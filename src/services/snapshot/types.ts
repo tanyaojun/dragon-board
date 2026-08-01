@@ -307,6 +307,8 @@ export interface SnapshotStockRowQueryOptions {
   excludeRestored?: boolean
   sort?: 'asc' | 'desc'
   limit?: number
+  /** 后端字段投影：只返回指定字段，用于大范围全市场读取瘦身 */
+  fields?: string[]
 }
 
 export interface RankTrendRankSeriesQueryOptions {

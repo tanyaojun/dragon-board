@@ -9,25 +9,42 @@ describe('App market platform summary', () => {
   test('shows live row counts for all eight hotlists and quote coverage', () => {
     const source = appSource()
 
-    expect(source).toContain('class="platform-summary"')
-    expect(source).toContain('共{{ marketSummary.totalStocks }}只')
-    expect(source).toContain('THS:{{ marketSummary.ths }}')
-    expect(source).toContain('KPL:{{ marketSummary.kpl }}')
-    expect(source).toContain('TDX:{{ marketSummary.tdx }}')
-    expect(source).toContain('雪球:{{ marketSummary.xueqiu }}')
-    expect(source).toContain('财联:{{ marketSummary.cls }}')
-    expect(source).toContain('淘股吧:{{ marketSummary.tgb }}')
-    expect(source).toContain('大智慧:{{ marketSummary.dzh }}')
-    expect(source).toContain('行情:{{ marketSummary.quotes }}')
+    expect(source).toContain('class="status-bar"')
+    expect(source).toContain('class="status-group"')
+    expect(source).toContain('<span class="status-label">股票</span>')
+    expect(source).toContain('{{ stockCount }}')
+    expect(source).toContain(
+      '<span class="status-label">东财:<span class="status-value">{{ marketSummary.eastmoney }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">THS:<span class="status-value">{{ marketSummary.ths }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">KPL:<span class="status-value">{{ marketSummary.kpl }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">TDX:<span class="status-value">{{ marketSummary.tdx }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">雪球:<span class="status-value">{{ marketSummary.xueqiu }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">财联:<span class="status-value">{{ marketSummary.cls }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">淘股吧:<span class="status-value">{{ marketSummary.tgb }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">大智慧:<span class="status-value">{{ marketSummary.dzh }}</span></span>',
+    )
+    expect(source).toContain(
+      '<span class="status-label">行情:<span class="status-value">{{ marketSummary.quotes }}</span></span>',
+    )
     expect(source).toContain("['raw.platforms', 'merged.stocks', 'quotes:batch']")
     expect(source).toMatch(/dataLayer\.subscribe\(path,/)
     expect(source).not.toContain('数据来自当前 platformData')
 
     const statusCenter = source.match(/<div class="status-center">([\s\S]*?)<\/div>\s*<div class="status-right">/)?.[1]
     expect(statusCenter).toContain('<SearchBox')
-    expect(statusCenter).toContain('class="platform-summary"')
-    expect(statusCenter?.indexOf('<SearchBox')).toBeLessThan(
-      statusCenter?.indexOf('class="platform-summary"') ?? -1,
-    )
   })
 })

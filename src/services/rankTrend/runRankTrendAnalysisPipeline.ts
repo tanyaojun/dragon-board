@@ -16,7 +16,7 @@ import type {
   RankTrendAnalysisResult,
   RankTrendRuntimeConfig,
 } from '@/services/rankTrend/types'
-import { getTechnicalMinSamples } from '@/services/rankTrend/utils'
+import { getTechnicalMinComputableSamples } from '@/services/rankTrend/utils'
 
 type RankTrendAnalysisPipelineResult = {
   technical: RankTrendAnalysisResult['technical']
@@ -40,7 +40,6 @@ type RunRankTrendAnalysisPipelineInput = {
   regime: MarketRegimeAnalysis
   hotlistSentiment?: HotlistSentimentLike
   config: RankTrendRuntimeConfig
-  requiredSamples?: number
 }
 
 export function runRankTrendAnalysisPipeline(
@@ -59,10 +58,9 @@ export function runRankTrendAnalysisPipeline(
     hotlistSentiment,
     config,
   } = input
-  const requiredSamples = input.requiredSamples ?? getTechnicalMinSamples(config)
 
   const technical =
-    percentiles.length >= requiredSamples
+    percentiles.length >= getTechnicalMinComputableSamples(config)
       ? analyzeTechnicalSignals(percentiles, config)
       : analyzeFallbackTechnicalSignals({
           percentiles,

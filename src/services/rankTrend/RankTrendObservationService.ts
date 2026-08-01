@@ -1,13 +1,18 @@
 import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
-import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { snapshotFacade } from '../snapshot/facade'
 import type { SnapshotStockRow } from '../snapshot/types'
 import { analyzeRankResonance } from './resonanceAnalyzer'
 import { runRankTrendAnalysisPipeline } from './runRankTrendAnalysisPipeline'
 import { analyzeTechnicalSignals } from './technicalSignalAnalyzer'
-import type { RankTrendAnalysisResult } from './types'
-import { getTechnicalMinSamples } from './utils'
+import { detectRankJumps } from './jumpDetector'
+import type { MarketRegimeAnalysis, RankTrendAnalysisResult } from './types'
+import {
+  getMacdMinSamples,
+  getMomentumMinSamples,
+  getTechnicalMinComputableSamples,
+  getTechnicalMinSamples,
+} from './utils'
 
 export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle'
 
@@ -40,6 +45,24 @@ export type RankTrendObservationViewModel = {
   issues: RankTrendObservationIssue[]
 }
 
+/** 各观察轨的显示窗口（bar/帧），按信号可计算与稳定需求分别设定 */
+export const OBSERVATION_WINDOW_BARS = {
+  resonance: 9,
+  technical: 22,
+  lifecycle: 15,
+} as const
+
+export const MAX_OBSERVATION_WINDOW_BARS = Math.max(...Object.values(OBSERVATION_WINDOW_BARS))
+
+/** 生命周期动量确认因子（mid 动量 + 加速度）可算窗口 */
+export const LIFECYCLE_MIN_SAMPLES = 15
+
+/** 市场横截面单次读取的行数上限（覆盖观察窗口各帧全市场行） */
+const MARKET_CROSS_SECTION_ROW_LIMIT = 20000
+
+/** 市场横截面计算所需的最小字段集（按帧真实横截面只依赖这几列） */
+const MARKET_CROSS_SECTION_FIELDS = ['tradingDate', 'slotTime', 'code', 'avgRankNum'] as const
+
 function median(values: number[]): number | null {
   if (!values.length) return null
   const sorted = [...values].sort((left, right) => left - right)
@@ -59,25 +82,61 @@ function frameLabel(frameKey: string): string {
   return frameKey.startsWith('current:') ? '当前' : frameKey
 }
 
-function calculateMarketMedian(frameKey: string, marketFrameKeys: string[]) {
-  const targetIndex = marketFrameKeys.indexOf(frameKey)
+type FrameCrossSections = Map<string, Map<string, number>>
+
+function buildFrameCrossSections(rows: SnapshotStockRow[]): FrameCrossSections {
+  const byFrame = new Map<string, Array<{ code: string; avgRankNum: number }>>()
+  for (const row of rows) {
+    const key = barFrameKey(row)
+    if (!key) continue
+    const code = String(row.code || '')
+    const avgRankNum = Number(row.avgRankNum)
+    if (!code || !Number.isFinite(avgRankNum) || avgRankNum <= 0) continue
+    const list = byFrame.get(key) ?? []
+    list.push({ code, avgRankNum })
+    byFrame.set(key, list)
+  }
+
+  const result: FrameCrossSections = new Map()
+  for (const [key, list] of byFrame) {
+    const sorted = [...list].sort(
+      (left, right) => left.avgRankNum - right.avgRankNum || left.code.localeCompare(right.code),
+    )
+    const totalCount = sorted.length
+    const percentiles = new Map<string, number>()
+    sorted.forEach((item, index) => {
+      percentiles.set(item.code, ((totalCount - index) / totalCount) * 100)
+    })
+    result.set(key, percentiles)
+  }
+  return result
+}
+
+function calculateMarketMedian(
+  frameKey: string,
+  marketFrameKeys: string[],
+  crossSections: FrameCrossSections,
+) {
+  const crossSectionKey = frameKey.startsWith('current:')
+    ? marketFrameKeys.filter((key) => !key.startsWith('current:')).at(-1) ?? frameKey
+    : frameKey
+  const targetIndex = marketFrameKeys.indexOf(crossSectionKey)
   if (targetIndex < 0) return { percentile: null, shortChange: null, sampleCount: 0 }
   const startKey = targetIndex >= 3 ? marketFrameKeys[targetIndex - 3] : null
-  const percentiles: number[] = []
-  const changes: number[] = []
+  const framePercentiles = crossSections.get(crossSectionKey)
+  if (!framePercentiles || framePercentiles.size === 0) {
+    return { percentile: null, shortChange: null, sampleCount: 0 }
+  }
 
-  for (const stock of dataLayer.getStocks()) {
-    const series = rankTrendAnalyzer.getLatestAnalysisSeries(stock.code)
-    if (!series) continue
-    const endIndex = series.frameKeys.indexOf(frameKey)
-    if (endIndex < 0) continue
-    const percentile = series.percentiles[endIndex]
-    if (Number.isFinite(percentile)) percentiles.push(percentile)
-    if (startKey) {
-      const startIndex = series.frameKeys.indexOf(startKey)
-      if (startIndex < 0) continue
-      const change = percentile - series.percentiles[startIndex]
-      if (Number.isFinite(change)) changes.push(change)
+  const percentiles = Array.from(framePercentiles.values())
+  const changes: number[] = []
+  if (startKey) {
+    const startPercentiles = crossSections.get(startKey)
+    if (startPercentiles) {
+      for (const [code, percentile] of framePercentiles) {
+        const start = startPercentiles.get(code)
+        if (start !== undefined) changes.push(percentile - start)
+      }
     }
   }
 
@@ -180,11 +239,42 @@ class RankTrendObservationService {
     }
     const rowsByFrame = new Map(rows.map((row) => [barFrameKey(row), row]))
     const marketFrameKeys = rankTrendAnalyzer.getLatestAnalysisFrameKeys()
+    const windowFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS)
+    const windowDates = windowFrameKeys
+      .map((key) => key.split(' ')[0])
+      .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+    let crossSections: FrameCrossSections = new Map()
+    if (windowDates.length > 0) {
+      try {
+        const crossSectionRows = await snapshotFacade.listSnapshotStockRows({
+          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+          startDate: windowDates[0],
+          endDate: windowDates[windowDates.length - 1],
+          sort: 'asc',
+          limit: MARKET_CROSS_SECTION_ROW_LIMIT,
+          fields: [...MARKET_CROSS_SECTION_FIELDS],
+          allowedCaptureModes: ['real_time', 'delayed'],
+          excludeRestored: true,
+        })
+        crossSections = buildFrameCrossSections(crossSectionRows)
+      } catch (error) {
+        serviceIssues.push(
+          observationIssue(
+            'market_cross_section_unavailable',
+            `市场横截面读取失败: ${errorMessage(error)}`,
+          ),
+        )
+      }
+    }
     const config = rankTrendAnalyzer.getRuntimeConfig()
-    const regime = currentAnalysis?.strategy?.regime || {
-      state: 'normal' as const,
+    const macdMinSamples = getMacdMinSamples(config)
+    const momentumMinSamples = getMomentumMinSamples(config)
+    const computableSamples = getTechnicalMinComputableSamples(config)
+    const stableSamples = getTechnicalMinSamples(config)
+    const historicalRegime: MarketRegimeAnalysis = {
+      state: 'normal',
       score: 0,
-      reasons: ['历史市场环境未单独持久化'],
+      reasons: ['历史市场环境未单独持久化，按中性环境处理'],
     }
     const allFrames: RankTrendObservationFrame[] = []
 
@@ -192,7 +282,7 @@ class RankTrendObservationService {
       const key = series.frameKeys[index]
       const isCurrent = index === series.frameKeys.length - 1
       const row = rowsByFrame.get(key)
-      const market = calculateMarketMedian(key, marketFrameKeys)
+      const market = calculateMarketMedian(key, marketFrameKeys, crossSections)
       const issues: RankTrendObservationIssue[] = []
       let analysis: RankTrendObservationAnalysis | null = null
 
@@ -206,13 +296,14 @@ class RankTrendObservationService {
         const displayChange = previousRank > 0
           ? ((previousRank - currentRank) / previousRank) * 100
           : 0
-        const jumpEvents = (currentAnalysis?.jump?.events || []).filter((event) => event.index <= index)
-        const latestJump = jumpEvents.at(-1)
+        const jumpResult = detectRankJumps(percentiles, ranks, 15)
+        const latestJump = jumpResult.events.at(-1)
         const jumpDirection = latestJump?.direction === 'surge'
           ? 'buy'
           : latestJump?.direction === 'collapse'
             ? 'sell'
             : 'hold'
+        const jumpEvent = latestJump?.index === index ? 'jump' : 'none'
         const resonance = analyzeRankResonance({
           percentiles,
           sampleQuality: { status: percentiles.length >= 9 ? 'ok' : 'insufficient' },
@@ -220,8 +311,8 @@ class RankTrendObservationService {
           marketSampleCount: market.sampleCount,
           jump: {
             direction: jumpDirection,
-            event: latestJump?.index === index ? 'jump' : 'none',
-            events: jumpEvents,
+            event: jumpEvent,
+            events: jumpResult.events,
           },
         })
         analysis = {
@@ -236,15 +327,27 @@ class RankTrendObservationService {
             currentPercentile: percentiles.at(-1) ?? 0,
           },
           resonance,
+          jump: {
+            event: jumpEvent,
+            direction: jumpDirection,
+            confidence: jumpResult.confidence,
+            events: jumpResult.events,
+          },
         }
 
-        const requiredSamples = getTechnicalMinSamples(config)
-        if (percentiles.length >= requiredSamples) {
+        if (percentiles.length >= computableSamples) {
           analysis.technical = analyzeTechnicalSignals(percentiles, config)
+          if (percentiles.length < stableSamples) {
+            issues.push(observationIssue(
+              'technical_stable_window_insufficient',
+              `该帧技术结构已计算，未达稳定观察窗口（${percentiles.length}/${stableSamples}）`,
+              { frameKey: key, track: 'technical' },
+            ))
+          }
         } else {
           issues.push(observationIssue(
             'technical_sample_insufficient',
-            `该帧技术结构样本不足（${percentiles.length}/${requiredSamples}）`,
+            `该帧技术结构样本不足（当前 ${percentiles.length} bar；MACD 需 ≥${macdMinSamples} bar、动量需 ≥${momentumMinSamples} bar）`,
             { frameKey: key, track: 'technical' },
           ))
         }
@@ -276,10 +379,25 @@ class RankTrendObservationService {
             volumeRatio: Number(row.volumeRatio),
             zlje: Number(row.zlje),
             zljzb: Number(row.zljzb),
-            regime,
+            regime: historicalRegime,
             config,
           })
           analysis = { ...analysis, ...pipeline, resonance }
+          if (percentiles.length < LIFECYCLE_MIN_SAMPLES) {
+            issues.push(observationIssue(
+              'lifecycle_sample_insufficient',
+              `该帧生命周期样本不足（当前 ${percentiles.length} bar；动量确认需 ≥${LIFECYCLE_MIN_SAMPLES} bar）`,
+              { frameKey: key, track: 'lifecycle' },
+            ))
+            if (analysis.observation) {
+              analysis.observation = { ...analysis.observation, lifecycle: undefined }
+            }
+          }
+          issues.push(observationIssue(
+            'historical_regime_unavailable',
+            '历史帧市场环境未单独持久化，生命周期分层按中性环境计算',
+            { frameKey: key, track: 'lifecycle' },
+          ))
         }
       }
 
@@ -305,7 +423,7 @@ class RankTrendObservationService {
     return {
       code,
       name: String(stock?.name || ''),
-      frames: allFrames.slice(-9),
+      frames: allFrames.slice(-MAX_OBSERVATION_WINDOW_BARS),
       issues: serviceIssues,
     }
   }

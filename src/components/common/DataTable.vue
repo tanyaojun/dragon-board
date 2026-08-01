@@ -58,8 +58,7 @@
             'opening-signal-row': hasOpeningWeakToStrongSignal(stock),
           },
         ]" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
-          @dblclick="openStockDetailFromRow($event, stock)"
-          @contextmenu.prevent="showContextMenu($event, stock)">
+          @dblclick="openStockDetailFromRow($event, stock)" @contextmenu.prevent="showContextMenu($event, stock)">
 
           <!-- 动态渲染所有列，保持和表头一致 -->
           <div v-for="col in visibleColumns" :key="col.key" class="cell" :class="getCellClass(col.key, stock)"
@@ -69,8 +68,7 @@
               <div class="themes-cell">
                 <span v-if="getStockThemes(stock).length > 0" class="themes-badge"
                   :class="getThemeBadgeClass(getStockThemes(stock))" :style="getThemeStyle(stock)"
-                  @mouseenter="showThemeTooltip($event, stock)"
-                  @mousemove="moveRowTooltip($event)"
+                  @mouseenter="showThemeTooltip($event, stock)" @mousemove="moveRowTooltip($event)"
                   @mouseleave="hideRowTooltip">
                   {{ getThemeDisplay(getStockThemes(stock)) }}
                 </span>
@@ -90,18 +88,15 @@
 
             <template v-else-if="col.key === 'name'">
               <span class="stock-name-text">{{ formatCell(col.key, stock) }}</span>
-              <span
-                v-if="hasOpeningWeakToStrongSignal(stock)"
-                class="opening-signal-badge"
-                :title="openingSignalTitle(stock)"
-              >竞强</span>
+              <span v-if="hasOpeningWeakToStrongSignal(stock)" class="opening-signal-badge"
+                :title="openingSignalTitle(stock)">竞强</span>
             </template>
 
             <!-- 共振强度列 -->
             <template v-else-if="col.key === 'resonanceIntensity'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'resonance')"
-                @mouseenter="showConfidenceTooltip($event, stock)"
-                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+                @mouseenter="showConfidenceTooltip($event, stock)" @mousemove="moveConfidenceTooltip($event)"
+                @mouseleave="hideConfidenceTooltip">
                 <span v-if="getResonanceCellValue(stock) != null" :class="getResonanceCellClass(stock)">
                   {{ getDirectionArrow(getResonanceDirection(stock)) }}{{ getResonanceCellValue(stock) }}%
                 </span>
@@ -111,9 +106,10 @@
 
             <template v-else-if="col.key === 'rankTrendStrength'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
-                @mouseenter="showConfidenceTooltip($event, stock)"
-                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <span v-if="getRankTrendStrengthValue(stock) != null" :class="getDirectionClass(getRankTrendDirection(stock))">
+                @mouseenter="showConfidenceTooltip($event, stock)" @mousemove="moveConfidenceTooltip($event)"
+                @mouseleave="hideConfidenceTooltip">
+                <span v-if="getRankTrendStrengthValue(stock) != null"
+                  :class="getDirectionClass(getRankTrendDirection(stock))">
                   {{ getDirectionArrow(getRankTrendDirection(stock)) }}{{ getRankTrendStrengthValue(stock) }}%
                 </span>
                 <span v-else class="trend-steady">--</span>
@@ -122,8 +118,8 @@
 
             <template v-else-if="col.key === 'lifecycleOpportunity'">
               <div class="observation-cell lifecycle-cell" @click.stop="openObservationPanel(stock, 'lifecycle')"
-                @mouseenter="showConfidenceTooltip($event, stock)"
-                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+                @mouseenter="showConfidenceTooltip($event, stock)" @mousemove="moveConfidenceTooltip($event)"
+                @mouseleave="hideConfidenceTooltip">
                 <span v-if="getLifecycleOpportunityValue(stock) != null" :class="getLifecycleClass(stock)">
                   {{ getLifecycleStageLabel(stock) }} {{ getLifecycleOpportunityValue(stock) }}%
                 </span>
@@ -159,7 +155,8 @@
     <div v-if="contextMenu.visible" class="context-menu"
       :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" ref="contextMenuRef">
       <div class="menu-item" @click="addToFavorite"><span class="menu-icon">⭐</span> 加入自选</div>
-      <div class="menu-item" @click="addToCandidatePool"><span class="menu-icon">🎯</span> {{ candidateMenuLabel }}</div>
+      <div class="menu-item" @click="addToCandidatePool"><span class="menu-icon">🎯</span> {{ candidateMenuLabel }}
+      </div>
       <div class="menu-divider"></div>
       <div class="menu-item" @mouseenter="showBoardMenu" @click.stop>
         <span class="menu-icon">📁</span> 加入板块
@@ -189,12 +186,8 @@
     <RankTrendPanel :visible="rankTrendPanelVisible" :triggerRect="rankTrendPanelTriggerRect"
       :stock-code="rankTrendPanelStockCode" @update:visible="rankTrendPanelVisible = $event"
       @close="rankTrendPanelVisible = false" />
-    <RankTrendObservationPanel
-      :visible="observationPanelVisible"
-      :stock="observationPanelStock"
-      :initial-track="observationPanelTrack"
-      @close="observationPanelVisible = false"
-    />
+    <RankTrendObservationPanel :visible="observationPanelVisible" :stock="observationPanelStock"
+      :initial-track="observationPanelTrack" @close="observationPanelVisible = false" />
     <div v-if="confidenceTooltip.visible" class="confidence-tooltip"
       :style="{ left: `${confidenceTooltip.x}px`, top: `${confidenceTooltip.y}px` }">
       {{ confidenceTooltip.content }}
@@ -352,9 +345,9 @@ const COLUMN_WIDTHS: Record<string, string> = {
   dzhRank: '50px',
   avgRank: '50px',
   compRank: '50px',
-  resonanceIntensity: '84px',
-  rankTrendStrength: '84px',
-  lifecycleOpportunity: '96px',
+  resonanceIntensity: '60px',
+  rankTrendStrength: '60px',
+  lifecycleOpportunity: '76px',
   zlje: '90px',
   zljzb: '90px',
   volume: '80px',
@@ -929,9 +922,9 @@ const getRankChange = (stock: any) => {
   if (stock._rankChange !== undefined) return stock._rankChange
   return Math.round(
     getRankTrendAnalysis(stock)?.meta?.change ??
-      getRankTrendAnalysis(stock)?.change ??
-      stock?.rankChange ??
-      0,
+    getRankTrendAnalysis(stock)?.change ??
+    stock?.rankChange ??
+    0,
   )
 }
 

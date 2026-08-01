@@ -75,7 +75,8 @@ export interface RankTrendObservationScores {
     score: number
     signedScore: number
   }
-  lifecycle: {
+  // 生命周期轨可独立降级：未达可算窗口时由观察服务移除该字段并给出结构化原因
+  lifecycle?: {
     stage: AttentionStage
     score: number
     veto: boolean

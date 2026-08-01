@@ -791,6 +791,7 @@ def list_snapshot_stock_rows(
     exclude_restored: bool = False,
     sort: str = "desc",
     limit: int | None = 500,
+    fields: str | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -817,6 +818,7 @@ def list_snapshot_stock_rows(
             exclude_restored=exclude_restored,
             limit=limit,
             sort=sort,
+            fields=_parse_csv(fields),
         )
         row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in result["rows"] if row.get("snapshotId"))
         return {
@@ -846,6 +848,7 @@ def list_snapshot_stock_rows(
             "exclude_restored": exclude_restored,
             "sort": sort,
             "limit": limit,
+            "fields": fields,
         },
         snapshot_type=snapshot_type,
         trading_date=trading_date,

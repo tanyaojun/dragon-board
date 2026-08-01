@@ -903,6 +903,7 @@ class Repository:
         exclude_restored: bool = False,
         limit: int | None = None,
         sort: str = "desc",
+        fields: list[str] | None = None,
     ) -> dict[str, Any]:
         if self.session is None:
             return {"rows": [], "source": "sqlite"}
@@ -950,6 +951,12 @@ class Repository:
             limit=limit if not rows else None,
         )
         merged = self._merge_archived_rows(rows, archived, limit=limit, sort=sort)
+        if fields:
+            field_set = set(fields)
+            merged = [
+                {key: value for key, value in row.items() if key in field_set}
+                for row in merged
+            ]
         source = _compute_archive_source(bool(rows), bool(archived))
         return {"rows": merged, "source": source}
 

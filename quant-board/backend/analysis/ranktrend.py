@@ -94,8 +94,16 @@ def get_macd_min_samples(config: RankTrendConfig) -> int:
     return max(2, int(config.macdSlow))
 
 
+def get_momentum_min_samples(config: RankTrendConfig) -> int:
+    return max(2, int(max(config.momentumPeriods)) + 1)
+
+
+def get_technical_min_computable_samples(config: RankTrendConfig) -> int:
+    return max(get_macd_min_samples(config), get_momentum_min_samples(config))
+
+
 def get_technical_min_samples(config: RankTrendConfig) -> int:
-    return max(get_macd_min_samples(config), max(config.momentumPeriods) + 1, 30)
+    return max(get_technical_min_computable_samples(config), 30)
 
 
 def percentile_rank(rank: float, total_count: int) -> float:
@@ -347,7 +355,7 @@ def analyze_technical(percentiles: list[float], config: RankTrendConfig, fallbac
     macd = calculate_macd(percentiles, config)
     profile = momentum_profile(percentiles)
     data = momentum_data(percentiles, config)
-    if len(percentiles) >= get_technical_min_samples(config) and data:
+    if len(percentiles) >= get_technical_min_computable_samples(config) and data:
         signals = analyze_momentum_signals(data, config)
         score = data["score"]
     else:

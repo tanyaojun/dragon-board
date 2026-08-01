@@ -81,7 +81,8 @@
                   <span><i class="legend-line stock-line"></i>个股关注度百分位</span>
                   <span><i class="legend-line market-line"></i>同帧市场中位</span>
                 </div>
-                <svg class="path-chart" viewBox="0 0 620 190" preserveAspectRatio="none" aria-label="最近九帧共振路径">
+                <svg class="path-chart" viewBox="0 0 620 190" preserveAspectRatio="none"
+                  :aria-label="`最近 ${trackFrames.length} 帧共振路径`">
                   <line v-for="tick in [25, 50, 75]" :key="tick" x1="0" x2="620" :y1="chartY(tick)" :y2="chartY(tick)"
                     class="grid-line" />
                   <path :d="percentilePath" class="market-path" />
@@ -125,12 +126,20 @@
                   <span><i class="legend-line dea-line"></i>DEA</span>
                   <span>柱体</span>
                 </div>
-                <svg class="path-chart" viewBox="0 0 620 190" preserveAspectRatio="none" aria-label="最近九帧 MACD 结构">
+                <svg class="path-chart" viewBox="0 0 620 190" preserveAspectRatio="none"
+                  :aria-label="`最近 ${trackFrames.length} 帧 MACD 结构`">
                   <line x1="0" x2="620" y1="95" y2="95" class="zero-line" />
                   <rect v-for="bar in macdBars" :key="bar.key" :x="bar.x" :y="bar.y" :width="bar.width"
                     :height="bar.height" :class="bar.positive ? 'macd-positive' : 'macd-negative'" />
                   <path :d="difPath" class="dif-path" />
                   <path :d="deaPath" class="dea-path" />
+                  <g v-for="point in macdCrossPoints" :key="point.key">
+                    <circle :cx="point.x" :cy="point.y" r="4"
+                      :class="point.cross === 'golden' ? 'cross-golden' : 'cross-death'" />
+                    <text :x="point.x" :y="point.y - 10" text-anchor="middle" class="cross-label">
+                      {{ point.cross === 'golden' ? '金叉' : '死叉' }}
+                    </text>
+                  </g>
                 </svg>
               </div>
 
@@ -161,8 +170,9 @@
                 </div>
               </div>
 
-              <div class="stage-rail" aria-label="最近九帧生命周期阶段">
-                <div v-for="frame in frames" :key="frame.key" :class="stageClass(frame.analysis?.cycle?.stage)">
+              <div class="stage-rail" :style="stageRailStyle"
+                :aria-label="`最近 ${trackFrames.length} 帧生命周期阶段`">
+                <div v-for="frame in trackFrames" :key="frame.key" :class="stageClass(frame.analysis?.cycle?.stage)">
                   <i></i>
                   <span>{{ stageLabel(frame.analysis?.cycle?.stage) }}</span>
                 </div>
@@ -186,17 +196,17 @@
 
               <div v-if="selectedAnalysis?.observation?.lifecycle?.veto" class="veto-alert">
                 <strong>风险否决警示</strong>
-                <span>{{ selectedAnalysis.observation.lifecycle.reasons.join('；') || '风险条件已触发' }}</span>
+                <span>{{ selectedAnalysis?.observation?.lifecycle?.reasons?.join('；') || '风险条件已触发' }}</span>
               </div>
             </section>
 
             <footer class="frame-timeline">
               <div class="timeline-heading">
-                <strong>最近 9 帧</strong>
-                <span>三轨同步回看</span>
+                <strong>最近 {{ trackFrames.length }} 帧</strong>
+                <span>各轨道按各自窗口回看</span>
               </div>
               <div class="timeline-buttons">
-                <button v-for="(frame, index) in frames" :key="frame.key" type="button"
+                <button v-for="(frame, index) in trackFrames" :key="frame.key" type="button"
                   :class="{ active: index === selectedIndex, degraded: frame.issues.length > 0 }"
                   :title="frame.issues.map((issue) => issue.message).join('；') || frame.key"
                   @click="selectedIndex = index">
@@ -216,6 +226,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import {
+  OBSERVATION_WINDOW_BARS,
   rankTrendObservationService,
   type ObservationTrack,
   type RankTrendObservationIssue,
@@ -246,7 +257,12 @@ const loadError = ref('')
 let loadToken = 0
 
 const frames = computed(() => viewModel.value?.frames || [])
-const selectedFrame = computed<RankTrendObservationFrame | null>(() => frames.value[selectedIndex.value] || null)
+const trackFrames = computed(() =>
+  frames.value.slice(-OBSERVATION_WINDOW_BARS[activeTrack.value]),
+)
+const selectedFrame = computed<RankTrendObservationFrame | null>(
+  () => trackFrames.value[selectedIndex.value] || null,
+)
 const selectedAnalysis = computed(() => selectedFrame.value?.analysis || null)
 const latestAnalysis = computed(() => frames.value.at(-1)?.analysis || props.stock?.rankTrend || null)
 const allIssues = computed(() => {
@@ -262,6 +278,13 @@ watch(
   { immediate: true },
 )
 
+watch(activeTrack, () => {
+  const next = trackFrames.value
+  const currentKey = selectedFrame.value?.key
+  const sameFrameIndex = currentKey ? next.findIndex((frame) => frame.key === currentKey) : -1
+  selectedIndex.value = sameFrameIndex >= 0 ? sameFrameIndex : Math.max(0, next.length - 1)
+})
+
 watch(
   [() => props.visible, () => props.stock?.code],
   async ([visible, code]) => {
@@ -273,7 +296,10 @@ watch(
       const result = await rankTrendObservationService.load(props.stock)
       if (token !== loadToken) return
       viewModel.value = result
-      selectedIndex.value = Math.max(0, result.frames.length - 1)
+      selectedIndex.value = Math.max(
+        0,
+        Math.min(result.frames.length - 1, OBSERVATION_WINDOW_BARS[activeTrack.value] - 1),
+      )
     } catch (error) {
       if (token !== loadToken) return
       loadError.value = error instanceof Error ? error.message : String(error)
@@ -404,13 +430,13 @@ function linePath(values: Array<number | null>, yProject: (value: number) => num
     .join(' ')
 }
 
-const stockPath = computed(() => linePath(frames.value.map((frame) => frame.percentile), chartY))
+const stockPath = computed(() => linePath(trackFrames.value.map((frame) => frame.percentile), chartY))
 const percentilePath = computed(() =>
-  linePath(frames.value.map((frame) => frame.marketMedianPercentile), chartY),
+  linePath(trackFrames.value.map((frame) => frame.marketMedianPercentile), chartY),
 )
 const jumpPoints = computed(() => {
-  const step = frames.value.length <= 1 ? 0 : 600 / (frames.value.length - 1)
-  return frames.value.flatMap((frame, index) =>
+  const step = trackFrames.value.length <= 1 ? 0 : 600 / (trackFrames.value.length - 1)
+  return trackFrames.value.flatMap((frame, index) =>
     frame.analysis?.jump?.event === 'jump'
       ? [{ key: frame.key, x: 10 + index * step, y: chartY(frame.percentile) }]
       : [],
@@ -455,7 +481,7 @@ function bipolarStyle(value: number | null) {
 }
 
 const macdScale = computed(() => {
-  const values = frames.value.flatMap((frame) => {
+  const values = trackFrames.value.flatMap((frame) => {
     const macd = frame.analysis?.technical?.macd
     if (!macd) return []
     return [macd.dif, macd.dea, macd.histogram].filter(Number.isFinite)
@@ -467,13 +493,17 @@ function macdY(value: number) {
   return 95 - (value / macdScale.value) * 78
 }
 
-const difPath = computed(() => linePath(frames.value.map((frame) => frame.analysis?.technical?.macd?.dif ?? null), macdY))
-const deaPath = computed(() => linePath(frames.value.map((frame) => frame.analysis?.technical?.macd?.dea ?? null), macdY))
+const difPath = computed(() =>
+  linePath(trackFrames.value.map((frame) => frame.analysis?.technical?.macd?.dif ?? null), macdY),
+)
+const deaPath = computed(() =>
+  linePath(trackFrames.value.map((frame) => frame.analysis?.technical?.macd?.dea ?? null), macdY),
+)
 const macdBars = computed(() => {
-  const count = Math.max(1, frames.value.length)
+  const count = Math.max(1, trackFrames.value.length)
   const step = count === 1 ? 600 : 600 / (count - 1)
   const width = Math.min(22, step * 0.42)
-  return frames.value.flatMap((frame, index) => {
+  return trackFrames.value.flatMap((frame, index) => {
     const value = Number(frame.analysis?.technical?.macd?.histogram)
     if (!Number.isFinite(value)) return []
     const y = macdY(value)
@@ -487,6 +517,26 @@ const macdBars = computed(() => {
     }]
   })
 })
+
+const macdCrossPoints = computed(() => {
+  const count = Math.max(1, trackFrames.value.length)
+  const step = count === 1 ? 600 : 600 / (count - 1)
+  return trackFrames.value.flatMap((frame, index) => {
+    const cross = frame.analysis?.technical?.macd?.cross
+    if (cross !== 'golden' && cross !== 'death') return []
+    const value = Number(frame.analysis?.technical?.macd?.dif ?? 0)
+    return [{
+      key: frame.key,
+      x: 10 + index * step,
+      y: macdY(Number.isFinite(value) ? value : 0),
+      cross,
+    }]
+  })
+})
+
+const stageRailStyle = computed(() => ({
+  gridTemplateColumns: `repeat(${Math.max(1, trackFrames.value.length)}, minmax(0, 1fr))`,
+}))
 
 const lifecycleFactors = computed(() => {
   const factors = selectedAnalysis.value?.observation?.lifecycle?.factors
@@ -850,6 +900,23 @@ const riskSignals = computed(() => {
   fill: rgba(56, 201, 139, 0.62);
 }
 
+.cross-golden {
+  fill: var(--gold);
+  stroke: #fff;
+  stroke-width: 1;
+}
+
+.cross-death {
+  fill: var(--down);
+  stroke: #fff;
+  stroke-width: 1;
+}
+
+.cross-label {
+  fill: #ffd77a;
+  font: 8px Consolas, monospace;
+}
+
 .factor-stack {
   margin-top: 18px;
   display: grid;
@@ -980,9 +1047,11 @@ const riskSignals = computed(() => {
 
 .stage-rail {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 3px;
   padding: 18px 0;
+  overflow-x: auto;
   border-top: 1px solid var(--cockpit-line);
   border-bottom: 1px solid var(--cockpit-line);
 }
@@ -1129,14 +1198,17 @@ const riskSignals = computed(() => {
 }
 
 .timeline-buttons {
-  display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  display: flex;
+  overflow-x: auto;
   gap: 4px;
+  padding-bottom: 4px;
 }
 
 .timeline-buttons button {
-  min-width: 0;
+  flex: 0 0 auto;
+  min-width: 52px;
   padding: 0;
+  text-align: center;
   border: 0;
   color: #788386;
   background: transparent;

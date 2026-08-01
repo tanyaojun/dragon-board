@@ -482,6 +482,7 @@ class MongoRepository:
         exclude_restored: bool = False,
         limit: int | None = None,
         sort: str = "desc",
+        fields: list[str] | None = None,
     ) -> dict[str, Any]:
         query = self._snapshot_row_query(
             dataset_id,
@@ -500,8 +501,14 @@ class MongoRepository:
         if stock_codes:
             query["code"] = {"$in": stock_codes}
         direction = 1 if sort == "asc" else -1
+        mongo_projection: dict[str, int] = (
+            {"_id": 0, **{field: 1 for field in fields}}
+            if fields
+            else {"depth10": 0}
+        )
         cursor = self.db["snapshot_stock_rows"].find(
-            query, {"depth10": 0}
+            query,
+            mongo_projection,
         ).sort([("timestamp", direction), ("rank", 1)])
         if limit and limit > 0:
             cursor = cursor.limit(limit)

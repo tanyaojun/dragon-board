@@ -928,6 +928,8 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 - 股票行：`snapshot_id`、`code`、`codes`、`slot_time`。
 - 题材行：`snapshot_id`、`entity_type/entity_types`、`entity_key/entity_keys`。
 
+`stock-rows` 额外支持投影参数 `fields`（逗号分隔字段名）：指定后后端只返回这些 camelCase 字段（`_id` 不返回），用于大范围全市场横截面读取瘦身；不传时保持原有全量行合同（仅排除 `depth10`）。RankTrend 观察舱按帧市场基准读取即使用 `fields=tradingDate,slotTime,code,avgRankNum`，避免 2 万行全字段响应超过前端读超时。
+
 Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/listSnapshotStockRows/listSnapshotSectorRows/getStockVolumeHistory`
 均通过这些 MongoDB 明细读口实现。列表读口返回 `cache` 诊断字段，单条 `records/{snapshot_id}` 仍直接读取 MongoDB。`getStockVolumeHistory` 固定读取 `daily` 的
 `snapshot_stock_rows`，不再扫描浏览器 IndexedDB 原始快照。

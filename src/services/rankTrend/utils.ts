@@ -46,16 +46,34 @@ export function getMacdMinSamples(config: { macdSlow: number }): number {
   return Math.max(2, slow)
 }
 
-export function getTechnicalMinSamples(config: {
-  macdSlow: number
-  momentumPeriods: number[]
-}): number {
+/** 动量特征的最小可计算窗口：需覆盖最长动量周期再加当前对比点 */
+export function getMomentumMinSamples(config: { momentumPeriods: number[] }): number {
   const momentumPeriods = Array.isArray(config.momentumPeriods) ? config.momentumPeriods : []
   const maxMomentumPeriod =
     momentumPeriods.length > 0
       ? Math.max(...momentumPeriods.map((value) => Math.floor(Number(value) || 0)))
       : 0
-  return Math.max(getMacdMinSamples(config), maxMomentumPeriod + 1, 30)
+  return Math.max(2, maxMomentumPeriod + 1)
+}
+
+/**
+ * 技术信号的最小可计算窗口（minComputableBars）：
+ * bars 达到该值时必须产出 MACD/动量/零线交叉结果。
+ * 与稳定观察窗口 getTechnicalMinSamples 分开，稳定窗口只影响质量标记，不阻断计算。
+ */
+export function getTechnicalMinComputableSamples(config: {
+  macdSlow: number
+  momentumPeriods: number[]
+}): number {
+  return Math.max(getMacdMinSamples(config), getMomentumMinSamples(config))
+}
+
+/** 技术结构稳定观察窗口（minComputableBars ≤ stableBars）：未达到时结果降级，但必须仍可计算 */
+export function getTechnicalMinSamples(config: {
+  macdSlow: number
+  momentumPeriods: number[]
+}): number {
+  return Math.max(getTechnicalMinComputableSamples(config), 30)
 }
 
 /** 各特征的最小稳定观察窗口（minComputableBars ≤ stableBars） */

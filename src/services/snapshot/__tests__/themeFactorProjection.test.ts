@@ -232,7 +232,7 @@ describe('theme factor snapshot projection', () => {
     ])
   })
 
-  it('strips runtime THS funds and fund metadata from formal sector rows', () => {
+  it('preserves runtime THS funds and fund metadata in formal sector rows', () => {
     const record = createRecord({})
     const buildContext = {
       themeHeatFactors: [
@@ -254,13 +254,15 @@ describe('theme factor snapshot projection', () => {
 
     const [row] = buildSnapshotSectorRows(record, buildContext)
 
-    expect(row.mainNetInflow).toBeUndefined()
-    expect(row.netInflow).toBeUndefined()
-    expect(row.fundScore).toBeUndefined()
+    expect(row.mainNetInflow).toBe(88_000_000)
+    expect(row.netInflow).toBe(88_000_000)
+    expect(row.fundScore).toBe(82)
     expect(row.momentumScore).toBe(76)
-    expect(row.metadata).toEqual(expect.objectContaining({ quoteSource: 'tencent' }))
-    expect(row.metadata).not.toHaveProperty('fundSource')
-    expect(row.metadata?.themeFactor).not.toHaveProperty('fundScore')
+    expect(row.metadata).toEqual(expect.objectContaining({
+      quoteSource: 'tencent',
+      fundSource: 'ths_main_monitor',
+    }))
+    expect(row.metadata?.themeFactor).toEqual(expect.objectContaining({ fundScore: 82 }))
   })
 
   it.each(['broker_l2', 'official_l2'])(

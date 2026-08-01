@@ -6,6 +6,8 @@ import {
   calculateWeightedShare,
   clamp,
   getMacdMinSamples,
+  getMomentumMinSamples,
+  getTechnicalMinComputableSamples,
   getTechnicalMinSamples,
   normalizeSigned,
 } from '../utils'
@@ -143,6 +145,44 @@ describe('getMacdMinSamples', () => {
 
   it('负数返回最小 2', () => {
     expect(getMacdMinSamples({ macdSlow: -5 })).toBe(2)
+  })
+})
+
+describe('getMomentumMinSamples', () => {
+  const baseConfig = { momentumPeriods: [3, 5, 8, 13, 21] }
+
+  it('默认周期取 max(periods)+1', () => {
+    expect(getMomentumMinSamples(baseConfig)).toBe(22)
+  })
+
+  it('空 momentumPeriods 返回最小 2', () => {
+    expect(getMomentumMinSamples({ momentumPeriods: [] })).toBe(2)
+  })
+})
+
+describe('getTechnicalMinComputableSamples', () => {
+  const baseConfig = { macdSlow: 21, momentumPeriods: [3, 5, 8, 13, 21] }
+
+  it('默认配置下为 macdSlow 与 maxPeriod+1 的最大值 22', () => {
+    expect(getTechnicalMinComputableSamples(baseConfig)).toBe(22)
+  })
+
+  it('大周期超过 macdSlow 时以周期为准', () => {
+    expect(
+      getTechnicalMinComputableSamples({ macdSlow: 12, momentumPeriods: [3, 5, 50] }),
+    ).toBe(51)
+  })
+
+  it('macdSlow 超过动量窗口时以 macdSlow 为准', () => {
+    expect(
+      getTechnicalMinComputableSamples({ macdSlow: 34, momentumPeriods: [3, 5, 8, 13, 21] }),
+    ).toBe(34)
+  })
+
+  it('可计算窗口不超过稳定窗口 getTechnicalMinSamples', () => {
+    expect(getTechnicalMinComputableSamples(baseConfig)).toBeLessThanOrEqual(
+      getTechnicalMinSamples(baseConfig),
+    )
   })
 })
 

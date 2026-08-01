@@ -87,7 +87,11 @@ class FakeCollection:
         rows = [dict(row) for row in self.rows if _matches(row, normalized_query)]
         if projection:
             included = {key for key, enabled in projection.items() if enabled}
-            rows = [{key: row.get(key) for key in included} for row in rows]
+            if included:
+                rows = [{key: row.get(key) for key in included} for row in rows]
+            else:
+                excluded = set(projection)
+                rows = [{key: value for key, value in row.items() if key not in excluded} for row in rows]
         return FakeCursor(rows)
 
     def aggregate(self, pipeline: list[dict[str, Any]], **_kwargs: Any) -> FakeCursor:
@@ -111,6 +115,25 @@ class FakeCollection:
                             "attentionIndex": index,
                         })
             return FakeCursor(projected)
+
+        if "$group" in pipeline[1]:
+            grouped: dict[str, Any] = {
+                "_id": None,
+                "trading_dates": set(),
+                "snapshot_types": set(),
+                "frame_count": 0,
+            }
+            for row in rows:
+                grouped["trading_dates"].add(row.get("tradingDate"))
+                grouped["snapshot_types"].add(row.get("type"))
+                grouped["frame_count"] += 1
+            normalized = {
+                "_id": None,
+                "trading_dates": sorted(str(d) for d in grouped["trading_dates"] if d),
+                "snapshot_types": sorted(str(t) for t in grouped["snapshot_types"] if t),
+                "frame_count": grouped["frame_count"],
+            }
+            return FakeCursor([normalized])
 
         window = pipeline[1]["$setWindowFields"]
         partition_key = window["partitionBy"].removeprefix("$")
@@ -409,6 +432,35 @@ def test_mongo_repository_frame_bundles_return_mongodb_source_rows() -> None:
     assert bundles[0]["stocks"] == bundles[0]["rows"]
     assert rows["source"] == "mongodb"
     assert rows["rows"][0]["rowId"] == "s1:000001"
+
+
+def test_list_snapshot_stock_rows_projects_requested_fields() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset()
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record("s1")],
+        frames=[_frame("s1", 1)],
+        stock_rows=[
+            {**_stock("s1", "000001", 1), "avgRankNum": 3.5},
+            {**_stock("s1", "000002", 2), "avgRankNum": 8.2},
+        ],
+        sector_rows=[],
+        idempotency_key="ingest-projection",
+        trading_date="2026-05-12",
+    )
+
+    rows = repo.list_snapshot_stock_rows(
+        "dragonboard_live",
+        snapshot_id="s1",
+        fields=["code", "avgRankNum"],
+    )
+
+    assert rows["source"] == "mongodb"
+    assert rows["rows"] == [
+        {"code": "000001", "avgRankNum": 3.5},
+        {"code": "000002", "avgRankNum": 8.2},
+    ]
 
 
 def test_mongo_repository_records_sectors_and_frame_list_contracts() -> None:

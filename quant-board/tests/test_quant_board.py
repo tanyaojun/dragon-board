@@ -22,6 +22,7 @@ from backend.analysis.ranktrend import (
     analyze_momentum_signals,
     analyze_risk,
     analyze_technical,
+    momentum_data,
 )
 from backend.cli import (
     build_longtest_baseline_payloads,
@@ -300,7 +301,7 @@ def test_supabase_theme_string_fields_preserve_explicit_empty_values() -> None:
     assert sector_row["rotation_state"] == ""
 
 
-def test_ranktrend_uses_fallback_until_technical_min_samples() -> None:
+def test_ranktrend_uses_fallback_below_min_computable_samples() -> None:
     config = RankTrendConfig()
     percentiles = [
         40,
@@ -333,11 +334,12 @@ def test_ranktrend_uses_fallback_until_technical_min_samples() -> None:
         67,
         68,
     ]
+    percentiles = percentiles[:20]  # 20 bar：低于 MACD 可计算窗口 21 与动量可计算窗口 22
     fallback = {"displayChange": 2.2, "stockChange": 1.8, "volumeRatio": 1.5, "zlje": 1, "zljzb": 1}
 
     technical = analyze_technical(percentiles, config, fallback)
 
-    assert len(percentiles) < 30
+    assert len(percentiles) < 22
     display_score = math.tanh(fallback["displayChange"] / 8)
     price_score = math.tanh(fallback["stockChange"] / 6)
     volume_score = math.tanh((fallback["volumeRatio"] - 1) / 0.75)
@@ -348,6 +350,24 @@ def test_ranktrend_uses_fallback_until_technical_min_samples() -> None:
     assert abs(technical["signals"]["direction"]["confidence"] - expected_direction_confidence) < 1e-12
     assert technical["signals"]["direction"]["signal"] == "buy"
     assert technical["signals"]["acceleration"]["confidence"] > 50
+
+
+def test_ranktrend_computes_real_technical_from_min_computable_samples() -> None:
+    config = RankTrendConfig()
+    # 22 bar：达到动量 max(periods)+1 与 MACD macdSlow 的最小可计算窗口，但未达稳定窗口 30
+    percentiles = [40 + index for index in range(22)]
+    fallback = {"displayChange": 2.2, "stockChange": 1.8, "volumeRatio": 1.5, "zlje": 1, "zljzb": 1}
+
+    technical = analyze_technical(percentiles, config, fallback)
+    data = momentum_data(percentiles, config)
+
+    assert abs(technical["macd"]["dif"]) > 0
+    assert abs(technical["macd"]["histogram"]) > 0
+    assert technical["momentumScore"] == pytest.approx(data["score"])
+    real_signals = analyze_momentum_signals(data, config)
+    assert technical["signals"]["direction"]["score"] == pytest.approx(
+        real_signals["direction"]["score"]
+    )
 
 
 def test_ranktrend_momentum_signals_match_typescript_edge_cases() -> None:
@@ -1620,6 +1640,71 @@ def test_snapshot_ingest_filters_existing_snapshot_ids_from_mixed_bundle() -> No
     )
     assert new_rows.status_code == 200, new_rows.text
     assert [row["code"] for row in new_rows.json()["rows"]] == ["600002"]
+
+
+def test_snapshot_stock_rows_api_supports_field_projection() -> None:
+    client = TestClient(app)
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_projection_{suffix}"
+    snapshot_id = f"half_hour:2026-04-21:{suffix}"
+    bundle = {
+        "version": "v4",
+        "tradingDate": "2026-04-21",
+        "items": [
+            {
+                "id": snapshot_id,
+                "type": "half_hour",
+                "tradingDate": "2026-04-21",
+                "slotTime": "10:00",
+                "timestamp": 1776746400000,
+                "displayKey": f"[半小时快照] 2026-04-21 10:00",
+                "captureMode": "real_time",
+                "source": "browser_runtime",
+                "payload": {
+                    "type": "half_hour",
+                    "tradingDate": "2026-04-21",
+                    "slotTime": "10:00",
+                    "timestamp": 1776746400000,
+                    "hotlist": [
+                        {"code": "600001", "name": "样本A", "rank": 1, "price": 10, "avgRankNum": 3.5},
+                        {"code": "600002", "name": "样本B", "rank": 2, "price": 11, "avgRankNum": 8.2},
+                    ],
+                },
+            }
+        ],
+    }
+    ingest = client.post(
+        "/api/snapshots/ingest",
+        json={
+            "datasetId": dataset_id,
+            "idempotencyKey": f"projection-{suffix}",
+            "bundle": bundle,
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    full = client.get(
+        "/api/snapshots/stock-rows",
+        params={"dataset_id": dataset_id, "snapshot_id": snapshot_id},
+    )
+    assert full.status_code == 200, full.text
+    full_row = full.json()["rows"][0]
+    assert "name" in full_row
+    assert "avgRankNum" in full_row
+
+    projected = client.get(
+        "/api/snapshots/stock-rows",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_id": snapshot_id,
+            "fields": "code,tradingDate,slotTime,avgRankNum",
+        },
+    )
+    assert projected.status_code == 200, projected.text
+    assert projected.json()["rows"] == [
+        {"code": "600001", "tradingDate": "2026-04-21", "slotTime": "10:00", "avgRankNum": 3.5},
+        {"code": "600002", "tradingDate": "2026-04-21", "slotTime": "10:00", "avgRankNum": 8.2},
+    ]
 
 
 def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:

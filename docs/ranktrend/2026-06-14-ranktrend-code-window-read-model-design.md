@@ -131,3 +131,17 @@ RankTrendAnalyzer 的职责变成：
 - 后端：补 repo / API 用例，验证按 code 返回的历史序列是最近窗口而不是全局 frame 截断。
 - 前端：补 `RankTrendAnalyzer` 用例，验证单票历史窗口足够时仍能计算出技术信号。
 - 回归：用 600601 这类“库内 bars 足够但最近全局帧命中少”的票做样本，确认不再误判。
+
+## 实现落地记录（2026-08-01）
+
+- 新增 `getTechnicalMinComputableSamples`（TS `src/services/rankTrend/utils.ts` 与 Python `quant-board/backend/analysis/ranktrend.py` 同步），主分析链路与观察舱的技术信号“真算/降级”切换点由稳定窗口（30）改为最小可计算窗口（当前默认 `max(macdSlow=21, max(momentumPeriods)+1=22) = 22`）。
+- `getTechnicalMinSamples`（30）保留为稳定观察/质量门槛，只影响 `sampleQuality` 与提示，不再阻断技术结构计算。
+- 观察舱低于可计算门槛时按特征给出结构化原因（MACD 需 ≥`macdSlow`、动量需 ≥`max(periods)+1`），达到可计算窗口但未达稳定窗口时输出“已计算、未达稳定观察窗口”的质量提示。
+- 观察舱三轨显示窗口独立设定：共振 9、技术结构 22、生命周期 15（见 `OBSERVATION_WINDOW_BARS`）。
+
+### 观察舱质量修复（2026-08-01 补充）
+
+- 历史帧市场基准改为按帧全市场横截面（`avgRankNum` 重排百分位中位数），不再用当前内存股票列表近似；读取失败降级并给出结构化原因。
+- 生命周期轨新增 15-bar 可算窗口，未达窗口的历史帧不产出 `observation.lifecycle`（类型调整为可选），并给出 `lifecycle_sample_insufficient`。
+- 历史帧按中性市场环境计算生命周期分层（`historical_regime_unavailable` 提示），不复用当前 regime；历史帧 Jump 用前缀独立重算（阈值 15），不再用当前分析事件索引近似。
+- 市场横截面读取改用 `/api/snapshots/stock-rows?fields=tradingDate,slotTime,code,avgRankNum` 投影读取，避免全字段 2 万行响应触发前端 15s 超时中止（`market_cross_section_unavailable: signal is aborted without reason`）。

@@ -143,7 +143,7 @@ lifecycleOpportunity = round(100 * clamp(
 
 ### 共振路径轨
 
-- 最近 9 帧关注度百分位折线。
+- 最近 9 帧关注度百分位折线（共振显示窗口固定 9 帧，与 `MIN_SERIES_POINTS=9` 对齐）。
 - 同帧市场中位路径虚线。
 - Jump 事件标记。
 - 相对动量、加速度、持续性、Jump 新鲜度和反转惩罚贡献条。
@@ -162,7 +162,15 @@ lifecycleOpportunity = round(100 * clamp(
 
 ### 时间轴
 
-底部保留最近 9 帧证据时间轴。默认选择最新帧；选择历史帧后三轨同步回看该帧及其历史前缀。
+底部保留证据时间轴，显示窗口按轨道分别设定（`OBSERVATION_WINDOW_BARS`）：
+
+| 轨道 | 显示窗口 | 依据 |
+| --- | ---: | --- |
+| 共振路径 | 9 帧 | 短窗 3 / 中窗 8 / 路径持续性 8，最小可算 9 |
+| 技术结构 | 22 帧 | MACD 与动量最小可计算窗口（当前默认 22） |
+| 阶段与风险 | 15 帧 | 生命周期动量确认因子（mid 动量 + 加速度）可算窗口 |
+
+默认选择最新帧。切换轨道时优先保留当前选中帧（同 frame key），超出新轨道窗口则回退到该轨道最新帧；各轨道在窗口内回看该帧及其历史前缀，未达本轨道可算窗口的早期帧按轨道单独降级并给出结构化原因。
 
 ## 数据边界
 
@@ -182,3 +190,18 @@ lifecycleOpportunity = round(100 * clamp(
 - 历史帧不混用当前资金或当前市场基准。
 - 缺失数据主动暴露，其他可用证据继续显示。
 - 桌面和窄屏无溢出，浏览器无观察舱新增错误。
+
+## 实现落地记录（2026-08-01 补充）
+
+审查后对观察舱做了 6 项对齐修复：
+
+1. **历史帧市场基准改为按帧真实横截面**：观察服务不再用当前内存股票列表近似，改为按观察窗口日期范围读取快照 stock rows，按 `avgRankNum` 升序重排计算每帧全市场关注度百分位，再取中位数；短周期变化只统计两帧都存在的股票。读取失败时降级并给出 `market_cross_section_unavailable`，不静默回退。
+2. **生命周期轨增加 15-bar 可算窗口降级**：新增 `LIFECYCLE_MIN_SAMPLES=15`，低于该窗口的历史帧不产出 `observation.lifecycle`，并给出 `lifecycle_sample_insufficient` 结构化原因。
+3. **技术结构轨补齐金叉/死叉位置标记**：MACD 图在 `cross=golden/death` 的帧位置渲染金叉/死叉标记点。
+4. **生命周期阶段轨改为动态列**：移除硬编码 9 列，按轨道窗口帧数横向自适应并支持横向滚动。
+5. **历史帧不再复用当前 regime**：历史帧按中性市场环境计算生命周期分层，并给出 `historical_regime_unavailable` 结构化原因，避免当前市场环境污染历史结论。
+6. **历史帧 Jump 独立重算**：历史帧用该帧前缀调用 `detectRankJumps`（阈值 15）独立检测，不再用当前分析的事件索引近似，并把 `jump` 写回该帧供共振轨标记。
+
+7. **市场横截面读取瘦身（fields 投影）**：修复“`market_cross_section_unavailable: signal is aborted without reason`”——原实现按日期范围整批读取全字段 stock rows（每行 107 字段、约 23KB），观察窗口 2 千多行即约 21.8MB，超过前端 15s 读超时被中止。`GET /api/snapshots/stock-rows` 新增 `fields` 投影参数，观察服务只请求 `tradingDate/slotTime/code/avgRankNum` 四个字段，响应缩至约 300KB；Mongo/SQLite 两个仓库与 Redis 缓存 key 同步支持。读取失败时仍按原设计降级并暴露 `market_cross_section_unavailable`。
+
+以上修复均有邻近 Vitest 覆盖（`RankTrendObservationService.test.ts`、`RankTrendObservationPanel.test.ts`），`observation.lifecycle` 类型调整为可选以支持生命周期轨独立降级；后端投影行为由 `quant-board/tests/test_mongo_repository.py` 与 `test_quant_board.py` 覆盖。

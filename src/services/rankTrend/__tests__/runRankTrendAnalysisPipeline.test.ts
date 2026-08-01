@@ -235,7 +235,6 @@ const riskCalls = vi.fn()
 const decisionCalls = vi.fn()
 const strategyCalls = vi.fn()
 const executionStrategyCalls = vi.fn()
-const minSamplesCalls = vi.fn()
 const marketRegimeCalls = vi.fn()
 
 vi.mock('@/services/rankTrend/technicalSignalAnalyzer', () => ({
@@ -291,17 +290,6 @@ vi.mock('@/services/rankTrend/marketRegimeAnalyzer', () => ({
   }),
 }))
 
-vi.mock('@/services/rankTrend/utils', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils')>()
-  return {
-    ...actual,
-    getTechnicalMinSamples: vi.fn(() => {
-      minSamplesCalls()
-      return 5
-    }),
-  }
-})
-
 describe('runRankTrendAnalysisPipeline', () => {
   beforeEach(() => {
     technicalCalls.mockClear()
@@ -311,16 +299,17 @@ describe('runRankTrendAnalysisPipeline', () => {
     decisionCalls.mockClear()
     strategyCalls.mockClear()
     executionStrategyCalls.mockClear()
-    minSamplesCalls.mockClear()
     marketRegimeCalls.mockClear()
   })
 
   it('按 shared pipeline 顺序执行并把 risk 回灌给第二次 cycle', async () => {
     const { runRankTrendAnalysisPipeline } = await import('../runRankTrendAnalysisPipeline')
+    const rankSeries = Array.from({ length: 26 }, (_, index) => 35 - index)
+    const percentileSeries = Array.from({ length: 26 }, (_, index) => 65 + index)
 
     const result = runRankTrendAnalysisPipeline({
-      ranks: [35, 21, 12],
-      percentiles: [65, 79, 88],
+      ranks: rankSeries,
+      percentiles: percentileSeries,
       currentPercentile: 88,
       displayChange: 9,
       stockChange: 5.2,
@@ -344,7 +333,6 @@ describe('runRankTrendAnalysisPipeline', () => {
         buyScoreThreshold: 0.12,
         sellScoreThreshold: -0.12,
       },
-      requiredSamples: 3,
     })
 
     expect(technicalCalls).toHaveBeenCalledTimes(1)
@@ -356,13 +344,13 @@ describe('runRankTrendAnalysisPipeline', () => {
     expect(executionStrategyCalls).toHaveBeenCalledTimes(1)
 
     expect(cycleCalls.mock.calls[0]?.[0]).toMatchObject({
-      ranks: [35, 21, 12],
-      percentiles: [65, 79, 88],
+      ranks: rankSeries,
+      percentiles: percentileSeries,
       momentumProfile: technicalResult.momentumProfile,
     })
     expect(cycleCalls.mock.calls[1]?.[0]).toMatchObject({
-      ranks: [35, 21, 12],
-      percentiles: [65, 79, 88],
+      ranks: rankSeries,
+      percentiles: percentileSeries,
       momentumProfile: technicalResult.momentumProfile,
       risk: {
         pressure: riskResult.pressure,
@@ -450,7 +438,6 @@ describe('runRankTrendAnalysisPipeline', () => {
         buyScoreThreshold: 0.12,
         sellScoreThreshold: -0.12,
       },
-      requiredSamples: 6,
     })
 
     expect(technicalCalls).not.toHaveBeenCalled()
@@ -459,43 +446,49 @@ describe('runRankTrendAnalysisPipeline', () => {
     expect(riskCalls).toHaveBeenCalledTimes(1)
     expect(decisionCalls).toHaveBeenCalledTimes(1)
     expect(strategyCalls).toHaveBeenCalledTimes(1)
-    expect(minSamplesCalls).not.toHaveBeenCalled()
   })
 
-  it('未显式传 requiredSamples 时会回退到 getTechnicalMinSamples(config)', async () => {
+  it('以最小可计算窗口作为真算/降级切换点，稳定窗口 30 不再阻断计算', async () => {
     const { runRankTrendAnalysisPipeline } = await import('../runRankTrendAnalysisPipeline')
+    const baseConfig = {
+      momentumPeriods: [5, 10, 20],
+      momentumWeights: [0.5, 0.3, 0.2],
+      buyThresholds: [70, 80, 90],
+      sellThresholds: [30, 20, 10],
+      macdFast: 12,
+      macdSlow: 26,
+      macdSignal: 9,
+      directionWeight: 0.3,
+      accelerationWeight: 0.25,
+      crossWeight: 0.2,
+      macdWeight: 0.25,
+      buyScoreThreshold: 0.12,
+      sellScoreThreshold: -0.12,
+    }
+    const runWith = (length: number) =>
+      runRankTrendAnalysisPipeline({
+        ranks: Array.from({ length }, (_, index) => 40 - index),
+        percentiles: Array.from({ length }, (_, index) => 40 + index),
+        currentPercentile: 88,
+        displayChange: 6,
+        stockChange: 2.8,
+        volumeRatio: 1.6,
+        zlje: 6000000,
+        zljzb: 8.4,
+        regime: strategyResult.regime,
+        config: baseConfig,
+      })
 
-    runRankTrendAnalysisPipeline({
-      ranks: [31, 18, 9],
-      percentiles: [69, 82, 91],
-      currentPercentile: 91,
-      displayChange: 6,
-      stockChange: 2.8,
-      volumeRatio: 1.6,
-      zlje: 6000000,
-      zljzb: 8.4,
-      regime: strategyResult.regime,
-      config: {
-        momentumPeriods: [5, 10, 20],
-        momentumWeights: [0.5, 0.3, 0.2],
-        buyThresholds: [70, 80, 90],
-        sellThresholds: [30, 20, 10],
-        macdFast: 12,
-        macdSlow: 26,
-        macdSignal: 9,
-        directionWeight: 0.3,
-        accelerationWeight: 0.25,
-        crossWeight: 0.2,
-        macdWeight: 0.25,
-        buyScoreThreshold: 0.12,
-        sellScoreThreshold: -0.12,
-      },
-    })
+    // 26 bar 恰好达到 macdSlow=26 的最小可计算窗口 → 真实技术信号
+    runWith(26)
+    expect(technicalCalls).toHaveBeenCalledTimes(1)
+    expect(fallbackTechnicalCalls).not.toHaveBeenCalled()
 
-    expect(minSamplesCalls).toHaveBeenCalledTimes(1)
-    expect(technicalCalls).not.toHaveBeenCalled()
+    // 25 bar 未达可计算窗口 → 降级 fallback
+    runWith(25)
     expect(fallbackTechnicalCalls).toHaveBeenCalledTimes(1)
-    expect(cycleCalls).toHaveBeenCalledTimes(2)
+    expect(technicalCalls).toHaveBeenCalledTimes(1)
+    expect(cycleCalls).toHaveBeenCalledTimes(4)
   })
 })
 
@@ -570,7 +563,6 @@ describe('shared pipeline consumers', () => {
       ranks: [78, 66, 58, 49, 42, 36, 33],
       percentiles: [23, 35, 43, 52, 59, 65, 68],
       currentPercentile: 68,
-      requiredSamples: 5,
       regime: strategyResult.regime,
       hotlistSentiment: {
         overall: 58,

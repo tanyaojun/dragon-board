@@ -279,7 +279,7 @@ export class RankTrendSignalService {
 
       const resonanceScore = Number(rankTrend?.resonance?.score)
       const rankTrendScore = Number(rankTrend?.observation?.rankTrend.score)
-      const lifecycleScore = Number(rankTrend?.observation?.lifecycle.score)
+      const lifecycleScore = Number(rankTrend?.observation?.lifecycle?.score)
       const hasResonance =
         rankTrend?.resonance?.status === 'ok' && Number.isFinite(resonanceScore)
 
@@ -289,8 +289,8 @@ export class RankTrendSignalService {
       stock._rankTrendPct = Number.isFinite(rankTrendScore) ? rankTrendScore : undefined
       stock._rankTrendDirection = rankTrend?.observation?.rankTrend.direction ?? null
       stock._lifecyclePct = Number.isFinite(lifecycleScore) ? lifecycleScore : undefined
-      stock._lifecycleStage = rankTrend?.observation?.lifecycle.stage ?? null
-      stock._lifecycleVeto = rankTrend?.observation?.lifecycle.veto ?? false
+      stock._lifecycleStage = rankTrend?.observation?.lifecycle?.stage ?? null
+      stock._lifecycleVeto = rankTrend?.observation?.lifecycle?.veto ?? false
     }
   }
 

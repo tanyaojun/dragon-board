@@ -954,7 +954,6 @@ export class RankTrendAnalyzer {
     const volumeRatio = getTrustedVolumeRatio(stock)
     const zlje = Number(stock?.zlje ?? 0) || 0
     const zljzb = Number(stock?.zljzb ?? 0) || 0
-    const requiredSamples = stockSampleQuality.requiredSampleCount
     const regime = this.resolveMarketRegime(snapshotSignature, dataLayer)
 
     const { technical, cycle, risk, decision, observation, strategy, executionStrategy } = runRankTrendAnalysisPipeline({
@@ -969,7 +968,6 @@ export class RankTrendAnalyzer {
       regime,
       hotlistSentiment: typeof dataLayer.getBreathData === 'function' ? dataLayer.getBreathData() : null,
       config: runtimeConfig,
-      requiredSamples,
     })
 
     const updateTime = Date.now()
