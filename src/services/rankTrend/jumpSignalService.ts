@@ -1,5 +1,5 @@
 import type { RankTrendAnalysisResult } from './types'
-import { detectRankJumps, type JumpResult } from './jumpDetector'
+import type { JumpResult } from './jumpDetector'
 
 // ── 出场配置 ──
 export interface JumpExitConfig {
@@ -177,7 +177,11 @@ export function evaluateJumpSignal(
   isInFrame: boolean,
   ranks?: number[],
 ): JumpSignalResult {
-  const jump = detectRankJumps(percentiles, ranks, 15)
+  // jump 事件检测收敛到 Python golden 输出（rankTrend.jump），本地不再重算。
+  const jump: JumpResult =
+    rankTrend?.jump && (rankTrend.jump as JumpResult).event === 'jump'
+      ? (rankTrend.jump as JumpResult)
+      : { event: 'none', direction: 'hold', signal: 'hold', magnitude: 0, overshoot: 0, delta: 15, sustained: false, confidence: 50, eventCount: 0, surgeCount: 0, collapseCount: 0, rankMagnitude: 0, events: [] }
   const entryCheck = checkEntryConditions(stock, rankTrend, jump)
   const currentPrice = Number(stock?.price ?? stock?.lastTradePrice ?? 0)
   const [isExit, exitReason] = entryCheck.passed

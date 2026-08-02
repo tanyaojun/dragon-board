@@ -113,6 +113,8 @@ export interface RankTrendAnalysisResult {
     change: number
     rawChange: number
     updateTime: number
+    analysisSource?: 'py_golden' | 'analysis_unavailable'
+    analysisUnavailableReason?: string
     sampleQuality?: {
       snapshotType: RankTrendSnapshotType
       sampleCount: number

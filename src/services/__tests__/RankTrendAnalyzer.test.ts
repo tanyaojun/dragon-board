@@ -69,6 +69,7 @@ vi.mock('../dataLoader', () => ({
 vi.mock('../apiService', () => ({
   apiService: {
     getRankTrendRankSeries: vi.fn(),
+    analyzeRankTrend: vi.fn(),
   },
 }))
 
@@ -109,6 +110,73 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.meta.sampleQuality?.status).toBe('degraded')
     expect(result?.meta.sampleQuality?.coverageWarning).toContain('回退 half_hour')
     expect(result?.meta.sampleQuality?.latestTradingDate).toBe('2026-04-27')
+  })
+
+  it('preferRemoteAnalysis 时消费 Python golden 结果并标记分析来源', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    const snapshots = [
+      { date: '2026-04-27 10:00', timestamp: Date.parse('2026-04-27T10:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '10:00', hotlist: buildHotlist(66) } },
+      { date: '2026-04-27 10:30', timestamp: Date.parse('2026-04-27T10:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '10:30', hotlist: buildHotlist(58) } },
+      { date: '2026-04-27 11:00', timestamp: Date.parse('2026-04-27T11:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '11:00', hotlist: buildHotlist(49) } },
+      { date: '2026-04-27 13:30', timestamp: Date.parse('2026-04-27T13:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '13:30', hotlist: buildHotlist(42) } },
+      { date: '2026-04-27 14:00', timestamp: Date.parse('2026-04-27T14:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '14:00', hotlist: buildHotlist(36) } },
+    ]
+    vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
+      ok: true,
+      frames: [{
+        frameKey: '2026-04-27 current:1',
+        regime: { state: 'strong', score: 80, reasons: ['池内上涨100%'] },
+        totalCount: 100,
+        stocks: [{
+          code: '600001',
+          analysis: {
+            meta: { code: '600001' },
+            strategy: { candidateTier: 'A_MAIN', regime: { state: 'strong', score: 80 } },
+            executionStrategy: { candidateTier: 'A_MAIN', hotlist: { state: 'missing' } },
+          },
+        }],
+      }],
+      source: 'py_golden',
+      issues: [],
+    })
+
+    const results = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'quarter_hour',
+      snapshots,
+      preferRemoteAnalysis: true,
+    })
+
+    const result = results.get('600001')
+    expect(result).toBeTruthy()
+    expect(result?.meta.analysisSource).toBe('py_golden')
+    expect(result?.strategy?.candidateTier).toBe('A_MAIN')
+  })
+
+  it('远程分析失败时标记 analysis_unavailable 并给出原因', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    const snapshots = [
+      { date: '2026-04-27 10:00', timestamp: Date.parse('2026-04-27T10:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '10:00', hotlist: buildHotlist(66) } },
+      { date: '2026-04-27 10:30', timestamp: Date.parse('2026-04-27T10:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '10:30', hotlist: buildHotlist(58) } },
+      { date: '2026-04-27 11:00', timestamp: Date.parse('2026-04-27T11:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '11:00', hotlist: buildHotlist(49) } },
+      { date: '2026-04-27 13:30', timestamp: Date.parse('2026-04-27T13:30:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '13:30', hotlist: buildHotlist(42) } },
+      { date: '2026-04-27 14:00', timestamp: Date.parse('2026-04-27T14:00:00'), snapshot: { type: 'half_hour', tradingDate: '2026-04-27', slotTime: '14:00', hotlist: buildHotlist(36) } },
+    ]
+    vi.mocked(apiService.analyzeRankTrend).mockRejectedValue(new Error('backend offline'))
+
+    const results = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'quarter_hour',
+      snapshots,
+      preferRemoteAnalysis: true,
+    })
+
+    const result = results.get('600001')
+    expect(result).toBeTruthy()
+    expect(result?.meta.analysisSource).toBe('analysis_unavailable')
+    expect(result?.meta.analysisUnavailableReason).toContain('backend offline')
   })
 
   it('当前完整排名与最新正式帧一致时不重复追加当前帧', async () => {

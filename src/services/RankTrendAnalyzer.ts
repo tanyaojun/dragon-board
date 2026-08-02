@@ -70,6 +70,7 @@ type RankTrendAnalysisOptions = {
   snapshots?: Array<{ date: string; timestamp?: number; snapshot: any }>
   updateSignalStore?: boolean
   preferredSnapshotType?: SupportedSnapshotType
+  preferRemoteAnalysis?: boolean
   fromDate?: Date
   toDate?: Date
   codes?: string[]
@@ -533,6 +534,65 @@ export class RankTrendAnalyzer {
 
     for (const [code, result] of computedResults) {
       if (result) results.set(code, result)
+    }
+
+    if (options.preferRemoteAnalysis === true) {
+      const stocks = typeof dataLayer.getStocks === 'function' ? dataLayer.getStocks() : []
+      const currentFrameStocks = stocks
+        .filter((stock: any) => rankMap.has(String(stock?.code)))
+        .map((stock: any) => ({
+          code: String(stock?.code),
+          rank: Number(stock?.compRank || stock?.rank) || 0,
+          avgRankNum: Number(stock?.avgRankNum) || 0,
+          change: Number(stock?.change) || 0,
+          volumeRatio: Number(stock?.volumeRatio) || 0,
+          zlje: Number(stock?.zlje) || 0,
+          zljzb: Number(stock?.zljzb) || 0,
+          platforms: Number(stock?.platforms) || 0,
+        }))
+      try {
+        const remote = await apiService.analyzeRankTrend({
+          snapshotType: options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+          codes: Array.from(rankMap.keys()),
+          currentFrame: {
+            tradingDate: new Date().toISOString().slice(0, 10),
+            slotTime: currentFrameKey,
+            stocks: currentFrameStocks,
+          },
+        })
+        if (remote?.ok && remote.frames?.length) {
+          const frameResult = remote.frames[remote.frames.length - 1]
+          const byCode = new Map(frameResult.stocks.map((item) => [item.code, item.analysis]))
+          for (const [code, result] of results) {
+            const analysis = byCode.get(code) as RankTrendAnalysisResult | undefined
+            if (!analysis) continue
+            result.meta = {
+              ...result.meta,
+              ...analysis.meta,
+              analysisSource: 'py_golden' as const,
+            }
+            result.technical = analysis.technical
+            result.cycle = analysis.cycle
+            result.risk = analysis.risk
+            result.decision = analysis.decision
+            if (analysis.observation) result.observation = analysis.observation
+            result.strategy = analysis.strategy
+            result.executionStrategy = analysis.executionStrategy
+            result.jump = analysis.jump
+          }
+          this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())
+          return results
+        }
+      } catch (error) {
+        for (const result of results.values()) {
+          result.meta = {
+            ...result.meta,
+            analysisSource: 'analysis_unavailable' as const,
+            analysisUnavailableReason: error instanceof Error ? error.message : String(error),
+          }
+        }
+        return results
+      }
     }
 
     this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())

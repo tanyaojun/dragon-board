@@ -98,6 +98,7 @@ export class RankTrendSignalService {
 
     const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
       updateSignalStore: false,
+      preferRemoteAnalysis: true,
     })
     const coverageWarning = this.extractRankTrendCoverageWarning(results)
 
@@ -128,15 +129,12 @@ export class RankTrendSignalService {
       const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
       if (!rankTrend?.meta?.code) continue
 
-      const analysisSeries = rankTrendAnalyzer.getLatestAnalysisSeries(stock.code)
-      if (!analysisSeries) continue
-
       const result = evaluateJumpSignal(
         stock,
         rankTrend,
-        analysisSeries.percentiles,
+        [],
         true,
-        analysisSeries.ranks,
+        [],
       )
 
       // 持仓管理
@@ -223,6 +221,7 @@ export class RankTrendSignalService {
     const newRankMap = buildAttentionRankMap(merged)
     const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap, {
       updateSignalStore: false,
+      preferRemoteAnalysis: true,
       snapshots: options.snapshots,
     })
     const coverageWarning = this.extractRankTrendCoverageWarning(rankTrends)

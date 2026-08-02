@@ -73,9 +73,21 @@ vi.mock('../../rankTrend/jumpSignalService', async () => {
   const actual = await vi.importActual<any>('../../rankTrend/jumpSignalService')
   return {
     ...actual,
-    evaluateJumpSignal: vi.fn(() => ({
-      jump: { event: 'jump', direction: 'buy', confidence: 92, sustained: true, magnitude: 20 },
-      isEntry: true,
+    evaluateJumpSignal: vi.fn((stock: any, rankTrend: any) => ({
+      jump: rankTrend?.jump ?? {
+        event: 'none',
+        direction: 'hold',
+        confidence: 50,
+        magnitude: 0,
+        overshoot: 0,
+        delta: 15,
+        sustained: false,
+        eventCount: 0,
+        surgeCount: 0,
+        collapseCount: 0,
+        events: [],
+      },
+      isEntry: false,
       isExit: false,
       exitReason: '',
     })),
@@ -327,7 +339,7 @@ describe('RankTrendSignalService', () => {
     ])
   })
 
-  it('uses the current-frame analysis series when evaluating a jump signal', async () => {
+  it('evaluates a jump signal from the py golden rankTrend without local series', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     const { evaluateJumpSignal } = await import('../../rankTrend/jumpSignalService')
     const rankTrend = {
@@ -346,21 +358,15 @@ describe('RankTrendSignalService', () => {
     } as any
 
     vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(new Map([['002298', rankTrend]]))
-    vi.mocked(rankTrendAnalyzer.getCachedPercentiles).mockReturnValue([58.8, 27.5, 29.3])
-    vi.mocked(rankTrendAnalyzer.getLatestAnalysisSeries).mockReturnValue({
-      ranks: [97, 175, 165, 11],
-      percentiles: [58.8, 27.5, 29.3, 95.2],
-    })
-
     const service = new RankTrendSignalService()
     await service.applySignalsToMerged([{ code: '002298', name: '中电鑫龙', rank: 11, avgRankNum: 1 }])
 
     expect(evaluateJumpSignal).toHaveBeenCalledWith(
       expect.objectContaining({ code: '002298' }),
       rankTrend,
-      [58.8, 27.5, 29.3, 95.2],
+      [],
       true,
-      [97, 175, 165, 11],
+      [],
     )
   })
 

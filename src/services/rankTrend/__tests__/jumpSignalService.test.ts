@@ -65,14 +65,35 @@ describe('checkEntryConditions', () => {
 
 describe('evaluateJumpSignal', () => {
   it('将 checkEntryConditions 产出的 limitUp 透传到聚合结果', () => {
+    const rankTrend = {
+      ...rankTrendWithSignals('buy', 'buy'),
+      jump: { event: 'jump', direction: 'buy', confidence: 90, sustained: true, events: [] },
+    } as RankTrendAnalysisResult
     const result = evaluateJumpSignal(
       { code: '600001', change: 9.8 },
-      rankTrendWithSignals('buy', 'buy'),
+      rankTrend,
       [10, 35, 55, 80],
       true,
     )
 
     expect(result.limitUp).toBe(true)
+  })
+
+  it('优先消费 rankTrend.jump，不再本地重算事件', () => {
+    const rankTrend = {
+      ...rankTrendWithSignals('buy', 'buy'),
+      jump: { event: 'jump', direction: 'buy', confidence: 90, sustained: true, events: [] },
+    } as RankTrendAnalysisResult
+
+    const result = evaluateJumpSignal(
+      { code: '600001', change: 2.5 },
+      rankTrend,
+      [10, 11, 12],
+      true,
+    )
+
+    expect(result.jump.event).toBe('jump')
+    expect(result.jump.direction).toBe('buy')
   })
 })
 

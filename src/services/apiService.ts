@@ -698,6 +698,45 @@ export class ApiService {
     )
   }
 
+  /** 调用 QuantBoard Python 批量分析：返回每帧 regime + 每股 golden 链输出 */
+  async analyzeRankTrend(payload: {
+    datasetId?: string
+    snapshotType: string
+    codes?: string[]
+    frameKeys?: string[]
+    currentFrame?: {
+      tradingDate: string
+      slotTime: string
+      stocks: Array<Record<string, unknown>>
+    }
+  }, options?: RequestConfig) {
+    return this.post<{
+      ok: boolean
+      frames: Array<{
+        frameKey: string
+        regime: { state: string; score: number; reasons: string[] }
+        totalCount: number
+        stocks: Array<{ code: string; analysis: Record<string, unknown> }>
+      }>
+      source: string
+      issues: string[]
+    }>(`/api/ranktrend/analyze`, {
+      datasetId: payload.datasetId || 'dragonboard_live',
+      snapshotType: payload.snapshotType,
+      codes: payload.codes || [],
+      frameKeys: payload.frameKeys || [],
+      currentFrame: payload.currentFrame,
+    }, {
+      context: 'quant-board',
+      priority: 'high',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
   /** 从 QuantBoard MongoDB 主库读取正式快照记录 */
   async listMongoSnapshotRecords(params: MongoSnapshotRecordQueryOptions = {}, options?: RequestConfig) {
     return this.get<any>(`/api/snapshots/records${this.buildMongoSnapshotQuery(params)}`, {

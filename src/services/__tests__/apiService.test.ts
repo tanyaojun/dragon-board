@@ -66,6 +66,37 @@ describe('ApiService', () => {
     await expect(queued).resolves.toMatchObject({ ok: true, queued: true })
   })
 
+  it('posts ranktrend analyze payload to /api/ranktrend/analyze', async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) =>
+      Promise.resolve(
+        new Response(JSON.stringify({ ok: true, frames: [], source: 'py_golden', issues: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const api = new ApiService()
+
+    const result = await api.analyzeRankTrend({
+      snapshotType: 'half_hour',
+      codes: ['002279'],
+    })
+
+    expect(result.source).toBe('py_golden')
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/ranktrend/analyze'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(String(init.body))
+    expect(body).toMatchObject({
+      datasetId: 'dragonboard_live',
+      snapshotType: 'half_hour',
+      codes: ['002279'],
+    })
+  })
+
   it('requests ths segmented limit-up pools through the limitup proxy endpoint', async () => {
     const api = new ApiService()
     const fetchMock = vi.fn(async () =>
