@@ -68,17 +68,17 @@
 
 **Files:** 无
 
-- [ ] **Step 1: 运行 TS RankTrend 测试**
+- [x] **Step 1: 运行 TS RankTrend 测试**
 
 Run: `pnpm test:ranktrend --reporter=basic`
 Expected: 24 个文件全部通过（当前 265 用例），记录退出码 0。
 
-- [ ] **Step 2: 运行 QuantBoard 后端测试**
+- [x] **Step 2: 运行 QuantBoard 后端测试**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest -q`
 Expected: 现有测试全部通过，记录退出码 0 与失败数。
 
-- [ ] **Step 3: 记录 git 基线**
+- [x] **Step 3: 记录 git 基线**
 
 Run: `git -C D:\dragon-board status --short`
 Expected: 记录当前未提交文件清单（应有上一轮已确认的 `RankTrendObservationService.ts` 及其测试，如有其它用户改动则列出并避让）。
@@ -90,7 +90,7 @@ Expected: 记录当前未提交文件清单（应有上一轮已确认的 `RankT
 **Files:**
 - Create: `quant-board/backend/tests/test_market_regime.py`
 
-- [ ] **Step 1: 创建测试文件**
+- [x] **Step 1: 创建测试文件**
 
 ```python
 from backend.analysis.ranktrend import market_regime
@@ -161,7 +161,7 @@ def test_no_stocks_returns_neutral_with_reason():
     assert result["reasons"]
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_market_regime.py -q`
 Expected: FAIL——`assert "池内上涨" in reasons` 失败（现实现输出"涨停/跌停/涨跌扩散"等全A原因）。
@@ -171,7 +171,7 @@ Expected: FAIL——`assert "池内上涨" in reasons` 失败（现实现输出"
 **Files:**
 - Modify: `quant-board/backend/analysis/ranktrend.py:830`（`market_regime` 函数整体替换）
 
-- [ ] **Step 1: 替换 market_regime 实现**
+- [x] **Step 1: 替换 market_regime 实现**
 
 ```python
 REGIME_STAGE_ADJUST = {"高潮": 8, "发酵": 5, "启动": 0, "退潮": -6, "冰点": -8}
@@ -234,17 +234,17 @@ def market_regime(frame: dict[str, Any]) -> dict[str, Any]:
     return {"state": state, "score": round(score, 1), "reasons": reasons}
 ```
 
-- [ ] **Step 2: 运行测试确认通过**
+- [x] **Step 2: 运行测试确认通过**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_market_regime.py -q`
 Expected: PASS（4 个用例）。
 
-- [ ] **Step 3: 确认现有关联测试**
+- [x] **Step 3: 确认现有关联测试**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest -q`
 Expected: 全绿。若既有测试断言旧全A regime 输出，更新该断言为五因子输出（属于本 Task 范围）。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 Run:
 ```powershell
@@ -260,7 +260,7 @@ git -C D:\dragon-board commit -m "feat: RankTrend regime 改为热榜池五因�
 - Create: `quant-board/backend/tests/test_observation_scores.py`
 - Modify: `quant-board/backend/analysis/ranktrend.py`（新增 `compose_observation_scores`，放在 `compose_decision` 之后）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 from backend.analysis.ranktrend import compose_observation_scores
@@ -299,12 +299,12 @@ def test_veto_keeps_score_and_marks_reason():
     assert result["lifecycle"]["reasons"] == ["生命周期进入反转路径"]
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_observation_scores.py -q`
 Expected: FAIL——`ImportError: cannot import name 'compose_observation_scores'`。
 
-- [ ] **Step 3: 实现（对齐 TS observationScoreComposer）**
+- [x] **Step 3: 实现（对齐 TS observationScoreComposer）**
 
 ```python
 STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
@@ -350,7 +350,7 @@ def compose_observation_scores(input: dict[str, Any]) -> dict[str, Any]:
     }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_observation_scores.py -q`
 Expected: PASS（2 个用例）。
@@ -360,7 +360,7 @@ Expected: PASS（2 个用例）。
 **Files:**
 - Modify: `quant-board/backend/analysis/ranktrend.py:1194`（`_build_signal`）
 
-- [ ] **Step 1: 写失败测试（合同字段）**
+- [x] **Step 1: 写失败测试（合同字段）**
 
 ```python
 from backend.analysis.ranktrend import RankTrendConfig, analyze_technical, analyze_cycle, analyze_risk, analyze_cycle_with_risk, compose_decision, compose_analysis_candidate_tier, compose_strategy, compose_observation_scores
@@ -386,12 +386,12 @@ def test_signal_contract_contains_observation_and_both_strategies():
     assert {"rankTrend", "lifecycle"} <= set(observation)
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_observation_scores.py -q`
 Expected: PASS（该测试只验证组合器合同，用于锁定签名；若通过则继续，若导入失败则先修正导入路径）。
 
-- [ ] **Step 3: 改造 _build_signal 输出**
+- [x] **Step 3: 改造 _build_signal 输出**
 
 在 `_build_signal` 中，将原来的"按 candidate_tier_mode 二选一"改为同时输出两个分层，并新增 observation：
 
@@ -419,12 +419,12 @@ Expected: PASS（该测试只验证组合器合同，用于锁定签名；若通
 
 注意：`strategy` 现在必须带 `regime` 字段供消费端使用；`compose_analysis_candidate_tier` 返回时在返回 dict 中补 `"regime": regime`（Python 端与 TS `composeCandidateTier` 输出一致）。
 
-- [ ] **Step 4: 运行全量后端测试**
+- [x] **Step 4: 运行全量后端测试**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest -q`
 Expected: 全绿。若有 golden/replay 断言引用旧 `strategy` 结构，按新合同更新断言。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```powershell
@@ -441,7 +441,7 @@ git -C D:\dragon-board commit -m "feat: Python 补齐 observation 与 executionS
 - Modify: `quant-board/backend/main.py`（挂载 router）
 - Create: `quant-board/backend/tests/test_ranktrend_analyze_api.py`
 
-- [ ] **Step 1: 写失败 API 测试**
+- [x] **Step 1: 写失败 API 测试**
 
 ```python
 from fastapi.testclient import TestClient
@@ -508,12 +508,12 @@ def test_analyze_returns_py_golden_frames(monkeypatch):
 `backend.data.repository_factory.get_runtime_mongodb_database` + `create_repository` 返回 FakeRepo）；
 无真实 MongoDB 时不得让用例静默通过或全走 503，必须用 FakeRepo 覆盖成功路径。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_ranktrend_analyze_api.py -q`
 Expected: FAIL——`404 Not Found`（路由不存在）。
 
-- [ ] **Step 3: 实现 router**
+- [x] **Step 3: 实现 router**
 
 ```python
 from typing import Any
@@ -629,7 +629,7 @@ def _analyze_frames(engine: RankTrendPythonEngine, frames: list[dict[str, Any]],
 
 注意：`RankTrendPythonEngine`（`backend/analysis/ranktrend.py:1080`）构造只接受 `config`，`replay(frames, ...)` 消费已组装的帧序列；本实现通过 `load_frame_bundles(... projection='ranktrend')` 复用既有 repository 能力，无需新增数据库接口。`_parse_frame_key` 若未使用应删除，避免死代码。
 
-- [ ] **Step 4: main.py 挂载 router**
+- [x] **Step 4: main.py 挂载 router**
 
 在 `backend/main.py` 顶部 import 区追加：
 
@@ -643,7 +643,7 @@ from backend.api.ranktrend_routes import router as ranktrend_router
 app.include_router(ranktrend_router)
 ```
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_ranktrend_analyze_api.py -q`
 Expected: PASS。
@@ -653,7 +653,7 @@ Expected: PASS。
 **Files:**
 - Modify: `quant-board/backend/main.py:518`（`list_snapshot_frames`）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `quant-board/backend/tests/test_ranktrend_analyze_api.py` 追加：
 
@@ -671,12 +671,12 @@ def test_frames_include_regime_when_computable(monkeypatch):
             assert "regime" in frame
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest backend/tests/test_ranktrend_analyze_api.py -q`
 Expected: 至少存在断言失败（frame 无 regime 字段），或仓库不可用时走 503 分支（此时检查实现路径的静态合同）。
 
-- [ ] **Step 3: 实现 frames regime 注入**
+- [x] **Step 3: 实现 frames regime 注入**
 
 在 `list_snapshot_frames` 的 `load_response()` 内，`frames` 从 `repo.load_frame_bundles(...)` 返回后、返回响应前，对每个 frame 注入 regime：
 
@@ -694,12 +694,12 @@ Expected: 至少存在断言失败（frame 无 regime 字段），或仓库不�
 
 `load_frame_bundles` 的 bundle 已含 `rows/hotlist/stocks` 和 `sentiment/marketStats`，无需额外 DB 查询。
 
-- [ ] **Step 4: 运行全量后端测试**
+- [x] **Step 4: 运行全量后端测试**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest -q`
 Expected: 全绿。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```powershell
@@ -715,7 +715,7 @@ git -C D:\dragon-board commit -m "feat: 新增 ranktrend analyze API 与 frames 
 - Modify: `src/services/apiService.ts`
 - Test: `src/services/__tests__/apiService.test.ts`
 
-- [ ] **Step 1: 写失败测试（URL 与方法）**
+- [x] **Step 1: 写失败测试（URL 与方法）**
 
 ```ts
 it('posts ranktrend analyze payload to /api/ranktrend/analyze', async () => {
@@ -728,12 +728,12 @@ it('posts ranktrend analyze payload to /api/ranktrend/analyze', async () => {
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm exec vitest run src/services/__tests__/apiService.test.ts -t "analyze" --reporter=basic`
 Expected: FAIL——`apiService.analyzeRankTrend is not a function`。
 
-- [ ] **Step 3: 实现方法**
+- [x] **Step 3: 实现方法**
 
 在 `apiService.ts` 的 `getRankTrendRankSeries` 之后新增：
 
@@ -778,7 +778,7 @@ async analyzeRankTrend(payload: {
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `pnpm exec vitest run src/services/__tests__/apiService.test.ts -t "analyze" --reporter=basic`
 Expected: PASS。
@@ -790,7 +790,7 @@ Expected: PASS。
 - Modify: `src/services/rankTrend/types.ts`（meta 增加分析来源字段）
 - Test: `src/services/__tests__/RankTrendAnalyzer.test.ts`
 
-- [ ] **Step 1: 写失败测试（消费 API + analysisUnavailable）**
+- [x] **Step 1: 写失败测试（消费 API + analysisUnavailable）**
 
 ```ts
 it('consumes py golden analysis and marks analysisUnavailable on API failure', async () => {
@@ -825,12 +825,12 @@ it('consumes py golden analysis and marks analysisUnavailable on API failure', a
 })
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm exec vitest run src/services/__tests__/RankTrendAnalyzer.test.ts -t "analysisUnavailable" --reporter=basic`
 Expected: FAIL。
 
-- [ ] **Step 3: 实现消费路径**
+- [x] **Step 3: 实现消费路径**
 
 先在 `src/services/rankTrend/types.ts` 的 `RankTrendAnalysisResult.meta` 中新增：
 
@@ -901,7 +901,7 @@ Expected: FAIL。
 
 注意：该分支保留现有 `computeStockRankTrend` 组装出的 per-code `results`（用于 live-only series 与 meta），远程成功时覆盖 golden 字段；失败时仅打标，不调用本地 pipeline。`DEFAULT_RANK_TREND_SNAPSHOT_TYPE` 从 `@/types/rankTrendDefaults` 导入。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `pnpm exec vitest run src/services/__tests__/RankTrendAnalyzer.test.ts -t "analysisUnavailable" --reporter=basic`
 Expected: PASS。
@@ -912,7 +912,7 @@ Expected: PASS。
 - Modify: `src/services/dataLoader/RankTrendSignalService.ts`
 - Test: `src/services/dataLoader/__tests__/RankTrendSignalService.test.ts`
 
-- [ ] **Step 1: 写失败测试（jump 消费 Python 输出）**
+- [x] **Step 1: 写失败测试（jump 消费 Python 输出）**
 
 ```ts
 it('applies jump signals from py golden jump events without local redetection', async () => {
@@ -931,12 +931,12 @@ it('applies jump signals from py golden jump events without local redetection', 
 
 若该测试难以直接断言，改为断言 `applyJumpSignals` 在 `rankTrend.jump.event === 'jump'` 时产生持仓登记（mock 持仓 store），且不调用本地 `detectRankJumps`。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm exec vitest run src/services/dataLoader/__tests__/RankTrendSignalService.test.ts -t "py golden" --reporter=basic`
 Expected: FAIL（当前仍本地重算）。
 
-- [ ] **Step 3: 改造 applyJumpSignals**
+- [x] **Step 3: 改造 applyJumpSignals**
 
 把 `applyJumpSignals` 内对每只股票的 jump 判定从"基于 percentiles 重算"改为"优先消费 `rankTrend.jump`（Python 输出）；本地重算路径删除"。保留持仓登记/通知/退出逻辑不变。
 
@@ -945,12 +945,12 @@ Expected: FAIL（当前仍本地重算）。
 `rankTrend.jump`（事件字段缺失时按 `event: 'none'` 处理）。`compat.ts` 中 `JumpResult` 类型改从
 `types.ts` 导入（JumpResult 定义从 jumpDetector.ts 迁移，见 Phase 6），避免删除 jumpDetector 时断链。
 
-- [ ] **Step 4: 运行确认通过 + 保留 resonance 回归**
+- [x] **Step 4: 运行确认通过 + 保留 resonance 回归**
 
 Run: `pnpm test:ranktrend --reporter=basic`
 Expected: 全绿（含既有 resonance 用例）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```powershell
@@ -966,7 +966,7 @@ git -C D:\dragon-board commit -m "feat: TS 实时链路消费 Python golden 分�
 - Modify: `src/services/rankTrend/RankTrendObservationService.ts`
 - Test: `src/services/rankTrend/__tests__/RankTrendObservationService.test.ts`
 
-- [ ] **Step 1: 写失败测试（历史帧 regime 来自 frame.regime）**
+- [x] **Step 1: 写失败测试（历史帧 regime 来自 frame.regime）**
 
 在现有"历史帧按该帧已落库 marketStats 重算"用例之后新增：
 
@@ -980,19 +980,19 @@ it('历史帧 regime 以 Python frame.regime 为准，不再本地计算', async
 
 测试骨架沿用现有用例的 mock 模式（`getLatestAnalysisSeries`、`listSnapshotStockRows`、`listSnapshotFrames`），断言 `regime.state` 等于 frame 附带的 regime，并 `vi.spyOn` 验证本地 `analyzeMarketRegime` 未被调用。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm exec vitest run src/services/rankTrend/__tests__/RankTrendObservationService.test.ts --reporter=basic`
 Expected: FAIL。
 
-- [ ] **Step 3: 改造观察服务**
+- [x] **Step 3: 改造观察服务**
 
 - 删除 `resolveHistoricalRegime`/`hasRegimeMaterial` 本地计算与 `analyzeMarketRegime` import；
 - 历史帧 regime 直接取 `frame.regime`（`listSnapshotFrames` 返回的新字段）；缺失时置 `historical_regime_unavailable` 中性降级（保留 fail-visible）；
 - 历史帧的 technical/cycle/risk/decision/observation/strategy 改为通过 `apiService.analyzeRankTrend({ codes: [code], frameKeys: [key] })` 批量获取并合并到 `analysis`；API 失败时该帧标记 `analysis_unavailable` 且不展示伪造结果；
 - 保留 resonance 轨的横截面计算（live-only，P3 迁）。
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `pnpm exec vitest run src/services/rankTrend/__tests__/RankTrendObservationService.test.ts --reporter=basic`
 Expected: PASS。
@@ -1003,16 +1003,16 @@ Expected: PASS。
 - Modify: `src/components/panels/RankTrendObservationPanel.vue`
 - Test: `src/components/panels/__tests__/RankTrendObservationPanel.test.ts`
 
-- [ ] **Step 1: 写失败测试（analysis_unavailable 渲染）**
+- [x] **Step 1: 写失败测试（analysis_unavailable 渲染）**
 
 断言当 `meta.analysisSource === 'analysis_unavailable'` 时面板显示"分析不可用"+ 原因文本，且技术/生命周期轨不渲染伪造分数。
 
-- [ ] **Step 2: 运行确认失败 → 实现 → 确认通过**
+- [x] **Step 2: 运行确认失败 → 实现 → 确认通过**
 
 Run: `pnpm exec vitest run src/components/panels/__tests__/RankTrendObservationPanel.test.ts --reporter=basic`
 Expected: 先 FAIL，实现后 PASS。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Run:
 ```powershell
@@ -1044,16 +1044,16 @@ git -C D:\dragon-board commit -m "feat: 观察面板消费 Python regime/分析�
 
 **删除约束：** 每次删除一个明确路径的文件（项目禁止批量删除命令）；使用 `git rm` 逐个提交。
 
-- [ ] **Step 1: 先确认没有业务代码再引用被删文件**
+- [x] **Step 1: 先确认没有业务代码再引用被删文件**
 
 Run: `rg -n "runRankTrendAnalysisPipeline|technicalSignalAnalyzer|attentionCycleAnalyzer|riskSignalAnalyzer|candidateTierComposer|executionCandidateTierComposer|resultComposer|observationScoreComposer|marketRegimeAnalyzer|jumpDetector|quantBoardGolden" src --glob '!**/__tests__/**'`
 Expected: 无业务引用（Phase 4/5 已完成消费切换，quantBoardGolden 无业务消费）；如有遗漏引用，先修。
 
-- [ ] **Step 2: 先迁移 JumpResult 类型，再删除 jumpDetector**
+- [x] **Step 2: 先迁移 JumpResult 类型，再删除 jumpDetector**
 
 把 `jumpDetector.ts` 中的 `JumpResult`（含 `JumpEvent` 等导出类型）定义复制到 `src/services/rankTrend/types.ts`，`compat.ts`/`jumpSignalService.ts` 的 import 改为 `./types`；确认无运行时依赖后删除 `jumpDetector.ts`。
 
-- [ ] **Step 3: 逐个删除文件与测试**
+- [x] **Step 3: 逐个删除文件与测试**
 
 Run（示例，逐个执行）:
 ```powershell
@@ -1065,11 +1065,11 @@ git -C D:\dragon-board rm src/services/quantBoardGolden/types.ts
 
 重复直到清单完成。
 
-- [ ] **Step 4: 清理 utils.ts 只供 golden 的导出**
+- [x] **Step 4: 清理 utils.ts 只供 golden 的导出**
 
 删除 `getMacdMinSamples/getMomentumMinSamples/getTechnicalMinComputableSamples/getTechnicalMinSamples` 等仅 golden 链使用的函数（先 `rg` 确认无引用）。
 
-- [ ] **Step 5: 全量验证**
+- [x] **Step 5: 全量验证**
 
 Run: `pnpm test:ranktrend --reporter=basic`
 Expected: 通过；若有遗留测试引用被删模块，删除对应测试。
@@ -1079,17 +1079,17 @@ Expected: 退出码 0。
 
 ### Task 6.2：全量回归
 
-- [ ] **Step 1: 运行全量前端测试**
+- [x] **Step 1: 运行全量前端测试**
 
 Run: `pnpm test --reporter=basic`
 Expected: 116 个文件全部通过。
 
-- [ ] **Step 2: 运行全量后端测试**
+- [x] **Step 2: 运行全量后端测试**
 
 Run: `cd D:\dragon-board\quant-board; .\.venv\Scripts\python.exe -m pytest -q`
 Expected: 全绿。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 Run:
 ```powershell
@@ -1107,25 +1107,25 @@ git -C D:\dragon-board commit -m "refactor: 删除 TS 本地 golden 链实现，
 - Modify: `quant-board/docs/ranktrend-python-port.md`
 - Modify: `quant-board/docs/AI_COLLABORATION.md`
 
-- [ ] **Step 1: 更新 AGENTS.md 4.2**
+- [x] **Step 1: 更新 AGENTS.md 4.2**
 
 把"TypeScript `src/services/RankTrendAnalyzer.ts` ... 是 Python 移植的 golden 标准"改为"RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend.py` 为生产事实标准，TS 前端只消费 `POST /api/ranktrend/analyze` 与 frames API 输出；TS 不再保留本地 golden 链算法实现"。
 
-- [ ] **Step 2: 更新 quant-board/docs/ranktrend-golden.md**
+- [x] **Step 2: 更新 quant-board/docs/ranktrend-golden.md**
 
 来源与校验方向反转：golden case 由 Python 生成，TS 消费校验；删除"TS 是唯一 golden 来源"表述；
 同时删除"通过 DragonBoard TypeScript 端生成 golden"（`window.quantBoardExportRankTrendGolden`）的导出流程描述——
 `src/services/quantBoardGolden/**` 已在 Phase 6 删除。
 
-- [ ] **Step 3: 更新 quant-board/docs/ranktrend-python-port.md**
+- [x] **Step 3: 更新 quant-board/docs/ranktrend-python-port.md**
 
 对齐目标从"复刻 TS"改为"Python 自身合同 + 跨语言消费契约校验"。
 
-- [ ] **Step 4: 更新 quant-board/docs/AI_COLLABORATION.md**
+- [x] **Step 4: 更新 quant-board/docs/AI_COLLABORATION.md**
 
 同步 golden 方向与 API 合同（analyze API、frames regime）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 ```powershell
