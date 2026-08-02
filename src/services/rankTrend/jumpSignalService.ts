@@ -1,5 +1,4 @@
-import type { RankTrendAnalysisResult } from './types'
-import type { JumpResult } from './jumpDetector'
+import type { JumpResult, RankTrendAnalysisResult } from './types'
 
 // ── 出场配置 ──
 export interface JumpExitConfig {

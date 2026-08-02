@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { checkEntryConditions, evaluateJumpSignal } from '../jumpSignalService'
 import { applyJumpSignal } from '../compat'
-import type { JumpResult } from '../jumpDetector'
-import type { RankTrendAnalysisResult } from '../types'
+import type { JumpResult, RankTrendAnalysisResult } from '../types'
 
 const baseJump: JumpResult = {
   event: 'jump',

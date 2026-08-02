@@ -1,6 +1,6 @@
 import type { RankTrendAnalysisResult } from './types'
-import type { JumpResult } from './jumpDetector'
 import type { JumpSignalResult } from './jumpSignalService'
+import type { JumpResult } from './types'
 export {
   buildRankTrendStatusContext,
   classifyVolumeConfirmation,

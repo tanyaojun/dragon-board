@@ -105,6 +105,29 @@ export interface RankTrendResonance {
   reasons: string[]
 }
 
+export interface JumpEvent {
+  index: number
+  direction: 'surge' | 'collapse'
+  magnitude: number
+}
+
+export interface JumpResult {
+  event: 'jump' | 'none'
+  direction: 'buy' | 'sell' | 'hold'
+  signal: 'buy' | 'sell' | 'hold'
+  magnitude: number
+  overshoot: number
+  delta: number
+  sustained: boolean
+  confidence: number
+  eventCount: number
+  surgeCount: number
+  collapseCount: number
+  rankMagnitude: number
+  cumulativeChange?: number
+  events: JumpEvent[]
+}
+
 export interface RankTrendAnalysisResult {
   meta: {
     code: string

@@ -11,9 +11,6 @@ import {
   normalizeRankTrendRuntimeConfig,
   type RTConfigPatch,
 } from '../types/rankTrendDefaults'
-import { analyzeMarketRegime } from './rankTrend/marketRegimeAnalyzer'
-import { runRankTrendAnalysisPipeline } from './rankTrend/runRankTrendAnalysisPipeline'
-import { getTrustedVolumeRatio } from './dataLoader/VolumeRatioTrust'
 import { getExpectedSlots } from './snapshot/schedule'
 import {
   summarizeRankTrendStrategyDistribution,
@@ -168,7 +165,6 @@ export class RankTrendAnalyzer {
   private latestMarketSnapshots: RankTrendAnalysisSnapshot[] = []
   private latestAnalysisFrameKeys: string[] = []
   private currentFrameSequence = 0
-  private marketRegimeCache: { signature: string; value: ReturnType<typeof analyzeMarketRegime> } | null = null
   private lastStrategyValidationReport: RankTrendStrategyValidationReport | null = null
 
   private constructor() {
@@ -213,7 +209,6 @@ export class RankTrendAnalyzer {
     this.rankHistoryCache.clear()
     this.latestAnalysisSeries.clear()
     this.latestAnalysisFrameKeys = []
-    this.marketRegimeCache = null
   }
 
   getCachedPercentiles(code: string): number[] | null {
@@ -536,7 +531,7 @@ export class RankTrendAnalyzer {
       if (result) results.set(code, result)
     }
 
-    if (options.preferRemoteAnalysis === true) {
+    if (options.preferRemoteAnalysis !== false) {
       const stocks = typeof dataLayer.getStocks === 'function' ? dataLayer.getStocks() : []
       const currentFrameStocks = stocks
         .filter((stock: any) => rankMap.has(String(stock?.code)))
@@ -915,20 +910,6 @@ export class RankTrendAnalyzer {
     return { prevRankMap, prevTotalCount }
   }
 
-  private resolveMarketRegime(snapshotSignature: string, dataLayer: any) {
-    const stocks = typeof dataLayer.getStocks === 'function' ? dataLayer.getStocks() : []
-    const breathData = typeof dataLayer.getBreathData === 'function' ? dataLayer.getBreathData() : null
-    const signature = `${snapshotSignature}:${stocks.length}:${breathData?.lastUpdate || breathData?.timestamp || ''}`
-
-    if (this.marketRegimeCache?.signature === signature) {
-      return this.marketRegimeCache.value
-    }
-
-    const value = analyzeMarketRegime({ breathData, stocks })
-    this.marketRegimeCache = { signature, value }
-    return value
-  }
-
   private async computeStockRankTrend(input: {
     code: string
     currentRank: number
@@ -1008,28 +989,6 @@ export class RankTrendAnalyzer {
       analysisPercentiles.length,
     )
 
-    const stock = dataLayer.getStock(code)
-    // || 0 防御 Number("abc") 等非数字字符串产生 NaN 污染下游计算链
-    const stockChange = Number(stock?.change ?? 0) || 0
-    const volumeRatio = getTrustedVolumeRatio(stock)
-    const zlje = Number(stock?.zlje ?? 0) || 0
-    const zljzb = Number(stock?.zljzb ?? 0) || 0
-    const regime = this.resolveMarketRegime(snapshotSignature, dataLayer)
-
-    const { technical, cycle, risk, decision, observation, strategy, executionStrategy } = runRankTrendAnalysisPipeline({
-      ranks: analysisRanks,
-      percentiles: analysisPercentiles,
-      currentPercentile,
-      displayChange,
-      stockChange,
-      volumeRatio,
-      zlje,
-      zljzb,
-      regime,
-      hotlistSentiment: typeof dataLayer.getBreathData === 'function' ? dataLayer.getBreathData() : null,
-      config: runtimeConfig,
-    })
-
     const updateTime = Date.now()
     const rawChange = analysisRanks[0] - analysisRanks[analysisRanks.length - 1]
     const rankTrend: RankTrendAnalysisResult = {
@@ -1042,13 +1001,11 @@ export class RankTrendAnalyzer {
         updateTime,
         sampleQuality: stockSampleQuality,
       },
-      technical,
-      cycle,
-      risk,
-      decision,
-      observation,
-      strategy,
-      executionStrategy,
+      // golden 链字段由 Python analyze API 覆盖（远程分支）；此处仅类型占位，不承载算法
+      technical: {} as RankTrendAnalysisResult['technical'],
+      cycle: {} as RankTrendAnalysisResult['cycle'],
+      risk: {} as RankTrendAnalysisResult['risk'],
+      decision: {} as RankTrendAnalysisResult['decision'],
     }
 
     const result: RankTrendResult = Object.assign(rankTrend, {
@@ -1056,23 +1013,23 @@ export class RankTrendAnalyzer {
       currentRank,
       change: displayChange,
       rawChange,
-      ma5: technical.movingAverage.ma5,
-      ma10: technical.movingAverage.ma10,
-      maTrend: technical.movingAverage.trend,
-      macd: technical.macd.dif,
-      macdSignal: technical.macd.dea,
-      macdHistogram: technical.macd.histogram,
-      macdCross: technical.macd.cross,
-      signal: decision.base.signal,
-      confidence: decision.base.confidence,
-      directionSignal: technical.signals.direction.signal,
-      directionConfidence: technical.signals.direction.confidence,
-      accelerationSignal: technical.signals.acceleration.signal,
-      accelerationConfidence: technical.signals.acceleration.confidence,
-      crossSignal: technical.signals.zeroCross.signal,
-      crossConfidence: technical.signals.zeroCross.confidence,
-      finalSignal: decision.final.signal,
-      finalConfidence: decision.final.confidence,
+      ma5: 0,
+      ma10: 0,
+      maTrend: 'steady' as const,
+      macd: 0,
+      macdSignal: 0,
+      macdHistogram: 0,
+      macdCross: 'none' as const,
+      signal: 'hold' as const,
+      confidence: 50,
+      directionSignal: 'hold' as const,
+      directionConfidence: 50,
+      accelerationSignal: 'hold' as const,
+      accelerationConfidence: 50,
+      crossSignal: 'hold' as const,
+      crossConfidence: 50,
+      finalSignal: 'hold' as const,
+      finalConfidence: 50,
       updateTime,
     })
 
