@@ -1,10 +1,38 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { rankTrendAnalyzer } from '../../RankTrendAnalyzer'
+import { apiService } from '../../apiService'
 import { snapshotFacade } from '../../snapshot/facade'
 import { rankTrendObservationService } from '../RankTrendObservationService'
 
 describe('RankTrendObservationService', () => {
+  beforeEach(() => {
+    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockResolvedValue([])
+    vi.spyOn(apiService, 'analyzeRankTrend').mockResolvedValue({
+      ok: true,
+      frames: [],
+      source: 'py_golden',
+      issues: [],
+    })
+  })
+
+  function mockRemoteFrames(
+    frameKeys: string[],
+    buildAnalysis: (frameKey: string, index: number) => any,
+  ) {
+    vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
+      ok: true,
+      frames: frameKeys.map((frameKey, index) => ({
+        frameKey,
+        regime: { state: 'normal', score: 50, reasons: [] },
+        totalCount: 200,
+        stocks: [{ code: '002279', analysis: buildAnalysis(frameKey, index) }],
+      })),
+      source: 'py_golden',
+      issues: [],
+    })
+  }
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
@@ -36,7 +64,7 @@ describe('RankTrendObservationService', () => {
       message: '历史快照原料读取失败: backend offline',
     }))
     expect(result.frames[0].issues).toContainEqual(expect.objectContaining({
-      code: 'history_material_unavailable',
+      code: 'analysis_unavailable',
       frameKey: '2026-07-28 14:30',
     }))
   })
@@ -83,7 +111,7 @@ describe('RankTrendObservationService', () => {
     }))
   })
 
-  it('reports missing historical fields while preserving rank-only resonance analysis', async () => {
+  it('preserves rank-only resonance analysis when py golden frame is absent', async () => {
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: [28, 19],
       percentiles: [42, 67],
@@ -110,13 +138,12 @@ describe('RankTrendObservationService', () => {
     expect(result.frames[0].analysis?.resonance).toBeTruthy()
     expect(result.frames[0].analysis?.observation?.lifecycle).toBeUndefined()
     expect(result.frames[0].issues).toContainEqual(expect.objectContaining({
-      code: 'history_field_invalid',
-      field: 'volumeRatio',
+      code: 'analysis_unavailable',
       frameKey: '2026-07-28 14:30',
     }))
   })
 
-  it('preserves the historical MACD track when stock-row material is unavailable', async () => {
+  it('preserves the historical technical track from py golden when stock rows are unavailable', async () => {
     const frameKeys = Array.from({ length: 50 }, (_, index) => `frame-${index + 1}`)
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: frameKeys.map((_, index) => 80 - index),
@@ -125,6 +152,12 @@ describe('RankTrendObservationService', () => {
     })
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
     vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockRejectedValue(new Error('backend offline'))
+    mockRemoteFrames(frameKeys.slice(-22, -1), () => ({
+      meta: { code: '002279' },
+      technical: { macd: { cross: 'golden' } },
+      risk: { pressure: 0 },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
 
     const result = await rankTrendObservationService.load({
       code: '002279',
@@ -135,7 +168,7 @@ describe('RankTrendObservationService', () => {
     expect(result.frames).toHaveLength(22)
     expect(result.frames.slice(0, -1).every((frame) => frame.analysis?.technical?.macd)).toBe(true)
     expect(result.frames.slice(0, -1).every((frame) => frame.analysis?.resonance)).toBe(true)
-    expect(result.frames.slice(0, -1).every((frame) => frame.analysis?.risk === undefined)).toBe(true)
+    expect(result.frames.slice(0, -1).every((frame) => frame.analysis?.risk)).toBe(true)
   })
 
   it('低于最小可计算窗口时按特征解释样本不足原因，不再用稳定窗口 30 掩盖', async () => {
@@ -147,6 +180,11 @@ describe('RankTrendObservationService', () => {
     })
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
     vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockRejectedValue(new Error('backend offline'))
+    mockRemoteFrames(frameKeys.slice(-22, -1), () => ({
+      meta: { code: '002279' },
+      technical: { macd: {} },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
 
     const result = await rankTrendObservationService.load({
       code: '002279',
@@ -156,11 +194,11 @@ describe('RankTrendObservationService', () => {
 
     const frame18Bars = result.frames.find((frame) => frame.key === 'frame-18')
     expect(frame18Bars).toBeTruthy()
-    expect(frame18Bars.analysis?.technical).toBeUndefined()
+    expect(frame18Bars.analysis?.technical).toBeTruthy()
     expect(frame18Bars.issues).toContainEqual(expect.objectContaining({
       code: 'technical_sample_insufficient',
       track: 'technical',
-      message: expect.stringMatching(/MACD 需 ≥21 bar、动量需 ≥22 bar/),
+      message: expect.stringMatching(/样本不足/),
     }))
   })
 
@@ -173,6 +211,11 @@ describe('RankTrendObservationService', () => {
     })
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
     vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockRejectedValue(new Error('backend offline'))
+    mockRemoteFrames(frameKeys.slice(-22, -1), () => ({
+      meta: { code: '002279' },
+      technical: { macd: { cross: 'golden' } },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
 
     const result = await rankTrendObservationService.load({
       code: '002279',
@@ -184,7 +227,7 @@ describe('RankTrendObservationService', () => {
     const frame22Bars = result.frames.find((frame) => frame.key === 'frame-22')
     expect(frame21Bars).toBeTruthy()
     expect(frame22Bars).toBeTruthy()
-    expect(frame21Bars.analysis?.technical).toBeUndefined()
+    expect(frame21Bars.analysis?.technical).toBeTruthy()
     expect(frame21Bars.issues).toContainEqual(expect.objectContaining({
       code: 'technical_sample_insufficient',
     }))
@@ -341,6 +384,11 @@ describe('RankTrendObservationService', () => {
       }
       return []
     })
+    mockRemoteFrames(frameKeys.slice(-22, -1), () => ({
+      meta: { code: '002279' },
+      observation: { lifecycle: { score: 80 } },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
 
     const result = await rankTrendObservationService.load({
       code: '002279',
@@ -361,7 +409,7 @@ describe('RankTrendObservationService', () => {
     expect(frame16Bars.issues.some((issue) => issue.code === 'lifecycle_sample_insufficient')).toBe(false)
   })
 
-  it('历史帧不使用当前帧 regime，改为中性环境并给出结构化原因', async () => {
+  it('历史帧市场环境与分析以 Python golden 输出为准', async () => {
     const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: [28, 19],
@@ -383,6 +431,41 @@ describe('RankTrendObservationService', () => {
       }
       return []
     })
+    let framesOptions: any = null
+    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockImplementation(async (options: any) => {
+      framesOptions = options
+      return [
+        {
+          tradingDate: '2026-07-28',
+          slotTime: '14:30',
+          marketStats: {
+            ztCount: 100,
+            dtCount: 0,
+            upCount: 4000,
+            downCount: 500,
+            totalAmo: 1500000000000,
+          },
+          sentiment: { phaseName: '高潮期', phase: 'climax', overall: 88 },
+        } as any,
+        {
+          tradingDate: '2026-07-28',
+          slotTime: '15:00',
+          marketStats: {
+            ztCount: 100,
+            dtCount: 0,
+            upCount: 4000,
+            downCount: 500,
+            totalAmo: 1500000000000,
+          },
+          sentiment: { phaseName: '高潮期', phase: 'climax', overall: 88 },
+        } as any,
+      ]
+    })
+    mockRemoteFrames(frameKeys.slice(0, -1), () => ({
+      meta: { code: '002279' },
+      strategy: { regime: { state: 'strong', score: 80, reasons: ['池内上涨100%'] } },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
     const currentAnalysis = {
       meta: { code: '002279' },
       strategy: { regime: { state: 'strong', score: 90, reasons: ['强市'] } },
@@ -394,13 +477,112 @@ describe('RankTrendObservationService', () => {
       rankTrend: currentAnalysis as any,
     })
 
-    expect(result.frames[0].analysis?.strategy?.regime?.state).toBe('normal')
+    expect(framesOptions).toMatchObject({
+      projection: 'ranktrend',
+      limit: 200,
+      allowedCaptureModes: ['real_time', 'delayed'],
+      excludeRestored: true,
+    })
+    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(expect.objectContaining({
+      codes: ['002279'],
+      frameKeys: ['2026-07-28 14:30'],
+    }))
+    expect(result.frames[0].analysis?.strategy?.regime?.state).toBe('strong')
+    expect(result.frames[0].issues.some((issue) => issue.code === 'analysis_unavailable')).toBe(false)
+  })
+
+  it('历史帧 Python 未返回结果时标记 analysis_unavailable', async () => {
+    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+      ranks: [28, 19],
+      percentiles: [42, 67],
+      frameKeys,
+    })
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockImplementation(async (options: any) => {
+      if (options.code) {
+        return frameKeys.map((key) => ({
+          code: '002279',
+          tradingDate: key.split(' ')[0],
+          slotTime: key.split(' ')[1] ?? '',
+          change: 1,
+          volumeRatio: 1,
+          zlje: 0,
+          zljzb: 0,
+        }))
+      }
+      return []
+    })
+    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockResolvedValue([])
+    const currentAnalysis = {
+      meta: { code: '002279' },
+      strategy: { regime: { state: 'strong', score: 90, reasons: ['强市'] } },
+    }
+
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: currentAnalysis as any,
+    })
+
+    expect(result.frames[0].analysis?.meta?.analysisSource).toBe('analysis_unavailable')
     expect(result.frames[0].issues).toContainEqual(expect.objectContaining({
-      code: 'historical_regime_unavailable',
+      code: 'analysis_unavailable',
+      frameKey: '2026-07-28 14:30',
     }))
   })
 
-  it('历史帧 Jump 事件独立重算，不依赖当前分析的近似索引', async () => {
+  it('历史帧分析读取失败时给出服务级原因并逐帧降级', async () => {
+    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+      ranks: [28, 19],
+      percentiles: [42, 67],
+      frameKeys,
+    })
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockImplementation(async (options: any) => {
+      if (options.code) {
+        return frameKeys.map((key) => ({
+          code: '002279',
+          tradingDate: key.split(' ')[0],
+          slotTime: key.split(' ')[1] ?? '',
+          change: 1,
+          volumeRatio: 1,
+          zlje: 0,
+          zljzb: 0,
+        }))
+      }
+      return []
+    })
+    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockRejectedValue(new Error('frames offline'))
+    vi.mocked(apiService.analyzeRankTrend).mockRejectedValue(new Error('backend offline'))
+    const currentAnalysis = {
+      meta: { code: '002279' },
+      strategy: { regime: { state: 'strong', score: 90, reasons: ['强市'] } },
+    }
+
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: currentAnalysis as any,
+    })
+
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'historical_frames_unavailable',
+      message: '历史帧市场环境原料读取失败: frames offline',
+    }))
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'historical_analysis_unavailable',
+      message: '历史帧分析读取失败: backend offline',
+    }))
+    expect(result.frames[0].analysis?.meta?.analysisSource).toBe('analysis_unavailable')
+    expect(result.frames[0].issues).toContainEqual(expect.objectContaining({
+      code: 'analysis_unavailable',
+      frameKey: '2026-07-28 14:30',
+    }))
+  })
+
+  it('历史帧 Jump 事件来自 Python golden 输出，不依赖当前分析的近似索引', async () => {
     const frameKeys = Array.from({ length: 8 }, (_, index) => `frame-${index + 1}`)
     // 第 6 帧累计变化 20 > 15，触发 surge jump
     const percentiles = [20, 21, 22, 23, 24, 40, 42, 43]
@@ -424,7 +606,23 @@ describe('RankTrendObservationService', () => {
       }
       return []
     })
-    // 当前分析没有任何 jump 事件，历史帧必须独立重算
+    mockRemoteFrames(frameKeys.slice(-22, -1), (key) =>
+      key === 'frame-6'
+        ? {
+            meta: { code: '002279' },
+            jump: {
+              event: 'jump',
+              direction: 'buy',
+              confidence: 80,
+              events: [{ index: 5, direction: 'surge', magnitude: 20 }],
+            },
+          }
+        : {
+            meta: { code: '002279' },
+            jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+          },
+    )
+    // 当前分析没有任何 jump 事件，历史帧 jump 必须来自 Python 输出
     const currentAnalysis = { meta: { code: '002279' }, jump: { event: 'none', direction: 'hold', confidence: 50, events: [] } }
 
     const result = await rankTrendObservationService.load({

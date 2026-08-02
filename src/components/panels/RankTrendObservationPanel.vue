@@ -64,6 +64,11 @@
               <span v-for="issue in allIssues" :key="issueKey(issue)">{{ issue.message }}</span>
             </div>
 
+            <div v-if="analysisUnavailable" class="unavailable-alert">
+              <strong>分析不可用</strong>
+              <span>{{ analysisUnavailableReason }}</span>
+            </div>
+
             <section v-if="activeTrack === 'resonance'" class="track-section">
               <div class="section-heading">
                 <div>
@@ -264,6 +269,14 @@ const selectedFrame = computed<RankTrendObservationFrame | null>(
   () => trackFrames.value[selectedIndex.value] || null,
 )
 const selectedAnalysis = computed(() => selectedFrame.value?.analysis || null)
+const analysisUnavailable = computed(
+  () => selectedFrame.value?.analysis?.meta?.analysisSource === 'analysis_unavailable',
+)
+const analysisUnavailableReason = computed(
+  () =>
+    String(selectedFrame.value?.analysis?.meta?.analysisUnavailableReason || '') ||
+    'Python 后端未就绪，已保留排名与共振展示',
+)
 const latestAnalysis = computed(() => frames.value.at(-1)?.analysis || props.stock?.rankTrend || null)
 const allIssues = computed(() => {
   const issues = [...(viewModel.value?.issues || []), ...(selectedFrame.value?.issues || [])]

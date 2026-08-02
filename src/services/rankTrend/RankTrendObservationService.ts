@@ -1,18 +1,11 @@
 import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
+import { apiService } from '../apiService'
 import { snapshotFacade } from '../snapshot/facade'
 import type { SnapshotStockRow } from '../snapshot/types'
 import { analyzeRankResonance } from './resonanceAnalyzer'
-import { runRankTrendAnalysisPipeline } from './runRankTrendAnalysisPipeline'
-import { analyzeTechnicalSignals } from './technicalSignalAnalyzer'
-import { detectRankJumps } from './jumpDetector'
-import type { MarketRegimeAnalysis, RankTrendAnalysisResult } from './types'
-import {
-  getMacdMinSamples,
-  getMomentumMinSamples,
-  getTechnicalMinComputableSamples,
-  getTechnicalMinSamples,
-} from './utils'
+import type { RankTrendAnalysisResult } from './types'
+import type { SnapshotFrameRow } from '../snapshot/types'
 
 export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle'
 
@@ -59,6 +52,9 @@ export const LIFECYCLE_MIN_SAMPLES = 15
 
 /** 市场横截面单次读取的行数上限（覆盖观察窗口各帧全市场行） */
 const MARKET_CROSS_SECTION_ROW_LIMIT = 20000
+
+/** 历史帧市场环境原料单次读取的帧数上限（覆盖观察窗口即可） */
+const HISTORY_FRAME_READ_LIMIT = 200
 
 /** 市场横截面计算所需的最小字段集（按帧真实横截面只依赖这几列） */
 const MARKET_CROSS_SECTION_FIELDS = ['tradingDate', 'slotTime', 'code', 'avgRankNum'] as const
@@ -157,13 +153,6 @@ function observationIssue(
   details: Omit<RankTrendObservationIssue, 'code' | 'message'> = {},
 ): RankTrendObservationIssue {
   return { code, message, ...details }
-}
-
-function invalidHistoryFields(row: SnapshotStockRow): string[] {
-  return (['change', 'volumeRatio', 'zlje', 'zljzb'] as const).filter((field) => {
-    const value: unknown = row[field]
-    return value === null || value === undefined || value === '' || !Number.isFinite(Number(value))
-  })
 }
 
 class RankTrendObservationService {
@@ -266,15 +255,59 @@ class RankTrendObservationService {
         )
       }
     }
-    const config = rankTrendAnalyzer.getRuntimeConfig()
-    const macdMinSamples = getMacdMinSamples(config)
-    const momentumMinSamples = getMomentumMinSamples(config)
-    const computableSamples = getTechnicalMinComputableSamples(config)
-    const stableSamples = getTechnicalMinSamples(config)
-    const historicalRegime: MarketRegimeAnalysis = {
-      state: 'normal',
-      score: 0,
-      reasons: ['历史市场环境未单独持久化，按中性环境处理'],
+    const frameRowsByKey = new Map<string, SnapshotFrameRow>()
+    if (windowDates.length > 0) {
+      try {
+        const historyFrames = await snapshotFacade.listSnapshotFrames({
+          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+          startDate: windowDates[0],
+          endDate: windowDates[windowDates.length - 1],
+          sort: 'asc',
+          limit: HISTORY_FRAME_READ_LIMIT,
+          projection: 'ranktrend',
+          allowedCaptureModes: ['real_time', 'delayed'],
+          excludeRestored: true,
+        })
+        for (const historyFrame of historyFrames) {
+          const frameKey = barFrameKey(historyFrame)
+          if (frameKey) frameRowsByKey.set(frameKey, historyFrame)
+        }
+      } catch (error) {
+        serviceIssues.push(
+          observationIssue(
+            'historical_frames_unavailable',
+            `历史帧市场环境原料读取失败: ${errorMessage(error)}`,
+          ),
+        )
+      }
+    }
+
+    // Python golden 批量分析历史帧（technical/cycle/risk/decision/observation/strategy/jump/regime）
+    const historyFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS, -1)
+    const remoteByFrame = new Map<string, RankTrendObservationAnalysis>()
+    if (historyFrameKeys.length > 0) {
+      try {
+        const remote = await apiService.analyzeRankTrend({
+          snapshotType: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+          codes: [code],
+          frameKeys: historyFrameKeys,
+        })
+        if (remote?.ok) {
+          for (const frame of remote.frames || []) {
+            const first = frame.stocks?.[0]
+            if (first?.analysis) {
+              remoteByFrame.set(frame.frameKey, first.analysis as RankTrendObservationAnalysis)
+            }
+          }
+        }
+      } catch (error) {
+        serviceIssues.push(
+          observationIssue(
+            'historical_analysis_unavailable',
+            `历史帧分析读取失败: ${errorMessage(error)}`,
+          ),
+        )
+      }
     }
     const allFrames: RankTrendObservationFrame[] = []
 
@@ -289,100 +322,40 @@ class RankTrendObservationService {
       if (isCurrent) {
         analysis = currentAnalysis ?? null
       } else {
-        const ranks = series.ranks.slice(0, index + 1)
         const percentiles = series.percentiles.slice(0, index + 1)
-        const previousRank = ranks.at(-2) ?? ranks.at(-1) ?? 0
-        const currentRank = ranks.at(-1) ?? 0
-        const displayChange = previousRank > 0
-          ? ((previousRank - currentRank) / previousRank) * 100
-          : 0
-        const jumpResult = detectRankJumps(percentiles, ranks, 15)
-        const latestJump = jumpResult.events.at(-1)
-        const jumpDirection = latestJump?.direction === 'surge'
-          ? 'buy'
-          : latestJump?.direction === 'collapse'
-            ? 'sell'
-            : 'hold'
-        const jumpEvent = latestJump?.index === index ? 'jump' : 'none'
+        const remoteAnalysis = remoteByFrame.get(key)
+        const pyJump = (remoteAnalysis?.jump ?? {
+          event: 'none',
+          direction: 'hold',
+          confidence: 50,
+          events: [],
+        }) as NonNullable<RankTrendObservationAnalysis['jump']>
         const resonance = analyzeRankResonance({
           percentiles,
           sampleQuality: { status: percentiles.length >= 9 ? 'ok' : 'insufficient' },
           marketMedianShortChange: market.shortChange ?? Number.NaN,
           marketSampleCount: market.sampleCount,
           jump: {
-            direction: jumpDirection,
-            event: jumpEvent,
-            events: jumpResult.events,
+            direction: pyJump.direction === 'buy' ? 'buy' : pyJump.direction === 'sell' ? 'sell' : 'hold',
+            event: pyJump.event === 'jump' ? 'jump' : 'none',
+            events: Array.isArray(pyJump.events) ? pyJump.events : [],
           },
         })
-        analysis = {
-          meta: {
-            ...(currentAnalysis?.meta || {
-              code,
-              change: displayChange,
-              rawChange: previousRank - currentRank,
-              updateTime: Number(row?.timestamp || 0),
-            }),
-            currentRank,
-            currentPercentile: percentiles.at(-1) ?? 0,
-          },
-          resonance,
-          jump: {
-            event: jumpEvent,
-            direction: jumpDirection,
-            confidence: jumpResult.confidence,
-            events: jumpResult.events,
-          },
-        }
-
-        if (percentiles.length >= computableSamples) {
-          analysis.technical = analyzeTechnicalSignals(percentiles, config)
-          if (percentiles.length < stableSamples) {
+        if (remoteAnalysis) {
+          analysis = { ...remoteAnalysis, resonance }
+          if (percentiles.length < OBSERVATION_WINDOW_BARS.technical) {
+            issues.push(observationIssue(
+              'technical_sample_insufficient',
+              `该帧技术结构样本不足（当前 ${percentiles.length} bar）`,
+              { frameKey: key, track: 'technical' },
+            ))
+          } else if (percentiles.length < 30) {
             issues.push(observationIssue(
               'technical_stable_window_insufficient',
-              `该帧技术结构已计算，未达稳定观察窗口（${percentiles.length}/${stableSamples}）`,
+              `该帧技术结构已计算，未达稳定观察窗口（${percentiles.length}/30）`,
               { frameKey: key, track: 'technical' },
             ))
           }
-        } else {
-          issues.push(observationIssue(
-            'technical_sample_insufficient',
-            `该帧技术结构样本不足（当前 ${percentiles.length} bar；MACD 需 ≥${macdMinSamples} bar、动量需 ≥${momentumMinSamples} bar）`,
-            { frameKey: key, track: 'technical' },
-          ))
-        }
-
-        const invalidFields = row ? invalidHistoryFields(row) : []
-        if (!row) {
-          issues.push(observationIssue(
-            'history_material_unavailable',
-            serviceIssues.some((issue) => issue.code === 'history_source_unavailable')
-              ? '历史快照原料不可用，生命周期与风险轨不可计算'
-              : '该帧资金与行情原料缺失，生命周期与风险轨不可计算',
-            { frameKey: key, track: 'lifecycle' },
-          ))
-        } else if (invalidFields.length) {
-          issues.push(
-            ...invalidFields.map((field) => observationIssue(
-              'history_field_invalid',
-              `该帧 ${field} 缺失或非法，依赖该字段的生命周期与风险轨不可计算`,
-              { frameKey: key, field, track: 'lifecycle' },
-            )),
-          )
-        } else {
-          const pipeline = runRankTrendAnalysisPipeline({
-            ranks,
-            percentiles,
-            currentPercentile: percentiles.at(-1) ?? 0,
-            displayChange,
-            stockChange: Number(row.change),
-            volumeRatio: Number(row.volumeRatio),
-            zlje: Number(row.zlje),
-            zljzb: Number(row.zljzb),
-            regime: historicalRegime,
-            config,
-          })
-          analysis = { ...analysis, ...pipeline, resonance }
           if (percentiles.length < LIFECYCLE_MIN_SAMPLES) {
             issues.push(observationIssue(
               'lifecycle_sample_insufficient',
@@ -393,10 +366,25 @@ class RankTrendObservationService {
               analysis.observation = { ...analysis.observation, lifecycle: undefined }
             }
           }
+        } else {
+          const currentMeta = currentAnalysis?.meta
+          analysis = {
+            meta: {
+              code,
+              currentRank: Number(currentMeta?.currentRank || 0),
+              currentPercentile: percentiles.at(-1) ?? 0,
+              change: Number(currentMeta?.change || 0),
+              rawChange: Number(currentMeta?.rawChange || 0),
+              updateTime: Number(row?.timestamp || currentMeta?.updateTime || 0),
+              analysisSource: 'analysis_unavailable',
+              analysisUnavailableReason: 'Python 后端未返回该帧分析结果',
+            },
+            resonance,
+          }
           issues.push(observationIssue(
-            'historical_regime_unavailable',
-            '历史帧市场环境未单独持久化，生命周期分层按中性环境计算',
-            { frameKey: key, track: 'lifecycle' },
+            'analysis_unavailable',
+            '历史帧分析不可用：Python 后端未返回该帧结果',
+            { frameKey: key },
           ))
         }
       }
