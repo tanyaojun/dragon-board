@@ -17,6 +17,7 @@ from backend.api.hotlist_routes import router as hotlist_router
 from backend.api.journal_routes import router as journal_router
 from backend.api.market_fund_routes import router as market_fund_router
 from backend.api.market_data_routes import router as market_data_router
+from backend.api.ranktrend_routes import router as ranktrend_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.api.theme_heat_routes import router as theme_heat_router
 from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
@@ -87,6 +88,7 @@ app.add_middleware(
 app.include_router(journal_router)
 app.include_router(market_fund_router)
 app.include_router(market_data_router)
+app.include_router(ranktrend_router)
 app.include_router(big_order_history_router)
 app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
@@ -559,6 +561,16 @@ def list_snapshot_frames(
             sort=sort,
             projection=projection,
         )
+        from backend.analysis.ranktrend import market_regime
+
+        for frame in frames:
+            frame["regime"] = market_regime({
+                "stocks": frame.get("rows") or frame.get("stocks") or [],
+                "marketContext": {
+                    "sentiment": frame.get("sentiment"),
+                    "marketStats": frame.get("marketStats"),
+                },
+            })
         snapshot_ids.extend(str(frame.get("snapshotId") or "") for frame in frames if frame.get("snapshotId"))
         return {
             "ok": True,
