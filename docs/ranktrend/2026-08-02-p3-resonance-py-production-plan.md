@@ -16,9 +16,9 @@
 
 | Phase | 状态 |
 | --- | --- |
-| Phase A Python resonance 移植 + analyze API 输出 | 进行中 |
-| Phase B TS 消费切换与删除 | 待做 |
-| Phase C 收尾（golden 确认、浏览器验收） | 待做 |
+| Phase A Python resonance 移植 + analyze API 输出 | ✅（commit `46eedff`） |
+| Phase B TS 消费切换与删除 | ✅（commit `08a4271`） |
+| Phase C 收尾（golden 确认、浏览器验收） | 进行中 |
 
 ## Phase A：Python resonance 移植 + analyze API 输出
 
