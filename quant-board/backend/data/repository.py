@@ -574,6 +574,10 @@ class Repository:
                                 "code": row.code,
                                 "name": row.name,
                                 "rank": row.rank,
+                                "change": row.change,
+                                "volumeRatio": row.volume_ratio,
+                                "zlje": row.zlje,
+                                "zljzb": row.zljzb,
                             }
                         )
                     else:

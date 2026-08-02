@@ -801,7 +801,18 @@ class MongoRepository:
         if not snapshot_ids:
             return rows_by_snapshot
         if projection == "ranktrend":
-            mongo_projection: dict[str, int] = {"_id": 0, "code": 1, "name": 1, "rank": 1}
+            # snapshotId 必须保留（分组 key）；regime 五因子需要 change/volumeRatio/zlje/zljzb
+            mongo_projection: dict[str, int] = {
+                "_id": 0,
+                "snapshotId": 1,
+                "code": 1,
+                "name": 1,
+                "rank": 1,
+                "change": 1,
+                "volumeRatio": 1,
+                "zlje": 1,
+                "zljzb": 1,
+            }
         else:
             mongo_projection = {"depth10": 0}
         for row in self.db["snapshot_stock_rows"].find(
@@ -809,7 +820,15 @@ class MongoRepository:
             mongo_projection,
         ).sort([("timestamp", 1), ("rank", 1)]):
             if projection == "ranktrend":
-                item = {"code": row.get("code"), "name": row.get("name"), "rank": row.get("rank")}
+                item = {
+                    "code": row.get("code"),
+                    "name": row.get("name"),
+                    "rank": row.get("rank"),
+                    "change": row.get("change"),
+                    "volumeRatio": row.get("volumeRatio"),
+                    "zlje": row.get("zlje"),
+                    "zljzb": row.get("zljzb"),
+                }
             else:
                 item = self.local_stock_to_bundle_dict(row)
             rows_by_snapshot[str(row.get("snapshotId"))].append(item)

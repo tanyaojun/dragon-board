@@ -1898,10 +1898,17 @@ def test_snapshot_frames_api_ranktrend_projection_returns_lightweight_hotlist() 
     )
     assert response.status_code == 200, response.text
     frame = response.json()["frames"][0]
-    assert frame["hotlist"] == [{"code": "600001", "name": "样本A", "rank": 1}]
+    assert frame["hotlist"] == [{
+        "code": "600001",
+        "name": "样本A",
+        "rank": 1,
+        "change": None,
+        "volumeRatio": None,
+        "zlje": 1234,
+        "zljzb": None,
+    }]
     assert frame["rows"] == frame["hotlist"]
     assert frame["sectors"] == []
-    assert "zlje" not in frame["hotlist"][0]
 
 
 def test_ranktrend_rank_series_api_returns_compact_rank_history() -> None:

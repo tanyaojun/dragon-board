@@ -29,6 +29,21 @@ def test_record_document_preserves_snapshot_payload() -> None:
     assert MongoRepository.record_to_dict(document)["payload"] == payload
 
 
+def test_stock_rows_by_snapshot_ranktrend_projection_keeps_snapshot_id() -> None:
+    database = FakeMongoDatabase()
+    database["snapshot_stock_rows"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000001", "name": "平安银行", "rank": 1, "timestamp": 1},
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000002", "name": "万科A", "rank": 2, "timestamp": 2},
+    ]
+    repo = MongoRepository(database)
+
+    rows = repo._stock_rows_by_snapshot("dragonboard_live", ["s1"], projection="ranktrend")
+
+    assert len(rows.get("s1", [])) == 2
+    assert rows["s1"][0]["code"] == "000001"
+    assert rows["s1"][1]["code"] == "000002"
+
+
 class FakeCursor:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows
