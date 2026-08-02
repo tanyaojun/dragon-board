@@ -117,3 +117,36 @@ def test_frames_include_regime(monkeypatch):
     assert body["ok"] is True
     assert "regime" in body["frames"][0]
     assert body["frames"][0]["regime"]["state"] in ("strong", "normal", "weak", "retreat")
+
+
+def test_analyze_returns_resonance_and_market_median(monkeypatch):
+    frames = [{
+        "tradingDate": f"2026-08-0{day}",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": day,
+        "rows": [
+            {"code": "002279", "rank": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+            {"code": "000001", "rank": 3, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.01},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    } for day in range(1, 5)]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-08-04 14:00"],
+    })
+    assert response.status_code == 200
+    frame = response.json()["frames"][0]
+    assert "marketMedianShortChange" in frame
+    assert frame["stocks"][0]["analysis"]["resonance"]["status"] in ("ok", "insufficient")

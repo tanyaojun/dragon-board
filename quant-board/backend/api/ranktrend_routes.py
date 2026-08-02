@@ -2,7 +2,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.analysis.ranktrend import RankTrendPythonEngine, market_regime
+from backend.analysis.ranktrend import RankTrendPythonEngine, analyze_rank_resonance, market_regime
 from backend.data import repository_factory
 
 router = APIRouter(tags=["ranktrend-analyze"])
@@ -73,23 +73,95 @@ def _analyze_frames(
     for signal in signals_by_frame:
         key = f"{signal.get('tradingDate')} {signal.get('slotTime')}".strip()
         by_key.setdefault(key, []).append(signal)
-    output: list[dict[str, Any]] = []
+    # 每股跨帧百分位序列（用于 resonance 横截面与个股序列）
+    series_by_code: dict[str, list[float]] = {}
     for frame in frames:
+        total = len(frame.get("stocks", []))
+        for stock in frame.get("stocks", []):
+            code = str(stock.get("code") or "")
+            rank = float(stock.get("rank") or 0)
+            if code and rank > 0 and total > 0:
+                series_by_code.setdefault(code, []).append(_percentile(rank, total))
+    output: list[dict[str, Any]] = []
+    for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
+        market_median, market_sample_count = _frame_market_median(frames, index)
         stocks_out: list[dict[str, Any]] = []
         for signal in by_key.get(key, []):
             code = str(signal.get("code") or "")
             if codes and code not in codes:
                 continue
-            stocks_out.append({"code": code, "analysis": signal.get("rankTrend")})
+            analysis = signal.get("rankTrend") or {}
+            percentiles = series_by_code.get(code, [])
+            jump = analysis.get("jump") or {}
+            sample_quality = (analysis.get("meta") or {}).get("sampleQuality") or {}
+            resonance = analyze_rank_resonance({
+                "percentiles": percentiles,
+                "sampleQuality": {
+                    "status": sample_quality.get("status") or "insufficient",
+                    "timelineValid": sample_quality.get("timelineValid", True),
+                },
+                "marketMedianShortChange": market_median if market_median is not None else float("nan"),
+                "marketSampleCount": market_sample_count,
+                "jump": {
+                    "direction": jump.get("direction") or "hold",
+                    "event": jump.get("event") or "none",
+                    "events": jump.get("events") or [],
+                },
+                "entry": {
+                    "isNew": len(percentiles) == 1,
+                    "currentAttentionPercentile": percentiles[-1] if percentiles else 0,
+                },
+            })
+            analysis["resonance"] = resonance
+            stocks_out.append({"code": code, "analysis": analysis})
         output.append({
             "frameKey": key,
             "regime": regime,
+            "marketMedianShortChange": market_median,
+            "marketSampleCount": market_sample_count,
             "totalCount": len(frame.get("stocks", [])),
             "stocks": stocks_out,
         })
     return output
+
+
+def _percentile(rank: float, total_count: int) -> float:
+    if rank <= 0 or total_count <= 0:
+        return 0.0
+    return ((total_count - rank + 1) / total_count) * 100
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _frame_market_median(frames: list[dict[str, Any]], index: int) -> tuple[float | None, int]:
+    """当前帧与前 3 个市场帧公共股票的短周期百分位变化中位数（横截面基准）。"""
+    start = max(0, index - 3)
+    window = frames[start:index + 1]
+    if len(window) < 4:
+        return None, 0
+    current = {str(s.get("code")): s for s in window[-1].get("stocks", []) if s.get("rank", 0) > 0}
+    first = {str(s.get("code")): s for s in window[0].get("stocks", []) if s.get("rank", 0) > 0}
+    changes: list[float] = []
+    for code, stock in current.items():
+        first_stock = first.get(code)
+        if not first_stock:
+            continue
+        current_pct = _percentile(float(stock.get("rank") or 0), len(window[-1].get("stocks", [])))
+        first_pct = _percentile(float(first_stock.get("rank") or 0), len(window[0].get("stocks", [])))
+        changes.append(current_pct - first_pct)
+    if len(changes) < 20:
+        return None, len(changes)
+    return _median(changes), len(changes)
 
 
 @router.post("/api/ranktrend/analyze")

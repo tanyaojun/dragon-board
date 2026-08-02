@@ -1051,6 +1051,160 @@ def compose_strategy(
     return {"hotlist": hotlist_state, "momentum": momentum, "candidateTier": tier, "action": action, "reasons": reasons}
 
 
+RESONANCE_SHORT_WINDOW_BARS = 3
+RESONANCE_MID_WINDOW_BARS = 8
+RESONANCE_PATH_WINDOW_BARS = 8
+RESONANCE_MIN_SERIES_POINTS = RESONANCE_MID_WINDOW_BARS + 1
+RESONANCE_MIN_MARKET_SAMPLE_COUNT = 20
+
+
+def _positive(value: float) -> float:
+    return max(0.0, value)
+
+
+def _resonance_label(score: float) -> str:
+    if score >= 85:
+        return "非常强"
+    if score >= 67:
+        return "强"
+    if score >= 50:
+        return "中等"
+    if score >= 27:
+        return "较弱"
+    return "非常弱"
+
+
+def _resonance_insufficient(reason: str, market_median_short_change: float) -> dict[str, Any]:
+    return {
+        "status": "insufficient",
+        "direction": "hold",
+        "score": 0,
+        "label": "样本不足",
+        "relativeMomentum": 0,
+        "acceleration": 0,
+        "persistence": 0,
+        "jumpFreshness": 0,
+        "reversalPenalty": 0,
+        "historyState": "established",
+        "marketMedianShortChange": market_median_short_change,
+        "reasons": [reason],
+    }
+
+
+def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
+    """共振强度（移植 TS resonanceAnalyzer）：相对动量/加速度/持续性/Jump 新鲜度/反转惩罚。"""
+    percentiles = [float(p) for p in (input.get("percentiles") or [])]
+    market_median_short_change = float(input.get("marketMedianShortChange") or 0)
+    market_sample_count = int(input.get("marketSampleCount") or 0)
+    jump = input.get("jump") or {}
+    entry = input.get("entry") or {}
+    sample_quality = input.get("sampleQuality") or {}
+    is_new_entry = entry.get("isNew") is True
+    current_attention_percentile = float(entry.get("currentAttentionPercentile") or 0)
+
+    if sample_quality.get("timelineValid") is False:
+        return _resonance_insufficient("快照时间轴不完整", market_median_short_change)
+    if is_new_entry:
+        if not math.isfinite(current_attention_percentile):
+            return _resonance_insufficient("新入榜关注度无效", market_median_short_change)
+        if not math.isfinite(market_median_short_change) or market_sample_count < RESONANCE_MIN_MARKET_SAMPLE_COUNT:
+            return _resonance_insufficient("横截面有效样本不足", market_median_short_change)
+        jump_events = jump.get("events") or []
+        jump_freshness = 1.0 if jump_events else 0.0
+        entry_strength = clamp((current_attention_percentile - 50) / 25, 0, 1)
+        score = round(100 * clamp(0.7 * entry_strength + 0.3 * jump_freshness, 0, 1))
+        return {
+            "status": "ok",
+            "direction": "buy" if entry_strength > 0 else "hold",
+            "score": score,
+            "label": _resonance_label(score),
+            "relativeMomentum": entry_strength,
+            "acceleration": 0,
+            "persistence": 0,
+            "jumpFreshness": jump_freshness,
+            "reversalPenalty": 0,
+            "historyState": "new_entry",
+            "marketMedianShortChange": market_median_short_change,
+            "reasons": [f"新入榜关注度 {round(current_attention_percentile)}"],
+        }
+    if len(percentiles) < RESONANCE_MIN_SERIES_POINTS or any(not math.isfinite(p) for p in percentiles):
+        return _resonance_insufficient("排名序列不足或无效", market_median_short_change)
+    if sample_quality.get("status") == "insufficient":
+        return _resonance_insufficient("快照样本不足", market_median_short_change)
+    if not math.isfinite(market_median_short_change) or market_sample_count < RESONANCE_MIN_MARKET_SAMPLE_COUNT:
+        return _resonance_insufficient("横截面有效样本不足", market_median_short_change)
+
+    last_index = len(percentiles) - 1
+    short_start_index = last_index - RESONANCE_SHORT_WINDOW_BARS
+    mid_start_index = last_index - RESONANCE_MID_WINDOW_BARS
+    short_bars = last_index - short_start_index
+    mid_bars = last_index - mid_start_index
+    short_change = percentiles[last_index] - percentiles[short_start_index]
+    mid_change = percentiles[last_index] - percentiles[mid_start_index]
+    relative_momentum = clamp((short_change - market_median_short_change) / 15, -1, 1)
+    acceleration = clamp((short_change - (mid_change * short_bars) / mid_bars) / 15, -1, 1)
+
+    path_percentiles = percentiles[-(RESONANCE_PATH_WINDOW_BARS + 1):]
+    changes = [path_percentiles[i + 1] - path_percentiles[i] for i in range(len(path_percentiles) - 1)]
+    path_direction = 1 if (short_change or mid_change) > 0 else -1 if (short_change or mid_change) < 0 else 0
+    directional_changes = [
+        value for value in changes
+        if path_direction != 0 and (1 if value > 0 else -1 if value < 0 else 0) == path_direction
+    ]
+    persistence = len(directional_changes) / len(changes) if changes else 0
+    if len(changes) > 1:
+        direction_switch_rate = sum(
+            1 for i in range(1, len(changes))
+            if math.copysign(1, changes[i]) != 0 and math.copysign(1, changes[i - 1]) != 0
+            and math.copysign(1, changes[i]) != math.copysign(1, changes[i - 1])
+        ) / (len(changes) - 1)
+    else:
+        direction_switch_rate = 0
+    recent_peak = max(path_percentiles)
+    percentile_drawdown = max(0, recent_peak - percentiles[last_index])
+    reversal_penalty = clamp(0.6 * direction_switch_rate + 0.4 * percentile_drawdown / 20, 0, 1)
+
+    jump_events = jump.get("events") or []
+    latest_event = jump_events[-1] if jump_events else None
+    jump_freshness = math.exp(-(last_index - int(latest_event["index"])) / 3) if latest_event else 0
+    direction_score = relative_momentum + acceleration + 0.2 * path_direction * persistence
+    base_direction = "buy" if direction_score > 0.1 else "sell" if direction_score < -0.1 else "hold"
+    has_reverse_jump = (
+        (base_direction == "buy" and jump.get("direction") == "sell")
+        or (base_direction == "sell" and jump.get("direction") == "buy")
+    )
+    direction = jump.get("direction") if jump.get("event") == "jump" and has_reverse_jump else base_direction
+
+    directional_momentum = -relative_momentum if direction == "sell" else relative_momentum
+    directional_acceleration = -acceleration if direction == "sell" else acceleration
+    raw_score = (
+        0.35 * _positive(directional_momentum)
+        + 0.25 * _positive(directional_acceleration)
+        + 0.2 * persistence
+        + 0.2 * jump_freshness
+        - 0.2 * reversal_penalty
+    )
+    score = round(100 * clamp(raw_score, 0, 1))
+    return {
+        "status": "ok",
+        "direction": direction,
+        "score": score,
+        "label": _resonance_label(score),
+        "relativeMomentum": round(relative_momentum, 6),
+        "acceleration": round(acceleration, 6),
+        "persistence": round(persistence, 6),
+        "jumpFreshness": round(jump_freshness, 6),
+        "reversalPenalty": round(reversal_penalty, 6),
+        "historyState": "established",
+        "marketMedianShortChange": market_median_short_change,
+        "reasons": [
+            f"相对动量 {round(relative_momentum * 100)}",
+            f"加速度 {round(acceleration * 100)}",
+            f"路径持续性 {round(persistence * 100)}%",
+        ],
+    }
+
+
 def analyze_cycle_with_risk(
     cycle: dict[str, Any],
     risk: dict[str, Any],
