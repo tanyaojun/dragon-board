@@ -1,9 +1,25 @@
+import pytest
 from fastapi.testclient import TestClient
 
+from backend.data import snapshot_cache
 from backend.main import app
+from backend.settings import get_settings
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_analyze_cache(monkeypatch):
+    """默认禁用真实 Redis，保证既有用例走计算路径；缓存专项用例再注入内存 fake。"""
+    monkeypatch.setattr(
+        "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
+        lambda: snapshot_cache.SnapshotRedisCache(
+            redis_client=None,
+            ttl_seconds=60,
+            empty_ttl_seconds=10,
+        ),
+    )
 
 
 class FakeRepo:
@@ -11,7 +27,13 @@ class FakeRepo:
         self.frames = frames
 
     def load_frame_bundles(self, *args, **kwargs):
-        return self.frames
+        frames = list(self.frames)
+        if kwargs.get("sort") == "desc":
+            frames.sort(key=lambda frame: int(frame.get("timestamp") or 0), reverse=True)
+            limit = kwargs.get("limit")
+            if limit and limit > 0:
+                frames = frames[:limit]
+        return frames
 
     def dataset_to_dict(self, dataset):
         return {}
@@ -40,6 +62,7 @@ def test_analyze_returns_py_golden_frames(monkeypatch):
             "code": "002279",
             "name": "久其软件",
             "rank": 1,
+            "avgRankNum": 1,
             "change": 5.0,
             "volumeRatio": 1.5,
             "zlje": 10,
@@ -126,9 +149,9 @@ def test_analyze_returns_resonance_and_market_median(monkeypatch):
         "type": "half_hour",
         "timestamp": day,
         "rows": [
-            {"code": "002279", "rank": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
-            {"code": "603580", "rank": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
-            {"code": "000001", "rank": 3, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.01},
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+            {"code": "000001", "rank": 3, "avgRankNum": 3, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.01},
         ],
         "sentiment": {"phaseName": "启动"},
         "marketStats": {},
@@ -148,5 +171,356 @@ def test_analyze_returns_resonance_and_market_median(monkeypatch):
     })
     assert response.status_code == 200
     frame = response.json()["frames"][0]
+    assert "marketMedianPercentile" in frame
     assert "marketMedianShortChange" in frame
     assert frame["stocks"][0]["analysis"]["resonance"]["status"] in ("ok", "insufficient")
+
+
+def test_analyze_finds_recent_frames_when_dataset_exceeds_200_window(monkeypatch):
+    # 数据集超过 200 帧时，观察面板请求的是最近历史帧；后端必须加载最近 200 帧，
+    # 而不是按 asc 加载最早 200 帧导致请求帧全部落空并返回 503。
+    frames = [
+        {
+            "tradingDate": f"2026-07-{day:03d}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+                {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+                {"code": "000001", "rank": 3, "avgRankNum": 3, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.01},
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 221)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-07-220 14:00"],
+    })
+    assert response.status_code == 200
+    body = response.json()
+    frame_keys = [frame["frameKey"] for frame in body["frames"]]
+    assert frame_keys[-1] == "2026-07-220 14:00"
+    # 请求帧 + 前导轨道窗口（技术/共振需要足够历史序列）
+    assert 1 < len(frame_keys) <= 30
+    assert body["frames"][0]["stocks"][0]["code"] == "002279"
+
+
+def test_analyze_returns_empty_frames_when_requested_keys_missing_but_repo_has_frames(monkeypatch):
+    # 请求的帧缺失但库里仍有帧时，不整段 503：返回可计算部分，由前端逐帧降级标记。
+    frames = [
+        {
+            "tradingDate": "2026-07-01",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": 1,
+            "rows": [{"code": "002279", "rank": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1}],
+            "sentiment": {},
+            "marketStats": {},
+        }
+    ]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-07-99 14:00"],
+    })
+    assert response.status_code == 200
+    assert response.json()["frames"] == []
+
+
+def test_analyze_live_path_keeps_enough_history_for_resonance(monkeypatch):
+    # 实时链路（无 frameKeys + currentFrame）必须保留足够回看窗口，否则个股百分位序列
+    # 不足 9 点，共振强度会固定返回 insufficient/全零因子。
+    frames = [
+        {
+            "tradingDate": f"2026-07-{day:03d}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {
+                    "code": f"C{index:02d}",
+                    "rank": (index + day) % 30 + 1,
+                    "avgRankNum": (index + day) % 30 + 1,
+                    "change": 1.0,
+                    "volumeRatio": 1.2,
+                    "zlje": 10,
+                    "zljzb": 0.1,
+                }
+                for index in range(30)
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 31)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C00"],
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            "stocks": [
+                {
+                    "code": f"C{index:02d}",
+                    "rank": (index + 31) % 30 + 1,
+                    "avgRankNum": (index + 31) % 30 + 1,
+                }
+                for index in range(30)
+            ],
+        },
+    })
+    assert response.status_code == 200
+    body = response.json()
+    last = body["frames"][-1]
+    assert last["frameKey"] == "2026-07-31 current:1"
+    assert isinstance(last["marketMedianShortChange"], float)
+    assert isinstance(last["marketMedianPercentile"], float)
+    resonance = last["stocks"][0]["analysis"]["resonance"]
+    assert resonance["status"] == "ok"
+    assert resonance["historyState"] == "established"
+    assert "marketSampleCount" in resonance
+    assert "marketMedianPercentile" in resonance
+
+
+def test_analyze_historical_frames_keep_enough_history_for_tracks(monkeypatch):
+    # 观察面板请求最近历史帧时，后端必须为最早请求帧保留足够的前导帧，
+    # 否则技术/共振/生命周期算法只能用 1-4 个 bar 分析，历史 bar 全为样本不足。
+    frames = [
+        {
+            "tradingDate": f"2026-07-{day:03d}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {
+                    "code": f"C{index:02d}",
+                    "rank": (index + day) % 30 + 1,
+                    "avgRankNum": (index + day) % 30 + 1,
+                    "change": 1.0,
+                    "volumeRatio": 1.2,
+                    "zlje": 10,
+                    "zljzb": 0.1,
+                }
+                for index in range(30)
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 41)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C00"],
+        "frameKeys": ["2026-07-038 14:00", "2026-07-039 14:00", "2026-07-040 14:00"],
+    })
+    assert response.status_code == 200
+    body = response.json()
+    by_key = {frame["frameKey"]: frame for frame in body["frames"]}
+    earliest = by_key["2026-07-038 14:00"]
+    sample_quality = earliest["stocks"][0]["analysis"]["meta"]["sampleQuality"]
+    assert sample_quality["sampleCount"] >= 22
+    assert earliest["stocks"][0]["analysis"]["resonance"]["status"] == "ok"
+
+
+def test_analyze_market_median_uses_avg_rank_num_cross_section(monkeypatch):
+    # 对齐旧 TS buildFrameCrossSections 合同：横截面只统计 avgRankNum > 0 的股票，
+    # 按 avgRankNum 升序重排后取百分位中位数；sampleCount = 帧横截面股票数。
+    frames = [{
+        "tradingDate": "2026-07-01",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "rows": [
+            {"code": "C01", "rank": 1, "avgRankNum": 20, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "C02", "rank": 2, "avgRankNum": 30, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "C03", "rank": 3, "avgRankNum": 40, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "C04", "rank": 4, "avgRankNum": 50, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "C05", "rank": 5, "avgRankNum": 0, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C01"],
+        "frameKeys": ["2026-07-01 14:00"],
+    })
+    assert response.status_code == 200
+    frame = response.json()["frames"][0]
+    assert frame["marketMedianPercentile"] == 62.5
+    assert frame["marketSampleCount"] == 4
+
+
+class FakeRedis:
+    def __init__(self):
+        self.data: dict[str, str] = {}
+        self.sets: dict[str, set[str]] = {}
+
+    def get(self, key):
+        return self.data.get(key)
+
+    def setex(self, key, ttl, value):
+        self.data[key] = value
+
+    def incr(self, key):
+        self.data[key] = str(int(self.data.get(key, 0)) + 1)
+        return int(self.data[key])
+
+    def sadd(self, key, member):
+        self.sets.setdefault(key, set()).add(member)
+        return 1
+
+    def expire(self, key, ttl):
+        return 1
+
+    def smembers(self, key):
+        return list(self.sets.get(key, set()))
+
+    def delete(self, *keys):
+        removed = 0
+        for key in keys:
+            if key in self.data:
+                del self.data[key]
+                removed += 1
+            if key in self.sets:
+                del self.sets[key]
+                removed += 1
+        return removed
+
+    def pipeline(self, transaction=False):
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.commands: list[tuple] = []
+
+    def sadd(self, key, member):
+        self.commands.append(("sadd", key, member))
+        return self
+
+    def expire(self, key, ttl):
+        self.commands.append(("expire", key, ttl))
+        return self
+
+    def execute(self):
+        for command in self.commands:
+            if command[0] == "sadd":
+                self.redis.sadd(command[1], command[2])
+            elif command[0] == "expire":
+                self.redis.expire(command[1], command[2])
+        self.commands = []
+        return []
+
+
+def test_analyze_redis_cache_hit_and_key_variation(monkeypatch):
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(
+        "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
+        lambda: snapshot_cache.SnapshotRedisCache(
+            redis_client=fake_redis,
+            ttl_seconds=60,
+            empty_ttl_seconds=10,
+        ),
+    )
+    frames = [{
+        "tradingDate": "2026-07-01",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "rows": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    calls = {"n": 0}
+
+    def counting_repo(db, enable_backup=True):
+        calls["n"] += 1
+        return FakeRepo(frames)
+
+    monkeypatch.setattr("backend.data.repository_factory.create_repository", counting_repo)
+    payload = {
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-07-01 14:00"],
+    }
+
+    first = client.post("/api/ranktrend/analyze", json=payload)
+    assert first.status_code == 200
+    calls_after_first = calls["n"]
+    assert calls_after_first == 1
+
+    second = client.post("/api/ranktrend/analyze", json=payload)
+    assert second.status_code == 200
+    assert calls["n"] == calls_after_first  # 命中缓存，不再走 repository
+    assert second.json()["cache"]["hit"] is True
+    assert second.json()["source"] == "py_golden"
+
+    # 请求内容不同（codes）→ 缓存键不同 → 重新计算
+    calls["n"] = 0
+    third = client.post("/api/ranktrend/analyze", json={**payload, "codes": ["002279", "603580"]})
+    assert calls["n"] == 1
+    assert third.json()["cache"]["hit"] is False
+
+    # dataset generation 递增（ingest 后）→ 新 generation 键不命中旧缓存
+    generation_key = snapshot_cache.build_snapshot_cache_generation_key(
+        prefix=get_settings().redis_key_prefix,
+        dataset_id="dragonboard_live",
+    )
+    fake_redis.incr(generation_key)
+    calls["n"] = 0
+    fourth = client.post("/api/ranktrend/analyze", json=payload)
+    assert calls["n"] == 1
+    assert fourth.json()["cache"]["hit"] is False

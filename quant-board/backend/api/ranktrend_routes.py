@@ -1,13 +1,29 @@
+import math
+from time import perf_counter
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.analysis.ranktrend import RankTrendPythonEngine, analyze_rank_resonance, market_regime
-from backend.data import repository_factory
+from backend.analysis.ranktrend import (
+    RankTrendPythonEngine,
+    analyze_rank_resonance,
+    attention_rank_lookup,
+    market_regime,
+    percentile_rank,
+)
+from backend.data import repository_factory, snapshot_cache
+from backend.settings import get_settings
 
 router = APIRouter(tags=["ranktrend-analyze"])
 
 SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
+
+# 方案 6.3：analyze 缓存 TTL 对齐前端 1 分钟刷新
+ANALYZE_CACHE_TTL_SECONDS = 60
+
+# 分析算法所需的最大回看窗口：共振至少 9 点序列（RESONANCE_MIN_SERIES_POINTS）、
+# 技术稳定窗口 30、生命周期 15、横截面 3；取 30 同时满足全部轨道。
+ANALYZE_MAX_TRACK_WINDOW = 30
 
 
 def _to_engine_frame(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -31,16 +47,29 @@ def _load_frames_for_analysis(
     snapshot_type: str,
     frame_keys: list[str],
     current_frame: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, list[tuple[str, int, float]]]]:
+    # 最近帧优先：倒序加载最近 200 帧后反转回时间升序，供 replay 按时间推进。
+    # 旧实现按升序加载最早 200 帧，数据集超过 200 帧后，观察面板请求的最近历史帧
+    # 全部落在窗口外，过滤后为空并被误报为 503。
     bundles = repo.load_frame_bundles(
         dataset_id,
         snapshot_type=snapshot_type,
-        sort="asc",
+        sort="desc",
         projection="ranktrend",
         limit=200,
     )
-    frames = [_to_engine_frame(b) for b in bundles]
+    frames = [_to_engine_frame(b) for b in reversed(bundles)]
+    # 每股 attention 出现序列（最近 50 次出现，旧 TS rank-series 合同）：
+    # 趋势分析输入是「该股的出现序列前缀」，不是连续帧窗口
+    series_by_code = _build_code_attention_series(frames)
     if current_frame:
+        current_stocks = current_frame.get("stocks") or []
+        current_ranks, current_total = attention_rank_lookup(current_stocks)
+        current_key = f"{current_frame.get('tradingDate')} {current_frame.get('slotTime')}".strip()
+        for code, rank in current_ranks.items():
+            series_by_code.setdefault(code, []).append(
+                (current_key, rank, percentile_rank(rank, current_total))
+            )
         frames.append({
             "tradingDate": current_frame.get("tradingDate"),
             "slotTime": current_frame.get("slotTime"),
@@ -54,55 +83,89 @@ def _load_frames_for_analysis(
         })
     if frame_keys:
         wanted = set(frame_keys)
-        # 保留请求帧及其前 3 帧作为横截面基准窗口
+        # 保留请求帧及其前 ANALYZE_MAX_TRACK_WINDOW-1 帧：共振/技术/生命周期算法需要
+        # 足够的百分位历史序列（横截面只需 3 帧，取最大轨道窗口一并覆盖）
         keys = [f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip() for frame in frames]
         keep: set[str] = set()
         for index, key in enumerate(keys):
             if key in wanted:
-                keep.update(keys[max(0, index - 3):index + 1])
+                keep.update(keys[max(0, index - (ANALYZE_MAX_TRACK_WINDOW - 1)):index + 1])
         frames = [
             frame for frame in frames
             if f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip() in keep
         ]
     else:
-        # 实时/最新：只保留最后 4 帧（当前帧 + 前 3 帧窗口），避免全量分析超时
-        frames = frames[-4:]
-    if not frames:
+        # 实时/最新：保留最近 ANALYZE_MAX_TRACK_WINDOW 帧（当前帧 + 回看窗口），
+        # 保证共振/技术观察轨有足够的百分位序列；避免全量分析超时
+        frames = frames[-ANALYZE_MAX_TRACK_WINDOW:]
+    if not bundles and not current_frame:
+        # 全源无数据：明确报告无数据；请求帧缺失但库里有帧时，返回可计算部分由前端逐帧降级
         raise HTTPException(status_code=503, detail="no frames available for analyze")
-    return frames
+    return frames, series_by_code
+
+
+def _build_code_attention_series(
+    bundles: list[dict[str, Any]],
+    max_bars: int = 50,
+) -> dict[str, list[tuple[str, int, float]]]:
+    """旧 TS 输入合同：每只代码最近 max_bars 次出现的 (frameKey, attention_rank, percentile)。
+
+    按 avgRankNum 横截面重排（与前端 rank-series rank_basis=attention 一致）；
+    综合排名不进入趋势序列。
+    """
+    series: dict[str, list[tuple[str, int, float]]] = {}
+    for bundle in bundles:
+        key = f"{bundle.get('tradingDate')} {bundle.get('slotTime')}".strip()
+        if not key:
+            continue
+        stocks = bundle.get("stocks") or []
+        ranks, total = attention_rank_lookup(stocks)
+        for code, rank in ranks.items():
+            series.setdefault(code, []).append((key, rank, percentile_rank(rank, total)))
+    for code in series:
+        series[code] = series[code][-max_bars:]
+    return series
 
 
 def _analyze_frames(
     engine: RankTrendPythonEngine,
     frames: list[dict[str, Any]],
+    series_by_code: dict[str, list[tuple[str, int, float]]],
     codes: list[str],
 ) -> list[dict[str, Any]]:
-    signals_by_frame = engine.replay(frames, warmup_count=1)
-    by_key: dict[str, list[dict[str, Any]]] = {}
-    for signal in signals_by_frame:
-        key = f"{signal.get('tradingDate')} {signal.get('slotTime')}".strip()
-        by_key.setdefault(key, []).append(signal)
-    # 每股跨帧百分位序列（用于 resonance 横截面与个股序列）
-    series_by_code: dict[str, list[float]] = {}
-    for frame in frames:
-        total = len(frame.get("stocks", []))
-        for stock in frame.get("stocks", []):
-            code = str(stock.get("code") or "")
-            rank = float(stock.get("rank") or 0)
-            if code and rank > 0 and total > 0:
-                series_by_code.setdefault(code, []).append(_percentile(rank, total))
+    """逐帧按「该股到该帧为止的出现序列前缀」跑 golden pipeline（旧 TS 合同）。
+
+    技术/周期/风险/决策/观察/策略/jump 以该股最近 50 次出现中的前缀为输入，
+    resonance 使用同一前缀（series.percentiles.slice(0, index+1)）。
+    """
+    wanted = set(codes) if codes else None
+    series_index: dict[str, dict[str, int]] = {}
+    for code, bars in series_by_code.items():
+        series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
     output: list[dict[str, Any]] = []
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
         market_median, market_sample_count = _frame_market_median(frames, index)
+        market_median_percentile = _frame_market_median_percentile(frame)
         stocks_out: list[dict[str, Any]] = []
-        for signal in by_key.get(key, []):
-            code = str(signal.get("code") or "")
-            if codes and code not in codes:
+        for stock in frame.get("stocks", []):
+            if not isinstance(stock, dict):
+                continue
+            code = str(stock.get("code") or "")
+            if not code or (wanted is not None and code not in wanted):
+                continue
+            bars = series_by_code.get(code)
+            pos = series_index.get(code, {}).get(key)
+            if not bars or pos is None:
+                continue
+            prefix = bars[: pos + 1]
+            ranks = [item[1] for item in prefix]
+            percentiles = [item[2] for item in prefix]
+            signal = engine._build_signal(stock, frame, ranks, percentiles, regime, {})
+            if not signal:
                 continue
             analysis = signal.get("rankTrend") or {}
-            percentiles = series_by_code.get(code, [])
             jump = analysis.get("jump") or {}
             sample_quality = (analysis.get("meta") or {}).get("sampleQuality") or {}
             resonance = analyze_rank_resonance({
@@ -113,6 +176,7 @@ def _analyze_frames(
                 },
                 "marketMedianShortChange": market_median if market_median is not None else float("nan"),
                 "marketSampleCount": market_sample_count,
+                "marketMedianPercentile": market_median_percentile,
                 "jump": {
                     "direction": jump.get("direction") or "hold",
                     "event": jump.get("event") or "none",
@@ -128,6 +192,7 @@ def _analyze_frames(
         output.append({
             "frameKey": key,
             "regime": regime,
+            "marketMedianPercentile": market_median_percentile,
             "marketMedianShortChange": market_median,
             "marketSampleCount": market_sample_count,
             "totalCount": len(frame.get("stocks", [])),
@@ -153,24 +218,95 @@ def _median(values: list[float]) -> float | None:
 
 
 def _frame_market_median(frames: list[dict[str, Any]], index: int) -> tuple[float | None, int]:
-    """当前帧与前 3 个市场帧公共股票的短周期百分位变化中位数（横截面基准）。"""
+    """旧 TS calculateMarketMedian 合同：当前帧与前第 3 个市场帧公共股票的
+    attention 百分位变化中位数；sampleCount = 当前帧横截面股票数。"""
     start = max(0, index - 3)
     window = frames[start:index + 1]
-    if len(window) < 4:
-        return None, 0
-    current = {str(s.get("code")): s for s in window[-1].get("stocks", []) if s.get("rank", 0) > 0}
-    first = {str(s.get("code")): s for s in window[0].get("stocks", []) if s.get("rank", 0) > 0}
+    current = _frame_cross_section(window[-1])
+    sample_count = len(current)
+    if len(window) < 4 or not current:
+        return None, sample_count
+    first = _frame_cross_section(window[0])
     changes: list[float] = []
-    for code, stock in current.items():
-        first_stock = first.get(code)
-        if not first_stock:
-            continue
-        current_pct = _percentile(float(stock.get("rank") or 0), len(window[-1].get("stocks", [])))
-        first_pct = _percentile(float(first_stock.get("rank") or 0), len(window[0].get("stocks", [])))
-        changes.append(current_pct - first_pct)
+    for code, current_pct in current.items():
+        first_pct = first.get(code)
+        if first_pct is not None:
+            changes.append(current_pct - first_pct)
     if len(changes) < 20:
-        return None, len(changes)
-    return _median(changes), len(changes)
+        return None, sample_count
+    return _median(changes), sample_count
+
+
+def _frame_cross_section(frame: dict[str, Any]) -> dict[str, float]:
+    """旧 TS buildFrameCrossSections 合同：过滤 avgRankNum > 0，按 (avgRankNum, code) 升序，
+    百分位 = ((n - idx) / n) * 100（idx 从 0 开始）。"""
+    stocks = frame.get("stocks") or []
+    valid: list[tuple[str, float]] = []
+    for stock in stocks:
+        if not isinstance(stock, dict):
+            continue
+        code = str(stock.get("code") or "")
+        if not code:
+            continue
+        avg_num = stock.get("avgRankNum")
+        try:
+            avg_num = float(avg_num)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(avg_num) or avg_num <= 0:
+            continue
+        valid.append((code, avg_num))
+    valid.sort(key=lambda item: (item[1], item[0]))
+    total = len(valid)
+    return {
+        code: ((total - index) / total) * 100
+        for index, (code, _avg) in enumerate(valid)
+    }
+
+
+def _frame_market_median_percentile(frame: dict[str, Any]) -> float | None:
+    """该帧市场横截面 attention 百分位中位数（与 marketMedianShortChange 同口径）。"""
+    return _median(list(_frame_cross_section(frame).values()))
+
+
+def _normalize_current_frame(current_frame: dict[str, Any] | None) -> dict[str, Any] | None:
+    """规范化 currentFrame 参与缓存键：stocks 按 code 排序，避免同内容不同顺序导致缓存未命中。"""
+    if not current_frame:
+        return None
+    stocks = current_frame.get("stocks") or []
+    ordered = sorted(
+        (stock for stock in stocks if isinstance(stock, dict)),
+        key=lambda stock: str(stock.get("code") or ""),
+    )
+    return {
+        "tradingDate": current_frame.get("tradingDate"),
+        "slotTime": current_frame.get("slotTime"),
+        "stocks": ordered,
+    }
+
+
+def _analyze_cache_key(
+    *,
+    dataset_id: str,
+    snapshot_type: str,
+    frame_keys: list[str],
+    codes: list[str],
+    current_frame: dict[str, Any] | None,
+    generation: int,
+) -> str:
+    """方案 6.3 缓存键：dataset/snapshot_type/frame_keys/codes/currentFrame 内容 + generation。"""
+    builder = snapshot_cache.SnapshotCacheKeyBuilder(prefix=get_settings().redis_key_prefix)
+    return builder.response_key(
+        "ranktrend:analyze",
+        resolved_dataset_id=dataset_id,
+        params={
+            "snapshot_type": snapshot_type,
+            "frame_keys": sorted(frame_keys),
+            "codes": sorted(codes),
+            "current_frame": _normalize_current_frame(current_frame),
+            "_generation": generation,
+        },
+    )
 
 
 @router.post("/api/ranktrend/analyze")
@@ -185,8 +321,41 @@ def analyze_ranktrend(
     codes = [str(c) for c in (payload.get("codes") or [])]
     frame_keys = [str(k) for k in (payload.get("frameKeys") or [])]
     current_frame = payload.get("currentFrame")
+
+    # 方案 6.3：Redis 缓存，TTL 60s，键含请求内容与 dataset generation（ingest 后失效）
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    generation_key = snapshot_cache.build_snapshot_cache_generation_key(
+        prefix=get_settings().redis_key_prefix,
+        dataset_id=dataset_id,
+    )
+    generation = cache.get_generation(generation_key)
+    cache_key = _analyze_cache_key(
+        dataset_id=dataset_id,
+        snapshot_type=snapshot_type,
+        frame_keys=frame_keys,
+        codes=codes,
+        current_frame=current_frame,
+        generation=generation,
+    )
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return cached
+
     repo = repository_factory.create_repository(db, enable_backup=False)
     engine = RankTrendPythonEngine()
-    raw_frames = _load_frames_for_analysis(repo, dataset_id, snapshot_type, frame_keys, current_frame)
-    frames_out = _analyze_frames(engine, raw_frames, codes)
-    return {"ok": True, "frames": frames_out, "source": "py_golden", "issues": []}
+    raw_frames, series_by_code = _load_frames_for_analysis(
+        repo, dataset_id, snapshot_type, frame_keys, current_frame
+    )
+    frames_out = _analyze_frames(engine, raw_frames, series_by_code, codes)
+    response = {"ok": True, "frames": frames_out, "source": "py_golden", "issues": []}
+    response = {**response, "cache": {"hit": False, "store": "py_golden"}}
+    if cache.get_generation(generation_key) == generation:
+        cache.set_response(cache_key, response, ttl_seconds=ANALYZE_CACHE_TTL_SECONDS)
+        cache.register_dependencies(
+            cache_key,
+            snapshot_cache.build_snapshot_cache_index_keys(
+                prefix=get_settings().redis_key_prefix,
+                dataset_id=dataset_id,
+            ),
+        )
+    return response

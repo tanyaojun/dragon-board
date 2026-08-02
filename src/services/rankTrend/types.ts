@@ -102,6 +102,8 @@ export interface RankTrendResonance {
   reversalPenalty: number
   historyState: 'established' | 'new_entry'
   marketMedianShortChange: number
+  marketSampleCount?: number
+  marketMedianPercentile?: number
   reasons: string[]
 }
 

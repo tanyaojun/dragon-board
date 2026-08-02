@@ -903,6 +903,12 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 返回 `dataset`、`frames`、`count`、`source=mongodb` 和 `cache`。`frames` 中每项包含 `rows/hotlist/sectors/hotThemes/rotationSummary`，供 Dragon Board `listSnapshotFrameBundles` 直接消费。正式快照不再把浏览器 IndexedDB 当事实读源；`five_minute` 浏览器本地入口也不再保留。
 
+`projection=ranktrend` 时 `rows/hotlist` 每行返回 `code/name/rank/avgRankNum/change/volumeRatio/zlje/zljzb`；`avgRankNum` 是趋势计算与市场横截面的唯一核心原料（旧 TS attention 口径），`rank/compRank` 只用于池子大小与展示，缺失 `avgRankNum` 的行不参与百分位计算，也不回退到 `rank/compRank`。
+
+`POST /api/ranktrend/analyze` 的市场横截面基准（`marketMedianPercentile/marketMedianShortChange/marketSampleCount`）与共振/趋势百分位均按每帧 `avgRankNum` 升序、代码并列次序重排后计算；`marketSampleCount` 为该帧有效 `avgRankNum` 股票数。
+
+`POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes/currentFrame` 内容与 dataset generation，TTL 60s；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
+
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
 `rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。API ingest 与后台 snapshot collector 每次成功写入快照事实后都会递增 dataset generation，并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。

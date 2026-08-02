@@ -715,6 +715,7 @@ export class ApiService {
       frames: Array<{
         frameKey: string
         regime: { state: string; score: number; reasons: string[] }
+        marketMedianPercentile?: number | null
         marketMedianShortChange?: number | null
         marketSampleCount?: number
         totalCount: number

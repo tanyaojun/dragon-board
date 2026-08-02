@@ -180,6 +180,7 @@ class RankTrendObservationService {
     const historyFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS, -1)
     const remoteByFrame = new Map<string, {
       analysis: RankTrendObservationAnalysis
+      marketMedianPercentile: number | null
       marketMedianShortChange: number | null
       marketSampleCount: number
     }>()
@@ -196,6 +197,11 @@ class RankTrendObservationService {
             if (first?.analysis) {
               remoteByFrame.set(frame.frameKey, {
                 analysis: first.analysis as RankTrendObservationAnalysis,
+                marketMedianPercentile:
+                  typeof frame.marketMedianPercentile === 'number' &&
+                  Number.isFinite(frame.marketMedianPercentile)
+                    ? frame.marketMedianPercentile
+                    : null,
                 marketMedianShortChange:
                   typeof frame.marketMedianShortChange === 'number' && Number.isFinite(frame.marketMedianShortChange)
                     ? frame.marketMedianShortChange
@@ -221,10 +227,18 @@ class RankTrendObservationService {
       const isCurrent = index === series.frameKeys.length - 1
       const row = rowsByFrame.get(key)
       const remoteMeta = remoteByFrame.get(key)
+      // 当前帧不在历史帧批量请求内，市场基准回退到实时 analyze 输出的 resonance
+      const currentResonance = isCurrent ? currentAnalysis?.resonance ?? null : null
       const market = {
-        percentile: null,
-        shortChange: remoteMeta?.marketMedianShortChange ?? null,
-        sampleCount: remoteMeta?.marketSampleCount ?? 0,
+        percentile:
+          remoteMeta?.marketMedianPercentile ??
+          currentResonance?.marketMedianPercentile ??
+          null,
+        shortChange:
+          remoteMeta?.marketMedianShortChange ??
+          currentResonance?.marketMedianShortChange ??
+          null,
+        sampleCount: remoteMeta?.marketSampleCount ?? currentResonance?.marketSampleCount ?? 0,
       }
       const issues: RankTrendObservationIssue[] = []
       let analysis: RankTrendObservationAnalysis | null = null
@@ -236,16 +250,24 @@ class RankTrendObservationService {
         const remoteAnalysis = remoteMeta?.analysis
         if (remoteAnalysis) {
           analysis = { ...remoteAnalysis }
-          if (percentiles.length < OBSERVATION_WINDOW_BARS.technical) {
+          const sampleStatus = remoteAnalysis.meta?.sampleQuality?.status
+          const goldenSampleCount =
+            remoteAnalysis.meta?.sampleQuality?.sampleCount ?? percentiles.length
+          const hasGoldenQuality =
+            sampleStatus === 'ok' || sampleStatus === 'degraded' || sampleStatus === 'insufficient'
+          if (
+            sampleStatus === 'insufficient' ||
+            (!hasGoldenQuality && percentiles.length < OBSERVATION_WINDOW_BARS.technical)
+          ) {
             issues.push(observationIssue(
               'technical_sample_insufficient',
-              `该帧技术结构样本不足（当前 ${percentiles.length} bar）`,
+              `该帧技术结构样本不足（当前 ${goldenSampleCount} bar）`,
               { frameKey: key, track: 'technical' },
             ))
-          } else if (percentiles.length < 30) {
+          } else if (sampleStatus === 'degraded' || (!hasGoldenQuality && percentiles.length < 30)) {
             issues.push(observationIssue(
               'technical_stable_window_insufficient',
-              `该帧技术结构已计算，未达稳定观察窗口（${percentiles.length}/30）`,
+              `该帧技术结构已计算，未达稳定观察窗口（${goldenSampleCount}/30）`,
               { frameKey: key, track: 'technical' },
             ))
           }

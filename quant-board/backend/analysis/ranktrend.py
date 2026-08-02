@@ -50,7 +50,7 @@ class RankTrendConfig:
     macdSlow: int = 21
     macdSignal: int = 8
     requireMacdGoldenCross: bool = False
-    jumpDeltaPct: float = 10.0  # 内生阈值跳跃检测的百分位变化阈值
+    jumpDeltaPct: float = 15.0  # 对齐旧 TS detectRankJumps 固定 delta=15
     directionWeight: float = 0.3
     accelerationWeight: float = 0.25
     crossWeight: float = 0.2
@@ -110,6 +110,31 @@ def percentile_rank(rank: float, total_count: int) -> float:
     if rank <= 0 or total_count <= 0:
         return 0.0
     return ((total_count - rank + 1) / total_count) * 100
+
+
+def attention_rank_lookup(stocks: list[dict[str, Any]]) -> tuple[dict[str, int], int]:
+    """旧 TS attention 口径：趋势核心因子是 avgRankNum 均榜百分位重排后的序号。
+
+    过滤 avgRankNum > 0，按 (avgRankNum, code) 升序重排；综合排名只决定池子大小
+    （哪些股票进池），不参与趋势百分位计算。
+    """
+    valid: list[tuple[str, float]] = []
+    for stock in stocks:
+        if not isinstance(stock, dict):
+            continue
+        code = str(stock.get("code") or "")
+        if not code:
+            continue
+        avg = stock.get("avgRankNum")
+        try:
+            avg = float(avg)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(avg) or avg <= 0:
+            continue
+        valid.append((code, avg))
+    valid.sort(key=lambda item: (item[1], item[0]))
+    return {code: index + 1 for index, (code, _avg) in enumerate(valid)}, len(valid)
 
 
 def period_momentum(percentiles: list[float], period: int) -> float:
@@ -905,12 +930,13 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     sell_count = len([c for c in components if c["signal"] == "sell"])
     base = "hold"
     macd_golden = technical["macd"]["cross"] == "golden"
-    if combined >= config.buyScoreThreshold and sell_count <= 1 and positive >= negative:
+    # 对齐旧 TS resultComposer：买/卖共识需要至少 2 个明确分量信号
+    if buy_count >= 2 and sell_count <= 1 and combined >= config.buyScoreThreshold:
         if config.requireMacdGoldenCross and not macd_golden:
             base = "hold"
         else:
             base = "buy"
-    elif combined <= config.sellScoreThreshold and buy_count <= 1 and negative >= positive:
+    elif sell_count >= 2 and buy_count <= 1 and combined <= config.sellScoreThreshold:
         base = "sell"
     signed_threshold = config.buyScoreThreshold if base == "buy" else config.sellScoreThreshold if base == "sell" else config.buyScoreThreshold if combined >= 0 else config.sellScoreThreshold
     threshold_scale = max(0.05, abs(signed_threshold))
@@ -1074,7 +1100,12 @@ def _resonance_label(score: float) -> str:
     return "非常弱"
 
 
-def _resonance_insufficient(reason: str, market_median_short_change: float) -> dict[str, Any]:
+def _resonance_insufficient(
+    reason: str,
+    market_median_short_change: float,
+    market_sample_count: int = 0,
+    market_median_percentile: float | None = None,
+) -> dict[str, Any]:
     return {
         "status": "insufficient",
         "direction": "hold",
@@ -1087,6 +1118,8 @@ def _resonance_insufficient(reason: str, market_median_short_change: float) -> d
         "reversalPenalty": 0,
         "historyState": "established",
         "marketMedianShortChange": market_median_short_change,
+        "marketSampleCount": market_sample_count,
+        "marketMedianPercentile": market_median_percentile,
         "reasons": [reason],
     }
 
@@ -1096,6 +1129,7 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
     percentiles = [float(p) for p in (input.get("percentiles") or [])]
     market_median_short_change = float(input.get("marketMedianShortChange") or 0)
     market_sample_count = int(input.get("marketSampleCount") or 0)
+    market_median_percentile = input.get("marketMedianPercentile")
     jump = input.get("jump") or {}
     entry = input.get("entry") or {}
     sample_quality = input.get("sampleQuality") or {}
@@ -1103,12 +1137,18 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
     current_attention_percentile = float(entry.get("currentAttentionPercentile") or 0)
 
     if sample_quality.get("timelineValid") is False:
-        return _resonance_insufficient("快照时间轴不完整", market_median_short_change)
+        return _resonance_insufficient(
+            "快照时间轴不完整", market_median_short_change, market_sample_count, market_median_percentile
+        )
     if is_new_entry:
         if not math.isfinite(current_attention_percentile):
-            return _resonance_insufficient("新入榜关注度无效", market_median_short_change)
+            return _resonance_insufficient(
+                "新入榜关注度无效", market_median_short_change, market_sample_count, market_median_percentile
+            )
         if not math.isfinite(market_median_short_change) or market_sample_count < RESONANCE_MIN_MARKET_SAMPLE_COUNT:
-            return _resonance_insufficient("横截面有效样本不足", market_median_short_change)
+            return _resonance_insufficient(
+                "横截面有效样本不足", market_median_short_change, market_sample_count, market_median_percentile
+            )
         jump_events = jump.get("events") or []
         jump_freshness = 1.0 if jump_events else 0.0
         entry_strength = clamp((current_attention_percentile - 50) / 25, 0, 1)
@@ -1125,14 +1165,22 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
             "reversalPenalty": 0,
             "historyState": "new_entry",
             "marketMedianShortChange": market_median_short_change,
+            "marketSampleCount": market_sample_count,
+            "marketMedianPercentile": market_median_percentile,
             "reasons": [f"新入榜关注度 {round(current_attention_percentile)}"],
         }
     if len(percentiles) < RESONANCE_MIN_SERIES_POINTS or any(not math.isfinite(p) for p in percentiles):
-        return _resonance_insufficient("排名序列不足或无效", market_median_short_change)
+        return _resonance_insufficient(
+            "排名序列不足或无效", market_median_short_change, market_sample_count, market_median_percentile
+        )
     if sample_quality.get("status") == "insufficient":
-        return _resonance_insufficient("快照样本不足", market_median_short_change)
+        return _resonance_insufficient(
+            "快照样本不足", market_median_short_change, market_sample_count, market_median_percentile
+        )
     if not math.isfinite(market_median_short_change) or market_sample_count < RESONANCE_MIN_MARKET_SAMPLE_COUNT:
-        return _resonance_insufficient("横截面有效样本不足", market_median_short_change)
+        return _resonance_insufficient(
+            "横截面有效样本不足", market_median_short_change, market_sample_count, market_median_percentile
+        )
 
     last_index = len(percentiles) - 1
     short_start_index = last_index - RESONANCE_SHORT_WINDOW_BARS
@@ -1197,6 +1245,8 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
         "reversalPenalty": round(reversal_penalty, 6),
         "historyState": "established",
         "marketMedianShortChange": market_median_short_change,
+        "marketSampleCount": market_sample_count,
+        "marketMedianPercentile": market_median_percentile,
         "reasons": [
             f"相对动量 {round(relative_momentum * 100)}",
             f"加速度 {round(acceleration * 100)}",
@@ -1306,13 +1356,21 @@ class RankTrendPythonEngine:
         self.config = config or RankTrendConfig()
         self._stock_lookup: list[dict[str, dict[str, Any]]] = []
 
-    def replay(self, frames: list[dict[str, Any]], warmup_count: int | None = None, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def replay(
+        self,
+        frames: list[dict[str, Any]],
+        warmup_count: int | None = None,
+        window_size: int = 50,
+        meta: dict[str, Any] | None = None,
+        codes: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         meta = meta or {}
         if self._candidate_tier_mode(meta) == "execution":
             self._ensure_hotlist_sentiment(frames, meta)
         self._stock_lookup = self._build_stock_lookup(frames)
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
+        requested_codes = {str(code) for code in codes} if codes else None
         histories = defaultdict(deque)
         signals: list[dict[str, Any]] = []
         for index, frame in enumerate(frames):
@@ -1322,17 +1380,19 @@ class RankTrendPythonEngine:
                     history.popleft()
 
             stocks = frame.get("stocks", [])
-            total_count = len(stocks)
+            # 池子大小 = 全池股票数（综合排名口径，用于 regime/展示）
+            # 趋势因子百分位 = avgRankNum attention 重排后的序号（有效子集内）
+            attention_ranks, attention_total = attention_rank_lookup(stocks)
             seen_codes: set[str] = set()
             for stock in stocks:
                 code = str(stock.get("code") or "")
                 if not code or code in seen_codes:
                     continue
                 seen_codes.add(code)
-                rank = float(stock.get("rank") or 0)
-                if rank <= 0:
+                rank = attention_ranks.get(code)
+                if rank is None:
                     continue
-                histories[code].append((index, rank, percentile_rank(rank, total_count)))
+                histories[code].append((index, rank, percentile_rank(rank, attention_total)))
 
             if index < start:
                 continue
@@ -1340,6 +1400,8 @@ class RankTrendPythonEngine:
             regime = market_regime(frame)
             for stock in stocks:
                 code = str(stock.get("code") or "")
+                if requested_codes is not None and code not in requested_codes:
+                    continue
                 series = histories.get(code)
                 if not series:
                     continue
@@ -1409,11 +1471,12 @@ class RankTrendPythonEngine:
             row = self._stock_lookup[lookup_index].get(code) if lookup_index < len(self._stock_lookup) else self._find_stock(historical, code)
             if not row:
                 continue
-            rank = float(row.get("rank") or 0)
-            if rank <= 0:
+            attention_ranks, attention_total = attention_rank_lookup(historical.get("stocks") or [])
+            rank = attention_ranks.get(code)
+            if rank is None:
                 continue
             ranks.append(rank)
-            percentiles.append(percentile_rank(rank, len(historical.get("stocks", []))))
+            percentiles.append(percentile_rank(rank, attention_total))
         return self._build_signal(stock, frame, ranks, percentiles, regime, meta)
 
     def _build_signal(self, stock: dict[str, Any], frame: dict[str, Any], ranks: list[float], percentiles: list[float], regime: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any] | None:

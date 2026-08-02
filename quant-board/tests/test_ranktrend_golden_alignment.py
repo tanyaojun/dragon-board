@@ -23,6 +23,7 @@ def _make_frames(include_hotlist_sentiment: bool = False) -> list[dict]:
                     "code": "000001",
                     "name": "样本",
                     "rank": max(1, 30 - i * 3),
+                    "avgRankNum": max(1, 30 - i * 3),
                     "change": 1.5,
                     "volumeRatio": 1.8,
                     "zlje": 1200,

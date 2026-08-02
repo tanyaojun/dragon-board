@@ -20,15 +20,20 @@ describe('RankTrendObservationService', () => {
     frameKeys: string[],
     buildAnalysis: (frameKey: string, index: number) => any,
     frameMeta: (frameKey: string, index: number) => {
+      marketMedianPercentile?: number | null
       marketMedianShortChange: number | null
       marketSampleCount: number
-    } = () => ({ marketMedianShortChange: null, marketSampleCount: 0 }),
+    } = () => ({
+      marketMedianShortChange: null,
+      marketSampleCount: 0,
+    }),
   ) {
     vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
       ok: true,
       frames: frameKeys.map((frameKey, index) => ({
         frameKey,
         regime: { state: 'normal', score: 50, reasons: [] },
+        marketMedianPercentile: frameMeta(frameKey, index).marketMedianPercentile ?? null,
         marketMedianShortChange: frameMeta(frameKey, index).marketMedianShortChange,
         marketSampleCount: frameMeta(frameKey, index).marketSampleCount,
         totalCount: 200,
@@ -618,5 +623,104 @@ describe('RankTrendObservationService', () => {
     expect(jumpFrame.analysis?.jump?.event).toBe('jump')
     expect(jumpFrame.analysis?.jump?.direction).toBe('buy')
     expect(result.frames.every((frame) => Array.isArray(frame.analysis?.jump?.events))).toBe(true)
+  })
+
+  it('当前帧市场基准回退到 Python resonance 输出', async () => {
+    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+      ranks: [28, 19],
+      percentiles: [42, 67],
+      frameKeys,
+    })
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+    mockRemoteFrames(
+      frameKeys.slice(0, -1),
+      () => ({
+        meta: { code: '002279' },
+        jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+      }),
+      () => ({ marketMedianPercentile: 55, marketMedianShortChange: 1.5, marketSampleCount: 4 }),
+    )
+    const currentAnalysis = {
+      meta: { code: '002279' },
+      resonance: {
+        status: 'ok',
+        direction: 'buy',
+        score: 80,
+        marketMedianPercentile: 62,
+        marketMedianShortChange: 7.5,
+        marketSampleCount: 25,
+      },
+    }
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: currentAnalysis as any,
+    })
+
+    expect(result.frames[0].marketMedianPercentile).toBe(55)
+    expect(result.frames[0].marketMedianShortChange).toBe(1.5)
+    expect(result.frames[0].marketSampleCount).toBe(4)
+    expect(result.frames[1].marketMedianPercentile).toBe(62)
+    expect(result.frames[1].marketMedianShortChange).toBe(7.5)
+    expect(result.frames[1].marketSampleCount).toBe(25)
+  })
+
+  it('历史帧技术质量以 Python sampleQuality 为准，degraded 不再标记样本不足', async () => {
+    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+      ranks: [28, 19],
+      percentiles: [42, 67],
+      frameKeys,
+    })
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+    mockRemoteFrames(frameKeys.slice(0, -1), () => ({
+      meta: {
+        code: '002279',
+        sampleQuality: { status: 'degraded', sampleCount: 12, requiredSampleCount: 30 },
+      },
+      technical: { macd: { cross: 'golden' } },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: { meta: { code: '002279' } },
+    })
+    const frame = result.frames[0]
+    expect(frame.analysis?.technical).toBeTruthy()
+    expect(frame.issues.some((issue) => issue.code === 'technical_sample_insufficient')).toBe(false)
+    expect(frame.issues).toContainEqual(expect.objectContaining({
+      code: 'technical_stable_window_insufficient',
+      message: expect.stringMatching(/未达稳定观察窗口/),
+    }))
+  })
+
+  it('历史帧 Python 标记 insufficient 时仍提示技术样本不足', async () => {
+    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+      ranks: [28, 19],
+      percentiles: [42, 67],
+      frameKeys,
+    })
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+    mockRemoteFrames(frameKeys.slice(0, -1), () => ({
+      meta: {
+        code: '002279',
+        sampleQuality: { status: 'insufficient', sampleCount: 3, requiredSampleCount: 30 },
+      },
+      technical: { macd: {} },
+      jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+    }))
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: { meta: { code: '002279' } },
+    })
+    const frame = result.frames[0]
+    expect(frame.issues).toContainEqual(expect.objectContaining({
+      code: 'technical_sample_insufficient',
+      message: expect.stringMatching(/样本不足（当前 3 bar）/),
+    }))
   })
 })

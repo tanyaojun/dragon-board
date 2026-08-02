@@ -78,11 +78,21 @@ class SnapshotRedisCache:
         except Exception:
             return None
 
-    def set_response(self, key: str, response: dict[str, Any]) -> None:
+    def set_response(
+        self,
+        key: str,
+        response: dict[str, Any],
+        *,
+        ttl_seconds: int | None = None,
+    ) -> None:
         if self.redis_client is None:
             return
         try:
-            ttl = self.empty_ttl_seconds if self._is_empty_response(response) else self.ttl_seconds
+            ttl = (
+                ttl_seconds
+                if ttl_seconds is not None
+                else (self.empty_ttl_seconds if self._is_empty_response(response) else self.ttl_seconds)
+            )
             payload = json.dumps(response, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             self.redis_client.setex(key, ttl, payload)
         except Exception:

@@ -574,6 +574,7 @@ export class RankTrendAnalyzer {
             result.strategy = analysis.strategy
             result.executionStrategy = analysis.executionStrategy
             result.jump = analysis.jump
+            if (analysis.resonance) result.resonance = analysis.resonance
           }
           this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())
           return results

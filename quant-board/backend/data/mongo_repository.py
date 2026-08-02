@@ -801,13 +801,15 @@ class MongoRepository:
         if not snapshot_ids:
             return rows_by_snapshot
         if projection == "ranktrend":
-            # snapshotId 必须保留（分组 key）；regime 五因子需要 change/volumeRatio/zlje/zljzb
+            # snapshotId 必须保留（分组 key）；regime 五因子需要 change/volumeRatio/zlje/zljzb；
+            # avgRankNum 是旧 TS 横截面（市场关注度百分位中位数）的原料，必须随行输出
             mongo_projection: dict[str, int] = {
                 "_id": 0,
                 "snapshotId": 1,
                 "code": 1,
                 "name": 1,
                 "rank": 1,
+                "avgRankNum": 1,
                 "change": 1,
                 "volumeRatio": 1,
                 "zlje": 1,
@@ -824,6 +826,7 @@ class MongoRepository:
                     "code": row.get("code"),
                     "name": row.get("name"),
                     "rank": row.get("rank"),
+                    "avgRankNum": row.get("avgRankNum"),
                     "change": row.get("change"),
                     "volumeRatio": row.get("volumeRatio"),
                     "zlje": row.get("zlje"),

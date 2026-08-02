@@ -42,8 +42,8 @@ def test_replay_signal_contract_has_observation_and_both_strategies():
         "type": "half_hour",
         "timestamp": 1,
         "stocks": [
-            {"code": "002279", "rank": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
-            {"code": "603580", "rank": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
         ],
         "marketContext": {"sentiment": {"phaseName": "启动"}, "marketStats": {}},
     }]
@@ -56,3 +56,41 @@ def test_replay_signal_contract_has_observation_and_both_strategies():
         assert "candidateTier" in rt["strategy"]
         assert "candidateTier" in rt["executionStrategy"]
         assert "regime" in rt["strategy"]
+
+
+def test_replay_codes_filter_only_builds_requested_signals():
+    frames = [{
+        "tradingDate": "2026-08-02",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "stocks": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+        ],
+        "marketContext": {"sentiment": {"phaseName": "启动"}, "marketStats": {}},
+    }]
+    engine = RankTrendPythonEngine()
+    filtered = engine.replay(frames, warmup_count=1, codes=["002279"])
+    assert [signal["code"] for signal in filtered] == ["002279"]
+    all_signals = engine.replay(frames, warmup_count=1)
+    assert {signal["code"] for signal in all_signals} == {"002279", "603580"}
+
+
+def test_replay_excludes_stocks_without_valid_avg_rank_num():
+    # 趋势核心因子是 avgRankNum 均榜百分位：avgRankNum 无效（<=0/缺失）的股票
+    # 不进入趋势百分位序列（旧 TS attention 口径），综合排名只决定池子大小。
+    frames = [{
+        "tradingDate": "2026-08-02",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "stocks": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 0, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+        ],
+        "marketContext": {"sentiment": {"phaseName": "启动"}, "marketStats": {}},
+    }]
+    engine = RankTrendPythonEngine()
+    signals = engine.replay(frames, warmup_count=1)
+    assert [signal["code"] for signal in signals] == ["002279"]
