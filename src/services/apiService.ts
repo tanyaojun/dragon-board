@@ -339,23 +339,29 @@ export class ApiService {
       }
     }
 
-    const controller = new AbortController()
-    this.abortControllers.set(requestId, controller)
-
-    const signal = config.signal
-      ? this.mergeSignals(config.signal, controller.signal)
-      : controller.signal
-
     try {
       // 重试循环
       while (retryCount <= (config.retries ?? 2)) {
+        // 每次尝试使用独立的 AbortController：超时 abort 后重试不能被旧 signal 卡住
+        const controller = new AbortController()
+        this.abortControllers.set(requestId, controller)
+        const signal = config.signal
+          ? this.mergeSignals(config.signal, controller.signal)
+          : controller.signal
+
+        // 区分“超时中断”（可重试）与“调用方取消”（不重试）
+        let timedOut = false
+
         try {
           // 通过队列执行（根据优先级）
           const response = await this.queue.add(config.priority ?? 'medium', async () => {
             if (signal.aborted) {
               throw new DOMException('Request aborted', 'AbortError')
             }
-            const timeoutId = setTimeout(() => controller.abort(), config.timeout)
+            const timeoutId = setTimeout(() => {
+              timedOut = true
+              controller.abort()
+            }, config.timeout)
 
             const fetchOptions: RequestInit = {
               method,
@@ -435,15 +441,18 @@ export class ApiService {
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error))
 
-          // 如果是取消请求，不重试
-          if (error instanceof Error && error.name === 'AbortError') {
+          const isAbort = error instanceof Error && error.name === 'AbortError'
+          const isUserCancel = isAbort && !timedOut
+
+          // 调用方取消（含外部 signal 取消）：不重试
+          if (isUserCancel) {
             debugLog(`[ApiService] 请求被取消: ${url}`)
             break
           }
 
+          // 超时或网络错误：计入重试（重试次数用尽后记录失败指标并抛出）
           retryCount++
 
-          // 如果还有重试次数，等待后继续
           if (retryCount <= (config.retries ?? 2) && this.shouldRetryRequest(error)) {
             const delay = (config.retryDelay ?? 1000) * Math.pow(2, retryCount - 1)
             debugLog(
@@ -464,7 +473,9 @@ export class ApiService {
             duration,
             success: false,
             retryCount: retryCount - 1,
-            error: error instanceof Error ? error.message : String(error),
+            error: timedOut
+              ? `timeout after ${config.timeout}ms: ${lastError.message}`
+              : lastError.message,
           })
 
           if (!config.silent) {

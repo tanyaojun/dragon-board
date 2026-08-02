@@ -40,7 +40,7 @@ describe('App market platform summary', () => {
     expect(source).toContain(
       '<span class="status-label">行情:<span class="status-value">{{ marketSummary.quotes }}</span></span>',
     )
-    expect(source).toContain("['raw.platforms', 'merged.stocks', 'quotes:batch']")
+    expect(source).toContain("['raw.platforms', 'raw.platformStatus', 'merged.stocks', 'quotes:batch']")
     expect(source).toMatch(/dataLayer\.subscribe\(path,/)
     expect(source).not.toContain('数据来自当前 platformData')
 

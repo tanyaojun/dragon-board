@@ -16,6 +16,10 @@ export const QUOTE_REFRESH_INTERVAL_MS = 10000
 export const QUOTE_BATCH_SIZE = 50
 export const PLATFORM_CACHE_TTL_MS = 1800000
 export const PLATFORM_REFRESH_INTERVAL_MS = 1800000
+// 平台连续失败多少次才在 UI 显示“失败”（少于阈值时显示“重试中”）
+export const PLATFORM_FAILURE_THRESHOLD = 3
+// 失败平台自动重试间隔
+export const PLATFORM_RETRY_INTERVAL_MS = 60_000
 export const MAX_PLATFORM_CACHE_SIZE = 10
 export const QUOTE_BATCH_DELAY_MS = 50
 export const REALTIME_FLUSH_DELAY_MS = 50

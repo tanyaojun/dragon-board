@@ -140,7 +140,7 @@ describe('PlatformHotlistService', () => {
         lastLoadFromCache: false,
         cacheTimestamp: new Date('2026-07-27T10:00:00+08:00').getTime(),
         platforms: {
-          eastmoney: { rowCount: 1, success: true },
+          eastmoney: { rowCount: 1, success: true, consecutiveFailures: 0 },
         },
       })
     } finally {
@@ -163,8 +163,85 @@ describe('PlatformHotlistService', () => {
     expect(service.getCacheDiagnostics().platforms.eastmoney).toEqual({
       rowCount: 0,
       success: false,
+      consecutiveFailures: 1,
       error: 'upstream timeout',
     })
     warn.mockRestore()
+  })
+
+  it('keeps a single failure as retrying and only marks failed after three consecutive failures', async () => {
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+    adapterMocks.getHotList.mockRejectedValue(new Error('upstream timeout'))
+    const service = new PlatformHotlistService()
+
+    await service.loadPlatforms(['eastmoney'], true)
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toMatchObject({
+      success: false,
+      consecutiveFailures: 1,
+    })
+
+    await service.loadPlatforms(['eastmoney'], true)
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toMatchObject({
+      success: false,
+      consecutiveFailures: 2,
+    })
+
+    await service.loadPlatforms(['eastmoney'], true)
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toMatchObject({
+      success: false,
+      consecutiveFailures: 3,
+    })
+  })
+
+  it('recovers a failed platform when a background retry succeeds', async () => {
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+    adapterMocks.getHotList.mockRejectedValueOnce(new Error('upstream timeout'))
+    adapterMocks.getHotList.mockResolvedValue([])
+    adapterMocks.format.mockReturnValue([{ code: '000001', name: '平安银行', rank: 1 }])
+    const service = new PlatformHotlistService()
+
+    await service.loadPlatforms(['eastmoney'], true)
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toMatchObject({
+      success: false,
+      consecutiveFailures: 1,
+    })
+
+    const retry = await service.retryFailedPlatforms()
+
+    expect(retry.updated).toBe(true)
+    expect(retry.data.eastmoney).toEqual([{ code: '000001', name: '平安银行', rank: 1 }])
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toMatchObject({
+      success: true,
+      consecutiveFailures: 0,
+    })
+  })
+
+  it('does not auto retry platforms already marked failed', async () => {
+    vi.mocked(apiService.listStockNames).mockResolvedValue({
+      ok: true,
+      source: 'mongodb',
+      stocks: [{ code: '000001', name: '平安银行', active: true }],
+    })
+    adapterMocks.getHotList.mockRejectedValue(new Error('upstream timeout'))
+    const service = new PlatformHotlistService()
+
+    await service.loadPlatforms(['eastmoney'], true)
+    await service.loadPlatforms(['eastmoney'], true)
+    await service.loadPlatforms(['eastmoney'], true)
+    expect(service.getCacheDiagnostics().platforms.eastmoney.consecutiveFailures).toBe(3)
+    const callsBeforeRetry = adapterMocks.getHotList.mock.calls.length
+
+    const retry = await service.retryFailedPlatforms()
+
+    expect(retry.updated).toBe(false)
+    expect(adapterMocks.getHotList.mock.calls.length).toBe(callsBeforeRetry)
   })
 })

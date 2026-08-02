@@ -95,12 +95,13 @@ vi.mock('../PlatformHotlistService', () => ({
     hasFreshCache: () => hasFreshPlatformCache,
     markRefreshChecked: vi.fn(),
     markRefreshed: vi.fn(),
+    retryFailedPlatforms: vi.fn(async () => ({ updated: false, data: {} })),
     getCacheDiagnostics: vi.fn(() => ({
       lastCheckAt: 1000,
       lastReloadAt: 1000,
       lastLoadFromCache: false,
       cacheTimestamp: 1000,
-      platforms: { eastmoney: { rowCount: 1, success: true } },
+      platforms: { eastmoney: { rowCount: 1, success: true, consecutiveFailures: 0 } },
     })),
     maintenance: vi.fn(),
     clearCache: vi.fn(),
@@ -306,6 +307,7 @@ describe('DataLoaderFacade', () => {
     const { dataLoader } = await import('../../dataLoader')
     dataLoader.stopQuoteAutoRefresh()
     dataLoader.stopSignalAutoRefresh()
+    dataLoader.stopFailedPlatformRetry()
     const runtime = await import('../../refresh/RefreshTaskRuntime').catch(() => null)
     runtime?.refreshTaskRegistry.resetRuntimeState()
   })
@@ -954,9 +956,48 @@ describe('DataLoaderFacade', () => {
         lastCheckAt: 1000,
         lastReloadAt: 1000,
         lastLoadFromCache: false,
-        platforms: { eastmoney: { rowCount: 1, success: true } },
+        platforms: { eastmoney: { rowCount: 1, success: true, consecutiveFailures: 0 } },
       }),
     )
+  })
+
+  it('publishes platform status from diagnostics into DataLayer after loading', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+
+    await dataLoader.bootstrapInitialData({ force: true })
+
+    expect(dataLayer.getPlatformStatus()).toEqual({
+      eastmoney: { rowCount: 1, success: true, consecutiveFailures: 0 },
+    })
+  })
+
+  it('publishes recovered platform data and status after the one-minute retry tick', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    const { platformHotlistService } = await import('../PlatformHotlistService')
+    vi.mocked(platformHotlistService.retryFailedPlatforms).mockResolvedValue({
+      updated: true,
+      data: {
+        eastmoney: [{ code: '000001', name: '平安银行', rank: 1, source: 'eastmoney' }],
+      },
+    })
+    vi.mocked(platformHotlistService.getCacheDiagnostics).mockReturnValue({
+      lastCheckAt: 1000,
+      lastReloadAt: 1000,
+      lastLoadFromCache: false,
+      cacheTimestamp: 1000,
+      platforms: {
+        eastmoney: { rowCount: 1, success: true, consecutiveFailures: 0 },
+      },
+    })
+
+    await (dataLoader as any).retryFailedPlatformsTick()
+
+    expect(dataLayer.getPlatformStatus()).toEqual({
+      eastmoney: { rowCount: 1, success: true, consecutiveFailures: 0 },
+    })
+    expect(dataLayer.getRawPlatforms().eastmoney).toEqual([
+      { code: '000001', name: '平安银行', rank: 1, source: 'eastmoney' },
+    ])
   })
 
   it('does not recalculate RankTrend signals outside trading time quote refresh', async () => {

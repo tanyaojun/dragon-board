@@ -515,6 +515,10 @@ describe('ApiService', () => {
     expect(aborted).toBe(false)
 
     await vi.advanceTimersByTimeAsync(160_000)
+    // 第一次 180s 超时触发；超时属于可重试错误，请求会按 retries 配置重试
+    expect(aborted).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(200_000)
     const result = await request
     expect(result.ok).toBe(false)
     if (result.ok) {
@@ -622,5 +626,112 @@ describe('ApiService', () => {
     expect(requestedUrl.origin).toBe('http://localhost:3000')
     expect(requestedUrl.pathname).toBe('/api/journal/entries')
     expect(requestedUrl.searchParams.get('status')).toBe('candidate')
+  })
+
+  it('retries a request that timed out and succeeds on the next attempt', async () => {
+    vi.useFakeTimers()
+    const api = new ApiService()
+    vi.spyOn(api as any, 'delay').mockResolvedValue(undefined)
+
+    let attempts = 0
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      attempts += 1
+      if (attempts === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('signal is aborted without reason', 'AbortError')),
+            { once: true },
+          )
+        })
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = api.get('/api/test/timeout-retry', {
+      timeout: 1000,
+      retries: 1,
+      cache: false,
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    const result = await request
+
+    expect(result).toMatchObject({ ok: true })
+    expect(attempts).toBe(2)
+  })
+
+  it('does not retry a request cancelled by the caller while in flight', async () => {
+    const api = new ApiService()
+    vi.spyOn(api as any, 'delay').mockResolvedValue(undefined)
+
+    let attempts = 0
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      attempts += 1
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('signal is aborted without reason', 'AbortError')),
+          { once: true },
+        )
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = api.get('/api/test/user-cancel-inflight', {
+      requestId: 'user-cancel-inflight',
+      retries: 2,
+      cache: false,
+    })
+    await vi.waitFor(() => expect(attempts).toBe(1))
+    api.cancelRequest('user-cancel-inflight')
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' })
+    expect(attempts).toBe(1)
+  })
+
+  it('records a timeout failure in request metrics', async () => {
+    vi.useFakeTimers()
+    const api = new ApiService()
+
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => reject(new DOMException('signal is aborted without reason', 'AbortError')),
+          { once: true },
+        )
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const request = api
+      .get('/api/test/timeout-metrics', {
+        timeout: 1000,
+        retries: 0,
+        cache: false,
+        silent: true,
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error) => ({ ok: false as const, error }),
+      )
+    await vi.advanceTimersByTimeAsync(1500)
+    const result = await request
+    expect(result.ok).toBe(false)
+    if (result.ok) {
+      throw new Error('expected timeout request to fail')
+    }
+    expect(result.error).toMatchObject({ name: 'AbortError' })
+
+    const metric = api.getMetrics().find((item) => item.url.includes('timeout-metrics'))
+    expect(metric).toBeDefined()
+    expect(metric?.success).toBe(false)
+    expect(metric?.error).toContain('timeout')
   })
 })

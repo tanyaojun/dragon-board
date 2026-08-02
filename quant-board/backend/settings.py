@@ -138,6 +138,7 @@ class Settings(BaseModel):
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
+    hotlist_refresh_interval_seconds: int = Field(default=600)
     xueqiu_cookie: str = Field(default="")
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
@@ -414,6 +415,13 @@ class Settings(BaseModel):
             _env_int(
                 "QUANT_BOARD_MARKET_QUOTES_REFRESH_INTERVAL_SECONDS",
                 self.market_quotes_refresh_interval_seconds,
+            ),
+        )
+        self.hotlist_refresh_interval_seconds = max(
+            60,
+            _env_int(
+                "QUANT_BOARD_HOTLIST_REFRESH_INTERVAL_SECONDS",
+                self.hotlist_refresh_interval_seconds,
             ),
         )
         self.xueqiu_cookie = os.environ.get(

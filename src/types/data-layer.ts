@@ -40,9 +40,19 @@ export interface DataVersion {
   review?: number
   quotes: number
   platforms: number
+  platformStatus: number
   breath: number
   algorithm: number
   rotation?: number
+}
+
+/** 单平台热榜加载状态：区分“真实空榜”与“来源失败/降级”，失败原因结构化保留。 */
+export interface PlatformStatusInfo {
+  rowCount: number
+  success: boolean
+  /** 连续失败次数；undefined 表示非重试类失败（如白名单不可用），直接按失败展示 */
+  consecutiveFailures?: number
+  error?: string
 }
 
 export interface ThemeMetrics {
@@ -235,6 +245,7 @@ export interface DataState {
   raw: {
     stocks: any[]
     platforms: Record<string, any>
+    platformStatus: Record<string, PlatformStatusInfo>
     themes: any[]
     fullMarket: any[]
   }

@@ -109,8 +109,10 @@ async def on_startup() -> None:
     theme_mapping_refresh_scheduler.start()
     market_fund_scheduler.start()
     from backend.market_proxy.quotes import start_market_quotes_refresh
+    from backend.market_proxy.hotlists import start_hotlist_refresh
 
     await start_market_quotes_refresh()
+    await start_hotlist_refresh()
 
 
 @app.on_event("shutdown")
@@ -126,13 +128,14 @@ async def on_shutdown() -> None:
     from backend.market_proxy.quotes import stop_market_quotes_refresh
 
     await stop_market_quotes_refresh()
-    from backend.market_proxy.hotlists import close_hotlist_client
+    from backend.market_proxy.hotlists import close_hotlist_client, stop_hotlist_refresh
     from backend.market_proxy.limitup import close_limitup_client
     from backend.market_proxy.longhu import close_longhu_client
     from backend.market_proxy.sentiment import close_sentiment_client
     from backend.market_proxy.surge import close_surge_client
     from backend.market_proxy.xuangubao import close_xuangubao_client
 
+    await stop_hotlist_refresh()
     await close_hotlist_client()
     await close_limitup_client()
     await close_longhu_client()

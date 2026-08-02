@@ -112,7 +112,7 @@ export const API_CONFIG = {
     // 平台热榜数据 - 走3000
     PLATFORM: {
       baseURL: 'http://localhost:3000',
-      timeout: 8000,
+      timeout: 15000,
       retries: 2,
       cacheTTL: 60000,
       priority: 'medium' as const,

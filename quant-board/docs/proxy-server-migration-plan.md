@@ -139,6 +139,26 @@ quant-board/backend/market_proxy/
     前端 PlatformHotlist/LimitUpFeed/ThsLimitUpEventFeed 17 tests 通过；
     真实冒烟：THS 热榜 100 行、大智慧 100 行、东财 100 行、选股宝 2 行、雪球 100 行、
     涨停池 98 只、8 个细分池全部可取。
+- ✅ 热榜链路加固（2026-08-02，P0/P1/P2/P3）：
+  - 根因：慢上游（eastmoney/tdx/cls 实测 8~27s）超过前端 8s 硬超时，且前端把超时 abort 一律当“取消”不重试；
+    迁移后只有进程内 60s 缓存，刷新页面反复触发慢上游，出现 5~6/8 平台空榜。
+  - P0 前端：`apiService` 区分“超时中断（可重试）”与“调用方取消（不重试）”，每次尝试独立 AbortController；
+    PLATFORM 超时 8s→15s。
+  - P1 后端：`HotlistService` 上游失败重试 1 次；失败降级结果负缓存 15s；缓存 TTL 从抓取完成时刻起算；
+    httpx 超时 8s→12s。
+  - P2 共享缓存：新增 `backend/market_proxy/cache.py`，热榜成功/失败结果写入 Redis
+    （key `market:hotlist:{platform}:v1`，成功 TTL 60s、失败 15s），跨进程/跨刷新共享；Redis 故障自动回退不阻断。
+  - P2 后台预取：`HotlistService` 内置 asyncio 调度器（启动即预取一轮，之后周期刷新），
+    八平台排名写入 Redis，前端刷新直接命中缓存实现首屏零等待；间隔默认 **600s（10 分钟）**，
+    可用环境变量 `QUANT_BOARD_HOTLIST_REFRESH_INTERVAL_SECONDS` 调整（最小 60s）；
+    挂载于 `backend/main.py` 生命周期（startup 启动 / shutdown 停止），单平台失败不中断整体（fail-visible）。
+  - P3 fail-visible：前端 adapter 不再 `catch → []` 伪装缺失，降级信封抛结构化 `PlatformLoadError`；
+    平台加载状态（成功/失败+原因）经 `DataLayer.updatePlatformStatus` 发布，状态栏失败平台显示“失败”，
+    具体原因可经 `dataLoader.getPlatformCacheDiagnostics()` 查询。
+  - P3 失败判定加固：单次失败不再直接显示“失败”，失败平台每 1 分钟自动重试（`PLATFORM_RETRY_INTERVAL_MS`），
+    连续 3 次失败（`PLATFORM_FAILURE_THRESHOLD`）才显示“失败”，期间显示“重试中”；任何一次成功即恢复并清零计数。
+  - 验证：quant-board pytest 1139 passed；前端 825 passed + vue-tsc 通过；
+    浏览器 8/8 平台全量显示且无 AbortError；Redis 负缓存跨实例 0ms 命中；状态栏失败态显示验证通过。
 - ✅ Batch 3（2026-08-01）：
   - QuantBoard 新增 `backend/market_proxy/longhu.py`（龙虎榜 GetMainMonitor_w30 分页/重建/缓存/熔断）、
     `xuangubao.py`（选股宝事件双 host + 类型过滤 + 提取），路由挂到 market_data_routes。

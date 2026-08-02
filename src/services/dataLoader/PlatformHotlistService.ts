@@ -1,6 +1,10 @@
 import { Adapters } from '../adapters'
 import { apiService } from '../apiService'
-import { MAX_PLATFORM_CACHE_SIZE, PLATFORM_CACHE_TTL_MS } from './constants'
+import {
+  MAX_PLATFORM_CACHE_SIZE,
+  PLATFORM_CACHE_TTL_MS,
+  PLATFORM_FAILURE_THRESHOLD,
+} from './constants'
 import type { PlatformLoadProgress } from './types'
 
 export interface PlatformHotlistResult {
@@ -12,6 +16,7 @@ export interface PlatformHotlistResult {
 export interface PlatformReloadDiagnostic {
   rowCount: number
   success: boolean
+  consecutiveFailures?: number
   error?: string
 }
 
@@ -26,6 +31,7 @@ export interface PlatformCacheDiagnostics {
 export class PlatformHotlistService {
   private platformCache = new Map<string, { data: Record<string, any[]>; timestamp: number }>()
   private lastPlatformRefresh = 0
+  private consecutiveFailures: Record<string, number> = {}
   private diagnostics: Omit<PlatformCacheDiagnostics, 'cacheTimestamp'> = {
     lastCheckAt: null,
     lastReloadAt: null,
@@ -107,9 +113,11 @@ export class PlatformHotlistService {
       if (result.status === 'fulfilled' && result.value.success) {
         const rows = result.value.data.filter((item) => activeCodes.has(item?.code))
         results[result.value.platform] = rows
+        this.consecutiveFailures[result.value.platform] = 0
         platformDiagnostics[result.value.platform] = {
           rowCount: rows.length,
           success: true,
+          consecutiveFailures: 0,
         }
         return
       }
@@ -122,9 +130,12 @@ export class PlatformHotlistService {
             ? result.reason.message
             : String(result.reason)
       results[failedPlatform] = []
+      const failureCount = (this.consecutiveFailures[failedPlatform] ?? 0) + 1
+      this.consecutiveFailures[failedPlatform] = failureCount
       platformDiagnostics[failedPlatform] = {
         rowCount: 0,
         success: false,
+        consecutiveFailures: failureCount,
         error,
       }
     })
@@ -135,6 +146,66 @@ export class PlatformHotlistService {
     this.diagnostics.lastLoadFromCache = false
     this.diagnostics.platforms = platformDiagnostics
     return { data: results, timestamp, fromCache: false }
+  }
+
+  /**
+   * 后台重试失败平台（连续失败 < 阈值）：成功即恢复，连续 3 次失败后不再自动重试。
+   * 返回本次是否取回数据，供上层合并进展示层。
+   */
+  async retryFailedPlatforms(): Promise<{ updated: boolean; data: Record<string, any[]> }> {
+    const activeCodes = await this.loadActiveStockCodes()
+    if (!activeCodes) {
+      return { updated: false, data: {} }
+    }
+    const candidates = Object.entries(this.consecutiveFailures)
+      .filter(([, count]) => count > 0 && count < PLATFORM_FAILURE_THRESHOLD)
+      .map(([platform]) => platform)
+    if (candidates.length === 0) {
+      return { updated: false, data: {} }
+    }
+
+    const updated: Record<string, any[]> = {}
+    let anyUpdated = false
+    await Promise.allSettled(
+      candidates.map(async (platform) => {
+        try {
+          const adapter = Adapters[platform as keyof typeof Adapters]
+          if (!adapter) {
+            throw new Error('adapter-unavailable')
+          }
+          const rawData = await adapter.getHotList()
+          const rows = adapter.format(rawData).filter((item) => activeCodes.has(item?.code))
+          this.consecutiveFailures[platform] = 0
+          this.diagnostics.platforms[platform] = {
+            rowCount: rows.length,
+            success: true,
+            consecutiveFailures: 0,
+          }
+          updated[platform] = rows
+          anyUpdated = true
+        } catch (error) {
+          const count = (this.consecutiveFailures[platform] ?? 0) + 1
+          this.consecutiveFailures[platform] = count
+          this.diagnostics.platforms[platform] = {
+            rowCount: 0,
+            success: false,
+            consecutiveFailures: count,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+      }),
+    )
+
+    if (anyUpdated) {
+      const cached = this.platformCache.get('platforms')
+      if (cached) {
+        this.platformCache.set('platforms', {
+          data: { ...cached.data, ...updated },
+          timestamp: Date.now(),
+        })
+      }
+    }
+    return { updated: anyUpdated, data: updated }
   }
 
   getAllHotCodes(data: Record<string, any[]>): Set<string> {
@@ -185,6 +256,7 @@ export class PlatformHotlistService {
 
   clearCache() {
     this.platformCache.clear()
+    this.consecutiveFailures = {}
   }
 
   private async loadActiveStockCodes(): Promise<Set<string> | null> {
@@ -218,12 +290,16 @@ export class PlatformHotlistService {
   }
 
   private summarizePlatforms(data: Record<string, any[]>): Record<string, PlatformReloadDiagnostic> {
-    return Object.fromEntries(
-      Object.entries(data).map(([platform, rows]) => [
-        platform,
-        { rowCount: Array.isArray(rows) ? rows.length : 0, success: true },
-      ]),
-    )
+    const summary: Record<string, PlatformReloadDiagnostic> = {}
+    for (const [platform, rows] of Object.entries(data)) {
+      this.consecutiveFailures[platform] = 0
+      summary[platform] = {
+        rowCount: Array.isArray(rows) ? rows.length : 0,
+        success: true,
+        consecutiveFailures: 0,
+      }
+    }
+    return summary
   }
 
   private setCache(key: string, value: { data: Record<string, any[]>; timestamp: number }) {

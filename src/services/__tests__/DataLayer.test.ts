@@ -2,6 +2,24 @@ import { describe, expect, test, vi } from 'vitest'
 import { dataLayer } from '../DataLayer'
 
 describe('DataLayer breath market data', () => {
+  test('stores and exposes per-platform load status with failure reasons', () => {
+    dataLayer.reset()
+
+    try {
+      dataLayer.updatePlatformStatus({
+        eastmoney: { rowCount: 0, success: false, error: 'upstream timeout' },
+        ths: { rowCount: 100, success: true },
+      })
+
+      expect(dataLayer.getPlatformStatus()).toEqual({
+        eastmoney: { rowCount: 0, success: false, error: 'upstream timeout' },
+        ths: { rowCount: 100, success: true },
+      })
+    } finally {
+      dataLayer.reset()
+    }
+  })
+
   test('keeps THS limit-up pool evidence for snapshot builders', () => {
     dataLayer.reset()
 

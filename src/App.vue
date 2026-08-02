@@ -240,6 +240,7 @@ import { EventManager } from './utils/eventManager'           // 事件总线
 import { AppEvents } from './types'
 import { cacheManager } from '@/services/LRUCache'            // 缓存管理
 import { dataLayer } from './services/DataLayer'              // 数据存储层（最基础）
+import { PLATFORM_FAILURE_THRESHOLD } from './services/dataLoader/constants'
 
 
 // ========== 2. 数据加载服务（依赖 dataLayer）==========
@@ -352,18 +353,31 @@ const stockCount = computed(() => {
 const marketSummary = computed(() => {
   marketSummaryVersion.value
   const platforms = dataLayer.getRawPlatforms() || {}
+  const status = dataLayer.getPlatformStatus() || {}
   const count = (key: string) => (Array.isArray(platforms[key]) ? platforms[key].length : 0)
+  const value = (key: string) => {
+    const platformStatus = status[key]
+    if (platformStatus && platformStatus.success === false) {
+      const failures = platformStatus.consecutiveFailures
+      // 连续失败未达阈值：显示“重试中”；达到阈值才显示“失败”，任何一次成功即恢复
+      if (failures !== undefined && failures < PLATFORM_FAILURE_THRESHOLD) {
+        return '重试中'
+      }
+      return '失败'
+    }
+    return count(key)
+  }
 
   return {
     totalStocks: dataLayer.getStocks().length,
-    eastmoney: count('eastmoney'),
-    ths: count('ths'),
-    kpl: count('kpl'),
-    tdx: count('tdx'),
-    xueqiu: count('xueqiu'),
-    cls: count('cls'),
-    tgb: count('tgb'),
-    dzh: count('dzh'),
+    eastmoney: value('eastmoney'),
+    ths: value('ths'),
+    kpl: value('kpl'),
+    tdx: value('tdx'),
+    xueqiu: value('xueqiu'),
+    cls: value('cls'),
+    tgb: value('tgb'),
+    dzh: value('dzh'),
     quotes: dataLayer.getQuotesCount(),
   }
 })
@@ -710,7 +724,7 @@ onMounted(async () => {
   favoriteStore.init()
   void stockCodeManager.getAllStocks()
 
-  for (const path of ['raw.platforms', 'merged.stocks', 'quotes:batch']) {
+  for (const path of ['raw.platforms', 'raw.platformStatus', 'merged.stocks', 'quotes:batch']) {
     eventUnsubscribers.push(dataLayer.subscribe(path, () => marketSummaryVersion.value++))
   }
 

@@ -18,6 +18,7 @@ import type {
   DataState,
   LimitUpExtData,
   MergedStock,
+  PlatformStatusInfo,
   StockExtData,
   ThemeMetrics,
 } from '../types/data-layer'
@@ -48,7 +49,7 @@ class DataLayer {
   constructor() {}
 
   private state: DataState = reactive({
-    raw: { stocks: [], platforms: {}, themes: [], fullMarket: [] },
+    raw: { stocks: [], platforms: {}, platformStatus: {}, themes: [], fullMarket: [] },
     realtime: {
       quotes: new Map(),
       depth10: new Map(),
@@ -147,6 +148,7 @@ class DataLayer {
       review: 0,
       quotes: 0,
       platforms: 0,
+      platformStatus: 0,
       breath: 0,
       algorithm: 0,
       rotation: 0,
@@ -520,6 +522,16 @@ class DataLayer {
 
   getPlatformData(platform: string) {
     return this.state.raw.platforms[platform] || []
+  }
+
+  updatePlatformStatus(status: Record<string, PlatformStatusInfo>) {
+    this.state.raw.platformStatus = status || {}
+    this.state.version.platformStatus++
+    this.throttledNotify('raw.platformStatus', this.state.raw.platformStatus)
+  }
+
+  getPlatformStatus() {
+    return this.state.raw.platformStatus
   }
 
   // ========== 原始题材数据 ==========
@@ -1435,7 +1447,13 @@ class DataLayer {
   // ========== 重置 ==========
 
   reset() {
-    this.state.raw = { stocks: [], platforms: {}, themes: [], fullMarket: [] }
+    // 取消挂起的节流通知，避免真实/假定时器跨测试或跨重置泄漏
+    if (this.notifyTimer) {
+      clearTimeout(this.notifyTimer)
+      this.notifyTimer = null
+    }
+    this.pendingNotify.clear()
+    this.state.raw = { stocks: [], platforms: {}, platformStatus: {}, themes: [], fullMarket: [] }
     this.state.realtime = {
       quotes: new Map(),
       depth10: new Map(),
@@ -1536,6 +1554,7 @@ class DataLayer {
       review: 0,
       quotes: 0,
       platforms: 0,
+      platformStatus: 0,
       breath: 0,
       algorithm: 0,
       rotation: 0,

@@ -12,6 +12,7 @@ import {
   DEFAULT_PLATFORMS,
   INTRADAY_VOLUME_SNAPSHOT_TYPES as DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES,
   PLATFORM_REFRESH_INTERVAL_MS,
+  PLATFORM_RETRY_INTERVAL_MS,
   QUOTE_BATCH_SIZE as DEFAULT_QUOTE_BATCH_SIZE,
   QUOTE_REFRESH_INTERVAL_MS,
 } from './constants'
@@ -94,6 +95,7 @@ class DataLoaderService {
   private pendingVolumeRatioCodes = new Set<string>()
   private volumeRatioRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private volumeRatioRefreshRunning = false
+  private failedPlatformRetryTimer: ReturnType<typeof setInterval> | null = null
   private startupSnapshotContext: StartupSnapshotContext | null = null
   private startupCurrentContextWritten = false
   private startupBundleWritePromise: Promise<boolean> | null = null
@@ -137,6 +139,7 @@ class DataLoaderService {
     })
     this.startQuoteAutoRefresh() // 自动启动行情刷新
     this.startSignalAutoRefresh()
+    this.startFailedPlatformRetry()
   }
 
   private syncRealtimeSubscription() {
@@ -491,6 +494,8 @@ class DataLoaderService {
     this.state.value.data = result.data
     this.state.value.lastUpdate = result.timestamp
     dataLayer.updatePlatforms(result.data)
+    // 平台加载状态（成功行数/失败原因）随数据一起发布，供状态栏与诊断展示
+    dataLayer.updatePlatformStatus(platformHotlistService.getCacheDiagnostics().platforms)
     const rankTrendSnapshotPromise = options.deferSignalEnrichment
       ? this.preloadRankTrendSnapshotsInBackground(Array.from(this.getAllHotCodes()))
       : undefined
@@ -705,6 +710,36 @@ class DataLoaderService {
 
   stopSignalAutoRefresh(): void {
     refreshScheduler.stopTask('dataLoader.ranktrendSignal')
+  }
+
+  /**
+   * 失败平台 1 分钟重试：连续 3 次失败才在 UI 显示“失败”，任何一次成功即恢复。
+   */
+  startFailedPlatformRetry(intervalMs: number = PLATFORM_RETRY_INTERVAL_MS): void {
+    if (this.failedPlatformRetryTimer) return
+    this.failedPlatformRetryTimer = setInterval(() => {
+      void this.retryFailedPlatformsTick()
+    }, intervalMs)
+  }
+
+  stopFailedPlatformRetry(): void {
+    if (this.failedPlatformRetryTimer) {
+      clearInterval(this.failedPlatformRetryTimer)
+      this.failedPlatformRetryTimer = null
+    }
+  }
+
+  private async retryFailedPlatformsTick(): Promise<void> {
+    try {
+      const { updated, data } = await platformHotlistService.retryFailedPlatforms()
+      if (updated) {
+        const platforms = dataLayer.getRawPlatforms() || {}
+        dataLayer.updatePlatforms({ ...platforms, ...data })
+        dataLayer.updatePlatformStatus(platformHotlistService.getCacheDiagnostics().platforms)
+      }
+    } catch (error) {
+      console.warn('[DataLoader] 失败平台重试异常:', error)
+    }
   }
 
   /**
@@ -1147,6 +1182,7 @@ class DataLoaderService {
     this.destroyed = true
     this.stopQuoteAutoRefresh()
     this.stopSignalAutoRefresh()
+    this.stopFailedPlatformRetry()
     if (this.volumeRatioRefreshTimer) {
       clearTimeout(this.volumeRatioRefreshTimer)
       this.volumeRatioRefreshTimer = null
