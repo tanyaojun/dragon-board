@@ -26,7 +26,7 @@
 | Phase 5 观察面板消费 | ✅ | 观察服务读 Python 输出 + 面板"分析不可用"（commit `0809286`） |
 | Phase 6 删除 TS 本地实现 | ✅ | 删除 22 个文件（4968 行），全量 820 用例通过（commit `5fa700d`） |
 | Phase 7 golden 文档反转 | ✅ | AGENTS.md / golden / python-port / AI_COLLABORATION 同步（commit `bb81393`） |
-| Phase 8 回测对比 | ⏸ 暂停 | 用户要求先完成代码、再核对回测策略（见"回测策略待办"） |
+| Phase 8 回测对比 | ⏸ 暂停 | 快照数据漏采缺失，回测结果严重偏差；待数据修复后按严格同策略重跑（见"回测策略待办"） |
 | Phase 8 浏览器验收 | ⏳ 待做 | 需要启动前端 dev + Playwright；依赖用户确认执行 |
 
 ## 实施记录与偏差（2026-08-02）
@@ -49,7 +49,11 @@
    `ranktrend_early_big_move_v3`（`--strategy-name` 未按预期生效），与旧基线
    `ranktrend_early_big_move_v3_lifecycle_fusion` 不是严格同策略；对比结论不可直接引用。
    已删除该次测试 run（`bt_4c319cb172224848`、`bt_f9b23ef5ca394993`），待核对 CLI/API
-   策略配置后再跑严格同策略对比。
+   策略配置后再跑严格同策略对比。正确的 baseline-set 为 `early_big_move_v5`
+   （V5_E1/E2 使用 `ranktrend_early_big_move_v3_lifecycle_fusion`）。
+5. **快照数据漏采影响（2026-08-02 补充）**：用户确认当前快照数据存在漏采、缺失，
+   Task 8.1 的回测结果不可作为 regime 口径对比依据；回测对比暂停，待数据采集修复、
+   覆盖补齐后再按 `early_big_move_v5` 配置重跑新旧对比。已终止进行中的回测进程。
 5. **已知偶发测试失败**：`tests/test_quant_board.py::test_import_backtest_optimize_and_golden`
    在全量 pytest 下偶发失败（单独运行通过），疑似测试间资源/顺序干扰，未定性为本改动回归；
    后续全量验证时观察是否复现。
