@@ -19,12 +19,18 @@ describe('RankTrendObservationService', () => {
   function mockRemoteFrames(
     frameKeys: string[],
     buildAnalysis: (frameKey: string, index: number) => any,
+    frameMeta: (frameKey: string, index: number) => {
+      marketMedianShortChange: number | null
+      marketSampleCount: number
+    } = () => ({ marketMedianShortChange: null, marketSampleCount: 0 }),
   ) {
     vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
       ok: true,
       frames: frameKeys.map((frameKey, index) => ({
         frameKey,
         regime: { state: 'normal', score: 50, reasons: [] },
+        marketMedianShortChange: frameMeta(frameKey, index).marketMedianShortChange,
+        marketSampleCount: frameMeta(frameKey, index).marketSampleCount,
         totalCount: 200,
         stocks: [{ code: '002279', analysis: buildAnalysis(frameKey, index) }],
       })),
@@ -57,7 +63,7 @@ describe('RankTrendObservationService', () => {
       key: '2026-07-28 14:30',
       percentile: 42,
     })
-    expect(result.frames[0].analysis?.resonance).toBeTruthy()
+    expect(result.frames[0].analysis?.meta?.analysisSource).toBe('analysis_unavailable')
     expect(result.frames[1].analysis).toBe(currentAnalysis)
     expect(result.issues).toContainEqual(expect.objectContaining({
       code: 'history_source_unavailable',
@@ -80,7 +86,7 @@ describe('RankTrendObservationService', () => {
     const result = await rankTrendObservationService.load({ code: '002279', name: '久其软件' })
 
     expect(result.frames).toHaveLength(2)
-    expect(result.frames[0].analysis?.resonance).toBeTruthy()
+    expect(result.frames[0].analysis?.meta?.analysisSource).toBe('analysis_unavailable')
     expect(result.frames[1].analysis).toBeNull()
     expect(result.issues).toContainEqual(expect.objectContaining({
       code: 'current_analysis_unavailable',
@@ -135,7 +141,7 @@ describe('RankTrendObservationService', () => {
       rankTrend: currentAnalysis,
     })
 
-    expect(result.frames[0].analysis?.resonance).toBeTruthy()
+    expect(result.frames[0].analysis?.meta?.analysisSource).toBe('analysis_unavailable')
     expect(result.frames[0].analysis?.observation?.lifecycle).toBeUndefined()
     expect(result.frames[0].issues).toContainEqual(expect.objectContaining({
       code: 'analysis_unavailable',
@@ -157,6 +163,7 @@ describe('RankTrendObservationService', () => {
       technical: { macd: { cross: 'golden' } },
       risk: { pressure: 0 },
       jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+      resonance: { status: 'ok', direction: 'buy', score: 80 },
     }))
 
     const result = await rankTrendObservationService.load({
@@ -239,7 +246,7 @@ describe('RankTrendObservationService', () => {
     expect(frame22Bars.issues.some((issue) => issue.code === 'technical_sample_insufficient')).toBe(false)
   })
 
-  it('历史帧市场基准使用对应帧全市场横截面，不再用当前股票列表近似', async () => {
+  it('历史帧市场基准来自 Python analyze 输出，不再本地横截面计算', async () => {
     const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00', '2026-07-28 15:30', '2026-07-28 16:00']
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: [28, 19, 12, 9],
@@ -251,26 +258,16 @@ describe('RankTrendObservationService', () => {
       if (options.code) {
         return [{ code: '002279', tradingDate: '2026-07-28', slotTime: '16:00', change: 1, volumeRatio: 1, zlje: 0, zljzb: 0 }]
       }
-      // 市场横截面：4 帧、每帧 4 只股票，avgRankNum 升序有效
-      return [
-        { code: 'A', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 1 },
-        { code: 'B', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 2 },
-        { code: 'C', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 3 },
-        { code: 'D', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 4 },
-        { code: 'A', tradingDate: '2026-07-28', slotTime: '15:00', avgRankNum: 1 },
-        { code: 'B', tradingDate: '2026-07-28', slotTime: '15:00', avgRankNum: 2 },
-        { code: 'C', tradingDate: '2026-07-28', slotTime: '15:00', avgRankNum: 3 },
-        { code: 'D', tradingDate: '2026-07-28', slotTime: '15:00', avgRankNum: 4 },
-        { code: 'A', tradingDate: '2026-07-28', slotTime: '15:30', avgRankNum: 1 },
-        { code: 'B', tradingDate: '2026-07-28', slotTime: '15:30', avgRankNum: 2 },
-        { code: 'C', tradingDate: '2026-07-28', slotTime: '15:30', avgRankNum: 3 },
-        { code: 'D', tradingDate: '2026-07-28', slotTime: '15:30', avgRankNum: 4 },
-        { code: 'A', tradingDate: '2026-07-28', slotTime: '16:00', avgRankNum: 1 },
-        { code: 'B', tradingDate: '2026-07-28', slotTime: '16:00', avgRankNum: 2 },
-        { code: 'C', tradingDate: '2026-07-28', slotTime: '16:00', avgRankNum: 3 },
-        { code: 'D', tradingDate: '2026-07-28', slotTime: '16:00', avgRankNum: 4 },
-      ]
+      return []
     })
+    mockRemoteFrames(
+      frameKeys.slice(0, -1),
+      () => ({
+        meta: { code: '002279' },
+        jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+      }),
+      () => ({ marketMedianShortChange: 0, marketSampleCount: 4 }),
+    )
 
     const result = await rankTrendObservationService.load({
       code: '002279',
@@ -278,14 +275,12 @@ describe('RankTrendObservationService', () => {
       rankTrend: { meta: { code: '002279' } },
     })
 
-    // 4 只股票百分位 100/75/50/25，中位数 62.5
-    expect(result.frames[0].marketMedianPercentile).toBe(62.5)
+    expect(result.frames[0].marketMedianPercentile).toBeNull()
+    expect(result.frames[0].marketMedianShortChange).toBe(0)
     expect(result.frames[0].marketSampleCount).toBe(4)
-    // 16:00 与 14:30 的短周期变化中位数（每只股票变化 0，中位数 0）
-    expect(result.frames[3].marketMedianShortChange).toBe(0)
   })
 
-  it('市场横截面读取失败时按轨道降级并给出结构化原因，不静默用当前股票列表', async () => {
+  it('Python 未返回横截面基准时按轨道降级并给出结构化原因', async () => {
     const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: [28, 19],
@@ -293,12 +288,15 @@ describe('RankTrendObservationService', () => {
       frameKeys,
     })
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
-    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockImplementation(async (options: any) => {
-      if (options.code) {
-        return [{ code: '002279', tradingDate: '2026-07-28', slotTime: '15:00', change: 1, volumeRatio: 1, zlje: 0, zljzb: 0 }]
-      }
-      throw new Error('cross-section offline')
-    })
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+    mockRemoteFrames(
+      frameKeys.slice(0, -1),
+      () => ({
+        meta: { code: '002279' },
+        jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+      }),
+      () => ({ marketMedianShortChange: null, marketSampleCount: 0 }),
+    )
 
     const result = await rankTrendObservationService.load({
       code: '002279',
@@ -306,59 +304,43 @@ describe('RankTrendObservationService', () => {
       rankTrend: { meta: { code: '002279' } },
     })
 
-    expect(result.issues).toContainEqual(expect.objectContaining({
-      code: 'market_cross_section_unavailable',
+    expect(result.frames[0].marketMedianShortChange).toBeNull()
+    expect(result.frames[0].marketSampleCount).toBe(0)
+    expect(result.frames[0].issues).toContainEqual(expect.objectContaining({
+      code: 'market_sample_insufficient',
+    }))
+  })
+
+  it('观察服务按帧请求 Python 分析，横截面基准来自响应', async () => {
+    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+      ranks: [28, 19],
+      percentiles: [42, 67],
+      frameKeys,
+    })
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+    mockRemoteFrames(
+      frameKeys.slice(0, -1),
+      () => ({
+        meta: { code: '002279' },
+        jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
+      }),
+      () => ({ marketMedianShortChange: 0, marketSampleCount: 4 }),
+    )
+
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: { meta: { code: '002279' } },
+    })
+
+    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(expect.objectContaining({
+      codes: ['002279'],
+      frameKeys: ['2026-07-28 14:30'],
     }))
     expect(result.frames[0].marketMedianPercentile).toBeNull()
-    expect(result.frames[0].marketSampleCount).toBe(0)
-  })
-
-  it('市场横截面读取只请求必要字段，投影行仍能计算每帧市场基准', async () => {
-    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
-    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
-      ranks: [28, 19],
-      percentiles: [42, 67],
-      frameKeys,
-    })
-    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
-    let crossSectionOptions: any = null
-    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockImplementation(async (options: any) => {
-      if (options.code) {
-        return [
-          {
-            code: '002279',
-            tradingDate: '2026-07-28',
-            slotTime: '15:00',
-            change: 1,
-            volumeRatio: 1,
-            zlje: 0,
-            zljzb: 0,
-          },
-        ]
-      }
-      crossSectionOptions = options
-      // 模拟后端 fields 投影：只返回 4 个必要字段
-      return [
-        { code: 'A', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 1 },
-        { code: 'B', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 2 },
-        { code: 'C', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 3 },
-        { code: 'D', tradingDate: '2026-07-28', slotTime: '14:30', avgRankNum: 4 },
-      ]
-    })
-
-    const result = await rankTrendObservationService.load({
-      code: '002279',
-      name: '久其软件',
-      rankTrend: { meta: { code: '002279' } },
-    })
-
-    expect(crossSectionOptions).toMatchObject({
-      fields: ['tradingDate', 'slotTime', 'code', 'avgRankNum'],
-      startDate: '2026-07-28',
-      endDate: '2026-07-28',
-      limit: 20000,
-    })
-    expect(result.frames[0].marketMedianPercentile).toBe(62.5)
+    expect(result.frames[0].marketMedianShortChange).toBe(0)
     expect(result.frames[0].marketSampleCount).toBe(4)
   })
 

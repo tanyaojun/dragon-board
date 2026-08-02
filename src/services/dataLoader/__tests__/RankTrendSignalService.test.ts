@@ -370,7 +370,7 @@ describe('RankTrendSignalService', () => {
     )
   })
 
-  it('writes one resonance final after the same-cycle jump pass', async () => {
+  it('keeps the py golden resonance final after the signal pass', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     const rankTrends = new Map(
       Array.from({ length: 20 }, (_, index) => {
@@ -398,6 +398,9 @@ describe('RankTrendSignalService', () => {
             cycle: {},
             risk: {},
             decision: { final: { signal: 'hold', confidence: 50 } },
+            resonance: code === '002298'
+              ? { status: 'ok', direction: 'buy', score: 88, marketMedianShortChange: 5 }
+              : { status: 'insufficient', direction: 'hold', score: 0, marketMedianShortChange: 5 },
           } as any,
         ]
       }),
@@ -434,7 +437,23 @@ describe('RankTrendSignalService', () => {
     expect(target?.rankTrend.decision.final.signal).toBe('buy')
   })
 
-  it('computes the market median only from stocks aligned to the same four market frames', async () => {
+  it('keeps py golden resonance and only overrides decision.final display', () => {
+    const service = new RankTrendSignalService()
+    const stock = {
+      code: '002279',
+      rankTrend: {
+        meta: { code: '002279', currentPercentile: 88, analysisSource: 'py_golden' },
+        resonance: { status: 'ok', direction: 'buy', score: 88 },
+        decision: { final: { signal: 'hold', confidence: 50 } },
+      },
+    }
+    service['applyResonanceFinals']([stock], new Set(['002279']))
+    expect(stock.rankTrend.resonance.score).toBe(88)
+    expect(stock.rankTrend.decision.final.signal).toBe('buy')
+    expect(stock.finalSignal).toBe('buy')
+  })
+
+  it('keeps the py golden resonance market median for the current frame', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     const rankTrends = new Map(
       Array.from({ length: 40 }, (_, index) => {
@@ -462,6 +481,7 @@ describe('RankTrendSignalService', () => {
             cycle: {},
             risk: {},
             decision: { final: { signal: 'hold', confidence: 50 } },
+            resonance: { status: 'ok', direction: 'hold', score: 50, marketMedianShortChange: 10 },
           } as any,
         ]
       }),

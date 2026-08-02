@@ -6,7 +6,6 @@ import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
-import { analyzeRankResonance } from '../rankTrend/resonanceAnalyzer'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
 import { buildFusionStrategyProjections } from '../rankTrend/FusionStrategyProjector'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
@@ -151,58 +150,18 @@ export class RankTrendSignalService {
   }
 
   private applyResonanceFinals(stocks: any[], freshCodes: Set<string>): void {
-    const seriesByCode = new Map<string, { ranks: number[]; percentiles: number[]; frameKeys: string[] }>()
-    const shortChanges: number[] = []
-    const marketFrameKeys = (rankTrendAnalyzer.getLatestAnalysisFrameKeys() || []).slice(-4)
-
+    // resonance 由 Python analyze API 输出；这里只做观察口径展示投影（简单赋值，非算法）
     for (const stock of stocks) {
       if (!freshCodes.has(stock.code)) continue
       const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
-      const series = rankTrend ? rankTrendAnalyzer.getLatestAnalysisSeries(stock.code) : null
-      if (!series || series.percentiles.length === 0) continue
-      seriesByCode.set(stock.code, series)
-      if (marketFrameKeys.length < 4 || rankTrend?.meta?.sampleQuality?.status === 'insufficient') continue
-      const percentileByFrame = new Map(
-        series.frameKeys.map((frameKey, index) => [frameKey, series.percentiles[index]]),
-      )
-      if (marketFrameKeys.some((frameKey) => !percentileByFrame.has(frameKey))) continue
-      const shortChange = percentileByFrame.get(marketFrameKeys.at(-1)!)! - percentileByFrame.get(marketFrameKeys[0])!
-      if (!Number.isFinite(shortChange)) continue
-      shortChanges.push(shortChange)
-    }
-
-    const sortedChanges = shortChanges.sort((left, right) => left - right)
-    const midpoint = Math.floor(sortedChanges.length / 2)
-    const marketMedianShortChange = sortedChanges.length === 0
-      ? Number.NaN
-      : sortedChanges.length % 2
-        ? sortedChanges[midpoint]
-        : (sortedChanges[midpoint - 1] + sortedChanges[midpoint]) / 2
-
-    for (const stock of stocks) {
-      if (!freshCodes.has(stock.code)) continue
-      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
-      if (!rankTrend) continue
-      const quality = rankTrend.meta?.sampleQuality
-      const resonance = analyzeRankResonance({
-        percentiles: seriesByCode.get(stock.code)?.percentiles || [],
-        sampleQuality: {
-          status: quality?.status || 'insufficient',
-          timelineValid: quality?.timelineValid !== false,
-        },
-        marketMedianShortChange,
-        marketSampleCount: shortChanges.length,
-        jump: {
-          direction: rankTrend.jump?.direction || 'hold',
-          event: rankTrend.jump?.event || 'none',
-          events: rankTrend.jump?.events || [],
-        },
-        entry: {
-          isNew: (seriesByCode.get(stock.code)?.percentiles.length || 0) === 1,
-          currentAttentionPercentile: rankTrend.meta.currentPercentile,
-        },
-      })
-      rankTrend.resonance = resonance
+      if (!rankTrend?.resonance) continue
+      const resonance = rankTrend.resonance
+      if (resonance.status === 'insufficient') {
+        rankTrend.decision.final = { signal: 'hold', confidence: 0 }
+        stock.finalSignal = 'hold'
+        stock.finalConfidence = 0
+        continue
+      }
       rankTrend.decision.final = { signal: resonance.direction, confidence: resonance.score }
       stock.finalSignal = resonance.direction
       stock.finalConfidence = resonance.score

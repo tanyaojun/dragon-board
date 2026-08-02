@@ -2,8 +2,6 @@ import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { apiService } from '../apiService'
 import { snapshotFacade } from '../snapshot/facade'
-import type { SnapshotStockRow } from '../snapshot/types'
-import { analyzeRankResonance } from './resonanceAnalyzer'
 import type { RankTrendAnalysisResult } from './types'
 import type { SnapshotFrameRow } from '../snapshot/types'
 
@@ -50,23 +48,8 @@ export const MAX_OBSERVATION_WINDOW_BARS = Math.max(...Object.values(OBSERVATION
 /** 生命周期动量确认因子（mid 动量 + 加速度）可算窗口 */
 export const LIFECYCLE_MIN_SAMPLES = 15
 
-/** 市场横截面单次读取的行数上限（覆盖观察窗口各帧全市场行） */
-const MARKET_CROSS_SECTION_ROW_LIMIT = 20000
-
 /** 历史帧市场环境原料单次读取的帧数上限（覆盖观察窗口即可） */
 const HISTORY_FRAME_READ_LIMIT = 200
-
-/** 市场横截面计算所需的最小字段集（按帧真实横截面只依赖这几列） */
-const MARKET_CROSS_SECTION_FIELDS = ['tradingDate', 'slotTime', 'code', 'avgRankNum'] as const
-
-function median(values: number[]): number | null {
-  if (!values.length) return null
-  const sorted = [...values].sort((left, right) => left - right)
-  const middle = Math.floor(sorted.length / 2)
-  return sorted.length % 2
-    ? sorted[middle]
-    : (sorted[middle - 1] + sorted[middle]) / 2
-}
 
 function barFrameKey(bar: any): string {
   return `${bar?.tradingDate || ''} ${bar?.slotTime || ''}`.trim()
@@ -76,71 +59,6 @@ function frameLabel(frameKey: string): string {
   const match = frameKey.match(/(\d{2}-\d{2})\s+(\d{2}:\d{2})/)
   if (match) return `${match[1]} ${match[2]}`
   return frameKey.startsWith('current:') ? '当前' : frameKey
-}
-
-type FrameCrossSections = Map<string, Map<string, number>>
-
-function buildFrameCrossSections(rows: SnapshotStockRow[]): FrameCrossSections {
-  const byFrame = new Map<string, Array<{ code: string; avgRankNum: number }>>()
-  for (const row of rows) {
-    const key = barFrameKey(row)
-    if (!key) continue
-    const code = String(row.code || '')
-    const avgRankNum = Number(row.avgRankNum)
-    if (!code || !Number.isFinite(avgRankNum) || avgRankNum <= 0) continue
-    const list = byFrame.get(key) ?? []
-    list.push({ code, avgRankNum })
-    byFrame.set(key, list)
-  }
-
-  const result: FrameCrossSections = new Map()
-  for (const [key, list] of byFrame) {
-    const sorted = [...list].sort(
-      (left, right) => left.avgRankNum - right.avgRankNum || left.code.localeCompare(right.code),
-    )
-    const totalCount = sorted.length
-    const percentiles = new Map<string, number>()
-    sorted.forEach((item, index) => {
-      percentiles.set(item.code, ((totalCount - index) / totalCount) * 100)
-    })
-    result.set(key, percentiles)
-  }
-  return result
-}
-
-function calculateMarketMedian(
-  frameKey: string,
-  marketFrameKeys: string[],
-  crossSections: FrameCrossSections,
-) {
-  const crossSectionKey = frameKey.startsWith('current:')
-    ? marketFrameKeys.filter((key) => !key.startsWith('current:')).at(-1) ?? frameKey
-    : frameKey
-  const targetIndex = marketFrameKeys.indexOf(crossSectionKey)
-  if (targetIndex < 0) return { percentile: null, shortChange: null, sampleCount: 0 }
-  const startKey = targetIndex >= 3 ? marketFrameKeys[targetIndex - 3] : null
-  const framePercentiles = crossSections.get(crossSectionKey)
-  if (!framePercentiles || framePercentiles.size === 0) {
-    return { percentile: null, shortChange: null, sampleCount: 0 }
-  }
-
-  const percentiles = Array.from(framePercentiles.values())
-  const changes: number[] = []
-  if (startKey) {
-    const startPercentiles = crossSections.get(startKey)
-    if (startPercentiles) {
-      for (const [code, percentile] of framePercentiles) {
-        const start = startPercentiles.get(code)
-        if (start !== undefined) changes.push(percentile - start)
-      }
-    }
-  }
-
-  return {
-    percentile: median(percentiles),
-    shortChange: median(changes),
-    sampleCount: percentiles.length,
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -206,7 +124,7 @@ class RankTrendObservationService {
         observationIssue('current_analysis_unavailable', '当前 RankTrend 分析结果不可用，保留排名路径'),
       )
     }
-    let rows: SnapshotStockRow[] = []
+    let rows: Array<Record<string, any>> = []
     try {
       rows = await snapshotFacade.listSnapshotStockRows({
         type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
@@ -227,34 +145,10 @@ class RankTrendObservationService {
       )
     }
     const rowsByFrame = new Map(rows.map((row) => [barFrameKey(row), row]))
-    const marketFrameKeys = rankTrendAnalyzer.getLatestAnalysisFrameKeys()
     const windowFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS)
     const windowDates = windowFrameKeys
       .map((key) => key.split(' ')[0])
       .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
-    let crossSections: FrameCrossSections = new Map()
-    if (windowDates.length > 0) {
-      try {
-        const crossSectionRows = await snapshotFacade.listSnapshotStockRows({
-          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
-          startDate: windowDates[0],
-          endDate: windowDates[windowDates.length - 1],
-          sort: 'asc',
-          limit: MARKET_CROSS_SECTION_ROW_LIMIT,
-          fields: [...MARKET_CROSS_SECTION_FIELDS],
-          allowedCaptureModes: ['real_time', 'delayed'],
-          excludeRestored: true,
-        })
-        crossSections = buildFrameCrossSections(crossSectionRows)
-      } catch (error) {
-        serviceIssues.push(
-          observationIssue(
-            'market_cross_section_unavailable',
-            `市场横截面读取失败: ${errorMessage(error)}`,
-          ),
-        )
-      }
-    }
     const frameRowsByKey = new Map<string, SnapshotFrameRow>()
     if (windowDates.length > 0) {
       try {
@@ -282,9 +176,13 @@ class RankTrendObservationService {
       }
     }
 
-    // Python golden 批量分析历史帧（technical/cycle/risk/decision/observation/strategy/jump/regime）
+    // Python golden 批量分析历史帧（technical/cycle/risk/decision/observation/strategy/jump/regime/resonance/横截面基准）
     const historyFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS, -1)
-    const remoteByFrame = new Map<string, RankTrendObservationAnalysis>()
+    const remoteByFrame = new Map<string, {
+      analysis: RankTrendObservationAnalysis
+      marketMedianShortChange: number | null
+      marketSampleCount: number
+    }>()
     if (historyFrameKeys.length > 0) {
       try {
         const remote = await apiService.analyzeRankTrend({
@@ -296,7 +194,14 @@ class RankTrendObservationService {
           for (const frame of remote.frames || []) {
             const first = frame.stocks?.[0]
             if (first?.analysis) {
-              remoteByFrame.set(frame.frameKey, first.analysis as RankTrendObservationAnalysis)
+              remoteByFrame.set(frame.frameKey, {
+                analysis: first.analysis as RankTrendObservationAnalysis,
+                marketMedianShortChange:
+                  typeof frame.marketMedianShortChange === 'number' && Number.isFinite(frame.marketMedianShortChange)
+                    ? frame.marketMedianShortChange
+                    : null,
+                marketSampleCount: Number(frame.marketSampleCount) || 0,
+              })
             }
           }
         }
@@ -315,7 +220,12 @@ class RankTrendObservationService {
       const key = series.frameKeys[index]
       const isCurrent = index === series.frameKeys.length - 1
       const row = rowsByFrame.get(key)
-      const market = calculateMarketMedian(key, marketFrameKeys, crossSections)
+      const remoteMeta = remoteByFrame.get(key)
+      const market = {
+        percentile: null,
+        shortChange: remoteMeta?.marketMedianShortChange ?? null,
+        sampleCount: remoteMeta?.marketSampleCount ?? 0,
+      }
       const issues: RankTrendObservationIssue[] = []
       let analysis: RankTrendObservationAnalysis | null = null
 
@@ -323,26 +233,9 @@ class RankTrendObservationService {
         analysis = currentAnalysis ?? null
       } else {
         const percentiles = series.percentiles.slice(0, index + 1)
-        const remoteAnalysis = remoteByFrame.get(key)
-        const pyJump = (remoteAnalysis?.jump ?? {
-          event: 'none',
-          direction: 'hold',
-          confidence: 50,
-          events: [],
-        }) as NonNullable<RankTrendObservationAnalysis['jump']>
-        const resonance = analyzeRankResonance({
-          percentiles,
-          sampleQuality: { status: percentiles.length >= 9 ? 'ok' : 'insufficient' },
-          marketMedianShortChange: market.shortChange ?? Number.NaN,
-          marketSampleCount: market.sampleCount,
-          jump: {
-            direction: pyJump.direction === 'buy' ? 'buy' : pyJump.direction === 'sell' ? 'sell' : 'hold',
-            event: pyJump.event === 'jump' ? 'jump' : 'none',
-            events: Array.isArray(pyJump.events) ? pyJump.events : [],
-          },
-        })
+        const remoteAnalysis = remoteMeta?.analysis
         if (remoteAnalysis) {
-          analysis = { ...remoteAnalysis, resonance }
+          analysis = { ...remoteAnalysis }
           if (percentiles.length < OBSERVATION_WINDOW_BARS.technical) {
             issues.push(observationIssue(
               'technical_sample_insufficient',
@@ -379,7 +272,6 @@ class RankTrendObservationService {
               analysisSource: 'analysis_unavailable',
               analysisUnavailableReason: 'Python 后端未返回该帧分析结果',
             },
-            resonance,
           }
           issues.push(observationIssue(
             'analysis_unavailable',
@@ -389,7 +281,7 @@ class RankTrendObservationService {
         }
       }
 
-      if (market.percentile == null || market.sampleCount < 20) {
+      if (market.shortChange == null || market.sampleCount < 20) {
         issues.push(observationIssue(
           'market_sample_insufficient',
           '该帧市场横截面样本不足',
