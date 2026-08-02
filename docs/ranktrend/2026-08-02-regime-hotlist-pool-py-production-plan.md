@@ -12,6 +12,48 @@
 
 ---
 
+## 进度状态（2026-08-02 更新）
+
+> 代码实现已全部完成（Phase 1-7），回测/策略核对与浏览器验收待用户确认后继续。
+
+| Phase | 状态 | 说明 |
+| --- | --- | --- |
+| Phase 0 基线确认 | ✅ | 前后基线已记录（TS 265 用例、后端 1129 用例基线） |
+| Phase 1 regime 五因子 | ✅ | `market_regime` 重写为热榜池五因子（commit `4e15cfc`） |
+| Phase 2 observation/executionStrategy | ✅ | Python 补齐输出合同（commit `fbef993`） |
+| Phase 3 analyze API + frames regime | ✅ | 新增 `POST /api/ranktrend/analyze`、frames 每帧附 regime（commit `66f608c`） |
+| Phase 4 TS 实时链路消费 | ✅ | `preferRemoteAnalysis` 默认开启、`analysis_unavailable` 打标、jump 收敛（commit `336d771`） |
+| Phase 5 观察面板消费 | ✅ | 观察服务读 Python 输出 + 面板"分析不可用"（commit `0809286`） |
+| Phase 6 删除 TS 本地实现 | ✅ | 删除 22 个文件（4968 行），全量 820 用例通过（commit `5fa700d`） |
+| Phase 7 golden 文档反转 | ✅ | AGENTS.md / golden / python-port / AI_COLLABORATION 同步（commit `bb81393`） |
+| Phase 8 回测对比 | ⏸ 暂停 | 用户要求先完成代码、再核对回测策略（见"回测策略待办"） |
+| Phase 8 浏览器验收 | ⏳ 待做 | 需要启动前端 dev + Playwright；依赖用户确认执行 |
+
+## 实施记录与偏差（2026-08-02）
+
+1. **repository ranktrend 投影 bug 修复**：`mongo_repository.py` 的 ranktrend 投影原为
+   `{"_id": 0, "code": 1, "name": 1, "rank": 1}`，排除 `snapshotId` 导致 `_stock_rows_by_snapshot`
+   以 `None` 为分组 key、`load_frame_bundles(projection='ranktrend')` 丢行（rows=0）；
+   修复为保留 `snapshotId`，并补齐 regime 五因子字段
+   `change/volumeRatio/zlje/zljzb`（SQLite `repository.py` 同步，注意 ORM 属性为
+   `volume_ratio`）。新增回归测试 `test_stock_rows_by_snapshot_ranktrend_projection_keeps_snapshot_id`
+   与更新 `test_snapshot_frames_api_ranktrend_projection_returns_lightweight_hotlist` 断言
+   （commit `02fc5a5`）。
+2. **plan 原 Task 3.1 实现偏差**：Python 引擎类为 `RankTrendPythonEngine(config=None)`（不是
+   `RankTrendGoldenReplayEngine(repo, ...)`）；analyze API 通过 `load_frame_bundles(... projection='ranktrend')`
+   组装帧后喂 `engine.replay`。已按审计修正落地。
+3. **TS 默认远程分析**：`getRankTrends` 的 `preferRemoteAnalysis` 实现为"默认开启"
+   （`!== false`），删除本地 pipeline 后远程是唯一分析路径；`analysis_unavailable` 时保留排名/共振展示。
+4. **回测策略待办**：`run-longtest-baselines --baseline-set early_big_move_v3 --strategy-name
+   ranktrend_early_big_move_v3_lifecycle_fusion` 产出的 run 的 `strategyName` 为
+   `ranktrend_early_big_move_v3`（`--strategy-name` 未按预期生效），与旧基线
+   `ranktrend_early_big_move_v3_lifecycle_fusion` 不是严格同策略；对比结论不可直接引用。
+   已删除该次测试 run（`bt_4c319cb172224848`、`bt_f9b23ef5ca394993`），待核对 CLI/API
+   策略配置后再跑严格同策略对比。
+5. **已知偶发测试失败**：`tests/test_quant_board.py::test_import_backtest_optimize_and_golden`
+   在全量 pytest 下偶发失败（单独运行通过），疑似测试间资源/顺序干扰，未定性为本改动回归；
+   后续全量验证时观察是否复现。
+
 ## 全局约定
 
 - Python 工作目录：`D:\dragon-board\quant-board`，测试命令：`.\.venv\Scripts\python.exe -m pytest backend/tests/<file> -q`。
