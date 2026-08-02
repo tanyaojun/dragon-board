@@ -827,42 +827,65 @@ def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: di
     }
 
 
+REGIME_STAGE_ADJUST = {"高潮": 8, "发酵": 5, "启动": 0, "退潮": -6, "冰点": -8}
+REGIME_STRONG_SCORE = 70.0
+REGIME_NORMAL_SCORE = 50.0
+REGIME_WEAK_SCORE = 30.0
+REGIME_LIMIT_UP_CHANGE = 9.8
+REGIME_LIMIT_UP_BASE_SHARE = 0.08
+
+
 def market_regime(frame: dict[str, Any]) -> dict[str, Any]:
+    """热榜池口径五因子市场环境：池内上涨占比、涨停强度、量能活跃、资金正向、情绪阶段参考。
+
+    全A 涨跌家数/成交额不再进入打分（分化行情下与热榜池赚钱效应脱节）。
+    权重为基线 v1，样本验证后冻结（见 P2 计划 Phase 8）。
+    """
     context = frame.get("marketContext") or {}
     payload = context.get("payload") or {}
     sentiment = context.get("sentiment") or payload.get("sentiment") or {}
-    market_data = payload.get("marketData") or context.get("marketStats") or {}
-    phase = sentiment.get("phaseName") or sentiment.get("phase") or payload.get("phaseName") or ""
-    phase = phase[:-1] if isinstance(phase, str) and phase.endswith("期") else phase
+    stocks = [s for s in (frame.get("stocks") or []) if isinstance(s, dict)]
+    pool_size = len(stocks)
+    if pool_size == 0:
+        return {"state": "normal", "score": 50.0, "reasons": ["市场环境数据不足，按中性处理"]}
+
     score = 50.0
     reasons: list[str] = []
-    if phase:
-        score += {"高潮": 14, "发酵": 8, "启动": 0, "退潮": -12, "冰点": -16}.get(phase, 0)
-        reasons.append(f"情绪阶段{phase}")
-    stocks = frame.get("stocks") or []
-    zt = float(market_data.get("ztCount") or 0)
-    dt = float(market_data.get("dtCount") or 0)
-    up = float(market_data.get("upCount") or 0)
-    down = float(market_data.get("downCount") or 0)
-    if zt:
-        score += clamp((zt - 35) * 0.35, -10, 16)
-        reasons.append(f"涨停{zt:g}")
-    if dt:
-        score -= clamp(dt * 1.6, 0, 18)
-        reasons.append(f"跌停{dt:g}")
-    if up or down:
-        spread = (up - down) / (up + down)
-        score += clamp(spread * 18, -18, 18)
-        reasons.append(f"涨跌扩散{spread * 100:.0f}%")
-    if stocks:
-        money_share = len([s for s in stocks if float(s.get("zlje") or 0) > 0]) / len(stocks)
-        volume_share = len([s for s in stocks if float(s.get("volumeRatio") or 0) >= 1.2]) / len(stocks)
+
+    up_count = sum(1 for s in stocks if float(s.get("change") or 0) > 0)
+    up_share = up_count / pool_size
+    score += clamp((up_share - 0.5) * 40, -20, 20)
+    reasons.append(f"池内上涨{up_share * 100:.0f}%")
+
+    limit_count = sum(1 for s in stocks if float(s.get("change") or 0) >= REGIME_LIMIT_UP_CHANGE)
+    limit_share = limit_count / pool_size
+    score += clamp((limit_share - REGIME_LIMIT_UP_BASE_SHARE) * 80, -15, 25)
+    reasons.append(f"池内涨停{limit_share * 100:.0f}%")
+
+    if any(s.get("volumeRatio") is not None for s in stocks):
+        active_share = sum(1 for s in stocks if float(s.get("volumeRatio") or 0) >= 1.2) / pool_size
+        score += clamp((active_share - 0.35) * 10, -5, 7)
+        reasons.append(f"量能活跃{active_share * 100:.0f}%")
+    if any(s.get("zlje") is not None for s in stocks):
+        money_share = sum(1 for s in stocks if float(s.get("zlje") or 0) > 0) / pool_size
         score += clamp((money_share - 0.5) * 20, -10, 10)
-        score += clamp((volume_share - 0.35) * 10, -5, 7)
-        reasons.extend([f"热榜资金正向{money_share * 100:.0f}%", f"量能活跃{volume_share * 100:.0f}%"])
+        reasons.append(f"热榜资金正向{money_share * 100:.0f}%")
+
+    phase = str(sentiment.get("phaseName") or sentiment.get("phase") or "").strip()
+    if phase.endswith("期"):
+        phase = phase[:-1]
+    if phase:
+        score += REGIME_STAGE_ADJUST.get(phase, 0)
+        reasons.append(f"情绪阶段{phase}")
+
     score = clamp(score, 0, 100)
-    state = "strong" if score >= 72 else "normal" if score >= 50 else "weak" if score >= 25 else "retreat"
-    return {"state": state, "score": round(score, 1), "reasons": reasons or ["市场环境数据不足，按中性处理"]}
+    state = (
+        "strong" if score >= REGIME_STRONG_SCORE
+        else "normal" if score >= REGIME_NORMAL_SCORE
+        else "weak" if score >= REGIME_WEAK_SCORE
+        else "retreat"
+    )
+    return {"state": state, "score": round(score, 1), "reasons": reasons}
 
 
 def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dict[str, Any], config: RankTrendConfig) -> dict[str, Any]:
