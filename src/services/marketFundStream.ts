@@ -7,8 +7,8 @@ import { EventManager } from '@/utils/eventManager'
  *
  * 后端链路（quant-board）：
  *   akshare 同花顺个股资金流全市场批量抓取（单次约 5000+ 只）
- *     → MarketFundScheduler 周期刷新（内存 last-good，不再走 Redis）
- *     → ThemeFundCache → MarketFundStream（fund_full_state / fund_patch）
+ *     → MarketFundScheduler 周期刷新 + 启动预热（写入 Redis TTL，跨进程/跨重启共享）
+ *     → ThemeFundCache（进程内 last-good 兜底）→ MarketFundStream（fund_full_state / fund_patch）
  *     → ws://127.0.0.1:8000/api/market/fund-stream
  *
  * 本服务只负责建立订阅并把增量行转成 QUOTE_PATCH 事件；数据获取与入库

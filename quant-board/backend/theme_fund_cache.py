@@ -11,8 +11,15 @@ from backend.settings import get_settings
 
 
 class ThemeFundCache:
-    def __init__(self, redis_client: Any | None, *, prefix: str) -> None:
+    def __init__(
+        self,
+        redis_client: Any | None,
+        *,
+        prefix: str,
+        ttl_seconds: int = 900,
+    ) -> None:
         self._redis = redis_client
+        self._ttl_seconds = max(60, int(ttl_seconds))
         self._base = f"{prefix.strip(':')}:theme-fund:v3"
         self._latest: dict[str, dict[str, object]] = {}
         self._owners: dict[str, list[str]] = {}
@@ -56,6 +63,8 @@ class ThemeFundCache:
             }
             self._latest[code] = stored
             self._write_hash(self._key("latest"), code, stored)
+            # 全市场行数据带 TTL：跨进程/跨重启 last-good，过期后自动清理（fail-visible 由进程内兜底）
+            self._touch(self._key("latest"))
             if len(self._latest) > 1000:
                 today = session_date
                 stale = [c for c, v in self._latest.items() if str(v.get("sessionDate") or "") < today]
@@ -210,6 +219,13 @@ class ThemeFundCache:
         except Exception:
             pass
 
+    def _touch(self, key: str) -> None:
+        try:
+            if self._redis is not None:
+                self._redis.expire(key, self._ttl_seconds)
+        except Exception:
+            pass
+
     def _read_value(self, key: str) -> object | None:
         try:
             raw = self._redis.get(key) if self._redis is not None else None
@@ -225,7 +241,13 @@ def get_theme_fund_cache() -> ThemeFundCache:
     global _theme_fund_cache
     if _theme_fund_cache is None:
         settings = get_settings()
-        # 行情主力资金改为 akshare 全市场批量刷新，last-good 只保存在进程内，
-        # 不再连接 Redis。snapshot 等缓存仍走独立的 snapshot_cache 连接。
-        _theme_fund_cache = ThemeFundCache(None, prefix=settings.redis_key_prefix)
+        # akshare 全市场批量刷新，结果写入 Redis（TTL）供跨进程/跨重启共享，
+        # 进程内 last-good 继续作为兜底；Redis 故障自动回退不阻断。
+        from backend.market_proxy.cache import get_hotlist_redis_client
+
+        _theme_fund_cache = ThemeFundCache(
+            get_hotlist_redis_client(settings),
+            prefix=settings.redis_key_prefix,
+            ttl_seconds=settings.theme_fund_cache_ttl_seconds,
+        )
     return _theme_fund_cache

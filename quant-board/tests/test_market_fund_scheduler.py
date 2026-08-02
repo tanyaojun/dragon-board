@@ -113,6 +113,26 @@ async def test_no_owner_makes_zero_requests() -> None:
 
 
 @pytest.mark.asyncio
+async def test_startup_warmup_fetches_once_even_without_subscribers() -> None:
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    provider = FakeProvider()
+    cache = FakeCache()
+    scheduler = _scheduler(
+        provider=provider,
+        current=current,
+        cache=cache,
+        stream=FakeStream([]),
+    )
+
+    assert await scheduler.run_once(ignore_subscribers=True) is True
+
+    # 启动预热不依赖 WebSocket 订阅者：全市场抓取写入缓存，首屏可直接命中
+    assert provider.calls == ["2026-07-30"]
+    assert "000001" in cache.rows
+    assert scheduler.status()["primedCodes"] == 2
+
+
+@pytest.mark.asyncio
 async def test_off_session_primes_once_then_idles() -> None:
     current = datetime(2026, 7, 30, 11, 31, 0, tzinfo=TZ)
     provider = FakeProvider()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from contextlib import contextmanager
 from typing import Any, Callable
@@ -37,10 +38,14 @@ class MarketOverviewService:
         self,
         *,
         akshare_module: Any | None = None,
+        redis_client: Any | None = None,
+        redis_key_prefix: str = "",
         ttl_seconds: float = 10.0,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         self._ak = akshare_module
+        self._redis = redis_client
+        self._redis_prefix = str(redis_key_prefix or "").strip(":")
         self._ttl_ms = max(1.0, float(ttl_seconds)) * 1000
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._snapshot: dict[str, Any] | None = None
@@ -50,6 +55,12 @@ class MarketOverviewService:
         now_ms = self._now_ms()
         if self._snapshot is not None and now_ms - self._cached_at_ms < self._ttl_ms:
             return self._snapshot
+        # 共享 Redis TTL 缓存：跨进程/跨重启 last-good，冷启动直接命中
+        redis_snapshot = self._redis_get()
+        if redis_snapshot is not None:
+            self._snapshot = redis_snapshot
+            self._cached_at_ms = now_ms
+            return redis_snapshot
         frame = await asyncio.to_thread(self._fetch_sync)
         items = self._normalize(frame)
         snapshot = {
@@ -61,12 +72,45 @@ class MarketOverviewService:
         }
         self._snapshot = snapshot
         self._cached_at_ms = now_ms
+        self._redis_set(snapshot)
         return snapshot
 
     def stale_snapshot(self) -> dict[str, Any] | None:
         if self._snapshot is None:
             return None
         return {**self._snapshot, "stale": True}
+
+    def _redis_key(self) -> str:
+        suffix = "market:overview:v1"
+        return f"{self._redis_prefix}:{suffix}" if self._redis_prefix else suffix
+
+    def _redis_get(self) -> dict[str, Any] | None:
+        client = self._redis
+        if client is None:
+            return None
+        try:
+            raw = client.get(self._redis_key())
+            if raw is None:
+                return None
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            value = json.loads(str(raw))
+            return value if isinstance(value, dict) and value.get("items") is not None else None
+        except Exception:
+            return None
+
+    def _redis_set(self, snapshot: dict[str, Any]) -> None:
+        client = self._redis
+        if client is None:
+            return
+        try:
+            client.setex(
+                self._redis_key(),
+                max(1, int(self._ttl_ms / 1000)),
+                json.dumps(snapshot, ensure_ascii=False),
+            )
+        except Exception:
+            return
 
     def _fetch_sync(self) -> Any:
         ak = self._ak
@@ -117,5 +161,12 @@ _overview_service: MarketOverviewService | None = None
 def get_market_overview_service() -> MarketOverviewService:
     global _overview_service
     if _overview_service is None:
-        _overview_service = MarketOverviewService()
+        from backend.settings import get_settings
+        from backend.market_proxy.cache import get_hotlist_redis_client
+
+        settings = get_settings()
+        _overview_service = MarketOverviewService(
+            redis_client=get_hotlist_redis_client(settings),
+            redis_key_prefix=settings.redis_key_prefix,
+        )
     return _overview_service

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 from fastapi import FastAPI
@@ -8,6 +10,65 @@ from fastapi.testclient import TestClient
 import backend.api.market_data_routes as market_data_routes
 from backend.market_proxy.indices import MarketOverviewService
 from backend.market_proxy.quotes import MarketQuotesCache, to_tencent_diff_item
+
+
+class FakeRedis:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.values: dict[str, str] = {}
+        self.expires: dict[str, int] = {}
+
+    def hset(self, key: str, field: str, value: str) -> None:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        self.hashes.setdefault(key, {})[field] = value
+
+    def hmget(self, key: str, fields: list[str]):
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        return [self.hashes.get(key, {}).get(field) for field in fields]
+
+    def get(self, key: str):
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        return self.values.get(key)
+
+    def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        self.values[key] = str(value)
+        self.expires[key] = int(ttl_seconds)
+
+    def expire(self, key: str, ttl_seconds: int) -> None:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        self.expires[key] = int(ttl_seconds)
+
+    def pipeline(self, transaction: bool = False):
+        return _FakeRedisPipeline(self)
+
+
+class _FakeRedisPipeline:
+    def __init__(self, redis: FakeRedis) -> None:
+        self.redis = redis
+        self.ops: list[tuple] = []
+
+    def hset(self, key: str, field: str, value: str):
+        self.ops.append(("hset", key, field, value))
+        return self
+
+    def expire(self, key: str, ttl_seconds: int):
+        self.ops.append(("expire", key, ttl_seconds))
+        return self
+
+    def execute(self) -> None:
+        for op in self.ops:
+            if op[0] == "hset":
+                self.redis.hset(op[1], op[2], op[3])
+            elif op[0] == "expire":
+                self.redis.expire(op[1], op[2])
+        self.ops = []
 
 
 class FakeTxAkshare:
@@ -236,6 +297,60 @@ async def test_quotes_cache_get_diff_keeps_last_good_after_failure() -> None:
     assert cache.status()["lastError"].startswith("RuntimeError")
 
 
+@pytest.mark.asyncio
+async def test_quotes_cache_refresh_writes_redis_with_ttl() -> None:
+    ak = FakeTxAkshare(frame=_tx_frame())
+    redis = FakeRedis()
+    cache = MarketQuotesCache(
+        refresh_interval_seconds=300,
+        akshare_module=ak,
+        redis_client=redis,
+        redis_key_prefix="test",
+        now_ms=lambda: 1000,
+    )
+
+    assert await cache.refresh() is True
+
+    key = "test:market:quotes:tencent:v1"
+    assert redis.expires[key] == 300
+    assert "600519" in redis.hashes[key]
+    assert "000001" in redis.hashes[key]
+
+
+def test_quotes_cache_serves_redis_rows_when_memory_cold() -> None:
+    redis = FakeRedis()
+    redis.hashes["test:market:quotes:tencent:v1"] = {
+        "600519": json.dumps({"f12": "600519", "f14": "贵州茅台", "f2": 1350.6}),
+        "000001": json.dumps({"f12": "000001", "f14": "平安银行", "f2": 11.5}),
+    }
+    cache = MarketQuotesCache(
+        refresh_interval_seconds=300,
+        redis_client=redis,
+        redis_key_prefix="test",
+    )
+
+    diff = cache.get_diff(["600519", "000001"])["data"]["diff"]
+
+    assert [row["f12"] for row in diff] == ["600519", "000001"]
+
+
+@pytest.mark.asyncio
+async def test_quotes_cache_redis_failure_falls_back_to_memory() -> None:
+    ak = FakeTxAkshare(frame=_tx_frame())
+    cache = MarketQuotesCache(
+        refresh_interval_seconds=300,
+        akshare_module=ak,
+        redis_client=FakeRedis(fail=True),
+        redis_key_prefix="test",
+        now_ms=lambda: 1000,
+    )
+
+    assert await cache.refresh() is True
+    diff = cache.get_diff(["600519"])["data"]["diff"]
+
+    assert [row["f12"] for row in diff] == ["600519"]  # Redis 故障不阻断
+
+
 def test_market_overview_normalizes_indices() -> None:
     ak = FakeIndexAkshare(
         frame=pd.DataFrame(
@@ -292,6 +407,102 @@ def test_market_overview_caches_within_ttl() -> None:
     asyncio_run(service.get_overview())
     asyncio_run(service.get_overview())
     assert ak.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_market_overview_serves_from_redis_without_upstream() -> None:
+    redis = FakeRedis()
+    redis.values["test:market:overview:v1"] = json.dumps(
+        {
+            "ok": True,
+            "source": "akshare-sina-index",
+            "timestamp": 1,
+            "stale": False,
+            "items": [{"code": "sh000001", "name": "上证指数", "price": 3832.26}],
+        }
+    )
+    ak = FakeIndexAkshare()
+    service = MarketOverviewService(
+        akshare_module=ak,
+        redis_client=redis,
+        redis_key_prefix="test",
+        now_ms=lambda: 1000,
+    )
+
+    snapshot = await service.get_overview()
+
+    assert snapshot["items"][0]["code"] == "sh000001"
+    assert ak.calls == 0  # Redis 命中不打上游
+
+
+@pytest.mark.asyncio
+async def test_market_overview_writes_redis_after_fetch() -> None:
+    redis = FakeRedis()
+    ak = FakeIndexAkshare(
+        frame=pd.DataFrame(
+            [
+                {
+                    "代码": "sh000001",
+                    "名称": "上证指数",
+                    "最新价": 3832.26,
+                    "涨跌额": 27.57,
+                    "涨跌幅": 0.725,
+                    "昨收": 3804.69,
+                    "今开": 3833.53,
+                    "最高": 3847.09,
+                    "最低": 3822.37,
+                    "成交量": 1,
+                    "成交额": 2,
+                }
+            ]
+        )
+    )
+    service = MarketOverviewService(
+        akshare_module=ak,
+        redis_client=redis,
+        redis_key_prefix="test",
+        ttl_seconds=10,
+        now_ms=lambda: 1,
+    )
+
+    snapshot = await service.get_overview()
+
+    assert snapshot["items"][0]["code"] == "sh000001"
+    assert "test:market:overview:v1" in redis.values
+    assert redis.expires["test:market:overview:v1"] == 10
+
+
+@pytest.mark.asyncio
+async def test_market_overview_redis_failure_falls_back_to_upstream() -> None:
+    ak = FakeIndexAkshare(
+        frame=pd.DataFrame(
+            [
+                {
+                    "代码": "sh000001",
+                    "名称": "上证指数",
+                    "最新价": 3832.26,
+                    "涨跌额": 27.57,
+                    "涨跌幅": 0.725,
+                    "昨收": 3804.69,
+                    "今开": 3833.53,
+                    "最高": 3847.09,
+                    "最低": 3822.37,
+                    "成交量": 1,
+                    "成交额": 2,
+                }
+            ]
+        )
+    )
+    service = MarketOverviewService(
+        akshare_module=ak,
+        redis_client=FakeRedis(fail=True),
+        redis_key_prefix="test",
+        now_ms=lambda: 1,
+    )
+
+    snapshot = await service.get_overview()
+
+    assert snapshot["items"][0]["code"] == "sh000001"  # Redis 故障不阻断
 
 
 def test_market_overview_route_503_without_cache(monkeypatch: pytest.MonkeyPatch) -> None:

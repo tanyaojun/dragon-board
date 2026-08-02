@@ -11,6 +11,7 @@ class FakeRedis:
         self.fail = fail
         self.hashes: dict[str, dict[str, str]] = {}
         self.values: dict[str, str] = {}
+        self.expires: dict[str, int] = {}
 
     def hset(self, key: str, field: str, value: str) -> None:
         if self.fail:
@@ -43,6 +44,11 @@ class FakeRedis:
         value = int(self.values.get(key, "0")) + 1
         self.values[key] = str(value)
         return value
+
+    def expire(self, key: str, ttl_seconds: int) -> None:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        self.expires[key] = int(ttl_seconds)
 
 
 def row(code: str, session_date: str, zlje: float, source_ts: int = 1) -> dict[str, object]:
@@ -164,3 +170,35 @@ def test_get_latest_reads_cold_codes_with_one_redis_hmget() -> None:
 
     assert set(latest) == {"000001", "000002"}
     assert calls == [("test:theme-fund:v3:latest", ["000001", "000002"])]
+
+
+def test_put_refreshes_latest_hash_ttl_in_redis() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+
+    cache.put(row("000001", "2026-07-24", 12.5))
+
+    assert redis.expires["test:theme-fund:v3:latest"] == 900
+    # 版本与 owners 键保持单调，不因 TTL 过期而重置
+    assert "test:theme-fund:v3:version" not in redis.expires
+
+
+def test_redis_ttl_expiry_keeps_process_last_good() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put(row("000001", "2026-07-24", 12.5))
+
+    # 模拟 Redis hash 已过期（数据被清理），进程内 last-good 仍可读（fail-visible）
+    redis.hashes.clear()
+
+    assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
+
+
+def test_redis_ttl_controls_cross_instance_cold_read() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put(row("000001", "2026-07-24", 12.5))
+
+    # 新实例（进程内空）从 Redis 命中
+    cold = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    assert cold.get_latest(["000001"])["000001"]["zlje"] == 12.5

@@ -137,6 +137,7 @@ class Settings(BaseModel):
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
+    theme_fund_cache_ttl_seconds: int = Field(default=900)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)
     xueqiu_cookie: str = Field(default="")
@@ -408,6 +409,13 @@ class Settings(BaseModel):
             _env_int(
                 "QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS",
                 self.theme_fund_refresh_interval_seconds,
+            ),
+        )
+        self.theme_fund_cache_ttl_seconds = max(
+            60,
+            _env_int(
+                "QUANT_BOARD_THEME_FUND_CACHE_TTL_SECONDS",
+                self.theme_fund_cache_ttl_seconds,
             ),
         )
         self.market_quotes_refresh_interval_seconds = max(

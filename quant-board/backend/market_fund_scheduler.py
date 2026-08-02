@@ -27,11 +27,13 @@ class MarketFundScheduler:
     """Full-market THS fund flow refresher backed by akshare.
 
     One akshare call returns the whole market, so the scheduler replaces the
-    old per-stock polling with a periodic full refresh. Redis is no longer part
-    of this path: last-good rows stay in the in-memory ThemeFundCache and are
-    served to subscribers (market stream, theme heat, snapshot collector) from
-    the same process. Upstream failures never clear existing rows; they open a
-    cooldown and expose a structured status so consumers can keep last-good.
+    old per-stock polling with a periodic full refresh. Rows are written to
+    Redis with a TTL (shared across processes/restarts) and kept as last-good
+    in the in-memory ThemeFundCache. Startup warmup prefetches the whole
+    market once without waiting for WebSocket subscribers so the first screen
+    can be served from cache immediately. Upstream failures never clear
+    existing rows; they open a cooldown and expose a structured status so
+    consumers can keep last-good.
     """
 
     def __init__(
@@ -78,7 +80,10 @@ class MarketFundScheduler:
     def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
             return
-        self._task = asyncio.create_task(self._run(), name="market-fund-scheduler")
+        self._task = asyncio.create_task(
+            self._warmup_then_run(),
+            name="market-fund-scheduler",
+        )
 
     async def stop(self) -> None:
         if self._task:
@@ -86,9 +91,9 @@ class MarketFundScheduler:
             await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
 
-    async def run_once(self) -> bool:
+    async def run_once(self, *, ignore_subscribers: bool = False) -> bool:
         codes = self.stream.market_codes()
-        if not codes:
+        if not codes and not ignore_subscribers:
             return False
         current = self._now()
         now_ts = current.timestamp()
@@ -155,6 +160,16 @@ class MarketFundScheduler:
         self._parse_failure_count = len(batch.failures) + len(validation_failures)
         self._parse_failure_samples = (batch.failures + validation_failures)[:10]
         return True
+
+    async def _warmup_then_run(self) -> None:
+        """启动预热：立即抓取一轮全市场资金流写入 Redis，首屏可直接命中；随后进入正常周期。"""
+        try:
+            await self.run_once(ignore_subscribers=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("market fund warmup cycle failed")
+        await self._run()
 
     async def _save_batch(
         self,

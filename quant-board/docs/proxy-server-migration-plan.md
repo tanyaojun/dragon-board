@@ -157,6 +157,17 @@ quant-board/backend/market_proxy/
     具体原因可经 `dataLoader.getPlatformCacheDiagnostics()` 查询。
   - P3 失败判定加固：单次失败不再直接显示“失败”，失败平台每 1 分钟自动重试（`PLATFORM_RETRY_INTERVAL_MS`），
     连续 3 次失败（`PLATFORM_FAILURE_THRESHOLD`）才显示“失败”，期间显示“重试中”；任何一次成功即恢复并清零计数。
+  - 主力资金（akshare 全市场个股资金流）Redis TTL + 首屏预热（2026-08-02）：
+    `ThemeFundCache` 恢复 Redis 参与，全市场行写入 `theme-fund:v3:latest` hash 并刷新 TTL
+    （默认 900s，`QUANT_BOARD_THEME_FUND_CACHE_TTL_SECONDS` 可调，最小 60s）；进程内 last-good 继续兜底，
+    Redis 故障自动回退不阻断（fail-visible）。`MarketFundScheduler` 启动时立即预热一轮
+    （不依赖 WebSocket 订阅者），资金流写入 Redis 后前端 `fund-stream` 连接即可秒出全量快照，
+    实现行情主页资金流首屏秒开；版本/owners 键保持单调不过期，避免跨重启版本回退。
+  - 行情主页其余数据 Redis TTL（2026-08-02）：
+     `MarketOverviewService`（指数概览，TTL 10s）与 `MarketQuotesCache`（全市场行情，TTL 300s）
+     均接入 Redis（`market:overview:v1`、`market:quotes:tencent:v1`），进程内缓存未就绪/跨重启时
+     冷读直接命中 Redis；Redis 故障自动回退进程内/上游（fail-visible）。至此行情主页
+     （指数概览 + 全市场行情 + 主力资金）全部消费后端 Redis/TTL，冷启动首屏秒开。
   - 验证：quant-board pytest 1139 passed；前端 825 passed + vue-tsc 通过；
     浏览器 8/8 平台全量显示且无 AbortError；Redis 负缓存跨实例 0ms 命中；状态栏失败态显示验证通过。
 - ✅ Batch 3（2026-08-01）：

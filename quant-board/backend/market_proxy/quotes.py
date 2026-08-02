@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -87,12 +88,18 @@ class MarketQuotesCache:
         refresh_interval_seconds: float = 300.0,
         akshare_module: Any | None = None,
         tqdm_module: Any | None = None,
+        redis_client: Any | None = None,
+        redis_key_prefix: str = "",
+        ttl_seconds: float = 300.0,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         # 与 settings 的下限保持一致（QUANT_BOARD_MARKET_QUOTES_REFRESH_INTERVAL_SECONDS 最小 60s）
         self.refresh_interval_seconds = max(60.0, float(refresh_interval_seconds))
         self._ak = akshare_module
         self._tqdm_module = tqdm_module
+        self._redis = redis_client
+        self._redis_prefix = str(redis_key_prefix or "").strip(":")
+        self._ttl_seconds = max(60, int(ttl_seconds))
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._rows: dict[str, dict[str, Any]] = {}
         self._fetched_at_ms = 0
@@ -136,19 +143,70 @@ class MarketQuotesCache:
             self._rows = rows
             self._fetched_at_ms = self._now_ms()
             self._last_error = None
+            self._redis_set_all(rows)
             return True
 
     def get_diff(self, codes: list[str]) -> dict[str, Any]:
+        normalized = [normalize_stock_code(raw) for raw in codes]
+        unique = list(dict.fromkeys(code for code in normalized if code))
+        if not unique:
+            return {"rc": 0, "data": {"diff": []}}
+
+        # 进程内未就绪（冷启动/重启）：从共享 Redis TTL 缓存兜底，保证首屏秒开
+        if not self._rows:
+            redis_rows = self._redis_get_many(unique)
+            if redis_rows:
+                return {
+                    "rc": 0,
+                    "data": {"diff": [redis_rows[code] for code in unique if code in redis_rows]},
+                }
+            return {"rc": 0, "data": {"diff": []}}
+
         ordered: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for raw in codes:
-            code = normalize_stock_code(raw)
-            if not code or code in seen:
-                continue
+        for code in unique:
             row = self._rows.get(code)
             if row:
                 ordered.append(row)
-                seen.add(code)
+        return {"rc": 0, "data": {"diff": ordered}}
+
+    def _redis_key(self) -> str:
+        suffix = "market:quotes:tencent:v1"
+        return f"{self._redis_prefix}:{suffix}" if self._redis_prefix else suffix
+
+    def _redis_set_all(self, rows: dict[str, dict[str, Any]]) -> None:
+        client = self._redis
+        if client is None or not rows:
+            return
+        try:
+            pipe = client.pipeline(transaction=False)
+            key = self._redis_key()
+            for code, row in rows.items():
+                pipe.hset(key, code, json.dumps(row, ensure_ascii=False))
+            pipe.expire(key, self._ttl_seconds)
+            pipe.execute()
+        except Exception:
+            return
+
+    def _redis_get_many(self, codes: list[str]) -> dict[str, dict[str, Any]]:
+        client = self._redis
+        normalized = list(dict.fromkeys(code for code in codes if code))
+        if client is None or not normalized:
+            return {}
+        try:
+            raw_values = client.hmget(self._redis_key(), normalized)
+        except Exception:
+            return {}
+        result: dict[str, dict[str, Any]] = {}
+        for code, raw in zip(normalized, raw_values):
+            try:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                value = json.loads(raw) if raw else None
+            except (TypeError, ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(value, dict):
+                result[code] = value
+        return result
         return {"rc": 0, "data": {"diff": ordered}}
 
     def status(self) -> dict[str, Any]:
@@ -192,9 +250,14 @@ def get_market_quotes_cache() -> MarketQuotesCache:
     global _quotes_cache
     if _quotes_cache is None:
         from backend.settings import get_settings
+        from backend.market_proxy.cache import get_hotlist_redis_client
 
+        settings = get_settings()
         _quotes_cache = MarketQuotesCache(
-            refresh_interval_seconds=get_settings().market_quotes_refresh_interval_seconds
+            refresh_interval_seconds=settings.market_quotes_refresh_interval_seconds,
+            redis_client=get_hotlist_redis_client(settings),
+            redis_key_prefix=settings.redis_key_prefix,
+            ttl_seconds=settings.market_quotes_refresh_interval_seconds,
         )
     return _quotes_cache
 
