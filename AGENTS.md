@@ -40,7 +40,7 @@
   迁移批次与去向见 `quant-board/docs/proxy-server-migration-plan.md`。
 - `python-bridge/`：本地 `mootdx + WebSocket` 行情桥，默认提供 `ws://127.0.0.1:8765/ws/quotes`。
 - `tools/TdxL2Helper/`：独立 x86 .NET helper，用于通达信 DLL、L2 权限和深度行情探针。
-- `quant-board/`：Python QuantBoard 子项目，用于 RankTrend golden 对齐、数据导入、回测、优化和报告展示。
+- `quant-board/`：Python QuantBoard 子项目，用于 RankTrend 算法生产（golden 事实标准）、数据导入、回测、优化和报告展示。
 
 涉及 QuantBoard 时，以 `quant-board/docs/README.md` 和 `quant-board/docs/AI_COLLABORATION.md` 为准。
 
@@ -87,8 +87,7 @@ src/
 │   ├── hotlist/             # 热榜情绪等热榜领域分析
 │   ├── hotness/             # 个股热度计算
 │   ├── quality/             # 数据质量、覆盖率和门禁
-│   ├── quantBoardGolden/    # TypeScript golden case 导出，不做回测/优化
-│   ├── rankTrend/           # RankTrend golden 标准模块
+│   ├── rankTrend/           # RankTrend 消费契约与 live-only 观察层
 │   └── snapshot/            # 快照保存、读取、覆盖率、备份和 QuantBoard 适配
 ├── stores/                  # Pinia 状态，只放 UI/应用级状态，不替代服务层
 ├── themes/                  # 应用主题配置和主题样式
@@ -152,7 +151,7 @@ quant-board/
 - `src/services/DataLayer.ts`：中心化内存数据层，只负责运行时内存状态、版本和订阅通知。
 - `src/services/dataLoader.ts`：八平台热榜加载、清洗、合并和综合排名。
 - `src/services/RankTrendAnalyzer.ts`：前端 RankTrend 分析入口。
-- `src/services/rankTrend/**`：RankTrend 拆分后的 golden 标准模块。
+- `src/services/rankTrend/**`：RankTrend 消费契约、live-only 观察层与展示投影（golden 算法在 Python 侧）。
 - `src/types/rankTrendDefaults.ts`：RankTrend 默认参数和默认快照类型。
 - `src/types/**`：统一类型契约目录；不要新增或恢复 `src/type/**`，不要放纯运行时配置。
 - `src/config/**`：运行时配置、默认参数、存储 key、固定展示配置和可调业务常量目录。
@@ -161,7 +160,6 @@ quant-board/
 - `src/**/__tests__/**/*.test.ts`：正式 Vitest 测试目录和文件命名；测试应尽量靠近被测模块。
 - `src/devtools/diagnostics/**`：浏览器控制台或临时手工诊断脚本，不属于自动化测试套件，默认排除在 Vitest 和应用类型检查之外。
 - `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
-- `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
 
 ## 4. 业务硬约束
@@ -203,7 +201,7 @@ quant-board/
 
 QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLLABORATION.md` 和专题文档为准：
 
-- TypeScript `src/services/RankTrendAnalyzer.ts`、`src/services/rankTrend/**`、`src/types/rankTrendDefaults.ts` 是 Python 移植的 golden 标准。
+- RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend.py` 为生产事实标准；TS 前端只消费 `POST /api/ranktrend/analyze` 与 frames API 输出，不再保留本地 golden 链算法实现（`src/services/rankTrend/**` 只保留消费契约、resonance/jump 应用层与展示投影）。
 - QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 - 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。
@@ -211,7 +209,7 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - QuantBoard 存储主链为 MongoDB 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 MongoDB 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
 - Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`，正式保存判重以 MongoDB/后端 `snapshot_id` 为准；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 快照缓存默认关闭，只保留为迁移源、显式缓存或非正式临时数据来源。
 - Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只保留为历史迁移源和缓存，不再新增或恢复浏览器端 IndexedDB 校验/补齐 API。迁移阶段只保留后端 `import-json` 和离线导入工具，字段映射不得随意删改。
-- Python RankTrend 输出字段必须能与 golden case 对齐。
+- Python RankTrend 输出字段是 golden 合同本身（`RankTrendAnalysisResult`），TS 消费方按该合同校验。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。
 
 ### 4.3 通达信实时行情与 L2

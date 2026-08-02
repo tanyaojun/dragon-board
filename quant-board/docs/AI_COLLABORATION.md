@@ -10,7 +10,7 @@
 - 参数优化口径：优化是 `backend/optimization/**` 独立模块，负责搜索方法、目标函数、异步任务状态和实验记录；它调用回测引擎执行 trial，但不得把搜索逻辑塞回 `backend.core.backtest`。
 - 优化方法口径：正式搜索方法只有 `grid`、`random`、`bayesian`、`tpe`。`method=bayesian` 是 Optuna `GPSampler` 高斯过程优化；`method=tpe` 对应 Optuna `TPESampler`。`method=optuna_tpe` 只作为后端兼容别名保留，不在前端和 CLI 展示为独立方法。
 - 优化任务口径：`POST /api/optimizations/rank-trend` 异步返回 `status=running` 和 `runId`；`GET /api/optimizations/{run_id}` 只返回 `running`、`completed` 或 `failed`。
-- Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
+- Dragon Board 根项目只提供实时看板、快照数据与 Python golden 结果的消费展示（不再导出 golden、不保留本地 golden 链算法）。
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 - Fusion 候选池历史语义：`GET /api/backtests/{run_id}/fusion-projections` 以 `ranktrend_early_big_move_v3_lifecycle_fusion` 为唯一策略锚点，必须基于 `signals + trades + tradeEvents/openPositions` 构建 projection rows；不得按股票代码把整次回测粗暴折叠成一条。
@@ -55,13 +55,13 @@
 
 ## 硬约束
 
-1. `rankTrend` TypeScript 是 golden 标准。
+1. `rankTrend` Python（`backend/analysis/ranktrend.py`）是 golden 生产事实标准，TS 前端只消费其输出。
 2. QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 3. 默认 `snapshot_type` 是 `half_hour`。
 4. `quarter_hour` 是可选项，不是默认项。
 5. 回测和优化必须保存 `random_seed`、`config_hash`、`dataset_id`、`snapshot_type`、`strategy_version`。
 6. 数据质量门禁失败必须结构化返回，不允许静默吞掉。
-7. Python 端 rankTrend 输出字段必须能和 golden case 对齐。
+7. Python 端 rankTrend 输出字段即 golden 合同（`RankTrendAnalysisResult`），TS 消费方按该合同校验。
 8. 前端展示不得把 `finalSignal` 当成唯一交易结论，应优先展示状态、候选分层、风险、样本质量和交易解释。
 9. MongoDB 主库、备份恢复、禁用旧维护入口、快照入库和 API/CLI 合同变更，必须同批更新对应文档。
 10. Dragon Board 前端不得直连 MongoDB 或 Supabase；正式快照写库必须走 QuantBoard 后端 API。正式快照判重以后端 `dataset_id + snapshot_id` 为准，不得再以浏览器 IndexedDB 记录存在性作为正式保存条件。

@@ -2,26 +2,18 @@
 
 ## 结论
 
-QuantBoard 首期以 dragon-board 的 TypeScript `rankTrend` 为 golden 标准。Python 端不是重新设计策略，而是先复刻 golden 输出，再在此基础上做回测和优化。
+RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend.py` 为生产事实标准。Dragon Board TS 前端只消费
+`POST /api/ranktrend/analyze` 与 `GET /api/snapshots/frames`（每帧附 regime）的输出，不再保留本地 golden 链算法实现。
 
-Golden 来源：
+Golden 来源（唯一）：
 
-- `src/types/rankTrendDefaults.ts`
-- `src/services/RankTrendAnalyzer.ts`
-- `src/services/rankTrend/runRankTrendAnalysisPipeline.ts`
-- `src/services/rankTrend/**`（各分析器模块）
+- `quant-board/backend/analysis/ranktrend.py`
 
-QuantBoard golden 只来自 dragon-board TypeScript `rankTrend` 源码。
+TS 消费契约仍为 `RankTrendAnalysisResult`（见 `src/services/rankTrend/types.ts`），但该合同现在由 Python 输出定义。
 
-## 当前 TS 真相源
+## 当前分析顺序（Python 事实标准）
 
-当前 RankTrend Golden 的共享分析顺序以以下文件为准：
-
-- `src/services/RankTrendAnalyzer.ts`
-- `src/services/rankTrend/runRankTrendAnalysisPipeline.ts`
-- `src/services/rankTrend/**`
-
-其中 `src/services/quantBoardGolden/RankTrendGoldenReplayEngine.ts` 必须复用同一条 `runRankTrendAnalysisPipeline()`，不能再维护平行的分析顺序。当前正式顺序是：
+当前 RankTrend 的共享分析顺序以 `ranktrend.py` 的 `RankTrendPythonEngine._build_signal` 为准：
 
 ```text
 technical -> cycle -> risk -> cycle(with risk) -> decision -> strategy
@@ -238,45 +230,9 @@ Golden validate 走归一化摘要比较时，当前至少覆盖以下字段：
 
 ## 生成流程
 
-推荐通过 DragonBoard TypeScript 端生成 golden。当前保留两条路径：
-
-### 运行页控制台导出
-
-这条路径不再让 QuantBoard 自动打开新页面。它要求你在已经打开的 DragonBoard 页面执行导出函数，稳定性更高。
-
-前提：
-
-- DragonBoard 页面在 `http://localhost:5173` 正常运行；
-- 页面已刷新到包含 `src/services/quantBoardBridge.ts` 的最新代码；
-- 浏览器控制台能看到 `QuantBoardBridge ready` 日志。
-
-在 DragonBoard 页面控制台执行：
-
-```js
-await window.quantBoardExportRankTrendGolden({
-  caseId: 'rank_trend_default',
-  datasetId: 'ds_xxx',
-  snapshotType: 'half_hour',
-  limit: 500,
-  sampleLimit: 100
-})
-```
-
-函数会读取当前页面 origin 下的 `DragonBoardData` IndexedDB，调用 TypeScript golden 回放器，并下载：
-
-```text
-rank_trend_default.half_hour.ts-golden.json
-```
-
-然后回到 QuantBoard 的 Golden 对齐页：
-
-1. 选择这个 JSON 文件；
-2. 点击 `导入 TS Golden`；
-3. 确认 QuantBoard Golden 页面的 `sampleLimit / 校验样本数` 与导出时一致，默认建议 `100`；
-4. 点击 `执行校验`；
-4. 结果里的 `source=ts_golden_import` 且 `passed=true` 时，才代表正式跨语言对齐通过。
-
-如果页面要求校验 `100` 条，但已导入 TS Golden 只有 `50` 条，后端会返回样本不足提示。此时需要回到 DragonBoard 控制台用更大的 `sampleLimit` 重新导出并导入。
+golden case 由 Python 端生成：对固定输入跑 `RankTrendPythonEngine`，输出 `RankTrendAnalysisResult` 合同 JSON 存入
+`golden_ranktrend_cases`；TS 消费侧以该合同做契约校验。旧的 DragonBoard 控制台导出流程
+（`window.quantBoardExportRankTrendGolden`）已随 `src/services/quantBoardGolden/**` 删除，不再使用。
 
 ### 手工模块导出
 
