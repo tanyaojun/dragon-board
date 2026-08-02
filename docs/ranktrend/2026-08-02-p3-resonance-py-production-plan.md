@@ -18,7 +18,29 @@
 | --- | --- |
 | Phase A Python resonance 移植 + analyze API 输出 | ✅（commit `46eedff`） |
 | Phase B TS 消费切换与删除 | ✅（commit `08a4271`） |
-| Phase C 收尾（golden 确认、浏览器验收） | 进行中 |
+| Phase C 收尾（golden 确认、浏览器验收） | ✅ |
+
+## 验收记录（2026-08-02，Task C2）
+
+- 服务：Quant API 8000（新代码）、proxy 3000、前端 dev 5173。
+- 页面加载正常：主表渲染 208 只股票，列包含"共振强度 / 排名趋势 / 生命周期"。
+- 共振强度列显示 Python 输出（如 `↑12%`），resonance 链路贯通；
+  排名趋势/生命周期列显示 `--`：受快照数据漏采影响（analyze API 历史帧仅到 2026-05-18，
+  前端当前帧行情源 TDX 恢复中），Python 分析标记样本不足/不可用，符合 fail-visible 降级。
+- analyze API 横截面基准验证：最新帧 `marketMedianShortChange=-0.796`、`marketSampleCount=191`、
+  243 只股票中 32 只有完整序列得到 `resonance.status=ok`。
+- 控制台错误 16 条：均为行情/资金流 WebSocket 连接失败（`ws://127.0.0.1:8000/api/market/fund-stream`
+  与 502 Bad Gateway），属于数据源/连接问题，非 P3 代码回归。
+- 截图：`%TEMP%\db_p3_dashboard.png`。
+
+## 收尾确认（Task C1）
+
+- TS `src/services/rankTrend/**` 现仅保留：契约类型（types.ts）、展示投影（statusClassifier/compat）、
+  持仓状态/通知（jumpSignalService 应用层）、消费组装（RankTrendObservationService）、
+  `analysis_unavailable` 状态；无 golden 链或 live-only 算法残留（resonanceAnalyzer/jumpDetector/
+  marketRegimeAnalyzer/technicalSignalAnalyzer 等均已删除，算法全部在 Python）。
+- golden 方向完成态确认：Python `backend/analysis/ranktrend.py` 为生产事实标准，
+  TS 只消费 `POST /api/ranktrend/analyze` 与 frames API 输出。
 
 ## Phase A：Python resonance 移植 + analyze API 输出
 
