@@ -267,10 +267,59 @@ P2 落地时同步更新：
 
 ## 12. P3 后续范围（方案写入，P2 验证后启动）
 
-1. resonance / jump 应用层迁移 Python：前端只消费，删除 `resonanceAnalyzer`、`jumpDetector`、`jumpSignalService` 的计算实现。
-2. 观察面板历史帧横截面（市场中位数）迁移 Python：frames API 或 analyze API 输出每帧横截面基准。
-3. TS 端完成零算法收尾，仅剩展示与"分析不可用"状态。
-4. golden 方向文档正式反转完成态确认。
+### 12.1 目标
+
+把 P2 留在 TS 的 live-only 观察计算（resonance、jump 判定、观察面板横截面）收敛到 Python，
+TS 端实现零算法：只保留展示投影、持仓状态/通知与"分析不可用"状态。golden 方向正式反转完成态确认。
+
+### 12.2 边界（2026-08-02 用户确认方案 A）
+
+- **持仓状态/通知保留前端**：`registerJumpEntry`/`unregisterJumpPosition`、退出计时、跳变通知
+  （`JumpSignalNotifier`）仍是前端运行时状态，不迁 Python。
+- **jump 事件检测已收敛**（P2 完成）：`detectRankJumps` 在 Python 输出 `rankTrend.jump`，
+  TS 本地 `jumpDetector.ts` 已删除。
+- **jump 应用判定归属**：`evaluateJumpSignal` 的入场/出场条件判定（`checkEntryConditions`/
+  `checkExitConditions`）依赖前端持仓状态（出场判定），保留 TS 应用层；P3 只确认其事件输入
+  全部来自 Python `rankTrend.jump`，无本地事件重算。
+
+### 12.3 resonance 迁移
+
+- Python 移植 TS `resonanceAnalyzer`（六因子：relativeMomentum/acceleration/persistence/
+  jumpFreshness/reversalPenalty + quality 判定），输出 `rankTrend.resonance`；
+- analyze API 每帧输出横截面基准：`marketMedianShortChange`（当前帧与前 3 个公共市场帧、
+  至少 20 只股票的百分位变化中位数，与 TS 现有合同一致）；
+- TS 删除：`resonanceAnalyzer.ts`、`RankTrendSignalService.applyResonanceFinals` 的本地横截面
+  计算、`RankTrendObservationService` 的 `calculateMarketMedian/buildFrameCrossSections`；
+- TS 展示投影保留：用 Python `resonance` 覆盖 `decision.final` 的观察口径赋值（简单赋值，非算法）。
+
+### 12.4 观察面板
+
+- resonance 轨读 Python 输出的 `resonance` 与每帧 `marketMedianShortChange`，删除本地横截面读取；
+- 技术轨/生命周期轨继续读 analyze API 输出（P2 已切换）；
+- 历史帧 resonance 由 analyze API 按帧返回（frameKeys 批量）。
+
+### 12.5 删除与保留清单（TS）
+
+删除：`src/services/rankTrend/resonanceAnalyzer.ts`、`RankTrendSignalService` 的
+`applyResonanceFinals`/`applyJumpSignals` 本地计算（jump 应用保留但只消费 Python 事件）、
+`RankTrendObservationService` 的横截面计算。
+
+保留：`statusClassifier`、展示投影、持仓状态/通知、`analysis_unavailable` 状态、
+`RankTrendObservationService` 的消费组装（读 Python 输出）。
+
+### 12.6 验证
+
+- Python：resonance 移植单测（对齐 TS 原 resonanceAnalyzer 合同：六因子、样本不足降级、
+  新入榜路径）；analyze API 输出 resonance 与横截面基准的合同测试；
+- TS：删除后契约清理（消费 Python resonance）、`analysis_unavailable` 不变；
+- 全量 `pnpm test` / `pytest` / `vue-tsc` / `typecheck:ranktrend`；
+- 浏览器验收：主表共振列、观察面板共振轨显示 Python 输出；离线显示"分析不可用"。
+
+### 12.7 golden 方向
+
+P2 已把 golden 方向反转为"Python 为生产事实标准"（AGENTS.md、ranktrend-golden.md 等）。
+P3 收尾时确认：TS `src/services/rankTrend/**` 无任何 golden 链或 live-only 算法残留，
+仅剩契约类型、展示投影与前端状态。
 
 ## 13. 风险与回退
 
