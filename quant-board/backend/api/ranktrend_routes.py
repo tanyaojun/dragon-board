@@ -54,10 +54,19 @@ def _load_frames_for_analysis(
         })
     if frame_keys:
         wanted = set(frame_keys)
+        # 保留请求帧及其前 3 帧作为横截面基准窗口
+        keys = [f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip() for frame in frames]
+        keep: set[str] = set()
+        for index, key in enumerate(keys):
+            if key in wanted:
+                keep.update(keys[max(0, index - 3):index + 1])
         frames = [
             frame for frame in frames
-            if f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip() in wanted
+            if f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip() in keep
         ]
+    else:
+        # 实时/最新：只保留最后 4 帧（当前帧 + 前 3 帧窗口），避免全量分析超时
+        frames = frames[-4:]
     if not frames:
         raise HTTPException(status_code=503, detail="no frames available for analyze")
     return frames
