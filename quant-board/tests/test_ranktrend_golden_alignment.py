@@ -42,12 +42,6 @@ def test_golden_replay_uses_pure_analysis_candidate_tier_without_hotlist(monkeyp
     engine = RankTrendPythonEngine(RankTrendConfig.from_patch({"minSampleCount": 3}))
     frames = _make_frames()
 
-    monkeypatch.setattr(
-        ranktrend,
-        "compose_strategy",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("golden replay should not call compose_strategy")),
-    )
-
     signals = engine.replay(frames, meta={"sampleQuality": "ok"})
 
     assert signals
@@ -55,6 +49,8 @@ def test_golden_replay_uses_pure_analysis_candidate_tier_without_hotlist(monkeyp
     assert strategy["regime"]["state"] == "strong"
     assert "hotlist" not in strategy
     assert all("热榜情绪" not in reason for reason in strategy["reasons"])
+    execution_strategy = signals[-1]["rankTrend"]["executionStrategy"]
+    assert "candidateTier" in execution_strategy
     assert all("hotlistSentiment" not in frame for frame in frames)
     assert all("hotlistSentimentStatus" not in frame for frame in frames)
     assert all("hotlistSentimentReason" not in frame for frame in frames)
@@ -101,11 +97,11 @@ def test_execution_replay_uses_hotlist_strategy_tier_when_requested() -> None:
     )
 
     assert signals
-    strategy = signals[-1]["rankTrend"]["strategy"]
-    assert strategy["hotlist"]["stage"] == "冰点"
+    execution_strategy = signals[-1]["rankTrend"]["executionStrategy"]
+    assert execution_strategy["hotlist"]["stage"] == "冰点"
     assert all("hotlistSentimentStatus" not in frame for frame in frames)
     assert signals[-1]["candidateTier"] not in {"A_MAIN", "B_IGNITION"}
-    assert any("热榜冰点期" in reason or "暂停入场" in reason for reason in strategy["reasons"])
+    assert any("热榜冰点期" in reason or "暂停入场" in reason for reason in execution_strategy["reasons"])
 
 
 def test_backtest_engine_requests_execution_candidate_tier(monkeypatch) -> None:

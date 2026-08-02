@@ -1,0 +1,58 @@
+from backend.analysis.ranktrend import compose_observation_scores
+from backend.analysis.ranktrend import RankTrendPythonEngine
+
+
+def test_lifecycle_opportunity_weights():
+    result = compose_observation_scores({
+        "technical": {"momentumProfile": {"short": 15, "mid": 15, "acceleration": 8}},
+        "cycle": {
+            "stage": "expansion",
+            "metrics": {"rankPathCommitment": 1.0},
+            "decision": {"action": "allow", "reasons": []},
+        },
+        "risk": {"pressure": 0.0},
+        "decision": {"base": {"signal": "buy", "combinedScore": 0.6}},
+    })
+    assert result["lifecycle"]["stage"] == "expansion"
+    assert result["lifecycle"]["score"] == 100
+    assert result["lifecycle"]["veto"] is False
+    assert result["rankTrend"]["direction"] == "buy"
+    assert result["rankTrend"]["score"] == 60
+
+
+def test_veto_keeps_score_and_marks_reason():
+    result = compose_observation_scores({
+        "technical": {"momentumProfile": {"short": 0, "mid": 0, "acceleration": 0}},
+        "cycle": {
+            "stage": "crowded",
+            "metrics": {"rankPathCommitment": 0.5},
+            "decision": {"action": "veto", "reasons": ["生命周期进入反转路径"]},
+        },
+        "risk": {"pressure": 0.5},
+        "decision": {"base": {"signal": "hold", "combinedScore": 0}},
+    })
+    assert result["lifecycle"]["veto"] is True
+    assert result["lifecycle"]["reasons"] == ["生命周期进入反转路径"]
+
+
+def test_replay_signal_contract_has_observation_and_both_strategies():
+    frames = [{
+        "tradingDate": "2026-08-02",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "stocks": [
+            {"code": "002279", "rank": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+        ],
+        "marketContext": {"sentiment": {"phaseName": "启动"}, "marketStats": {}},
+    }]
+    engine = RankTrendPythonEngine()
+    signals = engine.replay(frames, warmup_count=1)
+    assert len(signals) == 2
+    for signal in signals:
+        rt = signal["rankTrend"]
+        assert {"technical", "cycle", "risk", "decision", "observation", "strategy", "executionStrategy"} <= set(rt)
+        assert "candidateTier" in rt["strategy"]
+        assert "candidateTier" in rt["executionStrategy"]
+        assert "regime" in rt["strategy"]

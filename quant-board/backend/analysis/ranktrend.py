@@ -926,6 +926,54 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     return {"base": {"signal": base, "confidence": confidence, "combinedScore": combined, "scoreMargin": score_margin}, "final": {"signal": final, "confidence": final_conf}}
 
 
+STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
+
+
+def compose_observation_scores(input: dict[str, Any]) -> dict[str, Any]:
+    """生命周期机会成熟度（对齐 TS observationScoreComposer）。
+
+    score = 0.35 * stageFitness + 0.25 * pathCommitment + 0.2 * momentumConfirmation + 0.2 * riskSafety
+    veto 不清零实际成熟度，只保留警示与原因。
+    """
+    momentum = input["technical"]["momentumProfile"]
+    cycle = input["cycle"]
+    risk = input["risk"]
+    base = input["decision"]["base"]
+    signed_score = clamp(float(base.get("combinedScore") or 0), -1, 1)
+    momentum_confirmation = (
+        0.3 * clamp(float(momentum.get("short") or 0) / 15, 0, 1)
+        + 0.45 * clamp(float(momentum.get("mid") or 0) / 15, 0, 1)
+        + 0.25 * clamp(float(momentum.get("acceleration") or 0) / 8, 0, 1)
+    )
+    factors = {
+        "stageFitness": STAGE_FITNESS.get(str(cycle["stage"]), 0.0),
+        "pathCommitment": clamp(float(cycle.get("metrics", {}).get("rankPathCommitment") or 0), 0, 1),
+        "momentumConfirmation": clamp(momentum_confirmation, 0, 1),
+        "riskSafety": 1 - clamp(float(risk.get("pressure") or 0), 0, 1),
+    }
+    lifecycle_score = (
+        0.35 * factors["stageFitness"]
+        + 0.25 * factors["pathCommitment"]
+        + 0.2 * factors["momentumConfirmation"]
+        + 0.2 * factors["riskSafety"]
+    )
+    lifecycle_reasons = cycle.get("decision", {}).get("reasons")
+    return {
+        "rankTrend": {
+            "direction": str(base.get("signal") or "hold"),
+            "score": round(abs(signed_score) * 100),
+            "signedScore": signed_score,
+        },
+        "lifecycle": {
+            "stage": cycle["stage"],
+            "score": round(clamp(lifecycle_score, 0, 1) * 100),
+            "veto": cycle.get("decision", {}).get("action") == "veto",
+            "reasons": list(lifecycle_reasons) if isinstance(lifecycle_reasons, list) else [],
+            "factors": factors,
+        },
+    }
+
+
 def compose_strategy(
     technical: dict[str, Any],
     cycle: dict[str, Any],
@@ -1234,10 +1282,16 @@ class RankTrendPythonEngine:
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
         cycle = analyze_cycle_with_risk(cycle, risk, technical.get("momentumProfile"))
         decision = compose_decision(technical, cycle, risk, self.config)
-        if self._candidate_tier_mode(meta) == "execution":
-            strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
-        else:
-            strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
+        strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
+        execution_strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
+        observation = compose_observation_scores({
+            "technical": technical,
+            "cycle": cycle,
+            "risk": risk,
+            "decision": decision,
+        })
+        # 顶层 candidateTier/action 按 meta 模式选择，保持回测消费兼容；两个分层同时输出
+        tier_source = execution_strategy if self._candidate_tier_mode(meta) == "execution" else strategy
         jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
         sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"
         rank_trend = {
@@ -1265,7 +1319,9 @@ class RankTrendPythonEngine:
             "cycle": cycle,
             "risk": risk,
             "decision": decision,
+            "observation": observation,
             "strategy": strategy,
+            "executionStrategy": execution_strategy,
         }
         return {
             "snapshotId": frame.get("snapshotId"),
@@ -1275,6 +1331,8 @@ class RankTrendPythonEngine:
             "code": code,
             "name": stock.get("name") or code,
             "rank": current_rank,
+            "candidateTier": tier_source["candidateTier"],
+            "action": tier_source["action"],
             "price": stock.get("price"),
             "change": stock.get("change"),
             "volume": stock.get("volume"),
@@ -1302,8 +1360,6 @@ class RankTrendPythonEngine:
             "themeRole": stock.get("themeRole"),
             "themeRiskFlags": stock.get("themeRiskFlags") or [],
             "rankTrend": rank_trend,
-            "candidateTier": strategy["candidateTier"],
-            "action": strategy["action"],
             "stage": cycle["stage"],
             "regime": regime["state"],
             "confidence": decision["final"]["confidence"],
