@@ -229,6 +229,25 @@ src/services/rankTrend/types.ts                       # 契约类型保留
 5. frames API 每帧附 regime。
 6. golden case 由 Python 侧生成，TS 消费校验。
 
+## 9.1 TS 侧 golden 导出引擎废弃（审计补充 2026-08-02）
+
+`src/services/quantBoardGolden/RankTrendGoldenReplayEngine.ts` 当前 import 了将被删除的
+`marketRegimeAnalyzer`、`runRankTrendAnalysisPipeline` 与 `utils.getTechnicalMinSamples`，且仅被
+`runRankTrendAnalysisPipeline.test.ts` 引用。golden 方向反转后，TS 不再承担 golden 生成职责：
+
+- 删除 `src/services/quantBoardGolden/**`（RankTrendGoldenReplayEngine、types 及对应测试引用）；
+- 删除 `runRankTrendAnalysisPipeline.test.ts` 中"TS golden 引擎产出信号"的集成用例；
+- `quant-board/docs/ranktrend-golden.md` 中描述的 TS 导出流程（`window.quantBoardExportRankTrendGolden`）废弃，
+  golden case 改由 Python 生成（见 Phase 7）。
+
+## 9.2 TS 契约类型补充（审计补充 2026-08-02）
+
+- `src/services/rankTrend/types.ts` 的 `RankTrendAnalysisResult.meta` 新增：
+  `analysisSource?: 'py_golden' | 'analysis_unavailable'` 与 `analysisUnavailableReason?: string`；
+- `JumpResult` 类型从 `jumpDetector.ts` 迁移到 `types.ts`（`jumpDetector.ts` 删除后供 `compat.ts`、
+  `jumpSignalService.ts` 与消费方引用），Python `detect_rank_jumps` 输出映射该合同
+  （`event/direction/confidence/events` 字段必须与 TS 消费方兼容）。
+
 ## 10. golden 方向反转与文档合同
 
 P2 落地时同步更新：

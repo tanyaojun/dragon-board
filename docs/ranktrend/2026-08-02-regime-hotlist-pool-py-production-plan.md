@@ -409,17 +409,62 @@ from backend.main import app
 client = TestClient(app)
 
 
-def test_analyze_requires_supported_payload(monkeypatch):
-    monkeypatch.setattr("backend.main.create_repository", lambda *a, **k: None)
+class FakeRepo:
+    def __init__(self, frames):
+        self.frames = frames
+
+    def load_frame_bundles(self, *args, **kwargs):
+        return self.frames
+
+
+def test_analyze_rejects_unsupported_snapshot_type(monkeypatch):
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
     response = client.post("/api/ranktrend/analyze", json={
         "snapshotType": "bad_type",
         "codes": [],
     })
     assert response.status_code == 400
     assert "unsupported snapshot_type" in response.text
+
+
+def test_analyze_returns_py_golden_frames(monkeypatch):
+    frames = [{
+        "tradingDate": "2026-08-02",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "rows": [{"code": "002279", "rank": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1}],
+        "hotlist": [],
+        "stocks": [],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository.create_repository",
+        lambda db, enable_backup=False: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-08-02 14:00"],
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "py_golden"
+    assert len(body["frames"]) == 1
+    assert body["frames"][0]["regime"]["state"] in ("strong", "normal", "weak", "retreat")
 ```
 
-注意：若仓库/缓存不可用，测试应验证 503 或结构化错误（`ok: false` + errorCode），不得返回 200 空结果。
+注意：测试沿用 `quant-board/tests/test_hotlist_sentiment_api.py` 的现有模式（monkeypatch
+`backend.data.repository_factory.get_runtime_mongodb_database` + `create_repository` 返回 FakeRepo）；
+无真实 MongoDB 时不得让用例静默通过或全走 503，必须用 FakeRepo 覆盖成功路径。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -433,7 +478,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.analysis.ranktrend import RankTrendGoldenReplayEngine
+from backend.analysis.ranktrend import RankTrendPythonEngine, market_regime
 from backend.data import repository_factory
 from backend.data.repository import create_repository
 
@@ -452,7 +497,7 @@ def _parse_frame_key(value: str) -> tuple[str, str]:
 @router.post("/api/ranktrend/analyze")
 def analyze_ranktrend(
     payload: dict[str, Any],
-    db=Depends(lambda: repository_factory.get_runtime_database()),
+    db=Depends(lambda: repository_factory.get_runtime_mongodb_database()),
 ) -> dict[str, Any]:
     snapshot_type = str(payload.get("snapshotType") or "half_hour")
     if snapshot_type not in SUPPORTED_SNAPSHOT_TYPES:
@@ -462,52 +507,85 @@ def analyze_ranktrend(
     frame_keys = [str(k) for k in (payload.get("frameKeys") or [])]
     current_frame = payload.get("currentFrame")
     repo = create_repository(db, enable_backup=False)
-    engine = RankTrendGoldenReplayEngine(repo, dataset_id=dataset_id, snapshot_type=snapshot_type)
-    frames = engine.analyze_frames(
-        codes=codes,
-        frame_keys=frame_keys or None,
-        current_frame=current_frame,
-    )
-    return {"ok": True, "frames": frames, "source": "py_golden", "issues": []}
+    engine = RankTrendPythonEngine()
+    raw_frames = _load_frames_for_analysis(repo, dataset_id, snapshot_type, frame_keys, current_frame)
+    frames_out = _analyze_frames(engine, raw_frames, codes)
+    return {"ok": True, "frames": frames_out, "source": "py_golden", "issues": []}
 ```
 
-在 `backend/analysis/ranktrend.py` 的 `RankTrendGoldenReplayEngine` 中新增 `analyze_frames()`：
+在 `backend/api/ranktrend_routes.py` 中实现帧加载与批量分析辅助函数：
 
 ```python
-    def analyze_frames(
-        self,
-        codes: list[str] | None = None,
-        frame_keys: list[str] | None = None,
-        current_frame: dict[str, Any] | None = None,
-        window_size: int = 50,
-    ) -> list[dict[str, Any]]:
-        """批量分析指定帧：返回每帧 regime + 每股 golden 链输出。"""
-        frames = self._load_frames_for_analysis(frame_keys, current_frame)
-        if not frames:
-            raise RuntimeError("no frames available for analyze")
-        output: list[dict[str, Any]] = []
-        for index, frame in enumerate(frames):
-            history_start = max(0, index - window_size + 1)
-            history = frames[history_start:index + 1]
-            regime = market_regime(frame)
-            signals = []
-            for stock in frame.get("stocks", []):
-                code = str(stock.get("code") or "")
-                if codes and code not in codes:
-                    continue
-                signal = self._replay_stock(stock, frame, history, history_start, regime, {})
-                if signal:
-                    signals.append({"code": code, "analysis": signal.get("rankTrend")})
-            output.append({
-                "frameKey": f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip(),
-                "regime": regime,
-                "totalCount": len(frame.get("stocks", [])),
-                "stocks": signals,
-            })
-        return output
+def _to_engine_frame(bundle: dict[str, Any]) -> dict[str, Any]:
+    """把 repository bundle 组装成引擎期望的 frame（含 marketContext）。"""
+    return {
+        "tradingDate": bundle.get("tradingDate"),
+        "slotTime": bundle.get("slotTime"),
+        "type": bundle.get("type"),
+        "timestamp": bundle.get("timestamp"),
+        "stocks": bundle.get("rows") or bundle.get("stocks") or [],
+        "marketContext": {
+            "sentiment": bundle.get("sentiment") or {},
+            "marketStats": bundle.get("marketStats") or {},
+        },
+    }
+
+
+def _load_frames_for_analysis(repo, dataset_id: str, snapshot_type: str, frame_keys: list[str], current_frame: dict[str, Any] | None) -> list[dict[str, Any]]:
+    bundles = repo.load_frame_bundles(
+        dataset_id,
+        snapshot_type=snapshot_type,
+        sort="asc",
+        projection="ranktrend",
+        limit=200,
+    )
+    frames = [_to_engine_frame(b) for b in bundles]
+    if current_frame:
+        frames.append({
+            "tradingDate": current_frame.get("tradingDate"),
+            "slotTime": current_frame.get("slotTime"),
+            "type": snapshot_type,
+            "timestamp": 0,
+            "stocks": current_frame.get("stocks") or [],
+            "marketContext": {
+                "sentiment": current_frame.get("sentiment") or {},
+                "marketStats": current_frame.get("marketStats") or {},
+            },
+        })
+    if frame_keys:
+        wanted = set(frame_keys)
+        frames = [f for f in frames if f"{f.get('tradingDate')} {f.get('slotTime')}".strip() in wanted]
+    if not frames:
+        raise HTTPException(status_code=503, detail="no frames available for analyze")
+    return frames
+
+
+def _analyze_frames(engine: RankTrendPythonEngine, frames: list[dict[str, Any]], codes: list[str]) -> list[dict[str, Any]]:
+    signals_by_frame = engine.replay(frames, warmup_count=1)
+    by_key: dict[str, list[dict[str, Any]]] = {}
+    for signal in signals_by_frame:
+        key = f"{signal.get('tradingDate')} {signal.get('slotTime')}".strip()
+        by_key.setdefault(key, []).append(signal)
+    output: list[dict[str, Any]] = []
+    for frame in frames:
+        key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
+        regime = market_regime(frame)
+        stocks_out = []
+        for signal in by_key.get(key, []):
+            code = str(signal.get("code") or "")
+            if codes and code not in codes:
+                continue
+            stocks_out.append({"code": code, "analysis": signal.get("rankTrend")})
+        output.append({
+            "frameKey": key,
+            "regime": regime,
+            "totalCount": len(frame.get("stocks", [])),
+            "stocks": stocks_out,
+        })
+    return output
 ```
 
-其中 `_load_frames_for_analysis` 负责：有 `current_frame` 时把内存 stocks 组装为最新帧并追加到历史帧之后；`frame_keys` 指定时按 `tradingDate + slotTime` 过滤（可复用 repository 现有 `load_frame_bundles`/`load_rank_series` 能力，逐帧构造 `{tradingDate, slotTime, stocks}` 结构，stocks 字段名与 `_build_signal` 消费一致）。
+注意：`RankTrendPythonEngine`（`backend/analysis/ranktrend.py:1080`）构造只接受 `config`，`replay(frames, ...)` 消费已组装的帧序列；本实现通过 `load_frame_bundles(... projection='ranktrend')` 复用既有 repository 能力，无需新增数据库接口。`_parse_frame_key` 若未使用应删除，避免死代码。
 
 - [ ] **Step 4: main.py 挂载 router**
 
@@ -667,6 +745,7 @@ Expected: PASS。
 
 **Files:**
 - Modify: `src/services/RankTrendAnalyzer.ts`
+- Modify: `src/services/rankTrend/types.ts`（meta 增加分析来源字段）
 - Test: `src/services/__tests__/RankTrendAnalyzer.test.ts`
 
 - [ ] **Step 1: 写失败测试（消费 API + analysisUnavailable）**
@@ -710,6 +789,13 @@ Run: `pnpm exec vitest run src/services/__tests__/RankTrendAnalyzer.test.ts -t "
 Expected: FAIL。
 
 - [ ] **Step 3: 实现消费路径**
+
+先在 `src/services/rankTrend/types.ts` 的 `RankTrendAnalysisResult.meta` 中新增：
+
+```ts
+    analysisSource?: 'py_golden' | 'analysis_unavailable'
+    analysisUnavailableReason?: string
+```
 
 `getRankTrends` 在现有序列组装之后，新增远程分析分支：
 
@@ -812,6 +898,11 @@ Expected: FAIL（当前仍本地重算）。
 
 把 `applyJumpSignals` 内对每只股票的 jump 判定从"基于 percentiles 重算"改为"优先消费 `rankTrend.jump`（Python 输出）；本地重算路径删除"。保留持仓登记/通知/退出逻辑不变。
 
+**jump 字段合同对齐**：Python `detect_rank_jumps` 输出（`event/direction/confidence/events`）直接映射到
+`rankTrend.jump`；`jumpSignalService.evaluateJumpSignal` 的本地 `detectRankJumps` 调用改为消费
+`rankTrend.jump`（事件字段缺失时按 `event: 'none'` 处理）。`compat.ts` 中 `JumpResult` 类型改从
+`types.ts` 导入（JumpResult 定义从 jumpDetector.ts 迁移，见 Phase 6），避免删除 jumpDetector 时断链。
+
 - [ ] **Step 4: 运行确认通过 + 保留 resonance 回归**
 
 Run: `pnpm test:ranktrend --reporter=basic`
@@ -903,31 +994,40 @@ git -C D:\dragon-board commit -m "feat: 观察面板消费 Python regime/分析�
   - `src/services/rankTrend/observationScoreComposer.ts`
   - `src/services/rankTrend/marketRegimeAnalyzer.ts`
   - `src/services/rankTrend/jumpDetector.ts`
+  - `src/services/quantBoardGolden/**`（`RankTrendGoldenReplayEngine.ts`、`types.ts` 等；golden 方向反转后 TS 不再生成 golden，仅被 `runRankTrendAnalysisPipeline.test.ts` 引用）
 - 删除对应的 `__tests__/*.test.ts`（technicalSignalAnalyzer/attentionCycleAnalyzer/riskSignalAnalyzer/candidateTierComposer/executionCandidateTierComposer/resultComposer/observationScoreComposer/marketRegimeAnalyzer/jumpDetector/runRankTrendAnalysisPipeline）。
+- Modify: `src/services/rankTrend/types.ts`（把 `JumpResult` 类型从 `jumpDetector.ts` 迁移至此）
+- Modify: `src/services/rankTrend/compat.ts`（`JumpResult` import 改为 `./types`）
 - Modify: `src/services/rankTrend/utils.ts`（移除仅供 golden 链使用的窗口函数，保留 resonance/jump 需要部分）
 
 **删除约束：** 每次删除一个明确路径的文件（项目禁止批量删除命令）；使用 `git rm` 逐个提交。
 
 - [ ] **Step 1: 先确认没有业务代码再引用被删文件**
 
-Run: `rg -n "runRankTrendAnalysisPipeline|technicalSignalAnalyzer|attentionCycleAnalyzer|riskSignalAnalyzer|candidateTierComposer|executionCandidateTierComposer|resultComposer|observationScoreComposer|marketRegimeAnalyzer|jumpDetector" src --glob '!**/__tests__/**'`
-Expected: 无业务引用（Phase 4/5 已完成消费切换）；如有遗漏引用，先修。
+Run: `rg -n "runRankTrendAnalysisPipeline|technicalSignalAnalyzer|attentionCycleAnalyzer|riskSignalAnalyzer|candidateTierComposer|executionCandidateTierComposer|resultComposer|observationScoreComposer|marketRegimeAnalyzer|jumpDetector|quantBoardGolden" src --glob '!**/__tests__/**'`
+Expected: 无业务引用（Phase 4/5 已完成消费切换，quantBoardGolden 无业务消费）；如有遗漏引用，先修。
 
-- [ ] **Step 2: 逐个删除文件与测试**
+- [ ] **Step 2: 先迁移 JumpResult 类型，再删除 jumpDetector**
+
+把 `jumpDetector.ts` 中的 `JumpResult`（含 `JumpEvent` 等导出类型）定义复制到 `src/services/rankTrend/types.ts`，`compat.ts`/`jumpSignalService.ts` 的 import 改为 `./types`；确认无运行时依赖后删除 `jumpDetector.ts`。
+
+- [ ] **Step 3: 逐个删除文件与测试**
 
 Run（示例，逐个执行）:
 ```powershell
 git -C D:\dragon-board rm src/services/rankTrend/runRankTrendAnalysisPipeline.ts
 git -C D:\dragon-board rm src/services/rankTrend/__tests__/runRankTrendAnalysisPipeline.test.ts
+git -C D:\dragon-board rm src/services/quantBoardGolden/RankTrendGoldenReplayEngine.ts
+git -C D:\dragon-board rm src/services/quantBoardGolden/types.ts
 ```
 
 重复直到清单完成。
 
-- [ ] **Step 3: 清理 utils.ts 只供 golden 的导出**
+- [ ] **Step 4: 清理 utils.ts 只供 golden 的导出**
 
 删除 `getMacdMinSamples/getMomentumMinSamples/getTechnicalMinComputableSamples/getTechnicalMinSamples` 等仅 golden 链使用的函数（先 `rg` 确认无引用）。
 
-- [ ] **Step 4: 全量验证**
+- [ ] **Step 5: 全量验证**
 
 Run: `pnpm test:ranktrend --reporter=basic`
 Expected: 通过；若有遗留测试引用被删模块，删除对应测试。
@@ -971,7 +1071,9 @@ git -C D:\dragon-board commit -m "refactor: 删除 TS 本地 golden 链实现，
 
 - [ ] **Step 2: 更新 quant-board/docs/ranktrend-golden.md**
 
-来源与校验方向反转：golden case 由 Python 生成，TS 消费校验；删除"TS 是唯一 golden 来源"表述。
+来源与校验方向反转：golden case 由 Python 生成，TS 消费校验；删除"TS 是唯一 golden 来源"表述；
+同时删除"通过 DragonBoard TypeScript 端生成 golden"（`window.quantBoardExportRankTrendGolden`）的导出流程描述——
+`src/services/quantBoardGolden/**` 已在 Phase 6 删除。
 
 - [ ] **Step 3: 更新 quant-board/docs/ranktrend-python-port.md**
 
@@ -1039,3 +1141,19 @@ git -C D:\dragon-board commit -m "docs: RankTrend golden 方向反转，Python �
 - 覆盖检查：设计文档 13 节均有对应 Phase/Task（regime 五因子→Phase 1；py 生产/API→Phase 2/3；TS 消费与删除→Phase 4/5/6；golden 反转→Phase 7；验证/回测→Phase 8）。
 - 类型一致性：`analysisSource: 'py_golden' | 'analysis_unavailable'` 字段在 Task 4.2/5.1/5.2 使用一致；`frame.regime` 在 Task 3.2/5.1 一致；Python `compose_observation_scores` 输出键名与 TS observationScoreComposer 一致。
 - 无占位符：所有实现步骤均给出代码或明确改造点；唯一待冻结项（权重/阈值）有明确冻结触发点（Phase 8 Task 8.1 Step 4）。
+
+## 对抗性审计修正记录（2026-08-02，自查 + 审计后修正）
+
+1. **Python 引擎类名/构造修正**：计划原写 `RankTrendGoldenReplayEngine(repo, dataset_id=...)`，实际为
+   `RankTrendPythonEngine(config=None)`，`replay(frames, ...)` 消费已组装帧；Task 3.1 已改为
+   `load_frame_bundles(projection='ranktrend')` + `_to_engine_frame/_load_frames_for_analysis/_analyze_frames`，
+   不再虚构引擎方法。
+2. **TS golden 导出引擎**：`src/services/quantBoardGolden/RankTrendGoldenReplayEngine.ts` 引用将被删除的
+   `marketRegimeAnalyzer`/`runRankTrendAnalysisPipeline`/`utils`；已纳入 Phase 6 删除清单，Phase 7 同步废弃
+   golden.md 的 TS 导出流程。
+3. **meta 类型缺字段**：`RankTrendAnalysisResult.meta` 原无 `analysisSource`；Task 4.2 已补 types.ts 修改。
+4. **compat.ts 断链**：`compat.ts` import `JumpResult` 来自 jumpDetector；Task 4.3/6.1 已明确类型迁移
+   （JumpResult 移到 types.ts）后再删 jumpDetector。
+5. **API 测试模式**：原测试 mock `backend.main.create_repository` 不可行；已改为现有
+   `test_hotlist_sentiment_api.py` 模式（monkeypatch `repository_factory.get_runtime_mongodb_database` +
+   `backend.data.repository.create_repository` 返回 FakeRepo），并覆盖成功路径。
