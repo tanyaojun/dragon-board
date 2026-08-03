@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -33,6 +34,22 @@ class FakeCache:
         self.rows[code] = saved
         return saved
 
+    def put_many(
+        self,
+        rows: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        saved_rows: list[dict[str, object]] = []
+        failures: list[dict[str, object]] = []
+        for row in rows:
+            code = str(row.get("code") or "")
+            if code in self.reject_codes:
+                failures.append({"code": code, "reason": "rejected row for test"})
+                continue
+            saved = {**row, "version": len(self.rows) + 1}
+            self.rows[code] = saved
+            saved_rows.append(saved)
+        return saved_rows, failures
+
 
 class FakeStream:
     def __init__(self, codes: list[str]) -> None:
@@ -44,6 +61,25 @@ class FakeStream:
 
     def publish(self, rows: list[dict[str, object]]) -> None:
         self.published.extend(rows)
+
+
+class BlockableCache(FakeCache):
+    """put() 阻塞直到测试解除，用于模拟 Redis 慢/挂起下的保存超时。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release_puts = threading.Event()
+
+    def put(self, row: dict[str, object]) -> dict[str, object]:
+        self.release_puts.wait(timeout=10)
+        return super().put(row)
+
+    def put_many(
+        self,
+        rows: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        self.release_puts.wait(timeout=10)
+        return super().put_many(rows)
 
 
 class FakeProvider:
@@ -322,3 +358,37 @@ async def test_provider_batch_failures_are_exposed_in_status() -> None:
     assert status["parseFailureCount"] == 1
     assert status["parseFailureSamples"][0]["code"] == "300999"
     assert status["lastRowCount"] == 1
+
+
+@pytest.mark.asyncio
+async def test_save_timeout_keeps_rows_for_retry() -> None:
+    """保存超时进入待重试缓冲，不丢弃原始行；冷却后先重试缓冲再保存新批次。"""
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    box, now = _mutable_clock(current)
+    cache = BlockableCache()
+    stream = FakeStream(["000001", "000002"])
+    provider = FakeProvider()
+    scheduler = _scheduler(
+        provider=provider,
+        now=now,
+        cache=cache,
+        stream=stream,
+        save_timeout_seconds=0.2,
+        systemic_cooldown_seconds=60.0,
+        min_refresh_interval_seconds=30.0,
+        refresh_interval_seconds=300.0,
+    )
+
+    assert await scheduler.run_once() is True
+    assert scheduler._last_error == "save_timeout"
+    assert len(scheduler._pending_save_rows) == 2
+    assert cache.rows == {}
+
+    # 解除阻塞并越过冷却期：下个周期先重试缓冲（2 行），再保存新批次（2 行）
+    cache.release_puts.set()
+    box["current"] = current.replace(minute=current.minute + 5)
+    assert await scheduler.run_once() is True
+    assert scheduler._last_error is None
+    assert scheduler._pending_save_rows == []
+    assert len(cache.rows) == 2
+    assert len(stream.published) == 4

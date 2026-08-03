@@ -48,6 +48,8 @@ class MarketFundScheduler:
         refresh_interval_seconds: float = 300.0,
         systemic_cooldown_seconds: float = 300.0,
         fetch_timeout_seconds: float = 60.0,
+        save_timeout_seconds: float = 30.0,
+        max_pending_save_rows: int = 30000,
         enabled: bool = True,
     ) -> None:
         self.cache = cache
@@ -62,6 +64,8 @@ class MarketFundScheduler:
         )
         self.systemic_cooldown_seconds = max(30.0, float(systemic_cooldown_seconds))
         self.fetch_timeout_seconds = max(10.0, float(fetch_timeout_seconds))
+        self.save_timeout_seconds = max(5.0, float(save_timeout_seconds))
+        self.max_pending_save_rows = max(1000, int(max_pending_save_rows))
         self.enabled = enabled
         self._next_refresh_at = 0.0
         self._circuit_open_until = 0.0
@@ -77,6 +81,8 @@ class MarketFundScheduler:
         self._parse_failure_count = 0
         self._parse_failure_samples: list[dict[str, object]] = []
         self._request_times: list[float] = []
+        self._pending_save_rows: list[dict[str, object]] = []
+        self._pending_save_dropped = 0
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
@@ -157,7 +163,40 @@ class MarketFundScheduler:
             self._last_error = "empty_batch"
             return True
 
-        saved_rows, validation_failures = await self._save_batch(batch)
+        saved_rows: list[dict[str, object]] = []
+        validation_failures: list[dict[str, object]] = []
+
+        # 1) 先重试上次保存超时的原始行：不丢弃、先落地（fail-visible）
+        if self._pending_save_rows:
+            pending = self._pending_save_rows
+            self._pending_save_rows = []
+            try:
+                pending_saved, pending_failures = await asyncio.wait_for(
+                    self._save_rows(pending),
+                    timeout=self.save_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                self._pending_save_rows = self._retain_pending(pending)
+                self._last_error = "save_retry_timeout"
+                self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+                return True
+            saved_rows.extend(pending_saved)
+            validation_failures.extend(pending_failures)
+
+        # 2) 保存本轮新数据：超时进入待重试缓冲，不清空 last-good，下个周期重试
+        try:
+            new_saved, new_failures = await asyncio.wait_for(
+                self._save_batch(batch),
+                timeout=self.save_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            self._pending_save_rows = self._retain_pending(batch.rows)
+            self._last_error = "save_timeout"
+            self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+            return True
+        saved_rows.extend(new_saved)
+        validation_failures.extend(new_failures)
+
         if saved_rows:
             self.stream.publish(saved_rows)
 
@@ -190,19 +229,30 @@ class MarketFundScheduler:
         self,
         batch: AkshareFundBatch,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-        saved_rows: list[dict[str, object]] = []
-        validation_failures: list[dict[str, object]] = []
-        for row in batch.rows:
-            try:
-                saved = await asyncio.to_thread(self.cache.put, dict(row))
-            except ValueError as error:
-                # One malformed row must not block the rest of the batch.
-                validation_failures.append(
-                    {"code": str(row.get("code") or ""), "reason": str(error)}
-                )
-                continue
-            saved_rows.append(saved)
-        return saved_rows, validation_failures
+        return await self._save_rows(batch.rows)
+
+    async def _save_rows(
+        self,
+        rows: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        # 批量 pipeline 写入：单次 to_thread + 单次锁 + 单次 hmget/pipeline/incrby，
+        # 替代逐行 3 次 Redis 往返；非法行由 put_many 以 failures 返回，不阻断其余行。
+        return await asyncio.to_thread(
+            self.cache.put_many,
+            [dict(row) for row in rows],
+        )
+
+    def _retain_pending(
+        self,
+        rows: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """保留待重试行：超上限时丢弃最旧行并计数（全市场刷新成功后会被新数据覆盖）。"""
+        merged = self._pending_save_rows + rows
+        overflow = max(0, len(merged) - self.max_pending_save_rows)
+        if overflow:
+            self._pending_save_dropped += overflow
+            merged = merged[-self.max_pending_save_rows :]
+        return merged
 
     def _resolve_session_date(self, today: date, trading_day: bool) -> str:
         if trading_day:
@@ -241,6 +291,8 @@ class MarketFundScheduler:
             "lastRowCount": self._last_row_count,
             "parseFailureCount": self._parse_failure_count,
             "parseFailureSamples": self._parse_failure_samples,
+            "pendingSaveCount": len(self._pending_save_rows),
+            "pendingSaveDropped": self._pending_save_dropped,
         }
 
     async def _run(self) -> None:

@@ -853,6 +853,8 @@ def get_mongodb_database(
     *,
     connect_timeout_ms: int = 2000,
     server_selection_timeout_ms: int = 2000,
+    socket_timeout_ms: int = 60000,
+    max_pool_size: int = 20,
 ) -> Any:
     if not uri:
         raise RuntimeError("QUANT_BOARD_MONGODB_URI is required for MongoDB migration apply mode")
@@ -865,6 +867,8 @@ def get_mongodb_database(
         uri,
         connectTimeoutMS=connect_timeout_ms,
         serverSelectionTimeoutMS=server_selection_timeout_ms,
+        socketTimeoutMS=socket_timeout_ms,
+        maxPoolSize=max_pool_size,
     )
     client.admin.command("ping")
     return client[database_name]

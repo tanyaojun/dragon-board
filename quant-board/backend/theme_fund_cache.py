@@ -29,6 +29,34 @@ class ThemeFundCache:
 
     def put(self, row: dict[str, object], *, is_final: bool = False) -> dict[str, object]:
         del is_final
+        parsed = self._parse_fund_row(row)
+        if parsed is None:
+            raise ValueError("invalid ths_main_monitor fund row")
+        code, session_date, zlje = parsed
+
+        with self._lock:
+            previous = self._read_latest(code)
+            if previous and self._is_older(row, previous, session_date):
+                return dict(previous)
+            version = self._next_version()
+            stored: dict[str, object] = {
+                **self._build_stored(row, code, session_date, zlje),
+                "version": version,
+            }
+            self._latest[code] = stored
+            self._write_hash(self._key("latest"), code, stored)
+            # 全市场行数据带 TTL：跨进程/跨重启 last-good，过期后自动清理（fail-visible 由进程内兜底）
+            self._touch(self._key("latest"))
+            if len(self._latest) > 1000:
+                today = session_date
+                stale = [c for c, v in self._latest.items() if str(v.get("sessionDate") or "") < today]
+                for c in stale[:100]:
+                    self._latest.pop(c, None)
+            return dict(stored)
+
+    @staticmethod
+    def _parse_fund_row(row: dict[str, object]) -> tuple[str, str, float] | None:
+        """解析并校验单行资金流：返回 (code, session_date, zlje)，非法返回 None。"""
         code = str(row.get("code") or "").strip()
         session_date = str(row.get("sessionDate") or row.get("tradingDate") or "").strip()
         source = str(row.get("moneyFlowSource") or row.get("source") or "").strip()
@@ -42,35 +70,109 @@ class ThemeFundCache:
             or not session_date
             or not math.isfinite(zlje)
         ):
-            raise ValueError("invalid ths_main_monitor fund row")
+            return None
+        return code, session_date, zlje
 
+    @staticmethod
+    def _build_stored(
+        row: dict[str, object],
+        code: str,
+        session_date: str,
+        zlje: float,
+    ) -> dict[str, object]:
+        return {
+            **row,
+            "code": code,
+            "zlje": zlje,
+            "sessionDate": session_date,
+            "tradingDate": session_date,
+            "source": "ths_main_monitor",
+            "moneyFlowSource": "ths_main_monitor",
+            "sourceTs": int(row.get("sourceTs") or 0),
+            "updatedAt": int(row.get("updatedAt") or int(time.time() * 1000)),
+        }
+
+    def put_many(
+        self,
+        rows: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        """批量写入全市场资金流行（单锁 + 单次 hmget + 单次 pipeline）。
+
+        与 ``put`` 逐行语义完全一致：
+        - 更旧的行返回既有行（不覆盖）；
+        - 非法行收集到 ``failures``，不阻断其余行（fail-visible）；
+        - 版本号一次 ``incrby`` 递增，Redis 失败自动回退进程内 last-good。
+        Redis 往返从逐行的 3×N 降到每批 3 次（hmget + pipeline + incrby）。
+        """
+        validated: list[dict[str, object]] = []
+        failures: list[dict[str, object]] = []
+        for row in rows:
+            parsed = self._parse_fund_row(row)
+            if parsed is None:
+                code = str(row.get("code") or "").strip()
+                failures.append({"code": code, "reason": "invalid ths_main_monitor fund row"})
+                continue
+            code, session_date, zlje = parsed
+            validated.append(self._build_stored(row, code, session_date, zlje))
+
+        if not validated:
+            return [], failures
+
+        saved_rows: list[dict[str, object]] = []
+        hash_key = self._key("latest")
         with self._lock:
-            previous = self._read_latest(code)
-            if previous and self._is_older(row, previous, session_date):
-                return dict(previous)
-            version = self._next_version()
-            stored: dict[str, object] = {
-                **row,
-                "code": code,
-                "zlje": zlje,
-                "sessionDate": session_date,
-                "tradingDate": session_date,
-                "source": "ths_main_monitor",
-                "moneyFlowSource": "ths_main_monitor",
-                "sourceTs": int(row.get("sourceTs") or 0),
-                "updatedAt": int(row.get("updatedAt") or int(time.time() * 1000)),
-                "version": version,
-            }
-            self._latest[code] = stored
-            self._write_hash(self._key("latest"), code, stored)
-            # 全市场行数据带 TTL：跨进程/跨重启 last-good，过期后自动清理（fail-visible 由进程内兜底）
-            self._touch(self._key("latest"))
+            # 1) 批量读缺失 code 的最新行（单次 hmget，避免逐行 redis 读）
+            missing_codes = [
+                str(candidate.get("code") or "")
+                for candidate in validated
+                if str(candidate.get("code") or "") not in self._latest
+            ]
+            if missing_codes:
+                for code, value in self._read_hash_many(hash_key, missing_codes).items():
+                    if value.get("moneyFlowSource") == "ths_main_monitor":
+                        self._latest[code] = value
+
+            # 2) 版本号批量递增
+            version = self._next_version_batch(len(validated))
+
+            # 3) 组装并 pipeline 写入
+            pipeline = None
+            if self._redis is not None:
+                try:
+                    pipeline = self._redis.pipeline(transaction=False)
+                except Exception:
+                    pipeline = None
+            today = str(validated[0].get("sessionDate") or "")
+            for candidate in validated:
+                code = str(candidate.get("code") or "")
+                previous = self._latest.get(code)
+                session_date = str(candidate.get("sessionDate") or "")
+                if previous and self._is_older(candidate, previous, session_date):
+                    saved_rows.append(dict(previous))
+                    continue
+                stored: dict[str, object] = {
+                    **candidate,
+                    "version": version,
+                }
+                version += 1
+                self._latest[code] = stored
+                saved_rows.append(dict(stored))
+                if pipeline is not None:
+                    pipeline.hset(hash_key, code, json.dumps(stored, ensure_ascii=False, separators=(",", ":")))
+            if pipeline is not None:
+                try:
+                    pipeline.expire(hash_key, self._ttl_seconds)
+                    pipeline.execute()
+                except Exception:
+                    pass
+
+            # 4) 内存上限维护（与 put 一致）
             if len(self._latest) > 1000:
-                today = session_date
                 stale = [c for c, v in self._latest.items() if str(v.get("sessionDate") or "") < today]
                 for c in stale[:100]:
                     self._latest.pop(c, None)
-            return dict(stored)
+
+        return saved_rows, failures
 
     def get_latest(
         self,
@@ -147,6 +249,23 @@ class ThemeFundCache:
             pass
         self._memory_version += 1
         return self._memory_version
+
+    def _next_version_batch(self, count: int) -> int:
+        """为一批 count 行分配连续版本号，返回起始版本。"""
+        if count <= 0:
+            return self._memory_version + 1
+        try:
+            if self._redis is not None:
+                end_version = int(self._redis.incrby(self._key("version"), count))
+                if end_version - count + 1 <= self._memory_version:
+                    end_version = self._memory_version + count
+                    self._redis.set(self._key("version"), end_version)
+                self._memory_version = max(self._memory_version, end_version)
+                return end_version - count + 1
+        except Exception:
+            pass
+        self._memory_version += count
+        return self._memory_version - count + 1
 
     def _read_latest(self, code: str) -> dict[str, object] | None:
         if code in self._latest:

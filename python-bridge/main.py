@@ -88,6 +88,52 @@ class FastApiWebSocketClient:
         await self.websocket.send_text(message)
 
 
+class _ClientSendQueue:
+    """每客户端独立发送队列：broadcast 只入队（丢旧保新），由后台任务逐条发送。
+
+    慢客户端只影响自己的队列，不再拖拽其他客户端与心跳推送。
+    """
+
+    def __init__(self, client: Any, maxsize: int = 8) -> None:
+        self.client = client
+        self.maxsize = max(1, int(maxsize))
+        self.queue: deque[str] = deque()
+        self.closed = False
+        self.sender_task: asyncio.Task[None] | None = None
+
+    def enqueue(self, message: str) -> None:
+        if self.closed:
+            return
+        if len(self.queue) >= self.maxsize:
+            self.queue.popleft()  # 丢旧保新：行情是快照式消费，旧帧无保留价值
+        self.queue.append(message)
+        if self.sender_task is None or self.sender_task.done():
+            self.sender_task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        try:
+            while self.queue and not self.closed:
+                message = self.queue.popleft()
+                await self.client.send(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # 发送失败视为客户端失效；由 broadcast/清理路径移除
+            self.closed = True
+        finally:
+            self.sender_task = None
+
+    async def close(self) -> None:
+        self.closed = True
+        self.queue.clear()
+        task = self.sender_task
+        self.sender_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 DEFAULT_L2_SERVER_CANDIDATES = (
     "124.71.222.84:7719,"
     "139.9.2.221:7719,"
@@ -598,7 +644,9 @@ class BridgeConfig:
     quote_batch_size: int = env_int("TDX_QUOTE_BATCH_SIZE", 40)
     quote_batch_min_size: int = env_int("TDX_QUOTE_BATCH_MIN_SIZE", 20)
     quote_batch_max_size: int = env_int("TDX_QUOTE_BATCH_MAX_SIZE", 50)
-    quote_batch_delay_ms: int = env_int("TDX_QUOTE_BATCH_DELAY_MS", 40)
+    quote_batch_concurrency: int = env_int("TDX_QUOTE_BATCH_CONCURRENCY", 3)
+    tick_fetch_concurrency: int = env_int("TDX_TICK_FETCH_CONCURRENCY", 4)
+    client_send_queue_maxsize: int = env_int("TDX_CLIENT_SEND_QUEUE_MAXSIZE", 8)
     slow_batch_threshold_ms: int = env_int("TDX_SLOW_BATCH_THRESHOLD_MS", 1200)
     batch_growth_step: int = env_int("TDX_BATCH_GROWTH_STEP", 2)
     batch_shrink_step: int = env_int("TDX_BATCH_SHRINK_STEP", 5)
@@ -658,6 +706,7 @@ class TdxL2Bridge:
         self.config = config
         self.clients: set[Any] = set()
         self.client_pools: dict[Any, list[str]] = {}
+        self.client_queues: dict[Any, _ClientSendQueue] = {}
         self.fetch_lock = asyncio.Lock()
         self.stop_event = asyncio.Event()
         self.quote_client = None
@@ -1737,6 +1786,8 @@ class TdxL2Bridge:
     async def handle_client(self, websocket: Any) -> None:
         self.clients.add(websocket)
         self.client_pools[websocket] = []
+        queue = _ClientSendQueue(websocket, self.config.client_send_queue_maxsize)
+        self.client_queues[websocket] = queue
         try:
             async for message in websocket:
                 data = json.loads(message)
@@ -1760,6 +1811,8 @@ class TdxL2Bridge:
         finally:
             self.clients.discard(websocket)
             self.client_pools.pop(websocket, None)
+            self.client_queues.pop(websocket, None)
+            await queue.close()
             self.full_state_requested = True
 
     def status_snapshot(self) -> dict[str, Any]:
@@ -2268,14 +2321,19 @@ class TdxL2Bridge:
         stale_clients: list[Any] = []
 
         for client in list(self.clients):
-            try:
-                await client.send(message)
-            except Exception:
+            queue = self.client_queues.get(client)
+            if queue is None or queue.closed:
                 stale_clients.append(client)
+                continue
+            # 只入队不等待：慢客户端由自己的发送队列消化，不拖拽其他客户端
+            queue.enqueue(message)
 
         for client in stale_clients:
             self.clients.discard(client)
             self.client_pools.pop(client, None)
+            queue = self.client_queues.pop(client, None)
+            if queue is not None:
+                await queue.close()
 
     def diff_payloads(
         self,
@@ -2366,79 +2424,88 @@ class TdxL2Bridge:
         async with self.fetch_lock:
             await self.ensure_client()
 
-            for batch_index, batch_codes in enumerate(quote_batches):
-                batch_started = now_ms()
-                stats.batches += 1
+            # 分批并发：单批仍受 batch_size 上限约束，但多个 batch 在线程池并行执行，
+            # 整轮行情耗时从“逐批串行 + 批间延时”降为“ceil(批数/并发)×单批耗时”。
+            semaphore = asyncio.Semaphore(max(1, self.config.quote_batch_concurrency))
 
-                try:
-                    def _fetch(batch: list[str] = batch_codes):
-                        assert self.quote_client is not None
-                        return self.quote_client.quotes(symbol=batch)
+            async def _fetch_batch(batch_index: int, batch_codes: list[str]) -> None:
+                async with semaphore:
+                    batch_started = now_ms()
+                    stats.batches += 1
 
-                    frame = await asyncio.to_thread(_fetch)
-                    records = frame_to_records(frame)
-                    batch_elapsed = now_ms() - batch_started
+                    try:
+                        def _fetch(batch: list[str] = batch_codes):
+                            assert self.quote_client is not None
+                            return self.quote_client.quotes(symbol=batch)
 
-                    if batch_elapsed >= self.config.slow_batch_threshold_ms:
-                        stats.slow_batches += 1
+                        frame = await asyncio.to_thread(_fetch)
+                        records = frame_to_records(frame)
+                        batch_elapsed = now_ms() - batch_started
 
-                    record_codes = {
-                        normalize_code(pick(row, "code", "symbol"))
-                        for row in records
-                        if normalize_code(pick(row, "code", "symbol"))
-                    }
-                    missing_codes = [code for code in batch_codes if code not in record_codes]
-                    if missing_codes:
-                        stats.truncated_batches += 1
-                        logger.warning(
-                            "quote batch returned partial data: requested=%s received=%s missing=%s batch_size=%s",
-                            len(batch_codes),
-                            len(record_codes),
-                            ",".join(missing_codes[:8]) + ("..." if len(missing_codes) > 8 else ""),
-                            self.current_quote_batch_size,
-                        )
-                        for missing_code in missing_codes:
-                            try:
-                                def _refetch_one(code: str = missing_code):
-                                    assert self.quote_client is not None
-                                    return self.quote_client.quotes(symbol=[code])
+                        if batch_elapsed >= self.config.slow_batch_threshold_ms:
+                            stats.slow_batches += 1
 
-                                records.extend(frame_to_records(await asyncio.to_thread(_refetch_one)))
-                            except Exception as error:
-                                logger.warning(
-                                    "quote refetch failed: code=%s error=%s",
-                                    missing_code,
-                                    error,
-                                )
-
-                    for row in records:
-                        quote_item = normalize_quote_row(row, captured_ms=batch_started)
-                        if quote_item:
-                            if not is_trading_session_now() and is_placeholder_quote_row(quote_item):
-                                continue
-                            quote_item["speed"] = self.compute_quote_speed(
-                                quote_item["code"],
-                                to_number(quote_item.get("lastPrice")),
-                                to_int(quote_item.get("sourceTs"), now_ms()),
-                                row,
+                        record_codes = {
+                            normalize_code(pick(row, "code", "symbol"))
+                            for row in records
+                            if normalize_code(pick(row, "code", "symbol"))
+                        }
+                        missing_codes = [code for code in batch_codes if code not in record_codes]
+                        if missing_codes:
+                            stats.truncated_batches += 1
+                            logger.warning(
+                                "quote batch returned partial data: requested=%s received=%s missing=%s batch_size=%s",
+                                len(batch_codes),
+                                len(record_codes),
+                                ",".join(missing_codes[:8]) + ("..." if len(missing_codes) > 8 else ""),
+                                self.current_quote_batch_size,
                             )
-                            quotes_by_code[quote_item["code"]] = quote_item
+                            for missing_code in missing_codes:
+                                try:
+                                    def _refetch_one(code: str = missing_code):
+                                        assert self.quote_client is not None
+                                        return self.quote_client.quotes(symbol=[code])
 
-                        depth_item = normalize_depth_row(row)
-                        if depth_item:
-                            depth_by_code[depth_item["code"]] = depth_item
-                except Exception as error:
-                    stats.failed_batches += 1
-                    logger.warning(
-                        "quote batch fetch failed: index=%s size=%s sample=%s error=%s",
-                        batch_index,
-                        len(batch_codes),
-                        ",".join(batch_codes[:5]),
-                        error,
-                    )
+                                    records.extend(frame_to_records(await asyncio.to_thread(_refetch_one)))
+                                except Exception as error:
+                                    logger.warning(
+                                        "quote refetch failed: code=%s error=%s",
+                                        missing_code,
+                                        error,
+                                    )
 
-                if batch_index < len(quote_batches) - 1 and self.config.quote_batch_delay_ms > 0:
-                    await asyncio.sleep(self.config.quote_batch_delay_ms / 1000)
+                        for row in records:
+                            quote_item = normalize_quote_row(row, captured_ms=batch_started)
+                            if quote_item:
+                                if not is_trading_session_now() and is_placeholder_quote_row(quote_item):
+                                    continue
+                                quote_item["speed"] = self.compute_quote_speed(
+                                    quote_item["code"],
+                                    to_number(quote_item.get("lastPrice")),
+                                    to_int(quote_item.get("sourceTs"), now_ms()),
+                                    row,
+                                )
+                                quotes_by_code[quote_item["code"]] = quote_item
+
+                            depth_item = normalize_depth_row(row)
+                            if depth_item:
+                                depth_by_code[depth_item["code"]] = depth_item
+                    except Exception as error:
+                        stats.failed_batches += 1
+                        logger.warning(
+                            "quote batch fetch failed: index=%s size=%s sample=%s error=%s",
+                            batch_index,
+                            len(batch_codes),
+                            ",".join(batch_codes[:5]),
+                            error,
+                        )
+
+            await asyncio.gather(
+                *(
+                    _fetch_batch(batch_index, batch_codes)
+                    for batch_index, batch_codes in enumerate(quote_batches)
+                )
+            )
 
         if self.official_cache_reader and codes:
             try:
@@ -2503,33 +2570,45 @@ class TdxL2Bridge:
 
         async with self.fetch_lock:
             await self.ensure_client()
-            for code in tick_codes:
-                try:
-                    def _fetch():
-                        assert self.quote_client is not None
-                        return self.quote_client.transaction(symbol=code, start=0, offset=self.config.tick_window)
+            semaphore = asyncio.Semaphore(max(1, self.config.tick_fetch_concurrency))
 
-                    frame = await asyncio.to_thread(_fetch)
-                    records = frame_to_records(frame)
-                    normalized = [
-                        item
-                        for item in (normalize_tick_row(code, row) for row in records)
-                        if item
-                    ]
-                    fresh = self.dedupe_ticks(code, normalized)
-                    if fresh:
-                        results.append({"code": code, "items": fresh})
-                except NotImplementedError as error:
-                    self.tick_fetch_supported = False
-                    if not self.tick_fetch_warning_emitted:
-                        self.tick_fetch_warning_emitted = True
-                        logger.warning(
-                            "tick transaction API is not supported by current mootdx/tdxpy runtime; disabling tick fetch: %s",
-                            error,
-                        )
-                    break
-                except Exception as error:
-                    logger.warning("tick fetch failed for %s: %s", code, error)
+            async def _fetch_one(code: str) -> dict[str, Any] | None:
+                async with semaphore:
+                    try:
+                        def _fetch():
+                            assert self.quote_client is not None
+                            return self.quote_client.transaction(
+                                symbol=code, start=0, offset=self.config.tick_window
+                            )
+
+                        frame = await asyncio.to_thread(_fetch)
+                        records = frame_to_records(frame)
+                        normalized = [
+                            item
+                            for item in (normalize_tick_row(code, row) for row in records)
+                            if item
+                        ]
+                        fresh = self.dedupe_ticks(code, normalized)
+                        if fresh:
+                            return {"code": code, "items": fresh}
+                        return None
+                    except NotImplementedError as error:
+                        self.tick_fetch_supported = False
+                        if not self.tick_fetch_warning_emitted:
+                            self.tick_fetch_warning_emitted = True
+                            logger.warning(
+                                "tick transaction API is not supported by current mootdx/tdxpy runtime; disabling tick fetch: %s",
+                                error,
+                            )
+                        return None
+                    except Exception as error:
+                        logger.warning("tick fetch failed for %s: %s", code, error)
+                        return None
+
+            outcomes = await asyncio.gather(*(_fetch_one(code) for code in tick_codes))
+            for outcome in outcomes:
+                if outcome:
+                    results.append(outcome)
 
         return results
 

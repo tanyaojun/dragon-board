@@ -17,6 +17,7 @@ from backend.market_proxy.quotes import get_market_quotes_cache, normalize_stock
 from backend.market_proxy.sentiment import get_sentiment_service
 from backend.market_proxy.surge import get_surge_stock_service
 from backend.market_proxy.xuangubao import get_xuangubao_service
+from backend.volume_ratio_service import compute_volume_ratios
 
 
 router = APIRouter(tags=["market-data"])
@@ -315,3 +316,56 @@ async def xuangubao_events(count: str = "", types: str = ""):
             },
         )
     return JSONResponse(content=payload)
+
+
+@router.post("/api/quotes/volume-ratio", response_model=None)
+def volume_ratio(payload: dict[str, Any]) -> JSONResponse:
+    """量比计算（Python golden，Redis TTL 缓存历史）：前端只消费结果。
+
+    请求体：``{"stocks": [{"code": "600000", "volume": 12345}, ...]}``
+    响应逐 code 返回结构化结果；部分 code 无历史时单独降级，不阻断其他 code。
+    """
+    stocks = payload.get("stocks") if isinstance(payload, dict) else None
+    if not isinstance(stocks, list) or not stocks:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "errorCode": "missing_stocks",
+                "message": "缺少 stocks 参数",
+                "items": {},
+            },
+        )
+    from backend.data import repository_factory
+
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "errorCode": "storage_unavailable",
+                "message": str(exc)[:200],
+                "items": {},
+            },
+        )
+    try:
+        items = compute_volume_ratios(db, stocks)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "errorCode": "volume_ratio_unavailable",
+                "message": str(exc)[:200],
+                "items": {},
+            },
+        )
+    return JSONResponse(
+        content={
+            "ok": True,
+            "source": "quantboard_volume_ratio",
+            "items": items,
+        }
+    )

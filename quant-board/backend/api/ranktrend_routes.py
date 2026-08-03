@@ -191,6 +191,7 @@ def _analyze_frames(
                 },
             })
             analysis["resonance"] = resonance
+            _apply_resonance_final(analysis, resonance)
             stocks_out.append({"code": code, "analysis": analysis})
         output.append({
             "frameKey": key,
@@ -202,6 +203,25 @@ def _analyze_frames(
             "stocks": stocks_out,
         })
     return output
+
+
+def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) -> None:
+    """resonance 下沉：最终信号 = resonance 方向/分数（对齐旧 TS applyResonanceFinals）。
+
+    Python golden 直接输出融合后的 ``decision.final``，前端只读不再覆盖。
+    口径：resonance insufficient → hold/0；否则 final = resonance 方向/分数。
+    """
+    decision = analysis.get("decision")
+    if not isinstance(decision, dict):
+        return
+    status = str(resonance.get("status") or "")
+    if status == "insufficient":
+        decision["final"] = {"signal": "hold", "confidence": 0}
+        return
+    direction = str(resonance.get("direction") or "")
+    score = resonance.get("score")
+    if direction and score is not None:
+        decision["final"] = {"signal": direction, "confidence": float(score)}
 
 
 def _percentile(rank: float, total_count: int) -> float:

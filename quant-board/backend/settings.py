@@ -104,6 +104,11 @@ class Settings(BaseModel):
     mongodb_database: str = Field(default="dragon_board_quant")
     mongodb_connect_timeout_ms: int = Field(default=2000)
     mongodb_server_selection_timeout_ms: int = Field(default=2000)
+    # 单次 Mongo 读写的 socket 超时：不能设太小——RankTrend analyze 等重读
+    # 一次要跨集合拉 200 帧 + 数十万行，3s 会被 NetworkTimeout 掐断导致 500。
+    # 60s 既能兜住死连接挂起，也容得下本地大查询。
+    mongodb_socket_timeout_ms: int = Field(default=60000)
+    mongodb_max_pool_size: int = Field(default=20)
     mongodb_backup_dir: Path = BASE_DIR / "data" / "backups" / "mongodb"
     mongodb_backup_retention_days: int = Field(default=30)
     storage_backend: str = Field(default="sqlite")
@@ -287,6 +292,17 @@ class Settings(BaseModel):
                 "QUANT_BOARD_MONGODB_SERVER_SELECTION_TIMEOUT_MS",
                 self.mongodb_server_selection_timeout_ms,
             ),
+        )
+        self.mongodb_socket_timeout_ms = max(
+            100,
+            _env_int(
+                "QUANT_BOARD_MONGODB_SOCKET_TIMEOUT_MS",
+                self.mongodb_socket_timeout_ms,
+            ),
+        )
+        self.mongodb_max_pool_size = max(
+            1,
+            _env_int("QUANT_BOARD_MONGODB_MAX_POOL_SIZE", self.mongodb_max_pool_size),
         )
         mongodb_backup_dir = os.environ.get("QUANT_BOARD_MONGODB_BACKUP_DIR")
         if mongodb_backup_dir:

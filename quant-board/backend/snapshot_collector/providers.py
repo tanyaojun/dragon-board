@@ -19,13 +19,13 @@ import json
 import math
 import re
 import time
-import urllib.error
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 from urllib.parse import quote, urlencode
+
+import httpx
 
 from backend.theme_fund_cache import ThemeFundCache
 
@@ -75,6 +75,42 @@ _HOTLIST_WEIGHTS = {
 
 _LIMIT_UP_POOL_KEYS = ("one", "two", "three", "four", "high", "failed", "rushing", "drawdown")
 _TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+# 共享同步 HTTP 客户端与线程池：providers 由 asyncio.to_thread(service.run_once) 串行调用，
+# 但批内请求可并行；复用同一客户端/线程池避免每次 collect 新建线程池（线程抖动）。
+_PROXY_HTTP_TIMEOUT_SECONDS = 30.0
+_COLLECTOR_THREAD_POOL: ThreadPoolExecutor | None = None
+_PROXY_HTTP_CLIENT: httpx.Client | None = None
+
+
+def _get_collector_thread_pool() -> ThreadPoolExecutor:
+    global _COLLECTOR_THREAD_POOL
+    if _COLLECTOR_THREAD_POOL is None:
+        _COLLECTOR_THREAD_POOL = ThreadPoolExecutor(
+            max_workers=8,
+            thread_name_prefix="snapshot-collector",
+        )
+    return _COLLECTOR_THREAD_POOL
+
+
+def _get_proxy_http_client() -> httpx.Client:
+    global _PROXY_HTTP_CLIENT
+    if _PROXY_HTTP_CLIENT is None:
+        _PROXY_HTTP_CLIENT = httpx.Client(timeout=_PROXY_HTTP_TIMEOUT_SECONDS)
+    return _PROXY_HTTP_CLIENT
+
+
+def close_collector_http() -> None:
+    """关闭共享客户端与线程池（FastAPI shutdown / CLI 退出时调用）。"""
+    global _PROXY_HTTP_CLIENT, _COLLECTOR_THREAD_POOL
+    client = _PROXY_HTTP_CLIENT
+    _PROXY_HTTP_CLIENT = None
+    if client is not None:
+        client.close()
+    pool = _COLLECTOR_THREAD_POOL
+    _COLLECTOR_THREAD_POOL = None
+    if pool is not None:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -136,26 +172,28 @@ def _normalize_stock_code(value: Any) -> str:
 def _http_get_json(url: str, timeout_s: float) -> Any:
     """Perform a GET request and return the parsed JSON body.
 
-    Raises ``urllib.error.URLError`` or ``ValueError`` on failure.
+    Raises ``httpx.HTTPError`` / ``ValueError`` on failure.
     """
-    req = urllib.request.Request(url, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        body = resp.read()
-    return json.loads(body.decode("utf-8"))
+    response = _get_proxy_http_client().get(url, timeout=timeout_s)
+    response.raise_for_status()
+    return response.json()
 
 
 def _http_post_json(url: str, timeout_s: float, payload: Any = None) -> Any:
     """Perform a POST request and return the parsed JSON body.
 
     When *payload* is provided it is sent as a JSON-encoded body.
-    Raises ``urllib.error.URLError`` or ``ValueError`` on failure.
+    Raises ``httpx.HTTPError`` / ``ValueError`` on failure.
     """
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    headers = {"Content-Type": "application/json"} if data else {}
-    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        body = resp.read()
-    return json.loads(body.decode("utf-8"))
+    headers = {"Content-Type": "application/json"} if payload is not None else None
+    response = _get_proxy_http_client().post(
+        url,
+        content=json.dumps(payload) if payload is not None else None,
+        headers=headers,
+        timeout=timeout_s,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 class _BatchedProxyProvider:
@@ -211,37 +249,38 @@ class _BatchedProxyProvider:
         errors: list[str] = []
 
         if batches:
-            with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
-                for wave_start in range(0, len(batches), self._max_concurrency):
-                    wave = list(enumerate(
-                        batches[wave_start : wave_start + self._max_concurrency],
-                        start=wave_start,
-                    ))
-                    futures = {
-                        pool.submit(self._collect_batch, index, batch, timeout_ms): index
-                        for index, batch in wave
-                    }
-                    wave_failures = 0
-                    for future in as_completed(futures):
-                        index = futures[future]
-                        try:
-                            batch_rows = future.result()
-                            rows.update(batch_rows)
-                        except Exception as exc:
-                            wave_failures += 1
-                            failed_batches.append(index)
-                            errors.append(str(exc))
-                    if self.stop_on_systemic_failure and not rows and wave_failures == len(wave):
-                        remaining_start = wave_start + len(wave)
-                        failed_batches.extend(range(remaining_start, len(batches)))
-                        errors.append("upstream unavailable; remaining batches skipped")
-                        break
+            # 复用共享线程池：避免每次 collect 新建/销毁线程池
+            pool = _get_collector_thread_pool()
+            for wave_start in range(0, len(batches), self._max_concurrency):
+                wave = list(enumerate(
+                    batches[wave_start : wave_start + self._max_concurrency],
+                    start=wave_start,
+                ))
+                futures = {
+                    pool.submit(self._collect_batch, index, batch, timeout_ms): index
+                    for index, batch in wave
+                }
+                wave_failures = 0
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        batch_rows = future.result()
+                        rows.update(batch_rows)
+                    except Exception as exc:
+                        wave_failures += 1
+                        failed_batches.append(index)
+                        errors.append(str(exc))
+                if self.stop_on_systemic_failure and not rows and wave_failures == len(wave):
                     remaining_start = wave_start + len(wave)
-                    elapsed_ms = int((time.monotonic() - started) * 1000)
-                    if remaining_start < len(batches) and elapsed_ms >= self._collection_timeout_ms:
-                        failed_batches.extend(range(remaining_start, len(batches)))
-                        errors.append("collection timeout; remaining batches skipped")
-                        break
+                    failed_batches.extend(range(remaining_start, len(batches)))
+                    errors.append("upstream unavailable; remaining batches skipped")
+                    break
+                remaining_start = wave_start + len(wave)
+                elapsed_ms = int((time.monotonic() - started) * 1000)
+                if remaining_start < len(batches) and elapsed_ms >= self._collection_timeout_ms:
+                    failed_batches.extend(range(remaining_start, len(batches)))
+                    errors.append("collection timeout; remaining batches skipped")
+                    break
 
         returned_count = sum(code in rows for code in requested_codes)
         requested_count = len(requested_codes)
@@ -1034,16 +1073,8 @@ class BridgeQuoteProvider:
         """
         try:
             url = f"{self._base_url}/api/quotes/subscriptions"
-            payload = json.dumps({"codes": codes}).encode("utf-8")
             timeout_s = timeout_ms / 1000.0
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                method="POST",
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-                body = json.loads(resp.read().decode("utf-8"))
+            body = _http_post_json(url, timeout_s, {"codes": codes})
             return {
                 "ok": body.get("ok", False),
                 "count": body.get("count", 0),
@@ -1103,7 +1134,7 @@ class BridgeQuoteProvider:
                     raise ValueError("no valid codes after filtering")
                 url = (
                     f"{self._base_url}/api/quotes/snapshot"
-                    f"?codes={urllib.request.quote(codes_param, safe='')}"
+                    f"?codes={quote(codes_param, safe='')}"
                 )
 
             timeout_s = timeout_ms / 1000.0
@@ -1354,24 +1385,25 @@ class ThemeMappingProvider:
             result: dict[str, list[str]] = {}
             failed_count = 0
             first_error: str = ""
-            for code in codes:
+            pool = _get_collector_thread_pool()
+            futures = {
+                pool.submit(self._map_one, str(code).strip()): code
+                for code in codes
+            }
+            for future in as_completed(futures):
+                code = futures[future]
                 key = str(code).strip()
                 if not key:
                     result[key or code] = []
                     failed_count += 1
                     continue
                 try:
-                    stock_data = self._repo.get_stock_themes(key)
-                    theme_items = stock_data.get("themes", [])
-                    if isinstance(theme_items, list):
-                        themes = [
-                            str(t.get("name") or t.get("id") or "")
-                            for t in theme_items
-                            if isinstance(t, dict)
-                        ]
-                    else:
-                        themes = []
+                    themes, error = future.result()
                     result[key] = themes
+                    if error:
+                        failed_count += 1
+                        if not first_error:
+                            first_error = error
                 except Exception as exc:
                     result[key] = []
                     failed_count += 1
@@ -1404,6 +1436,25 @@ class ThemeMappingProvider:
                 captured_at=_iso_now(),
             )
             return {}, health
+
+    def _map_one(self, key: str) -> tuple[list[str], str | None]:
+        """单 code 题材映射：返回 (themes, error)；异常不阻断其他 code。"""
+        if not key:
+            return [], None
+        try:
+            stock_data = self._repo.get_stock_themes(key)
+            theme_items = stock_data.get("themes", [])
+            if isinstance(theme_items, list):
+                themes = [
+                    str(t.get("name") or t.get("id") or "")
+                    for t in theme_items
+                    if isinstance(t, dict)
+                ]
+            else:
+                themes = []
+            return themes, None
+        except Exception as exc:
+            return [], str(exc)
 
 
 class MarketFundCacheProvider:

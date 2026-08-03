@@ -32,6 +32,8 @@ def get_runtime_mongodb_database() -> Any:
             settings.mongodb_database,
             connect_timeout_ms=settings.mongodb_connect_timeout_ms,
             server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
+            socket_timeout_ms=settings.mongodb_socket_timeout_ms,
+            max_pool_size=settings.mongodb_max_pool_size,
         )
     return _runtime_mongodb_database
 

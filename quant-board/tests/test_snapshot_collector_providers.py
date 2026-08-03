@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
-import urllib.request
+from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import backend.snapshot_collector.providers as providers_module
 from backend.snapshot_collector.models import MarketDataContext, SourceHealth
 from backend.snapshot_collector.providers import (
     BridgeQuoteProvider,
@@ -30,26 +30,86 @@ from backend.snapshot_collector.providers import (
 from backend.theme_fund_cache import ThemeFundCache
 
 
-# ── Fake HTTP response builder ──────────────────────────────────────────────
+# ── Fake httpx client / response builder ────────────────────────────────────
 
 
-def _fake_urlopen_response(data: dict[str, Any], status: int = 200) -> MagicMock:
-    """Build a MagicMock that behaves like urlopen context manager."""
-    body_bytes = json.dumps(data).encode("utf-8")
-    mock_resp = MagicMock()
-    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    mock_resp.read.return_value = body_bytes
-    mock_resp.status = status
-    return mock_resp
+class _FakeHttpxResponse:
+    def __init__(self, data: Any, status: int = 200) -> None:
+        self._data = data
+        self._status = status
+
+    def raise_for_status(self) -> None:
+        if self._status >= 400:
+            raise RuntimeError(f"HTTP {self._status}")
+
+    def json(self) -> Any:
+        return self._data
 
 
-def _fake_urlopen_raise(exception: Exception) -> MagicMock:
-    """Build a MagicMock whose __enter__ raises the given exception."""
-    mock_resp = MagicMock()
-    mock_resp.__enter__ = MagicMock(side_effect=exception)
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    return mock_resp
+class _FakeHttpxClient:
+    """假 httpx.Client：get/post 按 responder/responses/data 返回 JSON 响应。"""
+
+    def __init__(
+        self,
+        *,
+        data: Any = None,
+        status: int = 200,
+        fail_with: Exception | None = None,
+        responder=None,
+        responses: list[Any] | None = None,
+    ) -> None:
+        self._data = data
+        self._status = status
+        self.fail_with = fail_with
+        self.responder = responder
+        self.responses = list(responses) if responses is not None else None
+        self.calls: list[tuple[str, str]] = []
+
+    def get(self, url: str, **_kwargs: Any) -> _FakeHttpxResponse:
+        self.calls.append(("GET", url))
+        return self._respond(url)
+
+    def post(self, url: str, **_kwargs: Any) -> _FakeHttpxResponse:
+        self.calls.append(("POST", url))
+        return self._respond(url)
+
+    def _respond(self, url: str) -> _FakeHttpxResponse:
+        if self.fail_with is not None:
+            raise self.fail_with
+        if self.responder is not None:
+            return _FakeHttpxResponse(self.responder(url), self._status)
+        if self.responses is not None:
+            if not self.responses:
+                return _FakeHttpxResponse({}, self._status)
+            item = self.responses.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return _FakeHttpxResponse(item, self._status)
+        return _FakeHttpxResponse(self._data, self._status)
+
+    def close(self) -> None:
+        return None
+
+
+def _fake_urlopen_response(data: dict[str, Any], status: int = 200) -> _FakeHttpxClient:
+    """兼容旧测试命名：返回可被 _get_proxy_http_client 替换的假客户端。"""
+    return _FakeHttpxClient(data=data, status=status)
+
+
+def _fake_urlopen_raise(exception: Exception) -> _FakeHttpxClient:
+    return _FakeHttpxClient(fail_with=exception)
+
+
+@contextmanager
+def _mock_http_client(*, responses=None, responder=None, fail_with=None):
+    """把 providers 的共享 httpx 客户端替换为假客户端。"""
+    client = _FakeHttpxClient(
+        responses=list(responses) if responses is not None else None,
+        responder=responder,
+        fail_with=fail_with,
+    )
+    with patch.object(providers_module, "_get_proxy_http_client", return_value=client):
+        yield client
 
 
 # ── Fake theme repository ───────────────────────────────────────────────────
@@ -375,7 +435,7 @@ class TestTencentBasicQuoteProvider:
     def test_empty_codes_report_no_data_without_requesting_upstream(self) -> None:
         provider = TencentBasicQuoteProvider(base_url=PROXY_BASE_URL)
 
-        with patch.object(urllib.request, "urlopen") as urlopen:
+        with patch.object(providers_module, "_get_proxy_http_client") as urlopen:
             rows, health = provider.collect([], timeout_ms=5000)
 
         urlopen.assert_not_called()
@@ -397,7 +457,7 @@ class TestStartupBundleStockProvider:
     def test_collect_reads_complete_merged_stocks_from_startup_bundle(self) -> None:
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         mock_resp = _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is True
@@ -416,7 +476,7 @@ class TestStartupBundleStockProvider:
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         mock_resp = _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
 
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.details["rankProvenance"]["platformTotals"] == {
@@ -442,7 +502,7 @@ class TestStartupBundleStockProvider:
         body["data"]["stocks"][2]["emRank"] = 5
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
 
-        with patch.object(urllib.request, "urlopen", return_value=_fake_urlopen_response(body)):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=_fake_urlopen_response(body)):
             stocks, _ = provider.collect(timeout_ms=5000)
 
         absent = next(stock for stock in stocks if stock["code"] == "300001")
@@ -456,7 +516,7 @@ class TestStartupBundleStockProvider:
         })
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
 
-        with patch.object(urllib.request, "urlopen", return_value=_fake_urlopen_response(body)):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=_fake_urlopen_response(body)):
             stocks, _ = provider.collect(timeout_ms=5000)
 
         ping_an = next(stock for stock in stocks if stock["code"] == "000001")
@@ -468,11 +528,11 @@ class TestStartupBundleStockProvider:
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
         captured_urls: list[str] = []
 
-        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
-            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
-            return _fake_urlopen_response(STARTUP_BUNDLE_RESPONSE)
+        def record_http(url: str) -> Any:
+            captured_urls.append(url)
+            return STARTUP_BUNDLE_RESPONSE
 
-        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+        with _mock_http_client(responder=record_http):
             provider.collect(timeout_ms=5000)
 
         assert len(captured_urls) == 1
@@ -482,7 +542,7 @@ class TestStartupBundleStockProvider:
     def test_missing_bundle_returns_failing_health(self) -> None:
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         mock_resp = _fake_urlopen_response({"ok": True, "data": None})
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert stocks == []
@@ -495,7 +555,7 @@ class TestStartupBundleStockProvider:
         body["data"].pop("snapshotContext")
         provider = StartupBundleStockProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
 
-        with patch.object(urllib.request, "urlopen", return_value=_fake_urlopen_response(body)):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=_fake_urlopen_response(body)):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert len(stocks) == 3
@@ -515,7 +575,7 @@ class TestProxyHotlistProviderNormalization:
     def test_normalizes_stock_codes(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is True
@@ -528,11 +588,10 @@ class TestProxyMergedHotlistProviderRankProvenance:
     def test_collect_preserves_raw_platform_ranks_and_formula_inputs(self) -> None:
         provider = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
 
-        def respond(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
-            del timeout
-            return _fake_urlopen_response(_hotlist_response_for_url(req.full_url))
+        def respond(url: str) -> Any:
+            return _hotlist_response_for_url(url)
 
-        with patch.object(urllib.request, "urlopen", side_effect=respond):
+        with _mock_http_client(responder=respond):
             stocks, health = provider.collect(timeout_ms=5000)
 
         ping_an = next(stock for stock in stocks if stock["code"] == "000001")
@@ -555,7 +614,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
     def test_normalized_fields_match_expected(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         row0 = stocks[0]
@@ -572,7 +631,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
     def test_all_stocks_have_required_fields(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         required = {"code", "name", "rank", "price", "pctChange", "volume", "amount", "turnover", "heat"}
@@ -583,7 +642,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
     def test_empty_data_returns_empty_list(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response({"data": []})
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is True
@@ -593,7 +652,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
     def test_missing_data_key_returns_empty(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response({"other": [{"c": "000001"}]})
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is True
@@ -608,7 +667,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
             ]
         }
         mock_resp = _fake_urlopen_response(body)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert len(stocks) == 1
@@ -623,7 +682,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
             ]
         }
         mock_resp = _fake_urlopen_response(body)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert len(stocks) == 1
@@ -632,7 +691,7 @@ class TestProxyMergedHotlistProviderRankProvenance:
     def test_health_contains_latency(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             _, health = provider.collect(timeout_ms=5000)
 
         assert health.latency_ms >= 0
@@ -644,8 +703,8 @@ class TestProxyHotlistProviderErrors:
 
     def test_http_error_returns_failing_health(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
-        mock_resp = _fake_urlopen_raise(urllib.error.URLError("connection refused"))
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        mock_resp = _fake_urlopen_raise(RuntimeError("connection refused"))
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is False
@@ -657,7 +716,7 @@ class TestProxyHotlistProviderErrors:
         """Provider timeout returns structured health and does not raise."""
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_raise(TimeoutError("timed out"))
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is False
@@ -668,7 +727,7 @@ class TestProxyHotlistProviderErrors:
         """Provider timeout must NOT propagate exception to caller."""
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_raise(TimeoutError("timed out"))
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             # Must not raise
             stocks, health = provider.collect(timeout_ms=5000)
 
@@ -676,11 +735,7 @@ class TestProxyHotlistProviderErrors:
 
     def test_invalid_json_returns_failing_health(self) -> None:
         provider = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.read.return_value = b"not json"
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with _mock_http_client(fail_with=ValueError("not json")):
             stocks, health = provider.collect(timeout_ms=5000)
 
         assert health.ok is False
@@ -698,7 +753,7 @@ class TestBridgeQuoteProviderNormalization:
     def test_normalizes_quotes(self) -> None:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is True
@@ -712,7 +767,7 @@ class TestBridgeQuoteProviderNormalization:
     def test_normalizes_depth(self) -> None:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         depth = data["depth"]
@@ -724,7 +779,7 @@ class TestBridgeQuoteProviderNormalization:
     def test_ignores_bridge_http_money_flow(self) -> None:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert data["money_flow"] == []
@@ -732,7 +787,7 @@ class TestBridgeQuoteProviderNormalization:
     def test_normalizes_market_meta(self) -> None:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         meta = data["market_meta"]
@@ -743,7 +798,7 @@ class TestBridgeQuoteProviderNormalization:
     def test_empty_codes_returns_empty(self) -> None:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect([], timeout_ms=5000)
 
         assert health.ok is True
@@ -754,11 +809,11 @@ class TestBridgeQuoteProviderNormalization:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         captured_urls: list[str] = []
 
-        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
-            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
-            return _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
+        def record_http(url: str) -> Any:
+            captured_urls.append(url)
+            return BRIDGE_SNAPSHOT_RESPONSE
 
-        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+        with _mock_http_client(responder=record_http):
             provider.collect(["000001", "600000"], timeout_ms=5000)
 
         assert len(captured_urls) == 1
@@ -773,7 +828,7 @@ class TestBridgeQuoteProviderErrors:
         """bridge offline returns SourceHealth(ok=False, error=...)."""
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_response(BRIDGE_OFFLINE_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is False
@@ -783,8 +838,8 @@ class TestBridgeQuoteProviderErrors:
 
     def test_bridge_http_error_returns_failing_health(self) -> None:
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
-        mock_resp = _fake_urlopen_raise(urllib.error.URLError("connection refused"))
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        mock_resp = _fake_urlopen_raise(RuntimeError("connection refused"))
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is False
@@ -794,7 +849,7 @@ class TestBridgeQuoteProviderErrors:
         """Provider timeout must NOT propagate exception."""
         provider = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         mock_resp = _fake_urlopen_raise(TimeoutError("timed out"))
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is False
@@ -813,7 +868,7 @@ class TestBridgeQuoteProviderErrors:
             "quoteStats": {},
         }
         mock_resp = _fake_urlopen_response(offline_body)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is False
@@ -828,7 +883,7 @@ class TestBridgeQuoteProviderErrors:
             "quoteStats": {},
         }
         mock_resp = _fake_urlopen_response(body_without_ok)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             data, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is True
@@ -918,11 +973,10 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx = collect_market_context(
@@ -960,11 +1014,10 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx = collect_market_context(
@@ -979,11 +1032,10 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx = collect_market_context(
@@ -997,11 +1049,10 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx = collect_market_context(
@@ -1016,11 +1067,10 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx = collect_market_context(
@@ -1036,11 +1086,10 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx = collect_market_context(
@@ -1057,13 +1106,13 @@ class TestCollectMarketContext:
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
         captured_urls: list[str] = []
 
-        def record_urlopen(req: urllib.request.Request, timeout: float = 0) -> MagicMock:
-            captured_urls.append(req.full_url if hasattr(req, "full_url") else str(req))
+        def record_http(url: str) -> Any:
+            captured_urls.append(url)
             if len(captured_urls) == 1:
-                return _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
-            return _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE)
+                return EASTMONEY_HOTLIST_RESPONSE
+            return BRIDGE_SNAPSHOT_RESPONSE
 
-        with patch.object(urllib.request, "urlopen", side_effect=record_urlopen):
+        with _mock_http_client(responder=record_http):
             ctx = collect_market_context([hotlist, bridge, theme], [], timeout_ms=5000)
 
         assert len(ctx.stocks) == 3
@@ -1078,11 +1127,10 @@ class TestCollectMarketContext:
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
         # Bridge fails, hotlist succeeds
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_raise(urllib.error.URLError("offline")),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                RuntimeError("offline"),
             ],
         ):
             ctx = collect_market_context(
@@ -1109,22 +1157,20 @@ class TestCollectMarketContext:
         bridge = BridgeQuoteProvider(base_url=BRIDGE_BASE_URL)
         theme = ThemeMappingProvider(FakeThemeRepo(THEME_MAP))
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                EASTMONEY_HOTLIST_RESPONSE,
+                BRIDGE_SNAPSHOT_RESPONSE,
             ],
         ):
             ctx_ordered = collect_market_context(
                 [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
             )
 
-        with patch.object(
-            urllib.request, "urlopen",
-            side_effect=[
-                _fake_urlopen_response(BRIDGE_SNAPSHOT_RESPONSE),
-                _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE),
+        with _mock_http_client(
+            responses=[
+                BRIDGE_SNAPSHOT_RESPONSE,
+                EASTMONEY_HOTLIST_RESPONSE,
             ],
         ):
             ctx_reversed = collect_market_context(
@@ -1138,7 +1184,7 @@ class TestCollectMarketContext:
     def test_default_timeout_is_used(self) -> None:
         hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
         mock_resp = _fake_urlopen_response(EASTMONEY_HOTLIST_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             _, health = hotlist.collect()
 
         assert health.ok is True
@@ -1155,7 +1201,7 @@ class TestProxyLimitUpProvider:
     def test_collect_maps_limitup_pool_fields_by_code(self) -> None:
         provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         mock_resp = _fake_urlopen_response(THS_LIMIT_UP_POOLS_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is True
@@ -1178,7 +1224,7 @@ class TestProxyLimitUpProvider:
     def test_collect_filters_to_requested_codes(self) -> None:
         provider = ProxyLimitUpProvider(base_url=PROXY_BASE_URL, trading_date="2026-06-23")
         mock_resp = _fake_urlopen_response(THS_LIMIT_UP_POOLS_RESPONSE)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             rows, health = provider.collect(["000001"], timeout_ms=5000)
 
         assert health.ok is True
@@ -1195,7 +1241,7 @@ class TestProxyLimitUpProvider:
             "pools": {},
         }
         mock_resp = _fake_urlopen_response(degraded)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert rows == []
@@ -1211,7 +1257,7 @@ class TestProxyLimitUpProvider:
             "pools": THS_LIMIT_UP_POOLS_RESPONSE["pools"],
         }
         mock_resp = _fake_urlopen_response(degraded)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         assert health.ok is False
@@ -1246,7 +1292,7 @@ class TestProxyLimitUpProvider:
             },
         }
         mock_resp = _fake_urlopen_response(response)
-        with patch.object(urllib.request, "urlopen", return_value=mock_resp):
+        with patch.object(providers_module, "_get_proxy_http_client", return_value=mock_resp):
             rows, health = provider.collect(TEST_CODES, timeout_ms=5000)
 
         by_code = {row["code"]: row for row in rows}

@@ -142,6 +142,9 @@ async def on_shutdown() -> None:
     await close_sentiment_client()
     await close_surge_client()
     await close_xuangubao_client()
+    from backend.snapshot_collector.providers import close_collector_http
+
+    close_collector_http()
     await close_ths_main_monitor_service()
 
 

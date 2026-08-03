@@ -6,6 +6,28 @@ import pytest
 from backend.theme_fund_cache import ThemeFundCache
 
 
+class FakePipeline:
+    def __init__(self, redis: "FakeRedis") -> None:
+        self.redis = redis
+        self.commands: list[tuple] = []
+
+    def hset(self, key: str, field: str, value: str) -> "FakePipeline":
+        self.commands.append(("hset", key, field, value))
+        return self
+
+    def expire(self, key: str, ttl_seconds: int) -> "FakePipeline":
+        self.commands.append(("expire", key, ttl_seconds))
+        return self
+
+    def execute(self) -> list:
+        for command in self.commands:
+            if command[0] == "hset":
+                self.redis.hset(command[1], command[2], command[3])
+            elif command[0] == "expire":
+                self.redis.expire(command[1], command[2])
+        return []
+
+
 class FakeRedis:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -45,6 +67,18 @@ class FakeRedis:
         self.values[key] = str(value)
         return value
 
+    def incrby(self, key: str, amount: int) -> int:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        value = int(self.values.get(key, "0")) + amount
+        self.values[key] = str(value)
+        return value
+
+    def pipeline(self, transaction: bool = True) -> FakePipeline:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        return FakePipeline(self)
+
     def expire(self, key: str, ttl_seconds: int) -> None:
         if self.fail:
             raise RuntimeError("redis unavailable")
@@ -70,6 +104,73 @@ def test_non_trading_day_reads_latest_last_good_without_final_flag() -> None:
 
     assert latest["000001"]["zlje"] == 12.5
     assert latest["000001"]["sessionDate"] == "2026-07-24"
+
+
+def test_put_many_batch_writes_with_monotonic_versions() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test")
+
+    saved, failures = cache.put_many(
+        [
+            row("000001", "2026-07-24", 12.5),
+            row("000002", "2026-07-24", 8.0),
+            row("000003", "2026-07-24", 9.5),
+        ]
+    )
+
+    assert failures == []
+    assert [item["version"] for item in saved] == [1, 2, 3]
+    assert cache.current_version() == 3
+    latest = cache.get_latest(["000001", "000002", "000003"])
+    assert latest["000001"]["zlje"] == 12.5
+    assert latest["000003"]["zlje"] == 9.5
+
+
+def test_put_many_preserves_older_rows_and_increments_after_existing_versions() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put(row("000001", "2026-07-24", 12.5, source_ts=20))
+
+    saved, failures = cache.put_many(
+        [
+            row("000001", "2026-07-24", 88.0, source_ts=10),  # 旧 sourceTs → 保留既有行
+            row("000002", "2026-07-24", 8.0),
+        ]
+    )
+
+    assert failures == []
+    assert saved[0]["zlje"] == 12.5
+    assert saved[0]["version"] == 1
+    assert saved[1]["zlje"] == 8.0
+    assert saved[1]["version"] == 2
+    assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
+
+
+def test_put_many_isolates_invalid_rows_and_saves_valid_ones() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    invalid = {"code": "bad", "zlje": "not-a-number", "source": "ths_main_monitor", "sessionDate": "2026-07-24"}
+
+    saved, failures = cache.put_many([row("000001", "2026-07-24", 12.5), invalid])
+
+    assert len(saved) == 1
+    assert failures == [{"code": "bad", "reason": "invalid ths_main_monitor fund row"}]
+    assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
+
+
+def test_put_many_falls_back_to_memory_when_redis_fails() -> None:
+    cache = ThemeFundCache(FakeRedis(fail=True), prefix="test")
+
+    saved, failures = cache.put_many(
+        [
+            row("000001", "2026-07-24", 12.5),
+            row("000002", "2026-07-24", 8.0),
+        ]
+    )
+
+    assert failures == []
+    assert [item["version"] for item in saved] == [1, 2]
+    latest = cache.get_latest(["000001", "000002"])
+    assert latest["000001"]["zlje"] == 12.5
+    assert latest["000002"]["zlje"] == 8.0
 
 
 def test_invalid_or_missing_value_never_overwrites_last_good() -> None:

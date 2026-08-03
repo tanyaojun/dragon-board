@@ -75,6 +75,46 @@ def _silence_tqdm(module: Any) -> Iterator[None]:
             module.get_tqdm = original
 
 
+@contextmanager
+def _bounded_requests(request_timeout_seconds: float) -> Iterator[None]:
+    """akshare 内部 requests 调用不带 timeout，IPv6 黑洞链路会让线程永久挂起。
+
+    在拉取期间：
+    1. 给 requests.get/post 注入默认 timeout；
+    2. 强制 getaddrinfo 优先返回 IPv4——qt.gtimg.cn 在本机 IPv6 链路可建立连接但
+       数据被黑洞（IPv4 直连正常），IPv4 优先 + timeout 双保险（同 akshare_fund_provider）。
+    避免 to_thread worker 被永不上限的 socket/DNS 调用占死（线程池耗尽风险）。
+    """
+    import requests as requests_module
+    import socket as socket_module
+
+    original_get = requests_module.get
+    original_post = requests_module.post
+    original_getaddrinfo = socket_module.getaddrinfo
+
+    def _with_timeout(original: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapped(url: str, *args: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("timeout", request_timeout_seconds)
+            return original(url, *args, **kwargs)
+
+        return wrapped
+
+    def _ipv4_first_getaddrinfo(*args: Any, **kwargs: Any) -> list[Any]:
+        results = original_getaddrinfo(*args, **kwargs)
+        ipv4 = [item for item in results if item[0] == socket_module.AF_INET]
+        return ipv4 or results
+
+    requests_module.get = _with_timeout(original_get)
+    requests_module.post = _with_timeout(original_post)
+    socket_module.getaddrinfo = _ipv4_first_getaddrinfo
+    try:
+        yield
+    finally:
+        requests_module.get = original_get
+        requests_module.post = original_post
+        socket_module.getaddrinfo = original_getaddrinfo
+
+
 class MarketQuotesCache:
     """全市场行情（腾讯源）周期刷新缓存。
 
@@ -92,6 +132,7 @@ class MarketQuotesCache:
         redis_key_prefix: str = "",
         ttl_seconds: float = 300.0,
         now_ms: Callable[[], int] | None = None,
+        fetch_timeout_seconds: float = 120.0,
     ) -> None:
         # 与 settings 的下限保持一致（QUANT_BOARD_MARKET_QUOTES_REFRESH_INTERVAL_SECONDS 最小 60s）
         self.refresh_interval_seconds = max(60.0, float(refresh_interval_seconds))
@@ -101,6 +142,7 @@ class MarketQuotesCache:
         self._redis_prefix = str(redis_key_prefix or "").strip(":")
         self._ttl_seconds = max(60, int(ttl_seconds))
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
+        self._fetch_timeout_seconds = max(30.0, float(fetch_timeout_seconds))
         self._rows: dict[str, dict[str, Any]] = {}
         self._fetched_at_ms = 0
         self._last_error: str | None = None
@@ -126,7 +168,18 @@ class MarketQuotesCache:
             return False
         async with self._refresh_lock:
             try:
-                frame = await asyncio.to_thread(self._fetch_sync)
+                frame = await asyncio.wait_for(
+                    asyncio.to_thread(self._fetch_sync),
+                    timeout=self._fetch_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                # 上游挂起不能拖死刷新任务：超时熔断，保留 last-good，下个周期自动重试
+                self._last_error = "fetch_timeout"
+                logger.warning(
+                    "market quotes refresh timed out after %.0fs, keeping last-good rows",
+                    self._fetch_timeout_seconds,
+                )
+                return False
             except Exception as exc:
                 self._last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
                 logger.warning("market quotes refresh failed: %s", self._last_error)
@@ -234,7 +287,7 @@ class MarketQuotesCache:
                 module = tx_module
             except Exception:
                 module = None
-        with _silence_tqdm(module):
+        with _silence_tqdm(module), _bounded_requests(self._fetch_timeout_seconds):
             return ak.stock_zh_a_spot_tx()
 
     async def _run(self) -> None:

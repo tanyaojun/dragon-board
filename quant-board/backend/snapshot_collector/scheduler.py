@@ -46,6 +46,12 @@ class SnapshotCollectorScheduler:
             t.strip() for t in settings.snapshot_collector_types.split(",") if t.strip()
         ]
         self.grace_minutes = settings.snapshot_collector_close_grace_minutes
+        # 单槽位采集整体超时：provider 串行（6 个）× 单个 provider 预算 + 落库缓冲。
+        # 超时后槽位不标 completed，下一轮定时器在 grace 窗口内自动重试。
+        self.collect_timeout_seconds = max(
+            60.0,
+            float(settings.snapshot_collector_provider_timeout_ms) / 1000.0 * 6 + 60.0,
+        )
         self._task: asyncio.Task[None] | None = None
         self._in_flight_slots: set[str] = set()
         self._last_run_at: str | None = None
@@ -239,7 +245,18 @@ class SnapshotCollectorScheduler:
                 dry_run=False,
                 force=False,
             )
-            result = await asyncio.to_thread(service.run_once, request)
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(service.run_once, request),
+                    timeout=self.collect_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                # 超时：不标记 completed，grace 窗口内下轮自动重试；
+                # 结构化错误随状态暴露，供诊断与人工补采。
+                raise RuntimeError(
+                    f"collector slot {slot.snapshot_id} timed out after "
+                    f"{self.collect_timeout_seconds}s"
+                ) from None
             self._last_run_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
             if result.status == "completed":
                 self._collection_count += 1

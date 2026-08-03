@@ -308,6 +308,45 @@ def test_analyze_live_path_keeps_enough_history_for_resonance(monkeypatch):
     assert resonance["historyState"] == "established"
     assert "marketSampleCount" in resonance
     assert "marketMedianPercentile" in resonance
+    # resonance 已下沉：Python golden 把共振方向/分数直接写进 decision.final
+    analysis = last["stocks"][0]["analysis"]
+    assert analysis["decision"]["final"] == {
+        "signal": resonance["direction"],
+        "confidence": resonance["score"],
+    }
+
+
+def test_analyze_fuses_insufficient_resonance_into_hold_final(monkeypatch):
+    frames = [{
+        "tradingDate": f"2026-08-0{day}",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": day,
+        "rows": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+            {"code": "000001", "rank": 3, "avgRankNum": 3, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.01},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    } for day in range(1, 5)]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-08-04 14:00"],
+    })
+    assert response.status_code == 200
+    analysis = response.json()["frames"][0]["stocks"][0]["analysis"]
+    assert analysis["resonance"]["status"] == "insufficient"
+    assert analysis["decision"]["final"] == {"signal": "hold", "confidence": 0}
 
 
 def test_analyze_historical_frames_keep_enough_history_for_tracks(monkeypatch):
