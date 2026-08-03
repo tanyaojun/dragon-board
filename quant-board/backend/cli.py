@@ -44,6 +44,7 @@ from backend.data.theme_service import ThemeMigrationService
 from backend.theme_mapping_refresh import refresh_theme_stock_mappings
 from backend.analysis.ranktrend_live_gate_shadow_audit import load_hotlist_anchor_samples
 from backend.operations.schedule import run_after_market_once
+from backend.operations.snapshot_field_backfill import SnapshotFieldBackfillService
 from backend.settings import get_settings
 from backend.services import (
     BacktestService,
@@ -474,6 +475,21 @@ def cmd_backfill_jump_fields(args: argparse.Namespace) -> None:
             dataset_id=args.dataset_id,
             trading_dates=args.trading_date or None,
             dry_run=not bool(args.apply),
+        )
+    )
+
+
+def cmd_snapshot_field_backfill(args: argparse.Namespace) -> None:
+    service = SnapshotFieldBackfillService(_runtime_mongodb_database())
+    print_json(
+        service.backfill(
+            dataset_id=args.dataset_id,
+            start_date=args.start_date or None,
+            end_date=args.end_date or None,
+            snapshot_types=args.snapshot_type or None,
+            dry_run=not bool(args.apply),
+            backup=not bool(args.no_backup),
+            limit=int(args.limit or 0),
         )
     )
 
@@ -1865,6 +1881,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show snapshot collector scheduler operational state",
     )
     scheduler_status_cmd.set_defaults(func=cmd_snapshot_collector_scheduler_status)
+
+    field_backfill_cmd = sub.add_parser(
+        "snapshot-backfill-fields",
+        help="Backfill derived fields in snapshot_stock_rows from per-row evidence "
+        "(limit prices, lastTrade, amplitude, zljzb, totalMV); default dry-run",
+    )
+    field_backfill_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    field_backfill_cmd.add_argument("--start-date", default="")
+    field_backfill_cmd.add_argument("--end-date", default="")
+    field_backfill_cmd.add_argument("--snapshot-type", action="append", default=None)
+    field_backfill_cmd.add_argument("--apply", dest="apply", action="store_true")
+    field_backfill_cmd.add_argument("--no-backup", dest="no_backup", action="store_true")
+    field_backfill_cmd.add_argument("--limit", default="0")
+    field_backfill_cmd.set_defaults(func=cmd_snapshot_field_backfill)
 
     return parser
 

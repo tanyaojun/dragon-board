@@ -1,7 +1,8 @@
 # Snapshot Collector 全面梳理与优化方案
 
 > 日期：2026-08-03 · 状态：审查完成；P0（独立采集进程 + 硬门禁移除 + 行情字段原料）已全部实施并验证，
-> Task 5（文档/收尾）完成；存量字段回填与既有测试文件修复留待后续排期
+> Task 5（文档/收尾）完成；存量历史字段已按证据回填（2026-08-03，备份 + 审计）；
+> 既有测试文件修复（bridge/contract mock 层）留待后续排期
 > 其中"独立采集进程"由 DragonBoardLauncher 核心启动项管理（8001），不建计划任务、不恢复 supervisor.py
 > 依据：`AGENTS.md §4.0`、`skills/fail-visible-data-pipelines/SKILL.md`、仓库代码与 MongoDB 实测证据
 

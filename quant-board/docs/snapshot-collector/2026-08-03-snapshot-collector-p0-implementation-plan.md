@@ -948,6 +948,21 @@ def test_builder_passes_quote_extra_fields_through():
 > - 文档同步：`architecture.md`、`api-cli.md`、`AI_COLLABORATION.md`、本计划与优化方案文档。
 > - `dotnet build -c Release` 0 警告 0 错误。
 
+---
+
+## 附加任务：存量历史字段按证据回填（2026-08-03 已完成）
+
+> - 新增 `backend/operations/snapshot_field_backfill.py` + CLI `snapshot-backfill-fields`（默认 dry-run，
+>   `--apply` 写库，默认先备份）。只填充缺失字段，只使用行内证据；`pe/pb/cirMV/volumeRatio` 无历史
+>   时点证据，保持缺失不伪造；`zljzb` 加 (0,100] 单位安全界。
+> - 执行结果（`dragonboard_live`，527,616 行扫描）：189,889 行回填 —— `lastTradePrice` 183,359、
+>   `lastTradeVolume` 179,436、`limitUpPrice/limitDownPrice` 各 86,254、`zljzb` 4,613、`amplitude` 2,823。
+> - 备份集合 `snapshot_stock_rows_field_backfill_backup_20260803_134807`（189,889 文档，与更新数一致）；
+>   审计 `snapshot-field-backfill-5043f907fa80467ca6bdbee6b40cbc5b`。行数无漂移（527,616 不变）；
+>   按交易所规则抽样 3,000 行校验全部精确匹配；近期交易日涨跌停价/振幅/最新价覆盖率升至 ~99%。
+> - 测试：`tests/test_snapshot_field_backfill.py` 12 用例（主板/创业板/科创板/北交所/ST 涨跌停派生、
+>   占位零值不视为证据、不覆盖已有值、dry-run 不写库、apply 备份+更新+审计）。
+
 **Files:**
 - Modify: `quant-board/docs/architecture.md`、`quant-board/docs/api-cli.md`、`quant-board/docs/AI_COLLABORATION.md`
 - Modify: `quant-board/docs/snapshot-collector/2026-08-03-snapshot-collector-optimization-plan.md`（状态更新）
