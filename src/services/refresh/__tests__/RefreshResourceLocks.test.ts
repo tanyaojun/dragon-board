@@ -16,9 +16,33 @@ describe('RefreshResourceLockManager', () => {
 
     const second = await locks.runExclusive('quote-http', () => 'second', { skipIfLocked: true })
 
-    expect(second).toEqual({ executed: false })
+    expect(second).toEqual({ executed: false, reason: 'skipped' })
     release()
     await first
+  })
+
+  it('returns wait-timeout without stealing a lock held by a hung runner', async () => {
+    const locks = new RefreshResourceLockManager()
+    let release!: () => void
+    const first = locks.runExclusive(
+      'quote-http',
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    await Promise.resolve()
+
+    const timedOut = await locks.runExclusive('quote-http', () => 'second', {
+      waitTimeoutMs: 100,
+    })
+
+    expect(timedOut).toEqual({ executed: false, reason: 'timeout' })
+    expect(locks.isLocked('quote-http')).toBe(true)
+
+    release()
+    await first
+    expect(locks.isLocked('quote-http')).toBe(false)
   })
 
   it('serializes runners for the same resource key', async () => {

@@ -48,14 +48,20 @@ describe('PlatformHotlistService', () => {
     expect(apiService.listStockNames).toHaveBeenCalledWith({ active: true })
   })
 
-  it('does not fall back to platform rows when the MongoDB stock_names API is unavailable', async () => {
+  it('keeps platform rows with a quality marker when the MongoDB stock_names API is unavailable', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     vi.mocked(apiService.listStockNames).mockRejectedValue(new Error('MongoDB unavailable'))
 
-    const result = await new PlatformHotlistService().loadPlatforms(['eastmoney'], true)
+    const service = new PlatformHotlistService()
+    const result = await service.loadPlatforms(['eastmoney'], true)
 
-    expect(result.data.eastmoney).toEqual([])
-    expect(adapterMocks.getHotList).not.toHaveBeenCalled()
+    expect(result.data.eastmoney).toHaveLength(3)
+    expect(adapterMocks.getHotList).toHaveBeenCalled()
+    expect(service.getCacheDiagnostics().platforms.eastmoney).toMatchObject({
+      success: true,
+      rowCount: 3,
+      warning: 'whitelist-unavailable',
+    })
     warn.mockRestore()
   })
 

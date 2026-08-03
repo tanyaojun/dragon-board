@@ -38,6 +38,12 @@ export interface RefreshTaskDefinition {
   label: string
   category: RefreshTaskCategory
   owner: string
+  /**
+   * 单次 runner 执行超时（毫秒）。超时后任务标记失败并复位 running，
+   * 下一个调度周期会自然重试；不设置则无超时（保持原语义）。
+   * 注意：超时不会中断仍在后台执行的 runner，调用方应保证 runner 幂等。
+   */
+  timeoutMs?: number | null
   intervalMs?: number | null
   hiddenIntervalMs?: number | null
   enabled?: boolean
@@ -49,6 +55,7 @@ export interface RefreshTaskDefinition {
 
 export interface RefreshTaskState extends Required<Omit<RefreshTaskDefinition, 'intervalMs'>> {
   intervalMs: number | null
+  timeoutMs: number | null
   running: boolean
   lastRunAt: number | null
   lastSuccessAt: number | null

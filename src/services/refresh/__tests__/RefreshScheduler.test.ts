@@ -99,6 +99,43 @@ describe('RefreshScheduler', () => {
     scheduler.destroy()
   })
 
+  it('times out a hung runner, records the failure and retries on the next interval', async () => {
+    const registry = new RefreshTaskRegistry(() => 1_000)
+    const run = vi.fn(async () => {
+      await new Promise<void>(() => {
+        // never resolves: 模拟挂起 runner
+      })
+    })
+
+    registry.register({
+      id: 'example.task',
+      label: '示例任务',
+      category: 'business',
+      owner: 'test',
+      intervalMs: 1_000,
+      timeoutMs: 100,
+    })
+
+    const scheduler = new RefreshScheduler(registry)
+    scheduler.registerRunner('example.task', run)
+    scheduler.startTask('example.task')
+
+    await vi.advanceTimersByTimeAsync(1_300)
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(registry.getTask('example.task')).toMatchObject({
+      running: false,
+      failureCount: 1,
+      lastError: expect.stringContaining('timeout after 100ms'),
+    })
+
+    await vi.advanceTimersByTimeAsync(1_300)
+
+    expect(run).toHaveBeenCalledTimes(2)
+
+    scheduler.destroy()
+  })
+
   it('honors trading time and visibility policies before running a task', async () => {
     const registry = new RefreshTaskRegistry()
     const run = vi.fn(async () => undefined)

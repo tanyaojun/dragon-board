@@ -1,22 +1,15 @@
+import { apiService } from '../apiService'
 import { dataLayer as defaultDataLayer } from '../DataLayer'
-import { VolumeHistoryService } from './VolumeHistoryService'
-import { INTRADAY_VOLUME_SNAPSHOT_TYPES } from './constants'
-import { calculateVolumeRatio, type VolumeRatioResult } from './VolumeRatioCalculator'
 import type { StockExtData, VolumeRatioMeta } from '@/types/data-layer'
 
 type VolumeRatioDataLayer = {
-  getStocks: () => Array<{ code: string; volume?: unknown; volumeRatio?: number }>
+  getStocks: () => Array<{
+    code: string
+    volume?: unknown
+    volumeRatio?: number
+    volumeRatioMeta?: VolumeRatioMeta | null
+  }>
   updateStockExtData: (updates: Array<Partial<StockExtData> & { code: string }>) => void
-}
-
-type VolumeRatioHistoryReader = {
-  buildVolumeHistoryMap: (codes: string[]) => Promise<Map<string, number[]>>
-  buildIntradayVolumeHistoryMap: (codes: string[], date?: Date) => Promise<Map<string, number[]>>
-}
-
-type ResolvedVolumeRatio = {
-  value?: number
-  meta: VolumeRatioMeta
 }
 
 export interface VolumeRatioUpdateSummary {
@@ -26,19 +19,34 @@ export interface VolumeRatioUpdateSummary {
   suspicious: number
 }
 
+type BackendVolumeRatioItem = {
+  value?: number
+  status?: string
+  source?: string
+  currentVolume?: number
+  expectedVolume?: number
+  historyVolumes?: number[]
+  rawRatio?: number
+  capped?: boolean
+  reason?: string
+  calculatedAt?: number
+}
+
+/**
+ * 量比更新服务：只消费后端量比结果（Python golden + Redis TTL），
+ * 不再在前端读取快照历史或运行量比算法（原 VolumeHistoryService/VolumeRatioCalculator 已迁移后端）。
+ */
 export class VolumeRatioUpdateService {
   private readonly dataLayer: VolumeRatioDataLayer
-  private readonly volumeHistoryService: VolumeRatioHistoryReader
   private readonly now: () => Date
 
-  constructor(options: {
-    dataLayer?: VolumeRatioDataLayer
-    volumeHistoryService?: VolumeRatioHistoryReader
-    now?: () => Date
-  } = {}) {
+  constructor(
+    options: {
+      dataLayer?: VolumeRatioDataLayer
+      now?: () => Date
+    } = {},
+  ) {
     this.dataLayer = options.dataLayer || defaultDataLayer
-    this.volumeHistoryService =
-      options.volumeHistoryService || new VolumeHistoryService(INTRADAY_VOLUME_SNAPSHOT_TYPES)
     this.now = options.now || (() => new Date())
   }
 
@@ -52,105 +60,84 @@ export class VolumeRatioUpdateService {
     }
     if (!targetCodes.length) return summary
 
-    const date = this.now()
-    const [volumeHistoryMap, intradayVolumeHistoryMap] = await Promise.all([
-      this.volumeHistoryService.buildVolumeHistoryMap(targetCodes),
-      this.volumeHistoryService.buildIntradayVolumeHistoryMap(targetCodes, date),
-    ])
-
-    const stocks = this.dataLayer.getStocks()
-    const stockMap = new Map(stocks.map((stock) => [stock.code, stock]))
-    const updates: Array<Partial<StockExtData> & { code: string }> = []
-
-    for (const code of targetCodes) {
-      const stock = stockMap.get(code)
-      if (!stock) continue
-
-      const result = this.calculateForStock(stock, volumeHistoryMap, intradayVolumeHistoryMap, date)
-      const resolved = this.resolveResult(stock, result)
-      if (resolved.meta.status === 'unavailable') summary.unavailable++
-      if (resolved.meta.status === 'suspicious') summary.suspicious++
-
-      updates.push({
-        code,
-        volumeRatio: resolved.value,
-        volumeRatioMeta: resolved.meta,
+    const stockByCode = new Map(this.dataLayer.getStocks().map((stock) => [stock.code, stock]))
+    const stocks = targetCodes
+      .map((code) => {
+        const volume = Number(stockByCode.get(code)?.volume)
+        return { code, volume }
       })
-    }
+      .filter((item) => Number.isFinite(item.volume) && item.volume > 0)
+    if (!stocks.length) return summary
 
-    if (updates.length) {
-      this.dataLayer.updateStockExtData(updates)
-      summary.updated = updates.length
-    }
+    try {
+      const response = await apiService.getVolumeRatios({ stocks })
+      const items = response?.items && typeof response.items === 'object' ? response.items : {}
+      const updates: Array<Partial<StockExtData> & { code: string }> = []
 
-    return summary
-  }
-
-  enrichStocks<
-    T extends {
-      code: string
-      volume?: unknown
-      volumeRatio?: unknown
-      volumeRatioMeta?: VolumeRatioMeta | null
-    },
-  >(
-    stocks: T[],
-    volumeHistoryMap: Map<string, number[]>,
-    intradayVolumeHistoryMap: Map<string, number[]> = new Map(),
-    date: Date = this.now(),
-  ): Array<T & { volumeRatio?: number; volumeRatioMeta: VolumeRatioMeta }> {
-    return stocks.map((stock) => {
-      const result = this.calculateForStock(stock, volumeHistoryMap, intradayVolumeHistoryMap, date)
-      const resolved = this.resolveResult(stock, result)
-      return {
-        ...stock,
-        volumeRatio: resolved.value,
-        volumeRatioMeta: resolved.meta,
+      for (const code of targetCodes) {
+        const stock = stockByCode.get(code)
+        const item = items[code]
+        if (!item) {
+          summary.unavailable++
+          continue
+        }
+        const meta = this.toMeta(item)
+        const preserved = this.preserveExistingRatio(stock, meta, item)
+        if (preserved) {
+          updates.push(preserved)
+          continue
+        }
+        if (meta.status === 'unavailable') summary.unavailable++
+        else if (meta.status === 'suspicious') summary.suspicious++
+        updates.push({
+          code,
+          volumeRatio: typeof item.value === 'number' ? item.value : undefined,
+          volumeRatioMeta: meta,
+        })
       }
-    })
-  }
 
-  private calculateForStock(
-    stock: { code: string; volume?: unknown },
-    volumeHistoryMap: Map<string, number[]>,
-    intradayVolumeHistoryMap: Map<string, number[]>,
-    date: Date,
-  ) {
-    return calculateVolumeRatio(stock, stock.code, volumeHistoryMap, intradayVolumeHistoryMap, date)
-  }
-
-  private toMeta(result: VolumeRatioResult): VolumeRatioMeta {
-    return {
-      status: result.status,
-      source: result.source,
-      calculatedAt: result.calculatedAt,
-      currentVolume: result.currentVolume,
-      expectedVolume: result.expectedVolume,
-      historyVolumes: result.historyVolumes,
-      rawRatio: result.rawRatio,
-      capped: result.capped,
-      reason: result.reason,
+      if (updates.length) {
+        this.dataLayer.updateStockExtData(updates)
+        summary.updated = updates.length
+      }
+      return summary
+    } catch (error) {
+      // 后端量比不可用：保留现有量比，结构化失败原因由日志暴露（fail-visible，不伪装 0）
+      console.warn('[VolumeRatio] 后端量比服务不可用，保留现有量比:', error)
+      return summary
     }
   }
 
-  private resolveResult(
-    stock: { volumeRatio?: unknown; volumeRatioMeta?: VolumeRatioMeta | null },
-    result: VolumeRatioResult,
-  ): ResolvedVolumeRatio {
-    const preserved = this.preserveExistingRatio(stock, result)
-    if (preserved) return preserved
-
+  private toMeta(item: BackendVolumeRatioItem): VolumeRatioMeta {
+    const status =
+      item.status === 'fresh' || item.status === 'suspicious' ? item.status : 'unavailable'
+    const source =
+      item.source === 'intraday_snapshot' || item.source === 'daily_snapshot'
+        ? item.source
+        : 'unavailable'
+    const currentVolume = Number(item.currentVolume)
+    const expectedVolume = Number(item.expectedVolume)
+    const rawRatio = Number(item.rawRatio)
     return {
-      value: result.value,
-      meta: this.toMeta(result),
+      status,
+      source,
+      calculatedAt: Number(item.calculatedAt) || this.now().getTime(),
+      currentVolume: Number.isFinite(currentVolume) ? currentVolume : 0,
+      expectedVolume: Number.isFinite(expectedVolume) ? expectedVolume : undefined,
+      historyVolumes: Array.isArray(item.historyVolumes) ? item.historyVolumes.map(Number) : [],
+      rawRatio: Number.isFinite(rawRatio) ? rawRatio : undefined,
+      capped: item.capped === true,
+      reason: typeof item.reason === 'string' ? item.reason : undefined,
     }
   }
 
   private preserveExistingRatio(
-    stock: { volumeRatio?: unknown; volumeRatioMeta?: VolumeRatioMeta | null },
-    result: VolumeRatioResult,
-  ): ResolvedVolumeRatio | null {
-    if (result.status !== 'unavailable' || result.reason !== 'insufficient_history') return null
+    stock: ReturnType<VolumeRatioDataLayer['getStocks']>[number] | undefined,
+    meta: VolumeRatioMeta,
+    item: BackendVolumeRatioItem,
+  ): (Partial<StockExtData> & { code: string }) | null {
+    if (!stock) return null
+    if (meta.status !== 'unavailable' || item.reason !== 'insufficient_history') return null
 
     const previousValue = Number(stock.volumeRatio)
     if (!Number.isFinite(previousValue) || previousValue <= 0) return null
@@ -158,14 +145,15 @@ export class VolumeRatioUpdateService {
 
     const previousMeta = stock.volumeRatioMeta ?? null
     return {
-      value: previousValue,
-      meta: {
+      code: stock.code,
+      volumeRatio: previousValue,
+      volumeRatioMeta: {
         ...(previousMeta || {}),
         status: 'stale',
         source: previousMeta?.source || 'unavailable',
-        calculatedAt: result.calculatedAt,
-        currentVolume: result.currentVolume,
-        historyVolumes: result.historyVolumes,
+        calculatedAt: meta.calculatedAt,
+        currentVolume: meta.currentVolume,
+        historyVolumes: meta.historyVolumes,
         reason: 'history_unavailable_preserved_previous',
       },
     }

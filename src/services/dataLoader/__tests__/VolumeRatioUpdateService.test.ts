@@ -1,30 +1,48 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { apiService } from '../../apiService'
 import { VolumeRatioUpdateService } from '../VolumeRatioUpdateService'
 
+vi.mock('../../apiService', () => ({
+  apiService: {
+    getVolumeRatios: vi.fn(),
+  },
+}))
+
 describe('VolumeRatioUpdateService', () => {
-  it('writes structured volume ratio diagnostics to the data layer', async () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('consumes backend volume ratio results and writes structured diagnostics', async () => {
+    vi.mocked(apiService.getVolumeRatios).mockResolvedValue({
+      ok: true,
+      items: {
+        '600000': {
+          value: 99.99,
+          status: 'suspicious',
+          source: 'daily_snapshot',
+          currentVolume: 100000,
+          expectedVolume: 1,
+          historyVolumes: [1, 1, 1],
+          rawRatio: 100000,
+          capped: true,
+          reason: 'ratio_capped',
+          calculatedAt: 123,
+        },
+      },
+    })
     const dataLayer = {
       getStocks: vi.fn(() => [{ code: '600000', name: '浦发银行', volume: 100000 }]),
       updateStockExtData: vi.fn(),
     }
-    const volumeHistoryService = {
-      buildVolumeHistoryMap: vi.fn(async () => new Map([['600000', [1, 1, 1]]])),
-      buildIntradayVolumeHistoryMap: vi.fn(async () => new Map()),
-    }
-    const service = new VolumeRatioUpdateService({
-      dataLayer,
-      volumeHistoryService,
-      now: () => new Date('2026-05-06T15:30:00+08:00'),
-    })
+    const service = new VolumeRatioUpdateService({ dataLayer })
 
     const summary = await service.updateVolumeRatios(['600000'])
 
-    expect(summary).toEqual({
-      requested: 1,
-      updated: 1,
-      unavailable: 0,
-      suspicious: 1,
+    expect(summary).toEqual({ requested: 1, updated: 1, unavailable: 0, suspicious: 1 })
+    expect(apiService.getVolumeRatios).toHaveBeenCalledWith({
+      stocks: [{ code: '600000', volume: 100000 }],
     })
     expect(dataLayer.updateStockExtData).toHaveBeenCalledWith([
       expect.objectContaining({
@@ -44,6 +62,19 @@ describe('VolumeRatioUpdateService', () => {
   })
 
   it('preserves an existing positive volume ratio when history is insufficient', async () => {
+    vi.mocked(apiService.getVolumeRatios).mockResolvedValue({
+      ok: true,
+      items: {
+        '600000': {
+          status: 'unavailable',
+          source: 'unavailable',
+          currentVolume: 100000,
+          historyVolumes: [],
+          reason: 'insufficient_history',
+          calculatedAt: 1000,
+        },
+      },
+    })
     const dataLayer = {
       getStocks: vi.fn(() => [
         {
@@ -61,24 +92,11 @@ describe('VolumeRatioUpdateService', () => {
       ]),
       updateStockExtData: vi.fn(),
     }
-    const volumeHistoryService = {
-      buildVolumeHistoryMap: vi.fn(async () => new Map()),
-      buildIntradayVolumeHistoryMap: vi.fn(async () => new Map()),
-    }
-    const service = new VolumeRatioUpdateService({
-      dataLayer,
-      volumeHistoryService,
-      now: () => new Date('2026-05-06T15:30:00+08:00'),
-    })
+    const service = new VolumeRatioUpdateService({ dataLayer })
 
     const summary = await service.updateVolumeRatios(['600000'])
 
-    expect(summary).toEqual({
-      requested: 1,
-      updated: 1,
-      unavailable: 0,
-      suspicious: 0,
-    })
+    expect(summary).toEqual({ requested: 1, updated: 1, unavailable: 0, suspicious: 0 })
     expect(dataLayer.updateStockExtData).toHaveBeenCalledWith([
       expect.objectContaining({
         code: '600000',
@@ -91,5 +109,21 @@ describe('VolumeRatioUpdateService', () => {
         }),
       }),
     ])
+  })
+
+  it('keeps existing data when the backend volume ratio service is unavailable', async () => {
+    vi.mocked(apiService.getVolumeRatios).mockRejectedValue(new Error('backend offline'))
+    const updateStockExtData = vi.fn()
+    const service = new VolumeRatioUpdateService({
+      dataLayer: {
+        getStocks: vi.fn(() => [{ code: '600000', name: '浦发银行', volume: 100 }]),
+        updateStockExtData,
+      },
+    })
+
+    const summary = await service.updateVolumeRatios(['600000'])
+
+    expect(summary).toEqual({ requested: 1, updated: 0, unavailable: 0, suspicious: 0 })
+    expect(updateStockExtData).not.toHaveBeenCalled()
   })
 })

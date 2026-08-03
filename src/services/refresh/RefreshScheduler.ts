@@ -7,6 +7,24 @@ interface RefreshSchedulerOptions {
   isVisible?: () => boolean
 }
 
+function withTimeout(promise: Promise<void>, timeoutMs: number, label: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timeout after ${timeoutMs}ms`))
+    }, timeoutMs)
+    promise.then(
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 export class RefreshScheduler {
   private timers = new Map<RefreshTaskId, ReturnType<typeof setInterval>>()
   private runners = new Map<RefreshTaskId, RefreshTaskRunner>()
@@ -92,7 +110,13 @@ export class RefreshScheduler {
     this.registry.markStarted(id, 'scheduler')
 
     try {
-      await runner()
+      if (task.timeoutMs && task.timeoutMs > 0) {
+        // runner 超时：标记失败并复位 running，下个周期自然重试。
+        // 超时不会中断后台仍在执行的 runner（JS 无法取消），runner 必须幂等。
+        await withTimeout(Promise.resolve(runner()), task.timeoutMs, `refresh task ${id}`)
+      } else {
+        await runner()
+      }
       this.registry.markSuccess(id, 'scheduler')
       return true
     } catch (error) {

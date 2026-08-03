@@ -3,7 +3,7 @@ import { buildCandidateJournalProjection } from '../candidate/CandidateProjectio
 import { candidateJournalService } from '../candidate/CandidateJournalService'
 import { applyCandidatePoolProjections } from '../candidate/CandidatePoolStatusProjector'
 import { dataLayer } from '../DataLayer'
-import { rankTrendAnalyzer, type RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
+import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
@@ -113,7 +113,6 @@ export class RankTrendSignalService {
     const mergedStocks = this.updateStockSignals(updates)
     // 跳跃检测与 V3 实盘信号都应基于本轮最新 rankTrend 结果计算。
     this.applyJumpSignals(mergedStocks)
-    this.applyResonanceFinals(mergedStocks, new Set(results.keys()))
     this.precomputeDisplayFields(mergedStocks)
     this.scheduleCandidatePoolSync(mergedStocks)
 
@@ -149,39 +148,12 @@ export class RankTrendSignalService {
     }
   }
 
-  private applyResonanceFinals(stocks: any[], freshCodes: Set<string>): void {
-    // resonance 由 Python analyze API 输出；这里只做观察口径展示投影（简单赋值，非算法）
-    for (const stock of stocks) {
-      if (!freshCodes.has(stock.code)) continue
-      const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
-      if (!rankTrend?.resonance) continue
-      const resonance = rankTrend.resonance
-      if (resonance.status === 'insufficient') {
-        rankTrend.decision.final = { signal: 'hold', confidence: 0 }
-        stock.finalSignal = 'hold'
-        stock.finalConfidence = 0
-        continue
-      }
-      rankTrend.decision.final = { signal: resonance.direction, confidence: resonance.score }
-      stock.finalSignal = resonance.direction
-      stock.finalConfidence = resonance.score
-    }
-  }
-
-  async preloadSnapshots(codes: string[]): Promise<RankTrendPreparedSnapshot[]> {
-    return rankTrendAnalyzer.preloadSnapshots({ codes })
-  }
-
-  async applySignalsToMerged(
-    merged: any[],
-    options: { snapshots?: RankTrendPreparedSnapshot[] } = {},
-  ): Promise<any[]> {
+  async applySignalsToMerged(merged: any[]): Promise<any[]> {
     const startedAt = performance.now()
     const newRankMap = buildAttentionRankMap(merged)
     const rankTrends = await rankTrendAnalyzer.getRankTrends(newRankMap, {
       updateSignalStore: false,
       preferRemoteAnalysis: true,
-      snapshots: options.snapshots,
     })
     const coverageWarning = this.extractRankTrendCoverageWarning(rankTrends)
 
@@ -209,7 +181,6 @@ export class RankTrendSignalService {
 
     // 核心展示字段必须在候选池/Fusion/交易日志投影前完成并返回。
     this.applyJumpSignals(merged)
-    this.applyResonanceFinals(merged, new Set(rankTrends.keys()))
     this.precomputeDisplayFields(merged)
     this.scheduleCandidatePoolSync(merged)
     debugLog('[RankTrendSignalService] 核心信号阶段完成', {

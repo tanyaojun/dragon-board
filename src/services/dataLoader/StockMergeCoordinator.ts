@@ -7,7 +7,7 @@ import { getRankField, rankMergedStocks } from './ComprehensiveRankEngine'
 export interface StockMergeCoordinatorInput {
   platformData: Record<string, any[]>
   latestQuotes?: Map<string, any>
-  volumeHistoryMap: Map<string, number[]>
+  volumeHistoryMap?: Map<string, number[]>
   intradayVolumeHistoryMap?: Map<string, number[]>
   existingMap: Map<string, any>
 }

@@ -51,6 +51,11 @@ function barFrameKey(bar: any): string {
   return `${bar?.tradingDate || ''} ${bar?.slotTime || ''}`.trim()
 }
 
+function normalizeCode(code: unknown): string {
+  const digits = String(code || '').replace(/\D/g, '')
+  return digits ? digits.padStart(6, '0').slice(-6) : ''
+}
+
 function frameLabel(frameKey: string): string {
   const match = frameKey.match(/(\d{2}-\d{2})\s+(\d{2}:\d{2})/)
   if (match) return `${match[1]} ${match[2]}`
@@ -73,7 +78,12 @@ class RankTrendObservationService {
   async load(stock: any): Promise<RankTrendObservationViewModel> {
     const code = String(stock?.code || '')
     const currentAnalysis = stock?.rankTrend as RankTrendAnalysisResult | undefined
-    const series = rankTrendAnalyzer.getLatestAnalysisSeries(code)
+    let series = rankTrendAnalyzer.getLatestAnalysisSeries(code)
+    if (!series) {
+      // 展示序列自建兜底：从 rank-series API 读取该股历史排名（纯数据投影，非算法），
+      // 保证后端 analyze 暂不可用时观察面板仍能展示历史排名曲线（fail-visible）。
+      series = await this.buildSeriesFromSnapshots(code)
+    }
     if (!series) {
       const issues = [
         observationIssue(
@@ -292,6 +302,39 @@ class RankTrendObservationService {
       name: String(stock?.name || ''),
       frames: allFrames.slice(-MAX_OBSERVATION_WINDOW_BARS),
       issues: serviceIssues,
+    }
+  }
+
+  private async buildSeriesFromSnapshots(code: string): Promise<{
+    ranks: number[]
+    percentiles: number[]
+    frameKeys: string[]
+  } | null> {
+    try {
+      const snapshots = await rankTrendAnalyzer.getSnapshotsByType(DEFAULT_RANK_TREND_SNAPSHOT_TYPE, {
+        limit: 50,
+        codes: [code],
+      })
+      const ranks: number[] = []
+      const percentiles: number[] = []
+      const frameKeys: string[] = []
+      for (const item of snapshots) {
+        const hotlist = Array.isArray(item?.snapshot?.hotlist) ? item.snapshot.hotlist : []
+        const index = hotlist.findIndex((row: any) => normalizeCode(row?.code) === code)
+        const row = index >= 0 ? hotlist[index] : null
+        const totalCount = Number(item.snapshot?.totalCount) || hotlist.length || 0
+        const rank = Number(row?.rank ?? (index >= 0 ? index + 1 : 0))
+        if (rank > 0 && totalCount > 0) {
+          ranks.push(rank)
+          percentiles.push(((totalCount - rank + 1) / totalCount) * 100)
+          frameKeys.push(String(item.date || ''))
+        }
+      }
+      if (!ranks.length) return null
+      return { ranks, percentiles, frameKeys }
+    } catch (error) {
+      console.warn('[RankTrendObservation] 自建排名序列读取失败:', error)
+      return null
     }
   }
 }

@@ -79,6 +79,57 @@ describe('RankTrendObservationService', () => {
     }))
   })
 
+  it('builds the display rank series from rank-series snapshots when the in-memory series is missing', async () => {
+    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue(null)
+    vi.spyOn(rankTrendAnalyzer, 'getSnapshotsByType').mockResolvedValue([
+      {
+        date: '2026-07-28 14:30',
+        timestamp: 1,
+        type: 'half_hour',
+        snapshot: {
+          type: 'half_hour',
+          tradingDate: '2026-07-28',
+          slotTime: '14:30',
+          totalCount: 100,
+          hotlist: [{ code: '002279', rank: 28 }],
+        },
+      },
+      {
+        date: '2026-07-28 15:00',
+        timestamp: 2,
+        type: 'half_hour',
+        snapshot: {
+          type: 'half_hour',
+          tradingDate: '2026-07-28',
+          slotTime: '15:00',
+          totalCount: 100,
+          hotlist: [{ code: '002279', rank: 19 }],
+        },
+      },
+    ])
+    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+
+    const result = await rankTrendObservationService.load({
+      code: '002279',
+      name: '久其软件',
+      rankTrend: { meta: { code: '002279' } },
+    })
+
+    expect(rankTrendAnalyzer.getSnapshotsByType).toHaveBeenCalledWith('half_hour', {
+      limit: 50,
+      codes: ['002279'],
+    })
+    expect(result.frames).toHaveLength(2)
+    expect(result.frames[0]).toMatchObject({
+      key: '2026-07-28 14:30',
+      percentile: 73,
+    })
+    expect(result.frames[1]).toMatchObject({
+      key: '2026-07-28 15:00',
+      percentile: 82,
+    })
+  })
+
   it('keeps the rank path when current analysis is unavailable', async () => {
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: [28, 19],
@@ -99,6 +150,7 @@ describe('RankTrendObservationService', () => {
 
   it('keeps the current analysis frame when the in-memory rank series is unavailable', async () => {
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue(null)
+    vi.spyOn(rankTrendAnalyzer, 'getSnapshotsByType').mockResolvedValue([])
     const currentAnalysis = {
       meta: { code: '603580', currentPercentile: 83, updateTime: 1 },
       observation: { lifecycle: { score: 90 } },

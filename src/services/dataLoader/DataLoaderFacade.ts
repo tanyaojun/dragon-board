@@ -10,7 +10,6 @@ import { EventManager } from '../../utils/eventManager'
 import { AppEvents } from '../../types'
 import {
   DEFAULT_PLATFORMS,
-  INTRADAY_VOLUME_SNAPSHOT_TYPES as DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES,
   PLATFORM_REFRESH_INTERVAL_MS,
   PLATFORM_RETRY_INTERVAL_MS,
   QUOTE_BATCH_SIZE as DEFAULT_QUOTE_BATCH_SIZE,
@@ -38,7 +37,6 @@ import {
 } from '../snapshot/buildContext'
 import { stockHotnessService } from './StockHotnessService'
 import { stockMergeCoordinator } from './StockMergeCoordinator'
-import { VolumeHistoryService } from './VolumeHistoryService'
 import { VolumeRatioUpdateService } from './VolumeRatioUpdateService'
 import type {
   DataLoaderBootstrapOptions,
@@ -51,12 +49,12 @@ import type {
   QuoteBatchProgress,
   StockSignalUpdate,
 } from './types'
-import type { RankTrendPreparedSnapshot } from '../RankTrendAnalyzer'
-
 export type { MergedQuoteData } from './types'
 
 const REALTIME_VOLUME_RATIO_REFRESH_DELAY_MS = 1000
-const STARTUP_VOLUME_HISTORY_TIMEOUT_MS = 5000
+// 量比重算最小间隔：全市场量比依赖历史快照读取，属于重 IO 操作，
+// 不能跟随 WS flush 或 10s 行情周期反复执行（会把后端快照读接口灌满）。
+const VOLUME_RATIO_MIN_INTERVAL_MS = 30_000
 
 type SignalCalculationResult = {
   merged: any[]
@@ -95,15 +93,14 @@ class DataLoaderService {
   private pendingVolumeRatioCodes = new Set<string>()
   private volumeRatioRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private volumeRatioRefreshRunning = false
+  private lastVolumeRatioRefreshAt = 0
   private failedPlatformRetryTimer: ReturnType<typeof setInterval> | null = null
   private startupSnapshotContext: StartupSnapshotContext | null = null
   private startupCurrentContextWritten = false
   private startupBundleWritePromise: Promise<boolean> | null = null
   private readonly stopStartupContextListener: () => void
 
-  private readonly INTRADAY_VOLUME_SNAPSHOT_TYPES = DEFAULT_INTRADAY_VOLUME_SNAPSHOT_TYPES
   private realtimeCoordinator: RealtimeQuoteCoordinator
-  private volumeHistoryService: VolumeHistoryService
   private volumeRatioUpdateService: VolumeRatioUpdateService
 
   private readonly PLATFORM_REFRESH_INTERVAL = PLATFORM_REFRESH_INTERVAL_MS // 30分钟
@@ -111,7 +108,6 @@ class DataLoaderService {
     platformStart: 5,
     platformEnd: 35,
     historyStart: 35,
-    historyEnd: 45,
     quoteStart: 45,
     quoteEnd: 70,
     mergeStart: 70,
@@ -126,10 +122,7 @@ class DataLoaderService {
       getHotCodes: () => this.getAllHotCodes(),
       onQuoteFlushed: (codes) => this.handleRealtimeQuoteFlushed(codes),
     })
-    this.volumeHistoryService = new VolumeHistoryService(this.INTRADAY_VOLUME_SNAPSHOT_TYPES)
-    this.volumeRatioUpdateService = new VolumeRatioUpdateService({
-      volumeHistoryService: this.volumeHistoryService,
-    })
+    this.volumeRatioUpdateService = new VolumeRatioUpdateService()
     this.stopStartupContextListener = EventManager.on(AppEvents.BREATH.UPDATED, () => {
       if (this.destroyed || this.startupCurrentContextWritten) return
       const context = getCurrentStartupSnapshotContext()
@@ -138,6 +131,8 @@ class DataLoaderService {
       void this.writeStartupBundle(this.summarizeRun(Date.now(), false), true)
     })
     this.startQuoteAutoRefresh() // 自动启动行情刷新
+    // 30 分钟信号刷新：Python golden 计算后前端按周期消费 observation/分层字段。
+    // 该周期任务是“消费后端结果”，不是前端重算；10s 行情任务已不再触发分析。
     this.startSignalAutoRefresh()
     this.startFailedPlatformRetry()
   }
@@ -170,6 +165,13 @@ class DataLoaderService {
     this.pendingVolumeRatioCodes.clear()
     if (!codes.length) return
 
+    if (!this.shouldRunVolumeRatioRefresh()) {
+      // 门限内不重算：待处理 codes 必须保留并稍后重试，避免静默丢数据（fail-visible）
+      codes.forEach((code) => this.pendingVolumeRatioCodes.add(code))
+      this.scheduleRealtimeVolumeRatioRefresh()
+      return
+    }
+
     this.volumeRatioRefreshRunning = true
     try {
       await this.updateVolumeRatios(codes)
@@ -179,6 +181,21 @@ class DataLoaderService {
         this.scheduleRealtimeVolumeRatioRefresh()
       }
     }
+  }
+
+  private shouldRunVolumeRatioRefresh(): boolean {
+    const now = Date.now()
+    if (now - this.lastVolumeRatioRefreshAt < VOLUME_RATIO_MIN_INTERVAL_MS) return false
+    this.lastVolumeRatioRefreshAt = now
+    return true
+  }
+
+  /**
+   * 复位量比重算门限（供测试与 HMR/诊断使用）。
+   * 门限本身只影响“多快允许再次全量重算”，不丢弃待处理 codes。
+   */
+  resetRealtimeVolumeRatioRefreshGate(): void {
+    this.lastVolumeRatioRefreshAt = 0
   }
 
   private async maybeRefreshPlatformCache(): Promise<boolean> {
@@ -329,37 +346,27 @@ class DataLoaderService {
     }
   }
 
-  private async withTimeout<T>(task: Promise<T>, timeoutMs: number, label: string): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | null = null
-    try {
-      return await Promise.race([
-        task,
-        new Promise<T>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error(`${label} timeout after ${timeoutMs}ms`))
-          }, timeoutMs)
-        }),
-      ])
-    } finally {
-      if (timer) clearTimeout(timer)
-    }
-  }
-
   private async loadPlatformAndMerge(
     force = false,
     options: {
       includeLimitUpData?: boolean
       allowWhileLoading?: boolean
       deferSignalEnrichment?: boolean
-      deferIntradayVolumeHistory?: boolean
       preserveExistingOnEmpty?: boolean
     } = {},
   ): Promise<DataLoaderRunSummary> {
     const locked = await refreshResourceLocks.runExclusive(
       'hotlist-platform',
       () => this.doLoadPlatformAndMerge(force, options),
+      { waitTimeoutMs: 120_000 },
     )
-    return locked.value!
+    if (locked.executed) return locked.value!
+    // 平台刷新资源被占用且等待超时：保留现有数据，返回结构化降级结果，等待下次刷新重试。
+    return {
+      ...this.summarizeRun(Date.now(), false),
+      degraded: true,
+      degradeReason: locked.reason === 'timeout' ? 'platform-lock-timeout' : 'platform-lock-busy',
+    }
   }
 
   private publishStartupBundle(bundle: any, startTime: number): DataLoaderRunSummary {
@@ -425,7 +432,6 @@ class DataLoaderService {
     void this.loadPlatformAndMerge(force, {
       allowWhileLoading: true,
       deferSignalEnrichment: true,
-      deferIntradayVolumeHistory: true,
       preserveExistingOnEmpty: true,
     })
       .catch((error) => {
@@ -439,7 +445,6 @@ class DataLoaderService {
       includeLimitUpData?: boolean
       allowWhileLoading?: boolean
       deferSignalEnrichment?: boolean
-      deferIntradayVolumeHistory?: boolean
       preserveExistingOnEmpty?: boolean
     } = {},
   ): Promise<DataLoaderRunSummary> {
@@ -496,16 +501,11 @@ class DataLoaderService {
     dataLayer.updatePlatforms(result.data)
     // 平台加载状态（成功行数/失败原因）随数据一起发布，供状态栏与诊断展示
     dataLayer.updatePlatformStatus(platformHotlistService.getCacheDiagnostics().platforms)
-    const rankTrendSnapshotPromise = options.deferSignalEnrichment
-      ? this.preloadRankTrendSnapshotsInBackground(Array.from(this.getAllHotCodes()))
-      : undefined
     if (options.includeLimitUpData) {
       await this.measureStartupStep('limitUp', () => this.loadLimitUpData(force))
     }
     await this.mergeData({
       deferSignalEnrichment: options.deferSignalEnrichment,
-      deferIntradayVolumeHistory: options.deferIntradayVolumeHistory,
-      rankTrendSnapshotPromise,
     })
 
     const summary = this.summarizeRun(startTime, fromCache)
@@ -535,7 +535,6 @@ class DataLoaderService {
       const summary = await this.loadPlatformAndMerge(options.force ?? false, {
         allowWhileLoading: true,
         deferSignalEnrichment: true,
-        deferIntradayVolumeHistory: true,
       })
       this.updateProgress(100, '完成', 'done')
       return summary
@@ -613,6 +612,8 @@ class DataLoaderService {
 
     if (allStockCodes.length === 0) return
 
+    // WS 主链路健康：只做行情合并补全，不重算量比、不触发 RankTrend 分析。
+    // RankTrend golden 与信号刷新职责在后端，前端 10s 周期不能反复做全市场重计算。
     if (this.isRealtimePrimaryHealthy()) {
       const quoteResult = await refreshResourceLocks.runExclusive(
         'quote-http',
@@ -632,15 +633,11 @@ class DataLoaderService {
         }
       }
 
-      await this.updateVolumeRatios(allStockCodes)
-      const platformRefreshed = await this.maybeRefreshPlatformCache()
-      if (!platformRefreshed) {
-        await this.refreshRankTrendSignals()
-      }
       return
     }
 
-    // 缩短批次延迟
+    // HTTP 兜底路径（WS 不可用）：分批行情 + 低频量比重算；
+    // RankTrend 信号只由全量刷新（mergeData）或手动调用触发。
     for (let i = 0; i < allStockCodes.length; i += batchSize) {
       const batchCodes = allStockCodes.slice(i, i + batchSize)
       const quoteResult = await refreshResourceLocks.runExclusive(
@@ -666,15 +663,12 @@ class DataLoaderService {
       }
     }
 
-    // 更新量比
-    if (allStockCodes.length) {
+    // 量比重算受最小间隔门限保护，避免兜底模式每 10s 全量读历史快照
+    if (allStockCodes.length && this.shouldRunVolumeRatioRefresh()) {
       await this.updateVolumeRatios(allStockCodes)
     }
 
-    const platformRefreshed = await this.maybeRefreshPlatformCache()
-    if (!platformRefreshed) {
-      await this.refreshRankTrendSignals()
-    }
+    await this.maybeRefreshPlatformCache()
 
     debugLog('[DataLoader] 行情刷新完成')
   }
@@ -867,35 +861,12 @@ class DataLoaderService {
   async mergeData(
     options: {
       deferSignalEnrichment?: boolean
-      deferIntradayVolumeHistory?: boolean
-      rankTrendSnapshotPromise?: Promise<RankTrendPreparedSnapshot[]>
     } = {},
   ): Promise<any[]> {
-    // 1. 获取历史成交量索引
     const allCodes = this.getAllHotCodes()
     const codesArray = Array.from(allCodes)
-    this.updateProgress(this.startupProgress.historyStart, '加载历史成交量索引...', 'merge')
-    const volumeHistoryMap = await this.measureStartupStep('history', () =>
-      this.withTimeout(
-        this.buildVolumeHistoryMap(codesArray),
-        STARTUP_VOLUME_HISTORY_TIMEOUT_MS,
-        'volume history',
-      ).catch((error) => {
-        console.warn('[DataLoader] 历史成交量索引加载失败，继续使用空索引:', error)
-        return new Map<string, number[]>()
-      }),
-    )
-    const intradayVolumeHistoryMap = options.deferIntradayVolumeHistory
-      ? new Map<string, number[]>()
-      : await this.measureStartupStep('intradayHistory', () =>
-          this.buildIntradayVolumeHistoryMap(codesArray).catch((error) => {
-            console.warn('[DataLoader] 分时成交量索引加载失败，继续使用空索引:', error)
-            return new Map<string, number[]>()
-          }),
-        )
-    this.updateProgress(this.startupProgress.historyEnd, '历史成交量索引完成', 'merge')
 
-    // 2. ✅ 先加载行情数据
+    // 1. 先加载行情数据（量比历史由后端统一计算，前端不再读快照历史）
     let quotesMap = new Map<string, any>()
     if (allCodes.size > 0) {
       try {
@@ -906,6 +877,7 @@ class DataLoaderService {
             () => this.getQuoteBatch(codesArray, false, {
               onProgress: (progress) => this.reportQuoteProgress(progress),
             }),
+            { waitTimeoutMs: 120_000 },
           ),
         )
         quotesMap = quoteResult.value ?? new Map()
@@ -914,54 +886,64 @@ class DataLoaderService {
       }
     }
 
-    // 3. 获取现有 stocks（用于保留已有数据）
+    // 2. 获取现有 stocks（用于保留已有数据）
     const existingStocks = dataLayer.getMergedStocks()
     const existingMap = new Map(
       existingStocks.filter((stock) => allCodes.has(stock.code)).map((stock) => [stock.code, stock]),
     )
 
-    // 4. 构建股票数据并计算综合排名
+    // 3. 构建股票数据并计算综合排名
     this.updateProgress(this.startupProgress.mergeStart, '合并热榜与行情数据...', 'merge')
     let merged = await this.measureStartupStep('merge', () =>
       stockMergeCoordinator.merge({
         platformData: this.state.value.data || {},
         latestQuotes: quotesMap,
-        volumeHistoryMap,
-        intradayVolumeHistoryMap,
         existingMap,
       }),
     )
 
-    // 5. 合并额外数据
+    // 4. 合并额外数据
     merged = this.mergeExtraData(merged)
 
-    merged = this.volumeRatioUpdateService.enrichStocks(
-      merged,
-      volumeHistoryMap,
-      intradayVolumeHistoryMap,
-    )
-
-    // 6. 计算个股热度
+    // 5. 计算个股热度
     this.updateStockHotness(merged)
 
-    // 7. 先存储基础热榜，RankTrend 信号属于后置增强，不能阻塞首屏数据可见。
+    // 6. 先存储基础热榜，RankTrend 信号属于后置增强，不能阻塞首屏数据可见。
     const basePublishVersion = this.publishStocks(merged, { reason: 'base-merge' })
     this.syncRealtimeSubscription()
     this.updateProgress(this.startupProgress.mergeEnd, '基础榜单已就绪', 'merge')
 
-    if (options.deferIntradayVolumeHistory) {
-      this.refreshIntradayVolumeRatiosInBackground(codesArray, volumeHistoryMap)
+    // 7. 量比由后端计算（Python golden + Redis TTL），前端只消费结果。
+    if (codesArray.length) {
+      try {
+        await this.updateVolumeRatios(codesArray)
+        // 把最新量比回填到本地 merged，避免后续 calculateSignals 整体 publish 覆盖掉量比
+        const ratioByCode = new Map(
+          dataLayer
+            .getStocks()
+            .map((stock) => [
+              stock.code,
+              { volumeRatio: stock.volumeRatio, volumeRatioMeta: stock.volumeRatioMeta },
+            ]),
+        )
+        merged = merged.map((stock) => {
+          const patch = ratioByCode.get(stock.code)
+          return patch ? { ...stock, ...patch } : stock
+        })
+      } catch (error) {
+        console.warn('[DataLoader] 后端量比刷新失败，保留基础榜单:', error)
+      }
     }
 
     if (options.deferSignalEnrichment) {
-      void this.enrichSignalsInBackground(merged, basePublishVersion, options.rankTrendSnapshotPromise)
+      void this.enrichSignalsInBackground(merged, basePublishVersion)
       return merged
     }
 
     // 8. 计算信号并回写增强字段
     this.updateProgress(this.startupProgress.signalStart, '计算排名趋势信号...', 'signal')
     const signalResult = await this.measureStartupStep('signal', () =>
-      this.calculateSignals(merged, options.rankTrendSnapshotPromise),
+      this.calculateSignals(merged),
     )
     merged = signalResult.merged
     if (signalResult.enriched) {
@@ -972,64 +954,12 @@ class DataLoaderService {
     return merged
   }
 
-  private preloadRankTrendSnapshotsInBackground(
-    codes: string[],
-  ): Promise<RankTrendPreparedSnapshot[]> | undefined {
-    const targetCodes = codes.filter((code) => code && code.length === 6)
-    if (!targetCodes.length) return undefined
-
-    return this.measureStartupStep('rankTrendSnapshot', () =>
-      rankTrendSignalService.preloadSnapshots(targetCodes),
-    ).catch((error) => {
-      console.warn('[DataLoader] 排名趋势历史快照预取失败，将回退即时读取:', error)
-      return []
-    })
-  }
-
-  private refreshIntradayVolumeRatiosInBackground(
-    codes: string[],
-    volumeHistoryMap: Map<string, number[]>,
-  ): void {
-    void this.buildIntradayVolumeHistoryMap(codes)
-      .then((intradayVolumeHistoryMap) => {
-        if (!intradayVolumeHistoryMap.size) return
-
-        const codeSet = new Set(codes)
-        const enrichedByCode = new Map(
-          this.volumeRatioUpdateService
-            .enrichStocks(
-              dataLayer.getStocks().filter((stock) => codeSet.has(stock.code)),
-              volumeHistoryMap,
-              intradayVolumeHistoryMap,
-            )
-            .map((stock) => [stock.code, stock]),
-        )
-
-        if (!enrichedByCode.size) return
-
-        const nextStocks = dataLayer.getStocks().map((stock) => {
-          const enriched = enrichedByCode.get(stock.code)
-          if (!enriched) return stock
-          return {
-            ...stock,
-            volumeRatio: enriched.volumeRatio,
-            volumeRatioMeta: enriched.volumeRatioMeta,
-          }
-        })
-        this.publishStocks(nextStocks, { reason: 'base-merge' })
-      })
-      .catch((error) => {
-        console.warn('[DataLoader] 后台分时成交量索引加载失败，保留日级量比:', error)
-      })
-  }
-
   private async enrichSignalsInBackground(
     baseMerged: any[],
     basePublishVersion: number,
-    snapshotPromise?: Promise<RankTrendPreparedSnapshot[]>,
   ): Promise<void> {
     try {
-      const result = await this.calculateSignals(baseMerged, snapshotPromise)
+      const result = await this.calculateSignals(baseMerged)
       if (!result.enriched) return
       const enriched = result.merged
       if (this.stockPublishVersion !== basePublishVersion) {
@@ -1114,22 +1044,6 @@ class DataLoaderService {
     return extraDataProjector.project(stocks)
   }
 
-  public async buildIntradayVolumeHistoryMap(
-    codes: string[] = [],
-    date: Date = new Date(),
-  ): Promise<Map<string, number[]>> {
-    return this.volumeHistoryService.buildIntradayVolumeHistoryMap(codes, date)
-  }
-
-  /**
-   * 1. 构建历史成交量索引
-   * 正式主链只按 code + daily + tradingDate 读取日级快照投影行，
-   * 返回最近 4 个交易日成交量，供后续剔除“当前成交量与最新日级快照重复”的场景。
-   */
-  public async buildVolumeHistoryMap(codes: string[] = []): Promise<Map<string, number[]>> {
-    return this.volumeHistoryService.buildVolumeHistoryMap(codes)
-  }
-
   /**
    * 批量更新股票信号（从 RankTrendAnalyzer 调用）
    */
@@ -1144,7 +1058,12 @@ class DataLoaderService {
     const result = await refreshResourceLocks.runExclusive(
       'ranktrend-signal',
       () => rankTrendSignalService.refreshRankTrendSignals(),
+      { waitTimeoutMs: 120_000 },
     )
+    if (!result.executed) {
+      console.warn(`[DataLoader] RankTrend 信号刷新跳过（${result.reason ?? 'busy'}），保留现有信号`)
+      return
+    }
     const stocks = result.value ?? []
     if (stocks.length) {
       this.publishStocks(stocks, { reason: 'manual-signal-update' })
@@ -1156,12 +1075,10 @@ class DataLoaderService {
    */
   private async calculateSignals(
     merged: any[],
-    snapshotPromise?: Promise<RankTrendPreparedSnapshot[]>,
   ): Promise<SignalCalculationResult> {
     try {
-      const snapshots = snapshotPromise ? await snapshotPromise : undefined
       return {
-        merged: await rankTrendSignalService.applySignalsToMerged(merged, { snapshots }),
+        merged: await rankTrendSignalService.applySignalsToMerged(merged),
         enriched: true,
       }
     } catch (error) {

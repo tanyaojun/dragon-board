@@ -113,6 +113,9 @@ type ThemeResearchSummaryQueryOptions = {
 }
 
 const QUANT_BOARD_RANKTREND_READ_TIMEOUT_MS = 70000
+// Python golden analyze 一次全市场/多帧分析可达 20s+，15s 超时会导致必然
+// abort+retry，浪费后端 CPU。预算对齐到 60s，前端已不再用 10s 周期反复触发。
+const QUANT_BOARD_RANKTREND_ANALYZE_TIMEOUT_MS = 60000
 
 type StockNameQueryOptions = {
   market?: 'SH' | 'SZ' | 'BJ'
@@ -581,6 +584,52 @@ export class ApiService {
   }
 
   /**
+   * 量比计算（Python golden + Redis TTL）：前端只提交 code + 当前成交量，
+   * 后端返回每股结构化结果；部分 code 无历史时单独降级，不阻断整体。
+   */
+  async getVolumeRatios(
+    payload: {
+      stocks: Array<{ code: string; volume: number }>
+    },
+    options?: RequestConfig,
+  ) {
+    return this.post<{
+      ok: boolean
+      source?: string
+      errorCode?: string
+      message?: string
+      items: Record<
+        string,
+        {
+          value?: number
+          status?: string
+          source?: string
+          currentVolume?: number
+          expectedVolume?: number
+          historyVolumes?: number[]
+          rawRatio?: number
+          capped?: boolean
+          reason?: string
+          calculatedAt?: number
+        }
+      >
+    }>(
+      '/api/quotes/volume-ratio',
+      payload,
+      {
+        context: 'quote',
+        priority: 'high',
+        retries: 1,
+        timeout: 20000,
+        cache: false,
+        throwOnHttpError: false,
+        silent: true,
+        ...options,
+      },
+    )
+  }
+
+  /**
    * 批量获取行情数据（自动分组合并）
    * @param codes 股票代码数组
    * @param batchSize 每批数量，默认20
@@ -763,7 +812,7 @@ export class ApiService {
       context: 'quant-board',
       priority: 'high',
       retries: 1,
-      timeout: 15000,
+      timeout: QUANT_BOARD_RANKTREND_ANALYZE_TIMEOUT_MS,
       cache: false,
       throwOnHttpError: true,
       ...options,

@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { dataLayer } from '../../DataLayer'
 import { RankTrendSignalService } from '../RankTrendSignalService'
+import { applyRankTrendAnalysis } from '../../rankTrend/compat'
 
 let emittedEvents = 0
 
@@ -370,7 +371,7 @@ describe('RankTrendSignalService', () => {
     )
   })
 
-  it('keeps the py golden resonance final after the signal pass', async () => {
+  it('keeps the py golden decision.final and projects finalSignal from it (resonance 已由 Python 融合)', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     const rankTrends = new Map(
       Array.from({ length: 20 }, (_, index) => {
@@ -434,23 +435,20 @@ describe('RankTrendSignalService', () => {
     const target = result.find((stock) => stock.code === '002298')
 
     expect(target?.rankTrend.resonance).toMatchObject({ status: 'ok', direction: 'buy' })
-    expect(target?.rankTrend.decision.final.signal).toBe('buy')
+    // Python golden 已把 resonance 融合进 decision.final；TS 不再覆盖，只投影 stock.finalSignal
+    expect(target?.rankTrend.decision.final.signal).toBe('hold')
+    expect(target?.finalSignal).toBe('hold')
   })
 
-  it('keeps py golden resonance and only overrides decision.final display', () => {
-    const service = new RankTrendSignalService()
+  it('projects stock.finalSignal from py golden decision.final without overriding it', () => {
     const stock = {
       code: '002279',
-      rankTrend: {
-        meta: { code: '002279', currentPercentile: 88, analysisSource: 'py_golden' },
-        resonance: { status: 'ok', direction: 'buy', score: 88 },
-        decision: { final: { signal: 'hold', confidence: 50 } },
-      },
     }
-    service['applyResonanceFinals']([stock], new Set(['002279']))
-    expect(stock.rankTrend.resonance.score).toBe(88)
-    expect(stock.rankTrend.decision.final.signal).toBe('buy')
+    applyRankTrendAnalysis(stock, {
+      decision: { final: { signal: 'buy', confidence: 88 } },
+    } as any)
     expect(stock.finalSignal).toBe('buy')
+    expect(stock.finalConfidence).toBe(88)
   })
 
   it('keeps the py golden resonance market median for the current frame', async () => {

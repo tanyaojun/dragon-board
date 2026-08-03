@@ -21,6 +21,11 @@ export function applyRankTrendAnalysis(target: any, rankTrend?: RankTrendAnalysi
   }
 
   target.rankTrend = rankTrend
+  // finalSignal/finalConfidence 由 Python decision.final（已含 resonance 融合）投影，
+  // 前端只读不重算；该投影覆盖所有走 applyRankTrendAnalysis 的更新路径。
+  const final = rankTrend.decision?.final
+  target.finalSignal = final?.signal ?? 'hold'
+  target.finalConfidence = Number(final?.confidence) || 0
 }
 
 export function getRankTrendAnalysis(target: any): RankTrendAnalysisResult | null {

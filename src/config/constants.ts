@@ -289,8 +289,9 @@ export const ROTATION_CONFIG = {
   // 轮动分析开关
   ENABLED: true,
 
-  // 分析间隔（毫秒）
-  ANALYSIS_INTERVAL: 5000,
+  // 分析间隔（毫秒）：题材轮动分析是前端同步重计算，5s 会持续占用主线程。
+  // 后端 theme_heat 已有独立刷新周期，前端降频到 30s 即可保证展示新鲜度。
+  ANALYSIS_INTERVAL: 30000,
 
   // 资金阈值（万元）
   FUND_THRESHOLDS: {

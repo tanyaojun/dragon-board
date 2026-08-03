@@ -27,7 +27,15 @@ function httpQuote(overrides: Partial<MergedQuoteData> = {}): MergedQuoteData {
 
 describe('QuoteService', () => {
   it('returns basic quotes before lazy money-flow enrichment when force is false', async () => {
-    const service = new QuoteService({ now: () => 1000 })
+    const fetchBasicData = vi.fn().mockResolvedValue(new Map([['603773', httpQuote()]]))
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => false,
+      feed: {
+        fetchBasicData,
+        fetchFullData: vi.fn().mockResolvedValue(new Map()),
+      } as any,
+    })
 
     const codes = ['603773']
     const result = await service.fetchMergedQuotes(codes)
@@ -35,6 +43,7 @@ describe('QuoteService', () => {
 
     expect(quote?.price).toBeDefined()
     expect(quote?.sources).toBeDefined()
+    expect(fetchBasicData).toHaveBeenCalledWith(codes)
   })
 
   it('does not publish legacy HTTP money-flow enrichment as authoritative funds', async () => {

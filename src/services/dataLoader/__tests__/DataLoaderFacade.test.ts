@@ -14,7 +14,6 @@ let fromCache = false
 let firstPlatformLoadEmptyCache = false
 let platformLoadCount = 0
 let quoteError: Error | null = null
-let volumeHistoryError: Error | null = null
 let platformLoadError: Error | null = null
 let quoteBatchResult = new Map<string, any>()
 let blockPlatformLoad = false
@@ -28,19 +27,13 @@ let signalPreloadCount = 0
 let blockQuoteBatch = false
 let releaseQuoteBatch: (() => void) | null = null
 let realtimePrimaryHealthy = false
-let blockIntradayVolumeHistory = false
-let releaseIntradayVolumeHistory: (() => void) | null = null
-let blockVolumeHistory = false
-let releaseVolumeHistory: (() => void) | null = null
 let startupBundle: any = null
 let startupBundleGetCount = 0
 let startupBundleSaveCount = 0
 let startupBundleWrites: any[] = []
 let realtimeOptions: any = null
-let volumeHistoryMapResult = new Map<string, number[]>()
-let intradayVolumeHistoryMapResult = new Map<string, number[]>()
-let volumeHistoryRequestCount = 0
-let intradayVolumeHistoryRequestCount = 0
+let volumeRatioItems: Record<string, any> = {}
+let volumeRatioError: Error | null = null
 let shouldRefreshPlatformCache = false
 let hasFreshPlatformCache = true
 
@@ -155,47 +148,17 @@ vi.mock('../RealtimeQuoteCoordinator', () => ({
     },
   }))
 
-vi.mock('../VolumeHistoryService', () => ({
-  VolumeHistoryService: class {
-    async buildVolumeHistoryMap() {
-      volumeHistoryRequestCount++
-      if (volumeHistoryError) throw volumeHistoryError
-      if (blockVolumeHistory) {
-        await new Promise<void>((resolve) => {
-          releaseVolumeHistory = resolve
-        })
-      }
-      return volumeHistoryMapResult
-    }
-    async buildIntradayVolumeHistoryMap() {
-      intradayVolumeHistoryRequestCount++
-      if (volumeHistoryError) throw volumeHistoryError
-      if (blockIntradayVolumeHistory) {
-        await new Promise<void>((resolve) => {
-          releaseIntradayVolumeHistory = resolve
-        })
-      }
-      return intradayVolumeHistoryMapResult
-    }
+vi.mock('../../apiService', () => ({
+  apiService: {
+    getVolumeRatios: vi.fn(async () => {
+      if (volumeRatioError) throw volumeRatioError
+      return { ok: true, items: volumeRatioItems }
+    }),
   },
 }))
 
 vi.mock('../RankTrendSignalService', () => ({
   rankTrendSignalService: {
-    preloadSnapshots: vi.fn(async () => {
-      signalPreloadCount++
-      return [
-        {
-          date: '2026-05-18 10:00',
-          timestamp: 1,
-          snapshot: {
-            type: 'half_hour',
-            hotlist: [{ code: '000001', rank: 30 }],
-            totalCount: 100,
-          },
-        },
-      ]
-    }),
     applySignalsToMerged: vi.fn(async (stocks) => {
       signalApplyCount++
       if (signalCalculationError) throw signalCalculationError
@@ -271,7 +234,6 @@ describe('DataLoaderFacade', () => {
     firstPlatformLoadEmptyCache = false
     platformLoadCount = 0
     quoteError = null
-    volumeHistoryError = null
     platformLoadError = null
     quoteBatchResult = new Map()
     blockPlatformLoad = false
@@ -285,18 +247,12 @@ describe('DataLoaderFacade', () => {
     blockQuoteBatch = false
     releaseQuoteBatch = null
     realtimePrimaryHealthy = false
-    blockIntradayVolumeHistory = false
-    releaseIntradayVolumeHistory = null
-    blockVolumeHistory = false
-    releaseVolumeHistory = null
     startupBundle = null
     startupBundleGetCount = 0
     startupBundleSaveCount = 0
     startupBundleWrites = []
-    volumeHistoryMapResult = new Map()
-    intradayVolumeHistoryMapResult = new Map()
-    volumeHistoryRequestCount = 0
-    intradayVolumeHistoryRequestCount = 0
+    volumeRatioItems = {}
+    volumeRatioError = null
     shouldRefreshPlatformCache = false
     hasFreshPlatformCache = true
     EventManager.clearHistory()
@@ -529,7 +485,7 @@ describe('DataLoaderFacade', () => {
     await loadingPromise
   })
 
-  it('preloads RankTrend snapshots while startup quote loading is still in flight', async () => {
+  it('startup no longer preloads RankTrend snapshots (后端 analyze 按需提供)', async () => {
     blockQuoteBatch = true
     const { dataLoader } = await import('../../dataLoader')
 
@@ -538,7 +494,7 @@ describe('DataLoaderFacade', () => {
     await vi.waitFor(() => {
       expect(releaseQuoteBatch).toEqual(expect.any(Function))
     })
-    expect(signalPreloadCount).toBe(1)
+    expect(signalPreloadCount).toBe(0)
     expect(signalApplyCount).toBe(0)
 
     blockQuoteBatch = false
@@ -570,52 +526,17 @@ describe('DataLoaderFacade', () => {
     })
   })
 
-  it('does not block initial startup on intraday volume history loading', async () => {
-    blockIntradayVolumeHistory = true
+  it('startup no longer reads volume history locally (后端量比统一计算)', async () => {
     const { dataLoader } = await import('../../dataLoader')
 
     const summary = await dataLoader.bootstrapInitialData({ force: true })
 
     expect(summary.stockCount).toBe(1)
-    expect(intradayVolumeHistoryRequestCount).toBe(1)
     expect(dataLoader.getLoadingStatus()).toMatchObject({
       active: false,
       phase: 'done',
       progress: 100,
     })
-
-    blockIntradayVolumeHistory = false
-    releaseIntradayVolumeHistory?.()
-  })
-
-  it('does not block initial startup on daily volume history loading', async () => {
-    vi.useFakeTimers()
-    blockVolumeHistory = true
-    try {
-      const { dataLoader } = await import('../../dataLoader')
-
-      const summaryPromise = dataLoader.bootstrapInitialData({ force: true })
-      await vi.advanceTimersByTimeAsync(6000)
-      const summary = await summaryPromise
-
-      expect(summary.stockCount).toBe(1)
-      expect(volumeHistoryRequestCount).toBe(1)
-      expect(dataLoader.getLoadingStatus()).toMatchObject({
-        active: false,
-        phase: 'done',
-        progress: 100,
-      })
-      expect(dataLayer.getStocks()).toEqual([
-        expect.objectContaining({
-          code: '000001',
-          name: '平安银行',
-        }),
-      ])
-    } finally {
-      blockVolumeHistory = false
-      releaseVolumeHistory?.()
-      vi.useRealTimers()
-    }
   })
 
   it('does not write half-enriched startup bundles before RankTrend signals finish', async () => {
@@ -911,7 +832,7 @@ describe('DataLoaderFacade', () => {
     }
   })
 
-  it('recalculates RankTrend signals during trading-time quote refresh', async () => {
+  it('does not trigger full-market RankTrend analysis during trading-time quote refresh', async () => {
     const { dataLoader } = await import('../../dataLoader')
     const { rankTrendSignalService } = await import('../RankTrendSignalService')
 
@@ -919,7 +840,7 @@ describe('DataLoaderFacade', () => {
 
     await (dataLoader as any).runQuoteRefresh(50)
 
-    expect(rankTrendSignalService.refreshRankTrendSignals).toHaveBeenCalledTimes(1)
+    expect(rankTrendSignalService.refreshRankTrendSignals).not.toHaveBeenCalled()
   })
 
   it('force reloads expired platform data and recalculates RankTrend during quote refresh', async () => {
@@ -1289,8 +1210,8 @@ describe('DataLoaderFacade', () => {
     ])
   })
 
-  it('keeps startup usable when volume history snapshots are unavailable', async () => {
-    volumeHistoryError = new Error('snapshot unavailable')
+  it('keeps startup usable when backend volume ratio is unavailable', async () => {
+    volumeRatioError = new Error('volume ratio service unavailable')
     const { dataLoader } = await import('../../dataLoader')
 
     await expect(dataLoader.loadAllPlatforms(true)).resolves.toBeTruthy()
@@ -1314,6 +1235,17 @@ describe('DataLoaderFacade', () => {
     vi.useFakeTimers()
     try {
       const { dataLoader } = await import('../../dataLoader')
+      const { apiService } = await import('../../apiService')
+      volumeRatioItems = {
+        '000001': {
+          status: 'unavailable',
+          source: 'unavailable',
+          currentVolume: 100,
+          historyVolumes: [],
+          reason: 'insufficient_history',
+          calculatedAt: 1,
+        },
+      }
       dataLayer.setMergedStocks([
         {
           code: '000001',
@@ -1323,9 +1255,17 @@ describe('DataLoaderFacade', () => {
         } as any,
       ])
 
+      ;(dataLoader as any).resetRealtimeVolumeRatioRefreshGate?.()
       realtimeOptions.onQuoteFlushed(['000001'])
       await vi.advanceTimersByTimeAsync(1000)
 
+      expect(apiService.getVolumeRatios).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stocks: expect.arrayContaining([
+            expect.objectContaining({ code: '000001', volume: 100 }),
+          ]),
+        }),
+      )
       expect(dataLayer.getStock('000001')).toMatchObject({
         volumeRatio: 1,
         volumeRatioMeta: expect.objectContaining({
@@ -1339,26 +1279,30 @@ describe('DataLoaderFacade', () => {
     }
   })
 
-  it('coalesces realtime volume ratio refreshes instead of reading history on every flush', async () => {
+  it('coalesces realtime volume ratio refreshes into a single backend call', async () => {
     vi.useFakeTimers()
     try {
       const { dataLoader } = await import('../../dataLoader')
+      const { apiService } = await import('../../apiService')
+      volumeRatioItems = {
+        '000001': { status: 'unavailable', reason: 'insufficient_history', currentVolume: 100, calculatedAt: 1 },
+        '000002': { status: 'unavailable', reason: 'insufficient_history', currentVolume: 200, calculatedAt: 1 },
+      }
       dataLayer.setMergedStocks([
         { code: '000001', name: '平安银行', volume: 100, volumeRatio: 1 } as any,
         { code: '000002', name: '万科A', volume: 200, volumeRatio: 1 } as any,
       ])
 
+      ;(dataLoader as any).resetRealtimeVolumeRatioRefreshGate?.()
       void realtimeOptions.onQuoteFlushed(['000001'])
       void realtimeOptions.onQuoteFlushed(['000001', '000002'])
       await Promise.resolve()
 
-      expect(volumeHistoryRequestCount).toBe(0)
-      expect(intradayVolumeHistoryRequestCount).toBe(0)
+      expect(apiService.getVolumeRatios).not.toHaveBeenCalled()
 
       await vi.advanceTimersByTimeAsync(1000)
 
-      expect(volumeHistoryRequestCount).toBe(1)
-      expect(intradayVolumeHistoryRequestCount).toBe(1)
+      expect(apiService.getVolumeRatios).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()
     }
@@ -1379,7 +1323,19 @@ describe('DataLoaderFacade', () => {
         },
       ],
     ])
-    volumeHistoryMapResult = new Map([['000001', [100, 100, 100]]])
+    volumeRatioItems = {
+      '000001': {
+        value: 2,
+        status: 'fresh',
+        source: 'daily_snapshot',
+        currentVolume: 200,
+        expectedVolume: 100,
+        historyVolumes: [100, 100, 100],
+        rawRatio: 2,
+        capped: false,
+        calculatedAt: 1,
+      },
+    }
     try {
       const { dataLoader } = await import('../../dataLoader')
 

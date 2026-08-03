@@ -18,6 +18,8 @@ export interface PlatformReloadDiagnostic {
   success: boolean
   consecutiveFailures?: number
   error?: string
+  /** 质量标记：白名单不可用时平台数据按原样展示（fail-visible，不阻断） */
+  warning?: string
 }
 
 export interface PlatformCacheDiagnostics {
@@ -50,26 +52,21 @@ export class PlatformHotlistService {
     options: { onProgress?: (progress: PlatformLoadProgress) => void } = {},
   ): Promise<PlatformHotlistResult> {
     const activeCodes = await this.loadActiveStockCodes()
-    if (!activeCodes) {
-      this.diagnostics.lastLoadFromCache = false
-      this.diagnostics.platforms = Object.fromEntries(
-        platforms.map((platform) => [
-          platform,
-          { rowCount: 0, success: false, error: 'active-stock-codes-unavailable' },
-        ]),
+    const whitelistUnavailable = activeCodes === null
+
+    if (whitelistUnavailable) {
+      // fail-visible：stock_names 白名单不可用不再阻断平台加载，
+      // 平台原始数据照常展示并打标，供下游与诊断观察（质量标记不是硬门禁）。
+      console.warn(
+        '[DataLoader] MongoDB stock_names 白名单不可用，平台数据按原样展示并打标（fail-visible）',
       )
-      return {
-        data: Object.fromEntries(platforms.map((platform) => [platform, []])),
-        timestamp: Date.now(),
-        fromCache: false,
-      }
     }
 
     const cached = this.platformCache.get('platforms')
     if (!force && cached && Date.now() - cached.timestamp < this.cacheTtl) {
       const data = this.filterPlatformData(cached.data, activeCodes)
       this.diagnostics.lastLoadFromCache = true
-      this.diagnostics.platforms = this.summarizePlatforms(data)
+      this.diagnostics.platforms = this.summarizePlatforms(data, whitelistUnavailable)
       return {
         data,
         timestamp: cached.timestamp,
@@ -111,13 +108,16 @@ export class PlatformHotlistService {
     const platformDiagnostics: Record<string, PlatformReloadDiagnostic> = {}
     allResults.forEach((result, index) => {
       if (result.status === 'fulfilled' && result.value.success) {
-        const rows = result.value.data.filter((item) => activeCodes.has(item?.code))
+        const rows = whitelistUnavailable
+          ? result.value.data
+          : result.value.data.filter((item) => activeCodes!.has(item?.code))
         results[result.value.platform] = rows
         this.consecutiveFailures[result.value.platform] = 0
         platformDiagnostics[result.value.platform] = {
           rowCount: rows.length,
           success: true,
           consecutiveFailures: 0,
+          ...(whitelistUnavailable ? { warning: 'whitelist-unavailable' } : {}),
         }
         return
       }
@@ -154,8 +154,11 @@ export class PlatformHotlistService {
    */
   async retryFailedPlatforms(): Promise<{ updated: boolean; data: Record<string, any[]> }> {
     const activeCodes = await this.loadActiveStockCodes()
-    if (!activeCodes) {
-      return { updated: false, data: {} }
+    const whitelistUnavailable = activeCodes === null
+    if (whitelistUnavailable) {
+      console.warn(
+        '[DataLoader] 失败平台重试：stock_names 白名单不可用，按原样合并并打标（fail-visible）',
+      )
     }
     const candidates = Object.entries(this.consecutiveFailures)
       .filter(([, count]) => count > 0 && count < PLATFORM_FAILURE_THRESHOLD)
@@ -174,12 +177,16 @@ export class PlatformHotlistService {
             throw new Error('adapter-unavailable')
           }
           const rawData = await adapter.getHotList()
-          const rows = adapter.format(rawData).filter((item) => activeCodes.has(item?.code))
+          const formatted = adapter.format(rawData)
+          const rows = whitelistUnavailable
+            ? formatted
+            : formatted.filter((item) => activeCodes!.has(item?.code))
           this.consecutiveFailures[platform] = 0
           this.diagnostics.platforms[platform] = {
             rowCount: rows.length,
             success: true,
             consecutiveFailures: 0,
+            ...(whitelistUnavailable ? { warning: 'whitelist-unavailable' } : {}),
           }
           updated[platform] = rows
           anyUpdated = true
@@ -279,8 +286,9 @@ export class PlatformHotlistService {
 
   private filterPlatformData(
     data: Record<string, any[]>,
-    activeCodes: Set<string>,
+    activeCodes: Set<string> | null,
   ): Record<string, any[]> {
+    if (!activeCodes) return data
     return Object.fromEntries(
       Object.entries(data).map(([platform, rows]) => [
         platform,
@@ -289,7 +297,10 @@ export class PlatformHotlistService {
     )
   }
 
-  private summarizePlatforms(data: Record<string, any[]>): Record<string, PlatformReloadDiagnostic> {
+  private summarizePlatforms(
+    data: Record<string, any[]>,
+    whitelistUnavailable = false,
+  ): Record<string, PlatformReloadDiagnostic> {
     const summary: Record<string, PlatformReloadDiagnostic> = {}
     for (const [platform, rows] of Object.entries(data)) {
       this.consecutiveFailures[platform] = 0
@@ -297,6 +308,7 @@ export class PlatformHotlistService {
         rowCount: Array.isArray(rows) ? rows.length : 0,
         success: true,
         consecutiveFailures: 0,
+        ...(whitelistUnavailable ? { warning: 'whitelist-unavailable' } : {}),
       }
     }
     return summary
