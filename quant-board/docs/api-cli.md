@@ -907,7 +907,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 的市场横截面基准（`marketMedianPercentile/marketMedianShortChange/marketSampleCount`）与共振/趋势百分位均按每帧 `avgRankNum` 升序、代码并列次序重排后计算；`marketSampleCount` 为该帧有效 `avgRankNum` 股票数。
 
-`POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes/currentFrame` 内容与 dataset generation，TTL 60s；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
+`POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes`、规范化后的 `currentFrame` 与 dataset generation；`currentFrame.slotTime` 会去掉前端自增的 `current:N` 序列号，`stocks` 只保留 `code/rank/avgRankNum` 稳定身份字段，避免面板每次打开因序列号或实时行情字段变化而缓存永不命中。TTL 与快照读口一致（`QUANT_BOARD_SNAPSHOT_CACHE_TTL_SECONDS`，默认 300s）；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
 
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
@@ -1243,7 +1243,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ⚠️ 口径说明：运行态 `zlje`（主力净额）直接取同花顺“个股资金流”页面 `净额 = 主力流入 − 主力流出`。该口径与旧 `mainMonitorDetail` 的 `mainbuy − mainsell` **不等价**——同一交易日同一只票两者数值甚至符号都可能不同（实测 300720 分别为 +1.245 亿 与 −0.831 亿）。因此运行态资金字段与历史快照中旧口径的 `zlje/mainNetInflow` 不可直接混算或跨口径比较。
 
-当腾讯覆盖率低于门槛时返回结构化 `503`；如果存在上次成功结果，响应携带 `staleData`。未覆盖资金的股票不按零值聚合，相关 `fundScore/mainNetInflow` 保持空值。
+当腾讯覆盖率低于门槛时不整段 `503`（fail-visible）：接口返回 `200`，`data.degraded=true`，`data.quality.errorCode=quote_coverage_blocked` 并携带覆盖率/返回数等结构化原因；因子保留已计算部分，但 `rank=0`、`rankEligible=false`，由前端展示可计算数据和缺失原因。只有题材映射本身为空（`mapping_empty`）这类"全源无数据"情形才返回结构化 `503` 并携带 `staleData`。未覆盖资金的股票不按零值聚合，相关 `fundScore/mainNetInflow` 保持空值。
 
 ### THS 主力资金运行态接口
 
@@ -1252,6 +1252,8 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 - `GET /api/themes/fund-rows?codes=000001,600000`：只读 Redis last-good 的诊断接口，不触发上游请求。
 
 全市场刷新周期可通过 `QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS` 覆盖，默认 300 秒（下限 60 秒）；akshare 每次调用会内部逐页请求同花顺数据中心约 104 页，触发风控（验证码/限流）时调度器进入熔断并保留 last-good。按需 THS 明细接口仍可用 `QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 2、15 秒和 THS `mainMonitorDetail` 官方地址。
+
+资金流 provider（`AkshareFundProvider`）抓取期间会强制 `getaddrinfo` 优先返回 IPv4 记录，并给 akshare 内部的 `requests` 调用注入单请求超时（默认取 `QUANT_BOARD_MARKET_FUND_FETCH_TIMEOUT_SECONDS` 的一半、上限 30 秒）。原因：`data.10jqka.com.cn` 在本机 IPv6 链路存在 TCP 可建连但数据被黑洞的问题，akshare 自身 `requests.get` 不带 timeout，上游挂起会让线程无限堆积并饿死调度器；IPv4 优先 + 超时双保险后，超时统一映射为 `ths_timeout` 进入熔断重试。
 
 该资金缓存（进程内 `ThemeFundCache`，last-good）只服务 Dragon Board 运行态行情列表和题材分析，也供快照采集器把运行态资金字段带入 snapshot stock rows。正式 RankTrend、回测、优化和历史数据集入库不把它当作历史资金口径；后端重启后资金行在首次全市场刷新完成前为空，前端保留 last-good 展示。
 

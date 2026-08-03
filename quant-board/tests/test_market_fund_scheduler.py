@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -46,15 +47,23 @@ class FakeStream:
 
 
 class FakeProvider:
-    def __init__(self, error_code: str | None = None, batch: AkshareFundBatch | None = None) -> None:
+    def __init__(
+        self,
+        error_code: str | None = None,
+        batch: AkshareFundBatch | None = None,
+        hang: bool = False,
+    ) -> None:
         self.error_code = error_code
         self.batch = batch
+        self.hang = hang
         self.calls: list[str] = []
 
     async def fetch_all(self, *, session_date: str) -> AkshareFundBatch:
         self.calls.append(session_date)
         if self.error_code:
             raise AkshareFundProviderError(self.error_code)
+        if self.hang:
+            await asyncio.sleep(3600)
         if self.batch is not None:
             return self.batch
         return AkshareFundBatch(
@@ -110,6 +119,46 @@ async def test_no_owner_makes_zero_requests() -> None:
 
     assert await scheduler.run_once() is False
     assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_timeout_opens_cooldown_and_exposes_status() -> None:
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    provider = FakeProvider(hang=True)
+    scheduler = _scheduler(
+        provider=provider,
+        current=current,
+        fetch_timeout_seconds=0.1,
+    )
+
+    assert await scheduler.run_once() is True
+
+    status = scheduler.status()
+    assert status["lastError"] == "ths_timeout"
+    assert status["circuitOpenUntil"] >= current.timestamp() + 300
+    assert status["lastRowCount"] == 0
+    assert status["primedCodes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_batch_is_exposed_in_status_not_silently_successful() -> None:
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    provider = FakeProvider(
+        batch=AkshareFundBatch(
+            rows=[],
+            failures=[],
+            fetched_at_ms=1,
+            session_date="2026-07-30",
+        )
+    )
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+
+    status = scheduler.status()
+    assert status["lastError"] == "empty_batch"
+    assert status["lastRowCount"] == 0
+    assert status["primedCodes"] == 0
 
 
 @pytest.mark.asyncio

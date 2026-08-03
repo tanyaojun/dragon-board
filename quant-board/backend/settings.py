@@ -138,6 +138,7 @@ class Settings(BaseModel):
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
     theme_fund_cache_ttl_seconds: int = Field(default=900)
+    market_fund_fetch_timeout_seconds: float = Field(default=60.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)
     xueqiu_cookie: str = Field(default="")
@@ -416,6 +417,13 @@ class Settings(BaseModel):
             _env_int(
                 "QUANT_BOARD_THEME_FUND_CACHE_TTL_SECONDS",
                 self.theme_fund_cache_ttl_seconds,
+            ),
+        )
+        self.market_fund_fetch_timeout_seconds = max(
+            10.0,
+            _env_float(
+                "QUANT_BOARD_MARKET_FUND_FETCH_TIMEOUT_SECONDS",
+                self.market_fund_fetch_timeout_seconds,
             ),
         )
         self.market_quotes_refresh_interval_seconds = max(

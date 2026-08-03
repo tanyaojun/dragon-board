@@ -107,6 +107,7 @@ def test_fetch_all_parses_full_market_rows() -> None:
     first = batch.rows[0]
     assert first["code"] == "300720"
     assert first["zlje"] == -83062800.0
+    assert first["zljzb"] == round(-83062800.0 / 335000000.0 * 100, 2)
     assert first["inflow"] == 126000000.0
     assert first["outflow"] == 209000000.0
     assert first["turnover"] == 335000000.0
@@ -119,6 +120,46 @@ def test_fetch_all_parses_full_market_rows() -> None:
     second = batch.rows[1]
     assert second["code"] == "000509"
     assert second["zlje"] == 60704000.0
+    assert second["zljzb"] == round(60704000.0 / 395000000.0 * 100, 2)
+
+
+def test_zljzb_missing_when_turnover_is_zero_or_absent() -> None:
+    ak = FakeAkshare(
+        frame=_frame(
+            [
+                {
+                    "序号": 1,
+                    "股票代码": 300720,
+                    "股票简称": "海川智能",
+                    "最新价": 50.8,
+                    "涨跌幅": "20.01%",
+                    "换手率": "3.72%",
+                    "流入资金": "1.26亿",
+                    "流出资金": "2.09亿",
+                    "净额": "-8306.28万",
+                    "成交额": "0",
+                },
+                {
+                    "序号": 2,
+                    "股票代码": 509,
+                    "股票简称": "华塑控股",
+                    "最新价": 2.92,
+                    "涨跌幅": "2.01%",
+                    "换手率": "1.00%",
+                    "流入资金": "2.28亿",
+                    "流出资金": "1.67亿",
+                    "净额": "6070.40万",
+                    "成交额": "-",
+                },
+            ]
+        )
+    )
+    provider = AkshareFundProvider(akshare_module=ak, now_ms=lambda: 1)
+    batch = provider._fetch_all_sync(session_date="2026-07-30")
+
+    # 成交额缺失/为 0 时 zljzb 保持缺失，避免用 0 伪装占比
+    assert "zljzb" not in batch.rows[0]
+    assert "zljzb" not in batch.rows[1]
 
 
 def test_fetch_all_records_parse_failures_but_keeps_valid_rows() -> None:
@@ -233,6 +274,125 @@ def test_tqdm_module_silenced_and_restored() -> None:
 
     assert ak.saw_silenced_tqdm is True
     assert tqdm_module.get_tqdm is tqdm_module.original
+
+
+def test_fetch_all_injects_timeout_into_akshare_requests_calls(monkeypatch) -> None:
+    """akshare 内部 requests 调用必须带上默认 timeout，否则上游挂起会永久阻塞线程。"""
+    import requests
+
+    captured: dict[str, object] = {}
+
+    def fake_get(url: str, *args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        captured["url"] = url
+        return "ok"
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: "ok")
+
+    class RequestsAkshare:
+        def stock_fund_flow_individual(self, symbol: str = "即时"):
+            assert requests.get("http://example.test/funds") == "ok"
+            return _frame(
+                [
+                    {
+                        "序号": 1,
+                        "股票代码": 300720,
+                        "股票简称": "海川智能",
+                        "最新价": 50.8,
+                        "涨跌幅": "20.01%",
+                        "换手率": "3.72%",
+                        "流入资金": "1.26亿",
+                        "流出资金": "2.09亿",
+                        "净额": "-8306.28万",
+                        "成交额": "3.35亿",
+                    }
+                ]
+            )
+
+    provider = AkshareFundProvider(
+        akshare_module=RequestsAkshare(),
+        now_ms=lambda: 1,
+        request_timeout_seconds=7.5,
+    )
+    batch = provider._fetch_all_sync(session_date="2026-07-30")
+
+    assert captured["timeout"] == 7.5
+    assert batch.rows[0]["code"] == "300720"
+    # 上下文结束后 requests.get 恢复原样，不再注入 timeout
+    assert requests.get is fake_get
+
+
+def test_fetch_all_maps_requests_timeout_when_upstream_hangs(monkeypatch) -> None:
+    """上游挂起时注入的 timeout 抛 requests.Timeout，必须映射为 ths_timeout 供调度器熔断。"""
+    import requests
+
+    def hang_get(url: str, *args, **kwargs):
+        raise requests.exceptions.ReadTimeout("read timed out")
+
+    monkeypatch.setattr(requests, "get", hang_get)
+    monkeypatch.setattr(requests, "post", hang_get)
+
+    class RequestsAkshare:
+        def stock_fund_flow_individual(self, symbol: str = "即时"):
+            # akshare 自身调用不带 timeout，注入后仍会抛 Timeout
+            requests.get("http://example.test/funds")
+            return None
+
+    provider = AkshareFundProvider(
+        akshare_module=RequestsAkshare(),
+        request_timeout_seconds=7.5,
+    )
+    with pytest.raises(AkshareFundProviderError) as exc_info:
+        provider._fetch_all_sync(session_date="2026-07-30")
+    assert exc_info.value.code == "ths_timeout"
+
+
+def test_fetch_all_prefers_ipv4_during_akshare_call(monkeypatch) -> None:
+    """IPv6 链路黑洞环境下，akshare 调用期间 DNS 解析必须优先返回 IPv4，否则请求永久挂起。"""
+    import socket
+    import requests
+
+    captured: dict[str, object] = {}
+
+    def fake_getaddrinfo(host: str, port: int, *args, **kwargs):
+        return [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", (host, port)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port)),
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: "ok")
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: "ok")
+
+    class RequestsAkshare:
+        def stock_fund_flow_individual(self, symbol: str = "即时"):
+            infos = socket.getaddrinfo("data.10jqka.com.cn", 80)
+            captured["families"] = [item[0] for item in infos]
+            return _frame(
+                [
+                    {
+                        "序号": 1,
+                        "股票代码": 300720,
+                        "股票简称": "海川智能",
+                        "最新价": 50.8,
+                        "涨跌幅": "20.01%",
+                        "换手率": "3.72%",
+                        "流入资金": "1.26亿",
+                        "流出资金": "2.09亿",
+                        "净额": "-8306.28万",
+                        "成交额": "3.35亿",
+                    }
+                ]
+            )
+
+    provider = AkshareFundProvider(akshare_module=RequestsAkshare(), now_ms=lambda: 1)
+    batch = provider._fetch_all_sync(session_date="2026-07-30")
+
+    assert captured["families"] == [socket.AF_INET]
+    assert batch.rows[0]["code"] == "300720"
+    # 调用结束后 getaddrinfo 恢复原样
+    assert socket.getaddrinfo is fake_getaddrinfo
 
 
 @pytest.mark.asyncio

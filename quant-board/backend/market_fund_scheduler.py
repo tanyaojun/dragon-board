@@ -47,6 +47,7 @@ class MarketFundScheduler:
         min_refresh_interval_seconds: float = 60.0,
         refresh_interval_seconds: float = 300.0,
         systemic_cooldown_seconds: float = 300.0,
+        fetch_timeout_seconds: float = 60.0,
         enabled: bool = True,
     ) -> None:
         self.cache = cache
@@ -60,6 +61,7 @@ class MarketFundScheduler:
             float(refresh_interval_seconds),
         )
         self.systemic_cooldown_seconds = max(30.0, float(systemic_cooldown_seconds))
+        self.fetch_timeout_seconds = max(10.0, float(fetch_timeout_seconds))
         self.enabled = enabled
         self._next_refresh_at = 0.0
         self._circuit_open_until = 0.0
@@ -130,7 +132,15 @@ class MarketFundScheduler:
         self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
         self._record_request(now_ts)
         try:
-            batch = await self.provider.fetch_all(session_date=session_date)
+            batch = await asyncio.wait_for(
+                self.provider.fetch_all(session_date=session_date),
+                timeout=self.fetch_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            # 上游挂起不能拖死调度器：超时熔断 + 冷却，状态结构化可见
+            self._last_error = "ths_timeout"
+            self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+            return True
         except AkshareFundProviderError as error:
             self._last_error = error.code
             if error.code in SYSTEMIC_ERRORS:
@@ -140,6 +150,11 @@ class MarketFundScheduler:
             logger.exception("market fund akshare refresh failed unexpectedly")
             self._last_error = "unexpected_fetch_error"
             self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+            return True
+
+        if not batch.rows:
+            # 空批次视为质量问题而非成功：保留 last-good、状态暴露原因，min 间隔后重试
+            self._last_error = "empty_batch"
             return True
 
         saved_rows, validation_failures = await self._save_batch(batch)
@@ -253,4 +268,5 @@ market_fund_scheduler = MarketFundScheduler(
     stream=get_market_fund_stream(),
     provider=get_akshare_fund_provider(),
     refresh_interval_seconds=get_settings().theme_fund_refresh_interval_seconds,
+    fetch_timeout_seconds=get_settings().market_fund_fetch_timeout_seconds,
 )
