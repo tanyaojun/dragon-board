@@ -19,15 +19,16 @@ V12 目标新增一条与 RankTrend 并列的 ThemeTrend 研究链：
 ```text
 backend/
   data/                 # 数据库、快照导入、质量门禁、数据查询
-  snapshot_collector/   # [实验] 后端快照采集器（shadow 模式），含 models/slots/providers/builder/quality_gate/state/repository_port/service/service_factory
+  snapshot_collector/   # 后端快照采集器（独立进程，正式生产链路），含 models/slots/providers/builder/quality_gate/state/repository_port/service/service_factory/gateway/instance_lock
   ranktrend/            # Python 版 rankTrend 分析链
   core/
     strategy/           # 策略接口和 rankTrend 候选策略
     engine/             # 回测事件循环、撮合、绩效统计
     portfolio/          # 现金、持仓、交易成本、风控
   optimization/         # 独立参数优化模块：搜索方法、目标函数、任务状态、实验记录
-  api/                  # FastAPI 路由（含 `/api/snapshot-collector/*` 实验路由）
-  cli/                  # 命令行入口（含 `snapshot-collector-*` 实验命令）
+  api/                  # FastAPI 路由（含 `/api/snapshot-collector/*` 路由）
+  cli/                  # 命令行入口（含 `snapshot-collector-*` 命令）
+  collector_main.py     # 独立采集进程入口（默认端口 8001）
   reports/              # 报告导出辅助
 ```
 
@@ -35,7 +36,7 @@ backend/
 
 ### 后端快照采集器
 
-`backend/snapshot_collector/` 是 QuantBoard 后端的正式快照采集模块。它从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，在 QuantBoard 后端独立完成快照组装、规范化和质量门禁，不再依赖 Dragon Board 浏览器页面是否打开。Dragon Board 前端已默认关闭自动正式快照写入，只保留手动诊断入口。
+`backend/snapshot_collector/` 是 QuantBoard 后端的正式快照采集模块，由**独立进程** `backend/collector_main:app`（默认端口 8001）承载，经 DragonBoardLauncher 作为核心启动项管理；8000 Quant API 进程不再启动采集调度器。它从 proxy-server 和 python-bridge 实时拉取热榜与行情数据，独立完成快照组装、规范化和质量检查，不再依赖 Dragon Board 浏览器页面是否打开。Dragon Board 前端已默认关闭自动正式快照写入，只保留手动诊断入口。
 
 模块结构：
 
@@ -47,6 +48,8 @@ backend/snapshot_collector/
   providers.py        # StartupBundleStockProvider, ProxyMergedHotlistProvider, ProxyHotlistProvider, ProxyQuoteProvider, BridgeQuoteProvider, ProxyLimitUpProvider, ThemeMappingProvider
   builder.py          # build_ingest_payload()
   quality_gate.py     # evaluate_quality()
+  gateway.py          # Http/InProcess 双数据网关（进程内直连 market_proxy，去掉 8000 自环）
+  instance_lock.py    # Redis 单实例锁（值含持有者 PID，残留锁自动清理）
   state.py            # record_run(), get_status()
   repository_port.py  # SnapshotRepository Protocol
   service.py          # SnapshotCollectorService (run_once, backfill_slots, audit 等)
@@ -56,15 +59,18 @@ backend/snapshot_collector/
 
 配置与运行：
 
-- 启停控制：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED` 控制。生产环境设为 `1`，调度器在 FastAPI `startup` 时自动注册到事件循环。
+- 启停控制：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED` 控制。生产环境设为 `1`，由独立进程 `collector_main`（8001）启动调度器；8000 API 进程不再采集。
+- 启动入口：`.\.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001`（DragonBoardLauncher 核心启动项，阶段顺序：基础设施 → 数据源 → Quant API → 采集服务）。
 - 写目标：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 指定（生产环境设为 `dragonboard_live`）。写入 live 数据集需同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，其它任意 dataset 仍被 quality gate 和 CLI 预检拒绝，防止误写。
-- 质量门禁：`evaluate_quality()` 在写入前检查数据源健康、股票行数量、时间窗口和 dataset 合法性。被阻止的运行写入 `snapshot_collector_runs`（状态 `blocked`）并保留完整审计轨迹，包括 `sourceHealth`、`captureMode`、核心行数和完成时间。
-- 自动调度器：`SnapshotCollectorScheduler` 是模块级 `asyncio` 后台 runner 单例，在 FastAPI `startup`/`shutdown` 生命周期中管理。轮询间隔由 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS`（默认 1000ms）控制，每个 tick 检查交易日、槽位表、时间窗口和 MongoDB 去重。非 MongoDB 模式或 `ENABLED=0` 时自动禁用。并发保护通过内存中的 `_in_flight_slots` 集合实现。
+- 质量语义（fail-visible）：**只有全部数据源都无任何原始记录时才拒写**（写入 `snapshot_collector_runs` 状态 `blocked`）。空热榜但存在 sector/指数等部分数据时，保存并打 `empty_hotlist_with_partial_data` 标记；`normalize_snapshot_ingest` 不再因空热榜整批抛错。
+- 自动调度器：`SnapshotCollectorScheduler` 在 `collector_main` lifespan 中管理，next-slot 精确定时（`QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` 已废弃）。非 MongoDB 模式或 `ENABLED=0` 时自动禁用。
+- 单实例协调：`collector_main` 与 8000 启动时竞争 Redis 锁（`snapshot-collector:instance-lock:<dataset>`，TTL 120s + 60s 心跳续期，值含持有者 PID）；持有者进程已死时残留锁自动清理重抢，避免强杀后等待与双进程双采。
+- 交易日历：bridge → 本地缓存（`quant-board/data/trading_calendar_cache.json`）→ 工作日启发式三级降级，桥挂只降级不停采。
 - 股票池：优先通过 `StartupBundleStockProvider` 读取 proxy-server 的 live 前端 startup bundle；缓存缺失时通过 `ProxyMergedHotlistProvider` 做八平台热榜 union fallback。单平台 `ProxyHotlistProvider` 只保留为诊断工具。
 
 数据源覆盖：
 
-- **行情**：同时使用 `ProxyQuoteProvider`（东财资金流）和 `BridgeQuoteProvider`（python-bridge 实时价格、盘口、高低价和昨收）。bridge 当前为 L1 + 标准五档，不描述为官方客户端级 L2。
+- **行情**：同时使用 `TencentBasicQuoteProvider`（腾讯 f2/f3/f6/f5/f8/f9/f10/f20/f21/f23，含 pe/pb/总市值/流通市值）和 `BridgeQuoteProvider`（python-bridge 实时价格、盘口、高低价和昨收）。量比由 Python golden `compute_volume_ratios` 补齐；涨跌停价按交易所规则从昨收派生（ST 5%、创业板/科创板 20%、北交所 30%、其余 10%）。bridge 当前为 L1 + 标准五档，不描述为官方客户端级 L2。
 - **盘口**：`depth10`、`bid1Price/bid1Volume`、`ask1Price/ask1Volume` 由 `BridgeQuoteProvider` 提供。
 - **题材**：MongoDB 全市场映射由共享 `ThemeHeatService` 聚合；`ThemeMappingProvider` 逐股写入 `themes/mainTheme/sectorLabel`。少数股票可能因题材基础库未覆盖而缺失，属于映射库质量缺口。
 - **涨停池**：`ProxyLimitUpProvider` 接入 THS pools，写入 `limitUpPool/reason/firstZtTime/lastZtTime/boardHeight` 等事件字段。该字段只应出现在涨停池相关股票上，不能按全量股票 100% 覆盖审计。

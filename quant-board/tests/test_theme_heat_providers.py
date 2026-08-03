@@ -57,9 +57,29 @@ class FakeBatchHttp:
                 self.active -= 1
 
 
+class _FakeGateway:
+    """把旧的 _http_get_json 风格 callable 适配为 MarketDataGateway 注入点。"""
+
+    def __init__(self, fake_http: FakeBatchHttp) -> None:
+        self._fake_http = fake_http
+
+    def get_json(self, url: str, timeout_s: float) -> dict:
+        return self._fake_http(url, timeout_s)
+
+    def post_json(self, url: str, timeout_s: float, payload: dict | None = None) -> dict:
+        raise AssertionError("unexpected POST in tencent provider test")
+
+
+def _patch_gateway(monkeypatch, fake_http: FakeBatchHttp) -> None:
+    monkeypatch.setattr(
+        "backend.snapshot_collector.providers._get_default_gateway",
+        lambda: _FakeGateway(fake_http),
+    )
+
+
 def test_tencent_provider_batches_and_keeps_only_basic_fields(monkeypatch) -> None:
     fake_http = FakeBatchHttp()
-    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
+    _patch_gateway(monkeypatch, fake_http)
     provider = TencentBasicQuoteProvider("http://127.0.0.1:3000", batch_size=50, max_concurrency=3)
 
     rows, health = provider.collect([f"{index:06d}" for index in range(120)])
@@ -82,7 +102,7 @@ def test_tencent_provider_batches_and_keeps_only_basic_fields(monkeypatch) -> No
 
 def test_provider_stops_scheduling_batches_after_collection_budget(monkeypatch) -> None:
     fake_http = FakeBatchHttp()
-    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
+    _patch_gateway(monkeypatch, fake_http)
     provider = TencentBasicQuoteProvider(
         "http://127.0.0.1:3000",
         batch_size=10,
@@ -100,7 +120,7 @@ def test_provider_stops_scheduling_batches_after_collection_budget(monkeypatch) 
 
 def test_failed_batch_is_retried_once(monkeypatch) -> None:
     fake_http = FakeBatchHttp(fail_once_for="000000")
-    monkeypatch.setattr("backend.snapshot_collector.providers._http_get_json", fake_http)
+    _patch_gateway(monkeypatch, fake_http)
     provider = TencentBasicQuoteProvider(
         "http://127.0.0.1:3000",
         batch_size=50,

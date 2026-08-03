@@ -151,6 +151,15 @@ Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
 
 以下接口属于 `backend/snapshot_collector/` 模块，是 QuantBoard 后端的正式快照采集能力。写入 `dragonboard_live` 需设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=1`、`QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 和 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`。所有响应使用统一的 `{"ok": true/false, "status": "...", "data": {...}}` 信封格式。
 
+正式采集由独立进程承载（DragonBoardLauncher 核心启动项，默认端口 8001）：
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001
+```
+
+8000 Quant API 进程不再启动采集调度器；`QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` 已废弃（next-slot 精确定时）。
+
 采集器通过 FastAPI 主进程的 `startup`/`shutdown` 生命周期自动管理 `SnapshotCollectorScheduler`，与 QuantBoard API 共用 `8000` 端口，无需独立守护进程。
 
 股票池优先读取 proxy-server `/api/cache/startup-bundle?key=default:YYYY-MM-DD`。startup bundle 缺失或过期时，collector 调用 proxy-server 的八个平台热榜接口做 union fallback，生成 `rank/compRank/platforms/avgRank/avgRankNum` 和各平台原始名次。任一平台失败只记录数据源健康和质量标记；只有 startup bundle 与八平台热榜全部不可用、无法采到任何股票时才阻断写入。frame 的 `metadata.rankProvenance` 同时保存当槽平台总行数、权重、字段映射和公式版本。
@@ -2396,7 +2405,7 @@ max_drawdown: -0.08
 
 ### 后端快照采集器 CLI
 
-以下命令属于 `backend/snapshot_collector/`。正式采集由 FastAPI 生命周期内的调度器执行；CLI 用于状态查询、人工单次采集、补采和审计。写入 `dragonboard_live` 必须同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`。命令直接输出 JSON，不做富文本格式化。
+以下命令属于 `backend/snapshot_collector/`。正式采集由独立进程 `backend.collector_main`（8001）执行；CLI 用于状态查询、人工单次采集、补采和审计。写入 `dragonboard_live` 必须同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 与 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`。命令直接输出 JSON，不做富文本格式化。
 
 ### `snapshot-collector-status`
 

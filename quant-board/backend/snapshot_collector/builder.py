@@ -31,6 +31,36 @@ SECTOR_FACTOR_FIELDS = (
 )
 
 
+def _limit_ratio_for(code: Any, name: Any = "") -> float:
+    """A股涨跌停幅度：ST 5%、创业板/科创板 20%、北交所 30%、其余主板 10%。"""
+    upper_name = str(name or "").upper()
+    if "ST" in upper_name:
+        return 0.05
+    if str(code).startswith(("300", "301", "688", "689")):
+        return 0.20
+    if str(code).startswith(("4", "8", "9")):
+        return 0.30
+    return 0.10
+
+
+def _derive_limit_prices(
+    pre_close: Any,
+    code: Any,
+    name: Any = "",
+) -> tuple[float, float] | None:
+    """按交易所规则从昨收派生涨停/跌停价；无效昨收返回 None（保持缺失）。"""
+    if (
+        isinstance(pre_close, bool)
+        or not isinstance(pre_close, (int, float))
+        or not math.isfinite(float(pre_close))
+        or float(pre_close) <= 0
+    ):
+        return None
+    ratio = _limit_ratio_for(code, name)
+    base = float(pre_close)
+    return round(base * (1 + ratio), 2), round(base * (1 - ratio), 2)
+
+
 def _first_present(row: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in row and row.get(key) is not None:
@@ -193,6 +223,20 @@ def _enrich_stock_rows_from_quotes(
             if tmv is not None:
                 row["totalMarketValue"] = tmv
                 row["totalMV"] = tmv
+            cir_mv = q.get("cirMV")
+            if cir_mv is not None:
+                row["cirMV"] = cir_mv
+            pb = q.get("pb")
+            if pb is not None:
+                row["pb"] = pb
+            for field in ("limitUpPrice", "limitDownPrice"):
+                value = q.get(field)
+                if value is not None and not row.get(field):
+                    row[field] = value
+            if row.get("price") is not None and not row.get("lastTradePrice"):
+                row["lastTradePrice"] = row["price"]
+            if row.get("volume") is not None and not row.get("lastTradeVolume"):
+                row["lastTradeVolume"] = row["volume"]
 
         mf = flow_by_code.get(code)
         if mf:
@@ -234,6 +278,14 @@ def _enrich_stock_rows_from_quotes(
                 row["ask1Volume"] = ask1_volume
             if book:
                 row["depth10"] = book
+
+        # 涨跌停价无上游来源时，按交易所规则从昨收派生（回测撮合约束所需）
+        if not row.get("limitUpPrice") and not row.get("limitDownPrice"):
+            pre_close = row.get("preClose")
+            if pre_close is not None:
+                derived = _derive_limit_prices(pre_close, code, str(row.get("name") or ""))
+                if derived is not None:
+                    row["limitUpPrice"], row["limitDownPrice"] = derived
 
 
 def build_ingest_payload(

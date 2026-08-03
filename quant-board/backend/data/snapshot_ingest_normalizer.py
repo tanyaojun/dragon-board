@@ -40,17 +40,24 @@ def normalize_snapshot_ingest(
         snapshot_id = row_snapshot_id(row)
         if snapshot_id:
             stock_row_count_by_snapshot[snapshot_id] = stock_row_count_by_snapshot.get(snapshot_id, 0) + 1
-    empty_formal_snapshot_ids = [
-        snapshot_id
-        for frame in frames
-        for snapshot_id in [row_snapshot_id(frame)]
-        if str(frame.get("type") or "") != "five_minute"
-        and snapshot_id
-        and str(frame.get("captureMode") or "real_time") != "restored"
-        and stock_row_count_by_snapshot.get(snapshot_id, 0) == 0
-    ]
-    if empty_formal_snapshot_ids:
-        raise ValueError(f"formal snapshot hotlist is empty: {empty_formal_snapshot_ids[0]}")
+    # 正式槽位热榜为空但存在其它可保存数据（sector/payload 等）时，不再整批拒写：
+    # 打质量标记保留部分数据（fail-visible）。仅当 service 层判定全源无数据时拒写。
+    for frame in frames:
+        sid = row_snapshot_id(frame)
+        if (
+            str(frame.get("type") or "") != "five_minute"
+            and sid
+            and str(frame.get("captureMode") or "real_time") != "restored"
+            and stock_row_count_by_snapshot.get(sid, 0) == 0
+        ):
+            frame_flags = list(frame.get("qualityFlags") or [])
+            frame_flags.append("empty_hotlist_with_partial_data")
+            frame["qualityFlags"] = list(dict.fromkeys(frame_flags))
+            for record in records:
+                if row_snapshot_id(record) == sid:
+                    record_flags = list(record.get("qualityFlags") or [])
+                    record_flags.append("empty_hotlist_with_partial_data")
+                    record["qualityFlags"] = list(dict.fromkeys(record_flags))
 
     snapshot_ids = {str(record.get("id") or record.get("snapshotId") or "") for record in records}
     snapshot_ids.update(str(frame.get("snapshotId") or frame.get("id") or "") for frame in frames)

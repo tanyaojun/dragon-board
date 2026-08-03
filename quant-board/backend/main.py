@@ -72,6 +72,7 @@ from backend.utils import json_loads
 
 logger = logging.getLogger(__name__)
 
+
 app = FastAPI(
     title="QuantBoard",
     version="0.1.0",
@@ -104,7 +105,8 @@ async def on_startup() -> None:
         auto_sync_runner.start()
         archive_auto_runner.start()
         backup_retention_runner.start()
-    snapshot_collector_scheduler.start()
+    # 快照采集已迁移到独立进程 backend.collector_main（8001，由 launcher 管理），
+    # 本 API 进程不再启动采集 scheduler，避免双进程争锁/双采。
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
     market_fund_scheduler.start()

@@ -29,6 +29,7 @@ import httpx
 
 from backend.theme_fund_cache import ThemeFundCache
 
+from .gateway import HttpMarketDataGateway
 from .models import MarketDataContext, SourceHealth
 
 # ── constants ───────────────────────────────────────────────────────────────
@@ -37,6 +38,10 @@ _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
 _DEFAULT_RANK = 999
+
+# 默认数据网关：CLI/手动链路走 HTTP（proxy 转发）；collector_main 独立采集进程
+# 通过 set_default_gateway() 切换为进程内直连，避免 8000 自环依赖。
+_DEFAULT_GATEWAY: Any | None = None
 
 _HOTLIST_PLATFORMS = ("eastmoney", "ths", "kpl", "tdx", "xueqiu", "cls", "tgb", "dzh")
 _HOTLIST_RANK_FIELDS = {
@@ -83,6 +88,19 @@ _COLLECTOR_THREAD_POOL: ThreadPoolExecutor | None = None
 _PROXY_HTTP_CLIENT: httpx.Client | None = None
 
 
+def set_default_gateway(gateway: Any) -> None:
+    """Install the default market data gateway for the collector process."""
+    global _DEFAULT_GATEWAY
+    _DEFAULT_GATEWAY = gateway
+
+
+def _get_default_gateway() -> Any:
+    global _DEFAULT_GATEWAY
+    if _DEFAULT_GATEWAY is None:
+        _DEFAULT_GATEWAY = HttpMarketDataGateway()
+    return _DEFAULT_GATEWAY
+
+
 def _get_collector_thread_pool() -> ThreadPoolExecutor:
     global _COLLECTOR_THREAD_POOL
     if _COLLECTOR_THREAD_POOL is None:
@@ -96,7 +114,13 @@ def _get_collector_thread_pool() -> ThreadPoolExecutor:
 def _get_proxy_http_client() -> httpx.Client:
     global _PROXY_HTTP_CLIENT
     if _PROXY_HTTP_CLIENT is None:
-        _PROXY_HTTP_CLIENT = httpx.Client(timeout=_PROXY_HTTP_TIMEOUT_SECONDS)
+        # trust_env=False：本机系统代理（如 iKuuuVPN 127.0.0.1:7890）会把 localhost
+        # 内网请求也劫持并返回 502。采集器只访问本地基础设施（proxy/bridge），
+        # 不应走系统代理；外部上游由 market_proxy 服务自行处理。
+        _PROXY_HTTP_CLIENT = httpx.Client(
+            timeout=_PROXY_HTTP_TIMEOUT_SECONDS,
+            trust_env=False,
+        )
     return _PROXY_HTTP_CLIENT
 
 
@@ -209,12 +233,14 @@ class _BatchedProxyProvider:
         max_concurrency: int = 3,
         failed_batch_retries: int = 1,
         collection_timeout_ms: int = 120000,
+        gateway: Any = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._batch_size = max(1, batch_size)
         self._max_concurrency = max(1, max_concurrency)
         self._failed_batch_retries = max(0, failed_batch_retries)
         self._collection_timeout_ms = max(1, collection_timeout_ms)
+        self._gateway = gateway or _get_default_gateway()
 
     def collect(
         self,
@@ -315,7 +341,7 @@ class _BatchedProxyProvider:
                     f"{self._base_url}{self.endpoint}"
                     f"?codes={quote(','.join(codes), safe=',')}"
                 )
-                body = _http_get_json(url, timeout_ms / 1000.0)
+                body = self._gateway.get_json(url, timeout_ms / 1000.0)
                 degraded_error = _proxy_degraded_error(body)
                 if degraded_error:
                     raise RuntimeError(degraded_error)
@@ -351,6 +377,26 @@ class TencentBasicQuoteProvider(_BatchedProxyProvider):
             "amount": _safe_float(item.get("f5")),
             "turnoverRate": _safe_float(item.get("f8")),
         }
+        pe = _safe_float(item.get("f9"), float("nan"))
+        if math.isfinite(pe):
+            row["pe"] = pe
+        pb = _safe_float(item.get("f23"), float("nan"))
+        if math.isfinite(pb):
+            row["pb"] = pb
+        # f20/f21 单位为万元（前端合同），collector 落库统一为元
+        total_mv = _safe_float(item.get("f20"), float("nan"))
+        if math.isfinite(total_mv):
+            row["totalMarketValue"] = total_mv * 10000
+        cir_mv = _safe_float(item.get("f21"), float("nan"))
+        if math.isfinite(cir_mv):
+            row["cirMV"] = cir_mv * 10000
+        # 上游若透传涨停/跌停价（ztPrice/dtPrice）则保留；缺失由 builder 从 preClose 派生
+        limit_up = _safe_float(item.get("ztPrice"), float("nan"))
+        if math.isfinite(limit_up) and limit_up > 0:
+            row["limitUpPrice"] = limit_up
+        limit_down = _safe_float(item.get("dtPrice"), float("nan"))
+        if math.isfinite(limit_down) and limit_down > 0:
+            row["limitDownPrice"] = limit_down
         volume_ratio = _safe_float(item.get("f10"), float("nan"))
         if math.isfinite(volume_ratio) and volume_ratio > 0:
             row["volumeRatio"] = volume_ratio
@@ -371,11 +417,14 @@ class StartupBundleStockProvider:
         *,
         cache_key_prefix: str = "default",
         trading_date: str | None = None,
+        gateway: Any = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._cache_key_prefix = cache_key_prefix
         self._trading_date = trading_date
         self.snapshot_context: dict[str, Any] = {}
+        # startup-bundle 由 proxy-server 本地缓存提供（独立于 8000），恒走 HTTP。
+        self._gateway = gateway or HttpMarketDataGateway()
 
     def collect(
         self,
@@ -386,7 +435,7 @@ class StartupBundleStockProvider:
         key = self._cache_key()
         try:
             url = f"{self._base_url}/api/cache/startup-bundle?{urlencode({'key': key})}"
-            body = _http_get_json(url, timeout_ms / 1000.0)
+            body = self._gateway.get_json(url, timeout_ms / 1000.0)
             degraded_error = _proxy_degraded_error(body)
             if degraded_error:
                 return [], self._health(False, start, error=degraded_error)
@@ -516,9 +565,11 @@ class ProxyHotlistProvider:
         self,
         base_url: str = _DEFAULT_PROXY_BASE_URL,
         platform: str = "eastmoney",
+        gateway: Any = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._platform = platform
+        self._gateway = gateway or _get_default_gateway()
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -536,7 +587,7 @@ class ProxyHotlistProvider:
             url = f"{self._base_url}/api/{self._platform}/hot"
             timeout_s = timeout_ms / 1000.0
             # Eastmoney endpoint uses POST
-            body = _http_post_json(url, timeout_s)
+            body = self._gateway.post_json(url, timeout_s)
             rows = self._normalize(body)
             latency_ms = int((time.monotonic() - start) * 1000)
             health = SourceHealth(
@@ -596,8 +647,13 @@ class ProxyHotlistProvider:
 class ProxyMergedHotlistProvider:
     """Fetch and merge all proxy hotlist platforms into a live-like stock pool."""
 
-    def __init__(self, base_url: str = _DEFAULT_PROXY_BASE_URL) -> None:
+    def __init__(
+        self,
+        base_url: str = _DEFAULT_PROXY_BASE_URL,
+        gateway: Any = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._gateway = gateway or _get_default_gateway()
 
     def collect(
         self,
@@ -647,8 +703,8 @@ class ProxyMergedHotlistProvider:
         url = f"{self._base_url}/api/{platform}/hot"
         if platform in ("eastmoney", "tdx"):
             payload = {} if platform == "eastmoney" else [{"listType": "0", "cycle": "0"}]
-            return _http_post_json(url, timeout_s, payload)
-        return _http_get_json(url, timeout_s)
+            return self._gateway.post_json(url, timeout_s, payload)
+        return self._gateway.get_json(url, timeout_s)
 
     def _merge_platform_rows(
         self,
@@ -803,9 +859,11 @@ class ProxyLimitUpProvider:
         base_url: str = _DEFAULT_PROXY_BASE_URL,
         *,
         trading_date: str | None = None,
+        gateway: Any = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._trading_date = trading_date
+        self._gateway = gateway or _get_default_gateway()
 
     def collect(
         self,
@@ -822,7 +880,10 @@ class ProxyLimitUpProvider:
             if date:
                 query["date"] = date
             suffix = f"?{urlencode(query)}" if query else ""
-            body = _http_get_json(f"{self._base_url}/api/limitup/ths/pools{suffix}", timeout_ms / 1000.0)
+            body = self._gateway.get_json(
+                f"{self._base_url}/api/limitup/ths/pools{suffix}",
+                timeout_ms / 1000.0,
+            )
             degraded_error = _proxy_degraded_error(body)
             rows = self._normalize(body, requested_codes=requested)
             ok = not degraded_error
@@ -1054,9 +1115,12 @@ class BridgeQuoteProvider:
         base_url: str = _DEFAULT_BRIDGE_BASE_URL,
         *,
         pool_staleness_ms: int = 30000,
+        gateway: Any = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._pool_staleness_ms = pool_staleness_ms
+        # bridge 是独立进程，行情/深度恒走 HTTP，不参与进程内网关。
+        self._gateway = gateway or HttpMarketDataGateway()
 
     # ── public API ──────────────────────────────────────────────────────
 
@@ -1074,7 +1138,7 @@ class BridgeQuoteProvider:
         try:
             url = f"{self._base_url}/api/quotes/subscriptions"
             timeout_s = timeout_ms / 1000.0
-            body = _http_post_json(url, timeout_s, {"codes": codes})
+            body = self._gateway.post_json(url, timeout_s, {"codes": codes})
             return {
                 "ok": body.get("ok", False),
                 "count": body.get("count", 0),
@@ -1138,7 +1202,7 @@ class BridgeQuoteProvider:
                 )
 
             timeout_s = timeout_ms / 1000.0
-            body = _http_get_json(url, timeout_s)
+            body = self._gateway.get_json(url, timeout_s)
 
             # Interpret bridge ok flag
             bridge_ok = body.get("ok", True)  # default True when absent

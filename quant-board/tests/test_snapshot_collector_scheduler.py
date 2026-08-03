@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -62,10 +63,16 @@ class TestTradingCalendar:
         with pytest.raises(TradingCalendarUnavailable):
             is_trading_day(datetime.date(2026, 7, 25))
 
-    def test_trading_date_from_ts_normal_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_trading_date_from_ts_normal_day(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """Timestamp during a Monday afternoon in Shanghai gives the correct date string."""
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
+        monkeypatch.setattr(
+            "backend.snapshot_collector.trading_calendar._CACHE_PATH",
+            tmp_path / "calendar_cache.json",
+        )
         monkeypatch.setattr(
             "backend.snapshot_collector.trading_calendar._fetch_bridge_calendar",
             lambda date: True,
@@ -76,11 +83,15 @@ class TestTradingCalendar:
         assert result == "2026-06-15"
 
     def test_trading_date_from_ts_non_trading_day(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The bridge calendar decides whether the date is a trading day."""
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
+        monkeypatch.setattr(
+            "backend.snapshot_collector.trading_calendar._CACHE_PATH",
+            tmp_path / "calendar_cache.json",
+        )
         monkeypatch.setattr(
             "backend.snapshot_collector.trading_calendar._fetch_bridge_calendar",
             lambda date: False,
@@ -90,10 +101,16 @@ class TestTradingCalendar:
         result = trading_date_from_ts(_ts_ms(dt))
         assert result is None
 
-    def test_trading_date_from_ts_midnight_edge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_trading_date_from_ts_midnight_edge(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """Timestamp at exactly midnight Asia/Shanghai on a trading day."""
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
+        monkeypatch.setattr(
+            "backend.snapshot_collector.trading_calendar._CACHE_PATH",
+            tmp_path / "calendar_cache.json",
+        )
         monkeypatch.setattr(
             "backend.snapshot_collector.trading_calendar._fetch_bridge_calendar",
             lambda date: True,

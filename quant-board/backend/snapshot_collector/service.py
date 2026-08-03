@@ -14,6 +14,7 @@ without mocking imports.
 from __future__ import annotations
 
 import hashlib
+import math
 import time
 import uuid
 from datetime import datetime, timezone
@@ -353,6 +354,7 @@ class SnapshotCollectorService:
             source="quantboard_backend_collector",
             capture_mode=capture_mode,
         )
+        self._enrich_volume_ratios(bundle.get("stockRows") or [])
 
         # 5 — Normalize
         norm_request = self._SnapshotIngestRequest(
@@ -703,6 +705,41 @@ class SnapshotCollectorService:
             return MongoThemeRepository(get_runtime_mongodb_database())
         except Exception:
             return None
+
+    def _enrich_volume_ratios(self, stock_rows: list[dict[str, Any]]) -> None:
+        """用量比 golden（Python volume_ratio_service）补齐缺失的 volumeRatio。
+
+        仅填充缺失值，保持来源/状态元数据；计算不可用时不阻断采集（fail-visible）。
+        """
+        if not stock_rows:
+            return
+        try:
+            from backend.data.repository_factory import get_runtime_mongodb_database
+            from backend.volume_ratio_service import compute_volume_ratios
+
+            db = get_runtime_mongodb_database()
+            items = compute_volume_ratios(db, stock_rows)
+        except Exception:
+            return
+        for row in stock_rows:
+            code = str(row.get("code") or "")
+            item = items.get(code)
+            if not item:
+                continue
+            ratio = item.get("volumeRatio")
+            if (
+                isinstance(ratio, (int, float))
+                and not isinstance(ratio, bool)
+                and math.isfinite(float(ratio))
+                and float(ratio) > 0
+                and not row.get("volumeRatio")
+            ):
+                row["volumeRatio"] = round(float(ratio), 4)
+                row["volumeRatioMeta"] = {
+                    "source": str(item.get("source") or "quantboard_volume_ratio"),
+                    "status": str(item.get("status") or "unavailable"),
+                    "calculatedAt": item.get("calculatedAt"),
+                }
 
     def _settings_or_default(self) -> Any:
         return self._settings if self._settings else _get_settings()

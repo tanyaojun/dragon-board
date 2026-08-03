@@ -461,8 +461,9 @@ class TestNormalizerCompatibility:
         assert stock_rows[0]["compRank"] == 4
         assert stock_rows[0]["platforms"] == 2
 
-    def test_normalizer_rejects_empty_stock_rows(self):
-        """normalizer must reject a bundle with no hotlist stock records."""
+    def test_normalizer_keeps_empty_stock_rows_with_quality_flag(self):
+        """normalizer 空热榜不再拒写：保留 frame 并打质量标记；
+        全源无数据的拒写判定在 service 层（all_hotlist_sources_failed）。"""
         from backend.data.schemas import SnapshotIngestRequest as Sir
 
         slot = make_slot_1500()
@@ -475,8 +476,11 @@ class TestNormalizerCompatibility:
             source=bundle["source"],
         )
 
-        with pytest.raises(ValueError, match="hotlist"):
-            normalize_snapshot_ingest(request)
+        result = normalize_snapshot_ingest(request)
+        _, records, frames, stock_rows, _, _ = result
+        assert len(stock_rows) == 0
+        assert records[0]["qualityFlags"] == ["empty_hotlist_with_partial_data"]
+        assert frames[0]["qualityFlags"] == ["empty_hotlist_with_partial_data"]
 
     def test_normalizer_with_delayed_mode(self):
         """normalizer must accept delayed capture payloads."""

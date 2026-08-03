@@ -26,7 +26,7 @@
 - V12 边界：Dragon Board 根项目不新增回测平台；共振策略以 RankTrend 候选为主，ThemeTrend 只能辅助排序、置信度、拥挤风险降级和解释，不得独立制造买入信号。
 - V12 策略口径：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 必须在执行信号中保留独立入场、降级、过滤和解释字段；Dragon Board 只展示 QuantBoard 研究摘要，不在根项目实现交易模拟。
 - L2 资金流口径：`estimated_l1` 只允许作为观察指标；正式资金流回测必须使用 `broker_l2` 或 `official_l2`，并在质量门禁中保留 `capital_flow_source`、`capital_flow_confidence`、`money_flow_estimated`。
-- 后端快照采集器：`backend/snapshot_collector/` 已正式切换为生产快照主链，写入 `dragonboard_live`。通过 FastAPI 主进程的 `startup`/`shutdown` 生命周期管理 `SnapshotCollectorScheduler`，无需独立守护进程。写入 live 数据集需显式设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=1`、`QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 和 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，CLI 预检和 quality gate 才会放行；任意其它 dataset 仍被拒绝。Dragon Board 前端已默认关闭正式快照自动写库，手动诊断入口保留。该模块的改动必须通过以下测试链路验证：
+- 后端快照采集器：`backend/snapshot_collector/` 已正式切换为生产快照主链，写入 `dragonboard_live`。由**独立进程** `backend/collector_main`（默认端口 8001）承载调度器，经 DragonBoardLauncher 作为核心启动项管理；8000 Quant API 进程不再启动采集调度器（避免双采/争锁）。写入 live 数据集需显式设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=1`、`QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 和 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，CLI 预检和 quality gate 才会放行；任意其它 dataset 仍被拒绝。Dragon Board 前端已默认关闭正式快照自动写库，手动诊断入口保留。该模块的改动必须通过以下测试链路验证：
   - 后端 pytest：`tests/test_snapshot_collector_*.py`（覆盖 models、slots、providers、builder、quality_gate、state、service、service_factory、routes 和 repository 合同）
   - python-bridge 接口测试：`python -m unittest discover python-bridge -p "test_*.py"`（覆盖 `GET /api/quotes/snapshot?codes=...` 行情接口）
   - MongoDB 审计命令：`.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type half_hour`
