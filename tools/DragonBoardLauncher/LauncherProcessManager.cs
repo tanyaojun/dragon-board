@@ -8,6 +8,7 @@ internal sealed class LauncherProcessManager
     private static readonly IReadOnlyDictionary<int, Uri> ReadinessUris =
         new Dictionary<int, Uri>
         {
+            [8000] = new("http://127.0.0.1:8000/api/health"),
             [3000] = new("http://127.0.0.1:3000/health"),
             [8765] = new("http://127.0.0.1:8765/health")
         };
@@ -15,6 +16,7 @@ internal sealed class LauncherProcessManager
     private readonly string _root;
     private readonly IReadOnlyDictionary<string, ManagedService> _services;
     private readonly Action<string> _log;
+    private readonly HashSet<string> _starting = new(StringComparer.Ordinal);
     private Process? _mongoExpressProcess;
     private Process? _redisCommanderProcess;
 
@@ -30,7 +32,7 @@ internal sealed class LauncherProcessManager
 
     public void StartAll()
     {
-        var stageNames = new[] { "基础设施", "实时数据源", "快照调度" };
+        var stageNames = new[] { "基础设施", "实时数据源", "快照采集", "量化后端" };
         for (var index = 0; index < LauncherServices.CoreStartupStages.Length; index++)
         {
             var stage = LauncherServices.CoreStartupStages[index];
@@ -50,7 +52,7 @@ internal sealed class LauncherProcessManager
             return;
         }
 
-        _log("核心启动完成: MongoDB、Redis、代理、行情桥和 Quant API 均已就绪。");
+        _log("核心启动完成: MongoDB、Redis、代理、行情桥、快照采集和 Quant API 均已就绪。");
         _log("展示与辅助服务最后按需启动: 龙头看板 5173、量化面板 5174、本地语音 32145；不阻塞快照调度。");
     }
 
@@ -70,7 +72,7 @@ internal sealed class LauncherProcessManager
     private static bool IsServiceReady(ManagedService service)
     {
         if (!IsServiceRunning(service)) return false;
-        if (service.Port == 8000)
+        if (service.Port == 8001)
             return SnapshotCollectorProbe.GetHealthAsync().GetAwaiter().GetResult().IsHealthy;
         if (!ReadinessUris.TryGetValue(service.Port, out var uri)) return true;
 
@@ -90,6 +92,7 @@ internal sealed class LauncherProcessManager
     {
         StopService(_services["quant-ui"]);
         StopService(_services["quant-api"]);
+        StopService(_services["collector"]);
         StopService(_services["bridge"]);
         StopService(_services["frontend"]);
         StopService(_services[LauncherServices.VoiceServiceKey]);
@@ -100,6 +103,12 @@ internal sealed class LauncherProcessManager
 
     public void StartService(ManagedService service)
     {
+        // 同一服务启动中禁止再次发起（UI 置灰之外的第二道保险，防止双 PID）。
+        if (!_starting.Add(service.Name))
+        {
+            _log($"{service.Name} 正在启动中，忽略重复启动请求。");
+            return;
+        }
         try
         {
             if (service.IsVoiceWorker && !IsCurrentVoiceWorkerHealthy(service))
@@ -141,7 +150,7 @@ internal sealed class LauncherProcessManager
                 // 提权方式运行的 Redis，普通权限 taskkill 会拒绝访问，但实例本身工作正常）。
                 if (LauncherPorts.IsPortOpen(service.Port))
                 {
-                    var usable = service.Port == 8000
+                    var usable = service.Port == 8001
                         ? SnapshotCollectorProbe.GetHealthAsync().GetAwaiter().GetResult().IsHealthy
                         : true;
                     if (usable)
@@ -201,6 +210,10 @@ internal sealed class LauncherProcessManager
         {
             _log($"启动 {service.Name} 失败: {ex.Message}");
         }
+        finally
+        {
+            _starting.Remove(service.Name);
+        }
     }
 
     public void StopService(ManagedService service)
@@ -243,6 +256,7 @@ internal sealed class LauncherProcessManager
         // 用 StopService 而非 StopStartedProcess，确保端口占用的孤儿进程也会被杀掉
         StopService(_services["quant-ui"]);
         StopService(_services["quant-api"]);
+        StopService(_services["collector"]);
         StopService(_services["bridge"]);
         StopService(_services["frontend"]);
         StopService(_services[LauncherServices.VoiceServiceKey]);
@@ -423,7 +437,9 @@ internal sealed class LauncherProcessManager
             if (process.ExitCode == 0)
                 _log("已请求停止 Redis Windows 服务。");
             else if (!string.IsNullOrWhiteSpace(output) || !string.IsNullOrWhiteSpace(error))
-                _log($"停止 Redis Windows 服务返回: {(output + error).Trim()}");
+                // 不输出 sc.exe 原始内容：控制台代码页输出按 UTF-8 读取会变乱码，
+                // 非零状态通常是"非服务方式运行或服务未注册"，无需展开原始文本。
+                _log("停止 Redis Windows 服务返回非零状态（可能非服务方式运行或服务未注册）。");
         }
         catch (Exception ex)
         {
@@ -570,8 +586,8 @@ internal sealed class LauncherProcessManager
             process.WaitForExit(5000);
             if (process.ExitCode == 0)
                 _log($"已终止{label}进程树，PID={pid}。");
-            else
-                _log($"无法终止{label}进程树，PID={pid}: {(output + error).Trim()}");
+            // taskkill 非零退出不记录：系统服务（如 Redis）被拒绝访问是预期场景，
+            // 后续"端口可用则复用"会兜底；只保留 catch 中的真实异常日志。
         }
         catch (Exception ex)
         {

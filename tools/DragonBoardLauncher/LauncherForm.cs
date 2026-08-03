@@ -31,6 +31,8 @@ internal sealed class LauncherForm : Form
     // Per-service UI elements
     private readonly Dictionary<string, Label> _dots = new();
     private readonly Dictionary<string, Label> _statusLabels = new();
+    private readonly Dictionary<string, Button> _startButtons = new();
+    private readonly Dictionary<string, Button> _stopButtons = new();
     private bool _isRefreshingStatuses;
     private bool _isManagerActionRunning;
     private bool _allowExit;
@@ -132,7 +134,7 @@ internal sealed class LauncherForm : Form
         Controls.Add(titlePanel);
 
         int y = titlePanel.Bottom + 8;
-        var iconKeys = new[] { "DB", "RD", "PX", "BR", "QA", "FE", "QU", "VO" };
+        var iconKeys = new[] { "DB", "RD", "PX", "BR", "SC", "QA", "FE", "QU", "VO" };
         var keys = LauncherServices.OrderedKeys;
         for (int i = 0; i < keys.Length; i++)
         {
@@ -309,6 +311,7 @@ internal sealed class LauncherForm : Form
         startBtn.FlatAppearance.BorderSize = 0;
         startBtn.Click += async (_, _) => await RunManagerActionAsync(() => _processManager.StartService(svc));
         p.Controls.Add(startBtn);
+        _startButtons[key] = startBtn;
 
         var stopBtn = new Button
         {
@@ -324,8 +327,9 @@ internal sealed class LauncherForm : Form
         stopBtn.FlatAppearance.BorderSize = 0;
         stopBtn.Click += async (_, _) => await RunManagerActionAsync(() => _processManager.StopService(svc));
         p.Controls.Add(stopBtn);
+        _stopButtons[key] = stopBtn;
 
-        if (svc.Port is 5173 or 5174 or 3000 or 8000 or 8765 or 27017 or 6379)
+        if (svc.Port is 5173 or 5174 or 3000 or 8000 or 8001 or 8765 or 27017 or 6379)
         {
             var openBtn = new Button
             {
@@ -344,6 +348,7 @@ internal sealed class LauncherForm : Form
                 5173 => "http://127.0.0.1:5173",
                 5174 => "http://127.0.0.1:5174",
                 8000 => "http://127.0.0.1:8000/docs",
+                8001 => "http://127.0.0.1:8001/docs",
                 8765 => "http://127.0.0.1:8765/docs",
                 27017 => "http://127.0.0.1:8081",
                 6379 => "http://127.0.0.1:8082",
@@ -410,11 +415,11 @@ internal sealed class LauncherForm : Form
             statuses = await Task.Run(() => services.ToDictionary(
                 kv => kv.Key,
                 kv => LauncherProcessManager.IsServiceRunning(kv.Value)));
-            collectorHealth = statuses.GetValueOrDefault("quant-api")
+            collectorHealth = statuses.GetValueOrDefault("collector")
                 ? await SnapshotCollectorProbe.GetHealthAsync()
                 : SnapshotCollectorHealth.Unhealthy(
-                    "quant-api-offline",
-                    "快照采集错误: Quant API 未运行，调度器无法采集快照");
+                    "collector-offline",
+                    "快照采集错误: 采集服务(8001)未运行，调度器无法采集快照");
         }
         finally
         {
@@ -429,7 +434,7 @@ internal sealed class LauncherForm : Form
         {
             var key = kv.Key;
             var isRunning = kv.Value;
-            var serviceFailed = key == "quant-api" && collectorFailed;
+            var serviceFailed = key == "collector" && collectorFailed;
 
             if (_dots.TryGetValue(key, out var dot))
             {
@@ -442,10 +447,43 @@ internal sealed class LauncherForm : Form
                 statusL.ForeColor = isRunning && !serviceFailed ? _green : _red;
             }
 
+            UpdateServiceButtons(key, isRunning, serviceFailed);
+
             if (isRunning) running++;
         }
 
         Text = $"龙头看板 · 启动管理器  [{running}/{_services.Count} 在线]";
+    }
+
+    /// <summary>按服务真实运行状态联动启动/停止按钮，防止重复点击重复拉起进程。</summary>
+    private void UpdateServiceButtons(string key, bool isRunning, bool serviceFailed)
+    {
+        // 运行且健康：禁止再次启动，允许停止；运行但采集异常：允许重启；未运行：允许启动，禁止停止。
+        var startEnabled = !isRunning || serviceFailed;
+        if (_startButtons.TryGetValue(key, out var start))
+            ApplyButtonState(start, startEnabled, Color.FromArgb(42, 98, 72), Color.White);
+
+        if (_stopButtons.TryGetValue(key, out var stop))
+            ApplyButtonState(stop, isRunning, Color.FromArgb(58, 42, 46), _text);
+    }
+
+    private static void ApplyButtonState(
+        Button button,
+        bool enabled,
+        Color enabledBack,
+        Color enabledFore)
+    {
+        button.Enabled = enabled;
+        if (enabled)
+        {
+            button.BackColor = enabledBack;
+            button.ForeColor = enabledFore;
+        }
+        else
+        {
+            button.BackColor = Color.FromArgb(36, 40, 46);
+            button.ForeColor = Color.FromArgb(100, 110, 120);
+        }
     }
 
     private bool ReportCollectorHealth(SnapshotCollectorHealth? health)

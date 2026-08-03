@@ -11,6 +11,7 @@ internal static class LauncherServices
         "redis",
         "proxy",
         "bridge",
+        "collector",
         "quant-api",
         "frontend",
         "quant-ui",
@@ -21,7 +22,8 @@ internal static class LauncherServices
     [
         ["mongo", "redis"],
         ["proxy", "bridge"],
-        ["quant-api"]
+        ["quant-api"],
+        ["collector"]
     ];
 
     public static Dictionary<string, ManagedService> Create(string root)
@@ -74,6 +76,13 @@ internal static class LauncherServices
                 quantRoot,
                 Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
                 "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
+                "python"),
+            ["collector"] = new(
+                "快照采集服务",
+                8001,
+                quantRoot,
+                Path.Combine(quantRoot, ".venv", "Scripts", "python.exe"),
+                "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001",
                 "python"),
             ["quant-ui"] = new(
                 "量化面板前端",

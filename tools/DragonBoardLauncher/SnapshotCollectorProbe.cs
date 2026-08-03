@@ -12,7 +12,9 @@ internal sealed record SnapshotCollectorHealth(bool IsHealthy, string Fingerprin
 
 internal static class SnapshotCollectorProbe
 {
-    private static readonly Uri HealthUri = new("http://127.0.0.1:8000/api/health");
+    // 快照采集已迁移到独立 collector 进程（collector_main，8001），由 launcher
+    // 作为核心启动项管理；健康检查跟随采集服务本身，不再依赖 Quant API(8000)。
+    private static readonly Uri HealthUri = new("http://127.0.0.1:8001/api/health");
 
     public static async Task<SnapshotCollectorHealth> GetHealthAsync()
     {
@@ -26,7 +28,7 @@ internal static class SnapshotCollectorProbe
             {
                 return SnapshotCollectorHealth.Unhealthy(
                     $"http:{(int)response.StatusCode}",
-                    $"快照采集错误: Quant API 健康检查返回 HTTP {(int)response.StatusCode}");
+                    $"快照采集错误: 采集服务(8001)健康检查返回 HTTP {(int)response.StatusCode}");
             }
 
             await using var stream = await response.Content.ReadAsStreamAsync();
@@ -35,7 +37,7 @@ internal static class SnapshotCollectorProbe
             {
                 return SnapshotCollectorHealth.Unhealthy(
                     "missing-status",
-                    "快照采集错误: Quant API 未返回 snapshotCollector 状态");
+                    "快照采集错误: 采集服务(8001)未返回 snapshotCollector 状态");
             }
 
             var issues = new List<string>();
@@ -89,7 +91,7 @@ internal static class SnapshotCollectorProbe
         {
             return SnapshotCollectorHealth.Unhealthy(
                 $"probe:{ex.GetType().Name}:{ex.Message}",
-                $"快照采集错误: 无法读取 Quant API 健康状态: {ex.Message}");
+                $"快照采集错误: 无法读取采集服务(8001)健康状态: {ex.Message}");
         }
     }
 

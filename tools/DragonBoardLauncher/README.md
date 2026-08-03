@@ -49,7 +49,11 @@ dotnet publish tools\DragonBoardLauncher\DragonBoardLauncher.csproj -p:PublishPr
 
 1. `27017` MongoDB、`6379` Redis：持久化和缓存基础设施，最先启动。
 2. `3000` 本地代理、`8765` 行情桥：快照采集的数据源，随后启动，并分别检查 `/health`。
-3. `8000` Quant API：最后启动核心服务；FastAPI startup 会在这里启动快照 scheduler，并检查 `/api/health` 中的启用状态、运行状态和轮询心跳。
+3. `8000` Quant API：先启动，只提供业务 API 与回测，不再启动采集 scheduler。
+4. `8001` 快照采集服务：后启动，独立进程 `backend.collector_main:app`，是快照采集唯一生产者；检查
+   `/api/health` 中的 `snapshotCollector` 启用/运行状态。进程内直连行情/热榜/涨停池服务，不依赖
+   Quant API；Redis 单实例锁（`snapshot-collector:instance-lock:<dataset>`，值含持有者 PID）防止
+   重复实例，持有者进程已死时残留锁会被自动清理。
 
 `5173` 龙头看板、`5174` 量化面板和 `32145` 本地语音属于展示或辅助服务，最后按需手动启动，不影响快照调度。`8081` Mongo Express、`8082` Redis Commander 仅在打开数据库/缓存管理页时启动，也不进入核心启动链。
 
