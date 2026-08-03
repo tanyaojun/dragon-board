@@ -154,6 +154,67 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.strategy?.candidateTier).toBe('A_MAIN')
   })
 
+  it('skipLocalCompute + remoteCodes 时跳过全市场本地序列构建，只远程分析指定股票', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
+      ok: true,
+      frames: [{
+        frameKey: '2026-08-02 current:1',
+        regime: { state: 'strong', score: 80, reasons: ['池内上涨100%'] },
+        totalCount: 200,
+        stocks: [{
+          code: '600001',
+          analysis: {
+            meta: { code: '600001' },
+            strategy: { candidateTier: 'A_MAIN', regime: { state: 'strong', score: 80 } },
+            executionStrategy: { candidateTier: 'A_MAIN', hotlist: { state: 'missing' } },
+          },
+        }],
+      }],
+      source: 'py_golden',
+      issues: [],
+    })
+
+    const results = await rankTrendAnalyzer.getRankTrends(
+      new Map([['600001', 33], ['600002', 44]]),
+      {
+        updateSignalStore: false,
+        skipLocalCompute: true,
+        remoteCodes: ['600001'],
+      },
+    )
+
+    // 面板只展示一只股票：不再读取全市场 rank-series 原料，也不再为每只股票构建本地序列
+    expect(apiService.getRankTrendRankSeries).not.toHaveBeenCalled()
+    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codes: ['600001'],
+        currentFrame: expect.objectContaining({
+          stocks: expect.any(Array),
+        }),
+      }),
+      { bypassQueue: true },
+    )
+    expect(results.size).toBe(1)
+    expect(results.get('600001')?.meta.analysisSource).toBe('py_golden')
+    expect(results.get('600001')?.strategy?.candidateTier).toBe('A_MAIN')
+  })
+
+  it('skipLocalCompute 且远程失败时返回空结果，由面板回退到 DataLayer 现有分析', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    vi.mocked(apiService.analyzeRankTrend).mockRejectedValue(new Error('backend offline'))
+
+    const results = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      skipLocalCompute: true,
+      remoteCodes: ['600001'],
+    })
+
+    expect(results.size).toBe(0)
+  })
+
   it('preferRemoteAnalysis 时合并 Python 输出的 resonance 到实时结果', async () => {
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
     const { apiService } = await import('../apiService')

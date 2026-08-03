@@ -19,4 +19,19 @@ describe('RankTrendPanel display contract', () => {
     expect(source).not.toMatch(/statusLabel:\s*status\.label/)
     expect(source).not.toMatch(/statusClass:\s*status\.classKey/)
   })
+
+  test('reuses the last panel result within 60s for the same stock and snapshot type', () => {
+    const source = panelSource()
+
+    expect(source).toMatch(/RANK_TREND_PANEL_RESULT_TTL_MS\s*=\s*60_000/)
+    expect(source).toMatch(/cached\.key === reuseKey/)
+    expect(source).toMatch(/Date\.now\(\) - cached\.at < RANK_TREND_PANEL_RESULT_TTL_MS/)
+    expect(source).toMatch(/function refresh\(\)[\s\S]*loadStock\(true\)/)
+  })
+
+  test('loads rank history for the selected code only', () => {
+    const source = panelSource()
+
+    expect(source).toMatch(/getSnapshotsByType\(sourceType,\s*\{[\s\S]*?codes:\s*\[code\]/)
+  })
 })

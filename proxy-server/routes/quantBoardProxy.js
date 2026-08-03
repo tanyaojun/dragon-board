@@ -1,6 +1,9 @@
+import { gzipSync } from 'node:zlib'
+
 import { hashCachePayload, normalizeCodeCacheKey } from '../helpers/proxyCache.js'
 
 const DEFAULT_QUANT_BOARD_TARGET = 'http://127.0.0.1:8000'
+const GZIP_MIN_BYTES = 1024
 
 const QUANT_BOARD_PREFIXES = [
   '/api/ranktrend/',
@@ -66,6 +69,23 @@ function copyResponseHeaders(upstream, res) {
   }
 }
 
+function acceptsGzip(req) {
+  return /(^|,)\s*gzip\s*(,|$)/i.test(String(req.headers['accept-encoding'] || ''))
+}
+
+function sendBody(res, buffer, { gzip = false } = {}) {
+  if (!gzip || buffer.length < GZIP_MIN_BYTES) {
+    res.setHeader('content-length', buffer.length)
+    res.send(buffer)
+    return
+  }
+  const compressed = gzipSync(buffer, { level: 1 })
+  res.setHeader('content-encoding', 'gzip')
+  res.setHeader('content-length', compressed.length)
+  res.setHeader('vary', 'accept-encoding')
+  res.send(compressed)
+}
+
 function buildCacheKey(resourcePath, query) {
   switch (resourcePath) {
     case '/api/ranktrend/rank-series': {
@@ -126,6 +146,7 @@ export function registerQuantBoardProxyRoutes(app, { fetchImpl, cache, runtimeCa
       next()
       return
     }
+    const gzip = acceptsGzip(req)
 
     const fetcher = fetchImpl || globalThis.fetch
     if (typeof fetcher !== 'function') {
@@ -186,7 +207,7 @@ export function registerQuantBoardProxyRoutes(app, { fetchImpl, cache, runtimeCa
           res.setHeader(key, value)
         }
         res.status(cached.status || 200)
-        res.send(Buffer.from(cached.body || '', 'utf8'))
+        sendBody(res, Buffer.from(cached.body || '', 'utf8'), { gzip })
         return
       } catch (error) {
         // 缓存层失败时回退到直通模式（含上游非 2xx 响应）
@@ -225,7 +246,7 @@ export function registerQuantBoardProxyRoutes(app, { fetchImpl, cache, runtimeCa
       }
 
       const buffer = Buffer.from(await upstream.arrayBuffer())
-      res.send(buffer)
+      sendBody(res, buffer, { gzip })
     } catch (error) {
       res.status(502).json({
         ok: false,

@@ -22,7 +22,7 @@
           class="search-input"
           type="text"
           placeholder="输入股票代码"
-          @keyup.enter="loadStock"
+          @keyup.enter="() => loadStock()"
         />
         <label class="snapshot-select">
           <span>快照</span>
@@ -32,7 +32,7 @@
             </option>
           </select>
         </label>
-        <button class="primary-btn" type="button" @click="loadStock">应用并分析</button>
+        <button class="primary-btn" type="button" @click="loadStock(true)">应用并分析</button>
       </div>
 
       <section class="config-card">
@@ -453,6 +453,22 @@ let chart: echarts.ECharts | null = null
 let resizeHandler: (() => void) | null = null
 const runtimeConfigForm = reactive<RuntimeConfigForm>(createRuntimeConfigForm())
 
+/** 面板 60s 内同股同口径复用（与后端 analyze TTL 一致），避免每次打开都全市场重算 */
+const RANK_TREND_PANEL_RESULT_TTL_MS = 60_000
+
+interface RankTrendPanelCachedResult {
+  key: string
+  at: number
+  currentStock: PanelStockView | null
+  breathData: any
+  rankHistory: number[]
+  historySource: string
+  dataStatus: string
+  lastUpdate: number
+}
+
+const cachedPanelResult = ref<RankTrendPanelCachedResult | null>(null)
+
 const stageLabels: Record<string, string> = {
   ignition: '点火',
   expansion: '扩散',
@@ -709,9 +725,29 @@ function buildPanelStockView(
   }
 }
 
-async function loadStock() {
+async function loadStock(force = false) {
   const code = normalizeCode(searchCode.value)
   if (!code) return
+
+  const reuseKey = `${code}:${selectedSnapshotType.value}:${dataLayer.getStocksWithVersion().version}`
+  const cached = cachedPanelResult.value
+  if (
+    !force &&
+    cached &&
+    cached.key === reuseKey &&
+    Date.now() - cached.at < RANK_TREND_PANEL_RESULT_TTL_MS
+  ) {
+    currentStock.value = cached.currentStock
+    breathData.value = cached.breathData
+    rankHistory.value = cached.rankHistory
+    historySource.value = cached.historySource
+    dataStatus.value = cached.dataStatus
+    lastUpdate.value = cached.lastUpdate
+    errorMessage.value = ''
+    await nextTick()
+    renderChart()
+    return
+  }
 
   loading.value = true
   loadingText.value = '读取 DataLayer 当前榜单'
@@ -736,6 +772,10 @@ async function loadStock() {
     const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
       updateSignalStore: false,
       preferredSnapshotType: selectedSnapshotType.value,
+      // 面板只展示选中股票：跳过浏览器端全市场本地序列构建，远程 analyze 只请求该股，
+      // 首次打开从 ~20s+20MB 降到 ~2-3s/KB 级；DataLoader 信号刷新仍走完整路径。
+      skipLocalCompute: true,
+      remoteCodes: [code],
     })
     const analysis = results.get(code) ?? (sourceStock.rankTrend as RankTrendResult | undefined) ?? null
     const rank = rankMap.get(code) ?? Number(sourceStock.compRank ?? 0)
@@ -752,6 +792,16 @@ async function loadStock() {
 
     loadingText.value = '加载快照排名曲线'
     await loadRankHistory(code, selectedSnapshotType.value)
+    cachedPanelResult.value = {
+      key: reuseKey,
+      at: Date.now(),
+      currentStock: currentStock.value,
+      breathData: breathData.value,
+      rankHistory: rankHistory.value,
+      historySource: historySource.value,
+      dataStatus: dataStatus.value,
+      lastUpdate: lastUpdate.value,
+    }
     await nextTick()
     renderChart()
   } catch (error) {
@@ -769,6 +819,7 @@ async function loadRankHistory(code: string, preferredType: PreferredSnapshotTyp
   for (const sourceType of sourcePriority) {
     const records = await rankTrendAnalyzer.getSnapshotsByType(sourceType, {
       limit: getRankTrendSnapshotHistoryLimit(sourceType),
+      codes: [code],
     })
     const ranks = records
       .map((record) => {
@@ -850,7 +901,7 @@ function disposeChart() {
 }
 
 function refresh() {
-  if (searchCode.value) loadStock()
+  if (searchCode.value) loadStock(true)
 }
 
 function ringOffset(confidence?: number): number {

@@ -18,8 +18,11 @@ router = APIRouter(tags=["ranktrend-analyze"])
 
 SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
 
-# 方案 6.3：analyze 缓存 TTL 对齐前端 1 分钟刷新
-ANALYZE_CACHE_TTL_SECONDS = 60
+# 方案 6.3：analyze 缓存 TTL 与快照读口保持一致（QUANT_BOARD_SNAPSHOT_CACHE_TTL_SECONDS，
+# 默认 300s）。新快照 ingest 会递增 dataset generation 并按 dataset 索引删除旧 analyze 响应，
+# 因此 TTL 只作为兜底，不需要再对齐某个固定刷新周期。
+def _analyze_cache_ttl_seconds() -> int:
+    return max(30, get_settings().snapshot_cache_ttl_seconds)
 
 # 分析算法所需的最大回看窗口：共振至少 9 点序列（RESONANCE_MIN_SERIES_POINTS）、
 # 技术稳定窗口 30、生命周期 15、横截面 3；取 30 同时满足全部轨道。
@@ -270,17 +273,37 @@ def _frame_market_median_percentile(frame: dict[str, Any]) -> float | None:
 
 
 def _normalize_current_frame(current_frame: dict[str, Any] | None) -> dict[str, Any] | None:
-    """规范化 currentFrame 参与缓存键：stocks 按 code 排序，避免同内容不同顺序导致缓存未命中。"""
+    """规范化 currentFrame 参与缓存键。
+
+    只保留影响分析输出的稳定身份字段：
+    - slotTime 去掉前端自增的 `current:N` 序列号，避免面板每次打开都生成新键导致缓存永不命中；
+    - stocks 只保留 code/rank/avgRankNum（横截面排序原料），剔除 change/volumeRatio/zlje/zljzb
+      等实时行情字段，避免行情一跳缓存键就变。
+    TTL 范围内的行情时效性差异由 TTL 兜底，ingest 后 generation 递增强制换键。
+    """
     if not current_frame:
         return None
     stocks = current_frame.get("stocks") or []
     ordered = sorted(
-        (stock for stock in stocks if isinstance(stock, dict)),
+        (
+            {
+                "code": stock.get("code"),
+                "rank": stock.get("rank"),
+                "avgRankNum": stock.get("avgRankNum"),
+            }
+            for stock in stocks
+            if isinstance(stock, dict)
+        ),
         key=lambda stock: str(stock.get("code") or ""),
     )
+    slot_time = current_frame.get("slotTime")
+    normalized_slot = None
+    if slot_time is not None:
+        value = str(slot_time).strip()
+        normalized_slot = "current" if value.startswith("current:") else value
     return {
         "tradingDate": current_frame.get("tradingDate"),
-        "slotTime": current_frame.get("slotTime"),
+        "slotTime": normalized_slot,
         "stocks": ordered,
     }
 
@@ -350,7 +373,7 @@ def analyze_ranktrend(
     response = {"ok": True, "frames": frames_out, "source": "py_golden", "issues": []}
     response = {**response, "cache": {"hit": False, "store": "py_golden"}}
     if cache.get_generation(generation_key) == generation:
-        cache.set_response(cache_key, response, ttl_seconds=ANALYZE_CACHE_TTL_SECONDS)
+        cache.set_response(cache_key, response, ttl_seconds=_analyze_cache_ttl_seconds())
         cache.register_dependencies(
             cache_key,
             snapshot_cache.build_snapshot_cache_index_keys(

@@ -398,6 +398,7 @@ def test_analyze_market_median_uses_avg_rank_num_cross_section(monkeypatch):
 class FakeRedis:
     def __init__(self):
         self.data: dict[str, str] = {}
+        self.ttls: dict[str, int] = {}
         self.sets: dict[str, set[str]] = {}
 
     def get(self, key):
@@ -405,6 +406,7 @@ class FakeRedis:
 
     def setex(self, key, ttl, value):
         self.data[key] = value
+        self.ttls[key] = ttl
 
     def incr(self, key):
         self.data[key] = str(int(self.data.get(key, 0)) + 1)
@@ -524,3 +526,125 @@ def test_analyze_redis_cache_hit_and_key_variation(monkeypatch):
     fourth = client.post("/api/ranktrend/analyze", json=payload)
     assert calls["n"] == 1
     assert fourth.json()["cache"]["hit"] is False
+
+
+def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(monkeypatch):
+    # 面板每次打开都会生成自增的 current:N slotTime，且 currentFrame.stocks 带实时行情字段。
+    # 两者都不能进入缓存键，否则 Redis TTL 缓存永远 miss、每次都重新计算。
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(
+        "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
+        lambda: snapshot_cache.SnapshotRedisCache(
+            redis_client=fake_redis,
+            ttl_seconds=60,
+            empty_ttl_seconds=10,
+        ),
+    )
+    frames = [{
+        "tradingDate": "2026-07-01",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "rows": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    calls = {"n": 0}
+
+    def counting_repo(db, enable_backup=True):
+        calls["n"] += 1
+        return FakeRepo(frames)
+
+    monkeypatch.setattr("backend.data.repository_factory.create_repository", counting_repo)
+
+    def payload(slot: str, change: float, trading_date: str = "2026-08-02"):
+        return {
+            "snapshotType": "half_hour",
+            "codes": ["002279"],
+            "frameKeys": ["2026-07-01 14:00"],
+            "currentFrame": {
+                "tradingDate": trading_date,
+                "slotTime": slot,
+                "stocks": [
+                    {
+                        "code": "002279",
+                        "rank": 1,
+                        "avgRankNum": 1,
+                        "change": change,
+                        "volumeRatio": 1.0,
+                        "zlje": 1,
+                        "zljzb": 0.1,
+                    }
+                ],
+            },
+        }
+
+    first = client.post("/api/ranktrend/analyze", json=payload("current:1", 5.0))
+    assert first.status_code == 200
+    assert calls["n"] == 1
+
+    # 自增序列号 + 实时行情字段变化 → 必须命中同一缓存键
+    calls["n"] = 0
+    second = client.post("/api/ranktrend/analyze", json=payload("current:2", 7.0))
+    assert calls["n"] == 0
+    assert second.json()["cache"]["hit"] is True
+
+    # 跨交易日（tradingDate 不同）→ 输出口径不同 → 必须生成新键
+    calls["n"] = 0
+    third = client.post(
+        "/api/ranktrend/analyze",
+        json=payload("current:3", 7.0, trading_date="2026-08-03"),
+    )
+    assert calls["n"] == 1
+    assert third.json()["cache"]["hit"] is False
+
+
+def test_analyze_cache_ttl_aligns_with_snapshot_read_ttl(monkeypatch):
+    # analyze 缓存 TTL 必须与快照读口一致（settings.snapshot_cache_ttl_seconds），
+    # 否则面板打开间隔稍长就丢失缓存并全量重算。
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(
+        "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
+        lambda: snapshot_cache.SnapshotRedisCache(
+            redis_client=fake_redis,
+            ttl_seconds=60,
+            empty_ttl_seconds=10,
+        ),
+    )
+    frames = [{
+        "tradingDate": "2026-07-01",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "rows": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-07-01 14:00"],
+    })
+    assert response.status_code == 200
+
+    analyze_keys = [key for key in fake_redis.ttls if "ranktrend:analyze" in key]
+    assert analyze_keys
+    for key in analyze_keys:
+        assert fake_redis.ttls[key] == get_settings().snapshot_cache_ttl_seconds

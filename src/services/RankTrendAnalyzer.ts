@@ -68,6 +68,10 @@ type RankTrendAnalysisOptions = {
   updateSignalStore?: boolean
   preferredSnapshotType?: SupportedSnapshotType
   preferRemoteAnalysis?: boolean
+  /** 跳过浏览器端全市场本地序列构建（本地计算只是兜底，golden 结果以 Python analyze 为准） */
+  skipLocalCompute?: boolean
+  /** 远程 analyze 只请求这些代码（面板只需选中股票时，响应从 20+MB 降到 KB 级） */
+  remoteCodes?: string[]
   fromDate?: Date
   toDate?: Date
   codes?: string[]
@@ -460,75 +464,80 @@ export class RankTrendAnalyzer {
     options: RankTrendAnalysisOptions = {},
   ): Promise<Map<string, RankTrendResult>> {
     const results = new Map<string, RankTrendResult>()
+    const skipLocalCompute = options.skipLocalCompute === true
     const recentSnapshots = options.snapshots?.length
       ? this.normalizeAnalysisSnapshots(options.snapshots)
-      : await this.loadRequiredSnapshots({ ...options, codes: Array.from(rankMap.keys()) })
+      : skipLocalCompute
+        ? []
+        : await this.loadRequiredSnapshots({ ...options, codes: Array.from(rankMap.keys()) })
 
-    if (recentSnapshots.length === 0) {
+    if (!skipLocalCompute && recentSnapshots.length === 0) {
       debugLog('[RankTrendAnalyzer] 快照不足，跳过计算')
       return results
     }
 
-    this.latestAnalysisSeries.clear()
-    this.latestAnalysisFrameKeys = []
-
-    const marketSnapshots = options.snapshots?.length
-      ? recentSnapshots
-      : this.latestMarketSnapshots.length
-        ? this.latestMarketSnapshots
-        : recentSnapshots
-    const { snapshots: recentMarketWindow, skippedHistoryCount } = this.getLatestContinuousMarketWindow(
-      marketSnapshots,
-    )
-    const sampleQuality = this.buildSampleQualitySummary(
-      recentMarketWindow.slice(-getMaxStableBars()),
-      options.preferredSnapshotType,
-      !options.snapshots?.length,
-    )
-    if (skippedHistoryCount > 0) {
-      sampleQuality.coverageWarning = [
-        sampleQuality.coverageWarning,
-        `较早市场帧存在断层，已仅使用最近连续 ${recentMarketWindow.length} 帧`,
-      ]
-        .filter(Boolean)
-        .join('；')
-    }
-    const enforceLiveTimeline = !options.snapshots?.length
-    const { prevRankMap, prevTotalCount } = this.getLatestRankSnapshot(recentSnapshots)
-    const currentTotalCount = rankMap.size
-    const snapshotsMap = this.buildSnapshotsMap(recentSnapshots)
-    const snapshotSignature = this.buildSnapshotSignature(recentSnapshots)
-    const weekdays = recentSnapshots.map((item) => item.date)
-    const appendCurrentFrame = this.shouldAppendCurrentFrame(
-      rankMap,
-      prevRankMap,
-      currentTotalCount,
-      prevTotalCount,
-    )
     const currentFrameKey = `current:${++this.currentFrameSequence}`
-    this.latestAnalysisFrameKeys = appendCurrentFrame ? [...weekdays, currentFrameKey] : weekdays
+    if (!skipLocalCompute) {
+      this.latestAnalysisSeries.clear()
+      this.latestAnalysisFrameKeys = []
 
-    const computedResults = await Promise.all(
-      Array.from(rankMap.entries()).map(([code, currentRank]) =>
-        this.computeStockRankTrend({
-          code,
-          currentRank,
-          currentTotalCount,
-          prevRankMap,
-          prevTotalCount,
-          weekdays,
-          snapshots: snapshotsMap,
-          snapshotSignature,
-          sampleQuality,
-          enforceLiveTimeline,
-          currentFrameKey,
-          appendCurrentFrame,
-        }),
-      ),
-    )
+      const marketSnapshots = options.snapshots?.length
+        ? recentSnapshots
+        : this.latestMarketSnapshots.length
+          ? this.latestMarketSnapshots
+          : recentSnapshots
+      const { snapshots: recentMarketWindow, skippedHistoryCount } = this.getLatestContinuousMarketWindow(
+        marketSnapshots,
+      )
+      const sampleQuality = this.buildSampleQualitySummary(
+        recentMarketWindow.slice(-getMaxStableBars()),
+        options.preferredSnapshotType,
+        !options.snapshots?.length,
+      )
+      if (skippedHistoryCount > 0) {
+        sampleQuality.coverageWarning = [
+          sampleQuality.coverageWarning,
+          `较早市场帧存在断层，已仅使用最近连续 ${recentMarketWindow.length} 帧`,
+        ]
+          .filter(Boolean)
+          .join('；')
+      }
+      const enforceLiveTimeline = !options.snapshots?.length
+      const { prevRankMap, prevTotalCount } = this.getLatestRankSnapshot(recentSnapshots)
+      const currentTotalCount = rankMap.size
+      const snapshotsMap = this.buildSnapshotsMap(recentSnapshots)
+      const snapshotSignature = this.buildSnapshotSignature(recentSnapshots)
+      const weekdays = recentSnapshots.map((item) => item.date)
+      const appendCurrentFrame = this.shouldAppendCurrentFrame(
+        rankMap,
+        prevRankMap,
+        currentTotalCount,
+        prevTotalCount,
+      )
+      this.latestAnalysisFrameKeys = appendCurrentFrame ? [...weekdays, currentFrameKey] : weekdays
 
-    for (const [code, result] of computedResults) {
-      if (result) results.set(code, result)
+      const computedResults = await Promise.all(
+        Array.from(rankMap.entries()).map(([code, currentRank]) =>
+          this.computeStockRankTrend({
+            code,
+            currentRank,
+            currentTotalCount,
+            prevRankMap,
+            prevTotalCount,
+            weekdays,
+            snapshots: snapshotsMap,
+            snapshotSignature,
+            sampleQuality,
+            enforceLiveTimeline,
+            currentFrameKey,
+            appendCurrentFrame,
+          }),
+        ),
+      )
+
+      for (const [code, result] of computedResults) {
+        if (result) results.set(code, result)
+      }
     }
 
     if (options.preferRemoteAnalysis !== false) {
@@ -546,35 +555,50 @@ export class RankTrendAnalyzer {
           platforms: Number(stock?.platforms) || 0,
         }))
       try {
+        const remoteCodes =
+          options.remoteCodes?.length ? options.remoteCodes : Array.from(rankMap.keys())
         const remote = await apiService.analyzeRankTrend({
           snapshotType: options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
-          codes: Array.from(rankMap.keys()),
+          codes: remoteCodes,
           currentFrame: {
             tradingDate: new Date().toISOString().slice(0, 10),
             slotTime: currentFrameKey,
             stocks: currentFrameStocks,
           },
-        })
+        }, skipLocalCompute ? { bypassQueue: true } : undefined)
         if (remote?.ok && remote.frames?.length) {
           const frameResult = remote.frames[remote.frames.length - 1]
           const byCode = new Map(frameResult.stocks.map((item) => [item.code, item.analysis]))
-          for (const [code, result] of results) {
-            const analysis = byCode.get(code) as RankTrendAnalysisResult | undefined
-            if (!analysis) continue
-            result.meta = {
-              ...result.meta,
-              ...analysis.meta,
-              analysisSource: 'py_golden' as const,
+          if (skipLocalCompute) {
+            // 面板快速路径：直接用 Python golden 结果作为最终结果（含完整 meta/golden 字段）
+            for (const [code, analysis] of byCode) {
+              if (!analysis) continue
+              const result = { ...analysis } as unknown as RankTrendResult
+              result.meta = {
+                ...result.meta,
+                analysisSource: 'py_golden' as const,
+              }
+              results.set(code, result)
             }
-            result.technical = analysis.technical
-            result.cycle = analysis.cycle
-            result.risk = analysis.risk
-            result.decision = analysis.decision
-            if (analysis.observation) result.observation = analysis.observation
-            result.strategy = analysis.strategy
-            result.executionStrategy = analysis.executionStrategy
-            result.jump = analysis.jump
-            if (analysis.resonance) result.resonance = analysis.resonance
+          } else {
+            for (const [code, result] of results) {
+              const analysis = byCode.get(code) as RankTrendAnalysisResult | undefined
+              if (!analysis) continue
+              result.meta = {
+                ...result.meta,
+                ...analysis.meta,
+                analysisSource: 'py_golden' as const,
+              }
+              result.technical = analysis.technical
+              result.cycle = analysis.cycle
+              result.risk = analysis.risk
+              result.decision = analysis.decision
+              if (analysis.observation) result.observation = analysis.observation
+              result.strategy = analysis.strategy
+              result.executionStrategy = analysis.executionStrategy
+              result.jump = analysis.jump
+              if (analysis.resonance) result.resonance = analysis.resonance
+            }
           }
           this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())
           return results

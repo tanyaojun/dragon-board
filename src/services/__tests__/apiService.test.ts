@@ -66,6 +66,165 @@ describe('ApiService', () => {
     await expect(queued).resolves.toMatchObject({ ok: true, queued: true })
   })
 
+  it('high priority requests start without waiting behind the shared queue backlog', async () => {
+    const api = new ApiService()
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/high')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, priority: 'high' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      }
+      return new Promise<Response>((resolve) => {
+        setTimeout(() => {
+          resolve(
+            new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          )
+        }, 800)
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    // 占满共享并发槽（当前为 3）：3 个慢请求各自 800ms
+    const background = [1, 2, 3].map((index) =>
+      api.get(`/api/test/medium-${index}`, {
+        priority: 'medium',
+        timeout: 5000,
+        retries: 0,
+        cache: false,
+      }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    const startedAt = Date.now()
+    const high = await api.get('/api/test/high', {
+      priority: 'high',
+      timeout: 5000,
+      retries: 0,
+      cache: false,
+    })
+    const highElapsed = Date.now() - startedAt
+
+    expect(high).toMatchObject({ ok: true, priority: 'high' })
+    // 高优交互请求不应排队等 800ms 的共享慢任务
+    expect(highElapsed).toBeLessThan(400)
+    await Promise.all(background)
+  })
+
+  it('keeps total fetch concurrency bounded when high priority uses its own lane', async () => {
+    const api = new ApiService()
+    let active = 0
+    let maxActive = 0
+    const fetchMock = vi.fn(async () => {
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      active -= 1
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const requests = [
+      ...[1, 2, 3, 4, 5].map((index) =>
+        api.get(`/api/test/medium-${index}`, {
+          priority: 'medium',
+          timeout: 5000,
+          retries: 0,
+          cache: false,
+        }),
+      ),
+      ...[1, 2, 3].map((index) =>
+        api.get(`/api/test/high-${index}`, {
+          priority: 'high',
+          timeout: 5000,
+          retries: 0,
+          cache: false,
+        }),
+      ),
+    ]
+    await Promise.all(requests)
+
+    // 共享槽（3）+ 高优独立通道（2）仍有界，不会无限制并发
+    expect(maxActive).toBeLessThanOrEqual(5)
+  })
+
+  it('bypassQueue requests start immediately even when the queue is saturated', async () => {
+    const api = new ApiService()
+    const slowFetch = vi.fn(
+      (url: string) =>
+        new Promise<Response>((resolve) => {
+          setTimeout(() => {
+            resolve(
+              new Response(JSON.stringify({ ok: true }), {
+                status: 200,
+                headers: { 'content-type': 'application/json' },
+              }),
+            )
+          }, 800)
+        }),
+    )
+    const fastFetch = vi.fn(
+      () =>
+        Promise.resolve(
+          new Response(JSON.stringify({ ok: true, bypassed: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        ),
+    )
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => (String(url).includes('bypass') ? fastFetch(url) : slowFetch(url))),
+    )
+
+    // 占满共享槽（3 个 800ms 慢任务）与高优槽（2 个 800ms 慢任务）
+    const background = [
+      ...[1, 2, 3].map((index) =>
+        api.get(`/api/test/medium-${index}`, {
+          priority: 'medium',
+          timeout: 5000,
+          retries: 0,
+          cache: false,
+        }),
+      ),
+      ...[1, 2].map((index) =>
+        api.get(`/api/test/high-${index}`, {
+          priority: 'high',
+          timeout: 5000,
+          retries: 0,
+          cache: false,
+        }),
+      ),
+    ]
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    const startedAt = Date.now()
+    const bypassed = await api.post(
+      '/api/test/bypass',
+      { ok: true },
+      {
+        priority: 'low',
+        bypassQueue: true,
+        timeout: 5000,
+        retries: 0,
+        cache: false,
+      },
+    )
+    const elapsed = Date.now() - startedAt
+
+    expect(bypassed).toMatchObject({ ok: true, bypassed: true })
+    expect(elapsed).toBeLessThan(400)
+    await Promise.all(background)
+  })
+
   it('posts ranktrend analyze payload to /api/ranktrend/analyze', async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) =>
       Promise.resolve(

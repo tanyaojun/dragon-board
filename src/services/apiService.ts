@@ -44,6 +44,8 @@ export interface RequestConfig {
   context?: RequestContext
   /** 请求ID（用于追踪） */
   requestId?: string
+  /** 交互关键请求可绕过全局并发队列，避免被后台轮询请求饿死（仅用于面板/观察等一次性请求） */
+  bypassQueue?: boolean
   /** 取消信号 */
   signal?: AbortSignal
   /** 自定义请求头 */
@@ -162,8 +164,13 @@ class RequestQueue {
     low: [],
   }
   private processing = false
-  private concurrentCount = 0
-  private readonly MAX_CONCURRENT = 3
+  private sharedCount = 0
+  private highCount = 0
+  // 共享并发槽：后台轮询（frames/stock-rows/quotes 等）受此限制，避免打满本地后端
+  private readonly MAX_SHARED_CONCURRENT = 3
+  // 高优独立通道：面板 analyze/rank-series/frames 等交互请求不会被共享槽饿死，
+  // 否则一次面板打开会排在大量慢后台请求后面等待数十秒
+  private readonly MAX_HIGH_CONCURRENT = 2
 
   async add<T>(priority: RequestPriority, task: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -183,32 +190,41 @@ class RequestQueue {
     if (this.processing) return
     this.processing = true
 
-    while (this.concurrentCount < this.MAX_CONCURRENT && this.hasTasks()) {
-      this.concurrentCount++
-      this.processNext()
+    try {
+      while (true) {
+        if (this.queues.high.length > 0 && this.highCount < this.MAX_HIGH_CONCURRENT) {
+          const task = this.queues.high.shift()!
+          this.highCount++
+          this.runTask(task, () => this.highCount--)
+          continue
+        }
+        // 先检查槽位再取任务：槽满时不能把任务 shift 出队列后丢弃
+        const shared = this.sharedCount < this.MAX_SHARED_CONCURRENT ? this.pickSharedTask() : null
+        if (shared) {
+          this.sharedCount++
+          this.runTask(shared, () => this.sharedCount--)
+          continue
+        }
+        break
+      }
+    } finally {
+      this.processing = false
     }
-    this.processing = false
   }
 
-  private async processNext() {
-    const task = this.getNextTask()
-    if (!task) {
-      this.concurrentCount--
-      return
-    }
-
+  private async runTask(task: () => Promise<any>, onDone: () => void) {
     try {
       await task()
     } catch (error) {
       console.error('[RequestQueue] 任务执行失败:', error)
     } finally {
-      this.concurrentCount--
+      onDone()
       this.process()
     }
   }
 
-  private getNextTask(): (() => Promise<any>) | null {
-    for (const priority of ['high', 'medium', 'low'] as RequestPriority[]) {
+  private pickSharedTask(): (() => Promise<any>) | null {
+    for (const priority of ['medium', 'low'] as RequestPriority[]) {
       if (this.queues[priority].length > 0) {
         return this.queues[priority].shift()!
       }
@@ -353,8 +369,7 @@ export class ApiService {
         let timedOut = false
 
         try {
-          // 通过队列执行（根据优先级）
-          const response = await this.queue.add(config.priority ?? 'medium', async () => {
+          const execute = async () => {
             if (signal.aborted) {
               throw new DOMException('Request aborted', 'AbortError')
             }
@@ -389,7 +404,11 @@ export class ApiService {
             } finally {
               clearTimeout(timeoutId)
             }
-          })
+          }
+          // 默认按优先级排队；bypassQueue 的交互请求直接执行，不受后台轮询影响
+          const response = config.bypassQueue
+            ? await execute()
+            : await this.queue.add(config.priority ?? 'medium', execute)
 
           const duration = Date.now() - startTime
 
@@ -1100,13 +1119,17 @@ export class ApiService {
 
   /** 获取队列状态 */
   getQueueStatus() {
+    const sharedCount = this.queue['sharedCount']
+    const highCount = this.queue['highCount']
     return {
       queues: {
         high: this.queue['queues'].high.length,
         medium: this.queue['queues'].medium.length,
         low: this.queue['queues'].low.length,
       },
-      concurrentCount: this.queue['concurrentCount'],
+      sharedCount,
+      highCount,
+      concurrentCount: sharedCount + highCount,
     }
   }
 }

@@ -7,7 +7,6 @@ import { rankTrendObservationService } from '../RankTrendObservationService'
 
 describe('RankTrendObservationService', () => {
   beforeEach(() => {
-    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockResolvedValue([])
     vi.spyOn(apiService, 'analyzeRankTrend').mockResolvedValue({
       ok: true,
       frames: [],
@@ -418,36 +417,6 @@ describe('RankTrendObservationService', () => {
       }
       return []
     })
-    let framesOptions: any = null
-    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockImplementation(async (options: any) => {
-      framesOptions = options
-      return [
-        {
-          tradingDate: '2026-07-28',
-          slotTime: '14:30',
-          marketStats: {
-            ztCount: 100,
-            dtCount: 0,
-            upCount: 4000,
-            downCount: 500,
-            totalAmo: 1500000000000,
-          },
-          sentiment: { phaseName: '高潮期', phase: 'climax', overall: 88 },
-        } as any,
-        {
-          tradingDate: '2026-07-28',
-          slotTime: '15:00',
-          marketStats: {
-            ztCount: 100,
-            dtCount: 0,
-            upCount: 4000,
-            downCount: 500,
-            totalAmo: 1500000000000,
-          },
-          sentiment: { phaseName: '高潮期', phase: 'climax', overall: 88 },
-        } as any,
-      ]
-    })
     mockRemoteFrames(frameKeys.slice(0, -1), () => ({
       meta: { code: '002279' },
       strategy: { regime: { state: 'strong', score: 80, reasons: ['池内上涨100%'] } },
@@ -464,12 +433,6 @@ describe('RankTrendObservationService', () => {
       rankTrend: currentAnalysis as any,
     })
 
-    expect(framesOptions).toMatchObject({
-      projection: 'ranktrend',
-      limit: 200,
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-    })
     expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(expect.objectContaining({
       codes: ['002279'],
       frameKeys: ['2026-07-28 14:30'],
@@ -500,7 +463,6 @@ describe('RankTrendObservationService', () => {
       }
       return []
     })
-    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockResolvedValue([])
     const currentAnalysis = {
       meta: { code: '002279' },
       strategy: { regime: { state: 'strong', score: 90, reasons: ['强市'] } },
@@ -541,7 +503,6 @@ describe('RankTrendObservationService', () => {
       }
       return []
     })
-    vi.spyOn(snapshotFacade, 'listSnapshotFrames').mockRejectedValue(new Error('frames offline'))
     vi.mocked(apiService.analyzeRankTrend).mockRejectedValue(new Error('backend offline'))
     const currentAnalysis = {
       meta: { code: '002279' },
@@ -554,10 +515,6 @@ describe('RankTrendObservationService', () => {
       rankTrend: currentAnalysis as any,
     })
 
-    expect(result.issues).toContainEqual(expect.objectContaining({
-      code: 'historical_frames_unavailable',
-      message: '历史帧市场环境原料读取失败: frames offline',
-    }))
     expect(result.issues).toContainEqual(expect.objectContaining({
       code: 'historical_analysis_unavailable',
       message: '历史帧分析读取失败: backend offline',

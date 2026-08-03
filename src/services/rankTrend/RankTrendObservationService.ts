@@ -3,7 +3,6 @@ import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { apiService } from '../apiService'
 import { snapshotFacade } from '../snapshot/facade'
 import type { RankTrendAnalysisResult } from './types'
-import type { SnapshotFrameRow } from '../snapshot/types'
 
 export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle'
 
@@ -47,9 +46,6 @@ export const MAX_OBSERVATION_WINDOW_BARS = Math.max(...Object.values(OBSERVATION
 
 /** 生命周期动量确认因子（mid 动量 + 加速度）可算窗口 */
 export const LIFECYCLE_MIN_SAMPLES = 15
-
-/** 历史帧市场环境原料单次读取的帧数上限（覆盖观察窗口即可） */
-const HISTORY_FRAME_READ_LIMIT = 200
 
 function barFrameKey(bar: any): string {
   return `${bar?.tradingDate || ''} ${bar?.slotTime || ''}`.trim()
@@ -145,37 +141,6 @@ class RankTrendObservationService {
       )
     }
     const rowsByFrame = new Map(rows.map((row) => [barFrameKey(row), row]))
-    const windowFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS)
-    const windowDates = windowFrameKeys
-      .map((key) => key.split(' ')[0])
-      .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
-    const frameRowsByKey = new Map<string, SnapshotFrameRow>()
-    if (windowDates.length > 0) {
-      try {
-        const historyFrames = await snapshotFacade.listSnapshotFrames({
-          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
-          startDate: windowDates[0],
-          endDate: windowDates[windowDates.length - 1],
-          sort: 'asc',
-          limit: HISTORY_FRAME_READ_LIMIT,
-          projection: 'ranktrend',
-          allowedCaptureModes: ['real_time', 'delayed'],
-          excludeRestored: true,
-        })
-        for (const historyFrame of historyFrames) {
-          const frameKey = barFrameKey(historyFrame)
-          if (frameKey) frameRowsByKey.set(frameKey, historyFrame)
-        }
-      } catch (error) {
-        serviceIssues.push(
-          observationIssue(
-            'historical_frames_unavailable',
-            `历史帧市场环境原料读取失败: ${errorMessage(error)}`,
-          ),
-        )
-      }
-    }
-
     // Python golden 批量分析历史帧（technical/cycle/risk/decision/observation/strategy/jump/regime/resonance/横截面基准）
     const historyFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS, -1)
     const remoteByFrame = new Map<string, {
