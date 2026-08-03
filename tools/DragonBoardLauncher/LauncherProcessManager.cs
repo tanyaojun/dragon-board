@@ -137,10 +137,21 @@ internal sealed class LauncherProcessManager
                 foreach (var pid in pids)
                     KillProcessTree(pid, $"端口 {service.Port} (孤儿清理)");
                 Thread.Sleep(800);
-                // 清理后重新检查，仍占用则放弃
+                // 清理后重新检查：仍被占用时，只要实例可用就直接复用（例如以 Windows 服务/
+                // 提权方式运行的 Redis，普通权限 taskkill 会拒绝访问，但实例本身工作正常）。
                 if (LauncherPorts.IsPortOpen(service.Port))
                 {
-                    _log($"{service.Name} 端口 {service.Port} 清理失败（可能权限不足），请手动关闭占用进程后重试。");
+                    var usable = service.Port == 8000
+                        ? SnapshotCollectorProbe.GetHealthAsync().GetAwaiter().GetResult().IsHealthy
+                        : true;
+                    if (usable)
+                    {
+                        _log($"{service.Name} 端口 {service.Port} 已被现有实例占用且可用，直接复用（跳过清理）。");
+                        return;
+                    }
+                    _log(
+                        $"{service.Name} 端口 {service.Port} 被不可用进程占用，清理失败（可能权限不足），" +
+                        "请手动关闭占用进程后重试。");
                     return;
                 }
             }

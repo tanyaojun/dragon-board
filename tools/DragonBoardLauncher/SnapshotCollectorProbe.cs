@@ -18,7 +18,9 @@ internal static class SnapshotCollectorProbe
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            // 后端启动预热（akshare 资金流/行情缓存）期间健康检查可能瞬时超过 2s，
+            // 收紧到 2s 会在启动窗口内误报"无法读取健康状态"；10s 覆盖预热尖峰。
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
             using var response = await client.GetAsync(HealthUri);
             if (!response.IsSuccessStatusCode)
             {
