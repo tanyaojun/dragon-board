@@ -148,7 +148,7 @@ def test_mapping_empty_raises_structured_error() -> None:
     assert caught.value.code == "mapping_empty"
 
 
-def test_blocked_refresh_preserves_last_success_as_stale_data() -> None:
+def test_low_quote_coverage_returns_degraded_snapshot_with_quality_reason() -> None:
     quote_provider = FakeProvider(_quotes(), source="quotes")
     service = ThemeHeatService(
         FakeRepo(),
@@ -157,14 +157,22 @@ def test_blocked_refresh_preserves_last_success_as_stale_data() -> None:
         now_ms=lambda: 1782018300000,
     )
     first = service.get_snapshot()
+    assert first["ok"] is True
+
+    # 覆盖率不足不是硬门禁：返回已计算的降级因子 + 结构化质量原因（fail-visible）
     quote_provider.rows = {"000001": _quotes()["000001"]}
+    degraded = service.get_snapshot(force=True)
 
-    with pytest.raises(ThemeHeatUnavailable) as caught:
-        service.get_snapshot(force=True)
-
-    assert caught.value.code == "quote_coverage_blocked"
-    assert caught.value.stale_data is first
-    assert service.get_snapshot() is first
+    assert degraded["ok"] is False
+    assert degraded["degraded"] is True
+    assert degraded["quality"]["errorCode"] == "quote_coverage_blocked"
+    assert degraded["quality"]["quoteCoverage"] < 0.85
+    assert all(
+        factor["rank"] == 0 and factor["rankEligible"] is False
+        for factor in degraded["factors"]
+    )
+    # 降级快照同样进入缓存供后续读取，不退回旧数据
+    assert service.get_snapshot() is degraded
 
 
 def test_theme_stock_slice_uses_cached_rows_without_refresh() -> None:

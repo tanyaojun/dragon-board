@@ -48,12 +48,12 @@ def test_theme_heat_summary_excludes_full_quote_maps(monkeypatch) -> None:
     assert "themeStocks" not in body["data"]
 
 
-def test_theme_heat_unavailable_returns_503_with_stale_data(monkeypatch) -> None:
+def test_theme_heat_mapping_empty_returns_503_with_stale_data(monkeypatch) -> None:
     stale = FakeThemeHeatService().get_snapshot()
     service = FakeThemeHeatService(
         failure=ThemeHeatUnavailable(
-            code="quote_coverage_blocked",
-            message="coverage low",
+            code="mapping_empty",
+            message="MongoDB theme mapping is empty",
             stale_data=stale,
         )
     )
@@ -62,9 +62,42 @@ def test_theme_heat_unavailable_returns_503_with_stale_data(monkeypatch) -> None
     response = client.get("/api/themes/heat")
 
     assert response.status_code == 503
-    assert response.json()["errorCode"] == "quote_coverage_blocked"
+    assert response.json()["errorCode"] == "mapping_empty"
     assert response.json()["staleData"]["computedAt"] > 0
     assert "quoteRowsByCode" not in response.json()["staleData"]
+
+
+def test_theme_heat_low_coverage_returns_degraded_data_with_200(monkeypatch) -> None:
+    """覆盖率不足返回降级因子 + 质量原因（200），不再用 503 隐藏已有数据。"""
+    service = FakeThemeHeatService()
+    monkeypatch.setattr(theme_heat_routes, "get_theme_heat_service", lambda: service)
+    monkeypatch.setattr(
+        service,
+        "get_snapshot",
+        lambda *, force: {
+            **FakeThemeHeatService().get_snapshot(),
+            "ok": False,
+            "degraded": True,
+            "quality": {
+                "quoteCoverage": 0.5,
+                "requestedCount": 2,
+                "returnedCount": 1,
+                "qualityFlags": [],
+                "errorCode": "quote_coverage_blocked",
+            },
+            "factors": [{"themeId": "AI", "heatScore": 50, "rank": 0, "rankEligible": False}],
+        },
+    )
+    client = TestClient(app)
+    response = client.get("/api/themes/heat")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["data"]["degraded"] is True
+    assert body["data"]["quality"]["errorCode"] == "quote_coverage_blocked"
+    assert body["data"]["factors"][0]["rankEligible"] is False
+    assert "quoteRowsByCode" not in body["data"]
 
 
 def test_theme_heat_stocks_rejects_unknown_sort_field(monkeypatch) -> None:

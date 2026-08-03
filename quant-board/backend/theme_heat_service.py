@@ -203,11 +203,9 @@ class ThemeHeatService:
             mapping_version=str(universe.get("version") or "unknown"),
         )
         if not result["ok"]:
-            raise ThemeHeatUnavailable(
-                code="quote_coverage_blocked",
-                message="Tencent quote coverage is below 85%",
-                stale_data=self._last_success,
-            )
+            # 覆盖率不足不是硬门禁：返回已计算的降级因子与结构化质量原因（fail-visible）。
+            # 前端展示可计算部分 + 缺失位置/原因，不整段 503 隐藏已有数据。
+            result["degraded"] = True
 
         result.update(
             {
