@@ -407,6 +407,48 @@ class _MongoSnapshotCollectorRepository:
             },
         }
 
+    def list_snapshot_sector_rows(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        entity_type: str | None = None,
+        sort: str = "asc",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        return self._mongo.list_snapshot_sector_rows(
+            dataset_id,
+            snapshot_type=snapshot_type,
+            start_date=start_date,
+            end_date=end_date,
+            entity_type=entity_type,
+            sort=sort,
+            limit=limit,
+        )
+
+    def list_snapshot_stock_rows(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+        slot_time: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sort: str = "asc",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        return self._mongo.list_snapshot_stock_rows(
+            dataset_id,
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            slot_time=slot_time,
+            start_date=start_date,
+            end_date=end_date,
+            sort=sort,
+            limit=limit,
+        )
+
 # ── factory ────────────────────────────────────────────────────────────────
 
 

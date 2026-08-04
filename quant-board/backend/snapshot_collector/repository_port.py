@@ -79,3 +79,30 @@ class SnapshotRepository(Protocol):
     ) -> dict[str, Any]:
         """Compare snapshot data between two datasets and return structured diff."""
         ...
+
+    def list_snapshot_sector_rows(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        entity_type: str | None = None,
+        sort: str = "asc",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Return ``{"rows": [...], "source": "mongodb"}``，行按 timestamp 升序。"""
+        ...
+
+    def list_snapshot_stock_rows(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+        slot_time: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sort: str = "asc",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Return ``{"rows": [...], "source": "mongodb"}``。"""
+        ...

@@ -333,6 +333,60 @@ class FakeSnapshotRepository:
             },
         }
 
+    def list_snapshot_sector_rows(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        entity_type: str | None = None,
+        sort: str = "asc",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        rows = [
+            row
+            for row in self._sector_rows
+            if row.get("datasetId") == dataset_id
+            and row.get("type") == snapshot_type
+            and (not start_date or (row.get("tradingDate") or "") >= start_date)
+            and (not end_date or (row.get("tradingDate") or "") <= end_date)
+            and (not entity_type or row.get("entityType") == entity_type)
+        ]
+        rows = sorted(rows, key=lambda r: int(r.get("timestamp") or 0))
+        if sort == "desc":
+            rows = list(reversed(rows))
+        if limit:
+            rows = rows[:limit]
+        return {"rows": rows, "source": "fake"}
+
+    def list_snapshot_stock_rows(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str | None = None,
+        slot_time: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        sort: str = "asc",
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        rows = [
+            row
+            for row in self._stock_rows
+            if row.get("datasetId") == dataset_id
+            and row.get("type") == snapshot_type
+            and (not trading_date or row.get("tradingDate") == trading_date)
+            and (not slot_time or row.get("slotTime") == slot_time)
+            and (not start_date or (row.get("tradingDate") or "") >= start_date)
+            and (not end_date or (row.get("tradingDate") or "") <= end_date)
+        ]
+        rows = sorted(rows, key=lambda r: int(r.get("timestamp") or 0))
+        if sort == "desc":
+            rows = list(reversed(rows))
+        if limit:
+            rows = rows[:limit]
+        return {"rows": rows, "source": "fake"}
+
 
 # ── Settings default tests ────────────────────────────────────────────────────
 
