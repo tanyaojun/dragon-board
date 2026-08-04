@@ -996,6 +996,17 @@ def test_builder_passes_quote_extra_fields_through():
   `SnapshotDerivationService().derive(fact)` → 入库；`builder.py` 保留为兼容门面。
 - 测试：`tests/test_snapshot_derivation.py` 3 用例（完整派生、derivation 元数据、
   同 fact 多类型派生互不污染）；真实 dry-run 224 行且 frame 带 derivation 元数据。
+- **字段补全（2026-08-04 复核）**：真实 dry-run 逐字段核对下游消费（RankTrend/回测/题材）
+  后补齐：
+  - `preClose` 由 `price/(1+pctChange/100)` 兜底派生（bridge 挂时不再断链），并解锁涨跌停价；
+  - `themeHeat/themeRiskFlags` 由主题材 sector factor（heatScore/crowdingRisk）派生；
+  - `highPrice/lowPrice` 兼容别名；
+  - `leadStatus` 在触及涨停/跌停价时标为 `涨停/跌停`；
+  - sector `fundScore/mainNetInflow` 通过 `include_runtime_funds=True` 补齐（采集进程资金缓存已预热）。
+  - 验证：真实 dry-run 225 行——preClose/涨跌停价/themeRole/themeContribution/highPrice/lowPrice
+    全量补齐，themeHeat 211/225（无题材者保持缺失），sector fundScore/mainNetInflow/heatScore 245/245。
+  - 剩余缺口（无上游可派生，不伪造）：sector `rotationState`（需轮动分析管线）；
+    bridge 挂时的 high/low/depth（腾讯源无此字段，需另接 Sina 兜底）。
 
 ### 第 2 层（生命周期层，已完成）
 

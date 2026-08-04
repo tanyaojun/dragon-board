@@ -60,3 +60,82 @@ def test_same_fact_derives_per_type_without_shared_mutation() -> None:
     assert daily.records[0]["snapshotId"] == "daily:2026-08-04:15:30"
     assert half.frames[0]["type"] == "half_hour"
     assert daily.frames[0]["type"] == "daily"
+
+
+def _fact_no_pre_close_with_theme() -> MarketFactBundle:
+    return MarketFactBundle(
+        snapshot_type="half_hour",
+        trading_date="2026-08-04",
+        slot_time="15:30",
+        timestamp_ms=1785835800000,
+        dataset_id="dragonboard_live",
+        stocks=[
+            {
+                "code": "000001",
+                "name": "平安银行",
+                "rank": 1,
+                "price": 10.5,
+                "pctChange": 5.0,
+            }
+        ],
+        themes={"000001": ["银行"]},
+        sectors=[
+            {
+                "entityType": "hot_theme",
+                "entityName": "银行",
+                "heatScore": 80.0,
+                "crowdingRisk": 75.0,
+            }
+        ],
+    )
+
+
+def test_pre_close_derived_from_price_and_change() -> None:
+    bundle = SnapshotDerivationService().derive(_fact_no_pre_close_with_theme())
+    row = bundle.stock_rows[0]
+    assert row["preClose"] == round(10.5 / (1 + 5.0 / 100), 4)
+    assert row["limitUpPrice"] == round(row["preClose"] * 1.1, 2)
+
+
+def test_theme_heat_and_risk_flags_derived_from_sector() -> None:
+    bundle = SnapshotDerivationService().derive(_fact_no_pre_close_with_theme())
+    row = bundle.stock_rows[0]
+    assert row["mainTheme"] == "银行"
+    assert row["themeHeat"] == 80.0
+    assert row["themeRiskFlags"] == ["题材拥挤风险高"]
+
+
+def test_high_low_price_aliases_from_quote() -> None:
+    fact = _fact_no_pre_close_with_theme()
+    fact.quotes = [
+        {
+            "code": "000001",
+            "price": 10.5,
+            "pctChange": 5.0,
+            "high": 10.8,
+            "low": 10.2,
+            "preClose": 10.0,
+        }
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    assert row["highPrice"] == 10.8
+    assert row["lowPrice"] == 10.2
+
+
+def test_lead_status_marked_limit_up_when_price_hits_limit() -> None:
+    fact = _fact_no_pre_close_with_theme()
+    fact.stocks = [
+        {
+            "code": "000001",
+            "name": "平安银行",
+            "rank": 1,
+            "price": 11.0,
+            "pctChange": 10.0,
+            "preClose": 10.0,
+        }
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    assert row["limitUpPrice"] == 11.0
+    assert row["leadStatus"] == "涨停"

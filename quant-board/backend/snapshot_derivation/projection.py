@@ -68,6 +68,34 @@ def _derive_theme_role_fields(stock: dict[str, Any]) -> tuple[str, float, str]:
     return role, contribution, lead_status
 
 
+def _normalize_theme_label(value: Any) -> str:
+    name = str(value or "").strip()
+    for suffix in ("概念板块", "概念", "板块"):
+        if name.endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+    return name.strip()
+
+
+def _derive_pre_close_from_price_change(row: dict[str, Any]) -> None:
+    """桥挂降级兜底：由 price + pctChange 反推昨收（缺失时）。"""
+    if row.get("preClose") is None:
+        price = _safe_float(row.get("price"))
+        change = _safe_float(
+            row.get("change") if row.get("change") is not None else row.get("pctChange")
+        )
+        if price > 0 and change is not None and change != -100:
+            row["preClose"] = round(price / (1 + change / 100), 4)
+    # 反推得到昨收后，补上此前因缺昨收而跳过的涨跌停价
+    if row.get("preClose") is not None and not row.get("limitUpPrice") and not row.get("limitDownPrice"):
+        derived = _derive_limit_prices(
+            row["preClose"],
+            str(row.get("code") or ""),
+            str(row.get("name") or ""),
+        )
+        if derived is not None:
+            row["limitUpPrice"], row["limitDownPrice"] = derived
+
+
 def _limit_ratio_for(code: Any, name: Any = "") -> float:
     """A股涨跌停幅度：ST 5%、创业板/科创板 20%、北交所 30%、其余主板 10%。"""
     upper_name = str(name or "").upper()
@@ -246,6 +274,11 @@ def _enrich_stock_rows_from_quotes(
                 value = q.get(field)
                 if value is not None and not row.get(field):
                     row[field] = value
+            # RankTrend/回测兼容别名：highPrice/lowPrice
+            if row.get("high") is not None and not row.get("highPrice"):
+                row["highPrice"] = row["high"]
+            if row.get("low") is not None and not row.get("lowPrice"):
+                row["lowPrice"] = row["low"]
             amplitude = _derive_amplitude(row)
             if amplitude is not None and not row.get("amplitude"):
                 row["amplitude"] = amplitude
@@ -447,6 +480,11 @@ def build_ingest_payload(
 
     # ── Stock rows ─────────────────────────────────────────────────────────
     stock_rows: list[dict[str, Any]] = []
+    sector_by_name = {
+        _normalize_theme_label(sector.get("entityName") or sector.get("name") or ""): sector
+        for sector in market_context.sectors
+        if isinstance(sector, dict)
+    }
     for stock in normalized_hotlist:
         if not isinstance(stock, dict):
             continue
@@ -525,6 +563,18 @@ def build_ingest_payload(
         row.setdefault("themeContribution", theme_contribution)
         row.setdefault("leadStatus", lead_status)
 
+        # 题材热度/拥挤风险：由该股主题材的 sector factor 派生（无匹配则保持缺失）
+        main_theme = row.get("mainTheme")
+        if main_theme:
+            sector = sector_by_name.get(_normalize_theme_label(main_theme))
+            if sector is not None:
+                heat = sector.get("heatScore")
+                if heat is not None:
+                    row.setdefault("themeHeat", heat)
+                crowding = _safe_float(sector.get("crowdingRisk"))
+                if crowding >= 70:
+                    row.setdefault("themeRiskFlags", ["题材拥挤风险高"])
+
         limit_up = market_context.limit_up.get(code)
         if isinstance(limit_up, dict):
             for field in (
@@ -554,6 +604,15 @@ def build_ingest_payload(
     )
     for row in stock_rows:
         _remove_unavailable_placeholder_zeros(row)
+        _derive_pre_close_from_price_change(row)
+        # 涨跌停状态标签：限价已知后补 leadStatus（回测 _limit_state 依赖）
+        price = _safe_float(row.get("price"))
+        limit_up = row.get("limitUpPrice")
+        limit_down = row.get("limitDownPrice")
+        if price > 0 and limit_up and price >= float(limit_up) * 0.999:
+            row["leadStatus"] = "涨停"
+        elif price > 0 and limit_down and price <= float(limit_down) * 1.001:
+            row["leadStatus"] = "跌停"
 
     stock_rows.sort(key=lambda r: int(r.get("rank") or 999999))
     frame["stockRowCount"] = len(stock_rows)

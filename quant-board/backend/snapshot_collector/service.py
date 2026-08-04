@@ -286,7 +286,7 @@ class SnapshotCollectorService:
             try:
                 theme_snapshot = await asyncio.to_thread(
                     self._theme_heat_service.get_snapshot,
-                    include_runtime_funds=False,
+                    include_runtime_funds=True,
                 )
                 market_context.sectors = [
                     factor_to_sector(factor, theme_snapshot)

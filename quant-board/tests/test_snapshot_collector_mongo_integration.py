@@ -439,7 +439,7 @@ class TestMongoIntegrationApply:
 
         class ThemeService:
             def get_snapshot(self, *, include_runtime_funds: bool = True):
-                assert include_runtime_funds is False
+                assert include_runtime_funds is True
                 return {
                     "computedAt": 1782018300000,
                     "factorVersion": "theme-market-v1",
@@ -447,7 +447,7 @@ class TestMongoIntegrationApply:
                     "quality": {"quoteCoverage": 0.99},
                     "sources": {
                         "quotes": {"source": "theme_quote_tencent", "ok": True},
-                        "funds": {"source": "formal_fund_unavailable", "ok": False},
+                        "funds": {"source": "ths_main_monitor", "ok": True},
                     },
                     "factors": [
                         {
