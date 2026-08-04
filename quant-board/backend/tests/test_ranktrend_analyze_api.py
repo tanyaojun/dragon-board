@@ -95,6 +95,9 @@ def test_analyze_returns_py_golden_frames(monkeypatch):
     assert body["frames"][0]["stocks"][0]["code"] == "002279"
     assert "strategy" in body["frames"][0]["stocks"][0]["analysis"]
     assert "executionStrategy" in body["frames"][0]["stocks"][0]["analysis"]
+    # 帧无自身 hotThemes 时必须打 fail-visible 标记（themeContext + qualityFlags）
+    assert body["frames"][0]["themeContext"]["hotThemesFallback"] is True
+    assert "theme_hot_themes_fallback" in body["frames"][0]["themeContext"]["qualityFlags"]
 
 
 def test_frames_include_regime(monkeypatch):

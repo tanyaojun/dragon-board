@@ -68,6 +68,23 @@ def test_fusion_insufficient_when_cross_section_bad_keeps_base_score():
     assert "theme_cross_section_insufficient" in fused["theme"]["reasons"]
 
 
+def test_fusion_marks_hot_themes_fallback_reason():
+    """帧缺自身 hotThemes、题材匹配走了历史回退时，resonance.theme.reasons 必须打标记（fail-visible）。"""
+    base = {"status": "ok", "direction": "buy", "score": 60, "label": "中等"}
+    exposure = stock_theme_exposure(_stock("000001", ["T2"]), [_theme("T2", 80.0, 1)])
+    fused = fuse_theme_resonance(
+        base,
+        exposure,
+        _frame_momentum(theme_scores={"T2": 80.0}),
+        hot_themes_fallback=True,
+    )
+    assert fused["theme"]["status"] == "ok"
+    assert "theme_hot_themes_fallback" in fused["theme"]["reasons"]
+
+    fused_ok = fuse_theme_resonance(base, exposure, _frame_momentum(theme_scores={"T2": 80.0}))
+    assert "theme_hot_themes_fallback" not in fused_ok["theme"]["reasons"]
+
+
 def test_fusion_missing_mapping_keeps_base_score():
     base = {"status": "ok", "direction": "buy", "score": 60, "label": "中等"}
     fused = fuse_theme_resonance(base, None, _frame_momentum())

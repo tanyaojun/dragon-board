@@ -21,6 +21,7 @@ SECTOR_FACTOR_FIELDS = (
     "correlationScore",
     "crowdingRisk",
     "persistenceScore",
+    "rotationState",
     "change",
     "mainNetInflow",
     "volumeRatio",
@@ -29,6 +30,42 @@ SECTOR_FACTOR_FIELDS = (
     "themeQualityFlags",
     "metadata",
 )
+
+# 股票-题材角色权重与阈值：与 theme_momentum._role_for 的 ROLE_WEIGHTS 语义对齐。
+# collector/theme_heat 按涨跌幅计算并落库，供 mainTheme 匹配时被直接信任。
+THEME_ROLE_WEIGHTS = {
+    "leader": 1.0,
+    "core": 0.82,
+    "follower": 0.62,
+    "independent": 0.38,
+    "noise": 0.15,
+}
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if math.isfinite(numeric) else default
+
+
+def _derive_theme_role_fields(stock: dict[str, Any]) -> tuple[str, float, str]:
+    """按涨跌幅派生题材角色/贡献/领涨状态：涨停附近=leader、5%=core、>0=follower、<=-5%=noise。"""
+    change = _safe_float(stock.get("change"))
+    if change >= 9.5:
+        role = "leader"
+    elif change >= 5.0:
+        role = "core"
+    elif change > 0:
+        role = "follower"
+    elif change <= -5.0:
+        role = "noise"
+    else:
+        role = "independent"
+    contribution = round(THEME_ROLE_WEIGHTS[role] * 60.0, 2)
+    lead_status = "领涨龙头" if role == "leader" else ""
+    return role, contribution, lead_status
 
 
 def _limit_ratio_for(code: Any, name: Any = "") -> float:
@@ -482,6 +519,11 @@ def build_ingest_payload(
             if theme_name:
                 row["sectorLabel"] = theme_name
                 row.setdefault("mainTheme", theme_name)
+
+        theme_role, theme_contribution, lead_status = _derive_theme_role_fields(row)
+        row.setdefault("themeRole", theme_role)
+        row.setdefault("themeContribution", theme_contribution)
+        row.setdefault("leadStatus", lead_status)
 
         limit_up = market_context.limit_up.get(code)
         if isinstance(limit_up, dict):

@@ -189,6 +189,32 @@ class MongoRepository:
                 dataset_id,
                 snapshot_ids,
                 entity_type="hot_theme" if projection == "ranktrend+themes" else None,
+                fields=(
+                    {
+                        "_id": 0,
+                        "snapshotId": 1,
+                        "tradingDate": 1,
+                        "slotTime": 1,
+                        "timestamp": 1,
+                        "captureMode": 1,
+                        "source": 1,
+                        "entityType": 1,
+                        "entityKey": 1,
+                        "entityName": 1,
+                        "entityCode": 1,
+                        "rowId": 1,
+                        "rank": 1,
+                        "heatScore": 1,
+                        "crowdingRisk": 1,
+                        "rotationState": 1,
+                        "metadata": 1,
+                        "themeId": 1,
+                        "code": 1,
+                        "name": 1,
+                    }
+                    if projection == "ranktrend+themes"
+                    else None
+                ),
             )
         )
         bundles: list[dict[str, Any]] = []
@@ -873,6 +899,7 @@ class MongoRepository:
         dataset_id: str,
         snapshot_ids: list[str],
         entity_type: str | None = None,
+        fields: dict[str, int] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
@@ -880,7 +907,7 @@ class MongoRepository:
         query: dict[str, Any] = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
         if entity_type:
             query["entityType"] = entity_type
-        for row in self.db["snapshot_sector_rows"].find(query).sort([("timestamp", 1), ("rank", 1)]):
+        for row in self.db["snapshot_sector_rows"].find(query, fields).sort([("timestamp", 1), ("rank", 1)]):
             rows_by_snapshot[str(row.get("snapshotId"))].append(self.local_sector_to_bundle_dict(row))
         return rows_by_snapshot
 

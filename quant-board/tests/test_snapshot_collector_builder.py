@@ -304,6 +304,42 @@ class TestBuilderOutput:
         assert sector["entityType"] == "sector"
         assert sector["entityName"] == "银行"
 
+    def test_sector_row_persists_rotation_state(self):
+        """rotationState 必须落库：题材生命周期加成/惩罚依赖它，漏掉会导致生产调节失效。"""
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+        ctx.sectors = [
+            {
+                "code": "T1",
+                "name": "AI概念板块",
+                "entityType": "hot_theme",
+                "rank": 1,
+                "heatScore": 80.0,
+                "crowdingRisk": 20.0,
+                "rotationState": "mainline",
+                "metadata": {"rankEligible": True},
+            }
+        ]
+        sector = build_ingest_payload(slot, ctx)["sectorRows"][0]
+        assert sector["entityType"] == "hot_theme"
+        assert sector.get("rotationState") == "mainline"
+
+    def test_stock_row_persists_theme_role_fields(self):
+        """collector/theme_heat 计算落库：themeRole/themeContribution/leadStatus 写入股票行。"""
+        slot = make_slot_1500()
+        ctx = make_fake_context()
+        ctx.stocks[0]["pctChange"] = 9.8
+        ctx.stocks[0]["change"] = 9.8
+        rows = build_ingest_payload(slot, ctx)["stockRows"]
+
+        leader = next(row for row in rows if row["code"] == "000001")
+        assert leader["themeRole"] == "leader"
+        assert leader["themeContribution"] == 60.0
+        assert "龙" in str(leader["leadStatus"] or "")
+
+        other = next(row for row in rows if row["code"] == "600000")
+        assert other["themeRole"] == "independent"
+
     def test_sector_factor_fields_preserve_nullable_values(self):
         slot = make_slot_1500()
         ctx = make_fake_context()

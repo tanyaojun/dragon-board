@@ -333,6 +333,7 @@ def fuse_theme_resonance(
     base_resonance: dict[str, Any] | None,
     exposure: dict[str, Any] | None,
     frame_momentum: dict[str, Any] | None,
+    hot_themes_fallback: bool = False,
 ) -> dict[str, Any]:
     """把题材动量并入个股共振。返回带 theme 子对象的共振结果。
 
@@ -360,7 +361,9 @@ def fuse_theme_resonance(
             )
             lifecycle_bonus = 0.0
             lifecycle_penalty = 0.0
-            extra_reasons: list[str] = []
+            extra_reasons: list[str] = (
+                ["theme_hot_themes_fallback"] if hot_themes_fallback else []
+            )
             if exposure["rotationState"] in LIFECYCLE_BOOST and exposure["role"] in {"leader", "core"}:
                 lifecycle_bonus = THEME_LIFECYCLE_BONUS
             if exposure["rotationState"] in LIFECYCLE_PENALTY and exposure["role"] != "leader":

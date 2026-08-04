@@ -226,6 +226,7 @@ def _analyze_frames(
         hot_themes = frame.get("hotThemes") or last_hot_themes
         if frame.get("hotThemes"):
             last_hot_themes = hot_themes
+        hot_themes_fallback = not bool(frame.get("hotThemes"))
         frame_momentum = momentum_series["frames"][index]
         theme_context = {
             "version": momentum_series["version"],
@@ -235,7 +236,11 @@ def _analyze_frames(
             )[:10],  # 响应只回传 top-10 题材动量摘要，控制体积；内部全量仍参与计算
             "marketThemeMedianShortChange": frame_momentum["marketThemeMedianShortChange"],
             "themeSampleCount": frame_momentum["themeSampleCount"],
-            "qualityFlags": frame_momentum["qualityFlags"],
+            "hotThemesFallback": hot_themes_fallback,
+            "qualityFlags": [
+                *frame_momentum["qualityFlags"],
+                *(["theme_hot_themes_fallback"] if hot_themes_fallback else []),
+            ],
         }
         market_median, market_sample_count = _frame_market_median(frames, index)
         market_median_percentile = _frame_market_median_percentile(frame)
@@ -282,7 +287,12 @@ def _analyze_frames(
             # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行，
             # 动量序列仍按截至当前帧的历史 bars 计算（避免当前帧题材恒为 mapping_missing）
             exposure = stock_theme_exposure(stock, hot_themes)
-            analysis["resonance"] = fuse_theme_resonance(resonance, exposure, frame_momentum)
+            analysis["resonance"] = fuse_theme_resonance(
+                resonance,
+                exposure,
+                frame_momentum,
+                hot_themes_fallback=hot_themes_fallback,
+            )
             if analysis["resonance"].get("status") == "ok":
                 analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
             _apply_resonance_final(analysis, analysis["resonance"])

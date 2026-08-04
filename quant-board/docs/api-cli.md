@@ -920,7 +920,9 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 带并发闸门：缓存未命中进入计算前，先按缓存键取 per-key 单飞锁（同 key 并发只计算一次，其余等待后共享缓存结果），再取全局有界信号量（默认 2，环境变量 `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` 可调），同一时刻最多 N 个 golden 计算并发。目的是防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死；并发上限不改变响应结构与缓存合同。
 
-`POST /api/ranktrend/analyze` 响应帧新增题材动量（板块共振）字段：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags`，`factors` 只回传 top-10 题材动量摘要），每股 `analysis.resonance.theme`（`status/themeId/themeName/role/roleWeight/themeMomentumScore/themeMomentumDirection/themeLifecycle/themeContribution/adjustment/reasons`）与 `analysis.resonance.baseScore`（调节前原始共振分数）。题材动量由 `backend/analysis/theme_momentum.py` 纯函数从已落库 `snapshot_sector_rows`（`entityType=hot_theme`）的因子序列计算，与个股共振同构（短 3/中 8/路径 8/Jump 衰减 3）；题材数据不足时 `theme.status=insufficient` 且保留原共振分数（fail-visible，不归零不伪造）。该字段为向后兼容扩展，旧消费方不受影响。
+`POST /api/ranktrend/analyze` 响应帧新增题材动量（板块共振）字段：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags/hotThemesFallback`，`factors` 只回传 top-10 题材动量摘要），每股 `analysis.resonance.theme`（`status/themeId/themeName/role/roleWeight/themeMomentumScore/themeMomentumDirection/themeLifecycle/themeContribution/adjustment/reasons`）与 `analysis.resonance.baseScore`（调节前原始共振分数）。题材动量由 `backend/analysis/theme_momentum.py` 纯函数从已落库 `snapshot_sector_rows`（`entityType=hot_theme`）的因子序列计算，与个股共振同构（短 3/中 8/路径 8/Jump 衰减 3）；题材数据不足时 `theme.status=insufficient` 且保留原共振分数（fail-visible，不归零不伪造）。该字段为向后兼容扩展，旧消费方不受影响。
+
+`hotThemesFallback=true` 表示该帧没有自身的 `hotThemes`（collector 未落库题材因子行），个股题材匹配回退到最近历史帧；此时 `qualityFlags` 追加 `theme_hot_themes_fallback`，`resonance.theme.reasons` 追加同名单（fail-visible，不静默重复题材）。collector 落库的 `snapshot_sector_rows` 含 `rotationState`（生命周期加成/惩罚原料），`snapshot_stock_rows` 含 `themes/mainTheme/themeRole/themeContribution/leadStatus`（角色/贡献按涨跌幅派生落库）。
 
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 

@@ -7,9 +7,11 @@ class FakeCollection:
     def __init__(self, rows):
         self._rows = list(rows)
         self.last_query = None
+        self.last_projection = None
 
     def find(self, query, projection=None):
         self.last_query = query
+        self.last_projection = projection
         return self
 
     def sort(self, *args, **kwargs):
@@ -121,6 +123,7 @@ def test_ranktrend_plus_themes_filters_sector_rows_by_hot_theme_server_side():
     sector_query = db._collections["snapshot_sector_rows"].last_query
     assert sector_query is not None
     assert sector_query.get("entityType") == "hot_theme"
+    assert db._collections["snapshot_sector_rows"].last_projection is not None
 
 
 def test_full_projection_does_not_filter_sector_rows_server_side():
@@ -135,3 +138,4 @@ def test_full_projection_does_not_filter_sector_rows_server_side():
     sector_query = db._collections["snapshot_sector_rows"].last_query
     assert sector_query is not None
     assert "entityType" not in sector_query
+    assert db._collections["snapshot_sector_rows"].last_projection is None
