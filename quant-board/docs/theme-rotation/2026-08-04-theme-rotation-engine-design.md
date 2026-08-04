@@ -1,6 +1,6 @@
 # 题材/板块轮动引擎（后端重写）设计方案
 
-> 日期：2026-08-04 · 状态：方案待评审 · 前端只消费后端结果，不再本地计算轮动逻辑
+> 日期：2026-08-04 · 状态：已评审（2026-08-04 外部对抗性审计后修订，见 §10）· 前端只消费后端结果，不再本地计算轮动逻辑
 
 ## 1. 背景与问题
 
@@ -19,10 +19,19 @@
    涨停晋级/连板梯队、拥挤度变化、相对大盘超额、板块成交额占比、主线集中度。
 3. **状态判定是硬编码启发式**：`isMainLine = persistentDays>=2 && heat>=70 && inflow>=0`；
    `rotationSpeed = 平均|rankChange|×18`，无理论依据、无量纲校准。
-4. **生命周期缺失**：只有 `cooling` 一个标签，没有 冰点/萌芽/发酵/高潮/退潮 的完整状态机。
+4. **生命周期口径混乱**：前端本地判定只有粗标签；后端 `theme_trend` 另有 8 态词表
+   （ignition/expansion/mainline/crowded/divergence/cooling/reversal/neutral），两套不互通。
 5. **前端计算不可回测**：轮动结果只进浏览器内存/本地存储，RankTrend/ThemeTrend 回测拿不到。
-6. **后端 sector rows 的 rotationState 恒缺**（0%）：theme_heat factors 不带轮动状态，
-   而 `theme_support.py` / `theme_trend.py` 都消费它 → 题材策略缺原料。
+6. **后端采集链 sector rows 的 rotationState 普遍缺失**：纯后端采集路径（theme_heat →
+   factor_to_sector）不写轮动状态（仅浏览器 JSON 导入路径可透传前端值）；而
+   `theme_support.py` / `theme_trend.py` / `theme_momentum.py` 都消费它 → 题材策略缺原料。
+
+> 事实修正（2026-08-04 外部审计 A1-A5，见 §10）：①"rotationState 恒缺 0%/从未写入"表述过强——
+> 前端 builders → 后端 importers 的 JSON 导入路径可写入；准确表述是"后端自产因子不带
+> rotationState"。②前端真正本地推导在 `ThemeFactorEngine.rotationState()`，`ThemeRotationEngine`
+> 只是消费。③localStorage 轮动历史写方是 `rotationService.ts`，不在 `ThemeRotationEngine.ts`。
+> ④消费者至少 4 个：`theme_support`/`theme_trend`/`theme_momentum`/前端各面板。
+> ⑤`snapshot_derivation/projection.py` 已把前端 `rotationAnalysis` 透传为 frame.rotationSummary。
 
 ## 2. 设计目标与原则
 
@@ -57,7 +66,7 @@
 | 横向相对强度 | 相对全市场题材的 z-score | `(heat - 全市场中位数) / 全市场MAD`，映射到 0-100 |
 | 纵向动量 | heat 的 1/3/5 槽变化斜率 | `slope(heat[-5:])`，线性回归斜率归一化 |
 | 涨停动能 | 涨停家数 + 环比变化 | `ztCount` 及 `ztCount - ztCount[-1]`，横向比多少、纵向看变化 |
-| 板块超额 | 题材 change − 大盘 change | 用 `frame.indices` 主要指数均值 |
+| 板块超额 | 题材 change − 大盘 change | 用 `frame.indices` 主要指数均值；**v1 显式降级**：后端采集链暂无 indices provider（`collect_market_context` 只路由 stocks/quotes/depth/money_flow/themes/limit_up），无 indices 时该因子 None 并从 strength 权重中剔除，reasons 标注 `excess_unavailable`，不伪造 |
 
 ### 4.2 资金（Flow）— 权重 0.25
 
@@ -96,7 +105,7 @@
 
 ### 5.1 主题生命周期 `lifecycle`
 
-五状态（对齐市场共识的情绪周期）：
+五状态 + `neutral` 兜底（对齐市场共识的情绪周期）：
 
 | 状态 | 判定（默认阈值，可配） | 典型证据 |
 | --- | --- | --- |
@@ -105,6 +114,10 @@
 | `expanding` 发酵 | heat≥60 且 inflow 持续≥2 槽且拥挤<70 | 晋级率升、宽度升 |
 | `climax` 高潮 | heat≥80 且拥挤≥75 或 最高连板≥7 | 梯队完整、量能过热 |
 | `cooling` 退潮 | momentum<35 或 连续 2 槽 inflow<0 | 晋级率降、溢价转负 |
+| `neutral` 中性 | 其余（数据不足以落入五态） | 观察 |
+
+**转移约束**：state 转移必须相邻（ice↔emerging↔expanding↔climax↔cooling，cooling→emerging 视为反转）；
+非相邻跳变（如 ice→climax）钳制到相邻中间态并在 reasons 标注 `transition_clamped`，避免单槽任意跳变。
 
 ### 5.2 轮动状态 `rotationState`
 
@@ -127,10 +140,15 @@
 | `chaos` 混沌轮动 | 轮动速度快（rank turnover 高）且无稳定主线 |
 | `rising` 主线上升 | 最高连板 7-9 且有稳定 mainline |
 | `climax` 高潮 | 最高连板≥10 或主线拥挤≥80 |
-| `cooling` 退潮 | 亏钱效应（昨日涨停溢价为负）且晋级率降 |
+| `cooling` 退潮 | 主题 cooling/outflow 占比≥35% 或 主题内负流入占比≥50%（v1 不用昨日溢价，缺数据降级） |
+| `neutral` 平稳 | 最高板 4-6、轮动慢（rotationSpeed<40）、无主线 |
 
 `rotationSpeed` = 全市场主题 rank turnover（`Σ|rankChange| / N`）映射 0-100，另输出
 `mainlineConcentration`（Top3 heat 占比）区分"抱团（低轮动）"与"发散（高轮动）"。
+
+**跨日基线（已确认选择①的实现口径）**：历史窗口默认 8 槽，查询范围从当前交易日回溯到
+前一交易日（用交易日历 `is_trading_day` 定位），按 `timestamp` 升序取当前槽之前最近 8 槽；
+开盘首批槽用前一交易日收盘槽做基线，避免首 90 分钟整片 null。
 
 ## 6. 输出合同
 
@@ -160,15 +178,20 @@
   "rotationSpeed": 42,
   "mainlineConcentration": 0.36,
   "maxBoardHeight": 8,
-  "mainLines": [{"themeId":"BKAI","themeName":"人工智能","rotationScore":78}],
+  "mainLines": [{"themeId":"BKAI","themeName":"人工智能","rotationScore":78,"rotationState":"mainline","rankChange":-2}],
   "inflowThemes": [],
   "outflowThemes": [],
   "suggestion": "主线上升期：跟踪人工智能等主线",
   "computedAt": 1785835800000,
   "algorithmVersion": "theme_rotation_v2",
-  "evidence": {"framesUsed": 8, "qualityIssues": []}
+  "evidence": {"framesUsed": 8, "qualityIssues": [], "historyLagSlots": 1}
 }
 ```
+
+> **键名硬约束（审计 C1）**：`rotationSummary` 落库必须序列化为 **camelCase**（与设计合同一致，
+> 也与现有前端透传的旧行格式一致），禁止把 snake_case dataclass 原样写入。`marketPhase/
+> rotationSpeed/mainlineConcentration/maxBoardHeight/mainLines/inflowThemes/outflowThemes/
+> computedAt/algorithmVersion/evidence`。
 
 ### 6.3 前端消费
 
@@ -224,3 +247,27 @@
    还是第一版就要求连板聚合（需要额外回放 stock_rows 的板高）？
 3. **输出落点**：rotationState 直接写进 sector_rows（回测同源），还是只放 frame.rotationSummary
    + 新 API（sector_rows 由读口派生）？
+
+## 10. 外部审计与修订记录（2026-08-04）
+
+审计报告：`quant-board/docs/theme-rotation/2026-08-04-theme-rotation-engine-audit.md`（未修改业务代码）。
+
+已确认并修订的审计项：
+
+- **C1（camelCase）**：`MarketRotationSummary.to_camel_dict()` 序列化落库，消费端全读 camelCase。
+- **C2（生命周期词汇）**：`theme_trend.LIFECYCLES` 扩展新词表；`_build_factor`（回测重放路径）
+  优先透传落库 lifecycle，`_infer_lifecycle` 增加新词汇映射。
+- **C3（mainLines 被 backendRead 剥掉）**：backendRead 停止剥除 `rotationSummary.mainLines`。
+- **C4（market cooling 不可达）**：`market_phase_for` 增加 cooling/neutral 分支。
+- **H1（跨日基线）**：`history.py` 用交易日历回溯前一交易日；上一槽股票按 slot_time 精确查询。
+- **H2（Supabase 同构）**：`supabase_schema.sql` + `supabase_homomorphic` 同步新列与映射。
+- **H3（迁移期混排）**：`rotationSummary.algorithmVersion` 标识引擎版本，消费端按版本分支。
+- **H4（rotation_main_line 覆盖）**：当前 API 走 Mongo 透传路径不受影响；SQLite 旧路径仅在
+  rotationSummary 无 `algorithmVersion` 时才合并 `rotation_main_line` 行（历史兼容）。
+- **H5（下游消费者）**：Task 9 增加全量消费者兼容审计（Battlefield/Regime/Candidate 等）。
+- **H6（flow 持续性恒 0）**：streak 由 engine 从历史序列计算后传入 `flow_score`，不读行字段。
+- **H7（计划内测试必失败）**：测试夹具与断言已对齐（BKAG 补历史、rotation_speed=8）。
+- **H8（主线判定）**：按设计实现"横向 z-score Top3 **且** 资金集中度 Top3"双条件。
+- **H9（晋级率字符串 bug）**：`leadStatus` 改为字符串比较，分母改为主题内昨日涨停。
+- **9.3 硬缺口**：①indices 无生产者 → 板块超额显式降级（reasons 标注）；②flow streak 由
+  引擎计算；③stock rows 无 themeIds → 引擎按 `themes` 列表 + `mainTheme` 归一化归集。
