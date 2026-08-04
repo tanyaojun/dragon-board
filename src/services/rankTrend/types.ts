@@ -90,6 +90,20 @@ export interface RankTrendObservationScores {
   }
 }
 
+export interface RankTrendThemeResonance {
+  status: 'ok' | 'insufficient'
+  themeId?: string
+  themeName?: string
+  role?: 'leader' | 'core' | 'follower' | 'independent' | 'noise'
+  roleWeight?: number
+  themeMomentumScore?: number
+  themeMomentumDirection?: 'buy' | 'sell' | 'hold'
+  themeLifecycle?: string
+  themeContribution?: number
+  adjustment?: number
+  reasons: string[]
+}
+
 export interface RankTrendResonance {
   status: 'ok' | 'insufficient'
   direction: RankSignalDirection
@@ -104,6 +118,8 @@ export interface RankTrendResonance {
   marketMedianShortChange: number
   marketSampleCount?: number
   marketMedianPercentile?: number
+  baseScore?: number // 调节前原始共振分数（Python 融合输出，供审计与前端对比）
+  theme?: RankTrendThemeResonance
   reasons: string[]
 }
 

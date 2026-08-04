@@ -260,6 +260,15 @@ class RankTrendObservationService {
 
       if (isCurrent) {
         analysis = currentAnalysis ?? null
+        if (analysis?.resonance?.theme?.status === 'insufficient') {
+          issues.push(
+            observationIssue(
+              'theme_resonance_insufficient',
+              `题材共振数据不足: ${analysis.resonance.theme.reasons.join('、')}`,
+              { frameKey: key, track: 'resonance' },
+            ),
+          )
+        }
       } else {
         const percentiles = series.percentiles.slice(0, index + 1)
         const remoteAnalysis = remoteMeta?.analysis
