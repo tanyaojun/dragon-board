@@ -45,8 +45,10 @@ internal sealed class LauncherForm : Form
     public LauncherForm()
     {
         _root = ProjectRootLocator.Find();
+        LogFile.Initialize(_root);
         _services = LauncherServices.Create(_root);
         _processManager = new LauncherProcessManager(_root, _services, Log);
+        Log($"启动管理器启动，本地日志: {LogFile.CurrentLogPath()}");
 
         Text = "龙头看板 · 启动管理器";
         Width = 660;
@@ -617,12 +619,21 @@ internal sealed class LauncherForm : Form
 
     private void Log(string message)
     {
+        // 全量落盘（UI 过滤之外的所有原始行，含子进程 stdout/stderr），
+        // 不因 BeginInvoke 重入重复写入。
+        if (!string.IsNullOrWhiteSpace(message))
+            LogFile.Append($"[{DateTime.Now:HH:mm:ss}] {message}");
+        LogCore(message);
+    }
+
+    private void LogCore(string message)
+    {
         if (IsDisposed) return;
         if (!ShouldShowLog(message)) return;
 
         if (InvokeRequired)
         {
-            try { BeginInvoke(() => Log(message)); }
+            try { BeginInvoke(() => LogCore(message)); }
             catch (InvalidOperationException) { }
             return;
         }
