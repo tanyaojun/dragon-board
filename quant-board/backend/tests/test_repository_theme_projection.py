@@ -6,8 +6,10 @@ from backend.data.mongo_repository import MongoRepository
 class FakeCollection:
     def __init__(self, rows):
         self._rows = list(rows)
+        self.last_query = None
 
     def find(self, query, projection=None):
+        self.last_query = query
         return self
 
     def sort(self, *args, **kwargs):
@@ -105,3 +107,31 @@ def test_plain_ranktrend_projection_stays_lightweight():
     assert "themes" not in stock
     assert "themeRole" not in stock
     assert set(stock) == {"code", "name", "rank", "avgRankNum", "change", "volumeRatio", "zlje", "zljzb"}
+
+
+def test_ranktrend_plus_themes_filters_sector_rows_by_hot_theme_server_side():
+    """M1: ranktrend+themes 只按 hot_theme 服务端过滤 sector rows，不加载行业板块行。"""
+    db = FakeDb({
+        "snapshot_frames": _frames(),
+        "snapshot_stock_rows": _stock_rows(),
+        "snapshot_sector_rows": _sector_rows(),
+    })
+    repo = MongoRepository(db)
+    repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
+    sector_query = db._collections["snapshot_sector_rows"].last_query
+    assert sector_query is not None
+    assert sector_query.get("entityType") == "hot_theme"
+
+
+def test_full_projection_does_not_filter_sector_rows_server_side():
+    """full 投影仍需同时取 sector 与 hot_theme，不应加 entityType 过滤。"""
+    db = FakeDb({
+        "snapshot_frames": _frames(),
+        "snapshot_stock_rows": _stock_rows(),
+        "snapshot_sector_rows": _sector_rows(),
+    })
+    repo = MongoRepository(db)
+    repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="full")
+    sector_query = db._collections["snapshot_sector_rows"].last_query
+    assert sector_query is not None
+    assert "entityType" not in sector_query

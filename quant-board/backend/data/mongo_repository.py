@@ -185,7 +185,11 @@ class MongoRepository:
         sector_rows_by_snapshot = (
             {}
             if projection == "ranktrend"
-            else self._sector_rows_by_snapshot(dataset_id, snapshot_ids)
+            else self._sector_rows_by_snapshot(
+                dataset_id,
+                snapshot_ids,
+                entity_type="hot_theme" if projection == "ranktrend+themes" else None,
+            )
         )
         bundles: list[dict[str, Any]] = []
         for row in frame_rows:
@@ -864,11 +868,19 @@ class MongoRepository:
             rows_by_snapshot[str(row.get("snapshotId"))].append(item)
         return rows_by_snapshot
 
-    def _sector_rows_by_snapshot(self, dataset_id: str, snapshot_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    def _sector_rows_by_snapshot(
+        self,
+        dataset_id: str,
+        snapshot_ids: list[str],
+        entity_type: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
-        for row in self.db["snapshot_sector_rows"].find({"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}).sort([("timestamp", 1), ("rank", 1)]):
+        query: dict[str, Any] = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
+        if entity_type:
+            query["entityType"] = entity_type
+        for row in self.db["snapshot_sector_rows"].find(query).sort([("timestamp", 1), ("rank", 1)]):
             rows_by_snapshot[str(row.get("snapshotId"))].append(self.local_sector_to_bundle_dict(row))
         return rows_by_snapshot
 
