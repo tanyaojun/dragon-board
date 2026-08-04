@@ -22,6 +22,7 @@
 - `findings.md`：审计发现、残留调用和后续清理边界。
 - `progress.md`：V1-V7 实施过程日志归档。
 - `plans/`：各版本执行计划归档。
+- `2026-08-04-theme-momentum-resonance-design.md`：RankTrend OBSERVATION 共振路径增加题材动量（板块共振）指标的设计（题材动量算法合同、analyze 数据流改造、共振融合与回测验证）。
 
 ## 后续维护
 
