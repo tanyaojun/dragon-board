@@ -99,6 +99,9 @@ def build_theme_candidate_support(frame: dict[str, Any], stock: dict[str, Any]) 
     correlation = _num(factor.get("correlationScore", factor.get("correlation_score")))
     crowding = _num(factor.get("crowdingRisk", factor.get("crowding_risk")))
     rotation_state = str(factor.get("rotationState") or factor.get("rotation_state") or "")
+    rotation_score_raw = factor.get("rotationScore") or factor.get("rotation_score")
+    rotation_score = _num(rotation_score_raw) if rotation_score_raw is not None else None
+    lifecycle = str(factor.get("lifecycle") or factor.get("lifecycle_state") or "")
 
     score = heat * 0.35 + min(18, contribution) * 2.0 + momentum * 0.15 + correlation * 0.12
     if role == "leader":
@@ -114,6 +117,8 @@ def build_theme_candidate_support(frame: dict[str, Any], stock: dict[str, Any]) 
     elif rotation_state in {"outflow", "cooling"}:
         score -= 10
     score -= max(0.0, crowding - 60) * 0.35
+    if rotation_score is not None:
+        score += min(10, max(0, rotation_score - 60) * 0.25)
 
     reasons: list[str] = []
     risk_flags: list[str] = [str(item) for item in _list(stock.get("themeRiskFlags") or stock.get("theme_risk_flags"))]
@@ -131,6 +136,11 @@ def build_theme_candidate_support(frame: dict[str, Any], stock: dict[str, Any]) 
         reasons.append("板块联动较强")
     if crowding >= 70:
         risk_flags.append("题材拥挤风险高")
+    if lifecycle == "climax":
+        if "题材轮动高潮风险" not in risk_flags:
+            risk_flags.append("题材轮动高潮风险")
+    elif lifecycle in {"emerging", "expanding"} and "题材处于主线" not in reasons:
+        reasons.append(f"题材生命周期: {lifecycle}")
 
     return {
         "mainTheme": main_theme,

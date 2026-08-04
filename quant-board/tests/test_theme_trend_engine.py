@@ -250,3 +250,28 @@ def test_replay_builds_leader_and_core_stock_exposures() -> None:
     assert "role:leader" in leader["reasons"]
     assert core["role"] == "core"
     assert "role:core" in core["reasons"]
+
+
+def test_ts_factors_prefer_persisted_rotation_state() -> None:
+    from backend.analysis.theme_trend import _theme_context_frames
+
+    frame = {
+        "timestamp": 1785807000000,
+        "themeContext": {
+            "themes": [{"id": "BKAI", "themeId": "BKAI", "themeName": "人工智能"}],
+            "themeStocks": {"BKAI": ["600001"]},
+            "stockThemes": {"600001": ["BKAI"]},
+            "rotationAnalysis": {"mainLines": []},
+        },
+        "stocks": [{"code": "600001", "change": 5.0, "themeIds": ["BKAI"]}],
+        "sectors": [{
+            "themeId": "BKAI", "entityKey": "BKAI", "themeName": "人工智能",
+            "rotationState": "mainline", "lifecycle": "expanding", "rotationScore": 78.0,
+        }],
+    }
+    factors, _ = _theme_context_frames(frame)
+    assert factors
+    factor = next(f for f in factors if f.get("themeId") == "BKAI")
+    assert factor["rotationState"] == "mainline"
+    assert factor["lifecycle"] == "expanding"
+    assert "rotationState_local_fallback" not in (factor.get("themeQualityFlags") or [])

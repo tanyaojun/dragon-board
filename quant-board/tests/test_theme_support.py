@@ -281,3 +281,20 @@ def test_backtest_signal_model_accepts_theme_columns() -> None:
     )
 
     assert signal.theme_support_score == 92
+
+
+def test_candidate_support_uses_rotation_score_and_lifecycle() -> None:
+    from backend.analysis.theme_support import build_theme_candidate_support
+
+    frame = {
+        "sectors": [{
+            "themeId": "BKAI", "themeName": "人工智能",
+            "rotationState": "mainline", "lifecycle": "climax", "rotationScore": 80.0,
+            "momentumScore": 70.0, "correlationScore": 60.0, "crowdingRisk": 75.0,
+        }],
+    }
+    stock = {"mainTheme": "人工智能", "themeHeat": 70.0, "themeContribution": 60.0,
+             "themeRole": "leader", "change": 9.8, "themeRiskFlags": []}
+    support = build_theme_candidate_support(frame, stock)
+    assert "题材轮动高潮风险" in support.get("riskFlags", [])
+    assert support.get("themeSupportScore", 0) >= 70

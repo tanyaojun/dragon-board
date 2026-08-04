@@ -15,6 +15,13 @@ LIFECYCLES = {
     "cooling",
     "reversal",
     "neutral",
+    # theme_rotation_v2 词表（审计 C2，engine 落库值直接透传）
+    "ice",
+    "emerging",
+    "expanding",
+    "climax",
+    "inflow",
+    "outflow",
 }
 
 STRATEGY_VERSION = "theme-trend-v12"
@@ -272,8 +279,16 @@ def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], 
         theme_id = _name(factor.get("themeId"))
         theme_name = _name(factor.get("themeName"))
         codes = [str(code) for code in _list(theme_stocks.get(theme_id))]
-        factor["rotationState"] = _ts_rotation_state(rotation, theme_id, theme_name)
-        factor["lifecycle"] = _infer_lifecycle({**factor, "lifecycle": ""}, ThemeTrendConfig())
+        persisted = _ts_persisted_rotation(factor, frame)
+        if persisted is not None:
+            factor["rotationState"], factor["lifecycle"], factor["rotationScore"] = persisted
+        else:
+            factor["rotationState"] = _ts_rotation_state(rotation, theme_id, theme_name)
+            factor["lifecycle"] = _infer_lifecycle({**factor, "lifecycle": ""}, ThemeTrendConfig())
+            flags = list(factor.get("themeQualityFlags") or [])
+            if "rotationState_local_fallback" not in flags:
+                flags.append("rotationState_local_fallback")
+            factor["themeQualityFlags"] = flags
         for code in codes:
             exposure = _build_ts_runtime_exposure(
                 code=code,
@@ -362,6 +377,34 @@ def _ts_rotation_state(rotation: dict[str, Any], theme_id: str, theme_name: str)
     if any(matches(item) for item in _list(rotation.get("outflowThemes"))):
         return "cooling" if rotation.get("marketPhase") in {"distribution", "falling"} else "outflow"
     return "neutral"
+
+
+def _ts_persisted_rotation(
+    factor: dict[str, Any],
+    frame: dict[str, Any],
+) -> tuple[str, str, float | None] | None:
+    """优先消费 sector rows 落库的轮动字段；无则返回 None 走旧推导。"""
+    theme_id = _name(factor.get("themeId"))
+    theme_name = _normalize_theme_name(_name(factor.get("themeName")))
+    for sector in _sector_rows(frame):
+        sid = _sector_theme_id(sector, theme_name)
+        sname = _normalize_theme_name(
+            _name(sector.get("themeName") or sector.get("entityName"))
+        )
+        if (theme_id and sid == theme_id) or (
+            theme_name and sname and _is_same_theme_name(sname, theme_name)
+        ):
+            state = _name(sector.get("rotationState"))
+            lifecycle = _name(sector.get("lifecycle"))
+            if state or lifecycle:
+                score = _num(sector.get("rotationScore"), -1.0)
+                return (
+                    state or "neutral",
+                    lifecycle
+                    or _infer_lifecycle({**factor, "lifecycle": ""}, ThemeTrendConfig()),
+                    score if score >= 0 else None,
+                )
+    return None
 
 
 def _ts_correlated_role(correlation: dict[str, Any] | None, code: str) -> str:
