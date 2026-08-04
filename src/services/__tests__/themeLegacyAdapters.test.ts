@@ -97,6 +97,25 @@ describe('theme service adapters', () => {
     expect(refreshSpy).toHaveBeenCalledTimes(2)
   })
 
+  it('does not overwrite dataLayer rotation with empty analysis when backend has no result', () => {
+    vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
+      factors: [],
+      exposures: { byCode: new Map(), byTheme: new Map() },
+      rotationSummary: null,
+      events: [],
+      qualitySummary: { totalFlags: 0, fatalCount: 0, warningCount: 0, infoCount: 0, byCode: {} },
+      changedFields: [],
+      inputSignature: 'same',
+      source: 'rotationService',
+      timestamp: 1713751200000,
+      syncedStockCount: 0,
+    })
+    const updateSpy = vi.spyOn(dataLayer, 'updateRotationAnalysis')
+    const result = rotationService.analyzeAll()
+    expect(result.rotationSpeed).toBe(0) // legacy 返回值仍为空分析（调用方可见“无后端数据”）
+    expect(updateSpy).not.toHaveBeenCalled() // 空分析不得覆盖 dataLayer 中已有的后端结果
+  })
+
   it('records rotation analysis through the shared refresh scheduler', async () => {
     vi.useFakeTimers()
     const refreshSpy = vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({

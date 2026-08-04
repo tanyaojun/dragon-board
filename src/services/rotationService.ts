@@ -57,7 +57,8 @@ class RotationService {
       emitAlerts: false,
     })
     const analysis = result.rotationSummary || emptyAnalysis()
-    dataLayer.updateRotationAnalysis?.(analysis)
+    // 只在拿到后端引擎结果时写入 dataLayer；无结果不拿空分析覆盖内存态（fail-visible）
+    if (result.rotationSummary) dataLayer.updateRotationAnalysis?.(analysis)
     this.lastAnalysis = analysis
     this.saveHotThemesToLocalStorage([
       ...analysis.mainLines,
