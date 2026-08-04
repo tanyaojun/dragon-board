@@ -1,6 +1,7 @@
 import math
+import threading
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -27,6 +28,70 @@ def _analyze_cache_ttl_seconds() -> int:
 # 分析算法所需的最大回看窗口：共振至少 9 点序列（RESONANCE_MIN_SERIES_POINTS）、
 # 技术稳定窗口 30、生命周期 15、横截面 3；取 30 同时满足全部轨道。
 ANALYZE_MAX_TRACK_WINDOW = 30
+
+# analyze 并发闸门：per-key 单飞锁 + 全局有界信号量（QUANT_BOARD_ANALYZE_MAX_CONCURRENCY，默认 2）。
+# 目的：并发相同请求只计算一次（其余等待共享缓存结果），并限制全局 golden 计算并发，
+# 防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死。
+_ANALYZE_KEY_LOCKS: dict[str, threading.Lock] = {}
+_ANALYZE_LOCKS_GUARD = threading.Lock()
+_ANALYZE_SEMAPHORE: threading.BoundedSemaphore | None = None
+
+
+def _analyze_semaphore() -> threading.BoundedSemaphore:
+    global _ANALYZE_SEMAPHORE
+    if _ANALYZE_SEMAPHORE is None:
+        _ANALYZE_SEMAPHORE = threading.BoundedSemaphore(
+            get_settings().quant_board_analyze_max_concurrency
+        )
+    return _ANALYZE_SEMAPHORE
+
+
+def _analyze_key_lock(key: str) -> threading.Lock:
+    with _ANALYZE_LOCKS_GUARD:
+        lock = _ANALYZE_KEY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ANALYZE_KEY_LOCKS[key] = lock
+        return lock
+
+
+def _prune_analyze_key_locks() -> None:
+    with _ANALYZE_LOCKS_GUARD:
+        if len(_ANALYZE_KEY_LOCKS) > 512:
+            for key in [k for k, lock in _ANALYZE_KEY_LOCKS.items() if not lock.locked()]:
+                del _ANALYZE_KEY_LOCKS[key]
+
+
+def _analyze_with_cache_gate(
+    cache: Any,
+    cache_key: str,
+    generation_key: str,
+    generation: Any,
+    ttl_seconds: int,
+    dataset_id: str,
+    compute: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    """per-key 单飞 + 全局有界并发 + 双检缓存：同 key 并发只计算一次，其余等待共享缓存结果。"""
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return cached
+    lock = _analyze_key_lock(cache_key)
+    with lock:
+        cached = cache.get_response(cache_key)
+        if cached is not None:
+            return cached
+        with _analyze_semaphore():
+            response = compute()
+        if cache.get_generation(generation_key) == generation:
+            cache.set_response(cache_key, response, ttl_seconds=ttl_seconds)
+            cache.register_dependencies(
+                cache_key,
+                snapshot_cache.build_snapshot_cache_index_keys(
+                    prefix=get_settings().redis_key_prefix,
+                    dataset_id=dataset_id,
+                ),
+            )
+        return response
 
 
 def _to_engine_frame(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -380,25 +445,31 @@ def analyze_ranktrend(
         current_frame=current_frame,
         generation=generation,
     )
-    cached = cache.get_response(cache_key)
-    if cached is not None:
-        return cached
 
-    repo = repository_factory.create_repository(db, enable_backup=False)
-    engine = RankTrendPythonEngine()
-    raw_frames, series_by_code = _load_frames_for_analysis(
-        repo, dataset_id, snapshot_type, frame_keys, current_frame
-    )
-    frames_out = _analyze_frames(engine, raw_frames, series_by_code, codes)
-    response = {"ok": True, "frames": frames_out, "source": "py_golden", "issues": []}
-    response = {**response, "cache": {"hit": False, "store": "py_golden"}}
-    if cache.get_generation(generation_key) == generation:
-        cache.set_response(cache_key, response, ttl_seconds=_analyze_cache_ttl_seconds())
-        cache.register_dependencies(
-            cache_key,
-            snapshot_cache.build_snapshot_cache_index_keys(
-                prefix=get_settings().redis_key_prefix,
-                dataset_id=dataset_id,
-            ),
+    def compute_analyze() -> dict[str, Any]:
+        repo = repository_factory.create_repository(db, enable_backup=False)
+        engine = RankTrendPythonEngine()
+        raw_frames, series_by_code = _load_frames_for_analysis(
+            repo, dataset_id, snapshot_type, frame_keys, current_frame
         )
-    return response
+        frames_out = _analyze_frames(engine, raw_frames, series_by_code, codes)
+        return {
+            "ok": True,
+            "frames": frames_out,
+            "source": "py_golden",
+            "issues": [],
+            "cache": {"hit": False, "store": "py_golden"},
+        }
+
+    try:
+        return _analyze_with_cache_gate(
+            cache=cache,
+            cache_key=cache_key,
+            generation_key=generation_key,
+            generation=generation,
+            ttl_seconds=_analyze_cache_ttl_seconds(),
+            dataset_id=dataset_id,
+            compute=compute_analyze,
+        )
+    finally:
+        _prune_analyze_key_locks()

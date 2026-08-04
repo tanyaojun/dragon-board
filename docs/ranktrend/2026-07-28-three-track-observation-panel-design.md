@@ -144,9 +144,13 @@ lifecycleOpportunity = round(100 * clamp(
 ### 共振路径轨
 
 - 最近 9 帧关注度百分位折线（共振显示窗口固定 9 帧，与 `MIN_SERIES_POINTS=9` 对齐）。
-- 同帧市场中位路径虚线。
+- 恒定市场中位：严格 50 水平参考线（蓝色虚线，等同于 0 轴），仅作参照标准，
+  不参与任何算法分析与回测计算；`marketMedianPercentile` 字段仍由后端输出并保留在帧数据中，不再画成折线。
+- 动态市场中位：黄色实线，按 `50 + 窗口内 marketMedianShortChange 累计` 用历史帧 + 当前帧绘成折线；
+  某帧样本不足或缺失时按现有折线规则断线、不跨空补齐（不伪造数据）。
 - Jump 事件标记。
-- 相对动量、加速度、持续性、Jump 新鲜度和反转惩罚贡献条。
+- 相对动量、加速度、持续性、Jump 事件和反转惩罚贡献条；Jump 事件条分两段：
+  黄色段显示 Jump 置信度、白色段显示 Jump 新鲜度，与主表 tooltip 的“Jump事件/新鲜度”语义一致。
 
 ### 技术结构轨
 
@@ -179,6 +183,21 @@ lifecycleOpportunity = round(100 * clamp(
 - 当前帧三项结果必须与主表和 tooltip 一致。
 - 历史风险必须使用对应帧的资金和量比字段，市场基准必须使用对应帧横截面数据。
 - 缺字段时按轨道局部降级并显示结构化原因；不得把缺失静默转换为 0，不得阻止其他有效轨道展示。
+
+## 观察投影缓存
+
+观察服务对组装好的 `RankTrendObservationViewModel` 做内存投影缓存（复用 `src/services/LRUCache.ts`，
+实例名 `observation`），用于同一股票同数据代次重复打开时 0 请求秒开，并避开后台请求队列拥塞。
+
+- 键：`observation:<snapshotType>:<code>:<series 指纹>:<当前分析指纹>`
+  - series 指纹 = frameKeys 长度 + 首末帧 key + 末位百分位（防回填导致的历史序列变化）；
+  - 当前分析指纹 = `meta.updateTime + meta.analysisSource`（主表刷新导致当前帧分析变化即失效）。
+- TTL：60 秒（与后端 Redis analyze 缓存 TTL 一致），过期视为 miss。
+- 容量：LRU 60 条（`OBSERVATION_PROJECTION_CACHE_CAPACITY`），逐出最久未用。
+- 只缓存成功返回的 viewModel（含降级但带结构化 issues 的真实结果）；load 抛错不缓存。
+- viewModel 新增 `source: 'cache' | 'live'`；缓存命中时观察舱标题显示 `· 缓存` 标注。
+- fail-visible：缓存只是加速层，指纹不匹配或 TTL 过期即重拉，绝不用旧投影伪装当前缺失；
+  全源无数据仍按原逻辑返回空/单帧并给出结构化原因。
 
 ## 验收
 

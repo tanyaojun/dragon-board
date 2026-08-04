@@ -138,6 +138,8 @@ class Settings(BaseModel):
     theme_heat_fund_collection_timeout_ms: int = Field(default=180000)
     theme_fund_concurrency: int = Field(default=2)
     theme_fund_upstream_timeout_seconds: float = Field(default=15.0)
+    # analyze 路由并发闸门：同一时刻最多 N 个 golden 计算并发，防止并发请求拖死 8000
+    quant_board_analyze_max_concurrency: int = Field(default=2)
     theme_fund_ths_upstream_url: str = Field(
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
@@ -343,6 +345,13 @@ class Settings(BaseModel):
             _env_float(
                 "QUANT_BOARD_SNAPSHOT_CACHE_SOCKET_TIMEOUT_SECONDS",
                 self.snapshot_cache_socket_timeout_seconds,
+            ),
+        )
+        self.quant_board_analyze_max_concurrency = max(
+            1,
+            _env_int(
+                "QUANT_BOARD_ANALYZE_MAX_CONCURRENCY",
+                self.quant_board_analyze_max_concurrency,
             ),
         )
         self.snapshot_collector_enabled = _env_bool(

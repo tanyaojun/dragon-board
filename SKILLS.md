@@ -336,6 +336,8 @@ git commit -m "<type>: <简短说明>"
 
 遇到需要浏览器真实渲染、交互验证、截图或 Playwright 自动化的任务时，按本节规则或项目内 `skills/` 中的浏览器验证流程执行。
 
+项目级操作手册：`skills/playwright-cli/SKILL.md`（Windows/PowerShell 下 playwright-cli 的命令、标准验收流程与常见坑）。
+
 典型场景：
 
 - 修改 `src/components/**`、`src/App.vue`、主题样式、面板布局或交互状态。
@@ -349,6 +351,12 @@ git commit -m "<type>: <简短说明>"
 - 若应用需要 dev server，应先启动对应服务并报告本地 URL。
 - 检查桌面和移动端关键视口；有图表、canvas 或复杂面板时确认非空渲染和无明显遮挡。
 - 浏览器验证不能替代单元测试和类型检查；UI 改动完成前仍需运行对应构建或类型验证。
+
+### 7.2 E2E 验收流程（主代理单线程执行）
+
+UI/前端改动交付前，由主代理按真实浏览器流程做 e2e 验收（渲染、交互、控制台错误、截图），
+逐条留证后再声称完成，不能仅凭自查结论交付；不派发子代理。项目级流程规则：
+`skills/e2e-verification/SKILL.md`。
 
 ## 8. 推荐组合
 
@@ -415,6 +423,7 @@ writing-plans（多步骤或高风险 UI 改动）
 plan-eng-review
 test-driven-development
 浏览器和 Playwright 验证
+e2e-verification（浏览器验收阶段）
 verification-before-completion
 requesting-code-review
 ```

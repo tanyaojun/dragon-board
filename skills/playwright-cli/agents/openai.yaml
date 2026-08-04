@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwright CLI 浏览器验收"
+  short_description: "用 playwright-cli 在真实 Chrome 中验收 Dragon Board / QuantBoard 页面"
+  default_prompt: "Use $playwright-cli to run real-browser verification of Dragon Board pages (rendering, interactions, console errors, screenshots)."

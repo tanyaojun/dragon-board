@@ -1,0 +1,4 @@
+interface:
+  display_name: "E2E 验收流程"
+  short_description: "前端改动交付前由主代理单线程做真实浏览器 e2e 验收并留证"
+  default_prompt: "Use $e2e-verification to run single-threaded real-browser e2e acceptance (playwright-cli) with evidence before claiming UI changes complete."

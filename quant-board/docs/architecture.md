@@ -457,6 +457,7 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 30000；覆盖 `proxy-server` EastMoney quote fallback 的慢请求窗口 |
 | `QUANT_BOARD_THEME_HEAT_BATCH_SIZE` | 腾讯题材基础行情批大小，默认 50 |
 | `QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY` | 腾讯批次最大并发，默认 3 |
+| `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` | `/api/ranktrend/analyze` 全局 golden 计算并发上限，默认 2；per-key 单飞在此基础上保证同 key 只算一次 |
 | `QUANT_BOARD_THEME_HEAT_CACHE_TTL_SECONDS` | 全市场题材热度缓存秒数，默认 300 |
 | `QUANT_BOARD_THEME_HEAT_FAILED_BATCH_RETRIES` | 失败批次重试次数，默认 1 |
 | `QUANT_BOARD_THEME_HEAT_QUOTE_COLLECTION_TIMEOUT_MS` | 腾讯全市场行情整次采集预算，默认 90000 毫秒；超时后剩余批次记为失败并进入覆盖率门禁 |

@@ -80,10 +80,10 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
   },
   {
     id: 'snapshot.sweep',
-    label: '快照槽位扫描',
+    label: '快照槽位扫描（600s）',
     category: 'storage',
     owner: 'SnapshotRuntime',
-    intervalMs: 1_000,
+    intervalMs: 600_000,
     timeoutMs: 30_000,
     tradingTimeOnly: false,
     visibilityPolicy: 'run',

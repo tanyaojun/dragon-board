@@ -1093,7 +1093,7 @@ export class SnapshotRuntime {
   startTimer() {
     if (this.sweepTimerStarted) return
     refreshScheduler.registerRunner('snapshot.sweep', () => this.scheduleSnapshotSweep(new Date()))
-    refreshScheduler.startTask('snapshot.sweep', 1000)
+    refreshScheduler.startTask('snapshot.sweep', 600_000)
     this.sweepTimerStarted = true
   }
 

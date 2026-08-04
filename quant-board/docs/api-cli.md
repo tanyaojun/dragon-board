@@ -918,6 +918,8 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes`、规范化后的 `currentFrame` 与 dataset generation；`currentFrame.slotTime` 会去掉前端自增的 `current:N` 序列号，`stocks` 只保留 `code/rank/avgRankNum` 稳定身份字段，避免面板每次打开因序列号或实时行情字段变化而缓存永不命中。TTL 与快照读口一致（`QUANT_BOARD_SNAPSHOT_CACHE_TTL_SECONDS`，默认 300s）；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
 
+`POST /api/ranktrend/analyze` 带并发闸门：缓存未命中进入计算前，先按缓存键取 per-key 单飞锁（同 key 并发只计算一次，其余等待后共享缓存结果），再取全局有界信号量（默认 2，环境变量 `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` 可调），同一时刻最多 N 个 golden 计算并发。目的是防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死；并发上限不改变响应结构与缓存合同。
+
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
 `rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。API ingest 与后台 snapshot collector 每次成功写入快照事实后都会递增 dataset generation，并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。

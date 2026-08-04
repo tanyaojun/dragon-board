@@ -3,10 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { rankTrendAnalyzer } from '../../RankTrendAnalyzer'
 import { apiService } from '../../apiService'
 import { snapshotFacade } from '../../snapshot/facade'
-import { rankTrendObservationService } from '../RankTrendObservationService'
+import { observationProjectionCache, rankTrendObservationService } from '../RankTrendObservationService'
 
 describe('RankTrendObservationService', () => {
   beforeEach(() => {
+    observationProjectionCache.clear()
     vi.spyOn(apiService, 'analyzeRankTrend').mockResolvedValue({
       ok: true,
       frames: [],
@@ -731,5 +732,96 @@ describe('RankTrendObservationService', () => {
       code: 'technical_sample_insufficient',
       message: expect.stringMatching(/样本不足（当前 3 bar）/),
     }))
+  })
+
+  describe('观察投影缓存', () => {
+    function buildStock(updateTime = 100) {
+      return {
+        code: '002279',
+        name: '久其软件',
+        rankTrend: {
+          meta: { code: '002279', updateTime, analysisSource: 'py_golden' },
+          resonance: {
+            status: 'ok',
+            direction: 'buy',
+            score: 80,
+            marketMedianShortChange: 1.5,
+            marketSampleCount: 200,
+          },
+        },
+      }
+    }
+
+    function mockSeries() {
+      vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+        ranks: [28, 19],
+        percentiles: [42, 67],
+        frameKeys: ['2026-07-28 14:30', '2026-07-28 15:00'],
+      })
+    }
+
+    it('同一股票重复打开命中投影缓存，不再请求后端', async () => {
+      mockSeries()
+      const stockRows = vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      const analyze = vi.mocked(apiService.analyzeRankTrend)
+      const stock = buildStock()
+
+      const first = await rankTrendObservationService.load(stock)
+      expect(first.source).toBe('live')
+      expect(stockRows).toHaveBeenCalledTimes(1)
+
+      const second = await rankTrendObservationService.load(stock)
+      expect(second.source).toBe('cache')
+      expect(stockRows).toHaveBeenCalledTimes(1)
+      expect(analyze).toHaveBeenCalledTimes(1)
+      expect(second.frames).toEqual(first.frames)
+    })
+
+    it('当前分析指纹变化时缓存失效并重新请求', async () => {
+      mockSeries()
+      const stockRows = vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+
+      await rankTrendObservationService.load(buildStock(100))
+      const second = await rankTrendObservationService.load(buildStock(101))
+
+      expect(second.source).toBe('live')
+      expect(stockRows).toHaveBeenCalledTimes(2)
+    })
+
+    it('TTL 过期后缓存失效并重新请求', async () => {
+      vi.useFakeTimers()
+      try {
+        mockSeries()
+        const stockRows = vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+
+        await rankTrendObservationService.load(buildStock())
+        vi.advanceTimersByTime(61_000)
+        const second = await rankTrendObservationService.load(buildStock())
+
+        expect(second.source).toBe('live')
+        expect(stockRows).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('降级结果（历史帧分析失败）照常缓存并保留结构化 issues', async () => {
+      mockSeries()
+      vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      const analyze = vi.mocked(apiService.analyzeRankTrend)
+      analyze.mockRejectedValueOnce(new Error('backend offline'))
+      const stock = buildStock()
+
+      const first = await rankTrendObservationService.load(stock)
+      expect(first.issues).toContainEqual(
+        expect.objectContaining({ code: 'historical_analysis_unavailable' }),
+      )
+      expect(first.source).toBe('live')
+
+      const second = await rankTrendObservationService.load(stock)
+      expect(second.source).toBe('cache')
+      expect(second.issues).toEqual(first.issues)
+      expect(analyze).toHaveBeenCalledTimes(1)
+    })
   })
 })

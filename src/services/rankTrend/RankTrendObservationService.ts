@@ -1,6 +1,7 @@
 import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
 import { apiService } from '../apiService'
+import { cacheManager } from '../LRUCache'
 import { snapshotFacade } from '../snapshot/facade'
 import type { RankTrendAnalysisResult } from './types'
 
@@ -33,6 +34,7 @@ export type RankTrendObservationViewModel = {
   name: string
   frames: RankTrendObservationFrame[]
   issues: RankTrendObservationIssue[]
+  source: 'cache' | 'live'
 }
 
 /** 各观察轨的显示窗口（bar/帧），按信号可计算与稳定需求分别设定 */
@@ -46,6 +48,36 @@ export const MAX_OBSERVATION_WINDOW_BARS = Math.max(...Object.values(OBSERVATION
 
 /** 生命周期动量确认因子（mid 动量 + 加速度）可算窗口 */
 export const LIFECYCLE_MIN_SAMPLES = 15
+
+/** 观察投影缓存：同一股票同数据代次重复打开时 0 请求秒开（纯展示投影，不参与算法/回测） */
+export const OBSERVATION_PROJECTION_CACHE_CAPACITY = 60
+export const OBSERVATION_PROJECTION_CACHE_TTL_MS = 60_000
+
+export const observationProjectionCache = cacheManager.createCache('observation', {
+  capacity: OBSERVATION_PROJECTION_CACHE_CAPACITY,
+  defaultTTL: OBSERVATION_PROJECTION_CACHE_TTL_MS,
+  maxMemory: 24 * 1024 * 1024,
+  ttlConfig: { observation: OBSERVATION_PROJECTION_CACHE_TTL_MS },
+})
+
+function observationProjectionCacheKey(
+  code: string,
+  series: { frameKeys: string[]; percentiles: number[] },
+  currentAnalysis: RankTrendAnalysisResult | undefined,
+): string {
+  const lastPercentile = series.percentiles.at(-1)
+  const seriesSig = [
+    series.frameKeys.length,
+    series.frameKeys[0] ?? '',
+    series.frameKeys.at(-1) ?? '',
+    Number.isFinite(lastPercentile) ? Math.round(Number(lastPercentile) * 100) : '',
+  ].join(':')
+  const currentSig = [
+    currentAnalysis?.meta?.updateTime ?? 0,
+    currentAnalysis?.meta?.analysisSource ?? 'none',
+  ].join(':')
+  return `observation:${DEFAULT_RANK_TREND_SNAPSHOT_TYPE}:${code}:${seriesSig}:${currentSig}`
+}
 
 function barFrameKey(bar: any): string {
   return `${bar?.tradingDate || ''} ${bar?.slotTime || ''}`.trim()
@@ -114,6 +146,7 @@ class RankTrendObservationService {
             issues: [],
           }],
           issues,
+          source: 'live',
         }
       }
       return {
@@ -121,7 +154,14 @@ class RankTrendObservationService {
         name: String(stock?.name || ''),
         frames: [],
         issues,
+        source: 'live',
       }
+    }
+
+    const cacheKey = observationProjectionCacheKey(code, series, currentAnalysis)
+    const cached = observationProjectionCache.get(cacheKey) as RankTrendObservationViewModel | null
+    if (cached) {
+      return { ...cached, source: 'cache' }
     }
 
     const serviceIssues: RankTrendObservationIssue[] = []
@@ -297,12 +337,15 @@ class RankTrendObservationService {
       })
     }
 
-    return {
+    const viewModel: RankTrendObservationViewModel = {
       code,
       name: String(stock?.name || ''),
       frames: allFrames.slice(-MAX_OBSERVATION_WINDOW_BARS),
       issues: serviceIssues,
+      source: 'live',
     }
+    observationProjectionCache.setWithType(cacheKey, viewModel, 'observation')
+    return viewModel
   }
 
   private async buildSeriesFromSnapshots(code: string): Promise<{

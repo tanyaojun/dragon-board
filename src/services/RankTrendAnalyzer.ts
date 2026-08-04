@@ -15,6 +15,7 @@ import {
   type RankTrendStrategyValidationReport,
 } from './rankTrend/strategyValidation'
 import { getMaxStableBars } from './rankTrend/utils'
+import { analyzeRankTrendCoalesced } from './rankTrend/analyzeCoalescer'
 import type {
   RankTrendAnalysisResult,
   RankTrendRuntimeConfig as RankTrendRuntimeConfigModel,
@@ -441,18 +442,15 @@ export class RankTrendAnalyzer {
       }))
 
     try {
-      const remote = await apiService.analyzeRankTrend(
-        {
-          snapshotType: options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
-          codes: remoteCodes,
-          currentFrame: {
-            tradingDate: new Date().toISOString().slice(0, 10),
-            slotTime: currentFrameKey,
-            stocks: currentFrameStocks,
-          },
+      const remote = await analyzeRankTrendCoalesced({
+        snapshotType: options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+        codes: remoteCodes,
+        currentFrame: {
+          tradingDate: new Date().toISOString().slice(0, 10),
+          slotTime: currentFrameKey,
+          stocks: currentFrameStocks,
         },
-        { bypassQueue: true },
-      )
+      })
       if (remote?.ok && remote.frames?.length) {
         // 从 Python 输出构建观察面板所需的最新分析序列（含当前帧）
         this.updateLatestAnalysisSeries(remote.frames)

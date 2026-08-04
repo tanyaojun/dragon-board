@@ -251,6 +251,7 @@ export interface RankTrendAnalysisResult {
   jump?: {
     event?: 'jump' | 'none'
     direction: 'buy' | 'sell' | 'hold'
+    magnitude?: number
     confidence: number
     limitUp?: boolean
     events?: Array<{

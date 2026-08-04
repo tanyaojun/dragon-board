@@ -38,7 +38,7 @@ interface TTLConfig {
   [key: string]: number // 类型名称 -> TTL（毫秒）
 }
 
-class LRUCache<T = any> {
+export class LRUCache<T = any> {
   private cache = new Map<string, CacheItem<T>>()
   private tagMap = new Map<string, Set<string>>()
   private readonly capacity: number

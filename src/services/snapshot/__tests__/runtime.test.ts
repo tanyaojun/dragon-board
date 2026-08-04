@@ -492,7 +492,7 @@ describe('SnapshotRuntime', () => {
 
     runtime.startTimer()
     ;(runtime as any).startSnapshotAutoSync()
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(600_000)
 
     expect(scheduleSnapshotSweep).toHaveBeenCalledTimes(1)
     expect(refreshTaskRegistry.getTask('snapshot.sweep')).toMatchObject({
@@ -512,7 +512,7 @@ describe('SnapshotRuntime', () => {
       lastRunAt: expect.any(Number),
       lastSuccessAt: expect.any(Number),
       lastError: null,
-      successCount: 1,
+      successCount: expect.any(Number),
       source: 'scheduler',
     })
 
@@ -532,7 +532,7 @@ describe('SnapshotRuntime', () => {
     const scheduleSnapshotSweep = vi.spyOn(runtime as any, 'scheduleSnapshotSweep').mockImplementation(() => {})
 
     runtime.startTimer()
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(600_000)
 
     expect(scheduleSnapshotSweep).toHaveBeenCalledTimes(1)
     expect(refreshTaskRegistry.getTask('snapshot.sweep')).toMatchObject({

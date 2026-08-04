@@ -4,7 +4,9 @@
       <aside class="observation-drawer" role="dialog" aria-modal="false" aria-label="排名趋势三轨观察舱">
         <header class="cockpit-header">
           <div>
-            <div class="eyebrow">RANKTREND / OBSERVATION</div>
+            <div class="eyebrow">
+              RANKTREND / OBSERVATION{{ viewModel?.source === 'cache' ? ' · 缓存' : '' }}
+            </div>
             <div class="stock-title">
               <strong>{{ stock?.name || '未命名股票' }}</strong>
               <span>{{ stock?.code || '--' }}</span>
@@ -84,25 +86,36 @@
               <div class="chart-shell">
                 <div class="chart-legend">
                   <span><i class="legend-line stock-line"></i>个股关注度百分位</span>
-                  <span><i class="legend-line market-line"></i>同帧市场中位</span>
+                  <span><i class="legend-line constant-line"></i>恒定市场中位（50 参考）</span>
+                  <span><i class="legend-line dynamic-market-line"></i>动态市场中位</span>
                 </div>
                 <svg class="path-chart" viewBox="0 0 620 190" preserveAspectRatio="none"
                   :aria-label="`最近 ${trackFrames.length} 帧共振路径`">
                   <line v-for="tick in [25, 50, 75]" :key="tick" x1="0" x2="620" :y1="chartY(tick)" :y2="chartY(tick)"
                     class="grid-line" />
-                  <path :d="percentilePath" class="market-path" />
+                  <line x1="0" x2="620" :y1="chartY(50)" :y2="chartY(50)" class="market-reference" />
+                  <path :d="dynamicMarketPath" class="dynamic-market-path" />
                   <path :d="stockPath" class="stock-path" />
                   <g v-for="point in jumpPoints" :key="point.key">
                     <circle :cx="point.x" :cy="point.y" r="5" class="jump-dot" />
-                    <text :x="point.x" :y="point.y - 10" text-anchor="middle" class="jump-label">JUMP</text>
+                    <text :x="point.x" :y="point.y - 10" text-anchor="middle" class="jump-label">
+                      {{ jumpValueText(point.value, point.direction) }}
+                    </text>
                   </g>
                 </svg>
               </div>
 
               <div class="factor-stack">
-                <div v-for="factor in resonanceFactors" :key="factor.label" class="factor-row">
+                <div v-for="factor in resonanceFactors" :key="factor.label" class="factor-row"
+                  :class="{ 'jump-event-row': factor.segments }">
                   <span>{{ factor.label }}</span>
-                  <div class="factor-meter"><i :style="{ width: `${factor.width}%` }" :class="factor.tone"></i></div>
+                  <div class="factor-meter" :class="{ 'jump-dual-meter': factor.segments }">
+                    <template v-if="factor.segments">
+                      <i v-for="(segment, index) in factor.segments" :key="index"
+                        :style="{ width: `${segment.width}%`, left: `${segment.left}%` }" :class="segment.tone"></i>
+                    </template>
+                    <i v-else :style="{ width: `${factor.width}%` }" :class="factor.tone"></i>
+                  </div>
                   <strong>{{ factor.text }}</strong>
                 </div>
               </div>
@@ -381,6 +394,28 @@ function percentText(value?: number | null) {
   return value == null || !Number.isFinite(Number(value)) ? '--' : `${percent(value)}%`
 }
 
+function jumpMagnitude(
+  jump?: {
+    event?: 'jump' | 'none'
+    magnitude?: number
+    direction?: string
+    events?: Array<{ magnitude?: number }>
+  } | null,
+): number | null {
+  if (jump?.event !== 'jump') return null
+  const direct = Number(jump.magnitude)
+  if (Number.isFinite(direct)) return direct
+  const lastEvent = jump.events?.at(-1)
+  const eventValue = Number(lastEvent?.magnitude)
+  return Number.isFinite(eventValue) ? eventValue : null
+}
+
+function jumpValueText(value: number | null, direction?: string | null) {
+  if (value == null || !Number.isFinite(Number(value))) return '--'
+  const sign = direction === 'sell' ? '-' : '+'
+  return `${sign}${Math.round(Number(value))}`
+}
+
 function signed(value?: number | null, digits = 0) {
   if (value == null) return '--'
   const numeric = Number(value)
@@ -444,25 +479,56 @@ function linePath(values: Array<number | null>, yProject: (value: number) => num
 }
 
 const stockPath = computed(() => linePath(trackFrames.value.map((frame) => frame.percentile), chartY))
-const percentilePath = computed(() =>
-  linePath(trackFrames.value.map((frame) => frame.marketMedianPercentile), chartY),
-)
+// 动态市场中位：50 + 窗口内 marketMedianShortChange 累计（纯展示投影，不参与算法/回测）
+const dynamicMarketValues = computed(() => {
+  let cumulative = 0
+  return trackFrames.value.map((frame) => {
+    const change = Number(frame.marketMedianShortChange)
+    if (!Number.isFinite(change)) return null
+    cumulative += change
+    return 50 + cumulative
+  })
+})
+const dynamicMarketPath = computed(() => linePath(dynamicMarketValues.value, chartY))
 const jumpPoints = computed(() => {
   const step = trackFrames.value.length <= 1 ? 0 : 600 / (trackFrames.value.length - 1)
-  return trackFrames.value.flatMap((frame, index) =>
-    frame.analysis?.jump?.event === 'jump'
-      ? [{ key: frame.key, x: 10 + index * step, y: chartY(frame.percentile) }]
-      : [],
-  )
+  return trackFrames.value.flatMap((frame, index) => {
+    const jump = frame.analysis?.jump
+    if (jump?.event !== 'jump') return []
+    return [{
+      key: frame.key,
+      x: 10 + index * step,
+      y: chartY(frame.percentile),
+      value: jumpMagnitude(jump),
+      direction: jump.direction,
+    }]
+  })
 })
 
 const resonanceFactors = computed(() => {
   const resonance = selectedAnalysis.value?.resonance
+  const jump = selectedAnalysis.value?.jump
+  const jumpConfidence = jump?.event === 'jump' ? Number(jump.confidence) : null
+  const jumpFreshness = Number(resonance?.jumpFreshness)
+  const confidenceWidth =
+    jumpConfidence != null && Number.isFinite(jumpConfidence) ? clamp(jumpConfidence) * 0.5 : 0
+  const freshnessWidth = Number.isFinite(jumpFreshness) ? clamp(jumpFreshness * 100) * 0.5 : 0
   return [
     { label: '相对动量', width: percent(resonance?.relativeMomentum), text: signedPercent(resonance?.relativeMomentum), tone: 'positive-tone' },
     { label: '加速度', width: percent(resonance?.acceleration), text: signedPercent(resonance?.acceleration), tone: Number(resonance?.acceleration || 0) >= 0 ? 'positive-tone' : 'negative-tone' },
     { label: '路径持续性', width: percent(resonance?.persistence), text: percentText(resonance?.persistence), tone: 'positive-tone' },
-    { label: 'Jump 新鲜度', width: percent(resonance?.jumpFreshness), text: percentText(resonance?.jumpFreshness), tone: 'jump-tone' },
+    {
+      label: 'Jump 事件',
+      width: 0,
+      tone: 'jump-tone',
+      segments: [
+        { left: 0, width: confidenceWidth, tone: 'jump-tone' },
+        { left: 50, width: freshnessWidth, tone: 'freshness-tone' },
+      ],
+      text: `${jumpConfidence == null ? '--' : `${Math.round(jumpConfidence)}%`} / ${
+        Number.isFinite(jumpFreshness) ? `${Math.round(jumpFreshness * 100)}%` : '--'
+      }`,
+    },
     { label: '反转惩罚', width: percent(resonance?.reversalPenalty), text: percentText(resonance?.reversalPenalty), tone: 'negative-tone' },
   ]
 })
@@ -834,8 +900,12 @@ const riskSignals = computed(() => {
   background: #eef3f4;
 }
 
-.market-line {
-  border-top: 2px dashed #e7bd4d;
+.constant-line {
+  border-top: 2px dashed #58b8d8;
+}
+
+.dynamic-market-line {
+  background: var(--gold);
 }
 
 .dif-line {
@@ -863,7 +933,7 @@ const riskSignals = computed(() => {
 }
 
 .stock-path,
-.market-path,
+.dynamic-market-path,
 .dif-path,
 .dea-path {
   fill: none;
@@ -877,10 +947,16 @@ const riskSignals = computed(() => {
   stroke-width: 2.4;
 }
 
-.market-path {
+.market-reference {
+  stroke: #58b8d8;
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  opacity: 0.85;
+}
+
+.dynamic-market-path {
   stroke: var(--gold);
   stroke-width: 1.5;
-  stroke-dasharray: 5 5;
   opacity: 0.75;
 }
 
@@ -977,6 +1053,28 @@ const riskSignals = computed(() => {
 
 .factor-meter .jump-tone {
   background: var(--gold);
+}
+
+.factor-meter .freshness-tone {
+  background: #eef3f4;
+}
+
+.factor-meter.jump-dual-meter {
+  position: relative;
+}
+
+.factor-meter.jump-dual-meter i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.factor-row.jump-event-row {
+  grid-template-columns: 104px 1fr 64px;
+}
+
+.factor-row.jump-event-row strong {
+  font-size: 10px;
 }
 
 .factor-meter .lifecycle-tone {

@@ -44,4 +44,39 @@ describe('RankTrendObservationPanel', () => {
     expect(panel).not.toContain('grid-template-columns: repeat(9')
     expect(panel).toContain('stageRailStyle')
   })
+
+  it('共振轨 jump 标记显示幅度数值，Jump 事件行分两段展示置信度与新鲜度', () => {
+    const panel = source()
+
+    expect(panel).not.toContain('>JUMP</text>')
+    expect(panel).toContain('jumpValueText')
+    expect(panel).toContain('jumpMagnitude')
+    expect(panel).not.toContain("label: 'Jump 新鲜度'")
+    expect(panel).not.toContain("label: 'Jump 跳跃度'")
+    expect(panel).toContain("label: 'Jump 事件'")
+    expect(panel).toContain('segments')
+    expect(panel).toContain('freshness-tone')
+    expect(panel).toContain('resonance?.jumpFreshness')
+    expect(panel).toContain('jumpFreshness * 100')
+  })
+
+  it('共振轨市场线分为恒定 50 参考线与动态市场中位折线', () => {
+    const panel = source()
+
+    expect(panel).not.toContain('同帧市场中位')
+    expect(panel).toContain('恒定市场中位（50 参考）')
+    expect(panel).toContain('动态市场中位')
+    expect(panel).toContain('class="market-reference"')
+    expect(panel).toContain('chartY(50)')
+    expect(panel).toContain('dynamicMarketPath')
+    expect(panel).toContain('marketMedianShortChange')
+    expect(panel).not.toContain('percentilePath')
+    expect(panel).not.toContain('marketMedianPercentile')
+  })
+
+  it('投影缓存命中时观察舱显示缓存标注', () => {
+    const panel = source()
+
+    expect(panel).toContain("source === 'cache'")
+  })
 })

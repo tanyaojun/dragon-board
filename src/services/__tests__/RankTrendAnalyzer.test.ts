@@ -113,6 +113,8 @@ describe('RankTrendAnalyzer', () => {
     vi.resetAllMocks()
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
     rankTrendAnalyzer.stop()
+    const { resetAnalyzeCoalescer } = await import('../rankTrend/analyzeCoalescer')
+    resetAnalyzeCoalescer()
   })
 
   it('默认路径消费 Python golden 结果并标记分析来源', async () => {
