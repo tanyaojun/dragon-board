@@ -530,8 +530,39 @@ const resonanceFactors = computed(() => {
       }`,
     },
     { label: '反转惩罚', width: percent(resonance?.reversalPenalty), text: percentText(resonance?.reversalPenalty), tone: 'negative-tone' },
+    ...(resonance?.theme?.status === 'ok'
+      ? [
+          {
+            label: '题材动量',
+            width: percent(((Number(resonance.theme.themeMomentumScore) || 50) - 50) / 50),
+            text: signedPercent(((Number(resonance.theme.themeMomentumScore) || 50) - 50) / 50),
+            tone: Number(resonance.theme.themeMomentumScore || 0) >= 50 ? 'positive-tone' : 'negative-tone',
+          },
+          { label: '题材生命周期', width: 0, text: resonance.theme.themeLifecycle || '—', tone: 'neutral-tone' },
+          { label: '个股角色', width: 0, text: themeRoleLabel(resonance.theme.role), tone: 'neutral-tone' },
+          {
+            label: '题材调节',
+            width: percent((Number(resonance.theme.adjustment) || 0) / 100),
+            text: signedPercent((Number(resonance.theme.adjustment) || 0) / 100),
+            tone: Number(resonance.theme.adjustment || 0) >= 0 ? 'positive-tone' : 'negative-tone',
+          },
+        ]
+      : resonance?.theme?.status === 'insufficient'
+        ? [{ label: '题材数据', width: 0, text: `不足: ${resonance.theme.reasons.join('、')}`, tone: 'neutral-tone' }]
+        : []),
   ]
 })
+
+function themeRoleLabel(role?: string): string {
+  const labels: Record<string, string> = {
+    leader: '龙头',
+    core: '核心',
+    follower: '跟随',
+    independent: '独立',
+    noise: '噪声',
+  }
+  return role ? labels[role] || role : '—'
+}
 
 function technicalValue(signal?: { score?: number; signal?: RankSignalDirection } | null): number | null {
   if (!signal) return null

@@ -639,6 +639,17 @@ const formatTooltipNumber = (value?: number | null, digits = 1) => {
   return Number(value).toFixed(digits)
 }
 
+const themeRoleLabel = (role?: string) => {
+  const labels: Record<string, string> = {
+    leader: '龙头',
+    core: '核心',
+    follower: '跟随',
+    independent: '独立',
+    noise: '噪声',
+  }
+  return role ? labels[role] || role : '—'
+}
+
 const getResonanceMomentumText = (value: number) => {
   if (value > 0) return '强于市场'
   if (value < 0) return '弱于市场'
@@ -831,6 +842,16 @@ const getConfidenceTitle = (stock: any) => {
       title += `Jump事件: ${jumpDirLabel} ${formatTooltipNumber(jumpConfidence, 1)}% · 新鲜度 ${formatTooltipNumber(resonance.jumpFreshness * 100, 0)}%\n`
       title += `反转惩罚: ${formatTooltipNumber(resonance.reversalPenalty * 100, 0)}%\n`
       title += `市场中位数（同帧共享）: ${formatTooltipNumber(resonance.marketMedianShortChange, 1)}\n`
+    }
+    if (resonance.theme) {
+      title += '\n【题材动量】\n'
+      if (resonance.theme.status === 'ok') {
+        title += `题材: ${resonance.theme.themeName || '—'}\n`
+        title += `题材动量: ${formatTooltipNumber(resonance.theme.themeMomentumScore, 0)}% · 角色: ${themeRoleLabel(resonance.theme.role)}\n`
+        title += `调节: ${(resonance.theme.adjustment ?? 0) >= 0 ? '+' : ''}${formatTooltipNumber(resonance.theme.adjustment, 1)}%\n`
+      } else {
+        title += `题材数据不足: ${resonance.theme.reasons.join('、')}\n`
+      }
     }
   }
 

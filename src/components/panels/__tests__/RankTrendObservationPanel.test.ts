@@ -79,4 +79,13 @@ describe('RankTrendObservationPanel', () => {
 
     expect(panel).toContain("source === 'cache'")
   })
+
+  it('resonance track includes theme momentum factor rows', () => {
+    const panel = source()
+
+    expect(panel).toContain("label: '题材动量'")
+    expect(panel).toContain("label: '题材生命周期'")
+    expect(panel).toContain("label: '个股角色'")
+    expect(panel).toContain("label: '题材调节'")
+  })
 })
