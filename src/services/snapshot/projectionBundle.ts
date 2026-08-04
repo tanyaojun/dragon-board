@@ -236,22 +236,6 @@ function reconcileSectorRows(
   )
 }
 
-function compactRotationSummary(rotation: any): Record<string, any> | undefined {
-  if (!rotation || typeof rotation !== 'object') return undefined
-
-  const compact = {
-    marketPhase: typeof rotation.marketPhase === 'string' ? rotation.marketPhase : '',
-    rotationSpeed: Number(rotation.rotationSpeed) || 0,
-    suggestion: typeof rotation.suggestion === 'string' ? rotation.suggestion : '',
-  } as Record<string, any>
-
-  if (!compact.marketPhase && !compact.rotationSpeed && !compact.suggestion) {
-    return undefined
-  }
-
-  return compact
-}
-
 function compactHotlistItem(item: any): Record<string, any> {
   const compact = {
     code: item?.code,
@@ -384,8 +368,9 @@ export function compactSnapshotPayload(
     compact.continuousBoards = clonePlain(source.continuousBoards)
   }
 
-  const rotationSummary = compactRotationSummary(source.rotationSummary || source.rotation)
-  if (rotationSummary) {
+  // 只透传后端引擎结果（全字段），不再重序列化为 3 字段子集
+  const rotationSummary = source.rotationSummary || source.rotation
+  if (rotationSummary && typeof rotationSummary === 'object') {
     compact.rotationSummary = rotationSummary
   }
 

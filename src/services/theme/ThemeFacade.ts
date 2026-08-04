@@ -6,6 +6,7 @@ import {
   refreshRuntime,
   setBackendRotationSummary,
   getBackendRotationMeta,
+  getBackendRotationSummaryRaw,
 } from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
@@ -382,5 +383,6 @@ export const themeFacade = {
   toStockTheme,
   setBackendRotationSummary,
   getBackendRotationMeta,
+  getBackendRotationSummaryRaw,
   runtimeStore: themeRuntimeStore,
 }

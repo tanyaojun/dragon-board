@@ -25,6 +25,8 @@ export interface SnapshotBuildContext {
   hotThemes: any[]
   themeHeatFactors?: any[]
   rotationAnalysis: any
+  /** 后端引擎 rotationSummary 原始载荷（camelCase 全字段）；快照构建原样透传，不重序列化 */
+  backendRotationSummary?: Record<string, any> | null
   breathHistory: any[]
   breathFactors: any[]
   marketMode: 'hot' | 'full'
@@ -281,15 +283,6 @@ function getCompactSignalColumns(item: any, sourceStock?: any) {
     macdCross,
   }
   return { ...signals, resonanceIntensity: computeResonanceFromSignals(signals) }
-}
-
-function buildRotationSummary(rotationAnalysis: any): Record<string, any> | null {
-  if (!rotationAnalysis) return null
-  return {
-    marketPhase: rotationAnalysis.marketPhase || '',
-    rotationSpeed: rotationAnalysis.rotationSpeed || 0,
-    suggestion: rotationAnalysis.summary?.suggestion || rotationAnalysis.suggestion || '',
-  }
 }
 
 function toDepthLevels(levels: any): DepthLevel[] {
@@ -553,7 +546,8 @@ export function buildHourlySnapshot(context: SnapshotBuildContext, snapshotTime:
       zhaban,
       thsPools: clonePlainObject(context.marketData?.thsLimitUpPools || null),
     }),
-    rotationSummary: buildRotationSummary(context.rotationAnalysis),
+    // 只透传后端引擎结果；无后端数据则不生产（不本地补算/重序列化）
+    rotationSummary: context.backendRotationSummary ?? null,
   }
 }
 
@@ -649,7 +643,7 @@ export function buildDailySnapshot(context: SnapshotBuildContext, snapshotTime: 
     limitSummary,
     sectors,
     hotlist,
-    rotationSummary: buildRotationSummary(context.rotationAnalysis),
+    rotationSummary: context.backendRotationSummary ?? null,
     stats: {
       totalStocks: context.stocks.length,
       totalSectors: sectors.length,

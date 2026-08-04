@@ -122,10 +122,18 @@ describe('snapshot builders', () => {
           leaderCount: 2,
         },
       ],
-      rotationAnalysis: {
-        marketPhase: '主升',
-        rotationSpeed: 0.8,
-        summary: { suggestion: '聚焦主线' },
+      backendRotationSummary: {
+        marketPhase: 'rising',
+        rotationSpeed: 42,
+        mainlineConcentration: 0.36,
+        maxBoardHeight: 8,
+        mainLines: [{ themeId: 'BKAI', themeName: '人工智能', rotationScore: 78 }],
+        inflowThemes: [{ themeId: 'BKAG', themeName: '机器人' }],
+        outflowThemes: [],
+        suggestion: '聚焦主线',
+        computedAt: 1713751200000,
+        algorithmVersion: 'theme_rotation_v2',
+        evidence: { framesUsed: 8, qualityIssues: [] },
       },
       breathHistory: [],
       breathFactors: [],
@@ -136,10 +144,19 @@ describe('snapshot builders', () => {
     expect(snapshot).not.toHaveProperty('hotThemes')
     expect(snapshot).not.toHaveProperty('leaders')
     expect(snapshot).not.toHaveProperty('limitUpStocks')
-    expect(snapshot.rotationSummary).toMatchObject({
-      marketPhase: '主升',
-      rotationSpeed: 0.8,
+    // 只透传后端引擎结果，mainLines/algorithmVersion/evidence 不丢失
+    expect(snapshot.rotationSummary).toEqual({
+      marketPhase: 'rising',
+      rotationSpeed: 42,
+      mainlineConcentration: 0.36,
+      maxBoardHeight: 8,
+      mainLines: [{ themeId: 'BKAI', themeName: '人工智能', rotationScore: 78 }],
+      inflowThemes: [{ themeId: 'BKAG', themeName: '机器人' }],
+      outflowThemes: [],
       suggestion: '聚焦主线',
+      computedAt: 1713751200000,
+      algorithmVersion: 'theme_rotation_v2',
+      evidence: { framesUsed: 8, qualityIssues: [] },
     })
     expect(snapshot.hotlist[0]).toMatchObject({
       code: '600001',

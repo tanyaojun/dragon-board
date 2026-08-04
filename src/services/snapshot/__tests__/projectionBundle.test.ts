@@ -1,10 +1,45 @@
 import { describe, expect, it } from 'vitest'
 
 import { createSnapshotRecord } from '../identity'
-import { buildCanonicalProjectionBundle } from '../projectionBundle'
+import { buildCanonicalProjectionBundle, compactSnapshotPayload } from '../projectionBundle'
 import type { SnapshotStockRow } from '../types'
 
 describe('buildCanonicalProjectionBundle', () => {
+  it('compacts snapshot payload with backend rotationSummary passed through verbatim', () => {
+    const record = createSnapshotRecord(
+      'half_hour',
+      new Date('2026-08-04T15:00:00'),
+      {
+        rotationSummary: {
+          marketPhase: 'rising',
+          rotationSpeed: 42,
+          mainLines: [{ themeId: 'BKAI', themeName: '人工智能', rotationScore: 78 }],
+          inflowThemes: [{ themeId: 'BKAG', themeName: '机器人' }],
+          outflowThemes: [],
+          suggestion: '聚焦主线',
+          computedAt: 1785835800000,
+          algorithmVersion: 'theme_rotation_v2',
+          evidence: { framesUsed: 8, qualityIssues: [] },
+        },
+      },
+      { captureMode: 'real_time' },
+    )
+
+    const compact = compactSnapshotPayload('half_hour', record.payload)
+
+    expect(compact.rotationSummary).toEqual({
+      marketPhase: 'rising',
+      rotationSpeed: 42,
+      mainLines: [{ themeId: 'BKAI', themeName: '人工智能', rotationScore: 78 }],
+      inflowThemes: [{ themeId: 'BKAG', themeName: '机器人' }],
+      outflowThemes: [],
+      suggestion: '聚焦主线',
+      computedAt: 1785835800000,
+      algorithmVersion: 'theme_rotation_v2',
+      evidence: { framesUsed: 8, qualityIssues: [] },
+    })
+  })
+
   it('preserves existing lightweight signal columns when raw hotlist no longer carries them', () => {
     const record = createSnapshotRecord(
       'quarter_hour',

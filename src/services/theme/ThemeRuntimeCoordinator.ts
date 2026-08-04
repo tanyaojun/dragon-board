@@ -49,6 +49,11 @@ export function getBackendRotationMeta(): BackendRotationMeta | null {
   return latestBackendRotationMeta
 }
 
+/** 原始后端 rotationSummary（camelCase 全字段），供快照构建等消费方原样透传，避免前端重序列化丢字段。 */
+export function getBackendRotationSummaryRaw(): Record<string, any> | null {
+  return latestBackendRotationSummary
+}
+
 export function themeInputSignature(context: ThemeSourceContext): string {
   return JSON.stringify({
     themes: context.themes.map((theme) => theme.id).sort(),
