@@ -6,7 +6,9 @@ import logging
 from time import perf_counter
 from typing import Any
 
+from backend.data import snapshot_cache
 from backend.data.models import Dataset
+from backend.settings import get_settings
 from backend.utils import json_dumps, json_loads
 
 
@@ -181,6 +183,27 @@ class MongoRepository:
             sort=sort,
         )
         snapshot_ids = [str(row.get("snapshotId")) for row in frame_rows if row.get("snapshotId")]
+        cache = snapshot_cache.get_snapshot_redis_cache()
+        cache_key: str | None = None
+        generation_key: str | None = None
+        generation = 0
+        if projection == "ranktrend+themes" and snapshot_ids:
+            settings = get_settings()
+            generation_key = snapshot_cache.build_snapshot_cache_generation_key(
+                prefix=settings.redis_key_prefix,
+                dataset_id=dataset_id,
+            )
+            generation = cache.get_generation(generation_key)
+            cache_key = snapshot_cache.SnapshotCacheKeyBuilder(
+                prefix=settings.redis_key_prefix
+            ).response_key(
+                "frame_bundles",
+                resolved_dataset_id=dataset_id,
+                params={"snapshot_ids": sorted(snapshot_ids), "projection": projection},
+            )
+            cached = cache.get_response(cache_key)
+            if cached is not None and isinstance(cached.get("bundles"), list):
+                return cached["bundles"]
         stock_rows_by_snapshot = self._stock_rows_by_snapshot(dataset_id, snapshot_ids, projection=projection)
         sector_rows_by_snapshot = (
             {}
@@ -248,6 +271,17 @@ class MongoRepository:
                 if sector.get("entityType") == "hot_theme"
             ]
             bundles.append(item)
+        if cache_key is not None and generation_key is not None and cache.get_generation(generation_key) == generation:
+            cache.set_response(cache_key, {"bundles": bundles})
+            cache.register_dependencies(
+                cache_key,
+                snapshot_cache.build_snapshot_cache_index_keys(
+                    prefix=get_settings().redis_key_prefix,
+                    dataset_id=dataset_id,
+                    snapshot_type=snapshot_type,
+                    snapshot_ids=snapshot_ids,
+                ),
+            )
         return bundles
 
     def load_frames(

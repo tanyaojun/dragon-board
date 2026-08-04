@@ -924,6 +924,8 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `hotThemesFallback=true` 表示该帧没有自身的 `hotThemes`（collector 未落库题材因子行），个股题材匹配回退到最近历史帧；此时 `qualityFlags` 追加 `theme_hot_themes_fallback`，`resonance.theme.reasons` 追加同名单（fail-visible，不静默重复题材）。collector 落库的 `snapshot_sector_rows` 含 `rotationState`（生命周期加成/惩罚原料），`snapshot_stock_rows` 含 `themes/mainTheme/themeRole/themeContribution/leadStatus`（角色/贡献按涨跌幅派生落库）。
 
+题材数据链缓存：`ranktrend+themes` 的 `load_frame_bundles`（MongoDB sector/stock rows 读取）走 Redis 读穿缓存（TTL 与快照缓存一致，ingest 递增 generation 并按 snapshot 索引失效）；`compute_theme_momentum_series` 按“帧窗口题材指纹 + generation”缓存 60 秒，不同 codes 共享同一历史帧窗口时复用计算。前端复用 `src/services/LRUCache.ts`：题材映射 10 分钟 TTL、题材热度快照与题材成分股 30 秒 TTL（force 均绕过）。
+
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
 `rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。API ingest 与后台 snapshot collector 每次成功写入快照事实后都会递增 dataset generation，并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。

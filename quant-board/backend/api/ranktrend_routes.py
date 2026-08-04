@@ -1,3 +1,4 @@
+import json
 import math
 import threading
 from time import perf_counter
@@ -207,6 +208,7 @@ def _analyze_frames(
     frames: list[dict[str, Any]],
     series_by_code: dict[str, list[tuple[str, int, float]]],
     codes: list[str],
+    dataset_id: str = "dragonboard_live",
 ) -> list[dict[str, Any]]:
     """逐帧按「该股到该帧为止的出现序列前缀」跑 golden pipeline（旧 TS 合同）。
 
@@ -214,7 +216,7 @@ def _analyze_frames(
     resonance 使用同一前缀（series.percentiles.slice(0, index+1)）。
     """
     wanted = set(codes) if codes else None
-    momentum_series = compute_theme_momentum_series(frames)
+    momentum_series = _compute_theme_momentum_series_cached(frames, dataset_id)
     series_index: dict[str, dict[str, int]] = {}
     for code, bars in series_by_code.items():
         series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
@@ -308,6 +310,53 @@ def _analyze_frames(
             "stocks": stocks_out,
         })
     return output
+
+
+def _theme_momentum_series_fingerprint(frames: list[dict[str, Any]]) -> str:
+    """题材动量序列的输入指纹：帧时间 + 逐帧 hotThemes（id/heat/rank/rotation）。"""
+    rows: list[tuple[Any, Any]] = []
+    for frame in frames:
+        themes = sorted(
+            (
+                str(theme.get("themeId") or theme.get("entityKey") or theme.get("code") or ""),
+                theme.get("heatScore"),
+                int(theme.get("rank") or 0) if theme.get("rank") is not None else -1,
+                str(theme.get("rotationState") or ""),
+            )
+            for theme in (frame.get("hotThemes") or [])
+            if isinstance(theme, dict)
+        )
+        rows.append((frame.get("timestamp") or 0, themes))
+    return json.dumps(rows, ensure_ascii=False, sort_keys=True)
+
+
+def _compute_theme_momentum_series_cached(
+    frames: list[dict[str, Any]],
+    dataset_id: str,
+) -> dict[str, Any]:
+    """题材动量序列 Redis TTL 缓存：不同 codes 共享同一历史帧窗口时复用计算结果。"""
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    settings = get_settings()
+    generation_key = snapshot_cache.build_snapshot_cache_generation_key(
+        prefix=settings.redis_key_prefix,
+        dataset_id=dataset_id,
+    )
+    generation = cache.get_generation(generation_key)
+    fingerprint = _theme_momentum_series_fingerprint(frames)
+    cache_key = snapshot_cache.SnapshotCacheKeyBuilder(
+        prefix=settings.redis_key_prefix
+    ).response_key(
+        "theme_momentum_series",
+        resolved_dataset_id=dataset_id,
+        params={"fingerprint": fingerprint, "generation": generation},
+    )
+    cached = cache.get_response(cache_key)
+    if cached is not None and isinstance(cached.get("series"), dict):
+        return cached["series"]
+    series = compute_theme_momentum_series(frames)
+    if cache.get_generation(generation_key) == generation:
+        cache.set_response(cache_key, {"series": series}, ttl_seconds=60)
+    return series
 
 
 def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) -> None:
@@ -492,7 +541,7 @@ def analyze_ranktrend(
         raw_frames, series_by_code = _load_frames_for_analysis(
             repo, dataset_id, snapshot_type, frame_keys, current_frame
         )
-        frames_out = _analyze_frames(engine, raw_frames, series_by_code, codes)
+        frames_out = _analyze_frames(engine, raw_frames, series_by_code, codes, dataset_id=dataset_id)
         return {
             "ok": True,
             "frames": frames_out,

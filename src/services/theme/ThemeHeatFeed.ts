@@ -1,4 +1,5 @@
 import { ApiHttpError, apiService } from '@/services/apiService'
+import { cacheManager } from '@/services/LRUCache'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import type {
@@ -16,6 +17,23 @@ type ThemeHeatApiClient = Pick<typeof apiService, 'getThemeHeat' | 'getThemeHeat
 type StoredSnapshot = ThemeHeatApiSnapshot & { stale: boolean; lastError: string | null }
 
 const STOCK_ROLES = new Set<ThemeStockRole>(['leader', 'core', 'follower', 'independent', 'noise'])
+
+// 题材热度数据 LRU TTL 缓存（复用 src/services/LRUCache.ts；30 秒 TTL，force 可绕过）
+const THEME_HEAT_TTL_MS = 30_000
+
+export const themeHeatSnapshotCache = cacheManager.createCache('themeHeat', {
+  capacity: 4,
+  defaultTTL: THEME_HEAT_TTL_MS,
+  maxMemory: 8 * 1024 * 1024,
+  ttlConfig: { themeHeat: THEME_HEAT_TTL_MS },
+})
+
+export const themeHeatStocksCache = cacheManager.createCache('themeHeatStocks', {
+  capacity: 200,
+  defaultTTL: THEME_HEAT_TTL_MS,
+  maxMemory: 8 * 1024 * 1024,
+  ttlConfig: { themeHeatStocks: THEME_HEAT_TTL_MS },
+})
 
 function finite(value: unknown, fallback = 0): number {
   const parsed = Number(value)
@@ -116,7 +134,6 @@ function normalizeStock(item: any): ThemeHeatStock {
 export class ThemeHeatFeed {
   private snapshot: StoredSnapshot | null = null
   private refreshPromise: Promise<ThemeHeatApiSnapshot> | null = null
-  private stockCache = new Map<string, ThemeHeatStock[]>()
   private stockPromises = new Map<string, Promise<ThemeHeatStock[]>>()
   private fundVersions = new Map<string, number>()
   private fundRefreshTimer: ReturnType<typeof setTimeout> | null = null
@@ -129,11 +146,20 @@ export class ThemeHeatFeed {
   }
 
   refresh(options: { force?: boolean } = {}): Promise<ThemeHeatApiSnapshot> {
+    const cacheKey = 'theme-heat-snapshot'
+    if (!options.force) {
+      const cached = themeHeatSnapshotCache.get(cacheKey) as ThemeHeatApiSnapshot | null
+      if (cached) {
+        this.snapshot = { ...cached, stale: false, lastError: null }
+        return Promise.resolve(cached)
+      }
+    }
     if (this.refreshPromise) return this.refreshPromise
     this.refreshPromise = (async () => {
       try {
         const next = unwrapSnapshot(await this.api.getThemeHeat({ force: options.force }))
         this.snapshot = { ...next, stale: false, lastError: null }
+        themeHeatSnapshotCache.setWithType(cacheKey, next, 'themeHeat')
         return next
       } catch (error) {
         const body = error instanceof ApiHttpError ? error.body as any : null
@@ -168,21 +194,24 @@ export class ThemeHeatFeed {
     themeId: string,
     options: { force?: boolean; limit?: number } = {},
   ): Promise<ThemeHeatStock[]> {
-    const key = `${themeId}:${options.limit || 80}`
-    if (!options.force && this.stockCache.has(key)) return this.stockCache.get(key)!
-    if (!options.force && this.stockPromises.has(key)) return this.stockPromises.get(key)!
+    const cacheKey = `theme:${themeId}:${options.limit || 80}`
+    if (!options.force) {
+      const cached = themeHeatStocksCache.get(cacheKey) as ThemeHeatStock[] | null
+      if (cached) return cached
+    }
+    if (!options.force && this.stockPromises.has(cacheKey)) return this.stockPromises.get(cacheKey)!
     const promise = (async () => {
       try {
         const response = await this.api.getThemeHeatStocks(themeId, { limit: options.limit || 80 })
         const rows = Array.isArray(response?.data?.stocks) ? response.data.stocks : []
         const stocks = rows.map(normalizeStock).filter((stock: ThemeHeatStock) => stock.code)
-        this.stockCache.set(key, stocks)
+        themeHeatStocksCache.setWithType(cacheKey, stocks, 'themeHeatStocks')
         return stocks
       } finally {
-        this.stockPromises.delete(key)
+        this.stockPromises.delete(cacheKey)
       }
     })()
-    this.stockPromises.set(key, promise)
+    this.stockPromises.set(cacheKey, promise)
     return promise
   }
 
@@ -197,13 +226,13 @@ export class ThemeHeatFeed {
       if (version < (this.fundVersions.get(code) || 0)) continue
 
       let codeChanged = false
-      for (const [key, stocks] of this.stockCache) {
-        const next = stocks.map((stock) => {
+      for (const { key, value: stocks } of themeHeatStocksCache.entries()) {
+        const next = (stocks as ThemeHeatStock[]).map((stock) => {
           if (stock.code !== code) return stock
           codeChanged = true
           return { ...stock, mainNetInflow: zlje }
         })
-        if (codeChanged) this.stockCache.set(key, next)
+        if (codeChanged) themeHeatStocksCache.set(key, next)
       }
       if (codeChanged) {
         this.fundVersions.set(code, version)
@@ -213,16 +242,18 @@ export class ThemeHeatFeed {
     if (!changed || this.fundRefreshTimer) return
     this.fundRefreshTimer = setTimeout(() => {
       this.fundRefreshTimer = null
-      void this.refresh().catch(() => undefined)
+      // 资金补丁已改变题材热度数据，防抖刷新必须绕过快照缓存强制取数
+      void this.refresh({ force: true }).catch(() => undefined)
     }, 250)
   }
 
   clear(): void {
     this.snapshot = null
     this.refreshPromise = null
-    this.stockCache.clear()
     this.stockPromises.clear()
     this.fundVersions.clear()
+    themeHeatSnapshotCache.clear()
+    themeHeatStocksCache.clear()
     if (this.fundRefreshTimer) clearTimeout(this.fundRefreshTimer)
     this.fundRefreshTimer = null
   }

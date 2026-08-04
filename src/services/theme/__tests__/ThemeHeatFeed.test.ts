@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiHttpError } from '@/services/apiService'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
-import { ThemeHeatFeed } from '../ThemeHeatFeed'
+import { ThemeHeatFeed, themeHeatSnapshotCache, themeHeatStocksCache } from '../ThemeHeatFeed'
 import type { ThemeHeatApiSnapshot } from '../types'
 
 
@@ -94,6 +94,8 @@ describe('ThemeHeatFeed', () => {
   }
 
   beforeEach(() => {
+    themeHeatSnapshotCache.clear()
+    themeHeatStocksCache.clear()
     api = {
       getThemeHeat: vi.fn().mockResolvedValue({ ok: true, data: apiSnapshot }),
       getThemeHeatStocks: vi.fn().mockResolvedValue({
@@ -131,6 +133,25 @@ describe('ThemeHeatFeed', () => {
 
     expect(first).toBe(second)
     expect(api.getThemeHeat).toHaveBeenCalledTimes(1)
+  })
+
+  it('serves cached theme heat snapshot within TTL without refetching', async () => {
+    const feed = new ThemeHeatFeed(api as any)
+
+    await feed.refresh()
+    await feed.refresh()
+
+    expect(api.getThemeHeat).toHaveBeenCalledTimes(1)
+    expect(feed.getSnapshot()?.factors).toHaveLength(2)
+  })
+
+  it('force refresh bypasses theme heat LRU TTL cache', async () => {
+    const feed = new ThemeHeatFeed(api as any)
+
+    await feed.refresh()
+    await feed.refresh({ force: true })
+
+    expect(api.getThemeHeat).toHaveBeenCalledTimes(2)
   })
 
   it('keeps last success explicit when refresh returns stale failure', async () => {

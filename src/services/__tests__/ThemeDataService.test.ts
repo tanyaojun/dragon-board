@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { apiService } from '../apiService'
 import { themeMapping } from '../ThemeDataService'
 import { dataLayer } from '../DataLayer'
 
@@ -192,5 +193,27 @@ describe('ThemeDataService mongo mapping facade', () => {
       themeCount: 2,
       mappingCount: 3,
     })
+  })
+
+  it('caches mongo mapping fetch with LRU TTL', async () => {
+    const apiSpy = vi.spyOn(apiService, 'getMongoThemeMapping').mockResolvedValue(mongoPayload as any)
+    const service = themeMapping as unknown as { loadFromMongoAPI(force?: boolean): Promise<unknown> }
+
+    const first = await service.loadFromMongoAPI()
+    const second = await service.loadFromMongoAPI()
+
+    expect(first).toBeTruthy()
+    expect(second).toBeTruthy()
+    expect(apiSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('force refresh bypasses theme mapping LRU TTL cache', async () => {
+    const apiSpy = vi.spyOn(apiService, 'getMongoThemeMapping').mockResolvedValue(mongoPayload as any)
+    const service = themeMapping as unknown as { loadFromMongoAPI(force?: boolean): Promise<unknown> }
+
+    await service.loadFromMongoAPI()
+    await service.loadFromMongoAPI(true)
+
+    expect(apiSpy).toHaveBeenCalledTimes(2)
   })
 })

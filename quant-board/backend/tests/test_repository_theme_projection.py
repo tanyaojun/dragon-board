@@ -1,6 +1,29 @@
 """ranktrend projection 必须返回 hotThemes 与股票 themes，供题材动量计算。"""
 
+import pytest
+
 from backend.data.mongo_repository import MongoRepository
+
+
+@pytest.fixture(autouse=True)
+def _isolate_redis_cache(monkeypatch):
+    """隔离真实 Redis：投影测试要断言 Mongo 查询行为，不能命中持久化缓存。"""
+    from backend.data import snapshot_cache
+
+    class NoopCache:
+        def get_response(self, key):
+            return None
+
+        def set_response(self, key, response, ttl_seconds=None):
+            return None
+
+        def get_generation(self, key):
+            return 0
+
+        def register_dependencies(self, key, index_keys):
+            return None
+
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: NoopCache())
 
 
 class FakeCollection:
@@ -8,8 +31,10 @@ class FakeCollection:
         self._rows = list(rows)
         self.last_query = None
         self.last_projection = None
+        self.call_count = 0
 
     def find(self, query, projection=None):
+        self.call_count += 1
         self.last_query = query
         self.last_projection = projection
         return self
@@ -139,3 +164,42 @@ def test_full_projection_does_not_filter_sector_rows_server_side():
     assert sector_query is not None
     assert "entityType" not in sector_query
     assert db._collections["snapshot_sector_rows"].last_projection is None
+
+
+def test_ranktrend_plus_themes_bundle_reads_use_redis_ttl_cache(monkeypatch):
+    """投影合同读取命中 Redis TTL 缓存时，不再重复查询 MongoDB stock/sector rows。"""
+    from backend.data import snapshot_cache
+
+    class FakeRedisCache:
+        def __init__(self):
+            self.store = {}
+            self.generation = 1
+
+        def get_response(self, key):
+            return self.store.get(key)
+
+        def set_response(self, key, response, ttl_seconds=None):
+            self.store[key] = response
+
+        def get_generation(self, key):
+            return self.generation
+
+        def register_dependencies(self, key, index_keys):
+            pass
+
+    fake_cache = FakeRedisCache()
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
+
+    db = FakeDb({
+        "snapshot_frames": _frames(),
+        "snapshot_stock_rows": _stock_rows(),
+        "snapshot_sector_rows": _sector_rows(),
+    })
+    repo = MongoRepository(db)
+    repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
+    stock_calls = db._collections["snapshot_stock_rows"].call_count
+    sector_calls = db._collections["snapshot_sector_rows"].call_count
+
+    repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
+    assert db._collections["snapshot_stock_rows"].call_count == stock_calls
+    assert db._collections["snapshot_sector_rows"].call_count == sector_calls

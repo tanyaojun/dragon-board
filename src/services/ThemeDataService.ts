@@ -1,12 +1,23 @@
-import { debugLog } from '@/utils/logger'
 // src/services/ThemeDataService.ts
 /**
  * 题材数据服务 - 只从 QuantBoard MongoDB 题材集合读取运行时基础映射
  */
 
+import { cacheManager } from '@/services/LRUCache'
+import { debugLog } from '@/utils/logger'
 import { apiService } from './apiService'
 import { dataLayer } from './DataLayer'
 import type { ThemeBase, ThemeMapping, ThemeMappingData } from '../types/sector'
+
+// 题材映射 LRU TTL 缓存（复用 src/services/LRUCache.ts；10 分钟 TTL，force 绕过）
+const THEME_MAPPING_TTL_MS = 10 * 60 * 1000
+
+export const themeMappingCache = cacheManager.createCache('themeMapping', {
+  capacity: 2,
+  defaultTTL: THEME_MAPPING_TTL_MS,
+  maxMemory: 4 * 1024 * 1024,
+  ttlConfig: { themeMapping: THEME_MAPPING_TTL_MS },
+})
 
 declare global {
   interface Window {
@@ -92,7 +103,12 @@ class ThemeDataService {
   /**
    * 从 QuantBoard MongoDB 题材集合读取正式映射。
    */
-  private async loadFromMongoAPI(): Promise<ThemeMappingData | null> {
+  private async loadFromMongoAPI(force = false): Promise<ThemeMappingData | null> {
+    const cacheKey = 'theme-mapping'
+    if (!force) {
+      const cached = themeMappingCache.get(cacheKey) as ThemeMappingData | null
+      if (cached) return cached
+    }
     try {
       debugLog('[ThemeDataService] 从 QuantBoard MongoDB 读取题材映射...')
       const response = await apiService.getMongoThemeMapping()
@@ -103,12 +119,14 @@ class ThemeDataService {
         return null
       }
       this.lastError = null
-      return {
+      const mappingData: ThemeMappingData = {
         version: String(mapping.version || 'unknown'),
         lastUpdate: String(mapping.lastUpdate || new Date().toISOString()),
         totalThemes: Number(mapping.totalThemes || mapping.themes.length || 0),
         themes: mapping.themes,
       }
+      themeMappingCache.setWithType(cacheKey, mappingData, 'themeMapping')
+      return mappingData
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.lastError = `MongoDB 题材映射读取失败: ${message}`
@@ -304,7 +322,7 @@ class ThemeDataService {
    */
   async forceRefresh(): Promise<boolean> {
     debugLog('[ThemeDataService] 🔄 从 MongoDB 强制刷新题材映射...')
-    const mongoData = await this.loadFromMongoAPI()
+    const mongoData = await this.loadFromMongoAPI(true)
     if (!mongoData) return false
     this.buildMapping(mongoData)
     this.syncToDataLayer()
@@ -466,6 +484,7 @@ class ThemeDataService {
     this.lastError = null
     this.kplThemes = []
     this.currentMappingData = null
+    themeMappingCache.clear()
     debugLog('[ThemeDataService] 🧹 缓存已清除')
   }
 

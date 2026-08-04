@@ -52,6 +52,59 @@ def test_analyze_rejects_unsupported_snapshot_type(monkeypatch):
     assert "unsupported snapshot_type" in response.text
 
 
+def test_theme_momentum_series_uses_redis_ttl_cache(monkeypatch):
+    """相同帧窗口的题材动量序列命中 Redis TTL 缓存时不再重复计算。"""
+    from backend.api import ranktrend_routes
+    from backend.analysis.theme_momentum import compute_theme_momentum_series
+
+    class FakeCache:
+        def __init__(self):
+            self.store = {}
+            self.generation = 1
+
+        def get_response(self, key):
+            return self.store.get(key)
+
+        def set_response(self, key, response, ttl_seconds=None):
+            self.store[key] = response
+
+        def get_generation(self, key):
+            return self.generation
+
+        def register_dependencies(self, key, index_keys):
+            pass
+
+    fake = FakeCache()
+    monkeypatch.setattr(
+        "backend.data.snapshot_cache.get_snapshot_redis_cache",
+        lambda: fake,
+    )
+    calls = {"count": 0}
+
+    def spy(frames):
+        calls["count"] += 1
+        return compute_theme_momentum_series(frames)
+
+    monkeypatch.setattr(ranktrend_routes, "compute_theme_momentum_series", spy)
+
+    frames = [{
+        "tradingDate": "2026-08-02",
+        "slotTime": "14:00",
+        "timestamp": 1,
+        "hotThemes": [{
+            "themeId": "T1",
+            "entityType": "hot_theme",
+            "heatScore": 80.0,
+            "rank": 1,
+            "rotationState": "mainline",
+        }],
+    }]
+    first = ranktrend_routes._compute_theme_momentum_series_cached(frames, "dragonboard_live")
+    second = ranktrend_routes._compute_theme_momentum_series_cached(frames, "dragonboard_live")
+    assert calls["count"] == 1
+    assert first == second
+
+
 def test_analyze_returns_py_golden_frames(monkeypatch):
     frames = [{
         "tradingDate": "2026-08-02",
