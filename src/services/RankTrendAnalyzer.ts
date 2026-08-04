@@ -439,6 +439,15 @@ export class RankTrendAnalyzer {
         zlje: Number(stock?.zlje) || 0,
         zljzb: Number(stock?.zljzb) || 0,
         platforms: Number(stock?.platforms) || 0,
+        // 题材暴露字段：题材动量共振需要在当前帧内做个股-题材匹配；
+        // dataLayer 的 themes 是详情对象数组，这里规范化为名称/ID 列表
+        themes: Array.isArray(stock?.themes)
+          ? stock.themes.map((theme: any) => String(theme?.name || theme?.id || theme))
+          : [],
+        mainTheme: String(stock?.mainTheme || ''),
+        themeRole: String(stock?.themeRole || ''),
+        themeContribution: Number(stock?.themeContribution) || 0,
+        leadStatus: String(stock?.leadStatus || ''),
       }))
 
     try {

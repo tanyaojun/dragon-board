@@ -772,3 +772,37 @@ def test_analyze_includes_theme_context_and_resonance_theme(monkeypatch):
         assert theme["themeMomentumScore"] > 50
         assert theme["themeLifecycle"] == "mainline"
         assert stock["analysis"]["decision"]["final"]["signal"] in ("buy", "hold")
+
+
+def test_analyze_current_frame_theme_falls_back_to_last_historical_hot_themes(monkeypatch):
+    frames = _theme_frames_with_context()
+    current_frame = {
+        "tradingDate": "2026-08-04",
+        "slotTime": "current:1",
+        "stocks": [{
+            "code": "002279",
+            "rank": 1,
+            "avgRankNum": 1,
+            "themes": ["主线概念"],
+        }],
+    }
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "currentFrame": current_frame,
+    })
+    assert response.status_code == 200
+    body = response.json()
+    last = body["frames"][-1]
+    theme = last["stocks"][0]["analysis"]["resonance"]["theme"]
+    assert theme["status"] == "ok"
+    assert theme["themeMomentumScore"] > 50
+    assert "theme_mapping_missing" not in theme["reasons"]

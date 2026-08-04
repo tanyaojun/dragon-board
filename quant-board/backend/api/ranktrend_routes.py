@@ -219,9 +219,13 @@ def _analyze_frames(
     for code, bars in series_by_code.items():
         series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
     output: list[dict[str, Any]] = []
+    last_hot_themes: list[dict[str, Any]] = []
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
+        hot_themes = frame.get("hotThemes") or last_hot_themes
+        if frame.get("hotThemes"):
+            last_hot_themes = hot_themes
         frame_momentum = momentum_series["frames"][index]
         theme_context = {
             "version": momentum_series["version"],
@@ -275,7 +279,9 @@ def _analyze_frames(
                 },
             })
             analysis["resonance"] = resonance
-            exposure = stock_theme_exposure(stock, frame.get("hotThemes") or [])
+            # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行，
+            # 动量序列仍按截至当前帧的历史 bars 计算（避免当前帧题材恒为 mapping_missing）
+            exposure = stock_theme_exposure(stock, hot_themes)
             analysis["resonance"] = fuse_theme_resonance(resonance, exposure, frame_momentum)
             if analysis["resonance"].get("status") == "ok":
                 analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))

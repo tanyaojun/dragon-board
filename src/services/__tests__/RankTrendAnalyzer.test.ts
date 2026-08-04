@@ -175,6 +175,48 @@ describe('RankTrendAnalyzer', () => {
     expect(results.get('600002')?.strategy?.candidateTier).toBe('A_MAIN')
   })
 
+  it('当前帧题材字段规范化为名称列表，供题材共振匹配', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    mockStocks[0] = {
+      ...mockStocks[0],
+      themes: [
+        { id: '370', name: '谷歌概念', role: 'follower' },
+        { id: '361', name: 'AMD概念' },
+      ],
+      mainTheme: '谷歌概念',
+      themeRole: 'follower',
+      themeContribution: 6.9,
+    }
+    vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
+      ok: true,
+      frames: [buildAnalyzeFrame('2026-08-04 current:1', [['600001', baseAnalysis('600001', 33, 68)]])],
+      source: 'py_golden',
+      issues: [],
+    })
+
+    const results = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+    })
+
+    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentFrame: expect.objectContaining({
+          stocks: [
+            expect.objectContaining({
+              themes: ['谷歌概念', 'AMD概念'],
+              mainTheme: '谷歌概念',
+              themeRole: 'follower',
+              themeContribution: 6.9,
+            }),
+          ],
+        }),
+      }),
+      expect.anything(),
+    )
+    expect(results.size).toBe(1)
+  })
+
   it('remoteCodes 收窄时只请求指定股票，面板可按需分析', async () => {
     const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
     const { apiService } = await import('../apiService')
