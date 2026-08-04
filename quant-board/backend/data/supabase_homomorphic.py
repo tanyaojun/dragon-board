@@ -205,6 +205,15 @@ REQUIRED_TABLE_COLUMNS = {
         "crowding_risk",
         "persistence_score",
         "rotation_state",
+        "lifecycle",
+        "rotation_score",
+        "heat_trend",
+        "flow_trend",
+        "breadth_trend",
+        "crowding_trend",
+        "mainline_concentration_rank",
+        "reasons",
+        "factor_breakdown",
         "theme_quality_flags_json",
         "metadata_json",
     },
@@ -917,6 +926,25 @@ class SupabaseBackupClient:
             "crowding_risk": _float(item.get("crowdingRisk") or item.get("crowding_risk")),
             "persistence_score": _float(item.get("persistenceScore") or item.get("persistence_score")),
             "rotation_state": _prefer_present(item.get("rotationState"), item.get("rotation_state")),
+            "lifecycle": _prefer_present(item.get("lifecycle"), None),
+            "rotation_score": _float(item.get("rotationScore") or item.get("rotation_score")),
+            "heat_trend": _float(item.get("heatTrend") or item.get("heat_trend")),
+            "flow_trend": _float(item.get("flowTrend") or item.get("flow_trend")),
+            "breadth_trend": _float(item.get("breadthTrend") or item.get("breadth_trend")),
+            "crowding_trend": _float(item.get("crowdingTrend") or item.get("crowding_trend")),
+            "mainline_concentration_rank": _maybe_int(
+                item.get("mainlineConcentrationRank") or item.get("mainline_concentration_rank")
+            ),
+            "reasons": (
+                json_dumps(item.get("reasons"))
+                if isinstance(item.get("reasons"), list)
+                else None
+            ),
+            "factor_breakdown": (
+                json_dumps(item.get("factorBreakdown"))
+                if isinstance(item.get("factorBreakdown"), dict)
+                else None
+            ),
             "theme_quality_flags_json": json_dumps(item.get("themeQualityFlags") if isinstance(item.get("themeQualityFlags"), list) else item.get("theme_quality_flags") or []),
             "metadata_json": json_dumps(item.get("metadata") if isinstance(item.get("metadata"), dict) else {}),
         }
@@ -1086,6 +1114,15 @@ class SupabaseBackupClient:
             "crowdingRisk": row.get("crowding_risk"),
             "persistenceScore": row.get("persistence_score"),
             "rotationState": row.get("rotation_state"),
+            "lifecycle": row.get("lifecycle"),
+            "rotationScore": row.get("rotation_score"),
+            "heatTrend": row.get("heat_trend"),
+            "flowTrend": row.get("flow_trend"),
+            "breadthTrend": row.get("breadth_trend"),
+            "crowdingTrend": row.get("crowding_trend"),
+            "mainlineConcentrationRank": row.get("mainline_concentration_rank"),
+            "reasons": json_loads(_maybe_decompress(row.get("reasons") or ""), []),
+            "factorBreakdown": json_loads(_maybe_decompress(row.get("factor_breakdown") or ""), {}),
             "themeQualityFlags": json_loads(_maybe_decompress(row.get("theme_quality_flags_json") or "[]"), []),
             "metadata": json_loads(_maybe_decompress(row.get("metadata_json") or "{}"), {}),
         }

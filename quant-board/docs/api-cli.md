@@ -719,6 +719,23 @@ python -m backend.cli pull-archive-backup --archive-id <archive_id> --apply
 
 读取口径：`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows`、`GET /api/backtests/{run_id}/trades`、`/equity`、`/signals` 在 SQLite 明细缺失且存在 verified/uploaded manifest 时，可通过 DuckDB 读取 Parquet，并返回 `source=parquet_archive` 或混合来源。前端不得传入 SQL。
 
+### `GET /api/theme-rotation/summary`
+
+返回最近一个含引擎 `rotationSummary` 的 frame 及其 sector rows 轮动状态（只读，不计算）。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/theme-rotation/summary?dataset_id=dragonboard_live&snapshot_type=half_hour&trading_date=2026-08-04'
+```
+
+参数：`dataset_id`（默认 `dragonboard_live`）、`snapshot_type`（默认 `half_hour`）、
+可选 `trading_date`、`slot_time`。查询条件按
+`rotationSummary.algorithmVersion` 存在过滤（只认引擎产出的帧，空 dict 不命中）。
+返回 `data.frame`（`snapshotId/tradingDate/slotTime/timestamp/rotationSummary`）
+与 `data.statuses`（`themeId/themeName/rank/rankChange/rotationState/lifecycle/
+rotationScore/heatTrend/flowTrend/breadthTrend/crowdingTrend/
+mainlineConcentrationRank/reasons/factorBreakdown/qualityFlags`）。
+无匹配帧时返回 404（`ok=false`）。
+
 ### `POST /api/operations/after-market-once`
 
 > MongoDB 模式下该入口执行 `hotlistSentiment` 日终步骤；以下为迁移前 SQLite/Parquet 历史合同。

@@ -642,7 +642,11 @@ class Repository:
             ]
             rotation_summary = item.get("rotationSummary") if isinstance(item.get("rotationSummary"), dict) else None
             if rotation_summary:
-                item["rotationSummary"] = {**rotation_summary, "mainLines": main_lines}
+                # H4：引擎帧（含 algorithmVersion）不被旧 rotation_main_line 行顶掉
+                if rotation_summary.get("algorithmVersion"):
+                    item["rotationSummary"] = rotation_summary
+                else:
+                    item["rotationSummary"] = {**rotation_summary, "mainLines": main_lines}
             elif main_lines:
                 item["rotationSummary"] = {"mainLines": main_lines}
             bundles.append(item)

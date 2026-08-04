@@ -1,6 +1,6 @@
 # 题材/板块轮动引擎（后端重写）设计方案
 
-> 日期：2026-08-04 · 状态：已评审（2026-08-04 外部对抗性审计后修订，见 §10）· 前端只消费后端结果，不再本地计算轮动逻辑
+> 日期：2026-08-04 · 状态：**已实施**（2026-08-04 按审计修订后的计划完成编码，见 §10 与 §11）· 前端只消费后端结果，不再本地计算轮动逻辑
 
 ## 1. 背景与问题
 
@@ -271,3 +271,19 @@
 - **H9（晋级率字符串 bug）**：`leadStatus` 改为字符串比较，分母改为主题内昨日涨停。
 - **9.3 硬缺口**：①indices 无生产者 → 板块超额显式降级（reasons 标注）；②flow streak 由
   引擎计算；③stock rows 无 themeIds → 引擎按 `themes` 列表 + `mainTheme` 归一化归集。
+
+## 11. 实施记录与偏差（2026-08-04）
+
+已按 `2026-08-04-theme-rotation-engine-plan.md` 全部 Task 落地，提交记录见 Git 历史
+（`feat(theme-rotation):` / `refactor(theme):` 前缀）。实现与设计/计划的偏差（均已随测试固化）：
+
+1. **晋级率断言口径**：`breadth_score` 复合分为加权平均，主题内晋级率子分命中 100 上限后
+   复合分不可能 ≥100；测试改为“晋级子分参与加权且显著高于降级路径”的对照断言，语义不变。
+2. **lifecycle ice 判定顺序**：设计 §5.1 的 ice 为 `heat<ice_heat 且 momentum<ice_momentum`
+   （AND），实现按此先于 cooling 分支判定；计划初版用 OR 且排在 cooling 之后，与设计矛盾，已修正。
+3. **跨日基线的交易日历容错**：`history.previous_trading_day` 在交易日历桥不可用时退化为
+   工作日启发（节假日多查无害，日期范围内无数据即空槽），保证跨日基线不阻断。
+4. **引擎 trend 字段 None 安全**：上一槽缺 `breadthScore` 等字段时 trend 计算返回 None
+   而不是 `round(None)` 抛错（真实数据常见缺字段）。
+5. **`fuse_theme_resonance` 调用约定**：该函数签名实为 `(base, exposure, frame_momentum)`，
+   计划内示例参数顺序有误，测试按真实签名调用。

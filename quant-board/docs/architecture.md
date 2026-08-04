@@ -300,6 +300,26 @@ RankTrend 信号列随股票行保存：`directionSignal/Confidence`、`accelera
 
 一条快照内的板块、题材、主线实体一行。首期可先导入，策略使用可后置。
 
+后端题材轮动引擎（`backend/analysis/theme_rotation/`，`algorithmVersion=theme_rotation_v2`）
+在采集落库时（`snapshot_collector.service._persist_one` → `ThemeRotationService.enrich_bundle`）
+为 `entityType=hot_theme` 行追加轮动字段：
+
+- `rotationState`：`mainline/inflow/outflow/cooling/emerging/neutral`
+- `lifecycle`：`ice/emerging/expanding/climax/cooling/neutral`
+- `rotationScore`：五组因子加权综合分（0-100，可用因子 <3 时为缺失）
+- `heatTrend/flowTrend/breadthTrend/crowdingTrend`：跨槽位趋势
+- `rankChange`、`mainlineConcentrationRank`
+- `reasons`：结构化原因数组
+- `factorBreakdown`：`{strength, flow, breadth, crowding, lifecycle}` 子分
+- `qualityFlags`：字段缺失/历史不足时显式标记（`rotation_history_insufficient` 等）
+
+引擎只依赖 `snapshot_sector_rows`/`snapshot_stock_rows` 跨槽位历史（MongoDB），
+历史或字段不足时输出 `null + reasons[] + qualityFlags`，绝不阻断快照入库（fail-visible）。
+同时每个 frame 顶层写入 `rotationSummary`（**camelCase** 合同）：
+`marketPhase/rotationSpeed/mainlineConcentration/maxBoardHeight/mainLines/inflowThemes/
+outflowThemes/suggestion/computedAt/algorithmVersion/evidence`，供前端、回测与
+`theme_trend/theme_support/theme_momentum` 同源读取。
+
 ### golden_ranktrend_cases
 
 MongoDB 模式下保存在 `golden_ranktrend_cases` 集合，保存 TypeScript golden 输入和期望输出。Python 移植必须用它做回归校验。

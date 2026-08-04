@@ -4,6 +4,24 @@
 
 本文保留 QuantBoard 迁移前存储迁移、归档、备份同步计划，供追溯 SQLite 源库、Supabase 同构备份和旧 Parquet 归档语义。涉及当前 MongoDB 主库、备份恢复、快照入库、同步接口、API/CLI 合同或相关配置的改动，必须先对齐 [mongodb-migration-plan.md](mongodb-migration-plan.md)，再同步更新 [architecture.md](architecture.md)、[api-cli.md](api-cli.md)、[development-roadmap.md](development-roadmap.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 
+## 2026-08-04 增补：snapshot_sector_rows 轮动字段与 Supabase 同构
+
+题材轮动引擎（`theme_rotation_v2`）为 MongoDB `snapshot_sector_rows`（`entityType=hot_theme`）
+新增字段：`rotationState`（既有）、`lifecycle`、`rotationScore`、`heatTrend`、`flowTrend`、
+`breadthTrend`、`crowdingTrend`、`rankChange`、`mainlineConcentrationRank`、`reasons`、
+`factorBreakdown`、`qualityFlags`；frame 顶层新增 `rotationSummary`（camelCase）。
+
+Supabase 备份同构已同步：`backend/data/supabase_schema.sql` 的 `snapshot_sector_rows`
+增加 `lifecycle/rotation_score/heat_trend/flow_trend/breadth_trend/crowding_trend/
+mainline_concentration_rank/reasons/factor_breakdown` 列；
+`backend/data/supabase_homomorphic.py` 的 `_sector_to_row`/`_sector_from_row`
+与 `REQUIRED_TABLE_COLUMNS` 同步双向映射（`reasons/factor_breakdown` 为 jsonb，
+写库 json.dumps、读回 json.loads；缺失保持 NULL，不伪造空值）。
+
+SQLite 旧读路径（`backend/data/repository.py`）防护：`rotationSummary` 含
+`algorithmVersion`（引擎帧）时不再被历史 `rotation_main_line` 行顶掉 `mainLines`；
+仅对无版本标记的旧帧做历史合并（H4）。
+
 ## 目标结论
 
 以下结论是迁移前目标；MongoDB 切换后不再作为生产运行目标。
