@@ -106,7 +106,8 @@ def test_collector_builds_all_theme_sector_rows() -> None:
     assert captured["sectorRows"][1]["fundScore"] is None
     assert captured["sectorRows"][1]["themeQualityFlags"] == ["fund_flow_unavailable"]
     assert captured["sectorRows"][0]["metadata"]["fundSource"] is None
-    assert theme_service.include_runtime_funds is False
+    # 现行契约：采集器请求实时资金（include_runtime_funds=True）
+    assert theme_service.include_runtime_funds is True
     assert repo.runs[0]["themeFactorVersion"] == "theme-market-v1"
     assert repo.runs[0]["themeComputedAt"] == 1782018300000
     assert repo.runs[0]["themeQuoteCoverage"] == 0.98

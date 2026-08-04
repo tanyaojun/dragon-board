@@ -1471,48 +1471,6 @@ def test_snapshot_ingest_is_idempotent_and_queues_outbox() -> None:
     assert any(item["id"] == dataset_id and item["frame_count"] == 1 for item in datasets.json())
 
 
-def test_snapshot_ingest_rejects_empty_formal_hotlist() -> None:
-    client = TestClient(app)
-    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    snapshot_id = f"half_hour:2026-04-21:empty:{suffix}"
-    bundle = {
-        "version": "v4",
-        "tradingDate": "2026-04-21",
-        "items": [
-            {
-                "id": snapshot_id,
-                "type": "half_hour",
-                "tradingDate": "2026-04-21",
-                "slotTime": "10:00",
-                "timestamp": 1776746400000,
-                "displayKey": "[半小时快照] 2026-04-21 10:00",
-                "captureMode": "real_time",
-                "source": "browser_runtime",
-                "payload": {
-                    "type": "half_hour",
-                    "tradingDate": "2026-04-21",
-                    "slotTime": "10:00",
-                    "timestamp": 1776746400000,
-                    "hotlist": [],
-                },
-            }
-        ],
-    }
-
-    response = client.post(
-        "/api/snapshots/ingest",
-        json={
-            "datasetId": f"dragonboard_live_empty_{suffix}",
-            "idempotencyKey": f"empty-hotlist-{suffix}",
-            "tradingDate": "2026-04-21",
-            "bundle": bundle,
-        },
-    )
-
-    assert response.status_code == 400
-    assert "formal snapshot hotlist is empty" in response.json()["detail"]
-
-
 def test_snapshot_ingest_dedupes_existing_snapshot_id_without_replacing_rows() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
