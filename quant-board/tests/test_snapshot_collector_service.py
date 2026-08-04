@@ -1321,8 +1321,8 @@ class TestServiceBlocked:
         # No fact write
         assert len(repo._ingests) == 0
 
-    def test_empty_stock_rows_from_available_source_are_saved_with_reason(self) -> None:
-        """An empty but successful source response remains observable in stored facts."""
+    def test_empty_stock_rows_from_available_source_are_blocked_with_reason(self) -> None:
+        """空热榜（无原始记录）必须阻断，不写 0 行帧；阻断原因通过 run 记录可见。"""
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service import SnapshotCollectorService
 
@@ -1349,10 +1349,13 @@ class TestServiceBlocked:
 
         result = service.run_once(request)
 
-        assert result.status == "completed"
+        assert result.status == "blocked"
         assert "empty_stock_rows" in result.quality.blocking_issues
-        assert len(repo._ingests) == 1
-        assert "empty_stock_rows" in repo._frames[0]["qualityFlags"]
+        assert len(repo._ingests) == 0
+        assert any(
+            "empty_stock_rows" in run.get("blockingIssues", [])
+            for run in repo._runs
+        )
 
     def test_invalid_stock_code_is_saved_with_reason(self) -> None:
         """Non-standard codes must not turn recoverable data into a missing slot."""
@@ -1897,3 +1900,58 @@ def _make_simple_settings(**overrides):
     }
     defaults.update(overrides)
     return type("FakeSettings", (), defaults)()
+
+
+def test_run_once_blocks_empty_stock_rows_even_when_partial_sources_ok() -> None:
+    """空热榜（无任何原始记录）时不得保存 0 行帧；部分非热榜源 ok 也不能绕过阻断。"""
+    from backend.snapshot_collector.models import (
+        CollectorRunRequest,
+        MarketDataContext,
+        QualityResult,
+        SourceHealth,
+    )
+    from backend.snapshot_collector.service import SnapshotCollectorService
+
+    repo = FakeSnapshotRepository()
+
+    def fake_collect(providers, codes, timeout_ms):
+        return MarketDataContext(
+            source_health=[
+                SourceHealth(source="merged_hotlist_proxy", ok=True, row_count=0),
+                SourceHealth(source="theme_heat", ok=True, row_count=0),
+            ]
+        )
+
+    def fake_normalize(norm_request):
+        return {}, [], [], [], [], "idem-key"
+
+    def fake_quality(**kwargs):
+        return QualityResult(
+            ok=False,
+            blocking_issues=["empty_stock_rows"],
+            warnings=[],
+            source_counts={"hotlistRows": 0},
+        )
+
+    service = SnapshotCollectorService(
+        repo=repo,
+        settings=_make_simple_settings(),
+        collect_fn=fake_collect,
+        normalize_fn=fake_normalize,
+        quality_fn=fake_quality,
+    )
+    result = service.run_once(
+        CollectorRunRequest(
+            dataset_id="dragonboard_live",
+            snapshot_type="half_hour",
+            trading_date="2026-08-04",
+            slot_time="13:00",
+        )
+    )
+
+    assert result.status == "blocked"
+    assert repo._ingests == []
+    assert any(
+        "empty_stock_rows" in run.get("blockingIssues", [])
+        for run in repo._runs
+    )

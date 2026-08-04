@@ -426,12 +426,9 @@ class SnapshotCollectorService:
                 flags = list(existing_flags) if isinstance(existing_flags, list) else []
                 item["qualityFlags"] = list(dict.fromkeys([*flags, *diagnostic_flags]))
 
-        # 7 — No raw record exists only when every hotlist source failed.
-        # Other quality findings are persisted above for later diagnosis.
-        all_hotlist_sources_failed = not source_health or all(
-            not source.get("ok") for source in source_health
-        )
-        if not stock_rows and all_hotlist_sources_failed:
+        # 7 — 没有任何可保存的原始热榜记录时不写入（fail-visible：全源无数据才报告无数据）。
+        # 其余质量发现（缺字段/低覆盖率/部分来源失败等）已在上方打标，照常落库，不得阻断。
+        if not stock_rows:
             run_doc = {
                 "runId": run_id,
                 "datasetId": dataset_id,
