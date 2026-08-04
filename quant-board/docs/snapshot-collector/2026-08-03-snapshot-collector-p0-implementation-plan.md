@@ -984,6 +984,19 @@ def test_builder_passes_quote_extra_fields_through():
   （60s 新鲜度时序赌博）已删除——热榜/涨停池统一走 acollect 直连真实服务，
   网关只保留行情缓存直读。
 
+### snapshot_derivation 完整实现（2026-08-04）
+
+- `backend/snapshot_derivation/` 不再是空目录：
+  - `models.py`：`MarketFactBundle`（原始事实）+ `SnapshotBundle`（四类事实结果）。
+  - `projection.py`：由原 `snapshot_collector/builder.py` 迁入的投影实现。
+  - `service.py`：`SnapshotDerivationService.derive(fact)`——无 I/O，把 MarketFactBundle
+    投影为 SnapshotBundle，并写入 `frame.metadata.derivation`
+    （algorithmVersion/configHash/inputEvidence/derivedAt/qualityIssues）。
+- 采集主链 `SnapshotCollectorService._persist_one` 改为：构造 MarketFactBundle →
+  `SnapshotDerivationService().derive(fact)` → 入库；`builder.py` 保留为兼容门面。
+- 测试：`tests/test_snapshot_derivation.py` 3 用例（完整派生、derivation 元数据、
+  同 fact 多类型派生互不污染）；真实 dry-run 224 行且 frame 带 derivation 元数据。
+
 ### 第 2 层（生命周期层，已完成）
 
 - 锁获取改为退避重试（10 次 × 5s，配合 PID 存活检测与 TTL 过期），不再一碰锁冲突就硬失败。

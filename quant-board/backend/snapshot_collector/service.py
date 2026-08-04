@@ -334,15 +334,32 @@ class SnapshotCollectorService:
             grace_minutes=grace_minutes,
         )
 
-        bundle = builder_module.build_ingest_payload(
-            slot,
-            market_context,
+        from backend.snapshot_derivation import SnapshotDerivationService
+        from backend.snapshot_derivation.models import MarketFactBundle
+
+        fact = MarketFactBundle(
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            slot_time=slot_time,
+            timestamp_ms=slot_timestamp,
             dataset_id=dataset_id,
             source="quantboard_backend_collector",
             capture_mode=capture_mode,
+            stocks=list(market_context.stocks),
+            quotes=list(market_context.quotes),
+            depth=list(market_context.depth),
+            money_flow=list(market_context.money_flow),
+            themes=dict(market_context.themes),
+            limit_up=dict(market_context.limit_up),
+            sectors=list(market_context.sectors),
+            source_health=list(market_context.source_health),
+            snapshot_context=dict(market_context.snapshot_context),
+            market_meta=dict(market_context.market_meta),
         )
+        derived = SnapshotDerivationService().derive(fact)
+        bundle = derived.to_ingest_bundle()
         await asyncio.to_thread(
-            self._enrich_volume_ratios, bundle.get("stockRows") or []
+            self._enrich_volume_ratios, derived.stock_rows
         )
 
         norm_request = self._SnapshotIngestRequest(
