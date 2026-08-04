@@ -920,6 +920,8 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 带并发闸门：缓存未命中进入计算前，先按缓存键取 per-key 单飞锁（同 key 并发只计算一次，其余等待后共享缓存结果），再取全局有界信号量（默认 2，环境变量 `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` 可调），同一时刻最多 N 个 golden 计算并发。目的是防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死；并发上限不改变响应结构与缓存合同。
 
+`POST /api/ranktrend/analyze` 响应帧新增题材动量（板块共振）字段：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags`，`factors` 只回传 top-10 题材动量摘要），每股 `analysis.resonance.theme`（`status/themeId/themeName/role/roleWeight/themeMomentumScore/themeMomentumDirection/themeLifecycle/themeContribution/adjustment/reasons`）与 `analysis.resonance.baseScore`（调节前原始共振分数）。题材动量由 `backend/analysis/theme_momentum.py` 纯函数从已落库 `snapshot_sector_rows`（`entityType=hot_theme`）的因子序列计算，与个股共振同构（短 3/中 8/路径 8/Jump 衰减 3）；题材数据不足时 `theme.status=insufficient` 且保留原共振分数（fail-visible，不归零不伪造）。该字段为向后兼容扩展，旧消费方不受影响。
+
 `frames`、`records`、`stock-rows` 和 `sector-rows` 列表读口可启用 Redis read-through cache。Redis 只缓存查询响应，不替代 MongoDB 事实源；命中时 `source` 仍表示原始事实来源，`cache.hit=true`、`cache.store=redis` 只用于诊断。Redis 不可用时读口直接回 MongoDB。
 
 `rank-series` 使用同一缓存合同。服务日志以 `snapshot_response resource=ranktrend:rank-series cache_hit=<true|false> elapsed_ms=<n>` 记录命中与端到端耗时；Mongo 查询日志记录代码数、返回 bar 数、批量查询、关注度横截面重排和总耗时。API ingest 与后台 snapshot collector 每次成功写入快照事实后都会递增 dataset generation，并按 dataset/date/snapshot 索引失效关联 key，慢读无法在新 generation 中回写旧响应；前端现有 `dataLoader.ranktrendSignal` 仍按 30 分钟轮询读取。
