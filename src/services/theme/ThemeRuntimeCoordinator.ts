@@ -1,6 +1,5 @@
 import { dataLayer } from '@/services/DataLayer'
 import { debugLog } from '@/utils/logger'
-import { buildThemeFactors } from './ThemeFactorEngine'
 import { projectThemeStockExposures } from './ThemeStockProjector'
 import { mapBackendRotationSummary } from './backendRotationAdapter'
 import { buildThemeEvents } from './ThemeAlertEngine'
@@ -233,11 +232,14 @@ export function refreshRuntime(
   options: ThemeRuntimeRefreshOptions,
 ): ThemeRuntimeRefreshResult | Promise<ThemeRuntimeRefreshResult> {
   if (options.context) {
+    // 唯一因子来源是后端 /api/theme-heat feed：题材热度/动量/轮动状态均由后端生产，
+    // 前端不本地计算、不保留 fallback（feed 为空即空态，绝不本地补算产生第二套语义）
+    const factors = themeHeatFeed.getRuntimeFactors()
     return executeWithFactors(
       options.context,
-      buildThemeFactors(options.context),
+      factors,
       options,
-      THEME_FACTOR_VERSION,
+      themeHeatFeed.getSnapshot()?.factorVersion || THEME_FACTOR_VERSION,
     )
   }
 

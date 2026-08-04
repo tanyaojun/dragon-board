@@ -7,6 +7,41 @@ import { themeRuntimeStore } from '../ThemeRuntimeStore'
 import { refreshResourceLocks } from '../../refresh/RefreshResourceLocks'
 import type { ThemeSourceContext } from '../types'
 
+function feedFactor(overrides: Record<string, unknown> = {}): any {
+  return {
+    themeId: 'AI',
+    themeName: '人工智能',
+    source: 'market_aggregate',
+    timestamp: 1713751200000,
+    heatScore: 80,
+    momentumScore: 60,
+    breadthScore: 60,
+    fundScore: 60,
+    leadershipScore: 60,
+    correlationScore: 60,
+    crowdingRisk: 30,
+    persistenceScore: 0,
+    rotationState: 'mainline',
+    stockCount: 1,
+    ztCount: 1,
+    leaderCount: 1,
+    netInflow: 100,
+    strength: 80,
+    volumeRatio: 1,
+    rank: 1,
+    relatedThemeIds: [],
+    qualityFlags: [],
+    components: {
+      breadthScore: 60,
+      fundScore: 60,
+      leadershipScore: 60,
+      correlationScore: 60,
+      riskPenalty: 0,
+    },
+    ...overrides,
+  }
+}
+
 function context(timestamp = 1713751200000): ThemeSourceContext {
   return {
     timestamp,
@@ -23,9 +58,12 @@ describe('ThemeRuntimeCoordinator', () => {
   beforeEach(() => {
     dataLayer.reset()
     themeRuntimeStore.clear()
+    // 因子唯一来源是后端 feed；默认空 feed，测试按需注入
+    vi.spyOn(themeHeatFeed, 'getRuntimeFactors').mockReturnValue([])
   })
 
   it('builds runtime result with metadata, quality summary and changed fields', () => {
+    vi.mocked(themeHeatFeed.getRuntimeFactors).mockReturnValue([feedFactor()])
     const result = refreshRuntime({
       source: 'test',
       context: context(),
@@ -55,6 +93,7 @@ describe('ThemeRuntimeCoordinator', () => {
   })
 
   it('uses remote market factors and synchronizes DataLayer hot themes', async () => {
+    vi.mocked(themeHeatFeed.getRuntimeFactors).mockReturnValue([feedFactor()])
     const localFactor = refreshRuntime({ source: 'test', context: context(), emitAlerts: false }).factors[0]
     const marketFactor = { ...localFactor, source: 'market_aggregate' as const, heatScore: 82 }
     vi.spyOn(themeHeatFeed, 'refresh').mockResolvedValue({
@@ -93,6 +132,7 @@ describe('ThemeRuntimeCoordinator', () => {
 
   it('syncs projected stock themes back to DataLayer when requested', () => {
     dataLayer.setMergedStocks([{ code: '000001', name: '样本一', change: 10 } as any])
+    vi.mocked(themeHeatFeed.getRuntimeFactors).mockReturnValue([feedFactor()])
 
     const result = refreshRuntime({
       source: 'dataLoader',
@@ -128,6 +168,9 @@ describe('ThemeRuntimeCoordinator', () => {
       stockThemes: new Map([['000001', ['NEW']]]),
     }
     let observedIds: string[] = []
+    vi.mocked(themeHeatFeed.getRuntimeFactors).mockReturnValue([
+      feedFactor({ themeId: 'NEW', themeName: '新题材' }),
+    ])
     const unsubscribe = themeRuntimeStore.subscribe(() => {
       observedIds = themeFacade.getThemeSummaries(20).map((theme) => theme.id)
     })
@@ -140,6 +183,7 @@ describe('ThemeRuntimeCoordinator', () => {
 
   it('serializes async facade runtime refreshes through the theme resource', async () => {
     const releases: Array<() => void> = []
+    vi.mocked(themeHeatFeed.getRuntimeFactors).mockReturnValue([feedFactor()])
     const localFactor = refreshRuntime({ source: 'test', context: context(), emitAlerts: false }).factors[0]
     vi.spyOn(themeHeatFeed, 'getRuntimeFactors').mockReturnValue([{ ...localFactor, source: 'market_aggregate' }])
     const spy = vi.spyOn(themeHeatFeed, 'refresh').mockImplementation(

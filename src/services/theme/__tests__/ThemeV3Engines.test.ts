@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createThemeRuntimeStore } from '../ThemeRuntimeStore'
 import { buildThemeEvents } from '../ThemeAlertEngine'
-import { buildThemeFactors } from '../ThemeFactorEngine'
 import { projectThemeStockExposures } from '../ThemeStockProjector'
 import { mapBackendRotationSummary } from '../backendRotationAdapter'
+import { themeHeatFeed } from '../ThemeHeatFeed'
 import {
   refreshThemeFacadeState,
   getHotThemes,
@@ -148,6 +148,9 @@ describe('ThemeAlertEngine', () => {
 
 describe('ThemeFacade runtime views', () => {
   it('refreshes runtime state and exposes hot theme and rotation views', () => {
+    vi.spyOn(themeHeatFeed, 'getRuntimeFactors').mockReturnValue([
+      factor({ themeId: 'AI', themeName: '人工智能' }),
+    ])
     const result = refreshThemeFacadeState({
       context: {
         ...context(),
