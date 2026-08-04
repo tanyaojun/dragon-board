@@ -98,14 +98,12 @@ export class SnapshotBackendRead {
         hotThemes: _hotThemes,
         rotationSummary,
         ...frame
-      }) => {
-        const { mainLines: _mainLines, ...plainRotationSummary } =
-          rotationSummary && typeof rotationSummary === 'object' ? rotationSummary : {}
-        return {
-          ...frame,
-          rotationSummary: plainRotationSummary,
-        }
-      },
+      }) => ({
+        ...frame,
+        // C3：保留引擎/历史行的 mainLines，不再剥除
+        rotationSummary:
+          rotationSummary && typeof rotationSummary === 'object' ? rotationSummary : null,
+      }),
     )
   }
 

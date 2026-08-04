@@ -157,6 +157,8 @@ export interface ThemeSourceContext {
   stockThemes: Map<string, string[]>
   stocks: Array<Partial<MergedStock> & { code: string; name?: string }>
   rotationAnalysis?: RotationAnalysis | null
+  /** 后端引擎 frame.rotationSummary 原始载荷（camelCase）；无则 null（H3 按 algorithmVersion 分支） */
+  backendRotationSummary?: Record<string, any> | null
   correlations?: Map<string, ThemeCorrelationDetail>
 }
 

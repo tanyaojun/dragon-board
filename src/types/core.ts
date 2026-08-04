@@ -702,32 +702,35 @@ export interface ThemeRotationStatus {
   themeName: string
 
   // 资金数据（万元）
-  inflow: number // 流入资金
-  outflow: number // 流出资金
-  netInflow: number // 净流入
+  inflow?: number // 流入资金（后端 v1 无生产者，缺失保持缺失）
+  outflow?: number // 流出资金
+  netInflow?: number // 净流入
 
   // 量价数据
-  avgChange: number // 平均涨幅
-  totalTurnover: number // 总成交额（万元）
-  ztCount: number // 涨停数
-  stockCount: number // 成分股数量
+  avgChange?: number // 平均涨幅
+  totalTurnover?: number // 总成交额（万元）
+  ztCount?: number // 涨停数
+  stockCount?: number // 成分股数量
 
   // 轮动指标
   rank: number // 当前排名
-  rankChange: number // 排名变化（负值表示上升）
+  rankChange?: number // 排名变化（负值表示上升）
   direction: RotationDirection
   strength: RotationStrength
 
   // 持续性
-  persistentDays: number // 持续天数（同方向）
+  persistentDays?: number // 持续天数（同方向）
   isMainLine: boolean // 是否主线（持续3天以上且净流入）
 
   // 关联板块
-  relatedThemes: Array<{
+  relatedThemes?: Array<{
     id: string
     name: string
     correlation: number // 相关性 0-1
   }>
+
+  /** 后端轮动引擎综合得分（0-100；无引擎数据时为 undefined） */
+  rotationScore?: number
 
   /** 强度分数（0-100） */
   strengthScore?: number
@@ -774,7 +777,7 @@ export interface RotationAnalysis {
   quickRotation: ThemeRotationStatus[]
 
   // 轮动速度（0-100，越高说明轮动越快）
-  rotationSpeed: number
+  rotationSpeed?: number
 
   // 市场阶段
   marketPhase: MarketPhaseType
@@ -803,6 +806,15 @@ export interface RotationAnalysis {
     themeName: string
     strengthScore: number
   }>
+
+  /** 后端算法版本（有值时表示来自后端引擎） */
+  algorithmVersion?: string
+  /** 主线集中度（Top3 heat 占比） */
+  mainlineConcentration?: number
+  /** 全市场最高连板 */
+  maxBoardHeight?: number
+  /** 引擎证据（framesUsed / qualityIssues） */
+  evidence?: { framesUsed?: number; qualityIssues?: string[] }
 }
 
 /** 轮动存储结构 */

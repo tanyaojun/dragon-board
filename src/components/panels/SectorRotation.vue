@@ -140,8 +140,8 @@
                   <div class="preview-name">{{ item.themeName }}</div>
                   <div class="preview-flow inflow">+{{ formatMoney(item.netInflow) }}</div>
                   <div class="preview-meta">
-                    <span class="preview-days">{{ item.persistentDays }}天</span>
-                    <span class="preview-score">{{ item.strengthScore }}分</span>
+                    <span class="preview-days">{{ item.persistentDays ?? '--' }}天</span>
+                    <span class="preview-score">{{ item.strengthScore ?? '--' }}分</span>
                   </div>
                 </div>
               </div>
@@ -157,20 +157,20 @@
               @click="showSectorDetail(item.themeName)">
               <div class="item-header">
                 <span class="item-name">{{ item.themeName }}</span>
-                <span class="item-days">{{ item.persistentDays }}天</span>
+                <span class="item-days">{{ item.persistentDays ?? '--' }}天</span>
               </div>
               <div class="item-flow">
                 <span class="flow-value inflow">+{{ formatMoney(item.netInflow) }}</span>
                 <span class="flow-label">净流入</span>
               </div>
               <div class="item-stats">
-                <span>📈 {{ item.ztCount }}涨停</span>
-                <span>⚡ {{ item.strengthScore }}分</span>
+                <span>📈 {{ item.ztCount ?? '--' }}涨停</span>
+                <span>⚡ {{ item.strengthScore ?? '--' }}分</span>
                 <span>📊 量比 {{ item.volumeRatio?.toFixed(2) }}</span>
               </div>
-              <div class="item-rank-change" v-if="item.rankChange !== 0"
-                :class="{ up: item.rankChange > 0, down: item.rankChange < 0 }">
-                {{ formatRankChange(item.rankChange) }}
+              <div class="item-rank-change" v-if="item.rankChange !== undefined && item.rankChange !== 0"
+                :class="{ up: (item.rankChange ?? 0) > 0, down: (item.rankChange ?? 0) < 0 }">
+                {{ formatRankChange(item.rankChange ?? 0) }}
               </div>
             </div>
           </div>
@@ -184,24 +184,24 @@
               @click="showSectorDetail(item.themeName)">
               <div class="item-header">
                 <span class="item-name">{{ item.themeName }}</span>
-                <span class="item-score">{{ item.strengthScore }}分</span>
+                <span class="item-score">{{ item.strengthScore ?? '--' }}分</span>
               </div>
               <div class="item-stats-grid">
                 <div class="stat">
                   <span class="stat-label">强度</span>
-                  <span class="stat-value">{{ item.strengthScore }}</span>
+                  <span class="stat-value">{{ item.strengthScore ?? '--' }}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">涨停</span>
-                  <span class="stat-value">{{ getThemeMetric(item, 'ztCount') }}</span>
+                  <span class="stat-value">{{ getThemeMetric(item, 'ztCount') ?? '--' }}</span>
                 </div>
                 <div class="stat">
                   <span class="stat-label">量比</span>
-                  <span class="stat-value">{{ getThemeMetric(item, 'volumeRatio').toFixed(2) }}</span>
+                  <span class="stat-value">{{ getThemeMetric(item, 'volumeRatio') ?? '--' }}</span>
                 </div>
               </div>
               <div class="item-flow">
-                <span class="flow-value" :class="getThemeMetric(item, 'netInflow') > 0 ? 'inflow' : 'outflow'">
+                <span class="flow-value" :class="(getThemeMetric(item, 'netInflow') ?? 0) > 0 ? 'inflow' : 'outflow'">
                   {{ formatMoney(getThemeMetric(item, 'netInflow')) }}
                 </span>
               </div>
@@ -217,8 +217,9 @@
               @click="showSectorDetail(item.themeName)">
               <div class="item-header">
                 <span class="item-name">{{ item.themeName }}</span>
-                <span class="item-rank" v-if="item.rankChange !== 0" :class="{ up: item.rankChange > 0 }">
-                  ↑{{ Math.abs(item.rankChange) }}
+                <span class="item-rank" v-if="item.rankChange !== undefined && item.rankChange !== 0"
+                  :class="{ up: (item.rankChange ?? 0) > 0 }">
+                  ↑{{ Math.abs(item.rankChange ?? 0) }}
                 </span>
               </div>
               <div class="item-flow-large">
@@ -226,7 +227,7 @@
               </div>
               <div class="item-stats">
                 <span>💪 强度 {{ item.strength }}</span>
-                <span>📈 涨停 {{ item.ztCount }}</span>
+                <span>📈 涨停 {{ item.ztCount ?? '--' }}</span>
                 <span>📊 涨幅 {{ (item.avgChange || 0).toFixed(2) }}%</span>
               </div>
               <div class="item-fund-change" v-if="item.inflowChange">
@@ -246,8 +247,9 @@
               @click="showSectorDetail(item.themeName)">
               <div class="item-header">
                 <span class="item-name">{{ item.themeName }}</span>
-                <span class="item-rank" v-if="item.rankChange !== 0" :class="{ down: item.rankChange < 0 }">
-                  ↓{{ Math.abs(item.rankChange) }}
+                <span class="item-rank" v-if="item.rankChange !== undefined && item.rankChange !== 0"
+                  :class="{ down: (item.rankChange ?? 0) < 0 }">
+                  ↓{{ Math.abs(item.rankChange ?? 0) }}
                 </span>
               </div>
               <div class="item-flow-large">
@@ -255,7 +257,7 @@
               </div>
               <div class="item-stats">
                 <span>💪 强度 {{ item.strength }}</span>
-                <span>📈 涨停 {{ item.ztCount }}</span>
+                <span>📈 涨停 {{ item.ztCount ?? '--' }}</span>
                 <span>📊 涨幅 {{ (item.avgChange || 0).toFixed(2) }}%</span>
               </div>
             </div>
@@ -283,9 +285,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
+import { snapshotFacade } from '@/services/snapshot/facade'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import type { RotationAnalysis } from '@/types/core'
+import type { SnapshotFrameRow } from '@/services/snapshot/types'
 import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 
 const props = defineProps<{
@@ -321,24 +325,39 @@ const { panelRef, panelStyle } = usePanel({
 
 // 轮动数据
 const rotationData = computed(() => {
-  const state = (dataLayer as any).state
-  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary() || (state?.analysis?.rotation?.current as RotationAnalysis | null)
+  // 只消费后端落库结果；无后端数据时保持 null（空态，不本地补算）
+  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary()
 })
 
 // 数据版本
 const dataVersion = computed(() => dataLayer.getVersion().themes)
 
 // ========== 加载数据 ==========
+const loadBackendRotation = async () => {
+  try {
+    const frames = await snapshotFacade.listSnapshotFrames({
+      type: 'half_hour',
+      sort: 'desc',
+      limit: 1,
+    })
+    const latest = frames[0] as (SnapshotFrameRow & { rotationSummary?: Record<string, any> }) | undefined
+    themeFacade.setBackendRotationSummary(latest?.rotationSummary ?? null)
+  } catch {
+    themeFacade.setBackendRotationSummary(null)
+  }
+}
+
 const loadData = async () => {
   loading.value = true
   error.value = null
 
+  await loadBackendRotation()
   themeFacade.refresh({ emitAlerts: false })
 
   await new Promise(resolve => setTimeout(resolve, 300))
 
   if (!rotationData.value) {
-    error.value = '暂无轮动数据'
+    error.value = '后端暂无轮动结果'
   }
 
   loading.value = false
@@ -391,8 +410,8 @@ function getMarketPhaseName(phase: string): string {
 }
 
 // 金额格式化
-function formatMoney(value: number): string {
-  if (!value && value !== 0) return '-'
+function formatMoney(value: number | undefined): string {
+  if (value === undefined || (!value && value !== 0)) return '-'
   const absValue = Math.abs(value)
   if (absValue >= 100000000) {
     return (value / 100000000).toFixed(2) + '亿'
@@ -417,9 +436,11 @@ function formatRankChange(change: number): string {
   return '='
 }
 
-function getThemeMetric(item: unknown, key: string): number {
+function getThemeMetric(item: unknown, key: string): number | undefined {
   const value = (item as Record<string, unknown>)?.[key]
-  return Number(value) || 0
+  if (value === undefined || value === null || value === '') return undefined
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : undefined
 }
 
 // ========== 生命周期 ==========

@@ -298,6 +298,7 @@ describe('snapshotBackendRead', () => {
     expect(frame).not.toHaveProperty('entities')
     expect(frame).not.toHaveProperty('sectors')
     expect(frame).not.toHaveProperty('hotThemes')
-    expect(frame.rotationSummary).toEqual({})
+    // C3：rotationSummary.mainLines 必须保留（后端引擎/历史行都含 mainLines）
+    expect(frame.rotationSummary).toEqual({ mainLines: [{ name: '主线' }] })
   })
 })

@@ -2,7 +2,7 @@ import { dataLayer } from '@/services/DataLayer'
 import { debugLog } from '@/utils/logger'
 import { buildThemeFactors } from './ThemeFactorEngine'
 import { projectThemeStockExposures } from './ThemeStockProjector'
-import { buildThemeRotationSummary } from './ThemeRotationEngine'
+import { mapBackendRotationSummary } from './backendRotationAdapter'
 import { buildThemeEvents } from './ThemeAlertEngine'
 import { themeHeatFeed } from './ThemeHeatFeed'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
@@ -23,8 +23,13 @@ export const THEME_EVENT_VERSION = 'theme-event-v1'
 
 let previousSignature = ''
 let previousFactors: ThemeFactorSnapshot[] = []
-let previousRotation = null as ThemeRuntimeRefreshResult['rotationSummary']
 let previousEvents: ThemeRuntimeRefreshResult['events'] = []
+let latestBackendRotationSummary: Record<string, any> | null = null
+
+/** 设置最新后端 frame.rotationSummary（面板/读取方在拿到 frame 后调用）。 */
+export function setBackendRotationSummary(payload: Record<string, any> | null | undefined): void {
+  latestBackendRotationSummary = payload && typeof payload === 'object' ? payload : null
+}
 
 export function themeInputSignature(context: ThemeSourceContext): string {
   return JSON.stringify({
@@ -146,13 +151,10 @@ function executeWithFactors(
     factors: factors.map((factor) => [factor.themeId, factor.heatScore, factor.momentumScore, factor.rank]),
   })
   const exposures = projectThemeStockExposures(context, factors)
-  const rotationSummary =
-    signature === previousSignature && previousRotation
-      ? previousRotation
-      : buildThemeRotationSummary(factors, {
-          timestamp,
-          previous: previousRotation || dataLayer.getCurrentRotation?.() || null,
-        })
+  // 轮动结果唯一来源是后端引擎落库的 rotationSummary；无则 null（空态，不本地补算）
+  const rotationSummary = mapBackendRotationSummary(
+    context.backendRotationSummary ?? latestBackendRotationSummary,
+  )
   const events = buildThemeEvents({ factors, exposures, previousFactors, timestamp })
   const qualitySummary = buildQualitySummary(factors)
   const changedFields = changedFieldsFor(signature, factors, exposures, events, qualitySummary)
@@ -177,7 +179,6 @@ function executeWithFactors(
 
   previousSignature = signature
   previousFactors = factors
-  previousRotation = rotationSummary
   previousEvents = events
 
   const result: ThemeRuntimeRefreshResult = {

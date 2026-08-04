@@ -1,9 +1,8 @@
 import { dataLayer } from '@/services/DataLayer'
 import type { RotationAnalysis } from '@/types/core'
-import { buildThemeRotationSummary } from './ThemeRotationEngine'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { themeRepository } from './ThemeRepository'
-import { refreshRuntime } from './ThemeRuntimeCoordinator'
+import { refreshRuntime, setBackendRotationSummary } from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
 import { themeHeatFeed } from './ThemeHeatFeed'
@@ -173,11 +172,7 @@ export function getThemeExposureProjection(): ThemeExposureProjection {
 }
 
 export function getRotationSummary(): RotationAnalysis | null {
-  if (!lastRotationSummary && lastFactors.length > 0) {
-    lastRotationSummary = buildThemeRotationSummary(lastFactors, {
-      previous: dataLayer.getCurrentRotation?.() || null,
-    })
-  }
+  // 只返回后端映射缓存；无后端结果时不本地补算（空态由面板展示）
   return lastRotationSummary
 }
 
@@ -381,5 +376,6 @@ export const themeFacade = {
   loadThemeStocks,
   toHotThemeSummary,
   toStockTheme,
+  setBackendRotationSummary,
   runtimeStore: themeRuntimeStore,
 }

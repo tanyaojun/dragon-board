@@ -14,9 +14,10 @@ export class RegimeClassifier {
     const ztCount = latest?.marketStats.ztCount || 0
     const hotConcentration = this.calculateHotConcentration(frames)
     const mainLineCount = rotation?.summary?.mainLineCount || rotation?.mainLines?.length || 0
-    const rotationSpeed = rotation?.rotationSpeed || 0
+    // H5：rotationSpeed 缺失时不参与“高速轮动”分支（undefined → 0 等效跳过，不伪造）
+    const rotationSpeed = rotation?.rotationSpeed ?? 0
     const persistentMainLines =
-      rotation?.mainLines?.filter((line) => (line.persistentDays || 0) >= 2).length || 0
+      rotation?.mainLines?.filter((line) => (line.persistentDays ?? 0) >= 2).length || 0
     const sentimentPhase = latest?.sentiment.phaseName || latest?.sentiment.phase
 
     if (zhabanRate >= 32 || sentimentPhase === '退潮' || sentimentPhase === 'retreat') {

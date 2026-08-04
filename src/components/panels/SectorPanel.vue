@@ -172,10 +172,10 @@
                 @click="showSectorDetail(item.themeName, $event)">
                 <div class="item-header">
                   <span class="item-name">{{ item.themeName }}</span>
-                  <span class="item-days">{{ item.persistentDays || 1 }}天</span>
+                  <span class="item-days">{{ item.persistentDays ?? '--' }}天</span>
                 </div>
                 <div class="item-flow">
-                  <span class="flow-value inflow" v-if="item.netInflow > 0">
+                  <span class="flow-value inflow" v-if="item.netInflow !== undefined && item.netInflow > 0">
                     +{{ formatMoney(item.netInflow) }}
                   </span>
                   <span class="flow-value outflow" v-else>
@@ -254,8 +254,10 @@
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
 import { dataLayer } from '../../services/DataLayer'
+import { snapshotFacade } from '../../services/snapshot/facade'
 import { usePanel } from '../../composables/usePanel'
 import type { RotationAnalysis, StockAlert } from '../../types/core'
+import type { SnapshotFrameRow } from '../../services/snapshot/types'
 import SectorStocksTree from './SectorStocksTree.vue'
 import SectorDetail from './SectorDetail.vue'
 import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
@@ -323,7 +325,8 @@ const lastUpdate = computed(() => {
 })
 
 const rotationData = computed(() => {
-  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary() || ((dataLayer as any).state?.analysis?.rotation?.current as RotationAnalysis | null)
+  // 只消费后端落库结果；无后端数据时保持 null（空态，不本地补算）
+  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary()
 })
 
 const alerts = computed(() => {
@@ -334,11 +337,26 @@ const alerts = computed(() => {
 const alertCount = computed(() => alerts.value.length)
 
 // ========== 加载数据 ==========
+const loadBackendRotation = async () => {
+  try {
+    const frames = await snapshotFacade.listSnapshotFrames({
+      type: 'half_hour',
+      sort: 'desc',
+      limit: 1,
+    })
+    const latest = frames[0] as (SnapshotFrameRow & { rotationSummary?: Record<string, any> }) | undefined
+    themeFacade.setBackendRotationSummary(latest?.rotationSummary ?? null)
+  } catch {
+    themeFacade.setBackendRotationSummary(null)
+  }
+}
+
 const loadData = async () => {
   loading.value = true
   error.value = null
 
   try {
+    await loadBackendRotation()
     await themeFacade.refreshRuntime({ force: true, source: 'ui' })
 
     // 验证数据是否存在
@@ -424,8 +442,8 @@ function handleSelectStock(code: string) {
   }
 }
 
-function formatMoney(value: number): string {
-  if (!value && value !== 0) return '-'
+function formatMoney(value: number | undefined): string {
+  if (value === undefined || (!value && value !== 0)) return '-'
   const absValue = Math.abs(value)
   if (absValue >= 100000000) {
     return (value / 100000000).toFixed(2) + '亿'

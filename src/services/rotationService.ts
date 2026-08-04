@@ -84,16 +84,20 @@ class RotationService {
     try {
       const today = new Date().toISOString().split('T')[0]
       const historyDates = JSON.parse(localStorage.getItem('hot_themes_history') || '[]')
-      const top10Themes = flows.slice(0, 10).map((flow) => ({
-        themeId: flow.themeId,
-        themeName: flow.themeName,
-        rank: flow.rank,
-        strength: flow.strengthScore,
-        netInflow: flow.netInflow,
-        ztCount: flow.ztCount,
-        persistentDays: flow.persistentDays || 1,
-        timestamp: Date.now(),
-      }))
+      // M11：只保存后端提供的字段，undefined 一律省略，不写占位值
+      const top10Themes = flows.slice(0, 10).map((flow) => {
+        const entry: Record<string, unknown> = {
+          themeId: flow.themeId,
+          themeName: flow.themeName,
+          rank: flow.rank,
+          timestamp: Date.now(),
+        }
+        if (flow.strengthScore !== undefined) entry.strength = flow.strengthScore
+        if (flow.netInflow !== undefined) entry.netInflow = flow.netInflow
+        if (flow.ztCount !== undefined) entry.ztCount = flow.ztCount
+        if (flow.persistentDays !== undefined) entry.persistentDays = flow.persistentDays
+        return entry
+      })
 
       localStorage.setItem(`hot_themes_${today}`, JSON.stringify(top10Themes))
       if (!historyDates.includes(today)) {

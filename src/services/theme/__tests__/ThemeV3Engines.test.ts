@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createThemeRuntimeStore } from '../ThemeRuntimeStore'
-import { buildThemeRotationSummary } from '../ThemeRotationEngine'
 import { buildThemeEvents } from '../ThemeAlertEngine'
 import { buildThemeFactors } from '../ThemeFactorEngine'
 import { projectThemeStockExposures } from '../ThemeStockProjector'
+import { mapBackendRotationSummary } from '../backendRotationAdapter'
 import {
   refreshThemeFacadeState,
   getHotThemes,
@@ -81,7 +81,13 @@ describe('ThemeRuntimeStore', () => {
 
     store.update({
       factors: [factor({ themeId: 'AI' })],
-      rotationSummary: buildThemeRotationSummary([factor({ themeId: 'AI' })]),
+      rotationSummary: mapBackendRotationSummary({
+        marketPhase: 'rising',
+        mainLines: [{ themeId: 'AI', themeName: '人工智能', rotationScore: 78 }],
+        inflowThemes: [],
+        outflowThemes: [],
+        algorithmVersion: 'theme_rotation_v2',
+      }),
     })
     const snapshot = store.getSnapshot()
     snapshot.factors.push(factor({ themeId: 'MUTATED' }))
@@ -94,37 +100,6 @@ describe('ThemeRuntimeStore', () => {
     unsubscribe()
     store.update({ factors: [] })
     expect(listener).toHaveBeenCalledTimes(1)
-  })
-})
-
-describe('ThemeRotationEngine', () => {
-  it('builds deterministic rotation summary from theme factors and previous runtime snapshot', () => {
-    const previous = buildThemeRotationSummary(
-      [
-        factor({ themeId: 'AI', themeName: '人工智能', heatScore: 80, rank: 2 }),
-        factor({ themeId: 'POWER', themeName: '电力设备', heatScore: 70, rank: 1, netInflow: -1000000 }),
-      ],
-      { timestamp: 1713750000000 },
-    )
-
-    const current = buildThemeRotationSummary(
-      [
-        factor({ themeId: 'AI', themeName: '人工智能', heatScore: 88, rank: 1 }),
-        factor({
-          themeId: 'POWER',
-          themeName: '电力设备',
-          heatScore: 40,
-          rank: 2,
-          netInflow: -60000000,
-          rotationState: 'cooling',
-        }),
-      ],
-      { timestamp: 1713751200000, previous },
-    )
-
-    expect(current.mainLines[0]).toMatchObject({ themeId: 'AI', persistentDays: 2, rankChange: 1 })
-    expect(current.outflowThemes[0]).toMatchObject({ themeId: 'POWER', direction: 'outflow' })
-    expect(current.marketPhase).toBe('rising')
   })
 })
 
@@ -176,24 +151,13 @@ describe('ThemeFacade runtime views', () => {
     const result = refreshThemeFacadeState({
       context: {
         ...context(),
-        rotationAnalysis: {
-          timestamp: 1713751200000,
+        backendRotationSummary: {
+          marketPhase: 'rising',
+          mainLines: [{ themeId: 'BKAI', themeName: '人工智能', rotationScore: 78 }],
           inflowThemes: [],
           outflowThemes: [],
-          mainLines: [{ themeId: 'BKAI', themeName: '人工智能', persistentDays: 2 } as any],
-          quickRotation: [],
-          rotationSpeed: 20,
-          marketPhase: 'rising',
-          summary: {
-            mainLineCount: 1,
-            inflowCount: 1,
-            outflowCount: 0,
-            topInflow: '人工智能',
-            topOutflow: '无',
-            suggestion: '',
-            strongCount: 1,
-            topStrength: '人工智能',
-          },
+          algorithmVersion: 'theme_rotation_v2',
+          computedAt: 1713751200000,
         },
       },
       emitAlerts: false,
@@ -202,7 +166,7 @@ describe('ThemeFacade runtime views', () => {
 
     expect(result.factors[0].themeName).toBe('人工智能')
     expect(hotThemes[0]).toMatchObject({ id: 'AI', name: '人工智能' })
-    expect(getRotationSummary()?.mainLines[0]?.themeId).toBe('AI')
+    expect(getRotationSummary()?.mainLines[0]?.themeId).toBe('BKAI')
   })
 })
 
