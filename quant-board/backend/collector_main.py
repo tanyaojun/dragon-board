@@ -41,6 +41,98 @@ def _build_redis_client(redis_url: str) -> Any | None:
         return None
 
 
+async def _acquire_lock_with_retry(
+    lock: Any,
+    *,
+    tries: int = 10,
+    interval_seconds: float = 5.0,
+) -> bool:
+    """锁冲突退避重试：上一进程残留锁会随 TTL 过期或 PID 存活检测回收。"""
+    for attempt in range(tries):
+        if await asyncio.to_thread(lock.acquire):
+            return True
+        logger.warning(
+            "collector lock held elsewhere (attempt %d/%d); retrying in %.0fs",
+            attempt + 1,
+            tries,
+            interval_seconds,
+        )
+        await asyncio.sleep(interval_seconds)
+    return False
+
+
+async def _catchup_missing_slots(settings: Any) -> None:
+    """当日缺槽自动补采：错过 grace 窗口且尚未入库的槽位用当日数据补上。"""
+    from backend.snapshot_collector.models import CollectorRunRequest
+    from backend.snapshot_collector.service_factory import (
+        create_snapshot_collector_repository,
+        create_snapshot_collector_service,
+    )
+    from backend.snapshot_collector.slots import generate_slots
+    from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+    attempted: set[str] = set()
+    last_date: str | None = None
+    while True:
+        await asyncio.sleep(900)  # 每 15 分钟检查一次
+        try:
+            now_ts = int(time.time() * 1000)
+            trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
+            if not trading_date:
+                continue
+            if last_date != trading_date:
+                last_date = trading_date
+                attempted.clear()
+            grace_ms = settings.snapshot_collector_close_grace_minutes * 60 * 1000
+            types = [
+                t.strip()
+                for t in settings.snapshot_collector_types.split(",")
+                if t.strip()
+            ]
+            repo = await asyncio.to_thread(create_snapshot_collector_repository)
+            missing: list[Any] = []
+            for slot in generate_slots(trading_date, types):
+                if slot.snapshot_id in attempted:
+                    continue
+                if slot.timestamp_ms + grace_ms >= now_ts:
+                    continue  # 调度器仍在处理或未到期，不抢
+                exists = await asyncio.to_thread(
+                    repo.snapshot_exists,
+                    settings.snapshot_collector_dataset_id,
+                    slot.snapshot_id,
+                )
+                if not exists:
+                    missing.append(slot)
+            if not missing:
+                continue
+            service = await asyncio.to_thread(create_snapshot_collector_service, repo)
+            for slot in missing:
+                attempted.add(slot.snapshot_id)
+                try:
+                    result = await service.arun_once(
+                        CollectorRunRequest(
+                            dataset_id=settings.snapshot_collector_dataset_id,
+                            snapshot_type=slot.snapshot_type,
+                            trading_date=slot.trading_date,
+                            slot_time=slot.slot_time,
+                            dry_run=False,
+                            force=False,
+                        )
+                    )
+                    logger.warning(
+                        "catch-up: %s -> %s (%s)",
+                        slot.snapshot_id,
+                        result.status,
+                        result.message,
+                    )
+                except Exception:
+                    logger.exception("catch-up failed: %s", slot.snapshot_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("catch-up cycle failed")
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     from backend.market_fund_scheduler import market_fund_scheduler
@@ -49,7 +141,6 @@ async def lifespan(app: FastAPI):
         start_hotlist_refresh,
         stop_hotlist_refresh,
     )
-    from backend.market_proxy.limitup import get_limitup_service
     from backend.market_proxy.quotes import (
         start_market_quotes_refresh,
         stop_market_quotes_refresh,
@@ -68,7 +159,7 @@ async def lifespan(app: FastAPI):
         _build_redis_client(settings.redis_url),
         settings.snapshot_collector_dataset_id,
     )
-    if not lock.acquire():
+    if not await _acquire_lock_with_retry(lock):
         remaining = lock.remaining_ttl()
         raise RuntimeError(
             "another snapshot collector instance holds the lock for dataset "
@@ -77,42 +168,41 @@ async def lifespan(app: FastAPI):
         )
 
     renew_task: asyncio.Task[Any] | None = None
+    catchup_task: asyncio.Task[Any] | None = None
     set_default_gateway(InProcessMarketDataGateway())
-
-    async def _warm_limitup() -> None:
-        """预热涨停池缓存：进程内网关冷缓存时显式降级，预热后正常返回。"""
-        while True:
-            try:
-                await get_limitup_service().get_ths_pools()
-            except Exception as exc:
-                logger.warning("limitup warm refresh failed: %s", exc)
-            await asyncio.sleep(300)
 
     try:
         await start_market_quotes_refresh()
         await start_hotlist_refresh()
         market_fund_scheduler.start()
         snapshot_collector_scheduler.start()
-        limitup_task = asyncio.create_task(_warm_limitup())
 
         async def _renew_lock() -> None:
+            failures = 0
             while True:
                 await asyncio.sleep(lock.ttl_seconds / 2)
-                if not lock.renew():
-                    logger.error("collector instance lock lost; stopping scheduler")
+                if await asyncio.to_thread(lock.renew):
+                    failures = 0
+                    continue
+                failures += 1
+                logger.error("collector lock renew failed (%d); retrying", failures)
+                if failures >= 3:
+                    logger.error(
+                        "collector lock lost after %d renew failures; stopping scheduler",
+                        failures,
+                    )
                     await snapshot_collector_scheduler.stop()
                     return
 
         renew_task = asyncio.create_task(_renew_lock())
+        catchup_task = asyncio.create_task(_catchup_missing_slots(settings))
         yield
-        limitup_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await limitup_task
     finally:
-        if renew_task is not None:
-            renew_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await renew_task
+        for task in (renew_task, catchup_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await snapshot_collector_scheduler.stop()
         await market_fund_scheduler.stop()
         await stop_hotlist_refresh()
@@ -136,6 +226,7 @@ def health() -> dict:
 
     status = snapshot_collector_scheduler.status()
     status["calendarSource"] = _last_calendar_source
+    status["background"] = _background_task_status()
     if not status.get("last_run_at"):
         # 进程重启后内存态 last_run_at 会清零，导致 launcher 探针在"已收盘但
         # 进程刚启动"时误报。用 MongoDB 里最近的 completed 运行记录回填。
@@ -166,3 +257,39 @@ def health() -> dict:
         except Exception:
             pass
     return {"status": "ok", "snapshotCollector": status}
+
+
+def _background_task_status() -> dict[str, Any]:
+    """各后台刷新任务健康：供 launcher/人工判断是"进程死"还是"任务停"。"""
+    result: dict[str, Any] = {}
+    try:
+        from backend.market_proxy.hotlists import get_hotlist_service
+
+        result["hotlist"] = get_hotlist_service().status()
+    except Exception as exc:
+        result["hotlist"] = {"ok": False, "error": str(exc)[:200]}
+    try:
+        from backend.market_proxy.quotes import get_market_quotes_cache
+
+        result["quotes"] = get_market_quotes_cache().status()
+    except Exception as exc:
+        result["quotes"] = {"ok": False, "error": str(exc)[:200]}
+    try:
+        from backend.market_fund_scheduler import market_fund_scheduler
+
+        fund = market_fund_scheduler.status()
+        result["fund"] = fund if isinstance(fund, dict) else {"ok": True}
+    except Exception as exc:
+        result["fund"] = {"ok": False, "error": str(exc)[:200]}
+    try:
+        from backend.market_proxy.limitup import get_limitup_service
+
+        service = get_limitup_service()
+        cache = getattr(service, "_cache", {})
+        result["limitup"] = {
+            "ok": True,
+            "cachedKeys": sorted(str(k) for k in cache.keys()),
+        }
+    except Exception as exc:
+        result["limitup"] = {"ok": False, "error": str(exc)[:200]}
+    return result

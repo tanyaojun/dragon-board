@@ -133,7 +133,7 @@ class SnapshotCollectorScheduler:
     async def _run_loop(self) -> None:
         while True:
             try:
-                until_next = self._seconds_until_next_slot()
+                until_next = await self._seconds_until_next_slot()
                 await asyncio.sleep(until_next)
                 await self._collect_due_slots()
             except asyncio.CancelledError:
@@ -148,7 +148,7 @@ class SnapshotCollectorScheduler:
 
     # ── next-slot calculation ───────────────────────────────────────────────
 
-    def _seconds_until_next_slot(self) -> float:
+    async def _seconds_until_next_slot(self) -> float:
         """Return seconds to sleep before the next snapshot slot becomes due.
 
         On a trading day returns the precise interval; on a non-trading day
@@ -158,7 +158,7 @@ class SnapshotCollectorScheduler:
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
         now_ts = int(time.time() * 1000)
-        trading_date = trading_date_from_ts(now_ts)
+        trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
         if trading_date is None:
             return float(_IDLE_RECHECK_SECONDS)
 
@@ -192,13 +192,13 @@ class SnapshotCollectorScheduler:
         from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
         now_ts = int(time.time() * 1000)
-        trading_date = trading_date_from_ts(now_ts)
+        trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
         if trading_date is None:
             return
 
         grace_ms = self.grace_minutes * 60 * 1000
         all_slots = generate_slots(trading_date, self.snapshot_types)
-        repo = create_snapshot_collector_repository()
+        repo = await asyncio.to_thread(create_snapshot_collector_repository)
 
         for slot in all_slots:
             sid = slot.snapshot_id
@@ -213,7 +213,7 @@ class SnapshotCollectorScheduler:
             if sid in self._in_flight_slots or sid in self._completed_today:
                 continue
             # Already persisted
-            if repo.snapshot_exists(self.dataset_id, sid):
+            if await asyncio.to_thread(repo.snapshot_exists, self.dataset_id, sid):
                 self._completed_today.add(sid)
                 continue
 
@@ -231,12 +231,12 @@ class SnapshotCollectorScheduler:
         )
 
         try:
-            repo = create_snapshot_collector_repository()
-            if repo.snapshot_exists(self.dataset_id, slot.snapshot_id):
+            repo = await asyncio.to_thread(create_snapshot_collector_repository)
+            if await asyncio.to_thread(repo.snapshot_exists, self.dataset_id, slot.snapshot_id):
                 self._completed_today.add(slot.snapshot_id)
                 return
 
-            service = create_snapshot_collector_service(repo)
+            service = await asyncio.to_thread(create_snapshot_collector_service, repo)
             request = CollectorRunRequest(
                 dataset_id=self.dataset_id,
                 snapshot_type=slot.snapshot_type,
@@ -246,10 +246,16 @@ class SnapshotCollectorScheduler:
                 force=False,
             )
             try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(service.run_once, request),
-                    timeout=self.collect_timeout_seconds,
-                )
+                if hasattr(service, "arun_once"):
+                    result = await asyncio.wait_for(
+                        service.arun_once(request),
+                        timeout=self.collect_timeout_seconds,
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(service.run_once, request),
+                        timeout=self.collect_timeout_seconds,
+                    )
             except asyncio.TimeoutError:
                 # 超时：不标记 completed，grace 窗口内下轮自动重试；
                 # 结构化错误随状态暴露，供诊断与人工补采。

@@ -13,7 +13,9 @@ without mocking imports.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import math
 import time
 import uuid
@@ -259,7 +261,7 @@ class SnapshotCollectorService:
 
     # ── run_once ──────────────────────────────────────────────────────────
 
-    def run_once(self, request: CollectorRunRequest) -> CollectorRunResult:
+    async def arun_once(self, request: CollectorRunRequest) -> CollectorRunResult:
         """Execute a single collection run.
 
         Pipeline order:
@@ -318,12 +320,24 @@ class SnapshotCollectorService:
         providers_list = self._create_providers(trading_date=trading_date)
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
-        market_context = self._collect_fn(providers_list, codes, timeout_ms=timeout_ms)
+        if self._collect_fn is providers_module.collect_market_context:
+            market_context = await providers_module.collect_market_context_async(
+                providers_list, codes, timeout_ms=timeout_ms
+            )
+        elif inspect.iscoroutinefunction(self._collect_fn):
+            market_context = await self._collect_fn(
+                providers_list, codes, timeout_ms=timeout_ms
+            )
+        else:
+            market_context = await asyncio.to_thread(
+                self._collect_fn, providers_list, codes, timeout_ms=timeout_ms
+            )
         theme_snapshot: dict[str, Any] | None = None
         if self._theme_heat_service is not None:
             try:
-                theme_snapshot = self._theme_heat_service.get_snapshot(
-                    include_runtime_funds=False
+                theme_snapshot = await asyncio.to_thread(
+                    self._theme_heat_service.get_snapshot,
+                    include_runtime_funds=False,
                 )
                 market_context.sectors = [
                     factor_to_sector(factor, theme_snapshot)
@@ -354,7 +368,9 @@ class SnapshotCollectorService:
             source="quantboard_backend_collector",
             capture_mode=capture_mode,
         )
-        self._enrich_volume_ratios(bundle.get("stockRows") or [])
+        await asyncio.to_thread(
+            self._enrich_volume_ratios, bundle.get("stockRows") or []
+        )
 
         # 5 — Normalize
         norm_request = self._SnapshotIngestRequest(
@@ -568,6 +584,10 @@ class SnapshotCollectorService:
                 "captureMode": capture_mode,
             },
         )
+
+    def run_once(self, request: CollectorRunRequest) -> CollectorRunResult:
+        """同步入口（CLI/API/测试）：在独立事件循环中执行异步管线。"""
+        return asyncio.run(self.arun_once(request))
 
     # ── backfill_slots ────────────────────────────────────────────────────
 

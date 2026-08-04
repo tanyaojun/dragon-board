@@ -341,9 +341,18 @@ class HotlistService:
             await task
 
     async def _run(self) -> None:
+        backoff = 1.0
         while True:
-            await self.refresh_all()
-            await asyncio.sleep(self._refresh_interval_seconds)
+            try:
+                await self.refresh_all()
+                backoff = 1.0
+                await asyncio.sleep(self._refresh_interval_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("market hotlist refresh cycle failed; backing off %.0fs", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 300.0)
 
     def status(self) -> dict[str, Any]:
         return {

@@ -291,9 +291,18 @@ class MarketQuotesCache:
             return ak.stock_zh_a_spot_tx()
 
     async def _run(self) -> None:
+        backoff = 1.0
         while True:
-            await self.refresh()
-            await asyncio.sleep(self.refresh_interval_seconds)
+            try:
+                await self.refresh()
+                backoff = 1.0
+                await asyncio.sleep(self.refresh_interval_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("market quotes refresh cycle failed; backing off %.0fs", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 300.0)
 
 
 _quotes_cache: MarketQuotesCache | None = None

@@ -412,7 +412,8 @@ class TestSnapshotCollectorScheduler:
 
     # ── next-slot timer ──────────────────────────────────────────────────
 
-    def test_seconds_until_next_slot_on_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_slot_on_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
         slot = make_test_slot(
             timestamp_ms=_ts_ms(datetime.datetime(2026, 6, 15, 10, 0, 0, tzinfo=TZ_SHANGHAI))
         )
@@ -421,31 +422,34 @@ class TestSnapshotCollectorScheduler:
         _patch_dispatch(monkeypatch, [slot])
         scheduler = _scheduler(monkeypatch)
 
-        assert scheduler._seconds_until_next_slot() == pytest.approx(3600.0)
+        assert await scheduler._seconds_until_next_slot() == pytest.approx(3600.0)
 
-    def test_seconds_until_next_slot_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_slot_non_trading_day(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_clock(monkeypatch, now_ms=1_000_000, trading_date=None)
         scheduler = _scheduler(monkeypatch)
 
-        assert scheduler._seconds_until_next_slot() == 1800.0
+        assert await scheduler._seconds_until_next_slot() == 1800.0
 
-    def test_seconds_until_next_slot_all_done_returns_idle(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_slot_all_done_returns_idle(self, monkeypatch: pytest.MonkeyPatch) -> None:
         slot = make_test_slot()
         _patch_clock(monkeypatch, now_ms=slot.timestamp_ms, trading_date="2026-06-15")
         _patch_dispatch(monkeypatch, [slot])
         scheduler = _scheduler(monkeypatch)
         scheduler._completed_today.add(slot.snapshot_id)
 
-        assert scheduler._seconds_until_next_slot() == 1800.0
+        assert await scheduler._seconds_until_next_slot() == 1800.0
 
-    def test_seconds_until_next_slot_skips_in_flight(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_slot_skips_in_flight(self, monkeypatch: pytest.MonkeyPatch) -> None:
         slot = make_test_slot()
         _patch_clock(monkeypatch, now_ms=slot.timestamp_ms - 1000, trading_date="2026-06-15")
         _patch_dispatch(monkeypatch, [slot])
         scheduler = _scheduler(monkeypatch)
         scheduler._in_flight_slots.add(slot.snapshot_id)
 
-        assert scheduler._seconds_until_next_slot() == 1800.0
+        assert await scheduler._seconds_until_next_slot() == 1800.0
 
     # ── due-slot dispatch ────────────────────────────────────────────────
 

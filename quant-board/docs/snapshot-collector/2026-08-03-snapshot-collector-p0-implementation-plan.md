@@ -963,6 +963,50 @@ def test_builder_passes_quote_extra_fields_through():
 > - 测试：`tests/test_snapshot_field_backfill.py` 12 用例（主板/创业板/科创板/北交所/ST 涨跌停派生、
 >   占位零值不视为证据、不覆盖已有值、dry-run 不写库、apply 备份+更新+审计）。
 
+---
+
+## 附加任务：采集器停摆根因重构（2026-08-04 起，第 1-3 层已完成）
+
+背景：2026-08-04 盘中 8001 运行 1-2 小时后停摆，15:00/15:30 槽位因进程内网关冷缓存
+（`in-process hotlist cache not ready`）被 blocked；启动器无法自启。根因见
+`2026-08-03-snapshot-collector-optimization-plan.md`。
+
+### 第 1 层（数据源层，已完成）
+
+- providers 增加 `acollect` 异步采集：进程内直连 market_proxy 真实服务
+  （`get_hotlist_service().get()` / `get_limitup_service().get_ths_pools()`，
+  自带 缓存→Redis→single-flight 刷新→last-good），不再依赖"60s 新鲜度 vs 600s 刷新"
+  的时序巧合；`TencentBasicQuoteProvider` 直读共享行情缓存。
+- 新增 `collect_market_context_async` 异步 orchestrator。
+- `SnapshotCollectorService.arun_once`（异步主链）；`run_once` 保留为同步包装
+  （`asyncio.run`），CLI/API/测试兼容。
+
+### 第 2 层（生命周期层，已完成）
+
+- 锁获取改为退避重试（10 次 × 5s，配合 PID 存活检测与 TTL 过期），不再一碰锁冲突就硬失败。
+- 锁续期失败改为连续 3 次才停调度器（每次失败记录并重试），避免单次抖动永久停摆。
+- `HotlistService._run` / `MarketQuotesCache._run` 循环加异常兜底与指数退避自愈。
+- `/api/health` 暴露 `background`（hotlist/quotes/fund/limitup 各任务状态）。
+
+### 第 3 层（调度层，已完成）
+
+- `_tracked_collect` 直接 `await service.arun_once(...)`（采集在 collector 事件循环内异步执行，
+  不再 to_thread 堆线程）。
+- 同步 Mongo（`snapshot_exists`/repo 创建）与交易日历（bridge HTTP）调用全部移出事件循环
+  （`asyncio.to_thread`），避免 loop 被阻塞导致锁 TTL 过期与后台任务停摆。
+
+### 第 4 层（兜底补采，已完成基础版）
+
+- `collector_main` 新增 `_catchup_missing_slots` 后台任务：每 15 分钟检查当日
+  "错过 grace 且未入库"的槽位并自动补采（当日数据），每个槽位当日只尝试一次；
+  结果写入 `snapshot_collector_runs` 并打日志。
+- 飞书告警暂缓：后端无现成 sender，先以 run 记录 + launcher 落盘日志暴露；
+  后续可接 proxy notifications 或独立 Feishu 客户端。
+
+验证：collector 全套件（排除两个既有失败文件）473 passed；新增
+`test_snapshot_collector_async_pipeline.py` 4 用例；TestClient 冒烟验证新 lifespan
+与 background 健康状态。待 8001 重启后用新代码观察下一个交易日。
+
 **Files:**
 - Modify: `quant-board/docs/architecture.md`、`quant-board/docs/api-cli.md`、`quant-board/docs/AI_COLLABORATION.md`
 - Modify: `quant-board/docs/snapshot-collector/2026-08-03-snapshot-collector-optimization-plan.md`（状态更新）

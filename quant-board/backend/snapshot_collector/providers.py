@@ -15,6 +15,7 @@ collections and never generate ``snapshot_id`` values.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -99,6 +100,12 @@ def _get_default_gateway() -> Any:
     if _DEFAULT_GATEWAY is None:
         _DEFAULT_GATEWAY = HttpMarketDataGateway()
     return _DEFAULT_GATEWAY
+
+
+def _is_in_process_gateway(gateway: Any) -> bool:
+    from .gateway import InProcessMarketDataGateway
+
+    return isinstance(gateway, InProcessMarketDataGateway)
 
 
 def _get_collector_thread_pool() -> ThreadPoolExecutor:
@@ -402,6 +409,52 @@ class TencentBasicQuoteProvider(_BatchedProxyProvider):
             row["volumeRatio"] = volume_ratio
         return row
 
+    async def acollect(
+        self,
+        codes: list[str],
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[dict[str, dict[str, Any]], SourceHealth]:
+        """进程内直读共享行情缓存（collector_main 内由 MarketQuotesCache 常驻刷新）。"""
+        if not _is_in_process_gateway(self._gateway):
+            return await asyncio.to_thread(self.collect, codes, timeout_ms=timeout_ms)
+
+        from backend.market_proxy.quotes import get_market_quotes_cache
+
+        started = time.monotonic()
+        requested = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
+        cache = get_market_quotes_cache()
+        status = cache.status()
+        if status["rowCount"] == 0:
+            return {}, SourceHealth(
+                source=self.source,
+                ok=False,
+                latency_ms=int((time.monotonic() - started) * 1000),
+                row_count=0,
+                error=status["lastError"] or "cache_not_ready",
+                captured_at=_iso_now(),
+                requested_count=len(requested),
+                returned_count=0,
+                coverage_ratio=0.0,
+            )
+        body = cache.get_diff(requested)
+        rows: dict[str, dict[str, Any]] = {}
+        for item in _extract_proxy_quote_rows(body):
+            row = self._normalize_row(item)
+            if row is not None:
+                rows[row["code"]] = row
+        returned = sum(code in rows for code in requested)
+        return rows, SourceHealth(
+            source=self.source,
+            ok=True,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            row_count=len(rows),
+            captured_at=_iso_now(),
+            requested_count=len(requested),
+            returned_count=returned,
+            coverage_ratio=round(returned / len(requested), 4) if requested else 1.0,
+        )
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # StartupBundleStockProvider
@@ -481,6 +534,14 @@ class StartupBundleStockProvider:
     def _cache_key(self) -> str:
         trading_date = self._trading_date or datetime.now().strftime("%Y-%m-%d")
         return f"{self._cache_key_prefix}:{trading_date}"
+
+    async def acollect(
+        self,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        """异步采集 startup bundle（proxy 本地缓存路由，始终 HTTP）。"""
+        return await asyncio.to_thread(self.collect, timeout_ms=timeout_ms)
 
     def _health(
         self,
@@ -706,6 +767,73 @@ class ProxyMergedHotlistProvider:
             return self._gateway.post_json(url, timeout_s, payload)
         return self._gateway.get_json(url, timeout_s)
 
+    async def acollect(
+        self,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        """进程内直连热榜服务真实 get()：缓存→Redis→single-flight→last-good。"""
+        if not _is_in_process_gateway(self._gateway):
+            return await asyncio.to_thread(self.collect, timeout_ms=timeout_ms)
+
+        from backend.market_proxy.hotlists import get_hotlist_service
+
+        service = get_hotlist_service()
+        start = time.monotonic()
+        stock_map: dict[str, dict[str, Any]] = {}
+        platform_totals: dict[str, int] = {}
+        failed_platforms: list[str] = []
+        errors: list[str] = []
+
+        async def fetch_one(platform: str) -> None:
+            try:
+                payload = await service.get(platform)
+            except Exception as exc:
+                failed_platforms.append(platform)
+                errors.append(f"{platform}: {exc}")
+                platform_totals[platform] = 0
+                return
+            if payload is None or (
+                isinstance(payload, dict) and payload.get("ok") is False
+            ):
+                failed_platforms.append(platform)
+                errors.append(
+                    f"{platform}: {str(payload.get('message') or payload.get('error') or 'degraded')[:120]}"
+                    if isinstance(payload, dict)
+                    else f"{platform}: empty payload"
+                )
+                platform_totals[platform] = 0
+                return
+            try:
+                rows = self._normalize_platform(platform, payload)
+            except Exception as exc:
+                failed_platforms.append(platform)
+                errors.append(f"{platform}: {exc}")
+                platform_totals[platform] = 0
+                return
+            platform_totals[platform] = len(rows)
+            self._merge_platform_rows(stock_map, platform, rows)
+
+        await asyncio.gather(*(fetch_one(platform) for platform in _HOTLIST_PLATFORMS))
+        rows = self._rank_rows(stock_map, platform_totals)
+        completed_at = _iso_now()
+        ok = bool(rows) and len(failed_platforms) < len(_HOTLIST_PLATFORMS)
+        return rows, SourceHealth(
+            source="merged_hotlist_proxy",
+            ok=ok,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            row_count=len(rows),
+            error="; ".join(errors),
+            captured_at=completed_at,
+            requested_count=sum(platform_totals.values()),
+            returned_count=len(rows),
+            coverage_ratio=round(len(rows) / sum(platform_totals.values()), 4)
+            if sum(platform_totals.values())
+            else 0.0,
+            failed_batches=failed_platforms,
+            details={"rankProvenance": _rank_provenance(platform_totals)},
+        )
+
     def _merge_platform_rows(
         self,
         stock_map: dict[str, dict[str, Any]],
@@ -902,6 +1030,39 @@ class ProxyLimitUpProvider:
     def _date_param(self) -> str:
         digits = "".join(ch for ch in str(self._trading_date or "") if ch.isdigit())
         return digits if len(digits) == 8 else ""
+
+    async def acollect(
+        self,
+        codes: list[str] | None = None,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        """进程内直连涨停池服务真实 get_ths_pools()（含拉取，不依赖预缓存）。"""
+        if not _is_in_process_gateway(self._gateway):
+            return await asyncio.to_thread(self.collect, codes, timeout_ms=timeout_ms)
+
+        from backend.market_proxy.limitup import get_limitup_service
+
+        start = time.monotonic()
+        requested = {_normalize_stock_code(code) for code in (codes or [])}
+        requested.discard("")
+        try:
+            date = self._date_param()
+            body = await get_limitup_service().get_ths_pools(date or None)
+            degraded_error = _proxy_degraded_error(body)
+            rows = self._normalize(body, requested_codes=requested)
+            ok = not degraded_error
+            return rows, self._health(
+                ok,
+                start,
+                row_count=len(rows),
+                error=degraded_error,
+                requested_count=len(requested),
+                returned_count=len(rows),
+                coverage_ratio=round(len(rows) / len(requested), 4) if requested else 1.0,
+            )
+        except Exception as exc:
+            return [], self._health(False, start, error=str(exc), requested_count=len(requested))
 
     def _health(
         self,
@@ -1267,6 +1428,21 @@ class BridgeQuoteProvider:
             )
             return {"quotes": [], "depth": [], "money_flow": [], "market_meta": {}}, health
 
+    async def acollect(
+        self,
+        codes: list[str] | None = None,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+        use_pool: bool = False,
+    ) -> tuple[dict[str, Any], SourceHealth]:
+        """异步采集 bridge 行情（HTTP，独立进程）。"""
+        return await asyncio.to_thread(
+            self.collect,
+            codes,
+            timeout_ms=timeout_ms,
+            use_pool=use_pool,
+        )
+
 
 def _normalize_quote_list(raw: Any) -> list[dict[str, Any]]:
     """Coerce raw quotes to a list of dicts with known keys."""
@@ -1520,6 +1696,59 @@ class ThemeMappingProvider:
         except Exception as exc:
             return [], str(exc)
 
+    async def acollect(
+        self,
+        codes: list[str],
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[dict[str, list[str]], SourceHealth]:
+        """异步逐 code 题材映射（信号量限制并发，不占用固定线程池）。"""
+        started = time.monotonic()
+        if not codes:
+            return {}, SourceHealth(
+                source="theme_mapping",
+                ok=True,
+                latency_ms=0,
+                row_count=0,
+                captured_at=_iso_now(),
+            )
+        sem = asyncio.Semaphore(8)
+
+        async def map_one(code: Any) -> tuple[str, list[str], str | None]:
+            key = str(code).strip()
+            async with sem:
+                themes, error = await asyncio.to_thread(self._map_one, key)
+            return key, themes, error
+
+        results = await asyncio.gather(
+            *(map_one(code) for code in codes),
+            return_exceptions=True,
+        )
+        result: dict[str, list[str]] = {}
+        failed_count = 0
+        first_error = ""
+        for item in results:
+            if isinstance(item, Exception):
+                failed_count += 1
+                if not first_error:
+                    first_error = str(item)
+                continue
+            key, themes, error = item
+            result[key] = themes
+            if error:
+                failed_count += 1
+                if not first_error:
+                    first_error = error
+        all_failed = failed_count == len(codes) and len(codes) > 0
+        return result, SourceHealth(
+            source="theme_mapping",
+            ok=not all_failed,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            row_count=len(result) - failed_count,
+            error=first_error if all_failed else "",
+            captured_at=_iso_now(),
+        )
+
 
 class MarketFundCacheProvider:
     """Read last-good market funds without issuing upstream requests."""
@@ -1557,6 +1786,14 @@ class MarketFundCacheProvider:
             captured_at=_iso_now(), requested_count=requested_count, returned_count=returned,
             coverage_ratio=round(returned / requested_count, 4) if requested_count else 1.0, stale=True,
         )
+
+    async def acollect(
+        self,
+        codes: list[str],
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[list[dict[str, Any]], SourceHealth]:
+        return await asyncio.to_thread(self.collect, codes, timeout_ms=timeout_ms)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1653,6 +1890,89 @@ def collect_market_context(
 
         except Exception as exc:
             # A provider raised unexpectedly — record it as a failed health
+            health = SourceHealth(
+                source=getattr(provider, "__class__", type(provider)).__name__,
+                ok=False,
+                error=str(exc),
+                captured_at=_iso_now(),
+            )
+            ctx.source_health.append(health)
+
+    return ctx
+
+
+async def collect_market_context_async(
+    providers: list[Any],
+    codes: list[str],
+    *,
+    timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+) -> MarketDataContext:
+    """异步采集：await 各 provider 的 acollect（进程内直连真实服务）。"""
+    ctx = MarketDataContext()
+    active_codes = [str(code).strip() for code in codes if str(code).strip()]
+
+    for provider in providers:
+        try:
+            if isinstance(provider, StartupBundleStockProvider):
+                rows, health = await provider.acollect(timeout_ms=timeout_ms)
+                ctx.source_health.append(health)
+                if rows:
+                    ctx.stocks = rows
+                    ctx.snapshot_context = dict(provider.snapshot_context)
+                    active_codes = [
+                        str(row.get("code") or "").strip()
+                        for row in rows
+                        if isinstance(row, dict) and str(row.get("code") or "").strip()
+                    ]
+
+            elif isinstance(provider, (ProxyMergedHotlistProvider, ProxyHotlistProvider)):
+                if ctx.stocks:
+                    continue
+                rows, health = await provider.acollect(timeout_ms=timeout_ms)
+                ctx.stocks.extend(rows)
+                ctx.source_health.append(health)
+                if not active_codes:
+                    active_codes = [
+                        str(row.get("code") or "").strip()
+                        for row in rows
+                        if isinstance(row, dict) and str(row.get("code") or "").strip()
+                    ]
+
+            elif isinstance(provider, TencentBasicQuoteProvider):
+                rows, health = await provider.acollect(active_codes, timeout_ms=timeout_ms)
+                _merge_rows_by_code(ctx.quotes, list(rows.values()))
+                ctx.source_health.append(health)
+
+            elif isinstance(provider, BridgeQuoteProvider):
+                data, health = await provider.acollect(active_codes, timeout_ms=timeout_ms)
+                if isinstance(data, dict):
+                    _merge_rows_by_code(ctx.quotes, data.get("quotes") or [])
+                    ctx.depth.extend(data.get("depth") or [])
+                    if data.get("market_meta"):
+                        ctx.market_meta.update(data["market_meta"])
+                ctx.source_health.append(health)
+
+            elif isinstance(provider, MarketFundCacheProvider):
+                rows, health = await provider.acollect(active_codes, timeout_ms=timeout_ms)
+                ctx.money_flow.extend(rows)
+                ctx.source_health.append(health)
+
+            elif isinstance(provider, ThemeMappingProvider):
+                themes, health = await provider.acollect(active_codes, timeout_ms=timeout_ms)
+                if isinstance(themes, dict):
+                    ctx.themes.update(themes)
+                ctx.source_health.append(health)
+
+            elif isinstance(provider, ProxyLimitUpProvider):
+                rows, health = await provider.acollect(active_codes, timeout_ms=timeout_ms)
+                for row in rows:
+                    if isinstance(row, dict):
+                        code = str(row.get("code") or "").strip()
+                        if code:
+                            ctx.limit_up[code] = row
+                ctx.source_health.append(health)
+
+        except Exception as exc:
             health = SourceHealth(
                 source=getattr(provider, "__class__", type(provider)).__name__,
                 ok=False,
