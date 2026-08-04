@@ -52,28 +52,13 @@ def test_inprocess_gateway_quotes_cold_cache_degrades(
     assert body["errorCode"] == "fetch_timeout"
 
 
-def test_inprocess_gateway_hotlist_cold_cache_degrades(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeHotlistService:
-        _cache: dict = {}
-        _ttl_ms = 60000
-
-    monkeypatch.setattr(
-        "backend.market_proxy.hotlists.get_hotlist_service",
-        lambda: FakeHotlistService(),
-    )
-    gateway = InProcessMarketDataGateway()
-    body = gateway.post_json("http://127.0.0.1:1/api/eastmoney/hot", 5.0, {})
-    assert body["ok"] is False
-    assert body["degraded"] is True
-    assert body["errorCode"] == "cache_not_ready"
-
-
 def test_inprocess_gateway_unsupported_path_raises() -> None:
     gateway = InProcessMarketDataGateway()
     with pytest.raises(RuntimeError):
         gateway.get_json("http://127.0.0.1:1/api/unknown", 5.0)
+    with pytest.raises(RuntimeError):
+        # 热榜/涨停池已由异步 acollect 直连真实服务，不再走网关缓存
+        gateway.post_json("http://127.0.0.1:1/api/eastmoney/hot", 5.0, {})
 
 
 def test_collector_http_client_disables_env_proxy() -> None:

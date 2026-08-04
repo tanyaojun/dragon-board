@@ -980,6 +980,9 @@ def test_builder_passes_quote_extra_fields_through():
 - 新增 `collect_market_context_async` 异步 orchestrator。
 - `SnapshotCollectorService.arun_once`（异步主链）；`run_once` 保留为同步包装
   （`asyncio.run`），CLI/API/测试兼容。
+- **补充（2026-08-04）**：`InProcessMarketDataGateway` 中热榜/涨停池的被动缓存读取
+  （60s 新鲜度时序赌博）已删除——热榜/涨停池统一走 acollect 直连真实服务，
+  网关只保留行情缓存直读。
 
 ### 第 2 层（生命周期层，已完成）
 
@@ -994,18 +997,25 @@ def test_builder_passes_quote_extra_fields_through():
   不再 to_thread 堆线程）。
 - 同步 Mongo（`snapshot_exists`/repo 创建）与交易日历（bridge HTTP）调用全部移出事件循环
   （`asyncio.to_thread`），避免 loop 被阻塞导致锁 TTL 过期与后台任务停摆。
+- **补充（2026-08-04）**：槽位按同一时刻分组，`arun_once_multi` **只采集一次上下文、
+  按类型派生多个快照**（消除 15:30 half_hour+daily 双链风暴）；全局信号量 1 保证不同
+  时刻的槽位串行执行，不再并发。
 
-### 第 4 层（兜底补采，已完成基础版）
+### 第 4 层（兜底补采 + Launcher 自愈，已完成）
 
 - `collector_main` 新增 `_catchup_missing_slots` 后台任务：每 15 分钟检查当日
   "错过 grace 且未入库"的槽位并自动补采（当日数据），每个槽位当日只尝试一次；
   结果写入 `snapshot_collector_runs` 并打日志。
 - 飞书告警暂缓：后端无现成 sender，先以 run 记录 + launcher 落盘日志暴露；
   后续可接 proxy notifications 或独立 Feishu 客户端。
+- **补充（2026-08-04）**：DragonBoardLauncher 增加核心服务健康失败自动重启
+  （`EnsureHealthy`）：8001 端口关闭→自动启动；端口被占用但探针不健康→先停再启；
+  60s 冷却 + 连续 3 次失败后暂停，避免重启风暴。新 exe 已发布。
 
 验证：collector 全套件（排除两个既有失败文件）473 passed；新增
-`test_snapshot_collector_async_pipeline.py` 4 用例；TestClient 冒烟验证新 lifespan
-与 background 健康状态。待 8001 重启后用新代码观察下一个交易日。
+`test_snapshot_collector_async_pipeline.py`（含 `arun_once_multi` 一次采集多类型派生）
+与 gateway 死代码清理测试；`dotnet build` 0 警告 0 错误，新 exe 已发布。
+待 8001 重启后用新代码观察下一个交易日。
 
 **Files:**
 - Modify: `quant-board/docs/architecture.md`、`quant-board/docs/api-cli.md`、`quant-board/docs/AI_COLLABORATION.md`

@@ -11,8 +11,6 @@ self-loop).
 from __future__ import annotations
 
 import json
-import re
-import time
 from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
 
@@ -66,23 +64,6 @@ def _degraded(error_code: str, message: str) -> dict[str, Any]:
     }
 
 
-def _read_service_cache(service: Any, key: str, ttl_ms: int) -> Any | None:
-    """Synchronously read a market_proxy service's process-local last-good cache.
-
-    Returns the cached payload when fresh, else ``None`` (cold cache).  This
-    lets the in-process gateway avoid awaiting async service singletons from
-    collector worker threads.
-    """
-    cache = getattr(service, "_cache", None)
-    if isinstance(cache, dict):
-        entry = cache.get(key)
-        if isinstance(entry, dict):
-            fetched_at = int(entry.get("fetched_at_ms") or 0)
-            if fetched_at > 0 and int(time.time() * 1000) - fetched_at < ttl_ms:
-                return entry.get("payload")
-    return None
-
-
 class InProcessMarketDataGateway:
     """Direct in-process access to market_proxy service singletons.
 
@@ -110,52 +91,11 @@ class InProcessMarketDataGateway:
             codes = (query.get("codes") or [""])[0].split(",")
             return cache.get_diff(codes)
 
-        if path == "/api/limitup/ths/pools":
-            from backend.market_proxy.limitup import get_limitup_service
-
-            date = (query.get("date") or [""])[0]
-            service = get_limitup_service()
-            payload = _read_service_cache(
-                service, f"ths-pools:{date}", ttl_ms=int(getattr(service, "_ttl_ms", 30000))
-            )
-            if payload is None:
-                return {
-                    "ok": False,
-                    "degraded": True,
-                    "date": date,
-                    "source": "limitup-ths-pools",
-                    "errorCode": "cache_not_ready",
-                    "message": "in-process limitup cache not ready",
-                    "pools": {},
-                    "errors": [],
-                }
-            return payload
-
         raise RuntimeError(f"in-process gateway does not support GET {path}")
 
     def post_json(self, url: str, timeout_s: float, payload: Any | None = None) -> Any:
         del timeout_s, payload
-        path = urlparse(url).path
-        match = re.fullmatch(r"/api/([a-z0-9]+)/hot", path)
-        if match:
-            platform = match.group(1)
-            from backend.market_proxy.hotlists import get_hotlist_service
-
-            service = get_hotlist_service()
-            entry = _read_service_cache(
-                service, platform, ttl_ms=int(getattr(service, "_ttl_ms", 60000))
-            )
-            if entry is None:
-                return {
-                    "ok": False,
-                    "degraded": True,
-                    "source": platform,
-                    "errorCode": "cache_not_ready",
-                    "message": "in-process hotlist cache not ready",
-                    "data": [],
-                }
-            return entry
-        raise RuntimeError(f"in-process gateway does not support POST {path}")
+        raise RuntimeError(f"in-process gateway does not support POST {urlparse(url).path}")
 
 
 def create_gateway(in_process: bool = False) -> MarketDataGateway:

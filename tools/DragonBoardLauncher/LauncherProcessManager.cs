@@ -17,6 +17,11 @@ internal sealed class LauncherProcessManager
     private readonly IReadOnlyDictionary<string, ManagedService> _services;
     private readonly Action<string> _log;
     private readonly HashSet<string> _starting = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTime> _lastAutoRestart = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _autoRestartFailures = new(StringComparer.Ordinal);
+    private readonly object _autoRestartSync = new();
+    private const int AutoRestartCooldownSeconds = 60;
+    private const int AutoRestartMaxConsecutive = 3;
     private Process? _mongoExpressProcess;
     private Process? _redisCommanderProcess;
 
@@ -99,6 +104,44 @@ internal sealed class LauncherProcessManager
         StopService(_services["proxy"]);
         StopService(_services["redis"]);
         StopService(_services["mongo"]);
+    }
+
+    /// <summary>
+    /// 核心服务健康失败自动重启：端口关闭→启动；端口被占用但探针不健康→先停再启。
+    /// 60 秒冷却 + 连续 3 次失败后暂停，避免重启风暴；失败计数在恢复健康后清零。
+    /// </summary>
+    public void EnsureHealthy(string key, Func<bool> isHealthy)
+    {
+        if (!_services.TryGetValue(key, out var service)) return;
+        lock (_autoRestartSync)
+        {
+            var now = DateTime.UtcNow;
+            if (_lastAutoRestart.TryGetValue(key, out var last) &&
+                (now - last).TotalSeconds < AutoRestartCooldownSeconds)
+                return;
+            if (_autoRestartFailures.TryGetValue(key, out var failures) &&
+                failures >= AutoRestartMaxConsecutive)
+                return;
+
+            if (isHealthy())
+            {
+                _autoRestartFailures[key] = 0;
+                return;
+            }
+
+            _lastAutoRestart[key] = now;
+            var attempt = _autoRestartFailures.GetValueOrDefault(key) + 1;
+            _autoRestartFailures[key] = attempt;
+            var portOpen = LauncherPorts.IsPortOpen(service.Port);
+            if (portOpen)
+            {
+                _log($"{service.Name} 健康检查失败但端口 {service.Port} 仍被占用，先停止再重启。");
+                StopService(service);
+                Thread.Sleep(800);
+            }
+            StartService(service);
+            _log($"{service.Name} 健康失败后已自动重启（第 {attempt}/{AutoRestartMaxConsecutive} 次）。");
+        }
     }
 
     public void StartService(ManagedService service)

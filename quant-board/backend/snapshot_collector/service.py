@@ -261,62 +261,11 @@ class SnapshotCollectorService:
 
     # ── run_once ──────────────────────────────────────────────────────────
 
-    async def arun_once(self, request: CollectorRunRequest) -> CollectorRunResult:
-        """Execute a single collection run.
-
-        Pipeline order:
-        1. Create ``SnapshotSlot`` from request parameters
-        2. If not dry_run and not force, check dedup via repository
-        3. Collect provider data into ``MarketDataContext``
-        4. Build ingest payload dict
-        5. Normalize payload through normalizer
-        6. Evaluate quality gate
-        7. Record and return blocked when blocked
-        8. Record and return dry-run when dry_run
-        9. Save through repository
-        10. Record and return completed
-        """
-        run_id = _generate_run_id()
-        dataset_id = request.dataset_id
-        snapshot_type = request.snapshot_type
-        trading_date = request.trading_date
-        slot_time = request.slot_time
-        started_at = datetime.now(timezone.utc).isoformat()
-
-        # 1 — Create SnapshotSlot
-        slot_timestamp = _slot_timestamp_ms(snapshot_type, trading_date, slot_time)
-        slot = SnapshotSlot(
-            snapshot_type=snapshot_type,
-            trading_date=trading_date,
-            slot_time=slot_time,
-            timestamp_ms=slot_timestamp,
-        )
-        snapshot_id = slot.snapshot_id
-
-        # 2 — Dedup check (skip when dry_run or force)
-        if not request.dry_run and not request.force:
-            if self._repo.snapshot_exists(dataset_id, snapshot_id):
-                run_doc = {
-                    "runId": run_id,
-                    "datasetId": dataset_id,
-                    "snapshotId": snapshot_id,
-                    "snapshotType": snapshot_type,
-                    "tradingDate": trading_date,
-                    "slotTime": slot_time,
-                    "status": "deduped",
-                    "deduped": True,
-                    "dryRun": False,
-                }
-                _record_run(self._repo, run_doc)
-                return CollectorRunResult(
-                    status="deduped",
-                    snapshot_id=snapshot_id,
-                    deduped=True,
-                    run_id=run_id,
-                    message="Snapshot already exists",
-                )
-
-        # 3 — Collect providers
+    async def _collect_context(
+        self,
+        trading_date: str,
+    ) -> tuple[MarketDataContext, dict[str, Any] | None]:
+        """采集一次原始上下文（八榜/行情/资金/涨停池/题材/主题热度）。"""
         providers_list = self._create_providers(trading_date=trading_date)
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
@@ -344,12 +293,37 @@ class SnapshotCollectorService:
                     for factor in theme_snapshot.get("factors", [])
                     if isinstance(factor, dict)
                 ]
-                market_context.source_health.extend(theme_snapshot_source_health(theme_snapshot))
+                market_context.source_health.extend(
+                    theme_snapshot_source_health(theme_snapshot)
+                )
             except ThemeHeatUnavailable as error:
                 market_context.sectors = []
                 market_context.source_health.append(
                     SourceHealth(source="theme_heat", ok=False, error=error.code)
                 )
+        return market_context, theme_snapshot
+
+    async def _persist_one(
+        self,
+        request: CollectorRunRequest,
+        market_context: MarketDataContext,
+        theme_snapshot: dict[str, Any] | None,
+    ) -> CollectorRunResult:
+        """把已采集的上下文按单个快照类型派生并入库。"""
+        run_id = _generate_run_id()
+        dataset_id = request.dataset_id
+        snapshot_type = request.snapshot_type
+        trading_date = request.trading_date
+        slot_time = request.slot_time
+        started_at = datetime.now(timezone.utc).isoformat()
+        slot_timestamp = _slot_timestamp_ms(snapshot_type, trading_date, slot_time)
+        slot = SnapshotSlot(
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            slot_time=slot_time,
+            timestamp_ms=slot_timestamp,
+        )
+        snapshot_id = slot.snapshot_id
         source_health = _source_health_dicts(market_context)
         theme_audit = _theme_audit_fields(theme_snapshot)
         actual_ts = _actual_timestamp_ms()
@@ -360,7 +334,6 @@ class SnapshotCollectorService:
             grace_minutes=grace_minutes,
         )
 
-        # 4 — Build ingest payload
         bundle = builder_module.build_ingest_payload(
             slot,
             market_context,
@@ -372,7 +345,6 @@ class SnapshotCollectorService:
             self._enrich_volume_ratios, bundle.get("stockRows") or []
         )
 
-        # 5 — Normalize
         norm_request = self._SnapshotIngestRequest(
             dataset_id=dataset_id,
             bundle=bundle,
@@ -381,7 +353,6 @@ class SnapshotCollectorService:
         try:
             normalized = self._normalize_fn(norm_request)
         except Exception as exc:
-            # Normalization failure is recorded as blocked
             run_doc = {
                 "runId": run_id,
                 "datasetId": dataset_id,
@@ -417,10 +388,7 @@ class SnapshotCollectorService:
             )
 
         dataset_model, records, frames, stock_rows, sector_rows, idempotency_key = normalized
-
-        # 6 — Evaluate quality
         allow_live = self._allow_live_dataset()
-
         quality = self._quality_fn(
             stock_rows=stock_rows,
             frames=frames,
@@ -442,8 +410,6 @@ class SnapshotCollectorService:
                 flags = list(existing_flags) if isinstance(existing_flags, list) else []
                 item["qualityFlags"] = list(dict.fromkeys([*flags, *diagnostic_flags]))
 
-        # 7 — 没有任何可保存的原始热榜记录时不写入（fail-visible：全源无数据才报告无数据）。
-        # 其余质量发现（缺字段/低覆盖率/部分来源失败等）已在上方打标，照常落库，不得阻断。
         if not stock_rows:
             run_doc = {
                 "runId": run_id,
@@ -476,7 +442,6 @@ class SnapshotCollectorService:
                 message=f"Quality gate blocked: {quality.blocking_issues}",
             )
 
-        # 8 — Dry run
         if request.dry_run:
             run_doc = {
                 "runId": run_id,
@@ -509,7 +474,6 @@ class SnapshotCollectorService:
                 message="Dry-run completed successfully",
             )
 
-        # 9 — Save through repository
         dataset_dict = {
             "id": dataset_id,
             "name": dataset_id,
@@ -530,22 +494,16 @@ class SnapshotCollectorService:
             sector_rows,
             idempotency_key=idempotency_key,
         )
-
-        # 10 — Record and return
         deduped = bool(save_result.get("deduped", False))
-        if deduped:
-            run_status = "deduped"
-        else:
-            run_status = "completed"
-            if self._cache_invalidate_fn is not None:
-                self._cache_invalidate_fn(
-                    dataset_id=dataset_id,
-                    records=records,
-                    frames=frames,
-                    stock_rows=stock_rows,
-                    sector_rows=sector_rows,
-                )
-
+        run_status = "deduped" if deduped else "completed"
+        if run_status == "completed" and self._cache_invalidate_fn is not None:
+            self._cache_invalidate_fn(
+                dataset_id=dataset_id,
+                records=records,
+                frames=frames,
+                stock_rows=stock_rows,
+                sector_rows=sector_rows,
+            )
         run_doc = {
             "runId": run_id,
             "datasetId": dataset_id,
@@ -568,7 +526,6 @@ class SnapshotCollectorService:
             **theme_audit,
         }
         _record_run(self._repo, run_doc)
-
         return CollectorRunResult(
             status=run_status,
             snapshot_id=snapshot_id,
@@ -584,6 +541,92 @@ class SnapshotCollectorService:
                 "captureMode": capture_mode,
             },
         )
+
+    async def arun_once(self, request: CollectorRunRequest) -> CollectorRunResult:
+        """执行单次采集（采集一次上下文，派生一个快照）。"""
+        run_id = _generate_run_id()
+        snapshot_id = (
+            f"{request.snapshot_type}:{request.trading_date}:{request.slot_time}"
+        )
+        if not request.dry_run and not request.force:
+            if self._repo.snapshot_exists(request.dataset_id, snapshot_id):
+                _record_run(
+                    self._repo,
+                    {
+                        "runId": run_id,
+                        "datasetId": request.dataset_id,
+                        "snapshotId": snapshot_id,
+                        "snapshotType": request.snapshot_type,
+                        "tradingDate": request.trading_date,
+                        "slotTime": request.slot_time,
+                        "status": "deduped",
+                        "deduped": True,
+                        "dryRun": False,
+                    },
+                )
+                return CollectorRunResult(
+                    status="deduped",
+                    snapshot_id=snapshot_id,
+                    deduped=True,
+                    run_id=run_id,
+                    message="Snapshot already exists",
+                )
+        market_context, theme_snapshot = await self._collect_context(
+            request.trading_date
+        )
+        return await self._persist_one(request, market_context, theme_snapshot)
+
+    async def arun_once_multi(
+        self,
+        requests: list[CollectorRunRequest],
+    ) -> list[CollectorRunResult]:
+        """同一时点多个快照类型：只采集一次上下文，按类型各自派生入库。"""
+        results: list[CollectorRunResult] = []
+        active: list[CollectorRunRequest] = []
+        for request in requests:
+            run_id = _generate_run_id()
+            snapshot_id = (
+                f"{request.snapshot_type}:{request.trading_date}:{request.slot_time}"
+            )
+            if not request.dry_run and not request.force and self._repo.snapshot_exists(
+                request.dataset_id, snapshot_id
+            ):
+                _record_run(
+                    self._repo,
+                    {
+                        "runId": run_id,
+                        "datasetId": request.dataset_id,
+                        "snapshotId": snapshot_id,
+                        "snapshotType": request.snapshot_type,
+                        "tradingDate": request.trading_date,
+                        "slotTime": request.slot_time,
+                        "status": "deduped",
+                        "deduped": True,
+                        "dryRun": False,
+                    },
+                )
+                results.append(
+                    CollectorRunResult(
+                        status="deduped",
+                        snapshot_id=snapshot_id,
+                        deduped=True,
+                        run_id=run_id,
+                        message="Snapshot already exists",
+                    )
+                )
+            else:
+                active.append(request)
+        if not active:
+            return results
+
+        market_context, theme_snapshot = await self._collect_context(
+            active[0].trading_date
+        )
+        for request in active:
+            results.append(
+                await self._persist_one(request, market_context, theme_snapshot)
+            )
+        return results
 
     def run_once(self, request: CollectorRunRequest) -> CollectorRunResult:
         """同步入口（CLI/API/测试）：在独立事件循环中执行异步管线。"""

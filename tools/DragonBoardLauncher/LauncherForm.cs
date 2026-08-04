@@ -430,6 +430,9 @@ internal sealed class LauncherForm : Form
 
         if (IsDisposed) return;
 
+        // 核心服务健康失败自动重启（8001 采集器）：端口关闭→启动；占用但探针不健康→先停再启。
+        _processManager.EnsureHealthy("collector", () => collectorHealth?.IsHealthy == true);
+
         var collectorFailed = ReportCollectorHealth(collectorHealth);
         var running = 0;
         foreach (var kv in statuses)

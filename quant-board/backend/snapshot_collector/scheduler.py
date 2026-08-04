@@ -61,6 +61,8 @@ class SnapshotCollectorScheduler:
         self._last_error_slot: str | None = None
         self._collection_count: int = 0
         self._error_count: int = 0
+        # 同刻多类型共享一次采集；全局信号量保证不同时刻的槽位不并发（防进程风暴）。
+        self._collect_sem = asyncio.Semaphore(1)
         # Tracks collected snapshot_ids for the current trading date so the
         # timer can skip already-persisted slots without a round-trip to Mongo.
         self._completed_today: set[str] = set()
@@ -200,6 +202,7 @@ class SnapshotCollectorScheduler:
         all_slots = generate_slots(trading_date, self.snapshot_types)
         repo = await asyncio.to_thread(create_snapshot_collector_repository)
 
+        groups: dict[int, list[Any]] = {}
         for slot in all_slots:
             sid = slot.snapshot_id
             # Not yet due
@@ -217,13 +220,20 @@ class SnapshotCollectorScheduler:
                 self._completed_today.add(sid)
                 continue
 
-            self._in_flight_slots.add(sid)
-            asyncio.create_task(self._tracked_collect(slot))
+            groups.setdefault(slot.timestamp_ms, []).append(slot)
+
+        for group in groups.values():
+            for slot in group:
+                self._in_flight_slots.add(slot.snapshot_id)
+            asyncio.create_task(self._tracked_collect_multi(group))
 
     # ── per-slot collection ────────────────────────────────────────────────
 
     async def _tracked_collect(self, slot: Any) -> None:
-        """Collect a single slot and update counters / completed set."""
+        await self._tracked_collect_multi([slot])
+
+    async def _tracked_collect_multi(self, group: list[Any]) -> None:
+        """同刻一组槽位：全局串行执行，一次采集、按类型派生。"""
         from backend.snapshot_collector.models import CollectorRunRequest
         from backend.snapshot_collector.service_factory import (
             create_snapshot_collector_repository,
@@ -231,62 +241,108 @@ class SnapshotCollectorScheduler:
         )
 
         try:
-            repo = await asyncio.to_thread(create_snapshot_collector_repository)
-            if await asyncio.to_thread(repo.snapshot_exists, self.dataset_id, slot.snapshot_id):
-                self._completed_today.add(slot.snapshot_id)
-                return
-
-            service = await asyncio.to_thread(create_snapshot_collector_service, repo)
-            request = CollectorRunRequest(
-                dataset_id=self.dataset_id,
-                snapshot_type=slot.snapshot_type,
-                trading_date=slot.trading_date,
-                slot_time=slot.slot_time,
-                dry_run=False,
-                force=False,
-            )
-            try:
-                if hasattr(service, "arun_once"):
-                    result = await asyncio.wait_for(
-                        service.arun_once(request),
-                        timeout=self.collect_timeout_seconds,
+            async with self._collect_sem:
+                repo = await asyncio.to_thread(create_snapshot_collector_repository)
+                pending: list[Any] = []
+                for slot in group:
+                    exists = await asyncio.to_thread(
+                        repo.snapshot_exists, self.dataset_id, slot.snapshot_id
                     )
+                    if exists:
+                        self._completed_today.add(slot.snapshot_id)
+                    else:
+                        pending.append(slot)
+                if not pending:
+                    return
+                service = await asyncio.to_thread(create_snapshot_collector_service, repo)
+                requests = [
+                    CollectorRunRequest(
+                        dataset_id=self.dataset_id,
+                        snapshot_type=slot.snapshot_type,
+                        trading_date=slot.trading_date,
+                        slot_time=slot.slot_time,
+                        dry_run=False,
+                        force=False,
+                    )
+                    for slot in pending
+                ]
+                group = pending
+                if hasattr(service, "arun_once_multi"):
+                    try:
+                        results = await asyncio.wait_for(
+                            service.arun_once_multi(requests),
+                            timeout=self.collect_timeout_seconds * len(requests),
+                        )
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(
+                            f"collector group of {len(group)} slots timed out after "
+                            f"{self.collect_timeout_seconds * len(group)}s"
+                        ) from None
+                elif hasattr(service, "arun_once"):
+                    results = []
+                    for slot, request in zip(group, requests):
+                        try:
+                            results.append(
+                                await asyncio.wait_for(
+                                    service.arun_once(request),
+                                    timeout=self.collect_timeout_seconds,
+                                )
+                            )
+                        except asyncio.TimeoutError:
+                            raise RuntimeError(
+                                f"collector slot {slot.snapshot_id} timed out after "
+                                f"{self.collect_timeout_seconds}s"
+                            ) from None
                 else:
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(service.run_once, request),
-                        timeout=self.collect_timeout_seconds,
-                    )
-            except asyncio.TimeoutError:
-                # 超时：不标记 completed，grace 窗口内下轮自动重试；
-                # 结构化错误随状态暴露，供诊断与人工补采。
-                raise RuntimeError(
-                    f"collector slot {slot.snapshot_id} timed out after "
-                    f"{self.collect_timeout_seconds}s"
-                ) from None
-            self._last_run_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
+                    results = []
+                    for slot, request in zip(group, requests):
+                        try:
+                            results.append(
+                                await asyncio.wait_for(
+                                    asyncio.to_thread(service.run_once, request),
+                                    timeout=self.collect_timeout_seconds,
+                                )
+                            )
+                        except asyncio.TimeoutError:
+                            raise RuntimeError(
+                                f"collector slot {slot.snapshot_id} timed out after "
+                                f"{self.collect_timeout_seconds}s"
+                            ) from None
+            for slot, result in zip(group, results):
+                try:
+                    self._apply_slot_result(slot, result)
+                except Exception as exc:
+                    self._mark_slot_error(slot, exc)
+        except Exception as exc:
+            for slot in group:
+                self._mark_slot_error(slot, exc)
+        finally:
+            for slot in group:
+                self._in_flight_slots.discard(slot.snapshot_id)
+
+    def _apply_slot_result(self, slot: Any, result: Any) -> None:
+        self._last_run_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
+        if result.status in ("completed", "deduped"):
             if result.status == "completed":
                 self._collection_count += 1
-                self._completed_today.add(slot.snapshot_id)
-            elif result.status == "deduped":
-                self._completed_today.add(slot.snapshot_id)
-            else:
-                raise RuntimeError(
-                    f"collector slot {slot.snapshot_id} returned {result.status}: "
-                    f"{result.message or 'no message'}"
-                )
-            self._last_slot_collected = slot.snapshot_id
-            if self._last_error_slot == slot.snapshot_id:
-                self._last_error = None
-                self._last_error_at = None
-                self._last_error_slot = None
-        except Exception as exc:
-            self._last_error = str(exc)
-            self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
-            self._last_error_slot = slot.snapshot_id
-            self._error_count += 1
-            logger.exception("snapshot collector slot failed: %s", slot.snapshot_id)
-        finally:
-            self._in_flight_slots.discard(slot.snapshot_id)
+            self._completed_today.add(slot.snapshot_id)
+        else:
+            raise RuntimeError(
+                f"collector slot {slot.snapshot_id} returned {result.status}: "
+                f"{result.message or 'no message'}"
+            )
+        self._last_slot_collected = slot.snapshot_id
+        if self._last_error_slot == slot.snapshot_id:
+            self._last_error = None
+            self._last_error_at = None
+            self._last_error_slot = None
+
+    def _mark_slot_error(self, slot: Any, exc: Exception) -> None:
+        self._last_error = str(exc)
+        self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
+        self._last_error_slot = slot.snapshot_id
+        self._error_count += 1
+        logger.exception("snapshot collector slot failed: %s", slot.snapshot_id)
 
 
 # Module-level singleton — start/stop via the FastAPI lifespan or CLI.
