@@ -266,23 +266,31 @@ class ThemeRotationEngine:
             rank_change = (prev_rank - rank) if prev_rank else 0
             rank_changes.append(rank_change)
 
-            heat_trend = (
-                round(linear_slope_heat(hist["heats"], _num(row.get("heatScore"))), 2)
+            heat_trend_raw = (
+                linear_slope_heat(hist["heats"], _num(row.get("heatScore")))
                 if enough_history
                 else None
             )
-            flow_trend = (
-                round(flow_summary(hist["inflows"], _num(row.get("mainNetInflow"))), 2)
+            heat_trend = round(heat_trend_raw, 2) if heat_trend_raw is not None else None
+            flow_trend_raw = (
+                flow_summary(hist["inflows"], _num(row.get("mainNetInflow")))
                 if hist["inflows"]
                 else None
             )
-            breadth_trend = (
-                round(breadth_trend_value(hist["prev_row"], row), 2) if hist["prev_row"] else None
+            flow_trend = round(flow_trend_raw, 2) if flow_trend_raw is not None else None
+            breadth_trend_raw = (
+                breadth_trend_value(hist["prev_row"], row) if hist["prev_row"] else None
             )
-            crowding_trend = (
-                round(crowding_trend_value(hist["crowdings"], _num(row.get("crowdingRisk"))), 2)
+            breadth_trend = (
+                round(breadth_trend_raw, 2) if breadth_trend_raw is not None else None
+            )
+            crowding_trend_raw = (
+                crowding_trend_value(hist["crowdings"], _num(row.get("crowdingRisk")))
                 if hist["crowdings"]
                 else None
+            )
+            crowding_trend = (
+                round(crowding_trend_raw, 2) if crowding_trend_raw is not None else None
             )
 
             status = ThemeRotationStatus(

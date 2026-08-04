@@ -247,6 +247,7 @@ class SnapshotCollectorService:
         quality_fn: Any = None,
         cache_invalidate_fn: Any = None,
         theme_heat_service: Any = None,
+        theme_rotation_service: Any = None,
     ) -> None:
         from backend.data.schemas import SnapshotIngestRequest
 
@@ -257,6 +258,7 @@ class SnapshotCollectorService:
         self._quality_fn = quality_fn or quality_gate_module.evaluate_quality
         self._cache_invalidate_fn = cache_invalidate_fn
         self._theme_heat_service = theme_heat_service
+        self._theme_rotation_service = theme_rotation_service
         self._SnapshotIngestRequest = SnapshotIngestRequest
 
     # ── run_once ──────────────────────────────────────────────────────────
@@ -357,6 +359,15 @@ class SnapshotCollectorService:
             market_meta=dict(market_context.market_meta),
         )
         derived = SnapshotDerivationService().derive(fact)
+        if self._theme_rotation_service is not None:
+            await self._theme_rotation_service.enrich_bundle(
+                derived,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                slot_timestamp_ms=slot_timestamp,
+                computed_at=actual_ts,
+            )
         bundle = derived.to_ingest_bundle()
         await asyncio.to_thread(
             self._enrich_volume_ratios, derived.stock_rows

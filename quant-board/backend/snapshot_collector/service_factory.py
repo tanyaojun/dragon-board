@@ -484,11 +484,14 @@ def create_snapshot_collector_service(
     settings = get_settings()
     if repo is None:
         repo = create_snapshot_collector_repository()
+    from backend.analysis.theme_rotation.service import ThemeRotationService
+
     return SnapshotCollectorService(
         repo=repo,
         settings=settings,
         cache_invalidate_fn=snapshot_cache.invalidate_snapshot_cache_after_ingest,
         theme_heat_service=get_theme_heat_service(),
+        theme_rotation_service=ThemeRotationService(repo),
     )
 
 
