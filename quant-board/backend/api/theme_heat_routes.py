@@ -47,7 +47,10 @@ def _unavailable_response(error: ThemeHeatUnavailable) -> JSONResponse:
 @router.get("/heat", response_model=None)
 def get_theme_heat(force: bool = False) -> dict[str, object] | JSONResponse:
     try:
-        snapshot = get_theme_heat_service().get_snapshot(force=force)
+        snapshot = get_theme_heat_service().get_snapshot(
+            force=force,
+            include_rotation_state=True,
+        )
         return {"ok": True, "data": public_theme_heat_snapshot(snapshot)}
     except ThemeHeatUnavailable as error:
         return _unavailable_response(error)

@@ -10,9 +10,16 @@ from backend.theme_heat_service import ThemeHeatUnavailable
 class FakeThemeHeatService:
     def __init__(self, *, failure: ThemeHeatUnavailable | None = None) -> None:
         self.failure = failure
+        self.last_options: dict = {}
 
-    def get_snapshot(self, *, force: bool = False) -> dict:
+    def get_snapshot(
+        self,
+        *,
+        force: bool = False,
+        include_rotation_state: bool = False,
+    ) -> dict:
         assert isinstance(force, bool)
+        self.last_options = {"force": force, "include_rotation_state": include_rotation_state}
         if self.failure:
             raise self.failure
         return {
@@ -35,7 +42,8 @@ class FakeThemeHeatService:
 
 
 def test_theme_heat_summary_excludes_full_quote_maps(monkeypatch) -> None:
-    monkeypatch.setattr(theme_heat_routes, "get_theme_heat_service", lambda: FakeThemeHeatService())
+    service = FakeThemeHeatService()
+    monkeypatch.setattr(theme_heat_routes, "get_theme_heat_service", lambda: service)
     client = TestClient(app)
     response = client.get("/api/themes/heat")
 
@@ -43,9 +51,34 @@ def test_theme_heat_summary_excludes_full_quote_maps(monkeypatch) -> None:
     body = response.json()
     assert body["ok"] is True
     assert body["data"]["factors"][0]["themeId"] == "AI"
+    assert service.last_options["include_rotation_state"] is True
     assert "quoteRowsByCode" not in body["data"]
     assert "fundRowsByCode" not in body["data"]
     assert "themeStocks" not in body["data"]
+
+
+def test_theme_heat_factors_enriched_with_rotation_state(monkeypatch) -> None:
+    from backend.theme_heat_service import ThemeHeatService
+
+    service = ThemeHeatService.__new__(ThemeHeatService)
+    monkeypatch.setattr(
+        service,
+        "_load_latest_rotation_state",
+        lambda: {
+            "AI": {"rotationState": "mainline", "lifecycle": "expanding", "rotationScore": 78.0}
+        },
+    )
+    snapshot = {
+        "factors": [
+            {"themeId": "AI", "heatScore": 88},
+            {"themeId": "BKAG", "heatScore": 60},
+        ]
+    }
+    enriched = service._with_rotation_state(snapshot)
+    assert enriched["factors"][0]["rotationState"] == "mainline"
+    assert enriched["factors"][0]["lifecycle"] == "expanding"
+    assert enriched["factors"][0]["rotationScore"] == 78.0
+    assert "rotationState" not in enriched["factors"][1]
 
 
 def test_theme_heat_mapping_empty_returns_503_with_stale_data(monkeypatch) -> None:
@@ -74,7 +107,7 @@ def test_theme_heat_low_coverage_returns_degraded_data_with_200(monkeypatch) -> 
     monkeypatch.setattr(
         service,
         "get_snapshot",
-        lambda *, force: {
+        lambda *, force, include_rotation_state=False: {
             **FakeThemeHeatService().get_snapshot(),
             "ok": False,
             "degraded": True,

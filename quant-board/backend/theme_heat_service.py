@@ -58,6 +58,21 @@ class ThemeHeatService:
         *,
         force: bool = False,
         include_runtime_funds: bool = True,
+        include_rotation_state: bool = False,
+    ) -> dict[str, object]:
+        snapshot = self._get_snapshot_core(
+            force=force,
+            include_runtime_funds=include_runtime_funds,
+        )
+        if include_rotation_state and isinstance(snapshot, dict):
+            snapshot = self._with_rotation_state(snapshot)
+        return snapshot
+
+    def _get_snapshot_core(
+        self,
+        *,
+        force: bool,
+        include_runtime_funds: bool,
     ) -> dict[str, object]:
         universe = self._repository.get_market_universe()
         if not universe.get("themes") or not universe.get("stockCodes"):
@@ -103,6 +118,75 @@ class ThemeHeatService:
         finally:
             with self._lock:
                 self._inflight.pop(cache_key, None)
+
+    def _with_rotation_state(self, snapshot: dict[str, object]) -> dict[str, object]:
+        """合并引擎落库的最新 rotationState/lifecycle/rotationScore（后端生产，前端只消费）。"""
+        rotation_by_theme = self._load_latest_rotation_state()
+        if not rotation_by_theme:
+            return snapshot
+        factors = snapshot.get("factors")
+        if not isinstance(factors, list):
+            return snapshot
+        enriched: list[object] = []
+        for factor in factors:
+            if not isinstance(factor, dict):
+                enriched.append(factor)
+                continue
+            state = rotation_by_theme.get(str(factor.get("themeId") or ""))
+            if not state:
+                enriched.append(factor)
+                continue
+            item = {**factor}
+            item["rotationState"] = str(state.get("rotationState") or "neutral")
+            if state.get("lifecycle"):
+                item["lifecycle"] = state["lifecycle"]
+            if state.get("rotationScore") is not None:
+                item["rotationScore"] = state["rotationScore"]
+            enriched.append(item)
+        return {**snapshot, "factors": enriched}
+
+    def _load_latest_rotation_state(self) -> dict[str, dict[str, object]]:
+        """读取最近一次引擎落库的 sector rows rotationState（只读，异常时按无数据处理）。"""
+        try:
+            db = get_runtime_mongodb_database()
+            latest = db["snapshot_sector_rows"].find_one(
+                {
+                    "entityType": "hot_theme",
+                    "rotationState": {"$nin": [None, ""]},
+                },
+                sort=[("timestamp", -1)],
+            )
+            if not latest:
+                return {}
+            rows = list(
+                db["snapshot_sector_rows"].find(
+                    {
+                        "snapshotId": latest.get("snapshotId"),
+                        "entityType": "hot_theme",
+                    },
+                    {
+                        "themeId": 1,
+                        "entityKey": 1,
+                        "rotationState": 1,
+                        "lifecycle": 1,
+                        "rotationScore": 1,
+                        "_id": 0,
+                    },
+                )
+            )
+        except Exception:
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for row in rows or []:
+            theme_id = str(row.get("themeId") or row.get("entityKey") or "")
+            state = str(row.get("rotationState") or "")
+            if theme_id and state:
+                result[theme_id] = {
+                    "rotationState": state,
+                    "lifecycle": row.get("lifecycle"),
+                    "rotationScore": row.get("rotationScore"),
+                }
+        return result
 
     def get_fund_rows(self, codes: list[str]) -> dict[str, dict[str, object]]:
         normalized = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
