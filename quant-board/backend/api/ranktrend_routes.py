@@ -11,6 +11,12 @@ from backend.analysis.ranktrend import (
     attention_rank_lookup,
     market_regime,
     percentile_rank,
+    _resonance_label,
+)
+from backend.analysis.theme_momentum import (
+    compute_theme_momentum_series,
+    fuse_theme_resonance,
+    stock_theme_exposure,
 )
 from backend.data import repository_factory, snapshot_cache
 from backend.settings import get_settings
@@ -102,6 +108,7 @@ def _to_engine_frame(bundle: dict[str, Any]) -> dict[str, Any]:
         "type": bundle.get("type"),
         "timestamp": bundle.get("timestamp"),
         "stocks": bundle.get("rows") or bundle.get("stocks") or [],
+        "hotThemes": bundle.get("hotThemes") or [],
         "marketContext": {
             "sentiment": bundle.get("sentiment") or {},
             "marketStats": bundle.get("marketStats") or {},
@@ -207,6 +214,7 @@ def _analyze_frames(
     resonance 使用同一前缀（series.percentiles.slice(0, index+1)）。
     """
     wanted = set(codes) if codes else None
+    momentum_series = compute_theme_momentum_series(frames)
     series_index: dict[str, dict[str, int]] = {}
     for code, bars in series_by_code.items():
         series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
@@ -214,6 +222,17 @@ def _analyze_frames(
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
+        frame_momentum = momentum_series["frames"][index]
+        theme_context = {
+            "version": momentum_series["version"],
+            "factors": sorted(
+                frame_momentum["themes"].values(),
+                key=lambda item: -float(item["score"]),
+            )[:10],  # 响应只回传 top-10 题材动量摘要，控制体积；内部全量仍参与计算
+            "marketThemeMedianShortChange": frame_momentum["marketThemeMedianShortChange"],
+            "themeSampleCount": frame_momentum["themeSampleCount"],
+            "qualityFlags": frame_momentum["qualityFlags"],
+        }
         market_median, market_sample_count = _frame_market_median(frames, index)
         market_median_percentile = _frame_market_median_percentile(frame)
         stocks_out: list[dict[str, Any]] = []
@@ -256,11 +275,16 @@ def _analyze_frames(
                 },
             })
             analysis["resonance"] = resonance
-            _apply_resonance_final(analysis, resonance)
+            exposure = stock_theme_exposure(stock, frame.get("hotThemes") or [])
+            analysis["resonance"] = fuse_theme_resonance(resonance, exposure, frame_momentum)
+            if analysis["resonance"].get("status") == "ok":
+                analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
+            _apply_resonance_final(analysis, analysis["resonance"])
             stocks_out.append({"code": code, "analysis": analysis})
         output.append({
             "frameKey": key,
             "regime": regime,
+            "themeContext": theme_context,
             "marketMedianPercentile": market_median_percentile,
             "marketMedianShortChange": market_median,
             "marketSampleCount": market_sample_count,

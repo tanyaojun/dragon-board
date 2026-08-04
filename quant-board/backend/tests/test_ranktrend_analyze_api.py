@@ -687,3 +687,88 @@ def test_analyze_cache_ttl_aligns_with_snapshot_read_ttl(monkeypatch):
     assert analyze_keys
     for key in analyze_keys:
         assert fake_redis.ttls[key] == get_settings().snapshot_cache_ttl_seconds
+
+
+def _theme_frames_with_context(count=12, theme_count=25):
+    frames = []
+    for idx in range(count):
+        slot = f"{10 + idx // 2:02d}:{30 if idx % 2 else 0:02d}"
+        rows = [{
+            "code": "002279",
+            "name": "久其软件",
+            "rank": 1,
+            "avgRankNum": 1,
+            "change": 5.0,
+            "volumeRatio": 1.5,
+            "zlje": 10,
+            "zljzb": 0.1,
+            "themes": ["主线概念"],
+        }]
+        hot_themes = [
+            {
+                "entityType": "hot_theme",
+                "themeId": "T0",
+                "themeName": "主线概念板块",
+                "heatScore": 40.0 + idx * 5.0,
+                "rank": 1,
+                "rotationState": "mainline",
+                "crowdingRisk": 30.0,
+                "metadata": {"rankEligible": True},
+            }
+        ]
+        hot_themes += [
+            {
+                "entityType": "hot_theme",
+                "themeId": f"T{i}",
+                "themeName": f"普通概念{i}",
+                "heatScore": 50.0,
+                "rank": i + 1,
+                "rotationState": "neutral",
+                "crowdingRisk": 30.0,
+                "metadata": {"rankEligible": True},
+            }
+            for i in range(1, theme_count)
+        ]
+        frames.append({
+            "tradingDate": "2026-08-04",
+            "slotTime": slot,
+            "type": "half_hour",
+            "timestamp": idx + 1,
+            "rows": rows,
+            "stocks": rows,
+            "hotThemes": hot_themes,
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        })
+    return frames
+
+
+def test_analyze_includes_theme_context_and_resonance_theme(monkeypatch):
+    frames = _theme_frames_with_context()
+    monkeypatch.setattr(
+        "backend.data.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["002279"],
+        "frameKeys": ["2026-08-04 15:00"],
+    })
+    assert response.status_code == 200
+    body = response.json()
+    frame = next(item for item in body["frames"] if item["frameKey"] == "2026-08-04 15:00")
+    assert "themeContext" in frame
+    assert frame["themeContext"]["themeSampleCount"] >= 20
+    assert frame["themeContext"]["marketThemeMedianShortChange"] is not None
+    stock = frame["stocks"][0]
+    theme = stock["analysis"]["resonance"].get("theme")
+    assert theme is not None
+    assert theme["status"] in ("ok", "insufficient")
+    if theme["status"] == "ok":
+        assert theme["themeMomentumScore"] > 50
+        assert theme["themeLifecycle"] == "mainline"
+        assert stock["analysis"]["decision"]["final"]["signal"] in ("buy", "hold")
