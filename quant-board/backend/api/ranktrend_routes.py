@@ -130,7 +130,7 @@ def _load_frames_for_analysis(
         dataset_id,
         snapshot_type=snapshot_type,
         sort="desc",
-        projection="ranktrend",
+        projection="ranktrend+themes",
         limit=200,
     )
     frames = [_to_engine_frame(b) for b in reversed(bundles)]

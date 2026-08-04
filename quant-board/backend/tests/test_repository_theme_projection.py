@@ -79,15 +79,29 @@ def _stock_rows():
     }]
 
 
-def test_ranktrend_projection_includes_hot_themes_and_stock_themes():
+def test_ranktrend_plus_themes_projection_includes_hot_themes_and_stock_themes():
+    repo = MongoRepository(FakeDb({
+        "snapshot_frames": _frames(),
+        "snapshot_stock_rows": _stock_rows(),
+        "snapshot_sector_rows": _sector_rows(),
+    }))
+    bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend+themes")
+    assert len(bundles) == 1
+    assert bundles[0]["hotThemes"] != []
+    assert bundles[0]["hotThemes"][0]["entityType"] == "hot_theme"
+    assert bundles[0]["stocks"][0]["themes"] == ["T1概念板块"]
+    assert bundles[0]["stocks"][0]["themeRole"] == "follower"
+
+
+def test_plain_ranktrend_projection_stays_lightweight():
     repo = MongoRepository(FakeDb({
         "snapshot_frames": _frames(),
         "snapshot_stock_rows": _stock_rows(),
         "snapshot_sector_rows": _sector_rows(),
     }))
     bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend")
-    assert len(bundles) == 1
-    assert bundles[0]["hotThemes"] != []
-    assert bundles[0]["hotThemes"][0]["entityType"] == "hot_theme"
-    assert bundles[0]["stocks"][0]["themes"] == ["T1概念板块"]
-    assert bundles[0]["stocks"][0]["themeRole"] == "follower"
+    assert bundles[0]["hotThemes"] == []
+    stock = bundles[0]["stocks"][0]
+    assert "themes" not in stock
+    assert "themeRole" not in stock
+    assert set(stock) == {"code", "name", "rank", "avgRankNum", "change", "volumeRatio", "zlje", "zljzb"}

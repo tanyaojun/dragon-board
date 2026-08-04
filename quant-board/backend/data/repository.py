@@ -568,37 +568,40 @@ class Repository:
                     .order_by(SnapshotStockRowModel.timestamp.asc(), SnapshotStockRowModel.rank.asc())
                 )
                 for row in self.session.scalars(stock_query):
-                    if projection == "ranktrend":
-                        stock_rows_by_snapshot[row.snapshot_id].append(
-                            {
-                                "code": row.code,
-                                "name": row.name,
-                                "rank": row.rank,
-                                "avgRankNum": row.avg_rank_num,
-                                "change": row.change,
-                                "volumeRatio": row.volume_ratio,
-                                "zlje": row.zlje,
-                                "zljzb": row.zljzb,
+                    if projection in ("ranktrend", "ranktrend+themes"):
+                        item = {
+                            "code": row.code,
+                            "name": row.name,
+                            "rank": row.rank,
+                            "avgRankNum": row.avg_rank_num,
+                            "change": row.change,
+                            "volumeRatio": row.volume_ratio,
+                            "zlje": row.zlje,
+                            "zljzb": row.zljzb,
+                        }
+                        if projection == "ranktrend+themes":
+                            item.update({
                                 "themes": json_loads(row.themes_json, []),
                                 "mainTheme": "",
                                 "themeRole": row.theme_role or "",
                                 "themeContribution": row.theme_contribution,
                                 "leadStatus": row.lead_status or "",
-                            }
-                        )
+                            })
+                        stock_rows_by_snapshot[row.snapshot_id].append(item)
                     else:
                         stock_rows_by_snapshot[row.snapshot_id].append(self.local_stock_to_bundle_dict(row))
 
-                sector_query = (
-                    select(SnapshotSectorRowModel)
-                    .where(
-                        SnapshotSectorRowModel.dataset_id == dataset_id,
-                        SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
+                if projection != "ranktrend":
+                    sector_query = (
+                        select(SnapshotSectorRowModel)
+                        .where(
+                            SnapshotSectorRowModel.dataset_id == dataset_id,
+                            SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
+                        )
+                        .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
                     )
-                    .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
-                )
-                for row in self.session.scalars(sector_query):
-                    sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
+                    for row in self.session.scalars(sector_query):
+                        sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
             except SQLAlchemyError:
                 raise RuntimeError("primary database read failed")
 
@@ -608,14 +611,17 @@ class Repository:
             item["rows"] = stock_rows_by_snapshot.get(frame.snapshot_id, [])
             item["hotlist"] = item["rows"]
             item["stocks"] = item["rows"]
-            if projection == "ranktrend":
+            if projection in ("ranktrend", "ranktrend+themes"):
                 item["entities"] = []
                 item["sectors"] = []
-                item["hotThemes"] = [
-                    self._sector_entity_to_view(row)
-                    for row in sector_rows_by_snapshot.get(frame.snapshot_id, [])
-                    if row.get("entityType") == "hot_theme"
-                ]
+                if projection == "ranktrend+themes":
+                    item["hotThemes"] = [
+                        self._sector_entity_to_view(row)
+                        for row in sector_rows_by_snapshot.get(frame.snapshot_id, [])
+                        if row.get("entityType") == "hot_theme"
+                    ]
+                else:
+                    item["hotThemes"] = []
                 bundles.append(item)
                 continue
             item["entities"] = sector_rows_by_snapshot.get(frame.snapshot_id, [])

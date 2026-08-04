@@ -182,21 +182,28 @@ class MongoRepository:
         )
         snapshot_ids = [str(row.get("snapshotId")) for row in frame_rows if row.get("snapshotId")]
         stock_rows_by_snapshot = self._stock_rows_by_snapshot(dataset_id, snapshot_ids, projection=projection)
-        sector_rows_by_snapshot = self._sector_rows_by_snapshot(dataset_id, snapshot_ids)
+        sector_rows_by_snapshot = (
+            {}
+            if projection == "ranktrend"
+            else self._sector_rows_by_snapshot(dataset_id, snapshot_ids)
+        )
         bundles: list[dict[str, Any]] = []
         for row in frame_rows:
             item = self.local_frame_to_bundle_dict(row)
             item["rows"] = stock_rows_by_snapshot.get(str(row.get("snapshotId")), [])
             item["hotlist"] = item["rows"]
             item["stocks"] = item["rows"]
-            if projection == "ranktrend":
+            if projection in ("ranktrend", "ranktrend+themes"):
                 item["entities"] = []
                 item["sectors"] = []
-                item["hotThemes"] = [
-                    self._sector_entity_to_view(sector)
-                    for sector in sector_rows_by_snapshot.get(str(row.get("snapshotId")), [])
-                    if sector.get("entityType") == "hot_theme"
-                ]
+                if projection == "ranktrend+themes":
+                    item["hotThemes"] = [
+                        self._sector_entity_to_view(sector)
+                        for sector in sector_rows_by_snapshot.get(str(row.get("snapshotId")), [])
+                        if sector.get("entityType") == "hot_theme"
+                    ]
+                else:
+                    item["hotThemes"] = []
                 bundles.append(item)
                 continue
             item["entities"] = sector_rows_by_snapshot.get(str(row.get("snapshotId")), [])
@@ -804,7 +811,7 @@ class MongoRepository:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
-        if projection == "ranktrend":
+        if projection in ("ranktrend", "ranktrend+themes"):
             # snapshotId 必须保留（分组 key）；regime 五因子需要 change/volumeRatio/zlje/zljzb；
             # avgRankNum 是旧 TS 横截面（市场关注度百分位中位数）的原料，必须随行输出
             mongo_projection: dict[str, int] = {
@@ -818,19 +825,22 @@ class MongoRepository:
                 "volumeRatio": 1,
                 "zlje": 1,
                 "zljzb": 1,
-                "themes": 1,
-                "mainTheme": 1,
-                "themeRole": 1,
-                "themeContribution": 1,
-                "leadStatus": 1,
             }
+            if projection == "ranktrend+themes":
+                mongo_projection.update({
+                    "themes": 1,
+                    "mainTheme": 1,
+                    "themeRole": 1,
+                    "themeContribution": 1,
+                    "leadStatus": 1,
+                })
         else:
             mongo_projection = {"depth10": 0}
         for row in self.db["snapshot_stock_rows"].find(
             {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}},
             mongo_projection,
         ).sort([("timestamp", 1), ("rank", 1)]):
-            if projection == "ranktrend":
+            if projection in ("ranktrend", "ranktrend+themes"):
                 item = {
                     "code": row.get("code"),
                     "name": row.get("name"),
@@ -840,12 +850,15 @@ class MongoRepository:
                     "volumeRatio": row.get("volumeRatio"),
                     "zlje": row.get("zlje"),
                     "zljzb": row.get("zljzb"),
-                    "themes": row.get("themes") or [],
-                    "mainTheme": row.get("mainTheme") or "",
-                    "themeRole": row.get("themeRole") or "",
-                    "themeContribution": row.get("themeContribution"),
-                    "leadStatus": row.get("leadStatus") or "",
                 }
+                if projection == "ranktrend+themes":
+                    item.update({
+                        "themes": row.get("themes") or [],
+                        "mainTheme": row.get("mainTheme") or "",
+                        "themeRole": row.get("themeRole") or "",
+                        "themeContribution": row.get("themeContribution"),
+                        "leadStatus": row.get("leadStatus") or "",
+                    })
             else:
                 item = self.local_stock_to_bundle_dict(row)
             rows_by_snapshot[str(row.get("snapshotId"))].append(item)
