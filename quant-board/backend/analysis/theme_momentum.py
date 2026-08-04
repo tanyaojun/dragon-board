@@ -242,3 +242,151 @@ def compute_theme_momentum_series(frames: list[dict[str, Any]]) -> dict[str, Any
             "qualityFlags": [] if cross_section_ok else ["theme_cross_section_insufficient"],
         })
     return {"frames": results, "version": THEME_MOMENTUM_VERSION}
+
+
+def _matches_theme(value: str, theme: dict[str, Any]) -> bool:
+    if _theme_id(theme) == value:
+        return True
+    return _is_same_theme_name(value, str(theme.get("themeName") or theme.get("name") or ""))
+
+
+def _theme_name(theme: dict[str, Any]) -> str:
+    return str(theme.get("themeName") or theme.get("name") or _theme_id(theme))
+
+
+def _role_for(stock: dict[str, Any], theme: dict[str, Any], matched_main_theme: bool) -> str:
+    explicit = str(stock.get("themeRole") or "").strip().lower()
+    # themeRole 是股票级字段，只在匹配题材就是 mainTheme（或股票仅属单一题材）时可信
+    if explicit in ROLE_WEIGHTS and (matched_main_theme or len(stock.get("themes") or []) <= 1):
+        return explicit
+    if "龙" in str(stock.get("leadStatus") or ""):
+        return "leader"
+    heat = _num(theme.get("heatScore"))
+    change = _num(stock.get("change"))
+    if heat >= 70 and change >= 5:
+        return "core"
+    if heat >= 45 and change > 0:
+        return "follower"
+    if heat < 20 or change < -5:
+        return "noise"
+    return "independent"
+
+
+def stock_theme_exposure(
+    stock: dict[str, Any],
+    frame_themes: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """主题材选择：mainTheme 优先，未命中时取所属题材中 heatScore 最高者。
+
+    无映射或均不匹配时返回 None。"""
+    stock_theme_values = [str(item) for item in (stock.get("themes") or []) if str(item)]
+    if not stock_theme_values:
+        return None
+    valid = [
+        theme for theme in frame_themes
+        if isinstance(theme, dict) and _theme_rank_eligible(theme)
+    ]
+    if not valid:
+        return None
+
+    main_theme_value = str(stock.get("mainTheme") or "").strip()
+    primary: dict[str, Any] | None = None
+    matched_main_theme = False
+    if main_theme_value:
+        for theme in valid:
+            if _matches_theme(main_theme_value, theme):
+                primary = theme
+                matched_main_theme = True
+                break
+    if primary is None:
+        candidates = [
+            theme for theme in valid
+            if any(_matches_theme(value, theme) for value in stock_theme_values)
+        ]
+        if not candidates:
+            return None
+        primary = max(candidates, key=lambda theme: _num(theme.get("heatScore"), -1.0))
+
+    role = _role_for(stock, primary, matched_main_theme)
+    role_weight = ROLE_WEIGHTS.get(role, 0.15)
+    contribution = _num(stock.get("themeContribution"), role_weight * 60.0)
+    crowding_raw = primary.get("crowdingRisk")
+    crowding_risk: float | None = None
+    if isinstance(crowding_raw, (int, float)):
+        numeric = float(crowding_raw)
+        crowding_risk = numeric if math.isfinite(numeric) else None
+    return {
+        "themeId": _theme_id(primary),
+        "themeName": _theme_name(primary),
+        "role": role,
+        "roleWeight": role_weight,
+        "themeContribution": round(contribution, 2),
+        "heatScore": _num(primary.get("heatScore")),
+        "rotationState": str(primary.get("rotationState") or "neutral"),
+        "crowdingRisk": crowding_risk,
+        "matchedMainTheme": matched_main_theme,
+        "reasons": [f"theme:{_theme_id(primary)}"],
+    }
+
+
+def fuse_theme_resonance(
+    base_resonance: dict[str, Any] | None,
+    exposure: dict[str, Any] | None,
+    frame_momentum: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把题材动量并入个股共振。返回带 theme 子对象的共振结果。
+
+    - 题材数据不足：theme.status=insufficient + reasons，baseScore 原样保留。
+    - 有数据：score = clamp(base + adjustment + lifecycleBonus - lifecyclePenalty, 0, 100)，
+      direction 不变，label 由调用方按新分数刷新。
+    - resonance.baseScore 始终保留调节前分数，供审计与前端对比。"""
+    fused = dict(base_resonance or {})
+    theme_out: dict[str, Any] = {"status": "insufficient", "reasons": []}
+    base_score = _num(fused.get("score"))
+    fused["baseScore"] = round(base_score, 0)
+    if not frame_momentum or not frame_momentum.get("crossSectionOk"):
+        theme_out["reasons"].append("theme_cross_section_insufficient")
+    elif exposure is None:
+        theme_out["reasons"].append("theme_mapping_missing")
+    else:
+        momentum = (frame_momentum.get("themes") or {}).get(exposure["themeId"])
+        if momentum is None or momentum.get("status") != "ok":
+            theme_out["reasons"].append("theme_momentum_insufficient")
+        else:
+            adjustment = _clamp(
+                (momentum["score"] - 50.0) * exposure["roleWeight"] * THEME_ADJUSTMENT_SCALE,
+                -THEME_ADJUSTMENT_MAX,
+                THEME_ADJUSTMENT_MAX,
+            )
+            lifecycle_bonus = 0.0
+            lifecycle_penalty = 0.0
+            extra_reasons: list[str] = []
+            if exposure["rotationState"] in LIFECYCLE_BOOST and exposure["role"] in {"leader", "core"}:
+                lifecycle_bonus = THEME_LIFECYCLE_BONUS
+            if exposure["rotationState"] in LIFECYCLE_PENALTY and exposure["role"] != "leader":
+                if exposure.get("crowdingRisk") is None:
+                    extra_reasons.append("crowding_risk_missing")
+                else:
+                    lifecycle_penalty = min(
+                        THEME_LIFECYCLE_PENALTY_MAX,
+                        _num(exposure.get("crowdingRisk")) / THEME_LIFECYCLE_PENALTY_DENOM,
+                    )
+            theme_out = {
+                "status": "ok",
+                "themeId": exposure["themeId"],
+                "themeName": exposure["themeName"],
+                "role": exposure["role"],
+                "roleWeight": round(exposure["roleWeight"], 2),
+                "themeMomentumScore": momentum["score"],
+                "themeMomentumDirection": momentum["direction"],
+                "themeLifecycle": exposure["rotationState"],
+                "themeContribution": exposure["themeContribution"],
+                "adjustment": round(adjustment + lifecycle_bonus - lifecycle_penalty, 2),
+                "reasons": exposure["reasons"] + [f"题材动量 {momentum['score']}"] + extra_reasons,
+            }
+            fused["score"] = round(
+                _clamp(base_score + adjustment + lifecycle_bonus - lifecycle_penalty, 0, 100),
+                0,
+            )
+    fused["theme"] = theme_out
+    return fused
