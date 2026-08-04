@@ -2,7 +2,11 @@ import { dataLayer } from '@/services/DataLayer'
 import type { RotationAnalysis } from '@/types/core'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { themeRepository } from './ThemeRepository'
-import { refreshRuntime, setBackendRotationSummary } from './ThemeRuntimeCoordinator'
+import {
+  refreshRuntime,
+  setBackendRotationSummary,
+  getBackendRotationMeta,
+} from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
 import { themeHeatFeed } from './ThemeHeatFeed'
@@ -377,5 +381,6 @@ export const themeFacade = {
   toHotThemeSummary,
   toStockTheme,
   setBackendRotationSummary,
+  getBackendRotationMeta,
   runtimeStore: themeRuntimeStore,
 }

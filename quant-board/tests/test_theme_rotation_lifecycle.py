@@ -76,6 +76,19 @@ def test_market_phase():
                             mainline_concentration=0.3, total_zt_count=50, cfg=CFG) == "neutral"
 
 
+def test_market_phase_rising_wins_over_cooling():
+    # R3：有稳定主线（board=8、mainline≥1）时，即使部分题材降温也不标退潮
+    assert market_phase_for(
+        max_board_height=8,
+        rotation_speed=30.0,
+        mainline_count=2,
+        mainline_concentration=0.5,
+        total_zt_count=60,
+        cooling_theme_ratio=0.5,
+        cfg=CFG,
+    ) == "rising"
+
+
 def test_rotation_speed_and_concentration():
     assert rotation_speed_score([3, -3, 4]) == 8 * (10 / 3)
     assert mainline_concentration([90.0, 10.0], 1) == 0.9

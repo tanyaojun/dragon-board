@@ -8,6 +8,21 @@ type BackendStatus = {
   rankChange?: number | null
 }
 
+type InflowOutflowItem = string | { themeId?: string; themeName?: string }
+
+function inflowOutflowStatus(item: InflowOutflowItem, state: string, index: number): ThemeRotationStatus {
+  if (typeof item === 'string') {
+    // 兼容旧帧：inflow/outflow 只有 themeId
+    return statusFromBackend({ themeId: item, themeName: item, rotationState: state }, index + 1, false)
+  }
+  return statusFromBackend({ ...item, rotationState: state }, index + 1, false)
+}
+
+function topFlowName(item: InflowOutflowItem | undefined): string {
+  if (!item) return ''
+  return typeof item === 'string' ? item : item.themeName || item.themeId || ''
+}
+
 /** 后端 rotationSummary → 前端 RotationAnalysis 的纯投影（无计算）。 */
 export function mapBackendRotationSummary(
   backend: Record<string, any> | null | undefined,
@@ -20,11 +35,11 @@ export function mapBackendRotationSummary(
   )
   return {
     timestamp: backend.computedAt || Date.now(),
-    inflowThemes: (backend.inflowThemes || []).map((id: string, i: number) =>
-      statusFromBackend({ themeId: id, themeName: id, rotationState: 'inflow' }, i + 1, false),
+    inflowThemes: (backend.inflowThemes || []).map((item: InflowOutflowItem, i: number) =>
+      inflowOutflowStatus(item, 'inflow', i),
     ),
-    outflowThemes: (backend.outflowThemes || []).map((id: string, i: number) =>
-      statusFromBackend({ themeId: id, themeName: id, rotationState: 'outflow' }, i + 1, false),
+    outflowThemes: (backend.outflowThemes || []).map((item: InflowOutflowItem, i: number) =>
+      inflowOutflowStatus(item, 'outflow', i),
     ),
     mainLines,
     quickRotation: [],
@@ -34,8 +49,8 @@ export function mapBackendRotationSummary(
       mainLineCount: mainLines.length,
       inflowCount: (backend.inflowThemes || []).length,
       outflowCount: (backend.outflowThemes || []).length,
-      topInflow: (backend.inflowThemes || [])[0] || '',
-      topOutflow: (backend.outflowThemes || [])[0] || '',
+      topInflow: topFlowName((backend.inflowThemes || [])[0]),
+      topOutflow: topFlowName((backend.outflowThemes || [])[0]),
       suggestion: backend.suggestion || '',
       strongCount: mainLines.filter((m) => m.strength === 'strong').length,
       topStrength: mainLines[0]?.themeName || '',

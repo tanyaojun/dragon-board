@@ -36,6 +36,10 @@
         <button class="tab-btn" :class="{ active: view === 'rotation' }" @click="view = 'rotation'">
           🔄 题材轮动
           <span v-if="rotationData" class="tab-count">{{ rotationData.rotationSpeed }}%</span>
+          <em v-if="rotationMeta?.slotTime" class="rotation-time-note"
+            :title="`轮动数据时间: ${formatTime(rotationMeta.computedAt || rotationMeta.timestamp || 0)}`">
+            {{ rotationMeta.slotTime }}<template v-if="rotationMeta.stale">·旧</template>
+          </em>
         </button>
         <button class="tab-btn" :class="{ active: view === 'alerts' }" @click="view = 'alerts'">
           ⚠️ 实时预警
@@ -264,6 +268,7 @@ import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
 import { useUIStore } from '../../stores/ui'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
+import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../../types/rankTrendDefaults'
 
 // 状态
 const viewMode = ref<'grid' | 'tree'>('grid') // 默认网格视图
@@ -274,6 +279,14 @@ const loading = ref(false)
 const version = '6.0.0'
 const view = ref<'hot' | 'rotation' | 'alerts' | 'correlation'>('hot')
 const themeRuntime = useThemeRuntimeSnapshot()
+const ROTATION_SNAPSHOT_TYPE = DEFAULT_RANK_TREND_SNAPSHOT_TYPE
+const rotationMeta = ref<{
+  tradingDate?: string
+  slotTime?: string
+  computedAt?: number
+  timestamp?: number
+  stale?: boolean
+} | null>(null)
 
 // 题材详情弹窗状态
 const sectorDetail = ref<{
@@ -340,14 +353,31 @@ const alertCount = computed(() => alerts.value.length)
 const loadBackendRotation = async () => {
   try {
     const frames = await snapshotFacade.listSnapshotFrames({
-      type: 'half_hour',
+      type: ROTATION_SNAPSHOT_TYPE,
       sort: 'desc',
-      limit: 1,
+      limit: 2,
     })
-    const latest = frames[0] as (SnapshotFrameRow & { rotationSummary?: Record<string, any> }) | undefined
-    themeFacade.setBackendRotationSummary(latest?.rotationSummary ?? null)
+    const rows = (frames || []) as SnapshotFrameRow[]
+    const withRotation = rows.filter(
+      (frame) => frame.rotationSummary && typeof frame.rotationSummary === 'object',
+    )
+    const chosen = withRotation[0]
+    // 最新槽位无引擎结果、回退展示上一槽数据时打 stale 标记（fail-visible）
+    const stale = Boolean(
+      rows[0] && !withRotation.includes(rows[0]) && chosen && rows[0] !== chosen,
+    )
+    const summary = chosen?.rotationSummary ?? null
+    themeFacade.setBackendRotationSummary(summary, {
+      tradingDate: chosen?.tradingDate,
+      slotTime: chosen?.slotTime,
+      computedAt: typeof summary?.computedAt === 'number' ? summary.computedAt : undefined,
+      timestamp: chosen?.timestamp,
+      stale,
+    })
+    rotationMeta.value = themeFacade.getBackendRotationMeta()
   } catch {
     themeFacade.setBackendRotationSummary(null)
+    rotationMeta.value = null
   }
 }
 

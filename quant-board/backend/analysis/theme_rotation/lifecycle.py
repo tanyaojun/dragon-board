@@ -137,6 +137,14 @@ def market_phase_for(
         return "climax"
     if max_board_height >= cfg.market_climax_max_board:
         return "climax"
+    if max_board_height <= cfg.market_ice_max_board and total_zt_count < cfg.market_ice_min_zt_count:
+        return "ice"
+    if (
+        cfg.market_rising_min_board <= max_board_height <= cfg.market_climax_max_board - 1
+        and mainline_count >= 1
+    ):
+        return "rising"
+    # R3：cooling 判定置于 rising 之后，避免“有稳定主线但部分题材降温”的市场被误标退潮
     if (
         (cooling_theme_ratio is not None and cooling_theme_ratio >= cfg.market_cooling_theme_ratio)
         or (
@@ -145,13 +153,6 @@ def market_phase_for(
         )
     ):
         return "cooling"
-    if max_board_height <= cfg.market_ice_max_board and total_zt_count < cfg.market_ice_min_zt_count:
-        return "ice"
-    if (
-        cfg.market_rising_min_board <= max_board_height <= cfg.market_climax_max_board - 1
-        and mainline_count >= 1
-    ):
-        return "rising"
     if (
         rotation_speed is not None
         and rotation_speed >= cfg.market_chaos_min_rotation_speed

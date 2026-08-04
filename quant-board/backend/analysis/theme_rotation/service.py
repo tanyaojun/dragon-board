@@ -52,7 +52,8 @@ class ThemeRotationService:
             current_stock_rows = list(bundle.stock_rows)
             frame = (bundle.frames or [{}])[0]
             indices = frame.get("indices") if isinstance(frame, dict) else None
-            result = self._engine.compute(
+            result = await asyncio.to_thread(
+                self._engine.compute,
                 current_sector_rows,
                 history.slots,
                 current_stock_rows,

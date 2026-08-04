@@ -86,3 +86,71 @@ def test_theme_rotation_summary_envelope_shape(monkeypatch):
     data = resp.json()["data"]
     assert data["frame"]["rotationSummary"]["marketPhase"] == "rising"
     assert data["statuses"][0]["rotationState"] == "mainline"
+
+
+class FakeCache:
+    def __init__(self):
+        self.store: dict[str, dict] = {}
+        self.deps: tuple[str, list] | None = None
+
+    def get_response(self, key):
+        return self.store.get(key)
+
+    def set_response(self, key, response, ttl_seconds=None):
+        self.store[key] = response
+
+    def register_dependencies(self, key, index_keys):
+        self.deps = (key, index_keys)
+
+
+def test_theme_rotation_summary_reads_through_redis_cache(monkeypatch):
+    calls = {"count": 0}
+
+    class CountingFrameDb(FakeFrameDb):
+        def __getitem__(self, name):
+            if name == "snapshot_frames":
+                return _CountingFrameCollection(self._frames, calls)
+            return super().__getitem__(name)
+
+    class _CountingFrameCollection(_FakeFrameCollection):
+        def __init__(self, frames, counter):
+            super().__init__(frames)
+            self._counter = counter
+
+        def find_one(self, query, sort=None):
+            self._counter["count"] += 1
+            return super().find_one(query, sort)
+
+    import backend.api.theme_rotation_routes as routes
+    from backend.data import snapshot_cache
+
+    frames = [{
+        "snapshotId": "half_hour:2026-08-04:15:00",
+        "tradingDate": "2026-08-04",
+        "slotTime": "15:00",
+        "timestamp": 1000,
+        "rotationSummary": {
+            "marketPhase": "rising",
+            "mainLines": [],
+            "algorithmVersion": "theme_rotation_v2",
+        },
+    }]
+    monkeypatch.setattr(
+        routes,
+        "get_runtime_mongodb_database",
+        lambda: CountingFrameDb(frames, []),
+    )
+    fake_cache = FakeCache()
+    monkeypatch.setattr(routes.snapshot_cache, "get_snapshot_redis_cache", lambda: fake_cache)
+
+    client = TestClient(app)
+    params = {"dataset_id": "dragonboard_live", "snapshot_type": "half_hour",
+              "trading_date": "2026-08-04"}
+    first = client.get("/api/theme-rotation/summary", params=params)
+    second = client.get("/api/theme-rotation/summary", params=params)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert calls["count"] == 1  # 第二次命中 Redis read-through，不再查库
+    assert fake_cache.deps is not None
+    assert any("index" in key for key in fake_cache.deps[1])

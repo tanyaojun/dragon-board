@@ -23,4 +23,18 @@ describe('mapBackendRotationSummary', () => {
     expect(mapBackendRotationSummary(null)).toBeNull()
     expect(mapBackendRotationSummary({})).toBeNull() // 无 algorithmVersion 视为非引擎产出（H3）
   })
+
+  it('maps inflow/outflow theme objects with names and legacy string ids', () => {
+    const mapped = mapBackendRotationSummary({
+      marketPhase: 'rising',
+      mainLines: [],
+      inflowThemes: [{ themeId: 'BKAI', themeName: '人工智能' }],
+      outflowThemes: ['BKAG'],
+      algorithmVersion: 'theme_rotation_v2',
+    })
+    expect(mapped?.inflowThemes[0].themeName).toBe('人工智能')
+    expect(mapped?.inflowThemes[0].direction).toBe('inflow')
+    expect(mapped?.outflowThemes[0].themeName).toBe('BKAG') // 旧帧只有 themeId
+    expect(mapped?.outflowThemes[0].direction).toBe('outflow')
+  })
 })

@@ -426,9 +426,15 @@ class ThemeRotationEngine:
             mainline_concentration=concentration,
             max_board_height=max_board,
             main_lines=mainlines,
-            inflow_themes=[s.theme_id for s in statuses if s.rotation_state == "inflow"],
+            inflow_themes=[
+                {"themeId": s.theme_id, "themeName": s.theme_name}
+                for s in statuses
+                if s.rotation_state == "inflow"
+            ],
             outflow_themes=[
-                s.theme_id for s in statuses if s.rotation_state in ("outflow", "cooling")
+                {"themeId": s.theme_id, "themeName": s.theme_name}
+                for s in statuses
+                if s.rotation_state in ("outflow", "cooling")
             ],
             suggestion=_suggestion_for(market_phase, mainlines),
             computed_at=computed_at,

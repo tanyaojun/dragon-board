@@ -58,8 +58,8 @@ class MarketRotationSummary:
     mainline_concentration: float | None = None
     max_board_height: int | None = None
     main_lines: list[dict[str, Any]] = field(default_factory=list)
-    inflow_themes: list[str] = field(default_factory=list)
-    outflow_themes: list[str] = field(default_factory=list)
+    inflow_themes: list[dict[str, Any]] = field(default_factory=list)
+    outflow_themes: list[dict[str, Any]] = field(default_factory=list)
     suggestion: str = ""
     computed_at: int = 0
     algorithm_version: str = "theme_rotation_v2"

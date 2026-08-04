@@ -736,6 +736,11 @@ rotationScore/heatTrend/flowTrend/breadthTrend/crowdingTrend/
 mainlineConcentrationRank/reasons/factorBreakdown/qualityFlags`）。
 无匹配帧时返回 404（`ok=false`）。
 
+该接口接入 Redis read-through 缓存（`snapshot_cache`，默认 TTL 60s，可用环境变量
+`QUANT_BOARD_THEME_ROTATION_CACHE_TTL_SECONDS` 调整）；响应 key 注册到 dataset/date
+索引，采集落库（ingest）时随现有失效链路自动清除，补采/force 重采后不会读到旧结果。
+`rotationSummary.inflowThemes/outflowThemes` 为 `[{themeId, themeName}]` 对象列表。
+
 ### `POST /api/operations/after-market-once`
 
 > MongoDB 模式下该入口执行 `hotlistSentiment` 日终步骤；以下为迁移前 SQLite/Parquet 历史合同。

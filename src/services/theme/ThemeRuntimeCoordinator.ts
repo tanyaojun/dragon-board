@@ -25,10 +25,28 @@ let previousSignature = ''
 let previousFactors: ThemeFactorSnapshot[] = []
 let previousEvents: ThemeRuntimeRefreshResult['events'] = []
 let latestBackendRotationSummary: Record<string, any> | null = null
+let latestBackendRotationMeta: BackendRotationMeta | null = null
 
-/** 设置最新后端 frame.rotationSummary（面板/读取方在拿到 frame 后调用）。 */
-export function setBackendRotationSummary(payload: Record<string, any> | null | undefined): void {
+export interface BackendRotationMeta {
+  tradingDate?: string
+  slotTime?: string
+  computedAt?: number
+  timestamp?: number
+  /** 最新槽位无引擎结果、展示的是上一槽数据时为 true */
+  stale?: boolean
+}
+
+/** 设置最新后端 frame.rotationSummary 及其来源元信息（面板/读取方在拿到 frame 后调用）。 */
+export function setBackendRotationSummary(
+  payload: Record<string, any> | null | undefined,
+  meta?: BackendRotationMeta | null,
+): void {
   latestBackendRotationSummary = payload && typeof payload === 'object' ? payload : null
+  latestBackendRotationMeta = meta && typeof meta === 'object' ? meta : null
+}
+
+export function getBackendRotationMeta(): BackendRotationMeta | null {
+  return latestBackendRotationMeta
 }
 
 export function themeInputSignature(context: ThemeSourceContext): string {

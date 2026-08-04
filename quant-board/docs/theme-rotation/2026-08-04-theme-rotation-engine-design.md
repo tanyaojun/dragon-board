@@ -200,6 +200,8 @@
   各主题 rotationState）。
 - 删除 `ThemeRotationEngine.ts` 的本地计算与 localStorage 轮动历史；`ThemeFactorEngine` 的
   rotationState/persistence 改为直接透传后端值。
+- `quickRotation`（“快速轮动/一日游”）维度在后端引擎 v1 不生产，前端 adapter 保持空数组；
+  该维度视为已废弃，后续有明确口径时再恢复。
 
 ## 7. 实施计划（TDD）
 
@@ -287,3 +289,28 @@
    而不是 `round(None)` 抛错（真实数据常见缺字段）。
 5. **`fuse_theme_resonance` 调用约定**：该函数签名实为 `(base, exposure, frame_momentum)`，
    计划内示例参数顺序有误，测试按真实签名调用。
+
+## 12. 第二轮修复记录（2026-08-04，code review + 缓存建议）
+
+对照 `2026-08-04-theme-rotation-engine-code-review.md` 与缓存建议的修复：
+
+- **读口 TTL cache**：`GET /api/theme-rotation/summary` 接入现有 Redis read-through
+  （`snapshot_cache`，TTL 默认 60s，可配 `QUANT_BOARD_THEME_ROTATION_CACHE_TTL_SECONDS`），
+  并把响应 key 注册到 dataset/date 索引，采集落库（ingest）时随现有失效链路清除。
+- **前端防旧标记**：面板展示轮动数据的 `slotTime`（含 computedAt tooltip）；最新槽位无引擎
+  结果、回退展示上一槽数据时打 `旧槽位` 标记（fail-visible，不静默）。
+- **R1**：engine 的 `inflowThemes/outflowThemes` 输出 `[{themeId, themeName}]` 对象，
+  adapter 兼容旧字符串形态，面板列表显示中文名。
+- **R3**：`market_phase_for` 的 cooling 判定移到 rising 之后，有稳定主线时不再误标退潮。
+- **R4**：逐一代查 H5 消费方——`BattlefieldBuilder` 的 persistentDays 归一化为数字、
+  主线判定走 `factor.rotationState`（后端值）；candidate 三服务仅透传 rotationSummary；
+  ThemeRiskDashboard/ThemeCorrelationPanel 仅展示。未发现 undefined 参与数值计算的路径。
+- **R5**：面板轮动数据源类型改用 `DEFAULT_RANK_TREND_SNAPSHOT_TYPE`（非硬编码），
+  并在轮动数据 badge 上显示槽位时间。
+- **R6**：新增真实中文名 + 后缀差异用例（`人工智能概念板块` vs `人工智能`）锁定归一化。
+- **R7**：`theme_momentum` 词表按 rotationState 值域修正——BOOST 有效新词
+  `emerging/inflow`（`inflow` 替代死词 `expanding`），PENALTY 移除死词 `climax`。
+- **R8**：`engine.compute` 经 `asyncio.to_thread` 移出事件循环（纯函数，线程安全）。
+- **R2**：v1 明确“板块超额”恒降级（后端采集链无 indices provider），见 §4.1 与 §12 说明；
+  后续补 indices provider 时再启用。
+- **R9**：`quickRotation` 维度废弃，前端空数组 + 文档标注。

@@ -76,3 +76,58 @@ def test_engine_rotation_score_present():
     assert result.statuses[0].rotation_score is not None
     assert result.market.rotation_speed == 8
     assert result.market.market_phase != "unknown"
+
+
+def test_market_inflow_outflow_carry_theme_names():
+    # R1：inflow/outflow 输出对象（themeId + themeName），前端列表不再显示裸代码
+    engine = ThemeRotationEngine()
+    history = [
+        HistorySlot(
+            timestamp_ms=1000 + i * 1000,
+            trading_date="2026-08-04",
+            sector_rows=[
+                _sector("BKAI", "人工智能", 1, 70.0, inflow=1.0),
+                _sector("BKAG", "机器人", 2, 60.0, inflow=0.8),
+                _sector("BKAH", "低空经济", 3, 55.0, inflow=0.5),
+                _sector("BKAJ", "数据要素", 4, 50.0, inflow=0.3),
+                _sector("BKAK", "退潮题材", 5, 45.0, momentum=30, inflow=-0.5),
+            ],
+        )
+        for i in range(2)
+    ]
+    current = [
+        _sector("BKAI", "人工智能", 1, 85.0, momentum=80, crowding=70, inflow=3.0, zt=8),
+        _sector("BKAG", "机器人", 2, 75.0, momentum=70, inflow=1.5, zt=6),
+        _sector("BKAH", "低空经济", 3, 65.0, momentum=60, inflow=0.5, zt=3),
+        _sector("BKAJ", "数据要素", 4, 62.0, momentum=60, inflow=0.2, zt=2),
+        _sector("BKAK", "退潮题材", 5, 55.0, momentum=30, inflow=-1.0, zt=1),
+    ]
+    stocks = [
+        _stock("600001", 8, "涨停", ["BKAI"]),
+        _stock("600002", 2, "", ["BKAG"]),
+        _stock("600003", 2, "", ["BKAH"]),
+        _stock("600004", 2, "", ["BKAJ"]),
+        _stock("600005", 2, "", ["BKAK"]),
+    ]
+    result = engine.compute(current, history, stocks, computed_at=3000)
+    by_key = {s.theme_id: s for s in result.statuses}
+    assert by_key["BKAJ"].rotation_state == "inflow"  # 非主线 expanding → inflow
+    assert by_key["BKAK"].rotation_state == "cooling"
+    inflow = result.market.inflow_themes
+    outflow = result.market.outflow_themes
+    for item in [*inflow, *outflow]:
+        assert isinstance(item, dict)
+        assert item.get("themeId")
+        assert item.get("themeName")
+    assert any(item["themeId"] == "BKAJ" and item["themeName"] == "数据要素" for item in inflow)
+    assert any(item["themeId"] == "BKAK" and item["themeName"] == "退潮题材" for item in outflow)
+
+
+def test_engine_stock_theme_label_normalization_matches_chinese_names():
+    # R6：真实 stock rows 的 themes 是中文名（可能带“概念/板块”后缀），
+    # 与 sector entityName 归一化后应正确归集主题内股票（boardHeight 不再缺失）
+    engine = ThemeRotationEngine()
+    current = [_sector("BKAI", "人工智能", 1, 60.0, momentum=55)]
+    stocks = [_stock("600001", 5, "涨停", ["人工智能概念板块"])]
+    result = engine.compute(current, _history(), stocks, computed_at=3000)
+    assert "boardHeight" not in result.statuses[0].quality_flags

@@ -6,9 +6,29 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from backend.data import snapshot_cache
 from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.settings import get_settings
 
 router = APIRouter(prefix="/api/theme-rotation", tags=["theme-rotation"])
+
+
+def _cache_key(
+    dataset_id: str,
+    snapshot_type: str,
+    trading_date: str | None,
+    slot_time: str | None,
+) -> str:
+    builder = snapshot_cache.SnapshotCacheKeyBuilder(prefix=get_settings().redis_key_prefix)
+    return builder.response_key(
+        "theme-rotation-summary",
+        resolved_dataset_id=dataset_id,
+        params={
+            "snapshot_type": snapshot_type,
+            "trading_date": trading_date or "",
+            "slot_time": slot_time or "",
+        },
+    )
 
 
 @router.get("/summary")
@@ -19,6 +39,12 @@ def theme_rotation_summary(
     slot_time: str | None = None,
 ) -> dict[str, Any]:
     """返回最近一个含 rotationSummary 的 frame 及其 sector rows 轮动状态。"""
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    cache_key = _cache_key(dataset_id, snapshot_type, trading_date, slot_time)
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_runtime_mongodb_database()
     query: dict[str, Any] = {
         "datasetId": dataset_id,
@@ -49,7 +75,7 @@ def theme_rotation_summary(
         )
         .sort([("rank", 1)])
     )
-    return {
+    response: dict[str, Any] = {
         "ok": True,
         "status": "ok",
         "data": {
@@ -63,6 +89,18 @@ def theme_rotation_summary(
             "statuses": [_public_sector(row) for row in sector_rows],
         },
     }
+    settings = get_settings()
+    cache.set_response(cache_key, response, ttl_seconds=settings.theme_rotation_cache_ttl_seconds)
+    cache.register_dependencies(
+        cache_key,
+        snapshot_cache.build_snapshot_cache_index_keys(
+            prefix=settings.redis_key_prefix,
+            dataset_id=dataset_id,
+            snapshot_type=snapshot_type,
+            trading_date=str(frame_doc.get("tradingDate") or trading_date or ""),
+        ),
+    )
+    return response
 
 
 def _public_sector(row: dict[str, Any]) -> dict[str, Any]:

@@ -35,9 +35,9 @@ ROLE_WEIGHTS = {
     "independent": 0.38,
     "noise": 0.15,
 }
-LIFECYCLE_BOOST = {"mainline", "expansion", "ignition", "expanding", "emerging"}
-LIFECYCLE_PENALTY = {"crowded", "divergence", "cooling", "reversal", "climax", "outflow"}
-REVERSAL_LIFECYCLES = {"cooling", "outflow", "divergence", "climax"}
+LIFECYCLE_BOOST = {"mainline", "expansion", "ignition", "emerging", "inflow"}
+LIFECYCLE_PENALTY = {"crowded", "divergence", "cooling", "reversal", "outflow"}
+REVERSAL_LIFECYCLES = {"cooling", "outflow", "divergence"}
 
 
 def _num(value: Any, default: float = 0.0) -> float:

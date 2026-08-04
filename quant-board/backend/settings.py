@@ -117,6 +117,7 @@ class Settings(BaseModel):
     snapshot_cache_enabled: bool = Field(default=True)
     snapshot_cache_ttl_seconds: int = Field(default=7200)
     snapshot_empty_cache_ttl_seconds: int = Field(default=10)
+    theme_rotation_cache_ttl_seconds: int = Field(default=60)
     snapshot_cache_connect_timeout_seconds: float = Field(default=0.2)
     snapshot_cache_socket_timeout_seconds: float = Field(default=0.2)
     snapshot_collector_enabled: bool = Field(default=False)
@@ -331,6 +332,13 @@ class Settings(BaseModel):
             _env_int(
                 "QUANT_BOARD_SNAPSHOT_EMPTY_CACHE_TTL_SECONDS",
                 self.snapshot_empty_cache_ttl_seconds,
+            ),
+        )
+        self.theme_rotation_cache_ttl_seconds = max(
+            1,
+            _env_int(
+                "QUANT_BOARD_THEME_ROTATION_CACHE_TTL_SECONDS",
+                self.theme_rotation_cache_ttl_seconds,
             ),
         )
         self.snapshot_cache_connect_timeout_seconds = max(
