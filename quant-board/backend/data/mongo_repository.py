@@ -182,7 +182,7 @@ class MongoRepository:
         )
         snapshot_ids = [str(row.get("snapshotId")) for row in frame_rows if row.get("snapshotId")]
         stock_rows_by_snapshot = self._stock_rows_by_snapshot(dataset_id, snapshot_ids, projection=projection)
-        sector_rows_by_snapshot = {} if projection == "ranktrend" else self._sector_rows_by_snapshot(dataset_id, snapshot_ids)
+        sector_rows_by_snapshot = self._sector_rows_by_snapshot(dataset_id, snapshot_ids)
         bundles: list[dict[str, Any]] = []
         for row in frame_rows:
             item = self.local_frame_to_bundle_dict(row)
@@ -192,7 +192,11 @@ class MongoRepository:
             if projection == "ranktrend":
                 item["entities"] = []
                 item["sectors"] = []
-                item["hotThemes"] = []
+                item["hotThemes"] = [
+                    self._sector_entity_to_view(sector)
+                    for sector in sector_rows_by_snapshot.get(str(row.get("snapshotId")), [])
+                    if sector.get("entityType") == "hot_theme"
+                ]
                 bundles.append(item)
                 continue
             item["entities"] = sector_rows_by_snapshot.get(str(row.get("snapshotId")), [])
@@ -814,6 +818,11 @@ class MongoRepository:
                 "volumeRatio": 1,
                 "zlje": 1,
                 "zljzb": 1,
+                "themes": 1,
+                "mainTheme": 1,
+                "themeRole": 1,
+                "themeContribution": 1,
+                "leadStatus": 1,
             }
         else:
             mongo_projection = {"depth10": 0}
@@ -831,6 +840,11 @@ class MongoRepository:
                     "volumeRatio": row.get("volumeRatio"),
                     "zlje": row.get("zlje"),
                     "zljzb": row.get("zljzb"),
+                    "themes": row.get("themes") or [],
+                    "mainTheme": row.get("mainTheme") or "",
+                    "themeRole": row.get("themeRole") or "",
+                    "themeContribution": row.get("themeContribution"),
+                    "leadStatus": row.get("leadStatus") or "",
                 }
             else:
                 item = self.local_stock_to_bundle_dict(row)

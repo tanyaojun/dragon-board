@@ -579,22 +579,26 @@ class Repository:
                                 "volumeRatio": row.volume_ratio,
                                 "zlje": row.zlje,
                                 "zljzb": row.zljzb,
+                                "themes": json_loads(row.themes_json, []),
+                                "mainTheme": "",
+                                "themeRole": row.theme_role or "",
+                                "themeContribution": row.theme_contribution,
+                                "leadStatus": row.lead_status or "",
                             }
                         )
                     else:
                         stock_rows_by_snapshot[row.snapshot_id].append(self.local_stock_to_bundle_dict(row))
 
-                if projection != "ranktrend":
-                    sector_query = (
-                        select(SnapshotSectorRowModel)
-                        .where(
-                            SnapshotSectorRowModel.dataset_id == dataset_id,
-                            SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
-                        )
-                        .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
+                sector_query = (
+                    select(SnapshotSectorRowModel)
+                    .where(
+                        SnapshotSectorRowModel.dataset_id == dataset_id,
+                        SnapshotSectorRowModel.snapshot_id.in_(snapshot_ids),
                     )
-                    for row in self.session.scalars(sector_query):
-                        sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
+                    .order_by(SnapshotSectorRowModel.timestamp.asc(), SnapshotSectorRowModel.rank.asc())
+                )
+                for row in self.session.scalars(sector_query):
+                    sector_rows_by_snapshot[row.snapshot_id].append(self.local_sector_to_bundle_dict(row))
             except SQLAlchemyError:
                 raise RuntimeError("primary database read failed")
 
@@ -607,7 +611,11 @@ class Repository:
             if projection == "ranktrend":
                 item["entities"] = []
                 item["sectors"] = []
-                item["hotThemes"] = []
+                item["hotThemes"] = [
+                    self._sector_entity_to_view(row)
+                    for row in sector_rows_by_snapshot.get(frame.snapshot_id, [])
+                    if row.get("entityType") == "hot_theme"
+                ]
                 bundles.append(item)
                 continue
             item["entities"] = sector_rows_by_snapshot.get(frame.snapshot_id, [])

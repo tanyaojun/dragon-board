@@ -1,0 +1,93 @@
+"""ranktrend projection 必须返回 hotThemes 与股票 themes，供题材动量计算。"""
+
+from backend.data.mongo_repository import MongoRepository
+
+
+class FakeCollection:
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def find(self, query, projection=None):
+        return self
+
+    def sort(self, *args, **kwargs):
+        return self
+
+    def limit(self, value):
+        return self
+
+    def __iter__(self):
+        yield from self._rows
+
+    def count_documents(self, query):
+        return 0
+
+
+class FakeDb:
+    def __init__(self, collections):
+        self._collections = {
+            name: FakeCollection(rows) for name, rows in collections.items()
+        }
+
+    def __getitem__(self, name):
+        return self._collections[name]
+
+
+def _frames():
+    return [{
+        "snapshotId": "s1",
+        "datasetId": "dragonboard_live",
+        "type": "half_hour",
+        "tradingDate": "2026-08-04",
+        "slotTime": "10:00",
+        "timestamp": 1,
+    }]
+
+
+def _sector_rows():
+    return [{
+        "snapshotId": "s1",
+        "datasetId": "dragonboard_live",
+        "entityType": "hot_theme",
+        "entityKey": "T1",
+        "entityName": "T1概念板块",
+        "heatScore": 80.0,
+        "rank": 1,
+        "rotationState": "mainline",
+        "crowdingRisk": 30.0,
+        "metadata": {"rankEligible": True},
+    }]
+
+
+def _stock_rows():
+    return [{
+        "snapshotId": "s1",
+        "datasetId": "dragonboard_live",
+        "code": "000001",
+        "name": "平安银行",
+        "rank": 1,
+        "avgRankNum": 1.0,
+        "change": 3.0,
+        "volumeRatio": 1.2,
+        "zlje": 10.0,
+        "zljzb": 0.1,
+        "themes": ["T1概念板块"],
+        "mainTheme": "T1概念板块",
+        "themeRole": "follower",
+        "themeContribution": 30.0,
+        "leadStatus": "",
+    }]
+
+
+def test_ranktrend_projection_includes_hot_themes_and_stock_themes():
+    repo = MongoRepository(FakeDb({
+        "snapshot_frames": _frames(),
+        "snapshot_stock_rows": _stock_rows(),
+        "snapshot_sector_rows": _sector_rows(),
+    }))
+    bundles = repo.load_frame_bundles("dragonboard_live", snapshot_type="half_hour", projection="ranktrend")
+    assert len(bundles) == 1
+    assert bundles[0]["hotThemes"] != []
+    assert bundles[0]["hotThemes"][0]["entityType"] == "hot_theme"
+    assert bundles[0]["stocks"][0]["themes"] == ["T1概念板块"]
+    assert bundles[0]["stocks"][0]["themeRole"] == "follower"
