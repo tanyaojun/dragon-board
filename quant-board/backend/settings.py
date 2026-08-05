@@ -378,11 +378,14 @@ class Settings(BaseModel):
             100,
             _env_int("QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS", self.snapshot_collector_poll_ms),
         )
-        self.snapshot_collector_close_grace_minutes = max(
-            1,
-            _env_int(
-                "QUANT_BOARD_SNAPSHOT_COLLECTOR_CLOSE_GRACE_MINUTES",
-                self.snapshot_collector_close_grace_minutes,
+        self.snapshot_collector_close_grace_minutes = min(
+            29,  # 上限 29 分钟：最后槽位 15:30 + grace = 15:59，落在 [09:00,16:00) 窗口内
+            max(
+                1,
+                _env_int(
+                    "QUANT_BOARD_SNAPSHOT_COLLECTOR_CLOSE_GRACE_MINUTES",
+                    self.snapshot_collector_close_grace_minutes,
+                ),
             ),
         )
         self.snapshot_collector_proxy_base_url = os.environ.get(

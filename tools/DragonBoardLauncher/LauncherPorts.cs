@@ -50,6 +50,11 @@ internal static class LauncherPorts
             {
                 var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 5 || !IsEndpointForPort(parts[1], port)) continue;
+                // 只取 LISTENING 状态的 PID：netstat -ano -p tcp 列序为
+                // Proto Local Foreign State PID，状态在 parts[^2]、PID 在 parts[^1]。
+                // ESTABLISHED 是残留连接（健康检查等），不代表进程在监听该端口，
+                // 误取会导致端口 owner 错绑/误杀。
+                if (!string.Equals(parts[^2], "LISTENING", StringComparison.OrdinalIgnoreCase)) continue;
                 if (int.TryParse(parts[^1], out var pid) && pid > 0 && !result.Contains(pid))
                     result.Add(pid);
             }
@@ -61,8 +66,16 @@ internal static class LauncherPorts
 
     private static bool IsEndpointForPort(string endpoint, int port)
     {
-        if (endpoint.EndsWith($":{port}", StringComparison.Ordinal))
-            return true;
+        // 精确匹配端口：取最后一个冒号后的段做全等比较，避免 :16379 误命中 6379
+        // （EndsWith(":6379") 对 127.0.0.1:16379 也成立，会把无关进程纳入清理/接管）。
+        var colonIndex = endpoint.LastIndexOf(':');
+        if (colonIndex > 0 && colonIndex < endpoint.Length - 1)
+        {
+            // IPv6 端点形如 [::1]:8001，括号外最后一个冒号才是端口分隔。
+            var afterColon = endpoint[(colonIndex + 1)..];
+            if (int.TryParse(afterColon, out var parsedPort) && parsedPort == port)
+                return true;
+        }
 
         return endpoint.Equals($"[::1]:{port}", StringComparison.OrdinalIgnoreCase)
             || endpoint.Equals($"[::]:{port}", StringComparison.OrdinalIgnoreCase);

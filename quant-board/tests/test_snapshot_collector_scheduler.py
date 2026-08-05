@@ -433,7 +433,10 @@ class TestSnapshotCollectorScheduler:
 
     @pytest.mark.asyncio
     async def test_seconds_until_next_slot_all_done_returns_idle(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        slot = make_test_slot()
+        slot = make_test_slot(
+            timestamp_ms=_ts_ms(datetime.datetime(2026, 6, 15, 10, 0, 0, tzinfo=TZ_SHANGHAI))
+        )
+        # 10:00 槽位已完成，但时钟仍处采集窗口内（10:00 < 16:00）：应返回 1800s 空闲轮询。
         _patch_clock(monkeypatch, now_ms=slot.timestamp_ms, trading_date="2026-06-15")
         _patch_dispatch(monkeypatch, [slot])
         scheduler = _scheduler(monkeypatch)
@@ -443,13 +446,33 @@ class TestSnapshotCollectorScheduler:
 
     @pytest.mark.asyncio
     async def test_seconds_until_next_slot_skips_in_flight(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        slot = make_test_slot()
-        _patch_clock(monkeypatch, now_ms=slot.timestamp_ms - 1000, trading_date="2026-06-15")
+        slot = make_test_slot(
+            timestamp_ms=_ts_ms(datetime.datetime(2026, 6, 15, 10, 0, 0, tzinfo=TZ_SHANGHAI))
+        )
+        # 时钟 09:59:59（窗口内），槽位 in-flight：返回 1800s 空闲轮询。
+        now_ms = slot.timestamp_ms - 1000
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
         _patch_dispatch(monkeypatch, [slot])
         scheduler = _scheduler(monkeypatch)
         scheduler._in_flight_slots.add(slot.snapshot_id)
 
         assert await scheduler._seconds_until_next_slot() == 1800.0
+
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_slot_after_close_sleeps_until_window(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 16:00 后（非采集窗口）：即使有未完成槽位也不调度，睡到次日 09:00 窗口再开。
+        slot = make_test_slot(
+            timestamp_ms=_ts_ms(datetime.datetime(2026, 6, 15, 15, 30, 0, tzinfo=TZ_SHANGHAI))
+        )
+        now_ms = _ts_ms(datetime.datetime(2026, 6, 15, 17, 0, 0, tzinfo=TZ_SHANGHAI))
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
+        _patch_dispatch(monkeypatch, [slot])
+        scheduler = _scheduler(monkeypatch)
+
+        # 17:00 -> 次日 09:00 = 16 小时
+        assert await scheduler._seconds_until_next_slot() == 16 * 3600.0
 
     # ── due-slot dispatch ────────────────────────────────────────────────
 

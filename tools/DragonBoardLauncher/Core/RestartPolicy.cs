@@ -80,10 +80,11 @@ internal sealed class RestartPolicy
         _failures[key] = _failures.GetValueOrDefault(key) + 1;
     }
 
-    /// <summary>服务恢复健康：清零失败计数。</summary>
+    /// <summary>服务恢复健康：清零失败计数并清除冷却时间（恢复后允许立即重启）。</summary>
     public void Reset(string key)
     {
         _failures[key] = 0;
+        _lastRestartUtc.Remove(key);
     }
 
     private TimeSpan ComputeBackoff(string key)

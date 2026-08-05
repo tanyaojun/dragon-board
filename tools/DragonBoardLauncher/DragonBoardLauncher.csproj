@@ -8,4 +8,8 @@
     <AssemblyName>DragonBoardLauncher</AssemblyName>
     <ApplicationIcon></ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="DragonBoardLauncher.Tests" />
+  </ItemGroup>
 </Project>

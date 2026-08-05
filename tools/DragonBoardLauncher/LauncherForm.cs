@@ -46,6 +46,13 @@ internal sealed class LauncherForm : Form
     // 重启被冷却拦截时，仅当原因变化才记日志，避免每 3 秒刷一条。
     private string _lastRestartBlockedReason = "";
 
+    // 用户显式停止过的服务 key：手动停止后不自动拉起（尊重用户意图），
+    // 直到用户再次手动启动该服务才清除标记。
+    // 写可能发生在 RunManagerActionAsync 的后台线程，读在 UI 线程的刷新循环，
+    // 用锁保护避免并发读写未定义行为。
+    private readonly object _userStoppedSync = new();
+    private readonly HashSet<string> _userStoppedServices = new(StringComparer.Ordinal);
+
     // 用户启停偏好持久化（P1.2）：launcher 重启后恢复用户手动启动过的展示/辅助服务。
     private readonly DesiredStateStore _desiredState;
     private readonly HashSet<string> _desiredEnabled;
@@ -116,6 +123,7 @@ internal sealed class LauncherForm : Form
         _trayMenu.Items.Add("显示窗口", null, (_, _) => ShowFromTray());
         _trayMenu.Items.Add("打开看板", null, (_, _) => OpenBoard());
         _trayMenu.Items.Add("核心启动", null, async (_, _) => await StartAllAsync());
+        _trayMenu.Items.Add("全部重启", null, async (_, _) => await RestartAllAsync());
         _trayMenu.Items.Add("全部停止", null, async (_, _) => await StopAllAsync());
         _trayMenu.Items.Add(new ToolStripSeparator());
         _trayMenu.Items.Add("退出", null, (_, _) => ExitApplication());
@@ -229,6 +237,21 @@ internal sealed class LauncherForm : Form
         _autoStartButton.Click += (_, _) => ToggleAutoStart();
         Controls.Add(_autoStartButton);
 
+        var restartAllBtn = new Button
+        {
+            Text = "全部重启",
+            FlatStyle = FlatStyle.Flat,
+            Size = new Size(96, 36),
+            Location = new Point(512, btnBarY),
+            BackColor = Color.FromArgb(176, 130, 44),
+            ForeColor = Color.White,
+            Font = new Font("Microsoft YaHei UI", 10f, FontStyle.Bold),
+            Cursor = Cursors.Hand,
+        };
+        restartAllBtn.FlatAppearance.BorderSize = 0;
+        restartAllBtn.Click += async (_, _) => await RestartAllAsync();
+        Controls.Add(restartAllBtn);
+
         var logY = btnBarY + 48;
         _log.Multiline = true;
         _log.ReadOnly = true;
@@ -326,6 +349,7 @@ internal sealed class LauncherForm : Form
         {
             await RunManagerActionAsync(() => _processManager.StartService(svc));
             MarkDesired(key, enabled: true);
+            UserStoppedRemove(key); // 用户重新启动，清除"手动停止"标记
         };
         p.Controls.Add(startBtn);
         _startButtons[key] = startBtn;
@@ -344,8 +368,11 @@ internal sealed class LauncherForm : Form
         stopBtn.FlatAppearance.BorderSize = 0;
         stopBtn.Click += async (_, _) =>
         {
-            await RunManagerActionAsync(() => _processManager.StopService(svc));
+            // 先记录用户手动停止意图（避免 StopService 后下一轮 RefreshStatusesAsync
+            // 自动重启先于标记写入把服务拉起——竞态窗口），再执行停止。
+            UserStoppedAdd(key);
             MarkDesired(key, enabled: false);
+            await RunManagerActionAsync(() => _processManager.StopService(svc));
         };
         p.Controls.Add(stopBtn);
         _stopButtons[key] = stopBtn;
@@ -391,12 +418,40 @@ internal sealed class LauncherForm : Form
 
     private Task StartAllAsync()
     {
-        return RunManagerActionAsync(_processManager.StartAll);
+        return RunManagerActionAsync(() =>
+        {
+            _processManager.StartAll();
+            // 核心启动视为用户显式意图，清除"手动停止"标记，恢复自动重启。
+            foreach (var key in _services.Keys)
+                UserStoppedRemove(key);
+        });
     }
 
     private Task StopAllAsync()
     {
-        return RunManagerActionAsync(_processManager.StopAll);
+        return RunManagerActionAsync(() =>
+        {
+            _processManager.StopAll();
+            // 全部停止视为用户显式意图：全部服务加入"手动停止"标记，避免自动重启拉起。
+            foreach (var key in _services.Keys)
+                UserStoppedAdd(key);
+        });
+    }
+
+    /// <summary>
+    /// 全部重启：停止全部服务 → 清除手动停止标记（恢复自动重启）→ 启动核心 → 恢复偏好服务。
+    /// </summary>
+    private async Task RestartAllAsync()
+    {
+        await RunManagerActionAsync(() =>
+        {
+            _processManager.StopAll();
+            // 重启视为用户显式意图：清除手动停止标记，恢复自动重启。
+            foreach (var key in _services.Keys)
+                UserStoppedRemove(key);
+            _processManager.StartAll();
+        });
+        await RestoreDesiredServicesAsync();
     }
 
     /// <summary>
@@ -425,6 +480,30 @@ internal sealed class LauncherForm : Form
 
         if (restored.Count > 0)
             Log($"已按上次偏好恢复服务: {string.Join("、", restored)}");
+    }
+
+    private bool UserStoppedContains(string key)
+    {
+        lock (_userStoppedSync)
+        {
+            return _userStoppedServices.Contains(key);
+        }
+    }
+
+    private void UserStoppedAdd(string key)
+    {
+        lock (_userStoppedSync)
+        {
+            _userStoppedServices.Add(key);
+        }
+    }
+
+    private void UserStoppedRemove(string key)
+    {
+        lock (_userStoppedSync)
+        {
+            _userStoppedServices.Remove(key);
+        }
     }
 
     /// <summary>记录服务启用/停用偏好并持久化（P1.2）。</summary>
@@ -507,8 +586,9 @@ internal sealed class LauncherForm : Form
             // 恢复健康：清零重启失败计数。
             _restartPolicy.Reset("collector");
         }
-        else if (decision.ShouldRestart)
+        else if (decision.ShouldRestart && !UserStoppedContains("collector"))
         {
+            // 用户手动停止过 collector：尊重意图不自动拉起，直到用户再次手动启动。
             if (_restartPolicy.TryRequestRestart("collector", out var blocked))
             {
                 _restartPolicy.RecordRestart("collector");
@@ -524,7 +604,8 @@ internal sealed class LauncherForm : Form
             }
         }
 
-        var collectorFailed = decision.CollectFailed;
+        // 用户手动停止过 collector：不标红为"采集异常"（尊重意图，属正常停止）。
+        var collectorFailed = decision.CollectFailed && !UserStoppedContains("collector");
         var running = 0;
         foreach (var kv in statuses)
         {

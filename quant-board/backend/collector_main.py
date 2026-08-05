@@ -115,7 +115,11 @@ async def _catchup_missing_slots(settings: Any) -> None:
         create_snapshot_collector_service,
     )
     from backend.snapshot_collector.slots import generate_slots
-    from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+    from backend.snapshot_collector.trading_calendar import (
+        TZ_SHANGHAI,
+        is_in_collect_window,
+        trading_date_from_ts,
+    )
 
     attempted: set[str] = set()
     last_date: str | None = None
@@ -123,6 +127,12 @@ async def _catchup_missing_slots(settings: Any) -> None:
         await asyncio.sleep(900)  # 每 15 分钟检查一次
         try:
             now_ts = int(time.time() * 1000)
+            # 非采集窗口（收盘后至次日 09:00）：当日槽位已定格，不补采，
+            # 避免收盘后继续用实时行情回填历史槽位。
+            if not is_in_collect_window(
+                datetime.fromtimestamp(now_ts / 1000, TZ_SHANGHAI)
+            ):
+                continue
             trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
             if not trading_date:
                 continue

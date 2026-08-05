@@ -53,6 +53,28 @@ dotnet publish tools\DragonBoardLauncher\DragonBoardLauncher.csproj -p:PublishPr
   按上次偏好恢复；手动停止的服务不会被无条件重新拉起。
 - 阶段名与 `services.json` stages 顺序一致：基础设施 → 实时数据源 → 量化后端 → 快照采集。
 
+## 日志策略（P2.1）
+
+- 每服务日志策略在 `config/services.json` 的 `logPolicy` 配置（`level`：`all` / `errors-only` /
+  `filter-access`；`suppressHealth`：是否抑制健康检查行）。缺省按旧 `logOnlyErrors` 字段兜底。
+  - `errors-only`：stdout 全忽略，仅错误/警告落盘（如行情桥的 INFO 轮询噪音）；
+  - `filter-access`：过滤 uvicorn 访问日志行与 proxy 每请求行（默认服务用）；
+  - `all`：全量落盘（Mongo/Redis 等低频服务）。
+- 子进程输出经**异步队列**消费（P2.1b）：输出回调只入队，后台线程批量写日志文件，
+  高吞吐 stdout/stderr 不阻塞子进程管道；launcher 退出时刷完队列剩余行。
+- 落盘仍按天分文件 + 10MB 轮转 gzip + 30 天清理（`LogFile.cs`）。
+
+## 操作按钮
+
+顶部按钮栏与托盘菜单：
+
+- **核心启动**：按依赖顺序启动核心服务（Mongo/Redis → 代理/行情桥 → Quant API → 采集），并清除"手动停止"标记。
+- **全部停止**：停止全部服务，并把全部服务标记为"手动停止"，避免轮询自动重启拉起。
+- **全部重启**：先停止全部，再启动核心并恢复上次偏好的展示/辅助服务（等价"全部停止 + 核心启动 + 恢复偏好"）。
+- **打开看板 / 打开量化**：打开 Dragon Board（5173）/ QuantBoard（5174）页面。
+- **自启**：切换开机自启动。
+- 每个服务卡片右侧有单服务"启动/停止"按钮；单服务停止同样标记"手动停止"。
+
 ## 核心启动顺序
 
 启动管理器会按依赖分阶段自动启动核心服务。每个阶段必须通过就绪检查，才会启动下一阶段：

@@ -162,6 +162,7 @@ internal static class LauncherServices
             var isVoiceWorker = GetBool(item, "isVoiceWorker", false);
             var logOnlyErrors = GetBool(item, "logOnlyErrors", false);
             var externalPolicy = ParsePolicy(GetString(item, "externalPolicy"));
+            var logPolicy = ParseLogPolicy(item, logOnlyErrors);
 
             Dictionary<string, string>? envVars = null;
             if (item.TryGetProperty("envVars", out var envElement) &&
@@ -183,13 +184,45 @@ internal static class LauncherServices
                 envVars,
                 isVoiceWorker,
                 logOnlyErrors,
-                externalPolicy);
+                externalPolicy,
+                logPolicy);
             return (key, service);
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>解析 logPolicy 对象（{level, suppressHealth}）；缺省按旧 logOnlyErrors 映射。</summary>
+    internal static ServiceLogPolicy? ParseLogPolicy(JsonElement item, bool logOnlyErrors)
+    {
+        if (!item.TryGetProperty("logPolicy", out var policy) ||
+            policy.ValueKind != JsonValueKind.Object)
+        {
+            return null; // 让 ManagedService 按 logOnlyErrors 兜底
+        }
+
+        var level = ServiceLogLevel.All;
+        if (policy.TryGetProperty("level", out var levelEl) &&
+            levelEl.ValueKind == JsonValueKind.String)
+        {
+            level = levelEl.GetString() switch
+            {
+                "errors-only" => ServiceLogLevel.ErrorsOnly,
+                "filter-access" => ServiceLogLevel.FilterAccess,
+                _ => ServiceLogLevel.All
+            };
+        }
+
+        var suppressHealth = false;
+        if (policy.TryGetProperty("suppressHealth", out var suppressEl) &&
+            suppressEl.ValueKind == JsonValueKind.True)
+        {
+            suppressHealth = true;
+        }
+
+        return new ServiceLogPolicy(level, suppressHealth);
     }
 
     private static ServiceExternalPolicy ParsePolicy(string? value) =>

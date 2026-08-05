@@ -37,7 +37,8 @@
       "fileName": "node",
       "arguments": "server.js",
       "externalPolicy": "managed",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "logPolicy": { "level": "filter-access", "suppressHealth": true }
     },
     {
       "key": "voice",
@@ -71,7 +72,8 @@
       "fileName": "python",
       "arguments": "python-bridge/main.py",
       "externalPolicy": "managed",
-      "logOnlyErrors": true
+      "logOnlyErrors": true,
+      "logPolicy": { "level": "errors-only" }
     },
     {
       "key": "quant-api",
@@ -82,7 +84,8 @@
       "arguments": "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
       "fallbackFileName": "python",
       "externalPolicy": "managed",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "logPolicy": { "level": "filter-access", "suppressHealth": true }
     },
     {
       "key": "collector",
@@ -93,7 +96,8 @@
       "arguments": "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001",
       "fallbackFileName": "python",
       "externalPolicy": "managed",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "logPolicy": { "level": "filter-access", "suppressHealth": true }
     },
     {
       "key": "quant-ui",

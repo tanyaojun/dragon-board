@@ -21,6 +21,16 @@ internal sealed class LauncherProcessManager
     private Process? _mongoExpressProcess;
     private Process? _redisCommanderProcess;
 
+    // 子进程输出异步队列（P2.1b）：输出回调只入队，后台消费线程批量写日志，
+    // 避免高吞吐 stdout/stderr 在 Process 读取线程上同步落盘拖慢管道。
+    // 有界容量（5000 行）防止极端高吞吐（如子进程疯狂刷错误）时内存无限增长；
+    // 满时 TryAdd 失败丢弃新行，保证不阻塞子进程输出回调。
+    private const int LogQueueCapacity = 5000;
+    private readonly System.Collections.Concurrent.BlockingCollection<string> _logQueue = new(
+        new System.Collections.Concurrent.ConcurrentQueue<string>(), LogQueueCapacity);
+    private readonly CancellationTokenSource _logCts = new();
+    private readonly Thread _logThread;
+
     public LauncherProcessManager(
         string root,
         IReadOnlyDictionary<string, ManagedService> services,
@@ -29,6 +39,71 @@ internal sealed class LauncherProcessManager
         _root = root;
         _services = services;
         _log = log;
+        _logThread = new Thread(LogDrainLoop)
+        {
+            IsBackground = true,
+            Name = "launcher-child-log"
+        };
+        _logThread.Start();
+    }
+
+    /// <summary>后台日志消费循环：批量取出子进程输出行并写日志（每批最多 100 行）。</summary>
+    private void LogDrainLoop()
+    {
+        var batch = new List<string>(100);
+        try
+        {
+            while (!_logCts.IsCancellationRequested)
+            {
+                batch.Clear();
+                try
+                {
+                    // 阻塞取一条；取消时抛 OperationCanceledException 退出循环。
+                    batch.Add(_logQueue.Take(_logCts.Token));
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+
+                // 非阻塞把剩余可立即取到的行收进同一批。
+                while (batch.Count < 100 && _logQueue.TryTake(out var line))
+                    batch.Add(line);
+
+                foreach (var line in batch)
+                {
+                    try { _log(line); }
+                    catch { /* 日志写入失败不影响后续 */ }
+                }
+            }
+
+            // 取消后把队列剩余行写完，避免丢失尾部日志。
+            while (_logQueue.TryTake(out var remaining))
+            {
+                try { _log(remaining); }
+                catch { }
+            }
+        }
+        catch
+        {
+            // 消费线程异常不阻塞启动器主体
+        }
+    }
+
+    private void EnqueueChildLog(string serviceName, string line)
+    {
+        try
+        {
+            // TryAdd：有界队列满时立即失败（丢弃该行），不阻塞子进程输出回调。
+            if (!_logQueue.TryAdd($"[{serviceName}] {line}"))
+            {
+                // 队列已满：丢弃，避免子进程高吞吐输出阻塞管道。
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // 队列已关闭（停止时）：丢弃，不阻塞子进程输出回调
+        }
     }
 
     public void StartAll()
@@ -37,6 +112,7 @@ internal sealed class LauncherProcessManager
         // 基础设施→实时数据源→量化后端→快照采集，原"快照采集/量化后端"顺序写反）。
         // stages 阶段数来自 services.json 可配置；超出内置名单时回退"阶段 N"。
         var stageNames = new[] { "基础设施", "实时数据源", "量化后端", "快照采集" };
+        var collectorPendingWait = false; // 锁冲突豁免：collector 等待锁释放，不宣告就绪
         for (var index = 0; index < LauncherServices.CoreStartupStages.Length; index++)
         {
             var stage = LauncherServices.CoreStartupStages[index];
@@ -50,6 +126,19 @@ internal sealed class LauncherProcessManager
 
             if (WaitForServices(stage, TimeSpan.FromSeconds(30))) continue;
 
+            // 仅 collector 独占阶段：若存在"启动失败 wait"（锁冲突）标记，不中止启动链，
+            // 交由后台 guard/RestartPolicy 在锁 TTL 过期后自动拉起（P0 防风暴设计）。
+            // 其它阶段无失败标记概念，超时仍按真实故障中止。
+            if (stage.SequenceEqual(new[] { "collector" }) &&
+                SnapshotCollectorProbe.TryReadStartupFailure() is not null)
+            {
+                _log(
+                    $"{_services["collector"].Name}(8001) 正在等待锁释放，" +
+                    "将由自动重启机制接管，不中止后续启动。");
+                collectorPendingWait = true;
+                continue;
+            }
+
             var unavailable = stage
                 .Where(key => !IsServiceReady(_services[key]))
                 .Select(key => $"{_services[key].Name}({_services[key].Port})");
@@ -57,7 +146,14 @@ internal sealed class LauncherProcessManager
             return;
         }
 
-        _log("核心启动完成: MongoDB、Redis、代理、行情桥、快照采集和 Quant API 均已就绪。");
+        if (collectorPendingWait)
+        {
+            _log("核心启动完成（快照采集服务等待锁释放中，稍后由自动重启机制接管）。");
+        }
+        else
+        {
+            _log("核心启动完成: MongoDB、Redis、代理、行情桥、快照采集和 Quant API 均已就绪。");
+        }
         _log("展示与辅助服务最后按需启动: 龙头看板 5173、量化面板 5174、本地语音 32145；不阻塞快照调度。");
     }
 
@@ -163,7 +259,42 @@ internal sealed class LauncherProcessManager
 
                     case ServiceExternalPolicy.Refuse:
                         // 外部进程占用：只显示占用信息，不杀不清理（Safety 原则）。
+                        // 例外：占用进程可执行文件路径与本服务配置完全一致（如
+                        // D:\APP_SOFT\MongoDB\bin\mongod.exe），判定为"启动器上次拉起的
+                        // 自家残留"，接管复用以便后续可停止；路径不同（用户自建实例）
+                        // 仍按外部进程 refuse。
+                        service.AdoptedExe = null; // 本分支重算接管标记，先清残留
                         var refusePids = LauncherPorts.GetPidsByPort(service.Port);
+                        var serviceExe = Path.GetFullPath(service.FileName);
+                        var adopted = false;
+                        foreach (var pid in refusePids)
+                        {
+                            try
+                            {
+                                using var proc = Process.GetProcessById(pid);
+                                var procExe = proc.MainModule?.FileName;
+                                if (!string.IsNullOrWhiteSpace(procExe) &&
+                                    string.Equals(
+                                        Path.GetFullPath(procExe),
+                                        serviceExe,
+                                        StringComparison.OrdinalIgnoreCase))
+                                {
+                                    service.Process = Process.GetProcessById(pid);
+                                    service.AdoptedExe = Path.GetFullPath(procExe);
+                                    _log(
+                                        $"{service.Name} 端口 {service.Port} 被启动器上次拉起的进程占用" +
+                                        $"（PID {pid}），已接管复用（可正常停止）。");
+                                    adopted = true;
+                                    break;
+                                }
+                            }
+                            catch
+                            {
+                                // MainModule 不可读（权限/已退出）或进程退出，忽略该 PID
+                            }
+                        }
+                        if (adopted) return;
+
                         _log(
                             $"{service.Name} 端口 {service.Port} 被外部进程占用" +
                             (refusePids.Count > 0 ? $"（PID {string.Join(", ", refusePids)}）" : "") +
@@ -223,20 +354,21 @@ internal sealed class LauncherProcessManager
                 LoadVoiceWorkerEnv(info);
 
             var process = new Process { StartInfo = info, EnableRaisingEvents = true };
+            var logPolicy = service.LogPolicy;
             process.OutputDataReceived += (_, e) =>
             {
                 if (string.IsNullOrWhiteSpace(e.Data)) return;
-                // 只留错误日志的服务（如行情桥）忽略 stdout，避免日志文件被 INFO 轮询刷爆
-                if (service.LogOnlyErrors) return;
-                if (ShouldSuppressChildOutput(e.Data)) return;
-                _log($"[{service.Name}] {e.Data}");
+                // ErrorsOnly：stdout 全忽略（如行情桥的 INFO 轮询噪音）。
+                if (logPolicy.ErrorsOnly) return;
+                if (ShouldSuppressChildOutput(e.Data, logPolicy)) return;
+                EnqueueChildLog(service.Name, e.Data);
             };
             process.ErrorDataReceived += (_, e) =>
             {
                 if (string.IsNullOrWhiteSpace(e.Data)) return;
-                if (service.LogOnlyErrors && !LooksLikeErrorOutput(e.Data)) return;
-                if (ShouldSuppressChildOutput(e.Data)) return;
-                _log($"[{service.Name}] {e.Data}");
+                if (logPolicy.ErrorsOnly && !LooksLikeErrorOutput(e.Data)) return;
+                if (ShouldSuppressChildOutput(e.Data, logPolicy)) return;
+                EnqueueChildLog(service.Name, e.Data);
             };
             process.Exited += (_, _) => _log($"{service.Name} 已退出。");
 
@@ -249,7 +381,10 @@ internal sealed class LauncherProcessManager
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             service.Process = process;
+            service.PortOwnerProcess = null;
+            service.AdoptedExe = null; // 新拉起进程非接管，清 Refuse 接管标记
             _log($"已启动 {service.Name}，PID={process.Id}。");
+            TrackPortOwner(service);
         }
         catch (Exception ex)
         {
@@ -258,6 +393,118 @@ internal sealed class LauncherProcessManager
         finally
         {
             _starting.Remove(service.Name);
+        }
+    }
+
+    /// <summary>
+    /// 记录实际监听端口的进程（uvicorn 在 Windows 上会 spawn 子进程承载真 server：
+    /// launcher 拉起的引导进程不监听端口）。仅对 uvicorn 类服务（命令含 "uvicorn"）
+    /// 执行，最多等待 5 秒；单进程服务（监听 PID == 引导 PID）不记录。
+    /// PortOwnerProcess 只用于停止时优先终止，不替换 service.Process（引导进程
+    /// 仍为托管对象，负责生命周期与输出）。
+    /// 身份校验：候选监听进程必须满足"父进程链包含引导进程"（uvicorn spawn 的
+    /// 子进程，父进程是 launcher 拉起的引导进程）。
+    /// 不能用 MainModule.FileName 比对——venv python.exe 是系统 python 的重定向器，
+    /// 实际二进制路径与 service.FileName（venv 路径）不一致。
+    /// </summary>
+    private void TrackPortOwner(ManagedService service)
+    {
+        if (!service.Arguments.Contains("uvicorn", StringComparison.OrdinalIgnoreCase))
+            return; // 非 spawn 型服务不处理
+
+        try
+        {
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                var pids = LauncherPorts.GetPidsByPort(service.Port);
+                if (pids.Count > 0)
+                {
+                    var guidedPid = service.Process is { HasExited: false } ? service.Process.Id : 0;
+                    if (pids.Contains(guidedPid))
+                        return; // 单进程：引导进程即监听者
+
+                    foreach (var ownerPid in pids)
+                    {
+                        if (IsDescendantOf(ownerPid, guidedPid))
+                        {
+                            try
+                            {
+                                service.PortOwnerProcess = Process.GetProcessById(ownerPid);
+                                _log(
+                                    $"{service.Name} 实际监听进程 PID={ownerPid}" +
+                                    (guidedPid > 0 ? $"（引导进程 PID={guidedPid}）" : "") + "。");
+                            }
+                            catch
+                            {
+                                // 进程瞬间退出，跳过该 PID
+                            }
+                            return;
+                        }
+                    }
+
+                    _log(
+                        $"{service.Name} 端口 {service.Port} 监听进程与引导进程无父子关系，不记录为托管。" +
+                        $"（端口 PID: {string.Join(", ", pids)}，引导 PID: {guidedPid}）");
+                    return;
+                }
+                Thread.Sleep(500);
+            }
+
+            _log($"{service.Name} 启动后 5 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
+        }
+        catch (Exception ex)
+        {
+            _log($"跟踪 {service.Name} 端口监听进程失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>判断 candidatePid 是否是指定引导进程（或其后代）的子进程。</summary>
+    private static bool IsDescendantOf(int candidatePid, int ancestorPid)
+    {
+        if (ancestorPid <= 0) return false;
+        try
+        {
+            var seen = new HashSet<int> { candidatePid };
+            var parent = ParentPidOf(candidatePid);
+            while (parent > 0 && seen.Add(parent))
+            {
+                if (parent == ancestorPid) return true;
+                parent = ParentPidOf(parent);
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>查询指定进程的父进程 PID（PowerShell Get-CimInstance，进程退出返回 0）。</summary>
+    private static int ParentPidOf(int pid)
+    {
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments =
+                    "-NoProfile -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId=" +
+                    pid + "').ParentProcessId\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true
+            };
+            using var process = Process.Start(info);
+            if (process == null) return 0;
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(3000);
+            var trimmed = output.Trim();
+            return int.TryParse(trimmed, out var parentPid) ? parentPid : 0;
+        }
+        catch
+        {
+            return 0;
         }
     }
 
@@ -315,6 +562,25 @@ internal sealed class LauncherProcessManager
         StopService(_services["proxy"]);
         StopService(_services["redis"]);
         StopService(_services["mongo"]);
+        ShutdownLogQueue();
+    }
+
+    /// <summary>停止后台日志消费线程（launcher 退出时），把队列剩余行刷完。</summary>
+    private void ShutdownLogQueue()
+    {
+        try
+        {
+            _logQueue.CompleteAdding();
+            _logCts.Cancel();
+            if (_logThread.IsAlive && !_logThread.Join(2000))
+            {
+                // 消费线程未及时退出（极端情况），后台线程随进程退出
+            }
+        }
+        catch
+        {
+            // 清理失败不阻塞退出
+        }
     }
 
     public void StartRedisCommander()
@@ -576,18 +842,29 @@ internal sealed class LauncherProcessManager
     }
 
     /// <summary>
-    /// 过滤子进程高频噪音输出，防止单日日志被访问日志刷爆：
-    /// 1. uvicorn/fastapi 访问日志行：INFO: 127.0.0.1:53390 - "GET /api/health HTTP/1.1" 200 OK；
-    /// 2. proxy-server 每请求日志行：[06:14:11] GET /health、[09:30:47] GET /api/snapshots/frames?...。
-    /// 错误/警告/异常行不受影响（由 LooksLikeErrorOutput 保底），启动器自身日志也不受影响。
+    /// 按服务日志策略过滤子进程输出，防止单日日志被访问日志刷爆：
+    /// - FilterAccess：过滤 uvicorn/fastapi 访问日志行与 proxy-server 每请求行；
+    /// - All：不过滤访问日志（全量落盘）；
+    /// - suppressHealth：额外抑制健康检查请求行（GET /health、GET /api/health）。
+    /// 错误/警告/异常行不受影响（由 LooksLikeErrorOutput 保底）。
     /// </summary>
-    private static bool ShouldSuppressChildOutput(string text)
+    private static bool ShouldSuppressChildOutput(string text, ServiceLogPolicy policy)
     {
         var trimmed = text.Trim();
         if (trimmed.Length == 0) return false;
 
         // 错误/警告绝不丢：先排除再判断噪音，避免把异常内容过滤掉。
         if (LooksLikeErrorOutput(trimmed)) return false;
+
+        // 健康检查行：suppressHealth 时抑制（含错误行已在上面放行，这里只过滤正常健康检查）。
+        if (policy.SuppressHealth &&
+            (trimmed.Contains("GET /api/health", StringComparison.Ordinal) ||
+             trimmed.EndsWith("GET /health", StringComparison.Ordinal)))
+            return true;
+
+        // 仅 FilterAccess 级别过滤访问日志；All 级别全量保留。
+        if (policy.Level != ServiceLogLevel.FilterAccess)
+            return false;
 
         // uvicorn 访问日志：INFO:     127.0.0.1:53390 - "GET /api/health HTTP/1.1" 200 OK
         if (trimmed.StartsWith("INFO:", StringComparison.Ordinal) &&
@@ -617,8 +894,65 @@ internal sealed class LauncherProcessManager
     {
         try
         {
+            // 先终止实际监听端口的进程（uvicorn spawn 的真 server 子进程），
+            // 再终止 launcher 拉起的引导进程，避免 reloader 残留拉起新 worker。
+            // 安全：Kill 前重新验证 owner 仍是引导进程的后代且仍监听本服务端口，
+            // 防止启动后 PID 被 OS 复用给无关进程导致误杀（TOCTOU）。
+            var owner = service.PortOwnerProcess;
+            service.PortOwnerProcess = null;
+            var guidedPid = service.Process is { HasExited: false } ? service.Process.Id : 0;
+            if (owner is { HasExited: false } &&
+                IsDescendantOf(owner.Id, guidedPid) &&
+                LauncherPorts.GetPidsByPort(service.Port).Contains(owner.Id))
+            {
+                try
+                {
+                    owner.Kill(entireProcessTree: true);
+                    owner.WaitForExit(3000);
+                    _log($"已停止 {service.Name} 实际监听进程。");
+                }
+                catch (Exception ex)
+                {
+                    _log($"停止 {service.Name} 实际监听进程失败: {ex.Message}");
+                }
+            }
+            else if (owner is { HasExited: false })
+            {
+                _log(
+                    $"{service.Name} 实际监听进程 PID={owner.Id} 已不满足托管条件" +
+                    "（父进程链或端口监听变化，疑似 PID 复用），跳过直接终止，仅停引导进程树。");
+            }
+
             if (service.Process is { HasExited: false })
             {
+                // Refuse 接管的外部进程（自家残留）：终止前核对 exe 路径仍匹配，
+                // 防 PID 复用后误杀其它进程；不匹配则仅提示不杀。
+                if (!string.IsNullOrWhiteSpace(service.AdoptedExe))
+                {
+                    try
+                    {
+                        var exe = service.Process.MainModule?.FileName;
+                        var stillMatches = !string.IsNullOrWhiteSpace(exe) &&
+                            string.Equals(
+                                Path.GetFullPath(exe),
+                                service.AdoptedExe,
+                                StringComparison.OrdinalIgnoreCase);
+                        if (!stillMatches)
+                        {
+                            _log(
+                                $"{service.Name} 接管进程 PID={service.Process.Id} 可执行文件已变化，" +
+                                "跳过终止（疑似 PID 复用，请手动处理）。");
+                            return;
+                        }
+                    }
+                    catch
+                    {
+                        // MainModule 不可读（权限/已退出），按不匹配处理不杀
+                        _log($"{service.Name} 接管进程 PID={service.Process.Id} 无法核对可执行文件，跳过终止。");
+                        return;
+                    }
+                }
+
                 service.Process.Kill(entireProcessTree: true);
                 service.Process.WaitForExit(3000);
                 _log($"已停止 {service.Name} 进程树。");
@@ -631,6 +965,8 @@ internal sealed class LauncherProcessManager
         finally
         {
             service.Process = null;
+            service.PortOwnerProcess = null;
+            service.AdoptedExe = null;
         }
     }
 

@@ -33,6 +33,47 @@ def is_post_close(value: datetime.datetime) -> bool:
     return _hhmm(value) > POST_CLOSE_END_HHMM
 
 
+# 非采集窗口：交易日下午 16:00 至次日 09:00（含）不采集，避免收盘后空转补采。
+_COLLECT_WINDOW_START_HHMM = 900
+_COLLECT_WINDOW_END_HHMM = 1600
+
+
+def is_in_collect_window(value: datetime.datetime) -> bool:
+    """Whether snapshot collection should run for this moment.
+
+    交易日下午 16:00 至隔日早上 09:00 之间不采集（当日槽位已全部完成，
+    收盘后数据已定格；次日数据需等开盘后才有意义）。09:00 起进入窗口，
+    覆盖盘前到收盘后 15:30 的最后槽位；16:00 后退出窗口。
+    """
+    hhmm = _hhmm(value)
+    return _COLLECT_WINDOW_START_HHMM <= hhmm < _COLLECT_WINDOW_END_HHMM
+
+
+def seconds_until_collect_window(
+    value: datetime.datetime,
+    *,
+    tz: datetime.tzinfo = TZ_SHANGHAI,
+) -> float:
+    """Seconds from *value* until the next collection window opens (09:00 next day).
+
+    非窗口内（16:00-次日 09:00）返回到次日 09:00 的秒数；窗口内返回 0。
+    用于调度器在收盘后深度休眠，避免每 30 分钟空转轮询。
+    """
+    if is_in_collect_window(value):
+        return 0.0
+    now = value
+    # 计算下一个窗口起点：若今天已过 16:00，则次日 09:00；否则（09:00 前）今天 09:00。
+    target_date = now.date()
+    if _hhmm(now) >= _COLLECT_WINDOW_END_HHMM:
+        target_date = target_date + datetime.timedelta(days=1)
+    target = datetime.datetime.combine(
+        target_date,
+        datetime.time(_COLLECT_WINDOW_START_HHMM // 100, _COLLECT_WINDOW_START_HHMM % 100),
+        tzinfo=tz,
+    )
+    return max(0.0, (target - now).total_seconds())
+
+
 def is_intraday_refresh_time(value: datetime.datetime) -> bool:
     """Allow live refresh only during continuous auction sessions."""
     hhmm = _hhmm(value)
