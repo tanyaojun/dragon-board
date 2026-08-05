@@ -191,6 +191,33 @@ QMT 可用时，WebSocket 会新增 `money_flow_patch`，资金流标记为 `mon
 
 ---
 
+## 交易日历
+
+`/api/calendar` 使用通达信官方交易日历（`tdx.com.cn`），由 `python-bridge/tdx_calendar.py`
+自实现拉取，不再调用 `mootdx.utils.holiday`，也不读写 mootdx 的共享 pickle 缓存
+（`~/.mootdx/caches/holiday.plk`）。
+
+背景（2026-08-06）：生产 bridge 由启动管理器用系统 Python（pandas 3.x）启动，测试/量化环境
+用 quant-board venv（pandas 2.x）。两环境共用 mootdx 用户级 `holiday.plk` 时，pandas 3.0 写入
+的 pickle 被 pandas 2.2.3 读取会触发 `pickle_compat` 的 `issubclass` TypeError，mootdx
+`file_cache` 只捕获 `FileNotFoundError/EOFError`，导致 holiday() 崩溃、日历 503，且两环境互写
+缓存互相触发重拉。
+
+现行为：
+
+- 数据源：`httpx GET https://www.tdx.com.cn/url/holiday/` + 正则提取 textarea + `split('|')`
+  （等价 mootdx `_holiday` 逻辑；只保留国家为「中国」的行）。
+- 判定语义与 mootdx 等价：周末与列表中的中国节假日为非交易日；调休上班的周末（上游不标注）
+  按非交易日处理。
+- 缓存：进程内内存 + 独立 JSON 文件 `~/.mootdx/caches/holiday_bridge.json`（纯文本，无 pandas
+  依赖，跨 pandas 版本无兼容问题；mootdx 不会读取该文件）。TTL 24h，拉取失败后 60s 冷却，
+  避免高频重试刷屏；重启后缓存新鲜则不再请求网络。
+- fail-visible：日历不可用时 `/api/calendar` 返回 `503 + errorCode=tdx_calendar_unavailable`，
+  内部判定返回 `None`（不猜测交易日），调用方按既有降级路径处理。
+- 遗留：`~/.mootdx/caches/holiday.plk` 不再被 bridge 读写，可手动删除（保留无害）。
+
+---
+
 ## 当前行为说明
 
 ### 1. 订阅池

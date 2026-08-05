@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from mootdx.quotes import Quotes
 
 from l2.qmt_provider import QmtL2Provider
+import tdx_calendar
 from tdx_hq_cache import OfficialHQCacheDepthReader
 from trading_time import (
     MORNING_CONTINUOUS_START_HHMM,
@@ -314,52 +315,15 @@ class OpeningRawQuoteFileSink:
         }
 
 
-def _clear_stale_mootdx_holiday_cache() -> bool:
-    """删除 mootdx 交易日历缓存文件（holiday.plk，tdx.com.cn 源）。
-
-    返回 True 表示文件存在且已删除（调用方可重试拉取）；False 表示无可删文件或清理失败。
-    背景：缓存可能由旧版 pandas 序列化，pandas 升级后 read_pickle 反序列化崩溃
-    （StringDtype 构造参数变化 → pickle_compat 的 issubclass 报错），删除后自动重建。
-    """
-    try:
-        from mootdx import get_config_path
-
-        cache_file = get_config_path("caches/holiday.plk")
-        if cache_file and os.path.exists(cache_file):
-            os.remove(cache_file)
-            logger.info("removed stale mootdx holiday cache: %s", cache_file)
-            return True
-    except Exception:
-        logger.debug("failed to clear mootdx holiday cache", exc_info=True)
-    return False
-
-
 def _is_trading_day_cached(date: datetime) -> bool | None:
-    """使用 mootdx 内置通达信交易日历；不可用时不猜测交易日。"""
-    try:
-        from mootdx.utils.holiday import holiday
+    """使用通达信官方交易日历（自实现 tdx.com.cn 拉取，绕开 mootdx 共享 pickle 缓存）。
 
-        return not holiday(
-            date=date.strftime("%Y-%m-%d"),
-            format_="%Y-%m-%d",
-            country="中国",
-        )
-    except Exception as error:
-        # 缓存损坏（旧 pandas pickle 不兼容）时删除缓存重试一次自愈，避免日历长期不可用。
-        if _clear_stale_mootdx_holiday_cache():
-            try:
-                from mootdx.utils.holiday import holiday
-
-                return not holiday(
-                    date=date.strftime("%Y-%m-%d"),
-                    format_="%Y-%m-%d",
-                    country="中国",
-                )
-            except Exception as retry_error:
-                logger.warning("TDX trading calendar unavailable for %s: %s", date.date(), retry_error)
-                return None
-        logger.warning("TDX trading calendar unavailable for %s: %s", date.date(), error)
-        return None
+    不可用时不猜测交易日，返回 None 由调用方降级（/api/calendar 返回 503）。
+    实现细节见 tdx_calendar 模块：内存 + 独立 JSON 缓存，不再读写 mootdx 的
+    ~/.mootdx/caches/holiday.plk，系统 Python（pandas 3.x）与 quant-board venv
+    （pandas 2.x）不再互相触发跨版本 pickle 重拉。
+    """
+    return tdx_calendar.is_trading_day(date.date())
 
 
 def is_trading_session_now(now: datetime | None = None) -> bool:
