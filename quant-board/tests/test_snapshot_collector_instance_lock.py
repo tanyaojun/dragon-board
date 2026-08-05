@@ -61,3 +61,28 @@ def test_live_holder_lock_is_not_reclaimed() -> None:
     ] = f"liveholder:{os.getpid()}"
     lock = RedisInstanceLock(redis, "collector", ttl_seconds=120)
     assert lock.acquire() is False
+
+
+def test_lock_renew_recovers_after_redis_restart() -> None:
+    """Redis 重启导致锁 key 丢失后，持有者 renew 应重新夺回而不是放弃。"""
+    redis = FakeRedis()
+    lock = RedisInstanceLock(redis, "collector", ttl_seconds=120)
+    assert lock.acquire() is True
+    # 模拟 Redis 重启：内存清空，锁 key 消失
+    redis._values.clear()
+    assert lock.renew() is True
+    assert redis.get("snapshot-collector:instance-lock:collector") is not None
+    # 重新夺回后仍是唯一持有者，其它实例拿不到
+    assert RedisInstanceLock(redis, "collector", ttl_seconds=120).acquire() is False
+
+
+def test_lock_renew_does_not_steal_from_live_holder() -> None:
+    """锁被其它存活实例抢走时，renew 必须返回 False（不得覆盖他人锁）。"""
+    redis = FakeRedis()
+    lock = RedisInstanceLock(redis, "collector", ttl_seconds=120)
+    assert lock.acquire() is True
+    other = RedisInstanceLock(redis, "collector", ttl_seconds=120)
+    # 模拟本进程锁过期被清理后，其它实例抢占了锁
+    redis._values.clear()
+    assert other.acquire() is True
+    assert lock.renew() is False

@@ -43,6 +43,16 @@ dotnet build tools\DragonBoardLauncher\DragonBoardLauncher.csproj -c Release
 dotnet publish tools\DragonBoardLauncher\DragonBoardLauncher.csproj -p:PublishProfile=RootSingleFile
 ```
 
+## 服务定义与启停偏好
+
+- 服务定义外置在 `config/services.json`（P1.1）：路径/参数/端口/依赖顺序/`externalPolicy`
+  （`managed` 托管清理 / `reuse` 复用外部实例如 Redis / `refuse` 只提示不清理如 MongoDB）。
+  文件缺失或解析失败时回退内嵌默认，不影响启动。
+- 用户启停偏好持久化到 `%LOCALAPPDATA%\DragonBoardLauncher\state.json`（P1.2）：
+  launcher 重启后核心服务始终随 StartAll 启动，展示/辅助服务（前端/量化面板/语音）
+  按上次偏好恢复；手动停止的服务不会被无条件重新拉起。
+- 阶段名与 `services.json` stages 顺序一致：基础设施 → 实时数据源 → 量化后端 → 快照采集。
+
 ## 核心启动顺序
 
 启动管理器会按依赖分阶段自动启动核心服务。每个阶段必须通过就绪检查，才会启动下一阶段：
@@ -54,6 +64,10 @@ dotnet publish tools\DragonBoardLauncher\DragonBoardLauncher.csproj -p:PublishPr
    `/api/health` 中的 `snapshotCollector` 启用/运行状态。进程内直连行情/热榜/涨停池服务，不依赖
    Quant API；Redis 单实例锁（`snapshot-collector:instance-lock:<dataset>`，值含持有者 PID）防止
    重复实例，持有者进程已死时残留锁会被自动清理。
+
+   采集健康探针区分硬故障与业务进度提示：HTTP 异常、调度器未启用/未运行、最近异常属于硬故障，
+   会自动重启；盘中长时间未采集、收盘仍无采集记录属于业务进度提示，只展示并记录日志，不触发
+   自动重启（漏槽是数据可用性问题，重启无法补采，反而可能引发锁竞争和重启风暴）。
 
 `5173` 龙头看板、`5174` 量化面板和 `32145` 本地语音属于展示或辅助服务，最后按需手动启动，不影响快照调度。`8081` Mongo Express、`8082` Redis Commander 仅在打开数据库/缓存管理页时启动，也不进入核心启动链。
 

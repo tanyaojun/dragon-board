@@ -159,7 +159,11 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
     if backup:
         backup_status = backup.deep_health() if deep else backup.health()
     return {
+        # launcher 健康契约：8000 进程存活即 ok/none，采集器状态见 collector_main。
         "status": "ok",
+        "restartable": True,
+        "recommendedAction": "none",
+        "reason": "量化后端 API 运行正常",
         "version": "0.1.0",
         "engine": "QuantBoard",
         "default_snapshot_type": "half_hour",

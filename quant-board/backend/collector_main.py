@@ -16,13 +16,51 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 
 
 logger = logging.getLogger(__name__)
+
+
+def _startup_failure_file() -> Path:
+    """锁冲突等启动失败原因落盘，供 launcher 探针在 8001 不可达时读取。
+
+    路径固定在仓库根 logs 下（与 launcher 日志同目录），C# 探针用
+    ProjectRootLocator.Find() 定位同一路径。
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "logs" / "collector-startup-failure.json"
+
+
+def _write_startup_failure(reason: str, *, recommended_action: str = "wait") -> None:
+    """启动失败时写入结构化原因；launcher 探针据此不杀不重启。"""
+    try:
+        payload = {
+            "status": "error",
+            "restartable": False,
+            "recommendedAction": recommended_action,
+            "reason": reason,
+            "writtenAt": datetime.now(timezone.utc).isoformat(),
+        }
+        _startup_failure_file().write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        logger.exception("failed to write startup failure file")
+
+
+def _clear_startup_failure() -> None:
+    try:
+        _startup_failure_file().unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _build_redis_client(redis_url: str) -> Any | None:
@@ -57,6 +95,14 @@ async def _acquire_lock_with_retry(
             tries,
             interval_seconds,
         )
+        if attempt == 0:
+            # 首次失败即落盘启动失败标记：进程可能已绑定 8001 端口但 lifespan
+            # 尚未完成（正在等锁），launcher 探针读到 restartable=false/wait 后
+            # 不会"杀正在等锁的进程"打断重试（2026-08-05 重启风暴根因之一）。
+            _write_startup_failure(
+                "collector lock held elsewhere; waiting for lock TTL expiry",
+                recommended_action="wait",
+            )
         await asyncio.sleep(interval_seconds)
     return False
 
@@ -161,11 +207,18 @@ async def lifespan(app: FastAPI):
     )
     if not await _acquire_lock_with_retry(lock):
         remaining = lock.remaining_ttl()
-        raise RuntimeError(
+        reason = (
             "another snapshot collector instance holds the lock for dataset "
             f"{settings.snapshot_collector_dataset_id}"
             + (f" (remaining TTL {remaining}s)" if remaining is not None else "")
         )
+        # 启动失败原因落盘，launcher 探针在 8001 不可达时读取后按 wait 处理，
+        # 不再"先杀再启"触发锁竞争重启风暴（2026-08-05 复盘）。
+        _write_startup_failure(reason, recommended_action="wait")
+        raise RuntimeError(reason)
+
+    # 成功拿到锁后清除历史失败标记，探针回到正常契约判定。
+    _clear_startup_failure()
 
     renew_task: asyncio.Task[Any] | None = None
     catchup_task: asyncio.Task[Any] | None = None
@@ -229,7 +282,9 @@ def health() -> dict:
     status["background"] = _background_task_status()
     if not status.get("last_run_at"):
         # 进程重启后内存态 last_run_at 会清零，导致 launcher 探针在"已收盘但
-        # 进程刚启动"时误报。用 MongoDB 里最近的 completed 运行记录回填。
+        # 进程刚启动"时误报。用 MongoDB 里最近且属于当前交易日的 completed
+        # 运行记录回填；跨日的旧记录不写入 last_run_at，避免新交易日开盘瞬间
+        # 被探针误判为"超过2小时未执行"而杀重启。
         try:
             from backend.snapshot_collector.service_factory import (
                 create_snapshot_collector_repository,
@@ -245,18 +300,68 @@ def health() -> dict:
             items = runs.get("items") or []
             if items:
                 latest = items[0]
-                created_at = latest.get("createdAt")
-                if created_at is not None:
-                    if hasattr(created_at, "isoformat"):
-                        iso = created_at.isoformat()
-                        # Mongo 的 datetime.utcnow() 是无时区 UTC，补 Z 让探针按 UTC 解析
-                        status["last_run_at"] = iso if created_at.tzinfo is not None else iso + "Z"
-                    else:
-                        status["last_run_at"] = str(created_at)
-                status["last_slot_collected"] = str(latest.get("snapshotId") or "")
+                latest_trading_date = str(
+                    latest.get("tradingDate")
+                    or latest.get("trading_date")
+                    or ""
+                )
+                if latest_trading_date == str(status.get("trading_date") or ""):
+                    created_at = latest.get("createdAt")
+                    if created_at is not None:
+                        if hasattr(created_at, "isoformat"):
+                            iso = created_at.isoformat()
+                            # Mongo 的 datetime.utcnow() 是无时区 UTC，补 Z 让探针按 UTC 解析
+                            status["last_run_at"] = (
+                                iso if created_at.tzinfo is not None else iso + "Z"
+                            )
+                        else:
+                            status["last_run_at"] = str(created_at)
+                    status["last_slot_collected"] = str(
+                        latest.get("snapshotId") or ""
+                    )
         except Exception:
             pass
-    return {"status": "ok", "snapshotCollector": status}
+
+    contract = _collector_health_contract(status)
+    return {
+        # launcher 健康契约：restartable/recommendedAction 由后端判定，
+        # 启动器只消费结构，不再解析 snapshotCollector 内部字段猜语义。
+        "status": contract["status"],
+        "restartable": contract["restartable"],
+        "recommendedAction": contract["recommendedAction"],
+        "reason": contract["reason"],
+        "snapshotCollector": status,
+    }
+
+
+def _collector_health_contract(status: dict[str, Any]) -> dict[str, Any]:
+    """把调度器状态映射为 launcher 可消费的健康契约。
+
+    - 调度器未运行（enabled 但 running=false）：硬故障，可重启；
+    - 最近有采集异常（last_error）：数据源暂时失败，重启无益，只告警；
+    - 其余：ok，不动作。
+    """
+    if status.get("enabled") and not status.get("running"):
+        return {
+            "status": "error",
+            "restartable": True,
+            "recommendedAction": "restart",
+            "reason": "调度器未运行",
+        }
+    last_error = status.get("last_error")
+    if last_error:
+        return {
+            "status": "degraded",
+            "restartable": False,
+            "recommendedAction": "alert",
+            "reason": f"最近异常: {last_error}",
+        }
+    return {
+        "status": "ok",
+        "restartable": True,
+        "recommendedAction": "none",
+        "reason": "快照采集运行正常",
+    }
 
 
 def _background_task_status() -> dict[str, Any]:

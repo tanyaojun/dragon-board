@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using DragonBoardLauncher.Core;
 using Microsoft.Win32;
 
 namespace DragonBoardLauncher;
@@ -37,10 +38,17 @@ internal sealed class LauncherForm : Form
     private bool _isManagerActionRunning;
     private bool _allowExit;
     private bool _trayNoticeShown;
-    private string _lastCollectorHealthFingerprint = "";
-    private string _pendingCollectorHealthFingerprint = "";
-    private int _pendingCollectorHealthCount;
-    private bool _collectorWasUnhealthy;
+
+    // 采集健康决策内核：防抖 + Restartable 判定 + 恢复日志（无 UI 依赖）。
+    private readonly CollectorHealthGuard _collectorGuard = new();
+    // 自动重启策略：冷却 + 连续失败上限 + 指数退避（防重启风暴）。
+    private readonly RestartPolicy _restartPolicy = new();
+    // 重启被冷却拦截时，仅当原因变化才记日志，避免每 3 秒刷一条。
+    private string _lastRestartBlockedReason = "";
+
+    // 用户启停偏好持久化（P1.2）：launcher 重启后恢复用户手动启动过的展示/辅助服务。
+    private readonly DesiredStateStore _desiredState;
+    private readonly HashSet<string> _desiredEnabled;
 
     public LauncherForm()
     {
@@ -48,6 +56,8 @@ internal sealed class LauncherForm : Form
         LogFile.Initialize(_root);
         _services = LauncherServices.Create(_root);
         _processManager = new LauncherProcessManager(_root, _services, Log);
+        _desiredState = new DesiredStateStore();
+        _desiredEnabled = _desiredState.LoadEnabled();
         Log($"启动管理器启动，本地日志: {LogFile.CurrentLogPath()}");
 
         Text = "龙头看板 · 启动管理器";
@@ -97,6 +107,7 @@ internal sealed class LauncherForm : Form
             Log($"项目目录: {_root}");
             Log("启动管理器正在自动启动核心服务，确保盘中快照调度持续运行。");
             await StartAllAsync();
+            await RestoreDesiredServicesAsync();
         };
     }
 
@@ -311,7 +322,11 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         startBtn.FlatAppearance.BorderSize = 0;
-        startBtn.Click += async (_, _) => await RunManagerActionAsync(() => _processManager.StartService(svc));
+        startBtn.Click += async (_, _) =>
+        {
+            await RunManagerActionAsync(() => _processManager.StartService(svc));
+            MarkDesired(key, enabled: true);
+        };
         p.Controls.Add(startBtn);
         _startButtons[key] = startBtn;
 
@@ -327,7 +342,11 @@ internal sealed class LauncherForm : Form
             Cursor = Cursors.Hand,
         };
         stopBtn.FlatAppearance.BorderSize = 0;
-        stopBtn.Click += async (_, _) => await RunManagerActionAsync(() => _processManager.StopService(svc));
+        stopBtn.Click += async (_, _) =>
+        {
+            await RunManagerActionAsync(() => _processManager.StopService(svc));
+            MarkDesired(key, enabled: false);
+        };
         p.Controls.Add(stopBtn);
         _stopButtons[key] = stopBtn;
 
@@ -380,6 +399,44 @@ internal sealed class LauncherForm : Form
         return RunManagerActionAsync(_processManager.StopAll);
     }
 
+    /// <summary>
+    /// 恢复用户上次显式启动过的展示/辅助服务（P1.2 DesiredState）。
+    /// 核心服务由 StartAll 启动，这里只补拉起用户偏好中已启用的服务。
+    /// </summary>
+    private async Task RestoreDesiredServicesAsync()
+    {
+        var restored = new List<string>();
+        foreach (var key in LauncherServices.OrderedKeys)
+        {
+            if (!_desiredEnabled.Contains(key)) continue;
+            if (!_services.TryGetValue(key, out var svc)) continue;
+
+            // 核心服务已由 StartAll 处理，跳过；只处理展示/辅助服务。
+            if (LauncherServices.CoreStartupStages.Any(stage => stage.Contains(key))) continue;
+
+            if (!LauncherProcessManager.IsServiceRunning(svc))
+            {
+                await Task.Run(() => _processManager.StartService(svc));
+                // 启动后再确认（StartService 内部失败仅记日志，不抛异常）。
+                if (LauncherProcessManager.IsServiceRunning(svc))
+                    restored.Add(svc.Name);
+            }
+        }
+
+        if (restored.Count > 0)
+            Log($"已按上次偏好恢复服务: {string.Join("、", restored)}");
+    }
+
+    /// <summary>记录服务启用/停用偏好并持久化（P1.2）。</summary>
+    private void MarkDesired(string serviceKey, bool enabled)
+    {
+        if (enabled)
+            _desiredEnabled.Add(serviceKey);
+        else
+            _desiredEnabled.Remove(serviceKey);
+        _desiredState.SaveEnabled(_desiredEnabled);
+    }
+
     private async Task RunManagerActionAsync(Action action)
     {
         if (_isManagerActionRunning || IsDisposed) return;
@@ -417,11 +474,19 @@ internal sealed class LauncherForm : Form
             statuses = await Task.Run(() => services.ToDictionary(
                 kv => kv.Key,
                 kv => LauncherProcessManager.IsServiceRunning(kv.Value)));
-            collectorHealth = statuses.GetValueOrDefault("collector")
-                ? await SnapshotCollectorProbe.GetHealthAsync()
-                : SnapshotCollectorHealth.Unhealthy(
-                    "collector-offline",
-                    "快照采集错误: 采集服务(8001)未运行，调度器无法采集快照");
+            if (statuses.GetValueOrDefault("collector"))
+            {
+                collectorHealth = await SnapshotCollectorProbe.GetHealthAsync();
+            }
+            else
+            {
+                // 端口关闭：先读启动失败标记（锁冲突等场景 restartable=false/wait），
+                // 无标记才按普通离线处理（需拉起）。
+                collectorHealth = SnapshotCollectorProbe.TryReadStartupFailure()
+                    ?? SnapshotCollectorHealth.Unhealthy(
+                        "collector-offline",
+                        "快照采集错误: 采集服务(8001)未运行，调度器无法采集快照");
+            }
         }
         finally
         {
@@ -430,10 +495,36 @@ internal sealed class LauncherForm : Form
 
         if (IsDisposed) return;
 
-        // 核心服务健康失败自动重启（8001 采集器）：端口关闭→启动；占用但探针不健康→先停再启。
-        _processManager.EnsureHealthy("collector", () => collectorHealth?.IsHealthy == true);
+        // 采集健康决策走内核：guard 做防抖 + Restartable 判定 + 恢复日志，
+        // policy 做冷却/连续失败上限/指数退避。只有 guard 判定"应重启"且
+        // policy 允许时才调用 EnsureHealthy 实际重启。
+        var decision = _collectorGuard.Evaluate(collectorHealth);
+        if (decision.LogMessage is not null)
+            Log(decision.LogMessage);
 
-        var collectorFailed = ReportCollectorHealth(collectorHealth);
+        if (collectorHealth is not null && collectorHealth.IsHealthy)
+        {
+            // 恢复健康：清零重启失败计数。
+            _restartPolicy.Reset("collector");
+        }
+        else if (decision.ShouldRestart)
+        {
+            if (_restartPolicy.TryRequestRestart("collector", out var blocked))
+            {
+                _restartPolicy.RecordRestart("collector");
+                _lastRestartBlockedReason = "";
+                _processManager.EnsureHealthy("collector");
+            }
+            else if (blocked is not null &&
+                     !string.Equals(_lastRestartBlockedReason, blocked, StringComparison.Ordinal))
+            {
+                _lastRestartBlockedReason = blocked;
+                var detail = _restartPolicy.DescribeBlock("collector");
+                Log($"快照采集错误: {blocked}" + (detail.Length > 0 ? $"（{detail}）" : ""));
+            }
+        }
+
+        var collectorFailed = decision.CollectFailed;
         var running = 0;
         foreach (var kv in statuses)
         {
@@ -491,45 +582,6 @@ internal sealed class LauncherForm : Form
         }
     }
 
-    private bool ReportCollectorHealth(SnapshotCollectorHealth? health)
-    {
-        if (health == null) return false;
-
-        if (!health.IsHealthy)
-        {
-            if (!string.Equals(
-                    _pendingCollectorHealthFingerprint,
-                    health.Fingerprint,
-                    StringComparison.Ordinal))
-            {
-                _pendingCollectorHealthFingerprint = health.Fingerprint;
-                _pendingCollectorHealthCount = 1;
-                return _collectorWasUnhealthy;
-            }
-
-            _pendingCollectorHealthCount++;
-            if (_pendingCollectorHealthCount < 2) return _collectorWasUnhealthy;
-
-            if (!string.Equals(
-                    _lastCollectorHealthFingerprint,
-                    health.Fingerprint,
-                    StringComparison.Ordinal))
-                Log(health.Message);
-
-            _collectorWasUnhealthy = true;
-            _lastCollectorHealthFingerprint = health.Fingerprint;
-            return true;
-        }
-
-        if (_collectorWasUnhealthy)
-            Log("快照采集恢复正常：调度器心跳和槽位完整性检查均通过。");
-
-        _pendingCollectorHealthFingerprint = "";
-        _pendingCollectorHealthCount = 0;
-        _collectorWasUnhealthy = false;
-        _lastCollectorHealthFingerprint = health.Fingerprint;
-        return false;
-    }
 
     private void ToggleAutoStart()
     {
@@ -585,7 +637,12 @@ internal sealed class LauncherForm : Form
 
     private void HideToTray()
     {
-        _restoreLocation = DesktopLocation;
+        // 最小化时 DesktopLocation 会变成 (-32000,-32000)（屏幕外），必须改用
+        // RestoreBounds 保留恢复后的位置；窗口从未最小化时 RestoreBounds 是
+        // (-1,-1) 占位值，此时（如点关闭按钮）仍用 DesktopLocation。
+        _restoreLocation = WindowState == FormWindowState.Minimized
+            ? RestoreBounds.Location
+            : DesktopLocation;
         Hide();
         ShowInTaskbar = false;
         WindowState = FormWindowState.Normal;

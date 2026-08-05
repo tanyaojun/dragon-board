@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace DragonBoardLauncher;
 
@@ -17,11 +18,6 @@ internal sealed class LauncherProcessManager
     private readonly IReadOnlyDictionary<string, ManagedService> _services;
     private readonly Action<string> _log;
     private readonly HashSet<string> _starting = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, DateTime> _lastAutoRestart = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, int> _autoRestartFailures = new(StringComparer.Ordinal);
-    private readonly object _autoRestartSync = new();
-    private const int AutoRestartCooldownSeconds = 60;
-    private const int AutoRestartMaxConsecutive = 3;
     private Process? _mongoExpressProcess;
     private Process? _redisCommanderProcess;
 
@@ -37,14 +33,18 @@ internal sealed class LauncherProcessManager
 
     public void StartAll()
     {
-        var stageNames = new[] { "基础设施", "实时数据源", "快照采集", "量化后端" };
+        // 阶段名与 LauncherServices.CoreStartupStages 顺序对齐（P1.1 修正：
+        // 基础设施→实时数据源→量化后端→快照采集，原"快照采集/量化后端"顺序写反）。
+        // stages 阶段数来自 services.json 可配置；超出内置名单时回退"阶段 N"。
+        var stageNames = new[] { "基础设施", "实时数据源", "量化后端", "快照采集" };
         for (var index = 0; index < LauncherServices.CoreStartupStages.Length; index++)
         {
             var stage = LauncherServices.CoreStartupStages[index];
+            var stageName = index < stageNames.Length ? stageNames[index] : $"阶段 {index + 1}";
             var stagePorts = string.Join(", ", stage.Select(key => _services[key].Port));
             _log(
                 $"核心启动阶段 {index + 1}/{LauncherServices.CoreStartupStages.Length}: " +
-                $"{stageNames[index]}（端口 {stagePorts}）。");
+                $"{stageName}（端口 {stagePorts}）。");
             foreach (var key in stage)
                 StartService(_services[key]);
 
@@ -107,41 +107,23 @@ internal sealed class LauncherProcessManager
     }
 
     /// <summary>
-    /// 核心服务健康失败自动重启：端口关闭→启动；端口被占用但探针不健康→先停再启。
-    /// 60 秒冷却 + 连续 3 次失败后暂停，避免重启风暴；失败计数在恢复健康后清零。
+    /// 单次健康恢复执行（不含冷却/计数——冷却与连续失败上限由 Core.RestartPolicy
+    /// 在调用方统一管理，避免双层计数导致健康恢复后重启被永久拦截）。
+    /// 端口关闭→启动；端口被占用但探针不健康→先停再启。
+    /// 调用方必须已确认服务不健康（guard + policy 已通过）。
     /// </summary>
-    public void EnsureHealthy(string key, Func<bool> isHealthy)
+    public void EnsureHealthy(string key)
     {
         if (!_services.TryGetValue(key, out var service)) return;
-        lock (_autoRestartSync)
+
+        var portOpen = LauncherPorts.IsPortOpen(service.Port);
+        if (portOpen)
         {
-            var now = DateTime.UtcNow;
-            if (_lastAutoRestart.TryGetValue(key, out var last) &&
-                (now - last).TotalSeconds < AutoRestartCooldownSeconds)
-                return;
-            if (_autoRestartFailures.TryGetValue(key, out var failures) &&
-                failures >= AutoRestartMaxConsecutive)
-                return;
-
-            if (isHealthy())
-            {
-                _autoRestartFailures[key] = 0;
-                return;
-            }
-
-            _lastAutoRestart[key] = now;
-            var attempt = _autoRestartFailures.GetValueOrDefault(key) + 1;
-            _autoRestartFailures[key] = attempt;
-            var portOpen = LauncherPorts.IsPortOpen(service.Port);
-            if (portOpen)
-            {
-                _log($"{service.Name} 健康检查失败但端口 {service.Port} 仍被占用，先停止再重启。");
-                StopService(service);
-                Thread.Sleep(800);
-            }
-            StartService(service);
-            _log($"{service.Name} 健康失败后已自动重启（第 {attempt}/{AutoRestartMaxConsecutive} 次）。");
+            _log($"{service.Name} 健康检查失败但端口 {service.Port} 仍被占用，先停止再重启。");
+            StopService(service);
+            Thread.Sleep(800);
         }
+        StartService(service);
     }
 
     public void StartService(ManagedService service)
@@ -169,28 +151,35 @@ internal sealed class LauncherProcessManager
                     _log($"{service.Name} 已在端口 {service.Port} 运行。");
                     return;
                 }
-                // 孤儿进程：杀掉后重新启动
-                _log($"{service.Name} 端口 {service.Port} 被未知进程占用，尝试清理...");
-                // Redis 优先尝试 Windows 服务停止
-                if (service.Port == 6379)
+                // 孤儿进程处理：按 externalPolicy 决定清理/复用/仅提示。
+                switch (service.ExternalPolicy)
                 {
-                    try
-                    {
-                        var sc = Process.Start(new ProcessStartInfo("sc.exe", "stop Redis")
-                        {
-                            CreateNoWindow = true, UseShellExecute = false,
-                            RedirectStandardOutput = true, RedirectStandardError = true,
-                        });
-                        sc?.WaitForExit(5000);
-                    }
-                    catch { }
+                    case ServiceExternalPolicy.Reuse:
+                        // 外部实例（Windows 服务/Session 0 自启/手动启动）不自动清理：
+                        // 直接复用，避免启动管理器自动重启用户正在使用的实例。
+                        // 用户显式点"停止"时 StopService 才会优雅关闭。
+                        _log($"{service.Name} 已在端口 {service.Port} 运行，直接复用现有实例（跳过重复启动）。");
+                        return;
+
+                    case ServiceExternalPolicy.Refuse:
+                        // 外部进程占用：只显示占用信息，不杀不清理（Safety 原则）。
+                        var refusePids = LauncherPorts.GetPidsByPort(service.Port);
+                        _log(
+                            $"{service.Name} 端口 {service.Port} 被外部进程占用" +
+                            (refusePids.Count > 0 ? $"（PID {string.Join(", ", refusePids)}）" : "") +
+                            "，按 refuse 策略不自动清理，请手动确认后处理。");
+                        return;
+
+                    default: // Managed：清理孤儿进程后重启
+                        _log($"{service.Name} 端口 {service.Port} 被未知进程占用，尝试清理...");
+                        break;
                 }
                 var pids = LauncherPorts.GetPidsByPort(service.Port);
                 foreach (var pid in pids)
                     KillProcessTree(pid, $"端口 {service.Port} (孤儿清理)");
                 Thread.Sleep(800);
                 // 清理后重新检查：仍被占用时，只要实例可用就直接复用（例如以 Windows 服务/
-                // 提权方式运行的 Redis，普通权限 taskkill 会拒绝访问，但实例本身工作正常）。
+                // 提权方式运行的实例，普通权限 taskkill 会拒绝访问，但实例本身工作正常）。
                 if (LauncherPorts.IsPortOpen(service.Port))
                 {
                     var usable = service.Port == 8001
@@ -198,7 +187,7 @@ internal sealed class LauncherProcessManager
                         : true;
                     if (usable)
                     {
-                        _log($"{service.Name} 端口 {service.Port} 已被现有实例占用且可用，直接复用（跳过清理）。");
+                        _log($"{service.Name} 已在端口 {service.Port} 运行，直接复用现有实例（跳过重复启动）。");
                         return;
                     }
                     _log(
@@ -234,8 +223,21 @@ internal sealed class LauncherProcessManager
                 LoadVoiceWorkerEnv(info);
 
             var process = new Process { StartInfo = info, EnableRaisingEvents = true };
-            process.OutputDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log($"[{service.Name}] {e.Data}"); };
-            process.ErrorDataReceived += (_, e) => { if (!string.IsNullOrWhiteSpace(e.Data)) _log($"[{service.Name}] {e.Data}"); };
+            process.OutputDataReceived += (_, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(e.Data)) return;
+                // 只留错误日志的服务（如行情桥）忽略 stdout，避免日志文件被 INFO 轮询刷爆
+                if (service.LogOnlyErrors) return;
+                if (ShouldSuppressChildOutput(e.Data)) return;
+                _log($"[{service.Name}] {e.Data}");
+            };
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(e.Data)) return;
+                if (service.LogOnlyErrors && !LooksLikeErrorOutput(e.Data)) return;
+                if (ShouldSuppressChildOutput(e.Data)) return;
+                _log($"[{service.Name}] {e.Data}");
+            };
             process.Exited += (_, _) => _log($"{service.Name} 已退出。");
 
             if (!process.Start())
@@ -278,7 +280,14 @@ internal sealed class LauncherProcessManager
                 return;
             }
 
+            // 只停止启动器自己拉起的进程树。
             StopStartedProcess(service);
+
+            // 端口清理按 externalPolicy：
+            // - Refuse：外部进程不杀（Safety 原则），仅停自家托管进程；
+            // - Managed：连同占用端口的孤儿进程一并清理，避免残留。
+            if (service.ExternalPolicy == ServiceExternalPolicy.Refuse)
+                return;
 
             var pids = LauncherPorts.GetPidsByPort(service.Port);
             foreach (var pid in pids)
@@ -457,6 +466,62 @@ internal sealed class LauncherProcessManager
 
     private void StopRedisService()
     {
+        // 优先级：redis-cli 优雅关闭（不依赖进程权限，可停 Session 0/服务方式实例）
+        // → sc 停止 Windows 服务 → taskkill 兜底。
+        if (TryShutdownRedisViaCli()) return;
+        TryStopRedisScService();
+    }
+
+    private bool TryShutdownRedisViaCli()
+    {
+        var redisDir = _services["redis"].WorkingDirectory;
+        var redisCli = Path.Combine(redisDir, "redis-cli.exe");
+        if (!File.Exists(redisCli))
+            redisCli = "redis-cli";
+
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = redisCli,
+                Arguments = "-p 6379 shutdown nosave",
+                WorkingDirectory = redisDir,
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            };
+            using var process = Process.Start(info);
+            if (process == null)
+                return false;
+
+            var output = process.StandardOutput.ReadToEnd();
+            var error = process.StandardError.ReadToEnd();
+            process.WaitForExit(5000);
+            if (process.ExitCode == 0)
+            {
+                _log("已通过 redis-cli 请求停止 Redis。");
+                WaitForPortClosed(6379, TimeSpan.FromSeconds(3));
+                return true;
+            }
+
+            var detail = string.IsNullOrWhiteSpace(error) ? output : error;
+            if (string.IsNullOrWhiteSpace(detail))
+                _log("redis-cli 停止 Redis 未成功（可能已停止、未运行或需密码认证）。");
+            else
+                _log($"redis-cli 停止 Redis 未成功: {TrimDetail(detail)}");
+        }
+        catch (Exception ex)
+        {
+            _log($"redis-cli 停止 Redis 失败: {ex.Message}");
+        }
+        return false;
+    }
+
+    private void TryStopRedisScService()
+    {
         try
         {
             var info = new ProcessStartInfo
@@ -478,7 +543,10 @@ internal sealed class LauncherProcessManager
             var error = process.StandardError.ReadToEnd();
             process.WaitForExit(5000);
             if (process.ExitCode == 0)
+            {
                 _log("已请求停止 Redis Windows 服务。");
+                WaitForPortClosed(6379, TimeSpan.FromSeconds(3));
+            }
             else if (!string.IsNullOrWhiteSpace(output) || !string.IsNullOrWhiteSpace(error))
                 // 不输出 sc.exe 原始内容：控制台代码页输出按 UTF-8 读取会变乱码，
                 // 非零状态通常是"非服务方式运行或服务未注册"，无需展开原始文本。
@@ -488,6 +556,61 @@ internal sealed class LauncherProcessManager
         {
             _log($"停止 Redis Windows 服务失败: {ex.Message}");
         }
+    }
+
+    private static void WaitForPortClosed(int port, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!LauncherPorts.IsPortOpen(port)) return;
+            Thread.Sleep(150);
+        }
+    }
+
+    private static bool LooksLikeErrorOutput(string text)
+    {
+        return ContainsAny(text,
+            "ERROR", "WARNING", "WARN", "Exception", "Traceback",
+            "错误", "警告", "异常", "失败");
+    }
+
+    /// <summary>
+    /// 过滤子进程高频噪音输出，防止单日日志被访问日志刷爆：
+    /// 1. uvicorn/fastapi 访问日志行：INFO: 127.0.0.1:53390 - "GET /api/health HTTP/1.1" 200 OK；
+    /// 2. proxy-server 每请求日志行：[06:14:11] GET /health、[09:30:47] GET /api/snapshots/frames?...。
+    /// 错误/警告/异常行不受影响（由 LooksLikeErrorOutput 保底），启动器自身日志也不受影响。
+    /// </summary>
+    private static bool ShouldSuppressChildOutput(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0) return false;
+
+        // 错误/警告绝不丢：先排除再判断噪音，避免把异常内容过滤掉。
+        if (LooksLikeErrorOutput(trimmed)) return false;
+
+        // uvicorn 访问日志：INFO:     127.0.0.1:53390 - "GET /api/health HTTP/1.1" 200 OK
+        if (trimmed.StartsWith("INFO:", StringComparison.Ordinal) &&
+            trimmed.Contains("HTTP/1.1\"", StringComparison.Ordinal))
+            return true;
+
+        // proxy-server 每请求日志：[HH:mm:ss] METHOD /path
+        if (Regex.IsMatch(trimmed, @"^\[\d{2}:\d{2}:\d{2}\] (GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) "))
+            return true;
+
+        return false;
+    }
+
+    private static bool ContainsAny(string text, params string[] needles)
+    {
+        return needles.Any(needle => text.Contains(needle, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string TrimDetail(string text)
+    {
+        const int maxChars = 200;
+        var value = text.Trim();
+        return value.Length <= maxChars ? value : value[..maxChars] + "...";
     }
 
     private void StopStartedProcess(ManagedService service)
@@ -628,9 +751,19 @@ internal sealed class LauncherProcessManager
             var error = process.StandardError.ReadToEnd();
             process.WaitForExit(5000);
             if (process.ExitCode == 0)
+            {
                 _log($"已终止{label}进程树，PID={pid}。");
-            // taskkill 非零退出不记录：系统服务（如 Redis）被拒绝访问是预期场景，
-            // 后续"端口可用则复用"会兜底；只保留 catch 中的真实异常日志。
+            }
+            else
+            {
+                // 非零通常表示权限不足（如 Session 0 系统级进程）或进程已退出；
+                // 明示出来，避免面板按钮"无反应"。
+                var reason = string.IsNullOrWhiteSpace(error) ? output.Trim() : error.Trim();
+                _log(
+                    string.IsNullOrWhiteSpace(reason)
+                        ? $"无法终止{label}进程树，PID={pid}（taskkill 退出码 {process.ExitCode}）。"
+                        : $"无法终止{label}进程树，PID={pid}（taskkill 退出码 {process.ExitCode}）: {TrimDetail(reason)}");
+            }
         }
         catch (Exception ex)
         {

@@ -32,6 +32,29 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 
 目标合同：健康检查必须能让调用方判断 MongoDB 主库和 MongoDB 备份能力是否可用。新增或改名字段时，必须同批更新本文和 [mongodb-migration-plan.md](mongodb-migration-plan.md)。
 
+### launcher 健康契约（8000 / 8001 通用）
+
+DragonBoardLauncher 消费的统一健康契约字段（两个 `/api/health` 都返回）：
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| `status` | `ok` / `degraded` / `error` | 服务健康等级 |
+| `restartable` | `true` / `false` | 是否允许 launcher 自动重启 |
+| `recommendedAction` | `none` / `restart` / `wait` / `alert` | launcher 应执行的动作 |
+| `reason` | 字符串 | 人类可读原因 |
+
+- 8000（`backend/main.py`）：进程存活即 `ok / restartable=true / action=none`；采集器状态见 `snapshotCollector` 兼容块。
+- 8001（`backend/collector_main.py`）：由 `_collector_health_contract` 把调度器状态映射为契约——
+  - 调度器未运行（`enabled` 但 `running=false`）：`error / restartable=true / action=restart`（硬故障）；
+  - 最近有 `last_error`：`degraded / restartable=false / action=alert`（数据源暂时失败，重启无益）；
+  - 其余：`ok / restartable=true / action=none`。
+- **启动失败标记文件**：8001 锁冲突等导致进程启动失败退出时，`collector_main` 会把原因写入仓库根
+  `logs/collector-startup-failure.json`（含 `restartable=false / recommendedAction=wait`）；launcher 探针在
+  8001 不可达时读取该文件（10 分钟内新鲜有效）并按 wait 处理，不再"先杀再启"触发锁竞争重启风暴。
+  成功拿到锁后该文件会被清除。
+- launcher 侧实现：`tools/DragonBoardLauncher/SnapshotCollectorProbe.cs`。改契约字段时需同批更新
+  该文件与本文；C# 侧已保留对旧 `snapshotCollector` 内部字段解析的兼容回退。
+
 ## MongoDB 备份与旧维护入口状态
 
 MongoDB 模式下：
@@ -550,6 +573,12 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshot-collector/runs?status=bloc
 ```
 
 调度器状态同样包含在 `GET /api/health` 响应的 `snapshotCollector` 字段中。
+
+注意：进程重启后内存态 `last_run_at` 会清零，健康端点只会用 MongoDB 里
+**属于当前交易日**的最近 completed 运行记录回填；跨日的旧记录不会写入
+`last_run_at`，避免新交易日开盘瞬间被启动管理器探针误判为“超过2小时未执行”
+而杀重启。若今天尚未有任何采集，`last_run_at` 保持 `null`，由调度器内存态
+在首次采集后自行填充。
 
 ## 热榜情绪 API、回填和盘后调度
 

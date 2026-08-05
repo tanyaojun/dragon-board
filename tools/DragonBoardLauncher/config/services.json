@@ -1,0 +1,110 @@
+{
+  "$schema": "launcher-services.schema.json",
+  "comment": "DragonBoardLauncher 服务定义（P1.1 外置）。路径支持 ${repoRoot} 变量插值；externalPolicy: managed|reuse|refuse。stage 用于核心启动依赖链顺序。",
+  "stages": [
+    { "name": "基础设施", "keys": ["mongo", "redis"] },
+    { "name": "实时数据源", "keys": ["proxy", "bridge"] },
+    { "name": "量化后端", "keys": ["quant-api"] },
+    { "name": "快照采集", "keys": ["collector"] }
+  ],
+  "services": [
+    {
+      "key": "mongo",
+      "name": "MongoDB 数据库",
+      "port": 27017,
+      "workingDirectory": "D:\\APP_SOFT\\MongoDB\\bin",
+      "fileName": "D:\\APP_SOFT\\MongoDB\\bin\\mongod.exe",
+      "arguments": "--dbpath D:\\APP_SOFT\\MongoDB\\data --logpath D:\\APP_SOFT\\MongoDB\\log\\mongod.log --port 27017",
+      "externalPolicy": "refuse",
+      "logOnlyErrors": false,
+      "comment": "refuse：端口被外部进程占用时只显示 PID 不清理（Safety 原则）；副作用是启动器拉起的 mongod 崩溃残留孤儿时不会自动清理，需人工处理。"
+    },
+    {
+      "key": "redis",
+      "name": "Redis 缓存",
+      "port": 6379,
+      "workingDirectory": "D:\\APP_SOFT\\redis\\Redis-8.10.0",
+      "fileName": "D:\\APP_SOFT\\redis\\Redis-8.10.0\\redis-server.exe",
+      "arguments": "redis.conf",
+      "externalPolicy": "reuse",
+      "logOnlyErrors": false
+    },
+    {
+      "key": "proxy",
+      "name": "本地代理服务",
+      "port": 3000,
+      "workingDirectory": "${repoRoot}\\proxy-server",
+      "fileName": "node",
+      "arguments": "server.js",
+      "externalPolicy": "managed",
+      "logOnlyErrors": false
+    },
+    {
+      "key": "voice",
+      "name": "本地语音服务",
+      "port": 32145,
+      "workingDirectory": "${repoRoot}",
+      "fileName": "${repoRoot}\\tools\\VoiceWorker\\bin\\Release\\net8.0-windows10.0.19041.0\\VoiceWorker.exe",
+      "arguments": "",
+      "fallbackFileName": "dotnet",
+      "fallbackArguments": "run --project tools\\VoiceWorker\\VoiceWorker.csproj",
+      "isVoiceWorker": true,
+      "externalPolicy": "managed",
+      "logOnlyErrors": false
+    },
+    {
+      "key": "frontend",
+      "name": "龙头看板前端",
+      "port": 5173,
+      "workingDirectory": "${repoRoot}",
+      "fileName": "node",
+      "arguments": "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5173",
+      "envVars": { "NO_COLOR": "1", "FORCE_COLOR": "0" },
+      "externalPolicy": "managed",
+      "logOnlyErrors": false
+    },
+    {
+      "key": "bridge",
+      "name": "通达信行情桥",
+      "port": 8765,
+      "workingDirectory": "${repoRoot}",
+      "fileName": "python",
+      "arguments": "python-bridge/main.py",
+      "externalPolicy": "managed",
+      "logOnlyErrors": true
+    },
+    {
+      "key": "quant-api",
+      "name": "量化后端 API",
+      "port": 8000,
+      "workingDirectory": "${repoRoot}\\quant-board",
+      "fileName": "${repoRoot}\\quant-board\\.venv\\Scripts\\python.exe",
+      "arguments": "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
+      "fallbackFileName": "python",
+      "externalPolicy": "managed",
+      "logOnlyErrors": false
+    },
+    {
+      "key": "collector",
+      "name": "快照采集服务",
+      "port": 8001,
+      "workingDirectory": "${repoRoot}\\quant-board",
+      "fileName": "${repoRoot}\\quant-board\\.venv\\Scripts\\python.exe",
+      "arguments": "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001",
+      "fallbackFileName": "python",
+      "externalPolicy": "managed",
+      "logOnlyErrors": false
+    },
+    {
+      "key": "quant-ui",
+      "name": "量化面板前端",
+      "port": 5174,
+      "workingDirectory": "${repoRoot}\\quant-board\\frontend",
+      "fileName": "node",
+      "arguments": "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5174",
+      "envVars": { "NO_COLOR": "1", "FORCE_COLOR": "0" },
+      "externalPolicy": "managed",
+      "logOnlyErrors": false
+    }
+  ]
+}

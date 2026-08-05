@@ -104,8 +104,15 @@ class RedisInstanceLock:
         if self._redis is None:
             return True
         try:
-            if self._token_of(self._redis.get(self._key)) == self._token:
+            current = self._redis.get(self._key)
+            if self._token_of(current) == self._token:
                 return bool(self._redis.expire(self._key, self.ttl_seconds))
+            if current is None:
+                # Redis 重启/锁过期导致 key 丢失：本进程仍是唯一调度者，
+                # 重新夺回（nx 防并发双采；若被其它实例抢走则返回 False）。
+                return bool(
+                    self._redis.set(self._key, self._value(), nx=True, ex=self.ttl_seconds)
+                )
             return False
         except Exception as exc:
             logger.warning("collector instance lock renew failed: %s", exc)

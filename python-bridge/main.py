@@ -9,6 +9,7 @@ import signal
 import subprocess
 import tempfile
 import time
+import warnings
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -2859,6 +2860,10 @@ async def main() -> None:
     config = BridgeConfig()
     bridge = TdxL2Bridge(config)
     loop = asyncio.get_running_loop()
+    _install_accept_error_filter(loop)
+    # tdxpy 收盘后调用接口会输出 DeprecationWarning 提示；只是建议性提示，
+    # 过滤后避免刷屏 launcher 日志，不影响行情拉取。
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"tdxpy")
     logger.info(
         "bridge bootstrap: pid=%s port=%s path=%s log=%s",
         os.getpid(),
@@ -2877,6 +2882,29 @@ async def main() -> None:
             pass
 
     await bridge.run()
+
+
+def _install_accept_error_filter(loop: asyncio.AbstractEventLoop) -> None:
+    """过滤 Windows IOCP accept 的 WinError 64 噪音。
+
+    Windows 上客户端连接在 accept 完成前断开时，AcceptEx 会返回
+    OSError(winerror=64)（"指定的网络名不再可用"）。asyncio 会把该异常
+    上报为 "Task exception was never retrieved" / "Accept failed on a socket"
+    两条 ERROR，属于正常竞争条件，不代表服务故障；这里只放行其它异常。
+    """
+
+    previous = loop.get_exception_handler()
+
+    def _handler(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 64:
+            return
+        if previous is not None:
+            previous(_loop, context)
+        else:
+            _loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
 
 
 if __name__ == "__main__":
