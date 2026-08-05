@@ -735,6 +735,11 @@ class TdxL2Bridge:
         self.latest_quote_stats = QuoteFetchStats()
         self.last_quote_cycle_ts = 0
         self.last_quote_error = ""
+        # 高频 WARNING 节流（2026-08-06）：同一缺失代码集合 / 同一重试失败代码在冷却窗口内
+        # 只记一条，防止持续故障（如个别 TDX 不支持代码）每轮刷屏打爆日志。
+        self._partial_data_warn_ts: dict[tuple[str, ...], float] = {}
+        self._refetch_fail_warn_ts: dict[str, float] = {}
+        self._warn_cooldown_s = 60.0
         self.opening_raw_quote_sink = OpeningRawQuoteFileSink(
             os.path.join(default_log_dir(), "opening-raw-quotes")
         )
@@ -2410,6 +2415,23 @@ class TdxL2Bridge:
                 stats.slow_batches,
             )
 
+    def _warn_throttled(self, cache: dict, key, cooldown_s: float) -> bool:
+        """返回 True 表示应记录该 WARNING；同一 key 在冷却窗口内只放行一次。
+
+        用于高频告警节流：key 可为缺失代码集合元组或单个代码，cache 为对应的时间戳字典。
+        顺带清理超过 2×冷却窗口的过期条目，防止长期运行缓存无限增长。
+        """
+        now = time.monotonic()
+        last = cache.get(key)
+        if last is not None and now - last < cooldown_s:
+            return False
+        cache[key] = now
+        if len(cache) > 512:
+            stale = [k for k, v in cache.items() if now - v >= cooldown_s * 2]
+            for k in stale:
+                cache.pop(k, None)
+        return True
+
     async def fetch_quotes_and_depth(
         self, codes: list[str]
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], QuoteFetchStats]:
@@ -2454,13 +2476,18 @@ class TdxL2Bridge:
                         missing_codes = [code for code in batch_codes if code not in record_codes]
                         if missing_codes:
                             stats.truncated_batches += 1
-                            logger.warning(
-                                "quote batch returned partial data: requested=%s received=%s missing=%s batch_size=%s",
-                                len(batch_codes),
-                                len(record_codes),
-                                ",".join(missing_codes[:8]) + ("..." if len(missing_codes) > 8 else ""),
-                                self.current_quote_batch_size,
-                            )
+                            if self._warn_throttled(
+                                self._partial_data_warn_ts,
+                                tuple(sorted(missing_codes)),
+                                self._warn_cooldown_s,
+                            ):
+                                logger.warning(
+                                    "quote batch returned partial data: requested=%s received=%s missing=%s batch_size=%s",
+                                    len(batch_codes),
+                                    len(record_codes),
+                                    ",".join(missing_codes[:8]) + ("..." if len(missing_codes) > 8 else ""),
+                                    self.current_quote_batch_size,
+                                )
                             for missing_code in missing_codes:
                                 try:
                                     def _refetch_one(code: str = missing_code):
@@ -2469,11 +2496,16 @@ class TdxL2Bridge:
 
                                     records.extend(frame_to_records(await asyncio.to_thread(_refetch_one)))
                                 except Exception as error:
-                                    logger.warning(
-                                        "quote refetch failed: code=%s error=%s",
+                                    if self._warn_throttled(
+                                        self._refetch_fail_warn_ts,
                                         missing_code,
-                                        error,
-                                    )
+                                        self._warn_cooldown_s,
+                                    ):
+                                        logger.warning(
+                                            "quote refetch failed: code=%s error=%s",
+                                            missing_code,
+                                            error,
+                                        )
 
                         for row in records:
                             quote_item = normalize_quote_row(row, captured_ms=batch_started)
