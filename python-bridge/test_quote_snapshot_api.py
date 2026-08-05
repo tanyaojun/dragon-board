@@ -122,7 +122,9 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
         quote_client = FakeQuoteClient()
         self.bridge.quote_client = quote_client
-        with patch("main.resolve_requested_session_date", return_value="20260724"):
+        with patch("main.resolve_requested_session_date", return_value="20260724"), patch(
+            "main.resolve_minute_session_date", return_value=("20260724", True)
+        ):
             response = self.client.get("/api/quotes/minute?code=002297&date=20260725")
 
         self.assertEqual(response.status_code, 200)
