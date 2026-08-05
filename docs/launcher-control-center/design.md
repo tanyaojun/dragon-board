@@ -26,8 +26,8 @@ Frontend、Python Bridge、QuantBoard API、Snapshot Collector、QuantBoard UI �
 | redis | Redis 缓存 | 6379 | `D:\APP_SOFT\redis\Redis-8.10.0\redis-server.exe redis.conf` | — | 外部实例复用；停止 redis-cli→sc→taskkill |
 | proxy | 本地代理服务 | 3000 | `node server.js`（proxy-server） | node_modules、.env.local、8000(转发时) | managed |
 | bridge | 通达信行情桥 | 8765 | `python python-bridge/main.py` | mootdx | managed，LogOnlyErrors |
-| collector | 快照采集服务 | 8001 | venv `python -m uvicorn backend.collector_main:app` | MongoDB、Redis 锁、proxy(3000 startup-bundle)、bridge(日历) | managed + Redis 单实例锁 |
-| quant-api | 量化后端 API | 8000 | venv `python -m uvicorn backend.main:app` | MongoDB、Redis | managed |
+| collector | 快照采集服务 | 8001 | venv `python -m uvicorn backend.collector_main:app --no-access-log` | MongoDB、Redis 锁、proxy(3000 startup-bundle)、bridge(日历) | managed + Redis 单实例锁 |
+| quant-api | 量化后端 API | 8000 | venv `python -m uvicorn backend.main:app --no-access-log` | MongoDB、Redis | managed |
 | frontend | 龙头看板前端 | 5173 | `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173` | proxy | managed |
 | quant-ui | 量化面板前端 | 5174 | `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5174` | 8000 | managed |
 | voice | 本地语音服务 | 32145 | `tools/VoiceWorker/bin/Release/.../VoiceWorker.exe` 或 `dotnet run` | `.env.local`（launcher 注入） | managed + 探针优雅停止 |

@@ -2419,7 +2419,8 @@ class TdxL2Bridge:
         """返回 True 表示应记录该 WARNING；同一 key 在冷却窗口内只放行一次。
 
         用于高频告警节流：key 可为缺失代码集合元组或单个代码，cache 为对应的时间戳字典。
-        顺带清理超过 2×冷却窗口的过期条目，防止长期运行缓存无限增长。
+        缓存有界：超过上限时先清理过期条目（≥2×冷却窗口）；若仍超限则删除最旧条目
+        直到回到上限，防止长期运行缓存无限增长。
         """
         now = time.monotonic()
         last = cache.get(key)
@@ -2430,6 +2431,10 @@ class TdxL2Bridge:
             stale = [k for k, v in cache.items() if now - v >= cooldown_s * 2]
             for k in stale:
                 cache.pop(k, None)
+            if len(cache) > 512:
+                # 仍超限：按时间戳一次排序，删除最旧条目直到回到上限（O(n log n)，避免逐次 min 的 O(n²)）
+                for k, _ in sorted(cache.items(), key=lambda kv: kv[1])[: len(cache) - 512]:
+                    cache.pop(k, None)
         return True
 
     async def fetch_quotes_and_depth(
