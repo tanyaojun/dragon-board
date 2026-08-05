@@ -178,7 +178,7 @@ Invoke-RestMethod http://127.0.0.1:8765/api/quotes/snapshot
 
 ```powershell
 cd quant-board
-.\.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001
+.\.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001 --no-access-log
 ```
 
 8000 Quant API 进程不再启动采集调度器；`QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` 已废弃（next-slot 精确定时）。

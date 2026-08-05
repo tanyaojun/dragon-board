@@ -156,7 +156,7 @@ tools/DragonBoardLauncher/
   "port": 8001,
   "workingDirectory": "${repoRoot}/quant-board",
   "fileName": "${repoRoot}/quant-board/.venv/Scripts/python.exe",
-  "arguments": "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001",
+  "arguments": "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001 --no-access-log",
   "fallbackFileName": "python",
   "stage": "core",
   "dependencies": ["mongo", "redis", "proxy", "bridge"],
@@ -183,7 +183,7 @@ tools/DragonBoardLauncher/
 - 每服务日志策略进 services.json：`level: all | errors-only | filter-access`、`suppressHealth`。
 - Process 输出回调改异步队列（Channel/BlockingCollection），避免同步 `_log` 阻塞管道。
 - 保留 LogFile 轮转 + gzip；UI 只订阅日志事件流。
-- （可选，涉及子项目）uvicorn `--no-access-log`、proxy 请求日志只保留非 2xx、行情桥 partial-data WARNING 节流。
+- 子项目源头精简（2026-08-06 已实施）：uvicorn 启动参数加 `--no-access-log`（8000/8001，launcher services.json + 文档命令同步）；proxy 请求日志只保留非 2xx、行情桥 partial-data WARNING 节流仍为可选项。
 
 ## 6. 验证命令
 

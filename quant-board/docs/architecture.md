@@ -60,7 +60,7 @@ backend/snapshot_collector/
 配置与运行：
 
 - 启停控制：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED` 控制。生产环境设为 `1`，由独立进程 `collector_main`（8001）启动调度器；8000 API 进程不再采集。
-- 启动入口：`.\.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001`（DragonBoardLauncher 核心启动项，阶段顺序：基础设施 → 数据源 → Quant API → 采集服务）。
+- 启动入口：`.\.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001 --no-access-log`（DragonBoardLauncher 核心启动项，阶段顺序：基础设施 → 数据源 → Quant API → 采集服务）。
 - 写目标：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 指定（生产环境设为 `dragonboard_live`）。写入 live 数据集需同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，其它任意 dataset 仍被 quality gate 和 CLI 预检拒绝，防止误写。
 - 质量语义（fail-visible）：**只有全部数据源都无任何原始记录时才拒写**（写入 `snapshot_collector_runs` 状态 `blocked`）。空热榜但存在 sector/指数等部分数据时，保存并打 `empty_hotlist_with_partial_data` 标记；`normalize_snapshot_ingest` 不再因空热榜整批抛错。
 - 自动调度器：`SnapshotCollectorScheduler` 在 `collector_main` lifespan 中管理，next-slot 精确定时（`QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` 已废弃）。非 MongoDB 模式或 `ENABLED=0` 时自动禁用。
