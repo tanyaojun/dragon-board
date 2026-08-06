@@ -32,7 +32,9 @@ class ThemeDailySeries:
     breadths: list[float] = field(default_factory=list)
     inflows: list[float] = field(default_factory=list)
     amount_ratios: list[float] = field(default_factory=list)
+    crowding_days: list[float | None] = field(default_factory=list)
     quality_flags: list[str] = field(default_factory=list)
+    latest_slots: list[dict[str, Any]] = field(default_factory=list, repr=False)
     _day_flags: list[list[str]] = field(default_factory=list, repr=False)
 
     @property
@@ -45,6 +47,9 @@ class ThemeDailySeries:
                 "breadthScore": breadth,
                 "mainNetInflow": inflow,
                 "amountRatio": ratio,
+                "crowdingRisk": (
+                    self.crowding_days[i] if i < len(self.crowding_days) else None
+                ),
                 "qualityFlags": (
                     self._day_flags[i] if i < len(self._day_flags) else []
                 ),
@@ -124,7 +129,9 @@ def build_daily_series(
         day_breadths: list[float] = []
         day_inflows: list[float] = []
         day_ratios: list[float] = []
+        day_crowding: list[float | None] = []
         day_flags: list[list[str]] = []
+        latest_slots: list[dict[str, Any]] = []
         for date in dates:
             day_rows = sorted(
                 by_date[date], key=lambda r: str(r.get("slotTime") or "")
@@ -141,13 +148,26 @@ def build_daily_series(
             ratio = metadata.get("amountRatio") if isinstance(metadata, dict) else None
             if _num(ratio) is None:
                 flags.append("amount_ratio_missing")
+            crowding_raw = chosen.get("crowdingRisk")
+            crowding = (
+                float(crowding_raw) if _num(crowding_raw) is not None else None
+            )
             day_dates.append(date)
             day_changes.append(_num(chosen.get("change")) or 0.0)
             day_zt.append(int(_num(chosen.get("ztCount"), 0) or 0))
             day_breadths.append(_num(chosen.get("breadthScore")) or 0.0)
             day_inflows.append(_num(chosen.get("mainNetInflow")) or 0.0)
             day_ratios.append(float(ratio) if _num(ratio) is not None else 0.0)
+            day_crowding.append(crowding)
             day_flags.append(flags)
+            # 槽位快照（供 intraday 辅口径）：保留当日收盘槽与前一日收盘槽
+            latest_slots.append({
+                "tradingDate": date,
+                "slotTime": str(chosen.get("slotTime") or ""),
+                "change": _num(chosen.get("change")) or 0.0,
+                "ztCount": int(_num(chosen.get("ztCount"), 0) or 0),
+                "mainNetInflow": _num(chosen.get("mainNetInflow")) or 0.0,
+            })
         theme_flags: list[str] = []
         for flags in day_flags:
             for flag in flags:
@@ -162,7 +182,9 @@ def build_daily_series(
             breadths=day_breadths,
             inflows=day_inflows,
             amount_ratios=day_ratios,
+            crowding_days=day_crowding,
             quality_flags=theme_flags,
+            latest_slots=latest_slots,
             _day_flags=day_flags,
         )
     return out

@@ -501,10 +501,10 @@ def _flow_volume_score(series: ThemeDailySeries) -> float | None:
 
 
 def _apply_crowding_penalty(
-    base: float, crowding: float, cfg: ThemeMomentumConfig
+    base: float, crowding: float | None, cfg: ThemeMomentumConfig
 ) -> float:
-    """拥挤门禁：crowding ≥ start 后线性扣分，封顶 penalty_max（动量崩溃对冲）。"""
-    if crowding < cfg.crowding_penalty_start:
+    """拥挤门禁：crowding ≥ start 后线性扣分，封顶 penalty_max（动量崩溃对冲）。缺失（None）不扣。"""
+    if crowding is None or crowding < cfg.crowding_penalty_start:
         return base
     penalty = min(
         cfg.crowding_penalty_max,
@@ -513,12 +513,16 @@ def _apply_crowding_penalty(
     return max(0.0, base - penalty)
 
 
-def _phase_label(score: float, crowding: float, cfg: ThemeMomentumConfig) -> str:
-    """展示标签（非状态机）：启动/扩散/过热/退潮/中性。
+def _phase_label(score: float, crowding: float | None, cfg: ThemeMomentumConfig) -> str:
+    """展示标签（非状态机）：启动/扩散/过热/退潮/中性。crowding 缺失（None）时不判过热。
 
     仅展示解释，不进任何合同/回测/决策；题材周期 1-3 天~半个月，不做固定状态机。
     """
-    if crowding >= cfg.phase_overheated_crowding and score >= cfg.phase_heat_score:
+    if (
+        crowding is not None
+        and crowding >= cfg.phase_overheated_crowding
+        and score >= cfg.phase_heat_score
+    ):
         return "过热"
     if score >= cfg.phase_heat_score:
         return "扩散"
@@ -547,6 +551,28 @@ def _intraday_state(
         "ztDelta": round(zt_cur - zt_prev, 2),
         "inflowDelta": round(inflow_cur - inflow_prev, 4),
     }
+
+
+
+
+def _rotation_state_for_v2(
+    score: float | None,
+    direction: str,
+    inflow: float | None,
+    crowding: float | None,
+) -> str:
+    """v2 的 rotationState 方向标签（spec D10，无状态机钳制）。
+
+    基于日线动量方向 + 资金方向；mainline 需横截面 Top 判定（由 theme_rotation
+    引擎负责），此处仅产出 inflow/outflow/neutral，reasons 标注来源 v2。
+    """
+    if score is None:
+        return "neutral"
+    if direction == "up" or (inflow is not None and inflow > 0):
+        return "inflow"
+    if direction == "down" or (inflow is not None and inflow < 0):
+        return "outflow"
+    return "neutral"
 
 
 def compute_theme_momentum_v2(
@@ -598,12 +624,14 @@ def compute_theme_momentum_v2(
             flow_volume = None
             reasons.append("flow_volume_unavailable")
 
-        # 拥挤代理：daily_series 无独立 crowdingRisk 日线，用日 breadthScore 反向代理
-        # （breadth 高 ≠ 拥挤，但 spec §5.2 门禁要求有扣分项；代理口径在 reasons 标注，
-        #  不伪造真实 crowding）。真实 crowding 由 Task 3 analyze 槽位口径补充。
-        crowding = _num100(series.breadths[-1]) if series.breadths else 0.0
-        if crowding > 0:
-            reasons.append(f"crowding_proxy(breadth={crowding:.0f})")
+        # 拥挤门禁（spec §5.2）：使用真实 crowdingRisk 日线（build_daily_series 聚合）；
+        # 数据缺失时保持缺失（crowding=None）→ 不扣分 + crowding_unavailable 标记
+        # （fail-visible：不伪造、不用宽度反向代理造成自抵消）。
+        crowding = (
+            series.crowding_days[-1] if series.crowding_days else None
+        )
+        if crowding is None:
+            reasons.append("crowding_unavailable")
 
         # 合成综合分：可用维度 < 3 则不产分
         scores: dict[str, float] = {}
@@ -628,6 +656,7 @@ def compute_theme_momentum_v2(
                 "themeName": series.theme_name,
                 "score": None,
                 "direction": "neutral",
+                "rotationState": "neutral",
                 "phaseLabel": "中性",
                 "rps": rps,
                 "nearHigh": round(near_high, 1) if near_high is not None else None,
@@ -637,14 +666,30 @@ def compute_theme_momentum_v2(
                 "breadth": round(breadth, 1) if breadth is not None else None,
                 "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
                 "crowdingPenalty": 0.0,
-                "intraday": {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True},
+                "intraday": (
+                    _intraday_state(
+                        (getattr(series, "latest_slots", []) or [None])[-1],
+                        (getattr(series, "latest_slots", []) or [None, None])[-2]
+                        if len(getattr(series, "latest_slots", []) or []) >= 2 else None,
+                    )
+                    if len(getattr(series, "latest_slots", []) or []) >= 2
+                    else {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True}
+                ),
                 "reasons": reasons + ["insufficient_factors"],
             }
             continue
 
         total_weight = sum(cfg.weights[k] for k in scores)
         base = sum(scores[k] * cfg.weights[k] for k in scores) / total_weight
-        score = _apply_crowding_penalty(base, crowding, cfg)
+        score = _apply_crowding_penalty(base, crowding if crowding is not None else 0.0, cfg)
+
+        # 槽位日内辅口径（spec D3）：当日收盘槽 vs 前一日收盘槽快照
+        slots = getattr(series, "latest_slots", [])
+        intraday = (
+            _intraday_state(slots[-1], slots[-2])
+            if len(slots) >= 2
+            else {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True}
+        )
         direction = (
             "up"
             if score >= cfg.direction_up_threshold
@@ -652,11 +697,17 @@ def compute_theme_momentum_v2(
             if score <= cfg.direction_down_threshold
             else "neutral"
         )
+        rotation_state = _rotation_state_for_v2(
+            score, direction, series.inflows[-1] if series.inflows else None, crowding
+        )
+        if rotation_state != "neutral":
+            reasons.append(f"rotationState={rotation_state}(v2)")
         factors[series.theme_id] = {
             "themeId": series.theme_id,
             "themeName": series.theme_name,
             "score": round(score, 1),
             "direction": direction,
+            "rotationState": rotation_state,
             "phaseLabel": _phase_label(score, crowding, cfg),
             "rps": rps,
             "nearHigh": round(near_high, 1) if near_high is not None else None,
@@ -664,7 +715,7 @@ def compute_theme_momentum_v2(
             "breadth": round(breadth, 1) if breadth is not None else None,
             "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
             "crowdingPenalty": round(base - score, 1),
-            "intraday": {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True},
+            "intraday": intraday,
             "reasons": reasons,
         }
 

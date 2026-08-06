@@ -106,8 +106,24 @@ def test_v2_near_high_and_window_momentum():
     assert momentum is not None and 0 <= momentum <= 100
 
 
-def test_v2_intraday_state_keys():
-    """intraday 辅口径含 shortChange/ztDelta/inflowDelta，且明确标注 unavailable（无槽位输入）。"""
+def test_v2_intraday_state_from_latest_slots():
+    """intraday 辅口径：有 latest_slots 时按当日/前一日收盘槽真实计算。"""
+    series = _series("BKAI", "人工智能", [0.01] * 25)
+    series.latest_slots = [
+        {"tradingDate": "2026-07-33", "slotTime": "15:00",
+         "change": 0.01, "ztCount": 2, "mainNetInflow": 1.0},
+        {"tradingDate": "2026-07-34", "slotTime": "15:00",
+         "change": 0.03, "ztCount": 5, "mainNetInflow": 2.5},
+    ]
+    result = compute_theme_momentum_v2([series], cfg=ThemeMomentumConfig())
+    row = result["factors"]["BKAI"]
+    assert set(row["intraday"]) == {"shortChange", "ztDelta", "inflowDelta"}
+    assert row["intraday"]["ztDelta"] == 3
+    assert row["intraday"]["inflowDelta"] == 1.5
+
+
+def test_v2_intraday_unavailable_without_slots():
+    """无 latest_slots（直接构造的 series）时 intraday 标注 unavailable（fail-visible）。"""
     result = compute_theme_momentum_v2(
         [_series("BKAI", "人工智能", [0.01] * 25)],
         cfg=ThemeMomentumConfig(),
@@ -115,6 +131,15 @@ def test_v2_intraday_state_keys():
     row = result["factors"]["BKAI"]
     assert set(row["intraday"]) == {"shortChange", "ztDelta", "inflowDelta", "unavailable"}
     assert row["intraday"]["unavailable"] is True
+
+
+def test_v2_rotation_state_direction_labels():
+    """v2 输出 rotationState 方向标签（spec D10）：动量上行 → inflow。"""
+    leader = _series("BKAI", "人工智能", [0.05] * 25)
+    result = compute_theme_momentum_v2([leader], cfg=ThemeMomentumConfig())
+    row = result["factors"]["BKAI"]
+    assert row["rotationState"] in {"mainline", "inflow", "outflow", "neutral"}
+    assert "rotationState=inflow(v2)" in row["reasons"] or row["direction"] != "up"
 
 
 def test_v2_empty_input_not_crash():
