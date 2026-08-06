@@ -2,6 +2,7 @@ import { dataLayer } from '../../services/DataLayer'
 import { FORMAL_SNAPSHOT_READ_POLICY } from '../../services/snapshot/readPolicy'
 import { snapshotFacade } from '../../services/snapshot/facade'
 import type { SnapshotFrameBundle, SnapshotStockRow } from '../../services/snapshot/types'
+import { cacheManager } from '../../services/LRUCache'
 import { dragonBreathAnalyzer } from '../../services/DragonBreathAnalyzer'
 import type { MergedStock } from '@/types'
 import {
@@ -160,20 +161,83 @@ function buildCloseFrame(stocks: MergedStock[], date: string, timestamp: number)
   }
 }
 
+// 复盘热榜行字段白名单（frames fields 投影）：normalizeHotlistItem 消费的完整字段集，
+// 避免 4 类型全帧 × full 107 字段的超大响应；sector/帧级字段不受行投影影响
+const REVIEW_HOT_STOCK_ROW_FIELDS = [
+  'code',
+  'name',
+  'rank',
+  'compRank',
+  'price',
+  'change',
+  'turnover',
+  'turnoverRate',
+  'totalMV',
+  'cirMV',
+  'zlje',
+  'zljzb',
+  'volumeRatio',
+  'leadStatus',
+  'leadTimes',
+  'lianbanStr',
+  'lianban',
+  'popularity',
+  'popularityChange',
+  'institutionBuy',
+  'mainBuy',
+  'mainSell',
+  'fengdan',
+  'maxFengdan',
+  'firstZtTime',
+  'lastZtTime',
+  'first_limit_up_time',
+  'last_limit_up_time',
+  'boardHeight',
+  'highDays',
+  'continuousDays',
+  'hotness',
+  'themes',
+  'isNew',
+  'mainTheme',
+  'themeHeat',
+  'themeLevel',
+]
+
+// 复盘 bundles 查询缓存：6 小时失效（历史复盘帧当天不变；key 含 reviewDate，次日自动换 key）
+const REVIEW_BUNDLES_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const reviewBundlesCache = cacheManager.createCache('reviewBundles', {
+  capacity: 2,
+  defaultTTL: REVIEW_BUNDLES_CACHE_TTL_MS,
+  maxMemory: 24 * 1024 * 1024,
+  ttlConfig: { reviewBundles: REVIEW_BUNDLES_CACHE_TTL_MS },
+})
+
 export class FrameNormalizer {
   async normalize(date?: string): Promise<{ reviewDate: string; frames: ReviewFrame[]; missingData: string[] }> {
     const reviewDate = normalizeDate(date)
     const missingData: string[] = []
     const frames: ReviewFrame[] = []
-    // 不同粒度快照在这里被压平成统一的 ReviewFrame，
-    // 后续模块只消费标准化后的 frame，不再分支判断数据来源。
-    const bundles = await snapshotFacade.listSnapshotFrameBundles({
-      types: RANK_TREND_SNAPSHOT_TYPES,
-      tradingDate: reviewDate,
-      allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-      excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-      sort: 'asc',
-    })
+    // 复盘是低频只读操作：同日 bundles 6h 内缓存（fields 白名单瘦身后内存可控），
+    // 避免重复查看复盘时对 MongoDB 重复拉取 4 类型全帧
+    const bundlesCacheKey = `review:${reviewDate}`
+    const cachedBundles = reviewBundlesCache.get(bundlesCacheKey) as SnapshotFrameBundle[] | null
+    let bundles: SnapshotFrameBundle[]
+    if (cachedBundles) {
+      bundles = cachedBundles
+    } else {
+      // 不同粒度快照在这里被压平成统一的 ReviewFrame，
+      // 后续模块只消费标准化后的 frame，不再分支判断数据来源。
+      // fields 行字段白名单投影：只取复盘行所需字段（sector/帧级字段不受影响）
+      bundles = await snapshotFacade.listSnapshotFrameBundles({
+        types: RANK_TREND_SNAPSHOT_TYPES,
+        tradingDate: reviewDate,
+        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+        sort: 'asc',
+        fields: REVIEW_HOT_STOCK_ROW_FIELDS,
+      })
+      reviewBundlesCache.setWithType(bundlesCacheKey, bundles, 'reviewBundles')
+    }
 
     for (const bundle of bundles) {
       frames.push(buildFrameFromBundle(bundle, reviewDate))

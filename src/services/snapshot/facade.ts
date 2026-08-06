@@ -10,6 +10,7 @@ import type {
   SnapshotStockRowQueryOptions,
   SnapshotType,
 } from './types'
+import type { BackendReadOptions } from './backendRead'
 
 const PRIMARY_DB_NAME = 'DragonBoardData'
 const PRIMARY_DB_VERSION = 9
@@ -78,15 +79,15 @@ class SnapshotFacade {
     return snapshotBackendRead.getTradingDateSnapshot(type, tradingDate)
   }
 
-  async listSnapshotFrames(options: SnapshotFrameQueryOptions = {}) {
+  async listSnapshotFrames(options: SnapshotFrameQueryOptions & BackendReadOptions = {}) {
     return snapshotBackendRead.listSnapshotFrames(options)
   }
 
-  async listSnapshotStockRows(options: SnapshotStockRowQueryOptions = {}) {
+  async listSnapshotStockRows(options: SnapshotStockRowQueryOptions & BackendReadOptions = {}) {
     return snapshotBackendRead.listSnapshotStockRows(options)
   }
 
-  async listSnapshotSectorRows(options: SnapshotSectorRowQueryOptions = {}) {
+  async listSnapshotSectorRows(options: SnapshotSectorRowQueryOptions & BackendReadOptions = {}) {
     return snapshotBackendRead.listSnapshotSectorRows(options)
   }
   getSnapshotProjectionMeta = snapshotRuntime.getSnapshotProjectionMeta.bind(snapshotRuntime)

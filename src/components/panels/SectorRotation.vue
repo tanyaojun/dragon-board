@@ -291,6 +291,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { snapshotFacade } from '@/services/snapshot/facade'
+import { rotationFramesCache } from '@/services/snapshot/rotationFramesCache'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { usePanel } from '@/composables/usePanel'
 import type { RotationAnalysis } from '@/types/core'
@@ -347,14 +348,24 @@ const rotationData = computed(() => {
 const dataVersion = computed(() => dataLayer.getVersion().themes)
 
 // ========== 加载数据 ==========
-const loadBackendRotation = async () => {
+const loadBackendRotation = async (force = false) => {
   try {
-    const frames = await snapshotFacade.listSnapshotFrames({
-      type: ROTATION_SNAPSHOT_TYPE,
-      sort: 'desc',
-      limit: 2,
-    })
-    const rows = (frames || []) as SnapshotFrameRow[]
+    const framesCacheKey = `rotation:${ROTATION_SNAPSHOT_TYPE}`
+    const cachedFrames = rotationFramesCache.get(framesCacheKey) as SnapshotFrameRow[] | null
+    let frames: SnapshotFrameRow[]
+    if (cachedFrames && !force) {
+      frames = cachedFrames
+    } else {
+      // ranktrend 行投影瘦身：轮动摘要只需帧级 rotationSummary，不需要整行 107 字段
+      frames = ((await snapshotFacade.listSnapshotFrames({
+        type: ROTATION_SNAPSHOT_TYPE,
+        sort: 'desc',
+        limit: 2,
+        projection: 'ranktrend',
+      })) || []) as SnapshotFrameRow[]
+      rotationFramesCache.setWithType(framesCacheKey, frames, 'sectorRotationFrames')
+    }
+    const rows = frames
     const withRotation = rows.filter(
       (frame) => frame.rotationSummary && typeof frame.rotationSummary === 'object',
     )
@@ -400,7 +411,10 @@ const loadingMessage = computed(() => loading.value ? '加载轮动数据...' : 
 function refresh() {
   dataLayer.refreshStocksVersion()
   themeFacade.refresh({ emitAlerts: false })
-  loadData()
+  // force 绕过 30 分钟缓存：手动刷新必须拉到最新轮动帧（loadData 模板绑定保持无参）
+  void loadBackendRotation(true).catch((err) =>
+    console.error('[SectorRotation] 轮动帧刷新失败:', err),
+  )
 }
 
 function close() {

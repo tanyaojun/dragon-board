@@ -580,7 +580,6 @@ import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import {
   hotListSentimentAnalyzer,
-  persistHotListSentiment,
   type HotListDayMetrics,
   type HotListSentimentResult,
   type HotListStatusLabel,
@@ -588,6 +587,7 @@ import {
 import type { SnapshotFrameBundle } from '@/services/snapshot/types'
 import { FORMAL_SNAPSHOT_READ_POLICY } from '@/services/snapshot/readPolicy'
 import { snapshotFacade } from '@/services/snapshot/facade'
+import { cacheManager } from '@/services/LRUCache'
 import {
   EMOTION_PHASE_BY_VALUE,
   EMOTION_PHASE_LIST,
@@ -682,6 +682,50 @@ const hotListSentimentError = ref<string | null>(null)
 const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 let hotListSentimentTimer: ReturnType<typeof setTimeout> | null = null
 let hotListSentimentRetryCount = 0
+// 热榜情绪读取防风暴：in-flight 锁 + 最小间隔节流 + visible 判断，
+// 避免 merged.stocks 高频事件把 frames 请求打满前端 high 队列（饿死观察面板等交互请求）。
+// daily 帧一天变化有限，情绪数据半小时（1800s）刷新一次足够。
+let hotListSentimentInFlight = false
+let hotListSentimentLastRunAt = 0
+const HOT_LIST_SENTIMENT_MIN_INTERVAL_MS = 1800_000
+// daily 历史帧查询投影缓存：6 小时失效。查询过滤 beforeTradingDate=today，结果仅含昨日及更早帧，
+// 当日入库的新帧不会改变结果；key 含 today，次日自动换 key 重新查询，不会跨日陈旧。
+// 6h 在"当天内历史回填可见性"与"减少 MongoDB 压力"之间取平衡。
+const HOT_LIST_SENTIMENT_FRAMES_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const hotListSentimentFramesCache = cacheManager.createCache('hotlistSentimentFrames', {
+  capacity: 8,
+  defaultTTL: HOT_LIST_SENTIMENT_FRAMES_CACHE_TTL_MS,
+  maxMemory: 8 * 1024 * 1024,
+  ttlConfig: { hotlistSentimentFrames: HOT_LIST_SENTIMENT_FRAMES_CACHE_TTL_MS },
+})
+
+// 热榜情绪分析所需的 stock 行字段白名单（frames fields 投影）：
+// 涨停/炸板信号与连板高度依赖这些行级字段；full 投影整行 107 字段会让 3 帧响应达 27MB
+const HOT_LIST_SENTIMENT_ROW_FIELDS = [
+  'code',
+  'name',
+  'rank',
+  'change',
+  'avgRankNum',
+  'boardHeight',
+  'highDays',
+  'continuousDays',
+  'lianbanStr',
+  'lianban',
+  'firstZtTime',
+  'lastZtTime',
+  'first_limit_up_time',
+  'last_limit_up_time',
+  'isZhaban',
+  'zhaban',
+  'openedLimit',
+  'limitOpened',
+  'failedLimitUp',
+  'isFailedLimitUp',
+  'volumeRatio',
+  'zlje',
+  'zljzb',
+]
 
 
 
@@ -1226,6 +1270,9 @@ function refresh() {
 }
 
 function scheduleHotListSentimentLoad() {
+  if (!props.visible) return
+  // 节流：距上次实际执行不足最小间隔时跳过，防止 merged.stocks 高频事件风暴
+  if (Date.now() - hotListSentimentLastRunAt < HOT_LIST_SENTIMENT_MIN_INTERVAL_MS) return
   if (hotListSentimentTimer) clearTimeout(hotListSentimentTimer)
   hotListSentimentTimer = setTimeout(() => {
     loadHotListSentiment()
@@ -1234,6 +1281,7 @@ function scheduleHotListSentimentLoad() {
 
 function scheduleHotListSentimentRetry() {
   if (hotListSentimentRetryCount >= 6) return
+  if (!props.visible) return
   hotListSentimentRetryCount += 1
   if (hotListSentimentTimer) clearTimeout(hotListSentimentTimer)
   hotListSentimentTimer = setTimeout(() => {
@@ -1242,6 +1290,9 @@ function scheduleHotListSentimentRetry() {
 }
 
 async function loadHotListSentiment() {
+  // in-flight 防重入：上一次未完成时直接丢弃新触发，避免并发 frames 请求堆积
+  if (hotListSentimentInFlight) return
+  hotListSentimentInFlight = true
   hotListSentimentLoading.value = true
   hotListSentimentError.value = null
 
@@ -1255,15 +1306,36 @@ async function loadHotListSentiment() {
     }
 
     hotListSentimentRetryCount = 0
-    const historicalBundles = await snapshotFacade.listSnapshotFrameBundles({
-      type: 'daily',
-      allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-      excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-      sort: 'desc',
-      limit: 3,
-    })
-
+    hotListSentimentLastRunAt = Date.now()
+    // 按需过滤：只看今天之前的历史 daily 帧（limit 3 + beforeTradingDate 后端过滤），
+    // 不拉取今天全量帧；情绪分析只需昨日/前日对比，今天数据来自 dataLayer 实时 stocks。
+    // 查询结果 30 分钟 LRU 缓存，减少对 MongoDB 的重复查询
     const today = formatLocalDate(new Date())
+    const framesCacheKey = `daily:${today}:fields`
+    const cachedBundles = hotListSentimentFramesCache.get(framesCacheKey) as
+      | SnapshotFrameBundle[]
+      | null
+    let historicalBundles: SnapshotFrameBundle[]
+    if (cachedBundles) {
+      historicalBundles = cachedBundles
+    } else {
+      historicalBundles = await snapshotFacade.listSnapshotFrameBundles({
+        type: 'daily',
+        beforeTradingDate: today,
+        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+        sort: 'desc',
+        limit: 3,
+        // fields 行字段白名单投影：只取情绪分析所需字段，避免 full 投影 27MB 大响应
+        fields: HOT_LIST_SENTIMENT_ROW_FIELDS,
+      })
+      hotListSentimentFramesCache.setWithType(
+        framesCacheKey,
+        historicalBundles,
+        'hotlistSentimentFrames',
+      )
+    }
+
     const historical = historicalBundles
       .filter((bundle: SnapshotFrameBundle) => bundle.tradingDate !== today)
       .slice(0, 2)
@@ -1274,19 +1346,13 @@ async function loadHotListSentiment() {
       dayBefore: historical[1] || null,
       marketData: marketData.value,
     })
-
-    const todayBundle = historicalBundles.find(
-      (b: SnapshotFrameBundle) => b.tradingDate === today && b.slotTime >= '15:00',
-    )
-    if (todayBundle && hotListSentiment.value) {
-      void persistHotListSentiment(hotListSentiment.value, {
-        tradingDate: todayBundle.tradingDate,
-      })
-    }
+    // 注：不再前端 persist 热榜情绪——proxy-server 无 /api/hotlist-sentiment 转发（404 死链），
+    // 且 QuantBoard 后端 startup 的 run_after_market_once 已按最新交易日自动入库（operations/schedule.py）。
   } catch (err: any) {
     console.warn('[DragonBreathPanel] 热榜情绪分析失败:', err)
     hotListSentimentError.value = err?.message || '热榜情绪分析失败'
   } finally {
+    hotListSentimentInFlight = false
     hotListSentimentLoading.value = false
   }
 }
@@ -1474,7 +1540,8 @@ onMounted(() => {
   unsubscribeFns.push(unsubHotThemes)
 
   const unsubStocks = dataLayer.subscribe('merged.stocks', () => {
-    scheduleHotListSentimentLoad()
+    // 仅面板可见时调度；schedule 内部另有 5s 节流与 in-flight 锁兜底
+    if (props.visible) scheduleHotListSentimentLoad()
   })
   unsubscribeFns.push(unsubStocks)
 

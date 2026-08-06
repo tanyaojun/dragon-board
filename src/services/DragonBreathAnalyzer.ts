@@ -26,8 +26,20 @@ import { API_CONFIG } from '../config/constants'
 import { dataLayer } from './DataLayer'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './snapshot/readPolicy'
 import { snapshotFacade } from './snapshot/facade'
+import { cacheManager } from './LRUCache'
+import type { SnapshotFrameBundle } from './snapshot/types'
 import { refreshResourceLocks } from './refresh/RefreshResourceLocks'
 import { refreshScheduler } from './refresh/RefreshTaskRuntime'
+
+// daily 历史帧查询投影缓存：6 小时失效（daily 帧一天 1-2 次入库，结果当天不可变；key 含 tradingDate 区分）。
+// 5 分钟自动刷新会重复触发 daily 查询，缓存避免每次刷新都请求 MongoDB。
+const DAILY_FRAMES_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const dailyFramesCache = cacheManager.createCache('breathDailyFrames', {
+  capacity: 16,
+  defaultTTL: DAILY_FRAMES_CACHE_TTL_MS,
+  maxMemory: 16 * 1024 * 1024,
+  ttlConfig: { breathDailyFrames: DAILY_FRAMES_CACHE_TTL_MS },
+})
 import { StockUtils } from '../utils/common'
 
 import { EMOTION_FACTOR_CONFIG, type EmotionFactor } from '../types/emotion'
@@ -551,14 +563,25 @@ export class DragonBreathAnalyzer {
     if (!tradingDate) return null
 
     try {
-      const [bundle] = await snapshotFacade.listSnapshotFrameBundles({
-        type: 'daily',
-        tradingDate,
-        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-        sort: 'desc',
-        limit: 1,
-      })
+      // 帧级 marketStats 查询：ranktrend 行投影瘦身 + 6h 缓存（帧级字段不受行投影影响）
+      const cacheKey = `daily:${tradingDate}`
+      const cached = dailyFramesCache.get(cacheKey) as SnapshotFrameBundle[] | null
+      let bundles: SnapshotFrameBundle[]
+      if (cached) {
+        bundles = cached
+      } else {
+        bundles = await snapshotFacade.listSnapshotFrameBundles({
+          type: 'daily',
+          tradingDate,
+          allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+          excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+          sort: 'desc',
+          limit: 1,
+          projection: 'ranktrend',
+        })
+        dailyFramesCache.setWithType(cacheKey, bundles, 'breathDailyFrames')
+      }
+      const [bundle] = bundles
       const marketStats = bundle?.marketStats
       if (!marketStats || typeof marketStats !== 'object') return null
 
@@ -754,13 +777,24 @@ export class DragonBreathAnalyzer {
    */
   private async getLastTradeDate(): Promise<string | null> {
     try {
-      const bundles = await snapshotFacade.listSnapshotFrameBundles({
-        type: 'daily',
-        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-        sort: 'desc',
-        limit: 2,
-      })
+      // 最近 2 个 daily 帧日期查询：ranktrend 行投影瘦身 + 6h 缓存（只需帧级 tradingDate）。
+      // key 含今天日期：跨日后强制重查，避免缓存返回前一天的"最近 2 帧"导致 lastTradeDate 陈旧
+      const cacheKey = `daily:latest:2:${this.formatLocalTradingDate(new Date())}`
+      const cached = dailyFramesCache.get(cacheKey) as SnapshotFrameBundle[] | null
+      let bundles: SnapshotFrameBundle[]
+      if (cached) {
+        bundles = cached
+      } else {
+        bundles = await snapshotFacade.listSnapshotFrameBundles({
+          type: 'daily',
+          allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+          excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+          sort: 'desc',
+          limit: 2,
+          projection: 'ranktrend',
+        })
+        dailyFramesCache.setWithType(cacheKey, bundles, 'breathDailyFrames')
+      }
 
       const tradeDates = Array.from(
         new Set(
@@ -803,14 +837,24 @@ export class DragonBreathAnalyzer {
         return
       }
 
-      const [yesterdayBundle] = await snapshotFacade.listSnapshotFrameBundles({
-        type: 'daily',
-        tradingDate: lastTradeDate,
-        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-        sort: 'desc',
-        limit: 1,
-      })
+      // 昨日涨停股行数据：需要 full 投影（涨停信号依赖行级字段），6h 缓存减少重复查询
+      const cacheKey = `daily:${lastTradeDate}:full`
+      const cached = dailyFramesCache.get(cacheKey) as SnapshotFrameBundle[] | null
+      let yesterdayBundles: SnapshotFrameBundle[]
+      if (cached) {
+        yesterdayBundles = cached
+      } else {
+        yesterdayBundles = await snapshotFacade.listSnapshotFrameBundles({
+          type: 'daily',
+          tradingDate: lastTradeDate,
+          allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
+          excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
+          sort: 'desc',
+          limit: 1,
+        })
+        dailyFramesCache.setWithType(cacheKey, yesterdayBundles, 'breathDailyFrames')
+      }
+      const [yesterdayBundle] = yesterdayBundles
 
       const yesterdayStocks = (yesterdayBundle?.hotlist || []).filter((stock: any) =>
         this.isSnapshotLimitUpStock(stock),

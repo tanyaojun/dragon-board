@@ -3,11 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { rankTrendAnalyzer } from '../../RankTrendAnalyzer'
 import { apiService } from '../../apiService'
 import { snapshotFacade } from '../../snapshot/facade'
-import { observationProjectionCache, rankTrendObservationService } from '../RankTrendObservationService'
+import {
+  observationProjectionCache,
+  observationStockRowsCache,
+  rankTrendObservationService,
+} from '../RankTrendObservationService'
 
 describe('RankTrendObservationService', () => {
   beforeEach(() => {
     observationProjectionCache.clear()
+    observationStockRowsCache.clear()
     vi.spyOn(apiService, 'analyzeRankTrend').mockResolvedValue({
       ok: true,
       frames: [],
@@ -116,10 +121,14 @@ describe('RankTrendObservationService', () => {
       rankTrend: { meta: { code: '002279' } },
     })
 
-    expect(rankTrendAnalyzer.getSnapshotsByType).toHaveBeenCalledWith('half_hour', {
-      limit: 50,
-      codes: ['002279'],
-    })
+    expect(rankTrendAnalyzer.getSnapshotsByType).toHaveBeenCalledWith(
+      'half_hour',
+      {
+        limit: 50,
+        codes: ['002279'],
+      },
+      expect.objectContaining({ signal: expect.anything() }),
+    )
     expect(result.frames).toHaveLength(2)
     expect(result.frames[0]).toMatchObject({
       key: '2026-07-28 14:30',
@@ -392,10 +401,13 @@ describe('RankTrendObservationService', () => {
       rankTrend: { meta: { code: '002279' } },
     })
 
-    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(expect.objectContaining({
-      codes: ['002279'],
-      frameKeys: ['2026-07-28 14:30'],
-    }))
+    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codes: ['002279'],
+        frameKeys: ['2026-07-28 14:30'],
+      }),
+      expect.objectContaining({ signal: expect.anything() }),
+    )
     expect(result.frames[0].marketMedianPercentile).toBeNull()
     expect(result.frames[0].marketMedianShortChange).toBe(0)
     expect(result.frames[0].marketSampleCount).toBe(4)
@@ -486,10 +498,13 @@ describe('RankTrendObservationService', () => {
       rankTrend: currentAnalysis as any,
     })
 
-    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(expect.objectContaining({
-      codes: ['002279'],
-      frameKeys: ['2026-07-28 14:30'],
-    }))
+    expect(apiService.analyzeRankTrend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codes: ['002279'],
+        frameKeys: ['2026-07-28 14:30'],
+      }),
+      expect.objectContaining({ signal: expect.anything() }),
+    )
     expect(result.frames[0].analysis?.strategy?.regime?.state).toBe('strong')
     expect(result.frames[0].issues.some((issue) => issue.code === 'analysis_unavailable')).toBe(false)
   })
@@ -777,15 +792,19 @@ describe('RankTrendObservationService', () => {
       expect(second.frames).toEqual(first.frames)
     })
 
-    it('当前分析指纹变化时缓存失效并重新请求', async () => {
+    it('当前分析指纹变化时缓存失效并重新请求（stock-rows 命中查询缓存，analyze 重新调用）', async () => {
       mockSeries()
       const stockRows = vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      const analyze = vi.mocked(apiService.analyzeRankTrend)
 
       await rankTrendObservationService.load(buildStock(100))
       const second = await rankTrendObservationService.load(buildStock(101))
 
       expect(second.source).toBe('live')
-      expect(stockRows).toHaveBeenCalledTimes(2)
+      // stock-rows 查询投影缓存 30 分钟：历史行未变，不重复请求 MongoDB
+      expect(stockRows).toHaveBeenCalledTimes(1)
+      // viewModel 指纹变化：analyze 重新调用组装新投影
+      expect(analyze).toHaveBeenCalledTimes(2)
     })
 
     it('TTL 过期后缓存失效并重新请求', async () => {
@@ -793,13 +812,16 @@ describe('RankTrendObservationService', () => {
       try {
         mockSeries()
         const stockRows = vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+        const analyze = vi.mocked(apiService.analyzeRankTrend)
 
         await rankTrendObservationService.load(buildStock())
         vi.advanceTimersByTime(61_000)
         const second = await rankTrendObservationService.load(buildStock())
 
         expect(second.source).toBe('live')
-        expect(stockRows).toHaveBeenCalledTimes(2)
+        // viewModel 缓存 60s 过期后重新组装；stock-rows 查询缓存 30 分钟仍命中
+        expect(stockRows).toHaveBeenCalledTimes(1)
+        expect(analyze).toHaveBeenCalledTimes(2)
       } finally {
         vi.useRealTimers()
       }
@@ -866,5 +888,119 @@ describe('RankTrendObservationService', () => {
       code: 'theme_resonance_insufficient',
       track: 'resonance',
     }))
+  })
+
+  describe('in-flight 合并与取消', () => {
+    function mockSeries() {
+      vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
+        ranks: [28, 19],
+        percentiles: [42, 67],
+        frameKeys: ['2026-07-28 14:30', '2026-07-28 15:00'],
+      })
+    }
+
+    it('并发 load 同一股票时合并为单次请求', async () => {
+      mockSeries()
+      const stockRows = vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      const analyze = vi.mocked(apiService.analyzeRankTrend)
+      const stock = { code: '002279', name: '久其软件' }
+
+      const first = rankTrendObservationService.load(stock)
+      const second = rankTrendObservationService.load(stock)
+      const [a, b] = await Promise.all([first, second])
+
+      expect(stockRows).toHaveBeenCalledTimes(1)
+      expect(analyze).toHaveBeenCalledTimes(1)
+      expect(a.frames).toEqual(b.frames)
+    })
+
+    it('部分 waiter 取消时不 abort 共享请求；全部取消后 abort 共享请求', async () => {
+      mockSeries()
+      vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      let sharedSignal: AbortSignal | undefined
+      vi.mocked(apiService.analyzeRankTrend).mockImplementation((_payload, options) => {
+        sharedSignal = options?.signal
+        if (options?.signal?.aborted) {
+          return Promise.reject(new DOMException('Request aborted', 'AbortError'))
+        }
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Request aborted', 'AbortError')),
+            { once: true },
+          )
+        })
+      })
+      const stock = { code: '002279', name: '久其软件' }
+
+      const controllerA = new AbortController()
+      const controllerB = new AbortController()
+      const first = rankTrendObservationService.load(stock, { signal: controllerA.signal })
+      const second = rankTrendObservationService.load(stock, { signal: controllerB.signal })
+
+      controllerA.abort() // refs 2→1：共享请求不应被取消
+      await Promise.resolve()
+      expect(sharedSignal?.aborted).toBe(false)
+
+      controllerB.abort() // refs 1→0：共享请求被 abort，两个 waiter 都收到取消
+      await expect(Promise.all([first, second])).rejects.toThrow('Request aborted')
+    })
+
+    it('无 signal 的 waiter 持有引用时，signal 全部取消不 abort 共享请求', async () => {
+      mockSeries()
+      vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      let sharedSignal: AbortSignal | undefined
+      const analyze = vi.mocked(apiService.analyzeRankTrend).mockImplementation((_payload, options) => {
+        sharedSignal = options?.signal
+        return Promise.resolve({ ok: true, frames: [], source: 'py_golden', issues: [] })
+      })
+      const stock = { code: '002279', name: '久其软件' }
+
+      const first = rankTrendObservationService.load(stock) // 无 signal，持有引用
+      const controller = new AbortController()
+      const second = rankTrendObservationService.load(stock, { signal: controller.signal })
+
+      controller.abort() // 仅 signal waiter 取消，refs 不清零 → 共享请求继续
+      await expect(first).resolves.toBeTruthy()
+      await expect(second).rejects.toThrow('Request aborted')
+      expect(sharedSignal?.aborted).toBe(false)
+      expect(analyze).toHaveBeenCalledTimes(1)
+    })
+
+    it('abort 后 in-flight 清理，可重新发起 load', async () => {
+      mockSeries()
+      vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
+      const analyze = vi.mocked(apiService.analyzeRankTrend).mockImplementation(
+        (_payload, options) => {
+          if (options?.signal?.aborted) {
+            return Promise.reject(new DOMException('Request aborted', 'AbortError'))
+          }
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => reject(new DOMException('Request aborted', 'AbortError')),
+              { once: true },
+            )
+          })
+        },
+      )
+      const stock = { code: '002279', name: '久其软件' }
+
+      const controller = new AbortController()
+      const first = rankTrendObservationService.load(stock, { signal: controller.signal })
+      controller.abort()
+      await expect(first).rejects.toThrow('Request aborted')
+
+      // in-flight 已清理：重新 load 发起新请求（analyze 第二次调用）
+      vi.mocked(apiService.analyzeRankTrend).mockResolvedValue({
+        ok: true,
+        frames: [],
+        source: 'py_golden',
+        issues: [],
+      })
+      const second = await rankTrendObservationService.load(stock)
+      expect(second.source).toBe('live')
+      expect(analyze).toHaveBeenCalledTimes(2)
+    })
   })
 })

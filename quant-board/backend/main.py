@@ -544,6 +544,7 @@ def list_snapshot_frames(
     sort: str = "asc",
     limit: int | None = 100,
     projection: str = "full",
+    fields: str | None = None,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -558,6 +559,7 @@ def list_snapshot_frames(
     start = trading_date or start_date
     end = trading_date or end_date
     capture_modes = _parse_csv(allowed_capture_modes)
+    field_list = _parse_csv(fields)
     repo = create_repository(db, enable_backup=False)
     resolved_dataset_id, dataset = _resolve_snapshot_dataset(repo, dataset_id)
     snapshot_ids: list[str] = []
@@ -574,6 +576,7 @@ def list_snapshot_frames(
             limit=limit,
             sort=sort,
             projection=projection,
+            fields=field_list or None,
         )
         from backend.analysis.ranktrend import market_regime
 
@@ -609,6 +612,7 @@ def list_snapshot_frames(
             "sort": sort,
             "limit": limit,
             "projection": projection,
+            "fields": fields,
         },
         snapshot_type=snapshot_type,
         trading_date=start if start == end else None,

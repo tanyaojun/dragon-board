@@ -170,6 +170,7 @@ class MongoRepository:
         limit: int | None = None,
         sort: str = "asc",
         projection: str = "full",
+        fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         frame_rows = self._find_frames(
             dataset_id,
@@ -199,12 +200,18 @@ class MongoRepository:
             ).response_key(
                 "frame_bundles",
                 resolved_dataset_id=dataset_id,
-                params={"snapshot_ids": sorted(snapshot_ids), "projection": projection},
+                params={
+                    "snapshot_ids": sorted(snapshot_ids),
+                    "projection": projection,
+                    "fields": sorted(fields) if fields else None,
+                },
             )
             cached = cache.get_response(cache_key)
             if cached is not None and isinstance(cached.get("bundles"), list):
                 return cached["bundles"]
-        stock_rows_by_snapshot = self._stock_rows_by_snapshot(dataset_id, snapshot_ids, projection=projection)
+        stock_rows_by_snapshot = self._stock_rows_by_snapshot(
+            dataset_id, snapshot_ids, projection=projection, fields=fields
+        )
         sector_rows_by_snapshot = (
             {}
             if projection == "ranktrend"
@@ -871,11 +878,20 @@ class MongoRepository:
         snapshot_ids: list[str],
         *,
         projection: str,
+        fields: list[str] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
-        if projection in ("ranktrend", "ranktrend+themes"):
+        if fields:
+            # 行字段白名单投影（frames fields 参数）：snapshotId 必须保留（分组 key），
+            # 其余只取请求字段，避免 full 投影整行 107 字段全量传输（3 帧可达 27MB）
+            mongo_projection: dict[str, int] = {
+                "_id": 0,
+                "snapshotId": 1,
+                **{field: 1 for field in fields},
+            }
+        elif projection in ("ranktrend", "ranktrend+themes"):
             # snapshotId 必须保留（分组 key）；regime 五因子需要 change/volumeRatio/zlje/zljzb；
             # avgRankNum 是旧 TS 横截面（市场关注度百分位中位数）的原料，必须随行输出
             mongo_projection: dict[str, int] = {
@@ -904,7 +920,15 @@ class MongoRepository:
             {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}},
             mongo_projection,
         ).sort([("timestamp", 1), ("rank", 1)]):
-            if projection in ("ranktrend", "ranktrend+themes"):
+            if fields:
+                # 保留请求字段的 null 值（与 full 投影语义一致），只剥离内部分组字段；
+                # 否则未涨停行缺失 maxFengdan/firstZtTime 等字段会静默降级
+                item = {
+                    key: value
+                    for key, value in row.items()
+                    if key not in ("_id", "snapshotId")
+                }
+            elif projection in ("ranktrend", "ranktrend+themes"):
                 item = {
                     "code": row.get("code"),
                     "name": row.get("name"),

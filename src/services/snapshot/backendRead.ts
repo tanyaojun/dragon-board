@@ -1,4 +1,4 @@
-import { apiService } from '../apiService'
+import { apiService, type RequestPriority } from '../apiService'
 import { FORMAL_SNAPSHOT_READ_POLICY } from './readPolicy'
 import { assertFormalSnapshotType, assertFormalSnapshotTypes } from './identity'
 import type {
@@ -18,7 +18,13 @@ const STOCK_VOLUME_HISTORY_CANDIDATE_FACTOR = 4
 const STOCK_VOLUME_HISTORY_MIN_CANDIDATES = 12
 const STOCK_VOLUME_HISTORY_BATCH_SIZE = 50
 
-type BackendReadOptions = { datasetId?: string }
+export type BackendReadOptions = {
+  datasetId?: string
+  /** 外部取消信号（观察面板等交互路径关闭/切换时中止请求） */
+  signal?: AbortSignal
+  /** 请求优先级覆盖（默认走 apiService 方法级默认值） */
+  priority?: RequestPriority
+}
 type BackendSnapshotFrameBundle = SnapshotFrameBundle & { entities?: unknown }
 
 function unwrapResponse<T>(response: any, key: string, fallback: T): T {
@@ -53,18 +59,20 @@ export class SnapshotBackendRead {
   async listSnapshots(options: SnapshotQueryOptions & BackendReadOptions = {}): Promise<SnapshotRecord[]> {
     assertFormalSnapshotType(options.type)
     assertFormalSnapshotTypes(options.types)
+    const { signal, priority, ...query } = options
     return unwrapResponse<SnapshotRecord[]>(
-      await apiService.listMongoSnapshotRecords(withFormalPolicy(options)),
+      await apiService.listMongoSnapshotRecords(withFormalPolicy(query), { signal, priority }),
       'records',
       [],
     )
   }
 
   async getSnapshotById(id: string, options: BackendReadOptions = {}): Promise<SnapshotRecord | null> {
+    const { signal, priority, ...query } = options
     return unwrapResponse<SnapshotRecord | null>(
       await apiService.getMongoSnapshotRecord(id, withFormalPolicy({
-        datasetId: options.datasetId || DEFAULT_DATASET_ID,
-      })),
+        datasetId: query.datasetId || DEFAULT_DATASET_ID,
+      }), { signal, priority }),
       'record',
       null,
     )
@@ -110,8 +118,9 @@ export class SnapshotBackendRead {
   async listSnapshotStockRows(
     options: SnapshotStockRowQueryOptions & BackendReadOptions = {},
   ): Promise<SnapshotStockRow[]> {
+    const { signal, priority, ...query } = options
     return unwrapResponse<SnapshotStockRow[]>(
-      await apiService.listMongoSnapshotStockRows(withFormalPolicy(options)),
+      await apiService.listMongoSnapshotStockRows(withFormalPolicy(query), { signal, priority }),
       'rows',
       [],
     )
@@ -120,8 +129,9 @@ export class SnapshotBackendRead {
   async listSnapshotSectorRows(
     options: SnapshotSectorRowQueryOptions & BackendReadOptions = {},
   ): Promise<SnapshotSectorRow[]> {
+    const { signal, priority, ...query } = options
     return unwrapResponse<SnapshotSectorRow[]>(
-      await apiService.listMongoSnapshotSectorRows(withFormalPolicy(options)),
+      await apiService.listMongoSnapshotSectorRows(withFormalPolicy(query), { signal, priority }),
       'rows',
       [],
     )
@@ -157,8 +167,12 @@ export class SnapshotBackendRead {
       return options.limit && options.limit > 0 ? sorted.slice(0, options.limit) : sorted
     }
 
+    const { signal, priority, ...query } = options
     return unwrapResponse<SnapshotFrameBundle[]>(
-      await apiService.listMongoSnapshotFrames(withFormalPolicy(options as SnapshotFrameQueryOptions & BackendReadOptions)),
+      await apiService.listMongoSnapshotFrames(
+        withFormalPolicy(query as SnapshotFrameQueryOptions & BackendReadOptions),
+        { signal, priority },
+      ),
       'frames',
       [],
     )

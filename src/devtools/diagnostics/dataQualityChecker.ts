@@ -31,7 +31,8 @@ export class DataQualityChecker {
   private readonly REQUIRED_SIGNALS = ['direction', 'acceleration', 'cross', 'final']
 
   private async listSnapshotKeys(): Promise<string[]> {
-    const records = await snapshotFacade.listSnapshots({ sort: 'desc' })
+    // 按需过滤：只取最近 100 条快照记录（避免诊断脚本全库拉取打满 MongoDB）
+    const records = await snapshotFacade.listSnapshots({ sort: 'desc', limit: 100 })
     return records.map((record) => record.id)
   }
 

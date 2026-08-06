@@ -1,4 +1,5 @@
 import json
+import asyncio
 import math
 import threading
 from time import perf_counter
@@ -39,25 +40,25 @@ ANALYZE_MAX_TRACK_WINDOW = 30
 # analyze 并发闸门：per-key 单飞锁 + 全局有界信号量（QUANT_BOARD_ANALYZE_MAX_CONCURRENCY，默认 2）。
 # 目的：并发相同请求只计算一次（其余等待共享缓存结果），并限制全局 golden 计算并发，
 # 防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死。
-_ANALYZE_KEY_LOCKS: dict[str, threading.Lock] = {}
+# 端点 async 化后：等待信号量的请求是 asyncio 协程，不占线程池槽位；
+# 只有拿到信号量的请求才通过 asyncio.to_thread 占用计算线程（最多 2 个）。
+_ANALYZE_KEY_LOCKS: dict[str, asyncio.Lock] = {}
 _ANALYZE_LOCKS_GUARD = threading.Lock()
-_ANALYZE_SEMAPHORE: threading.BoundedSemaphore | None = None
+_ANALYZE_SEMAPHORE: asyncio.Semaphore | None = None
 
 
-def _analyze_semaphore() -> threading.BoundedSemaphore:
+def _analyze_semaphore() -> asyncio.Semaphore:
     global _ANALYZE_SEMAPHORE
     if _ANALYZE_SEMAPHORE is None:
-        _ANALYZE_SEMAPHORE = threading.BoundedSemaphore(
-            get_settings().quant_board_analyze_max_concurrency
-        )
+        _ANALYZE_SEMAPHORE = asyncio.Semaphore(get_settings().quant_board_analyze_max_concurrency)
     return _ANALYZE_SEMAPHORE
 
 
-def _analyze_key_lock(key: str) -> threading.Lock:
+def _analyze_key_lock(key: str) -> asyncio.Lock:
     with _ANALYZE_LOCKS_GUARD:
         lock = _ANALYZE_KEY_LOCKS.get(key)
         if lock is None:
-            lock = threading.Lock()
+            lock = asyncio.Lock()
             _ANALYZE_KEY_LOCKS[key] = lock
         return lock
 
@@ -69,7 +70,7 @@ def _prune_analyze_key_locks() -> None:
                 del _ANALYZE_KEY_LOCKS[key]
 
 
-def _analyze_with_cache_gate(
+async def _analyze_with_cache_gate(
     cache: Any,
     cache_key: str,
     generation_key: str,
@@ -78,17 +79,21 @@ def _analyze_with_cache_gate(
     dataset_id: str,
     compute: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
-    """per-key 单飞 + 全局有界并发 + 双检缓存：同 key 并发只计算一次，其余等待共享缓存结果。"""
+    """per-key 单飞 + 全局有界并发 + 双检缓存：同 key 并发只计算一次，其余等待共享缓存结果。
+
+    async 版本：等待信号量的请求是协程（不占线程池）；重计算通过 asyncio.to_thread
+    在受限的计算线程中执行（并发数 = QUANT_BOARD_ANALYZE_MAX_CONCURRENCY）。
+    """
     cached = cache.get_response(cache_key)
     if cached is not None:
         return cached
     lock = _analyze_key_lock(cache_key)
-    with lock:
+    async with lock:
         cached = cache.get_response(cache_key)
         if cached is not None:
             return cached
-        with _analyze_semaphore():
-            response = compute()
+        async with _analyze_semaphore():
+            response = await asyncio.to_thread(compute)
         if cache.get_generation(generation_key) == generation:
             cache.set_response(cache_key, response, ttl_seconds=ttl_seconds)
             cache.register_dependencies(
@@ -507,7 +512,7 @@ def _analyze_cache_key(
 
 
 @router.post("/api/ranktrend/analyze")
-def analyze_ranktrend(
+async def analyze_ranktrend(
     payload: dict[str, Any],
     db=Depends(lambda: repository_factory.get_runtime_mongodb_database()),
 ) -> dict[str, Any]:
@@ -551,7 +556,7 @@ def analyze_ranktrend(
         }
 
     try:
-        return _analyze_with_cache_gate(
+        return await _analyze_with_cache_gate(
             cache=cache,
             cache_key=cache_key,
             generation_key=generation_key,

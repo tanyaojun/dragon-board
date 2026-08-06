@@ -477,6 +477,35 @@ def test_list_snapshot_stock_rows_projects_requested_fields() -> None:
     ]
 
 
+def test_frame_bundles_projects_requested_stock_row_fields() -> None:
+    repo = MongoRepository(FakeMongoDatabase())
+    dataset = _dataset()
+    repo.save_snapshot_ingest(
+        dataset,
+        records=[_record("s1")],
+        frames=[_frame("s1", 1)],
+        stock_rows=[
+            {**_stock("s1", "000001", 1), "change": 9.9, "boardHeight": 2},
+            {**_stock("s1", "000002", 2), "change": -1.2, "boardHeight": 0},
+        ],
+        sector_rows=[],
+        idempotency_key="ingest-fields",
+        trading_date="2026-05-12",
+    )
+
+    bundles = repo.load_frame_bundles(
+        "dragonboard_live",
+        snapshot_type="half_hour",
+        fields=["code", "change", "boardHeight"],
+    )
+
+    # fields 白名单投影：行只含请求字段（snapshotId 仅作为分组 key，不输出）
+    row = bundles[0]["rows"][0]
+    assert set(row.keys()) == {"code", "change", "boardHeight"}
+    assert row["change"] == 9.9
+    assert row["boardHeight"] == 2
+
+
 def test_mongo_repository_records_sectors_and_frame_list_contracts() -> None:
     repo = MongoRepository(FakeMongoDatabase())
     dataset = _dataset()

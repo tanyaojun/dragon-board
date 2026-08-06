@@ -282,6 +282,8 @@ export interface SnapshotFrameQueryOptions {
   type?: Exclude<SnapshotType, 'five_minute'>
   types?: Array<Exclude<SnapshotType, 'five_minute'>>
   projection?: 'full' | 'ranktrend'
+  /** 行字段白名单投影（frames fields 参数）：只返回指定 stock row 字段，避免 full 全字段大响应 */
+  fields?: string[]
   tradingDate?: string
   startDate?: string
   endDate?: string

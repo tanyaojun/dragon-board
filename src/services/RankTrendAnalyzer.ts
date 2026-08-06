@@ -86,7 +86,7 @@ type DataLoaderApi = {
 }
 
 type ApiServiceApi = {
-  getRankTrendRankSeries(options: Record<string, unknown>): Promise<{
+  getRankTrendRankSeries(options: Record<string, unknown>, requestOptions?: { signal?: AbortSignal }): Promise<{
     frames?: RankTrendRankSeriesFrame[]
     marketFrames?: RankTrendRankSeriesFrame[]
     series?: Record<string, { code?: string; bars?: RankTrendRankSeriesFrame['bars']; snapshotType?: SupportedSnapshotType }>
@@ -247,6 +247,7 @@ export class RankTrendAnalyzer {
       toDate?: Date
       codes?: string[]
     },
+    requestOptions?: { signal?: AbortSignal },
   ): Promise<RankTrendAnalysisSnapshot[]> {
     const apiService = await this.getApiService()
     const readLimit = options?.limit ? Math.max(options.limit, options.minRequired ?? 0) : options?.minRequired
@@ -262,7 +263,7 @@ export class RankTrendAnalyzer {
       limit: readLimit,
       windowBars: getMaxStableBars(),
       codes: options?.codes,
-    })
+    }, requestOptions)
     debugLog('[RankTrendAnalyzer] rank-series 响应', {
       cacheHit: response.cache?.hit ?? false,
       cacheStore: response.cache?.store ?? 'unknown',

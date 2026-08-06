@@ -745,11 +745,11 @@ export class ApiService {
     )
   }
 
-  /** 从 QuantBoard MongoDB 主库读取正式快照聚合帧 */
+  /** 从 QuantBoard MongoDB 主库读取正式快照聚合帧（后台批量读取，不占交互 high 槽） */
   async listMongoSnapshotFrames(params: MongoSnapshotFrameQueryOptions = {}, options?: RequestConfig) {
     return this.get<any>(`/api/snapshots/frames${this.buildMongoSnapshotQuery(params, true)}`, {
       context: 'quant-board',
-      priority: 'high',
+      priority: 'medium',
       retries: 1,
       timeout: 15000,
       cache: false,
@@ -819,11 +819,11 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard MongoDB 主库读取正式快照记录 */
+  /** 从 QuantBoard MongoDB 主库读取正式快照记录（后台批量读取，不占交互 high 槽） */
   async listMongoSnapshotRecords(params: MongoSnapshotRecordQueryOptions = {}, options?: RequestConfig) {
     return this.get<any>(`/api/snapshots/records${this.buildMongoSnapshotQuery(params)}`, {
       context: 'quant-board',
-      priority: 'high',
+      priority: 'medium',
       retries: 1,
       timeout: 15000,
       cache: false,
@@ -850,11 +850,11 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard MongoDB 主库读取正式股票投影行 */
+  /** 从 QuantBoard MongoDB 主库读取正式股票投影行（后台批量读取，不占交互 high 槽） */
   async listMongoSnapshotStockRows(params: MongoSnapshotStockRowQueryOptions = {}, options?: RequestConfig) {
     return this.get<any>(`/api/snapshots/stock-rows${this.buildMongoSnapshotQuery(params)}`, {
       context: 'quant-board',
-      priority: 'high',
+      priority: 'medium',
       retries: 1,
       timeout: 15000,
       cache: false,
@@ -863,11 +863,11 @@ export class ApiService {
     })
   }
 
-  /** 从 QuantBoard MongoDB 主库读取正式题材投影行 */
+  /** 从 QuantBoard MongoDB 主库读取正式题材投影行（后台批量读取，不占交互 high 槽） */
   async listMongoSnapshotSectorRows(params: MongoSnapshotSectorRowQueryOptions = {}, options?: RequestConfig) {
     return this.get<any>(`/api/snapshots/sector-rows${this.buildMongoSnapshotQuery(params)}`, {
       context: 'quant-board',
-      priority: 'high',
+      priority: 'medium',
       retries: 1,
       timeout: 15000,
       cache: false,

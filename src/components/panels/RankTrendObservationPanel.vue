@@ -273,6 +273,7 @@ const selectedIndex = ref(0)
 const loading = ref(false)
 const loadError = ref('')
 let loadToken = 0
+let loadAbortController: AbortController | null = null
 
 const frames = computed(() => viewModel.value?.frames || [])
 const trackFrames = computed(() =>
@@ -314,12 +315,20 @@ watch(activeTrack, () => {
 watch(
   [() => props.visible, () => props.stock?.code],
   async ([visible, code]) => {
+    // 关闭面板、切换股票或组件卸载前取消上一个 in-flight 观察请求，
+    // 避免残留请求占用前端 high 队列与后端线程（loadToken 只防 UI 覆盖，不取消网络请求）
+    if (loadAbortController) {
+      loadAbortController.abort()
+      loadAbortController = null
+    }
     if (!visible || !code) return
     const token = ++loadToken
+    const controller = new AbortController()
+    loadAbortController = controller
     loading.value = true
     loadError.value = ''
     try {
-      const result = await rankTrendObservationService.load(props.stock)
+      const result = await rankTrendObservationService.load(props.stock, { signal: controller.signal })
       if (token !== loadToken) return
       viewModel.value = result
       selectedIndex.value = Math.max(
@@ -328,6 +337,8 @@ watch(
       )
     } catch (error) {
       if (token !== loadToken) return
+      // 取消（关闭/切换）不视为错误，不污染面板状态
+      if (error instanceof Error && error.name === 'AbortError') return
       loadError.value = error instanceof Error ? error.message : String(error)
       viewModel.value = null
     } finally {
@@ -346,7 +357,13 @@ function handleKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => document.addEventListener('keydown', handleKeydown))
-onUnmounted(() => document.removeEventListener('keydown', handleKeydown))
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+  if (loadAbortController) {
+    loadAbortController.abort()
+    loadAbortController = null
+  }
+})
 
 function scoreText(value?: number | null, withPercent = false) {
   if (value == null || !Number.isFinite(Number(value))) return '--'

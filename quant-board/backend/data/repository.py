@@ -529,6 +529,7 @@ class Repository:
         limit: int | None = None,
         sort: str = "asc",
         projection: str = "full",
+        fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if self.session is None:
             raise RuntimeError("primary database is unavailable")

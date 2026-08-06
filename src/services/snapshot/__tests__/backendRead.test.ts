@@ -57,14 +57,17 @@ describe('snapshotBackendRead', () => {
       sort: 'asc',
     })
 
-    expect(apiService.listMongoSnapshotFrames).toHaveBeenCalledWith({
-      datasetId: 'dragonboard_live',
-      type: 'half_hour',
-      tradingDate: '2026-04-24',
-      sort: 'asc',
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-    })
+    expect(apiService.listMongoSnapshotFrames).toHaveBeenCalledWith(
+      {
+        datasetId: 'dragonboard_live',
+        type: 'half_hour',
+        tradingDate: '2026-04-24',
+        sort: 'asc',
+        allowedCaptureModes: ['real_time', 'delayed'],
+        excludeRestored: true,
+      },
+      expect.objectContaining({ signal: undefined, priority: undefined }),
+    )
     expect(frames).toHaveLength(1)
     expect(frames[0].rows[0].code).toBe('600001')
   })
@@ -82,14 +85,17 @@ describe('snapshotBackendRead', () => {
       projection: 'ranktrend',
     })
 
-    expect(apiService.listMongoSnapshotFrames).toHaveBeenCalledWith({
-      datasetId: 'dragonboard_live',
-      type: 'half_hour',
-      sort: 'desc',
-      projection: 'ranktrend',
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-    })
+    expect(apiService.listMongoSnapshotFrames).toHaveBeenCalledWith(
+      {
+        datasetId: 'dragonboard_live',
+        type: 'half_hour',
+        sort: 'desc',
+        projection: 'ranktrend',
+        allowedCaptureModes: ['real_time', 'delayed'],
+        excludeRestored: true,
+      },
+      expect.objectContaining({ signal: undefined, priority: undefined }),
+    )
   })
 
   it('unwraps MongoDB stock rows for volume history consumers', async () => {
@@ -110,16 +116,19 @@ describe('snapshotBackendRead', () => {
       limit: 3,
     })
 
-    expect(apiService.listMongoSnapshotStockRows).toHaveBeenCalledWith({
-      datasetId: 'dragonboard_live',
-      code: '600001',
-      type: 'daily',
-      beforeTradingDate: '2026-04-25',
-      sort: 'desc',
-      limit: 3,
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-    })
+    expect(apiService.listMongoSnapshotStockRows).toHaveBeenCalledWith(
+      {
+        datasetId: 'dragonboard_live',
+        code: '600001',
+        type: 'daily',
+        beforeTradingDate: '2026-04-25',
+        sort: 'desc',
+        limit: 3,
+        allowedCaptureModes: ['real_time', 'delayed'],
+        excludeRestored: true,
+      },
+      expect.objectContaining({ signal: undefined, priority: undefined }),
+    )
     expect(rows.map((row) => row.volume)).toEqual([300, 200])
   })
 
@@ -143,16 +152,19 @@ describe('snapshotBackendRead', () => {
     })
 
     expect(apiService.listMongoSnapshotStockRows).toHaveBeenCalledTimes(1)
-    expect(apiService.listMongoSnapshotStockRows).toHaveBeenCalledWith({
-      datasetId: 'dragonboard_live',
-      codes: ['603005', '600001'],
-      type: 'daily',
-      beforeTradingDate: '2026-05-20',
-      sort: 'desc',
-      limit: 24,
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-    })
+    expect(apiService.listMongoSnapshotStockRows).toHaveBeenCalledWith(
+      {
+        datasetId: 'dragonboard_live',
+        codes: ['603005', '600001'],
+        type: 'daily',
+        beforeTradingDate: '2026-05-20',
+        sort: 'desc',
+        limit: 24,
+        allowedCaptureModes: ['real_time', 'delayed'],
+        excludeRestored: true,
+      },
+      expect.objectContaining({ signal: undefined, priority: undefined }),
+    )
     expect(history.get('603005')).toEqual([563113, 604882, 228927])
     expect(history.get('600001')).toEqual([300, 200])
   })
@@ -195,6 +207,7 @@ describe('snapshotBackendRead', () => {
         code: '603005',
         limit: 12,
       }),
+      expect.objectContaining({ signal: undefined, priority: undefined }),
     )
     expect(history.get('603005')).toEqual([563113, 604882, 228927])
   })
@@ -222,11 +235,15 @@ describe('snapshotBackendRead', () => {
     const { snapshotBackendRead } = await import('../backendRead')
     const record = await snapshotBackendRead.getSnapshotById('half_hour:2026-04-24:10:00')
 
-    expect(apiService.getMongoSnapshotRecord).toHaveBeenCalledWith('half_hour:2026-04-24:10:00', {
-      datasetId: 'dragonboard_live',
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-    })
+    expect(apiService.getMongoSnapshotRecord).toHaveBeenCalledWith(
+      'half_hour:2026-04-24:10:00',
+      {
+        datasetId: 'dragonboard_live',
+        allowedCaptureModes: ['real_time', 'delayed'],
+        excludeRestored: true,
+      },
+      expect.objectContaining({ signal: undefined, priority: undefined }),
+    )
     expect(record?.captureMode).toBe('real_time')
   })
 
@@ -251,10 +268,12 @@ describe('snapshotBackendRead', () => {
     expect(apiService.listMongoSnapshotFrames).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ type: 'daily', types: undefined, limit: 5 }),
+      expect.objectContaining({ signal: undefined, priority: undefined }),
     )
     expect(apiService.listMongoSnapshotFrames).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ type: 'half_hour', types: undefined, limit: 5 }),
+      expect.objectContaining({ signal: undefined, priority: undefined }),
     )
     expect(frames.map((frame) => frame.snapshotId)).toEqual([
       'daily:2026-04-24:15:00',

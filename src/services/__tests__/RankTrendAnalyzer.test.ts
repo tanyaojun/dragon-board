@@ -315,18 +315,21 @@ describe('RankTrendAnalyzer', () => {
       codes: ['600001'],
     })
 
-    expect(apiService.getRankTrendRankSeries).toHaveBeenCalledWith({
-      type: 'half_hour',
-      startDate: undefined,
-      endDate: undefined,
-      allowedCaptureModes: ['real_time', 'delayed'],
-      excludeRestored: true,
-      rankBasis: 'attention',
-      sort: 'desc',
-      limit: 50,
-      windowBars: 50,
-      codes: ['600001'],
-    })
+    expect(apiService.getRankTrendRankSeries).toHaveBeenCalledWith(
+      {
+        type: 'half_hour',
+        startDate: undefined,
+        endDate: undefined,
+        allowedCaptureModes: ['real_time', 'delayed'],
+        excludeRestored: true,
+        rankBasis: 'attention',
+        sort: 'desc',
+        limit: 50,
+        windowBars: 50,
+        codes: ['600001'],
+      },
+      undefined,
+    )
     expect(snapshotFacade.listSnapshotFrameBundles).not.toHaveBeenCalled()
     expect(snapshots.length).toBe(50)
   })

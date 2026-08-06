@@ -88,4 +88,13 @@ describe('RankTrendObservationPanel', () => {
     expect(panel).toContain("label: '个股角色'")
     expect(panel).toContain("label: '题材调节'")
   })
+
+  it('关闭/切换股票/卸载时取消 in-flight 观察请求', () => {
+    const panel = source()
+
+    expect(panel).toContain('loadAbortController')
+    expect(panel).toContain('loadAbortController.abort()')
+    expect(panel).toContain('rankTrendObservationService.load(props.stock, { signal: controller.signal })')
+    expect(panel).toContain("error.name === 'AbortError'")
+  })
 })

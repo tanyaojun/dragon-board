@@ -259,6 +259,7 @@ import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
 import { dataLayer } from '../../services/DataLayer'
 import { snapshotFacade } from '../../services/snapshot/facade'
+import { rotationFramesCache } from '../../services/snapshot/rotationFramesCache'
 import { usePanel } from '../../composables/usePanel'
 import type { RotationAnalysis, StockAlert } from '../../types/core'
 import type { SnapshotFrameRow } from '../../services/snapshot/types'
@@ -350,14 +351,24 @@ const alerts = computed(() => {
 const alertCount = computed(() => alerts.value.length)
 
 // ========== 加载数据 ==========
-const loadBackendRotation = async () => {
+const loadBackendRotation = async (force = false) => {
   try {
-    const frames = await snapshotFacade.listSnapshotFrames({
-      type: ROTATION_SNAPSHOT_TYPE,
-      sort: 'desc',
-      limit: 2,
-    })
-    const rows = (frames || []) as SnapshotFrameRow[]
+    const framesCacheKey = `rotation:${ROTATION_SNAPSHOT_TYPE}`
+    const cachedFrames = rotationFramesCache.get(framesCacheKey) as SnapshotFrameRow[] | null
+    let frames: SnapshotFrameRow[]
+    if (cachedFrames && !force) {
+      frames = cachedFrames
+    } else {
+      // ranktrend 行投影瘦身：轮动摘要只需帧级 rotationSummary，不需要整行 107 字段
+      frames = ((await snapshotFacade.listSnapshotFrames({
+        type: ROTATION_SNAPSHOT_TYPE,
+        sort: 'desc',
+        limit: 2,
+        projection: 'ranktrend',
+      })) || []) as SnapshotFrameRow[]
+      rotationFramesCache.setWithType(framesCacheKey, frames, 'sectorRotationFrames')
+    }
+    const rows = frames
     const withRotation = rows.filter(
       (frame) => frame.rotationSummary && typeof frame.rotationSummary === 'object',
     )
@@ -406,6 +417,8 @@ const refresh = async () => {
     loading.value = true
     error.value = null
 
+    // force 绕过 30 分钟缓存：手动刷新必须拉到最新轮动帧
+    await loadBackendRotation(true)
     await themeFacade.refreshRuntime({ force: true, source: 'ui' })
 
     // 如果当前是树形视图，刷新树组件

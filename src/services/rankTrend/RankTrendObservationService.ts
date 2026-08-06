@@ -60,6 +60,21 @@ export const observationProjectionCache = cacheManager.createCache('observation'
   ttlConfig: { observation: OBSERVATION_PROJECTION_CACHE_TTL_MS },
 })
 
+/**
+ * stock-rows 查询投影缓存：同一股票历史快照行 30 分钟内不重复请求 MongoDB。
+ * 该数据是投影瘦身后的只读历史行（tradingDate/slotTime/timestamp/code），一天内几乎不变；
+ * 新帧 ingest 带来的延迟由 TTL 兜底，观察投影缓存（60s）与后端 generation 指纹负责数据新鲜度。
+ */
+export const OBSERVATION_STOCK_ROWS_CACHE_CAPACITY = 200
+export const OBSERVATION_STOCK_ROWS_CACHE_TTL_MS = 30 * 60 * 1000
+
+export const observationStockRowsCache = cacheManager.createCache('observationStockRows', {
+  capacity: OBSERVATION_STOCK_ROWS_CACHE_CAPACITY,
+  defaultTTL: OBSERVATION_STOCK_ROWS_CACHE_TTL_MS,
+  maxMemory: 16 * 1024 * 1024,
+  ttlConfig: { observationStockRows: OBSERVATION_STOCK_ROWS_CACHE_TTL_MS },
+})
+
 function observationProjectionCacheKey(
   code: string,
   series: { frameKeys: string[]; percentiles: number[] },
@@ -106,15 +121,87 @@ function observationIssue(
   return { code, message, ...details }
 }
 
+export type ObservationLoadOptions = { signal?: AbortSignal }
+
+type ObservationInflight = {
+  promise: Promise<RankTrendObservationViewModel>
+  controller: AbortController
+  refs: number
+}
+
 class RankTrendObservationService {
-  async load(stock: any): Promise<RankTrendObservationViewModel> {
+  /** in-flight 合并：同股票并发 load 共享同一请求；所有 waiter 取消后 abort 共享请求 */
+  private inflight = new Map<string, ObservationInflight>()
+
+  load(stock: any, options: ObservationLoadOptions = {}): Promise<RankTrendObservationViewModel> {
+    const code = String(stock?.code || '')
+    const existing = this.inflight.get(code)
+    if (existing) {
+      return this.wrapWaiter(existing, options.signal)
+    }
+    const controller = new AbortController()
+    const entry: ObservationInflight = {
+      controller,
+      refs: 0,
+      promise: this.doLoad(stock, controller.signal),
+    }
+    entry.promise.then(
+      () => this.releaseInflight(code, entry),
+      () => this.releaseInflight(code, entry),
+    )
+    this.inflight.set(code, entry)
+    return this.wrapWaiter(entry, options.signal)
+  }
+
+  private releaseInflight(code: string, entry: ObservationInflight): void {
+    if (this.inflight.get(code) === entry) this.inflight.delete(code)
+  }
+
+  /**
+   * 为单个调用方包装共享请求：
+   * - 无 signal：直接复用共享 promise（refs 持有，永不主动取消）；
+   * - 带 signal：signal abort 时该 waiter 立即 reject，refs 递减；
+   *   所有 waiter（含无 signal 的持有）都释放后 abort 共享请求。
+   */
+  private wrapWaiter(
+    entry: ObservationInflight,
+    signal?: AbortSignal,
+  ): Promise<RankTrendObservationViewModel> {
+    entry.refs += 1
+    if (!signal) return entry.promise
+    if (signal.aborted) {
+      entry.refs -= 1
+      if (entry.refs <= 0) entry.controller.abort()
+      return Promise.reject(new DOMException('Request aborted', 'AbortError'))
+    }
+    return new Promise<RankTrendObservationViewModel>((resolve, reject) => {
+      const onAbort = () => {
+        entry.refs -= 1
+        if (entry.refs <= 0) entry.controller.abort()
+        reject(new DOMException('Request aborted', 'AbortError'))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      entry.promise.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort)
+          resolve(value)
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+      )
+    })
+  }
+
+  private async doLoad(stock: any, signal?: AbortSignal): Promise<RankTrendObservationViewModel> {
     const code = String(stock?.code || '')
     const currentAnalysis = stock?.rankTrend as RankTrendAnalysisResult | undefined
     let series = rankTrendAnalyzer.getLatestAnalysisSeries(code)
     if (!series) {
       // 展示序列自建兜底：从 rank-series API 读取该股历史排名（纯数据投影，非算法），
       // 保证后端 analyze 暂不可用时观察面板仍能展示历史排名曲线（fail-visible）。
-      series = await this.buildSeriesFromSnapshots(code)
+      series = await this.buildSeriesFromSnapshots(code, signal)
     }
     if (!series) {
       const issues = [
@@ -171,25 +258,43 @@ class RankTrendObservationService {
       )
     }
     let rows: Array<Record<string, any>> = []
-    try {
-      rows = await snapshotFacade.listSnapshotStockRows({
-        type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
-        code,
-        sort: 'desc',
-        limit: 50,
-        allowedCaptureModes: ['real_time', 'delayed'],
-        excludeRestored: true,
-      })
-      const frameKeys = new Set(series.frameKeys)
-      rows = rows.filter((row) => frameKeys.has(barFrameKey(row)))
-    } catch (error) {
-      serviceIssues.push(
-        observationIssue(
-          'history_source_unavailable',
-          `历史快照原料读取失败: ${errorMessage(error)}`,
-        ),
-      )
+    // 缓存 key 含 limit/fields 维度，防止未来参数变化串 key；fields 投影后行小，容量充裕
+    const stockRowsCacheKey = `${DEFAULT_RANK_TREND_SNAPSHOT_TYPE}:${code}:rows:50:4fields`
+    const cachedRows = observationStockRowsCache.get(stockRowsCacheKey) as
+      | Array<Record<string, any>>
+      | null
+    if (cachedRows) {
+      rows = cachedRows
+    } else {
+      try {
+        rows = await snapshotFacade.listSnapshotStockRows({
+          type: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+          code,
+          sort: 'desc',
+          limit: 50,
+          allowedCaptureModes: ['real_time', 'delayed'],
+          excludeRestored: true,
+          // fields 投影瘦身：观察服务只需帧身份字段，避免整行 107 字段全量传输
+          fields: ['tradingDate', 'slotTime', 'timestamp', 'code'],
+          // 交互关键路径：显式 high，避免被后台批量读取（medium 共享槽）拖慢
+          priority: 'high',
+          signal,
+        })
+        // 30 分钟查询投影缓存：减少对 MongoDB 的重复查询；abort 的请求结果不缓存
+        if (!signal?.aborted) {
+          observationStockRowsCache.setWithType(stockRowsCacheKey, rows, 'observationStockRows')
+        }
+      } catch (error) {
+        serviceIssues.push(
+          observationIssue(
+            'history_source_unavailable',
+            `历史快照原料读取失败: ${errorMessage(error)}`,
+          ),
+        )
+      }
     }
+    const frameKeys = new Set(series.frameKeys)
+    rows = rows.filter((row) => frameKeys.has(barFrameKey(row)))
     const rowsByFrame = new Map(rows.map((row) => [barFrameKey(row), row]))
     // Python golden 批量分析历史帧（technical/cycle/risk/decision/observation/strategy/jump/regime/resonance/横截面基准）
     const historyFrameKeys = series.frameKeys.slice(-MAX_OBSERVATION_WINDOW_BARS, -1)
@@ -205,7 +310,7 @@ class RankTrendObservationService {
           snapshotType: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
           codes: [code],
           frameKeys: historyFrameKeys,
-        })
+        }, { signal })
         if (remote?.ok) {
           for (const frame of remote.frames || []) {
             const first = frame.stocks?.[0]
@@ -353,20 +458,30 @@ class RankTrendObservationService {
       issues: serviceIssues,
       source: 'live',
     }
-    observationProjectionCache.setWithType(cacheKey, viewModel, 'observation')
+    // 被取消（abort）的请求结果不写投影缓存：降级结果可能不完整，避免下次打开秒开"历史帧分析不可用"
+    if (!signal?.aborted) {
+      observationProjectionCache.setWithType(cacheKey, viewModel, 'observation')
+    }
     return viewModel
   }
 
-  private async buildSeriesFromSnapshots(code: string): Promise<{
+  private async buildSeriesFromSnapshots(
+    code: string,
+    signal?: AbortSignal,
+  ): Promise<{
     ranks: number[]
     percentiles: number[]
     frameKeys: string[]
   } | null> {
     try {
-      const snapshots = await rankTrendAnalyzer.getSnapshotsByType(DEFAULT_RANK_TREND_SNAPSHOT_TYPE, {
-        limit: 50,
-        codes: [code],
-      })
+      const snapshots = await rankTrendAnalyzer.getSnapshotsByType(
+        DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+        {
+          limit: 50,
+          codes: [code],
+        },
+        { signal },
+      )
       const ranks: number[] = []
       const percentiles: number[] = []
       const frameKeys: string[] = []
