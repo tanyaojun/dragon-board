@@ -770,6 +770,30 @@ mainlineConcentrationRank/reasons/factorBreakdown/qualityFlags`）。
 索引，采集落库（ingest）时随现有失效链路自动清除，补采/force 重采后不会读到旧结果。
 `rotationSummary.inflowThemes/outflowThemes` 为 `[{themeId, themeName}]` 对象列表。
 
+### `GET /api/theme-momentum/summary`
+
+题材动量 v2 只读摘要（独立第四维板块动量，2026-08-06）。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/theme-momentum/summary?dataset_id=dragonboard_live&snapshot_type=half_hour'
+```
+
+参数：`dataset_id`（默认 `dragonboard_live`）、`snapshot_type`（默认 `half_hour`）。
+从 `snapshot_sector_rows`（`entityType=hot_theme`）按交易日聚合日线序列（收盘槽
+`change` 累乘合成虚拟收益指数），计算 v2 六维动量（板块 RPS 5/10/20 / 距年内高点 /
+多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚），返回按 `score` 降序的 Top-50 排行。
+响应：`{ ok, status, version, factors[], qualityFlags, computedAt, cache }`，其中
+`factors[]` 每项含 `themeId/themeName/score/direction/phaseLabel/rps{nearHigh/
+windowMomentum/breadth/flowVolume/crowdingPenalty/intraday/reasons`。
+`phaseLabel`（启动/扩散/过热/退潮/中性）为展示标签非状态机；`direction` 为
+`up/neutral/down`。日线/横截面不足时打 `qualityFlags`（如 `cross_section_insufficient`）
+并保留可算部分（fail-visible，不补零不伪造）。接入 Redis read-through 缓存
+（TTL 与 theme-rotation/summary 一致，ingest 时随 dataset 索引失效）。
+
+> ⚠️ v1 题材动量（并入 `resonance.theme`，`themeMomentumScore` 六因子同构）已于
+> 2026-08-06 废弃（D2 完全解耦）：`resonance` 回归纯个股六因子，题材动量独立为
+> 本接口 + `analysis.themeMomentum`。旧 `resonance.theme` 字段不再产出。
+
 ### `POST /api/operations/after-market-once`
 
 > MongoDB 模式下该入口执行 `hotlistSentiment` 日终步骤；以下为迁移前 SQLite/Parquet 历史合同。
@@ -971,7 +995,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 带并发闸门：缓存未命中进入计算前，先按缓存键取 per-key 单飞锁（同 key 并发只计算一次，其余等待后共享缓存结果），再取全局有界信号量（默认 2，环境变量 `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` 可调），同一时刻最多 N 个 golden 计算并发。目的是防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死；并发上限不改变响应结构与缓存合同。
 
-`POST /api/ranktrend/analyze` 响应帧新增题材动量（板块共振）字段：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags/hotThemesFallback`，`factors` 只回传 top-10 题材动量摘要），每股 `analysis.resonance.theme`（`status/themeId/themeName/role/roleWeight/themeMomentumScore/themeMomentumDirection/themeLifecycle/themeContribution/adjustment/reasons`）与 `analysis.resonance.baseScore`（调节前原始共振分数）。题材动量由 `backend/analysis/theme_momentum.py` 纯函数从已落库 `snapshot_sector_rows`（`entityType=hot_theme`）的因子序列计算，与个股共振同构（短 3/中 8/路径 8/Jump 衰减 3）；题材数据不足时 `theme.status=insufficient` 且保留原共振分数（fail-visible，不归零不伪造）。该字段为向后兼容扩展，旧消费方不受影响。
+`POST /api/ranktrend/analyze` 响应帧题材动量（v2，2026-08-06 D2 解耦）：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags/hotThemesFallback`，`factors` 只回传 top-10 题材动量摘要）与 `themeMomentumContext`（`version/factors/qualityFlags/computedAt`，v2 日线动量 Top-20）；每股 `analysis.themeMomentum`（`status/themeId/themeName/score/direction/role/phaseLabel/reasons`，只读投影，第4轨数据源，不参与 decision）。题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象。v1 融合（`resonance.theme.themeMomentumScore`）已废弃。
 
 `hotThemesFallback=true` 表示该帧没有自身的 `hotThemes`（collector 未落库题材因子行），个股题材匹配回退到最近历史帧；此时 `qualityFlags` 追加 `theme_hot_themes_fallback`，`resonance.theme.reasons` 追加同名单（fail-visible，不静默重复题材）。collector 落库的 `snapshot_sector_rows` 含 `rotationState`（生命周期加成/惩罚原料），`snapshot_stock_rows` 含 `themes/mainTheme/themeRole/themeContribution/leadStatus`（角色/贡献按涨跌幅派生落库）。
 

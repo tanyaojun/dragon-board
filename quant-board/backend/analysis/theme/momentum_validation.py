@@ -1,5 +1,10 @@
-# quant-board/backend/analysis/theme_momentum_validation.py
-"""题材动量验证：多帧滚动对比基线/调节共振分数与排序位移（研究用，不触回测引擎）。"""
+# quant-board/backend/analysis/theme/momentum_validation.py
+"""题材动量验证：多帧滚动对比基线/调节共振分数与排序位移（研究用，不触回测引擎）。
+
+v2 重构（2026-08-06）：`compare_theme_momentum_v1_v2` 对比旧 v1 融合（fuse_theme_resonance，
+已废弃）与 v2 独立维度（compute_theme_momentum_v2）的题材排序/方向，回答
+"v2 是否系统性改变题材排序、方向是否与市场一致"。
+"""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -100,4 +105,77 @@ def compare_theme_momentum_rolling(
         },
         "directionDistribution": dict(aggregate["directionDistribution"]),
         "frames": per_frame,
+    }
+
+
+def compare_theme_momentum_v1_v2(
+    frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """对比 v1 融合 vs v2 独立维度的题材排序位移与方向分布（回放验证）。
+
+    输入 frames（含 hotThemes）；输出每题材 v2 score/direction + v1 融合分数代理
+    （fuse_theme_resonance 已废弃，v1 代理 = 题材 heatScore 截面排序，用于位移对比）。
+    """
+    from backend.analysis.theme.daily_series import build_daily_series
+    from backend.analysis.theme.momentum import compute_theme_momentum_v2
+    from backend.analysis.theme.momentum_config import ThemeMomentumConfig
+
+    sector_rows: list[dict[str, Any]] = []
+    for frame in frames:
+        for theme in frame.get("hotThemes") or []:
+            if isinstance(theme, dict):
+                theme = dict(theme)
+                theme.setdefault("tradingDate", frame.get("tradingDate"))
+                theme.setdefault("slotTime", frame.get("slotTime"))
+                sector_rows.append(theme)
+
+    daily = build_daily_series(sector_rows, [])
+    result = compute_theme_momentum_v2(list(daily.values()), cfg=ThemeMomentumConfig())
+    ranked_v2 = sorted(
+        (v for v in result["factors"].values() if v.get("score") is not None),
+        key=lambda item: -float(item["score"]),
+    )
+    rank_v2 = {item["themeId"]: idx for idx, item in enumerate(ranked_v2)}
+
+    # v1 代理：题材 heatScore 截面排序（旧融合的题材强度来源）
+    heat_by_theme: dict[str, float] = {}
+    last_frame_themes = frames[-1].get("hotThemes") or []
+    for theme in last_frame_themes:
+        if isinstance(theme, dict):
+            tid = str(theme.get("themeId") or theme.get("entityKey") or "")
+            heat = theme.get("heatScore")
+            if tid and heat is not None:
+                heat_by_theme[tid] = float(heat)
+    ranked_v1 = sorted(heat_by_theme.items(), key=lambda kv: -kv[1])
+    rank_v1 = {tid: idx for idx, (tid, _) in enumerate(ranked_v1)}
+
+    per_theme: dict[str, dict[str, Any]] = {}
+    rank_shifts: list[int] = []
+    for item in ranked_v2:
+        tid = item["themeId"]
+        v1_rank = rank_v1.get(tid)
+        shift = v1_rank - rank_v2[tid] if v1_rank is not None else None
+        if shift is not None:
+            rank_shifts.append(shift)
+        per_theme[tid] = {
+            "themeName": item["themeName"],
+            "v2Score": item["score"],
+            "v2Direction": item["direction"],
+            "v2Rank": rank_v2[tid],
+            "v1HeatRank": v1_rank,
+            "rankShift": shift,
+        }
+
+    return {
+        "ok": True,
+        "frameCount": len(ranked_v2),
+        "meanAbsRankShift": round(_mean([abs(v) for v in rank_shifts]), 2),
+        "maxRankShift": max((abs(v) for v in rank_shifts), default=0),
+        "directionDistribution": {
+            "up": sum(1 for v in result["factors"].values() if v.get("direction") == "up"),
+            "neutral": sum(1 for v in result["factors"].values() if v.get("direction") == "neutral"),
+            "down": sum(1 for v in result["factors"].values() if v.get("direction") == "down"),
+        },
+        "qualityFlags": result["qualityFlags"],
+        "perTheme": per_theme,
     }

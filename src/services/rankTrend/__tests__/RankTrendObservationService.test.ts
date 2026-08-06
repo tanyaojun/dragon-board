@@ -847,7 +847,7 @@ describe('RankTrendObservationService', () => {
     })
   })
 
-  it('当前帧题材共振数据不足时按共振轨给出结构化原因', async () => {
+  it('当前帧题材动量数据不足时按题材轨给出结构化原因', async () => {
     const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
     vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
       ranks: [28, 19],
@@ -873,7 +873,11 @@ describe('RankTrendObservationService', () => {
         label: '强',
         marketMedianShortChange: 1.5,
         marketSampleCount: 25,
-        theme: { status: 'insufficient', reasons: ['theme_cross_section_insufficient'] },
+      },
+      // D2 解耦：题材动量独立为 themeMomentum（第4轨）
+      themeMomentum: {
+        status: 'insufficient',
+        reasons: ['theme_cross_section_insufficient'],
       },
     }
 
@@ -885,8 +889,8 @@ describe('RankTrendObservationService', () => {
 
     const currentFrame = result.frames.at(-1)
     expect(currentFrame?.issues).toContainEqual(expect.objectContaining({
-      code: 'theme_resonance_insufficient',
-      track: 'resonance',
+      code: 'theme_momentum_insufficient',
+      track: 'theme',
     }))
   })
 
