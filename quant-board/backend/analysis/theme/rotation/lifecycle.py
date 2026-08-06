@@ -25,7 +25,11 @@ def lifecycle_for(
     prev_lifecycle: str | None,
     cfg: ThemeRotationConfig,
 ) -> tuple[str, list[str]]:
-    """按设计 §5.1 判定主题生命周期，返回 (state, reasons)。"""
+    """⚠️ DEPRECATED (2026-08-06)：题材生命周期状态机废弃，保留仅供回放/迁移期兼容。
+
+    按设计 §5.1 判定主题生命周期，返回 (state, reasons)。
+    theme_rotation_v2 引擎不再调用；落库值由 theme_trend 直接透传。
+    """
     heat = _num(row.get("heatScore"))
     momentum = _num(row.get("momentumScore"))
     crowding = _num(row.get("crowdingRisk"))
@@ -96,21 +100,21 @@ def lifecycle_for(
 
 
 def rotation_state_for(
-    lifecycle: str,
     momentum: float,
-    is_mainline: bool,
     inflow_positive: bool,
+    is_mainline: bool,
+    crowding: float,
 ) -> str:
-    """在设计 §5.2 的 lifecycle 之上叠加方向与主线性。"""
-    if lifecycle == "cooling":
-        return "cooling"
-    if lifecycle == "emerging":
-        return "emerging"
-    if lifecycle == "ice":
-        return "neutral"
-    if lifecycle in ("expanding", "climax"):
-        return "mainline" if is_mainline else "inflow"
-    if momentum < 50.0:
+    """rotationState 方向标签（spec D10，无状态机钳制）。
+
+    mainline = 调用方判定主线（动量/资金 Top）且动量强且不拥挤；
+    inflow/outflow 按动量方向；其余 neutral。
+    """
+    if is_mainline and momentum >= 55.0 and crowding < 60.0:
+        return "mainline"
+    if momentum >= 55.0:
+        return "inflow"
+    if momentum <= 45.0:
         return "outflow"
     if inflow_positive:
         return "inflow"

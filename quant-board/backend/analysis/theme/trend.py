@@ -519,33 +519,7 @@ def _infer_lifecycle(factor: dict[str, Any], config: ThemeTrendConfig) -> str:
     explicit = _name(factor.get("lifecycle"))
     if explicit in LIFECYCLES:
         return explicit
-
-    rotation_state = _name(factor["rotationState"])
-    heat = _num(factor["heatScore"])
-    momentum = _num(factor["momentumScore"])
-    breadth = _num(factor["breadthScore"])
-    fund = _num(factor["fundScore"])
-    crowding = _num(factor["crowdingRisk"])
-    persistence = _num(factor["persistenceScore"])
-    correlation = _num(factor["correlationScore"])
-
-    if crowding >= config.crowdedRiskThreshold:
-        return "crowded"
-    if rotation_state in LIFECYCLES:
-        return rotation_state
-    if momentum <= config.reversalMomentumThreshold and fund >= 60:
-        return "reversal"
-    if momentum <= config.coolingMomentumThreshold or rotation_state in {"outflow", "cooling"}:
-        return "cooling"
-    if heat >= config.mainlineHeatThreshold and momentum >= config.mainlineMomentumThreshold and persistence >= 65:
-        return "mainline"
-    if momentum >= config.expansionMomentumThreshold and breadth >= 55:
-        return "expansion"
-    if momentum >= config.ignitionMomentumThreshold and fund >= 55:
-        return "ignition"
-    if correlation < 35 and heat >= 65:
-        return "divergence"
-    return "neutral"
+    return "neutral"  # v2：状态机废弃，未落库 lifecycle 一律 neutral
 
 
 def _build_factor(sector: dict[str, Any], config: ThemeTrendConfig) -> dict[str, Any]:
@@ -602,7 +576,8 @@ def _build_exposure(stock: dict[str, Any], factors: list[dict[str, Any]]) -> dic
     risk_penalty = _round(max(0.0, factor["crowdingRisk"] - 70) * 0.35)
     exposure_weight = _round(_clamp((role_score * 0.45 + contribution * 2.5 + factor["heatScore"] * 0.25) - risk_penalty))
     reasons = [f"role:{role or 'unknown'}"]
-    if factor["lifecycle"] == "mainline":
+    # D5：lifecycle 状态机废弃，主线判断改用 rotationState 方向标签
+    if factor.get("rotationState") == "mainline":
         reasons.append("theme:mainline")
     if risk_penalty > 0:
         reasons.append("risk:crowded")
@@ -621,16 +596,21 @@ def _build_exposure(stock: dict[str, Any], factors: list[dict[str, Any]]) -> dic
 
 
 def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
-    lifecycle = factor["lifecycle"]
-    if lifecycle == "crowded":
+    # D5：lifecycle 状态机废弃；信号基于 rotationState 方向标签 + 拥挤度
+    rotation_state = _name(factor.get("rotationState"))
+    crowding = _num(factor.get("crowdingRisk"))
+    if crowding >= 75.0:
         signal = "risk"
         risk = "crowded"
-    elif lifecycle in {"mainline", "expansion", "ignition"}:
-        signal = lifecycle
+    elif rotation_state == "mainline":
+        signal = "mainline"
         risk = "none"
-    elif lifecycle in {"cooling", "reversal"}:
+    elif rotation_state in {"inflow", "expansion", "ignition"}:
+        signal = rotation_state
+        risk = "none"
+    elif rotation_state in {"outflow", "cooling", "reversal"}:
         signal = "reduce"
-        risk = lifecycle
+        risk = rotation_state
     else:
         signal = "watch"
         risk = "none"
@@ -639,7 +619,7 @@ def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
         "themeName": factor["themeName"],
         "signal": signal,
         "risk": risk,
-        "lifecycle": lifecycle,
+        "lifecycle": factor.get("lifecycle"),
         "score": _round(
             factor["heatScore"] * 0.25
             + factor["momentumScore"] * 0.25
@@ -736,17 +716,18 @@ class ThemeTrendPythonEngine:
                 theme_id = factor["themeId"]
                 prev = theme_tracker.get(theme_id)
                 consecutive = (prev.get("consecutiveFrames", 0) + 1) if prev else 1
-                prev_lifecycle = prev.get("lifecycle") if prev else None
-                current_lifecycle = factor["lifecycle"]
+                # D5：lifecycle 状态机废弃；方向迁移跟踪 rotationState 标签
+                prev_rotation = prev.get("rotationState") if prev else None
+                current_rotation = _name(factor.get("rotationState"))
 
                 factor["snapshotId"] = snapshot_id
                 factor["tradingDate"] = trading_date
                 factor["slotTime"] = slot_time
                 factor["consecutiveFrames"] = consecutive
-                factor["prevLifecycle"] = prev_lifecycle or ""
+                factor["prevLifecycle"] = prev_rotation or ""
                 factor["lifecycleTransition"] = (
-                    f"{prev_lifecycle}>{current_lifecycle}"
-                    if prev_lifecycle and prev_lifecycle != current_lifecycle
+                    f"{prev_rotation}>{current_rotation}"
+                    if prev_rotation and prev_rotation != current_rotation
                     else ""
                 )
                 # 多帧持久性评分（与 TS golden log1p 公式对齐）
@@ -755,14 +736,12 @@ class ThemeTrendPythonEngine:
                         min(92.0, 18.0 + math.log1p(consecutive) * 28.0 + min(5, consecutive) * 6.0)
                     )
                 )
-                # 用多帧 persistenceScore 重新推断生命周期（跨帧升级路径）
+                # 用多帧 persistenceScore 保留 lifecycle 透传/neutral（D5：状态机废弃）
                 factor["lifecycle"] = _infer_lifecycle(factor, resolved_config)
 
                 # 追踪状态（供后续帧使用）
-                # heatScore/momentumScore 预留：未来热度趋势分析、动量背离检测
-                # firstSeen 预留：题材首次出场帧索引
                 theme_tracker[theme_id] = {
-                    "lifecycle": factor["lifecycle"],
+                    "rotationState": factor.get("rotationState"),
                     "consecutiveFrames": consecutive,
                     "heatScore": factor["heatScore"],
                     "momentumScore": factor["momentumScore"],

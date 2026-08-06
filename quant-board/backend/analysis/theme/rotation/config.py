@@ -15,11 +15,10 @@ class ThemeRotationConfig:
 
     weights: dict[str, float] = field(
         default_factory=lambda: {
-            "strength": 0.30,
-            "flow": 0.25,
-            "breadth": 0.20,
-            "crowding": 0.15,
-            "lifecycle": 0.10,
+            "strength": 0.34,
+            "flow": 0.28,
+            "breadth": 0.22,
+            "crowding": 0.16,
         }
     )
 

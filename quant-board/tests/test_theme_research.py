@@ -863,8 +863,11 @@ def test_replay_sequence_detects_lifecycle_transition() -> None:
     result = ThemeTrendPythonEngine().replay_sequence(frames)
     factors = result["factors"]
 
-    assert factors[0]["lifecycle"] == "ignition"
-    assert factors[1]["lifecycle"] == "mainline"
+    # D5：lifecycle 状态机废弃，方向迁移由 rotationState 承载
+    assert factors[0]["lifecycle"] == "neutral"  # 无落库 lifecycle → neutral 兜底
+    assert factors[1]["lifecycle"] == "neutral"
+    assert factors[0]["rotationState"] == "ignition"
+    assert factors[1]["rotationState"] == "mainline"
     assert factors[1]["prevLifecycle"] == "ignition"
     assert factors[1]["lifecycleTransition"] == "ignition>mainline"
 

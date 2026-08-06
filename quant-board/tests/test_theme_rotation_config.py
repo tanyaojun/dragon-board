@@ -6,7 +6,8 @@ def test_default_config_contract():
     assert cfg.window_slots == 8
     assert cfg.min_slots_for_state == 3
     assert abs(sum(cfg.weights.values()) - 1.0) < 1e-9
-    assert set(cfg.weights) == {"strength", "flow", "breadth", "crowding", "lifecycle"}
+    # D5：lifecycle 权重废弃，四维归一化
+    assert set(cfg.weights) == {"strength", "flow", "breadth", "crowding"}
     assert cfg.algorithm_version == "theme_rotation_v2"
 
 
