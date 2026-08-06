@@ -91,6 +91,7 @@ export interface RankTrendObservationScores {
 }
 
 export interface RankTrendThemeResonance {
+  /** @deprecated 2026-08-06 题材动量不再并入共振（D2），仅迁移期兼容 */
   status: 'ok' | 'insufficient'
   themeId?: string
   themeName?: string
@@ -102,6 +103,18 @@ export interface RankTrendThemeResonance {
   themeContribution?: number
   adjustment?: number
   reasons: string[]
+}
+
+/** 题材动量 v2 每股只读投影（第4轨数据源，不参与 decision） */
+export interface RankTrendThemeMomentum {
+  status: 'ok' | 'insufficient'
+  themeId?: string
+  themeName?: string
+  score?: number
+  direction?: 'up' | 'neutral' | 'down'
+  role?: string
+  phaseLabel?: string
+  reasons?: string[]
 }
 
 export interface RankTrendResonance {
@@ -277,6 +290,8 @@ export interface RankTrendAnalysisResult {
     }>
   }
   resonance?: RankTrendResonance
+  /** 题材动量 v2 每股只读投影（第4轨数据源，不参与 decision） */
+  themeMomentum?: RankTrendThemeMomentum
   observation?: RankTrendObservationScores
   // 策略层结果是消费侧扩展，不属于 rankTrend 核心分析合同。
   strategy?: RankTrendStrategyResult

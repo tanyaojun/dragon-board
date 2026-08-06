@@ -226,12 +226,12 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain("return `!${ratio.toFixed(2)}`")
   })
 
-  test('resonance tooltip includes theme momentum section', () => {
+  test('resonance tooltip decoupled from theme momentum (D2)', () => {
     const source = dataTableSource()
 
-    expect(source).toContain('【题材动量】')
-    expect(source).toContain('themeMomentumScore')
-    expect(source).toContain('题材数据不足')
+    expect(source).not.toContain('【题材动量】')
+    expect(source).not.toContain('themeMomentumScore')
+    expect(source).not.toContain('resonance.theme')
   })
 
 })

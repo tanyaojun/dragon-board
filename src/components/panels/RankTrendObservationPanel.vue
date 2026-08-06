@@ -218,6 +218,49 @@
               </div>
             </section>
 
+            <section v-else-if="activeTrack === 'theme'" class="track-section">
+              <div class="section-heading">
+                <div>
+                  <span class="section-kicker">TRACK 04</span>
+                  <h2>题材动量（板块整体）</h2>
+                </div>
+                <div class="section-score" :class="momentumDirectionClass(selectedAnalysis?.themeMomentum)">
+                  {{ selectedAnalysis?.themeMomentum?.score ?? '--' }}
+                </div>
+              </div>
+
+              <div class="factor-stack">
+                <template v-if="selectedAnalysis?.themeMomentum?.status === 'ok'">
+                  <div class="factor-row">
+                    <span>方向</span>
+                    <div class="factor-meter">
+                      <i style="width: 100%" :class="momentumDirectionClass(selectedAnalysis.themeMomentum)"></i>
+                    </div>
+                    <strong>{{ momentumDirectionText(selectedAnalysis.themeMomentum) }}</strong>
+                  </div>
+                  <div class="factor-row">
+                    <span>阶段标签</span>
+                    <div class="factor-meter"><i style="width: 100%" class="neutral-tone"></i></div>
+                    <strong>{{ selectedAnalysis.themeMomentum.phaseLabel || '—' }}</strong>
+                  </div>
+                  <div class="factor-row">
+                    <span>个股角色</span>
+                    <div class="factor-meter"><i style="width: 100%" class="neutral-tone"></i></div>
+                    <strong>{{ selectedAnalysis.themeMomentum.role || '—' }}</strong>
+                  </div>
+                  <div v-for="(reason, index) in (selectedAnalysis.themeMomentum.reasons || [])" :key="index"
+                    class="factor-row">
+                    <span>依据 {{ index + 1 }}</span>
+                    <div class="factor-meter"><i style="width: 100%" class="neutral-tone"></i></div>
+                    <strong>{{ reason }}</strong>
+                  </div>
+                </template>
+                <div v-else class="insufficient-note">
+                  题材动量数据不足: {{ (selectedAnalysis?.themeMomentum?.reasons || ['无题材映射']).join('、') }}
+                </div>
+              </div>
+            </section>
+
             <footer class="frame-timeline">
               <div class="timeline-heading">
                 <strong>最近 {{ trackFrames.length }} 帧</strong>
@@ -265,7 +308,14 @@ const tracks: Array<{ id: ObservationTrack; index: string; label: string }> = [
   { id: 'resonance', index: '01', label: '共振路径' },
   { id: 'technical', index: '02', label: '技术结构' },
   { id: 'lifecycle', index: '03', label: '阶段与风险' },
+  { id: 'theme', index: '04', label: '题材动量' },
 ]
+
+const momentumDirectionClass = (m?: { direction?: string }) =>
+  m?.direction === 'up' ? 'positive-tone' : m?.direction === 'down' ? 'negative-tone' : 'neutral-tone'
+
+const momentumDirectionText = (m?: { direction?: string }) =>
+  m?.direction === 'up' ? '上行' : m?.direction === 'down' ? '下行' : '中性'
 
 const activeTrack = ref<ObservationTrack>('resonance')
 const viewModel = ref<RankTrendObservationViewModel | null>(null)
@@ -547,39 +597,8 @@ const resonanceFactors = computed(() => {
       }`,
     },
     { label: '反转惩罚', width: percent(resonance?.reversalPenalty), text: percentText(resonance?.reversalPenalty), tone: 'negative-tone' },
-    ...(resonance?.theme?.status === 'ok'
-      ? [
-          {
-            label: '题材动量',
-            width: percent(((Number(resonance.theme.themeMomentumScore) || 50) - 50) / 50),
-            text: signedPercent(((Number(resonance.theme.themeMomentumScore) || 50) - 50) / 50),
-            tone: Number(resonance.theme.themeMomentumScore || 0) >= 50 ? 'positive-tone' : 'negative-tone',
-          },
-          { label: '题材生命周期', width: 0, text: resonance.theme.themeLifecycle || '—', tone: 'neutral-tone' },
-          { label: '个股角色', width: 0, text: themeRoleLabel(resonance.theme.role), tone: 'neutral-tone' },
-          {
-            label: '题材调节',
-            width: percent((Number(resonance.theme.adjustment) || 0) / 100),
-            text: signedPercent((Number(resonance.theme.adjustment) || 0) / 100),
-            tone: Number(resonance.theme.adjustment || 0) >= 0 ? 'positive-tone' : 'negative-tone',
-          },
-        ]
-      : resonance?.theme?.status === 'insufficient'
-        ? [{ label: '题材数据', width: 0, text: `不足: ${resonance.theme.reasons.join('、')}`, tone: 'neutral-tone' }]
-        : []),
   ]
 })
-
-function themeRoleLabel(role?: string): string {
-  const labels: Record<string, string> = {
-    leader: '龙头',
-    core: '核心',
-    follower: '跟随',
-    independent: '独立',
-    noise: '噪声',
-  }
-  return role ? labels[role] || role : '—'
-}
 
 function technicalValue(signal?: { score?: number; signal?: RankSignalDirection } | null): number | null {
   if (!signal) return null

@@ -80,13 +80,19 @@ describe('RankTrendObservationPanel', () => {
     expect(panel).toContain("source === 'cache'")
   })
 
-  it('resonance track includes theme momentum factor rows', () => {
+  it('theme track renders analysis.themeMomentum as the fourth observation track', () => {
     const panel = source()
 
-    expect(panel).toContain("label: '题材动量'")
-    expect(panel).toContain("label: '题材生命周期'")
-    expect(panel).toContain("label: '个股角色'")
-    expect(panel).toContain("label: '题材调节'")
+    expect(panel).toContain("{ id: 'theme', index: '04', label: '题材动量' }")
+    expect(panel).toContain("activeTrack === 'theme'")
+    expect(panel).toContain('TRACK 04')
+    expect(panel).toContain('selectedAnalysis?.themeMomentum?.score')
+    expect(panel).toContain('momentumDirectionClass')
+    expect(panel).toContain('momentumDirectionText')
+    // 旧 resonance 轨内嵌题材行已移除（D2 解耦）
+    expect(panel).not.toContain("label: '题材生命周期'")
+    expect(panel).not.toContain('resonance?.theme?.themeMomentumScore')
+    expect(panel).not.toContain('themeRoleLabel')
   })
 
   it('关闭/切换股票/卸载时取消 in-flight 观察请求', () => {
@@ -96,5 +102,42 @@ describe('RankTrendObservationPanel', () => {
     expect(panel).toContain('loadAbortController.abort()')
     expect(panel).toContain('rankTrendObservationService.load(props.stock, { signal: controller.signal })')
     expect(panel).toContain("error.name === 'AbortError'")
+  })
+})
+
+describe('RankTrendObservationPanel theme momentum track', () => {
+  const panel = () =>
+    readFileSync(
+      join(process.cwd(), 'src', 'components', 'panels', 'RankTrendObservationPanel.vue'),
+      'utf8',
+    )
+  const service = () =>
+    readFileSync(
+      join(process.cwd(), 'src', 'services', 'rankTrend', 'RankTrendObservationService.ts'),
+      'utf8',
+    )
+  const dataTable = () =>
+    readFileSync(join(process.cwd(), 'src', 'components', 'common', 'DataTable.vue'), 'utf8')
+
+  it('adds theme as the fourth track with index 04', () => {
+    expect(panel()).toContain("{ id: 'theme', index: '04', label: '题材动量' }")
+  })
+
+  it('adds theme window to OBSERVATION_WINDOW_BARS', () => {
+    expect(service()).toContain('theme: 15')
+  })
+
+  it('renders analysis.themeMomentum with score/direction/phaseLabel', () => {
+    expect(panel()).toContain('selectedAnalysis?.themeMomentum')
+    expect(panel()).toContain('phaseLabel')
+  })
+
+  it('does not read resonance.theme for theme momentum anymore', () => {
+    expect(panel()).not.toContain('resonance?.theme?.themeMomentumScore')
+  })
+
+  it('DataTable resonance tooltip is decoupled from theme momentum', () => {
+    expect(dataTable()).not.toContain('【题材动量】')
+    expect(dataTable()).not.toContain('resonance.theme.themeMomentumScore')
   })
 })
