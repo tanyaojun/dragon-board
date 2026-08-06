@@ -2,12 +2,12 @@
 
 ## 结论
 
-RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend.py` 为生产事实标准。Dragon Board TS 前端只消费
+RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend/engine.py` 为生产事实标准。Dragon Board TS 前端只消费
 `POST /api/ranktrend/analyze` 与 `GET /api/snapshots/frames`（每帧附 regime）的输出，不再保留本地 golden 链算法实现。
 
 Golden 来源（唯一）：
 
-- `quant-board/backend/analysis/ranktrend.py`
+- `quant-board/backend/analysis/ranktrend/engine.py`
 
 TS 消费契约仍为 `RankTrendAnalysisResult`（见 `src/services/rankTrend/types.ts`），但该合同现在由 Python 输出定义。
 

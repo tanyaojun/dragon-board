@@ -2,7 +2,7 @@
 
 ## 移植目标
 
-Python 版 rankTrend 是 golden 生产事实标准（`backend/analysis/ranktrend.py`）。Dragon Board TS 前端只消费
+Python 版 rankTrend 是 golden 生产事实标准（`backend/analysis/ranktrend/engine.py`）。Dragon Board TS 前端只消费
 `POST /api/ranktrend/analyze` 与 frames API 输出，不再保留本地 golden 链算法实现。回测和优化直接基于 Python 生产链。
 
 ## 建议目录

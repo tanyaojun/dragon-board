@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.analysis.theme_trend import (
+from backend.analysis.theme.trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
     build_theme_quality_report,
@@ -253,7 +253,7 @@ def test_replay_builds_leader_and_core_stock_exposures() -> None:
 
 
 def test_ts_factors_prefer_persisted_rotation_state() -> None:
-    from backend.analysis.theme_trend import _theme_context_frames
+    from backend.analysis.theme.trend import _theme_context_frames
 
     frame = {
         "timestamp": 1785807000000,

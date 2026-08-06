@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.analysis.theme_heat import compute_theme_heat
+from backend.analysis.theme.heat import compute_theme_heat
 
 
 def test_compute_theme_heat_matches_v1_contract() -> None:

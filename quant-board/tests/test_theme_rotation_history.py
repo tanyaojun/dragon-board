@@ -1,4 +1,4 @@
-from backend.analysis.theme_rotation.history import RotationHistoryService
+from backend.analysis.theme.rotation.history import RotationHistoryService
 
 
 class FakeRepo:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest import BacktestEngine, normalize_strategy_name
 from backend.optimization.experiment import experiment_summary
 from backend.optimization.samplers import OptunaSearchRunner

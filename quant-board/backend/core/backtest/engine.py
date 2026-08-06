@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
-from backend.analysis.theme_support import build_theme_support_index
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
+from backend.analysis.theme.support import build_theme_support_index
 from backend.core.backtest.evaluator import OutcomeEvaluator
 from backend.core.backtest.execution import TradeSimulator
 from backend.core.backtest.metrics import _round_or_none, average, share

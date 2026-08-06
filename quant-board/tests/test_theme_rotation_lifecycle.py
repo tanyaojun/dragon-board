@@ -1,5 +1,5 @@
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.lifecycle import (
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.lifecycle import (
     lifecycle_for,
     mainline_concentration,
     market_phase_for,

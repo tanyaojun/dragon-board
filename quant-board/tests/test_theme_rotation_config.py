@@ -1,4 +1,4 @@
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
 
 
 def test_default_config_contract():

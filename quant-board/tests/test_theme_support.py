@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine, inspect, text
 
-from backend.analysis.theme_support import build_theme_candidate_support, build_theme_support_index
+from backend.analysis.theme.support import build_theme_candidate_support, build_theme_support_index
 from backend.core.backtest.strategy import RankTrendCandidateStrategy, StrategyInput
 from backend.data.database import _apply_column_migrations
 from backend.data.models import BacktestSignal, SnapshotSectorRowModel, SnapshotStockRowModel
@@ -284,7 +284,7 @@ def test_backtest_signal_model_accepts_theme_columns() -> None:
 
 
 def test_candidate_support_uses_rotation_score_and_lifecycle() -> None:
-    from backend.analysis.theme_support import build_theme_candidate_support
+    from backend.analysis.theme.support import build_theme_candidate_support
 
     frame = {
         "sectors": [{

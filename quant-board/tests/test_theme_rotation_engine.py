@@ -1,6 +1,6 @@
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.engine import ThemeRotationEngine
-from backend.analysis.theme_rotation.models import HistorySlot
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.engine import ThemeRotationEngine
+from backend.analysis.theme.rotation.models import HistorySlot
 
 
 def _sector(theme_id, name, rank, heat, momentum=60, crowding=50, inflow=1.0, zt=3, change=2.0, breadth=60):

@@ -8,8 +8,8 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
-from backend.analysis.ranktrend_live_gate_shadow_audit import (
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.live_gate_shadow_audit import (
     DEFAULT_SHADOW_VARIANTS,
     _nested_get,
     build_audit_meta,
@@ -21,8 +21,8 @@ from backend.analysis.ranktrend_live_gate_shadow_audit import (
     summarize_first_failure,
     summarize_jump_definition_replays,
 )
-from backend.analysis.ranktrend_jump_research import build_jump_research_request, summarize_jump_research
-from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
+from backend.analysis.ranktrend.jump_research import build_jump_research_request, summarize_jump_research
+from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
     DEFAULT_TRADE_CONFIG,
     V5_LIFECYCLE_FUSION_TRADE_DEFAULTS,

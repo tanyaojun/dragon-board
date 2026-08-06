@@ -1,4 +1,4 @@
-from backend.analysis.theme_momentum import (
+from backend.analysis.theme.momentum import (
     LIFECYCLE_BOOST,
     LIFECYCLE_PENALTY,
     REVERSAL_LIFECYCLES,

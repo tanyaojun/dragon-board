@@ -55,7 +55,7 @@ def test_analyze_rejects_unsupported_snapshot_type(monkeypatch):
 def test_theme_momentum_series_uses_redis_ttl_cache(monkeypatch):
     """相同帧窗口的题材动量序列命中 Redis TTL 缓存时不再重复计算。"""
     from backend.api import ranktrend_routes
-    from backend.analysis.theme_momentum import compute_theme_momentum_series
+    from backend.analysis.theme.momentum import compute_theme_momentum_series
 
     class FakeCache:
         def __init__(self):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest import BacktestEngine, TradeSimulator
 from backend.optimization import objective
 from backend.optimization.search_space import freeze, to_strategy_config, to_trade_config

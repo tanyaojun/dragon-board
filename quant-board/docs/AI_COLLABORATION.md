@@ -55,7 +55,7 @@
 
 ## 硬约束
 
-1. `rankTrend` Python（`backend/analysis/ranktrend.py`）是 golden 生产事实标准，TS 前端只消费其输出。
+1. `rankTrend` Python（`backend/analysis/ranktrend/engine.py`）是 golden 生产事实标准，TS 前端只消费其输出。
 2. QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 3. 默认 `snapshot_type` 是 `half_hour`。
 4. `quarter_hour` 是可选项，不是默认项。

@@ -1,5 +1,5 @@
 # quant-board/backend/tests/test_theme_resonance_fusion.py
-from backend.analysis.theme_momentum import (
+from backend.analysis.theme.momentum import (
     THEME_ADJUSTMENT_MAX,
     fuse_theme_resonance,
     stock_theme_exposure,

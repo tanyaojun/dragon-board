@@ -1,6 +1,6 @@
 import math
 
-from backend.analysis.theme_rotation.factors import (
+from backend.analysis.theme.rotation.factors import (
     breadth_score,
     crowding_score,
     flow_score,
@@ -88,8 +88,8 @@ def test_lifecycle_score_without_prev_is_neutral_with_flag():
 
 
 def test_combine_scores_min_factors_gate():
-    from backend.analysis.theme_rotation.factors import combine_scores
-    from backend.analysis.theme_rotation.models import ThemeFactorScores
+    from backend.analysis.theme.rotation.factors import combine_scores
+    from backend.analysis.theme.rotation.models import ThemeFactorScores
 
     scores = ThemeFactorScores(theme_id="BKAI", theme_name="人工智能", strength=80.0, flow=None)
     assert combine_scores(scores, {"strength": 0.3, "flow": 0.25, "breadth": 0.2,

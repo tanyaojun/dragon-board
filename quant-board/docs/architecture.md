@@ -509,7 +509,7 @@ ThemeTrend 策略消费 Python ThemeTrend 输出和标准快照事实；共振�
 `src/services/strategyBacktest` 的历史职责归并到 Python 后端：
 
 - 快照回放与样本质量：`backend.data.repository`、`backend.data.quality_gate`
-- RankTrend 回放：`backend.analysis.ranktrend.RankTrendPythonEngine`
+- RankTrend 回放：`backend.analysis.ranktrend.engine.RankTrendPythonEngine`
 - 后验分布与 forward validation：`backend.core.backtest.OutcomeEvaluator`
 - 交易模拟与撮合：`backend.core.backtest.TradeSimulator`
 - 回测编排：`backend.core.backtest.BacktestEngine`

@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.analysis.ranktrend import (
+from backend.analysis.ranktrend.engine import (
     RankTrendPythonEngine,
     analyze_rank_resonance,
     attention_rank_lookup,
@@ -15,7 +15,7 @@ from backend.analysis.ranktrend import (
     percentile_rank,
     _resonance_label,
 )
-from backend.analysis.theme_momentum import (
+from backend.analysis.theme.momentum import (
     compute_theme_momentum_series,
     fuse_theme_resonance,
     stock_theme_exposure,

@@ -201,7 +201,7 @@ quant-board/
 
 QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLLABORATION.md` 和专题文档为准：
 
-- RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend.py` 为生产事实标准；TS 前端只消费 `POST /api/ranktrend/analyze` 与 frames API 输出，不再保留本地 golden 链算法实现（`src/services/rankTrend/**` 只保留消费契约、resonance/jump 应用层与展示投影）。
+- RankTrend golden 以 Python `quant-board/backend/analysis/ranktrend/engine.py`（包入口 `backend.analysis.ranktrend`）为生产事实标准；TS 前端只消费 `POST /api/ranktrend/analyze` 与 frames API 输出，不再保留本地 golden 链算法实现（`src/services/rankTrend/**` 只保留消费契约、resonance/jump 应用层与展示投影）。
 - QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
 - 原 `src/services/strategyBacktest` 职责已迁移到 QuantBoard Python 后端：`backend.analysis.ranktrend`、`backend.core.backtest`、`backend.services`。
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。

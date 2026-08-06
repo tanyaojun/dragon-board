@@ -578,7 +578,7 @@ def list_snapshot_frames(
             projection=projection,
             fields=field_list or None,
         )
-        from backend.analysis.ranktrend import market_regime
+        from backend.analysis.ranktrend.engine import market_regime
 
         for frame in frames:
             frame["regime"] = market_regime({
@@ -1653,7 +1653,7 @@ def get_theme_research_summary(
             return {"available": False, "reason": "insufficient_frames", "frameCount": len(frames) if frames else 0}
 
         # 函数内导入避免与 FastAPI startup 事件中的 DB 初始化形成循环依赖
-        from backend.analysis.theme_trend import ThemeTrendPythonEngine
+        from backend.analysis.theme.trend import ThemeTrendPythonEngine
         result = ThemeTrendPythonEngine().replay_sequence(frames)
         factors = result.get("factors") or []
         quality = result.get("qualityReport") or {}
