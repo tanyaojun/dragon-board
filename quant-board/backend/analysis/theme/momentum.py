@@ -430,7 +430,7 @@ def _percentile_rank(value: float, values: list[float]) -> float:
 
 def _n_day_return(changes: list[float], window: int) -> float:
     """最近 N 日累计收益：(1+c[-N:]) 连乘 - 1；窗口不足时用可用天数。"""
-    series = changes[-(window + 1):]
+    series = changes[-window:]
     if not series:
         return 0.0
     product = 1.0
@@ -445,7 +445,7 @@ def _rps_for(
     all_returns: dict[int, list[float]],
 ) -> float | None:
     """N 日收益在全体板块横截面的百分位排名（0-100）。"""
-    if len(series.changes) < window + 1:
+    if len(series.changes) < window:
         return None
     ret = _n_day_return(series.changes, window)
     peers = all_returns.get(window, [])
@@ -471,7 +471,7 @@ def _near_high_score(series: ThemeDailySeries, cfg: ThemeMomentumConfig) -> floa
 
 def _window_momentum_score(series: ThemeDailySeries, cfg: ThemeMomentumConfig) -> float | None:
     """5/10/20 日收益率的加权符号强度（50 + Σ w·ret·coef，0-100）。"""
-    if len(series.changes) < cfg.min_history_days + 1:
+    if len(series.changes) < cfg.min_history_days:
         return None
     score = 50.0
     for window, weight in zip(cfg.rps_windows, cfg.rps_weights):
@@ -598,9 +598,12 @@ def compute_theme_momentum_v2(
             flow_volume = None
             reasons.append("flow_volume_unavailable")
 
-        # 拥挤代理：v2 纯函数层以 0 为默认（不惩罚）。真实 crowding 由 Task 3
-        # analyze 接入时从 frame 槽位传入，完整口径见 spec §5.2 门禁说明。
-        crowding = 0.0
+        # 拥挤代理：daily_series 无独立 crowdingRisk 日线，用日 breadthScore 反向代理
+        # （breadth 高 ≠ 拥挤，但 spec §5.2 门禁要求有扣分项；代理口径在 reasons 标注，
+        #  不伪造真实 crowding）。真实 crowding 由 Task 3 analyze 槽位口径补充。
+        crowding = _num100(series.breadths[-1]) if series.breadths else 0.0
+        if crowding > 0:
+            reasons.append(f"crowding_proxy(breadth={crowding:.0f})")
 
         # 合成综合分：可用维度 < 3 则不产分
         scores: dict[str, float] = {}
@@ -634,7 +637,7 @@ def compute_theme_momentum_v2(
                 "breadth": round(breadth, 1) if breadth is not None else None,
                 "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
                 "crowdingPenalty": 0.0,
-                "intraday": {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0},
+                "intraday": {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True},
                 "reasons": reasons + ["insufficient_factors"],
             }
             continue
@@ -661,7 +664,7 @@ def compute_theme_momentum_v2(
             "breadth": round(breadth, 1) if breadth is not None else None,
             "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
             "crowdingPenalty": round(base - score, 1),
-            "intraday": {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0},
+            "intraday": {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True},
             "reasons": reasons,
         }
 

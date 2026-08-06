@@ -20,8 +20,8 @@ from backend.settings import get_settings
 
 router = APIRouter(prefix="/api/theme-momentum", tags=["theme-momentum"])
 
-# 最近 N 行 sector rows（≈ 60 题材 × 20+ 交易日）
-RECENT_SECTOR_ROWS_LIMIT = 5000
+# 最近 N 行 sector rows（≈ 60 题材 × 21+ 交易日，覆盖 20 日 RPS/52 周高降级窗口）
+RECENT_SECTOR_ROWS_LIMIT = 20000
 SUMMARY_TOP_N = 50
 
 

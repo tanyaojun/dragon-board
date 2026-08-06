@@ -107,13 +107,14 @@ def test_v2_near_high_and_window_momentum():
 
 
 def test_v2_intraday_state_keys():
-    """intraday 辅口径含 shortChange/ztDelta/inflowDelta。"""
+    """intraday 辅口径含 shortChange/ztDelta/inflowDelta，且明确标注 unavailable（无槽位输入）。"""
     result = compute_theme_momentum_v2(
-        [_series("BKAI", "人工智能", [0.01] * 20)],
+        [_series("BKAI", "人工智能", [0.01] * 25)],
         cfg=ThemeMomentumConfig(),
     )
     row = result["factors"]["BKAI"]
-    assert set(row["intraday"]) == {"shortChange", "ztDelta", "inflowDelta"}
+    assert set(row["intraday"]) == {"shortChange", "ztDelta", "inflowDelta", "unavailable"}
+    assert row["intraday"]["unavailable"] is True
 
 
 def test_v2_empty_input_not_crash():

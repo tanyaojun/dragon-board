@@ -95,9 +95,14 @@
                       </div>
                       <div class="detail-block">
                         <h4>日内状态</h4>
-                        <p>短变化 {{ factor.intraday?.shortChange ?? '--' }}</p>
-                        <p>涨停增量 {{ factor.intraday?.ztDelta ?? '--' }}</p>
-                        <p>资金增量 {{ factor.intraday?.inflowDelta ?? '--' }}</p>
+                        <template v-if="factor.intraday?.unavailable">
+                          <p>槽位口径未接入（unavailable）</p>
+                        </template>
+                        <template v-else>
+                          <p>短变化 {{ factor.intraday?.shortChange ?? '--' }}</p>
+                          <p>涨停增量 {{ factor.intraday?.ztDelta ?? '--' }}</p>
+                          <p>资金增量 {{ factor.intraday?.inflowDelta ?? '--' }}</p>
+                        </template>
                       </div>
                       <div class="detail-block reasons">
                         <h4>依据</h4>
