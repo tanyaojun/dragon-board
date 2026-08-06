@@ -1,0 +1,40 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { describe, expect, it } from 'vitest'
+
+describe('ThemeMomentumPanel', () => {
+  const panel = readFileSync(
+    join(process.cwd(), 'src', 'components', 'panels', 'ThemeMomentumPanel.vue'),
+    'utf8',
+  )
+  const facade = readFileSync(
+    join(process.cwd(), 'src', 'services', 'theme', 'ThemeFacade.ts'),
+    'utf8',
+  )
+  const app = readFileSync(join(process.cwd(), 'src', 'App.vue'), 'utf8')
+
+  it('renders full-field momentum ranking table with expandable rows', () => {
+    expect(panel).toContain('momentum-table')
+    expect(panel).toContain('RPS 5/10/20')
+    expect(panel).toContain('expanded.has')
+    expect(panel).toContain('detail-row')
+  })
+
+  it('loads data via themeFacade.getThemeMomentumSummary', () => {
+    expect(panel).toContain('getThemeMomentumSummary')
+    expect(facade).toContain('/api/theme-momentum/summary')
+    expect(facade).toContain('export async function getThemeMomentumSummary')
+  })
+
+  it('is mounted in App.vue with panel state', () => {
+    expect(app).toContain('ThemeMomentumPanel')
+    expect(app).toContain('panels.themeMomentum')
+    expect(app).toContain('themeMomentum: false')
+  })
+
+  it('opens theme momentum panel when sector tab selected', () => {
+    expect(app).toContain("if (tabId === 'sector')")
+    expect(app).toContain('panels.value.themeMomentum = true')
+  })
+})

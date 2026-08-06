@@ -186,6 +186,8 @@
       @close="panels.sectorAlert = false" @show-detail="openSectorDetail" />
     <SectorRotation v-model:visible="panels.sectorRotation" :trigger-rect="panelRects.sectorRotation"
       @close="panels.sectorRotation = false" @show-detail="openSectorDetail" />
+    <ThemeMomentumPanel v-model:visible="panels.themeMomentum" :trigger-rect="panelRects.themeMomentum"
+      @close="panels.themeMomentum = false" />
     <ThemeRiskDashboard v-model:visible="panels.themeRisk" :trigger-rect="panelRects.themeRisk"
       @close="panels.themeRisk = false" />
   </div>
@@ -222,6 +224,7 @@ const StockL2DetailPanel = defineAsyncComponent(() => import('./components/panel
 const SectorDetail = defineAsyncComponent(() => import('./components/panels/SectorDetail.vue'))
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
 const SectorRotation = defineAsyncComponent(() => import('./components/panels/SectorRotation.vue'))
+const ThemeMomentumPanel = defineAsyncComponent(() => import('./components/panels/ThemeMomentumPanel.vue'))
 const ThemeRiskDashboard = defineAsyncComponent(() => import('./components/panels/ThemeRiskDashboard.vue'))
 const HotStockEventMonitorPanel = defineAsyncComponent(() => import('./components/panels/HotStockEventMonitorPanel.vue'))
 import TradeJournalPanel from './components/panels/TradeJournalPanel.vue'
@@ -330,6 +333,7 @@ const panels = ref({
   sectorDetail: false,
   sectorAlert: false,
   sectorRotation: false,
+  themeMomentum: false,
   themeRisk: false,
   stockDetail: false,
   rankTrend: false,
@@ -493,6 +497,10 @@ const handleTabChange = (tabId: string) => {
   }
   if (panelMap[tabId]) {
     panels.value[panelMap[tabId]] = true
+  }
+  // 题材热点 tab：同时打开题材动量独立面板（v2 独立第四维视图）
+  if (tabId === 'sector') {
+    panels.value.themeMomentum = true
   }
 }
 
