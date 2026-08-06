@@ -407,10 +407,12 @@ export class QuoteService {
       turnover: Number(quote.amount ?? stock?.turnover ?? existingQuote?.turnover) || 0,
       turnoverRate: pickPositiveNumber(quote.turnoverRate, stock?.turnoverRate, existingQuote?.turnoverRate),
       volumeRatio: pickPositiveNumber(quote.volumeRatio, stock?.volumeRatio, existingQuote?.volumeRatio),
-      pe: pickNonZeroNumber(stock?.pe, existingQuote?.pe),
-      totalMV: pickPositiveNumber(stock?.totalMV, existingQuote?.totalMV),
-      cirMV: pickPositiveNumber(stock?.cirMV, existingQuote?.cirMV),
-      pb: pickPositiveNumber(stock?.pb, existingQuote?.pb),
+      // 估值指标（市值/PE/PB）：python-bridge 实时计算（时效性快），优先于 HTTP/静态补充。
+      // bridge 字段映射：totalMarketCap → totalMV、floatMarketCap → cirMV、pe/pb 同名。
+      pe: pickNonZeroNumber(quote.pe, stock?.pe, existingQuote?.pe),
+      totalMV: pickPositiveNumber(quote.totalMarketCap, stock?.totalMV, existingQuote?.totalMV),
+      cirMV: pickPositiveNumber(quote.floatMarketCap, stock?.cirMV, existingQuote?.cirMV),
+      pb: pickPositiveNumber(quote.pb, stock?.pb, existingQuote?.pb),
       zlje: hasAuthoritativeMoneyFlow
         ? pickFundFlow(quote.zlje, stock?.zlje)
         : pickNonZeroNumber(stock?.zlje, existingQuote?.zlje),

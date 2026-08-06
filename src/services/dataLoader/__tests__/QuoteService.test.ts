@@ -130,6 +130,49 @@ describe('QuoteService', () => {
     expect(quote?.price).toBe(10.1)
   })
 
+  it('uses bridge valuation fields when realtime quote provides them, without HTTP enrichment', async () => {
+    const fetchBasicData = vi.fn().mockResolvedValue(new Map())
+    const fetchFullData = vi.fn().mockResolvedValue(new Map())
+    const service = new QuoteService({
+      now: () => 1000,
+      dataLayer: { getQuote: () => null, getStock: () => null, updateQuote: () => undefined } as any,
+      webSocketService: {
+        getQuotesBatch: () =>
+          new Map([
+            [
+              '603773',
+              {
+                code: '603773',
+                lastPrice: 10.1,
+                changePct: 0.5,
+                volume: 1200,
+                amount: 11000,
+                turnoverRate: 2.3,
+                totalMarketCap: 216760565962.5,
+                floatMarketCap: 216760565962.5,
+                pe: 12.5,
+                pb: 1.8,
+              } as any,
+            ],
+          ]),
+      },
+      isRealtimePrimaryHealthy: () => true,
+      feed: { fetchBasicData, fetchFullData } as any,
+    })
+
+    const result = await service.fetchMergedQuotes(['603773'])
+    const quote = result.get('603773')
+    // 估值字段来自 bridge（quote_patch），字段映射 totalMarketCap→totalMV / floatMarketCap→cirMV
+    expect(quote?.turnoverRate).toBe(2.3)
+    expect(quote?.totalMV).toBe(216760565962.5)
+    expect(quote?.cirMV).toBe(216760565962.5)
+    expect(quote?.pe).toBe(12.5)
+    expect(quote?.pb).toBe(1.8)
+    // 补充数据齐全 → 不再触发 HTTP enrichment
+    expect(fetchBasicData).not.toHaveBeenCalled()
+    expect(fetchFullData).not.toHaveBeenCalled()
+  })
+
   it('returns cached single quote within five seconds when force is false', async () => {
     const now = vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(4900)
     const service = new QuoteService({

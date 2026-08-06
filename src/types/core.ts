@@ -180,6 +180,11 @@ export interface QuotePatch {
   volumeRatio?: number
   amount: number
   turnoverRate?: number
+  totalMarketCap?: number
+  floatMarketCap?: number
+  pe?: number
+  peEstimated?: boolean
+  pb?: number
   tdxBuyVolume?: number
   tdxSellVolume?: number
   tdxCurrentVolume?: number
