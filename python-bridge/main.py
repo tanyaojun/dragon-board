@@ -2902,9 +2902,10 @@ class TdxL2Bridge:
             await asyncio.sleep(sleep_ms / 1000)
 
     async def _refresh_finance_background(self, codes: list[str]) -> None:
-        """后台刷新财务缓存（市值/PE/PB 计算原料）；失败仅 debug 日志，不影响行情。"""
+        """后台刷新财务缓存（市值/PE/PB 计算原料）；失败仅 debug 日志，不影响行情。
+        使用独立连接（refresh_finance 内自建），不与行情轮询共享 mootdx client（非线程安全）。"""
         try:
-            await asyncio.to_thread(tdx_fundamental.refresh_finance, codes, self.quote_client)
+            await asyncio.to_thread(tdx_fundamental.refresh_finance, codes)
         except Exception as error:
             logger.debug("finance refresh background failed: %s", error)
         finally:

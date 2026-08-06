@@ -104,6 +104,25 @@ class FundamentalTest(unittest.TestCase):
         self.assertEqual(tdx_fundamental.refresh_finance(["000001"], client), 0)
         self.assertEqual(client.finance.call_count, 1)
 
+    def test_refresh_finance_creates_own_client(self):
+        # client=None 时自建独立连接（不与行情轮询共享 mootdx client），用后关闭
+        fake_client = mock.Mock()
+        fake_client.finance.side_effect = lambda symbol: _finance_frame(symbol)
+        with mock.patch("mootdx.quotes.Quotes") as qmock:
+            qmock.factory.return_value = fake_client
+            ok = tdx_fundamental.refresh_finance(["000001"])
+        self.assertEqual(ok, 1)
+        qmock.factory.assert_called_once_with(market="std", heartbeat=False, timeout=10)
+        fake_client.close.assert_called_once()
+
+    def test_refresh_finance_mismatch_is_failure(self):
+        # 返回的 code 与请求不符（mootdx 并发错位）→ 视为失败：不进缓存、进入冷却
+        client = mock.Mock()
+        client.finance.side_effect = lambda symbol: _finance_frame("999999")
+        self.assertEqual(tdx_fundamental.refresh_finance(["000001"], client), 0)
+        self.assertNotIn("000001", tdx_fundamental._cache)
+        self.assertIn("000001", tdx_fundamental._failed_at)
+
     # ---------- normalize_quote_row 集成 ----------
 
     def test_normalize_quote_row_includes_fundamentals(self):

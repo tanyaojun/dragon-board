@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 
 _FINANCE_TTL_SECONDS = 6 * 3600  # 财务数据每日更新，6 小时刷新足够
 _FAILURE_COOLDOWN_SECONDS = 10 * 60
-_REFRESH_MAX_CONCURRENCY = 4
+# mootdx/tdxpy 客户端非线程安全（实测并发调用 finance 响应错位/损坏），必须串行拉取。
+# 全量刷新 226 只约 7-11s，30 分钟一次后台任务可接受。
+_REFRESH_MAX_CONCURRENCY = 1
 
 _cache: dict[str, dict[str, Any]] = {}
 _fetched_at: dict[str, float] = {}
@@ -84,12 +86,28 @@ def compute_fundamentals(code: str, price: float, volume_hands: float) -> dict[s
         return None
 
 
-def refresh_finance(codes: list[str], client: Any, max_concurrency: int = _REFRESH_MAX_CONCURRENCY) -> int:
-    """刷新财务缓存（后台任务用）；返回本次成功条数。client 为 mootdx Quotes 实例。"""
+def refresh_finance(codes: list[str], client: Any = None, max_concurrency: int = _REFRESH_MAX_CONCURRENCY) -> int:
+    """刷新财务缓存（后台任务用）；返回本次成功条数。
+
+    client 为 mootdx Quotes 实例；传 None 时自建独立连接（推荐）。mootdx 客户端
+    非线程安全，财务刷新必须与行情轮询使用不同连接，否则并发下响应错位。
+    """
     now = time.time()
     todo = [c for c in dict.fromkeys(codes) if _should_refresh(c, now)]
     if not todo:
         return 0
+
+    own_client = client is None
+    if own_client:
+        try:
+            from mootdx.quotes import Quotes
+            client = Quotes.factory(market="std", heartbeat=False, timeout=10)
+        except Exception as error:
+            logger.debug("finance client create failed: %s", error)
+            for code in todo:
+                with _guard:
+                    _failed_at[code] = time.time()
+            return 0
 
     semaphore = threading.Semaphore(max(1, max_concurrency))
     success = 0
@@ -104,7 +122,12 @@ def refresh_finance(codes: list[str], client: Any, max_concurrency: int = _REFRE
                 frame = client.finance(symbol=code)
                 if frame is None or frame.empty:
                     raise ValueError("empty finance frame")
-                fin = dict(frame.iloc[0])
+                row = frame.iloc[0]
+                returned = str(row.get('code', '')).strip()
+                if returned != code:
+                    # 非线程安全/连接复用下 mootdx 可能返回其它股票的数据，视为失败重试
+                    raise ValueError(f"finance response mismatch: expect {code}, got {returned!r}")
+                fin = dict(row)
                 with _guard:
                     _cache[code] = fin
                     _fetched_at[code] = time.time()
@@ -116,12 +139,19 @@ def refresh_finance(codes: list[str], client: Any, max_concurrency: int = _REFRE
                     _failed_at[code] = time.time()
                 logger.debug("finance fetch failed for %s: %s", code, error)
 
-    threads = [threading.Thread(target=_fetch, args=(code,), daemon=True) for code in todo]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    return success
+    try:
+        threads = [threading.Thread(target=_fetch, args=(code,), daemon=True) for code in todo]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return success
+    finally:
+        if own_client:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 
 def _should_refresh(code: str, now: float) -> bool:
