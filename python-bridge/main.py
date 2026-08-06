@@ -7,6 +7,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import warnings
@@ -16,6 +17,20 @@ from datetime import datetime, timedelta
 from logging.handlers import TimedRotatingFileHandler
 from typing import Any, Iterable
 
+# 被外部进程（如 DragonBoardLauncher）重定向输出时，stderr 默认按系统区域编码（GBK），
+# launcher 按 UTF-8 解码会造成中文日志/警告乱码。pipe 下强制 UTF-8 对齐；
+# 终端直跑（isatty）保持默认编码，不影响手工调试显示。
+if sys.stderr is not None and not sys.stderr.isatty():
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# tdxpy 在非交易时段调用分笔接口会输出 DeprecationWarning「目前不是交易时间段, ...」，
+# 属既有预期行为（接口本身返回 None）。按消息文本精确过滤（不依赖 module 解析，
+# 比按 module 匹配更鲁棒），避免刷屏 launcher 日志，不影响行情拉取。
+warnings.filterwarnings("ignore", message=r"目前不是交易时间段.*")
+
 import uvicorn
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,8 +38,16 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from mootdx.quotes import Quotes
 
 from l2.qmt_provider import QmtL2Provider
+from tdxpy.helper import time_frame as tdx_is_trading_frame
+import tdx_bj_compat
 import tdx_calendar
+import tdx_fund_flow
+import tdx_fundamental
 from tdx_hq_cache import OfficialHQCacheDepthReader
+
+# 北交所（920 号段）行情兼容 patch：mootdx/tdxpy 未实现北交所，运行时替换
+# （幂等；失败仅告警，不影响行情主链路）。
+tdx_bj_compat.install_bj_compat()
 from trading_time import (
     MORNING_CONTINUOUS_START_HHMM,
     hhmm,
@@ -482,6 +505,13 @@ def normalize_quote_row(row: dict[str, Any], captured_ms: int | None = None) -> 
 
     if turnover_rate is not None:
         payload["turnoverRate"] = turnover_rate
+    # 估值指标（换手率/市值/PE/PB）：由 tdx_fundamental 用财务数据 + 实时行情计算，
+    # 只补缺失字段（不覆盖上游已有值）；财务数据缺失时无这些字段。
+    fundamentals = tdx_fundamental.compute_fundamentals(code, last_price, volume)
+    if fundamentals:
+        for key, value in fundamentals.items():
+            if key not in payload:
+                payload[key] = value
     if not payload["name"]:
         payload.pop("name", None)
 
@@ -700,6 +730,11 @@ class TdxL2Bridge:
     helper_boot_timeout_ms = 15000
     helper_login_retry_window_ms = 6000
 
+    # 财务数据（市值/PE/PB 计算原料）后台刷新间隔
+    finance_refresh_interval_ms = 30 * 60 * 1000
+    # 资金流（主力/大单/中单/小单）广播间隔：累计值变化慢，低频推送
+    fund_flow_broadcast_interval_ms = 5 * 1000
+
     def __init__(self, config: BridgeConfig) -> None:
         self.config = config
         self.clients: set[Any] = set()
@@ -718,6 +753,10 @@ class TdxL2Bridge:
         self.tick_cursor = 0
         self.tick_fetch_supported = True
         self.tick_fetch_warning_emitted = False
+        self._last_finance_refresh_ts = 0
+        self._finance_refresh_in_progress = False
+        self._last_fund_flow_broadcast_ts = 0
+        self._last_fund_flow_date = ""
         self.current_quote_batch_size = self.clamp_quote_batch_size(self.config.quote_batch_size)
         self.healthy_fetch_cycles = 0
         self._manual_server: tuple[str, int] | None = None
@@ -2603,6 +2642,12 @@ class TdxL2Bridge:
         if not tick_codes:
             return results
 
+        # 非交易时段（与 tdxpy time_frame 同一判断）分笔接口本就不可用：tdxpy 会打
+        # DeprecationWarning 并返回 None。从源头跳过整个分笔轮询（不连接、不建 task），
+        # 行为与 tdxpy 返回 None 等价；_fetch_one 内再判断一次兜底跨时段边界。
+        if not tdx_is_trading_frame():
+            return results
+
         async with self.fetch_lock:
             await self.ensure_client()
             semaphore = asyncio.Semaphore(max(1, self.config.tick_fetch_concurrency))
@@ -2610,6 +2655,11 @@ class TdxL2Bridge:
             async def _fetch_one(code: str) -> dict[str, Any] | None:
                 async with semaphore:
                     try:
+                        # 兜底：拉取期间跨过时段边界（如 11:29:59 进入、11:30:00 执行）
+                        # 时避免调用 tdxpy（否则仍会触发其 DeprecationWarning）。
+                        if not tdx_is_trading_frame():
+                            return None
+
                         def _fetch():
                             assert self.quote_client is not None
                             return self.quote_client.transaction(
@@ -2625,6 +2675,8 @@ class TdxL2Bridge:
                         ]
                         fresh = self.dedupe_ticks(code, normalized)
                         if fresh:
+                            # 增量分笔 → 资金流聚合（主力/大单/中单/小单）
+                            tdx_fund_flow.accumulate_ticks(code, fresh)
                             return {"code": code, "items": fresh}
                         return None
                     except NotImplementedError as error:
@@ -2711,6 +2763,17 @@ class TdxL2Bridge:
             if not pool:
                 await asyncio.sleep(0.2)
                 continue
+
+            # 财务数据（市值/PE/PB 计算原料）后台节流刷新：首次 + 每 finance_refresh_interval_ms。
+            # 用独立 task + to_thread，不阻塞行情轮询；失败仅 debug 日志，不影响行情。
+            if not self._finance_refresh_in_progress and (
+                not self._last_finance_refresh_ts
+                or now_ms() - self._last_finance_refresh_ts >= self.finance_refresh_interval_ms
+            ):
+                self._finance_refresh_in_progress = True
+                self._last_finance_refresh_ts = now_ms()
+                finance_codes = list(pool)
+                asyncio.get_running_loop().create_task(self._refresh_finance_background(finance_codes))
 
             cycle_started_dt = datetime.now().astimezone()
             try:
@@ -2803,6 +2866,25 @@ class TdxL2Bridge:
                         }
                     )
 
+                # 跨日重置资金流累计（每日开盘重新累计当日资金流）
+                today = datetime.now().astimezone().strftime("%Y-%m-%d")
+                if today != self._last_fund_flow_date:
+                    tdx_fund_flow.reset()
+                    self._last_fund_flow_date = today
+
+                # 资金流低频广播（累计值变化慢，5s 一次）
+                if now_ms() - self._last_fund_flow_broadcast_ts >= self.fund_flow_broadcast_interval_ms:
+                    fund_flow_items = tdx_fund_flow.snapshot()
+                    if fund_flow_items:
+                        await self.broadcast(
+                            {
+                                "type": "fund_flow_patch",
+                                "serverTs": now_ms(),
+                                "items": fund_flow_items,
+                            }
+                        )
+                    self._last_fund_flow_broadcast_ts = now_ms()
+
                 self.tdx_connected = True
             except Exception as error:
                 logger.exception("poll loop failed: %s", error)
@@ -2818,6 +2900,15 @@ class TdxL2Bridge:
             target_cycle_ms = max(self.config.poll_interval_ms, self.config.target_cycle_interval_ms)
             sleep_ms = max(50, target_cycle_ms - elapsed)
             await asyncio.sleep(sleep_ms / 1000)
+
+    async def _refresh_finance_background(self, codes: list[str]) -> None:
+        """后台刷新财务缓存（市值/PE/PB 计算原料）；失败仅 debug 日志，不影响行情。"""
+        try:
+            await asyncio.to_thread(tdx_fundamental.refresh_finance, codes, self.quote_client)
+        except Exception as error:
+            logger.debug("finance refresh background failed: %s", error)
+        finally:
+            self._finance_refresh_in_progress = False
 
     async def heartbeat_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -2897,7 +2988,8 @@ async def main() -> None:
     _install_accept_error_filter(loop)
     # tdxpy 收盘后调用接口会输出 DeprecationWarning 提示；只是建议性提示，
     # 过滤后避免刷屏 launcher 日志，不影响行情拉取。
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"tdxpy")
+    # 模块顶部已按消息文本注册 ignore（更鲁棒）；此处再按 module+message 双条件注册兜底。
+    warnings.filterwarnings("ignore", message=r"目前不是交易时间段.*", category=DeprecationWarning, module=r"tdxpy")
     logger.info(
         "bridge bootstrap: pid=%s port=%s path=%s log=%s",
         os.getpid(),

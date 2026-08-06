@@ -218,6 +218,53 @@ QMT 可用时，WebSocket 会新增 `money_flow_patch`，资金流标记为 `mon
 
 ---
 
+## 日志与警告
+
+- tdxpy 非交易时段（9:30-11:30、13:00-15:00 之外）的分笔接口本就不可用：`get_transaction_data`
+  会输出 `DeprecationWarning`「目前不是交易时间段, ...」并返回 None。`fetch_ticks` 在
+  源头用与 tdxpy 相同的 `time_frame()` 判断，**非交易时段直接跳过调用**（行为与返回 None
+  等价），避免警告刷屏和无意义请求；交易时段行为不变。另在 `main.py` 启动时按消息文本
+  注册 `ignore` 过滤器作为兜底（不依赖 module 解析）。
+- 被外部进程（如 `DragonBoardLauncher`）重定向输出时，Python stderr 默认按系统区域
+  编码（GBK），而 launcher 按 UTF-8 解码，中文日志/警告会乱码。`main.py` 在 pipe
+  重定向场景下将 stderr 强制改为 UTF-8 对齐；终端直跑保持默认编码不受影响。
+
+## 北交所（920 号段）兼容
+
+`tdx_bj_compat.py` 在 bridge 启动时对 mootdx/tdxpy 做运行时替换（monkeypatch），
+补上两个库未实现的北交所 920 号段行情支持（通达信协议本身支持，实测 920299 可返回
+完整真实行情）：
+
+- `mootdx.get_stock_market`：92 开头识别为北交所（市场 2），不再误映射到沪市；
+- `tdxpy.get_security_type`：市场 2 + 92 开头返回 `BJ_A_STOCK`；
+- `tdxpy SECURITY_COEFFICIENT`：补 `BJ_A_STOCK: [0.01, 0.01]`（价格精度与沪深 A 股一致）；
+- `tdxpy.get_security_quotes`：放开对 `MARKET_BJ` 的拒绝，走底层 cmd 同路径。
+
+范围：只支持 920 新号段（83/87/43 老号段实测服务器端已失效/已转码，不处理）。
+不 fork 依赖、不提交上游 PR；可回退（删除 `tdx_bj_compat.py` 并移除 `main.py` 中的
+`install_bj_compat()` 调用即可），pip 重装/升级不受影响。
+
+---
+
+## 估值与资金流指标
+
+bridge 额外提供（基于 TDX 数据实时计算，非 akshare 口径）：
+
+- **估值指标**（随 `quote_patch`/快照输出）：`turnoverRate`（换手率 %）、
+  `floatMarketCap`/`totalMarketCap`（流通/总市值，元）、`pe`/`pb`。
+  财务基数来自 `get_finance_info`（股本/每股净资产/净利润），30 分钟后台刷新缓存；
+  其中 PE 用通达信 F10 净利润口径估算，以 `peEstimated=true` 标记，与 akshare 的
+  PE-TTM 不一致。
+  口径说明：`floatMarketCap` 为**含限售流通**口径（与腾讯源、通达信默认「流通市值」
+  列一致）；TDX 协议不提供「流通市值Z」（已扣限售股本），该口径需另接数据源。
+- **资金流**（独立 `fund_flow_patch` 消息，约 5 秒一次）：`mainNetAmount/mainNetPct`
+  （主力净额/占比）、`bigNetAmount/bigNetPct`、`midNetAmount/midNetPct`、
+  `smallNetAmount/smallNetPct`，以及 `totalAmount`（当日成交额）。
+  由分笔成交（含买卖方向）按单笔金额分档累计：超大单 ≥100 万、大单 20-100 万、
+  中单 4-20 万、小单 <4 万；主力 = 超大单 + 大单。每日开盘自动重置。
+
+---
+
 ## 当前行为说明
 
 ### 1. 订阅池
