@@ -11,7 +11,7 @@ from backend.analysis.theme.rotation import (
     ThemeRotationResult,
     ThemeRotationStatus,
 )
-from backend.analysis.theme.support import build_theme_support_index
+from backend.analysis.theme.support_index import build_theme_support_index
 from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 
 __all__ = [

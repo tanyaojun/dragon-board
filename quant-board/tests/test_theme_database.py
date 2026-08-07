@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.data.models.theme_database import ThemeBase
 from backend.data.repositories.theme_repository import ThemeRepository
-from backend.data.migrations.theme_service import ThemeMigrationError, ThemeMigrationService
+from backend.data.migrations.theme_migration import ThemeMigrationError, ThemeMigrationService
 
 
 def _theme_session(tmp_path: Path):

@@ -362,7 +362,7 @@ def get_theme_fund_cache() -> ThemeFundCache:
         settings = get_settings()
         # akshare 全市场批量刷新，结果写入 Redis（TTL）供跨进程/跨重启共享，
         # 进程内 last-good 继续作为兜底；Redis 故障自动回退不阻断。
-        from backend.market_proxy.cache import get_hotlist_redis_client
+        from backend.market_proxy.redis_client import get_hotlist_redis_client
 
         _theme_fund_cache = ThemeFundCache(
             get_hotlist_redis_client(settings),

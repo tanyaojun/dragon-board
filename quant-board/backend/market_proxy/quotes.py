@@ -312,7 +312,7 @@ def get_market_quotes_cache() -> MarketQuotesCache:
     global _quotes_cache
     if _quotes_cache is None:
         from backend.core.settings import get_settings
-        from backend.market_proxy.cache import get_hotlist_redis_client
+        from backend.market_proxy.redis_client import get_hotlist_redis_client
 
         settings = get_settings()
         _quotes_cache = MarketQuotesCache(

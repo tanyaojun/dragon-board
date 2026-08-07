@@ -37,7 +37,7 @@ from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
 from backend.optimization.search_space import candidate_count, select_candidates
 from backend.core.utils import json_dumps, json_loads, new_id, read_json_file, stable_hash
-from backend.services._shared import (
+from backend.services.shared import (
     DEFAULT_BACKTEST_STRATEGY_CONFIG,
     trade_defaults_for_strategy,
     BACKTEST_COMPARE_METRICS,

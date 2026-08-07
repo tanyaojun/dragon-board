@@ -53,7 +53,7 @@ from backend.data.backup.supabase_backup import get_backup_client
 from backend.data.models.theme_database import get_theme_db, init_theme_db, theme_status
 from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
 from backend.data.repositories.theme_repository import ThemeRepository
-from backend.data.migrations.theme_service import ThemeMigrationError, ThemeMigrationService
+from backend.data.migrations.theme_migration import ThemeMigrationError, ThemeMigrationService
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
 from backend.services.market.ths_main_monitor_service import close_ths_main_monitor_service

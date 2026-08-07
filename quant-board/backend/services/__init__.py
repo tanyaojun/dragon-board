@@ -11,7 +11,7 @@
 - market: 市场资金领域服务（资金调度/资金流）
 """
 
-from backend.services._shared import (
+from backend.services.shared import (
     BACKTEST_COMPARE_METRICS,
     CROSS_MARKET_ZERO_PRICE_PREFIXES,
     DEFAULT_BACKTEST_STRATEGY_CONFIG,

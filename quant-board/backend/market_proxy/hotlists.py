@@ -381,7 +381,7 @@ def get_hotlist_service() -> HotlistService:
     global _hotlist_service
     if _hotlist_service is None:
         from backend.core.settings import get_settings
-        from backend.market_proxy.cache import get_hotlist_redis_client
+        from backend.market_proxy.redis_client import get_hotlist_redis_client
 
         settings = get_settings()
         _hotlist_service = HotlistService(
