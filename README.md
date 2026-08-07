@@ -230,7 +230,12 @@ npm run build
 
 ### QuantBoard
 
-- `quant-board/backend/**` 是 FastAPI 后端、回测、优化、数据服务和领域核心。
+- `quant-board/backend/**` 是 FastAPI 后端主链，按职责分层：
+  - `analysis/`：分析算法层（纯函数优先）。`ranktrend/` 是 RankTrend golden 引擎；`theme/` 是题材算法（heat/momentum/daily_series/trend/support/rotation）。
+  - `services/`：业务服务编排层（有 I/O）。`backtest_service.py`/`optimization_service.py`/`golden_service.py`/`audit_service.py` 等按服务类型命名；`theme/`、`market/` 子目录承载题材与市场资金领域服务。
+  - `api/`：HTTP 路由层（`*_routes.py`，不含业务逻辑）。
+  - `core/`（回测引擎/交易规则）、`data/`（schema/仓库）、`optimization/`（参数搜索）、`market_proxy/`（外部数据代理）、`snapshot_collector/`（采集调度）、`snapshot_derivation/`（快照派生）。
+- **新增代码归档要求**：算法 → `analysis/`（RankTrend 放 `ranktrend/`、题材放 `theme/`）；服务 → `services/`（按领域归 `theme/`、`market/`）；路由 → `api/`。禁止散落到 `backend/` 根目录，禁止新增巨型服务单文件。
 - `quant-board/frontend/**` 是 QuantBoard 独立前端，默认端口 `5174`。
 - `quant-board/data/**` 是本地研究数据、warehouse、staging、reports，默认不提交运行产物。
 - `quant-board/docs/**` 是 QuantBoard 架构、API、数据库、优化和协作细则的唯一文档区。

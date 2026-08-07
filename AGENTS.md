@@ -115,12 +115,22 @@ QuantBoard `quant-board/` 目录边界：
 ```text
 quant-board/
 ├── backend/                 # Python FastAPI 后端、回测/优化/数据服务主链
-│   ├── analysis/            # RankTrend 等分析算法和特征计算
-│   ├── api/                 # HTTP API 路由和请求响应适配
-│   ├── core/                # 回测、交易规则、组合和领域核心模型
+│   ├── analysis/            # 分析算法层（纯函数优先）
+│   │   ├── ranktrend/       # RankTrend golden 引擎（engine.py）+ 观察/回测辅助
+│   │   └── theme/           # 题材算法：heat/momentum/daily_series/trend/support/rotation
+│   ├── api/                 # HTTP 路由层（*_routes.py，不含业务逻辑）
+│   ├── core/                # 回测引擎、交易规则、组合和领域核心模型
 │   ├── data/                # MongoDB/Supabase schema、仓库和数据访问适配
+│   ├── market_proxy/        # 外部数据代理（akshare/httpx 直连行情/热榜/资金）
+│   ├── operations/          # 运维/批处理操作
 │   ├── optimization/        # 参数搜索、优化 runner、搜索空间和结果管理
-│   ├── services/            # 后端业务服务编排
+│   ├── services/            # 业务服务编排层（有 I/O）
+│   │   ├── backtest_service.py / optimization_service.py / golden_service.py /
+│   │   │   audit_service.py / efficacy.py / checkpoint.py / _shared.py
+│   │   ├── theme/           # 题材领域服务（fund_cache/heat_service/mapping_*）
+│   │   └── market/          # 市场资金领域服务（fund_scheduler/fund_stream）
+│   ├── snapshot_collector/  # 快照采集调度器（独立进程承载，端口 8001）
+│   ├── snapshot_derivation/ # 快照派生/投影
 │   └── tests/               # 后端就近测试或领域测试，按现有结构归类
 ├── config/                  # QuantBoard 独立配置，不与根 src/config 混用
 ├── data/                    # 本地研究数据、warehouse、staging、reports，默认不提交运行产物
@@ -133,6 +143,10 @@ quant-board/
 
 - 回测、优化、参数搜索、交易模拟、报告展示只放在 `quant-board/**`，不要回流到根 `src/services/**`。
 - `backend/**` 是 QuantBoard 主后端；新增 Python 服务应落在现有 `analysis`、`core`、`data`、`optimization`、`services` 分层中。
+- **backend 归档硬约束（2026-08-07 重构后）**：
+  - 算法 → `analysis/`（RankTrend 放 `analysis/ranktrend/`，题材放 `analysis/theme/`）；服务 → `services/`（按领域归 `services/theme/`、`services/market/`）；路由 → `api/`；三者分离。
+  - 禁止把新代码散落到 `backend/` 根目录；禁止新增 `services.py` 这类巨型服务单文件（已拆分到 `services/` 子模块）。
+  - 新增测试就近放置；归档目录调整必须先跑全量 pytest 确认无 import 断裂。
 - `frontend/**` 是 QuantBoard 自己的展示端，不复用根项目 `src/components/**` 作为源码目录。
 - `data/**` 下运行期数据库、warehouse、staging、reports 属于本地状态，遵守 `.gitignore`，不要提交大体积数据产物。
 - `docs/**` 是 QuantBoard 细节唯一文档区；API、数据库、迁移、优化策略变化必须同步这里的专题文档。

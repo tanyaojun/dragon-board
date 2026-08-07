@@ -53,6 +53,38 @@
 - 面向个人开发者，Python 后端概念要解释清楚，尽可能展开相关教学。
 - 不用空泛建议；每次输出都要能指导下一步实现或验收。
 
+## backend 目录归档要求（2026-08-07 重构后）
+
+QuantBoard `backend/` 已完成目录规范化，**新增/修改代码必须按领域归档**：
+
+```text
+backend/
+├── analysis/       # 分析算法层（纯函数优先）
+│   ├── ranktrend/  # RankTrend golden 引擎（engine.py）与观察/回测辅助
+│   └── theme/      # 题材领域算法：heat / momentum / daily_series /
+│                   #   momentum_config / momentum_validation / support / trend / rotation
+├── services/       # 业务服务编排层（有 I/O）
+│   ├── backtest_service.py / optimization_service.py / golden_service.py /
+│   │   audit_service.py / efficacy.py / checkpoint.py / _shared.py
+│   ├── theme/      # 题材领域服务：fund_cache / heat_service / mapping_refresh / mapping_scheduler
+│   └── market/     # 市场资金领域服务：fund_scheduler / fund_stream
+├── api/            # HTTP 路由层（*_routes.py，不含业务逻辑）
+├── core/           # 领域核心：回测引擎、交易规则、组合
+├── data/           # 数据访问层：schema、仓库、repository
+├── optimization/   # 参数搜索与优化
+├── market_proxy/   # 外部数据代理（akshare/httpx）
+├── snapshot_collector/  # 快照采集
+└── snapshot_derivation/ # 快照派生/投影
+```
+
+归档硬约束（违反即视为结构违规）：
+
+1. **算法 → `analysis/`，服务 → `services/`，路由 → `api/`**：三者分离，算法保持纯函数可单测，服务负责 I/O 编排，路由只做适配。
+2. **禁止**把新代码散落到 `backend/` 根目录（历史遗留的 `theme_*.py`、`market_*.py`、`services.py` 已全部归入子目录）。
+3. **禁止**新增巨型服务单文件（如原 2971 行 `services.py`）；服务按类/职责拆分到 `services/` 子模块。
+4. **RankTrend 算法必须放 `backend/analysis/ranktrend/`**（golden 引擎 `engine.py`）；**题材算法必须放 `backend/analysis/theme/`**。
+5. 新增测试就近放置；涉及归档目录调整时，必须先跑全量 pytest 确认无 import 断裂。
+
 ## 硬约束
 
 1. `rankTrend` Python（`backend/analysis/ranktrend/engine.py`）是 golden 生产事实标准，TS 前端只消费其输出。

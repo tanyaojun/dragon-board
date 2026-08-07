@@ -37,6 +37,30 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | [optimization-long-task/findings.md](optimization-long-task/findings.md) | 长测优化研究发现和 checkpoint 分析 |
 | [optimization-long-task/progress.md](optimization-long-task/progress.md) | 长测优化会话进度日志 |
 
+## backend 子目录用途与新增代码归档要求
+
+QuantBoard `backend/` 按职责分层，**新增代码必须按领域归档到对应子目录**，禁止散落到 backend 根目录或放错分层：
+
+| 子目录 | 用途 | 新代码归档要求 |
+| --- | --- | --- |
+| `analysis/` | **分析算法层**：纯函数、无 I/O 副作用优先 | 新算法/因子/特征计算放这里；**RankTrend 相关放 `analysis/ranktrend/`，题材相关放 `analysis/theme/`** |
+| `services/` | **业务服务编排层**：有 I/O、组装算法与数据 | 新服务按领域归入 `services/theme/`、`services/market/`，或按服务类型命名（如 `*_service.py`）；不得新增 `backend/services.py` 这类巨型单文件 |
+| `api/` | **HTTP 路由层**：请求/响应适配，不含业务逻辑 | 新路由按领域命名 `*_routes.py`；禁止把计算/服务逻辑塞进路由 |
+| `core/` | **领域核心模型**：回测引擎、交易规则、组合 | 回测/交易规则只放这里 |
+| `data/` | **数据访问层**：schema、仓库、repository | 数据库读写、模型 schema 放这里 |
+| `optimization/` | **参数搜索与优化**：runner、搜索空间、结果 | 优化逻辑只放这里 |
+| `market_proxy/` | **数据代理**：akshare/httpx 直连外部行情 | 新外部数据源适配放这里 |
+| `snapshot_collector/` | **快照采集**：调度器/采集链 | 采集逻辑放这里；生产采集由独立进程承载 |
+| `snapshot_derivation/` | **快照派生**：投影/派生字段 | 帧级派生投影放这里 |
+
+归档硬约束：
+
+- **禁止**把新算法放到 `backend/` 根目录（如 `theme_*.py`、`market_*.py` 单文件已全部归入 `services/` 与 `analysis/`）。
+- **禁止**新增 `backend/services.py` 这类巨型服务单文件；服务按类/职责拆分到 `services/` 子模块。
+- 分析算法（`analysis/`）与服务编排（`services/`）分离：算法保持纯函数、可单测；服务负责 I/O 与编排。
+- 新增路由放 `api/`，不得把 HTTP 逻辑写进 `analysis/` 或 `services/`。
+- 新增测试就近放置：`analysis/`、`services/` 对应 `backend/tests/` 或 `tests/` 下同名测试文件。
+
 ## 推荐实现顺序
 
 1. 数据导入：从 MongoDB 正式快照事实集合生成 QuantBoard 研究数据集；历史 SQLite/JSON 只作为迁移辅助。
@@ -52,39 +76,36 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 ```text
 quant-board/
   backend/
-    main.py
-    settings.py
-    cli.py
-    services.py
-    data/
-      database.py
-      models.py
-      repository.py
-      repository_factory.py
-      quality_gate.py
-      bar_repair.py          # 缺 bar 补齐工具
-    api/
-      journal_routes.py       # 候选池 trade_journal API
-    core/
-      backtest/
-        engine.py
-        evaluator.py
-        metrics.py
-        strategy.py
-    analysis/
-      ranktrend/
-    optimization/
-  config/
-  data/
-    reports/
-      long_test_runs.jsonl    # 长测 checkpoint 记录
-  docs/
-    optimization-long-task/   # 长测优化计划和发现
-    superpowers/plans/        # 实施计划文档
-  frontend/
-  tests/
-    test_quant_board.py
-    test_money_flow_quality_gate.py
+    main.py                     # FastAPI 入口与路由装配
+    settings.py                 # 配置（MongoDB/存储/缓存等）
+    cli.py                      # CLI 入口
+    collector_main.py           # 快照采集独立进程（端口 8001）
+    analysis/                   # 分析算法（纯函数优先）
+      ranktrend/                # RankTrend golden 引擎（engine.py）+ 观察/回测辅助
+      theme/                    # 题材领域算法（heat/momentum/daily_series/trend/support/rotation）
+    api/                        # FastAPI 路由（ranktrend/theme_*/market_*/journal 等）
+    core/                       # 回测引擎、交易规则、组合与领域核心模型
+    data/                       # MongoDB/Supabase schema、仓库与数据访问适配
+    market_proxy/               # akshare + httpx 数据代理（指数/行情/热榜/情绪/大单）
+    operations/                 # 运维/批处理操作
+    optimization/               # 参数搜索、优化 runner、搜索空间与结果管理
+    services/                   # 业务服务编排
+      backtest_service.py       # BacktestService（回测/研究报告）
+      optimization_service.py   # OptimizationService（参数优化）
+      golden_service.py         # GoldenService（golden case）
+      audit_service.py          # RankTrendLiveGateAuditService（live 门禁审计）
+      efficacy.py               # 信号功效/对齐计算
+      checkpoint.py             # 长测 checkpoint 分析
+      _shared.py                # 共享常量与辅助
+      theme/                    # 题材领域服务（fund_cache/heat_service/mapping_*）
+      market/                   # 市场资金领域服务（fund_scheduler/fund_stream）
+    snapshot_collector/         # 快照采集调度器（独立进程承载）
+    snapshot_derivation/        # 快照派生/投影（rotationSummary 等）
+  config/                       # QuantBoard 独立配置
+  data/                         # 本地研究数据、warehouse、staging、reports（不提交）
+  docs/                         # 架构/API/数据库/优化/协作唯一文档区
+  frontend/                     # QuantBoard 独立前端（默认 5174）
+  tests/                        # 跨模块/集成测试（backend/tests 为就近测试）
   requirements.txt
 ```
 
