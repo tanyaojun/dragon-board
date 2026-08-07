@@ -191,7 +191,7 @@ async def _catchup_missing_slots(settings: Any) -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    from backend.market_fund_scheduler import market_fund_scheduler
+    from backend.services.market.fund_scheduler import market_fund_scheduler
     from backend.market_proxy.hotlists import (
         close_hotlist_client,
         start_hotlist_refresh,
@@ -390,7 +390,7 @@ def _background_task_status() -> dict[str, Any]:
     except Exception as exc:
         result["quotes"] = {"ok": False, "error": str(exc)[:200]}
     try:
-        from backend.market_fund_scheduler import market_fund_scheduler
+        from backend.services.market.fund_scheduler import market_fund_scheduler
 
         fund = market_fund_scheduler.status()
         result["fund"] = fund if isinstance(fund, dict) else {"ok": True}

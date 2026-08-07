@@ -54,10 +54,10 @@ from backend.data.theme_database import get_theme_db, init_theme_db, theme_statu
 from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
-from backend.theme_mapping_refresh import refresh_theme_stock_mappings
-from backend.theme_mapping_scheduler import theme_mapping_refresh_scheduler
+from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
+from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
 from backend.ths_main_monitor_service import close_ths_main_monitor_service
-from backend.market_fund_scheduler import market_fund_scheduler
+from backend.services.market.fund_scheduler import market_fund_scheduler
 from backend.operations.schedule import run_after_market_once
 from backend.services import (
     BacktestService,

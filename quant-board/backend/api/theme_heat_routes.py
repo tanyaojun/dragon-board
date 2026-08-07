@@ -5,11 +5,11 @@ from typing import Any
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 
-from backend.theme_heat_service import (
+from backend.services.theme.heat_service import (
     ThemeHeatUnavailable,
     get_theme_heat_service as create_theme_heat_service,
 )
-from backend.theme_fund_cache import get_theme_fund_cache
+from backend.services.theme.fund_cache import get_theme_fund_cache
 
 
 router = APIRouter(prefix="/api/themes")

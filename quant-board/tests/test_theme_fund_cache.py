@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from backend.theme_fund_cache import ThemeFundCache
+from backend.services.theme.fund_cache import ThemeFundCache
 
 
 class FakePipeline:

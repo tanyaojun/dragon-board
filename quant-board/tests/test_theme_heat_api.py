@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 import backend.api.theme_heat_routes as theme_heat_routes
 from backend.main import app
-from backend.theme_heat_service import ThemeHeatUnavailable
+from backend.services.theme.heat_service import ThemeHeatUnavailable
 
 
 class FakeThemeHeatService:
@@ -58,7 +58,7 @@ def test_theme_heat_summary_excludes_full_quote_maps(monkeypatch) -> None:
 
 
 def test_theme_heat_factors_enriched_with_rotation_state(monkeypatch) -> None:
-    from backend.theme_heat_service import ThemeHeatService
+    from backend.services.theme.heat_service import ThemeHeatService
 
     service = ThemeHeatService.__new__(ThemeHeatService)
     monkeypatch.setattr(

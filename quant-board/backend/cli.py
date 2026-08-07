@@ -41,7 +41,7 @@ from backend.data.storage_inspector import inspect_storage
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import ThemeSessionLocal, init_theme_db
 from backend.data.theme_service import ThemeMigrationService
-from backend.theme_mapping_refresh import refresh_theme_stock_mappings
+from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.analysis.ranktrend.live_gate_shadow_audit import load_hotlist_anchor_samples
 from backend.operations.schedule import run_after_market_once
 from backend.operations.snapshot_field_backfill import SnapshotFieldBackfillService

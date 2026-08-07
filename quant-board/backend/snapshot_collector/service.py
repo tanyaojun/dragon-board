@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.settings import get_settings as _get_settings
-from backend.theme_heat_service import ThemeHeatUnavailable
+from backend.services.theme.heat_service import ThemeHeatUnavailable
 
 from . import builder as builder_module
 from . import providers as providers_module
@@ -781,7 +781,7 @@ class SnapshotCollectorService:
 
     @staticmethod
     def _create_market_fund_cache() -> Any:
-        from backend.theme_fund_cache import get_theme_fund_cache
+        from backend.services.theme.fund_cache import get_theme_fund_cache
 
         return get_theme_fund_cache()
 
