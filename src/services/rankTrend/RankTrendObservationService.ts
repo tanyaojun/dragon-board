@@ -5,7 +5,7 @@ import { cacheManager } from '../LRUCache'
 import { snapshotFacade } from '../snapshot/facade'
 import type { RankTrendAnalysisResult } from './types'
 
-export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle' | 'theme'
+export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle'
 
 export type RankTrendObservationIssue = {
   code: string
@@ -42,7 +42,6 @@ export const OBSERVATION_WINDOW_BARS = {
   resonance: 9,
   technical: 22,
   lifecycle: 15,
-  theme: 15, // 题材动量：日线口径，观察窗口按帧数对齐 lifecycle
 } as const
 
 export const MAX_OBSERVATION_WINDOW_BARS = Math.max(...Object.values(OBSERVATION_WINDOW_BARS))
@@ -366,15 +365,6 @@ class RankTrendObservationService {
 
       if (isCurrent) {
         analysis = currentAnalysis ?? null
-        if (analysis?.themeMomentum?.status === 'insufficient') {
-          issues.push(
-            observationIssue(
-              'theme_momentum_insufficient',
-              `题材动量数据不足: ${(analysis.themeMomentum.reasons || []).join('、')}`,
-              { frameKey: key, track: 'theme' },
-            ),
-          )
-        }
       } else {
         const percentiles = series.percentiles.slice(0, index + 1)
         const remoteAnalysis = remoteMeta?.analysis

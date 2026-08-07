@@ -13,17 +13,17 @@ describe('RankTrendObservationPanel theme momentum track', () => {
     'utf8',
   )
 
-  it('adds theme as the fourth track with index 04', () => {
-    expect(panel).toContain("{ id: 'theme', index: '04', label: '题材动量' }")
+  it('removes theme as the fourth track with index 04', () => {
+    expect(panel).not.toContain("{ id: 'theme', index: '04', label: '题材动量' }")
   })
 
-  it('adds theme window to OBSERVATION_WINDOW_BARS', () => {
-    expect(service).toContain('theme: 15')
+  it('removes theme window from OBSERVATION_WINDOW_BARS', () => {
+    expect(service).not.toContain('theme: 15')
   })
 
-  it('renders analysis.themeMomentum with score/direction/phaseLabel', () => {
-    expect(panel).toContain('selectedAnalysis?.themeMomentum')
-    expect(panel).toContain('phaseLabel')
+  it('does not render analysis.themeMomentum in observation panel', () => {
+    expect(panel).not.toContain('selectedAnalysis?.themeMomentum')
+    expect(panel).not.toContain('themeMomentum')
   })
 
   it('does not read resonance.theme for theme momentum anymore', () => {

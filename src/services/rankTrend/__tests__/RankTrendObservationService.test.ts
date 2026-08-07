@@ -847,53 +847,6 @@ describe('RankTrendObservationService', () => {
     })
   })
 
-  it('当前帧题材动量数据不足时按题材轨给出结构化原因', async () => {
-    const frameKeys = ['2026-07-28 14:30', '2026-07-28 15:00']
-    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({
-      ranks: [28, 19],
-      percentiles: [42, 67],
-      frameKeys,
-    })
-    vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisFrameKeys').mockReturnValue(frameKeys)
-    vi.spyOn(snapshotFacade, 'listSnapshotStockRows').mockResolvedValue([])
-    mockRemoteFrames(
-      frameKeys.slice(0, -1),
-      () => ({
-        meta: { code: '002279' },
-        jump: { event: 'none', direction: 'hold', confidence: 50, events: [] },
-      }),
-      () => ({ marketMedianShortChange: 0, marketSampleCount: 4 }),
-    )
-    const currentAnalysis = {
-      meta: { code: '002279' },
-      resonance: {
-        status: 'ok',
-        direction: 'buy',
-        score: 70,
-        label: '强',
-        marketMedianShortChange: 1.5,
-        marketSampleCount: 25,
-      },
-      // D2 解耦：题材动量独立为 themeMomentum（第4轨）
-      themeMomentum: {
-        status: 'insufficient',
-        reasons: ['theme_cross_section_insufficient'],
-      },
-    }
-
-    const result = await rankTrendObservationService.load({
-      code: '002279',
-      name: '久其软件',
-      rankTrend: currentAnalysis as any,
-    })
-
-    const currentFrame = result.frames.at(-1)
-    expect(currentFrame?.issues).toContainEqual(expect.objectContaining({
-      code: 'theme_momentum_insufficient',
-      track: 'theme',
-    }))
-  })
-
   describe('in-flight 合并与取消', () => {
     function mockSeries() {
       vi.spyOn(rankTrendAnalyzer, 'getLatestAnalysisSeries').mockReturnValue({

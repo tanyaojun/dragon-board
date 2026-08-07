@@ -80,16 +80,20 @@ describe('RankTrendObservationPanel', () => {
     expect(panel).toContain("source === 'cache'")
   })
 
-  it('theme track renders analysis.themeMomentum as the fourth observation track', () => {
+  it('theme momentum track was removed from observation panel (panel only)', () => {
     const panel = source()
 
-    expect(panel).toContain("{ id: 'theme', index: '04', label: '题材动量' }")
-    expect(panel).toContain("activeTrack === 'theme'")
-    expect(panel).toContain('TRACK 04')
-    expect(panel).toContain('selectedAnalysis?.themeMomentum?.score')
-    expect(panel).toContain('momentumDirectionClass')
-    expect(panel).toContain('momentumDirectionText')
-    // 旧 resonance 轨内嵌题材行已移除（D2 解耦）
+    // 观察面板仅保留三轨（共振/技术/生命周期），题材动量不再作为第4轨页签
+    expect(panel).toContain("{ id: 'resonance', index: '01', label: '共振路径' }")
+    expect(panel).toContain("{ id: 'technical', index: '02', label: '技术结构' }")
+    expect(panel).toContain("{ id: 'lifecycle', index: '03', label: '阶段与风险' }")
+    expect(panel).not.toContain("{ id: 'theme', index: '04', label: '题材动量' }")
+    expect(panel).not.toContain("activeTrack === 'theme'")
+    expect(panel).not.toContain('TRACK 04')
+    expect(panel).not.toContain('selectedAnalysis?.themeMomentum?.score')
+    expect(panel).not.toContain('momentumDirectionClass')
+    expect(panel).not.toContain('momentumDirectionText')
+    // 旧 resonance 轨内嵌题材行仍不可恢复（D2 解耦）
     expect(panel).not.toContain("label: '题材生命周期'")
     expect(panel).not.toContain('resonance?.theme?.themeMomentumScore')
     expect(panel).not.toContain('themeRoleLabel')
@@ -119,17 +123,19 @@ describe('RankTrendObservationPanel theme momentum track', () => {
   const dataTable = () =>
     readFileSync(join(process.cwd(), 'src', 'components', 'common', 'DataTable.vue'), 'utf8')
 
-  it('adds theme as the fourth track with index 04', () => {
-    expect(panel()).toContain("{ id: 'theme', index: '04', label: '题材动量' }")
+  it('removes theme as fourth track (panel keeps 3 tracks)', () => {
+    expect(panel()).not.toContain("{ id: 'theme', index: '04', label: '题材动量' }")
+    expect(panel()).toContain("{ id: 'lifecycle', index: '03', label: '阶段与风险' }")
   })
 
-  it('adds theme window to OBSERVATION_WINDOW_BARS', () => {
-    expect(service()).toContain('theme: 15')
+  it('removes theme window from OBSERVATION_WINDOW_BARS', () => {
+    expect(service()).not.toContain('theme: 15')
+    expect(service()).toContain('lifecycle: 15')
   })
 
-  it('renders analysis.themeMomentum with score/direction/phaseLabel', () => {
-    expect(panel()).toContain('selectedAnalysis?.themeMomentum')
-    expect(panel()).toContain('phaseLabel')
+  it('does not render analysis.themeMomentum in observation panel', () => {
+    expect(panel()).not.toContain('selectedAnalysis?.themeMomentum')
+    expect(panel()).not.toContain('themeMomentum')
   })
 
   it('does not read resonance.theme for theme momentum anymore', () => {
