@@ -95,7 +95,7 @@
             <!-- 共振强度列 -->
             <template v-else-if="col.key === 'resonanceIntensity'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'resonance')"
-                @mouseenter="showConfidenceTooltip($event, stock)" @mousemove="moveConfidenceTooltip($event)"
+                @mouseenter="showConfidenceTooltip($event, stock, 'resonanceIntensity')" @mousemove="moveConfidenceTooltip($event)"
                 @mouseleave="hideConfidenceTooltip">
                 <span v-if="getResonanceCellValue(stock) != null" :class="getResonanceCellClass(stock)">
                   {{ getDirectionArrow(getResonanceDirection(stock)) }}{{ getResonanceCellValue(stock) }}%
@@ -104,9 +104,20 @@
               </div>
             </template>
 
+            <template v-else-if="col.key === 'themeMomentum'">
+              <div class="observation-cell" @click.stop="openThemeMomentumPanel(stock)"
+                @mouseenter="showConfidenceTooltip($event, stock, 'themeMomentum')" @mousemove="moveConfidenceTooltip($event)"
+                @mouseleave="hideConfidenceTooltip">
+                <span v-if="getThemeMomentumCellValue(stock) != null" :class="getThemeMomentumCellClass(stock)">
+                  {{ getThemeMomentumArrow(stock) }}{{ getThemeMomentumCellValue(stock) }}
+                </span>
+                <span v-else class="trend-steady">--</span>
+              </div>
+            </template>
+
             <template v-else-if="col.key === 'rankTrendStrength'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
-                @mouseenter="showConfidenceTooltip($event, stock)" @mousemove="moveConfidenceTooltip($event)"
+                @mouseenter="showConfidenceTooltip($event, stock, 'rankTrendStrength')" @mousemove="moveConfidenceTooltip($event)"
                 @mouseleave="hideConfidenceTooltip">
                 <span v-if="getRankTrendStrengthValue(stock) != null"
                   :class="getDirectionClass(getRankTrendDirection(stock))">
@@ -118,7 +129,7 @@
 
             <template v-else-if="col.key === 'lifecycleOpportunity'">
               <div class="observation-cell lifecycle-cell" @click.stop="openObservationPanel(stock, 'lifecycle')"
-                @mouseenter="showConfidenceTooltip($event, stock)" @mousemove="moveConfidenceTooltip($event)"
+                @mouseenter="showConfidenceTooltip($event, stock, 'lifecycleOpportunity')" @mousemove="moveConfidenceTooltip($event)"
                 @mouseleave="hideConfidenceTooltip">
                 <span v-if="getLifecycleOpportunityValue(stock) != null" :class="getLifecycleClass(stock)">
                   {{ getLifecycleStageLabel(stock) }} {{ getLifecycleOpportunityValue(stock) }}%
@@ -222,6 +233,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'select', code: string): void
+  (e: 'open-theme-momentum'): void
 }>()
 
 // ========== Stores ==========
@@ -315,6 +327,7 @@ const columns = [
   { key: 'avgRank', label: '均榜', group: 'comprehensive', always: true },
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'resonanceIntensity', label: '共振强度', group: 'comprehensive', always: true },
+  { key: 'themeMomentum', label: '题材动量', group: 'comprehensive', always: true },
   { key: 'rankTrendStrength', label: '排名趋势', group: 'comprehensive', always: true },
   { key: 'lifecycleOpportunity', label: '生命周期', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
@@ -346,6 +359,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   avgRank: '50px',
   compRank: '50px',
   resonanceIntensity: '60px',
+  themeMomentum: '70px',
   rankTrendStrength: '60px',
   lifecycleOpportunity: '76px',
   zlje: '90px',
@@ -872,13 +886,118 @@ const getConfidenceTitle = (stock: any) => {
   return title
 }
 
-const showConfidenceTooltip = (event: MouseEvent, stock: any) => {
+// 四列按字段拆分 tooltip：共振强度 / 排名趋势 / 生命周期 / 题材动量
+const getFieldTooltip = (field: string, stock: any): string => {
+  const rankTrend = getRankTrendAnalysis(stock)
+  const finalSignal = getFinalSignal(stock)
+  const hasFinalSignal = Boolean(finalSignal && finalSignal !== 'none')
+  if (!rankTrend && !hasFinalSignal) return '暂无信号'
+
+  const header = `📌 ${stock.name || '-'} (${stock.code || '-'})\n`
+
+  if (field === 'themeMomentum') {
+    const tm = getThemeMomentumTooltip(stock)
+    return header + tm
+  }
+
+  // —— 共振强度 ——
+  if (field === 'resonanceIntensity') {
+    const resonance = rankTrend?.resonance
+    const resonanceScore = getResonanceCellValue(stock)
+    const resonanceDirection = getResonanceDirection(stock)
+    let title = header
+    title += '\n【共振】\n'
+    title += resonanceDirection
+      ? `共振方向: ${getSignalDisplayText(resonanceDirection, '无')}\n`
+      : '共振方向: 暂无信号\n'
+    title += resonanceScore == null
+      ? '共振强度: --\n'
+      : `共振强度: ${resonanceScore}%（${resonance?.label || '未评级'}）\n`
+    if (resonance) {
+      title += resonance.historyState === 'new_entry'
+        ? '路径状态: 新入榜，待持续确认\n'
+        : '路径状态: 已建立\n'
+      if (resonance.status === 'insufficient') {
+        title += `样本状态: ${resonance.reasons.join('、')}\n`
+      } else {
+        const relativeMomentum = resonance.relativeMomentum * 100
+        const acceleration = resonance.acceleration * 100
+        const jumpConfidence = getJumpConfidence(stock)
+        const jumpDir = getJumpDirection(stock)
+        const jumpDirLabel = jumpDir === 'buy' ? '买入' : jumpDir === 'sell' ? '卖出' : jumpDir === 'hold' ? '观望' : '—'
+        title += `相对市场: ${getResonanceMomentumText(relativeMomentum)} (${formatTooltipNumber(relativeMomentum, 0)})\n`
+        title += `速度变化: ${getResonanceAccelerationText(relativeMomentum, acceleration)} (${formatTooltipNumber(acceleration, 0)})\n`
+        title += `路径持续性: ${formatTooltipNumber(resonance.persistence * 100, 0)}%\n`
+        title += `Jump事件: ${jumpDirLabel} ${formatTooltipNumber(jumpConfidence, 1)}% · 新鲜度 ${formatTooltipNumber(resonance.jumpFreshness * 100, 0)}%\n`
+        title += `反转惩罚: ${formatTooltipNumber(resonance.reversalPenalty * 100, 0)}%\n`
+        title += `市场中位数（同帧共享）: ${formatTooltipNumber(resonance.marketMedianShortChange, 1)}\n`
+      }
+    }
+    return title
+  }
+
+  // —— 排名趋势 ——
+  if (field === 'rankTrendStrength') {
+    const rankTrendScore = getRankTrendStrengthValue(stock)
+    let title = header
+    title += '\n【排名趋势】\n'
+    title += rankTrendScore == null
+      ? '排名趋势: --\n'
+      : `排名趋势: ${getDirectionArrow(getRankTrendDirection(stock))}${rankTrendScore}%\n`
+    if (rankTrend) {
+      const rankChange = getRankChange(stock)
+      if (rankChange !== 0) {
+        const change = Math.abs(rankChange)
+        title += `排名变化: ${rankChange > 0 ? '↑' : '↓'}${change}%\n`
+      }
+      const directionText = getSignalDisplayText(getDirectionSignal(stock), '无')
+      const accelerationText = getSignalDisplayText(getAccelerationSignal(stock), '无')
+      const crossText = getSignalDisplayText(getZeroCrossSignal(stock), '无')
+      title += `方向一致性: ${directionText} (${formatTooltipNumber(getDirectionConfidence(stock), 2)}%)\n`
+      title += `多周期加速度: ${accelerationText} (${formatTooltipNumber(getAccelerationConfidence(stock), 2)}%)\n`
+      title += `零线交叉: ${crossText} (${formatTooltipNumber(getZeroCrossConfidence(stock), 2)}%)\n`
+      const macdCross = getMacdCross(stock)
+      title += `MACD: ${getMacdDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
+      const macdDif = getMacdDif(stock)
+      if (macdDif !== undefined) {
+        title += `MACD值: DIF=${macdDif.toFixed(2)}  DEA=${getMacdDea(stock)?.toFixed(2)}  柱=${getMacdHistogram(stock)?.toFixed(2)}\n`
+      }
+    }
+    return title
+  }
+
+  // —— 生命周期 ——
+  if (field === 'lifecycleOpportunity') {
+    const lifecycleScore = getLifecycleOpportunityValue(stock)
+    let title = header
+    title += '\n【生命周期】\n'
+    title += lifecycleScore == null
+      ? '生命周期: --\n'
+      : `生命周期: ${getLifecycleStageLabel(stock)} ${lifecycleScore}%\n`
+    if (rankTrend) {
+      const attentionStage = getAttentionStage(stock)
+      if (attentionStage) {
+        title += `注意力阶段: ${getAttentionStageDisplayText(attentionStage)}\n`
+      }
+      const overheatScore = Math.round(getOverheatRiskScore(stock) || 0)
+      const divergenceScore = Math.round(getDivergenceScore(stock) || 0)
+      title += `过热风险: ${getRiskLevel(overheatScore, 45, 70)} (${overheatScore} / 100)\n`
+      title += `资金背离风险: ${getRiskLevel(divergenceScore, 40, 65)} (${divergenceScore} / 100)\n`
+    }
+    return title
+  }
+
+  // 兜底：完整置信度
+  return getConfidenceTitle(stock)
+}
+
+const showConfidenceTooltip = (event: MouseEvent, stock: any, field = '') => {
   hideRowTooltip()
   confidenceTooltip.value = {
     visible: true,
     x: event.clientX + 16,
     y: event.clientY + 16,
-    content: getConfidenceTitle(stock),
+    content: field ? getFieldTooltip(field, stock) : getConfidenceTitle(stock),
   }
 }
 
@@ -1071,6 +1190,58 @@ function getResonanceCellValue(stock: any): number | null {
 
 function getResonanceCellClass(stock: any): string {
   return getDirectionClass(getResonanceDirection(stock))
+}
+
+// ========== 题材动量列（第4轨独立维度，完全解耦共振）==========
+const getThemeMomentum = (stock: any) => getRankTrendAnalysis(stock)?.analysis?.themeMomentum
+
+function getThemeMomentumRawScore(stock: any): number | null {
+  if (stock._tmScore !== undefined) return stock._tmScore
+  const tm = getThemeMomentum(stock)
+  return tm?.status === 'ok' ? toFiniteObservationValue(tm.score) : null
+}
+
+function getThemeMomentumCellValue(stock: any): number | null {
+  return getThemeMomentumRawScore(stock)
+}
+
+const getThemeMomentumDirection = (stock: any) => {
+  const tm = getThemeMomentum(stock)
+  return tm?.status === 'ok' ? (tm.direction ?? 'neutral') : null
+}
+
+// 题材方向 up/down/neutral → 复用观察类 buy/sell 语义（↑红涨 / ↓绿跌）
+const getThemeMomentumCellClass = (stock: any): string => {
+  const dir = getThemeMomentumDirection(stock)
+  return dir === 'up' ? 'observation-buy' : dir === 'down' ? 'observation-sell' : 'observation-hold'
+}
+
+const getThemeMomentumArrow = (stock: any): string => {
+  const dir = getThemeMomentumDirection(stock)
+  return dir === 'up' ? '↑' : dir === 'down' ? '↓' : '—'
+}
+
+function getThemeMomentumTooltip(stock: any): string {
+  const tm = getThemeMomentum(stock)
+  if (tm?.status !== 'ok') {
+    return `题材动量: --\n${(tm?.reasons ?? ['暂无题材动量信号']).join('、')}`
+  }
+  const themeName = tm.themeName ?? '未知题材'
+  const role = tm.role ?? '跟随'
+  const phase = tm.phaseLabel ?? ''
+  let title = `题材动量: ${tm.score}${phase ? `（${phase}）` : ''}\n`
+  title += `所属题材: ${themeName}\n`
+  title += `个股角色: ${role}\n`
+  if (tm.reasons?.length) title += `说明: ${tm.reasons.join('、')}\n`
+  title += '点击打开题材动量面板'
+  return title
+}
+
+const openThemeMomentumPanel = (stock: any) => {
+  if (stock?._themeMomentumPanelTarget) {
+    // 兼容：可携带触发源位置（App.vue 监听后设置 rect）
+  }
+  emit('open-theme-momentum')
 }
 
 const getMacdCross = (stock: any) =>

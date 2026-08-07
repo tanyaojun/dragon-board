@@ -149,7 +149,7 @@
 
     <!-- 主要内容区 -->
     <main class="main-content">
-      <DataTable @select="handleSelectStock" />
+      <DataTable @select="handleSelectStock" @open-theme-momentum="openThemeMomentumFromTable" />
     </main>
 
     <!-- Toast 提示 -->
@@ -405,6 +405,11 @@ const openPanelFromShortcut = (panelName: keyof typeof panels.value, triggerRef?
   panels.value[panelName] = true
 }
 
+// 行情列表【题材动量】字段点击 → 打开题材动量面板（第4轨独立维度主视图）
+const openThemeMomentumFromTable = () => {
+  panels.value.themeMomentum = true
+}
+
 const openExportPanel = (event?: MouseEvent) => {
   if (event?.currentTarget) {
     panelRects.value.export = (event.currentTarget as HTMLElement).getBoundingClientRect()
@@ -487,16 +492,12 @@ const handleTabChange = (tabId: string) => {
   const panelMap: Record<string, keyof typeof panels.value> = {
     dragon: 'dragon',
     emotion: 'breath',
-    sector: 'sector',
+    sector: 'themeMomentum',
     events: 'eventMonitor',
     algorithm: 'algorithm',
   }
   if (panelMap[tabId]) {
     panels.value[panelMap[tabId]] = true
-  }
-  // 题材热点 tab：同时打开题材动量独立面板（v2 独立第四维视图）
-  if (tabId === 'sector') {
-    panels.value.themeMomentum = true
   }
 }
 

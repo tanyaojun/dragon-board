@@ -34,7 +34,14 @@ describe('ThemeMomentumPanel', () => {
   })
 
   it('opens theme momentum panel when sector tab selected', () => {
-    expect(app).toContain("if (tabId === 'sector')")
+    // 题材热点 tab → panelMap 映射到 themeMomentum（不再同开旧 SectorPanel）
+    expect(app).toContain("sector: 'themeMomentum'")
+    expect(app).toContain('panels.value[panelMap[tabId]] = true')
+  })
+
+  it('opens theme momentum panel from market table field click', () => {
+    expect(app).toContain('@open-theme-momentum="openThemeMomentumFromTable"')
+    expect(app).toContain('const openThemeMomentumFromTable = () => {')
     expect(app).toContain('panels.value.themeMomentum = true')
   })
 

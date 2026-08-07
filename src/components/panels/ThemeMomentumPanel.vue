@@ -130,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 import { usePanel } from '@/composables/usePanel'
 import {
@@ -231,6 +231,14 @@ function fmtNum(value?: number | null): string {
 onMounted(() => {
   if (props.visible) loadData()
 })
+
+// 面板常驻挂载（Teleport 到 body），visible 变化时按需加载/刷新
+watch(
+  () => props.visible,
+  (visible) => {
+    if (visible) loadData()
+  },
+)
 
 onUnmounted(() => {
   /* Teleport 面板随 visible 卸载 */

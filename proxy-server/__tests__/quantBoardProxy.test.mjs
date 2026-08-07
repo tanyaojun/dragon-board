@@ -10,6 +10,14 @@ test('theme heat summary and stock detail use QuantBoard proxy prefix', () => {
   assert.equal(shouldProxyToQuantBoard('/api/themes/fund-rows'), true)
 })
 
+test('theme momentum summary proxies to QuantBoard (v2 4th dimension)', () => {
+  assert.equal(shouldProxyToQuantBoard('/api/theme-momentum/summary'), true)
+  assert.equal(
+    shouldProxyToQuantBoard('/api/theme-momentum/summary?dataset_id=dragonboard_live&snapshot_type=half_hour'),
+    true,
+  )
+})
+
 
 test('deprecated theme batch route is not captured by QuantBoard proxy', () => {
   assert.equal(shouldProxyToQuantBoard('/api/themes/batch'), false)

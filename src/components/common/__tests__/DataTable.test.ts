@@ -118,7 +118,7 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain("col.key === 'resonanceIntensity'")
     expect(source).toContain('getResonanceCellValue')
     expect(source).toContain('getResonanceCellClass')
-    expect(source).toContain('@mouseenter="showConfidenceTooltip($event, stock)"')
+    expect(source).toContain('@mouseenter="showConfidenceTooltip($event, stock, \'resonanceIntensity\')"')
     expect(source).toContain('rankTrend?.resonance')
     expect(source).toContain('相对市场')
     expect(source).toContain('路径持续性')
@@ -153,6 +153,35 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
+  })
+
+  test('splits observation tooltips per field (D: resonance/rankTrend/lifecycle/themeMomentum)', () => {
+    const source = dataTableSource()
+
+    // 分派入口：showConfidenceTooltip 接收第三参数 field
+    expect(source).toContain('const showConfidenceTooltip = (event: MouseEvent, stock: any, field = \'\')')
+    expect(source).toContain('const getFieldTooltip = (field: string, stock: any): string => {')
+
+    // 四列分别传自己的 field，不共用同一份内容
+    expect(source).toContain("showConfidenceTooltip($event, stock, 'resonanceIntensity')")
+    expect(source).toContain("showConfidenceTooltip($event, stock, 'rankTrendStrength')")
+    expect(source).toContain("showConfidenceTooltip($event, stock, 'lifecycleOpportunity')")
+    expect(source).toContain("showConfidenceTooltip($event, stock, 'themeMomentum')")
+
+    // 共振分支只含共振专属内容
+    expect(source).toContain("if (field === 'resonanceIntensity') {")
+    expect(source).toContain('【共振】')
+    // 排名趋势分支
+    expect(source).toContain("if (field === 'rankTrendStrength') {")
+    expect(source).toContain('【排名趋势】')
+    // 生命周期分支
+    expect(source).toContain("if (field === 'lifecycleOpportunity') {")
+    expect(source).toContain('【生命周期】')
+    // 题材动量复用独立 tooltip
+    expect(source).toContain("if (field === 'themeMomentum') {")
+    expect(source).toContain('getThemeMomentumTooltip')
+    // 兜底：无 field 时仍是完整置信度
+    expect(source).toContain('content: field ? getFieldTooltip(field, stock) : getConfidenceTitle(stock)')
   })
 
   test('structures the confidence tooltip as conclusion, resonance, technical, and risk layers', () => {
