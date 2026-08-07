@@ -194,6 +194,7 @@ export interface ThemeMomentumSummaryFactor {
   breadth?: number | null
   flowVolume?: number | null
   crowdingPenalty?: number
+  ztCount?: number
   intraday?: { shortChange?: number; ztDelta?: number; inflowDelta?: number; unavailable?: boolean }
   reasons?: string[]
 }

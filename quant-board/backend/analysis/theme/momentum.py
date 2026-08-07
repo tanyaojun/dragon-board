@@ -676,6 +676,7 @@ def compute_theme_momentum_v2(
                 "breadth": round(breadth, 1) if breadth is not None else None,
                 "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
                 "crowdingPenalty": 0.0,
+                "ztCount": int(series.zt_counts[-1]) if series.zt_counts else 0,
                 "intraday": (
                     _intraday_state(
                         (getattr(series, "latest_slots", []) or [None])[-1],
@@ -738,6 +739,7 @@ def compute_theme_momentum_v2(
             "breadth": round(breadth, 1) if breadth is not None else None,
             "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
             "crowdingPenalty": round(base - score, 1),
+            "ztCount": int(series.zt_counts[-1]) if series.zt_counts else 0,
             "intraday": intraday,
             "reasons": reasons,
         }

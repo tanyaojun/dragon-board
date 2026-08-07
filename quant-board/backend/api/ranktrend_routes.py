@@ -226,8 +226,19 @@ def _compute_theme_momentum_v2_context(frames: list[dict[str, Any]]) -> dict[str
             theme.setdefault("tradingDate", frame.get("tradingDate"))
             theme.setdefault("slotTime", frame.get("slotTime"))
             sector_rows.append(theme)
-    daily = build_daily_series(sector_rows, [])
-    result = compute_theme_momentum_v2(list(daily.values()))
+    try:
+        daily = build_daily_series(sector_rows, [])
+        result = compute_theme_momentum_v2(list(daily.values()))
+    except Exception as exc:  # fail-visible：引擎异常不阻断 analyze（spec §8.1）
+        import logging
+        logging.getLogger(__name__).exception("theme_momentum_v2 compute failed: %s", exc)
+        return {
+            "version": "theme_momentum_v2",
+            "factors": [],
+            "factorsTop20": [],
+            "qualityFlags": ["theme_momentum_engine_error"],
+            "computedAt": int(frames[-1].get("timestamp") or 0) if frames else 0,
+        }
     # context 保留全量 factors（供每股投影按 themeId 查找，避免 top-20 截断导致
     # 第 21 名以后题材每股恒 insufficient——MEDIUM-3）；仅响应序列化时截断 top-20。
     ranked = sorted(

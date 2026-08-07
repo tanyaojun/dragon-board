@@ -58,6 +58,7 @@
                 <th>阶段</th>
                 <th>RPS 5/10/20</th>
                 <th>距高点</th>
+                <th>涨停</th>
                 <th>资金量能</th>
                 <th>拥挤扣分</th>
               </tr>
@@ -78,12 +79,13 @@
                     <span class="rps-value" :class="rpsTone(factor.rps?.d20)">{{ factor.rps?.d20 ?? '--' }}</span>
                   </td>
                   <td>{{ factor.nearHigh ?? '--' }}</td>
+                  <td class="zt-cell">{{ factor.ztCount ?? '--' }}</td>
                   <td>{{ factor.flowVolume ?? '--' }}</td>
                   <td class="penalty-cell" :class="{ penalized: (factor.crowdingPenalty ?? 0) > 0 }">
                     {{ factor.crowdingPenalty ?? '--' }}</td>
                 </tr>
                 <tr v-if="expanded.has(factor.themeId)" class="detail-row">
-                  <td colspan="8">
+                  <td colspan="9">
                     <div class="detail-grid">
                       <div class="detail-block">
                         <h4>多窗口动量</h4>
@@ -92,6 +94,10 @@
                       <div class="detail-block">
                         <h4>整体性</h4>
                         <p>宽度/一致性 {{ factor.breadth ?? '--' }}</p>
+                      </div>
+                      <div class="detail-block">
+                        <h4>龙头/涨停</h4>
+                        <p>涨停家数 {{ factor.ztCount ?? '--' }}</p>
                       </div>
                       <div class="detail-block">
                         <h4>日内状态</h4>

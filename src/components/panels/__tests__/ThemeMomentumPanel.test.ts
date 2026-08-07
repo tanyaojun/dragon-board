@@ -37,4 +37,11 @@ describe('ThemeMomentumPanel', () => {
     expect(app).toContain("if (tabId === 'sector')")
     expect(app).toContain('panels.value.themeMomentum = true')
   })
+
+  it('shows ztCount column and intraday detail blocks', () => {
+    expect(panel).toContain('涨停')
+    expect(panel).toContain('factor.ztCount')
+    expect(panel).toContain('龙头/涨停')
+    expect(panel).toContain('factor.intraday?.unavailable')
+  })
 })
