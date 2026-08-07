@@ -52,30 +52,31 @@ quant-board/backend/analysis/
 | 多窗口动量（5/10/20 加权符号强度） | 0.20 | 50 + Σ w·ret·coef |
 | 整体性（日 breadth + 涨停贡献） | 0.20 | breadth×0.8 + min(zt×5, 20) |
 | 资金量能（净流入 + 成交额占比） | 0.15 | inflow×0.6 + ratio×0.4 |
-| 拥挤惩罚（门禁） | 扣分 | 日 breadthScore 代理，reasons 标注 `crowding_proxy` |
+| 拥挤惩罚（门禁） | 扣分 | 日 crowdingRisk（crowding_days），缺失时 `crowding_unavailable` 不扣分 |
 
 `themeMomentumScore = Σ(wᵢ·scoreᵢ) − crowdingPenalty`；可用维度 < 3 不产分；`direction ∈ {up, neutral, down}`；`phaseLabel ∈ {启动, 扩散, 过热, 退潮, 中性}`（非状态机）。
 
 ### 合同
 
-- 帧级 `frame.themeMomentumContext`：`{version, factors(top-20), qualityFlags, computedAt}`
-- 每股 `analysis.themeMomentum`：`{status, themeId, themeName, score, direction, role, phaseLabel, reasons}`（只读，不参与 decision）
+- 帧级 `frame.themeMomentumContext`：`{version, factors(全量), factorsTop20, qualityFlags, computedAt}`
+- 每股 `analysis.themeMomentum`：`{status, themeId, themeName, score, direction, role, phaseLabel, rotationState, reasons}`（只读，不参与 decision）
 - `GET /api/theme-momentum/summary`：`{ok, status, version, factors(top-50), qualityFlags, computedAt, cache}`
 - `resonance` 回归纯个股六因子（不再含 `theme` 子对象）
-- `rotationState ∈ {mainline, inflow, outflow, neutral}`（lifecycle 恒 None）
+- `rotationState ∈ {mainline, inflow, outflow, neutral}`（v2 按日线动量+资金派生；lifecycle 恒 None）
 
 ## 验证结果
 
-- 后端 theme 全量：**221 passed**（v2 golden 9、集成 5、API 2、validation 3、rotation 方向标签 4、trend/support/research 等）
-- 后端完整回归：tests/ + backend/tests/ 1321+ passed（4 个 golden_alignment monkeypatch 适配后全过）
-- 前端：**851 passed**（新增 themeMomentumTrack 4、DataTableThemeTooltip 1、ThemeMomentumPanel 4；RankTrendObservationService 新合同）
+- 后端 theme 全量：**123 passed**（v2 golden 11、daily_series 4、集成、validation v2、rotation 引擎、trend/support/research 等）
+- 后端完整回归：tests/ + backend/tests/ **1349 passed**（仅 test_theme_momentum_api 2 例需 MongoDB 环境：`QUANT_BOARD_MONGODB_URI` 未配置，非代码缺陷）
+- RankTrend 专项：**82 passed**（golden_alignment/jump_research/live_gate_shadow_audit/analyze_api/resonance/market_regime/observation_scores）
+- 前端全量：**852 passed**（108 文件；themeMomentumTrack 4、DataTableThemeTooltip 1、ThemeMomentumPanel 5、RankTrendObservationPanel 11）
 - `vue-tsc --noEmit -p tsconfig.app.json`：0 错误
 
 ## 遗留与后续建议
 
-1. **intraday 槽位口径**：v2 纯函数层 intraday 标注 `unavailable=True`（真实槽位增量由 analyze 槽位数据补充，当前未接入）。后续可把 `_compute_theme_momentum_v2_context` 扩展为传当前/前一槽行。
-2. **crowding 代理**：拥挤惩罚用日 breadthScore 代理，非真实 crowdingRisk；后续 theme_heat 日聚合补 crowding 列后可替换。
-3. **52 周高**：`near_high_full_window_days=250` 需 250 个交易日数据，迁移期降级为数据窗内高点（reasons 标注 `near_high_window_limited`）。
-4. **theme_trend 字段命名**：`prevLifecycle/lifecycleTransition` 字段名保留但值已是 rotationState 方向标签（命名语义错位，前端无消费，低风险）。
-5. **B_IGNITION 语义**：执行分层 `elif rotation_state == "inflow"` 使任意 momentum≥55 非主线题材入 B_IGNITION（语义漂移），后续可细化。
+1. **52 周高**：`near_high_full_window_days=250` 需 250 个交易日数据，迁移期降级为数据窗内高点；窗内未创新高（peak ≤ 1.05）时 nearHigh=None + `near_high_window_limited`（MEDIUM-2）。
+2. **theme_trend 字段命名**：`prevLifecycle/lifecycleTransition` 字段名保留但值已是 rotationState 方向标签（命名语义错位，前端无消费，低风险）。
+3. **B_IGNITION 语义**：执行分层 `elif rotation_state == "inflow"` 使任意 momentum≥55 非主线题材入 B_IGNITION（语义漂移），后续可细化。
+4. **API 行数上限**：`RECENT_SECTOR_ROWS_LIMIT=20000` 可能截断 20 日 RPS 窗口（约 60 题材×16 槽×21 日 ≈ 20160 行），不足时 RPS 维度静默降级，建议调大或分页（LOW-5）。
+5. **旧融合测试**：`test_theme_resonance_fusion.py` 仍断言已废弃的 `fuse_theme_resonance`，缺"共振分数不被题材调节"的解耦回归断言（LOW-6）。
 6. **首日观察清单**：上线第 1 个完整交易日后人工验证 MongoDB 实际入库行数 + `GET /api/theme-momentum/summary` factors 分布 + 前端第4轨/面板渲染（spec §8.3 Task 7 清单）。

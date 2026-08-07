@@ -12,13 +12,13 @@
 2. 题材动量描述**题材/板块作为整体的上涨/下跌强度与扩散状态**，不再照搬个股生命周期分层（ice/emerging/expanding/climax/cooling）。
 3. 时间尺度改为**日线级主口径 + 半小时槽位日内状态辅口径**双层，匹配"题材周期 1-3 天至半个月"的现实尺度。
 4. 题材动量与个股动量是两个维度：个股动量看单股关注度路径，题材动量看板块内部赚钱效应扩散/收敛，两者不互相调节。
-5. 前端增加观察舱第 4 轨 + 重构 SectorRotation 面板为题材动量视图；后端是唯一生产者，前端只消费。
+5. 前端增加观察舱第 4 轨 + 新建 ThemeMomentumPanel 题材动量视图（SectorRotation 旧面板删除）；后端是唯一生产者，前端只消费。
 
 ## 2. 已确认决策（brainstorming 2026-08-06 逐项确认）
 
 | # | 决策点 | 选择 |
 | --- | --- | --- |
-| D1 | 第四维形态 | 观察舱第 4 轨 + 独立题材动量面板（重构 SectorRotation） |
+| D1 | 第四维形态 | 观察舱第 4 轨 + 独立题材动量面板（新建 ThemeMomentumPanel，删除旧 SectorRotation） |
 | D2 | 共振解耦程度 | 完全解耦：不再调节共振分数；`resonance.theme` 移除题材动量融合 |
 | D3 | 时间尺度 | 日线聚合 + 槽位日内状态双层 |
 | D4 | 动量本体数据源 | 成分股平均涨幅（trimmedMeanChange/change）按交易日合成日线收益序列 |
@@ -131,7 +131,7 @@ theme/momentum.py v2（纯函数）
 GET /api/theme-momentum/summary（新增只读 API，复用 theme-rotation/summary 的 Redis 缓存模式）
         │
         ▼
-TS 消费：OBSERVATION 第4轨 + SectorRotation 面板（重构）
+TS 消费：OBSERVATION 第4轨 + ThemeMomentumPanel 面板（新建）
 ```
 
 ### 6.2 输出合同（camelCase，新增字段不覆盖旧字段）
@@ -170,7 +170,7 @@ TS 消费：OBSERVATION 第4轨 + SectorRotation 面板（重构）
 ## 7. 前端（设计 Part 3）
 
 1. **OBSERVATION 第4轨**：`RankTrendObservationPanel.vue` tracks 增加 `{ id: 'theme', index: '04', label: '题材动量' }`；`OBSERVATION_WINDOW_BARS` 增加 `theme: 15`；渲染 `analysis.themeMomentum`（分数/方向/角色/phaseLabel/reasons，`insufficient` 显示原因）。
-2. **SectorRotation.vue 重构**：从"轮动状态列表"改为**全字段题材动量排行榜 + 行展开**——列：题材名/动量分/方向/phaseLabel/RPS(5,10,20)/距年内高点/资金量能/拥挤度/龙头与涨停数；行展开显示 intraday 详情 + reasons + 关联强势股。移除旧 rotationState/lifecycle 列表。
+2. **ThemeMomentumPanel.vue 新建**：全字段题材动量排行榜 + 行展开——列：题材名/动量分/方向/phaseLabel/RPS(5,10,20)/距年内高点/涨停/资金量能/拥挤扣分；行展开显示多窗口动量/整体性/龙头与涨停/日内状态 + reasons。旧 SectorRotation.vue（轮动状态列表）删除，App.vue 题材 tab 打开 ThemeMomentumPanel。
 3. **DataTable.vue**：共振 tooltip 移除内嵌"题材动量"段（随解耦），不再从 `resonance.theme` 展示题材动量。
 4. **视觉方向**：沿用现有暗色数据工作台风格；第4轨与三轨视觉层级一致，用独立强调色区分"板块视角"；面板排行用方向色（up 红涨/down 绿跌，沿用 A 股配色），拥挤度用警示色。
 
@@ -201,7 +201,7 @@ TS 消费：OBSERVATION 第4轨 + SectorRotation 面板（重构）
 3. analyze 接入（frame.themeMomentumContext + 每股 analysis.themeMomentum；resonance 回归纯六因子）
 4. theme/rotation 收敛（废弃 lifecycle，rotationState 改方向标签；下游消费审计）
 5. 前端第4轨 + DataTable tooltip 移除
-6. SectorRotation.vue 重构（全字段排行 + 行展开）+ `GET /api/theme-momentum/summary`
+6. ThemeMomentumPanel.vue 新建（全字段排行 + 行展开）+ 删除 SectorRotation.vue + `GET /api/theme-momentum/summary`
 7. 回放对比 + 首日观察清单 + 文档同步（architecture/api-cli/theme-module README）
 
 ## 9. 风险与边界
