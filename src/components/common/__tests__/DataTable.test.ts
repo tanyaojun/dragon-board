@@ -155,18 +155,17 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
   })
 
-  test('splits observation tooltips per field (D: resonance/rankTrend/lifecycle/themeMomentum)', () => {
+  test('splits observation tooltips per field (D: resonance/rankTrend/lifecycle)', () => {
     const source = dataTableSource()
 
     // 分派入口：showConfidenceTooltip 接收第三参数 field
     expect(source).toContain('const showConfidenceTooltip = (event: MouseEvent, stock: any, field = \'\')')
     expect(source).toContain('const getFieldTooltip = (field: string, stock: any): string => {')
 
-    // 四列分别传自己的 field，不共用同一份内容
+    // 三列分别传自己的 field，不共用同一份内容
     expect(source).toContain("showConfidenceTooltip($event, stock, 'resonanceIntensity')")
     expect(source).toContain("showConfidenceTooltip($event, stock, 'rankTrendStrength')")
     expect(source).toContain("showConfidenceTooltip($event, stock, 'lifecycleOpportunity')")
-    expect(source).toContain("showConfidenceTooltip($event, stock, 'themeMomentum')")
 
     // 共振分支只含共振专属内容
     expect(source).toContain("if (field === 'resonanceIntensity') {")
@@ -177,11 +176,21 @@ describe('DataTable row detail interactions', () => {
     // 生命周期分支
     expect(source).toContain("if (field === 'lifecycleOpportunity') {")
     expect(source).toContain('【生命周期】')
-    // 题材动量复用独立 tooltip
-    expect(source).toContain("if (field === 'themeMomentum') {")
-    expect(source).toContain('getThemeMomentumTooltip')
     // 兜底：无 field 时仍是完整置信度
     expect(source).toContain('content: field ? getFieldTooltip(field, stock) : getConfidenceTitle(stock)')
+  })
+
+  test('market table does not include a theme momentum column (panel only)', () => {
+    const source = dataTableSource()
+
+    // 行情列表不渲染题材动量列（题材动量仅在独立面板 / 顶部 tab）
+    expect(source).not.toContain("{ key: 'themeMomentum'")
+    expect(source).not.toContain("col.key === 'themeMomentum'")
+    expect(source).not.toContain('open-theme-momentum')
+    // 其余三列仍在
+    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振强度'")
+    expect(source).toContain("{ key: 'rankTrendStrength', label: '排名趋势'")
+    expect(source).toContain("{ key: 'lifecycleOpportunity', label: '生命周期'")
   })
 
   test('structures the confidence tooltip as conclusion, resonance, technical, and risk layers', () => {

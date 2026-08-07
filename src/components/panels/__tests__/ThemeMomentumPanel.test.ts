@@ -37,12 +37,8 @@ describe('ThemeMomentumPanel', () => {
     // 题材热点 tab → panelMap 映射到 themeMomentum（不再同开旧 SectorPanel）
     expect(app).toContain("sector: 'themeMomentum'")
     expect(app).toContain('panels.value[panelMap[tabId]] = true')
-  })
-
-  it('opens theme momentum panel from market table field click', () => {
-    expect(app).toContain('@open-theme-momentum="openThemeMomentumFromTable"')
-    expect(app).toContain('const openThemeMomentumFromTable = () => {')
-    expect(app).toContain('panels.value.themeMomentum = true')
+    // 行情列表不承载题材动量列/字段点击入口（面板仅由顶部 tab 打开）
+    expect(app).not.toContain('openThemeMomentumFromTable')
   })
 
   it('shows ztCount column and intraday detail blocks', () => {

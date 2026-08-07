@@ -149,7 +149,7 @@
 
     <!-- 主要内容区 -->
     <main class="main-content">
-      <DataTable @select="handleSelectStock" @open-theme-momentum="openThemeMomentumFromTable" />
+      <DataTable @select="handleSelectStock" />
     </main>
 
     <!-- Toast 提示 -->
@@ -403,11 +403,6 @@ const openPanelFromShortcut = (panelName: keyof typeof panels.value, triggerRef?
     panelRects.value[panelName] = triggerRef.getBoundingClientRect()
   }
   panels.value[panelName] = true
-}
-
-// 行情列表【题材动量】字段点击 → 打开题材动量面板（第4轨独立维度主视图）
-const openThemeMomentumFromTable = () => {
-  panels.value.themeMomentum = true
 }
 
 const openExportPanel = (event?: MouseEvent) => {
