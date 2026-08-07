@@ -1,8 +1,10 @@
 import { dataLayer } from '@/services/DataLayer'
 import { apiService } from '../apiService'
 import type { RotationAnalysis } from '@/types/core'
+import { shallowRef } from 'vue'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { themeRepository } from './ThemeRepository'
+import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
 import {
   refreshRuntime,
   setBackendRotationSummary,
@@ -29,6 +31,15 @@ let lastExposureProjection: ThemeExposureProjection = {
   byTheme: new Map(),
 }
 let lastRotationSummary: RotationAnalysis | null = null
+
+/**
+ * theme_momentum v2 题材动量分缓存（themeId → score）。
+ * 题材列表 / 热门题材卡片等「动量」字段统一使用 v2 口径，避免与热度引擎
+ * momentumScore（heat.py：当日涨幅 + 热度变化）混淆；v2 不可用时回退原值。
+ */
+let lastMomentumScoreMap: Map<string, number | null> = new Map()
+let momentumScoresLoaded = false
+const momentumScoresVersion = shallowRef(0)
 
 function buildStockThemesMap(): Map<string, string[]> {
   const result = new Map<string, string[]>()
@@ -226,6 +237,36 @@ export async function getThemeMomentumSummary(params: {
   }
 }
 
+/**
+ * 加载 theme_momentum v2 题材动量分缓存（幂等 + 并发去重）。成功后 bump 版本信号，
+ * 使依赖 getHotThemes 的响应式列表自动刷新为 v2 口径；请求失败（summary 为 null）
+ * 时不标记已加载，允许下次访问重试。
+ */
+let momentumLoadPromise: Promise<void> | null = null
+export async function loadThemeMomentumScores(force = false): Promise<void> {
+  if (momentumScoresLoaded && !force) return
+  if (momentumLoadPromise && !force) return momentumLoadPromise
+  if (momentumLoadPromise) {
+    // force 刷新：先等上一次在途请求收尾，避免并发写缓存乱序
+    await momentumLoadPromise
+  }
+  momentumLoadPromise = (async () => {
+    const summary = await getThemeMomentumSummary({
+      snapshotType: DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
+    })
+    if (summary) {
+      const next = new Map<string, number | null>()
+      for (const factor of summary.factors) next.set(factor.themeId, factor.score)
+      lastMomentumScoreMap = next
+      momentumScoresLoaded = true
+      momentumScoresVersion.value++
+    }
+  })().finally(() => {
+    momentumLoadPromise = null
+  })
+  return momentumLoadPromise
+}
+
 export function getThemeEvents() {
   return themeRuntimeStore.getSnapshot().events
 }
@@ -289,9 +330,23 @@ export function toStockTheme(exposure: ThemeStockExposure) {
 }
 
 export function getHotThemes(limit: number = 10) {
+  // 建立响应式依赖：v2 动量分缓存加载完成后自动刷新
+  momentumScoresVersion.value
+  if (!momentumScoresLoaded) {
+    void loadThemeMomentumScores()
+  }
   const apiById = new Map((themeHeatFeed.getSnapshot()?.factors || []).map((item) => [item.themeId, item]))
   return getThemeFactors()
-    .map((factor) => toHotThemeSummary(factor, apiById.get(factor.themeId)))
+    .map((factor) => {
+      const summary = toHotThemeSummary(factor, apiById.get(factor.themeId))
+      const v2Score = lastMomentumScoreMap.get(factor.themeId)
+      if (v2Score != null) {
+        // 统一为 theme_momentum v2 动量分；v2 无结果时回退热度引擎原值
+        summary.momentum = v2Score
+        summary.momentumScore = v2Score
+      }
+      return summary
+    })
     .sort((a, b) => b.heatScore - a.heatScore)
     .slice(0, limit)
 }
@@ -415,6 +470,7 @@ export const themeFacade = {
   getThemeExposureProjection,
   getRotationSummary,
   getThemeMomentumSummary,
+  loadThemeMomentumScores,
   getThemeEvents,
   getRuntimeSnapshot,
   getHotThemes,
