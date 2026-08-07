@@ -10,7 +10,7 @@ from backend.data.models import Dataset
 from backend.data.quality_gate import evaluate_snapshot_quality
 from backend.data.repository_factory import create_repository
 from backend.data.schemas import ImportDatasetRequest
-from backend.utils import json_dumps, new_id, stable_hash
+from backend.core.utils import json_dumps, new_id, stable_hash
 
 
 SNAPSHOT_PRIMARY_DATASET_IDS = {"dragonboard_live"}

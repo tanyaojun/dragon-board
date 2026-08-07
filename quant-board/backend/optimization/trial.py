@@ -7,7 +7,7 @@ from backend.core.backtest import BacktestEngine, TradeSimulator
 from backend.optimization import objective
 from backend.optimization.search_space import freeze, to_strategy_config, to_trade_config
 from backend.optimization.validation import frame_range
-from backend.utils import new_id, stable_hash
+from backend.core.utils import new_id, stable_hash
 
 
 class TrialExecutor:

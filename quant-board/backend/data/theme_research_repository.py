@@ -31,7 +31,7 @@ class ThemeResearchRepository:
 
     @property
     def is_mongodb(self) -> bool:
-        from backend.settings import get_settings
+        from backend.core.settings import get_settings
 
         return get_settings().storage_backend == "mongodb"
 

@@ -15,7 +15,7 @@ from backend.data.json_compaction import compact_json_fields
 from backend.data.legacy_split_migration import migrate_legacy_db
 from backend.data.models import BacktestRun, Base, ResearchBase
 from backend.data.storage_inspector import inspect_storage
-from backend.settings import Settings
+from backend.core.settings import Settings
 
 
 def test_json_codec_compresses_large_json_and_reads_plain_or_broken_text() -> None:

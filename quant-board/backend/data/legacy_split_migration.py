@@ -22,7 +22,7 @@ from backend.data.models import (
     SyncOutboxModel,
 )
 from backend.data.repository import Repository
-from backend.utils import json_loads, stable_hash
+from backend.core.utils import json_loads, stable_hash
 
 
 def migrate_legacy_db(

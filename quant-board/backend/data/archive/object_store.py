@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.data.archive.manifest import sha256_file
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 ALLOWED_OBJECT_ARCHIVE_FILENAMES = {

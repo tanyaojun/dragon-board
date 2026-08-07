@@ -7,7 +7,7 @@ from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRu
 from backend.data import mongo_research_repository as mongo_research_module
 from backend.data.mongo_research_repository import MongoResearchRepository
 from backend.data.json_codec import COMPRESSED_TEXT_PREFIX, loads_json_field
-from backend.utils import json_dumps
+from backend.core.utils import json_dumps
 
 
 class FakeCursor:

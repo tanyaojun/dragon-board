@@ -17,7 +17,7 @@ from backend.analysis.theme.trend import (
 from backend.data.database import SessionLocal
 from backend.data.repository_factory import create_repository, storage_source_label
 from backend.data.theme_research_repository import ThemeResearchRepository
-from backend.utils import stable_hash
+from backend.core.utils import stable_hash
 
 
 def build_theme_research(

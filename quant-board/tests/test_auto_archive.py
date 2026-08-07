@@ -53,7 +53,7 @@ def test_run_archive_auto_once_skips_when_below_retention(tmp_path: Path, monkey
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_AUTO_DATASET_ID", "auto_ds")
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_RETENTION_TRADING_DAYS", "365")
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_AUTO_SNAPSHOT_TYPES", "half_hour")
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
     get_settings.cache_clear()
     from backend.data.archive.auto_archive import run_archive_auto_once
 
@@ -75,7 +75,7 @@ def test_run_archive_auto_once_archives_beyond_retention(tmp_path: Path, monkeyp
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_RETENTION_TRADING_DAYS", "1")
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_AUTO_SNAPSHOT_TYPES", "half_hour")
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_DIR", str(tmp_path))
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
     get_settings.cache_clear()
     from backend.data.archive.auto_archive import run_archive_auto_once
 
@@ -106,7 +106,7 @@ def test_auto_archive_verification_failure_does_not_delete_sqlite(tmp_path: Path
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_RETENTION_TRADING_DAYS", "1")
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_AUTO_SNAPSHOT_TYPES", "half_hour")
     monkeypatch.setenv("QUANT_BOARD_ARCHIVE_DIR", str(tmp_path))
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
     get_settings.cache_clear()
 
     from backend.data.archive.service import ArchiveService

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 CSV_PARAMS = {"types", "codes", "allowed_capture_modes", "entity_types", "entity_keys"}

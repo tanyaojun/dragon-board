@@ -84,7 +84,7 @@ def is_intraday_refresh_time(value: datetime.datetime) -> bool:
 
 
 def _fetch_bridge_calendar(date: datetime.date) -> bool | None:
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
 
     base_url = get_settings().snapshot_collector_bridge_base_url.rstrip("/")
     url = f"{base_url}/api/calendar?{urlencode({'date': date.isoformat()})}"

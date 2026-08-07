@@ -4,7 +4,7 @@ import base64
 import gzip
 from typing import Any
 
-from backend.utils import json_dumps, json_loads
+from backend.core.utils import json_dumps, json_loads
 
 
 COMPRESSED_TEXT_PREFIX = "__qb_gzip_b64__:"

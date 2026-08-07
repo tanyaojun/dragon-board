@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import big_order_history_routes
-from backend.big_order_archive_service import BigOrderArchiveError, BigOrderArchiveService
+from backend.services.big_order_archive_service import BigOrderArchiveError, BigOrderArchiveService
 
 
 def _write_archive(path, payload: dict) -> None:

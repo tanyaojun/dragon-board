@@ -16,7 +16,7 @@ from typing import Any
 from backend.data import mongo_repository, snapshot_cache
 from backend.data.models import Dataset
 from backend.data.repository_factory import get_runtime_mongodb_database
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.services.theme.heat_service import get_theme_heat_service
 
 from .repository_port import SnapshotRepository

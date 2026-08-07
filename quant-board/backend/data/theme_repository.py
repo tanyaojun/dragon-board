@@ -6,7 +6,7 @@ from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
 from backend.data.theme_models import ThemeMetadataModel, ThemeModel, ThemeStockMappingModel
-from backend.utils import json_dumps
+from backend.core.utils import json_dumps
 
 
 def _loads_json(value: str, fallback: Any) -> Any:

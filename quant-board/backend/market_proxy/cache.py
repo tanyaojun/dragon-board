@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.settings import Settings
+from backend.core.settings import Settings
 
 
 def get_hotlist_redis_client(settings: Settings | None = None) -> Any | None:
@@ -11,7 +11,7 @@ def get_hotlist_redis_client(settings: Settings | None = None) -> Any | None:
     缓存属于优化层：Redis 不可用必须回退到进程内缓存/直连上游，不能阻断数据链路。
     """
     if settings is None:
-        from backend.settings import get_settings
+        from backend.core.settings import get_settings
 
         settings = get_settings()
     if not settings.redis_url:

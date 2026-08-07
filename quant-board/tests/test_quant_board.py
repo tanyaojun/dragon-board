@@ -50,9 +50,9 @@ from backend.data.models import (
 from backend.data.repository import Repository
 from backend.data.supabase_homomorphic import SupabaseBackupClient, _chunk_rows_by_payload_size
 from backend.main import app
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG, BacktestService
-from backend.utils import json_dumps
+from backend.core.utils import json_dumps
 
 
 def wait_for_optimization(client: TestClient, run_id: str, timeout: float = 20.0) -> dict:

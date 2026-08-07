@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from backend.akshare_fund_provider import (
+from backend.market_proxy.akshare_fund_provider import (
     SYSTEMIC_ERRORS,
     AkshareFundBatch,
     AkshareFundProvider,
@@ -14,7 +14,7 @@ from backend.akshare_fund_provider import (
     get_akshare_fund_provider,
 )
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
 

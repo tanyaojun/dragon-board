@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Any
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 

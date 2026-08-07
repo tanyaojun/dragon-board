@@ -7,7 +7,7 @@ from datetime import date
 from threading import Lock
 from typing import Any
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 class ThemeFundCache:

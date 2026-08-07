@@ -380,7 +380,7 @@ def get_hotlist_client() -> httpx.AsyncClient:
 def get_hotlist_service() -> HotlistService:
     global _hotlist_service
     if _hotlist_service is None:
-        from backend.settings import get_settings
+        from backend.core.settings import get_settings
         from backend.market_proxy.cache import get_hotlist_redis_client
 
         settings = get_settings()
@@ -394,7 +394,7 @@ def get_hotlist_service() -> HotlistService:
 
 async def start_hotlist_refresh() -> None:
     """后端启动时预取八平台排名并周期性写入 Redis（首屏零等待）。"""
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
 
     get_hotlist_service().start(get_settings().hotlist_refresh_interval_seconds)
 

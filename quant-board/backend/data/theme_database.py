@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine

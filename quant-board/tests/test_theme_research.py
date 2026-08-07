@@ -598,7 +598,7 @@ def test_repository_filter_by_code(tmp_path: Path) -> None:
 
 
 def test_config_hash_changes_with_parameters() -> None:
-    from backend.utils import stable_hash
+    from backend.core.utils import stable_hash
 
     hash1 = stable_hash({"crowdingRiskThreshold": 80})
     hash2 = stable_hash({"crowdingRiskThreshold": 75})

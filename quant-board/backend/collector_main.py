@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI):
         start_market_quotes_refresh,
         stop_market_quotes_refresh,
     )
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
     from backend.snapshot_collector.instance_lock import RedisInstanceLock
     from backend.snapshot_collector.providers import (
         close_collector_http,

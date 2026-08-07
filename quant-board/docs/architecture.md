@@ -588,8 +588,8 @@ snapshot_type = half_hour
 
 ## THSBigOrder 本地历史归档
 
-双源归档统一位于 `quant-board/data/big-order`。proxy-server 的 Longhu archiver 写入 `longhu/<sessionDate>/<stockCode>.money0.json.gz`，其采集清单同根写入 `longhu/collect-list/`；`backend.ths_main_monitor_service.ThsMainMonitorService` 在 THS 上游成功刷新后写入 `ths/<sessionDate>/<stockCode>.json.gz`。
+双源归档统一位于 `quant-board/data/big-order`。proxy-server 的 Longhu archiver 写入 `longhu/<sessionDate>/<stockCode>.money0.json.gz`，其采集清单同根写入 `longhu/collect-list/`；`backend.services.market.ths_main_monitor_service.ThsMainMonitorService` 在 THS 上游成功刷新后写入 `ths/<sessionDate>/<stockCode>.json.gz`。
 
-`backend.big_order_archive_service.BigOrderArchiveService` 是独立的只读文件适配层，供桌面端历史会话查看使用。它精确读取上述 Longhu 或 THS gzip 文件，验证归档中的 `sessionDate`、`stockCode`、`source` 和数据结构，再由 `/api/big-order/history` 返回原始归档。
+`backend.services.big_order_archive_service.BigOrderArchiveService` 是独立的只读文件适配层，供桌面端历史会话查看使用。它精确读取上述 Longhu 或 THS gzip 文件，验证归档中的 `sessionDate`、`stockCode`、`source` 和数据结构，再由 `/api/big-order/history` 返回原始归档。
 
 该链路不写 MongoDB，不参与快照事实、RankTrend、回测或优化，也不扫描或回退其他交易日期。缺档和损坏必须结构化失败，避免把其他交易日的大单叠加到所选分钟线。

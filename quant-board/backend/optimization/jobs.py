@@ -9,7 +9,7 @@ from backend.data.json_codec import dumps_json_field
 from backend.data.models import BacktestRun, OptimizationRun
 from backend.data.repository_factory import create_repository, storage_source_label
 from backend.optimization.runner import OptimizationRunner
-from backend.utils import stable_hash
+from backend.core.utils import stable_hash
 
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quant-optimization")

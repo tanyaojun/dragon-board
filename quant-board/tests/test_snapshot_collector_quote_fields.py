@@ -112,7 +112,7 @@ def test_service_enriches_volume_ratios_from_golden(monkeypatch) -> None:
     rows = [{"code": "000001", "volume": 1060851.0}]
     service = SnapshotCollectorService(repo=object())
     monkeypatch.setattr(
-        "backend.volume_ratio_service.compute_volume_ratios",
+        "backend.services.market.volume_ratio_service.compute_volume_ratios",
         lambda db, stocks, now=None: {
             "000001": {
                 "volumeRatio": 1.23,

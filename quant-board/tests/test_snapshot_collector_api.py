@@ -502,7 +502,7 @@ class TestRunOnceValidation:
         assert detail["ok"] is False
 
     def test_non_shadow_dataset_returns_400_before_service(self, monkeypatch: Any) -> None:
-        from backend.settings import get_settings
+        from backend.core.settings import get_settings
         monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
         get_settings.cache_clear()
         client, _ = _setup_client(monkeypatch)
@@ -1159,7 +1159,7 @@ class TestBackfillSlotsValidation:
         assert 400 <= response.status_code < 500
 
     def test_non_shadow_dataset_returns_400_before_service(self, monkeypatch: Any) -> None:
-        from backend.settings import get_settings
+        from backend.core.settings import get_settings
         monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "0")
         get_settings.cache_clear()
         client, _ = _setup_client(monkeypatch)

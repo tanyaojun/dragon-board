@@ -161,7 +161,7 @@ _overview_service: MarketOverviewService | None = None
 def get_market_overview_service() -> MarketOverviewService:
     global _overview_service
     if _overview_service is None:
-        from backend.settings import get_settings
+        from backend.core.settings import get_settings
         from backend.market_proxy.cache import get_hotlist_redis_client
 
         settings = get_settings()

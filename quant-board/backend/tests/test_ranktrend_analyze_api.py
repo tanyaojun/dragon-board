@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from backend.data import snapshot_cache
 from backend.main import app
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 client = TestClient(app)

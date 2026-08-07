@@ -355,7 +355,7 @@ def test_push_archive_rejects_empty_dir(tmp_path: Path) -> None:
 def test_get_object_backup_store_returns_none_when_bucket_unset(monkeypatch) -> None:
     """Factory returns None when object_backup_bucket is empty."""
     monkeypatch.setenv("QUANT_BOARD_OBJECT_BACKUP_BUCKET", "")
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
     get_settings.cache_clear()
     from backend.data.archive.object_store import get_object_backup_store
 

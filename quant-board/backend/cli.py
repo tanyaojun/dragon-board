@@ -45,7 +45,7 @@ from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.analysis.ranktrend.live_gate_shadow_audit import load_hotlist_anchor_samples
 from backend.operations.schedule import run_after_market_once
 from backend.operations.snapshot_field_backfill import SnapshotFieldBackfillService
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.services import (
     BacktestService,
     GoldenService,
@@ -57,7 +57,7 @@ from backend.services import (
     compute_checkpoint_layer2,
     read_checkpoint_history,
 )
-from backend.utils import json_loads
+from backend.core.utils import json_loads
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.quality_gate import SHADOW_DATASET_ID
 from backend.snapshot_collector.service import SnapshotCollectorService

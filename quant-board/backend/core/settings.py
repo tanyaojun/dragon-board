@@ -8,7 +8,8 @@ import yaml
 from pydantic import BaseModel, Field
 
 
-BASE_DIR = Path(__file__).resolve().parents[1]
+# backend/core/settings.py：位于 backend/core/ 下，parents[2] 指向 quant-board 根
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 def _load_env_file(path: Path) -> None:

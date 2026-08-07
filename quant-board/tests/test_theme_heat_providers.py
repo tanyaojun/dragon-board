@@ -4,7 +4,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlparse
 
-from backend.settings import Settings
+from backend.core.settings import Settings
 from backend.snapshot_collector.models import SourceHealth
 from backend.snapshot_collector.providers import TencentBasicQuoteProvider
 

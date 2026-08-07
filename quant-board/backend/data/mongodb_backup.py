@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 from backend.data.archive.object_store import ObjectBackupStore
 from backend.data.mongodb_migration import ALL_COLLECTIONS
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 def sha256_bytes(payload: bytes) -> str:

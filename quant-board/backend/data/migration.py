@@ -19,7 +19,7 @@ from backend.data.importers import (
 )
 from backend.data.models import Dataset, SnapshotFrameModel
 from backend.data.repository import Repository
-from backend.utils import json_dumps, json_loads, read_json_file, stable_hash
+from backend.core.utils import json_dumps, json_loads, read_json_file, stable_hash
 
 
 class SnapshotMigrationService:

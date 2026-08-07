@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from backend.akshare_fund_provider import (
+from backend.market_proxy.akshare_fund_provider import (
     AkshareFundBatch,
     AkshareFundProviderError,
 )

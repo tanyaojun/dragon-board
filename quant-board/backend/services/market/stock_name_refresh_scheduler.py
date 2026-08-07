@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.data.stock_name_refresh import refresh_stock_names
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import TZ_SHANGHAI
 
 

@@ -6,7 +6,7 @@ from typing import Any
 from backend.data.json_codec import dumps_json_field, loads_json_field
 from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
 from backend.data.mongo_repository import MongoRepository
-from backend.utils import json_dumps
+from backend.core.utils import json_dumps
 
 
 BACKTEST_RESULT_CHUNK_THRESHOLD = 8_000_000

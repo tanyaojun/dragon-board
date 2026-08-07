@@ -27,7 +27,7 @@ from backend.data.models import (
 )
 from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
 from backend.data.json_codec import dumps_json_field, loads_json_field
-from backend.utils import json_dumps, json_loads, stable_hash
+from backend.core.utils import json_dumps, json_loads, stable_hash
 
 
 class Repository:

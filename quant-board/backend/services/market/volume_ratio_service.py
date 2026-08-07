@@ -354,7 +354,7 @@ def _normalize_code(value: Any) -> str:
 
 def _redis_client() -> Any | None:
     from backend.market_proxy.cache import get_hotlist_redis_client
-    from backend.settings import get_settings
+    from backend.core.settings import get_settings
 
     return get_hotlist_redis_client(get_settings())
 

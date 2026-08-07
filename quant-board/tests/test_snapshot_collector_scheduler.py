@@ -171,7 +171,7 @@ def make_test_slot(
 
 def _make_settings(**overrides: Any):
     """Create a Settings instance with MongoDB backend and collector enabled by default."""
-    from backend.settings import Settings, get_settings
+    from backend.core.settings import Settings, get_settings
 
     get_settings.cache_clear()
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from backend.akshare_fund_provider import (
+from backend.market_proxy.akshare_fund_provider import (
     AkshareFundProvider,
     AkshareFundProviderError,
     normalize_code,

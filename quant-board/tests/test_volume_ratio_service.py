@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api.market_data_routes import router
-from backend.volume_ratio_service import (
+from backend.services.market.volume_ratio_service import (
     ashare_expected_volume_progress,
     ashare_volume_clock_minute,
     build_daily_history,

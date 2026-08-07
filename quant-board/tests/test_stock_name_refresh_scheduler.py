@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from backend.stock_name_refresh_scheduler import StockNameRefreshScheduler
+from backend.services.market.stock_name_refresh_scheduler import StockNameRefreshScheduler
 
 
 class _Settings:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
-from backend.ths_main_monitor_service import (
+from backend.services.market.ths_main_monitor_service import (
     ThsMainMonitorError,
     ThsMainMonitorService,
     get_ths_main_monitor_service,

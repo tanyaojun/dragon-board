@@ -8,8 +8,8 @@ from typing import Any
 
 from backend.data import snapshot_cache
 from backend.data.models import Dataset
-from backend.settings import get_settings
-from backend.utils import json_dumps, json_loads
+from backend.core.settings import get_settings
+from backend.core.utils import json_dumps, json_loads
 
 
 logger = logging.getLogger(__name__)

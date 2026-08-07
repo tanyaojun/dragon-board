@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
-from backend.utils import new_id, stable_hash
+from backend.core.utils import new_id, stable_hash
 
 
 DEFAULT_TRADE_CONFIG = {

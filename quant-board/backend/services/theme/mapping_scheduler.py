@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 class ThemeMappingRefreshScheduler:

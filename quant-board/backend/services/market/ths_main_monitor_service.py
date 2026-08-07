@@ -15,7 +15,7 @@ from uuid import uuid4
 import httpx
 
 from backend.data.snapshot_cache import create_snapshot_redis_client
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 THS_URL = "https://vaserviece.10jqka.com.cn/Level2/index.php"

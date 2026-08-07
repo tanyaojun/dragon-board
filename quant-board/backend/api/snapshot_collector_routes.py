@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.quality_gate import SHADOW_DATASET_ID

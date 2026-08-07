@@ -9,7 +9,7 @@ import inspect
 import os
 from typing import Any
 
-from backend.settings import Settings
+from backend.core.settings import Settings
 
 
 # ── Fake repository for protocol validation ───────────────────────────────────

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.data.database import SessionLocal
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 class ArchiveAutoRunner:

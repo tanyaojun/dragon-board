@@ -10,7 +10,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 if TYPE_CHECKING:
     from sqlalchemy import Engine
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 class Base(DeclarativeBase):

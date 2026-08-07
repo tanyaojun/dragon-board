@@ -11,8 +11,8 @@ from uuid import uuid4
 import httpx
 
 from backend.data.models import Dataset
-from backend.settings import Settings, get_settings
-from backend.utils import json_dumps, json_loads, utc_now_iso
+from backend.core.settings import Settings, get_settings
+from backend.core.utils import json_dumps, json_loads, utc_now_iso
 
 
 REQUIRED_TABLES = [

@@ -7,7 +7,7 @@ from typing import Any
 from backend.data.backup_sync import BackupSyncService
 from backend.data.database import SessionLocal
 from backend.data.repository import Repository
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 class BackupAutoSyncRunner:

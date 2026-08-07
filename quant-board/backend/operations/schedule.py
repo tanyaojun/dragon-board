@@ -9,7 +9,7 @@ from backend.data.archive.service import ArchiveService
 from backend.data.backup_retention import run_backup_retention_once
 from backend.data.database import SessionLocal, init_db
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 def run_after_market_once(

@@ -17,7 +17,7 @@ from backend.market_proxy.quotes import get_market_quotes_cache, normalize_stock
 from backend.market_proxy.sentiment import get_sentiment_service
 from backend.market_proxy.surge import get_surge_stock_service
 from backend.market_proxy.xuangubao import get_xuangubao_service
-from backend.volume_ratio_service import compute_volume_ratios
+from backend.services.market.volume_ratio_service import compute_volume_ratios
 
 
 router = APIRouter(tags=["market-data"])

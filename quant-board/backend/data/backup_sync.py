@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from backend.data.models import Dataset, SnapshotFrameModel
 from backend.data.repository import Repository
 from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
-from backend.settings import get_settings
-from backend.utils import json_dumps
+from backend.core.settings import get_settings
+from backend.core.utils import json_dumps
 
 
 class _RetentionPolicy:

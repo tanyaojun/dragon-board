@@ -25,7 +25,7 @@ from urllib.parse import urlencode
 
 from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.repository_factory import get_runtime_mongodb_database
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 # ── longhuvip API 配置 ─────────────────────────────────────────────────────
 _LONGHUVIP_THEME_API = "https://applhb.longhuvip.com/w1/api/index.php"

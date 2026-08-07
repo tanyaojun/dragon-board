@@ -22,7 +22,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.settings import get_settings as _get_settings
+from backend.core.settings import get_settings as _get_settings
 from backend.services.theme.heat_service import ThemeHeatUnavailable
 
 from . import builder as builder_module
@@ -803,7 +803,7 @@ class SnapshotCollectorService:
             return
         try:
             from backend.data.repository_factory import get_runtime_mongodb_database
-            from backend.volume_ratio_service import compute_volume_ratios
+            from backend.services.market.volume_ratio_service import compute_volume_ratios
 
             db = get_runtime_mongodb_database()
             items = compute_volume_ratios(db, stock_rows)

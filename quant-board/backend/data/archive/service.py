@@ -23,7 +23,7 @@ from backend.data.models import (
     SnapshotSectorRowModel,
     SnapshotStockRowModel,
 )
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 
 
 ALLOWED_ARCHIVE_FILENAMES = {

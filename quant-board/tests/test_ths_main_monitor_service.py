@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from backend.ths_main_monitor_service import ThsMainMonitorService
+from backend.services.market.ths_main_monitor_service import ThsMainMonitorService
 
 
 def _payload(*, buy: object = "1.2亿", sell: object = "3500万", date: str = "2026-07-24") -> dict:

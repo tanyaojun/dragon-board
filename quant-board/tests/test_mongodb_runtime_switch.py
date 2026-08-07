@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.data.models import OptimizationRun
-from backend.utils import json_loads
+from backend.core.utils import json_loads
 
 
 class FakeRepo:

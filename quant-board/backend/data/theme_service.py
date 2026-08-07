@@ -5,7 +5,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.settings import get_settings
+from backend.core.settings import get_settings
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.theme_repository import ThemeRepository

@@ -278,7 +278,7 @@ def test_plan_mongodb_migration_counts_sqlite_sources_and_stock_json(tmp_path: P
 
 
 def test_mongodb_settings_use_backend_only_environment(monkeypatch) -> None:
-    from backend.settings import Settings
+    from backend.core.settings import Settings
 
     monkeypatch.setenv("QUANT_BOARD_MONGODB_URI", "mongodb://localhost:27017")
     monkeypatch.setenv("QUANT_BOARD_MONGODB_DATABASE", "dragon_board_quant")

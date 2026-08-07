@@ -47,7 +47,7 @@ from backend.data.schemas import (
     SnapshotJsonMigrationRequest,
 )
 from backend.data.stock_name_repository import STOCK_NAMES_VERSION, StockNameRepository
-from backend.stock_name_refresh_scheduler import stock_name_refresh_scheduler
+from backend.services.market.stock_name_refresh_scheduler import stock_name_refresh_scheduler
 from backend.data import snapshot_cache
 from backend.data.supabase_backup import get_backup_client
 from backend.data.theme_database import get_theme_db, init_theme_db, theme_status
@@ -56,7 +56,7 @@ from backend.data.theme_repository import ThemeRepository
 from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
-from backend.ths_main_monitor_service import close_ths_main_monitor_service
+from backend.services.market.ths_main_monitor_service import close_ths_main_monitor_service
 from backend.services.market.fund_scheduler import market_fund_scheduler
 from backend.operations.schedule import run_after_market_once
 from backend.services import (
@@ -68,8 +68,8 @@ from backend.services import (
     select_longtest_baseline_slots,
     summarize_longtest_slot_label,
 )
-from backend.settings import get_settings
-from backend.utils import json_loads
+from backend.core.settings import get_settings
+from backend.core.utils import json_loads
 
 
 logger = logging.getLogger(__name__)
@@ -1268,7 +1268,7 @@ async def upload_dataset(payload: dict[str, Any], db: Session | None = Depends(g
         settings = get_settings()
         safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(payload.get("filename") or "upload.json"))
         path = settings.staging_dir / f"upload_{safe_name}"
-        from backend.utils import write_json_file
+        from backend.core.utils import write_json_file
 
         write_json_file(path, content)
         request = ImportDatasetRequest(
@@ -1304,7 +1304,7 @@ def normalize_import_payload(payload: dict[str, Any]) -> ImportDatasetRequest:
 
 
 def _write_inline_import_bundle(name: str, records: list[Any], preview: dict[str, Any]) -> str:
-    from backend.utils import write_json_file
+    from backend.core.utils import write_json_file
 
     settings = get_settings()
     path = settings.staging_dir / f"inline_{name.replace(' ', '_')}.json"
