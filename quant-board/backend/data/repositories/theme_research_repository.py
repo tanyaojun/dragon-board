@@ -5,14 +5,14 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.data.database import ResearchSessionLocal
-from backend.data.models import (
+from backend.data.models.database import ResearchSessionLocal
+from backend.data.models.models import (
     ThemeFactorFrameModel,
     ThemeStockExposureModel,
     ThemeSignalModel,
     ThemeQualityReportModel,
 )
-from backend.data.json_codec import dumps_json_field, loads_json_field
+from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
 
 
 class ThemeResearchRepository:
@@ -23,8 +23,8 @@ class ThemeResearchRepository:
     @property
     def mongo_repo(self) -> Any:
         if self._mongo_repo is None:
-            from backend.data.repository_factory import get_runtime_mongodb_database
-            from backend.data.mongo_research_repository import MongoResearchRepository
+            from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+            from backend.data.repositories.mongo_research_repository import MongoResearchRepository
 
             self._mongo_repo = MongoResearchRepository(get_runtime_mongodb_database())
         return self._mongo_repo

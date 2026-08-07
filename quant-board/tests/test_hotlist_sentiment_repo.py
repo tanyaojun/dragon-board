@@ -1,4 +1,4 @@
-from backend.data.hotlist_sentiment_repo import HotListSentimentRepository
+from backend.data.repositories.hotlist_sentiment_repo import HotListSentimentRepository
 
 
 class FakeMongoCollection:

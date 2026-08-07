@@ -123,7 +123,7 @@ def test_service_enriches_volume_ratios_from_golden(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     service._enrich_volume_ratios(rows)

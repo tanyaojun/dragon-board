@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from backend.data.json_codec import dumps_json_field, loads_json_field
+from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
 from backend.snapshot_collector.slots import SLOT_TIMES
 
 

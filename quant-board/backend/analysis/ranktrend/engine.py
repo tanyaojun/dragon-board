@@ -5,8 +5,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.data import repository_factory
-from backend.data.hotlist_sentiment_repo import HotListSentimentRepository
+from backend.data.repositories import repository_factory
+from backend.data.repositories.hotlist_sentiment_repo import HotListSentimentRepository
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
     if not math.isfinite(value):

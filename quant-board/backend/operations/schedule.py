@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.data import repository_factory
+from backend.data.repositories import repository_factory
 from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.service import ArchiveService
-from backend.data.backup_retention import run_backup_retention_once
-from backend.data.database import SessionLocal, init_db
+from backend.data.backup.backup_retention import run_backup_retention_once
+from backend.data.models.database import SessionLocal, init_db
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
 from backend.core.settings import get_settings
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend.data.models import Dataset
-from backend.data.mongo_repository import MongoRepository
+from backend.data.models.models import Dataset
+from backend.data.repositories.mongo_repository import MongoRepository
 
 
 def test_record_document_preserves_snapshot_payload() -> None:
@@ -611,7 +611,7 @@ def test_mongo_repository_rejects_primary_dataset_delete() -> None:
 
 
 def test_repository_factory_uses_mongo_backend_without_sqlite_session(monkeypatch) -> None:
-    import backend.data.repository_factory as factory
+    import backend.data.repositories.repository_factory as factory
 
     fake_db = FakeMongoDatabase()
     monkeypatch.setattr(factory, "get_settings", lambda: type("Settings", (), {"storage_backend": "mongodb"})())

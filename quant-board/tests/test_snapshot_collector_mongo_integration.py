@@ -164,7 +164,7 @@ def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
 
 def _mongo_repo(db: FakeMongoDatabase):
     """Create a MongoRepository backed by FakeMongoDatabase."""
-    from backend.data.mongo_repository import MongoRepository
+    from backend.data.repositories.mongo_repository import MongoRepository
 
     return MongoRepository(db)
 
@@ -385,7 +385,7 @@ class TestMongoIntegrationApply:
         assert result.status == "completed"
 
         # Check all collections have data
-        from backend.data.mongo_repository import MongoRepository
+        from backend.data.repositories.mongo_repository import MongoRepository
 
         mongo_repo = MongoRepository(db)
         counts = mongo_repo.snapshot_table_counts("dragonboard_backend_shadow")
@@ -551,7 +551,7 @@ class TestMongoIntegrationDedup:
         from backend.snapshot_collector.service import SnapshotCollectorService
 
         db = FakeMongoDatabase()
-        from backend.data.mongo_repository import MongoRepository
+        from backend.data.repositories.mongo_repository import MongoRepository
 
         mongo = MongoRepository(db)
         from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository

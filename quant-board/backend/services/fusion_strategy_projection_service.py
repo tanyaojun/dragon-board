@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
-from backend.data.json_codec import loads_json_field
+from backend.data.ingest.json_codec import loads_json_field
 
 
 FUSION_STRATEGY_NAME = "ranktrend_early_big_move_v3_lifecycle_fusion"

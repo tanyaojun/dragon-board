@@ -5,9 +5,9 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from backend.data.database import SessionLocal
-from backend.data.models import SnapshotStockRowModel, SyncOutboxModel
-from backend.data.repository import Repository
+from backend.data.models.database import SessionLocal
+from backend.data.models.models import SnapshotStockRowModel, SyncOutboxModel
+from backend.data.repositories.repository import Repository
 from backend.main import app
 
 

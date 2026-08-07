@@ -6,9 +6,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.core.settings import get_settings
-from backend.data.repository_factory import get_runtime_mongodb_database
-from backend.data.mongo_theme_repository import MongoThemeRepository
-from backend.data.theme_repository import ThemeRepository
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
+from backend.data.repositories.theme_repository import ThemeRepository
 
 
 class ThemeMigrationError(ValueError):

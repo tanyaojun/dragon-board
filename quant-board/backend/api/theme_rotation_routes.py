@@ -6,8 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from backend.data import snapshot_cache
-from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.data.cache import snapshot_cache
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.core.settings import get_settings
 
 router = APIRouter(prefix="/api/theme-rotation", tags=["theme-rotation"])

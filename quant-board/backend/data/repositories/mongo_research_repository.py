@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.data.json_codec import dumps_json_field, loads_json_field
-from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
-from backend.data.mongo_repository import MongoRepository
+from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
+from backend.data.models.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
+from backend.data.repositories.mongo_repository import MongoRepository
 from backend.core.utils import json_dumps
 
 

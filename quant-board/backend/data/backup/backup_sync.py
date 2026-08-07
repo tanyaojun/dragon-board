@@ -7,9 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend.data.models import Dataset, SnapshotFrameModel
-from backend.data.repository import Repository
-from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
+from backend.data.models.models import Dataset, SnapshotFrameModel
+from backend.data.repositories.repository import Repository
+from backend.data.backup.supabase_backup import SupabaseBackupClient, get_backup_client
 from backend.core.settings import get_settings
 from backend.core.utils import json_dumps
 

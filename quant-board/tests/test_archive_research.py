@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 
-from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
-from backend.data.models import ArchiveManifestModel, BacktestEquityCurve, BacktestQualityReport, BacktestRun, BacktestSignal, BacktestTrade
+from backend.data.models.database import ResearchSessionLocal, SessionLocal, init_db
+from backend.data.models.models import ArchiveManifestModel, BacktestEquityCurve, BacktestQualityReport, BacktestRun, BacktestSignal, BacktestTrade
 
 
 def _seed_backtest_run(snapshot_session, research_session, run_id: str) -> None:
@@ -123,7 +123,7 @@ def test_research_archive_preserves_run_on_restore(tmp_path: Path) -> None:
         # re-seed research data directly (without _seed_backtest_run which
         # would delete the archive manifest) so the second call sees
         # identical data and hits the dedup path
-        from backend.data.models import BacktestEquityCurve, BacktestRun, BacktestSignal, BacktestTrade
+        from backend.data.models.models import BacktestEquityCurve, BacktestRun, BacktestSignal, BacktestTrade
         from sqlalchemy import delete
         for model in (BacktestTrade, BacktestEquityCurve, BacktestSignal):
             research_session.execute(delete(model).where(model.backtest_run_id == "bt_preserve"))

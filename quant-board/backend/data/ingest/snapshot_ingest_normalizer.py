@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend.data.importers import frame_from_record, sector_rows_from_record, stock_rows_from_record
-from backend.data.models import Dataset
-from backend.data.schemas import SnapshotIngestRequest
+from backend.data.ingest.importers import frame_from_record, sector_rows_from_record, stock_rows_from_record
+from backend.data.models.models import Dataset
+from backend.data.models.schemas import SnapshotIngestRequest
 from backend.core.utils import json_dumps, stable_hash
 
 

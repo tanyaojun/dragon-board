@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from backend.data.stock_name_repository import StockNameRepository
+from backend.data.repositories.stock_name_repository import StockNameRepository
 
 
 class FakeCursor:

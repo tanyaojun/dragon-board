@@ -8,8 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.data.database import get_db
-from backend.data.repository_factory import create_repository
+from backend.data.models.database import get_db
+from backend.data.repositories.repository_factory import create_repository
 
 
 router = APIRouter(tags=["fusion-strategy-projection"])

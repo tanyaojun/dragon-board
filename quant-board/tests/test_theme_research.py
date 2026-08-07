@@ -16,14 +16,14 @@ from backend.analysis.theme.trend import (
     ThemeQualityReport,
     build_theme_quality_report,
 )
-from backend.data.database import ResearchBase
-from backend.data.models import (
+from backend.data.models.database import ResearchBase
+from backend.data.models.models import (
     ThemeFactorFrameModel,
     ThemeStockExposureModel,
     ThemeSignalModel,
     ThemeQualityReportModel,
 )
-from backend.data.theme_research_repository import ThemeResearchRepository
+from backend.data.repositories.theme_research_repository import ThemeResearchRepository
 
 
 def _research_session(tmp_path: Path):

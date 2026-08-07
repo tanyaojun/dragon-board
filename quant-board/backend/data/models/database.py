@@ -46,7 +46,7 @@ def init_db() -> bool:
         return True
     if _initialized and _primary_available:
         return _primary_available
-    from backend.data import models  # noqa: F401
+    from backend.data.models import models  # noqa: F401
 
     try:
         Base.metadata.create_all(bind=engine)
@@ -128,7 +128,7 @@ def _apply_column_migrations(eng: "Engine", migrations: list[tuple[str, str, str
 
 def primary_status() -> dict[str, str | bool | None]:
     if settings.storage_backend == "mongodb":
-        from backend.data.repository_factory import mongodb_status
+        from backend.data.repositories.repository_factory import mongodb_status
 
         return mongodb_status()
     return {

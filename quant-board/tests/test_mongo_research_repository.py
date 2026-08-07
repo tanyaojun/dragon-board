@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
-from backend.data import mongo_research_repository as mongo_research_module
-from backend.data.mongo_research_repository import MongoResearchRepository
-from backend.data.json_codec import COMPRESSED_TEXT_PREFIX, loads_json_field
+from backend.data.models.models import BacktestRun, GoldenRankTrendCase, OptimizationRun, TradeJournal
+from backend.data.repositories import mongo_research_repository as mongo_research_module
+from backend.data.repositories.mongo_research_repository import MongoResearchRepository
+from backend.data.ingest.json_codec import COMPRESSED_TEXT_PREFIX, loads_json_field
 from backend.core.utils import json_dumps
 
 
@@ -554,7 +554,7 @@ def test_theme_trend_research_tables_store_json_as_structured_fields() -> None:
 
 
 def test_repository_factory_returns_research_capable_mongo_repository(monkeypatch) -> None:
-    import backend.data.repository_factory as factory
+    import backend.data.repositories.repository_factory as factory
 
     fake_db = FakeMongoDatabase()
     monkeypatch.setattr(factory, "get_settings", lambda: type("Settings", (), {"storage_backend": "mongodb"})())
@@ -709,7 +709,7 @@ def test_mongo_research_repository_journal_stats_include_status_and_review_break
 
 
 def test_backtest_service_runs_on_mongodb_snapshots_without_historical_research(monkeypatch) -> None:
-    import backend.data.repository_factory as factory
+    import backend.data.repositories.repository_factory as factory
     import backend.services as services
 
     db = FakeMongoDatabase()

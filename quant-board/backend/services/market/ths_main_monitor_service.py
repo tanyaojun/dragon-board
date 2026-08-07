@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import httpx
 
-from backend.data.snapshot_cache import create_snapshot_redis_client
+from backend.data.cache.snapshot_cache import create_snapshot_redis_client
 from backend.core.settings import get_settings
 
 

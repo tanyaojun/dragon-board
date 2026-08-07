@@ -30,7 +30,7 @@ class FakeMongoDb:
 def test_hotlist_sentiment_ingest_writes_mongodb_document(monkeypatch) -> None:
     fake_db = FakeMongoDb()
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: fake_db,
     )
     client = TestClient(app)

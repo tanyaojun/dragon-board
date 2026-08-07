@@ -4,10 +4,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from typing import Any, Callable
 
-from backend.data.database import SessionLocal
-from backend.data.json_codec import dumps_json_field
-from backend.data.models import BacktestRun, OptimizationRun
-from backend.data.repository_factory import create_repository, storage_source_label
+from backend.data.models.database import SessionLocal
+from backend.data.ingest.json_codec import dumps_json_field
+from backend.data.models.models import BacktestRun, OptimizationRun
+from backend.data.repositories.repository_factory import create_repository, storage_source_label
 from backend.optimization.runner import OptimizationRunner
 from backend.core.utils import stable_hash
 

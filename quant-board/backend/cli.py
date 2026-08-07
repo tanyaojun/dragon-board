@@ -8,17 +8,17 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
-from backend.data.backup_sync import BackupSyncService
-from backend.data.backup_retention import run_backup_retention_once
+from backend.data.models.database import ResearchSessionLocal, SessionLocal, init_db
+from backend.data.backup.backup_sync import BackupSyncService
+from backend.data.backup.backup_retention import run_backup_retention_once
 from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.service import ArchiveService
-from backend.data.dataset_service import DatasetService
-from backend.data.json_compaction import compact_json_fields
-from backend.data.legacy_split_migration import migrate_legacy_db
-from backend.data.migration import SnapshotMigrationService
-from backend.data.mongodb_migration import (
+from backend.data.ingest.dataset_service import DatasetService
+from backend.data.ingest.json_compaction import compact_json_fields
+from backend.data.migrations.legacy_split_migration import migrate_legacy_db
+from backend.data.migrations.migration import SnapshotMigrationService
+from backend.data.migrations.mongodb_migration import (
     MongoMigrationPlan,
     apply_mongodb_migration,
     get_mongodb_database,
@@ -26,21 +26,21 @@ from backend.data.mongodb_migration import (
     plan_mongodb_migration,
     verify_mongodb_migration,
 )
-from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
-from backend.data.mongodb_snapshot_repair import (
+from backend.data.migrations.mongodb_cleanup import plan_mongodb_dataset_cleanup
+from backend.data.migrations.mongodb_snapshot_repair import (
     backfill_empty_snapshot_rows,
     copy_missing_snapshot_slots_from_dataset,
 )
-from backend.data.mongodb_backup import get_mongodb_backup_service
-from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
-from backend.data.jump_backfill import backfill_jump_fields
-from backend.data.repository import Repository
-from backend.data.repository_factory import create_repository
-from backend.data.schemas import ImportDatasetRequest
-from backend.data.storage_inspector import inspect_storage
-from backend.data.supabase_backup import get_backup_client
-from backend.data.theme_database import ThemeSessionLocal, init_theme_db
-from backend.data.theme_service import ThemeMigrationService
+from backend.data.backup.mongodb_backup import get_mongodb_backup_service
+from backend.data.migrations.mongodb_research_repair import repair_mongodb_research_metadata
+from backend.data.migrations.jump_backfill import backfill_jump_fields
+from backend.data.repositories.repository import Repository
+from backend.data.repositories.repository_factory import create_repository
+from backend.data.models.schemas import ImportDatasetRequest
+from backend.data.ingest.storage_inspector import inspect_storage
+from backend.data.backup.supabase_backup import get_backup_client
+from backend.data.models.theme_database import ThemeSessionLocal, init_theme_db
+from backend.data.migrations.theme_service import ThemeMigrationService
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.analysis.ranktrend.live_gate_shadow_audit import load_hotlist_anchor_samples
 from backend.operations.schedule import run_after_market_once

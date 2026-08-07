@@ -4,8 +4,8 @@ from pathlib import Path
 
 from sqlalchemy import delete, select
 
-from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
-from backend.data.models import ArchiveManifestModel, BacktestEquityCurve, BacktestRun, BacktestSignal, BacktestTrade, Dataset, SnapshotFrameModel, SnapshotRecordModel, SnapshotSectorRowModel, SnapshotStockRowModel
+from backend.data.models.database import ResearchSessionLocal, SessionLocal, init_db
+from backend.data.models.models import ArchiveManifestModel, BacktestEquityCurve, BacktestRun, BacktestSignal, BacktestTrade, Dataset, SnapshotFrameModel, SnapshotRecordModel, SnapshotSectorRowModel, SnapshotStockRowModel
 
 
 # ── snapshot stock rows ──
@@ -48,7 +48,7 @@ def _seed_duck_snapshot(session) -> None:
 
 def test_stock_rows_fall_back_to_duckdb_archive(tmp_path: Path) -> None:
     from backend.data.archive.service import ArchiveService
-    from backend.data.repository import Repository
+    from backend.data.repositories.repository import Repository
 
     init_db()
     with SessionLocal() as session:
@@ -115,7 +115,7 @@ def _seed_duck_sector(session) -> None:
 
 def test_sector_rows_fall_back_to_duckdb_archive(tmp_path: Path) -> None:
     from backend.data.archive.service import ArchiveService
-    from backend.data.repository import Repository
+    from backend.data.repositories.repository import Repository
 
     init_db()
     with SessionLocal() as session:
@@ -161,7 +161,7 @@ def _seed_duck_mixed(session) -> None:
 
 def test_mixed_source_returns_both_hot_and_cold(tmp_path: Path) -> None:
     from backend.data.archive.service import ArchiveService
-    from backend.data.repository import Repository
+    from backend.data.repositories.repository import Repository
 
     init_db()
     with SessionLocal() as session:
@@ -189,7 +189,7 @@ def test_mixed_source_returns_both_hot_and_cold(tmp_path: Path) -> None:
 
 def test_stock_rows_range_query_includes_archived_rows(tmp_path: Path) -> None:
     from backend.data.archive.service import ArchiveService
-    from backend.data.repository import Repository
+    from backend.data.repositories.repository import Repository
 
     init_db()
     with SessionLocal() as session:
@@ -215,7 +215,7 @@ def test_stock_rows_range_query_includes_archived_rows(tmp_path: Path) -> None:
 
 def test_sector_rows_range_query_includes_archived_rows(tmp_path: Path) -> None:
     from backend.data.archive.service import ArchiveService
-    from backend.data.repository import Repository
+    from backend.data.repositories.repository import Repository
 
     init_db()
     with SessionLocal() as session:
@@ -278,7 +278,7 @@ def test_service_reports_missing_archived_parquet_file(tmp_path: Path) -> None:
 
 def test_multi_date_archive_is_included_in_range_lookup(tmp_path: Path) -> None:
     from backend.data.archive.service import ArchiveService
-    from backend.data.repository import Repository
+    from backend.data.repositories.repository import Repository
 
     init_db()
     with SessionLocal() as session:

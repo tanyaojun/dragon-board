@@ -6,8 +6,8 @@ import logging
 from time import perf_counter
 from typing import Any
 
-from backend.data import snapshot_cache
-from backend.data.models import Dataset
+from backend.data.cache import snapshot_cache
+from backend.data.models.models import Dataset
 from backend.core.settings import get_settings
 from backend.core.utils import json_dumps, json_loads
 

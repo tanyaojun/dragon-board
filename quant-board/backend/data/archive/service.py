@@ -12,7 +12,7 @@ from backend.data.archive.duckdb_query import ArchiveQueryError, DuckDBArchiveQu
 from backend.data.archive.manifest import ARCHIVE_SCHEMA_VERSION, read_manifest, research_archive_id, sha256_file, snapshot_archive_id, write_manifest
 from backend.data.archive.object_store import get_object_backup_store
 from backend.data.archive.parquet_store import ParquetStore
-from backend.data.models import (
+from backend.data.models.models import (
     ArchiveManifestModel,
     BacktestEquityCurve,
     BacktestRun,
@@ -616,7 +616,7 @@ class ArchiveService:
         return [str(row[0]) for row in self.session.execute(query).all()]
 
     def _snapshot_rows(self, dataset_id: str, snapshot_type: str, dates: list[str]) -> dict[str, list[dict[str, Any]]]:
-        from backend.data.repository import Repository
+        from backend.data.repositories.repository import Repository
 
         if not dates:
             return {"records": [], "frames": [], "stockRows": [], "sectorRows": []}
@@ -670,7 +670,7 @@ class ArchiveService:
         return {"stockRows": int(stock.rowcount or 0), "sectorRows": int(sector.rowcount or 0)}
 
     def _restore_snapshot_archive(self, manifest: ArchiveManifestModel, payload: dict[str, Any]) -> dict[str, Any]:
-        from backend.data.repository import Repository
+        from backend.data.repositories.repository import Repository
 
         repo = Repository(self.session, enable_backup=False)
         store = ParquetStore(Path(manifest.local_path), compression=self.compression)
@@ -688,7 +688,7 @@ class ArchiveService:
         }
 
     def _archive_one_research_run(self, run_id: str, *, dry_run: bool, apply: bool) -> dict[str, Any]:
-        from backend.data.repository import Repository
+        from backend.data.repositories.repository import Repository
 
         research_session = self.research_session or self.session
         repo = Repository(research_session, enable_backup=False)
@@ -751,7 +751,7 @@ class ArchiveService:
         return {**base, "status": "verified", "files": files, "deletedFromSqlite": deleted}
 
     def _restore_research_archive(self, manifest: ArchiveManifestModel, payload: dict[str, Any]) -> dict[str, Any]:
-        from backend.data.repository import Repository
+        from backend.data.repositories.repository import Repository
 
         research_session = self.research_session or self.session
         repo = Repository(research_session, enable_backup=False)

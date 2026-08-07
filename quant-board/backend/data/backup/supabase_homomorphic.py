@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 
-from backend.data.models import Dataset
+from backend.data.models.models import Dataset
 from backend.core.settings import Settings, get_settings
 from backend.core.utils import json_dumps, json_loads, utc_now_iso
 

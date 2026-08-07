@@ -1,6 +1,6 @@
 """测试 jump_backfill 模块的核心算法，确保与前端 detectRankJumps 行为一致。"""
 import pytest
-from backend.data.jump_backfill import _detect_jump, _percentile_from_rank
+from backend.data.migrations.jump_backfill import _detect_jump, _percentile_from_rank
 
 
 class TestPercentileFromRank:

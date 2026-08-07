@@ -10,8 +10,8 @@ from typing import Any
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
-from backend.data.models import TradeJournal
-from backend.data.repository_factory import create_repository
+from backend.data.models.models import TradeJournal
+from backend.data.repositories.repository_factory import create_repository
 
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])

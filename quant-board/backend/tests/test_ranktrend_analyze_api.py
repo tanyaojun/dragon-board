@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.data import snapshot_cache
+from backend.data.cache import snapshot_cache
 from backend.main import app
 from backend.core.settings import get_settings
 
@@ -41,7 +41,7 @@ class FakeRepo:
 
 def test_analyze_rejects_unsupported_snapshot_type(monkeypatch):
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -76,7 +76,7 @@ def test_theme_momentum_series_uses_redis_ttl_cache(monkeypatch):
 
     fake = FakeCache()
     monkeypatch.setattr(
-        "backend.data.snapshot_cache.get_snapshot_redis_cache",
+        "backend.data.cache.snapshot_cache.get_snapshot_redis_cache",
         lambda: fake,
     )
     calls = {"count": 0}
@@ -127,11 +127,11 @@ def test_analyze_returns_py_golden_frames(monkeypatch):
         "marketStats": {},
     }]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -173,7 +173,7 @@ def test_frames_include_regime(monkeypatch):
         "marketStats": {},
     }]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
@@ -213,11 +213,11 @@ def test_analyze_returns_resonance_and_market_median(monkeypatch):
         "marketStats": {},
     } for day in range(1, 5)]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -252,11 +252,11 @@ def test_analyze_finds_recent_frames_when_dataset_exceeds_200_window(monkeypatch
         for day in range(1, 221)
     ]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -287,11 +287,11 @@ def test_analyze_returns_empty_frames_when_requested_keys_missing_but_repo_has_f
         }
     ]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -330,11 +330,11 @@ def test_analyze_live_path_keeps_enough_history_for_resonance(monkeypatch):
         for day in range(1, 31)
     ]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -387,11 +387,11 @@ def test_analyze_fuses_insufficient_resonance_into_hold_final(monkeypatch):
         "marketStats": {},
     } for day in range(1, 5)]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -432,11 +432,11 @@ def test_analyze_historical_frames_keep_enough_history_for_tracks(monkeypatch):
         for day in range(1, 41)
     ]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -472,11 +472,11 @@ def test_analyze_market_median_uses_avg_rank_num_cross_section(monkeypatch):
         "marketStats": {},
     }]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -578,7 +578,7 @@ def test_analyze_redis_cache_hit_and_key_variation(monkeypatch):
         "marketStats": {},
     }]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     calls = {"n": 0}
@@ -587,7 +587,7 @@ def test_analyze_redis_cache_hit_and_key_variation(monkeypatch):
         calls["n"] += 1
         return FakeRepo(frames)
 
-    monkeypatch.setattr("backend.data.repository_factory.create_repository", counting_repo)
+    monkeypatch.setattr("backend.data.repositories.repository_factory.create_repository", counting_repo)
     payload = {
         "snapshotType": "half_hour",
         "codes": ["002279"],
@@ -648,7 +648,7 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
         "marketStats": {},
     }]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     calls = {"n": 0}
@@ -657,7 +657,7 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
         calls["n"] += 1
         return FakeRepo(frames)
 
-    monkeypatch.setattr("backend.data.repository_factory.create_repository", counting_repo)
+    monkeypatch.setattr("backend.data.repositories.repository_factory.create_repository", counting_repo)
 
     def payload(slot: str, change: float, trading_date: str = "2026-08-02"):
         return {
@@ -725,11 +725,11 @@ def test_analyze_cache_ttl_aligns_with_snapshot_read_ttl(monkeypatch):
         "marketStats": {},
     }]
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -802,11 +802,11 @@ def _theme_frames_with_context(count=12, theme_count=25):
 def test_analyze_includes_theme_context_and_resonance_theme(monkeypatch):
     frames = _theme_frames_with_context()
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={
@@ -846,11 +846,11 @@ def test_analyze_current_frame_theme_falls_back_to_last_historical_hot_themes(mo
         }],
     }
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: object(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.create_repository",
+        "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
     response = client.post("/api/ranktrend/analyze", json={

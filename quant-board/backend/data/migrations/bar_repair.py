@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.snapshot_collector.slots import SLOT_TIMES
 
 HALF_HOUR_SLOTS = SLOT_TIMES["half_hour"]

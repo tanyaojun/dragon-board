@@ -14,8 +14,8 @@ import time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from backend.data.schemas import SnapshotIngestRequest
-from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
+from backend.data.models.schemas import SnapshotIngestRequest
+from backend.data.ingest.snapshot_ingest_normalizer import normalize_snapshot_ingest
 from backend.snapshot_collector.builder import build_ingest_payload
 from backend.snapshot_collector.models import SnapshotSlot
 from backend.snapshot_collector.providers import (

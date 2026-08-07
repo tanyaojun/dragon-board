@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
+from backend.data.backup.supabase_backup import SupabaseBackupClient, get_backup_client
 from backend.core.settings import get_settings
 
 

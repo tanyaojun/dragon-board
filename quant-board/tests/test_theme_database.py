@@ -6,9 +6,9 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.data.theme_database import ThemeBase
-from backend.data.theme_repository import ThemeRepository
-from backend.data.theme_service import ThemeMigrationError, ThemeMigrationService
+from backend.data.models.theme_database import ThemeBase
+from backend.data.repositories.theme_repository import ThemeRepository
+from backend.data.migrations.theme_service import ThemeMigrationError, ThemeMigrationService
 
 
 def _theme_session(tmp_path: Path):

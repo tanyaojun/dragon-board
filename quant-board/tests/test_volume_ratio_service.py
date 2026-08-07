@@ -276,7 +276,7 @@ def test_volume_ratio_route_returns_items(monkeypatch) -> None:
         }
 
     monkeypatch.setattr(
-        "backend.data.repository_factory.get_runtime_mongodb_database",
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         fake_db,
     )
     monkeypatch.setattr("backend.api.market_data_routes.compute_volume_ratios", fake_compute)

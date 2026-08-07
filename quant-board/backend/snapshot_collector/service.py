@@ -213,7 +213,7 @@ def _run_audit_fields(
 
 def _default_normalize(norm_request: Any) -> tuple:
     """Default normalizer using the extracted ingest normalizer."""
-    from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
+    from backend.data.ingest.snapshot_ingest_normalizer import normalize_snapshot_ingest
     return normalize_snapshot_ingest(norm_request)
 
 
@@ -249,7 +249,7 @@ class SnapshotCollectorService:
         theme_heat_service: Any = None,
         theme_rotation_service: Any = None,
     ) -> None:
-        from backend.data.schemas import SnapshotIngestRequest
+        from backend.data.models.schemas import SnapshotIngestRequest
 
         self._repo = repo
         self._settings = settings
@@ -787,8 +787,8 @@ class SnapshotCollectorService:
 
     def _create_theme_repository(self) -> Any | None:
         try:
-            from backend.data.mongo_theme_repository import MongoThemeRepository
-            from backend.data.repository_factory import get_runtime_mongodb_database
+            from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
+            from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
             return MongoThemeRepository(get_runtime_mongodb_database())
         except Exception:
@@ -802,7 +802,7 @@ class SnapshotCollectorService:
         if not stock_rows:
             return
         try:
-            from backend.data.repository_factory import get_runtime_mongodb_database
+            from backend.data.repositories.repository_factory import get_runtime_mongodb_database
             from backend.services.market.volume_ratio_service import compute_volume_ratios
 
             db = get_runtime_mongodb_database()

@@ -122,7 +122,7 @@ def test_theme_rotation_summary_reads_through_redis_cache(monkeypatch):
             return super().find_one(query, sort)
 
     import backend.api.theme_rotation_routes as routes
-    from backend.data import snapshot_cache
+    from backend.data.cache import snapshot_cache
 
     frames = [{
         "snapshotId": "half_hour:2026-08-04:15:00",

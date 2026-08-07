@@ -336,7 +336,7 @@ def volume_ratio(payload: dict[str, Any]) -> JSONResponse:
                 "items": {},
             },
         )
-    from backend.data import repository_factory
+    from backend.data.repositories import repository_factory
 
     try:
         db = repository_factory.get_runtime_mongodb_database()

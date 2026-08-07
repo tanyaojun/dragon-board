@@ -19,7 +19,8 @@ from backend.analysis.theme.momentum import (
     compute_theme_momentum_series,
     stock_theme_exposure,
 )
-from backend.data import repository_factory, snapshot_cache
+from backend.data.repositories import repository_factory
+from backend.data.cache import snapshot_cache
 from backend.core.settings import get_settings
 
 router = APIRouter(tags=["ranktrend-analyze"])

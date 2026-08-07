@@ -5,9 +5,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.data.mongo_research_repository import MongoResearchRepository
-from backend.data.mongodb_migration import get_mongodb_database
-from backend.data.repository import Repository
+from backend.data.repositories.mongo_research_repository import MongoResearchRepository
+from backend.data.migrations.mongodb_migration import get_mongodb_database
+from backend.data.repositories.repository import Repository
 from backend.core.settings import get_settings
 
 

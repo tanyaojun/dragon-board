@@ -8,8 +8,8 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from backend.data.database import ResearchSessionLocal
-from backend.data.models import (
+from backend.data.models.database import ResearchSessionLocal
+from backend.data.models.models import (
     BacktestEquityCurve,
     BacktestQualityReport,
     BacktestRun,
@@ -25,8 +25,8 @@ from backend.data.models import (
     SnapshotStockRowModel,
     SyncOutboxModel,
 )
-from backend.data.supabase_backup import SupabaseBackupClient, get_backup_client
-from backend.data.json_codec import dumps_json_field, loads_json_field
+from backend.data.backup.supabase_backup import SupabaseBackupClient, get_backup_client
+from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
 from backend.core.utils import json_dumps, json_loads, stable_hash
 
 

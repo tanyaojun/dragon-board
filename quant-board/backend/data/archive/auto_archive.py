@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.data.database import SessionLocal
+from backend.data.models.database import SessionLocal
 from backend.core.settings import get_settings
 
 
@@ -88,7 +88,7 @@ class ArchiveAutoRunner:
 
 def run_archive_auto_once(limit: int | None = None, *, dry_run: bool = False) -> dict[str, Any]:
     from backend.data.archive.service import ArchiveService
-    from backend.data.database import ResearchSessionLocal
+    from backend.data.models.database import ResearchSessionLocal
 
     settings = get_settings()
     snapshot_types = [item.strip() for item in settings.archive_auto_snapshot_types.split(",") if item.strip()]

@@ -6,8 +6,8 @@ from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Str
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import Session as ORMSession
 
-from backend.data.database import Base, ResearchBase
-from backend.data.json_codec import dumps_json_field
+from backend.data.models.database import Base, ResearchBase
+from backend.data.ingest.json_codec import dumps_json_field
 
 
 class Dataset(Base):

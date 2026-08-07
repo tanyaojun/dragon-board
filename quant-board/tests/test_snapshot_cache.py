@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.data.snapshot_cache import (
+from backend.data.cache.snapshot_cache import (
     SnapshotCacheKeyBuilder,
     SnapshotRedisCache,
     build_snapshot_cache_generation_key,

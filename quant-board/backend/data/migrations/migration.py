@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.data.importers import (
+from backend.data.ingest.importers import (
     ImporterError,
     JsonBundleImporter,
     SnapshotBundle,
@@ -17,8 +17,8 @@ from backend.data.importers import (
     sector_rows_from_record,
     stock_rows_from_record,
 )
-from backend.data.models import Dataset, SnapshotFrameModel
-from backend.data.repository import Repository
+from backend.data.models.models import Dataset, SnapshotFrameModel
+from backend.data.repositories.repository import Repository
 from backend.core.utils import json_dumps, json_loads, read_json_file, stable_hash
 
 

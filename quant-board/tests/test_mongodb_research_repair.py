@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.data.mongodb_research_repair import repair_mongodb_research_metadata
+from backend.data.migrations.mongodb_research_repair import repair_mongodb_research_metadata
 
 
 class UpdateResult:

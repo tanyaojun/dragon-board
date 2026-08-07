@@ -20,8 +20,8 @@ _project_root = Path(__file__).resolve().parents[1]
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from backend.data.mongodb_backup import get_mongodb_backup_service
-from backend.data.mongodb_migration import get_mongodb_database
+from backend.data.backup.mongodb_backup import get_mongodb_backup_service
+from backend.data.migrations.mongodb_migration import get_mongodb_database
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 

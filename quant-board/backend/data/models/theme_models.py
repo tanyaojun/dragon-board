@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.data.theme_database import ThemeBase
+from backend.data.models.theme_database import ThemeBase
 
 
 class ThemeMetadataModel(ThemeBase):

@@ -16,8 +16,8 @@ from fastapi import APIRouter
 from backend.analysis.theme.daily_series import build_daily_series
 from backend.analysis.theme.momentum import compute_theme_momentum_v2
 from backend.analysis.theme.momentum_config import ThemeMomentumConfig
-from backend.data import snapshot_cache
-from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.data.cache import snapshot_cache
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.core.settings import get_settings
 
 router = APIRouter(prefix="/api/theme-momentum", tags=["theme-momentum"])

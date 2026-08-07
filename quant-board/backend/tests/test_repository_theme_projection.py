@@ -2,13 +2,13 @@
 
 import pytest
 
-from backend.data.mongo_repository import MongoRepository
+from backend.data.repositories.mongo_repository import MongoRepository
 
 
 @pytest.fixture(autouse=True)
 def _isolate_redis_cache(monkeypatch):
     """隔离真实 Redis：投影测试要断言 Mongo 查询行为，不能命中持久化缓存。"""
-    from backend.data import snapshot_cache
+    from backend.data.cache import snapshot_cache
 
     class NoopCache:
         def get_response(self, key):
@@ -168,7 +168,7 @@ def test_full_projection_does_not_filter_sector_rows_server_side():
 
 def test_ranktrend_plus_themes_bundle_reads_use_redis_ttl_cache(monkeypatch):
     """投影合同读取命中 Redis TTL 缓存时，不再重复查询 MongoDB stock/sector rows。"""
-    from backend.data import snapshot_cache
+    from backend.data.cache import snapshot_cache
 
     class FakeRedisCache:
         def __init__(self):

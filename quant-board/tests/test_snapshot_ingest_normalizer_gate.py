@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from backend.data.schemas import SnapshotIngestRequest
-from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
+from backend.data.models.schemas import SnapshotIngestRequest
+from backend.data.ingest.snapshot_ingest_normalizer import normalize_snapshot_ingest
 
 
 def _bundle_without_stock_rows() -> dict:

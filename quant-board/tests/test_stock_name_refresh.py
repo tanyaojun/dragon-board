@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.data.stock_name_refresh import fetch_mootdx_stock_directory, refresh_stock_names
+from backend.data.cache.stock_name_refresh import fetch_mootdx_stock_directory, refresh_stock_names
 
 
 class FakeCollection:

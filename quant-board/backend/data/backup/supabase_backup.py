@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.data.supabase_homomorphic import REQUIRED_TABLES, SupabaseBackupClient
+from backend.data.backup.supabase_homomorphic import REQUIRED_TABLES, SupabaseBackupClient
 
 
 def get_backup_client() -> SupabaseBackupClient | None:

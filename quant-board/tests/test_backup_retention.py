@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
-from backend.data.backup_retention import BackupRetentionService
-from backend.data.backup_sync import BackupSyncService
+from backend.data.backup.backup_retention import BackupRetentionService
+from backend.data.backup.backup_sync import BackupSyncService
 from backend.main import app
 from fastapi.testclient import TestClient
 
@@ -168,9 +168,9 @@ def test_push_backup_defaults_to_retention_window(monkeypatch: Any) -> None:
     FakeRepository.pending_outbox = []
     backup = FakeBackupClient({})
     session = FakeSession([SimpleNamespace(id="dragonboard_live", created_at="2026-04-01")])
-    monkeypatch.setattr("backend.data.backup_sync.Repository", FakeRepository)
+    monkeypatch.setattr("backend.data.backup.backup_sync.Repository", FakeRepository)
     monkeypatch.setattr(
-        "backend.data.backup_sync._local_retention_start_date",
+        "backend.data.backup.backup_sync._local_retention_start_date",
         lambda _session, _dataset_id, _keep_trading_days: "2026-04-03",
     )
 
@@ -192,9 +192,9 @@ def test_push_backup_skips_non_retention_datasets_by_default(monkeypatch: Any) -
             SimpleNamespace(id="research_full_history", created_at="2026-04-01"),
         ]
     )
-    monkeypatch.setattr("backend.data.backup_sync.Repository", FakeRepository)
+    monkeypatch.setattr("backend.data.backup.backup_sync.Repository", FakeRepository)
     monkeypatch.setattr(
-        "backend.data.backup_sync._local_retention_start_date",
+        "backend.data.backup.backup_sync._local_retention_start_date",
         lambda _session, _dataset_id, _keep_trading_days: "2026-04-03",
     )
 
@@ -220,9 +220,9 @@ def test_push_backup_applies_retention_to_outbox_replay(monkeypatch: Any) -> Non
     ]
     backup = FakeBackupClient({})
     session = FakeSession([SimpleNamespace(id="dragonboard_live", created_at="2026-04-01")])
-    monkeypatch.setattr("backend.data.backup_sync.Repository", FakeRepository)
+    monkeypatch.setattr("backend.data.backup.backup_sync.Repository", FakeRepository)
     monkeypatch.setattr(
-        "backend.data.backup_sync._local_retention_start_date",
+        "backend.data.backup.backup_sync._local_retention_start_date",
         lambda _session, _dataset_id, _keep_trading_days: "2026-04-03",
     )
 

@@ -27,12 +27,12 @@ from backend.core.backtest import (
     TradeSimulator,
     normalize_strategy_name,
 )
-from backend.data.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
-from backend.data.quality_gate import evaluate_snapshot_quality
-from backend.data.json_codec import dumps_json_field, loads_json_field
-from backend.data.database import SessionLocal
-from backend.data.repository import Repository
-from backend.data.repository_factory import create_repository, storage_source_label
+from backend.data.models.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
+from backend.data.ingest.quality_gate import evaluate_snapshot_quality
+from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
+from backend.data.models.database import SessionLocal
+from backend.data.repositories.repository import Repository
+from backend.data.repositories.repository_factory import create_repository, storage_source_label
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
 from backend.optimization.search_space import candidate_count, select_candidates

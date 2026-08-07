@@ -74,7 +74,7 @@ class FakeObjectStore:
 
 
 def test_full_backup_writes_manifest_and_local_dump_structure(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import MongoBackupService
 
     db = FakeMongoDatabase(
         {
@@ -115,7 +115,7 @@ def test_full_backup_writes_manifest_and_local_dump_structure(tmp_path: Path) ->
 
 
 def test_verify_mongodb_backup_marks_verified_and_writes_sha256sums(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import MongoBackupService
 
     service = MongoBackupService(
         backup_dir=tmp_path,
@@ -139,7 +139,7 @@ def test_verify_mongodb_backup_marks_verified_and_writes_sha256sums(tmp_path: Pa
 
 
 def test_verify_mongodb_backup_returns_structured_error_on_sha_mismatch(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import MongoBackupService
 
     service = MongoBackupService(
         backup_dir=tmp_path,
@@ -165,7 +165,7 @@ def test_verify_mongodb_backup_returns_structured_error_on_sha_mismatch(tmp_path
 
 
 def test_push_mongodb_backup_rejects_unverified_and_uploads_verified_backup(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import MongoBackupService
 
     store = FakeObjectStore()
     service = MongoBackupService(
@@ -195,7 +195,7 @@ def test_push_mongodb_backup_rejects_unverified_and_uploads_verified_backup(tmp_
 
 
 def test_pull_mongodb_backup_uses_restore_staging_and_dry_run_writes_nothing(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import MongoBackupService
 
     store = FakeObjectStore()
     source = MongoBackupService(
@@ -242,8 +242,8 @@ def test_pull_mongodb_backup_uses_restore_staging_and_dry_run_writes_nothing(tmp
 
 
 def test_verify_restore_staging_backup_rejects_row_count_mismatch(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
-    from backend.data.mongodb_backup import sha256_file
+    from backend.data.backup.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import sha256_file
 
     service = MongoBackupService(
         backup_dir=tmp_path,
@@ -277,7 +277,7 @@ def test_verify_restore_staging_backup_rejects_row_count_mismatch(tmp_path: Path
 
 
 def test_prune_mongodb_local_backups_deletes_only_expired_backup_dirs(tmp_path: Path) -> None:
-    from backend.data.mongodb_backup import MongoBackupService
+    from backend.data.backup.mongodb_backup import MongoBackupService
 
     service = MongoBackupService(
         backup_dir=tmp_path,

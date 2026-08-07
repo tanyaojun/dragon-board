@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.data.models import OptimizationRun
+from backend.data.models.models import OptimizationRun
 from backend.core.utils import json_loads
 
 
@@ -196,7 +196,7 @@ def test_mongodb_mode_disables_supabase_health_probe_and_runs_hotlist_after_mark
 
 
 def test_theme_status_reports_mongodb_connection_failure(monkeypatch) -> None:
-    import backend.data.theme_database as theme_database
+    import backend.data.models.theme_database as theme_database
 
     monkeypatch.setattr(
         theme_database,
@@ -204,7 +204,7 @@ def test_theme_status_reports_mongodb_connection_failure(monkeypatch) -> None:
         lambda: type("Settings", (), {"storage_backend": "mongodb"})(),
     )
     monkeypatch.setattr(
-        "backend.data.repository_factory.mongodb_status",
+        "backend.data.repositories.repository_factory.mongodb_status",
         lambda: {
             "configured": False,
             "connected": False,
@@ -289,7 +289,7 @@ def test_delete_dataset_api_uses_mongodb_service_and_preserves_primary_guard(mon
 
 
 def test_pytest_cannot_connect_to_production_mongodb_database(monkeypatch) -> None:
-    from backend.data import repository_factory
+    from backend.data.repositories import repository_factory
 
     repository_factory._runtime_mongodb_database = None
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_guard")

@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy import create_engine, text
 
-from backend.data.json_codec import COMPRESSED_TEXT_PREFIX, DEFAULT_COMPRESSION_THRESHOLD, dumps_json_field
+from backend.data.ingest.json_codec import COMPRESSED_TEXT_PREFIX, DEFAULT_COMPRESSION_THRESHOLD, dumps_json_field
 
 
 DEFAULT_JSON_TABLES = {

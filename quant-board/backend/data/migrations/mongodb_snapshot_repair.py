@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.data.mongodb_migration import EXPECTED_SNAPSHOT_SLOTS, build_mongodb_indexes
+from backend.data.migrations.mongodb_migration import EXPECTED_SNAPSHOT_SLOTS, build_mongodb_indexes
 
 
 EXPLICIT_DONOR_SNAPSHOT_IDS = {

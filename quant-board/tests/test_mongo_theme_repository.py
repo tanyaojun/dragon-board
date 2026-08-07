@@ -4,8 +4,8 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from backend.data.mongo_theme_repository import MongoThemeRepository
-from backend.data.theme_service import ThemeMigrationService
+from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
+from backend.data.migrations.theme_service import ThemeMigrationService
 
 
 class FakeCursor:
@@ -148,7 +148,7 @@ def test_get_market_universe_returns_both_indexes() -> None:
 
 def test_theme_migration_service_uses_mongo_repository_in_mongodb_mode(monkeypatch) -> None:
     db = FakeMongoDatabase()
-    import backend.data.theme_service as theme_service
+    import backend.data.migrations.theme_service as theme_service
 
     monkeypatch.setattr(
         theme_service,

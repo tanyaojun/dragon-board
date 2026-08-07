@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import delete, distinct, func, select
 from sqlalchemy.orm import Session
 
-from backend.data.theme_models import ThemeMetadataModel, ThemeModel, ThemeStockMappingModel
+from backend.data.models.theme_models import ThemeMetadataModel, ThemeModel, ThemeStockMappingModel
 from backend.core.utils import json_dumps
 
 

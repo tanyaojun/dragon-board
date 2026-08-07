@@ -96,7 +96,7 @@ def test_collect_market_context_async_orchestrates(
 
 
 def test_arun_once_multi_collects_once_derives_per_type() -> None:
-    from backend.data.snapshot_ingest_normalizer import normalize_snapshot_ingest
+    from backend.data.ingest.snapshot_ingest_normalizer import normalize_snapshot_ingest
     from backend.snapshot_collector.models import (
         CollectorRunRequest,
         MarketDataContext,

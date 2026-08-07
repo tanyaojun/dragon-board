@@ -14,9 +14,9 @@ from backend.analysis.theme.trend import (
     FACTOR_VERSION,
     SIGNAL_VERSION,
 )
-from backend.data.database import SessionLocal
-from backend.data.repository_factory import create_repository, storage_source_label
-from backend.data.theme_research_repository import ThemeResearchRepository
+from backend.data.models.database import SessionLocal
+from backend.data.repositories.repository_factory import create_repository, storage_source_label
+from backend.data.repositories.theme_research_repository import ThemeResearchRepository
 from backend.core.utils import stable_hash
 
 

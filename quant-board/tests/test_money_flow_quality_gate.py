@@ -1,6 +1,6 @@
 import pytest
 
-from backend.data.quality_gate import evaluate_snapshot_quality
+from backend.data.ingest.quality_gate import evaluate_snapshot_quality
 from backend.services import (
     _cross_market_zero_price_stock_rows,
     _drop_all_zero_price_frames,

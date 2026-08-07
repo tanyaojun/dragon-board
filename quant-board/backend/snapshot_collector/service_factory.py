@@ -13,9 +13,10 @@ import math
 from datetime import datetime
 from typing import Any
 
-from backend.data import mongo_repository, snapshot_cache
-from backend.data.models import Dataset
-from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.data.repositories import mongo_repository
+from backend.data.cache import snapshot_cache
+from backend.data.models.models import Dataset
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.core.settings import get_settings
 from backend.services.theme.heat_service import get_theme_heat_service
 

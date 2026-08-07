@@ -8,9 +8,9 @@ from typing import Any
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from backend.data.importers import frame_from_record, normalize_record, sector_rows_from_record, stock_rows_from_record
-from backend.data.json_codec import dumps_json_field
-from backend.data.models import (
+from backend.data.ingest.importers import frame_from_record, normalize_record, sector_rows_from_record, stock_rows_from_record
+from backend.data.ingest.json_codec import dumps_json_field
+from backend.data.models.models import (
     BacktestRun,
     Dataset,
     GoldenRankTrendCase,
@@ -21,7 +21,7 @@ from backend.data.models import (
     SnapshotStockRowModel,
     SyncOutboxModel,
 )
-from backend.data.repository import Repository
+from backend.data.repositories.repository import Repository
 from backend.core.utils import json_loads, stable_hash
 
 

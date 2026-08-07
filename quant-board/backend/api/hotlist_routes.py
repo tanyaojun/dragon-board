@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.data import repository_factory
+from backend.data.repositories import repository_factory
 
 
 router = APIRouter(prefix="/api/hotlist-sentiment", tags=["hotlist-sentiment"])

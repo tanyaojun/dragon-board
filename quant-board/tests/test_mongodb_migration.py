@@ -3,8 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from backend.data.json_codec import loads_json_field
-from backend.data.mongodb_migration import (
+from backend.data.ingest.json_codec import loads_json_field
+from backend.data.migrations.mongodb_migration import (
     ALL_COLLECTIONS,
     MongoMigrationPlan,
     apply_mongodb_migration,
@@ -108,7 +108,7 @@ def test_backtest_run_mapping_uses_compressed_result_contract() -> None:
 
 
 def test_backtest_run_mapping_chunks_oversized_compressed_result(monkeypatch) -> None:
-    import backend.data.mongodb_migration as migration
+    import backend.data.migrations.mongodb_migration as migration
 
     monkeypatch.setattr(migration, "BACKTEST_RESULT_CHUNK_THRESHOLD", 20)
     monkeypatch.setattr(migration, "BACKTEST_RESULT_CHUNK_SIZE", 10)
@@ -583,7 +583,7 @@ def test_skip_research_does_not_require_readable_research_db(tmp_path: Path) -> 
 
 
 def test_get_mongodb_database_requires_uri() -> None:
-    from backend.data.mongodb_migration import get_mongodb_database
+    from backend.data.migrations.mongodb_migration import get_mongodb_database
 
     try:
         get_mongodb_database("", "dragon_board_quant")

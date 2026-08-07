@@ -744,14 +744,14 @@ class TestServiceFactory:
 
     def test_factory_returns_snapshot_repository_protocol_instance(self, monkeypatch: Any) -> None:
         """Factory must return an object satisfying the SnapshotRepository protocol."""
-        from backend.data.repository_factory import _runtime_mongodb_database as orig
+        from backend.data.repositories.repository_factory import _runtime_mongodb_database as orig
         from backend.snapshot_collector.repository_port import SnapshotRepository
         from backend.snapshot_collector.service_factory import (
             create_snapshot_collector_repository,
         )
 
         # Use the FakeMongoDatabase with MongoRepository pattern from existing tests
-        from backend.data.mongo_repository import MongoRepository
+        from backend.data.repositories.mongo_repository import MongoRepository
 
         # Match the test pattern from test_mongo_repository.py
         class FakeCursor:

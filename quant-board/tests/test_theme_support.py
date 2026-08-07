@@ -4,9 +4,9 @@ from sqlalchemy import create_engine, inspect, text
 
 from backend.analysis.theme.support import build_theme_candidate_support, build_theme_support_index
 from backend.core.backtest.strategy import RankTrendCandidateStrategy, StrategyInput
-from backend.data.database import _apply_column_migrations
-from backend.data.models import BacktestSignal, SnapshotSectorRowModel, SnapshotStockRowModel
-from backend.data.repository import Repository
+from backend.data.models.database import _apply_column_migrations
+from backend.data.models.models import BacktestSignal, SnapshotSectorRowModel, SnapshotStockRowModel
+from backend.data.repositories.repository import Repository
 
 
 def _ranktrend_final(signal: str = "buy") -> dict:

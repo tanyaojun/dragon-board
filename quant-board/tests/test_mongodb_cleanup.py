@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.data.mongodb_cleanup import plan_mongodb_dataset_cleanup
+from backend.data.migrations.mongodb_cleanup import plan_mongodb_dataset_cleanup
 
 
 class DeleteResult:

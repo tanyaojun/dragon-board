@@ -864,7 +864,7 @@ def _matches(row: dict[str, object], query: dict[str, object]) -> bool:
 
 def _load_backfill():
     try:
-        from backend.data.mongodb_snapshot_repair import backfill_empty_snapshot_rows
+        from backend.data.migrations.mongodb_snapshot_repair import backfill_empty_snapshot_rows
     except ModuleNotFoundError as exc:  # pragma: no cover - current RED state is the point of the test
         pytest.fail(f"mongodb snapshot repair module missing: {exc}")
     return backfill_empty_snapshot_rows
@@ -872,7 +872,7 @@ def _load_backfill():
 
 def _load_slot_copy():
     try:
-        from backend.data.mongodb_snapshot_repair import copy_missing_snapshot_slots_from_dataset
+        from backend.data.migrations.mongodb_snapshot_repair import copy_missing_snapshot_slots_from_dataset
     except ModuleNotFoundError:
         pytest.skip("QuantBoard backend package is not importable from this environment")
     return copy_missing_snapshot_slots_from_dataset

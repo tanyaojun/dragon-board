@@ -31,7 +31,7 @@ def init_theme_db() -> bool:
     global _theme_initialized, _theme_available, _last_theme_error
     if _theme_initialized and _theme_available:
         return _theme_available
-    from backend.data import theme_models  # noqa: F401
+    from backend.data.models import theme_models  # noqa: F401
 
     try:
         ThemeBase.metadata.create_all(bind=theme_engine)
@@ -62,7 +62,7 @@ def get_theme_db() -> Generator[Session | None, None, None]:
 
 def theme_status() -> dict[str, str | bool | None]:
     if get_settings().storage_backend == "mongodb":
-        from backend.data.repository_factory import mongodb_status
+        from backend.data.repositories.repository_factory import mongodb_status
 
         status = mongodb_status()
         return {

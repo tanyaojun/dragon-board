@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
-from backend.data.mongo_theme_repository import MongoThemeRepository
-from backend.data.repository_factory import get_runtime_mongodb_database
+from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.core.settings import get_settings
 
 # ── longhuvip API 配置 ─────────────────────────────────────────────────────

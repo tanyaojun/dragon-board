@@ -9,12 +9,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.cli import build_parser
-from backend.data.importers import LevelDbIndexedDbImporter
-from backend.data.json_codec import COMPRESSED_TEXT_PREFIX, dumps_json_field, loads_json_field
-from backend.data.json_compaction import compact_json_fields
-from backend.data.legacy_split_migration import migrate_legacy_db
-from backend.data.models import BacktestRun, Base, ResearchBase
-from backend.data.storage_inspector import inspect_storage
+from backend.data.ingest.importers import LevelDbIndexedDbImporter
+from backend.data.ingest.json_codec import COMPRESSED_TEXT_PREFIX, dumps_json_field, loads_json_field
+from backend.data.ingest.json_compaction import compact_json_fields
+from backend.data.migrations.legacy_split_migration import migrate_legacy_db
+from backend.data.models.models import BacktestRun, Base, ResearchBase
+from backend.data.ingest.storage_inspector import inspect_storage
 from backend.core.settings import Settings
 
 

@@ -38,7 +38,7 @@ from backend.services.checkpoint import (
     select_longtest_baseline_slots,
     summarize_longtest_slot_label,
 )
-from backend.data.repository_factory import storage_source_label
+from backend.data.repositories.repository_factory import storage_source_label
 from backend.services.backtest_service import (
     BacktestService,
     _cross_market_zero_price_stock_rows,

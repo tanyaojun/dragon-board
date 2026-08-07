@@ -5,11 +5,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.data.importers import ImporterError, read_snapshot_bundle
-from backend.data.models import Dataset
-from backend.data.quality_gate import evaluate_snapshot_quality
-from backend.data.repository_factory import create_repository
-from backend.data.schemas import ImportDatasetRequest
+from backend.data.ingest.importers import ImporterError, read_snapshot_bundle
+from backend.data.models.models import Dataset
+from backend.data.ingest.quality_gate import evaluate_snapshot_quality
+from backend.data.repositories.repository_factory import create_repository
+from backend.data.models.schemas import ImportDatasetRequest
 from backend.core.utils import json_dumps, new_id, stable_hash
 
 

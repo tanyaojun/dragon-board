@@ -4,9 +4,9 @@ import asyncio
 import contextlib
 from typing import Any
 
-from backend.data.backup_sync import BackupSyncService
-from backend.data.database import SessionLocal
-from backend.data.repository import Repository
+from backend.data.backup.backup_sync import BackupSyncService
+from backend.data.models.database import SessionLocal
+from backend.data.repositories.repository import Repository
 from backend.core.settings import get_settings
 
 

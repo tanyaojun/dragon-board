@@ -34,9 +34,9 @@ from backend.cli import (
 )
 from backend.core.backtest import DEFAULT_TRADE_CONFIG, TradeSimulator
 from backend.core.backtest.strategy import normalize_strategy_name
-from backend.data.database import ResearchSessionLocal, SessionLocal, init_db
-from backend.data.backup_sync import BackupSyncService
-from backend.data.models import (
+from backend.data.models.database import ResearchSessionLocal, SessionLocal, init_db
+from backend.data.backup.backup_sync import BackupSyncService
+from backend.data.models.models import (
     BacktestEquityCurve,
     BacktestQualityReport,
     BacktestRun,
@@ -47,8 +47,8 @@ from backend.data.models import (
     OptimizationRun,
     SyncOutboxModel,
 )
-from backend.data.repository import Repository
-from backend.data.supabase_homomorphic import SupabaseBackupClient, _chunk_rows_by_payload_size
+from backend.data.repositories.repository import Repository
+from backend.data.backup.supabase_homomorphic import SupabaseBackupClient, _chunk_rows_by_payload_size
 from backend.main import app
 from backend.core.settings import get_settings
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG, BacktestService
@@ -2280,7 +2280,7 @@ def test_ranktrend_rank_series_api_uses_per_code_window_not_global_frame_window(
 
 
 def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.data import snapshot_cache
+    from backend.data.cache import snapshot_cache
 
     class FakeCache:
         def __init__(self) -> None:
@@ -2500,7 +2500,7 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
 
 
 def test_snapshot_detail_list_apis_use_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.data import snapshot_cache
+    from backend.data.cache import snapshot_cache
 
     class FakeCache:
         def __init__(self) -> None:
@@ -2565,7 +2565,7 @@ def test_snapshot_detail_list_apis_use_snapshot_cache(monkeypatch: pytest.Monkey
 
 
 def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from backend.data import snapshot_cache
+    from backend.data.cache import snapshot_cache
 
     class FakeCache:
         def __init__(self) -> None:
