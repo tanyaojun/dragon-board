@@ -23,6 +23,41 @@ function getRankTrendAnalysis(stock: any) {
   return stock?.rankTrend ?? null
 }
 
+/**
+ * 生命周期阶段的方向划分（与 golden `ATTENTION_STAGE_SEQUENCE` 一致）：
+ * ignition（点火）/ expansion（扩散）为上升路径；crowded（拥挤）/ reversal（反转）/
+ * cooling（降温）为风险与下降路径。用于「生命周期」列的方向优先排序。
+ */
+const LIFECYCLE_UP_STAGES: ReadonlySet<string> = new Set(['ignition', 'expansion'])
+const LIFECYCLE_DOWN_STAGES: ReadonlySet<string> = new Set(['crowded', 'reversal', 'cooling'])
+
+/**
+ * 三个方向字段（共振强度 / 排名趋势 / 生命周期）的方向排序组：
+ * 1 = 上升，0 = 持平/未知，-1 = 下降。方向组固定优先（上升在前、下降在后），
+ * 与 asc/desc 无关，避免「下降 90 排在上升 88 前面」这类纯数值排序造成的错觉。
+ */
+function getDirectionalSortRank(stock: any, field: SortField): number {
+  if (field === 'resonanceIntensity') {
+    const direction = getRankTrendAnalysis(stock)?.resonance?.direction ?? null
+    return direction === 'buy' ? 1 : direction === 'sell' ? -1 : 0
+  }
+  if (field === 'rankTrendStrength') {
+    const direction =
+      stock?._rankTrendDirection ??
+      getRankTrendAnalysis(stock)?.observation?.rankTrend?.direction ??
+      null
+    return direction === 'buy' ? 1 : direction === 'sell' ? -1 : 0
+  }
+  if (field === 'lifecycleOpportunity') {
+    const stage =
+      stock?._lifecycleStage ?? getRankTrendAnalysis(stock)?.observation?.lifecycle?.stage ?? null
+    if (LIFECYCLE_UP_STAGES.has(stage)) return 1
+    if (LIFECYCLE_DOWN_STAGES.has(stage)) return -1
+    return 0
+  }
+  return 0
+}
+
 function getResonanceIntensitySortValue(stock: any): number | null {
   if (stock._resonancePct !== undefined) return toFiniteNumber(stock._resonancePct)
   const resonance = getRankTrendAnalysis(stock)?.resonance
@@ -211,6 +246,10 @@ export const useUIStore = defineStore('ui', () => {
     dataVersion.value
 
     result.sort((a, b) => {
+      // 方向字段：先按方向组固定排序（上升在前、下降在后），组内再按数值 + order。
+      const directionRankA = getDirectionalSortRank(a, field)
+      const directionRankB = getDirectionalSortRank(b, field)
+      if (directionRankA !== directionRankB) return directionRankB - directionRankA
       return compareSortValues(getStockSortValue(a, field), getStockSortValue(b, field), order)
     })
 

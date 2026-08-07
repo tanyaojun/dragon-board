@@ -139,6 +139,82 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001'])
   })
 
+  it('sorts resonance intensity direction-first: buy above sell regardless of score', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      {
+        code: '000001',
+        name: '下降高分',
+        _resonancePct: 90,
+        rankTrend: { resonance: { status: 'ok', direction: 'sell', score: 90 } },
+      },
+      {
+        code: '000002',
+        name: '上升低分',
+        _resonancePct: 20,
+        rankTrend: { resonance: { status: 'ok', direction: 'buy', score: 20 } },
+      },
+      {
+        code: '000003',
+        name: '上升高分',
+        _resonancePct: 88,
+        rankTrend: { resonance: { status: 'ok', direction: 'buy', score: 88 } },
+      },
+    ])
+
+    uiStore.toggleSort('resonanceIntensity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+
+    uiStore.toggleSort('resonanceIntensity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
+  it('sorts rank-trend strength direction-first: buy above sell regardless of score', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '下降30', _rankTrendPct: 30, _rankTrendDirection: 'sell' },
+      { code: '000002', name: '上升20', _rankTrendPct: 20, _rankTrendDirection: 'buy' },
+      { code: '000003', name: '上升90', _rankTrendPct: 90, _rankTrendDirection: 'buy' },
+    ])
+
+    uiStore.toggleSort('rankTrendStrength')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+
+    uiStore.toggleSort('rankTrendStrength')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
+  it('sorts lifecycle opportunity direction-first by attention stage', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '冷却高分', _lifecyclePct: 91, _lifecycleStage: 'cooling' },
+      { code: '000002', name: '扩散', _lifecyclePct: 63, _lifecycleStage: 'expansion' },
+      { code: '000003', name: '点火', _lifecyclePct: 55, _lifecycleStage: 'ignition' },
+      { code: '000004', name: '拥挤', _lifecyclePct: 85, _lifecycleStage: 'crowded' },
+    ])
+
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
+
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001', '000004'])
+  })
+
+  it('keeps missing observation direction between up and down groups in both sort directions', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '无方向', _rankTrendPct: 50 },
+      { code: '000002', name: '上升', _rankTrendPct: 20, _rankTrendDirection: 'buy' },
+      { code: '000003', name: '下降', _rankTrendPct: 80, _rankTrendDirection: 'sell' },
+    ])
+
+    uiStore.toggleSort('rankTrendStrength')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
+
+    uiStore.toggleSort('rankTrendStrength')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
+  })
+
   it('uses the three observation columns in the default table view', () => {
     const uiStore = useUIStore()
 
