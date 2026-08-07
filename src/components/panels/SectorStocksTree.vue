@@ -1,7 +1,18 @@
 <template>
   <div class="sector-stocks-container">
-    <!-- 左侧题材树 -->
-    <div class="sector-tree">
+    <!-- 子页签：题材列表 / 题材动量 -->
+    <div class="panel-tabs">
+      <button class="tab-btn" :class="{ active: activeTab === 'list' }" @click="activeTab = 'list'">
+        🌲 题材列表
+      </button>
+      <button class="tab-btn" :class="{ active: activeTab === 'momentum' }" @click="activeTab = 'momentum'">
+        📊 题材动量
+      </button>
+    </div>
+
+    <div v-if="activeTab === 'list'" class="tab-content">
+      <!-- 左侧题材树 -->
+      <div class="sector-tree">
       <div class="tree-header">
         <h4>📊 题材列表</h4>
         <div class="tree-search">
@@ -140,6 +151,10 @@
       <div class="empty-icon">📊</div>
       <div class="empty-text">请从左侧选择一个题材</div>
     </div>
+    </div>
+
+    <!-- 题材动量（嵌入式面板） -->
+    <ThemeMomentumPanel v-else embedded class="momentum-tab-content" />
   </div>
 </template>
 
@@ -150,6 +165,7 @@ import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
+import ThemeMomentumPanel from './ThemeMomentumPanel.vue'
 
 // Props
 const props = defineProps<{
@@ -162,6 +178,7 @@ const emit = defineEmits<{
 }>()
 
 // 状态
+const activeTab = ref<'list' | 'momentum'>('list')
 const treeSearch = ref('')
 const treePage = ref(1)
 const pageSize = ref(10)
@@ -360,12 +377,59 @@ watch([stockSearch, sortBy, sortDesc], () => {
 /* ========== 容器样式 ========== */
 .sector-stocks-container {
   display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 500px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
   overflow: hidden;
+}
+
+/* ========== 子页签栏（题材列表 / 题材动量） ========== */
+.panel-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 12px 0;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  padding: 7px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 8px 8px 0 0;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  background: var(--bg-primary);
+  color: var(--text-title);
+  font-weight: 600;
+  border-bottom-color: var(--color-highlight);
+}
+
+.tab-content {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.momentum-tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
 }
 
 /* ========== 左侧题材树 ========== */

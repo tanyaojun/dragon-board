@@ -8,23 +8,43 @@ describe('ThemeMomentumPanel', () => {
     join(process.cwd(), 'src', 'components', 'panels', 'ThemeMomentumPanel.vue'),
     'utf8',
   )
+  const body = readFileSync(
+    join(process.cwd(), 'src', 'components', 'panels', 'ThemeMomentumBody.vue'),
+    'utf8',
+  )
   const facade = readFileSync(
     join(process.cwd(), 'src', 'services', 'theme', 'ThemeFacade.ts'),
     'utf8',
   )
   const app = readFileSync(join(process.cwd(), 'src', 'App.vue'), 'utf8')
 
-  it('renders full-field momentum ranking table with expandable rows', () => {
-    expect(panel).toContain('momentum-table')
-    expect(panel).toContain('RPS 5/10/20')
-    expect(panel).toContain('expanded.has')
-    expect(panel).toContain('detail-row')
+  it('renders the embedded tree/detail momentum layout with full fields', () => {
+    // 嵌入正文：左侧题材动量列表 + 右侧详情（参照 SectorStocksTree 风格）
+    expect(body).toContain('momentum-tree')
+    expect(body).toContain('momentum-detail')
+    expect(body).toContain('RPS 5/10/20')
+    expect(body).toContain('strength-badge')
+    expect(body).toContain('progress-bar')
+    expect(body).toContain('tree-pagination')
   })
 
   it('loads data via themeFacade.getThemeMomentumSummary', () => {
     expect(panel).toContain('getThemeMomentumSummary')
     expect(facade).toContain('/api/theme-momentum/summary')
     expect(facade).toContain('export async function getThemeMomentumSummary')
+  })
+
+  it('supports embedded mode rendered inside the sector tree panel', () => {
+    expect(panel).toContain('embedded')
+    expect(panel).toContain('ThemeMomentumBody')
+    // 题材树形面板内嵌题材动量页签
+    const tree = readFileSync(
+      join(process.cwd(), 'src', 'components', 'panels', 'SectorStocksTree.vue'),
+      'utf8',
+    )
+    expect(tree).toContain("activeTab === 'list'")
+    expect(tree).toContain('ThemeMomentumPanel')
+    expect(tree).toContain('embedded')
   })
 
   it('is mounted in App.vue with panel state', () => {
@@ -42,9 +62,11 @@ describe('ThemeMomentumPanel', () => {
   })
 
   it('shows ztCount column and intraday detail blocks', () => {
-    expect(panel).toContain('涨停')
-    expect(panel).toContain('factor.ztCount')
-    expect(panel).toContain('龙头/涨停')
-    expect(panel).toContain('factor.intraday?.unavailable')
+    expect(body).toContain('涨停')
+    expect(body).toContain('factor.ztCount')
+    expect(body).toContain('龙头/涨停')
+    expect(body).toContain('selectedFactor.intraday?.unavailable')
+    expect(body).toContain('依据')
+    expect(body).toContain('selectedFactor.reasons')
   })
 })

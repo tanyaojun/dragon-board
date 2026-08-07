@@ -41,10 +41,6 @@
             {{ rotationMeta.slotTime }}<template v-if="rotationMeta.stale">·旧</template>
           </em>
         </button>
-        <button class="tab-btn" :class="{ active: view === 'alerts' }" @click="view = 'alerts'">
-          ⚠️ 实时预警
-          <span v-if="alertCount > 0" class="alert-count">{{ alertCount }}</span>
-        </button>
         <!-- 联动分析 -->
         <button class="tab-btn" :class="{ active: view === 'correlation' }" @click="view = 'correlation'">
           🔗 联动分析
@@ -218,29 +214,6 @@
         </div>
       </div>
 
-      <!-- 预警视图 -->
-      <div v-else-if="view === 'alerts'" class="alerts-view">
-        <div v-if="alerts.length === 0" class="empty-state">✅ 暂无预警信息</div>
-        <div v-else class="alerts-list">
-          <div v-for="alert in alerts.slice(0, 20)" :key="alert.id" class="alert-item" :class="'alert-' + alert.level">
-            <div class="alert-header">
-              <span class="alert-icon">{{ getAlertIcon(alert.type) }}</span>
-              <span class="alert-level">{{ alert.level }}</span>
-              <span class="alert-time">{{ formatTimeAgo(alert.timestamp) }}</span>
-            </div>
-            <div class="alert-title">{{ alert.title }}</div>
-            <div class="alert-message">{{ alert.message }}</div>
-            <div class="alert-meta" v-if="alert.themeName">
-              <span class="alert-theme" @click.stop="showSectorDetail(alert.themeName, $event)">
-                🔗 {{ alert.themeName }}
-              </span>
-            </div>
-          </div>
-          <div v-if="alerts.length > 20" class="more-hint">
-            还有 {{ alerts.length - 20 }} 条预警...
-          </div>
-        </div>
-      </div>
     </div>
 
     <div class="panel-footer">
@@ -257,11 +230,10 @@
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
-import { dataLayer } from '../../services/DataLayer'
 import { snapshotFacade } from '../../services/snapshot/facade'
 import { rotationFramesCache } from '../../services/snapshot/rotationFramesCache'
 import { usePanel } from '../../composables/usePanel'
-import type { RotationAnalysis, StockAlert } from '../../types/core'
+import type { RotationAnalysis } from '../../types/core'
 import type { SnapshotFrameRow } from '../../services/snapshot/types'
 import SectorStocksTree from './SectorStocksTree.vue'
 import SectorDetail from './SectorDetail.vue'
@@ -278,7 +250,7 @@ const selectedSectorName = ref('')
 const error = ref<string | null>(null)
 const loading = ref(false)
 const version = '6.0.0'
-const view = ref<'hot' | 'rotation' | 'alerts' | 'correlation'>('hot')
+const view = ref<'hot' | 'rotation' | 'correlation'>('hot')
 const themeRuntime = useThemeRuntimeSnapshot()
 const ROTATION_SNAPSHOT_TYPE = DEFAULT_RANK_TREND_SNAPSHOT_TYPE
 const rotationMeta = ref<{
@@ -343,12 +315,6 @@ const rotationData = computed(() => {
   return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary()
 })
 
-const alerts = computed(() => {
-  const state = (dataLayer as any).state
-  return (state?.analysis?.alerts?.items || []) as StockAlert[]
-})
-
-const alertCount = computed(() => alerts.value.length)
 
 // ========== 加载数据 ==========
 const loadBackendRotation = async (force = false) => {
@@ -503,14 +469,6 @@ function formatTime(timestamp: number | null): string {
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
 }
 
-function formatTimeAgo(timestamp: number): string {
-  if (!timestamp) return '未知'
-  const diff = Math.floor((Date.now() - timestamp) / 60000)
-  if (diff < 1) return '刚刚'
-  if (diff < 60) return diff + '分钟前'
-  return Math.floor(diff / 60) + '小时前'
-}
-
 // 轮动相关
 function getMarketPhaseIcon(phase: string): string {
   const icons: Record<string, string> = {
@@ -530,22 +488,6 @@ function getMarketPhaseName(phase: string): string {
     falling: '下降期'
   }
   return names[phase] || phase
-}
-
-// 预警相关
-function getAlertIcon(type: string): string {
-  const icons: Record<string, string> = {
-    leader_fall: '👑',
-    leader_emerge: '🌟',
-    batch_limit_up: '📈',
-    batch_explode: '💥',
-    heat_surge: '🔥',
-    heat_plunge: '❄️',
-    volume_surge: '📊',
-    rotation_signal: '🔄',
-    money_flow: '💰'
-  }
-  return icons[type] || '⚠️'
 }
 
 // ========== 生命周期 ==========
@@ -725,20 +667,6 @@ onMounted(() => {
   background: rgba(0, 0, 0, 0.1);
   border-radius: 8px;
   font-size: 9px;
-}
-
-.alert-count {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  background: #ff4757;
-  color: white;
-  border-radius: 8px;
-  font-size: 9px;
-  line-height: 16px;
 }
 
 /* ========== 内容区域 ========== */
@@ -1167,98 +1095,6 @@ onMounted(() => {
   font-size: 18px;
   font-weight: bold;
   color: var(--text-title);
-}
-
-/* ========== 预警视图样式 ========== */
-.alerts-view {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.alerts-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.alert-item {
-  padding: 12px;
-  border-radius: 8px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-left-width: 4px;
-}
-
-.alert-item.alert-critical {
-  border-left-color: #ff4757;
-}
-
-.alert-item.alert-warning {
-  border-left-color: #f39c12;
-}
-
-.alert-item.alert-info {
-  border-left-color: #3498db;
-}
-
-.alert-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-}
-
-.alert-icon {
-  font-size: 14px;
-}
-
-.alert-level {
-  font-size: 10px;
-  padding: 2px 8px;
-  background: var(--bg-primary);
-  border-radius: 10px;
-  text-transform: capitalize;
-}
-
-.alert-time {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-
-.alert-title {
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 2px;
-}
-
-.alert-message {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.alert-meta {
-  display: flex;
-  gap: 8px;
-}
-
-.alert-theme {
-  font-size: 10px;
-  padding: 2px 8px;
-  background: var(--bg-primary);
-  border-radius: 10px;
-  color: var(--color-highlight);
-  cursor: pointer;
-}
-
-.more-hint {
-  padding: 8px;
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-secondary);
-  border-top: 1px dashed var(--border-color);
 }
 
 /* ========== 通用状态样式 ========== */

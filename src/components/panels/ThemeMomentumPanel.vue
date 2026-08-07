@@ -1,24 +1,16 @@
 <!-- src/components/panels/ThemeMomentumPanel.vue -->
-<!-- 题材动量 v2 独立面板：全字段排行榜 + 行展开（spec D6） -->
+<!-- 题材动量 v2 面板外壳：浮窗模式（Teleport + usePanel）与嵌入式模式共用 ThemeMomentumBody -->
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="theme-momentum-panel" :style="panelStyle" ref="panelRef">
-      <div class="panel-header">
+  <Teleport to="body" v-if="!embedded">
+    <div v-if="visible" class="theme-momentum-frame" :style="panelStyle" ref="panelRef">
+      <div class="frame-header">
         <div class="header-left">
-          <h3>
-            📊 题材动量 <span class="version-badge">v{{ version }}</span>
-            <span v-if="summary?.version" class="version-info">{{ summary.version }}</span>
-            <span v-if="computedAtText" class="rotation-time-badge" :title="`计算时间: ${computedAtText}`">
-              🕒 {{ computedAtText }}
-            </span>
-          </h3>
+          <h3>📊 题材动量 <span class="version-badge">v{{ version }}</span></h3>
           <div class="stats-badge" v-if="summary">
-            <span>强势 {{ stats.up }} 个</span>
-            <span class="dot">·</span>
-            <span>退潮 {{ stats.down }} 个</span>
-            <span class="dot">·</span>
-            <span>中性 {{ stats.neutral }} 个</span>
+            <span>强势 {{ stats.up }}</span><span class="dot">·</span>
+            <span>退潮 {{ stats.down }}</span><span class="dot">·</span>
+            <span>中性 {{ stats.neutral }}</span>
           </div>
         </div>
         <div class="panel-actions">
@@ -28,130 +20,40 @@
           <button class="btn-icon" @click.stop="close" title="关闭">✕</button>
         </div>
       </div>
-
-      <div class="panel-content" ref="contentRef">
-        <div v-if="loading" class="loading-state">
-          <div class="loading-spinner"></div>
-          <span>加载题材动量…</span>
-        </div>
-        <div v-else-if="error" class="error-state">
-          <span class="error-icon">⚠️</span>
-          <span>{{ error }}</span>
-          <button class="retry-btn" @click="loadData(true)">重试</button>
-        </div>
-        <div v-else-if="!summary" class="empty-state">
-          <span class="empty-icon">🔄</span>
-          <span>暂无题材动量数据</span>
-        </div>
-
-        <template v-else>
-          <div v-if="summary.qualityFlags.length" class="quality-flags">
-            <span v-for="flag in summary.qualityFlags" :key="flag" class="quality-tag">{{ flag }}</span>
-          </div>
-
-          <table class="momentum-table">
-            <thead>
-              <tr>
-                <th>题材</th>
-                <th>动量分</th>
-                <th>方向</th>
-                <th>阶段</th>
-                <th>RPS 5/10/20</th>
-                <th>距高点</th>
-                <th>涨停</th>
-                <th>资金量能</th>
-                <th>拥挤扣分</th>
-              </tr>
-            </thead>
-            <tbody>
-              <template v-for="factor in sortedFactors" :key="factor.themeId">
-                <tr :class="['momentum-row', directionClass(factor.direction)]" @click="toggle(factor.themeId)">
-                  <td class="theme-name">{{ factor.themeName }}</td>
-                  <td class="score-cell">{{ factor.score ?? '--' }}</td>
-                  <td><span class="direction-badge" :class="directionClass(factor.direction)">
-                    {{ directionText(factor.direction) }}</span></td>
-                  <td>{{ factor.phaseLabel || '—' }}</td>
-                  <td class="rps-cell">
-                    <span class="rps-value" :class="rpsTone(factor.rps?.d5)">{{ factor.rps?.d5 ?? '--' }}</span>
-                    <span class="rps-sep">/</span>
-                    <span class="rps-value" :class="rpsTone(factor.rps?.d10)">{{ factor.rps?.d10 ?? '--' }}</span>
-                    <span class="rps-sep">/</span>
-                    <span class="rps-value" :class="rpsTone(factor.rps?.d20)">{{ factor.rps?.d20 ?? '--' }}</span>
-                  </td>
-                  <td>{{ factor.nearHigh ?? '--' }}</td>
-                  <td class="zt-cell">{{ factor.ztCount ?? '--' }}</td>
-                  <td>{{ factor.flowVolume ?? '--' }}</td>
-                  <td class="penalty-cell" :class="{ penalized: (factor.crowdingPenalty ?? 0) > 0 }">
-                    {{ factor.crowdingPenalty ?? '--' }}</td>
-                </tr>
-                <tr v-if="expanded.has(factor.themeId)" class="detail-row">
-                  <td colspan="9">
-                    <div class="detail-grid">
-                      <div class="detail-block">
-                        <h4>多窗口动量</h4>
-                        <p>5日 {{ fmtNum(factor.windowMomentum) }}</p>
-                      </div>
-                      <div class="detail-block">
-                        <h4>整体性</h4>
-                        <p>宽度/一致性 {{ factor.breadth ?? '--' }}</p>
-                      </div>
-                      <div class="detail-block">
-                        <h4>龙头/涨停</h4>
-                        <p>涨停家数 {{ factor.ztCount ?? '--' }}</p>
-                      </div>
-                      <div class="detail-block">
-                        <h4>日内状态</h4>
-                        <template v-if="factor.intraday?.unavailable">
-                          <p>槽位口径未接入（unavailable）</p>
-                        </template>
-                        <template v-else>
-                          <p>短变化 {{ factor.intraday?.shortChange ?? '--' }}</p>
-                          <p>涨停增量 {{ factor.intraday?.ztDelta ?? '--' }}</p>
-                          <p>资金增量 {{ factor.intraday?.inflowDelta ?? '--' }}</p>
-                        </template>
-                      </div>
-                      <div class="detail-block reasons">
-                        <h4>依据</h4>
-                        <ul>
-                          <li v-for="(reason, index) in (factor.reasons || [])" :key="index">{{ reason }}</li>
-                          <li v-if="!(factor.reasons || []).length">—</li>
-                        </ul>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-        </template>
-      </div>
+      <ThemeMomentumBody :summary="summary" :loading="loading" :error="error" :computed-at-text="computedAtText"
+        @retry="loadData(true)" />
     </div>
   </Teleport>
+
+  <!-- 嵌入式模式：直接渲染到父容器（题材树形面板内），无浮窗外壳 -->
+  <ThemeMomentumBody v-else :summary="summary" :loading="loading" :error="error" :computed-at-text="computedAtText"
+    @retry="loadData(true)" />
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import { usePanel } from '@/composables/usePanel'
+import ThemeMomentumBody from './ThemeMomentumBody.vue'
 import {
   themeFacade,
   type ThemeMomentumSummary,
-  type ThemeMomentumSummaryFactor,
 } from '@/services/theme/ThemeFacade'
 import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
 
 const props = defineProps<{
-  visible: boolean
+  visible?: boolean
   triggerRect?: DOMRect
+  /** 嵌入模式：不使用 Teleport/浮窗外壳，直接流式渲染到父容器（题材树形面板内） */
+  embedded?: boolean
 }>()
 
-const emit = defineEmits<{ (event: 'close'): void }>()
+const emit = defineEmits<{ (event: 'close'): void; (event: 'update:visible', value: boolean): void }>()
 
 const version = '1.0.0'
-const contentRef = ref<HTMLElement | null>(null)
 const { panelRef, panelStyle } = usePanel({
   name: 'ThemeMomentumPanel',
-  visible: props.visible,
+  visible: props.visible ?? false,
   triggerRect: props.triggerRect,
   onClose: close,
 })
@@ -159,11 +61,6 @@ const { panelRef, panelStyle } = usePanel({
 const loading = ref(false)
 const error = ref<string | null>(null)
 const summary = ref<ThemeMomentumSummary | null>(null)
-const expanded = ref<Set<string>>(new Set())
-
-const sortedFactors = computed<ThemeMomentumSummaryFactor[]>(() =>
-  [...(summary.value?.factors || [])].sort((a, b) => (b.score ?? -1) - (a.score ?? -1)),
-)
 
 const stats = computed(() => {
   const factors = summary.value?.factors || []
@@ -200,122 +97,88 @@ async function loadData(force = false) {
   }
 }
 
-function toggle(themeId: string) {
-  const next = new Set(expanded.value)
-  if (next.has(themeId)) next.delete(themeId)
-  else next.add(themeId)
-  expanded.value = next
-}
-
 function close() {
   emit('close')
-}
-
-function directionClass(direction?: string): string {
-  return direction === 'up' ? 'positive-tone' : direction === 'down' ? 'negative-tone' : 'neutral-tone'
-}
-
-function directionText(direction?: string): string {
-  return direction === 'up' ? '上行' : direction === 'down' ? '下行' : '中性'
-}
-
-function rpsTone(value?: number | null): string {
-  if (value == null) return ''
-  return value >= 80 ? 'rps-strong' : value >= 50 ? 'rps-mid' : 'rps-weak'
-}
-
-function fmtNum(value?: number | null): string {
-  return value == null ? '--' : String(value)
+  emit('update:visible', false)
 }
 
 onMounted(() => {
-  if (props.visible) loadData()
+  if (props.visible || props.embedded) loadData()
 })
 
-// 面板常驻挂载（Teleport 到 body），visible 变化时按需加载/刷新
+// 浮窗常驻挂载（Teleport 到 body），visible 变化时按需加载/刷新
 watch(
   () => props.visible,
   (visible) => {
     if (visible) loadData()
   },
 )
-
-onUnmounted(() => {
-  /* Teleport 面板随 visible 卸载 */
-})
 </script>
 
 <style scoped>
-.theme-momentum-panel {
+/* ========== 浮窗外壳（非嵌入模式） ========== */
+.theme-momentum-frame {
   position: fixed;
   z-index: 1001;
-  width: 860px;
+  width: 1080px;
   max-width: calc(100vw - 32px);
-  max-height: min(78vh, 720px);
-  background: #14161c;
-  border: 1px solid #2a2d36;
+  max-height: min(82vh, 760px);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  color: #d7dae0;
+  color: var(--text-primary);
   font-size: 13px;
 }
 
-.panel-header {
+.frame-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #2a2d36;
-  background: #191c24;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-header, var(--bg-secondary));
+  flex-shrink: 0;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
-h3 {
+.frame-header h3 {
   margin: 0;
   font-size: 14px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--text-title);
 }
 
 .version-badge {
   font-size: 10px;
-  background: #2f3542;
-  color: #9aa3b2;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  color: var(--text-secondary);
   border-radius: 4px;
   padding: 1px 5px;
   vertical-align: middle;
 }
 
-.version-info {
-  font-size: 10px;
-  color: #6c7a8d;
-  font-family: monospace;
-}
-
-.rotation-time-badge {
-  font-size: 11px;
-  color: #8b96a5;
-}
-
 .stats-badge {
   display: flex;
+  align-items: center;
   gap: 6px;
-  font-size: 12px;
-  color: #9aa3b2;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 
 .dot {
-  color: #4a5260;
+  opacity: 0.5;
 }
 
 .panel-actions {
@@ -324,19 +187,24 @@ h3 {
 }
 
 .btn-icon {
-  background: #23262e;
-  border: 1px solid #2f3542;
-  color: #9aa3b2;
+  width: 28px;
+  height: 28px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
   border-radius: 6px;
-  width: 26px;
-  height: 26px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
 }
 
 .btn-icon:hover {
-  background: #2f3542;
-  color: #fff;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--color-highlight);
 }
 
 .rotate-animation {
@@ -347,182 +215,6 @@ h3 {
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-.panel-content {
-  overflow-y: auto;
-  padding: 12px 16px;
-  flex: 1;
-}
-
-.loading-state,
-.error-state,
-.empty-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 48px 0;
-  color: #8b96a5;
-}
-
-.loading-spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid #2f3542;
-  border-top-color: #f39c12;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.error-icon,
-.empty-icon {
-  font-size: 20px;
-}
-
-.retry-btn {
-  background: #2f3542;
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 4px 12px;
-  cursor: pointer;
-}
-
-.quality-flags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
-}
-
-.quality-tag {
-  font-size: 10px;
-  background: #3a2417;
-  color: #e8a87c;
-  border-radius: 4px;
-  padding: 2px 6px;
-}
-
-.momentum-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.momentum-table th {
-  font-size: 11px;
-  color: #6c7a8d;
-  font-weight: 500;
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid #2a2d36;
-  white-space: nowrap;
-}
-
-.momentum-table td {
-  padding: 7px 8px;
-  border-bottom: 1px solid #23262e;
-  white-space: nowrap;
-}
-
-.momentum-row {
-  cursor: pointer;
-}
-
-.momentum-row:hover {
-  background: #1c2028;
-}
-
-.theme-name {
-  color: #eef0f3;
-  font-weight: 500;
-}
-
-.score-cell {
-  font-family: monospace;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.positive-tone {
-  color: #ff6b6b;
-}
-
-.negative-tone {
-  color: #4ecdc4;
-}
-
-.neutral-tone {
-  color: #8b96a5;
-}
-
-.direction-badge {
-  display: inline-block;
-  font-size: 11px;
-  border-radius: 4px;
-  padding: 1px 6px;
-  background: #23262e;
-}
-
-.rps-cell {
-  font-family: monospace;
-}
-
-.rps-sep {
-  color: #4a5260;
-  margin: 0 2px;
-}
-
-.rps-strong {
-  color: #ff6b6b;
-}
-
-.rps-mid {
-  color: #f39c12;
-}
-
-.rps-weak {
-  color: #4ecdc4;
-}
-
-.penalty-cell.penalized {
-  color: #e8a87c;
-}
-
-.detail-row td {
-  background: #171a21;
-  padding: 0;
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  padding: 12px 16px;
-}
-
-.detail-block h4 {
-  margin: 0 0 6px;
-  font-size: 11px;
-  color: #6c7a8d;
-  font-weight: 500;
-}
-
-.detail-block p {
-  margin: 2px 0;
-  font-size: 12px;
-}
-
-.detail-block.reasons ul {
-  margin: 0;
-  padding-left: 16px;
-  font-size: 12px;
-}
-
-@media (max-width: 720px) {
-  .detail-grid {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 </style>
