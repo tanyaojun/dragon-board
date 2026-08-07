@@ -8,8 +8,8 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
-from backend.analysis.ranktrend_live_gate_shadow_audit import (
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.live_gate_shadow_audit import (
     DEFAULT_SHADOW_VARIANTS,
     _nested_get,
     build_audit_meta,
@@ -21,8 +21,8 @@ from backend.analysis.ranktrend_live_gate_shadow_audit import (
     summarize_first_failure,
     summarize_jump_definition_replays,
 )
-from backend.analysis.ranktrend_jump_research import build_jump_research_request, summarize_jump_research
-from backend.analysis.theme_trend import ThemeTrendConfig, ThemeTrendPythonEngine
+from backend.analysis.ranktrend.jump_research import build_jump_research_request, summarize_jump_research
+from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
     DEFAULT_TRADE_CONFIG,
     V5_LIFECYCLE_FUSION_TRADE_DEFAULTS,
@@ -1866,18 +1866,20 @@ class BacktestService:
                 exposure = exposure_by_snapshot_code.get((snapshot_id, code))
                 theme_name = str((exposure or {}).get("themeName") or stock.get("mainTheme") or "")
                 factor = factor_by_snapshot_theme.get((snapshot_id, theme_name), {})
-                lifecycle = str(factor.get("lifecycle") or "neutral")
+                # D5：lifecycle 状态机废弃，执行分层改用 rotationState 方向标签 + 拥挤度
+                lifecycle = str(factor.get("lifecycle") or "neutral")  # 仅解释字段
+                rotation_state = str(factor.get("rotationState") or "neutral")
                 crowding = float(factor.get("crowdingRisk") or 0)
                 contribution = float((exposure or {}).get("themeContribution") or stock.get("themeContribution") or 0)
                 exposure_weight = float((exposure or {}).get("exposureWeight") or stock.get("themeExposureWeight") or 0)
                 tier = "N_NEUTRAL"
-                if lifecycle in {"mainline", "expansion"} and crowding < 75 and (exposure_weight >= 55 or contribution >= 8):
-                    tier = "A_MAIN"
-                elif lifecycle == "ignition" and crowding < 75:
-                    tier = "B_IGNITION"
-                elif lifecycle in {"crowded", "divergence"} or crowding >= 75:
+                if crowding >= 75:
                     tier = "C_CROWDED"
-                elif lifecycle in {"cooling", "reversal"}:
+                elif rotation_state in {"mainline", "inflow"} and (exposure_weight >= 55 or contribution >= 8):
+                    tier = "A_MAIN"
+                elif rotation_state == "inflow":
+                    tier = "B_IGNITION"
+                elif rotation_state in {"outflow"}:
                     tier = "D_EXIT_RISK"
                 role = str((exposure or {}).get("role") or stock.get("themeRole") or "")
                 confidence = min(100.0, max(0.0, exposure_weight or float(factor.get("heatScore") or 0)))
@@ -1917,7 +1919,8 @@ class BacktestService:
                     "candidateTier": tier,
                     "regime": "strong" if tier in {"A_MAIN", "B_IGNITION"} else "weak",
                     "confidence": confidence,
-                    "stage": lifecycle,
+                    # D5：lifecycle 状态机废弃，stage 输出 rotationState 方向标签（报告分组口径）
+                    "stage": rotation_state,
                     "rankTrend": {"strategy": {"momentum": {"acceleration": 1 if tier != "D_EXIT_RISK" else -1}}},
                     "mainTheme": theme_name,
                     "themeHeat": float(factor.get("heatScore") or stock.get("themeHeat") or 0),

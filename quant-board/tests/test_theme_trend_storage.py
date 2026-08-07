@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.analysis.theme_trend import (
+from backend.analysis.theme.trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
     ThemeTrendResult,

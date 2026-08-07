@@ -1,5 +1,6 @@
 from backend.analysis import ranktrend
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend import engine as ranktrend_engine
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest.engine import BacktestEngine
 from backend.services import GoldenService
 
@@ -132,7 +133,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     order: list[str] = []
 
     monkeypatch.setattr(
-        ranktrend,
+        ranktrend_engine,
         "analyze_technical",
         lambda percentiles, config, fallback: order.append("technical")
         or {
@@ -145,9 +146,9 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
             "momentumProfile": {"short": 6, "mid": 5, "long": 4, "acceleration": 2},
         },
     )
-    monkeypatch.setattr(ranktrend, "detect_rank_jumps", lambda *args, **kwargs: {"hasJump": False, "events": []})
+    monkeypatch.setattr(ranktrend_engine, "detect_rank_jumps", lambda *args, **kwargs: {"hasJump": False, "events": []})
     monkeypatch.setattr(
-        ranktrend,
+        ranktrend_engine,
         "analyze_cycle",
         lambda ranks, percentiles: order.append("cycle")
         or {
@@ -166,7 +167,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        ranktrend,
+        ranktrend_engine,
         "analyze_risk",
         lambda current_percentile, technical, cycle, zlje, zljzb, volume_ratio: order.append("risk")
         or {
@@ -177,7 +178,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        ranktrend,
+        ranktrend_engine,
         "analyze_cycle_with_risk",
         lambda cycle, risk, momentum: order.append("cycle_with_risk")
         or {
@@ -186,7 +187,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        ranktrend,
+        ranktrend_engine,
         "compose_decision",
         lambda technical, cycle, risk, config: order.append("decision")
         or {
@@ -195,7 +196,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
         },
     )
     monkeypatch.setattr(
-        ranktrend,
+        ranktrend_engine,
         "compose_analysis_candidate_tier",
         lambda technical, cycle, risk, regime: order.append("strategy")
         or {

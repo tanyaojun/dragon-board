@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.analysis.theme_trend import (
+from backend.analysis.theme.trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
     ThemeTrendResult,
@@ -692,7 +692,7 @@ def test_large_json_field_roundtrips_through_compression(tmp_path: Path) -> None
 
 def test_unmatched_theme_stock_produces_warning() -> None:
     """当 stock 的 themeName 无法匹配任何 sector 时，产出警告。"""
-    from backend.analysis.theme_trend import ThemeTrendPythonEngine
+    from backend.analysis.theme.trend import ThemeTrendPythonEngine
 
     frames = [
         {
@@ -750,7 +750,7 @@ def test_unmatched_theme_stock_produces_warning() -> None:
 
 def test_unmatched_theme_stock_not_added_for_empty_theme_name() -> None:
     """股票没有主题名时不报告 unmatched_theme_stock（属于正常情况）。"""
-    from backend.analysis.theme_trend import ThemeTrendPythonEngine
+    from backend.analysis.theme.trend import ThemeTrendPythonEngine
 
     frames = [
         {
@@ -863,8 +863,11 @@ def test_replay_sequence_detects_lifecycle_transition() -> None:
     result = ThemeTrendPythonEngine().replay_sequence(frames)
     factors = result["factors"]
 
-    assert factors[0]["lifecycle"] == "ignition"
-    assert factors[1]["lifecycle"] == "mainline"
+    # D5：lifecycle 状态机废弃，方向迁移由 rotationState 承载
+    assert factors[0]["lifecycle"] == "neutral"  # 无落库 lifecycle → neutral 兜底
+    assert factors[1]["lifecycle"] == "neutral"
+    assert factors[0]["rotationState"] == "ignition"
+    assert factors[1]["rotationState"] == "mainline"
     assert factors[1]["prevLifecycle"] == "ignition"
     assert factors[1]["lifecycleTransition"] == "ignition>mainline"
 
@@ -957,7 +960,7 @@ def test_replay_sequence_typed_roundtrips() -> None:
     ]
 
     result = ThemeTrendPythonEngine().replay_sequence_typed(frames)
-    from backend.analysis.theme_trend import ThemeTrendResult
+    from backend.analysis.theme.trend import ThemeTrendResult
 
     assert isinstance(result, ThemeTrendResult)
     assert result.strategyVersion == "theme-trend-v12"

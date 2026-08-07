@@ -1,5 +1,5 @@
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.lifecycle import (
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.lifecycle import (
     lifecycle_for,
     mainline_concentration,
     market_phase_for,
@@ -56,10 +56,11 @@ def test_lifecycle_transition_clamped():
 
 
 def test_rotation_state_mainline():
-    assert rotation_state_for("expanding", 70.0, True, True) == "mainline"
-    assert rotation_state_for("cooling", 20.0, True, False) == "cooling"
-    assert rotation_state_for("expanding", 70.0, False, True) == "inflow"
-    assert rotation_state_for("neutral", 45.0, False, False) == "outflow"
+    # 新签名 rotation_state_for(momentum, inflow_positive, is_mainline, crowding)（spec D10）
+    assert rotation_state_for(70.0, True, True, 40.0) == "mainline"
+    assert rotation_state_for(20.0, True, True, 40.0) != "mainline"  # 动量弱不主线
+    assert rotation_state_for(70.0, True, False, 40.0) == "inflow"
+    assert rotation_state_for(45.0, False, False, 40.0) == "outflow"
 
 
 def test_market_phase():

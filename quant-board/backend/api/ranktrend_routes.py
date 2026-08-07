@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.analysis.ranktrend import (
+from backend.analysis.ranktrend.engine import (
     RankTrendPythonEngine,
     analyze_rank_resonance,
     attention_rank_lookup,
@@ -15,9 +15,8 @@ from backend.analysis.ranktrend import (
     percentile_rank,
     _resonance_label,
 )
-from backend.analysis.theme_momentum import (
+from backend.analysis.theme.momentum import (
     compute_theme_momentum_series,
-    fuse_theme_resonance,
     stock_theme_exposure,
 )
 from backend.data import repository_factory, snapshot_cache
@@ -208,6 +207,89 @@ def _build_code_attention_series(
     return series
 
 
+def _compute_theme_momentum_v2_context(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    """从 frames 的 hotThemes 聚合日线序列并计算 v2 动量上下文（无 I/O，纯函数）。
+
+    输出 {version, factors(top-20 by score), qualityFlags, computedAt}，供
+    frame.themeMomentumContext 与每股只读投影使用。帧级先算一次，每股共享。
+    """
+    from backend.analysis.theme.daily_series import build_daily_series
+    from backend.analysis.theme.momentum import compute_theme_momentum_v2
+
+    sector_rows: list[dict[str, Any]] = []
+    for frame in frames:
+        for theme in frame.get("hotThemes") or []:
+            if not isinstance(theme, dict):
+                continue
+            # theme 行可能不含日期字段，从 frame 补 tradingDate/slotTime
+            theme = dict(theme)
+            theme.setdefault("tradingDate", frame.get("tradingDate"))
+            theme.setdefault("slotTime", frame.get("slotTime"))
+            sector_rows.append(theme)
+    try:
+        daily = build_daily_series(sector_rows, [])
+        result = compute_theme_momentum_v2(list(daily.values()))
+    except Exception as exc:  # fail-visible：引擎异常不阻断 analyze（spec §8.1）
+        import logging
+        logging.getLogger(__name__).exception("theme_momentum_v2 compute failed: %s", exc)
+        return {
+            "version": "theme_momentum_v2",
+            "factors": [],
+            "factorsTop20": [],
+            "qualityFlags": ["theme_momentum_engine_error"],
+            "computedAt": int(frames[-1].get("timestamp") or 0) if frames else 0,
+        }
+    # context 保留全量 factors（供每股投影按 themeId 查找，避免 top-20 截断导致
+    # 第 21 名以后题材每股恒 insufficient——MEDIUM-3）；仅响应序列化时截断 top-20。
+    ranked = sorted(
+        (v for v in result["factors"].values() if v.get("score") is not None),
+        key=lambda item: -float(item["score"]),
+    )
+    return {
+        "version": result["version"],
+        "factors": ranked,
+        "factorsTop20": ranked[:20],
+        "qualityFlags": result["qualityFlags"],
+        "computedAt": int(frames[-1].get("timestamp") or 0) if frames else 0,
+    }
+
+
+def _theme_momentum_projection(
+    exposure: dict[str, Any] | None,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """每股只读题材动量投影（第4轨数据源）：所属题材的 v2 分数/方向/角色/phaseLabel。
+
+    完全不参与 resonance/decision（D2 完全解耦）；题材映射缺失或分数不足时
+    返回 insufficient + 原因（fail-visible，不伪造）。
+    """
+    if not exposure:
+        return {"status": "insufficient", "reasons": ["theme_mapping_missing"]}
+    theme_id = str(exposure.get("themeId") or "")
+    factors = {str(f.get("themeId") or ""): f for f in context.get("factors", [])}
+    if theme_id not in factors:
+        # 兼容旧形状：仅 factorsTop20 时也查一次
+        factors = {
+            str(f.get("themeId") or ""): f
+            for f in context.get("factorsTop20", [])
+        }
+    factor = factors.get(theme_id)
+    if not factor or factor.get("score") is None:
+        return {"status": "insufficient", "reasons": ["theme_momentum_insufficient"]}
+    return {
+        "status": "ok",
+        "themeId": theme_id,
+        "themeName": factor.get("themeName") or exposure.get("themeName"),
+        "score": factor.get("score"),
+        "direction": factor.get("direction"),
+        "role": exposure.get("role"),
+        "phaseLabel": factor.get("phaseLabel"),
+        "reasons": [
+            f"板块整体动量 {factor.get('direction')}，该股为{exposure.get('role')}跟随"
+        ],
+    }
+
+
 def _analyze_frames(
     engine: RankTrendPythonEngine,
     frames: list[dict[str, Any]],
@@ -222,6 +304,7 @@ def _analyze_frames(
     """
     wanted = set(codes) if codes else None
     momentum_series = _compute_theme_momentum_series_cached(frames, dataset_id)
+    momentum_v2_ctx = _compute_theme_momentum_v2_context(frames)
     series_index: dict[str, dict[str, int]] = {}
     for code, bars in series_by_code.items():
         series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
@@ -291,14 +374,11 @@ def _analyze_frames(
                 },
             })
             analysis["resonance"] = resonance
-            # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行，
-            # 动量序列仍按截至当前帧的历史 bars 计算（避免当前帧题材恒为 mapping_missing）
+            # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行
             exposure = stock_theme_exposure(stock, hot_themes)
-            analysis["resonance"] = fuse_theme_resonance(
-                resonance,
-                exposure,
-                frame_momentum,
-                hot_themes_fallback=hot_themes_fallback,
+            # D2 完全解耦：题材动量独立为只读投影，不再调节共振分数
+            analysis["themeMomentum"] = _theme_momentum_projection(
+                exposure, momentum_v2_ctx
             )
             if analysis["resonance"].get("status") == "ok":
                 analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
@@ -308,6 +388,7 @@ def _analyze_frames(
             "frameKey": key,
             "regime": regime,
             "themeContext": theme_context,
+            "themeMomentumContext": momentum_v2_ctx,
             "marketMedianPercentile": market_median_percentile,
             "marketMedianShortChange": market_median,
             "marketSampleCount": market_sample_count,

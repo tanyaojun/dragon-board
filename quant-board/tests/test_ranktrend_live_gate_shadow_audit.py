@@ -6,7 +6,7 @@ from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
-from backend.analysis.ranktrend_live_gate_shadow_audit import (
+from backend.analysis.ranktrend.live_gate_shadow_audit import (
     DEFAULT_SHADOW_VARIANTS,
     build_audit_meta,
     classify_hotlist_buy_pattern,

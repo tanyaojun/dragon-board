@@ -1,4 +1,4 @@
-from backend.analysis.ranktrend import market_regime
+from backend.analysis.ranktrend.engine import market_regime
 
 
 def _frame(stocks, sentiment=None):

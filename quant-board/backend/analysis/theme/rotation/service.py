@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.engine import ThemeRotationEngine
-from backend.analysis.theme_rotation.history import RotationHistoryService
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.engine import ThemeRotationEngine
+from backend.analysis.theme.rotation.history import RotationHistoryService
 from backend.snapshot_derivation.models import SnapshotBundle
 
 
@@ -66,7 +66,7 @@ class ThemeRotationService:
             self._record_issue(bundle, f"theme_rotation_failed: {type(exc).__name__}: {exc}")
 
     def _apply(self, result, bundle: SnapshotBundle) -> None:
-        from backend.analysis.theme_rotation.engine import _theme_key
+        from backend.analysis.theme.rotation.engine import _theme_key
 
         status_by_key = {s.theme_id: s for s in result.statuses}
         for row in bundle.sector_rows:

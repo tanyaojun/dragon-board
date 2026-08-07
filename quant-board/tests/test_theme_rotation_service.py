@@ -1,8 +1,8 @@
 import pytest
 
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.engine import ThemeRotationEngine
-from backend.analysis.theme_rotation.service import ThemeRotationService
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.engine import ThemeRotationEngine
+from backend.analysis.theme.rotation.service import ThemeRotationService
 from backend.snapshot_derivation.models import SnapshotBundle
 
 

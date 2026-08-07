@@ -1,5 +1,5 @@
 # quant-board/backend/tests/test_theme_momentum_validation.py
-from backend.analysis.theme_momentum_validation import compare_theme_momentum_rolling
+from backend.analysis.theme.momentum_validation import compare_theme_momentum_rolling
 
 
 def _frame(index, stock_code, themes, heat_rows):

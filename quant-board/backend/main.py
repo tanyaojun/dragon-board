@@ -20,6 +20,7 @@ from backend.api.market_data_routes import router as market_data_router
 from backend.api.ranktrend_routes import router as ranktrend_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.api.theme_heat_routes import router as theme_heat_router
+from backend.api.theme_momentum_routes import router as theme_momentum_router
 from backend.api.theme_rotation_routes import router as theme_rotation_router
 from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
 from backend.data.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
@@ -96,6 +97,7 @@ app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)
 app.include_router(theme_heat_router)
+app.include_router(theme_momentum_router)
 app.include_router(theme_rotation_router)
 app.include_router(ths_main_monitor_router)
 
@@ -578,7 +580,7 @@ def list_snapshot_frames(
             projection=projection,
             fields=field_list or None,
         )
-        from backend.analysis.ranktrend import market_regime
+        from backend.analysis.ranktrend.engine import market_regime
 
         for frame in frames:
             frame["regime"] = market_regime({
@@ -1653,7 +1655,7 @@ def get_theme_research_summary(
             return {"available": False, "reason": "insufficient_frames", "frameCount": len(frames) if frames else 0}
 
         # 函数内导入避免与 FastAPI startup 事件中的 DB 初始化形成循环依赖
-        from backend.analysis.theme_trend import ThemeTrendPythonEngine
+        from backend.analysis.theme.trend import ThemeTrendPythonEngine
         result = ThemeTrendPythonEngine().replay_sequence(frames)
         factors = result.get("factors") or []
         quality = result.get("qualityReport") or {}

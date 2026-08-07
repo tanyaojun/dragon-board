@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 
 
 def _daily_limit_pct(code: str) -> float:

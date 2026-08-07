@@ -54,3 +54,9 @@
 - `theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 已在执行信号中区分题材轮动、龙头确认、热榜共振的入场、降级、过滤和解释字段。
 - Dragon Board 根前端只消费 `GET /api/research/theme-summary` 研究摘要，不承载回测、优化或交易模拟；题材、龙头和热榜视图展示研究解释，QuantBoard 不可用时显示降级文案。
 - 默认 `snapshotType=half_hour`；`quarter_hour` 只能显式选择，不能替代默认研究口径。
+
+## 2026-08-06 题材动量 v2（独立第四维）
+- 设计文档：quant-board/docs/theme-rotation/2026-08-06-theme-momentum-redesign.md（brainstorming 已批准）
+- 核心变更（D1/D2/D5/D10）：题材动量从共振解耦为独立第四维；lifecycle 状态机废弃，rotationState 改方向标签；日线聚合 + 槽位日内双层
+- 新 API：GET /api/theme-momentum/summary；前端 OBSERVATION 第4轨 + ThemeMomentumPanel 面板
+- 旧 v1 融合（esonance.theme）已废弃，	heme/momentum.py 保留 v1 函数仅供回放对比

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.theme_trend import (
+from backend.analysis.theme.trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
     ThemeTrendResult,

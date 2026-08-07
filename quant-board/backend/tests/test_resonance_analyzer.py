@@ -1,4 +1,4 @@
-from backend.analysis.ranktrend import analyze_rank_resonance
+from backend.analysis.ranktrend.engine import analyze_rank_resonance
 
 
 def _jump(direction="hold", events=None):

@@ -3,7 +3,7 @@ import math
 
 import pytest
 
-from backend.analysis.theme_momentum import (
+from backend.analysis.theme.momentum import (
     THEME_CROSS_SECTION_MIN,
     build_theme_strength_series,
     compute_theme_momentum_series,

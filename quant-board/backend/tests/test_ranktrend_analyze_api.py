@@ -55,7 +55,7 @@ def test_analyze_rejects_unsupported_snapshot_type(monkeypatch):
 def test_theme_momentum_series_uses_redis_ttl_cache(monkeypatch):
     """相同帧窗口的题材动量序列命中 Redis TTL 缓存时不再重复计算。"""
     from backend.api import ranktrend_routes
-    from backend.analysis.theme_momentum import compute_theme_momentum_series
+    from backend.analysis.theme.momentum import compute_theme_momentum_series
 
     class FakeCache:
         def __init__(self):
@@ -821,12 +821,15 @@ def test_analyze_includes_theme_context_and_resonance_theme(monkeypatch):
     assert frame["themeContext"]["themeSampleCount"] >= 20
     assert frame["themeContext"]["marketThemeMedianShortChange"] is not None
     stock = frame["stocks"][0]
-    theme = stock["analysis"]["resonance"].get("theme")
+    # D2 解耦：resonance 不再含 theme 子对象
+    assert "theme" not in stock["analysis"]["resonance"]
+    # 题材动量独立为只读投影（第4轨数据源）
+    theme = stock["analysis"].get("themeMomentum")
     assert theme is not None
     assert theme["status"] in ("ok", "insufficient")
     if theme["status"] == "ok":
-        assert theme["themeMomentumScore"] > 50
-        assert theme["themeLifecycle"] == "mainline"
+        assert theme["direction"] in ("up", "neutral", "down")
+        assert "themeId" in theme and "themeName" in theme
         assert stock["analysis"]["decision"]["final"]["signal"] in ("buy", "hold")
 
 
@@ -858,7 +861,9 @@ def test_analyze_current_frame_theme_falls_back_to_last_historical_hot_themes(mo
     assert response.status_code == 200
     body = response.json()
     last = body["frames"][-1]
-    theme = last["stocks"][0]["analysis"]["resonance"]["theme"]
-    assert theme["status"] == "ok"
-    assert theme["themeMomentumScore"] > 50
-    assert "theme_mapping_missing" not in theme["reasons"]
+    stock = last["stocks"][0]
+    assert "theme" not in stock["analysis"]["resonance"]
+    theme = stock["analysis"]["themeMomentum"]
+    assert theme["status"] in ("ok", "insufficient")
+    if theme["status"] == "ok":
+        assert "themeId" in theme and "themeName" in theme

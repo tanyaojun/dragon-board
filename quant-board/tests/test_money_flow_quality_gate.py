@@ -594,7 +594,7 @@ def test_compute_execution_quality_with_history() -> None:
 # ═══════════════════════════════════════════
 
 def test_ranktrend_config_has_tier_threshold_fields_with_defaults() -> None:
-    from backend.analysis.ranktrend import RankTrendConfig
+    from backend.analysis.ranktrend.engine import RankTrendConfig
 
     c = RankTrendConfig()
     assert c.tierAMainMidMomentumMin == 4.0
@@ -612,7 +612,7 @@ def test_ranktrend_config_has_tier_threshold_fields_with_defaults() -> None:
 
 
 def test_ranktrend_config_from_patch_preserves_tier_fields() -> None:
-    from backend.analysis.ranktrend import RankTrendConfig
+    from backend.analysis.ranktrend.engine import RankTrendConfig
 
     c = RankTrendConfig.from_patch({"tierAMainMidMomentumMin": 5.0, "macdFast": 8})
     assert c.tierAMainMidMomentumMin == 5.0
@@ -623,7 +623,7 @@ def test_ranktrend_config_from_patch_preserves_tier_fields() -> None:
 
 
 def test_compose_strategy_uses_config_tier_thresholds() -> None:
-    from backend.analysis.ranktrend import (
+    from backend.analysis.ranktrend.engine import (
         RankTrendConfig,
         compose_strategy,
     )
@@ -652,7 +652,7 @@ def test_compose_strategy_uses_config_tier_thresholds() -> None:
 
 
 def test_compose_strategy_respects_b_ignition_config_thresholds() -> None:
-    from backend.analysis.ranktrend import (
+    from backend.analysis.ranktrend.engine import (
         RankTrendConfig,
         compose_strategy,
     )
@@ -679,7 +679,7 @@ def test_compose_strategy_respects_b_ignition_config_thresholds() -> None:
 
 
 def test_compose_strategy_uses_hotlist_stage_instead_of_market_regime() -> None:
-    from backend.analysis.ranktrend import compose_strategy
+    from backend.analysis.ranktrend.engine import compose_strategy
 
     technical = {
         "momentumProfile": {"short": 0.0, "mid": 5.0, "long": 3.0, "acceleration": 1.0},
@@ -733,7 +733,7 @@ def test_compose_strategy_uses_hotlist_stage_instead_of_market_regime() -> None:
 
 
 def test_compose_strategy_none_hotlist_is_neutral_fallback() -> None:
-    from backend.analysis.ranktrend import compose_strategy
+    from backend.analysis.ranktrend.engine import compose_strategy
 
     technical = {
         "momentumProfile": {"short": 0.0, "mid": 5.0, "long": 3.0, "acceleration": 1.0},

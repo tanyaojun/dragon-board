@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.analysis.theme_trend import (
+from backend.analysis.theme.trend import (
     ThemeTrendConfig,
     ThemeTrendPythonEngine,
     build_theme_quality_report,
@@ -127,7 +127,8 @@ def test_replay_outputs_mainline_theme_factor_for_single_frame() -> None:
     assert factor["themeId"] == "ai"
     assert factor["themeName"] == "人工智能"
     assert factor["rotationState"] == "mainline"
-    assert factor["lifecycle"] == "mainline"
+    # D5：状态机废弃，无落库 lifecycle 时 neutral 兜底
+    assert factor["lifecycle"] == "neutral"
     assert factor["rank"] == 1
     assert factor["qualityFlags"] == []
     assert factor["heatScore"] >= 85
@@ -169,7 +170,7 @@ def test_crowded_theme_sets_crowded_lifecycle_and_risk_signal() -> None:
 
     result = ThemeTrendPythonEngine().replay(frames)
 
-    assert result["factors"][0]["lifecycle"] == "crowded"
+    assert result["factors"][0]["lifecycle"] == "neutral"  # D5：不再从拥挤度推导 crowded
     assert "crowding_risk_high" in result["factors"][0]["qualityFlags"]
     assert result["signals"][0]["signal"] == "risk"
     assert result["signals"][0]["risk"] == "crowded"
@@ -253,7 +254,7 @@ def test_replay_builds_leader_and_core_stock_exposures() -> None:
 
 
 def test_ts_factors_prefer_persisted_rotation_state() -> None:
-    from backend.analysis.theme_trend import _theme_context_frames
+    from backend.analysis.theme.trend import _theme_context_frames
 
     frame = {
         "timestamp": 1785807000000,

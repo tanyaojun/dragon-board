@@ -244,7 +244,7 @@ def test_ranktrend_jump_entry_requires_momentum_and_acceleration_confirmation() 
 
 
 def test_jump_research_request_uses_continuous_tpe_and_reproducible_metadata() -> None:
-    from backend.analysis.ranktrend_jump_research import build_jump_research_request
+    from backend.analysis.ranktrend.jump_research import build_jump_research_request
 
     request = build_jump_research_request(
         {
@@ -268,7 +268,7 @@ def test_jump_research_request_uses_continuous_tpe_and_reproducible_metadata() -
 
 
 def test_jump_research_summary_flags_fallback_dependency() -> None:
-    from backend.analysis.ranktrend_jump_research import summarize_jump_research
+    from backend.analysis.ranktrend.jump_research import summarize_jump_research
 
     summary = summarize_jump_research(
         {

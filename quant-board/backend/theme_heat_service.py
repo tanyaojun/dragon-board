@@ -8,7 +8,7 @@ from threading import Lock
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from backend.analysis.theme_heat import compute_theme_heat
+from backend.analysis.theme.heat import compute_theme_heat
 from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.settings import get_settings

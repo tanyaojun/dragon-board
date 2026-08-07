@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass
 from typing import Any
 
-from backend.analysis.ranktrend import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
+from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
 from backend.utils import new_id, stable_hash
 
 

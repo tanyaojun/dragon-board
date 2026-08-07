@@ -5,8 +5,8 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.models import HistorySlot, RotationHistory
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.models import HistorySlot, RotationHistory
 from backend.snapshot_collector.trading_calendar import (
     TradingCalendarUnavailable,
     is_trading_day,

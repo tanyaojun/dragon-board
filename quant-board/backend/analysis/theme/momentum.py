@@ -393,3 +393,364 @@ def fuse_theme_resonance(
             )
     fused["theme"] = theme_out
     return fused
+
+# ════════════ v2：独立第四维题材动量（日线主口径 + 槽位日内辅口径） ════════════
+# 2026-08-06 重构：题材动量不再并入个股共振（D2 完全解耦）。
+# 日线六维：RPS(5/10/20) / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚。
+# 展示标签 phaseLabel（启动/扩散/过热/退潮/中性）为非状态机派生，不进任何合同。
+
+from backend.analysis.theme.daily_series import ThemeDailySeries, virtual_index
+from backend.analysis.theme.momentum_config import ThemeMomentumConfig
+
+
+def _clamp100(value: float) -> float:
+    """0-100 区间钳制（v2 专用，避免与 v1 的 0-1 _clamp 混淆）。"""
+    return max(0.0, min(100.0, value))
+
+
+def _num100(value: Any, default: float | None = None) -> float | None:
+    """数值化，NaN/None → default；v2 语义：缺失保持缺失（不补零）。"""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if v == v else default
+
+
+def _percentile_rank(value: float, values: list[float]) -> float:
+    """value 在 values 中的横截面百分位（0-100，越大越强）。
+
+    `<= value` 计数占全体比例——与"板块 RPS = 涨幅在全体板块中的分位"口径一致。
+    """
+    if not values:
+        return 50.0
+    below = sum(1 for v in values if v <= value)
+    return (below / len(values)) * 100.0
+
+
+def _n_day_return(changes: list[float], window: int) -> float:
+    """最近 N 日累计收益：(1+c[-N:]) 连乘 - 1；窗口不足时用可用天数。"""
+    series = changes[-window:]
+    if not series:
+        return 0.0
+    product = 1.0
+    for change in series:
+        product *= 1.0 + change
+    return product - 1.0
+
+
+def _rps_for(
+    window: int,
+    series: ThemeDailySeries,
+    all_returns: dict[int, list[float]],
+) -> float | None:
+    """N 日收益在全体板块横截面的百分位排名（0-100）。"""
+    if len(series.changes) < window:
+        return None
+    ret = _n_day_return(series.changes, window)
+    peers = all_returns.get(window, [])
+    if not peers:
+        return None
+    return _percentile_rank(ret, peers)
+
+
+def _near_high_score(series: ThemeDailySeries, cfg: ThemeMomentumConfig) -> float | None:
+    """虚拟收益指数当前值 / 数据窗内 max(Index) 的接近度（0-100）。
+
+    数据不足 full_window_days 时降级为"数据窗内高点"（reasons 由调用方标注）。
+    窗内从未创新高（peak 贴近起点 1.0）时接近度语义失真，返回 None 由调用方
+    标注 near_high_window_limited，避免普跌板块被高估（MEDIUM-2）。
+    """
+    if not series.changes:
+        return None
+    index = virtual_index(series.changes)
+    current = index[-1]
+    peak = max(index)
+    if peak <= 0:
+        return None
+    # 窗内最高指数未明显高于起点（未创新高）：接近度无意义，降级 None
+    if peak <= 1.05:
+        return None
+    return _clamp100(current / peak * 100.0)
+
+
+def _window_momentum_score(series: ThemeDailySeries, cfg: ThemeMomentumConfig) -> float | None:
+    """5/10/20 日收益率的加权符号强度（50 + Σ w·ret·coef，0-100）。"""
+    if len(series.changes) < cfg.min_history_days:
+        return None
+    score = 50.0
+    for window, weight in zip(cfg.rps_windows, cfg.rps_weights):
+        ret = _n_day_return(series.changes, window)
+        score += ret * 100.0 * weight * cfg.momentum_coefficient
+    return _clamp100(score)
+
+
+def _breadth_score(series: ThemeDailySeries) -> float | None:
+    """整体性：日 breadthScore + 涨停家数贡献（0-100）。"""
+    if not series.breadths:
+        return None
+    breadth = series.breadths[-1]
+    zt = series.zt_counts[-1] if series.zt_counts else 0
+    return _clamp100(breadth * 0.8 + min(zt * 5.0, 20.0))
+
+
+def _flow_volume_score(series: ThemeDailySeries) -> float | None:
+    """资金量能：主力净流入符号强度 + 成交额占比（0-100）。"""
+    if not series.inflows:
+        return None
+    inflow = series.inflows[-1]
+    ratio = series.amount_ratios[-1] if series.amount_ratios else 0.0
+    inflow_score = _clamp100(50.0 + inflow * 10.0)
+    ratio_score = _clamp100(ratio * 1000.0)
+    return _clamp100(inflow_score * 0.6 + ratio_score * 0.4)
+
+
+def _apply_crowding_penalty(
+    base: float, crowding: float | None, cfg: ThemeMomentumConfig
+) -> float:
+    """拥挤门禁：crowding ≥ start 后线性扣分，封顶 penalty_max（动量崩溃对冲）。缺失（None）不扣。"""
+    if crowding is None or crowding < cfg.crowding_penalty_start:
+        return base
+    penalty = min(
+        cfg.crowding_penalty_max,
+        (crowding - cfg.crowding_penalty_start) * cfg.crowding_penalty_slope,
+    )
+    return max(0.0, base - penalty)
+
+
+def _phase_label(score: float, crowding: float | None, cfg: ThemeMomentumConfig) -> str:
+    """展示标签（非状态机）：启动/扩散/过热/退潮/中性。crowding 缺失（None）时不判过热。
+
+    仅展示解释，不进任何合同/回测/决策；题材周期 1-3 天~半个月，不做固定状态机。
+    """
+    if (
+        crowding is not None
+        and crowding >= cfg.phase_overheated_crowding
+        and score >= cfg.phase_heat_score
+    ):
+        return "过热"
+    if score >= cfg.phase_heat_score:
+        return "扩散"
+    if score >= cfg.phase_start_score:
+        return "启动"
+    if score <= cfg.phase_cool_score:
+        return "退潮"
+    return "中性"
+
+
+def _intraday_state(
+    current_row: dict[str, Any] | None,
+    prev_row: dict[str, Any] | None,
+) -> dict[str, float]:
+    """槽位日内辅口径：短变化/涨停增量/资金增量（仅快照，不判定生命周期）。"""
+    def num(v: Any) -> float:
+        v = _num100(v)
+        return v if v is not None else 0.0
+    short_change = num(current_row.get("change") if current_row else None)
+    zt_cur = num(current_row.get("ztCount") if current_row else None)
+    zt_prev = num(prev_row.get("ztCount") if prev_row else None)
+    inflow_cur = num(current_row.get("mainNetInflow") if current_row else None)
+    inflow_prev = num(prev_row.get("mainNetInflow") if prev_row else None)
+    return {
+        "shortChange": round(short_change, 4),
+        "ztDelta": round(zt_cur - zt_prev, 2),
+        "inflowDelta": round(inflow_cur - inflow_prev, 4),
+    }
+
+
+
+
+def _rotation_state_for_v2(
+    score: float | None,
+    direction: str,
+    inflow: float | None,
+    crowding: float | None,
+) -> str:
+    """v2 的 rotationState 方向标签（spec D10，无状态机钳制）。
+
+    基于日线动量方向 + 资金方向；mainline 需横截面 Top 判定（由 theme_rotation
+    引擎负责），此处仅产出 inflow/outflow/neutral，reasons 标注来源 v2。
+    """
+    if score is None:
+        return "neutral"
+    if direction == "up" or (inflow is not None and inflow > 0):
+        return "inflow"
+    if direction == "down" or (inflow is not None and inflow < 0):
+        return "outflow"
+    return "neutral"
+
+
+def compute_theme_momentum_v2(
+    daily_series_list: list[ThemeDailySeries],
+    cfg: ThemeMomentumConfig | None = None,
+    computed_at: int = 0,
+) -> dict[str, Any]:
+    """日线主口径题材动量（纯函数，无 I/O）。
+
+    输入为 daily_series.build_daily_series 的产物；输出每题材
+    {themeId, themeName, score, direction, phaseLabel, rps, nearHigh,
+     windowMomentum, breadth, flowVolume, crowdingPenalty, intraday, reasons}。
+
+    fail-visible：横截面不足打 qualityFlags；单题材序列不足对应维度 None + reason，
+    不补零、不伪造；至少 3 个可用维度才合成综合分，否则 score=None。
+    """
+    cfg = cfg or ThemeMomentumConfig()
+
+    # 横截面收益集合（各窗口）
+    all_returns: dict[int, list[float]] = {}
+    for window in cfg.rps_windows:
+        all_returns[window] = [
+            _n_day_return(s.changes, window)
+            for s in daily_series_list
+            if len(s.changes) >= window + 1
+        ]
+
+    factors: dict[str, dict[str, Any]] = {}
+    for series in daily_series_list:
+        reasons: list[str] = []
+
+        rps: dict[str, float | None] = {}
+        for window in cfg.rps_windows:
+            value = _rps_for(window, series, all_returns)
+            rps[f"d{window}"] = round(value, 1) if value is not None else None
+            if value is None:
+                reasons.append(f"rps_d{window}_history_insufficient")
+
+        near_high = _near_high_score(series, cfg)
+        if near_high is not None:
+            if len(series.changes) < cfg.near_high_full_window_days:
+                reasons.append("near_high_window_limited")
+        else:
+            # None：无数据或窗内未创新高（语义失真降级），统一标注
+            reasons.append("near_high_window_limited")
+
+        window_momentum = _window_momentum_score(series, cfg)
+        if window_momentum is None:
+            reasons.append("window_momentum_history_insufficient")
+
+        breadth = _breadth_score(series)
+        flow_volume = _flow_volume_score(series)
+        if "amount_ratio_missing" in series.quality_flags and flow_volume is not None:
+            flow_volume = None
+            reasons.append("flow_volume_unavailable")
+
+        # 拥挤门禁（spec §5.2）：使用真实 crowdingRisk 日线（build_daily_series 聚合）；
+        # 数据缺失时保持缺失（crowding=None）→ 不扣分 + crowding_unavailable 标记
+        # （fail-visible：不伪造、不用宽度反向代理造成自抵消）。
+        crowding = (
+            series.crowding_days[-1] if series.crowding_days else None
+        )
+        if crowding is None:
+            reasons.append("crowding_unavailable")
+
+        # 合成综合分：可用维度 < 3 则不产分
+        scores: dict[str, float] = {}
+        if rps.get("d5") is not None and rps.get("d10") is not None and rps.get("d20") is not None:
+            scores["rps"] = (
+                rps["d5"] * cfg.rps_weights[0]
+                + rps["d10"] * cfg.rps_weights[1]
+                + rps["d20"] * cfg.rps_weights[2]
+            )
+        if near_high is not None:
+            scores["near_high"] = near_high
+        if window_momentum is not None:
+            scores["window_momentum"] = window_momentum
+        if breadth is not None:
+            scores["breadth"] = breadth
+        if flow_volume is not None:
+            scores["flow_volume"] = flow_volume
+
+        if len(scores) < 3:
+            factors[series.theme_id] = {
+                "themeId": series.theme_id,
+                "themeName": series.theme_name,
+                "score": None,
+                "direction": "neutral",
+                "rotationState": "neutral",
+                "phaseLabel": "中性",
+                "rps": rps,
+                "nearHigh": round(near_high, 1) if near_high is not None else None,
+                "windowMomentum": (
+                    round(window_momentum, 1) if window_momentum is not None else None
+                ),
+                "breadth": round(breadth, 1) if breadth is not None else None,
+                "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
+                "crowdingPenalty": 0.0,
+                "ztCount": int(series.zt_counts[-1]) if series.zt_counts else 0,
+                "intraday": (
+                    _intraday_state(
+                        (getattr(series, "latest_slots", []) or [None])[-1],
+                        (getattr(series, "latest_slots", []) or [None, None])[-2]
+                        if len(getattr(series, "latest_slots", []) or []) >= 2 else None,
+                    )
+                    if len(getattr(series, "latest_slots", []) or []) >= 2
+                    else {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True}
+                ),
+                "reasons": reasons + ["insufficient_factors"],
+            }
+            continue
+
+        total_weight = sum(cfg.weights[k] for k in scores)
+        base = sum(scores[k] * cfg.weights[k] for k in scores) / total_weight
+        score = _apply_crowding_penalty(base, crowding if crowding is not None else 0.0, cfg)
+
+        # 槽位日内辅口径（spec D3）：当日收盘槽 vs 前一日收盘槽快照
+        slots = getattr(series, "latest_slots", [])
+        intraday = (
+            _intraday_state(slots[-1], slots[-2])
+            if len(slots) >= 2
+            else {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True}
+        )
+        # direction 结合动量方向（spec §5.2：score 相对 50 且动量方向一致）：
+        # 普跌市中 RPS 分位可能高但绝对动量（windowMomentum 以 50 为中性）为负，
+        # 此时不标 up 而降级 neutral，避免方向与真实收益矛盾。
+        momentum_dir = (
+            "up"
+            if window_momentum is not None and window_momentum > 50.0
+            else "down"
+            if window_momentum is not None and window_momentum < 50.0
+            else "neutral"
+        )
+        if score >= cfg.direction_up_threshold and momentum_dir == "up":
+            direction = "up"
+        elif score <= cfg.direction_down_threshold and momentum_dir == "down":
+            direction = "down"
+        else:
+            direction = "neutral"
+            if score >= cfg.direction_up_threshold or score <= cfg.direction_down_threshold:
+                reasons.append(
+                    f"direction_consistency(momentum_dir={momentum_dir}, score={score:.0f})"
+                )
+        rotation_state = _rotation_state_for_v2(
+            score, direction, series.inflows[-1] if series.inflows else None, crowding
+        )
+        if rotation_state != "neutral":
+            reasons.append(f"rotationState={rotation_state}(v2)")
+        factors[series.theme_id] = {
+            "themeId": series.theme_id,
+            "themeName": series.theme_name,
+            "score": round(score, 1),
+            "direction": direction,
+            "rotationState": rotation_state,
+            "phaseLabel": _phase_label(score, crowding, cfg),
+            "rps": rps,
+            "nearHigh": round(near_high, 1) if near_high is not None else None,
+            "windowMomentum": round(window_momentum, 1) if window_momentum is not None else None,
+            "breadth": round(breadth, 1) if breadth is not None else None,
+            "flowVolume": round(flow_volume, 1) if flow_volume is not None else None,
+            "crowdingPenalty": round(base - score, 1),
+            "ztCount": int(series.zt_counts[-1]) if series.zt_counts else 0,
+            "intraday": intraday,
+            "reasons": reasons,
+        }
+
+    return {
+        "version": cfg.version,
+        "factors": factors,
+        "qualityFlags": (
+            ["cross_section_insufficient"]
+            if len(daily_series_list) < cfg.cross_section_min
+            else []
+        ),
+        "computedAt": computed_at,
+    }

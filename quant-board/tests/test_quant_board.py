@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, select
 
-from backend.analysis.ranktrend import (
+from backend.analysis.ranktrend.engine import (
     RankTrendConfig,
     RankTrendPythonEngine,
     analyze_cycle,
@@ -509,7 +509,7 @@ def test_ranktrend_cycle_outputs_lifecycle_decision_contract() -> None:
 
 
 def test_ranktrend_lifecycle_decision_evidence_accepts_risk_pressure() -> None:
-    from backend.analysis.ranktrend import lifecycle_decision
+    from backend.analysis.ranktrend.engine import lifecycle_decision
 
     decision = lifecycle_decision(
         "expansion",
@@ -536,7 +536,7 @@ def test_ranktrend_lifecycle_decision_evidence_accepts_risk_pressure() -> None:
 
 
 def test_ranktrend_lifecycle_decision_vetoes_high_risk_breakout() -> None:
-    from backend.analysis.ranktrend import lifecycle_decision
+    from backend.analysis.ranktrend.engine import lifecycle_decision
 
     decision = lifecycle_decision(
         "expansion",
@@ -569,7 +569,7 @@ def test_ranktrend_lifecycle_decision_outputs_discovery_diagnostic() -> None:
 
 
 def test_ranktrend_lifecycle_decision_cautions_last_jump_without_path_commitment() -> None:
-    from backend.analysis.ranktrend import lifecycle_decision
+    from backend.analysis.ranktrend.engine import lifecycle_decision
 
     decision = lifecycle_decision(
         "expansion",
@@ -596,7 +596,7 @@ def test_ranktrend_lifecycle_decision_cautions_last_jump_without_path_commitment
 
 
 def test_ranktrend_lifecycle_decision_does_not_veto_weak_path_when_mid_long_commit() -> None:
-    from backend.analysis.ranktrend import lifecycle_decision
+    from backend.analysis.ranktrend.engine import lifecycle_decision
 
     decision = lifecycle_decision(
         "expansion",
@@ -629,7 +629,7 @@ def test_ranktrend_lifecycle_decision_does_not_veto_weak_path_when_mid_long_comm
 
 
 def test_ranktrend_lifecycle_decision_preserves_low_long_big_move_when_path_commits() -> None:
-    from backend.analysis.ranktrend import lifecycle_decision
+    from backend.analysis.ranktrend.engine import lifecycle_decision
 
     decision = lifecycle_decision(
         "expansion",
@@ -656,7 +656,7 @@ def test_ranktrend_lifecycle_decision_preserves_low_long_big_move_when_path_comm
 
 
 def test_ranktrend_lifecycle_decision_flags_low_visibility_ignition_commitment() -> None:
-    from backend.analysis.ranktrend import lifecycle_decision
+    from backend.analysis.ranktrend.engine import lifecycle_decision
 
     decision = lifecycle_decision(
         "ignition",
@@ -690,7 +690,7 @@ def test_ranktrend_lifecycle_decision_flags_low_visibility_ignition_commitment()
 
 
 def test_ranktrend_compose_strategy_keeps_low_visibility_b_ignition_as_caution_candidate() -> None:
-    from backend.analysis.ranktrend import compose_strategy
+    from backend.analysis.ranktrend.engine import compose_strategy
 
     technical = {
         "signals": {
@@ -730,7 +730,7 @@ def test_ranktrend_compose_strategy_keeps_low_visibility_b_ignition_as_caution_c
 
 
 def test_ranktrend_compose_strategy_blocks_execution_tier_when_lifecycle_vetoes() -> None:
-    from backend.analysis.ranktrend import compose_strategy
+    from backend.analysis.ranktrend.engine import compose_strategy
 
     technical = {
         "signals": {

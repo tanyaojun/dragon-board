@@ -1,6 +1,6 @@
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.engine import ThemeRotationEngine
-from backend.analysis.theme_rotation.models import HistorySlot
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.engine import ThemeRotationEngine
+from backend.analysis.theme.rotation.models import HistorySlot
 
 
 def _sector(theme_id, name, rank, heat, momentum=60, crowding=50, inflow=1.0, zt=3, change=2.0, breadth=60):
@@ -47,7 +47,7 @@ def test_engine_insufficient_history_no_state():
 def test_engine_sufficient_history_mainline():
     engine = ThemeRotationEngine()
     current = [
-        _sector("BKAI", "人工智能", 1, 85.0, momentum=80, crowding=70, inflow=3.0, zt=8),
+        _sector("BKAI", "人工智能", 1, 85.0, momentum=80, crowding=40, inflow=3.0, zt=8),
         _sector("BKAG", "机器人", 2, 45.0, momentum=45, inflow=-1.0, zt=1),
     ]
     stocks = [
@@ -56,10 +56,10 @@ def test_engine_sufficient_history_mainline():
     ]
     result = engine.compute(current, _history(), stocks, indices={}, computed_at=3000)
     by_key = {s.theme_id: s for s in result.statuses}
-    assert by_key["BKAI"].lifecycle == "climax"
+    assert by_key["BKAI"].lifecycle is None  # D5：状态机废弃
     assert by_key["BKAI"].rotation_state == "mainline"
     assert by_key["BKAI"].mainline_concentration_rank == 1
-    assert by_key["BKAG"].rotation_state == "emerging"
+    assert by_key["BKAG"].rotation_state == "outflow"  # 动量 45、资金负 → outflow
     assert result.market.mainline_concentration is not None
     assert result.market.evidence["framesUsed"] == 3
 
@@ -111,8 +111,8 @@ def test_market_inflow_outflow_carry_theme_names():
     ]
     result = engine.compute(current, history, stocks, computed_at=3000)
     by_key = {s.theme_id: s for s in result.statuses}
-    assert by_key["BKAJ"].rotation_state == "inflow"  # 非主线 expanding → inflow
-    assert by_key["BKAK"].rotation_state == "cooling"
+    assert by_key["BKAJ"].rotation_state == "inflow"  # 动量 60 强 → inflow
+    assert by_key["BKAK"].rotation_state == "outflow"  # 动量 30 弱 → outflow
     inflow = result.market.inflow_themes
     outflow = result.market.outflow_themes
     for item in [*inflow, *outflow]:

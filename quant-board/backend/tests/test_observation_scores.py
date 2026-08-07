@@ -1,5 +1,5 @@
-from backend.analysis.ranktrend import compose_observation_scores
-from backend.analysis.ranktrend import RankTrendPythonEngine
+from backend.analysis.ranktrend.engine import compose_observation_scores
+from backend.analysis.ranktrend.engine import RankTrendPythonEngine
 
 
 def test_lifecycle_opportunity_weights():

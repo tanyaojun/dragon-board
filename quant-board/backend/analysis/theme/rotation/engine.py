@@ -5,24 +5,22 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from backend.analysis.theme_rotation.config import ThemeRotationConfig
-from backend.analysis.theme_rotation.factors import (
+from backend.analysis.theme.rotation.config import ThemeRotationConfig
+from backend.analysis.theme.rotation.factors import (
     breadth_score,
     combine_scores,
     crowding_score,
     flow_score,
-    lifecycle_score,
     robust_z,
     strength_score,
 )
-from backend.analysis.theme_rotation.lifecycle import (
-    lifecycle_for,
+from backend.analysis.theme.rotation.lifecycle import (
     mainline_concentration,
     market_phase_for,
     rotation_speed_score,
     rotation_state_for,
 )
-from backend.analysis.theme_rotation.models import (
+from backend.analysis.theme.rotation.models import (
     HistorySlot,
     MarketRotationSummary,
     ThemeFactorScores,
@@ -222,14 +220,6 @@ class ThemeRotationEngine:
                 prev_theme_stocks,
             )
             crowding, c_missing = crowding_score(row, hist["crowdings"], theme_stocks)
-            lifecycle, l_missing = lifecycle_score(
-                hist["prev_lifecycle"],
-                [
-                    int(_num(r.get("rank"), 0) or 0) - int(_num(row.get("rank"), 0) or 0)
-                    for r in [hist["prev_row"]]
-                    if hist["prev_row"]
-                ],
-            )
 
             scores = ThemeFactorScores(
                 theme_id=key,
@@ -238,28 +228,16 @@ class ThemeRotationEngine:
                 flow=round(flow, 2) if flow is not None else None,
                 breadth=round(breadth, 2) if breadth is not None else None,
                 crowding=round(crowding, 2) if crowding is not None else None,
-                lifecycle=round(lifecycle, 2) if lifecycle is not None else None,
-                missing=s_missing + f_missing + b_missing + c_missing + l_missing,
+                # lifecycle 因子废弃（spec D5）：字段保留输出合同，但恒 None
+                lifecycle=None,
+                missing=s_missing + f_missing + b_missing + c_missing,
             )
             rotation_score = combine_scores(scores, cfg.weights, cfg.min_factors_for_score)
 
             enough_history = (len(hist["heats"]) + 1) >= cfg.min_slots_for_state
-            prev_lifecycle = hist["prev_lifecycle"]
-            if enough_history:
-                theme_max_board = max(
-                    (int(_num(s.get("boardHeight"), 0) or 0) for s in theme_stocks),
-                    default=0,
-                )
-                lifecycle_row = {
-                    **row,
-                    "positiveInflowStreak": positive_streak,
-                    "negativeInflowStreak": negative_streak,
-                    "maxBoardHeight": theme_max_board,
-                }
-                lifecycle_state, life_reasons = lifecycle_for(lifecycle_row, prev_lifecycle, cfg)
-            else:
-                lifecycle_state = None
-                life_reasons = ["历史不足，不判定生命周期"]
+            # lifecycle 状态机废弃（spec D5）：不再由 heat/momentum/资金推导 8 态
+            lifecycle_state = None
+            life_reasons = []
 
             rank = int(_num(row.get("rank"), len(statuses) + 1) or (len(statuses) + 1))
             prev_rank = int(_num(hist["prev_row"].get("rank"), 0) or 0) if hist["prev_row"] else 0
@@ -297,7 +275,7 @@ class ThemeRotationEngine:
                 theme_id=key,
                 theme_name=name,
                 rotation_state=None,
-                lifecycle=lifecycle_state,
+                lifecycle=None,  # spec D5：状态机废弃，输出合同恒 None
                 rotation_score=round(rotation_score, 1) if rotation_score is not None else None,
                 rank=rank,
                 rank_change=rank_change,
@@ -347,36 +325,37 @@ class ThemeRotationEngine:
         mainline_candidates = [
             s
             for s in statuses
-            if s.lifecycle in ("expanding", "climax")
-            and s.rotation_score is not None
+            if s.rotation_score is not None
             and z_rank.get(s.theme_id, 999) <= cfg.min_mainline_z_rank
             and conc_rank.get(s.theme_id, 999) <= cfg.min_mainline_concentration_rank
         ]
         mainline_candidates.sort(key=lambda s: -(s.rotation_score or 0))
         mainline_keys = {s.theme_id for s in mainline_candidates[: cfg.mainline_top_n]}
-        for status in statuses:
-            if status.lifecycle not in ("expanding", "climax"):
-                continue
-            is_mainline = status.theme_id in mainline_keys
-            status.mainline_concentration_rank = conc_rank.get(status.theme_id)
-            row = _row_for(current_sector_rows, status.theme_id) or {}
-            momentum = _num(row.get("momentumScore"))
-            status.rotation_state = rotation_state_for(
-                status.lifecycle or "neutral",
-                momentum if momentum is not None else 50.0,
-                is_mainline,
-                (_num(row.get("mainNetInflow"), 0) or 0) > 0,
-            )
-        for status in statuses:
-            if status.rotation_state is not None or status.lifecycle is None:
-                continue
-            row = _row_for(current_sector_rows, status.theme_id) or {}
-            status.rotation_state = rotation_state_for(
-                status.lifecycle or "neutral",
-                _num(row.get("momentumScore"), 50.0),
-                False,
-                (_num(row.get("mainNetInflow"), 0) or 0) > 0,
-            )
+        # 历史不足时不伪造方向状态（fail-visible，沿用 rotation_state=None 语义）
+        enough_state = len(ordered_slots) + 1 >= cfg.min_slots_for_state
+        if enough_state:
+            for status in statuses:
+                if status.theme_id not in mainline_keys:
+                    continue
+                status.mainline_concentration_rank = conc_rank.get(status.theme_id)
+                row = _row_for(current_sector_rows, status.theme_id) or {}
+                momentum = _num(row.get("momentumScore"))
+                status.rotation_state = rotation_state_for(
+                    momentum if momentum is not None else 50.0,
+                    (_num(row.get("mainNetInflow"), 0) or 0) > 0,
+                    True,
+                    _num(row.get("crowdingRisk"), 0.0),
+                )
+            for status in statuses:
+                if status.rotation_state is not None:
+                    continue
+                row = _row_for(current_sector_rows, status.theme_id) or {}
+                status.rotation_state = rotation_state_for(
+                    _num(row.get("momentumScore"), 50.0),
+                    (_num(row.get("mainNetInflow"), 0) or 0) > 0,
+                    False,
+                    _num(row.get("crowdingRisk"), 0.0),
+                )
 
         # ── 市场摘要 ────────────────────────────────────────────────────
         max_board = max(
@@ -386,7 +365,7 @@ class ThemeRotationEngine:
         total_zt = sum(int(_num(r.get("ztCount"), 0) or 0) for r in current_sector_rows)
         speed = rotation_speed_score(rank_changes) if rank_changes else None
         concentration = mainline_concentration(all_heats, cfg.mainline_top_n) if all_heats else None
-        cooling_count = sum(1 for s in statuses if s.rotation_state == "cooling")
+        cooling_count = sum(1 for s in statuses if s.rotation_state == "outflow")
         cooling_theme_ratio = cooling_count / len(statuses) if statuses else None
         negative_inflow_count = sum(
             1 for r in current_sector_rows if (_num(r.get("mainNetInflow")) or 0) < 0
@@ -434,7 +413,7 @@ class ThemeRotationEngine:
             outflow_themes=[
                 {"themeId": s.theme_id, "themeName": s.theme_name}
                 for s in statuses
-                if s.rotation_state in ("outflow", "cooling")
+                if s.rotation_state == "outflow"
             ],
             suggestion=_suggestion_for(market_phase, mainlines),
             computed_at=computed_at,
@@ -482,7 +461,7 @@ def _inflow_streaks(series: list[float]) -> tuple[int, int]:
 
 
 def linear_slope_heat(history: list[float], current: float | None) -> float | None:
-    from backend.analysis.theme_rotation.factors import linear_slope
+    from backend.analysis.theme.rotation.factors import linear_slope
 
     if current is None:
         return None
@@ -497,7 +476,7 @@ def flow_summary(inflows: list[float], current: float | None) -> float | None:
 
 
 def breadth_trend_value(prev: dict[str, Any] | None, row: dict[str, Any]) -> float | None:
-    from backend.analysis.theme_rotation.factors import _num
+    from backend.analysis.theme.rotation.factors import _num
 
     if prev is None:
         return None

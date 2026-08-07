@@ -1,6 +1,6 @@
 {
   "caseId": "theme_trend_market_runtime_v12_001",
-  "source": "backend.analysis.theme_heat + ThemeStockProjector contract",
+  "source": "backend.analysis.theme.heat + ThemeStockProjector contract",
   "snapshotType": "half_hour",
   "input": {
     "frames": [

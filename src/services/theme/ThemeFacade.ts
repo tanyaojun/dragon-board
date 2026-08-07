@@ -1,4 +1,5 @@
 import { dataLayer } from '@/services/DataLayer'
+import { apiService } from '../apiService'
 import type { RotationAnalysis } from '@/types/core'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { themeRepository } from './ThemeRepository'
@@ -179,6 +180,50 @@ export function getThemeExposureProjection(): ThemeExposureProjection {
 export function getRotationSummary(): RotationAnalysis | null {
   // 只返回后端映射缓存；无后端结果时不本地补算（空态由面板展示）
   return lastRotationSummary
+}
+
+export interface ThemeMomentumSummaryFactor {
+  themeId: string
+  themeName: string
+  score: number | null
+  direction: 'up' | 'neutral' | 'down'
+  phaseLabel: string
+  rps?: { d5?: number | null; d10?: number | null; d20?: number | null }
+  nearHigh?: number | null
+  windowMomentum?: number | null
+  breadth?: number | null
+  flowVolume?: number | null
+  crowdingPenalty?: number
+  ztCount?: number
+  intraday?: { shortChange?: number; ztDelta?: number; inflowDelta?: number; unavailable?: boolean }
+  reasons?: string[]
+}
+
+export interface ThemeMomentumSummary {
+  ok: boolean
+  status: string
+  version: string
+  factors: ThemeMomentumSummaryFactor[]
+  qualityFlags: string[]
+  computedAt: number
+}
+
+export async function getThemeMomentumSummary(params: {
+  snapshotType: string
+  datasetId?: string
+}): Promise<ThemeMomentumSummary | null> {
+  try {
+    const query = new URLSearchParams({
+      dataset_id: params.datasetId || 'dragonboard_live',
+      snapshot_type: params.snapshotType,
+    })
+    const resp = await apiService.get<ThemeMomentumSummary>(
+      `/api/theme-momentum/summary?${query.toString()}`,
+    )
+    return resp ?? null
+  } catch {
+    return null
+  }
 }
 
 export function getThemeEvents() {
@@ -369,6 +414,7 @@ export const themeFacade = {
   getStockExposures,
   getThemeExposureProjection,
   getRotationSummary,
+  getThemeMomentumSummary,
   getThemeEvents,
   getRuntimeSnapshot,
   getHotThemes,
