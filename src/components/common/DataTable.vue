@@ -113,6 +113,8 @@
                   {{ getDirectionArrow(getRankTrendDirection(stock)) }}{{ getRankTrendStrengthValue(stock) }}%
                 </span>
                 <span v-else class="trend-steady">--</span>
+                <span v-if="getMacdCross(stock) === 'golden'" class="macd-badge golden" title="MACD 金叉">▲</span>
+                <span v-else-if="getMacdCross(stock) === 'death'" class="macd-badge death" title="MACD 死叉">▼</span>
               </div>
             </template>
 
@@ -2474,8 +2476,9 @@ defineExpose({
 }
 
 .macd-badge.death {
-  color: #7f8c8d;
-  text-shadow: 0 0 2px rgba(127, 140, 141, 0.5);
+  color: #3498db;
+  text-shadow: 0 0 2px rgba(52, 152, 219, 0.5);
+  filter: drop-shadow(0 0 2px rgba(52, 152, 219, 0.8));
 }
 
 /* 三轨观察指标 */
