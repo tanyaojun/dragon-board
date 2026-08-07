@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from backend.theme_heat_service import ThemeHeatService, ThemeHeatUnavailable
+from backend.services.theme.heat_service import ThemeHeatService, ThemeHeatUnavailable
 from backend.snapshot_collector.models import SourceHealth
 
 
@@ -254,7 +254,7 @@ def test_missing_cache_row_stays_missing() -> None:
 
 
 def test_factory_rejects_unconfigured_mongodb(monkeypatch) -> None:
-    import backend.theme_heat_service as module
+    import backend.services.theme.heat_service as module
 
     monkeypatch.setattr(module, "_theme_heat_service", None)
     monkeypatch.setattr(module, "get_runtime_mongodb_database", lambda: None)

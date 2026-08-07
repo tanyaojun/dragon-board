@@ -10,7 +10,7 @@ import contextlib
 from datetime import datetime, timedelta
 from typing import Any
 
-from backend.theme_mapping_refresh import refresh_theme_stock_mappings
+from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.settings import get_settings
 
 

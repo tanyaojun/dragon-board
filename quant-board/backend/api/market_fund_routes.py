@@ -5,7 +5,7 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.market_fund_stream import get_market_fund_stream
+from backend.services.market.fund_stream import get_market_fund_stream
 
 
 router = APIRouter(prefix="/api/market", tags=["market-fund"])

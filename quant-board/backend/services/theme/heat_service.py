@@ -13,7 +13,7 @@ from backend.data.mongo_theme_repository import MongoThemeRepository
 from backend.data.repository_factory import get_runtime_mongodb_database
 from backend.settings import get_settings
 from backend.snapshot_collector.providers import TencentBasicQuoteProvider
-from backend.theme_fund_cache import get_theme_fund_cache
+from backend.services.theme.fund_cache import get_theme_fund_cache
 
 
 class ThemeHeatUnavailable(RuntimeError):

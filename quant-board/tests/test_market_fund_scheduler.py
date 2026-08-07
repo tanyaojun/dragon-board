@@ -12,7 +12,7 @@ from backend.akshare_fund_provider import (
     AkshareFundBatch,
     AkshareFundProviderError,
 )
-from backend.market_fund_scheduler import MarketFundScheduler
+from backend.services.market.fund_scheduler import MarketFundScheduler
 
 
 TZ = ZoneInfo("Asia/Shanghai")

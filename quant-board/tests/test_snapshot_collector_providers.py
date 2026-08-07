@@ -27,7 +27,7 @@ from backend.snapshot_collector.providers import (
     ThemeMappingProvider,
     collect_market_context,
 )
-from backend.theme_fund_cache import ThemeFundCache
+from backend.services.theme.fund_cache import ThemeFundCache
 
 
 # ── Fake httpx client / response builder ────────────────────────────────────

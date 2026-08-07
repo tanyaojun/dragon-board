@@ -28,7 +28,7 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
-from backend.theme_fund_cache import ThemeFundCache
+from backend.services.theme.fund_cache import ThemeFundCache
 
 from .gateway import HttpMarketDataGateway
 from .models import MarketDataContext, SourceHealth
