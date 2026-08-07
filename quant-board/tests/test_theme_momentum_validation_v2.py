@@ -52,14 +52,16 @@ def test_compare_v1_v2_reports_rank_shifts_and_directions() -> None:
 
 
 def test_compare_v1_v2_insufficient_series_flagged() -> None:
-    # 日线序列不足 5 日：部分维度可算（breadth/flow），但打横截面不足标记（fail-visible）
+    # 日线序列不足 5 日：RPS/窗口动量/距高点维度 None，题材保留并打 insufficient 标记
+    # （fail-visible：不伪造缺失、不静默过滤）
     themes = [_theme("BKAI", "人工智能", 90.0, 0.05)]
     frames = [_frame("2026-06-10", themes) for _ in range(2)]
 
     result = compare_theme_momentum_v1_v2(frames)
     assert result["ok"] is True
-    # 可算部分保留（不伪造缺失），横截面不足显式标记
+    # 题材保留在 perTheme（即使 score=None）
     assert "BKAI" in result["perTheme"]
     assert "cross_section_insufficient" in result["qualityFlags"]
-    # 2 帧 < 5 日：窗口动量/RPS 维度不足 → reason 标记
-    assert result["perTheme"]["BKAI"]["v2Score"] is not None
+    # 2 帧 < 5 日：维度不足 → insufficient 标记 + reason（fail-visible）
+    assert result["perTheme"]["BKAI"]["insufficient"] is True
+    assert any("history_insufficient" in r for r in result["perTheme"]["BKAI"]["reasons"])

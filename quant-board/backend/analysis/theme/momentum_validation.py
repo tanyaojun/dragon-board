@@ -132,8 +132,10 @@ def compare_theme_momentum_v1_v2(
     daily = build_daily_series(sector_rows, [])
     result = compute_theme_momentum_v2(list(daily.values()), cfg=ThemeMomentumConfig())
     ranked_v2 = sorted(
-        (v for v in result["factors"].values() if v.get("score") is not None),
-        key=lambda item: -float(item["score"]),
+        result["factors"].values(),
+        key=lambda item: (
+            -float(item["score"]) if item.get("score") is not None else float("inf")
+        ),
     )
     rank_v2 = {item["themeId"]: idx for idx, item in enumerate(ranked_v2)}
 
@@ -164,6 +166,8 @@ def compare_theme_momentum_v1_v2(
             "v2Rank": rank_v2[tid],
             "v1HeatRank": v1_rank,
             "rankShift": shift,
+            "insufficient": item.get("score") is None,
+            "reasons": item.get("reasons") or [],
         }
 
     return {

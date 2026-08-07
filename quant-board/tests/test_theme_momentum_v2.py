@@ -147,3 +147,25 @@ def test_v2_empty_input_not_crash():
     assert result["factors"] == {}
     # 空输入：无板块 → 横截面不足标记（fail-visible，不伪装成功）
     assert result["qualityFlags"] == ["cross_section_insufficient"]
+
+
+def test_v2_direction_requires_momentum_consistency():
+    """普跌市中 RPS 分位高但绝对动量负 → 不标 up（MEDIUM-1）。"""
+    # 全市场都在跌：BKAI 跌得最少（相对最强，RPS 高）但绝对收益为负
+    others = [_series(f"BK{i:02d}", f"题材{i}", [-0.05] * 25) for i in range(19)]
+    leader = _series("BKAI", "人工智能", [-0.01] * 25)
+    result = compute_theme_momentum_v2([leader, *others], cfg=ThemeMomentumConfig())
+    row = result["factors"]["BKAI"]
+    # 绝对动量 windowMomentum < 50（负收益）→ 不标 up，即使 RPS 分位高
+    assert row["direction"] != "up"
+    assert row["direction"] in {"neutral", "down"}
+
+
+def test_v2_near_high_degraded_without_new_high():
+    """窗内从未创新高（一路阴跌）→ nearHigh None + near_high_window_limited（MEDIUM-2）。"""
+    falling = _series("BKAI", "人工智能", [-0.01] * 25)
+    result = compute_theme_momentum_v2([falling], cfg=ThemeMomentumConfig())
+    row = result["factors"]["BKAI"]
+    assert row["nearHigh"] is None
+    assert "near_high_window_limited" in row["reasons"]
+

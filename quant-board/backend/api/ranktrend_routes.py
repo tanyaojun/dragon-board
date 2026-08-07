@@ -228,12 +228,16 @@ def _compute_theme_momentum_v2_context(frames: list[dict[str, Any]]) -> dict[str
             sector_rows.append(theme)
     daily = build_daily_series(sector_rows, [])
     result = compute_theme_momentum_v2(list(daily.values()))
+    # context 保留全量 factors（供每股投影按 themeId 查找，避免 top-20 截断导致
+    # 第 21 名以后题材每股恒 insufficient——MEDIUM-3）；仅响应序列化时截断 top-20。
+    ranked = sorted(
+        (v for v in result["factors"].values() if v.get("score") is not None),
+        key=lambda item: -float(item["score"]),
+    )
     return {
         "version": result["version"],
-        "factors": sorted(
-            (v for v in result["factors"].values() if v.get("score") is not None),
-            key=lambda item: -float(item["score"]),
-        )[:20],
+        "factors": ranked,
+        "factorsTop20": ranked[:20],
         "qualityFlags": result["qualityFlags"],
         "computedAt": int(frames[-1].get("timestamp") or 0) if frames else 0,
     }
@@ -252,6 +256,12 @@ def _theme_momentum_projection(
         return {"status": "insufficient", "reasons": ["theme_mapping_missing"]}
     theme_id = str(exposure.get("themeId") or "")
     factors = {str(f.get("themeId") or ""): f for f in context.get("factors", [])}
+    if theme_id not in factors:
+        # 兼容旧形状：仅 factorsTop20 时也查一次
+        factors = {
+            str(f.get("themeId") or ""): f
+            for f in context.get("factorsTop20", [])
+        }
     factor = factors.get(theme_id)
     if not factor or factor.get("score") is None:
         return {"status": "insufficient", "reasons": ["theme_momentum_insufficient"]}

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import time
+
 from fastapi import APIRouter
 
 from backend.analysis.theme.daily_series import build_daily_series
@@ -68,7 +70,9 @@ def theme_momentum_summary(
     db = get_runtime_mongodb_database()
     rows = _load_recent_sector_rows(db, dataset_id, snapshot_type)
     daily = build_daily_series(rows, [])
-    result = compute_theme_momentum_v2(list(daily.values()), cfg=ThemeMomentumConfig())
+    result = compute_theme_momentum_v2(
+        list(daily.values()), cfg=ThemeMomentumConfig(), computed_at=int(time.time() * 1000)
+    )
 
     factors = sorted(
         (v for v in result["factors"].values() if v.get("score") is not None),

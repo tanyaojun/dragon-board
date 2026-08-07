@@ -458,6 +458,8 @@ def _near_high_score(series: ThemeDailySeries, cfg: ThemeMomentumConfig) -> floa
     """虚拟收益指数当前值 / 数据窗内 max(Index) 的接近度（0-100）。
 
     数据不足 full_window_days 时降级为"数据窗内高点"（reasons 由调用方标注）。
+    窗内从未创新高（peak 贴近起点 1.0）时接近度语义失真，返回 None 由调用方
+    标注 near_high_window_limited，避免普跌板块被高估（MEDIUM-2）。
     """
     if not series.changes:
         return None
@@ -465,7 +467,10 @@ def _near_high_score(series: ThemeDailySeries, cfg: ThemeMomentumConfig) -> floa
     current = index[-1]
     peak = max(index)
     if peak <= 0:
-        return 50.0
+        return None
+    # 窗内最高指数未明显高于起点（未创新高）：接近度无意义，降级 None
+    if peak <= 1.05:
+        return None
     return _clamp100(current / peak * 100.0)
 
 
@@ -578,6 +583,7 @@ def _rotation_state_for_v2(
 def compute_theme_momentum_v2(
     daily_series_list: list[ThemeDailySeries],
     cfg: ThemeMomentumConfig | None = None,
+    computed_at: int = 0,
 ) -> dict[str, Any]:
     """日线主口径题材动量（纯函数，无 I/O）。
 
@@ -611,7 +617,11 @@ def compute_theme_momentum_v2(
                 reasons.append(f"rps_d{window}_history_insufficient")
 
         near_high = _near_high_score(series, cfg)
-        if near_high is not None and len(series.changes) < cfg.near_high_full_window_days:
+        if near_high is not None:
+            if len(series.changes) < cfg.near_high_full_window_days:
+                reasons.append("near_high_window_limited")
+        else:
+            # None：无数据或窗内未创新高（语义失真降级），统一标注
             reasons.append("near_high_window_limited")
 
         window_momentum = _window_momentum_score(series, cfg)
@@ -690,13 +700,26 @@ def compute_theme_momentum_v2(
             if len(slots) >= 2
             else {"shortChange": 0.0, "ztDelta": 0.0, "inflowDelta": 0.0, "unavailable": True}
         )
-        direction = (
+        # direction 结合动量方向（spec §5.2：score 相对 50 且动量方向一致）：
+        # 普跌市中 RPS 分位可能高但绝对动量（windowMomentum 以 50 为中性）为负，
+        # 此时不标 up 而降级 neutral，避免方向与真实收益矛盾。
+        momentum_dir = (
             "up"
-            if score >= cfg.direction_up_threshold
+            if window_momentum is not None and window_momentum > 50.0
             else "down"
-            if score <= cfg.direction_down_threshold
+            if window_momentum is not None and window_momentum < 50.0
             else "neutral"
         )
+        if score >= cfg.direction_up_threshold and momentum_dir == "up":
+            direction = "up"
+        elif score <= cfg.direction_down_threshold and momentum_dir == "down":
+            direction = "down"
+        else:
+            direction = "neutral"
+            if score >= cfg.direction_up_threshold or score <= cfg.direction_down_threshold:
+                reasons.append(
+                    f"direction_consistency(momentum_dir={momentum_dir}, score={score:.0f})"
+                )
         rotation_state = _rotation_state_for_v2(
             score, direction, series.inflows[-1] if series.inflows else None, crowding
         )
@@ -727,5 +750,5 @@ def compute_theme_momentum_v2(
             if len(daily_series_list) < cfg.cross_section_min
             else []
         ),
-        "computedAt": 0,
+        "computedAt": computed_at,
     }
