@@ -8,8 +8,10 @@ import { REALTIME_FLUSH_DELAY_MS } from './constants'
 
 const REALTIME_OWNER = 'dataLoader.hotlist'
 
-// P0 可见行数量：热榜排序（compRank/信号/换手）前 N 只作为资金流优先校准对象
-const P0_VISIBLE_COUNT = 30
+// P0/P1 资金校准分级（2026-08-08 用户确认简化为纯 compRank 口径）：
+// P0 = compRank ≤ 50（优先校准，30 秒轮转），P1 = compRank > 50（180 秒轮转）。
+// 不再叠加信号/金叉/confidence/turnover 分层。
+const P0_MAX_COMP_RANK = 50
 
 function deriveMainMoneyRatio(mainNet: unknown, turnover: unknown): number | undefined {
   const net = Number(mainNet)
@@ -42,8 +44,8 @@ export class RealtimeQuoteCoordinator {
   }
 
   syncRealtimeSubscription() {
-    const codes = this.buildRealtimeSubscriptionCodes()
-    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, codes, codes.slice(0, P0_VISIBLE_COUNT))
+    const { p0Codes, allCodes } = this.buildRealtimeSubscriptionCodes()
+    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, allCodes, p0Codes)
   }
 
   isRealtimePrimaryHealthy(): boolean {
@@ -252,9 +254,9 @@ export class RealtimeQuoteCoordinator {
     }
   }
 
-  private buildRealtimeSubscriptionCodes(): string[] {
+  private buildRealtimeSubscriptionCodes(): { p0Codes: string[]; allCodes: string[] } {
     const hotCodes = Array.from(this.getHotCodes())
-    if (!hotCodes.length) return []
+    if (!hotCodes.length) return { p0Codes: [], allCodes: [] }
 
     const hotCodeSet = new Set(hotCodes)
     const stocks = dataLayer.getStocks().filter((stock) => hotCodeSet.has(stock.code))
@@ -267,47 +269,24 @@ export class RealtimeQuoteCoordinator {
       return 9999
     }
 
-    const getFinalSignal = (stock: any) => stock?.rankTrend?.decision?.final?.signal ?? 'none'
-    const getFinalConfidence = (stock: any) =>
-      Number(stock?.rankTrend?.decision?.final?.confidence) || 0
-    const getMacdCross = (stock: any) => stock?.rankTrend?.technical?.macd?.cross ?? 'none'
-
-    const priorityOf = (stock: any) => {
-      const withinTop50 = getCompRank(stock) <= 50
-      const finalSignal = getFinalSignal(stock)
-      const macdCross = getMacdCross(stock)
-
-      if (withinTop50 && finalSignal === 'buy' && macdCross === 'golden') return 3
-      if (withinTop50 && finalSignal === 'buy') return 2
-      if (withinTop50) return 1
-      return 0
-    }
-
-    const prioritizedCodes = stocks
+    // P0/P1 只按 compRank 排序（用户确认简化为纯 compRank 口径）
+    const sorted = stocks
       .slice()
       .sort((left: any, right: any) => {
-        const rightPriority = priorityOf(right)
-        const leftPriority = priorityOf(left)
-        if (rightPriority !== leftPriority) return rightPriority - leftPriority
-
-        const leftCompRank = getCompRank(left)
-        const rightCompRank = getCompRank(right)
-        if (leftCompRank !== rightCompRank) return leftCompRank - rightCompRank
-
-        const rightConfidence = getFinalConfidence(right)
-        const leftConfidence = getFinalConfidence(left)
-        if (rightConfidence !== leftConfidence) return rightConfidence - leftConfidence
-
-        const rightTurnover = Number(right?.turnover) || 0
-        const leftTurnover = Number(left?.turnover) || 0
-        if (rightTurnover !== leftTurnover) return rightTurnover - leftTurnover
-
+        const leftRank = getCompRank(left)
+        const rightRank = getCompRank(right)
+        if (leftRank !== rightRank) return leftRank - rightRank
         return String(left?.code || '').localeCompare(String(right?.code || ''))
       })
       .map((stock) => stock.code)
 
-    const missingCodes = hotCodes.filter((code) => !prioritizedCodes.includes(code))
-    return [...prioritizedCodes, ...missingCodes]
+    const missingCodes = hotCodes.filter((code) => !sorted.includes(code))
+    const allCodes = [...sorted, ...missingCodes]
+    const p0Codes = allCodes.filter((code) => {
+      const stock = stocks.find((item) => item.code === code)
+      return stock !== undefined && getCompRank(stock) <= P0_MAX_COMP_RANK
+    })
+    return { p0Codes, allCodes }
   }
 
 }

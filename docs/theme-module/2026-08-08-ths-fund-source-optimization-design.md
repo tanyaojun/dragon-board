@@ -230,8 +230,9 @@ akshare stock_fund_flow_individual("即时") 全市场  ← fund_scheduler.py
    （`ths_fund_refresh_scheduler.py`，每批 ≤5、并发 ≤2、180s 轮转、退避/冷却），
    `backend/main.py` 挂接，调度器测试 8 项通过。
 3. ✅ **已完成（2026-08-08）**：P0/P1 可见行优先级——前端 fund-stream 协议
-   上报 `priorityCodes`（热榜排序前 30 只，`RealtimeQuoteCoordinator` →
-   `RealtimeSubscriptionRegistry` → `marketFundStream`），后端
+   上报 `priorityCodes`（P0 = `compRank ≤ 50`、P1 = `compRank > 50`，
+   `RealtimeQuoteCoordinator` 按 compRank 排序，`RealtimeSubscriptionRegistry` →
+   `marketFundStream`），后端
    `MarketFundStream` 维护 priority 并集，`ThsFundRefreshScheduler` 按
    P0 30s / P1 180s 分级轮转（P0 到期优先），测试：`test_fund_stream.py`、
    调度器 P0/P1 用例、前端 registry/marketFundStream/coordinator 用例。

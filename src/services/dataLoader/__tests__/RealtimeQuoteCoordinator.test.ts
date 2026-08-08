@@ -68,7 +68,7 @@ describe('RealtimeQuoteCoordinator', () => {
     coordinator.destroy()
   })
 
-  it('submits top P0 visible codes as priority to the market fund feed', () => {
+  it('submits compRank<=50 codes as P0 priority to the market fund feed', () => {
     for (let index = 1; index <= 40; index += 1) {
       const code = String(index).padStart(6, '0')
       stocks.push({ code, rank: index, compRank: index })
@@ -81,11 +81,33 @@ describe('RealtimeQuoteCoordinator', () => {
     coordinator.syncRealtimeSubscription()
 
     const call = registryCalls[0]
-    expect(call.priorityCodes).toHaveLength(30)
+    // 40 只 compRank 均 ≤50 → 全部为 P0（不再截断到 30）
+    expect(call.priorityCodes).toHaveLength(40)
     expect(call.priorityCodes?.[0]).toBe('000001')
-    expect(call.priorityCodes?.[29]).toBe('000030')
-    // 全池仍是 40 只
+    expect(call.priorityCodes?.[39]).toBe('000040')
     expect(call.codes).toHaveLength(40)
+    coordinator.destroy()
+  })
+
+  it('splits P0 (compRank<=50) and P1 (compRank>50) without complex layering', () => {
+    for (let index = 1; index <= 60; index += 1) {
+      const code = String(index).padStart(6, '0')
+      stocks.push({ code, rank: index, compRank: index })
+    }
+    const coordinator = new RealtimeQuoteCoordinator({
+      getHotCodes: () => new Set(stocks.map((stock) => stock.code)),
+      flushDelay: 1,
+    })
+
+    coordinator.syncRealtimeSubscription()
+
+    const call = registryCalls[0]
+    expect(call.priorityCodes).toHaveLength(50) // compRank 1-50
+    expect(call.priorityCodes?.[0]).toBe('000001')
+    expect(call.priorityCodes?.[49]).toBe('000050')
+    // 51-60（compRank>50）不进入 P0
+    expect(call.priorityCodes).not.toContain('000051')
+    expect(call.codes).toHaveLength(60) // 全池仍是 60 只
     coordinator.destroy()
   })
 
