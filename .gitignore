@@ -65,6 +65,12 @@ quant-board/data/
 quant-board/data/warehouse/*.db
 quant-board/data/staging/
 quant-board/data/reports/
+# ThsMainMonitorService 单票 gzip 归档（运行产物，落点与设计文档的
+# quant-board/data/big-order/ths/ 不一致，见 2026-08-08 设计文档风险节）
+quant-board/backend/services/data/
+# Reasonix 工具环境文件（会话任务、主题元数据、权限配置）
+.reasonix/
+reasonix.toml
 # Superpowers plugin artifact
 .superpowers/
 .worktrees/

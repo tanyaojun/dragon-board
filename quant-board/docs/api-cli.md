@@ -1331,9 +1331,9 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/heat?force=false`
 
-返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段来自后端 `MarketFundScheduler` 用 akshare 同花顺个股资金流（`stock_fund_flow_individual("即时")`）做的全市场批量刷新，写入进程内 last-good（不再使用 Redis `theme-fund:v3`），来源固定为 `ths_main_monitor`。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。
+返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段来自两层来源：① 种子层（akshare 东财个股资金流排行 `eastmoney_seed`，主力净流入 = 超大单 + 大单）**默认停用**（`QUANT_BOARD_THEME_FUND_SEED_ENABLED=false`），冷启动改从 MongoDB `fund_flow_l2` 恢复最近交易日 L2 行（零第三方请求）；② 盘中由 `mainMonitorDetail`（`ths_main_monitor`，L2 口径）按展示池逐票校准覆盖。前端按 source 优先级合并展示（`eastmoney_seed`/`ths_web_seed` < `ths_main_monitor`），低 rank 不覆盖高 rank。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。
 
-⚠️ 口径说明：运行态 `zlje`（主力净额）直接取同花顺“个股资金流”页面 `净额 = 主力流入 − 主力流出`。该口径与旧 `mainMonitorDetail` 的 `mainbuy − mainsell` **不等价**——同一交易日同一只票两者数值甚至符号都可能不同（实测 300720 分别为 +1.245 亿 与 −0.831 亿）。因此运行态资金字段与历史快照中旧口径的 `zlje/mainNetInflow` 不可直接混算或跨口径比较。
+⚠️ 口径说明：运行态资金列当前由两层组成——种子层取东财排行接口主力净流入（`eastmoney_seed`，= 超大单 + 大单净流入，与 L2 `mainMonitorDetail` 的 `mainbuy − mainsell` 近似，实盘验证差异远小于同花顺网页口径）；权威层取 `mainMonitorDetail` L2 口径（`ths_main_monitor`）。**历史快照/旧缓存中的 `ths_web_seed` 行是同花顺网页口径**（`净额 = 主力流入 − 主力流出`），该口径与 L2 **不等价**——同一交易日同一只票两者数值甚至符号都可能不同（实测 300720 分别为 +1.245 亿 与 −0.831 亿）。因此运行态资金字段与历史快照中旧口径的 `zlje/mainNetInflow` 不可直接混算或跨口径比较。
 
 当腾讯覆盖率低于门槛时不整段 `503`（fail-visible）：接口返回 `200`，`data.degraded=true`，`data.quality.errorCode=quote_coverage_blocked` 并携带覆盖率/返回数等结构化原因；因子保留已计算部分，但 `rank=0`、`rankEligible=false`，由前端展示可计算数据和缺失原因。只有题材映射本身为空（`mapping_empty`）这类"全源无数据"情形才返回结构化 `503` 并携带 `staleData`。未覆盖资金的股票不按零值聚合，相关 `fundScore/mainNetInflow` 保持空值。
 
@@ -1343,11 +1343,17 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 - `GET /api/big-order/ths-fund-batch?codes=000001,600000&concurrency=2`：按最多 5 只股票返回标准化 `zlje`、`sessionDate` 和逐票失败；并发限制在 1 到 2。
 - `GET /api/themes/fund-rows?codes=000001,600000`：只读 Redis last-good 的诊断接口，不触发上游请求。
 
-全市场刷新周期可通过 `QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS` 覆盖，默认 300 秒（下限 60 秒）；akshare 每次调用会内部逐页请求同花顺数据中心约 104 页，触发风控（验证码/限流）时调度器进入熔断并保留 last-good。按需 THS 明细接口仍可用 `QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 2、15 秒和 THS `mainMonitorDetail` 官方地址。
+全市场刷新周期可通过 `QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS` 覆盖，默认 300 秒（下限 60 秒）；种子层由 provider 自请求东财 `push2.eastmoney.com/api/qt/clist/get` 分页拉取（100 条/页，约 53 页）——**不依赖 akshare `stock_individual_fund_flow_rank`**（其 53 页无间隔连发会触发 push2 WAF `RemoteDisconnected`，且无 UA/timeout）：自带 UA/Referer、硬 timeout、IPv4 优先 DNS、每页 0.35 秒间隔摊薄限流、120 页上限保护；上游连接被服务端断开（`ConnectionError`，属东财风控）映射 `ths_rate_limited`，超时映射 `ths_timeout`，调度器进入熔断并保留 last-good。展示池 L2 校准由 `ThsFundRefreshScheduler` 完成（每批 ≤5 只、并发 ≤2、P0 可见行 30 秒 / P1 其余 180 秒分级轮转、单票失败退避、系统性限流全局冷却 30 秒 + 并发降 1、连续 3 批成功恢复并发 2；P0 可见行由前端 fund-stream 协议 `priorityCodes` 上报，默认热榜排序前 30 只）。owner 持久化：浏览器断开后按最后已知池继续刷新（`ownerState`：active/persisted/none）；交易日时段策略：周一至周五 09:30-11:30、13:00-15:00 正常轮转，非交易时段已初始化则暂停（保留 last-good），冷启动例外（从未刷过）允许非交易时段刷一轮拿最近交易日 L2——**该轮只写 Redis 热缓存（首屏不空），不写 MongoDB**（MongoDB 只固化交易时段数据，避免非交易日垃圾文档）。**MongoDB 故障隔离**：页面展示走 Redis/进程内 last-good（不经过 MongoDB），MongoDB upsert 失败/挂起仅记日志（`mongo_write_timeout_seconds` 默认 5 秒超时，不拖慢 P0/P1 刷新节奏）。状态见 `/api/health` 的 `thsFundRefresh`。按需 THS 明细接口仍可用 `QUANT_BOARD_THEME_FUND_CONCURRENCY`、`QUANT_BOARD_THEME_FUND_UPSTREAM_TIMEOUT_SECONDS` 和 `QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL` 覆盖；默认分别为 2、15 秒和 THS `mainMonitorDetail` 官方地址。
 
 资金流 provider（`AkshareFundProvider`）抓取期间会强制 `getaddrinfo` 优先返回 IPv4 记录，并给 akshare 内部的 `requests` 调用注入单请求超时（默认取 `QUANT_BOARD_MARKET_FUND_FETCH_TIMEOUT_SECONDS` 的一半、上限 30 秒）。原因：`data.10jqka.com.cn` 在本机 IPv6 链路存在 TCP 可建连但数据被黑洞的问题，akshare 自身 `requests.get` 不带 timeout，上游挂起会让线程无限堆积并饿死调度器；IPv4 优先 + 超时双保险后，超时统一映射为 `ths_timeout` 进入熔断重试。
 
-该资金缓存（进程内 `ThemeFundCache`，last-good）只服务 Dragon Board 运行态行情列表和题材分析，也供快照采集器把运行态资金字段带入 snapshot stock rows。正式 RankTrend、回测、优化和历史数据集入库不把它当作历史资金口径；后端重启后资金行在首次全市场刷新完成前为空，前端保留 last-good 展示。
+该资金缓存（进程内 `ThemeFundCache`，last-good）只服务 Dragon Board 运行态行情列表和题材分析；快照采集器只接受 `ths_main_monitor`（L2 权威）行带入 snapshot stock rows，`ths_web_seed`/`eastmoney_seed` 估算种子行不进入正式快照。正式 RankTrend、回测、优化和历史数据集入库不把它当作历史资金口径；后端重启后冷启动从 MongoDB `fund_flow_l2` 恢复最近交易日 L2 行（零第三方请求），盘中 `ThsFundRefreshScheduler` 继续校准覆盖；MongoDB 不可用时前端保留 last-good 展示。
+
+**Redis 持久化（2026-08-08）**：本机 Redis 8.10.0 已开启 RDB 自动保存 `save 900 1 300 10 60 10000`（900 秒内 ≥1 写 / 300 秒内 ≥10 写 / 60 秒内 ≥10000 写即 BGSAVE），`appendonly no` 保持关闭（RDB 即可满足冷缓存快速恢复；若要求分钟级更新零丢失再单独评估 AOF）。Redis 重启/崩溃后自动从 `dump.rdb` 读取磁盘冷缓存快速恢复内存状态（含资金 last-good 行与 7 天 TTL 容灾窗口），前端无需等重新填充；崩溃最多丢约 60 秒数据。Redis 故障时进程内 last-good 仍兜底展示，不阻断数据链路。
+
+### fund_flow_l2 持久化（2026-08-08）
+
+MongoDB 集合 `fund_flow_l2`（仅 `QUANT_BOARD_STORAGE_BACKEND=mongodb` 模式启用）：一行一股一日，唯一索引 `{sessionDate, code}`。文档含 `total`（`mainMonitorDetail` title 摘要：`zlje = mainbuy − mainsell`、`buyAmount`、`sellAmount`）与 `buckets`（7 档逐笔聚合，按 `data.list` 的 `money` 分档、`tradetype` 1=买 2=卖：`ge_1000w`/`700_1000w`/`500_700w`/`300_500w` 大单系、`100_300w` 中单、`50_100w`/`30_50w` 小单，每档 `buyCount/sellCount/buyAmount/sellAmount/net`，低于 30 万不入档）。写入：`ThsFundRefreshScheduler` 每只 `load_raw` 一次拉取 → `parse_l2_summary` 写 Redis 行 + `aggregate_l2_buckets` 写 MongoDB（异步 `to_thread` upsert，不阻塞 180 秒刷新循环，盘中异动随轮转滚动覆盖）。读取：`backend/main.py` `on_startup` 的 `restore_fund_flow_from_mongodb()`（mongodb 模式）投影最近交易日 `total.zlje` → `ThemeFundCache.put_many`。设计见 `docs/theme-module/2026-08-08-fund-flow-l2-mongodb-persistence-design.md`。
 
 ### proxy-server 迁移接口（akshare）
 

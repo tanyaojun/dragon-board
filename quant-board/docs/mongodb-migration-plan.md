@@ -392,6 +392,25 @@ ThemeTrend 研究集合：
 }
 ```
 
+### `fund_flow_l2`（2026-08-08 新增，运行态资金 L2 7 档）
+
+一行一股一日，唯一 `{ sessionDate: 1, code: 1 }`。文档：`code`、`sessionDate`、
+`tradingDate`、`source`（`ths_main_monitor`）、`sourceTs`、`updatedAt`、
+`total`（`zlje = mainbuy − mainsell`、`buyAmount`、`sellAmount`）、
+`buckets`（7 档逐笔聚合 `ge_1000w/700_1000w/500_700w/300_500w/100_300w/50_100w/30_50w`，
+每档 `buyCount/sellCount/buyAmount/sellAmount/net`）。
+
+- 归属：运行态展示池资金校准的持久化（冷启动恢复 + 跨重启 last-good），
+  **不是正式快照/回测/数据集口径**；`project_cache_rows` 只投影 `total.zlje`
+  进 `ThemeFundCache`，完整 `buckets` 保留在 MongoDB。
+- 写入：`ThsFundRefreshScheduler`（8000）每批 `load_raw` → `parse_l2_summary`
+  （Redis 行）+ `aggregate_l2_buckets`（MongoDB 异步 upsert，盘中轮转滚动覆盖）。
+- 读取：`backend/main.py` `restore_fund_flow_from_mongodb()`（mongodb 模式
+  on_startup）投影最近 `sessionDate` → `ThemeFundCache.put_many`。
+- 备份：**不纳入 Supabase 同构**（运行态诊断数据，非正式快照；如后续需要
+  与快照一致的备份策略再增补 `supabase_schema.sql`）。
+- 设计：`docs/theme-module/2026-08-08-fund-flow-l2-mongodb-persistence-design.md`。
+
 ## API 合同调整
 
 ### 保持不变的正式快照 API

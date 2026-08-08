@@ -757,6 +757,7 @@ class TdxL2Bridge:
         self._finance_refresh_in_progress = False
         self._last_fund_flow_broadcast_ts = 0
         self._last_fund_flow_date = ""
+        self.last_tick_error = ""
         self.current_quote_batch_size = self.clamp_quote_batch_size(self.config.quote_batch_size)
         self.healthy_fetch_cycles = 0
         self._manual_server: tuple[str, int] | None = None
@@ -1892,6 +1893,19 @@ class TdxL2Bridge:
                 },
                 "lastError": self.last_quote_error,
             },
+            "tick": {
+                # L1 分笔自算链路诊断（非全日完整分笔，不作为资金列来源）
+                "fetchSupported": self.tick_fetch_supported,
+                "tickWindow": self.config.tick_window,
+                "lastError": self.last_tick_error or "",
+            },
+            "fundFlow": {
+                "source": "tdx_fund_flow",
+                "accumulatedCodes": len(tdx_fund_flow.snapshot()),
+                "lastDate": self._last_fund_flow_date or "",
+                "lastBroadcastTs": self._last_fund_flow_broadcast_ts or 0,
+                "broadcastIntervalMs": self.fund_flow_broadcast_interval_ms,
+            },
             "l2": self.l2_state,
             "logFile": LOG_FILE_PATH,
         }
@@ -2681,6 +2695,7 @@ class TdxL2Bridge:
                         return None
                     except NotImplementedError as error:
                         self.tick_fetch_supported = False
+                        self.last_tick_error = "transaction API not supported by mootdx/tdxpy runtime"
                         if not self.tick_fetch_warning_emitted:
                             self.tick_fetch_warning_emitted = True
                             logger.warning(
@@ -2689,6 +2704,7 @@ class TdxL2Bridge:
                             )
                         return None
                     except Exception as error:
+                        self.last_tick_error = str(error)
                         logger.warning("tick fetch failed for %s: %s", code, error)
                         return None
 

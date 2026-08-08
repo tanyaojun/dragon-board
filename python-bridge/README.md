@@ -262,6 +262,12 @@ bridge 额外提供（基于 TDX 数据实时计算，非 akshare 口径）：
   `smallNetAmount/smallNetPct`，以及 `totalAmount`（当日成交额）。
   由分笔成交（含买卖方向）按单笔金额分档累计：超大单 ≥100 万、大单 20-100 万、
   中单 4-20 万、小单 <4 万；主力 = 超大单 + 大单。每日开盘自动重置。
+  **注意**：`fetch_ticks` 只拉最近 `TDX_TICK_WINDOW`（默认 60）笔分笔，非全日
+  完整分笔——中途启动/断连/窗口溢出都会导致累计不完整甚至方向错误，故
+  `fund_flow_patch` **不作为页面资金列来源**（仅保留广播与诊断）。
+  诊断：`/health` 新增 `tick`（`fetchSupported/tickWindow/lastError`）与
+  `fundFlow`（`accumulatedCodes/lastDate/lastBroadcastTs/broadcastIntervalMs`）
+  字段，用于排查分笔链路是否存活及累计规模。
 
 ---
 
