@@ -172,13 +172,14 @@ export interface TickTrade {
 export interface QuotePatch {
   code: string
   name?: string
-  lastPrice: number
-  changePct: number
+  // 纯资金行（fund-stream / fund_flow_patch）不携带行情字段，故这些字段可选
+  lastPrice?: number
+  changePct?: number
   changeAmount?: number
   speed?: number
-  volume: number
+  volume?: number
   volumeRatio?: number
-  amount: number
+  amount?: number
   turnoverRate?: number
   totalMarketCap?: number
   floatMarketCap?: number

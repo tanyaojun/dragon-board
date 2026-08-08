@@ -1,11 +1,15 @@
 import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../DataLayer'
+import { isDashboardFundSource } from '../moneyFlowSourcePriority'
 import { realtimeSubscriptionRegistry } from '../realtime/RealtimeSubscriptionRegistry'
 import { webSocketService } from '../websocket'
 import { REALTIME_FLUSH_DELAY_MS } from './constants'
 
 const REALTIME_OWNER = 'dataLoader.hotlist'
+
+// P0 可见行数量：热榜排序（compRank/信号/换手）前 N 只作为资金流优先校准对象
+const P0_VISIBLE_COUNT = 30
 
 function deriveMainMoneyRatio(mainNet: unknown, turnover: unknown): number | undefined {
   const net = Number(mainNet)
@@ -38,7 +42,8 @@ export class RealtimeQuoteCoordinator {
   }
 
   syncRealtimeSubscription() {
-    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, this.buildRealtimeSubscriptionCodes())
+    const codes = this.buildRealtimeSubscriptionCodes()
+    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, codes, codes.slice(0, P0_VISIBLE_COUNT))
   }
 
   isRealtimePrimaryHealthy(): boolean {
@@ -138,7 +143,7 @@ export class RealtimeQuoteCoordinator {
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
-          const hasDashboardMoneyFlow = item.moneyFlowSource === 'ths_main_monitor'
+          const hasDashboardMoneyFlow = isDashboardFundSource(item)
           const mainMoneyRatio = hasDashboardMoneyFlow
             ? item.zljzb ?? deriveMainMoneyRatio(item.zlje, dataLayer.getStock(item.code)?.turnover)
             : undefined

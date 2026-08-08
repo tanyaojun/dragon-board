@@ -411,7 +411,8 @@ class RealTimeWebSocketService {
         this.handleTicksBatch(payload as TickBatchPayload, serverTs)
         break
       case 'money_flow_patch':
-        // 资金字段只接受 QuantBoard 的统一资金流。
+        // 资金字段只接受 QuantBoard 的统一资金流；bridge 的 fund_flow_patch
+        // 为 L1 分笔自算（非全日完整分笔），不作为资金列来源，仅 /health 诊断。
         break
       case 'l2_status':
         this.handleL2Status(payload as QuotePayload, serverTs)

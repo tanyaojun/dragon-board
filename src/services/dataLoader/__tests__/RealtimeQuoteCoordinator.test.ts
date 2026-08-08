@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const registryCalls: Array<{ owner: string; codes: string[] }> = []
+const registryCalls: Array<{ owner: string; codes: string[]; priorityCodes?: string[] }> = []
 const clearedOwners: string[] = []
 const stocks: any[] = []
 
@@ -18,7 +18,8 @@ vi.mock('../../DataLayer', () => ({
 
 vi.mock('../../realtime/RealtimeSubscriptionRegistry', () => ({
   realtimeSubscriptionRegistry: {
-    setOwnerCodes: (owner: string, codes: string[]) => registryCalls.push({ owner, codes }),
+    setOwnerCodes: (owner: string, codes: string[], priorityCodes?: string[]) =>
+      registryCalls.push({ owner, codes, priorityCodes }),
     clearOwner: (owner: string) => clearedOwners.push(owner),
   },
 }))
@@ -57,9 +58,34 @@ describe('RealtimeQuoteCoordinator', () => {
     coordinator.syncRealtimeSubscription()
 
     expect(registryCalls).toEqual([
-      { owner: 'dataLoader.hotlist', codes: ['300001', '600001'] },
+      {
+        owner: 'dataLoader.hotlist',
+        codes: ['300001', '600001'],
+        priorityCodes: ['300001', '600001'], // 池子 ≤30 只时全部为 P0
+      },
     ])
     expect(webSocketService.setHotPool).not.toHaveBeenCalled()
+    coordinator.destroy()
+  })
+
+  it('submits top P0 visible codes as priority to the market fund feed', () => {
+    for (let index = 1; index <= 40; index += 1) {
+      const code = String(index).padStart(6, '0')
+      stocks.push({ code, rank: index, compRank: index })
+    }
+    const coordinator = new RealtimeQuoteCoordinator({
+      getHotCodes: () => new Set(stocks.map((stock) => stock.code)),
+      flushDelay: 1,
+    })
+
+    coordinator.syncRealtimeSubscription()
+
+    const call = registryCalls[0]
+    expect(call.priorityCodes).toHaveLength(30)
+    expect(call.priorityCodes?.[0]).toBe('000001')
+    expect(call.priorityCodes?.[29]).toBe('000030')
+    // 全池仍是 40 只
+    expect(call.codes).toHaveLength(40)
     coordinator.destroy()
   })
 
@@ -124,7 +150,7 @@ describe('RealtimeQuoteCoordinator', () => {
     })
 
     ;(coordinator as any).queueRealtimeQuotes([
-      { code: '000001', lastPrice: 10, zlje: 99, moneyFlowSource: 'tdx_transaction' },
+      { code: '000001', lastPrice: 10, zlje: 99, moneyFlowSource: 'tdx_transaction', moneyFlowEstimated: true },
     ])
     vi.advanceTimersByTime(10)
 

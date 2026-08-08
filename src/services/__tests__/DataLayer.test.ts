@@ -226,6 +226,7 @@ describe('DataLayer money flow source precedence', () => {
         },
       ])
 
+      // tdx_transaction（L1 分笔自算，不完整）rank 0：不应用，保持既有值
       dataLayer.applyRealtimeQuoteBatch([
         {
           code: '000001',

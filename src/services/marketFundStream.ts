@@ -1,6 +1,7 @@
 import { AppEvents } from '@/types'
 import { normalizeStockCode } from '@/utils/common'
 import { EventManager } from '@/utils/eventManager'
+import { isDashboardFundSource } from './moneyFlowSourcePriority'
 
 /**
  * 行情主页主力资金流订阅（前端只消费）。
@@ -26,11 +27,21 @@ function defaultUrl(): string {
 export class MarketFundStreamService {
   private socket: WebSocket | null = null
   private codes: string[] = []
+  private priorityCodes: string[] = []
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private versions = new Map<string, number>()
 
-  setSubscription(codes: string[]): void {
+  /**
+   * 订阅展示池（codes）与 P0 可见行（priorityCodes，热榜排序前 N 只）。
+   * priorityCodes 会随订阅消息上报，后端 ThsFundRefreshScheduler 据此做
+   * P0/P1 分级刷新（P0 默认 30 秒优先校准）。
+   */
+  setSubscription(codes: string[], priorityCodes?: string[]): void {
     this.codes = [...new Set(codes.map(normalizeStockCode).filter(Boolean))].sort()
+    this.priorityCodes = (priorityCodes || [])
+      .map(normalizeStockCode)
+      .filter((code): code is string => Boolean(code) && this.codes.includes(code))
+      .slice(0, 100)
     if (!this.codes.length) {
       this.disconnect()
       return
@@ -68,7 +79,9 @@ export class MarketFundStreamService {
   }
 
   private sendSubscription(): void {
-    this.socket?.send(JSON.stringify({ codes: this.codes }))
+    const message: Record<string, string[]> = { codes: this.codes }
+    if (this.priorityCodes.length) message.priorityCodes = this.priorityCodes
+    this.socket?.send(JSON.stringify(message))
   }
 
   private handlePayload(payload: any): void {
@@ -81,12 +94,17 @@ export class MarketFundStreamService {
   }
 
   private normalizeRow(row: any): Record<string, unknown> | null {
-    if (row?.moneyFlowSource !== 'ths_main_monitor') return null
+    if (!isDashboardFundSource(row)) return null
     const code = normalizeStockCode(String(row?.code || ''))
     const version = Number(row?.version)
     const zlje = Number(row?.zlje)
     if (!code || !Number.isFinite(version) || !Number.isFinite(zlje)) return null
-    if (version < (this.versions.get(code) || 0)) return null
+    const prev = this.versions.get(code)
+    if (prev !== undefined && version < prev) {
+      // 服务端 version 重置（Redis 清空/后端重启后 version 从头计数）：
+      // 清除旧记录接受新版本，避免旧 version 导致该码永久丢弃
+      this.versions.delete(code)
+    }
     this.versions.set(code, version)
     return { ...row, code }
   }
