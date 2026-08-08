@@ -298,9 +298,16 @@ class ThsFundRefreshScheduler:
         return "none"
 
     def _needs_cold_init(self) -> bool:
-        """非交易时段冷启动例外：从未成功刷过（进程重启/首日部署）时允许请求一轮，
-        拿最近交易日 L2 数据，避免 MongoDB 空库时首屏资金列全空。"""
-        return self._last_session_date is None and not self._next_refresh_at
+        """非交易时段冷启动例外：展示池还有未刷过的码时允许继续刷，
+        直到全池都有最近交易日 L2（首屏资金列不空），然后暂停。
+
+        修复 2026-08-08 首屏只有数笔：原实现"从未刷过才刷一轮"（batch=5），
+        233 只展示池只刷 5 只就暂停；现改为按展示池未刷新码持续补齐。
+        """
+        codes = self._stream.market_codes()
+        if not codes:
+            return False
+        return any(code not in self._next_refresh_at for code in codes)
 
     @staticmethod
     def _is_trading_time(now: datetime) -> bool:

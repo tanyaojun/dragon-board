@@ -524,6 +524,32 @@ async def test_cold_start_outside_hours_writes_redis_but_skips_mongo() -> None:
 
 
 @pytest.mark.asyncio
+async def test_outside_trading_hours_cold_start_drains_full_pool() -> None:
+    # 周六冷启动多只池：冷启动例外应持续刷到全池完成（不只一轮），
+    # 否则 233 只展示池只有 5 只有资金——2026-08-08 用户反馈首屏只有数笔的根因
+    current = datetime(2026, 8, 8, 10, 0, 0, tzinfo=TZ)  # 周六
+    codes = [f"{i:06d}" for i in range(1, 13)]  # 12 只 = 3 批 × 5
+    service = FakeThsService(titles=_titles(*codes))
+    cache = FakeCache()
+    scheduler = _scheduler(
+        service=service,
+        cache=cache,
+        stream=FakeStream(codes),
+        current=current,
+        batch_size=5,
+    )
+
+    rounds = 0
+    while await scheduler.run_once() and rounds < 10:
+        rounds += 1
+
+    assert set(cache.rows) == set(codes)  # 全池都有最近交易日 L2
+    assert scheduler.status()["lastSessionDate"] == "2026-08-07"
+    assert scheduler._needs_cold_init() is False  # 刷完即暂停
+    assert all(len(b) <= 5 for b in service.batches)
+
+
+@pytest.mark.asyncio
 async def test_trading_hours_persist_writes_mongo() -> None:
     # 交易时段冷启动（周五 10:00）→ Redis + MongoDB 都写
     current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
