@@ -1,42 +1,18 @@
 from __future__ import annotations
-import gzip
-import math
-from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 from sqlalchemy.orm import Session
-from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
-from backend.analysis.ranktrend.live_gate_shadow_audit import (
-    DEFAULT_SHADOW_VARIANTS,
-    _nested_get,
-    build_audit_meta,
-    classify_hotlist_buy_pattern,
-    evaluate_shadow_variants,
-    rank_shadow_candidate,
-    scan_jump_confidence_thresholds,
-    summarize_fusion_gate_misses,
-    summarize_first_failure,
-    summarize_jump_definition_replays,
-)
 from backend.analysis.ranktrend.jump_research import build_jump_research_request, summarize_jump_research
 from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
-    DEFAULT_TRADE_CONFIG,
-    V5_LIFECYCLE_FUSION_TRADE_DEFAULTS,
-    BacktestEngine,
-    TradeSimulator,
     normalize_strategy_name,
 )
-from backend.data.models.models import BacktestRun, GoldenRankTrendCase, OptimizationRun
-from backend.data.ingest.quality_gate import evaluate_snapshot_quality
+from backend.data.models.models import BacktestRun, OptimizationRun
 from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
-from backend.data.models.database import SessionLocal
-from backend.data.repositories.repository import Repository
-from backend.data.repositories.repository_factory import create_repository, storage_source_label
+from backend.data.repositories.repository_factory import create_repository
 from backend.optimization.jobs import submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
 from backend.optimization.search_space import candidate_count, select_candidates
-from backend.core.utils import json_dumps, json_loads, new_id, read_json_file, stable_hash
+from backend.core.utils import new_id, stable_hash
 from backend.services.shared import (
     DEFAULT_BACKTEST_STRATEGY_CONFIG,
     camel_get,

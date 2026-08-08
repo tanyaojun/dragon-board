@@ -19,6 +19,7 @@ from backend.analysis.theme.momentum_config import ThemeMomentumConfig
 from backend.data.cache import snapshot_cache
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.core.settings import get_settings
+from backend.services.theme.snapshot_query_service import get_snapshot_query_service
 
 router = APIRouter(prefix="/api/theme-momentum", tags=["theme-momentum"])
 
@@ -37,21 +38,16 @@ def _cache_key(dataset_id: str, snapshot_type: str) -> str:
 
 
 def _load_recent_sector_rows(db: Any, dataset_id: str, snapshot_type: str) -> list[dict[str, Any]]:
-    """最近 RECENT_SECTOR_ROWS_LIMIT 行 hot_theme sector rows（desc → 逆序为时间升序）。"""
-    rows = list(
-        db["snapshot_sector_rows"]
-        .find(
-            {
-                "datasetId": dataset_id,
-                "type": snapshot_type,
-                "entityType": "hot_theme",
-            }
-        )
-        .sort([("timestamp", -1)])
-        .limit(RECENT_SECTOR_ROWS_LIMIT)
+    """最近 RECENT_SECTOR_ROWS_LIMIT 行 hot_theme sector rows（service 内 desc → 逆序为时间升序）。
+
+    *db* 参数仅为兼容调用方与测试注入点保留，查询已下沉到 SnapshotQueryService。
+    """
+    return get_snapshot_query_service(database=db).recent_sector_rows(
+        dataset_id,
+        snapshot_type,
+        entity_type="hot_theme",
+        limit=RECENT_SECTOR_ROWS_LIMIT,
     )
-    rows.reverse()
-    return rows
 
 
 @router.get("/summary")

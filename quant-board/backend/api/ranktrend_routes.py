@@ -624,7 +624,10 @@ async def analyze_ranktrend(
 
     def compute_analyze() -> dict[str, Any]:
         repo = repository_factory.create_repository(db, enable_backup=False)
-        engine = RankTrendPythonEngine()
+        from backend.services.theme.hotlist_sentiment_service import make_hotlist_sentiment_provider
+        engine = RankTrendPythonEngine(
+            sentiment_provider=make_hotlist_sentiment_provider(dataset_id, snapshot_type),
+        )
         raw_frames, series_by_code = _load_frames_for_analysis(
             repo, dataset_id, snapshot_type, frame_keys, current_frame
         )

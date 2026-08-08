@@ -485,7 +485,7 @@ def create_snapshot_collector_service(
     settings = get_settings()
     if repo is None:
         repo = create_snapshot_collector_repository()
-    from backend.analysis.theme.rotation.service import ThemeRotationService
+    from backend.services.theme.rotation_service import ThemeRotationService
 
     return SnapshotCollectorService(
         repo=repo,

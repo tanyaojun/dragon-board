@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from backend.data.cache import snapshot_cache
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.core.settings import get_settings
+from backend.services.theme.snapshot_query_service import get_snapshot_query_service
 
 router = APIRouter(prefix="/api/theme-rotation", tags=["theme-rotation"])
 
@@ -46,17 +47,13 @@ def theme_rotation_summary(
         return cached
 
     db = get_runtime_mongodb_database()
-    query: dict[str, Any] = {
-        "datasetId": dataset_id,
-        "type": snapshot_type,
-        # M6：过滤引擎产出的 rotationSummary（含 algorithmVersion），避免空 dict 命中
-        "rotationSummary.algorithmVersion": {"$exists": True},
-    }
-    if trading_date:
-        query["tradingDate"] = trading_date
-    if slot_time:
-        query["slotTime"] = slot_time
-    frame_doc = db["snapshot_frames"].find_one(query, sort=[("timestamp", -1)])
+    service = get_snapshot_query_service(database=db)
+    frame_doc = service.latest_rotation_frame(
+        dataset_id,
+        snapshot_type,
+        trading_date=trading_date,
+        slot_time=slot_time,
+    )
     if not frame_doc:
         raise HTTPException(
             status_code=404,
@@ -64,16 +61,10 @@ def theme_rotation_summary(
                     "error": "no theme rotation summary found for the given filters"},
         )
 
-    sector_rows = list(
-        db["snapshot_sector_rows"]
-        .find(
-            {
-                "datasetId": dataset_id,
-                "snapshotId": frame_doc["snapshotId"],
-                "entityType": "hot_theme",
-            }
-        )
-        .sort([("rank", 1)])
+    sector_rows = service.sector_rows_by_snapshot(
+        dataset_id,
+        str(frame_doc.get("snapshotId") or ""),
+        entity_type="hot_theme",
     )
     response: dict[str, Any] = {
         "ok": True,

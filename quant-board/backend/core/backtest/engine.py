@@ -14,14 +14,21 @@ class BacktestEngine:
     def run(self, frames: list[dict[str, Any]], options: dict[str, Any]) -> dict[str, Any]:
         config = RankTrendConfig.from_patch(options.get("strategy_config") or {})
         strategy_name = normalize_strategy_name(options.get("strategy_name") or (options.get("trade_config") or {}).get("entryStrategy"))
-        signals = RankTrendPythonEngine(config).replay(
+        dataset_id = options.get("dataset_id") or options.get("datasetId")
+        snapshot_type = options.get("snapshot_type") or options.get("snapshotType")
+        sentiment_provider = None
+        if dataset_id and snapshot_type:
+            from backend.services.theme.hotlist_sentiment_service import make_hotlist_sentiment_provider
+
+            sentiment_provider = make_hotlist_sentiment_provider(str(dataset_id), str(snapshot_type))
+        signals = RankTrendPythonEngine(config, sentiment_provider=sentiment_provider).replay(
             frames,
             meta={
                 "sampleQuality": "ok",
                 "warnings": [],
                 "candidateTierMode": "execution",
-                "datasetId": options.get("dataset_id") or options.get("datasetId"),
-                "snapshotType": options.get("snapshot_type") or options.get("snapshotType"),
+                "datasetId": dataset_id,
+                "snapshotType": snapshot_type,
                 "strategyName": strategy_name,
             },
         )

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.data.repositories import repository_factory
+from backend.services.theme.hotlist_sentiment_service import get_hotlist_sentiment_service
 
 
 router = APIRouter(prefix="/api/hotlist-sentiment", tags=["hotlist-sentiment"])
@@ -33,13 +33,12 @@ def ingest_hotlist_sentiment(payload: HotListSentimentPayload) -> dict[str, Any]
         "snapshotType": payload.snapshotType,
         "tradingDate": payload.tradingDate,
     }
-    doc = payload.model_dump()
-    doc["_id"] = f"{payload.datasetId}:{payload.snapshotType}:{payload.tradingDate}"
-    doc["computedAt"] = int(time.time())
 
     try:
-        db = repository_factory.get_runtime_mongodb_database()
-        db["hotlist_sentiment"].replace_one(query, doc, upsert=True)
+        # 每次取当前运行时 db 传入 service，兼容测试 monkeypatch（单例缓存不阻塞注入）
+        get_hotlist_sentiment_service(
+            repository_factory.get_runtime_mongodb_database()
+        ).upsert(payload.model_dump())
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"MongoDB primary is unavailable: {exc}") from exc
 

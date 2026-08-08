@@ -3,10 +3,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Any
-
-from backend.data.repositories import repository_factory
-from backend.data.repositories.hotlist_sentiment_repo import HotListSentimentRepository
+from typing import Any, Callable
 
 def clamp(value: float, min_value: float, max_value: float) -> float:
     if not math.isfinite(value):
@@ -1352,9 +1349,15 @@ def compose_analysis_candidate_tier(
 
 
 class RankTrendPythonEngine:
-    def __init__(self, config: RankTrendConfig | None = None):
+    def __init__(
+        self,
+        config: RankTrendConfig | None = None,
+        sentiment_provider: Callable[[str], dict[str, Any] | None] | None = None,
+    ):
         self.config = config or RankTrendConfig()
         self._stock_lookup: list[dict[str, dict[str, Any]]] = []
+        # hotlist-sentiment 补全依赖注入：(trading_date) -> doc | None；None 时跳过补全
+        self._sentiment_provider = sentiment_provider
 
     def replay(
         self,
@@ -1426,22 +1429,21 @@ class RankTrendPythonEngine:
         if not missing_frames:
             return
 
-        dataset_id = str(meta.get("datasetId") or meta.get("dataset_id") or "dragonboard_live")
-        default_snapshot_type = str(meta.get("snapshotType") or meta.get("snapshot_type") or "half_hour")
+        provider = self._sentiment_provider
+        if provider is None:
+            # 未注入 provider 时跳过补全（不报错、不写字段）
+            return
         try:
-            repo = HotListSentimentRepository(repository_factory.get_runtime_mongodb_database())
-            by_key: dict[tuple[str, str], dict] = {}
+            by_key: dict[str, dict] = {}
             for frame in missing_frames:
                 trading_date = str(frame.get("tradingDate") or "")
                 if not trading_date:
                     continue
-                snapshot_type = str(frame.get("type") or frame.get("snapshotType") or default_snapshot_type)
-                key = (snapshot_type, trading_date)
-                if key not in by_key:
-                    doc = repo.get_by_date(dataset_id, snapshot_type, trading_date)
+                if trading_date not in by_key:
+                    doc = provider(trading_date)
                     if doc:
-                        by_key[key] = doc
-                frame["hotlistSentiment"] = by_key.get(key)
+                        by_key[trading_date] = doc
+                frame["hotlistSentiment"] = by_key.get(trading_date)
                 frame["hotlistSentimentStatus"] = "ok" if frame.get("hotlistSentiment") else "missing"
         except Exception as exc:
             reason = f"MongoDB hotlist sentiment unavailable: {exc}"
