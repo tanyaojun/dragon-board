@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from backend.services.theme.fund_cache import ThemeFundCache
+from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
 
 
 class FakePipeline:
@@ -85,14 +85,34 @@ class FakeRedis:
         self.expires[key] = int(ttl_seconds)
 
 
-def row(code: str, session_date: str, zlje: float, source_ts: int = 1) -> dict[str, object]:
+def row(
+    code: str,
+    session_date: str,
+    zlje: float,
+    source_ts: int = 1,
+    source: str = "ths_main_monitor",
+) -> dict[str, object]:
     return {
         "code": code,
         "zlje": zlje,
-        "source": "ths_main_monitor",
-        "moneyFlowSource": "ths_main_monitor",
+        "source": source,
+        "moneyFlowSource": source,
         "sessionDate": session_date,
         "sourceTs": source_ts,
+    }
+
+
+def seed_row(
+    code: str,
+    session_date: str,
+    zlje: float,
+    source_ts: int = 1,
+    source: str = "eastmoney_seed",
+) -> dict[str, object]:
+    """全市场种子行（东财排行接口，估算），默认 source=eastmoney_seed。"""
+    return {
+        **row(code, session_date, zlje, source_ts, source=source),
+        "moneyFlowEstimated": True,
     }
 
 
@@ -152,7 +172,7 @@ def test_put_many_isolates_invalid_rows_and_saves_valid_ones() -> None:
     saved, failures = cache.put_many([row("000001", "2026-07-24", 12.5), invalid])
 
     assert len(saved) == 1
-    assert failures == [{"code": "bad", "reason": "invalid ths_main_monitor fund row"}]
+    assert failures == [{"code": "bad", "reason": "invalid fund row"}]
     assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
 
 
@@ -284,6 +304,15 @@ def test_put_refreshes_latest_hash_ttl_in_redis() -> None:
     assert "test:theme-fund:v3:version" not in redis.expires
 
 
+def test_default_redis_ttl_is_week_long_disaster_recovery_window() -> None:
+    # 容灾语义（2026-08-08 用户确认）：冷启动 MongoDB 不可用时，Redis 里最近
+    # 交易日的 L2 行由 get_latest 兜底恢复；TTL 默认 7 天即容灾窗口（跨周末/短故障）
+    from backend.core.settings import get_settings
+
+    assert get_settings().theme_fund_cache_ttl_seconds == 604800
+    assert get_theme_fund_cache()._ttl_seconds == 604800
+
+
 def test_redis_ttl_expiry_keeps_process_last_good() -> None:
     redis = FakeRedis()
     cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
@@ -303,3 +332,59 @@ def test_redis_ttl_controls_cross_instance_cold_read() -> None:
     # 新实例（进程内空）从 Redis 命中
     cold = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
     assert cold.get_latest(["000001"])["000001"]["zlje"] == 12.5
+
+
+def test_eastmoney_seed_row_is_written_and_read_with_estimated_flag() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put(seed_row("000001", "2026-07-24", 12.5))
+    latest = cache.get_latest(["000001"])["000001"]
+    assert latest["moneyFlowSource"] == "eastmoney_seed"
+    assert latest["moneyFlowEstimated"] is True
+    assert latest["zlje"] == 12.5
+
+
+def test_legacy_ths_web_seed_rows_still_accepted() -> None:
+    """存量同花顺网页种子行仍可读写（兼容旧缓存），不随接口切换丢失。"""
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put(seed_row("000001", "2026-07-24", 12.5, source="ths_web_seed"))
+    latest = cache.get_latest(["000001"])["000001"]
+    assert latest["moneyFlowSource"] == "ths_web_seed"
+    assert latest["moneyFlowEstimated"] is True
+
+
+def test_l2_overwrites_eastmoney_seed_on_same_session_even_with_older_source_ts() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put(seed_row("000001", "2026-07-24", 12.5, source_ts=100))
+    # L2 行 sourceTs 更旧但 source rank 更高：同日应覆盖种子
+    saved = cache.put(row("000001", "2026-07-24", 88.0, source_ts=10))
+    assert saved["zlje"] == 88.0
+    latest = cache.get_latest(["000001"])["000001"]
+    assert latest["moneyFlowSource"] == "ths_main_monitor"
+    assert latest["zlje"] == 88.0
+
+
+def test_web_seed_never_overwrites_l2_last_good() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put(row("000001", "2026-07-24", 88.0, source_ts=10))  # L2 last-good
+    saved = cache.put(seed_row("000001", "2026-07-24", 12.5, source_ts=100))
+    assert saved["zlje"] == 88.0
+    assert cache.get_latest(["000001"])["000001"]["zlje"] == 88.0
+
+
+def test_newer_session_overwrites_older_session_regardless_of_rank() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    cache.put(row("000001", "2026-07-24", 88.0))  # 昨日 L2 最终值
+    saved = cache.put(seed_row("000001", "2026-07-25", 12.5))  # 今日种子（新日期）
+    assert saved["zlje"] == 12.5
+    latest = cache.get_latest(["000001"])["000001"]
+    assert latest["sessionDate"] == "2026-07-25"
+    assert latest["moneyFlowSource"] == "eastmoney_seed"
+
+
+def test_put_many_preserves_eastmoney_seed_source_and_estimated_flag() -> None:
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    saved, failures = cache.put_many([seed_row("000001", "2026-07-24", 12.5)])
+    assert failures == []
+    assert saved[0]["moneyFlowSource"] == "eastmoney_seed"
+    assert saved[0]["moneyFlowEstimated"] is True
+    assert cache.get_latest(["000001"])["000001"]["moneyFlowSource"] == "eastmoney_seed"

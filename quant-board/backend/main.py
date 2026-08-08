@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from time import perf_counter
 from pathlib import Path
@@ -58,6 +59,10 @@ from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
 from backend.services.market.ths_main_monitor_service import close_ths_main_monitor_service
 from backend.services.market.fund_scheduler import market_fund_scheduler
+from backend.services.market.ths_fund_refresh_scheduler import (
+    close_ths_fund_refresh_scheduler,
+    get_ths_fund_refresh_scheduler,
+)
 from backend.operations.schedule import run_after_market_once
 from backend.services import (
     BacktestService,
@@ -101,6 +106,30 @@ app.include_router(theme_momentum_router)
 app.include_router(theme_rotation_router)
 app.include_router(ths_main_monitor_router)
 
+
+async def restore_fund_flow_from_mongodb() -> None:
+    """冷启动资金恢复：MongoDB fund_flow_l2 最近交易日 L2 行 → ThemeFundCache。
+
+    零第三方请求；失败不阻塞启动（回退为仅盘中校准）。完整 7 档 buckets
+    保留在 MongoDB，恢复只投影 total.zlje 摘要进 Redis/内存。
+    """
+    from backend.data.repositories.fund_flow_repository import (
+        FundFlowRepository,
+        project_cache_rows,
+    )
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    from backend.services.theme.fund_cache import get_theme_fund_cache
+
+    repo = FundFlowRepository(get_runtime_mongodb_database())
+    session_date, docs = await asyncio.to_thread(repo.load_latest_session)
+    if not docs:
+        return
+    rows = project_cache_rows(docs)
+    if not rows:
+        return
+    await asyncio.to_thread(get_theme_fund_cache().put_many, rows)
+    logger.info("fund_flow_l2 cold restore: %d rows from %s", len(rows), session_date)
+
 @app.on_event("startup")
 async def on_startup() -> None:
     if get_settings().storage_backend != "mongodb":
@@ -113,7 +142,16 @@ async def on_startup() -> None:
     # 本 API 进程不再启动采集 scheduler，避免双进程争锁/双采。
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
+    # MongoDB L2 资金冷启动恢复（零第三方）：最近交易日 L2 行 → ThemeFundCache
+    # （Redis + 进程内 last-good），首屏资金列直接命中；失败不阻塞启动。
+    if get_settings().storage_backend == "mongodb":
+        try:
+            await restore_fund_flow_from_mongodb()
+        except Exception:
+            logger.exception("fund_flow_l2 cold restore failed; continue startup")
     market_fund_scheduler.start()
+    # mainMonitorDetail 展示池资金校准（L2 主源，覆盖 akshare 种子）
+    get_ths_fund_refresh_scheduler().start()
     from backend.market_proxy.quotes import start_market_quotes_refresh
     from backend.market_proxy.hotlists import start_hotlist_refresh
 
@@ -131,6 +169,7 @@ async def on_shutdown() -> None:
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
     await market_fund_scheduler.stop()
+    await close_ths_fund_refresh_scheduler()
     from backend.market_proxy.quotes import stop_market_quotes_refresh
 
     await stop_market_quotes_refresh()
@@ -193,6 +232,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
         "stockNameRefresh": stock_name_refresh_scheduler.status(),
         "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
         "marketFundRefresh": market_fund_scheduler.status(),
+        "thsFundRefresh": get_ths_fund_refresh_scheduler().status(),
     }
 
 

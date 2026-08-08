@@ -146,7 +146,13 @@ class Settings(BaseModel):
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
-    theme_fund_cache_ttl_seconds: int = Field(default=900)
+    # Redis last-good 热缓存 TTL（秒）：默认 7 天。
+    # 容灾语义（2026-08-08 用户确认）：冷启动 MongoDB 不可用时，Redis 里最近
+    # 交易日的 L2 行仍可被 get_latest 兜底恢复（跨进程/跨重启），TTL 即容灾窗口；
+    # 调度器每次写入会刷新 TTL，正常运行永不过期，TTL 只在停止写入后生效。
+    theme_fund_cache_ttl_seconds: int = Field(default=604800)
+    # akshare 全市场种子：默认关闭（2026-08-08 起冷启动改从 MongoDB fund_flow_l2 恢复）
+    theme_fund_seed_enabled: bool = Field(default=False)
     market_fund_fetch_timeout_seconds: float = Field(default=60.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)
@@ -456,6 +462,9 @@ class Settings(BaseModel):
                 self.theme_fund_cache_ttl_seconds,
             ),
         )
+        seed_flag = os.environ.get("QUANT_BOARD_THEME_FUND_SEED_ENABLED")
+        if seed_flag is not None:
+            self.theme_fund_seed_enabled = seed_flag.strip().lower() in {"1", "true", "yes", "on"}
         self.market_fund_fetch_timeout_seconds = max(
             10.0,
             _env_float(

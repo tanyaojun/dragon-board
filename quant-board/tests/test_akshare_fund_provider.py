@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
+import socket
+import time
 
 import pandas as pd
 import pytest
@@ -13,33 +15,30 @@ from backend.market_proxy.akshare_fund_provider import (
 )
 
 
-class FakeAkshare:
-    def __init__(self, frame=None, error=None, tqdm_module=None) -> None:
-        self.frame = frame
-        self.error = error
-        self.tqdm_module = tqdm_module
-        self.calls: list[str] = []
-        self.saw_silenced_tqdm: bool | None = None
-
-    def stock_fund_flow_individual(self, symbol: str = "即时"):
-        self.calls.append(symbol)
-        if self.tqdm_module is not None:
-            self.saw_silenced_tqdm = (
-                self.tqdm_module.get_tqdm is not self.tqdm_module.original
-            )
-        if self.error is not None:
-            raise self.error
-        return self.frame
+def _clist_response(diff: list[dict], total: int) -> str:
+    return json.dumps({"data": {"total": total, "diff": diff}})
 
 
-class FakeTqdmModule:
-    def __init__(self) -> None:
-        self.original = lambda *args, **kwargs: "original"
-        self.get_tqdm = self.original
+def _em_diff_row(*, code: object, name: str = "", net: object = -83062800.0, net_pct: object = -24.81) -> dict:
+    """东财 push2 clist diff 行（f62 净额单位：元）。"""
+    return {
+        "f12": code,
+        "f14": name,
+        "f2": 50.8,
+        "f3": 20.01,
+        "f62": net,
+        "f184": net_pct,
+        "f66": -83062800.0,
+        "f72": 0.0,
+        "f78": 1000000.0,
+        "f84": -200000.0,
+    }
 
 
-def _frame(rows: list[dict]) -> pd.DataFrame:
-    return pd.DataFrame(rows)
+def _provider(**kwargs) -> AkshareFundProvider:
+    defaults = {"page_interval_seconds": 0.0}
+    defaults.update(kwargs)
+    return AkshareFundProvider(**defaults)
 
 
 def test_parse_amount_handles_wan_yi_and_invalid() -> None:
@@ -47,10 +46,12 @@ def test_parse_amount_handles_wan_yi_and_invalid() -> None:
     assert parse_amount("3.38亿") == 338000000.0
     assert parse_amount("1,234.5万") == 12345000.0
     assert parse_amount("0") == 0.0
-    assert parse_amount("1.26亿") == 126000000.0
     assert parse_amount(None) is None
     assert parse_amount("-") is None
     assert parse_amount("N/A") is None
+    # 东财 fltt=2 返回元 float，也应直接可解析
+    assert parse_amount(-83062800.0) == -83062800.0
+    assert parse_amount(60704000) == 60704000.0
 
 
 def test_normalize_code_pads_and_rejects() -> None:
@@ -63,149 +64,212 @@ def test_normalize_code_pads_and_rejects() -> None:
     assert normalize_code("") == ""
 
 
-def test_fetch_all_parses_full_market_rows() -> None:
+def test_fetch_all_parses_full_market_rows(monkeypatch) -> None:
     now_ms = 1234567
-    ak = FakeAkshare(
-        frame=_frame(
-            [
-                {
-                    "序号": 1,
-                    "股票代码": 300720,
-                    "股票简称": "海川智能",
-                    "最新价": 50.8,
-                    "涨跌幅": "20.01%",
-                    "换手率": "3.72%",
-                    "流入资金": "1.26亿",
-                    "流出资金": "2.09亿",
-                    "净额": "-8306.28万",
-                    "成交额": "3.35亿",
-                },
-                {
-                    "序号": 2,
-                    "股票代码": 509,
-                    "股票简称": "华塑控股",
-                    "最新价": 2.92,
-                    "涨跌幅": "2.01%",
-                    "换手率": "1.00%",
-                    "流入资金": "2.28亿",
-                    "流出资金": "1.67亿",
-                    "净额": "6070.40万",
-                    "成交额": "3.95亿",
-                },
-            ]
+    captured: dict[str, object] = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return SimpleResponse(
+            _clist_response(
+                [
+                    _em_diff_row(code=300720, name="海川智能"),
+                    _em_diff_row(code=509, name="华塑控股", net=60704000.0, net_pct=15.37),
+                ],
+                total=2,
+            )
         )
-    )
-    provider = AkshareFundProvider(akshare_module=ak, now_ms=lambda: now_ms)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider(now_ms=lambda: now_ms)
     batch = provider._fetch_all_sync(session_date="2026-07-30")
 
-    assert ak.calls == ["即时"]
+    assert captured["url"] == "https://push2.eastmoney.com/api/qt/clist/get"
+    assert captured["params"]["pn"] == 1
+    assert captured["timeout"] == 20.0
+    headers = captured["headers"] or {}
+    assert "Mozilla" in str(headers.get("User-Agent", ""))
     assert batch.session_date == "2026-07-30"
-    assert batch.source == "akshare_ths_individual"
+    assert batch.source == "akshare_eastmoney_rank"
     assert len(batch.rows) == 2
     assert len(batch.failures) == 0
 
     first = batch.rows[0]
     assert first["code"] == "300720"
+    assert first["name"] == "海川智能"
     assert first["zlje"] == -83062800.0
-    assert first["zljzb"] == round(-83062800.0 / 335000000.0 * 100, 2)
-    assert first["inflow"] == 126000000.0
-    assert first["outflow"] == 209000000.0
-    assert first["turnover"] == 335000000.0
-    assert first["source"] == "ths_main_monitor"
-    assert first["moneyFlowSource"] == "ths_main_monitor"
+    assert first["zljzb"] == -24.81
+    assert first["source"] == "eastmoney_seed"
+    assert first["moneyFlowSource"] == "eastmoney_seed"
+    assert first["moneyFlowEstimated"] is True
     assert first["sessionDate"] == "2026-07-30"
-    assert first["tradingDate"] == "2026-07-30"
     assert first["sourceTs"] == now_ms
+    assert "inflow" not in first
+    assert "outflow" not in first
 
     second = batch.rows[1]
     assert second["code"] == "000509"
     assert second["zlje"] == 60704000.0
-    assert second["zljzb"] == round(60704000.0 / 395000000.0 * 100, 2)
+    assert second["zljzb"] == 15.37
 
 
-def test_zljzb_missing_when_turnover_is_zero_or_absent() -> None:
-    ak = FakeAkshare(
-        frame=_frame(
-            [
-                {
-                    "序号": 1,
-                    "股票代码": 300720,
-                    "股票简称": "海川智能",
-                    "最新价": 50.8,
-                    "涨跌幅": "20.01%",
-                    "换手率": "3.72%",
-                    "流入资金": "1.26亿",
-                    "流出资金": "2.09亿",
-                    "净额": "-8306.28万",
-                    "成交额": "0",
-                },
-                {
-                    "序号": 2,
-                    "股票代码": 509,
-                    "股票简称": "华塑控股",
-                    "最新价": 2.92,
-                    "涨跌幅": "2.01%",
-                    "换手率": "1.00%",
-                    "流入资金": "2.28亿",
-                    "流出资金": "1.67亿",
-                    "净额": "6070.40万",
-                    "成交额": "-",
-                },
-            ]
-        )
-    )
-    provider = AkshareFundProvider(akshare_module=ak, now_ms=lambda: 1)
+def test_fetch_all_paginates_until_total(monkeypatch) -> None:
+    pages: list[dict[str, object]] = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        pages.append(params)
+        page = int(params["pn"])
+        if page == 1:
+            return SimpleResponse(_clist_response([_em_diff_row(code=100 + i) for i in range(100)], total=250))
+        if page == 2:
+            return SimpleResponse(_clist_response([_em_diff_row(code=200 + i) for i in range(100)], total=250))
+        return SimpleResponse(_clist_response([_em_diff_row(code=300 + i) for i in range(50)], total=250))
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
     batch = provider._fetch_all_sync(session_date="2026-07-30")
 
-    # 成交额缺失/为 0 时 zljzb 保持缺失，避免用 0 伪装占比
+    assert [p["pn"] for p in pages] == [1, 2, 3]
+    assert len(batch.rows) == 250
+    assert batch.rows[0]["code"] == "000100"
+    assert batch.rows[-1]["code"] == "000349"
+
+
+def test_fetch_all_respects_page_interval(monkeypatch) -> None:
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        page = int(params["pn"])
+        if page == 1:
+            return SimpleResponse(_clist_response([_em_diff_row(code=100 + i) for i in range(100)], total=250))
+        if page == 2:
+            return SimpleResponse(_clist_response([_em_diff_row(code=200 + i) for i in range(100)], total=250))
+        return SimpleResponse(_clist_response([_em_diff_row(code=300 + i) for i in range(50)], total=250))
+
+    monkeypatch.setattr("requests.get", fake_get)
+    monkeypatch.setattr("time.sleep", fake_sleep)
+    provider = _provider(page_interval_seconds=0.5)
+    provider._fetch_all_sync(session_date="2026-07-30")
+
+    assert sleeps == [0.5, 0.5]  # 第 1、2 页后各间隔一次，最后一页后不再 sleep
+
+
+def test_fetch_all_maps_connection_error_to_rate_limited(monkeypatch) -> None:
+    import requests
+
+    def boom(url, params=None, headers=None, timeout=None):
+        raise requests.exceptions.ConnectionError("Remote end closed connection without response")
+
+    monkeypatch.setattr("requests.get", boom)
+    provider = _provider()
+    with pytest.raises(AkshareFundProviderError) as exc_info:
+        provider._fetch_all_sync(session_date="2026-07-30")
+    assert exc_info.value.code == "ths_rate_limited"
+
+
+def test_fetch_all_maps_timeout(monkeypatch) -> None:
+    import requests
+
+    def hang(url, params=None, headers=None, timeout=None):
+        raise requests.exceptions.ReadTimeout("read timed out")
+
+    monkeypatch.setattr("requests.get", hang)
+    provider = _provider()
+    with pytest.raises(AkshareFundProviderError) as exc_info:
+        provider._fetch_all_sync(session_date="2026-07-30")
+    assert exc_info.value.code == "ths_timeout"
+
+
+def test_fetch_all_maps_invalid_payload(monkeypatch) -> None:
+    def bad(url, params=None, headers=None, timeout=None):
+        return SimpleResponse("not-json")
+
+    monkeypatch.setattr("requests.get", bad)
+    provider = _provider()
+    with pytest.raises(AkshareFundProviderError) as exc_info:
+        provider._fetch_all_sync(session_date="2026-07-30")
+    assert exc_info.value.code == "ths_invalid_payload"
+
+
+def test_fetch_all_prefers_ipv4_during_call(monkeypatch) -> None:
+    """IPv6 链路黑洞环境下，请求期间 DNS 解析必须优先返回 IPv4。"""
+    captured: dict[str, object] = {}
+
+    def fake_getaddrinfo(host: str, port: int, *args, **kwargs):
+        return [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", (host, port)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port)),
+        ]
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        infos = socket.getaddrinfo("push2.eastmoney.com", 80)
+        captured["families"] = [item[0] for item in infos]
+        return SimpleResponse(_clist_response([_em_diff_row(code=300720)], total=1))
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
+    batch = provider._fetch_all_sync(session_date="2026-07-30")
+
+    assert captured["families"] == [socket.AF_INET]
+    assert batch.rows[0]["code"] == "300720"
+    # provider 退出后 getaddrinfo 恢复为进入 _ipv4_first_dns 时的值（monkeypatch 的 fake）
+    assert socket.getaddrinfo is fake_getaddrinfo
+
+
+def test_fetch_all_rejects_empty_frame(monkeypatch) -> None:
+    def empty(url, params=None, headers=None, timeout=None):
+        return SimpleResponse(_clist_response([], total=0))
+
+    monkeypatch.setattr("requests.get", empty)
+    provider = _provider()
+    batch = provider._fetch_all_sync(session_date="2026-07-30")
+    assert batch.rows == []
+    assert batch.failures == []
+
+
+def test_zljzb_absent_when_net_ratio_missing(monkeypatch) -> None:
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return SimpleResponse(
+            _clist_response(
+                [
+                    _em_diff_row(code=300720, name="海川智能", net=-83062800.0, net_pct=None),
+                    _em_diff_row(code=509, name="华塑控股", net=60704000.0, net_pct="-"),
+                ],
+                total=2,
+            )
+        )
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
+    batch = provider._fetch_all_sync(session_date="2026-07-30")
+
     assert "zljzb" not in batch.rows[0]
     assert "zljzb" not in batch.rows[1]
+    assert batch.rows[0]["zlje"] == -83062800.0
 
 
-def test_fetch_all_records_parse_failures_but_keeps_valid_rows() -> None:
-    ak = FakeAkshare(
-        frame=_frame(
-            [
-                {
-                    "序号": 1,
-                    "股票代码": 300720,
-                    "股票简称": "海川智能",
-                    "最新价": 50.8,
-                    "涨跌幅": "20.01%",
-                    "换手率": "3.72%",
-                    "流入资金": "1.26亿",
-                    "流出资金": "2.09亿",
-                    "净额": "-8306.28万",
-                    "成交额": "3.35亿",
-                },
-                {
-                    "序号": 2,
-                    "股票代码": 300999,
-                    "股票简称": "坏数据",
-                    "最新价": 10.0,
-                    "涨跌幅": "1.00%",
-                    "换手率": "1.00%",
-                    "流入资金": "-",
-                    "流出资金": "-",
-                    "净额": "-",
-                    "成交额": "-",
-                },
-                {
-                    "序号": 3,
-                    "股票代码": None,
-                    "股票简称": "无代码",
-                    "最新价": 1.0,
-                    "涨跌幅": "0.00%",
-                    "换手率": "0.00%",
-                    "流入资金": "1万",
-                    "流出资金": "1万",
-                    "净额": "0",
-                    "成交额": "2万",
-                },
-            ]
+def test_fetch_all_records_parse_failures_but_keeps_valid_rows(monkeypatch) -> None:
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return SimpleResponse(
+            _clist_response(
+                [
+                    _em_diff_row(code=300720, name="海川智能"),
+                    _em_diff_row(code=300999, name="坏数据", net="-", net_pct="-"),
+                    _em_diff_row(code=None, name="无代码", net=0.0, net_pct=0.0),
+                ],
+                total=3,
+            )
         )
-    )
-    provider = AkshareFundProvider(akshare_module=ak, now_ms=lambda: 1)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
     batch = provider._fetch_all_sync(session_date="2026-07-30")
 
     assert len(batch.rows) == 1
@@ -216,206 +280,55 @@ def test_fetch_all_records_parse_failures_but_keeps_valid_rows() -> None:
     assert codes == {"300999", ""}
 
 
-def test_fetch_all_maps_upstream_errors() -> None:
-    import requests
-
-    cases = [
-        (requests.exceptions.ConnectTimeout("boom"), "ths_timeout"),
-        (
-            requests.exceptions.HTTPError("429", response=SimpleNamespace(status_code=429)),
-            "ths_rate_limited",
-        ),
-        (
-            requests.exceptions.HTTPError("500", response=SimpleNamespace(status_code=500)),
-            "ths_upstream_unavailable",
-        ),
-        (AttributeError("page_info"), "ths_captcha_required"),
-        (ValueError("bad payload"), "ths_invalid_payload"),
-        (RuntimeError("boom"), "ths_upstream_unavailable"),
-    ]
-    for error, expected_code in cases:
-        provider = AkshareFundProvider(akshare_module=FakeAkshare(error=error))
-        with pytest.raises(AkshareFundProviderError) as exc_info:
-            provider._fetch_all_sync(session_date="2026-07-30")
-        assert exc_info.value.code == expected_code
-
-
-def test_fetch_all_rejects_empty_frame() -> None:
-    provider = AkshareFundProvider(akshare_module=FakeAkshare(frame=None))
-    with pytest.raises(AkshareFundProviderError) as exc_info:
-        provider._fetch_all_sync(session_date="2026-07-30")
-    assert exc_info.value.code == "ths_invalid_payload"
-
-
-def test_tqdm_module_silenced_and_restored() -> None:
-    tqdm_module = FakeTqdmModule()
-    ak = FakeAkshare(
-        frame=_frame(
-            [
-                {
-                    "序号": 1,
-                    "股票代码": 300720,
-                    "股票简称": "海川智能",
-                    "最新价": 50.8,
-                    "涨跌幅": "20.01%",
-                    "换手率": "3.72%",
-                    "流入资金": "1.26亿",
-                    "流出资金": "2.09亿",
-                    "净额": "-8306.28万",
-                    "成交额": "3.35亿",
-                }
-            ]
-        ),
-        tqdm_module=tqdm_module,
-    )
-    provider = AkshareFundProvider(akshare_module=ak, tqdm_module=tqdm_module, now_ms=lambda: 1)
-
-    provider._fetch_all_sync(session_date="2026-07-30")
-
-    assert ak.saw_silenced_tqdm is True
-    assert tqdm_module.get_tqdm is tqdm_module.original
-
-
-def test_fetch_all_injects_timeout_into_akshare_requests_calls(monkeypatch) -> None:
-    """akshare 内部 requests 调用必须带上默认 timeout，否则上游挂起会永久阻塞线程。"""
-    import requests
-
-    captured: dict[str, object] = {}
-
-    def fake_get(url: str, *args, **kwargs):
-        captured["timeout"] = kwargs.get("timeout")
-        captured["url"] = url
-        return "ok"
-
-    monkeypatch.setattr(requests, "get", fake_get)
-    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: "ok")
-
-    class RequestsAkshare:
-        def stock_fund_flow_individual(self, symbol: str = "即时"):
-            assert requests.get("http://example.test/funds") == "ok"
-            return _frame(
-                [
-                    {
-                        "序号": 1,
-                        "股票代码": 300720,
-                        "股票简称": "海川智能",
-                        "最新价": 50.8,
-                        "涨跌幅": "20.01%",
-                        "换手率": "3.72%",
-                        "流入资金": "1.26亿",
-                        "流出资金": "2.09亿",
-                        "净额": "-8306.28万",
-                        "成交额": "3.35亿",
-                    }
-                ]
-            )
-
-    provider = AkshareFundProvider(
-        akshare_module=RequestsAkshare(),
-        now_ms=lambda: 1,
-        request_timeout_seconds=7.5,
-    )
-    batch = provider._fetch_all_sync(session_date="2026-07-30")
-
-    assert captured["timeout"] == 7.5
-    assert batch.rows[0]["code"] == "300720"
-    # 上下文结束后 requests.get 恢复原样，不再注入 timeout
-    assert requests.get is fake_get
-
-
-def test_fetch_all_maps_requests_timeout_when_upstream_hangs(monkeypatch) -> None:
-    """上游挂起时注入的 timeout 抛 requests.Timeout，必须映射为 ths_timeout 供调度器熔断。"""
-    import requests
-
-    def hang_get(url: str, *args, **kwargs):
-        raise requests.exceptions.ReadTimeout("read timed out")
-
-    monkeypatch.setattr(requests, "get", hang_get)
-    monkeypatch.setattr(requests, "post", hang_get)
-
-    class RequestsAkshare:
-        def stock_fund_flow_individual(self, symbol: str = "即时"):
-            # akshare 自身调用不带 timeout，注入后仍会抛 Timeout
-            requests.get("http://example.test/funds")
-            return None
-
-    provider = AkshareFundProvider(
-        akshare_module=RequestsAkshare(),
-        request_timeout_seconds=7.5,
-    )
-    with pytest.raises(AkshareFundProviderError) as exc_info:
-        provider._fetch_all_sync(session_date="2026-07-30")
-    assert exc_info.value.code == "ths_timeout"
-
-
-def test_fetch_all_prefers_ipv4_during_akshare_call(monkeypatch) -> None:
-    """IPv6 链路黑洞环境下，akshare 调用期间 DNS 解析必须优先返回 IPv4，否则请求永久挂起。"""
-    import socket
-    import requests
-
-    captured: dict[str, object] = {}
-
-    def fake_getaddrinfo(host: str, port: int, *args, **kwargs):
-        return [
-            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", (host, port)),
-            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.2.3.4", port)),
-        ]
-
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: "ok")
-    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: "ok")
-
-    class RequestsAkshare:
-        def stock_fund_flow_individual(self, symbol: str = "即时"):
-            infos = socket.getaddrinfo("data.10jqka.com.cn", 80)
-            captured["families"] = [item[0] for item in infos]
-            return _frame(
-                [
-                    {
-                        "序号": 1,
-                        "股票代码": 300720,
-                        "股票简称": "海川智能",
-                        "最新价": 50.8,
-                        "涨跌幅": "20.01%",
-                        "换手率": "3.72%",
-                        "流入资金": "1.26亿",
-                        "流出资金": "2.09亿",
-                        "净额": "-8306.28万",
-                        "成交额": "3.35亿",
-                    }
-                ]
-            )
-
-    provider = AkshareFundProvider(akshare_module=RequestsAkshare(), now_ms=lambda: 1)
-    batch = provider._fetch_all_sync(session_date="2026-07-30")
-
-    assert captured["families"] == [socket.AF_INET]
-    assert batch.rows[0]["code"] == "300720"
-    # 调用结束后 getaddrinfo 恢复原样
-    assert socket.getaddrinfo is fake_getaddrinfo
-
-
 @pytest.mark.asyncio
-async def test_fetch_all_async_wrapper() -> None:
-    ak = FakeAkshare(
-        frame=_frame(
-            [
-                {
-                    "序号": 1,
-                    "股票代码": 300720,
-                    "股票简称": "海川智能",
-                    "最新价": 50.8,
-                    "涨跌幅": "20.01%",
-                    "换手率": "3.72%",
-                    "流入资金": "1.26亿",
-                    "流出资金": "2.09亿",
-                    "净额": "-8306.28万",
-                    "成交额": "3.35亿",
-                }
-            ]
-        )
-    )
-    provider = AkshareFundProvider(akshare_module=ak, now_ms=lambda: 1)
+async def test_fetch_all_async_wrapper(monkeypatch) -> None:
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return SimpleResponse(_clist_response([_em_diff_row(code=300720, name="海川智能")], total=1))
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
     batch = await provider.fetch_all(session_date="2026-07-30")
     assert len(batch.rows) == 1
     assert batch.rows[0]["zlje"] == -83062800.0
+
+
+class SimpleResponse:
+    def __init__(self, body: str, status_code: int = 200) -> None:
+        self._body = body
+        self.status_code = status_code
+
+    def json(self):
+        try:
+            return json.loads(self._body)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"invalid json payload: {error}") from error
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+
+            error = requests.exceptions.HTTPError(f"{self.status_code} Server Error")
+            error.response = self
+            raise error
+
+
+def test_fetch_all_maps_http_429_to_rate_limited(monkeypatch) -> None:
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return SimpleResponse("{}", status_code=429)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
+    with pytest.raises(AkshareFundProviderError) as exc:
+        provider._fetch_all_sync(session_date="2026-07-30")
+    assert exc.value.code == "ths_rate_limited"
+
+
+def test_fetch_all_maps_http_5xx_to_upstream_unavailable(monkeypatch) -> None:
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return SimpleResponse("", status_code=503)
+
+    monkeypatch.setattr("requests.get", fake_get)
+    provider = _provider()
+    with pytest.raises(AkshareFundProviderError) as exc:
+        provider._fetch_all_sync(session_date="2026-07-30")
+    assert exc.value.code == "ths_upstream_unavailable"

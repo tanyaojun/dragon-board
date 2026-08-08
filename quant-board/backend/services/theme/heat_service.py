@@ -256,8 +256,15 @@ class ThemeHeatService:
         else:
             quote_rows, quote_health = cached_quotes
         fund_rows = self.get_fund_rows(stock_codes) if include_runtime_funds else {}
+        # 运行态资金行可能来自 ths_web_seed（akshare 全市场种子，估算）或
+        # ths_main_monitor（L2 主源），按实际行来源标注，不把估算伪装成 L2 权威。
+        fund_sources = sorted({str(row.get("moneyFlowSource") or "") for row in fund_rows.values()})
         fund_health = {
-            "source": "ths_main_monitor" if include_runtime_funds else "formal_fund_unavailable",
+            "source": (
+                "formal_fund_unavailable"
+                if not include_runtime_funds
+                else (",".join(fund_sources) if fund_sources else "no_fund_rows")
+            ),
             "ok": include_runtime_funds,
             "requested_count": len(stock_codes),
             "returned_count": len(fund_rows),

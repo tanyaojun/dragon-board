@@ -10,6 +10,19 @@ from typing import Any
 from backend.core.settings import get_settings
 
 
+# 允许写入运行态资金缓存的来源：L2 主源 + 全市场种子（东财 + 存量同花顺网页）。
+# 其它来源（tdx_transaction 等）不写入本缓存，避免污染资金列口径。
+SUPPORTED_FUND_SOURCES = frozenset(
+    {"ths_main_monitor", "ths_web_seed", "eastmoney_seed"}
+)
+# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(2) > 种子(1)。
+FUND_SOURCE_RANK: dict[str, int] = {
+    "ths_web_seed": 1,
+    "eastmoney_seed": 1,
+    "ths_main_monitor": 2,
+}
+
+
 class ThemeFundCache:
     def __init__(
         self,
@@ -31,7 +44,7 @@ class ThemeFundCache:
         del is_final
         parsed = self._parse_fund_row(row)
         if parsed is None:
-            raise ValueError("invalid ths_main_monitor fund row")
+            raise ValueError("invalid fund row")
         code, session_date, zlje = parsed
 
         with self._lock:
@@ -66,7 +79,7 @@ class ThemeFundCache:
             zlje = math.nan
         if (
             not code
-            or source != "ths_main_monitor"
+            or source not in SUPPORTED_FUND_SOURCES
             or not session_date
             or not math.isfinite(zlje)
         ):
@@ -86,8 +99,6 @@ class ThemeFundCache:
             "zlje": zlje,
             "sessionDate": session_date,
             "tradingDate": session_date,
-            "source": "ths_main_monitor",
-            "moneyFlowSource": "ths_main_monitor",
             "sourceTs": int(row.get("sourceTs") or 0),
             "updatedAt": int(row.get("updatedAt") or int(time.time() * 1000)),
         }
@@ -110,7 +121,7 @@ class ThemeFundCache:
             parsed = self._parse_fund_row(row)
             if parsed is None:
                 code = str(row.get("code") or "").strip()
-                failures.append({"code": code, "reason": "invalid ths_main_monitor fund row"})
+                failures.append({"code": code, "reason": "invalid fund row"})
                 continue
             code, session_date, zlje = parsed
             validated.append(self._build_stored(row, code, session_date, zlje))
@@ -129,7 +140,7 @@ class ThemeFundCache:
             ]
             if missing_codes:
                 for code, value in self._read_hash_many(hash_key, missing_codes).items():
-                    if value.get("moneyFlowSource") == "ths_main_monitor":
+                    if value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
                         self._latest[code] = value
 
             # 2) 版本号批量递增
@@ -186,7 +197,7 @@ class ThemeFundCache:
         with self._lock:
             missing = [code for code in normalized if code not in self._latest]
             for code, value in self._read_hash_many(self._key("latest"), missing).items():
-                if value.get("moneyFlowSource") == "ths_main_monitor":
+                if value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
                     self._latest[code] = value
             for code in normalized:
                 latest = self._latest.get(code)
@@ -234,6 +245,10 @@ class ThemeFundCache:
         previous_date = str(previous.get("sessionDate") or previous.get("tradingDate") or "")
         if candidate_date != previous_date:
             return candidate_date < previous_date
+        candidate_rank = FUND_SOURCE_RANK.get(str(candidate.get("moneyFlowSource") or ""), 0)
+        previous_rank = FUND_SOURCE_RANK.get(str(previous.get("moneyFlowSource") or ""), 0)
+        if candidate_rank != previous_rank:
+            return candidate_rank < previous_rank
         return int(candidate.get("sourceTs") or 0) < int(previous.get("sourceTs") or 0)
 
     def _next_version(self) -> int:
@@ -271,7 +286,7 @@ class ThemeFundCache:
         if code in self._latest:
             return self._latest[code]
         value = self._read_hash(self._key("latest"), code)
-        if value and value.get("moneyFlowSource") == "ths_main_monitor":
+        if value and value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
             self._latest[code] = value
             return value
         return None

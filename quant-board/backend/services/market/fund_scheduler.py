@@ -88,6 +88,14 @@ class MarketFundScheduler:
     def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
             return
+        if not get_settings().theme_fund_seed_enabled:
+            # 2026-08-08：akshare 全市场种子默认停用（东财风控），
+            # 冷启动改从 MongoDB fund_flow_l2 恢复，见
+            # docs/theme-module/2026-08-08-fund-flow-l2-mongodb-persistence-design.md
+            logger.info(
+                "market fund seed disabled (QUANT_BOARD_THEME_FUND_SEED_ENABLED=false); skip akshare refresh"
+            )
+            return
         self._task = asyncio.create_task(
             self._warmup_then_run(),
             name="market-fund-scheduler",
@@ -277,8 +285,9 @@ class MarketFundScheduler:
     def status(self) -> dict[str, object]:
         return {
             "enabled": self.enabled,
+            "seedEnabled": get_settings().theme_fund_seed_enabled,
             "running": self._task is not None,
-            "source": "akshare_ths_individual",
+            "source": "akshare_eastmoney_rank",
             "queueLength": len(self.stream.market_codes()),
             "currentCode": self._last_code,
             "requestsLastMinute": len(self._request_times),
