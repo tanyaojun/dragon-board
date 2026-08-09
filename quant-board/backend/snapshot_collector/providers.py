@@ -1470,6 +1470,9 @@ def _normalize_quote_list(raw: Any) -> list[dict[str, Any]]:
                     "low": item.get("low"),
                     "preClose": item.get("preClose"),
                     "open": item.get("open"),
+                    # 涨速由 python-bridge 计算（compute_quote_speed，60s 窗口），
+                    # bridge 的 quotes 输出恒带 speed；透传供 stock row 填补。
+                    "speed": item.get("speed"),
                 },
             )
         )

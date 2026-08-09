@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from backend.snapshot_collector.builder import build_ingest_payload
 from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
 from backend.snapshot_collector.providers import TencentBasicQuoteProvider
@@ -35,6 +37,42 @@ def test_tencent_provider_maps_full_fields() -> None:
     assert row["totalMarketValue"] == 22549700.0 * 10000
     assert row["cirMV"] == 22549300.0 * 10000
     assert row["volumeRatio"] == 0.64
+    # 腾讯 provider 行保持基础字段合同（不带 volumeRatioMeta；来源标记由派生层补）
+
+
+def test_bridge_quote_passes_speed_through() -> None:
+    from backend.snapshot_collector.providers import _normalize_quote_list
+
+    quotes = _normalize_quote_list(
+        [
+            {
+                "code": "000001",
+                "price": 11.62,
+                "pctChange": -0.09,
+                "volume": 1060851,
+                "amount": 1232708862.0,
+                "speed": 1.23,
+            }
+        ]
+    )
+    assert quotes[0]["speed"] == 1.23
+
+
+def test_bridge_quote_drops_missing_speed() -> None:
+    from backend.snapshot_collector.providers import _normalize_quote_list
+
+    quotes = _normalize_quote_list(
+        [
+            {
+                "code": "000001",
+                "price": 11.62,
+                "pctChange": -0.09,
+                "volume": 1060851,
+                "amount": 1232708862.0,
+            }
+        ]
+    )
+    assert "speed" not in quotes[0]
 
 
 def test_builder_passes_quote_extra_fields_through() -> None:

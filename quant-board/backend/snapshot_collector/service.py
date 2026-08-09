@@ -795,12 +795,15 @@ class SnapshotCollectorService:
             return None
 
     def _enrich_volume_ratios(self, stock_rows: list[dict[str, Any]]) -> None:
-        """用量比 golden（Python volume_ratio_service）补齐缺失的 volumeRatio。
+        """用量比 golden（Python volume_ratio_service）统一 stock row 量比口径。
 
-        仅填充缺失值，保持来源/状态元数据；计算不可用时不阻断采集（fail-visible）。
+        golden 三日口径优先：计算出有效值时**覆盖**已有值（腾讯 f10 等）并附
+        volumeRatioMeta；golden 不可用（历史不足等）时保留原值（腾讯 f10 兜底）。
+        计算不可用时不阻断采集（fail-visible）。
         """
         if not stock_rows:
             return
+        items: dict[str, dict[str, Any]] = {}
         try:
             from backend.data.repositories.repository_factory import get_runtime_mongodb_database
             from backend.services.market.volume_ratio_service import compute_volume_ratios
@@ -820,14 +823,14 @@ class SnapshotCollectorService:
                 and not isinstance(ratio, bool)
                 and math.isfinite(float(ratio))
                 and float(ratio) > 0
-                and not row.get("volumeRatio")
             ):
                 row["volumeRatio"] = round(float(ratio), 4)
                 row["volumeRatioMeta"] = {
                     "source": str(item.get("source") or "quantboard_volume_ratio"),
-                    "status": str(item.get("status") or "unavailable"),
+                    "status": str(item.get("status") or "available"),
                     "calculatedAt": item.get("calculatedAt"),
                 }
+            # golden unavailable（insufficient_history 等）时保留原值（腾讯 f10 兜底）
 
     def _settings_or_default(self) -> Any:
         return self._settings if self._settings else _get_settings()

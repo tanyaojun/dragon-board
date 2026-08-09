@@ -270,6 +270,16 @@ def _enrich_stock_rows_from_quotes(
             volume_ratio = q.get("volumeRatio")
             if volume_ratio is not None and not row.get("volumeRatio"):
                 row["volumeRatio"] = volume_ratio
+                q_meta = q.get("volumeRatioMeta")
+                if isinstance(q_meta, dict) and not row.get("volumeRatioMeta"):
+                    row["volumeRatioMeta"] = q_meta
+                elif not row.get("volumeRatioMeta"):
+                    # quote 层无来源标记：此处 volumeRatio 来自腾讯 f10 兜底，派生层补标记
+                    row["volumeRatioMeta"] = {"source": "tencent_f10", "status": "available"}
+            # 涨速：python-bridge 计算（compute_quote_speed，60s 窗口），stock row 缺失时填补
+            speed = q.get("speed")
+            if speed is not None and not row.get("speed"):
+                row["speed"] = speed
             for field in ("high", "low", "preClose", "open"):
                 value = q.get(field)
                 if value is not None and not row.get(field):

@@ -139,3 +139,54 @@ def test_lead_status_marked_limit_up_when_price_hits_limit() -> None:
     row = bundle.stock_rows[0]
     assert row["limitUpPrice"] == 11.0
     assert row["leadStatus"] == "涨停"
+
+
+def test_quote_fills_speed_from_bridge() -> None:
+    fact = _fact()
+    fact.quotes = [
+        {
+            "code": "000001",
+            "price": 10.5,
+            "pctChange": 5.0,
+            "speed": 1.23,
+        }
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    # 涨速由 python-bridge 计算，stock row 缺失时从 quote 填补
+    assert row["speed"] == 1.23
+
+
+def test_quote_volume_ratio_meta_passthrough() -> None:
+    fact = _fact()
+    fact.quotes = [
+        {
+            "code": "000001",
+            "price": 10.5,
+            "pctChange": 5.0,
+            "volumeRatio": 1.8,
+            "volumeRatioMeta": {"source": "tencent_f10", "status": "available"},
+        }
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    # 腾讯 f10 兜底值连同来源标记一起透传（golden 三日口径覆盖前可见）
+    assert row["volumeRatio"] == 1.8
+    assert row["volumeRatioMeta"]["source"] == "tencent_f10"
+
+
+def test_quote_volume_ratio_stamps_tencent_f10_meta_when_missing() -> None:
+    fact = _fact()
+    fact.quotes = [
+        {
+            "code": "000001",
+            "price": 10.5,
+            "pctChange": 5.0,
+            "volumeRatio": 2.2,
+        }
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    # quote 层无来源标记时，派生层补 tencent_f10 兜底标记（golden 三日覆盖前可见）
+    assert row["volumeRatio"] == 2.2
+    assert row["volumeRatioMeta"]["source"] == "tencent_f10"
