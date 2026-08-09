@@ -62,6 +62,42 @@ describe('StockMergeCoordinator', () => {
     })
   })
 
+  it('keeps golden volume ratio and does not override with quote fallback', async () => {
+    // golden 3 日量比已存在（existingMap 保留）时，腾讯 quote 只应兜底缺失，不覆盖已有值（口径一致）
+    const [stock] = await new StockMergeCoordinator().merge({
+      platformData: {
+        eastmoney: [{ code: '000001', name: '样本股', rank: 1 }],
+      },
+      latestQuotes: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            name: '样本股',
+            volume: 120000,
+            volumeRatio: 1.88,
+          },
+        ],
+      ]),
+      volumeHistoryMap: new Map(),
+      intradayVolumeHistoryMap: new Map(),
+      existingMap: new Map([
+        [
+          '000001',
+          {
+            code: '000001',
+            name: '样本股',
+            volumeRatio: 2.45,
+            volumeRatioMeta: { status: 'fresh', source: 'daily_snapshot' },
+          },
+        ],
+      ]),
+    })
+
+    expect(stock.volumeRatio).toBe(2.45)
+    expect(stock.volumeRatioMeta?.reason).not.toBe('quote_feed')
+  })
+
   it('lets explicit zero money-flow fields clear existing values', async () => {
     const [stock] = await new StockMergeCoordinator().merge({
       platformData: {

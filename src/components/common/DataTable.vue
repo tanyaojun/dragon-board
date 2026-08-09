@@ -129,12 +129,19 @@
               </div>
             </template>
 
+            <template v-else-if="col.key === 'volumePriceQuadrant'">
+              <div class="observation-cell" @mouseenter="showConfidenceTooltip($event, stock, 'volumePriceQuadrant')"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+                <span :class="getQuadrantClass(stock)">{{ getQuadrantText(stock) }}</span>
+              </div>
+            </template>
+
             <template v-else-if="col.key === 'zlje' || col.key === 'zljzb'">
               <span :title="getMoneyFlowTitle(col.key, stock)">{{ formatCell(col.key, stock) }}</span>
             </template>
 
             <template v-else-if="col.key === 'volumeRatio'">
-              <span :title="getVolumeRatioTitle(stock)">{{ formatCell(col.key, stock) }}</span>
+              <span :class="getVolumeRatioClass(stock)" :title="getVolumeRatioTitle(stock)">{{ formatCell(col.key, stock) }}</span>
             </template>
 
             <template v-else>
@@ -218,6 +225,15 @@ import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import RankTrendObservationPanel from '../../components/panels/RankTrendObservationPanel.vue'
 import type { ObservationTrack } from '@/services/rankTrend/RankTrendObservationService'
+import { classifyVolumeRatio, volumeRatioStateLabel } from '@/utils/volumeRatio'
+import {
+  classifyFundSignal,
+  classifyVolumePriceQuadrant,
+  computeVolumePriceScore,
+  getVolumePriceQuadrantLabel,
+  volumeStateLabel,
+} from '@/services/rankTrend/volumePriceValidation'
+import { resolveLiveLimitState } from '@/services/rankTrend/liveLimitState'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -316,9 +332,10 @@ const columns = [
   { key: 'dzhRank', label: '大智慧', group: 'platform', always: true },
   { key: 'avgRank', label: '均榜', group: 'comprehensive', always: true },
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
-  { key: 'resonanceIntensity', label: '共振强度', group: 'comprehensive', always: true },
-  { key: 'rankTrendStrength', label: '排名趋势', group: 'comprehensive', always: true },
-  { key: 'lifecycleOpportunity', label: '生命周期', group: 'comprehensive', always: true },
+  { key: 'resonanceIntensity', label: '共振', group: 'comprehensive', always: true },
+  { key: 'rankTrendStrength', label: '趋势', group: 'comprehensive', always: true },
+  { key: 'volumePriceQuadrant', label: '量价', group: 'comprehensive', always: true },
+  { key: 'lifecycleOpportunity', label: '周期', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'volume', label: '成交量', group: 'quote', always: true },
@@ -337,6 +354,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   price: '60px',
   change: '70px',
   speed: '70px',
+  volumePriceQuadrant: '52px',
   emRank: '50px',
   thsRank: '50px',
   kplRank: '50px',
@@ -347,9 +365,9 @@ const COLUMN_WIDTHS: Record<string, string> = {
   dzhRank: '50px',
   avgRank: '50px',
   compRank: '50px',
-  resonanceIntensity: '60px',
-  rankTrendStrength: '60px',
-  lifecycleOpportunity: '76px',
+  resonanceIntensity: '52px',
+  rankTrendStrength: '52px',
+  lifecycleOpportunity: '64px',
   zlje: '90px',
   zljzb: '90px',
   volume: '80px',
@@ -879,7 +897,8 @@ const getFieldTooltip = (field: string, stock: any): string => {
   const rankTrend = getRankTrendAnalysis(stock)
   const finalSignal = getFinalSignal(stock)
   const hasFinalSignal = Boolean(finalSignal && finalSignal !== 'none')
-  if (!rankTrend && !hasFinalSignal) return '暂无信号'
+  // 量价配合不依赖 rankTrend 分析（只用 change/volumeRatio/zlje/中位数），跳过兜底拦截
+  if (!rankTrend && !hasFinalSignal && field !== 'volumePriceQuadrant') return '暂无信号'
 
   const header = `📌 ${stock.name || '-'} (${stock.code || '-'})\n`
 
@@ -966,6 +985,80 @@ const getFieldTooltip = (field: string, stock: any): string => {
       const divergenceScore = Math.round(getDivergenceScore(stock) || 0)
       title += `过热风险: ${getRiskLevel(overheatScore, 45, 70)} (${overheatScore} / 100)\n`
       title += `资金背离风险: ${getRiskLevel(divergenceScore, 40, 65)} (${divergenceScore} / 100)\n`
+    }
+    return title
+  }
+
+  // —— 量价配合 ——
+  if (field === 'volumePriceQuadrant') {
+    const result = computeVolumePriceScore({
+      code: stock.code,
+      change: stock.change,
+      volumeRatio: stock.volumeRatio,
+      zlje: stock.zlje,
+      zljzb: stock.zljzb,
+    })
+    const volume = classifyVolumeRatio(stock.volumeRatio)
+    const change = Number(stock.change)
+    const changeText = Number.isFinite(change) ? (change > 0 ? '+' : '') + change.toFixed(2) + '%' : '--'
+    let title = header
+    title += '\n【量价配合】\n'
+    title += `综合评估: ${
+      result.score == null ? '--' : `${result.direction === 'up' ? '↑' : result.direction === 'down' ? '↓' : ''}${result.score}`
+    }（${getVolumePriceQuadrantLabel(result.quadrant)}）\n`
+    title += `涨跌: ${changeText}\n`
+    title += `量能: ${volume === 'unknown' ? '无量比基准' : volumeStateLabel(volume)}\n`
+    title += `资金: ${classifyFundSignal(stock.zlje, stock.zljzb) === 'support' ? '主力净流入' : classifyFundSignal(stock.zlje, stock.zljzb) === 'divergent' ? '主力净流出' : '无资金数据'}\n`
+    if (result.score != null) {
+      const b = result.breakdown
+      const chg = Number(stock.change)
+      const vr = Number(stock.volumeRatio)
+      const zljzb = Number(stock.zljzb)
+      const zlje = Number(stock.zlje)
+      const atLimitUp = resolveLiveLimitState({ code: stock.code, change: chg }).atLimitUp
+      const sign = (v: number) => (v >= 0 ? '+' : '') + v.toFixed(1)
+      // 三项具体分值 + 该股数据（不含公式）
+      const dirNote =
+        result.direction === 'up'
+          ? `涨幅 ${Number.isFinite(chg) ? '+' + chg.toFixed(2) : '--'}%`
+          : result.direction === 'down'
+            ? `跌幅 ${Number.isFinite(chg) ? Math.abs(chg).toFixed(2) : '--'}%`
+            : '平盘'
+      const vpNote =
+        Number.isFinite(vr) && vr <= 0.95 && atLimitUp
+          ? `缩量涨停，量比 ${vr.toFixed(2)}`
+          : Number.isFinite(vr) && vr <= 0.95 && Number.isFinite(chg) && chg > 0
+            ? `缩量上涨，量比 ${vr.toFixed(2)}`
+            : Number.isFinite(vr) && vr > 2.5 && Number.isFinite(chg) && chg > 0
+              ? `过度放量（出货风险），量比 ${vr.toFixed(2)}`
+              : Number.isFinite(vr) && vr > 2 && Number.isFinite(chg) && chg > 0
+                ? `放量偏大，量比 ${vr.toFixed(2)}`
+                : Number.isFinite(vr) && vr > 1.05 && Number.isFinite(chg) && chg > 0
+                  ? `放量上涨，量比 ${vr.toFixed(2)}`
+                  : Number.isFinite(vr) && vr > 1.05 && Number.isFinite(chg) && chg < 0
+                    ? `放量下跌，量比 ${vr.toFixed(2)}`
+                    : Number.isFinite(vr) && vr < 0.95 && Number.isFinite(chg) && chg < 0
+                      ? `缩量下跌，量比 ${vr.toFixed(2)}`
+                      : `量能常态，量比 ${Number.isFinite(vr) ? vr.toFixed(2) : '--'}`
+      const fundNote =
+        Number.isFinite(zljzb) && zljzb > 20
+          ? '主力净占比异常高（疑似对倒出货）'
+          : Number.isFinite(zljzb) && zljzb > 0
+            ? `主力净流入 ${zljzb.toFixed(2)}%`
+            : Number.isFinite(zljzb) && zljzb < 0
+              ? `主力净流出 ${Math.abs(zljzb).toFixed(2)}%`
+              : Number.isFinite(zlje) && zlje > 0
+                ? '主力净额为正'
+                : Number.isFinite(zlje) && zlje < 0
+                  ? '主力净额为负'
+                  : '无资金数据'
+      title += `评分(总${result.score}): 基准50\n`
+      title += `  方向 ${sign(b.direction)}（${dirNote}）\n`
+      title += `  量价 ${sign(b.volume)}（${vpNote}）\n`
+      title += `  资金 ${sign(b.fund)}（${fundNote}）\n`
+    }
+    if (result.reasons.length) {
+      title += `依据: ${result.reasons.join('、')}\n`
     }
     return title
   }
@@ -1355,21 +1448,59 @@ const formatVolumeRatioCell = (stock: any) => {
   return ratio.toFixed(2)
 }
 
+const getVolumeRatioRelativeText = (stock: any) => {
+  const state = classifyVolumeRatio(stock.volumeRatio)
+  if (state === 'unknown') return ''
+  return volumeRatioStateLabel(state)
+}
+
+const getVolumeRatioClass = (stock: any) => {
+  const state = classifyVolumeRatio(stock.volumeRatio)
+  if (state === 'up') return 'vr-up'
+  if (state === 'down') return 'vr-down'
+  if (state === 'normal') return 'vr-normal'
+  return ''
+}
+
+// ========== 量价配合（四象限列） ==========
+// 列内文本参照三指标列「方向 + 数值」：↑/↓ 为涨跌方向，数值为量价综合评估值（0-100）；
+// 完整四象限语义（放量上涨等）由颜色（quadrant-*）与 tooltip 承载。
+const getQuadrantText = (stock: any) => {
+  const result = computeVolumePriceScore({
+    code: stock.code,
+    change: stock.change,
+    volumeRatio: stock.volumeRatio,
+    zlje: stock.zlje,
+    zljzb: stock.zljzb,
+  })
+  if (result.score == null) return '--'
+  const arrow = result.direction === 'up' ? '↑' : result.direction === 'down' ? '↓' : ''
+  return `${arrow}${result.score}%`
+}
+
+const getQuadrantClass = (stock: any) => {
+  const quadrant = classifyVolumePriceQuadrant(stock.change, stock.volumeRatio)
+  return quadrant ? `quadrant-${quadrant}` : ''
+}
+
 const getVolumeRatioTitle = (stock: any) => {
   const meta = stock.volumeRatioMeta
-  if (!meta) return ''
-  return [
-    `状态: ${meta.status}`,
-    `来源: ${meta.source}`,
-    Number.isFinite(Number(meta.currentVolume)) ? `当前成交量: ${meta.currentVolume}` : '',
-    Number.isFinite(Number(meta.expectedVolume))
-      ? `预期成交量: ${Number(meta.expectedVolume).toFixed(2)}`
-      : '',
-    Number.isFinite(Number(meta.rawRatio)) ? `原始量比: ${Number(meta.rawRatio).toFixed(2)}` : '',
-    meta.reason ? `原因: ${meta.reason}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n')
+  const lines: string[] = []
+  const relative = getVolumeRatioRelativeText(stock)
+  if (relative) lines.push(`相对状态: ${relative}`)
+  if (meta) {
+    lines.push(
+      `状态: ${meta.status}`,
+      `来源: ${meta.source}`,
+      Number.isFinite(Number(meta.currentVolume)) ? `当前成交量: ${meta.currentVolume}` : '',
+      Number.isFinite(Number(meta.expectedVolume))
+        ? `预期成交量: ${Number(meta.expectedVolume).toFixed(2)}`
+        : '',
+      Number.isFinite(Number(meta.rawRatio)) ? `原始量比: ${Number(meta.rawRatio).toFixed(2)}` : '',
+      meta.reason ? `原因: ${meta.reason}` : '',
+    )
+  }
+  return lines.filter(Boolean).join('\n')
 }
 
 const getGroupLabel = (group: string) => {
@@ -2044,6 +2175,46 @@ defineExpose({
 
 /* 无变化 */
 .trend-steady {
+  color: var(--text-secondary);
+}
+
+/* 量比相对状态（当日中位数基准：×1.5 放量 / ×0.5 缩量） */
+.vr-up {
+  color: #ff4757;
+  font-weight: 500;
+}
+
+.vr-down {
+  color: #4a90e2;
+  font-weight: 500;
+}
+
+.vr-normal {
+  color: var(--text-secondary);
+}
+
+/* ========== 量价配合 ========== */
+/* 四象限列 */
+.quadrant-rise_volume {
+  color: #ff4757;
+  font-weight: 500;
+}
+
+.quadrant-rise_shrink {
+  color: #ffb142;
+  font-weight: 500;
+}
+
+.quadrant-fall_volume {
+  color: #4a90e2;
+  font-weight: 500;
+}
+
+.quadrant-fall_shrink {
+  color: #7f8c8d;
+}
+
+.quadrant-normal {
   color: var(--text-secondary);
 }
 

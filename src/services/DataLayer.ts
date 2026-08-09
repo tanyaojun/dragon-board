@@ -1188,6 +1188,11 @@ class DataLayer {
   }
 
   private applyQuoteVolumeRatio(stock: MergedStock, quote: any): void {
+    // golden 3 日量比为主（VolumeRatioUpdateService 写入），腾讯 f10 仅在缺失/无效时兜底，
+    // 不覆盖已有量比——保证行情列表显示与落库口径一致（3 日量比）。
+    const existing = Number(stock?.volumeRatio)
+    if (Number.isFinite(existing) && existing > 0) return
+
     const volumeRatio = Number(quote?.volumeRatio)
     if (!Number.isFinite(volumeRatio) || volumeRatio <= 0) return
 

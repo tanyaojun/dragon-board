@@ -113,8 +113,8 @@ describe('DataTable row detail interactions', () => {
   test('shows resonance intensity column with directional color classes', () => {
     const source = dataTableSource()
 
-    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振强度'")
-    expect(source).toContain("resonanceIntensity: '60px'")
+    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振'")
+    expect(source).toContain("resonanceIntensity: '52px'")
     expect(source).toContain("col.key === 'resonanceIntensity'")
     expect(source).toContain('getResonanceCellValue')
     expect(source).toContain('getResonanceCellClass')
@@ -137,11 +137,11 @@ describe('DataTable row detail interactions', () => {
   test('shows three independent observation columns with dedicated panel tracks', () => {
     const source = dataTableSource()
 
-    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振强度'")
-    expect(source).toContain("{ key: 'rankTrendStrength', label: '排名趋势'")
-    expect(source).toContain("{ key: 'lifecycleOpportunity', label: '生命周期'")
-    expect(source).toContain("rankTrendStrength: '60px'")
-    expect(source).toContain("lifecycleOpportunity: '76px'")
+    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振'")
+    expect(source).toContain("{ key: 'rankTrendStrength', label: '趋势'")
+    expect(source).toContain("{ key: 'lifecycleOpportunity', label: '周期'")
+    expect(source).toContain("rankTrendStrength: '52px'")
+    expect(source).toContain("lifecycleOpportunity: '64px'")
     expect(source).toContain("openObservationPanel(stock, 'resonance')")
     expect(source).toContain("openObservationPanel(stock, 'technical')")
     expect(source).toContain("openObservationPanel(stock, 'lifecycle')")
@@ -153,6 +153,22 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
+    // 量价配合：独立四象限列，样式/ tooltip 参照三指标观察列
+    expect(source).toContain("{ key: 'volumePriceQuadrant', label: '量价'")
+    expect(source).toContain("volumePriceQuadrant: '52px'")
+    expect(source).toContain('classifyVolumePriceQuadrant')
+    expect(source).toContain('getQuadrantText')
+    expect(source).toContain("@mouseenter=\"showConfidenceTooltip($event, stock, 'volumePriceQuadrant')\"")
+    expect(source).toContain("field === 'volumePriceQuadrant'")
+    expect(source).toContain('【量价配合】')
+    // 量价配合不依赖中位数基准（绝对阈值，量比 >1 放量 / <1 缩量）
+    expect(source).not.toContain('effectiveVolumeRatioMedian')
+    expect(source).not.toContain('localVolumeRatioMedian')
+    expect(source).not.toContain('volumeRatioMedian')
+    expect(source).not.toContain('当日量比基准')
+    // 三指标数值列保持紧凑：不混入中文确认标记
+    expect(source).not.toContain('vp-badge')
+    expect(source).not.toContain('getVolumePriceBadge')
   })
 
   test('splits observation tooltips per field (D: resonance/rankTrend/lifecycle)', () => {
@@ -188,9 +204,9 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain("col.key === 'themeMomentum'")
     expect(source).not.toContain('open-theme-momentum')
     // 其余三列仍在
-    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振强度'")
-    expect(source).toContain("{ key: 'rankTrendStrength', label: '排名趋势'")
-    expect(source).toContain("{ key: 'lifecycleOpportunity', label: '生命周期'")
+    expect(source).toContain("{ key: 'resonanceIntensity', label: '共振'")
+    expect(source).toContain("{ key: 'rankTrendStrength', label: '趋势'")
+    expect(source).toContain("{ key: 'lifecycleOpportunity', label: '周期'")
   })
 
   test('structures the confidence tooltip as conclusion, resonance, technical, and risk layers', () => {

@@ -1007,16 +1007,17 @@ function getStrengthColor(strength: number): string {
 }
 
 function getVolumeRatioColor(ratio: number): string {
-  if (ratio >= 2.5) return '#ff4757'
-  if (ratio >= 1.5) return '#ffb142'
-  if (ratio >= 0.8) return '#4a90e2'
-  return '#7f8c8d'
+  // 绝对阈值（golden 3 日量比：>1 放量、<1 缩量）
+  if (ratio >= 1.05) return '#ff4757' // 放量
+  if (ratio >= 0.95) return '#ffb142' // 常态（1.0 附近）
+  if (ratio >= 0.5) return '#4a90e2' // 缩量
+  return '#7f8c8d' // 地量
 }
 
 function getVolumeRatioDesc(ratio: number): string {
-  if (ratio >= 2.5) return '高量'
-  if (ratio >= 1.5) return '正常'
-  if (ratio >= 0.8) return '缩量'
+  if (ratio >= 1.05) return '放量'
+  if (ratio >= 0.95) return '常态'
+  if (ratio >= 0.5) return '缩量'
   return '地量'
 }
 
