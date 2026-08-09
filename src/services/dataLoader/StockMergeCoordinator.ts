@@ -142,6 +142,10 @@ export class StockMergeCoordinator {
   }
 
   private applyQuoteVolumeRatio(stock: any, quote: any): void {
+    // golden 3 日量比为主，腾讯 f10 仅在缺失/无效时兜底，不覆盖已有量比（口径一致）
+    const existing = Number(stock?.volumeRatio)
+    if (Number.isFinite(existing) && existing > 0) return
+
     const volumeRatio = Number(quote?.volumeRatio)
     if (!Number.isFinite(volumeRatio) || volumeRatio <= 0) return
 
