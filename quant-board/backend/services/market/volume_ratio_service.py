@@ -8,6 +8,7 @@ from __future__ import annotations
 - 算法与 TS 版本逐行对齐：分时优先、日线按 A 股进度折算、加权平均、封顶 99.99。
 """
 
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -24,8 +25,12 @@ LOOKBACK_DAYS = 4
 DATASET_ID = "dragonboard_live"
 INTRADAY_TYPES = ("quarter_hour", "half_hour", "hourly")
 
+# 日级历史均量（量比分母）缓存：日级快照低频变化（一天数次），长 TTL 避免重 IO 反复读历史快照
 DAILY_CACHE_TTL_SECONDS = 600
-INTRADAY_CACHE_TTL_SECONDS = 120
+INTRADAY_CACHE_TTL_SECONDS = 120  # 分时历史分母：槽位 30 分钟级，120s 缓存合理
+# 量比结果缓存 TTL 60s（与前端量比刷新门限 VOLUME_RATIO_MIN_INTERVAL_MS=60s 一致）：
+# 分子为当日实时量，60s 内量比固定；结果层缓存避免 60s 门限内重复请求仍打历史快照查询。
+VOLUME_RATIO_RESULT_CACHE_TTL_SECONDS = 60
 REDIS_PREFIX = "volume-ratio"
 
 
@@ -611,6 +616,14 @@ def compute_volume_ratios(
     if not codes:
         return items
 
+    # 量比结果缓存 60s：同交易日内同 codes 集合复用（量比 60s 粒度，与前端刷新门限一致），
+    # 避免 60s 门限内前端重复请求仍触发历史快照查询（重 IO）。
+    code_sig = hashlib.sha1(",".join(sorted(codes)).encode("utf-8")).hexdigest()[:16]
+    result_cache_key = f"{REDIS_PREFIX}:result:{trading_date}:{code_sig}"
+    cached = _cache_get(result_cache_key)
+    if cached is not None:
+        return cached
+
     daily = build_daily_history(db, codes, trading_date)
     intraday = build_intraday_history(db, codes, trading_date, clock_minute)
     for code in codes:
@@ -620,4 +633,5 @@ def compute_volume_ratios(
             intraday.get(code),
             current,
         )
+    _cache_set(result_cache_key, items, VOLUME_RATIO_RESULT_CACHE_TTL_SECONDS)
     return items

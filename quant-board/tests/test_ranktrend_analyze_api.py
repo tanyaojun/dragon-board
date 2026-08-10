@@ -701,9 +701,11 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
     assert third.json()["cache"]["hit"] is False
 
 
-def test_analyze_cache_ttl_aligns_with_snapshot_read_ttl(monkeypatch):
-    # analyze 缓存 TTL 必须与快照读口一致（settings.snapshot_cache_ttl_seconds），
-    # 否则面板打开间隔稍长就丢失缓存并全量重算。
+def test_analyze_cache_ttl_fixed_300s_aligns_with_frontend_lru(monkeypatch):
+    # analyze 缓存 TTL 固定 300s（与前端 rankTrendResultCache LRU TTL 300s 一致），
+    # 避免面板打开间隔稍长就丢失缓存并全量重算。
+    from backend.api.ranktrend_routes import RANK_TREND_ANALYZE_CACHE_TTL_SECONDS
+
     fake_redis = FakeRedis()
     monkeypatch.setattr(
         "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
@@ -742,7 +744,7 @@ def test_analyze_cache_ttl_aligns_with_snapshot_read_ttl(monkeypatch):
     analyze_keys = [key for key in fake_redis.ttls if "ranktrend:analyze" in key]
     assert analyze_keys
     for key in analyze_keys:
-        assert fake_redis.ttls[key] == get_settings().snapshot_cache_ttl_seconds
+        assert fake_redis.ttls[key] == RANK_TREND_ANALYZE_CACHE_TTL_SECONDS
 
 
 def _theme_frames_with_context(count=12, theme_count=25):
