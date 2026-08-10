@@ -222,7 +222,7 @@
       <button class="btn-text" @click="importFavorites">
         <span class="icon">📥</span> 导入
       </button>
-      <button class="btn-text" @click="syncWithMarketData">
+      <button class="btn-text" @click="syncToCandidatePool">
         <span class="icon">↻</span> 同步
       </button>
       <button class="btn-text" @click="clearAllFavorites" v-if="favoriteStore.favoriteList.length > 0">
@@ -240,6 +240,7 @@ import { useUIStore } from '@/stores/ui'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import type { Board } from '@/types'  // Board 从 types 导入
+import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 const props = defineProps<{
   visible: boolean
   triggerRect?: DOMRect
@@ -363,13 +364,43 @@ function importFavorites() {
   input.click()
 }
 
-function syncWithMarketData() {
-  const updated = favoriteStore.syncWithMarketData()
-  EventManager.emit(AppEvents.UI.TOAST, {
-    message: `已同步 ${updated} 只自选股`,
-    duration: 1500,
-    type: 'success',
-  })
+function syncToCandidatePool() {
+  const favorites = favoriteStore.favoriteList.map((fav) => ({ code: fav.code, name: fav.name }))
+  if (!favorites.length) {
+    EventManager.emit(AppEvents.UI.TOAST, {
+      message: '暂无自选股可同步',
+      duration: 1500,
+      type: 'info',
+    })
+    return
+  }
+
+  void (async () => {
+    try {
+      const result = await candidateJournalService.syncFavoritesToCandidatePool(favorites, {
+        source: 'favorite-panel-sync',
+      })
+      const parts = [`已同步 ${result.created.length} 只到候选池`]
+      if (result.skipped) parts.push(`${result.skipped} 只已存在`)
+      if (result.failed.length) parts.push(`${result.failed.length} 只失败`)
+      EventManager.emit(AppEvents.UI.TOAST, {
+        message: parts.join('，'),
+        duration: 2000,
+        type: result.failed.length ? 'warning' : 'success',
+      })
+      if (result.failed.length) {
+        console.warn('[FavoritePanel] 同步候选池失败明细:', result.failed)
+      }
+      // 打开候选池面板展示同步结果
+      EventManager.emit('candidate-pool:open', {})
+    } catch (error) {
+      EventManager.emit(AppEvents.UI.TOAST, {
+        message: `同步候选池失败：${error instanceof Error ? error.message : '未知错误'}`,
+        duration: 2000,
+        type: 'error',
+      })
+    }
+  })()
 }
 
 function clearAllFavorites() {

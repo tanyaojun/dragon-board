@@ -201,6 +201,70 @@ describe('FavoriteStore', () => {
     expect(store.boards.get(board.id)?.count).toBe(1)
   })
 
+  it('records auto source and stays silent when adding via the auto entry', () => {
+    seedStock('600584')
+    const store = useFavoriteStore()
+    store.init()
+
+    expect(store.addToFavorites('600584', '默认', '', 'auto', true)).toBe(true)
+
+    expect(store.favorites.get('600584')?.source).toBe('auto')
+    expect(EventManager.getHistory(AppEvents.UI.TOAST)).toHaveLength(0)
+    expect(EventManager.getHistory('favorite-added')).toHaveLength(1)
+  })
+
+  it('keeps manual source as the default for plain user adds', () => {
+    seedStock('600584')
+    const store = useFavoriteStore()
+    store.init()
+
+    store.addToFavorites('600584')
+
+    expect(store.favorites.get('600584')?.source).toBe('manual')
+  })
+
+  it('removes silently when requested so auto sync does not spam toasts', () => {
+    seedStock('600584')
+    const store = useFavoriteStore()
+    store.init()
+    store.addToFavorites('600584')
+
+    expect(store.removeFromFavorites('600584', true)).toBe(true)
+
+    expect(store.favorites.has('600584')).toBe(false)
+    expect(EventManager.getHistory(AppEvents.UI.TOAST)).toHaveLength(1) // 仅加入时成功 toast
+    expect(EventManager.getHistory('favorite-removed')).toHaveLength(1)
+  })
+
+  it('treats stored favorites without source as manual for auto-sync safety', () => {
+    storage.setItem(
+      'favorite_data',
+      JSON.stringify({
+        favorites: [
+          [
+            '000001',
+            {
+              code: '000001',
+              name: '平安银行',
+              group: '默认',
+              addTime: 1,
+              lastPrice: 10,
+              lastChange: 1,
+              lastUpdate: 1,
+            },
+          ],
+        ],
+        groups: [['默认', { name: '默认', color: '#FF6B6B', count: 1, createTime: 1 }]],
+        boards: [],
+        stockBoards: [],
+      }),
+    )
+    const store = useFavoriteStore()
+    store.init()
+
+    expect(store.favorites.get('000001')?.source ?? 'manual').toBe('manual')
+  })
+
   it('unsubscribes from DataLayer updates when the store scope is disposed', async () => {
     seedStock()
     const store = useFavoriteStore()

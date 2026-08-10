@@ -41,12 +41,20 @@ interface AddCandidateOptions {
   source?: string
   statusOverride?: CandidateStatus
   signalsSnapshotPatch?: Record<string, any>
+  /** 创建成功时不弹单条 toast（用于批量静默同步） */
+  silent?: boolean
 }
 
 interface AddCandidateResult {
   created: boolean
   entry: CandidateJournalEntry | null
   analysis?: CandidateAnalysisResult
+}
+
+export interface FavoriteSyncResult {
+  created: string[]
+  skipped: number
+  failed: Array<{ code: string; reason: string }>
 }
 
 interface CandidateJournalServiceDeps {
@@ -422,13 +430,60 @@ export class CandidateJournalService {
       this.addFavorite ? this.addFavorite(stockCode) : useFavoriteStore().addToFavorites(stockCode)
     }
 
-    EventManager.emit(AppEvents.UI.TOAST, {
-      message: `已加入候选池：${context.stock.name || stockCode} · ${analysis.grade}级 ${analysis.score}分`,
-      duration: 1800,
-      type: 'success',
-    })
+    if (!options.silent) {
+      EventManager.emit(AppEvents.UI.TOAST, {
+        message: `已加入候选池：${context.stock.name || stockCode} · ${analysis.grade}级 ${analysis.score}分`,
+        duration: 1800,
+        type: 'success',
+      })
+    }
 
     return { created: true, entry: normalizeEntry(created), analysis }
+  }
+
+  /**
+   * 把自选股批量同步到候选池：只创建尚无 open candidate 的股票，
+   * 已存在的跳过，失败的单条记录不影响其余股票。全程静默（不弹单条 toast），
+   * 由调用方统一汇总提示。返回统计结果供界面展示。
+   */
+  async syncFavoritesToCandidatePool(
+    favorites: Array<{ code: string; name?: string }>,
+    options: { source?: string } = {},
+  ): Promise<FavoriteSyncResult> {
+    const source = options.source || 'favorite-sync'
+    const codes = favorites.map((fav) => normalizeCode(fav.code)).filter(Boolean)
+    if (!codes.length) return { created: [], skipped: 0, failed: [] }
+
+    const openByCode = await this.getOpenCandidateMap(codes)
+    const created: string[] = []
+    let skipped = 0
+    const failed: Array<{ code: string; reason: string }> = []
+
+    for (const fav of favorites) {
+      const code = normalizeCode(fav.code)
+      if (!code) continue
+      if (openByCode[code]) {
+        skipped += 1
+        continue
+      }
+
+      const liveStock = dataLayer.getStock(code)
+      const stock = {
+        ...(liveStock || {}),
+        code,
+        name: fav.name || liveStock?.name || code,
+      } as CandidateStockLike
+
+      try {
+        const result = await this.addCandidateFromStock(stock, { source, silent: true })
+        if (result.created) created.push(code)
+        else skipped += 1
+      } catch (error) {
+        failed.push({ code, reason: error instanceof Error ? error.message : String(error) })
+      }
+    }
+
+    return { created, skipped, failed }
   }
 
   async updateCandidateStatus(id: string, status: CandidateStatus): Promise<CandidateJournalEntry> {

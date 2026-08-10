@@ -540,11 +540,16 @@ export interface Board {
   updateTime?: number
 }
 
+/** 自选股来源：auto = 自动同步加入（可被自动规则删除），manual = 用户手动加入（不受自动删除影响） */
+export type FavoriteStockSource = 'auto' | 'manual'
+
 export interface FavoriteStock {
   code: string
   name: string
   group: string
   notes?: string
+  /** 加入来源；缺省按 manual（旧存储兼容） */
+  source?: FavoriteStockSource
   addTime: number
   lastPrice: number
   lastChange: number
