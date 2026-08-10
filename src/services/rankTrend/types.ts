@@ -88,6 +88,25 @@ export interface RankTrendObservationScores {
       riskSafety: number
     }
   }
+  // 量价协同轴（阶段 2）：后端生产，前端只消费
+  volumePrice?: RankTrendVolumePrice
+  synergy?: RankTrendSynergy
+}
+
+/** 量价评分（后端 Python compute_volume_price_score 产出，0-100） */
+export interface RankTrendVolumePrice {
+  score: number | null
+  direction: 'up' | 'down' | 'neutral' | null
+  quadrant: 'rise_volume' | 'rise_shrink' | 'fall_volume' | 'fall_shrink' | 'normal' | null
+  reasons: string[]
+  breakdown?: { direction: number; volume: number; fund: number }
+}
+
+/** 四象协同状态（阶段 × 量价 为主，技术/共振协同） */
+export interface RankTrendSynergy {
+  state: '启动确认' | '主升确认' | '风险升级' | '退潮' | '存疑' | 'noData'
+  hardWarn: boolean
+  reasons: string[]
 }
 
 export interface RankTrendThemeResonance {
@@ -121,6 +140,8 @@ export interface RankTrendResonance {
   status: 'ok' | 'insufficient'
   direction: RankSignalDirection
   score: number
+  /** 量价修正前原始排名动量分（阶段 2，后端保留，面板对比用） */
+  rawScore?: number
   label: '非常强' | '强' | '中等' | '较弱' | '非常弱' | '样本不足'
   relativeMomentum: number
   acceleration: number

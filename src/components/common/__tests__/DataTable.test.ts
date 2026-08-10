@@ -153,19 +153,23 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
-    // 量价配合：独立四象限列，样式/ tooltip 参照三指标观察列
+    // 量价配合：独立四象限列，样式/ tooltip 参照三指标观察列；数据由后端生产（_volumePrice*）前端只消费
     expect(source).toContain("{ key: 'volumePriceQuadrant', label: '量价'")
     expect(source).toContain("volumePriceQuadrant: '52px'")
-    expect(source).toContain('classifyVolumePriceQuadrant')
+    expect(source).toContain('_volumePriceScore')
+    expect(source).toContain('_volumePriceQuadrant')
     expect(source).toContain('getQuadrantText')
+    // 投影缺失时回退 rankTrend.observation.volumePrice（与三轨读取口径一致，缓存预热可显示）
+    expect(source).toContain('getVolumePrice')
+    expect(source).toContain('stock?._volumePriceScore ?? vp.score')
+    expect(source).toContain("getRankTrendAnalysis(stock)?.observation?.volumePrice")
     expect(source).toContain("@mouseenter=\"showConfidenceTooltip($event, stock, 'volumePriceQuadrant')\"")
     expect(source).toContain("field === 'volumePriceQuadrant'")
     expect(source).toContain('【量价配合】')
-    // 量价配合不依赖中位数基准（绝对阈值，量比 >1 放量 / <1 缩量）
-    expect(source).not.toContain('effectiveVolumeRatioMedian')
-    expect(source).not.toContain('localVolumeRatioMedian')
-    expect(source).not.toContain('volumeRatioMedian')
-    expect(source).not.toContain('当日量比基准')
+    // 前端不生产量价评分（后端 observation.volumePrice）
+    expect(source).not.toContain('computeVolumePriceScore')
+    expect(source).not.toContain('classifyVolumePriceQuadrant')
+    expect(source).not.toContain('resolveLiveLimitState')
     // 三指标数值列保持紧凑：不混入中文确认标记
     expect(source).not.toContain('vp-badge')
     expect(source).not.toContain('getVolumePriceBadge')

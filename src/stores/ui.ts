@@ -55,6 +55,14 @@ function getDirectionalSortRank(stock: any, field: SortField): number {
     if (LIFECYCLE_DOWN_STAGES.has(stage)) return -1
     return 0
   }
+  if (field === 'volumePriceQuadrant') {
+    // 量价方向组：up=上升、down=下降（与三指标方向组一致，方向固定优先于数值）
+    const direction =
+      stock?._volumePriceDirection ??
+      getRankTrendAnalysis(stock)?.observation?.volumePrice?.direction ??
+      null
+    return direction === 'up' ? 1 : direction === 'down' ? -1 : 0
+  }
   return 0
 }
 
@@ -76,6 +84,12 @@ function getStockSortValue(stock: Stock, field: SortField): string | number | nu
   if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
   if (field === 'rankTrendStrength') return getObservationSortValue(stock, '_rankTrendPct')
   if (field === 'lifecycleOpportunity') return getObservationSortValue(stock, '_lifecyclePct')
+  if (field === 'volumePriceQuadrant') {
+    // 量价分（0-100）：投影优先，回退 rankTrend.observation.volumePrice.score（与三指标回退口径一致）
+    const projected = (stock as any)._volumePriceScore
+    if (projected !== undefined) return toFiniteNumber(projected)
+    return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.volumePrice?.score)
+  }
   if (field === 'avgRank') {
     return (
       toFiniteNumber((stock as any).avgRankNum) ??

@@ -806,6 +806,84 @@ describe('RankTrendSignalService', () => {
       })
     })
 
+    it('projects _volumePrice* / _synergy* from backend observation (front-end only consumes)', () => {
+      const stock = {
+        code: '600664',
+        rankTrend: {
+          meta: { change: 9.97 },
+          jump: { direction: 'hold', confidence: 0 },
+          resonance: { status: 'ok', direction: 'buy', score: 38, rawScore: 23, label: '强' },
+          observation: {
+            rankTrend: { direction: 'buy', score: 20, signedScore: 0.2 },
+            volumePrice: {
+              score: 75,
+              direction: 'up',
+              quadrant: 'rise_shrink',
+              reasons: ['缩量涨停（封板惜售，好票）', '主力净流入'],
+              breakdown: { direction: 15, volume: 25, fund: -15 },
+            },
+            synergy: { state: '主升确认', hardWarn: false, reasons: ['阶段=expansion', '量价分=75（≥75）'] },
+          },
+        },
+      }
+      const service = new RankTrendSignalService()
+
+      ;(service as any).precomputeDisplayFields([stock])
+
+      expect(stock._volumePriceScore).toBe(75)
+      expect(stock._volumePriceDirection).toBe('up')
+      expect(stock._volumePriceQuadrant).toBe('rise_shrink')
+      expect(stock._volumePriceReasons).toEqual(['缩量涨停（封板惜售，好票）', '主力净流入'])
+      expect(stock._volumePriceBreakdown).toEqual({ direction: 15, volume: 25, fund: -15 })
+      expect(stock._synergyState).toBe('主升确认')
+      expect(stock._synergyHardWarn).toBe(false)
+      expect(stock._synergyReasons).toEqual(['阶段=expansion', '量价分=75（≥75）'])
+    })
+
+    it('projects volumePrice score as undefined when observation.volumePrice is absent (no fake data)', () => {
+      const stock = {
+        code: '000001',
+        rankTrend: {
+          meta: { change: 3.2 },
+          jump: { direction: 'hold', confidence: 0 },
+          resonance: { status: 'ok', direction: 'hold', score: 50, label: '中等' },
+          observation: {
+            rankTrend: { direction: 'hold', score: 40, signedScore: 0 },
+          },
+        },
+      }
+      const service = new RankTrendSignalService()
+
+      ;(service as any).precomputeDisplayFields([stock])
+
+      expect(stock._volumePriceScore).toBeUndefined()
+      expect(stock._volumePriceQuadrant).toBeNull()
+      expect(stock._synergyState).toBeNull()
+    })
+
+    it('does not fake volumePrice score as 0 when backend returns score=null (no data)', () => {
+      const stock = {
+        code: '000001',
+        rankTrend: {
+          meta: { change: 3.2 },
+          jump: { direction: 'hold', confidence: 0 },
+          resonance: { status: 'ok', direction: 'hold', score: 50, label: '中等' },
+          observation: {
+            rankTrend: { direction: 'hold', score: 40, signedScore: 0 },
+            volumePrice: { score: null, direction: null, quadrant: null, reasons: [] },
+            synergy: { state: 'noData', hardWarn: false, reasons: [] },
+          },
+        },
+      }
+      const service = new RankTrendSignalService()
+
+      ;(service as any).precomputeDisplayFields([stock])
+
+      // Number(null)===0 的陷阱：无数据必须显示 --，不能伪装成 0 分
+      expect(stock._volumePriceScore).toBeUndefined()
+      expect(stock._volumePriceReasons).toEqual([])
+    })
+
     it('sets _rankChange / _jumpConfidence / _jumpDirection when rankTrend is present', async () => {
       const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
       vi.mocked(rankTrendAnalyzer.getRankTrends).mockResolvedValue(

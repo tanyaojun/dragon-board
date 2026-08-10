@@ -16,7 +16,7 @@ interface CandidateJournalLike {
   addCandidateFromStock(
     stock: CandidateStockLike,
     options: {
-      addToFavorites: boolean
+      addToFavorites?: boolean
       source: string
       statusOverride: CandidateStatus
       signalsSnapshotPatch: Record<string, unknown>
@@ -82,7 +82,8 @@ export class FusionCandidateNotifier {
       if (existing) continue
 
       const result = await this.candidateJournal.addCandidateFromStock(stock, {
-        addToFavorites: true,
+        // 自选股维护已移交 AutoFavoriteSyncService（金叉+共振向上规则），
+        // 此处不再自动加入自选股；候选池写入与飞书推送保持不变。
         source: FUSION_STRATEGY_SOURCE,
         statusOverride: 'triggered',
         signalsSnapshotPatch: {

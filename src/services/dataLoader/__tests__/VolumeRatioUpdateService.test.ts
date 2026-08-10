@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiService } from '../../apiService'
 import { VolumeRatioUpdateService } from '../VolumeRatioUpdateService'
+import { clearVolumeRatioCache } from '../volumeRatioCache'
 
 vi.mock('../../apiService', () => ({
   apiService: {
@@ -12,6 +13,11 @@ vi.mock('../../apiService', () => ({
 describe('VolumeRatioUpdateService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    // 清空量比结果 LRU 缓存，避免用例间缓存残留
+    clearVolumeRatioCache()
   })
 
   it('consumes backend volume ratio results and writes structured diagnostics', async () => {
@@ -123,7 +129,43 @@ describe('VolumeRatioUpdateService', () => {
 
     const summary = await service.updateVolumeRatios(['600000'])
 
-    expect(summary).toEqual({ requested: 1, updated: 0, unavailable: 0, suspicious: 0 })
+    expect(summary).toEqual({ requested: 1, updated: 0, unavailable: 1, suspicious: 0 })
     expect(updateStockExtData).not.toHaveBeenCalled()
+  })
+
+  it('reuses cached volume ratio within 60s TTL without calling backend again', async () => {
+    vi.mocked(apiService.getVolumeRatios).mockResolvedValue({
+      ok: true,
+      items: {
+        '600000': {
+          value: 1.88,
+          status: 'fresh',
+          source: 'daily_snapshot',
+          currentVolume: 100000,
+          expectedVolume: 53191,
+          historyVolumes: [50000, 52000, 48000],
+          rawRatio: 1.88,
+          calculatedAt: 123,
+        },
+      },
+    })
+    const updateStockExtData = vi.fn()
+    const service = new VolumeRatioUpdateService({
+      dataLayer: {
+        getStocks: vi.fn(() => [{ code: '600000', name: '浦发银行', volume: 100000 }]),
+        updateStockExtData,
+      },
+    })
+
+    // 首次：miss → 调后端并写缓存
+    const first = await service.updateVolumeRatios(['600000'])
+    expect(first.updated).toBe(1)
+    expect(apiService.getVolumeRatios).toHaveBeenCalledTimes(1)
+
+    // 二次（60s TTL 内）：命中缓存 → 不调后端
+    vi.mocked(apiService.getVolumeRatios).mockClear()
+    const second = await service.updateVolumeRatios(['600000'])
+    expect(second.updated).toBe(1)
+    expect(apiService.getVolumeRatios).not.toHaveBeenCalled()
   })
 })

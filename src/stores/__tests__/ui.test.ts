@@ -184,6 +184,36 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
   })
 
+  it('sorts volume-price direction-first: up above down regardless of score (与三指标一致)', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      {
+        code: '000001',
+        name: '下降高分',
+        _volumePriceScore: 90,
+        _volumePriceDirection: 'down',
+      },
+      {
+        code: '000002',
+        name: '上升低分',
+        _volumePriceScore: 20,
+        _volumePriceDirection: 'up',
+      },
+      {
+        code: '000003',
+        name: '上升高分',
+        _volumePriceScore: 88,
+        _volumePriceDirection: 'up',
+      },
+    ])
+
+    uiStore.toggleSort('volumePriceQuadrant')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+
+    uiStore.toggleSort('volumePriceQuadrant')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
   it('sorts lifecycle opportunity direction-first by attention stage', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
