@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { CandidateJournalService } from '../CandidateJournalService'
 import type { CandidateAnalysisResult, CandidateJournalEntry, CandidateStockLike } from '../types'
+import { AppEvents } from '@/types'
+import { EventManager } from '@/utils/eventManager'
 
 const stock: CandidateStockLike = {
   code: '600584',
@@ -1001,5 +1003,96 @@ describe('CandidateJournalService', () => {
         reviewNotes: undefined,
       },
     })
+  })
+})
+
+describe('syncFavoritesToCandidatePool', () => {
+  it('creates candidates only for favorites without an open candidate and reports stats', async () => {
+    const { service, api } = createService()
+    // 全量查询（getOpenCandidateMap）：600584 已有 open candidate；单股查询（findOpenCandidate）：无候选
+    api.get.mockImplementation((url: string) => {
+      const u = String(url)
+      if (u.includes('stock_code=')) {
+        return Promise.resolve({ entries: [], total: 0 })
+      }
+      return Promise.resolve({
+        entries: [{ ...existingCandidate, stockCode: '600584', status: 'candidate' }],
+        total: 1,
+      })
+    })
+    api.post.mockResolvedValue({
+      id: 'tj_fav_sync',
+      stockCode: '000001',
+      stockName: '平安银行',
+      status: 'candidate',
+      tradeType: 'thesis',
+      signalsSnapshot: {},
+    })
+
+    const result = await service.syncFavoritesToCandidatePool([
+      { code: '600584', name: '长电科技' }, // 已有 open candidate → 跳过
+      { code: '000001', name: '平安银行' }, // 新增
+      { code: '000002', name: '万科A' }, // 新增（无行情也按自选名创建）
+    ])
+
+    // 000001 走 addCandidateFromStock 内部 findOpenCandidate 一次 GET + POST，000002 同理
+    expect(api.post).toHaveBeenCalledTimes(2)
+    expect(api.post).toHaveBeenCalledWith(
+      '/api/journal/entries',
+      expect.objectContaining({ stock_code: '000001', stock_name: '平安银行' }),
+      expect.any(Object),
+    )
+    expect(result.created).toEqual(['000001', '000002'])
+    expect(result.skipped).toBe(1)
+    expect(result.failed).toEqual([])
+  })
+
+  it('collects failed favorites without stopping the rest', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({ entries: [], total: 0 })
+    api.post.mockRejectedValueOnce(new Error('网络错误'))
+    api.post.mockResolvedValueOnce({
+      id: 'tj_fav_sync_2',
+      stockCode: '000002',
+      stockName: '万科A',
+      status: 'candidate',
+      tradeType: 'thesis',
+      signalsSnapshot: {},
+    })
+
+    const result = await service.syncFavoritesToCandidatePool([
+      { code: '000001', name: '平安银行' },
+      { code: '000002', name: '万科A' },
+    ])
+
+    expect(result.created).toEqual(['000002'])
+    expect(result.failed).toEqual([{ code: '000001', reason: '网络错误' }])
+  })
+
+  it('returns empty stats when there are no favorites', async () => {
+    const { service, api } = createService()
+
+    const result = await service.syncFavoritesToCandidatePool([])
+
+    expect(result).toEqual({ created: [], skipped: 0, failed: [] })
+    expect(api.get).not.toHaveBeenCalled()
+  })
+
+  it('does not emit a toast per created candidate when syncing silently', async () => {
+    const { service, api } = createService()
+    api.get.mockResolvedValue({ entries: [], total: 0 })
+    api.post.mockResolvedValue({
+      id: 'tj_silent',
+      stockCode: '000001',
+      stockName: '平安银行',
+      status: 'candidate',
+      tradeType: 'thesis',
+      signalsSnapshot: {},
+    })
+    EventManager.clearHistory()
+
+    await service.syncFavoritesToCandidatePool([{ code: '000001', name: '平安银行' }])
+
+    expect(EventManager.getHistory(AppEvents.UI.TOAST)).toHaveLength(0)
   })
 })

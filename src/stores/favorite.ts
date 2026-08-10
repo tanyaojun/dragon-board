@@ -3,7 +3,7 @@ import { debugLog } from '@/utils/logger'
 
 import { defineStore } from 'pinia'
 import { ref, computed, onScopeDispose } from 'vue'
-import type { FavoriteStock, FavoriteGroup, FavoriteStats, Board, StockBoard } from '@/types'
+import type { FavoriteStock, FavoriteGroup, FavoriteStats, Board, StockBoard, FavoriteStockSource } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { stockCodeManager } from '@/services/StockCodeManager'
@@ -180,7 +180,13 @@ export const useFavoriteStore = defineStore('favorite', () => {
   }
 
   // ========== 原有自选股操作（保持不变）==========
-  function addToFavorites(code: string, group = '默认', notes = ''): boolean {
+  function addToFavorites(
+    code: string,
+    group = '默认',
+    notes = '',
+    source: FavoriteStockSource = 'manual',
+    silent = false,
+  ): boolean {
     ensureInitialized()
 
     const normalizedCode = normalizeFavoriteCode(code)
@@ -192,21 +198,25 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
     if (!stockInfo && !dataLayerStock) {
       console.warn(`[FavoriteStore] 未找到股票代码: ${normalizedCode}`)
-      EventManager.emit(AppEvents.UI.TOAST, {
-        message: `❌ 无效的股票代码: ${normalizedCode}`,
-        duration: 1500,
-        type: 'error',
-      })
+      if (!silent) {
+        EventManager.emit(AppEvents.UI.TOAST, {
+          message: `❌ 无效的股票代码: ${normalizedCode}`,
+          duration: 1500,
+          type: 'error',
+        })
+      }
       return false
     }
 
     // 2. 检查是否已在自选股中
     if (favorites.value.has(normalizedCode)) {
-      EventManager.emit(AppEvents.UI.TOAST, {
-        message: `⚠️ ${stockName || normalizedCode} 已在自选股中`,
-        duration: 1500,
-        type: 'warning',
-      })
+      if (!silent) {
+        EventManager.emit(AppEvents.UI.TOAST, {
+          message: `⚠️ ${stockName || normalizedCode} 已在自选股中`,
+          duration: 1500,
+          type: 'warning',
+        })
+      }
       return false
     }
 
@@ -216,6 +226,7 @@ export const useFavoriteStore = defineStore('favorite', () => {
       name: stockName || normalizedCode,
       group,
       notes,
+      source,
       addTime: Date.now(),
       lastPrice: dataLayerStock?.price || 0,
       lastChange: dataLayerStock?.change || 0,
@@ -226,27 +237,31 @@ export const useFavoriteStore = defineStore('favorite', () => {
     updateGroupCount(group, 1)
     saveToStorage()
 
-    EventManager.emit(AppEvents.UI.TOAST, {
-      message: `⭐ 已加入自选: ${stockName || normalizedCode}`,
-      duration: 1500,
-      type: 'success',
-    })
+    if (!silent) {
+      EventManager.emit(AppEvents.UI.TOAST, {
+        message: `⭐ 已加入自选: ${stockName || normalizedCode}`,
+        duration: 1500,
+        type: 'success',
+      })
+    }
 
     EventManager.emit('favorite-added', { code: normalizedCode, group })
 
     return true
   }
 
-  function removeFromFavorites(code: string): boolean {
+  function removeFromFavorites(code: string, silent = false): boolean {
     ensureInitialized()
 
     const normalizedCode = normalizeFavoriteCode(code)
     if (!favorites.value.has(normalizedCode)) {
-      EventManager.emit(AppEvents.UI.TOAST, {
-        message: '❌ 该股票不在自选中',
-        duration: 1500,
-        type: 'error',
-      })
+      if (!silent) {
+        EventManager.emit(AppEvents.UI.TOAST, {
+          message: '❌ 该股票不在自选中',
+          duration: 1500,
+          type: 'error',
+        })
+      }
       return false
     }
 
@@ -259,11 +274,13 @@ export const useFavoriteStore = defineStore('favorite', () => {
 
     saveToStorage()
 
-    EventManager.emit(AppEvents.UI.TOAST, {
-      message: `➖ 已从自选中移除: ${stockName}`,
-      duration: 1500,
-      type: 'info',
-    })
+    if (!silent) {
+      EventManager.emit(AppEvents.UI.TOAST, {
+        message: `➖ 已从自选中移除: ${stockName}`,
+        duration: 1500,
+        type: 'info',
+      })
+    }
 
     EventManager.emit('favorite-removed', { code: normalizedCode })
 
