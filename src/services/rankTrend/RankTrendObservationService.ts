@@ -5,7 +5,7 @@ import { cacheManager } from '../LRUCache'
 import { snapshotFacade } from '../snapshot/facade'
 import type { RankTrendAnalysisResult } from './types'
 
-export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle'
+export type ObservationTrack = 'resonance' | 'technical' | 'lifecycle' | 'volumePrice'
 
 export type RankTrendObservationIssue = {
   code: string
@@ -42,6 +42,7 @@ export const OBSERVATION_WINDOW_BARS = {
   resonance: 9,
   technical: 22,
   lifecycle: 15,
+  volumePrice: 5, // 量价协同轴：当前帧量价/资金即可判读，短窗口看趋势
 } as const
 
 export const MAX_OBSERVATION_WINDOW_BARS = Math.max(...Object.values(OBSERVATION_WINDOW_BARS))

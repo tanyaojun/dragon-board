@@ -228,12 +228,9 @@ import type { ObservationTrack } from '@/services/rankTrend/RankTrendObservation
 import { classifyVolumeRatio, volumeRatioStateLabel } from '@/utils/volumeRatio'
 import {
   classifyFundSignal,
-  classifyVolumePriceQuadrant,
-  computeVolumePriceScore,
   getVolumePriceQuadrantLabel,
   volumeStateLabel,
 } from '@/services/rankTrend/volumePriceValidation'
-import { resolveLiveLimitState } from '@/services/rankTrend/liveLimitState'
 const props = defineProps<{
   loading?: boolean
 }>()
@@ -692,18 +689,22 @@ const toFiniteObservationValue = (value: unknown): number | null => {
   return Number.isFinite(numeric) ? numeric : null
 }
 
-const getRankTrendStrengthValue = (stock: any): number | null =>
-  toFiniteObservationValue(
+const getRankTrendStrengthValue = (stock: any): number | null => {
+  const value = toFiniteObservationValue(
     stock._rankTrendPct ?? getRankTrendAnalysis(stock)?.observation?.rankTrend?.score,
   )
+  return value === null ? null : Math.round(value)
+}
 
 const getRankTrendDirection = (stock: any) =>
   stock._rankTrendDirection ?? getRankTrendAnalysis(stock)?.observation?.rankTrend?.direction ?? 'hold'
 
-const getLifecycleOpportunityValue = (stock: any): number | null =>
-  toFiniteObservationValue(
+const getLifecycleOpportunityValue = (stock: any): number | null => {
+  const value = toFiniteObservationValue(
     stock._lifecyclePct ?? getRankTrendAnalysis(stock)?.observation?.lifecycle?.score,
   )
+  return value === null ? null : Math.round(value)
+}
 
 const getLifecycleStage = (stock: any) =>
   stock._lifecycleStage ?? getRankTrendAnalysis(stock)?.observation?.lifecycle?.stage ?? null
@@ -991,74 +992,35 @@ const getFieldTooltip = (field: string, stock: any): string => {
 
   // —— 量价配合 ——
   if (field === 'volumePriceQuadrant') {
-    const result = computeVolumePriceScore({
-      code: stock.code,
-      change: stock.change,
-      volumeRatio: stock.volumeRatio,
-      zlje: stock.zlje,
-      zljzb: stock.zljzb,
-    })
+    // 后端生产 observation.volumePrice，前端只消费（与三轨数据链路一致）；
+    // 投影缺失时回退 rankTrend.observation.volumePrice（同 getVolumePrice）
+    const vp = getVolumePrice(stock)
+    const score = vp.score
+    const direction = vp.direction
+    const quadrant = vp.quadrant
+    const reasons: string[] = vp.reasons
+    const breakdown = vp.breakdown
     const volume = classifyVolumeRatio(stock.volumeRatio)
     const change = Number(stock.change)
     const changeText = Number.isFinite(change) ? (change > 0 ? '+' : '') + change.toFixed(2) + '%' : '--'
     let title = header
     title += '\n【量价配合】\n'
     title += `综合评估: ${
-      result.score == null ? '--' : `${result.direction === 'up' ? '↑' : result.direction === 'down' ? '↓' : ''}${result.score}`
-    }（${getVolumePriceQuadrantLabel(result.quadrant)}）\n`
+      score == null ? '--' : `${direction === 'up' ? '↑' : direction === 'down' ? '↓' : ''}${score}`
+    }（${getVolumePriceQuadrantLabel(quadrant)}）\n`
     title += `涨跌: ${changeText}\n`
     title += `量能: ${volume === 'unknown' ? '无量比基准' : volumeStateLabel(volume)}\n`
-    title += `资金: ${classifyFundSignal(stock.zlje, stock.zljzb) === 'support' ? '主力净流入' : classifyFundSignal(stock.zlje, stock.zljzb) === 'divergent' ? '主力净流出' : '无资金数据'}\n`
-    if (result.score != null) {
-      const b = result.breakdown
-      const chg = Number(stock.change)
-      const vr = Number(stock.volumeRatio)
-      const zljzb = Number(stock.zljzb)
-      const zlje = Number(stock.zlje)
-      const atLimitUp = resolveLiveLimitState({ code: stock.code, change: chg }).atLimitUp
-      const sign = (v: number) => (v >= 0 ? '+' : '') + v.toFixed(1)
-      // 三项具体分值 + 该股数据（不含公式）
-      const dirNote =
-        result.direction === 'up'
-          ? `涨幅 ${Number.isFinite(chg) ? '+' + chg.toFixed(2) : '--'}%`
-          : result.direction === 'down'
-            ? `跌幅 ${Number.isFinite(chg) ? Math.abs(chg).toFixed(2) : '--'}%`
-            : '平盘'
-      const vpNote =
-        Number.isFinite(vr) && vr <= 0.95 && atLimitUp
-          ? `缩量涨停，量比 ${vr.toFixed(2)}`
-          : Number.isFinite(vr) && vr <= 0.95 && Number.isFinite(chg) && chg > 0
-            ? `缩量上涨，量比 ${vr.toFixed(2)}`
-            : Number.isFinite(vr) && vr > 2.5 && Number.isFinite(chg) && chg > 0
-              ? `过度放量（出货风险），量比 ${vr.toFixed(2)}`
-              : Number.isFinite(vr) && vr > 2 && Number.isFinite(chg) && chg > 0
-                ? `放量偏大，量比 ${vr.toFixed(2)}`
-                : Number.isFinite(vr) && vr > 1.05 && Number.isFinite(chg) && chg > 0
-                  ? `放量上涨，量比 ${vr.toFixed(2)}`
-                  : Number.isFinite(vr) && vr > 1.05 && Number.isFinite(chg) && chg < 0
-                    ? `放量下跌，量比 ${vr.toFixed(2)}`
-                    : Number.isFinite(vr) && vr < 0.95 && Number.isFinite(chg) && chg < 0
-                      ? `缩量下跌，量比 ${vr.toFixed(2)}`
-                      : `量能常态，量比 ${Number.isFinite(vr) ? vr.toFixed(2) : '--'}`
-      const fundNote =
-        Number.isFinite(zljzb) && zljzb > 20
-          ? '主力净占比异常高（疑似对倒出货）'
-          : Number.isFinite(zljzb) && zljzb > 0
-            ? `主力净流入 ${zljzb.toFixed(2)}%`
-            : Number.isFinite(zljzb) && zljzb < 0
-              ? `主力净流出 ${Math.abs(zljzb).toFixed(2)}%`
-              : Number.isFinite(zlje) && zlje > 0
-                ? '主力净额为正'
-                : Number.isFinite(zlje) && zlje < 0
-                  ? '主力净额为负'
-                  : '无资金数据'
-      title += `评分(总${result.score}): 基准50\n`
-      title += `  方向 ${sign(b.direction)}（${dirNote}）\n`
-      title += `  量价 ${sign(b.volume)}（${vpNote}）\n`
-      title += `  资金 ${sign(b.fund)}（${fundNote}）\n`
+    title += `资金: ${classifyFundSignal(stock.zlje, stock.zljzb) === 'support' ? '主力净流入' : classifyFundSignal(stock.zlje, stock.zljzb) === 'divergent' ? '主力净流出' : classifyFundSignal(stock.zlje, stock.zljzb) === 'suspect' ? '主力净占比异常（疑似对倒）' : '无资金数据'}\n`
+    if (score != null && breakdown) {
+      const b = breakdown
+      const sign = (v: number) => (v >= 0 ? '+' : '') + Number(v).toFixed(1)
+      title += `评分(总${score}): 基准50\n`
+      title += `  方向 ${sign(b.direction)}\n`
+      title += `  量价 ${sign(b.volume)}\n`
+      title += `  资金 ${sign(b.fund)}\n`
     }
-    if (result.reasons.length) {
-      title += `依据: ${result.reasons.join('、')}\n`
+    if (reasons.length) {
+      title += `依据: ${reasons.join('、')}\n`
     }
     return title
   }
@@ -1260,8 +1222,11 @@ const getResonanceDirection = (stock: any) => {
 }
 
 function getResonanceCellValue(stock: any): number | null {
-  if (stock._resonancePct !== undefined) return toFiniteObservationValue(stock._resonancePct)
-  return toFiniteObservationValue(getResonanceRawScore(stock))
+  const value =
+    stock._resonancePct !== undefined
+      ? toFiniteObservationValue(stock._resonancePct)
+      : toFiniteObservationValue(getResonanceRawScore(stock))
+  return value === null ? null : Math.round(value)
 }
 
 function getResonanceCellClass(stock: any): string {
@@ -1465,21 +1430,34 @@ const getVolumeRatioClass = (stock: any) => {
 // ========== 量价配合（四象限列） ==========
 // 列内文本参照三指标列「方向 + 数值」：↑/↓ 为涨跌方向，数值为量价综合评估值（0-100）；
 // 完整四象限语义（放量上涨等）由颜色（quadrant-*）与 tooltip 承载。
+// 读取口径与三轨一致：投影（_volumePrice*）优先，投影缺失时回退直接读
+// rankTrend.observation.volumePrice（后端 Redis 缓存/前端缓存预热提供的 rankTrend 数据），
+// 避免分析未完成时整列回退为 '--'。
+const getVolumePrice = (stock: any) => {
+  const vp = getRankTrendAnalysis(stock)?.observation?.volumePrice ?? {}
+  return {
+    score: stock?._volumePriceScore ?? vp.score ?? null,
+    direction: stock?._volumePriceDirection ?? vp.direction ?? null,
+    quadrant: stock?._volumePriceQuadrant ?? vp.quadrant ?? null,
+    reasons: Array.isArray(stock?._volumePriceReasons)
+      ? stock._volumePriceReasons
+      : Array.isArray(vp.reasons)
+        ? vp.reasons
+        : [],
+    breakdown: stock?._volumePriceBreakdown ?? vp.breakdown ?? null,
+  }
+}
+
 const getQuadrantText = (stock: any) => {
-  const result = computeVolumePriceScore({
-    code: stock.code,
-    change: stock.change,
-    volumeRatio: stock.volumeRatio,
-    zlje: stock.zlje,
-    zljzb: stock.zljzb,
-  })
-  if (result.score == null) return '--'
-  const arrow = result.direction === 'up' ? '↑' : result.direction === 'down' ? '↓' : ''
-  return `${arrow}${result.score}%`
+  const score = getVolumePrice(stock).score
+  if (score == null) return '--'
+  const direction = getVolumePrice(stock).direction
+  const arrow = direction === 'up' ? '↑' : direction === 'down' ? '↓' : ''
+  return `${arrow}${Math.round(Number(score))}%`
 }
 
 const getQuadrantClass = (stock: any) => {
-  const quadrant = classifyVolumePriceQuadrant(stock.change, stock.volumeRatio)
+  const quadrant = getVolumePrice(stock).quadrant
   return quadrant ? `quadrant-${quadrant}` : ''
 }
 

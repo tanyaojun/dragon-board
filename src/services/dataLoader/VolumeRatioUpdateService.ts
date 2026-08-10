@@ -1,4 +1,5 @@
 import { apiService } from '../apiService'
+import { volumeRatioCache } from './volumeRatioCache'
 import { dataLayer as defaultDataLayer } from '../DataLayer'
 import type { StockExtData, VolumeRatioMeta } from '@/types/data-layer'
 
@@ -61,51 +62,71 @@ export class VolumeRatioUpdateService {
     if (!targetCodes.length) return summary
 
     const stockByCode = new Map(this.dataLayer.getStocks().map((stock) => [stock.code, stock]))
-    const stocks = targetCodes
-      .map((code) => {
-        const volume = Number(stockByCode.get(code)?.volume)
-        return { code, volume }
-      })
-      .filter((item) => Number.isFinite(item.volume) && item.volume > 0)
-    if (!stocks.length) return summary
 
-    try {
-      const response = await apiService.getVolumeRatios({ stocks })
-      const items = response?.items && typeof response.items === 'object' ? response.items : {}
-      const updates: Array<Partial<StockExtData> & { code: string }> = []
-
-      for (const code of targetCodes) {
-        const stock = stockByCode.get(code)
-        const item = items[code]
-        if (!item) {
-          summary.unavailable++
-          continue
-        }
-        const meta = this.toMeta(item)
-        const preserved = this.preserveExistingRatio(stock, meta, item)
-        if (preserved) {
-          updates.push(preserved)
-          continue
-        }
-        if (meta.status === 'unavailable') summary.unavailable++
-        else if (meta.status === 'suspicious') summary.suspicious++
-        updates.push({
-          code,
-          volumeRatio: typeof item.value === 'number' ? item.value : undefined,
-          volumeRatioMeta: meta,
-        })
-      }
-
-      if (updates.length) {
-        this.dataLayer.updateStockExtData(updates)
-        summary.updated = updates.length
-      }
-      return summary
-    } catch (error) {
-      // 后端量比不可用：保留现有量比，结构化失败原因由日志暴露（fail-visible，不伪装 0）
-      console.warn('[VolumeRatio] 后端量比服务不可用，保留现有量比:', error)
-      return summary
+    // 前端量比 LRU TTL 缓存（60s）：命中直接复用（不调后端），未命中才请求后端并写缓存。
+    const cachedByCode = new Map<string, BackendVolumeRatioItem>()
+    const missCodes: string[] = []
+    for (const code of targetCodes) {
+      const cached = volumeRatioCache.get(code)
+      if (cached) cachedByCode.set(code, cached)
+      else missCodes.push(code)
     }
+
+    // 未命中部分调后端量比接口（仅带有效实时量的 code），结果写回缓存
+    const fetched = new Map<string, BackendVolumeRatioItem>()
+    if (missCodes.length) {
+      const stocks = missCodes
+        .map((code) => {
+          const volume = Number(stockByCode.get(code)?.volume)
+          return { code, volume }
+        })
+        .filter((item) => Number.isFinite(item.volume) && item.volume > 0)
+      if (stocks.length) {
+        try {
+          const response = await apiService.getVolumeRatios({ stocks })
+          const items = response?.items && typeof response.items === 'object' ? response.items : {}
+          for (const code of missCodes) {
+            const item = items[code]
+            if (!item) continue
+            fetched.set(code, item)
+            volumeRatioCache.set(code, item)
+          }
+        } catch (error) {
+          // 后端量比不可用：保留现有量比，结构化失败原因由日志暴露（fail-visible，不伪装 0）
+          console.warn('[VolumeRatio] 后端量比服务不可用，保留现有量比:', error)
+        }
+      }
+    }
+
+    // 合并缓存命中 + 本次后端结果，统一写 DataLayer
+    const updates: Array<Partial<StockExtData> & { code: string }> = []
+    for (const code of targetCodes) {
+      const stock = stockByCode.get(code)
+      const item = cachedByCode.get(code) ?? fetched.get(code)
+      if (!item) {
+        summary.unavailable++
+        continue
+      }
+      const meta = this.toMeta(item)
+      const preserved = this.preserveExistingRatio(stock, meta, item)
+      if (preserved) {
+        updates.push(preserved)
+        continue
+      }
+      if (meta.status === 'unavailable') summary.unavailable++
+      else if (meta.status === 'suspicious') summary.suspicious++
+      updates.push({
+        code,
+        volumeRatio: typeof item.value === 'number' ? item.value : undefined,
+        volumeRatioMeta: meta,
+      })
+    }
+
+    if (updates.length) {
+      this.dataLayer.updateStockExtData(updates)
+      summary.updated = updates.length
+    }
+    return summary
   }
 
   private toMeta(item: BackendVolumeRatioItem): VolumeRatioMeta {

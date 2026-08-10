@@ -16,6 +16,7 @@ import {
 } from './rankTrend/strategyValidation'
 import { getMaxStableBars } from './rankTrend/utils'
 import { analyzeRankTrendCoalesced } from './rankTrend/analyzeCoalescer'
+import { rankTrendResultCache, rankTrendResultCacheKey } from './rankTrend/rankTrendCache'
 import type {
   RankTrendAnalysisResult,
   RankTrendRuntimeConfig as RankTrendRuntimeConfigModel,
@@ -72,6 +73,9 @@ type RankTrendAnalysisOptions = {
   skipLocalCompute?: boolean
   /** 远程 analyze 只请求这些代码（面板只需选中股票时，响应从 20+MB 降到 KB 级） */
   remoteCodes?: string[]
+  /** 主动刷新场景（量比刷新后信号重算）绕过前端 LRU 缓存，强制打后端 analyze；
+   * 后端 Redis 缓存键含 current_frame（量价输入指纹）保证量价分随输入变化刷新 */
+  forceRemote?: boolean
 }
 type RankTrendAnalysisSeries = {
   ranks: number[]
@@ -428,6 +432,30 @@ export class RankTrendAnalyzer {
     const results = new Map<string, RankTrendResult>()
     const currentFrameKey = `current:${++this.currentFrameSequence}`
     const remoteCodes = options.remoteCodes?.length ? options.remoteCodes : Array.from(rankMap.keys())
+    const snapshotType = options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE
+
+    // 前端 LRU TTL 缓存（rankTrendResultCache，300s 与后端 Redis 对齐）：
+    // 命中直接返回，未命中才请求 Python analyze，再写回缓存。
+    // 四个观察字段（共振/趋势/量价/周期）均来自 rankTrend 结果，统一随此缓存预热，
+    // 避免数据刷新循环重复打后端、分析未完成时整列回退 '--'。
+    // forceRemote（主动刷新）：跳过读缓存，强制打后端——量比刷新后量价输入已变，
+    // 后端缓存键含 current_frame 指纹，输入变化会重新计算量价分，结果仍写回前端缓存。
+    const cachedResults = new Map<string, RankTrendResult>()
+    const missCodes: string[] = []
+    const forceRemote = options.forceRemote === true
+    for (const code of remoteCodes) {
+      if (forceRemote) {
+        missCodes.push(code)
+        continue
+      }
+      const cached = rankTrendResultCache.get(rankTrendResultCacheKey(code, snapshotType))
+      if (cached) cachedResults.set(code, cached)
+      else missCodes.push(code)
+    }
+    if (!forceRemote && missCodes.length === 0) {
+      return cachedResults
+    }
+
     const stocks = typeof dataLayer.getStocks === 'function' ? dataLayer.getStocks() : []
     const currentFrameStocks = stocks
       .filter((stock: any) => rankMap.has(String(stock?.code)))
@@ -453,8 +481,8 @@ export class RankTrendAnalyzer {
 
     try {
       const remote = await analyzeRankTrendCoalesced({
-        snapshotType: options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE,
-        codes: remoteCodes,
+        snapshotType,
+        codes: missCodes,
         currentFrame: {
           tradingDate: new Date().toISOString().slice(0, 10),
           slotTime: currentFrameKey,
@@ -474,16 +502,25 @@ export class RankTrendAnalyzer {
             analysisSource: 'py_golden' as const,
           }
           results.set(code, result)
+          rankTrendResultCache.set(rankTrendResultCacheKey(code, snapshotType), result)
+        }
+        // 合并缓存命中部分 + 本次新分析结果（覆盖全部 remoteCodes）
+        for (const [code, result] of cachedResults) {
+          results.set(code, result)
         }
         this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())
         return results
       }
     } catch (error) {
-      // 远程失败：不返回伪造结果，面板/观察层回退到 DataLayer 现有分析（fail-visible）
+      // 远程失败：不返回伪造结果，缓存命中部分仍可用（fail-visible），缺失部分由面板/观察层回退
       debugLog('[RankTrendAnalyzer] Python analyze 不可用:', error)
-      return results
+      return cachedResults
     }
 
+    // analyze 无 ok/无 frames：仅返回缓存命中部分，不伪造缺失结果（fail-visible）
+    for (const [code, result] of cachedResults) {
+      results.set(code, result)
+    }
     this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())
 
     if (options.updateSignalStore !== false) {

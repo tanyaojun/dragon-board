@@ -52,9 +52,10 @@ import type {
 export type { MergedQuoteData } from './types'
 
 const REALTIME_VOLUME_RATIO_REFRESH_DELAY_MS = 1000
-// 量比重算最小间隔：全市场量比依赖历史快照读取，属于重 IO 操作，
-// 不能跟随 WS flush 或 10s 行情周期反复执行（会把后端快照读接口灌满）。
-const VOLUME_RATIO_MIN_INTERVAL_MS = 30_000
+// 量比重算最小间隔 = 前端量比 TTL（60s，与后端量比缓存 TTL 一致）：
+// 全市场量比依赖历史快照读取，属于重 IO 操作，不能跟随 WS flush 或 10s 行情周期反复执行；
+// 60s 内复用现有量比，且保证 rankTrend 分析（量价计算依赖量比）前量比已刷新。
+const VOLUME_RATIO_MIN_INTERVAL_MS = 60_000
 
 type SignalCalculationResult = {
   merged: any[]
@@ -1055,6 +1056,19 @@ class DataLoaderService {
   }
 
   async refreshRankTrendSignals(): Promise<void> {
+    // 量价计算依赖量比：先刷新量比（60s TTL 门限内复用现有量比），确保量比先于量价，
+    // 避免 analyze 用旧量比算量价导致展示链路量比/量价不一致。
+    const codes = dataLayer
+      .getStocks()
+      .map((stock) => String(stock?.code))
+      .filter(Boolean)
+    if (codes.length) {
+      try {
+        await this.updateVolumeRatios(codes)
+      } catch (error) {
+        console.warn('[DataLoader] 信号刷新前置量比刷新失败，保留现有量比:', error)
+      }
+    }
     const result = await refreshResourceLocks.runExclusive(
       'ranktrend-signal',
       () => rankTrendSignalService.refreshRankTrendSignals(),

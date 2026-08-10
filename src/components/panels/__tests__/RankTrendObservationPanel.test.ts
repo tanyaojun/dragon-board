@@ -83,13 +83,14 @@ describe('RankTrendObservationPanel', () => {
   it('theme momentum track was removed from observation panel (panel only)', () => {
     const panel = source()
 
-    // 观察面板仅保留三轨（共振/技术/生命周期），题材动量不再作为第4轨页签
+    // 观察面板四轨（共振/技术/生命周期/量能协同），题材动量不再作为页签
     expect(panel).toContain("{ id: 'resonance', index: '01', label: '共振路径' }")
     expect(panel).toContain("{ id: 'technical', index: '02', label: '技术结构' }")
     expect(panel).toContain("{ id: 'lifecycle', index: '03', label: '阶段与风险' }")
+    expect(panel).toContain("{ id: 'volumePrice', index: '04', label: '量能协同' }")
     expect(panel).not.toContain("{ id: 'theme', index: '04', label: '题材动量' }")
     expect(panel).not.toContain("activeTrack === 'theme'")
-    expect(panel).not.toContain('TRACK 04')
+    expect(panel).toContain("activeTrack === 'volumePrice'")
     expect(panel).not.toContain('selectedAnalysis?.themeMomentum?.score')
     expect(panel).not.toContain('momentumDirectionClass')
     expect(panel).not.toContain('momentumDirectionText')

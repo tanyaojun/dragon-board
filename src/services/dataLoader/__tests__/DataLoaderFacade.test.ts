@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../../DataLayer'
+import { clearVolumeRatioCache } from '../volumeRatioCache'
 
 const platformRows: Record<string, any[]> = {
   eastmoney: [{ code: '000001', name: '平安银行', rank: 1, source: 'eastmoney' }],
@@ -257,6 +258,7 @@ describe('DataLoaderFacade', () => {
     hasFreshPlatformCache = true
     EventManager.clearHistory()
     vi.clearAllMocks()
+    clearVolumeRatioCache()
   })
 
   afterEach(async () => {

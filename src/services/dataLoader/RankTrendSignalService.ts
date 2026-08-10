@@ -8,6 +8,7 @@ import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
 import { buildFusionStrategyProjections } from '../rankTrend/FusionStrategyProjector'
+import { autoFavoriteSyncService } from '../favorite/AutoFavoriteSyncService'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
@@ -98,6 +99,7 @@ export class RankTrendSignalService {
     const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
       updateSignalStore: false,
       preferRemoteAnalysis: true,
+      forceRemote: true, // 主动刷新：绕过前端缓存，量比刷新后量价输入已变需重新分析
     })
     const coverageWarning = this.extractRankTrendCoverageWarning(results)
 
@@ -115,6 +117,7 @@ export class RankTrendSignalService {
     this.applyJumpSignals(mergedStocks)
     this.precomputeDisplayFields(mergedStocks)
     this.scheduleCandidatePoolSync(mergedStocks)
+    this.syncAutoFavorites(mergedStocks)
 
     return mergedStocks
   }
@@ -183,6 +186,7 @@ export class RankTrendSignalService {
     this.applyJumpSignals(merged)
     this.precomputeDisplayFields(merged)
     this.scheduleCandidatePoolSync(merged)
+    this.syncAutoFavorites(merged)
     debugLog('[RankTrendSignalService] 核心信号阶段完成', {
       stockCount: merged.length,
       elapsedMs: Math.round(performance.now() - startedAt),
@@ -214,12 +218,31 @@ export class RankTrendSignalService {
 
       stock._resonancePct = hasResonance ? resonanceScore : undefined
       stock._resonanceLabel = rankTrend?.resonance?.label ?? '样本不足'
-      stock._resonanceRawScore = hasResonance ? resonanceScore : undefined
+      // rawScore = 后端保留的原始排名动量分（量价修正前）；score = 修正后（列表默认展示）
+      const rawResonance = Number(rankTrend?.resonance?.rawScore)
+      stock._resonanceRawScore = hasResonance
+        ? Number.isFinite(rawResonance)
+          ? rawResonance
+          : resonanceScore
+        : undefined
       stock._rankTrendPct = Number.isFinite(rankTrendScore) ? rankTrendScore : undefined
       stock._rankTrendDirection = rankTrend?.observation?.rankTrend.direction ?? null
       stock._lifecyclePct = Number.isFinite(lifecycleScore) ? lifecycleScore : undefined
       stock._lifecycleStage = rankTrend?.observation?.lifecycle?.stage ?? null
       stock._lifecycleVeto = rankTrend?.observation?.lifecycle?.veto ?? false
+
+      // 量价协同轴（阶段 2）：后端生产 observation.volumePrice / synergy，前端只消费
+      const vp = rankTrend?.observation?.volumePrice
+      const vpScore = vp?.score == null ? Number.NaN : Number(vp.score)
+      stock._volumePriceScore = Number.isFinite(vpScore) ? vpScore : undefined
+      stock._volumePriceDirection = vp?.direction ?? null
+      stock._volumePriceQuadrant = vp?.quadrant ?? null
+      stock._volumePriceReasons = Array.isArray(vp?.reasons) ? vp.reasons : []
+      stock._volumePriceBreakdown = vp?.breakdown ?? null
+      const synergy = rankTrend?.observation?.synergy
+      stock._synergyState = synergy?.state ?? null
+      stock._synergyHardWarn = synergy?.hardWarn === true
+      stock._synergyReasons = Array.isArray(synergy?.reasons) ? synergy.reasons : []
     }
   }
 
@@ -243,6 +266,22 @@ export class RankTrendSignalService {
         const pending = this.pendingCandidatePoolBatch
         if (pending) this.scheduleCandidatePoolSync(pending.stocks)
       })
+  }
+
+  /**
+   * 自选股自动同步：金叉+共振向上加入，死叉/退出热榜删除（仅 auto 来源）。
+   * 同步失败只告警，绝不影响核心 RankTrend 信号与候选池链路。
+   */
+  private syncAutoFavorites(stocks: any[]): void {
+    if (!stocks.length) return
+    try {
+      autoFavoriteSyncService.sync(stocks)
+    } catch (error) {
+      console.warn(
+        '[RankTrendSignalService] 自选股自动同步失败，保留核心信号结果:',
+        error instanceof Error ? error.message : String(error),
+      )
+    }
   }
 
   private async flushCandidatePoolSync(): Promise<void> {

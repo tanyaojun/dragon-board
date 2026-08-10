@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="visible" class="observation-layer">
-      <aside class="observation-drawer" role="dialog" aria-modal="false" aria-label="排名趋势三轨观察舱">
+      <aside class="observation-drawer" role="dialog" aria-modal="false" aria-label="四象观察舱">
         <header class="cockpit-header">
           <div>
             <div class="eyebrow">
@@ -39,13 +39,19 @@
                 latestAnalysis?.observation?.lifecycle?.score, true) }}
             </strong>
           </div>
+          <div>
+            <span>量价</span>
+            <strong :class="directionClass(volumePriceDirection(latestAnalysis))">
+              {{ volumePriceScoreText(latestAnalysis) }}
+            </strong>
+          </div>
         </div>
 
         <nav class="track-switcher" aria-label="观察轨道">
           <button v-for="track in tracks" :key="track.id" type="button" :class="{ active: activeTrack === track.id }"
-            @click="activeTrack = track.id">
-            <span class="track-index">{{ track.index }}</span>
-            <span>{{ track.label }}</span>
+            :title="`${track.index} ${track.label}`" @click="activeTrack = track.id">
+            <span class="track-label">{{ track.label }}</span>
+            <span v-if="trackValue(track.id)" class="track-value">{{ trackValue(track.id) }}</span>
           </button>
         </nav>
 
@@ -218,6 +224,42 @@
               </div>
             </section>
 
+            <section v-if="activeTrack === 'volumePrice'" class="track-section">
+              <div class="section-heading">
+                <div>
+                  <span class="section-kicker">TRACK 04</span>
+                  <h2>量能协同</h2>
+                </div>
+                <div class="section-score" :class="directionClass(volumePriceDirection(selectedAnalysis))">
+                  {{ volumePriceScoreText(selectedAnalysis) }}
+                </div>
+              </div>
+
+              <div class="synergy-state" :class="synergyStateClass(selectedAnalysis)">
+                <strong>{{ synergyStateText(selectedAnalysis) }}</strong>
+                <span v-if="synergyHardWarn(selectedAnalysis)">⚠ 风险升级</span>
+              </div>
+
+              <div class="factor-stack">
+                <div class="factor-row">
+                  <span>量价象限</span>
+                  <strong>{{ volumePriceQuadrantText(selectedAnalysis) }}</strong>
+                </div>
+                <div class="factor-row">
+                  <span>共振原始分</span>
+                  <strong>{{ resonanceRawText(selectedAnalysis) }}</strong>
+                </div>
+                <div class="factor-row">
+                  <span>共振修正后</span>
+                  <strong>{{ resonanceAdjustedText(selectedAnalysis) }}</strong>
+                </div>
+              </div>
+
+              <ul v-if="synergyReasons(selectedAnalysis).length" class="synergy-reasons">
+                <li v-for="(reason, index) in synergyReasons(selectedAnalysis)" :key="index">{{ reason }}</li>
+              </ul>
+            </section>
+
             <footer class="frame-timeline">
               <div class="timeline-heading">
                 <strong>最近 {{ trackFrames.length }} 帧</strong>
@@ -252,6 +294,7 @@ import {
   type RankTrendObservationViewModel,
 } from '@/services/rankTrend/RankTrendObservationService'
 import type { AttentionStage, RankSignalDirection } from '@/services/rankTrend/types'
+import { getVolumePriceQuadrantLabel } from '@/services/rankTrend/volumePriceValidation'
 
 const props = defineProps<{
   visible: boolean
@@ -265,6 +308,7 @@ const tracks: Array<{ id: ObservationTrack; index: string; label: string }> = [
   { id: 'resonance', index: '01', label: '共振路径' },
   { id: 'technical', index: '02', label: '技术结构' },
   { id: 'lifecycle', index: '03', label: '阶段与风险' },
+  { id: 'volumePrice', index: '04', label: '量能协同' },
 ]
 
 const activeTrack = ref<ObservationTrack>('resonance')
@@ -391,6 +435,87 @@ function lifecycleScore(
 ) {
   const score = scoreText(value, withPercent)
   return score === '--' ? score : `${stageLabel(stage)} ${score}`
+}
+
+// ========== 量能协同（TRACK 04） ==========
+function volumePrice(analysis: any) {
+  return analysis?.observation?.volumePrice || null
+}
+
+function volumePriceScoreText(analysis: any) {
+  const vp = volumePrice(analysis)
+  const score = vp?.score
+  if (score == null) return '--'
+  const arrow = vp?.direction === 'up' ? '↑' : vp?.direction === 'down' ? '↓' : ''
+  return `${arrow}${Math.round(Number(score))}%`
+}
+
+function volumePriceDirection(analysis: any): RankSignalDirection | null {
+  const vp = volumePrice(analysis)
+  if (vp?.direction === 'up') return 'buy'
+  if (vp?.direction === 'down') return 'sell'
+  return 'hold'
+}
+
+function volumePriceQuadrantText(analysis: any) {
+  return getVolumePriceQuadrantLabel(volumePrice(analysis)?.quadrant ?? null)
+}
+
+function synergyState(analysis: any) {
+  return analysis?.observation?.synergy || null
+}
+
+function synergyStateText(analysis: any) {
+  const synergy = synergyState(analysis)
+  return synergy?.state ? (synergy.state === 'noData' ? '未判定（量价数据不足）' : synergy.state) : '未判定'
+}
+
+function synergyStateClass(analysis: any): string {
+  const state = synergyState(analysis)?.state
+  if (state === '启动确认' || state === '主升确认') return 'synergy-positive'
+  if (state === '风险升级') return 'synergy-negative'
+  if (state === '退潮') return 'synergy-neutral'
+  if (state === '存疑') return 'synergy-suspect'
+  return ''
+}
+
+function synergyHardWarn(analysis: any): boolean {
+  return synergyState(analysis)?.hardWarn === true
+}
+
+function synergyReasons(analysis: any): string[] {
+  const reasons = synergyState(analysis)?.reasons
+  return Array.isArray(reasons) ? reasons : []
+}
+
+function resonanceRawText(analysis: any) {
+  const raw = analysis?.resonance?.rawScore
+  const score = analysis?.resonance?.score
+  const value = raw != null ? raw : score
+  return scoreText(value == null ? null : Math.round(Number(value)), true)
+}
+
+function resonanceAdjustedText(analysis: any) {
+  const score = analysis?.resonance?.score
+  return scoreText(score == null ? null : Math.round(Number(score)), true)
+}
+
+// 子页签标题 = 「页签名 + 字段值」（当前观察值，一行展示）
+function trackValue(trackId: ObservationTrack): string {
+  const a = latestAnalysis.value
+  if (trackId === 'resonance') {
+    return directionalScore(a?.resonance?.direction, resonanceScore(a?.resonance), true)
+  }
+  if (trackId === 'technical') {
+    return directionalScore(a?.observation?.rankTrend?.direction, a?.observation?.rankTrend?.score, true)
+  }
+  if (trackId === 'lifecycle') {
+    return lifecycleScore(a?.observation?.lifecycle?.stage, a?.observation?.lifecycle?.score, true)
+  }
+  if (trackId === 'volumePrice') {
+    return volumePriceScoreText(a)
+  }
+  return ''
 }
 
 function issueKey(issue: RankTrendObservationIssue) {
@@ -778,7 +903,7 @@ const riskSignals = computed(() => {
 
 .track-switcher {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   height: 48px;
   border-bottom: 1px solid var(--cockpit-line);
 }
@@ -794,6 +919,7 @@ const riskSignals = computed(() => {
   color: #98a2a6;
   background: #111719;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .track-switcher button::after {
@@ -815,9 +941,16 @@ const riskSignals = computed(() => {
   background: var(--gold);
 }
 
-.track-index {
-  color: #667174;
-  font: 10px Consolas, monospace;
+.track-label {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.track-value {
+  font-size: 11px;
+  color: #98a2a6;
+  font-family: Consolas, monospace;
+  white-space: nowrap;
 }
 
 .cockpit-body {
@@ -1241,6 +1374,56 @@ const riskSignals = computed(() => {
   margin: 8px 0 0;
   color: #7f8a8e;
   font-size: 10px;
+}
+
+/* ========== 量能协同（TRACK 04） ========== */
+.synergy-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.synergy-state strong {
+  font-size: 15px;
+}
+
+.synergy-state span {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 71, 87, 0.2);
+  color: #ff4757;
+}
+
+.synergy-positive {
+  color: #ff4757;
+}
+
+.synergy-negative {
+  color: #ff4757;
+}
+
+.synergy-neutral {
+  color: #f39c12;
+}
+
+.synergy-suspect {
+  color: #95a5a6;
+}
+
+.synergy-reasons {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.7;
 }
 
 .veto-alert {

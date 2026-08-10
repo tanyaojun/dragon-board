@@ -115,6 +115,8 @@ describe('RankTrendAnalyzer', () => {
     rankTrendAnalyzer.stop()
     const { resetAnalyzeCoalescer } = await import('../rankTrend/analyzeCoalescer')
     resetAnalyzeCoalescer()
+    const { clearRankTrendResultCache } = await import('../rankTrend/rankTrendCache')
+    clearRankTrendResultCache()
   })
 
   it('默认路径消费 Python golden 结果并标记分析来源', async () => {
@@ -137,6 +139,92 @@ describe('RankTrendAnalyzer', () => {
     expect(result?.meta.analysisSource).toBe('py_golden')
     expect(result?.strategy?.candidateTier).toBe('A_MAIN')
     expect(apiService.getRankTrendRankSeries).not.toHaveBeenCalled()
+  })
+
+  it('LRU TTL 缓存命中时不再请求 Python analyze（四观察字段随 rankTrend 结果缓存）', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    const analyzeMock = vi.mocked(apiService.analyzeRankTrend)
+    analyzeMock.mockResolvedValue({
+      ok: true,
+      frames: [buildAnalyzeFrame('2026-04-27 current:1', [['600001', baseAnalysis('600001', 33, 68)]])],
+      source: 'py_golden',
+      issues: [],
+    })
+
+    // 首次：miss → 请求后端并写缓存
+    const first = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'half_hour',
+    })
+    expect(first.get('600001')?.meta.analysisSource).toBe('py_golden')
+    expect(analyzeMock).toHaveBeenCalledTimes(1)
+
+    // 二次：命中缓存 → 不请求后端
+    analyzeMock.mockClear()
+    const second = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'half_hour',
+    })
+    expect(second.get('600001')?.meta.analysisSource).toBe('py_golden')
+    expect(analyzeMock).not.toHaveBeenCalled()
+  })
+
+  it('forceRemote 主动刷新时绕过前端缓存，强制打后端（量比刷新后量价输入已变）', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    const analyzeMock = vi.mocked(apiService.analyzeRankTrend)
+    analyzeMock.mockResolvedValue({
+      ok: true,
+      frames: [buildAnalyzeFrame('2026-04-27 current:1', [['600001', baseAnalysis('600001', 33, 68)]])],
+      source: 'py_golden',
+      issues: [],
+    })
+
+    // 首次：miss → 请求后端并写缓存
+    await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'half_hour',
+    })
+    expect(analyzeMock).toHaveBeenCalledTimes(1)
+
+    // forceRemote：即使缓存有值，仍强制打后端；结果写回缓存
+    analyzeMock.mockClear()
+    const result = await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'half_hour',
+      forceRemote: true,
+    })
+    expect(analyzeMock).toHaveBeenCalledTimes(1)
+    expect(result.get('600001')?.meta.analysisSource).toBe('py_golden')
+  })
+
+  it('analyze 失败时返回缓存命中部分（fail-visible，不伪造缺失）', async () => {
+    const { rankTrendAnalyzer } = await import('../RankTrendAnalyzer')
+    const { apiService } = await import('../apiService')
+    const analyzeMock = vi.mocked(apiService.analyzeRankTrend)
+    analyzeMock.mockResolvedValue({
+      ok: true,
+      frames: [buildAnalyzeFrame('2026-04-27 current:1', [['600001', baseAnalysis('600001', 33, 68)]])],
+      source: 'py_golden',
+      issues: [],
+    })
+    await rankTrendAnalyzer.getRankTrends(new Map([['600001', 33]]), {
+      updateSignalStore: false,
+      preferredSnapshotType: 'half_hour',
+    })
+
+    // 缓存已有 600001；请求 600001 + 新 code 600002，后端失败 → 返回缓存命中部分，缺失 code 无伪造
+    analyzeMock.mockRejectedValue(new Error('backend down'))
+    const results = await rankTrendAnalyzer.getRankTrends(
+      new Map([
+        ['600001', 33],
+        ['600002', 44],
+      ]),
+      { updateSignalStore: false, preferredSnapshotType: 'half_hour' },
+    )
+    expect(results.get('600001')?.meta.analysisSource).toBe('py_golden')
+    expect(results.has('600002')).toBe(false)
   })
 
   it('全量路径把全部 codes 与当前帧发给 Python，不再读取 rank-series 原料', async () => {

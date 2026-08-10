@@ -116,7 +116,6 @@ describe('FusionCandidateNotifier', () => {
     expect(addCandidateFromStock).toHaveBeenCalledWith(
       expect.objectContaining({ code: '000001' }),
       {
-        addToFavorites: true,
         source: 'ranktrend_early_big_move_v3_lifecycle_fusion',
         statusOverride: 'triggered',
         signalsSnapshotPatch: {

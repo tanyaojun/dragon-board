@@ -207,8 +207,7 @@ export function evaluateV5FusionEntry(
     buildLiveGateCheck({
       key: 'execution_strategy',
       label: '执行分层',
-      status: executionTier ? 'pass' : 'fail',
-      hardBlock: !executionTier,
+      status: executionTier ? 'pass' : 'fail',      hardBlock: !executionTier,
       actual: candidateTier,
       expected: '存在 executionStrategy',
       message: executionTier ? '存在执行层候选分层' : '缺失 executionStrategy，阻断 V5 入场',
@@ -228,6 +227,29 @@ export function evaluateV5FusionEntry(
       message: samplePass ? '样本质量满足 live 入池要求' : '样本不足，阻断 V5 入场',
     }),
   )
+
+  // 四象协同观察项（阶段 2）：量价协同状态，不否决只降级/加分
+  const synergy = rankTrend.observation?.synergy
+  const synergyState = synergy?.state
+  if (synergyState) {
+    const synergyUp = synergyState === '启动确认' || synergyState === '主升确认'
+    const synergyWarn = synergyState === '风险升级'
+    checks.push(
+      buildLiveGateCheck({
+        key: 'synergy_state',
+        label: '四象协同',
+        status: synergyUp ? 'pass' : synergyWarn ? 'warn' : 'pass', // 退潮/存疑/未判定 → 中性
+        hardBlock: false,
+        actual: synergyState,
+        expected: '启动/主升确认优先；风险升级降级 watch',
+        message: synergyWarn
+          ? `风险升级：${(synergy.reasons || []).join('；')}`
+          : synergyUp
+            ? `协同确认：${(synergy.reasons || []).join('；')}`
+            : `协同：${synergyState}`,
+      }),
+    )
+  }
 
   checks.push(
     buildLiveGateCheck({
