@@ -15,6 +15,10 @@ from backend.analysis.ranktrend.engine import (
     percentile_rank,
     _resonance_label,
 )
+from backend.analysis.ranktrend.volume_price import (
+    compute_volume_price_score,
+    compute_synergy_state,
+)
 from backend.analysis.theme.momentum import (
     compute_theme_momentum_series,
     stock_theme_exposure,
@@ -27,11 +31,14 @@ router = APIRouter(tags=["ranktrend-analyze"])
 
 SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
 
-# 方案 6.3：analyze 缓存 TTL 与快照读口保持一致（QUANT_BOARD_SNAPSHOT_CACHE_TTL_SECONDS，
-# 默认 300s）。新快照 ingest 会递增 dataset generation 并按 dataset 索引删除旧 analyze 响应，
+# analyze 缓存 TTL：固定 300s，与前端 rankTrendResultCache（LRU TTL 300s）保持一致。
+# 新快照 ingest 会递增 dataset generation 并按 dataset 索引删除旧 analyze 响应，
 # 因此 TTL 只作为兜底，不需要再对齐某个固定刷新周期。
+RANK_TREND_ANALYZE_CACHE_TTL_SECONDS = 300
+
+
 def _analyze_cache_ttl_seconds() -> int:
-    return max(30, get_settings().snapshot_cache_ttl_seconds)
+    return RANK_TREND_ANALYZE_CACHE_TTL_SECONDS
 
 # 分析算法所需的最大回看窗口：共振至少 9 点序列（RESONANCE_MIN_SERIES_POINTS）、
 # 技术稳定窗口 30、生命周期 15、横截面 3；取 30 同时满足全部轨道。
@@ -381,9 +388,26 @@ def _analyze_frames(
             analysis["themeMomentum"] = _theme_momentum_projection(
                 exposure, momentum_v2_ctx
             )
+            # 四象协同轴（阶段 2）：后端生产 observation.volumePrice / synergy，前端只消费
+            observation = analysis.setdefault("observation", {})
+            vp = compute_volume_price_score(
+                code,
+                stock.get("change"),
+                stock.get("volumeRatio"),
+                stock.get("zlje"),
+                stock.get("zljzb"),
+            )
+            observation["volumePrice"] = vp
+            observation["synergy"] = compute_synergy_state(
+                (observation.get("lifecycle") or {}).get("stage"),
+                vp.get("score"),
+                (observation.get("rankTrend") or {}).get("direction"),
+                resonance.get("direction"),
+                stock.get("zljzb"),
+            )
+            _apply_resonance_final(analysis, analysis["resonance"])
             if analysis["resonance"].get("status") == "ok":
                 analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
-            _apply_resonance_final(analysis, analysis["resonance"])
             stocks_out.append({"code": code, "analysis": analysis})
         output.append({
             "frameKey": key,
@@ -446,11 +470,19 @@ def _compute_theme_momentum_series_cached(
     return series
 
 
+# 量价修正权重（0.15）：量价分每偏离 50 分 1 分，共振分调整 ±0.15 分（满分 ±7.5）。
+# 历史 0.6（±30）/ 0.3（±15）导致共振高分占比过高（约 20%），0.15 下高分（≥80）回落到 10-15%，
+# 以排名动量（rawScore）为主、量价仅温和修正。
+RESONANCE_VOLUME_PRICE_WEIGHT = 0.15
+
+
 def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) -> None:
     """resonance 下沉：最终信号 = resonance 方向/分数（对齐旧 TS applyResonanceFinals）。
 
     Python golden 直接输出融合后的 ``decision.final``，前端只读不再覆盖。
     口径：resonance insufficient → hold/0；否则 final = resonance 方向/分数。
+    量价修正（阶段 2）：resonance.rawScore 保留原始排名动量分；resonance.score 并入量价协同
+    （score + (vpScore−50)×RESONANCE_VOLUME_PRICE_WEIGHT，clamp 0-100）；量价分 ≤40 且 buy → final 降级 hold。
     """
     decision = analysis.get("decision")
     if not isinstance(decision, dict):
@@ -462,7 +494,17 @@ def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) 
     direction = str(resonance.get("direction") or "")
     score = resonance.get("score")
     if direction and score is not None:
-        decision["final"] = {"signal": direction, "confidence": float(score)}
+        raw = float(score)
+        resonance["rawScore"] = raw
+        vp_score = ((analysis.get("observation") or {}).get("volumePrice") or {}).get("score")
+        adjusted = raw
+        if isinstance(vp_score, (int, float)):
+            adjusted = max(0.0, min(100.0, raw + (vp_score - 50) * RESONANCE_VOLUME_PRICE_WEIGHT))
+        resonance["score"] = adjusted
+        final_signal = direction
+        if direction == "buy" and isinstance(vp_score, (int, float)) and vp_score <= 40:
+            final_signal = "hold"  # 量价证伪（无量虚涨/放量下跌）降级
+        decision["final"] = {"signal": final_signal, "confidence": adjusted}
 
 
 def _percentile(rank: float, total_count: int) -> float:
@@ -606,7 +648,7 @@ async def analyze_ranktrend(
     frame_keys = [str(k) for k in (payload.get("frameKeys") or [])]
     current_frame = payload.get("currentFrame")
 
-    # 方案 6.3：Redis 缓存，TTL 60s，键含请求内容与 dataset generation（ingest 后失效）
+    # 方案 6.3：Redis 缓存，TTL 300s（与前端 LRU 一致），键含请求内容与 dataset generation（ingest 后失效）
     cache = snapshot_cache.get_snapshot_redis_cache()
     generation_key = snapshot_cache.build_snapshot_cache_generation_key(
         prefix=get_settings().redis_key_prefix,

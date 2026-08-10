@@ -991,7 +991,7 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 的市场横截面基准（`marketMedianPercentile/marketMedianShortChange/marketSampleCount`）与共振/趋势百分位均按每帧 `avgRankNum` 升序、代码并列次序重排后计算；`marketSampleCount` 为该帧有效 `avgRankNum` 股票数。
 
-`POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes`、规范化后的 `currentFrame` 与 dataset generation；`currentFrame.slotTime` 会去掉前端自增的 `current:N` 序列号，`stocks` 只保留 `code/rank/avgRankNum` 稳定身份字段，避免面板每次打开因序列号或实时行情字段变化而缓存永不命中。TTL 与快照读口一致（`QUANT_BOARD_SNAPSHOT_CACHE_TTL_SECONDS`，默认 300s）；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
+`POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes`、规范化后的 `currentFrame` 与 dataset generation；`currentFrame.slotTime` 会去掉前端自增的 `current:N` 序列号，`stocks` 只保留 `code/rank/avgRankNum` 稳定身份字段，避免面板每次打开因序列号或实时行情字段变化而缓存永不命中。TTL 固定 300s（`RANK_TREND_ANALYZE_CACHE_TTL_SECONDS`），与前端 `rankTrendResultCache` LRU TTL（300s）一致；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
 
 `POST /api/ranktrend/analyze` 带并发闸门：缓存未命中进入计算前，先按缓存键取 per-key 单飞锁（同 key 并发只计算一次，其余等待后共享缓存结果），再取全局有界信号量（默认 2，环境变量 `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` 可调），同一时刻最多 N 个 golden 计算并发。目的是防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死；并发上限不改变响应结构与缓存合同。
 
