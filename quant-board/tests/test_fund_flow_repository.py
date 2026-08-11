@@ -53,6 +53,16 @@ class FakeCollection:
                 self.docs.append(replacement)
                 upserted += 1
             else:
+                # H2：模拟 $or sourceTs 条件——已存在且 sourceTs 更新（>= 新值）时跳过，
+                # 旧写不得覆盖新写（真实 MongoDB 在此场景抛 DuplicateKeyError 后降级跳过）
+                or_cond = flt.get("$or")
+                if or_cond:
+                    new_ts = next(
+                        (c["sourceTs"]["$lt"] for c in or_cond if "sourceTs" in c and "$lt" in c["sourceTs"]),
+                        None,
+                    )
+                    if new_ts is not None and "sourceTs" in matched and matched.get("sourceTs", 0) >= new_ts:
+                        continue
                 matched.update(replacement)
                 modified += 1
         return FakeBulkResult(upserted=upserted, modified=modified)
@@ -81,13 +91,13 @@ class FakeMongoDatabase(dict):
         return dict.__getitem__(self, name)
 
 
-def _doc(code: str, session_date: str, zlje: float = 1.0) -> dict:
+def _doc(code: str, session_date: str, zlje: float = 1.0, source_ts: float = 1) -> dict:
     return {
         "code": code,
         "sessionDate": session_date,
         "tradingDate": session_date,
         "source": "ths_main_monitor",
-        "sourceTs": 1,
+        "sourceTs": source_ts,
         "total": {"zlje": zlje, "buyAmount": 2.0, "sellAmount": 1.0},
         "buckets": [],
     }
@@ -97,14 +107,31 @@ def test_upsert_many_inserts_and_overwrites_by_session_code() -> None:
     db = FakeMongoDatabase()
     repo = FundFlowRepository(db)
 
-    n = repo.upsert_many([_doc("000001", "2026-08-07", 10.0), _doc("000002", "2026-08-07", 5.0)])
+    n = repo.upsert_many([_doc("000001", "2026-08-07", 10.0, source_ts=1), _doc("000002", "2026-08-07", 5.0, source_ts=1)])
     assert n == 2
-    # 同 {sessionDate, code} 覆盖（$set 更新）
-    n2 = repo.upsert_many([_doc("000001", "2026-08-07", 99.0)])
+    # 同 {sessionDate, code} 且 sourceTs 更新（2 > 1）→ 覆盖
+    n2 = repo.upsert_many([_doc("000001", "2026-08-07", 99.0, source_ts=2)])
     assert n2 == 1
     rows = list(db["fund_flow_l2"].docs)
     assert len(rows) == 2
     assert next(r for r in rows if r["code"] == "000001")["total"]["zlje"] == 99.0
+
+
+def test_upsert_many_older_source_ts_does_not_overwrite_newer() -> None:
+    # H2（2026-08-11 审计）：MongoDB 慢时后台旧线程晚完成，sourceTs 更旧的写
+    # 不得覆盖新写（无 sourceTs 条件的裸 $set 会回退数据）
+    db = FakeMongoDatabase()
+    repo = FundFlowRepository(db)
+
+    repo.upsert_many([_doc("000001", "2026-08-11", 100.0, source_ts=200)])
+    # 旧写（sourceTs=100 < 200）→ 跳过，不覆盖
+    n = repo.upsert_many([_doc("000001", "2026-08-11", 999.0, source_ts=100)])
+    assert n == 0
+    assert list(db["fund_flow_l2"].docs)[0]["total"]["zlje"] == 100.0
+    # 新写（sourceTs=300 > 200）→ 覆盖
+    n2 = repo.upsert_many([_doc("000001", "2026-08-11", 555.0, source_ts=300)])
+    assert n2 == 1
+    assert list(db["fund_flow_l2"].docs)[0]["total"]["zlje"] == 555.0
 
 
 def test_upsert_many_empty_returns_zero() -> None:

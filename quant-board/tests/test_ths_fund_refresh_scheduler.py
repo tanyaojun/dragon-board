@@ -128,6 +128,7 @@ class FakeStream:
         self.priority = priority_codes or []
         self.active = active_owner
         self.codes_changed = asyncio.Event()
+        self.publish_calls: list[list[dict]] = []
 
     def market_codes(self) -> list[str]:
         return list(self.codes)
@@ -137,6 +138,9 @@ class FakeStream:
 
     def has_active_owner(self) -> bool:
         return self.active
+
+    def publish(self, rows: list[dict]) -> None:
+        self.publish_calls.append(list(rows))
 
 
 def _titles(*codes: str) -> dict[str, tuple[str, str]]:
@@ -692,6 +696,26 @@ def test_compute_wait_seconds_trading_hours_uses_due_horizon() -> None:
         refresh_interval_seconds=180,
     )
     assert scheduler._compute_wait_seconds() == 180.0
+
+
+@pytest.mark.asyncio
+async def test_run_once_publishes_written_rows_to_stream() -> None:
+    # H1 回归（2026-08-11 实盘复盘）：调度器每批写入 Redis 后必须 publish 到
+    # fund-stream，前端才能收到 P0/P1 校准增量（否则只靠 300s idle 断线重连拿快照）
+    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
+    service = FakeThsService(titles=_titles("000001", "000002", "000003"))
+    cache = FakeCache()
+    stream = FakeStream(codes=["000001", "000002", "000003"])
+    scheduler = _scheduler(service=service, cache=cache, stream=stream, current=current)
+
+    assert await scheduler.run_once() is True
+    assert stream.publish_calls, "刷新成功后必须 publish 到 fund-stream"
+    published = stream.publish_calls[-1]
+    assert len(published) == 3
+    for row in published:
+        assert row["code"] in {"000001", "000002", "000003"}
+        assert "version" in row  # 推送行带单调 version，前端据此去重
+        assert row["moneyFlowSource"] == "ths_main_monitor"
 
 
 @pytest.mark.asyncio

@@ -156,20 +156,32 @@ class ThsFundRefreshScheduler:
             cache_rows.append(summary)
             if persist_to_mongo:
                 buckets = aggregate_l2_buckets((raw.get("data") or {}).get("list") or [])
-                mongo_docs.append(
-                    build_l2_persist_doc(
-                        code,
-                        raw,
-                        summary,
-                        buckets,
-                        now_ms=int(now_ts * 1000),
-                    )
+                # M3（2026-08-11 审计）：THS list 为空或全部 <30 万时 buckets 全 0，
+                # 跳过 Mongo 写入——防止全 0 覆盖历史 7 档（MongoDB 侧无 _is_older 保护），
+                # Redis total 摘要照常落库（fail-visible：total 有值不空白）。
+                has_bucket_activity = any(
+                    (b.get("buyAmount") or 0)
+                    or (b.get("sellAmount") or 0)
+                    or (b.get("buyCount") or 0)
+                    or (b.get("sellCount") or 0)
+                    for b in buckets
                 )
+                if has_bucket_activity:
+                    mongo_docs.append(
+                        build_l2_persist_doc(
+                            code,
+                            raw,
+                            summary,
+                            buckets,
+                            now_ms=int(now_ts * 1000),
+                        )
+                    )
         batch_ok = bool(cache_rows)
         self._consecutive_batch_success = (
             self._consecutive_batch_success + 1 if batch_ok else 0
         )
 
+        published_rows: list[dict[str, object]] = []
         for row in cache_rows:
             code = str(row.get("code") or "")
             if not code:
@@ -180,11 +192,21 @@ class ThsFundRefreshScheduler:
             self._retry_at.pop(code, None)
             self._fail_count[code] = 0
             try:
-                self._cache.put(dict(row))
+                stored = self._cache.put(dict(row))
+                published_rows.append(stored)
             except ValueError:
-                # 非法行不落库：保留 last-good（fail-visible），由 fail_count 走退避
+                # 非法行不落库：保留 last-good（fail-visible），由 fail_count 走退避。
+                # M4（2026-08-11 审计）：回滚常规周期，让 retry_at(30s 起) 真正生效，
+                # 否则 180s 的 _next_refresh_at 会掩盖 30s 退避。
+                self._next_refresh_at.pop(code, None)
                 logger.warning("THS 资金行落库被拒 code=%s，保留 last-good", code)
                 self._record_failure(code, now_ts)
+
+        if published_rows:
+            # H1（2026-08-11 实盘复盘）：每批校准写入后必须 publish 到 fund-stream，
+            # 前端才能实时收到 P0/P1 增量（此前只靠 300s idle 断线重连拿快照，滞后 ≤5 分钟）。
+            # 推送行带单调 version（来自 ThemeFundCache.put 返回值），前端据此去重。
+            self._stream.publish(published_rows)
 
         if mongo_docs and self._fund_repo is not None:
             try:

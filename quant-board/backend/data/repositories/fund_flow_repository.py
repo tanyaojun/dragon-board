@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from pymongo import UpdateOne
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +29,39 @@ class FundFlowRepository:
         )
 
     def upsert_many(self, docs: list[dict[str, Any]]) -> int:
-        """按 ``{sessionDate, code}`` 批量 upsert，返回写入/更新的文档数。"""
+        """按 ``{sessionDate, code}`` 批量 upsert，返回写入/更新的文档数。
+
+        H2（2026-08-11 审计）：仅当已存在文档的 ``sourceTs`` 更旧（或缺失）
+        时覆盖——MongoDB 慢时（wait_for 超时后后台线程晚完成）旧写不得
+        覆盖新写。条件不匹配且文档已存在时 upsert 会撞唯一键，捕获
+        ``DuplicateKeyError`` 降级为条件更新（跳过）。
+        """
         if not docs:
             return 0
+
+        def _filter(doc: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "sessionDate": doc["sessionDate"],
+                "code": doc["code"],
+                "$or": [
+                    {"sourceTs": {"$lt": doc["sourceTs"]}},
+                    {"sourceTs": {"$exists": False}},
+                ],
+            }
+
         operations = [
-            UpdateOne(
-                {"sessionDate": doc["sessionDate"], "code": doc["code"]},
-                {"$set": doc},
-                upsert=True,
-            )
+            UpdateOne(_filter(doc), {"$set": doc}, upsert=True)
             for doc in docs
         ]
-        result = self._collection.bulk_write(operations, ordered=False)
+        try:
+            result = self._collection.bulk_write(operations, ordered=False)
+        except DuplicateKeyError:
+            # 并发/条件未匹配但唯一键已存在：降级为条件更新（不插入，不覆盖新值）
+            operations = [
+                UpdateOne(_filter(doc), {"$set": doc}, upsert=False)
+                for doc in docs
+            ]
+            result = self._collection.bulk_write(operations, ordered=False)
         return (result.upserted_count or 0) + (result.modified_count or 0)
 
     def load_latest_session(self) -> tuple[str, list[dict[str, Any]]]:
