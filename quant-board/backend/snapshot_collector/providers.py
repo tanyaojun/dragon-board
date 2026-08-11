@@ -1776,6 +1776,10 @@ class MarketFundCacheProvider:
                 "code": code, "mainNetInflow": float(zlje),
                 "moneyFlowSource": "ths_main_monitor", "moneyFlowEstimated": False,
                 "capitalFlowSource": "ths_main_monitor", "capitalFlowConfidence": "high",
+                # M1（2026-08-11 审计）：暴露资金行时效信息，供快照质量门控/下游
+                # 判断"缓存 last-good 是否跨日/过期"，避免把陈旧资金当权威数据
+                "moneyFlowSessionDate": str(row.get("sessionDate") or ""),
+                "moneyFlowSourceTs": int(row.get("sourceTs") or 0),
             }
             if isinstance(row.get("zljzb"), (int, float)) and math.isfinite(float(row["zljzb"])):
                 item["mainNetRatio"] = float(row["zljzb"])

@@ -156,6 +156,9 @@ def test_market_fund_cache_provider_preserves_last_good_and_missing_values() -> 
         "moneyFlowEstimated": False,
         "capitalFlowSource": "ths_main_monitor",
         "capitalFlowConfidence": "high",
+        # M1（2026-08-11 审计）：暴露资金行时效信息
+        "moneyFlowSessionDate": "2026-07-30",
+        "moneyFlowSourceTs": 1,
     }]
     assert health.ok is False
     assert health.returned_count == 1

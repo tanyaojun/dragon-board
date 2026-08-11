@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from datetime import date
@@ -8,6 +9,8 @@ from threading import Lock
 from typing import Any
 
 from backend.core.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # 允许写入运行态资金缓存的来源：L2 主源 + 全市场种子（东财 + 存量同花顺网页）。
@@ -174,8 +177,10 @@ class ThemeFundCache:
                 try:
                     pipeline.expire(hash_key, self._ttl_seconds)
                     pipeline.execute()
-                except Exception:
-                    pass
+                except Exception as error:
+                    # L3（2026-08-11 审计）：Redis 写入失败不得静默——记录并保留
+                    # 进程内 last-good（fail-visible），后续批次会重试覆盖
+                    logger.warning("theme-fund pipeline 写入 Redis 失败，保留进程内 last-good: %s", error)
 
             # 4) 内存上限维护（与 put 一致）
             if len(self._latest) > 1000:

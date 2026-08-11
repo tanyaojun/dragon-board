@@ -16,6 +16,8 @@ from fastapi import APIRouter, HTTPException
 
 from backend.core.settings import get_settings
 
+from backend.market_proxy.redis_client import get_hotlist_redis_client
+from backend.snapshot_collector.instance_lock import RedisInstanceLock
 from backend.snapshot_collector.models import CollectorRunRequest
 from backend.snapshot_collector.quality_gate import SHADOW_DATASET_ID
 from backend.snapshot_collector.service import SnapshotCollectorService
@@ -134,6 +136,27 @@ def get_collector_status() -> dict[str, Any]:
 # ── POST /api/snapshot-collector/run-once ─────────────────────────────────────
 
 
+def _acquire_collection_lock(lock_name: str) -> RedisInstanceLock | None:
+    """M2（2026-08-11 审计）：手动采集（run-once/backfill）也抢实例锁，防止
+    与 8001 定时调度器对同一 snapshotId 并发写 MongoDB（check-then-act 非原子）。
+    Redis 不可用时 fail-open（锁禁用），不阻断手动采集。"""
+    lock = RedisInstanceLock(
+        get_hotlist_redis_client(get_settings()),
+        name=lock_name,
+        ttl_seconds=600,
+    )
+    if not lock.acquire():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "ok": False,
+                "status": "error",
+                "error": f"collection already in progress by another instance (lock={lock_name})",
+            },
+        )
+    return lock
+
+
 @router.post("/run-once")
 def run_collector_once(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute a single snapshot collection run.
@@ -178,7 +201,11 @@ def run_collector_once(payload: dict[str, Any]) -> dict[str, Any]:
 
     repo = create_snapshot_collector_repository()
     service = _create_service(repo)
-    result = service.run_once(request)
+    lock = _acquire_collection_lock("run-once")
+    try:
+        result = service.run_once(request)
+    finally:
+        lock.release()
 
     envelope = _build_envelope(
         ok=result.status in ("completed", "dry_run", "deduped"),
@@ -313,7 +340,11 @@ def backfill_collector_slots(payload: dict[str, Any]) -> dict[str, Any]:
 
     repo = create_snapshot_collector_repository()
     service = _create_service(repo)
-    result = service.backfill_slots(backfill_request)
+    lock = _acquire_collection_lock("backfill")
+    try:
+        result = service.backfill_slots(backfill_request)
+    finally:
+        lock.release()
 
     ok = result.get("failed", 0) == 0 and result.get("blocked", 0) == 0
     return _build_envelope(ok=ok, status="completed", data=result)

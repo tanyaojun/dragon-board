@@ -75,6 +75,9 @@ def _bucket_for(money: float) -> str | None:
 def _parse_money(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
+    if isinstance(value, str):
+        # L4（2026-08-11 审计）：防御带千分位逗号/空白的字符串金额，避免整笔丢档
+        value = value.replace(",", "").strip()
     try:
         amount = float(value)
     except (TypeError, ValueError):

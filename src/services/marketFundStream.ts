@@ -29,6 +29,7 @@ export class MarketFundStreamService {
   private codes: string[] = []
   private priorityCodes: string[] = []
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnectAttempts = 0
   private versions = new Map<string, number>()
 
   /**
@@ -43,7 +44,8 @@ export class MarketFundStreamService {
       .filter((code): code is string => Boolean(code) && this.codes.includes(code))
       .slice(0, 100)
     if (!this.codes.length) {
-      this.disconnect()
+      // P1-1（2026-08-11 审计）：空订阅（平台临时加载失败/热榜暂空）不主动断开——
+      // 保留连接等待恢复；registry 层也会跳过空上报，避免清空后端订阅池。
       return
     }
     if (!this.socket || this.socket.readyState > WebSocket.OPEN) this.connect()
@@ -59,8 +61,20 @@ export class MarketFundStreamService {
 
   private connect(): void {
     if (typeof window === 'undefined' || !this.codes.length) return
+    // P3-5（2026-08-11 审计）：清理旧的 CONNECTING 连接——若该连接永久挂起，
+    // 新订阅永远不会发出（依赖 open 事件而 open 不会触发）
+    if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
+      try {
+        this.socket.close()
+      } catch {
+        // ignore
+      }
+    }
     this.socket = new WebSocket(defaultUrl())
-    this.socket.addEventListener('open', () => this.sendSubscription())
+    this.socket.addEventListener('open', () => {
+      this.reconnectAttempts = 0
+      this.sendSubscription()
+    })
     this.socket.addEventListener('message', event => {
       try {
         this.handlePayload(JSON.parse(String(event.data)))
@@ -71,10 +85,14 @@ export class MarketFundStreamService {
     this.socket.addEventListener('close', () => {
       this.socket = null
       if (!this.codes.length || this.reconnectTimer) return
+      // P3-1（2026-08-11 审计）：指数退避重连（2s→4s→8s→10s 上限），
+      // 避免后端长时间不可用时恒定 2s 空连
+      const delay = Math.min(2000 * 2 ** this.reconnectAttempts, 10_000)
+      this.reconnectAttempts += 1
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = null
         this.connect()
-      }, 2000)
+      }, delay)
     })
   }
 
@@ -86,6 +104,12 @@ export class MarketFundStreamService {
 
   private handlePayload(payload: any): void {
     if (!['fund_full_state', 'fund_patch'].includes(String(payload?.type))) return
+    if (payload?.type === 'fund_full_state') {
+      // P2-2（2026-08-11 审计）：全量快照意味着服务端版本序列可能重置
+      // （Redis 清空/后端重启），清空本地版本记录——否则重置后的小 version
+      // 会被乱序保护永久丢弃
+      this.versions.clear()
+    }
     const rows = (Array.isArray(payload?.items) ? payload.items : [])
       .map((row: any) => this.normalizeRow(row))
       .filter(Boolean)
@@ -101,9 +125,13 @@ export class MarketFundStreamService {
     if (!code || !Number.isFinite(version) || !Number.isFinite(zlje)) return null
     const prev = this.versions.get(code)
     if (prev !== undefined && version < prev) {
-      // 服务端 version 重置（Redis 清空/后端重启后 version 从头计数）：
-      // 清除旧记录接受新版本，避免旧 version 导致该码永久丢弃
-      this.versions.delete(code)
+      // P2-2（2026-08-11 审计）：乱序/回退的旧版本直接丢弃，不覆盖新值
+      // （服务端 version 重置由 fund_full_state 清空本地记录兜底）
+      return null
+    }
+    if (prev === version) {
+      // 重复推送：跳过，避免重复 QUOTE_PATCH / 量比刷新
+      return null
     }
     this.versions.set(code, version)
     return { ...row, code }

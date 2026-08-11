@@ -673,14 +673,15 @@ async def test_status_owner_state_active_and_persisted() -> None:
 
 
 def test_compute_wait_seconds_outside_trading_hours() -> None:
-    # 周六 10:00 → 距周一 09:30 约 47.5h，上限 3600 秒
+    # L5（2026-08-11 审计）：周六 10:00 → 距周一 09:30 约 47.5h，一觉睡到开盘
+    # （不再每小时空转一次）
     now = datetime(2026, 8, 8, 10, 0, 0, tzinfo=TZ)
     scheduler = _scheduler(service=FakeThsService(), stream=FakeStream(["000001"]), current=now)
-    assert scheduler._compute_wait_seconds() == 3600.0
+    assert scheduler._compute_wait_seconds() == 171000.0
 
 
 def test_compute_wait_seconds_lunch_break() -> None:
-    # 周五 12:00 午休 → 距 13:00 开盘 3600 秒（cap 3600）
+    # 周五 12:00 午休 → 距 13:00 开盘 3600 秒
     now = datetime(2026, 8, 7, 12, 0, 0, tzinfo=TZ)
     scheduler = _scheduler(service=FakeThsService(), stream=FakeStream(["000001"]), current=now)
     assert scheduler._compute_wait_seconds() == 3600.0

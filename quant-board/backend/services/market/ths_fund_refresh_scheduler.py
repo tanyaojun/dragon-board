@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -99,6 +100,9 @@ class ThsFundRefreshScheduler:
         self._last_row_count = 0
         self._last_session_date: str | None = None
         self._task: asyncio.Task[None] | None = None
+        # L8（2026-08-11 审计）：MongoDB 唯一索引在首次 run_once 异步 ensure（带超时），
+        # 避免单例创建时同步阻塞启动
+        self._indexes_ensured = False
 
     def start(self) -> None:
         if not self.enabled or (self._task and not self._task.done()):
@@ -116,6 +120,16 @@ class ThsFundRefreshScheduler:
 
     async def run_once(self) -> bool:
         now_dt = self._now()
+        if not self._indexes_ensured and self._fund_repo is not None:
+            self._indexes_ensured = True
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(self._fund_repo.ensure_indexes),
+                    timeout=5.0,
+                )
+            except Exception:
+                self._indexes_ensured = False  # 失败下次重试；缺唯一索引不影响本轮刷新
+                logger.exception("fund_flow_l2 ensure_indexes failed; continue without unique index")
         if not self._is_trading_time(now_dt) and not self._needs_cold_init():
             # 非交易时段（周末/午休/盘前盘后）且已初始化：暂停请求，保留 last-good。
             # 冷启动例外：非交易时段允许刷一轮——THS 接口返回最近交易日完整 L2，
@@ -154,7 +168,10 @@ class ThsFundRefreshScheduler:
                 self._record_failure(code, now_ts)
                 continue
             cache_rows.append(summary)
-            if persist_to_mongo:
+            if persist_to_mongo and not raw.get("stale"):
+                # M2（2026-08-11 审计）：stale raw（上游失败回退的旧缓存）不写 MongoDB——
+                # MongoDB 只固化真实拉取的数据；Redis 侧有 _is_older 保护，Mongo 侧没有，
+                # stale 可能跨日，旧值不得入库。
                 buckets = aggregate_l2_buckets((raw.get("data") or {}).get("list") or [])
                 # M3（2026-08-11 审计）：THS list 为空或全部 <30 万时 buckets 全 0，
                 # 跳过 Mongo 写入——防止全 0 覆盖历史 7 档（MongoDB 侧无 _is_older 保护），
@@ -186,9 +203,15 @@ class ThsFundRefreshScheduler:
             code = str(row.get("code") or "")
             if not code:
                 continue
-            self._next_refresh_at[code] = now_ts + (
+            # L6（2026-08-11 审计）：P1 常规周期加 ±20% 随机抖动，摊薄开盘/冷启动
+            # 后全池集中到期造成的 THS 请求陡增；P0 保持 30s 固定优先校准。
+            interval = (
                 self._priority_interval_seconds if code in priority else self._refresh_interval_seconds
             )
+            if code in priority:
+                self._next_refresh_at[code] = now_ts + interval
+            else:
+                self._next_refresh_at[code] = now_ts + interval * random.uniform(0.8, 1.2)
             self._retry_at.pop(code, None)
             self._fail_count[code] = 0
             try:
@@ -325,11 +348,22 @@ class ThsFundRefreshScheduler:
 
         修复 2026-08-08 首屏只有数笔：原实现"从未刷过才刷一轮"（batch=5），
         233 只展示池只刷 5 只就暂停；现改为按展示池未刷新码持续补齐。
+        M1（2026-08-11 审计）：若缓存已有最近交易日行（MongoDB 冷启动 restore
+        或上次冷刷已补齐），视为已初始化——非交易时段不再全池冷刷 THS（避免
+        每次重启都消耗限流预算，违背"重启零第三方请求"设计）。
         """
         codes = self._stream.market_codes()
         if not codes:
             return False
-        return any(code not in self._next_refresh_at for code in codes)
+        if not any(code not in self._next_refresh_at for code in codes):
+            return False
+        try:
+            cached = self._cache.get_latest(codes)
+            if cached:
+                return False
+        except Exception:
+            pass
+        return True
 
     @staticmethod
     def _is_trading_time(now: datetime) -> bool:
@@ -341,13 +375,13 @@ class ThsFundRefreshScheduler:
 
     @staticmethod
     def _seconds_until_next_trading_time(now: datetime) -> float:
-        """距下一个交易时段开始（含跨午休/跨日/跨周末）的秒数，上限 1 小时。"""
+        """距下一个交易时段开始（含跨午休/跨日/跨周末）的秒数，最多覆盖 7 天。"""
         candidate = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        for _ in range(24 * 60):
+        for _ in range(7 * 24 * 60):
             if ThsFundRefreshScheduler._is_trading_time(candidate):
                 return max(1.0, (candidate - now).total_seconds())
             candidate += timedelta(minutes=1)
-        return 3600.0
+        return 3600.0  # 兜底（正常情况下不会到达）
 
     async def _run(self) -> None:
         while True:
@@ -375,8 +409,9 @@ class ThsFundRefreshScheduler:
     def _compute_wait_seconds(self) -> float:
         now_dt = self._now()
         if not self._is_trading_time(now_dt):
-            # 非交易时段：等到下一个交易时段开始再唤醒（避免空转忙轮询）
-            return max(1.0, min(self._seconds_until_next_trading_time(now_dt), 3600.0))
+            # 非交易时段：L5（2026-08-11 审计）一觉睡到下一个交易时段开始
+            # （跨午休/跨日/跨周末），不再每小时空转一次
+            return max(1.0, self._seconds_until_next_trading_time(now_dt))
         now_ts = now_dt.timestamp()
         horizon = self._refresh_interval_seconds
         for code in self._stream.market_codes():
@@ -398,12 +433,8 @@ def get_ths_fund_refresh_scheduler() -> ThsFundRefreshScheduler:
             from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
             fund_repo = FundFlowRepository(get_runtime_mongodb_database())
-            try:
-                # 确保 {sessionDate, code} 唯一索引存在（upsert 幂等的前提）；
-                # MongoDB 故障仅告警，不阻塞调度器启动（Redis/内存 last-good 继续工作）
-                fund_repo.ensure_indexes()
-            except Exception:
-                logger.exception("fund_flow_l2 ensure_indexes failed; continue without unique index")
+            # L8（2026-08-11 审计）：ensure_indexes 移到 run_once 异步执行（带超时），
+            # 不在单例创建时同步阻塞启动；MongoDB 故障仅告警（Redis/内存 last-good 继续工作）
         _ths_fund_refresh_scheduler = ThsFundRefreshScheduler(
             service=get_ths_main_monitor_service(),
             cache=get_theme_fund_cache(),
