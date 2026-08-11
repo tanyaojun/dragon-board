@@ -216,6 +216,21 @@ def test_snapshot_cache_generation_is_dataset_scoped_and_monotonic() -> None:
     assert cache.get_generation(other_key) == 0
 
 
+def test_bump_generation_sets_ttl_to_prevent_permanent_keys() -> None:
+    # 清理策略（2026-08-11 用户确认）：generation 标记带 TTL——此前 57 个
+    # snapshot:generation:* 永久累积（只管杀不管埋），过期后缓存重新计算一次（无害）
+    redis = FakeRedis()
+    cache = SnapshotRedisCache(redis_client=redis, ttl_seconds=300, empty_ttl_seconds=10)
+    live_key = build_snapshot_cache_generation_key(
+        prefix="hellobiga:dragon-board:test",
+        dataset_id="dragonboard_live",
+    )
+
+    cache.bump_generation(live_key)
+
+    assert redis.expires[live_key] == 310  # ttl + empty_ttl
+
+
 def test_cached_snapshot_response_does_not_write_after_ingest_generation_changes(monkeypatch) -> None:
     from types import SimpleNamespace
 

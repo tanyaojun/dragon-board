@@ -280,6 +280,10 @@ class ThemeFundCache:
                     version = self._memory_version + 1
                     self._redis.set(self._key("version"), version)
                 self._memory_version = max(self._memory_version, version)
+                # 清理策略（2026-08-11 用户确认）：version 与 latest 同生命周期
+                # （容灾 1 交易日，TTL 兜底 3 天）；停止写入后过期重置，
+                # 前端 fund_full_state 会清空本地版本记录（可恢复）
+                self._redis.expire(self._key("version"), self._ttl_seconds)
                 return version
         except Exception:
             pass
@@ -297,6 +301,7 @@ class ThemeFundCache:
                     end_version = self._memory_version + count
                     self._redis.set(self._key("version"), end_version)
                 self._memory_version = max(self._memory_version, end_version)
+                self._redis.expire(self._key("version"), self._ttl_seconds)
                 return end_version - count + 1
         except Exception:
             pass

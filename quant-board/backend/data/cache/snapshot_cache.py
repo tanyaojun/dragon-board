@@ -111,7 +111,11 @@ class SnapshotRedisCache:
         if self.redis_client is None:
             return 0
         try:
-            return int(self.redis_client.incr(key))
+            generation = int(self.redis_client.incr(key))
+            # 清理策略（2026-08-11 用户确认）：generation 标记带 TTL——此前
+            # 57 个 snapshot:generation:* 永久累积；过期后缓存失效重新计算一次（无害）
+            self.redis_client.expire(key, self.ttl_seconds + self.empty_ttl_seconds)
+            return generation
         except Exception:
             return 0
 

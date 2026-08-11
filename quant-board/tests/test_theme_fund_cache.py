@@ -309,8 +309,9 @@ def test_put_refreshes_latest_hash_ttl_in_redis() -> None:
     cache.put(row("000001", "2026-07-24", 12.5))
 
     assert redis.expires["test:theme-fund:v3:latest"] == 900
-    # 版本与 owners 键保持单调，不因 TTL 过期而重置
-    assert "test:theme-fund:v3:version" not in redis.expires
+    # 清理策略（2026-08-11 用户确认）：version 与 latest 同生命周期（TTL 兜底），
+    # 停止写入后过期重置，前端 fund_full_state 清空本地版本记录兜底
+    assert redis.expires["test:theme-fund:v3:version"] == 900
 
 
 def test_put_prunes_stale_trading_session_rows() -> None:

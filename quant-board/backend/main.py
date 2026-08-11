@@ -107,6 +107,39 @@ app.include_router(theme_rotation_router)
 app.include_router(ths_main_monitor_router)
 
 
+def prune_legacy_redis_ttl(redis_client: Any, prefix: str) -> dict[str, int]:
+    """启动时一次性清理存量永久 Redis key（2026-08-11 用户确认"只管杀不管埋"修复）。
+
+    给历史无 TTL 的缓存 key 补 TTL：
+    - ``ths-main-monitor:raw:*`` → 3 天（容灾 1 交易日 + 跨周末，此前 628 个永久）
+    - ``snapshot:generation:*`` → 7 天（缓存失效标记，过期后重新计算一次）
+    - ``theme-fund:v3:version`` → 3 天（与 latest 同生命周期）
+    best-effort：Redis 不可用/单个 key 失败不阻塞启动。
+    """
+    patterns = {
+        f"{prefix}:ths-main-monitor:raw*": 259200,
+        f"{prefix}:snapshot:generation*": 604800,
+        f"{prefix}:theme-fund:v3:version": 259200,
+    }
+    counts: dict[str, int] = {}
+    for pattern, ttl_seconds in patterns.items():
+        pruned = 0
+        try:
+            for key in redis_client.scan_iter(match=pattern, count=500):
+                try:
+                    if redis_client.ttl(key) < 0:
+                        redis_client.expire(key, ttl_seconds)
+                        pruned += 1
+                except Exception:
+                    continue
+        except Exception:
+            logger.warning("prune legacy redis ttl scan failed for %s", pattern, exc_info=True)
+        counts[pattern] = pruned
+        if pruned:
+            logger.info("prune legacy redis ttl: %s -> %d keys", pattern, pruned)
+    return counts
+
+
 async def restore_fund_flow_from_mongodb() -> None:
     """冷启动资金恢复：MongoDB fund_flow_l2 最近交易日 L2 行 → ThemeFundCache。
 
@@ -132,6 +165,22 @@ async def restore_fund_flow_from_mongodb() -> None:
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    # 清理策略（2026-08-11 用户确认）：启动时给存量永久 Redis key 补 TTL
+    # （ths-main-monitor:raw / snapshot:generation / theme-fund version）——
+    # 修复"只管杀不管埋"：历史无 TTL 缓存补过期时间，best-effort 不阻塞启动
+    try:
+        from backend.core.settings import get_settings as _get_settings
+        from backend.market_proxy.redis_client import get_hotlist_redis_client
+
+        _redis = get_hotlist_redis_client(_get_settings())
+        if _redis is not None:
+            await asyncio.to_thread(
+                prune_legacy_redis_ttl,
+                _redis,
+                _get_settings().redis_key_prefix,
+            )
+    except Exception:
+        logger.exception("prune legacy redis ttl failed; continue startup")
     if get_settings().storage_backend != "mongodb":
         init_db()
         init_theme_db()
