@@ -1349,7 +1349,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 该资金缓存（进程内 `ThemeFundCache`，last-good）只服务 Dragon Board 运行态行情列表和题材分析；快照采集器只接受 `ths_main_monitor`（L2 权威）行带入 snapshot stock rows，`ths_web_seed`/`eastmoney_seed` 估算种子行不进入正式快照。正式 RankTrend、回测、优化和历史数据集入库不把它当作历史资金口径；后端重启后冷启动从 MongoDB `fund_flow_l2` 恢复最近交易日 L2 行（零第三方请求），盘中 `ThsFundRefreshScheduler` 继续校准覆盖；MongoDB 不可用时前端保留 last-good 展示。
 
-**Redis 持久化（2026-08-08）**：本机 Redis 8.10.0 已开启 RDB 自动保存 `save 900 1 300 10 60 10000`（900 秒内 ≥1 写 / 300 秒内 ≥10 写 / 60 秒内 ≥10000 写即 BGSAVE），`appendonly no` 保持关闭（RDB 即可满足冷缓存快速恢复；若要求分钟级更新零丢失再单独评估 AOF）。Redis 重启/崩溃后自动从 `dump.rdb` 读取磁盘冷缓存快速恢复内存状态（含资金 last-good 行与 7 天 TTL 容灾窗口），前端无需等重新填充；崩溃最多丢约 60 秒数据。Redis 故障时进程内 last-good 仍兜底展示，不阻断数据链路。
+**Redis 持久化（2026-08-08）**：本机 Redis 8.10.0 已开启 RDB 自动保存 `save 900 1 300 10 60 10000`（900 秒内 ≥1 写 / 300 秒内 ≥10 写 / 60 秒内 ≥10000 写即 BGSAVE），`appendonly no` 保持关闭（RDB 即可满足冷缓存快速恢复；若要求分钟级更新零丢失再单独评估 AOF）。Redis 重启/崩溃后自动从 `dump.rdb` 读取磁盘冷缓存快速恢复内存状态，前端无需等重新填充；崩溃最多丢约 60 秒数据。Redis 故障时进程内 last-good 仍兜底展示，不阻断数据链路。**清理策略（2026-08-11 用户确认，容灾 1 个交易日）**：① `theme-fund:v3:latest` 资金行缓存每次写入按 `sessionDate` 主动清理旧交易日行（Redis 只保留最近 1 个交易日，避免旧累计值滞留），TTL 兜底 3 天（`QUANT_BOARD_THEME_FUND_CACHE_TTL_SECONDS`，覆盖跨周末 72h）；② `ths-main-monitor:raw:*` 明细缓存加 3 天 TTL（此前永久 key 不清理）。
 
 ### fund_flow_l2 持久化（2026-08-08）
 

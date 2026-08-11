@@ -56,6 +56,9 @@ class ThsMainMonitorService:
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._request_timeout_seconds = request_timeout_seconds
         self._upstream_url = upstream_url.strip() or THS_URL
+        # raw 明细缓存 TTL（2026-08-11 用户确认，容灾 1 个交易日）：3 天覆盖
+        # 跨周末，停止拉取后自动过期清理（此前永久 key 628 个不清理）
+        self._raw_cache_ttl_seconds = 259200
         self._raw_memory: dict[str, dict[str, Any]] = {}
         self._condition = asyncio.Condition()
         self._active_requests = 0
@@ -284,7 +287,13 @@ class ThsMainMonitorService:
         self._raw_memory[code] = dict(value)
         try:
             if self._redis is not None:
-                self._redis.set(self._raw_key(code), json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+                # 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：raw 明细带 TTL，
+                # 停止拉取后自动过期，避免永久 key 累积
+                self._redis.set(
+                    self._raw_key(code),
+                    json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+                    ex=self._raw_cache_ttl_seconds,
+                )
         except Exception:
             pass
 

@@ -63,12 +63,31 @@ class ThemeFundCache:
             self._write_hash(self._key("latest"), code, stored)
             # 全市场行数据带 TTL：跨进程/跨重启 last-good，过期后自动清理（fail-visible 由进程内兜底）
             self._touch(self._key("latest"))
-            if len(self._latest) > 1000:
-                today = session_date
-                stale = [c for c, v in self._latest.items() if str(v.get("sessionDate") or "") < today]
-                for c in stale[:100]:
-                    self._latest.pop(c, None)
+            # 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：跨日即清旧交易日行
+            self._prune_stale_sessions(session_date)
             return dict(stored)
+
+    def _prune_stale_sessions(self, current_session: str) -> None:
+        """清理策略（2026-08-11 用户确认，容灾 1 个交易日）。
+
+        删除 sessionDate 早于本次写入日期的行（跨日即清旧，天然覆盖周末：
+        周五数据保留到周一新写入后自动清理）——Redis 里只保留最近 1 个交易日行，
+        避免旧交易日累计值滞留（首屏 bug 根源）；TTL 仅作停止写入后的兜底过期。
+        """
+        stale = [
+            code
+            for code, value in self._latest.items()
+            if str(value.get("sessionDate") or "") < current_session
+        ]
+        if not stale:
+            return
+        for code in stale:
+            self._latest.pop(code, None)
+        if self._redis is not None:
+            try:
+                self._redis.hdel(self._key("latest"), *stale)
+            except Exception:
+                logger.warning("theme-fund 清理旧交易日行失败 codes=%s", len(stale), exc_info=True)
 
     @staticmethod
     def _parse_fund_row(row: dict[str, object]) -> tuple[str, str, float] | None:
@@ -182,11 +201,8 @@ class ThemeFundCache:
                     # 进程内 last-good（fail-visible），后续批次会重试覆盖
                     logger.warning("theme-fund pipeline 写入 Redis 失败，保留进程内 last-good: %s", error)
 
-            # 4) 内存上限维护（与 put 一致）
-            if len(self._latest) > 1000:
-                stale = [c for c, v in self._latest.items() if str(v.get("sessionDate") or "") < today]
-                for c in stale[:100]:
-                    self._latest.pop(c, None)
+            # 4) 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：跨日即清旧交易日行
+            self._prune_stale_sessions(today)
 
         return saved_rows, failures
 

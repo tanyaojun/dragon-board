@@ -148,9 +148,12 @@ class Settings(BaseModel):
     theme_fund_refresh_interval_seconds: int = Field(default=300)
     # Redis last-good 热缓存 TTL（秒）：默认 7 天。
     # 容灾语义（2026-08-08 用户确认）：冷启动 MongoDB 不可用时，Redis 里最近
-    # 交易日的 L2 行仍可被 get_latest 兜底恢复（跨进程/跨重启），TTL 即容灾窗口；
+    # 资金行缓存 TTL（容灾 1 个交易日，2026-08-11 用户确认）：日常由 sessionDate
+    # 主动清理（只保留最近 1 个交易日行），TTL 仅作停止写入后的兜底过期；
+    # 3 天覆盖跨周末（周五→周一 72h）。冷启动 MongoDB 不可用时最近交易日的
+    # L2 行仍可被 get_latest 兜底恢复（跨进程/跨重启），TTL 即容灾窗口；
     # 调度器每次写入会刷新 TTL，正常运行永不过期，TTL 只在停止写入后生效。
-    theme_fund_cache_ttl_seconds: int = Field(default=604800)
+    theme_fund_cache_ttl_seconds: int = Field(default=259200)
     # akshare 全市场种子：默认关闭（2026-08-08 起冷启动改从 MongoDB fund_flow_l2 恢复）
     theme_fund_seed_enabled: bool = Field(default=False)
     market_fund_fetch_timeout_seconds: float = Field(default=60.0)

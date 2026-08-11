@@ -45,6 +45,15 @@ class FakeRedis:
             raise RuntimeError("redis unavailable")
         return self.hashes.get(key, {}).get(field)
 
+    def hdel(self, key: str, *fields: str) -> int:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        removed = 0
+        for field in fields:
+            if self.hashes.get(key, {}).pop(field, None) is not None:
+                removed += 1
+        return removed
+
     def hmget(self, key: str, fields: list[str]):
         if self.fail:
             raise RuntimeError("redis unavailable")
@@ -304,13 +313,41 @@ def test_put_refreshes_latest_hash_ttl_in_redis() -> None:
     assert "test:theme-fund:v3:version" not in redis.expires
 
 
-def test_default_redis_ttl_is_week_long_disaster_recovery_window() -> None:
-    # 容灾语义（2026-08-08 用户确认）：冷启动 MongoDB 不可用时，Redis 里最近
-    # 交易日的 L2 行由 get_latest 兜底恢复；TTL 默认 7 天即容灾窗口（跨周末/短故障）
+def test_put_prunes_stale_trading_session_rows() -> None:
+    # 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：写入新交易日行时，
+    # 旧交易日行（sessionDate < 本次写入日期）从内存与 Redis hash 一并清理
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test")
+    cache.put(row("000001", "2026-08-10", 1.0))
+    cache.put(row("000002", "2026-08-10", 2.0))
+    assert set(cache._latest) == {"000001", "000002"}
+
+    cache.put(row("000003", "2026-08-11", 3.0))
+
+    assert set(cache._latest) == {"000003"}  # 旧交易日行被清
+    latest_hash = redis.hashes["test:theme-fund:v3:latest"]
+    assert set(latest_hash) == {"000003"}  # Redis hash 同步清理
+
+
+def test_put_many_prunes_stale_trading_session_rows() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test")
+    cache.put_many([row("000001", "2026-08-10", 1.0), row("000002", "2026-08-10", 2.0)])
+    assert set(cache._latest) == {"000001", "000002"}
+
+    cache.put_many([row("000003", "2026-08-11", 3.0)])
+
+    assert set(cache._latest) == {"000003"}
+    assert set(redis.hashes["test:theme-fund:v3:latest"]) == {"000003"}
+
+
+def test_default_redis_ttl_covers_one_trading_session_plus_weekend() -> None:
+    # 容灾语义（2026-08-11 用户确认，容灾 1 个交易日）：日常由 sessionDate 主动清理
+    # （只保留最近 1 个交易日行），TTL 3 天仅作停止写入后的兜底过期（覆盖跨周末 72h）
     from backend.core.settings import get_settings
 
-    assert get_settings().theme_fund_cache_ttl_seconds == 604800
-    assert get_theme_fund_cache()._ttl_seconds == 604800
+    assert get_settings().theme_fund_cache_ttl_seconds == 259200
+    assert get_theme_fund_cache()._ttl_seconds == 259200
 
 
 def test_redis_ttl_expiry_keeps_process_last_good() -> None:
