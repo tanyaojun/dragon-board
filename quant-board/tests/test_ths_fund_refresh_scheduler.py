@@ -736,9 +736,9 @@ async def test_stale_raw_skips_cache_and_mongo() -> None:
     assert scheduler._retry_at["000002"] == current.timestamp() + 30
 
 @pytest.mark.asyncio
-async def test_base_hotlist_pool_is_refreshed_without_subscribers() -> None:
-    # 方案 B（2026-08-11 用户确认）：后端独立热度池——即使没有前端订阅，
-    # 行情列表（hotlist 并集）的股票也进入刷新范围
+async def test_no_subscribers_means_no_refresh() -> None:
+    # 2026-08-11 用户确认：取消热度池——刷新范围 = 前端订阅池（行情列表），
+    # 无订阅时无刷新范围，不刷（不再有后端热榜池兜底）
     current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
     service = FakeThsService(titles=_titles("000100", "000200"))
     cache = FakeCache()
@@ -746,35 +746,24 @@ async def test_base_hotlist_pool_is_refreshed_without_subscribers() -> None:
         service=service,
         cache=cache,
         stream=FakeStream([]),  # 无前端订阅
-        base_pool_provider=lambda: _async_list(["000100", "000200"]),
         current=current,
     )
 
-    assert await scheduler.run_once() is True
-    assert "000100" in cache.rows
-    assert "000200" in cache.rows
+    assert await scheduler.run_once() is False
+    assert cache.rows == {}
 
 
 @pytest.mark.asyncio
-async def test_pool_codes_unions_subscribers_and_base_pool() -> None:
+async def test_pool_codes_returns_only_subscription_pool() -> None:
+    # 2026-08-11 用户确认：取消热度池——_pool_codes 只返回前端订阅池
     current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
     scheduler = _scheduler(
         service=FakeThsService(),
         stream=FakeStream(["000001"]),
-        base_pool_provider=None,
         current=current,
     )
-    scheduler._base_pool = ["000100", "000200"]
 
     pool = scheduler._pool_codes()
 
-    assert pool == ["000001", "000100", "000200"]
+    assert pool == ["000001"]
 
-
-def _async_list(items: list[str]):
-    import asyncio as _a
-
-    async def _provider() -> list[str]:
-        return list(items)
-
-    return _provider()

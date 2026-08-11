@@ -60,7 +60,9 @@ describe('RealtimeQuoteCoordinator', () => {
     expect(registryCalls).toEqual([
       {
         owner: 'dataLoader.hotlist',
-        codes: ['300001', '600001'],
+        // 2026-08-11 用户确认：取消热度池/热榜过滤——订阅池 = 行情列表全部
+        // （688001 不在热榜 codes 也进入订阅池，全量轮转覆盖）
+        codes: ['300001', '600001', '688001'],
         // 均匀轮转（2026-08-11 方案 A）：不再上报 priorityCodes
         priorityCodes: undefined,
       },

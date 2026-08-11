@@ -254,11 +254,11 @@ export class RealtimeQuoteCoordinator {
   }
 
   private buildRealtimeSubscriptionCodes(): string[] {
-    const hotCodes = Array.from(this.getHotCodes())
-    if (!hotCodes.length) return []
-
-    const hotCodeSet = new Set(hotCodes)
-    const stocks = dataLayer.getStocks().filter((stock) => hotCodeSet.has(stock.code))
+    // 2026-08-11 用户确认：取消热度池/热榜过滤——订阅池 = 行情列表全部股票
+    // （dataLayer.getStocks() 合并后的完整展示列表），全量轮转覆盖；
+    // 不依赖热榜 codes，行情列表显示的任何票都进入资金刷新范围。
+    const stocks = dataLayer.getStocks()
+    if (!stocks.length) return []
 
     const getCompRank = (stock: any) => {
       const compRank = Number(stock?.compRank)
@@ -270,7 +270,7 @@ export class RealtimeQuoteCoordinator {
 
     // 均匀轮转（2026-08-11 方案 A）：只按 compRank 排序（订阅顺序稳定），
     // 不再划分 P0/P1——全列表统一刷新周期，后端批次自然错峰。
-    const sorted = stocks
+    return stocks
       .slice()
       .sort((left: any, right: any) => {
         const leftRank = getCompRank(left)
@@ -279,9 +279,6 @@ export class RealtimeQuoteCoordinator {
         return String(left?.code || '').localeCompare(String(right?.code || ''))
       })
       .map((stock) => stock.code)
-
-    const missingCodes = hotCodes.filter((code) => !sorted.includes(code))
-    return [...sorted, ...missingCodes]
   }
 
 }
