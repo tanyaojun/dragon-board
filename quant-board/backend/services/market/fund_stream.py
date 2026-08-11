@@ -2,8 +2,26 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
+
+_TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+
+def latest_trading_session(now: datetime | None = None) -> str:
+    """最近一个交易日（忽略节假日近似）：周末/盘后回退到最近周五/当天。
+
+    首屏链路修复（2026-08-11 实盘复盘）：Redis theme-fund 里旧交易日行
+    （TTL 7 天不清）会被 fund_full_state 原样下发，旧票显示过期交易日累计值，
+    与 THSBigOrder（当日实时）偏差大。快照/推送只下发最近交易日行——
+    宁可资金列暂空等待刷新，也不显示误导性的过期累计值（fail-visible）。
+    """
+    day = (now or datetime.now(_TZ_SHANGHAI)).date()
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day.isoformat()
 
 
 class MarketFundStream:
@@ -82,12 +100,25 @@ class MarketFundStream:
     async def snapshot(self, codes: list[str]) -> dict[str, object]:
         rows = await asyncio.to_thread(self.cache.get_latest, self._normalize(codes))
         version = await asyncio.to_thread(self.cache.current_version)
-        return {"type": "fund_full_state", "version": version, "items": list(rows.values())}
+        latest = latest_trading_session()
+        # 首屏链路修复：只下发最近交易日行，旧交易日累计值不下发（避免误导）
+        items = [
+            dict(row)
+            for row in rows.values()
+            if str(row.get("sessionDate") or "") == latest
+        ]
+        return {"type": "fund_full_state", "version": version, "items": items}
 
     def publish(self, rows: list[dict[str, object]]) -> None:
+        latest = latest_trading_session()
         for queue, sub in list(self._subscribers.items()):
             allowed = set(sub["codes"])
-            items = [row for row in rows if str(row.get("code") or "") in allowed]
+            items = [
+                row
+                for row in rows
+                if str(row.get("code") or "") in allowed
+                and str(row.get("sessionDate") or "") == latest
+            ]
             if not items:
                 continue
             if queue.full():

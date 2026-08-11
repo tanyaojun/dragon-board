@@ -8,15 +8,65 @@ from backend.services.market.fund_stream import MarketFundStream
 
 
 class FakeCache:
+    def __init__(self, rows: dict[str, dict] | None = None) -> None:
+        self._rows = rows or {}
+
     def get_latest(self, codes: list[str]) -> dict[str, dict]:
-        return {}
+        return {code: dict(self._rows[code]) for code in codes if code in self._rows}
 
     def current_version(self) -> int:
         return 1
 
 
-def _stream() -> MarketFundStream:
-    return MarketFundStream(cache=FakeCache())
+def _stream(cache: FakeCache | None = None) -> MarketFundStream:
+    return MarketFundStream(cache=cache or FakeCache())
+
+
+@pytest.mark.asyncio
+async def test_snapshot_only_serves_latest_trading_session_rows() -> None:
+    # 首屏链路修复（2026-08-11 实盘复盘）：Redis 旧交易日行（TTL 不清）不得
+    # 随 fund_full_state 下发——旧票显示过期交易日累计值，与当日实时偏差大
+    from backend.services.market.fund_stream import latest_trading_session
+
+    latest = latest_trading_session()
+    stale = "2026-08-10"
+    cache = FakeCache(
+        {
+            "000001": {"code": "000001", "zlje": 1.0, "sessionDate": latest, "moneyFlowSource": "ths_main_monitor"},
+            "000002": {"code": "000002", "zlje": 2.0, "sessionDate": stale, "moneyFlowSource": "ths_main_monitor"},
+        }
+    )
+    stream = _stream(cache)
+    queue = await stream.subscribe(["000001", "000002"])
+
+    payload = queue.get_nowait()
+    assert payload["type"] == "fund_full_state"
+    assert [row["code"] for row in payload["items"]] == ["000001"]  # 旧交易日行不下发
+    stream.unsubscribe(queue)
+
+
+@pytest.mark.asyncio
+async def test_publish_filters_out_stale_trading_session_rows() -> None:
+    from backend.services.market.fund_stream import latest_trading_session
+
+    latest = latest_trading_session()
+    stale = "2026-08-07"
+    stream = _stream()
+    queue = await stream.subscribe(["000001"])
+    queue.get_nowait()  # 消费 subscribe 时的 fund_full_state
+
+    stream.publish(
+        [
+            {"code": "000001", "zlje": 1.0, "sessionDate": latest, "moneyFlowSource": "ths_main_monitor", "version": 1},
+            {"code": "000001", "zlje": 9.0, "sessionDate": stale, "moneyFlowSource": "ths_main_monitor", "version": 2},
+        ]
+    )
+
+    payload = queue.get_nowait()
+    assert payload["type"] == "fund_patch"
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["zlje"] == 1.0  # 只推最近交易日行
+    stream.unsubscribe(queue)
 
 
 @pytest.mark.asyncio
