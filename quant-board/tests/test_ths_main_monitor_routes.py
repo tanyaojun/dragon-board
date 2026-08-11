@@ -103,6 +103,26 @@ def test_ths_detail_refreshes_theme_fund_cache_when_raw_valid(monkeypatch) -> No
     assert row["moneyFlowSource"] == "ths_main_monitor"
 
 
+def test_ths_detail_publishes_written_row_to_fund_stream(monkeypatch) -> None:
+    # 查看即刷新必须推送（2026-08-11 实盘验证）：仅写缓存不推送时，用户必须
+    # 刷新浏览器才能看到新数据
+    class FakeStream:
+        def __init__(self) -> None:
+            self.published: list[dict] = []
+
+        def publish(self, rows: list[dict]) -> None:
+            self.published.extend(rows)
+
+    stream = FakeStream()
+    monkeypatch.setattr(ths_main_monitor_routes, "get_market_fund_stream", lambda: stream)
+    response = _client().get("/api/big-order/ths-detail?stockCode=002297")
+
+    assert response.status_code == 200
+    assert len(stream.published) == 1
+    assert stream.published[0]["code"] == "002297"
+    assert stream.published[0]["zlje"] == -10_000
+
+
 def test_ths_fund_batch_refreshes_theme_fund_cache_with_rows(monkeypatch) -> None:
     cache = FakeCache()
     response = _client_with_cache(monkeypatch, cache).get(

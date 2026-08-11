@@ -5,6 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
+from backend.services.market.fund_stream import get_market_fund_stream
 from backend.services.market.ths_fund_flow_buckets import parse_l2_summary
 from backend.services.market.ths_main_monitor_service import (
     ThsMainMonitorError,
@@ -19,29 +20,33 @@ router = APIRouter(prefix="/api/big-order", tags=["big-order"])
 
 
 def _refresh_theme_fund_from_raw(code: str, raw: dict[str, object]) -> None:
-    """查看即刷新：ths-detail 成功拉到有效摘要时同步更新资金列。
+    """查看即刷新：ths-detail 成功拉到有效摘要时同步更新资金列并推送前端。
 
-    调度器只刷 fund-stream 订阅池（前端热榜 codes）；用户查看的非订阅池个股
-    资金列会停留在 MongoDB 恢复的历史旧值。这里在 HTTP 查看入口顺带把
-    mainMonitorDetail 摘要写入 theme-fund（fail-visible：解析失败保留 last-good，
-    不阻断明细返回）。
+    调度器只刷 fund-stream 订阅池 ∪ 后端热度池；用户查看的非池内个股资金列
+    会停留在历史旧值。这里在 HTTP 查看入口顺带把 mainMonitorDetail 摘要写入
+    theme-fund，并 publish 到 fund-stream——前端**立即**收到该票 fund_patch，
+    不用等重连/刷新页面（实盘验证 2026-08-11：仅写缓存不推送时，用户必须
+    刷新浏览器才能看到新数据）。fail-visible：解析失败保留 last-good，不阻断明细返回。
     """
     try:
         summary = parse_l2_summary(code, raw)
         if summary is None:
             return
-        get_theme_fund_cache().put(dict(summary))
-    except Exception:  # noqa: BLE001 - 缓存写入失败不影响查看接口
+        stored = get_theme_fund_cache().put(dict(summary))
+        get_market_fund_stream().publish([stored])
+    except Exception:  # noqa: BLE001 - 缓存/推送失败不影响查看接口
         logger.warning("ths-detail 同步资金列失败 code=%s", code, exc_info=True)
 
 
 def _refresh_theme_fund_from_rows(rows: list[dict[str, object]]) -> None:
-    """查看即刷新：ths-fund-batch 的 rows 已是摘要行，批量写入资金列。"""
+    """查看即刷新：ths-fund-batch 的 rows 已是摘要行，批量写入资金列并推送前端。"""
     if not rows:
         return
     try:
-        get_theme_fund_cache().put_many([dict(row) for row in rows])
-    except Exception:  # noqa: BLE001 - 缓存写入失败不影响批量查看接口
+        saved, _ = get_theme_fund_cache().put_many([dict(row) for row in rows])
+        if saved:
+            get_market_fund_stream().publish(saved)
+    except Exception:  # noqa: BLE001 - 缓存/推送失败不影响批量查看接口
         logger.warning("ths-fund-batch 同步资金列失败 rows=%s", len(rows), exc_info=True)
 
 

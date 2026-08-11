@@ -425,9 +425,11 @@ class ThsFundRefreshScheduler:
 
         修复 2026-08-08 首屏只有数笔：原实现"从未刷过才刷一轮"（batch=5），
         233 只展示池只刷 5 只就暂停；现改为按展示池未刷新码持续补齐。
-        M1（2026-08-11 审计）：若缓存已有最近交易日行（MongoDB 冷启动 restore
-        或上次冷刷已补齐），视为已初始化——非交易时段不再全池冷刷 THS（避免
-        每次重启都消耗限流预算，违背"重启零第三方请求"设计）。
+        M1（2026-08-11 审计）：仅当缓存已有**最近交易日**行（MongoDB 冷启动
+        restore 或上次冷刷已补齐）时才视为已初始化——**TTL 内未失效的旧交易日
+        缓存不算**，否则盘后重启会一直显示旧数据直到下一交易时段（实盘验证
+        2026-08-11：Redis 有 08-10 缓存，08-11 盘后重启后 cachedCount=0 且
+        调度器暂停，页面显示旧值）。
         """
         codes = self._pool_codes()
         if not codes:
@@ -437,10 +439,23 @@ class ThsFundRefreshScheduler:
         try:
             cached = self._cache.get_latest(codes)
             if cached:
-                return False
+                latest_session = max(
+                    (str(row.get("sessionDate") or "") for row in cached.values()),
+                    default="",
+                )
+                if latest_session == self._latest_trading_day(self._now()):
+                    return False
         except Exception:
             pass
         return True
+
+    @staticmethod
+    def _latest_trading_day(now: datetime) -> str:
+        """最近一个工作日（忽略节假日近似）：周末/盘后回退到最近周五/当天。"""
+        day = now.date()
+        while day.weekday() >= 5:
+            day -= timedelta(days=1)
+        return day.isoformat()
 
     @staticmethod
     def _is_trading_time(now: datetime) -> bool:
