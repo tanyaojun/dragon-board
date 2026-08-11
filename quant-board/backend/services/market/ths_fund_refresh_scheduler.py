@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from datetime import datetime, timedelta
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -201,7 +200,6 @@ class ThsFundRefreshScheduler:
         codes = self._pool_codes()
         if not codes:
             return False
-        priority = set(self._stream.priority_codes())
         due = [
             code
             for code in codes
@@ -209,8 +207,10 @@ class ThsFundRefreshScheduler:
         ]
         if not due:
             return False
-        # 从未刷过的股票优先（首次补齐），同批内 P0（priority）优先于 P1
-        due.sort(key=lambda code: (0 if code not in self._next_refresh_at else 1, 0 if code in priority else 1))
+        # 均匀轮转（2026-08-11 方案 A，用户确认）：去 P0/P1 分级，全列表统一
+        # 周期——列表内数据时效一致，避免综合排名对比时新旧混杂。
+        # 从未刷过的股票优先（首次补齐）。
+        due.sort(key=lambda code: 0 if code not in self._next_refresh_at else 1)
         batch = due[: self._batch_size]
 
         raw_map = await self._load_raw_batch(batch, now_ts)
@@ -262,15 +262,10 @@ class ThsFundRefreshScheduler:
             code = str(row.get("code") or "")
             if not code:
                 continue
-            # L6（2026-08-11 审计）：P1 常规周期加 ±20% 随机抖动，摊薄开盘/冷启动
-            # 后全池集中到期造成的 THS 请求陡增；P0 保持 30s 固定优先校准。
-            interval = (
-                self._priority_interval_seconds if code in priority else self._refresh_interval_seconds
-            )
-            if code in priority:
-                self._next_refresh_at[code] = now_ts + interval
-            else:
-                self._next_refresh_at[code] = now_ts + interval * random.uniform(0.8, 1.2)
+            # 均匀轮转（2026-08-11 方案 A）：全列表统一 refresh_interval_seconds，
+            # 到期时间按批次自然错峰（每批 5 只、批间 batch_interval_seconds），
+            # 不再用随机抖动（批次错峰已足够均匀，抖动反而破坏一致性）。
+            self._next_refresh_at[code] = now_ts + self._refresh_interval_seconds
             self._retry_at.pop(code, None)
             self._fail_count[code] = 0
             try:

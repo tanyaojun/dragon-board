@@ -61,14 +61,15 @@ describe('RealtimeQuoteCoordinator', () => {
       {
         owner: 'dataLoader.hotlist',
         codes: ['300001', '600001'],
-        priorityCodes: ['300001', '600001'], // 池子 ≤30 只时全部为 P0
+        // 均匀轮转（2026-08-11 方案 A）：不再上报 priorityCodes
+        priorityCodes: undefined,
       },
     ])
     expect(webSocketService.setHotPool).not.toHaveBeenCalled()
     coordinator.destroy()
   })
 
-  it('submits compRank<=50 codes as P0 priority to the market fund feed', () => {
+  it('submits all codes without priority layering (uniform rotation)', () => {
     for (let index = 1; index <= 40; index += 1) {
       const code = String(index).padStart(6, '0')
       stocks.push({ code, rank: index, compRank: index })
@@ -81,15 +82,15 @@ describe('RealtimeQuoteCoordinator', () => {
     coordinator.syncRealtimeSubscription()
 
     const call = registryCalls[0]
-    // 40 只 compRank 均 ≤50 → 全部为 P0（不再截断到 30）
-    expect(call.priorityCodes).toHaveLength(40)
-    expect(call.priorityCodes?.[0]).toBe('000001')
-    expect(call.priorityCodes?.[39]).toBe('000040')
+    // 均匀轮转：全列表统一上报，无 P0/P1 分级
+    expect(call.priorityCodes).toBeUndefined()
     expect(call.codes).toHaveLength(40)
+    expect(call.codes?.[0]).toBe('000001')
+    expect(call.codes?.[39]).toBe('000040')
     coordinator.destroy()
   })
 
-  it('splits P0 (compRank<=50) and P1 (compRank>50) without complex layering', () => {
+  it('submits full list without P0/P1 split', () => {
     for (let index = 1; index <= 60; index += 1) {
       const code = String(index).padStart(6, '0')
       stocks.push({ code, rank: index, compRank: index })
@@ -102,12 +103,11 @@ describe('RealtimeQuoteCoordinator', () => {
     coordinator.syncRealtimeSubscription()
 
     const call = registryCalls[0]
-    expect(call.priorityCodes).toHaveLength(50) // compRank 1-50
-    expect(call.priorityCodes?.[0]).toBe('000001')
-    expect(call.priorityCodes?.[49]).toBe('000050')
-    // 51-60（compRank>50）不进入 P0
-    expect(call.priorityCodes).not.toContain('000051')
-    expect(call.codes).toHaveLength(60) // 全池仍是 60 只
+    // 60 只全部上报（compRank 排序稳定），无 P0/P1 划分
+    expect(call.priorityCodes).toBeUndefined()
+    expect(call.codes).toHaveLength(60)
+    expect(call.codes?.[0]).toBe('000001')
+    expect(call.codes?.[59]).toBe('000060')
     coordinator.destroy()
   })
 

@@ -8,10 +8,7 @@ import { REALTIME_FLUSH_DELAY_MS } from './constants'
 
 const REALTIME_OWNER = 'dataLoader.hotlist'
 
-// P0/P1 资金校准分级（2026-08-08 用户确认简化为纯 compRank 口径）：
-// P0 = compRank ≤ 50（优先校准，30 秒轮转），P1 = compRank > 50（180 秒轮转）。
-// 不再叠加信号/金叉/confidence/turnover 分层。
-const P0_MAX_COMP_RANK = 50
+// 均匀轮转（2026-08-11 方案 A，用户确认）：全列表统一刷新周期，无 P0/P1 分级。
 
 function deriveMainMoneyRatio(mainNet: unknown, turnover: unknown): number | undefined {
   const net = Number(mainNet)
@@ -44,8 +41,10 @@ export class RealtimeQuoteCoordinator {
   }
 
   syncRealtimeSubscription() {
-    const { p0Codes, allCodes } = this.buildRealtimeSubscriptionCodes()
-    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, allCodes, p0Codes)
+    // 均匀轮转（2026-08-11 方案 A，用户确认）：不再上报 P0/P1 优先级——
+    // 全列表统一刷新周期，列表内数据时效一致，避免综合排名对比时新旧混杂。
+    const codes = this.buildRealtimeSubscriptionCodes()
+    realtimeSubscriptionRegistry.setOwnerCodes(REALTIME_OWNER, codes)
   }
 
   isRealtimePrimaryHealthy(): boolean {
@@ -254,9 +253,9 @@ export class RealtimeQuoteCoordinator {
     }
   }
 
-  private buildRealtimeSubscriptionCodes(): { p0Codes: string[]; allCodes: string[] } {
+  private buildRealtimeSubscriptionCodes(): string[] {
     const hotCodes = Array.from(this.getHotCodes())
-    if (!hotCodes.length) return { p0Codes: [], allCodes: [] }
+    if (!hotCodes.length) return []
 
     const hotCodeSet = new Set(hotCodes)
     const stocks = dataLayer.getStocks().filter((stock) => hotCodeSet.has(stock.code))
@@ -269,7 +268,8 @@ export class RealtimeQuoteCoordinator {
       return 9999
     }
 
-    // P0/P1 只按 compRank 排序（用户确认简化为纯 compRank 口径）
+    // 均匀轮转（2026-08-11 方案 A）：只按 compRank 排序（订阅顺序稳定），
+    // 不再划分 P0/P1——全列表统一刷新周期，后端批次自然错峰。
     const sorted = stocks
       .slice()
       .sort((left: any, right: any) => {
@@ -281,12 +281,7 @@ export class RealtimeQuoteCoordinator {
       .map((stock) => stock.code)
 
     const missingCodes = hotCodes.filter((code) => !sorted.includes(code))
-    const allCodes = [...sorted, ...missingCodes]
-    const p0Codes = allCodes.filter((code) => {
-      const stock = stocks.find((item) => item.code === code)
-      return stock !== undefined && getCompRank(stock) <= P0_MAX_COMP_RANK
-    })
-    return { p0Codes, allCodes }
+    return [...sorted, ...missingCodes]
   }
 
 }

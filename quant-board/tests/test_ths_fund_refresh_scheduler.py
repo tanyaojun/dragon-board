@@ -406,56 +406,50 @@ async def test_mongo_persist_disabled_without_repo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_priority_codes_refresh_faster_than_regular() -> None:
+async def test_uniform_rotation_refreshes_all_codes_at_same_interval() -> None:
+    # 均匀轮转（2026-08-11 方案 A）：无 P0/P1 分级，全列表统一 180s 周期
     box, now = _mutable_clock(datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ))
     service = FakeThsService(titles=_titles("000001", "000002"))
     cache = FakeCache()
     scheduler = _scheduler(
         service=service,
         cache=cache,
-        stream=FakeStream(["000001", "000002"], priority_codes=["000001"]),
+        stream=FakeStream(["000001", "000002"]),
         now=now,
         refresh_interval_seconds=180,
-        priority_interval_seconds=30,
     )
 
     assert await scheduler.run_once() is True  # 首轮全刷
-    first_batches = list(service.batches)
-    # 35 秒后：P0（000001）到期再刷，P1（000002）未到期
+    # 35 秒后：未到期（180s），不刷
     box["current"] = datetime(2026, 8, 7, 10, 0, 35, tzinfo=TZ)
-    assert await scheduler.run_once() is True
-    assert service.batches[-1] == ["000001"]
-    assert scheduler._next_refresh_at["000002"] > box["current"].timestamp()
-    # 180 秒后：P1 也到期
+    assert await scheduler.run_once() is False
+    # 180 秒后：全部到期再刷（统一周期，无优先级差异）
     box["current"] = datetime(2026, 8, 7, 10, 3, 5, tzinfo=TZ)
     assert await scheduler.run_once() is True
-    assert first_batches  # 首轮确实刷过
+    last_round = [b[0] for b in service.batches[-2:]]
+    assert set(last_round) == {"000001", "000002"}
 
 
 @pytest.mark.asyncio
-async def test_priority_codes_are_sorted_first_when_due() -> None:
+async def test_uniform_rotation_sorts_unrefreshed_first() -> None:
     box, now = _mutable_clock(datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ))
     service = FakeThsService(titles=_titles("000001", "000002", "000003", "000004", "000005", "000006"))
     scheduler = _scheduler(
         service=service,
-        stream=FakeStream(
-            ["000001", "000002", "000003", "000004", "000005", "000006"],
-            priority_codes=["000004", "000001"],
-        ),
+        stream=FakeStream(["000001", "000002", "000003", "000004", "000005", "000006"]),
         now=now,
         batch_size=5,
         refresh_interval_seconds=180,
-        priority_interval_seconds=30,
     )
 
-    assert await scheduler.run_once() is True  # 首轮 5 只（P0 优先：000001、000004 在前）
+    assert await scheduler.run_once() is True  # 首轮 5 只（未刷优先，无 P0 排序）
     first_round = [b[0] for b in service.batches[:5]]
-    assert first_round[:2] == ["000001", "000004"]
+    assert len(set(first_round)) == 5
     box["current"] = box["current"].replace(minute=0, second=40)
-    assert await scheduler.run_once() is True  # 补齐未刷的 000006 + P0（000001/000004）到期重刷
+    assert await scheduler.run_once() is True  # 补齐未刷的 000006；其余 180s 未到期
     second_round = [b[0] for b in service.batches[5:]]
     assert "000006" in second_round
-    assert "000005" not in second_round  # P1（180s）未到期
+    assert len(set(second_round)) == 1  # 只补未刷的
 
 
 @pytest.mark.asyncio
@@ -468,6 +462,7 @@ async def test_status_reports_priority_count() -> None:
         priority_interval_seconds=30,
     )
     status = scheduler.status()
+    # 均匀轮转下 priority 不再驱动刷新节奏；字段保留仅作前端上报兼容（生产恒 0）
     assert status["priorityCount"] == 1
     assert status["priorityIntervalSeconds"] == 30
 
