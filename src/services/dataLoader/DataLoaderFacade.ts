@@ -212,6 +212,11 @@ class DataLoaderService {
       await themeFacade.refreshRuntime({ source: 'dataLoader', syncStocks: true })
       platformHotlistService.markRefreshed()
       debugLog('[DataLoader] 平台热榜已重新加载', platformHotlistService.getCacheDiagnostics())
+      // 平台热榜每次刷新后显式重新上报订阅：热榜池每次刷新标的都会变化，
+      // 新进榜股票必须立即进入 fund-stream 订阅池（调度器刷新范围），
+      // 不能停留在上次上报的静态快照。registry 内部按 signature 去重，
+      // 池未变化时不会重复发送（与 mergeData 内的上报互为冗余保险）。
+      this.syncRealtimeSubscription()
       return true
     }
 

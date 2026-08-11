@@ -33,6 +33,7 @@ let startupBundleGetCount = 0
 let startupBundleSaveCount = 0
 let startupBundleWrites: any[] = []
 let realtimeOptions: any = null
+let realtimeSyncCallCount = 0
 let volumeRatioItems: Record<string, any> = {}
 let volumeRatioError: Error | null = null
 let shouldRefreshPlatformCache = false
@@ -142,7 +143,9 @@ vi.mock('../RealtimeQuoteCoordinator', () => ({
       constructor(options: any) {
         realtimeOptions = options
       }
-      syncRealtimeSubscription() {}
+      syncRealtimeSubscription() {
+        realtimeSyncCallCount++
+      }
       isRealtimePrimaryHealthy() {
         return realtimePrimaryHealthy
       }
@@ -248,6 +251,7 @@ describe('DataLoaderFacade', () => {
     blockQuoteBatch = false
     releaseQuoteBatch = null
     realtimePrimaryHealthy = false
+    realtimeSyncCallCount = 0
     startupBundle = null
     startupBundleGetCount = 0
     startupBundleSaveCount = 0
@@ -863,6 +867,8 @@ describe('DataLoaderFacade', () => {
       expect.any(Object),
     )
     expect(platformHotlistService.markRefreshed).toHaveBeenCalledTimes(1)
+    // 平台热榜刷新完成后必须重新上报订阅：新进榜股票立即进入调度器刷新范围
+    expect(realtimeSyncCallCount).toBeGreaterThan(0)
     expect(themeFacade.refreshRuntime).toHaveBeenCalledWith({
       source: 'dataLoader',
       syncStocks: true,
