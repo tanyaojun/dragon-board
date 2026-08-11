@@ -25,6 +25,57 @@ from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cac
 logger = logging.getLogger(__name__)
 TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
+# 方案 B（2026-08-11 用户确认）：后端独立热度池的刷新节流（秒）——
+# 基础池每 5 分钟从 hotlist 服务缓存重建一次（get() 内部 TTL 缓存，不额外打上游）
+BASE_POOL_REFRESH_SECONDS = 300.0
+
+
+def extract_hotlist_codes(node: Any, codes: set[str]) -> None:
+    """递归提取热榜 payload 中的 6 位股票代码（兼容各平台结构差异）。
+
+    方案 B：后端独立热度池不依赖前端 fund-stream 上报，直接读 hotlist
+    服务缓存的 8 平台热榜 payload（xueqiu/cls/ths/kpl/tgb/dzh/eastmoney/tdx
+    结构各异），统一按"6 位数字 code 字段"提取并集。
+    """
+    if isinstance(node, dict):
+        for key in ("code", "stock_code", "stockCode", "f12", "symbol"):
+            val = node.get(key)
+            if isinstance(val, str) and val.isdigit() and len(val) == 6:
+                codes.add(val)
+        for value in node.values():
+            extract_hotlist_codes(value, codes)
+    elif isinstance(node, list):
+        for item in node:
+            extract_hotlist_codes(item, codes)
+
+
+async def hotlist_pool_codes() -> list[str]:
+    """后端独立热度池：从 hotlist 服务缓存提取 8 平台 codes 并集。
+
+    只读缓存（get() 命中 TTL 内缓存/降级兜底），单平台失败不中断；
+    调度器侧另有 BASE_POOL_REFRESH_SECONDS 节流，不会每轮都调。
+    """
+    try:
+        from backend.market_proxy.hotlists import (
+            GET_PLATFORMS,
+            POST_PLATFORMS,
+            get_hotlist_service,
+        )
+    except Exception:
+        return []
+    try:
+        service = get_hotlist_service()
+    except Exception:
+        return []
+    codes: set[str] = set()
+    for platform in sorted(GET_PLATFORMS | POST_PLATFORMS):
+        try:
+            payload = await service.get(platform)
+        except Exception:
+            continue
+        extract_hotlist_codes(payload, codes)
+    return sorted(codes)
+
 # 系统性上游故障：进入全局冷却 + 并发降 1（与 2026-07-25 设计一致）
 SYSTEMIC_THS_ERRORS = frozenset(
     {"ths_rate_limited", "ths_captcha_required", "ths_upstream_unavailable"}
@@ -68,10 +119,17 @@ class ThsFundRefreshScheduler:
         fund_repo: FundFlowRepository | None = None,
         priority_interval_seconds: int = 30,
         mongo_write_timeout_seconds: float = 5.0,
+        base_pool_provider: Callable[[], Awaitable[list[str]]] | None = None,
     ) -> None:
         self._service = service
         self._cache = cache
         self._stream = stream
+        # 方案 B（2026-08-11 用户确认）：后端独立热度池提供者（async () -> codes）。
+        # universe = 前端订阅池 ∪ 后端热度池——行情列表显示的票无条件在刷新范围，
+        # 不随"查看"变化，前端断开/未上报时仍按热度池刷新。
+        self._base_pool_provider = base_pool_provider
+        self._base_pool: list[str] = []
+        self._base_pool_fetched_at = 0.0
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
         self._batch_size = max(1, min(5, int(batch_size)))
         self._base_concurrency = max(1, min(2, int(base_concurrency)))
@@ -139,7 +197,8 @@ class ThsFundRefreshScheduler:
         now_ts = now_dt.timestamp()
         if now_ts < self._circuit_open_until:
             return False
-        codes = self._stream.market_codes()
+        await self._refresh_base_pool_if_stale(now_ts)
+        codes = self._pool_codes()
         if not codes:
             return False
         priority = set(self._stream.priority_codes())
@@ -255,6 +314,24 @@ class ThsFundRefreshScheduler:
             self._last_session_date = str(cache_rows[0].get("sessionDate") or self._last_session_date or "")
         return True
 
+    async def _refresh_base_pool_if_stale(self, now_ts: float) -> None:
+        """方案 B：每 BASE_POOL_REFRESH_SECONDS 从后端热度池提供者重建基础池。
+        基础池失败/不可用时保留上次池（fail-visible），不影响订阅池刷新。"""
+        if self._base_pool_provider is None:
+            return
+        if now_ts - self._base_pool_fetched_at < BASE_POOL_REFRESH_SECONDS:
+            return
+        self._base_pool_fetched_at = now_ts
+        try:
+            self._base_pool = await self._base_pool_provider()
+        except Exception:
+            logger.exception("base hotlist pool refresh failed; keep last pool")
+
+    def _pool_codes(self) -> list[str]:
+        """刷新范围 = 前端订阅池（含 owner 持久化）∪ 后端独立热度池（方案 B）。
+        行情列表显示的股票无条件在刷新范围内，不随"查看"变化。"""
+        return sorted(set(self._stream.market_codes()) | set(self._base_pool))
+
     async def _load_raw_batch(self, codes: list[str], now_ts: float) -> dict[str, dict]:
         """并发 load_raw（每只独立超时），返回成功 raw 的 code→raw 映射。
 
@@ -320,7 +397,7 @@ class ThsFundRefreshScheduler:
             "running": self._task is not None,
             "source": "ths_main_monitor",
             "mongoPersistEnabled": self._fund_repo is not None,
-            "universeCount": len(self._stream.market_codes()),
+            "universeCount": len(self._pool_codes()),
             "priorityCount": len(self._stream.priority_codes()),
             "priorityIntervalSeconds": self._priority_interval_seconds,
             "ownerState": self._owner_state(),
@@ -352,7 +429,7 @@ class ThsFundRefreshScheduler:
         或上次冷刷已补齐），视为已初始化——非交易时段不再全池冷刷 THS（避免
         每次重启都消耗限流预算，违背"重启零第三方请求"设计）。
         """
-        codes = self._stream.market_codes()
+        codes = self._pool_codes()
         if not codes:
             return False
         if not any(code not in self._next_refresh_at for code in codes):
@@ -414,7 +491,7 @@ class ThsFundRefreshScheduler:
             return max(1.0, self._seconds_until_next_trading_time(now_dt))
         now_ts = now_dt.timestamp()
         horizon = self._refresh_interval_seconds
-        for code in self._stream.market_codes():
+        for code in self._pool_codes():
             due = max(self._next_refresh_at.get(code, 0.0), self._retry_at.get(code, 0.0))
             if due > 0:
                 horizon = min(horizon, max(0.0, due - now_ts))
@@ -440,6 +517,9 @@ def get_ths_fund_refresh_scheduler() -> ThsFundRefreshScheduler:
             cache=get_theme_fund_cache(),
             stream=get_market_fund_stream(),
             fund_repo=fund_repo,
+            # 方案 B（2026-08-11 用户确认）：后端独立热度池——universe =
+            # 前端订阅池 ∪ hotlist 服务 8 平台热榜并集，行情列表无条件在刷新范围
+            base_pool_provider=hotlist_pool_codes,
         )
     return _ths_fund_refresh_scheduler
 

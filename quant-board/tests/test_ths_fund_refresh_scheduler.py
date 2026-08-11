@@ -221,7 +221,8 @@ async def test_refreshed_codes_respect_interval() -> None:
 
     assert await scheduler.run_once() is True
     assert await scheduler.run_once() is False  # interval 内不重复
-    box["current"] = datetime(2026, 8, 7, 10, 3, 5, tzinfo=TZ)
+    # L6（2026-08-11）：P1 常规周期带 ±20% 随机抖动（144-216s），推进到抖动上限之后
+    box["current"] = datetime(2026, 8, 7, 10, 4, 0, tzinfo=TZ)
     assert await scheduler.run_once() is True
 
 
@@ -738,3 +739,47 @@ async def test_stale_raw_skips_cache_and_mongo() -> None:
     assert "000002" not in cache.rows
     assert [d["code"] for d in fund_repo.docs] == ["000001"]
     assert scheduler._retry_at["000002"] == current.timestamp() + 30
+
+@pytest.mark.asyncio
+async def test_base_hotlist_pool_is_refreshed_without_subscribers() -> None:
+    # 方案 B（2026-08-11 用户确认）：后端独立热度池——即使没有前端订阅，
+    # 行情列表（hotlist 并集）的股票也进入刷新范围
+    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
+    service = FakeThsService(titles=_titles("000100", "000200"))
+    cache = FakeCache()
+    scheduler = _scheduler(
+        service=service,
+        cache=cache,
+        stream=FakeStream([]),  # 无前端订阅
+        base_pool_provider=lambda: _async_list(["000100", "000200"]),
+        current=current,
+    )
+
+    assert await scheduler.run_once() is True
+    assert "000100" in cache.rows
+    assert "000200" in cache.rows
+
+
+@pytest.mark.asyncio
+async def test_pool_codes_unions_subscribers_and_base_pool() -> None:
+    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
+    scheduler = _scheduler(
+        service=FakeThsService(),
+        stream=FakeStream(["000001"]),
+        base_pool_provider=None,
+        current=current,
+    )
+    scheduler._base_pool = ["000100", "000200"]
+
+    pool = scheduler._pool_codes()
+
+    assert pool == ["000001", "000100", "000200"]
+
+
+def _async_list(items: list[str]):
+    import asyncio as _a
+
+    async def _provider() -> list[str]:
+        return list(items)
+
+    return _provider()
