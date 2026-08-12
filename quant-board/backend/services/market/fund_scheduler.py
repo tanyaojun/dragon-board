@@ -346,6 +346,23 @@ class MarketFundScheduler:
             "pendingSaveDropped": self._pending_save_dropped,
         }
 
+    async def _ensure_redis_cache_alive(self) -> None:
+        """theme-fund:latest key 缺失时用内存 last-good 写回 Redis（零上游请求）。
+
+        2026-08-12：Redis 资金缓存 key 曾被误清/丢失导致前端资金列空；盘后
+        调度器暂停不写，key 缺失时这里从进程内 last-good 恢复，保证前端可读。
+        """
+        try:
+            if not self.cache.has_redis_data():
+                rows = self.cache.memory_rows()
+                if rows:
+                    saved, _failures = self.cache.put_many(rows)
+                    if saved:
+                        self.stream.publish(saved)
+                        logger.info("restored theme-fund redis cache from last-good: %s rows", len(saved))
+        except Exception:
+            logger.exception("ensure theme-fund redis cache alive failed")
+
     async def _run(self) -> None:
         while True:
             try:
@@ -364,6 +381,8 @@ class MarketFundScheduler:
                     await asyncio.wait_for(self.stream.codes_changed.wait(), timeout=wait_for)
                 except asyncio.TimeoutError:
                     pass
+            # Redis 资金缓存存活检查（key 被误清/丢失时用内存 last-good 写回）
+            await self._ensure_redis_cache_alive()
 
 
 market_fund_scheduler = MarketFundScheduler(

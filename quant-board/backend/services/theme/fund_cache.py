@@ -222,6 +222,21 @@ class ThemeFundCache:
                     result[code] = dict(latest)
         return result
 
+    def has_redis_data(self) -> bool:
+        """Redis 里 theme-fund:latest key 是否存在（2026-08-12：key 曾被误清/
+        过期导致前端资金列空，恢复机制用此判断是否需要从内存 last-good 写回）。"""
+        if self._redis is None:
+            return False
+        try:
+            return bool(self._redis.exists(self._key("latest")))
+        except Exception:
+            return False
+
+    def memory_rows(self) -> list[dict[str, object]]:
+        """导出进程内 last-good 全部行（用于 Redis key 缺失时写回，零上游请求）。"""
+        with self._lock:
+            return [dict(value) for value in self._latest.values()]
+
     def set_owner_codes(self, owner: str, codes: list[str]) -> None:
         key = str(owner).strip()
         if not key:
