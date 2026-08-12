@@ -30,6 +30,10 @@ class ThemeFundCache:
         self._owners: dict[str, list[str]] = {}
         self._owners_loaded = False
         self._memory_version = 0
+        # 旧交易日行清理标记（2026-08-12）：仅跨日时清理 Redis hash——
+        # 同日内重复写入不重复 hgetall（5200 字段 hgetall 太重，曾导致大 batch
+        # put_many 超时、Redis latest 未写入）
+        self._last_pruned_date: str | None = None
         self._lock = Lock()
 
     def put(self, row: dict[str, object], *, is_final: bool = False) -> dict[str, object]:
@@ -169,11 +173,16 @@ class ThemeFundCache:
                 if pipeline is not None:
                     pipeline.hset(hash_key, code, json.dumps(stored, ensure_ascii=False, separators=(",", ":")))
             # 旧交易日行主动清理（2026-08-12）：TTL 加长后旧累计值不能滞留——
-            # 写入新交易日时清掉 Redis hash + 内存里 sessionDate < 当天 的行，
-            # 前端不会显示过期累计值（hgetall 一次 + 追加 hdel 到同一 pipeline；
-            # 排除本批已写入的 code，避免 hset 后误删）
-            if self._redis is not None and pipeline is not None:
+            # 仅在写入日期变化（跨日）时清理 Redis hash + 内存里 sessionDate <
+            # 当天 的行；同日内重复写入跳过（5200 字段 hgetall 太重，曾导致大
+            # batch put_many 超时、Redis latest 未写入、前端资金列空）
+            if (
+                self._redis is not None
+                and pipeline is not None
+                and today != self._last_pruned_date
+            ):
                 try:
+                    self._last_pruned_date = today
                     written_codes = {str(c.get("code")) for c in validated}
                     all_rows = self._read_hash_all(hash_key)
                     stale_fields = [

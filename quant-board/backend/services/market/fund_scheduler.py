@@ -49,7 +49,7 @@ class MarketFundScheduler:
         refresh_interval_seconds: float = 300.0,
         systemic_cooldown_seconds: float = 300.0,
         fetch_timeout_seconds: float = 60.0,
-        save_timeout_seconds: float = 30.0,
+        save_timeout_seconds: float = 90.0,
         max_pending_save_rows: int = 30000,
         enabled: bool = True,
         # THS L2 单票补充服务（2026-08-12 用户确认）：akshare 网页源不全，
@@ -269,18 +269,20 @@ class MarketFundScheduler:
         THS 也无数据（新股未上市等）则跳过，下轮再试。单轮上限防批量缺失
         时打爆 THS 30 req/min 预算。
         """
-        if not saved_rows or self._ths_service is None:
+        if not saved_rows and self.cache.has_redis_data():
             return
-        saved_codes = {str(row.get("code")) for row in saved_rows}
+        if self._ths_service is None:
+            return
         pool_codes = set(self.stream.market_codes())
-        missing = sorted(code for code in pool_codes if code not in saved_codes)
-        if not missing:
+        if not pool_codes:
             return
-        # 排除 Redis 已有 session_date 行的（之前 THS 补过/其它来源已有），不重复补
-        cached = self.cache.get_latest(missing)
+        # 缺失判断直接用 cache.get_latest（内存 + Redis）——即使本轮 put_many
+        # 超时（saved_rows 空）但内存已有 akshare 行，也不算缺失、不重复补 THS
+        # （2026-08-12：曾因 put_many 超时 saved_codes 空而补全部订阅池 194 只）
+        cached = self.cache.get_latest(list(pool_codes))
         missing = [
             code
-            for code in missing
+            for code in pool_codes
             if str((cached.get(code) or {}).get("sessionDate") or "") != session_date
         ]
         if not missing:
