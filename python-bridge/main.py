@@ -644,6 +644,7 @@ class QuoteFetchStats:
     received_quotes: int = 0
     received_depth: int = 0
     elapsed_ms: int = 0
+    halted_codes: int = 0  # 本轮因无数据挂起而跳过的代码数
 
     def to_payload(self) -> dict[str, int]:
         return {
@@ -655,6 +656,7 @@ class QuoteFetchStats:
             "failedBatches": self.failed_batches,
             "slowBatches": self.slow_batches,
             "truncatedBatches": self.truncated_batches,
+            "haltedCodes": self.halted_codes,
         }
 
 
@@ -679,6 +681,8 @@ class BridgeConfig:
     batch_growth_step: int = env_int("TDX_BATCH_GROWTH_STEP", 2)
     batch_shrink_step: int = env_int("TDX_BATCH_SHRINK_STEP", 5)
     healthy_cycles_before_grow: int = env_int("TDX_HEALTHY_CYCLES_BEFORE_GROW", 5)
+    dead_code_max_failures: int = env_int("TDX_DEAD_CODE_MAX_FAILURES", 3)
+    dead_code_retry_ms: int = env_int("TDX_DEAD_CODE_RETRY_MS", 1800000)  # 30 分钟
     tick_window: int = env_int("TDX_TICK_WINDOW", 60)
     tick_codes_per_cycle: int = env_int("TDX_TICK_CODES_PER_CYCLE", 0)
     speed_window_ms: int = env_int("TDX_SPEED_WINDOW_MS", 60000)
@@ -827,6 +831,40 @@ class TdxL2Bridge:
         self._backend_cached_quotes: list[dict[str, Any]] = []
         self._backend_cached_depth: list[dict[str, Any]] = []
         self._backend_cached_stats: Any = None
+
+        # 无数据代码挂起（2026-08-12：688836 新股未上市 TDX 无数据，含它的
+        # 批量行情请求整批返回空——连续失败 N 次挂起，避免每轮重复请求 + 拖累
+        # 同批其他股票；到期自动重试，上市后有数据自动恢复）
+        self._dead_codes: dict[str, float] = {}  # code -> 下次重试时间戳(ms)
+        self._dead_fail_counts: dict[str, int] = {}
+
+    def is_code_halted(self, code: str, now_ms_value: int) -> bool:
+        """代码是否处于无数据挂起（未到重试时间）。"""
+        return now_ms_value < self._dead_codes.get(code, 0)
+
+    def halt_code(self, code: str, now_ms_value: int) -> None:
+        """记录一次单只请求失败；连续失败达阈值后挂起（dead_code_retry_ms 后重试）。"""
+        count = self._dead_fail_counts.get(code, 0) + 1
+        if count >= self.config.dead_code_max_failures:
+            self._dead_codes[code] = now_ms_value + self.config.dead_code_retry_ms
+            self._dead_fail_counts.pop(code, None)
+            logger.warning(
+                "quote code halted (no data after %s attempts): %s; retry in %ss",
+                count,
+                code,
+                self.config.dead_code_retry_ms / 1000.0,
+            )
+        else:
+            self._dead_fail_counts[code] = count
+
+    def unhalt_code(self, code: str) -> None:
+        """单只请求成功（拿到数据）后清除挂起/失败计数。"""
+        self._dead_codes.pop(code, None)
+        self._dead_fail_counts.pop(code, None)
+
+    def halted_codes(self, now_ms_value: int) -> list[str]:
+        """当前处于挂起窗口内的代码列表。"""
+        return [code for code, retry_at in self._dead_codes.items() if now_ms_value < retry_at]
 
     def prune_quote_speed_history(self, code: str, current_ts: int) -> deque[tuple[int, float]]:
         history = self.quote_price_history[code]
@@ -2481,6 +2519,17 @@ class TdxL2Bridge:
         if not codes:
             return [], [], stats
 
+        # 无数据挂起代码跳过（2026-08-12：688836 新股未上市 TDX 无数据，
+        # 含它的批量请求整批返回空——挂起后不再每轮重复请求/拖累同批）
+        now_value = now_ms()
+        halted = self.halted_codes(now_value)
+        if halted:
+            codes = [code for code in codes if code not in halted]
+            stats.halted_codes = len(halted)
+            stats.requested_codes = len(codes)
+        if not codes:
+            return [], [], stats
+
         quotes_by_code: dict[str, dict[str, Any]] = {}
         depth_by_code: dict[str, dict[str, Any]] = {}
         quote_batches = self.chunk_codes(codes, self.current_quote_batch_size)
@@ -2535,8 +2584,17 @@ class TdxL2Bridge:
                                         assert self.quote_client is not None
                                         return self.quote_client.quotes(symbol=[code])
 
-                                    records.extend(frame_to_records(await asyncio.to_thread(_refetch_one)))
+                                    refetched_records = frame_to_records(
+                                        await asyncio.to_thread(_refetch_one)
+                                    )
+                                    if any(
+                                        normalize_code(pick(r, "code", "symbol")) == missing_code
+                                        for r in refetched_records
+                                    ):
+                                        self.unhalt_code(missing_code)
+                                    records.extend(refetched_records)
                                 except Exception as error:
+                                    self.halt_code(missing_code, now_ms())
                                     if self._warn_throttled(
                                         self._refetch_fail_warn_ts,
                                         missing_code,
