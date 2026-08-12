@@ -139,8 +139,12 @@ export class RealtimeQuoteCoordinator {
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
-          const hasDashboardMoneyFlow = item.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR
-          const mainMoneyRatio = hasDashboardMoneyFlow
+          // 2026-08-12：接受 akshare 同花顺网页估算行（唯一资金源）与 THS L2 行——
+          // 此前只认 ths_main_monitor 导致 akshare 行的资金字段（zlje 等）全被丢弃
+          const isDashboardMoneyFlow =
+            item.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR ||
+            item.moneyFlowSource === FUND_SOURCE.AKSHARE_THS_INDIVIDUAL
+          const mainMoneyRatio = isDashboardMoneyFlow
             ? item.zljzb ?? deriveMainMoneyRatio(item.zlje, dataLayer.getStock(item.code)?.turnover)
             : undefined
           return {
@@ -152,14 +156,14 @@ export class RealtimeQuoteCoordinator {
             volume: item.volume,
             turnover: item.amount,
             turnoverRate: item.turnoverRate,
-            zlje: hasDashboardMoneyFlow ? item.zlje : undefined,
+            zlje: isDashboardMoneyFlow ? item.zlje : undefined,
             zljzb: mainMoneyRatio,
-            cddje: hasDashboardMoneyFlow ? item.cddje : undefined,
-            cddjzb: hasDashboardMoneyFlow ? item.cddjzb : undefined,
-            moneyFlowSource: hasDashboardMoneyFlow ? item.moneyFlowSource : undefined,
-            moneyFlowEstimated: hasDashboardMoneyFlow ? item.moneyFlowEstimated : undefined,
-            capitalFlowSource: hasDashboardMoneyFlow ? item.capitalFlowSource : undefined,
-            capitalFlowConfidence: hasDashboardMoneyFlow ? item.capitalFlowConfidence : undefined,
+            cddje: isDashboardMoneyFlow ? item.cddje : undefined,
+            cddjzb: isDashboardMoneyFlow ? item.cddjzb : undefined,
+            moneyFlowSource: isDashboardMoneyFlow ? item.moneyFlowSource : undefined,
+            moneyFlowEstimated: isDashboardMoneyFlow ? item.moneyFlowEstimated : undefined,
+            capitalFlowSource: isDashboardMoneyFlow ? item.capitalFlowSource : undefined,
+            capitalFlowConfidence: isDashboardMoneyFlow ? item.capitalFlowConfidence : undefined,
             tdxBuyVolume: item.tdxBuyVolume,
             tdxSellVolume: item.tdxSellVolume,
             tdxCurrentVolume: item.tdxCurrentVolume,
