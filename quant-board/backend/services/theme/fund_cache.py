@@ -10,6 +10,11 @@ from typing import Any
 from backend.core.settings import get_settings
 
 
+# 支持的来源（2026-08-12：akshare 同花顺网页 source 诚实标识后，缓存接受
+# L2 主源与网页估算两种；后续其它来源按需扩展）
+SUPPORTED_FUND_SOURCES = frozenset({"ths_main_monitor", "akshare_ths_individual"})
+
+
 class ThemeFundCache:
     def __init__(
         self,
@@ -66,7 +71,7 @@ class ThemeFundCache:
             zlje = math.nan
         if (
             not code
-            or source != "ths_main_monitor"
+            or source not in SUPPORTED_FUND_SOURCES
             or not session_date
             or not math.isfinite(zlje)
         ):
@@ -86,8 +91,12 @@ class ThemeFundCache:
             "zlje": zlje,
             "sessionDate": session_date,
             "tradingDate": session_date,
-            "source": "ths_main_monitor",
-            "moneyFlowSource": "ths_main_monitor",
+            # 数据源诚实标识（2026-08-12）：保留行原始 source（akshare_ths_individual
+            # 或 ths_main_monitor），不再硬编码 L2；回退 ths_main_monitor 兼容历史行。
+            "source": str(row.get("source") or row.get("moneyFlowSource") or "ths_main_monitor"),
+            "moneyFlowSource": str(
+                row.get("moneyFlowSource") or row.get("source") or "ths_main_monitor"
+            ),
             "sourceTs": int(row.get("sourceTs") or 0),
             "updatedAt": int(row.get("updatedAt") or int(time.time() * 1000)),
         }
@@ -129,7 +138,7 @@ class ThemeFundCache:
             ]
             if missing_codes:
                 for code, value in self._read_hash_many(hash_key, missing_codes).items():
-                    if value.get("moneyFlowSource") == "ths_main_monitor":
+                    if value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
                         self._latest[code] = value
 
             # 2) 版本号批量递增
@@ -159,6 +168,25 @@ class ThemeFundCache:
                 saved_rows.append(dict(stored))
                 if pipeline is not None:
                     pipeline.hset(hash_key, code, json.dumps(stored, ensure_ascii=False, separators=(",", ":")))
+            # 旧交易日行主动清理（2026-08-12）：TTL 加长后旧累计值不能滞留——
+            # 写入新交易日时清掉 Redis hash + 内存里 sessionDate < 当天 的行，
+            # 前端不会显示过期累计值（hgetall 一次 + 追加 hdel 到同一 pipeline；
+            # 排除本批已写入的 code，避免 hset 后误删）
+            if self._redis is not None and pipeline is not None:
+                try:
+                    written_codes = {str(c.get("code")) for c in validated}
+                    all_rows = self._read_hash_all(hash_key)
+                    stale_fields = [
+                        field
+                        for field, value in all_rows.items()
+                        if field not in written_codes and str(value.get("sessionDate") or "") < today
+                    ]
+                    if stale_fields:
+                        for field in stale_fields:
+                            pipeline.hdel(hash_key, field)
+                            self._latest.pop(field, None)
+                except Exception:
+                    pass
             if pipeline is not None:
                 try:
                     pipeline.expire(hash_key, self._ttl_seconds)
@@ -186,7 +214,7 @@ class ThemeFundCache:
         with self._lock:
             missing = [code for code in normalized if code not in self._latest]
             for code, value in self._read_hash_many(self._key("latest"), missing).items():
-                if value.get("moneyFlowSource") == "ths_main_monitor":
+                if value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
                     self._latest[code] = value
             for code in normalized:
                 latest = self._latest.get(code)
@@ -239,11 +267,15 @@ class ThemeFundCache:
     def _next_version(self) -> int:
         try:
             if self._redis is not None:
-                version = int(self._redis.incr(self._key("version")))
+                version_key = self._key("version")
+                version = int(self._redis.incr(version_key))
                 if version <= self._memory_version:
                     version = self._memory_version + 1
-                    self._redis.set(self._key("version"), version)
+                    self._redis.set(version_key, version)
                 self._memory_version = max(self._memory_version, version)
+                # 清理策略（2026-08-12）：version 与 latest 同生命周期（TTL 兑底），
+                # 停止写入后过期重置，前端 full_state 会清空本地版本记录兑底
+                self._redis.expire(version_key, self._ttl_seconds)
                 return version
         except Exception:
             pass
@@ -256,11 +288,13 @@ class ThemeFundCache:
             return self._memory_version + 1
         try:
             if self._redis is not None:
-                end_version = int(self._redis.incrby(self._key("version"), count))
+                version_key = self._key("version")
+                end_version = int(self._redis.incrby(version_key, count))
                 if end_version - count + 1 <= self._memory_version:
                     end_version = self._memory_version + count
-                    self._redis.set(self._key("version"), end_version)
+                    self._redis.set(version_key, end_version)
                 self._memory_version = max(self._memory_version, end_version)
+                self._redis.expire(version_key, self._ttl_seconds)
                 return end_version - count + 1
         except Exception:
             pass
@@ -294,6 +328,27 @@ class ThemeFundCache:
 
     def _key(self, suffix: str) -> str:
         return f"{self._base}:{suffix}"
+
+    def _read_hash_all(self, key: str) -> dict[str, dict[str, object]]:
+        """读取 hash 全部字段（用于旧交易日行清理）。"""
+        if self._redis is None:
+            return {}
+        try:
+            raw_all = self._redis.hgetall(key)
+        except Exception:
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for field, raw in raw_all.items():
+            field_str = field.decode("utf-8") if isinstance(field, bytes) else str(field)
+            try:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                value = json.loads(raw) if raw else None
+            except (TypeError, ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(value, dict):
+                result[field_str] = value
+        return result
 
     def _write_hash(self, key: str, field: str, value: dict[str, object]) -> None:
         try:

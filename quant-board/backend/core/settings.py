@@ -146,7 +146,7 @@ class Settings(BaseModel):
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
-    theme_fund_cache_ttl_seconds: int = Field(default=900)
+    theme_fund_cache_ttl_seconds: int = Field(default=259200)  # 3 天（容灾 1 交易日 + 跨周末）
     market_fund_fetch_timeout_seconds: float = Field(default=60.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)

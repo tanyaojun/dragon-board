@@ -103,6 +103,33 @@ app.include_router(ths_main_monitor_router)
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    # 清理策略（2026-08-12）：启动时给存量永久 Redis key 补 TTL
+    # （ths-main-monitor:raw / snapshot:generation / theme-fund version）——
+    # 修复"只管杀不管埋"：历史无 TTL 缓存补过期时间，best-effort 不阻塞启动
+    try:
+        from backend.core.settings import get_settings as _get_settings
+        from backend.market_proxy.redis_client import get_hotlist_redis_client
+
+        _redis = get_hotlist_redis_client(_get_settings())
+        if _redis is not None:
+            _prefix = _get_settings().redis_key_prefix
+            _patterns = {
+                f"{_prefix}:ths-main-monitor:raw*": 259200,
+                f"{_prefix}:snapshot:generation*": 604800,
+                f"{_prefix}:theme-fund:v3:version": 259200,
+            }
+            for _pattern, _ttl in _patterns.items():
+                try:
+                    for _key in _redis.scan_iter(match=_pattern, count=500):
+                        try:
+                            if _redis.ttl(_key) < 0:
+                                _redis.expire(_key, _ttl)
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+    except Exception:
+        pass
     if get_settings().storage_backend != "mongodb":
         init_db()
         init_theme_db()

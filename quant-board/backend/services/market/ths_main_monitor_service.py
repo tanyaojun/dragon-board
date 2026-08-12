@@ -284,7 +284,13 @@ class ThsMainMonitorService:
         self._raw_memory[code] = dict(value)
         try:
             if self._redis is not None:
-                self._redis.set(self._raw_key(code), json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+                # 清理策略（2026-08-12）：raw 明细带 3 天 TTL（容灾 1 交易日 + 跨周末），
+                # 避免永久 key 累积（此前每票一个永久 key 只管杀不管埋）
+                self._redis.set(
+                    self._raw_key(code),
+                    json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+                    ex=259200,
+                )
         except Exception:
             pass
 

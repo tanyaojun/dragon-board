@@ -15,6 +15,10 @@ class FakePipeline:
         self.commands.append(("hset", key, field, value))
         return self
 
+    def hdel(self, key: str, *fields: str) -> "FakePipeline":
+        self.commands.append(("hdel", key, *fields))
+        return self
+
     def expire(self, key: str, ttl_seconds: int) -> "FakePipeline":
         self.commands.append(("expire", key, ttl_seconds))
         return self
@@ -23,6 +27,8 @@ class FakePipeline:
         for command in self.commands:
             if command[0] == "hset":
                 self.redis.hset(command[1], command[2], command[3])
+            elif command[0] == "hdel":
+                self.redis.hdel(command[1], *command[2:])
             elif command[0] == "expire":
                 self.redis.expire(command[1], command[2])
         return []
@@ -49,6 +55,22 @@ class FakeRedis:
         if self.fail:
             raise RuntimeError("redis unavailable")
         return [self.hashes.get(key, {}).get(field) for field in fields]
+
+    def hgetall(self, key: str):
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        return dict(self.hashes.get(key, {}))
+
+    def hdel(self, key: str, *fields: str) -> int:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        mapping = self.hashes.get(key)
+        removed = 0
+        if mapping:
+            for field in fields:
+                if mapping.pop(field, None) is not None:
+                    removed += 1
+        return removed
 
     def get(self, key: str):
         if self.fail:
@@ -280,8 +302,9 @@ def test_put_refreshes_latest_hash_ttl_in_redis() -> None:
     cache.put(row("000001", "2026-07-24", 12.5))
 
     assert redis.expires["test:theme-fund:v3:latest"] == 900
-    # 版本与 owners 键保持单调，不因 TTL 过期而重置
-    assert "test:theme-fund:v3:version" not in redis.expires
+    # 清理策略（2026-08-12）：version 与 latest 同生命周期（TTL 兜底），
+    # 停止写入后过期重置，前端 full_state 清空本地版本记录兜底
+    assert redis.expires["test:theme-fund:v3:version"] == 900
 
 
 def test_redis_ttl_expiry_keeps_process_last_good() -> None:
@@ -303,3 +326,52 @@ def test_redis_ttl_controls_cross_instance_cold_read() -> None:
     # 新实例（进程内空）从 Redis 命中
     cold = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
     assert cold.get_latest(["000001"])["000001"]["zlje"] == 12.5
+
+
+def test_put_accepts_akshare_ths_individual_source() -> None:
+    # 2026-08-12：provider source 诚实标识后，缓存接受 akshare 网页估算行
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    akshare_row = {
+        "code": "000001",
+        "zlje": 12.5,
+        "source": "akshare_ths_individual",
+        "moneyFlowSource": "akshare_ths_individual",
+        "sessionDate": "2026-07-24",
+        "sourceTs": 1,
+    }
+
+    saved = cache.put(akshare_row)
+
+    assert saved["source"] == "akshare_ths_individual"
+    assert cache.get_latest(["000001"])["000001"]["source"] == "akshare_ths_individual"
+
+
+def test_put_many_prunes_stale_trading_session_rows() -> None:
+    # 2026-08-12：TTL 加长后旧累计值不能滞留——写入新交易日时，Redis hash +
+    # 内存里 sessionDate < 当天 的行被主动清理（本批已写入的 code 除外）
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put(row("000001", "2026-07-24", 1.0))
+    cache.put(row("000002", "2026-07-24", 2.0))
+
+    saved, failures = cache.put_many(
+        [row("000001", "2026-07-25", 3.0), row("000003", "2026-07-25", 4.0)]
+    )
+
+    assert failures == []
+    assert len(saved) == 2
+    # 旧交易日行（000002 07-24，未在本批写入）从内存与 Redis hash 一并清除
+    assert "000002" not in cache._latest
+    assert "000002" not in redis.hashes["test:theme-fund:v3:latest"]
+    # 本批写入的行保留
+    assert "000001" in redis.hashes["test:theme-fund:v3:latest"]
+    assert "000003" in redis.hashes["test:theme-fund:v3:latest"]
+
+
+def test_put_many_version_gets_ttl() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put_many([row("000001", "2026-07-24", 1.0)])
+
+    assert redis.expires["test:theme-fund:v3:version"] == 900
