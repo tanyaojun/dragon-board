@@ -1764,15 +1764,20 @@ class MarketFundCacheProvider:
         rows: list[dict[str, Any]] = []
         for code in requested:
             row = cached.get(code)
-            if not row or row.get("moneyFlowSource") != "ths_main_monitor":
+            # 2026-08-12：资金行 source 诚实标识后，接受 L2 主源与 akshare 网页
+            # 估算两种（此前只收 ths_main_monitor，akshare 行会被过滤导致快照资金列空）
+            source = str(row.get("moneyFlowSource") or row.get("source") or "") if row else ""
+            if source not in ("ths_main_monitor", "akshare_ths_individual"):
                 continue
             zlje = row.get("zlje")
             if not isinstance(zlje, (int, float)) or isinstance(zlje, bool) or not math.isfinite(float(zlje)):
                 continue
             item: dict[str, Any] = {
                 "code": code, "mainNetInflow": float(zlje),
-                "moneyFlowSource": "ths_main_monitor", "moneyFlowEstimated": False,
-                "capitalFlowSource": "ths_main_monitor", "capitalFlowConfidence": "high",
+                "moneyFlowSource": source,
+                "moneyFlowEstimated": source != "ths_main_monitor",
+                "capitalFlowSource": source,
+                "capitalFlowConfidence": "high" if source == "ths_main_monitor" else "medium",
             }
             if isinstance(row.get("zljzb"), (int, float)) and math.isfinite(float(row["zljzb"])):
                 item["mainNetRatio"] = float(row["zljzb"])

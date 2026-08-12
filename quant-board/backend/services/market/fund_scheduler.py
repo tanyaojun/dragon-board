@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
-from typing import Callable
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from backend.market_proxy.akshare_fund_provider import (
@@ -14,6 +14,7 @@ from backend.market_proxy.akshare_fund_provider import (
     get_akshare_fund_provider,
 )
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
+from backend.services.market.ths_main_monitor_service import get_ths_main_monitor_service
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
@@ -51,10 +52,16 @@ class MarketFundScheduler:
         save_timeout_seconds: float = 30.0,
         max_pending_save_rows: int = 30000,
         enabled: bool = True,
+        # THS L2 单票补充服务（2026-08-12 用户确认）：akshare 网页源不全，
+        # 订阅池里 akshare 全量结果缺失的票主动用 THS L2 补（不能查看才刷新）
+        ths_service: Any | None = None,
+        max_ths_backfill_per_cycle: int = 20,
     ) -> None:
         self.cache = cache
         self.stream = stream
         self.provider = provider
+        self._ths_service = ths_service
+        self.max_ths_backfill_per_cycle = max(1, int(max_ths_backfill_per_cycle))
         self._is_trading_day = is_trading_day
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
         self.min_refresh_interval_seconds = max(30.0, float(min_refresh_interval_seconds))
@@ -200,6 +207,9 @@ class MarketFundScheduler:
         if saved_rows:
             self.stream.publish(saved_rows)
 
+        # akshare 全量缺失票 THS L2 补充（2026-08-12 用户确认）
+        await self._backfill_missing_with_ths(saved_rows, session_date)
+
         self._primed = True
         self._final_session_date = session_date
         if after_close:
@@ -241,6 +251,47 @@ class MarketFundScheduler:
             self.cache.put_many,
             [dict(row) for row in rows],
         )
+
+    async def _backfill_missing_with_ths(
+        self,
+        saved_rows: list[dict[str, object]],
+        session_date: str,
+    ) -> None:
+        """akshare 全量缺失票 THS L2 补充（2026-08-12 用户确认）。
+
+        判断逻辑：订阅池（行情列表）中 akshare 全量结果缺失、且 Redis 无
+        session_date 行的票，主动用 THS L2 单票接口（load_summary_row）补；
+        THS 也无数据（新股未上市等）则跳过，下轮再试。单轮上限防批量缺失
+        时打爆 THS 30 req/min 预算。
+        """
+        if not saved_rows or self._ths_service is None:
+            return
+        saved_codes = {str(row.get("code")) for row in saved_rows}
+        pool_codes = set(self.stream.market_codes())
+        missing = sorted(code for code in pool_codes if code not in saved_codes)
+        if not missing:
+            return
+        # 排除 Redis 已有 session_date 行的（之前 THS 补过/其它来源已有），不重复补
+        cached = self.cache.get_latest(missing)
+        missing = [
+            code
+            for code in missing
+            if str((cached.get(code) or {}).get("sessionDate") or "") != session_date
+        ]
+        if not missing:
+            return
+        for code in missing[: self.max_ths_backfill_per_cycle]:
+            try:
+                row = await self._ths_service.load_summary_row(code)
+            except Exception:
+                continue
+            if not row or row.get("zlje") is None:
+                continue
+            try:
+                saved = self.cache.put(dict(row))
+                self.stream.publish([saved])
+            except ValueError:
+                continue
 
     def _retain_pending(
         self,
@@ -321,4 +372,6 @@ market_fund_scheduler = MarketFundScheduler(
     provider=get_akshare_fund_provider(),
     refresh_interval_seconds=get_settings().theme_fund_refresh_interval_seconds,
     fetch_timeout_seconds=get_settings().market_fund_fetch_timeout_seconds,
+    # akshare 全量缺失票 THS L2 单票补充（2026-08-12 用户确认）
+    ths_service=get_ths_main_monitor_service(),
 )
