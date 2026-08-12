@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import sys
 import time
 from datetime import date
 from threading import Lock
@@ -18,6 +20,9 @@ from backend.core.settings import get_settings
 # L2 主源与网页估算两种；后续其它来源按需扩展）
 # 支持的来源（2026-08-12：统一入口 backend.core.fund_sources，资金列接受
 # L2 主源与网页估算两种；模块级 SUPPORTED_FUND_SOURCES 由 import 提供）
+
+
+logger = logging.getLogger(__name__)
 
 
 class ThemeFundCache:
@@ -39,6 +44,8 @@ class ThemeFundCache:
         # 同日内重复写入不重复 hgetall（5200 字段 hgetall 太重，曾导致大 batch
         # put_many 超时、Redis latest 未写入）
         self._last_pruned_date: str | None = None
+        # fail-visible：最近一次 Redis 写入错误（put_many 静默失败时记录，供诊断）
+        self._last_redis_write_error: str | None = None
         self._lock = Lock()
 
     def put(self, row: dict[str, object], *, is_final: bool = False) -> dict[str, object]:
@@ -160,6 +167,15 @@ class ThemeFundCache:
                     pipeline = self._redis.pipeline(transaction=False)
                 except Exception:
                     pipeline = None
+                    logger.exception("theme-fund redis pipeline() failed")
+            if self._redis is None:
+                # fail-visible（2026-08-12）：Redis client 不可用（连接/配置失败）——
+                # 只写内存，Redis 无持久化；此前静默导致"内存有、Redis 无"
+                self._last_redis_write_error = "redis client unavailable (get_hotlist_redis_client returned None)"
+                logger.warning(
+                    "theme-fund redis client unavailable; skip redis write (memory only): %s",
+                    self._last_redis_write_error,
+                )
             today = str(validated[0].get("sessionDate") or "")
             for candidate in validated:
                 code = str(candidate.get("code") or "")
@@ -206,7 +222,10 @@ class ThemeFundCache:
                     pipeline.expire(hash_key, self._ttl_seconds)
                     pipeline.execute()
                 except Exception:
-                    pass
+                    # fail-visible（2026-08-12）：写 Redis 失败必须暴露原因（此前静默吞掉，
+                    # 导致内存有数据但 Redis 无——跨重启丢失；socket_timeout 曾 0.2s 超时）
+                    logger.exception("theme-fund redis put_many pipeline execute failed")
+                    self._last_redis_write_error = str(sys.exc_info()[1]) if sys.exc_info()[1] else "unknown"
 
             # 4) 内存上限维护（与 put 一致）
             if len(self._latest) > 1000:
@@ -449,7 +468,13 @@ def get_theme_fund_cache() -> ThemeFundCache:
         from backend.market_proxy.redis_client import get_hotlist_redis_client
 
         _theme_fund_cache = ThemeFundCache(
-            get_hotlist_redis_client(settings),
+            # 资金大批次 pipeline 写入/连接需要更长超时（快照缓存默认 0.2s 太短，
+            # 曾导致 5204 行写入超时/连接超时、Redis 未写入——2026-08-12）
+            get_hotlist_redis_client(
+                settings,
+                socket_timeout=10.0,
+                connect_timeout=3.0,
+            ),
             prefix=settings.redis_key_prefix,
             ttl_seconds=settings.theme_fund_cache_ttl_seconds,
         )
