@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import httpx
 
-from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.data.cache.snapshot_cache import create_snapshot_redis_client
 from backend.core.settings import get_settings
 
@@ -96,59 +95,6 @@ class ThsMainMonitorService:
             if cached:
                 return self._raw_result(stock_code, cached, stale=True)
             raise
-
-    async def load_row(self, code: str) -> dict[str, Any]:
-        stock_code = self._normalize_code(code)
-        payload = await self._fetch_payload(stock_code)
-        raw = self._validate_payload(payload)
-        source_ts = self._now_ms()
-        raw["fetchedAt"] = source_ts
-        self._write_raw(stock_code, raw)
-        await self._archive_raw_safely(stock_code, raw)
-        main_buy = self._parse_amount(raw["title"].get("mainbuy"))
-        main_sell = self._parse_amount(raw["title"].get("mainsell"))
-        return {
-            "code": stock_code,
-            "zlje": main_buy - main_sell,
-            "sessionDate": raw["sessionDate"],
-            "source": FUND_SOURCE_THS_MAIN_MONITOR,
-            "moneyFlowSource": FUND_SOURCE_THS_MAIN_MONITOR,
-            "sourceTs": source_ts,
-        }
-
-    async def load_summary_row(self, code: str) -> dict[str, Any]:
-        stock_code = self._normalize_code(code)
-        payload = await self._fetch_payload(stock_code)
-        raw = self._validate_payload(payload)
-        main_buy = self._parse_amount(raw["title"].get("mainbuy"))
-        main_sell = self._parse_amount(raw["title"].get("mainsell"))
-        return {
-            "code": stock_code,
-            "zlje": main_buy - main_sell,
-            "sessionDate": raw["sessionDate"],
-            "source": FUND_SOURCE_THS_MAIN_MONITOR,
-            "moneyFlowSource": FUND_SOURCE_THS_MAIN_MONITOR,
-            "sourceTs": self._now_ms(),
-        }
-
-    async def load_batch(self, codes: list[str], *, concurrency: int = 2) -> dict[str, list[dict[str, Any]]]:
-        normalized = list(dict.fromkeys(self._normalize_code(code) for code in codes))
-        if len(normalized) > 5:
-            raise ValueError("too_many_codes")
-        local_gate = asyncio.Semaphore(max(1, min(2, int(concurrency))))
-
-        async def load(code: str) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-            async with local_gate:
-                try:
-                    return await self.load_row(code), None
-                except ThsMainMonitorError as error:
-                    return None, {"code": code, "errorCode": error.code}
-
-        results = await asyncio.gather(*(load(code) for code in normalized))
-        return {
-            "rows": [row for row, _ in results if row is not None],
-            "failures": [failure for _, failure in results if failure is not None],
-        }
 
     async def _fetch_payload(self, code: str) -> dict[str, Any]:
         async with self._request_slot():

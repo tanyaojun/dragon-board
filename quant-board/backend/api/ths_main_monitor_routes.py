@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
-from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.services.market.ths_main_monitor_service import (
     ThsMainMonitorError,
     ThsMainMonitorService,
@@ -47,24 +46,3 @@ async def get_ths_detail(
         "servedAt": result["servedAt"],
         "data": data,
     }
-
-
-@router.get("/ths-fund-batch", response_model=None)
-async def get_ths_fund_batch(
-    codes: str = Query(default=""),
-    concurrency: int = Query(default=2),
-    service: ThsMainMonitorService = Depends(get_ths_main_monitor_service),
-) -> dict[str, object] | JSONResponse:
-    requested = list(dict.fromkeys(value.strip() for value in codes.split(",") if value.strip()))
-    if len(requested) > 5:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errorCode": "too_many_codes"},
-        )
-    if not requested or any(len(code) != 6 or not code.isdigit() for code in requested):
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errorCode": "invalid_stock_code"},
-        )
-    result = await service.load_batch(requested, concurrency=max(1, min(2, concurrency)))
-    return {"ok": True, "source": FUND_SOURCE_THS_MAIN_MONITOR, "data": result}

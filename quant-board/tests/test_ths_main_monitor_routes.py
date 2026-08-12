@@ -46,21 +46,3 @@ def test_single_route_keeps_tool_compatible_envelope() -> None:
     assert body["servedAt"] == 110
     assert body["data"]["dragonMeta"]["cache"]["uiStale"] is True
     assert body["data"]["title"]["mainbuy"] == "1万"
-
-
-def test_batch_route_returns_partial_results() -> None:
-    response = _client().get(
-        "/api/big-order/ths-fund-batch?codes=002297,600000&concurrency=2"
-    )
-
-    assert response.status_code == 200
-    assert response.json()["data"]["failures"][0]["errorCode"] == "ths_timeout"
-
-
-def test_batch_route_rejects_more_than_five_codes() -> None:
-    response = _client().get(
-        "/api/big-order/ths-fund-batch?codes=000001,000002,000003,000004,000005,000006"
-    )
-
-    assert response.status_code == 400
-    assert response.json()["errorCode"] == "too_many_codes"
