@@ -7,12 +7,17 @@ from datetime import date
 from threading import Lock
 from typing import Any
 
+from backend.core.fund_sources import (
+    FUND_SOURCE_THS_MAIN_MONITOR,
+    SUPPORTED_FUND_SOURCES,
+)
 from backend.core.settings import get_settings
 
 
 # 支持的来源（2026-08-12：akshare 同花顺网页 source 诚实标识后，缓存接受
 # L2 主源与网页估算两种；后续其它来源按需扩展）
-SUPPORTED_FUND_SOURCES = frozenset({"ths_main_monitor", "akshare_ths_individual"})
+# 支持的来源（2026-08-12：统一入口 backend.core.fund_sources，资金列接受
+# L2 主源与网页估算两种；模块级 SUPPORTED_FUND_SOURCES 由 import 提供）
 
 
 class ThemeFundCache:
@@ -40,7 +45,7 @@ class ThemeFundCache:
         del is_final
         parsed = self._parse_fund_row(row)
         if parsed is None:
-            raise ValueError("invalid ths_main_monitor fund row")
+            raise ValueError("invalid fund row")
         code, session_date, zlje = parsed
 
         with self._lock:
@@ -97,9 +102,9 @@ class ThemeFundCache:
             "tradingDate": session_date,
             # 数据源诚实标识（2026-08-12）：保留行原始 source（akshare_ths_individual
             # 或 ths_main_monitor），不再硬编码 L2；回退 ths_main_monitor 兼容历史行。
-            "source": str(row.get("source") or row.get("moneyFlowSource") or "ths_main_monitor"),
+            "source": str(row.get("source") or row.get("moneyFlowSource") or FUND_SOURCE_THS_MAIN_MONITOR),
             "moneyFlowSource": str(
-                row.get("moneyFlowSource") or row.get("source") or "ths_main_monitor"
+                row.get("moneyFlowSource") or row.get("source") or FUND_SOURCE_THS_MAIN_MONITOR
             ),
             "sourceTs": int(row.get("sourceTs") or 0),
             "updatedAt": int(row.get("updatedAt") or int(time.time() * 1000)),
@@ -123,7 +128,7 @@ class ThemeFundCache:
             parsed = self._parse_fund_row(row)
             if parsed is None:
                 code = str(row.get("code") or "").strip()
-                failures.append({"code": code, "reason": "invalid ths_main_monitor fund row"})
+                failures.append({"code": code, "reason": "invalid fund row"})
                 continue
             code, session_date, zlje = parsed
             validated.append(self._build_stored(row, code, session_date, zlje))
@@ -329,7 +334,7 @@ class ThemeFundCache:
         if code in self._latest:
             return self._latest[code]
         value = self._read_hash(self._key("latest"), code)
-        if value and value.get("moneyFlowSource") == "ths_main_monitor":
+        if value and value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
             self._latest[code] = value
             return value
         return None

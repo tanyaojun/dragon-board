@@ -28,6 +28,10 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from backend.core.fund_sources import (
+    FUND_SOURCE_THS_MAIN_MONITOR,
+    SUPPORTED_FUND_SOURCES,
+)
 from backend.services.theme.fund_cache import ThemeFundCache
 
 from .gateway import HttpMarketDataGateway
@@ -1767,7 +1771,7 @@ class MarketFundCacheProvider:
             # 2026-08-12：资金行 source 诚实标识后，接受 L2 主源与 akshare 网页
             # 估算两种（此前只收 ths_main_monitor，akshare 行会被过滤导致快照资金列空）
             source = str(row.get("moneyFlowSource") or row.get("source") or "") if row else ""
-            if source not in ("ths_main_monitor", "akshare_ths_individual"):
+            if source not in SUPPORTED_FUND_SOURCES:
                 continue
             zlje = row.get("zlje")
             if not isinstance(zlje, (int, float)) or isinstance(zlje, bool) or not math.isfinite(float(zlje)):
@@ -1775,9 +1779,9 @@ class MarketFundCacheProvider:
             item: dict[str, Any] = {
                 "code": code, "mainNetInflow": float(zlje),
                 "moneyFlowSource": source,
-                "moneyFlowEstimated": source != "ths_main_monitor",
+                "moneyFlowEstimated": source != FUND_SOURCE_THS_MAIN_MONITOR,
                 "capitalFlowSource": source,
-                "capitalFlowConfidence": "high" if source == "ths_main_monitor" else "medium",
+                "capitalFlowConfidence": "high" if source == FUND_SOURCE_THS_MAIN_MONITOR else "medium",
             }
             if isinstance(row.get("zljzb"), (int, float)) and math.isfinite(float(row["zljzb"])):
                 item["mainNetRatio"] = float(row["zljzb"])

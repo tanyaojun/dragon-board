@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.data.cache.snapshot_cache import create_snapshot_redis_client
 from backend.core.settings import get_settings
 
@@ -110,8 +111,8 @@ class ThsMainMonitorService:
             "code": stock_code,
             "zlje": main_buy - main_sell,
             "sessionDate": raw["sessionDate"],
-            "source": "ths_main_monitor",
-            "moneyFlowSource": "ths_main_monitor",
+            "source": FUND_SOURCE_THS_MAIN_MONITOR,
+            "moneyFlowSource": FUND_SOURCE_THS_MAIN_MONITOR,
             "sourceTs": source_ts,
         }
 
@@ -125,8 +126,8 @@ class ThsMainMonitorService:
             "code": stock_code,
             "zlje": main_buy - main_sell,
             "sessionDate": raw["sessionDate"],
-            "source": "ths_main_monitor",
-            "moneyFlowSource": "ths_main_monitor",
+            "source": FUND_SOURCE_THS_MAIN_MONITOR,
+            "moneyFlowSource": FUND_SOURCE_THS_MAIN_MONITOR,
             "sourceTs": self._now_ms(),
         }
 

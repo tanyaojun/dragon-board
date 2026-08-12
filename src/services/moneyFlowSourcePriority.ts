@@ -1,3 +1,5 @@
+import { FUND_SOURCE } from '@/config/fundSources'
+
 export type MoneyFlowSourceLike = {
   moneyFlowSource?: unknown
   capitalFlowSource?: unknown
@@ -7,12 +9,12 @@ export type MoneyFlowSourceLike = {
 export function getMoneyFlowSourceRank(value: MoneyFlowSourceLike | null | undefined): number {
   if (!value) return 0
 
-  if (value.moneyFlowSource === 'ths_main_monitor') {
+  if (value.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR) {
     return 5
   }
 
   // akshare 同花顺网页个股资金流（估算口径，非 L2）——rank 1，低于 L2 主源
-  if (value.moneyFlowSource === 'akshare_ths_individual') {
+  if (value.moneyFlowSource === FUND_SOURCE.AKSHARE_THS_INDIVIDUAL) {
     return 1
   }
 

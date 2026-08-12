@@ -1,4 +1,5 @@
 import type { QuotePatch, TickTrade } from '../../types'
+import { FUND_SOURCE } from '@/config/fundSources'
 import {
   EASTMONEY_LARGE_ORDER_AMOUNT_THRESHOLD,
   EASTMONEY_LARGE_ORDER_VOLUME_THRESHOLD,
@@ -20,7 +21,7 @@ export interface EstimatedTdxMoneyFlow {
   tdxBuyVolume: number
   tdxSellVolume: number
   tdxCurrentVolume: number
-  moneyFlowSource: 'tdx_estimate'
+  moneyFlowSource: typeof FUND_SOURCE.TDX_ESTIMATE
   moneyFlowEstimated: true
 }
 

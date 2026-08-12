@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 
+from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.services.market.ths_main_monitor_service import (
     ThsMainMonitorError,
     ThsMainMonitorService,
@@ -66,4 +67,4 @@ async def get_ths_fund_batch(
             content={"ok": False, "errorCode": "invalid_stock_code"},
         )
     result = await service.load_batch(requested, concurrency=max(1, min(2, concurrency)))
-    return {"ok": True, "source": "ths_main_monitor", "data": result}
+    return {"ok": True, "source": FUND_SOURCE_THS_MAIN_MONITOR, "data": result}

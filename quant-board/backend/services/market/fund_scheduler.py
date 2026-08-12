@@ -15,6 +15,7 @@ from backend.market_proxy.akshare_fund_provider import (
 )
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
 from backend.services.market.ths_main_monitor_service import get_ths_main_monitor_service
+from backend.core.fund_sources import FUND_SOURCE_AKSHARE_THS_INDIVIDUAL
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
@@ -336,7 +337,7 @@ class MarketFundScheduler:
         return {
             "enabled": self.enabled,
             "running": self._task is not None,
-            "source": "akshare_ths_individual",
+            "source": FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
             "queueLength": len(self.stream.market_codes()),
             "currentCode": self._last_code,
             "requestsLastMinute": len(self._request_times),

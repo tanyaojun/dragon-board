@@ -1,3 +1,4 @@
+import { FUND_SOURCE } from '@/config/fundSources'
 import { AppEvents, type Depth10Book, type QuotePatch, type TickTrade } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../DataLayer'
@@ -138,7 +139,7 @@ export class RealtimeQuoteCoordinator {
     if (quoteItems.length) {
       dataLayer.applyRealtimeQuoteBatch(
         quoteItems.map((item) => {
-          const hasDashboardMoneyFlow = item.moneyFlowSource === 'ths_main_monitor'
+          const hasDashboardMoneyFlow = item.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR
           const mainMoneyRatio = hasDashboardMoneyFlow
             ? item.zljzb ?? deriveMainMoneyRatio(item.zlje, dataLayer.getStock(item.code)?.turnover)
             : undefined

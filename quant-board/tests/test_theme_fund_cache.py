@@ -174,7 +174,7 @@ def test_put_many_isolates_invalid_rows_and_saves_valid_ones() -> None:
     saved, failures = cache.put_many([row("000001", "2026-07-24", 12.5), invalid])
 
     assert len(saved) == 1
-    assert failures == [{"code": "bad", "reason": "invalid ths_main_monitor fund row"}]
+    assert failures == [{"code": "bad", "reason": "invalid fund row"}]
     assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
 
 

@@ -1,3 +1,4 @@
+import { FUND_SOURCE } from '@/config/fundSources'
 import { filterValidStockCodes } from '@/utils/common'
 import { dataLayer as defaultDataLayer } from '../DataLayer'
 import { webSocketService as defaultWebSocketService } from '../websocket'
@@ -397,7 +398,7 @@ export class QuoteService {
     const stock = this.dataLayer.getStock(code)
     const speedCandidate = quote.speed ?? existingQuote?.speed
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
-    const hasAuthoritativeMoneyFlow = quote.moneyFlowSource === 'ths_main_monitor'
+    const hasAuthoritativeMoneyFlow = quote.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -472,7 +473,7 @@ export class QuoteService {
   ): MergedQuoteData {
     const preferHttpSupplement = this.hasQuoteSupplementData(httpQuote)
     const preferHttpFundFlow =
-      httpQuote.moneyFlowSource === 'ths_main_monitor' &&
+      httpQuote.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR &&
       this.hasFundFlowData(httpQuote) &&
       shouldApplyMoneyFlowUpdate(realtimeQuote, httpQuote)
 

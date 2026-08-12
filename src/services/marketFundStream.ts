@@ -1,3 +1,4 @@
+import { FUND_SOURCE } from '@/config/fundSources'
 import { AppEvents } from '@/types'
 import { normalizeStockCode } from '@/utils/common'
 import { EventManager } from '@/utils/eventManager'
@@ -90,7 +91,8 @@ export class MarketFundStreamService {
     // 2026-08-12：接受 akshare 同花顺网页估算行（数据源已切换）与 THS L2 行；
     // 此前只收 ths_main_monitor 导致前端一直显示旧 L2 数据
     const source = String(row?.moneyFlowSource || '')
-    if (source !== 'ths_main_monitor' && source !== 'akshare_ths_individual') return null
+    if (source !== FUND_SOURCE.THS_MAIN_MONITOR && source !== FUND_SOURCE.AKSHARE_THS_INDIVIDUAL)
+      return null
     const code = normalizeStockCode(String(row?.code || ''))
     const version = Number(row?.version)
     const zlje = Number(row?.zlje)
