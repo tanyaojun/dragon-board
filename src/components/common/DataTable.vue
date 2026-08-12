@@ -1314,6 +1314,8 @@ const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
   if (stock.moneyFlowSource === 'qmt_l2') return 'QMT L2实时资金流'
   if (stock.moneyFlowSource === 'eastmoney') return '东财资金流'
   if (stock.moneyFlowSource === 'akshare_ths_individual') return '同花顺网页资金流（估算）'
+  // 前端 TDX 分笔估算兜底（Redis 资金数据缺失时）——诚实标注，避免误认为 L2
+  if (stock.moneyFlowSource === 'tdx_estimate') return 'TDX 分笔估算'
   return undefined
 }
 

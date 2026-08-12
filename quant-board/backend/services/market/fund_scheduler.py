@@ -140,7 +140,12 @@ class MarketFundScheduler:
         elif after_close and self._finalized:
             return False
         elif not intraday and not after_close and self._primed:
-            return False
+            # 盘后暂停——但 Redis 资金缓存缺失（重启后 RDB 无此 key/被误清）时
+            # 冷启动拉一次填充（2026-08-12 修复：否则前端资金列空直到下个交易日）
+            if self.cache.has_redis_data():
+                return False
+            logger.info("theme-fund redis cache missing; cold-start refresh outside trading hours")
+            self._primed = False
 
         self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
         self._record_request(now_ts)
