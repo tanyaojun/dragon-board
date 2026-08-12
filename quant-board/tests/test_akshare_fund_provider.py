@@ -111,8 +111,8 @@ def test_fetch_all_parses_full_market_rows() -> None:
     assert first["inflow"] == 126000000.0
     assert first["outflow"] == 209000000.0
     assert first["turnover"] == 335000000.0
-    assert first["source"] == "ths_main_monitor"
-    assert first["moneyFlowSource"] == "ths_main_monitor"
+    assert first["source"] == "akshare_ths_individual"
+    assert first["moneyFlowSource"] == "akshare_ths_individual"
     assert first["sessionDate"] == "2026-07-30"
     assert first["tradingDate"] == "2026-07-30"
     assert first["sourceTs"] == now_ms

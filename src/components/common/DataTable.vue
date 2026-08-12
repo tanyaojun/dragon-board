@@ -1313,6 +1313,7 @@ const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
   if (stock.moneyFlowSource === 'ths_l2') return '同花顺L2主力监控'
   if (stock.moneyFlowSource === 'qmt_l2') return 'QMT L2实时资金流'
   if (stock.moneyFlowSource === 'eastmoney') return '东财资金流'
+  if (stock.moneyFlowSource === 'akshare_ths_individual') return '同花顺网页资金流（估算）'
   return undefined
 }
 

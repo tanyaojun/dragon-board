@@ -219,8 +219,12 @@ class AkshareFundProvider:
                 "turnover": turnover,
                 "sessionDate": session_date,
                 "tradingDate": session_date,
-                "source": "ths_main_monitor",
-                "moneyFlowSource": "ths_main_monitor",
+                # 数据源诚实标识（2026-08-12 用户确认）：本行来自 akshare 同花顺
+                # 网页个股资金流（stock_fund_flow_individual），并非 mainMonitorDetail
+                # L2 口径——source 用 akshare_ths_individual，前端显示"同花顺网页资金流"
+                # 而非 L2 标识，避免误导。
+                "source": "akshare_ths_individual",
+                "moneyFlowSource": "akshare_ths_individual",
                 "sourceTs": fetched_at_ms,
             }
             # zljzb（主力%）：akshare 个股资金流“即时”接口没有净占比列，
