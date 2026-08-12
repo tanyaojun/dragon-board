@@ -17,36 +17,6 @@
           </button>
         </header>
 
-        <div class="summary-strip">
-          <div>
-            <span>共振</span>
-            <strong :class="directionClass(latestAnalysis?.resonance?.direction)">
-              {{ directionalScore(latestAnalysis?.resonance?.direction, resonanceScore(latestAnalysis?.resonance), true)
-              }}
-            </strong>
-          </div>
-          <div>
-            <span>技术</span>
-            <strong :class="directionClass(latestAnalysis?.observation?.rankTrend?.direction)">
-              {{ directionalScore(latestAnalysis?.observation?.rankTrend?.direction,
-                latestAnalysis?.observation?.rankTrend?.score, true) }}
-            </strong>
-          </div>
-          <div>
-            <span>生命周期</span>
-            <strong :class="stageClass(latestAnalysis?.observation?.lifecycle?.stage)">
-              {{ lifecycleScore(latestAnalysis?.observation?.lifecycle?.stage,
-                latestAnalysis?.observation?.lifecycle?.score, true) }}
-            </strong>
-          </div>
-          <div>
-            <span>量价</span>
-            <strong :class="directionClass(volumePriceDirection(latestAnalysis))">
-              {{ volumePriceScoreText(latestAnalysis) }}
-            </strong>
-          </div>
-        </div>
-
         <nav class="track-switcher" aria-label="观察轨道">
           <button v-for="track in tracks" :key="track.id" type="button" :class="{ active: activeTrack === track.id }"
             :title="`${track.index} ${track.label}`" @click="activeTrack = track.id">
@@ -194,8 +164,7 @@
                 </div>
               </div>
 
-              <div class="stage-rail" :style="stageRailStyle"
-                :aria-label="`最近 ${trackFrames.length} 帧生命周期阶段`">
+              <div class="stage-rail" :style="stageRailStyle" :aria-label="`最近 ${trackFrames.length} 帧生命周期阶段`">
                 <div v-for="frame in trackFrames" :key="frame.key" :class="stageClass(frame.analysis?.cycle?.stage)">
                   <i></i>
                   <span>{{ stageLabel(frame.analysis?.cycle?.stage) }}</span>
@@ -667,9 +636,8 @@ const resonanceFactors = computed(() => {
         { left: 0, width: confidenceWidth, tone: 'jump-tone' },
         { left: 50, width: freshnessWidth, tone: 'freshness-tone' },
       ],
-      text: `${jumpConfidence == null ? '--' : `${Math.round(jumpConfidence)}%`} / ${
-        Number.isFinite(jumpFreshness) ? `${Math.round(jumpFreshness * 100)}%` : '--'
-      }`,
+      text: `${jumpConfidence == null ? '--' : `${Math.round(jumpConfidence)}%`} / ${Number.isFinite(jumpFreshness) ? `${Math.round(jumpFreshness * 100)}%` : '--'
+        }`,
     },
     { label: '反转惩罚', width: percent(resonance?.reversalPenalty), text: percentText(resonance?.reversalPenalty), tone: 'negative-tone' },
   ]
