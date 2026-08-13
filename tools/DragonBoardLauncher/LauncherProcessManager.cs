@@ -750,7 +750,10 @@ internal sealed class LauncherProcessManager
             var info = new ProcessStartInfo
             {
                 FileName = redisCli,
-                Arguments = "-p 6379 shutdown nosave",
+                // 关闭时默认 SAVE（落盘 dump.rdb），让预热缓存（量比 daily / RankTrend
+                // frame_bundles）持久化，重启后首屏直接命中，无需等待预热重跑。
+                // 此前用 "shutdown nosave" 会丢弃内存缓存，导致 RDB 冷启动容灾失效。
+                Arguments = "-p 6379 shutdown",
                 WorkingDirectory = redisDir,
                 CreateNoWindow = true,
                 UseShellExecute = false,
