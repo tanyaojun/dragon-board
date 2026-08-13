@@ -2,7 +2,6 @@ import { FUND_SOURCE } from '@/config/fundSources'
 import { AppEvents } from '@/types'
 import { normalizeStockCode } from '@/utils/common'
 import { EventManager } from '@/utils/eventManager'
-import { isDashboardFundSource } from './moneyFlowSourcePriority'
 
 /**
  * 行情主页主力资金流订阅（前端只消费）。
