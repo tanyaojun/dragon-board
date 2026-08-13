@@ -210,6 +210,7 @@
 </template>
 
 <script setup lang="ts">
+import { FUND_SOURCE } from '@/config/fundSources'
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -368,8 +369,8 @@ const COLUMN_WIDTHS: Record<string, string> = {
   lifecycleOpportunity: '64px',
   zlje: '90px',
   zljzb: '90px',
-  volume: '90px',
-  volumeRatio: '50px',
+  volume: '80px',
+  volumeRatio: '40px',
   turnover: '80px',
   turnoverRate: '80px',
   cirMV: '80px',
@@ -1309,12 +1310,13 @@ const formatMoneyFlowCell = (key: string, stock: any): string => {
 }
 
 const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
-  if (stock.moneyFlowSource === 'ths_main_monitor') return '同花顺个股资金流'
-  if (stock.moneyFlowSource === 'ths_web_seed') return '同花顺网页资金流（估算）'
-  if (stock.moneyFlowSource === 'eastmoney_seed') return '东方财富个股资金流（估算）'
-  if (stock.moneyFlowSource === 'ths_l2') return '同花顺L2主力监控'
-  if (stock.moneyFlowSource === 'qmt_l2') return 'QMT L2实时资金流'
-  if (stock.moneyFlowSource === 'eastmoney') return '东财资金流'
+  if (stock.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR) return '同花顺个股资金流'
+  if (stock.moneyFlowSource === FUND_SOURCE.THS_L2) return '同花顺L2主力监控'
+  if (stock.moneyFlowSource === FUND_SOURCE.QMT_L2) return 'QMT L2实时资金流'
+  if (stock.moneyFlowSource === FUND_SOURCE.EASTMONEY) return '东财资金流'
+  if (stock.moneyFlowSource === FUND_SOURCE.AKSHARE_THS_INDIVIDUAL) return '同花顺网页资金流（估算）'
+  // 前端 TDX 分笔估算兜底（Redis 资金数据缺失时）——诚实标注，避免误认为 L2
+  if (stock.moneyFlowSource === FUND_SOURCE.TDX_ESTIMATE) return 'TDX 分笔估算'
   return undefined
 }
 

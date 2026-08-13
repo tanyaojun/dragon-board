@@ -16,11 +16,9 @@ export class QuoteHttpFeed {
   constructor(options: {
     api?: QuoteApi
     sleep?: Sleep
-    eastmoneyQuoteEnrichmentEnabled?: boolean
   } = {}) {
     this.api = options.api || apiService
     this.sleep = options.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
-    void options.eastmoneyQuoteEnrichmentEnabled
   }
 
   async fetchBasicData(

@@ -8,8 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
-import pandas as pd
-
+from backend.core.fund_sources import FUND_SOURCE_AKSHARE_THS_INDIVIDUAL
 from backend.core.settings import get_settings
 
 
@@ -69,7 +68,7 @@ class AkshareFundBatch:
     failures: list[dict[str, Any]]
     fetched_at_ms: int
     session_date: str
-    source: str = field(default="akshare_eastmoney_rank")
+    source: str = field(default=FUND_SOURCE_AKSHARE_THS_INDIVIDUAL)
 
 
 def parse_amount(value: Any) -> float | None:
@@ -262,9 +261,12 @@ class AkshareFundProvider:
                 "zlje": net,
                 "sessionDate": session_date,
                 "tradingDate": session_date,
-                "source": "eastmoney_seed",
-                "moneyFlowSource": "eastmoney_seed",
-                "moneyFlowEstimated": True,
+                # 数据源诚实标识（2026-08-12 用户确认）：本行来自 akshare 同花顺
+                # 网页个股资金流（stock_fund_flow_individual），并非 mainMonitorDetail
+                # L2 口径——source 用 akshare_ths_individual，前端显示"同花顺网页资金流"
+                # 而非 L2 标识，避免误导。
+                "source": FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
+                "moneyFlowSource": FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
                 "sourceTs": fetched_at_ms,
             }
             # zljzb（主力净占比 %）：东财排行接口直接提供，缺失/为空时保持缺失，

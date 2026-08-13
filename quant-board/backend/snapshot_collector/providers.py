@@ -28,6 +28,10 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from backend.core.fund_sources import (
+    FUND_SOURCE_THS_MAIN_MONITOR,
+    SUPPORTED_FUND_SOURCES,
+)
 from backend.services.theme.fund_cache import ThemeFundCache
 
 from .gateway import HttpMarketDataGateway
@@ -1767,19 +1771,20 @@ class MarketFundCacheProvider:
         rows: list[dict[str, Any]] = []
         for code in requested:
             row = cached.get(code)
-            if not row or row.get("moneyFlowSource") != "ths_main_monitor":
+            # 2026-08-12：资金行 source 诚实标识后，接受 L2 主源与 akshare 网页
+            # 估算两种（此前只收 ths_main_monitor，akshare 行会被过滤导致快照资金列空）
+            source = str(row.get("moneyFlowSource") or row.get("source") or "") if row else ""
+            if source not in SUPPORTED_FUND_SOURCES:
                 continue
             zlje = row.get("zlje")
             if not isinstance(zlje, (int, float)) or isinstance(zlje, bool) or not math.isfinite(float(zlje)):
                 continue
             item: dict[str, Any] = {
                 "code": code, "mainNetInflow": float(zlje),
-                "moneyFlowSource": "ths_main_monitor", "moneyFlowEstimated": False,
-                "capitalFlowSource": "ths_main_monitor", "capitalFlowConfidence": "high",
-                # M1（2026-08-11 审计）：暴露资金行时效信息，供快照质量门控/下游
-                # 判断"缓存 last-good 是否跨日/过期"，避免把陈旧资金当权威数据
-                "moneyFlowSessionDate": str(row.get("sessionDate") or ""),
-                "moneyFlowSourceTs": int(row.get("sourceTs") or 0),
+                "moneyFlowSource": source,
+                "moneyFlowEstimated": source != FUND_SOURCE_THS_MAIN_MONITOR,
+                "capitalFlowSource": source,
+                "capitalFlowConfidence": "high" if source == FUND_SOURCE_THS_MAIN_MONITOR else "medium",
             }
             if isinstance(row.get("zljzb"), (int, float)) and math.isfinite(float(row["zljzb"])):
                 item["mainNetRatio"] = float(row["zljzb"])

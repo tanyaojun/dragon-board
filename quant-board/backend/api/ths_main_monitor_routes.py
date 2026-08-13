@@ -84,25 +84,3 @@ async def get_ths_detail(
         "servedAt": result["servedAt"],
         "data": data,
     }
-
-
-@router.get("/ths-fund-batch", response_model=None)
-async def get_ths_fund_batch(
-    codes: str = Query(default=""),
-    concurrency: int = Query(default=2),
-    service: ThsMainMonitorService = Depends(get_ths_main_monitor_service),
-) -> dict[str, object] | JSONResponse:
-    requested = list(dict.fromkeys(value.strip() for value in codes.split(",") if value.strip()))
-    if len(requested) > 5:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errorCode": "too_many_codes"},
-        )
-    if not requested or any(len(code) != 6 or not code.isdigit() for code in requested):
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errorCode": "invalid_stock_code"},
-        )
-    result = await service.load_batch(requested, concurrency=max(1, min(2, concurrency)))
-    _refresh_theme_fund_from_rows(result.get("rows") or [])
-    return {"ok": True, "source": "ths_main_monitor", "data": result}

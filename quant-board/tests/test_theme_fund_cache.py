@@ -15,6 +15,10 @@ class FakePipeline:
         self.commands.append(("hset", key, field, value))
         return self
 
+    def hdel(self, key: str, *fields: str) -> "FakePipeline":
+        self.commands.append(("hdel", key, *fields))
+        return self
+
     def expire(self, key: str, ttl_seconds: int) -> "FakePipeline":
         self.commands.append(("expire", key, ttl_seconds))
         return self
@@ -23,6 +27,8 @@ class FakePipeline:
         for command in self.commands:
             if command[0] == "hset":
                 self.redis.hset(command[1], command[2], command[3])
+            elif command[0] == "hdel":
+                self.redis.hdel(command[1], *command[2:])
             elif command[0] == "expire":
                 self.redis.expire(command[1], command[2])
         return []
@@ -58,6 +64,22 @@ class FakeRedis:
         if self.fail:
             raise RuntimeError("redis unavailable")
         return [self.hashes.get(key, {}).get(field) for field in fields]
+
+    def hgetall(self, key: str):
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        return dict(self.hashes.get(key, {}))
+
+    def hdel(self, key: str, *fields: str) -> int:
+        if self.fail:
+            raise RuntimeError("redis unavailable")
+        mapping = self.hashes.get(key)
+        removed = 0
+        if mapping:
+            for field in fields:
+                if mapping.pop(field, None) is not None:
+                    removed += 1
+        return removed
 
     def get(self, key: str):
         if self.fail:
@@ -309,46 +331,9 @@ def test_put_refreshes_latest_hash_ttl_in_redis() -> None:
     cache.put(row("000001", "2026-07-24", 12.5))
 
     assert redis.expires["test:theme-fund:v3:latest"] == 900
-    # 清理策略（2026-08-11 用户确认）：version 与 latest 同生命周期（TTL 兜底），
-    # 停止写入后过期重置，前端 fund_full_state 清空本地版本记录兜底
+    # 清理策略（2026-08-12）：version 与 latest 同生命周期（TTL 兜底），
+    # 停止写入后过期重置，前端 full_state 清空本地版本记录兜底
     assert redis.expires["test:theme-fund:v3:version"] == 900
-
-
-def test_put_prunes_stale_trading_session_rows() -> None:
-    # 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：写入新交易日行时，
-    # 旧交易日行（sessionDate < 本次写入日期）从内存与 Redis hash 一并清理
-    redis = FakeRedis()
-    cache = ThemeFundCache(redis, prefix="test")
-    cache.put(row("000001", "2026-08-10", 1.0))
-    cache.put(row("000002", "2026-08-10", 2.0))
-    assert set(cache._latest) == {"000001", "000002"}
-
-    cache.put(row("000003", "2026-08-11", 3.0))
-
-    assert set(cache._latest) == {"000003"}  # 旧交易日行被清
-    latest_hash = redis.hashes["test:theme-fund:v3:latest"]
-    assert set(latest_hash) == {"000003"}  # Redis hash 同步清理
-
-
-def test_put_many_prunes_stale_trading_session_rows() -> None:
-    redis = FakeRedis()
-    cache = ThemeFundCache(redis, prefix="test")
-    cache.put_many([row("000001", "2026-08-10", 1.0), row("000002", "2026-08-10", 2.0)])
-    assert set(cache._latest) == {"000001", "000002"}
-
-    cache.put_many([row("000003", "2026-08-11", 3.0)])
-
-    assert set(cache._latest) == {"000003"}
-    assert set(redis.hashes["test:theme-fund:v3:latest"]) == {"000003"}
-
-
-def test_default_redis_ttl_covers_one_trading_session_plus_weekend() -> None:
-    # 容灾语义（2026-08-11 用户确认，容灾 1 个交易日）：日常由 sessionDate 主动清理
-    # （只保留最近 1 个交易日行），TTL 3 天仅作停止写入后的兜底过期（覆盖跨周末 72h）
-    from backend.core.settings import get_settings
-
-    assert get_settings().theme_fund_cache_ttl_seconds == 259200
-    assert get_theme_fund_cache()._ttl_seconds == 259200
 
 
 def test_redis_ttl_expiry_keeps_process_last_good() -> None:
@@ -372,57 +357,50 @@ def test_redis_ttl_controls_cross_instance_cold_read() -> None:
     assert cold.get_latest(["000001"])["000001"]["zlje"] == 12.5
 
 
-def test_eastmoney_seed_row_is_written_and_read_with_estimated_flag() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put(seed_row("000001", "2026-07-24", 12.5))
-    latest = cache.get_latest(["000001"])["000001"]
-    assert latest["moneyFlowSource"] == "eastmoney_seed"
-    assert latest["moneyFlowEstimated"] is True
-    assert latest["zlje"] == 12.5
+def test_put_accepts_akshare_ths_individual_source() -> None:
+    # 2026-08-12：provider source 诚实标识后，缓存接受 akshare 网页估算行
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    akshare_row = {
+        "code": "000001",
+        "zlje": 12.5,
+        "source": "akshare_ths_individual",
+        "moneyFlowSource": "akshare_ths_individual",
+        "sessionDate": "2026-07-24",
+        "sourceTs": 1,
+    }
+
+    saved = cache.put(akshare_row)
+
+    assert saved["source"] == "akshare_ths_individual"
+    assert cache.get_latest(["000001"])["000001"]["source"] == "akshare_ths_individual"
 
 
-def test_legacy_ths_web_seed_rows_still_accepted() -> None:
-    """存量同花顺网页种子行仍可读写（兼容旧缓存），不随接口切换丢失。"""
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put(seed_row("000001", "2026-07-24", 12.5, source="ths_web_seed"))
-    latest = cache.get_latest(["000001"])["000001"]
-    assert latest["moneyFlowSource"] == "ths_web_seed"
-    assert latest["moneyFlowEstimated"] is True
+def test_put_many_prunes_stale_trading_session_rows() -> None:
+    # 2026-08-12：TTL 加长后旧累计值不能滞留——写入新交易日时，Redis hash +
+    # 内存里 sessionDate < 当天 的行被主动清理（本批已写入的 code 除外）
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put(row("000001", "2026-07-24", 1.0))
+    cache.put(row("000002", "2026-07-24", 2.0))
 
+    saved, failures = cache.put_many(
+        [row("000001", "2026-07-25", 3.0), row("000003", "2026-07-25", 4.0)]
+    )
 
-def test_l2_overwrites_eastmoney_seed_on_same_session_even_with_older_source_ts() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put(seed_row("000001", "2026-07-24", 12.5, source_ts=100))
-    # L2 行 sourceTs 更旧但 source rank 更高：同日应覆盖种子
-    saved = cache.put(row("000001", "2026-07-24", 88.0, source_ts=10))
-    assert saved["zlje"] == 88.0
-    latest = cache.get_latest(["000001"])["000001"]
-    assert latest["moneyFlowSource"] == "ths_main_monitor"
-    assert latest["zlje"] == 88.0
-
-
-def test_web_seed_never_overwrites_l2_last_good() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put(row("000001", "2026-07-24", 88.0, source_ts=10))  # L2 last-good
-    saved = cache.put(seed_row("000001", "2026-07-24", 12.5, source_ts=100))
-    assert saved["zlje"] == 88.0
-    assert cache.get_latest(["000001"])["000001"]["zlje"] == 88.0
-
-
-def test_newer_session_overwrites_older_session_regardless_of_rank() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put(row("000001", "2026-07-24", 88.0))  # 昨日 L2 最终值
-    saved = cache.put(seed_row("000001", "2026-07-25", 12.5))  # 今日种子（新日期）
-    assert saved["zlje"] == 12.5
-    latest = cache.get_latest(["000001"])["000001"]
-    assert latest["sessionDate"] == "2026-07-25"
-    assert latest["moneyFlowSource"] == "eastmoney_seed"
-
-
-def test_put_many_preserves_eastmoney_seed_source_and_estimated_flag() -> None:
-    cache = ThemeFundCache(FakeRedis(), prefix="test")
-    saved, failures = cache.put_many([seed_row("000001", "2026-07-24", 12.5)])
     assert failures == []
-    assert saved[0]["moneyFlowSource"] == "eastmoney_seed"
-    assert saved[0]["moneyFlowEstimated"] is True
-    assert cache.get_latest(["000001"])["000001"]["moneyFlowSource"] == "eastmoney_seed"
+    assert len(saved) == 2
+    # 旧交易日行（000002 07-24，未在本批写入）从内存与 Redis hash 一并清除
+    assert "000002" not in cache._latest
+    assert "000002" not in redis.hashes["test:theme-fund:v3:latest"]
+    # 本批写入的行保留
+    assert "000001" in redis.hashes["test:theme-fund:v3:latest"]
+    assert "000003" in redis.hashes["test:theme-fund:v3:latest"]
+
+
+def test_put_many_version_gets_ttl() -> None:
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put_many([row("000001", "2026-07-24", 1.0)])
+
+    assert redis.expires["test:theme-fund:v3:version"] == 900

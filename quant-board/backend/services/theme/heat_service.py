@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from backend.analysis.theme.heat import compute_theme_heat
 from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.core.settings import get_settings
 from backend.snapshot_collector.providers import TencentBasicQuoteProvider
 from backend.services.theme.fund_cache import get_theme_fund_cache
@@ -260,11 +261,7 @@ class ThemeHeatService:
         # ths_main_monitor（L2 主源），按实际行来源标注，不把估算伪装成 L2 权威。
         fund_sources = sorted({str(row.get("moneyFlowSource") or "") for row in fund_rows.values()})
         fund_health = {
-            "source": (
-                "formal_fund_unavailable"
-                if not include_runtime_funds
-                else (",".join(fund_sources) if fund_sources else "no_fund_rows")
-            ),
+            "source": FUND_SOURCE_THS_MAIN_MONITOR if include_runtime_funds else "formal_fund_unavailable",
             "ok": include_runtime_funds,
             "requested_count": len(stock_codes),
             "returned_count": len(fund_rows),

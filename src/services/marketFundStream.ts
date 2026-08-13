@@ -1,3 +1,4 @@
+import { FUND_SOURCE } from '@/config/fundSources'
 import { AppEvents } from '@/types'
 import { normalizeStockCode } from '@/utils/common'
 import { EventManager } from '@/utils/eventManager'
@@ -105,9 +106,9 @@ export class MarketFundStreamService {
   private handlePayload(payload: any): void {
     if (!['fund_full_state', 'fund_patch'].includes(String(payload?.type))) return
     if (payload?.type === 'fund_full_state') {
-      // P2-2（2026-08-11 审计）：全量快照意味着服务端版本序列可能重置
-      // （Redis 清空/后端重启），清空本地版本记录——否则重置后的小 version
-      // 会被乱序保护永久丢弃
+      // 全量快照意味着服务端版本序列可能重置（Redis 清空/后端重启/数据源切换），
+      // 清空本地版本记录——否则重置后的小 version 会被乱序保护永久丢弃，
+      // 导致前端一直显示旧数据源（ths_main_monitor）的行
       this.versions.clear()
     }
     const rows = (Array.isArray(payload?.items) ? payload.items : [])
@@ -118,7 +119,11 @@ export class MarketFundStreamService {
   }
 
   private normalizeRow(row: any): Record<string, unknown> | null {
-    if (!isDashboardFundSource(row)) return null
+    // 2026-08-12：接受 akshare 同花顺网页估算行（数据源已切换）与 THS L2 行；
+    // 此前只收 ths_main_monitor 导致前端一直显示旧 L2 数据
+    const source = String(row?.moneyFlowSource || '')
+    if (source !== FUND_SOURCE.THS_MAIN_MONITOR && source !== FUND_SOURCE.AKSHARE_THS_INDIVIDUAL)
+      return null
     const code = normalizeStockCode(String(row?.code || ''))
     const version = Number(row?.version)
     const zlje = Number(row?.zlje)

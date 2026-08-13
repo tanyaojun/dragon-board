@@ -237,7 +237,11 @@ async def lifespan(app: FastAPI):
     try:
         await start_market_quotes_refresh()
         await start_hotlist_refresh()
-        market_fund_scheduler.start()
+        # 资金数据（theme-fund）由 8000 的 fund_scheduler 维护（akshare 全量 +
+        # THS L2 补充）；8001 只通过 MarketFundCacheProvider 读 Redis theme-fund
+        # 做快照资金列，不再自己启动 fund_scheduler——否则 8000/8001 双进程并发
+        # put_many 会互相触发旧行清理，导致 theme-fund:latest key 反复消失
+        # （2026-08-12 排查修复）。
         snapshot_collector_scheduler.start()
 
         async def _renew_lock() -> None:

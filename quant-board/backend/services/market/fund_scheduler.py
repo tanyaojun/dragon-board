@@ -14,6 +14,7 @@ from backend.market_proxy.akshare_fund_provider import (
     get_akshare_fund_provider,
 )
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
+from backend.core.fund_sources import FUND_SOURCE_AKSHARE_THS_INDIVIDUAL
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
@@ -48,7 +49,7 @@ class MarketFundScheduler:
         refresh_interval_seconds: float = 300.0,
         systemic_cooldown_seconds: float = 300.0,
         fetch_timeout_seconds: float = 60.0,
-        save_timeout_seconds: float = 30.0,
+        save_timeout_seconds: float = 90.0,
         max_pending_save_rows: int = 30000,
         enabled: bool = True,
     ) -> None:
@@ -141,7 +142,12 @@ class MarketFundScheduler:
         elif after_close and self._finalized:
             return False
         elif not intraday and not after_close and self._primed:
-            return False
+            # 盘后暂停——但 Redis 资金缓存缺失（重启后 RDB 无此 key/被误清）时
+            # 冷启动拉一次填充（2026-08-12 修复：否则前端资金列空直到下个交易日）
+            if self.cache.has_redis_data():
+                return False
+            logger.info("theme-fund redis cache missing; cold-start refresh outside trading hours")
+            self._primed = False
 
         self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
         self._record_request(now_ts)
@@ -287,7 +293,7 @@ class MarketFundScheduler:
             "enabled": self.enabled,
             "seedEnabled": get_settings().theme_fund_seed_enabled,
             "running": self._task is not None,
-            "source": "akshare_eastmoney_rank",
+            "source": FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
             "queueLength": len(self.stream.market_codes()),
             "currentCode": self._last_code,
             "requestsLastMinute": len(self._request_times),
@@ -303,6 +309,23 @@ class MarketFundScheduler:
             "pendingSaveCount": len(self._pending_save_rows),
             "pendingSaveDropped": self._pending_save_dropped,
         }
+
+    async def _ensure_redis_cache_alive(self) -> None:
+        """theme-fund:latest key 缺失时用内存 last-good 写回 Redis（零上游请求）。
+
+        2026-08-12：Redis 资金缓存 key 曾被误清/丢失导致前端资金列空；盘后
+        调度器暂停不写，key 缺失时这里从进程内 last-good 恢复，保证前端可读。
+        """
+        try:
+            if not self.cache.has_redis_data():
+                rows = self.cache.memory_rows()
+                if rows:
+                    saved, _failures = self.cache.put_many(rows)
+                    if saved:
+                        self.stream.publish(saved)
+                        logger.info("restored theme-fund redis cache from last-good: %s rows", len(saved))
+        except Exception:
+            logger.exception("ensure theme-fund redis cache alive failed")
 
     async def _run(self) -> None:
         while True:
@@ -322,6 +345,8 @@ class MarketFundScheduler:
                     await asyncio.wait_for(self.stream.codes_changed.wait(), timeout=wait_for)
                 except asyncio.TimeoutError:
                     pass
+            # Redis 资金缓存存活检查（key 被误清/丢失时用内存 last-good 写回）
+            await self._ensure_redis_cache_alive()
 
 
 market_fund_scheduler = MarketFundScheduler(

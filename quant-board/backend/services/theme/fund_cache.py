@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import logging
 import math
+import sys
 import time
 from datetime import date
 from threading import Lock
 from typing import Any
 
+from backend.core.fund_sources import (
+    FUND_SOURCE_THS_MAIN_MONITOR,
+    SUPPORTED_FUND_SOURCES,
+)
 from backend.core.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -26,6 +31,15 @@ FUND_SOURCE_RANK: dict[str, int] = {
 }
 
 
+# 支持的来源（2026-08-12：akshare 同花顺网页 source 诚实标识后，缓存接受
+# L2 主源与网页估算两种；后续其它来源按需扩展）
+# 支持的来源（2026-08-12：统一入口 backend.core.fund_sources，资金列接受
+# L2 主源与网页估算两种；模块级 SUPPORTED_FUND_SOURCES 由 import 提供）
+
+
+logger = logging.getLogger(__name__)
+
+
 class ThemeFundCache:
     def __init__(
         self,
@@ -41,6 +55,12 @@ class ThemeFundCache:
         self._owners: dict[str, list[str]] = {}
         self._owners_loaded = False
         self._memory_version = 0
+        # 旧交易日行清理标记（2026-08-12）：仅跨日时清理 Redis hash——
+        # 同日内重复写入不重复 hgetall（5200 字段 hgetall 太重，曾导致大 batch
+        # put_many 超时、Redis latest 未写入）
+        self._last_pruned_date: str | None = None
+        # fail-visible：最近一次 Redis 写入错误（put_many 静默失败时记录，供诊断）
+        self._last_redis_write_error: str | None = None
         self._lock = Lock()
 
     def put(self, row: dict[str, object], *, is_final: bool = False) -> dict[str, object]:
@@ -121,6 +141,12 @@ class ThemeFundCache:
             "zlje": zlje,
             "sessionDate": session_date,
             "tradingDate": session_date,
+            # 数据源诚实标识（2026-08-12）：保留行原始 source（akshare_ths_individual
+            # 或 ths_main_monitor），不再硬编码 L2；回退 ths_main_monitor 兼容历史行。
+            "source": str(row.get("source") or row.get("moneyFlowSource") or FUND_SOURCE_THS_MAIN_MONITOR),
+            "moneyFlowSource": str(
+                row.get("moneyFlowSource") or row.get("source") or FUND_SOURCE_THS_MAIN_MONITOR
+            ),
             "sourceTs": int(row.get("sourceTs") or 0),
             "updatedAt": int(row.get("updatedAt") or int(time.time() * 1000)),
         }
@@ -175,6 +201,15 @@ class ThemeFundCache:
                     pipeline = self._redis.pipeline(transaction=False)
                 except Exception:
                     pipeline = None
+                    logger.exception("theme-fund redis pipeline() failed")
+            if self._redis is None:
+                # fail-visible（2026-08-12）：Redis client 不可用（连接/配置失败）——
+                # 只写内存，Redis 无持久化；此前静默导致"内存有、Redis 无"
+                self._last_redis_write_error = "redis client unavailable (get_hotlist_redis_client returned None)"
+                logger.warning(
+                    "theme-fund redis client unavailable; skip redis write (memory only): %s",
+                    self._last_redis_write_error,
+                )
             today = str(validated[0].get("sessionDate") or "")
             for candidate in validated:
                 code = str(candidate.get("code") or "")
@@ -192,14 +227,39 @@ class ThemeFundCache:
                 saved_rows.append(dict(stored))
                 if pipeline is not None:
                     pipeline.hset(hash_key, code, json.dumps(stored, ensure_ascii=False, separators=(",", ":")))
+            # 旧交易日行主动清理（2026-08-12）：TTL 加长后旧累计值不能滞留——
+            # 仅在写入日期变化（跨日）时清理 Redis hash + 内存里 sessionDate <
+            # 当天 的行；同日内重复写入跳过（5200 字段 hgetall 太重，曾导致大
+            # batch put_many 超时、Redis latest 未写入、前端资金列空）
+            if (
+                self._redis is not None
+                and pipeline is not None
+                and today != self._last_pruned_date
+            ):
+                try:
+                    self._last_pruned_date = today
+                    written_codes = {str(c.get("code")) for c in validated}
+                    all_rows = self._read_hash_all(hash_key)
+                    stale_fields = [
+                        field
+                        for field, value in all_rows.items()
+                        if field not in written_codes and str(value.get("sessionDate") or "") < today
+                    ]
+                    if stale_fields:
+                        for field in stale_fields:
+                            pipeline.hdel(hash_key, field)
+                            self._latest.pop(field, None)
+                except Exception:
+                    pass
             if pipeline is not None:
                 try:
                     pipeline.expire(hash_key, self._ttl_seconds)
                     pipeline.execute()
-                except Exception as error:
-                    # L3（2026-08-11 审计）：Redis 写入失败不得静默——记录并保留
-                    # 进程内 last-good（fail-visible），后续批次会重试覆盖
-                    logger.warning("theme-fund pipeline 写入 Redis 失败，保留进程内 last-good: %s", error)
+                except Exception:
+                    # fail-visible（2026-08-12）：写 Redis 失败必须暴露原因（此前静默吞掉，
+                    # 导致内存有数据但 Redis 无——跨重启丢失；socket_timeout 曾 0.2s 超时）
+                    logger.exception("theme-fund redis put_many pipeline execute failed")
+                    self._last_redis_write_error = str(sys.exc_info()[1]) if sys.exc_info()[1] else "unknown"
 
             # 4) 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：跨日即清旧交易日行
             self._prune_stale_sessions(today)
@@ -225,6 +285,21 @@ class ThemeFundCache:
                 if latest:
                     result[code] = dict(latest)
         return result
+
+    def has_redis_data(self) -> bool:
+        """Redis 里 theme-fund:latest key 是否存在（2026-08-12：key 曾被误清/
+        过期导致前端资金列空，恢复机制用此判断是否需要从内存 last-good 写回）。"""
+        if self._redis is None:
+            return False
+        try:
+            return bool(self._redis.exists(self._key("latest")))
+        except Exception:
+            return False
+
+    def memory_rows(self) -> list[dict[str, object]]:
+        """导出进程内 last-good 全部行（用于 Redis key 缺失时写回，零上游请求）。"""
+        with self._lock:
+            return [dict(value) for value in self._latest.values()]
 
     def set_owner_codes(self, owner: str, codes: list[str]) -> None:
         key = str(owner).strip()
@@ -275,15 +350,15 @@ class ThemeFundCache:
     def _next_version(self) -> int:
         try:
             if self._redis is not None:
-                version = int(self._redis.incr(self._key("version")))
+                version_key = self._key("version")
+                version = int(self._redis.incr(version_key))
                 if version <= self._memory_version:
                     version = self._memory_version + 1
-                    self._redis.set(self._key("version"), version)
+                    self._redis.set(version_key, version)
                 self._memory_version = max(self._memory_version, version)
-                # 清理策略（2026-08-11 用户确认）：version 与 latest 同生命周期
-                # （容灾 1 交易日，TTL 兜底 3 天）；停止写入后过期重置，
-                # 前端 fund_full_state 会清空本地版本记录（可恢复）
-                self._redis.expire(self._key("version"), self._ttl_seconds)
+                # 清理策略（2026-08-12）：version 与 latest 同生命周期（TTL 兑底），
+                # 停止写入后过期重置，前端 full_state 会清空本地版本记录兑底
+                self._redis.expire(version_key, self._ttl_seconds)
                 return version
         except Exception:
             pass
@@ -296,12 +371,13 @@ class ThemeFundCache:
             return self._memory_version + 1
         try:
             if self._redis is not None:
-                end_version = int(self._redis.incrby(self._key("version"), count))
+                version_key = self._key("version")
+                end_version = int(self._redis.incrby(version_key, count))
                 if end_version - count + 1 <= self._memory_version:
                     end_version = self._memory_version + count
-                    self._redis.set(self._key("version"), end_version)
+                    self._redis.set(version_key, end_version)
                 self._memory_version = max(self._memory_version, end_version)
-                self._redis.expire(self._key("version"), self._ttl_seconds)
+                self._redis.expire(version_key, self._ttl_seconds)
                 return end_version - count + 1
         except Exception:
             pass
@@ -335,6 +411,27 @@ class ThemeFundCache:
 
     def _key(self, suffix: str) -> str:
         return f"{self._base}:{suffix}"
+
+    def _read_hash_all(self, key: str) -> dict[str, dict[str, object]]:
+        """读取 hash 全部字段（用于旧交易日行清理）。"""
+        if self._redis is None:
+            return {}
+        try:
+            raw_all = self._redis.hgetall(key)
+        except Exception:
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for field, raw in raw_all.items():
+            field_str = field.decode("utf-8") if isinstance(field, bytes) else str(field)
+            try:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8")
+                value = json.loads(raw) if raw else None
+            except (TypeError, ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(value, dict):
+                result[field_str] = value
+        return result
 
     def _write_hash(self, key: str, field: str, value: dict[str, object]) -> None:
         try:
@@ -406,7 +503,13 @@ def get_theme_fund_cache() -> ThemeFundCache:
         from backend.market_proxy.redis_client import get_hotlist_redis_client
 
         _theme_fund_cache = ThemeFundCache(
-            get_hotlist_redis_client(settings),
+            # 资金大批次 pipeline 写入/连接需要更长超时（快照缓存默认 0.2s 太短，
+            # 曾导致 5204 行写入超时/连接超时、Redis 未写入——2026-08-12）
+            get_hotlist_redis_client(
+                settings,
+                socket_timeout=10.0,
+                connect_timeout=3.0,
+            ),
             prefix=settings.redis_key_prefix,
             ttl_seconds=settings.theme_fund_cache_ttl_seconds,
         )

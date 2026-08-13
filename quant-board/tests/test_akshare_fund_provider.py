@@ -101,10 +101,12 @@ def test_fetch_all_parses_full_market_rows(monkeypatch) -> None:
     assert first["code"] == "300720"
     assert first["name"] == "海川智能"
     assert first["zlje"] == -83062800.0
-    assert first["zljzb"] == -24.81
-    assert first["source"] == "eastmoney_seed"
-    assert first["moneyFlowSource"] == "eastmoney_seed"
-    assert first["moneyFlowEstimated"] is True
+    assert first["zljzb"] == round(-83062800.0 / 335000000.0 * 100, 2)
+    assert first["inflow"] == 126000000.0
+    assert first["outflow"] == 209000000.0
+    assert first["turnover"] == 335000000.0
+    assert first["source"] == "akshare_ths_individual"
+    assert first["moneyFlowSource"] == "akshare_ths_individual"
     assert first["sessionDate"] == "2026-07-30"
     assert first["sourceTs"] == now_ms
     assert "inflow" not in first

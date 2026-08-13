@@ -22,6 +22,13 @@ class FakeCache:
     def __init__(self, reject_codes: set[str] | None = None) -> None:
         self.rows: dict[str, dict[str, object]] = {}
         self.reject_codes = reject_codes or set()
+        self.redis_data_present = True
+
+    def has_redis_data(self) -> bool:
+        return self.redis_data_present
+
+    def memory_rows(self) -> list[dict[str, object]]:
+        return [dict(v) for v in self.rows.values()]
 
     def get_latest(self, codes: list[str]) -> dict[str, dict[str, object]]:
         return {code: self.rows[code] for code in codes if code in self.rows}
@@ -392,3 +399,4 @@ async def test_save_timeout_keeps_rows_for_retry() -> None:
     assert scheduler._pending_save_rows == []
     assert len(cache.rows) == 2
     assert len(stream.published) == 4
+

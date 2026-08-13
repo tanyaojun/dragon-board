@@ -17,6 +17,36 @@
           </button>
         </header>
 
+        <div class="summary-strip">
+          <div>
+            <span>共振</span>
+            <strong :class="directionClass(latestAnalysis?.resonance?.direction)">
+              {{ directionalScore(latestAnalysis?.resonance?.direction, resonanceScore(latestAnalysis?.resonance), true)
+              }}
+            </strong>
+          </div>
+          <div>
+            <span>技术</span>
+            <strong :class="directionClass(latestAnalysis?.observation?.rankTrend?.direction)">
+              {{ directionalScore(latestAnalysis?.observation?.rankTrend?.direction,
+                latestAnalysis?.observation?.rankTrend?.score, true) }}
+            </strong>
+          </div>
+          <div>
+            <span>生命周期</span>
+            <strong :class="stageClass(latestAnalysis?.observation?.lifecycle?.stage)">
+              {{ lifecycleScore(latestAnalysis?.observation?.lifecycle?.stage,
+                latestAnalysis?.observation?.lifecycle?.score, true) }}
+            </strong>
+          </div>
+          <div>
+            <span>量价</span>
+            <strong :class="directionClass(volumePriceDirection(latestAnalysis))">
+              {{ volumePriceScoreText(latestAnalysis) }}
+            </strong>
+          </div>
+        </div>
+
         <nav class="track-switcher" aria-label="观察轨道">
           <button v-for="track in tracks" :key="track.id" type="button" :class="{ active: activeTrack === track.id }"
             :title="`${track.index} ${track.label}`" @click="activeTrack = track.id">
