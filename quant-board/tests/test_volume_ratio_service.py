@@ -19,6 +19,7 @@ from backend.services.market.volume_ratio_service import (
     normalize_volume_history,
     raw_volume_ratio,
     resolve_volume_ratio_history,
+    warmup_daily_history_cache,
     weighted_average_volume,
 )
 
@@ -293,3 +294,50 @@ def test_volume_ratio_route_returns_items(monkeypatch) -> None:
     empty = client.post("/api/quotes/volume-ratio", json={"stocks": []})
     assert empty.json()["ok"] is False
     assert empty.json()["errorCode"] == "missing_stocks"
+
+
+def test_warmup_daily_history_cache_loads_full_market_without_code_filter() -> None:
+    db = _FakeDb(
+        [
+            {"code": "600000", "type": "daily", "tradingDate": "2026-05-06", "volume": 1000, "timestamp": 3},
+            {"code": "600000", "type": "daily", "tradingDate": "2026-05-05", "volume": 800, "timestamp": 2},
+            {"code": "600001", "type": "daily", "tradingDate": "2026-05-06", "volume": 500, "timestamp": 3},
+        ]
+    )
+    history = warmup_daily_history_cache(db, "2026-05-07")
+    # 全市场装入：不按 code 过滤，两只票都进缓存，最新在前
+    assert history["600000"] == [1000, 800]
+    assert history["600001"] == [500]
+
+
+def test_warmup_populates_cache_so_build_daily_skips_mongo(monkeypatch) -> None:
+    store: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        "backend.services.market.volume_ratio_service._cache_get",
+        lambda key: store.get(key),
+    )
+    monkeypatch.setattr(
+        "backend.services.market.volume_ratio_service._cache_set",
+        lambda key, value, ttl: store.__setitem__(key, value),
+    )
+    db = _FakeDb(
+        [
+            {"code": "600000", "type": "daily", "tradingDate": "2026-05-06", "volume": 1000, "timestamp": 3},
+            {"code": "600000", "type": "daily", "tradingDate": "2026-05-05", "volume": 800, "timestamp": 2},
+        ]
+    )
+    warmup_daily_history_cache(db, "2026-05-07")
+
+    # 预热后缓存已含 600000：build_daily_history 应命中缓存，不再触发 Mongo find
+    find_calls = {"count": 0}
+    original_find = db.snapshot_stock_rows.find
+
+    def counting_find(query: dict[str, Any], projection: dict[str, Any] | None = None):
+        find_calls["count"] += 1
+        return original_find(query, projection)
+
+    db.snapshot_stock_rows.find = counting_find  # type: ignore[method-assign]
+    history = build_daily_history(db, ["600000"], "2026-05-07")
+    assert history == {"600000": [1000, 800]}
+    assert find_calls["count"] == 0

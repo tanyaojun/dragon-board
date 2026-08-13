@@ -209,6 +209,19 @@ async def on_startup() -> None:
             await restore_fund_flow_from_mongodb()
         except Exception:
             logger.exception("fund_flow_l2 cold restore failed; continue startup")
+    # 量比历史缓存预热（2026-08-13）：预装全市场 daily 历史成交量到 Redis，
+    # 避免首次量比请求冷启动串行查 Mongo 造成量价字段长时间 --。
+    # best-effort：后台线程执行，失败不阻断启动。
+    if get_settings().storage_backend == "mongodb":
+        from backend.services.market.volume_ratio_service import warmup_volume_ratio_daily
+
+        def _warmup_volume_ratio() -> None:
+            try:
+                warmup_volume_ratio_daily()
+            except Exception:
+                logger.exception("volume_ratio daily warmup failed; continue startup")
+
+        asyncio.get_running_loop().run_in_executor(None, _warmup_volume_ratio)
     market_fund_scheduler.start()
     # mainMonitorDetail 展示池资金校准（L2 主源，覆盖 akshare 种子）
     get_ths_fund_refresh_scheduler().start()

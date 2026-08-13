@@ -26,8 +26,10 @@ DATASET_ID = "dragonboard_live"
 INTRADAY_TYPES = ("quarter_hour", "half_hour", "hourly")
 
 # 日级历史均量（量比分母）缓存：日级快照低频变化（一天数次），长 TTL 避免重 IO 反复读历史快照
-DAILY_CACHE_TTL_SECONDS = 600
-INTRADAY_CACHE_TTL_SECONDS = 120  # 分时历史分母：槽位 30 分钟级，120s 缓存合理
+DAILY_CACHE_TTL_SECONDS = 1800
+INTRADAY_CACHE_TTL_SECONDS = 300  # 分时历史分母：历史 2 日固定、仅当天在变，300s 缓存合理
+# 最近交易日列表缓存：交易日一天只变一次，长 TTL（1h）避免每 5 分钟重跑 tradingDate 聚合
+RECENT_DATES_CACHE_TTL_SECONDS = 3600
 # 量比结果缓存 TTL 60s（与前端量比刷新门限 VOLUME_RATIO_MIN_INTERVAL_MS=60s 一致）：
 # 分子为当日实时量，60s 内量比固定；结果层缓存避免 60s 门限内重复请求仍打历史快照查询。
 VOLUME_RATIO_RESULT_CACHE_TTL_SECONDS = 60
@@ -347,7 +349,7 @@ def _recent_trading_dates(
         for item in db["snapshot_stock_rows"].aggregate(pipeline)
         if item.get("_id")
     ]
-    _cache_set(cache_key, {"dates": dates}, 300)
+    _cache_set(cache_key, {"dates": dates}, RECENT_DATES_CACHE_TTL_SECONDS)
     return dates
 
 
@@ -451,6 +453,72 @@ def build_daily_history(
 
     _cache_set(cache_key, result, DAILY_CACHE_TTL_SECONDS)
     return result
+
+
+def warmup_daily_history_cache(
+    db: Any,
+    before_trading_date: str,
+    lookback_days: int = LOOKBACK_DAYS,
+) -> dict[str, list[float]]:
+    """启动预热：一次性装入最近 lookback_days 日全市场 daily 成交量到 Redis。
+
+    与 ``build_daily_history`` 的差异：不按 code 过滤，直接扫全市场 daily 行，
+    避免首次量比请求（热榜几百只 code 全部 miss）串行分块查 Mongo，造成量价
+    字段长时间显示 ``--``。best-effort：失败/空数据不阻断启动。
+    """
+    cache_key = f"{REDIS_PREFIX}:daily:{before_trading_date}"
+    cached = _cache_get(cache_key) or {}
+    result = dict(cached)
+
+    dates = _recent_trading_dates(db, before_trading_date, lookback_days, "daily")
+    if not dates:
+        return result
+
+    by_code: dict[str, dict[str, tuple[float, int]]] = defaultdict(dict)
+    rows = db["snapshot_stock_rows"].find(
+        {
+            "datasetId": DATASET_ID,
+            "type": "daily",
+            "tradingDate": {"$in": dates},
+        },
+        {"_id": 0, "code": 1, "tradingDate": 1, "volume": 1, "timestamp": 1},
+    ).sort([("timestamp", -1)])
+    for row in rows:
+        code = str(row.get("code") or "")
+        trading_date = str(row.get("tradingDate") or "")
+        try:
+            volume = float(row.get("volume") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not code or not trading_date or not math.isfinite(volume) or volume <= 0:
+            continue
+        timestamp = int(row.get("timestamp") or 0)
+        existing = by_code[code].get(trading_date)
+        if existing is None or timestamp > existing[1]:
+            by_code[code][trading_date] = (volume, timestamp)
+
+    for code, entries in by_code.items():
+        sorted_entries = sorted(entries.items(), key=lambda item: item[0], reverse=True)[
+            :lookback_days
+        ]
+        if sorted_entries:
+            result[code] = [volume for _, (volume, _timestamp) in sorted_entries]
+
+    _cache_set(cache_key, result, DAILY_CACHE_TTL_SECONDS)
+    return result
+
+
+def warmup_volume_ratio_daily() -> None:
+    """启动预热入口：预装全市场 daily 历史成交量到 Redis（best-effort）。
+
+    由 main.py 的 startup 事件在后台线程调用；失败只告警不阻断启动。
+    数据来自 MongoDB snapshot_stock_rows（storage_backend == "mongodb"）。
+    """
+    from backend.data.repositories import repository_factory
+
+    db = repository_factory.get_runtime_mongodb_database()
+    trading_date = datetime.now(TZ_SHANGHAI).date().isoformat()
+    warmup_daily_history_cache(db, trading_date)
 
 
 def build_intraday_history(
