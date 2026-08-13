@@ -4,11 +4,16 @@ import asyncio
 import math
 import re
 import time
+
+import pandas as pd
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
-from backend.core.fund_sources import FUND_SOURCE_AKSHARE_THS_INDIVIDUAL
+from backend.core.fund_sources import (
+    FUND_SOURCE_AKSHARE_EASTMONEY_RANK,
+    FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
+)
 from backend.core.settings import get_settings
 
 
@@ -68,7 +73,7 @@ class AkshareFundBatch:
     failures: list[dict[str, Any]]
     fetched_at_ms: int
     session_date: str
-    source: str = field(default=FUND_SOURCE_AKSHARE_THS_INDIVIDUAL)
+    source: str = field(default=FUND_SOURCE_AKSHARE_EASTMONEY_RANK)
 
 
 def parse_amount(value: Any) -> float | None:

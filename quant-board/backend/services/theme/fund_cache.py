@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 允许写入运行态资金缓存的来源：L2 主源 + 全市场种子（东财 + 存量同花顺网页）。
 # 其它来源（tdx_transaction 等）不写入本缓存，避免污染资金列口径。
 SUPPORTED_FUND_SOURCES = frozenset(
-    {"ths_main_monitor", "ths_web_seed", "eastmoney_seed"}
+    {"ths_main_monitor", "ths_web_seed", "eastmoney_seed", "akshare_ths_individual"}
 )
 # 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(2) > 种子(1)。
 FUND_SOURCE_RANK: dict[str, int] = {

@@ -23,7 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -32,7 +32,8 @@ from backend.core.fund_sources import (
     FUND_SOURCE_THS_MAIN_MONITOR,
     SUPPORTED_FUND_SOURCES,
 )
-from backend.services.theme.fund_cache import ThemeFundCache
+if TYPE_CHECKING:
+    from backend.services.theme.fund_cache import ThemeFundCache
 
 from .gateway import HttpMarketDataGateway
 from .models import MarketDataContext, SourceHealth
@@ -1785,6 +1786,9 @@ class MarketFundCacheProvider:
                 "moneyFlowEstimated": source != FUND_SOURCE_THS_MAIN_MONITOR,
                 "capitalFlowSource": source,
                 "capitalFlowConfidence": "high" if source == FUND_SOURCE_THS_MAIN_MONITOR else "medium",
+                # M1（2026-08-11 审计）：暴露资金行时效信息
+                "moneyFlowSessionDate": row.get("sessionDate"),
+                "moneyFlowSourceTs": row.get("sourceTs"),
             }
             if isinstance(row.get("zljzb"), (int, float)) and math.isfinite(float(row["zljzb"])):
                 item["mainNetRatio"] = float(row["zljzb"])

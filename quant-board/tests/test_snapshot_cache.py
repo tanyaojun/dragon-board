@@ -228,7 +228,7 @@ def test_bump_generation_sets_ttl_to_prevent_permanent_keys() -> None:
 
     cache.bump_generation(live_key)
 
-    assert redis.expires[live_key] == 310  # ttl + empty_ttl
+    assert redis.expires[live_key] == 7 * 24 * 3600  # generation 标记 7 天 TTL（防永久累积）
 
 
 def test_cached_snapshot_response_does_not_write_after_ingest_generation_changes(monkeypatch) -> None:
