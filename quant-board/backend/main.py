@@ -222,6 +222,27 @@ async def on_startup() -> None:
                 logger.exception("volume_ratio daily warmup failed; continue startup")
 
         asyncio.get_running_loop().run_in_executor(None, _warmup_volume_ratio)
+    # RankTrend frame_bundles 缓存预热（2026-08-13）：预装最近 200 帧 ranktrend+themes
+    # bundle 到 Redis，消除 analyze 四信号（共振/趋势/周期/量价）冷启动的 Mongo 重查询。
+    # best-effort：后台线程执行，失败不阻断启动。
+    if get_settings().storage_backend == "mongodb":
+        from backend.data.repositories import repository_factory as _repo_factory
+
+        def _warmup_ranktrend_bundles() -> None:
+            try:
+                _db = _repo_factory.get_runtime_mongodb_database()
+                _repo = _repo_factory.create_repository(_db, enable_backup=False)
+                _repo.load_frame_bundles(
+                    "dragonboard_live",
+                    snapshot_type="half_hour",
+                    sort="desc",
+                    projection="ranktrend+themes",
+                    limit=200,
+                )
+            except Exception:
+                logger.exception("ranktrend frame_bundles warmup failed; continue startup")
+
+        asyncio.get_running_loop().run_in_executor(None, _warmup_ranktrend_bundles)
     market_fund_scheduler.start()
     # mainMonitorDetail 展示池资金校准（L2 主源，覆盖 akshare 种子）
     get_ths_fund_refresh_scheduler().start()
