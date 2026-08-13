@@ -701,10 +701,10 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
     assert third.json()["cache"]["hit"] is False
 
 
-def test_analyze_cache_ttl_fixed_300s_aligns_with_frontend_lru(monkeypatch):
-    # analyze 缓存 TTL 固定 300s（与前端 rankTrendResultCache LRU TTL 300s 一致），
-    # 避免面板打开间隔稍长就丢失缓存并全量重算。
-    from backend.api.ranktrend_routes import RANK_TREND_ANALYZE_CACHE_TTL_SECONDS
+def test_analyze_cache_ttl_dynamic_intraday_afterhours(monkeypatch):
+    # analyze 缓存 TTL 动态化：盘中 300s / 盘后 1800s。
+    # 写入缓存的 TTL 必须等于 _analyze_cache_ttl_seconds() 当前返回值，而非固定常量。
+    from backend.api.ranktrend_routes import _analyze_cache_ttl_seconds
 
     fake_redis = FakeRedis()
     monkeypatch.setattr(
@@ -741,10 +741,40 @@ def test_analyze_cache_ttl_fixed_300s_aligns_with_frontend_lru(monkeypatch):
     })
     assert response.status_code == 200
 
+    expected_ttl = _analyze_cache_ttl_seconds()
     analyze_keys = [key for key in fake_redis.ttls if "ranktrend:analyze" in key]
     assert analyze_keys
     for key in analyze_keys:
-        assert fake_redis.ttls[key] == RANK_TREND_ANALYZE_CACHE_TTL_SECONDS
+        assert fake_redis.ttls[key] == expected_ttl
+
+
+def test_analyze_cache_ttl_intraday_vs_afterhours_boundaries():
+    # 纯时间窗口边界：盘中（9:15-11:30 / 13:00-15:30）→ 300s，其余（午休/盘后/凌晨）→ 1800s。
+    from datetime import datetime as _dt
+
+    from backend.api.ranktrend_routes import (
+        _analyze_cache_ttl_seconds,
+        _is_intraday_trading_time,
+    )
+
+    intraday = [
+        _dt(2026, 8, 13, 9, 15),   # 集合竞价开始
+        _dt(2026, 8, 13, 10, 0),   # 早盘
+        _dt(2026, 8, 13, 11, 30),  # 早盘收盘
+        _dt(2026, 8, 13, 13, 0),   # 下午开盘
+        _dt(2026, 8, 13, 15, 30),  # 盘后固定价格结束
+    ]
+    after_hours = [
+        _dt(2026, 8, 13, 9, 14),   # 集合竞价前
+        _dt(2026, 8, 13, 12, 0),   # 午休
+        _dt(2026, 8, 13, 15, 31),  # 收盘后
+        _dt(2026, 8, 13, 23, 0),   # 深夜
+    ]
+    for moment in intraday:
+        assert _is_intraday_trading_time(moment) is True, moment
+        assert _analyze_cache_ttl_seconds() in (300, 1800)
+    for moment in after_hours:
+        assert _is_intraday_trading_time(moment) is False, moment
 
 
 def _theme_frames_with_context(count=12, theme_count=25):

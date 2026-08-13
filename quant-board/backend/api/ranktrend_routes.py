@@ -2,6 +2,7 @@ import json
 import asyncio
 import math
 import threading
+from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable
 
@@ -32,16 +33,29 @@ router = APIRouter(tags=["ranktrend-analyze"])
 
 SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
 
-# analyze 缓存 TTL：1800s（2026-08-13 由 300s 延长）。
-# 目的：冷启动（关机重启）时 dump.rdb 恢复 Redis 后，analyze 响应在 30 分钟内仍命中，
-# 避免引擎逐股重算（30 帧 × 全市场）导致四信号 5-10 秒 "--"。
+# analyze 缓存 TTL 动态化（2026-08-13）：
+# - 盘中交易时段（9:15-11:30 / 13:00-15:30）：300s，保证盘中数据新鲜度；
+# - 盘后/非交易时段：1800s，配合 dump.rdb 恢复覆盖关机重启，避免冷启动逐股重算 5-10s。
 # 新快照 ingest 会递增 dataset generation 并按 dataset 索引删除旧 analyze 响应，
 # 因此 TTL 只作为兜底，不需要再对齐某个固定刷新周期。
-RANK_TREND_ANALYZE_CACHE_TTL_SECONDS = 1800
+RANK_TREND_ANALYZE_CACHE_TTL_INTRA_DAY_SECONDS = 300
+RANK_TREND_ANALYZE_CACHE_TTL_AFTER_HOURS_SECONDS = 1800
+
+
+def _is_intraday_trading_time(now: datetime) -> bool:
+    """A 股盘中交易时段（纯时间窗口，不含交易日判断）。
+
+    早盘 9:15-11:30（含集合竞价），下午 13:00-15:30（含盘后固定价格）。
+    午休、周末、节假日按盘后处理（数据静态，可用更长 TTL）。
+    """
+    minutes = now.hour * 60 + now.minute
+    return (9 * 60 + 15 <= minutes <= 11 * 60 + 30) or (13 * 60 <= minutes <= 15 * 60 + 30)
 
 
 def _analyze_cache_ttl_seconds() -> int:
-    return RANK_TREND_ANALYZE_CACHE_TTL_SECONDS
+    if _is_intraday_trading_time(datetime.now()):
+        return RANK_TREND_ANALYZE_CACHE_TTL_INTRA_DAY_SECONDS
+    return RANK_TREND_ANALYZE_CACHE_TTL_AFTER_HOURS_SECONDS
 
 # 分析算法所需的最大回看窗口：共振至少 9 点序列（RESONANCE_MIN_SERIES_POINTS）、
 # 技术稳定窗口 30、生命周期 15、横截面 3；取 30 同时满足全部轨道。
@@ -307,11 +321,18 @@ def _analyze_frames(
     series_by_code: dict[str, list[tuple[str, int, float]]],
     codes: list[str],
     dataset_id: str = "dragonboard_live",
+    *,
+    full_history: bool = True,
 ) -> list[dict[str, Any]]:
     """逐帧按「该股到该帧为止的出现序列前缀」跑 golden pipeline（旧 TS 合同）。
 
     技术/周期/风险/决策/观察/策略/jump 以该股最近 50 次出现中的前缀为输入，
     resonance 使用同一前缀（series.percentiles.slice(0, index+1)）。
+
+    full_history=False 用于首屏全市场场景（无 frame_keys）：历史帧仅输出轻量 meta
+    （currentRank/currentPercentile），完整四信号只在最后一帧计算——前端
+    updateLatestAnalysisSeries 只消费历史帧的 meta 两字段，完整分析由观察面板按需
+    单股（带 frame_keys）再请求。这样把 30 帧 × 全市场的逐股重算压缩为 1 帧完整 + 29 帧轻量。
     """
     wanted = set(codes) if codes else None
     momentum_series = _compute_theme_momentum_series_cached(frames, dataset_id)
@@ -321,6 +342,7 @@ def _analyze_frames(
         series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
     output: list[dict[str, Any]] = []
     last_hot_themes: list[dict[str, Any]] = []
+    last_frame_index = len(frames) - 1
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
@@ -359,6 +381,21 @@ def _analyze_frames(
             prefix = bars[: pos + 1]
             ranks = [item[1] for item in prefix]
             percentiles = [item[2] for item in prefix]
+            if not full_history and index != last_frame_index:
+                # 首屏全市场场景（无 frame_keys）：历史帧仅输出轻量 meta，
+                # 前端 updateLatestAnalysisSeries 只消费 currentRank/currentPercentile；
+                # 完整四信号（technical/cycle/risk/resonance/volumePrice）只在最后一帧计算。
+                stocks_out.append({
+                    "code": code,
+                    "analysis": {
+                        "meta": {
+                            "code": code,
+                            "currentRank": ranks[-1] if ranks else 0,
+                            "currentPercentile": percentiles[-1] if percentiles else 0.0,
+                        },
+                    },
+                })
+                continue
             signal = engine._build_signal(stock, frame, ranks, percentiles, regime, {})
             if not signal:
                 continue
@@ -729,7 +766,10 @@ async def analyze_ranktrend(
         raw_frames, series_by_code = _load_frames_for_analysis(
             repo, dataset_id, snapshot_type, frame_keys, current_frame
         )
-        frames_out = _analyze_frames(engine, raw_frames, series_by_code, codes, dataset_id=dataset_id)
+        frames_out = _analyze_frames(
+            engine, raw_frames, series_by_code, codes, dataset_id=dataset_id,
+            full_history=bool(frame_keys),
+        )
         return {
             "ok": True,
             "frames": frames_out,
