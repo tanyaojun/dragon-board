@@ -99,6 +99,24 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return min(high, max(low, value))
 
 
+def _volume_price_tier(quadrant: str | None, fund_score: float, reasons: list[str]) -> tuple[str, list[str]]:
+    """量价离散档位（signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §6.3。"""
+    if quadrant is None:
+        return "unknown", ["量价数据不足"]
+    joined = " ".join(reasons)
+    if "对倒出货" in joined or "过度放量" in joined:
+        return "E", ["硬风险：对倒出货/过度放量"]
+    if "缩量涨停" in joined:
+        return "S", ["封板惜售，唯一性强信号"]
+    if quadrant == "rise_volume" and fund_score > 0:
+        return "A", ["放量上涨 + 资金流入"]
+    if quadrant == "rise_volume":
+        return "B", ["放量上涨，量价配合"]
+    if quadrant in ("rise_shrink", "normal"):
+        return "C", ["缩量上涨/常态"]
+    return "D", ["放量下跌/缩量下跌"]
+
+
 def compute_volume_price_score(
     code: Any,
     change: Any,
@@ -117,6 +135,8 @@ def compute_volume_price_score(
             "direction": None,
             "quadrant": None,
             "reasons": ["量价数据不足（涨跌/量比缺失），不评估"],
+            "signalTier": "unknown",
+            "tierReasons": ["量价数据不足"],
         }
 
     # 方向（涨跌幅五档）
@@ -190,11 +210,14 @@ def compute_volume_price_score(
     elif ratio is not None and ratio < 0:
         reasons.append("主力净流出")
 
+    _tier, _tier_reasons = _volume_price_tier(quadrant, fund_score, reasons)
     return {
         "score": score,
         "direction": direction,
         "quadrant": quadrant,
         "reasons": reasons,
+        "signalTier": _tier,
+        "tierReasons": _tier_reasons,
         "breakdown": {
             "direction": round(direction_score, 1),
             "volume": round(volume_score, 1),

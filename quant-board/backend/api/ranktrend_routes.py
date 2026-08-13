@@ -405,6 +405,14 @@ def _analyze_frames(
                 resonance.get("direction"),
                 stock.get("zljzb"),
             )
+            _syn_tier, _syn_reasons = _synergy_tier(
+                resonance.get("signalTier"), resonance.get("direction"),
+                (observation.get("rankTrend") or {}).get("signalTier"), (observation.get("rankTrend") or {}).get("direction"),
+                vp.get("signalTier"), vp.get("direction"),
+                (observation.get("lifecycle") or {}).get("signalTier"),
+            )
+            observation["synergy"]["signalTier"] = _syn_tier
+            observation["synergy"]["tierReasons"] = _syn_reasons
             _apply_resonance_final(analysis, analysis["resonance"])
             if analysis["resonance"].get("status") == "ok":
                 analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
@@ -474,6 +482,48 @@ def _compute_theme_momentum_series_cached(
 # 历史 0.6（±30）/ 0.3（±15）导致共振高分占比过高（约 20%），0.15 下高分（≥80）回落到 10-15%，
 # 以排名动量（rawScore）为主、量价仅温和修正。
 RESONANCE_VOLUME_PRICE_WEIGHT = 0.15
+
+
+def _synergy_tier(
+    res_tier: str | None,
+    res_dir: str | None,
+    rank_tier: str | None,
+    rank_dir: str | None,
+    vp_tier: str | None,
+    vp_dir: str | None,
+    lc_tier: str | None,
+) -> tuple[str, list[str]]:
+    """四维合并档位（synergy.signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §7。"""
+    if lc_tier == "E":
+        return "E", ["周期一票否决"]
+    if vp_tier == "E":
+        return "D", ["量价出货硬风险"]
+
+    def _vote(tier: str | None, direction: str | None) -> int:
+        if tier == "unknown" or not direction:
+            return 0
+        if direction in ("buy", "up"):
+            return 1
+        if direction in ("sell", "down"):
+            return -1
+        return 0
+
+    v = _vote(res_tier, res_dir) + _vote(rank_tier, rank_dir) + _vote(vp_tier, vp_dir)
+    if v >= 2 and lc_tier == "A":
+        tier, reasons = "S", ["方向一致强买 + 环境优选"]
+    elif v >= 2:
+        tier, reasons = "A", ["方向一致强买"]
+    elif v == 1:
+        tier, reasons = "B", ["方向分歧，弱买"]
+    elif v <= -1:
+        tier, reasons = "D", ["反向"]
+    else:
+        tier, reasons = "C", ["无明确方向"]
+    # 周期 B（caution）/D（cooling/crowded 回避）时 S/A 降一档
+    if lc_tier in ("B", "D") and tier in ("S", "A"):
+        tier = "A" if tier == "S" else "B"
+        reasons = reasons + [f"周期 {lc_tier} 环境降档"]
+    return tier, reasons
 
 
 def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) -> None:

@@ -1011,6 +1011,48 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
 STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
 
 
+def _tier_as_dict(pair: tuple[str, list[str]]) -> dict[str, Any]:
+    """把 (tier, reasons) 转成 signalTier/tierReasons dict，便于 ** 展开进输出。"""
+    return {"signalTier": pair[0], "tierReasons": pair[1]}
+
+
+def _rank_trend_tier_as_dict(base_signal: str, combined: float) -> dict[str, Any]:
+    return _tier_as_dict(_rank_trend_tier(base_signal, combined))
+
+
+def _lifecycle_tier_as_dict(stage: str, action: str) -> dict[str, Any]:
+    return _tier_as_dict(_lifecycle_tier(stage, action))
+
+
+def _rank_trend_tier(base_signal: str, combined: float) -> tuple[str, list[str]]:
+    """趋势离散档位（signalTier）。规则见 docs §6.2。"""
+    if base_signal == "hold":
+        return "C", ["中性"]
+    if base_signal == "sell":
+        return "D", ["趋势转弱/反向"]
+    a = abs(combined)
+    if a >= 0.5:
+        return "S", ["强趋势，加权强度远超阈值"]
+    if a >= 0.25:
+        return "A", ["趋势确认"]
+    return "B", ["弱趋势，勉强越过阈值"]
+
+
+def _lifecycle_tier(stage: str, action: str) -> tuple[str, list[str]]:
+    """周期离散档位（signalTier）。规则见 docs §6.4。"""
+    if action == "veto":
+        return "E", ["生命周期一票否决"]
+    if action == "allow" and stage in ("ignition", "expansion"):
+        return "A", ["优选路径"]
+    if action == "caution" and stage in ("ignition", "expansion"):
+        return "B", ["低可见度点火/假突破，谨慎观察"]
+    if action == "exit_watch":
+        return "D", ["拥挤，退出观察"]
+    if stage == "cooling":
+        return "D", ["冷却，回避"]
+    return "C", ["中性"]
+
+
 def compose_observation_scores(input: dict[str, Any], config: RankTrendConfig | None = None) -> dict[str, Any]:
     """生命周期机会成熟度（对齐 TS observationScoreComposer）。
 
@@ -1046,6 +1088,7 @@ def compose_observation_scores(input: dict[str, Any], config: RankTrendConfig | 
             "direction": str(base.get("signal") or "hold"),
             "score": round(abs(signed_score) * 100),
             "signedScore": signed_score,
+            **_rank_trend_tier_as_dict(str(base.get("signal") or "hold"), signed_score),
         },
         "lifecycle": {
             "stage": cycle["stage"],
@@ -1053,6 +1096,7 @@ def compose_observation_scores(input: dict[str, Any], config: RankTrendConfig | 
             "veto": cycle.get("decision", {}).get("action") == "veto",
             "reasons": list(lifecycle_reasons) if isinstance(lifecycle_reasons, list) else [],
             "factors": factors,
+            **_lifecycle_tier_as_dict(cycle["stage"], str(cycle.get("decision", {}).get("action") or "caution")),
         },
     }
 
@@ -1157,6 +1201,27 @@ def _resonance_label(score: float) -> str:
     return "非常弱"
 
 
+def _resonance_tier(
+    direction: str,
+    persistence: float,
+    jump_event: str,
+    jump_freshness: float,
+    reversal_penalty: float,
+) -> tuple[str, list[str]]:
+    """共振离散档位（signalTier）：S/A/B/C/D。规则见 docs/ranktrend-observation-discrete-tiers-design.md §6.1。"""
+    if reversal_penalty >= 0.6:
+        return "D", [f"反转惩罚高 {round(reversal_penalty * 100)}%"]
+    if jump_event == "jump" and direction == "buy" and jump_freshness >= 0.5:
+        return "S", ["Jump 事件驱动，排名跳跃式上升"]
+    if direction == "buy" and persistence >= 0.6:
+        return "A", ["方向确认 + 路径持续"]
+    if direction == "buy":
+        return "B", ["方向确认但路径持续不足"]
+    if direction == "hold":
+        return "C", ["中性"]
+    return "D", ["共振衰竭/反向"]
+
+
 def _resonance_insufficient(
     reason: str,
     market_median_short_change: float,
@@ -1178,6 +1243,8 @@ def _resonance_insufficient(
         "marketSampleCount": market_sample_count,
         "marketMedianPercentile": market_median_percentile,
         "reasons": [reason],
+        "signalTier": "unknown",
+        "tierReasons": [reason],
     }
 
 
@@ -1211,6 +1278,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         jump_freshness = 1.0 if jump_events else 0.0
         entry_strength = clamp((current_attention_percentile - 50) / c.resonanceEntryStrengthScale, 0, 1)
         score = round(100 * clamp(c.resonanceNewEntryWeights[0] * entry_strength + c.resonanceNewEntryWeights[1] * jump_freshness, 0, 1))
+        _tier, _tier_reasons = _resonance_tier("buy" if entry_strength > 0 else "hold", 0.0, "none", jump_freshness, 0.0)
         return {
             "status": "ok",
             "direction": "buy" if entry_strength > 0 else "hold",
@@ -1226,6 +1294,8 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
             "marketSampleCount": market_sample_count,
             "marketMedianPercentile": market_median_percentile,
             "reasons": [f"新入榜关注度 {round(current_attention_percentile)}"],
+            "signalTier": _tier,
+            "tierReasons": _tier_reasons,
         }
     if len(percentiles) < c.resonanceMidWindowBars + 1 or any(not math.isfinite(p) for p in percentiles):
         return _resonance_insufficient(
@@ -1291,6 +1361,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         - c.resonanceWeights[4] * reversal_penalty
     )
     score = round(100 * clamp(raw_score, 0, 1))
+    _tier, _tier_reasons = _resonance_tier(direction, persistence, jump.get("event"), jump_freshness, reversal_penalty)
     return {
         "status": "ok",
         "direction": direction,
@@ -1310,6 +1381,8 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
             f"加速度 {round(acceleration * 100)}",
             f"路径持续性 {round(persistence * 100)}%",
         ],
+        "signalTier": _tier,
+        "tierReasons": _tier_reasons,
     }
 
 
