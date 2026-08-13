@@ -1,7 +1,9 @@
 import json
 import asyncio
 import math
+import os
 import threading
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable
@@ -315,6 +317,95 @@ def _theme_momentum_projection(
     }
 
 
+# analyze 逐股计算并行化（2026-08-13）：_build_signal 是纯函数（只依赖 config + 参数，
+# 不依赖 sentiment_provider/stock_lookup），全市场单帧逐股串行是冷启动/打开面板 5s+ 的根因。
+# 用进程池并行（rankTrend 分析模块无 numpy，纯 Python 受 GIL 限制，线程池无效）。
+# 少于阈值时串行，避免进程池 spawn + pickle 开销反超小批量收益。
+ANALYZE_PARALLEL_MIN_STOCKS = 50
+
+
+def _analyze_parallel_workers() -> int:
+    """并行 worker 数：CPU 核心数，上限 8（避免与 analyze 全局并发信号量叠加过载）。"""
+    return max(2, min(os.cpu_count() or 2, 8))
+
+
+def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
+    """进程池 worker：单只股票的完整 golden 计算（纯函数，无共享状态）。
+
+    args 依次为 (config, stock, frame, ranks, percentiles, regime, hot_themes,
+    momentum_v2_ctx, market_median, market_sample_count, market_median_percentile)。
+    返回 {code, analysis} 或 None。engine 按需构造轻量实例（仅含 config，不注入
+    sentiment_provider——_build_signal 不依赖它，hotlistSentiment 已预置进 frame）。
+    """
+    (
+        config, stock, frame, ranks, percentiles, regime, hot_themes,
+        momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
+    ) = args
+    engine = RankTrendPythonEngine(config=config)
+    signal = engine._build_signal(stock, frame, ranks, percentiles, regime, {})
+    if not signal:
+        return None
+    code = str(stock.get("code") or "")
+    analysis = signal.get("rankTrend") or {}
+    jump = analysis.get("jump") or {}
+    sample_quality = (analysis.get("meta") or {}).get("sampleQuality") or {}
+    resonance = analyze_rank_resonance({
+        "percentiles": percentiles,
+        "sampleQuality": {
+            "status": sample_quality.get("status") or "insufficient",
+            "timelineValid": sample_quality.get("timelineValid", True),
+        },
+        "marketMedianShortChange": market_median if market_median is not None else float("nan"),
+        "marketSampleCount": market_sample_count,
+        "marketMedianPercentile": market_median_percentile,
+        "jump": {
+            "direction": jump.get("direction") or "hold",
+            "event": jump.get("event") or "none",
+            "events": jump.get("events") or [],
+        },
+        "entry": {
+            "isNew": len(percentiles) == 1,
+            "currentAttentionPercentile": percentiles[-1] if percentiles else 0,
+        },
+    }, config)
+    analysis["resonance"] = resonance
+    # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行
+    exposure = stock_theme_exposure(stock, hot_themes)
+    # D2 完全解耦：题材动量独立为只读投影，不再调节共振分数
+    analysis["themeMomentum"] = _theme_momentum_projection(exposure, momentum_v2_ctx)
+    # 四象协同轴（阶段 2）：后端生产 observation.volumePrice / synergy，前端只消费
+    observation = analysis.setdefault("observation", {})
+    vp = compute_volume_price_score(
+        code,
+        stock.get("change"),
+        stock.get("volumeRatio"),
+        stock.get("zlje"),
+        stock.get("zljzb"),
+        config,
+    )
+    observation["volumePrice"] = vp
+    observation["synergy"] = compute_synergy_state(
+        (observation.get("lifecycle") or {}).get("stage"),
+        vp.get("score"),
+        (observation.get("rankTrend") or {}).get("direction"),
+        resonance.get("direction"),
+        stock.get("zljzb"),
+        config,
+    )
+    _syn_tier, _syn_reasons = _synergy_tier(
+        resonance.get("signalTier"), resonance.get("direction"),
+        (observation.get("rankTrend") or {}).get("signalTier"), (observation.get("rankTrend") or {}).get("direction"),
+        vp.get("signalTier"), vp.get("direction"),
+        (observation.get("lifecycle") or {}).get("signalTier"),
+    )
+    observation["synergy"]["signalTier"] = _syn_tier
+    observation["synergy"]["tierReasons"] = _syn_reasons
+    _apply_resonance_final(analysis, analysis["resonance"], config)
+    if analysis["resonance"].get("status") == "ok":
+        analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
+    return {"code": code, "analysis": analysis}
+
+
 def _analyze_frames(
     engine: RankTrendPythonEngine,
     frames: list[dict[str, Any]],
@@ -368,6 +459,7 @@ def _analyze_frames(
         market_median, market_sample_count = _frame_market_median(frames, index)
         market_median_percentile = _frame_market_median_percentile(frame)
         stocks_out: list[dict[str, Any]] = []
+        full_tasks: list[tuple[Any, ...]] = []
         for stock in frame.get("stocks", []):
             if not isinstance(stock, dict):
                 continue
@@ -396,69 +488,21 @@ def _analyze_frames(
                     },
                 })
                 continue
-            signal = engine._build_signal(stock, frame, ranks, percentiles, regime, {})
-            if not signal:
-                continue
-            analysis = signal.get("rankTrend") or {}
-            jump = analysis.get("jump") or {}
-            sample_quality = (analysis.get("meta") or {}).get("sampleQuality") or {}
-            resonance = analyze_rank_resonance({
-                "percentiles": percentiles,
-                "sampleQuality": {
-                    "status": sample_quality.get("status") or "insufficient",
-                    "timelineValid": sample_quality.get("timelineValid", True),
-                },
-                "marketMedianShortChange": market_median if market_median is not None else float("nan"),
-                "marketSampleCount": market_sample_count,
-                "marketMedianPercentile": market_median_percentile,
-                "jump": {
-                    "direction": jump.get("direction") or "hold",
-                    "event": jump.get("event") or "none",
-                    "events": jump.get("events") or [],
-                },
-                "entry": {
-                    "isNew": len(percentiles) == 1,
-                    "currentAttentionPercentile": percentiles[-1] if percentiles else 0,
-                },
-            }, engine.config)
-            analysis["resonance"] = resonance
-            # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行
-            exposure = stock_theme_exposure(stock, hot_themes)
-            # D2 完全解耦：题材动量独立为只读投影，不再调节共振分数
-            analysis["themeMomentum"] = _theme_momentum_projection(
-                exposure, momentum_v2_ctx
-            )
-            # 四象协同轴（阶段 2）：后端生产 observation.volumePrice / synergy，前端只消费
-            observation = analysis.setdefault("observation", {})
-            vp = compute_volume_price_score(
-                code,
-                stock.get("change"),
-                stock.get("volumeRatio"),
-                stock.get("zlje"),
-                stock.get("zljzb"),
-                engine.config,
-            )
-            observation["volumePrice"] = vp
-            observation["synergy"] = compute_synergy_state(
-                (observation.get("lifecycle") or {}).get("stage"),
-                vp.get("score"),
-                (observation.get("rankTrend") or {}).get("direction"),
-                resonance.get("direction"),
-                stock.get("zljzb"),
-                engine.config,
-            )
-            _syn_tier, _syn_reasons = _synergy_tier(
-                resonance.get("signalTier"), resonance.get("direction"),
-                (observation.get("rankTrend") or {}).get("signalTier"), (observation.get("rankTrend") or {}).get("direction"),
-                vp.get("signalTier"), vp.get("direction"),
-                (observation.get("lifecycle") or {}).get("signalTier"),
-            )
-            observation["synergy"]["signalTier"] = _syn_tier
-            observation["synergy"]["tierReasons"] = _syn_reasons
-            _apply_resonance_final(analysis, analysis["resonance"], engine.config)
-            if analysis["resonance"].get("status") == "ok":
-                analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
-            stocks_out.append({"code": code, "analysis": analysis})
+            full_tasks.append((
+                engine.config, stock, frame, ranks, percentiles, regime, hot_themes,
+                momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
+            ))
+
+        # 完整四信号计算：小批量串行，大批量（全市场单帧）进程池并行。
+        if full_tasks:
+            if len(full_tasks) >= ANALYZE_PARALLEL_MIN_STOCKS:
+                with ProcessPoolExecutor(max_workers=_analyze_parallel_workers()) as executor:
+                    results = list(executor.map(_analyze_one_stock, full_tasks))
+            else:
+                results = [_analyze_one_stock(task) for task in full_tasks]
+            for result in results:
+                if result:
+                    stocks_out.append(result)
         output.append({
             "frameKey": key,
             "regime": regime,

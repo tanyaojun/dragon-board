@@ -899,3 +899,68 @@ def test_analyze_current_frame_theme_falls_back_to_last_historical_hot_themes(mo
     assert theme["status"] in ("ok", "insufficient")
     if theme["status"] == "ok":
         assert "themeId" in theme and "themeName" in theme
+
+
+def test_analyze_parallel_path_over_threshold(monkeypatch):
+    # 全市场单帧（股票数 > ANALYZE_PARALLEL_MIN_STOCKS）走进程池并行，结果与串行等价：
+    # 最后一帧每只股票都返回完整 analysis（resonance/observation/technical），不丢股、不空字段。
+    stock_count = 60
+    frames = [
+        {
+            "tradingDate": f"2026-07-{day:03d}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {
+                    "code": f"C{index:02d}",
+                    "rank": (index + day) % stock_count + 1,
+                    "avgRankNum": (index + day) % stock_count + 1,
+                    "change": 1.0,
+                    "volumeRatio": 1.2,
+                    "zlje": 10,
+                    "zljzb": 0.1,
+                }
+                for index in range(stock_count)
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 31)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": [f"C{index:02d}" for index in range(stock_count)],
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            "stocks": [
+                {
+                    "code": f"C{index:02d}",
+                    "rank": (index + 31) % stock_count + 1,
+                    "avgRankNum": (index + 31) % stock_count + 1,
+                }
+                for index in range(stock_count)
+            ],
+        },
+    })
+    assert response.status_code == 200
+    body = response.json()
+    last = body["frames"][-1]
+    assert last["frameKey"] == "2026-07-31 current:1"
+    codes_in_last = {stock["code"] for stock in last["stocks"]}
+    assert codes_in_last == {f"C{index:02d}" for index in range(stock_count)}
+    for stock in last["stocks"]:
+        analysis = stock["analysis"]
+        assert "resonance" in analysis
+        assert "observation" in analysis
+        assert "technical" in analysis
+        assert "meta" in analysis
