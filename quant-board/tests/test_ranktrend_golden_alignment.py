@@ -150,7 +150,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     monkeypatch.setattr(
         ranktrend_engine,
         "analyze_cycle",
-        lambda ranks, percentiles: order.append("cycle")
+        lambda ranks, percentiles, config: order.append("cycle")
         or {
             "rawStage": "expansion",
             "stage": "expansion",
@@ -180,7 +180,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     monkeypatch.setattr(
         ranktrend_engine,
         "analyze_cycle_with_risk",
-        lambda cycle, risk, momentum: order.append("cycle_with_risk")
+        lambda cycle, risk, momentum, config: order.append("cycle_with_risk")
         or {
             **cycle,
             "decision": {"action": "allow", "reasons": ["risk aware"]},
@@ -198,7 +198,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     monkeypatch.setattr(
         ranktrend_engine,
         "compose_analysis_candidate_tier",
-        lambda technical, cycle, risk, regime: order.append("strategy")
+        lambda technical, cycle, risk, regime, config: order.append("strategy")
         or {
             "regime": regime,
             "momentum": technical["momentumProfile"],

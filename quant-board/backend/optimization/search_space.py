@@ -246,7 +246,13 @@ _STRATEGY_SCALAR_KEYS = tuple(
     if isinstance(f.default, (int, float, bool))
 )
 # 复合字段（field(default_factory=...) 定义，f.default 为 dataclasses.MISSING）需手工维护白名单
-_STRATEGY_LIST_KEYS = ("momentumPeriods", "momentumWeights", "buyThresholds", "sellThresholds")
+_STRATEGY_LIST_KEYS = (
+    "momentumPeriods", "momentumWeights", "buyThresholds", "sellThresholds",
+    "resonanceWeights", "resonanceNewEntryWeights",
+    "decisionRiskPenaltyWeights",
+    "lifecycleWeights", "lifecycleMomentumWeights", "lifecycleMomentumScales",
+    "riskPressureWeights",
+)
 _STRATEGY_PARAM_KEYS = _STRATEGY_SCALAR_KEYS + _STRATEGY_LIST_KEYS
 
 

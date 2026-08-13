@@ -8,6 +8,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.analysis.ranktrend.engine import (
+    RankTrendConfig,
     RankTrendPythonEngine,
     analyze_rank_resonance,
     attention_rank_lookup,
@@ -380,7 +381,7 @@ def _analyze_frames(
                     "isNew": len(percentiles) == 1,
                     "currentAttentionPercentile": percentiles[-1] if percentiles else 0,
                 },
-            })
+            }, engine.config)
             analysis["resonance"] = resonance
             # 当前 live 帧无 hotThemes：题材匹配回退到最近历史帧的题材因子行
             exposure = stock_theme_exposure(stock, hot_themes)
@@ -396,6 +397,7 @@ def _analyze_frames(
                 stock.get("volumeRatio"),
                 stock.get("zlje"),
                 stock.get("zljzb"),
+                engine.config,
             )
             observation["volumePrice"] = vp
             observation["synergy"] = compute_synergy_state(
@@ -404,6 +406,7 @@ def _analyze_frames(
                 (observation.get("rankTrend") or {}).get("direction"),
                 resonance.get("direction"),
                 stock.get("zljzb"),
+                engine.config,
             )
             _syn_tier, _syn_reasons = _synergy_tier(
                 resonance.get("signalTier"), resonance.get("direction"),
@@ -413,7 +416,7 @@ def _analyze_frames(
             )
             observation["synergy"]["signalTier"] = _syn_tier
             observation["synergy"]["tierReasons"] = _syn_reasons
-            _apply_resonance_final(analysis, analysis["resonance"])
+            _apply_resonance_final(analysis, analysis["resonance"], engine.config)
             if analysis["resonance"].get("status") == "ok":
                 analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
             stocks_out.append({"code": code, "analysis": analysis})
@@ -500,7 +503,7 @@ def _synergy_tier(
         return "D", ["量价出货硬风险"]
 
     def _vote(tier: str | None, direction: str | None) -> int:
-        if tier == "unknown" or not direction:
+        if tier in ("unknown", None) or not direction:
             return 0
         if direction in ("buy", "up"):
             return 1
@@ -526,7 +529,7 @@ def _synergy_tier(
     return tier, reasons
 
 
-def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) -> None:
+def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any], config: RankTrendConfig | None = None) -> None:
     """resonance 下沉：最终信号 = resonance 方向/分数（对齐旧 TS applyResonanceFinals）。
 
     Python golden 直接输出融合后的 ``decision.final``，前端只读不再覆盖。
@@ -534,6 +537,7 @@ def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) 
     量价修正（阶段 2）：resonance.rawScore 保留原始排名动量分；resonance.score 并入量价协同
     （score + (vpScore−50)×RESONANCE_VOLUME_PRICE_WEIGHT，clamp 0-100）；量价分 ≤40 且 buy → final 降级 hold。
     """
+    c = config or RankTrendConfig()
     decision = analysis.get("decision")
     if not isinstance(decision, dict):
         return
@@ -549,7 +553,7 @@ def _apply_resonance_final(analysis: dict[str, Any], resonance: dict[str, Any]) 
         vp_score = ((analysis.get("observation") or {}).get("volumePrice") or {}).get("score")
         adjusted = raw
         if isinstance(vp_score, (int, float)):
-            adjusted = max(0.0, min(100.0, raw + (vp_score - 50) * RESONANCE_VOLUME_PRICE_WEIGHT))
+            adjusted = max(0.0, min(100.0, raw + (vp_score - 50) * c.resonanceVolumePriceWeight))
         resonance["score"] = adjusted
         final_signal = direction
         if direction == "buy" and isinstance(vp_score, (int, float)) and vp_score <= 40:

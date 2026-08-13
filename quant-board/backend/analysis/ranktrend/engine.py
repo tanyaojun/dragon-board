@@ -91,6 +91,7 @@ class RankTrendConfig:
     volumePriceMildRatio: float = 1.05
     synergyLowVp: float = 40.0
     synergyHighVp: float = 75.0
+    resonanceVolumePriceWeight: float = 0.15
     # ── decision（compose_decision）：置信度公式与反转降级 ──
     decisionMinAgreement: int = 2
     decisionMaxOpposition: int = 1
@@ -133,6 +134,8 @@ class RankTrendConfig:
             return base
         for key, value in patch.items():
             if hasattr(base, key):
+                if isinstance(getattr(base, key), bool):
+                    value = bool(value)
                 setattr(base, key, value)
         if base.macdSlow <= base.macdFast:
             base.macdSlow = base.macdFast + 1
@@ -591,7 +594,7 @@ def detect_rank_jumps(
     }
 
 
-def analyze_cycle(ranks: list[float], percentiles: list[float]) -> dict[str, Any]:
+def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTrendConfig | None = None) -> dict[str, Any]:
     previous_stage = None
     current_stage = None
     current_raw = None
@@ -620,7 +623,7 @@ def analyze_cycle(ranks: list[float], percentiles: list[float]) -> dict[str, Any
         "confidence": confidence,
         "metrics": metric_values,
         "entryAdvice": entry_advice(stage, transition),
-        "decision": lifecycle_decision(raw, stage, transition, confidence, metric_values),
+        "decision": lifecycle_decision(raw, stage, transition, confidence, metric_values, config=config),
     }
 
 
@@ -762,7 +765,9 @@ def lifecycle_decision(
     metrics: dict[str, Any],
     risk: dict[str, Any] | None = None,
     momentum: dict[str, Any] | None = None,
+    config: RankTrendConfig | None = None,
 ) -> dict[str, Any]:
+    c = config or RankTrendConfig()
     reasons: list[str] = []
     action = "caution"
     risk = risk or {}
@@ -772,18 +777,18 @@ def lifecycle_decision(
     divergence_severity = float(divergence.get("severity") or 0)
     overheat_severity = float(overheat.get("severity") or 0)
     discovery_reasons: list[str] = []
-    high_risk_conflict = risk_pressure >= 0.75 or (divergence_severity >= 0.8 and overheat_severity >= 0.7)
+    high_risk_conflict = risk_pressure >= c.lifecycleHighRiskPressureMin or (divergence_severity >= c.lifecycleHighRiskDivergenceMin and overheat_severity >= c.lifecycleHighRiskOverheatMin)
     rank_path = float(metrics.get("rankPathCommitment", 0.5))
     momentum = momentum if isinstance(momentum, dict) else {}
     momentum_short = float(momentum.get("short") or 0)
     momentum_mid = float(momentum.get("mid") or 0)
     momentum_long = float(momentum.get("long") or 0)
     momentum_acceleration = float(momentum.get("acceleration") or 0)
-    mid_long_committed = momentum_mid >= 15 and momentum_long >= 15 and momentum_acceleration >= 8
+    mid_long_committed = momentum_mid >= c.lifecycleMidLongCommitmentMin and momentum_long >= c.lifecycleMidLongCommitmentMin and momentum_acceleration >= c.lifecycleAccelCommitmentMin
     weak_path_commitment = (
-        rank_path < 0.45
-        and float(metrics.get("rankVelocity") or 0) > 18
-        and float(metrics.get("rankAcceleration") or 0) > 12
+        rank_path < c.lifecycleWeakPathCommitmentMax
+        and float(metrics.get("rankVelocity") or 0) > c.lifecycleVelocityMin
+        and float(metrics.get("rankAcceleration") or 0) > c.lifecycleAccelMin
         and not mid_long_committed
         and stage in ("ignition", "expansion")
     )
@@ -791,12 +796,12 @@ def lifecycle_decision(
         stage == "ignition"
         and transition == "cooling->ignition"
         and int(metrics.get("hotZoneStreak") or 0) == 0
-        and rank_path < 0.7
-        and float(metrics.get("rankVelocity") or 0) > 18
-        and float(metrics.get("rankAcceleration") or 0) > 12
-        and momentum_short >= 18
-        and momentum_mid >= 18
-        and momentum_acceleration >= 18
+        and rank_path < c.lifecycleLowVisibilityPathMax
+        and float(metrics.get("rankVelocity") or 0) > c.lifecycleVelocityMin
+        and float(metrics.get("rankAcceleration") or 0) > c.lifecycleAccelMin
+        and momentum_short >= c.lifecycleLowVisibilityMomentumMin
+        and momentum_mid >= c.lifecycleLowVisibilityMomentumMin
+        and momentum_acceleration >= c.lifecycleLowVisibilityMomentumMin
     )
     if stage == "reversal" or raw == "reversal":
         action = "veto"
@@ -1278,7 +1283,14 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         jump_freshness = 1.0 if jump_events else 0.0
         entry_strength = clamp((current_attention_percentile - 50) / c.resonanceEntryStrengthScale, 0, 1)
         score = round(100 * clamp(c.resonanceNewEntryWeights[0] * entry_strength + c.resonanceNewEntryWeights[1] * jump_freshness, 0, 1))
-        _tier, _tier_reasons = _resonance_tier("buy" if entry_strength > 0 else "hold", 0.0, "none", jump_freshness, 0.0)
+        if jump_freshness >= 0.5 and entry_strength > 0:
+            _tier, _tier_reasons = "S", ["Jump 事件驱动，排名跳跃式上升"]
+        elif entry_strength >= 0.3:
+            _tier, _tier_reasons = "A", ["新入榜关注度较强"]
+        elif entry_strength > 0:
+            _tier, _tier_reasons = "B", ["新入榜关注度较弱"]
+        else:
+            _tier, _tier_reasons = "C", ["新入榜关注度中性"]
         return {
             "status": "ok",
             "direction": "buy" if entry_strength > 0 else "hold",
@@ -1390,6 +1402,7 @@ def analyze_cycle_with_risk(
     cycle: dict[str, Any],
     risk: dict[str, Any],
     momentum: dict[str, Any] | None = None,
+    config: RankTrendConfig | None = None,
 ) -> dict[str, Any]:
     updated_cycle = dict(cycle)
     updated_cycle["decision"] = lifecycle_decision(
@@ -1400,6 +1413,7 @@ def analyze_cycle_with_risk(
         cycle.get("metrics") if isinstance(cycle.get("metrics"), dict) else {},
         risk,
         momentum,
+        config=config,
     )
     return updated_cycle
 
@@ -1409,7 +1423,9 @@ def compose_analysis_candidate_tier(
     cycle: dict[str, Any],
     risk: dict[str, Any],
     regime: dict[str, Any] | None = None,
+    config: RankTrendConfig | None = None,
 ) -> dict[str, Any]:
+    c = config or RankTrendConfig()
     momentum = technical["momentumProfile"]
     stage = cycle["stage"]
     reasons: list[str] = []
@@ -1428,31 +1444,31 @@ def compose_analysis_candidate_tier(
     if lifecycle_decision_data.get("action") == "veto":
         reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
     elif stage in ("reversal", "cooling") and (
-        momentum["short"] <= -2 or momentum["acceleration"] <= -2 or pressure >= 0.55
+        momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or pressure >= c.tierExitRiskPressureMin
     ):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
     elif stage == "crowded" or (
-        momentum["long"] >= 4 and (momentum["acceleration"] <= 0 or pressure >= 0.45)
+        momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or pressure >= c.tierCrowdedRiskPressureMin)
     ):
         tier = "C_CROWDED"
         reasons.append("长周期热度高位停留，追高性价比下降")
     elif (
         stage == "expansion"
-        and momentum["mid"] >= 4
-        and momentum["short"] >= -1
+        and momentum["mid"] >= c.tierAMainMidMomentumMin
+        and momentum["short"] >= c.tierAMainShortMomentumMin
         and trend_buy
         and not weak_market
-        and money_risk < 0.7
+        and money_risk < c.tierAMainDivergenceSeverityMax
     ):
         tier = "A_MAIN"
         reasons.append("扩散阶段中周期动量确认，技术信号保持正向")
     elif (
         stage == "ignition"
-        and momentum["short"] >= 3
-        and momentum["acceleration"] >= 0.5
+        and momentum["short"] >= c.tierBIgnitionShortMomentumMin
+        and momentum["acceleration"] >= c.tierBIgnitionAccelMin
         and regime_data["state"] != "retreat"
-        and pressure < 0.65
+        and pressure < c.tierBIgnitionRiskPressureMax
     ):
         tier = "B_IGNITION"
         reasons.append("点火阶段短周期冲击增强，仍需继续确认")
@@ -1631,11 +1647,11 @@ class RankTrendPythonEngine:
             "zljzb": float(stock.get("zljzb") or 0),
         }
         technical = analyze_technical(percentiles, self.config, fallback)
-        cycle = analyze_cycle(ranks, percentiles)
+        cycle = analyze_cycle(ranks, percentiles, self.config)
         risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"], self.config)
-        cycle = analyze_cycle_with_risk(cycle, risk, technical.get("momentumProfile"))
+        cycle = analyze_cycle_with_risk(cycle, risk, technical.get("momentumProfile"), self.config)
         decision = compose_decision(technical, cycle, risk, self.config)
-        strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
+        strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime, self.config)
         execution_strategy = compose_strategy(technical, cycle, risk, frame.get("hotlistSentiment"), config=self.config)
         observation = compose_observation_scores({
             "technical": technical,
