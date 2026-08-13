@@ -5,6 +5,9 @@ import math
 import random
 from typing import Any
 
+import dataclasses
+
+from backend.analysis.ranktrend.engine import RankTrendConfig
 from backend.core.backtest.config import DEFAULT_TRADE_CONFIG
 
 
@@ -237,31 +240,14 @@ def to_trade_config(params: dict[str, Any]) -> dict[str, Any]:
     return mapped
 
 
-_STRATEGY_PARAM_KEYS = (
-    "momentumPeriods",
-    "macdFast",
-    "macdSlow",
-    "macdSignal",
-    "jumpDeltaPct",
-    "buyScoreThreshold",
-    "sellScoreThreshold",
-    "directionWeight",
-    "accelerationWeight",
-    "crossWeight",
-    "macdWeight",
-    "tierAMainMidMomentumMin",
-    "tierAMainShortMomentumMin",
-    "tierAMainDivergenceSeverityMax",
-    "tierBIgnitionShortMomentumMin",
-    "tierBIgnitionAccelMin",
-    "tierBIgnitionRiskPressureMax",
-    "tierCrowdedLongMomentumMin",
-    "tierCrowdedAccelMax",
-    "tierCrowdedRiskPressureMin",
-    "tierExitRiskShortMomentumMax",
-    "tierExitRiskAccelMax",
-    "tierExitRiskPressureMin",
+_STRATEGY_SCALAR_KEYS = tuple(
+    f.name
+    for f in dataclasses.fields(RankTrendConfig)
+    if isinstance(f.default, (int, float, bool))
 )
+# 复合字段（field(default_factory=...) 定义，f.default 为 dataclasses.MISSING）需手工维护白名单
+_STRATEGY_LIST_KEYS = ("momentumPeriods", "momentumWeights", "buyThresholds", "sellThresholds")
+_STRATEGY_PARAM_KEYS = _STRATEGY_SCALAR_KEYS + _STRATEGY_LIST_KEYS
 
 
 def to_strategy_config(params: dict[str, Any]) -> dict[str, Any]:

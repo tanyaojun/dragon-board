@@ -147,6 +147,7 @@ class Settings(BaseModel):
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
     theme_fund_cache_ttl_seconds: int = Field(default=259200)  # 3 天（容灾 1 交易日 + 跨周末）
+    theme_fund_seed_enabled: bool = Field(default=False)  # merge 遗留：默认字段缺失导致环境变量未设时 AttributeError
     market_fund_fetch_timeout_seconds: float = Field(default=60.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)

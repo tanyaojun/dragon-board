@@ -169,7 +169,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     monkeypatch.setattr(
         ranktrend_engine,
         "analyze_risk",
-        lambda current_percentile, technical, cycle, zlje, zljzb, volume_ratio: order.append("risk")
+        lambda current_percentile, technical, cycle, zlje, zljzb, volume_ratio, config: order.append("risk")
         or {
             "pressure": 0.2,
             "divergence": {"severity": 0.1},

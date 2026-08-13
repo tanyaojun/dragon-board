@@ -67,6 +67,64 @@ class RankTrendConfig:
     tierExitRiskShortMomentumMax: float = -2.0
     tierExitRiskAccelMax: float = -2.0
     tierExitRiskPressureMin: float = 0.55
+    # ── resonance（analyze_rank_resonance）：默认值 = 原硬编码/模块常量 ──
+    resonanceShortWindowBars: int = 3
+    resonanceMidWindowBars: int = 8
+    resonancePathWindowBars: int = 8
+    resonanceMinMarketSampleCount: int = 20
+    resonanceMomentumScale: float = 15.0
+    resonanceAccelerationScale: float = 15.0
+    resonancePathDirectionWeight: float = 0.2
+    resonanceDirectionThreshold: float = 0.1
+    resonanceWeights: list[float] = field(default_factory=lambda: [0.35, 0.25, 0.2, 0.2, 0.2])
+    resonanceReversalSwitchWeight: float = 0.6
+    resonanceReversalDrawdownWeight: float = 0.4
+    resonanceReversalDrawdownScale: float = 20.0
+    resonanceJumpFreshnessDecay: float = 3.0
+    resonanceEntryStrengthScale: float = 25.0
+    resonanceNewEntryWeights: list[float] = field(default_factory=lambda: [0.7, 0.3])
+    # ── volume_price（compute_volume_price_score / compute_synergy_state） ──
+    volumePriceBase: float = 50.0
+    volumePriceOverVolumeRatio: float = 2.5
+    volumePriceAbnormalFundRatio: float = 20.0
+    volumePriceShrinkRatio: float = 0.95
+    volumePriceMildRatio: float = 1.05
+    synergyLowVp: float = 40.0
+    synergyHighVp: float = 75.0
+    # ── decision（compose_decision）：置信度公式与反转降级 ──
+    decisionMinAgreement: int = 2
+    decisionMaxOpposition: int = 1
+    decisionConfidenceBase: float = 50.0
+    decisionConfidenceSlope: float = 25.0
+    decisionAgreementSlope: float = 15.0
+    decisionMarginSlope: float = 10.0
+    decisionConfidenceMin: float = 50.0
+    decisionConfidenceMax: float = 95.0
+    decisionRiskPenaltyWeights: list[float] = field(default_factory=lambda: [11.0, 9.0, 5.0])
+    decisionReversalFinalConfCap: float = 62.0
+    decisionReversalPressureMin: float = 0.78
+    decisionReversalOverheatMin: float = 0.7
+    decisionReversalMarginMax: float = 0.05
+    # ── lifecycle（compose_observation_scores / lifecycle_decision） ──
+    lifecycleWeights: list[float] = field(default_factory=lambda: [0.35, 0.25, 0.2, 0.2])
+    lifecycleMomentumWeights: list[float] = field(default_factory=lambda: [0.3, 0.45, 0.25])
+    lifecycleMomentumScales: list[float] = field(default_factory=lambda: [15.0, 15.0, 8.0])
+    lifecycleMidLongCommitmentMin: float = 15.0
+    lifecycleAccelCommitmentMin: float = 8.0
+    lifecycleWeakPathCommitmentMax: float = 0.45
+    lifecycleVelocityMin: float = 18.0
+    lifecycleAccelMin: float = 12.0
+    lifecycleLowVisibilityPathMax: float = 0.7
+    lifecycleLowVisibilityMomentumMin: float = 18.0
+    lifecycleHighRiskPressureMin: float = 0.75
+    lifecycleHighRiskDivergenceMin: float = 0.8
+    lifecycleHighRiskOverheatMin: float = 0.7
+    # ── risk（analyze_risk）：压力合成与严重度归一 ──
+    riskPressureWeights: list[float] = field(default_factory=lambda: [0.58, 0.42])
+    riskOverheatOffset: float = 45.0
+    riskOverheatScale: float = 30.0
+    riskDivergenceOffset: float = 40.0
+    riskDivergenceScale: float = 30.0
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
@@ -792,7 +850,8 @@ def lifecycle_decision(
     }
 
 
-def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: dict[str, Any], zlje: float, zljzb: float, volume_ratio: float) -> dict[str, Any]:
+def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: dict[str, Any], zlje: float, zljzb: float, volume_ratio: float, config: RankTrendConfig | None = None) -> dict[str, Any]:
+    c = config or RankTrendConfig()
     metrics = cycle["metrics"]
     overheat = 0.0
     overheat += max(0, current_percentile - 70) * 1.2
@@ -838,9 +897,9 @@ def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: di
     stage = cycle["stage"]
     over_mult = {"ignition": 0.3, "expansion": 0.55, "crowded": 0.85, "reversal": 1, "cooling": 0.3}
     div_mult = {"ignition": 0.35, "expansion": 0.65, "crowded": 0.9, "reversal": 1, "cooling": 0.35}
-    over_sev = clamp((overheat - 45) / 30, 0, 1) * over_mult.get(stage, 1)
-    div_sev = clamp((divergence - 40) / 30, 0, 1) * div_mult.get(stage, 1)
-    pressure = clamp(0.58 * over_sev + 0.42 * div_sev, 0, 1)
+    over_sev = clamp((overheat - c.riskOverheatOffset) / c.riskOverheatScale, 0, 1) * over_mult.get(stage, 1)
+    div_sev = clamp((divergence - c.riskDivergenceOffset) / c.riskDivergenceScale, 0, 1) * div_mult.get(stage, 1)
+    pressure = clamp(c.riskPressureWeights[0] * over_sev + c.riskPressureWeights[1] * div_sev, 0, 1)
     return {
         "overheat": {"score": overheat, "signal": "sell" if overheat >= 70 and stage in ("crowded", "reversal") else "hold" if overheat >= 45 else "buy", "severity": over_sev},
         "divergence": {"score": divergence, "signal": "sell" if divergence >= 65 else "hold" if divergence >= 40 else "buy", "severity": div_sev},
@@ -928,45 +987,46 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     base = "hold"
     macd_golden = technical["macd"]["cross"] == "golden"
     # 对齐旧 TS resultComposer：买/卖共识需要至少 2 个明确分量信号
-    if buy_count >= 2 and sell_count <= 1 and combined >= config.buyScoreThreshold:
+    if buy_count >= config.decisionMinAgreement and sell_count <= config.decisionMaxOpposition and combined >= config.buyScoreThreshold:
         if config.requireMacdGoldenCross and not macd_golden:
             base = "hold"
         else:
             base = "buy"
-    elif sell_count >= 2 and buy_count <= 1 and combined <= config.sellScoreThreshold:
+    elif sell_count >= config.decisionMinAgreement and buy_count <= config.decisionMaxOpposition and combined <= config.sellScoreThreshold:
         base = "sell"
     signed_threshold = config.buyScoreThreshold if base == "buy" else config.sellScoreThreshold if base == "sell" else config.buyScoreThreshold if combined >= 0 else config.sellScoreThreshold
     threshold_scale = max(0.05, abs(signed_threshold))
     score_margin = combined - config.buyScoreThreshold if combined >= 0 else abs(combined) - abs(config.sellScoreThreshold)
     opposing = negative if base == "buy" else positive if base == "sell" else min(positive, negative)
     agreement = clamp(1 - opposing, 0, 1)
-    confidence = clamp(50 + 25 * abs(combined) + 15 * agreement + 10 * math.tanh(abs(combined - signed_threshold) / threshold_scale), 50, 95)
+    confidence = clamp(config.decisionConfidenceBase + config.decisionConfidenceSlope * abs(combined) + config.decisionAgreementSlope * agreement + config.decisionMarginSlope * math.tanh(abs(combined - signed_threshold) / threshold_scale), config.decisionConfidenceMin, config.decisionConfidenceMax)
     final = base
-    final_conf = clamp(confidence - 11 * risk["overheat"]["severity"] - 9 * risk["divergence"]["severity"] - 5 * risk["synergy"], 50, 95)
-    if base == "buy" and cycle["stage"] == "reversal" and risk["pressure"] >= 0.78 and risk["overheat"]["severity"] >= 0.7 and score_margin < 0.05:
+    final_conf = clamp(confidence - config.decisionRiskPenaltyWeights[0] * risk["overheat"]["severity"] - config.decisionRiskPenaltyWeights[1] * risk["divergence"]["severity"] - config.decisionRiskPenaltyWeights[2] * risk["synergy"], config.decisionConfidenceMin, config.decisionConfidenceMax)
+    if base == "buy" and cycle["stage"] == "reversal" and risk["pressure"] >= config.decisionReversalPressureMin and risk["overheat"]["severity"] >= config.decisionReversalOverheatMin and score_margin < config.decisionReversalMarginMax:
         final = "hold"
-        final_conf = min(final_conf, 62)
+        final_conf = min(final_conf, config.decisionReversalFinalConfCap)
     return {"base": {"signal": base, "confidence": confidence, "combinedScore": combined, "scoreMargin": score_margin}, "final": {"signal": final, "confidence": final_conf}}
 
 
 STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
 
 
-def compose_observation_scores(input: dict[str, Any]) -> dict[str, Any]:
+def compose_observation_scores(input: dict[str, Any], config: RankTrendConfig | None = None) -> dict[str, Any]:
     """生命周期机会成熟度（对齐 TS observationScoreComposer）。
 
     score = 0.35 * stageFitness + 0.25 * pathCommitment + 0.2 * momentumConfirmation + 0.2 * riskSafety
     veto 不清零实际成熟度，只保留警示与原因。
     """
+    c = config or RankTrendConfig()
     momentum = input["technical"]["momentumProfile"]
     cycle = input["cycle"]
     risk = input["risk"]
     base = input["decision"]["base"]
     signed_score = clamp(float(base.get("combinedScore") or 0), -1, 1)
     momentum_confirmation = (
-        0.3 * clamp(float(momentum.get("short") or 0) / 15, 0, 1)
-        + 0.45 * clamp(float(momentum.get("mid") or 0) / 15, 0, 1)
-        + 0.25 * clamp(float(momentum.get("acceleration") or 0) / 8, 0, 1)
+        c.lifecycleMomentumWeights[0] * clamp(float(momentum.get("short") or 0) / c.lifecycleMomentumScales[0], 0, 1)
+        + c.lifecycleMomentumWeights[1] * clamp(float(momentum.get("mid") or 0) / c.lifecycleMomentumScales[1], 0, 1)
+        + c.lifecycleMomentumWeights[2] * clamp(float(momentum.get("acceleration") or 0) / c.lifecycleMomentumScales[2], 0, 1)
     )
     factors = {
         "stageFitness": STAGE_FITNESS.get(str(cycle["stage"]), 0.0),
@@ -975,10 +1035,10 @@ def compose_observation_scores(input: dict[str, Any]) -> dict[str, Any]:
         "riskSafety": 1 - clamp(float(risk.get("pressure") or 0), 0, 1),
     }
     lifecycle_score = (
-        0.35 * factors["stageFitness"]
-        + 0.25 * factors["pathCommitment"]
-        + 0.2 * factors["momentumConfirmation"]
-        + 0.2 * factors["riskSafety"]
+        c.lifecycleWeights[0] * factors["stageFitness"]
+        + c.lifecycleWeights[1] * factors["pathCommitment"]
+        + c.lifecycleWeights[2] * factors["momentumConfirmation"]
+        + c.lifecycleWeights[3] * factors["riskSafety"]
     )
     lifecycle_reasons = cycle.get("decision", {}).get("reasons")
     return {
@@ -1121,8 +1181,9 @@ def _resonance_insufficient(
     }
 
 
-def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
+def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None = None) -> dict[str, Any]:
     """共振强度（移植 TS resonanceAnalyzer）：相对动量/加速度/持续性/Jump 新鲜度/反转惩罚。"""
+    c = config or RankTrendConfig()
     percentiles = [float(p) for p in (input.get("percentiles") or [])]
     market_median_short_change = float(input.get("marketMedianShortChange") or 0)
     market_sample_count = int(input.get("marketSampleCount") or 0)
@@ -1142,14 +1203,14 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
             return _resonance_insufficient(
                 "新入榜关注度无效", market_median_short_change, market_sample_count, market_median_percentile
             )
-        if not math.isfinite(market_median_short_change) or market_sample_count < RESONANCE_MIN_MARKET_SAMPLE_COUNT:
+        if not math.isfinite(market_median_short_change) or market_sample_count < c.resonanceMinMarketSampleCount:
             return _resonance_insufficient(
                 "横截面有效样本不足", market_median_short_change, market_sample_count, market_median_percentile
             )
         jump_events = jump.get("events") or []
         jump_freshness = 1.0 if jump_events else 0.0
-        entry_strength = clamp((current_attention_percentile - 50) / 25, 0, 1)
-        score = round(100 * clamp(0.7 * entry_strength + 0.3 * jump_freshness, 0, 1))
+        entry_strength = clamp((current_attention_percentile - 50) / c.resonanceEntryStrengthScale, 0, 1)
+        score = round(100 * clamp(c.resonanceNewEntryWeights[0] * entry_strength + c.resonanceNewEntryWeights[1] * jump_freshness, 0, 1))
         return {
             "status": "ok",
             "direction": "buy" if entry_strength > 0 else "hold",
@@ -1166,7 +1227,7 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
             "marketMedianPercentile": market_median_percentile,
             "reasons": [f"新入榜关注度 {round(current_attention_percentile)}"],
         }
-    if len(percentiles) < RESONANCE_MIN_SERIES_POINTS or any(not math.isfinite(p) for p in percentiles):
+    if len(percentiles) < c.resonanceMidWindowBars + 1 or any(not math.isfinite(p) for p in percentiles):
         return _resonance_insufficient(
             "排名序列不足或无效", market_median_short_change, market_sample_count, market_median_percentile
         )
@@ -1174,22 +1235,22 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
         return _resonance_insufficient(
             "快照样本不足", market_median_short_change, market_sample_count, market_median_percentile
         )
-    if not math.isfinite(market_median_short_change) or market_sample_count < RESONANCE_MIN_MARKET_SAMPLE_COUNT:
+    if not math.isfinite(market_median_short_change) or market_sample_count < c.resonanceMinMarketSampleCount:
         return _resonance_insufficient(
             "横截面有效样本不足", market_median_short_change, market_sample_count, market_median_percentile
         )
 
     last_index = len(percentiles) - 1
-    short_start_index = last_index - RESONANCE_SHORT_WINDOW_BARS
-    mid_start_index = last_index - RESONANCE_MID_WINDOW_BARS
+    short_start_index = last_index - c.resonanceShortWindowBars
+    mid_start_index = last_index - c.resonanceMidWindowBars
     short_bars = last_index - short_start_index
     mid_bars = last_index - mid_start_index
     short_change = percentiles[last_index] - percentiles[short_start_index]
     mid_change = percentiles[last_index] - percentiles[mid_start_index]
-    relative_momentum = clamp((short_change - market_median_short_change) / 15, -1, 1)
-    acceleration = clamp((short_change - (mid_change * short_bars) / mid_bars) / 15, -1, 1)
+    relative_momentum = clamp((short_change - market_median_short_change) / c.resonanceMomentumScale, -1, 1)
+    acceleration = clamp((short_change - (mid_change * short_bars) / mid_bars) / c.resonanceAccelerationScale, -1, 1)
 
-    path_percentiles = percentiles[-(RESONANCE_PATH_WINDOW_BARS + 1):]
+    path_percentiles = percentiles[-(c.resonancePathWindowBars + 1):]
     changes = [path_percentiles[i + 1] - path_percentiles[i] for i in range(len(path_percentiles) - 1)]
     path_direction = 1 if (short_change or mid_change) > 0 else -1 if (short_change or mid_change) < 0 else 0
     directional_changes = [
@@ -1207,13 +1268,13 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
         direction_switch_rate = 0
     recent_peak = max(path_percentiles)
     percentile_drawdown = max(0, recent_peak - percentiles[last_index])
-    reversal_penalty = clamp(0.6 * direction_switch_rate + 0.4 * percentile_drawdown / 20, 0, 1)
+    reversal_penalty = clamp(c.resonanceReversalSwitchWeight * direction_switch_rate + c.resonanceReversalDrawdownWeight * percentile_drawdown / c.resonanceReversalDrawdownScale, 0, 1)
 
     jump_events = jump.get("events") or []
     latest_event = jump_events[-1] if jump_events else None
-    jump_freshness = math.exp(-(last_index - int(latest_event["index"])) / 3) if latest_event else 0
-    direction_score = relative_momentum + acceleration + 0.2 * path_direction * persistence
-    base_direction = "buy" if direction_score > 0.1 else "sell" if direction_score < -0.1 else "hold"
+    jump_freshness = math.exp(-(last_index - int(latest_event["index"])) / c.resonanceJumpFreshnessDecay) if latest_event else 0
+    direction_score = relative_momentum + acceleration + c.resonancePathDirectionWeight * path_direction * persistence
+    base_direction = "buy" if direction_score > c.resonanceDirectionThreshold else "sell" if direction_score < -c.resonanceDirectionThreshold else "hold"
     has_reverse_jump = (
         (base_direction == "buy" and jump.get("direction") == "sell")
         or (base_direction == "sell" and jump.get("direction") == "buy")
@@ -1223,11 +1284,11 @@ def analyze_rank_resonance(input: dict[str, Any]) -> dict[str, Any]:
     directional_momentum = -relative_momentum if direction == "sell" else relative_momentum
     directional_acceleration = -acceleration if direction == "sell" else acceleration
     raw_score = (
-        0.35 * _positive(directional_momentum)
-        + 0.25 * _positive(directional_acceleration)
-        + 0.2 * persistence
-        + 0.2 * jump_freshness
-        - 0.2 * reversal_penalty
+        c.resonanceWeights[0] * _positive(directional_momentum)
+        + c.resonanceWeights[1] * _positive(directional_acceleration)
+        + c.resonanceWeights[2] * persistence
+        + c.resonanceWeights[3] * jump_freshness
+        - c.resonanceWeights[4] * reversal_penalty
     )
     score = round(100 * clamp(raw_score, 0, 1))
     return {
@@ -1498,7 +1559,7 @@ class RankTrendPythonEngine:
         }
         technical = analyze_technical(percentiles, self.config, fallback)
         cycle = analyze_cycle(ranks, percentiles)
-        risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"])
+        risk = analyze_risk(current_percentile, technical, cycle, fallback["zlje"], fallback["zljzb"], fallback["volumeRatio"], self.config)
         cycle = analyze_cycle_with_risk(cycle, risk, technical.get("momentumProfile"))
         decision = compose_decision(technical, cycle, risk, self.config)
         strategy = compose_analysis_candidate_tier(technical, cycle, risk, regime)
@@ -1508,7 +1569,7 @@ class RankTrendPythonEngine:
             "cycle": cycle,
             "risk": risk,
             "decision": decision,
-        })
+        }, config=self.config)
         # 顶层 candidateTier/action 按 meta 模式选择，保持回测消费兼容；两个分层同时输出
         tier_source = execution_strategy if self._candidate_tier_mode(meta) == "execution" else strategy
         jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)

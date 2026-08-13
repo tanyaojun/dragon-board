@@ -27,6 +27,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.analysis.ranktrend.engine import RankTrendConfig
+
 _LIMIT_UP_20 = ("300", "301", "688", "689")  # 创业板 / 科创板 20%
 _LIMIT_UP_30 = ("8", "4", "9")  # 北交所 30%（9 开头 B 股误判为北交所，热榜池无 B 股，记录待数据源补齐）
 # 口径说明：TS 旧版涨停判定复用 resolveLiveLimitState（quote_limit_price 真实涨跌停价优先 + 板块 fallback）；
@@ -103,8 +105,10 @@ def compute_volume_price_score(
     volume_ratio: Any,
     zlje: Any,
     zljzb: Any,
+    config: RankTrendConfig | None = None,
 ) -> dict[str, Any]:
     """量价评分（0-100）与方向/象限/依据，与 TS computeVolumePriceScore 口径一致。"""
+    c = config or RankTrendConfig()
     chg = _finite(change)
     vr = _finite(volume_ratio)
     if chg is None or vr is None or vr <= 0:
@@ -123,20 +127,20 @@ def compute_volume_price_score(
     limit_up = _is_limit_up(code, chg)
     volume_score = 0.0
     if chg > 0:
-        if vr <= 0.95:
-            volume_score = 25.0 if limit_up else min(15.0, 10 + (0.95 - vr) * 15)
-        elif vr <= 1.05:
+        if vr <= c.volumePriceShrinkRatio:
+            volume_score = 25.0 if limit_up else min(15.0, 10 + (c.volumePriceShrinkRatio - vr) * 15)
+        elif vr <= c.volumePriceMildRatio:
             volume_score = 20.0 if limit_up else 5.0
         elif vr <= 2.0:
             volume_score = min(15.0, 10 + (vr - 1) * 5)
-        elif vr <= _OVER_VOLUME_RATIO:
+        elif vr <= c.volumePriceOverVolumeRatio:
             volume_score = max(5.0, 15 - (vr - 2) * 10)
         else:
-            volume_score = -min(20.0, 15 + (vr - _OVER_VOLUME_RATIO) * 10)
+            volume_score = -min(20.0, 15 + (vr - c.volumePriceOverVolumeRatio) * 10)
     elif chg < 0:
-        if vr > 1.05:
+        if vr > c.volumePriceMildRatio:
             volume_score = -20.0
-        elif vr >= 0.95:
+        elif vr >= c.volumePriceShrinkRatio:
             volume_score = -5.0
         else:
             volume_score = -10.0
@@ -145,8 +149,8 @@ def compute_volume_price_score(
     ratio = _finite(zljzb)
     inflow = _finite(zlje)
     fund_score = 0.0
-    if ratio is not None and ratio > _ABNORMAL_FUND_RATIO:
-        fund_score = -min(15.0, 10 + (ratio - _ABNORMAL_FUND_RATIO) * 0.5)
+    if ratio is not None and ratio > c.volumePriceAbnormalFundRatio:
+        fund_score = -min(15.0, 10 + (ratio - c.volumePriceAbnormalFundRatio) * 0.5)
     elif ratio is not None and ratio > 0:
         fund_score = min(15.0, ratio * 3)
     elif ratio is not None and ratio < 0:
@@ -154,10 +158,10 @@ def compute_volume_price_score(
     elif ratio is None and inflow is not None:
         fund_score = 5.0 if inflow > 0 else -5.0 if inflow < 0 else 0.0
 
-    score = round(_clamp(50 + direction_score + volume_score + fund_score))
+    score = round(_clamp(c.volumePriceBase + direction_score + volume_score + fund_score))
 
     # 象限（change 方向 × 放缩量）
-    volume_state = "up" if vr >= 1.05 else "down" if vr <= 0.95 else "normal"
+    volume_state = "up" if vr >= c.volumePriceMildRatio else "down" if vr <= c.volumePriceShrinkRatio else "normal"
     quadrant = None
     if chg > 0:
         quadrant = "rise_volume" if volume_state == "up" else "rise_shrink" if volume_state == "down" else "normal"
@@ -167,19 +171,19 @@ def compute_volume_price_score(
         quadrant = "normal"
 
     reasons: list[str] = []
-    if limit_up and vr <= 0.95:
+    if limit_up and vr <= c.volumePriceShrinkRatio:
         reasons.append("缩量涨停（封板惜售，好票）")
-    elif vr <= 0.95 and chg > 0:
+    elif vr <= c.volumePriceShrinkRatio and chg > 0:
         reasons.append("缩量上涨（惜售/无量涨）")
-    elif vr > _OVER_VOLUME_RATIO and chg > 0:
+    elif vr > c.volumePriceOverVolumeRatio and chg > 0:
         reasons.append("过度放量上涨（疑似出货）")
-    elif vr > 1.05 and chg > 0:
+    elif vr > c.volumePriceMildRatio and chg > 0:
         reasons.append("放量上涨（量价配合）")
-    elif vr > 1.05 and chg < 0:
+    elif vr > c.volumePriceMildRatio and chg < 0:
         reasons.append("放量下跌（风险）")
-    elif vr < 0.95 and chg < 0:
+    elif vr < c.volumePriceShrinkRatio and chg < 0:
         reasons.append("缩量下跌（无量阴跌）")
-    if ratio is not None and ratio > _ABNORMAL_FUND_RATIO:
+    if ratio is not None and ratio > c.volumePriceAbnormalFundRatio:
         reasons.append("主力净占比异常高（疑似对倒出货）")
     elif ratio is not None and ratio > 0:
         reasons.append("主力净流入")
@@ -205,11 +209,13 @@ def compute_synergy_state(
     technical_direction: Any,
     resonance_direction: Any,
     zljzb: Any,
+    config: RankTrendConfig | None = None,
 ) -> dict[str, Any]:
     """四象协同状态：阶段 × 量价（主），技术/共振协同；输出给候选池分层。"""
+    c = config or RankTrendConfig()
     stage = str(stage or "")
     ratio = _finite(zljzb)
-    fund_suspect = ratio is not None and ratio > _ABNORMAL_FUND_RATIO
+    fund_suspect = ratio is not None and ratio > c.volumePriceAbnormalFundRatio
     reasons: list[str] = []
 
     if vp_score is None:
@@ -217,8 +223,8 @@ def compute_synergy_state(
 
     tech_buy = technical_direction == "buy"
     res_up = resonance_direction == "buy"
-    low_vp = vp_score <= 40
-    high_vp = vp_score >= 75
+    low_vp = vp_score <= c.synergyLowVp
+    high_vp = vp_score >= c.synergyHighVp
 
     state = "suspect"
     if stage in ("ignition", "expansion") and high_vp and tech_buy and res_up:
