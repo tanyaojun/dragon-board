@@ -171,6 +171,7 @@ class MongoRepository:
         sort: str = "asc",
         projection: str = "full",
         fields: list[str] | None = None,
+        skip_cache_write: bool = False,
     ) -> list[dict[str, Any]]:
         frame_rows = self._find_frames(
             dataset_id,
@@ -278,7 +279,12 @@ class MongoRepository:
                 if sector.get("entityType") == "hot_theme"
             ]
             bundles.append(item)
-        if cache_key is not None and generation_key is not None and cache.get_generation(generation_key) == generation:
+        if (
+            not skip_cache_write
+            and cache_key is not None
+            and generation_key is not None
+            and cache.get_generation(generation_key) == generation
+        ):
             cache.set_response(cache_key, {"bundles": bundles})
             cache.register_dependencies(
                 cache_key,

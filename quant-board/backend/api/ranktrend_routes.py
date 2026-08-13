@@ -63,6 +63,11 @@ def _analyze_cache_ttl_seconds() -> int:
 # 技术稳定窗口 30、生命周期 15、横截面 3；取 30 同时满足全部轨道。
 ANALYZE_MAX_TRACK_WINDOW = 30
 
+# 单股/少量 codes 的 analyze（如排名趋势面板打开）加载帧数：趋势序列 max_bars=50，
+# 60 帧足够热门股凑满 50 次出现（与全量 200 帧序列质量一致），数据量仅为 200 帧的 1/3，
+# 避免每次打开面板都从 MongoDB/Redis 搬运 200 帧 × 全市场（~70MB，3.5-4.5s）成为冷启动瓶颈。
+ANALYZE_SMALL_CODES_LOAD_LIMIT = 60
+
 # analyze 并发闸门：per-key 单飞锁 + 全局有界信号量（QUANT_BOARD_ANALYZE_MAX_CONCURRENCY，默认 2）。
 # 目的：并发相同请求只计算一次（其余等待共享缓存结果），并限制全局 golden 计算并发，
 # 防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死。
@@ -154,16 +159,27 @@ def _load_frames_for_analysis(
     snapshot_type: str,
     frame_keys: list[str],
     current_frame: dict[str, Any] | None,
+    codes: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, list[tuple[str, int, float]]]]:
     # 最近帧优先：倒序加载最近 200 帧后反转回时间升序，供 replay 按时间推进。
     # 旧实现按升序加载最早 200 帧，数据集超过 200 帧后，观察面板请求的最近历史帧
     # 全部落在窗口外，过滤后为空并被误报为 503。
+    # 单股/少量 codes（无 frame_keys）只加载 60 帧：趋势序列 max_bars=50 已足够，
+    # 避免每次打开排名趋势面板都搬运 200 帧 × 全市场（~70MB）成为 4s+ 冷启动瓶颈。
+    load_limit = 200
+    skip_cache_write = False
+    if not frame_keys and codes and len(codes) <= ANALYZE_PARALLEL_MIN_STOCKS:
+        load_limit = ANALYZE_SMALL_CODES_LOAD_LIMIT
+        # 单股面板低频打开：60 帧 bundles 缓存（~21MB）写读都 ~0.9s，几乎无净收益，
+        # 跳过缓存写，直接读 MongoDB（stock+sector ~1.7s）反而更省。
+        skip_cache_write = True
     bundles = repo.load_frame_bundles(
         dataset_id,
         snapshot_type=snapshot_type,
         sort="desc",
         projection="ranktrend+themes",
-        limit=200,
+        limit=load_limit,
+        skip_cache_write=skip_cache_write,
     )
     frames = [_to_engine_frame(b) for b in reversed(bundles)]
     # 每股 attention 出现序列（最近 50 次出现，旧 TS rank-series 合同）：
@@ -808,7 +824,7 @@ async def analyze_ranktrend(
             sentiment_provider=make_hotlist_sentiment_provider(dataset_id, snapshot_type),
         )
         raw_frames, series_by_code = _load_frames_for_analysis(
-            repo, dataset_id, snapshot_type, frame_keys, current_frame
+            repo, dataset_id, snapshot_type, frame_keys, current_frame, codes=codes
         )
         frames_out = _analyze_frames(
             engine, raw_frames, series_by_code, codes, dataset_id=dataset_id,
