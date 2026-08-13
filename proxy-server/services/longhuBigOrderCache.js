@@ -13,6 +13,9 @@ const VALID_MODES = new Set(['off', 'prepend-device-snapshot', 'prepend-logical'
 const MAX_INCREMENTAL_ROWS = PAGE_SIZE * 10
 const INCREMENTAL_BUDGET_MS = 20_000
 const HISTORY_AUDIT_INTERVAL_MS = 300_000
+// 龙虎榜大单缓存容灾保留窗口：3 天（覆盖跨周末 1 个交易日），
+// 历史数据已由 bigOrderArchive 归档到文件，Redis 仅保留近 3 天 stale 兜底。
+const LONGHU_RETENTION_SECONDS = 3 * 24 * 3600
 
 class LonghuIntegrityError extends Error {}
 
@@ -124,11 +127,11 @@ function shanghaiDate(timestamp) {
   return new Date(timestamp).toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' })
 }
 
-// 设计 §7 的时段 TTL 表：交易 3/300、盘前午间和收盘后半小时 60/900、其余(含周末) 1800/604800。
+// 设计 §7 的时段 TTL 表：交易 3/300、盘前午间和收盘后半小时 60/900、其余(含周末) 1800/LONGHU_RETENTION_SECONDS。
 // off 模式的完整重建冷却同样分时段：闭市数据不再变化，不允许整夜重复全量分页。
 export function longhuCacheSlot(timestamp) {
   const date = new Date(timestamp)
-  const closed = { ttlSeconds: 1800, staleTtlSeconds: 604800, rebuildCooldownMs: 21_600_000 }
+  const closed = { ttlSeconds: 1800, staleTtlSeconds: LONGHU_RETENTION_SECONDS, rebuildCooldownMs: 21_600_000 }
   const weekday = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Shanghai',
     weekday: 'short',
@@ -383,7 +386,7 @@ export function createLonghuBigOrderService({
       value: { data, sessionDate, fetchedAt },
       options: {
         ttlSeconds: slot.ttlSeconds,
-        staleTtlSeconds: 604800,
+        staleTtlSeconds: LONGHU_RETENTION_SECONDS,
         maxValueBytes: 8 * 1024 * 1024,
       },
       stockCode,
@@ -393,7 +396,7 @@ export function createLonghuBigOrderService({
       await layeredCache.set(
         `big-order:longhu:latest:v1:${stockCode}`,
         sessionDate,
-        { ttlSeconds: 604800, staleTtlSeconds: 604800 },
+        { ttlSeconds: LONGHU_RETENTION_SECONDS, staleTtlSeconds: LONGHU_RETENTION_SECONDS },
       )
     }
     auditState.set(`${stockCode}:${money}`, { lastAuditAt: now(), offset: PAGE_SIZE })
@@ -616,7 +619,7 @@ export function createLonghuBigOrderService({
       value,
       options: {
         ttlSeconds: slot.ttlSeconds,
-        staleTtlSeconds: 604800,
+        staleTtlSeconds: LONGHU_RETENTION_SECONDS,
         maxValueBytes: 8 * 1024 * 1024,
         stale: true,
       },
@@ -624,8 +627,8 @@ export function createLonghuBigOrderService({
       money: 0,
     })
     await layeredCache.set(`big-order:longhu:latest:v1:${stockCode}`, snapshot.sessionDate, {
-      ttlSeconds: 604800,
-      staleTtlSeconds: 604800,
+      ttlSeconds: LONGHU_RETENTION_SECONDS,
+      staleTtlSeconds: LONGHU_RETENTION_SECONDS,
     })
     logger.log(
       `[龙虎缓存] 归档回填 ${stockCode} session=${snapshot.sessionDate} rows=${value.data.List.length}`,
@@ -746,7 +749,7 @@ export function createLonghuBigOrderService({
       value,
       options: {
         ttlSeconds: slot.ttlSeconds,
-        staleTtlSeconds: 604800,
+        staleTtlSeconds: LONGHU_RETENTION_SECONDS,
         maxValueBytes: 8 * 1024 * 1024,
       },
       stockCode,
@@ -817,7 +820,7 @@ export function createLonghuBigOrderService({
       value,
       options: {
         ttlSeconds: slot.ttlSeconds,
-        staleTtlSeconds: 604800,
+        staleTtlSeconds: LONGHU_RETENTION_SECONDS,
         maxValueBytes: 8 * 1024 * 1024,
         stale: true,
       },

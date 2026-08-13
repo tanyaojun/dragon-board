@@ -774,13 +774,13 @@ test('cache slot maps trading, lunch and closed windows to design TTLs', () => {
 
   const closed = longhuCacheSlot(CLOSED_NOW)
   assert.equal(closed.ttlSeconds, 1800)
-  assert.equal(closed.staleTtlSeconds, 604800)
+  assert.equal(closed.staleTtlSeconds, 3 * 24 * 3600)
   assert.equal(closed.rebuildCooldownMs, 21_600_000)
 
   // 周六任何时间都按收盘处理
   const weekend = longhuCacheSlot(Date.parse('2026-07-18T02:00:00Z'))
   assert.equal(weekend.ttlSeconds, 1800)
-  assert.equal(weekend.staleTtlSeconds, 604800)
+  assert.equal(weekend.staleTtlSeconds, 3 * 24 * 3600)
 })
 
 test('after close the snapshot stays fresh long and stale hits do not rebuild', async () => {
