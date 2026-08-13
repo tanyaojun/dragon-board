@@ -243,6 +243,82 @@ async def on_startup() -> None:
                 logger.exception("ranktrend frame_bundles warmup failed; continue startup")
 
         asyncio.get_running_loop().run_in_executor(None, _warmup_ranktrend_bundles)
+    # RankTrend analyze 响应预热（2026-08-13）：预计算最近一帧全市场四信号并写 Redis 缓存，
+    # 冷启动（startup bundle / analyze 缓存失效）时前端请求命中，避免引擎 30 帧 × 全市场
+    # 逐股重算造成四信号 5-10 秒 "--"。关键：current_frame 必须与前端 getRankTrends 对齐
+    # （code/rank=compRank/avgRankNum 的数字语义一致），否则 cache key 对不齐、预热白做。
+    # best-effort：后台异步任务，失败不阻断启动。
+    if get_settings().storage_backend == "mongodb":
+        from backend.api.ranktrend_routes import analyze_ranktrend
+
+        def _warmup_num(value: Any) -> int | float:
+            """模拟前端 Number(x) || 0：非数字/NaN → 0；整数 → int，其余 → float。"""
+            try:
+                f = float(value)
+            except (TypeError, ValueError):
+                return 0
+            if f != f:  # NaN
+                return 0
+            if f.is_integer():
+                return int(f)
+            return f
+
+        async def _warmup_ranktrend_analyze() -> None:
+            try:
+                _db = get_runtime_mongodb_database()
+                _repo = create_repository(_db, enable_backup=False)
+                bundles = _repo.load_frame_bundles(
+                    "dragonboard_live",
+                    snapshot_type="half_hour",
+                    sort="desc",
+                    projection="ranktrend+themes",
+                    limit=1,
+                )
+                if not bundles:
+                    logger.info("[warmup] ranktrend analyze 预热跳过：无快照帧")
+                    return
+                latest = bundles[0]
+                stocks = latest.get("rows") or latest.get("stocks") or []
+                current_stocks: list[dict[str, Any]] = []
+                codes: list[str] = []
+                for stock in stocks:
+                    if not isinstance(stock, dict):
+                        continue
+                    code = str(stock.get("code") or "").strip()
+                    if not code:
+                        continue
+                    avg_rank_num = _warmup_num(stock.get("avgRankNum"))
+                    if avg_rank_num <= 0:
+                        continue
+                    rank_raw = stock.get("compRank")
+                    if not rank_raw:  # 对齐前端 compRank || rank
+                        rank_raw = stock.get("rank")
+                    current_stocks.append(
+                        {
+                            "code": code,
+                            "rank": _warmup_num(rank_raw),
+                            "avgRankNum": avg_rank_num,
+                        }
+                    )
+                    codes.append(code)
+                if not codes:
+                    return
+                payload = {
+                    "snapshotType": "half_hour",
+                    "datasetId": "dragonboard_live",
+                    "codes": codes,
+                    "currentFrame": {
+                        "tradingDate": latest.get("tradingDate"),
+                        "slotTime": "current",
+                        "stocks": current_stocks,
+                    },
+                }
+                await analyze_ranktrend(payload, _db)
+                logger.info("[warmup] ranktrend analyze 预热完成，codes=%d", len(codes))
+            except Exception:
+                logger.exception("ranktrend analyze warmup failed; continue startup")
+
+        asyncio.create_task(_warmup_ranktrend_analyze())
     market_fund_scheduler.start()
     # mainMonitorDetail 展示池资金校准（L2 主源，覆盖 akshare 种子）
     get_ths_fund_refresh_scheduler().start()

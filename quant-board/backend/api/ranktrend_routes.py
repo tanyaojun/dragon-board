@@ -32,10 +32,12 @@ router = APIRouter(tags=["ranktrend-analyze"])
 
 SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
 
-# analyze 缓存 TTL：固定 300s，与前端 rankTrendResultCache（LRU TTL 300s）保持一致。
+# analyze 缓存 TTL：1800s（2026-08-13 由 300s 延长）。
+# 目的：冷启动（关机重启）时 dump.rdb 恢复 Redis 后，analyze 响应在 30 分钟内仍命中，
+# 避免引擎逐股重算（30 帧 × 全市场）导致四信号 5-10 秒 "--"。
 # 新快照 ingest 会递增 dataset generation 并按 dataset 索引删除旧 analyze 响应，
 # 因此 TTL 只作为兜底，不需要再对齐某个固定刷新周期。
-RANK_TREND_ANALYZE_CACHE_TTL_SECONDS = 300
+RANK_TREND_ANALYZE_CACHE_TTL_SECONDS = 1800
 
 
 def _analyze_cache_ttl_seconds() -> int:

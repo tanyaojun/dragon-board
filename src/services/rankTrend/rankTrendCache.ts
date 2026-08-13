@@ -5,8 +5,10 @@
 // 观察指标（共振/趋势/量价/周期）基于快照帧低频变化，300s 内缓存旧值风险可接受。
 import { cacheManager } from '../LRUCache'
 
-/** 前端 LRU TTL：300s（覆盖慢分析场景，后端 Redis 60s 保证新鲜度） */
-export const RANK_TREND_RESULT_CACHE_TTL_MS = 300_000
+/** 前端 LRU TTL：1800s（2026-08-13 由 300s 延长，与后端 analyze 缓存 TTL 对齐）。
+ *  观察指标（共振/趋势/量价/周期）基于快照帧低频变化，且 ingest 会递增 dataset generation
+ *  使后端缓存主动失效；延长后覆盖关机重启场景，避免冷启动四信号 5-10 秒 "--"。 */
+export const RANK_TREND_RESULT_CACHE_TTL_MS = 1_800_000
 
 export const rankTrendResultCache = cacheManager.createCache('rankTrendResult', {
   capacity: 1200,
