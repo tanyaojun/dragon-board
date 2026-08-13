@@ -1,9 +1,7 @@
 import json
 import asyncio
 import math
-import os
 import threading
-from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from time import perf_counter
 from typing import Any, Callable
@@ -168,7 +166,7 @@ def _load_frames_for_analysis(
     # 避免每次打开排名趋势面板都搬运 200 帧 × 全市场（~70MB）成为 4s+ 冷启动瓶颈。
     load_limit = 200
     skip_cache_write = False
-    if not frame_keys and codes and len(codes) <= ANALYZE_PARALLEL_MIN_STOCKS:
+    if not frame_keys and codes and len(codes) <= ANALYZE_SMALL_CODES_MAX:
         load_limit = ANALYZE_SMALL_CODES_LOAD_LIMIT
         # 单股面板低频打开：60 帧 bundles 缓存（~21MB）写读都 ~0.9s，几乎无净收益，
         # 跳过缓存写，直接读 MongoDB（stock+sector ~1.7s）反而更省。
@@ -333,16 +331,9 @@ def _theme_momentum_projection(
     }
 
 
-# analyze 逐股计算并行化（2026-08-13）：_build_signal 是纯函数（只依赖 config + 参数，
-# 不依赖 sentiment_provider/stock_lookup），全市场单帧逐股串行是冷启动/打开面板 5s+ 的根因。
-# 用进程池并行（rankTrend 分析模块无 numpy，纯 Python 受 GIL 限制，线程池无效）。
-# 少于阈值时串行，避免进程池 spawn + pickle 开销反超小批量收益。
-ANALYZE_PARALLEL_MIN_STOCKS = 50
-
-
-def _analyze_parallel_workers() -> int:
-    """并行 worker 数：CPU 核心数，上限 8（避免与 analyze 全局并发信号量叠加过载）。"""
-    return max(2, min(os.cpu_count() or 2, 8))
+# 单股/少量 codes 判定阈值：codes 数量 <= 此值视为"面板单股/小批量"场景，
+# 走 60 帧轻量加载（见 _load_frames_for_analysis）；超过则视为全市场首屏/信号刷新。
+ANALYZE_SMALL_CODES_MAX = 50
 
 
 def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
@@ -509,13 +500,10 @@ def _analyze_frames(
                 momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
             ))
 
-        # 完整四信号计算：小批量串行，大批量（全市场单帧）进程池并行。
+        # 完整四信号计算：单股逐股纯 Python 计算仅 ~1ms/股，全市场 224 股串行 ~0.2s。
+        # 进程池并行（spawn 8 worker 重新导入 backend）反而要 8s+，是负优化，统一串行。
         if full_tasks:
-            if len(full_tasks) >= ANALYZE_PARALLEL_MIN_STOCKS:
-                with ProcessPoolExecutor(max_workers=_analyze_parallel_workers()) as executor:
-                    results = list(executor.map(_analyze_one_stock, full_tasks))
-            else:
-                results = [_analyze_one_stock(task) for task in full_tasks]
+            results = [_analyze_one_stock(task) for task in full_tasks]
             for result in results:
                 if result:
                     stocks_out.append(result)

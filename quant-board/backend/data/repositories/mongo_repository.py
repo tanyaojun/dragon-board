@@ -925,7 +925,7 @@ class MongoRepository:
         for row in self.db["snapshot_stock_rows"].find(
             {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}},
             mongo_projection,
-        ).sort([("timestamp", 1), ("rank", 1)]):
+        ).sort([("rank", 1)]):
             if fields:
                 # 保留请求字段的 null 值（与 full 投影语义一致），只剥离内部分组字段；
                 # 否则未涨停行缺失 maxFengdan/firstZtTime 等字段会静默降级
@@ -971,7 +971,7 @@ class MongoRepository:
         query: dict[str, Any] = {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}}
         if entity_type:
             query["entityType"] = entity_type
-        for row in self.db["snapshot_sector_rows"].find(query, fields).sort([("timestamp", 1), ("rank", 1)]):
+        for row in self.db["snapshot_sector_rows"].find(query, fields).sort([("rank", 1)]):
             rows_by_snapshot[str(row.get("snapshotId"))].append(self.local_sector_to_bundle_dict(row))
         return rows_by_snapshot
 

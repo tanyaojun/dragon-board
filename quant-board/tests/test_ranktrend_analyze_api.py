@@ -901,9 +901,10 @@ def test_analyze_current_frame_theme_falls_back_to_last_historical_hot_themes(mo
         assert "themeId" in theme and "themeName" in theme
 
 
-def test_analyze_parallel_path_over_threshold(monkeypatch):
-    # 全市场单帧（股票数 > ANALYZE_PARALLEL_MIN_STOCKS）走进程池并行，结果与串行等价：
-    # 最后一帧每只股票都返回完整 analysis（resonance/observation/technical），不丢股、不空字段。
+def test_analyze_full_market_single_frame_over_threshold(monkeypatch):
+    # 全市场单帧（股票数 > 单股阈值）串行逐股计算，最后一帧每只股票都返回完整
+    # analysis（resonance/observation/technical），不丢股、不空字段。
+    # （2026-08-14 起逐股计算统一串行：单股 ~1ms/股，进程池 spawn 开销反而 8s+，是负优化。）
     stock_count = 60
     frames = [
         {
