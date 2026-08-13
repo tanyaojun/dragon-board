@@ -95,8 +95,8 @@
             <!-- 共振强度列 -->
             <template v-else-if="col.key === 'resonanceIntensity'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'resonance')"
-                @mouseenter="showConfidenceTooltip($event, stock, 'resonanceIntensity')" @mousemove="moveConfidenceTooltip($event)"
-                @mouseleave="hideConfidenceTooltip">
+                @mouseenter="showConfidenceTooltip($event, stock, 'resonanceIntensity')"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <span v-if="getResonanceCellValue(stock) != null" :class="getResonanceCellClass(stock)">
                   {{ getDirectionArrow(getResonanceDirection(stock)) }}{{ getResonanceCellValue(stock) }}%
                 </span>
@@ -106,8 +106,8 @@
 
             <template v-else-if="col.key === 'rankTrendStrength'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
-                @mouseenter="showConfidenceTooltip($event, stock, 'rankTrendStrength')" @mousemove="moveConfidenceTooltip($event)"
-                @mouseleave="hideConfidenceTooltip">
+                @mouseenter="showConfidenceTooltip($event, stock, 'rankTrendStrength')"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <span v-if="getRankTrendStrengthValue(stock) != null"
                   :class="getDirectionClass(getRankTrendDirection(stock))">
                   {{ getDirectionArrow(getRankTrendDirection(stock)) }}{{ getRankTrendStrengthValue(stock) }}%
@@ -120,8 +120,8 @@
 
             <template v-else-if="col.key === 'lifecycleOpportunity'">
               <div class="observation-cell lifecycle-cell" @click.stop="openObservationPanel(stock, 'lifecycle')"
-                @mouseenter="showConfidenceTooltip($event, stock, 'lifecycleOpportunity')" @mousemove="moveConfidenceTooltip($event)"
-                @mouseleave="hideConfidenceTooltip">
+                @mouseenter="showConfidenceTooltip($event, stock, 'lifecycleOpportunity')"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <span v-if="getLifecycleOpportunityValue(stock) != null" :class="getLifecycleClass(stock)">
                   {{ getLifecycleStageLabel(stock) }} {{ getLifecycleOpportunityValue(stock) }}%
                 </span>
@@ -141,7 +141,8 @@
             </template>
 
             <template v-else-if="col.key === 'volumeRatio'">
-              <span :class="getVolumeRatioClass(stock)" :title="getVolumeRatioTitle(stock)">{{ formatCell(col.key, stock) }}</span>
+              <span :class="getVolumeRatioClass(stock)" :title="getVolumeRatioTitle(stock)">{{ formatCell(col.key,
+                stock) }}</span>
             </template>
 
             <template v-else>
@@ -369,7 +370,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   zlje: '90px',
   zljzb: '90px',
   volume: '80px',
-  volumeRatio: '70px',
+  volumeRatio: '40px',
   turnover: '80px',
   turnoverRate: '80px',
   cirMV: '80px',
@@ -1006,9 +1007,8 @@ const getFieldTooltip = (field: string, stock: any): string => {
     const changeText = Number.isFinite(change) ? (change > 0 ? '+' : '') + change.toFixed(2) + '%' : '--'
     let title = header
     title += '\n【量价配合】\n'
-    title += `综合评估: ${
-      score == null ? '--' : `${direction === 'up' ? '↑' : direction === 'down' ? '↓' : ''}${score}`
-    }（${getVolumePriceQuadrantLabel(quadrant)}）\n`
+    title += `综合评估: ${score == null ? '--' : `${direction === 'up' ? '↑' : direction === 'down' ? '↓' : ''}${score}`
+      }（${getVolumePriceQuadrantLabel(quadrant)}）\n`
     title += `涨跌: ${changeText}\n`
     title += `量能: ${volume === 'unknown' ? '无量比基准' : volumeStateLabel(volume)}\n`
     title += `资金: ${classifyFundSignal(stock.zlje, stock.zljzb) === 'support' ? '主力净流入' : classifyFundSignal(stock.zlje, stock.zljzb) === 'divergent' ? '主力净流出' : classifyFundSignal(stock.zlje, stock.zljzb) === 'suspect' ? '主力净占比异常（疑似对倒）' : '无资金数据'}\n`
