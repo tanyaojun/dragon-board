@@ -65,7 +65,7 @@ class FakeFundCache:
         self.version = version
         self.calls: list[list[str]] = []
 
-    def get_latest(self, codes: list[str]) -> dict[str, dict]:
+    def get_akshare_latest(self, codes: list[str]) -> dict[str, dict]:
         self.calls.append(list(codes))
         return {code: self.rows[code] for code in codes if code in self.rows}
 

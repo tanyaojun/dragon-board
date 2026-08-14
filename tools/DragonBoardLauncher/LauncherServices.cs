@@ -163,6 +163,8 @@ internal static class LauncherServices
             var logOnlyErrors = GetBool(item, "logOnlyErrors", false);
             var externalPolicy = ParsePolicy(GetString(item, "externalPolicy"));
             var logPolicy = ParseLogPolicy(item, logOnlyErrors);
+            var dumpRdbPath = ExpandNullable(GetString(item, "dumpRdbPath"), root);
+            var dumpRdbOwner = GetString(item, "dumpRdbOwner");
 
             Dictionary<string, string>? envVars = null;
             if (item.TryGetProperty("envVars", out var envElement) &&
@@ -185,7 +187,9 @@ internal static class LauncherServices
                 isVoiceWorker,
                 logOnlyErrors,
                 externalPolicy,
-                logPolicy);
+                logPolicy,
+                dumpRdbPath,
+                dumpRdbOwner);
             return (key, service);
         }
         catch
@@ -284,7 +288,9 @@ internal static class LauncherServices
                 @"D:\APP_SOFT\redis\Redis-8.10.0",
                 @"D:\APP_SOFT\redis\Redis-8.10.0\redis-server.exe",
                 @"redis.conf",
-                externalPolicy: ServiceExternalPolicy.Reuse),
+                externalPolicy: ServiceExternalPolicy.Reuse,
+                dumpRdbPath: @"D:\APP_SOFT\redis\Redis-8.10.0\dump.rdb",
+                dumpRdbOwner: @"TANNY-PC\Think"),
             ["proxy"] = new("本地代理服务", 3000, Path.Combine(root, "proxy-server"), "node", "server.js"),
             [VoiceServiceKey] = new(
                 "本地语音服务",

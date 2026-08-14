@@ -51,7 +51,9 @@ internal sealed class ManagedService
         bool isVoiceWorker = false,
         bool logOnlyErrors = false,
         ServiceExternalPolicy externalPolicy = ServiceExternalPolicy.Managed,
-        ServiceLogPolicy? logPolicy = null)
+        ServiceLogPolicy? logPolicy = null,
+        string? dumpRdbPath = null,
+        string? dumpRdbOwner = null)
     {
         Name = name;
         Port = port;
@@ -67,6 +69,8 @@ internal sealed class ManagedService
         // 显式 logPolicy 优先；否则按旧 logOnlyErrors 映射（兼容默认值回退路径）。
         LogPolicy = logPolicy ?? new ServiceLogPolicy(
             logOnlyErrors ? ServiceLogLevel.ErrorsOnly : ServiceLogLevel.All);
+        DumpRdbPath = dumpRdbPath;
+        DumpRdbOwner = dumpRdbOwner;
     }
 
     public string Name { get; }
@@ -91,4 +95,8 @@ internal sealed class ManagedService
     /// <summary>Refuse 策略下接管的"自家残留"进程的可执行文件路径（用于停止前核对，
     /// 防 PID 复用误杀外部进程；仅当路径仍匹配时才允许终止）。</summary>
     public string? AdoptedExe { get; set; }
+    /// <summary>启动后需检查文件所有者的 RDB 路径（如 Redis dump.rdb）；null 表示无需检查。</summary>
+    public string? DumpRdbPath { get; }
+    /// <summary>RDB 文件的期望所有者（如 "TANNY-PC\\Think"）；实际所有者不符时自动修复权限。</summary>
+    public string? DumpRdbOwner { get; }
 }

@@ -142,11 +142,11 @@ class MarketFundScheduler:
         elif after_close and self._finalized:
             return False
         elif not intraday and not after_close and self._primed:
-            # 盘后暂停——但 Redis 资金缓存缺失（重启后 RDB 无此 key/被误清）时
-            # 冷启动拉一次填充（2026-08-12 修复：否则前端资金列空直到下个交易日）
-            if self.cache.has_redis_data():
+            # 盘后暂停——但 akshare 题材源缓存缺失（重启后 RDB 无此 key/被误清）时
+            # 冷启动拉一次填充（2026-08-12 修复：否则题材资金空直到下个交易日）
+            if self.cache.has_akshare_redis_data():
                 return False
-            logger.info("theme-fund redis cache missing; cold-start refresh outside trading hours")
+            logger.info("theme-fund akshare cache missing; cold-start refresh outside trading hours")
             self._primed = False
 
         self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
@@ -311,21 +311,24 @@ class MarketFundScheduler:
         }
 
     async def _ensure_redis_cache_alive(self) -> None:
-        """theme-fund:latest key 缺失时用内存 last-good 写回 Redis（零上游请求）。
+        """theme-fund:akshare key 缺失时用内存 akshare last-good 写回 Redis（零上游请求）。
 
-        2026-08-12：Redis 资金缓存 key 曾被误清/丢失导致前端资金列空；盘后
-        调度器暂停不写，key 缺失时这里从进程内 last-good 恢复，保证前端可读。
+        2026-08-12：Redis 资金缓存 key 曾被误清/丢失导致资金列空；盘后
+        调度器暂停不写，key 缺失时这里从进程内 akshare last-good 恢复，保证题材可读。
+        2026-08-14：akshare 题材源独立 hash，恢复逻辑改针对 akshare；
+        L2 latest 由 ThsFundRefreshScheduler._ensure_latest_cache_alive
+        （内存 last-good 写回 Redis latest，run_once 每次调用）负责。
         """
         try:
-            if not self.cache.has_redis_data():
-                rows = self.cache.memory_rows()
+            if not self.cache.has_akshare_redis_data():
+                rows = self.cache.akshare_memory_rows()
                 if rows:
                     saved, _failures = self.cache.put_many(rows)
                     if saved:
                         self.stream.publish(saved)
-                        logger.info("restored theme-fund redis cache from last-good: %s rows", len(saved))
+                        logger.info("restored theme-fund akshare cache from last-good: %s rows", len(saved))
         except Exception:
-            logger.exception("ensure theme-fund redis cache alive failed")
+            logger.exception("ensure theme-fund akshare cache alive failed")
 
     async def _run(self) -> None:
         while True:

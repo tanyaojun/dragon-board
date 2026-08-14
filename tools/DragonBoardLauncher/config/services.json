@@ -27,6 +27,8 @@
       "fileName": "D:\\APP_SOFT\\redis\\Redis-8.10.0\\redis-server.exe",
       "arguments": "redis.conf",
       "externalPolicy": "reuse",
+      "dumpRdbPath": "D:\\APP_SOFT\\redis\\Redis-8.10.0\\dump.rdb",
+      "dumpRdbOwner": "TANNY-PC\\Think",
       "logOnlyErrors": false
     },
     {

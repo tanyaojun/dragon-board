@@ -393,6 +393,12 @@ internal sealed class LauncherProcessManager
         finally
         {
             _starting.Remove(service.Name);
+            // Redis 等服务的 RDB 文件可能被 SYSTEM 权限污染（历史遗留，
+            // 如 RedisService.exe install 装成服务、或以管理员身份跑过一次），
+            // 导致后续以普通用户启动时 BGSAVE 无法覆盖。启动/复用后检查所有者，
+            // 异常时自动提权修复（takeown + icacls）。
+            try { EnsureDumpRdbAccessible(service); }
+            catch { /* 权限检测失败不阻塞启动流程 */ }
         }
     }
 
@@ -666,6 +672,122 @@ internal sealed class LauncherProcessManager
             return LauncherPorts.IsTcpListeningOn("127.0.0.1", service.Port);
 
         return LauncherPorts.IsPortOpen(service.Port);
+    }
+
+    /// <summary>
+    /// 检查服务配置的 RDB 文件（如 Redis dump.rdb）所有者是否正常；所有者异常
+    /// （如被 SYSTEM 接管）时自动提权修复。根治"SYSTEM 权限 dump.rdb 导致
+    /// BGSAVE 覆盖失败"的问题（2026-08-14 复盘）。
+    /// </summary>
+    private void EnsureDumpRdbAccessible(ManagedService service)
+    {
+        var path = service.DumpRdbPath;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return;
+
+        string? owner;
+        try
+        {
+            owner = new FileInfo(path).GetAccessControl()
+                .GetOwner(typeof(System.Security.Principal.NTAccount))
+                ?.ToString();
+        }
+        catch
+        {
+            return; // 无法读取 ACL（文件被占用/已删除），跳过不阻塞启动
+        }
+
+        if (string.IsNullOrWhiteSpace(owner))
+            return;
+
+        var expected = service.DumpRdbOwner;
+        if (string.IsNullOrWhiteSpace(expected))
+            expected = System.Security.Principal.WindowsIdentity.GetCurrent().Name;
+
+        if (string.Equals(owner, expected, StringComparison.OrdinalIgnoreCase))
+            return; // 所有者正常，无需修复
+
+        _log(
+            $"{service.Name} 检测到 {Path.GetFileName(path)} 所有者异常" +
+            $"（当前 {owner}，期望 {expected}），自动提权修复权限...");
+        RunDumpRdbFix(path, expected);
+    }
+
+    /// <summary>用户取消过 UAC 提权后，本进程生命周期内不再重复弹窗。</summary>
+    private static bool _dumpRdbFixDeclined;
+
+    /// <summary>
+    /// cmd /c 拼接注入防护：path/owner 只允许不含 cmd 元字符的文本
+    /// （& | &lt; &gt; ^ ( ) % ! " 等会改变命令解析）。配置受信，但防御纵深
+    /// 防配置被篡改或特殊账户名导致注入。含元字符时跳过修复并记录。
+    /// </summary>
+    private static bool IsSafeAclArgument(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        foreach (var ch in value)
+        {
+            if (ch == '&' || ch == '|' || ch == '<' || ch == '>' ||
+                ch == '^' || ch == '(' || ch == ')' || ch == '%' ||
+                ch == '!' || ch == '"')
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>用 UAC 提权执行 takeown + icacls，把 RDB 文件所有者与访问权限改回指定账户。</summary>
+    private void RunDumpRdbFix(string path, string owner)
+    {
+        if (_dumpRdbFixDeclined)
+            return; // 用户已取消过提权，本进程生命周期不再重复弹 UAC
+        // 注入防护：非法参数直接跳过修复（权限问题保留，不引入命令注入面）
+        if (!IsSafeAclArgument(path) || !IsSafeAclArgument(owner))
+        {
+            _log($"dump.rdb 权限修复参数含不安全字符，跳过（path={path} owner={owner}）。");
+            return;
+        }
+        // 三条命令串成一条 cmd：先取所有权（/a 交给 Administrators），再重置 ACL，
+        // 最后给目标账户完全控制。takeown/icacls 需要管理员权限，故 runas 提权。
+        var command =
+            $"takeown /f \"{path}\" /a && " +
+            $"icacls \"{path}\" /reset && " +
+            $"icacls \"{path}\" /grant \"{owner}:(F)\"";
+        var info = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            Arguments = $"/c {command}",
+            Verb = "runas",
+            UseShellExecute = true,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        try
+        {
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                _log("无法启动 dump.rdb 权限修复进程。");
+                return;
+            }
+            process.WaitForExit(20000);
+            if (process.ExitCode == 0)
+                _log("dump.rdb 权限修复完成（takeown + icacls）。");
+            else
+            {
+                _dumpRdbFixDeclined = true; // 非 0 退出：多半是用户取消，不再重复弹
+                _log($"dump.rdb 权限修复命令退出码 {process.ExitCode}（可能用户取消了 UAC 提权）。");
+            }
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            // ERROR_CANCELLED（1223）：用户在 UAC 弹窗点了"否"。
+            _dumpRdbFixDeclined = true; // 用户明确拒绝，本进程生命周期不再重复弹窗
+            _log("用户取消了 UAC 提权，dump.rdb 权限未修复（不影响其余服务启动）。");
+        }
+        catch (Exception ex)
+        {
+            _log($"dump.rdb 权限修复失败: {ex.Message}");
+        }
     }
 
     private static ProcessStartInfo CreateHiddenProcessInfo(

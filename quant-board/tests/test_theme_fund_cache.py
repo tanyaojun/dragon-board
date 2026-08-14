@@ -163,28 +163,29 @@ def test_put_many_batch_writes_with_monotonic_versions() -> None:
 
     saved, failures = cache.put_many(
         [
-            row("000001", "2026-07-24", 12.5),
-            row("000002", "2026-07-24", 8.0),
-            row("000003", "2026-07-24", 9.5),
+            row("000001", "2026-07-24", 12.5, source="akshare_ths_individual"),
+            row("000002", "2026-07-24", 8.0, source="akshare_ths_individual"),
+            row("000003", "2026-07-24", 9.5, source="akshare_ths_individual"),
         ]
     )
 
     assert failures == []
     assert [item["version"] for item in saved] == [1, 2, 3]
     assert cache.current_version() == 3
-    latest = cache.get_latest(["000001", "000002", "000003"])
+    # put_many 写 akshare 题材源独立 hash（2026-08-14），读 get_akshare_latest
+    latest = cache.get_akshare_latest(["000001", "000002", "000003"])
     assert latest["000001"]["zlje"] == 12.5
     assert latest["000003"]["zlje"] == 9.5
 
 
 def test_put_many_preserves_older_rows_and_increments_after_existing_versions() -> None:
     cache = ThemeFundCache(FakeRedis(), prefix="test")
-    cache.put(row("000001", "2026-07-24", 12.5, source_ts=20))
+    cache.put_many([row("000001", "2026-07-24", 12.5, source_ts=20, source="akshare_ths_individual")])
 
     saved, failures = cache.put_many(
         [
-            row("000001", "2026-07-24", 88.0, source_ts=10),  # 旧 sourceTs → 保留既有行
-            row("000002", "2026-07-24", 8.0),
+            row("000001", "2026-07-24", 88.0, source_ts=10, source="akshare_ths_individual"),  # 旧 sourceTs → 保留既有行
+            row("000002", "2026-07-24", 8.0, source="akshare_ths_individual"),
         ]
     )
 
@@ -193,18 +194,20 @@ def test_put_many_preserves_older_rows_and_increments_after_existing_versions() 
     assert saved[0]["version"] == 1
     assert saved[1]["zlje"] == 8.0
     assert saved[1]["version"] == 2
-    assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
+    assert cache.get_akshare_latest(["000001"])["000001"]["zlje"] == 12.5
 
 
 def test_put_many_isolates_invalid_rows_and_saves_valid_ones() -> None:
     cache = ThemeFundCache(FakeRedis(), prefix="test")
-    invalid = {"code": "bad", "zlje": "not-a-number", "source": "ths_main_monitor", "sessionDate": "2026-07-24"}
+    invalid = {"code": "bad", "zlje": "not-a-number", "source": "akshare_ths_individual", "sessionDate": "2026-07-24"}
 
-    saved, failures = cache.put_many([row("000001", "2026-07-24", 12.5), invalid])
+    saved, failures = cache.put_many(
+        [row("000001", "2026-07-24", 12.5, source="akshare_ths_individual"), invalid]
+    )
 
     assert len(saved) == 1
     assert failures == [{"code": "bad", "reason": "invalid fund row"}]
-    assert cache.get_latest(["000001"])["000001"]["zlje"] == 12.5
+    assert cache.get_akshare_latest(["000001"])["000001"]["zlje"] == 12.5
 
 
 def test_put_many_falls_back_to_memory_when_redis_fails() -> None:
@@ -212,14 +215,14 @@ def test_put_many_falls_back_to_memory_when_redis_fails() -> None:
 
     saved, failures = cache.put_many(
         [
-            row("000001", "2026-07-24", 12.5),
-            row("000002", "2026-07-24", 8.0),
+            row("000001", "2026-07-24", 12.5, source="akshare_ths_individual"),
+            row("000002", "2026-07-24", 8.0, source="akshare_ths_individual"),
         ]
     )
 
     assert failures == []
     assert [item["version"] for item in saved] == [1, 2]
-    latest = cache.get_latest(["000001", "000002"])
+    latest = cache.get_akshare_latest(["000001", "000002"])
     assert latest["000001"]["zlje"] == 12.5
     assert latest["000002"]["zlje"] == 8.0
 
@@ -357,8 +360,8 @@ def test_redis_ttl_controls_cross_instance_cold_read() -> None:
     assert cold.get_latest(["000001"])["000001"]["zlje"] == 12.5
 
 
-def test_put_accepts_akshare_ths_individual_source() -> None:
-    # 2026-08-12：provider source 诚实标识后，缓存接受 akshare 网页估算行
+def test_put_many_accepts_akshare_ths_individual_source() -> None:
+    # 2026-08-14：akshare 题材源独立 hash——用 put_many 写入、get_akshare_latest 读取
     redis = FakeRedis()
     cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
     akshare_row = {
@@ -370,37 +373,63 @@ def test_put_accepts_akshare_ths_individual_source() -> None:
         "sourceTs": 1,
     }
 
-    saved = cache.put(akshare_row)
+    saved, _failures = cache.put_many([akshare_row])
 
-    assert saved["source"] == "akshare_ths_individual"
-    assert cache.get_latest(["000001"])["000001"]["source"] == "akshare_ths_individual"
+    assert saved[0]["source"] == "akshare_ths_individual"
+    assert cache.get_akshare_latest(["000001"])["000001"]["source"] == "akshare_ths_individual"
 
 
 def test_put_many_prunes_stale_trading_session_rows() -> None:
-    # 2026-08-12：TTL 加长后旧累计值不能滞留——写入新交易日时，Redis hash +
-    # 内存里 sessionDate < 当天 的行被主动清理（本批已写入的 code 除外）
+    # 2026-08-14：put_many 写 akshare 独立 hash，旧交易日清理针对 akshare hash
     redis = FakeRedis()
     cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
-    cache.put(row("000001", "2026-07-24", 1.0))
-    cache.put(row("000002", "2026-07-24", 2.0))
+    cache.put_many(
+        [
+            row("000001", "2026-07-24", 1.0, source="akshare_ths_individual"),
+            row("000002", "2026-07-24", 2.0, source="akshare_ths_individual"),
+        ]
+    )
 
     saved, failures = cache.put_many(
-        [row("000001", "2026-07-25", 3.0), row("000003", "2026-07-25", 4.0)]
+        [
+            row("000001", "2026-07-25", 3.0, source="akshare_ths_individual"),
+            row("000003", "2026-07-25", 4.0, source="akshare_ths_individual"),
+        ]
     )
 
     assert failures == []
     assert len(saved) == 2
-    # 旧交易日行（000002 07-24，未在本批写入）从内存与 Redis hash 一并清除
-    assert "000002" not in cache._latest
-    assert "000002" not in redis.hashes["test:theme-fund:v3:latest"]
+    # 旧交易日行（000002 07-24，未在本批写入）从内存与 akshare hash 一并清除
+    assert "000002" not in cache._akshare
+    assert "000002" not in redis.hashes["test:theme-fund:v3:akshare"]
     # 本批写入的行保留
-    assert "000001" in redis.hashes["test:theme-fund:v3:latest"]
-    assert "000003" in redis.hashes["test:theme-fund:v3:latest"]
+    assert "000001" in redis.hashes["test:theme-fund:v3:akshare"]
+    assert "000003" in redis.hashes["test:theme-fund:v3:akshare"]
 
 
 def test_put_many_version_gets_ttl() -> None:
     redis = FakeRedis()
     cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
-    cache.put_many([row("000001", "2026-07-24", 1.0)])
+    cache.put_many([row("000001", "2026-07-24", 1.0, source="akshare_ths_individual")])
 
     assert redis.expires["test:theme-fund:v3:version"] == 900
+
+
+def test_put_many_rejects_ths_main_monitor() -> None:
+    # 2026-08-14：akshare 题材源 hash 只接受 akshare_ths_individual；L2 主源行
+    # 必须走 put（写 latest hash），否则串线（MongoDB 冷启动恢复曾误写）。
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test")
+    saved, failures = cache.put_many([row("000001", "2026-07-24", 1.0)])  # 默认 ths_main_monitor
+
+    assert saved == []
+    assert len(failures) == 1
+    assert failures[0]["code"] == "000001"
+    assert "test:theme-fund:v3:akshare" not in redis.hashes
+
+
+def test_put_rejects_akshare_source() -> None:
+    # 2026-08-14：latest hash 只接受 ths_main_monitor；akshare 题材源必须走 put_many。
+    cache = ThemeFundCache(FakeRedis(), prefix="test")
+    with pytest.raises(ValueError):
+        cache.put(row("000001", "2026-07-24", 1.0, source="akshare_ths_individual"))

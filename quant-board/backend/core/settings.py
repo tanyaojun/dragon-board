@@ -138,7 +138,8 @@ class Settings(BaseModel):
     theme_heat_fund_timeout_ms: int = Field(default=30000)
     theme_heat_quote_collection_timeout_ms: int = Field(default=90000)
     theme_heat_fund_collection_timeout_ms: int = Field(default=180000)
-    theme_fund_concurrency: int = Field(default=2)
+    # THS L2 单票并发（2026-08-14 实测：并发 4 为甜点，30s 压测 18.7 rps 全程 0 429）
+    theme_fund_concurrency: int = Field(default=4)
     theme_fund_upstream_timeout_seconds: float = Field(default=15.0)
     # analyze 路由并发闸门：同一时刻最多 N 个 golden 计算并发，防止并发请求拖死 8000
     quant_board_analyze_max_concurrency: int = Field(default=2)
@@ -432,7 +433,7 @@ class Settings(BaseModel):
         )
         self.theme_fund_concurrency = max(
             1,
-            min(2, _env_int("QUANT_BOARD_THEME_FUND_CONCURRENCY", self.theme_fund_concurrency)),
+            min(4, _env_int("QUANT_BOARD_THEME_FUND_CONCURRENCY", self.theme_fund_concurrency)),
         )
         self.theme_fund_upstream_timeout_seconds = max(
             0.1,

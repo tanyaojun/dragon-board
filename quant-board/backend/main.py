@@ -145,6 +145,11 @@ async def restore_fund_flow_from_mongodb() -> None:
 
     零第三方请求；失败不阻塞启动（回退为仅盘中校准）。完整 7 档 buckets
     保留在 MongoDB，恢复只投影 total.zlje 摘要进 Redis/内存。
+
+    2026-08-14 修复：恢复行 source=ths_main_monitor（L2 主源），必须走
+    ``put`` 写 latest hash——不能走 ``put_many``（已改为写 akshare 题材源
+    独立 hash，会导致 L2 串线到题材源，实盘已出现 akshare hash 混入
+    ths_main_monitor 行）。
     """
     from backend.data.repositories.fund_flow_repository import (
         FundFlowRepository,
@@ -160,8 +165,20 @@ async def restore_fund_flow_from_mongodb() -> None:
     rows = project_cache_rows(docs)
     if not rows:
         return
-    await asyncio.to_thread(get_theme_fund_cache().put_many, rows)
-    logger.info("fund_flow_l2 cold restore: %d rows from %s", len(rows), session_date)
+
+    def _restore() -> int:
+        cache = get_theme_fund_cache()
+        saved = 0
+        for row in rows:
+            try:
+                cache.put(dict(row))
+                saved += 1
+            except ValueError:
+                continue
+        return saved
+
+    saved = await asyncio.to_thread(_restore)
+    logger.info("fund_flow_l2 cold restore: %d rows from %s", saved, session_date)
 
 @app.on_event("startup")
 async def on_startup() -> None:

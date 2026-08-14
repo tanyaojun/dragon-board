@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiHttpError } from '@/services/apiService'
-import { AppEvents } from '@/types'
-import { EventManager } from '@/utils/eventManager'
 import { ThemeHeatFeed, themeHeatSnapshotCache, themeHeatStocksCache } from '../ThemeHeatFeed'
 import type { ThemeHeatApiSnapshot } from '../types'
 
@@ -184,47 +182,5 @@ describe('ThemeHeatFeed', () => {
 
     feed.clear()
   })
-
-  it('patches cached theme stocks immediately and debounces one factor refresh', async () => {
-    vi.useFakeTimers()
-    const feed = new ThemeHeatFeed(api as any)
-    await feed.loadThemeStocks('AI')
-    api.getThemeHeat.mockClear()
-
-    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, {
-      items: [
-        { code: '000001', zlje: 88, version: 2, moneyFlowSource: 'ths_main_monitor' },
-      ],
-    })
-
-    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(88)
-    expect(api.getThemeHeat).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(300)
-    expect(api.getThemeHeat).toHaveBeenCalledTimes(1)
-
-    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, {
-      items: [
-        { code: '000001', zlje: 1, version: 1, moneyFlowSource: 'ths_main_monitor' },
-      ],
-    })
-    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(88)
-    feed.destroy()
-  })
-
-  it('ignores akshare_ths_individual fund rows in WS patch (theme_fund uses HTTP)', async () => {
-    vi.useFakeTimers()
-    const feed = new ThemeHeatFeed(api as any)
-    await feed.loadThemeStocks('AI')
-
-    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, {
-      items: [
-        { code: '000001', zlje: 66, version: 3, moneyFlowSource: 'akshare_ths_individual' },
-      ],
-    })
-
-    // akshare 估算行只供 theme_fund HTTP（/api/themes/fund-rows），不进 WS 资金补丁
-    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBeNull()
-    feed.destroy()
-  })
 })
+

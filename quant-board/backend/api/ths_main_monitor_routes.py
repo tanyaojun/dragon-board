@@ -38,18 +38,6 @@ def _refresh_theme_fund_from_raw(code: str, raw: dict[str, object]) -> None:
         logger.warning("ths-detail 同步资金列失败 code=%s", code, exc_info=True)
 
 
-def _refresh_theme_fund_from_rows(rows: list[dict[str, object]]) -> None:
-    """查看即刷新：ths-fund-batch 的 rows 已是摘要行，批量写入资金列并推送前端。"""
-    if not rows:
-        return
-    try:
-        saved, _ = get_theme_fund_cache().put_many([dict(row) for row in rows])
-        if saved:
-            get_market_fund_stream().publish(saved)
-    except Exception:  # noqa: BLE001 - 缓存/推送失败不影响批量查看接口
-        logger.warning("ths-fund-batch 同步资金列失败 rows=%s", len(rows), exc_info=True)
-
-
 @router.get("/ths-detail", response_model=None)
 async def get_ths_detail(
     stockCode: str = Query(default=""),

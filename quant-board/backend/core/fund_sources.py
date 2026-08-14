@@ -31,3 +31,16 @@ SUPPORTED_FUND_SOURCES = frozenset(
         FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
     }
 )
+
+# theme-fund 缓存 hash 后缀（fund_cache 内部结构名，统一从本模块暴露，
+# 避免业务代码散落 "latest"/"akshare" 字符串字面量）。
+FUND_HASH_LATEST = "latest"
+FUND_HASH_AKSHARE = "akshare"
+
+# 数据源 → 缓存 hash 路由表（唯一真相源，2026-08-14 收敛）：
+# 每个源只写入/读取其专属 hash；加新源只需在此登记一条映射，
+# fund_cache 的 put/put_many/get_* 统一按本表路由，不再散落 == 判断。
+FUND_SOURCE_HASH: dict[str, str] = {
+    FUND_SOURCE_THS_MAIN_MONITOR: FUND_HASH_LATEST,
+    FUND_SOURCE_AKSHARE_THS_INDIVIDUAL: FUND_HASH_AKSHARE,
+}

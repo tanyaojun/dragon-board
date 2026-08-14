@@ -191,7 +191,8 @@ class ThemeHeatService:
 
     def get_fund_rows(self, codes: list[str]) -> dict[str, dict[str, object]]:
         normalized = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
-        rows = self._fund_cache.get_latest(normalized)
+        # 题材聚合统一用 akshare 估算口径（2026-08-14 用户确认），读独立 akshare hash
+        rows = self._fund_cache.get_akshare_latest(normalized)
         return {
             code: {
                 **row,

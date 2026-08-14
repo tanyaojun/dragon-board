@@ -90,6 +90,9 @@ class FakeCache:
         self.rows[code] = saved
         return saved
 
+    def get_latest(self, codes: list[str]) -> dict[str, dict[str, object]]:
+        return {code: row for code, row in self.rows.items() if code in codes}
+
 
 class FakeFundRepo:
     def __init__(self) -> None:
@@ -532,6 +535,52 @@ async def test_outside_trading_hours_cold_start_drains_full_pool() -> None:
     assert scheduler.status()["lastSessionDate"] == "2026-08-07"
     assert scheduler._needs_cold_init() is False  # 刷完即暂停
     assert all(len(b) <= 5 for b in service.batches)
+
+
+@pytest.mark.asyncio
+async def test_cold_start_not_stopped_by_partial_latest_day_coverage() -> None:
+    # 修复 2026-08-14 实盘：盘后重启时缓存只有 1 条最近交易日 L2 行，
+    # _needs_cold_init 不得误判为已初始化（此前用 max(sessionDate) 判断，
+    # 只要有 1 条最新日期行就停止冷启动，热榜资金列只剩少数几笔）。
+    current = datetime(2026, 8, 8, 10, 0, 0, tzinfo=TZ)  # 周六，最近交易日 08-07
+    codes = [f"{i:06d}" for i in range(1, 6)]
+    cache = FakeCache()
+    cache.rows["000001"] = {
+        "code": "000001",
+        "sessionDate": "2026-08-07",
+        "moneyFlowSource": "ths_main_monitor",
+        "zlje": 1.0,
+    }
+    service = FakeThsService(titles=_titles(*codes))
+    scheduler = _scheduler(
+        service=service,
+        cache=cache,
+        stream=FakeStream(codes),
+        current=current,
+        batch_size=5,
+    )
+
+    # 1/5 覆盖 → 仍需冷启动补齐其余 4 只
+    assert scheduler._needs_cold_init() is True
+
+    # akshare 残留行（非 L2 源）不参与覆盖判断，仍应冷启动
+    cache.rows["000002"] = {
+        "code": "000002",
+        "sessionDate": "2026-08-07",
+        "moneyFlowSource": "akshare_ths_individual",
+        "zlje": 1.0,
+    }
+    assert scheduler._needs_cold_init() is True
+
+    # 全池 L2 最近交易日覆盖后 → 不再冷启动
+    for code in codes:
+        cache.rows[code] = {
+            "code": code,
+            "sessionDate": "2026-08-07",
+            "moneyFlowSource": "ths_main_monitor",
+            "zlje": 1.0,
+        }
+    assert scheduler._needs_cold_init() is False
 
 
 @pytest.mark.asyncio

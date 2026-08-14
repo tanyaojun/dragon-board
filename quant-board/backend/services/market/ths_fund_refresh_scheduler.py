@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 from zoneinfo import ZoneInfo
 
+from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.core.settings import get_settings
 from backend.data.repositories.fund_flow_repository import FundFlowRepository
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
@@ -58,7 +59,7 @@ class ThsFundRefreshScheduler:
         stream: MarketFundStream,
         now: Callable[[], datetime] | None = None,
         batch_size: int = 5,
-        base_concurrency: int = 2,
+        base_concurrency: int | None = None,
         refresh_interval_seconds: float = DEFAULT_REFRESH_INTERVAL_SECONDS,
         batch_timeout_seconds: float = 15.0,
         systemic_cooldown_seconds: float = 30.0,
@@ -75,16 +76,27 @@ class ThsFundRefreshScheduler:
         # 2026-08-14 用户确认：取消 P0/P1 分级与前 100 白名单，全列表统一刷新。
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
         self._batch_size = max(1, min(5, int(batch_size)))
-        self._base_concurrency = max(1, min(2, int(base_concurrency)))
+        # 并发默认统一读 settings.theme_fund_concurrency（env QUANT_BOARD_THEME_FUND_CONCURRENCY
+        # 可覆盖），避免三处硬编码各自漂移；显式传参仍可覆盖。
+        self._base_concurrency = max(
+            1,
+            min(
+                4,
+                int(
+                    base_concurrency
+                    if base_concurrency is not None
+                    else get_settings().theme_fund_concurrency
+                ),
+            ),
+        )
         self._refresh_interval_seconds = max(30.0, float(refresh_interval_seconds))
         self._batch_timeout_seconds = max(1.0, float(batch_timeout_seconds))
         self._systemic_cooldown_seconds = max(10.0, float(systemic_cooldown_seconds))
         self._retry_backoff_seconds = tuple(float(v) for v in (retry_backoff_seconds or (30,)))
-        # 批间间隔：让每批请求节奏贴合 30 req/min 限流预算
-        self._batch_interval_seconds = max(
-            1.0,
-            self._batch_size / 30.0 * 60.0,
-        )
+        # 批间间隔（2026-08-14 实测）：THS 无 30 req/min 硬限流，并发 4 为甜点
+        # （30s 压测 18.7 rps 全程 0 429/验证码），旧 30 req/min 假设被推翻。
+        # 固定 1s 摊薄节奏（batch_size=5 + 并发 4 时每批约 1~2s），一轮 225 只约 1 分钟。
+        self._batch_interval_seconds = 1.0
         self.enabled = enabled
         self._fund_repo = fund_repo
         # MongoDB upsert 超时：MongoDB 挂起（TCP 不响应）时不拖慢刷新节奏
@@ -120,6 +132,9 @@ class ThsFundRefreshScheduler:
 
     async def run_once(self) -> bool:
         now_dt = self._now()
+        # Redis latest key 丢失（2026-08-12 事故场景）时先从内存 last-good 写回，
+        # 零上游请求；再走冷启动/交易时段判断，保证跨进程可读。
+        await self._ensure_latest_cache_alive()
         if not self._indexes_ensured and self._fund_repo is not None:
             self._indexes_ensured = True
             try:
@@ -342,6 +357,33 @@ class ThsFundRefreshScheduler:
             return "persisted"
         return "none"
 
+    async def _ensure_latest_cache_alive(self) -> None:
+        """Redis theme-fund:latest key 丢失时用内存 L2 last-good 写回（零上游请求）。
+
+        与 fund_scheduler._ensure_redis_cache_alive（akshare 题材源）对称：2026-08-12
+        key 误清事故后，latest hash 丢失而进程内存已初始化（非交易时段调度器暂停
+        不刷新，_needs_cold_init 又因内存有数据判 False）时仍可恢复 Redis latest，
+        保证跨进程/重启后资金列可读。
+        """
+        try:
+            if not self._cache.has_redis_data():
+                rows = self._cache.memory_rows()
+                if rows:
+                    saved: list[dict[str, object]] = []
+                    for row in rows:
+                        try:
+                            saved.append(self._cache.put(dict(row)))
+                        except ValueError:
+                            continue  # latest hash 只接受 L2 主源行（防串线）
+                    if saved:
+                        self._stream.publish(saved)
+                        logger.info(
+                            "restored theme-fund latest cache from last-good: %s rows",
+                            len(saved),
+                        )
+        except Exception:
+            logger.exception("ensure theme-fund latest cache alive failed")
+
     def _needs_cold_init(self) -> bool:
         """非交易时段冷启动例外：展示池还有未刷过的码时允许继续刷，
         直到全池都有最近交易日 L2（首屏资金列不空），然后暂停。
@@ -359,15 +401,21 @@ class ThsFundRefreshScheduler:
             return False
         if not any(code not in self._next_refresh_at for code in codes):
             return False
+        latest_day = self._latest_trading_day(self._now())
         try:
             cached = self._cache.get_latest(codes)
-            if cached:
-                latest_session = max(
-                    (str(row.get("sessionDate") or "") for row in cached.values()),
-                    default="",
-                )
-                if latest_session == self._latest_trading_day(self._now()):
-                    return False
+            # 只有全池 codes 都被「最近交易日 + L2 主源」行覆盖时才视为已初始化。
+            # 之前用 max(sessionDate) 判断，只要任意 1 条最近日期行就停止冷启动，
+            # 导致盘后重启只刷 2 条就提前终止、热榜资金列大部分缺失（2026-08-14 实盘）。
+            # 注意：get_latest 可能混入 akshare 残留行，这里只统计 ths_main_monitor 覆盖。
+            covered = {
+                str(row.get("code") or "")
+                for row in cached.values()
+                if str(row.get("sessionDate") or "") == latest_day
+                and str(row.get("moneyFlowSource") or "") == FUND_SOURCE_THS_MAIN_MONITOR
+            }
+            if covered >= set(codes):
+                return False
         except Exception:
             pass
         return True

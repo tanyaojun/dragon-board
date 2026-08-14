@@ -1,8 +1,5 @@
 import { ApiHttpError, apiService } from '@/services/apiService'
 import { cacheManager } from '@/services/LRUCache'
-import { AppEvents } from '@/types'
-import { EventManager } from '@/utils/eventManager'
-import { isDashboardFundSource } from '../moneyFlowSourcePriority'
 import type {
   ThemeFactorSnapshot,
   ThemeHeatApiFactor,
@@ -136,15 +133,10 @@ export class ThemeHeatFeed {
   private snapshot: StoredSnapshot | null = null
   private refreshPromise: Promise<ThemeHeatApiSnapshot> | null = null
   private stockPromises = new Map<string, Promise<ThemeHeatStock[]>>()
-  private fundVersions = new Map<string, number>()
-  private fundRefreshTimer: ReturnType<typeof setTimeout> | null = null
-  private readonly unsubscribeFundPatch: () => void
 
-  constructor(private readonly api: ThemeHeatApiClient = apiService) {
-    this.unsubscribeFundPatch = EventManager.on(AppEvents.WEBSOCKET.QUOTE_PATCH, (payload: any) => {
-      this.applyFundPatch(Array.isArray(payload?.items) ? payload.items : [])
-    })
-  }
+  // 2026-08-14 用户确认：题材资金统一用 akshare 估算口径（走 HTTP 5 分钟全量刷新），
+  // 不再订阅 fund-stream 的 L2 资金补丁（否则 L2 会覆盖题材热榜股票的估算值，口径混杂）。
+  constructor(private readonly api: ThemeHeatApiClient = apiService) {}
 
   refresh(options: { force?: boolean } = {}): Promise<ThemeHeatApiSnapshot> {
     const cacheKey = 'theme-heat-snapshot'
@@ -216,52 +208,16 @@ export class ThemeHeatFeed {
     return promise
   }
 
-  applyFundPatch(items: any[]): void {
-    let changed = false
-    for (const item of items) {
-      if (!isDashboardFundSource({ moneyFlowSource: item?.moneyFlowSource })) continue
-      const code = String(item?.code || '')
-      const version = Number(item?.version)
-      const zlje = nullableFinite(item?.zlje)
-      if (!code || !Number.isFinite(version) || zlje === null) continue
-      if (version < (this.fundVersions.get(code) || 0)) continue
-
-      let codeChanged = false
-      for (const { key, value: stocks } of themeHeatStocksCache.entries()) {
-        const next = (stocks as ThemeHeatStock[]).map((stock) => {
-          if (stock.code !== code) return stock
-          codeChanged = true
-          return { ...stock, mainNetInflow: zlje }
-        })
-        if (codeChanged) themeHeatStocksCache.set(key, next)
-      }
-      if (codeChanged) {
-        this.fundVersions.set(code, version)
-        changed = true
-      }
-    }
-    if (!changed || this.fundRefreshTimer) return
-    this.fundRefreshTimer = setTimeout(() => {
-      this.fundRefreshTimer = null
-      // 资金补丁已改变题材热度数据，防抖刷新必须绕过快照缓存强制取数
-      void this.refresh({ force: true }).catch(() => undefined)
-    }, 250)
-  }
-
   clear(): void {
     this.snapshot = null
     this.refreshPromise = null
     this.stockPromises.clear()
-    this.fundVersions.clear()
     themeHeatSnapshotCache.clear()
     themeHeatStocksCache.clear()
-    if (this.fundRefreshTimer) clearTimeout(this.fundRefreshTimer)
-    this.fundRefreshTimer = null
   }
 
   destroy(): void {
     this.clear()
-    this.unsubscribeFundPatch()
   }
 }
 

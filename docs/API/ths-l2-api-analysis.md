@@ -179,6 +179,26 @@ C# 工具 `ThsPayloadParser.ParseOrder()` 将 ths-detail 的 `nature` 文本转�
 
 完整根因、修复规则和回归测试见 [THSBigOrder 双数据源调试复盘](../ths-big-order-debug/2026-07-16-debug-retrospective.md)。
 
+### 3.5.1 风控实测（2026-08-14，备用源摸底）
+
+2026-08-14 用 httpx 探针实测 `GetMainMonitor_w30` 的风控阈值（作为备用源摸底，暂不接入）：
+
+- **单页请求**（`Index=0` / `st=200`，随机 DeviceID，各 10s）：
+  | 并发 | 2 | 4 | 6 | 8 | 10 | 12 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | rps | 43 | 97 | 105 | 198 | 192 | 231 |
+
+  全程 0 个 429 / 验证码 / 业务错误（`errcode != "0"`），响应 avg 0.04~0.05s。
+  结论：**无 THS mainMonitorDetail 那样的 30 req/min 硬限流**，单页并发到 12 仍无退化。
+- **串行分页**（000938，Total=11937，全量 60 页）：150ms 间隔 20.5s、0ms 间隔 5.57s，
+  全程 0 错误页、0 短页。**分页也无风控**（0ms 间隔连续 60 页无拦截）。
+- **与 THS 资金流对比**：THS `mainMonitorDetail` 并发 4 甜点 18.7 rps、并发 6 退化；
+  longhuvip 单页承载能力高一个量级。
+
+**结论**：longhuvip 风控宽松，但其返回的是逐笔大单（无主力净额汇总），
+作为资金列（`zlje`）备用源需「分页 + 按 tradetype 方向汇总」，且 tradetype 4 值编码
+与 THS `nature` 两套体系的方向映射尚未在官方文档确认。本轮仅摸底，暂不接入。
+
 ### 3.6 14 只股票全量验证（2026-07-16）
 
 | 股票 | Total | 返回 | 有效 | types |

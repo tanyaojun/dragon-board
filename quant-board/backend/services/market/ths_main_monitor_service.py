@@ -46,7 +46,7 @@ class ThsMainMonitorService:
         now_ms: Callable[[], int] | None = None,
         request_timeout_seconds: float = 15.0,
         upstream_url: str = THS_URL,
-        max_concurrency: int = 2,
+        max_concurrency: int | None = None,
         archive_root: Path | None = None,
     ) -> None:
         self._client = client or httpx.AsyncClient(headers=THS_HEADERS)
@@ -62,7 +62,20 @@ class ThsMainMonitorService:
         self._raw_memory: dict[str, dict[str, Any]] = {}
         self._condition = asyncio.Condition()
         self._active_requests = 0
-        self._max_concurrency = max(1, min(2, int(max_concurrency)))
+        # 并发上限 4（2026-08-14 实测并发 4 为甜点、无 429）；默认统一读
+        # settings.theme_fund_concurrency（env QUANT_BOARD_THEME_FUND_CONCURRENCY 可覆盖），
+        # 与 ths_fund_refresh_scheduler / settings 三处同源，避免硬编码漂移。
+        self._max_concurrency = max(
+            1,
+            min(
+                4,
+                int(
+                    max_concurrency
+                    if max_concurrency is not None
+                    else get_settings().theme_fund_concurrency
+                ),
+            ),
+        )
         self._effective_concurrency = self._max_concurrency
         self._cooldown_until_ms = 0
         self._archive_root = archive_root

@@ -10,7 +10,10 @@ from threading import Lock
 from typing import Any
 
 from backend.core.fund_sources import (
+    FUND_HASH_AKSHARE,
+    FUND_HASH_LATEST,
     FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
+    FUND_SOURCE_HASH,
     FUND_SOURCE_THS_MAIN_MONITOR,
     SUPPORTED_FUND_SOURCES,
 )
@@ -40,7 +43,11 @@ class ThemeFundCache:
         self._redis = redis_client
         self._ttl_seconds = max(60, int(ttl_seconds))
         self._base = f"{prefix.strip(':')}:theme-fund:v3"
+        # L2 主源（ths_main_monitor）行：供热榜资金列 / fund-stream
         self._latest: dict[str, dict[str, object]] = {}
+        # akshare 题材源（akshare_ths_individual）行：供 theme_fund 题材聚合。
+        # 2026-08-14 用户确认：题材统一用 akshare 估算口径，与 L2 分 hash 存储互不覆盖。
+        self._akshare: dict[str, dict[str, object]] = {}
         self._owners: dict[str, list[str]] = {}
         self._owners_loaded = False
         self._memory_version = 0
@@ -57,6 +64,11 @@ class ThemeFundCache:
         parsed = self._parse_fund_row(row)
         if parsed is None:
             raise ValueError("invalid fund row")
+        source = str(row.get("moneyFlowSource") or row.get("source") or "").strip()
+        # latest hash 只接受路由到 latest 的源（ths_main_monitor）：akshare 题材源
+        # 必须走 put_many（写 akshare 独立 hash），避免两源串线（2026-08-14）。
+        if FUND_SOURCE_HASH.get(source) != FUND_HASH_LATEST:
+            raise ValueError(f"latest hash rejects source={source or 'empty'}")
         code, session_date, zlje = parsed
 
         with self._lock:
@@ -97,6 +109,23 @@ class ThemeFundCache:
                 self._redis.hdel(self._key("latest"), *stale)
             except Exception:
                 logger.warning("theme-fund 清理旧交易日行失败 codes=%s", len(stale), exc_info=True)
+
+    def _prune_akshare_stale_sessions(self, current_session: str) -> None:
+        """清理 akshare 题材源 hash 的旧交易日行（与 latest 独立，2026-08-14）。"""
+        stale = [
+            code
+            for code, value in self._akshare.items()
+            if str(value.get("sessionDate") or "") < current_session
+        ]
+        if not stale:
+            return
+        for code in stale:
+            self._akshare.pop(code, None)
+        if self._redis is not None:
+            try:
+                self._redis.hdel(self._key("akshare"), *stale)
+            except Exception:
+                logger.warning("theme-fund 清理 akshare 旧交易日行失败 codes=%s", len(stale), exc_info=True)
 
     @staticmethod
     def _parse_fund_row(row: dict[str, object]) -> tuple[str, str, float] | None:
@@ -160,6 +189,19 @@ class ThemeFundCache:
                 code = str(row.get("code") or "").strip()
                 failures.append({"code": code, "reason": "invalid fund row"})
                 continue
+            source = str(row.get("moneyFlowSource") or row.get("source") or "").strip()
+            # akshare 题材源 hash 只接受路由到 akshare 的源（akshare_ths_individual）：
+            # L2 主源行必须走 put（写 latest hash）。否则 MongoDB 冷启动恢复等 L2
+            # 路径会把 ths_main_monitor 串线到题材源（2026-08-14 实盘）。
+            if FUND_SOURCE_HASH.get(source) != FUND_HASH_AKSHARE:
+                code = str(row.get("code") or "").strip()
+                failures.append(
+                    {
+                        "code": code,
+                        "reason": f"akshare hash rejects source={source or 'empty'}",
+                    }
+                )
+                continue
             code, session_date, zlje = parsed
             validated.append(self._build_stored(row, code, session_date, zlje))
 
@@ -167,18 +209,19 @@ class ThemeFundCache:
             return [], failures
 
         saved_rows: list[dict[str, object]] = []
-        hash_key = self._key("latest")
+        # akshare 题材源独立 hash（2026-08-14）：与 L2 分库，题材聚合只读 akshare
+        hash_key = self._key("akshare")
         with self._lock:
             # 1) 批量读缺失 code 的最新行（单次 hmget，避免逐行 redis 读）
             missing_codes = [
                 str(candidate.get("code") or "")
                 for candidate in validated
-                if str(candidate.get("code") or "") not in self._latest
+                if str(candidate.get("code") or "") not in self._akshare
             ]
             if missing_codes:
                 for code, value in self._read_hash_many(hash_key, missing_codes).items():
-                    if value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
-                        self._latest[code] = value
+                    if FUND_SOURCE_HASH.get(value.get("moneyFlowSource")) == FUND_HASH_AKSHARE:
+                        self._akshare[code] = value
 
             # 2) 版本号批量递增
             version = self._next_version_batch(len(validated))
@@ -202,7 +245,7 @@ class ThemeFundCache:
             today = str(validated[0].get("sessionDate") or "")
             for candidate in validated:
                 code = str(candidate.get("code") or "")
-                previous = self._latest.get(code)
+                previous = self._akshare.get(code)
                 session_date = str(candidate.get("sessionDate") or "")
                 if previous and self._is_older(candidate, previous, session_date):
                     saved_rows.append(dict(previous))
@@ -212,7 +255,7 @@ class ThemeFundCache:
                     "version": version,
                 }
                 version += 1
-                self._latest[code] = stored
+                self._akshare[code] = stored
                 saved_rows.append(dict(stored))
                 if pipeline is not None:
                     pipeline.hset(hash_key, code, json.dumps(stored, ensure_ascii=False, separators=(",", ":")))
@@ -237,7 +280,7 @@ class ThemeFundCache:
                     if stale_fields:
                         for field in stale_fields:
                             pipeline.hdel(hash_key, field)
-                            self._latest.pop(field, None)
+                            self._akshare.pop(field, None)
                 except Exception:
                     pass
             if pipeline is not None:
@@ -251,7 +294,7 @@ class ThemeFundCache:
                     self._last_redis_write_error = str(sys.exc_info()[1]) if sys.exc_info()[1] else "unknown"
 
             # 4) 清理策略（2026-08-11 用户确认，容灾 1 个交易日）：跨日即清旧交易日行
-            self._prune_stale_sessions(today)
+            self._prune_akshare_stale_sessions(today)
 
         return saved_rows, failures
 
@@ -267,7 +310,9 @@ class ThemeFundCache:
         with self._lock:
             missing = [code for code in normalized if code not in self._latest]
             for code, value in self._read_hash_many(self._key("latest"), missing).items():
-                if value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
+                # latest hash 只承载路由到 latest 的源（ths_main_monitor），
+                # akshare 题材源不进入此内存（2026-08-14 source 隔离）。
+                if FUND_SOURCE_HASH.get(value.get("moneyFlowSource")) == FUND_HASH_LATEST:
                     self._latest[code] = value
             for code in normalized:
                 latest = self._latest.get(code)
@@ -275,13 +320,32 @@ class ThemeFundCache:
                     result[code] = dict(latest)
         return result
 
+    def get_akshare_latest(self, codes: list[str]) -> dict[str, dict[str, object]]:
+        """读 akshare 题材源 hash 的最新行（题材聚合统一估算口径，2026-08-14）。"""
+        normalized = list(dict.fromkeys(str(value).strip() for value in codes if str(value).strip()))
+        result: dict[str, dict[str, object]] = {}
+        with self._lock:
+            missing = [code for code in normalized if code not in self._akshare]
+            for code, value in self._read_hash_many(self._key("akshare"), missing).items():
+                # 只加载路由到 akshare 的源（akshare_ths_individual）行：避免把
+                # 历史串线的 ths_main_monitor 行读进 _akshare 内存，进而被
+                # _ensure_redis_cache_alive 写回 akshare hash 形成恶性循环（2026-08-14）。
+                if FUND_SOURCE_HASH.get(value.get("moneyFlowSource")) == FUND_HASH_AKSHARE:
+                    self._akshare[code] = value
+            for code in normalized:
+                row = self._akshare.get(code)
+                if row:
+                    result[code] = dict(row)
+        return result
+
     def has_redis_data(self) -> bool:
-        """Redis 里 theme-fund:latest key 是否存在（2026-08-12：key 曾被误清/
+        """Redis 里 theme-fund:latest key 是否有行（2026-08-12：key 曾被误清/
         过期导致前端资金列空，恢复机制用此判断是否需要从内存 last-good 写回）。"""
         if self._redis is None:
             return False
         try:
-            return bool(self._redis.exists(self._key("latest")))
+            # hlen 而非 exists：空 hash（hlen=0）视为无数据，exists 会误判为有
+            return bool(self._redis.hlen(self._key("latest")))
         except Exception:
             return False
 
@@ -289,6 +353,29 @@ class ThemeFundCache:
         """导出进程内 last-good 全部行（用于 Redis key 缺失时写回，零上游请求）。"""
         with self._lock:
             return [dict(value) for value in self._latest.values()]
+
+    def has_akshare_redis_data(self) -> bool:
+        """Redis 里 theme-fund:akshare key 是否有行（akshare 题材源独立 hash，2026-08-14）。"""
+        if self._redis is None:
+            return False
+        try:
+            # hlen 而非 exists：空 hash（hlen=0）视为无数据，exists 会误判为有
+            return bool(self._redis.hlen(self._key("akshare")))
+        except Exception:
+            return False
+
+    def akshare_memory_rows(self) -> list[dict[str, object]]:
+        """导出进程内 akshare 题材源全部行（Redis akshare key 缺失时写回）。
+
+        只导出 akshare_ths_individual 源：历史串线的 ths_main_monitor 行不得被
+        _ensure_redis_cache_alive 写回 akshare hash（2026-08-14）。
+        """
+        with self._lock:
+            return [
+                dict(value)
+                for value in self._akshare.values()
+                if FUND_SOURCE_HASH.get(str(value.get("moneyFlowSource") or "")) == FUND_HASH_AKSHARE
+            ]
 
     def set_owner_codes(self, owner: str, codes: list[str]) -> None:
         key = str(owner).strip()
@@ -377,7 +464,7 @@ class ThemeFundCache:
         if code in self._latest:
             return self._latest[code]
         value = self._read_hash(self._key("latest"), code)
-        if value and value.get("moneyFlowSource") in SUPPORTED_FUND_SOURCES:
+        if value and FUND_SOURCE_HASH.get(value.get("moneyFlowSource")) == FUND_HASH_LATEST:
             self._latest[code] = value
             return value
         return None

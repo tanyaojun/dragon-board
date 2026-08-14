@@ -28,8 +28,8 @@
 
 | 线 | 数据源 | source 值 | 范围 | 节奏 |
 | --- | --- | --- | --- | --- |
-| 1 | 同花顺 mainMonitorDetail L2 主源（权威） | `ths_main_monitor` | 行情主页八平台热榜股票列表（约 200-230 只） | 每批 5 只、并发 2、30 req/min，约 10 分钟轮转一轮 |
-| 2 | akshare 同花顺网页个股资金流（估算） | `akshare_ths_individual` | theme_fund 题材股票列表（约 4000 只） | 5 分钟全量刷新 |
+| 1 | 同花顺 mainMonitorDetail L2 主源（权威） | `ths_main_monitor` | 行情主页八平台热榜股票列表（约 200-230 只） | 每批 5 只、并发 4、批间 1s，约 1 分钟轮转一轮（2026-08-14 实测推翻 30 req/min 假设） |
+| 2 | akshare 同花顺网页个股资金流（估算） | `akshare_ths_individual` | theme_fund 题材股票列表（约 4000 只） | 5 分钟全量刷新，写入独立 hash `theme-fund:v3:akshare` |
 
 - **热榜只用 L2**：行情主页热榜资金列只接受 `ths_main_monitor`，L2 缺失的股票
   诚实显示 `--`（fail-visible），不用 akshare 估算兜底。
@@ -101,3 +101,28 @@
   `tdx_estimate` 资金源，不得恢复 P0/P1 priority 前 100 白名单。
 - akshare 题材源失败不影响 THS L2 热榜校准（独立调度器 + 独立熔断）。
 - 冷启动资金恢复仍走 Redis `dump.rdb`（L2 last-good），不依赖 akshare。
+
+## 2026-08-14 追加修订（题材分 hash + 刷新提速）
+
+用户反馈两个问题后追加修订：
+
+1. **题材统一用 akshare（估算）**：原方案 `FUND_SOURCE_RANK` 让 L2 覆盖
+   akshare 行，导致题材聚合里热榜股票拿到 L2 值、口径混杂。改为 **分 hash 存储**：
+   - `ThemeFundCache.put_many`（akshare 全市场）写独立 hash `theme-fund:v3:akshare`
+     + 内存 `_akshare`；`put`（L2 单票）仍写 `theme-fund:v3:latest` + 内存 `_latest`。
+   - `heat_service.get_fund_rows` 与 `GET /api/themes/fund-rows` 改读
+     `get_akshare_latest`（纯 akshare），题材聚合统一估算口径。
+   - `MarketFundScheduler` 的盘后冷启动 / Redis 恢复逻辑改针对 akshare hash
+     （`has_akshare_redis_data` / `akshare_memory_rows`）。
+   - 前端 `ThemeHeatFeed` 移除 fund-stream 的 L2 资金补丁订阅（`applyFundPatch`），
+     题材资金只走 HTTP akshare 5 分钟刷新，不再被 L2 实时补丁覆盖。
+
+2. **热榜 L2 刷新提速**：实测（30s 压测，并发 2/4/6 各 10s）证明 THS 无
+   30 req/min 硬限流——并发 4 时 18.7 rps 全程 0 429/验证码（并发 6 反而退化）。
+   故：并发上限 2→4（`settings.theme_fund_concurrency` /
+   `ThsFundRefreshScheduler._base_concurrency` / `ThsMainMonitorService._max_concurrency`），
+   批间 sleep 从 `batch_size/30*60=10s` 改为固定 1s。一轮 225 只从约 9 分钟降到约 1 分钟，
+   满足「5 分钟内全量轮询刷新」。保留 429/验证码 → 全局冷却 + 并发降 1 的保护。
+
+验证：后端全量 pytest **1424 passed**；前端 `vue-tsc` 退出码 0、
+`ThemeHeatFeed.test.ts` 6 passed（删除两个 WS patch 用例）。
