@@ -126,6 +126,16 @@ class RankTrendConfig:
     riskOverheatScale: float = 30.0
     riskDivergenceOffset: float = 40.0
     riskDivergenceScale: float = 30.0
+    # ── 五维观察档位阈值（回测方案 §3.1）：默认值 = 当前硬编码，golden 不漂移 ──
+    tierResonanceReversalPenaltyMin: float = 0.6  # _resonance_tier 首条（reversal 否决）
+    tierResonanceJumpFreshnessMin: float = 0.5  # _resonance_tier 第二条（Jump 事件）+ 新入榜 S
+    tierResonancePersistenceMin: float = 0.6  # _resonance_tier 第三条（buy+persistence）
+    tierResonanceEntryStrengthMin: float = 0.3  # 新入榜 A 判定
+    tierRankTrendStrongMin: float = 0.5  # _rank_trend_tier S
+    tierRankTrendConfirmMin: float = 0.25  # _rank_trend_tier A
+    tierSynergyVoteStrong: int = 2  # _synergy_tier vote_sum≥2（S/A 分界）
+    tierSynergyVoteWeak: int = 1  # _synergy_tier vote_sum==1（B）
+    tierSynergyVoteReverse: int = -1  # _synergy_tier vote_sum≤−1（D）
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
@@ -134,9 +144,20 @@ class RankTrendConfig:
             return base
         for key, value in patch.items():
             if hasattr(base, key):
-                if isinstance(getattr(base, key), bool):
+                current = getattr(base, key)
+                if isinstance(current, bool):
                     value = bool(value)
+                elif isinstance(current, int):
+                    # int 字段（tierSynergyVote*）强制整数：非整数值拒绝（截断会破坏分支语义）。
+                    # float() 统一处理 str/numpy/Decimal 等数值输入，非数值在此抛 ValueError。
+                    as_float = float(value)
+                    if not as_float.is_integer():
+                        raise ValueError(f"{key} 需要整数，实际 {value!r}")
+                    value = int(as_float)
+                elif isinstance(current, float):
+                    value = float(value)
                 setattr(base, key, value)
+        _validate_tier_constraints(base)
         if base.macdSlow <= base.macdFast:
             base.macdSlow = base.macdFast + 1
         total = base.directionWeight + base.accelerationWeight + base.crossWeight + base.macdWeight
@@ -146,6 +167,35 @@ class RankTrendConfig:
             base.crossWeight /= total
             base.macdWeight /= total
         return base
+
+
+def _validate_tier_constraints(config: "RankTrendConfig") -> None:
+    """档位阈值强校验（回测方案 §3.1）。
+
+    约束：0 < confirm < strong <= 1；reverse <= weak < strong；
+    0 <= tierResonance*Min <= 1。不满足抛 ValueError（回测 trial 记 failed）。
+    weak 必须严格小于 strong，防止 _synergy_tier 的 v==weak 分支被 v>=strong 吞掉而不可达。
+    """
+    if not (0 < config.tierRankTrendConfirmMin < config.tierRankTrendStrongMin <= 1):
+        raise ValueError(
+            f"tierRankTrend 约束失败：需要 0 < confirm < strong <= 1，"
+            f"实际 confirm={config.tierRankTrendConfirmMin}, strong={config.tierRankTrendStrongMin}"
+        )
+    if not (config.tierSynergyVoteReverse <= config.tierSynergyVoteWeak < config.tierSynergyVoteStrong):
+        raise ValueError(
+            f"tierSynergyVote 约束失败：需要 reverse <= weak < strong，"
+            f"实际 reverse={config.tierSynergyVoteReverse}, weak={config.tierSynergyVoteWeak}, "
+            f"strong={config.tierSynergyVoteStrong}"
+        )
+    for name in (
+        "tierResonanceReversalPenaltyMin",
+        "tierResonanceJumpFreshnessMin",
+        "tierResonancePersistenceMin",
+        "tierResonanceEntryStrengthMin",
+    ):
+        value = float(getattr(config, name))
+        if not (0 <= value <= 1):
+            raise ValueError(f"{name} 约束失败：需要 0 <= value <= 1，实际 {value}")
 
 
 def get_macd_min_samples(config: RankTrendConfig) -> int:
@@ -1021,24 +1071,25 @@ def _tier_as_dict(pair: tuple[str, list[str]]) -> dict[str, Any]:
     return {"signalTier": pair[0], "tierReasons": pair[1]}
 
 
-def _rank_trend_tier_as_dict(base_signal: str, combined: float) -> dict[str, Any]:
-    return _tier_as_dict(_rank_trend_tier(base_signal, combined))
+def _rank_trend_tier_as_dict(base_signal: str, combined: float, config: RankTrendConfig | None = None) -> dict[str, Any]:
+    return _tier_as_dict(_rank_trend_tier(base_signal, combined, config))
 
 
 def _lifecycle_tier_as_dict(stage: str, action: str) -> dict[str, Any]:
     return _tier_as_dict(_lifecycle_tier(stage, action))
 
 
-def _rank_trend_tier(base_signal: str, combined: float) -> tuple[str, list[str]]:
-    """趋势离散档位（signalTier）。规则见 docs §6.2。"""
+def _rank_trend_tier(base_signal: str, combined: float, config: RankTrendConfig | None = None) -> tuple[str, list[str]]:
+    """趋势离散档位（signalTier）。规则见 docs §6.2。阈值读 config.tierRankTrend*。"""
+    c = config or RankTrendConfig()
     if base_signal == "hold":
         return "C", ["中性"]
     if base_signal == "sell":
         return "D", ["趋势转弱/反向"]
     a = abs(combined)
-    if a >= 0.5:
+    if a >= c.tierRankTrendStrongMin:
         return "S", ["强趋势，加权强度远超阈值"]
-    if a >= 0.25:
+    if a >= c.tierRankTrendConfirmMin:
         return "A", ["趋势确认"]
     return "B", ["弱趋势，勉强越过阈值"]
 
@@ -1093,7 +1144,7 @@ def compose_observation_scores(input: dict[str, Any], config: RankTrendConfig | 
             "direction": str(base.get("signal") or "hold"),
             "score": round(abs(signed_score) * 100),
             "signedScore": signed_score,
-            **_rank_trend_tier_as_dict(str(base.get("signal") or "hold"), signed_score),
+            **_rank_trend_tier_as_dict(str(base.get("signal") or "hold"), signed_score, config),
         },
         "lifecycle": {
             "stage": cycle["stage"],
@@ -1212,13 +1263,15 @@ def _resonance_tier(
     jump_event: str,
     jump_freshness: float,
     reversal_penalty: float,
+    config: RankTrendConfig | None = None,
 ) -> tuple[str, list[str]]:
-    """共振离散档位（signalTier）：S/A/B/C/D。规则见 docs/ranktrend-observation-discrete-tiers-design.md §6.1。"""
-    if reversal_penalty >= 0.6:
+    """共振离散档位（signalTier）：S/A/B/C/D。规则见 docs/ranktrend-observation-discrete-tiers-design.md §6.1。阈值读 config.tierResonance*。"""
+    c = config or RankTrendConfig()
+    if reversal_penalty >= c.tierResonanceReversalPenaltyMin:
         return "D", [f"反转惩罚高 {round(reversal_penalty * 100)}%"]
-    if jump_event == "jump" and direction == "buy" and jump_freshness >= 0.5:
+    if jump_event == "jump" and direction == "buy" and jump_freshness >= c.tierResonanceJumpFreshnessMin:
         return "S", ["Jump 事件驱动，排名跳跃式上升"]
-    if direction == "buy" and persistence >= 0.6:
+    if direction == "buy" and persistence >= c.tierResonancePersistenceMin:
         return "A", ["方向确认 + 路径持续"]
     if direction == "buy":
         return "B", ["方向确认但路径持续不足"]
@@ -1283,9 +1336,9 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         jump_freshness = 1.0 if jump_events else 0.0
         entry_strength = clamp((current_attention_percentile - 50) / c.resonanceEntryStrengthScale, 0, 1)
         score = round(100 * clamp(c.resonanceNewEntryWeights[0] * entry_strength + c.resonanceNewEntryWeights[1] * jump_freshness, 0, 1))
-        if jump_freshness >= 0.5 and entry_strength > 0:
+        if jump_freshness >= c.tierResonanceJumpFreshnessMin and entry_strength > 0:
             _tier, _tier_reasons = "S", ["Jump 事件驱动，排名跳跃式上升"]
-        elif entry_strength >= 0.3:
+        elif entry_strength >= c.tierResonanceEntryStrengthMin:
             _tier, _tier_reasons = "A", ["新入榜关注度较强"]
         elif entry_strength > 0:
             _tier, _tier_reasons = "B", ["新入榜关注度较弱"]
@@ -1373,7 +1426,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         - c.resonanceWeights[4] * reversal_penalty
     )
     score = round(100 * clamp(raw_score, 0, 1))
-    _tier, _tier_reasons = _resonance_tier(direction, persistence, jump.get("event"), jump_freshness, reversal_penalty)
+    _tier, _tier_reasons = _resonance_tier(direction, persistence, jump.get("event"), jump_freshness, reversal_penalty, config)
     return {
         "status": "ok",
         "direction": direction,
@@ -1631,7 +1684,7 @@ class RankTrendPythonEngine:
             percentiles.append(percentile_rank(rank, attention_total))
         return self._build_signal(stock, frame, ranks, percentiles, regime, meta)
 
-    def _build_signal(self, stock: dict[str, Any], frame: dict[str, Any], ranks: list[float], percentiles: list[float], regime: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any] | None:
+    def _build_signal(self, stock: dict[str, Any], frame: dict[str, Any], ranks: list[float], percentiles: list[float], regime: dict[str, Any], meta: dict[str, Any], assemble: bool = True) -> dict[str, Any] | None:
         if not ranks:
             return None
         code = str(stock.get("code") or "")
@@ -1692,6 +1745,13 @@ class RankTrendPythonEngine:
             "strategy": strategy,
             "executionStrategy": execution_strategy,
         }
+        # 回测方案 §3.2 组装下沉：observation.volumePrice / synergy + signalTier 与 API 单股链路同源。
+        # 延迟 import 避免 engine ↔ volume_price 循环依赖；replay 无 resonance 时共振维缺票（vote=0）。
+        # API 单股链路（_analyze_one_stock）传 assemble=False，在 routes 层组装一次（含 resonance 票）。
+        if assemble:
+            from backend.analysis.ranktrend.volume_price import assemble_observation
+
+            assemble_observation(rank_trend, stock, self.config)
         return {
             "snapshotId": frame.get("snapshotId"),
             "timestamp": frame.get("timestamp"),

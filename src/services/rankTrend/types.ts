@@ -69,11 +69,19 @@ export interface RankTrendSignalScore {
   score: number
 }
 
+/** 四维观察信号离散档位（后端 Python golden 生产，前端只消费；unknown=样本不足/数据缺失） */
+export type RankTrendSignalTier = 'S' | 'A' | 'B' | 'C' | 'D' | 'E' | 'unknown'
+
+/** 档位命中规则原文（后端 tierReasons） */
+export type RankTrendTierReasons = string[]
+
 export interface RankTrendObservationScores {
   rankTrend: {
     direction: RankSignalDirection
     score: number
     signedScore: number
+    signalTier?: RankTrendSignalTier
+    tierReasons?: RankTrendTierReasons
   }
   // 生命周期轨可独立降级：未达可算窗口时由观察服务移除该字段并给出结构化原因
   lifecycle?: {
@@ -81,6 +89,8 @@ export interface RankTrendObservationScores {
     score: number
     veto: boolean
     reasons: string[]
+    signalTier?: RankTrendSignalTier
+    tierReasons?: RankTrendTierReasons
     factors: {
       stageFitness: number
       pathCommitment: number
@@ -100,6 +110,8 @@ export interface RankTrendVolumePrice {
   quadrant: 'rise_volume' | 'rise_shrink' | 'fall_volume' | 'fall_shrink' | 'normal' | null
   reasons: string[]
   breakdown?: { direction: number; volume: number; fund: number }
+  signalTier?: RankTrendSignalTier
+  tierReasons?: RankTrendTierReasons
 }
 
 /** 四象协同状态（阶段 × 量价 为主，技术/共振协同） */
@@ -107,6 +119,8 @@ export interface RankTrendSynergy {
   state: '启动确认' | '主升确认' | '风险升级' | '退潮' | '存疑' | 'noData'
   hardWarn: boolean
   reasons: string[]
+  signalTier?: RankTrendSignalTier
+  tierReasons?: RankTrendTierReasons
 }
 
 export interface RankTrendThemeResonance {
@@ -155,6 +169,9 @@ export interface RankTrendResonance {
   baseScore?: number // 调节前原始共振分数（Python 融合输出，供审计与前端对比）
   theme?: RankTrendThemeResonance
   reasons: string[]
+  /** 前端挂 stock.rankTrend.resonance，对应后端 analysis.resonance 顶层字段（组装下沉后生产） */
+  signalTier?: RankTrendSignalTier
+  tierReasons?: RankTrendTierReasons
 }
 
 export interface JumpEvent {

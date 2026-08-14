@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.analysis.ranktrend.tier_monotonicity import MAX_UNKNOWN_RATE, MIN_S_SAMPLES
 from backend.core.backtest import _round_or_none
 
+# tier_risk_adjusted 惩罚权重（回测方案 §5.2）
+TIER_PENALTY_HARD_CONSTRAINT = 0.5
+TIER_PENALTY_S_SAMPLE = 0.2
+TIER_PENALTY_UNKNOWN_RATE = 1.0
 
-def score(result: dict[str, Any], objective: str) -> float:
+
+def score(result: dict[str, Any], objective: str, request: dict[str, Any] | None = None) -> float:
     if objective == "ranktrend_jump":
         total_return = float(result.get("totalReturn") or 0)
         win_rate = float(result.get("winRate") or 0)
@@ -24,12 +30,38 @@ def score(result: dict[str, Any], objective: str) -> float:
         trade_count = int(result.get("tradeCount") or 0)
         low_trade_penalty = max(0, 3 - trade_count) * 0.05
         return float(result.get("winRate") or 0) - low_trade_penalty
-    if objective == "risk_adjusted":
+    if objective in ("risk_adjusted", "tier_risk_adjusted"):
         total_return = float(result.get("totalReturn") or 0)
         drawdown = abs(float(result.get("maxDrawdown") or 0))
         sharpe = float(result.get("sharpe") or 0)
-        return total_return - drawdown * 1.5 + sharpe * 0.02
+        base = total_return - drawdown * 1.5 + sharpe * 0.02
+        if objective == "tier_risk_adjusted":
+            # 回测方案 §5.2：档位硬约束违约/样本不足/unknown 占比惩罚（tierStats 由 trial 注入）
+            return base - tier_penalty(result.get("tierStats") or {})
+        return base
     return float(result.get("totalReturn") or 0)
+
+
+def tier_penalty(tier_stats: dict[str, Any]) -> float:
+    """档位单调性惩罚（回测方案 §5.2）。
+
+    - 硬约束违约（passHardConstraint=False）→ +0.5；
+    - S 档样本 < 30 → +0.2；
+    - unknown 占比 ≥ 5% → +unknown_rate * 1.0。
+    """
+    if not tier_stats:
+        return 0.0
+    monotonicity = tier_stats.get("monotonicity") or {}
+    penalty = 0.0
+    if monotonicity.get("passHardConstraint") is False:
+        penalty += TIER_PENALTY_HARD_CONSTRAINT
+    s_count = int(((tier_stats.get("tiers") or {}).get("S") or {}).get("count") or 0)
+    if s_count < MIN_S_SAMPLES:
+        penalty += TIER_PENALTY_S_SAMPLE
+    unknown_rate = float(tier_stats.get("unknownRate") or 0)
+    if unknown_rate >= MAX_UNKNOWN_RATE:
+        penalty += unknown_rate * TIER_PENALTY_UNKNOWN_RATE
+    return penalty
 
 
 def objective_for_phase(objective: str) -> str:
@@ -94,12 +126,16 @@ def score_trial(
 
 def phase_public(phase_eval: dict[str, Any], objective: str) -> dict[str, Any]:
     phase_objective = objective_for_phase(objective)
+    simulation = phase_eval["simulation"]
+    if phase_objective == "tier_risk_adjusted":
+        # phase 分数与 trial 分数口径一致：注入 metrics.tierStats 使档位惩罚生效
+        simulation = {**simulation, "tierStats": (phase_eval.get("metrics") or {}).get("tierStats")}
     return {
         "runId": phase_eval["runId"],
         "run_id": phase_eval["runId"],
         "range": phase_eval["range"],
         "signalFrameRange": phase_eval["signalFrameRange"],
-        "score": round(score(phase_eval["simulation"], phase_objective), 6),
+        "score": round(score(simulation, phase_objective), 6),
         "metrics": phase_eval["metrics"],
     }
 

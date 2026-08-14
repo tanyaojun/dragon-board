@@ -6,6 +6,7 @@ import type { Stock } from '../types'
 import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
 import { dataLayer } from '../services/DataLayer'
+import { getSynergyTier } from '@/services/rankTrend/tierDisplay'
 
 type SortField = string
 
@@ -30,6 +31,9 @@ function getRankTrendAnalysis(stock: any) {
  */
 const LIFECYCLE_UP_STAGES: ReadonlySet<string> = new Set(['ignition', 'expansion'])
 const LIFECYCLE_DOWN_STAGES: ReadonlySet<string> = new Set(['crowded', 'reversal', 'cooling'])
+
+/** 四维合并档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后，与四列打分排序对齐 */
+const SYNERGY_TIER_LEVEL: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 }
 
 /**
  * 三个方向字段（共振强度 / 排名趋势 / 生命周期）的方向排序组：
@@ -63,6 +67,13 @@ function getDirectionalSortRank(stock: any, field: SortField): number {
       null
     return direction === 'up' ? 1 : direction === 'down' ? -1 : 0
   }
+  if (field === 'synergyTier') {
+    // 四维方向组：S/A/B 方向一致强买（buy 类）在前，D/E 反向/风险在后；C/unknown/缺失中性
+    const tier = getSynergyTier(stock)
+    if (tier === 'S' || tier === 'A' || tier === 'B') return 1
+    if (tier === 'D' || tier === 'E') return -1
+    return 0
+  }
   return 0
 }
 
@@ -89,6 +100,11 @@ function getStockSortValue(stock: Stock, field: SortField): string | number | nu
     const projected = (stock as any)._volumePriceScore
     if (projected !== undefined) return toFiniteNumber(projected)
     return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.volumePrice?.score)
+  }
+  if (field === 'synergyTier') {
+    // 四维等级值（S=5 → E=0）；unknown/缺失 → null 排最后
+    const tier = getSynergyTier(stock)
+    return tier && tier !== 'unknown' ? SYNERGY_TIER_LEVEL[tier] : null
   }
   if (field === 'avgRank') {
     return (

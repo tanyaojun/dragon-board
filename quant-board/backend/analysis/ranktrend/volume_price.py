@@ -226,6 +226,97 @@ def compute_volume_price_score(
     }
 
 
+def _synergy_tier(
+    res_tier: str | None,
+    res_dir: str | None,
+    rank_tier: str | None,
+    rank_dir: str | None,
+    vp_tier: str | None,
+    vp_dir: str | None,
+    lc_tier: str | None,
+    config: RankTrendConfig | None = None,
+) -> tuple[str, list[str]]:
+    """四维合并档位（synergy.signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §7。
+
+    阈值读 config.tierSynergyVote*（vote 求和为整数，strong/weak/reverse 均为 int）。
+    """
+    c = config or RankTrendConfig()
+    if lc_tier == "E":
+        return "E", ["周期一票否决"]
+    if vp_tier == "E":
+        return "D", ["量价出货硬风险"]
+
+    def _vote(tier: str | None, direction: str | None) -> int:
+        if tier in ("unknown", None) or not direction:
+            return 0
+        if direction in ("buy", "up"):
+            return 1
+        if direction in ("sell", "down"):
+            return -1
+        return 0
+
+    v = _vote(res_tier, res_dir) + _vote(rank_tier, rank_dir) + _vote(vp_tier, vp_dir)
+    if v >= c.tierSynergyVoteStrong and lc_tier == "A":
+        tier, reasons = "S", ["方向一致强买 + 环境优选"]
+    elif v >= c.tierSynergyVoteStrong:
+        tier, reasons = "A", ["方向一致强买"]
+    elif v == c.tierSynergyVoteWeak:
+        tier, reasons = "B", ["方向分歧，弱买"]
+    elif v <= c.tierSynergyVoteReverse:
+        tier, reasons = "D", ["反向"]
+    else:
+        tier, reasons = "C", ["无明确方向"]
+    # 周期 B（caution）/D（cooling/crowded 回避）时 S/A 降一档
+    if lc_tier in ("B", "D") and tier in ("S", "A"):
+        tier = "A" if tier == "S" else "B"
+        reasons = reasons + [f"周期 {lc_tier} 环境降档"]
+    return tier, reasons
+
+
+def assemble_observation(
+    analysis: dict[str, Any],
+    stock: dict[str, Any],
+    config: RankTrendConfig | None = None,
+) -> dict[str, Any]:
+    """组装 observation.volumePrice / observation.synergy + 各维 signalTier（回测方案 §3.2）。
+
+    与 API 单股链路（原 ranktrend_routes.py 内联组装）同源：resonance 已写入 analysis 时参与
+    synergy 投票；replay 链路无 resonance（缺横截面市场 median）时共振维缺票（vote=0），
+    synergy 仍可计算。返回写入后的 observation。
+    """
+    c = config or RankTrendConfig()
+    observation = analysis.setdefault("observation", {})
+    code = str(stock.get("code") or "")
+    resonance = analysis.get("resonance") or {}
+    vp = compute_volume_price_score(
+        code,
+        stock.get("change"),
+        stock.get("volumeRatio"),
+        stock.get("zlje"),
+        stock.get("zljzb"),
+        c,
+    )
+    observation["volumePrice"] = vp
+    observation["synergy"] = compute_synergy_state(
+        (observation.get("lifecycle") or {}).get("stage"),
+        vp.get("score"),
+        (observation.get("rankTrend") or {}).get("direction"),
+        resonance.get("direction"),
+        stock.get("zljzb"),
+        c,
+    )
+    _syn_tier, _syn_reasons = _synergy_tier(
+        resonance.get("signalTier"), resonance.get("direction"),
+        (observation.get("rankTrend") or {}).get("signalTier"), (observation.get("rankTrend") or {}).get("direction"),
+        vp.get("signalTier"), vp.get("direction"),
+        (observation.get("lifecycle") or {}).get("signalTier"),
+        c,
+    )
+    observation["synergy"]["signalTier"] = _syn_tier
+    observation["synergy"]["tierReasons"] = _syn_reasons
+    return observation
+
+
 def compute_synergy_state(
     stage: Any,
     vp_score: float | None,

@@ -40,6 +40,20 @@ def default_search_space() -> dict[str, list[Any]]:
         "tierBIgnitionShortMomentumMin": [1.5, 3.0, 5.0],
         "tierBIgnitionAccelMin": [0.0, 0.5, 1.0],
         "tierBIgnitionRiskPressureMax": [0.50, 0.65, 0.80],
+        # ── 五维观察档位阈值（回测方案 §4.1；默认值=当前硬编码，float 参数居中，vote/开关取首元素）──
+        "tierResonanceReversalPenaltyMin": [0.5, 0.6, 0.7],
+        "tierResonanceJumpFreshnessMin": [0.4, 0.5, 0.6],
+        "tierResonancePersistenceMin": [0.5, 0.6, 0.7],
+        "tierResonanceEntryStrengthMin": [0.2, 0.3, 0.4],
+        "tierRankTrendStrongMin": [0.4, 0.5, 0.6],
+        "tierRankTrendConfirmMin": [0.2, 0.25, 0.3],
+        # vote 阈值：from_patch 强校验 weak < strong，有效组合 (weak,strong)∈{(1,2),(1,3),(2,3)}
+        "tierSynergyVoteStrong": [2, 3],
+        "tierSynergyVoteWeak": [1, 2],
+        "tierSynergyVoteReverse": [-1, 0],
+        # ── synergy 交易开关（§3.3，交易层参数，to_trade_config 透传）──
+        "synergyEntryTierMin": ["none", "a"],  # none(基线) vs a(S/A 入场)，s 单独验证
+        "synergyExitOnDanger": [False, True],
         # ── 交易层 ──
         "maxPositions": [3, 5, 8],
         "minJumpConfidence": [DEFAULT_TRADE_CONFIG["minJumpConfidence"]],

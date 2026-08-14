@@ -1,0 +1,133 @@
+"""RankTrend tier 阈值参数化（回测方案 §3.1）：RankTrendConfig 新增 tier* 字段与强校验。
+
+合同（docs/ranktrend-signal-tier-backtest-plan.md §3.1）：
+- 9 个 tier* 字段，默认值 = 当前硬编码值（golden 不漂移）。
+- from_patch 强校验：
+  - 0 < tierRankTrendConfirmMin < tierRankTrendStrongMin <= 1
+  - tierSynergyVoteReverse <= tierSynergyVoteWeak < tierSynergyVoteStrong（weak 严格小于 strong）
+  - 0 <= tierResonance*Min <= 1
+  - 不满足时 from_patch 抛 ValueError（回测 trial 记 failed，防止非法阈值污染）。
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from backend.analysis.ranktrend.engine import RankTrendConfig
+
+
+def test_tier_fields_defaults_match_hardcoded_values() -> None:
+    """默认值 = 当前硬编码（engine/volume_price/_synergy_tier 现状），保证 golden 不漂移。"""
+    c = RankTrendConfig()
+    assert c.tierResonanceReversalPenaltyMin == 0.6
+    assert c.tierResonanceJumpFreshnessMin == 0.5
+    assert c.tierResonancePersistenceMin == 0.6
+    assert c.tierResonanceEntryStrengthMin == 0.3
+    assert c.tierRankTrendStrongMin == 0.5
+    assert c.tierRankTrendConfirmMin == 0.25
+    assert c.tierSynergyVoteStrong == 2
+    assert c.tierSynergyVoteWeak == 1
+    assert c.tierSynergyVoteReverse == -1
+
+
+def test_tier_fields_patch_applies() -> None:
+    c = RankTrendConfig.from_patch(
+        {
+            "tierResonanceReversalPenaltyMin": 0.7,
+            "tierRankTrendStrongMin": 0.6,
+            "tierRankTrendConfirmMin": 0.3,
+            "tierSynergyVoteStrong": 3,
+            "tierSynergyVoteWeak": 1,
+            "tierSynergyVoteReverse": 0,
+        }
+    )
+    assert c.tierResonanceReversalPenaltyMin == 0.7
+    assert c.tierRankTrendStrongMin == 0.6
+    assert c.tierRankTrendConfirmMin == 0.3
+    assert c.tierSynergyVoteStrong == 3
+    assert c.tierSynergyVoteWeak == 1
+    assert c.tierSynergyVoteReverse == 0
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"tierRankTrendConfirmMin": 0.5, "tierRankTrendStrongMin": 0.5},  # confirm == strong
+        {"tierRankTrendConfirmMin": 0.6, "tierRankTrendStrongMin": 0.5},  # confirm > strong
+        {"tierRankTrendConfirmMin": 0.0},  # confirm <= 0
+        {"tierRankTrendStrongMin": 1.1},  # strong > 1
+        {"tierRankTrendStrongMin": 0.2, "tierRankTrendConfirmMin": 0.2},  # confirm == strong（边界）
+        {"tierSynergyVoteWeak": 2, "tierSynergyVoteStrong": 2},  # weak == strong（分支不可达）
+        {"tierSynergyVoteWeak": 3, "tierSynergyVoteStrong": 2},  # weak > strong
+        {"tierSynergyVoteReverse": 1, "tierSynergyVoteWeak": 0},  # reverse(1) > weak(0)
+        {"tierSynergyVoteReverse": 2},  # reverse 越界
+        {"tierResonanceReversalPenaltyMin": -0.1},
+        {"tierResonanceJumpFreshnessMin": 1.01},
+        {"tierResonancePersistenceMin": -0.01},
+        {"tierResonanceEntryStrengthMin": 1.5},
+    ],
+)
+def test_tier_fields_invalid_patch_raises(patch: dict) -> None:
+    with pytest.raises(ValueError):
+        RankTrendConfig.from_patch(patch)
+
+
+def test_tier_fields_boundary_valid_patch_ok() -> None:
+    """合法边界：confirm 略小于 strong、weak 略小于 strong、resonance 恰在 [0,1] 端点。"""
+    c = RankTrendConfig.from_patch(
+        {
+            "tierRankTrendConfirmMin": 0.001,
+            "tierRankTrendStrongMin": 1.0,
+            "tierSynergyVoteWeak": 1,
+            "tierSynergyVoteStrong": 3,
+            "tierSynergyVoteReverse": 1,
+            "tierResonanceReversalPenaltyMin": 0.0,
+            "tierResonancePersistenceMin": 1.0,
+        }
+    )
+    assert c.tierRankTrendConfirmMin == 0.001
+    assert c.tierRankTrendStrongMin == 1.0
+    assert c.tierSynergyVoteStrong == 3
+    assert c.tierSynergyVoteReverse == 1
+
+
+def test_tier_fields_unknown_keys_still_ignored() -> None:
+    """from_patch 对未知 key 保持现有宽松行为（不抛错、不写入）。"""
+    c = RankTrendConfig.from_patch({"notAField": 123, "tierSynergyVoteStrong": 2})
+    assert c.tierSynergyVoteStrong == 2
+    assert not hasattr(c, "notAField")
+
+
+def test_tier_fields_bool_patch_preserved() -> None:
+    """现有 bool 字段转换行为不回归（from_patch 内 isinstance bool 分支）。"""
+    c = RankTrendConfig.from_patch({"requireMacdGoldenCross": "true"})
+    assert c.requireMacdGoldenCross is True
+
+
+def test_tier_fields_empty_patch_no_raise() -> None:
+    """from_patch(None)/from_patch({}) 不触发校验、不抛错。"""
+    assert RankTrendConfig.from_patch(None).tierRankTrendStrongMin == 0.5
+    assert RankTrendConfig.from_patch({}).tierSynergyVoteStrong == 2
+
+
+def test_tier_fields_macd_fix_still_applies() -> None:
+    """既有 macdSlow/macdFast 强制修正不因新校验回归。"""
+    c = RankTrendConfig.from_patch({"macdFast": 34, "macdSlow": 21})
+    assert c.macdSlow == 35  # 修正为 fast+1
+
+
+def test_tier_fields_str_numeric_patch_converted() -> None:
+    """str 数值 patch 被按字段类型转换（float/int），非法字符串抛 ValueError 而非 TypeError。"""
+    c = RankTrendConfig.from_patch({"tierRankTrendStrongMin": "0.6", "tierSynergyVoteStrong": "3"})
+    assert c.tierRankTrendStrongMin == 0.6
+    assert c.tierSynergyVoteStrong == 3
+    with pytest.raises(ValueError):
+        RankTrendConfig.from_patch({"tierSynergyVoteWeak": "1.5"})  # int 字段非法值
+    with pytest.raises(ValueError):
+        RankTrendConfig.from_patch({"tierRankTrendStrongMin": "abc"})
+
+
+def test_tier_fields_synergy_vote_float_rejected() -> None:
+    """tierSynergyVote* 强制整数：float 非法值被拒（v==1.5 永不可达会破坏分支语义）。"""
+    with pytest.raises(ValueError):
+        RankTrendConfig.from_patch({"tierSynergyVoteWeak": 1.5})

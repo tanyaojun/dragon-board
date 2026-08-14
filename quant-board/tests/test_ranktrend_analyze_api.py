@@ -230,6 +230,12 @@ def test_analyze_returns_resonance_and_market_median(monkeypatch):
     assert "marketMedianPercentile" in frame
     assert "marketMedianShortChange" in frame
     assert frame["stocks"][0]["analysis"]["resonance"]["status"] in ("ok", "insufficient")
+    # 组装下沉（回测方案 §3.2）：API 输出仍含 observation.volumePrice / synergy.signalTier
+    analysis = frame["stocks"][0]["analysis"]
+    observation = analysis.get("observation") or {}
+    assert observation.get("volumePrice") is not None
+    assert observation["volumePrice"].get("signalTier") is not None
+    assert observation.get("synergy", {}).get("signalTier") in ("S", "A", "B", "C", "D", "E", "unknown", None)
 
 
 def test_analyze_finds_recent_frames_when_dataset_exceeds_200_window(monkeypatch):

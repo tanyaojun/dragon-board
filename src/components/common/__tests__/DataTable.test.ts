@@ -114,11 +114,11 @@ describe('DataTable row detail interactions', () => {
     const source = dataTableSource()
 
     expect(source).toContain("{ key: 'resonanceIntensity', label: '共振'")
-    expect(source).toContain("resonanceIntensity: '52px'")
+    expect(source).toContain("resonanceIntensity: '60px'")
     expect(source).toContain("col.key === 'resonanceIntensity'")
     expect(source).toContain('getResonanceCellValue')
     expect(source).toContain('getResonanceCellClass')
-    expect(source).toContain('@mouseenter="showConfidenceTooltip($event, stock, \'resonanceIntensity\')"')
+    expect(source).toContain('@mouseenter="showTierTooltip($event, stock, \'resonanceIntensity\')"')
     expect(source).toContain('rankTrend?.resonance')
     expect(source).toContain('相对市场')
     expect(source).toContain('路径持续性')
@@ -140,8 +140,8 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain("{ key: 'resonanceIntensity', label: '共振'")
     expect(source).toContain("{ key: 'rankTrendStrength', label: '趋势'")
     expect(source).toContain("{ key: 'lifecycleOpportunity', label: '周期'")
-    expect(source).toContain("rankTrendStrength: '52px'")
-    expect(source).toContain("lifecycleOpportunity: '64px'")
+    expect(source).toContain("rankTrendStrength: '60px'")
+    expect(source).toContain("lifecycleOpportunity: '60px'")
     expect(source).toContain("openObservationPanel(stock, 'resonance')")
     expect(source).toContain("openObservationPanel(stock, 'technical')")
     expect(source).toContain("openObservationPanel(stock, 'lifecycle')")
@@ -153,9 +153,21 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
+    // 三列风格统一：方向 + 数值%（无徽章，档位说明移入 tooltip，避免与四维最终信号混淆）
+    expect(source).toContain('getDirectionArrow(getResonanceDirection(stock))')
+    expect(source).toContain('getDirectionArrow(getRankTrendDirection(stock))')
+    expect(source).toContain('getDirectionArrow(getLifecycleDirection(stock))')
+    // 四列（共振/趋势/量价/周期）单元格不再渲染 tier-badge；tooltip 拼接"档位字母：原因"
+    expect(source).not.toContain('tierBadgeClass(getResonanceTier(stock))')
+    expect(source).not.toContain('tierBadgeClass(getRankTrendTier(stock))')
+    expect(source).not.toContain('tierBadgeClass(getVolumePriceTier(stock))')
+    expect(source).not.toContain('tierBadgeClass(getLifecycleTier(stock))')
+    expect(source).toContain("parts.join('：')")
+    // 周期列不再在单元格渲染阶段文字（点火/扩散等移入 tooltip）
+    expect(source).not.toContain('{{ getLifecycleStageLabel(stock) }}')
     // 量价配合：独立四象限列，样式/ tooltip 参照三指标观察列；数据由后端生产（_volumePrice*）前端只消费
     expect(source).toContain("{ key: 'volumePriceQuadrant', label: '量价'")
-    expect(source).toContain("volumePriceQuadrant: '52px'")
+    expect(source).toContain("volumePriceQuadrant: '60px'")
     expect(source).toContain('_volumePriceScore')
     expect(source).toContain('_volumePriceQuadrant')
     expect(source).toContain('getQuadrantText')
@@ -163,7 +175,7 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getVolumePrice')
     expect(source).toContain('stock?._volumePriceScore ?? vp.score')
     expect(source).toContain("getRankTrendAnalysis(stock)?.observation?.volumePrice")
-    expect(source).toContain("@mouseenter=\"showConfidenceTooltip($event, stock, 'volumePriceQuadrant')\"")
+    expect(source).toContain("@mouseenter=\"showTierTooltip($event, stock, 'volumePriceQuadrant')\"")
     expect(source).toContain("field === 'volumePriceQuadrant'")
     expect(source).toContain('【量价配合】')
     // 前端不生产量价评分（后端 observation.volumePrice）
@@ -182,10 +194,10 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('const showConfidenceTooltip = (event: MouseEvent, stock: any, field = \'\')')
     expect(source).toContain('const getFieldTooltip = (field: string, stock: any): string => {')
 
-    // 三列分别传自己的 field，不共用同一份内容
-    expect(source).toContain("showConfidenceTooltip($event, stock, 'resonanceIntensity')")
-    expect(source).toContain("showConfidenceTooltip($event, stock, 'rankTrendStrength')")
-    expect(source).toContain("showConfidenceTooltip($event, stock, 'lifecycleOpportunity')")
+    // 三列分别传自己的 field，不共用同一份内容（hover 走 showTierTooltip，内部回退 showConfidenceTooltip）
+    expect(source).toContain("showTierTooltip($event, stock, 'resonanceIntensity')")
+    expect(source).toContain("showTierTooltip($event, stock, 'rankTrendStrength')")
+    expect(source).toContain("showTierTooltip($event, stock, 'lifecycleOpportunity')")
 
     // 共振分支只含共振专属内容
     expect(source).toContain("if (field === 'resonanceIntensity') {")
@@ -198,6 +210,105 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('【生命周期】')
     // 兜底：无 field 时仍是完整置信度
     expect(source).toContain('content: field ? getFieldTooltip(field, stock) : getConfidenceTitle(stock)')
+  })
+
+  test('adds a synergy tier column with badge and fallback', () => {
+    const source = dataTableSource()
+
+    // 新增【四维】列（紧跟周期列后，group comprehensive）
+    expect(source).toContain("{ key: 'synergyTier', label: '四维'")
+    expect(source).toContain("synergyTier: '60px'")
+    expect(source).toContain("col.key === 'synergyTier'")
+    // 读取 synergy 档位（前端路径）+ 徽章 + 悬停明细
+    expect(source).toContain('getSynergyTier(stock)')
+    expect(source).toContain('tierBadgeClass(getSynergyTier(stock))')
+    expect(source).toContain('getSynergyTierDetail')
+    expect(source).toContain('getSynergyTierReasons(stock)')
+    expect(source).toContain('tier-badge')
+    // 缺档位回退 --（不渲染空徽章、不报错）
+    expect(source).toContain('<span v-else class="trend-steady">--</span>')
+    // 前端不重算档位
+    expect(source).not.toContain('computeSynergyTier')
+  })
+
+  test('collapses the nine platform rank columns by default with a toggle', () => {
+    const source = dataTableSource()
+
+    // 折叠集合：8 平台 + 均榜（9 个），默认折叠
+    expect(source).toContain("const rankColumnsCollapsed = ref(true)")
+    for (const key of ['emRank', 'thsRank', 'kplRank', 'tdxRank', 'xqRank', 'clsRank', 'tgbRank', 'dzhRank', 'avgRank']) {
+      expect(source).toContain(`'${key}'`)
+    }
+    // visibleColumns 过滤折叠列
+    expect(source).toContain('COLLAPSIBLE_RANK_KEYS.has(col.key)')
+    // 切换函数
+    expect(source).toContain('const toggleRankColumns')
+    // 综合列左侧三角按钮（左/右三角，点击切换，不触发排序冒泡）
+    expect(source).toContain('rank-collapse-toggle')
+    expect(source).toContain('@click.stop="toggleRankColumns"')
+    expect(source).toContain("rankColumnsCollapsed ? '▶' : '◀'")
+  })
+
+  test('collapses the four observation columns via the synergy tier toggle', () => {
+    const source = dataTableSource()
+
+    // 折叠集合：共振/趋势/量价/周期，默认展开
+    expect(source).toContain('const observationColumnsCollapsed = ref(false)')
+    for (const key of ['resonanceIntensity', 'rankTrendStrength', 'volumePriceQuadrant', 'lifecycleOpportunity']) {
+      expect(source).toContain(`'${key}'`)
+    }
+    // visibleColumns 过滤观察列
+    expect(source).toContain('COLLAPSIBLE_OBSERVATION_KEYS.has(col.key)')
+    expect(source).toContain('const toggleObservationColumns')
+    // 四维列左侧三角按钮（与综合列折叠方式一致）
+    expect(source).toContain("@click.stop=\"toggleObservationColumns\"")
+    expect(source).toContain("observationColumnsCollapsed ? '▶' : '◀'")
+  })
+
+  test('collapses the quote columns (成交额/流通值/总市值/市盈率/市净率) via the volume toggle', () => {
+    const source = dataTableSource()
+
+    // 折叠集合：成交额/流通值/总市值/市盈率/市净率，默认展开
+    expect(source).toContain("const quoteColumnsCollapsed = ref(false)")
+    for (const key of ['turnover', 'cirMV', 'totalMV', 'pe', 'pb']) {
+      expect(source).toContain(`'${key}'`)
+    }
+    // visibleColumns 过滤行情列
+    expect(source).toContain('COLLAPSIBLE_QUOTE_KEYS.has(col.key)')
+    expect(source).toContain('const toggleQuoteColumns')
+    // 成交量列 title 右侧三角按钮（与综合/四维折叠方式一致）
+    expect(source).toContain("@click.stop=\"toggleQuoteColumns\"")
+    expect(source).toContain("quoteColumnsCollapsed ? '▶' : '◀'")
+  })
+
+  test('opens the observation panel from the volume price column too', () => {
+    const source = dataTableSource()
+
+    // 量价列与共振/趋势/周期一致：点击打开 OBSERVATION 面板（volumePrice track）
+    expect(source).toContain("@click.stop=\"openObservationPanel(stock, 'volumePrice')\"")
+    expect(source).toContain("@click.stop=\"openObservationPanel(stock, 'resonance')\"")
+    expect(source).toContain("@click.stop=\"openObservationPanel(stock, 'technical')\"")
+    expect(source).toContain("@click.stop=\"openObservationPanel(stock, 'lifecycle')\"")
+  })
+
+  test('centers the synergy tier badge in its cell', () => {
+    const source = dataTableSource()
+
+    expect(source).toContain('.synergy-tier-cell')
+    expect(source).toContain('align-items: center')
+    expect(source).toContain('justify-content: center')
+  })
+
+  test('keeps observation cells vertically centered and lifecycle tooltip carries stage', () => {
+    const source = dataTableSource()
+
+    // .observation-cell 撑满 cell 高度并垂直居中（解决徽章靠上）
+    expect(source).toContain('height: 100%')
+    expect(source).toContain('line-height: 1')
+    // 周期 tooltip：阶段文字 + 档位原因拼接（如"扩散 A：优选路径"）
+    expect(source).toContain("field === 'lifecycleOpportunity'")
+    expect(source).toContain('getLifecycleStageLabel(stock)')
+    expect(source).toContain("parts.join('：')")
   })
 
   test('market table does not include a theme momentum column (panel only)', () => {

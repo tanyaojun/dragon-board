@@ -41,7 +41,30 @@
         <div class="header-row" :style="gridTemplateStyle">
           <div v-for="col in visibleColumns" :key="col.key" class="header-cell"
             :class="{ sorted: uiStore.sort.field === col.key }" @click="uiStore.toggleSort(col.key as any)">
-            {{ col.label }}
+            <template v-if="col.key === 'compRank'">
+              <button class="rank-collapse-toggle" :class="{ collapsed: rankColumnsCollapsed }"
+                :title="rankColumnsCollapsed ? '展开热榜排名列' : '折叠热榜排名列'" @click.stop="toggleRankColumns" type="button">
+                <span class="rank-collapse-arrow">{{ rankColumnsCollapsed ? '▶' : '◀' }}</span>
+              </button>
+              {{ col.label }}
+            </template>
+            <template v-else-if="col.key === 'synergyTier'">
+              <button class="rank-collapse-toggle" :class="{ collapsed: observationColumnsCollapsed }"
+                :title="observationColumnsCollapsed ? '展开观察列（共振/趋势/量价/周期）' : '隐藏观察列（共振/趋势/量价/周期）'"
+                @click.stop="toggleObservationColumns" type="button">
+                <span class="rank-collapse-arrow">{{ observationColumnsCollapsed ? '▶' : '◀' }}</span>
+              </button>
+              {{ col.label }}
+            </template>
+            <template v-else-if="col.key === 'volume'">
+              {{ col.label }}
+              <button class="rank-collapse-toggle" :class="{ collapsed: quoteColumnsCollapsed }"
+                :title="quoteColumnsCollapsed ? '展开成交额/流通值/总市值/市盈率/市净率' : '折叠成交额/流通值/总市值/市盈率/市净率'"
+                @click.stop="toggleQuoteColumns" type="button">
+                <span class="rank-collapse-arrow">{{ quoteColumnsCollapsed ? '▶' : '◀' }}</span>
+              </button>
+            </template>
+            <template v-else>{{ col.label }}</template>
             <span v-if="uiStore.sort.field === col.key" class="sort-icon">
               {{ uiStore.sort.order === 'asc' ? '↑' : '↓' }}
             </span>
@@ -95,23 +118,29 @@
             <!-- 共振强度列 -->
             <template v-else-if="col.key === 'resonanceIntensity'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'resonance')"
-                @mouseenter="showConfidenceTooltip($event, stock, 'resonanceIntensity')"
+                @mouseenter="showTierTooltip($event, stock, 'resonanceIntensity')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <span v-if="getResonanceCellValue(stock) != null" :class="getResonanceCellClass(stock)">
-                  {{ getDirectionArrow(getResonanceDirection(stock)) }}{{ getResonanceCellValue(stock) }}%
-                </span>
+                <template v-if="getResonanceCellValue(stock) != null">
+                  <span :class="getResonanceCellClass(stock)">
+                    {{ getDirectionArrow(getResonanceDirection(stock)) }}
+                  </span>
+                  <span :class="getResonanceCellClass(stock)">{{ getResonanceCellValue(stock) }}%</span>
+                </template>
                 <span v-else class="trend-steady">--</span>
               </div>
             </template>
 
             <template v-else-if="col.key === 'rankTrendStrength'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
-                @mouseenter="showConfidenceTooltip($event, stock, 'rankTrendStrength')"
+                @mouseenter="showTierTooltip($event, stock, 'rankTrendStrength')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <span v-if="getRankTrendStrengthValue(stock) != null"
-                  :class="getDirectionClass(getRankTrendDirection(stock))">
-                  {{ getDirectionArrow(getRankTrendDirection(stock)) }}{{ getRankTrendStrengthValue(stock) }}%
-                </span>
+                <template v-if="getRankTrendStrengthValue(stock) != null">
+                  <span :class="getDirectionClass(getRankTrendDirection(stock))">
+                    {{ getDirectionArrow(getRankTrendDirection(stock)) }}
+                  </span>
+                  <span :class="getDirectionClass(getRankTrendDirection(stock))">{{ getRankTrendStrengthValue(stock)
+                  }}%</span>
+                </template>
                 <span v-else class="trend-steady">--</span>
                 <span v-if="getMacdCross(stock) === 'golden'" class="macd-badge golden" title="MACD 金叉">▲</span>
                 <span v-else-if="getMacdCross(stock) === 'death'" class="macd-badge death" title="MACD 死叉">▼</span>
@@ -120,19 +149,35 @@
 
             <template v-else-if="col.key === 'lifecycleOpportunity'">
               <div class="observation-cell lifecycle-cell" @click.stop="openObservationPanel(stock, 'lifecycle')"
-                @mouseenter="showConfidenceTooltip($event, stock, 'lifecycleOpportunity')"
+                @mouseenter="showTierTooltip($event, stock, 'lifecycleOpportunity')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <span v-if="getLifecycleOpportunityValue(stock) != null" :class="getLifecycleClass(stock)">
-                  {{ getLifecycleStageLabel(stock) }} {{ getLifecycleOpportunityValue(stock) }}%
-                </span>
+                <template v-if="getLifecycleOpportunityValue(stock) != null">
+                  <span :class="getLifecycleClass(stock)">
+                    {{ getDirectionArrow(getLifecycleDirection(stock)) }}
+                  </span>
+                  <span :class="getLifecycleClass(stock)">{{ getLifecycleOpportunityValue(stock) }}%</span>
+                </template>
                 <span v-else class="trend-steady">--</span>
               </div>
             </template>
 
             <template v-else-if="col.key === 'volumePriceQuadrant'">
-              <div class="observation-cell" @mouseenter="showConfidenceTooltip($event, stock, 'volumePriceQuadrant')"
+              <div class="observation-cell" @click.stop="openObservationPanel(stock, 'volumePrice')"
+                @mouseenter="showTierTooltip($event, stock, 'volumePriceQuadrant')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <span :class="getQuadrantClass(stock)">{{ getQuadrantText(stock) }}</span>
+              </div>
+            </template>
+
+            <!-- 四维合并档位列（回测方案配套：消费 synergy.signalTier，前端只展示） -->
+            <template v-else-if="col.key === 'synergyTier'">
+              <div class="observation-cell synergy-tier-cell"
+                @mouseenter="showTierTooltip($event, stock, 'synergyTier')" @mousemove="moveConfidenceTooltip($event)"
+                @mouseleave="hideConfidenceTooltip">
+                <span v-if="getSynergyTier(stock)" class="tier-badge" :class="tierBadgeClass(getSynergyTier(stock))">
+                  {{ tierBadgeLabel(getSynergyTier(stock)) }}
+                </span>
+                <span v-else class="trend-steady">--</span>
               </div>
             </template>
 
@@ -227,6 +272,17 @@ import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import RankTrendObservationPanel from '../../components/panels/RankTrendObservationPanel.vue'
 import type { ObservationTrack } from '@/services/rankTrend/RankTrendObservationService'
+import {
+  getLifecycleTier,
+  getRankTrendTier,
+  getResonanceTier,
+  getSynergyTier,
+  getSynergyTierDetail,
+  getSynergyTierReasons,
+  getVolumePriceTier,
+  tierBadgeClass,
+  tierBadgeLabel,
+} from '@/services/rankTrend/tierDisplay'
 import { classifyVolumeRatio, volumeRatioStateLabel } from '@/utils/volumeRatio'
 import {
   classifyFundSignal,
@@ -335,25 +391,27 @@ const columns = [
   { key: 'rankTrendStrength', label: '趋势', group: 'comprehensive', always: true },
   { key: 'volumePriceQuadrant', label: '量价', group: 'comprehensive', always: true },
   { key: 'lifecycleOpportunity', label: '周期', group: 'comprehensive', always: true },
+  { key: 'synergyTier', label: '四维', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
-  { key: 'volume', label: '成交量', group: 'quote', always: true },
-  { key: 'volumeRatio', label: '量比', group: 'quote', always: true },
-  { key: 'turnover', label: '成交额', group: 'quote', always: true },
+  { key: 'volumeRatio', label: '3日量比', group: 'quote', always: true },
   { key: 'turnoverRate', label: '换手%', group: 'quote', always: true },
+  { key: 'volume', label: '成交量', group: 'quote', always: true },
+  { key: 'turnover', label: '成交额', group: 'quote', always: true },
   { key: 'cirMV', label: '流通值', group: 'quote', always: true },
   { key: 'totalMV', label: '总市值', group: 'quote', always: true },
+  { key: 'pe', label: '市盈率', group: 'quote', always: true },
+  { key: 'pb', label: '市净率', group: 'quote', always: true },
 ]
 
 // ========== 列宽映射==========
 const COLUMN_WIDTHS: Record<string, string> = {
   code: '60px',
   name: '80px',
-  themes: '120px',
-  price: '60px',
+  themes: '150px',
+  price: '70px',
   change: '70px',
   speed: '70px',
-  volumePriceQuadrant: '52px',
   emRank: '50px',
   thsRank: '50px',
   kplRank: '50px',
@@ -364,23 +422,58 @@ const COLUMN_WIDTHS: Record<string, string> = {
   dzhRank: '50px',
   avgRank: '50px',
   compRank: '50px',
-  resonanceIntensity: '52px',
-  rankTrendStrength: '52px',
-  lifecycleOpportunity: '64px',
+  resonanceIntensity: '60px',
+  rankTrendStrength: '60px',
+  volumePriceQuadrant: '60px',
+  lifecycleOpportunity: '60px',
+  synergyTier: '60px',
   zlje: '90px',
   zljzb: '90px',
-  volume: '80px',
-  volumeRatio: '40px',
-  turnover: '80px',
-  turnoverRate: '80px',
-  cirMV: '80px',
-  totalMV: '80px',
-  pe: '80px',
-  pb: '80px',
+  volume: '90px',
+  volumeRatio: '50px',
+  turnover: '90px',
+  turnoverRate: '90px',
+  cirMV: '90px',
+  totalMV: '90px',
+  pe: '60px',
+  pb: '60px',
 }
 
 // ========== 计算属性==========
-const visibleColumns = computed(() => columns.filter(col => col.always))
+// 可折叠热榜排名列（8 平台 + 均榜）：默认折叠以缓解横向溢出，【综合】列左侧三角按钮切换
+const COLLAPSIBLE_RANK_KEYS = new Set([
+  'emRank', 'thsRank', 'kplRank', 'tdxRank', 'xqRank', 'clsRank', 'tgbRank', 'dzhRank', 'avgRank',
+])
+const rankColumnsCollapsed = ref(true)
+const toggleRankColumns = () => {
+  rankColumnsCollapsed.value = !rankColumnsCollapsed.value
+}
+
+// 可折叠观察列（共振/趋势/量价/周期）：默认展开，【四维】列左侧三角按钮切换（隐藏/展开四列明细）
+const COLLAPSIBLE_OBSERVATION_KEYS = new Set([
+  'resonanceIntensity', 'rankTrendStrength', 'volumePriceQuadrant', 'lifecycleOpportunity',
+])
+const observationColumnsCollapsed = ref(false)
+const toggleObservationColumns = () => {
+  observationColumnsCollapsed.value = !observationColumnsCollapsed.value
+}
+
+// 可折叠行情列（成交额/流通值/总市值/市盈率/市净率）：默认折叠，【成交量】列 title 右侧三角按钮切换
+const COLLAPSIBLE_QUOTE_KEYS = new Set(['turnover', 'cirMV', 'totalMV', 'pe', 'pb'])
+const quoteColumnsCollapsed = ref(false)
+const toggleQuoteColumns = () => {
+  quoteColumnsCollapsed.value = !quoteColumnsCollapsed.value
+}
+
+const visibleColumns = computed(() =>
+  columns.filter(
+    col =>
+      col.always &&
+      !(rankColumnsCollapsed.value && COLLAPSIBLE_RANK_KEYS.has(col.key)) &&
+      !(observationColumnsCollapsed.value && COLLAPSIBLE_OBSERVATION_KEYS.has(col.key)) &&
+      !(quoteColumnsCollapsed.value && COLLAPSIBLE_QUOTE_KEYS.has(col.key)),
+  )
+)
 const visibleGroups = computed(() => {
   const groups = new Set<string>()
   visibleColumns.value.forEach(col => groups.add(col.group))
@@ -714,6 +807,14 @@ const getLifecycleStage = (stock: any) =>
 const getLifecycleStageLabel = (stock: any) =>
   getAttentionStageDisplayText(getLifecycleStage(stock))
 
+// 生命周期方向（与 uiStore 排序方向组语义一致）：点火/扩散=上升(buy)，拥挤/反转/降温=下降(sell)
+const getLifecycleDirection = (stock: any) => {
+  const stage = getLifecycleStage(stock)
+  if (stage === 'ignition' || stage === 'expansion') return 'buy'
+  if (stage === 'crowded' || stage === 'reversal' || stage === 'cooling') return 'sell'
+  return 'hold'
+}
+
 const getLifecycleClass = (stock: any) => {
   const stage = getLifecycleStage(stock)
   return stage ? `lifecycle-${stage}` : 'observation-hold'
@@ -1037,6 +1138,73 @@ const showConfidenceTooltip = (event: MouseEvent, stock: any, field = '') => {
     x: event.clientX + 16,
     y: event.clientY + 16,
     content: field ? getFieldTooltip(field, stock) : getConfidenceTitle(stock),
+  }
+}
+
+// 各维档位命中规则原文（tierReasons），用于悬停展示；缺字段回退空数组（不伪造）
+const getTierReasonsOf = (stock: any, field: string): string[] => {
+  const rankTrend = getRankTrendAnalysis(stock)
+  const observation = rankTrend?.observation || {}
+  if (field === 'resonanceIntensity') {
+    return Array.isArray(rankTrend?.resonance?.tierReasons) ? rankTrend.resonance.tierReasons : []
+  }
+  if (field === 'rankTrendStrength') {
+    return Array.isArray(observation.rankTrend?.tierReasons) ? observation.rankTrend.tierReasons : []
+  }
+  if (field === 'volumePriceQuadrant') {
+    return Array.isArray(observation.volumePrice?.tierReasons) ? observation.volumePrice.tierReasons : []
+  }
+  if (field === 'lifecycleOpportunity') {
+    return Array.isArray(observation.lifecycle?.tierReasons) ? observation.lifecycle.tierReasons : []
+  }
+  return []
+}
+
+// 档位悬停：四列（共振/趋势/量价/周期）tooltip 显示"档位字母，原因"（如"B，方向确认但路径持续不足"），
+// 单元格不再渲染徽章以免与【四维】最终信号混淆；四维列保留徽章与完整说明
+const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
+  hideRowTooltip()
+  const lines: string[] = []
+  if (field === 'synergyTier') {
+    const tier = getSynergyTier(stock)
+    if (tier) {
+      lines.push(`四维合并档位 ${tierBadgeLabel(tier)}`)
+      lines.push(...getSynergyTierDetail(stock))
+      lines.push(...getSynergyTierReasons(stock))
+    }
+  } else if (field === 'lifecycleOpportunity') {
+    // 周期：阶段 + 档位字母 + 原因（如"扩散 A，优选路径"）
+    const stage = getLifecycleStageLabel(stock)
+    const tier = getLifecycleTier(stock)
+    const parts: string[] = []
+    if (stage && stage !== '未知') parts.push(stage)
+    if (tier && tier !== 'unknown') parts.push(tierBadgeLabel(tier) ?? '')
+    parts.push(...getTierReasonsOf(stock, field))
+    if (parts.length) lines.push(parts.join('：'))
+  } else {
+    // 共振/趋势/量价：档位字母 + 原因（如"B，方向确认但路径持续不足"）
+    const tier =
+      field === 'resonanceIntensity'
+        ? getResonanceTier(stock)
+        : field === 'rankTrendStrength'
+          ? getRankTrendTier(stock)
+          : field === 'volumePriceQuadrant'
+            ? getVolumePriceTier(stock)
+            : null
+    const parts: string[] = []
+    if (tier && tier !== 'unknown') parts.push(tierBadgeLabel(tier) ?? '')
+    parts.push(...getTierReasonsOf(stock, field))
+    if (parts.length) lines.push(parts.join('：'))
+  }
+  if (!lines.length) {
+    showConfidenceTooltip(event, stock, field)
+    return
+  }
+  confidenceTooltip.value = {
+    visible: true,
+    x: event.clientX + 16,
+    y: event.clientY + 16,
+    content: lines.join('\n'),
   }
 }
 
@@ -1982,6 +2150,38 @@ defineExpose({
   opacity: 0.8;
 }
 
+/* 热榜排名折叠按钮（【综合】列左侧） */
+.rank-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.rank-collapse-toggle:hover {
+  color: var(--color-highlight);
+}
+
+.rank-collapse-arrow {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.22s ease;
+}
+
+.rank-collapse-toggle.collapsed .rank-collapse-arrow {
+  transform: rotate(0deg);
+  /* ▶ 右三角：折叠态，点击展开 */
+}
+
 /* 数据行 */
 .data-row {
   display: grid;
@@ -2634,7 +2834,11 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
+  height: 100%;
+  /* 撑满 cell（48px 行高），观察列内容垂直居中，不再靠上 */
   min-height: 30px;
+  line-height: 1;
+  /* 覆盖 .cell 继承的 48px 行高，避免内部文本行盒撑高 */
   font-weight: 600;
   font-size: 12px;
   cursor: pointer;
@@ -2667,6 +2871,72 @@ defineExpose({
 .observation-hold,
 .lifecycle-cooling {
   color: #95a5a6;
+}
+
+/* 档位徽章（四维列方案 §4.4，与现有观察色系对齐） */
+.tier-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  min-width: 18px;
+  height: 18px;
+  margin: 0 3px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.tier-s {
+  color: #ff4757;
+  background: rgba(255, 71, 87, 0.14);
+  border: 1px solid rgba(255, 71, 87, 0.5);
+}
+
+.tier-a {
+  color: #ff6b81;
+  background: rgba(255, 107, 129, 0.12);
+  border: 1px solid rgba(255, 107, 129, 0.4);
+}
+
+.tier-b {
+  color: #ff9f43;
+  background: rgba(255, 159, 67, 0.12);
+  border: 1px solid rgba(255, 159, 67, 0.4);
+}
+
+.tier-c {
+  color: #95a5a6;
+  background: rgba(149, 165, 166, 0.12);
+  border: 1px solid rgba(149, 165, 166, 0.4);
+}
+
+.tier-d {
+  color: #2ed573;
+  background: rgba(46, 213, 115, 0.12);
+  border: 1px solid rgba(46, 213, 115, 0.4);
+}
+
+.tier-e {
+  color: #fff;
+  background: #e74c3c;
+  border: 1px solid #c0392b;
+  box-shadow: 0 0 6px rgba(231, 76, 60, 0.6);
+}
+
+.tier-unknown {
+  color: #7f8c8d;
+  background: transparent;
+  border: 1px dashed #7f8c8d;
+}
+
+.synergy-tier-cell {
+  min-width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* 量比保持稳定显示，数据状态留在悬浮说明中 */

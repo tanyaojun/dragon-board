@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.tier_monotonicity import tier_forward_returns, tier_monotonicity_score
 from backend.core.backtest import BacktestEngine, TradeSimulator
 from backend.optimization import objective
 from backend.optimization.search_space import freeze, to_strategy_config, to_trade_config
@@ -72,8 +73,12 @@ class TrialExecutor:
                     signal_cache,
                 )
             score_details = objective.score_trial(
-                train_eval["simulation"],
-                validation_eval["simulation"] if validation_eval else None,
+                {**train_eval["simulation"], "tierStats": (train_eval["metrics"] or {}).get("tierStats")},
+                (
+                    {**validation_eval["simulation"], "tierStats": (validation_eval["metrics"] or {}).get("tierStats")}
+                    if validation_eval
+                    else None
+                ),
                 objective_name,
                 request,
             )
@@ -92,6 +97,17 @@ class TrialExecutor:
                 "validation": objective.phase_public(validation_eval, objective_name) if validation_eval else None,
                 "metrics": (validation_eval or train_eval)["metrics"],
                 "stability": objective.trial_stability(train_eval["metrics"], validation_eval["metrics"] if validation_eval else None, score_details),
+                "tierMonotonicity": {
+                    "train": tier_monotonicity_score(train_eval["metrics"].get("tierStats") or {}),
+                    "validation": tier_monotonicity_score(validation_eval["metrics"].get("tierStats") or {}) if validation_eval else None,
+                },
+                "tierConstraintFailed": (
+                    (train_eval["metrics"].get("tierStats") or {}).get("monotonicity", {}).get("passHardConstraint") is False
+                    or (
+                        validation_eval is not None
+                        and (validation_eval["metrics"].get("tierStats") or {}).get("monotonicity", {}).get("passHardConstraint") is False
+                    )
+                ),
             }
             artifacts = [train_eval["artifact"]]
             if validation_eval:
@@ -141,6 +157,15 @@ class TrialExecutor:
         phase_signals = [signal for signal in signal_cache[signal_key] if str(signal.get("snapshotId")) in phase_snapshot_ids]
         simulation = TradeSimulator().run(phase_frames, phase_signals, trade_config)
         metrics = self.metrics(simulation, len(phase_signals))
+        # 回测方案 §5.3：仅 tier_risk_adjusted objective 注入档位单调性统计（避免无关 trial 的开销）
+        tier_stats: dict[str, Any] | None = None
+        if str(request.get("objective") or "") == "tier_risk_adjusted":
+            try:
+                horizon = max(1, int(request.get("tier_horizon") or 3))
+            except (TypeError, ValueError):
+                horizon = 3
+            tier_stats = tier_forward_returns(phase_signals, phase_frames, horizon=horizon)
+            metrics["tierStats"] = tier_stats
         phase_config = RankTrendConfig.from_patch(strategy_config)
         sample_diagnostics = BacktestEngine._sample_diagnostics(phase_frames, phase_signals, phase_config)
         macd_diagnostics = BacktestEngine._macd_diagnostics(phase_config, phase_frames)
@@ -163,6 +188,7 @@ class TrialExecutor:
             "warnings": data_quality["warnings"],
             "tradeSimulation": simulation,
             "tradeDiagnostics": BacktestEngine._trade_diagnostics(simulation),
+            "tierMonotonicity": tier_monotonicity_score(tier_stats or {}),
             "totalReturn": simulation.get("totalReturn"),
             "sharpe": simulation.get("sharpe"),
             "tradeSharpe": simulation.get("tradeSharpe"),

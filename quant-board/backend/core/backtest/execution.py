@@ -47,6 +47,7 @@ class TradeSimulator:
             "missingPriceRows": 0,
             "nextBarEntries": 0,
             "nextBarExits": 0,
+            "blockedBySynergyTier": 0,
         }
         for idx, frame in enumerate(frames):
             frame_signals = signals_by_snapshot.get(frame["snapshotId"], [])
@@ -110,7 +111,8 @@ class TradeSimulator:
                     should_exit, strategy_exit_reason = self._ranktrend_early_big_move_v2_exit_decision(signal, pos, gross_return, config)
                 else:
                     final_signal = ((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
-                    should_exit = (final_signal == "sell" or signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"])
+                    synergy_danger_exit = TradeSimulator._synergy_exit_on_danger(config) and TradeSimulator._synergy_tier_of(signal) in ("D", "E")
+                    should_exit = (final_signal == "sell" or signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"] or synergy_danger_exit)
                 exit_trigger = None
                 trigger_price = raw_price
                 intrabar = self._intrabar_exit_trigger(pos, quote, config)
@@ -154,9 +156,13 @@ class TradeSimulator:
             signal_idx = idx if execution_mode == "current_bar" else idx - 1
             candidate_signals = frame_signals if execution_mode == "current_bar" else list(execution_signal_by_code.values())
             candidates = self._entry_candidates(candidate_signals, frames, signal_idx, signal_by_snapshot_code, positions, strategy_key, config)
+            synergy_allowed = TradeSimulator._synergy_allowed_tiers(config)
             for signal in candidates:
                 if len(positions) >= int(config["maxPositions"]):
                     break
+                if synergy_allowed is not None and TradeSimulator._synergy_tier_of(signal) not in synergy_allowed:
+                    matching_stats["blockedBySynergyTier"] += 1
+                    continue
                 fill_signal = self._merge_execution_signal(signal, signal_by_code.get(str(signal.get("code"))), frame, execution_mode)
                 quote = self._quote(fill_signal)
                 raw_price = float(quote.get("lastPrice") or fill_signal.get("price") or 0)
@@ -332,6 +338,27 @@ class TradeSimulator:
                 "price": price,
             }
         return None
+
+    @staticmethod
+    def _synergy_tier_of(signal: dict[str, Any]) -> str | None:
+        """读取 signal.rankTrend.observation.synergy.signalTier（组装下沉后 replay/API 均含）。"""
+        return ((((signal or {}).get("rankTrend") or {}).get("observation") or {}).get("synergy") or {}).get("signalTier")
+
+    @staticmethod
+    def _synergy_allowed_tiers(config: dict[str, Any] | None) -> set[str] | None:
+        """synergyEntryTierMin → 允许档位集合；None 表示不启用（默认，行为与现状一致）。"""
+        value = str((config or {}).get("synergyEntryTierMin") or "none").strip().lower()
+        if value == "s":
+            return {"S"}
+        if value == "a":
+            return {"S", "A"}
+        return None
+
+    @staticmethod
+    def _synergy_exit_on_danger(config: dict[str, Any] | None) -> bool:
+        """synergyExitOnDanger 布尔判定：容忍 "true"/"1"/"yes" 等字符串形态（配置可能来自 JSON/环境变量）。"""
+        value = str((config or {}).get("synergyExitOnDanger") or "").strip().lower()
+        return value in ("1", "true", "yes")
 
     @staticmethod
     def _entry_candidates(
@@ -968,6 +995,8 @@ class TradeSimulator:
     @staticmethod
     def _exit_reason(signal: dict[str, Any], pos: dict[str, Any], gross_return: float, config: dict[str, Any]) -> str:
         final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
+        if TradeSimulator._synergy_exit_on_danger(config) and final_signal != "sell" and TradeSimulator._synergy_tier_of(signal) in ("D", "E"):
+            return "四维合并档位 D/E 强制卖出"
         if final_signal == "sell":
             return "compose_decision 卖出信号"
         if signal["candidateTier"] == "D_EXIT_RISK":

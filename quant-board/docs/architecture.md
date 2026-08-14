@@ -21,6 +21,9 @@ backend/
   data/                 # 数据库、快照导入、质量门禁、数据查询
   snapshot_collector/   # 后端快照采集器（独立进程，正式生产链路），含 models/slots/providers/builder/quality_gate/state/repository_port/service/service_factory/gateway/instance_lock
   ranktrend/            # Python 版 rankTrend 分析链
+    engine.py           # golden 引擎：config/档位函数/_build_signal（含 assemble_observation 组装下沉）
+    volume_price.py     # 量价评分/四象协同/四维合并档位（_synergy_tier）+ assemble_observation
+    tier_monotonicity.py# 档位单调性统计（回测方案 §5.1：分层收益/Spearman/硬约束判定，纯函数）
   core/
     strategy/           # 策略接口和 rankTrend 候选策略
     engine/             # 回测事件循环、撮合、绩效统计

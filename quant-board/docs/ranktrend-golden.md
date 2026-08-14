@@ -42,6 +42,29 @@ Python Golden replay 也必须对齐这条纯分析链，不再消费 `hotlistSe
 | `buyScoreThreshold` | `0.12` |
 | `sellScoreThreshold` | `-0.12` |
 
+五维观察档位阈值（`docs/ranktrend-signal-tier-backtest-plan.md` §3.1 参数化，默认值 = 旧硬编码，golden 不漂移）：
+
+| 参数 | 默认值 | 消费位置 |
+| --- | --- | --- |
+| `tierResonanceReversalPenaltyMin` | `0.6` | `_resonance_tier` 首条（reversal 否决） |
+| `tierResonanceJumpFreshnessMin` | `0.5` | `_resonance_tier` 第二条（Jump）+ 新入榜 S |
+| `tierResonancePersistenceMin` | `0.6` | `_resonance_tier` 第三条（buy+persistence） |
+| `tierResonanceEntryStrengthMin` | `0.3` | 新入榜 A 判定 |
+| `tierRankTrendStrongMin` | `0.5` | `_rank_trend_tier` S |
+| `tierRankTrendConfirmMin` | `0.25` | `_rank_trend_tier` A |
+| `tierSynergyVoteStrong` | `2` | `_synergy_tier`：`v>=strong 且 lc_tier=="A"`→S，`v>=strong`→A（int） |
+| `tierSynergyVoteWeak` | `1` | `_synergy_tier` vote_sum==1（B，int） |
+| `tierSynergyVoteReverse` | `-1` | `_synergy_tier` vote_sum≤−1（D，int） |
+
+> `from_patch` 强校验（不满足抛 ValueError，回测 trial 记 failed）：`0 < tierRankTrendConfirmMin < tierRankTrendStrongMin <= 1`、`tierSynergyVoteReverse <= tierSynergyVoteWeak < tierSynergyVoteStrong`（weak 严格小于 strong）、`0 <= tierResonance*Min <= 1`。
+
+交易层 synergy 门参数（不进 `RankTrendConfig`，经 `to_trade_config` 透传进 trade_config，由 `TradeSimulator` 消费，默认关闭）：
+
+| 参数 | 默认值 | 语义 |
+| --- | --- | --- |
+| `synergyEntryTierMin` | `"none"` | `none`=不启用；`s`=仅 S 入场；`a`=S/A 入场（与现有入场条件取交集） |
+| `synergyExitOnDanger` | `false` | D/E 档强制卖出 |
+
 默认快照：
 
 ```text
@@ -146,6 +169,18 @@ Python rankTrend 输出应对齐 `RankTrendAnalysisResult`：
 - `reasons`
 
 > **边界说明：** `ThemeCandidateSupport`（`mainTheme`、`themeHeat`、`themeContribution`、`themeRole`、`themeSupportScore`、`themeRiskFlags`、`themeReasons`）是回测引擎层面的信号富化字段，写入 `backtest_signals`，**不属于 RankTrend golden 输出合同**。Golden 测试不验证题材字段，题材因子不能绕过 RankTrend 独立制造买入信号。
+
+### observation / resonance 档位字段（回测方案 §3.2 组装下沉后）
+
+`rankTrend.observation.*` 与 `rankTrend.resonance` 输出五维离散档位（`docs/ranktrend-observation-discrete-tiers-design.md`）：
+
+- `rankTrend.resonance.signalTier` / `tierReasons`：共振档位（`_resonance_tier` 产出；新入榜分支内联）。
+- `rankTrend.observation.rankTrend.signalTier` / `tierReasons`：趋势档位（`_rank_trend_tier`）。
+- `rankTrend.observation.lifecycle.signalTier` / `tierReasons`：周期档位（`_lifecycle_tier`）。
+- `rankTrend.observation.volumePrice.signalTier` / `tierReasons`：量价档位（`_volume_price_tier`）。
+- `rankTrend.observation.synergy.signalTier` / `tierReasons`：四维合并档位（`_synergy_tier`，组装下沉前仅在 API 单股链路生产，下沉后 replay 信号亦含）。
+
+档位枚举：`S / A / B / C / D / E / unknown`（`unknown` = 样本不足/数据缺失，前端显示 `--`，不归零、不伪装）。API 与 replay 由 `assemble_observation`（`backend/analysis/ranktrend/volume_price.py`）统一组装；replay 链路无横截面 resonance 时共振维缺票（vote=0），属已知限制。
 
 ## Golden case 类型
 

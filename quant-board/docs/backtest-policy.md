@@ -38,6 +38,12 @@ randomSeed         = 20260430
 
 半小时快照按每天约 8 个 bars 估算，`maxHoldingBars=40` 表示最多持有约 5 个交易日。这个限制是交易持仓周期，不是 MACD 预热窗口。
 
+## 档位阈值与 synergy 交易门（回测方案 §3.1/§3.3）
+
+- 五维观察档位阈值（`tierResonance*`/`tierRankTrend*`/`tierSynergyVote*`，9 个）已参数化进 `RankTrendConfig`，默认值 = 旧硬编码；`from_patch` 强校验（`0 < confirm < strong <= 1`、`reverse <= weak < strong`、`resonance* ∈ [0,1]`），非法阈值抛 ValueError → 回测 trial 记 failed。
+- synergy 交易门（`synergyEntryTierMin`/`synergyExitOnDanger`）为交易层参数，默认关闭（行为与现状一致）；经 `to_trade_config` 透传进 `trade_config`，由 `TradeSimulator`（`backend/core/backtest/execution.py`）消费：入场取交集（`none`=不启用；`s`=仅 S；`a`=S/A），D/E 档强卖（`synergyExitOnDanger=true` 时）。拦截计入 `matchingDiagnostics.blockedBySynergyTier`（fail-visible）。
+- 档位单调性统计模块：`backend/analysis/ranktrend/tier_monotonicity.py`（`tier_forward_returns`/`tier_monotonicity_score`，按 synergy 档位分层统计未来 N 帧相对排名收益 + Spearman 单调 + 硬约束判定）。`tier_risk_adjusted` objective = risk_adjusted − 档位惩罚（硬约束违约 +0.5、S 样本 <30 +0.2、unknown ≥5% 时 +unknown_rate×1.0）。
+
 ## MACD 定位
 
 MACD 只作为入场前的辅助观察信号，不是独立买卖触发器。

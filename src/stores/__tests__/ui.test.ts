@@ -99,6 +99,37 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
   })
 
+  it('sorts synergy tier by direction group then tier level', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: 'D档', rankTrend: { observation: { synergy: { signalTier: 'D' } } } },
+      { code: '000002', name: 'B档', rankTrend: { observation: { synergy: { signalTier: 'B' } } } },
+      { code: '000003', name: 'S档', rankTrend: { observation: { synergy: { signalTier: 'S' } } } },
+      { code: '000004', name: '缺失', rankTrend: { observation: {} } },
+    ])
+
+    // asc：方向组优先（S/A/B 在前），组内等级升序 → B(3) < S(5)；D 反向组最后
+    uiStore.toggleSort('synergyTier')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000004', '000001'])
+
+    // desc：方向组不变（与 order 无关），组内等级降序 → S 在 B 前
+    uiStore.toggleSort('synergyTier')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
+  })
+
+  it('keeps unknown synergy tier in the neutral group after real tiers', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: 'E档', rankTrend: { observation: { synergy: { signalTier: 'E' } } } },
+      { code: '000002', name: 'A档', rankTrend: { observation: { synergy: { signalTier: 'A' } } } },
+      { code: '000003', name: 'unknown', rankTrend: { observation: { synergy: { signalTier: 'unknown' } } } },
+    ])
+
+    uiStore.toggleSort('synergyTier')
+    // A(4) 在 asc 组内 < E(0)？A/E 分属不同方向组：A=1 前、E=-1 后；unknown=0 中间
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+  })
+
   it('sorts lifecycle opportunity by the displayed observation score', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
