@@ -39,6 +39,12 @@ _ABNORMAL_FUND_RATIO = 20.0
 
 
 def _daily_limit_pct(code: Any) -> float:
+    """板块涨跌幅限制（%）：主板 10% / 创业板·科创板 20% / 北交所 30%。
+
+    ST 股与同板块普通股同阈值（沪深交易所新规：ST 涨跌幅 ±10%，创业板/科创板
+    ST 仍 ±20%、北交所 ST 仍 ±30%），代码前缀无法区分 ST 标记，天然按板块阈值
+    判定即可，勿新增 ST 5% 特判（旧规已废除）。
+    """
     value = str(code or "").strip()
     # 兼容交易所前缀（sz300001 / SH600001 / bj830001），归一为纯 6 位代码再判板块
     if len(value) > 6 and value[:2].lower() in ("sz", "sh", "bj"):
