@@ -9,8 +9,6 @@ export const FUND_SOURCE = {
   THS_MAIN_MONITOR: 'ths_main_monitor',
   /** akshare 同花顺网页个股资金流（估算口径） */
   AKSHARE_THS_INDIVIDUAL: 'akshare_ths_individual',
-  /** akshare 东财全市场排行（估算口径，自分页 clist fetch） */
-  AKSHARE_EASTMONEY_RANK: 'akshare_eastmoney_rank',
   /** 同花顺 L2 主力监控（历史/兼容） */
   THS_L2: 'ths_l2',
   /** QMT L2 实时资金流（历史/兼容） */
