@@ -28,9 +28,3 @@ export const FUND_SOURCE = {
 } as const
 
 export type FundSource = (typeof FUND_SOURCE)[keyof typeof FUND_SOURCE]
-
-/** 资金列（theme-fund 缓存）当前接受的数据源 */
-export const SUPPORTED_FUND_SOURCES: ReadonlySet<string> = new Set([
-  FUND_SOURCE.THS_MAIN_MONITOR,
-  FUND_SOURCE.AKSHARE_THS_INDIVIDUAL,
-])

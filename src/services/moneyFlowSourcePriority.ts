@@ -24,6 +24,11 @@ export function getMoneyFlowSourceRank(value: MoneyFlowSourceLike | null | undef
   return DASHBOARD_FUND_SOURCE_RANK[value.moneyFlowSource] ?? 0
 }
 
+/** 是否可作为资金列来源（rank > 0）。统一白名单入口，禁止在业务代码硬编码源字符串。 */
+export function isDashboardFundSource(value: MoneyFlowSourceLike | null | undefined): boolean {
+  return getMoneyFlowSourceRank(value) > 0
+}
+
 export function shouldApplyMoneyFlowUpdate(
   current: MoneyFlowSourceLike | null | undefined,
   next: MoneyFlowSourceLike | null | undefined,

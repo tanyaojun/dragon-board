@@ -1,7 +1,7 @@
-import { FUND_SOURCE } from '@/config/fundSources'
 import { AppEvents } from '@/types'
 import { normalizeStockCode } from '@/utils/common'
 import { EventManager } from '@/utils/eventManager'
+import { isDashboardFundSource } from './moneyFlowSourcePriority'
 
 /**
  * 行情主页主力资金流订阅（前端只消费）。
@@ -118,11 +118,11 @@ export class MarketFundStreamService {
   }
 
   private normalizeRow(row: any): Record<string, unknown> | null {
-    // 2026-08-12：接受 akshare 同花顺网页估算行（数据源已切换）与 THS L2 行；
-    // 此前只收 ths_main_monitor 导致前端一直显示旧 L2 数据
-    const source = String(row?.moneyFlowSource || '')
-    if (source !== FUND_SOURCE.THS_MAIN_MONITOR && source !== FUND_SOURCE.AKSHARE_THS_INDIVIDUAL)
-      return null
+    // 统一资金源白名单（isDashboardFundSource = rank > 0）：接受 THS L2 主源、
+    // akshare 同花顺网页估算行与存量 seed（ths_web_seed/eastmoney_seed），
+    // 拒绝 rank 0 源（tdx_transaction/eastmoney/ths_l2/qmt_l2）。
+    // 不再硬编码源字符串，避免只显示同花顺、丢弃东财/seed 行。
+    if (!isDashboardFundSource({ moneyFlowSource: row?.moneyFlowSource })) return null
     const code = normalizeStockCode(String(row?.code || ''))
     const version = Number(row?.version)
     const zlje = Number(row?.zlje)
