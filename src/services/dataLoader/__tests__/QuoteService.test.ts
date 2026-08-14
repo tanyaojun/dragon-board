@@ -95,6 +95,48 @@ describe('QuoteService', () => {
     expect(quote?.zlje).toBeUndefined()
   })
 
+  it('accepts akshare_ths_individual fund flow in realtime quote as dashboard money flow', async () => {
+    const service = new QuoteService({
+      now: () => 1000,
+      isRealtimePrimaryHealthy: () => true,
+      dataLayer: { getQuote: () => null, getStock: () => null, updateQuote: () => undefined } as any,
+      webSocketService: {
+        getQuotesBatch: () =>
+          new Map([
+            [
+              '603773',
+              {
+                code: '603773',
+                lastPrice: 10.1,
+                changePct: 0.5,
+                volume: 1200,
+                amount: 11000,
+                turnoverRate: 2.3,
+                totalMarketCap: 216760565962.5,
+                floatMarketCap: 216760565962.5,
+                pe: 12.5,
+                pb: 1.8,
+                zlje: 123456,
+                zljzb: 3.5,
+                moneyFlowSource: 'akshare_ths_individual',
+              } as any,
+            ],
+          ]),
+      },
+      feed: {
+        fetchBasicData: () => new Map(),
+        fetchFullData: () => new Map(),
+      } as any,
+    })
+
+    const result = await service.fetchMergedQuotes(['603773'])
+    const quote = result.get('603773')
+    expect(quote?.zlje).toBe(123456)
+    expect(quote?.zljzb).toBe(3.5)
+    expect(quote?.moneyFlowSource).toBe('akshare_ths_individual')
+    expect(quote?.moneyFlowEstimated).toBe(true)
+  })
+
   it('uses HTTP quote supplement fields when realtime TDX quote has no valuation fields', async () => {
     const service = new QuoteService({
       now: () => 1000,

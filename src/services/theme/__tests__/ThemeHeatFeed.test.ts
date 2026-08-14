@@ -211,4 +211,19 @@ describe('ThemeHeatFeed', () => {
     expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(88)
     feed.destroy()
   })
+
+  it('patches cached theme stocks from akshare_ths_individual fund rows', async () => {
+    vi.useFakeTimers()
+    const feed = new ThemeHeatFeed(api as any)
+    await feed.loadThemeStocks('AI')
+
+    EventManager.emit(AppEvents.WEBSOCKET.QUOTE_PATCH, {
+      items: [
+        { code: '000001', zlje: 66, version: 3, moneyFlowSource: 'akshare_ths_individual' },
+      ],
+    })
+
+    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(66)
+    feed.destroy()
+  })
 })

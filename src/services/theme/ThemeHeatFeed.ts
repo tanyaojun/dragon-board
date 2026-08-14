@@ -1,8 +1,8 @@
-import { FUND_SOURCE } from '@/config/fundSources'
 import { ApiHttpError, apiService } from '@/services/apiService'
 import { cacheManager } from '@/services/LRUCache'
 import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
+import { isDashboardFundSource } from '../moneyFlowSourcePriority'
 import type {
   ThemeFactorSnapshot,
   ThemeHeatApiFactor,
@@ -219,7 +219,7 @@ export class ThemeHeatFeed {
   applyFundPatch(items: any[]): void {
     let changed = false
     for (const item of items) {
-      if (item?.moneyFlowSource !== FUND_SOURCE.THS_MAIN_MONITOR) continue
+      if (!isDashboardFundSource({ moneyFlowSource: item?.moneyFlowSource })) continue
       const code = String(item?.code || '')
       const version = Number(item?.version)
       const zlje = nullableFinite(item?.zlje)

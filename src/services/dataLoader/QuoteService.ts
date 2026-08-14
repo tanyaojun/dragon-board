@@ -3,7 +3,7 @@ import { filterValidStockCodes } from '@/utils/common'
 import { dataLayer as defaultDataLayer } from '../DataLayer'
 import { webSocketService as defaultWebSocketService } from '../websocket'
 import { QUOTE_BATCH_DELAY_MS } from './constants'
-import { shouldApplyMoneyFlowUpdate } from '../moneyFlowSourcePriority'
+import { shouldApplyMoneyFlowUpdate, isDashboardFundSource } from '../moneyFlowSourcePriority'
 import { quoteHttpFeed } from './QuoteHttpFeed'
 import type { MergedQuoteData, QuoteBatchProgress } from './types'
 import type { QuotePatch } from '@/types'
@@ -398,7 +398,8 @@ export class QuoteService {
     const stock = this.dataLayer.getStock(code)
     const speedCandidate = quote.speed ?? existingQuote?.speed
     const speed = typeof speedCandidate === 'number' && Number.isFinite(speedCandidate) ? speedCandidate : undefined
-    const hasAuthoritativeMoneyFlow = quote.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR
+    const hasDashboardMoneyFlow = isDashboardFundSource({ moneyFlowSource: quote.moneyFlowSource })
+    const isEstimatedMoneyFlow = quote.moneyFlowSource !== FUND_SOURCE.THS_MAIN_MONITOR
 
     return {
       price: Number(quote.lastPrice) || 0,
@@ -414,32 +415,32 @@ export class QuoteService {
       totalMV: pickPositiveNumber(quote.totalMarketCap, stock?.totalMV, existingQuote?.totalMV),
       cirMV: pickPositiveNumber(quote.floatMarketCap, stock?.cirMV, existingQuote?.cirMV),
       pb: pickPositiveNumber(quote.pb, stock?.pb, existingQuote?.pb),
-      zlje: hasAuthoritativeMoneyFlow
+      zlje: hasDashboardMoneyFlow
         ? pickFundFlow(quote.zlje, stock?.zlje)
         : pickNonZeroNumber(stock?.zlje, existingQuote?.zlje),
-      zljzb: hasAuthoritativeMoneyFlow
+      zljzb: hasDashboardMoneyFlow
         ? pickFundFlow(quote.zljzb, stock?.zljzb)
         : pickNonZeroNumber(stock?.zljzb, existingQuote?.zljzb),
-      cddje: hasAuthoritativeMoneyFlow
+      cddje: hasDashboardMoneyFlow
         ? pickFundFlow(quote.cddje, stock?.cddje)
         : pickNonZeroNumber(stock?.cddje, existingQuote?.cddje),
-      cddjzb: hasAuthoritativeMoneyFlow
+      cddjzb: hasDashboardMoneyFlow
         ? pickFundFlow(quote.cddjzb, stock?.cddjzb)
         : pickNonZeroNumber(stock?.cddjzb, existingQuote?.cddjzb),
-      moneyFlowSource: hasAuthoritativeMoneyFlow
+      moneyFlowSource: hasDashboardMoneyFlow
         ? quote.moneyFlowSource
         : stock?.moneyFlowSource ?? existingQuote?.moneyFlowSource,
-      moneyFlowEstimated: hasAuthoritativeMoneyFlow
-        ? false
+      moneyFlowEstimated: hasDashboardMoneyFlow
+        ? isEstimatedMoneyFlow
         : stock?.moneyFlowEstimated ?? existingQuote?.moneyFlowEstimated,
-      capitalFlowSource: hasAuthoritativeMoneyFlow
+      capitalFlowSource: hasDashboardMoneyFlow
         ? quote.capitalFlowSource
         : stock?.capitalFlowSource ?? existingQuote?.capitalFlowSource,
-      capitalFlowConfidence: hasAuthoritativeMoneyFlow
+      capitalFlowConfidence: hasDashboardMoneyFlow
         ? quote.capitalFlowConfidence
         : stock?.capitalFlowConfidence ?? existingQuote?.capitalFlowConfidence,
       name: quote.name || stock?.name || existingQuote?.name,
-      sources: hasAuthoritativeMoneyFlow
+      sources: hasDashboardMoneyFlow
         ? [String(quote.moneyFlowSource)]
         : ['tdx_l2'],
       confidence: 99,
@@ -473,7 +474,7 @@ export class QuoteService {
   ): MergedQuoteData {
     const preferHttpSupplement = this.hasQuoteSupplementData(httpQuote)
     const preferHttpFundFlow =
-      httpQuote.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR &&
+      isDashboardFundSource({ moneyFlowSource: httpQuote.moneyFlowSource }) &&
       this.hasFundFlowData(httpQuote) &&
       shouldApplyMoneyFlowUpdate(realtimeQuote, httpQuote)
 
