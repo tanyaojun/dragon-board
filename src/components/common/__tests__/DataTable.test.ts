@@ -262,13 +262,15 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain("case 'cddjzb'")
   })
 
-  test('labels THS L2 money flow appropriately', () => {
+  test('labels THS L2 and akshare money flow appropriately', () => {
     const source = dataTableSource()
 
     expect(source).toContain('getMoneyFlowTitle')
     expect(source).toContain('同花顺个股资金流')
-    expect(source).toContain('同花顺L2主力监控')
-    expect(source).toContain('QMT L2实时资金流')
+    expect(source).toContain('同花顺网页资金流（估算）')
+    // 2026-08-14：废弃源（同花顺L2主力监控/QMT L2/东财/TDX 分笔估算）已移除
+    expect(source).not.toContain('同花顺L2主力监控')
+    expect(source).not.toContain('QMT L2实时资金流')
   })
 
   test('keeps volume ratio display visually stable across data states', () => {

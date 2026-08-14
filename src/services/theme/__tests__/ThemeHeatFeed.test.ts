@@ -212,7 +212,7 @@ describe('ThemeHeatFeed', () => {
     feed.destroy()
   })
 
-  it('patches cached theme stocks from akshare_ths_individual fund rows', async () => {
+  it('ignores akshare_ths_individual fund rows in WS patch (theme_fund uses HTTP)', async () => {
     vi.useFakeTimers()
     const feed = new ThemeHeatFeed(api as any)
     await feed.loadThemeStocks('AI')
@@ -223,7 +223,8 @@ describe('ThemeHeatFeed', () => {
       ],
     })
 
-    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBe(66)
+    // akshare 估算行只供 theme_fund HTTP（/api/themes/fund-rows），不进 WS 资金补丁
+    expect((await feed.loadThemeStocks('AI'))[0].mainNetInflow).toBeNull()
     feed.destroy()
   })
 })

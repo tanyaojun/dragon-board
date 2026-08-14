@@ -10,6 +10,7 @@ from threading import Lock
 from typing import Any
 
 from backend.core.fund_sources import (
+    FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
     FUND_SOURCE_THS_MAIN_MONITOR,
     SUPPORTED_FUND_SOURCES,
 )
@@ -18,26 +19,14 @@ from backend.core.settings import get_settings
 logger = logging.getLogger(__name__)
 
 
-# 允许写入运行态资金缓存的来源：L2 主源 + 全市场种子（东财 + 存量同花顺网页）。
-# 其它来源（tdx_transaction 等）不写入本缓存，避免污染资金列口径。
-SUPPORTED_FUND_SOURCES = frozenset(
-    {"ths_main_monitor", "ths_web_seed", "eastmoney_seed", "akshare_ths_individual"}
-)
-# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(2) > 种子(1)。
+# 允许写入运行态资金缓存的来源由 backend.core.fund_sources.SUPPORTED_FUND_SOURCES
+# 统一提供（L2 主源 + akshare 题材源）；本模块不再本地重定义（2026-08-14 清理，
+# 此前本地 frozenset 覆盖了统一入口，导致种子源被误接受）。
+# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(2) > akshare 题材估算(1)。
 FUND_SOURCE_RANK: dict[str, int] = {
-    "ths_web_seed": 1,
-    "eastmoney_seed": 1,
-    "ths_main_monitor": 2,
+    FUND_SOURCE_AKSHARE_THS_INDIVIDUAL: 1,
+    FUND_SOURCE_THS_MAIN_MONITOR: 2,
 }
-
-
-# 支持的来源（2026-08-12：akshare 同花顺网页 source 诚实标识后，缓存接受
-# L2 主源与网页估算两种；后续其它来源按需扩展）
-# 支持的来源（2026-08-12：统一入口 backend.core.fund_sources，资金列接受
-# L2 主源与网页估算两种；模块级 SUPPORTED_FUND_SOURCES 由 import 提供）
-
-
-logger = logging.getLogger(__name__)
 
 
 class ThemeFundCache:

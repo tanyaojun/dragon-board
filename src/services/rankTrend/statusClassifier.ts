@@ -224,7 +224,9 @@ function isStrongMoney(stock: any): boolean {
 }
 
 function isEstimatedMoneyFlow(stock: any): boolean {
-  return stock?.moneyFlowEstimated === true || stock?.moneyFlowSource === 'tdx_estimate'
+  // 2026-08-14：tdx_estimate（TDX 分笔估算兜底）已废弃删除，估算口径仅由
+  // moneyFlowEstimated 标记表达（akshare 题材源）；热榜资金列只用 L2 权威源。
+  return stock?.moneyFlowEstimated === true
 }
 
 function isMoneyWeak(stock: any): boolean {

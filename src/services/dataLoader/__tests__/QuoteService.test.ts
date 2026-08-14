@@ -95,7 +95,7 @@ describe('QuoteService', () => {
     expect(quote?.zlje).toBeUndefined()
   })
 
-  it('accepts akshare_ths_individual fund flow in realtime quote as dashboard money flow', async () => {
+  it('rejects akshare_ths_individual fund flow in realtime quote (theme_fund HTTP only)', async () => {
     const service = new QuoteService({
       now: () => 1000,
       isRealtimePrimaryHealthy: () => true,
@@ -131,10 +131,9 @@ describe('QuoteService', () => {
 
     const result = await service.fetchMergedQuotes(['603773'])
     const quote = result.get('603773')
-    expect(quote?.zlje).toBe(123456)
-    expect(quote?.zljzb).toBe(3.5)
-    expect(quote?.moneyFlowSource).toBe('akshare_ths_individual')
-    expect(quote?.moneyFlowEstimated).toBe(true)
+    // 行情主页热榜资金列只用 L2；akshare 估算行只供 theme_fund（HTTP），不进资金列
+    expect(quote?.moneyFlowSource).toBeUndefined()
+    expect(quote?.zlje).toBe(0)
   })
 
   it('uses HTTP quote supplement fields when realtime TDX quote has no valuation fields', async () => {

@@ -25,31 +25,25 @@ def latest_trading_session(now: datetime | None = None) -> str:
 
 
 class MarketFundStream:
-    """fund-stream 订阅池（market_codes）与 P0 可见行（priority_codes）管理。
+    """fund-stream 订阅池（market_codes）管理。
 
-    priority_codes 是前端上报的"当前可见/高关注"股票子集（如热榜排序前 N 只），
-    供 ThsFundRefreshScheduler 做 P0/P1 分级刷新（P0 更快校准，默认 30 秒）。
+    2026-08-14 用户确认：取消 P0/P1 分级与前 100 白名单——只维护
+    market_codes（行情列表全部股票），全列表统一刷新，不再有 priority_codes。
     """
 
     def __init__(self, *, cache: ThemeFundCache) -> None:
         self.cache = cache
         self._subscribers: dict[asyncio.Queue[dict[str, object]], dict[str, object]] = {}
         # 最后已知 owner（浏览器断开后继续刷新的持久池）：订阅/更新时刷新，
-        # 全部订阅者断开后由 market_codes/priority_codes 继续返回（owner 持久化）
-        self._persisted: dict[str, list[str]] = {"codes": [], "priority": []}
+        # 全部订阅者断开后由 market_codes 继续返回（owner 持久化）
+        self._persisted: dict[str, list[str]] = {"codes": []}
         self.codes_changed = asyncio.Event()
 
-    async def subscribe(
-        self,
-        codes: list[str],
-        *,
-        priority_codes: list[str] | None = None,
-    ) -> asyncio.Queue[dict[str, object]]:
+    async def subscribe(self, codes: list[str]) -> asyncio.Queue[dict[str, object]]:
         queue: asyncio.Queue[dict[str, object]] = asyncio.Queue(maxsize=32)
         normalized = self._normalize(codes)
-        priority = self._normalize(priority_codes or [])
-        self._subscribers[queue] = {"codes": normalized, "priority": priority}
-        self._persisted = {"codes": normalized, "priority": priority}
+        self._subscribers[queue] = {"codes": normalized}
+        self._persisted = {"codes": normalized}
         self.codes_changed.set()
         queue.put_nowait(await self.snapshot(normalized))
         return queue
@@ -58,14 +52,11 @@ class MarketFundStream:
         self,
         queue: asyncio.Queue[dict[str, object]],
         codes: list[str],
-        *,
-        priority_codes: list[str] | None = None,
     ) -> None:
         if queue in self._subscribers:
             normalized = self._normalize(codes)
-            priority = self._normalize(priority_codes or [])
-            self._subscribers[queue] = {"codes": normalized, "priority": priority}
-            self._persisted = {"codes": normalized, "priority": priority}
+            self._subscribers[queue] = {"codes": normalized}
+            self._persisted = {"codes": normalized}
             self.codes_changed.set()
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, object]]) -> None:
@@ -80,22 +71,11 @@ class MarketFundStream:
             return subscriber_codes
         return list(self._persisted["codes"])
 
-    def priority_codes(self) -> list[str]:
-        subscriber_priority = self._normalize(
-            [code for sub in self._subscribers.values() for code in sub["priority"]]
-        )
-        if subscriber_priority:
-            return subscriber_priority
-        return list(self._persisted["priority"])
-
     def has_active_owner(self) -> bool:
         return bool(self._subscribers)
 
     def persisted_owner(self) -> dict[str, list[str]]:
-        return {
-            "codes": list(self._persisted["codes"]),
-            "priority": list(self._persisted["priority"]),
-        }
+        return {"codes": list(self._persisted["codes"])}
 
     async def snapshot(self, codes: list[str]) -> dict[str, object]:
         rows = await asyncio.to_thread(self.cache.get_latest, self._normalize(codes))

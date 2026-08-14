@@ -1311,12 +1311,7 @@ const formatMoneyFlowCell = (key: string, stock: any): string => {
 
 const getMoneyFlowTitle = (key: string, stock: any): string | undefined => {
   if (stock.moneyFlowSource === FUND_SOURCE.THS_MAIN_MONITOR) return '同花顺个股资金流'
-  if (stock.moneyFlowSource === FUND_SOURCE.THS_L2) return '同花顺L2主力监控'
-  if (stock.moneyFlowSource === FUND_SOURCE.QMT_L2) return 'QMT L2实时资金流'
-  if (stock.moneyFlowSource === FUND_SOURCE.EASTMONEY) return '东财资金流'
   if (stock.moneyFlowSource === FUND_SOURCE.AKSHARE_THS_INDIVIDUAL) return '同花顺网页资金流（估算）'
-  // 前端 TDX 分笔估算兜底（Redis 资金数据缺失时）——诚实标注，避免误认为 L2
-  if (stock.moneyFlowSource === FUND_SOURCE.TDX_ESTIMATE) return 'TDX 分笔估算'
   return undefined
 }
 

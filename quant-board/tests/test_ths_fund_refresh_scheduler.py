@@ -453,21 +453,6 @@ async def test_uniform_rotation_sorts_unrefreshed_first() -> None:
 
 
 @pytest.mark.asyncio
-async def test_status_reports_priority_count() -> None:
-    current = datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ)
-    scheduler = _scheduler(
-        service=FakeThsService(titles=_titles("000001", "000002")),
-        stream=FakeStream(["000001", "000002"], priority_codes=["000001"]),
-        current=current,
-        priority_interval_seconds=30,
-    )
-    status = scheduler.status()
-    # 均匀轮转下 priority 不再驱动刷新节奏；字段保留仅作前端上报兼容（生产恒 0）
-    assert status["priorityCount"] == 1
-    assert status["priorityIntervalSeconds"] == 30
-
-
-@pytest.mark.asyncio
 async def test_outside_trading_hours_skips_requests_after_initialized() -> None:
     box, now = _mutable_clock(datetime(2026, 8, 7, 10, 0, 0, tzinfo=TZ))
     service = FakeThsService(titles=_titles("000001"))

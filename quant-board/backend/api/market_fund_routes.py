@@ -12,8 +12,6 @@ router = APIRouter(prefix="/api/market", tags=["market-fund"])
 
 _MAX_CONNECTIONS = 10
 _MAX_CODES = 500
-# P0 可见行上限（前端热榜排序前 N 只，调度器 30 秒优先校准）
-_MAX_PRIORITY_CODES = 100
 _IDLE_TIMEOUT_SECONDS = 300
 _active_connections = 0
 
@@ -32,9 +30,7 @@ async def market_fund_stream(websocket: WebSocket) -> None:
         initial = await asyncio.wait_for(websocket.receive_json(), timeout=10)
         codes = initial.get("codes") if isinstance(initial, dict) else []
         codes = (codes if isinstance(codes, list) else [])[:_MAX_CODES]
-        priority_codes = initial.get("priorityCodes") if isinstance(initial, dict) else []
-        priority_codes = (priority_codes if isinstance(priority_codes, list) else [])[:_MAX_PRIORITY_CODES]
-        queue = await stream.subscribe(codes, priority_codes=priority_codes)
+        queue = await stream.subscribe(codes)
         await websocket.send_json(queue.get_nowait())
         while True:
             client_task = asyncio.create_task(websocket.receive_json())
@@ -53,11 +49,7 @@ async def market_fund_stream(websocket: WebSocket) -> None:
                 updated = message.get("codes") if isinstance(message, dict) else []
                 if isinstance(updated, list):
                     updated = updated[:_MAX_CODES]
-                    updated_priority = message.get("priorityCodes") if isinstance(message, dict) else []
-                    updated_priority = (
-                        updated_priority if isinstance(updated_priority, list) else []
-                    )[:_MAX_PRIORITY_CODES]
-                    await stream.update(queue, updated, priority_codes=updated_priority)
+                    await stream.update(queue, updated)
                     await websocket.send_json(await stream.snapshot(updated))
             if patch_task in done:
                 await websocket.send_json(patch_task.result())

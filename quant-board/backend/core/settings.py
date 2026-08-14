@@ -147,7 +147,9 @@ class Settings(BaseModel):
     )
     theme_fund_refresh_interval_seconds: int = Field(default=300)
     theme_fund_cache_ttl_seconds: int = Field(default=259200)  # 3 天（容灾 1 交易日 + 跨周末）
-    theme_fund_seed_enabled: bool = Field(default=False)  # merge 遗留：默认字段缺失导致环境变量未设时 AttributeError
+    # akshare 同花顺网页全市场资金源开关（2026-08-14：默认启用，专供 theme_fund
+    # 题材资金聚合；原“种子首屏占位”方案废弃，冷启动改由 Redis dump.rdb 恢复 L2）
+    theme_fund_seed_enabled: bool = Field(default=True)
     market_fund_fetch_timeout_seconds: float = Field(default=60.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)

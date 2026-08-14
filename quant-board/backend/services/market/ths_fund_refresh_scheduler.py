@@ -65,7 +65,6 @@ class ThsFundRefreshScheduler:
         retry_backoff_seconds: tuple[float, ...] = DEFAULT_RETRY_BACKOFF_SECONDS,
         enabled: bool = True,
         fund_repo: FundFlowRepository | None = None,
-        priority_interval_seconds: int = 30,
         mongo_write_timeout_seconds: float = 5.0,
     ) -> None:
         self._service = service
@@ -73,6 +72,7 @@ class ThsFundRefreshScheduler:
         self._stream = stream
         # 刷新范围 = 前端 fund-stream 订阅池（2026-08-11 用户确认：取消热度池，
         # 只刷行情列表股票——订阅池即行情列表全部，全量轮转覆盖）。
+        # 2026-08-14 用户确认：取消 P0/P1 分级与前 100 白名单，全列表统一刷新。
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
         self._batch_size = max(1, min(5, int(batch_size)))
         self._base_concurrency = max(1, min(2, int(base_concurrency)))
@@ -87,7 +87,6 @@ class ThsFundRefreshScheduler:
         )
         self.enabled = enabled
         self._fund_repo = fund_repo
-        self._priority_interval_seconds = max(5, int(priority_interval_seconds))
         # MongoDB upsert 超时：MongoDB 挂起（TCP 不响应）时不拖慢刷新节奏
         self._mongo_write_timeout_seconds = max(0.5, float(mongo_write_timeout_seconds))
 
@@ -324,8 +323,6 @@ class ThsFundRefreshScheduler:
             "source": "ths_main_monitor",
             "mongoPersistEnabled": self._fund_repo is not None,
             "universeCount": len(self._pool_codes()),
-            "priorityCount": len(self._stream.priority_codes()),
-            "priorityIntervalSeconds": self._priority_interval_seconds,
             "ownerState": self._owner_state(),
             "cachedCount": len(self._next_refresh_at),
             "effectiveConcurrency": self._effective_concurrency,

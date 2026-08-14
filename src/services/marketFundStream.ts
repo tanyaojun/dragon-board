@@ -27,22 +27,17 @@ function defaultUrl(): string {
 export class MarketFundStreamService {
   private socket: WebSocket | null = null
   private codes: string[] = []
-  private priorityCodes: string[] = []
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempts = 0
   private versions = new Map<string, number>()
 
   /**
-   * 订阅展示池（codes）与 P0 可见行（priorityCodes，热榜排序前 N 只）。
-   * priorityCodes 会随订阅消息上报，后端 ThsFundRefreshScheduler 据此做
-   * P0/P1 分级刷新（P0 默认 30 秒优先校准）。
+   * 订阅展示池（codes，行情列表全部股票）。
+   * 2026-08-14 用户确认：取消 P0/P1 分级与前 100 白名单——全列表统一刷新，
+   * 不再上报 priorityCodes，避免行情主页大量股票接收不到资金数据。
    */
-  setSubscription(codes: string[], priorityCodes?: string[]): void {
+  setSubscription(codes: string[]): void {
     this.codes = [...new Set(codes.map(normalizeStockCode).filter(Boolean))].sort()
-    this.priorityCodes = (priorityCodes || [])
-      .map(normalizeStockCode)
-      .filter((code): code is string => Boolean(code) && this.codes.includes(code))
-      .slice(0, 100)
     if (!this.codes.length) {
       // P1-1（2026-08-11 审计）：空订阅（平台临时加载失败/热榜暂空）不主动断开——
       // 保留连接等待恢复；registry 层也会跳过空上报，避免清空后端订阅池。
@@ -97,9 +92,7 @@ export class MarketFundStreamService {
   }
 
   private sendSubscription(): void {
-    const message: Record<string, string[]> = { codes: this.codes }
-    if (this.priorityCodes.length) message.priorityCodes = this.priorityCodes
-    this.socket?.send(JSON.stringify(message))
+    this.socket?.send(JSON.stringify({ codes: this.codes }))
   }
 
   private handlePayload(payload: any): void {
@@ -118,10 +111,10 @@ export class MarketFundStreamService {
   }
 
   private normalizeRow(row: any): Record<string, unknown> | null {
-    // 统一资金源白名单（isDashboardFundSource = rank > 0）：接受 THS L2 主源、
-    // akshare 同花顺网页估算行与存量 seed（ths_web_seed/eastmoney_seed），
-    // 拒绝 rank 0 源（tdx_transaction/eastmoney/ths_l2/qmt_l2）。
-    // 不再硬编码源字符串，避免只显示同花顺、丢弃东财/seed 行。
+    // 行情主页资金列白名单（isDashboardFundSource = rank > 0）：只接受 THS L2
+    // 主源（ths_main_monitor）；akshare 同花顺网页估算行（akshare_ths_individual）
+    // 只供 theme_fund 题材资金聚合（走后端 /api/themes/fund-rows），不进入行情
+    // 主页资金列。已废弃源（seed/eastmoney/tdx 等）一律 rank 0 被拒。
     if (!isDashboardFundSource({ moneyFlowSource: row?.moneyFlowSource })) return null
     const code = normalizeStockCode(String(row?.code || ''))
     const version = Number(row?.version)

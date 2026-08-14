@@ -25,16 +25,16 @@ TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 class MarketFundScheduler:
-    """Full-market THS fund flow refresher backed by akshare.
+    """Full-market akshare fund flow refresher for theme_fund.
 
-    One akshare call returns the whole market, so the scheduler replaces the
-    old per-stock polling with a periodic full refresh. Rows are written to
-    Redis with a TTL (shared across processes/restarts) and kept as last-good
-    in the in-memory ThemeFundCache. Startup warmup prefetches the whole
-    market once without waiting for WebSocket subscribers so the first screen
-    can be served from cache immediately. Upstream failures never clear
-    existing rows; they open a cooldown and expose a structured status so
-    consumers can keep last-good.
+    One akshare call returns the whole market, so the scheduler refreshes all
+    listed A-shares (theme_fund 题材股票约 4000 只) in a single batch every
+    refresh interval. Rows are written to Redis with a TTL (shared across
+    processes/restarts) and kept as last-good in the in-memory ThemeFundCache.
+    Startup warmup prefetches the whole market once without waiting for WebSocket
+    subscribers so the theme_fund aggregation can be served immediately.
+    Upstream failures never clear existing rows; they open a cooldown and expose
+    a structured status so consumers can keep last-good.
     """
 
     def __init__(
@@ -90,11 +90,11 @@ class MarketFundScheduler:
         if not self.enabled or (self._task and not self._task.done()):
             return
         if not get_settings().theme_fund_seed_enabled:
-            # 2026-08-08：akshare 全市场种子默认停用（东财风控），
-            # 冷启动改从 MongoDB fund_flow_l2 恢复，见
-            # docs/theme-module/2026-08-08-fund-flow-l2-mongodb-persistence-design.md
+            # 2026-08-14：akshare 同花顺网页全市场源默认启用，专供 theme_fund 题材
+            # 资金聚合；该开关关闭时跳过 akshare 刷新，冷启动改从 Redis dump.rdb
+            # 恢复 L2 数据（见 docs/theme-module 资金源口径文档）。
             logger.info(
-                "market fund seed disabled (QUANT_BOARD_THEME_FUND_SEED_ENABLED=false); skip akshare refresh"
+                "akshare theme_fund source disabled (QUANT_BOARD_THEME_FUND_SEED_ENABLED=false); skip akshare refresh"
             )
             return
         self._task = asyncio.create_task(

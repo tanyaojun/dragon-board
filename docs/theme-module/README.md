@@ -23,6 +23,7 @@
 - `progress.md`：V1-V7 实施过程日志归档。
 - `plans/`：各版本执行计划归档。
 - `2026-08-04-theme-momentum-resonance-design.md`：RankTrend OBSERVATION 共振路径增加题材动量（板块共振）指标的设计（题材动量算法合同、analyze 数据流改造、共振融合与回测验证）。
+- `2026-08-14-fund-source-two-lines-design.md`：资金数据源两条线方案——THS L2 专供行情主页热榜、akshare 同花顺网页专供 theme_fund 题材；废弃种子方案（ths_web_seed/eastmoney_seed）、取消 P0/P1 前 100 白名单、清理东财/TDX L1 等不可用源。
 
 ## 后续维护
 

@@ -7,31 +7,28 @@ function normalize(row: Record<string, unknown>) {
 }
 
 describe('marketFundStream normalizeRow', () => {
-  it('accepts ths_main_monitor and ths_web_seed rows with version and zlje', () => {
+  it('accepts ths_main_monitor rows with version and zlje', () => {
     const l2 = normalize({
       code: '000001',
       zlje: 100,
       version: 3,
       moneyFlowSource: 'ths_main_monitor',
     })
-    const seed = normalize({
-      code: '000002',
-      zlje: 50,
-      version: 1,
-      moneyFlowSource: 'ths_web_seed',
-      moneyFlowEstimated: true,
-    })
 
     expect(l2).toMatchObject({ code: '000001', zlje: 100, moneyFlowSource: 'ths_main_monitor' })
-    expect(seed).toMatchObject({
-      code: '000002',
-      zlje: 50,
-      moneyFlowSource: 'ths_web_seed',
-      moneyFlowEstimated: true,
-    })
   })
 
-  it('rejects non-dashboard sources and invalid rows', () => {
+  it('rejects non-L2 sources and invalid rows', () => {
+    // akshare 同花顺网页估算源只供 theme_fund 题材聚合（HTTP），不进入行情主页资金列
+    expect(
+      normalize({
+        code: '000002',
+        zlje: 50,
+        version: 1,
+        moneyFlowSource: 'akshare_ths_individual',
+        moneyFlowEstimated: true,
+      }),
+    ).toBeNull()
     expect(
       normalize({
         code: '000003',
@@ -61,7 +58,7 @@ describe('marketFundStream normalizeRow', () => {
         code: '000005',
         zlje: 99,
         version: NaN,
-        moneyFlowSource: 'ths_web_seed',
+        moneyFlowSource: 'ths_main_monitor',
       }),
     ).toBeNull()
   })
@@ -166,39 +163,24 @@ describe('marketFundStream subscription protocol', () => {
     ;(globalThis as any).WebSocket = FakeWebSocket
   })
 
-  it('sends priorityCodes along with codes when priority is provided', () => {
+  it('sends codes only (no priorityCodes after removing P0/P1 whitelist)', () => {
     ;(globalThis as any).WebSocket = FakeWebSocket
     const service = (marketFundStreamService as any)
     service.socket = null
 
-    service.setSubscription(['000001', '000002', '000003'], ['000001', '000002'])
+    service.setSubscription(['000001', '000002', '000003'])
     ;(FakeWebSocket.instances.at(-1) as FakeWebSocket).emitOpen()
 
-    expect(lastSentMessage()).toEqual({
-      codes: ['000001', '000002', '000003'],
-      priorityCodes: ['000001', '000002'],
-    })
+    expect(lastSentMessage()).toEqual({ codes: ['000001', '000002', '000003'] })
     service.disconnect()
   })
 
-  it('omits priorityCodes when not provided', () => {
+  it('sends only codes for a single stock subscription', () => {
     ;(globalThis as any).WebSocket = FakeWebSocket
     const service = (marketFundStreamService as any)
     service.socket = null
 
     service.setSubscription(['000001'])
-    ;(FakeWebSocket.instances.at(-1) as FakeWebSocket).emitOpen()
-
-    expect(lastSentMessage()).toEqual({ codes: ['000001'] })
-    service.disconnect()
-  })
-
-  it('filters priority codes that are not in the subscribed pool', () => {
-    ;(globalThis as any).WebSocket = FakeWebSocket
-    const service = (marketFundStreamService as any)
-    service.socket = null
-
-    service.setSubscription(['000001'], ['000002']) // 000002 不在池内
     ;(FakeWebSocket.instances.at(-1) as FakeWebSocket).emitOpen()
 
     expect(lastSentMessage()).toEqual({ codes: ['000001'] })

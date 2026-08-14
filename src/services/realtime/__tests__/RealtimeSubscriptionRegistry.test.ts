@@ -45,31 +45,18 @@ describe('RealtimeSubscriptionRegistry', () => {
     registry.setOwnerCodes('dataLoader.hotlist', ['600001', '000002'])
     registry.setOwnerCodes('eventRadar.tdxBlock', ['300001'])
 
-    expect(applyMarketFunds).toHaveBeenLastCalledWith(['000002', '600001'], [])
+    expect(applyMarketFunds).toHaveBeenLastCalledWith(['000002', '600001'])
     expect('setFundOwnerCodes' in registry).toBe(false)
   })
 
-  it('forwards priority codes to the market fund feed', () => {
+  it('clears market fund codes with the owner', () => {
     const apply = vi.fn()
     const applyMarketFunds = vi.fn()
     const registry = new RealtimeSubscriptionRegistry({ apply, applyMarketFunds })
 
-    registry.setOwnerCodes('dataLoader.hotlist', ['600001', '000002'], ['600001'])
-
-    expect(applyMarketFunds).toHaveBeenLastCalledWith(['000002', '600001'], ['600001'])
-    expect(registry.getMergedPriorityCodes()).toEqual(['600001'])
-    expect(registry.getMergedCodes()).toEqual(['000002', '600001']) // 全池不受影响
-  })
-
-  it('clears priority codes with the owner', () => {
-    const apply = vi.fn()
-    const applyMarketFunds = vi.fn()
-    const registry = new RealtimeSubscriptionRegistry({ apply, applyMarketFunds })
-
-    registry.setOwnerCodes('dataLoader.hotlist', ['600001'], ['600001'])
+    registry.setOwnerCodes('dataLoader.hotlist', ['600001'])
     registry.clearOwner('dataLoader.hotlist')
 
-    expect(applyMarketFunds).toHaveBeenLastCalledWith([], [])
-    expect(registry.getMergedPriorityCodes()).toEqual([])
+    expect(applyMarketFunds).toHaveBeenLastCalledWith([])
   })
 })

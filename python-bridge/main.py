@@ -2747,8 +2747,8 @@ class TdxL2Bridge:
                         ]
                         fresh = self.dedupe_ticks(code, normalized)
                         if fresh:
-                            # 增量分笔 → 资金流聚合（主力/大单/中单/小单）
-                            tdx_fund_flow.accumulate_ticks(code, fresh)
+                            # 2026-08-14：TDX L1 分笔自算资金流（tdx_transaction）已废弃——
+                            # 非全日完整分笔、累计不可靠，前端不消费；不再累积 tdx_fund_flow。
                             return {"code": code, "items": fresh}
                         return None
                     except NotImplementedError as error:
@@ -2940,24 +2940,8 @@ class TdxL2Bridge:
                         }
                     )
 
-                # 跨日重置资金流累计（每日开盘重新累计当日资金流）
-                today = datetime.now().astimezone().strftime("%Y-%m-%d")
-                if today != self._last_fund_flow_date:
-                    tdx_fund_flow.reset()
-                    self._last_fund_flow_date = today
-
-                # 资金流低频广播（累计值变化慢，5s 一次）
-                if now_ms() - self._last_fund_flow_broadcast_ts >= self.fund_flow_broadcast_interval_ms:
-                    fund_flow_items = tdx_fund_flow.snapshot()
-                    if fund_flow_items:
-                        await self.broadcast(
-                            {
-                                "type": "fund_flow_patch",
-                                "serverTs": now_ms(),
-                                "items": fund_flow_items,
-                            }
-                        )
-                    self._last_fund_flow_broadcast_ts = now_ms()
+                # 2026-08-14：TDX L1 分笔自算资金流（tdx_transaction）已废弃，不再广播
+                # fund_flow_patch（前端不消费，非全日完整分笔、累计不可靠）。
 
                 self.tdx_connected = True
             except Exception as error:

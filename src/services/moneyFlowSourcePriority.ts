@@ -6,17 +6,14 @@ export type MoneyFlowSourceLike = {
   moneyFlowEstimated?: unknown
 }
 
-// 资金列来源优先级（rank 高者权威，低者不覆盖高者）：
-// - ths_main_monitor：mainMonitorDetail L2 主源（权威）
-// - akshare_ths_individual：akshare 同花顺网页个股资金流（估算）
-// - eastmoney_seed / ths_web_seed：存量种子（估算，仅兼容旧缓存）
-// tdx_transaction（bridge L1 分笔自算，非全日完整分笔、累计不可靠）不作为
-// 资金列来源，仅 bridge /health 诊断；eastmoney / ths_l2 / qmt_l2 亦保持 rank 0。
+// 行情主页资金列来源优先级（rank 高者权威，低者不覆盖高者）。
+// 2026-08-14 用户确认：行情主页热榜资金列只用 L2 主源（ths_main_monitor），
+// 缺口诚实显示 --；akshare 同花顺网页估算源（akshare_ths_individual）只供
+// theme_fund 题材资金聚合（走后端 /api/themes/fund-rows，不进入本资金列白名单）。
+// 已废弃/不可用源（ths_web_seed / eastmoney_seed / eastmoney / tdx_transaction /
+// tdx_estimate / ths_l2 / qmt_l2）一律移除，禁止恢复。
 const DASHBOARD_FUND_SOURCE_RANK: Record<string, number> = {
   [FUND_SOURCE.THS_MAIN_MONITOR]: 5,
-  [FUND_SOURCE.AKSHARE_THS_INDIVIDUAL]: 1,
-  [FUND_SOURCE.THS_WEB_SEED]: 1,
-  [FUND_SOURCE.EASTMONEY_SEED]: 1,
 }
 
 export function getMoneyFlowSourceRank(value: MoneyFlowSourceLike | null | undefined): number {
