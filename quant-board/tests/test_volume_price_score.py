@@ -11,22 +11,38 @@ def _vp(code: str = "600001", chg: float = 9.97, vr: float = 0.75, zlje: float =
     return compute_volume_price_score(code, chg, vr, zlje, zljzb)
 
 
-def test_shrink_limit_up_is_top_score() -> None:
-    # 缩量涨停（主板）：+25 → 高分
+def test_shrink_limit_up_not_tradeable() -> None:
+    # 缩量涨停（主板）：封板买不进，可交易性压低 → 非顶格分、降出 S 强档
     r = _vp("600001", 9.97, 0.75)
-    assert r["score"] == 93  # 50 + 15 + 25 + 3
+    assert r["score"] == 76  # 50 + 15 + 8 + 3（旧口径 +25 → 93）
     assert r["quadrant"] == "rise_shrink"
-    assert "缩量涨停（封板惜售，好票）" in r["reasons"]
+    assert "缩量涨停（封板不可买）" in r["reasons"]
+    assert r["signalTier"] == "C"  # 封板不可买，不再归 S 强档
 
 
 def test_board_limit_up_pct() -> None:
     # 创业板 20% 缩量涨停、北交所 30% 缩量涨停
     cyb = _vp("300001", 19.97, 0.6)
     bj = _vp("830001", 29.9, 0.6)
-    assert "缩量涨停（封板惜售，好票）" in cyb["reasons"]
-    assert "缩量涨停（封板惜售，好票）" in bj["reasons"]
+    assert "缩量涨停（封板不可买）" in cyb["reasons"]
+    assert "缩量涨停（封板不可买）" in bj["reasons"]
     # 创业板 12%（未达 20%）不判涨停 → 缩量上涨
     assert "缩量上涨（惜售/无量涨）" in _vp("300001", 12.0, 0.6)["reasons"]
+
+
+def test_volume_limit_up_keeps_rank() -> None:
+    # 放量涨停（有换手，可排单成交）：保持 rise_volume + 资金流入 → A
+    r = compute_volume_price_score("600001", 9.97, 1.5, 1e6, 1.0)
+    assert r["quadrant"] == "rise_volume"
+    assert r["signalTier"] == "A"
+    assert r["score"] == 80  # 50 + 15 + 12.5 + 3 → round(80.5) = 80
+
+
+def test_shrink_limit_down_penalty() -> None:
+    # 缩量跌停：封死卖不出，风险加重（对称于涨停不可买）
+    r = compute_volume_price_score("600001", -9.97, 0.5, -1e6, -1.0)
+    assert r["score"] == 17  # 50 - 15（方向） - 15（缩量跌停加重） - 3
+    assert "缩量下跌（无量阴跌）" in r["reasons"]
 
 
 def test_over_volume_is_selloff() -> None:

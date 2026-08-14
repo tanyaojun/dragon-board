@@ -1,16 +1,17 @@
 """量价评分与四象协同（阶段 2：量能协同轴）。
 
 TS `src/services/rankTrend/volumePriceValidation.ts::computeVolumePriceScore` 的 Python 移植——
-口径一致（方向 + 量价交叉 + 资金 + 板块涨停），后端生产 `observation.volumePrice`，前端只消费，
-与三轨（resonance/technical/lifecycle）数据链路保持一致。
+TS 侧仅保留象限/量比展示标签；后端生产 `observation.volumePrice`，前端只消费。
+注意：本实现已做"涨跌停可交易性"修订（2026-08），分值/档位与 TS 旧版不再逐分一致。
 
 量价分 0-100：
 - 方向（涨跌幅八档，对称）：涨停/跌停（板块阈值）±15；7%+ ±12；5-7% ±10；
   3-5% ±8；2-3% ±6；1-2% ±4；0.5-1% ±2；0-0.5% ±1；平盘 0
-- 量价交叉（量比幅度 + 板块涨停语境）：
-  缩量涨停（vr≤0.95 且达板块涨停）+25；缩量上涨（非涨停）+10~15；
-  温和放量上涨（1.05≤vr≤2）+10~15；放量过大（2<vr≤2.5）渐扣；
-  过度放量（vr>2.5）-15~-20（出货风险）；缩量下跌 -10；放量下跌 -20；常态 ±5
+- 量价交叉（量比幅度 + 板块涨停语境）：涨停封板买不进，可交易性压低——
+  缩量涨停（vr≤0.95 且达板块涨停）+8（封板不可买，不给交易满分）；缩量上涨（非涨停）+10~15；
+  准缩量涨停（0.95<vr≤1.05）+10；温和放量上涨（1.05≤vr≤2）+10~15；放量过大（2<vr≤2.5）渐扣；
+  过度放量（vr>2.5）-15~-20（出货风险）；缩量跌停（封死卖不出）-15；缩量下跌（非跌停）-10；
+  放量下跌 -20；常态 ±5
 - 资金：0<zljzb≤20 → +min(15, zljzb×3)；zljzb>20 → -min(15, 10+(zljzb-20)×0.5)（对倒出货）；
   zljzb<0 → -min(15, |zljzb|×3)；缺失按 zlje 符号 ±5
 - score = clamp(round(50 + 方向 + 量价 + 资金), 0, 100)
@@ -107,7 +108,7 @@ def _volume_price_tier(quadrant: str | None, fund_score: float, reasons: list[st
     if "对倒出货" in joined or "过度放量" in joined:
         return "E", ["硬风险：对倒出货/过度放量"]
     if "缩量涨停" in joined:
-        return "S", ["封板惜售，唯一性强信号"]
+        return "C", ["缩量涨停封板，买不进，不可交易"]  # 信号真但执行不可交易，降出强档
     if quadrant == "rise_volume" and fund_score > 0:
         return "A", ["放量上涨 + 资金流入"]
     if quadrant == "rise_volume":
@@ -143,14 +144,17 @@ def compute_volume_price_score(
     direction = "up" if chg > 0 else "down" if chg < 0 else "neutral"
     direction_score = _direction_bucket(code, chg)
 
-    # 量价交叉（量比幅度 + 板块涨停）
+    # 量价交叉（量比幅度 + 板块涨停语境）
     limit_up = _is_limit_up(code, chg)
+    limit_down = _is_limit_down(code, chg)
     volume_score = 0.0
     if chg > 0:
         if vr <= c.volumePriceShrinkRatio:
-            volume_score = 25.0 if limit_up else min(15.0, 10 + (c.volumePriceShrinkRatio - vr) * 15)
+            # 缩量涨停封板买不进：只保留弱加成（方向分已含涨停溢价），不给交易满分
+            volume_score = 8.0 if limit_up else min(15.0, 10 + (c.volumePriceShrinkRatio - vr) * 15)
         elif vr <= c.volumePriceMildRatio:
-            volume_score = 20.0 if limit_up else 5.0
+            # 准缩量涨停同理压低；非涨停常态 5 分
+            volume_score = 10.0 if limit_up else 5.0
         elif vr <= 2.0:
             volume_score = min(15.0, 10 + (vr - 1) * 5)
         elif vr <= c.volumePriceOverVolumeRatio:
@@ -163,7 +167,8 @@ def compute_volume_price_score(
         elif vr >= c.volumePriceShrinkRatio:
             volume_score = -5.0
         else:
-            volume_score = -10.0
+            # 缩量跌停封死卖不出，风险加重（对称于涨停不可买）
+            volume_score = -15.0 if limit_down else -10.0
 
     # 资金（净占比；>20% 判对倒出货）
     ratio = _finite(zljzb)
@@ -192,7 +197,7 @@ def compute_volume_price_score(
 
     reasons: list[str] = []
     if limit_up and vr <= c.volumePriceShrinkRatio:
-        reasons.append("缩量涨停（封板惜售，好票）")
+        reasons.append("缩量涨停（封板不可买）")
     elif vr <= c.volumePriceShrinkRatio and chg > 0:
         reasons.append("缩量上涨（惜售/无量涨）")
     elif vr > c.volumePriceOverVolumeRatio and chg > 0:
