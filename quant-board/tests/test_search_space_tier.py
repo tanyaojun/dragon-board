@@ -52,7 +52,7 @@ def test_tier_params_values_match_plan() -> None:
     assert space["tierRankTrendStrongMin"] == [0.4, 0.5, 0.6]
     assert space["tierRankTrendConfirmMin"] == [0.2, 0.25, 0.3]
     assert space["tierSynergyVoteStrong"] == [2, 3]
-    assert space["tierSynergyVoteWeak"] == [1, 2]
+    assert space["tierSynergyVoteWeak"] == [1]  # 收敛固定默认值，避免 weak==strong 必死组合
     assert space["tierSynergyVoteReverse"] == [-1, 0]
     assert space["synergyEntryTierMin"] == ["none", "a"]
     assert space["synergyExitOnDanger"] == [False, True]
@@ -100,7 +100,7 @@ def test_to_trade_config_pops_tier_passes_synergy() -> None:
 
 
 def test_candidate_count_nominal_matches_plan() -> None:
-    """名义组合 3⁶×2³×2×2 = 23328（§4.2；无效 weak<strong 组合由 from_patch 拒绝计 failed）。"""
+    """名义组合 3⁶×2×1×2×2×2 = 11664（§4.2 修订：weak 收敛 [1] 后 vote 三元组全有效，无必死组合）。"""
     space = default_search_space()
     count = candidate_count(space)
     tier_vote_strong = len(space["tierSynergyVoteStrong"])
@@ -117,5 +117,9 @@ def test_candidate_count_nominal_matches_plan() -> None:
     ]:
         tier_6 *= len(space[key])
     expected = tier_6 * tier_vote_strong * tier_vote_weak * tier_vote_reverse * 2 * 2
-    assert expected == 3**6 * 2**3 * 2 * 2 == 23328
+    assert expected == 3**6 * 2 * 1 * 2 * 2 * 2 == 11664
     assert count >= expected  # 含既有参数（macd/分层阈值/交易层），名义总空间 >= 新增档位子空间
+    # 全部 vote 组合均满足 from_patch 强校验 weak < strong，无必死组合
+    for strong in space["tierSynergyVoteStrong"]:
+        for weak in space["tierSynergyVoteWeak"]:
+            assert weak < strong

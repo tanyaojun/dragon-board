@@ -102,7 +102,7 @@
     # ── 四维合并投票阈值（from_patch 强校验 weak < strong，
     #    有效组合 (weak, strong) ∈ {(1,2),(1,3),(2,3)}；strong=3 时 v==2 既不满足 S/A 也不满足 B/D，按规则落 C，属上调强买门槛后的预期语义）──
     "tierSynergyVoteStrong": [2, 3],
-    "tierSynergyVoteWeak": [1, 2],
+    "tierSynergyVoteWeak": [1],  # 固定默认值：避免笛卡尔积产生 weak==strong 必死组合（from_patch 强校验 weak < strong）
     "tierSynergyVoteReverse": [-1, 0],
     # ── 交易接入开关 ──
     "synergyEntryTierMin": ["none", "a"],   # 先扫 none(基线) vs a(S/A 入场)，s 单独验证
@@ -118,7 +118,7 @@ _STRATEGY_PARAM_KEYS = _STRATEGY_SCALAR_KEYS + _STRATEGY_LIST_KEYS + ("synergyEn
 
 ### 4.2 组合规模与搜索方法
 
-- 全空间名义规模：3⁶ × 2³ × 2 × 2 = **23328**，grid 不可行；其中 vote 阈值含 `weak<strong` 约束剔除的无效组合，实际有效组合 3⁶ × 6 × 2 × 2 = **17496**，无效组合由 `from_patch` 拒绝并记 trial failed。
+- 全空间名义规模：3⁶ × 2 × 1 × 2 × 2 × 2 = **11664**（vote 三元组已收敛 `weak=[1]`，8 种笛卡尔组合中 `weak==strong` 的 2 种必死组合被剔除，剩余组合全部通过 `from_patch` 强校验，无 trial 浪费），grid 仍不可行，推荐 optuna。
 - 分阶段搜索（推荐，控制成本）：
   - **Phase A 单维敏感性**：固定其它为默认值，每次只扫 1 个参数 3 候选值 → 11 组 × 3 = 33 次 trial，产出每参数的敏感性报告（参数值 → 单调性/收益），识别高敏感与冗余参数。
   - **Phase B 联合搜索**：Phase A 剔除冗余参数后，用 optuna（`method: "optuna_tpe"`）联合搜索剩余参数，`max_trials` 200-500。

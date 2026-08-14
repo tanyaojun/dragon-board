@@ -47,9 +47,9 @@ def default_search_space() -> dict[str, list[Any]]:
         "tierResonanceEntryStrengthMin": [0.2, 0.3, 0.4],
         "tierRankTrendStrongMin": [0.4, 0.5, 0.6],
         "tierRankTrendConfirmMin": [0.2, 0.25, 0.3],
-        # vote 阈值：from_patch 强校验 weak < strong，有效组合 (weak,strong)∈{(1,2),(1,3),(2,3)}
+        # vote 阈值：from_patch 强校验 weak < strong，搜索空间收敛 weak=[1]（固定默认值）避免 25% 必死组合
         "tierSynergyVoteStrong": [2, 3],
-        "tierSynergyVoteWeak": [1, 2],
+        "tierSynergyVoteWeak": [1],
         "tierSynergyVoteReverse": [-1, 0],
         # ── synergy 交易开关（§3.3，交易层参数，to_trade_config 透传）──
         "synergyEntryTierMin": ["none", "a"],  # none(基线) vs a(S/A 入场)，s 单独验证
