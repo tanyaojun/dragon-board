@@ -11,6 +11,24 @@ from backend.optimization.validation import frame_range
 from backend.core.utils import new_id, stable_hash
 
 
+def _signal_cache_key(phase: str, signal_frames: list[dict[str, Any]], strategy_config: dict[str, Any]) -> str:
+    """信号缓存键：只含信号层参数（RankTrendConfig 字段子集，经 to_strategy_config 过滤）。
+
+    交易层参数（maxPositions/takeProfit/stopLoss/minJumpConfidence/synergyEntryTierMin/
+    synergyExitOnDanger 等，经 to_trade_config 透传给 TradeSimulator、不进 RankTrendConfig）
+    不参与键——交易层参数变化时复用已算信号，是长期参数搜索缓存复用的核心（阶段 1 方案 B）。
+    从 base_strategy_config 混入的非 RankTrendConfig 键同样被剔除（from_patch 本就忽略未知键，行为一致）。
+    """
+    return freeze(
+        {
+            "phase": phase,
+            "first": signal_frames[0].get("snapshotId") if signal_frames else "",
+            "last": signal_frames[-1].get("snapshotId") if signal_frames else "",
+            "strategy": to_strategy_config(strategy_config),
+        }
+    )
+
+
 class TrialExecutor:
     def evaluate(
         self,
@@ -142,14 +160,7 @@ class TrialExecutor:
         request: dict[str, Any],
         signal_cache: dict[str, list[dict[str, Any]]],
     ) -> dict[str, Any]:
-        signal_key = freeze(
-            {
-                "phase": phase,
-                "first": signal_frames[0].get("snapshotId") if signal_frames else "",
-                "last": signal_frames[-1].get("snapshotId") if signal_frames else "",
-                "strategy": strategy_config,
-            }
-        )
+        signal_key = _signal_cache_key(phase, signal_frames, strategy_config)
         if signal_key not in signal_cache:
             config = RankTrendConfig.from_patch(strategy_config)
             signal_cache[signal_key] = RankTrendPythonEngine(config).replay(signal_frames, meta={"sampleQuality": "ok", "warnings": []})
