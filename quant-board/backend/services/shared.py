@@ -66,6 +66,27 @@ MONEY_FLOW_QUALITY_FIELDS = (
 )
 
 
+# 优化/回测链路的股票行字段白名单（阶段 1：load_frames 投影裁剪）。
+# 依据：backend/analysis/ranktrend/** 引擎消费字段（grep 实证）+ quality gate 依赖
+# （_stock_rows_for_quality 读 rowId/row_id/MONEY_FLOW_QUALITY_FIELDS）+ 行级排序/诊断。
+# 超集原则：宁多勿缺，防止投影遗漏导致引擎静默降级（fail-visible，禁止裁剪必需字段）。
+BACKTEST_RANKTREND_STOCK_FIELDS = (
+    # 引擎 replay/_build_signal 消费
+    "code", "name", "rank", "avgRankNum",
+    "change", "volumeRatio", "zlje", "zljzb",
+    "price", "volume", "turnover", "turnoverRate",
+    "dtPrice", "high", "low", "fengdan",
+    "lastTradePrice", "lastTradeVolume",
+    "limitUpPrice", "limitDownPrice", "ztPrice",
+    "highPrice", "lowPrice", "status", "leadStatus",
+    "themes", "mainTheme", "themeRole", "themeContribution",
+    "themeHeat", "themeRiskFlags", "label", "annotator", "evidence",
+    # quality gate / 分组排序
+    "rowId", "row_id", "timestamp",
+    *MONEY_FLOW_QUALITY_FIELDS,
+)
+
+
 CROSS_MARKET_ZERO_PRICE_PREFIXES = ("001", "003", "006", "007", "009")
 
 

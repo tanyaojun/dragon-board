@@ -304,7 +304,11 @@ class MongoRepository:
         start_date: str | None = None,
         end_date: str | None = None,
         include_payload: bool = True,
+        fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        """按帧+股票行加载快照。fields 非 None 时股票行走字段白名单投影
+        （_stock_rows_by_snapshot fields 分支：mongo 层裁剪 + 保留 null + 剥离 _id/snapshotId），
+        fields=None 保持原 full 投影行为。include_payload 为历史兼容参数（本实现不裁剪帧字段）。"""
         frame_rows = self._find_frames(
             dataset_id,
             snapshot_type,
@@ -317,7 +321,9 @@ class MongoRepository:
             sort="asc",
         )
         snapshot_ids = [str(row.get("snapshotId")) for row in frame_rows if row.get("snapshotId")]
-        stock_rows_by_snapshot = self._stock_rows_by_snapshot(dataset_id, snapshot_ids, projection="full")
+        stock_rows_by_snapshot = self._stock_rows_by_snapshot(
+            dataset_id, snapshot_ids, projection="full", fields=fields
+        )
         frames: list[dict[str, Any]] = []
         for row in frame_rows:
             item = self.frame_to_dict(row)

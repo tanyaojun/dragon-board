@@ -729,3 +729,59 @@ def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
         if value != expected:
             return False
     return True
+
+
+def test_load_frames_field_whitelist_projection() -> None:
+    database = FakeMongoDatabase()
+    database["snapshot_frames"].rows = [
+        {
+            "datasetId": "dragonboard_live", "snapshotId": "s1", "type": "half_hour",
+            "timestamp": 1, "tradingDate": "2026-08-01", "slotTime": "10:00",
+            "captureMode": "real_time", "source": "test",
+        },
+    ]
+    database["snapshot_stock_rows"].rows = [
+        {
+            "datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000001",
+            "name": "平安银行", "rank": 1, "change": 1.2, "volumeRatio": 1.5,
+            "zlje": 100.0, "zljzb": 5.0, "themes": ["银行"], "platforms": ["同花顺"],
+            "timestamp": 1,
+        },
+    ]
+    repo = MongoRepository(database)
+
+    frames = repo.load_frames(
+        "dragonboard_live",
+        fields=["code", "change", "volumeRatio", "zlje", "zljzb", "themes"],
+    )
+
+    stocks = frames[0]["stocks"]
+    assert stocks[0]["code"] == "000001"
+    assert stocks[0]["change"] == 1.2
+    assert stocks[0]["themes"] == ["银行"]
+    # 大字段与大字段之外的字段被裁剪
+    assert "platforms" not in stocks[0]
+    assert "name" not in stocks[0]
+
+
+def test_load_frames_without_fields_keeps_full_rows() -> None:
+    database = FakeMongoDatabase()
+    database["snapshot_frames"].rows = [
+        {
+            "datasetId": "dragonboard_live", "snapshotId": "s1", "type": "half_hour",
+            "timestamp": 1, "tradingDate": "2026-08-01", "slotTime": "10:00",
+            "captureMode": "real_time", "source": "test",
+        },
+    ]
+    database["snapshot_stock_rows"].rows = [
+        {
+            "datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000001",
+            "name": "平安银行", "rank": 1, "platforms": ["同花顺"],
+        },
+    ]
+    repo = MongoRepository(database)
+
+    frames = repo.load_frames("dragonboard_live")
+
+    assert frames[0]["stocks"][0]["platforms"] == ["同花顺"]
+    assert frames[0]["stocks"][0]["name"] == "平安银行"
