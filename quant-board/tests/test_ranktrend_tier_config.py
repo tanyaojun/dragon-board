@@ -120,14 +120,16 @@ def test_tier_fields_str_numeric_patch_converted() -> None:
     """str 数值 patch 被按字段类型转换（float/int），非法字符串抛 ValueError 而非 TypeError。"""
     c = RankTrendConfig.from_patch({"tierRankTrendStrongMin": "0.6", "tierSynergyVoteStrong": "3"})
     assert c.tierRankTrendStrongMin == 0.6
-    assert c.tierSynergyVoteStrong == 3
-    with pytest.raises(ValueError):
-        RankTrendConfig.from_patch({"tierSynergyVoteWeak": "1.5"})  # int 字段非法值
+    assert c.tierSynergyVoteStrong == 3.0  # vote 阈值 float 化（vote 语义改进 2026-08-15）
     with pytest.raises(ValueError):
         RankTrendConfig.from_patch({"tierRankTrendStrongMin": "abc"})
-
-
-def test_tier_fields_synergy_vote_float_rejected() -> None:
-    """tierSynergyVote* 强制整数：float 非法值被拒（v==1.5 永不可达会破坏分支语义）。"""
+    # 非数值 vote 阈值仍拒绝
     with pytest.raises(ValueError):
-        RankTrendConfig.from_patch({"tierSynergyVoteWeak": 1.5})
+        RankTrendConfig.from_patch({"tierSynergyVoteWeak": "abc"})
+
+
+def test_tier_fields_synergy_vote_float_allowed() -> None:
+    """tierSynergyVote* 档位加权后为 float：float 阈值允许（原 int 强制已移除）。"""
+    c = RankTrendConfig.from_patch({"tierSynergyVoteWeak": 1.5, "tierSynergyVoteStrong": 2.5})
+    assert c.tierSynergyVoteWeak == 1.5
+    assert c.tierSynergyVoteStrong == 2.5

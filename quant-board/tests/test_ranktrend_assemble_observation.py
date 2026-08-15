@@ -55,25 +55,25 @@ def test_assemble_observation_without_resonance() -> None:
 
 
 def test_assemble_observation_resonance_vote_affects_tier() -> None:
-    """有 resonance 票时 v=2 → A；无 resonance 时 v=1 → B（共振票参与投票的差异可见）。
-    lc 置 None 隔离周期升档影响（lc==A 时 v>=2 会升 S）。"""
+    """有 resonance 票时 v=2.0 → A；无 resonance 时 v=1.0 → B（共振票参与投票的差异可见）。
+    lc 置 None 隔离周期升档影响（档位加权 v2 保持旧票数门槛）。"""
     analysis = _sample_analysis()
     analysis["observation"]["lifecycle"]["signalTier"] = None
     observation = assemble_observation(analysis, _vp_neutral_stock())
-    assert observation["synergy"]["signalTier"] == "A"  # rank A/buy + res A/buy → v=2
+    assert observation["synergy"]["signalTier"] == "A"  # rank A/buy + res A/buy → v=2.0
     analysis_no_res = _sample_analysis()
     analysis_no_res["observation"]["lifecycle"]["signalTier"] = None
     analysis_no_res.pop("resonance")
     observation_no_res = assemble_observation(analysis_no_res, _vp_neutral_stock())
-    assert observation_no_res["synergy"]["signalTier"] == "B"  # 仅 rank 1 票
+    assert observation_no_res["synergy"]["signalTier"] == "B"  # 仅 rank A/buy=1.0 → B
 
 
 def test_assemble_observation_config_vote_thresholds() -> None:
-    """config 阈值参与组装：strong=3 时 v=2 落 C（强买门槛上调后的预期语义）。"""
-    analysis = _sample_analysis()  # res A + rank A → v=2
+    """config 阈值参与组装：strong=3 时 rank A + res A = v=2.0 < strong → B（门槛上调语义）。"""
+    analysis = _sample_analysis()  # res A/buy(1.0) + rank A/buy(1.0) → v=2.0
     config = RankTrendConfig.from_patch({"tierSynergyVoteStrong": 3, "tierSynergyVoteWeak": 1})
     observation = assemble_observation(analysis, _vp_neutral_stock(), config)
-    assert observation["synergy"]["signalTier"] == "C"
+    assert observation["synergy"]["signalTier"] == "B"
 
 
 def _make_replay_frames() -> list[dict]:

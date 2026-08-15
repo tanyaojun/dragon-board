@@ -148,13 +148,17 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
 
 1. 周期 tier == E（veto）                  → 总档 E（硬否决，reasons 注明周期否决）
 2. 量价 tier == E                          → 总档 D（硬风险警示：对倒出货/过度放量，不否决但强降档）
-3. 投票：buy=+1, sell=−1, hold/unknown=0，vote_sum = 共振 + 趋势 + 量价 三者之和
-4. 档位判定（按优先级）：
-   a. vote_sum ≥ 2 且 周期 tier == A       → S（方向一致强买 + 环境优选）
-   b. vote_sum ≥ 2                          → A（方向一致强买）
-   c. vote_sum == 1                         → B（方向分歧，弱买）
-   d. vote_sum ≤ −1                         → D（反向）
-   e. 其余（vote_sum == 0）                 → C（无明确方向）
+3. 档位强度加权投票（vote 语义改进 2026-08-15，v4 最终权重：方向主导 × 档位幅度）：
+   strength：S=1.2 / A=1.0 / B=0.8 / C=0.5 / D=1.0 / E=1.0
+   vote = strength × dir_sign(direction)，dir_sign: buy/up=+1, sell/down=-1, hold=0（弃权）
+   方向主导（D/E 档 buy 仍投正分，同旧票数语义）；档位幅度区分体现于 S/B/C：
+   vote(共振) + vote(趋势) + vote(量价) = vote_sum（float，范围 ±6）
+4. 档位判定（按优先级，阈值 config.tierSynergyVote*，默认 strong=2.0/weak=1.0/reverse=-1.0）：
+   a. vote_sum ≥ strong + 1                → S（高票一致强买，如三维 A/buy 或三维 S/buy）
+   b. vote_sum ≥ strong                     → A（方向一致强买，如两维 A/buy）
+   c. vote_sum ≥ weak                       → B（方向分歧，弱买，如一维 A/buy）
+   d. vote_sum ≤ reverse                    → D（反向，如一维 D/sell）
+   e. 其余                                  → C（无明确方向）
 5. 周期环境修正：周期 tier == B（caution）或 D（cooling/crowded 回避）时，
    4a/4b 的 S/A 降一档（S→A，A→B）；B/C/D 不降
 ```
@@ -162,7 +166,10 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
 说明：
 - 周期无 buy/sell 方向，故不参与投票，只作环境门（veto 否决 / caution/回避 降档 / allow 放行）。
 - 量价 `direction` 是 `up/down/neutral` 而非 `buy/sell/hold`，第 0 步先归一，否则投票语义错误。
-- `vote_sum` 覆盖 −3..+3：+3/±2 为多数 buy，±1 为分歧，0 为中性或对冲，−1 及以下为反向。示例：1 buy + 2 sell → vote_sum=−1 → D（反向），不会误判 B。
+- 档位加权核心语义：S=1.2/B=0.8/C=0.5 在**票数内**区分强度（B 档 3 票仅 A、C 档 3 票仅 B、
+  弱确认单票不升 B），D/E=1.0 保持方向主导（单维空即 D）——权重经 h1 验收口径扫描选定
+  （saEx 0.0651 ≥ 0.05、passHard=True，优于全 1.0 基线 0.0519）。
+- `vote_sum` 覆盖 −6..+6：+3.0（三 A/buy）为 S，−1.0（单 D/sell）为 D，0 为中性或对冲。
 - `synergy.state` 文本字段保留不变，`synergy.signalTier` 为新增总档。
 - 同档内排序用各维连续分，权重未定，待第 9 节回测校准后确定（不沿用杜撰权重）。
 

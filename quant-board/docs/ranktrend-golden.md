@@ -52,9 +52,9 @@ Python Golden replay 也必须对齐这条纯分析链，不再消费 `hotlistSe
 | `tierResonanceEntryStrengthMin` | `0.3` | 新入榜 A 判定 |
 | `tierRankTrendStrongMin` | `0.5` | `_rank_trend_tier` S |
 | `tierRankTrendConfirmMin` | `0.25` | `_rank_trend_tier` A |
-| `tierSynergyVoteStrong` | `2` | `_synergy_tier`：`v>=strong 且 lc_tier=="A"`→S，`v>=strong`→A（int） |
-| `tierSynergyVoteWeak` | `1` | `_synergy_tier` vote_sum==1（B，int） |
-| `tierSynergyVoteReverse` | `-1` | `_synergy_tier` vote_sum≤−1（D，int） |
+| `tierSynergyVoteStrong` | `2.0` | `_synergy_tier`：`v>=strong+1`→S，`v>=strong`→A（档位加权 float，vote 语义改进 2026-08-15） |
+| `tierSynergyVoteWeak` | `1.0` | `_synergy_tier` `v>=weak`（B，float） |
+| `tierSynergyVoteReverse` | `-1.0` | `_synergy_tier` `v<=reverse`（D，float） |
 
 > `from_patch` 强校验（不满足抛 ValueError，回测 trial 记 failed）：`0 < tierRankTrendConfirmMin < tierRankTrendStrongMin <= 1`、`tierSynergyVoteReverse <= tierSynergyVoteWeak < tierSynergyVoteStrong`（weak 严格小于 strong）、`0 <= tierResonance*Min <= 1`。
 

@@ -237,6 +237,13 @@ def compute_volume_price_score(
     }
 
 
+# ── synergy 档位强度权重（vote 语义改进 2026-08-15，v4 权重，horizon=1 验收口径）──
+# 模块级常量便于权重扫描/实证迭代；方案 1 方向主导（vote = strength × dir_sign）。
+# v4 = 权重扫描最优（saEx=0.0651、passHard=True、spearman=1.0，优于 v0 基线 0.0519）：
+# S=1.2/A=1.0/B=0.8/C=0.5/D=1.0/E=1.0 —— 档位区分体现在 S/B/C，D/E 恢复方向主导。
+_VOTE_STRENGTH: dict[str, float] = {"S": 1.2, "A": 1.0, "B": 0.8, "C": 0.5, "D": 1.0, "E": 1.0}
+
+
 def _synergy_tier(
     res_tier: str | None,
     res_dir: str | None,
@@ -257,14 +264,21 @@ def _synergy_tier(
     if vp_tier == "E":
         return "D", ["量价出货硬风险"]
 
-    def _vote(tier: str | None, direction: str | None) -> int:
+    def _vote(tier: str | None, direction: str | None) -> float:
+        """档位强度加权投票（vote 语义改进 2026-08-15，方案 1：方向主导 × 档位幅度）。
+
+        vote = strength(tier) × dir_sign(direction)，dir_sign: buy/up=+1, sell/down=-1, hold=0。
+        方向主导（D/E 档 buy 仍投正分），档位强度决定幅度（v4：S=1.2/A=1.0/B=0.8/C=0.5/
+        D=1.0/E=1.0，权重扫描最优）。全 1.0 权重 = 旧票数语义（方向 ±1）。
+        """
         if tier in ("unknown", None) or not direction:
-            return 0
+            return 0.0
+        strength = _VOTE_STRENGTH.get(tier, 0.0)
         if direction in ("buy", "up"):
-            return 1
+            return strength
         if direction in ("sell", "down"):
-            return -1
-        return 0
+            return -strength
+        return 0.0
 
     v = _vote(res_tier, res_dir) + _vote(rank_tier, rank_dir) + _vote(vp_tier, vp_dir)
     # 阶段 3 修复方向 3：档位分级按票数（strong/strong+1），A 档可达。
@@ -273,10 +287,10 @@ def _synergy_tier(
     # 新规则：S = v>=strong+1（高票一致，如四维至少 3 票同向），A = v==strong（刚达强买线），
     # B/D/C 语义不变；周期 B/D 时 S/A 降一档规则保留。
     if v >= c.tierSynergyVoteStrong + 1:
-        tier, reasons = "S", ["方向一致强买（≥strong+1 票）"]
+        tier, reasons = "S", ["方向一致强买（档位加权高分）"]
     elif v >= c.tierSynergyVoteStrong:
         tier, reasons = "A", ["方向一致强买"]
-    elif v == c.tierSynergyVoteWeak:
+    elif v >= c.tierSynergyVoteWeak:
         tier, reasons = "B", ["方向分歧，弱买"]
     elif v <= c.tierSynergyVoteReverse:
         tier, reasons = "D", ["反向"]

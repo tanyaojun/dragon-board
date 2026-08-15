@@ -133,9 +133,9 @@ class RankTrendConfig:
     tierResonanceEntryStrengthMin: float = 0.3  # 新入榜 A 判定
     tierRankTrendStrongMin: float = 0.5  # _rank_trend_tier S
     tierRankTrendConfirmMin: float = 0.25  # _rank_trend_tier A
-    tierSynergyVoteStrong: int = 2  # _synergy_tier vote_sum≥2（S/A 分界）
-    tierSynergyVoteWeak: int = 1  # _synergy_tier vote_sum==1（B）
-    tierSynergyVoteReverse: int = -1  # _synergy_tier vote_sum≤−1（D）
+    tierSynergyVoteStrong: float = 2.0  # _synergy_tier vote_sum≥strong（S/A 分界，档位加权后 float）
+    tierSynergyVoteWeak: float = 1.0  # _synergy_tier vote_sum≥weak（B）
+    tierSynergyVoteReverse: float = -1.0  # _synergy_tier vote_sum≤reverse（D）
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
@@ -148,7 +148,7 @@ class RankTrendConfig:
                 if isinstance(current, bool):
                     value = bool(value)
                 elif isinstance(current, int):
-                    # int 字段（tierSynergyVote*）强制整数：非整数值拒绝（截断会破坏分支语义）。
+                    # int 字段（macd*/resonance*Bars/decision* 等）强制整数：非整数值拒绝。
                     # float() 统一处理 str/numpy/Decimal 等数值输入，非数值在此抛 ValueError。
                     as_float = float(value)
                     if not as_float.is_integer():
