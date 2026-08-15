@@ -1,6 +1,6 @@
 # 四维信号长期回测计划与性能优化方案
 
-> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2（数据质量治理）已落地（commit `58878dc`），阶段 3（四维信号区分度诊断 + 三方向修复 + 语义校准）**验收达成**（commit `2f905b5`/`dc01019`/`40ddc7f`），阶段 4（参数搜索）**四线碰壁归档**（commit `1fb7384`/`cf73491`/`4a6a443`/`a31af1b`/`1adf47b`），验收口径调整为**胜率×盈亏比组合**，阶段 5（信号→收益映射缺口诊断）待推进
+> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2（数据质量治理）已落地（commit `58878dc`），阶段 3（四维信号区分度诊断 + 三方向修复 + 语义校准）**验收达成**（commit `2f905b5`/`dc01019`/`40ddc7f`），阶段 4（参数搜索）**四线碰壁归档**（commit `1fb7384`/`cf73491`/`4a6a443`/`a31af1b`/`1adf47b`），验收口径调整为**胜率×盈亏比组合**，阶段 5（信号→收益映射缺口诊断）**已落地，缺口归属=退出机制（exit）**，阶段 6 待立项
 > 日期：2026-08-15
 > 归档位置：本文档与四份四维信号方案文档统一存入 `quant-board/docs/ranktrend-tier-backtest/`
 
@@ -305,6 +305,42 @@ high/low K 线（ATR 回退固定 %）；`win_rate_pf` 目标下仓位缩放不�
 5. **判定规则**：产出诊断报告（`data/reports/signal-to-return-gap.json`），明确缺口归属（入场 / 退出 / 两者），作为阶段 6 立项依据。
 
 **验收**：诊断报告产出 + 缺口归属结论明确（入场 / 退出 / 两者）；不改变任何信号数值与默认参数，全量 pytest 保持绿。
+
+**已落地（commit 待补，2026-08-15）**。实现 `backend/analysis/ranktrend/signal_return_gap.py`（纯函数：
+`horizon_price_return_stats` / `sa_bucket_distribution` / `sa_vs_amain_overlap` / `assess_gap`）+
+`backend/operations/diagnose_signal_return_gap.py`（只读诊断脚本，复用阶段 3 的 Mongo 加载/replay 链路，
+另接一次默认配置 TradeSimulator 取 S/A 档入场净收益对照）；测试 `tests/test_signal_return_gap.py`
+11 用例（TDD RED→GREEN，含 rank 超界占位修复的 fail-visible 用例）。全量 pytest 1564 passed。
+
+**真实诊断（769 帧 / 156647 信号，2026-04-15~08-14，half_hour，报告 `data/reports/signal-to-return-gap.json`）**：
+
+| 项 | 结果 | 解读 |
+|---|---|---|
+| S/A 档 h1/h3 价格收益 | median=0.0，winRate 0.371~0.416 | 短期（1-3 帧）追强无优势，均值回归主导（与阶段 3 一致） |
+| S/A 档 h8 价格收益 | median **+0.0028**，winRate **0.5272** vs control 0.5073 | **8 帧后信号方向正确**（winRate 超 control +2pp） |
+| 分位桶分布 | S/A 档集中桶 6-9（995/1079/1038/868） | 追强确实集中高分位，印证均值回归假设 |
+| S/A ∩ A_MAIN 重叠 | Jaccard **0.60**，saShareInAmain **0.90**，amainShareInSa 0.65 | A_MAIN 入场 90% 是 S/A 档（入场在追强）；S/A 档仅 65% 进 A_MAIN 候选 |
+| 默认配置交易（S/A 入场 97 笔） | netReturn median **−0.0095**，winRate **0.3711** | 交易执行把 h8 的正信号收益吞掉了 |
+
+**缺口归属判定：exit（退出机制吞利润）**——S/A 档信号在 8 帧 horizon 有正方向信息
+（winRate 0.5272 vs 交易 0.3711，差 15.6pp），但默认交易配置（stopLoss −0.06 / takeProfit 0.12 /
+maxHoldingBars 等退出路径）在收益兑现前打断持仓。h1/h3 无优势说明**入场后 1-3 帧均值回归吃掉短期收益**，
+真正的问题不是"入场错了"，而是**持有时间不足以等到 h8 的正期望兑现，且退出路径过早截断**。
+
+### 阶段 6（候选，待用户决策立项）
+
+基于阶段 5 缺口归属（exit），候选方向：
+
+1. **延长持有/退出结构重估**：h8 收益为正说明 8 帧是正期望窗口，maxHoldingBars/止盈过早截断；
+   对比"8 帧强制持有"vs 当前退出路径的收益差（需确认 T+1 与流动性约束下可执行性）。
+2. **退出触发条件去噪**：D_EXIT_RISK / 降档退出在均值回归 h1-h3 窗口内触发过多，可验证
+   "持仓 ≥N 帧后才允许 synergy 降档退出"（当前 `synergyExitOnDowngrade` 默认关闭，grid 曾证无增量——
+   需结合 h8 正期望重新校准）。
+3. **入场时机叠加分位条件**：h1-h3 无优势而 h8 有优势 → 若叠加"低分位桶入场"或"入场后先忍 3 帧"，
+   可能提高绝对胜率；与阶段 4 的 excess 口径诊断联动。
+4. **补齐 high/low 数据后重验 ATR 止损**：ATR 止损在缺 high/low 时回退固定 %，重验后才算完整退出结构。
+
+阶段 6 立项需先量化"8 帧强制持有 vs 当前退出"的 winRate×pf 差，再定方向；验收走第 4 节胜率×盈亏比组合线。
 
 ## 4. 验收标准汇总
 
