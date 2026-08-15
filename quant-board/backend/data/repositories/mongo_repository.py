@@ -900,6 +900,9 @@ class MongoRepository:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
+        # 去重：单次 $in 查询天然去重，分批切批后若含重复 snapshotId 且落在不同批次，
+        # 同一行会重复 append（审计修订：list(dict.fromkeys(...)) 保持顺序、与单次查询语义一致）
+        snapshot_ids = list(dict.fromkeys(snapshot_ids))
         if fields is not None:
             # 行字段白名单投影（frames fields 参数）：snapshotId 必须保留（分组 key），
             # 其余只取请求字段，避免 full 投影整行 107 字段全量传输（3 帧可达 27MB）；

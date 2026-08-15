@@ -813,3 +813,27 @@ def test_stock_rows_by_snapshot_batches_snapshot_ids(monkeypatch) -> None:
     assert len(collection.find_queries) == 3
     for query in collection.find_queries:
         assert query["snapshotId"]["$in"]  # 分批仍走 $in（保持 sort(rank) 语义）
+
+
+def test_stock_rows_by_snapshot_deduplicates_snapshot_ids(monkeypatch) -> None:
+    """分批查询前对 snapshot_ids 去重：重复 id 落在不同批次会导致同一行重复 append，
+    破坏单次 $in 查询的天然去重语义（审计修订）。"""
+    import backend.data.repositories.mongo_repository as mongo_repo
+
+    database = FakeMongoDatabase()
+    collection = database["snapshot_stock_rows"]
+    collection.rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": f"s{i}", "code": f"00000{i}", "rank": i}
+        for i in range(1, 6)
+    ]
+    repo = MongoRepository(database)
+    monkeypatch.setattr(mongo_repo, "_STOCK_ROWS_BATCH_SIZE", 2)
+
+    rows_by_snapshot = repo._stock_rows_by_snapshot(
+        "dragonboard_live", ["s1", "s2", "s1", "s3", "s2"], projection="full"
+    )
+
+    # 去重后 3 个 snapshotId；未去重时 s1/s2 跨批会出现重复行
+    assert len(rows_by_snapshot) == 3
+    assert [len(rows_by_snapshot[k]) for k in ("s1", "s2", "s3")] == [1, 1, 1]
+    assert sum(len(v) for v in rows_by_snapshot.values()) == 3

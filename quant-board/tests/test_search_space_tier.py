@@ -123,3 +123,20 @@ def test_candidate_count_nominal_matches_plan() -> None:
     for strong in space["tierSynergyVoteStrong"]:
         for weak in space["tierSynergyVoteWeak"]:
             assert weak < strong
+
+
+def test_strategy_list_keys_cover_all_ranktrend_config_factory_fields() -> None:
+    """_STRATEGY_LIST_KEYS 是手工维护白名单（复合字段 default_factory 非 dataclass 默认值，
+    _STRATEGY_SCALAR_KEYS 自动扫描无法覆盖）。若 RankTrendConfig 新增 default_factory 字段而
+    漏更白名单，_signal_cache_key 会漏掉该字段 → 两个不同策略配置复用同一信号（错误复用 bug），
+    而非缓存未命中（浪费）。此测试强制白名单与 dataclass 字段双向一致（审计修订）。"""
+    import dataclasses
+
+    from backend.optimization.search_space import _STRATEGY_LIST_KEYS
+
+    factory_fields = {
+        f.name
+        for f in dataclasses.fields(RankTrendConfig)
+        if f.default is dataclasses.MISSING and f.default_factory is not dataclasses.MISSING
+    }
+    assert factory_fields == set(_STRATEGY_LIST_KEYS)
