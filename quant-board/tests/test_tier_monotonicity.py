@@ -40,11 +40,22 @@ def _frames_and_signals(
 
 
 def _monotonic_passing_fixture() -> tuple[list[dict], list[dict]]:
-    """S(30) rank 31-60→1-30（+0.5）；A(20) rank 11-30→10-29（+0.017）；C(10) rank 1-10→31-40（−0.5）。
-    预期：S>A>C 单调、S 样本 30、S/A 精度 100%、unknown 0 → 硬约束全过。"""
-    tiers = ["S"] * 30 + ["A"] * 20 + ["C"] * 10
-    frame0 = list(range(31, 61)) + list(range(11, 31)) + list(range(1, 11))
-    frame1 = list(range(1, 31)) + list(range(10, 30)) + list(range(31, 41))
+    """阶段 3 修复后合同通过 fixture：S(30)/A(30)/B(30) 同桶交错（frame0 rank 3i+1/3i+2/3i+3），
+    frame1 S 升（rank 1-30）、A 平（rank 31-60）、B 降（rank 61-90）。
+    预期（excess 口径，§5.2 修复后）：S exM≈+0.33 > A≈0 > B≈−0.33 单调、S/A 加权 excess≈0.25、
+    S 样本 30、unknown 0 → 硬约束全过（spearman=1.0、无反转、saExcessAccuracy≥0.05）。"""
+    tiers = ["S"] * 30 + ["A"] * 30 + ["B"] * 30
+    frame0 = [3 * i + 1 for i in range(30)] + [3 * i + 2 for i in range(30)] + [3 * i + 3 for i in range(30)]
+    frame1 = list(range(1, 31)) + list(range(31, 61)) + list(range(61, 91))
+    return _frames_and_signals(tiers, frame0, frame1)
+
+
+def _no_a_fixture() -> tuple[list[dict], list[dict]]:
+    """无 A 样本 fixture（§5.2 saExcessAccuracy 样本池加权）：S(30)/B(30) 偶数交错同桶，
+    S 升 B 降 → S excess≈+0.25，A n=0 不拖死加权结果。"""
+    tiers = ["S"] * 30 + ["B"] * 30
+    frame0 = [2 * i + 1 for i in range(30)] + [2 * i + 2 for i in range(30)]
+    frame1 = list(range(1, 31)) + list(range(31, 61))
     return _frames_and_signals(tiers, frame0, frame1)
 
 
@@ -53,11 +64,14 @@ def test_tier_forward_returns_layer_stats() -> None:
     stats = tier_forward_returns(signals, frames, horizon=1)
     tiers = stats["tiers"]
     assert tiers["S"]["count"] == 30
-    assert tiers["A"]["count"] == 20
-    assert tiers["C"]["count"] == 10
-    assert tiers["S"]["meanFutureReturn"] > tiers["A"]["meanFutureReturn"] > tiers["C"]["meanFutureReturn"]
-    assert tiers["S"]["directionAccuracy"] == 1.0
-    assert tiers["C"]["meanFutureReturn"] < 0
+    assert tiers["A"]["count"] == 30
+    assert tiers["B"]["count"] == 30
+    assert tiers["S"]["meanFutureReturn"] > tiers["A"]["meanFutureReturn"] > tiers["B"]["meanFutureReturn"]
+    assert tiers["S"]["directionAccuracy"] >= 0.9  # 交错边界个别 delta≈0，非全升
+    assert tiers["B"]["meanFutureReturn"] < 0
+    # 修复后口径：excess（去趋势）字段存在且 S 最高
+    assert tiers["S"]["excessMeanFutureReturn"] > 0
+    assert tiers["S"]["excessDirectionAccuracy"] > 0
 
 
 def test_monotonicity_passes_hard_constraint() -> None:
@@ -68,8 +82,9 @@ def test_monotonicity_passes_hard_constraint() -> None:
     assert stats["monotonicity"]["reversals"] == []
     checks = stats["monotonicity"]["checks"]
     assert checks["sSampleCount"]["ok"] is True
-    assert checks["saDirectionAccuracy"]["ok"] is True
+    assert checks["saExcessAccuracy"]["ok"] is True  # 修复后：excess 达标线 0.05
     assert checks["unknownRateBelow5pct"]["ok"] is True
+    assert checks["monotonicNoReversal"]["validTiers"] == 3  # 链收窄为 S/A/B
 
 
 def test_reversal_detected_when_a_below_b() -> None:
@@ -151,15 +166,14 @@ def test_tier_monotonicity_score_contract() -> None:
 
 
 def test_sa_accuracy_without_a_samples_not_penalized() -> None:
-    """A 档无样本时 S/A 合并精度按样本池加权：仅 S 样本且精度 100% → 约束通过（不被 None→0 拖死）。"""
-    tiers = ["S"] * 30 + ["C"] * 30
-    frame0 = list(range(31, 61)) + list(range(1, 31))
-    frame1 = list(range(1, 31)) + list(range(31, 61))
-    frames, signals = _frames_and_signals(tiers, frame0, frame1)
+    """A 档无样本时 S/A 合并 excess 按样本池加权：仅 S 样本且 excess>0 → 约束通过（不被 None→0 拖死）。"""
+    frames, signals = _no_a_fixture()
     stats = tier_forward_returns(signals, frames, horizon=1)
     assert stats["tiers"]["A"]["count"] == 0
-    assert stats["monotonicity"]["checks"]["saDirectionAccuracy"]["ok"] is True
-    assert stats["monotonicity"]["checks"]["saDirectionAccuracy"]["actual"] == 1.0
+    assert stats["tiers"]["S"]["count"] == 30
+    checks = stats["monotonicity"]["checks"]
+    assert checks["saExcessAccuracy"]["ok"] is True
+    assert checks["saExcessAccuracy"]["actual"] >= 0.05
 
 
 def test_tier_order_constant() -> None:
@@ -211,33 +225,33 @@ def test_tier_signal_of_dimension_missing_falls_back() -> None:
 
 
 def test_tier_forward_returns_layers_by_dimension() -> None:
-    """同一批 signals 按不同维度分层：rankTrend 维 S 升 A 平 C 降 → 单调；
+    """同一批 signals 按不同维度分层：rankTrend 维 S 升 A 平 B 降 → 单调（新合同链 S/A/B）；
     volumePrice 维（同一批股票）反向 C 升 S 降 → 不单调。验证 dimension 参数真正生效。"""
-    tier_block = ["S"] * 30 + ["A"] * 20 + ["C"] * 10
-    frame0 = list(range(31, 61)) + list(range(11, 31)) + list(range(1, 11))
-    frame1 = list(range(1, 31)) + list(range(10, 30)) + list(range(31, 41))
-    frames, _ = _frames_and_signals(tier_block, frame0, frame1)
+    tiers, frame0, frame1 = ["S"] * 30 + ["A"] * 30 + ["B"] * 30, None, None
+    frame0 = [3 * i + 1 for i in range(30)] + [3 * i + 2 for i in range(30)] + [3 * i + 3 for i in range(30)]
+    frame1 = list(range(1, 31)) + list(range(31, 61)) + list(range(61, 91))
+    frames, _ = _frames_and_signals(tiers, frame0, frame1)
     signals = [
         _multi_dimension_signal(
             {
                 # rankTrend 维与档位块一致；volumePrice 维故意反向（S 块实际下跌）
                 "resonance": tier,
                 "rankTrend": tier,
-                "volumePrice": {"S": "C", "A": "B", "C": "S"}[tier],
+                "volumePrice": {"S": "C", "A": "B", "B": "S"}[tier],
                 "lifecycle": "B",
                 "synergy": tier,
             }
         )
         | {"snapshotId": "s0", "code": f"{i:06d}"}
-        for i, tier in enumerate(tier_block)
+        for i, tier in enumerate(tiers)
     ]
     rank_trend_stats = tier_forward_returns(signals, frames, horizon=1, dimension="rankTrend")
     assert rank_trend_stats["tiers"]["S"]["count"] == 30
-    assert rank_trend_stats["tiers"]["S"]["meanFutureReturn"] > rank_trend_stats["tiers"]["C"]["meanFutureReturn"]
+    assert rank_trend_stats["tiers"]["S"]["meanFutureReturn"] > rank_trend_stats["tiers"]["B"]["meanFutureReturn"]
     assert rank_trend_stats["monotonicity"]["passHardConstraint"] is True
 
     vp_stats = tier_forward_returns(signals, frames, horizon=1, dimension="volumePrice")
-    assert vp_stats["tiers"]["S"]["count"] == 10  # 原 C 块（rank 1-10）被映射为 S
+    assert vp_stats["tiers"]["S"]["count"] == 30  # 原 B 块被映射为 S
     assert vp_stats["tiers"]["S"]["meanFutureReturn"] < 0
     assert vp_stats["tiers"]["C"]["count"] == 30  # 原 S 块被映射为 C
     assert vp_stats["tiers"]["C"]["meanFutureReturn"] > 0
@@ -246,15 +260,22 @@ def test_tier_forward_returns_layers_by_dimension() -> None:
 
 def test_tier_discrimination_contract() -> None:
     """tier_discrimination 输出区分度指标：S−C 收益差、S/A 方向精度、D/E 相对 C、档位收益极差、正单调。"""
+    # positiveMonotonic 用新合同 passing fixture（S/A/B 交错，excess 单调）
     frames, signals = _monotonic_passing_fixture()
     stats = tier_forward_returns(signals, frames, horizon=1)
     disc = tier_discrimination(stats)
-    assert disc["sMinusC"] is not None and disc["sMinusC"] > 0
-    assert disc["aMinusC"] is not None
     assert disc["tierSpread"] is not None and disc["tierSpread"] > 0
-    assert disc["saDirectionAccuracy"] >= 0.6
+    assert disc["saDirectionAccuracy"] > 0  # 原始口径保留（验收以 excess 为准）
     assert disc["positiveMonotonic"] is True
-    assert disc["deVsC"] is None or disc["deVsC"] < 0  # 无 D/E 样本时为 None，不伪造
+    # sMinusC/aMinusC/deVsC 用含 C/D/E 的 fixture（S 升 C 降，无 D/E → deVsC None 不伪造）
+    tiers = ["S"] * 30 + ["A"] * 20 + ["C"] * 10
+    frame0 = list(range(31, 61)) + list(range(11, 31)) + list(range(1, 11))
+    frame1 = list(range(1, 31)) + list(range(10, 30)) + list(range(31, 41))
+    frames2, signals2 = _frames_and_signals(tiers, frame0, frame1)
+    disc2 = tier_discrimination(tier_forward_returns(signals2, frames2, horizon=1))
+    assert disc2["sMinusC"] is not None and disc2["sMinusC"] > 0
+    assert disc2["aMinusC"] is not None
+    assert disc2["deVsC"] is None  # 无 D/E 样本时为 None，不伪造
 
 
 def test_tier_discrimination_detects_non_monotonic() -> None:

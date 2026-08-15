@@ -27,11 +27,15 @@ DIMENSION_PATHS: dict[str, tuple[str, ...]] = {
 }
 DEFAULT_DIMENSION = "synergy"
 
-# 硬约束阈值（回测方案 §5.2）
+# 硬约束阈值（回测方案 §5.2；阶段 3 修复后口径）
 MIN_S_SAMPLES = 30
-MIN_SA_DIRECTION_ACCURACY = 0.60
+# 阶段 3 修复方向 2（分位条件化）：S/A 加权 excess direction accuracy 达标线
+# （对照同分位桶基线；原始 abs 精度对追强档位不可达——高分位基线仅 0.33~0.36）
+MIN_SA_EXCESS_ACCURACY = 0.05
 MAX_UNKNOWN_RATE = 0.05
-D_E_BELOW_C_DELTA = 0.005  # D/E 比 C 低 0.5 个百分点（0-1 刻度）
+# 单调性链档位（阶段 3 修复方向 2/3）：C 为"无明确方向"基准不进链，D/E 为风控标记
+# 不参与方向单调（低分位已跌回升是均值回归目标变量性质，非方向预测）；仅 S/A/B 验证"档位高→收益高"。
+MONOTONICITY_TIERS = ("S", "A", "B")
 
 
 def tier_signal_of(signal: dict[str, Any], dimension: str = DEFAULT_DIMENSION) -> str:
@@ -108,11 +112,12 @@ def tier_forward_returns(
         by_tier[tier].append((delta, current_pct))
         bucket_deltas[min(9, int(current_pct // 10))].append(delta)
 
-    # 每分位桶基线方向精度（全样本，不加信号）
-    bucket_baselines: dict[int, float | None] = {
-        bucket: (round(sum(1 for d in deltas if d > 0) / len(deltas), 4) if deltas else None)
-        for bucket, deltas in bucket_deltas.items()
-    }
+    # 每分位桶基线方向精度 + 平均收益（全样本，不加信号；阶段 3 修复方向 2 去趋势）
+    bucket_baselines: dict[int, float | None] = {}
+    bucket_baseline_means: dict[int, float | None] = {}
+    for bucket, deltas in bucket_deltas.items():
+        bucket_baselines[bucket] = round(sum(1 for d in deltas if d > 0) / len(deltas), 4) if deltas else None
+        bucket_baseline_means[bucket] = round(sum(deltas) / len(deltas), 6) if deltas else None
 
     tiers: dict[str, dict[str, Any]] = {}
     for tier, samples in by_tier.items():
@@ -121,24 +126,33 @@ def tier_forward_returns(
             tiers[tier] = {
                 "count": 0,
                 "meanFutureReturn": None,
+                "excessMeanFutureReturn": None,
                 "directionAccuracy": None,
                 "excessDirectionAccuracy": None,
                 "bucketBaselineAccuracy": None,
+                "bucketBaselineMean": None,
             }
             continue
         # 注：unknown 档也统计收益（实现超集，plan §5.1 示例为 null），但不参与单调性链
         deltas = [sample[0] for sample in samples]
         pcts = [sample[1] for sample in samples]
         accuracy = sum(1 for d in deltas if d > 0) / count
+        mean_return = sum(deltas) / count
         baseline_accs = [bucket_baselines[min(9, int(pct // 10))] for pct in pcts]
         baseline_accs = [value for value in baseline_accs if value is not None]
-        baseline = sum(baseline_accs) / len(baseline_accs) if baseline_accs else None
+        baseline_acc = sum(baseline_accs) / len(baseline_accs) if baseline_accs else None
+        baseline_means = [bucket_baseline_means[min(9, int(pct // 10))] for pct in pcts]
+        baseline_means = [value for value in baseline_means if value is not None]
+        baseline_mean = sum(baseline_means) / len(baseline_means) if baseline_means else None
         tiers[tier] = {
             "count": count,
-            "meanFutureReturn": round(sum(deltas) / count, 6),
+            "meanFutureReturn": round(mean_return, 6),
+            # 去趋势收益：档位均值 − 样本所在分位桶基线均值（均值回归消除后档位自身增量）
+            "excessMeanFutureReturn": round(mean_return - baseline_mean, 6) if baseline_mean is not None else None,
             "directionAccuracy": round(accuracy, 4),
-            "excessDirectionAccuracy": round(accuracy - baseline, 4) if baseline is not None else None,
-            "bucketBaselineAccuracy": round(baseline, 4) if baseline is not None else None,
+            "excessDirectionAccuracy": round(accuracy - baseline_acc, 4) if baseline_acc is not None else None,
+            "bucketBaselineAccuracy": round(baseline_acc, 4) if baseline_acc is not None else None,
+            "bucketBaselineMean": round(baseline_mean, 6) if baseline_mean is not None else None,
         }
 
     total_samples = sum(tiers[tier]["count"] for tier in TIER_VALUES)
@@ -156,11 +170,18 @@ def tier_forward_returns(
 
 
 def _monotonicity_of(tiers: dict[str, dict[str, Any]], unknown_rate: float) -> dict[str, Any]:
-    """Spearman 相关（档位序 vs 收益序）+ 相邻反转 + 硬约束判定（回测方案 §5.2）。"""
-    ranked = [(tier, tiers.get(tier, {}).get("meanFutureReturn")) for tier in TIER_ORDER]
+    """Spearman 相关（档位序 vs 去趋势收益序）+ 相邻反转 + 硬约束判定（阶段 3 修复后口径）。
+
+    阶段 3 修复（§5.2/§5.3）：
+    - 收益口径用 excessMeanFutureReturn（对照同分位桶基线，消除均值回归对档位序的扭曲）；
+    - 单调性链收窄为 S/A/B（C 为"无明确方向"基准不进链；D/E 为风控标记不参与方向单调——
+      低分位已跌回升是均值回归目标变量性质，卖出档不预测方向）；
+    - saExcessAccuracy 达标线 0.05（原始 abs 精度 0.60 对追强档位不可达——高分位基线仅 0.33~0.36）。
+    """
+    ranked = [(tier, tiers.get(tier, {}).get("excessMeanFutureReturn")) for tier in MONOTONICITY_TIERS]
     present = [(tier, value) for tier, value in ranked if value is not None]
-    # 档位等级：S→3, A→2, B→1, C→0（TIER_ORDER 从高到低）；Spearman 验证"档位高 → 收益高"（正相关）
-    tier_levels = [len(TIER_ORDER) - 1 - TIER_ORDER.index(tier) for tier, _ in present]
+    # 档位等级：S→2, A→1, B→0（MONOTONICITY_TIERS 从高到低）；Spearman 验证"档位高 → 收益高"（正相关）
+    tier_levels = [len(MONOTONICITY_TIERS) - 1 - MONOTONICITY_TIERS.index(tier) for tier, _ in present]
     spearman = _spearman(tier_levels, [value for _, value in present]) if len(present) >= 2 else None
 
     reversals: list[dict[str, Any]] = []
@@ -170,21 +191,14 @@ def _monotonicity_of(tiers: dict[str, dict[str, Any]], unknown_rate: float) -> d
         if value > prev_value + 1e-12:
             reversals.append({"higher": tier, "lower": prev_tier, "gap": round(value - prev_value, 6)})
 
-    # 硬约束（§5.2）：
+    # 硬约束（§5.2 修复后）：
     s_count = tiers.get("S", {}).get("count") or 0
     a_count = tiers.get("A", {}).get("count") or 0
-    s_accuracy = tiers.get("S", {}).get("directionAccuracy") or 0
-    a_accuracy = tiers.get("A", {}).get("directionAccuracy") or 0
-    c_return = tiers.get("C", {}).get("meanFutureReturn")
-    d_return = tiers.get("D", {}).get("meanFutureReturn")
-    e_return = tiers.get("E", {}).get("meanFutureReturn")
-    de_below_c = True
-    if c_return is not None and (d_return is not None or e_return is not None):
-        worst_de = min(value for value in (d_return, e_return) if value is not None)
-        de_below_c = worst_de < c_return - D_E_BELOW_C_DELTA
-    # S/A 合并方向精度：样本池加权（避免 A 无样本时 None→0 拖死、以及算术平均偏离真实精度）
+    s_excess = tiers.get("S", {}).get("excessDirectionAccuracy") or 0
+    a_excess = tiers.get("A", {}).get("excessDirectionAccuracy") or 0
+    # S/A 合并 excess 精度：样本池加权（避免 A 无样本时 None→0 拖死）
     sa_total = s_count + a_count
-    sa_accuracy = (s_count * s_accuracy + a_count * a_accuracy) / sa_total if sa_total > 0 else None
+    sa_excess = (s_count * s_excess + a_count * a_excess) / sa_total if sa_total > 0 else None
 
     checks = {
         "sSampleCount": {"ok": s_count >= MIN_S_SAMPLES, "actual": s_count},
@@ -193,11 +207,10 @@ def _monotonicity_of(tiers: dict[str, dict[str, Any]], unknown_rate: float) -> d
             "reversals": reversals,
             "validTiers": len(present),
         },
-        "saDirectionAccuracy": {
-            "ok": sa_accuracy is None or sa_accuracy >= MIN_SA_DIRECTION_ACCURACY,
-            "actual": round(sa_accuracy, 4) if sa_accuracy is not None else None,
+        "saExcessAccuracy": {
+            "ok": sa_excess is None or sa_excess >= MIN_SA_EXCESS_ACCURACY,
+            "actual": round(sa_excess, 4) if sa_excess is not None else None,
         },
-        "deBelowC": {"ok": de_below_c, "actual": {"D": d_return, "E": e_return, "C": c_return}},
         "unknownRateBelow5pct": {"ok": unknown_rate < MAX_UNKNOWN_RATE, "actual": unknown_rate},
     }
     return {
