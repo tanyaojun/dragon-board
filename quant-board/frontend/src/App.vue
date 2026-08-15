@@ -350,15 +350,10 @@ const gridInputs = reactive({
   maxPositions: "3,5,8",
   macdFast: "21",
   macdSlow: "34",
-  macdSignal: "13",
-  // 交易策略开关数值型候选（逗号分隔；空=不参与搜索）
-  atrStopMultiplier: "2.0",
-  atrTakeMultiplier: "3.0",
-  breakevenThreshold: "0.02",
-  synergyDowngradeSteps: "2"
+  macdSignal: "13"
 });
 
-// 交易策略开关——枚举（下拉单选）与布尔（勾选=启用）
+// 交易策略开关——枚举（下拉单选）、布尔（勾选=启用）、数值（单值 number，参照随机种子控件）
 const synergyEntryTierMin = ref("none");
 const entryMomentumConfirm = ref("off");
 const switchSynergyExitOnDanger = ref(false);
@@ -366,6 +361,10 @@ const switchUseAtrStops = ref(false);
 const switchBreakevenTrailing = ref(false);
 const switchTierPositionScale = ref(false);
 const switchSynergyExitOnDowngrade = ref(false);
+const atrStopMultiplier = ref(2.0);
+const atrTakeMultiplier = ref(3.0);
+const breakevenThreshold = ref(0.02);
+const synergyDowngradeSteps = ref(2);
 
 const selectedDataset = computed(() => {
   return datasetsState.data?.find((dataset) => dataset.id === selectedDatasetId.value);
@@ -1427,7 +1426,7 @@ async function runOptimization(): Promise<void> {
   if (macdFast.length) optimizationForm.parameterGrid.macdFast = macdFast;
   if (macdSlow.length) optimizationForm.parameterGrid.macdSlow = macdSlow;
   if (macdSignal.length) optimizationForm.parameterGrid.macdSignal = macdSignal;
-  // 交易策略开关（方向 1/3/4；枚举下拉/布尔勾选/数值逗号分隔，未启用则不参与搜索）
+  // 交易策略开关（方向 1/3/4；枚举下拉/布尔勾选/数值单值，未启用则不参与搜索）
   optimizationForm.parameterGrid.synergyEntryTierMin = [synergyEntryTierMin.value];
   optimizationForm.parameterGrid.entryMomentumConfirm = [entryMomentumConfirm.value];
   if (switchSynergyExitOnDanger.value) optimizationForm.parameterGrid.synergyExitOnDanger = [true];
@@ -1435,14 +1434,10 @@ async function runOptimization(): Promise<void> {
   if (switchBreakevenTrailing.value) optimizationForm.parameterGrid.breakevenTrailing = [true];
   if (switchTierPositionScale.value) optimizationForm.parameterGrid.tierPositionScale = [true];
   if (switchSynergyExitOnDowngrade.value) optimizationForm.parameterGrid.synergyExitOnDowngrade = [true];
-  const atrStopMultiplier = parseNumberList(gridInputs.atrStopMultiplier);
-  if (atrStopMultiplier.length) optimizationForm.parameterGrid.atrStopMultiplier = atrStopMultiplier;
-  const atrTakeMultiplier = parseNumberList(gridInputs.atrTakeMultiplier);
-  if (atrTakeMultiplier.length) optimizationForm.parameterGrid.atrTakeMultiplier = atrTakeMultiplier;
-  const breakevenThreshold = parseNumberList(gridInputs.breakevenThreshold);
-  if (breakevenThreshold.length) optimizationForm.parameterGrid.breakevenThreshold = breakevenThreshold;
-  const synergyDowngradeSteps = parseNumberList(gridInputs.synergyDowngradeSteps);
-  if (synergyDowngradeSteps.length) optimizationForm.parameterGrid.synergyDowngradeSteps = synergyDowngradeSteps;
+  optimizationForm.parameterGrid.atrStopMultiplier = [atrStopMultiplier.value];
+  optimizationForm.parameterGrid.atrTakeMultiplier = [atrTakeMultiplier.value];
+  optimizationForm.parameterGrid.breakevenThreshold = [breakevenThreshold.value];
+  optimizationForm.parameterGrid.synergyDowngradeSteps = [synergyDowngradeSteps.value];
 
   const pollToken = ++optimizationPollToken;
   optimizationState.status = "loading";
@@ -2343,20 +2338,20 @@ onMounted(async () => {
               <label class="check-label" title="止损/止盈按 ATR(14) 自适应；缺 K 线高低价数据时回退固定百分比">
                 <input type="checkbox" v-model="switchUseAtrStops" /> ATR 自适应止损
               </label>
-              <label title="ATR 止损倍数（入场价 − N×ATR）；逗号分隔多个候选参与搜索">
+              <label title="ATR 止损倍数（入场价 − N×ATR）">
                 ATR 止损倍数
-                <input v-model="gridInputs.atrStopMultiplier" type="text" placeholder="默认 2.0；可填 1.5,2.0,2.5" />
+                <input v-model.number="atrStopMultiplier" type="number" min="0.1" step="0.1" placeholder="默认 2.0" />
               </label>
-              <label title="ATR 止盈倍数（入场价 + N×ATR）；逗号分隔多个候选参与搜索">
+              <label title="ATR 止盈倍数（入场价 + N×ATR）">
                 ATR 止盈倍数
-                <input v-model="gridInputs.atrTakeMultiplier" type="text" placeholder="默认 3.0；可填 2.5,3.0,3.5" />
+                <input v-model.number="atrTakeMultiplier" type="number" min="0.1" step="0.1" placeholder="默认 3.0" />
               </label>
               <label class="check-label" title="盈利达阈值后止损上移至成本价，先保本再谈盈利">
                 <input type="checkbox" v-model="switchBreakevenTrailing" /> 保本移动止损
               </label>
-              <label title="触发保本的盈利阈值（0.02 = 盈利 2%）；逗号分隔多个候选参与搜索">
+              <label title="触发保本的盈利阈值（0.02 = 盈利 2%）">
                 保本触发阈值
-                <input v-model="gridInputs.breakevenThreshold" type="text" placeholder="默认 0.02（+2%）；可填 0.01,0.02,0.03" />
+                <input v-model.number="breakevenThreshold" type="number" min="0" step="0.01" placeholder="默认 0.02" />
               </label>
               <label class="check-label" title="按 synergy 档位缩放入场仓位（S/A 满仓、B 半仓）">
                 <input type="checkbox" v-model="switchTierPositionScale" /> 档位联动仓位
@@ -2364,9 +2359,9 @@ onMounted(async () => {
               <label class="check-label" title="持仓档位相对入场降级达 N 档时退出">
                 <input type="checkbox" v-model="switchSynergyExitOnDowngrade" /> 档位连续降级退出
               </label>
-              <label title="降级退出步数阈值（2 = 从 A 降到 C 触发退出）；逗号分隔多个候选参与搜索">
+              <label title="降级退出步数阈值（2 = 从 A 降到 C 触发退出）">
                 降级退出步数
-                <input v-model="gridInputs.synergyDowngradeSteps" type="text" placeholder="默认 2；可填 1,2,3" />
+                <input v-model.number="synergyDowngradeSteps" type="number" min="1" step="1" placeholder="默认 2" />
               </label>
             </div>
           </details>
