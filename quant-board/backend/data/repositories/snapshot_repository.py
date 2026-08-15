@@ -248,7 +248,13 @@ class SnapshotRepositoryMixin:
         start_date: str | None = None,
         end_date: str | None = None,
         include_payload: bool = True,
+        fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        """按帧+股票行加载快照（SQLAlchemy 版）。
+
+        阶段 1 只对 Mongo 主链做字段白名单裁剪；sqlite 后端接受 fields 参数保持
+        与 MongoRepository.load_frames 签名一致，但暂不裁剪（本地库，无压库问题）。
+        """
         if self.session is None:
             raise RuntimeError("primary database is unavailable")
         query = select(SnapshotFrameModel).where(
