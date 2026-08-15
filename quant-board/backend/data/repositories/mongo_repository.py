@@ -14,6 +14,11 @@ from backend.core.utils import json_dumps, json_loads
 
 logger = logging.getLogger(__name__)
 
+# 股票行分批游标大小（阶段 1）：按 snapshot_id 分批，避免 57 万行一次 $in 全拉。
+# 每批 200 帧 ≈ 4-5 万行，兼顾查询次数与单批内存。测试用 monkeypatch 覆盖此值验证分批逻辑。
+_STOCK_ROWS_BATCH_SIZE = 200
+
+
 class MongoRepository:
     def __init__(self, database: Any) -> None:
         self.db = database
@@ -895,9 +900,11 @@ class MongoRepository:
         rows_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
         if not snapshot_ids:
             return rows_by_snapshot
-        if fields:
+        if fields is not None:
             # 行字段白名单投影（frames fields 参数）：snapshotId 必须保留（分组 key），
-            # 其余只取请求字段，避免 full 投影整行 107 字段全量传输（3 帧可达 27MB）
+            # 其余只取请求字段，避免 full 投影整行 107 字段全量传输（3 帧可达 27MB）；
+            # 用 is not None 判定（而非 if fields:）：fields=[] 也应走白名单分支，
+            # 得到只剩 snapshotId 分组键的行，而不是落入 else 的 full 投影（审计修订）
             mongo_projection: dict[str, int] = {
                 "_id": 0,
                 "snapshotId": 1,
@@ -928,40 +935,47 @@ class MongoRepository:
                 })
         else:
             mongo_projection = {"depth10": 0}
-        for row in self.db["snapshot_stock_rows"].find(
-            {"datasetId": dataset_id, "snapshotId": {"$in": snapshot_ids}},
-            mongo_projection,
-        ).sort([("rank", 1)]):
-            if fields:
-                # 保留请求字段的 null 值（与 full 投影语义一致），只剥离内部分组字段；
-                # 否则未涨停行缺失 maxFengdan/firstZtTime 等字段会静默降级
-                item = {
-                    key: value
-                    for key, value in row.items()
-                    if key not in ("_id", "snapshotId")
-                }
-            elif projection in ("ranktrend", "ranktrend+themes"):
-                item = {
-                    "code": row.get("code"),
-                    "name": row.get("name"),
-                    "rank": row.get("rank"),
-                    "avgRankNum": row.get("avgRankNum"),
-                    "change": row.get("change"),
-                    "volumeRatio": row.get("volumeRatio"),
-                    "zlje": row.get("zlje"),
-                    "zljzb": row.get("zljzb"),
-                }
-                if projection == "ranktrend+themes":
-                    item.update({
-                        "themes": row.get("themes") or [],
-                        "mainTheme": row.get("mainTheme") or "",
-                        "themeRole": row.get("themeRole") or "",
-                        "themeContribution": row.get("themeContribution"),
-                        "leadStatus": row.get("leadStatus") or "",
-                    })
-            else:
-                item = self.local_stock_to_bundle_dict(row)
-            rows_by_snapshot[str(row.get("snapshotId"))].append(item)
+        # 游标分批：按 snapshot_id 切批查询，组内保持 rank 排序（每批 find 自带 sort），
+        # 合并到同一分组 dict，语义与一次全拉等价（分组键/排序/字段均不变）。
+        batch_size = _STOCK_ROWS_BATCH_SIZE
+        for start in range(0, len(snapshot_ids), batch_size):
+            batch_ids = snapshot_ids[start : start + batch_size]
+            for row in self.db["snapshot_stock_rows"].find(
+                {"datasetId": dataset_id, "snapshotId": {"$in": batch_ids}},
+                mongo_projection,
+            ).sort([("rank", 1)]):
+                if fields is not None:
+                    # 字段白名单分支：保留请求字段（含 null 值，供引擎 .get() 消费），只剥离内部分组字段；
+                    # 注：full 分支经 local_stock_to_bundle_dict 会剥离 null——两分支 null 语义不同，属现状，
+                    # 勿在本阶段"统一"以免改变既有行为（未涨停行缺失 maxFengdan/firstZtTime 等字段会静默降级）。
+                    # fields=[] 时 mongo_projection 只剩 snapshotId 分组键（空列表 = 不投影任何业务字段）。
+                    item = {
+                        key: value
+                        for key, value in row.items()
+                        if key not in ("_id", "snapshotId")
+                    }
+                elif projection in ("ranktrend", "ranktrend+themes"):
+                    item = {
+                        "code": row.get("code"),
+                        "name": row.get("name"),
+                        "rank": row.get("rank"),
+                        "avgRankNum": row.get("avgRankNum"),
+                        "change": row.get("change"),
+                        "volumeRatio": row.get("volumeRatio"),
+                        "zlje": row.get("zlje"),
+                        "zljzb": row.get("zljzb"),
+                    }
+                    if projection == "ranktrend+themes":
+                        item.update({
+                            "themes": row.get("themes") or [],
+                            "mainTheme": row.get("mainTheme") or "",
+                            "themeRole": row.get("themeRole") or "",
+                            "themeContribution": row.get("themeContribution"),
+                            "leadStatus": row.get("leadStatus") or "",
+                        })
+                else:
+                    item = self.local_stock_to_bundle_dict(row)
+                rows_by_snapshot[str(row.get("snapshotId"))].append(item)
         return rows_by_snapshot
 
     def _sector_rows_by_snapshot(

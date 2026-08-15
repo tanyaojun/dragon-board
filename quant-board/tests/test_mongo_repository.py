@@ -785,3 +785,31 @@ def test_load_frames_without_fields_keeps_full_rows() -> None:
 
     assert frames[0]["stocks"][0]["platforms"] == ["同花顺"]
     assert frames[0]["stocks"][0]["name"] == "平安银行"
+
+
+def test_stock_rows_by_snapshot_batches_snapshot_ids(monkeypatch) -> None:
+    import backend.data.repositories.mongo_repository as mongo_repo
+
+    database = FakeMongoDatabase()
+    collection = database["snapshot_stock_rows"]
+    collection.rows = [
+        {
+            "datasetId": "dragonboard_live", "snapshotId": f"s{i}", "code": f"00000{i % 10}",
+            "rank": i, "change": float(i),
+        }
+        for i in range(1, 31)
+    ]
+    repo = MongoRepository(database)
+    monkeypatch.setattr(mongo_repo, "_STOCK_ROWS_BATCH_SIZE", 10)
+
+    rows_by_snapshot = repo._stock_rows_by_snapshot(
+        "dragonboard_live", [f"s{i}" for i in range(1, 31)], projection="full"
+    )
+
+    assert len(rows_by_snapshot) == 30
+    assert [r["rank"] for r in rows_by_snapshot["s1"]] == [1]
+    assert [r["code"] for r in rows_by_snapshot["s15"]] == ["000005"]
+    # 30 个 snapshotId、批大小 10 → 恰好 3 次查询
+    assert len(collection.find_queries) == 3
+    for query in collection.find_queries:
+        assert query["snapshotId"]["$in"]  # 分批仍走 $in（保持 sort(rank) 语义）
