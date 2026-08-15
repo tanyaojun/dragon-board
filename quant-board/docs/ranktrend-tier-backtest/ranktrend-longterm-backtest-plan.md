@@ -141,7 +141,7 @@ percentileDelta（不加任何信号），热榜排名收益存在**强均值回
 - 4.3 walk-forward 滚动复核 + 固定样本外窗口裁决。
 - 4.4 周度滚动：新样本入库 → 重跑 → 监控参数漂移。
 
-**阶段 4 前置能力（commit 待补，2026-08-15）**：
+**阶段 4 前置能力（commit `be2cd05`，2026-08-15）**：
 - `TradeSimulator` 输出 `profitFactor`（盈亏比 = 盈利/亏损总额，`execution.py _profit_factor`；
   无交易/无亏损 → None 不伪造，fail-visible），`BacktestEngine` metrics 透传。
 - objective 新增 `win_rate_pf`（阶段 4.1 目标：winRate 主 + profitFactor 约束——<1.0 罚 0.2、
