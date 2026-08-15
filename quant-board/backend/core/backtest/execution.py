@@ -112,7 +112,21 @@ class TradeSimulator:
                 else:
                     final_signal = ((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
                     synergy_danger_exit = TradeSimulator._synergy_exit_on_danger(config) and TradeSimulator._synergy_tier_of(signal) in ("D", "E")
-                    should_exit = (final_signal == "sell" or signal["candidateTier"] == "D_EXIT_RISK" or (signal["candidateTier"] == "C_CROWDED" and signal["rankTrend"]["strategy"]["momentum"]["acceleration"] <= 0) or signal["rank"] > 50 or pos["holdingBars"] >= config["maxHoldingBars"] or gross_return <= config["stopLoss"] or gross_return >= config["takeProfit"] or synergy_danger_exit)
+                    # 对照组/部分帧 signal 可能缺 rankTrend.strategy（信号组装差异），
+                    # 缺字段时 acceleration 按 0 处理（不触发 C_CROWDED 加速转弱出场），不阻断回测
+                    _crowded_accel = (
+                        ((signal.get("rankTrend") or {}).get("strategy") or {}).get("momentum") or {}
+                    ).get("acceleration", 0)
+                    should_exit = (
+                        final_signal == "sell"
+                        or signal["candidateTier"] == "D_EXIT_RISK"
+                        or (signal["candidateTier"] == "C_CROWDED" and _crowded_accel <= 0)
+                        or signal["rank"] > 50
+                        or pos["holdingBars"] >= config["maxHoldingBars"]
+                        or gross_return <= config["stopLoss"]
+                        or gross_return >= config["takeProfit"]
+                        or synergy_danger_exit
+                    )
                 exit_trigger = None
                 trigger_price = raw_price
                 intrabar = self._intrabar_exit_trigger(pos, quote, config)

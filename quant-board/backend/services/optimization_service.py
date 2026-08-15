@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import date, timedelta
 from typing import Any
 from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.jump_research import build_jump_research_request, summarize_jump_research
@@ -276,7 +277,26 @@ class OptimizationService:
             or base_trade_config.get("controlStrategy")
             or base_trade_config.get("strategyName")
         )
-        frames = self.repo.load_frames(dataset_id, snapshot_type=snapshot_type, include_payload=True)
+        train_range = camel_get(payload, "train_range", "trainRange", None)
+        validation_range = camel_get(payload, "validation_range", "validationRange", None)
+        # 只加载优化实际需要的窗口（train/validation 并集 + 7 天预热），
+        # 避免每次优化全量拉取 MongoDB——2559 帧/55 万行曾被反复拉取压垮本地库。
+        range_starts = [r[0] for r in (train_range, validation_range) if r and r[0]]
+        range_ends = [r[1] for r in (train_range, validation_range) if r and r[1]]
+        load_start: str | None = None
+        if range_starts:
+            try:
+                load_start = (date.fromisoformat(min(range_starts)) - timedelta(days=7)).isoformat()
+            except ValueError:
+                load_start = min(range_starts)
+        load_end: str | None = max(range_ends) if range_ends else None
+        frames = self.repo.load_frames(
+            dataset_id,
+            snapshot_type=snapshot_type,
+            start_date=load_start,
+            end_date=load_end,
+            include_payload=True,
+        )
         if not frames:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
         run_frames, quality_gate = _prepare_frames_for_backtest(frames, snapshot_type)

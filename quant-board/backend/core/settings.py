@@ -103,8 +103,8 @@ class Settings(BaseModel):
     object_backup_region: str = Field(default="auto")
     mongodb_uri: str = Field(default="")
     mongodb_database: str = Field(default="dragon_board_quant")
-    mongodb_connect_timeout_ms: int = Field(default=2000)
-    mongodb_server_selection_timeout_ms: int = Field(default=2000)
+    mongodb_connect_timeout_ms: int = Field(default=10000)
+    mongodb_server_selection_timeout_ms: int = Field(default=15000)
     # 单次 Mongo 读写的 socket 超时：不能设太小——RankTrend analyze 等重读
     # 一次要跨集合拉 200 帧 + 数十万行，3s 会被 NetworkTimeout 掐断导致 500。
     # 60s 既能兜住死连接挂起，也容得下本地大查询。
