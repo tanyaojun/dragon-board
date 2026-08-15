@@ -173,7 +173,7 @@ quant-board/
 - `src/data/**`：只保留自动生成或外部导入的静态业务数据，例如题材映射原始数据；算法、因子、主题等运行时配置不要放入该目录。
 - `src/**/__tests__/**/*.test.ts`：正式 Vitest 测试目录和文件命名；测试应尽量靠近被测模块。
 - `src/devtools/diagnostics/**`：浏览器控制台或临时手工诊断脚本，不属于自动化测试套件，默认排除在 Vitest 和应用类型检查之外。
-- `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
+- `src/services/quantBoardBridge.ts`：已移除（TS 端无 golden 计算链；QuantBoard 桥接分散在 `src/services/snapshot/**` 与 `src/services/theme/**`）。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
 
 ## 4. 业务硬约束
