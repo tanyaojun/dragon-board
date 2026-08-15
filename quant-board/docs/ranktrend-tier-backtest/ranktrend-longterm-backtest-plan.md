@@ -103,7 +103,7 @@ A 减约 80% 传输 + B 让交易层 trial 秒级完成 + C 并行 → 24 trials
 - 排查方向定义、阈值、权重，以及「量价涨停可交易性」等已改口径是否引入偏差。
 - **验收**：各维 `directionAccuracy ≥ 0.55`、tierDiscrimination 呈正单调；否则先修信号算法，**暂停阶段 4**。
 
-**已落地（commit 待补，2026-08-15）**。诊断工具：`tier_monotonicity.py` 扩展按维度分层
+**已落地（commit `2f905b5`，2026-08-15）**。诊断工具：`tier_monotonicity.py` 扩展按维度分层
 （`DIMENSION_PATHS` + `tier_forward_returns(dimension=...)` + `tier_discrimination`），
 诊断脚本 `backend/operations/diagnose_tier_discrimination.py`（只读 Mongo → replay → 五维诊断，
 报告 `data/reports/tier-discrimination.json`）。真实数据窗口与阶段 2 一致（2026-04-15~08-14，
