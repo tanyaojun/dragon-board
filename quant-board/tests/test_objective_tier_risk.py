@@ -66,3 +66,29 @@ def test_other_objectives_unaffected() -> None:
     assert score(_base_result(), "max_drawdown") == pytest.approx(-0.05)
     assert score(_base_result(), "sharpe") == pytest.approx(1.5)
     assert score(_base_result(), "risk_adjusted") == pytest.approx(0.1 - 0.05 * 1.5 + 1.5 * 0.02)
+
+def test_win_rate_pf_objective_penalizes_low_profit_factor() -> None:
+    """win_rate_pf：高胜率但盈亏比 <1 → 惩罚；盈亏比达标 → 不惩罚（阶段 4.1 盈亏比约束）。"""
+    base = {"winRate": 0.9, "tradeCount": 100}
+    low_pf = {**base, "profitFactor": 0.8}
+    ok_pf = {**base, "profitFactor": 1.5}
+    assert score(low_pf, "win_rate_pf") == pytest.approx(score(ok_pf, "win_rate_pf") - 0.2)
+    # 1.0 <= pf < 1.3 → 轻罚 0.1
+    mid_pf = {**base, "profitFactor": 1.1}
+    assert score(mid_pf, "win_rate_pf") == pytest.approx(score(ok_pf, "win_rate_pf") - 0.1)
+
+
+def test_win_rate_pf_none_profit_factor_not_penalized() -> None:
+    """profitFactor=None（无亏损/无交易，不伪造）→ 不惩罚。"""
+    base = {"winRate": 0.9, "tradeCount": 100}
+    assert score({**base, "profitFactor": None}, "win_rate_pf") == pytest.approx(
+        score({**base, "profitFactor": 1.5}, "win_rate_pf")
+    )
+
+
+def test_win_rate_pf_low_trade_count_penalty() -> None:
+    """tradeCount < 30 → 温和惩罚（每笔 0.005）。"""
+    base = {"winRate": 0.9, "profitFactor": 1.5}
+    assert score({**base, "tradeCount": 10}, "win_rate_pf") == pytest.approx(
+        score({**base, "tradeCount": 100}, "win_rate_pf") - 20 * 0.005
+    )

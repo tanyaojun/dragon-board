@@ -141,6 +141,15 @@ percentileDelta（不加任何信号），热榜排名收益存在**强均值回
 - 4.3 walk-forward 滚动复核 + 固定样本外窗口裁决。
 - 4.4 周度滚动：新样本入库 → 重跑 → 监控参数漂移。
 
+**阶段 4 前置能力（commit 待补，2026-08-15）**：
+- `TradeSimulator` 输出 `profitFactor`（盈亏比 = 盈利/亏损总额，`execution.py _profit_factor`；
+  无交易/无亏损 → None 不伪造，fail-visible），`BacktestEngine` metrics 透传。
+- objective 新增 `win_rate_pf`（阶段 4.1 目标：winRate 主 + profitFactor 约束——<1.0 罚 0.2、
+  <1.3 罚 0.1，压制紧止损刷胜率；tradeCount<30 温和惩罚，验收线 60 由报告筛选）。
+- 链路验证：8 trials random 交易层粗搜（train 2026-05-15~07-15，tier_risk_adjusted）全部完成
+  0 failed（阶段 3 改动后 replay 带共振 + tierStats 注入正常）；发现交易层搜索下
+  `tierConstraintFailed` 恒定（tierStats 不受交易参数影响，属信号层约束）→ 4.1 改用 `win_rate_pf`。
+
 **验收**：满足第 0 节完整验收标准，且连续两个样本外窗口稳定。
 
 ## 4. 验收标准汇总

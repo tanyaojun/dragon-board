@@ -15,6 +15,22 @@ from backend.core.backtest.metrics import (
 from backend.core.backtest.strategy import normalize_strategy_name
 
 
+def _profit_factor(round_trip_trades: list[dict[str, Any]]) -> float | None:
+    """盈亏比 = 盈利交易 profit 总额 / 亏损交易 profit 总额绝对值（阶段 4.1 盈亏比约束）。
+
+    fail-visible：无交易或无亏损（gross_loss<=0）→ None（不伪造 99.99/0 等伪值，
+    无亏损本身即满足 profitFactor 验收，由消费方按 None 处理）。
+    """
+    profits = [float(trade.get("profit") or 0) for trade in round_trip_trades]
+    if not profits:
+        return None
+    gross_profit = sum(profit for profit in profits if profit > 0)
+    gross_loss = abs(sum(profit for profit in profits if profit < 0))
+    if gross_loss <= 0:
+        return None
+    return round(gross_profit / gross_loss, 4)
+
+
 class TradeSimulator:
     def run(self, frames: list[dict[str, Any]], signals: list[dict[str, Any]], config_patch: dict[str, Any] | None = None) -> dict[str, Any]:
         config = {**DEFAULT_TRADE_CONFIG, **(config_patch or {})}
@@ -217,6 +233,7 @@ class TradeSimulator:
         round_trip_trades = self._round_trip_trades(trades, config)
         round_trip_wins = [trade for trade in round_trip_trades if trade["netReturn"] > 0]
         sharpe_metrics = short_cycle_sharpe(round_trip_trades, target_holding_days=float(config.get("targetHoldingDays") or 5.0))
+        profit_factor = _profit_factor(round_trip_trades)
         open_positions = [self._open_position_snapshot(pos, config) for pos in positions.values()]
         realized_profit = round(sum(float(trade.get("profit") or 0) for trade in trades), 2)
         unrealized_mark_profit = round(sum(float(pos.get("unrealizedMarkProfit") or 0) for pos in open_positions), 2)
@@ -227,7 +244,7 @@ class TradeSimulator:
         notes = ["交易模拟已启用 A 股 T+1、100 股手数、手续费、印花税、滑点、涨跌停可成交检查、盘口价格优先和容量约束；缺少盘口/成交量字段时会在 matchingDiagnostics 中降级说明。", "totalReturn 含未平仓市值；unrealizedProfit 为预估平仓后浮动盈亏，已扣预估卖出手续费和印花税。"]
         if execution_mode == "next_bar":
             notes.insert(0, "executionMode=next_bar：信号按下一快照成交，成交价和可成交性使用下一快照行情。")
-        return {"enabled": True, "entryStrategy": strategy_key, "executionMode": execution_mode, "config": config, "totalReturn": round((final_equity - config["initialCapital"]) / config["initialCapital"], 4), "realizedReturn": round(realized_profit / config["initialCapital"], 4), "realizedProfit": realized_profit, "unrealizedMarkProfit": unrealized_mark_profit, "unrealizedExitCost": unrealized_exit_cost, "unrealizedProfit": unrealized_profit, "openPositionCount": len(open_positions), "openPositions": open_positions, **sharpe_metrics, "sharpeMethod": f"trade_return_cycle_{target_days:g}d", "maxDrawdown": max_drawdown(equity), "winRate": share(len(round_trip_wins), len(round_trip_trades)), "tradeCount": len(round_trip_trades), "roundTripTrades": round_trip_trades, "exitSliceWinRate": share(len(exit_slice_wins), len(trades)), "exitSliceCount": len(trades), "eventCount": len(trade_events), "skippedOrderCount": len(skipped_orders), "skippedOrders": skipped_orders[:200], "matchingDiagnostics": matching_diagnostics, "trades": trades, "tradeEvents": trade_events, "equityHistory": equity, "equityCurve": equity, "notes": notes}
+        return {"enabled": True, "entryStrategy": strategy_key, "executionMode": execution_mode, "config": config, "totalReturn": round((final_equity - config["initialCapital"]) / config["initialCapital"], 4), "realizedReturn": round(realized_profit / config["initialCapital"], 4), "realizedProfit": realized_profit, "unrealizedMarkProfit": unrealized_mark_profit, "unrealizedExitCost": unrealized_exit_cost, "unrealizedProfit": unrealized_profit, "openPositionCount": len(open_positions), "openPositions": open_positions, **sharpe_metrics, "sharpeMethod": f"trade_return_cycle_{target_days:g}d", "maxDrawdown": max_drawdown(equity), "winRate": share(len(round_trip_wins), len(round_trip_trades)), "tradeCount": len(round_trip_trades), "profitFactor": profit_factor, "roundTripTrades": round_trip_trades, "exitSliceWinRate": share(len(exit_slice_wins), len(trades)), "exitSliceCount": len(trades), "eventCount": len(trade_events), "skippedOrderCount": len(skipped_orders), "skippedOrders": skipped_orders[:200], "matchingDiagnostics": matching_diagnostics, "trades": trades, "tradeEvents": trade_events, "equityHistory": equity, "equityCurve": equity, "notes": notes}
 
     @staticmethod
     def _round_trip_trades(trades: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:

@@ -30,6 +30,20 @@ def score(result: dict[str, Any], objective: str, request: dict[str, Any] | None
         trade_count = int(result.get("tradeCount") or 0)
         low_trade_penalty = max(0, 3 - trade_count) * 0.05
         return float(result.get("winRate") or 0) - low_trade_penalty
+    if objective == "win_rate_pf":
+        # 阶段 4.1：win_rate 主 + 盈亏比约束（计划 §5 风险 4——纯 win_rate 会倾向紧止损刷胜率，
+        # profitFactor 压制低盈亏比高胜率组合）+ 低交易数温和惩罚（验收线 tradeCount≥60 由报告筛选）。
+        win_rate = float(result.get("winRate") or 0)
+        trade_count = int(result.get("tradeCount") or 0)
+        profit_factor = result.get("profitFactor")
+        pf_penalty = 0.0
+        if profit_factor is not None:
+            if profit_factor < 1.0:
+                pf_penalty += 0.2
+            elif profit_factor < 1.3:
+                pf_penalty += 0.1
+        trade_penalty = max(0, 30 - trade_count) * 0.005
+        return win_rate - pf_penalty - trade_penalty
     if objective in ("risk_adjusted", "tier_risk_adjusted"):
         total_return = float(result.get("totalReturn") or 0)
         drawdown = abs(float(result.get("maxDrawdown") or 0))

@@ -72,6 +72,8 @@ def test_trade_count_and_win_rate_are_grouped_by_entry_when_exit_is_partial() ->
     assert result["winRate"] == 1.0
     assert result["roundTripTrades"][0]["exitSliceCount"] == 2
     assert result["roundTripTrades"][0]["profit"] == 500
+    # 单笔盈利 500、无亏损 → profitFactor None（不伪造）
+    assert result["profitFactor"] is None
 
 
 def test_early_big_move_entry_allows_final_hold_when_jump_and_momentum_are_strong() -> None:
@@ -916,3 +918,16 @@ def test_early_big_move_v2_exit_after_three_missing_hotlist_bars() -> None:
 
     assert should_exit is True
     assert reason == "退出热榜连续3个bar"
+
+from backend.core.backtest.execution import _profit_factor
+
+
+def test_profit_factor_contract() -> None:
+    """盈亏比纯函数：盈利/亏损总额比值；无交易或无亏损 → None（fail-visible 不伪造）。"""
+    assert _profit_factor([]) is None
+    assert _profit_factor([{"profit": 500}, {"profit": -200}]) == 2.5
+    assert _profit_factor([{"profit": 300}, {"profit": 400}, {"profit": -100}]) == 7.0
+    assert _profit_factor([{"profit": 500}]) is None  # 无亏损
+    assert _profit_factor([{"profit": 0}, {"profit": 0}]) is None  # 全平
+    assert _profit_factor([{"profit": -100}, {"profit": -50}]) == 0.0
+    assert _profit_factor([{"profit": None}, {"profit": 100}]) is None  # 无亏损

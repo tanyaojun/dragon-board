@@ -90,6 +90,7 @@ class BacktestEngine:
                 "maxDrawdown": report["tradeSimulation"]["maxDrawdown"],
                 "winRate": report["tradeSimulation"]["winRate"],
                 "tradeCount": report["tradeSimulation"]["tradeCount"],
+                "profitFactor": report["tradeSimulation"].get("profitFactor"),
                 "roundTripTrades": report["tradeSimulation"].get("roundTripTrades") or [],
                 "exitSliceWinRate": report["tradeSimulation"].get("exitSliceWinRate"),
                 "exitSliceCount": report["tradeSimulation"].get("exitSliceCount"),
