@@ -45,8 +45,8 @@ def test_lifecycle_tier():
 def test_volume_price_tier_priority():
     assert _volume_price_tier(None, 0.0, [])[0] == "unknown"
     assert _volume_price_tier("rise_volume", 0.0, ["主力净占比异常高（疑似对倒出货）"])[0] == "E"
-    assert _volume_price_tier("rise_shrink", 0.0, ["缩量涨停（封板惜售，好票）"])[0] == "S"
-    # 缩量涨停 + 对倒出货同现 → E 硬风险优先于 S
+    assert _volume_price_tier("rise_shrink", 0.0, ["缩量涨停（封板惜售，好票）"])[0] == "C"
+    # 缩量涨停 + 对倒出货同现 → E 硬风险优先于 C
     assert _volume_price_tier(
         "rise_shrink", 0.0, ["缩量涨停（封板惜售，好票）", "主力净占比异常高（疑似对倒出货）"]
     )[0] == "E"
