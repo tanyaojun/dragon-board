@@ -290,6 +290,108 @@ def test_synergy_exit_on_downgrade_disabled_by_default() -> None:
     assert result["openPositionCount"] == 1
 
 
+# ---------- 方向5：最小持有帧数（minHoldingBars，默认 0 不改变行为）----------
+
+
+def test_min_holding_bars_disabled_by_default() -> None:
+    """默认不设 minHoldingBars：D_EXIT_RISK 信号第 2 帧正常退出（行为不变回归）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+
+
+def test_min_holding_bars_holds_through_exit_signals() -> None:
+    """minHoldingBars=3：前 3 帧 D_EXIT_RISK 不退出，第 4 帧（holdingBars>=3）才退出。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+        _frame("s4", "2026-05-09", 10.3),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+        _signal("s3", "2026-05-08", 10.2, tier="S", candidate_tier="D_EXIT_RISK"),
+        _signal("s4", "2026-05-09", 10.3, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"minHoldingBars": 3})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    trade = result["roundTripTrades"][0]
+    assert trade["holdingBars"] == 3
+
+
+def test_min_holding_bars_blocks_stop_loss() -> None:
+    """minHoldingBars=3：s2/s3 触发止损（-6%）也不退出，s4（期满）止损生效退出。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 9.0),  # -10% 触发止损，但 min 期内强制持有
+        _frame("s3", "2026-05-08", 9.2),  # -8% 仍触发，仍强制持有
+        _frame("s4", "2026-05-09", 9.3),  # -7% 期满后止损生效
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 9.0, tier="S"),
+        _signal("s3", "2026-05-08", 9.2, tier="S"),
+        # s4 用 D_EXIT_RISK：期满后止损生效退出，且该帧不再满足入场条件（避免同帧重入）
+        _signal("s4", "2026-05-09", 9.3, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"minHoldingBars": 3})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    trade = result["roundTripTrades"][0]
+    assert trade["holdingBars"] == 3
+    # 止损被延后：退出价格是 s4 的 9.3 而非 s2 的 9.0
+    assert trade["exitPrice"] == 9.3
+
+
+def test_min_holding_bars_blocks_max_holding_and_downgrade() -> None:
+    """minHoldingBars 优先于 maxHoldingBars 与 synergy 降档：最小持有期内均不退出，期满后降档退出。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+        _frame("s4", "2026-05-09", 10.3),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="B", final_signal="sell"),
+        _signal("s3", "2026-05-08", 10.2, tier="B"),
+        _signal("s4", "2026-05-09", 10.3, tier="B", final_signal="sell"),
+    ]
+    # maxHoldingBars=1（第 2 帧就该退出）但 minHoldingBars=3 强制持有到 s4
+    result = _run(frames, signals, {"minHoldingBars": 3, "maxHoldingBars": 1})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["holdingBars"] == 3
+
+
+def test_min_holding_bars_zero_accepts_negative_or_string() -> None:
+    """minHoldingBars 支持字符串/负数形态：<=0 视为不启用（与现状一致）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    for value in (0, -1, "0", ""):
+        result = _run(frames, signals, {"minHoldingBars": value})
+        assert result["openPositionCount"] == 0
+        assert result["tradeCount"] == 1
+
+
 # ---------- 字符串布尔形态（前端 search_space 提交 ["true","false"]）----------
 
 

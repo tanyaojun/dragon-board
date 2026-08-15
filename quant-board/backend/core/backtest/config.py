@@ -11,6 +11,7 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "stampTaxRate": 0.0005,
     "slippageRate": 0.001,
     "maxHoldingBars": 40,
+    "minHoldingBars": 0,  # 阶段6 退出结构研究：最小持有帧数，默认 0 不改变行为
     "targetHoldingDays": 5.0,
     "enforceT1": True,
     "executionMode": "current_bar",

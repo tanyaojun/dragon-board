@@ -122,6 +122,12 @@ class TradeSimulator:
                 pos["lastSignal"] = signal
                 if config.get("enforceT1", True) and str(frame.get("tradingDate") or "") <= str(pos.get("entryTradingDate") or ""):
                     continue
+                # 方向5（阶段6 退出结构研究）：minHoldingBars 强制持有——最小持有期内
+                # 跳过所有退出触发（止损/止盈/降档/D_EXIT_RISK/maxHoldingBars），
+                # 默认 0 不改变行为；<=0 视为不启用（容忍字符串/负数形态）。
+                min_holding_bars = TradeSimulator._min_holding_bars(config)
+                if min_holding_bars > 0 and pos["holdingBars"] < min_holding_bars:
+                    continue
                 gross_return = (raw_price - pos["entryPrice"]) / pos["entryPrice"]
                 strategy_exit_reason = None
                 atr = TradeSimulator._atr_of(atr_history_by_code.get(code)) if config.get("useAtrStops") else None
@@ -393,6 +399,15 @@ class TradeSimulator:
                 "price": price,
             }
         return None
+
+    @staticmethod
+    def _min_holding_bars(config: dict[str, Any] | None) -> int:
+        """minHoldingBars 解析：容忍 int/字符串/负数形态；<=0 视为不启用（与现状一致）。"""
+        value = (config or {}).get("minHoldingBars") or 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _synergy_tier_of(signal: dict[str, Any]) -> str | None:
