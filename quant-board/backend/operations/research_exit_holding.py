@@ -97,7 +97,7 @@ def _sa_stats(signals: list[dict[str, Any]], frames: list[dict[str, Any]], patch
     total_returns = simulation.get("totalReturn")
     max_dd = simulation.get("maxDrawdown")
     return {
-        "patch": {k: patch[k] for k in ("minHoldingBars", "stopLoss", "takeProfit", "maxHoldingBars") if k in patch},
+        "patch": {k: patch[k] for k in ("minHoldingBars", "signalExitDelayBars", "stopLoss", "takeProfit", "maxHoldingBars") if k in patch},
         "saEntryTrades": count,
         "allTrades": len(trades),
         "winRate": round(win_rate, 4) if win_rate is not None else None,
@@ -140,9 +140,13 @@ def main() -> int:
 
     base = {**DEFAULT_TRADE_CONFIG}
     variants: dict[str, dict[str, Any]] = {
-        "baseline": {**base, "minHoldingBars": 0},
+        "baseline": {**base, "minHoldingBars": 0, "signalExitDelayBars": 0},
         "min8": {**base, "minHoldingBars": 8},
         "min8_wide_stop": {**base, "minHoldingBars": 8, "stopLoss": -0.12},
+        # 方向2（信号驱动退出去噪）：只延迟 D_EXIT_RISK/final sell/rank>50 信号退出，
+        # 止损/止盈立即生效（去噪不硬扛）
+        "denoise8": {**base, "signalExitDelayBars": 8},
+        "denoise8_wide_stop": {**base, "signalExitDelayBars": 8, "stopLoss": -0.12},
     }
     result: dict[str, Any] = {
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
@@ -164,9 +168,11 @@ def main() -> int:
         )
         print(f"  exitReasons: {stats['exitReasons']}", file=sys.stderr)
 
-    # 对比：min8 / min8_wide_stop 相对 baseline 的 winRate×pf 差
+    # 对比：变体相对 baseline 的 winRate×pf 差
     baseline = result["variants"]["baseline"]
-    for name in ("min8", "min8_wide_stop"):
+    for name in variants:
+        if name == "baseline":
+            continue
         variant = result["variants"][name]
         result["comparison"][name] = {
             "winRateDelta": round(variant["winRate"] - baseline["winRate"], 4)

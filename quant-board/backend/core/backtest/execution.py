@@ -159,17 +159,24 @@ class TradeSimulator:
                     stop_ratio = (stop_price / entry_price - 1) if entry_price else float(config["stopLoss"])
                     take_ratio = (take_price / entry_price - 1) if entry_price else float(config["takeProfit"])
                     synergy_downgrade_exit = TradeSimulator._synergy_downgrade_exit(pos, signal, config)
-                    should_exit = (
+                    # 方向6（阶段6 方向2 信号驱动退出去噪）：拆分"价格退出"与"信号驱动退出"。
+                    # signalExitDelayBars>0 时，最小持有期内只抑制信号驱动退出（D_EXIT_RISK /
+                    # final sell / C_CROWDED 转弱 / rank>50 / synergy 风控），
+                    # 价格止损/止盈与 maxHoldingBars 仍立即生效（去噪不硬扛，区别于 minHoldingBars）。
+                    max_holding_exit = pos["holdingBars"] >= config["maxHoldingBars"]
+                    price_exit = gross_return <= stop_ratio or gross_return >= take_ratio or max_holding_exit
+                    signal_exit = (
                         final_signal == "sell"
                         or signal["candidateTier"] == "D_EXIT_RISK"
                         or (signal["candidateTier"] == "C_CROWDED" and _crowded_accel <= 0)
                         or signal["rank"] > 50
-                        or pos["holdingBars"] >= config["maxHoldingBars"]
-                        or gross_return <= stop_ratio
-                        or gross_return >= take_ratio
                         or synergy_danger_exit
                         or synergy_downgrade_exit
                     )
+                    signal_exit_delay = TradeSimulator._signal_exit_delay_bars(config)
+                    if signal_exit_delay > 0 and pos["holdingBars"] < signal_exit_delay:
+                        signal_exit = False
+                    should_exit = price_exit or signal_exit
                 exit_trigger = None
                 trigger_price = raw_price
                 intrabar = self._intrabar_exit_trigger(pos, quote, config, atr=atr, gross_return=gross_return)
@@ -404,6 +411,15 @@ class TradeSimulator:
     def _min_holding_bars(config: dict[str, Any] | None) -> int:
         """minHoldingBars 解析：容忍 int/字符串/负数形态；<=0 视为不启用（与现状一致）。"""
         value = (config or {}).get("minHoldingBars") or 0
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _signal_exit_delay_bars(config: dict[str, Any] | None) -> int:
+        """signalExitDelayBars 解析：容忍 int/字符串/负数形态；<=0 视为不启用（与现状一致）。"""
+        value = (config or {}).get("signalExitDelayBars") or 0
         try:
             return int(value)
         except (TypeError, ValueError):

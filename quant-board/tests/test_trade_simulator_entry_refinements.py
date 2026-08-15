@@ -392,6 +392,117 @@ def test_min_holding_bars_zero_accepts_negative_or_string() -> None:
         assert result["tradeCount"] == 1
 
 
+# ---------- 方向6：信号驱动退出去噪（signalExitDelayBars，默认 0 不改变行为）----------
+
+
+def test_signal_exit_delay_disabled_by_default() -> None:
+    """默认不设 signalExitDelayBars：D_EXIT_RISK 第 2 帧正常退出（行为不变回归）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+
+
+def test_signal_exit_delay_holds_d_exit_risk() -> None:
+    """signalExitDelayBars=3：D_EXIT_RISK 前 3 帧被抑制，第 4 帧（期满）才退出。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+        _frame("s4", "2026-05-09", 10.3),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+        _signal("s3", "2026-05-08", 10.2, tier="S", candidate_tier="D_EXIT_RISK"),
+        _signal("s4", "2026-05-09", 10.3, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"signalExitDelayBars": 3})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["holdingBars"] == 3
+
+
+def test_signal_exit_delay_keeps_stop_loss_active() -> None:
+    """signalExitDelayBars 只延迟信号驱动退出：止损仍立即生效（区别于 minHoldingBars 的硬扛）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 9.0),  # -10% 触发止损 → 立即退出，不受延迟影响
+        _frame("s3", "2026-05-08", 9.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        # s2 用 D_EXIT_RISK：信号退出被延迟，但 -10% 止损必须立即生效（优先级高于去噪）
+        _signal("s2", "2026-05-07", 9.0, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"signalExitDelayBars": 8})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["holdingBars"] == 1
+
+
+def test_signal_exit_delay_keeps_take_profit_active() -> None:
+    """signalExitDelayBars 只延迟信号驱动退出：止盈仍立即生效。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 11.5),  # +15% 触发止盈 → 立即退出
+        _frame("s3", "2026-05-08", 12.0),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 11.5, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"signalExitDelayBars": 8})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["holdingBars"] == 1
+    assert result["roundTripTrades"][0]["exitPrice"] == 11.5
+
+
+def test_signal_exit_delay_holds_final_sell_and_rank() -> None:
+    """signalExitDelayBars 同时抑制 final sell 与 rank>50 信号退出，期满后放行。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", final_signal="sell"),
+        _signal("s3", "2026-05-08", 10.2, tier="S", final_signal="sell"),
+    ]
+    # rank=8 <= 50 不触发 rank 退出；final_signal=sell 前 2 帧被抑制，s3 期满（holdingBars=2）退出
+    result = _run(frames, signals, {"signalExitDelayBars": 2})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["holdingBars"] == 2
+
+
+def test_signal_exit_delay_zero_accepts_negative_or_string() -> None:
+    """signalExitDelayBars 支持字符串/负数形态：<=0 视为不启用（与现状一致）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    for value in (0, -1, "0", ""):
+        result = _run(frames, signals, {"signalExitDelayBars": value})
+        assert result["openPositionCount"] == 0
+        assert result["tradeCount"] == 1
+
+
 # ---------- 字符串布尔形态（前端 search_space 提交 ["true","false"]）----------
 
 
