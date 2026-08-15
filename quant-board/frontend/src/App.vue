@@ -298,10 +298,19 @@ const backtestForm = reactive<BacktestRequest>({
   useIntrabarStops: true,
   useThemeFactorForExecution: false,
   intrabarAmbiguity: "stop_first",
-  momentumPeriods: [3, 5, 8, 13, 21],
-  macdFast: 21,
-  macdSlow: 34,
-  macdSignal: 13
+  tradeConfig: {
+    synergyEntryTierMin: "none",
+    synergyExitOnDanger: false,
+    entryMomentumConfirm: "off",
+    useAtrStops: false,
+    atrStopMultiplier: 2.0,
+    atrTakeMultiplier: 3.0,
+    breakevenTrailing: false,
+    breakevenThreshold: 0.02,
+    tierPositionScale: false,
+    synergyExitOnDowngrade: false,
+    synergyDowngradeSteps: 2
+  }
 });
 
 const optimizationForm = reactive<OptimizationRequest>({
@@ -354,17 +363,7 @@ const gridInputs = reactive({
 });
 
 // 交易策略开关——枚举（下拉单选）、布尔（勾选=启用）、数值（单值 number，参照随机种子控件）
-const synergyEntryTierMin = ref("none");
-const entryMomentumConfirm = ref("off");
-const switchSynergyExitOnDanger = ref(false);
-const switchUseAtrStops = ref(false);
-const switchBreakevenTrailing = ref(false);
-const switchTierPositionScale = ref(false);
-const switchSynergyExitOnDowngrade = ref(false);
-const atrStopMultiplier = ref(2.0);
-const atrTakeMultiplier = ref(3.0);
-const breakevenThreshold = ref(0.02);
-const synergyDowngradeSteps = ref(2);
+// 注：开关已随优化表单移除，配置入口在【回测运行】页签的 backtestForm.tradeConfig
 
 const selectedDataset = computed(() => {
   return datasetsState.data?.find((dataset) => dataset.id === selectedDatasetId.value);
@@ -956,13 +955,6 @@ function formatStructuredError(value: unknown): string {
   }
 }
 
-function parseNumberList(value: string): number[] {
-  return value
-    .split(",")
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isFinite(item));
-}
-
 function apiErrorRaw(error: unknown, fallback: string): Record<string, unknown> {
   if (error && typeof error === "object") {
     const detail =
@@ -1423,18 +1415,6 @@ async function runOptimization(): Promise<void> {
   if (gridInputs.macdFast) optimizationForm.parameterGrid.macdFast = [gridInputs.macdFast];
   if (gridInputs.macdSlow) optimizationForm.parameterGrid.macdSlow = [gridInputs.macdSlow];
   if (gridInputs.macdSignal) optimizationForm.parameterGrid.macdSignal = [gridInputs.macdSignal];
-  // 交易策略开关（方向 1/3/4；枚举下拉/布尔勾选/数值单值，未启用则不参与搜索）
-  optimizationForm.parameterGrid.synergyEntryTierMin = [synergyEntryTierMin.value];
-  optimizationForm.parameterGrid.entryMomentumConfirm = [entryMomentumConfirm.value];
-  if (switchSynergyExitOnDanger.value) optimizationForm.parameterGrid.synergyExitOnDanger = [true];
-  if (switchUseAtrStops.value) optimizationForm.parameterGrid.useAtrStops = [true];
-  if (switchBreakevenTrailing.value) optimizationForm.parameterGrid.breakevenTrailing = [true];
-  if (switchTierPositionScale.value) optimizationForm.parameterGrid.tierPositionScale = [true];
-  if (switchSynergyExitOnDowngrade.value) optimizationForm.parameterGrid.synergyExitOnDowngrade = [true];
-  optimizationForm.parameterGrid.atrStopMultiplier = [atrStopMultiplier.value];
-  optimizationForm.parameterGrid.atrTakeMultiplier = [atrTakeMultiplier.value];
-  optimizationForm.parameterGrid.breakevenThreshold = [breakevenThreshold.value];
-  optimizationForm.parameterGrid.synergyDowngradeSteps = [synergyDowngradeSteps.value];
 
   const pollToken = ++optimizationPollToken;
   optimizationState.status = "loading";
@@ -2004,27 +1984,58 @@ onMounted(async () => {
               <input v-model="backtestForm.useThemeFactorForExecution" type="checkbox" />
               题材因子参与执行
             </label>
-            <label>
-              动量周期
-              <input
-                :value="backtestForm.momentumPeriods.join(',')"
-                type="text"
-                @input="backtestForm.momentumPeriods = parseNumberList(($event.target as HTMLInputElement).value)"
-              />
-            </label>
-            <label>
-              MACD 快线
-              <input v-model.number="backtestForm.macdFast" type="number" min="1" />
-            </label>
-            <label>
-              MACD 慢线
-              <input v-model.number="backtestForm.macdSlow" type="number" min="1" />
-            </label>
-            <label>
-              MACD 信号线
-              <input v-model.number="backtestForm.macdSignal" type="number" min="1" />
-            </label>
           </div>
+          <details class="adv-params">
+            <summary>交易策略开关（可选，勾选/下拉即可配置，无需改代码）</summary>
+            <div class="form-grid">
+              <label title="synergy 档位入场门：选择允许入场的档位下限">
+                档位入场门
+                <select v-model="backtestForm.tradeConfig.synergyEntryTierMin">
+                  <option value="none">不启用（默认）</option>
+                  <option value="a">A 档及以上（S/A 入场）</option>
+                  <option value="s">仅 S 档入场</option>
+                </select>
+              </label>
+              <label title="A_MAIN 入场要求短期动量仍为正（momentum.short > 0），防止追高">
+                入场动量确认
+                <select v-model="backtestForm.tradeConfig.entryMomentumConfirm">
+                  <option value="off">不启用（默认）</option>
+                  <option value="short_positive">要求短期动量仍为正</option>
+                </select>
+              </label>
+              <label class="check-label" title="D/E 档（风险档）持仓时强制卖出">
+                <input type="checkbox" v-model="backtestForm.tradeConfig.synergyExitOnDanger" /> D/E 档强制退出
+              </label>
+              <label class="check-label" title="止损/止盈按 ATR(14) 自适应；缺 K 线高低价数据时回退固定百分比">
+                <input type="checkbox" v-model="backtestForm.tradeConfig.useAtrStops" /> ATR 自适应止损
+              </label>
+              <label title="ATR 止损倍数（入场价 − N×ATR）">
+                ATR 止损倍数
+                <input v-model.number="backtestForm.tradeConfig.atrStopMultiplier" type="number" min="0.1" step="0.1" placeholder="默认 2.0" />
+              </label>
+              <label title="ATR 止盈倍数（入场价 + N×ATR）">
+                ATR 止盈倍数
+                <input v-model.number="backtestForm.tradeConfig.atrTakeMultiplier" type="number" min="0.1" step="0.1" placeholder="默认 3.0" />
+              </label>
+              <label class="check-label" title="盈利达阈值后止损上移至成本价，先保本再谈盈利">
+                <input type="checkbox" v-model="backtestForm.tradeConfig.breakevenTrailing" /> 保本移动止损
+              </label>
+              <label title="触发保本的盈利阈值（0.02 = 盈利 2%）">
+                保本触发阈值
+                <input v-model.number="backtestForm.tradeConfig.breakevenThreshold" type="number" min="0" step="0.01" placeholder="默认 0.02" />
+              </label>
+              <label class="check-label" title="按 synergy 档位缩放入场仓位（S/A 满仓、B 半仓）">
+                <input type="checkbox" v-model="backtestForm.tradeConfig.tierPositionScale" /> 档位联动仓位
+              </label>
+              <label class="check-label" title="持仓档位相对入场降级达 N 档时退出">
+                <input type="checkbox" v-model="backtestForm.tradeConfig.synergyExitOnDowngrade" /> 档位连续降级退出
+              </label>
+              <label title="降级退出步数阈值（2 = 从 A 降到 C 触发退出）">
+                降级退出步数
+                <input v-model.number="backtestForm.tradeConfig.synergyDowngradeSteps" type="number" min="1" step="1" placeholder="默认 2" />
+              </label>
+            </div>
+          </details>
           <div class="button-row">
             <button
               type="button"
@@ -2311,57 +2322,6 @@ onMounted(async () => {
               <input v-model.number="gridInputs.macdSignal" type="number" min="1" />
             </label>
           </div>
-          <details class="adv-params">
-            <summary>交易策略开关（可选，勾选/下拉即可配置，无需改代码）</summary>
-            <div class="form-grid">
-              <label title="synergy 档位入场门：选择允许入场的档位下限">
-                档位入场门
-                <select v-model="synergyEntryTierMin">
-                  <option value="none">不启用（默认）</option>
-                  <option value="a">A 档及以上（S/A 入场）</option>
-                  <option value="s">仅 S 档入场</option>
-                </select>
-              </label>
-              <label title="A_MAIN 入场要求短期动量仍为正（momentum.short > 0），防止追高">
-                入场动量确认
-                <select v-model="entryMomentumConfirm">
-                  <option value="off">不启用（默认）</option>
-                  <option value="short_positive">要求短期动量仍为正</option>
-                </select>
-              </label>
-              <label class="check-label" title="D/E 档（风险档）持仓时强制卖出">
-                <input type="checkbox" v-model="switchSynergyExitOnDanger" /> D/E 档强制退出
-              </label>
-              <label class="check-label" title="止损/止盈按 ATR(14) 自适应；缺 K 线高低价数据时回退固定百分比">
-                <input type="checkbox" v-model="switchUseAtrStops" /> ATR 自适应止损
-              </label>
-              <label title="ATR 止损倍数（入场价 − N×ATR）">
-                ATR 止损倍数
-                <input v-model.number="atrStopMultiplier" type="number" min="0.1" step="0.1" placeholder="默认 2.0" />
-              </label>
-              <label title="ATR 止盈倍数（入场价 + N×ATR）">
-                ATR 止盈倍数
-                <input v-model.number="atrTakeMultiplier" type="number" min="0.1" step="0.1" placeholder="默认 3.0" />
-              </label>
-              <label class="check-label" title="盈利达阈值后止损上移至成本价，先保本再谈盈利">
-                <input type="checkbox" v-model="switchBreakevenTrailing" /> 保本移动止损
-              </label>
-              <label title="触发保本的盈利阈值（0.02 = 盈利 2%）">
-                保本触发阈值
-                <input v-model.number="breakevenThreshold" type="number" min="0" step="0.01" placeholder="默认 0.02" />
-              </label>
-              <label class="check-label" title="按 synergy 档位缩放入场仓位（S/A 满仓、B 半仓）">
-                <input type="checkbox" v-model="switchTierPositionScale" /> 档位联动仓位
-              </label>
-              <label class="check-label" title="持仓档位相对入场降级达 N 档时退出">
-                <input type="checkbox" v-model="switchSynergyExitOnDowngrade" /> 档位连续降级退出
-              </label>
-              <label title="降级退出步数阈值（2 = 从 A 降到 C 触发退出）">
-                降级退出步数
-                <input v-model.number="synergyDowngradeSteps" type="number" min="1" step="1" placeholder="默认 2" />
-              </label>
-            </div>
-          </details>
           <div class="button-row">
             <button
               type="button"

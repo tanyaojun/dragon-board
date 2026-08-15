@@ -160,10 +160,7 @@ export interface BacktestRequest {
   useIntrabarStops: boolean;
   useThemeFactorForExecution: boolean;
   intrabarAmbiguity: "stop_first" | "take_first";
-  momentumPeriods: number[];
-  macdFast: number;
-  macdSlow: number;
-  macdSignal: number;
+  tradeConfig: Record<string, unknown>;
 }
 
 export interface BacktestTrade {
