@@ -92,3 +92,14 @@ def test_win_rate_pf_low_trade_count_penalty() -> None:
     assert score({**base, "tradeCount": 10}, "win_rate_pf") == pytest.approx(
         score({**base, "tradeCount": 100}, "win_rate_pf") - 20 * 0.005
     )
+
+def test_trial_metrics_includes_profit_factor() -> None:
+    """TrialExecutor.metrics 透传 profitFactor（阶段 4.1 盈亏比约束的持久化字段）。"""
+    from backend.optimization.trial import TrialExecutor
+
+    metrics = TrialExecutor.metrics(
+        {"entryStrategy": "rank_trend_candidate", "winRate": 0.5, "tradeCount": 10, "profitFactor": 2.0},
+        signal_count=100,
+    )
+    assert metrics["profitFactor"] == 2.0
+    assert metrics["winRate"] == 0.5

@@ -261,6 +261,7 @@ class TrialExecutor:
             "maxDrawdown": result.get("maxDrawdown", 0),
             "winRate": result.get("winRate", 0),
             "tradeCount": result.get("tradeCount", 0),
+            "profitFactor": result.get("profitFactor"),
             "skippedOrderCount": result.get("skippedOrderCount", 0),
             "openPositionCount": result.get("openPositionCount", 0),
             "signalCount": signal_count,
