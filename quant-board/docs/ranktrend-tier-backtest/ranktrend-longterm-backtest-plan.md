@@ -1,6 +1,6 @@
 # 四维信号长期回测计划与性能优化方案
 
-> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2-4 待推进
+> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2（数据质量治理）已落地（commit `58878dc`），阶段 3-4 待推进
 > 日期：2026-08-15
 > 归档位置：本文档与四份四维信号方案文档统一存入 `quant-board/docs/ranktrend-tier-backtest/`
 
@@ -83,8 +83,19 @@ A 减约 80% 传输 + B 让交易层 trial 秒级完成 + C 并行 → 24 trials
 
 ### 阶段 2：数据质量治理
 
-- 排查并修复 sampleDiagnostics 的 degraded 根因：非正价格、MACD 预热不足、空热榜、`moneyFlowSource` 缺失（历史 28592 行）。
-- **验收**：优化/回测窗口内 `researchGrade` 达 `research_ready`（或 degraded 占比 < 25%）。
+**已落地（commit `58878dc`，2026-08-15）**。真实 Mongo 只读诊断（2026-04-15~08-14，869 帧 half_hour 窗口）排除三个候选根因、锁定真实根因：
+
+- **非正价格**：15839 行 `price=0` 全部为停牌股合理数据（688836/603221/001810 连续多日 0 价），且回测链路传给 quality_gate 的行不含 `price` → 不触发 fatal。**排除**。
+- **空热榜**：当前数据 0 个（快照最小 50 行/平均 224 行）；早期 4 帧空快照已由运行时过滤剔除。**排除**。
+- **`moneyFlowSource` 缺失**：26.19 万行（45.6%，集中于 2026-04），但优化/回测链路 `require_formal_money_flow` 默认 False → 统计不致命。**观察项**（正式资金流强校验时需补采历史）。
+- **MACD 预热不足（真实根因）**：`sampleQuality.status` 的 ok 判定用 `get_technical_min_samples`（`max(macdSlow, momentum.max+1, 30)`=34 帧，混入 MACD 预热需求）；half_hour 快照 50 帧滑动窗口 + 热榜轮动 + 跨周末断档稀释在榜帧数 → 20 个历史回测全部 `researchGrade=degraded`（ok_share 仅 46%~52%，<60% 达标线）。
+
+修复（fail-visible，不改信号数值、不动 replay warmup）：
+- ok 判定改 `get_momentum_min_samples`（`momentumPeriods.max+1`=22 帧，动量可计算门槛）；degraded(5~21)/insufficient(<5) 档不变。
+- `requiredSampleCount`/`requiredTechnicalBars` 同步为 22，与判定口径一致；MACD 预热状态由 `_macd_diagnostics.hasStableObservationBars` 单独暴露（不隐藏）。
+- 实现位置：`backend/analysis/ranktrend/engine.py`（`_build_signal` sample_status / `requiredSampleCount`）、`backend/core/backtest/engine.py`（`_sample_diagnostics.requiredTechnicalBars`）；新增 `tests/test_ranktrend_sample_status.py` 3 用例（TDD RED→GREEN）。
+
+验收状态：50 帧滑动窗口模拟新口径 ok≈60.0%（达标线 60%，warmup 后实际预计更高）；全量 pytest 1518 passed、golden 信号对齐无回归。**真实回测 ok_share 验收留手动**（同阶段 1 性能验收，避免重操作压垮本机）。
 
 ### 阶段 3：四维信号区分度诊断
 
