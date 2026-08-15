@@ -468,6 +468,47 @@ class TradeSimulator:
         return True
 
     @staticmethod
+    def _is_trend_reversal_jump_entry_signal(
+        signal: dict[str, Any], trade_config: dict[str, Any] | None
+    ) -> bool:
+        """趋势反转 × jump 新买点候选判定（阶段6，统计分析 commit `3e39b34`）。
+
+        条件（全部满足才算候选，fail-visible：缺字段 → False 不伪造）：
+        1. trendReversal.isReversal == True（低位弱转强：当前分位 ≤50 + 此前下行 + 当前回升）；
+        2. jump.event == "jump" 且 jump.direction == "buy"（排名跳跃式上升，非 collapse）；
+        3. 最新跳跃事件 magnitude >= config.trendReversalJumpMagMin（默认 20）；
+        4. jumpFreshness >= config.trendReversalJumpFreshMin（默认 0 = 不要求新鲜度）。
+        统计依据：jump buy + mag≥20 → h8 winRate 0.5212（median 转正 +0.0026）；
+        再叠加 fresh≥0.5 → 0.5278。两项阈值均可由 trade_config 调。
+        """
+        rank_trend = signal.get("rankTrend") or {}
+        marker = rank_trend.get("trendReversal") or {}
+        if not marker.get("isReversal"):
+            return False
+        jump = rank_trend.get("jump") or {}
+        if str(jump.get("event") or "") != "jump" or str(jump.get("direction") or "") != "buy":
+            return False
+        events = jump.get("events") or []
+        if not events:
+            return False
+        try:
+            magnitude = float(events[-1].get("magnitude"))
+        except (TypeError, ValueError):
+            return False
+        mag_min = float((trade_config or {}).get("trendReversalJumpMagMin", 20.0))
+        if magnitude < mag_min:
+            return False
+        freshness = (rank_trend.get("resonance") or {}).get("jumpFreshness")
+        fresh_min = float((trade_config or {}).get("trendReversalJumpFreshMin", 0.0))
+        if fresh_min > 0:
+            try:
+                if float(freshness) < fresh_min:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        return True
+
+    @staticmethod
     def _atr_of(bars: list[tuple[float, float, float]] | None, period: int = 14) -> float | None:
         """ATR(period)：bars 为 (high, low, close) 列表；样本不足或数据缺失时返回 None（回退固定百分比）。"""
         if not bars or len(bars) < period + 1:
@@ -612,6 +653,13 @@ class TradeSimulator:
                 continue
             if strategy_key == "b_ignition_only":
                 if TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
+                    result.append(signal)
+                continue
+            if strategy_key == "trend_reversal_jump":
+                # 阶段6 趋势反转 × jump 新买点候选：低位弱转强 + 排名跳跃(buy) + 大幅（可选新鲜）。
+                # 默认配置（magMin=20/freshMin=0）对应统计分析 h8 winRate 0.5212 组合；
+                # 若配置 freshMin>0 则进一步过滤到 0.5278 组合。retreat 退潮不入场。
+                if TradeSimulator._is_trend_reversal_jump_entry_signal(signal, trade_config) and signal["regime"] != "retreat":
                     result.append(signal)
                 continue
             # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，

@@ -38,6 +38,10 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "tierPositionScales": {"S": 1.0, "A": 1.0, "B": 0.5},
     "synergyExitOnDowngrade": False,
     "synergyDowngradeSteps": 2,
+    # 阶段6 趋势反转 × jump 新买点候选（趋势反转层入场，默认关闭不改变现状）：
+    # 开启后 entryStrategy="trend_reversal_jump" 要求 trendReversal ∧ jump buy ∧ mag≥min 且 fresh≥min
+    "trendReversalJumpMagMin": 20.0,
+    "trendReversalJumpFreshMin": 0.0,
 }
 
 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {

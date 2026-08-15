@@ -35,6 +35,12 @@ STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
 
 RESEARCH_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "key": "trend_reversal_jump",
+        "label": "趋势反转 × Jump 新买点候选研究策略",
+        "description": "低位弱转强（trendReversal）+ 排名跳跃上升（jump buy + mag≥20，可选 fresh≥阈值）入场；"
+        "统计分析 h8 winRate 0.5212/0.5278，仅作研究候选，不作为默认实盘策略。",
+    },
+    {
         "key": "ranktrend_jump",
         "label": "RankTrend Jump 研究策略",
         "description": "只用于 Jump 内生阈值研究复跑，不作为默认实盘策略。",

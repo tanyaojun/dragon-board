@@ -536,3 +536,117 @@ def test_switches_work_with_string_bool_values() -> None:
     result = _run(frames, signals, {"breakevenTrailing": "true", "breakevenThreshold": "0.02"})
     assert result["openPositionCount"] == 0
     assert result["tradeCount"] == 1
+
+# ---------- 趋势反转 × jump 新买点候选（trend_reversal_jump 策略）----------
+
+
+def _trj_signal(sid: str, day: str, price: float, *, reversal: bool = True,
+                jump_event: str = "jump", jump_dir: str = "buy", magnitude: float = 25.0,
+                freshness: float = 0.8) -> dict:
+    """构造 trendReversal + jump 信号（模拟 replay 输出结构：rankTrend.jump / trendReversal / resonance.jumpFreshness）。"""
+    return {
+        "snapshotId": sid,
+        "timestamp": sid,
+        "tradingDate": day,
+        "slotTime": "10:00",
+        "code": "000001",
+        "name": "测试股",
+        "rank": 20,
+        "price": price,
+        "volume": 100000,
+        "regime": "normal",
+        "candidateTier": "N_NEUTRAL",
+        "confidence": 90,
+        "rankTrend": {
+            "decision": {"final": {"signal": "buy", "confidence": 90}},
+            "trendReversal": {"isReversal": reversal},
+            "jump": {
+                "event": jump_event,
+                "direction": jump_dir,
+                "events": [{"index": 0, "direction": "surge", "magnitude": magnitude}],
+            },
+            "resonance": {"jumpFreshness": freshness},
+        },
+    }
+
+
+def test_trj_entry_signal_requires_all_conditions() -> None:
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0), {}
+    ) is True
+    # 非 trendReversal → False
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, reversal=False), {}
+    ) is False
+    # 非 jump 事件 → False
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, jump_event="none"), {}
+    ) is False
+    # jump 方向非 buy（collapse）→ False
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, jump_dir="sell"), {}
+    ) is False
+    # 幅度不足 → False
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, magnitude=15.0), {}
+    ) is False
+    # 无事件 → False
+    signal = _trj_signal("s1", "2026-05-06", 10.0)
+    signal["rankTrend"]["jump"]["events"] = []
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(signal, {}) is False
+
+
+def test_trj_entry_signal_thresholds_from_config() -> None:
+    # magMin 调低到 10 → 幅度 15 通过
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, magnitude=15.0),
+        {"trendReversalJumpMagMin": 10.0},
+    ) is True
+    # freshMin 开启 → freshness 不足被过滤
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, freshness=0.3),
+        {"trendReversalJumpFreshMin": 0.5},
+    ) is False
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(
+        _trj_signal("s1", "2026-05-06", 10.0, freshness=0.8),
+        {"trendReversalJumpFreshMin": 0.5},
+    ) is True
+    # freshMin=0（默认）→ freshness 缺失也通过
+    signal = _trj_signal("s1", "2026-05-06", 10.0)
+    signal["rankTrend"]["resonance"]["jumpFreshness"] = None
+    assert TradeSimulator._is_trend_reversal_jump_entry_signal(signal, {}) is True
+
+
+def test_trj_strategy_entry_round_trip() -> None:
+    """trend_reversal_jump 策略完整回合：满足条件的信号入场并持有（rank≤50 不触发退出）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.5),
+        _frame("s3", "2026-05-08", 11.0),
+    ]
+    signals = [
+        _trj_signal("s1", "2026-05-06", 10.0),
+        _trj_signal("s2", "2026-05-07", 10.5),
+        _trj_signal("s3", "2026-05-08", 11.0),
+    ]
+    result = _run(frames, signals, {"entryStrategy": "trend_reversal_jump"})
+    assert result["openPositionCount"] == 1
+    # 持仓未平 → roundTripTrades 为空，用 openPositions 确认入场
+    opens = result.get("openPositions") or []
+    assert len(opens) == 1
+    assert opens[0]["code"] == "000001"
+
+
+def test_trj_strategy_ignores_non_reversal_signals() -> None:
+    """trend_reversal_jump 策略只入场满足 trendReversal ∧ jump buy ∧ mag≥20 的信号。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+    ]
+    # s1 满足条件入场；s2 非 trendReversal → 不产生新持仓（s1 仍持有）
+    signals = [
+        _trj_signal("s1", "2026-05-06", 10.0),
+        _trj_signal("s2", "2026-05-07", 10.1, reversal=False),
+    ]
+    result = _run(frames, signals, {"entryStrategy": "trend_reversal_jump"})
+    assert result["openPositionCount"] == 1
