@@ -502,6 +502,24 @@ h8 = 未来 8 帧价格收益 median）：
   新鲜度仅作增强（叠加大幅后 +3.7pp，超过 S/A 档基线 0.5272）；方向必须 buy（含 collapse 的
   0.5045 < 0.5212）。→ **"低位弱转强 + 排名跳跃(buy) + 大幅"组合可作为新买点候选**。
 
+**trend_reversal_jump 策略接入回测（commit `4fb6fe4`，2026-08-16）**：
+- 新研究策略 `trend_reversal_jump`（非默认实盘）：`_is_trend_reversal_jump_entry_signal`
+  判定 trendReversal ∧ jump buy ∧ mag≥magMin 且 fresh≥freshMin；默认 magMin=20/freshMin=0
+  （不改变现有行为）；retreat 退潮不入场；`SUPPORTED_STRATEGY_NAMES` 注册。
+- **真实数据回测（769 帧，默认交易配置，winRate×pf 验收线 0.78）**：
+
+| 配置 | tradeCount | winRate | profitFactor | winRate×pf |
+|---|---|---|---|---|
+| 默认（mag≥20） | 150 | 0.4400 | 0.8799 | 0.387 |
+| fresh≥0.5 | 143 | 0.4755 | 0.9164 | 0.436 |
+| **mag≥30** | 77 | **0.5455** | 0.9847 | **0.537** |
+| fresh≥0.5 + mag≥30 | 54 | 0.5185 | 0.7949 | 0.412 |
+
+- 结论：全部配置未过 0.78 验收线，与阶段 5 结论一致（**缺口在退出机制，非入场信号**）；
+  但 mag≥30 使 winRate 0.44→0.5455（+10.5pp）、tradeCount 77 仍 ≥60——**信号层幅度阈值提升
+  显著改善胜率，作为信号层参数候选保留**；后续若修复退出机制（阶段 6 方向 2 信号退出去噪
+  已落地但默认关闭），重跑本策略验证。
+
 **后续待办（未立项）**：
 - 把 trendReversal ∧ jumpBuy ∧ mag≥20（可选 + fresh≥0.5）接入候选分层/回测验证
   （winRate×pf 验收线），若通过再决定作为入场候选；
