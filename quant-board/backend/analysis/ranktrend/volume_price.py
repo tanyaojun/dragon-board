@@ -267,8 +267,13 @@ def _synergy_tier(
         return 0
 
     v = _vote(res_tier, res_dir) + _vote(rank_tier, rank_dir) + _vote(vp_tier, vp_dir)
-    if v >= c.tierSynergyVoteStrong and lc_tier == "A":
-        tier, reasons = "S", ["方向一致强买 + 环境优选"]
+    # 阶段 3 修复方向 3：档位分级按票数（strong/strong+1），A 档可达。
+    # 旧规则 v>=strong 且 lc==A → S 独占 S 判定，而周期档位只有 A/B/D/E（无 C），
+    # v>=strong 且 lc∉{A,B,D} 的 A 分支永远不可达 → synergy A 档 n=0（阶段 3 诊断实证）。
+    # 新规则：S = v>=strong+1（高票一致，如四维至少 3 票同向），A = v==strong（刚达强买线），
+    # B/D/C 语义不变；周期 B/D 时 S/A 降一档规则保留。
+    if v >= c.tierSynergyVoteStrong + 1:
+        tier, reasons = "S", ["方向一致强买（≥strong+1 票）"]
     elif v >= c.tierSynergyVoteStrong:
         tier, reasons = "A", ["方向一致强买"]
     elif v == c.tierSynergyVoteWeak:

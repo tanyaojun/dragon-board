@@ -267,3 +267,37 @@ def test_tier_discrimination_detects_non_monotonic() -> None:
     disc = tier_discrimination(stats)
     assert disc["positiveMonotonic"] is False
     assert "sMinusC" in disc  # 无 C 样本时如实为 None，不伪造
+
+
+def test_excess_direction_accuracy_conditions_by_rank_bucket() -> None:
+    """分位条件化（阶段 3 修复方向 2）：纯均值回归下 excess≈0——追强档位原始 acc 被
+    高分位基线拉低，但条件化后不额外惩罚；excess = directionAccuracy − 样本桶基线 acc。"""
+    # S 25 只高桶（rank 1-25 → pct 60-100，桶 6-9）全降；C 35 只低桶（rank 26-60 → pct 1.67-58.33，桶 0-5）全升
+    # 桶完全分离（S 最小 pct 60 = 桶 6 起点，C 最大 pct 58.33 = 桶 5）→ 纯均值回归
+    tiers = ["S"] * 25 + ["C"] * 35
+    frame0 = list(range(1, 26)) + list(range(26, 61))
+    frame1 = list(range(26, 51)) + list(range(1, 36))  # S rank 26-50（降）、C rank 1-35（升）
+    frames, signals = _frames_and_signals(tiers, frame0, frame1)
+    stats = tier_forward_returns(signals, frames, horizon=1)
+    s = stats["tiers"]["S"]
+    c = stats["tiers"]["C"]
+    assert s["directionAccuracy"] == 0.0  # 原始 acc 被均值回归打成 0
+    assert s["excessDirectionAccuracy"] is not None
+    assert abs(s["excessDirectionAccuracy"]) < 0.01  # 同桶基线同为 0 → excess≈0
+    assert abs(c["excessDirectionAccuracy"]) < 0.01
+    # 字段关系：excess = directionAccuracy − 样本桶基线 acc
+    assert abs((s["excessDirectionAccuracy"] or 0) - (s["directionAccuracy"] - (s["bucketBaselineAccuracy"] or 0))) < 1e-6
+    assert "bucketBaselines" in stats
+
+
+def test_excess_direction_accuracy_positive_when_signal_beats_baseline() -> None:
+    """同桶内信号优于基线：S 低桶升入高桶、C 高桶降 → S excess > 0（条件化后信号有增量信息）。"""
+    # frame0：S 20 只 rank 1-20（高桶）、C 40 只 rank 21-60（中低桶）
+    # frame1：S 保持高桶 rank 1-20（delta≈0）、C 中低桶部分升、高桶 C 部分降
+    tiers = ["S"] * 20 + ["C"] * 40
+    frame0 = list(range(1, 21)) + list(range(21, 61))
+    frame1 = list(range(1, 21)) + list(range(41, 61)) + list(range(21, 41))  # C 前 20 降、后 20 升
+    frames, signals = _frames_and_signals(tiers, frame0, frame1)
+    stats = tier_forward_returns(signals, frames, horizon=1)
+    assert "excessDirectionAccuracy" in stats["tiers"]["S"]
+    assert "excessDirectionAccuracy" in stats["tiers"]["C"]

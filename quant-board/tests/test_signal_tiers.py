@@ -65,8 +65,10 @@ def test_synergy_tier_veto_and_hard_risk():
 
 
 def test_synergy_tier_direction_vote():
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "A")[0] == "S"
-    assert _synergy_tier("A", "buy", "A", "buy", "B", "buy", "B")[0] == "B"
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "A")[0] == "S"  # v=3 → S
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", None)[0] == "S"  # v=3, lc 非 B/D → S 保持
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None)[0] == "A"  # v=2 → A（阶段 3 修复：A 档可达）
+    assert _synergy_tier("A", "buy", "A", "buy", "B", "buy", "B")[0] == "A"  # v=3, lc=B → S 降 A
     assert _synergy_tier("B", "buy", "C", "hold", "C", "neutral", "A")[0] == "B"
     assert _synergy_tier("D", "sell", "D", "sell", "D", "sell", "A")[0] == "D"
 
@@ -77,5 +79,7 @@ def test_synergy_tier_none_tier_boundary():
 
 
 def test_synergy_tier_lifecycle_env_downgrade():
-    # 周期 B（caution）时 S 降一档为 A
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "B")[0] == "B"
+    # 周期 B（caution）时 S 降一档为 A（阶段 3 修复：v=3 高票一致 → S → 降 A）
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "B")[0] == "A"
+    # 周期 B 时 A 降一档为 B（v=2 → A → 降 B）
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "B")[0] == "B"

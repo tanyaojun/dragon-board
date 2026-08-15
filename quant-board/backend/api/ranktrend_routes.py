@@ -13,6 +13,8 @@ from backend.analysis.ranktrend.engine import (
     RankTrendPythonEngine,
     analyze_rank_resonance,
     attention_rank_lookup,
+    frame_market_median,
+    frame_market_median_percentile,
     market_regime,
     percentile_rank,
     _resonance_label,
@@ -439,8 +441,8 @@ def _analyze_frames(
                 *(["theme_hot_themes_fallback"] if hot_themes_fallback else []),
             ],
         }
-        market_median, market_sample_count = _frame_market_median(frames, index)
-        market_median_percentile = _frame_market_median_percentile(frame)
+        market_median, market_sample_count = frame_market_median(frames, index)
+        market_median_percentile = frame_market_median_percentile(frame)
         stocks_out: list[dict[str, Any]] = []
         full_tasks: list[tuple[Any, ...]] = []
         for stock in frame.get("stocks", []):
@@ -586,68 +588,6 @@ def _percentile(rank: float, total_count: int) -> float:
     if rank <= 0 or total_count <= 0:
         return 0.0
     return ((total_count - rank + 1) / total_count) * 100
-
-
-def _median(values: list[float]) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) / 2
-
-
-def _frame_market_median(frames: list[dict[str, Any]], index: int) -> tuple[float | None, int]:
-    """旧 TS calculateMarketMedian 合同：当前帧与前第 3 个市场帧公共股票的
-    attention 百分位变化中位数；sampleCount = 当前帧横截面股票数。"""
-    start = max(0, index - 3)
-    window = frames[start:index + 1]
-    current = _frame_cross_section(window[-1])
-    sample_count = len(current)
-    if len(window) < 4 or not current:
-        return None, sample_count
-    first = _frame_cross_section(window[0])
-    changes: list[float] = []
-    for code, current_pct in current.items():
-        first_pct = first.get(code)
-        if first_pct is not None:
-            changes.append(current_pct - first_pct)
-    if len(changes) < 20:
-        return None, sample_count
-    return _median(changes), sample_count
-
-
-def _frame_cross_section(frame: dict[str, Any]) -> dict[str, float]:
-    """旧 TS buildFrameCrossSections 合同：过滤 avgRankNum > 0，按 (avgRankNum, code) 升序，
-    百分位 = ((n - idx) / n) * 100（idx 从 0 开始）。"""
-    stocks = frame.get("stocks") or []
-    valid: list[tuple[str, float]] = []
-    for stock in stocks:
-        if not isinstance(stock, dict):
-            continue
-        code = str(stock.get("code") or "")
-        if not code:
-            continue
-        avg_num = stock.get("avgRankNum")
-        try:
-            avg_num = float(avg_num)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(avg_num) or avg_num <= 0:
-            continue
-        valid.append((code, avg_num))
-    valid.sort(key=lambda item: (item[1], item[0]))
-    total = len(valid)
-    return {
-        code: ((total - index) / total) * 100
-        for index, (code, _avg) in enumerate(valid)
-    }
-
-
-def _frame_market_median_percentile(frame: dict[str, Any]) -> float | None:
-    """该帧市场横截面 attention 百分位中位数（与 marketMedianShortChange 同口径）。"""
-    return _median(list(_frame_cross_section(frame).values()))
 
 
 def _normalize_current_frame(current_frame: dict[str, Any] | None) -> dict[str, Any] | None:

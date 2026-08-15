@@ -182,3 +182,50 @@ percentileDelta（不加任何信号），热榜排名收益存在**强均值回
 
 验收线（修复后重跑诊断）：各维 excess accuracy（对照同分位基准）≥ 0.05 且 tierDiscrimination 正单调，
 再进入阶段 4 参数搜索。
+
+### 5.2 修复落地（commit 待补，2026-08-15）
+
+三个方向已全部实现并 TDD 落地：
+
+1. **方向 1 — 补共振维进 replay（已完成）**：engine 层下沉横截面函数
+   （`median_of` / `frame_cross_section` / `frame_market_median` / `frame_market_median_percentile`，
+   自 routes 迁入），`replay` 每帧计算 market 上下文传入 `_build_signal`（assemble=True 时计算
+   `analyze_rank_resonance` 写入 `rank_trend.resonance` 并参与 synergy 投票）；routes 改为 import
+   engine 层函数（API 链路 assemble=False 行为不变）。顺带修复 **resonance NaN 泄漏**：
+   横截面不足时 `marketMedianShortChange` 输出 None（原 NaN 导致回测严格 JSON 序列化崩溃，
+   fail-visible：无效横截面标记为缺失）。
+2. **方向 3 — 重排档位投票/降档逻辑（已完成）**：`_synergy_tier` 改为票数分级
+   **S = v≥strong+1（高票一致）、A = v==strong（可达）**，B/D/C 语义不变、周期 B/D 降档保留；
+   旧规则 `v≥strong 且 lc==A → S` 独占 S 判定，而周期只有 A/B/D/E → A 分支永远不可达（synergy A 档 n=0 根因）。
+3. **方向 2 — 分位条件化评估（已完成）**：`tier_forward_returns` 记录样本当前分位桶，输出
+   `excessDirectionAccuracy`（档位 acc − 同桶基线 acc）与顶层 `bucketBaselines`；诊断脚本摘要含 ex 字段。
+
+**修复后真实诊断（769 帧 / 156647 信号，h1）**：
+
+| 维度 | S 档 excess | A 档 excess | 结构变化 |
+|---|---|---|---|
+| 共振 resonance | −0.021 | −0.007 | **不再 100% unknown**（unknownRate 18.8%，S/A/B/C/D 分布齐全）|
+| 趋势 rankTrend | **+0.064** ✓ | +0.037 | — |
+| 量价 volumePrice | 无 S 档 | +0.013 | — |
+| 周期 lifecycle | 无 S 档 | **+0.055** ✓（B +0.097 ✓） | — |
+| 合并 synergy | **+0.088** ✓ | +0.039 | **A 档可达（n=7172，之前 0）** |
+
+**修复后验收判定**：S 档 excess 达标（synergy +0.088 / rankTrend +0.064 / lifecycle A+B），
+**实证确认信号在控制分位后有正增量信息**；但**整体 tierDiscrimination 仍非正单调**
+（各维 spearman ≤0.8 且存在反转，B/C 中间档样本大但 excess≈0，D 卖出档在 h3/h8 收益转正——
+均值回归目标下"已跌"档位未来回升，卖出语义与排名收益方向在低分位反转）。
+**阶段 4 仍暂停**；剩余问题为档位语义/收益口径的策略性校准（§5.3），非本轮结构修复范围。
+
+### 5.3 剩余问题（档位语义校准，待策略决策）
+
+结构修复后 S 档已证实有增量信息，但中间/卖出档区分度不足。候选方向（需用户决策后实施）：
+
+1. **收益口径去趋势**：档位收益改"相对同分位桶的超额收益"（meanFutureReturn 也用
+   excess 口径，`excessDirectionAccuracy` 已实现）——消除均值回归对档位序的扭曲，重新校准验收。
+2. **档位语义与排名方向解耦**：卖出档（D）在低分位未来回升是目标变量性质（已跌反弹），
+   不是信号 bug；如业务目标是"追涨"则应保留 S/A 档 excess 作为唯一买卖依据（D/E 仅做风控不预测方向），
+   单调性链改为只评估 S/A/B（买入侧）。
+3. **中间档（B/C）区分度重建**：B 档样本 28488 但 excess≈0——"方向分歧弱买"语义无预测力，
+   可收缩 B 档判定（v==weak 且某维强），或把 C 档作为"无信息"基准不进单调性链。
+
+三项均不改变默认参数数值（档位阈值/权重不变），只影响档位映射与验收口径，需 golden + 全量 pytest + 重跑诊断验收。

@@ -86,7 +86,7 @@ def _summarize(report: dict[str, Any]) -> str:
         tiers = stats["tiers"]
         tier_line = " ".join(
             f"{t}:n={tiers.get(t, {}).get('count', 0)},r={tiers.get(t, {}).get('meanFutureReturn')},"
-            f"acc={tiers.get(t, {}).get('directionAccuracy')}"
+            f"acc={tiers.get(t, {}).get('directionAccuracy')},ex={tiers.get(t, {}).get('excessDirectionAccuracy')}"
             for t in ("S", "A", "B", "C", "D", "E", "unknown")
         )
         mono = stats["monotonicity"]

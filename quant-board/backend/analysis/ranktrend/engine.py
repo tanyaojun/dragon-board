@@ -245,6 +245,67 @@ def attention_rank_lookup(stocks: list[dict[str, Any]]) -> tuple[dict[str, int],
     return {code: index + 1 for index, (code, _avg) in enumerate(valid)}, len(valid)
 
 
+def median_of(values: list[float]) -> float | None:
+    """中位数（无依赖实现）；空列表返回 None（fail-visible：不伪造 0）。"""
+    if not values:
+        return None
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def frame_cross_section(frame: dict[str, Any]) -> dict[str, float]:
+    """旧 TS buildFrameCrossSections 合同（阶段 3 修复方向 1 下沉自 routes）：过滤 avgRankNum > 0，
+    按 (avgRankNum, code) 升序，百分位 = ((n - idx) / n) * 100（idx 从 0 开始）。"""
+    stocks = frame.get("stocks") or []
+    valid: list[tuple[str, float]] = []
+    for stock in stocks:
+        if not isinstance(stock, dict):
+            continue
+        code = str(stock.get("code") or "")
+        if not code:
+            continue
+        avg_num = stock.get("avgRankNum")
+        try:
+            avg_num = float(avg_num)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(avg_num) or avg_num <= 0:
+            continue
+        valid.append((code, avg_num))
+    valid.sort(key=lambda item: (item[1], item[0]))
+    total = len(valid)
+    return {code: ((total - index) / total) * 100 for index, (code, _avg) in enumerate(valid)}
+
+
+def frame_market_median(frames: list[dict[str, Any]], index: int) -> tuple[float | None, int]:
+    """旧 TS calculateMarketMedian 合同（阶段 3 修复方向 1 下沉自 routes）：当前帧与前第 3 个
+    市场帧公共股票的 attention 百分位变化中位数；sampleCount = 当前帧横截面股票数。
+    窗口不足 4 帧 / 公共样本 <20 → 返回 None（横截面不可算，fail-visible）。"""
+    start = max(0, index - 3)
+    window = frames[start : index + 1]
+    current = frame_cross_section(window[-1])
+    sample_count = len(current)
+    if len(window) < 4 or not current:
+        return None, sample_count
+    first = frame_cross_section(window[0])
+    changes: list[float] = []
+    for code, current_pct in current.items():
+        first_pct = first.get(code)
+        if first_pct is not None:
+            changes.append(current_pct - first_pct)
+    if len(changes) < 20:
+        return None, sample_count
+    return median_of(changes), sample_count
+
+
+def frame_market_median_percentile(frame: dict[str, Any]) -> float | None:
+    """该帧市场横截面 attention 百分位中位数（与 marketMedianShortChange 同口径）。"""
+    return median_of(list(frame_cross_section(frame).values()))
+
+
 def period_momentum(percentiles: list[float], period: int) -> float:
     if len(percentiles) < period + 1:
         return 0.0
@@ -1297,7 +1358,11 @@ def _resonance_insufficient(
         "jumpFreshness": 0,
         "reversalPenalty": 0,
         "historyState": "established",
-        "marketMedianShortChange": market_median_short_change,
+        "marketMedianShortChange": (
+            None
+            if market_median_short_change is None or not math.isfinite(market_median_short_change)
+            else market_median_short_change
+        ),
         "marketSampleCount": market_sample_count,
         "marketMedianPercentile": market_median_percentile,
         "reasons": [reason],
@@ -1311,6 +1376,9 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
     c = config or RankTrendConfig()
     percentiles = [float(p) for p in (input.get("percentiles") or [])]
     market_median_short_change = float(input.get("marketMedianShortChange") or 0)
+    # JSON 安全（fail-visible）：横截面无效（NaN）时输出 None，不序列化崩溃、不伪造 0；
+    # 内部 isfinite 判断仍用原始 NaN。
+    _short_change_json = None if not math.isfinite(market_median_short_change) else market_median_short_change
     market_sample_count = int(input.get("marketSampleCount") or 0)
     market_median_percentile = input.get("marketMedianPercentile")
     jump = input.get("jump") or {}
@@ -1355,7 +1423,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
             "jumpFreshness": jump_freshness,
             "reversalPenalty": 0,
             "historyState": "new_entry",
-            "marketMedianShortChange": market_median_short_change,
+            "marketMedianShortChange": _short_change_json,
             "marketSampleCount": market_sample_count,
             "marketMedianPercentile": market_median_percentile,
             "reasons": [f"新入榜关注度 {round(current_attention_percentile)}"],
@@ -1438,7 +1506,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         "jumpFreshness": round(jump_freshness, 6),
         "reversalPenalty": round(reversal_penalty, 6),
         "historyState": "established",
-        "marketMedianShortChange": market_median_short_change,
+        "marketMedianShortChange": _short_change_json,
         "marketSampleCount": market_sample_count,
         "marketMedianPercentile": market_median_percentile,
         "reasons": [
@@ -1604,6 +1672,14 @@ class RankTrendPythonEngine:
                 continue
 
             regime = market_regime(frame)
+            # 阶段 3 修复方向 1：每帧一次性计算横截面市场上下文（与 API 链路同口径），
+            # 供 _build_signal 补共振维参与 synergy 投票；窗口不足/样本不足时如实为 None（fail-visible）。
+            market_median, market_sample_count = frame_market_median(frames, index)
+            market_ctx = {
+                "marketMedianShortChange": market_median,
+                "marketSampleCount": market_sample_count,
+                "marketMedianPercentile": frame_market_median_percentile(frame),
+            }
             for stock in stocks:
                 code = str(stock.get("code") or "")
                 if requested_codes is not None and code not in requested_codes:
@@ -1618,6 +1694,7 @@ class RankTrendPythonEngine:
                     [item[2] for item in series],
                     regime,
                     meta,
+                    market_ctx=market_ctx,
                 )
                 if signal:
                     signals.append(signal)
@@ -1684,7 +1761,7 @@ class RankTrendPythonEngine:
             percentiles.append(percentile_rank(rank, attention_total))
         return self._build_signal(stock, frame, ranks, percentiles, regime, meta)
 
-    def _build_signal(self, stock: dict[str, Any], frame: dict[str, Any], ranks: list[float], percentiles: list[float], regime: dict[str, Any], meta: dict[str, Any], assemble: bool = True) -> dict[str, Any] | None:
+    def _build_signal(self, stock: dict[str, Any], frame: dict[str, Any], ranks: list[float], percentiles: list[float], regime: dict[str, Any], meta: dict[str, Any], assemble: bool = True, market_ctx: dict[str, Any] | None = None) -> dict[str, Any] | None:
         if not ranks:
             return None
         code = str(stock.get("code") or "")
@@ -1754,11 +1831,40 @@ class RankTrendPythonEngine:
             "executionStrategy": execution_strategy,
         }
         # 回测方案 §3.2 组装下沉：observation.volumePrice / synergy + signalTier 与 API 单股链路同源。
-        # 延迟 import 避免 engine ↔ volume_price 循环依赖；replay 无 resonance 时共振维缺票（vote=0）。
-        # API 单股链路（_analyze_one_stock）传 assemble=False，在 routes 层组装一次（含 resonance 票）。
+        # 延迟 import 避免 engine ↔ volume_price 循环依赖。
+        # 阶段 3 修复方向 1：replay（assemble=True + market_ctx）补共振维——与 API 单股链路
+        # （routes _analyze_one_stock 的 analyze_rank_resonance 组装）同输入同源，恢复四维投票语义；
+        # API 单股链路（_analyze_one_stock）传 assemble=False，resonance 由 routes 层组装（含题材上下文），不重复计算。
         if assemble:
             from backend.analysis.ranktrend.volume_price import assemble_observation
 
+            if market_ctx is not None:
+                sample_quality = (rank_trend.get("meta") or {}).get("sampleQuality") or {}
+                market_short_change = market_ctx.get("marketMedianShortChange")
+                rank_trend["resonance"] = analyze_rank_resonance(
+                    {
+                        "percentiles": percentiles,
+                        "sampleQuality": {
+                            "status": sample_quality.get("status") or "insufficient",
+                            "timelineValid": sample_quality.get("timelineValid", True),
+                        },
+                        "marketMedianShortChange": (
+                            market_short_change if market_short_change is not None else float("nan")
+                        ),
+                        "marketSampleCount": market_ctx.get("marketSampleCount") or 0,
+                        "marketMedianPercentile": market_ctx.get("marketMedianPercentile"),
+                        "jump": {
+                            "direction": jump.get("direction") or "hold",
+                            "event": jump.get("event") or "none",
+                            "events": jump.get("events") or [],
+                        },
+                        "entry": {
+                            "isNew": len(percentiles) == 1,
+                            "currentAttentionPercentile": percentiles[-1] if percentiles else 0,
+                        },
+                    },
+                    self.config,
+                )
             assemble_observation(rank_trend, stock, self.config)
         return {
             "snapshotId": frame.get("snapshotId"),

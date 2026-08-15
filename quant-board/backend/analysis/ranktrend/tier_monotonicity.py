@@ -83,7 +83,11 @@ def tier_forward_returns(
     """
     index_by_snapshot, stock_by_frame_code = _build_lookup(frames)
     totals = len(frames)
-    by_tier: dict[str, list[float]] = {tier: [] for tier in TIER_VALUES}
+    by_tier: dict[str, list[tuple[float, float]]] = {tier: [] for tier in TIER_VALUES}
+    # 分位条件化（阶段 3 修复方向 2）：记录每个样本的当前排名百分位 → 同桶基线 acc。
+    # 排名收益强均值回归（高 90-99 分位桶 h1 acc 仅 0.36），原始 directionAccuracy 对追强档位
+    # 不可达；excessDirectionAccuracy = 档位 acc − 样本所在分位桶基线 acc（增量信息）。
+    bucket_deltas: dict[int, list[float]] = {bucket: [] for bucket in range(10)}
     for signal in signals:
         tier = tier_signal_of(signal, dimension)
         code = str(signal.get("code") or "")
@@ -100,19 +104,41 @@ def tier_forward_returns(
         future_pct = _percentile(float(target.get("rank") or 0), len(stock_by_frame_code[future]))
         if current_pct <= 0 or future_pct <= 0:
             continue
-        by_tier[tier].append((future_pct - current_pct) / 100.0)
+        delta = (future_pct - current_pct) / 100.0
+        by_tier[tier].append((delta, current_pct))
+        bucket_deltas[min(9, int(current_pct // 10))].append(delta)
+
+    # 每分位桶基线方向精度（全样本，不加信号）
+    bucket_baselines: dict[int, float | None] = {
+        bucket: (round(sum(1 for d in deltas if d > 0) / len(deltas), 4) if deltas else None)
+        for bucket, deltas in bucket_deltas.items()
+    }
 
     tiers: dict[str, dict[str, Any]] = {}
-    for tier, deltas in by_tier.items():
-        count = len(deltas)
+    for tier, samples in by_tier.items():
+        count = len(samples)
         if count == 0:
-            tiers[tier] = {"count": 0, "meanFutureReturn": None, "directionAccuracy": None}
+            tiers[tier] = {
+                "count": 0,
+                "meanFutureReturn": None,
+                "directionAccuracy": None,
+                "excessDirectionAccuracy": None,
+                "bucketBaselineAccuracy": None,
+            }
             continue
         # 注：unknown 档也统计收益（实现超集，plan §5.1 示例为 null），但不参与单调性链
+        deltas = [sample[0] for sample in samples]
+        pcts = [sample[1] for sample in samples]
+        accuracy = sum(1 for d in deltas if d > 0) / count
+        baseline_accs = [bucket_baselines[min(9, int(pct // 10))] for pct in pcts]
+        baseline_accs = [value for value in baseline_accs if value is not None]
+        baseline = sum(baseline_accs) / len(baseline_accs) if baseline_accs else None
         tiers[tier] = {
             "count": count,
             "meanFutureReturn": round(sum(deltas) / count, 6),
-            "directionAccuracy": round(sum(1 for d in deltas if d > 0) / count, 4),
+            "directionAccuracy": round(accuracy, 4),
+            "excessDirectionAccuracy": round(accuracy - baseline, 4) if baseline is not None else None,
+            "bucketBaselineAccuracy": round(baseline, 4) if baseline is not None else None,
         }
 
     total_samples = sum(tiers[tier]["count"] for tier in TIER_VALUES)
@@ -124,6 +150,7 @@ def tier_forward_returns(
         "unknownRate": round(unknown_rate, 4),
         "frameCount": totals,
         "indexedFrameCount": len(index_by_snapshot),  # 若小于 frameCount，说明存在重复 snapshotId（数据异常，显式暴露）
+        "bucketBaselines": bucket_baselines,  # 每分位桶基线方向精度（分位条件化对照）
         "monotonicity": monotonicity,
     }
 

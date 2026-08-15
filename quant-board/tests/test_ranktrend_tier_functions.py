@@ -107,18 +107,19 @@ def test_synergy_tier_default_matches_hardcoded() -> None:
     assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "E")[0] == "E"
     # vp=E 硬分支
     assert _synergy_tier("A", "buy", "A", "buy", "E", "down", None)[0] == "D"
-    # v=2 且 lc==A → S
+    # v=3（strong+1）→ S（阶段 3 修复：S 需高票一致，不再由 lc==A 独占）
     assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "A")[0] == "S"
-    # v=2 → A
+    # v=2 == strong → A（阶段 3 修复：A 档可达，不再被 lc==A→S 分支吞掉）
     assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None)[0] == "A"
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "A")[0] == "A"  # lc=A 不再独占 S
     # v=1 → B
     assert _synergy_tier("A", "buy", "B", "hold", "C", "hold", None)[0] == "B"
     # v=0 → C
     assert _synergy_tier("C", "hold", "C", "hold", "C", "hold", None)[0] == "C"
     # v=-1 → D
     assert _synergy_tier("D", "sell", "C", "hold", "C", "hold", None)[0] == "D"
-    # lc=B 时 S 分支不可达（S 需 lc==A），最高 A → 降档 B
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "B")[0] == "B"  # A→B
+    # lc=B/D 时 S/A 降一档：v=3 且 lc=B → S 降 A
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "B")[0] == "A"  # S→A
     assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "D")[0] == "B"  # A→B
 
 
