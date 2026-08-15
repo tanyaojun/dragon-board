@@ -395,6 +395,52 @@ pf 从 0.81 跌到 0.62，winRate×pf 从 0.2993 恶化到 0.2457）。**退出�
 方向 2 实现（signalExitDelayBars）保留为研究开关（默认关闭不改变行为），后续如需复核
 "入场子集 h8 负期望"或与其他方向组合可复用。
 
+**阶段 6 综合评估：生命周期分层策略 vs RankTrend 分析方法匹配度（commit 待补，2026-08-15，
+报告 `data/reports/strategy-signal-fit.json`）**：
+
+用户提出"A_MAIN 入场条件只是其中一环，策略到底匹不匹配 RankTrend 分析方法，要综合评估"。
+实现 `backend/analysis/ranktrend/strategy_signal_fit.py`（纯函数：`tier_distribution_by_candidate` /
+`amain_funnel_by_regime` / `entered_vs_unentered`，6 测试）+ `backend/operations/evaluate_strategy_signal_fit.py`
+（只读综合评估），逐环节拆解漏斗：synergy S/A 档 → candidateTier 分层 → regime 过滤 → 实际入场。
+
+**真实数据（769 帧 / 156647 信号，h8 价格收益，S/A 档口径，winRate 为 h8 方向胜率）**：
+
+| 环节 | 子集 | 样本 | winRate | winRateDelta vs S/A 基线(0.5272) |
+|---|---|---|---|---|
+| 分层 | A_MAIN（入场档） | 967 | 0.5140 | **−0.0132** |
+| 分层 | B_IGNITION | 1040 | 0.5308 | +0.0036 |
+| 分层 | C_CROWDED | 496 | 0.4899 | −0.0373 |
+| 分层 | D_EXIT_RISK（风控档） | 155 | **0.6065** | **+0.0793** |
+| 分层 | N_NEUTRAL | 1932 | 0.5352 | +0.0080 |
+| regime | A_MAIN 内 strong | 245 | **0.6041** | **+0.0901** |
+| regime | A_MAIN 内 normal | 722 | 0.4834 | **−0.0306** |
+| 执行 | A_MAIN 实际入场 | 85 | 0.4706 | **−0.0475**（vs 未入场 0.5181） |
+| 档位 | A_MAIN 内 S 档 / A 档 | 386/581 | 0.513/0.515 | 几乎无差异 |
+
+**综合结论：生命周期分层策略与 RankTrend 分析方法存在结构性不匹配**：
+
+1. **分层方向与信号收益背离**：被判定"退出风险"的 D_EXIT_RISK 档 h8 收益最高（winRate 0.6065，
+   +7.9pp），被判定"入场"的 A_MAIN 档反而低于 S/A 基线（−1.3pp）。生命周期分层（stage 驱动的
+   reversal/cooling/crowded/expansion/ignition 判定）与"未来 8 帧哪个方向赚"的 RankTrend 信号
+   没有对齐——D_EXIT_RISK 高收益可能是低分位均值回归，但至少证明**当前分层把强弱信号分反了**。
+2. **regime 过滤方向正确但阈值偏低**：A_MAIN 内 strong 环境 h8 winRate 0.6041（+9pp 超额），
+   normal 环境 0.4834（−3.1pp）；A_MAIN 候选 75%（722/967）落在 normal，负超额拖累整体。
+   → "A_MAIN 仅限 strong/高分 regime"可能是首个可落地的改进，但需样本外复核。
+3. **执行环节系统性损耗**：A_MAIN 内实际入场（85 笔）h8 winRate 0.4706，显著低于未入场
+   （882 笔）0.5181（−4.8pp）。入场排序（按 confidence 降序 + maxPositions 资金约束）选出的
+   子集方向更差——confidence 高 ≠ 未来收益高，**排序依据需要重估**。
+4. **A_MAIN 内 S/A 档位无区分度**：S 档 0.513 vs A 档 0.515，几乎相同——档位强度没有转化为
+   A_MAIN 内部的差异化，分层只用了 lifecycle 维度，synergy 档位没有参与 A_MAIN 内排序。
+
+**下一步（待用户决策）**：
+- 候选 A：A_MAIN 入场加 regime 强过滤（strong 才入场，normal 降级）——证据最强（+9pp 超额），
+  但 n=245 需样本外验证；
+- 候选 B：重估入场排序（弃 confidence，改用 regime×synergy 联合分或 h8 期望代理）——直击
+  执行环节 −4.8pp 损耗；
+- 候选 C：重构分层语义（验证 D_EXIT_RISK 高收益是否为均值回归，A_MAIN 档与生命周期判定
+  是否应引入 synergy 档位）——工作量大，属算法层重设计；
+- 候选 D：接受"信号优势薄 + 执行损耗"结论，暂停交易层研究。
+
 ## 4. 验收标准汇总
 
 > 2026-08-15 更新（二次修正）：原绝对胜率口径（winRate ≥ 0.80 / validation ≥ 0.70 / walkForward ≥ 0.7）在均值回归主导的目标变量上不可达，已废弃；**主验收改为胜率×盈亏比组合**（用户决策：胜率改收益不如胜率×盈亏比）。
