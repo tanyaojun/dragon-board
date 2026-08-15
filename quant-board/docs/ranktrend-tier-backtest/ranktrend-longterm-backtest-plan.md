@@ -485,8 +485,26 @@ h8 = 未来 8 帧价格收益 median）：
   无正期望** → 趋势反转层仅作观察/候选标记，**不能直接作为买点**（与研究 v2 结论一致，
   与"四维信号仅观察"口径统一）；低位反转买点需结合量价/资金/情绪进一步搜索验证。
 
+**趋势反转 × jump 跳跃度搭配分析（commit `3e39b34`，2026-08-16，用户方向）**：
+- 新分析模块 `backend/analysis/ranktrend/trend_reversal_jump.py`：trendReversal 信号按 jump 参数
+  （事件方向 / 幅度 / 新鲜度 / 组合）分桶统计 h1/h3/h8 价格收益（fail-visible skipped* 计数）；
+- 只读诊断脚本 `backend/operations/diagnose_trend_reversal_jump.py`，报告 `data/reports/trend-reversal-jump.json`；
+- **真实数据结论（769 帧 / 9560 trendReversal）**：
+
+| 分桶（trendReversal 子集） | h8 n | h8 winRate | h8 median |
+|---|---|---|---|
+| 全量 trendReversal（基线） | 6641 | 0.4910 | 0.0 |
+| jump_buy（跳跃上升） | 1887 | 0.4976 | 0.0 |
+| **jump_buy + 大幅（mag≥20）** | 779 | **0.5212** | **+0.0026** |
+| **jump_buy + 大幅 + 新鲜（fresh≥0.5）** | 252 | **0.5278** | **+0.0022** |
+
+- 规律：幅度是主因子（jump buy + mag≥20 首次 h8 median 转正，winRate +3.0pp）；
+  新鲜度仅作增强（叠加大幅后 +3.7pp，超过 S/A 档基线 0.5272）；方向必须 buy（含 collapse 的
+  0.5045 < 0.5212）。→ **"低位弱转强 + 排名跳跃(buy) + 大幅"组合可作为新买点候选**。
+
 **后续待办（未立项）**：
-- 搜索"低位反转新买点"：在 trendReversal 判定基础上叠加量价/资金/情绪条件，验证 h8 正期望；
+- 把 trendReversal ∧ jumpBuy ∧ mag≥20（可选 + fresh≥0.5）接入候选分层/回测验证
+  （winRate×pf 验收线），若通过再决定作为入场候选；
 - 趋势反转层接入分层档位（若搜索验证有正期望，再决定是否作为入场候选）；
 - cycle stage 的 reversal（高位反转）与 cooling（降温）语义边界审视（阶段6 steer 记录：两者
   位置分离——reversal 分位 84.9 / cooling 39.9，不合并；缺口在 cooling 内缺"低位回升"细分层）。
