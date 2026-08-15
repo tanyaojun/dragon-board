@@ -343,14 +343,14 @@ const goldenForm = reactive<GoldenValidateRequest>({
 });
 
 const gridInputs = reactive({
-  momentumPeriods: "3-5-8-13-21;2-4-6-10-16;5-8-13-21-34",
-  minJumpConfidence: "90",
-  takeProfitPct: "0.08,0.12,0.16",
-  stopLossPct: "0.04,0.06,0.08",
-  maxPositions: "3,5,8",
-  macdFast: "21",
-  macdSlow: "34",
-  macdSignal: "13"
+  momentumPeriods: "3-5-8-13-21;2-4-6-10-16;5-8-13-21-34", // 多组周期数组（文本）
+  minJumpConfidence: 90,
+  takeProfitPct: 0.12,
+  stopLossPct: 0.06,
+  maxPositions: 5,
+  macdFast: 21,
+  macdSlow: 34,
+  macdSignal: 13
 });
 
 // 交易策略开关——枚举（下拉单选）、布尔（勾选=启用）、数值（单值 number，参照随机种子控件）
@@ -1414,18 +1414,15 @@ async function deleteCurrentBacktest(): Promise<void> {
 async function runOptimization(): Promise<void> {
   optimizationForm.parameterGrid = {
     momentumPeriods: parsePeriodGrid(gridInputs.momentumPeriods),
-    minJumpConfidence: parseNumberList(gridInputs.minJumpConfidence),
-    takeProfitPct: parseNumberList(gridInputs.takeProfitPct),
-    stopLossPct: parseNumberList(gridInputs.stopLossPct),
-    maxPositions: parseNumberList(gridInputs.maxPositions)
+    minJumpConfidence: [gridInputs.minJumpConfidence],
+    takeProfitPct: [gridInputs.takeProfitPct],
+    stopLossPct: [gridInputs.stopLossPct],
+    maxPositions: [gridInputs.maxPositions]
   };
   // Phase 2 strategy params (only include if user provided values)
-  const macdFast = parseNumberList(gridInputs.macdFast);
-  const macdSlow = parseNumberList(gridInputs.macdSlow);
-  const macdSignal = parseNumberList(gridInputs.macdSignal);
-  if (macdFast.length) optimizationForm.parameterGrid.macdFast = macdFast;
-  if (macdSlow.length) optimizationForm.parameterGrid.macdSlow = macdSlow;
-  if (macdSignal.length) optimizationForm.parameterGrid.macdSignal = macdSignal;
+  if (gridInputs.macdFast) optimizationForm.parameterGrid.macdFast = [gridInputs.macdFast];
+  if (gridInputs.macdSlow) optimizationForm.parameterGrid.macdSlow = [gridInputs.macdSlow];
+  if (gridInputs.macdSignal) optimizationForm.parameterGrid.macdSignal = [gridInputs.macdSignal];
   // 交易策略开关（方向 1/3/4；枚举下拉/布尔勾选/数值单值，未启用则不参与搜索）
   optimizationForm.parameterGrid.synergyEntryTierMin = [synergyEntryTierMin.value];
   optimizationForm.parameterGrid.entryMomentumConfirm = [entryMomentumConfirm.value];
@@ -2283,35 +2280,35 @@ onMounted(async () => {
             </label>
             <label>
               动量周期组
-              <input v-model="gridInputs.momentumPeriods" type="text" />
+              <input v-model="gridInputs.momentumPeriods" type="text" title="多组周期用分号分隔，组内用 - 或 , 分隔" />
             </label>
             <label>
-              Jump 置信度组
-              <input v-model="gridInputs.minJumpConfidence" type="text" />
+              Jump 置信度
+              <input v-model.number="gridInputs.minJumpConfidence" type="number" min="0" max="100" step="0.1" />
             </label>
             <label>
-              止盈比例组
-              <input v-model="gridInputs.takeProfitPct" type="text" />
+              止盈比例
+              <input v-model.number="gridInputs.takeProfitPct" type="number" min="0" max="1" step="0.01" title="如 0.12 = 盈利 12%" />
             </label>
             <label>
-              止损比例组
-              <input v-model="gridInputs.stopLossPct" type="text" />
+              止损比例
+              <input v-model.number="gridInputs.stopLossPct" type="number" min="0" max="1" step="0.01" title="如 0.06 = 亏损 6%" />
             </label>
             <label>
-              最大持仓数组
-              <input v-model="gridInputs.maxPositions" type="text" />
+              最大持仓数
+              <input v-model.number="gridInputs.maxPositions" type="number" min="1" />
             </label>
-            <label title="默认沿用当前回测 MACD；需要不搜索 MACD 时可手动清空">
-              MACD 快线候选
-              <input v-model="gridInputs.macdFast" type="text" placeholder="默认 21；可填 19,21,24" />
+            <label title="默认沿用当前回测 MACD">
+              MACD 快线
+              <input v-model.number="gridInputs.macdFast" type="number" min="1" />
             </label>
-            <label title="默认沿用当前回测 MACD；需要不搜索 MACD 时可手动清空">
-              MACD 慢线候选
-              <input v-model="gridInputs.macdSlow" type="text" placeholder="默认 34；可填 30,34,38" />
+            <label title="默认沿用当前回测 MACD">
+              MACD 慢线
+              <input v-model.number="gridInputs.macdSlow" type="number" min="1" />
             </label>
-            <label title="默认沿用当前回测 MACD；需要不搜索 MACD 时可手动清空">
-              MACD 信号线候选
-              <input v-model="gridInputs.macdSignal" type="text" placeholder="默认 13；可填 10,13,16" />
+            <label title="默认沿用当前回测 MACD">
+              MACD 信号线
+              <input v-model.number="gridInputs.macdSignal" type="number" min="1" />
             </label>
           </div>
           <details class="adv-params">
