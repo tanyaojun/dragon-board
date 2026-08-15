@@ -169,7 +169,7 @@ class TradeSimulator:
                         final_signal == "sell"
                         or signal["candidateTier"] == "D_EXIT_RISK"
                         or (signal["candidateTier"] == "C_CROWDED" and _crowded_accel <= 0)
-                        or signal["rank"] > 50
+                        or TradeSimulator._rank_exit_triggered(signal, config, strategy_key)
                         or synergy_danger_exit
                         or synergy_downgrade_exit
                     )
@@ -203,7 +203,7 @@ class TradeSimulator:
                 cash += gross_amount - exit_cost
                 entry_cost_basis = (float(pos["entryCost"]) / int(pos["quantity"])) * quantity if pos["quantity"] else 0
                 profit = gross_amount - exit_cost - entry_cost_basis
-                reason = exit_trigger or strategy_exit_reason or self._exit_reason(signal, pos, gross_return, config, stop_ratio=stop_ratio, take_ratio=take_ratio)
+                reason = exit_trigger or strategy_exit_reason or self._exit_reason(signal, pos, gross_return, config, stop_ratio=stop_ratio, take_ratio=take_ratio, strategy_key=strategy_key)
                 net_return = profit / entry_cost_basis if entry_cost_basis else 0
                 explanation = self._signal_explanation(signal, f"卖出：{reason}", pos)
                 trade = {"code": code, "name": pos["name"], "entrySnapshotId": pos["entrySnapshotId"], "entrySignalSnapshotId": pos.get("entrySignalSnapshotId") or pos["entrySnapshotId"], "exitSnapshotId": frame["snapshotId"], "exitSignalSnapshotId": signal.get("snapshotId"), "entryTime": pos["entryTime"], "exitTime": frame["timestamp"], "entryTradingDate": pos.get("entryTradingDate"), "exitTradingDate": frame.get("tradingDate"), "entryPrice": pos["entryPrice"], "exitPrice": exit_price, "quantity": quantity, "holdingBars": pos["holdingBars"], "grossReturn": round((exit_price - pos["entryPrice"]) / pos["entryPrice"], 4) if pos["entryPrice"] else 0, "netReturn": round(net_return, 4), "entryCostBasis": round(entry_cost_basis, 2), "profit": round(profit, 2), "reason": reason, "explanation": explanation, "action": "sell", "price": exit_price, "rank": signal["rank"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "executionMode": execution_mode, "fill": self._public_fill(fill)}
@@ -1229,6 +1229,31 @@ class TradeSimulator:
         }
 
     @staticmethod
+    def _rank_exit_triggered(
+        signal: dict[str, Any],
+        config: dict[str, Any] | None,
+        strategy_key: str = "rank_trend_candidate",
+    ) -> bool:
+        """排名恶化退出判定（阶段6 修复：低位弱转强入场用 avgRankNum 而非绝对 rank）。
+
+        - rankExitField="rank"（默认）：保持现状 signal.rank > 50（重排序号，子集内跌出前 50）；
+        - rankExitField="avgranknum"（trend_reversal_jump 低位入场推荐）：用 avgRankNum 百分位
+          （0-100，**数值越大 = 排名越靠后**），跌破阈值 avgRankNumExitMax（默认 80 = 跌到后 20%）
+          才退出——避免低位入场（rank 恒 >50）一入场即被"跌出前50"误踢，给价格波动留出空间。
+        fail-visible：切换 avgranknum 但信号缺 avgRankNum 字段 → False（不误杀，交其他退出条件判断）。
+        """
+        field = str((config or {}).get("rankExitField") or "rank").strip().lower()
+        if field == "avgranknum":
+            value = signal.get("avgRankNum")
+            if value is None:
+                return False
+            try:
+                return float(value) > float((config or {}).get("avgRankNumExitMax", 80.0))
+            except (TypeError, ValueError):
+                return False
+        return bool(signal.get("rank", 0) > 50)
+
+    @staticmethod
     def _exit_reason(
         signal: dict[str, Any],
         pos: dict[str, Any],
@@ -1236,6 +1261,7 @@ class TradeSimulator:
         config: dict[str, Any],
         stop_ratio: float | None = None,
         take_ratio: float | None = None,
+        strategy_key: str = "rank_trend_candidate",
     ) -> str:
         final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
         if TradeSimulator._synergy_exit_on_danger(config) and final_signal != "sell" and TradeSimulator._synergy_tier_of(signal) in ("D", "E"):
@@ -1246,8 +1272,8 @@ class TradeSimulator:
             return "compose_decision 卖出信号"
         if signal["candidateTier"] == "D_EXIT_RISK":
             return "D_EXIT_RISK"
-        if signal["rank"] > 50:
-            return "排名跌出前50"
+        if TradeSimulator._rank_exit_triggered(signal, config, strategy_key):
+            return "排名恶化退出"
         if pos["holdingBars"] >= config["maxHoldingBars"]:
             return "到达最大持有快照"
         if gross_return <= (stop_ratio if stop_ratio is not None else config["stopLoss"]):

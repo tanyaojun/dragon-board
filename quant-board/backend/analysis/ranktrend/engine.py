@@ -1889,6 +1889,7 @@ class RankTrendPythonEngine:
             "code": code,
             "name": stock.get("name") or code,
             "rank": current_rank,
+            "avgRankNum": stock.get("avgRankNum"),
             "candidateTier": tier_source["candidateTier"],
             "action": tier_source["action"],
             "price": stock.get("price"),

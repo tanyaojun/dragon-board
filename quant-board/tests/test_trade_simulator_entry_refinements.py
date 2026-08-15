@@ -650,3 +650,41 @@ def test_trj_strategy_ignores_non_reversal_signals() -> None:
     ]
     result = _run(frames, signals, {"entryStrategy": "trend_reversal_jump"})
     assert result["openPositionCount"] == 1
+
+# ---------- 排名恶化退出判定（rankExitField: rank | avgranknum）----------
+
+
+def _exit_signal(rank: float = 60.0, avg_rank_num: float | None = 85.0) -> dict:
+    s = {"rank": rank, "avgRankNum": avg_rank_num}
+    return s
+
+
+def test_rank_exit_default_uses_rank_field() -> None:
+    """默认 rankExitField=rank：signal.rank > 50 退出（现状不变）。"""
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60.0), {}) is True
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=50.0), {}) is False
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=20.0), {}) is False
+
+
+def test_rank_exit_avgranknum_field() -> None:
+    """rankExitField=avgranknum：avgRankNum > avgRankNumExitMax(默认80) 才退出。"""
+    cfg = {"rankExitField": "avgranknum"}
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=200, avg_rank_num=90.0), cfg) is True
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=200, avg_rank_num=80.0), cfg) is False
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=200, avg_rank_num=70.0), cfg) is False
+    # 低位入场：rank 恒>50 但 avgRankNum 尚未恶化 → 不退出（修复核心场景）
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=117, avg_rank_num=65.0), cfg) is False
+
+
+def test_rank_exit_avgranknum_threshold_config() -> None:
+    """avgRankNumExitMax 可配置。"""
+    cfg = {"rankExitField": "avgranknum", "avgRankNumExitMax": 70.0}
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(avg_rank_num=75.0), cfg) is True
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(avg_rank_num=65.0), cfg) is False
+
+
+def test_rank_exit_avgranknum_missing_field_fail_visible() -> None:
+    """切换 avgranknum 但信号缺 avgRankNum → False（不误杀，交其他退出条件判断）。"""
+    cfg = {"rankExitField": "avgranknum"}
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60, avg_rank_num=None), cfg) is False
+    assert TradeSimulator._rank_exit_triggered({"rank": 60}, cfg) is False

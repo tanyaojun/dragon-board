@@ -42,6 +42,10 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     # 开启后 entryStrategy="trend_reversal_jump" 要求 trendReversal ∧ jump buy ∧ mag≥min 且 fresh≥min
     "trendReversalJumpMagMin": 20.0,
     "trendReversalJumpFreshMin": 0.0,
+    # 排名恶化退出判定字段（阶段6 修复）：默认 "rank" 保持现状（重排序号>50）；
+    # 低位弱转强策略（trend_reversal_jump）建议 "avgranknum"（avgRankNum 百分位>avgRankNumExitMax）
+    "rankExitField": "rank",
+    "avgRankNumExitMax": 80.0,
 }
 
 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {
