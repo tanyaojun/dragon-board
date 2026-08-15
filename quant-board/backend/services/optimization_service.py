@@ -16,6 +16,7 @@ from backend.optimization.search_space import candidate_count, select_candidates
 from backend.core.utils import new_id, stable_hash
 from backend.services.shared import (
     DEFAULT_BACKTEST_STRATEGY_CONFIG,
+    BACKTEST_RANKTREND_STOCK_FIELDS,
     camel_get,
     _prepare_frames_for_backtest
 )
@@ -296,6 +297,7 @@ class OptimizationService:
             start_date=load_start,
             end_date=load_end,
             include_payload=True,
+            fields=list(BACKTEST_RANKTREND_STOCK_FIELDS),
         )
         if not frames:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
