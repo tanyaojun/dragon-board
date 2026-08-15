@@ -1291,7 +1291,9 @@ def compose_strategy(
     if risk["overheat"]["severity"] >= 0.65:
         reasons.append("过热压力较高")
     reasons.append(f"动量结构 短{momentum['short']:+.1f} 中{momentum['mid']:+.1f} 长{momentum['long']:+.1f} 加速度{momentum['acceleration']:+.1f}")
-    action = {"A_MAIN": "focus", "B_IGNITION": "watch", "C_CROWDED": "avoid", "D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
+    # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，
+    # 降级为观察档（action=watch，不参与默认策略入场投票）；对照组策略可显式启用。
+    action = {"A_MAIN": "watch", "B_IGNITION": "watch", "C_CROWDED": "avoid", "D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
     return {"hotlist": hotlist_state, "momentum": momentum, "candidateTier": tier, "action": action, "reasons": reasons}
 
 
@@ -1609,7 +1611,9 @@ def compose_analysis_candidate_tier(
     reasons.append(
         f"动量结构 短{momentum['short']:+.1f} 中{momentum['mid']:+.1f} 长{momentum['long']:+.1f} 加速度{momentum['acceleration']:+.1f}"
     )
-    action = {"A_MAIN": "focus", "B_IGNITION": "watch", "C_CROWDED": "avoid", "D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
+    # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，
+    # 降级为观察档（action=watch，不参与默认策略入场投票）；对照组策略可显式启用。
+    action = {"A_MAIN": "watch", "B_IGNITION": "watch", "C_CROWDED": "avoid", "D_EXIT_RISK": "exit_watch"}.get(tier, "hold")
     return {
         "regime": regime_data,
         "momentum": momentum,
@@ -1642,6 +1646,8 @@ class RankTrendPythonEngine:
         if self._candidate_tier_mode(meta) == "execution":
             self._ensure_hotlist_sentiment(frames, meta)
         self._stock_lookup = self._build_stock_lookup(frames)
+        # 趋势反转层（阶段6）：snapshotId → 帧索引，供 trend_reversal_of 取历史 percentile
+        self._index_by_snapshot = {str(frame.get("snapshotId")): i for i, frame in enumerate(frames)}
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
         requested_codes = {str(code) for code in codes} if codes else None
@@ -1697,6 +1703,15 @@ class RankTrendPythonEngine:
                     market_ctx=market_ctx,
                 )
                 if signal:
+                    # 阶段6 趋势反转层（RankTrend 分析方法本体，观察信号）：
+                    # 低分位 + 此前下行 + 当前回升 → 标记 trendReversal，供分层/前端展示消费，
+                    # 不直接作为买点（研究 v2 实证无正期望，需结合量价/资金/情绪再搜索）。
+                    # 延迟 import 避免 engine ↔ trend_reversal 循环依赖。
+                    from backend.analysis.ranktrend.trend_reversal import trend_reversal_of
+
+                    signal["rankTrend"]["trendReversal"] = trend_reversal_of(
+                        signal, self._index_by_snapshot, self._stock_lookup
+                    )
                     signals.append(signal)
         return signals
 

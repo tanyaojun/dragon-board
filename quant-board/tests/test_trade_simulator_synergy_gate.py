@@ -50,7 +50,9 @@ def _run(frames: list[dict], signals: list[dict], patch: dict) -> dict:
         frames,
         signals,
         {
-            "entryStrategy": "rank_trend_candidate",
+            # 阶段6：A_MAIN 降级观察档后默认策略不入场，本组测试验证 A_MAIN 入场的 synergy 门，
+            # 改用 a_b_combined 对照组显式保留 A_MAIN 入场（含 momentum confirm 行为）
+            "entryStrategy": "a_b_combined",
             "initialCapital": 100000,
             "positionSize": 0.1,
             "maxPositions": 2,

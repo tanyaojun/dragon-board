@@ -595,6 +595,13 @@ class TradeSimulator:
                 if signal.get("themeRole") == "leader" and signal["candidateTier"] in {"A_MAIN", "B_IGNITION"}:
                     result.append(signal)
                 continue
+            # theme_rotation：题材引擎独立信号（rotationState=mainline/inflow 题材资金流入），
+            # 与 RankTrend 生命周期分层的 A_MAIN 不同源，不随 A_MAIN 降级（阶段6 业务口径）；
+            # 保留题材 A_MAIN/B_IGNITION 入场。
+            if strategy_key == "theme_rotation":
+                if signal["candidateTier"] in {"A_MAIN", "B_IGNITION"} and signal["regime"] != "weak":
+                    result.append(signal)
+                continue
             if strategy_key == "hotlist_theme_confluence":
                 if signal.get("candidateTier") in {"A_MAIN", "B_IGNITION"} and signal.get("themeConfluenceScore", 0) >= 75 and signal.get("themeRole") != "noise":
                     result.append(signal)
@@ -607,7 +614,10 @@ class TradeSimulator:
                 if TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
                     result.append(signal)
                 continue
-            if signal["candidateTier"] == "A_MAIN" and signal["regime"] != "weak" and TradeSimulator._entry_momentum_confirmed(signal, trade_config):
+            # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，
+            # 默认策略 rank_trend_candidate 不再自动入场 A_MAIN（降级为观察档）；
+            # 对照组策略 a_main_only（上文）/ a_b_combined 显式保留 A_MAIN 入场供研究对比。
+            if signal["candidateTier"] == "A_MAIN" and strategy_key == "a_b_combined" and signal["regime"] != "weak" and TradeSimulator._entry_momentum_confirmed(signal, trade_config):
                 result.append(signal)
             elif signal["candidateTier"] == "B_IGNITION" and strategy_key in ("rank_trend_candidate", "a_b_combined") and TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
                 result.append(signal)

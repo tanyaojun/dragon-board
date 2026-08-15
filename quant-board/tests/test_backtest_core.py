@@ -698,7 +698,14 @@ def test_trade_simulator_realistic_matching_constraints() -> None:
     no_fill = TradeSimulator().run(
         [{"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-04-01", "slotTime": "10:00"}],
         [{**base_signal, "change": 10.0, "leadStatus": "涨停"}],
-        {"initialCapital": 100000, "positionSize": 1, "maxPositions": 1},
+        {
+            # 阶段6：A_MAIN 降级观察档后默认策略不入场，本测试验证 A_MAIN 成交约束，
+            # 用 a_main_only 对照组显式启用
+            "initialCapital": 100000,
+            "positionSize": 1,
+            "maxPositions": 1,
+            "entryStrategy": "a_main_only",
+        },
     )
     assert no_fill["tradeCount"] == 0
     assert no_fill["matchingDiagnostics"]["blockedByLimit"] == 1
@@ -714,6 +721,7 @@ def test_trade_simulator_realistic_matching_constraints() -> None:
             "slippageRate": 0,
             "orderBookParticipationRate": 1,
             "volumeParticipationRate": 1,
+            "entryStrategy": "a_main_only",
         },
     )
     buy_event = partial["tradeEvents"][0]
@@ -733,6 +741,7 @@ def test_trade_simulator_realistic_matching_constraints() -> None:
             "positionSize": 1,
             "maxPositions": 1,
             "executionMode": "next_bar",
+            "entryStrategy": "a_main_only",
         },
     )
     assert missing_next_bar_quote["eventCount"] == 0
@@ -765,7 +774,15 @@ def test_trade_simulator_allows_a_main_entries_without_explicit_final_signal() -
     result = TradeSimulator().run(
         [{"snapshotId": "s1", "timestamp": 1, "tradingDate": "2026-04-01", "slotTime": "10:00"}],
         [signal],
-        {"initialCapital": 100000, "positionSize": 1, "maxPositions": 1, "slippageRate": 0},
+        {
+            # 阶段6：A_MAIN 降级观察档后默认策略不入场，本测试验证 A_MAIN 入场路径，
+            # 用 a_main_only 对照组显式启用
+            "initialCapital": 100000,
+            "positionSize": 1,
+            "maxPositions": 1,
+            "slippageRate": 0,
+            "entryStrategy": "a_main_only",
+        },
     )
 
     assert result["matchingDiagnostics"]["buyAttempts"] == 1

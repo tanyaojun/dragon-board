@@ -82,7 +82,10 @@ def _run(frames: list[dict], signals: list[dict], patch: dict) -> dict:
         frames,
         signals,
         {
-            "entryStrategy": "rank_trend_candidate",
+            # 阶段6 业务口径：默认策略 rank_trend_candidate 不再入场 A_MAIN（观察档）；
+            # 本组测试验证 A_MAIN 入场后的交易行为开关，改用 a_b_combined 对照组策略
+            # 显式保留 A_MAIN 入场（含 momentum confirm 行为，与旧默认路径一致）。
+            "entryStrategy": "a_b_combined",
             "initialCapital": 100000,
             "positionSize": 0.1,
             "maxPositions": 2,

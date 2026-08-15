@@ -883,6 +883,8 @@ def test_entry_candidates_requires_final_signal_buy() -> None:
     }
     candidates = ts._entry_candidates(signals, frames, 1, by_key, {}, "rank_trend_candidate")
     codes = [c["code"] for c in candidates]
-    assert "000001" in codes  # A_MAIN + finalSignal=buy → included
-    assert "000002" not in codes  # A_MAIN but finalSignal=sell → excluded
+    # 阶段6 业务口径：默认策略 rank_trend_candidate 不再入场 A_MAIN（观察档），
+    # 仅 B_IGNITION 连续确认入场；A_MAIN 需对照组策略（a_main_only/a_b_combined）显式启用
+    assert "000001" not in codes  # A_MAIN：默认策略降级观察档，不再自动入场
+    assert "000002" not in codes  # A_MAIN + finalSignal=sell：默认策略不入场（双重排除）
     assert "000003" in codes  # B_IGNITION confirmed + finalSignal=buy → included
