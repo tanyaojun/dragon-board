@@ -1715,7 +1715,15 @@ class RankTrendPythonEngine:
         # 顶层 candidateTier/action 按 meta 模式选择，保持回测消费兼容；两个分层同时输出
         tier_source = execution_strategy if self._candidate_tier_mode(meta) == "execution" else strategy
         jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
-        sample_status = "ok" if len(percentiles) >= get_technical_min_samples(self.config) else "degraded" if len(percentiles) >= 5 else "insufficient"
+        # 阶段 2 数据质量治理：ok 判定用动量可计算门槛（momentumPeriods.max+1），
+        # 不再混入 MACD 预热需求。旧口径 get_technical_min_samples=34 帧在 50 帧滑动窗口
+        # + 热榜轮动下把 ok 占比压到 ~46%（20 个历史回测全部 researchGrade=degraded）。
+        # MACD 预热状态由 _macd_diagnostics.hasStableObservationBars 单独暴露（fail-visible）。
+        sample_status = (
+            "ok" if len(percentiles) >= get_momentum_min_samples(self.config)
+            else "degraded" if len(percentiles) >= 5
+            else "insufficient"
+        )
         rank_trend = {
             "meta": {
                 "code": code,
@@ -1727,7 +1735,7 @@ class RankTrendPythonEngine:
                 "sampleQuality": {
                     "snapshotType": frame.get("type"),
                     "sampleCount": len(percentiles),
-                    "requiredSampleCount": get_technical_min_samples(self.config),
+                    "requiredSampleCount": get_momentum_min_samples(self.config),
                     "status": sample_status,
                     "coverageWarning": None if meta.get("sampleQuality") == "ok" else (meta.get("warnings") or ["样本质量降级"])[0],
                     "latestTradingDate": frame.get("tradingDate"),

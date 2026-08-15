@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine, get_macd_min_samples
+from backend.analysis.ranktrend.engine import (
+    RankTrendConfig,
+    RankTrendPythonEngine,
+    get_macd_min_samples,
+    get_momentum_min_samples,
+)
 from backend.analysis.theme.support_index import build_theme_support_index
 from backend.core.backtest.evaluator import OutcomeEvaluator
 from backend.core.backtest.execution import TradeSimulator
@@ -96,7 +101,9 @@ class BacktestEngine:
 
     @staticmethod
     def _sample_diagnostics(frames: list[dict[str, Any]], signals: list[dict[str, Any]], config: RankTrendConfig) -> dict[str, Any]:
-        required = max(get_macd_min_samples(config), max(config.momentumPeriods or [0]) + 1, 30)
+        # 阶段 2：requiredTechnicalBars 与 sampleQuality.status 判定口径一致（动量可计算门槛）；
+        # MACD 预热需求（macdMinimumBars/macdStableObservationBars）单独字段暴露，不混入。
+        required = get_momentum_min_samples(config)
         stable_macd_bars = int(config.macdSlow) + int(config.macdSignal)
         status_counts: dict[str, int] = {"ok": 0, "degraded": 0, "insufficient": 0}
         sample_counts: list[int] = []
