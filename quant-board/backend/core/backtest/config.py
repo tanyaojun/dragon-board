@@ -25,6 +25,17 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "orderBookParticipationRate": 0.3,
     "useIntrabarStops": True,
     "intrabarAmbiguity": "stop_first",
+    # 策略层改进（全部默认关闭，开启时行为变更，见 tests/test_trade_simulator_entry_refinements.py）
+    "entryMomentumConfirm": "off",
+    "useAtrStops": False,
+    "atrStopMultiplier": 2.0,
+    "atrTakeMultiplier": 3.0,
+    "breakevenTrailing": False,
+    "breakevenThreshold": 0.02,
+    "tierPositionScale": False,
+    "tierPositionScales": {"S": 1.0, "A": 1.0, "B": 0.5},
+    "synergyExitOnDowngrade": False,
+    "synergyDowngradeSteps": 2,
 }
 
 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {

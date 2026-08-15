@@ -49,6 +49,7 @@ class TradeSimulator:
         trade_events: list[dict[str, Any]] = []
         equity: list[dict[str, Any]] = []
         skipped_orders: list[dict[str, Any]] = []
+        atr_history_by_code: dict[str, list[tuple[float, float, float]]] = {}
         matching_stats = {
             "buyAttempts": 0,
             "sellAttempts": 0,
@@ -66,6 +67,16 @@ class TradeSimulator:
             "blockedBySynergyTier": 0,
         }
         for idx, frame in enumerate(frames):
+            if config.get("useAtrStops"):
+                for stock in frame.get("stocks") or []:
+                    stock_code = str(stock.get("code") or "")
+                    if not stock_code:
+                        continue
+                    bar_high = _first_number(stock, "high", "highPrice", "dayHigh")
+                    bar_low = _first_number(stock, "low", "lowPrice", "dayLow")
+                    bar_close = _first_number(stock, "close", "closePrice", "lastPrice", "lastTradePrice", "price")
+                    if bar_high and bar_low and bar_close and bar_high > 0 and bar_low > 0 and bar_close > 0:
+                        atr_history_by_code.setdefault(stock_code, []).append((float(bar_high), float(bar_low), float(bar_close)))
             frame_signals = signals_by_snapshot.get(frame["snapshotId"], [])
             signal_by_code = {signal["code"]: signal for signal in frame_signals}
             execution_signal_by_code = self._execution_signal_by_code(frames, idx, signals_by_snapshot, execution_mode)
@@ -113,6 +124,9 @@ class TradeSimulator:
                     continue
                 gross_return = (raw_price - pos["entryPrice"]) / pos["entryPrice"]
                 strategy_exit_reason = None
+                atr = TradeSimulator._atr_of(atr_history_by_code.get(code)) if config.get("useAtrStops") else None
+                stop_ratio = float(config.get("stopLoss") or -0.06)
+                take_ratio = float(config.get("takeProfit") or 0.12)
                 if strategy_key == "ranktrend_jump":
                     should_exit, strategy_exit_reason = self._ranktrend_jump_exit_decision(signal, pos, gross_return, config)
                 elif strategy_key in {
@@ -133,19 +147,26 @@ class TradeSimulator:
                     _crowded_accel = (
                         ((signal.get("rankTrend") or {}).get("strategy") or {}).get("momentum") or {}
                     ).get("acceleration", 0)
+                    atr = TradeSimulator._atr_of(atr_history_by_code.get(code)) if config.get("useAtrStops") else None
+                    stop_price, take_price, _stop_notes = TradeSimulator._exit_prices(pos, quote, config, atr, gross_return)
+                    entry_price = float(pos["entryPrice"] or 0)
+                    stop_ratio = (stop_price / entry_price - 1) if entry_price else float(config["stopLoss"])
+                    take_ratio = (take_price / entry_price - 1) if entry_price else float(config["takeProfit"])
+                    synergy_downgrade_exit = TradeSimulator._synergy_downgrade_exit(pos, signal, config)
                     should_exit = (
                         final_signal == "sell"
                         or signal["candidateTier"] == "D_EXIT_RISK"
                         or (signal["candidateTier"] == "C_CROWDED" and _crowded_accel <= 0)
                         or signal["rank"] > 50
                         or pos["holdingBars"] >= config["maxHoldingBars"]
-                        or gross_return <= config["stopLoss"]
-                        or gross_return >= config["takeProfit"]
+                        or gross_return <= stop_ratio
+                        or gross_return >= take_ratio
                         or synergy_danger_exit
+                        or synergy_downgrade_exit
                     )
                 exit_trigger = None
                 trigger_price = raw_price
-                intrabar = self._intrabar_exit_trigger(pos, quote, config)
+                intrabar = self._intrabar_exit_trigger(pos, quote, config, atr=atr, gross_return=gross_return)
                 if intrabar:
                     should_exit = True
                     exit_trigger = intrabar["reason"]
@@ -169,7 +190,7 @@ class TradeSimulator:
                 cash += gross_amount - exit_cost
                 entry_cost_basis = (float(pos["entryCost"]) / int(pos["quantity"])) * quantity if pos["quantity"] else 0
                 profit = gross_amount - exit_cost - entry_cost_basis
-                reason = exit_trigger or strategy_exit_reason or self._exit_reason(signal, pos, gross_return, config)
+                reason = exit_trigger or strategy_exit_reason or self._exit_reason(signal, pos, gross_return, config, stop_ratio=stop_ratio, take_ratio=take_ratio)
                 net_return = profit / entry_cost_basis if entry_cost_basis else 0
                 explanation = self._signal_explanation(signal, f"卖出：{reason}", pos)
                 trade = {"code": code, "name": pos["name"], "entrySnapshotId": pos["entrySnapshotId"], "entrySignalSnapshotId": pos.get("entrySignalSnapshotId") or pos["entrySnapshotId"], "exitSnapshotId": frame["snapshotId"], "exitSignalSnapshotId": signal.get("snapshotId"), "entryTime": pos["entryTime"], "exitTime": frame["timestamp"], "entryTradingDate": pos.get("entryTradingDate"), "exitTradingDate": frame.get("tradingDate"), "entryPrice": pos["entryPrice"], "exitPrice": exit_price, "quantity": quantity, "holdingBars": pos["holdingBars"], "grossReturn": round((exit_price - pos["entryPrice"]) / pos["entryPrice"], 4) if pos["entryPrice"] else 0, "netReturn": round(net_return, 4), "entryCostBasis": round(entry_cost_basis, 2), "profit": round(profit, 2), "reason": reason, "explanation": explanation, "action": "sell", "price": exit_price, "rank": signal["rank"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "executionMode": execution_mode, "fill": self._public_fill(fill)}
@@ -201,6 +222,9 @@ class TradeSimulator:
                     continue
                 matching_stats["buyAttempts"] += 1
                 allocation = min(cash, float(config["initialCapital"]) * float(config["positionSize"]))
+                if config.get("tierPositionScale"):
+                    entry_tier = TradeSimulator._synergy_tier_of(signal) or ""
+                    allocation *= float((config.get("tierPositionScales") or {}).get(entry_tier, 1.0))
                 estimated_price = self._quote_price_for_side(quote, "buy", raw_price, config)
                 quantity = int((allocation - allocation * config["feeRate"]) / estimated_price / 100) * 100 if estimated_price > 0 else 0
                 if quantity <= 0:
@@ -224,7 +248,7 @@ class TradeSimulator:
                 used = entry_amount + entry_fee
                 cash -= used
                 entry_reason = self._entry_reason(signal, frames, signal_idx, signal_by_snapshot_code, strategy_key)
-                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
+                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
                 trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal["snapshotId"], "code": signal["code"], "name": signal["name"], "action": "buy", "executionMode": execution_mode, "price": entry_price, "quantity": quantity, "rank": signal["rank"], "reason": entry_reason, "explanation": self._signal_explanation(signal, f"买入：{entry_reason}"), "candidateTier": signal["candidateTier"], "stage": signal.get("stage"), "regime": signal.get("regime"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
             market_value = sum(pos["quantity"] * float((signal_by_code.get(code) or {}).get("price") or pos.get("lastPrice") or pos["entryPrice"]) for code, pos in positions.items())
             equity.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "equity": round(cash + market_value, 2), "cash": round(cash, 2), "marketValue": round(market_value, 2), "positionCount": len(positions)})
@@ -392,6 +416,82 @@ class TradeSimulator:
         return value in ("1", "true", "yes")
 
     @staticmethod
+    def _entry_momentum_confirmed(signal: dict[str, Any], trade_config: dict[str, Any] | None) -> bool:
+        """entryMomentumConfirm 入场确认（方向1）：默认 "off" 不改变现状。"""
+        mode = str((trade_config or {}).get("entryMomentumConfirm") or "off").strip().lower()
+        if mode == "off":
+            return True
+        if mode == "short_positive":
+            rank_trend = signal.get("rankTrend") or {}
+            technical = rank_trend.get("technical") or {}
+            momentum = TradeSimulator._early_big_move_momentum(signal, rank_trend, technical)
+            return TradeSimulator._signal_value(momentum, "short") > 0
+        return True
+
+    @staticmethod
+    def _atr_of(bars: list[tuple[float, float, float]] | None, period: int = 14) -> float | None:
+        """ATR(period)：bars 为 (high, low, close) 列表；样本不足或数据缺失时返回 None（回退固定百分比）。"""
+        if not bars or len(bars) < period + 1:
+            return None
+        trs: list[float] = []
+        for i in range(1, len(bars)):
+            high, low, prev_close = bars[i][0], bars[i][1], bars[i - 1][2]
+            trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        if len(trs) < period:
+            return None
+        return sum(trs[-period:]) / period
+
+    @staticmethod
+    def _exit_prices(
+        pos: dict[str, Any],
+        quote: dict[str, Any],
+        config: dict[str, Any],
+        atr: float | None = None,
+        gross_return: float | None = None,
+    ) -> tuple[float, float, list[str]]:
+        """ATR/保本生效后的止损/止盈价（方向3）。返回 (stop_price, take_price, notes)。"""
+        entry_price = float(pos.get("entryPrice") or 0)
+        stop_price = entry_price * (1 + float(config.get("stopLoss") or -0.06))
+        take_price = entry_price * (1 + float(config.get("takeProfit") or 0.12))
+        notes: list[str] = []
+        if config.get("useAtrStops") and atr and atr > 0:
+            stop_price = entry_price - float(config.get("atrStopMultiplier") or 2.0) * atr
+            take_price = entry_price + float(config.get("atrTakeMultiplier") or 3.0) * atr
+            notes.append("atr")
+        if config.get("breakevenTrailing") and (
+            pos.get("breakevenActivated") or (gross_return is not None and gross_return >= float(config.get("breakevenThreshold") or 0.02))
+        ):
+            pos["breakevenActivated"] = True  # 粘性：激活后不回退
+            stop_price = max(stop_price, entry_price)
+            notes.append("breakeven")
+        return stop_price, take_price, notes
+
+    @staticmethod
+    def _tier_rank(tier: str | None) -> int:
+        """synergy 档位排序：S>A>B>C>D>E；未知/缺失返回大值（视为最低档）。"""
+        order = {"S": 0, "A": 1, "B": 2, "C": 3, "D": 4, "E": 5}
+        if tier is None:
+            return 99
+        return order.get(str(tier).strip().upper(), 99)
+
+    @staticmethod
+    def _tier_downgrade_steps(entry_tier: str | None, current_tier: str | None) -> int:
+        """档位相对入场降级步数；正值=降级（A->C=2），负值/零=持平或升级。"""
+        return TradeSimulator._tier_rank(current_tier) - TradeSimulator._tier_rank(entry_tier)
+
+    @staticmethod
+    def _synergy_downgrade_exit(pos: dict[str, Any], signal: dict[str, Any], config: dict[str, Any] | None) -> bool:
+        """synergyExitOnDowngrade（方向4）：持仓档位相对入场降 >= synergyDowngradeSteps 档触发退出。"""
+        if not (config or {}).get("synergyExitOnDowngrade"):
+            return False
+        entry_tier = str(pos.get("entrySynergyTier") or "")
+        current_tier = TradeSimulator._synergy_tier_of(signal)
+        if not entry_tier or not current_tier:
+            return False
+        steps = TradeSimulator._tier_downgrade_steps(entry_tier, current_tier)
+        return steps >= int((config or {}).get("synergyDowngradeSteps") or 2)
+
+    @staticmethod
     def _entry_candidates(
         frame_signals: list[dict[str, Any]],
         frames: list[dict[str, Any]],
@@ -468,7 +568,7 @@ class TradeSimulator:
                 if TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
                     result.append(signal)
                 continue
-            if signal["candidateTier"] == "A_MAIN" and signal["regime"] != "weak":
+            if signal["candidateTier"] == "A_MAIN" and signal["regime"] != "weak" and TradeSimulator._entry_momentum_confirmed(signal, trade_config):
                 result.append(signal)
             elif signal["candidateTier"] == "B_IGNITION" and strategy_key in ("rank_trend_candidate", "a_b_combined") and TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
                 result.append(signal)
@@ -916,14 +1016,22 @@ class TradeSimulator:
         return 9.8
 
     @staticmethod
-    def _intrabar_exit_trigger(pos: dict[str, Any], quote: dict[str, Any], config: dict[str, Any]) -> dict[str, Any] | None:
+    def _intrabar_exit_trigger(
+        pos: dict[str, Any],
+        quote: dict[str, Any],
+        config: dict[str, Any],
+        atr: float | None = None,
+        gross_return: float | None = None,
+    ) -> dict[str, Any] | None:
         if not config.get("useIntrabarStops", True):
             return None
         entry_price = float(pos.get("entryPrice") or 0)
         if entry_price <= 0:
             return None
-        stop_price = entry_price * (1 + float(config.get("stopLoss") or 0))
-        take_price = entry_price * (1 + float(config.get("takeProfit") or 0))
+        if gross_return is None:
+            last_price = float(quote.get("lastPrice") or pos.get("lastPrice") or 0)
+            gross_return = (last_price - entry_price) / entry_price if entry_price else 0.0
+        stop_price, take_price, _notes = TradeSimulator._exit_prices(pos, quote, config, atr, gross_return)
         low = quote.get("low")
         high = quote.get("high")
         hit_stop = low is not None and float(low) > 0 and float(low) <= stop_price
@@ -1024,10 +1132,19 @@ class TradeSimulator:
         }
 
     @staticmethod
-    def _exit_reason(signal: dict[str, Any], pos: dict[str, Any], gross_return: float, config: dict[str, Any]) -> str:
+    def _exit_reason(
+        signal: dict[str, Any],
+        pos: dict[str, Any],
+        gross_return: float,
+        config: dict[str, Any],
+        stop_ratio: float | None = None,
+        take_ratio: float | None = None,
+    ) -> str:
         final_signal = str((((signal.get("rankTrend") or {}).get("decision") or {}).get("final") or {}).get("signal") or "hold")
         if TradeSimulator._synergy_exit_on_danger(config) and final_signal != "sell" and TradeSimulator._synergy_tier_of(signal) in ("D", "E"):
             return "四维合并档位 D/E 强制卖出"
+        if TradeSimulator._synergy_downgrade_exit(pos, signal, config):
+            return "档位连续降级退出"
         if final_signal == "sell":
             return "compose_decision 卖出信号"
         if signal["candidateTier"] == "D_EXIT_RISK":
@@ -1036,9 +1153,9 @@ class TradeSimulator:
             return "排名跌出前50"
         if pos["holdingBars"] >= config["maxHoldingBars"]:
             return "到达最大持有快照"
-        if gross_return <= config["stopLoss"]:
+        if gross_return <= (stop_ratio if stop_ratio is not None else config["stopLoss"]):
             return "止损"
-        if gross_return >= config["takeProfit"]:
+        if gross_return >= (take_ratio if take_ratio is not None else config["takeProfit"]):
             return "止盈"
         return "拥挤且加速度转弱"
 

@@ -235,6 +235,35 @@ run_id：基线 `opt_a1fdd46851254991`、搜索 `opt_34a91f83279f4988`：
 但绝对收益仍受均值回归主导。4.1 best 组合**仍不采纳**（样本外不稳定）。
 8000 服务需重启后前端/API 才使用 vote v4 语义。
 
+**阶段 4 策略层改进（2026-08-15，方向 1/3/4）**：用户决策：更长时间窗口不做（性能不允许），
+策略层改进才是正确方向。基于 4.2 诊断（"S/A 档相对强势 ≠ 绝对盈利，均值回归主导入场后回落"），
+选定三个 trade 层改进方向并 TDD 落地（全部**默认关闭**，行为与现状一致）：
+
+| 方向 | 配置键（默认） | 行为 |
+|---|---|---|
+| 1 入场时机 | `entryMomentumConfirm: "off"` | `"short_positive"`：A_MAIN 入场要求 `momentum.short > 0` |
+| 3 止损结构 | `useAtrStops: False`、`atrStopMultiplier: 2.0`、`atrTakeMultiplier: 3.0` | 止损/止盈价 = entry ∓ 倍数×ATR(14)，缺 K 线历史时回退固定 %（fail-visible） |
+| 3 止损结构 | `breakevenTrailing: False`、`breakevenThreshold: 0.02` | 盈利达阈值后止损上移至入场价（粘性，pos.breakevenActivated） |
+| 4 档位联动 | `tierPositionScale: False`、`tierPositionScales: {S:1.0, A:1.0, B:0.5}` | 按 synergy 档位缩放入场仓位 |
+| 4 档位联动 | `synergyExitOnDowngrade: False`、`synergyDowngradeSteps: 2` | 持仓档位相对入场降 ≥2 档退出 |
+
+实现：`backend/core/backtest/config.py`（DEFAULT_TRADE_CONFIG 新键）+ `execution.py`
+（`_entry_momentum_confirmed` / `_exit_prices` / `_atr_of` / `_tier_downgrade_steps` /
+`_synergy_downgrade_exit`，run() 维护个股 K 线历史供 ATR 计算）；
+测试 `tests/test_trade_simulator_entry_refinements.py`（12 用例，含默认关闭回归）。
+全量 pytest **1551 passed**。
+
+**开关 grid 主效应（门关 + maxPositions=5 基线，32 组合，run `opt_65fd17fc603f46c5`）**：
+entryMomentumConfirm / useAtrStops / breakevenTrailing on=off 无差异（A_MAIN 本就要求短周期动量正；
+数据缺 high/low 时 ATR 回退固定 %）；tierPositionScale +0.005 边际正；synergyExitOnDowngrade
+−0.02 负效应（过早退出减损）。开关效果需配合 synergy `a` 门验证（4.1 best 前提）。
+
+**网页端可操作性（用户要求）**：原前端 `OptimizationRequest.parameterGrid` 是固定白名单
+（momentumPeriods/minJumpConfidence/takeProfitPct/stopLossPct/maxPositions/macd），synergy 门与
+新开关网页端均不可配（此前只能脚本硬编码）。后端 `search_space`/`parameterGrid` 自由透传
+（`optimization_service._build_request` 不校验白名单），前端为唯一瓶颈。后续落地：
+types.ts 扩展 parameterGrid + App.vue 优化表单"交易策略开关"折叠块 + objective 加 `win_rate_pf`。
+
 **验收**：满足第 0 节完整验收标准，且连续两个样本外窗口稳定。
 
 ## 4. 验收标准汇总
