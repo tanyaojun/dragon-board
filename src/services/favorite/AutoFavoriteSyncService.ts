@@ -11,7 +11,7 @@ import type { FavoriteStockSource } from '@/types'
  *   且【生命周期】为点火或扩散（observation.lifecycle.stage ∈ ignition/expansion）
  *   → 加入自选股（来源标记为 auto）。
  * - 删除：来源为 auto 的自选股中，排名趋势转为死叉（macd.cross === 'death'）、
- *   生命周期进入降温/高位反转（stage ∈ cooling/high_reversal），或已退出本轮热榜股票池
+ *   生命周期进入降温/反转（stage ∈ cooling/reversal），或已退出本轮热榜股票池
  *   → 自动删除。
  *
  * 约束：
@@ -29,7 +29,7 @@ export const MIN_AUTO_ADD_RESONANCE_SCORE = 80
 const AUTO_ADD_LIFECYCLE_STAGES: ReadonlySet<string> = new Set(['ignition', 'expansion'])
 
 /** 触发自动出池的生命周期阶段：降温 / 反转 */
-const AUTO_REMOVE_LIFECYCLE_STAGES: ReadonlySet<string> = new Set(['cooling', 'high_reversal'])
+const AUTO_REMOVE_LIFECYCLE_STAGES: ReadonlySet<string> = new Set(['cooling', 'reversal'])
 
 export interface AutoFavoriteSyncResult {
   added: string[]
@@ -126,7 +126,7 @@ export class AutoFavoriteSyncService {
     )
   }
 
-  /** 生命周期是否触发自动出池：降温（cooling）或高位反转（high_reversal）；缺失时不触发 */
+  /** 生命周期是否触发自动出池：降温（cooling）或反转（reversal）；缺失时不触发 */
   shouldAutoRemoveLifecycle(stock: any): boolean {
     const stage = this.getLifecycleStage(stock)
     return stage != null && AUTO_REMOVE_LIFECYCLE_STAGES.has(stage)

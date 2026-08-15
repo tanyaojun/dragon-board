@@ -486,6 +486,6 @@ def test_ranktrend_compose_strategy_blocks_execution_tier_when_lifecycle_vetoes(
 def test_ranktrend_cycle_reversal_vetoes_lifecycle_entry() -> None:
     cycle = analyze_cycle([18, 8, 4, 6, 9], [82, 93, 97, 94, 89])
 
-    assert cycle["stage"] == "high_reversal"
+    assert cycle["stage"] == "reversal"
     assert cycle["decision"]["action"] == "veto"
     assert any("反转" in reason for reason in cycle["decision"]["reasons"])

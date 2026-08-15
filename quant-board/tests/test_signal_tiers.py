@@ -39,7 +39,7 @@ def test_lifecycle_tier():
     assert _lifecycle_tier("ignition", "caution")[0] == "B"
     assert _lifecycle_tier("crowded", "exit_watch")[0] == "D"
     assert _lifecycle_tier("cooling", "caution")[0] == "D"
-    assert _lifecycle_tier("high_reversal", "caution")[0] == "C"
+    assert _lifecycle_tier("reversal", "caution")[0] == "C"
 
 
 def test_volume_price_tier_priority():

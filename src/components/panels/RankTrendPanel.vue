@@ -473,7 +473,7 @@ const stageLabels: Record<string, string> = {
   ignition: '点火',
   expansion: '扩散',
   crowded: '拥挤',
-  high_reversal: '反转',
+  reversal: '反转',
   cooling: '冷却',
 }
 

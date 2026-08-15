@@ -585,8 +585,6 @@ const stageLabels: Record<string, string> = {
   ignition: '点火',
   expansion: '扩散',
   crowded: '拥挤',
-  high_reversal: '反转',
-  // 历史兼容：旧快照 stage=reversal（2026-08-15 前）
   reversal: '反转',
   cooling: '冷却',
 }
@@ -1012,7 +1010,7 @@ const riskSignals = computed(() => {
   color: #ff9f43 !important;
 }
 
-.stage-high-reversal {
+.stage-reversal {
   color: var(--down) !important;
 }
 

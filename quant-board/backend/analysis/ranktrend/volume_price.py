@@ -374,7 +374,7 @@ def compute_synergy_state(
     if stage in ("ignition", "expansion") and high_vp and tech_buy and res_up:
         state = "启动确认" if stage == "ignition" else "主升确认"
         reasons = [f"阶段={stage}", f"量价分={vp_score}（≥75）", "技术 buy", "共振 ↑"]
-    elif stage in ("crowded", "high_reversal") and (low_vp or fund_suspect):
+    elif stage in ("crowded", "reversal") and (low_vp or fund_suspect):
         state = "风险升级"
         reasons = [f"阶段={stage}", f"量价分={vp_score}（≤40）" if low_vp else "", "资金对倒" if fund_suspect else ""]
     elif stage == "cooling" and low_vp:

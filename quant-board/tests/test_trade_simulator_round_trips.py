@@ -416,7 +416,7 @@ def test_early_big_move_v3_lifecycle_fusion_blocks_strong_a_signal_when_lifecycl
             "confidence": 86,
             "reasons": ["生命周期B反对：原始路径转弱"],
             "evidence": {
-                "rawStage": "high_reversal",
+                "rawStage": "reversal",
                 "stage": "expansion",
                 "transition": "ignition->expansion",
                 "rankVelocity": -2.0,
@@ -681,8 +681,8 @@ def test_early_big_move_v3_lifecycle_fusion_exits_losing_position_when_lifecycle
     exit_signal["tradingDate"] = "2026-05-22"
     exit_signal["price"] = 9.9
     exit_signal["rankTrend"]["cycle"] = {
-        "stage": "high_reversal",
-        "transition": "expansion->high_reversal",
+        "stage": "reversal",
+        "transition": "expansion->reversal",
         "decision": {"action": "veto", "reasons": ["生命周期B反对：承接失败"]},
     }
 
@@ -731,8 +731,8 @@ def test_early_big_move_v3_lifecycle_fusion_does_not_exit_profitable_position_on
     veto_profit["tradingDate"] = "2026-05-22"
     veto_profit["price"] = 10.5
     veto_profit["rankTrend"]["cycle"] = {
-        "stage": "high_reversal",
-        "transition": "expansion->high_reversal",
+        "stage": "reversal",
+        "transition": "expansion->reversal",
         "decision": {"action": "veto", "reasons": ["生命周期B反对：但价格仍盈利"]},
     }
     max_hold_exit = _early_big_move_v2_signal(tier="A_MAIN", zero_cross="hold", change=1.0)

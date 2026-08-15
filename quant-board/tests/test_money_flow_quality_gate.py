@@ -725,7 +725,7 @@ def test_compose_strategy_uses_hotlist_stage_instead_of_market_regime() -> None:
             **technical,
             "momentumProfile": {"short": -3.0, "mid": -2.0, "long": -1.0, "acceleration": -3.0},
         },
-        {"stage": "high_reversal", "metrics": {}},
+        {"stage": "reversal", "metrics": {}},
         risk,
         hotlist={"stage": "退潮", "riskLevel": "高", "confidence": 30},
     )

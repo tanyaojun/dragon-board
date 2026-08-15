@@ -127,7 +127,7 @@ class RankTrendConfig:
     riskDivergenceOffset: float = 40.0
     riskDivergenceScale: float = 30.0
     # ── 五维观察档位阈值（回测方案 §3.1）：默认值 = 当前硬编码，golden 不漂移 ──
-    tierResonanceReversalPenaltyMin: float = 0.6  # _resonance_tier 首条（高位反转否决）
+    tierResonanceReversalPenaltyMin: float = 0.6  # _resonance_tier 首条（reversal 否决）
     tierResonanceJumpFreshnessMin: float = 0.5  # _resonance_tier 第二条（Jump 事件）+ 新入榜 S
     tierResonancePersistenceMin: float = 0.6  # _resonance_tier 第三条（buy+persistence）
     tierResonanceEntryStrengthMin: float = 0.3  # 新入榜 A 判定
@@ -775,9 +775,9 @@ def raw_stage(history_length: int, current_percentile: float, metrics: dict[str,
     recovery = velocity > 0 and accel >= -1.2 and (current_percentile >= 50 or best <= 30 or hot >= 1)
     expansion = velocity > 0 and current_percentile >= 70 and (accel >= -1 or hot >= 1 or best <= 20)
     crowded = hot_zone and (hot >= 3 or best <= 5) and drawdown <= 1 and (velocity <= 1 or accel < 0)
-    high_reversal = warm and drawdown >= 2 and (velocity < 0 or accel < -1) and (hot >= 2 or best <= 10)
-    if high_reversal:
-        return "high_reversal"
+    reversal = warm and drawdown >= 2 and (velocity < 0 or accel < -1) and (hot >= 2 or best <= 10)
+    if reversal:
+        return "reversal"
     if crowded:
         return "crowded"
     if expansion and warm:
@@ -803,31 +803,31 @@ def normalize_stage(previous: str | None, raw: str, current_percentile: float, m
     if previous == "ignition":
         if raw in ("expansion", "crowded"):
             return "expansion"
-        if raw in ("high_reversal", "cooling"):
+        if raw in ("reversal", "cooling"):
             return "cooling" if weakening else "ignition"
         return "ignition"
     if previous == "expansion":
         if raw == "crowded":
             return "crowded"
-        if raw == "high_reversal":
-            return "crowded" if crowded_carry and not severe else "high_reversal" if severe or weakening else "crowded"
+        if raw == "reversal":
+            return "crowded" if crowded_carry and not severe else "reversal" if severe or weakening else "crowded"
         if raw == "cooling":
-            return "high_reversal" if severe or weakening else "expansion"
+            return "reversal" if severe or weakening else "expansion"
         return "expansion"
     if previous == "crowded":
-        if raw == "high_reversal":
-            return "high_reversal"
+        if raw == "reversal":
+            return "reversal"
         if raw == "cooling":
-            return "cooling" if cooling_ready else "high_reversal"
+            return "cooling" if cooling_ready else "reversal"
         if raw in ("expansion", "ignition"):
-            return "high_reversal" if weakening else "crowded"
+            return "reversal" if weakening else "crowded"
         return "crowded"
-    if previous == "high_reversal":
-        if raw in ("cooling", "high_reversal"):
+    if previous == "reversal":
+        if raw in ("cooling", "reversal"):
             return raw
-        return "cooling" if recovery else "high_reversal"
+        return "cooling" if recovery else "reversal"
     if previous == "cooling":
-        if raw in ("cooling", "high_reversal") or not recovery:
+        if raw in ("cooling", "reversal") or not recovery:
             return "cooling"
         if raw == "expansion" and current_percentile < 72 and hot == 0:
             return "ignition"
@@ -853,7 +853,7 @@ def cycle_confidence(stage: str, percentile: float, metrics: dict[str, Any]) -> 
 def entry_advice(stage: str, transition: str) -> dict[str, Any]:
     if transition in ("cooling->ignition", "ignition->expansion"):
         bias = "preferred"
-    elif stage == "high_reversal":
+    elif stage == "reversal":
         bias = "blocked"
     elif stage in ("cooling", "crowded"):
         bias = "avoid"
@@ -914,7 +914,7 @@ def lifecycle_decision(
         and momentum_mid >= c.lifecycleLowVisibilityMomentumMin
         and momentum_acceleration >= c.lifecycleLowVisibilityMomentumMin
     )
-    if stage == "high_reversal" or raw == "high_reversal":
+    if stage == "reversal" or raw == "reversal":
         action = "veto"
         reasons.append("生命周期进入反转路径，辅助决策一票否决。")
     elif weak_path_commitment:
@@ -1000,7 +1000,7 @@ def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: di
         divergence += 8
     if metrics["rankShock"] > 0.8 and zlje <= 0:
         divergence += 12
-    if cycle["stage"] in ("crowded", "high_reversal") and zlje <= 0:
+    if cycle["stage"] in ("crowded", "reversal") and zlje <= 0:
         divergence += 12
     if zlje > 0:
         divergence -= 15
@@ -1011,13 +1011,13 @@ def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: di
     divergence = clamp(divergence, 0, 100)
 
     stage = cycle["stage"]
-    over_mult = {"ignition": 0.3, "expansion": 0.55, "crowded": 0.85, "high_reversal": 1, "cooling": 0.3}
-    div_mult = {"ignition": 0.35, "expansion": 0.65, "crowded": 0.9, "high_reversal": 1, "cooling": 0.35}
+    over_mult = {"ignition": 0.3, "expansion": 0.55, "crowded": 0.85, "reversal": 1, "cooling": 0.3}
+    div_mult = {"ignition": 0.35, "expansion": 0.65, "crowded": 0.9, "reversal": 1, "cooling": 0.35}
     over_sev = clamp((overheat - c.riskOverheatOffset) / c.riskOverheatScale, 0, 1) * over_mult.get(stage, 1)
     div_sev = clamp((divergence - c.riskDivergenceOffset) / c.riskDivergenceScale, 0, 1) * div_mult.get(stage, 1)
     pressure = clamp(c.riskPressureWeights[0] * over_sev + c.riskPressureWeights[1] * div_sev, 0, 1)
     return {
-        "overheat": {"score": overheat, "signal": "sell" if overheat >= 70 and stage in ("crowded", "high_reversal") else "hold" if overheat >= 45 else "buy", "severity": over_sev},
+        "overheat": {"score": overheat, "signal": "sell" if overheat >= 70 and stage in ("crowded", "reversal") else "hold" if overheat >= 45 else "buy", "severity": over_sev},
         "divergence": {"score": divergence, "signal": "sell" if divergence >= 65 else "hold" if divergence >= 40 else "buy", "severity": div_sev},
         "pressure": pressure,
         "synergy": 1 if over_sev >= 0.65 and div_sev >= 0.6 else 0,
@@ -1118,13 +1118,13 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     confidence = clamp(config.decisionConfidenceBase + config.decisionConfidenceSlope * abs(combined) + config.decisionAgreementSlope * agreement + config.decisionMarginSlope * math.tanh(abs(combined - signed_threshold) / threshold_scale), config.decisionConfidenceMin, config.decisionConfidenceMax)
     final = base
     final_conf = clamp(confidence - config.decisionRiskPenaltyWeights[0] * risk["overheat"]["severity"] - config.decisionRiskPenaltyWeights[1] * risk["divergence"]["severity"] - config.decisionRiskPenaltyWeights[2] * risk["synergy"], config.decisionConfidenceMin, config.decisionConfidenceMax)
-    if base == "buy" and cycle["stage"] == "high_reversal" and risk["pressure"] >= config.decisionReversalPressureMin and risk["overheat"]["severity"] >= config.decisionReversalOverheatMin and score_margin < config.decisionReversalMarginMax:
+    if base == "buy" and cycle["stage"] == "reversal" and risk["pressure"] >= config.decisionReversalPressureMin and risk["overheat"]["severity"] >= config.decisionReversalOverheatMin and score_margin < config.decisionReversalMarginMax:
         final = "hold"
         final_conf = min(final_conf, config.decisionReversalFinalConfCap)
     return {"base": {"signal": base, "confidence": confidence, "combinedScore": combined, "scoreMargin": score_margin}, "final": {"signal": final, "confidence": final_conf}}
 
 
-STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "high_reversal": 0.0}
+STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
 
 
 def _tier_as_dict(pair: tuple[str, list[str]]) -> dict[str, Any]:
@@ -1262,7 +1262,7 @@ def compose_strategy(
 
     if lifecycle_action == "veto":
         reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
-    elif stage in ("high_reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
+    elif stage in ("reversal", "cooling") and (momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or risk["pressure"] >= c.tierExitRiskPressureMin):
         tier = "D_EXIT_RISK"
         reasons.append("生命周期进入反转/冷却，短周期动量或风险压力转弱")
     elif stage == "crowded" or (momentum["long"] >= c.tierCrowdedLongMomentumMin and (momentum["acceleration"] <= c.tierCrowdedAccelMax or risk["pressure"] >= c.tierCrowdedRiskPressureMin)):
@@ -1566,7 +1566,7 @@ def compose_analysis_candidate_tier(
 
     if lifecycle_decision_data.get("action") == "veto":
         reasons.append("生命周期辅助决策一票否决，阻止进入 A/B 候选池")
-    elif stage in ("high_reversal", "cooling") and (
+    elif stage in ("reversal", "cooling") and (
         momentum["short"] <= c.tierExitRiskShortMomentumMax or momentum["acceleration"] <= c.tierExitRiskAccelMax or pressure >= c.tierExitRiskPressureMin
     ):
         tier = "D_EXIT_RISK"
