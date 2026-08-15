@@ -76,7 +76,6 @@ src/
 │   ├── hotlist/             # 热榜情绪等热榜领域分析
 │   ├── hotness/             # 个股热度计算
 │   ├── quality/             # 数据质量、覆盖率和门禁
-│   ├── quantBoardGolden/    # TypeScript golden case 导出，不做回测/优化
 │   ├── rankTrend/           # RankTrend golden 标准模块
 │   └── snapshot/            # 快照保存、读取、覆盖率、备份和 QuantBoard 适配
 ├── stores/                  # Pinia 状态，只放 UI/应用级状态，不替代服务层
@@ -163,8 +162,7 @@ quant-board/
 - `src/data/**`：只保留自动生成或外部导入的静态业务数据，例如题材映射原始数据；算法、因子、主题等运行时配置不要放入该目录。
 - `src/**/__tests__/**/*.test.ts`：正式 Vitest 测试目录和文件命名；测试应尽量靠近被测模块。
 - `src/devtools/diagnostics/**`：浏览器控制台或临时手工诊断脚本，不属于自动化测试套件，默认排除在 Vitest 和应用类型检查之外。
-- `src/services/quantBoardBridge.ts`：Dragon Board 与 QuantBoard 的数据桥接和 Golden 导出。
-- `src/services/quantBoardGolden/**`：仅用于导出 TypeScript golden case，不承载回测、优化或交易模拟。
+- `src/services/quantBoardBridge.ts`：已移除（TS 端无 golden 计算链，QuantBoard 桥接分散在 `src/services/snapshot/**` 与 `src/services/theme/**`）。
 - `src/services/snapshot/**` 与 `src/services/quality/**`：快照质量、覆盖率和门禁。
 
 ## 4. 业务硬约束

@@ -35,7 +35,6 @@ import type {
   BacktestSignal,
   BacktestTrade,
   DatasetSummary,
-  GoldenImportPayload,
   GoldenValidateRequest,
   HealthResponse,
   OptimizationRequest,
@@ -95,7 +94,7 @@ const strategyOptions: Array<{ value: StrategyName; label: string; description: 
 ];
 
 const tabs: Array<{ key: TabKey; label: string }> = [
-  { key: "golden", label: "Golden 对齐" },
+  { key: "golden", label: "Golden 回归" },
   { key: "backtest", label: "回测运行" },
   { key: "theme", label: "ThemeTrend" },
   { key: "optimization", label: "参数优化" },
@@ -133,7 +132,6 @@ const datasetRefreshAt = ref("");
 const importMode = ref<ImportMode>("snapshot_store");
 const sourceDatasetId = ref("dragonboard_live");
 const selectedJsonFile = ref<File | null>(null);
-const selectedGoldenFile = ref<File | null>(null);
 const importSnapshotType = ref<"half_hour" | "quarter_hour">("half_hour");
 const datasetName = ref(`dragonboard-${new Date().toISOString().slice(0, 10)}`);
 const dryRunImport = ref(false);
@@ -603,19 +601,17 @@ const goldenSummary = computed(() => {
     return "尚未执行 Golden 操作";
   }
   if (goldenResult.value.message) {
-    const source = goldenResult.value.source === "ts_golden_import" ? "TS Golden" : "Python 自基线";
-    return `${source} 已保存：${goldenResult.value.caseId || goldenForm.caseId}，样本 ${goldenResult.value.checked || 0} 条`;
+    return `Python 基线已保存：${goldenResult.value.caseId || goldenForm.caseId}，样本 ${goldenResult.value.checked || 0} 条`;
   }
   const passed = Boolean(goldenResult.value.passed);
   const issueCount = Number(goldenResult.value.issueCount || 0);
-  const source = goldenResult.value.source === "ts_golden_import" ? "TS Golden" : "Python 自基线";
   const mode = goldenResult.value.strict === false ? "宽松" : "严格";
   const checked = Number(goldenResult.value.checked || 0);
   const expectedCount = Number(goldenResult.value.expectedCount || checked);
   const sampleText = expectedCount && expectedCount !== checked ? `检查 ${checked}/${expectedCount} 条` : `检查 ${checked} 条`;
   return passed
-    ? `${source} ${mode}校验通过：${goldenResult.value.caseId || goldenForm.caseId}，${sampleText}，差异 0`
-    : `${source} ${mode}校验未通过：差异 ${issueCount} 条，请查看 issues`;
+    ? `Python 引擎 ${mode}回归校验通过：${goldenResult.value.caseId || goldenForm.caseId}，${sampleText}，差异 0`
+    : `Python 引擎 ${mode}回归校验未通过：差异 ${issueCount} 条，请查看 issues`;
 });
 
 const goldenSummaryClass = computed(() => {
@@ -624,9 +620,6 @@ const goldenSummaryClass = computed(() => {
   }
   if (goldenState.status === "error" || (goldenState.status === "ok" && goldenResult.value.passed === false)) {
     return "golden-banner error";
-  }
-  if (goldenState.status === "ok" && goldenResult.value.source === "python_current_output") {
-    return "golden-banner warning";
   }
   if (goldenState.status === "ok") {
     return "golden-banner ok";
@@ -1149,11 +1142,6 @@ function selectJsonFile(event: Event): void {
   }
 }
 
-function selectGoldenFile(event: Event): void {
-  const input = event.target as HTMLInputElement;
-  selectedGoldenFile.value = input.files?.[0] || null;
-}
-
 async function readJsonFile(file: File): Promise<unknown> {
   const text = await file.text();
   return JSON.parse(text);
@@ -1260,29 +1248,6 @@ async function deleteSelectedDataset(): Promise<void> {
 async function validateGolden(): Promise<void> {
   goldenAction.value = "validate";
   await runRequest(goldenState, () => api.validateGolden({ ...goldenForm }));
-}
-
-async function importGoldenCase(): Promise<void> {
-  if (!selectedGoldenFile.value) {
-    goldenState.status = "error";
-    goldenState.error = "请先选择 TS golden JSON 文件";
-    return;
-  }
-  goldenAction.value = "validate";
-  await runRequest(goldenState, async () => {
-    const payload = await readJsonFile(selectedGoldenFile.value as File);
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      throw new Error("TS golden JSON 须是对象结构");
-    }
-    const request: GoldenImportPayload = {
-      caseId: goldenForm.caseId,
-      datasetId: selectedDatasetId.value || goldenForm.datasetId,
-      snapshotType: backtestForm.snapshotType,
-      source: "ts_golden_import",
-      payload: payload as Record<string, unknown>
-    };
-    return api.importGolden(request);
-  });
 }
 
 async function createGoldenBaseline(): Promise<void> {
@@ -1566,7 +1531,7 @@ onMounted(async () => {
     <header class="topbar">
       <div>
         <h1>QuantBoard 轻实验台</h1>
-        <p>数据导入、Golden 对齐、回测、优化、报告与单票解释联调面板</p>
+        <p>数据导入、Golden 回归、回测、优化、报告与单票解释联调面板</p>
       </div>
       <div class="topbar-actions">
         <span class="status-pill" :class="healthStatusClass">{{ healthLabel }}</span>
@@ -1767,7 +1732,7 @@ onMounted(async () => {
 
         <section v-if="activeTab === 'golden'" class="tab-panel">
           <div class="section-heading">
-            <h2>Golden 对齐</h2>
+            <h2>Golden 回归验证</h2>
             <span class="status-pill" :class="statusClass(goldenState.status)">
               {{ statusLabel(goldenState.status) }}
             </span>
@@ -1811,30 +1776,14 @@ onMounted(async () => {
               {{ goldenState.status === "loading" && goldenAction === "validate" ? "校验中..." : "执行校验" }}
             </button>
           </div>
-          <div class="file-row">
-            <label>
-              TS Golden JSON / TypeScript 基线文件
-              <input type="file" accept="application/json,.json" @change="selectGoldenFile" />
-            </label>
-            <button
-              type="button"
-              :disabled="goldenState.status === 'loading' || !selectedGoldenFile"
-              @click="importGoldenCase"
-            >
-              导入 TS Golden
-            </button>
-          </div>
           <div class="inline-note">
-            页面有两种基线：`保存当前输出为基线` 只保存 Python 当前结果，适合临时回归；`导入 TS Golden` 才是正式跨语言对齐入口。
-            请导入已生成的 TS Golden JSON 文件。导入后继续点击 `执行校验`。
+            Golden 已全部以 Python 后端为准（前端无 golden 计算链）。本页签为 Python 引擎回归验证：
+            `保存当前输出为基线` 用当前引擎输出建基线，`执行校验` 对比最新输出与基线，防止引擎改动破坏已知输出。
           </div>
           <div :class="goldenSummaryClass">
             <strong>{{ goldenSummary }}</strong>
             <span v-if="goldenState.status === 'loading'">真实数据集通常需要数秒，请等待结果返回。</span>
-            <span v-else-if="goldenState.status === 'ok' && goldenResult.source === 'ts_golden_import' && goldenResult.passed === true">这是正式 TS Golden 对齐通过，可作为跨语言验收依据。</span>
-            <span v-else-if="goldenState.status === 'ok' && goldenResult.source === 'ts_golden_import' && goldenResult.message">TS Golden 已导入。下一步点击“执行校验”比较 Python 当前输出。</span>
-            <span v-else-if="goldenState.status === 'ok' && goldenResult.source === 'python_current_output'">当前不是 TS Golden。它只说明 Python 当前输出没有相对自基线漂移，不能作为 TypeScript 跨语言验收。</span>
-            <span v-else>正式验收请先导入 TypeScript 端导出的 TS Golden，再执行校验。</span>
+            <span v-else-if="goldenState.status === 'ok'">校验完成，详见下方结果。</span>
           </div>
           <div v-if="goldenPreviewRows.length" class="golden-preview-grid">
             <div v-for="row in goldenPreviewRows" :key="`${row.snapshotId}-${row.code}`" class="golden-preview-item">
