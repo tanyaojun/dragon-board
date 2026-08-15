@@ -520,6 +520,27 @@ h8 = 未来 8 帧价格收益 median）：
   显著改善胜率，作为信号层参数候选保留**；后续若修复退出机制（阶段 6 方向 2 信号退出去噪
   已落地但默认关闭），重跑本策略验证。
 
+**退出机制修复验证：rankExitField 配置化（commit `6fea158`，2026-08-16）**：
+- 定位：trend_reversal_jump 低位入场（percentile≤50 → attention 重排序号 median=117）**入场即触发
+  rank>50 退出**（signal.rank 是 avgRankNum attention 重排序号，非 compRank）；价格止损/止盈
+  因此几乎无触发机会（退出原因 73/77=95% 为信号驱动：final sell 26 + D_EXIT_RISK 25 + rank>50 22）。
+- 实现：engine `_build_signal` 输出补 `avgRankNum`；execution 新增 `_rank_exit_triggered` +
+  `rankExitField` 配置（默认 "rank" 现状不变 / "avgranknum" 用 avgRankNum 百分位>avgRankNumExitMax），
+  `_exit_reason` 透传 strategy_key；测试 +4。
+- **真实数据验证（trend_reversal_jump mag≥30，769 帧）**：
+
+| 配置 | tradeCount | winRate | pf | winRate×pf |
+|---|---|---|---|---|
+| rank 退出（现状） | 77 | 0.5455 | 0.9847 | **0.537** |
+| avgranknum 70 | 77 | 0.5455 | 0.8851 | 0.483 |
+| avgranknum 80 | 77 | 0.5325 | 0.8802 | 0.469 |
+| avgranknum 90 | 77 | 0.5195 | 0.8760 | 0.455 |
+
+- **结论：avgRankNum 绝对阈值退出被证伪**——rank>50（attention 重排"跌出前 50"）对低位弱转强是
+  有效及时止损（22 笔提前离场避免更大回撤），换成 avgRankNum 绝对阈值延迟退出反而放大亏损
+  （pf 0.98→0.88）。开关保留为研究工具，默认不变；**signal.rank 本身已是 avgRankNum 派生**
+  （attention_rank_lookup 按 avgRankNum 重排），不存在 compRank/rank 混用问题。
+
 **后续待办（未立项）**：
 - 把 trendReversal ∧ jumpBuy ∧ mag≥20（可选 + fresh≥0.5）接入候选分层/回测验证
   （winRate×pf 验收线），若通过再决定作为入场候选；
