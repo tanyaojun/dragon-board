@@ -350,7 +350,19 @@ const gridInputs = reactive({
   maxPositions: "3,5,8",
   macdFast: "21",
   macdSlow: "34",
-  macdSignal: "13"
+  macdSignal: "13",
+  // 交易策略开关（阶段4 策略层改进方向 1/3/4；逗号分隔候选，空=不参与搜索）
+  synergyEntryTierMin: "none,a",
+  synergyExitOnDanger: "false,true",
+  entryMomentumConfirm: "off,short_positive",
+  useAtrStops: "false,true",
+  atrStopMultiplier: "2.0",
+  atrTakeMultiplier: "3.0",
+  breakevenTrailing: "false,true",
+  breakevenThreshold: "0.02",
+  tierPositionScale: "false,true",
+  synergyExitOnDowngrade: "false,true",
+  synergyDowngradeSteps: "2"
 });
 
 const selectedDataset = computed(() => {
@@ -950,6 +962,20 @@ function parseNumberList(value: string): number[] {
     .filter((item) => Number.isFinite(item));
 }
 
+function parseStringList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function parseBoolList(value: string): boolean[] {
+  return parseStringList(value)
+    .map((item) => item.toLowerCase())
+    .filter((item) => ["true", "false", "1", "0"].includes(item))
+    .map((item) => item === "true" || item === "1");
+}
+
 function apiErrorRaw(error: unknown, fallback: string): Record<string, unknown> {
   if (error && typeof error === "object") {
     const detail =
@@ -1413,6 +1439,29 @@ async function runOptimization(): Promise<void> {
   if (macdFast.length) optimizationForm.parameterGrid.macdFast = macdFast;
   if (macdSlow.length) optimizationForm.parameterGrid.macdSlow = macdSlow;
   if (macdSignal.length) optimizationForm.parameterGrid.macdSignal = macdSignal;
+  // 交易策略开关（方向 1/3/4；输入为空则该参数不参与搜索）
+  const synergyEntryTierMin = parseStringList(gridInputs.synergyEntryTierMin);
+  if (synergyEntryTierMin.length) optimizationForm.parameterGrid.synergyEntryTierMin = synergyEntryTierMin;
+  const synergyExitOnDanger = parseBoolList(gridInputs.synergyExitOnDanger);
+  if (synergyExitOnDanger.length) optimizationForm.parameterGrid.synergyExitOnDanger = synergyExitOnDanger;
+  const entryMomentumConfirm = parseStringList(gridInputs.entryMomentumConfirm);
+  if (entryMomentumConfirm.length) optimizationForm.parameterGrid.entryMomentumConfirm = entryMomentumConfirm;
+  const useAtrStops = parseBoolList(gridInputs.useAtrStops);
+  if (useAtrStops.length) optimizationForm.parameterGrid.useAtrStops = useAtrStops;
+  const atrStopMultiplier = parseNumberList(gridInputs.atrStopMultiplier);
+  if (atrStopMultiplier.length) optimizationForm.parameterGrid.atrStopMultiplier = atrStopMultiplier;
+  const atrTakeMultiplier = parseNumberList(gridInputs.atrTakeMultiplier);
+  if (atrTakeMultiplier.length) optimizationForm.parameterGrid.atrTakeMultiplier = atrTakeMultiplier;
+  const breakevenTrailing = parseBoolList(gridInputs.breakevenTrailing);
+  if (breakevenTrailing.length) optimizationForm.parameterGrid.breakevenTrailing = breakevenTrailing;
+  const breakevenThreshold = parseNumberList(gridInputs.breakevenThreshold);
+  if (breakevenThreshold.length) optimizationForm.parameterGrid.breakevenThreshold = breakevenThreshold;
+  const tierPositionScale = parseBoolList(gridInputs.tierPositionScale);
+  if (tierPositionScale.length) optimizationForm.parameterGrid.tierPositionScale = tierPositionScale;
+  const synergyExitOnDowngrade = parseBoolList(gridInputs.synergyExitOnDowngrade);
+  if (synergyExitOnDowngrade.length) optimizationForm.parameterGrid.synergyExitOnDowngrade = synergyExitOnDowngrade;
+  const synergyDowngradeSteps = parseNumberList(gridInputs.synergyDowngradeSteps);
+  if (synergyDowngradeSteps.length) optimizationForm.parameterGrid.synergyDowngradeSteps = synergyDowngradeSteps;
 
   const pollToken = ++optimizationPollToken;
   optimizationState.status = "loading";
@@ -2214,6 +2263,7 @@ onMounted(async () => {
                 <option value="return">收益率</option>
                 <option value="max_drawdown">最大回撤</option>
                 <option value="win_rate">胜率</option>
+                <option value="win_rate_pf">胜率×盈亏比</option>
               </select>
             </label>
             <label>
@@ -2288,6 +2338,55 @@ onMounted(async () => {
               <input v-model="gridInputs.macdSignal" type="text" placeholder="默认 13；可填 10,13,16" />
             </label>
           </div>
+          <details class="adv-params">
+            <summary>交易策略开关（方向 1/3/4，可选；逗号分隔候选，留空=不参与搜索）</summary>
+            <div class="form-grid">
+              <label title="synergy 档位入场门：none=不启用；a=S/A；s=仅 S">
+                档位入场门（synergyEntryTierMin）
+                <input v-model="gridInputs.synergyEntryTierMin" type="text" placeholder="none,a" />
+              </label>
+              <label title="D/E 档持仓强制卖出">
+                D/E 档强制退出
+                <input v-model="gridInputs.synergyExitOnDanger" type="text" placeholder="false,true" />
+              </label>
+              <label title="A_MAIN 入场要求短期动量 momentum.short > 0（防追高）">
+                入场动量确认（short_positive）
+                <input v-model="gridInputs.entryMomentumConfirm" type="text" placeholder="off,short_positive" />
+              </label>
+              <label title="ATR(14) 自适应止损/止盈；缺 K 线历史时回退固定百分比">
+                ATR 自适应止损
+                <input v-model="gridInputs.useAtrStops" type="text" placeholder="false,true" />
+              </label>
+              <label title="ATR 止损倍数（entry - N×ATR）">
+                ATR 止损倍数
+                <input v-model="gridInputs.atrStopMultiplier" type="text" placeholder="2.0" />
+              </label>
+              <label title="ATR 止盈倍数（entry + N×ATR）">
+                ATR 止盈倍数
+                <input v-model="gridInputs.atrTakeMultiplier" type="text" placeholder="3.0" />
+              </label>
+              <label title="盈利达阈值后止损上移至入场价（保本）">
+                保本移动止损
+                <input v-model="gridInputs.breakevenTrailing" type="text" placeholder="false,true" />
+              </label>
+              <label title="触发保本的盈利阈值（如 0.02 = +2%）">
+                保本触发阈值
+                <input v-model="gridInputs.breakevenThreshold" type="text" placeholder="0.02" />
+              </label>
+              <label title="按 synergy 档位缩放入场仓位（S/A 满仓、B 半仓）">
+                档位联动仓位
+                <input v-model="gridInputs.tierPositionScale" type="text" placeholder="false,true" />
+              </label>
+              <label title="持仓档位相对入场降 >= N 档触发退出">
+                档位连续降级退出
+                <input v-model="gridInputs.synergyExitOnDowngrade" type="text" placeholder="false,true" />
+              </label>
+              <label title="降级退出步数阈值（如 2 = 从 A 降到 C）">
+                降级退出步数
+                <input v-model="gridInputs.synergyDowngradeSteps" type="text" placeholder="2" />
+              </label>
+            </div>
+          </details>
           <div class="button-row">
             <button
               type="button"

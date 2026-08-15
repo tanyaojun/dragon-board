@@ -67,7 +67,7 @@ class TradeSimulator:
             "blockedBySynergyTier": 0,
         }
         for idx, frame in enumerate(frames):
-            if config.get("useAtrStops"):
+            if TradeSimulator._config_bool(config, "useAtrStops"):
                 for stock in frame.get("stocks") or []:
                     stock_code = str(stock.get("code") or "")
                     if not stock_code:
@@ -147,7 +147,7 @@ class TradeSimulator:
                     _crowded_accel = (
                         ((signal.get("rankTrend") or {}).get("strategy") or {}).get("momentum") or {}
                     ).get("acceleration", 0)
-                    atr = TradeSimulator._atr_of(atr_history_by_code.get(code)) if config.get("useAtrStops") else None
+                    atr = TradeSimulator._atr_of(atr_history_by_code.get(code)) if TradeSimulator._config_bool(config, "useAtrStops") else None
                     stop_price, take_price, _stop_notes = TradeSimulator._exit_prices(pos, quote, config, atr, gross_return)
                     entry_price = float(pos["entryPrice"] or 0)
                     stop_ratio = (stop_price / entry_price - 1) if entry_price else float(config["stopLoss"])
@@ -222,7 +222,7 @@ class TradeSimulator:
                     continue
                 matching_stats["buyAttempts"] += 1
                 allocation = min(cash, float(config["initialCapital"]) * float(config["positionSize"]))
-                if config.get("tierPositionScale"):
+                if TradeSimulator._config_bool(config, "tierPositionScale"):
                     entry_tier = TradeSimulator._synergy_tier_of(signal) or ""
                     allocation *= float((config.get("tierPositionScales") or {}).get(entry_tier, 1.0))
                 estimated_price = self._quote_price_for_side(quote, "buy", raw_price, config)
@@ -410,6 +410,14 @@ class TradeSimulator:
         return None
 
     @staticmethod
+    def _config_bool(config: dict[str, Any] | None, key: str, default: bool = False) -> bool:
+        """布尔配置统一解析：容忍 bool 与 "true"/"1"/"yes"/"on" 字符串形态（前端 search_space 提交字符串数组）。"""
+        value = (config or {}).get(key, default)
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    @staticmethod
     def _synergy_exit_on_danger(config: dict[str, Any] | None) -> bool:
         """synergyExitOnDanger 布尔判定：容忍 "true"/"1"/"yes" 等字符串形态（配置可能来自 JSON/环境变量）。"""
         value = str((config or {}).get("synergyExitOnDanger") or "").strip().lower()
@@ -454,11 +462,11 @@ class TradeSimulator:
         stop_price = entry_price * (1 + float(config.get("stopLoss") or -0.06))
         take_price = entry_price * (1 + float(config.get("takeProfit") or 0.12))
         notes: list[str] = []
-        if config.get("useAtrStops") and atr and atr > 0:
+        if TradeSimulator._config_bool(config, "useAtrStops") and atr and atr > 0:
             stop_price = entry_price - float(config.get("atrStopMultiplier") or 2.0) * atr
             take_price = entry_price + float(config.get("atrTakeMultiplier") or 3.0) * atr
             notes.append("atr")
-        if config.get("breakevenTrailing") and (
+        if TradeSimulator._config_bool(config, "breakevenTrailing") and (
             pos.get("breakevenActivated") or (gross_return is not None and gross_return >= float(config.get("breakevenThreshold") or 0.02))
         ):
             pos["breakevenActivated"] = True  # 粘性：激活后不回退
@@ -482,7 +490,7 @@ class TradeSimulator:
     @staticmethod
     def _synergy_downgrade_exit(pos: dict[str, Any], signal: dict[str, Any], config: dict[str, Any] | None) -> bool:
         """synergyExitOnDowngrade（方向4）：持仓档位相对入场降 >= synergyDowngradeSteps 档触发退出。"""
-        if not (config or {}).get("synergyExitOnDowngrade"):
+        if not TradeSimulator._config_bool(config, "synergyExitOnDowngrade"):
             return False
         entry_tier = str(pos.get("entrySynergyTier") or "")
         current_tier = TradeSimulator._synergy_tier_of(signal)

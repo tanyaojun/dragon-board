@@ -288,3 +288,35 @@ def test_synergy_exit_on_downgrade_disabled_by_default() -> None:
     ]
     result = _run(frames, signals, {})
     assert result["openPositionCount"] == 1
+
+
+# ---------- 字符串布尔形态（前端 search_space 提交 ["true","false"]）----------
+
+
+def test_config_bool_accepts_string_forms() -> None:
+    """_config_bool：容忍 "true"/"false"/"on"/"1" 字符串形态（前端提交字符串数组）。"""
+    assert TradeSimulator._config_bool({}, "useAtrStops") is False
+    assert TradeSimulator._config_bool({"useAtrStops": "true"}, "useAtrStops") is True
+    assert TradeSimulator._config_bool({"useAtrStops": "on"}, "useAtrStops") is True
+    assert TradeSimulator._config_bool({"useAtrStops": "1"}, "useAtrStops") is True
+    assert TradeSimulator._config_bool({"useAtrStops": "false"}, "useAtrStops") is False
+    assert TradeSimulator._config_bool({"useAtrStops": True}, "useAtrStops") is True
+    assert TradeSimulator._config_bool({"useAtrStops": False}, "useAtrStops") is False
+
+
+def test_switches_work_with_string_bool_values() -> None:
+    """字符串布尔形态的开关在实际回测中生效（如前端提交 ["true"]）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.3),
+        _frame("s3", "2026-05-08", 9.98, ),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0),
+        _signal("s2", "2026-05-07", 10.3),
+        _signal("s3", "2026-05-08", 9.98, final_signal="hold"),
+    ]
+    # "true" 字符串形态触发保本止损（否则 9.98 > 固定 -6% 不退出）
+    result = _run(frames, signals, {"breakevenTrailing": "true", "breakevenThreshold": "0.02"})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1

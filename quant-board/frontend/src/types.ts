@@ -337,7 +337,14 @@ export interface OptimizationRequest {
   strategyName: StrategyName;
   method: "grid" | "random" | "bayesian" | "tpe";
   randomSeed: number;
-  objective: "sharpe" | "return" | "max_drawdown" | "win_rate" | "risk_adjusted" | "stability";
+  objective:
+    | "sharpe"
+    | "return"
+    | "max_drawdown"
+    | "win_rate"
+    | "win_rate_pf"
+    | "risk_adjusted"
+    | "stability";
   trials: number;
   validationMode: "none" | "auto";
   validationRatio: number;
@@ -358,6 +365,18 @@ export interface OptimizationRequest {
     macdFast?: number[];
     macdSlow?: number[];
     macdSignal?: number[];
+    // 交易策略开关（阶段4 策略层改进方向 1/3/4；后端 search_space 自由透传）
+    synergyEntryTierMin?: string[]; // "none" | "a" | "s"
+    synergyExitOnDanger?: boolean[];
+    entryMomentumConfirm?: string[]; // "off" | "short_positive"
+    useAtrStops?: boolean[];
+    atrStopMultiplier?: number[];
+    atrTakeMultiplier?: number[];
+    breakevenTrailing?: boolean[];
+    breakevenThreshold?: number[];
+    tierPositionScale?: boolean[];
+    synergyExitOnDowngrade?: boolean[];
+    synergyDowngradeSteps?: number[];
   };
 }
 

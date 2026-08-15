@@ -264,6 +264,29 @@ entryMomentumConfirm / useAtrStops / breakevenTrailing on=off 无差异（A_MAIN
 （`optimization_service._build_request` 不校验白名单），前端为唯一瓶颈。后续落地：
 types.ts 扩展 parameterGrid + App.vue 优化表单"交易策略开关"折叠块 + objective 加 `win_rate_pf`。
 
+**网页端可配置能力落地（2026-08-15，commit 后补）**：
+
+- `frontend/src/types.ts`：`OptimizationRequest.objective` 加 `win_rate_pf`；
+  `parameterGrid` 加 10 个可选键（synergyEntryTierMin/synergyExitOnDanger/entryMomentumConfirm/
+  useAtrStops/atrStopMultiplier/atrTakeMultiplier/breakevenTrailing/breakevenThreshold/
+  tierPositionScale/synergyExitOnDowngrade/synergyDowngradeSteps）。
+- `frontend/src/App.vue`：优化表单新增"交易策略开关"折叠块（11 个控件，逗号分隔候选、
+  留空=不参与搜索，与现有 takeProfitPct 等输入风格一致）；objective 下拉加"胜率×盈亏比"；
+  新增 `parseStringList`/`parseBoolList` 解析。`styles.css` 加 `.adv-params` 折叠块样式。
+- `backend/core/backtest/execution.py`：新增 `_config_bool` 统一布尔解析（容忍 bool 与
+  `"true"/"1"/"yes"/"on"` 字符串——前端 search_space 提交字符串数组），替换 5 处开关读取；
+  测试 +2（字符串形态），全量 pytest **1553 passed**。前端 `npm run build` 通过。
+- **效果**：不再硬编码——网页端可直接配置 synergy 门与全部新开关并搜索，后端自由透传。
+
+**开关×a门协同搜索结论（run `opt_ca96af636c814f94`，4.1 best + 5 开关 grid 32）**：
+32 组合 **score 全部 0.4303 / winRate 0.5303 / trades 66，完全无差异**。原因：
+A_MAIN 分层已含短周期动量约束（`tierAMainShortMomentumMin=-2.0`），`short>0` 不过滤任何入场；
+`synergyExitOnDanger`（D/E 强制退出）已覆盖 S/A 持仓降级场景；`dragonboard_live` 缺
+high/low K 线（ATR 回退固定 %）；`win_rate_pf` 目标下仓位缩放不改变胜率、保本触发稀疏。
+**结论：trade 层开关在当前数据/目标下无增量（保持默认关闭不污染现状），
+瓶颈仍在选股/信号层（均值回归主导）**。后续提升路径：A_MAIN 入场条件本身（信号层）、
+补齐 high/low 数据后重验 ATR 止损、或大盘 regime 过滤（方向 2，需指数数据确认）。
+
 **验收**：满足第 0 节完整验收标准，且连续两个样本外窗口稳定。
 
 ## 4. 验收标准汇总
