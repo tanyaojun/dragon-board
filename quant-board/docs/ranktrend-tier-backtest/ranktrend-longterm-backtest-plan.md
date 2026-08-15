@@ -150,7 +150,7 @@ percentileDelta（不加任何信号），热榜排名收益存在**强均值回
   0 failed（阶段 3 改动后 replay 带共振 + tierStats 注入正常）；发现交易层搜索下
   `tierConstraintFailed` 恒定（tierStats 不受交易参数影响，属信号层约束）→ 4.1 改用 `win_rate_pf`。
 
-**阶段 4.1 交易层粗搜（commit 待补，2026-08-15）**：random 20 trials + 基线对照
+**阶段 4.1 交易层粗搜（commit `1fb7384`，2026-08-15）**：random 20 trials + 基线对照
 （train 2026-05-15~07-15 / validation chronological 0.3 / objective `win_rate_pf`），
 run_id：基线 `opt_a1fdd46851254991`、搜索 `opt_34a91f83279f4988`：
 
@@ -171,7 +171,7 @@ run_id：基线 `opt_a1fdd46851254991`、搜索 `opt_34a91f83279f4988`：
 未达最终验收（winRate 0.80 / profitFactor 1.3）——交易层参数只能改交易结构，信号质量提升需
 4.2 信号层精搜；best 参数仅候选，不自动写回默认值（硬约束）。
 
-（trial metrics 补 profitFactor 透传：commit 待补）
+（trial metrics 补 profitFactor 透传：commit `1fb7384`）
 
 **验收**：满足第 0 节完整验收标准，且连续两个样本外窗口稳定。
 
