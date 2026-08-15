@@ -266,6 +266,8 @@ def test_tier_discrimination_contract() -> None:
     disc = tier_discrimination(stats)
     assert disc["tierSpread"] is not None and disc["tierSpread"] > 0
     assert disc["saDirectionAccuracy"] > 0  # 原始口径保留（验收以 excess 为准）
+    assert disc["saExcessAccuracy"] is not None  # 验收口径：S/A 加权 excess
+    assert disc["saExcessAccuracy"] >= 0.05
     assert disc["positiveMonotonic"] is True
     # sMinusC/aMinusC/deVsC 用含 C/D/E 的 fixture（S 升 C 降，无 D/E → deVsC None 不伪造）
     tiers = ["S"] * 30 + ["A"] * 20 + ["C"] * 10

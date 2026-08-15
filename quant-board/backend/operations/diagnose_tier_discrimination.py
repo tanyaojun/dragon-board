@@ -94,7 +94,7 @@ def _summarize(report: dict[str, Any]) -> str:
             f"[{dimension}] unknownRate={stats['unknownRate']} spearman={mono['spearmanRankCorr']} "
             f"reversals={len(mono['reversals'])} passHard={mono['passHardConstraint']} "
             f"discrim: sMinusC={disc['sMinusC']} saAcc={disc['saDirectionAccuracy']} "
-            f"deVsC={disc['deVsC']} positiveMonotonic={disc['positiveMonotonic']}\n  {tier_line}"
+            f"saEx={disc['saExcessAccuracy']} deVsC={disc['deVsC']} positiveMonotonic={disc['positiveMonotonic']}\n  {tier_line}"
         )
     return "\n".join(lines)
 

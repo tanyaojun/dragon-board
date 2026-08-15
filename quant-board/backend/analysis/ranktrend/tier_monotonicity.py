@@ -288,6 +288,9 @@ def tier_discrimination(stats: dict[str, Any] | None) -> dict[str, Any]:
     def acc(tier: str) -> float | None:
         return (tiers.get(tier) or {}).get("directionAccuracy")
 
+    def excess_acc(tier: str) -> float | None:
+        return (tiers.get(tier) or {}).get("excessDirectionAccuracy")
+
     s, a, c = ret("S"), ret("A"), ret("C")
     d, e = ret("D"), ret("E")
     present = [value for value in (s, a, ret("B"), c) if value is not None]
@@ -297,6 +300,12 @@ def tier_discrimination(stats: dict[str, Any] | None) -> dict[str, Any]:
     sa_accuracy = (
         (s_count * (acc("S") or 0) + a_count * (acc("A") or 0)) / sa_total if sa_total > 0 else None
     )
+    # S/A 合并 excess 精度（验收口径；对照同分位桶基线，见 §5.2 saExcessAccuracy）
+    sa_excess = (
+        (s_count * (excess_acc("S") or 0) + a_count * (excess_acc("A") or 0)) / sa_total
+        if sa_total > 0
+        else None
+    )
     de_values = [value for value in (d, e) if value is not None]
     worst_de = min(de_values) if de_values else None
     spearman = monotonicity.get("spearmanRankCorr")
@@ -305,6 +314,8 @@ def tier_discrimination(stats: dict[str, Any] | None) -> dict[str, Any]:
         "aMinusC": round(a - c, 6) if a is not None and c is not None else None,
         "tierSpread": round(max(present) - min(present), 6) if present else None,
         "saDirectionAccuracy": round(sa_accuracy, 4) if sa_accuracy is not None else None,
+        # 验收口径（§5.4）：S/A 加权 excess 精度
+        "saExcessAccuracy": round(sa_excess, 4) if sa_excess is not None else None,
         "cDirectionAccuracy": acc("C"),
         "deVsC": round(worst_de - c, 6) if worst_de is not None and c is not None else None,
         "positiveMonotonic": bool(

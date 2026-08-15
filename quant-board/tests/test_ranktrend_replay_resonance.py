@@ -198,9 +198,12 @@ def test_replay_resonance_participates_in_synergy_vote() -> None:
     assemble_observation(analysis, stock, config)
     with_res = signal["rankTrend"]["observation"]["synergy"]["signalTier"]
     without_res = analysis["observation"]["synergy"]["signalTier"]
-    # 共振 direction=buy（rising）→ 有共振时 vote 更高，档位不应更差
+
+    # 共振 buy 票必须参与 synergy 投票：手工构造共振 buy（+1 票）→ S/A 强档
     assert _synergy_tier(resonance.get("signalTier"), resonance.get("direction"), "A", "buy", "A", "up", "A", config)[0] in (
         "S",
         "A",
     )
-    assert with_res != "D" or without_res != "S"  # 共振不应把强档拉低
+    # fixture 实际共振 direction=hold（相对动量不足/中位 0）→ 不贡献票 →
+    # 带共振与清空共振的 synergy 档位必须一致（证明 resonance 被读取但 hold 无票）
+    assert with_res == without_res, f"共振 hold 不应改变档位: with={with_res} without={without_res}"
