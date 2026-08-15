@@ -173,6 +173,25 @@ run_id：基线 `opt_a1fdd46851254991`、搜索 `opt_34a91f83279f4988`：
 
 （trial metrics 补 profitFactor 透传：commit `1fb7384`）
 
+**阶段 4.2 信号层粗搜（commit 待补，2026-08-15）**：20 trials optuna_tpe（固定 4.1 best 交易层，
+搜索 8 信号层阈值），run_id：基线 `opt_280e332857a046e1`、搜索 `opt_880147e7ea2b40b4`，
+耗时 55.6 分钟（信号层参数变化 → signal_cache 不命中 → 每次 trial 全量 replay ~90-115s）。
+
+**结论：信号层阈值在现有 vote 语义下无优化空间（默认即最优）**。逐层排查证据：
+1. 20 trials 中 16 个（VoteStrong=2）交易/score 完全相同（68/0.5441，score -0.6346），
+   仅 VoteStrong=3 的 4 个不同但更差（65/0.5231，score -0.87）；
+2. `TrialExecutor.evaluate` 链路正常（A 组 68 笔 vs B 组 65 笔，signal_cache 正确区分）；
+3. **根因**：`_synergy_tier`（`volume_price.py:260-269`）vote 只取各维度 direction（buy/sell ±1），
+   **忽略 signalTier 档位** → tierResonance*/tierRankTrend* 阈值只改单维档位标签不改 vote；
+4. 单维敏感性分析（min/max 边界，15 次 replay）证实：
+   - 6 个共振/趋势阈值参数变化率 **0.0**（完全无效）；
+   - `tierSynergyVoteReverse` -1→0 改档位分布（D 35295→51286，变化率 0.41）但**不影响交易**
+     （D/C 均不入 S/A 入场门）；
+   - `tierSynergyVoteStrong` 2→3 影响交易但**变差**（67→64，pf 1.3171→0.9975，winRate 0.5672→0.5312）。
+
+**后续可选**（不阻塞阶段 4）：提升信号区分度的方向是改 vote 语义（S/A 档强度加权投票），
+属策略语义变更（触碰 golden 算法），需独立 TDD + 文档 + golden 对比，另行立项。
+
 **验收**：满足第 0 节完整验收标准，且连续两个样本外窗口稳定。
 
 ## 4. 验收标准汇总
