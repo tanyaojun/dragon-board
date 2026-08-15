@@ -26,11 +26,11 @@ function getRankTrendAnalysis(stock: any) {
 
 /**
  * 生命周期阶段的方向划分（与 golden `ATTENTION_STAGE_SEQUENCE` 一致）：
- * ignition（点火）/ expansion（扩散）为上升路径；crowded（拥挤）/ reversal（反转）/
+ * ignition（点火）/ expansion（扩散）为上升路径；crowded（拥挤）/ high_reversal（高位反转）/
  * cooling（降温）为风险与下降路径。用于「生命周期」列的方向优先排序。
  */
 const LIFECYCLE_UP_STAGES: ReadonlySet<string> = new Set(['ignition', 'expansion'])
-const LIFECYCLE_DOWN_STAGES: ReadonlySet<string> = new Set(['crowded', 'reversal', 'cooling'])
+const LIFECYCLE_DOWN_STAGES: ReadonlySet<string> = new Set(['crowded', 'high_reversal', 'cooling'])
 
 /** 四维合并档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后，与四列打分排序对齐 */
 const SYNERGY_TIER_LEVEL: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 }

@@ -332,6 +332,8 @@ const localAttentionStageLabels: Record<string, string> = {
   ignition: '点火',
   expansion: '扩散',
   crowded: '拥挤',
+  high_reversal: '反转',
+  // 历史兼容：旧快照 stage=reversal（2026-08-15 前）
   reversal: '反转',
   cooling: '降温',
 }
@@ -811,7 +813,7 @@ const getLifecycleStageLabel = (stock: any) =>
 const getLifecycleDirection = (stock: any) => {
   const stage = getLifecycleStage(stock)
   if (stage === 'ignition' || stage === 'expansion') return 'buy'
-  if (stage === 'crowded' || stage === 'reversal' || stage === 'cooling') return 'sell'
+  if (stage === 'crowded' || stage === 'high_reversal' || stage === 'cooling') return 'sell'
   return 'hold'
 }
 
@@ -2864,7 +2866,7 @@ defineExpose({
 }
 
 .observation-sell,
-.lifecycle-reversal {
+.lifecycle-high-reversal {
   color: #2ed573;
 }
 

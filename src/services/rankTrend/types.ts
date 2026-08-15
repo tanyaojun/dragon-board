@@ -8,7 +8,7 @@ export type AttentionStage =
   | 'ignition'
   | 'expansion'
   | 'crowded'
-  | 'reversal'
+  | 'high_reversal'
   | 'cooling'
 
 export type CycleEntryBias = 'preferred' | 'watch' | 'avoid' | 'blocked'
@@ -341,6 +341,6 @@ export const ATTENTION_STAGE_SEQUENCE: AttentionStage[] = [
   'ignition',
   'expansion',
   'crowded',
-  'reversal',
+  'high_reversal',
   'cooling',
 ]

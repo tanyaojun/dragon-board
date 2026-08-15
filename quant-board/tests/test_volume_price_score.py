@@ -124,7 +124,7 @@ def test_synergy_states() -> None:
     assert compute_synergy_state("ignition", 80.0, "buy", "buy", 1.0)["state"] == "启动确认"
     assert compute_synergy_state("expansion", 80.0, "buy", "buy", 1.0)["state"] == "主升确认"
     assert compute_synergy_state("crowded", 30.0, "buy", "buy", 1.0)["state"] == "风险升级"
-    assert compute_synergy_state("reversal", 60.0, "sell", "sell", 25.0)["state"] == "风险升级"  # 资金对倒
+    assert compute_synergy_state("high_reversal", 60.0, "sell", "sell", 25.0)["state"] == "风险升级"  # 资金对倒
     assert compute_synergy_state("cooling", 30.0, "hold", "hold", 1.0)["state"] == "退潮"
     assert compute_synergy_state("expansion", 30.0, "buy", "buy", 1.0)["state"] == "suspect"  # 量价分低
     assert compute_synergy_state("expansion", None, "buy", "buy", 1.0)["state"] == "noData"

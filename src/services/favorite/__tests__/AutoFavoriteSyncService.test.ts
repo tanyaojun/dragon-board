@@ -137,12 +137,12 @@ describe('AutoFavoriteSyncService', () => {
     expect(result.added).toEqual(['000001'])
   })
 
-  it('does not add when lifecycle stage is crowded/reversal/cooling even with golden and strong resonance', () => {
+  it('does not add when lifecycle stage is crowded/high_reversal/cooling even with golden and strong resonance', () => {
     const { deps, addAutoFavorite } = createDeps()
     const service = new AutoFavoriteSyncService(deps)
     const base = createStock().rankTrend
 
-    for (const stage of ['crowded', 'reversal', 'cooling']) {
+    for (const stage of ['crowded', 'high_reversal', 'cooling']) {
       service.sync([createStock({ rankTrend: { ...base, observation: { lifecycle: { stage } } } })])
     }
 
@@ -159,7 +159,7 @@ describe('AutoFavoriteSyncService', () => {
     expect(addAutoFavorite).not.toHaveBeenCalled()
   })
 
-  it('removes auto favorites whose lifecycle turns to cooling or reversal even while golden in pool', () => {
+  it('removes auto favorites whose lifecycle turns to cooling or high_reversal even while golden in pool', () => {
     const { deps, removeAutoFavorite, listAutoFavorites } = createDeps()
     listAutoFavorites.mockReturnValue([{ code: '000001' }, { code: '000002' }])
     const service = new AutoFavoriteSyncService(deps)
@@ -167,7 +167,7 @@ describe('AutoFavoriteSyncService', () => {
 
     service.sync([
       createStock({ rankTrend: { ...base, observation: { lifecycle: { stage: 'cooling' } } } }),
-      createStock({ code: '000002', rankTrend: { ...base, observation: { lifecycle: { stage: 'reversal' } } } }),
+      createStock({ code: '000002', rankTrend: { ...base, observation: { lifecycle: { stage: 'high_reversal' } } } }),
     ])
 
     expect(removeAutoFavorite).toHaveBeenCalledWith('000001')

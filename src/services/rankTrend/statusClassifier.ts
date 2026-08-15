@@ -128,6 +128,8 @@ const CYCLE_LABELS: Record<string, string> = {
   ignition: '启动',
   expansion: '扩散',
   crowded: '拥挤',
+  high_reversal: '反转',
+  // 历史兼容：旧快照/旧响应 stage=reversal（2026-08-15 前）归一化展示
   reversal: '反转',
   cooling: '降温',
 }
