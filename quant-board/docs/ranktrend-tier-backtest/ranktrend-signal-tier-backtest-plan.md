@@ -1,7 +1,7 @@
 # RankTrend 五维信号阈值参数搜索回测方案
 
 > 主题：共振/趋势/量价/周期四维观察信号 + synergy 四维合并档位的参数阈值治理与回测优化
-> 状态：方案稿（未实现）
+> 状态：**已落地**（§3–§5 已全部实现并通过 golden；本文保留方案原文，就地标注实现位置与核对行号；核对日期 2026-08-15）
 > 前置文档：`ranktrend-observation-discrete-tiers-design.md`（档位规则）、`ranktrend-factor-calibration-plan.md`（参数抽取）
 > 落位：QuantBoard 后端 `backend/analysis/ranktrend/` + `backend/optimization/` + `backend/core/backtest/`（生产）
 > 配套：行情主页【四维】列前端方案见 `ranktrend-four-dimension-column-plan.md`
@@ -20,14 +20,16 @@
 
 ### 2.1 五维 signalTier 生产位置与硬编码阈值
 
-| 维度 | 函数 | 位置 | 硬编码阈值（拍脑袋） |
+> 行号已按 2026-08-15 代码核对更新；**全部硬编码阈值均已参数化进 `RankTrendConfig`（§3.1，engine.py:130-138）**，下表"硬编码阈值"为参数化前的原始值。
+
+| 维度 | 函数 | 位置（当前） | 硬编码阈值（拍脑袋，现已参数化） |
 |---|---|---|---|
-| 共振 | `_resonance_tier` | `engine.py:1209-1227` | `reversalPenalty≥0.6`、`jumpFreshness≥0.5`、`persistence≥0.6` |
-| 共振（新入榜） | `analyze_rank_resonance` 内联 | `engine.py:1273-1311` | `entryStrength≥0.3`（A）、`jumpFreshness≥0.5 and entryStrength>0`（S） |
-| 趋势 | `_rank_trend_tier` | `engine.py:1032-1043` | `\|combinedScore\|≥0.5`（S）、`≥0.25`（A） |
-| 量价 | `_volume_price_tier` | `volume_price.py:102-117` | 关键词/象限状态机（无数值阈值，见 §2.2） |
-| 周期 | `_lifecycle_tier` | `engine.py:1046-1058` | stage/action 状态机（无数值阈值，见 §2.2） |
-| 四维合并 | `_synergy_tier` | `ranktrend_routes.py:577-616` | 前置硬分支：`lc_tier==E`→E（周期否决）、`vp_tier==E`→D（量价出货）；否则投票：`vote_sum≥2 且 lc_tier==A`→S、`≥2`→A、`==1`→B、`≤−1`→D、其余→C；周期 B/D 时 S/A 降档 |
+| 共振 | `_resonance_tier` | `engine.py:1260` | `reversalPenalty≥0.6`、`jumpFreshness≥0.5`、`persistence≥0.6` |
+| 共振（新入榜） | `analyze_rank_resonance` 内联 | `engine.py:1309`（A 判定 L1341） | `entryStrength≥0.3`（A）、`jumpFreshness≥0.5 and entryStrength>0`（S） |
+| 趋势 | `_rank_trend_tier` | `engine.py:1082` | `\|combinedScore\|≥0.5`（S）、`≥0.25`（A） |
+| 量价 | `_volume_price_tier` | `volume_price.py:109` | 关键词/象限状态机（无数值阈值，见 §2.2） |
+| 周期 | `_lifecycle_tier` | `engine.py:1097` | stage/action 状态机（无数值阈值，见 §2.2） |
+| 四维合并 | `_synergy_tier` | `volume_price.py:240`（组装下沉后由 routes 移入） | 前置硬分支：`lc_tier==E`→E（周期否决）、`vp_tier==E`→D（量价出货）；否则投票：`vote_sum≥2 且 lc_tier==A`→S、`≥2`→A、`==1`→B、`≤−1`→D、其余→C；周期 B/D 时 S/A 降档 |
 
 ### 2.2 量价/周期的"非数值阈值"说明
 
@@ -37,22 +39,24 @@
 
 ### 2.3 回测链路缺口（关键发现）
 
-1. **replay 信号不含 volumePrice/synergy**：`engine.py _build_signal`（`engine.py:1656-1694`）产出的 `rankTrend.observation` 只有 `rankTrend`/`lifecycle` 两轨；`volumePrice`/`synergy`/`signalTier` 组装在 **API 层** `ranktrend_routes.py:384-409`（`analyze_stock`/`_analyze_one_stock` 单股链路）。而回测走 `RankTrendPythonEngine(config).replay(...)`（`trial.py:139`），其信号**没有** `synergy.signalTier` → 交易链路无法消费合并档位。
-2. **交易链路不消费 signalTier**：`strategy.py _entry_signal`（`:343-364`）只用 `candidateTier`（A_MAIN/B_IGNITION）+ `decision.final.signal==buy`；`_exit_signal`（`:366-379`）只用 `finalSignal==sell`/D_EXIT_RISK/rank>50。
-3. **阈值未参数化**：§2.1 全部硬编码，不在 `RankTrendConfig`（`engine.py:40-148`），无法 `from_patch` 覆盖、无法进搜索空间。
+> 以下三项缺口均为方案撰写时点的现状，**已全部修复（2026-08-15 核对）**，标注修复位置：
+
+1. ~~**replay 信号不含 volumePrice/synergy**~~ → **已修复**：组装下沉为 engine 层 `assemble_observation`（`volume_price.py:287`，`engine.py:1752-1754` 在 `_build_signal` 内调用；`_build_signal` 当前 `engine.py:1687`），`ranktrend_routes.py:384-385` 改为调用同一函数（原 API 层组装 `ranktrend_routes.py:384-409` 已删重复），replay 与单股 API 同源同构，`replay()` 输出已含 `synergy.signalTier`。
+2. ~~**交易链路不消费 signalTier**~~ → **已修复**：`strategy.py` 旧 `_entry_signal`（`:343-364`）/`_exit_signal`（`:366-379`）已随交易引擎重构；synergy 门实现在 `execution.py`（入场过滤 L173-177、D/E 卖出门 L114/L1012，辅助函数 `_synergy_tier_of` L357、`_synergy_allowed_tiers` L362、`_synergy_exit_on_danger` L372）。
+3. ~~**阈值未参数化**~~ → **已修复**：全部档位阈值进 `RankTrendConfig`（`engine.py:130-138`），`from_patch` 可覆盖（L141-159），并带约束校验 `_validate_tier_constraints`（L160），已进搜索空间（`search_space.py:44-56`）。
 
 ## 3. 前置改动（实现回测的前提，属于本方案实施范围）
 
 ### 3.1 阈值参数化：`RankTrendConfig` 新增字段（A 类可调）
 
-默认值 = 当前硬编码值，保证 golden 不漂移。前缀约定 `tier*`（与现有 `tierAMain*` 风格一致）：
+> ✅ **已实现**：字段定义 `engine.py:130-138`，`from_patch` 覆盖与约束校验（`_validate_tier_constraints`，engine.py:160）。默认值 = 当前硬编码值，保证 golden 不漂移。前缀约定 `tier*`（与现有 `tierAMain*` 风格一致）：
 
 | 字段名 | 默认值 | 消费位置 |
 |---|---|---|
 | `tierResonanceReversalPenaltyMin` | `0.6` | `_resonance_tier` 首条（reversal 否决） |
 | `tierResonanceJumpFreshnessMin` | `0.5` | `_resonance_tier` 第二条（Jump 事件）+ 新入榜 S |
 | `tierResonancePersistenceMin` | `0.6` | `_resonance_tier` 第三条（buy+persistence） |
-| `tierResonanceEntryStrengthMin` | `0.3` | 新入榜 A 判定（`engine.py:1288`） |
+| `tierResonanceEntryStrengthMin` | `0.3` | 新入榜 A 判定（`engine.py:1341`） |
 | `tierRankTrendStrongMin` | `0.5` | `_rank_trend_tier` S |
 | `tierRankTrendConfirmMin` | `0.25` | `_rank_trend_tier` A |
 | `tierSynergyVoteStrong` | `2` | `_synergy_tier` vote_sum≥2（S/A 分界） |
@@ -65,7 +69,9 @@
 
 ### 3.2 组装下沉：replay 信号含 synergy.signalTier
 
-把 `ranktrend_routes.py:384-409` 的组装逻辑（`compute_volume_price_score` + `compute_synergy_state` + `_synergy_tier` + 写入 `observation`）下沉为 engine 层纯函数/方法，在 `_build_signal` 内对每个 signal 调用，使 `replay()` 输出与 API 单股链路**同源同构**：
+> ✅ **已实现**：`assemble_observation`（`volume_price.py:287`）由 `engine.py:1752-1754` 在 `_build_signal` 内调用；`_synergy_tier` 落在 `volume_price.py:240`；`ranktrend_routes.py:384-385` 改调用同一函数（API 层重复组装已删除）。replay 与单股 API 同源同构。
+
+把 `ranktrend_routes.py:384-409`（撰写时点）的组装逻辑（`compute_volume_price_score` + `compute_synergy_state` + `_synergy_tier` + 写入 `observation`）下沉为 engine 层纯函数/方法，在 `_build_signal` 内对每个 signal 调用，使 `replay()` 输出与 API 单股链路**同源同构**：
 
 - 新函数（engine.py 或 volume_price.py）：`assemble_observation(analysis, stock, config)` → 返回补全后的 `observation`（volumePrice/synergy + 各维 signalTier/tierReasons）。
 - `_synergy_tier` 从 `ranktrend_routes.py` 移入 engine（或 volume_price.py），签名改为接收 `config`（读 `tierSynergy*`）。
@@ -74,13 +80,13 @@
 
 ### 3.3 synergy 接入交易决策（可开关，防止默认行为漂移）
 
-在 `backend/core/backtest/strategy.py` 增加基于 `synergy.signalTier` 的买卖门，**默认关闭**（默认策略行为与现状一致，golden 回测不漂移）：
+> ✅ **已实现**：买卖门实现在 `backend/core/backtest/execution.py`（入场过滤 L173-177、D/E 卖出门 L114/L1012；辅助 `_synergy_tier_of` L357 / `_synergy_allowed_tiers` L362 / `_synergy_exit_on_danger` L372）。两个开关为**纯交易层参数**（不在 `RankTrendConfig`，由 `to_trade_config` 透传进 trade_config），**默认关闭**（默认策略行为与现状一致，golden 回测不漂移）。
 
-- 新增 config 字段（进 `RankTrendConfig`，随搜索空间可调）：
+- 新增 config 字段（交易层，随搜索空间可调，见 §4.1）：
   - `synergyEntryTierMin: str = "none"`（`none`=不启用；`s`=仅 S；`a`=S/A 允许入场）
   - `synergyExitOnDanger: bool = False`（D/E 档强制卖出）
-- `_entry_signal` 追加门：`synergy.signalTier ∈ 允许集合` 时才能 buy（与现有 `finalSignal==buy` + `candidateTier` 条件**取交集**，不是替代）；
-- `_exit_signal` 追加门：`synergy.signalTier in (D,E)` 且开启时 → sell（原因注明"四维合并档位 D/E"）。
+- 入场追加门：`synergy.signalTier ∈ 允许集合` 时才能 buy（`execution.py:177`，与现有 `finalSignal==buy` + `candidateTier` 条件**取交集**，不是替代）；
+- 出场追加门：`synergy.signalTier in (D,E)` 且开启时 → sell（`execution.py:114`/`1012`，原因注明"四维合并档位 D/E"）。
 - 说明：`synergy.signalTier` 读取路径 `signal.rankTrend.observation.synergy.signalTier`（§3.2 下沉后 replay 信号已含）。
 
 > 设计取舍：**交集模式**（signalTier 只做过滤/门）而非"signalTier 替代 finalSignal"——保留现有 `decision.final` 交易语义，避免 golden 交易口径被整体替换；用户后续如需"档位直接决定买卖"可再加策略变体。
@@ -110,11 +116,7 @@
 }
 ```
 
-> 白名单：新增字段均为标量（int/float/bool/str），`_STRATEGY_SCALAR_KEYS`（`search_space.py:243-247`）按 `isinstance(f.default, (int, float, bool))` 自动纳入。**注意 `synergyEntryTierMin` 是 str 类型**，`f.default` 为 str 不满足 int/float/bool → **不会被自动纳入白名单**，须显式追加到 `_STRATEGY_PARAM_KEYS`（与复合字段同列手工维护）；否则参数会被 `to_trade_config` 错误改道进交易层。实现时在 `search_space.py` 增加：
-
-```python
-_STRATEGY_PARAM_KEYS = _STRATEGY_SCALAR_KEYS + _STRATEGY_LIST_KEYS + ("synergyEntryTierMin",)
-```
+> 白名单（已核对，与实现一致）：`_STRATEGY_SCALAR_KEYS`（`search_space.py:257-261`）按 `isinstance(f.default, (int, float, bool))` 从 `RankTrendConfig` 字段自动生成。**`synergyEntryTierMin`/`synergyExitOnDanger` 是交易层参数（不在 `RankTrendConfig`）**，天然不进 `_STRATEGY_PARAM_KEYS`（`search_space.py:270`）→ `to_trade_config` 对它们**透传保留**，正好进入 `trade_config` 供 `execution.py`（§3.3）读取，**这是期望行为，不要追加进 `_STRATEGY_PARAM_KEYS`**；若误追加，`to_trade_config` 会将其 pop，交易门将永远读不到而失效（`search_space.py:54` 注释已明确"交易层参数，to_trade_config 透传"）。
 
 ### 4.2 组合规模与搜索方法
 
@@ -128,6 +130,8 @@ _STRATEGY_PARAM_KEYS = _STRATEGY_SCALAR_KEYS + _STRATEGY_LIST_KEYS + ("synergyEn
 ## 5. 目标函数设计（单调性约束 + 交易收益）
 
 ### 5.1 新增档位单调性统计模块（观察回测）
+
+> ✅ **已实现**：新文件 `backend/analysis/ranktrend/tier_monotonicity.py`（纯函数，analysis 层）。
 
 新文件 `backend/analysis/ranktrend/tier_monotonicity.py`（纯函数，就近放 analysis 层）：
 
@@ -169,6 +173,8 @@ def tier_monotonicity_score(stats: dict[str, Any]) -> dict[str, Any]:
 
 ### 5.2 objective 扩展：`tier_risk_adjusted`
 
+> ✅ **已实现**：`backend/optimization/objective.py`（`score` L14、`tier_risk_adjusted` 分支 L33-40、`tier_penalty` L45、`score_trial` L71；phase 分数注入 tierStats L130-132）。
+
 在 `backend/optimization/objective.py` 增加 objective 名（不经 `objective_for_phase` 改写）：
 
 ```python
@@ -187,7 +193,7 @@ def score(result, objective, request):   # 现有签名扩展 request
         return base - penalty
 ```
 
-- `score_trial`（`objective.py:39-92`）签名不变，`request` 已传入；`tierStats` 由 trial 评估时注入 `train_eval`/`validation_eval` 结果（见 §5.3）。
+- `score_trial`（`objective.py:71`）签名不变，`request` 已传入；`tierStats` 由 trial 评估时注入 `train_eval`/`validation_eval` 结果（见 §5.3）。
 - **硬约束**（设计文档 §9 验收标准，任一不满足则整 trial 标记 `tierConstraintFailed=true`，可入选但显著降分并在报告突出）：
   1. S 档样本数 ≥ 30 且 S>A>B>C 收益单调不反转（Spearman>0 且无相邻反转）；
   2. D/E 档收益显著低于 C（D 或 E 的 meanFutureReturn < C 的 −0.005）；
@@ -195,6 +201,8 @@ def score(result, objective, request):   # 现有签名扩展 request
   4. unknown 占比 < 5%。
 
 ### 5.3 trial 接入（`trial.py` 改动）
+
+> ✅ **已实现**：phase 评估后对 `phase_signals` 调 `tier_forward_returns` 写入 `metrics["tierStats"]`；`score_trial` 合并 train/validation 的 tierStats 计算（`objective.py:130-132` 注入）。
 
 - `TrialExecutor.evaluate_phase`：`replay` 后对 `phase_signals` 调 `tier_forward_returns(signals, phase_frames, horizon)`（horizon 用 request 的 `tier_horizon`，默认 3），结果写入 `metrics["tierStats"]` 与 `phase_eval`。
 - `objective.score_trial` 读取 `train_eval["metrics"]["tierStats"]` / validation 同，合并后按 §5.2 计算。
@@ -220,33 +228,33 @@ def score(result, objective, request):   # 现有签名扩展 request
 
 ## 7. 验收标准
 
-| 阶段 | 内容 | 验收命令/标准 |
-|---|---|---|
-| 1 | 阈值参数化 + 组装下沉 + 交易接入（默认关闭） | `cd quant-board; .\.venv\Scripts\python.exe -m pytest` 全绿；**golden case 全绿**（`tests/test_ranktrend_golden_alignment.py`，默认 config 行为不变） |
-| 2 | 单测：每档每阈值至少 1 输入样例 + 边界（等于阈值/略低于）+ 非法阈值 from_patch 报错 | pytest 新增用例全绿 |
-| 3 | 单调性模块单测：构造已知档位收益序列，验证 Spearman/硬约束判定 | pytest 新增用例全绿 |
-| 4 | objective `tier_risk_adjusted` 单测：硬约束违约/unknown 占比/样本不足惩罚生效 | pytest 新增用例全绿 |
-| 5 | 回测运行（Phase A/B/C） | 产出 `quant-board/data/reports/` 敏感性报告 + 最优参数报告，满足 §5.2 硬约束且优于基线 |
-| 6 | 参数采纳后：更新 golden case + 提升 `ranktrend_version`/`strategy_version` | 按 `ranktrend-golden.md` 第 6 节变更管理；历史回测不覆盖 |
-| 7 | 文档同步 | `ranktrend-golden.md` 配置节 + 输出合同节 + `backtest-policy.md` + `architecture.md` |
+| 阶段 | 内容 | 验收命令/标准 | 落地状态 |
+|---|---|---|---|
+| 1 | 阈值参数化 + 组装下沉 + 交易接入（默认关闭） | `cd quant-board; .\.venv\Scripts\python.exe -m pytest` 全绿；**golden case 全绿**（`tests/test_ranktrend_golden_alignment.py`，默认 config 行为不变） | ✅ 已完成 |
+| 2 | 单测：每档每阈值至少 1 输入样例 + 边界（等于阈值/略低于）+ 非法阈值 from_patch 报错 | pytest 新增用例全绿 | ✅ 已完成 |
+| 3 | 单调性模块单测：构造已知档位收益序列，验证 Spearman/硬约束判定 | pytest 新增用例全绿 | ✅ 已完成 |
+| 4 | objective `tier_risk_adjusted` 单测：硬约束违约/unknown 占比/样本不足惩罚生效 | pytest 新增用例全绿 | ✅ 已完成 |
+| 5 | 回测运行（Phase A/B/C） | 产出 `quant-board/data/reports/` 敏感性报告 + 最优参数报告，满足 §5.2 硬约束且优于基线 | ⏳ 待办（后续长期回测计划） |
+| 6 | 参数采纳后：更新 golden case + 提升 `ranktrend_version`/`strategy_version` | 按 `ranktrend-golden.md` 第 6 节变更管理；历史回测不覆盖 | ⏳ 待办 |
+| 7 | 文档同步 | `ranktrend-golden.md` 配置节 + 输出合同节 + `backtest-policy.md` + `architecture.md` | ⏳ 待办（golden 已补档位字段说明，其余随参数采纳同步） |
 
 ## 8. 实施步骤（建议顺序，均为小步可回退）
 
-1. **RankTrendConfig 扩展**：新增 §3.1 字段 + `from_patch` 约束校验；默认值=旧硬编码。跑 pytest + golden 确认零漂移。
-2. **档位函数接 config**：`_resonance_tier`/`_rank_trend_tier`/`_lifecycle_tier`/`_volume_price_tier` 改为接收 `RankTrendConfig` 读取 `tier*`；`_synergy_tier` 移入 engine 并读 config。pytest + golden。
-3. **组装下沉**：新增 `assemble_observation`，`_build_signal` 接入；`ranktrend_routes.py` 删重复组装改调用。pytest + golden（API 输出应与之前逐字段一致）。
-4. **交易接入**：`strategy.py` 增加 `synergyEntryTierMin`/`synergyExitOnDanger` 门（默认关闭）；`execution.py` 读取路径确认。pytest（含默认关闭回归）。
-5. **单调性模块**：新建 `tier_monotonicity.py` + 单测。
-6. **objective/trial 接入**：`tier_risk_adjusted` + tierStats 注入 + 单测。
-7. **搜索空间**：§4.1 追加 + `synergyEntryTierMin` 白名单 + `default_search_space()` 单测（新增标量自动入白名单）。
-8. **回测运行与校准**（Phase A/B/C），产出报告，按 §7 验收。
-9. **参数采纳 + golden 更新 + 文档同步**。
+1. ✅ **RankTrendConfig 扩展**：新增 §3.1 字段 + `from_patch` 约束校验；默认值=旧硬编码。pytest + golden 零漂移。
+2. ✅ **档位函数接 config**：`_resonance_tier`/`_rank_trend_tier`/`_lifecycle_tier`/`_volume_price_tier` 接收 `RankTrendConfig` 读取 `tier*`；`_synergy_tier` 移入 `volume_price.py:240` 并读 config。pytest + golden。
+3. ✅ **组装下沉**：新增 `assemble_observation`（`volume_price.py:287`），`_build_signal` 接入（`engine.py:1752-1754`）；`ranktrend_routes.py:384-385` 删重复组装改调用。pytest + golden（API 输出逐字段一致）。
+4. ✅ **交易接入**：`execution.py` 增加 `synergyEntryTierMin`/`synergyExitOnDanger` 门（默认关闭）。pytest（含默认关闭回归）。
+5. ✅ **单调性模块**：新建 `tier_monotonicity.py` + 单测。
+6. ✅ **objective/trial 接入**：`tier_risk_adjusted` + tierStats 注入 + 单测。
+7. ✅ **搜索空间**：§4.1 追加（`search_space.py:44-56`）；`synergyEntryTierMin`/`synergyExitOnDanger` 为交易层参数经 `to_trade_config` 透传（白名单核对见 §4.1 注）。`default_search_space()` 单测。
+8. ⏳ **回测运行与校准**（Phase A/B/C），产出报告，按 §7 验收——纳入长期回测计划。
+9. ⏳ **参数采纳 + golden 更新 + 文档同步**——随长期回测计划推进。
 
 ## 9. 风险与回退
 
 - **默认行为漂移**：所有新字段默认值=旧硬编码；`synergyEntryTierMin` 默认 `"none"`、`synergyExitOnDanger` 默认 `False` → 交易链路行为不变。缓解：每阶段跑 golden 对比。
 - **组装下沉导致 API 输出漂移**：`assemble_observation` 逻辑必须与 routes.py 现组装**逐字段一致**；阶段 3 验收含 API 输出字段级 diff（可加一条断言 observation 结构与下沉前一致的测试）。
-- **str 字段不进自动白名单**：`synergyEntryTierMin` 漏加手工白名单会流入 `to_trade_config`，导致交易层收到未知 key 或参数丢失。阶段 7 单测覆盖。
+- ~~**str 字段不进自动白名单**~~ → **已闭环**：`synergyEntryTierMin`/`synergyExitOnDanger` 是交易层参数（不在 `RankTrendConfig`），`to_trade_config` 对非策略白名单参数**透传保留**进 trade_config 供 `execution.py` 读取（§4.1 注）。曾担心的"漏加白名单导致参数丢失"经核对不存在——透传即期望行为。
 - **单调性样本不足**：S 档/未知档样本可能 <30 或 unknown>5%，此时按 §5.2 惩罚并**不得据此采纳参数**（回到设计讨论），不以整体收益掩盖。
 - **搜索过拟合**：train/validation 拆分 + walk-forward + 基线对照三重防线；参数采纳必须同时满足样本外单调性与收益提升。
 - **量价/周期档位不参与数值搜索**：其底层参数（`volumePrice*`、`lifecycle*`）已在 config 可搜索；若需要改量价/周期档位的**离散映射**（如把 rise_shrink 从 C 改 B），属于规则语义变更，走离散档位设计文档的规则变更流程（单测 + 回测验收），不在本方案数值搜索范围内。
@@ -257,4 +265,4 @@ def score(result, objective, request):   # 现有签名扩展 request
 - 实现前在 `ranktrend-golden.md` 输出合同节补充 `observation.*.signalTier`/`tierReasons` 与 `resonance.signalTier` 字段说明（A 类可调参数入配置节）。
 - `strategy_version` / `ranktrend_version` 提升遵循 `ranktrend-golden.md` 变更管理流程。
 - 回测/前端口径变化同步检查 `backtest-policy.md` 与 `architecture.md`。
-- 本方案为过程文档，落地验收后归档到 `quant-board/docs/` 专题目录。
+- 本方案为过程文档，**已落地并归档**到 `quant-board/docs/ranktrend-tier-backtest/` 专题目录（连同档位设计/参数抽取/四维列/jump 共振研究等四维信号方案文档）。

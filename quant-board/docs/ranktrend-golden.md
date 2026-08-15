@@ -42,7 +42,7 @@ Python Golden replay 也必须对齐这条纯分析链，不再消费 `hotlistSe
 | `buyScoreThreshold` | `0.12` |
 | `sellScoreThreshold` | `-0.12` |
 
-五维观察档位阈值（`docs/ranktrend-signal-tier-backtest-plan.md` §3.1 参数化，默认值 = 旧硬编码，golden 不漂移）：
+五维观察档位阈值（`ranktrend-tier-backtest/ranktrend-signal-tier-backtest-plan.md` §3.1 参数化，默认值 = 旧硬编码，golden 不漂移）：
 
 | 参数 | 默认值 | 消费位置 |
 | --- | --- | --- |
@@ -172,7 +172,7 @@ Python rankTrend 输出应对齐 `RankTrendAnalysisResult`：
 
 ### observation / resonance 档位字段（回测方案 §3.2 组装下沉后）
 
-`rankTrend.observation.*` 与 `rankTrend.resonance` 输出五维离散档位（`docs/ranktrend-observation-discrete-tiers-design.md`）：
+`rankTrend.observation.*` 与 `rankTrend.resonance` 输出五维离散档位（`ranktrend-tier-backtest/ranktrend-observation-discrete-tiers-design.md`）：
 
 - `rankTrend.resonance.signalTier` / `tierReasons`：共振档位（`_resonance_tier` 产出；新入榜分支内联）。
 - `rankTrend.observation.rankTrend.signalTier` / `tierReasons`：趋势档位（`_rank_trend_tier`）。
