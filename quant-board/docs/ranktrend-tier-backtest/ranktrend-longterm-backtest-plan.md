@@ -466,6 +466,31 @@ h8 = 未来 8 帧价格收益 median）：
    "低分位反转入场"可能是唯一有正期望的方向，需另行探索验证；
 4. 评估脚本 `evaluate_strategy_signal_fit.py` / 画像脚本可重复运行，供后续立项复核。
 
+**阶段 6 趋势反转层落地（commit `f3ae177`，2026-08-15，用户决策实施）**：
+
+**A_MAIN 降级观察档（已实施）**：
+- `compose_strategy` / `compose_analysis_candidate_tier`：A_MAIN action 从 focus 降为 **watch**（观察档）；
+- 默认策略 `rank_trend_candidate` 不再自动入场 A_MAIN（高位出货不作买点）；
+- 对照组策略 `a_main_only` / `a_b_combined` 显式保留 A_MAIN 入场供研究对比；
+- 题材引擎独立信号（`theme_rotation`：rotationState=mainline/inflow）与 RankTrend 分层不同源，
+  保留 A_MAIN/B_IGNITION 入场（不随降级）；
+- 受影响测试同步（entry_refinements/synergy_gate 改 a_b_combined、backtest_core/money_flow 改
+  a_main_only 断言），全量 pytest 1587 passed。
+
+**趋势反转层（新增，观察信号）**：
+- `backend/analysis/ranktrend/trend_reversal.py`：`trend_reversal_of` 纯函数判定
+  **低位趋势反转**（当前分位 ≤50 + 此前下行确认 + 当前 rankVelocity>0），6 测试 TDD；
+- `RankTrendPythonEngine.replay` 注入 `rankTrend.trendReversal` 观察标记（分层/前端可消费）；
+- **真实数据验证（769 帧，h8）：trend_reversal 判定 n=6641，winRate 0.491 < 全量 0.5082、
+  无正期望** → 趋势反转层仅作观察/候选标记，**不能直接作为买点**（与研究 v2 结论一致，
+  与"四维信号仅观察"口径统一）；低位反转买点需结合量价/资金/情绪进一步搜索验证。
+
+**后续待办（未立项）**：
+- 搜索"低位反转新买点"：在 trendReversal 判定基础上叠加量价/资金/情绪条件，验证 h8 正期望；
+- 趋势反转层接入分层档位（若搜索验证有正期望，再决定是否作为入场候选）；
+- cycle stage 的 reversal（高位反转）与 cooling（降温）语义边界审视（阶段6 steer 记录：两者
+  位置分离——reversal 分位 84.9 / cooling 39.9，不合并；缺口在 cooling 内缺"低位回升"细分层）。
+
 ## 4. 验收标准汇总
 
 > 2026-08-15 更新（二次修正）：原绝对胜率口径（winRate ≥ 0.80 / validation ≥ 0.70 / walkForward ≥ 0.7）在均值回归主导的目标变量上不可达，已废弃；**主验收改为胜率×盈亏比组合**（用户决策：胜率改收益不如胜率×盈亏比）。
