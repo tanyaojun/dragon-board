@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import pytest
+
 from backend.api.market_data_routes import router
 from backend.services.market.volume_ratio_service import (
     ashare_expected_volume_progress,
@@ -25,6 +27,28 @@ from backend.services.market.volume_ratio_service import (
 
 
 TZ = ZoneInfo("Asia/Shanghai")
+
+
+@pytest.fixture(autouse=True)
+def _clean_volume_ratio_redis_cache() -> None:
+    """隔离 Redis 缓存：volume-ratio:* 键由其它测试（API 路由/富化）共享写入且无 TTL 隔离，
+    本文件断言依赖空缓存（如 test_build_daily_history 期望精确的 3 日序列），
+    故每个测试前清理，避免跨文件/跨用例污染（预存在的环境敏感缺陷修复）。
+    Redis 不可用时 _cache_get/_cache_set 已容错，本 fixture 同样静默跳过。"""
+    from backend.core.settings import get_settings
+    from backend.market_proxy.redis_client import get_hotlist_redis_client
+
+    client = get_hotlist_redis_client(get_settings())
+    if client is None:
+        yield
+        return
+    try:
+        keys = client.keys("volume-ratio:*")
+        if keys:
+            client.delete(*keys)
+    except Exception:
+        pass
+    yield
 
 
 def test_weighted_average_uses_latest_three_positive_finite_volumes() -> None:
