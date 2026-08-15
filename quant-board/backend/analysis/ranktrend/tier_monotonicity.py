@@ -15,6 +15,18 @@ from typing import Any
 TIER_ORDER = ["S", "A", "B", "C"]
 TIER_VALUES = {"S", "A", "B", "C", "D", "E", "unknown"}
 
+# 四维信号（+ synergy 合并）的 signalTier 在 signal 内的路径（阶段 3 区分度诊断）：
+# resonance 由 API 单股链路写入 rankTrend.resonance（replay 链路缺横截面数据，无该维）；
+# 其余四维由 engine 层 assemble_observation / compose_observation_scores 写入 observation.<dim>。
+DIMENSION_PATHS: dict[str, tuple[str, ...]] = {
+    "resonance": ("rankTrend", "resonance", "signalTier"),
+    "rankTrend": ("rankTrend", "observation", "rankTrend", "signalTier"),
+    "volumePrice": ("rankTrend", "observation", "volumePrice", "signalTier"),
+    "lifecycle": ("rankTrend", "observation", "lifecycle", "signalTier"),
+    "synergy": ("rankTrend", "observation", "synergy", "signalTier"),
+}
+DEFAULT_DIMENSION = "synergy"
+
 # 硬约束阈值（回测方案 §5.2）
 MIN_S_SAMPLES = 30
 MIN_SA_DIRECTION_ACCURACY = 0.60
@@ -22,10 +34,17 @@ MAX_UNKNOWN_RATE = 0.05
 D_E_BELOW_C_DELTA = 0.005  # D/E 比 C 低 0.5 个百分点（0-1 刻度）
 
 
-def tier_signal_of(signal: dict[str, Any]) -> str:
-    """读取 signal 的 synergy 档位；缺字段/非法值回退 'unknown'（不伪装、不归零）。"""
-    tier = ((((signal or {}).get("rankTrend") or {}).get("observation") or {}).get("synergy") or {}).get("signalTier")
-    return str(tier) if tier in TIER_VALUES else "unknown"
+def tier_signal_of(signal: dict[str, Any], dimension: str = DEFAULT_DIMENSION) -> str:
+    """读取指定维度（synergy/共振/趋势/量价/周期）的 signalTier；缺字段/非法值回退 'unknown'（不伪装、不归零）。"""
+    path = DIMENSION_PATHS.get(dimension)
+    if path is None:
+        return "unknown"
+    current: Any = signal or {}
+    for key in path:
+        if not isinstance(current, dict):
+            return "unknown"
+        current = current.get(key)
+    return str(current) if current in TIER_VALUES else "unknown"
 
 
 def _percentile(rank: float, total: int) -> float:
@@ -52,19 +71,21 @@ def tier_forward_returns(
     signals: list[dict[str, Any]],
     frames: list[dict[str, Any]],
     horizon: int = 3,
+    dimension: str = DEFAULT_DIMENSION,
 ) -> dict[str, Any]:
-    """按 synergy.signalTier 分层统计未来 horizon 帧的相对排名收益。
+    """按指定维度 signalTier 分层统计未来 horizon 帧的相对排名收益。
 
     收益口径：该股该帧 signalTier 在未来 horizon 帧的 percentileDelta
     （percentile(future_rank) - percentile(current_rank)，归一化 0-1 刻度）；
     directionAccuracy = buy 类档位（S/A/B）中 percentileDelta > 0 的比例。
     帧边界不足/股票缺失 → 该样本不计入（found=False），不伪造收益。
+    dimension 支持 resonance/rankTrend/volumePrice/lifecycle/synergy（阶段 3 四维诊断）。
     """
     index_by_snapshot, stock_by_frame_code = _build_lookup(frames)
     totals = len(frames)
     by_tier: dict[str, list[float]] = {tier: [] for tier in TIER_VALUES}
     for signal in signals:
-        tier = tier_signal_of(signal)
+        tier = tier_signal_of(signal, dimension)
         code = str(signal.get("code") or "")
         entry = index_by_snapshot.get(str(signal.get("snapshotId")))
         if entry is None or entry + horizon >= totals:
@@ -202,4 +223,51 @@ def tier_monotonicity_score(stats: dict[str, Any] | None) -> dict[str, Any]:
         "reversals": monotonicity.get("reversals") or [],
         "unknownRate": stats.get("unknownRate"),
         "checks": monotonicity.get("checks") or {},
+    }
+
+
+def tier_discrimination(stats: dict[str, Any] | None) -> dict[str, Any]:
+    """档位区分度指标（阶段 3 四维信号区分度诊断）。
+
+    从 tier_forward_returns 输出中提取"档位 → 未来收益/方向精度"的分离度：
+    - sMinusC / aMinusC：S/A 档相对 C 档的未来收益差（>0 且越大区分度越强）；
+    - tierSpread：S/A/B/C 档收益极差（0-1 刻度）；
+    - saDirectionAccuracy：S/A 合并方向精度（样本池加权，无样本时 None 不伪造）；
+    - cDirectionAccuracy：C 档方向精度（对照组）；
+    - deVsC：D/E 中最差档相对 C 的收益差（应 < 0，反向风险档低于中性档）；
+    - positiveMonotonic：Spearman>0 且无相邻反转（阶段 3 验收"tierDiscrimination 呈正单调"）。
+    fail-visible：样本不足的档位返回 None/如实数值，不静默吞掉、不用 0 伪装。
+    """
+    stats = stats or {}
+    tiers = stats.get("tiers") or {}
+    monotonicity = stats.get("monotonicity") or {}
+
+    def ret(tier: str) -> float | None:
+        return (tiers.get(tier) or {}).get("meanFutureReturn")
+
+    def acc(tier: str) -> float | None:
+        return (tiers.get(tier) or {}).get("directionAccuracy")
+
+    s, a, c = ret("S"), ret("A"), ret("C")
+    d, e = ret("D"), ret("E")
+    present = [value for value in (s, a, ret("B"), c) if value is not None]
+    s_count = (tiers.get("S") or {}).get("count") or 0
+    a_count = (tiers.get("A") or {}).get("count") or 0
+    sa_total = s_count + a_count
+    sa_accuracy = (
+        (s_count * (acc("S") or 0) + a_count * (acc("A") or 0)) / sa_total if sa_total > 0 else None
+    )
+    de_values = [value for value in (d, e) if value is not None]
+    worst_de = min(de_values) if de_values else None
+    spearman = monotonicity.get("spearmanRankCorr")
+    return {
+        "sMinusC": round(s - c, 6) if s is not None and c is not None else None,
+        "aMinusC": round(a - c, 6) if a is not None and c is not None else None,
+        "tierSpread": round(max(present) - min(present), 6) if present else None,
+        "saDirectionAccuracy": round(sa_accuracy, 4) if sa_accuracy is not None else None,
+        "cDirectionAccuracy": acc("C"),
+        "deVsC": round(worst_de - c, 6) if worst_de is not None and c is not None else None,
+        "positiveMonotonic": bool(
+            spearman is not None and spearman > 0 and not (monotonicity.get("reversals") or [])
+        ),
     }

@@ -1,6 +1,6 @@
 # 四维信号长期回测计划与性能优化方案
 
-> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2（数据质量治理）已落地（commit `58878dc`），阶段 3-4 待推进
+> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2（数据质量治理）已落地（commit `58878dc`），阶段 3（四维信号区分度诊断）已落地（见下文，验收未过 → 暂停阶段 4），阶段 4 待推进
 > 日期：2026-08-15
 > 归档位置：本文档与四份四维信号方案文档统一存入 `quant-board/docs/ranktrend-tier-backtest/`
 
@@ -103,6 +103,37 @@ A 减约 80% 传输 + B 让交易层 trial 秒级完成 + C 并行 → 24 trials
 - 排查方向定义、阈值、权重，以及「量价涨停可交易性」等已改口径是否引入偏差。
 - **验收**：各维 `directionAccuracy ≥ 0.55`、tierDiscrimination 呈正单调；否则先修信号算法，**暂停阶段 4**。
 
+**已落地（commit 待补，2026-08-15）**。诊断工具：`tier_monotonicity.py` 扩展按维度分层
+（`DIMENSION_PATHS` + `tier_forward_returns(dimension=...)` + `tier_discrimination`），
+诊断脚本 `backend/operations/diagnose_tier_discrimination.py`（只读 Mongo → replay → 五维诊断，
+报告 `data/reports/tier-discrimination.json`）。真实数据窗口与阶段 2 一致（2026-04-15~08-14，
+**769 帧 / 156647 信号**，half_hour），horizon 1/3/8：
+
+| 维度 | S/A/B 方向精度 (h1) | sMinusC (h1) | 单调性 (h1) | 结构问题 |
+|---|---|---|---|---|
+| 共振 resonance | 无样本（全部 unknown） | None | 不可评 | **replay 链路 100% 缺共振维**（`_build_signal` 不调 `analyze_rank_resonance`，缺横截面 median → 缺票 vote=0） |
+| 趋势 rankTrend | S 0.468 / A 0.445 | +0.0092 | spearman 0.8 但 B<C 反转 | S/A 精度 < 0.5；**D 档（卖出）未来收益为正**（h3 +0.016 / h8 +0.035，acc 0.52~0.55）→ 热榜排名均值回归主导 |
+| 量价 volumePrice | A 0.416 | None（无 S 档） | spearman −0.5 | **状态机无 S 档**（最高 A）；unknown 15.7% |
+| 周期 lifecycle | A 0.444 | None（无 S 档） | h1 −1.0 / h3+ 正（仅 A/B 两档） | **无 S/C 档**；A（优选）收益为负 −0.0097 |
+| 合并 synergy | S 0.468（A 档 n=0） | **−0.0054（负区分度）** | spearman −0.5 | **S 收益 −0.0056 < B +0.0022，档位序反向**；A 档不可达（`_synergy_tier` 投票需 v≥2 且 lc∉{A,B,D}，而周期只有 A/B/D/E → A 分支永远落空，全被降档/否决） |
+
+**验收判定：FAIL**——按原始验收线（各维 directionAccuracy≥0.55、tierDiscrimination 正单调），五维全部未达标
+（方向精度 0.36~0.49）。**按计划暂停阶段 4，先修信号算法。**
+
+**重要补充——均值回归基准（2026-08-15，同窗口 769 帧）**：对"当前排名百分位"分桶（0-9…90-99）统计未来
+percentileDelta（不加任何信号），热榜排名收益存在**强均值回归**：
+
+| 当前分位桶 | h1 mean / acc | h3 mean / acc | h8 mean / acc |
+|---|---|---|---|
+| 0-9（垫底） | +0.062 / 0.58 | +0.121 / 0.73 | +0.194 / 0.84 |
+| 40-49 | −0.010 / 0.41 | −0.008 / 0.47 | +0.007 / 0.49 |
+| 90-99（榜首） | −0.012 / 0.36 | −0.034 / 0.33 | −0.077 / 0.27 |
+
+含义：**"追强"档位（S/A）天然处于高分位，其原始 directionAccuracy 会被均值回归基线拉低到 0.5 以下**——
+原始验收线对强信号不可达。对照同分位基准：趋势维 S 档 acc 0.468 vs 90-99 分位基线 0.363（h1），
+**高出约 10 个百分点 → 信号在控制分位后仍有正增量信息**，不能据此断言信号无效。
+真正的结构问题见 §5.1（共振维缺失 / 档位分布畸形 / 评估口径未条件化）。
+
 ### 阶段 4：参数搜索 + 样本外验证 + 滚动迭代
 
 - 4.1 交易层参数粗搜（random，win_rate + 盈亏比约束）。
@@ -130,3 +161,24 @@ A 减约 80% 传输 + B 让交易层 trial 秒级完成 + C 并行 → 24 trials
 3. 阶段 3 若诊断出信号算法需改，先修信号，不修地基就调参是浪费算力。
 4. 纯 win_rate 目标会倾向「少而精 / 紧止损」刷胜率，必须配合 profitFactor / tradeCount 约束。
 5. 阶段 1 的方案 B/C 引入 Redis 与多进程，需评估部署影响（Redis 缓存已有专题文档：仓库根目录 `docs/ranktrend-redis-cache/`，含 `design.md`/`implementation-plan.md` 等）。
+
+### 5.1 阶段 3 修复方向（验收未过，暂停阶段 4）
+
+阶段 3 诊断结论（见上文）：按原始验收线五维方向精度全部 < 0.55、tierDiscrimination 全部非正单调；
+但均值回归基准表明"追强"档位原始 acc 被高分位基线拉低，信号在控制分位后仍有正增量信息。
+修复候选方向（按影响面排序，均需先做根因量化、再 TDD 小步落地、跑 golden + 全量 pytest + 重跑诊断验收）：
+
+1. **补共振维进 replay 链路**（结构性缺失，最优先）：replay 的 `_build_signal` 不计算
+   `analyze_rank_resonance`（缺横截面市场 median），synergy 实际是 3 维投票，共振维 100% 缺票。
+   方案：在 replay 内按帧计算 market median / market_median_percentile（与 API 链路 `_analyze_one_stock`
+   同口径），组装时传入 resonance 参与投票；golden 对齐 API 输出。这是唯一能恢复"四维"语义的修复。
+2. **评估口径升级为分位条件化（方法论修正，基准已完成量化）**：排名收益强均值回归（高 90-99 分位桶
+   h1 acc 仅 0.36 / h8 0.27），原始 directionAccuracy 验收线对追强档位不可达。诊断与验收改为
+   **对照同分位桶基线的超额精度（excess accuracy）**：S 档 acc 0.468 vs 90-99 分位基线 0.363 → +0.105 增量。
+   验收线从"abs ≥ 0.55"改为"excess ≥ 0.05 且正单调"（具体阈值随修复落地校准）。
+3. **重排档位投票/降档逻辑**：synergy A 档不可达（投票需 v≥2 且 lc∉{A,B,D}，而周期只有 A/B/D/E）、
+   量价无 S 档、周期无 S/C 档——S/A 强档样本量不足且语义被降档规则扭曲；修复后需重跑诊断确认
+   档位分布与区分度。
+
+验收线（修复后重跑诊断）：各维 excess accuracy（对照同分位基准）≥ 0.05 且 tierDiscrimination 正单调，
+再进入阶段 4 参数搜索。

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from backend.analysis.ranktrend.tier_monotonicity import (
     TIER_ORDER,
+    tier_discrimination,
     tier_forward_returns,
     tier_monotonicity_score,
     tier_signal_of,
@@ -164,3 +165,105 @@ def test_sa_accuracy_without_a_samples_not_penalized() -> None:
 def test_tier_order_constant() -> None:
     """档位序 S>A>B>C 为单调性验证基线（D/E 不参与正向链）。"""
     assert TIER_ORDER == ["S", "A", "B", "C"]
+
+
+# ─── 阶段 3：四维信号区分度诊断——按维度分层 ───
+
+
+def _multi_dimension_signal(
+    tiers: dict[str, str],
+) -> dict:
+    """按维度路径构造 signal：resonance 在 rankTrend.resonance，其余在 rankTrend.observation.<dim>。"""
+    return {
+        "rankTrend": {
+            "resonance": {"signalTier": tiers["resonance"]},
+            "observation": {
+                "rankTrend": {"signalTier": tiers["rankTrend"]},
+                "volumePrice": {"signalTier": tiers["volumePrice"]},
+                "lifecycle": {"signalTier": tiers["lifecycle"]},
+                "synergy": {"signalTier": tiers["synergy"]},
+            },
+        }
+    }
+
+
+def test_tier_signal_of_dimension_paths() -> None:
+    """各维度 signalTier 按各自路径读取；默认维度为 synergy（向后兼容）。"""
+    signal = _multi_dimension_signal(
+        {"resonance": "S", "rankTrend": "A", "volumePrice": "B", "lifecycle": "C", "synergy": "D"}
+    )
+    assert tier_signal_of(signal, "resonance") == "S"
+    assert tier_signal_of(signal, "rankTrend") == "A"
+    assert tier_signal_of(signal, "volumePrice") == "B"
+    assert tier_signal_of(signal, "lifecycle") == "C"
+    assert tier_signal_of(signal, "synergy") == "D"
+    assert tier_signal_of(signal) == "D"  # 默认 synergy
+
+
+def test_tier_signal_of_dimension_missing_falls_back() -> None:
+    """维度缺字段 / 非法值 → 'unknown'（fail-visible：不伪装、不归零）。"""
+    signal = {"rankTrend": {"observation": {}}}
+    assert tier_signal_of(signal, "resonance") == "unknown"
+    assert tier_signal_of(signal, "volumePrice") == "unknown"
+    assert tier_signal_of(signal, "rankTrend") == "unknown"
+    signal["rankTrend"]["resonance"] = {"signalTier": "X"}
+    assert tier_signal_of(signal, "resonance") == "unknown"
+
+
+def test_tier_forward_returns_layers_by_dimension() -> None:
+    """同一批 signals 按不同维度分层：rankTrend 维 S 升 A 平 C 降 → 单调；
+    volumePrice 维（同一批股票）反向 C 升 S 降 → 不单调。验证 dimension 参数真正生效。"""
+    tier_block = ["S"] * 30 + ["A"] * 20 + ["C"] * 10
+    frame0 = list(range(31, 61)) + list(range(11, 31)) + list(range(1, 11))
+    frame1 = list(range(1, 31)) + list(range(10, 30)) + list(range(31, 41))
+    frames, _ = _frames_and_signals(tier_block, frame0, frame1)
+    signals = [
+        _multi_dimension_signal(
+            {
+                # rankTrend 维与档位块一致；volumePrice 维故意反向（S 块实际下跌）
+                "resonance": tier,
+                "rankTrend": tier,
+                "volumePrice": {"S": "C", "A": "B", "C": "S"}[tier],
+                "lifecycle": "B",
+                "synergy": tier,
+            }
+        )
+        | {"snapshotId": "s0", "code": f"{i:06d}"}
+        for i, tier in enumerate(tier_block)
+    ]
+    rank_trend_stats = tier_forward_returns(signals, frames, horizon=1, dimension="rankTrend")
+    assert rank_trend_stats["tiers"]["S"]["count"] == 30
+    assert rank_trend_stats["tiers"]["S"]["meanFutureReturn"] > rank_trend_stats["tiers"]["C"]["meanFutureReturn"]
+    assert rank_trend_stats["monotonicity"]["passHardConstraint"] is True
+
+    vp_stats = tier_forward_returns(signals, frames, horizon=1, dimension="volumePrice")
+    assert vp_stats["tiers"]["S"]["count"] == 10  # 原 C 块（rank 1-10）被映射为 S
+    assert vp_stats["tiers"]["S"]["meanFutureReturn"] < 0
+    assert vp_stats["tiers"]["C"]["count"] == 30  # 原 S 块被映射为 C
+    assert vp_stats["tiers"]["C"]["meanFutureReturn"] > 0
+    assert vp_stats["monotonicity"]["passHardConstraint"] is False
+
+
+def test_tier_discrimination_contract() -> None:
+    """tier_discrimination 输出区分度指标：S−C 收益差、S/A 方向精度、D/E 相对 C、档位收益极差、正单调。"""
+    frames, signals = _monotonic_passing_fixture()
+    stats = tier_forward_returns(signals, frames, horizon=1)
+    disc = tier_discrimination(stats)
+    assert disc["sMinusC"] is not None and disc["sMinusC"] > 0
+    assert disc["aMinusC"] is not None
+    assert disc["tierSpread"] is not None and disc["tierSpread"] > 0
+    assert disc["saDirectionAccuracy"] >= 0.6
+    assert disc["positiveMonotonic"] is True
+    assert disc["deVsC"] is None or disc["deVsC"] < 0  # 无 D/E 样本时为 None，不伪造
+
+
+def test_tier_discrimination_detects_non_monotonic() -> None:
+    """A 收益 < B（反转）→ positiveMonotonic=False，sMinusC 仍如实输出（不隐藏数据）。"""
+    tiers = ["S"] * 30 + ["A"] * 20 + ["B"] * 10
+    frame0 = list(range(31, 61)) + list(range(11, 31)) + list(range(6, 16))
+    frame1 = list(range(1, 31)) + list(range(11, 31)) + list(range(1, 11))
+    frames, signals = _frames_and_signals(tiers, frame0, frame1)
+    stats = tier_forward_returns(signals, frames, horizon=1)
+    disc = tier_discrimination(stats)
+    assert disc["positiveMonotonic"] is False
+    assert "sMinusC" in disc  # 无 C 样本时如实为 None，不伪造
