@@ -1,6 +1,6 @@
 # 四维信号长期回测计划与性能优化方案
 
-> 状态：待复审（未提交）
+> 状态：阶段 1（性能改造）已落地（commit `b4c9091`~`dce716b`），阶段 2-4 待推进
 > 日期：2026-08-15
 > 归档位置：本文档与四份四维信号方案文档统一存入 `quant-board/docs/ranktrend-tier-backtest/`
 
@@ -51,15 +51,15 @@ winRate ≥ 0.80 且 tradeCount ≥ 60 且 profitFactor ≥ 1.3
 
 ### 2.1 方案 A — 数据访问层瘦身（最小，最先）
 
-- `load_frames` 增加**字段白名单 projection**（只拉引擎需要的 ~15 字段），替代 `projection="full"`。
-- 股票行查询改**游标分批**（`limit + batch`），避免一次全拉 57 万行到内存。
+- `load_frames` 增加**字段白名单 projection**（只拉引擎需要的 ~15 字段），替代 `projection="full"`。**已落地**：`BACKTEST_RANKTREND_STOCK_FIELDS`（`backend/services/shared.py`）+ `load_frames(fields=...)`（`backend/data/repositories/mongo_repository.py`）+ 优化链路传参（`backend/services/optimization_service.py:293`）。
+- 股票行查询改**游标分批**（`limit + batch`），避免一次全拉 57 万行到内存。**已落地**：`_stock_rows_by_snapshot` 按 `_STOCK_ROWS_BATCH_SIZE=200` 分批（`mongo_repository.py`，组内保持 rank 排序）。
 - 日期过滤补全到回测服务（优化侧已做，见 `optimization_service._build_request`）。
 - Mongo 连接/服务器选择超时已调大（`connect 10000ms` / `serverSelection 15000ms`）。
 
 ### 2.2 方案 B — 信号/中间量缓存（核心收益，Redis）
 
 - **参数分组**：搜索空间参数拆成「信号层参数」（macd/tier 阈值，决定 `replay` 输出）与「交易层参数」（stopLoss/takeProfit/maxPositions，只影响撮合）。
-- 交易层参数变化时**复用已算信号**（`signal_cache` 键去掉交易层参数）。
+- 交易层参数变化时**复用已算信号**（`signal_cache` 键去掉交易层参数）。**已落地（进程内）**：`_signal_cache_key`（`backend/optimization/trial.py`）键只含 `to_strategy_config` 过滤后的 `RankTrendConfig` 字段，`strategyRunCount` 可用于度量复用率；Redis 跨运行缓存为后续里程碑。
 - Redis 缓存帧 + 信号（以 `config_hash` 为键），跨优化运行复用，避免每次重算。
 - 中间量（动量 / 技术 / 生命周期）按参数独立性分层缓存，能复用则复用。
 
