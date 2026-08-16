@@ -63,6 +63,7 @@ export interface UploadPayload {
 
 export type StrategyName =
   | "rank_trend_candidate"
+  | "rank_trend_four_dim"
   | "ranktrend_early_big_move_v3_lifecycle_fusion"
   | "hot_top10"
   | "a_main_only"

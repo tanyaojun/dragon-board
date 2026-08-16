@@ -49,7 +49,7 @@ const strategyOptions: Array<{ value: StrategyName; label: string; description: 
   {
     value: "rank_trend_candidate",
     label: "RankTrend 候选池",
-    description: "A_MAIN + 连续确认 B_IGNITION，当前正式策略"
+    description: "四维信号×资金入场主轴（synergy S/A + zljzb≥0 + 非生命周期 veto），当前正式策略"
   },
   {
     value: "ranktrend_early_big_move_v3_lifecycle_fusion",
@@ -2650,8 +2650,8 @@ onMounted(async () => {
             <div class="inline-note">信号解释展示策略判断，不代表真实成交。真实成交请查看交易明细。</div>
             <div class="diagnostic-grid compact-diagnostic">
               <div><span>信号总数</span><b>{{ signalSummary.total }}</b></div>
-              <div><span>强候选 A_MAIN</span><b>{{ signalSummary.strongCandidates }}</b></div>
-              <div><span>观察 B_IGNITION</span><b>{{ signalSummary.watchCandidates }}</b></div>
+              <div><span>A_MAIN 档（扩散确认）</span><b>{{ signalSummary.strongCandidates }}</b></div>
+              <div><span>B_IGNITION 档（点火）</span><b>{{ signalSummary.watchCandidates }}</b></div>
               <div><span>剔除/风险候选</span><b>{{ signalSummary.excludedCandidates }}</b></div>
               <div><span>买入信号</span><b>{{ signalSummary.signalCounts.buy || 0 }}</b></div>
               <div><span>观察信号</span><b>{{ signalSummary.signalCounts.watch || 0 }}</b></div>
