@@ -659,32 +659,57 @@ def _exit_signal(rank: float = 60.0, avg_rank_num: float | None = 85.0) -> dict:
     return s
 
 
+def _exit_pos(entry_avg_rank_num: float | None = 60.0) -> dict:
+    return {"entryAvgRankNum": entry_avg_rank_num}
+
+
 def test_rank_exit_default_uses_rank_field() -> None:
     """默认 rankExitField=rank：signal.rank > 50 退出（现状不变）。"""
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60.0), {}) is True
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=50.0), {}) is False
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=20.0), {}) is False
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60.0), {}, {}) is True
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=50.0), {}, {}) is False
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=20.0), {}, {}) is False
 
 
-def test_rank_exit_avgranknum_field() -> None:
-    """rankExitField=avgranknum：avgRankNum > avgRankNumExitMax(默认80) 才退出。"""
+def test_rank_exit_avgranknum_relative_delta() -> None:
+    """rankExitField=avgranknum：当前 avgRankNum 比入场恶化 > avgRankNumExitDelta(默认20) 才退出。"""
     cfg = {"rankExitField": "avgranknum"}
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=200, avg_rank_num=90.0), cfg) is True
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=200, avg_rank_num=80.0), cfg) is False
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=200, avg_rank_num=70.0), cfg) is False
-    # 低位入场：rank 恒>50 但 avgRankNum 尚未恶化 → 不退出（修复核心场景）
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=117, avg_rank_num=65.0), cfg) is False
+    # 入场 60 → 当前 85：恶化 +25 > 20 → 退出
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(rank=200, avg_rank_num=85.0), _exit_pos(entry_avg_rank_num=60.0), cfg
+    ) is True
+    # 恶化 +20 = 阈值 → 不退出（严格大于）
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(rank=200, avg_rank_num=80.0), _exit_pos(entry_avg_rank_num=60.0), cfg
+    ) is False
+    # 恶化 +5 → 不退出（低位入场容忍正常波动，修复核心场景：rank 恒>50 但不误踢）
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(rank=117, avg_rank_num=65.0), _exit_pos(entry_avg_rank_num=60.0), cfg
+    ) is False
+    # 排名改善（当前 < 入场）→ 不退出
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(rank=200, avg_rank_num=40.0), _exit_pos(entry_avg_rank_num=60.0), cfg
+    ) is False
 
 
-def test_rank_exit_avgranknum_threshold_config() -> None:
-    """avgRankNumExitMax 可配置。"""
-    cfg = {"rankExitField": "avgranknum", "avgRankNumExitMax": 70.0}
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(avg_rank_num=75.0), cfg) is True
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(avg_rank_num=65.0), cfg) is False
+def test_rank_exit_avgranknum_delta_config() -> None:
+    """avgRankNumExitDelta 可配置。"""
+    cfg = {"rankExitField": "avgranknum", "avgRankNumExitDelta": 10.0}
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(avg_rank_num=75.0), _exit_pos(entry_avg_rank_num=60.0), cfg
+    ) is True
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(avg_rank_num=65.0), _exit_pos(entry_avg_rank_num=60.0), cfg
+    ) is False
 
 
 def test_rank_exit_avgranknum_missing_field_fail_visible() -> None:
-    """切换 avgranknum 但信号缺 avgRankNum → False（不误杀，交其他退出条件判断）。"""
+    """切换 avgranknum 但缺 pos/entryAvgRankNum/当前 avgRankNum → False（不误杀）。"""
     cfg = {"rankExitField": "avgranknum"}
-    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60, avg_rank_num=None), cfg) is False
-    assert TradeSimulator._rank_exit_triggered({"rank": 60}, cfg) is False
+    assert TradeSimulator._rank_exit_triggered(
+        _exit_signal(rank=60, avg_rank_num=None), _exit_pos(), cfg
+    ) is False
+    assert TradeSimulator._rank_exit_triggered(
+        {"rank": 60}, _exit_pos(), cfg
+    ) is False
+    # 缺 pos（entryAvgRankNum 无从取）→ False
+    assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60), None, cfg) is False

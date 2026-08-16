@@ -169,7 +169,7 @@ class TradeSimulator:
                         final_signal == "sell"
                         or signal["candidateTier"] == "D_EXIT_RISK"
                         or (signal["candidateTier"] == "C_CROWDED" and _crowded_accel <= 0)
-                        or TradeSimulator._rank_exit_triggered(signal, config, strategy_key)
+                        or TradeSimulator._rank_exit_triggered(signal, pos, config, strategy_key)
                         or synergy_danger_exit
                         or synergy_downgrade_exit
                     )
@@ -261,7 +261,7 @@ class TradeSimulator:
                 used = entry_amount + entry_fee
                 cash -= used
                 entry_reason = self._entry_reason(signal, frames, signal_idx, signal_by_snapshot_code, strategy_key)
-                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
+                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryAvgRankNum": signal.get("avgRankNum"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
                 trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal["snapshotId"], "code": signal["code"], "name": signal["name"], "action": "buy", "executionMode": execution_mode, "price": entry_price, "quantity": quantity, "rank": signal["rank"], "reason": entry_reason, "explanation": self._signal_explanation(signal, f"买入：{entry_reason}"), "candidateTier": signal["candidateTier"], "stage": signal.get("stage"), "regime": signal.get("regime"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
             market_value = sum(pos["quantity"] * float((signal_by_code.get(code) or {}).get("price") or pos.get("lastPrice") or pos["entryPrice"]) for code, pos in positions.items())
             equity.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "equity": round(cash + market_value, 2), "cash": round(cash, 2), "marketValue": round(market_value, 2), "positionCount": len(positions)})
@@ -1231,26 +1231,36 @@ class TradeSimulator:
     @staticmethod
     def _rank_exit_triggered(
         signal: dict[str, Any],
+        pos: dict[str, Any] | None,
         config: dict[str, Any] | None,
         strategy_key: str = "rank_trend_candidate",
     ) -> bool:
-        """排名恶化退出判定（阶段6 修复：低位弱转强入场用 avgRankNum 而非绝对 rank）。
+        """排名恶化退出判定（阶段6 修复：低位弱转强入场用 avgRankNum 相对恶化而非绝对 rank）。
 
         - rankExitField="rank"（默认）：保持现状 signal.rank > 50（重排序号，子集内跌出前 50）；
-        - rankExitField="avgranknum"（trend_reversal_jump 低位入场推荐）：用 avgRankNum 百分位
-          （0-100，**数值越大 = 排名越靠后**），跌破阈值 avgRankNumExitMax（默认 80 = 跌到后 20%）
-          才退出——避免低位入场（rank 恒 >50）一入场即被"跌出前50"误踢，给价格波动留出空间。
-        fail-visible：切换 avgranknum 但信号缺 avgRankNum 字段 → False（不误杀，交其他退出条件判断）。
+        - rankExitField="avgranknum"（trend_reversal_jump 低位入场推荐）：**相对恶化**——
+          当前 avgRankNum 比入场时（pos.entryAvgRankNum）恶化超过 avgRankNumExitDelta（默认 20
+          个百分点）才退出。avgRankNum 是 0-100 百分位（数值越大 = 排名越靠后），相对增量对
+          低位入场（初始 avgRankNum 即偏高）公平；绝对阈值（avgRankNumExitMax）2026-08-16
+          实测证伪（wrXpf 0.537→0.469，延迟退出放大亏损）。
+        fail-visible：avgranknum 模式缺 pos/entryAvgRankNum/当前 avgRankNum → False（不误杀，
+        交其他退出条件判断）。
         """
         field = str((config or {}).get("rankExitField") or "rank").strip().lower()
         if field == "avgranknum":
-            value = signal.get("avgRankNum")
-            if value is None:
+            entry_avg = (pos or {}).get("entryAvgRankNum")
+            current_avg = signal.get("avgRankNum")
+            if entry_avg is None or current_avg is None:
                 return False
             try:
-                return float(value) > float((config or {}).get("avgRankNumExitMax", 80.0))
+                delta = float(current_avg) - float(entry_avg)
             except (TypeError, ValueError):
                 return False
+            try:
+                threshold = float((config or {}).get("avgRankNumExitDelta", 20.0))
+            except (TypeError, ValueError):
+                threshold = 20.0
+            return delta > threshold
         return bool(signal.get("rank", 0) > 50)
 
     @staticmethod
@@ -1272,7 +1282,7 @@ class TradeSimulator:
             return "compose_decision 卖出信号"
         if signal["candidateTier"] == "D_EXIT_RISK":
             return "D_EXIT_RISK"
-        if TradeSimulator._rank_exit_triggered(signal, config, strategy_key):
+        if TradeSimulator._rank_exit_triggered(signal, pos, config, strategy_key):
             return "排名恶化退出"
         if pos["holdingBars"] >= config["maxHoldingBars"]:
             return "到达最大持有快照"

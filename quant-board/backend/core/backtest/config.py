@@ -43,9 +43,11 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "trendReversalJumpMagMin": 20.0,
     "trendReversalJumpFreshMin": 0.0,
     # 排名恶化退出判定字段（阶段6 修复）：默认 "rank" 保持现状（重排序号>50）；
-    # 低位弱转强策略（trend_reversal_jump）建议 "avgranknum"（avgRankNum 百分位>avgRankNumExitMax）
+    # 低位弱转强策略（trend_reversal_jump）建议 "avgranknum"——相对恶化：
+    # 当前 avgRankNum 比入场时恶化超过 avgRankNumExitDelta（默认 20 个百分点）才退出
+    # （绝对阈值 avgRankNumExitMax 2026-08-16 实测证伪，改为相对增量语义）
     "rankExitField": "rank",
-    "avgRankNumExitMax": 80.0,
+    "avgRankNumExitDelta": 20.0,
 }
 
 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {
