@@ -1,7 +1,7 @@
 # RankTrend 四维观察信号离散规则评分设计方案
 
 > 主题：【共振】【趋势】【量价】【周期】四维观察信号评分算法优化
-> 状态：设计稿（未实现）
+> 状态：**已实现**（阶段 3 三方向修复 + vote v4 语义校准已落地，见 `ranktrend-signal-tier-backtest-plan.md` §3-§5；2026-08-16 按生命周期区分度结论补充注记）
 > 范围：四维一次做完（共振 / 趋势 / 量价 / 周期 + 四维合并）
 > 落位：Python golden `quant-board/backend/analysis/ranktrend/`（生产）+ Dragon Board 前端展示（消费）
 
@@ -136,6 +136,16 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
 
 说明：`lifecycle.veto` 字段保留；`score`（机会成熟度）保留为排序键。档位规则与 `compose_strategy` 的 A_MAIN/B_IGNITION 候选池分层不冲突——前者是观察信号、后者是候选池分层。
 
+> **2026-08-16 注记（生命周期区分度结论，见 `ranktrend-lifecycle-threshold-optimization-design.md` §8.2）**：
+> 生命周期档位（A/B/C/D/E）是**环境状态标记，不是方向预测力**。坐标下降搜索证明：A 档
+> （allow+ignition/expansion，样本 21475）h8 excess 0.0092 **反低于** B 档（caution，样本 1877）
+> 0.0228，且该关系是分位结构性差异（A 高分位混杂被均值回归拉低），阈值不可调。因此：
+> - **前端展示**：周期列改为"环境门标签"（stage 中文 + 环境色 + veto 角标），**不做方向色徽章**
+>   （见 `ranktrend-four-dimension-column-plan.md` §2.1）；
+> - **四维合并**：周期仍只作环境门（§7 规则 1/5，veto 否决 / caution/回避 降档），不参与方向投票；
+> - **单维验收豁免**：§9 单调性验收对生命周期维度不适用（无 S 档、A/B 区分受分位结构限制），
+>   生命周期验收以"环境门正确性"（veto 是否生效、回避是否降档）为准。
+
 ## 7. 四维合并（观察信号总档）
 
 合并语义：**周期是环境门（是否允许入场），共振/趋势/量价是方向信号（投票）**，二者角色不同，不可混同计票。
@@ -194,7 +204,7 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
 
 - **不改动**：`score`、`direction`、`label`、`stage`、`quadrant`、`breakdown`、`reasons`、`decision.*`、`strategy.*` 等全部现有字段与语义。
 - 快照落库：`signalTier` 为派生展示字段，默认不写入 `snapshot_stock_rows`；如需落库须同步 `supabase_schema.sql` 与 `snapshot_repository.py` 映射（默认不落库，避免污染快照合同）。
-- TS 消费：`src/services/rankTrend/types.ts` 的 `RankTrendAnalysisResult.observation` 补充可选字段；`DataTable.vue` 四列改为"方向箭头 + 档位徽章 + 连续分（悬停显示）"。
+- TS 消费：`src/services/rankTrend/types.ts` 的 `RankTrendAnalysisResult.observation` 补充可选字段；`DataTable.vue` 共振/趋势/量价三列改为"方向箭头 + 档位徽章 + 连续分"，**周期列改为环境门标签**（stage 中文 + 环境色 + veto 角标，不做方向徽章——2026-08-16 优化，见 `ranktrend-four-dimension-column-plan.md` §2.1）；新增【四维】synergy 总档列置末。
 
 ## 9. 回测验证方案（证明规则有效性）
 
@@ -207,6 +217,10 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
    - D/E 档收益显著低于 C 档（负收益或明显偏低）；
    - S/A 档方向精度 ≥ 60%；
    - `unknown` 档占比 < 5%（否则说明样本门限过严）。
+   - **生命周期维度豁免**（2026-08-16 结论）：lifecycle 合法档位 A/B/C/D/E（无 S），A/B 区分
+     受分位结构限制（坐标下降证明不可调），单调性验收对该维度不适用；以"环境门正确性"
+     （veto 生效 / caution、cooling 回避降档）为准。阶段 3 实际验收口径：**synergy 合并档**
+     S/A/B excess 单调（0.088/0.039/-0.006，passHard=True）达标，单维不强制。
 4. 工具：沿用 QuantBoard 回测主链（`backend/core/backtest`）或直接对 frames API 输出做统计脚本；结果报告到 `quant-board/data/reports/`，不落库。
 5. 回退判定：任一维度档位单调性不成立，则该维规则回到设计讨论，不以其它维度的"整体效果"掩盖。
 
