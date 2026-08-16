@@ -35,6 +35,12 @@ STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
 
 RESEARCH_STRATEGY_DEFINITIONS: list[dict[str, Any]] = [
     {
+        "key": "rank_trend_four_dim",
+        "label": "四维信号 × 资金研究策略",
+        "description": "生命周期分层彻底重构（方案 A）：入场 = synergy S/A（四维投票方向一致）+ 资金 zljzb≥0 "
+        "+ 非生命周期 veto；生命周期不制造买点不硬过滤（6-07 审计方向），退出沿用统一逻辑。研究对照，不作为默认实盘策略。",
+    },
+    {
         "key": "trend_reversal_jump",
         "label": "趋势反转 × Jump 新买点候选研究策略",
         "description": "低位弱转强（trendReversal）+ 排名跳跃上升（jump buy + mag≥20，可选 fresh≥阈值）入场；"

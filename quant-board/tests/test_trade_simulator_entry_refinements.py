@@ -24,6 +24,7 @@ def _signal(
     candidate_tier: str = "A_MAIN",
     quadrant: str = "normal",
     zljzb: float | None = None,
+    lifecycle_veto: bool = False,
 ) -> dict:
     return {
         "snapshotId": snapshot_id,
@@ -47,6 +48,7 @@ def _signal(
             "observation": {
                 "synergy": {"signalTier": tier, "tierReasons": []} if tier is not None else {},
                 "volumePrice": {"quadrant": quadrant},
+                "lifecycle": {"veto": lifecycle_veto},
             },
         },
     }
@@ -805,3 +807,63 @@ def test_weak_state_exit_threshold_config() -> None:
     # 阈值 -4：-3 >= -4 不触发，持有
     result2 = _run(frames, signals, {"weakStateExit": True, "weakStateExitZljzb": -4.0})
     assert result2["openPositionCount"] == 1
+
+
+# ---------- rank_trend_four_dim：synergy S/A + 资金 zljzb≥0 + 非 veto（重构方案 A）----------
+
+
+def test_four_dim_entry_signal_sa_plus_fund() -> None:
+    """synergy S/A + zljzb≥0 + 非 veto → 入场。"""
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="S", zljzb=3.0)
+    ) is True
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="A", zljzb=0.0)
+    ) is True
+
+
+def test_four_dim_entry_rejects_low_tier_or_fund_outflow() -> None:
+    """B/C/D 档或资金流出（zljzb<0）→ 拒绝入场。"""
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="B", zljzb=3.0)
+    ) is False
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="S", zljzb=-2.0)
+    ) is False
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="C", zljzb=0.0)
+    ) is False
+
+
+def test_four_dim_entry_rejects_missing_zljzb_fail_visible() -> None:
+    """缺 zljzb → 拒绝（资金确认必需，fail-visible 不默认放行）。"""
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="S", zljzb=None)
+    ) is False
+
+
+def test_four_dim_entry_rejects_lifecycle_veto() -> None:
+    """生命周期 veto（环境门）→ 拒绝入场（保留一票否决风控）。"""
+    assert TradeSimulator._is_four_dim_entry_signal(
+        _signal("s1", "2026-05-06", 10.0, tier="S", zljzb=3.0, lifecycle_veto=True)
+    ) is False
+
+
+def test_four_dim_strategy_entry_round_trip() -> None:
+    """rank_trend_four_dim 策略 round trip：S+资金入场，D 档/弱势退出。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.5),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S", zljzb=5.0),
+        _signal("s2", "2026-05-07", 10.5, tier="S", zljzb=2.0),
+        # D_EXIT_RISK → 退出（沿用统一退出）
+        _signal("s3", "2026-05-08", 10.2, tier="S", zljzb=-6.0, candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"entryStrategy": "rank_trend_four_dim"})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["entrySignalSnapshotId"] == "s1"
+    assert result["roundTripTrades"][0]["exitSignalSnapshotId"] == "s3"

@@ -484,6 +484,35 @@ class TradeSimulator:
         return True
 
     @staticmethod
+    def _is_four_dim_entry_signal(
+        signal: dict[str, Any], trade_config: dict[str, Any] | None = None
+    ) -> bool:
+        """四维信号入场判定（生命周期分层彻底重构方案 A，用户确认 2026-08-16）。
+
+        条件（全部满足才算候选，fail-visible：缺字段 → False 不伪造）：
+        1. synergy tier ∈ {S, A}（四维投票方向一致；阶段 3 验收单调 excess 0.088/0.039）；
+        2. 资金 zljzb ≥ 0（不流出；量价拐点研究最强组合 0.5460 的资金约束）；
+        3. 生命周期非 veto（环境门：一票否决保留，其他生命周期阶段不硬过滤）。
+        退出沿用统一逻辑（final sell / D_EXIT_RISK（与弱势状态同帧等效）/ rank 恶化 / 价格止损）。
+        生命周期不制造买点、不硬过滤（2026-06-07 审计方向）。
+        """
+        tier = TradeSimulator._synergy_tier_of(signal)
+        if tier not in ("S", "A"):
+            return False
+        zljzb = signal.get("zljzb")
+        if zljzb is None:
+            return False
+        try:
+            if float(zljzb) < 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+        lifecycle = (signal.get("rankTrend") or {}).get("observation", {}).get("lifecycle") or {}
+        if lifecycle.get("veto"):
+            return False
+        return True
+
+    @staticmethod
     def _is_trend_reversal_jump_entry_signal(
         signal: dict[str, Any], trade_config: dict[str, Any] | None
     ) -> bool:
@@ -676,6 +705,13 @@ class TradeSimulator:
                 # 默认配置（magMin=20/freshMin=0）对应统计分析 h8 winRate 0.5212 组合；
                 # 若配置 freshMin>0 则进一步过滤到 0.5278 组合。retreat 退潮不入场。
                 if TradeSimulator._is_trend_reversal_jump_entry_signal(signal, trade_config) and signal["regime"] != "retreat":
+                    result.append(signal)
+                continue
+            # 生命周期分层彻底重构（方案 A，用户确认 2026-08-16）：rank_trend_four_dim 研究对照策略——
+            # 入场 = synergy S/A（四维投票方向一致）+ 资金 zljzb≥0 + 非生命周期 veto（环境门）；
+            # 生命周期不制造买点不硬过滤（6-07 审计方向）；退出沿用统一逻辑（final sell/弱势状态/止损）。
+            if strategy_key == "rank_trend_four_dim":
+                if TradeSimulator._is_four_dim_entry_signal(signal, trade_config) and signal["regime"] != "retreat":
                     result.append(signal)
                 continue
             # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，
