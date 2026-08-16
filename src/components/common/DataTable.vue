@@ -152,10 +152,8 @@
                 @mouseenter="showTierTooltip($event, stock, 'lifecycleOpportunity')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <!-- 生命周期为环境门（2026-08-16 优化：lifecycle 档位无方向区分度，不做方向色徽章）：
-                     显示 stage 中文 + 环境色，veto 红色角标；悬停注明不预测方向 -->
+                     显示 stage 中文 + 环境色；veto 状态在悬停提示中注明（2026-08-16 去"否决"二字） -->
                 <template v-if="getLifecycleStage(stock) != null">
-                  <span v-if="getLifecycleVeto(stock)" class="lifecycle-veto-badge"
-                    title="生命周期一票否决">否决</span>
                   <span :class="lifecycleEnvClass(stock)">{{ getLifecycleStageLabel(stock) }}</span>
                 </template>
                 <span v-else class="trend-steady">--</span>
@@ -2936,18 +2934,6 @@ defineExpose({
   padding: 1px 4px;
   border-radius: 3px;
   background: rgba(149, 165, 166, 0.08);
-}
-.lifecycle-veto-badge {
-  display: inline-flex;
-  align-items: center;
-  font-size: 10px;
-  font-weight: 700;
-  color: #fff;
-  background: #e74c3c;
-  border-radius: 3px;
-  padding: 0 3px;
-  margin-right: 3px;
-  vertical-align: middle;
 }
 
 /* 档位徽章（四维列方案 §4.4，与现有观察色系对齐） */
