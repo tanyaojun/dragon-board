@@ -151,11 +151,12 @@
               <div class="observation-cell lifecycle-cell" @click.stop="openObservationPanel(stock, 'lifecycle')"
                 @mouseenter="showTierTooltip($event, stock, 'lifecycleOpportunity')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <template v-if="getLifecycleOpportunityValue(stock) != null">
-                  <span :class="getLifecycleClass(stock)">
-                    {{ getDirectionArrow(getLifecycleDirection(stock)) }}
-                  </span>
-                  <span :class="getLifecycleClass(stock)">{{ getLifecycleOpportunityValue(stock) }}%</span>
+                <!-- 生命周期为环境门（2026-08-16 优化：lifecycle 档位无方向区分度，不做方向色徽章）：
+                     显示 stage 中文 + 环境色，veto 红色角标；悬停注明不预测方向 -->
+                <template v-if="getLifecycleStage(stock) != null">
+                  <span v-if="getLifecycleVeto(stock)" class="lifecycle-veto-badge"
+                    title="生命周期一票否决">否决</span>
+                  <span :class="lifecycleEnvClass(stock)">{{ getLifecycleStageLabel(stock) }}</span>
                 </template>
                 <span v-else class="trend-steady">--</span>
               </div>
@@ -820,6 +821,20 @@ const getLifecycleClass = (stock: any) => {
   return stage ? `lifecycle-${stage}` : 'observation-hold'
 }
 
+// 生命周期一票否决（环境门）：读 observation.lifecycle.veto 布尔
+const getLifecycleVeto = (stock: any): boolean =>
+  !!(getRankTrendAnalysis(stock)?.observation?.lifecycle?.veto ?? stock?._lifecycleVeto ?? false)
+
+// 环境门环境色（2026-08-16 优化：lifecycle 无方向区分度，不用方向色；veto=红实心、
+// 反转/拥挤=橙回避、冷却=灰、点火/扩散=中性）
+const lifecycleEnvClass = (stock: any): string => {
+  if (getLifecycleVeto(stock)) return 'lifecycle-env-veto'
+  const stage = getLifecycleStage(stock)
+  if (stage === 'crowded' || stage === 'reversal') return 'lifecycle-env-caution'
+  if (stage === 'cooling') return 'lifecycle-env-cooling'
+  return 'lifecycle-env-neutral'
+}
+
 const openObservationPanel = (stock: any, track: ObservationTrack) => {
   observationPanelStock.value = stock
   observationPanelTrack.value = track
@@ -1173,14 +1188,15 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
       lines.push(...getSynergyTierReasons(stock))
     }
   } else if (field === 'lifecycleOpportunity') {
-    // 周期：阶段 + 档位字母 + 原因（如"扩散 A，优选路径"）
+    // 周期（2026-08-16 优化）：环境门标签——显示阶段 + veto 状态 + 原因，
+    // 不显示档位字母（lifecycle 无方向区分度）；注明"不预测方向，仅环境修正/否决"
     const stage = getLifecycleStageLabel(stock)
-    const tier = getLifecycleTier(stock)
     const parts: string[] = []
     if (stage && stage !== '未知') parts.push(stage)
-    if (tier && tier !== 'unknown') parts.push(tierBadgeLabel(tier) ?? '')
-    parts.push(...getTierReasonsOf(stock, field))
-    if (parts.length) lines.push(parts.join('：'))
+    if (getLifecycleVeto(stock)) parts.push('否决')
+    if (parts.length) lines.push(parts.join(' '))
+    lines.push('生命周期为环境门，不预测方向，仅参与 synergy 环境修正/否决')
+    lines.push(...getTierReasonsOf(stock, field))
   } else {
     // 共振/趋势/量价：档位字母 + 原因（如"B，方向确认但路径持续不足"）
     const tier =
@@ -2871,6 +2887,49 @@ defineExpose({
 .observation-hold,
 .lifecycle-cooling {
   color: #95a5a6;
+}
+
+/* 生命周期环境门标签（2026-08-16 优化：无方向区分度，显示 stage+环境色；veto=红实心、反转/拥挤=橙、冷却=灰、点火/扩散=中性） */
+.lifecycle-env-neutral {
+  color: #95a5a6;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(149, 165, 166, 0.08);
+}
+.lifecycle-env-cooling {
+  color: #7f8c8d;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(127, 140, 141, 0.1);
+}
+.lifecycle-env-caution {
+  color: #ff9f43;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 159, 67, 0.1);
+}
+.lifecycle-env-veto {
+  color: #fff;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #e74c3c;
+  border: 1px solid #c0392b;
+}
+.lifecycle-veto-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #e74c3c;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-right: 3px;
+  vertical-align: middle;
 }
 
 /* 档位徽章（四维列方案 §4.4，与现有观察色系对齐） */
