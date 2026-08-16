@@ -136,6 +136,60 @@ class RankTrendConfig:
     tierSynergyVoteStrong: float = 2.0  # _synergy_tier vote_sum≥strong（S/A 分界，档位加权后 float）
     tierSynergyVoteWeak: float = 1.0  # _synergy_tier vote_sum≥weak（B）
     tierSynergyVoteReverse: float = -1.0  # _synergy_tier vote_sum≤reverse（D）
+    # ── 生命周期分层阈值（阈值数据驱动优化设计 2026-08-16，默认值=当前硬编码，零行为变化）──
+    # raw_stage（5 态初判）
+    cycleRawWarmPercentileMin: float = 65.0
+    cycleRawWarmBestRankMax: float = 25.0
+    cycleRawHotZonePercentileMin: float = 85.0
+    cycleRawHotZoneBestRankMax: float = 10.0
+    cycleRawRecoveryVelocityMin: float = 0.0
+    cycleRawRecoveryAccelMin: float = -1.2
+    cycleRawRecoveryPercentileMin: float = 50.0
+    cycleRawRecoveryBestRankMax: float = 30.0
+    cycleRawRecoveryHotMin: int = 1
+    cycleRawExpansionPercentileMin: float = 70.0
+    cycleRawExpansionAccelMin: float = -1.0
+    cycleRawExpansionHotMin: int = 1
+    cycleRawExpansionBestRankMax: float = 20.0
+    cycleRawCrowdedHotMin: int = 3
+    cycleRawCrowdedBestRankMax: float = 5.0
+    cycleRawCrowdedDrawdownMax: float = 1.0
+    cycleRawCrowdedVelocityMax: float = 1.0
+    cycleRawReversalDrawdownMin: float = 2.0
+    cycleRawReversalAccelMax: float = -1.0
+    cycleRawReversalHotMin: int = 2
+    cycleRawReversalBestRankMax: float = 10.0
+    # normalize_stage（状态机平滑）
+    cycleNormWeakeningAccelMax: float = -1.0
+    cycleNormSevereAccelMax: float = -2.5
+    cycleNormSevereDrawdownMin: float = 3.0
+    cycleNormCoolingReadyPercentileMax: float = 72.0
+    cycleNormCrowdedCarryPercentileMin: float = 82.0
+    cycleNormCrowdedCarryBestRankMax: float = 12.0
+    # cycle_confidence（每态区域/动量/持续性/回撤）
+    cycleConfCoolingRegionPctMax: float = 60.0
+    cycleConfIgnitionRegionPctMin: float = 50.0
+    cycleConfIgnitionRegionPctMax: float = 80.0
+    cycleConfExpansionRegionPctMin: float = 60.0
+    cycleConfCrowdedRegionPctMin: float = 82.0
+    cycleConfCrowdedRegionBestMax: float = 10.0
+    cycleConfReversalRegionPctMin: float = 70.0
+    cycleConfReversalRegionBestMax: float = 20.0
+    cycleConfIgnitionMomentumAccelMin: float = -0.8
+    cycleConfExpansionMomentumAccelMin: float = -0.2
+    cycleConfCrowdedMomentumHotMin: int = 2
+    cycleConfCoolingMomentumPctMax: float = 60.0
+    cycleConfCrowdedMomentumPctMin: float = 80.0
+    cycleConfCoolingPersistenceHotMax: int = 1
+    cycleConfIgnitionPersistenceHotMax: int = 1
+    cycleConfExpansionPersistenceHotMax: int = 2
+    cycleConfCrowdedPersistenceHotMin: int = 2
+    cycleConfReversalPersistenceHotMin: int = 2
+    cycleConfReversalPersistenceBestMax: float = 10.0
+    cycleConfCoolingDrawdownMax: float = 1.0
+    cycleConfExpansionDrawdownMax: float = 1.0
+    cycleConfCrowdedDrawdownMax: float = 1.0
+    cycleConfReversalDrawdownMin: float = 1.0
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
@@ -715,8 +769,8 @@ def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTren
         prefix_ranks = ranks[: index + 1]
         prefix_percentiles = percentiles[: index + 1]
         metrics = cycle_metrics(prefix_ranks, prefix_percentiles)
-        raw = raw_stage(len(prefix_percentiles), prefix_percentiles[-1], metrics)
-        normalized = normalize_stage(current_stage, raw, prefix_percentiles[-1], metrics)
+        raw = raw_stage(len(prefix_percentiles), prefix_percentiles[-1], metrics, config=config)
+        normalized = normalize_stage(current_stage, raw, prefix_percentiles[-1], metrics, config=config)
         previous_stage = current_raw
         previous_normalized = current_stage
         current_raw = raw
@@ -724,7 +778,7 @@ def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTren
     stage = current_stage or "cooling"
     raw = current_raw or "cooling"
     transition = stage if not previous_normalized or previous_normalized == stage else f"{previous_normalized}->{stage}"
-    confidence = cycle_confidence(stage, percentiles[-1] if percentiles else 0, metrics)
+    confidence = cycle_confidence(stage, percentiles[-1] if percentiles else 0, metrics, config=config)
     metric_values = metrics or {"rankVelocity": 0, "rankAcceleration": 0, "rankShock": 0, "hotZoneStreak": 0, "bestRecentRank": ranks[-1] if ranks else 999, "drawdownFromPeak": 0, "rankPathCommitment": 0.5}
     return {
         "rawStage": raw,
@@ -762,7 +816,11 @@ def cycle_metrics(ranks: list[float], percentiles: list[float]) -> dict[str, Any
     }
 
 
-def raw_stage(history_length: int, current_percentile: float, metrics: dict[str, Any]) -> str:
+def raw_stage(
+    history_length: int, current_percentile: float, metrics: dict[str, Any], config: "RankTrendConfig | None" = None
+) -> str:
+    """5 态初判（阈值数据驱动优化设计 2026-08-16：全部阈值参数化，默认值=原硬编码，零行为变化）。"""
+    c = config or RankTrendConfig()
     if history_length < 2:
         return "cooling"
     velocity = metrics["rankVelocity"]
@@ -770,12 +828,20 @@ def raw_stage(history_length: int, current_percentile: float, metrics: dict[str,
     hot = metrics["hotZoneStreak"]
     best = metrics["bestRecentRank"]
     drawdown = metrics["drawdownFromPeak"]
-    warm = current_percentile >= 65 or best <= 25
-    hot_zone = current_percentile >= 85 or best <= 10
-    recovery = velocity > 0 and accel >= -1.2 and (current_percentile >= 50 or best <= 30 or hot >= 1)
-    expansion = velocity > 0 and current_percentile >= 70 and (accel >= -1 or hot >= 1 or best <= 20)
-    crowded = hot_zone and (hot >= 3 or best <= 5) and drawdown <= 1 and (velocity <= 1 or accel < 0)
-    reversal = warm and drawdown >= 2 and (velocity < 0 or accel < -1) and (hot >= 2 or best <= 10)
+    warm = current_percentile >= c.cycleRawWarmPercentileMin or best <= c.cycleRawWarmBestRankMax
+    hot_zone = current_percentile >= c.cycleRawHotZonePercentileMin or best <= c.cycleRawHotZoneBestRankMax
+    recovery = velocity > c.cycleRawRecoveryVelocityMin and accel >= c.cycleRawRecoveryAccelMin and (
+        current_percentile >= c.cycleRawRecoveryPercentileMin or best <= c.cycleRawRecoveryBestRankMax or hot >= c.cycleRawRecoveryHotMin
+    )
+    expansion = velocity > c.cycleRawRecoveryVelocityMin and current_percentile >= c.cycleRawExpansionPercentileMin and (
+        accel >= c.cycleRawExpansionAccelMin or hot >= c.cycleRawExpansionHotMin or best <= c.cycleRawExpansionBestRankMax
+    )
+    crowded = hot_zone and (hot >= c.cycleRawCrowdedHotMin or best <= c.cycleRawCrowdedBestRankMax) and (
+        drawdown <= c.cycleRawCrowdedDrawdownMax and (velocity <= c.cycleRawCrowdedVelocityMax or accel < 0)
+    )
+    reversal = warm and drawdown >= c.cycleRawReversalDrawdownMin and (
+        velocity < 0 or accel < c.cycleRawReversalAccelMax
+    ) and (hot >= c.cycleRawReversalHotMin or best <= c.cycleRawReversalBestRankMax)
     if reversal:
         return "reversal"
     if crowded:
@@ -787,7 +853,11 @@ def raw_stage(history_length: int, current_percentile: float, metrics: dict[str,
     return "cooling"
 
 
-def normalize_stage(previous: str | None, raw: str, current_percentile: float, metrics: dict[str, Any]) -> str:
+def normalize_stage(
+    previous: str | None, raw: str, current_percentile: float, metrics: dict[str, Any], config: "RankTrendConfig | None" = None
+) -> str:
+    """状态机平滑（阈值参数化，默认值=原硬编码，零行为变化）。"""
+    c = config or RankTrendConfig()
     if not previous:
         return raw
     velocity = metrics["rankVelocity"]
@@ -795,11 +865,13 @@ def normalize_stage(previous: str | None, raw: str, current_percentile: float, m
     hot = metrics["hotZoneStreak"]
     best = metrics["bestRecentRank"]
     drawdown = metrics["drawdownFromPeak"]
-    recovery = velocity > 0 and accel >= -1.2 and (current_percentile >= 50 or best <= 30 or hot >= 1)
-    weakening = velocity < 0 or accel < -1 or drawdown >= 2
-    severe = velocity < -1 or accel < -2.5 or drawdown >= 3
-    cooling_ready = current_percentile < 72 or hot <= 1
-    crowded_carry = current_percentile >= 82 or best <= 12 or hot >= 2
+    recovery = velocity > c.cycleRawRecoveryVelocityMin and accel >= c.cycleRawRecoveryAccelMin and (
+        current_percentile >= c.cycleRawRecoveryPercentileMin or best <= c.cycleRawRecoveryBestRankMax or hot >= c.cycleRawRecoveryHotMin
+    )
+    weakening = velocity < 0 or accel < c.cycleNormWeakeningAccelMax or drawdown >= 2
+    severe = velocity < -1 or accel < c.cycleNormSevereAccelMax or drawdown >= c.cycleNormSevereDrawdownMin
+    cooling_ready = current_percentile < c.cycleNormCoolingReadyPercentileMax or hot <= 1
+    crowded_carry = current_percentile >= c.cycleNormCrowdedCarryPercentileMin or best <= c.cycleNormCrowdedCarryBestRankMax or hot >= 2
     if previous == "ignition":
         if raw in ("expansion", "crowded"):
             return "expansion"
@@ -837,16 +909,41 @@ def normalize_stage(previous: str | None, raw: str, current_percentile: float, m
     return raw
 
 
-def cycle_confidence(stage: str, percentile: float, metrics: dict[str, Any]) -> float:
+def cycle_confidence(
+    stage: str, percentile: float, metrics: dict[str, Any], config: "RankTrendConfig | None" = None
+) -> float:
+    """阶段置信度（阈值参数化，默认值=原硬编码，零行为变化；每态区域/动量/持续性/回撤阈值）。"""
+    c = config or RankTrendConfig()
     velocity = metrics.get("rankVelocity", 0)
     accel = metrics.get("rankAcceleration", 0)
     hot = metrics.get("hotZoneStreak", 0)
     best = metrics.get("bestRecentRank", 999)
     drawdown = metrics.get("drawdownFromPeak", 0)
-    region = percentile < 60 if stage == "cooling" else percentile >= 50 and percentile < 80 if stage == "ignition" else percentile >= 60 if stage == "expansion" else percentile >= 82 or best <= 10 if stage == "crowded" else percentile >= 70 or best <= 20
-    momentum = velocity <= 0 or percentile < 60 if stage == "cooling" else velocity > 0 and accel >= -0.8 if stage == "ignition" else velocity > 0 and accel >= -0.2 if stage == "expansion" else percentile >= 80 and (velocity <= 0 or hot >= 2) if stage == "crowded" else velocity <= 0 or accel < -1
-    persistence = hot <= 1 if stage in ("cooling", "ignition") else hot <= 2 if stage == "expansion" else hot >= 2 if stage == "crowded" else hot >= 2 or best <= 10
-    draw = drawdown <= 1 or percentile < 60 if stage == "cooling" else drawdown == 0 if stage == "ignition" else drawdown <= 1 if stage in ("expansion", "crowded") else drawdown >= 1
+    if stage == "cooling":
+        region = percentile < c.cycleConfCoolingRegionPctMax
+        momentum = velocity <= 0 or percentile < c.cycleConfCoolingMomentumPctMax
+        persistence = hot <= c.cycleConfCoolingPersistenceHotMax
+        draw = drawdown <= c.cycleConfCoolingDrawdownMax or percentile < c.cycleConfCoolingRegionPctMax
+    elif stage == "ignition":
+        region = percentile >= c.cycleConfIgnitionRegionPctMin and percentile < c.cycleConfIgnitionRegionPctMax
+        momentum = velocity > 0 and accel >= c.cycleConfIgnitionMomentumAccelMin
+        persistence = hot <= c.cycleConfIgnitionPersistenceHotMax
+        draw = drawdown == 0
+    elif stage == "expansion":
+        region = percentile >= c.cycleConfExpansionRegionPctMin
+        momentum = velocity > 0 and accel >= c.cycleConfExpansionMomentumAccelMin
+        persistence = hot <= c.cycleConfExpansionPersistenceHotMax
+        draw = drawdown <= c.cycleConfExpansionDrawdownMax
+    elif stage == "crowded":
+        region = percentile >= c.cycleConfCrowdedRegionPctMin or best <= c.cycleConfCrowdedRegionBestMax
+        momentum = percentile >= c.cycleConfCrowdedMomentumPctMin and (velocity <= 0 or hot >= c.cycleConfCrowdedMomentumHotMin)
+        persistence = hot >= c.cycleConfCrowdedPersistenceHotMin
+        draw = drawdown <= c.cycleConfCrowdedDrawdownMax
+    else:  # reversal
+        region = percentile >= c.cycleConfReversalRegionPctMin or best <= c.cycleConfReversalRegionBestMax
+        momentum = velocity <= 0 or accel < -1
+        persistence = hot >= c.cycleConfReversalPersistenceHotMin or best <= c.cycleConfReversalPersistenceBestMax
+        draw = drawdown >= c.cycleConfReversalDrawdownMin
     return clamp(50 + int(region) * 10 + int(momentum) * 10 + int(persistence) * 10 + int(draw) * 10, 50, 90)
 
 

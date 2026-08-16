@@ -258,7 +258,10 @@ _STRATEGY_SCALAR_KEYS = tuple(
     f.name
     for f in dataclasses.fields(RankTrendConfig)
     if isinstance(f.default, (int, float, bool))
+    and not f.name.startswith(("cycleRaw", "cycleNorm", "cycleConf"))
 )
+# 生命周期分层阈值（cycleRaw*/cycleNorm*/cycleConf*，2026-08-16 数据驱动优化设计）不进默认搜索空间：
+# 由专用坐标下降脚本（backend/operations/optimize_lifecycle_thresholds）搜索，避免膨胀 optuna/grid 维度。
 # 复合字段（field(default_factory=...) 定义，f.default 为 dataclasses.MISSING）需手工维护白名单
 _STRATEGY_LIST_KEYS = (
     "momentumPeriods", "momentumWeights", "buyThresholds", "sellThresholds",
