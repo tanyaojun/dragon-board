@@ -881,10 +881,11 @@ def test_entry_candidates_requires_final_signal_buy() -> None:
     by_key = {
         "s1:000003": {"candidateTier": "B_IGNITION", "code": "000003"},
     }
-    candidates = ts._entry_candidates(signals, frames, 1, by_key, {}, "rank_trend_candidate")
+    # 生命周期重构方案 B（2026-08-16）：默认策略 rank_trend_candidate 入场主轴 = four_dim
+    # （synergy S/A + zljzb≥0），A/B 档位不再作为默认入场依据；本测试验证 final_signal=buy
+    # 前提语义，改用 a_b_combined 对照组显式保留 A/B 档位入场。
+    candidates = ts._entry_candidates(signals, frames, 1, by_key, {}, "a_b_combined")
     codes = [c["code"] for c in candidates]
-    # 阶段6 业务口径：默认策略 rank_trend_candidate 不再入场 A_MAIN（观察档），
-    # 仅 B_IGNITION 连续确认入场；A_MAIN 需对照组策略（a_main_only/a_b_combined）显式启用
-    assert "000001" not in codes  # A_MAIN：默认策略降级观察档，不再自动入场
-    assert "000002" not in codes  # A_MAIN + finalSignal=sell：默认策略不入场（双重排除）
+    assert "000001" in codes  # A_MAIN + finalSignal=buy：a_b_combined 对照组入场（对照组语义）
+    assert "000002" not in codes  # A_MAIN + finalSignal=sell：final buy 前提排除
     assert "000003" in codes  # B_IGNITION confirmed + finalSignal=buy → included

@@ -867,3 +867,41 @@ def test_four_dim_strategy_entry_round_trip() -> None:
     assert result["tradeCount"] == 1
     assert result["roundTripTrades"][0]["entrySignalSnapshotId"] == "s1"
     assert result["roundTripTrades"][0]["exitSignalSnapshotId"] == "s3"
+
+
+# ---------- 默认策略 rank_trend_candidate = four_dim 主轴（重构方案 B 落地）----------
+
+
+def test_default_strategy_uses_four_dim_entry() -> None:
+    """默认策略 rank_trend_candidate 入场 = synergy S/A + 资金 zljzb>=0（与 rank_trend_four_dim 一致）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.5),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S", zljzb=5.0),
+        _signal("s2", "2026-05-07", 10.5, tier="S", zljzb=2.0),
+        _signal("s3", "2026-05-08", 10.2, tier="S", zljzb=-6.0, candidate_tier="D_EXIT_RISK"),
+    ]
+    # 默认策略（patch 不含 entryStrategy）
+    result_default = TradeSimulator().run(frames, signals, {
+        "initialCapital": 100000, "positionSize": 0.1, "maxPositions": 2,
+        "maxHoldingBars": 10, "enforceT1": True, "useOrderBookPrice": False,
+        "enforceLimitStatus": False, "enforceOrderBookQueue": False,
+        "enforceVolumeLimit": False, "executionMode": "current_bar",
+    })
+    # rank_trend_four_dim 显式
+    result_four = TradeSimulator().run(frames, signals, {
+        "entryStrategy": "rank_trend_four_dim",
+        "initialCapital": 100000, "positionSize": 0.1, "maxPositions": 2,
+        "maxHoldingBars": 10, "enforceT1": True, "useOrderBookPrice": False,
+        "enforceLimitStatus": False, "enforceOrderBookQueue": False,
+        "enforceVolumeLimit": False, "executionMode": "current_bar",
+    })
+    assert result_default["tradeCount"] == 1
+    assert result_default["openPositionCount"] == 0
+    # 默认策略与 four_dim 显式策略结果一致（同一入场主轴）
+    assert result_default["tradeCount"] == result_four["tradeCount"]
+    assert result_default["roundTripTrades"][0]["entrySignalSnapshotId"] == "s1"
+    assert result_default["roundTripTrades"][0]["exitSignalSnapshotId"] == "s3"

@@ -714,12 +714,19 @@ class TradeSimulator:
                 if TradeSimulator._is_four_dim_entry_signal(signal, trade_config) and signal["regime"] != "retreat":
                     result.append(signal)
                 continue
+            # 生命周期分层彻底重构（方案 B 落地，用户确认 2026-08-16）：默认策略
+            # rank_trend_candidate 入场主轴切换为四维信号×资金——synergy S/A + 资金 zljzb>=0
+            # + 非生命周期 veto（环境门）；生命周期不制造买点不硬过滤（6-07 审计方向）。
+            # A_MAIN/B_IGNITION 档位不再作为默认入场依据（a_main_only/a_b_combined 对照保留）。
+            if strategy_key == "rank_trend_candidate":
+                if TradeSimulator._is_four_dim_entry_signal(signal, trade_config) and signal["regime"] != "retreat":
+                    result.append(signal)
+                continue
             # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，
-            # 默认策略 rank_trend_candidate 不再自动入场 A_MAIN（降级为观察档）；
-            # 对照组策略 a_main_only（上文）/ a_b_combined 显式保留 A_MAIN 入场供研究对比。
+            # 对照组策略 a_main_only（上文）/ a_b_combined 显式保留 A_MAIN/B_IGNITION 入场供研究对比。
             if signal["candidateTier"] == "A_MAIN" and strategy_key == "a_b_combined" and signal["regime"] != "weak" and TradeSimulator._entry_momentum_confirmed(signal, trade_config):
                 result.append(signal)
-            elif signal["candidateTier"] == "B_IGNITION" and strategy_key in ("rank_trend_candidate", "a_b_combined") and TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
+            elif signal["candidateTier"] == "B_IGNITION" and strategy_key == "a_b_combined" and TradeSimulator._is_confirmed_b_ignition(signal, previous_frame, by_key):
                 result.append(signal)
         if strategy_key in {
             "ranktrend_early_big_move",

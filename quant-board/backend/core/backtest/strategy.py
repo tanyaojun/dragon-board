@@ -435,7 +435,7 @@ class BaseStrategy:
 class RankTrendCandidateStrategy(BaseStrategy):
     key = "rank_trend_candidate"
     label = "RankTrend 候选池"
-    description = "买入 A_MAIN 与连续确认后的 B_IGNITION，是当前正式策略。"
+    description = "四维信号×资金入场主轴（synergy S/A + zljzb≥0 + 非生命周期 veto，生命周期重构方案 B，2026-08-16），当前正式策略。"
 
 
 class HotTop10Strategy(BaseStrategy):
