@@ -165,9 +165,25 @@ class TradeSimulator:
                     # 价格止损/止盈与 maxHoldingBars 仍立即生效（去噪不硬扛，区别于 minHoldingBars）。
                     max_holding_exit = pos["holdingBars"] >= config["maxHoldingBars"]
                     price_exit = gross_return <= stop_ratio or gross_return >= take_ratio or max_holding_exit
+                    # 弱势状态退出（2026-08-16 拐头向下研究立项）：weakStateExit=True 时
+                    # D_EXIT_RISK 档位退出（低分位预测反弹，过早离场）替换为"持续弱势状态"退出——
+                    # 放量下跌(fall_volume) 或 资金强流出(zljzb < weakStateExitZljzb) 预测继续下跌。
+                    d_exit_risk_exit = signal["candidateTier"] == "D_EXIT_RISK"
+                    if TradeSimulator._config_bool(config, "weakStateExit"):
+                        vp = (signal.get("rankTrend") or {}).get("observation", {}).get("volumePrice") or {}
+                        quadrant = str(vp.get("quadrant") or "")
+                        zljzb = signal.get("zljzb")
+                        weak = quadrant == "fall_volume"
+                        if zljzb is not None:
+                            try:
+                                threshold = float((config or {}).get("weakStateExitZljzb", -5.0))
+                                weak = weak or float(zljzb) < threshold
+                            except (TypeError, ValueError):
+                                pass
+                        d_exit_risk_exit = weak
                     signal_exit = (
                         final_signal == "sell"
-                        or signal["candidateTier"] == "D_EXIT_RISK"
+                        or d_exit_risk_exit
                         or (signal["candidateTier"] == "C_CROWDED" and _crowded_accel <= 0)
                         or TradeSimulator._rank_exit_triggered(signal, pos, config, strategy_key)
                         or synergy_danger_exit
@@ -1280,6 +1296,19 @@ class TradeSimulator:
             return "档位连续降级退出"
         if final_signal == "sell":
             return "compose_decision 卖出信号"
+        if TradeSimulator._config_bool(config, "weakStateExit"):
+            vp = (signal.get("rankTrend") or {}).get("observation", {}).get("volumePrice") or {}
+            quadrant = str(vp.get("quadrant") or "")
+            zljzb = signal.get("zljzb")
+            weak = quadrant == "fall_volume"
+            if zljzb is not None:
+                try:
+                    threshold = float((config or {}).get("weakStateExitZljzb", -5.0))
+                    weak = weak or float(zljzb) < threshold
+                except (TypeError, ValueError):
+                    pass
+            if weak:
+                return "弱势状态退出（放量下跌/资金强流出）"
         if signal["candidateTier"] == "D_EXIT_RISK":
             return "D_EXIT_RISK"
         if TradeSimulator._rank_exit_triggered(signal, pos, config, strategy_key):

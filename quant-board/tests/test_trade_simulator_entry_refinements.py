@@ -22,6 +22,8 @@ def _signal(
     final_signal: str = "buy",
     momentum_short: float = 5.0,
     candidate_tier: str = "A_MAIN",
+    quadrant: str = "normal",
+    zljzb: float | None = None,
 ) -> dict:
     return {
         "snapshotId": snapshot_id,
@@ -34,6 +36,7 @@ def _signal(
         "price": price,
         "change": 2,
         "volume": 100_000,
+        "zljzb": zljzb,
         "candidateTier": candidate_tier,
         "stage": "expansion",
         "regime": "strong",
@@ -41,7 +44,10 @@ def _signal(
         "rankTrend": {
             "decision": {"final": {"signal": final_signal, "confidence": 90}},
             "strategy": {"momentum": {"short": momentum_short, "mid": 2.0, "long": 1.0, "acceleration": 1.0}},
-            "observation": {"synergy": {"signalTier": tier, "tierReasons": []} if tier is not None else {}},
+            "observation": {
+                "synergy": {"signalTier": tier, "tierReasons": []} if tier is not None else {},
+                "volumePrice": {"quadrant": quadrant},
+            },
         },
     }
 
@@ -713,3 +719,89 @@ def test_rank_exit_avgranknum_missing_field_fail_visible() -> None:
     ) is False
     # 缺 pos（entryAvgRankNum 无从取）→ False
     assert TradeSimulator._rank_exit_triggered(_exit_signal(rank=60), None, cfg) is False
+
+
+# ---------- 弱势状态退出（weakStateExit，拐头向下研究立项）----------
+
+
+def test_weak_state_exit_disabled_by_default() -> None:
+    """默认关闭：D_EXIT_RISK 档位直接退出（现状不变）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+        _signal("s3", "2026-05-08", 10.2, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+
+
+def test_weak_state_exit_replaces_d_exit_risk_with_fall_volume() -> None:
+    """weakStateExit=True：D_EXIT_RISK 不再退出；fall_volume（放量下跌）状态触发退出。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+        _frame("s4", "2026-05-09", 10.3),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        # D_EXIT_RISK 但非弱势状态 → 不退出
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK"),
+        # fall_volume（放量下跌）→ 触发弱势状态退出
+        _signal("s3", "2026-05-08", 9.8, tier="S", candidate_tier="D_EXIT_RISK",
+                quadrant="fall_volume"),
+        _signal("s4", "2026-05-09", 9.9, tier="S", candidate_tier="D_EXIT_RISK"),
+    ]
+    result = _run(frames, signals, {"weakStateExit": True})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["exitSignalSnapshotId"] == "s3"
+    assert result["roundTripTrades"][0]["reason"] == "弱势状态退出（放量下跌/资金强流出）"
+
+
+def test_weak_state_exit_zljzb_strong_outflow() -> None:
+    """weakStateExit=True：zljzb < weakStateExitZljzb（默认-5）触发退出（任意档位）。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+        _frame("s4", "2026-05-09", 10.3),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        # D_EXIT_RISK + 资金强流出 -8 → 触发弱势状态退出（且 D 档不入场，避免同帧再入场）
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="D_EXIT_RISK", zljzb=-8.0),
+        _signal("s3", "2026-05-08", 10.2, tier="S", candidate_tier="N_NEUTRAL", zljzb=2.0),
+        _signal("s4", "2026-05-09", 10.3, tier="S", candidate_tier="N_NEUTRAL"),
+    ]
+    result = _run(frames, signals, {"weakStateExit": True})
+    assert result["openPositionCount"] == 0
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["exitSignalSnapshotId"] == "s2"
+
+
+def test_weak_state_exit_threshold_config() -> None:
+    """weakStateExitZljzb 可配置。"""
+    frames = [
+        _frame("s1", "2026-05-06", 10.0),
+        _frame("s2", "2026-05-07", 10.1),
+        _frame("s3", "2026-05-08", 10.2),
+    ]
+    signals = [
+        _signal("s1", "2026-05-06", 10.0, tier="S"),
+        _signal("s2", "2026-05-07", 10.1, tier="S", candidate_tier="A_MAIN", zljzb=-3.0),
+        _signal("s3", "2026-05-08", 10.2, tier="S", candidate_tier="A_MAIN"),
+    ]
+    # 阈值 -2：-3 < -2 触发退出
+    result = _run(frames, signals, {"weakStateExit": True, "weakStateExitZljzb": -2.0})
+    assert result["tradeCount"] == 1
+    assert result["roundTripTrades"][0]["exitSignalSnapshotId"] == "s2"
+    # 阈值 -4：-3 >= -4 不触发，持有
+    result2 = _run(frames, signals, {"weakStateExit": True, "weakStateExitZljzb": -4.0})
+    assert result2["openPositionCount"] == 1

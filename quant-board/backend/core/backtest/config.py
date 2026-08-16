@@ -48,6 +48,12 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     # （绝对阈值 avgRankNumExitMax 2026-08-16 实测证伪，改为相对增量语义）
     "rankExitField": "rank",
     "avgRankNumExitDelta": 20.0,
+    # 弱势状态退出（2026-08-16 拐头向下研究立项，默认关闭零行为变化）：
+    # weakStateExit=True 时，D_EXIT_RISK 档位不再直接触发退出（低分位预测反弹 0.5264，
+    # 过早离场），改由"持续弱势状态"触发——放量下跌(quadrant=fall_volume) 或
+    # 资金强流出(zljzb < weakStateExitZljzb，默认 -5) 预测继续下跌（winRate 0.4778/0.4832）。
+    "weakStateExit": False,
+    "weakStateExitZljzb": -5.0,
 }
 
 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {
