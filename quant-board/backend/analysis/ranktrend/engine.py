@@ -1652,6 +1652,7 @@ class RankTrendPythonEngine:
         start = min_count - 1 if len(frames) >= min_count else 0
         requested_codes = {str(code) for code in codes} if codes else None
         histories = defaultdict(deque)
+        prev_candidate_by_code: dict[str, str] = {}
         signals: list[dict[str, Any]] = []
         for index, frame in enumerate(frames):
             history_start = max(0, index - window_size + 1)
@@ -1704,14 +1705,25 @@ class RankTrendPythonEngine:
                 )
                 if signal:
                     # 阶段6 趋势反转层（RankTrend 分析方法本体，观察信号）：
-                    # 低分位 + 此前下行 + 当前回升 → 标记 trendReversal，供分层/前端展示消费，
-                    # 不直接作为买点（研究 v2 实证无正期望，需结合量价/资金/情绪再搜索）。
+                    # 默认 rank_cross：低分位 + 此前下行 + 当前回升 → 标记 trendReversal；
+                    # reversalMode="tier_shift"（用户立项 2026-08-16）：前一帧 D_EXIT_RISK →
+                    # 当前 B_IGNITION/A_MAIN 档位转向（研究实证 h8 winRate 0.53 > 排名拐点 0.49）。
                     # 延迟 import 避免 engine ↔ trend_reversal 循环依赖。
-                    from backend.analysis.ranktrend.trend_reversal import trend_reversal_of
-
-                    signal["rankTrend"]["trendReversal"] = trend_reversal_of(
-                        signal, self._index_by_snapshot, self._stock_lookup
+                    from backend.analysis.ranktrend.trend_reversal import (
+                        tier_shift_reversal_of,
+                        trend_reversal_of,
                     )
+
+                    reversal_mode = str(meta.get("reversalMode") or "rank_cross")
+                    if reversal_mode == "tier_shift":
+                        signal["rankTrend"]["trendReversal"] = tier_shift_reversal_of(
+                            signal, prev_candidate_by_code.get(code)
+                        )
+                    else:
+                        signal["rankTrend"]["trendReversal"] = trend_reversal_of(
+                            signal, self._index_by_snapshot, self._stock_lookup
+                        )
+                    prev_candidate_by_code[code] = signal.get("candidateTier")
                     signals.append(signal)
         return signals
 

@@ -111,3 +111,45 @@ def trend_reversal_of(
         "rankVelocity": round(velocity, 3),
         "reasons": reasons or ["低位 + 此前下行 + 当前回升，判定为趋势反转"],
     }
+
+
+# 档位转向判定常量（2026-08-16 语义对比研究立项）：
+# 低位风险档 → 买入档的离散状态机跃迁；C_CROWDED（高位拥挤偏卖）不纳入低位转强跃迁。
+TIER_SHIFT_FROM = {"D_EXIT_RISK"}
+TIER_SHIFT_TO = {"B_IGNITION", "A_MAIN"}
+
+
+def tier_shift_reversal_of(
+    signal: dict[str, Any],
+    prev_candidate_tier: str | None,
+) -> dict[str, Any]:
+    """档位转向判定（观察信号，用户立项 reversalMode=tier_shift）。
+
+    条件：前一帧 candidateTier ∈ {D_EXIT_RISK}（低位风险档）且当前档位 ∈ {B_IGNITION, A_MAIN}
+    （点火/扩散买入档）——捕获"风险档转买档"的状态跃迁（研究实证 h8 winRate 0.5166~0.5309，
+    优于排名拐点 0.4910）。C_CROWDED 为高位拥挤（偏卖语义）不纳入跃迁目标。
+    fail-visible：缺前一帧档位 → isReversal=False + reasons 说明（不伪造）。
+    输出与 trend_reversal_of 同构 {isReversal, confidence, currentTier, prevTier, reasons}。
+    """
+    reasons: list[str] = []
+    current_tier = str(signal.get("candidateTier") or "")
+    if prev_candidate_tier is None:
+        return {
+            "isReversal": False,
+            "confidence": 0.0,
+            "currentTier": current_tier,
+            "prevTier": None,
+            "reasons": ["缺少前一帧 candidateTier，无法判定档位转向"],
+        }
+    is_reversal = prev_candidate_tier in TIER_SHIFT_FROM and current_tier in TIER_SHIFT_TO
+    if prev_candidate_tier not in TIER_SHIFT_FROM:
+        reasons.append(f"前一帧档位 {prev_candidate_tier} 不在风险档 {sorted(TIER_SHIFT_FROM)}")
+    if current_tier not in TIER_SHIFT_TO:
+        reasons.append(f"当前档位 {current_tier} 不在买入档 {sorted(TIER_SHIFT_TO)}")
+    return {
+        "isReversal": is_reversal,
+        "confidence": 1.0 if is_reversal else 0.0,
+        "currentTier": current_tier,
+        "prevTier": prev_candidate_tier,
+        "reasons": reasons,
+    }

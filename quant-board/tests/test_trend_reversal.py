@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from backend.analysis.ranktrend.signal_return_gap import _build_lookup
-from backend.analysis.ranktrend.trend_reversal import trend_reversal_of
+from backend.analysis.ranktrend.trend_reversal import tier_shift_reversal_of, trend_reversal_of
 
 
 def _frames(frame_count: int = 8) -> list[dict]:
@@ -111,3 +111,50 @@ def test_missing_lookup_fail_visible() -> None:
     result = trend_reversal_of(signal, None, None)
     assert result["isReversal"] is False
     assert any("帧索引" in reason for reason in result["reasons"])
+
+
+def test_tier_shift_reversal_d_to_b_ignition() -> None:
+    """D_EXIT_RISK → B_IGNITION：档位转向判定为 True（用户立项核心场景）。"""
+    result = tier_shift_reversal_of({"candidateTier": "B_IGNITION"}, "D_EXIT_RISK")
+    assert result["isReversal"] is True
+    assert result["confidence"] == 1.0
+    assert result["currentTier"] == "B_IGNITION"
+    assert result["prevTier"] == "D_EXIT_RISK"
+
+
+def test_tier_shift_reversal_d_to_a_main() -> None:
+    """D_EXIT_RISK → A_MAIN：扩散买档也属跃迁目标。"""
+    result = tier_shift_reversal_of({"candidateTier": "A_MAIN"}, "D_EXIT_RISK")
+    assert result["isReversal"] is True
+
+
+def test_tier_shift_reversal_stays_in_d() -> None:
+    """D_EXIT_RISK → D_EXIT_RISK：仍在风险档，不算跃迁。"""
+    result = tier_shift_reversal_of({"candidateTier": "D_EXIT_RISK"}, "D_EXIT_RISK")
+    assert result["isReversal"] is False
+    assert len(result["reasons"]) >= 1
+
+
+def test_tier_shift_reversal_not_from_risk_tier() -> None:
+    """非风险档（N_NEUTRAL → B_IGNITION）不算档位转向。"""
+    result = tier_shift_reversal_of({"candidateTier": "B_IGNITION"}, "N_NEUTRAL")
+    assert result["isReversal"] is False
+
+
+def test_tier_shift_reversal_to_crowded_excluded() -> None:
+    """D_EXIT_RISK → C_CROWDED：拥挤档为高位偏卖语义，不纳入跃迁。"""
+    result = tier_shift_reversal_of({"candidateTier": "C_CROWDED"}, "D_EXIT_RISK")
+    assert result["isReversal"] is False
+
+
+def test_tier_shift_reversal_missing_prev_fail_visible() -> None:
+    """缺前一帧档位 → False + reasons 说明（不伪造）。"""
+    result = tier_shift_reversal_of({"candidateTier": "B_IGNITION"}, None)
+    assert result["isReversal"] is False
+    assert any("前一帧" in r for r in result["reasons"])
+
+
+def test_tier_shift_reversal_same_signal_consumable() -> None:
+    """输出与 trend_reversal_of 同构：isReversal/confidence 可被 trend_reversal_jump 消费。"""
+    result = tier_shift_reversal_of({"candidateTier": "B_IGNITION"}, "D_EXIT_RISK")
+    assert set(("isReversal", "confidence")) <= set(result.keys())
