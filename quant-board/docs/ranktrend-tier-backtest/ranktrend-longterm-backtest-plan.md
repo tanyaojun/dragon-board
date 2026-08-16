@@ -666,6 +666,25 @@ h8 = 未来 8 帧价格收益 median）：
    均值回归区过早离场——控回撤应改用"fall_volume 或 zljzb<-5 持续弱势状态"触发退出
    （预测继续下跌），而非"档位回落"（预测反弹）。待立项（退出触发信号改造）。
 
+**weakStateExit 落地（commit `3c311e3`，2026-08-16，用户立项确认）**：
+- 实现：engine `_build_signal` 输出补 `zljzb`；`weakStateExit=True` 时 D_EXIT_RISK 档位退出
+  替换为"持续弱势状态"退出（fall_volume 或 zljzb < weakStateExitZljzb 默认 -5）；
+  `_exit_reason` 同步弱势状态分支；config 加开关；测试 +4（默认关闭回归 / fall_volume 触发 /
+  zljzb 强流出触发 / 阈值可配）。
+- **真实数据验证（769 帧）**：
+
+| 配置 | tradeCount | winRate | pf | winRate×pf | maxDD |
+|---|---|---|---|---|---|
+| rtc 默认（现状） | 99 | 0.3030 | 0.4070 | 0.123 | 0.3207 |
+| rtc weakStateExit(-5) | 99 | 0.2929 | 0.3908 | 0.114 | 0.3287 |
+| trj mag30 默认 | 77 | 0.5455 | 0.9847 | 0.537 | 0.1151 |
+| trj mag30 weakStateExit(-5) | 77 | 0.5455 | 0.9778 | 0.533 | 0.1151 |
+
+- **结论：weakStateExit 交易模拟无效果**（tradeCount 完全不变 99/77）——D_EXIT_RISK 档位与
+  弱势状态在真实数据**同帧共现**（档位判定已含"短动量弱+风险压力"，持仓走到 D 档时通常已
+  放量下跌/资金流出，两种触发同一帧，替换无差异）。开关保留为研究工具（默认关闭），
+  归档结论：h8 统计上弱势状态预测下跌有效，但交易执行层面与 D_EXIT_RISK 退出等效。
+
 **后续待办（未立项）**：
 - 把 trendReversal ∧ jumpBuy ∧ mag≥20（可选 + fresh≥0.5）接入候选分层/回测验证
   （winRate×pf 验收线），若通过再决定作为入场候选；
