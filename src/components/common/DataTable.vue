@@ -334,7 +334,7 @@ const localAttentionStageLabels: Record<string, string> = {
   expansion: '扩散',
   crowded: '拥挤',
   reversal: '反转',
-  cooling: '降温',
+  cooling: '冷却',
 }
 
 // ========== 状态 ==========
@@ -825,12 +825,15 @@ const getLifecycleClass = (stock: any) => {
 const getLifecycleVeto = (stock: any): boolean =>
   !!(getRankTrendAnalysis(stock)?.observation?.lifecycle?.veto ?? stock?._lifecycleVeto ?? false)
 
-// 环境门环境色（2026-08-16 优化：lifecycle 无方向区分度，不用方向色；veto=红实心、
-// 反转/拥挤=橙回避、冷却=灰、点火/扩散=中性）
+// 环境门环境色（2026-08-16 优化：lifecycle 无方向区分度，不用方向色；逐 stage 色与
+// OBSERVATION 面板一致：点火黄/扩散红/拥挤橙/反转绿/冷却灰；否决（veto）是动作语义，
+// 由红色"否决"角标单独表达，不覆盖 stage 颜色——避免"反转阶段+否决"混淆）
 const lifecycleEnvClass = (stock: any): string => {
-  if (getLifecycleVeto(stock)) return 'lifecycle-env-veto'
   const stage = getLifecycleStage(stock)
-  if (stage === 'crowded' || stage === 'reversal') return 'lifecycle-env-caution'
+  if (stage === 'ignition') return 'lifecycle-env-ignition'
+  if (stage === 'expansion') return 'lifecycle-env-expansion'
+  if (stage === 'crowded') return 'lifecycle-env-crowded'
+  if (stage === 'reversal') return 'lifecycle-env-reversal'
   if (stage === 'cooling') return 'lifecycle-env-cooling'
   return 'lifecycle-env-neutral'
 }
@@ -2889,35 +2892,50 @@ defineExpose({
   color: #95a5a6;
 }
 
-/* 生命周期环境门标签（2026-08-16 优化：无方向区分度，显示 stage+环境色；veto=红实心、反转/拥挤=橙、冷却=灰、点火/扩散=中性） */
-.lifecycle-env-neutral {
-  color: #95a5a6;
+/* 生命周期环境门标签（2026-08-16 优化：无方向区分度，显示 stage+环境色；逐 stage 色与
+   OBSERVATION 面板 .stage-* 一致：点火黄 #e7bd4d/扩散红 #ff5b62/拥挤橙 #ff9f43/反转绿 #38c98b/
+   冷却灰 #8f999c；否决（veto）由红色"否决"角标单独表达） */
+.lifecycle-env-ignition {
+  color: #e7bd4d !important;
   font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
-  background: rgba(149, 165, 166, 0.08);
+  background: rgba(231, 189, 77, 0.1);
 }
-.lifecycle-env-cooling {
-  color: #7f8c8d;
+.lifecycle-env-expansion {
+  color: #ff5b62 !important;
   font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
-  background: rgba(127, 140, 141, 0.1);
+  background: rgba(255, 91, 98, 0.1);
 }
-.lifecycle-env-caution {
-  color: #ff9f43;
+.lifecycle-env-crowded {
+  color: #ff9f43 !important;
   font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
   background: rgba(255, 159, 67, 0.1);
 }
-.lifecycle-env-veto {
-  color: #fff;
+.lifecycle-env-reversal {
+  color: #38c98b !important;
   font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
-  background: #e74c3c;
-  border: 1px solid #c0392b;
+  background: rgba(56, 201, 139, 0.1);
+}
+.lifecycle-env-cooling {
+  color: #8f999c !important;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(143, 153, 156, 0.1);
+}
+.lifecycle-env-neutral {
+  color: #95a5a6 !important;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(149, 165, 166, 0.08);
 }
 .lifecycle-veto-badge {
   display: inline-flex;
