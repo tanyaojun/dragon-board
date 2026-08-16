@@ -541,6 +541,24 @@ h8 = 未来 8 帧价格收益 median）：
   （pf 0.98→0.88）。开关保留为研究工具，默认不变；**signal.rank 本身已是 avgRankNum 派生**
   （attention_rank_lookup 按 avgRankNum 重排），不存在 compRank/rank 混用问题。
 
+**avgRankNum 相对恶化退出（commit `59610ff`，2026-08-16，用户确认方向）**：
+- 按用户指示把 avgranknum 模式改为**相对恶化**：position 存入场 avgRankNum（entryAvgRankNum），
+  当前 avgRankNum − 入场 avgRankNum > avgRankNumExitDelta（默认 20 个百分点）才退出
+  （config `avgRankNumExitMax` → `avgRankNumExitDelta`，绝对阈值证伪归档）；测试更新 5 用例。
+- **真实数据验证（trend_reversal_jump mag≥30，769 帧）**：
+
+| 配置 | tradeCount | winRate | pf | winRate×pf |
+|---|---|---|---|---|
+| rank 退出（基线） | 77 | 0.5455 | 0.9847 | **0.537** |
+| avgdelta 10/15/20/25/30 | 76 | 0.5526 | 0.8741 | **0.483**（全部相同） |
+| avgdelta20 + delay4 | 76 | 0.5658 | 0.8704 | 0.492 |
+
+- **结论：avgRankNum 相对恶化退出同样证伪**（delta 10~30 无区分度）——被保留的仓位最终仍经
+  final sell / D_EXIT_RISK 退出但已亏更多（pf 0.98→0.87）。**"入场即触发 rank>50"的表面矛盾
+  在数据上不成立**：22 笔 rank>50 退出中 21 笔同时/稍后被 final sell / D_EXIT_RISK 覆盖，
+  提前退出反而减少亏损。排名止损保持 `rank>50`（attention 重排）为最优，rankExitField 开关
+  保留为研究工具（默认 "rank" 不变）。
+
 **后续待办（未立项）**：
 - 把 trendReversal ∧ jumpBuy ∧ mag≥20（可选 + fresh≥0.5）接入候选分层/回测验证
   （winRate×pf 验收线），若通过再决定作为入场候选；
