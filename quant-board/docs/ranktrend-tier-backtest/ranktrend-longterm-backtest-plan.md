@@ -588,6 +588,24 @@ h8 = 未来 8 帧价格收益 median）：
 4. **立项建议**：趋势反转层判定从"排名拐点"切换为"档位转向 D→B_IGNITION"（可配置模式），
    并叠加 jump buy 放大（0.5309）；属策略语义变更，待用户确认后 TDD 落地。
 
+**reversalMode 开关落地（commit `85b7c9c`，2026-08-16，用户立项确认）**：
+- 实现：`trend_reversal.py` 新增 `tier_shift_reversal_of`（前一帧 D_EXIT_RISK → 当前
+  B_IGNITION/A_MAIN 档位转向；C_CROWDED 高位拥挤偏卖不纳入）；engine replay 跟踪
+  `prev_candidate_by_code` + `meta.reversalMode`（默认 `rank_cross` 零行为变化，`tier_shift`
+  用档位转向）；测试 +7。
+- **真实数据交易模拟验证（trend_reversal_jump，769 帧）**：
+
+| 配置 | tradeCount | winRate | pf | winRate×pf |
+|---|---|---|---|---|
+| rank_cross mag30（基线） | 77 | 0.5455 | 0.9847 | **0.537** |
+| tier_shift mag25 | 79 | 0.5190 | 0.9244 | 0.480 |
+| tier_shift mag30 | 77 | 0.4416 | 0.6245 | 0.276（崩） |
+
+- **结论：tier_shift 交易模拟未优于 rank_cross**——h8 信号统计正期望（0.53 > 0.49）
+  再次未转化为交易收益（双边成本 0.36% + 执行吃平），与历次信号层发现一致；
+  reversalMode 保留为研究工具（默认 rank_cross），tier_shift 作观察信号有效但交易不转化。
+  后续若继续，方向是降低交易成本敏感度（更长持有/更少换手），而非换信号。
+
 **后续待办（未立项）**：
 - 把 trendReversal ∧ jumpBuy ∧ mag≥20（可选 + fresh≥0.5）接入候选分层/回测验证
   （winRate×pf 验收线），若通过再决定作为入场候选；
