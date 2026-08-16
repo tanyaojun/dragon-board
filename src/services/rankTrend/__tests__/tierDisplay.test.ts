@@ -5,6 +5,7 @@ import {
   getResonanceTier,
   getSynergyTier,
   getSynergyTierDetail,
+  getSynergyVoteBreakdown,
   getVolumePriceTier,
   tierBadgeClass,
   tierBadgeLabel,
@@ -89,5 +90,67 @@ describe('getSynergyTierDetail', () => {
     const stock = makeStock()
     expect(getSynergyTierDetail(stock)).toEqual(['共振 A', '趋势 S', '量价 B', '周期 A'])
     expect(getSynergyTierDetail({})).toEqual(['共振 -', '趋势 -', '量价 -', '周期 -'])
+  })
+})
+
+describe('getSynergyVoteBreakdown（三票一票制用户友好解释）', () => {
+  it('三维方向票 + 周期环境门 + 最终结果', () => {
+    const stock = {
+      rankTrend: {
+        resonance: { signalTier: 'A', direction: 'buy' },
+        observation: {
+          rankTrend: { signalTier: 'A', direction: 'buy' },
+          volumePrice: { signalTier: 'B', direction: 'up' },
+          lifecycle: { signalTier: 'A', stage: 'expansion' },
+          synergy: { signalTier: 'S', tierReasons: ['方向一致强买'] },
+        },
+      },
+    }
+    const lines = getSynergyVoteBreakdown(stock)
+    expect(lines[0]).toContain('共振 买入·涨')
+    expect(lines[0]).toContain('趋势 买入·涨')
+    expect(lines[0]).toContain('量价 弱买·涨')
+    expect(lines[1]).toContain('周期 放行（扩散）')
+    expect(lines[2]).toContain('总档 S（强买）')
+  })
+
+  it('周期否决：一票否决直接决定总档', () => {
+    const stock = {
+      rankTrend: {
+        resonance: { signalTier: 'A', direction: 'buy' },
+        observation: {
+          rankTrend: { signalTier: 'A', direction: 'buy' },
+          volumePrice: { signalTier: 'B', direction: 'up' },
+          lifecycle: { signalTier: 'E', stage: 'crowded' },
+          synergy: { signalTier: 'E', tierReasons: ['周期一票否决'] },
+        },
+      },
+    }
+    const lines = getSynergyVoteBreakdown(stock)
+    expect(lines.some((l) => l.includes('周期 否决'))).toBe(true)
+    expect(lines.some((l) => l.includes('总档强制否决'))).toBe(true)
+  })
+
+  it('周期降档标注', () => {
+    const stock = {
+      rankTrend: {
+        resonance: { signalTier: 'A', direction: 'buy' },
+        observation: {
+          rankTrend: { signalTier: 'A', direction: 'buy' },
+          volumePrice: { signalTier: 'B', direction: 'up' },
+          lifecycle: { signalTier: 'D', stage: 'cooling' },
+          synergy: { signalTier: 'B', tierReasons: ['方向一致强买', '周期 D 环境降档'] },
+        },
+      },
+    }
+    const lines = getSynergyVoteBreakdown(stock)
+    expect(lines.some((l) => l.includes('周期 回避（冷却）'))).toBe(true)
+    expect(lines.some((l) => l.includes('环境门降档'))).toBe(true)
+  })
+
+  it('缺字段回退：方向票不足/总档未合并，不抛错', () => {
+    const lines = getSynergyVoteBreakdown({})
+    expect(lines.some((l) => l.includes('方向票不足'))).toBe(true)
+    expect(lines.some((l) => l.includes('总档：数据不足'))).toBe(true)
   })
 })

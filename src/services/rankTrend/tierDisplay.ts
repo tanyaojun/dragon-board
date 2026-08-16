@@ -81,6 +81,99 @@ export function getSynergyTierDetail(stock: unknown): string[] {
   return parts
 }
 
+const STAGE_CN: Record<string, string> = {
+  ignition: '点火',
+  expansion: '扩散',
+  crowded: '拥挤',
+  reversal: '反转',
+  cooling: '冷却',
+}
+
+const TIER_CN: Record<RankTrendSignalTier, string> = {
+  S: '强买',
+  A: '买入',
+  B: '弱买',
+  C: '中性',
+  D: '回避',
+  E: '否决',
+  unknown: '--',
+}
+
+function dimDirection(stock: unknown, path: string): string | null {
+  let cur: unknown = stock
+  for (const key of path.split('.')) {
+    if (cur && typeof cur === 'object' && key in (cur as Record<string, unknown>)) {
+      cur = (cur as Record<string, unknown>)[key]
+    } else {
+      return null
+    }
+  }
+  return typeof cur === 'string' && cur ? cur : null
+}
+
+/** 四维信号"三票一票制"用户友好解释（悬停展示，2026-08-16）：
+ *  三维方向投票（共振/趋势/量价，有明确方向才投）+ 周期环境门（否决/谨慎/回避/放行）+ 最终结果。
+ *  示例：
+ *    共振 强买·涨  趋势 买入·涨  量价 弱买·放量涨   ← 三维方向票
+ *    周期 扩散（放行）                              ← 环境门把关
+ *    方向票汇总 → 总档 买入（周期环境门降档后）       */
+export function getSynergyVoteBreakdown(stock: unknown): string[] {
+  const lines: string[] = []
+  const votes: string[] = []
+  const resTier = getResonanceTier(stock)
+  const rankTier = getRankTrendTier(stock)
+  const vpTier = getVolumePriceTier(stock)
+  const lcTier = getLifecycleTier(stock)
+  const resDir = dimDirection(stock, 'rankTrend.resonance.direction')
+  const rankDir = dimDirection(stock, 'rankTrend.observation.rankTrend.direction')
+  const vpDir = dimDirection(stock, 'rankTrend.observation.volumePrice.direction')
+  const stage = dimDirection(stock, 'rankTrend.observation.lifecycle.stage')
+
+  const voteText = (tier: RankTrendSignalTier | null, dir: string | null, defaultTxt: string) => {
+    if (!tier || tier === 'unknown') return null
+    if (dir === 'buy' || dir === 'up') return `${TIER_CN[tier]}·涨`
+    if (dir === 'sell' || dir === 'down') return `${TIER_CN[tier]}·跌`
+    return `${TIER_CN[tier]}（${defaultTxt}）`
+  }
+  const vRes = voteText(resTier, resDir, '共振观望')
+  const vRank = voteText(rankTier, rankDir, '趋势观望')
+  const vVp = voteText(vpTier, vpDir, '量价常态')
+  if (vRes) votes.push(`共振 ${vRes}`)
+  if (vRank) votes.push(`趋势 ${vRank}`)
+  if (vVp) votes.push(`量价 ${vVp}`)
+  if (votes.length) {
+    lines.push(votes.join('  '))
+  } else {
+    lines.push('共振/趋势/量价：方向票不足，未形成买入方向')
+  }
+
+  // 周期环境门
+  const stageCn = stage ? (STAGE_CN[stage] || stage) : '未知'
+  if (lcTier === 'E') {
+    lines.push(`周期 否决（${stageCn}）→ 总档强制否决`)
+  } else if (lcTier === 'B') {
+    lines.push(`周期 谨慎（${stageCn}）→ 若为 S/A 则降一档`)
+  } else if (lcTier === 'D') {
+    lines.push(`周期 回避（${stageCn}）→ 若为 S/A 则降一档`)
+  } else if (lcTier === 'A') {
+    lines.push(`周期 放行（${stageCn}）→ 不干预方向票`)
+  } else {
+    lines.push(`周期 ${stageCn}（环境门）`)
+  }
+
+  // 最终结果
+  const syn = getSynergyTier(stock)
+  const synReasons = getSynergyTierReasons(stock)
+  const downgraded = synReasons.some((r) => r.includes('环境降档'))
+  if (syn && syn !== 'unknown') {
+    const reason = TIER_CN[syn]
+    lines.push(`方向票汇总 → 总档 ${syn}（${reason}${downgraded ? '，周期环境门降档后' : ''}）`)
+  } else {
+    lines.push('总档：数据不足，未合并')
+  }
+  return lines
+}
+
 /** 档位徽章 CSS 类（DataTable §4.4），unknown → 虚线占位 */
 export function tierBadgeClass(tier: RankTrendSignalTier | null | undefined): string | null {
   if (tier === null || tier === undefined) return null

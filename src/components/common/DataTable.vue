@@ -278,6 +278,7 @@ import {
   getSynergyTier,
   getSynergyTierDetail,
   getSynergyTierReasons,
+  getSynergyVoteBreakdown,
   getVolumePriceTier,
   tierBadgeClass,
   tierBadgeLabel,
@@ -1184,20 +1185,22 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
   if (field === 'synergyTier') {
     const tier = getSynergyTier(stock)
     if (tier) {
-      lines.push(`四维合并档位 ${tierBadgeLabel(tier)}`)
-      lines.push(...getSynergyTierDetail(stock))
-      lines.push(...getSynergyTierReasons(stock))
+      // 四维"三票一票制"用户友好解释（2026-08-16）：三维方向票 + 周期环境门 + 最终结果
+      lines.push('四维信号 · 三票一票制')
+      lines.push(...getSynergyVoteBreakdown(stock))
     }
   } else if (field === 'lifecycleOpportunity') {
-    // 周期（2026-08-16 优化）：环境门标签——显示阶段 + veto 状态 + 原因，
-    // 不显示档位字母（lifecycle 无方向区分度）；注明"不预测方向，仅环境修正/否决"
+    // 周期（2026-08-16 优化）：环境门标签——用户友好解释"三票一票制"中的把关角色
     const stage = getLifecycleStageLabel(stock)
-    const parts: string[] = []
-    if (stage && stage !== '未知') parts.push(stage)
-    if (getLifecycleVeto(stock)) parts.push('否决')
-    if (parts.length) lines.push(parts.join(' '))
-    lines.push('生命周期为环境门，不预测方向，仅参与 synergy 环境修正/否决')
-    lines.push(...getTierReasonsOf(stock, field))
+    const lcTier = getLifecycleTier(stock)
+    lines.push('周期 · 环境门（三票一票制中的"一票"）')
+    if (stage && stage !== '未知') lines.push(`当前阶段：${stage}`)
+    if (lcTier === 'E') lines.push('一票否决：本票直接决定总档为否决')
+    else if (lcTier === 'B') lines.push('谨慎把关：若方向票为强买/买入，则降一档')
+    else if (lcTier === 'D') lines.push('回避把关：若方向票为强买/买入，则降一档')
+    else if (lcTier === 'A') lines.push('放行：不干预三维方向票')
+    else lines.push('环境门状态未知')
+    lines.push('（周期不投方向票，只做风控把关）')
   } else {
     // 共振/趋势/量价：档位字母 + 原因（如"B，方向确认但路径持续不足"）
     const tier =
