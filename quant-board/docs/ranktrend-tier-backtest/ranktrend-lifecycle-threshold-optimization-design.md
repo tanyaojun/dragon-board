@@ -136,3 +136,26 @@ cycleNormCrowdedCarryBestRankMax: float = 12.0
 - 阈值改动影响 lifecycle tier → synergy 投票 → 交易，波及面大 → 参数化先零行为落地，
   搜索候选隔离验证；
 - cycle_confidence 阈值较少被消费（仅 confidence 字段），可后置或跳过。
+
+## 8. 实施结果（2026-08-16）
+
+### 8.1 参数化已落地（commit `ba6e301`，零行为变化）
+- RankTrendConfig 新增 **51 个阈值字段**（cycleRaw* 21 + cycleNorm* 6 + cycleConf* 24），
+  默认值 = 原硬编码（65/25/85/10/-1.2/50/30/70/20/3/5/1/2/-2.5/72/82/12…）；
+- `raw_stage`/`normalize_stage`/`cycle_confidence` 加 config 参数读阈值，`analyze_cycle` 传 config；
+- search_space 排除 `cycle*` 前缀（不进默认 optuna/grid 空间，由专用搜索脚本搜索）；
+- 测试 +5（默认行为与硬编码一致回归 + 阈值可调改变 stage）；golden 对齐 57 passed；
+  全量 pytest 1626 passed。
+
+### 8.2 坐标下降搜索（commit `ada4a27`）——**否定性结论**
+- 搜索脚本 `backend/operations/optimize_lifecycle_thresholds.py`：replay + lifecycle tier h8
+  excess 评估 + 坐标下降；
+- **评估目标修正**：lifecycle 合法档位 A/B/C/D/E（无 S，`_lifecycle_tier` 规则）——
+  目标改为 A_ex > B_ex（优选路径方向区分度；阶段 3 诊断 A 0.0092 < B 0.0228 反转）；
+- **搜索结果（rounds=1，10 参数 × 2-3 候选 ≈ 20 次 replay）**：best = baseline（score 0.5、
+  params 空）——**stage 阈值调整无法改变 A/B excess 关系**；
+- **根因**：A 档（21475 样本覆盖全部 allow ignition/expansion）高分位混杂，excess 被均值回归
+  拉低；B 档（1877 谨慎样本）低分位 excess 天然高——**分位结构性差异，阈值不可调**；
+- **结论**：lifecycle 方向区分度受档位语义 + 分位结构限制（非阈值可优化）；参数化保留
+  （可配置化本身是改进，供人工调优）；lifecycle 保持"环境门"角色（synergy 由其他三维支撑
+  已达标）。搜索脚本保留为工具，可扩展搜索空间/目标后复用。
