@@ -1,14 +1,14 @@
 # 行情主页【四维】列实现方案（前端消费后端 signalTier）
 
 > 主题：行情主页（`DataTable.vue`）展示后端生产的五维离散档位信号
-> 状态：方案稿（未实现）
+> 状态：方案稿（未实现）——2026-08-16 按生命周期区分度结论优化（§2.1 优化说明）
 > 前置：后端五维 `signalTier`（共振/趋势/量价/周期/synergy 合并）已由 Python golden 生产（`engine.py`/`volume_price.py`/`ranktrend_routes.py`），前端只消费
 > 关联：回测方案见 `ranktrend-signal-tier-backtest-plan.md`；档位规则见 `ranktrend-observation-discrete-tiers-design.md`
 
 ## 1. 背景与目标
 
 1. 现状：行情主页 `src/components/common/DataTable.vue` 已有四列（共振/趋势/量价/周期），只展示方向箭头 + 连续分（`observation-cell`）；后端已生产各维 `signalTier`/`tierReasons` 与四维合并 `synergy.signalTier`，前端**零消费**（`src/services/rankTrend/types.ts` 无字段、模板无徽章）。
-2. 目标（用户已确认形态）：**新增【四维】总档列**（显示 synergy 合并档位）+ **现有四列升级为「方向箭头 + 档位徽章 + 连续分」**，与设计文档 §8 的"前端展示档位徽章后行为可解释"一致。
+2. 目标（用户已确认形态）：**新增【四维】总档列**（显示 synergy 合并档位）+ **共振/趋势/量价三列升级为「方向箭头 + 档位徽章 + 连续分」**，**周期列改为「环境门标签」**（§2.1 优化，不做方向色徽章），与设计文档 §8 的"前端展示档位徽章后行为可解释"一致。
 3. 约束：前端只消费后端已产字段，不在前端重算档位；不改动后端生产逻辑（回测方案的参数化/下沉属另一任务，互不阻塞——前端消费的是现有已产字段）。
 
 ## 2. 字段合同确认（后端已生产，只读消费）
@@ -26,6 +26,23 @@
 档位枚举（全局统一）：`S / A / B / C / D / E / unknown`。`unknown` 表示样本不足/数据缺失，前端显示 `--`，**不归零、不伪装**（fail-visible-data-pipelines）。
 
 > 注意：`signalTier` 为可选字段（后端可能因版本/降级缺失），前端读取必须**容错缺字段**：缺失时回退为现有连续分展示（方向箭头 + 分数），不渲染徽章。
+
+## 2.1 优化说明（2026-08-16，基于生命周期区分度结论）
+
+**数据结论**（`ranktrend-lifecycle-threshold-optimization-design.md` §8.2，坐标下降搜索证明）：
+lifecycle 档位（A/B/C/D/E）**无方向区分度**——A（优选路径 ignition/expansion）h8 excess 0.0092
+**反低于** B（谨慎）0.0228，且该关系是分位结构性差异（A 高分位混杂被均值回归拉低），阈值不可调。
+
+**对展示的影响（本方案优化点）**：
+1. **周期列不做方向色徽章**——原方案把四列统一升级为方向徽章，会误导用户以为 lifecycle 的
+   A/B 档有方向强弱语义；实际 A 档股票 h8 表现弱于 B 档。改为**环境门标签**：显示 stage
+   中文名（点火/扩散/拥挤/反转/冷却）+ 环境色（veto=红实心、反转/拥挤=橙、冷却=灰），
+   悬停注明"生命周期为环境门，不预测方向，仅参与 synergy 环境修正/否决"；
+2. **【四维】synergy 总档列置末**（用户确认列顺序）：synergy 是唯一有方向区分度的合并信号
+   （阶段 3：S/A/B excess 单调 0.088/0.039/-0.006），作为总档展示在周期列之后；
+3. **悬停明细**：四维明细中 lifecycle 标注"环境门"，synergy reasons 展示四维投票构成
+   （如 `共振S · 趋势A · 量价B · 周期[环境]`），缺维显示 `-`；
+4. 共振/趋势/量价三列保留方向徽章（趋势 0.064/0.037、量价资金 zljzb>5 0.554 有方向区分度）。
 
 ## 3. TS 类型补充（`src/services/rankTrend/types.ts`）
 
@@ -102,8 +119,8 @@ export function getSynergyTier(stock: any): { tier: RankTrendSignalTier | null; 
   - `resonanceIntensity: '52px' → '78px'`
   - `rankTrendStrength: '52px' → '78px'`
   - `volumePriceQuadrant: '52px' → '78px'`
-  - `lifecycleOpportunity: '64px' → '86px'`
-- 新增列（紧跟周期列之后，`group: 'comprehensive'`）：
+  - `lifecycleOpportunity: '64px' → '86px'`（环境门标签，宽度容纳 stage 中文名）
+- 新增列（**紧跟周期列之后，置末**，`group: 'comprehensive'`；用户确认列顺序 synergy 置末）：
 
 ```ts
 { key: 'synergyTier', label: '四维', group: 'comprehensive', always: true },
@@ -113,7 +130,7 @@ synergyTier: '64px',
 
 ### 4.2 单元格模板
 
-**四列升级**（以共振列为模板，四列同构）：
+**共振/趋势/量价三列升级**（以共振列为模板，三列同构；周期列不同，见下）：
 
 ```html
 <template v-else-if="col.key === 'resonanceIntensity'">
@@ -134,7 +151,23 @@ synergyTier: '64px',
 </template>
 ```
 
-**新增【四维】列**：
+**周期列改为环境门标签**（不做方向徽章——§2.1 优化）：显示 stage 中文名 + 环境色，veto 红角标：
+
+```html
+<template v-else-if="col.key === 'lifecycleOpportunity'">
+  <div class="observation-cell lifecycle-cell" @click.stop="openObservationPanel(stock, 'lifecycle')"
+    @mouseenter="showTierTooltip($event, stock, 'lifecycleOpportunity')"
+    @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+    <template v-if="getLifecycleStage(stock) != null">
+      <span v-if="getLifecycleVeto(stock)" class="lifecycle-veto-badge" title="生命周期一票否决">否决</span>
+      <span :class="lifecycleEnvClass(getLifecycleStage(stock))">{{ lifecycleStageLabel(getLifecycleStage(stock)) }}</span>
+    </template>
+    <span v-else class="trend-steady">--</span>
+  </div>
+</template>
+```
+
+**新增【四维】列**（synergy 档位徽章，置末）：
 
 ```html
 <template v-else-if="col.key === 'synergyTier'">
@@ -152,8 +185,9 @@ synergyTier: '64px',
 ### 4.3 读取与工具函数
 
 - 复用现有 `getRankTrendAnalysis(stock) = stock.rankTrend`（`DataTable.vue:1075`）读取 `observation`。
-- 新增 `getResonanceTier/getRankTrendTier/getVolumePriceTier/getLifecycleTier/getSynergyTier(stock)` 五个 getter（缺字段返回 null，回退纯连续分展示）。
-- `showTierTooltip`：扩展 `confidenceTooltip` 机制（`DataTable.vue:201-203`），content 拼 `tierReasons` 全文；四维列悬停显示合并 reasons + 四维明细（如 `共振S · 趋势A · 量价B · 周期A`），缺维显示 `-`。
+- 新增 `getResonanceTier/getRankTrendTier/getVolumePriceTier/getSynergyTier(stock)` 四个方向档 getter（缺字段返回 null，回退纯连续分展示）。
+- 周期列工具：`getLifecycleStage`（已有，`DataTable.vue:804`）、`getLifecycleVeto(stock)`（读 lifecycle.veto 布尔）、`lifecycleStageLabel(stage)`（stage→中文：ignition=点火/expansion=扩散/crowded=拥挤/reversal=反转/cooling=冷却）、`lifecycleEnvClass(stage, veto)`（环境色：veto=红实心、crowded/reversal=橙、cooling=灰、ignition/expansion=中性）。
+- `showTierTooltip`：扩展 `confidenceTooltip` 机制（`DataTable.vue:201-203`），content 拼 `tierReasons` 全文；四维列悬停显示合并 reasons + 四维明细（如 `共振S · 趋势A · 量价B · 周期[环境门]`），缺维显示 `-`；周期列悬停注明"生命周期为环境门，不预测方向，仅参与 synergy 环境修正/否决"。
 - `tierBadgeClass(tier)`：返回档位徽章样式类（§4.4）。
 
 ### 4.4 徽章样式（与现有观察色系对齐，`DataTable.vue:2649-2670`）
