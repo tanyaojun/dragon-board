@@ -69,28 +69,24 @@ def _is_limit_down(code: Any, change: float | None) -> bool:
     return change <= -_daily_limit_pct(code)
 
 
-def _direction_bucket(code: Any, chg: float) -> float:
+def _direction_bucket(code: Any, chg: float, config: RankTrendConfig | None = None) -> float:
     """涨跌幅八档方向分（对称）：涨停/跌停 ±15、7%+ ±12、5-7% ±10、3-5% ±8、
-    2-3% ±6、1-2% ±4、0.5-1% ±2、0-0.5% ±1、平盘 0。"""
+    2-3% ±6、1-2% ±4、0.5-1% ±2、0-0.5% ±1、平盘 0。
+
+    档位分值 2026-08-17 参数化（config.volumePriceDirectionBuckets，默认值=原硬编码）。
+    """
+    c = config or RankTrendConfig()
     if chg >= _daily_limit_pct(code):
-        return 15.0
+        return c.volumePriceDirectionBuckets[0]
     if chg <= -_daily_limit_pct(code):
-        return -15.0
+        return -c.volumePriceDirectionBuckets[0]
     magnitude = abs(chg)
-    if magnitude >= 7.0:
-        return 12.0 if chg > 0 else -12.0
-    if magnitude >= 5.0:
-        return 10.0 if chg > 0 else -10.0
-    if magnitude >= 3.0:
-        return 8.0 if chg > 0 else -8.0
-    if magnitude >= 2.0:
-        return 6.0 if chg > 0 else -6.0
-    if magnitude >= 1.0:
-        return 4.0 if chg > 0 else -4.0
-    if magnitude >= 0.5:
-        return 2.0 if chg > 0 else -2.0
+    thresholds = (7.0, 5.0, 3.0, 2.0, 1.0, 0.5)
+    for index, threshold in enumerate(thresholds, start=1):
+        if magnitude >= threshold:
+            return c.volumePriceDirectionBuckets[index] if chg > 0 else -c.volumePriceDirectionBuckets[index]
     if magnitude > 0:
-        return 1.0 if chg > 0 else -1.0
+        return c.volumePriceDirectionBuckets[7] if chg > 0 else -c.volumePriceDirectionBuckets[7]
     return 0.0
 
 
@@ -148,7 +144,7 @@ def compute_volume_price_score(
 
     # 方向（涨跌幅五档）
     direction = "up" if chg > 0 else "down" if chg < 0 else "neutral"
-    direction_score = _direction_bucket(code, chg)
+    direction_score = _direction_bucket(code, chg, c)
 
     # 量价交叉（量比幅度 + 板块涨停语境）
     limit_up = _is_limit_up(code, chg)
@@ -161,7 +157,7 @@ def compute_volume_price_score(
         elif vr <= c.volumePriceMildRatio:
             # 准缩量涨停同理压低；非涨停常态 5 分
             volume_score = 10.0 if limit_up else 5.0
-        elif vr <= 2.0:
+        elif vr <= c.volumePriceNormalRatio:
             volume_score = min(15.0, 10 + (vr - 1) * 5)
         elif vr <= c.volumePriceOverVolumeRatio:
             volume_score = max(5.0, 15 - (vr - 2) * 10)

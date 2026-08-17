@@ -122,6 +122,11 @@ class RankTrendConfig:
     volumePriceAbnormalFundRatio: float = 20.0
     volumePriceShrinkRatio: float = 0.95
     volumePriceMildRatio: float = 1.05
+    # ── 量价硬编码参数化（2026-08-17，默认值=原硬编码，golden 不漂移）──
+    volumePriceDirectionBuckets: list[float] = field(
+        default_factory=lambda: [15.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 1.0]
+    )  # 方向八档分值：涨停/7%+/5-7/3-5/2-3/1-2/0.5-1/0-0.5（原硬编码）
+    volumePriceNormalRatio: float = 2.0  # 量比正常上限（原硬编码 vr<=2.0 边界）
     synergyLowVp: float = 40.0
     synergyHighVp: float = 75.0
     resonanceVolumePriceWeight: float = 0.15

@@ -165,3 +165,34 @@ def test_resonance_without_vp_keeps_raw() -> None:
     _apply_resonance_final(a, a["resonance"])
     assert a["resonance"]["rawScore"] == 60.0
     assert a["resonance"]["score"] == 60.0
+
+def test_vp_param_config_defaults() -> None:
+    """量价参数化默认值 = 原硬编码（golden 不漂移）。"""
+    from backend.analysis.ranktrend.engine import RankTrendConfig
+    c = RankTrendConfig()
+    assert c.volumePriceDirectionBuckets == [15.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 1.0]
+    assert c.volumePriceNormalRatio == 2.0
+    assert c.volumePriceBase == 50.0
+    assert c.volumePriceOverVolumeRatio == 2.5
+    assert c.volumePriceAbnormalFundRatio == 20.0
+    assert c.volumePriceShrinkRatio == 0.95
+    assert c.volumePriceMildRatio == 1.05
+
+
+def test_vp_direction_buckets_config_effect() -> None:
+    """方向八档分值参数化生效：提高 7%+ 档分值 → 对应分数变化。"""
+    from backend.analysis.ranktrend.engine import RankTrendConfig
+    from backend.analysis.ranktrend.volume_price import _direction_bucket
+    c = RankTrendConfig()
+    assert _direction_bucket("600001", 8.0, c) == 12.0  # 7%+ 档
+    c2 = RankTrendConfig.from_patch({"volumePriceDirectionBuckets": [15.0, 18.0, 10.0, 8.0, 6.0, 4.0, 2.0, 1.0]})
+    assert _direction_bucket("600001", 8.0, c2) == 18.0
+
+
+def test_vp_normal_ratio_config_effect() -> None:
+    """量比 2.0 边界参数化生效：volumePriceNormalRatio 提高 → 更大 vr 走"正常放量"分支。"""
+    from backend.analysis.ranktrend.engine import RankTrendConfig
+    r_default = compute_volume_price_score("600001", 5.0, 2.4, 1e6, 1.0)  # vr=2.4 > 2.0 → 过度放量分支
+    c2 = RankTrendConfig.from_patch({"volumePriceNormalRatio": 3.0})
+    r_new = compute_volume_price_score("600001", 5.0, 2.4, 1e6, 1.0, c2)  # vr=2.4 <= 3.0 → 正常放量分支
+    assert r_default["breakdown"]["volume"] != r_new["breakdown"]["volume"]

@@ -30,28 +30,53 @@ from backend.operations.optimize_resonance_parameters import (
     _tier_summary,
 )
 
-REPORT_PATH = Path(r"D:\dragon-board\quant-board\data\reports\core-signal-parameter-jump.json")
+REPORT_PATH = Path(r"D:\dragon-board\quant-board\data\reports\core-signal-parameter-volumeprice.json")
 
 # 每个参数 5 档候选（含当前默认，防过拟合——多档位观察单调性/峰值稳定性）。
-# dimension = 该参数主要影响的单维（评估 focus）。共振 Jump 参数构成：
+# dimension = 该参数主要影响的单维（评估 focus）。第 3 轮：**【量价】因子参数**（2026-08-17）。
 PARAM_TRIALS: list[dict[str, Any]] = [
+    {"param": "volumePriceBase", "desc": "量价：基准分", "dimension": "volumePrice", "levels": [40.0, 45.0, 50.0, 55.0, 60.0]},
     {
-        "param": "jumpDeltaPct",
-        "desc": "Jump：触发阈值（百分位变化）",
-        "dimension": "resonance",
-        "levels": [10.0, 12.5, 15.0, 20.0, 25.0],
+        "param": "volumePriceOverVolumeRatio",
+        "desc": "量价：过度放量阈值",
+        "dimension": "volumePrice",
+        "levels": [1.5, 2.0, 2.5, 3.0, 3.5],
     },
     {
-        "param": "jumpResetLookback",
-        "desc": "Jump：事件后重置窗口",
-        "dimension": "resonance",
-        "levels": [2, 3, 4, 5, 6],
+        "param": "volumePriceAbnormalFundRatio",
+        "desc": "量价：资金对倒阈值（zljzb%）",
+        "dimension": "volumePrice",
+        "levels": [10.0, 15.0, 20.0, 25.0, 30.0],
     },
     {
-        "param": "jumpSustainCount",
-        "desc": "Jump：持续事件判定阈值",
-        "dimension": "resonance",
-        "levels": [1, 2, 3, 4, 5],
+        "param": "volumePriceShrinkRatio",
+        "desc": "量价：缩量阈值",
+        "dimension": "volumePrice",
+        "levels": [0.75, 0.85, 0.95, 1.05, 1.15],
+    },
+    {
+        "param": "volumePriceMildRatio",
+        "desc": "量价：温和放量阈值",
+        "dimension": "volumePrice",
+        "levels": [0.95, 1.0, 1.05, 1.1, 1.15],
+    },
+    {
+        "param": "volumePriceNormalRatio",
+        "desc": "量价：量比正常上限（2026-08-17 参数化）",
+        "dimension": "volumePrice",
+        "levels": [1.5, 1.75, 2.0, 2.25, 2.5],
+    },
+    {
+        "param": "volumePriceDirectionBuckets",
+        "desc": "量价：方向八档分值缩放（×0.8/0.9/1.0/1.1/1.2）",
+        "dimension": "volumePrice",
+        "levels": [
+            [12.0, 9.6, 8.0, 6.4, 4.8, 3.2, 1.6, 0.8],
+            [13.5, 10.8, 9.0, 7.2, 5.4, 3.6, 1.8, 0.9],
+            [15.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 1.0],
+            [16.5, 13.2, 11.0, 8.8, 6.6, 4.4, 2.2, 1.1],
+            [18.0, 14.4, 12.0, 9.6, 7.2, 4.8, 2.4, 1.2],
+        ],
     },
 ]
 
@@ -61,14 +86,15 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 
 def evaluate(config: RankTrendConfig, frames: list[dict[str, Any]], focus_dim: str) -> dict[str, Any]:
-    """replay + rankTrend/resonance/synergy h1 统计。score 以 synergy 合并档为主、focus 维次之。"""
+    """replay + rankTrend/resonance/volumePrice/synergy h1 统计。score 以 synergy 合并档为主、focus 维次之。"""
     engine = RankTrendPythonEngine(config=config)
     signals = engine.replay(frames, window_size=50)
     trend = tier_forward_returns(signals, frames, horizon=1, dimension="rankTrend")
     res = tier_forward_returns(signals, frames, horizon=1, dimension="resonance")
+    vp = tier_forward_returns(signals, frames, horizon=1, dimension="volumePrice")
     syn = tier_forward_returns(signals, frames, horizon=1, dimension="synergy")
 
-    focus = trend if focus_dim == "rankTrend" else res
+    focus = {"rankTrend": trend, "resonance": res, "volumePrice": vp}.get(focus_dim, trend)
     focus_sa = sa_excess_of(focus)
     syn_sa = sa_excess_of(syn)
     focus_unknown = float(focus.get("unknownRate") or 0)

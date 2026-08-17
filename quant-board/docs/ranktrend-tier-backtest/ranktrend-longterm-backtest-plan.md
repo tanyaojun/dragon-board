@@ -1235,3 +1235,54 @@ delta 组合（30+freshness06 0.0698）亦劣于 25 组合（0.0753）。**最�
 
 
 
+
+## 阶段 9：量价因子参数回测与优化（2026-08-17）
+
+> 状态：参数化 + 5 档扫描 + 组合样本外复核完成；`fund10 + over2` 为**参数研究以来样本外
+> 最强候选**（validation synergy 转正 +0.0165）；不写回默认值，采纳待进一步复核
+> 脚本：`backend/operations/optimize_core_signal_parameters.py`（第 3 轮，量价）
+> 报告：`data/reports/core-signal-parameter-volumeprice.json`
+
+### 9.1 参数化（TDD，默认值=原硬编码，golden 不漂移）
+
+量价因子已有 config 参数（`volumePriceBase=50`/`OverVolumeRatio=2.5`/`AbnormalFundRatio=20`/
+`ShrinkRatio=0.95`/`MildRatio=1.05`）；新增硬编码参数化 2 个：
+- `volumePriceDirectionBuckets=[15,12,10,8,6,4,2,1]`（方向八档分值，原硬编码于 `_direction_bucket`）
+- `volumePriceNormalRatio=2.0`（量比正常上限，原硬编码 `vr<=2.0` 边界）
+
+测试 +3（默认值断言/方向八档生效/量比边界生效），`test_volume_price_score.py` 17 passed。
+
+### 9.2 5 档扫描（7 参数 × 5 档 = 28 次全量评估；synergy saEx）
+
+| 参数 | 5 档结果（synergy saEx） | 判定 |
+|---|---|---|
+| **`volumePriceAbnormalFundRatio`** | **10:0.0759 / 15:0.0666 / 20:0.0651 / 25:0.0667 / 30:0.0677** | ✅ **10 显著（+16.6%，pass=T 保持）** |
+| `volumePriceOverVolumeRatio` | 1.5:0.0788(pass=F) / 2.0:0.0683 / 2.5:0.0651 / 3.0:0.0615 / 3.5:0.0628 | ⚪ 2.0 略升（1.5 破坏 passHard） |
+| `volumePriceMildRatio` | 0.95:0.0622 / 1.0:0.0633 / 1.05:0.0651 / 1.1:0.0657 / 1.15:0.0657 | ⚪ 1.1/1.15 微升 |
+| `volumePriceShrinkRatio` | 0.75~1.15：0.0643~0.0651 | ⚪ 持平/略降 |
+| `volumePriceBase` | 40~60 全部 0.0651（完全一致） | ❌ 仅平移 score 不影响档位 |
+| `volumePriceNormalRatio` | 全部 0.0651（完全一致） | ❌ 同上 |
+| `volumePriceDirectionBuckets` | ×0.8~1.2 全部 0.0651（完全一致） | ❌ 方向分平移不影响档位（象限决定档位） |
+
+**关键洞察**：量价档位由 **quadrant（量比×涨跌）+ fund（资金）** 决定——方向八档/基准分/量比
+正常边界仅平移 score，**无档位影响**；真正可调的是**资金对倒阈值**（识别 E 档假信号的敏感度）
+与**过度放量阈值**。
+
+### 9.3 组合验证 + 样本外复核（chronological train=537/validation=232）
+
+| 配置 | 全窗口 h1 syn saEx | train h1 | validation h1 |
+|---|---|---|---|
+| baseline | 0.0651（pass=T） | 0.0902 | −0.0112 |
+| `fund10` | 0.0759（+16.6%） | 0.1022 | **+0.0044（转正）** |
+| **`fund10 + over2`** | **0.0808（+24.1%）** | 0.1031 | **+0.0165（转正）** |
+| `fund10 + mild1.15` | 0.075 | 0.1032 | −0.0009（不叠加） |
+
+**复核结论**：
+1. **`fund10 + over2`（AbnormalFundRatio 20→10 + OverVolumeRatio 2.5→2.0）是参数研究以来
+   样本外最强候选**：全窗口 syn +24.1%（passHard=True 保持）、validation syn −0.0112→**+0.0165**
+   （转正，优于 Jump 组合 delta25+freshness06 的 +0.0024）；
+2. **语义**：资金对倒阈值更敏感（zljzb>10% 即判异常）→ E 档假信号（对倒出货/过度放量）更早
+   识别，量价档位对 synergy 投票的正贡献提升；over 阈值 2.0 与 fund10 方向一致可叠加；
+3. **fund10 + mild1.15 不叠加**（validation 回落）——mild 阈值与 fund 无协同；
+4. **绝对验收线（≥0.05 且 passHard）样本外仍不可达**（+0.0165 < 0.05），维持不写回默认值；
+   但方向正确、train/validation 一致改善，为**采纳优先级最高的候选**（高于 Jump/趋势组合）。
