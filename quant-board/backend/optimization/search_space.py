@@ -265,6 +265,8 @@ _STRATEGY_SCALAR_KEYS = tuple(
 # 复合字段（field(default_factory=...) 定义，f.default 为 dataclasses.MISSING）需手工维护白名单
 _STRATEGY_LIST_KEYS = (
     "momentumPeriods", "momentumWeights", "buyThresholds", "sellThresholds",
+    "momentumDirectionShareBoost", "momentumAccelShareBoost",  # 趋势因子（2026-08-17 参数化）
+    "momentumZeroWeights", "macdRawScoreWeights",
     "resonanceWeights", "resonanceNewEntryWeights",
     "decisionRiskPenaltyWeights",
     "lifecycleWeights", "lifecycleMomentumWeights", "lifecycleMomentumScales",

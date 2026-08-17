@@ -809,3 +809,429 @@ h8 = 未来 8 帧价格收益 median）：
 整合后，合并档位对未来排名收益具备正单调区分度，**阶段 3 验收达成，可进入阶段 4 参数搜索**。
 单维信号（resonance/volumePrice）作为投票输入 excess 仍为负/弱，属输入信号质量短板，
 已由 synergy 投票整合吸收；阶段 4 搜索时以 synergy 档位为优化对象并监测单维 excess。
+
+## 阶段 7：共振参数搜索与样本外复核（2026-08-17）
+
+> 状态：Phase 1/2 已完成，样本外复核结果见 §7.4
+> 脚本：`backend/operations/optimize_resonance_parameters.py`（`--phase 1/2/3 --resume` 可断点续跑）
+> 报告：`quant-board/data/reports/resonance-parameter-search.json`
+> 决策（用户 2026-08-17）：优化【共振】信号参数——主目标改善共振维对 synergy 投票的贡献
+> （合并档为主、监测单维 excess）；搜索范围 = 档位阈值（`tierResonance*`）+ 连续分权重
+> （`resonance*`）；产出 = 搜索报告 + 建议参数，**不写回默认值**（golden 不变，采纳另行立项）。
+
+### 7.1 评估口径与基线
+
+- 评估：`replay(config)`（769 帧 2026-04-15~08-14，156647 信号）→
+  `tier_forward_returns(dimension=resonance/synergy, horizon=1)`；
+  评分 = `2×clamp(synergy saEx,0,0.15) + 0.5×synergy passHard − 0.8×synergy fail + 10×clamp(resonance saEx,0,0.05) + 0.2×resonance passHard − 0.5×max(0, resonance unknown − 0.10)`。
+- 基线（当前默认参数）：score 0.5864；synergy saEx **0.0651**（passHard=True）；resonance saEx **−0.0162**（passHard=False）；resonance unknown 18.75%。
+- 关键事实：`_resonance_tier` 只消费 `reversal_penalty / jump_event / direction / jump_freshness / persistence`
+  五输入，`resonanceWeights`（[0.35,0.25,0.2,0.2,0.2]）只影响 score/label 展示，**不影响档位 → 不影响 synergy 投票**。
+
+### 7.2 Phase 1 单维敏感性（12 参数，29 次评估）
+
+| 参数 | 候选 | 最佳 | score | synergy saEx | resonance saEx | 判定 |
+|---|---|---|---|---|---|---|
+| `tierResonanceJumpFreshnessMin` | 0.3/0.4/0.5/0.6 | **0.6** | **0.5940** | **0.0689** | **−0.0093** | ✅ 唯一显著改善 |
+| `resonanceJumpFreshnessDecay` | 2/3/5 | **2.0** | **0.5940** | **0.0689** | **−0.0093** | ✅ 与上者数学等价 |
+| `tierResonanceReversalPenaltyMin` | 0.4/0.5/0.6/0.7 | 0.4 | 0.5878 | 0.0658 | −0.0095 | 微弱 |
+| `resonanceMomentumScale` | 10/15/20 | 10 | 0.5883 | 0.0660 | −0.0169 | 微弱 |
+| 其余 8 参数（persistence/entryStrength/reversal switch/drawdown/pathDirection/threshold/accelerationScale/weights） | — | — | ≤0.5868 | ≤0.0653 | 无改善 | ❌ 无改善 |
+| `resonanceWeights` 三组组合 | — | — | 0.5864 | 0.0651 | −0.0162 | ⚪ 与基线完全一致（证实不参与档位投票） |
+
+**结论**：Jump 新鲜度是共振信号质量的唯一显著可调维度——S 档要求 Jump 事件更新鲜
+（`JumpFreshnessMin` 0.5→0.6）或新鲜度衰减更快（`Decay` 3→2），两旋钮数学等价；
+其余参数对 synergy 投票无实质贡献。
+
+### 7.3 Phase 2 定向组合验证（6 组合）
+
+| 组合 | score | synergy saEx | resonance saEx |
+|---|---|---|---|
+| 基线 | 0.5864 | 0.0651 | −0.0162 |
+| `jump_min_0.6`（首选单旋钮） | 0.5940 | 0.0689 | −0.0093 |
+| `jump_min_0.6 + decay_2.0` | 0.5940 | 0.0689 | −0.0093（不叠加，等价确认） |
+| `jump_min_0.6 + reversal_penalty_min_0.4` | 0.5954 | 0.0696 | **−0.0025**（单维最佳） |
+| **`jump_min_0.6 + momentum_scale_10`** | **0.5956** | **0.0697** | −0.0098 |
+| `jump_min_0.6 + decay_2.0 + reversal_penalty_min_0.4` | 0.5954 | 0.0696 | −0.0025 |
+
+**建议参数**（不写回默认值）：
+1. 首选：`tierResonanceJumpFreshnessMin` 0.5→**0.6**（synergy saEx +5.8%、单维改善 43%，最稳健）；
+2. 可选叠加：`resonanceMomentumScale` 15→**10**（总分最佳）或 `tierResonanceReversalPenaltyMin` 0.6→**0.4**（单维最优）；
+3. `resonanceJumpFreshnessDecay` / `resonanceWeights` 不动（等价取一；不影响档位）。
+
+### 7.4 样本外复核（walk-forward，2026-08-17）
+
+**方法**：chronological 切分（`split_frames`，validation_ratio 0.3）→
+train=2026-04-15~07-07（537 帧）/ validation=2026-07-09~08-14（232 帧）；
+每配置全量 769 帧 replay 一次（信号含完整历史上下文），train/validation 段分别统计
+resonance/synergy h1 tier（段外 snapshotId 自动跳过）。
+
+| 配置 | train syn saEx | train res saEx | validation syn saEx | validation res saEx |
+|---|---|---|---|---|
+| baseline | 0.0902（pass=True） | −0.0093 | **−0.0112（pass=False）** | −0.0369 |
+| `jump_min_0.6` | 0.0933（pass=True） | −0.0024 | −0.0062（pass=False） | −0.0299 |
+| `jump_min_0.6 + reversal_penalty_min_0.4` | 0.0932（pass=True） | **+0.0055** | **−0.0024（pass=False）** | −0.0285 |
+| `jump_min_0.6 + momentum_scale_10` | **0.0943（pass=True）** | −0.0024 | −0.0056（pass=False） | −0.0325 |
+
+（validation 段全部配置 passHard=False，含基线；verdict 均为 `validation_passHard_failed`）
+
+**复核结论**：
+1. **参数方向样本内稳定**：train 段建议参数 synergy saEx 0.0902→0.0933~0.0943（+3.4%~+4.5%），
+   共振单维 saEx −0.0093→−0.0024~+0.0055（由负转正/大幅改善）——Phase 1/2 的 in-sample 改善可复现；
+2. **样本外 synergy 档位绝对区分度失效（窗口性，与共振参数无关）**：validation 段**基线也**
+   passHard=False、saEx −0.0112（全窗口 0.0651 的显著回撤），且该段共振 unknown 占比升至 29.9%
+   （train 14.8%）——7-9 月窗口热榜排名收益模式/样本质量变化导致四维信号整体失效，
+   档位分布两段几乎一致（S~210-222/A~1085-1123/B~6080/D~13870），排除参数致分布扭曲；
+3. **建议参数在样本外相对基线仍保持改善**（validation saEx −0.0112→−0.0062~−0.0024，
+   改善 45%~79%，无反转）——参数方向稳健，但**绝对验收线（≥0.05 且 passHard）样本外不可达**。
+
+**最终建议**（延续 §7.3，不写回默认值）：
+- `tierResonanceJumpFreshnessMin` 0.5→**0.6** 可作为共振输入质量的小幅稳健改善候选，但
+  **单独据此采纳不满足样本外绝对验收**（synergy 区分度失效是窗口/市场状态问题，非本参数可解）；
+- 如需推进：先做市场状态（regime）过滤或延长样本外窗口复核，再走 golden 变更流程；
+  或按阶段 6 结论保持"四维信号仅作观察信号"，共振参数调整仅影响展示口径。
+
+### 7.5 市场状态（regime）过滤研究（2026-08-17）
+
+**方法**：`market_regime(frame)` 五因子打分（score≥70 strong / ≥50 normal / ≥30 weak / 其余 retreat），
+每个 signal 带 `regime` 字段。按 regime 分桶（`tier_forward_returns` 新增 `signal_filter` 参数）
+统计 synergy/resonance h1，全窗口 + train（2026-04-15~07-07）/ validation（2026-07-09~08-14）三段，
+对比 baseline / `jump_min_0.6` / `jump_min_0.6 + reversal_penalty_min_0.4` 三配置。
+
+**synergy saEx 按 regime 分桶（baseline，n 为全量信号数）**：
+
+| regime | n（占比） | all | train | validation | validation ≥0.05 |
+|---|---|---|---|---|---|
+| strong | 26418（17%） | 0.014 | 0.0495 | **−0.0202** | ❌ |
+| normal | 88826（57%） | 0.0828 ✓ | 0.1059 | 0.0131 | ❌ |
+| **weak** | 37975（24%） | 0.0712 ✓ | 0.0735 | **0.1146** | ✅ |
+| retreat | 3428（2%） | 0.1421 | 0.1502 | None（样本不足） | — |
+| weak+normal | 126801（81%） | 0.0796 | 0.0956 | 0.0188 | ❌ |
+| all（对照） | 156647 | 0.0651 | 0.0902 | −0.0112 | ❌ |
+
+**weak 桶 validation 明细（baseline）**：S n=12（exAcc +0.139）/ A n=54（+0.109）/ B n=491（+0.02），
+spearman 1.0、无反转、saEx **0.1146**、unknown 0%；passHard=False 仅因 **S 档样本 12 < 30**
+（其余三项 check 全 ok）。
+
+**共振参数在 weak 桶（synergy saEx）**：`jump_min_0.6` all 0.0748 / train 0.0772 / validation 0.1146；
+`jump_min_0.6 + reversal_penalty_min_0.4` all 0.0712 / train 0.0731 / validation **0.1259**
+（均不劣于 baseline 的 0.0712/0.0735/0.1146）。
+
+**结论**：
+1. **过滤方向与"strong 有效"直觉相反**：weak 是唯一 validation 段 saEx ≥ 0.05 的 regime——
+   **弱市里 S/A 档（追强）稀缺但有正增量信息**（跨三段 0.0712/0.0735/0.1146 方向稳定）；
+   strong 状态反而失效（validation −0.0202），与阶段 6 "A_MAIN 触发=高位出货、追强 h8 归零"结论一致
+   ——强市追强是高位接盘，弱市追强才有区分度。
+2. **全窗口 validation 失效根因定位**：2026-07-09~08-14 窗口 strong+normal 桶贡献负/弱 excess
+   （normal val 0.0131、strong val −0.0202），weak 桶（占 24%）保持正区分度——不是共振参数问题，
+   是**市场状态结构**问题。
+3. **weak 桶置信度限制**：validation 段 S 档仅 12 样本（<30），saEx 0.1146 统计置信度有限；
+   resonance 单维在 weak 状态横截面不足（validation res unknown 69.1%），单维不可用，
+   synergy 投票仍有效（趋势/量价维提供信号）。
+4. **共振参数建议在 weak 桶不恶化且小幅改善**（0.0712→0.0748；组合 val 0.1259 最高）。
+
+**建议**（不改代码/默认值，延续 §7.4）：
+- **weak 状态可作为"四维观察信号可信度"补充口径**：弱市 S/A 档更有区分度、强市追强为高位风险
+  （如需前端/观察层标注，另行立项）；
+- 共振参数（`JumpFreshnessMin` 0.6）单独采纳仍不满足样本外绝对验收（weak 桶 S 样本不足、
+  其余 regime 验证失效）；如需落地需先延长样本外窗口或接入 weak 过滤后重估 S 档样本量。
+
+### 7.6 weak 状态 S 档样本量重估（quarter_hour 长窗口，2026-08-17）
+
+**背景**：§7.5 的 weak 桶 validation 段（half_hour，2026-07-09~08-14）S 档仅 12 样本，
+置信度不足。为验证"更长样本外窗口能否重估 S 档显著性"，用**唯一更长历史窗口
+quarter_hour（2026-03-27~07-31，1399 帧）**重跑（显式研究口径，非默认 half_hour；
+脚本 `backend/operations/diagnose_weak_regime_sampling.py`，报告
+`data/reports/weak-regime-sampling.json`）。
+
+**weak 桶 synergy h1（quarter_hour，train 1007 帧 03-27~06-18 / validation 392 帧 06-22~07-31）**：
+
+| 配置 | 段 | S | A | B | saEx | pass |
+|---|---|---|---|---|---|---|
+| baseline | all | 184 | 1314 | 8810 | 0.0623 | True |
+| baseline | train | 163 | 1174 | 7968 | 0.0734 | True |
+| baseline | validation | **21** | 140 | 842 | **−0.0096** | False |
+| `jump_min_0.6` | validation | 20 | 137 | 828 | −0.0122 | False |
+| `jump_min_0.6 + reversal_0.4` | validation | 20 | 139 | 859 | −0.0229 | False |
+
+**validation 段拆分（baseline weak 桶）**：
+
+| 子窗口 | 帧数 | S | A | saEx | S exAcc | A exAcc |
+|---|---|---|---|---|---|---|
+| 06-22~07-08 | 180 | 19 | 126 | **0.0017** | +0.023 | −0.002 |
+| 07-09~07-31 | 212 | **2** | 14 | **0.2398** | **+0.561** | +0.194 |
+| 全段 06-22~07-31 | 392 | 21 | 140 | −0.0096 | +0.035 | −0.016 |
+
+**重估结论**：
+1. **S 档样本不足是结构性的，不是窗口长度问题**：quarter_hour 帧密度翻倍 + 前移 3 周，
+   weak 桶 validation S 档仍仅 21 样本（07-09 后更只有 2 个）——**弱市 S 档（Jump 驱动的追强档）
+   本身极稀缺**，无法获得 ≥30 的统计置信。
+2. **weak 状态 synergy 区分度样本外不稳定**：07-09~07-31 段 S 方向精度极高（exAcc +0.56）
+   但仅 2 样本（half_hour 的 0.1146/S=12 同属此现象——方向强、样本稀）；06-22~07-08 段
+   S=19 却无区分度（0.0017）。**样本外 weak 桶 S 档表现随样本量剧烈波动，无统计显著性**。
+3. **样本内（train/全窗口）weak 桶稳定成立**（saEx 0.062~0.079，S 163-184，pass=True）——
+   弱市追强有正增量的样本内证据充分，但样本外无法证实（数据历史不足）。
+4. **"weak 过滤 + 更长窗口"不足以支撑共振参数采纳**；维持 §7.4/§7.5 结论不变。
+
+**后续**：如需证实"弱市稀缺追强信号"方向（07-09 后 S exAcc +0.56 的提示），需更长历史数据
+或更宽 S 档定义（如放宽 Jump 新鲜度门槛增加 S 样本）后重估；当前 5 个月数据不足以定论。
+
+## 阶段 8：核心信号参数逐参数 3 档扫描（2026-08-17）
+
+> 状态：扫描完成；结论 = 趋势核心改善点在**多周期动量周期组合**（快周期），
+> 零线交叉/MACD 权重周期与 Jump reset/sustain 无独立调参空间。
+> 脚本：`backend/operations/optimize_core_signal_parameters.py`（每个参数 3 档单变量扫描）
+> 报告：`quant-board/data/reports/core-signal-parameter-groups.json`
+
+### 8.1 背景与决策
+
+用户 2026-08-17：档位（S/A/B/C/D/E）层面参数（tierResonance*/tierRankTrend* 等）扫描
+已穷尽、基本无调参可能，**深入核心指标参数构成**——【趋势】多周期动量 / 零线交叉 / MACD、
+【共振】Jump 跳跃值参数（delta/reset/sustain），**每个参数分别定义 3 档候选值**逐参数扫描
+（非打包 3 组配置）。
+
+配套代码改动（TDD，golden 不漂移）：`detect_rank_jumps` 的 reset_lookback（原硬编码 3）
+与 sustain_count（原硬编码 2）参数化进 `RankTrendConfig`（`jumpResetLookback`/`jumpSustainCount`），
+新增 `tests/test_ranktrend_jump_detection.py`（4 用例，默认行为不变，回归 32 passed）。
+
+### 8.2 扫描结果（769 帧，h1；score=阶段 7 公式；表格为 score / synergy saEx / 关注维 saEx）
+
+**趋势（rankTrend focus）**：
+
+| 参数 | 档 1（默认） | 档 2 | 档 3 | 判定 |
+|---|---|---|---|---|
+| `momentumPeriods` | [3,5,8,13,21]：1.0854/0.0651/0.0455 | **[2,3,5,8,13]：1.1112/0.0673/0.0477** | [5,8,13,21,34]：1.0716/0.0558/0.046 | ✅ 唯一显著改善 |
+| `momentumWeights` | [0.15,0.2,0.25,0.25,0.15] | [0.25,…快]：1.0524/0.0628/0.0427 | [0.1,…慢]：1.0884/0.0641/0.046 | ❌ 权重非瓶颈 |
+| `crossWeight` | 0.2：1.0854 | 0.35：1.0723/0.0641/0.0444 | **0.1：1.0988/0.0657/0.0467** | ⚪ 弱化微升 |
+| `macdWeight` | 0.25 | 0.35：1.0757/0.0653/0.0445 | 0.15：1.0873/0.0651/0.0457 | ⚪ 持平 |
+| `macdFast` | 13 | 9：1.0706/0.0646/0.0441 | 17：1.087/0.0648/0.0457 | ⚪ 持平 |
+| `macdSlow` | 21 | 26：1.0962/**0.0619**/0.0472 | 17：1.0708/0.0636/0.0444 | ⚪ trend 升但 synergy 降 |
+| `macdSignal` | 8 | 5：1.0684/0.065/0.0438 | 12：1.0801/0.0645/0.0451 | ⚪ 持平 |
+
+**共振 Jump（resonance focus）**：
+
+| 参数 | 档 1（默认） | 档 2 | 档 3 | 判定 |
+|---|---|---|---|---|
+| `jumpDeltaPct` | 15：0.5864/0.0651/−0.0162 | **20：0.592/0.0679/−0.0146** | 10：0.5849/0.0643/−0.0193 | ✅ 严格化微升（延续 §7.2） |
+| `jumpResetLookback` | 3 | 5：0.5898/0.0668/−0.0196 | 2：0.5894/0.0666/−0.0156 | ⚪ 微弱 |
+| `jumpSustainCount` | 2 | 3：0.5864（完全一致） | 1：0.5864（完全一致） | ❌ 无影响（事件分布不敏感） |
+
+**组合验证**：
+
+| 组合 | score | synergy saEx | trend saEx |
+|---|---|---|---|
+| base | 1.0854 | 0.0651 | 0.0455 |
+| `mom_fast`（periods 快） | 1.1112 | 0.0673 | 0.0477 |
+| `mom_fast + jump20` | 1.112 | 0.0677 | 0.0477（可叠加） |
+| **`mom_fast + cross01`** | **1.1177** | 0.067 | **0.0484** |
+
+### 8.3 结论
+
+1. **趋势核心改善点 = `momentumPeriods` 快周期 [2,3,5,8,13]**：单参数 synergy saEx +3.4%、
+   rankTrend saEx +4.8%（0.0455→0.0477）——热榜排名动量是短周期现象，更快周期捕捉更及时；
+   慢周期 [5,8,13,21,34] 反而拖累 synergy（0.0651→0.0558）。
+2. **零线交叉 / MACD 的权重与周期参数无独立调参空间**（各档基本持平或 trade-off）——
+   其内部硬编码阈值（零线 0.7/0.3/0.15、MACD gap 阈值）尚未 config 化，如需深入须先参数化
+   内部阈值（另行立项）。
+3. **Jump 严格化（`jumpDeltaPct` 20）延续 §7.2 结论**（synergy 0.0679，可与快周期叠加）；
+   `jumpResetLookback` 微弱、`jumpSustainCount` 无影响（当前数据事件分布不敏感）。
+4. **建议参数**（不写回默认值，golden 不变）：首选 `momentumPeriods=[2,3,5,8,13]`；
+   可选叠加 `jumpDeltaPct=20`（synergy）或 `crossWeight=0.1`（trend saEx 最接近 0.05 线）。
+   采纳仍需样本外复核 + golden 变更流程。
+
+### 8.4 趋势因子硬编码参数化 + 每个因子 5 档扫描（2026-08-17）
+
+**背景**：用户要求【趋势】信号每个因子构成的参数找全，硬编码阈值先参数化，然后
+每个因子单独跑 5 档（防过拟合——多档位观察单调性/峰值稳定性，避免单点过拟合）。
+
+**参数化落地（TDD，默认值=原硬编码，golden 不漂移）**：18 个硬编码阈值进 `RankTrendConfig`——
+动量方向 `momentumDirectionThreshold`(0.2)/`momentumSignalShareMin`(0.6)/`momentumLongOpposeThreshold`(0.25)/
+`momentumLongAgreeThreshold`(0.15)/`momentumDirectionShareBoost`([0.5,0.5])；
+动量加速度 `momentumAccelThreshold`(0.18)/`momentumAccelShareBoost`([0.7,0.3])；
+momentum_data `momentumScoreThreshold`(35)/`momentumConfidenceSlope`(0.45)；
+零线交叉 `momentumZeroWeights`([0.7,0.3])/`momentumZeroConfirmThreshold`(0.15)/
+`momentumZeroStrongConfirmThreshold`(0.15)/`momentumZeroStrongConfirmBonus`(5)；
+MACD `macdGoldenStrongGapMin`(0.2)/`macdGoldenGapScaleRatio`(0.18)/`macdDeathGapScaleRatio`(0.12)/
+`macdDeathStrongGapMin`(0.18)/`macdRawScoreWeights`([0.7,0.3])。
+`_STRATEGY_LIST_KEYS` 补 4 个 list 字段；新增 `tests/test_ranktrend_trend_factor_config.py`（4 用例）。
+验证：相关 pytest 78 passed 无回归 + 新测试 4 passed。
+
+**5 档扫描（8 参数 × 5 档 = 32 次全量评估；score / synergy saEx / trend saEx）**：
+
+| 因子 | 参数 | 5 档结果（score 序列） | 判定 |
+|---|---|---|---|
+| F1 动量·方向 | `momentumDirectionThreshold` | 0.1:1.0817 / 0.15:1.0814 / **0.2:1.0854** / 0.25:1.0829 / 0.3:1.0838 | ⚪ 默认最优，各档持平 |
+| F1 动量·方向 | `momentumSignalShareMin` | 0.4:1.0865 / 0.5:1.0867 / 0.6:1.0854 / 0.7:1.0843 / **0.8:1.0885** | ⚪ 0.8 微升 |
+| F2 动量·加速度 | **`momentumAccelThreshold`** | 0.1:1.0625 / 0.14:1.0765 / 0.18:1.0854 / 0.22:1.0994 / **0.26:1.1093** | ✅ **单调上升唯一显著** |
+| F2 动量·加速度 | `momentumLongOpposeThreshold` | 0.15:1.0847 / 0.2:1.0854 / 0.25:1.0854 / 0.3:1.0843 / 0.35:1.0844 | ⚪ 默认最优 |
+| F3 零线交叉 | `momentumZeroConfirmThreshold` | 0.05:1.0852 / 0.1:1.0865 / 0.15:1.0854 / **0.2:1.0904 / 0.25:1.0906** | ⚪ 提高微升（syn 0.066） |
+| F3 零线交叉 | `momentumZeroStrongConfirmThreshold` | 全部 1.0854（完全一致） | ❌ 仅影响 confidence 不影响档位 |
+| F4 MACD | `macdGoldenStrongGapMin` | 0.1:1.0852 / 0.15:1.0852 / 0.2:1.0854 / 0.25:1.0864 / **0.3:1.0881** | ⚪ 提高微升 |
+| F4 MACD | `macdGoldenGapScaleRatio` | 0.1:1.0854 / 0.14:1.0854 / 0.18:1.0854 / 0.22:1.0862 / **0.26:1.0878** | ⚪ 提高微升 |
+
+**结论**：
+1. **`momentumAccelThreshold` 0.18→0.26 是唯一显著改善参数**：5 档单调上升（1.0625→1.1093，
+   非单点尖峰 → 方向稳健、防过拟合证据强）；trend saEx 0.0455→**0.0478**（+5.1%）、synergy 0.0651→0.0658。
+   语义：加速度信号判定更严格（更强加速度才触发 buy/sell），过滤弱加速度噪声。
+2. **方向阈值默认 0.2 最优**、`momentumLongOpposeThreshold` 默认最优——方向判定当前阈值合理。
+3. **`momentumZeroStrongConfirmThreshold` 完全无影响**（各档一致）——该参数只影响 zero_conf
+   （confidence），不影响 zero_signal/zero_score → 不参与档位判定（属冗余可调参数）。
+4. **MACD 阈值提高微升**（0.3/0.26），幅度小（score +0.2%~0.3%）。
+5. **建议参数**（不写回默认值，golden 不变）：首选 `momentumAccelThreshold=0.26`；
+   可选微调 `momentumZeroConfirmThreshold=0.25`、`macdGoldenStrongGapMin=0.3`、
+   `momentumSignalShareMin=0.8`。采纳仍需样本外复核 + golden 变更流程。
+
+### 8.5 momentumAccelThreshold=0.26 样本外复核（2026-08-17）
+
+**方法**：同 §7.4（chronological 切分，validation_ratio 0.3）→
+train=2026-04-15~07-07（537 帧）/ validation=2026-07-09~08-14（232 帧）；
+每配置全量 769 帧 replay 一次（信号含完整历史上下文），train/validation 段分别统计
+**rankTrend / synergy** h1 tier（本参数影响趋势维，重点看 rankTrend 单维 + synergy 合并档）。
+
+**配置**：`baseline` / `momentumAccelThreshold=0.26`（5 档扫描唯一单调显著参数）。
+
+| 配置 | train trend saEx | train syn saEx | validation trend saEx | validation syn saEx |
+|---|---|---|---|---|
+| baseline | 0.0636（pass=True） | 0.0902（pass=True） | −0.0081（pass=False） | −0.0112（pass=False） |
+| `accel_0.26` | **0.0665（pass=True）** | **0.0922（pass=True）** | **−0.0079（pass=False）** | −0.014（pass=False） |
+
+**复核结论**：
+1. **样本内改善可复现**：train 段 trend saEx 0.0636→0.0665（+4.6%）、synergy 0.0902→0.0922
+   （+2.2%）——与全窗口 5 档扫描的 in-sample 改善方向一致；
+2. **趋势维样本外无反转且微改善**：validation trend saEx −0.0081→−0.0079（方向稳健）；
+3. **但 synergy 合并档样本外略恶化**：−0.0112→−0.014（−25%），加速度严格化对 synergy 投票
+   样本外无正贡献；
+4. **validation 段绝对区分度失效是窗口性**（同 §7.4/§7.5）：baseline 的 validation trend/syn
+   saEx 均为负（−0.0081/−0.0112，passHard=False）——2026-07-09~08-14 窗口四维信号整体失效
+   （市场状态结构问题，非本参数可解）。
+5. **最终判定**：`momentumAccelThreshold=0.26` 样本内显著改善、趋势维样本外方向稳健，
+   但 synergy 样本外无正贡献且绝对验收线不可达 → **不满足样本外采纳标准**；
+   维持"不写回默认值"，与 §8.4 建议（作候选参数观察）一致。
+
+### 8.6 momentumPeriods 快周期样本外复核（2026-08-17）
+
+**方法**：同 §8.5/§7.4（chronological 切分，validation_ratio 0.3）→
+train=2026-04-15~07-07（537 帧）/ validation=2026-07-09~08-14（232 帧）；
+全量 769 帧 replay 一次，train/validation 段分别统计 rankTrend / synergy h1 tier。
+baseline 数值引用 §8.5 复核产出（同一次切分口径）。
+
+**配置**：`baseline` / `mom_fast`（`momentumPeriods=[2,3,5,8,13]`，阶段 8 发现的唯一显著参数）。
+
+| 配置 | train trend saEx | train syn saEx | validation trend saEx | validation syn saEx |
+|---|---|---|---|---|
+| baseline | 0.0636（pass=True） | 0.0902（pass=True） | −0.0081（pass=False） | −0.0112（pass=False） |
+| `mom_fast` | **0.0654（pass=True）** | **0.0936（pass=True）** | **−0.0055（pass=False）** | −0.0136（pass=False） |
+
+**复核结论**：
+1. **样本内改善可复现**：train 段 trend saEx 0.0636→0.0654（+2.8%）、synergy 0.0902→0.0936
+   （+3.8%）——与阶段 8 全窗口扫描（synergy +3.4%）一致；
+2. **趋势维样本外改善幅度最大**：validation trend saEx −0.0081→−0.0055（改善 32%），
+   优于 accel_0.26（−0.0081→−0.0079）——快周期对趋势维样本外方向更稳健、改善更大；
+3. **synergy 合并档样本外略恶化**：−0.0112→−0.0136（−21%，与 §8.5 accel_0.26 同类）——
+   动量快化对 synergy 投票样本外无正贡献；
+4. **validation 段绝对区分度失效是窗口性**（同 §7.4/§8.5）：baseline validation saEx 为负、
+   passHard=False——2026-07-09~08-14 窗口四维信号整体失效（市场状态结构问题）。
+5. **最终判定**：`momentumPeriods=[2,3,5,8,13]` 样本内显著改善、趋势维样本外改善（三个复核
+   参数中最佳），但 synergy 样本外无正贡献且绝对验收线不可达 → **不满足样本外采纳标准**；
+   维持"不写回默认值"，与 §8.4 建议（作候选参数观察）一致。
+
+### 8.7 mom_fast + accel_0.26 组合样本外复核（2026-08-17）
+
+**方法**：同 §8.5/§8.6/§7.4（chronological 切分，validation_ratio 0.3）→
+train=2026-04-15~07-07（537 帧）/ validation=2026-07-09~08-14（232 帧）；
+全量 769 帧 replay 一次，train/validation 段分别统计 rankTrend / synergy h1 tier。
+baseline/mom_fast/accel_0.26 数值引用 §8.5/§8.6 复核产出。
+
+**配置**：`mom_fast + accel_0.26`（`momentumPeriods=[2,3,5,8,13]` + `momentumAccelThreshold=0.26`），
+对照三个既有配置。
+
+| 配置 | train trend saEx | train syn saEx | validation trend saEx | validation syn saEx |
+|---|---|---|---|---|
+| baseline | 0.0636 | 0.0902 | −0.0081 | −0.0112 |
+| `mom_fast` | 0.0654 | **0.0936** | **−0.0055** | −0.0136 |
+| `accel_0.26` | 0.0665 | 0.0922 | −0.0079 | −0.014 |
+| **`combo`** | **0.0666** | 0.0934 | −0.0071 | **−0.0183** |
+
+**复核结论**：
+1. **样本内小幅叠加**：combo train trend 0.0666（四配置最高，+4.7% vs baseline）、synergy 0.0934
+   （接近 mom_fast 的 0.0936）——两参数样本内趋势维叠加基本成立；
+2. **样本外趋势维不叠加、被 accel_0.26 拖累**：combo validation trend −0.0071，介于
+   mom_fast（−0.0055 最佳）与 accel_0.26（−0.0079）之间——组合未继承 mom_fast 的最佳样本外
+   改善，反而恶化 29%（−0.0055→−0.0071）；
+3. **样本外 synergy 负面放大（最差）**：combo validation syn −0.0183，劣于全部既有配置
+   （baseline −0.0112 / mom_fast −0.0136 / accel_0.26 −0.014）——两参数的样本外 synergy
+   负面贡献叠加放大；
+4. **validation 段绝对区分度失效是窗口性**（同 §7.4/§8.5/§8.6），不改变相对对比结论。
+5. **最终判定**：**组合不成立**——样本内趋势维小幅叠加不足以抵消样本外 synergy 负面放大与
+   趋势维回退；两参数维持各自独立观察（§8.4 候选），**组合方案不建议采纳**，均不写回默认值。
+
+### 8.8 共振 Jump 参数 5 档扫描 + 组合样本外复核（2026-08-17）
+
+**背景**：趋势参数研究收敛（§8.4-§8.7），转向【共振】Jump 参数组合。
+沿用逐参数 5 档方法论（防过拟合）对 Jump 参数构成（delta/reset/sustain）扫描，
+再对显著参数与档位层有效参数（§7.3 `JumpFreshnessMin` 0.6）组合验证 + 样本外复核。
+报告：`data/reports/core-signal-parameter-jump.json`。
+
+**5 档扫描（3 参数 × 5 档 = 12 次非默认全量评估；score / synergy saEx / resonance saEx）**：
+
+| 参数 | 5 档结果（score / syn saEx / res saEx） | 判定 |
+|---|---|---|
+| **`jumpDeltaPct`** | 10:0.5849/0.0643/−0.0193 · 12.5:0.5874/0.0656/−0.0181 · 15:0.5864/0.0651/−0.0162 · 20:0.592/0.0679/−0.0146 · **25:0.6008/0.0723/−0.013** | ✅ **严格化单调显著**（15→25 synergy +11.1%） |
+| `jumpResetLookback` | 2:0.5894/0.0666/−0.0156 · 3:0.5864/0.0651 · 4:0.5856/0.0647 · 5:0.5898/0.0668 · 6:0.5853/0.0645 | ⚪ 非单调微弱 |
+| `jumpSustainCount` | 1/2/3/4/5 全部 0.5864/0.0651/−0.0162 | ❌ 完全无影响（冗余参数确认） |
+
+**组合验证（全窗口 769 帧）**：
+
+| 配置 | synergy saEx | resonance saEx |
+|---|---|---|
+| baseline | 0.0651 | −0.0162 |
+| `delta25` | 0.0723（+11.1%） | −0.013 |
+| **`delta25 + freshness06`** | **0.0753（+15.7%）** | **−0.0079（改善 51%）** |
+| `delta25 + reset2` | 0.0724 | −0.0105 |
+
+核心参数（delta 严格化）与档位参数（freshness 严格化）方向一致 → **叠加有效**，为共振维度
+首次强组合信号。
+
+**单调边界探测（2026-08-17 补充，delta 25 基础上探 30/35）**：
+
+| 配置 | synergy saEx | resonance saEx |
+|---|---|---|
+| `delta25` | **0.0723** | −0.013 |
+| `delta30` | 0.0669（回落） | −0.0135 |
+| `delta35` | 0.0655（≈baseline） | −0.0135 |
+| `delta30 + freshness06` | 0.0698 | −0.0088 |
+
+**边界结论**：`jumpDeltaPct` 单调曲线 10→25 上升、25→35 下降，**25 为真实峰值/拐点**
+（非扫描边界假峰值——防过拟合确认）；delta≥30 过度过滤导致 jump 事件减少、贡献回落，
+delta 组合（30+freshness06 0.0698）亦劣于 25 组合（0.0753）。**最优档锁定 delta=25**。
+
+**样本外复核（chronological train=537/validation=232，resonance/synergy h1）**：
+
+| 配置 | train res saEx | train syn saEx | validation res saEx | validation syn saEx |
+|---|---|---|---|---|
+| baseline | −0.0093 | 0.0902 | −0.0369 | −0.0112 |
+| `delta25 + freshness06` | **−0.0037**（+60%） | **0.0993**（+10.1%） | **−0.0191**（+48%） | **+0.0024（转正）** |
+
+**复核结论**：
+1. **样本内大幅改善**：train res −0.0093→−0.0037（+60%）、syn 0.0902→0.0993（+10.1%）——
+   共振单维与 synergy 合并档双双显著改善，可复现；
+2. **样本外 res 单维改善 48%**（−0.0369→−0.0191，仍负但大幅接近 0）；
+3. **样本外 synergy 转正（关键突破）**：validation syn −0.0112→**+0.0024**——**所有复核参数
+   （趋势 accel/mom_fast、Jump 单参数、共振 Phase 1/2 建议）中首个样本外 synergy 转正者**；
+   虽未达 0.05 验收线、passHard 仍 False，但方向正确（相对改善 121%）；
+4. validation res unknown 29.9% 与 baseline 相同（窗口性未知率上升，同 §7.4）；
+5. **最终判定**：`jumpDeltaPct=25 + tierResonanceJumpFreshnessMin=0.6` 是当前研究最强候选
+   （样本内 +10.1%、样本外 synergy 转正）；**绝对验收线样本外仍不可达**，维持不写回默认值；
+   如需推进：延长样本外窗口（quarter_hour 1399 帧显式口径）或 weak regime 桶复核后再走
+   golden 变更流程。
+
+
+
+
+
+
+
+
+
+
+

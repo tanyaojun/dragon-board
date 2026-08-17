@@ -324,3 +324,30 @@ def test_excess_direction_accuracy_positive_when_signal_beats_baseline() -> None
     stats = tier_forward_returns(signals, frames, horizon=1)
     assert "excessDirectionAccuracy" in stats["tiers"]["S"]
     assert "excessDirectionAccuracy" in stats["tiers"]["C"]
+
+
+def test_tier_forward_returns_signal_filter_buckets() -> None:
+    """signal_filter（regime 分桶，2026-08-17）：只统计被过滤信号，分桶基线同口径重算，
+    被过滤样本不计入（count 减少可见）；S 样本不足 30 时 sSampleCount 如实判 False（不伪造）。"""
+    frames, signals = _monotonic_passing_fixture()
+    for idx, signal in enumerate(signals):
+        signal["regime"] = "weak" if idx % 2 == 0 else "strong"
+
+    all_stats = tier_forward_returns(signals, frames, horizon=1)
+    weak_stats = tier_forward_returns(
+        signals,
+        frames,
+        horizon=1,
+        signal_filter=lambda s: s.get("regime") == "weak",
+    )
+    # 全量 S/A/B 各 30；weak 过滤（偶数 idx）后各 15
+    assert all_stats["tiers"]["S"]["count"] == 30
+    for tier in ("S", "A", "B"):
+        assert weak_stats["tiers"][tier]["count"] == 15
+    assert weak_stats["unknownRate"] == 0.0
+    # 分桶后单调性仍成立（S>A>B、无反转、saExcessAccuracy 达标），S 样本 15<30 如实判 False
+    checks = weak_stats["monotonicity"]["checks"]
+    assert checks["monotonicNoReversal"]["ok"] is True
+    assert checks["saExcessAccuracy"]["ok"] is True
+    assert checks["sSampleCount"]["ok"] is False
+    assert checks["sSampleCount"]["actual"] == 15

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 # 档位序（单调性验证用）：S > A > B > C；D/E 为反向/风险档不参与正向单调链。
 TIER_ORDER = ["S", "A", "B", "C"]
@@ -24,6 +24,7 @@ DIMENSION_PATHS: dict[str, tuple[str, ...]] = {
     "volumePrice": ("rankTrend", "observation", "volumePrice", "signalTier"),
     "lifecycle": ("rankTrend", "observation", "lifecycle", "signalTier"),
     "synergy": ("rankTrend", "observation", "synergy", "signalTier"),
+    "atr": ("rankTrend", "observation", "atrMeanReversion", "signalTier"),  # 2026-08-17 ATR 波动观察维
 }
 DEFAULT_DIMENSION = "synergy"
 
@@ -76,6 +77,7 @@ def tier_forward_returns(
     frames: list[dict[str, Any]],
     horizon: int = 3,
     dimension: str = DEFAULT_DIMENSION,
+    signal_filter: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     """按指定维度 signalTier 分层统计未来 horizon 帧的相对排名收益。
 
@@ -84,6 +86,8 @@ def tier_forward_returns(
     directionAccuracy = buy 类档位（S/A/B）中 percentileDelta > 0 的比例。
     帧边界不足/股票缺失 → 该样本不计入（found=False），不伪造收益。
     dimension 支持 resonance/rankTrend/volumePrice/lifecycle/synergy（阶段 3 四维诊断）。
+    signal_filter：可选信号过滤谓词（如按 market regime 分桶）；过滤后分桶基线同口径重算，
+    段外/被过滤样本不计入（fail-visible：从 count 缺失可见）。
     """
     index_by_snapshot, stock_by_frame_code = _build_lookup(frames)
     totals = len(frames)
@@ -93,6 +97,8 @@ def tier_forward_returns(
     # 不可达；excessDirectionAccuracy = 档位 acc − 样本所在分位桶基线 acc（增量信息）。
     bucket_deltas: dict[int, list[float]] = {bucket: [] for bucket in range(10)}
     for signal in signals:
+        if signal_filter is not None and not signal_filter(signal):
+            continue  # 分桶过滤（如 regime）：被过滤样本不计入，count 缺失可见
         tier = tier_signal_of(signal, dimension)
         code = str(signal.get("code") or "")
         entry = index_by_snapshot.get(str(signal.get("snapshotId")))

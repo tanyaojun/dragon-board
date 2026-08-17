@@ -47,7 +47,40 @@ class RankTrendConfig:
     macdSlow: int = 21
     macdSignal: int = 8
     requireMacdGoldenCross: bool = False
+    # ── 趋势因子硬编码阈值参数化（2026-08-17，默认值=原硬编码，golden 不漂移）──
+    # 多周期动量：方向/加速度判定
+    momentumDirectionThreshold: float = 0.2  # direction_signal 判定阈值（原 0.2）
+    momentumSignalShareMin: float = 0.6  # direction 正/负占比门槛（原 0.6）
+    momentumLongOpposeThreshold: float = 0.25  # 长周期反对阈值（原 0.25）
+    momentumLongAgreeThreshold: float = 0.15  # 长周期附和阈值（原 0.15）
+    momentumDirectionShareBoost: list[float] = field(default_factory=lambda: [0.5, 0.5])  # direction share boost（原 0.5/0.5）
+    momentumAccelThreshold: float = 0.18  # accel_signal 判定阈值（原 0.18）
+    momentumAccelShareBoost: list[float] = field(default_factory=lambda: [0.7, 0.3])  # accel share boost（原 0.7/0.3）
+    momentumScoreThreshold: float = 35.0  # momentum_data signal 阈值（原 35）
+    momentumConfidenceSlope: float = 0.45  # momentum_data confidence slope（原 0.45）
+    # 零线交叉（zeroCross）
+    momentumZeroWeights: list[float] = field(default_factory=lambda: [0.7, 0.3])  # trigger/confirm 权重（原 0.7/0.3）
+    momentumZeroConfirmThreshold: float = 0.15  # confirm_score 方向判定阈值（原 0.15）
+    momentumZeroStrongConfirmThreshold: float = 0.15  # strong_confirm 阈值（原 0.15）
+    momentumZeroStrongConfirmBonus: float = 5.0  # strong_confirm confidence bonus（原 5）
+    # MACD
+    macdGoldenStrongGapMin: float = 0.2  # golden strong_gap 阈值（原 0.2）
+    macdGoldenGapScaleRatio: float = 0.18  # golden gap/gap_scale 比例（原 0.18）
+    macdDeathGapScaleRatio: float = 0.12  # death gap/gap_scale 比例（原 0.12）
+    macdDeathStrongGapMin: float = 0.18  # death strong_gap 阈值（原 0.18）
+    macdRawScoreWeights: list[float] = field(default_factory=lambda: [0.7, 0.3])  # rawScore strong_gap/impulse 权重（原 0.7/0.3）
+    # ── ATR 真实波动均值回归（2026-08-17，设计 v2；独立观察维度，不进 synergy 投票）──
+    atrPeriod: int = 14  # ATR 周期（简单均值，与 execution.py::_atr_of 一致）
+    atrRefPeriod: int = 20  # close 参考均值周期
+    atrChannelK: float = 2.0  # 通道倍数（偏离阈值）
+    atrDeepDeviation: float = 3.0  # S 档绝对偏离阈值（审计修订，替代 2.5×k 相对式）
+    atrMaxHistoryBars: int = 60  # 历史 bar 截断窗口（防内存）
+    atrGapResetBars: int = 2  # 断档重置阈值（帧间隔 ≥ N 个 slot 即重置；跨 tradingDate 恒重置）
+    atrAggregateByDay: bool = False  # 是否按日聚合（False=逐帧快照 bar，与回测同口径）
+    atrBucketBySlot: bool = False  # 是否按 slot 分桶聚合（桶内 max high/min low/last close）
     jumpDeltaPct: float = 15.0  # 对齐旧 TS detectRankJumps 固定 delta=15
+    jumpResetLookback: int = 3  # 事件触发后重置窗口（原硬编码 min(3, i+1)）
+    jumpSustainCount: int = 2  # 持续事件判定阈值 surge/collapse 次数（原硬编码 2）
     directionWeight: float = 0.3
     accelerationWeight: float = 0.25
     crossWeight: float = 0.2
@@ -420,17 +453,28 @@ def calculate_macd(values: list[float], config: RankTrendConfig) -> dict[str, An
     raw_score = 0.0
     confirmed = False
     if detected == "golden":
-        strong = hist > 0 and gap > 0 and gap > prev_gap and hist >= prev_hist and strong_gap >= 0.2 and gap >= max(1e-6, gap_scale * 0.18)
+        strong = (
+            hist > 0
+            and gap > 0
+            and gap > prev_gap
+            and hist >= prev_hist
+            and strong_gap >= config.macdGoldenStrongGapMin
+            and gap >= max(1e-6, gap_scale * config.macdGoldenGapScaleRatio)
+        )
         confirmed = strong
         if strong:
             cross = "golden"
-            raw_score = clamp(0.7 * strong_gap + 0.3 * impulse, 0, 1)
+            raw_score = clamp(config.macdRawScoreWeights[0] * strong_gap + config.macdRawScoreWeights[1] * impulse, 0, 1)
     elif detected == "death":
-        valid = hist < 0 and gap < 0 and (abs(gap) >= max(1e-6, gap_scale * 0.12) or strong_gap >= 0.18)
+        valid = (
+            hist < 0
+            and gap < 0
+            and (abs(gap) >= max(1e-6, gap_scale * config.macdDeathGapScaleRatio) or strong_gap >= config.macdDeathStrongGapMin)
+        )
         confirmed = valid and gap < prev_gap and hist <= prev_hist
         if valid:
             cross = "death"
-            raw_score = -clamp(0.7 * strong_gap + 0.3 * impulse, 0, 1)
+            raw_score = -clamp(config.macdRawScoreWeights[0] * strong_gap + config.macdRawScoreWeights[1] * impulse, 0, 1)
     return {"dif": dif, "dea": dea, "histogram": hist, "cross": cross, "confirmed": confirmed, "rawScore": raw_score}
 
 
@@ -523,8 +567,8 @@ def momentum_data(percentiles: list[float], config: RankTrendConfig) -> dict[str
         else:
             score -= math.tanh(abs(value) / max(1e-6, abs(sell))) * 100 * weight
     score = clamp(score, -100, 100)
-    signal = "buy" if score >= 35 else "sell" if score <= -35 else "hold"
-    return {"values": values, "prevValues": prev_values, "score": score, "signal": signal, "confidence": clamp(50 + abs(score) * 0.45, 50, 95)}
+    signal = "buy" if score >= config.momentumScoreThreshold else "sell" if score <= -config.momentumScoreThreshold else "hold"
+    return {"values": values, "prevValues": prev_values, "score": score, "signal": signal, "confidence": clamp(50 + abs(score) * config.momentumConfidenceSlope, 50, 95)}
 
 
 def analyze_momentum_signals(data: dict[str, Any] | None, config: RankTrendConfig) -> dict[str, Any]:
@@ -549,26 +593,28 @@ def analyze_momentum_signals(data: dict[str, Any] | None, config: RankTrendConfi
     direction_raw = sum(period_scores[i] * weights[i] for i in range(count))
     positive_share = weighted_share(period_scores, weights, lambda score, _: score > 0)
     negative_share = weighted_share(period_scores, weights, lambda score, _: score < 0)
-    direction_score = clamp(direction_raw * (0.5 + 0.5 * max(positive_share, negative_share)), -1, 1)
+    share_boost = config.momentumDirectionShareBoost
+    direction_score = clamp(direction_raw * (share_boost[0] + share_boost[1] * max(positive_share, negative_share)), -1, 1)
     long_window = period_scores[-min(2, len(period_scores)):]
-    long_oppose_buy = len(long_window) == 2 and all(score <= -0.25 for score in long_window)
-    long_oppose_sell = len(long_window) == 2 and all(score >= 0.25 for score in long_window)
+    long_oppose_buy = len(long_window) == 2 and all(score <= -config.momentumLongOpposeThreshold for score in long_window)
+    long_oppose_sell = len(long_window) == 2 and all(score >= config.momentumLongOpposeThreshold for score in long_window)
     direction_signal = "hold"
-    if direction_score >= 0.2 and positive_share >= 0.6 and not long_oppose_buy:
+    if direction_score >= config.momentumDirectionThreshold and positive_share >= config.momentumSignalShareMin and not long_oppose_buy:
         direction_signal = "buy"
-    elif direction_score <= -0.2 and negative_share >= 0.6 and not long_oppose_sell:
+    elif direction_score <= -config.momentumDirectionThreshold and negative_share >= config.momentumSignalShareMin and not long_oppose_sell:
         direction_signal = "sell"
-    long_agreement = len([s for s in long_window if (s >= 0.15 if direction_score >= 0 else s <= -0.15)])
+    long_agreement = len([s for s in long_window if (s >= config.momentumLongAgreeThreshold if direction_score >= 0 else s <= -config.momentumLongAgreeThreshold)])
 
     accelerations = [values[i] - prev_values[i] for i in range(count)]
     accel_scores = [normalize_signed(accelerations[i], buy[i], abs(sell[i])) for i in range(count)]
     accel_raw = sum(accel_scores[i] * weights[i] for i in range(count))
     short_scores = accel_scores[:min(2, len(accel_scores))]
-    accel_score = clamp(accel_raw * (0.7 + 0.3 * average([abs(score) for score in short_scores])), -1, 1)
+    accel_boost = config.momentumAccelShareBoost
+    accel_score = clamp(accel_raw * (accel_boost[0] + accel_boost[1] * average([abs(score) for score in short_scores])), -1, 1)
     accel_signal = "hold"
-    if accel_score >= 0.18 and any(score > 0 for score in short_scores):
+    if accel_score >= config.momentumAccelThreshold and any(score > 0 for score in short_scores):
         accel_signal = "buy"
-    elif accel_score <= -0.18 and any(score < 0 for score in short_scores):
+    elif accel_score <= -config.momentumAccelThreshold and any(score < 0 for score in short_scores):
         accel_signal = "sell"
     short_agreement = len([s for s in short_scores if (s > 0 if accel_signal == "buy" else s < 0)]) if accel_signal != "hold" else 0
 
@@ -581,14 +627,18 @@ def analyze_momentum_signals(data: dict[str, Any] | None, config: RankTrendConfi
         confirm_score = normalize_signed(values[1], buy[1], abs(sell[1]))
         trigger_strength = min(1, abs(normalize_signed(trigger_now, buy[0], abs(sell[0]))))
         confirm_strength = min(1, abs(confirm_score))
-        if trigger_prev <= 0 < trigger_now and confirm_score >= -0.15:
+        zero_weights = config.momentumZeroWeights
+        if trigger_prev <= 0 < trigger_now and confirm_score >= -config.momentumZeroConfirmThreshold:
             zero_signal = "buy"
-            zero_score = clamp(0.7 * trigger_strength + 0.3 * max(0, confirm_strength), -1, 1)
-        elif trigger_prev >= 0 > trigger_now and confirm_score <= 0.15:
+            zero_score = clamp(zero_weights[0] * trigger_strength + zero_weights[1] * max(0, confirm_strength), -1, 1)
+        elif trigger_prev >= 0 > trigger_now and confirm_score <= config.momentumZeroConfirmThreshold:
             zero_signal = "sell"
-            zero_score = -clamp(0.7 * trigger_strength + 0.3 * max(0, confirm_strength), 0, 1)
-        strong_confirm = (zero_signal == "buy" and confirm_score > 0.15) or (zero_signal == "sell" and confirm_score < -0.15)
-        zero_conf = signal_confidence(zero_score, 5 if strong_confirm else 0)
+            zero_score = -clamp(zero_weights[0] * trigger_strength + zero_weights[1] * max(0, confirm_strength), 0, 1)
+        strong_confirm = (
+            (zero_signal == "buy" and confirm_score > config.momentumZeroStrongConfirmThreshold)
+            or (zero_signal == "sell" and confirm_score < -config.momentumZeroStrongConfirmThreshold)
+        )
+        zero_conf = signal_confidence(zero_score, config.momentumZeroStrongConfirmBonus if strong_confirm else 0)
 
     return {
         "direction": {"signal": direction_signal, "confidence": signal_confidence(direction_score, clamp(long_agreement * 2.5, 0, 5) if direction_signal != "hold" else 0), "score": direction_score},
@@ -671,6 +721,8 @@ def detect_rank_jumps(
     percentiles: list[float],
     ranks: list[float] | None = None,
     delta_pct: float = 10.0,
+    reset_lookback: int = 3,
+    sustain_count: int = 2,
 ) -> dict[str, Any]:
     """内生阈值排名跳跃检测。
 
@@ -682,6 +734,8 @@ def detect_rank_jumps(
         percentiles: 排序百分位序列 (0-100)
         ranks: 原始排名序列，用于计算实际排名变化幅度
         delta_pct: 百分位变化阈值，默认 10 个百分点
+        reset_lookback: 事件触发后重置参考价的近期窗口（默认 3，原硬编码）
+        sustain_count: sustained 判定阈值（surge/collapse 事件数，默认 2，原硬编码）
 
     Returns:
         event: "jump" | "none"
@@ -710,7 +764,7 @@ def detect_rank_jumps(
                 "percentile": round(p, 2),
             })
             # 重置到近期均价而非当前极值，防止极端值误触反向事件
-            lookback = min(3, i + 1)
+            lookback = min(reset_lookback, i + 1)
             ref = sum(percentiles[i - lookback + 1 : i + 1]) / lookback
 
     if not events:
@@ -726,7 +780,7 @@ def detect_rank_jumps(
     latest = events[-1]
     surge_count = sum(1 for e in events if e["direction"] == "surge")
     collapse_count = sum(1 for e in events if e["direction"] == "collapse")
-    sustained = surge_count >= 2 or collapse_count >= 2
+    sustained = surge_count >= sustain_count or collapse_count >= sustain_count
     direction = "buy" if latest["direction"] == "surge" else "sell"
 
     mag = latest["magnitude"]
@@ -1745,6 +1799,8 @@ class RankTrendPythonEngine:
         self._stock_lookup = self._build_stock_lookup(frames)
         # 趋势反转层（阶段6）：snapshotId → 帧索引，供 trend_reversal_of 取历史 percentile
         self._index_by_snapshot = {str(frame.get("snapshotId")): i for i, frame in enumerate(frames)}
+        # ATR 波动观察（2026-08-17）：个股跨帧 bar 累积（断档重置/截断，见 _build_signal assemble 分支）
+        self._atr_meta_by_code: dict[str, dict[str, Any]] = {}
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
         requested_codes = {str(code) for code in codes} if codes else None
@@ -1858,6 +1914,9 @@ class RankTrendPythonEngine:
 
     def replay_frame_at(self, frames: list[dict[str, Any]], index: int, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         frame = frames[index]
+        # ATR 流式路径（2026-08-17）：重建帧索引保证断档判断正确；_atr_meta_by_code 跨调用累积，
+        # 由调用方保证 frames 序列一致（混用 replay/replay_frame_at 时需自行隔离状态）
+        self._index_by_snapshot = {str(f.get("snapshotId")): i for i, f in enumerate(frames)}
         history_start = max(0, index - window_size + 1)
         history = frames[history_start: index + 1]
         regime = market_regime(frame)
@@ -1915,7 +1974,13 @@ class RankTrendPythonEngine:
         }, config=self.config)
         # 顶层 candidateTier/action 按 meta 模式选择，保持回测消费兼容；两个分层同时输出
         tier_source = execution_strategy if self._candidate_tier_mode(meta) == "execution" else strategy
-        jump = detect_rank_jumps(percentiles, ranks, delta_pct=self.config.jumpDeltaPct)
+        jump = detect_rank_jumps(
+            percentiles,
+            ranks,
+            delta_pct=self.config.jumpDeltaPct,
+            reset_lookback=self.config.jumpResetLookback,
+            sustain_count=self.config.jumpSustainCount,
+        )
         # 阶段 2 数据质量治理：ok 判定用动量可计算门槛（momentumPeriods.max+1），
         # 不再混入 MACD 预热需求。旧口径 get_technical_min_samples=34 帧在 50 帧滑动窗口
         # + 热榜轮动下把 ok 占比压到 ~46%（20 个历史回测全部 researchGrade=degraded）。
@@ -1961,6 +2026,47 @@ class RankTrendPythonEngine:
         # API 单股链路（_analyze_one_stock）传 assemble=False，resonance 由 routes 层组装（含题材上下文），不重复计算。
         if assemble:
             from backend.analysis.ranktrend.volume_price import assemble_observation
+            from backend.analysis.ranktrend.atr_mean_reversion import analyze_atr_mean_reversion, bar_of
+
+            # _build_signal 可被直接调用（不经 replay），惰性初始化 ATR 累积状态与帧索引
+            if not hasattr(self, "_atr_meta_by_code"):
+                self._atr_meta_by_code = {}
+            if not hasattr(self, "_index_by_snapshot"):
+                self._index_by_snapshot = {}
+
+            # ── ATR 波动观察（独立观察维度，不进 synergy 投票；设计 ranktrend-atr-signal-design.md v2）──
+            # 跨帧累积 (high, low, close)；缺 bar 帧计数 missingBars；跨 tradingDate 或帧间隔
+            # ≥ atrGapResetBars 重置序列（防 TR 跨时间连接膨胀）并计数 gapResets；截断 atrMaxHistoryBars。
+            atr_entry = self._atr_meta_by_code.setdefault(
+                code, {"bars": [], "missing": 0, "resets": 0, "last_idx": None, "last_date": None}
+            )
+            frame_idx = self._index_by_snapshot.get(str(frame.get("snapshotId")))
+            trading_date = str(frame.get("tradingDate") or "")
+            bar = bar_of(stock)
+            if bar is None:
+                atr_entry["missing"] += 1
+            else:
+                prev_idx = atr_entry["last_idx"]
+                prev_date = atr_entry["last_date"]
+                gap = (frame_idx - prev_idx) if (frame_idx is not None and prev_idx is not None) else 0
+                cross_day = bool(prev_date and trading_date and trading_date != prev_date)
+                if prev_idx is not None and (cross_day or gap >= self.config.atrGapResetBars):
+                    atr_entry["bars"] = []  # 断档重置：只保留当前帧重新起算
+                    atr_entry["resets"] += 1
+                    atr_entry["missing"] = 0
+                atr_entry["bars"].append(bar)
+                if self.config.atrMaxHistoryBars > 0 and len(atr_entry["bars"]) > self.config.atrMaxHistoryBars:
+                    atr_entry["bars"] = atr_entry["bars"][-self.config.atrMaxHistoryBars :]
+                atr_entry["last_idx"] = frame_idx
+                atr_entry["last_date"] = trading_date
+            rank_trend["observation"]["atrMeanReversion"] = analyze_atr_mean_reversion(
+                atr_entry["bars"],
+                self.config,
+                missing_bars=atr_entry["missing"],
+                gap_resets=atr_entry["resets"],
+            )
+            # 设计文档 §4.2：同时挂载 technical.atrMeanReversion（供技术诊断层消费）
+            rank_trend["technical"]["atrMeanReversion"] = rank_trend["observation"]["atrMeanReversion"]
 
             if market_ctx is not None:
                 sample_quality = (rank_trend.get("meta") or {}).get("sampleQuality") or {}

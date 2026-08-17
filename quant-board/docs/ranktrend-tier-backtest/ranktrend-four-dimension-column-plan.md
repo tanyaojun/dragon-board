@@ -1,15 +1,21 @@
-# 行情主页【四维】列实现方案（前端消费后端 signalTier）
+# 行情主页【四维+波动】列实现方案（前端消费后端 signalTier）
 
-> 主题：行情主页（`DataTable.vue`）展示后端生产的五维离散档位信号
-> 状态：方案稿（未实现）——2026-08-16 按生命周期区分度结论优化（§2.1 优化说明）
-> 前置：后端五维 `signalTier`（共振/趋势/量价/周期/synergy 合并）已由 Python golden 生产（`engine.py`/`volume_price.py`/`ranktrend_routes.py`），前端只消费
-> 关联：回测方案见 `ranktrend-signal-tier-backtest-plan.md`；档位规则见 `ranktrend-observation-discrete-tiers-design.md`
+> 主题：行情主页（`DataTable.vue`）展示后端生产的离散档位信号——**四维合并（共振/趋势/量价/周期）
+> + 波动观察列（ATR 均值回归，第五观察维，不进 synergy 投票）**
+> 状态：方案稿 v2（未实现）——2026-08-16 按生命周期区分度结论优化；2026-08-17 按用户决策修订：
+> **ATR 波动列为独立观察列（Phase 2，待后端实现），synergy 保持四维不变**
+> 前置：后端五维观察 `signalTier`（共振/趋势/量价/周期/ATR）+ 四维合并 `synergy` 由 Python golden
+> 生产（`engine.py`/`volume_price.py`/`ranktrend_routes.py`），前端只消费；ATR 维度尚未实现
+> （设计见 `ranktrend-atr-signal-design.md` v2），字段为预留契约
+> 关联：回测方案见 `ranktrend-signal-tier-backtest-plan.md`；档位规则见 `ranktrend-observation-discrete-tiers-design.md`；
+> ATR 信号设计见 `ranktrend-atr-signal-design.md`
 
 ## 1. 背景与目标
 
 1. 现状：行情主页 `src/components/common/DataTable.vue` 已有四列（共振/趋势/量价/周期），只展示方向箭头 + 连续分（`observation-cell`）；后端已生产各维 `signalTier`/`tierReasons` 与四维合并 `synergy.signalTier`，前端**零消费**（`src/services/rankTrend/types.ts` 无字段、模板无徽章）。
 2. 目标（用户已确认形态）：**新增【四维】总档列**（显示 synergy 合并档位）+ **共振/趋势/量价三列升级为「方向箭头 + 档位徽章 + 连续分」**，**周期列改为「环境门标签」**（§2.1 优化，不做方向色徽章），与设计文档 §8 的"前端展示档位徽章后行为可解释"一致。
-3. 约束：前端只消费后端已产字段，不在前端重算档位；不改动后端生产逻辑（回测方案的参数化/下沉属另一任务，互不阻塞——前端消费的是现有已产字段）。
+3. **新增【波动】观察列（v2，Phase 2）**：ATR 均值回归（`observation.atrMeanReversion`）作为**第五观察维独立展示**（方向箭头 + 徽章 + deviation），**不进 synergy 投票**（synergy 保持四维合并）——参照 lifecycle 环境门先例（观察/环境角色不进方向投票）。Phase 1 不实现该列（后端未生产字段），Phase 2 后端实现并验证区分度后落地。
+4. 约束：前端只消费后端已产字段，不在前端重算档位；不改动后端生产逻辑（回测方案的参数化/下沉属另一任务，互不阻塞——前端消费的是现有已产字段）。
 
 ## 2. 字段合同确认（后端已生产，只读消费）
 
@@ -19,7 +25,8 @@
 | `stock.rankTrend.observation.rankTrend` | `signalTier` / `tierReasons` | string / string[] | `engine.py _rank_trend_tier` |
 | `stock.rankTrend.observation.volumePrice` | `signalTier` / `tierReasons` | string / string[] | `volume_price.py _volume_price_tier` |
 | `stock.rankTrend.observation.lifecycle` | `signalTier` / `tierReasons` | string / string[] | `engine.py _lifecycle_tier` |
-| `stock.rankTrend.observation.synergy` | `signalTier` / `tierReasons` | string / string[] | `ranktrend_routes.py _synergy_tier` |
+| `stock.rankTrend.observation.synergy` | `signalTier` / `tierReasons` | string / string[] | `ranktrend_routes.py _synergy_tier`（实际生产 `volume_price.py::_synergy_tier`） |
+| `stock.rankTrend.observation.atrMeanReversion`（**Phase 2 前端列，后端已实现**） | `signalTier` / `tierReasons` / `direction` / `deviation` | string / string[] / string / float | `engine.py analyze_atr_mean_reversion`（`backend/analysis/ranktrend/atr_mean_reversion.py`，**2026-08-17 已实现并挂载**；前端该列仍待区分度验证后启用，字段缺失时**不渲染波动列**，fail-visible） |
 
 > **路径口径**：位置列给出**前端读取路径**（`getRankTrendAnalysis(stock) = stock.rankTrend`，`DataTable.vue:1075`；resonance 已按 `rankTrend.resonance` 读取，`DataTable.vue:815`）。后端组装术语为 `analysis.resonance`（顶层）与 `analysis.observation.*`（`ranktrend_routes.py:378-409`），实现 getter 时**以本表前端路径为准，勿照抄后端路径**。
 
@@ -43,6 +50,25 @@ lifecycle 档位（A/B/C/D/E）**无方向区分度**——A（优选路径 igni
 3. **悬停明细**：四维明细中 lifecycle 标注"环境门"，synergy reasons 展示四维投票构成
    （如 `共振S · 趋势A · 量价B · 周期[环境]`），缺维显示 `-`；
 4. 共振/趋势/量价三列保留方向徽章（趋势 0.064/0.037、量价资金 zljzb>5 0.554 有方向区分度）。
+
+### 2.2 ATR 波动观察列决策（2026-08-17，用户确认）
+
+**决策**：ATR 均值回归信号（`observation.atrMeanReversion`）作为**第五观察维独立展示**
+（【波动】列），**不进 synergy 投票——synergy 保持四维合并**。
+
+依据：
+1. **信息正交**：ATR 是价格相对波动通道的偏离（`deviation=(close−ref)/ATR`），与四维
+   （排名/涨跌/量比/资金/环境）无重叠（`ranktrend-atr-signal-design.md` §5.2 正交性验证计划）；
+2. **方向相反**：ATR 是**逆向/回归**信号（超买 sell/超卖 buy），与共振/趋势/量价的**追强**
+   方向天然相反——直接并入五维投票会造成 synergy 自相矛盾（同一天 ATR 超买 sell、
+   共振追强 buy）；
+3. **先例**：参照 lifecycle 环境门（观察/否决角色，不进方向投票），ATR 初始为纯观察列；
+4. **验证路径**：区分度（buy/sell 分组）与正交性验证通过后，再评估 ATR 角色
+   （独立否决条件/观察权重），届时走 golden 变更流程（不写回默认值原则）。
+
+**展示**：方向箭头（超买 ↑sell / 超卖 ↓buy）+ 档位徽章 + deviation 数值 + "回归"标签，
+与四维列同构；`unknown` 显示 `--`；**Phase 2 后端实现前该列不渲染**（字段缺失 → 列隐藏，
+fail-visible）。
 
 ## 3. TS 类型补充（`src/services/rankTrend/types.ts`）
 
@@ -94,6 +120,16 @@ export interface RankTrendSynergy {
   tierReasons?: RankTrendTierReasons // 新增
 }
 
+// Phase 2（ATR 波动观察列，后端实现后启用；synergy 不消费该字段）
+export interface RankTrendAtrMeanReversion {
+  status: 'ok' | 'insufficient'
+  direction: 'buy' | 'sell' | 'hold' | null
+  score: number | null
+  deviation: number | null
+  signalTier?: RankTrendSignalTier   // 新增
+  tierReasons?: RankTrendTierReasons // 新增
+}
+
 export interface RankTrendResonance {
   // ...现有字段（direction/score/label 等）
   signalTier?: RankTrendSignalTier   // 新增（前端挂 stock.rankTrend.resonance，对应后端 analysis.resonance 顶层字段）
@@ -120,11 +156,13 @@ export function getSynergyTier(stock: any): { tier: RankTrendSignalTier | null; 
   - `rankTrendStrength: '52px' → '78px'`
   - `volumePriceQuadrant: '52px' → '78px'`
   - `lifecycleOpportunity: '64px' → '86px'`（环境门标签，宽度容纳 stage 中文名）
-- 新增列（**紧跟周期列之后，置末**，`group: 'comprehensive'`；用户确认列顺序 synergy 置末）：
+- 新增列（**紧跟周期列之后**，`group: 'comprehensive'`；用户确认列顺序 synergy 置末）：
 
 ```ts
-{ key: 'synergyTier', label: '四维', group: 'comprehensive', always: true },
+{ key: 'atrMeanReversion', label: '波动', group: 'comprehensive', always: true }, // Phase 2：ATR 观察列（后端未实现前不渲染）
+{ key: 'synergyTier', label: '四维', group: 'comprehensive', always: true },      // 合并总档置末
 // COLUMN_WIDTHS:
+atrMeanReversion: '72px',  // 方向箭头 + 徽章 + deviation（如 ↓2.4）
 synergyTier: '64px',
 ```
 
@@ -167,6 +205,31 @@ synergyTier: '64px',
 </template>
 ```
 
+**新增【波动】列（Phase 2，ATR 观察列——后端实现后启用；方向箭头 + 徽章 + deviation）**：
+
+```html
+<template v-else-if="col.key === 'atrMeanReversion'">
+  <div class="observation-cell atr-cell"
+    @click.stop="openObservationPanel(stock, 'atr')"
+    @mouseenter="showTierTooltip($event, stock, 'atrMeanReversion')"
+    @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+    <template v-if="getAtrSignal(stock) != null">
+      <span :class="getAtrCellClass(stock)" :title="getAtrDirectionLabel(stock) + '：回归预期'">
+        {{ getDirectionArrow(getAtrDirection(stock)) }}
+      </span>
+      <span v-if="getAtrTier(stock)" :class="tierBadgeClass(getAtrTier(stock))">
+        {{ getAtrTier(stock) }}
+      </span>
+      <span :class="getAtrCellClass(stock)">{{ getAtrDeviation(stock) }}</span>
+    </template>
+    <span v-else class="trend-steady">--</span>
+  </div>
+</template>
+```
+
+> **Phase 2 说明**：后端 `observation.atrMeanReversion` 未实现前，该列定义存在但
+> **列渲染函数检测字段缺失时跳过该列**（列配置按数据可用性过滤），不显示空列（fail-visible）。
+
 **新增【四维】列**（synergy 档位徽章，置末）：
 
 ```html
@@ -186,8 +249,9 @@ synergyTier: '64px',
 
 - 复用现有 `getRankTrendAnalysis(stock) = stock.rankTrend`（`DataTable.vue:1075`）读取 `observation`。
 - 新增 `getResonanceTier/getRankTrendTier/getVolumePriceTier/getSynergyTier(stock)` 四个方向档 getter（缺字段返回 null，回退纯连续分展示）。
+- **ATR getter（Phase 2）**：`getAtrSignal(stock)`（读 `observation.atrMeanReversion`，缺字段返回 null → 列隐藏/`--`）、`getAtrDirection/getAtrTier/getAtrDeviation(stock)`、`getAtrDirectionLabel(stock)`（超买/超卖）、`getAtrCellClass(stock)`（复用方向色：超买同 sell 绿/超卖同 buy 红）。
 - 周期列工具：`getLifecycleStage`（已有，`DataTable.vue:804`）、`getLifecycleVeto(stock)`（读 lifecycle.veto 布尔）、`lifecycleStageLabel(stage)`（stage→中文：ignition=点火/expansion=扩散/crowded=拥挤/reversal=反转/cooling=冷却）、`lifecycleEnvClass(stage, veto)`（环境色：veto=红实心、crowded/reversal=橙、cooling=灰、ignition/expansion=中性）。
-- `showTierTooltip`：扩展 `confidenceTooltip` 机制（`DataTable.vue:201-203`），content 拼 `tierReasons` 全文；四维列悬停显示合并 reasons + 四维明细（如 `共振S · 趋势A · 量价B · 周期[环境门]`），缺维显示 `-`；周期列悬停注明"生命周期为环境门，不预测方向，仅参与 synergy 环境修正/否决"。
+- `showTierTooltip`：扩展 `confidenceTooltip` 机制（`DataTable.vue:201-203`），content 拼 `tierReasons` 全文；四维列悬停显示合并 reasons + 四维明细（如 `共振S · 趋势A · 量价B · 周期[环境门]`），缺维显示 `-`；**波动列悬停（Phase 2）**：显示 ATR reasons + 标注"回归信号，不进 synergy 投票，仅观察"；周期列悬停注明"生命周期为环境门，不预测方向，仅参与 synergy 环境修正/否决"。
 - `tierBadgeClass(tier)`：返回档位徽章样式类（§4.4）。
 
 ### 4.4 徽章样式（与现有观察色系对齐，`DataTable.vue:2649-2670`）
@@ -219,6 +283,9 @@ synergyTier: '64px',
 - E 档（硬风险）用实心警示底，区别于 S 的亮红描边，符合设计文档"E 档警示样式"验收。
 - 暗色主题下对比度校验：红/绿/橙/灰均沿用现有 observation 色系（已在使用），E 档白字深红底对比度达标。
 - 若暗色主题变量（`--text-primary` 等）存在，优先用主题变量覆盖徽章文字色。
+- **波动列（Phase 2）**：复用 `observation-cell` 基础样式；方向色沿用既有（超买=sell 绿、超卖=buy 红）；
+  deviation 数值用 `observation-value` 样式；"回归"语义通过悬停 title + reasons 表达（不做额外色徽章，
+  避免与四维方向色混淆）。
 
 ## 5. 验收
 
@@ -226,15 +293,24 @@ synergyTier: '64px',
 |---|---|---|
 | 1 | 类型检查 | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` 无错误 |
 | 2 | 单元测试 | `pnpm test`：新增 getter/tierBadgeClass 用例 + 缺字段回退用例（`src/components/common/__tests__/` 或 `src/services/rankTrend/__tests__/`） |
-| 3 | 浏览器渲染（Playwright） | 行情总览页：四列显示「方向箭头 + 徽章 + 连续分」、【四维】列显示 synergy 档位徽章；悬停显示 tierReasons；`unknown` 显示 `--`；E 档警示样式可见；无横向溢出、控制台无错误 |
-| 4 | 数据回退 | mock 无 `signalTier` 字段的数据，确认回退为纯连续分展示（不渲染徽章、不报错） |
+| 3 | 浏览器渲染（Playwright，Phase 1） | 行情总览页：四列显示「方向箭头 + 徽章 + 连续分」、【四维】列显示 synergy 档位徽章；悬停显示 tierReasons；`unknown` 显示 `--`；E 档警示样式可见；无横向溢出、控制台无错误 |
+| 4 | 数据回退 | mock 无 `signalTier` 字段的数据，确认回退为纯连续分展示（不渲染徽章、不报错）；**波动列字段缺失 → 列隐藏**（fail-visible，Phase 1 后端未实现即应验证） |
+| 5 | 波动列（Phase 2，后端实现后） | mock 含 `observation.atrMeanReversion` 数据：方向箭头 + 徽章 + deviation 渲染；悬停显示"回归信号，不进 synergy 投票，仅观察"；`unknown` 显示 `--`；四维列悬停明细含 `波动[回归]` |
 
 ## 6. 实施步骤
 
-1. `types.ts` 补 `RankTrendSignalTier` + 五个接口可选字段 + 服务层 getter 与单测。
+**Phase 1（四维升级 + 【四维】总档列，不依赖后端新字段）**：
+1. `types.ts` 补 `RankTrendSignalTier` + 四个接口可选字段 + 服务层 getter 与单测。
 2. `DataTable.vue`：列定义 + 列宽 + 四列模板升级 + 新增【四维】列模板 + `tierBadgeClass`/`showTierTooltip` + 样式。
 3. 单测 + 类型检查 + Playwright 浏览器验收（`skills/playwright-cli/SKILL.md` 流程，dev server `pnpm dev` 与 QuantBoard 后端 `8000` 需可用；若后端不可用则用 mock 数据验收并注明）。
 4. 交付前 `verification-before-completion`。
+
+**Phase 2（【波动】ATR 观察列，依赖后端 ATR 信号实现）**：
+5. 后端实现 ATR 信号（`ranktrend-atr-signal-design.md` v2：纯函数 golden case → replay 挂载
+   `observation.atrMeanReversion` → buy/sell 分组区分度验证 → 样本外复核）。
+6. `types.ts` 补 `RankTrendAtr` 接口 + ATR getter 与单测；`DataTable.vue` 启用波动列（列配置按
+   字段可用性过滤，缺失即隐藏）。
+7. 波动列渲染验收（验收项 5）+ 四维悬停明细含波动。
 
 ## 7. 风险与回退
 
