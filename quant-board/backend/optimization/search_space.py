@@ -267,6 +267,7 @@ _STRATEGY_LIST_KEYS = (
     "momentumPeriods", "momentumWeights", "buyThresholds", "sellThresholds",
     "momentumDirectionShareBoost", "momentumAccelShareBoost",  # 趋势因子（2026-08-17 参数化）
     "momentumZeroWeights", "macdRawScoreWeights",
+    "volumePriceDirectionBuckets",  # 量价方向八档（2026-08-17 参数化）
     "resonanceWeights", "resonanceNewEntryWeights",
     "decisionRiskPenaltyWeights",
     "lifecycleWeights", "lifecycleMomentumWeights", "lifecycleMomentumScales",

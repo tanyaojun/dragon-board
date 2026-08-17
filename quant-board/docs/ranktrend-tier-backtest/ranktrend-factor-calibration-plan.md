@@ -144,6 +144,15 @@ _STRATEGY_PARAM_KEYS = _SCALAR_KEYS + (
 | `movingAverageShortPeriod` | `5`（ma5） | A | engine.py:375 |
 | `movingAverageLongPeriod` | `10`（ma10） | A | engine.py:376 |
 | `cycleRankShockLookback` | `5`（velocities[-5:]） | A | engine.py:256 |
+| `volumePriceNormalRatio` | `2.0`（量比正常上限，原硬编码 vr<=2.0） | A | engine.py RankTrendConfig（2026-08-17 参数化） |
+| `atrPeriod` | `14`（ATR 简单均值周期） | A | engine.py RankTrendConfig（2026-08-17） |
+| `atrRefPeriod` | `20`（close 参考均值周期） | A | engine.py RankTrendConfig |
+| `atrChannelK` | `2.0`（通道倍数/偏离阈值） | A | engine.py RankTrendConfig |
+| `atrDeepDeviation` | `3.0`（S 档绝对偏离阈值） | A | engine.py RankTrendConfig |
+| `atrMaxHistoryBars` | `60`（历史 bar 截断窗口） | A | engine.py RankTrendConfig |
+| `atrGapResetBars` | `2`（缺席帧断档重置阈值；跨日不恒重置） | A | engine.py RankTrendConfig |
+| `atrAggregateByDay` | `False`（是否按日聚合） | A | engine.py RankTrendConfig |
+| `atrBucketBySlot` | `False`（是否按 slot 分桶聚合） | A | engine.py RankTrendConfig |
 
 > MACD `hist = 2*(dif−dea)` 的 `2` 与 EMA `multiplier = 2/(period+1)` 的 `2` 均为标准公式系数，属数学定义，不需抽取（加注释说明即可）。
 
