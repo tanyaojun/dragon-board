@@ -2035,8 +2035,10 @@ class RankTrendPythonEngine:
                 self._index_by_snapshot = {}
 
             # ── ATR 波动观察（独立观察维度，不进 synergy 投票；设计 ranktrend-atr-signal-design.md v2）──
-            # 跨帧累积 (high, low, close)；缺 bar 帧计数 missingBars；跨 tradingDate 或帧间隔
-            # ≥ atrGapResetBars 重置序列（防 TR 跨时间连接膨胀）并计数 gapResets；截断 atrMaxHistoryBars。
+            # 跨帧累积 (high, low, close)；缺 bar 帧计数 missingBars；帧间隔 ≥ atrGapResetBars 重置
+            # 序列（防缺席帧导致的跨时间连接 TR 膨胀）并计数 gapResets；截断 atrMaxHistoryBars。
+            # 2026-08-17 修正：跨 tradingDate **不**恒重置——half_hour 每天仅 10-11 帧，
+            # 跨日恒重置使序列永远达不到样本门槛（0 信号）；隔日跳空计入 TR 为真实日线 ATR 语义。
             atr_entry = self._atr_meta_by_code.setdefault(
                 code, {"bars": [], "missing": 0, "resets": 0, "last_idx": None, "last_date": None}
             )
@@ -2047,11 +2049,9 @@ class RankTrendPythonEngine:
                 atr_entry["missing"] += 1
             else:
                 prev_idx = atr_entry["last_idx"]
-                prev_date = atr_entry["last_date"]
                 gap = (frame_idx - prev_idx) if (frame_idx is not None and prev_idx is not None) else 0
-                cross_day = bool(prev_date and trading_date and trading_date != prev_date)
-                if prev_idx is not None and (cross_day or gap >= self.config.atrGapResetBars):
-                    atr_entry["bars"] = []  # 断档重置：只保留当前帧重新起算
+                if prev_idx is not None and gap >= self.config.atrGapResetBars:
+                    atr_entry["bars"] = []  # 缺席帧断档重置：只保留当前帧重新起算
                     atr_entry["resets"] += 1
                     atr_entry["missing"] = 0
                 atr_entry["bars"].append(bar)

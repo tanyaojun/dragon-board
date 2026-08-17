@@ -157,6 +157,37 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _append_quote_coverage_warning(ctx: MarketDataContext, active_codes: list[str]) -> None:
+    """行情覆盖率告警（2026-08-17 A3）：quotes 覆盖热榜 code 比例 < 0.8 时记录 warning health。
+
+    high/low 缺失根因（2026-08-17）：热榜源无 high/low，依赖行情补充；行情采集间歇性
+    覆盖不全（批次失败/桥 dead_code 挂起）→ 该帧股票缺 high/low。此处把低覆盖率显式暴露
+    （fail-visible），供采集审计/监控发现。
+    """
+    if not active_codes or not ctx.quotes:
+        return
+    quoted_codes = {str(q.get("code") or "").strip() for q in ctx.quotes if q.get("code")}
+    covered = sum(1 for code in active_codes if code in quoted_codes)
+    coverage = covered / len(active_codes)
+    if coverage < 0.8:
+        ctx.source_health.append(
+            SourceHealth(
+                source="quote_coverage",
+                ok=True,
+                row_count=covered,
+                requested_count=len(active_codes),
+                coverage_ratio=round(coverage, 4),
+                error=f"quotes 覆盖率 {covered}/{len(active_codes)}（{coverage:.0%}）< 80%",
+                details={
+                    "quoteCoverage": round(coverage, 4),
+                    "covered": covered,
+                    "total": len(active_codes),
+                },
+                captured_at=_iso_now(),
+            )
+        )
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     """Coerce *value* to float, returning *default* on failure."""
     try:
@@ -243,7 +274,7 @@ class _BatchedProxyProvider:
         *,
         batch_size: int = 50,
         max_concurrency: int = 3,
-        failed_batch_retries: int = 1,
+        failed_batch_retries: int = 2,  # 2026-08-17 A1：批次失败重试 1→2，降低行情补充丢股票（high/low 缺失根因）
         collection_timeout_ms: int = 120000,
         gateway: Any = None,
     ) -> None:
@@ -1914,6 +1945,7 @@ def collect_market_context(
             )
             ctx.source_health.append(health)
 
+    _append_quote_coverage_warning(ctx, active_codes)
     return ctx
 
 
@@ -1997,4 +2029,5 @@ async def collect_market_context_async(
             )
             ctx.source_health.append(health)
 
+    _append_quote_coverage_warning(ctx, active_codes)
     return ctx

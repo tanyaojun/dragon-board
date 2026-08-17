@@ -120,9 +120,36 @@ def test_bar_of_field_fallback() -> None:
     assert bar_of({"high": 11.0, "low": 9.0, "close": 10.0}) == (11.0, 9.0, 10.0)
     assert bar_of({"highPrice": 12.0, "lowPrice": 8.0, "lastTradePrice": 10.5}) == (12.0, 8.0, 10.5)
     assert bar_of({"dayHigh": 13.0, "dayLow": 7.0, "price": 9.5}) == (13.0, 7.0, 9.5)
-    assert bar_of({"high": 11.0}) is None  # low/close 缺失
+    assert bar_of({"high": 11.0}) is None  # 无 close → None
     assert bar_of({}) is None
     assert bar_of(None) is None
+
+
+def test_bar_of_close_only_allowed() -> None:
+    # 2026-08-17 收盘准 ATR 口径：close 可用即返回 bar（high/low 为 None，TR 用收盘 Δclose 降级）
+    assert bar_of({"price": 9.5}) == (None, None, 9.5)
+    assert bar_of({"lastTradePrice": 10.0}) == (None, None, 10.0)
+    assert bar_of({"close": 10.2, "high": 11.0}) == (11.0, None, 10.2)
+
+
+def test_true_ranges_close_only_fallback() -> None:
+    # 无 high/low → TR' = |Δclose|（收盘准 ATR 口径）
+    bars = [(None, None, 10.0), (None, None, 10.5), (None, None, 10.2)]
+    trs = true_ranges(bars)
+    assert len(trs) == 2
+    assert trs[0] == pytest.approx(0.5)
+    assert trs[1] == pytest.approx(0.3)
+
+
+def test_analyze_close_only_works() -> None:
+    # 收盘准 ATR：21 帧价格序列（无 high/low），超卖 → buy
+    c = RankTrendConfig()
+    bars = [(None, None, 10.0 + i * 0.05) for i in range(19)] + [(None, None, 7.0), (None, None, 6.8)]
+    result = analyze_atr_mean_reversion(bars, c)
+    assert result["status"] == "ok"
+    assert result["direction"] == "buy"
+    assert result["signalTier"] in ("A", "S")
+    assert result["missingBars"] == 0
 
 
 def test_atr_config_defaults() -> None:
@@ -197,16 +224,19 @@ def test_replay_atr_mean_reversion_present() -> None:
         assert atr["signalTier"] in ("S", "A", "B", "C", "D", "E", "unknown")
 
 
-def test_replay_atr_gap_reset_cross_day() -> None:
+def test_replay_atr_cross_day_keeps_sequence() -> None:
     from backend.analysis.ranktrend.engine import RankTrendPythonEngine
 
-    # 每天 1 帧（tradingDate 每天变化）→ 跨日恒重置，最后一帧 gapResets ≥ 1
+    # 2026-08-17 断档策略修正：跨 tradingDate 连续出现**不**重置（每天 1 帧、帧间隔=1 < atrGapResetBars）
+    # → 序列跨日累积、gapResets=0（隔日跳空计入 TR，真实日线 ATR 语义）
     frames = _make_atr_frames(n=22, change_date_at=1)
     engine = RankTrendPythonEngine()
     signals = engine.replay(frames, warmup_count=1)
     assert signals
     atr = _last_signal_for(signals)["rankTrend"]["observation"]["atrMeanReversion"]
-    assert atr["gapResets"] >= 1
+    assert atr["gapResets"] == 0
+    # 22 帧跨日连续 → 样本满足门槛（20）→ 非 unknown
+    assert atr["status"] == "ok"
 
 
 def test_replay_atr_missing_bar_counts() -> None:

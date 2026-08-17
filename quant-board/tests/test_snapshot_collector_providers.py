@@ -25,6 +25,7 @@ from backend.snapshot_collector.providers import (
     StartupBundleStockProvider,
     TencentBasicQuoteProvider,
     ThemeMappingProvider,
+    _append_quote_coverage_warning,
     collect_market_context,
 )
 from backend.services.theme.fund_cache import ThemeFundCache
@@ -1305,3 +1306,34 @@ class TestProxyLimitUpProvider:
         assert by_code["000001"]["boardHeight"] == 3
         assert by_code["600000"]["firstZtTime"] == "09:45:00"
         assert by_code["600000"]["boardHeight"] == 3
+
+def test_append_quote_coverage_warning_low_coverage() -> None:
+    """A3：quotes 覆盖热榜 code < 80% → 记录 quote_coverage warning health（fail-visible）。"""
+    ctx = MarketDataContext()
+    ctx.quotes = [{"code": "000001"}, {"code": "000002"}]
+    _append_quote_coverage_warning(ctx, ["000001", "000002", "000003", "000004", "000005"])
+    coverage_health = [h for h in ctx.source_health if h.source == "quote_coverage"]
+    assert len(coverage_health) == 1
+    health = coverage_health[0]
+    assert health.ok is True  # warning 不阻断采集
+    assert health.coverage_ratio == pytest.approx(0.4)
+    assert health.requested_count == 5
+    assert health.row_count == 2
+    assert "40%" in health.error
+    assert health.details["covered"] == 2
+
+
+def test_append_quote_coverage_warning_high_coverage_silent() -> None:
+    """A3：覆盖率 >= 80% → 不记录告警。"""
+    ctx = MarketDataContext()
+    ctx.quotes = [{"code": "000001"}, {"code": "000002"}, {"code": "000003"}, {"code": "000004"}]
+    _append_quote_coverage_warning(ctx, ["000001", "000002", "000003", "000004", "000005"])
+    assert not [h for h in ctx.source_health if h.source == "quote_coverage"]
+
+
+def test_append_quote_coverage_warning_empty_guards() -> None:
+    """A3：无 active_codes 或无 quotes → 静默。"""
+    ctx = MarketDataContext()
+    _append_quote_coverage_warning(ctx, [])
+    _append_quote_coverage_warning(ctx, ["000001"])
+    assert not ctx.source_health

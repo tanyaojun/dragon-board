@@ -26,7 +26,7 @@
 | `stock.rankTrend.observation.volumePrice` | `signalTier` / `tierReasons` | string / string[] | `volume_price.py _volume_price_tier` |
 | `stock.rankTrend.observation.lifecycle` | `signalTier` / `tierReasons` | string / string[] | `engine.py _lifecycle_tier` |
 | `stock.rankTrend.observation.synergy` | `signalTier` / `tierReasons` | string / string[] | `ranktrend_routes.py _synergy_tier`（实际生产 `volume_price.py::_synergy_tier`） |
-| `stock.rankTrend.observation.atrMeanReversion`（**Phase 2 前端列，后端已实现**） | `signalTier` / `tierReasons` / `direction` / `deviation` | string / string[] / string / float | `engine.py analyze_atr_mean_reversion`（`backend/analysis/ranktrend/atr_mean_reversion.py`，**2026-08-17 已实现并挂载**；前端该列仍待区分度验证后启用，字段缺失时**不渲染波动列**，fail-visible） |
+| `stock.rankTrend.observation.atrMeanReversion`（**Phase 2 前端列，后端已实现但验证未通过**） | `signalTier` / `tierReasons` / `direction` / `deviation` | string / string[] / string / float | `engine.py analyze_atr_mean_reversion`（`backend/analysis/ranktrend/atr_mean_reversion.py`，**2026-08-17 已实现并挂载**；区分度验证 buy/sell saEx≈0 未通过 + high/low 数据缺口 28%，**【波动】列不启用**，详见 `ranktrend-atr-signal-design.md` §8） |
 
 > **路径口径**：位置列给出**前端读取路径**（`getRankTrendAnalysis(stock) = stock.rankTrend`，`DataTable.vue:1075`；resonance 已按 `rankTrend.resonance` 读取，`DataTable.vue:815`）。后端组装术语为 `analysis.resonance`（顶层）与 `analysis.observation.*`（`ranktrend_routes.py:378-409`），实现 getter 时**以本表前端路径为准，勿照抄后端路径**。
 

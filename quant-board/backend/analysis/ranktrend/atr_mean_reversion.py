@@ -21,12 +21,14 @@ from typing import Any
 from backend.analysis.ranktrend.engine import RankTrendConfig
 
 
-def bar_of(stock: dict[str, Any] | None) -> tuple[float, float, float] | None:
-    """从股票 record 提取 (high, low, close)，字段回退顺序同回测引擎 execution.py。
+def bar_of(stock: dict[str, Any] | None) -> tuple[float | None, float | None, float] | None:
+    """从股票 record 提取 (high, low, close)；**close 必填，high/low 可选**。
 
-    high：high → highPrice → dayHigh；low：low → lowPrice → dayLow；
-    close：close → closePrice → lastPrice → lastTradePrice → price。
-    任一维全缺或非正 → 返回 None（该帧不累积，fail-visible）。
+    2026-08-17 自适应口径（用户决策：ATR 不依赖日线 high/low）：
+    - close 回退：close → closePrice → lastPrice → lastTradePrice → price（100% 数据可用）；
+    - high/low 回退：high→highPrice→dayHigh / low→lowPrice→dayLow（**缺失时为 None**，
+      TR 降级为收盘 Δclose 准 ATR，而非丢弃该帧/标记 unknown）；
+    - close 也缺失 → 返回 None（该帧不累积，fail-visible）。
     """
     if not stock:
         return None
@@ -47,21 +49,29 @@ def bar_of(stock: dict[str, Any] | None) -> tuple[float, float, float] | None:
     high = first_number("high", "highPrice", "dayHigh")
     low = first_number("low", "lowPrice", "dayLow")
     close = first_number("close", "closePrice", "lastPrice", "lastTradePrice", "price")
-    if high is None or low is None or close is None:
+    if close is None:
         return None
     return (high, low, close)
 
 
-def true_ranges(bars: list[tuple[float, float, float]]) -> list[float]:
-    """TR 序列：TR(i) = max(high_i − low_i, |high_i − close_{i−1}|, |low_i − close_{i−1}|)。"""
+def true_ranges(bars: list[tuple[float | None, float | None, float]]) -> list[float]:
+    """TR 序列；high/low 缺失（None）时降级为收盘 Δclose（准 ATR 口径）。
+
+    真实 TR：TR(i) = max(high_i − low_i, |high_i − close_{i−1}|, |low_i − close_{i−1}|)
+    收盘降级：TR'(i) = |close_i − close_{i−1}|
+    """
     trs: list[float] = []
     for i in range(1, len(bars)):
         high, low, prev_close = bars[i][0], bars[i][1], bars[i - 1][2]
-        trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        close = bars[i][2]
+        if high is not None and low is not None:
+            trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        else:
+            trs.append(abs(close - prev_close))
     return trs
 
 
-def atr_of(bars: list[tuple[float, float, float]] | None, period: int = 14) -> float | None:
+def atr_of(bars: list[tuple[float | None, float | None, float]] | None, period: int = 14) -> float | None:
     """ATR(period) 简单均值（与 execution.py::_atr_of 一致）；样本不足/缺失返回 None。"""
     if not bars or len(bars) < period + 1:
         return None
@@ -76,7 +86,7 @@ def _mean(values: list[float]) -> float | None:
 
 
 def analyze_atr_mean_reversion(
-    bars: list[tuple[float, float, float]],
+    bars: list[tuple[float | None, float | None, float]],
     config: RankTrendConfig,
     missing_bars: int = 0,
     gap_resets: int = 0,
