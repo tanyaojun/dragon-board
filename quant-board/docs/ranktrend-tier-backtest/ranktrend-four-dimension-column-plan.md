@@ -2,11 +2,13 @@
 
 > 主题：行情主页（`DataTable.vue`）展示后端生产的离散档位信号——**四维合并（共振/趋势/量价/周期）
 > + 波动观察列（ATR 均值回归，第五观察维，不进 synergy 投票）**
-> 状态：方案稿 v2（未实现）——2026-08-16 按生命周期区分度结论优化；2026-08-17 按用户决策修订：
-> **ATR 波动列为独立观察列（Phase 2，待后端实现），synergy 保持四维不变**
+> 状态：**Phase 1 已实现（2026-08-17 前，commit 73190d3/c51dcbb/f50217b/cdf89ff 等）**——
+> 四维徽章（共振/趋势/量价）+ 【四维】synergy 总档列 + 周期环境门标签 + 悬停 tooltip 已落地；
+> 2026-08-16 按生命周期区分度结论优化；2026-08-17 按用户决策修订：
+> **ATR 波动列为独立观察列（Phase 2，验证未通过不启用），synergy 保持四维不变**
 > 前置：后端五维观察 `signalTier`（共振/趋势/量价/周期/ATR）+ 四维合并 `synergy` 由 Python golden
-> 生产（`engine.py`/`volume_price.py`/`ranktrend_routes.py`），前端只消费；ATR 维度尚未实现
-> （设计见 `ranktrend-atr-signal-design.md` v2），字段为预留契约
+> 生产（`engine.py`/`volume_price.py`/`ranktrend_routes.py`），前端只消费；ATR 维度已实现
+> 但**区分度验证未通过（buy/sell saEx≈0，文档 `ranktrend-atr-signal-design.md` §8）**，波动列不启用
 > 关联：回测方案见 `ranktrend-signal-tier-backtest-plan.md`；档位规则见 `ranktrend-observation-discrete-tiers-design.md`；
 > ATR 信号设计见 `ranktrend-atr-signal-design.md`
 

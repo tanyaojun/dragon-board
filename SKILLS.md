@@ -96,6 +96,25 @@ npm run build
 - 不能用旧运行结果、局部检查或“看起来没问题”代替验证。
 - 如果环境限制导致无法验证，最终回复必须明确说明未验证项和风险。
 
+### 2.4 `ranktrend-tier-longterm-test`
+
+项目级正文：`skills/ranktrend-tier-longterm-test/SKILL.md`。
+
+用于四维信号（共振/趋势/量价/周期/新因子）参数长测的**标准流程**——参数盘点与参数化
+（TDD golden 不漂移）→ 逐参数 5 档扫描（防过拟合）→ 组合验证 → **市场状态窗口感知**
+的样本外复核（第一轮教训：7 月股灾月污染 validation）→ 判定分类（证实/缺复核/证伪/冗余）
+→ 文档固化 → golden 变更。N 阶段长测直接调用本 skill，无需反复查阅历史长测记录
+（第一轮实践见 `quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`
+阶段 7/8/9）。
+
+使用要求：
+
+- 硬编码阈值先参数化（默认值=原值，golden 不漂移），list 字段必须同步
+  `_STRATEGY_LIST_KEYS` 白名单；
+- 每参数 5 档单变量扫描（非打包 3 组），多档位单调性判定真实可调参数；
+- 样本外复核必须检查 validation 窗口是否含极端行情月，单独跑干净窗口交叉验证；
+- 全程不写回默认值，只有"证实"类（干净窗口 ≥0.05 且跨窗口稳健）才走 golden 变更流程。
+
 ## 3. 设计和范围控制 Skills
 
 ### 3.1 `superpowers:brainstorming`
