@@ -4,12 +4,7 @@
 review nit 固化：_analyze_one_stock（前端 POST /api/ranktrend/analyze 数据源，assemble=False）
 必须挂载 observation.crossSection，synergy 才能计入第 5 维投票——防回测改进不同步前端。
 """
-import sys
-from unittest.mock import patch
-
 import pytest
-
-sys.path.insert(0, r"D:\dragon-board\quant-board")
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, market_regime
 
@@ -48,8 +43,10 @@ def test_api_link_mounts_cross_section_and_votes() -> None:
 
 def test_api_link_fail_visible_none_market_median() -> None:
     func, args = _make_args([30.0, 40.0, 50.0, 60.0, 70.0])
-    # market_median=None → relativeToMarket=None，绝对档照常（不阻断）
+    # market_median=None → relativeToMarket=None，绝对档照常（fail-visible，不阻断）
     result = func(args)
     assert result is not None
-    cs = (result["analysis"].get("observation") or {}).get("crossSection") or {}
-    assert cs.get("relativeToMarket") is None or cs.get("signalTier") in ("A", "B", "C", "D")
+    obs = result["analysis"].get("observation") or {}
+    cs = obs.get("crossSection") or {}
+    assert cs.get("signalTier") in ("A", "B", "C", "D", "unknown"), "crossSection 未挂载（回归）"
+    assert cs.get("relativeToMarket") is None, "market_median=None 时应保留 relativeToMarket=None"
