@@ -55,6 +55,22 @@ export function getLifecycleTier(stock: unknown): RankTrendSignalTier | null {
   return asTier((stock as { rankTrend?: { observation?: { lifecycle?: { signalTier?: unknown } } } } | undefined)?.rankTrend?.observation?.lifecycle?.signalTier)
 }
 
+/** 横截面档位：stock.rankTrend.observation.crossSection.signalTier（2026-08-18 第 5 维，tooltip 展示） */
+export function getCrossSectionTier(stock: unknown): RankTrendSignalTier | null {
+  return asTier((stock as { rankTrend?: { observation?: { crossSection?: { signalTier?: unknown } } } } | undefined)?.rankTrend?.observation?.crossSection?.signalTier)
+}
+
+/** 横截面明细：percentile/delta/relativeToMarket（tooltip 展示；缺字段返回 null） */
+export function getCrossSectionDetail(stock: unknown): string | null {
+  const cs = (stock as { rankTrend?: { observation?: { crossSection?: { percentile?: unknown; percentileDelta?: unknown; relativeToMarket?: unknown } } } } | undefined)?.rankTrend?.observation?.crossSection
+  if (!cs || typeof cs !== 'object') return null
+  const pct = typeof cs.percentile === 'number' ? Math.round(cs.percentile) : null
+  const delta = typeof cs.percentileDelta === 'number' ? Math.round(cs.percentileDelta) : null
+  const rel = typeof cs.relativeToMarket === 'number' ? Math.round(cs.relativeToMarket) : null
+  if (pct === null && delta === null && rel === null) return null
+  return `横截 ${pct ?? '-'}/${delta ?? '-'}/${rel ?? '-'}`
+}
+
 /** 四维合并档位：stock.rankTrend.observation.synergy.signalTier（缺字段返回 null，回退纯连续分展示） */
 export function getSynergyTier(stock: unknown): RankTrendSignalTier | null {
   return asTier((stock as { rankTrend?: { observation?: { synergy?: { signalTier?: unknown } } } } | undefined)?.rankTrend?.observation?.synergy?.signalTier)
@@ -66,7 +82,7 @@ export function getSynergyTierReasons(stock: unknown): string[] {
   return Array.isArray(reasons) ? (reasons as string[]) : []
 }
 
-/** 四维合并档位明细（悬停展示）：如 ["共振 S","趋势 A","量价 B","周期 A"]，缺维显示 "-" */
+/** 四维合并档位明细（悬停展示）：如 ["共振 S","趋势 A","量价 B","周期 A","横截 A"]，缺维显示 "-" */
 export function getSynergyTierDetail(stock: unknown): string[] {
   const parts: string[] = []
   const dims: Array<[string, RankTrendSignalTier | null]> = [
@@ -74,6 +90,7 @@ export function getSynergyTierDetail(stock: unknown): string[] {
     ['趋势', getRankTrendTier(stock)],
     ['量价', getVolumePriceTier(stock)],
     ['周期', getLifecycleTier(stock)],
+    ['横截', getCrossSectionTier(stock)],
   ]
   for (const [label, tier] of dims) {
     parts.push(tier === null ? `${label} -` : `${label} ${tier}`)

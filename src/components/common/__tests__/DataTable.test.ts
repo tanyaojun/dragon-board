@@ -148,23 +148,22 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getRankTrendStrengthValue')
     expect(source).toContain('getLifecycleOpportunityValue')
     expect(source).toContain('RankTrendObservationPanel')
-    expect(source).toContain('v-if="getRankTrendStrengthValue(stock) != null"')
-    expect(source).toContain('v-if="getLifecycleOpportunityValue(stock) != null"')
+    expect(source).toContain('getRankTrendStrengthValue(stock) != null')
+    expect(source).toContain('v-if="getLifecycleStage(stock) != null"')
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
-    // 三列风格统一：方向 + 数值%（无徽章，档位说明移入 tooltip，避免与四维最终信号混淆）
+    // 四列当前实现（2026-08-18）：共振/趋势/量价 = TierBadge 徽章（含方向+数值% 回退）；
+    // 生命周期 = stage 环境门标签（无方向色徽章，veto 移入 tooltip）
     expect(source).toContain('getDirectionArrow(getResonanceDirection(stock))')
     expect(source).toContain('getDirectionArrow(getRankTrendDirection(stock))')
-    expect(source).toContain('getDirectionArrow(getLifecycleDirection(stock))')
-    // 四列（共振/趋势/量价/周期）单元格不再渲染 tier-badge；tooltip 拼接"档位字母：原因"
+    // 徽章组件化：四列单元格经 TierBadge 渲染，不再直接调用 tierBadgeClass(getXxxTier(stock))
     expect(source).not.toContain('tierBadgeClass(getResonanceTier(stock))')
     expect(source).not.toContain('tierBadgeClass(getRankTrendTier(stock))')
     expect(source).not.toContain('tierBadgeClass(getVolumePriceTier(stock))')
     expect(source).not.toContain('tierBadgeClass(getLifecycleTier(stock))')
-    expect(source).toContain("parts.join('：')")
-    // 周期列不再在单元格渲染阶段文字（点火/扩散等移入 tooltip）
-    expect(source).not.toContain('{{ getLifecycleStageLabel(stock) }}')
+    // 生命周期列在单元格渲染 stage 环境门文字（点火/扩散/拥挤等）
+    expect(source).toContain('getLifecycleStageLabel(stock)')
     // 量价配合：独立四象限列，样式/ tooltip 参照三指标观察列；数据由后端生产（_volumePrice*）前端只消费
     expect(source).toContain("{ key: 'volumePriceQuadrant', label: '量价'")
     expect(source).toContain("volumePriceQuadrant: '60px'")
@@ -219,11 +218,11 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain("{ key: 'synergyTier', label: '四维'")
     expect(source).toContain("synergyTier: '60px'")
     expect(source).toContain("col.key === 'synergyTier'")
-    // 读取 synergy 档位（前端路径）+ 徽章 + 悬停明细
+    // 读取 synergy 档位（前端路径）+ 徽章（TierBadge 组件，2026-08-18 图标化）+ 悬停明细
     expect(source).toContain('getSynergyTier(stock)')
-    expect(source).toContain('tierBadgeClass(getSynergyTier(stock))')
+    expect(source).toContain('TierBadge')
     expect(source).toContain('getSynergyTierDetail')
-    expect(source).toContain('getSynergyTierReasons(stock)')
+    expect(source).toContain('getSynergyTierReasons')
     expect(source).toContain('tier-badge')
     // 缺档位回退 --（不渲染空徽章、不报错）
     expect(source).toContain('<span v-else class="trend-steady">--</span>')

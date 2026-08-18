@@ -101,6 +101,17 @@ export interface RankTrendObservationScores {
   // 量价协同轴（阶段 2）：后端生产，前端只消费
   volumePrice?: RankTrendVolumePrice
   synergy?: RankTrendSynergy
+  // 横截面相对强弱（2026-08-18 阶段 11 G2，第 5 维投票默认打开；tooltip 展示）
+  crossSection?: RankTrendCrossSection
+}
+
+/** 横截面相对强弱（后端 Python compute_cross_section 产出，2026-08-18） */
+export interface RankTrendCrossSection {
+  percentile: number | null
+  percentileDelta: number | null
+  relativeToMarket: number | null
+  signalTier?: RankTrendSignalTier
+  tierReasons?: RankTrendTierReasons
 }
 
 /** 量价评分（后端 Python compute_volume_price_score 产出，0-100） */

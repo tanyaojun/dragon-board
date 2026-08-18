@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getCrossSectionDetail,
+  getCrossSectionTier,
   getLifecycleTier,
   getRankTrendTier,
   getResonanceTier,
@@ -88,8 +90,8 @@ describe('tierBadgeClass / tierBadgeLabel', () => {
 describe('getSynergyTierDetail', () => {
   it('拼四维明细，缺维显示 -', () => {
     const stock = makeStock()
-    expect(getSynergyTierDetail(stock)).toEqual(['共振 A', '趋势 S', '量价 B', '周期 A'])
-    expect(getSynergyTierDetail({})).toEqual(['共振 -', '趋势 -', '量价 -', '周期 -'])
+    expect(getSynergyTierDetail(stock)).toEqual(['共振 A', '趋势 S', '量价 B', '周期 A', '横截 -'])
+    expect(getSynergyTierDetail({})).toEqual(['共振 -', '趋势 -', '量价 -', '周期 -', '横截 -'])
   })
 })
 
@@ -152,5 +154,54 @@ describe('getSynergyVoteBreakdown（三票一票制用户友好解释）', () =>
     const lines = getSynergyVoteBreakdown({})
     expect(lines.some((l) => l.includes('方向票不足'))).toBe(true)
     expect(lines.some((l) => l.includes('总档：数据不足'))).toBe(true)
+  })
+})
+
+describe('crossSection getters（2026-08-18 第 5 维 tooltip）', () => {
+  it('getCrossSectionTier 读取 observation.crossSection.signalTier', () => {
+    const stock = makeStock({
+      rankTrend: {
+        ...makeStock().rankTrend,
+        observation: {
+          ...makeStock().rankTrend!.observation,
+          crossSection: { signalTier: 'A', percentile: 92, percentileDelta: 8, relativeToMarket: 30 },
+        },
+      },
+    })
+    expect(getCrossSectionTier(stock)).toBe('A')
+  })
+
+  it('getCrossSectionTier 缺字段返回 null', () => {
+    expect(getCrossSectionTier(makeStock())).toBeNull()
+  })
+
+  it('getCrossSectionDetail 返回 percentile/delta/rel 摘要', () => {
+    const stock = makeStock({
+      rankTrend: {
+        ...makeStock().rankTrend,
+        observation: {
+          ...makeStock().rankTrend!.observation,
+          crossSection: { percentile: 92.4, percentileDelta: 8.2, relativeToMarket: 30.7 },
+        },
+      },
+    })
+    expect(getCrossSectionDetail(stock)).toBe('横截 92/8/31')
+  })
+
+  it('getCrossSectionDetail 全缺返回 null', () => {
+    expect(getCrossSectionDetail(makeStock())).toBeNull()
+  })
+
+  it('getSynergyTierDetail 含横截段', () => {
+    const stock = makeStock({
+      rankTrend: {
+        ...makeStock().rankTrend,
+        observation: {
+          ...makeStock().rankTrend!.observation,
+          crossSection: { signalTier: 'A', percentile: 92, percentileDelta: 8, relativeToMarket: 30 },
+        },
+      },
+    })
+    expect(getSynergyTierDetail(stock)).toContain('横截 A')
   })
 })
