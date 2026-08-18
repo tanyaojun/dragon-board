@@ -1437,6 +1437,17 @@ validation=2026-08-03~08-14（110 帧，10 交易日）。
 res（rank Jump） + rankTrend + volumePrice + lifecycle + **crossSection（第 5 维，默认开）**；
 priceMomentum 观察不投票（负贡献实证）；Jump 确认默认开（事件稀疏无实际影响）。
 
+### 11.4b 前端链路同步（2026-08-18 补）
+
+- **问题**：前端【四维】字段数据源 = POST /api/ranktrend/analyze（ranktrend_routes._analyze_one_stock，
+  assemble=False）——crossSection 仅挂载于 replay 链路（assemble=True），API 链路 cs_tier=None
+  → 第 5 维投票不生效 → **前端档位停留在旧投票口径**（回测改进未同步前端）；
+- **修复**：_analyze_one_stock 在 assemble_observation 前补挂载 observation.crossSection
+  （percentiles + market_median_percentile 已在 args，与 replay 链路同源）；验证：
+  API 链路输出含 crossSection 档位 + synergy 含第 5 维投票；
+- **结论**：前端【四维】字段**跟随后端 py 核心算法**（现算链路，非回测研究限定）；
+  快照存储为原始数据（collector 不计算 rankTrend），四维分析全部现算——无需回放迁移。
+
 ### 11.5 下一步
 
 - crossSection 投票为**首次核心算法默认变更**（用户决策）；9 月数据累积后复核

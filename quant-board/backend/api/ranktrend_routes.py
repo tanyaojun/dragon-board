@@ -382,6 +382,18 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     exposure = stock_theme_exposure(stock, hot_themes)
     # D2 完全解耦：题材动量独立为只读投影，不再调节共振分数
     analysis["themeMomentum"] = _theme_momentum_projection(exposure, momentum_v2_ctx)
+    # 2026-08-18（前端链路对齐）：_build_signal(assemble=False) 不挂载 crossSection，
+    # 而 synergy 第 5 维投票（tierSynergyCrossSectionVote=1.0 默认打开）需要 cs_tier——
+    # 否则前端【四维】档位停留在旧投票口径。这里与 replay 链路同源补挂载
+    # （percentiles/market_median_percentile 已在 args 中）。
+    from backend.analysis.ranktrend.cross_section import compute_cross_section
+
+    analysis.setdefault("observation", {})["crossSection"] = compute_cross_section(
+        percentiles,
+        market_median_percentile,
+        config,
+    )
+    analysis.setdefault("technical", {})["crossSection"] = analysis["observation"]["crossSection"]
     # 四象协同轴（阶段 2）：组装下沉（回测方案 §3.2）——observation.volumePrice / synergy
     # 由 engine 层 assemble_observation 统一产出，与 replay 链路同源同构
     assemble_observation(analysis, stock, config)

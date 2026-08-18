@@ -127,7 +127,7 @@ class RankTrendConfig:
         default_factory=lambda: [15.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 1.0]
     )  # 方向八档分值：涨停/7%+/5-7/3-5/2-3/1-2/0.5-1/0-0.5（原硬编码）
     volumePriceNormalRatio: float = 2.0  # 量比正常上限（原硬编码 vr<=2.0 边界）
-    # ── crossSection（横截面相对强弱观察因子，2026-08-17 算法升级方向 A；不进 synergy 投票）──
+    # ── crossSection（横截面相对强弱因子，2026-08-17 方向 A；第 5 维投票默认打开，见 tierSynergyCrossSectionVote）──
     crossSectionStrongMin: float = 85.0  # A 档 percentile 下限（高位）
     crossSectionStrongDeltaUp: float = 5.0  # A 档 delta 上升确认
     crossSectionMidMin: float = 50.0  # B 档中位下限
@@ -2154,8 +2154,8 @@ class RankTrendPythonEngine:
             )
             # 设计文档 §4.2：同时挂载 technical.atrMeanReversion（供技术诊断层消费）
             rank_trend["technical"]["atrMeanReversion"] = rank_trend["observation"]["atrMeanReversion"]
-            # 横截面相对强弱观察因子（2026-08-17 方向 A）：个股 percentile 序列（histories item[2]）
-            # + 市场 median percentile（market_ctx）。不进 synergy 投票，先验证区分度。
+            # 横截面相对强弱因子（2026-08-17 方向 A）：个股 percentile 序列（histories item[2]）
+            # + 市场 median percentile（market_ctx）。第 5 维投票默认打开（tierSynergyCrossSectionVote=1.0）。
             from backend.analysis.ranktrend.cross_section import compute_cross_section
 
             rank_trend["observation"]["crossSection"] = compute_cross_section(
