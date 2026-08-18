@@ -153,6 +153,14 @@ _STRATEGY_PARAM_KEYS = _SCALAR_KEYS + (
 | `atrGapResetBars` | `2`（缺席帧断档重置阈值；跨日不恒重置） | A | engine.py RankTrendConfig |
 | `atrAggregateByDay` | `False`（是否按日聚合） | A | engine.py RankTrendConfig |
 | `atrBucketBySlot` | `False`（是否按 slot 分桶聚合） | A | engine.py RankTrendConfig |
+| `crossSectionStrongMin` | `85`（A 档 percentile 下限） | A | engine.py RankTrendConfig（2026-08-17 方向 A） |
+| `crossSectionStrongDeltaUp` | `5`（A 档 delta 上升确认） | A | engine.py RankTrendConfig |
+| `crossSectionMidMin` | `50`（B 档中位下限） | A | engine.py RankTrendConfig |
+| `crossSectionMidDeltaUp` | `15`（B 档 delta 显著上升） | A | engine.py RankTrendConfig |
+| `crossSectionWeakMax` | `15`（D 档 percentile 上限） | A | engine.py RankTrendConfig |
+| `crossSectionWeakDeltaDown` | `-5`（D 档 delta 下降确认） | A | engine.py RankTrendConfig |
+| `crossSectionMidMax` | `50`（C 档中位上限） | A | engine.py RankTrendConfig |
+| `crossSectionMidDeltaDown` | `-15`（C 档 delta 显著下降） | A | engine.py RankTrendConfig |
 
 > MACD `hist = 2*(dif−dea)` 的 `2` 与 EMA `multiplier = 2/(period+1)` 的 `2` 均为标准公式系数，属数学定义，不需抽取（加注释说明即可）。
 
@@ -479,3 +487,31 @@ _STRATEGY_PARAM_KEYS = _SCALAR_KEYS + (
 - `strategy_version` / `ranktrend_version` 提升遵循 `ranktrend-golden.md` 变更管理流程。
 - 校准后参数若变更默认值，必须同批更新 golden case 并重新跑 Layer 1/2 长测基线（`ranktrend-golden.md` 第 6 节）。
 - 本计划为过程文档，落地验收后归档到 `quant-board/docs/` 专题目录，不在根目录新增过程文件。
+
+## 12. 口径统一定义（2026-08-17 审计修正，G5-G7）
+
+> 审计发现：趋势维度的 momentum/MA/MACD/zeroCross 全部计算在**排名百分位时序（percentiles）**
+> 上，价格时序（change/close）只进量价（单帧）与 fallback（样本不足降级）。以下口径正式统一。
+
+### 12.1 G5：MACD 金死叉 = 排名百分位 MACD（严格定义）
+
+- `calculate_macd(percentiles, config)`——输入是**个股排名百分位时序**（0-100），非价格；
+- **金叉/死叉语义**：dif（percentile 快 EMA−慢 EMA）上穿/下穿 dea，`hist = 2*(dif−dea)`；
+- 含义：**排名动能的二次加速**，不是价格 MACD 黄金交叉——排名上升≠价格上涨；
+- 已知偏差（不修，文档明确）：全市场普涨时个股排名不动但价格涨，排名 MACD 无反应；
+  价格 MACD 不在本版本实现范围（趋势价格维另见 priceMomentum 观察，阶段 11 G1）。
+
+### 12.2 G6：样本门槛口径统一（momentum 可计算 vs MACD 预热分离）
+
+- **momentum 可计算门槛**：`get_momentum_min_samples = max(momentumPeriods)+1`（默认 14 帧）
+  ——sampleQuality.ok 判定用此（阶段 2 修复，避免 50 帧窗口下 ok 占比被 MACD 预热压到 ~46%）；
+- **MACD 预热**：`get_macd_min_samples`（fast+slow+signal 周期和）——仅控制 MACD 可用性，
+  由 `_macd_diagnostics.hasStableObservationBars` 单独暴露（fail-visible），不进 sampleQuality；
+- 统一结论：**趋势信号以 momentum 门槛为准，MACD 预热是附加诊断，不混入质量判定**。
+
+### 12.3 G7：市场环境 = 热榜横截面 median 口径（明确边界）
+
+- 市场环境唯一来源：`frame_cross_section`（八平台热榜合并 avgRankNum 的横截面 percentile）
+  → 市场 median = 当前帧 percentile 中位数 / 短变化 = 当前帧 vs 前 3 帧 percentile 变化中位数；
+- **无大盘指数**（指数数据未进快照）、**无全市场涨跌家数**——市场环境仅反映"热榜内部热度分布"，
+  不代表全市场；结论引用时不得外推为大盘环境（阶段 10 crossSection 同源）。

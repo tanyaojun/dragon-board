@@ -249,16 +249,24 @@ def _synergy_tier(
     vp_dir: str | None,
     lc_tier: str | None,
     config: RankTrendConfig | None = None,
+    cs_tier: str | None = None,
+    pm_tier: str | None = None,
 ) -> tuple[str, list[str]]:
     """四维合并档位（synergy.signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §7。
 
     阈值读 config.tierSynergyVote*（vote 求和为整数，strong/weak/reverse 均为 int）。
+    cs_tier：crossSection 第 5 维（2026-08-17 G2）；pm_tier：priceMomentum 第 6 维
+    （2026-08-17 G1，价格动量/均线）——权重 tierSynergyCrossSectionVote/
+    tierSynergyPriceMomentumVote（1.0=启用，用户决策默认生效）。两维无 direction 字段，
+    档位自带方向（A/B 强势、C/D 弱势），投票 = 档位符号 × 强度 × 权重。
     """
     c = config or RankTrendConfig()
     if lc_tier == "E":
         return "E", ["周期一票否决"]
     if vp_tier == "E":
         return "D", ["量价出货硬风险"]
+
+    _CS_STRENGTH = {"A": 1.0, "B": 0.5, "C": -0.5, "D": -1.0}
 
     def _vote(tier: str | None, direction: str | None) -> float:
         """档位强度加权投票（vote 语义改进 2026-08-15，方案 1：方向主导 × 档位幅度）。
@@ -277,6 +285,12 @@ def _synergy_tier(
         return 0.0
 
     v = _vote(res_tier, res_dir) + _vote(rank_tier, rank_dir) + _vote(vp_tier, vp_dir)
+    cs_weight = float(getattr(c, "tierSynergyCrossSectionVote", 0.0) or 0.0)
+    if cs_weight and cs_tier and cs_tier in _CS_STRENGTH:
+        v += _CS_STRENGTH[cs_tier] * cs_weight
+    pm_weight = float(getattr(c, "tierSynergyPriceMomentumVote", 0.0) or 0.0)
+    if pm_weight and pm_tier and pm_tier in _CS_STRENGTH:
+        v += _CS_STRENGTH[pm_tier] * pm_weight
     # 阶段 3 修复方向 3：档位分级按票数（strong/strong+1），A 档可达。
     # 旧规则 v>=strong 且 lc==A → S 独占 S 判定，而周期档位只有 A/B/D/E（无 C），
     # v>=strong 且 lc∉{A,B,D} 的 A 分支永远不可达 → synergy A 档 n=0（阶段 3 诊断实证）。
@@ -337,6 +351,8 @@ def assemble_observation(
         vp.get("signalTier"), vp.get("direction"),
         (observation.get("lifecycle") or {}).get("signalTier"),
         c,
+        cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
+        pm_tier=((observation.get("priceMomentum") or {}).get("signalTier")),
     )
     observation["synergy"]["signalTier"] = _syn_tier
     observation["synergy"]["tierReasons"] = _syn_reasons

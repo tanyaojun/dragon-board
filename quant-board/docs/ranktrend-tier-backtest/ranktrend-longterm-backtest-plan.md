@@ -1337,3 +1337,108 @@ validation=2026-08-03~08-14（110 帧，10 交易日）。
 5. **修正后判定**：`fund10+over2` 与 `jump25+fresh06` 升为**跨窗口样本外最强候选**（8 月
    干净窗口显著正向），但未达 0.05 验收线且 8 月仅 110 帧（单窗口仍需谨慎）——维持
    **不写回默认值**；采纳路径：扩充 8 月后数据（09 月以后）或 regime 条件化后复验。
+
+## 阶段 10：核心算法升级方向 A——横截面相对强弱因子 crossSection（2026-08-17）
+
+> 状态：首次验证**显著有效**（参数搜索无实质进展后的算法结构升级）；观察因子已挂载
+> （observation.crossSection），**第 5 维投票默认打开**（2026-08-17 用户决策，阶段 11 已生效；实证 all +10%/8月 +237%）
+> 代码：`backend/analysis/ranktrend/cross_section.py`（纯函数）+ engine.py 挂载 +
+> `tier_monotonicity.py` DIMENSION_PATHS 新增 crossSection
+> 测试：`tests/test_cross_section.py` 9 passed；golden 全回归 103 passed（不漂移）
+
+### 10.1 背景（为什么参数搜索无实质进展）
+
+第一轮四维参数扫描（阶段 7/8/9）穷尽全部参数后无候选达 0.05 验收线。根因分析（数据实证）：
+- **热榜排名未进主信号**：engine.py 的 frame_cross_section（avgRankNum 横截面 percentile）
+  只用于市场 median 环境门（frame_market_median），个股主信号（动量/MACD/量比）全是纯时序
+  自回归——Dragon Board 核心资产（八平台热榜合并排名）的**横截面信息被浪费**；
+- **synergy A 档自身无增量**（本阶段实证）：synergy A 档 4538 样本 excessDirectionAccuracy≈0
+  ——四维投票组合的强势档相对分位桶基线无信息增量，参数再怎么调也无法突破；
+- 用户决策（2026-08-17）：核心算法升级方向 A = **横截面相对强弱进主信号**。
+
+### 10.2 因子设计（参数化，golden 不漂移）
+
+个股横截面 percentile 序列（engine histories item[2]，avgRankNum 越小 percentile 越高）：
+- `percentile`：当前帧横截面 percentile（0-100）
+- `percentileDelta`：percentile − 上一帧（正 = 热度排名上升）
+- `relativeToMarket`：percentile − 市场 median percentile
+- 档位：A 强（percentile≥85 且 delta≥5）/ B 偏强（≥70 或 delta≥15）/ C 偏弱（≤30 或 delta≤−15）/
+  D 弱（≤15 且 delta≤−5）/ unknown（不在横截面）；首帧缺 delta 降级绝对档（A/D 需 delta 确认）；
+  市场 median 缺失 → relativeToMarket=None，绝对档照常（fail-visible）
+- config 8 字段：crossSectionStrongMin=85 / StrongDeltaUp=5 / MidMin=50 / MidDeltaUp=15 /
+  WeakMax=15 / WeakDeltaDown=−5 / MidMax=50 / MidDeltaDown=−15（默认=设计值）
+
+### 10.3 区分度验证（tier_forward_returns，h1 excessDirectionAccuracy）
+
+| 维度 | h1 all exAcc | h1 8月 exAcc | unknown 占比 |
+|---|---|---|---|
+| **crossSection A** | **+0.0996**（n=1964） | **+0.0724**（n=278） | **0%** |
+| crossSection B | +0.0153 | +0.0129 | — |
+| crossSection C | −0.0133 | −0.0111 | — |
+| volumePrice A（对照） | +0.0125 | −0.0138 | 18.75% |
+| rankTrend（整体） | 0.0455 | 0.007 | — |
+| synergy A 档 | ≈0（n=4538） | ≈0（n=928） | — |
+
+**关键结论**：
+1. **crossSection A 档 h1 exAcc +0.0996 为迄今最强单档信号**（volumePrice A 的 8 倍、
+   rankTrend 整体 2 倍、synergy A 档自身≈0）——"高位 + 热度排名上升"个股下一帧相对排名
+   显著走强；
+2. **8 月干净窗口 +0.0724 稳定**（不依赖股灾月；样本 278 偏少需 9 月累积复核）；
+3. **unknown=0**（100% 覆盖率，优于 volumePrice 18.75%）——数据可用性完美；
+4. **单调性良好**：A(+0.0996) > B(+0.0153) > C(−0.0133)；D 档因均值回归特殊（低位反弹）；
+5. **h8 衰减**（A 档转负）——与 volumePrice 同模式（高热度短前瞻有效、4 小时后均值回归）；
+6. **叠加分析**：synergy A 档自身 exAcc≈0 → crossSection 提供 synergy 之外增量
+   （8 月 synergy 未覆盖的 crossSection A 个股 exAcc +0.0563/+0.1328，样本偏少）。
+
+### 10.4 判定与下一步
+
+- **判定**：非证伪、非冗余——**"缺复核"偏"证实候选"**（区分度显著但 8 月单窗口样本 278
+  偏少 + h8 衰减需确认）；
+- ~~不进 synergy 投票~~（阶段 10 初版决策）——**阶段 11 已修订：第 5 维投票默认打开**（用户决策，实证 +10%/+237%）；
+- **下一步**：9 月数据累积后复核 A 档（目标样本 >500），确认跨窗口稳定后：
+  ① 作为第 5 维投票加入 synergy（golden 变更流程）；② 或与 fund10+over2 组合验证。
+
+## 阶段 11：核心算法审计缺口 G1-G7 修复（2026-08-17）
+
+> 状态：G1-G7 全部处理完成（实现 + 实证 + golden 补强）；**G2 默认打开（用户决策），
+> G1 实证负贡献保留观察不进投票，G4 实现默认开但 Jump 事件稀疏**；不写回其它默认值
+> 代码：cross_section.py / price_momentum.py / engine.py / volume_price.py / shared.py /
+> tier_monotonicity.py；测试：+25（price_momentum 7 + synergy_vote 8 + confirm_jump 10），全量 110 passed
+
+### 11.1 审计根因（为什么参数研究无实质进展）
+
+四维算法不是没实现，而是**排名时序独大、价格时序缺失、横截面浪费**：
+- 趋势维度（momentum/MA5/MA10/MACD/zeroCross）输入 100% 是排名百分位时序——**价格信息
+  完全没进趋势主信号**（change 只在量价单帧与 fallback 降级用）；
+- 个股横截面 avgRankNum 只算市场 median 环境门（阶段 10 已证 crossSection A 档 +0.0996）；
+- 成交额 amount 快照已有（8 月 99.7%）但回测字段列表漏读（全窗口 29% 是字段缺口非数据缺口）；
+- Jump 事件在 half_hour 数据上**为 0**（detect_rank_jumps 未触发）——共振维实际无事件样本。
+
+### 11.2 修复与实证结论
+
+| 缺口 | 修复 | 实证结论 |
+|---|---|---|
+| **G1 价格动量** | price_momentum.py 观察因子（change 均线/动量档位 A-D）+ 挂载 observation.priceMomentum | **投票负贡献**（all syn 0.0651→0.0441 −32%、8月 −0.0054）——**保留观察不进投票**（tierSynergyPriceMomentumVote=0）；价格动量与热榜排名收益在短前瞻下无正协同 |
+| **G2 crossSection 投票** | _synergy_tier 第 5 维（cs A/B 正 C/D 负 × 权重） | **有效，默认打开**（tierSynergyCrossSectionVote=1.0，用户决策）：all syn 0.0651→0.0716（+10%）、8月 0.0069→0.0232（**+237%**） |
+| **G3 amount** | shared.py BACKTEST_RANKTREND_STOCK_FIELDS 补 amount（数据链路打通） | **如实标注：仅数据可读，量价金额因子未落地**（ranktrend 目录零 amount 消费方）——快照已有（8 月 99.7%），全窗口 29%（早期采集缺 fail-visible）；量价升级需 amount 历史覆盖 + 因子设计（待后续） |
+| **G4 Jump 确认** | _confirm_jump（change≥3% 且 volumeRatio≥1 确认，默认开；不满足降级 hold+unconfirmed） | **Jump 事件在 half_hour 为 0**——无实际影响（实现保留防未来假 Jump；resonance 维事件稀疏另见 §7.6） |
+| **G5 MACD 口径** | factor-calibration §12.1 | MACD 金死叉 = 排名百分位计算（非价格），价格 MACD 不在范围 |
+| **G6 样本门槛** | factor-calibration §12.2 | momentum 可计算门槛（14 帧）与 MACD 预热分离，sampleQuality.ok 用 momentum 门槛 |
+| **G7 市场环境** | factor-calibration §12.3 | 市场环境 = 热榜横截面 median（无大盘指数，引用不得外推） |
+
+### 11.3 golden 补强（用户反馈：golden 形同虚设）
+
+- 此前 golden 测试无 synergy 档位断言（G2 投票变更 38 passed 不报错）；
+- 新增 `tests/test_synergy_vote.py` 8 用例：默认投票含 crossSection / A 升 S / D 降 B /
+  C 降档 / unknown 忽略 / 权重 0 回归旧语义 / 硬风险优先 / pm 投票默认关——**防算法变更悄悄漂移**。
+
+### 11.4 当前 synergy 投票构成（六维 → 五维有效）
+
+res（rank Jump） + rankTrend + volumePrice + lifecycle + **crossSection（第 5 维，默认开）**；
+priceMomentum 观察不投票（负贡献实证）；Jump 确认默认开（事件稀疏无实际影响）。
+
+### 11.5 下一步
+
+- crossSection 投票为**首次核心算法默认变更**（用户决策）；9 月数据累积后复核
+  （A 档样本 >500 + 新窗口 synergy 稳定 >0.05）；
+- 前端四维面板：crossSection/priceMomentum 观察字段可扩展展示（视用户需求）。

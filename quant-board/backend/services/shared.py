@@ -74,7 +74,7 @@ BACKTEST_RANKTREND_STOCK_FIELDS = (
     # 引擎 replay/_build_signal 消费
     "code", "name", "rank", "avgRankNum",
     "change", "volumeRatio", "zlje", "zljzb",
-    "price", "volume", "turnover", "turnoverRate",
+    "price", "volume", "amount", "turnover", "turnoverRate",
     "dtPrice", "high", "low", "fengdan",
     "lastTradePrice", "lastTradeVolume",
     "limitUpPrice", "limitDownPrice", "ztPrice",

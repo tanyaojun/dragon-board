@@ -127,6 +127,24 @@ class RankTrendConfig:
         default_factory=lambda: [15.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 1.0]
     )  # 方向八档分值：涨停/7%+/5-7/3-5/2-3/1-2/0.5-1/0-0.5（原硬编码）
     volumePriceNormalRatio: float = 2.0  # 量比正常上限（原硬编码 vr<=2.0 边界）
+    # ── crossSection（横截面相对强弱观察因子，2026-08-17 算法升级方向 A；不进 synergy 投票）──
+    crossSectionStrongMin: float = 85.0  # A 档 percentile 下限（高位）
+    crossSectionStrongDeltaUp: float = 5.0  # A 档 delta 上升确认
+    crossSectionMidMin: float = 50.0  # B 档中位下限
+    crossSectionMidDeltaUp: float = 15.0  # B 档 delta 显著上升
+    crossSectionWeakMax: float = 15.0  # D 档 percentile 上限（低位）
+    crossSectionWeakDeltaDown: float = -5.0  # D 档 delta 下降确认
+    crossSectionMidMax: float = 50.0  # C 档中位上限
+    crossSectionMidDeltaDown: float = -15.0  # C 档 delta 显著下降
+    jumpConfirmChangeMin: float = 3.0  # Jump 价格确认：涨跌幅 ≥3%（up）/ ≤-3%（down），2026-08-17 G4 默认生效
+    jumpConfirmVolumeRatioMin: float = 1.0  # Jump 量确认：量比 ≥1（放量配合）
+    tierSynergyCrossSectionVote: float = 1.0  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；验证 all+10%/8月+237%）
+    tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
+    # ── priceMomentum（价格动量观察因子，2026-08-17 审计缺口 G1；不进 synergy 投票）──
+    priceMaShort: float = 5.0  # 价格（change）短均线周期
+    priceMaLong: float = 10.0  # 价格（change）长均线周期
+    priceMomentumPeriod: float = 3.0  # 价格动量均值周期
+    priceMomentumScoreThreshold: float = 0.5  # 价格动量 buy/sell 阈值（%）
     synergyLowVp: float = 40.0
     synergyHighVp: float = 75.0
     resonanceVolumePriceWeight: float = 0.15
@@ -816,6 +834,47 @@ def detect_rank_jumps(
         "events": [{"index": e["index"], "direction": e["direction"],
                      "magnitude": e["magnitude"]} for e in events],
     }
+
+
+def _confirm_jump(
+    jump: dict[str, Any],
+    stock: dict[str, Any],
+    config: RankTrendConfig | None = None,
+) -> dict[str, Any]:
+    """2026-08-17 G4：Jump 价格/量确认（默认生效）。
+
+    排名 Jump 可能来自热榜噪声（无价格/成交配合的假 Jump）。up 需 change ≥
+    jumpConfirmChangeMin 且 volumeRatio ≥ jumpConfirmVolumeRatioMin；down 需 change ≤
+    -jumpConfirmChangeMin 且 volumeRatio ≥ jumpConfirmVolumeRatioMin（放量配合）。
+    不满足 → direction 降级 hold 并记录 unconfirmed（fail-visible，不阻断原始事件）。
+    """
+    c = config or RankTrendConfig()
+    direction = jump.get("direction")
+    if not direction or direction == "hold":
+        jump = dict(jump)
+        jump["confirmed"] = True  # 无方向视为无确认需求（统一输出结构，审计 2026-08-18）
+        return jump
+    chg = float(stock.get("change") or 0)
+    vr = float(stock.get("volumeRatio") or 0)
+    confirm_change = float(getattr(c, "jumpConfirmChangeMin", 3.0))
+    confirm_vr = float(getattr(c, "jumpConfirmVolumeRatioMin", 1.0))
+    if direction == "up":
+        ok = chg >= confirm_change and vr >= confirm_vr
+    elif direction == "down":
+        ok = chg <= -confirm_change and vr >= confirm_vr
+    else:
+        ok = True
+    if ok:
+        jump["confirmed"] = True
+        return jump
+    jump = dict(jump)
+    jump["direction"] = "hold"
+    jump["confirmed"] = False
+    jump["unconfirmedReasons"] = [
+        f"Jump {direction} 缺价格/量确认（change={chg}%，volumeRatio={vr} vs "
+        f"需 ≥{confirm_change if direction == 'up' else -confirm_change}% / ≥{confirm_vr}）"
+    ]
+    return jump
 
 
 def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTrendConfig | None = None) -> dict[str, Any]:
@@ -1810,6 +1869,7 @@ class RankTrendPythonEngine:
         start = min_count - 1 if len(frames) >= min_count else 0
         requested_codes = {str(code) for code in codes} if codes else None
         histories = defaultdict(deque)
+        change_histories: dict[str, deque] = defaultdict(deque)
         prev_candidate_by_code: dict[str, str] = {}
         signals: list[dict[str, Any]] = []
         for index, frame in enumerate(frames):
@@ -1817,6 +1877,9 @@ class RankTrendPythonEngine:
             for history in histories.values():
                 while history and history[0][0] < history_start:
                     history.popleft()
+            for chg_history in change_histories.values():
+                while chg_history and chg_history[0][0] < history_start:
+                    chg_history.popleft()
 
             stocks = frame.get("stocks", [])
             # 池子大小 = 全池股票数（综合排名口径，用于 regime/展示）
@@ -1832,6 +1895,8 @@ class RankTrendPythonEngine:
                 if rank is None:
                     continue
                 histories[code].append((index, rank, percentile_rank(rank, attention_total)))
+                chg = stock.get("change")
+                change_histories[code].append((index, chg if chg is not None else None))
 
             if index < start:
                 continue
@@ -1860,6 +1925,7 @@ class RankTrendPythonEngine:
                     regime,
                     meta,
                     market_ctx=market_ctx,
+                    price_changes=[item[1] for item in change_histories.get(code, [])],
                 )
                 if signal:
                     # 阶段6 趋势反转层（RankTrend 分析方法本体，观察信号）：
@@ -1947,9 +2013,20 @@ class RankTrendPythonEngine:
                 continue
             ranks.append(rank)
             percentiles.append(percentile_rank(rank, attention_total))
-        return self._build_signal(stock, frame, ranks, percentiles, regime, meta)
+        return self._build_signal(stock, frame, ranks, percentiles, regime, meta, price_changes=[stock.get("change")])
 
-    def _build_signal(self, stock: dict[str, Any], frame: dict[str, Any], ranks: list[float], percentiles: list[float], regime: dict[str, Any], meta: dict[str, Any], assemble: bool = True, market_ctx: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def _build_signal(
+        self,
+        stock: dict[str, Any],
+        frame: dict[str, Any],
+        ranks: list[float],
+        percentiles: list[float],
+        regime: dict[str, Any],
+        meta: dict[str, Any],
+        assemble: bool = True,
+        market_ctx: dict[str, Any] | None = None,
+        price_changes: list[Any] | None = None,
+    ) -> dict[str, Any] | None:
         if not ranks:
             return None
         code = str(stock.get("code") or "")
@@ -1986,6 +2063,11 @@ class RankTrendPythonEngine:
             reset_lookback=self.config.jumpResetLookback,
             sustain_count=self.config.jumpSustainCount,
         )
+        # 2026-08-17 G4：Jump 价格/量确认（审计缺口——排名 Jump 可能来自热榜噪声，无成交配合）。
+        # 默认生效（jumpConfirmChangeMin=3.0 / jumpConfirmVolumeRatioMin=1.0）：up 需
+        # change ≥3% 且量比 ≥1，down 需 change ≤-3% 且量比 ≥1（放量配合）；不满足 → 降级
+        # direction=hold 并记录 unconfirmed（fail-visible），避免假 Jump 污染共振投票。
+        jump = _confirm_jump(jump, stock, self.config)
         # 阶段 2 数据质量治理：ok 判定用动量可计算门槛（momentumPeriods.max+1），
         # 不再混入 MACD 预热需求。旧口径 get_technical_min_samples=34 帧在 50 帧滑动窗口
         # + 热榜轮动下把 ok 占比压到 ~46%（20 个历史回测全部 researchGrade=degraded）。
@@ -2072,6 +2154,25 @@ class RankTrendPythonEngine:
             )
             # 设计文档 §4.2：同时挂载 technical.atrMeanReversion（供技术诊断层消费）
             rank_trend["technical"]["atrMeanReversion"] = rank_trend["observation"]["atrMeanReversion"]
+            # 横截面相对强弱观察因子（2026-08-17 方向 A）：个股 percentile 序列（histories item[2]）
+            # + 市场 median percentile（market_ctx）。不进 synergy 投票，先验证区分度。
+            from backend.analysis.ranktrend.cross_section import compute_cross_section
+
+            rank_trend["observation"]["crossSection"] = compute_cross_section(
+                percentiles,
+                (market_ctx or {}).get("marketMedianPercentile"),
+                self.config,
+            )
+            rank_trend["technical"]["crossSection"] = rank_trend["observation"]["crossSection"]
+            # 价格动量观察因子（2026-08-17 审计缺口 G1）：价格时序（change）均线/动量——
+            # 排名时序独大、价格信息缺失的补齐。不进 synergy 投票，先验证区分度。
+            from backend.analysis.ranktrend.price_momentum import compute_price_momentum
+
+            rank_trend["observation"]["priceMomentum"] = compute_price_momentum(
+                price_changes or [],
+                self.config,
+            )
+            rank_trend["technical"]["priceMomentum"] = rank_trend["observation"]["priceMomentum"]
 
             if market_ctx is not None:
                 sample_quality = (rank_trend.get("meta") or {}).get("sampleQuality") or {}
