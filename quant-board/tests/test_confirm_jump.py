@@ -38,6 +38,9 @@ def test_up_unconfirmed_without_price() -> None:
     assert r["direction"] == "hold"
     assert r["confirmed"] is False
     assert any("缺价格/量确认" in x for x in r["unconfirmedReasons"])
+    # 2026-08-19 P0-1：events 内 direction 同步降级（口径一致）
+    assert all(e["direction"] == "hold" for e in r["events"])
+    assert all(e.get("magnitude") == 30 for e in r["events"])
 
 
 def test_up_unconfirmed_without_volume() -> None:
@@ -64,6 +67,9 @@ def test_down_unconfirmed_without_price() -> None:
     r = _confirm_jump(jump("down"), stock(change=-2.0, volume_ratio=1.2), cfg())
     assert r["direction"] == "hold"
     assert r["confirmed"] is False
+    # 2026-08-19 审计 F2：down 降级分支 events 口径同步断言（与 up 对称）
+    assert all(e["direction"] == "hold" for e in r["events"])
+    assert all(e.get("magnitude") == 30 for e in r["events"])
 
 
 def test_down_unconfirmed_without_volume() -> None:

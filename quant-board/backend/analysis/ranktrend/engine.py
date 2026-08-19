@@ -147,6 +147,10 @@ class RankTrendConfig:
     priceRankDeltaMin: float = 0.0  # 排名方向阈值：percentile delta ≥ 此值判升、≤ -此值判降
     # ── regime 环境门（2026-08-18 数据修正：strong 禁 A/B、weak 放开；False 回退旧 weak/retreat 禁）──
     regimeGateStrongBan: bool = True
+    # 2026-08-19 方向 C 强度门控：strong 市场 A/B 分层禁（A -0.0739 比 B -0.0172 衰减更重）——
+    # banStrongA=banStrongB=True 等价旧全禁；banStrongB=False = A 禁 B 观察（默认值由验证定）
+    banStrongA: bool = True
+    banStrongB: bool = True
     tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
     tierSynergyCrossSectionVote: float = 1.0  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；验证 all+10%/8月+237%）
     tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
@@ -880,6 +884,12 @@ def _confirm_jump(
     jump = dict(jump)
     jump["direction"] = "hold"
     jump["confirmed"] = False
+    # 2026-08-19 P0-1：events 内 direction 同步降级——共振用 events 算 freshness、
+    # 外层判方向，两处口径必须一致（否则 events 仍报 up/down 与降级矛盾）
+    jump["events"] = [
+        {"index": e.get("index"), "direction": "hold", "magnitude": e.get("magnitude")}
+        for e in jump.get("events", [])
+    ]
     jump["unconfirmedReasons"] = [
         f"Jump {direction} 缺价格/量确认（change={chg}%，volumeRatio={vr} vs "
         f"需 ≥{confirm_change if direction == 'up' else -confirm_change}% / ≥{confirm_vr}）"
@@ -1815,8 +1825,17 @@ def compose_analysis_candidate_tier(
     strong_market = regime_data["state"] == "strong"
     retreat_market = regime_data["state"] == "retreat"
     gate_strong_ban = bool(getattr(c, "regimeGateStrongBan", True))
-    ban_a_main = (strong_market or retreat_market) if gate_strong_ban else retreat_market or regime_data["state"] == "weak"
-    ban_b_ignition = (strong_market or retreat_market) if gate_strong_ban else regime_data["state"] == "retreat"
+    # 2026-08-19 方向 C：A/B 分层禁（banStrongA/banStrongB），regimeGateStrongBan 兼容旧开关
+    ban_a_main = (
+        ((strong_market and bool(getattr(c, "banStrongA", True))) or retreat_market)
+        if gate_strong_ban
+        else retreat_market or regime_data["state"] == "weak"
+    )
+    ban_b_ignition = (
+        ((strong_market and bool(getattr(c, "banStrongB", True))) or retreat_market)
+        if gate_strong_ban
+        else regime_data["state"] == "retreat"
+    )
     trend_buy = (
         technical["signals"]["direction"]["signal"] == "buy"
         or technical["signals"]["acceleration"]["signal"] == "buy"
