@@ -3042,15 +3042,15 @@ defineExpose({
 }
 
 .tier-a {
-  color: #ff6b81;
-  background: rgba(255, 107, 129, 0.12);
-  border: 1px solid rgba(255, 107, 129, 0.4);
-}
-
-.tier-b {
   color: #ff9f43;
   background: rgba(255, 159, 67, 0.12);
   border: 1px solid rgba(255, 159, 67, 0.4);
+}
+
+.tier-b {
+  color: #ff6b81;
+  background: rgba(255, 107, 129, 0.12);
+  border: 1px solid rgba(255, 107, 129, 0.4);
 }
 
 .tier-c {
