@@ -79,16 +79,40 @@ momentum/macd 基础 22、ATR 6、decision 10、risk 4、resonance 基础权重�
 3. **cycle 50 阈值无调参记录**——自由度假象（未验证也未优化），属"未审计区"。
 4. **amountRatio 阈值未扫描**直接定值 1.5/0.5——唯一未扫新参数。
 
+
+## 5.1 D 项：cycle 50 阈值审计（2026-08-19）
+
+**来源**：全部来自 TS golden 硬编码提取（`b2b3bc7` 参数化 + `ba6e301` 生命周期 51 字段
+参数化，均"零行为变化"）——**未被本数据窗口调过，非自由参数**。
+
+**分类（结构/语义定义参数，非评分权重）**：
+
+| 组 | 数量 | 字段 | 性质 |
+|---|---|---|---|
+| cycleRaw* 原始阶段判定 | 21 | Warm/HotZone/Recovery/Expansion/Crowded/Reversal 的 percentileMin/bestRankMax/accelMin/velocityMin/hotMin/drawdownMax | 阶段分类规则边界（语义定义） |
+| cycleNorm* 归一化 | 4 | Weakening/SevereAccel/SevereDrawdown/CoolingReady/CrowdedCarry | 归一化阶段规则 |
+| cycleConf* 置信度 | 25 | RegionPct/MomentumHot/Persistence/Drawdown 各阶段阈值 | 阶段置信度边界 |
+
+**判定**：
+- **非可调参数（结构定义）**：全部 50 个——阈值有明确语义边界（分位/天数/档数），
+  改动破坏阶段判定语义链；且从未被优化（无过拟合来源），自由度风险低；
+- **未验证风险（非过拟合风险）**：这些阈值从未在本数据窗口验证正确性——可能阶段
+  误判，但那是"正确性"问题不是"过拟合"问题；
+- **管理处置**：cycle* 从 L2 降级为**结构参数登记**（不纳入 L1 定值档案、不做扫描）；
+  复核触发条件=阶段判定错误率审计（cycle_metrics 一致性）发现异常时。
+
+**结论**：cycle 50 字段无过拟合风险（未调参即无自由度消耗）；D 项完成。
+
 ## 6. 加固方案（A-E，逐项落地）
 
 | 项 | 内容 | 状态 |
 |---|---|---|
-| A | 8 月冻结为最终验证集——参数决策禁用 8 月数据 | ☐ |
-| B | 滚动 walk-forward：4-5 月 train / 6 月 val / 7 月 test | ☐ |
-| C | amountRatio 3 参数 5 档扫描（冻结前窗口） | ☐ |
-| D | cycle 50 阈值审计：区分结构定义 vs 可调参数 | ☐ |
-| E | L1 参数定值档案（commit/数据窗口/样本外状态） | ☐ |
+| A | 8 月冻结为最终验证集——参数决策禁用 8 月数据（`backend/optimization/data_windows.py` FINAL 守卫 `assert_not_frozen`） | ✅ |
+| B | 滚动 walk-forward：4-5 月 train / 6 月 val / 7 月 test（`rolling_windows`，越窗禁止） | ✅ |
+| C | amountRatio 3 参数 5 档扫描（冻结前窗口）——**零差异**：train+val（4-15~6-30）amount 覆盖不足，参数无可调空间；唯一有数据窗口（8 月）已冻结 → 保持现状待 9 月数据累积 | ✅ |
+| D | cycle 50 阈值审计——全部为结构/语义定义参数（golden 提取零调参），非可调参数，无过拟合来源；降级为结构参数登记 | ✅ |
+| E | L1 参数定值档案（commit/数据窗口/样本外状态）→ `ranktrend-l1-param-ledger.md`（5 组 ≈50 参数 + 8 月污染历史标注 + 复核触发） | ✅ |
 
 ## 7. 定值档案（E 落地后填充）
 
-见 §7 附表（`ranktrend-l1-param-ledger.md`）。
+见 `ranktrend-l1-param-ledger.md`（E 项落地）。
