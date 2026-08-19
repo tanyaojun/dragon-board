@@ -1420,7 +1420,7 @@ validation=2026-08-03~08-14（110 帧，10 交易日）。
 |---|---|---|
 | **G1 价格动量** | price_momentum.py 观察因子（change 均线/动量档位 A-D）+ 挂载 observation.priceMomentum | **投票负贡献**（all syn 0.0651→0.0441 −32%、8月 −0.0054）——**保留观察不进投票**（tierSynergyPriceMomentumVote=0）；价格动量与热榜排名收益在短前瞻下无正协同 |
 | **G2 crossSection 投票** | _synergy_tier 第 5 维（cs A/B 正 C/D 负 × 权重） | **有效，默认打开**（tierSynergyCrossSectionVote=1.0，用户决策）：all syn 0.0651→0.0716（+10%）、8月 0.0069→0.0232（**+237%**） |
-| **G3 amount** | shared.py BACKTEST_RANKTREND_STOCK_FIELDS 补 amount（数据链路打通） | **如实标注：仅数据可读，量价金额因子未落地**（ranktrend 目录零 amount 消费方）——快照已有（8 月 99.7%），全窗口 29%（早期采集缺 fail-visible）；量价升级需 amount 历史覆盖 + 因子设计（待后续） |
+| **G3 amount** | shared.py 补字段 + **跨帧成交额量比落地（2026-08-18）**：amount_histories 累积 + compute_amount_ratio（当前/前 N 帧均额）进 compute_volume_price_score（≥1.5 放量资金 +5 分 / ≤0.5 缩量 -5 分） | 快照已有（8 月 99.7%）；amountRatio 可算 20.7%（需 ≥2 帧连续 amount，早期缺失 fail-visible）、量价增强生效 3.6%（8 月后新数据逐步生效）；测试 +9（amount_ratio 计算/阈值/fail-visible） |
 | **G4 Jump 确认** | _confirm_jump（change≥3% 且 volumeRatio≥1 确认，默认开；不满足降级 hold+unconfirmed） | **Jump 事件在 half_hour 为 0**——无实际影响（实现保留防未来假 Jump；resonance 维事件稀疏另见 §7.6） |
 | **G5 MACD 口径** | factor-calibration §12.1 | MACD 金死叉 = 排名百分位计算（非价格），价格 MACD 不在范围 |
 | **G6 样本门槛** | factor-calibration §12.2 | momentum 可计算门槛（14 帧）与 MACD 预热分离，sampleQuality.ok 用 momentum 门槛 |
@@ -1447,6 +1447,47 @@ priceMomentum 观察不投票（负贡献实证）；Jump 确认默认开（事�
   API 链路输出含 crossSection 档位 + synergy 含第 5 维投票；
 - **结论**：前端【四维】字段**跟随后端 py 核心算法**（现算链路，非回测研究限定）；
   快照存储为原始数据（collector 不计算 rankTrend），四维分析全部现算——无需回放迁移。
+
+### 11.4c 价格-排名背离因子 priceRankDivergence（2026-08-18，G1 相位差方案）
+
+- **背景**：G1 价格动能裸投票实证负贡献（−32%）——根因是价格 vs 排名 Jump 的相位差
+  （排名先行/价格兑现，h1 无独立预测力）；正确用法是观察**背离**而非并列投票；
+- **state 四态**（priceDir × rankDir 交叉）：confirm_up（价升+排名升）/ rank_lead（排名升+价跌，
+  关注度先行）/ confirm_down（价跌+排名跌）/ price_lead_warn（价升+排名跌，出货预警）；
+- **档位映射由数据验证决定（非拍脑袋）**——h1 synergy 桶内 excessDirectionAccuracy：
+
+| state | 分布 | synergy A 档样本 | 证据 → 档位 |
+|---|---|---|---|
+| confirm_up | 33.1% | 4102，**+0.0242** | A（唯一强正，4102 样本） |
+| rank_lead | 18.9% | 138，+0.0097 | B（弱正，样本少） |
+| confirm_down | 18.9% | 0（无 A） | C（弱势集中） |
+| price_lead_warn | 24.9% | 116，**−0.0086** | D（强档也失效=出货预警成立） |
+
+- **投票验证（2026-08-18，数据驱动）**：dv 投票 0.5→all 0.0626（−12.6%）/1.0→all 0.0535（−25%）、
+  8 月 0.0181/0.0139（−22%/−40%）——**实证负贡献，保持观察不进投票**（与 G1 priceMomentum 同因：
+  与 crossSection/rankTrend 排名信息高度冗余，重复投票扭曲档位）；
+  tierSynergyDivergenceVote=0.0 默认（机制已实现 dv_tier 第 6 维，权重数据定）；
+- 测试 +8（四态/阈值/fail-visible）；golden 60 passed 不漂移。
+
+### 11.4d 环境门 regime 优化（2026-08-18，缺口 H 落地，数据驱动）
+
+- **口径统一（第 1 阶）**：market_regime 情绪阶段改读 hotlistSentiment（stage/riskLevel——
+  热榜池同源），全市场 sentiment 降为对照（不再打分）；riskLevel 高 −8/低 +3；缺失标注
+  fail-visible。修复原混合口径（热榜池打分 + 全市场情绪阶段）。
+- **门控数据验证（第 2 阶，结论与预期相反）**：regime 分布 strong 16.9%/normal 56.7%/
+  weak 24.2%/retreat 2.2%。synergy A 档 h1 exAcc：**strong −0.0045（负）**/normal +0.0767/
+  weak +0.0597/retreat +0.2353（样本少）。candidateTier 桶：A_MAIN strong synA **−0.0739**、
+  B_IGNITION strong −0.0172、weak B_IGNITION **+0.077（最强）**——**现有 not weak_market
+  （weak/retreat 禁）规则与数据相反：该禁 strong（普涨无区分度+追高），weak 弱市选强更稀缺有效**。
+- **门控实现（第 3 阶）**：A_MAIN/B_IGNITION 改 
+regime not in (strong, retreat) 禁
+  （
+regimeGateStrongBan=True 默认，False 回退旧规则）；weak 市场放开 A/B；reasons 标注
+  强/退潮降级。效果验证：B_IGNITION all +0.0249→**+0.0416（+67%）**/8 月 −0.0387→−0.0029、
+  A_MAIN 8 月 +0.0252→+0.0589（all −0.0119 为 weak 新增样本拖累，弱市选强逻辑正确）。
+- **7 月股灾说明**：7 月 regime 分布 strong 3075/normal 14292/weak 6324/retreat 132——股灾
+  主要在 normal/weak，weak 放开后 A 档 +0.0597 有效（弱市选强正确应对）；strong 禁防的是
+  普涨无区分度而非股灾本身。
 
 ### 11.5 下一步
 

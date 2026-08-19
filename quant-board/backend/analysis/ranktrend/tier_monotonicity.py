@@ -26,6 +26,7 @@ DIMENSION_PATHS: dict[str, tuple[str, ...]] = {
     "synergy": ("rankTrend", "observation", "synergy", "signalTier"),
     "atr": ("rankTrend", "observation", "atrMeanReversion", "signalTier"),  # 2026-08-17 ATR 波动观察维
     "crossSection": ("rankTrend", "observation", "crossSection", "signalTier"),  # 2026-08-17 横截面相对强弱
+    "priceRankDivergence": ("rankTrend", "observation", "priceRankDivergence", "signalTier"),  # 2026-08-18 价格-排名背离
 }
 DEFAULT_DIMENSION = "synergy"
 

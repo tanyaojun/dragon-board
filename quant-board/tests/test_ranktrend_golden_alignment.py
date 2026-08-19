@@ -59,7 +59,9 @@ def test_golden_replay_uses_pure_analysis_candidate_tier_without_hotlist(monkeyp
     assert signals[-1]["candidateTier"] == strategy["candidateTier"]
 
 
-def test_golden_replay_ignores_preexisting_hotlist_sentiment_payload() -> None:
+def test_golden_replay_regime_consumes_hotlist_sentiment() -> None:
+    # 2026-08-18 口径统一：regime 情绪阶段读 hotlistSentiment（热榜池同源），
+    # 全市场 sentiment 降为对照。预置 hotlistSentiment（冰点+高风险）→ regime 状态应反映热榜情绪（非 strong）。
     engine = RankTrendPythonEngine(RankTrendConfig.from_patch({"minSampleCount": 3}))
     baseline_frames = _make_frames()
     frames = _make_frames(include_hotlist_sentiment=True)
@@ -77,7 +79,13 @@ def test_golden_replay_ignores_preexisting_hotlist_sentiment_payload() -> None:
     assert signals
     baseline_strategy = baseline_signals[-1]["rankTrend"]["strategy"]
     strategy = signals[-1]["rankTrend"]["strategy"]
-    assert strategy["regime"]["state"] == "strong"
+    # 无热榜情绪：池内因子 strong（全市场只作对照）
+    assert baseline_strategy["regime"]["state"] == "strong"
+    assert any("全市场情绪对照" in reason for reason in baseline_strategy["regime"]["reasons"])
+    # 预置热榜情绪（冰点-8 + 高风险-8）→ 状态降级，不再被全市场"发酵期"误导
+    assert strategy["regime"]["state"] != "strong"
+    assert any("热榜情绪阶段" in reason for reason in strategy["regime"]["reasons"])
+    assert any("热榜情绪风险" in reason for reason in strategy["regime"]["reasons"])
     assert "hotlist" not in strategy
     assert all("热榜情绪" not in reason for reason in strategy["reasons"])
     assert signals[-1]["candidateTier"] == baseline_signals[-1]["candidateTier"]
@@ -328,7 +336,8 @@ def test_compose_analysis_candidate_tier_matches_ts_weak_market_downgrade() -> N
 
     assert strategy["candidateTier"] == "N_NEUTRAL"
     assert strategy["action"] == "hold"
-    assert "弱势/退潮环境下买入信号降级为观察" in strategy["reasons"]
+    # 2026-08-18 环境门数据修正：retreat 仍禁 A/B（风控保留），降级措辞改为强/退潮
+    assert any("市场强/退潮环境买入信号降级为观察" in r for r in strategy["reasons"])
     assert "市场退潮，优先控制回撤风险" in strategy["reasons"]
 
 

@@ -138,6 +138,16 @@ class RankTrendConfig:
     crossSectionMidDeltaDown: float = -15.0  # C 档 delta 显著下降
     jumpConfirmChangeMin: float = 3.0  # Jump 价格确认：涨跌幅 ≥3%（up）/ ≤-3%（down），2026-08-17 G4 默认生效
     jumpConfirmVolumeRatioMin: float = 1.0  # Jump 量确认：量比 ≥1（放量配合）
+    # ── amount 成交额量比（2026-08-18 G3：跨帧成交额量比进量价，"价量资金"落地）──
+    amountRatioPeriod: float = 5.0  # 成交额量比均额窗口（前 N 帧平均）
+    amountRatioHigh: float = 1.5  # 放量资金阈值（成交额 ≥ 均额 1.5 倍 → 加分）
+    amountRatioLow: float = 0.5  # 缩量资金阈值（成交额 ≤ 均额 0.5 倍 → 减分）
+    # ── priceRankDivergence（价格-排名背离观察因子，2026-08-18 G1 相位差方案；不进 synergy 投票）──
+    priceRankChangeMin: float = 0.0  # 价格方向阈值：change ≥ 此值判涨、≤ -此值判跌
+    priceRankDeltaMin: float = 0.0  # 排名方向阈值：percentile delta ≥ 此值判升、≤ -此值判降
+    # ── regime 环境门（2026-08-18 数据修正：strong 禁 A/B、weak 放开；False 回退旧 weak/retreat 禁）──
+    regimeGateStrongBan: bool = True
+    tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
     tierSynergyCrossSectionVote: float = 1.0  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；验证 all+10%/8月+237%）
     tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
     # ── priceMomentum（价格动量观察因子，2026-08-17 审计缺口 G1；不进 synergy 投票）──
@@ -1252,10 +1262,16 @@ def market_regime(frame: dict[str, Any]) -> dict[str, Any]:
 
     全A 涨跌家数/成交额不再进入打分（分化行情下与热榜池赚钱效应脱节）。
     权重为基线 v1，样本验证后冻结（见 P2 计划 Phase 8）。
+
+    2026-08-18 口径统一（环境门优化第 1 阶）：情绪阶段改读 hotlistSentiment
+    （frame.hotlistSentiment.stage/riskLevel——热榜池同口径），全市场 sentiment 降为对照
+    （仅保留在 reasons/observation，不再进入打分）。riskLevel 高 → 风险修正减分。
     """
     context = frame.get("marketContext") or {}
     payload = context.get("payload") or {}
     sentiment = context.get("sentiment") or payload.get("sentiment") or {}
+    hotlist_sentiment = frame.get("hotlistSentiment")
+    hotlist_missing = not isinstance(hotlist_sentiment, dict)
     stocks = [s for s in (frame.get("stocks") or []) if isinstance(s, dict)]
     pool_size = len(stocks)
     if pool_size == 0:
@@ -1283,12 +1299,34 @@ def market_regime(frame: dict[str, Any]) -> dict[str, Any]:
         score += clamp((money_share - 0.5) * 20, -10, 10)
         reasons.append(f"热榜资金正向{money_share * 100:.0f}%")
 
-    phase = str(sentiment.get("phaseName") or sentiment.get("phase") or "").strip()
+    # 2026-08-18 口径统一：情绪阶段用热榜池同源 hotlistSentiment（stage），全市场 sentiment 仅作对照。
+    # 缺失 → 标注 missing，不阻断打分（fail-visible）。
+    phase = ""
+    risk_adjust = 0.0
+    if hotlist_missing:
+        reasons.append("热榜情绪缺失（regime 情绪阶段按中性）")
+    else:
+        phase = str(hotlist_sentiment.get("stage") or hotlist_sentiment.get("phase") or "").strip()
+        hotlist_risk = str(hotlist_sentiment.get("riskLevel") or "").strip()
+        if hotlist_risk in ("高", "high", "HIGH"):
+            risk_adjust = -8.0
+            reasons.append(f"热榜情绪风险={hotlist_risk}（-8）")
+        elif hotlist_risk in ("低", "low", "LOW"):
+            risk_adjust = 3.0
+            reasons.append(f"热榜情绪风险={hotlist_risk}（+3）")
+        conf = hotlist_sentiment.get("confidence")
+        if conf is not None:
+            reasons.append(f"热榜情绪置信={conf}")
     if phase.endswith("期"):
         phase = phase[:-1]
     if phase:
         score += REGIME_STAGE_ADJUST.get(phase, 0)
-        reasons.append(f"情绪阶段{phase}")
+        reasons.append(f"热榜情绪阶段{phase}")
+    score += risk_adjust
+    # 全市场 sentiment 仅作对照（不再打分）
+    market_phase = str(sentiment.get("phaseName") or sentiment.get("phase") or "").strip()
+    if market_phase:
+        reasons.append(f"全市场情绪对照={market_phase}")
 
     score = clamp(score, 0, 100)
     state = (
@@ -1770,7 +1808,15 @@ def compose_analysis_candidate_tier(
     money_risk = risk["divergence"]["severity"]
     pressure = risk["pressure"]
     regime_data = regime or {"state": "normal", "score": 0, "reasons": []}
-    weak_market = regime_data["state"] in ("weak", "retreat")
+    # 2026-08-18 环境门数据修正（regime × candidateTier h1 验证）：
+    # strong 市场 A_MAIN synA exAcc -0.0739 / B_IGNITION -0.0172（普涨无区分度+追高）→ 禁 A/B；
+    # weak 市场 B_IGNITION +0.077（弱市点火更稀缺）→ 放开（原 not weak_market 规则与数据相反）；
+    # retreat 样本少，风控保留禁入。regimeGateStrongBan=False 可回退旧规则（weak/retreat 禁）。
+    strong_market = regime_data["state"] == "strong"
+    retreat_market = regime_data["state"] == "retreat"
+    gate_strong_ban = bool(getattr(c, "regimeGateStrongBan", True))
+    ban_a_main = (strong_market or retreat_market) if gate_strong_ban else retreat_market or regime_data["state"] == "weak"
+    ban_b_ignition = (strong_market or retreat_market) if gate_strong_ban else regime_data["state"] == "retreat"
     trend_buy = (
         technical["signals"]["direction"]["signal"] == "buy"
         or technical["signals"]["acceleration"]["signal"] == "buy"
@@ -1796,7 +1842,7 @@ def compose_analysis_candidate_tier(
         and momentum["mid"] >= c.tierAMainMidMomentumMin
         and momentum["short"] >= c.tierAMainShortMomentumMin
         and trend_buy
-        and not weak_market
+        and not ban_a_main
         and money_risk < c.tierAMainDivergenceSeverityMax
     ):
         tier = "A_MAIN"
@@ -1805,13 +1851,13 @@ def compose_analysis_candidate_tier(
         stage == "ignition"
         and momentum["short"] >= c.tierBIgnitionShortMomentumMin
         and momentum["acceleration"] >= c.tierBIgnitionAccelMin
-        and regime_data["state"] != "retreat"
+        and not ban_b_ignition
         and pressure < c.tierBIgnitionRiskPressureMax
     ):
         tier = "B_IGNITION"
         reasons.append("点火阶段短周期冲击增强，仍需继续确认")
-    elif weak_market and trend_buy:
-        reasons.append("弱势/退潮环境下买入信号降级为观察")
+    elif (regime_data["state"] in ("strong", "retreat")) and trend_buy:
+        reasons.append("市场强/退潮环境买入信号降级为观察（数据：strong 下 A/B 档负贡献）")
     else:
         reasons.append("动量、阶段与风险未形成明确候选池信号")
 
@@ -1870,6 +1916,7 @@ class RankTrendPythonEngine:
         requested_codes = {str(code) for code in codes} if codes else None
         histories = defaultdict(deque)
         change_histories: dict[str, deque] = defaultdict(deque)
+        amount_histories: dict[str, deque] = defaultdict(deque)
         prev_candidate_by_code: dict[str, str] = {}
         signals: list[dict[str, Any]] = []
         for index, frame in enumerate(frames):
@@ -1880,6 +1927,9 @@ class RankTrendPythonEngine:
             for chg_history in change_histories.values():
                 while chg_history and chg_history[0][0] < history_start:
                     chg_history.popleft()
+            for amt_history in amount_histories.values():
+                while amt_history and amt_history[0][0] < history_start:
+                    amt_history.popleft()
 
             stocks = frame.get("stocks", [])
             # 池子大小 = 全池股票数（综合排名口径，用于 regime/展示）
@@ -1897,6 +1947,8 @@ class RankTrendPythonEngine:
                 histories[code].append((index, rank, percentile_rank(rank, attention_total)))
                 chg = stock.get("change")
                 change_histories[code].append((index, chg if chg is not None else None))
+                amt = stock.get("amount")
+                amount_histories[code].append((index, amt if amt is not None else None))
 
             if index < start:
                 continue
@@ -1926,6 +1978,7 @@ class RankTrendPythonEngine:
                     meta,
                     market_ctx=market_ctx,
                     price_changes=[item[1] for item in change_histories.get(code, [])],
+                    amount_history=[item[1] for item in amount_histories.get(code, [])],
                 )
                 if signal:
                     # 阶段6 趋势反转层（RankTrend 分析方法本体，观察信号）：
@@ -2026,6 +2079,7 @@ class RankTrendPythonEngine:
         assemble: bool = True,
         market_ctx: dict[str, Any] | None = None,
         price_changes: list[Any] | None = None,
+        amount_history: list[Any] | None = None,
     ) -> dict[str, Any] | None:
         if not ranks:
             return None
@@ -2173,6 +2227,22 @@ class RankTrendPythonEngine:
                 self.config,
             )
             rank_trend["technical"]["priceMomentum"] = rank_trend["observation"]["priceMomentum"]
+            # 成交额量比（2026-08-18 G3）：跨帧 amount 均额基准——"价量资金"落地。
+            # 历史不足/缺失 → None（fail-visible），assemble_observation 传入 compute_volume_price_score。
+            from backend.analysis.ranktrend.volume_price import compute_amount_ratio
+
+            rank_trend["observation"]["amountRatio"] = compute_amount_ratio(amount_history, self.config)
+            rank_trend["technical"]["amountRatio"] = rank_trend["observation"]["amountRatio"]
+            # 价格-排名背离观察因子（2026-08-18 G1 相位差方案）：价升排名跌（出货预警）/
+            # 排名升价跌（关注度先行）——价格与排名 Jump 的背离信号。不进 synergy 投票，先验证区分度。
+            from backend.analysis.ranktrend.price_rank_divergence import compute_price_rank_divergence
+
+            rank_trend["observation"]["priceRankDivergence"] = compute_price_rank_divergence(
+                price_changes or [],
+                percentiles,
+                self.config,
+            )
+            rank_trend["technical"]["priceRankDivergence"] = rank_trend["observation"]["priceRankDivergence"]
 
             if market_ctx is not None:
                 sample_quality = (rank_trend.get("meta") or {}).get("sampleQuality") or {}

@@ -127,8 +127,14 @@ def compute_volume_price_score(
     zlje: Any,
     zljzb: Any,
     config: RankTrendConfig | None = None,
+    amount_ratio: Any = None,
 ) -> dict[str, Any]:
-    """量价评分（0-100）与方向/象限/依据，与 TS computeVolumePriceScore 口径一致。"""
+    """量价评分（0-100）与方向/象限/依据，与 TS computeVolumePriceScore 口径一致。
+
+    amount_ratio（2026-08-18 G3）：成交额量比（当前成交额 / 前 N 帧均额）——"价量资金"维度。
+    None/0（历史缺失）→ 不参与（fail-visible，不破坏原量价档位）；≥1.5 放量资金加分、
+    ≤0.5 缩量资金减分。
+    """
     c = config or RankTrendConfig()
     chg = _finite(change)
     vr = _finite(volume_ratio)
@@ -217,6 +223,20 @@ def compute_volume_price_score(
     elif ratio is not None and ratio < 0:
         reasons.append("主力净流出")
 
+    # 2026-08-18 G3：成交额量比增强（"价量资金"）——amount_ratio None/0（历史缺失）不参与（fail-visible）
+    amount_score = 0.0
+    ar = _finite(amount_ratio)
+    if ar is not None and ar > 0:
+        if ar >= c.amountRatioHigh:
+            amount_score = 5.0
+            reasons.append(f"成交额放量资金（量比 {ar:.2f} ≥ {c.amountRatioHigh}）")
+        elif ar <= c.amountRatioLow:
+            amount_score = -5.0
+            reasons.append(f"成交额缩量资金（量比 {ar:.2f} ≤ {c.amountRatioLow}）")
+        score = round(_clamp(score + amount_score))
+    elif ar is not None and ar <= 0:
+        reasons.append("成交额数据缺失（amount=0，不参与量价资金判定）")
+
     _tier, _tier_reasons = _volume_price_tier(quadrant, fund_score, reasons)
     return {
         "score": score,
@@ -229,8 +249,37 @@ def compute_volume_price_score(
             "direction": round(direction_score, 1),
             "volume": round(volume_score, 1),
             "fund": round(fund_score, 1),
+            "amount": round(amount_score, 1),
         },
     }
+
+
+def compute_amount_ratio(amount_history: list[Any] | None, config: RankTrendConfig | None = None) -> float | None:
+    """成交额量比（2026-08-18 G3）：当前帧成交额 / 前 N 帧（amountRatioPeriod）平均成交额。
+
+    历史不足/全缺失/当前为 0/None/非有限 → None（fail-visible，不参与量价资金判定）。
+    """
+    c = config or RankTrendConfig()
+    raw = amount_history or []
+    if not raw:
+        return None
+    # 当前帧必须取原始序列最后一帧：0/None/非有限 → None（不静默回退上一帧，fail-visible 合同）
+    cur = _finite(raw[-1])
+    if cur is None or cur <= 0:
+        return None
+    period = max(1, int(c.amountRatioPeriod))
+    base_vals: list[float] = []
+    for v in raw[:-1]:
+        n = _finite(v)
+        if n is not None and n > 0:
+            base_vals.append(n)
+    if not base_vals:
+        return None
+    base = base_vals[-period:]  # 前 N 帧（不含当前）
+    avg = sum(base) / len(base)
+    if avg <= 0:
+        return None
+    return round(cur / avg, 4)
 
 
 # ── synergy 档位强度权重（vote 语义改进 2026-08-15，v4 权重，horizon=1 验收口径）──
@@ -251,13 +300,16 @@ def _synergy_tier(
     config: RankTrendConfig | None = None,
     cs_tier: str | None = None,
     pm_tier: str | None = None,
+    dv_tier: str | None = None,
 ) -> tuple[str, list[str]]:
     """四维合并档位（synergy.signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §7。
 
     阈值读 config.tierSynergyVote*（vote 求和为整数，strong/weak/reverse 均为 int）。
     cs_tier：crossSection 第 5 维（2026-08-17 G2）；pm_tier：priceMomentum 第 6 维
-    （2026-08-17 G1，价格动量/均线）——权重 tierSynergyCrossSectionVote/
-    tierSynergyPriceMomentumVote（1.0=启用，用户决策默认生效）。两维无 direction 字段，
+    （2026-08-17 G1，价格动量/均线）；dv_tier：priceRankDivergence 第 7 维
+    （2026-08-18 量名背离——confirm_up 一致强 / rank_lead 关注度先行 / confirm_down /
+    price_lead_warn 出货预警）——权重 tierSynergyCrossSectionVote/
+    tierSynergyPriceMomentumVote/tierSynergyDivergenceVote。无 direction 字段的维度
     档位自带方向（A/B 强势、C/D 弱势），投票 = 档位符号 × 强度 × 权重。
     """
     c = config or RankTrendConfig()
@@ -291,6 +343,9 @@ def _synergy_tier(
     pm_weight = float(getattr(c, "tierSynergyPriceMomentumVote", 0.0) or 0.0)
     if pm_weight and pm_tier and pm_tier in _CS_STRENGTH:
         v += _CS_STRENGTH[pm_tier] * pm_weight
+    dv_weight = float(getattr(c, "tierSynergyDivergenceVote", 0.0) or 0.0)
+    if dv_weight and dv_tier and dv_tier in _CS_STRENGTH:
+        v += _CS_STRENGTH[dv_tier] * dv_weight
     # 阶段 3 修复方向 3：档位分级按票数（strong/strong+1），A 档可达。
     # 旧规则 v>=strong 且 lc==A → S 独占 S 判定，而周期档位只有 A/B/D/E（无 C），
     # v>=strong 且 lc∉{A,B,D} 的 A 分支永远不可达 → synergy A 档 n=0（阶段 3 诊断实证）。
@@ -335,6 +390,7 @@ def assemble_observation(
         stock.get("zlje"),
         stock.get("zljzb"),
         c,
+        amount_ratio=((observation.get("amountRatio") or None)),
     )
     observation["volumePrice"] = vp
     observation["synergy"] = compute_synergy_state(
@@ -344,6 +400,7 @@ def assemble_observation(
         resonance.get("direction"),
         stock.get("zljzb"),
         c,
+        cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
     )
     _syn_tier, _syn_reasons = _synergy_tier(
         resonance.get("signalTier"), resonance.get("direction"),
@@ -353,6 +410,7 @@ def assemble_observation(
         c,
         cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
         pm_tier=((observation.get("priceMomentum") or {}).get("signalTier")),
+        dv_tier=((observation.get("priceRankDivergence") or {}).get("signalTier")),
     )
     observation["synergy"]["signalTier"] = _syn_tier
     observation["synergy"]["tierReasons"] = _syn_reasons
@@ -366,13 +424,21 @@ def compute_synergy_state(
     resonance_direction: Any,
     zljzb: Any,
     config: RankTrendConfig | None = None,
+    cs_tier: str | None = None,
 ) -> dict[str, Any]:
-    """四象协同状态：阶段 × 量价（主），技术/共振协同；输出给候选池分层。"""
+    """四象协同状态：阶段 × 量价（主），技术/共振协同；输出给候选池分层。
+
+    cs_tier（2026-08-18 P0 A1 口径对齐）：crossSection 第 5 维档位——state 与 signalTier
+    投票口径一致。cs A（高位+排名上升）可补足主升确认的共振方向缺失；cs D（低位+下降）
+    直接升级风险状态；reasons 标注 cs 贡献（fail-visible）。
+    """
     c = config or RankTrendConfig()
     stage = str(stage or "")
     ratio = _finite(zljzb)
     fund_suspect = ratio is not None and ratio > c.volumePriceAbnormalFundRatio
     reasons: list[str] = []
+    cs_strong = cs_tier == "A"
+    cs_weak = cs_tier == "D"
 
     if vp_score is None:
         return {"state": "noData", "hardWarn": False, "reasons": ["量价数据不足，不判定协同"]}
@@ -386,9 +452,18 @@ def compute_synergy_state(
     if stage in ("ignition", "expansion") and high_vp and tech_buy and res_up:
         state = "启动确认" if stage == "ignition" else "主升确认"
         reasons = [f"阶段={stage}", f"量价分={vp_score}（≥75）", "技术 buy", "共振 ↑"]
-    elif stage in ("crowded", "reversal") and (low_vp or fund_suspect):
+    elif stage in ("ignition", "expansion") and high_vp and tech_buy and cs_strong:
+        # 2026-08-18 P0 A1：crossSection A（高位+排名上升）补足共振方向缺失——与 signalTier 投票口径一致
+        state = "启动确认" if stage == "ignition" else "主升确认"
+        reasons = [f"阶段={stage}", f"量价分={vp_score}（≥75）", "技术 buy", "横截面 A（热度高位+排名上升）"]
+    elif stage in ("crowded", "reversal") and (low_vp or fund_suspect or cs_weak):
         state = "风险升级"
-        reasons = [f"阶段={stage}", f"量价分={vp_score}（≤40）" if low_vp else "", "资金对倒" if fund_suspect else ""]
+        reasons = [
+            f"阶段={stage}",
+            f"量价分={vp_score}（≤40）" if low_vp else "",
+            "资金对倒" if fund_suspect else "",
+            "横截面 D（低位+排名下降）" if cs_weak else "",
+        ]
     elif stage == "cooling" and low_vp:
         state = "退潮"
         reasons = [f"阶段={stage}", f"量价分={vp_score}（≤40）"]
