@@ -115,6 +115,27 @@ npm run build
 - 样本外复核必须检查 validation 窗口是否含极端行情月，单独跑干净窗口交叉验证；
 - 全程不写回默认值，只有"证实"类（干净窗口 ≥0.05 且跨窗口稳健）才走 golden 变更流程。
 
+### 2.5 `four-dim-algorithm-research`
+
+项目级正文：`skills/four-dim-algorithm-research/SKILL.md`。
+
+用于四维信号**核心算法研发与优化**（区别于参数扫描）——新增/修改 synergy 投票维度、
+观察因子、投票权重、regime 门控或评估口径时调用：因子设计（参数化 golden 不漂移）→
+区分度验证（h1 exAcc + A 档样本门槛）→ 投票/门控接线 → 数据驱动决策（正贡献落默认/
+负贡献 vote=0 关闭观察，假设可证伪）→ rolling walk-forward 组合验证（**8 月冻结纪律**、
+7 月股灾样本外排除）→ golden 回归 → 定值档案更新。与 2.4 `ranktrend-tier-longterm-test`
+互补：本 skill 管"加不加因子/开不开投票/怎么门控"，长测 skill 管"已有参数怎么调"。
+（第一轮实践见 `quant-board/docs/ranktrend-tier-backtest/overfitting-audit.md` 与
+`ranktrend-longterm-backtest-plan.md` 阶段 10/11。）
+
+使用要求：
+
+- 动核心算法前先确认数据窗口纪律（`backend/optimization/data_windows.py`：8 月冻结，
+  `assert_not_frozen` 守卫），参数决策禁止引用 8 月数据；
+- 新增维度须登记 `tier_monotonicity.py DIMENSION_PATHS`，否则分档统计不可见；
+- 负贡献/冗余因子一律 vote=0 关闭观察（机制保留），不删除实现；
+- 结构改动完成后必须 golden 回归全绿 + L1 定值档案（`ranktrend-l1-param-ledger.md`）同步。
+
 ## 3. 设计和范围控制 Skills
 
 ### 3.1 `superpowers:brainstorming`
