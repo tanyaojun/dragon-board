@@ -187,12 +187,17 @@ def _load_frames_for_analysis(
     series_by_code = _build_code_attention_series(frames)
     if current_frame:
         current_stocks = current_frame.get("stocks") or []
-        current_ranks, current_total = attention_rank_lookup(current_stocks)
+        # 2026-08-23 修复 A（防过拟合排查）：当前帧 percentile 不再用前端派生的
+        # rank/avgRankNum（随 zljzb/八平台热榜重算、会漂移，污染横截面/趋势/周期）。
+        # 改为复用该 code 在权威历史帧的最后一个 percentile——横截面/趋势/周期只用
+        # 权威源，当前帧仅作展示帧（量价仍用其字段）。历史无该 code 则不注册（新上市边缘）。
         current_key = f"{current_frame.get('tradingDate')} {current_frame.get('slotTime')}".strip()
-        for code, rank in current_ranks.items():
-            series_by_code.setdefault(code, []).append(
-                (current_key, rank, percentile_rank(rank, current_total))
-            )
+        for code in {str(s.get("code")) for s in current_stocks if isinstance(s, dict)}:
+            bars = series_by_code.get(code)
+            if bars:
+                # 复用最后一个权威 (key, rank, percentile)，仅将 key 标记为当前帧
+                _key, _rank, _pct = bars[-1]
+                series_by_code[code].append((current_key, _rank, _pct))
         frames.append({
             "tradingDate": current_frame.get("tradingDate"),
             "slotTime": current_frame.get("slotTime"),
