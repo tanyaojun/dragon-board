@@ -69,6 +69,14 @@ ANALYZE_MAX_TRACK_WINDOW = 30
 # 避免每次打开面板都从 MongoDB/Redis 搬运 200 帧 × 全市场（~70MB，3.5-4.5s）成为冷启动瓶颈。
 ANALYZE_SMALL_CODES_LOAD_LIMIT = 60
 
+# 全市场最新帧 analyze（无 frame_keys / codes 大批量）的历史窗帧数。
+# 实测依据（dragonboard_live, half_hour, 2026-08-23）：当前帧活跃股 232 只中 207 只历史 ≥50 次；
+# 它们"最近 50 次出现"覆盖的连续帧跨度 P90=277、max=824、均值 121。旧默认 200 帧对 P90 活跃股
+# 不足（200 帧内约 36 次 < 50），导致大量活跃股 macd/momentum 序列不完整。取 280（P90 上沿）
+# 覆盖约 90% 活跃股；仍不足的股由 engine 的 sampleQuality 标为 insufficient（fail-visible）。
+# 性能：280 帧 × projection="ranktrend+themes" 仅略高于旧 200 帧（+40%），且有 Redis analyze 缓存。
+ANALYZE_FULL_MARKET_LOAD_LIMIT = 280
+
 # analyze 并发闸门：per-key 单飞锁 + 全局有界信号量（QUANT_BOARD_ANALYZE_MAX_CONCURRENCY，默认 2）。
 # 目的：并发相同请求只计算一次（其余等待共享缓存结果），并限制全局 golden 计算并发，
 # 防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死。
@@ -162,12 +170,12 @@ def _load_frames_for_analysis(
     current_frame: dict[str, Any] | None,
     codes: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, list[tuple[str, int, float]]]]:
-    # 最近帧优先：倒序加载最近 200 帧后反转回时间升序，供 replay 按时间推进。
+    # 最近帧优先：倒序加载最近 ANALYZE_FULL_MARKET_LOAD_LIMIT 帧后反转回时间升序，供 replay 按时间推进。
     # 旧实现按升序加载最早 200 帧，数据集超过 200 帧后，观察面板请求的最近历史帧
     # 全部落在窗口外，过滤后为空并被误报为 503。
     # 单股/少量 codes（无 frame_keys）只加载 60 帧：趋势序列 max_bars=50 已足够，
-    # 避免每次打开排名趋势面板都搬运 200 帧 × 全市场（~70MB）成为 4s+ 冷启动瓶颈。
-    load_limit = 200
+    # 避免每次打开排名趋势面板都搬运全量（~70MB）成为 4s+ 冷启动瓶颈。
+    load_limit = ANALYZE_FULL_MARKET_LOAD_LIMIT
     skip_cache_write = False
     if not frame_keys and codes and len(codes) <= ANALYZE_SMALL_CODES_MAX:
         load_limit = ANALYZE_SMALL_CODES_LOAD_LIMIT
