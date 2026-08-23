@@ -28,8 +28,26 @@ _STATUS = {
     "C_CROWDED": ("高位拥挤", "crowded", "高位拥挤，警惕回落。"),
     "A_MAIN": ("主升确认", "main_confirmed", "主升扩散确认，趋势向上。"),
     "B_IGNITION": ("点火观察", "ignition_watch", "点火启动，观察是否扩散。"),
+    "strong_money": ("强资确认", "strong_money", "资金明显介入，但趋势样本仍需确认，重点看后续留榜和资金持续。"),
     "money_divergence": ("资金背离", "money_divergence", "热度仍在但主力资金不支撑，警惕诱多。"),
 }
+
+
+def _is_strong_money(stock: dict[str, Any]) -> bool:
+    """G2 强资确认：主力净额 > 0 且 zljzb ≥ 8%（与前端 isStrongMoney 口径对齐）。"""
+    try:
+        zlje = float(stock.get("zlje") or 0)
+        zljzb = float(stock.get("zljzb") or 0)
+    except (TypeError, ValueError):
+        return False
+    return zlje > 0 and zljzb >= 8
+
+
+def _is_volume_supported(analysis: dict[str, Any]) -> bool:
+    """G2 量能承接：volumePrice.signalTier ∈ {A 放量上涨+资金流入, B 放量上涨/量价配合}，
+    排除过热(E 对倒/过度放量)与走弱(D)。"""
+    vp = (analysis.get("observation") or {}).get("volumePrice") or {}
+    return str(vp.get("signalTier") or "") in ("A", "B")
 
 
 def compute_display_status(
@@ -59,6 +77,10 @@ def compute_display_status(
         label, key, tip = _STATUS["D_EXIT_RISK"]
     elif state == "存疑" and (float(stock.get("zljzb") or 0) <= 0):
         label, key, tip = _STATUS["money_divergence"]
+    # G2（2026-08-23 补齐）：强资金 + 量能承接 + 无强档位/转弱信号 → 强资确认
+    # （sampleStatus insufficient / D_EXIT_RISK / A_MAIN / B_IGNITION / C_CROWDED 已在上方优先 return）
+    elif _is_strong_money(stock) and _is_volume_supported(analysis):
+        label, key, tip = _STATUS["strong_money"]
     else:
         label, key, tip = _DEFAULT["label"], _DEFAULT["classKey"], _DEFAULT["tooltip"]
 

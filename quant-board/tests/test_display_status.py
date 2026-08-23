@@ -48,6 +48,7 @@ _UI_KNOWN_KEYS = {
     "new_watch",
     "crowded",
     "money_divergence",
+    "strong_money",  # G2 补充：强资确认（前端 UI .hero-card.tier-strong_money 存在）
     "insufficient",
 }
 
@@ -66,3 +67,24 @@ def test_classkey_aligned_with_frontend_ui_whitelist():
     ]
     for case in cases:
         assert case["classKey"] in _UI_KNOWN_KEYS, f"classKey {case['classKey']} 不在前端 UI 白名单"
+
+
+def test_strong_money_when_strong_fund_and_volume_supported():
+    a = _analysis(sample_status="ok", synergy_state="主升确认")
+    a["observation"]["volumePrice"] = {"signalTier": "A"}
+    r = compute_display_status(a, {"zlje": 1e8, "zljzb": 12.0})
+    assert r["label"] == "强资确认"
+    assert r["classKey"] == "strong_money"
+    # 量能承接 B 档（放量上涨量价配合）也产强资确认
+    a["observation"]["volumePrice"] = {"signalTier": "B"}
+    assert compute_display_status(a, {"zlje": 1e8, "zljzb": 12.0})["classKey"] == "strong_money"
+
+
+def test_strong_money_not_with_weak_volume_or_fund():
+    a = _analysis(sample_status="ok", synergy_state="主升确认")
+    a["observation"]["volumePrice"] = {"signalTier": "D"}
+    # 量能走弱（D）→ 不产强资确认
+    assert compute_display_status(a, {"zlje": 1e8, "zljzb": 12.0})["classKey"] != "strong_money"
+    # 资金流出 → 不产强资确认
+    a["observation"]["volumePrice"] = {"signalTier": "A"}
+    assert compute_display_status(a, {"zlje": -1e8, "zljzb": -5})["classKey"] != "strong_money"
