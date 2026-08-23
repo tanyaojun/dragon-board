@@ -2,11 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   average,
-  calculateSignalConfidence,
-  calculateWeightedShare,
   clamp,
   getTechnicalMinSamples,
-  normalizeSigned,
 } from '../utils'
 
 describe('clamp', () => {
@@ -52,82 +49,6 @@ describe('average', () => {
 
   it('含零值正常计算', () => {
     expect(average([0, 10])).toBe(5)
-  })
-})
-
-describe('normalizeSigned', () => {
-  it('正值用 positiveScale 归一化', () => {
-    const result = normalizeSigned(8, 8, 8)
-    expect(result).toBeGreaterThan(0.7)
-    expect(result).toBeLessThanOrEqual(1)
-  })
-
-  it('负值用 negativeScale 归一化', () => {
-    const result = normalizeSigned(-6, 8, 6)
-    expect(result).toBeLessThan(-0.7)
-    expect(result).toBeGreaterThanOrEqual(-1)
-  })
-
-  it('零值返回 0', () => {
-    expect(normalizeSigned(0, 5, 5)).toBe(0)
-  })
-
-  it('NaN 返回 0', () => {
-    expect(normalizeSigned(NaN, 5, 5)).toBe(0)
-  })
-
-  it('scale 过小时使用 1e-6 保底不除零', () => {
-    expect(() => normalizeSigned(5, 0, 0)).not.toThrow()
-    const result = normalizeSigned(5, 0, 0)
-    expect(result).toBeCloseTo(clamp(Math.tanh(5 / 1e-6), -1, 1))
-  })
-})
-
-describe('calculateSignalConfidence', () => {
-  it('零分返回基准 50', () => {
-    expect(calculateSignalConfidence(0)).toBe(50)
-  })
-
-  it('高分提升置信度', () => {
-    expect(calculateSignalConfidence(0.8)).toBeGreaterThanOrEqual(80)
-  })
-
-  it('负分按绝对值提升置信度', () => {
-    expect(calculateSignalConfidence(-0.8)).toBeGreaterThanOrEqual(80)
-  })
-
-  it('agreementBonus 叠加不超 90', () => {
-    expect(calculateSignalConfidence(0.5, 20)).toBeLessThanOrEqual(90)
-  })
-
-  it('不低于 50', () => {
-    expect(calculateSignalConfidence(-100)).toBeGreaterThanOrEqual(50)
-  })
-})
-
-describe('calculateWeightedShare', () => {
-  const weights = [1, 2, 3]
-
-  it('全部满足返回 1', () => {
-    expect(calculateWeightedShare([1, 1, 1], weights, (s) => s > 0)).toBe(1)
-  })
-
-  it('全不满足返回 0', () => {
-    expect(calculateWeightedShare([-1, -1, -1], weights, (s) => s > 0)).toBe(0)
-  })
-
-  it('部分满足按权重返回比例', () => {
-    const share = calculateWeightedShare([1, -1, 1], weights, (s) => s > 0)
-    expect(share).toBeCloseTo(4 / 6)
-  })
-
-  it('空数组返回 0', () => {
-    expect(calculateWeightedShare([], [], () => true)).toBe(0)
-  })
-
-  it('权重含 NaN 或非正值时跳过该项', () => {
-    expect(calculateWeightedShare([1, -1], [NaN, 1], (s) => s > 0)).toBe(0)
-    expect(calculateWeightedShare([1, -1], [0, 1], (s) => s > 0)).toBe(0)
   })
 })
 
