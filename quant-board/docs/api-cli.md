@@ -962,9 +962,21 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，当前
 
 同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。MongoDB 模式不再登记 Supabase outbox，也不通过 `push-backup` 补偿。
 
+MongoDB 生产态下，ingest 成功后会**后台**（FastAPI `BackgroundTasks`，不阻塞响应）对每个 frame 执行 `analyze_snapshot_and_persist`，把 `observation/displayStatus/meta/resonance` 写入 `snapshot_analysis`，供 `GET /api/snapshots/analysis` 读取（稳定回放口径）。失败静默（不吞数据、不阻塞 ingest），后续可手动补跑或依赖下次 ingest。
+
 正式快照入库要求每个非 `five_minute` frame 至少有一条股票行。若 v4 bundle 中的 `items/records` 热榜为空，或显式 `stockRows` 缺失导致正式 frame 无股票行，接口返回 400，错误信息包含 `formal snapshot hotlist is empty`。历史导入数据中已经存在的空热榜快照仍由回测质量门禁和运行时过滤处理，不通过该正式写入口继续新增。
 
 MongoDB 不可用时接口必须结构化失败，不回退 Supabase/SQLite 并返回 `backup_only`。
+
+### `GET /api/snapshots/analysis`
+
+读取后端持久化的 **analyze 产物**（`observation/displayStatus/meta/resonance`），供**历史回放/对比**（当前帧仍保留实时 analyze）。仅 MongoDB 生产态有效；非 MongoDB 返回 `degraded=true` 且 `analysis={}`。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/analysis?dataset_id=dragonboard_live&snapshot_id=half_hour%3A2026-04-21%3A10%3A00'
+```
+
+查询参数：`dataset_id`、`snapshot_id` 必填；`codes` 可选（逗号分隔，缺省返回该快照全部）。返回 `{ ok, dataset_id, snapshot_id, analysis: { code: { observation, displayStatus, meta, resonance } } }`。该数据由 `POST /api/snapshots/ingest` 后台触发 `analyze_snapshot_and_persist` 写入（MongoDB 生产态），属稳定回放口径。
 
 ### `GET /api/snapshots/frames`
 

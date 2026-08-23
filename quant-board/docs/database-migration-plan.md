@@ -60,6 +60,7 @@ QuantBoard 当前拆成两个 SQLite 库。旧单库 `quant_board.db` 只作为 
 - `snapshot_frames`
 - `snapshot_stock_rows`
 - `snapshot_sector_rows`
+- `snapshot_analysis`
 - `sync_outbox`
 - `archive_manifests`
 
@@ -82,6 +83,7 @@ Supabase 备份库必须与快照事实库保持同构 schema。云端需要使�
 - `snapshot_frames`
 - `snapshot_stock_rows`
 - `snapshot_sector_rows`
+- `snapshot_analysis`
 - `sync_outbox`
 
 旧的 Supabase `snapshots` / payload 兼容方案已经废弃。云端不再使用 `quality_flags.kind=qb_dataset`、`qb_snapshot_bundle` 等业务枚举，也不再把 QuantBoard 明细塞进 `snapshots.payload`。如果 Supabase 仍只有旧 `snapshots`、`snapshot_frames`、`snapshot_stock_rows`、`snapshot_sector_rows` 四张非同构表，健康检查会报告缺失表，`push-backup` 不应视为可用。
@@ -93,6 +95,8 @@ Supabase schema 不再包含回测、优化和 Golden 表，也不再对研究 J
 同花顺涨停池集成增加了股票行涨停原因列：`snapshot_stock_rows.reason`。该字段与 `first_zt_time/last_zt_time/board_height/high_days/fengdan` 一起作为复盘事实保存；SQLite 旧库通过 idempotent `ALTER TABLE ADD COLUMN reason TEXT` 迁移，Supabase 同构 schema 必须同步包含 `reason text`。
 
 研究库 `backtest_signals` 也增加题材解释列：`main_theme/theme_heat/theme_contribution/theme_role/theme_support_score/theme_risk_flags_json/theme_reasons_json`。研究库仍是 local-only，不进入 Supabase 备份链路。
+
+`snapshot_analysis`（G4，2026-08-23 前后端分离）保存每帧每股的 **analyze 产物**（`observation/displayStatus/meta/resonance`），由 ingest 后后台 `analyze_snapshot_and_persist` 写入，供**历史回放/对比**（当前帧仍保留实时 analyze）。MongoDB 以 `(dataset_id, snapshot_id, code)` 为唯一键幂等 upsert；Supabase 备份表 `snapshot_analysis` 同键，读口 `GET /api/snapshots/analysis`。超大 JSON（`analysis_json`）沿用备份适配层透明压缩，不在本 schema 内展开。
 
 题材模块 V8 新增独立题材主库 `themeDATA.db`，包含 `theme_metadata`、`themes`、`theme_stock_mappings`。该库只保存题材基础映射、题材-股票关系、股票-题材反查、标签和原因；不保存题材因子、轮动、预警、回测或快照事实。旧浏览器 `ThemeDataDB/theme_mapping` 只作为历史迁移源，正式读口固定为 `GET /api/themes/mapping`。V11 后 Dragon Board 运行时不再使用浏览器 IndexedDB、本地静态 JSON 或 `/api/themes/batch` 作为题材兜底事实源。
 
