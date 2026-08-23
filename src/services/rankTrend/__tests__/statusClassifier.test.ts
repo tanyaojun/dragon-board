@@ -617,3 +617,18 @@ describe('getRankTrendDisplayBreakdown', () => {
     expect(breakdown.classKeys.quality).toBe('quality-unknown')
   })
 })
+describe('getRankTrendDisplayStatus 后端 displayStatus 优先（前后端分离）', () => {
+  it('有后端 displayStatus 时优先使用（与后台一致）', () => {
+    const rankTrend = {
+      displayStatus: { label: '上位拥挤', classKey: 'crowded', tooltip: '高位拥挤' },
+    } as any
+    const status = getRankTrendDisplayStatus(rankTrend, {}, undefined as any)
+    expect(status.label).toBe('上位拥挤')
+    expect(status.classKey).toBe('crowded')
+  })
+
+  it('后端无 displayStatus 时回退前端兜底逻辑', () => {
+    const status = getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), { zljzb: 5 }, undefined as any)
+    expect(status.label).toBeTruthy()
+  })
+})

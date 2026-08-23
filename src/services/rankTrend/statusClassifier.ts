@@ -371,6 +371,16 @@ export function getRankTrendDisplayStatus(
   stock?: any,
   context?: RankTrendStatusContext,
 ): RankTrendDisplayStatus {
+  // 2026-08-23 前后端分离：优先消费后端 golden 生产的 analysis.displayStatus（后端
+  // compute_display_status），前端状态与后台一致；后端未提供（旧缓存/离线）时回退前端兜底。
+  const backendStatus = (rankTrend as any)?.displayStatus
+  if (backendStatus && typeof backendStatus.label === 'string') {
+    return {
+      label: backendStatus.label,
+      classKey: backendStatus.classKey ?? 'n_neutral',
+      tooltip: backendStatus.tooltip ?? '',
+    }
+  }
   const statusContext = getStatusContext(context)
   const tier = rankTrend?.strategy?.candidateTier
   const insufficient = isSampleInsufficient(rankTrend)
