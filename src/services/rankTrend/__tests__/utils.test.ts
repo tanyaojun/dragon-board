@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   average,
+  buildVpInputFingerprint,
   calculateSignalConfidence,
   calculateWeightedShare,
   clamp,
@@ -151,5 +152,42 @@ describe('getTechnicalMinSamples', () => {
   it('大周期推高阈值超过 30 时取周期值', () => {
     const result = getTechnicalMinSamples({ macdSlow: 12, momentumPeriods: [3, 5, 50] })
     expect(result).toBe(51) // maxPeriod(50)+1 > 30
+  })
+})
+describe('buildVpInputFingerprint', () => {
+  const sample = (over: Partial<{ change: number; volumeRatio: number; zlje: number; zljzb: number }> = {}) => ({
+    code: '601869',
+    change: 1.65,
+    volumeRatio: 0.86,
+    zlje: 2.23e8,
+    zljzb: 8.29,
+    ...over,
+  })
+
+  it('相同输入返回相同指纹（稳定）', () => {
+    expect(buildVpInputFingerprint([sample()])).toBe(buildVpInputFingerprint([sample()]))
+  })
+
+  it('量价输入任一字段变化 → 指纹变化', () => {
+    const base = buildVpInputFingerprint([sample()])
+    expect(buildVpInputFingerprint([sample({ zljzb: 5.0 })])).not.toBe(base)
+    expect(buildVpInputFingerprint([sample({ volumeRatio: 1.2 })])).not.toBe(base)
+    expect(buildVpInputFingerprint([sample({ change: -0.5 })])).not.toBe(base)
+  })
+
+  it('字段顺序/遍历序无关（排序后哈希，确定性）', () => {
+    const a = buildVpInputFingerprint([sample({ code: '601869' }), sample({ code: '000001', zljzb: 1 })])
+    const b = buildVpInputFingerprint([sample({ code: '000001', zljzb: 1 }), sample({ code: '601869' })])
+    expect(a).toBe(b)
+  })
+
+  it('空数组返回固定值', () => {
+    expect(buildVpInputFingerprint([])).toBe('empty')
+  })
+
+  it('非量价字段变化不影响指纹（只取 change/volumeRatio/zlje/zljzb）', () => {
+    const base = buildVpInputFingerprint([sample()])
+    const withExtra = buildVpInputFingerprint([{ ...sample(), rank: 5, platforms: 12 }])
+    expect(withExtra).toBe(base)
   })
 })
