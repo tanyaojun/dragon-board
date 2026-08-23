@@ -37,3 +37,32 @@ def test_default_when_no_signal():
     r = compute_display_status(_analysis(synergy_state="主升确认"), {})
     # synergy 主升确认但无 candidateTier → 兜底新入观察（后端未给 tier 时不放大）
     assert r["label"] in ("新入观察", "主升确认")
+
+
+# 前端 UI 样式 classKey 白名单（src/components/panels/RankTrendPanel.vue .hero-card.tier-*
+# 与 statusClassifier.ts 兜底名）。后端 classKey 必须落在此集合内，否则样式丢失（口径漂移）。
+_UI_KNOWN_KEYS = {
+    "main_confirmed",
+    "ignition_watch",
+    "weakening",
+    "new_watch",
+    "crowded",
+    "money_divergence",
+    "insufficient",
+}
+
+
+def test_classkey_aligned_with_frontend_ui_whitelist():
+    cases = [
+        compute_display_status(_analysis(sample_status="insufficient", tier="A_MAIN"), {}),
+        compute_display_status(_analysis(tier="D_EXIT_RISK"), {}),
+        compute_display_status(_analysis(tier="C_CROWDED"), {}),
+        compute_display_status(_analysis(tier="A_MAIN"), {}),
+        compute_display_status(_analysis(tier="B_IGNITION"), {}),
+        compute_display_status(_analysis(synergy_state="启动确认"), {}),
+        compute_display_status(_analysis(synergy_state="风险升级"), {}),
+        compute_display_status(_analysis(synergy_state="存疑"), {"zljzb": -5.0}),
+        compute_display_status(_analysis(synergy_state="主升确认"), {}),
+    ]
+    for case in cases:
+        assert case["classKey"] in _UI_KNOWN_KEYS, f"classKey {case['classKey']} 不在前端 UI 白名单"

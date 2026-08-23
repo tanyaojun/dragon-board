@@ -14,16 +14,13 @@ from __future__ import annotations
 import math
 from typing import Any
 
-# 五维权重（与前端 COMPREHENSIVE_WEIGHTS 一致）
+# 五维权重（与前端 COMPREHENSIVE_WEIGHTS 一致，防漂移见 tests/test_comprehensive_rank.py 金标准断言）
 HOT_RANK = 0.45
 MONEY_RATIO = 0.25
 FUND_PENETRATION = 0.10
 TURNOVER_RATE = 0.12
 VOLUME = 0.08
-WEIGHTS = (HOT_RANK, MONEY_RATIO, FUND_PENETRATION, TURNOVER_RATE, VOLUME)
 
-PENALTY_SCORE = 100.0
-DEFAULT_RANK = 999.0
 OPTIMAL_TURNOVER = 15.0
 TURNOVER_SIGMA = 10.0
 

@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 """comprehensive_rank 后端五维综合排名单测（2026-08-23 前后端分离 G1）。"""
-from backend.analysis.ranktrend.comprehensive_rank import compute_comprehensive_scores
+from backend.analysis.ranktrend.comprehensive_rank import (
+    FUND_PENETRATION,
+    HOT_RANK,
+    MONEY_RATIO,
+    OPTIMAL_TURNOVER,
+    TURNOVER_RATE,
+    TURNOVER_SIGMA,
+    VOLUME,
+    compute_comprehensive_scores,
+)
 
 
 def _stock(avg, zljzb, fund, turnover_rate, turnover, code):
@@ -8,6 +17,20 @@ def _stock(avg, zljzb, fund, turnover_rate, turnover, code):
         "code": code, "avgRankNum": avg, "zljzb": zljzb, "fundPenetration": fund,
         "turnoverRate": turnover_rate, "turnover": turnover,
     }
+
+
+# 前后端五维权重金标准（src/types/config.ts COMPREHENSIVE_WEIGHTS 同步锁）。
+# 两端权重双份硬编码（跨语言无法运行时共享），此测试锁定后端值，
+# 前端 config.ts COMPREHENSIVE_WEIGHTS 由对应前端测试锁定，保证两端一致防漂移。
+def test_weights_aligned_with_frontend_golden():
+    assert HOT_RANK == 0.45
+    assert MONEY_RATIO == 0.25
+    assert FUND_PENETRATION == 0.10
+    assert TURNOVER_RATE == 0.12
+    assert VOLUME == 0.08
+    # 前端 config.ts：PENALTY_SCORE=100 / DEFAULT_RANK=999 / OPTIMAL_TURNOVER=15 / TURNOVER_SIGMA=10
+    assert OPTIMAL_TURNOVER == 15.0
+    assert TURNOVER_SIGMA == 10.0
 
 
 def test_rank_order_follows_comp_score_desc():

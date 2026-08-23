@@ -20,14 +20,14 @@ from __future__ import annotations
 
 from typing import Any
 
-_DEFAULT = {"label": "新入观察", "classKey": "n_neutral", "tooltip": "无明确信号，继续观察。"}
+_DEFAULT = {"label": "新入观察", "classKey": "new_watch", "tooltip": "无明确信号，继续观察。"}
 
 _STATUS = {
     "insufficient": ("样本不足", "insufficient", "历史样本不足，暂不判定状态。"),
-    "D_EXIT_RISK": ("转弱预警", "exit_risk", "撤退/转弱信号，注意风险。"),
+    "D_EXIT_RISK": ("转弱预警", "weakening", "撤退/转弱信号，注意风险。"),
     "C_CROWDED": ("高位拥挤", "crowded", "高位拥挤，警惕回落。"),
-    "A_MAIN": ("主升确认", "a_main", "主升扩散确认，趋势向上。"),
-    "B_IGNITION": ("点火观察", "b_ignition", "点火启动，观察是否扩散。"),
+    "A_MAIN": ("主升确认", "main_confirmed", "主升扩散确认，趋势向上。"),
+    "B_IGNITION": ("点火观察", "ignition_watch", "点火启动，观察是否扩散。"),
     "money_divergence": ("资金背离", "money_divergence", "热度仍在但主力资金不支撑，警惕诱多。"),
 }
 
