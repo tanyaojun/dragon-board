@@ -251,14 +251,17 @@ async def on_startup() -> None:
                 logger.exception("volume_ratio daily warmup failed; continue startup")
 
         asyncio.get_running_loop().run_in_executor(None, _warmup_volume_ratio)
-    # RankTrend frame_bundles 缓存预热（2026-08-13）：预装最近 200 帧 ranktrend+themes
-    # bundle 到 Redis，消除 analyze 四信号（共振/趋势/周期/量价）冷启动的 Mongo 重查询。
-    # best-effort：后台线程执行，失败不阻断启动。
+    # RankTrend frame_bundles 缓存预热（2026-08-13，2026-08-23 对齐 C'）：预装最近
+    # ANALYZE_FULL_MARKET_LOAD_LIMIT=280 帧 ranktrend+themes bundle 到 Redis，消除 analyze
+    # 四信号（共振/趋势/周期/量价）冷启动的 Mongo 重查询。帧数必须与全市场 analyze 的
+    # load_limit 一致（frame_bundles 缓存 key 含 snapshot_ids，200 帧与 280 帧 key 不同，
+    # 预热才会被 analyze 命中；否则预热白做、首开仍冷算 280 帧）。best-effort，失败不阻断启动。
     if get_settings().storage_backend == "mongodb":
         from backend.data.repositories import repository_factory as _repo_factory
 
         def _warmup_ranktrend_bundles() -> None:
             try:
+                from backend.api.ranktrend_routes import ANALYZE_FULL_MARKET_LOAD_LIMIT as _ANALYZE_LIMIT
                 _db = _repo_factory.get_runtime_mongodb_database()
                 _repo = _repo_factory.create_repository(_db, enable_backup=False)
                 _repo.load_frame_bundles(
@@ -266,7 +269,7 @@ async def on_startup() -> None:
                     snapshot_type="half_hour",
                     sort="desc",
                     projection="ranktrend+themes",
-                    limit=200,
+                    limit=_ANALYZE_LIMIT,
                 )
             except Exception:
                 logger.exception("ranktrend frame_bundles warmup failed; continue startup")
