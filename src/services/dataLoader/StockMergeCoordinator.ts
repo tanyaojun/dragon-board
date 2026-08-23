@@ -2,7 +2,7 @@ import type { MergedStock } from '@/types'
 import { DEFAULT_RANK } from '@/types/config'
 import { stockCodeManager } from '../StockCodeManager'
 import { shouldApplyMoneyFlowUpdate } from '../moneyFlowSourcePriority'
-import { getRankField, rankMergedStocks } from './ComprehensiveRankEngine'
+import { getRankField } from './ComprehensiveRankEngine'
 
 export interface StockMergeCoordinatorInput {
   platformData: Record<string, any[]>
@@ -16,7 +16,10 @@ export class StockMergeCoordinator {
   async merge(input: StockMergeCoordinatorInput): Promise<any[]> {
     const stockMap = await this.buildStockMap(input)
     this.applyStockNameFallbacks(stockMap)
-    return rankMergedStocks(stockMap, input.platformData)
+    // 2026-08-23 前后端分离：compRank/avgRankNum 采用后端/前序聚合值（existingMap 持有，
+    // 源自启动 bundle 后端 compRank），不再前端五维重算（同源不另算）；盘中新 tick 股票
+    // compRank 继承尾部启动 bundle 后端值（快照口径，实时综合排名滞后到下次采集）。
+    return Array.from(stockMap.values())
   }
 
   private async buildStockMap(input: StockMergeCoordinatorInput): Promise<Map<string, any>> {
