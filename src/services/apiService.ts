@@ -28,6 +28,7 @@ export type RequestContext =
   | 'limitup' // 涨停数据
   | 'market' // 市场概览
   | 'quant-board' // QuantBoard 数据后端
+  | 'snapshot' // 快照数据（读库）
   | 'unknown'
 
 /** 请求配置 */
@@ -121,6 +122,14 @@ type StockNameQueryOptions = {
   market?: 'SH' | 'SZ' | 'BJ'
   type?: 'stock' | 'index' | 'etf' | 'bond'
   active?: boolean
+}
+
+export interface SnapshotAnalysisEntry {
+  /** 后端持久化的 analyze 产物（MongoDB snapshot_analysis），供历史回放/对比。 */
+  observation?: Record<string, any>
+  displayStatus?: { label?: string; classKey?: string; tooltip?: string }
+  meta?: Record<string, any>
+  resonance?: Record<string, any>
 }
 
 export class ApiHttpError extends Error {
@@ -551,6 +560,32 @@ export class ApiService {
   /** 批量获取热榜数据 */
   async getPlatformsHot(platforms: string[], options?: RequestConfig) {
     return Promise.allSettled(platforms.map((p) => this.getPlatformHot(p, options)))
+  }
+
+  /** G4（2026-08-23）：读取后端持久化的快照 analyze 结果（observation/displayStatus/meta/resonance）。
+   * 供历史回放/对比（保留 current_frame 实时 analyze 于当前帧）。 */
+  async getSnapshotAnalysis(
+    datasetId: string,
+    snapshotId: string,
+    codes?: string[],
+    options?: RequestConfig,
+  ) {
+    const params = new URLSearchParams({ dataset_id: datasetId, snapshot_id: snapshotId })
+    if (codes && codes.length) params.set('codes', codes.join(','))
+    return this.get<{
+      ok: boolean
+      dataset_id?: string
+      snapshot_id?: string
+      analysis: Record<string, SnapshotAnalysisEntry>
+    }>(`/api/snapshots/analysis?${params.toString()}`, {
+      context: 'snapshot',
+      priority: 'low',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: false,
+      ...options,
+    })
   }
 
   /**
