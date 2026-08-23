@@ -15,7 +15,6 @@ import {
   type RankTrendStrategyValidationReport,
 } from './rankTrend/strategyValidation'
 import { getMaxStableBars } from './rankTrend/utils'
-import { buildVpInputFingerprint } from './rankTrend/utils'
 import { analyzeRankTrendCoalesced } from './rankTrend/analyzeCoalescer'
 import { rankTrendResultCache, rankTrendResultCacheKey } from './rankTrend/rankTrendCache'
 import type {
@@ -431,6 +430,7 @@ export class RankTrendAnalyzer {
   ): Promise<Map<string, RankTrendResult>> {
     // 前端不再保留本地 golden 计算链：结果一律来自 Python analyze API（golden 事实标准）。
     const results = new Map<string, RankTrendResult>()
+    const currentFrameKey = `current:${++this.currentFrameSequence}`
     const remoteCodes = options.remoteCodes?.length ? options.remoteCodes : Array.from(rankMap.keys())
     const snapshotType = options.preferredSnapshotType || DEFAULT_RANK_TREND_SNAPSHOT_TYPE
 
@@ -478,12 +478,6 @@ export class RankTrendAnalyzer {
         themeContribution: Number(stock?.themeContribution) || 0,
         leadStatus: String(stock?.leadStatus || ''),
       }))
-
-    // 2026-08-23 修复①：当前帧标识用「量价输入指纹」而非递增序号。
-    // 原 current:${++sequence} 每次刷新必变 → 后端缓存键永不命中 → 量价分随刷新漂移；
-    // 改为给定输入稳定指纹：非交易日输入稳定 → key 稳定 → 缓存命中 → 量价分稳定；
-    // 盘中实时输入变化 → 指纹变化 → key 变化 → 后端重算（量价分随实时刷新）。
-    const currentFrameKey = `realtime:${buildVpInputFingerprint(currentFrameStocks)}`
 
     try {
       const remote = await analyzeRankTrendCoalesced({

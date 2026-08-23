@@ -3,42 +3,6 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-/**
- * 量价输入指纹（2026-08-23 修复①：当前帧标识稳定化）。
- *
- * 仅取影响量价/四维分档的输入字段（change/volumeRatio/zlje/zljzb），做确定性稳定哈希：
- * - 相同输入 → 相同指纹 → 后端 analyze 缓存命中 → 量价分不随刷新漂移；
- * - 盘中实时输入变化 → 指纹变化 → 缓存错过 → 量价分随实时刷新；
- * - 排序后哈希保证字段顺序无关（同股不同遍历序也稳定）。
- */
-export function buildVpInputFingerprint(
-  stocks: Array<{
-    code?: unknown
-    change?: unknown
-    volumeRatio?: unknown
-    zlje?: unknown
-    zljzb?: unknown
-  }>,
-): string {
-  if (!Array.isArray(stocks) || stocks.length === 0) return 'empty'
-  const inputs = stocks
-    .map((s) => [
-      String(s?.code ?? ''),
-      Number(s?.change ?? 0),
-      Number(s?.volumeRatio ?? 0),
-      Number(s?.zlje ?? 0),
-      Number(s?.zljzb ?? 0),
-    ])
-    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
-  // 确定性 djb2 哈希（无需 crypto 依赖，浏览器/Node 一致）
-  const payload = JSON.stringify(inputs)
-  let hash = 5381
-  for (let index = 0; index < payload.length; index += 1) {
-    hash = ((hash << 5) + hash + payload.charCodeAt(index)) >>> 0
-  }
-  return hash.toString(36)
-}
-
 export function average(values: number[]): number {
   if (!Array.isArray(values) || values.length === 0) return 0
   return values.reduce((sum, value) => sum + value, 0) / values.length
