@@ -1,9 +1,10 @@
-# -*- coding: utf-8 -*-
-"""analyze_cross_section_overheat 纯函数单测（crossSection 追强 × ATR 波动过热/超卖回归校准）。
+"""crossSection×ATR 波动过热/超卖校准纯函数测试（2026-08-23，实施计划 Task1）。
 
-观察信号，不进 synergy。详见 docs/ranktrend-percentile-atr-fusion-signal-design.md §3/§4。
+覆盖：percentile 交叉档 × 波动率分位的黄金 case（过热 S/C/B、温和 A、超卖回升 B、弱势 C），
+非法档位/非有限分位 → insufficient/unknown（fail-visible）。
 """
-import pytest
+
+from __future__ import annotations
 
 from backend.analysis.ranktrend.cross_section_vol_overheat import analyze_cross_section_overheat
 
