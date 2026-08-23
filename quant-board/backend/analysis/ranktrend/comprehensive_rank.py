@@ -1,0 +1,101 @@
+# -*- coding: utf-8 -*-
+"""综合排名 compScore/compRank 后端 golden 生产（2026-08-23，前后端分离 G1）。
+
+移植前端 ComprehensiveRankEngine 的五维综合评分到后端（后端为 golden）：
+compScore = 归一化(avgRankNum 反)*HOT_RANK + 归一化(zljzb)*MONEY_RATIO
+          + 归一化(fundPenetration)*FUND_PENETRATION + 换手率得分*TURNOVER_RATE
+          + 归一化(turnover)*VOLUME
+compRank = compScore 降序序号（并列按 code 稳定排序）。
+
+纯函数，不接线（无回归）；供 analyze/快照后续挂载 + 入库。
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+# 五维权重（与前端 COMPREHENSIVE_WEIGHTS 一致）
+HOT_RANK = 0.45
+MONEY_RATIO = 0.25
+FUND_PENETRATION = 0.10
+TURNOVER_RATE = 0.12
+VOLUME = 0.08
+WEIGHTS = (HOT_RANK, MONEY_RATIO, FUND_PENETRATION, TURNOVER_RATE, VOLUME)
+
+PENALTY_SCORE = 100.0
+DEFAULT_RANK = 999.0
+OPTIMAL_TURNOVER = 15.0
+TURNOVER_SIGMA = 10.0
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return default
+    return val if math.isfinite(val) else default
+
+
+def _normalize(val: float, low: float, high: float, reverse: bool = False) -> float:
+    """min-max 归一化到 0-100；reverse=True 时 min→100（排名反，越小越好）。"""
+    if high == low or not (math.isfinite(low) and math.isfinite(high)):
+        if val > 0:
+            return 0.0 if reverse else 100.0
+        if val < 0:
+            return 100.0 if reverse else 0.0
+        return 50.0
+    score = ((val - low) / (high - low)) * 100
+    clamped = min(100.0, max(0.0, score))
+    return 100.0 - clamped if reverse else clamped
+
+
+def _turnover_score(rate: float) -> float:
+    return 100.0 * math.exp(-((rate - OPTIMAL_TURNOVER) ** 2) / (2 * TURNOVER_SIGMA ** 2))
+
+
+def compute_comprehensive_scores(stocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """为每只股票计算 compScore（五维加权），并赋 compRank（降序稳定序号）。"""
+    if not stocks:
+        return []
+    valid = [s for s in stocks if isinstance(s, dict)]
+    if not valid:
+        return []
+
+    # 五维 min/max 基线（与前端 updateMinMax 一致）
+    stats = {
+        "avgRankNum": (math.inf, -math.inf),
+        "zljzb": (math.inf, -math.inf),
+        "fundPenetration": (math.inf, -math.inf),
+        "turnover": (math.inf, -math.inf),
+    }
+    for s in valid:
+        avg = _num(s.get("avgRankNum"))
+        zljzb = _num(s.get("zljzb"))
+        fund = _num(s.get("fundPenetration"))
+        turnover = _num(s.get("turnover"))
+        for key, val in (("avgRankNum", avg), ("zljzb", zljzb), ("fundPenetration", fund), ("turnover", turnover)):
+            if val < stats[key][0]:
+                stats[key] = (val, stats[key][1])
+            if val > stats[key][1]:
+                stats[key] = (stats[key][0], val)
+
+    for s in valid:
+        avg = _num(s.get("avgRankNum"))
+        zljzb = _num(s.get("zljzb"))
+        fund = _num(s.get("fundPenetration"))
+        turnover = _num(s.get("turnover"))
+        turnover_rate = _num(s.get("turnoverRate"))
+        score = (
+            _normalize(avg, stats["avgRankNum"][0], stats["avgRankNum"][1], reverse=True) * HOT_RANK
+            + _normalize(zljzb, stats["zljzb"][0], stats["zljzb"][1], reverse=False) * MONEY_RATIO
+            + _normalize(fund, stats["fundPenetration"][0], stats["fundPenetration"][1], reverse=False) * FUND_PENETRATION
+            + _turnover_score(turnover_rate) * TURNOVER_RATE
+            + _normalize(turnover, stats["turnover"][0], stats["turnover"][1], reverse=False) * VOLUME
+        )
+        s["compScore"] = round(score, 4)
+
+    # 降序序号（并列按 code 稳定排序）
+    ranked = sorted(valid, key=lambda s: (-_num(s.get("compScore")), str(s.get("code") or "")))
+    for index, s in enumerate(ranked, start=1):
+        s["compRank"] = index
+    return valid
