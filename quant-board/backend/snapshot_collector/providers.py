@@ -983,10 +983,21 @@ class ProxyMergedHotlistProvider:
         for row in rows:
             _calculate_average_rank_fields(row, platform_totals)
 
+        # 保留 avgRankNum 单维 rank（历史消费口径）：按 avgRankNum 排序序号
         rows.sort(key=lambda item: (float(item.get("avgRankNum") or _DEFAULT_RANK), -int(item.get("platforms") or 0)))
         for index, row in enumerate(rows, start=1):
-            row["compRank"] = index
             row["rank"] = index
+
+        # 2026-08-23 前后端分离：五维综合排名后端 golden（前端零计算）。
+        # compScore/compRank 用五维（avgRankNum 反 + zljzb + fundPenetration + turnoverRate + turnover），
+        # avgRankNum 作 HOT_RANK 输入；fundPenetration = zlje/cirMV*100。
+        from backend.analysis.ranktrend.comprehensive_rank import compute_comprehensive_scores
+
+        for row in rows:
+            cir_mv = float(row.get("cirMV") or 0)
+            zlje = float(row.get("zlje") or 0)
+            row["fundPenetration"] = (zlje / cir_mv) * 100 if (cir_mv and zlje) else 0.0
+        compute_comprehensive_scores(rows)  # 赋 compScore + compRank（五维降序稳定）
         return rows
 
 
