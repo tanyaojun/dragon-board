@@ -45,4 +45,10 @@ def analyze_cross_section_overheat(cross_tier: str | None, vol_rank: float | Non
         else:
             direction, tier, reason = "hold", "C", "横截面弱势（无缩量企稳），回避"
     score = {"S": 100, "A": 60, "B": 45, "C": 25}.get(tier, 0)
-    return {"status": "ok", "direction": direction, "score": score, "crossTier": cross_tier, "volTier": None, "pctVolRank": rank, "signalTier": tier, "reasons": [reason]}
+    if rank < p33:
+        vol_tier = "low"
+    elif rank < p67:
+        vol_tier = "mid"
+    else:
+        vol_tier = "high"
+    return {"status": "ok", "direction": direction, "score": score, "crossTier": cross_tier, "volTier": vol_tier, "pctVolRank": rank, "signalTier": tier, "reasons": [reason]}

@@ -18,6 +18,7 @@ class _C:
 def test_strong_deep_overheat_is_sell_s():
     r = analyze_cross_section_overheat("A", 0.95, _C())
     assert r["direction"] == "sell" and r["signalTier"] == "S"
+    assert r["volTier"] == "high"
 
 
 def test_strong_high_vol_is_overheat():
@@ -33,6 +34,7 @@ def test_strong_mid_vol_is_warm():
 def test_strong_low_vol_is_mild():
     r = analyze_cross_section_overheat("A", 0.1, _C())
     assert r["direction"] == "hold" and r["signalTier"] == "A"
+    assert r["volTier"] == "low"
 
 
 def test_weak_low_vol_is_rebound():
@@ -50,3 +52,13 @@ def test_unknown_input_is_fail_visible():
     assert r["status"] == "insufficient" and r["signalTier"] == "unknown"
     r2 = analyze_cross_section_overheat("A", None, _C())
     assert r2["status"] == "insufficient" and r2["signalTier"] == "unknown"
+
+
+def test_weak_mid_vol_is_hold_c():
+    r = analyze_cross_section_overheat("D", 0.5, _C())
+    assert r["direction"] == "hold" and r["signalTier"] == "C"
+
+
+def test_none_cross_tier_is_fail_visible():
+    r = analyze_cross_section_overheat(None, 0.5, _C())
+    assert r["status"] == "insufficient" and r["signalTier"] == "unknown"
