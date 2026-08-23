@@ -1143,6 +1143,34 @@ class MongoRepository:
         if rows:
             self.db[collection].insert_many(rows, ordered=False)
 
+    def upsert_snapshot_analysis(
+        self, dataset_id: str, snapshot_id: str, code: str, analysis: dict[str, Any]
+    ) -> None:
+        """G4（2026-08-23 前后端分离）：持久化 analyze 产出的单股 observation/displayStatus 结果。
+        _id 幂等 = datasetId+snapshotId+code，重复写入覆盖（前端读库稳定值，不随刷新漂移）。"""
+        doc = {
+            "datasetId": dataset_id,
+            "snapshotId": snapshot_id,
+            "code": code,
+            "analysis": analysis,
+            "updatedAt": datetime.utcnow(),
+        }
+        self.db["snapshot_analysis"].replace_one(
+            {"datasetId": dataset_id, "snapshotId": snapshot_id, "code": code},
+            doc,
+            upsert=True,
+        )
+
+    def load_snapshot_analysis(
+        self, dataset_id: str, snapshot_id: str, codes: list[str] | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """读回快照的单股 analyze 结果（code → analysis）。codes 缺省返回该快照全部。"""
+        query: dict[str, Any] = {"datasetId": dataset_id, "snapshotId": snapshot_id}
+        if codes:
+            query["code"] = {"$in": codes}
+        rows = self.db["snapshot_analysis"].find(query, {"_id": 0, "code": 1, "analysis": 1})
+        return {str(row.get("code")): row.get("analysis") for row in rows}
+
     @staticmethod
     def _dataset_to_doc(dataset: Dataset) -> dict[str, Any]:
         return {
