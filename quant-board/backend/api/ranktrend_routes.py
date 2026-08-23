@@ -402,6 +402,10 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     # 四象协同轴（阶段 2）：组装下沉（回测方案 §3.2）——observation.volumePrice / synergy
     # 由 engine 层 assemble_observation 统一产出，与 replay 链路同源同构
     assemble_observation(analysis, stock, config)
+    # 2026-08-23 前后端分离 G2：displayStatus 状态分类后端 golden 生产（前端只做 label 映射）
+    from backend.analysis.ranktrend.display_status import compute_display_status
+
+    analysis["displayStatus"] = compute_display_status(analysis, stock)
     _apply_resonance_final(analysis, analysis["resonance"], config)
     if analysis["resonance"].get("status") == "ok":
         analysis["resonance"]["label"] = _resonance_label(analysis["resonance"].get("score"))
