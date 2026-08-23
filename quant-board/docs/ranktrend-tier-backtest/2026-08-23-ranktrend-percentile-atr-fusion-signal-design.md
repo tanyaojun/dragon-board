@@ -120,3 +120,32 @@ pct_vol = ATR_close_only / close        # TR'=|Δclose|，atrRefPeriod 窗口
   复用已实证的 percentile 信息、避免与 crossSection 对冲；验证通过前前端列不启用。
 - 核心修正：从"percentile 回归（逆向，与 crossSection 重复）"转为"crossSection 追强 × ATR 过热/超卖校准"（复盘：brainstorming 探索上下文时漏查 `cross_section.py`，经用户提示修正）。
 - 下一步（验证通过后走 golden 变更流程）；验证未通过则归档，方向为"波动率状态因子"（非方向回归）。
+
+## 10. 区分度验证结果（2026-08-23，任务2，阻断性结论）
+
+**背景**：按 §7 执行区分度验证（引擎 replay + 现有 `tier_monotonicity.tier_forward_returns` 分位桶基线，
+**buy/sell 分组**，未自造收益指标；window 2026-07-01~2026-08-14，dataset=dragonboard_live，269 帧/41515 信号，
+ATR 可用子集 15314，约 36.9%）。比较 `fusion`（crossSection×ATR 过热/超卖校准）、`crossSection`（追强）、`atr`（旧价格通道回归）。
+
+**同域（ATR 可用子集）结果——verdict**：
+
+| direction/horizon | fusion saEx | crossSection saEx | atr saEx | fusion 更强？ |
+|---|---|---|---|---|
+| buy h1 | **-0.0126** | +0.0138 | +0.0539(passHard, n=2887→44 子样本) | ❌ 均不优 |
+| buy h8 | **-0.033** | +0.0121 | +0.0495 | ❌ 均不优 |
+| sell h1 | **-0.0187** | +0.0175 | -0.0123 | ❌ 均不优 |
+| sell h8 | **-0.0099** | +0.016 | -0.099 | ❌ 不优于 cs；✅ 优于 atr（但 atr 本身差） |
+
+**结论（阻断性）**：
+1. 融合信号的 buy/sell **方向区分度未显著高于两个单基线**（saEx 全为负、均未达 0.05 硬阈值）；
+   `crossSection` 追强是同域内更稳的正增量来源——**融合无增量价值**。
+2. **池构成效应 caveat**：全池表面 fusion buy h1 saEx=+0.022（看似正），因其选中样本（C/D 弱势+缩量）
+   本身处于中低分位、全池基线偏低所致；同域内转负(-0.0126)。**全池正增量为假象**。
+3. **采纳门槛未满足** → **前端【波动】列维持不启用**，`observation.atrMeanReversion`（本方案替换后语义）
+   不升级、不写回默认值；`cross_section_vol_overheat.py` 保留为诊断/观察纯函数（验证脚本
+   `quant-board/scripts/ranktrend_overheat_validation.py`，报告 `data/reports/ranktrend-overheat-validation.json`）。
+4. ATR 子样本统计力弱（buy 仅 44，因 ATR 需 20 帧连续 + 热榜轮动 + 仅 36.9% 覆盖）——如需再验，先补齐
+   high/low 或改用收盘准 ATR 全量覆盖后重验；但当前证据已提示融合方向信号结构性无增量。
+5. **Task 3（engine 挂载）不做**——验证门控未通过。
+
+> v2 spec 定稿 + 任务1 纯函数/单测 + 任务2 验证 harness 均已提交；结论为研究性负结果，如实归档（fail-visible）。
