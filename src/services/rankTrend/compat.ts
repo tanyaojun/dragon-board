@@ -3,6 +3,7 @@ import type { JumpSignalResult } from './jumpSignalService'
 import type { JumpResult } from './types'
 export {
   buildRankTrendStatusContext,
+  buildRankTrendStatusContextFromMarketPercentiles,
   classifyVolumeConfirmation,
   getRankTrendDisplayBreakdown,
   getRankTrendDisplayStatus,

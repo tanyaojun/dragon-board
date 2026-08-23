@@ -15,6 +15,7 @@ from backend.analysis.ranktrend.engine import (
     attention_rank_lookup,
     frame_market_median,
     frame_market_median_percentile,
+    frame_market_percentiles,
     market_regime,
     percentile_rank,
     _resonance_label,
@@ -412,6 +413,16 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     return {"code": code, "analysis": analysis}
 
 
+def _latest_market_percentiles(frames: list[dict[str, Any]]) -> dict[str, float]:
+    """最近一个含量能字段的全市场帧分位（G3）。currentFrame 归一化后缺失量能字段，
+    故跳过 currentFrame 帧，取最近真实全市场快照帧的分位（后端 golden）。"""
+    for frame in reversed(frames):
+        pct = frame_market_percentiles(frame)
+        if pct:
+            return pct
+    return {}
+
+
 def _analyze_frames(
     engine: RankTrendPythonEngine,
     frames: list[dict[str, Any]],
@@ -440,6 +451,9 @@ def _analyze_frames(
     output: list[dict[str, Any]] = []
     last_hot_themes: list[dict[str, Any]] = []
     last_frame_index = len(frames) - 1
+    # 2026-08-23 前后端分离 G3：全市场量能分位（后端 golden，替代前端当前视图自算分位）。
+    # currentFrame 归一化后缺量能字段 → 取最近真实全市场快照帧分位，响应内所有帧共享。
+    market_percentiles = _latest_market_percentiles(frames)
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
@@ -490,6 +504,7 @@ def _analyze_frames(
                             "code": code,
                             "currentRank": ranks[-1] if ranks else 0,
                             "currentPercentile": percentiles[-1] if percentiles else 0.0,
+                            "marketPercentiles": market_percentiles,
                         },
                     },
                 })
@@ -505,6 +520,7 @@ def _analyze_frames(
             results = [_analyze_one_stock(task) for task in full_tasks]
             for result in results:
                 if result:
+                    (result["analysis"].setdefault("meta", {}))["marketPercentiles"] = market_percentiles
                     stocks_out.append(result)
         output.append({
             "frameKey": key,

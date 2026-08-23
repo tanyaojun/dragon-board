@@ -218,6 +218,12 @@ export interface RankTrendAnalysisResult {
     updateTime: number
     analysisSource?: 'py_golden' | 'analysis_unavailable'
     analysisUnavailableReason?: string
+    /**
+     * G3（2026-08-23 前后端分离）：后端 golden 生产的全市场量能分位
+     * （turnover/volumeRatio/turnoverRate 的 P50/70/85），供 statusClassifier 量能判定。
+     * 后端未提供（旧缓存/离线）时缺省，前端回退自算/兜底。
+     */
+    marketPercentiles?: Record<string, number>
     sampleQuality?: {
       snapshotType: RankTrendSnapshotType
       sampleCount: number

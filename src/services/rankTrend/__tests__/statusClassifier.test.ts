@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildRankTrendStatusContext,
+  buildRankTrendStatusContextFromMarketPercentiles,
   getRankTrendDisplayBreakdown,
   getRankTrendDisplayStatus,
 } from '../statusClassifier'
@@ -630,5 +631,50 @@ describe('getRankTrendDisplayStatus 后端 displayStatus 优先（前后端分�
   it('后端无 displayStatus 时回退前端兜底逻辑', () => {
     const status = getRankTrendDisplayStatus(createRankTrend({ tier: 'A_MAIN' }), { zljzb: 5 }, undefined as any)
     expect(status.label).toBeTruthy()
+  })
+
+  it('G3：从后端 marketPercentiles 构建分位 context，缺失字段回退/无效输入返回 undefined', () => {
+    const ctx = buildRankTrendStatusContextFromMarketPercentiles({
+      turnoverP50: 100,
+      turnoverP70: 200,
+      volumeRatioP50: 1.2,
+      turnoverRateP50: 3,
+    })
+    expect(ctx).toEqual({
+      turnoverP50: 100,
+      turnoverP70: 200,
+      turnoverP85: 200, // 未提供 → 回退 P70
+      volumeRatioP50: 1.2,
+      volumeRatioP70: 1.5, // 未提供 → FALLBACK
+      volumeRatioP85: 1.8,
+      turnoverRateP50: 3,
+      turnoverRateP70: 6,
+      turnoverRateP85: 10,
+    })
+    expect(buildRankTrendStatusContextFromMarketPercentiles(null)).toBeUndefined()
+    expect(buildRankTrendStatusContextFromMarketPercentiles({})).toBeUndefined()
+  })
+
+  it('G3：displayStatus 在 meta 提供 marketPercentiles 时消费后端分位（不传 context）', () => {
+    const rankTrend = {
+      meta: {
+        sampleQuality: { status: 'ok' },
+        currentPercentile: 80,
+        marketPercentiles: { volumeRatioP50: 0.5, volumeRatioP70: 0.8, volumeRatioP85: 1.2 },
+      },
+      strategy: { candidateTier: 'A_MAIN' },
+      observation: { synergy: { state: '启动确认' } },
+    } as any
+    // stock 量比 1.0（介于 P50=0.5 与 P70=0.8 之上 → volumeRatioSupported=true），
+    // 但无 context 传入时走后端 marketPercentiles 构建的分位，量能判定不崩且能判 healthy
+    const status = getRankTrendDisplayStatus(rankTrend, {
+      turnover: 100,
+      volumeRatio: 1.0,
+      turnoverRate: 4,
+      zlje: 1e8,
+      zljzb: 10,
+    }, undefined as any)
+    expect(status.label).toBeTruthy()
+    expect(status.classKey).toBeTruthy()
   })
 })

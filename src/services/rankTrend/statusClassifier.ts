@@ -189,6 +189,34 @@ function getStatusContext(context?: RankTrendStatusContext): RankTrendStatusCont
   return context ?? FALLBACK_STATUS_CONTEXT
 }
 
+/**
+ * G3（2026-08-23 前后端分离）：从后端 golden 生产的全市场量能分位（meta.marketPercentiles，
+ * 扁平字段 turnoverP50/turnoverP70/turnoverP85/volumeRatio.../turnoverRate...）构建 RankTrendStatusContext。
+ * 后端未提供（旧缓存/离线）时返回 undefined，调用方回退前端自算/FALLBACK。
+ */
+export function buildRankTrendStatusContextFromMarketPercentiles(
+  marketPercentiles?: Record<string, number> | null,
+): RankTrendStatusContext | undefined {
+  if (!marketPercentiles || typeof marketPercentiles.turnoverP50 !== 'number') {
+    return undefined
+  }
+  const p = (key: string, fallback: number): number => {
+    const value = Number(marketPercentiles[key])
+    return Number.isFinite(value) && value > 0 ? value : fallback
+  }
+  return {
+    turnoverP50: marketPercentiles.turnoverP50,
+    turnoverP70: p('turnoverP70', marketPercentiles.turnoverP50),
+    turnoverP85: p('turnoverP85', marketPercentiles.turnoverP70),
+    volumeRatioP50: p('volumeRatioP50', FALLBACK_STATUS_CONTEXT.volumeRatioP50),
+    volumeRatioP70: p('volumeRatioP70', FALLBACK_STATUS_CONTEXT.volumeRatioP70),
+    volumeRatioP85: p('volumeRatioP85', FALLBACK_STATUS_CONTEXT.volumeRatioP85),
+    turnoverRateP50: p('turnoverRateP50', FALLBACK_STATUS_CONTEXT.turnoverRateP50),
+    turnoverRateP70: p('turnoverRateP70', FALLBACK_STATUS_CONTEXT.turnoverRateP70),
+    turnoverRateP85: p('turnoverRateP85', FALLBACK_STATUS_CONTEXT.turnoverRateP85),
+  }
+}
+
 function isSampleInsufficient(rankTrend?: RankTrendAnalysisResult | null): boolean {
   return !rankTrend || rankTrend.meta?.sampleQuality?.status === 'insufficient'
 }
@@ -381,7 +409,10 @@ export function getRankTrendDisplayStatus(
       tooltip: backendStatus.tooltip ?? '',
     }
   }
-  const statusContext = getStatusContext(context)
+  const statusContext =
+    context ??
+    buildRankTrendStatusContextFromMarketPercentiles((rankTrend as any)?.meta?.marketPercentiles) ??
+    FALLBACK_STATUS_CONTEXT
   const tier = rankTrend?.strategy?.candidateTier
   const insufficient = isSampleInsufficient(rankTrend)
   const hotAttention = isHotAttention(rankTrend, stock)

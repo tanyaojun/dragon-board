@@ -430,6 +430,51 @@ def frame_market_median_percentile(frame: dict[str, Any]) -> float | None:
     return median_of(list(frame_cross_section(frame).values()))
 
 
+def _percentile_sorted(sorted_values: list[float], ratio: float) -> float:
+    """已升序 list 的线性插值分位（ratio∈(0,1]），等价于 numpy.percentile 的 linear 模式。"""
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos = (len(sorted_values) - 1) * ratio
+    low = int(math.floor(pos))
+    high = int(math.ceil(pos))
+    if low == high:
+        return sorted_values[low]
+    frac = pos - low
+    return sorted_values[low] + (sorted_values[high] - sorted_values[low]) * frac
+
+
+def frame_market_percentiles(
+    frame: dict[str, Any],
+    ratios: tuple[float, ...] = (0.5, 0.7, 0.85),
+) -> dict[str, float]:
+    """G3 全市场量能分位（2026-08-23 前后端分离）：对 frame.stocks 全市场计算
+    turnover/volumeRatio/turnoverRate 的 P50/70/85（扁平字段 turnoverP50...）。
+    过滤无效/非正值；某维度有效样本 < 20 则该维度整组不产出（fail-visible，不伪造 0）。
+    供后端 golden 生产市场分位、前端 statusClassifier 消费（替代前端当前视图自算分位）。"""
+    stocks = frame.get("stocks") or []
+    out: dict[str, float] = {}
+    for field in ("turnover", "volumeRatio", "turnoverRate"):
+        values: list[float] = []
+        for stock in stocks:
+            if not isinstance(stock, dict):
+                continue
+            try:
+                value = float(stock.get(field))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                values.append(value)
+        if len(values) < 20:
+            continue
+        values.sort()
+        for ratio in ratios:
+            out[f"{field}P{int(round(ratio * 100))}"] = _percentile_sorted(values, ratio)
+    return out
+
+
+
 def period_momentum(percentiles: list[float], period: int) -> float:
     if len(percentiles) < period + 1:
         return 0.0

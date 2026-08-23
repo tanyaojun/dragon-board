@@ -114,3 +114,54 @@ def test_current_frame_uses_authoritative_percentile(monkeypatch):
         f"current_frame percentile 应反映权威高位(rank=1)，实际 {current_percentile}"
         f"（若 <60 说明仍被前端漂移 rank=50 污染）"
     )
+
+
+def test_market_percentiles_attached_to_meta(monkeypatch):
+    # G3：全市场帧（≥20 只 turnover>0）→ analyze 每只股票 meta 挂 marketPercentiles（后端 golden 分位）
+    stocks = [
+        {
+            "code": f"6{i:05d}",
+            "name": f"股{i}",
+            "rank": i + 1,
+            "avgRankNum": float(i + 1),
+            "change": 1.0,
+            "volumeRatio": float(i + 1),
+            "zlje": 1000.0,
+            "zljzb": 0.1,
+            "turnover": float(i + 1),
+            "turnoverRate": float(i + 1),
+        }
+        for i in range(22)
+    ]
+    frames = []
+    for idx, (d, slot) in enumerate([("2026-08-13", "14:00"), ("2026-08-14", "14:00")]):
+        frames.append({
+            "tradingDate": d, "slotTime": slot, "type": "half_hour", "timestamp": idx + 1,
+            "rows": [{
+                "code": s["code"], "name": s["name"], "rank": s["rank"], "avgRankNum": s["avgRankNum"],
+                "turnover": s["turnover"], "volumeRatio": s["volumeRatio"], "turnoverRate": s["turnoverRate"],
+            } for s in stocks],
+            "hotlist": [], "stocks": stocks,
+            "sentiment": {"phaseName": "启动"}, "marketStats": {},
+        })
+    monkeypatch.setattr("backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: object())
+    monkeypatch.setattr("backend.data.repositories.repository_factory.create_repository", lambda db, enable_backup=True: FakeRepo(frames))
+    payload = {
+        "snapshotType": "half_hour",
+        "codes": [s["code"] for s in stocks],
+        "frameKeys": ["2026-08-13 14:00", "2026-08-14 14:00"],
+        "currentFrame": {
+            "tradingDate": "2026-08-14", "slotTime": "current",
+            "stocks": stocks,
+        },
+    }
+    resp = client.post("/api/ranktrend/analyze", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    cf = body["frames"][-1]
+    sample = next((s for s in cf.get("stocks", []) if s.get("code") == "600000"), None)
+    assert sample is not None
+    mp = (sample.get("analysis", {}).get("meta", {})).get("marketPercentiles", {})
+    assert "turnoverP50" in mp and "volumeRatioP50" in mp and "turnoverRateP50" in mp
+    # turnover = 1..22 → P50 应在 [10,13] 区间（22 只线性插值 ≈ 11.5）
+    assert 10 <= mp["turnoverP50"] <= 13

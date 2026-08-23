@@ -333,6 +333,7 @@ import { dataLayer } from '@/services/DataLayer'
 import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
 import {
   buildRankTrendStatusContext,
+  buildRankTrendStatusContextFromMarketPercentiles,
   getRankTrendDisplayBreakdown,
   type RankTrendStatusContext,
 } from '@/services/rankTrend/compat'
@@ -780,7 +781,9 @@ async function loadStock(force = false) {
     const analysis = results.get(code) ?? (sourceStock.rankTrend as RankTrendResult | undefined) ?? null
     const rank = rankMap.get(code) ?? Number(sourceStock.compRank ?? 0)
 
-    const statusContext = buildRankTrendStatusContext(stocks)
+    const statusContext =
+      buildRankTrendStatusContextFromMarketPercentiles(analysis?.meta?.marketPercentiles) ??
+      buildRankTrendStatusContext(stocks)
     currentStock.value = buildPanelStockView(sourceStock, analysis, rank, statusContext)
     breathData.value = dataLayer.getBreathData()
     const sampleQuality = analysis?.meta?.sampleQuality
