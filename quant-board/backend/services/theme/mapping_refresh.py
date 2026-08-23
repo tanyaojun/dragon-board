@@ -45,6 +45,8 @@ _LONGHUVIP_PARAMS = {
 _BATCH_SIZE = 10
 _BATCH_DELAY_SECONDS = 0.5
 _REQUEST_TIMEOUT_SECONDS = 15
+_SCAN_TOTAL_TIMEOUT_SECONDS = 60  # 盲扫单轮总时限：50 候选最坏 750s，超时中断保留已扫 cursor 续扫
+_DIRECTORY_SCAN_AHEAD = 50
 
 
 def _fetch_theme_detail(theme_id: str) -> dict[str, Any] | None:
@@ -154,6 +156,14 @@ class ThemeMappingRefreshResult:
         self.mappings_updated: int = 0
         self.mappings_cleared: int = 0
         self.total_stocks: int = 0
+        self.directory_scan_start: int | None = None
+        self.directory_scan_end: int | None = None
+        self.directory_scanned: int = 0
+        self.directory_added: int = 0
+        self.directory_renamed: int = 0
+        self.directory_failed_ids: list[str] = []
+        self.directory_empty_ids: list[str] = []
+        self.directory_scan_cursor: int | None = None
         self.errors: list[str] = []
         self.source: str = "longhuvip"
         self.started_at: str = ""
@@ -170,6 +180,16 @@ class ThemeMappingRefreshResult:
             "mappingsUpdated": self.mappings_updated,
             "mappingsCleared": self.mappings_cleared,
             "totalStocks": self.total_stocks,
+            "directoryScanStart": self.directory_scan_start,
+            "directoryScanEnd": self.directory_scan_end,
+            "directoryScanned": self.directory_scanned,
+            "directoryAdded": self.directory_added,
+            "directoryRenamed": self.directory_renamed,
+            "directoryFailedIds": self.directory_failed_ids[:30],
+            "directoryFailedCount": len(self.directory_failed_ids),
+            "directoryEmptyIds": self.directory_empty_ids[:30],
+            "directoryEmptyCount": len(self.directory_empty_ids),
+            "directoryScanCursor": self.directory_scan_cursor,
             "errors": self.errors,
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
@@ -178,6 +198,8 @@ class ThemeMappingRefreshResult:
 
 def refresh_theme_stock_mappings(
     database: Any = None,
+    *,
+    directory_scan_ahead: int = _DIRECTORY_SCAN_AHEAD,
 ) -> dict[str, Any]:
     """从 longhuvip 题材 API 刷新 MongoDB theme_stock_mappings 集合。
 
@@ -185,6 +207,7 @@ def refresh_theme_stock_mappings(
     1. 读取 MongoDB themes 表获取所有题材 ID
     2. 逐批调用 longhuvip API 获取每个题材的成分股
     3. 提取 tags / reason 并写入 theme_stock_mappings
+    4. 按“当前最大题材 ID + 1”往后盲扫 50 个候选 ID，发现有效新题材时自动写入 themes
     """
     result = ThemeMappingRefreshResult()
     result.started_at = datetime.now(timezone.utc).isoformat()
@@ -208,7 +231,7 @@ def refresh_theme_stock_mappings(
         result.finished_at = datetime.now(timezone.utc).isoformat()
         return result.to_dict()
 
-    # 2. 逐批拉取 & 写入
+    # 2. 逐批拉取 & 写入已有题材
     now = datetime.now(timezone.utc)
     theme_ids = [str(t.get("id") or "") for t in themes if str(t.get("id") or "")]
     total_stocks = 0
@@ -245,9 +268,113 @@ def refresh_theme_stock_mappings(
 
     result.total_stocks = total_stocks
 
-    # 3. 更新元数据
+    # 3. 盲扫新题材：从当前最大题材 ID 的下一位开始探测 directory_scan_ahead 个 ID
+    numeric_ids = [int(tid) for tid in theme_ids if tid.isdigit()]
+    stored_cursor = repo.get_metadata("directoryScanCursor", "")
+    try:
+        cursor = int(stored_cursor) if stored_cursor else max(numeric_ids, default=0)
+    except (TypeError, ValueError):
+        cursor = max(numeric_ids, default=0)
+    cursor = max(cursor, max(numeric_ids, default=0))
+
+    scan_count = max(0, int(directory_scan_ahead))
+    if scan_count:
+        result.directory_scan_start = cursor + 1
+        result.directory_scan_end = result.directory_scan_start + scan_count - 1
+        candidate_ids = [
+            str(value)
+            for value in range(result.directory_scan_start, result.directory_scan_end + 1)
+        ]
+
+        scan_started_at = time.monotonic()
+        last_theme_id: int | None = None
+        for index, theme_id in enumerate(candidate_ids):
+            # 盲扫单轮总时限：超时中断，保留已扫 cursor 供下一轮继续（避免 750s 长时间阻塞）
+            if time.monotonic() - scan_started_at > _SCAN_TOTAL_TIMEOUT_SECONDS:
+                break
+            result.directory_scanned += 1
+            last_theme_id = int(theme_id)
+            try:
+                api_data = _fetch_theme_detail(theme_id)
+            except Exception as exc:
+                result.directory_failed_ids.append(f"{theme_id}: {exc}")
+                continue
+
+            if api_data is None:
+                # errcode != 0（该 ID 无题材，正常空洞）→ 计 empty，不误判为失败
+                # （真正的网络/解析失败已在上方 except 计入 directory_failed_ids）
+                result.directory_empty_ids.append(theme_id)
+                continue
+
+            name = str(api_data.get("Name") or "").strip()
+            if not name:
+                result.directory_empty_ids.append(theme_id)
+                continue
+
+            mappings = _extract_mappings(api_data)
+            if not mappings:
+                result.directory_empty_ids.append(theme_id)
+                continue
+
+            existed = database["themes"].find_one({"id": theme_id}) is not None
+            old_name = ""
+            if existed:
+                old_doc = database["themes"].find_one({"id": theme_id})
+                old_name = str((old_doc or {}).get("name") or "").strip()
+            repo.upsert_theme(
+                theme_id,
+                name,
+                str(api_data.get("ZSCode") or "").strip(),
+            )
+            if old_name and old_name != name:
+                result.directory_renamed += 1
+            if not existed:
+                result.directory_added += 1
+            repo.replace_theme_mappings(theme_id, mappings)
+            result.mappings_updated += 1
+            total_stocks += len(mappings)
+            result.themes_fetched += 1
+
+            if (index + 1) % _BATCH_SIZE == 0 and index + 1 < len(candidate_ids):
+                time.sleep(_BATCH_DELAY_SECONDS)
+
+        result.directory_scan_cursor = (
+            last_theme_id if last_theme_id is not None else (result.directory_scan_end - 1)
+        )
+    else:
+        result.directory_scan_cursor = cursor
+
+    result.total_stocks = total_stocks
+
+    # 4. 更新元数据
+    result.finished_at = datetime.now(timezone.utc).isoformat()
     version = f"longhuvip-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     repo.set_metadata(version=version, last_update=now.isoformat())
+
+    metadata_values = {
+        "directoryScanCursor": result.directory_scan_cursor,
+        "directoryRetryIds": [],
+        "lastAttemptId": "",
+        "lastAttemptStartedAt": result.started_at,
+        "lastAttemptAt": result.finished_at,
+        "lastStatus": (
+            "success"
+            if not result.errors and not result.themes_failed and not result.directory_failed_ids
+            else "partial"
+        ),
+        "lastCompleteAt": (
+            result.finished_at
+            if not result.errors and not result.themes_failed and not result.directory_failed_ids
+            else None
+        ),
+        "lastRefreshAttempt": result.to_dict(),
+    }
+    for key, value in metadata_values.items():
+        database["theme_metadata"].replace_one(
+            {"key": key},
+            {"key": key, "value": value, "updatedAt": datetime.now(timezone.utc)},
+            upsert=True,
+        )
 
     result.finished_at = datetime.now(timezone.utc).isoformat()
     return result.to_dict()

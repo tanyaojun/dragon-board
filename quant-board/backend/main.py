@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from time import perf_counter
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +50,7 @@ from backend.data.models.schemas import (
 )
 from backend.data.repositories.stock_name_repository import STOCK_NAMES_VERSION, StockNameRepository
 from backend.services.market.stock_name_refresh_scheduler import stock_name_refresh_scheduler
+from backend.services.snapshot_analysis_service import analyze_snapshot_and_persist
 from backend.data.cache import snapshot_cache
 from backend.data.backup.supabase_backup import get_backup_client
 from backend.data.models.theme_database import get_theme_db, init_theme_db, theme_status
@@ -78,6 +80,16 @@ from backend.core.utils import json_loads
 
 
 logger = logging.getLogger(__name__)
+
+
+# akshare stock_fund_flow 内部 pd.concat 与新版 pandas 存在已知弃用警告
+# （第三方库内部实现，无法在调用方修复）。全市场资金流刷新每次都会触发并刷屏日志，
+# 这里按模块精确静默该类 FutureWarning，不影响其它警告的可见性。
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+    module=r"akshare\.stock_feature\.stock_fund_flow",
+)
 
 
 app = FastAPI(
@@ -601,7 +613,11 @@ def smoke_backup() -> dict[str, Any]:
 
 
 @app.post("/api/snapshots/ingest")
-def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def ingest_snapshot(
+    request: SnapshotIngestRequest,
+    db: Session | None = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+) -> dict[str, Any]:
     try:
         dataset, records, frames, stock_rows, sector_rows, idempotency_key = normalize_snapshot_ingest(request)
         result = create_repository(db).save_snapshot_ingest(
@@ -621,10 +637,67 @@ def ingest_snapshot(request: SnapshotIngestRequest, db: Session | None = Depends
             stock_rows=stock_rows,
             sector_rows=sector_rows,
         )
+        # G4-3（2026-08-23 前后端分离，用户授权追加）：ingest 后后台对快照帧全量 analyze 并
+        # 持久化 observation/displayStatus（稳定回放口径，不阻塞 ingest 响应）。仅 MongoDB 生产态。
+        _schedule_snapshot_analysis(background_tasks, dataset.id, frames, db)
         return {"ok": True, **result}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+def _schedule_snapshot_analysis(
+    background_tasks: BackgroundTasks,
+    dataset_id: str,
+    frames: list[dict[str, Any]],
+    db: Session | None,
+) -> None:
+    """G4-3：ingest 后后台触发 analyze 入库。仅 MongoDB 生产态；失败静默（不吞数据/不阻塞 ingest）。"""
+    try:
+        if storage_source_label() != "mongodb":
+            return
+        if not frames:
+            return
+        task_repo = create_repository(db)
+    except Exception:
+        return
+    for frame in frames:
+        snapshot_id = str(frame.get("snapshotId") or frame.get("id") or "")
+        if not snapshot_id:
+            continue
+        # 每帧用自身 snapshot_type（同批混型时不共用 frames[0] 口径）
+        snapshot_type = str(frame.get("type") or "half_hour")
+        try:
+            background_tasks.add_task(
+                analyze_snapshot_and_persist,
+                task_repo,
+                dataset_id,
+                snapshot_id,
+                snapshot_type,
+                frame,
+            )
+        except Exception:
+            continue
+
+
+@app.get("/api/snapshots/analysis")
+def get_snapshot_analysis(
+    dataset_id: str = Query(...),
+    snapshot_id: str = Query(...),
+    codes: str | None = Query(None),
+    db: Session | None = Depends(get_db),
+) -> dict[str, Any]:
+    """G4-4（2026-08-23）：读快照的 analyze 持久化结果（observation/displayStatus/meta/resonance）。
+    仅 MongoDB 生产态有效；代码列表按逗号分隔，缺省返回该快照全部。"""
+    try:
+        if storage_source_label() != "mongodb":
+            return {"ok": False, "degraded": True, "errorCode": "mongodb_required", "analysis": {}}
+        repo = create_repository(db)
+        code_list = _parse_csv(codes) or None
+        result = repo.load_snapshot_analysis(dataset_id, snapshot_id, code_list)
+        return {"ok": True, "dataset_id": dataset_id, "snapshot_id": snapshot_id, "analysis": result}
+    except Exception as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
