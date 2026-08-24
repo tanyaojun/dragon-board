@@ -806,6 +806,30 @@ describe('RankTrendSignalService', () => {
       })
     })
 
+    it('keeps front-end computed compRank untouched (precompute no longer backfills from backend meta)', () => {
+      // 2026-08-24 回滚前后端分离迁移：compRank/avgRankNum 由前端本地实时计算
+      // （ComprehensiveRankEngine.rankMergedStocks），precomputeDisplayFields 不再从
+      // analyze meta 回填，保留本地计算值（此处 stock.compRank=25 为本地值）。
+      const stock: any = {
+        code: '000001',
+        compRank: 25, // 前端本地计算值
+        rankTrend: {
+          meta: { code: '000001', compRank: 3 },
+          jump: { direction: 'buy', confidence: 80 },
+          resonance: { status: 'ok', direction: 'buy', score: 80, label: '强' },
+          observation: {
+            rankTrend: { direction: 'buy', score: 70, signedScore: 0.7 },
+            lifecycle: { stage: 'expansion', score: 80, veto: false, reasons: [] },
+          },
+        },
+      }
+      const service = new RankTrendSignalService()
+
+      ;(service as any).precomputeDisplayFields([stock])
+
+      expect(stock.compRank).toBe(25)
+    })
+
     it('projects _volumePrice* / _synergy* from backend observation (front-end only consumes)', () => {
       const stock = {
         code: '600664',

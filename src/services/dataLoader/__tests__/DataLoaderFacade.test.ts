@@ -174,6 +174,9 @@ vi.mock('../RankTrendSignalService', () => ({
       signalCompletionCount++
       return stocks.map((stock: any) => ({
         ...stock,
+        // 模拟 analyze 后的 enriched 股票：compRank 权威回填；avgRankNum 由前端合并时实时计算
+        // （StockMergeCoordinator），analyze 不回填，随 ...stock 原样保留、merge 合并时不得丢失
+        compRank: 7,
         rankTrend: {
           meta: { change: 12 },
           technical: {},
@@ -624,6 +627,10 @@ describe('DataLoaderFacade', () => {
       expect(dataLayer.getStock('000001')?.rankTrend?.meta?.change).toBe(12)
     })
     expect(dataLayer.getStock('000001')).toMatchObject({
+      // 根治：mergeSignalEnrichmentByCode 合并时保留权威 compRank（此前漏复制导致综合列 "--"）
+      // 与前端合并时实时计算的 avgRankNum（仅东财 rank1/total1 → 100）
+      compRank: 7,
+      avgRankNum: 100,
       candidatePoolStatus: 'triggered',
       candidatePoolLabel: '已触发',
       candidatePoolEntryId: 'entry-1',

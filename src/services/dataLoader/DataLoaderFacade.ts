@@ -996,6 +996,12 @@ class DataLoaderService {
       mergedCount += 1
       return {
         ...stock,
+        // 2026-08-24 根治：合并时补齐 compRank/avgRankNum 与 precomputeDisplayFields 输出的全部
+        // 展示缓存字段（与 RankTrendSignalService.precomputeDisplayFields 保持同步，勿漏字段，
+        // 否则 stock.compRank 恒 undefined → 综合列 "--"、avgRankNum 恒 999、startup-bundle
+        // 校验（compRank>0）失败不写缓存）。
+        compRank: signalStock.compRank ?? stock.compRank,
+        avgRankNum: signalStock.avgRankNum ?? stock.avgRankNum,
         rankTrend: signalStock.rankTrend,
         rankTrendCoverageWarning: signalStock.rankTrendCoverageWarning,
         _rankChange: signalStock._rankChange,
@@ -1004,6 +1010,19 @@ class DataLoaderService {
         _resonancePct: signalStock._resonancePct,
         _resonanceLabel: signalStock._resonanceLabel,
         _resonanceRawScore: signalStock._resonanceRawScore,
+        _rankTrendPct: signalStock._rankTrendPct,
+        _rankTrendDirection: signalStock._rankTrendDirection,
+        _lifecyclePct: signalStock._lifecyclePct,
+        _lifecycleStage: signalStock._lifecycleStage,
+        _lifecycleVeto: signalStock._lifecycleVeto,
+        _volumePriceScore: signalStock._volumePriceScore,
+        _volumePriceDirection: signalStock._volumePriceDirection,
+        _volumePriceQuadrant: signalStock._volumePriceQuadrant,
+        _volumePriceReasons: signalStock._volumePriceReasons,
+        _volumePriceBreakdown: signalStock._volumePriceBreakdown,
+        _synergyState: signalStock._synergyState,
+        _synergyHardWarn: signalStock._synergyHardWarn,
+        _synergyReasons: signalStock._synergyReasons,
         candidatePoolStatus: signalStock.candidatePoolStatus,
         candidatePoolLabel: signalStock.candidatePoolLabel,
         candidatePoolProjection: signalStock.candidatePoolProjection,

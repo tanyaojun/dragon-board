@@ -185,45 +185,4 @@ describe('StockMergeCoordinator', () => {
       moneyFlowSource: 'eastmoney',
     })
   })
-
-  it('keeps backend compRank/compScore/avgRankNum from existingMap without recompute', async () => {
-    // 前后端分离：前端 merge 直接继承 existingMap 后端 compRank（启动 bundle），不再五维重算
-    const [stock] = await new StockMergeCoordinator().merge({
-      platformData: {
-        eastmoney: [{ code: '000001', name: '样本股', rank: 1 }],
-      },
-      latestQuotes: new Map(),
-      volumeHistoryMap: new Map(),
-      intradayVolumeHistoryMap: new Map(),
-      existingMap: new Map([
-        [
-          '000001',
-          { code: '000001', name: '样本股', compRank: 7, compScore: 88.1, avgRankNum: 42.3 },
-        ],
-      ]),
-    })
-
-    expect(stock).toMatchObject({ compRank: 7, compScore: 88.1, avgRankNum: 42.3 })
-  })
-
-  it('leaves intraday new-stock compRank undefined and sorts safely without misordering', async () => {
-    // 盘中新 tick 股票无 existingMap → createEmptyStock compRank=undefined；
-    // 消费端排序须按 (b.compRank ?? 0) 降级，undefined 不产生 NaN/越界
-    const merged = await new StockMergeCoordinator().merge({
-      platformData: {
-        eastmoney: [{ code: '600000', name: '新进', rank: 99 }],
-      },
-      latestQuotes: new Map(),
-      volumeHistoryMap: new Map(),
-      intradayVolumeHistoryMap: new Map(),
-      existingMap: new Map(),
-    })
-
-    const [stock] = merged
-    expect(stock.compRank).toBeUndefined()
-
-    const rankCmp = (a: any, b: any) => (b?.compRank ?? 0) - (a?.compRank ?? 0)
-    const sorted = [...merged].sort(rankCmp)
-    expect(sorted[0].code).toBe('600000')
-  })
 })
