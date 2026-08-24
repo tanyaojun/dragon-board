@@ -133,7 +133,9 @@ export function calculateComprehensiveRanks<T extends RankableStock>(stocks: T[]
         COMPREHENSIVE_WEIGHTS.VOLUME
   })
 
-  const sorted = [...stocks].sort((a, b) => (b.compScore || 0) - (a.compScore || 0))
+  const sorted = [...stocks].sort(
+    (a, b) => (b.compScore || 0) - (a.compScore || 0) || String(a.code).localeCompare(String(b.code)),
+  )
   sorted.forEach((stock, index) => {
     stock.compRank = index + 1
   })
@@ -149,7 +151,9 @@ export function rankMergedStocks<T extends RankableStock>(
   )
 
   calculateComprehensiveRanks(merged)
-  merged.sort((a, b) => (b.compScore || 0) - (a.compScore || 0))
+  merged.sort(
+    (a, b) => (b.compScore || 0) - (a.compScore || 0) || String(a.code).localeCompare(String(b.code)),
+  )
   merged.forEach((stock, index) => {
     stock.rank = index + 1
   })

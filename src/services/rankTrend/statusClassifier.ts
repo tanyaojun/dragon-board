@@ -271,6 +271,13 @@ function isMoneyWeak(stock: any): boolean {
 }
 
 function isHotAttention(rankTrend: RankTrendAnalysisResult | null | undefined, stock: any): boolean {
+  // 2026-08-25（P2 复盘）：优先消费后端 displayStatus（compute_display_status golden）——
+  // 状态明确时不再用前端 compRank 自判（回滚后 compRank 是前端本地值，与后端 attention 判定双轨）；
+  // 后端缺失（旧缓存/离线）时回退前端 percentile/compRank 兜底 = fail-visible。
+  const backendStatus = (rankTrend as any)?.displayStatus
+  if (backendStatus && typeof backendStatus.classKey === 'string') {
+    return !['insufficient', 'n_neutral', 'D_EXIT_RISK'].includes(backendStatus.classKey)
+  }
   const currentPercentile = toNumber(rankTrend?.meta?.currentPercentile)
   const compRank = toNumber(stock?.compRank ?? stock?.rank)
   const rankChange = toNumber(rankTrend?.meta?.change ?? stock?.rankChange)

@@ -277,9 +277,12 @@ async def on_startup() -> None:
         asyncio.get_running_loop().run_in_executor(None, _warmup_ranktrend_bundles)
     # RankTrend analyze 响应预热（2026-08-13）：预计算最近一帧全市场四信号并写 Redis 缓存，
     # 冷启动（startup bundle / analyze 缓存失效）时前端请求命中，避免引擎 30 帧 × 全市场
-    # 逐股重算造成四信号 5-10 秒 "--"。关键：current_frame 必须与前端 getRankTrends 对齐
-    # （code/rank=compRank/avgRankNum 的数字语义一致），否则 cache key 对不齐、预热白做。
-    # best-effort：后台异步任务，失败不阻断启动。
+    # 逐股重算造成四信号 5-10 秒 "--"。
+    # 2026-08-25（P2 复盘）：预热用**最新快照帧**构造 currentFrame（rank=快照 compRank、
+    # avgRankNum=快照均榜），而前端请求用**实时值**（compRank/avgRankNum 为前端本地实时计算，
+    # 见 ComprehensiveRankEngine.rankMergedStocks）→ 两者缓存键**天然不同**，预热键命中率有限
+    # （主要覆盖历史帧请求 / slotTime 规范化后同 tradingDate 的窗口）。这是预期限制，
+    # 不宣称"必须对齐"；best-effort：后台异步任务，失败不阻断启动。
     if get_settings().storage_backend == "mongodb":
         from backend.api.ranktrend_routes import analyze_ranktrend
 

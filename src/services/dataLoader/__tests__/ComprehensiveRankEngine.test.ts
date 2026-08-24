@@ -153,4 +153,20 @@ describe('ComprehensiveRankEngine', () => {
     expect(ranked.map((stock) => stock.rank)).toEqual([1, 2])
     expect(ranked.map((stock) => stock.compRank)).toEqual([1, 2])
   })
+
+  it('breaks compRank ties by code for stable ordering (2026-08-25, 对齐后端 -compScore, code)', () => {
+    // 并列 compScore 时按 code 升序稳定排序，消除 Array.sort 不稳定导致的刷新抖动；
+    // 与后端 comprehensive_rank.py compute_comprehensive_scores（(-score, code)）对齐。
+    const stocks = [
+      { code: '600002', avgRankNum: 40, zljzb: 2, zlje: 20, cirMV: 200, turnover: 100, turnoverRate: 5 },
+      { code: '600001', avgRankNum: 40, zljzb: 2, zlje: 20, cirMV: 200, turnover: 100, turnoverRate: 5 },
+      { code: '600003', avgRankNum: 40, zljzb: 2, zlje: 20, cirMV: 200, turnover: 100, turnoverRate: 5 },
+    ]
+    calculateComprehensiveRanks(stocks)
+    const byCode = Object.fromEntries(stocks.map((s) => [s.code, s.compRank]))
+    expect(new Set(stocks.map((s) => s.compScore)).size).toBe(1) // 三只 compScore 并列
+    expect(byCode['600001']).toBe(1) // 并列按 code 升序稳定分配
+    expect(byCode['600002']).toBe(2)
+    expect(byCode['600003']).toBe(3)
+  })
 })

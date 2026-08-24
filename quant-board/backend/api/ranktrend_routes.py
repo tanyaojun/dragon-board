@@ -431,8 +431,9 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
 
 
 def _latest_market_percentiles(frames: list[dict[str, Any]]) -> dict[str, float]:
-    """最近一个含量能字段的全市场帧分位（G3）。currentFrame 归一化后缺失量能字段，
-    故跳过 currentFrame 帧，取最近真实全市场快照帧的分位（后端 golden）。"""
+    """最近一个含量能字段的全市场帧分位（G3）。前端 currentFrame 现传 turnover/turnoverRate
+    量能字段（见 RankTrendAnalyzer.currentFrameStocks），故优先取 current 帧（实时口径）；
+    缺量能字段（旧前端/降级）时回退最近真实全市场快照帧的分位（后端 golden）。"""
     for frame in reversed(frames):
         pct = frame_market_percentiles(frame)
         if pct:

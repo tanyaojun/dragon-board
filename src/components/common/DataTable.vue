@@ -1651,7 +1651,9 @@ const formatCell = (key: string, stock: any) => {
   if (value === undefined || value === null) return '-'
 
   if (key.includes('Rank') || key === 'compRank') {
-    return value === 999 ? '-' : value
+    // 2026-08-25（P1 复盘）：avgRankNum 全平台缺失时采集器写 999（avgRank="999.0" 字符串），
+    // 统一按哨兵显示 '-'（与平台 rank 999 / compRank 999 一致）
+    return value === 999 || Number(value) >= 999 ? '-' : value
   }
 
   if (key === 'speed') {

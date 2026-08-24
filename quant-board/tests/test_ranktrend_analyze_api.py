@@ -438,6 +438,52 @@ def test_analyze_new_hotlist_stock_without_history_gets_signals_from_current_fra
     assert analysis["decision"]["final"]["signal"] in ("hold", "buy", "sell")
 
 
+def test_analyze_new_stock_without_avg_rank_num_stays_fail_visible(monkeypatch):
+    # 2026-08-25（P1 复盘）：新股 avgRankNum 全平台缺失（<=0 被 attention_rank_lookup 过滤）
+    # 时无法算出截面 percentile —— 保持 fail-visible（不产出、不编造），待快照落库后有历史再算。
+    frames = [
+        {
+            "tradingDate": f"2026-08-0{day}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+                {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 4)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    # 新 code=688888 只在 currentFrame 出现，且 avgRankNum=0（全平台缺失）
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["688888"],
+        "currentFrame": {
+            "tradingDate": "2026-08-05",
+            "slotTime": "current:1",
+            "stocks": [
+                {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1, "turnover": 8.0, "turnoverRate": 9.0},
+                {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05, "turnover": 6.0, "turnoverRate": 7.0},
+                {"code": "688888", "rank": 3, "avgRankNum": 0, "change": 20.0, "volumeRatio": 3.0, "zlje": 30, "zljzb": 0.3, "turnover": 15.0, "turnoverRate": 18.0},
+            ],
+        },
+    })
+    assert response.status_code == 200
+    last = response.json()["frames"][-1]
+    # 不产出（fail-visible）：cur_pcts 无该 code（avgRankNum<=0 被过滤）→ 不注册、不编造 percentile
+    assert all(s["code"] != "688888" for s in last["stocks"])
+
+
 def test_analyze_fuses_insufficient_resonance_into_hold_final(monkeypatch):
     frames = [{
         "tradingDate": f"2026-08-0{day}",
@@ -765,6 +811,85 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
     )
     assert calls["n"] == 1
     assert third.json()["cache"]["hit"] is False
+
+
+def test_analyze_cache_key_contract_avg_rank_num_in_key_turnover_not(monkeypatch):
+    # 2026-08-25（P2 复盘）缓存键契约不变式：**计算输入 ⊆ 缓存键**。
+    # 新股 percentile 计算（attention_rank_lookup）只用 avgRankNum → avgRankNum 必须进键（变化→新键）；
+    # turnover/turnoverRate 仅参与 frame_market_percentiles（响应辅助字段，TTL 内陈旧可接受）→ 不进键（变化→同键命中）。
+    # 若未来让新股 percentile 依赖量能字段，必须同步进键并更新本测试。
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(
+        "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
+        lambda: snapshot_cache.SnapshotRedisCache(
+            redis_client=fake_redis,
+            ttl_seconds=60,
+            empty_ttl_seconds=10,
+        ),
+    )
+    frames = [{
+        "tradingDate": "2026-07-01",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 1,
+        "rows": [
+            {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+            {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.1},
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    calls = {"n": 0}
+
+    def counting_repo(db, enable_backup=True):
+        calls["n"] += 1
+        return FakeRepo(frames)
+
+    monkeypatch.setattr("backend.data.repositories.repository_factory.create_repository", counting_repo)
+
+    def payload(avg_rank_num: float, turnover: float):
+        return {
+            "snapshotType": "half_hour",
+            "codes": ["002279"],
+            "frameKeys": ["2026-07-01 14:00"],
+            "currentFrame": {
+                "tradingDate": "2026-08-02",
+                "slotTime": "current:1",
+                "stocks": [
+                    {
+                        "code": "002279",
+                        "rank": 1,
+                        "avgRankNum": avg_rank_num,
+                        "turnover": turnover,
+                        "turnoverRate": turnover,
+                        "change": 5.0,
+                        "volumeRatio": 1.0,
+                        "zlje": 1,
+                        "zljzb": 0.1,
+                    }
+                ],
+            },
+        }
+
+    first = client.post("/api/ranktrend/analyze", json=payload(1.0, 8.0))
+    assert first.status_code == 200
+    assert calls["n"] == 1
+
+    # avgRankNum 变化（新股 percentile 计算输入）→ 必须新键重算
+    calls["n"] = 0
+    second = client.post("/api/ranktrend/analyze", json=payload(2.0, 8.0))
+    assert calls["n"] == 1
+    assert second.json()["cache"]["hit"] is False
+
+    # turnover 变化（不进键，仅市场分位辅助）→ 同键命中缓存
+    calls["n"] = 0
+    third = client.post("/api/ranktrend/analyze", json=payload(2.0, 99.0))
+    assert calls["n"] == 0
+    assert third.json()["cache"]["hit"] is True
 
 
 def test_analyze_cache_ttl_dynamic_intraday_afterhours(monkeypatch):

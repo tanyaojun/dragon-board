@@ -420,4 +420,10 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain('resonance.theme')
   })
 
+  test('avgRankNum 999 sentinel renders as "-" (2026-08-25 P1 复盘)', () => {
+    // 采集器全平台缺失时 avgRankNum=999 → avgRank="999.0" 字符串，须与 compRank/平台 rank 999 一致显示 '-'
+    const source = dataTableSource()
+    expect(source).toContain("Number(value) >= 999 ? '-' : value")
+  })
+
 })

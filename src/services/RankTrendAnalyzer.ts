@@ -467,7 +467,10 @@ export class RankTrendAnalyzer {
         volumeRatio: Number(stock?.volumeRatio) || 0,
         zlje: Number(stock?.zlje) || 0,
         zljzb: Number(stock?.zljzb) || 0,
-        // 五维综合排名输入（current frame 实时 compRank 计算所需，2026-08-24）
+        // 2026-08-24 回滚后（compRank 恢复前端本地计算）这些字段不再用于后端注入 compRank：
+        // avgRankNum 用于后端新股单点 percentile 排序（attention_rank_lookup，G3 权威算法）；
+        // turnover/turnoverRate 用于 frame_market_percentiles（marketPercentiles 响应辅助字段，
+        // 不进缓存键）；rank=compRank 仅作缓存键身份与排序展示（后端 percentile 计算不读 rank）。
         turnover: Number(stock?.turnover) || 0,
         turnoverRate: Number(stock?.turnoverRate) || 0,
         fundPenetration: Number(stock?.fundPenetration) || 0,

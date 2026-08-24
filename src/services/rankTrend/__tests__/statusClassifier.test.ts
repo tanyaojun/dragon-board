@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildRankTrendStatusContext,
   buildRankTrendStatusContextFromMarketPercentiles,
+  classifyVolumeConfirmation,
   getRankTrendDisplayBreakdown,
   getRankTrendDisplayStatus,
 } from '../statusClassifier'
@@ -676,5 +677,40 @@ describe('getRankTrendDisplayStatus 后端 displayStatus 优先（前后端分�
     }, undefined as any)
     expect(status.label).toBeTruthy()
     expect(status.classKey).toBeTruthy()
+  })
+
+  it('isHotAttention 优先后端 displayStatus，缺失才回退前端 compRank（2026-08-25 P2 复盘）', () => {
+    const context = buildRankTrendStatusContext([
+      { turnover: 10, volumeRatio: 0.6, turnoverRate: 2 },
+      { turnover: 50, volumeRatio: 1, turnoverRate: 4 },
+      { turnover: 100, volumeRatio: 1.4, turnoverRate: 6 },
+      { turnover: 200, volumeRatio: 2, turnoverRate: 8 },
+    ])
+    // 后端 displayStatus.classKey=strong_money（热门）→ 即使前端 compRank=999（不热）也判 hot → 资金背离
+    const backendHot = {
+      displayStatus: { label: '强资确认', classKey: 'strong_money', tooltip: '资金明显介入' },
+      meta: { sampleQuality: { status: 'ok' } },
+    } as any
+    expect(
+      classifyVolumeConfirmation(backendHot, { compRank: 999, zlje: -1, zljzb: -5, volumeRatio: 2.5, turnover: 300 }, context),
+    ).toBe('divergent')
+
+    // 后端 displayStatus.classKey=n_neutral（不热）→ 即使前端 compRank=1（热）也不判 hot → 不产生背离
+    const backendNeutral = {
+      displayStatus: { label: '一般', classKey: 'n_neutral', tooltip: '' },
+      meta: { sampleQuality: { status: 'ok' } },
+    } as any
+    expect(
+      classifyVolumeConfirmation(backendNeutral, { compRank: 1, zlje: -1, zljzb: -5, volumeRatio: 2.5, turnover: 300 }, context),
+    ).not.toBe('divergent')
+
+    // 后端无 displayStatus → 回退前端 compRank 判定（fail-visible）
+    expect(
+      classifyVolumeConfirmation(
+        createRankTrend({ sampleStatus: 'ok', percentile: 50, change: 0 }),
+        { compRank: 1, zlje: -1, zljzb: -5, volumeRatio: 2.5, turnover: 300 },
+        context,
+      ),
+    ).toBe('divergent')
   })
 })
