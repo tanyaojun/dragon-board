@@ -112,9 +112,9 @@ describe('UIStore table sorting', () => {
     uiStore.toggleSort('synergyTier')
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000004', '000001'])
 
-    // desc：方向组不变（与 order 无关），组内等级降序 → S 在 B 前
+    // desc：方向组随 order 反转（D/E 反向组在前），组内等级降序 → S 在 B 前
     uiStore.toggleSort('synergyTier')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000004', '000003', '000002'])
   })
 
   it('keeps unknown synergy tier in the neutral group after real tiers', () => {
@@ -197,6 +197,7 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
 
     uiStore.toggleSort('resonanceIntensity')
+    // desc：方向组固定（buy/up 恒前），组内降序 → [上升88, 上升20, 下降90]
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
   })
 
@@ -212,6 +213,7 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
 
     uiStore.toggleSort('rankTrendStrength')
+    // desc：方向组固定（buy/up 恒前），组内降序 → [上升90, 上升20, 下降30]
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
   })
 
@@ -242,7 +244,25 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
 
     uiStore.toggleSort('volumePriceQuadrant')
+    // desc：方向组固定（buy/up 恒前），组内降序 → [上升88, 上升20, 下降90]
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
+  it('sorts cross section by percentile direction-first (方向+数值%)', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '低位', rankTrend: { observation: { crossSection: { percentile: 20 } } } },
+      { code: '000002', name: '高位', rankTrend: { observation: { crossSection: { percentile: 88 } } } },
+      { code: '000003', name: '中位', rankTrend: { observation: { crossSection: { percentile: 55 } } } },
+    ])
+
+    uiStore.toggleSort('crossSection')
+    // direction-first：pct<50 归 down 组（后），pct≥50 归 up 组（前）；组内 asc 升序
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+
+    uiStore.toggleSort('crossSection')
+    // desc：方向组固定（pct≥50 的 up 组恒前），组内降序 → [高位88, 中位55, 低位20]
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
   })
 
   it('sorts lifecycle opportunity direction-first by attention stage', () => {
@@ -258,7 +278,8 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
 
     uiStore.toggleSort('lifecycleOpportunity')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001', '000004'])
+    // desc：方向组随 order 反转（冷却/拥挤下降组在前），组内降序 → [冷却91, 拥挤85, 扩散63, 点火55]
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000004', '000002', '000003'])
   })
 
   it('keeps missing observation direction between up and down groups in both sort directions', () => {
@@ -273,6 +294,7 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
 
     uiStore.toggleSort('rankTrendStrength')
+    // desc：方向组固定（buy 恒前），组内降序 → [上升20, 无方向50, 下降80]
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
   })
 

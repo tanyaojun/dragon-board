@@ -214,8 +214,8 @@ describe('DataTable row detail interactions', () => {
   test('adds a synergy tier column with badge and fallback', () => {
     const source = dataTableSource()
 
-    // 新增【四维】列（紧跟周期列后，group comprehensive）
-    expect(source).toContain("{ key: 'synergyTier', label: '四维'")
+    // 新增【五维度】（原四维，synergy 合并档位）列（紧跟周期列后，group comprehensive）
+    expect(source).toContain("{ key: 'synergyTier', label: '五维度'")
     expect(source).toContain("synergyTier: '60px'")
     expect(source).toContain("col.key === 'synergyTier'")
     // 读取 synergy 档位（前端路径）+ 徽章（TierBadge 组件，2026-08-18 图标化）+ 悬停明细
@@ -228,6 +228,22 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
     // 前端不重算档位
     expect(source).not.toContain('computeSynergyTier')
+  })
+
+  test('adds a cross section column driven by percentile (方向+数值%，非档位徽章)', () => {
+    const source = dataTableSource()
+
+    // 横截列紧跟趋势列后（2026-08-24），group comprehensive
+    expect(source).toContain("{ key: 'crossSection', label: '横截'")
+    expect(source).toContain("crossSection: '60px'")
+    expect(source).toContain("col.key === 'crossSection'")
+    // 单元格：方向（percentile≥50 向上/向下）+ 数值%（percentile），不渲染档位徽章
+    expect(source).toContain('getCrossSectionDirection(stock)')
+    expect(source).toContain('getCrossSectionValue(stock)')
+    expect(source).toContain('getDirectionArrow(getCrossSectionDirection(stock))')
+    // tooltip 分支
+    expect(source).toContain("showTierTooltip($event, stock, 'crossSection')")
+    expect(source).toContain("field === 'crossSection'")
   })
 
   test('collapses the nine platform rank columns by default with a toggle', () => {
@@ -248,12 +264,12 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain("rankColumnsCollapsed ? '▶' : '◀'")
   })
 
-  test('collapses the four observation columns via the synergy tier toggle', () => {
+  test('collapses the five observation columns via the synergy tier toggle', () => {
     const source = dataTableSource()
 
-    // 折叠集合：共振/趋势/量价/周期，默认展开
+    // 折叠集合：共振/趋势/横截/量价/周期，默认展开
     expect(source).toContain('const observationColumnsCollapsed = ref(false)')
-    for (const key of ['resonanceIntensity', 'rankTrendStrength', 'volumePriceQuadrant', 'lifecycleOpportunity']) {
+    for (const key of ['resonanceIntensity', 'rankTrendStrength', 'crossSection', 'volumePriceQuadrant', 'lifecycleOpportunity']) {
       expect(source).toContain(`'${key}'`)
     }
     // visibleColumns 过滤观察列

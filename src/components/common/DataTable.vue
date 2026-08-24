@@ -50,7 +50,7 @@
             </template>
             <template v-else-if="col.key === 'synergyTier'">
               <button class="rank-collapse-toggle" :class="{ collapsed: observationColumnsCollapsed }"
-                :title="observationColumnsCollapsed ? '展开观察列（共振/趋势/量价/周期）' : '隐藏观察列（共振/趋势/量价/周期）'"
+                :title="observationColumnsCollapsed ? '展开观察列（共振/趋势/横截/量价/周期）' : '隐藏观察列（共振/趋势/横截/量价/周期）'"
                 @click.stop="toggleObservationColumns" type="button">
                 <span class="rank-collapse-arrow">{{ observationColumnsCollapsed ? '▶' : '◀' }}</span>
               </button>
@@ -115,14 +115,12 @@
                 :title="openingSignalTitle(stock)">竞强</span>
             </template>
 
-            <!-- 共振强度列 -->
+            <!-- 共振强度列：方向+数值%（2026-08-24 取消档位徽章） -->
             <template v-else-if="col.key === 'resonanceIntensity'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'resonance')"
                 @mouseenter="showTierTooltip($event, stock, 'resonanceIntensity')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 2026-08-18：共振列改档位徽章，方向+数值% 仅作无档位回退 -->
-                <TierBadge v-if="getResonanceTier(stock)" :tier="getResonanceTier(stock)" />
-                <template v-else-if="getResonanceCellValue(stock) != null">
+                <template v-if="getResonanceCellValue(stock) != null">
                   <span :class="getResonanceCellClass(stock)">
                     {{ getDirectionArrow(getResonanceDirection(stock)) }}
                   </span>
@@ -136,9 +134,8 @@
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
                 @mouseenter="showTierTooltip($event, stock, 'rankTrendStrength')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 2026-08-18：趋势字段改横截面徽章（crossSection A/B/C/D），方向+数值% 仅作无横截数据回退 -->
-                <TierBadge v-if="getCrossSectionTier(stock)" :tier="getCrossSectionTier(stock)" />
-                <template v-else-if="getRankTrendStrengthValue(stock) != null">
+                <!-- 2026-08-24：趋势改回方向+数值%（取消横截面徽章，横截独立成列） -->
+                <template v-if="getRankTrendStrengthValue(stock) != null">
                   <span :class="getDirectionClass(getRankTrendDirection(stock))">
                     {{ getDirectionArrow(getRankTrendDirection(stock)) }}
                   </span>
@@ -148,6 +145,20 @@
                 <span v-else class="trend-steady">--</span>
                 <span v-if="getMacdCross(stock) === 'golden'" class="macd-badge golden">▲</span>
                 <span v-else-if="getMacdCross(stock) === 'death'" class="macd-badge death">▼</span>
+              </div>
+            </template>
+
+            <!-- 横截（cross_sction）列：方向+数值%（2026-08-24 新增独立列，percentile 推算方向/分值） -->
+            <template v-else-if="col.key === 'crossSection'">
+              <div class="observation-cell cross-section-cell"
+                @mouseenter="showTierTooltip($event, stock, 'crossSection')"
+                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+                <template v-if="getCrossSectionValue(stock) != null">
+                  <span :class="getCrossSectionClass(stock)">{{ getDirectionArrow(getCrossSectionDirection(stock))
+                  }}</span>
+                  <span :class="getCrossSectionClass(stock)">{{ getCrossSectionValue(stock) }}%</span>
+                </template>
+                <span v-else class="trend-steady">--</span>
               </div>
             </template>
 
@@ -168,9 +179,8 @@
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'volumePrice')"
                 @mouseenter="showTierTooltip($event, stock, 'volumePriceQuadrant')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 2026-08-18：量价列改档位徽章，象限文本仅作无档位回退 -->
-                <TierBadge v-if="getVolumePriceTier(stock)" :tier="getVolumePriceTier(stock)" />
-                <span v-else :class="getQuadrantClass(stock)">{{ getQuadrantText(stock) }}</span>
+                <!-- 2026-08-24：量价列改方向+数值%（取消档位徽章） -->
+                <span :class="getQuadrantClass(stock)">{{ getQuadrantText(stock) }}</span>
               </div>
             </template>
 
@@ -396,9 +406,10 @@ const columns = [
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'resonanceIntensity', label: '共振', group: 'comprehensive', always: true },
   { key: 'rankTrendStrength', label: '趋势', group: 'comprehensive', always: true },
+  { key: 'crossSection', label: '横截', group: 'comprehensive', always: true },
   { key: 'volumePriceQuadrant', label: '量价', group: 'comprehensive', always: true },
   { key: 'lifecycleOpportunity', label: '周期', group: 'comprehensive', always: true },
-  { key: 'synergyTier', label: '四维', group: 'comprehensive', always: true },
+  { key: 'synergyTier', label: '五维度', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'volumeRatio', label: '3日量比', group: 'quote', always: true },
@@ -431,6 +442,7 @@ const COLUMN_WIDTHS: Record<string, string> = {
   compRank: '50px',
   resonanceIntensity: '60px',
   rankTrendStrength: '60px',
+  crossSection: '60px',
   volumePriceQuadrant: '60px',
   lifecycleOpportunity: '60px',
   synergyTier: '60px',
@@ -456,9 +468,9 @@ const toggleRankColumns = () => {
   rankColumnsCollapsed.value = !rankColumnsCollapsed.value
 }
 
-// 可折叠观察列（共振/趋势/量价/周期）：默认展开，【四维】列左侧三角按钮切换（隐藏/展开四列明细）
+// 可折叠观察列（共振/趋势/横截/量价/周期）：默认展开，【五维度】列左侧三角按钮切换（隐藏/展开五列明细）
 const COLLAPSIBLE_OBSERVATION_KEYS = new Set([
-  'resonanceIntensity', 'rankTrendStrength', 'volumePriceQuadrant', 'lifecycleOpportunity',
+  'resonanceIntensity', 'rankTrendStrength', 'crossSection', 'volumePriceQuadrant', 'lifecycleOpportunity',
 ])
 const observationColumnsCollapsed = ref(false)
 const toggleObservationColumns = () => {
@@ -785,6 +797,23 @@ const getDirectionClass = (direction?: string | null) =>
     : direction === 'sell'
       ? 'observation-sell'
       : 'observation-hold'
+
+// 横截（cross_sction）：仅 percentile，方向/分值由其推算（2026-08-24）
+const getCrossSectionPercentile = (stock: any): number | null => {
+  const cs = getRankTrendAnalysis(stock)?.observation?.crossSection ?? {}
+  const pct = typeof cs.percentile === 'number' ? Math.round(cs.percentile) : null
+  return pct
+}
+
+const getCrossSectionValue = (stock: any): number | null => getCrossSectionPercentile(stock)
+
+const getCrossSectionDirection = (stock: any): 'buy' | 'sell' | null => {
+  const pct = getCrossSectionPercentile(stock)
+  if (pct == null) return null
+  return pct >= 50 ? 'buy' : 'sell'
+}
+
+const getCrossSectionClass = (stock: any): string => getDirectionClass(getCrossSectionDirection(stock))
 
 const toFiniteObservationValue = (value: unknown): number | null => {
   const numeric = Number(value)
@@ -1189,17 +1218,41 @@ const getTierReasonsOf = (stock: any, field: string): string[] => {
 const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
   hideRowTooltip()
   const lines: string[] = []
+  const stockName = (stock as any)?.name ?? '--'
+  const stockCode = (stock as any)?.code ?? '--'
+  const rankTrend = getRankTrendAnalysis(stock)
+  const observation = (rankTrend && rankTrend.observation) || {}
+  const dirText = (dir: unknown): string =>
+    dir === 'buy' || dir === 'up' ? '向上' : dir === 'sell' || dir === 'down' ? '向下' : '中性'
+  const tierCn: Record<string, string> = {
+    S: '强买', A: '买入', B: '弱买', C: '中性', D: '回避', E: '否决',
+  }
+  const pushTier = (tier: string | null | undefined) => {
+    lines.push(`档位：${tier && tier !== 'unknown' ? tier : '--'}`)
+  }
   if (field === 'synergyTier') {
+    // 五维度（原四维）：合并档位徽章。tooltip 按用户要求：名称代码 / 档位 / 方向 / 分值 / 说明
     const tier = getSynergyTier(stock)
-    if (tier) {
-      // 四维"三票一票制"用户友好解释（2026-08-16）：三维方向票 + 周期环境门 + 最终结果
-      lines.push('四维信号 · 三票一票制')
-      lines.push(...getSynergyVoteBreakdown(stock))
-      // 横截面相对强弱（2026-08-18 第 5 维，tooltip 补充展示——不占列）
-      const csTier = getCrossSectionTier(stock)
-      const csDetail = getCrossSectionDetail(stock)
-      if (csTier) lines.push(`横截面 ${csTier}${csDetail ? `（${csDetail}）` : ''}`)
-    }
+    const syn = (observation.synergy as any) || {}
+    lines.push(`${stockName} ${stockCode}`)
+    pushTier(tier)
+    // 方向按 synergy.state 映射（2026-08-24 用户确认）
+    const state = syn.state as string | undefined
+    const stateDir =
+      state === '启动确认' || state === '主升确认'
+        ? '向上'
+        : state === '风险升级' || state === '退潮'
+          ? '向下'
+          : '中性'
+    lines.push(`方向：${stateDir}`)
+    // 分值显示档位相关说明（synergy 无独立 0-100 分值）
+    lines.push(`分值：${tier && tier !== 'unknown' ? `${tier}（${tierCn[tier] ?? tier}）` : '--'}`)
+    // 说明：三票一票制 + 各维档位（与现有一致）
+    lines.push('说明：四维信号 · 三票一票制')
+    lines.push(...getSynergyVoteBreakdown(stock))
+    const csTier = getCrossSectionTier(stock)
+    const csDetail = getCrossSectionDetail(stock)
+    if (csTier) lines.push(`横截面 ${csTier}${csDetail ? `（${csDetail}）` : ''}`)
   } else if (field === 'lifecycleOpportunity') {
     // 周期（2026-08-16 优化）：环境门标签——用户友好解释"三票一票制"中的把关角色
     const stage = getLifecycleStageLabel(stock)
@@ -1212,82 +1265,91 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
     else if (lcTier === 'A') lines.push('放行：不干预三维方向票')
     else lines.push('环境门状态未知')
     lines.push('（周期不投方向票，只做风控把关）')
-  } else {
-    // 共振/趋势/量价：合并 tooltip（2026-08-18 用户要求）——档位/方向/分值/说明 四行深色
-    const rankTrend = getRankTrendAnalysis(stock)
-    const observation = (rankTrend && rankTrend.observation) || {}
-    const dirText = (dir: unknown): string =>
-      dir === 'buy' || dir === 'up' ? '向上' : dir === 'sell' || dir === 'down' ? '向下' : '中性'
-    if (field === 'resonanceIntensity') {
-      const res = (rankTrend && rankTrend.resonance) || {}
-      const tier = getResonanceTier(stock)
-      lines.push(`档位：${tier && tier !== 'unknown' ? tier : '--'}`)
-      lines.push(`方向：${dirText(res.direction)}`)
-      const score = getResonanceCellValue(stock)
-      lines.push(`分值：${score != null ? `${score}%` : '--'}`)
-      const reasons: string[] = []
-      if (Array.isArray(res.tierReasons)) reasons.push(...res.tierReasons)
-      const jumpDir = res.jump && res.jump.direction
-      if (jumpDir === 'up') {
-        reasons.push(`Jump 向上事件驱动，排名跳跃式上升${res.jumpFreshness != null ? `（新鲜度 ${Math.round(res.jumpFreshness * 100)}%）` : ''}`)
-      } else if (jumpDir === 'down') {
-        reasons.push(`Jump 向下事件驱动，排名跳水${res.jumpFreshness != null ? `（新鲜度 ${Math.round(res.jumpFreshness * 100)}%）` : ''}`)
-      }
-      if (res.marketMedianShortChange != null) reasons.push(`市场热度中位变化 ${res.marketMedianShortChange.toFixed(2)}`)
-      lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
-    } else if (field === 'rankTrendStrength') {
-      // 趋势列显示横截面徽章：档位取 crossSection，分值/方向取排名趋势
-      const tier = getCrossSectionTier(stock)
-      const rt = observation.rankTrend || {}
-      lines.push(`档位：${tier && tier !== 'unknown' ? tier : '--'}`)
-      lines.push(`方向：${dirText(rt.direction)}`)
-      const score = getRankTrendStrengthValue(stock)
-      lines.push(`分值：${score != null ? `${score}%` : '--'}`)
-      const reasons: string[] = []
-      const cs = observation.crossSection || {}
-      if (cs.percentile != null) {
-        const csDetail = getCrossSectionDetail(stock)
-        reasons.push(`横截面${csDetail ? ` ${csDetail}` : ''}${cs.signalTier ? `（${cs.signalTier}）` : ''}`)
-      }
-      if (Array.isArray(rt.tierReasons)) reasons.push(...rt.tierReasons)
-      const dirSig = getSignalDisplayText(getDirectionSignal(stock), '无')
-      const accSig = getSignalDisplayText(getAccelerationSignal(stock), '无')
-      const crossSig = getSignalDisplayText(getZeroCrossSignal(stock), '无')
-      if (dirSig !== '无') reasons.push(`方向一致性 ${dirSig}`)
-      if (accSig !== '无') reasons.push(`加速度 ${accSig}`)
-      if (crossSig !== '无') reasons.push(`零线交叉 ${crossSig}`)
-      const macdCross = getMacdCross(stock)
-      if (macdCross === 'golden') reasons.push('MACD 金叉')
-      else if (macdCross === 'death') reasons.push('MACD 死叉')
-      lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
-    } else if (field === 'volumePriceQuadrant') {
-      const vp = observation.volumePrice || {}
-      const tier = getVolumePriceTier(stock)
-      lines.push(`档位：${tier && tier !== 'unknown' ? tier : '--'}`)
-      lines.push(`方向：${dirText(vp.direction)}`)
-      const score = vp.score
-      lines.push(`分值：${score != null ? `${Math.round(score)}%` : '--'}`)
-      const reasons: string[] = []
-      if (vp.quadrant) {
-        const qMap: Record<string, string> = {
-          rise_volume: '放量上涨', rise_shrink: '缩量上涨', fall_volume: '放量下跌',
-          fall_shrink: '缩量下跌', normal: '量价常态',
-        }
-        reasons.push(`象限：${qMap[vp.quadrant] ?? vp.quadrant}`)
-      }
-      if (Array.isArray(vp.tierReasons)) reasons.push(...vp.tierReasons)
-      if (Array.isArray(vp.reasons)) reasons.push(...vp.reasons)
-      const zljzb = (stock as any)?.zljzb
-      if (zljzb != null) reasons.push(`资金净占比 ${Math.round(zljzb)}%`)
-      lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
-    } else {
-      const tier =
-        field === 'lifecycleOpportunity' ? getLifecycleTier(stock) : null
-      const parts: string[] = []
-      if (tier && tier !== 'unknown') parts.push(tierBadgeLabel(tier) ?? '')
-      parts.push(...getTierReasonsOf(stock, field))
-      if (parts.length) lines.push(parts.join('：'))
+  } else if (field === 'resonanceIntensity') {
+    const res = (rankTrend && rankTrend.resonance) || {}
+    const tier = getResonanceTier(stock)
+    const score = getResonanceCellValue(stock)
+    lines.push(`${stockName} ${stockCode}`)
+    pushTier(tier)
+    lines.push(`方向：${dirText(getResonanceDirection(stock))}`)
+    lines.push(`分值：${score != null ? `${score}%` : '--'}`)
+    const reasons: string[] = []
+    if (Array.isArray(res.tierReasons)) reasons.push(...res.tierReasons)
+    const jumpDir = res.jump && res.jump.direction
+    if (jumpDir === 'up') {
+      reasons.push(`Jump 向上事件驱动，排名跳跃式上升${res.jumpFreshness != null ? `（新鲜度 ${Math.round(res.jumpFreshness * 100)}%）` : ''}`)
+    } else if (jumpDir === 'down') {
+      reasons.push(`Jump 向下事件驱动，排名跳水${res.jumpFreshness != null ? `（新鲜度 ${Math.round(res.jumpFreshness * 100)}%）` : ''}`)
     }
+    if (res.marketMedianShortChange != null) reasons.push(`市场热度中位变化 ${res.marketMedianShortChange.toFixed(2)}`)
+    lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
+  } else if (field === 'rankTrendStrength') {
+    // 趋势：方向+数值%；档位取趋势自身（getRankTrendTier），横截独立成列后不再混入 tooltip
+    const tier = getRankTrendTier(stock)
+    const rt = observation.rankTrend || {}
+    const score = getRankTrendStrengthValue(stock)
+    lines.push(`${stockName} ${stockCode}`)
+    pushTier(tier)
+    lines.push(`方向：${dirText(rt.direction)}`)
+    lines.push(`分值：${score != null ? `${score}%` : '--'}`)
+    const reasons: string[] = []
+    if (Array.isArray(rt.tierReasons)) reasons.push(...rt.tierReasons)
+    const dirSig = getSignalDisplayText(getDirectionSignal(stock), '无')
+    const accSig = getSignalDisplayText(getAccelerationSignal(stock), '无')
+    const crossSig = getSignalDisplayText(getZeroCrossSignal(stock), '无')
+    if (dirSig !== '无') reasons.push(`方向一致性 ${dirSig}`)
+    if (accSig !== '无') reasons.push(`加速度 ${accSig}`)
+    if (crossSig !== '无') reasons.push(`零线交叉 ${crossSig}`)
+    const macdCross = getMacdCross(stock)
+    if (macdCross === 'golden') reasons.push('MACD 金叉')
+    else if (macdCross === 'death') reasons.push('MACD 死叉')
+    lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
+  } else if (field === 'crossSection') {
+    const cs = (observation.crossSection as any) || {}
+    const tier = getCrossSectionTier(stock)
+    const pct = typeof cs.percentile === 'number' ? Math.round(cs.percentile) : null
+    lines.push(`${stockName} ${stockCode}`)
+    pushTier(tier)
+    // 方向/分值按 percentiles 推算（2026-08-24 用户确认）
+    lines.push(`方向：${pct == null ? '中性' : pct >= 50 ? '向上' : '向下'}`)
+    lines.push(`分值：${pct != null ? `${pct}%` : '--'}`)
+    const reasons: string[] = []
+    if (pct != null) reasons.push(`相对强弱分位 ${pct}%`)
+    const delta = typeof cs.percentileDelta === 'number' ? Math.round(cs.percentileDelta) : null
+    const rel = typeof cs.relativeToMarket === 'number' ? Math.round(cs.relativeToMarket) : null
+    if (delta != null) reasons.push(`分位变化 ${delta}`)
+    if (rel != null) reasons.push(`相对市场 ${rel}`)
+    if (Array.isArray(cs.tierReasons)) reasons.push(...cs.tierReasons)
+    lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
+  } else if (field === 'volumePriceQuadrant') {
+    const vp = observation.volumePrice || {}
+    const tier = getVolumePriceTier(stock)
+    const vpData = getVolumePrice(stock)
+    const score = vpData.score
+    lines.push(`${stockName} ${stockCode}`)
+    pushTier(tier)
+    lines.push(`方向：${dirText(vpData.direction)}`)
+    lines.push(`分值：${score != null ? `${Math.round(score)}%` : '--'}`)
+    const reasons: string[] = []
+    if (vp.quadrant) {
+      const qMap: Record<string, string> = {
+        rise_volume: '放量上涨', rise_shrink: '缩量上涨', fall_volume: '放量下跌',
+        fall_shrink: '缩量下跌', normal: '量价常态',
+      }
+      reasons.push(`象限：${qMap[vp.quadrant] ?? vp.quadrant}`)
+    }
+    if (Array.isArray(vp.tierReasons)) reasons.push(...vp.tierReasons)
+    if (Array.isArray(vp.reasons)) reasons.push(...vp.reasons)
+    const zljzb = (stock as any)?.zljzb
+    if (zljzb != null) reasons.push(`资金净占比 ${Math.round(zljzb)}%`)
+    lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
+  } else {
+    const tier =
+      field === 'lifecycleOpportunity' ? getLifecycleTier(stock) : null
+    const parts: string[] = []
+    if (tier && tier !== 'unknown') parts.push(tierBadgeLabel(tier) ?? '')
+    parts.push(...getTierReasonsOf(stock, field))
+    if (parts.length) lines.push(parts.join('：'))
   }
   if (!lines.length) {
     showConfidenceTooltip(event, stock, field)

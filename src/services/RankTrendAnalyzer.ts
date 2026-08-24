@@ -467,6 +467,10 @@ export class RankTrendAnalyzer {
         volumeRatio: Number(stock?.volumeRatio) || 0,
         zlje: Number(stock?.zlje) || 0,
         zljzb: Number(stock?.zljzb) || 0,
+        // 五维综合排名输入（current frame 实时 compRank 计算所需，2026-08-24）
+        turnover: Number(stock?.turnover) || 0,
+        turnoverRate: Number(stock?.turnoverRate) || 0,
+        fundPenetration: Number(stock?.fundPenetration) || 0,
         platforms: Number(stock?.platforms) || 0,
         // 题材暴露字段：题材动量共振需要在当前帧内做个股-题材匹配；
         // dataLayer 的 themes 是详情对象数组，这里规范化为名称/ID 列表
