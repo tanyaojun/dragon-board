@@ -384,7 +384,8 @@ internal sealed class LauncherProcessManager
             service.PortOwnerProcess = null;
             service.AdoptedExe = null; // 新拉起进程非接管，清 Refuse 接管标记
             _log($"已启动 {service.Name}，PID={process.Id}。");
-            TrackPortOwner(service);
+            // 后台跟踪实际监听进程（uvicorn 启动慢，可能远超 5 秒），不阻塞后续核心服务启动。
+            _ = Task.Run(() => TrackPortOwner(service));
         }
         catch (Exception ex)
         {
@@ -405,7 +406,8 @@ internal sealed class LauncherProcessManager
     /// <summary>
     /// 记录实际监听端口的进程（uvicorn 在 Windows 上会 spawn 子进程承载真 server：
     /// launcher 拉起的引导进程不监听端口）。仅对 uvicorn 类服务（命令含 "uvicorn"）
-    /// 执行，最多等待 5 秒；单进程服务（监听 PID == 引导 PID）不记录。
+    /// 执行，后台跟踪，最多等待 20 秒（量化后端启动较慢，5 秒窗口会误报）；
+    /// 单进程服务（监听 PID == 引导 PID）不记录。
     /// PortOwnerProcess 只用于停止时优先终止，不替换 service.Process（引导进程
     /// 仍为托管对象，负责生命周期与输出）。
     /// 身份校验：候选监听进程必须满足"父进程链包含引导进程"（uvicorn spawn 的
@@ -420,7 +422,7 @@ internal sealed class LauncherProcessManager
 
         try
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
             while (DateTime.UtcNow < deadline)
             {
                 var pids = LauncherPorts.GetPidsByPort(service.Port);
@@ -457,7 +459,7 @@ internal sealed class LauncherProcessManager
                 Thread.Sleep(500);
             }
 
-            _log($"{service.Name} 启动后 5 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
+            _log($"{service.Name} 启动后 20 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
         }
         catch (Exception ex)
         {
