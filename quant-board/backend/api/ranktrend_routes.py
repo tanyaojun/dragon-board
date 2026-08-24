@@ -196,17 +196,26 @@ def _load_frames_for_analysis(
     series_by_code = _build_code_attention_series(frames)
     if current_frame:
         current_stocks = current_frame.get("stocks") or []
-        # 2026-08-23 修复 A（防过拟合排查）：当前帧 percentile 不再用前端派生的
-        # rank/avgRankNum（随 zljzb/八平台热榜重算、会漂移，污染横截面/趋势/周期）。
-        # 改为复用该 code 在权威历史帧的最后一个 percentile——横截面/趋势/周期只用
-        # 权威源，当前帧仅作展示帧（量价仍用其字段）。历史无该 code 则不注册（新上市边缘）。
         current_key = f"{current_frame.get('tradingDate')} {current_frame.get('slotTime')}".strip()
+        # current 帧全市场 attention rank/percentile（与历史帧同构：按 avgRankNum 排序，
+        # G3 权威算法），供新进热榜（历史无记录）股票注册单点序列用。
+        cur_ranks, cur_total = attention_rank_lookup(current_stocks)
+        cur_pcts = {code: percentile_rank(rank, cur_total) for code, rank in cur_ranks.items()}
         for code in {str(s.get("code")) for s in current_stocks if isinstance(s, dict)}:
             bars = series_by_code.get(code)
             if bars:
-                # 复用最后一个权威 (key, rank, percentile)，仅将 key 标记为当前帧
+                # 2026-08-23 修复 A（防过拟合排查）：当前帧 percentile 不再用前端派生的
+                # rank/avgRankNum（随 zljzb/八平台热榜重算、会漂移，污染横截面/趋势/周期）。
+                # 改为复用该 code 在权威历史帧的最后一个 percentile——横截面/趋势/周期只用
+                # 权威源，当前帧仅作展示帧（量价仍用其字段）。
                 _key, _rank, _pct = bars[-1]
                 series_by_code[code].append((current_key, _rank, _pct))
+            elif code in cur_pcts:
+                # 2026-08-24 新进热榜（历史无该 code）：用 current 帧截面 percentile 注册
+                # 单点序列（与历史帧同构的 attention percentile，非前端派生值），使新股
+                # 也能获得五维信号——横截/量价/共振可算，趋势/周期因单点样本走
+                # sampleQuality=insufficient 降级（fail-visible），不再整只被丢弃。
+                series_by_code[code] = [(current_key, cur_ranks[code], cur_pcts[code])]
         frames.append({
             "tradingDate": current_frame.get("tradingDate"),
             "slotTime": current_frame.get("slotTime"),

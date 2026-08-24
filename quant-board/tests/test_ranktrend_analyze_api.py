@@ -378,6 +378,66 @@ def test_analyze_live_path_keeps_enough_history_for_resonance(monkeypatch):
     }
 
 
+def test_analyze_new_hotlist_stock_without_history_gets_signals_from_current_frame(monkeypatch):
+    # 2026-08-24：新进热榜（历史快照无该 code）股票不应被整只丢弃——
+    # current 帧为其注册单点 percentile 序列后，可产出五维信号（sampleQuality=insufficient 降级）。
+    frames = [
+        {
+            "tradingDate": f"2026-08-0{day}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1},
+                {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05},
+                {"code": "000001", "rank": 3, "avgRankNum": 3, "change": 1.0, "volumeRatio": 1.0, "zlje": 1, "zljzb": 0.01},
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 4)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    # 新 code=688999：历史帧从未出现，只在 currentFrame 里出现（带量能字段）
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["688999"],
+        "currentFrame": {
+            "tradingDate": "2026-08-05",
+            "slotTime": "current:1",
+            "stocks": [
+                {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1, "turnover": 8.0, "turnoverRate": 9.0},
+                {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05, "turnover": 6.0, "turnoverRate": 7.0},
+                {"code": "688999", "rank": 3, "avgRankNum": 3, "change": 10.0, "volumeRatio": 2.0, "zlje": 20, "zljzb": 0.2, "turnover": 12.0, "turnoverRate": 15.0},
+            ],
+        },
+    })
+    assert response.status_code == 200
+    body = response.json()
+    last = body["frames"][-1]
+    assert last["frameKey"] == "2026-08-05 current:1"
+    # 新 code 不再被丢弃：最后一帧含该股票完整 analysis
+    stocks = last["stocks"]
+    new_stock = next((s for s in stocks if s["code"] == "688999"), None)
+    assert new_stock is not None, "新进热榜股票不应被 _analyze_frames 丢弃"
+    analysis = new_stock["analysis"]
+    # 五维信号结构完整（单点样本 → sampleQuality=insufficient 降级，fail-visible）
+    assert analysis["meta"]["sampleQuality"]["status"] == "insufficient"
+    assert analysis["meta"]["sampleQuality"]["sampleCount"] == 1
+    assert analysis["resonance"]["status"] in ("insufficient", "ok")
+    assert "observation" in analysis
+    assert "volumePrice" in analysis.get("observation", {})
+    assert "crossSection" in analysis.get("observation", {})
+    assert analysis["decision"]["final"]["signal"] in ("hold", "buy", "sell")
+
+
 def test_analyze_fuses_insufficient_resonance_into_hold_final(monkeypatch):
     frames = [{
         "tradingDate": f"2026-08-0{day}",

@@ -1005,6 +1005,8 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/frames?dataset_id=dragonb
 
 `POST /api/ranktrend/analyze` 使用 Redis 缓存（方案 6.3）：缓存键含 `dataset_id/snapshot_type/frameKeys/codes`、规范化后的 `currentFrame` 与 dataset generation；`currentFrame.slotTime` 会去掉前端自增的 `current:N` 序列号，`stocks` 只保留 `code/rank/avgRankNum` 稳定身份字段，避免面板每次打开因序列号或实时行情字段变化而缓存永不命中。TTL 固定 300s（`RANK_TREND_ANALYZE_CACHE_TTL_SECONDS`），与前端 `rankTrendResultCache` LRU TTL（300s）一致；快照 ingest 递增 generation 并按 dataset 索引失效。命中响应带 `cache.hit=true`。
 
+`POST /api/ranktrend/analyze` 新进热榜股票（历史快照无该 code，2026-08-24）：`currentFrame.stocks` 含量能字段（`turnover/turnoverRate/volumeRatio`，前端已传）时，后端用与历史帧同构的 attention percentile（`attention_rank_lookup` + `percentile_rank`，G3 权威算法）为新股注册**单点序列**，不再整只丢弃——量价/横截可计算，共振/趋势/周期因单点样本走 `sampleQuality.status=insufficient` 降级（fail-visible）；历史已有该 code 的股票仍复用权威历史帧 percentile（修复 A 防漂移口径不变，老股票序列不受影响）。
+
 `POST /api/ranktrend/analyze` 带并发闸门：缓存未命中进入计算前，先按缓存键取 per-key 单飞锁（同 key 并发只计算一次，其余等待后共享缓存结果），再取全局有界信号量（默认 2，环境变量 `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` 可调），同一时刻最多 N 个 golden 计算并发。目的是防止前端刷新风暴或重复请求把 FastAPI 线程池打满导致 8000 假死；并发上限不改变响应结构与缓存合同。
 
 `POST /api/ranktrend/analyze` 响应帧题材动量（v2，2026-08-06 D2 解耦）：帧级 `themeContext`（`version/factors/marketThemeMedianShortChange/themeSampleCount/qualityFlags/hotThemesFallback`，`factors` 只回传 top-10 题材动量摘要）与 `themeMomentumContext`（`version/factors/qualityFlags/computedAt`，v2 日线动量 Top-20）；每股 `analysis.themeMomentum`（`status/themeId/themeName/score/direction/role/phaseLabel/reasons`，只读投影，第4轨数据源，不参与 decision）。题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象。v1 融合（`resonance.theme.themeMomentumScore`）已废弃。
