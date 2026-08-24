@@ -484,6 +484,69 @@ def test_analyze_new_stock_without_avg_rank_num_stays_fail_visible(monkeypatch):
     assert all(s["code"] != "688888" for s in last["stocks"])
 
 
+def test_analyze_current_frame_market_median_uses_last_snapshot_frame(monkeypatch):
+    # 2026-08-25（用户决策 A）：marketMedian/marketMedianPercentile 与个股 percentile 同口径
+    # ——current 帧是前端实时 avgRankNum 派生（会漂移），不进中位数体系；取最近真实快照帧。
+    frames = [
+        {
+            "tradingDate": f"2026-07-{day:03d}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": [
+                {
+                    "code": f"C{index:02d}",
+                    "rank": (index + day) % 30 + 1,
+                    "avgRankNum": (index + day) % 30 + 1,  # 1..30 排列
+                    "change": 1.0,
+                    "volumeRatio": 1.2,
+                    "zlje": 10,
+                    "zljzb": 0.1,
+                }
+                for index in range(30)
+            ],
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day in range(1, 31)
+    ]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    # current 帧只有 1 只股票（中位数=100）→ 若误用 current 帧，marketMedianPercentile=100；
+    # 对齐历史帧后应为历史 30 帧的中位数（51.67）。
+    current_stocks = [
+        {"code": "C00", "rank": 1, "avgRankNum": 100, "change": 5.0},
+    ]
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C00"],
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            "stocks": current_stocks,
+        },
+    })
+    assert response.status_code == 200
+    last = response.json()["frames"][-1]
+    from backend.api.ranktrend_routes import _to_engine_frame, frame_market_median_percentile
+
+    last_snapshot_engine = _to_engine_frame(frames[-1])
+    current_engine = {**last_snapshot_engine, "stocks": current_stocks}
+    # 与最近快照帧（历史第 30 帧）中位数一致，而非 current 实时帧（=100）
+    assert last["marketMedianPercentile"] == frame_market_median_percentile(last_snapshot_engine)
+    assert frame_market_median_percentile(current_engine) == 100.0
+    assert last["marketMedianPercentile"] != frame_market_median_percentile(current_engine)
+    # relativeToMarket 使用同一快照口径（crossSection 一致）
+    cs = last["stocks"][0]["analysis"]["observation"]["crossSection"]
+    assert cs["relativeToMarket"] is not None
+
+
 def test_analyze_fuses_insufficient_resonance_into_hold_final(monkeypatch):
     frames = [{
         "tradingDate": f"2026-08-0{day}",

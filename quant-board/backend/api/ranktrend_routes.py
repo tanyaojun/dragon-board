@@ -430,6 +430,11 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     return {"code": code, "analysis": analysis}
 
 
+def _is_current_frame(frame: dict[str, Any]) -> bool:
+    """current 帧识别：slotTime 以 'current' 开头（前端 'current:N' / warmup 'current'）。"""
+    return str(frame.get("slotTime") or "").startswith("current")
+
+
 def _latest_market_percentiles(frames: list[dict[str, Any]]) -> dict[str, float]:
     """最近一个含量能字段的全市场帧分位（G3）。前端 currentFrame 现传 turnover/turnoverRate
     量能字段（见 RankTrendAnalyzer.currentFrameStocks），故优先取 current 帧（实时口径）；
@@ -470,7 +475,7 @@ def _analyze_frames(
     last_hot_themes: list[dict[str, Any]] = []
     last_frame_index = len(frames) - 1
     # 2026-08-23 前后端分离 G3：全市场量能分位（后端 golden，替代前端当前视图自算分位）。
-    # currentFrame 归一化后缺量能字段 → 取最近真实全市场快照帧分位，响应内所有帧共享。
+    # 2026-08-25：current 帧含量能字段时取实时分位（量能判定用），缺量能字段回退最近快照帧。
     market_percentiles = _latest_market_percentiles(frames)
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
@@ -494,8 +499,14 @@ def _analyze_frames(
                 *(["theme_hot_themes_fallback"] if hot_themes_fallback else []),
             ],
         }
-        market_median, market_sample_count = frame_market_median(frames, index)
-        market_median_percentile = frame_market_median_percentile(frame)
+        # 2026-08-25（用户决策 A）：市场分位中位数与个股 percentile 同口径——current 帧
+        # 是前端实时 avgRankNum 派生（会漂移），不进 percentile 中位数体系；取最近真实
+        # 快照帧计算 marketMedian / marketMedianPercentile，relativeToMarket 不再混合口径。
+        eff_index = index
+        if _is_current_frame(frame) and index > 0:
+            eff_index = index - 1
+        market_median, market_sample_count = frame_market_median(frames, eff_index)
+        market_median_percentile = frame_market_median_percentile(frames[eff_index])
         stocks_out: list[dict[str, Any]] = []
         full_tasks: list[tuple[Any, ...]] = []
         for stock in frame.get("stocks", []):

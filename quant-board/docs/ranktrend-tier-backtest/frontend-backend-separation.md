@@ -109,9 +109,14 @@
 - **新股 percentile = 过渡值**：历史无快照的股票用 current 帧实时 `avgRankNum` 注册单点序列
   （`1e9f254`），值随热榜刷新可能变动；`sampleQuality=insufficient` 降级展示；下个快照落库后
   转正为权威历史口径。avgRankNum 全平台缺失（≤0）时新股仍不产出（fail-visible，不编造）。
-- **帧级 marketMedian 与个股 percentile 不同源（预期设计）**：current 帧含量能字段时，
-  `marketMedianPercentile` 用 current 帧实时 attention（前端 avgRankNum）；老股票个股
-  percentile 序列用权威历史帧（修复 A）。两者时点不同是设计（marketMedian 作实时相对强弱基准）。
+- **marketMedian 与个股 percentile 同帧（2026-08-25 用户决策 A）**：`marketMedianPercentile`/
+  `marketMedianShortChange` 对 current 帧（前端实时 avgRankNum 派生，会漂移）**跳过**，取最近真实
+  快照帧计算（`_analyze_frames` 的 eff_index 逻辑）→ 与老股票个股 percentile（权威历史帧）同口径，
+  `relativeToMarket` 不再混合实时/历史。注意数学事实：percentile 是排序位置，`frame_market_median_
+  percentile` 对任意 >1 只有效股票的帧都恒 ≈50%（与 avgRankNum 具体值无关），A 的实际收益是
+  **语义自洽 + 不依赖 current 帧股票集合完整度**（current 帧只含少数股票时不再拉高中位数）。
+  `marketPercentiles`（量能 P50/70/85，statusClassifier 量能判定用）仍优先取 current 帧实时量能
+  （缺量能字段回退快照帧）——与 percentile 中位数体系无关，保持不变。
 - **currentFrame.stocks.rank 字段语义**：前端传 `rank = compRank || rank`（五维综合排名），
   仅作缓存键身份与排序展示；后端 percentile 计算一律用 `avgRankNum`（`attention_rank_lookup`/
   `frame_cross_section`），**不读 rank 字段**——勿新增消费方误用。
