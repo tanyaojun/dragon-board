@@ -215,7 +215,7 @@ describe('DataTable row detail interactions', () => {
     const source = dataTableSource()
 
     // 新增【五维度】（原四维，synergy 合并档位）列（紧跟周期列后，group comprehensive）
-    expect(source).toContain("{ key: 'synergyTier', label: '五维度'")
+    expect(source).toContain("{ key: 'synergyTier', label: '五维'")
     expect(source).toContain("synergyTier: '60px'")
     expect(source).toContain("col.key === 'synergyTier'")
     // 读取 synergy 档位（前端路径）+ 徽章（TierBadge 组件，2026-08-18 图标化）+ 悬停明细
@@ -230,11 +230,30 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toContain('computeSynergyTier')
   })
 
-  test('adds a cross section column driven by percentile (方向+数值%，非档位徽章)', () => {
+  test('uses the user-requested tooltip template for synergy and lifecycle columns', () => {
     const source = dataTableSource()
 
-    // 横截列紧跟趋势列后（2026-08-24），group comprehensive
-    expect(source).toContain("{ key: 'crossSection', label: '横截'")
+    // 五维度 tooltip（2026-08-26 用户模板）：名称（代码）/ 阶段 / 周期 / 说明 + 操作建议
+    expect(source).toContain('`${stockName}（${stockCode}）：`')
+    expect(source).toContain('阶段：')
+    expect(source).toContain('周期：')
+    expect(source).toContain('周期不投方向票，但参与总档合成：E 一票否决、B/D 对 S/A 降一档、A 放行')
+    expect(source).toContain('getSynergyVoteBreakdown(stock)')
+    expect(source).toContain('getSynergyTierDetail(stock)')
+    expect(source).toContain('getSynergyTierReasons(stock)')
+    expect(source).toContain('操作建议：')
+    // 周期列说明包含环境门规则与操作建议
+    expect(source).toContain('周期为环境门，不投方向票，但参与总档位合成')
+    expect(source).toContain('E 否决 → 总档强制否决')
+    expect(source).toContain('B 谨慎 / D 回避 → 总档 S/A 降一档')
+    expect(source).toContain('A 放行 → 不干预三维方向票')
+  })
+
+  test('adds a 热度（crossSection）column driven by percentile (方向+数值%，非档位徽章)', () => {
+    const source = dataTableSource()
+
+    // 热度列紧跟趋势列后（2026-08-24；技术字段 crossSection，UI 展示名「热度」），group comprehensive
+    expect(source).toContain("{ key: 'crossSection', label: '热度'")
     expect(source).toContain("crossSection: '60px'")
     expect(source).toContain("col.key === 'crossSection'")
     // 单元格：方向（percentile≥50 向上/向下）+ 数值%（percentile），不渲染档位徽章
@@ -261,13 +280,13 @@ describe('DataTable row detail interactions', () => {
     // 综合列左侧三角按钮（左/右三角，点击切换，不触发排序冒泡）
     expect(source).toContain('rank-collapse-toggle')
     expect(source).toContain('@click.stop="toggleRankColumns"')
-    expect(source).toContain("rankColumnsCollapsed ? '▶' : '◀'")
+    expect(source).toContain("rankColumnsCollapsed ? '◀' : '▶'")
   })
 
   test('collapses the five observation columns via the synergy tier toggle', () => {
     const source = dataTableSource()
 
-    // 折叠集合：共振/趋势/横截/量价/周期，默认展开
+    // 折叠集合：共振/趋势/热度/量价/周期，默认展开
     expect(source).toContain('const observationColumnsCollapsed = ref(false)')
     for (const key of ['resonanceIntensity', 'rankTrendStrength', 'crossSection', 'volumePriceQuadrant', 'lifecycleOpportunity']) {
       expect(source).toContain(`'${key}'`)
@@ -277,7 +296,7 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('const toggleObservationColumns')
     // 四维列左侧三角按钮（与综合列折叠方式一致）
     expect(source).toContain("@click.stop=\"toggleObservationColumns\"")
-    expect(source).toContain("observationColumnsCollapsed ? '▶' : '◀'")
+    expect(source).toContain("observationColumnsCollapsed ? '◀' : '▶'")
   })
 
   test('collapses the quote columns (成交额/流通值/总市值/市盈率/市净率) via the volume toggle', () => {
@@ -293,7 +312,7 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('const toggleQuoteColumns')
     // 成交量列 title 右侧三角按钮（与综合/四维折叠方式一致）
     expect(source).toContain("@click.stop=\"toggleQuoteColumns\"")
-    expect(source).toContain("quoteColumnsCollapsed ? '▶' : '◀'")
+    expect(source).toContain("quoteColumnsCollapsed ? '◀' : '▶'")
   })
 
   test('opens the observation panel from the volume price column too', () => {
@@ -320,9 +339,12 @@ describe('DataTable row detail interactions', () => {
     // .observation-cell 撑满 cell 高度并垂直居中（解决徽章靠上）
     expect(source).toContain('height: 100%')
     expect(source).toContain('line-height: 1')
-    // 周期 tooltip：阶段文字 + 档位原因拼接（如"扩散 A：优选路径"）
+    // 周期 tooltip（2026-08-26 用户模板）：名称（代码）/ 阶段 / 周期 / 说明 + 操作建议
     expect(source).toContain("field === 'lifecycleOpportunity'")
     expect(source).toContain('getLifecycleStageLabel(stock)')
+    expect(source).toContain('阶段：')
+    expect(source).toContain('周期为环境门，不投方向票，但参与总档位合成')
+    expect(source).toContain('操作建议：')
     expect(source).toContain("parts.join('：')")
   })
 

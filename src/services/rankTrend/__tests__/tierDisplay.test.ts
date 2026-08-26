@@ -90,8 +90,8 @@ describe('tierBadgeClass / tierBadgeLabel', () => {
 describe('getSynergyTierDetail', () => {
   it('拼四维明细，缺维显示 -', () => {
     const stock = makeStock()
-    expect(getSynergyTierDetail(stock)).toEqual(['共振 A', '趋势 S', '量价 B', '周期 A', '横截 -'])
-    expect(getSynergyTierDetail({})).toEqual(['共振 -', '趋势 -', '量价 -', '周期 -', '横截 -'])
+    expect(getSynergyTierDetail(stock)).toEqual(['共振 A', '趋势 S', '量价 B', '周期 A', '热度 -'])
+    expect(getSynergyTierDetail({})).toEqual(['共振 -', '趋势 -', '量价 -', '周期 -', '热度 -'])
   })
 })
 
@@ -150,6 +150,51 @@ describe('getSynergyVoteBreakdown（三票一票制用户友好解释）', () =>
     expect(lines.some((l) => l.includes('环境门降档'))).toBe(true)
   })
 
+  it('热度第 5 维参与投票：展示票值与降档前档位（江西铜业案例）', () => {
+    const stock = {
+      rankTrend: {
+        resonance: { signalTier: 'A', direction: 'buy' },
+        observation: {
+          rankTrend: { signalTier: 'B', direction: 'buy' },
+          volumePrice: { signalTier: 'B', direction: 'up' },
+          lifecycle: { signalTier: 'D', stage: 'crowded' },
+          crossSection: { signalTier: 'B', percentile: 95, percentileDelta: 0, relativeToMarket: 44 },
+          synergy: { signalTier: 'A', tierReasons: ['方向一致强买（档位加权高分）', '周期 D 环境降档'] },
+        },
+      },
+    }
+    const lines = getSynergyVoteBreakdown(stock)
+    // 三维票附分值（1.0 + 0.8 + 0.8）+ 热度第 5 维票 +0.5（合计 3.1 ≥ S 线 3.0）
+    expect(lines[0]).toContain('共振 买入·涨(+1)')
+    expect(lines[0]).toContain('趋势 弱买·涨(+0.8)')
+    expect(lines[0]).toContain('量价 弱买·涨(+0.8)')
+    expect(lines[0]).toContain('热度 偏强（第5维票 +0.5）')
+    // 周期环境门
+    expect(lines[1]).toContain('周期 回避（拥挤）')
+    // 总档：A 是 S 降一档后的结果，标注降档前档位
+    expect(lines[2]).toContain('总档 A（买入')
+    expect(lines[2]).toContain('周期环境门降档后')
+    expect(lines[2]).toContain('降档前 S')
+  })
+
+  it('热度档位缺失时不展示第 5 维票（fail-visible，不伪造）', () => {
+    const stock = {
+      rankTrend: {
+        resonance: { signalTier: 'A', direction: 'buy' },
+        observation: {
+          rankTrend: { signalTier: 'A', direction: 'buy' },
+          volumePrice: { signalTier: 'B', direction: 'up' },
+          lifecycle: { signalTier: 'A', stage: 'expansion' },
+          synergy: { signalTier: 'S', tierReasons: ['方向一致强买'] },
+        },
+      },
+    }
+    const lines = getSynergyVoteBreakdown(stock)
+    expect(lines[0]).not.toContain('热度')
+    expect(lines[2]).toContain('总档 S（强买）')
+    expect(lines[2]).not.toContain('降档前')
+  })
+
   it('缺字段回退：方向票不足/总档未合并，不抛错', () => {
     const lines = getSynergyVoteBreakdown({})
     expect(lines.some((l) => l.includes('方向票不足'))).toBe(true)
@@ -185,14 +230,14 @@ describe('crossSection getters（2026-08-18 第 5 维 tooltip）', () => {
         },
       },
     })
-    expect(getCrossSectionDetail(stock)).toBe('横截 92/8/31')
+    expect(getCrossSectionDetail(stock)).toBe('热度 92/8/31')
   })
 
   it('getCrossSectionDetail 全缺返回 null', () => {
     expect(getCrossSectionDetail(makeStock())).toBeNull()
   })
 
-  it('getSynergyTierDetail 含横截段', () => {
+  it('getSynergyTierDetail 含热度段', () => {
     const stock = makeStock({
       rankTrend: {
         ...makeStock().rankTrend,
@@ -202,6 +247,6 @@ describe('crossSection getters（2026-08-18 第 5 维 tooltip）', () => {
         },
       },
     })
-    expect(getSynergyTierDetail(stock)).toContain('横截 A')
+    expect(getSynergyTierDetail(stock)).toContain('热度 A')
   })
 })

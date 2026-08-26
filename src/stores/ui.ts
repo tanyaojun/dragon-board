@@ -26,38 +26,33 @@ function getRankTrendAnalysis(stock: any) {
   return stock?.rankTrend ?? null
 }
 
-/** 四维合并档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后，与四列打分排序对齐 */
+/** 档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后。五维度（synergy）与周期（lifecycle）共用 */
 const SYNERGY_TIER_LEVEL: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 }
 
-/** 生命周期 stage（投影优先，回退 observation.lifecycle.stage） */
-const getLifecycleStageOf = (stock: any): unknown =>
-  stock?._lifecycleStage ?? getRankTrendAnalysis(stock)?.observation?.lifecycle?.stage ?? null
-
-/** 生命周期分值（投影优先，回退 observation.lifecycle.score） */
+/** 生命周期分值（投影优先，回退 observation.lifecycle.score；周期同档位组内次级排序用） */
 function getLifecycleScoreOf(stock: any): number | null {
   if (stock?._lifecyclePct !== undefined) return toFiniteNumber(stock._lifecyclePct)
   return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.lifecycle?.score)
 }
 
-/** 生命周期方向组（点火/扩散=上升，拥挤/反转/冷却=下降，其余中性） */
-function getLifecycleDirectionOf(stock: any): unknown {
-  const stage = getLifecycleStageOf(stock)
-  if (stage === 'ignition' || stage === 'expansion') return 'buy'
-  if (stage === 'crowded' || stage === 'reversal' || stage === 'cooling') return 'sell'
-  return 'hold'
+/** 生命周期档位（observation.lifecycle.signalTier；缺失返回 null） */
+function getLifecycleTierOf(stock: any): string | null {
+  const tier = getRankTrendAnalysis(stock)?.observation?.lifecycle?.signalTier
+  return typeof tier === 'string' && tier !== 'unknown' ? tier : null
 }
 
 /**
  * 方向排序组（2026-08-24）：buy/up=1、中性/未知=0、sell/down=-1。
- * 四信号（共振/趋势/横截/量价）方向组**固定**「向上恒前」，不随 order 反转（见
+ * 四信号（共振/趋势/热度/量价）方向组**固定**「向上恒前」，不随 order 反转（见
  * isDirectionFixedSortField）；组内数值%仍随 order 升降。
  */
 const dirRankOf = (dir: unknown): number =>
   dir === 'buy' || dir === 'up' ? 1 : dir === 'sell' || dir === 'down' ? -1 : 0
 
 /**
- * 2026-08-24：共振/趋势/横截/量价四信号——方向组固定「向上（buy/up）恒前」，
- * 不随 order 反转（升序/降序都向上优先）；周期/五维度不在此列（保持方向组随 order 反转）。
+ * 2026-08-24：共振/趋势/热度/量价四信号——方向组固定「向上（buy/up）恒前」，
+ * 不随 order 反转（升序/降序都向上优先）；五维度/周期不走方向组
+ * （2026-08-26 起改为纯档位排序，见 sortedStocks 专用分支）。
  */
 function isDirectionFixedSortField(field: SortField): boolean {
   return (
@@ -105,7 +100,7 @@ function getCrossSectionDirectionOf(stock: any): unknown {
 }
 
 function getDirectionalSortRank(stock: any, field: SortField): number {
-  // 2026-08-24：共振/趋势/横截/量价 → 方向组（buy/up 高在前；档位不参与，见 getStockSortValue 按数值%）
+  // 2026-08-24：共振/趋势/热度/量价 → 方向组（buy/up 高在前；档位不参与，见 getStockSortValue 按数值%）
   if (field === 'resonanceIntensity') {
     return dirRankOf(getResonanceDirectionOf(stock))
   }
@@ -118,17 +113,7 @@ function getDirectionalSortRank(stock: any, field: SortField): number {
   if (field === 'volumePriceQuadrant') {
     return dirRankOf(getVolumePriceDirectionOf(stock))
   }
-  if (field === 'lifecycleOpportunity') {
-    // 2026-08-24：周期列按（方向组固定 + 组内分值）排序——方向由 stage 判定（点火/扩散上升，拥挤/反转/冷却下降）
-    return dirRankOf(getLifecycleDirectionOf(stock))
-  }
-  if (field === 'synergyTier') {
-    // 四维方向组：S/A/B 方向一致强买（buy 类）在前，D/E 反向/风险在后；C/unknown/缺失中性
-    const tier = getSynergyTier(stock)
-    if (tier === 'S' || tier === 'A' || tier === 'B') return 1
-    if (tier === 'D' || tier === 'E') return -1
-    return 0
-  }
+  // 五维度/周期（2026-08-26 用户需求）：纯档位排序，不走方向组（见 sortedStocks 专用分支）
   return 0
 }
 
@@ -140,12 +125,15 @@ function getResonanceIntensitySortValue(stock: any): number | null {
 
 function getStockSortValue(stock: Stock, field: SortField): string | number | null {
   if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
-  // 2026-08-24：趋势列显示方向+数值%——排序值取排名趋势分（弃横截档位，横截独立成列）
+  // 2026-08-24：趋势列显示方向+数值%——排序值取排名趋势分（弃热度档位，热度独立成列）
   if (field === 'rankTrendStrength') return getRankTrendStrengthScoreOf(stock)
-  // 2026-08-24：横截（cross_sction）排序值取 percentile
+  // 2026-08-24：热度（技术字段 crossSection）排序值取 percentile
   if (field === 'crossSection') return getCrossSectionPercentileOf(stock)
-  // 2026-08-24：周期列排序值取生命周期分值（弃 stage 等级）
-  if (field === 'lifecycleOpportunity') return getLifecycleScoreOf(stock)
+  // 2026-08-26：周期列排序值取周期档位等级（A=4 → E=0，无 S 档）；同档位组内按分值次级排序（见 sortedStocks）
+  if (field === 'lifecycleOpportunity') {
+    const tier = getLifecycleTierOf(stock)
+    return tier ? SYNERGY_TIER_LEVEL[tier] ?? null : null
+  }
   if (field === 'volumePriceQuadrant') {
     // 量价分（0-100）：投影优先，回退 rankTrend.observation.volumePrice.score（与三指标回退口径一致）
     const projected = (stock as any)._volumePriceScore
@@ -225,8 +213,8 @@ export const useUIStore = defineStore('ui', () => {
   const expandedRows = ref<Set<string>>(new Set())
 
   const sort = ref<SortConfig>({
-    field: 'compRank',
-    order: 'asc',
+    field: 'synergyTier',
+    order: 'desc',
   })
 
   const filters = ref<FilterConfig>({
@@ -327,13 +315,22 @@ export const useUIStore = defineStore('ui', () => {
     dataVersion.value
 
     result.sort((a, b) => {
+      // 五维度/周期（2026-08-26 用户需求）：纯档位排序——↓降序=高档（A/S）在前、↑升序=低档（E）在前；
+      // 周期同档位组内按分值次级排序；档位缺失（null）恒排最后（fail-visible，不伪装）。
+      if (field === 'synergyTier' || field === 'lifecycleOpportunity') {
+        const byTier = compareSortValues(getStockSortValue(a, field), getStockSortValue(b, field), order)
+        if (byTier !== 0) return byTier
+        if (field === 'lifecycleOpportunity') {
+          return compareSortValues(getLifecycleScoreOf(a), getLifecycleScoreOf(b), order)
+        }
+        return 0
+      }
       // 方向字段：先按方向组排序；组内再按数值 + order。
       const directionRankA = getDirectionalSortRank(a, field)
       const directionRankB = getDirectionalSortRank(b, field)
       if (directionRankA !== directionRankB) {
-        // 2026-08-24：共振/趋势/横截/量价四信号——方向组固定（buy/up 恒前），
+        // 2026-08-24：共振/趋势/热度/量价四信号——方向组固定（buy/up 恒前），
         // 不随 order 反转（无论升序降序，「向上」都排前面）；组内数值仍随 order 升降。
-        // 周期/五维度保持「方向组随 order 反转」（双击列头可反向）。
         const directionFixed = isDirectionFixedSortField(field)
         if (directionFixed) {
           return directionRankB - directionRankA

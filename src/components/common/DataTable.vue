@@ -44,15 +44,15 @@
             <template v-if="col.key === 'compRank'">
               <button class="rank-collapse-toggle" :class="{ collapsed: rankColumnsCollapsed }"
                 :title="rankColumnsCollapsed ? '展开热榜排名列' : '折叠热榜排名列'" @click.stop="toggleRankColumns" type="button">
-                <span class="rank-collapse-arrow">{{ rankColumnsCollapsed ? '▶' : '◀' }}</span>
+                <span class="rank-collapse-arrow">{{ rankColumnsCollapsed ? '◀' : '▶' }}</span>
               </button>
               {{ col.label }}
             </template>
             <template v-else-if="col.key === 'synergyTier'">
               <button class="rank-collapse-toggle" :class="{ collapsed: observationColumnsCollapsed }"
-                :title="observationColumnsCollapsed ? '展开观察列（共振/趋势/横截/量价/周期）' : '隐藏观察列（共振/趋势/横截/量价/周期）'"
+                :title="observationColumnsCollapsed ? '展开观察列（共振/趋势/热度/量价/周期）' : '隐藏观察列（共振/趋势/热度/量价/周期）'"
                 @click.stop="toggleObservationColumns" type="button">
-                <span class="rank-collapse-arrow">{{ observationColumnsCollapsed ? '▶' : '◀' }}</span>
+                <span class="rank-collapse-arrow">{{ observationColumnsCollapsed ? '◀' : '▶' }}</span>
               </button>
               {{ col.label }}
             </template>
@@ -61,7 +61,7 @@
               <button class="rank-collapse-toggle" :class="{ collapsed: quoteColumnsCollapsed }"
                 :title="quoteColumnsCollapsed ? '展开成交额/流通值/总市值/市盈率/市净率' : '折叠成交额/流通值/总市值/市盈率/市净率'"
                 @click.stop="toggleQuoteColumns" type="button">
-                <span class="rank-collapse-arrow">{{ quoteColumnsCollapsed ? '▶' : '◀' }}</span>
+                <span class="rank-collapse-arrow">{{ quoteColumnsCollapsed ? '◀' : '▶' }}</span>
               </button>
             </template>
             <template v-else>{{ col.label }}</template>
@@ -134,7 +134,7 @@
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
                 @mouseenter="showTierTooltip($event, stock, 'rankTrendStrength')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 2026-08-24：趋势改回方向+数值%（取消横截面徽章，横截独立成列） -->
+                <!-- 2026-08-24：趋势改回方向+数值%（取消横截面徽章，热度独立成列） -->
                 <template v-if="getRankTrendStrengthValue(stock) != null">
                   <span :class="getDirectionClass(getRankTrendDirection(stock))">
                     {{ getDirectionArrow(getRankTrendDirection(stock)) }}
@@ -148,11 +148,11 @@
               </div>
             </template>
 
-            <!-- 横截（cross_sction）列：方向+数值%（2026-08-24 新增独立列，percentile 推算方向/分值） -->
+            <!-- 热度列（技术字段 crossSection，UI 展示名「热度」）：方向+数值%（2026-08-24 新增独立列，percentile 推算方向/分值） -->
             <template v-else-if="col.key === 'crossSection'">
               <div class="observation-cell cross-section-cell"
-                @mouseenter="showTierTooltip($event, stock, 'crossSection')"
-                @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
+                @mouseenter="showTierTooltip($event, stock, 'crossSection')" @mousemove="moveConfidenceTooltip($event)"
+                @mouseleave="hideConfidenceTooltip">
                 <template v-if="getCrossSectionValue(stock) != null">
                   <span :class="getCrossSectionClass(stock)">{{ getDirectionArrow(getCrossSectionDirection(stock))
                   }}</span>
@@ -406,10 +406,10 @@ const columns = [
   { key: 'compRank', label: '综合', group: 'comprehensive', always: true },
   { key: 'resonanceIntensity', label: '共振', group: 'comprehensive', always: true },
   { key: 'rankTrendStrength', label: '趋势', group: 'comprehensive', always: true },
-  { key: 'crossSection', label: '横截', group: 'comprehensive', always: true },
+  { key: 'crossSection', label: '热度', group: 'comprehensive', always: true },
   { key: 'volumePriceQuadrant', label: '量价', group: 'comprehensive', always: true },
   { key: 'lifecycleOpportunity', label: '周期', group: 'comprehensive', always: true },
-  { key: 'synergyTier', label: '五维度', group: 'comprehensive', always: true },
+  { key: 'synergyTier', label: '五维', group: 'comprehensive', always: true },
   { key: 'zlje', label: '主力净额', group: 'money', always: true },
   { key: 'zljzb', label: '主力%', group: 'money', always: true },
   { key: 'volumeRatio', label: '3日量比', group: 'quote', always: true },
@@ -425,8 +425,8 @@ const columns = [
 // ========== 列宽映射==========
 const COLUMN_WIDTHS: Record<string, string> = {
   code: '60px',
-  name: '80px',
-  themes: '150px',
+  name: '70px',
+  themes: '120px',
   price: '70px',
   change: '70px',
   speed: '70px',
@@ -446,16 +446,16 @@ const COLUMN_WIDTHS: Record<string, string> = {
   volumePriceQuadrant: '60px',
   lifecycleOpportunity: '60px',
   synergyTier: '60px',
-  zlje: '90px',
-  zljzb: '90px',
-  volume: '90px',
-  volumeRatio: '50px',
-  turnover: '90px',
-  turnoverRate: '90px',
+  zlje: '80px',
+  zljzb: '70px',
+  volume: '85px',
+  volumeRatio: '60px',
+  turnover: '80px',
+  turnoverRate: '80px',
   cirMV: '90px',
   totalMV: '90px',
-  pe: '60px',
-  pb: '60px',
+  pe: '65px',
+  pb: '65px',
 }
 
 // ========== 计算属性==========
@@ -468,7 +468,7 @@ const toggleRankColumns = () => {
   rankColumnsCollapsed.value = !rankColumnsCollapsed.value
 }
 
-// 可折叠观察列（共振/趋势/横截/量价/周期）：默认展开，【五维度】列左侧三角按钮切换（隐藏/展开五列明细）
+// 可折叠观察列（共振/趋势/热度/量价/周期）：默认展开，【五维度】列左侧三角按钮切换（隐藏/展开五列明细）
 const COLLAPSIBLE_OBSERVATION_KEYS = new Set([
   'resonanceIntensity', 'rankTrendStrength', 'crossSection', 'volumePriceQuadrant', 'lifecycleOpportunity',
 ])
@@ -798,7 +798,7 @@ const getDirectionClass = (direction?: string | null) =>
       ? 'observation-sell'
       : 'observation-hold'
 
-// 横截（cross_sction）：仅 percentile，方向/分值由其推算（2026-08-24）
+// 热度（技术字段 crossSection）：仅 percentile，方向/分值由其推算（2026-08-24）
 const getCrossSectionPercentile = (stock: any): number | null => {
   const cs = getRankTrendAnalysis(stock)?.observation?.crossSection ?? {}
   const pct = typeof cs.percentile === 'number' ? Math.round(cs.percentile) : null
@@ -1227,44 +1227,75 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
   const tierCn: Record<string, string> = {
     S: '强买', A: '买入', B: '弱买', C: '中性', D: '回避', E: '否决',
   }
+  // 周期档位中文（环境门语义，2026-08-26 用户模板：阶段/周期/说明）
+  const lifecycleTierCn = (tier: string | null | undefined): string => {
+    const map: Record<string, string> = { A: '放行', B: '谨慎', C: '中性', D: '回避', E: '否决' }
+    return tier && tier !== 'unknown' ? map[tier] ?? tier : '--'
+  }
+  // 五维度总档操作建议
+  const synergyActionAdvice = (tier: string | null | undefined): string => {
+    const advice: Record<string, string> = {
+      S: '强买——高确定性方向一致，可重点介入',
+      A: '买入——方向票达标，可介入',
+      B: '弱买——方向分歧或受周期降档，轻仓观察',
+      C: '中性——无明确方向，观望',
+      D: '回避——反向或风险信号，回避',
+      E: '否决——周期一票否决，坚决回避',
+    }
+    return tier && tier !== 'unknown' ? advice[tier] ?? tier : '数据不足，未合并'
+  }
+  // 周期环境门操作建议（档位优先，回退 stage 语义）
+  const lifecycleActionAdvice = (tier: string | null | undefined, stage: unknown): string => {
+    if (tier === 'E') return '否决——坚决回避，不做介入'
+    if (tier === 'D') return '回避——建议回避或减仓，不追高'
+    if (tier === 'B') return '谨慎——低可见度，轻仓观察为主'
+    if (tier === 'A') return '放行——环境允许，可正常跟踪'
+    if (stage === 'ignition') return '点火——上升早期，可跟踪观察'
+    if (stage === 'expansion') return '扩散——主升路径，适合介入/持有'
+    if (stage === 'crowded') return '拥挤——高位拥挤，建议回避或减仓'
+    if (stage === 'reversal') return '反转——见顶反转，建议回避'
+    if (stage === 'cooling') return '冷却——降温阶段，建议回避观望'
+    return '档位/阶段缺失，仅观察'
+  }
   const pushTier = (tier: string | null | undefined) => {
     lines.push(`档位：${tier && tier !== 'unknown' ? tier : '--'}`)
   }
   if (field === 'synergyTier') {
-    // 五维度（原四维）：合并档位徽章。tooltip 按用户要求：名称代码 / 档位 / 方向 / 分值 / 说明
+    // 五维度（2026-08-26 用户模板）：名称（代码）/ 阶段 / 周期 / 说明（参数阈值 + 操作建议）
     const tier = getSynergyTier(stock)
-    const syn = (observation.synergy as any) || {}
-    lines.push(`${stockName} ${stockCode}`)
-    pushTier(tier)
-    // 方向按 synergy.state 映射（2026-08-24 用户确认）
-    const state = syn.state as string | undefined
-    const stateDir =
-      state === '启动确认' || state === '主升确认'
-        ? '向上'
-        : state === '风险升级' || state === '退潮'
-          ? '向下'
-          : '中性'
-    lines.push(`方向：${stateDir}`)
-    // 分值显示档位相关说明（synergy 无独立 0-100 分值）
-    lines.push(`分值：${tier && tier !== 'unknown' ? `${tier}（${tierCn[tier] ?? tier}）` : '--'}`)
-    // 说明：三票一票制 + 各维档位（与现有一致）
-    lines.push('说明：四维信号 · 三票一票制')
-    lines.push(...getSynergyVoteBreakdown(stock))
-    const csTier = getCrossSectionTier(stock)
-    const csDetail = getCrossSectionDetail(stock)
-    if (csTier) lines.push(`横截面 ${csTier}${csDetail ? `（${csDetail}）` : ''}`)
-  } else if (field === 'lifecycleOpportunity') {
-    // 周期（2026-08-16 优化）：环境门标签——用户友好解释"三票一票制"中的把关角色
-    const stage = getLifecycleStageLabel(stock)
+    const stageLabel = getLifecycleStageLabel(stock)
     const lcTier = getLifecycleTier(stock)
-    lines.push('周期 · 环境门（三票一票制中的"一票"）')
-    if (stage && stage !== '未知') lines.push(`当前阶段：${stage}`)
-    if (lcTier === 'E') lines.push('一票否决：本票直接决定总档为否决')
-    else if (lcTier === 'B') lines.push('谨慎把关：若方向票为强买/买入，则降一档')
-    else if (lcTier === 'D') lines.push('回避把关：若方向票为强买/买入，则降一档')
-    else if (lcTier === 'A') lines.push('放行：不干预三维方向票')
-    else lines.push('环境门状态未知')
-    lines.push('（周期不投方向票，只做风控把关）')
+    lines.push(`${stockName}（${stockCode}）：`)
+    lines.push(`阶段：${stageLabel && stageLabel !== '未知' ? stageLabel : '--'}`)
+    lines.push(`周期：${lifecycleTierCn(lcTier)}`)
+    lines.push('说明：')
+    lines.push(
+      `  总档 ${tier && tier !== 'unknown' ? `${tier}（${tierCn[tier] ?? tier}）` : '--'} · 五维档位 ${getSynergyTierDetail(stock).join(' / ')}`,
+    )
+    lines.push(...getSynergyVoteBreakdown(stock).map((line) => `  ${line}`))
+    const synReasons = getSynergyTierReasons(stock)
+    if (synReasons.length) lines.push(`  依据：${synReasons.join('；')}`)
+    const csDetail = getCrossSectionDetail(stock)
+    if (csDetail) lines.push(`  ${csDetail}`)
+    lines.push('  周期不投方向票，但参与总档合成：E 一票否决、B/D 对 S/A 降一档、A 放行')
+    lines.push(`  操作建议：${synergyActionAdvice(tier)}`)
+  } else if (field === 'lifecycleOpportunity') {
+    // 周期（2026-08-26 用户模板）：名称（代码）/ 阶段 / 周期 / 说明（环境门规则 + 操作建议）
+    const stage = getLifecycleStage(stock)
+    const stageLabel = getLifecycleStageLabel(stock)
+    const lcTier = getLifecycleTier(stock)
+    lines.push(`${stockName}（${stockCode}）：`)
+    lines.push(`阶段：${stageLabel && stageLabel !== '未知' ? stageLabel : '--'}`)
+    lines.push(`周期：${lifecycleTierCn(lcTier)}`)
+    lines.push('说明：周期为环境门，不投方向票，但参与总档位合成')
+    lines.push('  E 否决 → 总档强制否决')
+    lines.push('  B 谨慎 / D 回避 → 总档 S/A 降一档')
+    lines.push('  A 放行 → 不干预三维方向票')
+    const lcReasons = Array.isArray(observation.lifecycle?.tierReasons)
+      ? observation.lifecycle.tierReasons
+      : []
+    if (lcReasons.length) lines.push(`  依据：${lcReasons.join('；')}`)
+    lines.push(`  操作建议：${lifecycleActionAdvice(lcTier, stage)}`)
   } else if (field === 'resonanceIntensity') {
     const res = (rankTrend && rankTrend.resonance) || {}
     const tier = getResonanceTier(stock)
@@ -1284,7 +1315,7 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
     if (res.marketMedianShortChange != null) reasons.push(`市场热度中位变化 ${res.marketMedianShortChange.toFixed(2)}`)
     lines.push(`说明：${reasons.length ? reasons.join('；') : '（无结构化原因）'}`)
   } else if (field === 'rankTrendStrength') {
-    // 趋势：方向+数值%；档位取趋势自身（getRankTrendTier），横截独立成列后不再混入 tooltip
+    // 趋势：方向+数值%；档位取趋势自身（getRankTrendTier），热度独立成列后不再混入 tooltip
     const tier = getRankTrendTier(stock)
     const rt = observation.rankTrend || {}
     const score = getRankTrendStrengthValue(stock)
@@ -3040,6 +3071,7 @@ defineExpose({
   border-radius: 3px;
   background: rgba(231, 189, 77, 0.1);
 }
+
 .lifecycle-env-expansion {
   color: #ff5b62 !important;
   font-size: 11px;
@@ -3047,6 +3079,7 @@ defineExpose({
   border-radius: 3px;
   background: rgba(255, 91, 98, 0.1);
 }
+
 .lifecycle-env-crowded {
   color: #ff9f43 !important;
   font-size: 11px;
@@ -3054,6 +3087,7 @@ defineExpose({
   border-radius: 3px;
   background: rgba(255, 159, 67, 0.1);
 }
+
 .lifecycle-env-reversal {
   color: #38c98b !important;
   font-size: 11px;
@@ -3061,6 +3095,7 @@ defineExpose({
   border-radius: 3px;
   background: rgba(56, 201, 139, 0.1);
 }
+
 .lifecycle-env-cooling {
   color: #8f999c !important;
   font-size: 11px;
@@ -3068,6 +3103,7 @@ defineExpose({
   border-radius: 3px;
   background: rgba(143, 153, 156, 0.1);
 }
+
 .lifecycle-env-neutral {
   color: #95a5a6 !important;
   font-size: 11px;

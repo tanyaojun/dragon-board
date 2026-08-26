@@ -99,7 +99,7 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
   })
 
-  it('sorts synergy tier by direction group then tier level', () => {
+  it('sorts synergy tier by tier level (↑asc=低档在前、↓desc=高档在前)', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       { code: '000001', name: 'D档', rankTrend: { observation: { synergy: { signalTier: 'D' } } } },
@@ -108,16 +108,16 @@ describe('UIStore table sorting', () => {
       { code: '000004', name: '缺失', rankTrend: { observation: {} } },
     ])
 
-    // asc：方向组优先（S/A/B 在前），组内等级升序 → B(3) < S(5)；D 反向组最后
+    // asc（↑）：低档在前 → D(1) < B(3) < S(5)，缺失排最后
     uiStore.toggleSort('synergyTier')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000004', '000001'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000002', '000003', '000004'])
 
-    // desc：方向组随 order 反转（D/E 反向组在前），组内等级降序 → S 在 B 前
+    // desc（↓）：高档在前 → S(5) > B(3) > D(1)，缺失仍最后
     uiStore.toggleSort('synergyTier')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000004', '000003', '000002'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001', '000004'])
   })
 
-  it('keeps unknown synergy tier in the neutral group after real tiers', () => {
+  it('keeps missing/unknown synergy tier after real tiers in both directions', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       { code: '000001', name: 'E档', rankTrend: { observation: { synergy: { signalTier: 'E' } } } },
@@ -126,21 +126,48 @@ describe('UIStore table sorting', () => {
     ])
 
     uiStore.toggleSort('synergyTier')
-    // A(4) 在 asc 组内 < E(0)？A/E 分属不同方向组：A=1 前、E=-1 后；unknown=0 中间
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+    // asc：E(0) < A(4)，unknown(null) 排最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000002', '000003'])
+
+    uiStore.toggleSort('synergyTier')
+    // desc：A(4) > E(0)，unknown(null) 仍最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
   })
 
-  it('sorts lifecycle opportunity by the displayed observation score', () => {
+  it('sorts lifecycle opportunity by tier groups then score within group', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
-      { code: '000001', name: '低成熟', _lifecyclePct: 21 },
-      { code: '000002', name: '高成熟', _lifecyclePct: 91 },
-      { code: '000003', name: '中成熟', rankTrend: { observation: { lifecycle: { score: 63 } } } },
+      { code: '000001', name: 'A档低分', rankTrend: { observation: { lifecycle: { signalTier: 'A', score: 30 } } } },
+      { code: '000002', name: 'B档', rankTrend: { observation: { lifecycle: { signalTier: 'B', score: 80 } } } },
+      { code: '000003', name: 'A档高分', rankTrend: { observation: { lifecycle: { signalTier: 'A', score: 90 } } } },
+      { code: '000004', name: '缺失', rankTrend: { observation: {} } },
     ])
 
+    // asc（↑）：低档在前 → B(3) < A(4)，同档组内分值升序，缺失最后
     uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003', '000004'])
 
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002'])
+    // desc（↓）：高档在前 → A 组（组内分值降序 90 前）> B 组，缺失仍最后
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000002', '000004'])
+  })
+
+  it('sorts lifecycle opportunity by tier (stage-derived), not direction group', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '冷却高分', _lifecyclePct: 91, rankTrend: { observation: { lifecycle: { signalTier: 'D', stage: 'cooling', score: 91 } } } },
+      { code: '000002', name: '扩散', _lifecyclePct: 63, rankTrend: { observation: { lifecycle: { signalTier: 'A', stage: 'expansion', score: 63 } } } },
+      { code: '000003', name: '点火', _lifecyclePct: 55, rankTrend: { observation: { lifecycle: { signalTier: 'A', stage: 'ignition', score: 55 } } } },
+      { code: '000004', name: '拥挤', _lifecyclePct: 85, rankTrend: { observation: { lifecycle: { signalTier: 'D', stage: 'crowded', score: 85 } } } },
+    ])
+
+    // asc（↑）：D 档(1) 组在前（组内分值升序 85<91），A 档(4) 组在后（55<63）
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000004', '000001', '000003', '000002'])
+
+    // desc（↓）：A 档组在前（组内分值降序 63>55），D 档组在后（91>85）
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001', '000004'])
   })
 
   it('keeps missing observation scores after real values in both sort directions', () => {

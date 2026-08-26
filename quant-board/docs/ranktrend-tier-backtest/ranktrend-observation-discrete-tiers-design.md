@@ -162,7 +162,11 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
    strength：S=1.2 / A=1.0 / B=0.8 / C=0.5 / D=1.0 / E=1.0
    vote = strength × dir_sign(direction)，dir_sign: buy/up=+1, sell/down=-1, hold=0（弃权）
    方向主导（D/E 档 buy 仍投正分，同旧票数语义）；档位幅度区分体现于 S/B/C：
-   vote(共振) + vote(趋势) + vote(量价) = vote_sum（float，范围 ±6）
+   第 5 维热度（技术字段 crossSection，UI 展示名「热度」；默认参与，config.tierSynergyCrossSectionVote=1.0，2026-08-17 用户决策）：
+     cs 票 = CS_STRENGTH(cs_tier) × 权重，CS_STRENGTH：A=+1.0 / B=+0.5 / C=-0.5 / D=-1.0
+   第 6 维 priceMomentum / 第 7 维 priceRankDivergence：
+     tierSynergyPriceMomentumVote=0 / tierSynergyDivergenceVote=0（观察因子，默认不参与投票）
+   vote_sum = vote(共振) + vote(趋势) + vote(量价) + cs 票（+ pm 票 / dv 票 当对应权重 > 0）
 4. 档位判定（按优先级，阈值 config.tierSynergyVote*，默认 strong=2.0/weak=1.0/reverse=-1.0）：
    a. vote_sum ≥ strong + 1                → S（高票一致强买，如三维 A/buy 或三维 S/buy）
    b. vote_sum ≥ strong                     → A（方向一致强买，如两维 A/buy）
@@ -179,7 +183,10 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
 - 档位加权核心语义：S=1.2/B=0.8/C=0.5 在**票数内**区分强度（B 档 3 票仅 A、C 档 3 票仅 B、
   弱确认单票不升 B），D/E=1.0 保持方向主导（单维空即 D）——权重经 h1 验收口径扫描选定
   （saEx 0.0651 ≥ 0.05、passHard=True，优于全 1.0 基线 0.0519）。
-- `vote_sum` 覆盖 −6..+6：+3.0（三 A/buy）为 S，−1.0（单 D/sell）为 D，0 为中性或对冲。
+- `vote_sum` 覆盖范围：三维 ±6 + 热度 ±1（第 5 维默认开）；+3.0（三 A/buy）为 S，−1.0（单 D/sell）为 D，0 为中性或对冲。
+  热度 B 档（+0.5）可把 2.6 分（A/B/B 三票）抬到 3.1 达 S 线——实例：江西铜业 600362
+  共振 A·涨(+1.0) + 趋势 B·涨(+0.8) + 量价 B·涨(+0.8) + 热度 B(+0.5) = 3.1 ≥ 3.0 → S，
+  周期 D（拥挤/回避）降一档 → 最终 A（买入，tierReasons 含"方向一致强买（档位加权高分）；周期 D 环境降档"）。
 - `synergy.state` 文本字段保留不变，`synergy.signalTier` 为新增总档。
 - 同档内排序用各维连续分，权重未定，待第 9 节回测校准后确定（不沿用杜撰权重）。
 

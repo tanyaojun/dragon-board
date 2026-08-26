@@ -55,12 +55,12 @@ export function getLifecycleTier(stock: unknown): RankTrendSignalTier | null {
   return asTier((stock as { rankTrend?: { observation?: { lifecycle?: { signalTier?: unknown } } } } | undefined)?.rankTrend?.observation?.lifecycle?.signalTier)
 }
 
-/** 横截面档位：stock.rankTrend.observation.crossSection.signalTier（2026-08-18 第 5 维，tooltip 展示） */
+/** 热度档位（技术字段 crossSection）：stock.rankTrend.observation.crossSection.signalTier（2026-08-18 第 5 维，tooltip 展示；UI 展示名「热度」） */
 export function getCrossSectionTier(stock: unknown): RankTrendSignalTier | null {
   return asTier((stock as { rankTrend?: { observation?: { crossSection?: { signalTier?: unknown } } } } | undefined)?.rankTrend?.observation?.crossSection?.signalTier)
 }
 
-/** 横截面明细：percentile/delta/relativeToMarket（tooltip 展示；缺字段返回 null） */
+/** 热度明细（技术字段 crossSection）：percentile/delta/relativeToMarket（tooltip 展示；缺字段返回 null） */
 export function getCrossSectionDetail(stock: unknown): string | null {
   const cs = (stock as { rankTrend?: { observation?: { crossSection?: { percentile?: unknown; percentileDelta?: unknown; relativeToMarket?: unknown } } } } | undefined)?.rankTrend?.observation?.crossSection
   if (!cs || typeof cs !== 'object') return null
@@ -68,7 +68,7 @@ export function getCrossSectionDetail(stock: unknown): string | null {
   const delta = typeof cs.percentileDelta === 'number' ? Math.round(cs.percentileDelta) : null
   const rel = typeof cs.relativeToMarket === 'number' ? Math.round(cs.relativeToMarket) : null
   if (pct === null && delta === null && rel === null) return null
-  return `横截 ${pct ?? '-'}/${delta ?? '-'}/${rel ?? '-'}`
+  return `热度 ${pct ?? '-'}/${delta ?? '-'}/${rel ?? '-'}`
 }
 
 /** 四维合并档位：stock.rankTrend.observation.synergy.signalTier（缺字段返回 null，回退纯连续分展示） */
@@ -82,7 +82,7 @@ export function getSynergyTierReasons(stock: unknown): string[] {
   return Array.isArray(reasons) ? (reasons as string[]) : []
 }
 
-/** 四维合并档位明细（悬停展示）：如 ["共振 S","趋势 A","量价 B","周期 A","横截 A"]，缺维显示 "-" */
+/** 五维合并档位明细（悬停展示）：如 ["共振 S","趋势 A","量价 B","周期 A","热度 B"]，缺维显示 "-" */
 export function getSynergyTierDetail(stock: unknown): string[] {
   const parts: string[] = []
   const dims: Array<[string, RankTrendSignalTier | null]> = [
@@ -90,7 +90,7 @@ export function getSynergyTierDetail(stock: unknown): string[] {
     ['趋势', getRankTrendTier(stock)],
     ['量价', getVolumePriceTier(stock)],
     ['周期', getLifecycleTier(stock)],
-    ['横截', getCrossSectionTier(stock)],
+    ['热度', getCrossSectionTier(stock)],
   ]
   for (const [label, tier] of dims) {
     parts.push(tier === null ? `${label} -` : `${label} ${tier}`)
@@ -128,12 +128,13 @@ function dimDirection(stock: unknown, path: string): string | null {
   return typeof cur === 'string' && cur ? cur : null
 }
 
-/** 四维信号"三票一票制"用户友好解释（悬停展示，2026-08-16）：
- *  三维方向投票（共振/趋势/量价，有明确方向才投）+ 周期环境门（否决/谨慎/回避/放行）+ 最终结果。
+/** 五维信号"三票一票制"用户友好解释（悬停展示，2026-08-16；2026-08-26 补齐第 5 维热度票与降档前档位）：
+ *  方向投票（共振/趋势/量价三维 + 第 5 维热度（crossSection），有明确方向/档位才投）+ 周期环境门（否决/谨慎/回避/放行）+ 最终结果。
+ *  分值映射与后端一致（_VOTE_STRENGTH v4 / _CS_STRENGTH × tierSynergyCrossSectionVote=1.0），仅作解释投影，不产出档位。
  *  示例：
- *    共振 强买·涨  趋势 买入·涨  量价 弱买·放量涨   ← 三维方向票
- *    周期 扩散（放行）                              ← 环境门把关
- *    方向票汇总 → 总档 买入（周期环境门降档后）       */
+ *    共振 强买·涨(+1.2)  趋势 买入·涨(+1.0)  量价 弱买·涨(+0.8)  热度 偏强（第5维票 +0.5）
+ *    周期 拥挤（回避）→ 若为 S/A 则降一档
+ *    票数汇总 → 总档 买入（周期环境门降档后，降档前 S）       */
 export function getSynergyVoteBreakdown(stock: unknown): string[] {
   const lines: string[] = []
   const votes: string[] = []
@@ -146,10 +147,17 @@ export function getSynergyVoteBreakdown(stock: unknown): string[] {
   const vpDir = dimDirection(stock, 'rankTrend.observation.volumePrice.direction')
   const stage = dimDirection(stock, 'rankTrend.observation.lifecycle.stage')
 
+  // 档位加权票数（展示投影，与后端 volume_price.py _VOTE_STRENGTH v4 一致）
+  const VOTE_STRENGTH: Record<string, number> = { S: 1.2, A: 1.0, B: 0.8, C: 0.5, D: 1.0, E: 1.0 }
+  const CS_TIER_CN: Record<string, string> = { A: '强', B: '偏强', C: '偏弱', D: '弱' }
+  const CS_VOTE: Record<string, number> = { A: 1.0, B: 0.5, C: -0.5, D: -1.0 }
+
   const voteText = (tier: RankTrendSignalTier | null, dir: string | null, defaultTxt: string) => {
     if (!tier || tier === 'unknown') return null
-    if (dir === 'buy' || dir === 'up') return `${TIER_CN[tier]}·涨`
-    if (dir === 'sell' || dir === 'down') return `${TIER_CN[tier]}·跌`
+    const score = VOTE_STRENGTH[tier] ?? 0
+    const scoreTxt = score > 0 ? `(+${score})` : `(${score})`
+    if (dir === 'buy' || dir === 'up') return `${TIER_CN[tier]}·涨${scoreTxt}`
+    if (dir === 'sell' || dir === 'down') return `${TIER_CN[tier]}·跌${scoreTxt}`
     return `${TIER_CN[tier]}（${defaultTxt}）`
   }
   const vRes = voteText(resTier, resDir, '共振观望')
@@ -158,6 +166,12 @@ export function getSynergyVoteBreakdown(stock: unknown): string[] {
   if (vRes) votes.push(`共振 ${vRes}`)
   if (vRank) votes.push(`趋势 ${vRank}`)
   if (vVp) votes.push(`量价 ${vVp}`)
+  // 第 5 维热度（技术字段 crossSection）：默认参与投票（后端 tierSynergyCrossSectionVote=1.0，2026-08-17 用户决策）
+  const csTier = getCrossSectionTier(stock)
+  if (csTier && csTier !== 'unknown' && CS_VOTE[csTier] != null) {
+    const csVote = CS_VOTE[csTier]
+    votes.push(`热度 ${CS_TIER_CN[csTier] ?? csTier}（第5维票 ${csVote > 0 ? '+' : ''}${csVote}）`)
+  }
   if (votes.length) {
     lines.push(votes.join('  '))
   } else {
@@ -178,13 +192,16 @@ export function getSynergyVoteBreakdown(stock: unknown): string[] {
     lines.push(`周期 ${stageCn}（环境门）`)
   }
 
-  // 最终结果
+  // 最终结果：后端已产 synergy.signalTier；若 tierReasons 含"环境降档"，标注降档前档位（S→A、A→B）
   const syn = getSynergyTier(stock)
   const synReasons = getSynergyTierReasons(stock)
   const downgraded = synReasons.some((r) => r.includes('环境降档'))
+  const downgradeBefore = (tier: RankTrendSignalTier): string =>
+    tier === 'A' ? 'S' : tier === 'B' ? 'A' : tier
   if (syn && syn !== 'unknown') {
     const reason = TIER_CN[syn]
-    lines.push(`方向票汇总 → 总档 ${syn}（${reason}${downgraded ? '，周期环境门降档后' : ''}）`)
+    const before = downgraded ? `，降档前 ${downgradeBefore(syn)}` : ''
+    lines.push(`票数汇总 → 总档 ${syn}（${reason}${downgraded ? '，周期环境门降档后' : ''}${before}）`)
   } else {
     lines.push('总档：数据不足，未合并')
   }
