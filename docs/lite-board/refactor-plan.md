@@ -1,6 +1,8 @@
 # lite-board 极简重构方案 v3（独立部署 + 移动优先）
 
-> 状态：**方案 v3（2026-08-25）**。新增产品定位与移动优先约束。
+> 状态：**Obsolete（2026-08-28）**。本文件仅作为历史审计材料；现行方案请参阅 [`cloud-native-design.md`](cloud-native-design.md) 及 [`cloud-native-plan.md`](cloud-native-plan.md)。
+
+> 历史版本：方案 v3（2026-08-25）。新增产品定位与移动优先约束。
 > 归档：`docs/lite-board/`。
 
 ## 0. 产品定位（2026-08-25 明确，最重要）
