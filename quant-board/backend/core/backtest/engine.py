@@ -161,6 +161,7 @@ class BacktestEngine:
         synthesized_empty_hotlist_count = int(stats.get("synthesizedEmptyHotlistCount") or 0)
         target_frames = int(stats.get("targetFrames") or sample_diagnostics.get("snapshotCount") or 0)
         runtime_filter = gate.get("runtimeFilter") if isinstance(gate.get("runtimeFilter"), dict) else {}
+        runtime_observation = gate.get("runtimeObservation") if isinstance(gate.get("runtimeObservation"), dict) else {}
         report_only_diagnostics = (
             gate.get("reportOnlyDiagnostics")
             if isinstance(gate.get("reportOnlyDiagnostics"), dict)
@@ -169,6 +170,7 @@ class BacktestEngine:
         layer_1_efficacy = gate.get("layer1SignalEfficacy") if isinstance(gate.get("layer1SignalEfficacy"), dict) else {}
         layer_2_quality = gate.get("layer2ExecutionQuality") if isinstance(gate.get("layer2ExecutionQuality"), dict) else {}
         dropped_empty_count = int(runtime_filter.get("droppedEmptyHotlistSnapshots") or 0)
+        retained_empty_count = int(runtime_observation.get("emptyHotlistSnapshots") or 0)
         ok_share = float((sample_diagnostics.get("statusShares") or {}).get("ok") or 0)
         degraded_share = float((sample_diagnostics.get("statusShares") or {}).get("degraded") or 0)
         has_stable_macd = bool(macd_diagnostics.get("hasStableObservationBars"))
@@ -189,11 +191,13 @@ class BacktestEngine:
             )
         if dropped_empty_count:
             warnings.append(f"本次回测已自动剔除 {dropped_empty_count} 个空热榜快照，仅用可交易快照继续运行。")
+        if retained_empty_count:
+            warnings.append(f"本次回测保留 {retained_empty_count} 个空热榜快照，相关信号标记为数据不足。")
         if not has_stable_macd:
             warnings.append("MACD 尚未达到稳定观察窗口，MACD 相关解释只作辅助。")
 
         severity = "pass"
-        empty_only_runtime_filtered = bool(dropped_empty_count and not any(
+        empty_only_runtime_filtered = bool((dropped_empty_count or retained_empty_count) and not any(
             int(stats.get(key) or 0) > 0
             for key in ("invalidCaptureMode", "duplicateSnapshotId", "nonMonotonicTimestamp", "missingCoreFieldCount")
         ))
@@ -225,7 +229,9 @@ class BacktestEngine:
             "snapshotCount": int(sample_diagnostics.get("snapshotCount") or 0),
             "sourceSnapshotCount": target_frames,
             "runtimeFilter": runtime_filter,
+            "runtimeObservation": runtime_observation,
             "droppedEmptyHotlistSnapshots": dropped_empty_count,
+            "retainedEmptyHotlistSnapshots": retained_empty_count,
             "lowHotlistCount": low_hotlist_count,
             "emptyHotlistCount": empty_hotlist_count,
             "rawEmptyHotlistCount": raw_empty_hotlist_count,

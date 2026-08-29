@@ -6,7 +6,7 @@
 
 `dragon-board 快照数据 -> QuantBoard 数据集 -> Python rankTrend -> 回测 -> 独立优化模块 -> API/CLI/前端报告`
 
-这里的 Python rankTrend 必须对齐 TypeScript golden 标准。QuantBoard 是仓库内唯一回测平台，Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出。
+这里的 Python RankTrend 是生产 golden 事实标准；TypeScript 仅作为导出与跨语言验收基线。QuantBoard 是仓库内唯一回测平台，Dragon Board 根项目只提供实时看板和快照数据。
 
 V12 目标新增一条与 RankTrend 并列的 ThemeTrend 研究链：
 
@@ -325,7 +325,7 @@ outflowThemes/suggestion/computedAt/algorithmVersion/evidence`，供前端、回
 
 ### golden_ranktrend_cases
 
-MongoDB 模式下保存在 `golden_ranktrend_cases` 集合，保存 TypeScript golden 输入和期望输出。Python 移植必须用它做回归校验。
+MongoDB 模式下保存在 `golden_ranktrend_cases` 集合，保存跨语言验收输入和期望输出。Python 生产输出作为事实标准，TS 导出样本仅用于兼容性回归。
 
 ### backtest_runs
 

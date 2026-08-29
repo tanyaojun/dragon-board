@@ -160,24 +160,15 @@ def _prepare_frames_for_backtest(frames: list[dict[str, Any]], snapshot_type: st
     if gate.passed:
         return frames, gate_dict
 
-    stats = gate.stats or {}
-    has_empty_hotlist = int(stats.get("emptyHotlistCount") or 0) > 0
-    has_other_fatal = any(int(stats.get(key) or 0) > 0 for key in FATAL_QUALITY_STATS)
-    non_empty_frames = [frame for frame in frames if frame.get("stocks")]
-    min_snapshot_count = int(stats.get("minSnapshotCount") or 2)
-
-    if not has_empty_hotlist or has_other_fatal or len(non_empty_frames) < min_snapshot_count:
-        raise ValueError({"qualityGate": gate_dict})
-
-    dropped_frames = [frame for frame in frames if not frame.get("stocks")]
-    gate_dict["runtimeFilter"] = {
-        "reason": "empty_hotlist_snapshots_excluded",
+    affected_frames = [frame for frame in frames if not frame.get("stocks")]
+    gate_dict["runtimeObservation"] = {
+        "reason": "quality_issues_retained_for_backtest",
         "sourceTargetFrames": len(frames),
-        "usableTargetFrames": len(non_empty_frames),
-        "droppedEmptyHotlistSnapshots": len(dropped_frames),
-        "droppedSnapshotIds": [str(frame.get("snapshotId") or "") for frame in dropped_frames[:50]],
+        "retainedTargetFrames": len(frames),
+        "emptyHotlistSnapshots": len(affected_frames),
+        "emptyHotlistSnapshotIds": [str(frame.get("snapshotId") or "") for frame in affected_frames[:50]],
     }
-    return non_empty_frames, gate_dict
+    return frames, gate_dict
 
 
 def _ensure_runtime_filtered_frames_usable(frames: list[dict[str, Any]], quality_gate: dict[str, Any]) -> None:
@@ -195,4 +186,6 @@ def _ensure_runtime_filtered_frames_usable(frames: list[dict[str, Any]], quality
             f"runtime filters left usable snapshots below minimum {min_snapshot_count}: {len(usable_frames)}",
         ],
     }
-    raise ValueError({"qualityGate": failed_gate})
+    # 质量不足只影响研究结论可信度，不得阻断已有原始帧进入回测/回放链路。
+    quality_gate.clear()
+    quality_gate.update(failed_gate)

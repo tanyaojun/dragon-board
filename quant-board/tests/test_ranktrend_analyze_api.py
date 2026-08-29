@@ -798,7 +798,7 @@ def test_analyze_redis_cache_hit_and_key_variation(monkeypatch):
     assert fourth.json()["cache"]["hit"] is False
 
 
-def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(monkeypatch):
+def test_analyze_cache_key_refreshes_when_price_volume_fields_change(monkeypatch):
     # 面板每次打开都会生成自增的 current:N slotTime，且 currentFrame.stocks 带实时行情字段。
     # 两者都不能进入缓存键，否则 Redis TTL 缓存永远 miss、每次都重新计算。
     fake_redis = FakeRedis()
@@ -860,11 +860,11 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
     assert first.status_code == 200
     assert calls["n"] == 1
 
-    # 自增序列号 + 实时行情字段变化 → 必须命中同一缓存键
+    # 自增序列号被规范化，但实时行情字段变化必须触发重算
     calls["n"] = 0
     second = client.post("/api/ranktrend/analyze", json=payload("current:2", 7.0))
-    assert calls["n"] == 0
-    assert second.json()["cache"]["hit"] is True
+    assert calls["n"] == 1
+    assert second.json()["cache"]["hit"] is False
 
     # 跨交易日（tradingDate 不同）→ 输出口径不同 → 必须生成新键
     calls["n"] = 0
@@ -876,11 +876,10 @@ def test_analyze_cache_key_ignores_current_frame_sequence_and_volatile_fields(mo
     assert third.json()["cache"]["hit"] is False
 
 
-def test_analyze_cache_key_contract_avg_rank_num_in_key_turnover_not(monkeypatch):
+def test_analyze_cache_key_contract_includes_avg_rank_and_turnover(monkeypatch):
     # 2026-08-25（P2 复盘）缓存键契约不变式：**计算输入 ⊆ 缓存键**。
     # 新股 percentile 计算（attention_rank_lookup）只用 avgRankNum → avgRankNum 必须进键（变化→新键）；
-    # turnover/turnoverRate 仅参与 frame_market_percentiles（响应辅助字段，TTL 内陈旧可接受）→ 不进键（变化→同键命中）。
-    # 若未来让新股 percentile 依赖量能字段，必须同步进键并更新本测试。
+    # turnover/turnoverRate 参与量能观察，必须进入缓存键（变化→新键）。
     fake_redis = FakeRedis()
     monkeypatch.setattr(
         "backend.api.ranktrend_routes.snapshot_cache.get_snapshot_redis_cache",
@@ -948,11 +947,11 @@ def test_analyze_cache_key_contract_avg_rank_num_in_key_turnover_not(monkeypatch
     assert calls["n"] == 1
     assert second.json()["cache"]["hit"] is False
 
-    # turnover 变化（不进键，仅市场分位辅助）→ 同键命中缓存
+    # turnover 变化（量能观察输入）→ 必须新键重算
     calls["n"] = 0
     third = client.post("/api/ranktrend/analyze", json=payload(2.0, 99.0))
-    assert calls["n"] == 0
-    assert third.json()["cache"]["hit"] is True
+    assert calls["n"] == 1
+    assert third.json()["cache"]["hit"] is False
 
 
 def test_analyze_cache_ttl_dynamic_intraday_afterhours(monkeypatch):

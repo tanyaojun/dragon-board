@@ -372,9 +372,31 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     (
         config, stock, frame, ranks, percentiles, regime, hot_themes,
         momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
+        *history_args,
     ) = args
+    price_changes = history_args[0] if history_args else None
+    amount_history = history_args[1] if len(history_args) > 1 else None
+    atr_history = history_args[2] if len(history_args) > 2 else None
     engine = RankTrendPythonEngine(config=config)
-    signal = engine._build_signal(stock, frame, ranks, percentiles, regime, {}, assemble=False)
+    # API 与 replay/backtest 共用完整 observation 组装入口；单帧 API 的 ATR
+    # 历史不足时由引擎返回 insufficient，而不是省略维度。
+    signal = engine._build_signal(
+        stock,
+        frame,
+        ranks,
+        percentiles,
+        regime,
+        {},
+        assemble=True,
+        market_ctx={
+            "marketMedianShortChange": market_median,
+            "marketSampleCount": market_sample_count,
+            "marketMedianPercentile": market_median_percentile,
+        },
+        price_changes=price_changes,
+        amount_history=amount_history,
+        atr_history=atr_history,
+    )
     if not signal:
         return None
     code = str(stock.get("code") or "")
@@ -538,9 +560,28 @@ def _analyze_frames(
                     },
                 })
                 continue
+            # API 当前帧也传入可用的价格/成交额历史，使 amountRatio、priceMomentum、
+            # priceRankDivergence 与 replay 使用同一输入合同。
+            price_changes = []
+            amount_history = []
+            atr_history = []
+            from backend.analysis.ranktrend.atr_mean_reversion import bar_of
+            for historical in frames[: index + 1]:
+                row = next(
+                    (item for item in historical.get("stocks", [])
+                     if isinstance(item, dict) and str(item.get("code") or "") == code),
+                    None,
+                )
+                if row is not None:
+                    price_changes.append(row.get("change"))
+                    amount_history.append(row.get("amount"))
+                    parsed_bar = bar_of(row)
+                    atr_history.append(parsed_bar)
             full_tasks.append((
                 engine.config, stock, frame, ranks, percentiles, regime, hot_themes,
                 momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
+                price_changes, amount_history,
+                atr_history,
             ))
 
         # 完整四信号计算：单股逐股纯 Python 计算仅 ~1ms/股，全市场 224 股串行 ~0.2s。
@@ -659,22 +700,20 @@ def _percentile(rank: float, total_count: int) -> float:
 def _normalize_current_frame(current_frame: dict[str, Any] | None) -> dict[str, Any] | None:
     """规范化 currentFrame 参与缓存键。
 
-    只保留影响分析输出的稳定身份字段：
+    保留所有影响分析输出的输入字段：
     - slotTime 去掉前端自增的 `current:N` 序列号，避免面板每次打开都生成新键导致缓存永不命中；
-    - stocks 只保留 code/rank/avgRankNum（横截面排序原料），剔除 change/volumeRatio/zlje/zljzb
-      等实时行情字段，避免行情一跳缓存键就变。
-    TTL 范围内的行情时效性差异由 TTL 兜底，ingest 后 generation 递增强制换键。
+    - stocks 纳入量价、成交额和资金字段；这些字段会直接影响 observation、displayStatus
+      与 decision，不能从缓存键中剔除。
     """
     if not current_frame:
         return None
     stocks = current_frame.get("stocks") or []
     ordered = sorted(
         (
-            {
-                "code": stock.get("code"),
-                "rank": stock.get("rank"),
-                "avgRankNum": stock.get("avgRankNum"),
-            }
+            {key: stock.get(key) for key in (
+                "code", "rank", "avgRankNum", "change", "volumeRatio", "zlje", "zljzb",
+                "amount", "turnover", "turnoverRate", "fundPenetration", "platforms",
+            )}
             for stock in stocks
             if isinstance(stock, dict)
         ),

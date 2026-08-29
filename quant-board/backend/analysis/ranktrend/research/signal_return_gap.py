@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.ranktrend.tier_monotonicity import tier_signal_of
+from backend.analysis.ranktrend.research.tier_monotonicity import tier_signal_of
 
 # 与 tier_monotonicity 分位桶一致：rank 1-based → percentile 0-100 → 桶 0-9
 BUCKET_COUNT = 10

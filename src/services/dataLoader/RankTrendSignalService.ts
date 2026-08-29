@@ -161,13 +161,27 @@ export class RankTrendSignalService {
     const coverageWarning = this.extractRankTrendCoverageWarning(rankTrends)
 
     for (const stock of merged) {
-      stock.rank = newRankMap.get(stock.code)
-      if (!newRankMap.has(stock.code)) {
-        stock.rankTrend = undefined
-        stock.rankTrendCoverageWarning = '均榜缺失'
-        stock.finalSignal = 'hold'
-        stock.finalConfidence = 0
+      const attentionRank = newRankMap.get(stock.code)
+      if (attentionRank !== undefined) {
+        stock.attentionRank = attentionRank
+      }
+      if (attentionRank === undefined) {
+        // 缺失均榜只代表本轮无法计算 attention 维度；保留原始股票和已有信号，
+        // 通过质量标记让观察层显式显示，不把缺失伪造成 hold/0。
+        stock.rankTrendCoverageWarning = '均榜缺失，未更新信号'
+        stock.rankTrendQuality = {
+          status: 'degraded',
+          missingFields: ['avgRankNum', 'attentionRank'],
+          qualityFlags: ['attention_rank_missing'],
+          affected: 'rankTrend',
+        }
         continue
+      }
+      stock.rankTrendQuality = {
+        status: coverageWarning ? 'degraded' : 'ok',
+        missingFields: [],
+        qualityFlags: coverageWarning ? ['snapshot_coverage_degraded'] : [],
+        affected: coverageWarning ? 'rankTrend' : null,
       }
       extraDataProjector.projectRuntimeFields(stock)
 

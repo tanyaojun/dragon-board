@@ -71,7 +71,7 @@ Python Golden replay 也必须对齐这条纯分析链，不再消费 `hotlistSe
 DEFAULT_RANK_TREND_SNAPSHOT_TYPE = half_hour
 ```
 
-> 注意：TypeScript golden 标准使用 `macdFast=13, macdSlow=21, macdSignal=8` 作为 RankTrend 算法层的默认值。QuantBoard 回测引擎的 `DEFAULT_BACKTEST_STRATEGY_CONFIG` 使用 `21/34/13` 作为生产默认值。两者是不同层次的配置 — golden 测试验证的是算法移植正确性，回测默认值反映的是当前实盘参数选择。修改任意一侧时应同时检查另一侧是否需要同步，并在对应文档（`backtest-policy.md`）中记录。
+> Python `RankTrendConfig` 是生产算法默认值的唯一来源。TypeScript 默认值仅用于前端兼容与导出样本，不得作为后端参数源；回测策略默认值如有差异，必须在回测策略文档中单独记录。
 
 ## 输出合同
 
@@ -293,14 +293,14 @@ POST /api/golden/import
 
 `payload.signals` 可以是 TypeScript 原始 `rankTrend` 输出，也可以是已归一化后的 expected 列表。后端会保存到 `golden_ranktrend_cases.expected_json`，之后 `POST /api/golden/validate` 用同一 `caseId` 做 Python 对齐校验。
 
-注意：`/api/golden/baseline` 保存的是 Python 当前输出，只能用于临时回归，不是正式 TypeScript golden。
+注意：`/api/golden/baseline` 保存的是 Python 当前输出，可用于生产回归；TS 导入用例仅用于跨语言兼容验收。
 
 ## Python 自基线与 TS Golden 的区别
 
 | 类型 | 来源 | 用途 | 是否可作为跨语言验收 |
 | --- | --- | --- | --- |
-| Python 自基线 | `POST /api/golden/baseline` | 检查 Python 后续代码是否漂移 | 否 |
-| TS Golden | DragonBoard TypeScript 导出后 `POST /api/golden/import` | 比较 Python 当前输出与 TypeScript 期望输出 | 是 |
+| Python Golden | `POST /api/golden/baseline` | 生产回归与漂移检查 | 是（生产） |
+| TS 导出样本 | DragonBoard TypeScript 导出后 `POST /api/golden/import` | 跨语言兼容性比较 | 是（兼容） |
 
 页面上看到 `source=python_current_output` 时，即使 `passed=true`，也只能说明 Python 对自身没有漂移。
 
@@ -308,7 +308,7 @@ POST /api/golden/import
 
 Python 移植进入回测前必须满足：
 
-- 默认配置与 TypeScript 一致。
+- 默认配置以 Python `RankTrendConfig` 为准；TS 仅作为兼容样本来源。
 - `snapshot_type` 默认是 `half_hour`。
 - golden case 全部通过。
 - 样本不足 case 能返回 `insufficient` 或 `degraded`。

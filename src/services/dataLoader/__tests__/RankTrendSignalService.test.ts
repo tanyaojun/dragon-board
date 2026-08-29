@@ -240,7 +240,7 @@ describe('RankTrendSignalService', () => {
     expect(result[0].finalConfidence).toBe(78)
   })
 
-  it('excludes stocks without a valid avgRankNum from the current attention ranking', async () => {
+  it('keeps stocks without a valid avgRankNum and marks them without erasing prior signals', async () => {
     const { rankTrendAnalyzer } = await import('../../RankTrendAnalyzer')
     vi.mocked(rankTrendAnalyzer.getRankTrends).mockImplementation(async (rankMap) => {
       expect(Array.from(rankMap.keys())).toEqual(['000001'])
@@ -254,16 +254,15 @@ describe('RankTrendSignalService', () => {
       { code: '000003', name: '缺失均榜', rankTrend: { stale: true } },
     ])
 
-    expect(result[0].rank).toBe(1)
+    expect(result[0].attentionRank).toBe(1)
     expect(result[1]).toMatchObject({
-      rank: undefined,
-      rankTrend: undefined,
-      finalSignal: 'hold',
-      finalConfidence: 0,
-      _resonancePct: undefined,
-      _resonanceLabel: '样本不足',
+      rankTrend: { stale: true },
+      rankTrendCoverageWarning: '均榜缺失，未更新信号',
     })
-    expect(result[2].rankTrendCoverageWarning).toBe('均榜缺失')
+    expect(result[2]).toMatchObject({
+      rankTrend: { stale: true },
+      rankTrendCoverageWarning: '均榜缺失，未更新信号',
+    })
   })
 
   it('can update stock signals without publishing UI events', () => {

@@ -22,6 +22,12 @@ import type {
   RankTrendRuntimeConfig as RankTrendRuntimeConfigModel,
 } from './rankTrend/types'
 
+function toOptionalFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
 const runtimeConfig: RankTrendRuntimeConfigModel = cloneDefaultRankTrendRuntimeConfig()
 type SnapshotCaptureMode = 'real_time' | 'delayed' | 'restored'
 type SupportedSnapshotType = RankTrendSnapshotType
@@ -458,23 +464,28 @@ export class RankTrendAnalyzer {
 
     const stocks = typeof dataLayer.getStocks === 'function' ? dataLayer.getStocks() : []
     const currentFrameStocks = stocks
-      .filter((stock: any) => rankMap.has(String(stock?.code)))
+      .filter((stock: any) => remoteCodes.includes(String(stock?.code)))
       .map((stock: any) => ({
         code: String(stock?.code),
-        rank: Number(stock?.compRank || stock?.rank) || 0,
-        avgRankNum: Number(stock?.avgRankNum) || 0,
-        change: Number(stock?.change) || 0,
-        volumeRatio: Number(stock?.volumeRatio) || 0,
-        zlje: Number(stock?.zlje) || 0,
-        zljzb: Number(stock?.zljzb) || 0,
+        rank: toOptionalFiniteNumber(stock?.compRank ?? stock?.rank),
+        avgRankNum: toOptionalFiniteNumber(stock?.avgRankNum),
+        change: toOptionalFiniteNumber(stock?.change),
+        volumeRatio: toOptionalFiniteNumber(stock?.volumeRatio),
+        zlje: toOptionalFiniteNumber(stock?.zlje),
+        zljzb: toOptionalFiniteNumber(stock?.zljzb),
+        amount: toOptionalFiniteNumber(stock?.amount ?? stock?.turnover),
+        price: toOptionalFiniteNumber(stock?.price ?? stock?.lastTradePrice),
+        high: toOptionalFiniteNumber(stock?.high ?? stock?.highPrice),
+        low: toOptionalFiniteNumber(stock?.low ?? stock?.lowPrice),
+        close: toOptionalFiniteNumber(stock?.close ?? stock?.price ?? stock?.lastTradePrice),
         // 2026-08-24 回滚后（compRank 恢复前端本地计算）这些字段不再用于后端注入 compRank：
         // avgRankNum 用于后端新股单点 percentile 排序（attention_rank_lookup，G3 权威算法）；
-        // turnover/turnoverRate 用于 frame_market_percentiles（marketPercentiles 响应辅助字段，
-        // 不进缓存键）；rank=compRank 仅作缓存键身份与排序展示（后端 percentile 计算不读 rank）。
-        turnover: Number(stock?.turnover) || 0,
-        turnoverRate: Number(stock?.turnoverRate) || 0,
-        fundPenetration: Number(stock?.fundPenetration) || 0,
-        platforms: Number(stock?.platforms) || 0,
+        // turnover/turnoverRate 用于 frame_market_percentiles；rank=compRank 仅作缓存键身份与
+        // 排序展示（后端 percentile 计算不读 rank）。这些字段由后端缓存键完整指纹化。
+        turnover: toOptionalFiniteNumber(stock?.turnover),
+        turnoverRate: toOptionalFiniteNumber(stock?.turnoverRate),
+        fundPenetration: toOptionalFiniteNumber(stock?.fundPenetration),
+        platforms: toOptionalFiniteNumber(stock?.platforms),
         // 题材暴露字段：题材动量共振需要在当前帧内做个股-题材匹配；
         // dataLayer 的 themes 是详情对象数组，这里规范化为名称/ID 列表
         themes: Array.isArray(stock?.themes)
@@ -482,7 +493,7 @@ export class RankTrendAnalyzer {
           : [],
         mainTheme: String(stock?.mainTheme || ''),
         themeRole: String(stock?.themeRole || ''),
-        themeContribution: Number(stock?.themeContribution) || 0,
+        themeContribution: toOptionalFiniteNumber(stock?.themeContribution),
         leadStatus: String(stock?.leadStatus || ''),
       }))
 
@@ -516,6 +527,9 @@ export class RankTrendAnalyzer {
           results.set(code, result)
         }
         this.lastStrategyValidationReport = summarizeRankTrendStrategyDistribution(results.values())
+        if (options.updateSignalStore !== false) {
+          await this.batchUpdateSignals(results)
+        }
         return results
       }
     } catch (error) {

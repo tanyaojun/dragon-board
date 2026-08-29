@@ -7,7 +7,7 @@ compScore = 归一化(avgRankNum 反)*HOT_RANK + 归一化(zljzb)*MONEY_RATIO
           + 归一化(turnover)*VOLUME
 compRank = compScore 降序序号（并列按 code 稳定排序）。
 
-纯函数，不接线（无回归）；供 analyze/快照后续挂载 + 入库。
+纯函数，由 analyze/快照采集链路调用并入库。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ OPTIMAL_TURNOVER = 15.0
 TURNOVER_SIGMA = 10.0
 
 
-def _num(value: Any, default: float = 0.0) -> float:
+def _num(value: Any, default: float | None = None) -> float | None:
     try:
         val = float(value)
     except (TypeError, ValueError):
@@ -65,12 +65,15 @@ def compute_comprehensive_scores(stocks: list[dict[str, Any]]) -> list[dict[str,
         "fundPenetration": (math.inf, -math.inf),
         "turnover": (math.inf, -math.inf),
     }
+    raw_scores: dict[int, float | None] = {}
     for s in valid:
         avg = _num(s.get("avgRankNum"))
         zljzb = _num(s.get("zljzb"))
         fund = _num(s.get("fundPenetration"))
         turnover = _num(s.get("turnover"))
         for key, val in (("avgRankNum", avg), ("zljzb", zljzb), ("fundPenetration", fund), ("turnover", turnover)):
+            if val is None:
+                continue
             if val < stats[key][0]:
                 stats[key] = (val, stats[key][1])
             if val > stats[key][1]:
@@ -82,17 +85,26 @@ def compute_comprehensive_scores(stocks: list[dict[str, Any]]) -> list[dict[str,
         fund = _num(s.get("fundPenetration"))
         turnover = _num(s.get("turnover"))
         turnover_rate = _num(s.get("turnoverRate"))
-        score = (
-            _normalize(avg, stats["avgRankNum"][0], stats["avgRankNum"][1], reverse=True) * HOT_RANK
-            + _normalize(zljzb, stats["zljzb"][0], stats["zljzb"][1], reverse=False) * MONEY_RATIO
-            + _normalize(fund, stats["fundPenetration"][0], stats["fundPenetration"][1], reverse=False) * FUND_PENETRATION
-            + _turnover_score(turnover_rate) * TURNOVER_RATE
-            + _normalize(turnover, stats["turnover"][0], stats["turnover"][1], reverse=False) * VOLUME
+        components = (
+            (avg, HOT_RANK, lambda value: _normalize(value, stats["avgRankNum"][0], stats["avgRankNum"][1], reverse=True)),
+            (zljzb, MONEY_RATIO, lambda value: _normalize(value, stats["zljzb"][0], stats["zljzb"][1], reverse=False)),
+            (fund, FUND_PENETRATION, lambda value: _normalize(value, stats["fundPenetration"][0], stats["fundPenetration"][1], reverse=False)),
+            (turnover_rate, TURNOVER_RATE, _turnover_score),
+            (turnover, VOLUME, lambda value: _normalize(value, stats["turnover"][0], stats["turnover"][1], reverse=False)),
         )
-        s["compScore"] = round(score, 4)
+        available = [(weight, scorer(value)) for value, weight, scorer in components if value is not None]
+        score = sum(weight * value for weight, value in available) / sum(weight for weight, _ in available) if available else None
+        raw_scores[id(s)] = score
+        s["compScore"] = round(score, 4) if score is not None else None
+        missing = [
+            key for key in ("avgRankNum", "zljzb", "fundPenetration", "turnoverRate", "turnover")
+            if s.get(key) is None or not math.isfinite(_num(s.get(key), float("nan")))
+        ]
+        s["qualityFlags"] = ["missing_comprehensive_fields"] if missing else []
+        s["missingFields"] = missing
 
     # 降序序号（并列按 code 稳定排序）
-    ranked = sorted(valid, key=lambda s: (-_num(s.get("compScore")), str(s.get("code") or "")))
+    ranked = sorted(valid, key=lambda s: (-(raw_scores.get(id(s)) if raw_scores.get(id(s)) is not None else -1.0), str(s.get("code") or "")))
     for index, s in enumerate(ranked, start=1):
         s["compRank"] = index
     return valid

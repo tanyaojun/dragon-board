@@ -102,6 +102,7 @@ def test_tier_fields_bool_patch_preserved() -> None:
     """现有 bool 字段转换行为不回归（from_patch 内 isinstance bool 分支）。"""
     c = RankTrendConfig.from_patch({"requireMacdGoldenCross": "true"})
     assert c.requireMacdGoldenCross is True
+    assert RankTrendConfig.from_patch({"requireMacdGoldenCross": "false"}).requireMacdGoldenCross is False
 
 
 def test_tier_fields_empty_patch_no_raise() -> None:

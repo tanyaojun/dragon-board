@@ -34,7 +34,7 @@ def _pct_series_of(
     lookback: int = LOOKBACK,
 ) -> list[float]:
     """entry 及前 lookback-1 帧的 percentile 序列（含当前帧）；缺行/无效 rank → 空列表。"""
-    from backend.analysis.ranktrend.signal_return_gap import _percentile
+    from backend.analysis.ranktrend.research.signal_return_gap import _percentile
 
     code = str(signal.get("code") or "")
     entry = index_by_snapshot.get(str(signal.get("snapshotId")))
@@ -65,7 +65,7 @@ def trend_reversal_of(
     3. 当前回升：cycle.metrics.rankVelocity > 0（本帧排名开始回升）。
     返回 confidence：满足 1 且 2 且 3 → 1.0；缺任一维度 → 0 且 reasons 说明。
     """
-    from backend.analysis.ranktrend.signal_return_gap import _percentile
+    from backend.analysis.ranktrend.research.signal_return_gap import _percentile
 
     reasons: list[str] = []
     code = str(signal.get("code") or "")

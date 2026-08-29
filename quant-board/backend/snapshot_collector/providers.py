@@ -994,9 +994,12 @@ class ProxyMergedHotlistProvider:
         from backend.analysis.ranktrend.comprehensive_rank import compute_comprehensive_scores
 
         for row in rows:
-            cir_mv = float(row.get("cirMV") or 0)
-            zlje = float(row.get("zlje") or 0)
-            row["fundPenetration"] = (zlje / cir_mv) * 100 if (cir_mv and zlje) else 0.0
+            try:
+                cir_mv = float(row.get("cirMV"))
+                zlje = float(row.get("zlje"))
+                row["fundPenetration"] = (zlje / cir_mv) * 100 if math.isfinite(cir_mv) and math.isfinite(zlje) and cir_mv != 0 else None
+            except (TypeError, ValueError):
+                row["fundPenetration"] = None
         compute_comprehensive_scores(rows)  # 赋 compScore + compRank（五维降序稳定）
         return rows
 

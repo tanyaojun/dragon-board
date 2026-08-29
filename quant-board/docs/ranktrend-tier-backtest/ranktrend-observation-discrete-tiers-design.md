@@ -238,7 +238,7 @@ unknown = 样本不足或数据缺失（保留结构化 reasons，不归零）
 | 1 | 在 `engine.py` / `volume_price.py` 增加 `_tier_*` 纯函数与 `signalTier`/`tierReasons` 组装，接入 `compose_observation_scores` 与 `ranktrend_routes.py` | `cd quant-board; .\.venv\Scripts\python.exe -m pytest` 全绿 |
 | 2 | 补充单元测试：每维每档规则至少 1 个输入样例 + 互斥分支 + insufficient 用例（含 `unknown` 不归零断言） | pytest 新增用例全绿 |
 | 3 | TS 类型补充（`src/services/rankTrend/types.ts`） | `pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty false` |
-| 4 | `DataTable.vue` 四列档位徽章展示 + 悬停 tierReasons | `pnpm test` + 浏览器验收（Playwright，检查四列渲染、unknown 显示 `--`、E 档警示样式、控制台无错误） |
+| 4 | `DataTable.vue` 四列方向 + 连续分展示，档位仅用于 tooltip/诊断 | `pnpm test` + 浏览器验收（Playwright，检查方向/分值渲染、unknown 显示 `--`、不渲染各维徽章、控制台无错误） |
 | 5 | 回测验证（第 9 节），产出档位收益/命中率报告 | 报告满足验收标准或给出规则修订结论 |
 | 6 | golden case 更新 + 版本提升 | 按 `ranktrend-golden.md` 变更管理：更新 case、提升 `ranktrend_version`、重跑 golden 测试、历史回测不覆盖 |
 

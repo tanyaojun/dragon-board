@@ -1,0 +1,310 @@
+from __future__ import annotations
+
+import math
+from typing import Any
+from ..engine.config import RankTrendConfig
+from ..engine.primitives import clamp, average, signal_confidence
+from .technical import cycle_rank_shock, rank_path_commitment
+
+def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTrendConfig | None = None) -> dict[str, Any]:
+    previous_stage = None
+    current_stage = None
+    current_raw = None
+    previous_normalized = None
+    metrics = {}
+    for index in range(len(percentiles)):
+        prefix_ranks = ranks[: index + 1]
+        prefix_percentiles = percentiles[: index + 1]
+        metrics = cycle_metrics(prefix_ranks, prefix_percentiles)
+        raw = raw_stage(len(prefix_percentiles), prefix_percentiles[-1], metrics, config=config)
+        normalized = normalize_stage(current_stage, raw, prefix_percentiles[-1], metrics, config=config)
+        previous_stage = current_raw
+        previous_normalized = current_stage
+        current_raw = raw
+        current_stage = normalized
+    stage = current_stage or "cooling"
+    raw = current_raw or "cooling"
+    transition = stage if not previous_normalized or previous_normalized == stage else f"{previous_normalized}->{stage}"
+    confidence = cycle_confidence(stage, percentiles[-1] if percentiles else 0, metrics, config=config)
+    metric_values = metrics or {"rankVelocity": 0, "rankAcceleration": 0, "rankShock": 0, "hotZoneStreak": 0, "bestRecentRank": ranks[-1] if ranks else 999, "drawdownFromPeak": 0, "rankPathCommitment": 0.5}
+    return {
+        "rawStage": raw,
+        "stage": stage,
+        "previousStage": previous_normalized,
+        "transition": transition,
+        "confidence": confidence,
+        "metrics": metric_values,
+        "entryAdvice": entry_advice(stage, transition),
+        "decision": lifecycle_decision(raw, stage, transition, confidence, metric_values, config=config),
+    }
+
+
+def cycle_metrics(ranks: list[float], percentiles: list[float]) -> dict[str, Any]:
+    current_rank = ranks[-1] if ranks else 999
+    rank_window = ranks[-8:]
+    percentile_window = percentiles[-8:]
+    hot_streak = 0
+    for rank, percentile in reversed(list(zip(rank_window, percentile_window))):
+        if rank <= 10 or percentile >= 88:
+            hot_streak += 1
+        else:
+            break
+    best = min(rank_window) if rank_window else current_rank
+    velocity = percentiles[-1] - percentiles[-2] if len(percentiles) >= 2 else 0
+    previous_velocity = percentiles[-2] - percentiles[-3] if len(percentiles) >= 3 else 0
+    return {
+        "rankVelocity": velocity,
+        "rankAcceleration": velocity - previous_velocity,
+        "rankShock": cycle_rank_shock(percentiles),
+        "hotZoneStreak": hot_streak,
+        "bestRecentRank": best,
+        "drawdownFromPeak": max(0, current_rank - best),
+        "rankPathCommitment": rank_path_commitment(percentiles),
+    }
+
+
+def raw_stage(
+    history_length: int, current_percentile: float, metrics: dict[str, Any], config: "RankTrendConfig | None" = None
+) -> str:
+    """5 态初判（阈值数据驱动优化设计 2026-08-16：全部阈值参数化，默认值=原硬编码，零行为变化）。"""
+    c = config or RankTrendConfig()
+    if history_length < 2:
+        return "cooling"
+    velocity = metrics["rankVelocity"]
+    accel = metrics["rankAcceleration"]
+    hot = metrics["hotZoneStreak"]
+    best = metrics["bestRecentRank"]
+    drawdown = metrics["drawdownFromPeak"]
+    warm = current_percentile >= c.cycleRawWarmPercentileMin or best <= c.cycleRawWarmBestRankMax
+    hot_zone = current_percentile >= c.cycleRawHotZonePercentileMin or best <= c.cycleRawHotZoneBestRankMax
+    recovery = velocity > c.cycleRawRecoveryVelocityMin and accel >= c.cycleRawRecoveryAccelMin and (
+        current_percentile >= c.cycleRawRecoveryPercentileMin or best <= c.cycleRawRecoveryBestRankMax or hot >= c.cycleRawRecoveryHotMin
+    )
+    expansion = velocity > c.cycleRawRecoveryVelocityMin and current_percentile >= c.cycleRawExpansionPercentileMin and (
+        accel >= c.cycleRawExpansionAccelMin or hot >= c.cycleRawExpansionHotMin or best <= c.cycleRawExpansionBestRankMax
+    )
+    crowded = hot_zone and (hot >= c.cycleRawCrowdedHotMin or best <= c.cycleRawCrowdedBestRankMax) and (
+        drawdown <= c.cycleRawCrowdedDrawdownMax and (velocity <= c.cycleRawCrowdedVelocityMax or accel < 0)
+    )
+    reversal = warm and drawdown >= c.cycleRawReversalDrawdownMin and (
+        velocity < 0 or accel < c.cycleRawReversalAccelMax
+    ) and (hot >= c.cycleRawReversalHotMin or best <= c.cycleRawReversalBestRankMax)
+    if reversal:
+        return "reversal"
+    if crowded:
+        return "crowded"
+    if expansion and warm:
+        return "expansion"
+    if recovery:
+        return "ignition"
+    return "cooling"
+
+
+def normalize_stage(
+    previous: str | None, raw: str, current_percentile: float, metrics: dict[str, Any], config: "RankTrendConfig | None" = None
+) -> str:
+    """状态机平滑（阈值参数化，默认值=原硬编码，零行为变化）。"""
+    c = config or RankTrendConfig()
+    if not previous:
+        return raw
+    velocity = metrics["rankVelocity"]
+    accel = metrics["rankAcceleration"]
+    hot = metrics["hotZoneStreak"]
+    best = metrics["bestRecentRank"]
+    drawdown = metrics["drawdownFromPeak"]
+    recovery = velocity > c.cycleRawRecoveryVelocityMin and accel >= c.cycleRawRecoveryAccelMin and (
+        current_percentile >= c.cycleRawRecoveryPercentileMin or best <= c.cycleRawRecoveryBestRankMax or hot >= c.cycleRawRecoveryHotMin
+    )
+    weakening = velocity < 0 or accel < c.cycleNormWeakeningAccelMax or drawdown >= 2
+    severe = velocity < -1 or accel < c.cycleNormSevereAccelMax or drawdown >= c.cycleNormSevereDrawdownMin
+    cooling_ready = current_percentile < c.cycleNormCoolingReadyPercentileMax or hot <= 1
+    crowded_carry = current_percentile >= c.cycleNormCrowdedCarryPercentileMin or best <= c.cycleNormCrowdedCarryBestRankMax or hot >= 2
+    if previous == "ignition":
+        if raw in ("expansion", "crowded"):
+            return "expansion"
+        if raw in ("reversal", "cooling"):
+            return "cooling" if weakening else "ignition"
+        return "ignition"
+    if previous == "expansion":
+        if raw == "crowded":
+            return "crowded"
+        if raw == "reversal":
+            return "crowded" if crowded_carry and not severe else "reversal" if severe or weakening else "crowded"
+        if raw == "cooling":
+            return "reversal" if severe or weakening else "expansion"
+        return "expansion"
+    if previous == "crowded":
+        if raw == "reversal":
+            return "reversal"
+        if raw == "cooling":
+            return "cooling" if cooling_ready else "reversal"
+        if raw in ("expansion", "ignition"):
+            return "reversal" if weakening else "crowded"
+        return "crowded"
+    if previous == "reversal":
+        if raw in ("cooling", "reversal"):
+            return raw
+        return "cooling" if recovery else "reversal"
+    if previous == "cooling":
+        if raw in ("cooling", "reversal") or not recovery:
+            return "cooling"
+        if raw == "expansion" and current_percentile < 72 and hot == 0:
+            return "ignition"
+        if raw == "crowded":
+            return "expansion"
+        return raw
+    return raw
+
+
+def cycle_confidence(
+    stage: str, percentile: float, metrics: dict[str, Any], config: "RankTrendConfig | None" = None
+) -> float:
+    """阶段置信度（阈值参数化，默认值=原硬编码，零行为变化；每态区域/动量/持续性/回撤阈值）。"""
+    c = config or RankTrendConfig()
+    velocity = metrics.get("rankVelocity", 0)
+    accel = metrics.get("rankAcceleration", 0)
+    hot = metrics.get("hotZoneStreak", 0)
+    best = metrics.get("bestRecentRank", 999)
+    drawdown = metrics.get("drawdownFromPeak", 0)
+    if stage == "cooling":
+        region = percentile < c.cycleConfCoolingRegionPctMax
+        momentum = velocity <= 0 or percentile < c.cycleConfCoolingMomentumPctMax
+        persistence = hot <= c.cycleConfCoolingPersistenceHotMax
+        draw = drawdown <= c.cycleConfCoolingDrawdownMax or percentile < c.cycleConfCoolingRegionPctMax
+    elif stage == "ignition":
+        region = percentile >= c.cycleConfIgnitionRegionPctMin and percentile < c.cycleConfIgnitionRegionPctMax
+        momentum = velocity > 0 and accel >= c.cycleConfIgnitionMomentumAccelMin
+        persistence = hot <= c.cycleConfIgnitionPersistenceHotMax
+        draw = drawdown == 0
+    elif stage == "expansion":
+        region = percentile >= c.cycleConfExpansionRegionPctMin
+        momentum = velocity > 0 and accel >= c.cycleConfExpansionMomentumAccelMin
+        persistence = hot <= c.cycleConfExpansionPersistenceHotMax
+        draw = drawdown <= c.cycleConfExpansionDrawdownMax
+    elif stage == "crowded":
+        region = percentile >= c.cycleConfCrowdedRegionPctMin or best <= c.cycleConfCrowdedRegionBestMax
+        momentum = percentile >= c.cycleConfCrowdedMomentumPctMin and (velocity <= 0 or hot >= c.cycleConfCrowdedMomentumHotMin)
+        persistence = hot >= c.cycleConfCrowdedPersistenceHotMin
+        draw = drawdown <= c.cycleConfCrowdedDrawdownMax
+    else:  # reversal
+        region = percentile >= c.cycleConfReversalRegionPctMin or best <= c.cycleConfReversalRegionBestMax
+        momentum = velocity <= 0 or accel < -1
+        persistence = hot >= c.cycleConfReversalPersistenceHotMin or best <= c.cycleConfReversalPersistenceBestMax
+        draw = drawdown >= c.cycleConfReversalDrawdownMin
+    return clamp(50 + int(region) * 10 + int(momentum) * 10 + int(persistence) * 10 + int(draw) * 10, 50, 90)
+
+
+def entry_advice(stage: str, transition: str) -> dict[str, Any]:
+    if transition in ("cooling->ignition", "ignition->expansion"):
+        bias = "preferred"
+    elif stage == "reversal":
+        bias = "blocked"
+    elif stage in ("cooling", "crowded"):
+        bias = "avoid"
+    else:
+        bias = "watch"
+    reasons = {
+        "preferred": "处于优选阶段路径，可作为情绪周期主观察对象。",
+        "watch": "处于可跟踪阶段，但还不是优选出手路径。",
+        "avoid": "处于冷却或拥挤阶段，宜观察不宜积极出手。",
+        "blocked": "处于反转阶段，应优先回避。",
+    }
+    return {"bias": bias, "allowed": bias == "preferred", "reason": reasons[bias]}
+
+
+def lifecycle_decision(
+    raw: str,
+    stage: str,
+    transition: str,
+    confidence: float,
+    metrics: dict[str, Any],
+    risk: dict[str, Any] | None = None,
+    momentum: dict[str, Any] | None = None,
+    config: RankTrendConfig | None = None,
+) -> dict[str, Any]:
+    c = config or RankTrendConfig()
+    reasons: list[str] = []
+    action = "caution"
+    risk = risk or {}
+    divergence = risk.get("divergence") if isinstance(risk.get("divergence"), dict) else {}
+    overheat = risk.get("overheat") if isinstance(risk.get("overheat"), dict) else {}
+    risk_pressure = float(risk.get("pressure") or 0)
+    divergence_severity = float(divergence.get("severity") or 0)
+    overheat_severity = float(overheat.get("severity") or 0)
+    discovery_reasons: list[str] = []
+    high_risk_conflict = risk_pressure >= c.lifecycleHighRiskPressureMin or (divergence_severity >= c.lifecycleHighRiskDivergenceMin and overheat_severity >= c.lifecycleHighRiskOverheatMin)
+    rank_path = float(metrics.get("rankPathCommitment", 0.5))
+    momentum = momentum if isinstance(momentum, dict) else {}
+    momentum_short = float(momentum.get("short") or 0)
+    momentum_mid = float(momentum.get("mid") or 0)
+    momentum_long = float(momentum.get("long") or 0)
+    momentum_acceleration = float(momentum.get("acceleration") or 0)
+    mid_long_committed = momentum_mid >= c.lifecycleMidLongCommitmentMin and momentum_long >= c.lifecycleMidLongCommitmentMin and momentum_acceleration >= c.lifecycleAccelCommitmentMin
+    weak_path_commitment = (
+        rank_path < c.lifecycleWeakPathCommitmentMax
+        and float(metrics.get("rankVelocity") or 0) > c.lifecycleVelocityMin
+        and float(metrics.get("rankAcceleration") or 0) > c.lifecycleAccelMin
+        and not mid_long_committed
+        and stage in ("ignition", "expansion")
+    )
+    low_visibility_ignition = (
+        stage == "ignition"
+        and transition == "cooling->ignition"
+        and int(metrics.get("hotZoneStreak") or 0) == 0
+        and rank_path < c.lifecycleLowVisibilityPathMax
+        and float(metrics.get("rankVelocity") or 0) > c.lifecycleVelocityMin
+        and float(metrics.get("rankAcceleration") or 0) > c.lifecycleAccelMin
+        and momentum_short >= c.lifecycleLowVisibilityMomentumMin
+        and momentum_mid >= c.lifecycleLowVisibilityMomentumMin
+        and momentum_acceleration >= c.lifecycleLowVisibilityMomentumMin
+    )
+    if stage == "reversal" or raw == "reversal":
+        action = "veto"
+        reasons.append("生命周期进入反转路径，辅助决策一票否决。")
+    elif weak_path_commitment:
+        action = "caution"
+        reasons.append("生命周期B识别到最后一跳过强但整段承接不足，按假突破路径谨慎观察。")
+    elif low_visibility_ignition:
+        action = "caution"
+        reasons.append("生命周期B识别到低可见度首段点火，承接尚未扩散，防止抢占后续高质量仓位。")
+    elif high_risk_conflict and stage in ("ignition", "expansion"):
+        action = "veto"
+        reasons.append("生命周期虽处于点火/扩散，但风险背离与过热证据明确反对，辅助决策一票否决。")
+    elif stage == "crowded":
+        action = "exit_watch"
+        reasons.append("生命周期进入拥挤路径，持仓后应进入退出观察。")
+    elif stage in ("ignition", "expansion"):
+        action = "allow"
+        reasons.append("生命周期处于点火或扩散路径，允许 RankTrend 主结构继续进入候选评估。")
+    else:
+        reasons.append("生命周期仍在冷却路径，辅助决策保持谨慎。")
+    if "->" in transition:
+        reasons.append(f"阶段路径：{transition}。")
+    if stage in ("ignition", "expansion") and float(metrics.get("rankVelocity") or 0) > 0:
+        discovery_reasons.append("生命周期存在漏选研究价值：点火/扩散路径仍在改善，但不得绕过 RankTrend 主结构直接制造买入。")
+    return {
+        "action": action,
+        "confidence": confidence,
+        "reasons": reasons,
+        "discovery": {
+            "action": "research_watch" if discovery_reasons else "none",
+            "reasons": discovery_reasons,
+        },
+        "evidence": {
+            "rawStage": raw,
+            "stage": stage,
+            "transition": transition,
+            "rankVelocity": metrics.get("rankVelocity", 0),
+            "rankAcceleration": metrics.get("rankAcceleration", 0),
+            "drawdownFromPeak": metrics.get("drawdownFromPeak", 0),
+            "hotZoneStreak": metrics.get("hotZoneStreak", 0),
+            "rankPathCommitment": rank_path,
+            "momentumShort": momentum_short,
+            "momentumMid": momentum_mid,
+            "momentumLong": momentum_long,
+            "momentumAcceleration": momentum_acceleration,
+            "riskPressure": risk_pressure,
+            "divergenceSeverity": divergence_severity,
+            "overheatSeverity": overheat_severity,
+        },
+    }

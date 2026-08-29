@@ -1,13 +1,13 @@
 # QuantBoard 文档中心
 
-QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期目标不是另起一套策略体系，而是把 `dragon-board` 已经稳定运行的 `rankTrend` TypeScript 分析链迁移到 Python 后端，形成可导入数据、可复现回测、可比较优化、可通过前端查看结果的个人量化研究平台。
+QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。RankTrend Python 引擎是生产 golden，TypeScript 仅负责前端消费和跨语言导出验收。
 
 ## 首期结论
 
-- `src/services/rankTrend/*` 与 `src/services/RankTrendAnalyzer.ts` 是首期唯一 golden 标准。
+- `backend/analysis/ranktrend/engine.py` 是生产 golden 标准；`src/services/rankTrend/*` 仅为消费契约。
 - QuantBoard 是参数研究、回测、优化、交易模拟和报告展示的唯一主链。
-- Dragon Board 根项目只提供实时看板、快照数据和 TypeScript golden 导出，不承载回测平台职责。
-- Python 端必须先复刻 `rankTrend` 输出合同，再开发策略、回测和优化。
+- Dragon Board 根项目只提供实时看板和快照数据，不承载回测平台职责。
+- Python 端输出合同是 RankTrend 生产事实标准；TypeScript 导出仅用于跨语言兼容验收。
 - 默认 `snapshot_type` 为 `half_hour`。`quarter_hour` 只作为可选细颗粒度样本，不是默认口径。
 - 当前运行主库是 MongoDB，SQLite/Supabase/Parquet 旧链路仅作为迁移前历史、审计/离线备份参考或 Mongo 模式下显式禁用入口；详细切换方案和实施状态以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
 - 所有回测、优化、API、CLI、前端展示都要保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`，保证结果可追溯。
@@ -22,7 +22,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。首期�
 | [mongodb-migration-plan.md](mongodb-migration-plan.md) | 当前 MongoDB 全量主库迁移方案和实施记录，覆盖快照库、研究库、题材库和股票基础库 |
 | [database-migration-plan.md](database-migration-plan.md) | 迁移前 SQLite 主库 + Supabase 备份库历史计划；Mongo 模式下旧入口禁用口径以文档顶部说明为准 |
 | [data-ingestion.md](data-ingestion.md) | SQLite 快照库派生研究数据集、历史 JSON 迁移和质量门禁 |
-| [ranktrend-golden.md](ranktrend-golden.md) | TypeScript golden 标准、输出合同、验收基线 |
+| [ranktrend-golden.md](ranktrend-golden.md) | Python golden 输出合同、跨语言验收基线 |
 | [ranktrend-python-port.md](ranktrend-python-port.md) | Python 移植步骤、数值对齐、测试策略 |
 | [backtest-policy.md](backtest-policy.md) | 当前回测统一口径：5 天/40 bars、MACD 辅助定位、T+1、收益字段 |
 | [backtest-engine.md](backtest-engine.md) | 事件驱动回测引擎、撮合、持仓、绩效指标 |

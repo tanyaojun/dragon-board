@@ -183,7 +183,7 @@ dict[str, RankTrendAnalysisResult]
 - 空数组；
 - 样本不足；
 - 极端值；
-- 与 TypeScript golden 对齐的固定输入。
+- 与 Python golden 合同对齐的固定输入；TypeScript 导出样本仅用于跨语言兼容验收。
 
 ### Golden 测试
 
@@ -214,7 +214,7 @@ dict[str, RankTrendAnalysisResult]
 
 进入回测开发前必须满足：
 
-- `defaults.py` 与 TypeScript 默认参数一致。
+- `RankTrendConfig` 默认参数作为 Python 生产口径；TypeScript 默认参数仅用于兼容导出，不反向约束后端。
 - 所有 golden case 通过。
 - Python 输出 JSON 字段和 TypeScript 合同一致。
 - `half_hour` 是默认快照。

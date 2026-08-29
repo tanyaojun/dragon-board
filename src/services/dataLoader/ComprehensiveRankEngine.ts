@@ -15,10 +15,12 @@ type RankableStock = Record<string, any> & {
   platforms?: number
   avgRankNum?: number
   avgRank?: string
-  fundPenetration?: number
-  compScore?: number
+  fundPenetration?: number | null
+  compScore?: number | null
   compRank?: number
   rank?: number
+  missingFields?: string[]
+  qualityFlags?: string[]
 }
 
 const rankFieldMap: Record<Platform, string> = {
@@ -98,7 +100,7 @@ export function calculateComprehensiveRanks<T extends RankableStock>(stocks: T[]
   stocks.forEach((stock) => {
     const cirMV = toNumber(stock.cirMV)
     const zlje = toNumber(stock.zlje)
-    stock.fundPenetration = cirMV > 0 && zlje !== 0 ? (zlje / cirMV) * 100 : 0
+    stock.fundPenetration = cirMV !== null && zlje !== null && cirMV > 0 ? (zlje / cirMV) * 100 : null
   })
 
   const stats = {
@@ -109,10 +111,12 @@ export function calculateComprehensiveRanks<T extends RankableStock>(stocks: T[]
   }
 
   stocks.forEach((stock) => {
-    updateMinMax(stats.avgRankNum, toNumber(stock.avgRankNum))
-    updateMinMax(stats.zljzb, toNumber(stock.zljzb))
-    updateMinMax(stats.fundPenetration, toNumber(stock.fundPenetration))
-    updateMinMax(stats.turnover, toNumber(stock.turnover))
+    ;[
+      ['avgRankNum', toNumber(stock.avgRankNum)],
+      ['zljzb', toNumber(stock.zljzb)],
+      ['fundPenetration', toNumber(stock.fundPenetration)],
+      ['turnover', toNumber(stock.turnover)],
+    ].forEach(([key, value]) => { if (value !== null) updateMinMax(stats[key as keyof typeof stats], value as number) })
   })
 
   stocks.forEach((stock) => {
@@ -121,20 +125,24 @@ export function calculateComprehensiveRanks<T extends RankableStock>(stocks: T[]
     const fundPenetration = toNumber(stock.fundPenetration)
     const turnover = toNumber(stock.turnover)
 
-    stock.compScore =
-      normalize(avgRankNum, stats.avgRankNum.min, stats.avgRankNum.max, true) *
-        COMPREHENSIVE_WEIGHTS.HOT_RANK +
-      normalize(zljzb, stats.zljzb.min, stats.zljzb.max, false) *
-        COMPREHENSIVE_WEIGHTS.MONEY_RATIO +
-      normalize(fundPenetration, stats.fundPenetration.min, stats.fundPenetration.max, false) *
-        COMPREHENSIVE_WEIGHTS.FUND_PENETRATION +
-      getTurnoverScore(stock.turnoverRate) * COMPREHENSIVE_WEIGHTS.TURNOVER_RATE +
-      normalize(turnover, stats.turnover.min, stats.turnover.max, false) *
-        COMPREHENSIVE_WEIGHTS.VOLUME
+    const components: Array<[number | null, number, (value: number) => number]> = [
+      [avgRankNum, COMPREHENSIVE_WEIGHTS.HOT_RANK, (v) => normalize(v, stats.avgRankNum.min, stats.avgRankNum.max, true)],
+      [zljzb, COMPREHENSIVE_WEIGHTS.MONEY_RATIO, (v) => normalize(v, stats.zljzb.min, stats.zljzb.max, false)],
+      [fundPenetration, COMPREHENSIVE_WEIGHTS.FUND_PENETRATION, (v) => normalize(v, stats.fundPenetration.min, stats.fundPenetration.max, false)],
+      [toNumber(stock.turnoverRate), COMPREHENSIVE_WEIGHTS.TURNOVER_RATE, getTurnoverScore],
+      [turnover, COMPREHENSIVE_WEIGHTS.VOLUME, (v) => normalize(v, stats.turnover.min, stats.turnover.max, false)],
+    ]
+    const available = components.filter(([value]) => value !== null) as Array<[number, number, (value: number) => number]>
+    stock.compScore = available.length
+      ? available.reduce((sum, [value, weight, scorer]) => sum + scorer(value) * weight, 0) / available.reduce((sum, [, weight]) => sum + weight, 0)
+      : null
+    const missingFields = ['avgRankNum', 'zljzb', 'fundPenetration', 'turnoverRate', 'turnover'].filter((field) => toNumber(stock[field]) === null)
+    stock.missingFields = missingFields
+    stock.qualityFlags = missingFields.length ? ['missing_comprehensive_fields'] : []
   })
 
   const sorted = [...stocks].sort(
-    (a, b) => (b.compScore || 0) - (a.compScore || 0) || String(a.code).localeCompare(String(b.code)),
+    (a, b) => (b.compScore ?? -1) - (a.compScore ?? -1) || String(a.code).localeCompare(String(b.code)),
   )
   sorted.forEach((stock, index) => {
     stock.compRank = index + 1
@@ -166,8 +174,10 @@ function updateMinMax(stat: { min: number; max: number }, value: number): void {
   if (value > stat.max) stat.max = value
 }
 
-function toNumber(value: unknown): number {
-  return parseFloat(value as any) || 0
+function toNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function normalize(val: number, min: number, max: number, reverse = false): number {
@@ -184,6 +194,6 @@ function normalize(val: number, min: number, max: number, reverse = false): numb
 }
 
 function getTurnoverScore(rate: number): number {
-  const r = parseFloat(rate as any) || 0
+  const r = rate
   return 100 * Math.exp(-Math.pow(r - OPTIMAL_TURNOVER, 2) / (2 * TURNOVER_SIGMA ** 2))
 }

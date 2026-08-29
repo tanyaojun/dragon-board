@@ -657,7 +657,7 @@ function buildRankMap(stocks: any[]): Map<string, number> {
   stocks.forEach((stock, index) => {
     const code = normalizeCode(stock?.code)
     if (!code) return
-    const rank = Number(stock?.rank ?? stock?.compRank ?? index + 1)
+    const rank = Number(stock?.attentionRank ?? stock?.rankTrend?.meta?.currentRank ?? stock?.rank ?? index + 1)
     rankMap.set(code, Number.isFinite(rank) && rank > 0 ? rank : index + 1)
   })
   return rankMap

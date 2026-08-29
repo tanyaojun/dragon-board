@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.analysis.ranktrend.signal_return_gap import (
+from backend.analysis.ranktrend.research.signal_return_gap import (
     signal_entry_tier,
     _build_lookup,
     _percentile,

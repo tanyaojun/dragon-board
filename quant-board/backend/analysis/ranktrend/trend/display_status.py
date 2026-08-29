@@ -18,6 +18,7 @@ synergy.state / strategy.candidateTier / meta.sampleStatus / volumePrice / zljzb
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 _DEFAULT = {"label": "新入观察", "classKey": "new_watch", "tooltip": "无明确信号，继续观察。"}
@@ -36,8 +37,8 @@ _STATUS = {
 def _is_strong_money(stock: dict[str, Any]) -> bool:
     """G2 强资确认：主力净额 > 0 且 zljzb ≥ 8%（与前端 isStrongMoney 口径对齐）。"""
     try:
-        zlje = float(stock.get("zlje") or 0)
-        zljzb = float(stock.get("zljzb") or 0)
+        zlje = float(stock.get("zlje"))
+        zljzb = float(stock.get("zljzb"))
     except (TypeError, ValueError):
         return False
     return zlje > 0 and zljzb >= 8
@@ -75,7 +76,7 @@ def compute_display_status(
         label, key, tip = _STATUS["B_IGNITION"]
     elif state == "风险升级":
         label, key, tip = _STATUS["D_EXIT_RISK"]
-    elif state == "存疑" and (float(stock.get("zljzb") or 0) <= 0):
+    elif state == "存疑" and _finite_non_positive(stock.get("zljzb")):
         label, key, tip = _STATUS["money_divergence"]
     # G2（2026-08-23 补齐）：强资金 + 量能承接 + 无强档位/转弱信号 → 强资确认
     # （sampleStatus insufficient / D_EXIT_RISK / A_MAIN / B_IGNITION / C_CROWDED 已在上方优先 return）
@@ -85,3 +86,11 @@ def compute_display_status(
         label, key, tip = _DEFAULT["label"], _DEFAULT["classKey"], _DEFAULT["tooltip"]
 
     return {"label": label, "classKey": key, "tooltip": tip}
+
+
+def _finite_non_positive(value: Any) -> bool:
+    try:
+        number = float(value)
+        return math.isfinite(number) and number <= 0
+    except (TypeError, ValueError):
+        return False

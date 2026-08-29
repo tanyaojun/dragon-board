@@ -62,7 +62,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
 
     backtest = client.post(
         "/api/backtests/rank-trend",
-        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430},
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "randomSeed": 20260430, "strategyVersion": "test-v2"},
     )
     assert backtest.status_code == 200, backtest.text
     run = backtest.json()
@@ -73,6 +73,8 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert "tradeEvents" in run
     assert "sharpe" in run
     assert run["strategyName"] == "rank_trend_candidate"
+    assert run["strategyVersion"] == "test-v2"
+    assert client.get(f"/api/backtests/{run['runId']}").json()["strategyVersion"] == "test-v2"
     assert run["tradeSimulation"]["entryStrategy"] == "rank_trend_candidate"
     assert run["tradeSimulation"]["config"]["minJumpConfidence"] == 90.0
     assert "controlBacktests" in run
@@ -540,7 +542,7 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert "sourceType=indexeddb is removed" in indexeddb_import.json()["detail"]
 
 
-def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_path: Path) -> None:
+def test_backtest_retains_empty_hotlist_frames_with_quality_warning(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle_with_empty_hotlist(tmp_path)
 
@@ -563,11 +565,12 @@ def test_backtest_excludes_empty_hotlist_frames_but_keeps_quality_warning(tmp_pa
     assert data_quality["severity"] == "warn"
     assert data_quality["researchGrade"] == "degraded"
     assert data_quality["emptyHotlistCount"] == 3
-    assert data_quality["droppedEmptyHotlistSnapshots"] == 3
-    assert data_quality["snapshotCount"] == dataset["frame_count"] - 3
+    assert data_quality["droppedEmptyHotlistSnapshots"] == 0
+    assert data_quality["retainedEmptyHotlistSnapshots"] == 3
+    assert data_quality["snapshotCount"] == dataset["frame_count"]
     assert data_quality["sourceSnapshotCount"] == dataset["frame_count"]
-    assert data_quality["runtimeFilter"]["reason"] == "empty_hotlist_snapshots_excluded"
-    assert any("自动剔除 3 个空热榜快照" in item for item in run["warnings"])
+    assert data_quality["runtimeObservation"]["reason"] == "quality_issues_retained_for_backtest"
+    assert any("保留 3 个空热榜快照" in item for item in run["warnings"])
 
 
 def test_backtest_omits_empty_layer2_and_explains_synthesized_empty_hotlist(tmp_path: Path) -> None:
@@ -599,7 +602,7 @@ def test_backtest_omits_empty_layer2_and_explains_synthesized_empty_hotlist(tmp_
     assert not any(item.startswith("Empty hotlist snapshot:") for item in run["warnings"])
 
 
-def test_ranktrend_backtest_blocks_when_price_filter_leaves_too_few_usable_frames(tmp_path: Path) -> None:
+def test_ranktrend_backtest_retains_frames_when_price_filter_leaves_too_few_usable_frames(tmp_path: Path) -> None:
     client = TestClient(app)
     bundle = make_bundle_with_one_positive_price_frame(tmp_path)
 
@@ -620,8 +623,8 @@ def test_ranktrend_backtest_blocks_when_price_filter_leaves_too_few_usable_frame
         },
     )
 
-    assert response.status_code == 400
-    quality_gate = response.json()["detail"]["qualityGate"]
+    assert response.status_code == 200, response.text
+    quality_gate = response.json()["dataQuality"]["qualityGate"]
     assert quality_gate["passed"] is False
     assert quality_gate["severity"] == "fail"
     assert quality_gate["runtimeFilter"]["priceFilter"]["emptySnapshotsAfterFilter"] == dataset["frame_count"] - 1

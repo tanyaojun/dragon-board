@@ -39,6 +39,8 @@ def test_api_link_mounts_cross_section_and_votes() -> None:
     syn = obs.get("synergy") or {}
     assert syn.get("signalTier"), "synergy 档位缺失"
     assert cs.get("signalTier") in ("A", "B"), f"测试数据应产生强势档，实际 {cs.get('signalTier')}"
+    for key in ("atrMeanReversion", "priceMomentum", "amountRatio", "priceRankDivergence"):
+        assert key in obs, f"API observation 缺失 {key}"
 
 
 def test_api_link_fail_visible_none_market_median() -> None:

@@ -484,6 +484,7 @@ class BacktestService:
             if payload_strategy_name is not None
             else trade_config_patch.get("entryStrategy") or trade_config_patch.get("controlStrategy") or trade_config_patch.get("strategyName")
         )
+        strategy_version = str(camel_get(payload, "strategy_version", "strategyVersion", "0.1.0"))
         frames = self.repo.load_frames(
             dataset_id,
             snapshot_type=snapshot_type,
@@ -574,6 +575,7 @@ class BacktestService:
             "trade_config": trade_config,
             "strategy_config": strategy_config,
             "strategy_name": strategy_name,
+            "strategy_version": strategy_version,
             "dataset_id": dataset_id,
             "snapshot_type": snapshot_type,
             "random_seed": int(camel_get(payload, "random_seed", "randomSeed", 20260430)),
@@ -613,6 +615,7 @@ class BacktestService:
             "snapshot_type": snapshot_type,
             "random_seed": int(camel_get(payload, "random_seed", "randomSeed", 20260430)),
             "strategy_name": strategy_name,
+            "strategy_version": strategy_version,
             "strategy_config": strategy_config,
             "trade_config": trade_config,
             "research_filters": options["research_filters"],
@@ -622,6 +625,7 @@ class BacktestService:
             id=run_id,
             dataset_id=dataset_id,
             strategy_name=strategy_name,
+            strategy_version=strategy_version,
             snapshot_type=snapshot_type,
             random_seed=request_meta["random_seed"],
             status="completed",
@@ -647,6 +651,7 @@ class BacktestService:
                 "datasetId": dataset_id,
                 "dataset_id": dataset_id,
                 "strategyName": strategy_name,
+                "strategyVersion": strategy_version,
                 "snapshotType": snapshot_type,
                 "randomSeed": request_meta["random_seed"],
                 "configHash": run.config_hash,
@@ -974,6 +979,7 @@ class BacktestService:
             "datasetId": run.dataset_id,
             "dataset_id": run.dataset_id,
             "strategyName": run.strategy_name,
+            "strategyVersion": run.strategy_version,
             "snapshotType": run.snapshot_type,
             "randomSeed": run.random_seed,
             "configHash": run.config_hash,
