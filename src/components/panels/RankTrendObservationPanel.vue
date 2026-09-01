@@ -874,7 +874,7 @@ const riskSignals = computed(() => {
 .summary-strip {
   height: 58px;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-bottom: 1px solid var(--cockpit-line);
 }
 
@@ -884,10 +884,6 @@ const riskSignals = computed(() => {
   justify-content: center;
   gap: 8px;
   border-right: 1px solid var(--cockpit-line);
-}
-
-.summary-strip>div:last-child {
-  border-right: 0;
 }
 
 .summary-strip span {
