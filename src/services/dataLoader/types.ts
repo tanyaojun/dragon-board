@@ -19,6 +19,8 @@ export interface LimitUpItem {
   continue_day: number | null
   high_days: number | string | null
   high_days_value?: number | string | null
+  order_amount?: number | string | null
+  open_num?: number | string | null
 }
 
 export interface LoadingStatus {

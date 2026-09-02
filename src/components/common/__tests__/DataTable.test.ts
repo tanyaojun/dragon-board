@@ -299,20 +299,36 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain("observationColumnsCollapsed ? '◀' : '▶'")
   })
 
-  test('collapses the quote columns (成交额/流通值/总市值/市盈率/市净率) via the volume toggle', () => {
+  test('collapses the quote columns (流通值/总市值/市盈率/市净率) via the turnover toggle', () => {
     const source = dataTableSource()
 
-    // 折叠集合：成交额/流通值/总市值/市盈率/市净率，默认展开
-    expect(source).toContain("const quoteColumnsCollapsed = ref(false)")
-    for (const key of ['turnover', 'cirMV', 'totalMV', 'pe', 'pb']) {
+    // 2026-09-02 用户口径：默认只打开 3日量比/换手%/成交量/成交额，其余四列默认折叠；
+    // 成交额移出折叠集合（始终显示），折叠按钮从成交量列改挂成交额列
+    expect(source).toContain("const quoteColumnsCollapsed = ref(true)")
+    for (const key of ['cirMV', 'totalMV', 'pe', 'pb']) {
       expect(source).toContain(`'${key}'`)
     }
     // visibleColumns 过滤行情列
     expect(source).toContain('COLLAPSIBLE_QUOTE_KEYS.has(col.key)')
     expect(source).toContain('const toggleQuoteColumns')
-    // 成交量列 title 右侧三角按钮（与综合/四维折叠方式一致）
+    // 成交额列 title 右侧三角按钮（与综合/四维折叠方式一致）
     expect(source).toContain("@click.stop=\"toggleQuoteColumns\"")
     expect(source).toContain("quoteColumnsCollapsed ? '◀' : '▶'")
+  })
+
+  test('collapses limit-up detail columns via the lianban toggle, keeps 连板/涨停原因 visible', () => {
+    const source = dataTableSource()
+
+    // 2026-09-02 用户口径：涨停相关组默认只显示连板+涨停原因，
+    // 首次/最后涨停/封单/开板默认折叠，点击连板列右侧三角展开
+    expect(source).toContain('const limitupColumnsCollapsed = ref(true)')
+    for (const key of ['firstZtTime', 'lastZtTime', 'fengdan', 'openNum']) {
+      expect(source).toContain(`'${key}'`)
+    }
+    expect(source).toContain('COLLAPSIBLE_LIMITUP_KEYS.has(col.key)')
+    expect(source).toContain('const toggleLimitupColumns')
+    expect(source).toContain("@click.stop=\"toggleLimitupColumns\"")
+    expect(source).toContain("limitupColumnsCollapsed ? '◀' : '▶'")
   })
 
   test('opens the observation panel from the volume price column too', () => {

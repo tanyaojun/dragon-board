@@ -13,4 +13,12 @@ describe('DataTable resonance tooltip decoupled from theme momentum', () => {
     expect(source).not.toContain('【题材动量】')
     expect(source).not.toContain('resonance.theme.themeMomentumScore')
   })
+
+  it('renders limit-up reason from the dedicated limitUpReason field next to related reason', () => {
+    // 2026-09-02 口径：题材 tooltip 中「关联原因」（stock.reason，主营业务静态文本）与
+    // 「涨停原因」（stock.limitUpReason，同花顺涨停池 reason_type）是两个独立字段
+    expect(source).toContain('📋 关联原因:')
+    expect(source).toContain('🚀 涨停原因: ${stock.limitUpReason}')
+    expect(source).not.toContain('merged.reason = limitUpData.reason')
+  })
 })

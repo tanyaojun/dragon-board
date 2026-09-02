@@ -18,6 +18,7 @@ type LimitUpDataLayerUpdate = {
   highDays?: number
   fengdan?: number
   maxFengdan?: number
+  openNum?: number
   leadStatus?: string
   leadTimes?: number
   lianbanStr?: string
@@ -60,6 +61,8 @@ export interface LimitUpPoolStock extends Partial<LimitUpUpdate> {
   change?: number
   limitUpTime?: string
   fengdan?: number
+  openNum?: number
+  lianbanStr?: string
   turnover?: number
   turnoverRate?: number
   speed?: number
@@ -126,15 +129,26 @@ function formatLimitTime(value: unknown): string {
 }
 
 export function mapLimitUpItems(items: LimitUpItem[]): LimitUpUpdate[] {
-  return items.map((item) => ({
-    code: normalizeStockCode(item.code),
-    reason: item.reason_type,
-    isNew: item.is_new === 1,
-    firstZtTime: formatLimitTime(item.first_limit_up_time),
-    lastZtTime: formatLimitTime(item.last_limit_up_time),
-    boardHeight: resolveBoardHeight(item),
-    highDays: resolveHighDays(item),
-  }))
+  return items.map((item) => {
+    const update: LimitUpUpdate & { fengdan?: number; openNum?: number; lianbanStr?: string } = {
+      code: normalizeStockCode(item.code),
+      reason: item.reason_type,
+      isNew: item.is_new === 1,
+      firstZtTime: formatLimitTime(item.first_limit_up_time),
+      lastZtTime: formatLimitTime(item.last_limit_up_time),
+      boardHeight: resolveBoardHeight(item),
+      highDays: resolveHighDays(item),
+    }
+    // fail-visible：缺失字段不产出键（不伪造 fengdan: 0 / openNum: 0 / 空连板文本）
+    const fengdan = toFiniteNumber(item.order_amount)
+    if (fengdan !== null) update.fengdan = fengdan
+    const openNum = toFiniteNumber(item.open_num)
+    if (openNum !== null) update.openNum = openNum
+    // 连板文本仅取 high_days 字符串原文（"首板"/"5天3板"）；数字口径走 boardHeight
+    const lianbanText = typeof item.high_days === 'string' ? item.high_days.trim() : ''
+    if (lianbanText) update.lianbanStr = lianbanText
+    return update
+  })
 }
 
 function pickText(record: Record<string, unknown>, keys: string[]): string {
@@ -166,19 +180,23 @@ function mapThsPoolItem(poolType: LimitUpPoolType, value: unknown): LimitUpPoolS
     parseBoardText(item.high_days) ??
     decodeHighDaysValue(item.high_days_value) ??
     undefined
+  // 细分池实测（2026-09-02）没有 last_limit_up_time 字段；缺省时不得用首次时间伪造
+  // 最后涨停时间（否则细分池后加载会覆盖主池真实的回封时间），保持缺失
+  const lastZtRaw = pickText(item, ['last_limit_up_time'])
 
-  return {
+  const row: LimitUpPoolStock = {
     poolType,
     code,
     name: pickText(item, ['stock_name', 'name']) || code,
     reason: pickText(item, ['limit_up_reason', 'reason_type']),
     firstZtTime: limitUpTime,
-    lastZtTime: formatLimitTime(pickText(item, ['last_limit_up_time'])) || limitUpTime,
     limitUpTime,
     boardHeight,
     highDays: boardHeight,
+    lianbanStr: pickText(item, ['high_days']),
     change: pickNumber(item, ['change', 'change_rate']),
     fengdan: pickNumber(item, ['volume_money', 'order_amount']),
+    openNum: pickNumber(item, ['open_num']),
     turnover: pickNumber(item, ['turnover', 'volume_money']),
     turnoverRate: pickNumber(item, ['turnover_rate']),
     speed: pickNumber(item, ['rise_rate', 'speed']),
@@ -186,6 +204,8 @@ function mapThsPoolItem(poolType: LimitUpPoolType, value: unknown): LimitUpPoolS
     maxDrawdown: pickNumber(item, ['max_drawdown']),
     raw: item,
   }
+  if (lastZtRaw) row.lastZtTime = formatLimitTime(lastZtRaw)
+  return row
 }
 
 export function mapThsLimitUpPools(pools: ThsLimitUpPoolResponse): LimitUpPoolStock[] {
@@ -207,7 +227,9 @@ function toLimitUpUpdate(stock: LimitUpPoolStock): LimitUpDataLayerUpdate {
   if (stock.lastZtTime) update.lastZtTime = stock.lastZtTime
   if (stock.boardHeight !== undefined) update.boardHeight = stock.boardHeight
   if (stock.highDays !== undefined) update.highDays = stock.highDays
+  if (stock.lianbanStr) update.lianbanStr = stock.lianbanStr
   if (stock.fengdan !== undefined) update.fengdan = stock.fengdan
+  if (stock.openNum !== undefined) update.openNum = stock.openNum
   if (stock.speed !== undefined) update.speed = stock.speed
   if (stock.turnover !== undefined) update.turnover = stock.turnover
   if (stock.turnoverRate !== undefined) update.turnoverRate = stock.turnoverRate

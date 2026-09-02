@@ -255,12 +255,60 @@ describe('theme service adapters', () => {
     })
     const stockTagsSpy = vi.spyOn(dataLayer, 'updateStockTags')
     const limitUpSpy = vi.spyOn(dataLayer, 'updateLimitUpData')
+    const stockReasonSpy = vi.spyOn(dataLayer, 'updateStockReasons')
 
     await sectorAnalyzer.init()
 
     expect(stockTagsSpy).toHaveBeenCalledWith([{ code: '000001', tags: [{ Name: '算力' }] }])
+    // 2026-09-02 口径：涨停原因唯一来源是同花顺涨停池 reason_type；
+    // 静态题材映射文本（getStockReason）不得写入 limitUpData.reason，否则未涨停股也会显示公告文本
     expect(limitUpSpy).toHaveBeenCalledWith([
-      { code: '000001', reason: '算力龙头', tags: [{ Name: '算力' }] },
+      { code: '000001', tags: [{ Name: '算力' }] },
     ])
+    // 关联原因（主营业务静态文本）走独立字段 stockReasons，与涨停原因互不覆盖
+    expect(stockReasonSpy).toHaveBeenCalledWith([{ code: '000001', reason: '算力龙头' }])
+  })
+
+  it('never writes static mapping reason into limitUpData even when pool data is absent', async () => {
+    // init 有模块级幂等保护，先重置状态再跑同步流程
+    sectorAnalyzer.destroy()
+    vi.spyOn(themeRepository, 'loadThemeBase').mockResolvedValue(true)
+    vi.spyOn(themeRepository, 'getThemes').mockReturnValue([
+      { id: 'AI', name: '人工智能', zsCode: 'BK0800' },
+    ])
+    vi.spyOn(themeRepository, 'getThemeStocks').mockReturnValue(['000001'])
+    vi.spyOn(themeRepository, 'getThemeBaseStatus').mockReturnValue({
+      source: 'mongodb',
+      loaded: true,
+      lastUpdate: '2026-05-05T09:30:00.000Z',
+      lastError: null,
+      themeCount: 1,
+      mappingCount: 1,
+    })
+    vi.spyOn(themeRepository, 'getStockTags').mockReturnValue([{ Name: '算力' }])
+    vi.spyOn(themeRepository, 'getStockReason').mockReturnValue('算力龙头')
+    vi.spyOn(themeFacade, 'refreshRuntime').mockReturnValue({
+      factors: [],
+      exposures: { byCode: new Map(), byTheme: new Map() },
+      rotationSummary: null,
+      events: [],
+      qualitySummary: { totalFlags: 0, fatalCount: 0, warningCount: 0, infoCount: 0, byCode: {} },
+      changedFields: [],
+      inputSignature: 'same',
+      source: 'sectorAnalyzer',
+      timestamp: 1713751200000,
+      syncedStockCount: 0,
+    })
+    // 涨停池尚未加载（getLimitUpData 返回 undefined）时，静态题材映射文本同样不得写入 reason ——
+    // 否则启动顺序竞态会让全市场股票带上“公司公告”文本（2026-09-02 用户报告的根因）
+    vi.spyOn(dataLayer, 'getLimitUpData').mockReturnValue(undefined)
+    const limitUpSpy = vi.spyOn(dataLayer, 'updateLimitUpData')
+    const stockReasonSpy = vi.spyOn(dataLayer, 'updateStockReasons')
+
+    await sectorAnalyzer.init()
+
+    expect(limitUpSpy).toHaveBeenCalledWith([{ code: '000001', tags: [{ Name: '算力' }] }])
+    // 涨停池未加载时静态文本也不进 limitUpData；关联原因走独立的 stockReasons 字段
+    expect(stockReasonSpy).toHaveBeenCalledWith([{ code: '000001', reason: '算力龙头' }])
   })
 })

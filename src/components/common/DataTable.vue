@@ -40,7 +40,7 @@
         <!-- 列表头 -->
         <div class="header-row" :style="gridTemplateStyle">
           <div v-for="col in visibleColumns" :key="col.key" class="header-cell"
-            :class="{ sorted: uiStore.sort.field === col.key }" @click="uiStore.toggleSort(col.key as any)">
+            :class="{ sorted: uiStore.sort.field === col.key }" @click="uiStore.toggleSort(col.key)">
             <template v-if="col.key === 'compRank'">
               <button class="rank-collapse-toggle" :class="{ collapsed: rankColumnsCollapsed }"
                 :title="rankColumnsCollapsed ? '展开热榜排名列' : '折叠热榜排名列'" @click.stop="toggleRankColumns" type="button">
@@ -56,10 +56,18 @@
               </button>
               {{ col.label }}
             </template>
-            <template v-else-if="col.key === 'volume'">
+            <template v-else-if="col.key === 'lianbanStr'">
+              {{ col.label }}
+              <button class="rank-collapse-toggle" :class="{ collapsed: limitupColumnsCollapsed }"
+                :title="limitupColumnsCollapsed ? '展开首次/最后涨停/封单/开板' : '折叠首次/最后涨停/封单/开板'"
+                @click.stop="toggleLimitupColumns" type="button">
+                <span class="rank-collapse-arrow">{{ limitupColumnsCollapsed ? '◀' : '▶' }}</span>
+              </button>
+            </template>
+            <template v-else-if="col.key === 'turnover'">
               {{ col.label }}
               <button class="rank-collapse-toggle" :class="{ collapsed: quoteColumnsCollapsed }"
-                :title="quoteColumnsCollapsed ? '展开成交额/流通值/总市值/市盈率/市净率' : '折叠成交额/流通值/总市值/市盈率/市净率'"
+                :title="quoteColumnsCollapsed ? '展开流通值/总市值/市盈率/市净率' : '折叠流通值/总市值/市盈率/市净率'"
                 @click.stop="toggleQuoteColumns" type="button">
                 <span class="rank-collapse-arrow">{{ quoteColumnsCollapsed ? '◀' : '▶' }}</span>
               </button>
@@ -201,6 +209,12 @@
             <template v-else-if="col.key === 'volumeRatio'">
               <span :class="getVolumeRatioClass(stock)" :title="getVolumeRatioTitle(stock)">{{ formatCell(col.key,
                 stock) }}</span>
+            </template>
+
+            <!-- 涨停原因列：限宽省略，悬停看全文；非涨停股显示 '-'（reason_type 仅涨停股有值） -->
+            <template v-else-if="col.key === 'limitUpReason'">
+              <span class="limit-up-reason-text" :title="stock.limitUpReason || ''">{{ stock.limitUpReason || '-'
+              }}</span>
             </template>
 
             <template v-else>
@@ -420,12 +434,20 @@ const columns = [
   { key: 'totalMV', label: '总市值', group: 'quote', always: true },
   { key: 'pe', label: '市盈率', group: 'quote', always: true },
   { key: 'pb', label: '市净率', group: 'quote', always: true },
+  // 涨停相关（2026-09-02）：取值来源同花顺涨停池（主池+细分池），字段语义与题材面板成分股一致；
+  // 非涨停股保持缺失显示 '-'，不伪造
+  { key: 'lianbanStr', label: '连板', group: 'limitup', always: true },
+  { key: 'firstZtTime', label: '首次涨停', group: 'limitup', always: true },
+  { key: 'lastZtTime', label: '最后涨停', group: 'limitup', always: true },
+  { key: 'fengdan', label: '封单(亿)', group: 'limitup', always: true },
+  { key: 'openNum', label: '开板', group: 'limitup', always: true },
+  { key: 'limitUpReason', label: '涨停原因', group: 'limitup', always: true },
 ]
 
 // ========== 列宽映射==========
 const COLUMN_WIDTHS: Record<string, string> = {
   code: '60px',
-  name: '70px',
+  name: '84px',
   themes: '120px',
   price: '70px',
   change: '70px',
@@ -456,6 +478,12 @@ const COLUMN_WIDTHS: Record<string, string> = {
   totalMV: '90px',
   pe: '65px',
   pb: '65px',
+  lianbanStr: '70px',
+  firstZtTime: '75px',
+  lastZtTime: '75px',
+  fengdan: '70px',
+  openNum: '50px',
+  limitUpReason: '200px',
 }
 
 // ========== 计算属性==========
@@ -477,11 +505,20 @@ const toggleObservationColumns = () => {
   observationColumnsCollapsed.value = !observationColumnsCollapsed.value
 }
 
-// 可折叠行情列（成交额/流通值/总市值/市盈率/市净率）：默认折叠，【成交量】列 title 右侧三角按钮切换
-const COLLAPSIBLE_QUOTE_KEYS = new Set(['turnover', 'cirMV', 'totalMV', 'pe', 'pb'])
-const quoteColumnsCollapsed = ref(false)
+// 可折叠行情列（流通值/总市值/市盈率/市净率）：默认折叠，【成交额】列 title 右侧三角按钮切换；
+// 3日量比/换手%/成交量/成交额始终显示（2026-09-02 用户口径）
+const COLLAPSIBLE_QUOTE_KEYS = new Set(['cirMV', 'totalMV', 'pe', 'pb'])
+const quoteColumnsCollapsed = ref(true)
 const toggleQuoteColumns = () => {
   quoteColumnsCollapsed.value = !quoteColumnsCollapsed.value
+}
+
+// 可折叠涨停明细列（首次/最后涨停/封单/开板）：默认折叠，【连板】列 title 右侧三角按钮切换；
+// 连板/涨停原因始终显示（2026-09-02 用户口径）
+const COLLAPSIBLE_LIMITUP_KEYS = new Set(['firstZtTime', 'lastZtTime', 'fengdan', 'openNum'])
+const limitupColumnsCollapsed = ref(true)
+const toggleLimitupColumns = () => {
+  limitupColumnsCollapsed.value = !limitupColumnsCollapsed.value
 }
 
 const visibleColumns = computed(() =>
@@ -490,7 +527,8 @@ const visibleColumns = computed(() =>
       col.always &&
       !(rankColumnsCollapsed.value && COLLAPSIBLE_RANK_KEYS.has(col.key)) &&
       !(observationColumnsCollapsed.value && COLLAPSIBLE_OBSERVATION_KEYS.has(col.key)) &&
-      !(quoteColumnsCollapsed.value && COLLAPSIBLE_QUOTE_KEYS.has(col.key)),
+      !(quoteColumnsCollapsed.value && COLLAPSIBLE_QUOTE_KEYS.has(col.key)) &&
+      !(limitupColumnsCollapsed.value && COLLAPSIBLE_LIMITUP_KEYS.has(col.key)),
   )
 )
 const visibleGroups = computed(() => {
@@ -718,7 +756,7 @@ const getMergedThemeTooltipTitle = (stock: Stock) => {
     }
   }
 
-  // 关联原因
+  // 关联原因（主营业务静态文本，题材映射来源）
   if (stock.reason) {
     title += `\n📋 关联原因:\n`
     let reason = stock.reason
@@ -737,6 +775,11 @@ const getMergedThemeTooltipTitle = (stock: Stock) => {
     if (paragraphs.length > 5) {
       title += `   ... 共 ${paragraphs.length} 条\n`
     }
+  }
+
+  // 涨停原因（同花顺涨停池 reason_type，仅涨停股有值；与关联原因是两个不同字段）
+  if (stock.limitUpReason) {
+    title += `\n🚀 涨停原因: ${stock.limitUpReason}\n`
   }
 
   // 连板信息
@@ -1719,6 +1762,12 @@ const formatCell = (key: string, stock: any) => {
   if (key === 'pb') return value ? Number(value).toFixed(2) : '-'
   if (key === 'themes') return Array.isArray(value) ? value.join(', ') || '-' : value || '-'
 
+  // 封单金额：亿元两位小数（与题材面板封单列同口径），缺失 '-' 不伪造 0
+  if (key === 'fengdan') {
+    const amount = Number(value)
+    return Number.isFinite(amount) ? `${(amount / 1e8).toFixed(2)}亿` : '-'
+  }
+
   return value ?? '-'
 }
 
@@ -1841,6 +1890,7 @@ const getGroupLabel = (group: string) => {
     comprehensive: '🎯 综合',
     money: '💰 资金流向',
     quote: '🔴 行情数据',
+    limitup: '🚀 涨停相关',
   }
   return labels[group] || group
 }
@@ -2841,6 +2891,18 @@ defineExpose({
   height: 48px;
   display: flex;
   align-items: center;
+}
+
+/* 涨停原因列：限宽省略，悬停看全文；取值来源同花顺涨停池 reason_type（仅涨停股有值）；
+   字体与名称列一致（12px / --text-primary，继承 .cell 基础字号） */
+.limit-up-reason-text {
+  display: inline-block;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--text-primary);
 }
 
 /* 题材徽章 */

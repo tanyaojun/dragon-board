@@ -708,6 +708,30 @@ describe('DataLoaderFacade', () => {
     ])
   })
 
+  it('bootstrapInitialData loads limit-up data during startup', async () => {
+    const { dataLoader } = await import('../../dataLoader')
+    const { loadLimitUpData, loadThsLimitUpPoolData } = await import('../LimitUpFeed')
+
+    await dataLoader.bootstrapInitialData({ force: true })
+
+    // 题材面板成分股依赖涨停池扩展数据（连板/涨停时间/封单/开板），
+    // 启动直连路径也必须加载涨停池，不能只等定时刷新
+    expect(loadLimitUpData).toHaveBeenCalledTimes(1)
+    expect(loadThsLimitUpPoolData).toHaveBeenCalledTimes(1)
+  })
+
+  it('background startup bundle refresh loads limit-up data', async () => {
+    startupBundle = { ...completeSnapshotContext }
+    const { dataLoader } = await import('../../dataLoader')
+    const { loadLimitUpData, loadThsLimitUpPoolData } = await import('../LimitUpFeed')
+
+    await dataLoader.bootstrapInitialData({ force: false })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(loadLimitUpData).toHaveBeenCalled()
+    expect(loadThsLimitUpPoolData).toHaveBeenCalled()
+  })
+
   it('refreshAll performs one platform load and one merge cycle', async () => {
     const { dataLoader } = await import('../../dataLoader')
     const { loadLimitUpData, loadThsLimitUpPoolData } = await import('../LimitUpFeed')

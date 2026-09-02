@@ -999,6 +999,7 @@ class DataLayer {
       highDays?: number
       fengdan?: number
       maxFengdan?: number
+      openNum?: number
       leadStatus?: string
       leadTimes?: number
       lianbanStr?: string
@@ -1011,8 +1012,8 @@ class DataLayer {
     let touchedStocks = false
 
     updates.forEach(({ code, reason, isNew, tags, ...rest }) => {
-      // 更新 reason
-      if (reason !== undefined) this.state.tck2!.stockReasons.set(code, reason)
+      // 2026-09-02 口径：涨停原因（reason_type）只进 limitUpData，不写 stockReasons ——
+      // stockReasons 是关联原因（主营业务静态文本）专属存储，两者是不同字段，不得互相覆盖
 
       // 更新 isNew
       if (isNew !== undefined) this.state.tck2!.stockIsNew.set(code, isNew)
@@ -1066,10 +1067,13 @@ class DataLayer {
     stock.highDays = limitData.highDays ?? stock.highDays
     stock.fengdan = limitData.fengdan ?? stock.fengdan
     stock.maxFengdan = limitData.maxFengdan ?? stock.maxFengdan
+    stock.openNum = limitData.openNum ?? stock.openNum
+    // 涨停原因投影到独立键 limitUpReason；stock.reason 保持关联原因（主营业务静态文本）口径
+    if (limitData.reason) stock.limitUpReason = limitData.reason
     stock.leadStatus = limitData.leadStatus ?? stock.leadStatus
     stock.leadTimes = limitData.leadTimes ?? stock.leadTimes
     stock.lianbanStr = limitData.lianbanStr ?? stock.lianbanStr
-    stock.reason = limitData.reason ?? stock.reason
+    // stock.reason 是关联原因（主营业务静态文本），涨停原因不再投影覆盖（消费方读 getLimitUpData().reason）
     stock.tags = limitData.tags ?? stock.tags
     stock.isNew = limitData.isNew ?? stock.isNew
   }
@@ -1082,6 +1086,18 @@ class DataLayer {
 
   getStockTags(code: string): Array<{ Name: string }> | undefined {
     return this.state.tck2?.stockTags.get(code)
+  }
+
+  /**
+   * 关联原因（主营业务静态文本，题材映射来源）独立写入口。
+   * 与涨停原因（limitUpData.reason，同花顺涨停池 reason_type）是两个不同字段，互不覆盖。
+   */
+  updateStockReasons(updates: Array<{ code: string; reason: string }>) {
+    if (!this.state.tck2) this.initTck2Store()
+    updates.forEach(({ code, reason }) => {
+      if (reason) this.state.tck2!.stockReasons.set(code, reason)
+    })
+    this.throttledNotify('tck2.stockReasons', { count: updates.length })
   }
 
   getStockReason(code: string): string | undefined {

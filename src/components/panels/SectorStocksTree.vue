@@ -89,6 +89,10 @@
                 <option value="change">涨跌幅</option>
                 <option value="volumeRatio">量比</option>
                 <option value="mainNetInflow">主力净额</option>
+                <option value="leader">龙头</option>
+                <option value="lianban">连板</option>
+                <option value="firstZtTime">首次涨停时间</option>
+                <option value="fengdan">封单金额</option>
               </select>
               <button class="sort-btn" @click="sortDesc = !sortDesc">
                 {{ sortDesc ? '↓' : '↑' }}
@@ -108,7 +112,13 @@
                 <th @click="setSort('change')">涨跌幅</th>
                 <th @click="setSort('volumeRatio')">量比</th>
                 <th @click="setSort('mainNetInflow')">主力净额</th>
-                <th>领涨状态</th>
+                <th @click="setSort('leader')">领涨状态</th>
+                <th @click="setSort('lianban')">连板</th>
+                <th @click="setSort('firstZtTime')">首次涨停</th>
+                <th @click="setSort('lastZtTime')">最后涨停</th>
+                <th @click="setSort('fengdan')">封单(亿)</th>
+                <th>开板</th>
+                <th>涨停原因</th>
               </tr>
             </thead>
             <tbody>
@@ -127,10 +137,17 @@
                   {{ stock.mainNetInflow == null ? '--' : formatMoney(stock.mainNetInflow) }}
                 </td>
                 <td>
-                  <span v-if="stock.leadStatus" class="lead-badge"
-                    :class="{ 'poban': stock.leadStatus.includes('破板') }">
-                    {{ stock.leadStatus }}
-                  </span>
+                  <!-- 领涨状态=题材内按首次涨停时间编位：龙一/龙二/龙三……，未涨停显示 -- -->
+                  <span v-if="stock.leaderRank" class="lead-badge">{{ formatLeaderRank(stock.leaderRank) }}</span>
+                  <span v-else>--</span>
+                </td>
+                <td>{{ formatLianbanText(stock) }}</td>
+                <td>{{ stock.firstZtTime || '--' }}</td>
+                <td>{{ stock.lastZtTime || '--' }}</td>
+                <td>{{ formatFengdanYi(stock.fengdan) }}</td>
+                <td>{{ formatOpenNum(stock.openNum) }}</td>
+                <td>
+                  <span class="reason-text" :title="stock.reason || ''">{{ stock.reason || '--' }}</span>
                 </td>
               </tr>
             </tbody>
@@ -163,8 +180,14 @@ import { debugLog } from '@/utils/logger'
 import { StockUtils } from '@/utils/common'
 import { ref, computed, onMounted, watch } from 'vue'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
-import { useUIStore } from '@/stores/ui'
 import { themeFacade } from '@/services/theme/ThemeFacade'
+import {
+  compareThemeStockRows,
+  formatFengdanYi,
+  formatLeaderRank,
+  formatLianbanText,
+  formatOpenNum,
+} from '@/services/theme/stockLimitUpRows'
 import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 import ThemeMomentumPanel from './ThemeMomentumPanel.vue'
 
@@ -190,7 +213,8 @@ const themeRuntime = useThemeRuntimeSnapshot()
 
 // 表格状态
 const stockSearch = ref('')
-const sortBy = ref('change')
+// 默认按龙头排序：leaderRank 编位（连板降序+首次涨停时间升序），龙一在最前
+const sortBy = ref('leader')
 const sortDesc = ref(true)
 const stockPage = ref(1)
 const stockPageSize = ref(20)
@@ -254,11 +278,7 @@ const filteredStocks = computed(() => {
       s.name.toLowerCase().includes(keyword)
     )
   }
-  result.sort((a, b) => {
-    let aVal = a[sortBy.value as keyof typeof a] || 0
-    let bVal = b[sortBy.value as keyof typeof b] || 0
-    return sortDesc.value ? bVal - aVal : aVal - bVal
-  })
+  result.sort((a, b) => compareThemeStockRows(a, b, sortBy.value, sortDesc.value))
   return result
 })
 
@@ -282,12 +302,11 @@ async function selectSector(sector: any) {
   loadingStocks.value = true
 
   try {
-    // ✅ 强制刷新，不依赖缓存
-    const stocks = await sectorAnalyzer.loadSectorStocks(sector.id, sector.name, true)  // 加个 force 参数
-    sectorStockRows.value = stocks.map(stock => ({
-      ...stock,
-      leadStatus: stock.role === 'leader' ? '龙头' : stock.role === 'core' ? '核心' : '',
-    }))
+    // 打开题材走 30 秒 LRU 缓存（themeHeatStocksCache），避免每次点击都强制后端查 MongoDB 重算；
+    // 涨停池字段（龙一/连板/封单等）由 loadSectorStocks 用 dataLayer 内存数据本地合入，不受缓存影响
+    const stocks = await sectorAnalyzer.loadSectorStocks(sector.id, sector.name)
+    // 行数据已由 enrichStocksWithLimitUp 合入涨停池字段并编好 leaderRank（龙一/龙二……）
+    sectorStockRows.value = [...stocks]
 
     // 更新到本地数据
     if (stocks && stocks.length > 0) {
@@ -721,6 +740,15 @@ watch([stockSearch, sortBy, sortDesc], () => {
   font-size: 12px;
   min-width: 100%;
   white-space: nowrap;
+}
+
+/* 涨停原因列：限宽省略，悬停看全文；其余列由内容自适应宽度 */
+.stocks-table .reason-text {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .stocks-table th {

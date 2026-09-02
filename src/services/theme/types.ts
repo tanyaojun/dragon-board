@@ -92,6 +92,14 @@ export interface ThemeHeatStock {
   rank: number
   role: ThemeStockRole
   qualityFlags: ThemeQualityFlag[]
+  /** 涨停池扩展字段：由 enrichStocksWithLimitUp 从 DataLayer 涨停池数据合入，非涨停股保持缺失 */
+  lianbanStr?: string
+  boardHeight?: number
+  firstZtTime?: string
+  lastZtTime?: string
+  fengdan?: number
+  openNum?: number
+  reason?: string
 }
 
 export interface ThemePanelSummary {

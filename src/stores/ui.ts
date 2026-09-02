@@ -123,6 +123,17 @@ function getResonanceIntensitySortValue(stock: any): number | null {
   return resonance?.status === 'ok' ? toFiniteNumber(resonance.score) : null
 }
 
+// 涨停相关字段（2026-09-02）：缺失（非涨停/未覆盖）与真实 0（封单 0、开板 0）语义不同，
+// 缺失返回 null 恒排最后（fail-visible），不与 0 混排；与题材面板 compareThemeStockRows 语义一致
+const LIMIT_UP_MISSING_LAST_SORT_FIELDS = new Set([
+  'lianbanStr',
+  'firstZtTime',
+  'lastZtTime',
+  'fengdan',
+  'openNum',
+  'limitUpReason',
+])
+
 function getStockSortValue(stock: Stock, field: SortField): string | number | null {
   if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
   // 2026-08-24：趋势列显示方向+数值%——排序值取排名趋势分（弃热度档位，热度独立成列）
@@ -159,6 +170,7 @@ function getStockSortValue(stock: Stock, field: SortField): string | number | nu
 
   const value = (stock as unknown as Record<string, unknown>)[field]
   if (value === undefined || value === null || value === '') {
+    if (LIMIT_UP_MISSING_LAST_SORT_FIELDS.has(field)) return null
     return field.includes('Rank') ? 999 : 0
   }
 

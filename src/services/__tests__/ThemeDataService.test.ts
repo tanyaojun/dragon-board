@@ -77,7 +77,9 @@ describe('ThemeDataService mongo mapping facade', () => {
     expect(themeMapping.getStockReason('000001')).toBe('算力龙头；电网建设')
   })
 
-  it('syncs stock tags and reasons to DataLayer limit-up extension on initial load', async () => {
+  it('syncs stock tags into limit-up ext and reasons into the dedicated stockReasons store', async () => {
+    // 2026-09-02 口径：题材映射静态文本（关联原因/主营业务）不得写入 limitUpData.reason ——
+    // 涨停原因唯一来源是同花顺涨停池 reason_type（仅涨停股有值）；关联原因走 updateStockReasons
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -90,10 +92,12 @@ describe('ThemeDataService mongo mapping facade', () => {
 
     await expect(themeMapping.load()).resolves.toBe(true)
 
-    expect(dataLayer.getLimitUpData('000001')).toMatchObject({
-      tags: [{ Name: '算力' }, { Name: '电网' }],
-      reason: '算力龙头；电网建设',
-    })
+    // tags 走 stockTags 独立存储
+    expect(dataLayer.getStockTags('000001')).toEqual([{ Name: '算力' }, { Name: '电网' }])
+    // 涨停池未加载时 limitUpData 不存在——静态映射不得伪造涨停数据
+    expect(dataLayer.getLimitUpData('000001')).toBeUndefined()
+    // 关联原因走 stockReasons 独立存储
+    expect(dataLayer.getStockReason('000001')).toBe('算力龙头；电网建设')
   })
 
   it('setData updates only in-memory facade state and does not persist browser IndexedDB', () => {

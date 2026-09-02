@@ -17,6 +17,7 @@ import { themeHeatFeed } from './theme/ThemeHeatFeed'
 import type { ThemeHeatStock } from './theme/types'
 import { themeRepository } from './theme/ThemeRepository'
 import { deriveThemeHeatMeta } from './theme/stockThemeMeta'
+import { enrichStocksWithLimitUp } from './theme/stockLimitUpRows'
 
 type SortableThemeStockKey = keyof Pick<
   ThemeStock,
@@ -108,27 +109,31 @@ async function syncTagsAndReasonsToDataLayer(): Promise<void> {
     reason?: string
     tags?: Array<{ Name: string }>
   }> = []
+  const stockReasonUpdates: Array<{ code: string; reason: string }> = []
   for (const theme of themeRepository.getThemes()) {
     for (const code of themeRepository.getThemeStocks(theme.id)) {
       const tags = themeRepository.getStockTags(code)
-      const reason = themeRepository.getStockReason(code)
       if (tags.length > 0) {
         stockTagsUpdates.push({
           code,
           tags: tags.map((tag: { Name: string }) => ({ Name: tag.Name })),
         })
       }
-      if (reason) {
-        limitUpUpdates.push({
-          code,
-          reason,
-          tags: tags.length > 0 ? tags.map((tag: { Name: string }) => ({ Name: tag.Name })) : undefined,
-        })
+      // 字段口径（2026-09-02）：
+      // - 涨停原因 = limitUpData.reason，唯一来源是同花顺涨停池 reason_type，仅涨停股有值；
+      //   静态映射文本不得写入（否则未涨停股也显示"涨停原因"）。
+      // - 关联原因 = stockReasons（getStockReason），主营业务静态文本，供主营业务分析；
+      //   走独立写入口 updateStockReasons，与涨停原因互不覆盖。
+      const reason = themeRepository.getStockReason(code)
+      if (reason) stockReasonUpdates.push({ code, reason })
+      if (tags.length > 0) {
+        limitUpUpdates.push({ code, tags: tags.map((tag: { Name: string }) => ({ Name: tag.Name })) })
       }
     }
   }
 
   if (stockTagsUpdates.length > 0) dataLayer.updateStockTags(stockTagsUpdates)
+  if (stockReasonUpdates.length > 0) dataLayer.updateStockReasons(stockReasonUpdates)
   if (limitUpUpdates.length > 0) dataLayer.updateLimitUpData(limitUpUpdates)
   if (stockTagsUpdates.length > 0 || limitUpUpdates.length > 0) {
     dataLayer.updateStocks(dataLayer.getStocks())
@@ -190,7 +195,8 @@ export async function loadSectorStocks(
   sectorName: string,
   forceRefresh: boolean = false,
 ): Promise<ThemeHeatStock[]> {
-  return themeHeatFeed.loadThemeStocks(sectorCode, { force: forceRefresh, limit: 200 })
+  const stocks = await themeHeatFeed.loadThemeStocks(sectorCode, { force: forceRefresh, limit: 200 })
+  return enrichStocksWithLimitUp(stocks, (code) => dataLayer.getLimitUpData(code))
 }
 
 export async function preloadTopSectors(limit: number = CONFIG.PRELOAD_COUNT) {

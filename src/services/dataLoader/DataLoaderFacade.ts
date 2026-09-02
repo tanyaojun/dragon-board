@@ -439,6 +439,7 @@ class DataLoaderService {
       allowWhileLoading: true,
       deferSignalEnrichment: true,
       preserveExistingOnEmpty: true,
+      includeLimitUpData: true,
     })
       .catch((error) => {
         console.warn('[DataLoader] 后台刷新启动快照包失败:', error)
@@ -541,6 +542,7 @@ class DataLoaderService {
       const summary = await this.loadPlatformAndMerge(options.force ?? false, {
         allowWhileLoading: true,
         deferSignalEnrichment: true,
+        includeLimitUpData: true,
       })
       this.updateProgress(100, '完成', 'done')
       return summary

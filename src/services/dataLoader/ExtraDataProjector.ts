@@ -32,6 +32,11 @@ export class ExtraDataProjector {
       stock.lastZtTime = limitUp.lastZtTime
       stock.boardHeight = limitUp.boardHeight
       stock.highDays = limitUp.highDays
+      stock.lianbanStr = limitUp.lianbanStr ?? stock.lianbanStr
+      stock.fengdan = limitUp.fengdan ?? stock.fengdan
+      stock.openNum = limitUp.openNum ?? stock.openNum
+      // 涨停原因走独立键 limitUpReason；stock.reason 保持关联原因口径，不得覆盖
+      if (limitUp.reason) stock.limitUpReason = limitUp.reason
     }
   }
 
@@ -76,12 +81,15 @@ export class ExtraDataProjector {
     if (limitUpData) {
       merged.fengdan = limitUpData.fengdan ?? merged.fengdan
       merged.maxFengdan = limitUpData.maxFengdan ?? merged.maxFengdan
+      merged.openNum = limitUpData.openNum ?? merged.openNum
       merged.leadStatus = limitUpData.leadStatus ?? merged.leadStatus
       merged.leadTimes = limitUpData.leadTimes ?? merged.leadTimes
       merged.lianbanStr = limitUpData.lianbanStr ?? merged.lianbanStr
       merged.firstZtTime = limitUpData.firstZtTime ?? merged.firstZtTime
       merged.lastZtTime = limitUpData.lastZtTime ?? merged.lastZtTime
-      merged.reason = limitUpData.reason ?? merged.reason
+      // 两字段口径（2026-09-02）：merged.reason 恒为关联原因（主营业务静态文本）；
+      // 涨停原因（同花顺涨停池 reason_type）投影到独立键 limitUpReason，不得覆盖 reason
+      if (limitUpData.reason) merged.limitUpReason = limitUpData.reason
       merged.tags = limitUpData.tags ?? merged.tags
       merged.isNew = limitUpData.isNew ?? merged.isNew
     }

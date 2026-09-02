@@ -72,24 +72,21 @@ class ThemeDataService {
       tags: tags.map((tag) => ({ Name: tag.Name })),
     }))
 
-    const limitUpUpdates = Array.from(
-      new Set([...this.stockTagsMap.keys(), ...this.stockReasonsMap.keys()]),
-    ).map((code) => ({
-      code,
-      reason: this.stockReasonsMap.get(code),
-      tags: this.stockTagsMap.get(code)?.map((tag) => ({ Name: tag.Name })),
-    }))
-
     if (stockTagsUpdates.length > 0) {
       dataLayer.updateStockTags(stockTagsUpdates)
     }
 
-    if (limitUpUpdates.length > 0) {
-      dataLayer.updateLimitUpData(limitUpUpdates)
+    // 2026-09-02 口径：题材映射静态文本（关联原因/主营业务）走 updateStockReasons 独立存储，
+    // 不得写进 updateLimitUpData（limitUpData.reason 是涨停原因，唯一来源同花顺涨停池 reason_type）
+    const stockReasonUpdates = Array.from(this.stockReasonsMap.entries())
+      .map(([code, reason]) => ({ code, reason: String(reason || '').trim() }))
+      .filter((update) => update.reason)
+    if (stockReasonUpdates.length > 0) {
+      dataLayer.updateStockReasons(stockReasonUpdates)
     }
 
     const stocks = dataLayer.getStocks()
-    if (stocks.length > 0 && (stockTagsUpdates.length > 0 || limitUpUpdates.length > 0)) {
+    if (stocks.length > 0 && (stockTagsUpdates.length > 0 || stockReasonUpdates.length > 0)) {
       dataLayer.setMergedStocks(
         stocks.map((stock) => ({
           ...stock,

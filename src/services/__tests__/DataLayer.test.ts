@@ -110,13 +110,21 @@ describe('DataLayer limit-up runtime projection', () => {
         },
       ])
 
-      expect(dataLayer.getStock('000001')).toMatchObject({
+      // 2026-09-02 口径：涨停原因只进 limitUpData，不再投影覆盖 stock.reason（关联原因字段）
+      expect(dataLayer.getLimitUpData('000001')).toMatchObject({
         reason: '存储芯片+先进封装',
         firstZtTime: '09:37:00',
         lastZtTime: '09:37:00',
         boardHeight: 2,
         highDays: 2,
       })
+      expect(dataLayer.getStock('000001')).toMatchObject({
+        firstZtTime: '09:37:00',
+        lastZtTime: '09:37:00',
+        boardHeight: 2,
+        highDays: 2,
+      })
+      expect(dataLayer.getStock('000001')?.reason).toBeUndefined()
     } finally {
       vi.runOnlyPendingTimers()
       dataLayer.reset()
@@ -161,15 +169,40 @@ describe('DataLayer limit-up runtime projection', () => {
       ])
 
       expect(dataLayer.getStock('000001')).toMatchObject({
-        reason: '存储芯片',
         speed: 0.8,
         turnover: 1000000,
       })
+      expect(dataLayer.getStock('000001')?.reason).toBeUndefined()
+      expect(dataLayer.getLimitUpData('000001')?.reason).toBe('存储芯片')
     } finally {
       vi.runOnlyPendingTimers()
       dataLayer.reset()
       vi.useRealTimers()
     }
+  })
+
+  test('limit-up reason does not overwrite关联原因 in stockReasons', () => {
+    // 2026-09-02 用户口径：关联原因（主营业务静态文本）与涨停原因（涨停池 reason_type）是两个不同字段，
+    // 涨停池数据入库时不得覆盖 stockReasons
+    dataLayer.reset()
+
+    dataLayer.updateStockReasons([{ code: '000001', reason: '公司是国内首家量产800G高速DA的公司' }])
+    dataLayer.updateLimitUpData([{ code: '000001', reason: '存储芯片+先进封装' }])
+
+    expect(dataLayer.getStockReason('000001')).toBe('公司是国内首家量产800G高速DA的公司')
+    expect(dataLayer.getLimitUpData('000001')?.reason).toBe('存储芯片+先进封装')
+  })
+
+  test('updateStockReasons stores关联原因 readable via getStockReason', () => {
+    dataLayer.reset()
+
+    dataLayer.updateStockReasons([
+      { code: '000001', reason: '算力龙头' },
+      { code: '000002', reason: '' }, // 空文本不写入
+    ])
+
+    expect(dataLayer.getStockReason('000001')).toBe('算力龙头')
+    expect(dataLayer.getStockReason('000002')).toBeUndefined()
   })
 })
 

@@ -222,6 +222,10 @@
                   <option value="volumeRatio">量比</option>
                   <option value="mainNetInflow">主力净额</option>
                   <option value="price">最新价</option>
+                  <option value="leader">龙头</option>
+                  <option value="lianban">连板</option>
+                  <option value="firstZtTime">首次涨停时间</option>
+                  <option value="fengdan">封单金额</option>
                 </select>
                 <button class="sort-btn" @click="sortDesc = !sortDesc">
                   {{ sortDesc ? '↓ 降序' : '↑ 升序' }}
@@ -246,7 +250,13 @@
                     <th @click="setSort('change')">涨跌幅</th>
                     <th @click="setSort('volumeRatio')">量比</th>
                     <th @click="setSort('mainNetInflow')">主力净额</th>
-                    <th>领涨状态</th>
+                    <th @click="setSort('leader')">领涨状态</th>
+                    <th @click="setSort('lianban')">连板</th>
+                    <th @click="setSort('firstZtTime')">首次涨停</th>
+                    <th @click="setSort('lastZtTime')">最后涨停</th>
+                    <th @click="setSort('fengdan')">封单(亿)</th>
+                    <th>开板</th>
+                    <th>涨停原因</th>
                     <th>板块</th>
                     <th>标记</th>
                   </tr>
@@ -267,11 +277,17 @@
                       {{ stock.mainNetInflow === null ? '--' : formatMoney(stock.mainNetInflow) }}
                     </td>
                     <td>
-                      <span v-if="stock.leadStatus" class="lead-badge"
-                        :class="{ 'poban': stock.leadStatus.includes('破板') }">
-                        {{ stock.leadStatus }}
-                      </span>
-                      <span v-else>-</span>
+                      <!-- 领涨状态=题材内按首次涨停时间编位：龙一/龙二/龙三……，未涨停显示 -- -->
+                      <span v-if="stock.leaderRank" class="lead-badge">{{ formatLeaderRank(stock.leaderRank) }}</span>
+                      <span v-else>--</span>
+                    </td>
+                    <td>{{ formatLianbanText(stock) }}</td>
+                    <td>{{ stock.firstZtTime || '--' }}</td>
+                    <td>{{ stock.lastZtTime || '--' }}</td>
+                    <td>{{ formatFengdanYi(stock.fengdan) }}</td>
+                    <td>{{ formatOpenNum(stock.openNum) }}</td>
+                    <td>
+                      <span class="reason-text" :title="stock.reason || ''">{{ stock.reason || '--' }}</span>
                     </td>
                     <td>
                       <div class="blocks-container">
@@ -287,7 +303,6 @@
                       <div class="badges">
                         <span v-if="stock.isSectorLeader" class="badge leader-badge" title="龙头">👑</span>
                         <span v-if="isZtStock(stock)" class="badge zt-badge" title="涨停">📈</span>
-                        <span v-if="stock.leadStatus?.includes('破板')" class="badge poban-badge" title="破板">💥</span>
                       </div>
                     </td>
                   </tr>
@@ -435,6 +450,14 @@ import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import type { ThemeHeatStock } from '../../services/theme/types'
+import type { ThemeStockWithLimitUp } from '../../services/theme/stockLimitUpRows'
+import {
+  compareThemeStockRows,
+  formatFengdanYi,
+  formatLeaderRank,
+  formatLianbanText,
+  formatOpenNum,
+} from '../../services/theme/stockLimitUpRows'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
 import { StockUtils } from '../../utils/common'
 
@@ -475,7 +498,9 @@ const loadData = async () => {
     const summary = themeFacade.getThemeSummaries(Number.MAX_SAFE_INTEGER)
       .find(theme => theme.name === props.sectorName || theme.id === props.sectorName)
     if (summary) {
-      themeStockRows.value = await sectorAnalyzer.loadSectorStocks(summary.id, summary.name, true)
+      // 打开面板走 30 秒 LRU 缓存（themeHeatStocksCache），避免每次打开都强制后端查 MongoDB 重算；
+      // 手动刷新按钮（refresh）才 force 绕过缓存
+      themeStockRows.value = await sectorAnalyzer.loadSectorStocks(summary.id, summary.name)
     }
 
     // 验证数据是否存在
@@ -490,7 +515,8 @@ const loadData = async () => {
   }
 }
 
-const themeStockRows = ref<ThemeHeatStock[]>([])
+// enrichStocksWithLimitUp 输出：ThemeHeatStock + 涨停池字段 + leaderRank（龙一/龙二编位）
+const themeStockRows = ref<Array<ThemeStockWithLimitUp<ThemeHeatStock>>>([])
 
 const blockCode = computed(() => {
   if (!themeRuntime.value.factors.length) return null
@@ -508,16 +534,19 @@ const displayLastUpdate = computed(() => {
 })
 
 const themeStocks = computed(() => {
-  return themeStockRows.value.map(stock => ({
-    ...stock,
-    volumeRatio: stock.volumeRatio,
-    mainNetInflow: stock.mainNetInflow,
-    isSectorLeader: stock.role === 'leader',
-    leadStatus: stock.role === 'leader' ? '龙头' : stock.role === 'core' ? '核心' : '',
-    lianban: '',
-    continuousDays: 0,
-    blocks: [props.sectorName],
-  }))
+  return themeStockRows.value.map(stock => {
+    // 连板文本/天数取真实涨停池字段（boardHeight），非涨停股保持空（不伪造）
+    const lianbanText = formatLianbanText(stock)
+    return {
+      ...stock,
+      volumeRatio: stock.volumeRatio,
+      mainNetInflow: stock.mainNetInflow,
+      isSectorLeader: stock.role === 'leader',
+      lianban: lianbanText === '--' ? '' : lianbanText,
+      continuousDays: stock.boardHeight || 0,
+      blocks: [props.sectorName],
+    }
+  })
 })
 
 const hasThemeData = computed(() => blockData.value !== null || themeStocks.value.length > 0)
@@ -543,24 +572,22 @@ const themeZtCount = displayZtCount
 const themeLeaderCount = computed(() => themeLeaders.value.length)
 
 const themeTotalContinuousDays = computed(() =>
-  themeStocks.value.reduce((sum, s) => {
-    const days = s.lianban ? (parseInt(s.lianban) || 0) : 0
-    return sum + days
-  }, 0)
+  themeStocks.value.reduce((sum, s) => sum + (s.boardHeight || 0), 0)
 )
 
-// 龙头股
+// 龙头股：按题材内连板+首次涨停时间编位（龙一/龙二……），与成分股表领涨状态列同口径
 const themeLeaders = computed(() => {
   return themeStocks.value
-    .filter(stock => stock.leadStatus && (stock.leadStatus.includes('龙') || stock.leadStatus.includes('首板')))
+    .filter(stock => stock.leaderRank)
+    .sort((a, b) => (a.leaderRank || 0) - (b.leaderRank || 0))
     .map(stock => ({
       code: stock.code,
       name: stock.name,
       change: stock.change,
-      continuousDays: stock.lianban ? (parseInt(stock.lianban) || 1) : 1,
-      level: stock.leadStatus,
-      levelIcon: stock.leadStatus.includes('龙') ? '👑' : '🌱',
-      levelColor: stock.leadStatus.includes('龙') ? '#ffd700' : '#4ade80',
+      continuousDays: stock.boardHeight || 1,
+      level: formatLeaderRank(stock.leaderRank),
+      levelIcon: '👑',
+      levelColor: '#ffd700',
     }))
 })
 
@@ -613,7 +640,8 @@ const correlationThemes = computed(() => themeMetrics.value?.relatedThemes || []
 
 // ========== 成分股视图状态 ==========
 const stockSearch = ref('')
-const sortBy = ref('change')
+// 默认按龙头排序：leaderRank 编位（连板降序+首次涨停时间升序），龙一在最前
+const sortBy = ref('leader')
 const sortDesc = ref(true)
 const currentPage = ref(1)
 const pageSize = ref(20)
@@ -631,18 +659,7 @@ const filteredStocks = computed(() => {
     )
   }
 
-  result.sort((a, b) => {
-    let valA = a[sortBy.value as keyof typeof a] ?? 0
-    let valB = b[sortBy.value as keyof typeof b] ?? 0
-
-    if (sortBy.value === 'code' || sortBy.value === 'name') {
-      const strA = String(valA || '')
-      const strB = String(valB || '')
-      return sortDesc.value ? strB.localeCompare(strA) : strA.localeCompare(strB)
-    }
-
-    return sortDesc.value ? Number(valB) - Number(valA) : Number(valA) - Number(valB)
-  })
+  result.sort((a, b) => compareThemeStockRows(a, b, sortBy.value, sortDesc.value))
 
   return result
 })
@@ -1734,6 +1751,15 @@ defineExpose({ themeStocks, filteredStocks, paginatedStocks })
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
   color: var(--text-primary);
+}
+
+/* 涨停原因列：限宽省略，悬停看全文；其余列由内容自适应宽度 */
+.stocks-table .reason-text {
+  display: inline-block;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .stocks-table tbody tr {

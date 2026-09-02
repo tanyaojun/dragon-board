@@ -78,6 +78,7 @@ export interface LimitUpExtData {
   highDays?: number
   fengdan?: number
   maxFengdan?: number
+  openNum?: number
   leadStatus?: string
   leadTimes?: number
   lianbanStr?: string
@@ -214,6 +215,9 @@ export interface MergedStock {
   lastZtTime?: string
   boardHeight?: number
   highDays?: number
+  openNum?: number
+  /** 涨停原因（同花顺涨停池 reason_type，仅涨停股有值）；与 reason（关联原因静态文本）是两个不同字段 */
+  limitUpReason?: string
   fundPenetration?: number
   mainTheme?: string
   themeHeat?: number

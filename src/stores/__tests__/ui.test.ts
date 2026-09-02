@@ -152,6 +152,46 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000002', '000004'])
   })
 
+  it('keeps missing limit-up fields last and distinct from real zero when sorting limit-up columns', () => {
+    // 2026-09-02 涨停相关列：缺失（非涨停/未覆盖）与真实 0（封单 0、开板 0）语义不同，
+    // 缺失恒排最后（fail-visible），不得与 0 混排
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '非涨停', change: 3.2 }, // fengdan 缺失
+      { code: '000002', name: '零封单', change: 10.01, fengdan: 0 }, // 真实 0
+      { code: '000003', name: '有封单', change: 10.02, fengdan: 42000000 },
+    ])
+
+    uiStore.toggleSort('fengdan')
+
+    // 首次点击 = asc：真实 0 > 有封单；缺失恒最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+
+    uiStore.toggleSort('fengdan')
+
+    // desc：有封单 > 真实 0 > 缺失
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
+  it('sorts first limit-up time chronologically and keeps missing rows last in both directions', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '缺失' },
+      { code: '000002', name: '早板', firstZtTime: '09:25:00' },
+      { code: '000003', name: '晚板', firstZtTime: '13:52:00' },
+    ])
+
+    uiStore.toggleSort('firstZtTime')
+
+    // 首次点击 = asc：早板在前；缺失恒最后（缺失按字符串回退时 '0' 前缀会混进最前 → 需按缺失处理）
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+
+    uiStore.toggleSort('firstZtTime')
+
+    // desc：晚板在前；缺失仍最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+  })
+
   it('sorts lifecycle opportunity by tier (stage-derived), not direction group', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
