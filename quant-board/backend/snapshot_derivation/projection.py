@@ -97,13 +97,19 @@ def _derive_pre_close_from_price_change(row: dict[str, Any]) -> None:
 
 
 def _limit_ratio_for(code: Any, name: Any = "") -> float:
-    """A股涨跌停幅度：ST 5%、创业板/科创板 20%、北交所 30%、其余主板 10%。"""
-    upper_name = str(name or "").upper()
-    if "ST" in upper_name:
-        return 0.05
-    if str(code).startswith(("300", "301", "688", "689")):
+    """A股涨跌停幅度：创业板/科创板 20%、北交所 30%、其余主板 10%（含主板 ST）。
+
+    2026-09 起主板 ST 涨跌幅已改为 ±10%，全市场按所属板块阈值，无 ST 特判
+    （与前端 src/utils/common.ts StockUtils 口径一致）。
+    """
+    value = str(code or "").strip()
+    if value.isdigit():
+        value = value.zfill(6)
+    if value.startswith(("688", "689")):
         return 0.20
-    if str(code).startswith(("4", "8", "9")):
+    if value.startswith("30"):
+        return 0.20
+    if value.startswith(("43", "8", "92")):
         return 0.30
     return 0.10
 

@@ -253,7 +253,7 @@
                 </thead>
                 <tbody>
                   <tr v-for="stock in paginatedStocks" :key="stock.code" :class="{
-                    'zt-row': (stock.change || 0) > 9.5,
+                    'zt-row': isZtStock(stock),
                     'leader-row': stock.isSectorLeader,
                   }" @click.stop="selectStock(stock.code)">
                     <td>{{ stock.rank }}</td>
@@ -286,7 +286,7 @@
                     <td>
                       <div class="badges">
                         <span v-if="stock.isSectorLeader" class="badge leader-badge" title="龙头">👑</span>
-                        <span v-if="(stock.change || 0) > 9.5" class="badge zt-badge" title="涨停">📈</span>
+                        <span v-if="isZtStock(stock)" class="badge zt-badge" title="涨停">📈</span>
                         <span v-if="stock.leadStatus?.includes('破板')" class="badge poban-badge" title="破板">💥</span>
                       </div>
                     </td>
@@ -436,6 +436,7 @@ import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import type { ThemeHeatStock } from '../../services/theme/types'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
+import { StockUtils } from '../../utils/common'
 
 const props = defineProps<{
   visible: boolean
@@ -522,6 +523,11 @@ const themeStocks = computed(() => {
 const hasThemeData = computed(() => blockData.value !== null || themeStocks.value.length > 0)
 
 // 统计指标
+// 涨停判定统一走 StockUtils 分板块阈值（主板10%/创业科创20%/北交所30%，主板ST 5%）
+function isZtStock(stock: { code: string; name?: string; change?: number }): boolean {
+  return StockUtils.isLimitUp(stock.change || 0, stock.code, stock.name || '')
+}
+
 const themeStockCount = computed(() => themeStocks.value.length)
 
 // 涨停股数量 - 优先使用 blockData 的 ztCount，如果为0则从股票列表统计
@@ -529,7 +535,7 @@ const displayZtCount = computed(() => {
   if (blockData.value?.ztCount && blockData.value.ztCount > 0) {
     return blockData.value.ztCount
   }
-  return themeStocks.value.filter(s => (s.change || 0) > 9.5).length
+  return themeStocks.value.filter(s => isZtStock(s)).length
 })
 
 const themeZtCount = displayZtCount

@@ -1,5 +1,6 @@
 import type { RankTrendAnalysisResult } from './types'
 import { getTrustedVolumeRatio } from '@/services/dataLoader/VolumeRatioTrust'
+import { StockUtils } from '@/utils/common'
 
 export interface RankTrendDisplayStatus {
   label: string
@@ -328,8 +329,8 @@ function isVolumeReasonable(stock: any, context: RankTrendStatusContext): boolea
 }
 
 function isNearLimitUp(stock: any): boolean {
-  const change = toNumber(stock?.change)
-  return change >= 9.5
+  // 近涨停按板块阈值判定（主板10%/创业科创20%/北交所30%，主板ST 5%）
+  return StockUtils.isLimitUp(toNumber(stock?.change), String(stock?.code || ''), String(stock?.name || ''))
 }
 
 function isVolumeAmplified(stock: any, context: RankTrendStatusContext): boolean {

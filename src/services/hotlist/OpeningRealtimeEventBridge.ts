@@ -142,8 +142,8 @@ function deriveLimitUpPrice(code: string, name: string | undefined, preClose: nu
   return Math.round(preClose * (1 + limitPct / 100) * 100) / 100
 }
 
-function resolveLimitPct(code: string, name: string | undefined): number {
-  if (String(name || '').toUpperCase().includes('ST')) return 5
+function resolveLimitPct(code: string, _name: string | undefined): number {
+  // 2026-09 起主板 ST 涨跌幅 ±10%，全市场按所属板块比例，无 ST 特判
   if (code.startsWith('30') || code.startsWith('68')) return 20
   if (code.startsWith('8') || code.startsWith('4')) return 30
   return 10

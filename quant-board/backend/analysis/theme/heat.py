@@ -6,6 +6,26 @@ from typing import Any
 
 FACTOR_VERSION = "theme-market-v1"
 
+# 分板块涨停阈值（与前端 src/utils/common.ts StockUtils 口径一致：板块阈值 - 0.5 容差）。
+# 2026-09 起主板 ST 涨跌幅已改为 ±10%，全市场均按所属板块阈值判定，无 ST 特判。
+_LIMIT_UP_MAIN = 9.3  # 主板（沪 60x / 深 000-003，±10%，含主板 ST）
+_LIMIT_UP_GEM = 19.3  # 创业板（300-302，±20%）
+_LIMIT_UP_STAR = 19.3  # 科创板（688/689，±20%）
+_LIMIT_UP_BSE = 29.3  # 北交所（43xxxx / 82-88xxxx / 920xxx，±30%）
+
+
+def _limit_up_threshold(code: object) -> float:
+    value = str(code or "").strip()
+    if value.isdigit():
+        value = value.zfill(6)
+    if value.startswith(("688", "689")):
+        return _LIMIT_UP_STAR
+    if value.startswith("30"):
+        return _LIMIT_UP_GEM
+    if value.startswith(("43", "8", "92")):
+        return _LIMIT_UP_BSE
+    return _LIMIT_UP_MAIN
+
 
 def _number(value: object, default: float = 0.0) -> float:
     try:
@@ -37,13 +57,18 @@ def _theme_codes(theme: dict[str, object]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if str(value)))
 
 
-def _breadth_score(changes: list[float]) -> tuple[float, int]:
-    if not changes:
+def _breadth_score(rows: list[dict[str, object]]) -> tuple[float, int]:
+    if not rows:
         return 0.0, 0
+    changes = [_number(row.get("change")) for row in rows]
     count = len(changes)
     up_rate = sum(change > 0 for change in changes) / count
     strong_rate = sum(change >= 5 for change in changes) / count
-    zt_count = sum(change >= 9.5 for change in changes)
+    # 涨停家数按个股所属板块阈值判定，不用统一 9.5 误判创业/科创/北交所大涨幅
+    zt_count = sum(
+        _number(row.get("change")) >= _limit_up_threshold(row.get("code"))
+        for row in rows
+    )
     limit_up_rate = zt_count / count
     return _score(up_rate * 45 + strong_rate * 30 + limit_up_rate * 25), zt_count
 
@@ -147,7 +172,7 @@ def _compute_theme_factor(
     rows = [quotes[code] for code in codes if isinstance(quotes.get(code), dict) and _is_number(quotes[code].get("change"))]
     changes = [_number(row.get("change")) for row in rows]
     quote_coverage = len(rows) / len(codes) if codes else 0.0
-    breadth_score, zt_count = _breadth_score(changes)
+    breadth_score, zt_count = _breadth_score(rows)
     fund_score, fund_covered_count, main_net_inflow = _fund_score(codes, quotes, funds)
     fund_coverage = fund_covered_count / len(codes) if codes else 0.0
     correlation_score = _correlation_score(changes)

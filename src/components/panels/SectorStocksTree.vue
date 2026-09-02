@@ -112,7 +112,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(stock, index) in paginatedStocks" :key="stock.code" :class="{ 'zt-row': stock.change > 9.5 }"
+              <tr v-for="(stock, index) in paginatedStocks" :key="stock.code" :class="{ 'zt-row': isZtStock(stock) }"
                 @dblclick="openStockDetail(stock.code)">
                 <td>{{ (stockPage - 1) * stockPageSize + index + 1 }}</td>
                 <td>
@@ -160,6 +160,7 @@
 
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
+import { StockUtils } from '@/utils/common'
 import { ref, computed, onMounted, watch } from 'vue'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { useUIStore } from '@/stores/ui'
@@ -197,6 +198,11 @@ const stockPageSize = ref(20)
 // DOM 引用
 const treeContentRef = ref<HTMLElement>()
 const tableWrapperRef = ref<HTMLElement>()
+
+// 涨停行高亮：统一走 StockUtils 分板块阈值（主板10%/创业科创20%/北交所30%，主板ST 5%）
+function isZtStock(stock: { code: string; name?: string; change?: number }): boolean {
+  return StockUtils.isLimitUp(stock.change || 0, stock.code, stock.name || '')
+}
 
 // ========== 左侧题材树数据 ==========
 const allSectors = computed(() => {

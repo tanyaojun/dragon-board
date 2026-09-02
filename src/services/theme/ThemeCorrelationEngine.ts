@@ -2,6 +2,7 @@ import type { ThemeCorrelationDetail, StockCorrelation } from '@/services/ThemeC
 import type { MergedStock } from '@/types'
 import { toFiniteNumber } from './utils'
 import { getTrustedVolumeRatio } from '@/services/dataLoader/VolumeRatioTrust'
+import { StockUtils } from '@/utils/common'
 
 type CorrelationInput = {
   themeId: string
@@ -16,7 +17,7 @@ function calcStockScore(stock: StockWithCode): number {
   const change = Math.max(0, toFiniteNumber(stock.change))
   const volumeRatio = getTrustedVolumeRatio(stock)
   const leadBonus = String((stock as any).leadStatus || '').includes('龙') ? 25 : 0
-  const limitBonus = change >= 9.5 ? 20 : 0
+  const limitBonus = StockUtils.isLimitUp(change, stock.code, stock.name || '') ? 20 : 0
   return change * 4 + Math.min(20, volumeRatio * 4) + leadBonus + limitBonus
 }
 
@@ -77,7 +78,7 @@ export function analyzeThemeCorrelationInput(input: CorrelationInput): ThemeCorr
     sumChange += change
     sumVolumeRatio += volumeRatio
     sumMainInflow += mainInflow
-    if (change >= 9.5) ztCount++
+    if (StockUtils.isLimitUp(change, stock.code, stock.name || '')) ztCount++
 
     const dir = directionByCode.get(stock.code)!
     const consistency = dir !== 0 && validDirectionCount > 0

@@ -347,7 +347,8 @@ export function getHotThemes(limit: number = 10) {
       }
       return summary
     })
-    .sort((a, b) => b.heatScore - a.heatScore)
+    // 全消费方统一口径：按涨停家数降序；同涨停数时按热度降序保持确定性
+    .sort((a, b) => b.ztCount - a.ztCount || b.heatScore - a.heatScore)
     .slice(0, limit)
 }
 

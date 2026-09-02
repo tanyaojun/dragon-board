@@ -8,6 +8,7 @@ import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
 import type { MergedStock } from '@/types'
 import { dragonReviewService } from '@/services/dragon/DragonReviewService'
+import { StockUtils } from '@/utils/common'
 
 // 批量更新配置
 const BATCH_UPDATE_DELAY = 100 // 100ms
@@ -125,8 +126,8 @@ export const useStockStore = defineStore('stock', () => {
     let score = 0
     const { change, continuousDays, isSectorLeader, leaderLevel, compRank, zlje, turnover } = stock
 
-    // 涨停加成
-    if (change && change > 9.5) {
+    // 涨停加成（按板块阈值判定）
+    if (change && StockUtils.isLimitUp(change, stock.code, stock.name)) {
       score += 100
       if (continuousDays && continuousDays > 1) {
         score += Math.min((continuousDays - 1) * 50, 200) // 上限200分

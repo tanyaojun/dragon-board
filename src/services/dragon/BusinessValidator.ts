@@ -1,5 +1,7 @@
 // src/services/dragon/BusinessValidator.ts
 
+import { StockUtils } from '../../utils/common'
+
 /**
  * 业务验证器 - 次日验证龙头质量
  */
@@ -41,7 +43,7 @@ export class BusinessValidator {
       const sectorStocks = today.filter(s => 
         s.themes?.some(t => y.themes?.includes(t))
       )
-      const sectorZtCount = sectorStocks.filter(s => s.change > 9.5).length
+      const sectorZtCount = sectorStocks.filter(s => StockUtils.isLimitUp(s.change, s.code, s.name)).length
       if (sectorZtCount > 0) {
         performanceScore += sectorZtCount * 5
       }
@@ -50,7 +52,7 @@ export class BusinessValidator {
         code: y.code,
         name: y.name,
         level: y.level,
-        status: todayStock.change > 9.5 ? '晋级' : 
+        status: StockUtils.isLimitUp(todayStock.change, todayStock.code, todayStock.name) ? '晋级' :
                 todayStock.change > 5 ? '高溢价' :
                 todayStock.change > 0 ? '小涨' :
                 todayStock.change > -5 ? '调整' : '大跌',

@@ -190,3 +190,48 @@ def test_quote_volume_ratio_stamps_tencent_f10_meta_when_missing() -> None:
     # quote 层无来源标记时，派生层补 tencent_f10 兜底标记（golden 三日覆盖前可见）
     assert row["volumeRatio"] == 2.2
     assert row["volumeRatioMeta"]["source"] == "tencent_f10"
+
+
+def test_limit_prices_main_board_st_follows_main_board_ratio_since_rule_change() -> None:
+    """2026-09 起主板 ST 涨跌幅 ±10%，涨停/跌停价不再按 5% 派生。"""
+    fact = _fact()
+    fact.stocks = [
+        {
+            "code": "600001",
+            "name": "ST测试",
+            "rank": 1,
+            "preClose": 10.0,
+            "price": 10.5,
+            "pctChange": 5.0,
+        }
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    row = bundle.stock_rows[0]
+    assert row["limitUpPrice"] == 11.0
+    assert row["limitDownPrice"] == 9.0
+
+
+def test_limit_prices_follow_board_aware_ratios() -> None:
+    """创业板/科创板 ±20%、北交所 ±30%、主板 ±10%，与前端 StockUtils 口径一致。"""
+    fact = _fact()
+    fact.stocks = [
+        {"code": "300001", "name": "创业板股", "rank": 1, "preClose": 10.0, "price": 10.5},
+        {"code": "302001", "name": "创业板股B", "rank": 2, "preClose": 10.0, "price": 10.5},
+        {"code": "688001", "name": "科创板股", "rank": 3, "preClose": 10.0, "price": 10.5},
+        {"code": "689009", "name": "科创板CDR", "rank": 4, "preClose": 10.0, "price": 10.5},
+        {"code": "430001", "name": "北交所股", "rank": 5, "preClose": 10.0, "price": 10.5},
+        {"code": "830001", "name": "北交所股B", "rank": 6, "preClose": 10.0, "price": 10.5},
+        {"code": "920001", "name": "北交所股C", "rank": 7, "preClose": 10.0, "price": 10.5},
+        {"code": "600001", "name": "主板股", "rank": 8, "preClose": 10.0, "price": 10.5},
+    ]
+    bundle = SnapshotDerivationService().derive(fact)
+    by_code = {row["code"]: row for row in bundle.stock_rows}
+
+    for code in ("300001", "302001", "688001", "689009"):
+        assert by_code[code]["limitUpPrice"] == 12.0
+        assert by_code[code]["limitDownPrice"] == 8.0
+    for code in ("430001", "830001", "920001"):
+        assert by_code[code]["limitUpPrice"] == 13.0
+        assert by_code[code]["limitDownPrice"] == 7.0
+    assert by_code["600001"]["limitUpPrice"] == 11.0
+    assert by_code["600001"]["limitDownPrice"] == 9.0

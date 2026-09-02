@@ -17,20 +17,10 @@ from uuid import uuid4
 
 from pymongo import UpdateOne
 
+from backend.snapshot_derivation.projection import _limit_ratio_for  # noqa: F401
+
 
 BACKFILL_VERSION = "snapshot_derived_fields_v1"
-
-
-def _limit_ratio_for(code: Any, name: Any = "") -> float:
-    """A股涨跌停幅度：ST 5%、创业板/科创板 20%、北交所 30%、其余主板 10%。"""
-    upper = str(name or "").upper()
-    if "ST" in upper:
-        return 0.05
-    if str(code).startswith(("300", "301", "688", "689")):
-        return 0.20
-    if str(code).startswith(("4", "8", "9")):
-        return 0.30
-    return 0.10
 
 
 def _finite(value: Any) -> float | None:

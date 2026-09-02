@@ -5,6 +5,7 @@ import type { MergedStock } from '@/types'
 import type { ThemeExposureProjection } from '../theme/types'
 import type { BattlefieldDominance, BattlefieldRecord, ReviewFrame, SignalStrength } from './types'
 import { getNetCapital, getStockTagNames, themeNamesFromStock, toSignalStrength, uniq } from './helpers'
+import { StockUtils } from '../../utils/common'
 
 interface BattlefieldSeed {
   battlefieldId: string
@@ -92,7 +93,7 @@ function continuityScoreForTheme(themeId: string, frames: ReviewFrame[]): number
 
 function carryScoreForStocks(stocks: MergedStock[]): number {
   const followers = stocks.filter((stock) => (stock.change || 0) > 0).length
-  const limitUps = stocks.filter((stock) => (stock.change || 0) >= 9.5).length
+  const limitUps = stocks.filter((stock) => StockUtils.isLimitUp(stock.change || 0, stock.code, stock.name || '')).length
   return Math.min(100, followers * 12 + limitUps * 20)
 }
 

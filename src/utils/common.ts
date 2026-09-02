@@ -366,47 +366,41 @@ export class StockUtils {
   /**
    * 获取股票的涨跌停阈值
    * @param code 股票代码
-   * @param name 股票名称（用于判断ST）
+   * @param name 股票名称（保留参数兼容既有调用；2026-09 起主板 ST 涨跌幅 ±10%，全市场按板块阈值，无 ST 特判）
    */
-  static getLimitThreshold(code: string, name: string = ''): LimitThreshold {
-    // ST股判断
-    if (name.includes('ST') || name.includes('*ST')) {
-      return {
-        up: LIMIT_UP_CONFIG.THRESHOLDS.ST,
-        down: -LIMIT_UP_CONFIG.THRESHOLDS.ST,
-      }
-    }
+  static getLimitThreshold(code: string, _name: string = ''): LimitThreshold {
+    const normalized = String(code || '').padStart(6, '0')
 
-    // 根据代码前缀判断板块
-    if (code.startsWith('60') || code.startsWith('00')) {
-      return {
-        up: LIMIT_UP_CONFIG.THRESHOLDS.MAIN,
-        down: -LIMIT_UP_CONFIG.THRESHOLDS.MAIN,
-      }
-    }
-
-    if (code.startsWith('30')) {
-      return {
-        up: LIMIT_UP_CONFIG.THRESHOLDS.GEM,
-        down: -LIMIT_UP_CONFIG.THRESHOLDS.GEM,
-      }
-    }
-
-    if (code.startsWith('688')) {
+    // 根据代码前缀判断板块（先判 20%/30% 板块，再判主板，避免误匹配）
+    if (normalized.startsWith('688') || normalized.startsWith('689')) {
+      // 科创板（含 CDR 689）
       return {
         up: LIMIT_UP_CONFIG.THRESHOLDS.STAR,
         down: -LIMIT_UP_CONFIG.THRESHOLDS.STAR,
       }
     }
 
-    if (code.startsWith('8')) {
+    if (normalized.startsWith('30')) {
+      // 创业板
+      return {
+        up: LIMIT_UP_CONFIG.THRESHOLDS.GEM,
+        down: -LIMIT_UP_CONFIG.THRESHOLDS.GEM,
+      }
+    }
+
+    if (
+      normalized.startsWith('43') ||
+      normalized.startsWith('8') ||
+      normalized.startsWith('92')
+    ) {
+      // 北交所（43xxxx / 82-88xxxx / 920xxx）
       return {
         up: LIMIT_UP_CONFIG.THRESHOLDS.NORTH,
         down: -LIMIT_UP_CONFIG.THRESHOLDS.NORTH,
       }
     }
 
-    // 默认主板
+    // 主板（沪 60x / 深 000-003，含主板 ST）
     return {
       up: LIMIT_UP_CONFIG.THRESHOLDS.MAIN,
       down: -LIMIT_UP_CONFIG.THRESHOLDS.MAIN,

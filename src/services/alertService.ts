@@ -50,10 +50,9 @@ class StockTools {
   }
 
   /**
-   * 获取涨停阈值
+   * 获取涨停阈值（2026-09 起主板 ST 涨跌幅 ±10%，全市场均按板块阈值，无 ST 特判）
    */
-  static getLimitUpThreshold(code: string, name: string): number {
-    if (this.isST(name)) return LIMIT_UP_CONFIG.THRESHOLDS.ST
+  static getLimitUpThreshold(code: string, _name: string): number {
     const type = this.getStockType(code)
     const map: Record<string, number> = {
       main: LIMIT_UP_CONFIG.THRESHOLDS.MAIN,

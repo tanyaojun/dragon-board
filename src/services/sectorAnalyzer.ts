@@ -10,6 +10,7 @@ import type {
   ThemeStock,
 } from '../types'
 import { SECTOR_CONFIG } from '../config/constants'
+import { StockUtils } from '../utils/common'
 import { dataLayer } from './DataLayer'
 import { themeFacade } from './theme/ThemeFacade'
 import { themeHeatFeed } from './theme/ThemeHeatFeed'
@@ -305,7 +306,7 @@ export function getThemeStocks(
       turnover: stock.turnover || 0,
       turnoverRate: stock.turnoverRate || 0,
       continuousDays: stock.continuousDays || 0,
-      isZT: (stock.change || 0) > 9.5,
+      isZT: StockUtils.isLimitUp(stock.change || 0, stock.code, stock.name || ''),
       lianbanStr: limitUpData?.lianbanStr || stock.lianbanStr || '',
       firstZtTime: limitUpData?.firstZtTime || stock.firstZtTime || '',
       lastZtTime: limitUpData?.lastZtTime || stock.lastZtTime || '',

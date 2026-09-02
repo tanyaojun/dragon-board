@@ -270,7 +270,10 @@ function getRank(stock: any, fallbackIndex: number): number {
 }
 
 function classifyEntryReason(stock: any): TurnoverEntryDetail['entryReason'] {
-  if (toNumber(stock?.change) >= 9.8) return 'limit_up'
+  const change = toNumber(stock?.change)
+  if (StockUtils.isLimitUp(change, normalizeCode(stock?.code), normalizeName(stock?.name))) {
+    return 'limit_up'
+  }
   if (toNumber(stock?.zlje) > 0 || toNumber(stock?.zljzb) > 0) return 'strong_money'
   if (getTrustedVolumeRatio(stock) > 2) return 'new_high_volume'
   return 'rank_surge'
@@ -278,7 +281,9 @@ function classifyEntryReason(stock: any): TurnoverEntryDetail['entryReason'] {
 
 function classifyExitReason(stock: any): TurnoverExitDetail['exitReason'] {
   const change = toNumber(stock?.change)
-  if (change <= -9.8) return 'limit_down'
+  if (StockUtils.isLimitDown(change, normalizeCode(stock?.code), normalizeName(stock?.name))) {
+    return 'limit_down'
+  }
   if (change < -3) return 'weakening'
   return 'rank_out_of_range'
 }

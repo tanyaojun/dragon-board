@@ -344,8 +344,9 @@ describe('HotListSentimentAnalyzer', () => {
     const result = analyzer.analyze({ stocks: current, topN: 100 })
     const evidence = result.metrics.limitEvidence.intersection
 
-    expect(evidence.top100LimitUpCount).toBe(3)
-    expect(evidence.top100NearLimitUpCount).toBe(4)
+    // 主板 ST（*ST测试 4.9%）2026-09 起按 ±10% 判定，不再计入涨停/近涨停
+    expect(evidence.top100LimitUpCount).toBe(2)
+    expect(evidence.top100NearLimitUpCount).toBe(3)
   })
 
   it('热榜涨停证据只使用热榜交集，全市场数据仅作为背景', () => {

@@ -25,9 +25,11 @@ def test_limit_prices_gem_creates_and_bj() -> None:
     assert backfill_stock_row_fields({"code": "830001", "preClose": 10})["limitUpPrice"] == 13.0
 
 
-def test_limit_prices_st_overrides_board_ratio() -> None:
+def test_limit_prices_st_keeps_board_ratio_since_rule_change() -> None:
+    """2026-09 起主板 ST 涨跌幅 ±10%，全市场按所属板块比例派生，无 ST 特判。"""
+    assert backfill_stock_row_fields({"code": "600001", "name": "ST测试", "preClose": 10})["limitUpPrice"] == 11.0
     fills = backfill_stock_row_fields({"code": "300750", "name": "*ST宁德", "preClose": 10})
-    assert fills["limitUpPrice"] == 10.5
+    assert fills["limitUpPrice"] == 12.0
 
 
 def test_existing_limit_price_is_not_overwritten() -> None:
