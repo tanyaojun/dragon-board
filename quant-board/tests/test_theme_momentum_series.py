@@ -7,6 +7,7 @@ from backend.analysis.theme.momentum import (
     THEME_CROSS_SECTION_MIN,
     build_theme_strength_series,
     compute_theme_momentum_series,
+    stock_theme_exposure,
 )
 
 
@@ -127,3 +128,40 @@ def test_momentum_series_reversal_penalty_adds_cooling_bonus():
         frames.append(_frame(idx, rows))
     momentum = compute_theme_momentum_series(frames)["frames"][-1]["themes"]["T0"]
     assert momentum["reversalPenalty"] == pytest.approx(0.2)
+
+
+# ── theme-market-v2 口径迁移：绝对值 heatScore（KPL 人气总和，>100）不参与 0-100 计算 ──
+
+def test_series_skips_absolute_heat_scores():
+    """新口径绝对值落库行（>100）视为口径不兼容缺失，不进动量序列，
+    避免 /15.0 归一与 JUMP_DELTA=15 在绝对值量纲下恒饱和（2026-09 审计 H1）。"""
+    frames = [
+        _frame(0, [
+            _theme("A", 2000.0, 1),
+            _theme("B", 80.0, 2),
+        ]),
+        _frame(1, [
+            _theme("A", 2200.0, 1),
+            _theme("B", 85.0, 2),
+        ]),
+    ]
+    series = build_theme_strength_series(frames)
+    assert list(series) == ["B"]
+
+
+def test_exposure_role_ignores_absolute_heat_score():
+    """heatScore=2000 不得触发 core 阈值（>=70）；热度缺失时只按涨跌判定。"""
+    theme = _theme("A", 2000.0, 1)
+    stock = {"code": "600001", "name": "样本", "themes": ["A概念板块"], "change": 10.0}
+    exposure = stock_theme_exposure(stock, [theme])
+    assert exposure is not None
+    assert exposure["role"] == "independent"
+
+
+def test_exposure_role_missing_heat_is_not_noise():
+    """热度缺失（None）不算 heat<20 的 noise：正涨跌个股按 independent 分层。"""
+    theme = _theme("A", None, 1)
+    stock = {"code": "600001", "name": "样本", "themes": ["A概念板块"], "change": 2.0}
+    exposure = stock_theme_exposure(stock, [theme])
+    assert exposure is not None
+    assert exposure["role"] == "independent"

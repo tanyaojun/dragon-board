@@ -5,6 +5,7 @@ Extracted from tests/test_quant_board.py.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -180,6 +181,41 @@ def test_theme_strategy_execution_signals_are_strategy_specific(tmp_path: Path) 
     assert hotlist_leader["candidateTier"] == "A_MAIN"
     assert hotlist_leader["themeConfluenceScore"] >= 80
     assert "hotlist_confluence" in hotlist_leader["themeReasons"]
+
+
+def test_theme_confluence_score_ignores_absolute_heat_score(tmp_path: Path) -> None:
+    """新口径绝对值 heatScore（>100 落库值，2026-09 theme-market-v2）不伪装成 0-100 满分 confluence。"""
+    client = TestClient(app)
+    bundle = make_theme_trade_bundle(tmp_path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    for record in data["records"]:
+        record["payload"]["sectors"][0]["heatScore"] = 2000
+    bundle.write_text(json.dumps({"records": data["records"]}, ensure_ascii=False), encoding="utf-8")
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-absolute-heat", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "hotlist_theme_confluence",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+        },
+    )
+    assert response.status_code == 200, response.text
+    signal = next(
+        item for item in response.json()["result"]["executionSignals"] if item["code"] == "600001"
+    )
+    # 绝对值热度按缺失（0）计入：confluence = exposure_weight 95*0.35 + contribution 20*0.8 = 49.25，
+    # 不再恒过 75 门槛（exposure_weight 为 replay 重建值 45+50=95，非 stock 携带的 88）
+    assert signal["themeConfluenceScore"] == 49.25
+    assert "hotlist_confluence" not in signal["themeReasons"]
 
 
 def test_theme_trend_report_includes_lifecycle_returns_and_trade_diagnostics(tmp_path: Path) -> None:

@@ -54,10 +54,14 @@ def strength_score(
     market_change: float | None,
     prev_zt_count: float | None,
 ) -> tuple[float | None, list[str]]:
-    """强度/动量：heat、横向 z、heat 斜率、涨停动能、板块超额。"""
+    """强度/动量：heat、横向 z、heat 斜率、涨停动能、板块超额。
+
+    新口径绝对值 heatScore（>100，theme-market-v2 的 KPL 人气总和）视为缺失：
+    _clamp 绝对值恒 100、斜率项恒饱和，按缺失返回让 combine_scores 按可用
+    因子归一（与 trend._ts_heat_level / momentum 序列过滤同一语义）。"""
     missing: list[str] = []
     heat = _num(row.get("heatScore"))
-    if heat is None:
+    if heat is None or heat > 100.0:
         missing.append("heatScore")
         return None, missing
     heat_score = _clamp(heat)

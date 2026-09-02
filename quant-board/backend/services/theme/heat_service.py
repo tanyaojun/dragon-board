@@ -15,6 +15,7 @@ from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.core.settings import get_settings
 from backend.snapshot_collector.providers import TencentBasicQuoteProvider
 from backend.services.theme.fund_cache import get_theme_fund_cache
+from backend.services.theme.kpl_hotness_cache import KplHotnessCache
 
 
 class ThemeHeatUnavailable(RuntimeError):
@@ -41,10 +42,12 @@ class ThemeHeatService:
         now_ms: Callable[[], int] | None = None,
         cache_ttl_seconds: int = 300,
         quote_timeout_ms: int = 10000,
+        kpl_cache: Any | None = None,
     ) -> None:
         self._repository = repository
         self._quote_provider = quote_provider
         self._fund_cache = fund_cache
+        self._kpl_cache = kpl_cache
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self._cache_ttl_seconds = max(1, cache_ttl_seconds)
         self._quote_timeout_ms = max(100, quote_timeout_ms)
@@ -53,6 +56,11 @@ class ThemeHeatService:
         self._inflight: dict[str, Future[dict[str, object]]] = {}
         self._last_success: dict[str, object] | None = None
         self._lock = Lock()
+
+    @property
+    def kpl_cache(self) -> Any | None:
+        """公开只读出口：main.py lifespan 启停后台刷新线程使用。"""
+        return self._kpl_cache
 
     def get_snapshot(
         self,
@@ -283,6 +291,21 @@ class ThemeHeatService:
             if isinstance(factor, dict)
         }
         computed_at = self._now_ms()
+        # KPL 个股人气（tck2.js 口径）：heatScore = 成分股人气去重总和。
+        # 缓存未预热/未注入时 kpl_hots 为空 → 题材热度缺失按 kpl_hotness_unavailable
+        # 打标（fail-visible），不伪装成 0，行情侧因子照常返回。
+        # 缓存读路径异常同样降级为缺失并结构化标注，不炸整个 heat 快照。
+        kpl_hots: dict[str, dict[str, object]] = {}
+        kpl_health: dict[str, object] = {"available": False, "reason": "kpl_cache_not_configured"}
+        if self._kpl_cache is not None:
+            try:
+                kpl_hots = self._kpl_cache.get_theme_hots(
+                    [str(theme.get("id") or "") for theme in themes if str(theme.get("id") or "")]
+                )
+                kpl_health = self._health_dict(self._kpl_cache.get_health())
+            except Exception as exc:
+                kpl_hots = {}
+                kpl_health = {"available": False, "reason": f"kpl_cache_error: {exc}"}
         result = compute_theme_heat(
             themes=themes,
             quotes=quote_rows,
@@ -290,6 +313,7 @@ class ThemeHeatService:
             previous_factors=previous_factors,
             computed_at=computed_at,
             mapping_version=str(universe.get("version") or "unknown"),
+            kpl_hots=kpl_hots,
         )
         if not result["ok"]:
             # 覆盖率不足不是硬门禁：返回已计算的降级因子与结构化质量原因（fail-visible）。
@@ -302,6 +326,7 @@ class ThemeHeatService:
                 "sources": {
                     "quotes": self._health_dict(quote_health),
                     "funds": self._health_dict(fund_health),
+                    "kplHotness": kpl_health,
                 },
                 "quoteRowsByCode": quote_rows,
                 "fundRowsByCode": fund_rows,
@@ -394,6 +419,25 @@ def get_theme_heat_service() -> ThemeHeatService:
                 "failed_batch_retries": settings.theme_heat_failed_batch_retries,
             }
             proxy_base = settings.snapshot_collector_proxy_base_url
+
+            def _kpl_theme_ids_provider() -> list[str]:
+                # 每轮刷新时读最新题材列表（题材会随盲扫新增/改名）
+                try:
+                    return [
+                        str(doc.get("id") or "")
+                        for doc in database["themes"].find({}, {"id": 1})
+                        if str(doc.get("id") or "")
+                    ]
+                except Exception:
+                    return []
+
+            kpl_cache = KplHotnessCache(
+                _kpl_theme_ids_provider,
+                refresh_interval_seconds=settings.theme_kpl_hotness_refresh_seconds,
+            )
+            # 工厂内即启动后台刷新（start 幂等）：lifespan 启动失败后，首次请求
+            # 重建服务也能自愈，不会出现整进程缓存为空（2026-09 审计 M2）。
+            kpl_cache.start()
             _theme_heat_service = ThemeHeatService(
                 MongoThemeRepository(database),
                 TencentBasicQuoteProvider(
@@ -404,5 +448,12 @@ def get_theme_heat_service() -> ThemeHeatService:
                 get_theme_fund_cache(),
                 cache_ttl_seconds=settings.theme_heat_cache_ttl_seconds,
                 quote_timeout_ms=settings.theme_heat_quote_timeout_ms,
+                kpl_cache=kpl_cache,
             )
     return _theme_heat_service
+
+
+def get_kpl_hotness_cache() -> KplHotnessCache | None:
+    """暴露 KPL 人气缓存单例（供 main.py lifespan 启停后台刷新线程）。"""
+    service = get_theme_heat_service()
+    return service.kpl_cache

@@ -214,6 +214,16 @@ def _price_quality_diagnostics(
     }
 
 
+def _persisted_heat_level(value: object) -> float:
+    """落库 heatScore 的 0-100 相对分解释（2026-09 theme-market-v2 口径迁移）：
+    缺失或新口径绝对值（>100，KPL 人气总和落库形态）按 0 计，不伪装成满分。"""
+    try:
+        numeric = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return numeric if 0.0 <= numeric <= 100.0 else 0.0
+
+
 class BacktestService:
     def __init__(self, session: Session | None):
         self.repo = create_repository(session)
@@ -1227,13 +1237,18 @@ class BacktestService:
                 elif rotation_state in {"outflow"}:
                     tier = "D_EXIT_RISK"
                 role = str((exposure or {}).get("role") or stock.get("themeRole") or "")
-                confidence = min(100.0, max(0.0, exposure_weight or float(factor.get("heatScore") or 0)))
+                heat_level = _persisted_heat_level(factor.get("heatScore"))
+                confidence = min(100.0, max(0.0, exposure_weight or heat_level))
                 theme_risk_flags = [f"crowding:{crowding}"] if crowding >= 75 else []
                 theme_reasons = [f"lifecycle:{lifecycle}", f"strategy:{strategy_name}"]
                 confluence_score = round(
-                    min(100.0, max(0.0, float(factor.get("heatScore") or 0) * 0.45 + exposure_weight * 0.35 + contribution * 0.8)),
+                    min(100.0, max(0.0, heat_level * 0.45 + exposure_weight * 0.35 + contribution * 0.8)),
                     2,
                 )
+                # 透传展示字段：显式 None 判断，真实 0 热度不被 fallback 值顶掉
+                raw_theme_heat = factor.get("heatScore")
+                if raw_theme_heat is None:
+                    raw_theme_heat = stock.get("themeHeat")
                 if strategy_name == "leader_theme_confirmation":
                     if role == "leader" and tier in {"A_MAIN", "B_IGNITION"} and crowding < 75:
                         theme_reasons.append("leader_confirmation")
@@ -1268,7 +1283,7 @@ class BacktestService:
                     "stage": rotation_state,
                     "rankTrend": {"strategy": {"momentum": {"acceleration": 1 if tier != "D_EXIT_RISK" else -1}}},
                     "mainTheme": theme_name,
-                    "themeHeat": float(factor.get("heatScore") or stock.get("themeHeat") or 0),
+                    "themeHeat": float(raw_theme_heat) if raw_theme_heat is not None else 0.0,
                     "themeContribution": contribution,
                     "themeRole": role,
                     "themeSupportScore": exposure_weight,
@@ -1304,7 +1319,10 @@ class BacktestService:
             crowding = float(factor.get("crowdingRisk") or 0)
             item = dict(signal)
             item["mainTheme"] = theme_name
-            item["themeHeat"] = float(factor.get("heatScore") or signal.get("themeHeat") or 0)
+            raw_theme_heat = factor.get("heatScore")
+            if raw_theme_heat is None:
+                raw_theme_heat = signal.get("themeHeat")
+            item["themeHeat"] = float(raw_theme_heat) if raw_theme_heat is not None else 0.0
             item["themeContribution"] = float((exposure or {}).get("themeContribution") or signal.get("themeContribution") or 0)
             item["themeRole"] = (exposure or {}).get("role") or signal.get("themeRole") or ""
             item["themeSupportScore"] = float((exposure or {}).get("exposureWeight") or signal.get("themeSupportScore") or 0)

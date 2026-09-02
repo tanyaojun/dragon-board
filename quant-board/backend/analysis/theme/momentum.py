@@ -97,7 +97,9 @@ def build_theme_strength_series(
 ) -> dict[str, list[tuple[int, float, int | None]]]:
     """每题材按 (frame_index, heatScore, rank) 记录；仅 rankEligible 且 heatScore 有限。
 
-    rank 缺失时记 None（题材 Jump 仍可用 heatScore 判定）。"""
+    rank 缺失时记 None（题材 Jump 仍可用 heatScore 判定）。
+    新口径绝对值（>100，theme-market-v2 的 KPL 人气总和）视为口径不兼容缺失：
+    本模块 /15.0 归一、JUMP_DELTA=15 等量纲均按 0-100 校准，混入绝对值会恒饱和。"""
     series: dict[str, list[tuple[int, float, int | None]]] = defaultdict(list)
     for frame_index, frame in enumerate(frames):
         for theme in frame.get("hotThemes") or []:
@@ -107,7 +109,12 @@ def build_theme_strength_series(
                 continue
             theme_id = _theme_id(theme)
             heat = _num(theme.get("heatScore"), math.nan)
-            if not theme_id or not math.isfinite(heat) or not _theme_rank_eligible(theme):
+            if (
+                not theme_id
+                or not math.isfinite(heat)
+                or heat > 100.0
+                or not _theme_rank_eligible(theme)
+            ):
                 continue
             rank = theme.get("rank")
             try:
@@ -261,13 +268,20 @@ def _role_for(stock: dict[str, Any], theme: dict[str, Any], matched_main_theme: 
         return explicit
     if "龙" in str(stock.get("leadStatus") or ""):
         return "leader"
-    heat = _num(theme.get("heatScore"))
+    # 热度阈值（70/45/20）按 0-100 口径校准：新口径绝对值（>100）与缺失都
+    # 不参与热度分层（误判 core/noise），只保留涨跌侧的 noise 判定。
+    raw_heat = theme.get("heatScore")
+    heat = _num(raw_heat, math.nan)
     change = _num(stock.get("change"))
-    if heat >= 70 and change >= 5:
-        return "core"
-    if heat >= 45 and change > 0:
-        return "follower"
-    if heat < 20 or change < -5:
+    heat_0_100 = math.isfinite(heat) and heat <= 100.0
+    if heat_0_100:
+        if heat >= 70 and change >= 5:
+            return "core"
+        if heat >= 45 and change > 0:
+            return "follower"
+    if heat_0_100 and heat < 20:
+        return "noise"
+    if change < -5:
         return "noise"
     return "independent"
 

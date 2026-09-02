@@ -1,5 +1,26 @@
 # 题材模块重构进度
 
+## 2026-09-03 热度口径迁移 code review 修复
+
+- subagent 审计（1 High / 4 Medium / 5 Low）后逐条修复，全部走 TDD（先失败测试再改实现）：
+  - H1：`momentum.py` 动量序列跳过 `>100` 绝对值 bar、`_role_for` 热度阈值只对 0-100 有限值生效；`rotation/factors.py` `strength_score` 对 `>100` 按缺失返回——修复前热门题材热度分量恒满分、动量/斜率项恒饱和（与 confluence 门槛恒真同类失真）。
+  - M2：`get_theme_heat_service()` 工厂内启动 KPL 缓存线程（幂等，lifespan 失败后请求路径自愈）；缓存读路径异常隔离降级；新增 `ThemeHeatService.kpl_cache` 公开属性。
+  - M3：`_ts_heat_level` 对降级帧显式 `heatLevel=None` 不回退 heatScore，冷题材 ≤100 绝对值不再被反向解释成高相对分。
+  - M4：恢复 `test_theme_heat_service.py` 被误删的 10 个服务级行为测试（singleflight/fund 版本失效/降级快照/formal scope 等）。
+  - L1-L5：typed 合同 `heatScore: float | None`、`_num_or_none` 非数值按缺失、缓存 `stop()` 超时保线程引用防双循环、shutdown mongodb 守卫、`themeHeat` 透传显式 None 判断。
+- M1（baseline_reset 对 current≤100 小题材的过渡帧窗口）按文档口径接受：只影响 v1→v2 升级后第一个环比帧，落库口径标记列为后续 TODO。
+- 残留 TODO（heatLevel 落库、momentum 量纲重校准、口径标记、前端消费点确认）登记在 `quant-board/docs/theme-rotation/2026-09-02-kpl-hotness-formula-migration.md`。
+- 验证：momentum/rotation/trend/heat 引擎/缓存/服务/backtest 分批全绿（22+15+15+27），`--collect-only` 1794 无 import 断裂。
+
+## 2026-09-02 题材热度口径切换为 KPL 人气总和（theme-market-v2）
+
+- QuantBoard `compute_theme_heat` 的 `heatScore` 从 0-100 归一加权分改为 KPL 题材库人气总和（对齐 `tck2.js` fetchThemeData：成分股 Hot/HotNum 按 StockID 去重求和），`FACTOR_VERSION` 升级 `theme-market-v1 → theme-market-v2`。
+- 新增 `KplHotnessCache` 后台缓存（默认 600s 全量刷新，启动预热，失败保留 last-good 并结构化上报）；`/api/themes/heat` 的 `sources.kplHotness` 与 `/api/health` 的 `kplHotness` 暴露缓存健康。
+- fail-visible：KPL 缺失题材 `heatScore=null` + `kpl_hotness_unavailable` 标记，不伪装 0；快照 ok 只由行情覆盖率决定；口径切换首帧有 `kpl_hotness_baseline_reset` 保护。
+- trend.py 适配：role 分层/贡献度/信号的热度读点改用 `heatLevel`（rank 百分位 0-100 相对分）；`_theme_context_frames` 过滤改行情覆盖口径，KPL 缺失不再连带清空因子。
+- Dragon Board 前端影响：`heatScore` 语义变化，消费该字段的组件需确认口径与空值展示（null 显示"--"）；详见 `quant-board/docs/theme-rotation/2026-09-02-kpl-hotness-formula-migration.md`。
+- 验证：热度引擎/缓存/服务/trend 回放单测全绿，golden fixture 升级 v2/v13。
+
 ## 2026-07-25 THS 增量资金整改
 
 - 状态：design/plan 已完成 agent 评审，8 个架构阻塞项已落地修正；正在按 TDD 处理 THSBigOrder 的权威日期校验与交易日硬编码两个剩余阻塞项，随后执行 Task 9 全量验证和运行态验收。

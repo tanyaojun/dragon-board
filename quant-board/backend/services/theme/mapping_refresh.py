@@ -70,6 +70,11 @@ def _fetch_theme_detail(theme_id: str) -> dict[str, Any] | None:
         raise RuntimeError(f"未知错误: {exc}") from exc
 
 
+# 公开别名：KPL 人气缓存（kpl_hotness_cache）复用同一 API client；
+# 本模块内部与既有测试仍使用 _fetch_theme_detail。
+fetch_theme_detail = _fetch_theme_detail
+
+
 def _extract_mappings(api_data: dict[str, Any]) -> list[dict[str, Any]]:
     """从 longhuvip API 返回数据中提取 stockCode → tags/reason 映射。
 

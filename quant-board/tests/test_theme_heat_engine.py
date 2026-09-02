@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.analysis.theme.heat import compute_theme_heat
+from backend.analysis.theme.heat import FACTOR_VERSION, compute_theme_heat
 
 
-def test_compute_theme_heat_matches_v1_contract() -> None:
-    fixture_path = Path(__file__).parent / "fixtures" / "theme_heat_market_golden_v1.json"
+def test_compute_theme_heat_matches_v2_contract() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "theme_heat_market_golden_v2.json"
     case = json.loads(fixture_path.read_text(encoding="utf-8"))
 
     result = compute_theme_heat(**case["input"])
@@ -15,7 +15,13 @@ def test_compute_theme_heat_matches_v1_contract() -> None:
     assert result == case["expected"]
 
 
-def test_fund_unavailable_is_nullable_and_reweighted() -> None:
+def test_factor_version_is_theme_market_v2() -> None:
+    """热度口径切换为 KPL 人气总和（tck2.js 口径），版本号必须升级防止新旧数据混淆。"""
+    assert FACTOR_VERSION == "theme-market-v2"
+
+
+def test_heat_score_equals_kpl_hotness_sum() -> None:
+    """heatScore = 题材成分股 KPL 人气值总和（tck2.js fetchThemeData 口径）。"""
     result = compute_theme_heat(
         themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
         quotes={
@@ -26,13 +32,119 @@ def test_fund_unavailable_is_nullable_and_reweighted() -> None:
         previous_factors={},
         computed_at=1782018300000,
         mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["heatScore"] == 2000
+    assert factor["hotnessCoveredCount"] == 2
+    assert factor["rankEligible"] is True
+    assert "kpl_hotness_unavailable" not in factor["qualityFlags"]
+
+
+def test_kpl_missing_theme_gets_none_heat_score() -> None:
+    """KPL 人气缺失保持缺失（fail-visible）：heatScore=None + 结构化标记，不伪装成 0。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes={
+            "000001": {"code": "000001", "change": 6, "amount": 100000000, "volumeRatio": 2},
+            "000002": {"code": "000002", "change": 2, "amount": 80000000, "volumeRatio": 1.5},
+        },
+        funds={},
+        previous_factors={},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"OTHER": {"000001": 1200}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["heatScore"] is None
+    assert factor["hotnessCoveredCount"] == 0
+    assert factor["rankEligible"] is False
+    assert "kpl_hotness_unavailable" in factor["qualityFlags"]
+
+
+def test_kpl_empty_dict_is_real_zero_not_missing() -> None:
+    """KPL 数据源可用但题材无 Hot>0 股票 → 真实零值，不标缺失。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes={
+            "000001": {"code": "000001", "change": 6, "amount": 100000000, "volumeRatio": 2},
+            "000002": {"code": "000002", "change": 2, "amount": 80000000, "volumeRatio": 1.5},
+        },
+        funds={},
+        previous_factors={},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["heatScore"] == 0
+    assert "kpl_hotness_unavailable" not in factor["qualityFlags"]
+
+
+def test_momentum_uses_hotness_change_ratio() -> None:
+    """momentum 新口径：热度环比 +10% → 50 + 15 = 65（涨幅 0 贡献为 0）。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes={
+            "000001": {"code": "000001", "change": 0, "amount": 100000000, "volumeRatio": 2},
+            "000002": {"code": "000002", "change": 0, "amount": 80000000, "volumeRatio": 1.5},
+        },
+        funds={},
+        previous_factors={"AI": {"heatScore": 2000}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1320, "000002": 880}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["momentumScore"] == 65
+    assert factor["metadata"]["hotnessChangeRatio"] == 0.1
+
+
+def test_stale_zero_to_hundred_baseline_does_not_explode_momentum() -> None:
+    """公式切换后上一帧可能是旧 0-100 口径残留：环比不计算，momentum 回中值 + 重置标记。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes={
+            "000001": {"code": "000001", "change": 0, "amount": 100000000, "volumeRatio": 2},
+            "000002": {"code": "000002", "change": 0, "amount": 80000000, "volumeRatio": 1.5},
+        },
+        funds={},
+        previous_factors={"AI": {"heatScore": 88}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["momentumScore"] == 50
+    assert factor["metadata"]["hotnessChangeRatio"] is None
+    assert "kpl_hotness_baseline_reset" in factor["qualityFlags"]
+
+
+def test_fund_unavailable_is_reported_without_hiding_subscores() -> None:
+    """资金缺失：heatScore 仍来自 KPL 人气；资金子分保持缺失并打标。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes={
+            "000001": {"code": "000001", "change": 6, "amount": 100000000, "volumeRatio": 2},
+            "000002": {"code": "000002", "change": 2, "amount": 80000000, "volumeRatio": 1.5},
+        },
+        funds={},
+        previous_factors={},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
     )
 
     factor = result["factors"][0]
     assert factor["fundScore"] is None
     assert factor["degraded"] is True
     assert "fund_flow_unavailable" in factor["qualityFlags"]
-    assert factor["heatScore"] > 0
+    assert factor["heatScore"] == 2000
 
 
 def test_partial_fund_coverage_keeps_covered_value_visible() -> None:

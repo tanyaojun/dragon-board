@@ -231,6 +231,18 @@ async def on_startup() -> None:
     # 本 API 进程不再启动采集 scheduler，避免双进程争锁/双采。
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
+    # KPL 题材个股人气缓存（2026-09 热度口径 = KPL 人气总和，tck2.js）：后台线程
+    # 每 10 分钟全量刷新，启动即预热一轮。best-effort：失败不阻断启动，
+    # 题材热度缺失会以 kpl_hotness_unavailable 标记暴露在前端。
+    if get_settings().storage_backend == "mongodb":
+        try:
+            from backend.services.theme.heat_service import get_kpl_hotness_cache
+
+            kpl_hotness_cache = get_kpl_hotness_cache()
+            if kpl_hotness_cache is not None:
+                kpl_hotness_cache.start()
+        except Exception:
+            logger.exception("kpl hotness cache startup failed; continue startup")
     # MongoDB L2 资金冷启动恢复（零第三方）：最近交易日 L2 行 → ThemeFundCache
     # （Redis + 进程内 last-good），首屏资金列直接命中；失败不阻塞启动。
     if get_settings().storage_backend == "mongodb":
@@ -373,6 +385,17 @@ async def on_shutdown() -> None:
     await snapshot_collector_scheduler.stop()
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
+    # KPL 缓存只在 mongodb 模式启动（与 startup 对称）：非 mongo 部署不尝试
+    # 停止，避免每次关闭都打印 "kpl hotness shutdown failed" 异常栈（审计 L4）。
+    if get_settings().storage_backend == "mongodb":
+        try:
+            from backend.services.theme.heat_service import get_kpl_hotness_cache
+
+            kpl_hotness_cache = get_kpl_hotness_cache()
+            if kpl_hotness_cache is not None:
+                kpl_hotness_cache.stop()
+        except Exception:
+            logger.exception("kpl hotness cache shutdown failed; continue shutdown")
     await market_fund_scheduler.stop()
     await close_ths_fund_refresh_scheduler()
     from backend.market_proxy.quotes import stop_market_quotes_refresh
@@ -396,6 +419,19 @@ async def on_shutdown() -> None:
 
     close_collector_http()
     await close_ths_main_monitor_service()
+
+
+def _kpl_hotness_health() -> dict[str, Any]:
+    """KPL 人气缓存健康（best-effort：未配置/异常时返回结构化占位，不崩 health）。"""
+    try:
+        from backend.services.theme.heat_service import get_kpl_hotness_cache
+
+        cache = get_kpl_hotness_cache()
+        if cache is None:
+            return {"available": False, "reason": "kpl_cache_not_configured"}
+        return cache.get_health()
+    except Exception as exc:
+        return {"available": False, "reason": str(exc)}
 
 
 @app.get("/api/health")
@@ -438,6 +474,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
         "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
         "marketFundRefresh": market_fund_scheduler.status(),
         "thsFundRefresh": get_ths_fund_refresh_scheduler().status(),
+        "kplHotness": _kpl_hotness_health(),
     }
 
 

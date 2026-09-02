@@ -45,6 +45,21 @@ def test_strength_score_missing_heat_returns_none():
     assert "heatScore" in missing
 
 
+def test_strength_score_absolute_heat_treated_as_missing():
+    """新口径绝对值 heatScore（>100，KPL 人气总和落库形态，2026-09 theme-market-v2）
+    不参与 0-100 权重合成：_clamp(2000)=100 会让热度分量恒满分、斜率项恒饱和，
+    按缺失处理（fail-visible，与 trend._ts_heat_level 同一语义）。"""
+    score, missing = strength_score(
+        _row(heatScore=2000.0, ztCount=6, change=5.0),
+        history_heats=[1800.0, 1900.0],
+        all_current_heats=[1500.0, 2000.0],
+        market_change=1.0,
+        prev_zt_count=3,
+    )
+    assert score is None
+    assert "heatScore" in missing
+
+
 def test_flow_score_missing_inflow_returns_none():
     score, missing = flow_score(_row(mainNetInflow=None), [2.0], [2.0, 3.0], 1)
     assert score is None

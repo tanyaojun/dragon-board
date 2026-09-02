@@ -151,6 +151,9 @@ class Settings(BaseModel):
     # akshare 同花顺网页全市场资金源开关（2026-08-14：默认启用，专供 theme_fund
     # 题材资金聚合；原“种子首屏占位”方案废弃，冷启动改由 Redis dump.rdb 恢复 L2）
     theme_fund_seed_enabled: bool = Field(default=True)
+    # KPL 题材个股人气后台刷新周期（2026-09：热度口径切换为 KPL 人气总和，
+    # 对齐 tck2.js 的 10 分钟全量刷新节奏；下限 60s 由 KplHotnessCache 兜底）
+    theme_kpl_hotness_refresh_seconds: int = Field(default=600)
     market_fund_fetch_timeout_seconds: float = Field(default=60.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)
@@ -463,6 +466,13 @@ class Settings(BaseModel):
         seed_flag = os.environ.get("QUANT_BOARD_THEME_FUND_SEED_ENABLED")
         if seed_flag is not None:
             self.theme_fund_seed_enabled = seed_flag.strip().lower() in {"1", "true", "yes", "on"}
+        self.theme_kpl_hotness_refresh_seconds = max(
+            60,
+            _env_int(
+                "QUANT_BOARD_THEME_KPL_HOTNESS_REFRESH_SECONDS",
+                self.theme_kpl_hotness_refresh_seconds,
+            ),
+        )
         self.market_fund_fetch_timeout_seconds = max(
             10.0,
             _env_float(

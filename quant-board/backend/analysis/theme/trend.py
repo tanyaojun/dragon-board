@@ -33,7 +33,8 @@ SIGNAL_VERSION = "theme-signal-v12"
 class ThemeFactorFrame:
     themeId: str = ""
     themeName: str = ""
-    heatScore: float = 0.0
+    # theme-market-v2 起 heatScore 为 KPL 人气总和（绝对值）或 None（缺失）
+    heatScore: float | None = None
     momentumScore: float = 0.0
     breadthScore: float = 0.0
     fundScore: float | None = 0.0
@@ -174,6 +175,12 @@ def _num(value: Any, default: float = 0.0) -> float:
     return numeric if math.isfinite(numeric) else default
 
 
+def _num_or_none(value: Any) -> float | None:
+    """数值化：非法值/NaN/Inf → None（缺失），与"真 0"可区分（fail-visible）。"""
+    numeric = _num(value, math.nan)
+    return numeric if math.isfinite(numeric) else None
+
+
 def _int(value: Any, default: int = 0) -> int:
     try:
         numeric = int(value)
@@ -260,6 +267,7 @@ def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], 
         }
         for theme in themes
     ]
+    kpl_hots = context.get("kplHots")
     snapshot = compute_theme_heat(
         themes=market_themes,
         quotes=stock_by_code,
@@ -271,9 +279,17 @@ def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], 
         },
         computed_at=int(_timestamp(frame)),
         mapping_version=_name(context.get("mappingVersion") or "theme-context"),
+        kpl_hots=kpl_hots if isinstance(kpl_hots, dict) else None,
     )
 
-    factors = [dict(item) for item in snapshot["factors"] if item.get("rankEligible")]
+    def _quote_coverage(item: dict[str, Any]) -> float:
+        metadata = item.get("metadata")
+        return _num(metadata.get("quoteCoverage")) if isinstance(metadata, dict) else 0.0
+
+    # 行情覆盖门槛（>= 0.5，rankEligible 的行情语义）。热度缺失不再连带过滤：
+    # KPL 缺失时行情侧因子照常参与 exposures/signals（fail-visible，见 test_theme_trend_heat_level）。
+    factors = [dict(item) for item in snapshot["factors"] if _quote_coverage(item) >= 0.5]
+    _attach_heat_levels(factors)
     exposures: list[dict[str, Any]] = []
     for factor in factors:
         theme_id = _name(factor.get("themeId"))
@@ -414,17 +430,54 @@ def _ts_correlated_role(correlation: dict[str, Any] | None, code: str) -> str:
     return role if role in {"leader", "follower"} else ""
 
 
+def _ts_heat_level(factor: dict[str, Any]) -> float | None:
+    """题材热度相对分（0-100）：themeContext 路径读 heatLevel（rank 百分位），
+    sector rows 路径回退落库 heatScore。缺失或新口径绝对值（>100，KPL 人气总和
+    落库形态）返回 None，不伪装成 0 也不伪装成满分。
+
+    heatLevel key 存在但为 None（降级帧 rank 全 0 时 _attach_heat_levels 显式
+    置 None）同样返回 None、不回退 heatScore：避免 ≤100 的绝对值（冷题材人气
+    总和）被反向解释成高相对分（2026-09 审计 M3）。"""
+    if "heatLevel" in factor:
+        numeric = _num_or_none(factor.get("heatLevel"))
+        return _clamp(numeric) if numeric is not None else None
+    numeric = _num_or_none(factor.get("heatScore"))
+    if numeric is None or numeric > 100:
+        return None
+    return _clamp(numeric)
+
+
+def _attach_heat_levels(factors: list[dict[str, Any]]) -> None:
+    """按 rank 百分位就地附加 heatLevel（rank1 → 100）；无热度/无 rank 保持 None。"""
+    ranked_total = sum(1 for factor in factors if _int(factor.get("rank"), 0) > 0)
+    for factor in factors:
+        if factor.get("heatScore") is None:
+            factor["heatLevel"] = None
+            continue
+        rank = _int(factor.get("rank"), 0)
+        factor["heatLevel"] = (
+            round((1 - (rank - 1) / max(1, ranked_total)) * 100, 1)
+            if rank > 0 and ranked_total > 0
+            else None
+        )
+
+
 def _ts_role_for(code: str, stock: dict[str, Any] | None, factor: dict[str, Any], correlation: dict[str, Any] | None) -> str:
     correlated = _ts_correlated_role(correlation, code)
     if correlated:
         return correlated
     if "龙" in _name((stock or {}).get("leadStatus")):
         return "leader"
-    if factor["heatScore"] >= 70 and _num((stock or {}).get("change")) >= 5:
-        return "core"
-    if factor["heatScore"] >= 45 and _num((stock or {}).get("change")) > 0:
-        return "follower"
-    if factor["heatScore"] < 20 or _num((stock or {}).get("change")) < -5:
+    change = _num((stock or {}).get("change"))
+    heat = _ts_heat_level(factor)
+    if heat is not None:
+        if heat >= 70 and change >= 5:
+            return "core"
+        if heat >= 45 and change > 0:
+            return "follower"
+        if heat < 20:
+            return "noise"
+    if change < -5:
         return "noise"
     return "independent"
 
@@ -457,7 +510,8 @@ def _ts_exposure_reasons(factor: dict[str, Any], role: str) -> list[str]:
         reasons.append("题材资金流入")
     elif factor["rotationState"] == "quick":
         reasons.append("题材快速轮动")
-    if factor["heatScore"] >= 70:
+    heat = _ts_heat_level(factor)
+    if heat is not None and heat >= 70:
         reasons.append("题材热度强")
     if factor["leadershipScore"] >= 55:
         reasons.append("题材有龙头带动")
@@ -483,8 +537,9 @@ def _build_ts_runtime_exposure(
     role_score = _ts_role_score(role, stock)
     risk_penalty = 8 if factor["crowdingRisk"] >= 70 else 4 if factor["crowdingRisk"] >= 50 else 0
     exposure_weight = {"leader": 1, "core": 0.82, "follower": 0.62, "independent": 0.38}.get(role, 0.15)
+    heat = _ts_heat_level(factor)
     contribution = _ts_clamp(
-        _ts_round((factor["heatScore"] * 0.1 + role_score * 0.08 + factor["persistenceScore"] * 0.03 - risk_penalty) * exposure_weight, 1),
+        _ts_round(((heat or 0.0) * 0.1 + role_score * 0.08 + factor["persistenceScore"] * 0.03 - risk_penalty) * exposure_weight, 1),
         0,
         18,
     )
@@ -501,7 +556,7 @@ def _build_ts_runtime_exposure(
         "riskPenalty": risk_penalty,
         "reasons": _ts_exposure_reasons(factor, role),
         "source": _ts_exposure_source(factor, stock_theme_ids),
-        "themeScore": factor["heatScore"],
+        "themeScore": heat,
         "qualityFlags": factor["qualityFlags"],
     }
 
@@ -524,10 +579,14 @@ def _infer_lifecycle(factor: dict[str, Any], config: ThemeTrendConfig) -> str:
 
 def _build_factor(sector: dict[str, Any], config: ThemeTrendConfig) -> dict[str, Any]:
     theme_name = _sector_theme_name(sector)
+    # heatScore 不在此 clamp：新口径是 KPL 人气总和（绝对值），0-100 解释权
+    # 统一交给 _ts_heat_level（缺失/绝对值 → None，不伪装成 0 或满分）。
+    raw_heat = sector.get("heatScore", sector.get("hotScore"))
+    heat_score = _num_or_none(raw_heat)
     factor = {
         "themeId": _sector_theme_id(sector, theme_name),
         "themeName": theme_name,
-        "heatScore": _round(_clamp(_num(sector.get("heatScore", sector.get("hotScore"))))),
+        "heatScore": _round(heat_score) if heat_score is not None else None,
         "momentumScore": _round(_clamp(_num(sector.get("momentumScore")))),
         "breadthScore": _round(_clamp(_num(sector.get("breadthScore")))),
         "fundScore": _round(_clamp(_num(sector.get("fundScore", sector.get("capitalScore"))))),
@@ -574,7 +633,9 @@ def _build_exposure(stock: dict[str, Any], factors: list[dict[str, Any]]) -> dic
 
     role_score = _role_score(role)
     risk_penalty = _round(max(0.0, factor["crowdingRisk"] - 70) * 0.35)
-    exposure_weight = _round(_clamp((role_score * 0.45 + contribution * 2.5 + factor["heatScore"] * 0.25) - risk_penalty))
+    exposure_weight = _round(
+        _clamp((role_score * 0.45 + contribution * 2.5 + (_ts_heat_level(factor) or 0.0) * 0.25) - risk_penalty)
+    )
     reasons = [f"role:{role or 'unknown'}"]
     # D5：lifecycle 状态机废弃，主线判断改用 rotationState 方向标签
     if factor.get("rotationState") == "mainline":
@@ -621,7 +682,7 @@ def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
         "risk": risk,
         "lifecycle": factor.get("lifecycle"),
         "score": _round(
-            factor["heatScore"] * 0.25
+            (_ts_heat_level(factor) or 0.0) * 0.25
             + factor["momentumScore"] * 0.25
             + factor["breadthScore"] * 0.15
             + _num(factor["fundScore"]) * 0.15
