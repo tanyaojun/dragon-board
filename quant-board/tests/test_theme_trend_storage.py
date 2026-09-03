@@ -37,7 +37,11 @@ class TestThemeFactorFrame:
         frame = ThemeFactorFrame()
         assert frame.themeId == ""
         assert frame.themeName == ""
-        assert frame.heatScore == 0.0
+        # 05dbe86（theme-market-v2 L1）起 heatScore 默认 None（缺失不伪装 0）；
+        # heatLevel/heatFactorVersion 为 heatLevel 落库迁移新增字段，默认缺失。
+        assert frame.heatScore is None
+        assert frame.heatLevel is None
+        assert frame.heatFactorVersion is None
         assert frame.lifecycle == "neutral"
         assert frame.snapshotType == "half_hour"
 

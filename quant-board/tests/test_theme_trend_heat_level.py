@@ -166,3 +166,82 @@ def test_sector_non_numeric_heat_stays_missing() -> None:
 
     assert result["factors"], "sector 行不应被丢弃"
     assert result["factors"][0]["heatScore"] is None
+
+
+def test_ts_heat_level_respects_caliber_marking() -> None:
+    """落库口径标记（design §4.2 规则2）：v2 行不回退 heatScore；v1 行与未标记行 ≤100 回退。"""
+    assert _ts_heat_level({"heatScore": 85, "metadata": {"factorVersion": "theme-market-v2"}}) is None
+    assert _ts_heat_level({"heatScore": 85, "metadata": {"factorVersion": "theme-market-v1"}}) == 85.0
+    assert _ts_heat_level({"heatScore": 85, "heatFactorVersion": "theme-market-v2"}) is None
+    # 未标记行维持既有行为（残留歧义按 v1 语义回退，design §4.2 显式接受）
+    assert _ts_heat_level({"heatScore": 85}) == 85.0
+
+
+def test_build_factor_propagates_persisted_heat_level_and_caliber() -> None:
+    """sector 行 heatLevel/metadata.factorVersion 透传进 factor（tri-state：无 key 不伪造）。"""
+    from backend.analysis.theme.trend import ThemeTrendConfig, _build_factor
+
+    base = {
+        "entityKey": "ai",
+        "entityName": "人工智能",
+        "rank": 1,
+        "heatScore": 2000,
+        "momentumScore": 50,
+        "breadthScore": 50,
+        "fundScore": 50,
+        "leadershipScore": 50,
+        "correlationScore": 50,
+        "crowdingRisk": 30,
+        "persistenceScore": 50,
+    }
+    marked = _build_factor(
+        {**base, "heatLevel": 96.3, "metadata": {"factorVersion": "theme-market-v2"}},
+        ThemeTrendConfig(),
+    )
+    assert marked["heatLevel"] == 96.3
+    assert marked["heatFactorVersion"] == "theme-market-v2"
+
+    explicit_none = _build_factor(
+        {**base, "heatLevel": None, "metadata": {"factorVersion": "theme-market-v2"}},
+        ThemeTrendConfig(),
+    )
+    assert explicit_none["heatLevel"] is None
+
+    legacy = _build_factor(dict(base), ThemeTrendConfig())
+    assert "heatLevel" not in legacy
+    assert "heatFactorVersion" not in legacy
+
+
+def test_replay_sector_rows_with_heat_level_and_caliber() -> None:
+    """replay 端到端：sector 行携带 heatLevel + 口径标记时 factor 完整透传。"""
+    frames = [
+        {
+            "snapshotId": "snap_heat_level",
+            "timestamp": 100,
+            "tradingDate": "2026-09-03",
+            "stocks": [],
+            "sectors": [
+                {
+                    "entityKey": "ai",
+                    "entityName": "人工智能",
+                    "rank": 1,
+                    "heatScore": 2000,
+                    "heatLevel": 96.3,
+                    "momentumScore": 50,
+                    "breadthScore": 50,
+                    "fundScore": 50,
+                    "leadershipScore": 50,
+                    "correlationScore": 50,
+                    "crowdingRisk": 30,
+                    "persistenceScore": 50,
+                    "metadata": {"factorVersion": "theme-market-v2"},
+                }
+            ],
+        }
+    ]
+
+    result = ThemeTrendPythonEngine().replay(frames)
+
+    factor = result["factors"][0]
+    assert factor["heatLevel"] == 96.3
+    assert factor["heatFactorVersion"] == "theme-market-v2"

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, asdict, fields
 from typing import Any
 
 from backend.analysis.theme.heat import compute_theme_heat
+from backend.analysis.theme.heat_level import attach_heat_levels, resolve_heat_level
 
 LIFECYCLES = {
     "ignition",
@@ -35,6 +36,10 @@ class ThemeFactorFrame:
     themeName: str = ""
     # theme-market-v2 起 heatScore 为 KPL 人气总和（绝对值）或 None（缺失）
     heatScore: float | None = None
+    # heatLevel：0-100 rank 百分位相对分；None = 缺失（无热度/降级帧 rank 全 0）
+    heatLevel: float | None = None
+    # heatFactorVersion：热度口径标记（theme-market-v1/v2），透传落库行 metadata.factorVersion
+    heatFactorVersion: str | None = None
     momentumScore: float = 0.0
     breadthScore: float = 0.0
     fundScore: float | None = 0.0
@@ -289,7 +294,7 @@ def _theme_context_frames(frame: dict[str, Any]) -> tuple[list[dict[str, Any]], 
     # 行情覆盖门槛（>= 0.5，rankEligible 的行情语义）。热度缺失不再连带过滤：
     # KPL 缺失时行情侧因子照常参与 exposures/signals（fail-visible，见 test_theme_trend_heat_level）。
     factors = [dict(item) for item in snapshot["factors"] if _quote_coverage(item) >= 0.5]
-    _attach_heat_levels(factors)
+    attach_heat_levels(factors)
     exposures: list[dict[str, Any]] = []
     for factor in factors:
         theme_id = _name(factor.get("themeId"))
@@ -431,35 +436,11 @@ def _ts_correlated_role(correlation: dict[str, Any] | None, code: str) -> str:
 
 
 def _ts_heat_level(factor: dict[str, Any]) -> float | None:
-    """题材热度相对分（0-100）：themeContext 路径读 heatLevel（rank 百分位），
-    sector rows 路径回退落库 heatScore。缺失或新口径绝对值（>100，KPL 人气总和
-    落库形态）返回 None，不伪装成 0 也不伪装成满分。
+    """题材热度相对分（0-100）：统一走 heat_level.resolve_heat_level（design §4.2 三分支）。
 
-    heatLevel key 存在但为 None（降级帧 rank 全 0 时 _attach_heat_levels 显式
-    置 None）同样返回 None、不回退 heatScore：避免 ≤100 的绝对值（冷题材人气
-    总和）被反向解释成高相对分（2026-09 审计 M3）。"""
-    if "heatLevel" in factor:
-        numeric = _num_or_none(factor.get("heatLevel"))
-        return _clamp(numeric) if numeric is not None else None
-    numeric = _num_or_none(factor.get("heatScore"))
-    if numeric is None or numeric > 100:
-        return None
-    return _clamp(numeric)
-
-
-def _attach_heat_levels(factors: list[dict[str, Any]]) -> None:
-    """按 rank 百分位就地附加 heatLevel（rank1 → 100）；无热度/无 rank 保持 None。"""
-    ranked_total = sum(1 for factor in factors if _int(factor.get("rank"), 0) > 0)
-    for factor in factors:
-        if factor.get("heatScore") is None:
-            factor["heatLevel"] = None
-            continue
-        rank = _int(factor.get("rank"), 0)
-        factor["heatLevel"] = (
-            round((1 - (rank - 1) / max(1, ranked_total)) * 100, 1)
-            if rank > 0 and ranked_total > 0
-            else None
-        )
+    保留独立函数名：sector rows 路径因子与 themeContext 因子共用此入口，
+    test_theme_trend_heat_level 直接锁定其行为。"""
+    return resolve_heat_level(factor)
 
 
 def _ts_role_for(code: str, stock: dict[str, Any] | None, factor: dict[str, Any], correlation: dict[str, Any] | None) -> str:
@@ -601,6 +582,15 @@ def _build_factor(sector: dict[str, Any], config: ThemeTrendConfig) -> dict[str,
     }
     factor["lifecycle"] = _infer_lifecycle(factor | {"lifecycle": sector.get("lifecycle")}, config)
     factor["qualityFlags"] = _quality_flags(factor | sector, config)
+    sector_metadata = sector.get("metadata") if isinstance(sector.get("metadata"), dict) else {}
+    # heatLevel 落库透传（tri-state）：sector 行有 key → 数值或显式 None；
+    # 无 key（旧落库行）→ 不伪造 key，消费端按口径标记回退（heat_level.resolve_heat_level）。
+    if "heatLevel" in sector:
+        heat_level = _num_or_none(sector.get("heatLevel"))
+        factor["heatLevel"] = _round(heat_level) if heat_level is not None else None
+    caliber = str(sector_metadata.get("factorVersion") or "").strip()
+    if caliber:
+        factor["heatFactorVersion"] = caliber
     return factor
 
 
