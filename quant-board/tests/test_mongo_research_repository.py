@@ -945,3 +945,18 @@ def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
         if value != expected:
             return False
     return True
+
+
+# ── heatLevel 落库迁移（2026-09 design B5）：研究集合 factor 文档落相对分与口径标记 ──
+
+def test_factor_doc_keeps_heat_level_and_caliber() -> None:
+    doc = MongoResearchRepository._factor_doc({
+        "datasetId": "d", "snapshotId": "s", "themeId": "ai", "themeName": "AI",
+        "heatScore": 2000.0, "heatLevel": 96.3, "heatFactorVersion": "theme-market-v2",
+    })
+    assert doc["heatLevel"] == 96.3
+    assert doc["heatFactorVersion"] == "theme-market-v2"
+
+    missing = MongoResearchRepository._factor_doc({"datasetId": "d", "snapshotId": "s", "themeId": "ai"})
+    assert missing["heatLevel"] is None
+    assert missing["heatFactorVersion"] is None

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from typing import Any
 
@@ -761,6 +762,13 @@ class MongoResearchRepository(MongoRepository):
             "themeId": str(item.get("themeId") or ""),
             "themeName": str(item.get("themeName") or ""),
             "heatScore": float(item.get("heatScore") or 0.0),
+            # heatLevel：0-100 相对分或 None（缺失，不伪装 0）；heatFactorVersion：热度口径标记
+            "heatLevel": (
+                float(item["heatLevel"])
+                if isinstance(item.get("heatLevel"), (int, float)) and math.isfinite(float(item["heatLevel"]))
+                else None
+            ),
+            "heatFactorVersion": str(item["heatFactorVersion"]) if item.get("heatFactorVersion") else None,
             "momentumScore": float(item.get("momentumScore") or 0.0),
             "breadthScore": float(item.get("breadthScore") or 0.0),
             "fundScore": float(item.get("fundScore") or 0.0),
