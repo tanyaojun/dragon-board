@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.analysis.theme.rotation.config import ThemeRotationConfig
 from backend.analysis.theme.rotation.factors import (
     breadth_score,
@@ -134,7 +135,7 @@ class ThemeRotationEngine:
                         "prev_slot_stocks": None,
                     },
                 )
-                heat = _num(row.get("heatScore"))
+                heat = resolve_heat_level(row)
                 if heat is not None:
                     bucket["heats"].append(heat)
                 inflow = _num(row.get("mainNetInflow"))
@@ -151,9 +152,8 @@ class ThemeRotationEngine:
                 bucket["prev_slot_stocks"] = slot.stock_rows
 
         # ── 截面参照 ────────────────────────────────────────────────────
-        all_heats = [
-            _num(r.get("heatScore")) for r in current_sector_rows if _num(r.get("heatScore")) is not None
-        ]
+        resolved_current_heats = [resolve_heat_level(r) for r in current_sector_rows]
+        all_heats = [heat for heat in resolved_current_heats if heat is not None]
         all_inflows = [
             _num(r.get("mainNetInflow"))
             for r in current_sector_rows
@@ -245,7 +245,7 @@ class ThemeRotationEngine:
             rank_changes.append(rank_change)
 
             heat_trend_raw = (
-                linear_slope_heat(hist["heats"], _num(row.get("heatScore")))
+                linear_slope_heat(hist["heats"], resolve_heat_level(row))
                 if enough_history
                 else None
             )
@@ -298,7 +298,7 @@ class ThemeRotationEngine:
         # ── 主线判定（设计 §5.2：横向 z-score Top3 且 资金集中度 Top3） ──
         theme_rows = {_theme_key(r): r for r in current_sector_rows}
         heat_zs = {
-            key: robust_z(_num(r.get("heatScore"), 0.0), all_heats)
+            key: robust_z(resolve_heat_level(r) or 0.0, all_heats)
             for key, r in theme_rows.items()
         }
         z_rank = {

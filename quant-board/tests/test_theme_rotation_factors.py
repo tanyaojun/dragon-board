@@ -114,3 +114,35 @@ def test_combine_scores_min_factors_gate():
     combined = combine_scores(scores, {"strength": 0.3, "flow": 0.25, "breadth": 0.2,
                                        "crowding": 0.15, "lifecycle": 0.1})
     assert combined is not None
+
+
+# ── heatLevel 落库迁移：强度因子热度读点统一走 heat_level.resolve_heat_level（design §4.2）──
+
+def test_strength_score_consumes_heat_level_row() -> None:
+    """collector 新行：heatScore 绝对值 + heatLevel 相对分 → 强度因子吃 heatLevel。"""
+    row = {
+        "heatScore": 2000.0,
+        "heatLevel": 96.3,
+        "ztCount": 4,
+        "change": 3.2,
+    }
+    score, missing = strength_score(row, [90.0, 92.0], [96.3, 50.0, 40.0], 1.0, 2)
+    assert score is not None
+    assert missing == []
+    assert 0.0 <= score <= 100.0
+
+
+def test_strength_score_v2_marked_row_without_heat_level_is_missing() -> None:
+    """v2 标记行无 heatLevel key：≤100 绝对值不回退（M1 边界窗口消除）。"""
+    row = {"heatScore": 85.0, "metadata": {"factorVersion": "theme-market-v2"}}
+    score, missing = strength_score(row, [], [85.0], 1.0, 0)
+    assert score is None
+    assert "heatScore" in missing
+
+
+def test_strength_score_unmarked_row_heat_score_fallback() -> None:
+    """未标记旧行：≤100 heatScore 回退（旧行为保留）。"""
+    row = {"heatScore": 85.0, "ztCount": 2, "change": 3.0}
+    score, missing = strength_score(row, [80.0], [85.0, 50.0], 1.0, 1)
+    assert score is not None
+    assert missing == []

@@ -6,6 +6,8 @@ import math
 import statistics
 from typing import Any, Protocol
 
+from backend.analysis.theme.heat_level import resolve_heat_level
+
 
 def _num(value: Any, default: float | None = None) -> float | None:
     try:
@@ -56,12 +58,12 @@ def strength_score(
 ) -> tuple[float | None, list[str]]:
     """强度/动量：heat、横向 z、heat 斜率、涨停动能、板块超额。
 
-    新口径绝对值 heatScore（>100，theme-market-v2 的 KPL 人气总和）视为缺失：
-    _clamp 绝对值恒 100、斜率项恒饱和，按缺失返回让 combine_scores 按可用
-    因子归一（与 trend._ts_heat_level / momentum 序列过滤同一语义）。"""
+    热度统一走 heat_level.resolve_heat_level（design §4.2）：heatLevel 相对分缺失时
+    按缺失返回（missing 标记沿用 "heatScore" 名，rotation 合同不变），由
+    combine_scores 按可用因子归一。"""
     missing: list[str] = []
-    heat = _num(row.get("heatScore"))
-    if heat is None or heat > 100.0:
+    heat = resolve_heat_level(row)
+    if heat is None:
         missing.append("heatScore")
         return None, missing
     heat_score = _clamp(heat)
