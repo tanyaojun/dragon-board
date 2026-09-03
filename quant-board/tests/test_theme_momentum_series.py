@@ -165,3 +165,68 @@ def test_exposure_role_missing_heat_is_not_noise():
     exposure = stock_theme_exposure(stock, [theme])
     assert exposure is not None
     assert exposure["role"] == "independent"
+
+
+# ── heatLevel 落库迁移：序列与角色判定统一走 heat_level.resolve_heat_level（design §4.2）──
+
+def test_series_consumes_heat_level_rows():
+    """collector 新行（heatScore 绝对值 + heatLevel 相对分）→ 序列吃 heatLevel。"""
+    frames = [
+        _frame(0, [
+            _theme("A", 2000.0, 1, extra={"heatLevel": 100.0}),
+            _theme("B", 300.0, 2, extra={"heatLevel": 50.0}),
+        ]),
+        _frame(1, [
+            _theme("A", 2200.0, 1, extra={"heatLevel": 100.0}),
+            _theme("B", 320.0, 2, extra={"heatLevel": 50.0}),
+        ]),
+    ]
+    series = build_theme_strength_series(frames)
+    assert list(series) == ["A", "B"]
+    assert series["A"][0][:2] == (0, 100.0)
+    assert series["B"][1][:2] == (1, 50.0)
+
+
+def test_series_explicit_none_heat_level_is_missing():
+    """heatLevel 显式 None（降级行）：诚实缺失，不回退 heatScore 绝对值。"""
+    frames = [_frame(0, [_theme("A", 2000.0, 1, extra={"heatLevel": None})])]
+    assert build_theme_strength_series(frames) == {}
+
+
+def test_series_v2_marked_small_absolute_heat_not_relative():
+    """v2 标记行无 heatLevel key：≤100 绝对值不回退为相对分（M1 边界窗口消除）。"""
+    frames = [
+        _frame(0, [
+            _theme("A", 85.0, 1, extra={"metadata": {"rankEligible": True, "factorVersion": "theme-market-v2"}}),
+        ]),
+    ]
+    assert build_theme_strength_series(frames) == {}
+
+
+def test_series_v1_marked_row_heat_score_fallback():
+    """v1 标记行无 heatLevel key：≤100 heatScore 回退为相对分（旧行为保留）。"""
+    frames = [
+        _frame(0, [
+            _theme("A", 85.0, 1, extra={"metadata": {"rankEligible": True, "factorVersion": "theme-market-v1"}}),
+        ]),
+    ]
+    series = build_theme_strength_series(frames)
+    assert series["A"][0][:2] == (0, 85.0)
+
+
+def test_exposure_role_consumes_heat_level():
+    """新行 heatLevel=92 → core 阈值恢复语义；heatScore 绝对值不参与阈值。"""
+    theme = _theme("A", 2000.0, 1, extra={"heatLevel": 92.0})
+    stock = {"code": "600001", "name": "样本", "themes": ["A概念板块"], "change": 10.0}
+    exposure = stock_theme_exposure(stock, [theme])
+    assert exposure is not None
+    assert exposure["role"] == "core"
+
+
+def test_exposure_role_v2_row_without_heat_level_heatless_not_noise():
+    """v2 标记行无 heatLevel：热度缺失只按涨跌判定，正涨跌不误判 noise。"""
+    theme = _theme("A", 85.0, 1, extra={"metadata": {"rankEligible": True, "factorVersion": "theme-market-v2"}})
+    stock = {"code": "600001", "name": "样本", "themes": ["A概念板块"], "change": 10.0}
+    exposure = stock_theme_exposure(stock, [theme])
+    assert exposure is not None
+    assert exposure["role"] == "independent"

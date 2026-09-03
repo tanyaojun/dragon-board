@@ -10,6 +10,8 @@ import math
 from collections import defaultdict
 from typing import Any
 
+from backend.analysis.theme.heat_level import resolve_heat_level
+
 # 固定参数（与个股共振 analyze_rank_resonance 对齐；不做参数搜索）
 THEME_SHORT_WINDOW_BARS = 3
 THEME_MID_WINDOW_BARS = 8
@@ -17,9 +19,15 @@ THEME_PATH_WINDOW_BARS = 8
 THEME_JUMP_DECAY_BARS = 3
 THEME_JUMP_RANK_SLOTS = 3
 THEME_JUMP_HEAT_DELTA = 15.0
+# heatLevel 相对分（0-100 rank 百分位）量纲参数（2026-09 落库迁移 design D3）：
+# 消费对象从 heatScore 改为 heatLevel 序列，数值沿用旧 0-100 校准值，上线后按真实数据核定。
+# 注意（design §5.5）：rank 百分位与 rank 变化同源，THEME_JUMP_HEAT_DELTA 信号与
+# rank_jump 信号可能同帧重复触发，首日观察重叠率后再核定，本次不重校。
+THEME_RELATIVE_MOMENTUM_SCALE = 15.0
+THEME_DRAWDOWN_SCALE = 20.0
 THEME_CROSS_SECTION_MIN = 20
 THEME_SERIES_MIN_BARS = THEME_MID_WINDOW_BARS + 1
-THEME_MOMENTUM_VERSION = "theme-momentum-v1"
+THEME_MOMENTUM_VERSION = "theme-momentum-v2"  # 2026-09 heatLevel 落库迁移：序列消费对象 heatScore → heatLevel
 
 # 融合参数（固定常量，不做参数搜索）
 THEME_ADJUSTMENT_SCALE = 0.3
@@ -95,11 +103,10 @@ def _is_same_theme_name(left: Any, right: Any) -> bool:
 def build_theme_strength_series(
     frames: list[dict[str, Any]],
 ) -> dict[str, list[tuple[int, float, int | None]]]:
-    """每题材按 (frame_index, heatScore, rank) 记录；仅 rankEligible 且 heatScore 有限。
+    """每题材按 (frame_index, heatLevel, rank) 记录；仅 rankEligible 且热度相对分可用。
 
-    rank 缺失时记 None（题材 Jump 仍可用 heatScore 判定）。
-    新口径绝对值（>100，theme-market-v2 的 KPL 人气总和）视为口径不兼容缺失：
-    本模块 /15.0 归一、JUMP_DELTA=15 等量纲均按 0-100 校准，混入绝对值会恒饱和。"""
+    热度读取统一走 heat_level.resolve_heat_level（design §4.2）：新落库行吃 heatLevel
+    相对分；v1/未标记旧行 ≤100 heatScore 回退；v2 标记行不回退（M1 边界窗口消除）。"""
     series: dict[str, list[tuple[int, float, int | None]]] = defaultdict(list)
     for frame_index, frame in enumerate(frames):
         for theme in frame.get("hotThemes") or []:
@@ -108,13 +115,8 @@ def build_theme_strength_series(
             if str(theme.get("entityType") or "hot_theme") != "hot_theme":
                 continue
             theme_id = _theme_id(theme)
-            heat = _num(theme.get("heatScore"), math.nan)
-            if (
-                not theme_id
-                or not math.isfinite(heat)
-                or heat > 100.0
-                or not _theme_rank_eligible(theme)
-            ):
+            heat = resolve_heat_level(theme)
+            if not theme_id or heat is None or not _theme_rank_eligible(theme):
                 continue
             rank = theme.get("rank")
             try:
@@ -136,12 +138,15 @@ def _theme_momentum_for(
     short_change = values[last] - values[last - THEME_SHORT_WINDOW_BARS]
     mid_change = values[last] - values[last - THEME_MID_WINDOW_BARS]
     relative_momentum = (
-        _clamp((short_change - market_median) / 15.0, -1, 1)
+        _clamp((short_change - market_median) / THEME_RELATIVE_MOMENTUM_SCALE, -1, 1)
         if market_median is not None
         else 0.0
     )
     acceleration = _clamp(
-        (short_change - mid_change * THEME_SHORT_WINDOW_BARS / THEME_MID_WINDOW_BARS) / 15.0,
+        (
+            (short_change - mid_change * THEME_SHORT_WINDOW_BARS / THEME_MID_WINDOW_BARS)
+            / THEME_RELATIVE_MOMENTUM_SCALE
+        ),
         -1,
         1,
     )
@@ -164,7 +169,7 @@ def _theme_momentum_for(
         ) / (len(signs) - 1)
     recent_peak = max(path)
     drawdown = max(0.0, recent_peak - values[last])
-    reversal_penalty = _clamp(0.6 * switch_rate + 0.4 * drawdown / 20.0, 0, 1)
+    reversal_penalty = _clamp(0.6 * switch_rate + 0.4 * drawdown / THEME_DRAWDOWN_SCALE, 0, 1)
     if rotation_state in REVERSAL_LIFECYCLES:
         reversal_penalty = _clamp(reversal_penalty + 0.2, 0, 1)
 
@@ -268,19 +273,17 @@ def _role_for(stock: dict[str, Any], theme: dict[str, Any], matched_main_theme: 
         return explicit
     if "龙" in str(stock.get("leadStatus") or ""):
         return "leader"
-    # 热度阈值（70/45/20）按 0-100 口径校准：新口径绝对值（>100）与缺失都
-    # 不参与热度分层（误判 core/noise），只保留涨跌侧的 noise 判定。
-    raw_heat = theme.get("heatScore")
-    heat = _num(raw_heat, math.nan)
+    # 热度阈值（70/45/20）消费 heatLevel 相对分（design §4.2）：缺失（含 v2 行显式
+    # None / 绝对值）不参与热度分层，只保留涨跌侧的 noise 判定。
+    heat = resolve_heat_level(theme)
     change = _num(stock.get("change"))
-    heat_0_100 = math.isfinite(heat) and heat <= 100.0
-    if heat_0_100:
+    if heat is not None:
         if heat >= 70 and change >= 5:
             return "core"
         if heat >= 45 and change > 0:
             return "follower"
-    if heat_0_100 and heat < 20:
-        return "noise"
+        if heat < 20:
+            return "noise"
     if change < -5:
         return "noise"
     return "independent"
