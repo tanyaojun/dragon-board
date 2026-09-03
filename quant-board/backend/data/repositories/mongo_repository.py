@@ -18,6 +18,32 @@ logger = logging.getLogger(__name__)
 # 每批 200 帧 ≈ 4-5 万行，兼顾查询次数与单批内存。测试用 monkeypatch 覆盖此值验证分批逻辑。
 _STOCK_ROWS_BATCH_SIZE = 200
 
+# hotThemes 读侧投影白名单（ranktrend+themes）：heatLevel 2026-09 落库迁移加入；
+# metadata（口径标记 factorVersion）已在白名单。
+HOT_THEME_FRAME_FIELDS: dict[str, int] = {
+    "_id": 0,
+    "snapshotId": 1,
+    "tradingDate": 1,
+    "slotTime": 1,
+    "timestamp": 1,
+    "captureMode": 1,
+    "source": 1,
+    "entityType": 1,
+    "entityKey": 1,
+    "entityName": 1,
+    "entityCode": 1,
+    "rowId": 1,
+    "rank": 1,
+    "heatScore": 1,
+    "heatLevel": 1,
+    "crowdingRisk": 1,
+    "rotationState": 1,
+    "metadata": 1,
+    "themeId": 1,
+    "code": 1,
+    "name": 1,
+}
+
 
 class MongoRepository:
     def __init__(self, database: Any) -> None:
@@ -226,28 +252,7 @@ class MongoRepository:
                 snapshot_ids,
                 entity_type="hot_theme" if projection == "ranktrend+themes" else None,
                 fields=(
-                    {
-                        "_id": 0,
-                        "snapshotId": 1,
-                        "tradingDate": 1,
-                        "slotTime": 1,
-                        "timestamp": 1,
-                        "captureMode": 1,
-                        "source": 1,
-                        "entityType": 1,
-                        "entityKey": 1,
-                        "entityName": 1,
-                        "entityCode": 1,
-                        "rowId": 1,
-                        "rank": 1,
-                        "heatScore": 1,
-                        "crowdingRisk": 1,
-                        "rotationState": 1,
-                        "metadata": 1,
-                        "themeId": 1,
-                        "code": 1,
-                        "name": 1,
-                    }
+                    HOT_THEME_FRAME_FIELDS
                     if projection == "ranktrend+themes"
                     else None
                 ),

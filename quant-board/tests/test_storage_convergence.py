@@ -375,3 +375,12 @@ def _create_legacy_db(path: Path) -> None:
             ("bt_1", "dragonboard_live", "rank_trend_candidate", "0.1.0", "half_hour", "cfg", 1, "completed", "{}", "{\"ok\":true}", "2026-04-30T10:00:00"),
         )
         conn.commit()
+
+
+def test_hot_theme_projection_whitelist_includes_heat_level() -> None:
+    """hotThemes 读侧投影白名单必须放行 heatLevel 与 metadata（口径标记）。"""
+    from backend.data.repositories.mongo_repository import HOT_THEME_FRAME_FIELDS
+
+    assert HOT_THEME_FRAME_FIELDS["heatLevel"] == 1
+    assert HOT_THEME_FRAME_FIELDS["heatScore"] == 1
+    assert HOT_THEME_FRAME_FIELDS["metadata"] == 1
