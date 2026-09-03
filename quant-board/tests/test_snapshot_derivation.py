@@ -235,3 +235,24 @@ def test_limit_prices_follow_board_aware_ratios() -> None:
         assert by_code[code]["limitDownPrice"] == 7.0
     assert by_code["600001"]["limitUpPrice"] == 11.0
     assert by_code["600001"]["limitDownPrice"] == 9.0
+
+
+# ── heatLevel 落库迁移（2026-09 design B7）：stock row themeHeat 改相对分口径 ──
+
+def test_stock_theme_heat_consumes_sector_heat_level_and_caliber() -> None:
+    """collector 新行：stock row themeHeat 吃 sector heatLevel 相对分（不再落绝对值）。"""
+    fact = _fact_no_pre_close_with_theme()
+    fact.sectors[0]["heatScore"] = 2000.0
+    fact.sectors[0]["heatLevel"] = 96.3
+    fact.sectors[0]["metadata"] = {"factorVersion": "theme-market-v2"}
+    bundle = SnapshotDerivationService().derive(fact)
+    assert bundle.stock_rows[0]["themeHeat"] == 96.3
+
+
+def test_stock_theme_heat_v2_sector_without_heat_level_stays_missing() -> None:
+    """v2 标记 sector 行无 heatLevel key：≤100 绝对值不回退，themeHeat 保持缺失。"""
+    fact = _fact_no_pre_close_with_theme()
+    fact.sectors[0]["heatScore"] = 85.0
+    fact.sectors[0]["metadata"] = {"factorVersion": "theme-market-v2"}
+    bundle = SnapshotDerivationService().derive(fact)
+    assert "themeHeat" not in bundle.stock_rows[0]

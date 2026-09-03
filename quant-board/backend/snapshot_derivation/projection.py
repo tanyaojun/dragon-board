@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
 
 
@@ -582,12 +583,14 @@ def build_ingest_payload(
         row.setdefault("themeContribution", theme_contribution)
         row.setdefault("leadStatus", lead_status)
 
-        # 题材热度/拥挤风险：由该股主题材的 sector factor 派生（无匹配则保持缺失）
+        # 题材热度/拥挤风险：由该股主题材的 sector factor 派生（无匹配则保持缺失）。
+        # themeHeat 落库语义 = 0-100 相对分或缺失（2026-09 design B7）：统一走
+        # resolve_heat_level（sector 行口径标记消歧），不伪装 0、不落绝对值。
         main_theme = row.get("mainTheme")
         if main_theme:
             sector = sector_by_name.get(_normalize_theme_label(main_theme))
             if sector is not None:
-                heat = sector.get("heatScore")
+                heat = resolve_heat_level(sector)
                 if heat is not None:
                     row.setdefault("themeHeat", heat)
                 crowding = _safe_float(sector.get("crowdingRisk"))
