@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildDailySnapshot, buildSnapshotFrameRow, buildSnapshotStockRows } from '../builders'
+import { buildDailySnapshot, buildSnapshotFrameRow, buildSnapshotSectorRows, buildSnapshotStockRows } from '../builders'
 import { createSnapshotRecord } from '../identity'
 
 describe('snapshot builders', () => {
@@ -303,5 +303,33 @@ describe('snapshot builders', () => {
     expect(rows[0].moneyFlowSource).toBe('ths_main_monitor')
     expect(rows[0].capitalFlowSource).toBe('ths_main_monitor')
     expect(rows[0].money_flow_source).toBe('ths_main_monitor')
+  })
+
+  it('writes numeric heatLevel only and keeps missing themeHeat as null', () => {
+    const record = createSnapshotRecord(
+      'half_hour',
+      new Date('2026-07-24T15:00:00'),
+      {
+        hotlist: [{
+          code: '000001',
+          name: '热度缺失样本',
+          themeHeat: null,
+        }],
+        hotThemes: [
+          { id: 'AI', name: '人工智能', heatScore: 2000, heatLevel: 96.3 },
+          { id: 'OLD', name: '历史档位', heatScore: 50, heatLevel: '热门' },
+        ],
+      },
+    )
+
+    const sectorRows = buildSnapshotSectorRows(record)
+    const hotRow = sectorRows.find((row) => row.entityType === 'hot_theme' && row.entityKey === 'AI')
+    const legacyRow = sectorRows.find((row) => row.entityType === 'hot_theme' && row.entityKey === 'OLD')
+    expect(hotRow?.heatLevel).toBe(96.3)
+    // 历史字符串档位标签不再写入（写侧只落数值，tri-state）
+    expect(legacyRow?.heatLevel).toBeUndefined()
+
+    const stockRows = buildSnapshotStockRows(record)
+    expect(stockRows[0].themeHeat).toBeNull()
   })
 })

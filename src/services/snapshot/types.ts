@@ -154,7 +154,7 @@ export interface SnapshotStockRow {
   highDays?: number
   hotness?: number
   mainTheme?: string
-  themeHeat?: number
+  themeHeat?: number | null
   themeLevel?: string
   rankChange?: number
   directionSignal?: string
@@ -189,7 +189,7 @@ export interface SnapshotSectorRow {
   rank: number
   strength?: number
   heatScore?: number | null
-  heatLevel?: string
+  heatLevel?: string | number | null
   change?: number
   mainNetInflow?: number | null
   bigMoney300?: number

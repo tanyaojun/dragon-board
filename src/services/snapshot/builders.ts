@@ -804,7 +804,7 @@ export function buildSnapshotStockRows(
         highDays: Number(item.highDays) || 0,
         hotness: Number(item.hotness) || 0,
         mainTheme: typeof item.mainTheme === 'string' ? item.mainTheme : undefined,
-        themeHeat: Number(item.themeHeat) || 0,
+        themeHeat: finiteNumberOrNull(item.themeHeat),
         themeLevel: typeof item.themeLevel === 'string' ? item.themeLevel : undefined,
         ...signalColumns,
       } satisfies SnapshotStockRow
@@ -839,7 +839,12 @@ function buildSectorRow(
     heatScore: finiteNumberOrNull(
       Object.prototype.hasOwnProperty.call(payload, 'heatScore') ? payload.heatScore : payload.strength,
     ),
-    heatLevel: typeof payload.heatLevel === 'string' ? payload.heatLevel : undefined,
+    // 浏览器构建的正式 sector row 只落数值 heatLevel（非数值=历史字符串档位标签，不写）；
+    // 相对分来源是 buildContext.themeHeatFactors / hotThemes（B9 数值化）
+    heatLevel:
+      typeof payload.heatLevel === 'number' && Number.isFinite(payload.heatLevel)
+        ? payload.heatLevel
+        : undefined,
     change: Number(payload.change) || 0,
     mainNetInflow: includesFormalFunds
       ? finiteNumberOrNull(
