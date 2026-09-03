@@ -26,36 +26,41 @@ class FakeThemeHeatService:
     def __init__(self) -> None:
         self.calls = 0
         self.include_runtime_funds: bool | None = None
+        self.include_heat_level = True
 
     def get_snapshot(self, *, include_runtime_funds: bool = True) -> dict[str, Any]:
         self.calls += 1
         self.include_runtime_funds = include_runtime_funds
+        factors = [
+            {
+                "themeId": "AI", "themeName": "人工智能", "rank": 1,
+                "heatScore": 88, "heatLevel": 100.0, "momentumScore": 90, "breadthScore": 80,
+                "fundScore": 70, "leadershipScore": 75, "correlationScore": 82,
+                "crowdingRisk": 20, "persistenceScore": 60,
+                "mainNetInflow": 1000000, "volumeRatio": 1.8,
+                "ztCount": 2, "leaderCount": 1, "qualityFlags": [],
+                "metadata": {"quoteCoverage": 1},
+            },
+            {
+                "themeId": "POWER", "themeName": "电力", "rank": 2,
+                "heatScore": 45, "heatLevel": None, "momentumScore": 40, "breadthScore": 55,
+                "fundScore": None, "leadershipScore": 10, "correlationScore": 50,
+                "crowdingRisk": 5, "persistenceScore": 0,
+                "mainNetInflow": None, "volumeRatio": 1.0,
+                "ztCount": 0, "leaderCount": 0,
+                "qualityFlags": ["fund_flow_unavailable"],
+                "metadata": {"quoteCoverage": 1},
+            },
+        ]
+        if not self.include_heat_level:
+            for factor in factors:
+                factor.pop("heatLevel", None)
         return {
             "computedAt": 1782018300000,
             "factorVersion": "theme-market-v1",
             "mappingVersion": "theme-v8-test",
             "quality": {"quoteCoverage": 0.98},
-            "factors": [
-                {
-                    "themeId": "AI", "themeName": "人工智能", "rank": 1,
-                    "heatScore": 88, "momentumScore": 90, "breadthScore": 80,
-                    "fundScore": 70, "leadershipScore": 75, "correlationScore": 82,
-                    "crowdingRisk": 20, "persistenceScore": 60,
-                    "mainNetInflow": 1000000, "volumeRatio": 1.8,
-                    "ztCount": 2, "leaderCount": 1, "qualityFlags": [],
-                    "metadata": {"quoteCoverage": 1},
-                },
-                {
-                    "themeId": "POWER", "themeName": "电力", "rank": 2,
-                    "heatScore": 45, "momentumScore": 40, "breadthScore": 55,
-                    "fundScore": None, "leadershipScore": 10, "correlationScore": 50,
-                    "crowdingRisk": 5, "persistenceScore": 0,
-                    "mainNetInflow": None, "volumeRatio": 1.0,
-                    "ztCount": 0, "leaderCount": 0,
-                    "qualityFlags": ["fund_flow_unavailable"],
-                    "metadata": {"quoteCoverage": 1},
-                },
-            ],
+            "factors": factors,
             "sources": {
                 "quotes": {"source": "theme_quote_tencent", "ok": True, "row_count": 4000},
                 "funds": {
@@ -106,6 +111,10 @@ def test_collector_builds_all_theme_sector_rows() -> None:
     assert captured["sectorRows"][1]["fundScore"] is None
     assert captured["sectorRows"][1]["themeQualityFlags"] == ["fund_flow_unavailable"]
     assert captured["sectorRows"][0]["metadata"]["fundSource"] is None
+    # heatLevel 落库透传（2026-09 design B2）：数值或显式 None，captured 是派生后产物，
+    # 能端到端锁定"collector 透传 + 派生白名单放行"两环。
+    assert captured["sectorRows"][0]["heatLevel"] == 100.0
+    assert captured["sectorRows"][1]["heatLevel"] is None
     # 现行契约：采集器请求实时资金（include_runtime_funds=True）
     assert theme_service.include_runtime_funds is True
     assert repo.runs[0]["themeFactorVersion"] == "theme-market-v1"
@@ -124,3 +133,47 @@ def test_service_factory_injects_shared_theme_heat_service(monkeypatch) -> None:
     service = factory.create_snapshot_collector_service(repo=FakeRepo())
 
     assert service._theme_heat_service is fake_theme_service
+
+
+def test_sector_factor_fields_whitelist_includes_heat_level() -> None:
+    """SECTOR_FACTOR_FIELDS 是落库 sector row 的唯一字段白名单（projection.py :661-663
+    逐字段拷贝），heatLevel 不放行则 collector 透传在端到端被剥掉（评审 H1）。"""
+    from backend.snapshot_derivation.projection import SECTOR_FACTOR_FIELDS
+
+    assert "heatLevel" in SECTOR_FACTOR_FIELDS
+    assert "heatScore" in SECTOR_FACTOR_FIELDS
+    assert "metadata" in SECTOR_FACTOR_FIELDS
+
+
+def test_collector_omits_heat_level_key_when_factor_lacks_it() -> None:
+    """factor 无 heatLevel key（迁移前数据形态）时 sector row 不伪造该 key（tri-state）。
+    注意：白名单未放行前本测试平凡通过，作为实现后的回归锁定；RED 由上面两个断言承担。"""
+    captured: dict[str, Any] = {}
+
+    def normalize(request):
+        captured.update(request.bundle)
+        bundle = request.bundle
+        return (
+            type("Dataset", (), {"id": request.dataset_id})(),
+            bundle["items"], bundle["frames"], bundle["stockRows"], bundle["sectorRows"],
+            "test-key",
+        )
+
+    repo = FakeRepo()
+    theme_service = FakeThemeHeatService()
+    theme_service.include_heat_level = False
+    service = SnapshotCollectorService(
+        repo=repo, collect_fn=_collect, normalize_fn=normalize,
+        quality_fn=lambda **kwargs: QualityResult(True, [], [], {"ok": 3, "failed": 0}),
+        theme_heat_service=theme_service,
+    )
+    request = CollectorRunRequest(
+        dataset_id="dragonboard_backend_shadow", snapshot_type="half_hour",
+        trading_date="2026-06-11", slot_time="10:00", dry_run=True,
+    )
+
+    result = service.run_once(request)
+
+    assert result.status == "dry_run"
+    assert len(captured["sectorRows"]) == 2
+    assert all("heatLevel" not in row for row in captured["sectorRows"])

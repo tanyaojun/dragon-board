@@ -14,6 +14,9 @@ from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
 
 SECTOR_FACTOR_FIELDS = (
     "heatScore",
+    # heatLevel（0-100 rank 百分位相对分）2026-09 落库迁移放行：collector 已透传，
+    # 白名单是派生层落库 sector row 的唯一字段准入。
+    "heatLevel",
     "momentumScore",
     "breadthScore",
     "fundScore",

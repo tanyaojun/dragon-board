@@ -108,7 +108,7 @@ def factor_to_sector(
             "fundSource": None,
         }
     )
-    return {
+    sector = {
         "code": str(factor.get("themeId") or ""),
         "name": str(factor.get("themeName") or factor.get("themeId") or ""),
         "entityType": "hot_theme",
@@ -129,6 +129,11 @@ def factor_to_sector(
         "themeQualityFlags": list(factor.get("qualityFlags") or []),
         "metadata": metadata,
     }
+    # heatLevel 落库（2026-09 design B2）：数值或显式 None 透传；factor 无该 key
+    # （迁移前数据形态）时不伪造 key，消费端按 metadata.factorVersion 口径回退。
+    if "heatLevel" in factor:
+        sector["heatLevel"] = factor.get("heatLevel")
+    return sector
 
 
 def theme_snapshot_source_health(theme_snapshot: dict[str, Any]) -> list[SourceHealth]:
