@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from typing import Any
 
@@ -16,6 +17,17 @@ from backend.data.models.models import (
 from backend.data.ingest.json_codec import loads_json_field
 from backend.core.utils import json_dumps, json_loads
 from backend.data.repositories.shared import _compute_archive_source, _maybe_float, _maybe_int
+
+
+def _heat_level_text(value: object) -> str | None:
+    """heat_level 列是 varchar(40)：数值 heatLevel 统一转文本存储；None/字符串（历史
+    浏览器档位标签）原样。读侧回字符串，消费端 heat_level.resolve_heat_level 可解析。"""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return str(numeric) if math.isfinite(numeric) else None
+    return str(value)
 
 
 class SnapshotRepositoryMixin:
@@ -1495,7 +1507,7 @@ class SnapshotRepositoryMixin:
             rank=int(float(item.get("rank") or 0)),
             strength=_maybe_float(item.get("strength")),
             heat_score=_maybe_float(item.get("heatScore")),
-            heat_level=item.get("heatLevel"),
+            heat_level=_heat_level_text(item.get("heatLevel")),
             change=_maybe_float(item.get("change")),
             main_net_inflow=_maybe_float(item.get("mainNetInflow")),
             big_money300=_maybe_float(item.get("bigMoney300")),

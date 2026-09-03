@@ -384,3 +384,31 @@ def test_hot_theme_projection_whitelist_includes_heat_level() -> None:
     assert HOT_THEME_FRAME_FIELDS["heatLevel"] == 1
     assert HOT_THEME_FRAME_FIELDS["heatScore"] == 1
     assert HOT_THEME_FRAME_FIELDS["metadata"] == 1
+
+
+# ── heatLevel 落库迁移（2026-09 design）：heat_level varchar 列数值写入统一转文本 ──
+
+def test_sector_model_heat_level_numeric_persists_as_text() -> None:
+    """heat_level 列是 varchar(40)：数值 heatLevel 统一转文本存储，读侧回字符串。"""
+    from backend.data.repositories.snapshot_repository import SnapshotRepositoryMixin
+
+    model = SnapshotRepositoryMixin._sector_model("ds1", {
+        "entityType": "hot_theme", "entityKey": "ai", "entityName": "人工智能",
+        "rank": 1, "heatScore": 2000.0, "heatLevel": 96.3,
+    })
+    assert model.heat_level == "96.3"
+
+    label = SnapshotRepositoryMixin._sector_model("ds1", {
+        "entityType": "hot_theme", "entityKey": "x", "entityName": "X",
+        "heatLevel": "热门",
+    })
+    assert label.heat_level == "热门"
+
+    none_case = SnapshotRepositoryMixin._sector_model("ds1", {
+        "entityType": "hot_theme", "entityKey": "y", "entityName": "Y",
+        "heatLevel": None,
+    })
+    assert none_case.heat_level is None
+
+    bundle = SnapshotRepositoryMixin.local_sector_to_bundle_dict(model)
+    assert bundle["heatLevel"] == "96.3"

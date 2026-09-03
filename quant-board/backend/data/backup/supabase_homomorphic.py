@@ -4,6 +4,7 @@ import base64
 from collections import defaultdict
 from datetime import datetime, timezone
 import gzip
+import math
 import time
 from typing import Any
 from uuid import uuid4
@@ -13,6 +14,18 @@ import httpx
 from backend.data.models.models import Dataset
 from backend.core.settings import Settings, get_settings
 from backend.core.utils import json_dumps, json_loads, utc_now_iso
+
+
+def _heat_level_text(value: object) -> str | None:
+    """heat_level 列是 varchar(40)：数值 heatLevel 统一转文本存储；None/字符串（历史
+    浏览器档位标签）原样。读侧回字符串，消费端 heat_level.resolve_heat_level 可解析。
+    （与 backend/data/repositories/snapshot_repository.py 同名 helper 保持同构。）"""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        return str(numeric) if math.isfinite(numeric) else None
+    return str(value)
 
 
 REQUIRED_TABLES = [
@@ -908,7 +921,7 @@ class SupabaseBackupClient:
             "rank": _int(item.get("rank")),
             "strength": _float(item.get("strength")),
             "heat_score": _float(item.get("heatScore") or item.get("heat_score")),
-            "heat_level": item.get("heatLevel") or item.get("heat_level"),
+            "heat_level": _heat_level_text(item.get("heatLevel", item.get("heat_level"))),
             "change": _float(item.get("change")),
             "main_net_inflow": _float(item.get("mainNetInflow") or item.get("main_net_inflow")),
             "big_money300": _float(item.get("bigMoney300") or item.get("big_money300")),
