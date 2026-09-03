@@ -98,7 +98,7 @@ export function buildThemeEvents(context: ThemeAlertBuildContext): ThemeEvent[] 
       events.push(baseEvent('theme_mainline_started', factor, timestamp, ['题材进入主线'], stockCodes))
     }
 
-    if (factor.momentumScore >= 75 && factor.heatScore >= 70) {
+    if (factor.momentumScore >= 75 && (factor.heatLevel ?? 0) >= 70) {
       events.push(baseEvent('theme_strength_surge', factor, timestamp, ['题材强度快速上升'], stockCodes))
     }
 

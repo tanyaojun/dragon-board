@@ -393,6 +393,7 @@ interface RiskTheme {
   themeId: string
   themeName: string
   heatScore: number
+  heatLevel: number | null
   momentumScore: number
   crowdingRisk: number
   rotationState: string
@@ -412,6 +413,7 @@ const riskLevels = computed(() => {
       themeId: f.themeId,
       themeName: f.themeName,
       heatScore: Math.round(f.heatScore),
+      heatLevel: f.heatLevel,
       momentumScore: Math.round(f.momentumScore),
       crowdingRisk: Math.round(f.crowdingRisk),
       rotationState: f.rotationState,
@@ -423,7 +425,7 @@ const riskLevels = computed(() => {
 
     if (f.crowdingRisk >= 70 || f.rotationState === 'cooling' || f.qualityFlags.some((q) => q.level === 'fatal')) {
       high.push(item)
-    } else if (f.crowdingRisk >= 50 || f.qualityFlags.some((q) => q.level === 'warning') || f.heatScore >= 75) {
+    } else if (f.crowdingRisk >= 50 || f.qualityFlags.some((q) => q.level === 'warning') || (f.heatLevel ?? 0) >= 75) {
       warn.push(item)
     } else {
       safe.push(item)

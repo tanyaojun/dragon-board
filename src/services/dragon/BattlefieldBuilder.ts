@@ -162,7 +162,7 @@ function qualifiesThemeBattlefield(params: {
   continuityScore: number
 }): boolean {
   const persistentDays = params.mainLine?.persistentDays || 0
-  const heatScore = params.hotTheme?.heatScore || 0
+  const heatScore = params.hotTheme?.heatLevelScore ?? 0
   const correlation = params.correlation?.overallCorrelation || 0
   const ztCount = params.hotTheme?.ztCount || 0
   const mainNetInflow = params.hotTheme?.mainNetInflow || 0
@@ -251,7 +251,7 @@ export class BattlefieldBuilder {
     })
 
     themeFactors
-      .filter((factor) => factor.rotationState === 'mainline' || factor.heatScore >= 75)
+      .filter((factor) => factor.rotationState === 'mainline' || (factor.heatLevel ?? 0) >= 75)
       .slice(0, 8)
       .forEach((factor) => {
         themeIds.add(factor.themeId)
@@ -338,7 +338,7 @@ export class BattlefieldBuilder {
         qualityScore,
         capitalScore,
         fragilityScore: fragilityScore(zhabanRate),
-        themeHeatScore: factor?.heatScore || hotTheme?.heatScore || 0,
+        themeHeatScore: factor?.heatLevel ?? hotTheme?.heatLevelScore ?? 0,
         themeZtCount: factor?.ztCount || hotTheme?.ztCount || 0,
         themeMainNetInflow: factor?.netInflow || themeNetInflow(hotTheme),
         overallCorrelation: factor ? factor.correlationScore / 100 : correlation?.overallCorrelation || 0,
@@ -352,7 +352,7 @@ export class BattlefieldBuilder {
           capitalScore * 0.25,
         evidence: [
           continuityScore >= 60 ? '主线在多段快照里持续出现' : '题材持续性一般',
-          (hotTheme?.heatScore || 0) >= 60 ? `题材热度 ${Math.round(hotTheme?.heatScore || 0)}` : '题材热度一般',
+          (hotTheme?.heatLevelScore ?? 0) >= 60 ? `题材热度 ${Math.round(hotTheme?.heatLevelScore ?? 0)}` : '题材热度一般',
           (hotTheme?.ztCount || 0) >= 2 ? `题材涨停数 ${hotTheme?.ztCount || 0}` : '题材涨停扩散不足',
           (mainLine?.persistentDays || 0) >= 2 ? `主线持续 ${mainLine?.persistentDays || 0} 天` : '主线持续不足',
           strongStockCount >= 2 ? `强势成员 ${strongStockCount} 只` : '强势成员不足',
@@ -424,7 +424,7 @@ export class BattlefieldBuilder {
         qualityScore: qualityScoreForStocks([stock]),
         capitalScore: capitalScoreForStocks([stock]),
         fragilityScore: fragilityScore(zhabanRate),
-        themeHeatScore: stock.themeHeat || 0,
+        themeHeatScore: stock.themeHeat ?? 0,
         themeZtCount: 0,
         themeMainNetInflow: getNetCapital(stock),
         overallCorrelation: 0,

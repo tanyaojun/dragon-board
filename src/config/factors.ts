@@ -114,7 +114,8 @@ export const FACTORS: Record<string, Factor> = {
     calculate: (stock: Stock) => {
       try {
         const exposure = primaryThemeExposure(stock)
-        return Math.min(100, exposure?.themeScore || 0)
+        // themeScore 现为 heatLevel 相对分（0-100 | null）；评分因子缺失→0（合成项，不展示）
+        return Math.min(100, exposure?.themeScore ?? 0)
       } catch {
         return 0
       }

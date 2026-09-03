@@ -65,7 +65,7 @@
                   <span v-if="theme.isMainLine" class="mainline-badge">主线</span>
                 </span>
                 <div class="node-badges">
-                  <span class="strength-badge" :class="getStrengthClass(theme.strength)">
+                  <span class="strength-badge" :class="getStrengthClass(theme.heatLevelScore ?? 0)">
                     {{ formatStrength(theme.strength) }}
                   </span>
                   <span class="stock-count">{{ theme.stockCount }}只</span>
@@ -879,10 +879,11 @@ const allThemes = computed(() => {
       id: theme.id,
       name: theme.name,
       strength: theme.heatScore,
+      heatLevelScore: theme.heatLevelScore,
       change: theme.momentumScore,
       stockCount: theme.stockCount,
       correlation: correlation?.overallCorrelation || 0,
-      isHot: theme.heatScore >= 65,
+      isHot: theme.heatLevelScore != null && theme.heatLevelScore >= 65,
       isMainLine: mainLineIds.has(theme.id),
     }
   }).sort((a, b) => b.strength - a.strength)

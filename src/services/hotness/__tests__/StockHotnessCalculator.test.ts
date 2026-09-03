@@ -225,4 +225,15 @@ describe('StockHotnessCalculator', () => {
     expect(hotnessMap.get('600800')).toBeLessThan(20)
     expect(hotnessMap.get('600900')).toBeGreaterThan(hotnessMap.get('600800') || 0)
   })
+
+  it('themeSupport：>100 旧口径绝对值按缺失处理，真实冷门 heat 有效，null 不伪装', () => {
+    // RED 判别点（评审 M-3/M5）：themeHeat=2000 是迁移前绝对值残留，旧代码
+    // 2000*0.55 被 Math.min(100,...) clamp 到满分；新代码 0-100 区间守卫按缺失 → 0。
+    const legacyAbsolute = calculateStockHotnessRecords([createStock({ themeHeat: 2000, themes: [] })], 8)
+    const missing = calculateStockHotnessRecords([createStock({ themeHeat: null, themes: [] })], 8)
+    const cold = calculateStockHotnessRecords([createStock({ themeHeat: 5, themes: [] })], 8)
+    expect(legacyAbsolute[0].components.themeSupport).toBe(0)
+    expect(missing[0].components.themeSupport).toBe(0)
+    expect(cold[0].components.themeSupport).toBeGreaterThan(0)
+  })
 })

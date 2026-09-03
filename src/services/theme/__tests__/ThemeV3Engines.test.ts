@@ -19,6 +19,7 @@ function factor(overrides: Partial<ThemeFactorSnapshot>): ThemeFactorSnapshot {
     source: 'mixed',
     timestamp: 1713751200000,
     heatScore: 86,
+    heatLevel: 80,
     momentumScore: 82,
     breadthScore: 74,
     fundScore: 76,

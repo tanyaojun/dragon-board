@@ -152,15 +152,25 @@ function turnoverHeatScore(stock: Pick<MergedStock, 'turnoverRate'>): number {
 }
 
 function themeSupportScore(stock: Pick<MergedStock, 'themeHeat' | 'themes'>): number {
-  const themeHeat = toNumber(stock.themeHeat)
+  // themeHeat 现为 0-100 相对分或 null/undefined（缺失）：null = 热度缺失不伪装 0；
+  // rank 末位 heatLevel>0 是真实冷，不是无信号（2026-09-03 design §4.4）；
+  // >100 = 迁移前绝对值残留，按缺失处理（0-100 区间守卫，评审 M5），不参与加权。
+  const themeHeat =
+    typeof stock.themeHeat === 'number' &&
+    Number.isFinite(stock.themeHeat) &&
+    stock.themeHeat >= 0 &&
+    stock.themeHeat <= 100
+      ? stock.themeHeat
+      : null
   const themeContributions = Array.isArray(stock.themes)
     ? stock.themes.map((theme: unknown) =>
         theme && typeof theme === 'object' ? toNumber((theme as { themeContribution?: unknown }).themeContribution) : 0,
       )
     : []
   const maxContribution = Math.max(0, ...themeContributions)
-  if (themeHeat <= 0 && maxContribution <= 0) return 0
-  return Math.min(100, themeHeat * 0.55 + Math.min(18, maxContribution) * 2.5)
+  if (themeHeat === null && maxContribution <= 0) return 0
+  const heatPart = themeHeat === null ? 0 : themeHeat * 0.55
+  return Math.min(100, heatPart + Math.min(18, maxContribution) * 2.5)
 }
 
 function platformCoverageScore(platforms: unknown, totalPlatforms: number): number {
