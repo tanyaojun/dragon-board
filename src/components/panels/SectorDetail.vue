@@ -82,11 +82,11 @@
                 <div class="metric-icon">💪</div>
                 <div class="metric-content">
                   <div class="metric-label">题材热度</div>
-                  <div class="metric-value" :style="{ color: getStrengthColor(blockData?.heatScore || 0) }">
-                    {{ blockData?.heatScore || 0 }}
+                  <div class="metric-value" :style="{ color: heatDisplay.color }">
+                    {{ heatDisplay.value }}
                   </div>
-                  <div class="metric-level" :class="`strength-${getStrengthLevel(blockData?.heatScore || 0)}`">
-                    {{ getStrengthLevelText(blockData?.heatScore || 0) }}
+                  <div class="metric-level" :class="`strength-${heatDisplay.band}`">
+                    {{ heatDisplay.level }}
                   </div>
                 </div>
               </div>
@@ -449,6 +449,7 @@ import * as echarts from 'echarts'
 import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
+import { deriveThemeHeatBand, deriveThemeHeatLevel, deriveThemeHeatMeta } from '../../services/theme/stockThemeMeta'
 import type { ThemeHeatStock } from '../../services/theme/types'
 import type { ThemeStockWithLimitUp } from '../../services/theme/stockLimitUpRows'
 import {
@@ -527,6 +528,25 @@ const blockCode = computed(() => {
 const blockData = computed(() => {
   if (!blockCode.value) return null
   return themeFacade.getThemeSummary(blockCode.value)
+})
+
+// 题材热度卡（审计修复：heatLevel 迁移后 heatScore 是 KPL 人气绝对值，可达数十万，
+// 旧 4000/3000/2000/1000 分档使热门题材全部挤"极强"）。档位/颜色统一走
+// heatLevelScore 相对分（0-100）+ stockThemeMeta 统一档位出口；
+// 数值本身保留绝对值展示（人气量级口径），缺失显示 '--' 不伪装 0。
+const heatDisplay = computed(() => {
+  const heatScore = blockData.value?.heatScore
+  const heatLevelScore = blockData.value?.heatLevelScore
+  if (heatScore == null || typeof heatScore !== 'number' || !Number.isFinite(heatScore)) {
+    return { value: '--', level: '-', band: 'd' as const, color: '#7f8c8d' }
+  }
+  const meta = deriveThemeHeatMeta(heatLevelScore)
+  return {
+    value: String(Math.round(heatScore)),
+    level: deriveThemeHeatLevel(heatLevelScore) || '-',
+    band: deriveThemeHeatBand(heatLevelScore),
+    color: meta.color,
+  }
 })
 
 const displayLastUpdate = computed(() => {
@@ -1005,30 +1025,6 @@ function setSort(field: string) {
 }
 
 // ========== 工具函数 ==========
-function getStrengthLevel(strength: number): string {
-  if (strength >= 4000) return 's'
-  if (strength >= 3000) return 'a'
-  if (strength >= 2000) return 'b'
-  if (strength >= 1000) return 'c'
-  return 'd'
-}
-
-function getStrengthLevelText(strength: number): string {
-  if (strength >= 4000) return '极强'
-  if (strength >= 3000) return '强'
-  if (strength >= 2000) return '中'
-  if (strength >= 1000) return '弱'
-  return '极弱'
-}
-
-function getStrengthColor(strength: number): string {
-  if (strength >= 4000) return '#ff4757'
-  if (strength >= 3000) return '#ff7f50'
-  if (strength >= 2000) return '#ffb142'
-  if (strength >= 1000) return '#4a90e2'
-  return '#7f8c8d'
-}
-
 function getVolumeRatioColor(ratio: number): string {
   // 绝对阈值（golden 3 日量比：>1 放量、<1 缩量）
   if (ratio >= 1.05) return '#ff4757' // 放量

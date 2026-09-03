@@ -12,7 +12,7 @@ import {
   getBackendRotationSummaryRaw,
 } from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
-import { deriveThemeHeatLevel } from './stockThemeMeta'
+import { deriveThemeHeatLevel, deriveThemeHeatMeta } from './stockThemeMeta'
 import { themeHeatFeed } from './ThemeHeatFeed'
 import type {
   ThemeExposureProjection,
@@ -279,6 +279,8 @@ export function toHotThemeSummary(
   // 人气绝对值（人气量级展示/排序专用，如 DragonBreathPanel 3000/1500）。
   const heatLevelScore = factor.heatLevel ?? null
   const heatLevel = deriveThemeHeatLevel(heatLevelScore)
+  // 图标/颜色统一走 deriveThemeHeatMeta（缺失 → 中性灰 '–'，不落入冷档伪装）
+  const heatMeta = deriveThemeHeatMeta(heatLevelScore)
   const apiNetInflow = apiFactor
     ? Object.prototype.hasOwnProperty.call(apiFactor, 'netInflow')
       ? apiFactor.netInflow ?? null
@@ -289,8 +291,8 @@ export function toHotThemeSummary(
     name: factor.themeName,
     rank: factor.rank,
     heatScore: factor.heatScore,
-    heatIcon: heatLevelScore == null ? '❄️' : heatLevelScore >= 80 ? '🔥' : heatLevelScore >= 60 ? '⚡' : heatLevelScore >= 40 ? '🌟' : '❄️',
-    heatColor: heatLevelScore != null && heatLevelScore >= 80 ? '#ff4757' : heatLevelScore != null && heatLevelScore >= 60 ? '#f39c12' : '#3498db',
+    heatIcon: heatMeta.icon,
+    heatColor: heatMeta.color,
     heatLevel,
     heatLevelScore,
     stockCount: factor.stockCount,

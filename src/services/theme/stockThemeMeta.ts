@@ -43,7 +43,25 @@ export function deriveThemeHeatLevel(score: number | null | undefined): string {
   return '冰'
 }
 
-export function deriveThemeHeatMeta(score: number): { level: string; icon: string; color: string } {
+/** 热度徽章分档（s/a/b/c/d 样式档），阈值与 deriveThemeHeatLevel 五档一致（80/60/40/20）。
+ *  统一出口：组件不得再各自维护绝对值阈值（审计修复：SectorDetail/ThemeCorrelationPanel/
+ *  SectorStocksTree 三处孤儿分档已切到本函数 + heatLevelScore 相对分）。 */
+export function deriveThemeHeatBand(score: number | null | undefined): 's' | 'a' | 'b' | 'c' | 'd' {
+  if (score == null || typeof score !== 'number' || !Number.isFinite(score)) return 'd'
+  if (score >= 80) return 's'
+  if (score >= 60) return 'a'
+  if (score >= 40) return 'b'
+  if (score >= 20) return 'c'
+  return 'd'
+}
+
+export function deriveThemeHeatMeta(
+  score: number | null | undefined,
+): { level: string; icon: string; color: string } {
+  // 缺失热度显示中性灰色，不落入 '冰' 分支伪装成真实冷档（审计 Low：缺失展示语义偏冷）
+  if (score == null || typeof score !== 'number' || !Number.isFinite(score)) {
+    return { level: '', icon: '–', color: '#95a5a6' }
+  }
   if (score >= 80) return { level: '热门', icon: '🔥', color: '#ff4757' }
   if (score >= 60) return { level: '活跃', icon: '⚡', color: '#f39c12' }
   if (score >= 40) return { level: '温', icon: '🌟', color: '#3498db' }
@@ -78,10 +96,15 @@ export function resolvePrimaryStockTheme(themes: StockThemeLike[]): StockThemeSn
 
   // 同一陷阱：hasFiniteNumber(null) === true 会让 null 经 normalizeThemeHeatScore
   // 伪装成 0，必须显式守卫，缺失热度返回 null 而非 0。
+  // 0-100 区间守卫（审计 Medium）：theme-market-v2 的 heatScore 是 KPL 人气总和
+  // 绝对值（可达数十万），超界值按缺失处理，不向 0-100 相对分消费端泄漏
+  // （与 StockHotnessCalculator 的 M5 守卫同口径）。
   const themeHeat =
     primaryTheme.heatScore != null &&
     typeof primaryTheme.heatScore === 'number' &&
-    Number.isFinite(primaryTheme.heatScore)
+    Number.isFinite(primaryTheme.heatScore) &&
+    primaryTheme.heatScore >= 0 &&
+    primaryTheme.heatScore <= 100
       ? normalizeThemeHeatScore(primaryTheme.heatScore)
       : null
   return {

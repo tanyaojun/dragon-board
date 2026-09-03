@@ -65,8 +65,8 @@
                   <span v-if="theme.isMainLine" class="mainline-badge">主线</span>
                 </span>
                 <div class="node-badges">
-                  <span class="strength-badge" :class="getStrengthClass(theme.heatLevelScore ?? 0)">
-                    {{ formatStrength(theme.strength) }}
+                  <span class="strength-badge" :class="deriveThemeHeatBand(theme.heatLevelScore)">
+                    {{ formatStrengthBand(theme.heatLevelScore) }}
                   </span>
                   <span class="stock-count">{{ theme.stockCount }}只</span>
                 </div>
@@ -432,6 +432,7 @@ import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { themeFacade } from '@/services/theme/ThemeFacade'
+import { deriveThemeHeatBand } from '@/services/theme/stockThemeMeta'
 import { themeCorrelationAnalyzer } from '@/services/ThemeCorrelationAnalyzer'
 import { usePanel } from '@/composables/usePanel'
 import { useUIStore } from '@/stores/ui'
@@ -615,20 +616,12 @@ function getPopularityChangeClass(change: number): string {
   return 'popularity-steady'
 }
 
-function getStrengthClass(strength: number): string {
-  if (strength >= 80) return 's'
-  if (strength >= 65) return 'a'
-  if (strength >= 50) return 'b'
-  if (strength >= 35) return 'c'
-  return 'd'
-}
-
-function formatStrength(strength: number): string {
-  if (strength >= 4000) return 'S'
-  if (strength >= 3000) return 'A'
-  if (strength >= 2000) return 'B'
-  if (strength >= 1000) return 'C'
-  return 'D'
+// 热度徽章（审计修复：旧 class 吃 80/65/50/35 自造阈值、文字吃 heatScore 绝对值
+// 4000/3000/2000/1000，v2 口径下热门题材全部挤 'S'）。统一走 heatLevelScore 相对分
+// + stockThemeMeta deriveThemeHeatBand（80/60/40/20 五档）；缺失显示 '-' 不伪装低分。
+function formatStrengthBand(score: number | null | undefined): string {
+  if (score == null || typeof score !== 'number' || !Number.isFinite(score)) return '-'
+  return deriveThemeHeatBand(score).toUpperCase()
 }
 
 function getCorrelationColor(value: number = 0): string {
@@ -878,7 +871,7 @@ const allThemes = computed(() => {
     return {
       id: theme.id,
       name: theme.name,
-      strength: theme.heatScore,
+      strength: theme.heatLevelScore,
       heatLevelScore: theme.heatLevelScore,
       change: theme.momentumScore,
       stockCount: theme.stockCount,
@@ -886,7 +879,7 @@ const allThemes = computed(() => {
       isHot: theme.heatLevelScore != null && theme.heatLevelScore >= 65,
       isMainLine: mainLineIds.has(theme.id),
     }
-  }).sort((a, b) => b.strength - a.strength)
+  }).sort((a, b) => (b.strength ?? -1) - (a.strength ?? -1))
 
   return result
 })

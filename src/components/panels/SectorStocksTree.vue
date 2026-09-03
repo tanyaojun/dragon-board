@@ -29,8 +29,8 @@
           <div class="node-header">
             <span class="node-name">{{ sector.name }}</span>
             <div class="node-badges">
-              <span class="strength-badge" :class="getStrengthClass(sector.strength)">
-                {{ formatStrength(sector.strength) }}
+              <span class="strength-badge" :class="deriveThemeHeatBand(sector.strength)">
+                {{ formatStrengthBand(sector.strength) }}
               </span>
               <span class="zt-badge" v-if="sector.ztCount > 0">
                 {{ sector.ztCount }}
@@ -45,8 +45,8 @@
               {{ sector.mainNetInflow == null ? '--' : formatMoney(sector.mainNetInflow) }}
             </span>
           </div>
-          <div class="node-progress" v-if="sector.strength">
-            <div class="progress-bar" :style="{ width: sector.strength + '%' }"></div>
+          <div class="node-progress" v-if="sector.strength != null">
+            <div class="progress-bar" :style="{ width: Math.min(100, sector.strength) + '%' }"></div>
           </div>
         </div>
 
@@ -72,8 +72,8 @@
           <h4>
             📈 {{ selectedSector.name }} 成分股
             <span class="sector-metrics">
-              <span class="badge" :class="getStrengthClass(selectedSector.strength)">
-                热度 {{ selectedSector.strength }}
+              <span class="badge" :class="deriveThemeHeatBand(selectedSector.strength)">
+                热度 {{ selectedSector.strength == null ? '--' : selectedSector.strength }}
               </span>
               <span class="badge" :class="selectedSector.change >= 0 ? 'up' : 'down'">
                 动量 {{ selectedSector.change.toFixed(0) }}
@@ -181,6 +181,7 @@ import { StockUtils } from '@/utils/common'
 import { ref, computed, onMounted, watch } from 'vue'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { themeFacade } from '@/services/theme/ThemeFacade'
+import { deriveThemeHeatBand } from '@/services/theme/stockThemeMeta'
 import {
   compareThemeStockRows,
   formatFengdanYi,
@@ -234,7 +235,7 @@ const allSectors = computed(() => {
   return themeFacade.getThemeSummaries(200).map(theme => ({
     id: theme.id,
     name: theme.name,
-    strength: theme.heatScore,
+    strength: theme.heatLevelScore,
     change: theme.momentumScore,
     mainNetInflow: theme.mainNetInflow,
     ztCount: theme.ztCount,
@@ -336,20 +337,12 @@ function setSort(field: string) {
   stockPage.value = 1
 }
 
-function getStrengthClass(strength: number): string {
-  if (strength >= 80) return 's'
-  if (strength >= 65) return 'a'
-  if (strength >= 50) return 'b'
-  if (strength >= 35) return 'c'
-  return 'd'
-}
-
-function formatStrength(strength: number): string {
-  if (strength >= 80) return 'S'
-  if (strength >= 65) return 'A'
-  if (strength >= 50) return 'B'
-  if (strength >= 35) return 'C'
-  return 'D'
+// 热度徽章（审计修复：旧函数吃 80/65/50/35 自造阈值且输入是 heatScore 绝对值，
+// v2 口径下热门题材全部挤 'S'）。统一走 heatLevelScore 相对分 + stockThemeMeta
+// deriveThemeHeatBand（80/60/40/20 五档）；缺失显示 '-' 不伪装低分。
+function formatStrengthBand(score: number | null | undefined): string {
+  if (score == null || typeof score !== 'number' || !Number.isFinite(score)) return '-'
+  return deriveThemeHeatBand(score).toUpperCase()
 }
 
 function getLianbanClass(lianban: string): string {
