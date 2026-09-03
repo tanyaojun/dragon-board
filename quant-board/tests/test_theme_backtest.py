@@ -508,3 +508,47 @@ def test_cli_exposes_theme_trend_commands() -> None:
     assert opt_args.dataset_id == "ds_theme"
     assert opt_args.method == "tpe"
     assert opt_args.no_wait is True
+
+
+# ── heatLevel 落库迁移（design §4.2/B10）：执行信号热度分量与透传按相对分口径消费 ──
+
+from backend.services.backtest_service import BacktestService, _persisted_heat_level
+
+
+def test_persisted_heat_level_consumes_heat_level_and_caliber() -> None:
+    """执行信号热度分量按 design §4.2 消费：heatLevel 优先，v2 绝对值不回退。"""
+    assert _persisted_heat_level({"heatLevel": 96.3, "heatScore": 2000}) == 96.3
+    assert _persisted_heat_level({"heatLevel": None, "heatScore": 2000}) == 0.0
+    assert _persisted_heat_level({"heatScore": 85}) == 85.0
+    assert _persisted_heat_level({"heatScore": 85, "metadata": {"factorVersion": "theme-market-v1"}}) == 85.0
+    assert _persisted_heat_level({"heatScore": 85, "heatFactorVersion": "theme-market-v2"}) == 0.0
+    assert _persisted_heat_level({"heatScore": 2000}) == 0.0
+    assert _persisted_heat_level({}) == 0.0
+    assert _persisted_heat_level(None) == 0.0
+
+
+def test_execution_signal_theme_heat_relative_caliber() -> None:
+    """B10（评审 M4）：执行信号 themeHeat 透传字段改吃 heatLevel 相对分，不再透传绝对值。"""
+    frames = [{
+        "snapshotId": "snap_b10", "timestamp": 100,
+        "tradingDate": "2026-09-03", "slotTime": "10:00",
+        "stocks": [{"code": "600001", "name": "样本", "rank": 1, "price": 10.0, "change": 5.0}],
+    }]
+    factors = [{
+        "snapshotId": "snap_b10", "themeName": "人工智能",
+        "heatScore": 2000.0, "heatLevel": 96.3,
+        "rotationState": "mainline", "crowdingRisk": 30,
+    }]
+    exposures = [{
+        "snapshotId": "snap_b10", "code": "600001", "themeName": "人工智能",
+        "role": "core", "themeContribution": 10.0, "exposureWeight": 82.0,
+    }]
+    signals = BacktestService._theme_execution_signals(frames, factors, exposures, "theme_rotation")
+    assert signals[0]["themeHeat"] == 96.3
+
+    # heatLevel 缺失 → 回退 stock.themeHeat（本例无）→ 0.0，不落绝对值
+    factors_missing = [{**factors[0], "heatLevel": None}]
+    signals_missing = BacktestService._theme_execution_signals(
+        frames, factors_missing, exposures, "theme_rotation",
+    )
+    assert signals_missing[0]["themeHeat"] == 0.0

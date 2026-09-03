@@ -1,10 +1,12 @@
 from __future__ import annotations
 import gzip
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.theme.heat_level import HEAT_CALIBER_V1, heat_caliber_of, resolve_heat_level
 from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
     BacktestEngine,
@@ -214,14 +216,36 @@ def _price_quality_diagnostics(
     }
 
 
-def _persisted_heat_level(value: object) -> float:
-    """落库 heatScore 的 0-100 相对分解释（2026-09 theme-market-v2 口径迁移）：
-    缺失或新口径绝对值（>100，KPL 人气总和落库形态）按 0 计，不伪装成满分。"""
+def _persisted_heat_level(factor: object) -> float:
+    """落库热度相对分解释（0-100，design §4.2 消费规则，2026-09 heatLevel 落库迁移）：
+
+    factor.heatLevel key 存在 → 数值（0-100）直接用，缺失（None/非法）按 0 计
+    （置信度合成项，缺失不伪装满分）；key 不存在 → 按 heatFactorVersion /
+    metadata.factorVersion 口径回退 heatScore：theme-market-v1 或未标记且 ≤100
+    有效，theme-market-v2 绝对值不回退按 0 计。"""
+    if not isinstance(factor, dict):
+        return 0.0
+    if "heatLevel" in factor:
+        numeric = _heat_score_number(factor.get("heatLevel"))
+        if numeric is None:
+            return 0.0
+        return max(0.0, min(100.0, numeric))  # clamp 与 resolve_heat_level 一致
+    numeric = _heat_score_number(factor.get("heatScore"))
+    if numeric is None or not 0.0 <= numeric <= 100.0:
+        return 0.0
+    if heat_caliber_of(factor) in ("", HEAT_CALIBER_V1):
+        return numeric
+    return 0.0
+
+
+def _heat_score_number(value: object) -> float | None:
     try:
         numeric = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return 0.0
-    return numeric if 0.0 <= numeric <= 100.0 else 0.0
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return numeric
 
 
 class BacktestService:
@@ -1237,7 +1261,7 @@ class BacktestService:
                 elif rotation_state in {"outflow"}:
                     tier = "D_EXIT_RISK"
                 role = str((exposure or {}).get("role") or stock.get("themeRole") or "")
-                heat_level = _persisted_heat_level(factor.get("heatScore"))
+                heat_level = _persisted_heat_level(factor)
                 confidence = min(100.0, max(0.0, exposure_weight or heat_level))
                 theme_risk_flags = [f"crowding:{crowding}"] if crowding >= 75 else []
                 theme_reasons = [f"lifecycle:{lifecycle}", f"strategy:{strategy_name}"]
@@ -1245,8 +1269,9 @@ class BacktestService:
                     min(100.0, max(0.0, heat_level * 0.45 + exposure_weight * 0.35 + contribution * 0.8)),
                     2,
                 )
-                # 透传展示字段：显式 None 判断，真实 0 热度不被 fallback 值顶掉
-                raw_theme_heat = factor.get("heatScore")
+                # B10（评审 M4）：透传展示字段改吃 heatLevel 相对分（0-100），不再透传
+                # 绝对值；缺失回退 stock 行 themeHeat，仍缺失按 0.0（展示合成项语义）。
+                raw_theme_heat = resolve_heat_level(factor)
                 if raw_theme_heat is None:
                     raw_theme_heat = stock.get("themeHeat")
                 if strategy_name == "leader_theme_confirmation":
@@ -1319,7 +1344,8 @@ class BacktestService:
             crowding = float(factor.get("crowdingRisk") or 0)
             item = dict(signal)
             item["mainTheme"] = theme_name
-            raw_theme_heat = factor.get("heatScore")
+            # B10：与 _theme_execution_signals 同口径，themeHeat 透传相对分
+            raw_theme_heat = resolve_heat_level(factor)
             if raw_theme_heat is None:
                 raw_theme_heat = signal.get("themeHeat")
             item["themeHeat"] = float(raw_theme_heat) if raw_theme_heat is not None else 0.0
