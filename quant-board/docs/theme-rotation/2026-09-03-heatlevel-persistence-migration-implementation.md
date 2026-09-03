@@ -70,6 +70,26 @@ Task 17 为阶段 B 收口与浏览器验收，Step 3 无修复需求，无独�
   3. 多轮浏览器会话 0 console error / 0 pageerror。
   4. 运行态 `dataLayer.getStocks()` 188/203 个股 `themeHeat` 有值（94.7~100 数值）且 `themes[].heatScore` 同源透传（188/188）；档位标签 `热门` 与数值 `heatLevelScore` 并存；缺失热度显示 `--`、无「冰/冷」伪装（tri-state 降级路径，旧数据轮验证）。
 
+## 审计修复记录（2026-09-04，code-review 逐项修复 + 题材热度分档重定义）
+
+阶段 A/B 上线后 /code-review 发现的遗留问题与用户报告的详情面板分档失效（v2 绝对值下
+"极强"恒亮），全部按 TDD 修复（专项测试不跑全量）：
+
+| # | 发现 | 修复 | 验证 |
+| --- | --- | --- | --- |
+| 1 | rotation 引擎主线 z-score 用 `resolve_heat_level(r) or 0.0` 伪造 0：全缺失截面 `robust_z(0, [])` 恒 0.0，并列排序按 key 顺序任意产生 rank 1≤3，凭空评出主线（实证：热度缺失题材拿到 `rotation_state='mainline'`） | `engine.py` heat_zs 剔除式构造：`resolve_heat_level` 返回 None 的题材不进 `heat_zs`，z_rank 兜底 999 永不满足 `min_mainline_z_rank`；all_heats 本就排除 None 不变 | 新增 `test_engine_missing_heat_not_fabricated_into_mainline_z_rank`（先红：BKAI 拿到 mainline；修复后绿），rotation 专项 6 passed |
+| 2 | `backtest_service._persisted_heat_level` 重复实现 §4.2 口径三分支（~20 行 vs `resolve_heat_level` 一行委托） | 收缩为薄包装：非 dict 输入与 `None → 0.0` 兜底（置信度合成项语义），口径规则唯一实现回到 `heat_level.py`；同步清理 `HEAT_CALIBER_V1`/`heat_caliber_of`/`math` 死 import | `test_persisted_heat_level_consumes_heat_level_and_caliber` 等回归通过，backtest+rotation 专项 38 passed |
+| 3 | `resolvePrimaryStockTheme` 无 0-100 区间守卫：v2 绝对值 heatScore（如 615949）穿透为 `stock.themeHeat`（实证：测试红 `expected null, received 615949`），0-100 消费端饱和 | 加 `0 ≤ heatScore ≤ 100` 区间守卫，超界按缺失 null（与 `StockHotnessCalculator` M5 守卫同口径）；主链 `syncStocks` 的 heatScore 本就是相对分（ThemeStockProjector 迁移后），守卫防其他穿透路径 | 新增 3 个用例（红→绿），stockThemeMeta 专项 10 passed |
+| 4 | 三处孤儿分档未随 12 处消费点迁移：`SectorDetail`（极强/强/中/弱 @4000/3000/2000/1000 绝对值）、`ThemeCorrelationPanel.formatStrength`（S/A/B/C/D @4000/3000/2000/1000）、`SectorStocksTree`（S/A/B/C/D @80/65/50/35 但输入绝对值）→ **用户报告的"热度值>100 全部显示极强"即此三处** | 三组件全部切 `heatLevelScore` 相对分 + 新共享函数 `deriveThemeHeatBand`（80/60/40/20 五档，`stockThemeMeta.ts`）；SectorDetail 档位文字复用 `deriveThemeHeatLevel`（热门/活跃/温/冷/冰）；徽章 S/A/B/C/D 由 band.toUpperCase() 派生；缺失显示 `--`/`'-'`（数值卡）/灰（分档），进度条 `Math.min(100, …)` 防溢出；删除 5 个重复阈值函数 | 题材数据链专项 7 文件 40 passed + `vue-tsc` 零错误；修复后 615949 绝对值走热度数值展示（人气量级），档位徽章按 heatLevelScore（0-100）五档显示 |
+| 5 | `ThemeFacade` heatIcon/heatColor 手写三元与统一档位漂移（缺失落 '❄️' 蓝色冷档伪装） | 统一走 `deriveThemeHeatMeta`：缺失 → `level:'' / icon:'–' / color:'#95a5a6'` 中性灰（当前无 UI 消费方，诚实性顺手修） | `deriveThemeHeatMeta` null 守卫测试（红→绿）覆盖；题材专项 40 passed |
+| 6 | `deriveThemeHeatMeta` 无 null 守卫（TS 签名 `number` 但运行时 null 落 '冰' 分支） | 签名放宽 `number \| null \| undefined`，缺失返回中性灰，不伪装真实冷档 | 同上（红→绿） |
+
+统一档位出口（本次新增/固化）：`deriveThemeHeatBand`（s/a/b/c/d 样式档）与
+`deriveThemeHeatLevel`（热门/活跃/温/冷/冰文字档）、`deriveThemeHeatMeta`（icon/color）
+同阈值 80/60/40/20，位于 `src/services/theme/stockThemeMeta.ts`；组件不得再各自维护
+绝对值阈值。heatScore 绝对值保留为展示数字（人气量级口径）与绝对值阈值场景
+（DragonBreathPanel 3000/1500）。
+
 ## 首日人工验证清单（design §6，待上线日填写）
 
 - [ ] `snapshot_sector_rows` 新落库 hot_theme 行 heatLevel 为数值且与 rank 百分位一致。
