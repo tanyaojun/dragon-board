@@ -1345,7 +1345,7 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 ### `GET /api/themes/heat?force=false`
 
-返回基于 MongoDB 全市场题材映射计算的 `theme-market-v1` factors。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段来自两层来源：① 种子层（akshare 东财个股资金流排行 `eastmoney_seed`，主力净流入 = 超大单 + 大单）**默认停用**（`QUANT_BOARD_THEME_FUND_SEED_ENABLED=false`），冷启动改从 MongoDB `fund_flow_l2` 恢复最近交易日 L2 行（零第三方请求）；② 盘中由 `mainMonitorDetail`（`ths_main_monitor`，L2 口径）按展示池逐票校准覆盖。前端按 source 优先级合并展示（`eastmoney_seed`/`ths_web_seed` < `ths_main_monitor`），低 rank 不覆盖高 rank。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。
+返回基于 MongoDB 全市场题材映射计算的 `theme-market-v2` factors（`heatScore` 为 KPL 人气总和绝对值；自 2026-09-03 起每个 factor 另带 `heatLevel`——0-100 rank 百分位相对分，热度缺失时为 `null`，不伪装 0；响应顶层与 factor metadata 携带 `factorVersion` 口径标记）。基础行情固定使用腾讯批量行情（50 只/批、有限并发、默认整次预算 90 秒）；资金字段来自两层来源：① 种子层（akshare 东财个股资金流排行 `eastmoney_seed`，主力净流入 = 超大单 + 大单）**默认停用**（`QUANT_BOARD_THEME_FUND_SEED_ENABLED=false`），冷启动改从 MongoDB `fund_flow_l2` 恢复最近交易日 L2 行（零第三方请求）；② 盘中由 `mainMonitorDetail`（`ths_main_monitor`，L2 口径）按展示池逐票校准覆盖。前端按 source 优先级合并展示（`eastmoney_seed`/`ths_web_seed` < `ths_main_monitor`），低 rank 不覆盖高 rank。服务端复用最近行情快照，资金 version 变化只重算题材资金聚合，不重新请求全市场行情。`force=true` 跳过行情缓存。公开响应不包含全市场逐股 quote/fund map。heatLevel 解释与消费统一走 `backend/analysis/theme/heat_level.py` `resolve_heat_level`。
 
 ⚠️ 口径说明：运行态资金列当前由两层组成——种子层取东财排行接口主力净流入（`eastmoney_seed`，= 超大单 + 大单净流入，与 L2 `mainMonitorDetail` 的 `mainbuy − mainsell` 近似，实盘验证差异远小于同花顺网页口径）；权威层取 `mainMonitorDetail` L2 口径（`ths_main_monitor`）。**历史快照/旧缓存中的 `ths_web_seed` 行是同花顺网页口径**（`净额 = 主力流入 − 主力流出`），该口径与 L2 **不等价**——同一交易日同一只票两者数值甚至符号都可能不同（实测 300720 分别为 +1.245 亿 与 −0.831 亿）。因此运行态资金字段与历史快照中旧口径的 `zlje/mainNetInflow` 不可直接混算或跨口径比较。
 

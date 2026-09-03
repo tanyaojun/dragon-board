@@ -84,11 +84,18 @@ subagent 审计（H1/M1-M4/L1-L5）后已修复：
 
 ## 残留 TODO（后续迁移）
 
+> **2026-09-03 全部收口**：以下 5 项已由 `2026-09-03-heatlevel-persistence-migration-design.md` / `-plan.md` 落地，实施记录见 `2026-09-03-heatlevel-persistence-migration-implementation.md`。
+
 1. **heatLevel 落库**：sector rows / hotThemes 投影（`snapshot_collector/service.py factor_to_sector`、`snapshot_derivation/projection.py`）目前只落绝对值 heatScore；落库 heatLevel（rank 百分位，持久层字段已存在）后，momentum/rotation 可恢复完整热度动量而非当前的"绝对值按缺失降级"。
+   ✅ 已完成（2026-09-03）：collector sector row tri-state 落库（`bc7a775`）、派生投影透传（`a02e787`）、Mongo hotThemes 投影白名单放行（`7389e47`）；统一消费走 `backend/analysis/theme/heat_level.py` `resolve_heat_level`。
 2. **momentum 量纲重校准**：`/15.0` 归一、`drawdown/20.0`、`THEME_JUMP_HEAT_DELTA=15` 按 0-100 校准；heatLevel 落库后重新核定。
+   ✅ 已完成（2026-09-03）：momentum 序列/角色判定消费 heatLevel + 量纲常量参数化（D3，`b8e8da8`，`THEME_MOMENTUM_VERSION` 同批 bump）。
 3. **口径标记**：落库行携带 factorVersion/heat 口径 metadata，替代 `>100` 启发式，消除 M1 边界窗口与混合窗口歧义。
+   ✅ 已完成（2026-09-03）：sector 行 `metadata.factorVersion` 口径标记 + collector 落库（`bc7a775`）、前端快照 context 行每帧统一标记（B9，`21ee7b6`）；`>100` 启发式由 design §4.2 三分支规则替代（`heat_level.py`）。
 4. **前端消费点确认**（同量级阈值问题）：`src/config/factors.ts` themeScore 的 `Math.min(100)`、`src/services/hotness/StockHotnessCalculator.ts`、`src/services/dragon/BattlefieldBuilder.ts`、`DataLayer.ts` 的 `themeHeat ?? 0`（缺失伪装 0）。DragonBreathPanel 3000/1500 阈值与新口径同量级，无需改。
+   ✅ 已完成（2026-09-03）：前端数据链切换 heatLevel 相对分口径、缺失不伪装 0（`e217a7a`）；12 处 0-100 阈值消费点切换（`02392e0`）；DragonBreathPanel 3000/1500 绝对值阈值按预期保留不动。
 5. **golden 合同**：v14 起把 `heatLevel` 纳入 trend golden fixture。
+   ✅ 已完成（2026-09-03）：trend golden bump v14（`57af939`，v13 不可变）；heat golden bump v3（`e51219b`，v2 不可变）。
 
 ## 验证
 

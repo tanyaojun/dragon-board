@@ -323,6 +323,13 @@ RankTrend 信号列随股票行保存：`directionSignal/Confidence`、`accelera
 outflowThemes/suggestion/computedAt/algorithmVersion/evidence`，供前端、回测与
 `theme_trend/theme_support/theme_momentum` 同源读取。
 
+题材热度双字段（2026-09-03 heatLevel 迁移）：hot_theme 行 `heatScore` 为 KPL 人气绝对值
+（`theme-market-v2` 口径），`heatLevel` 为 0-100 rank 百分位相对分（写侧 tri-state：数值 /
+显式 `null` / 缺 key；历史字符串档位标签不再写入）。行级口径标记为 `metadata.factorVersion`。
+所有消费端（momentum/rotation/backtest/派生投影/前端）统一走共享模块
+`backend/analysis/theme/heat_level.py` 的 `resolve_heat_level` 解释热度（存在直接用、缺失按
+`heatScore` + factorVersion 口径回退），不得用 `>100` 启发式或直接读裸字段。
+
 ### golden_ranktrend_cases
 
 MongoDB 模式下保存在 `golden_ranktrend_cases` 集合，保存跨语言验收输入和期望输出。Python 生产输出作为事实标准，TS 导出样本仅用于兼容性回归。
@@ -409,6 +416,8 @@ V12 Phase 1 已落地 ThemeTrend 专用研究归一化表，写入 `quant_board_
 - `theme_quality_reports`：数据集级质量报告，记录门禁结果（passed/severity/researchGrade）、问题清单、警告清单和统计信息。
 
 以上表均保留完整溯源链：`dataset_id`、`snapshot_id`、`snapshot_type`、`trading_date`、`slot_time`、`strategy_version`、`config_hash`、`random_seed`。
+
+`theme_factor_frames` factor 文档自 2026-09-03 起携带 `heatLevel`（0-100 rank 百分位相对分，缺失 `null`）与 `heatFactorVersion`（热度口径标记）；热度解释统一走 `backend/analysis/theme/heat_level.py` 共享模块（`resolve_heat_level`），trend/momentum/rotation/backtest 消费点均已接入。实施记录见 `docs/theme-rotation/2026-09-03-heatlevel-persistence-migration-implementation.md`。
 
 V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现有 `backtest_runs`、`backtest_trades`、`backtest_equity_curve`、`backtest_signals`、`backtest_quality_reports` 和 `optimization_runs`。通过 `strategy_name=theme_trend_candidate` 或 `strategy_name=theme_confluence_candidate` 区分研究链。
 

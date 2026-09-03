@@ -32,6 +32,7 @@
 - `hotlist_sentiment` 已作为 MongoDB 研究集合接入，唯一业务键为 `datasetId + snapshotType + tradingDate`；历史回填脚本 `scripts/backfill_hotlist_sentiment.py` 默认 dry-run，显式 `--apply` 才会写入。
 - MongoDB 模式下 `/api/operations/after-market-once` 和 CLI `after-market-once` 不再调用旧 archive/prune 链路，只执行 `hotlistSentiment` 日终步骤。
 - 后端采集器已补齐股票行排名事实字段和 frame `metadata.rankProvenance`。历史 `source=quantboard_backend_collector` 数据中可精确恢复的 `compRank=rank` 已回填 271 个槽位、58581 行，`migration_audit` 审计 ID 为 `rank-field-backfill-31b03a5b1f1a4707aadcb407f623914c`；缺少历史平台原始名次的 `platforms/avgRank/avgRankNum` 不做推测回填。
+- 2026-09-03 heatLevel 落库迁移已实施（`snapshot_sector_rows.heatLevel` 数值 tri-state、stock row `themeHeat` 相对分口径、研究集合 factor 文档 `heatLevel/heatFactorVersion`、SQL/Supabase varchar 转文本），统一消费走 `backend/analysis/theme/heat_level.py`。实施记录见 `docs/theme-rotation/2026-09-03-heatlevel-persistence-migration-implementation.md`。
 
 2026-05-12 停服窗口已执行：
 
@@ -265,6 +266,8 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 
 排名事实字段 `rank/compRank/platforms/avgRank/avgRankNum` 和 `emRank/thsRank/kplRank/tdxRank/xqRank/clsRank/tgbRank/dzhRank` 必须随行保存。对应 frame 的 `metadata.rankProvenance` 保存公式版本、当槽八平台总行数、平台权重、字段映射和缺榜默认名次；不得用当前榜单容量替换历史公式输入。
 
+`themeHeat`（2026-09-03 heatLevel 迁移，B7）：个股主题材热度改为 0-100 rank 百分位相对分或缺失（`null`），不再落 KPL 人气绝对值（绝对值仍在关联 `snapshot_sector_rows.heatScore` 与 factor 文档）。值由 `backend/analysis/theme/heat_level.py` 的 `resolve_heat_level(sector)` 派生，不加行级口径标记；口径歧义由同帧 sector 行 `metadata.factorVersion` 消解。
+
 `snapshot_sector_rows`
 
 - unique `{ datasetId: 1, rowId: 1 }`
@@ -273,6 +276,8 @@ MongoDB 正式字段使用 camelCase，保持 Dragon Board 和 QuantBoard API �
 - `{ datasetId: 1, entityType: 1, entityKey: 1, tradingDate: 1 }`
 - `{ datasetId: 1, entityType: 1, entityKey: 1, type: 1, tradingDate: 1, timestamp: 1 }`
 - `{ datasetId: 1, type: 1, tradingDate: 1, timestamp: 1, rank: 1 }`
+
+`heatLevel`（2026-09-03 heatLevel 迁移）：hot_theme 行落库 0-100 rank 百分位相对分。写侧 tri-state——数值照写、热度缺失写显式 `null`、无值不写 key；历史字符串档位标签（"热门"等）不再写入。消费端不得直接读该字段做口径判断：统一走 `backend/analysis/theme/heat_level.py` `resolve_heat_level`（key 存在直接用；缺失按 `heatScore` 与 `metadata.factorVersion` 口径回退）。行级口径标记为 `metadata.factorVersion`（`theme-market-v2` 起 `heatScore` 为 KPL 人气绝对值、`heatLevel` 为 rank 百分位相对分）。
 
 ### 研究集合
 
@@ -343,6 +348,8 @@ ThemeTrend 研究集合：
 - `theme_stock_exposures`: unique `{ datasetId: 1, snapshotId: 1, strategyVersion: 1, configHash: 1, code: 1, themeId: 1 }`，普通索引 `{ datasetId: 1, code: 1, tradingDate: 1 }`
 - `theme_signals`: unique `{ datasetId: 1, snapshotId: 1, strategyVersion: 1, configHash: 1, themeId: 1 }`，普通索引 `{ datasetId: 1, themeId: 1, tradingDate: 1 }`
 - `theme_quality_reports`: unique `{ datasetId: 1, snapshotType: 1, strategyVersion: 1, configHash: 1, randomSeed: 1 }`，普通索引 `{ datasetId: 1, snapshotType: 1, createdAt: -1 }`
+
+2026-09-03 heatLevel 迁移：`theme_factor_frames` factor 文档新增 `heatLevel`（0-100 rank 百分位相对分，缺失为 `null`）与 `heatFactorVersion`（热度口径标记，如 `theme-market-v2`）；`theme_stock_exposures` 的 `themeHeat` 同步改为相对分或缺失语义。消费统一走 `backend/analysis/theme/heat_level.py` `resolve_heat_level`，不得用 `>100` 启发式判口径。
 
 ### 题材和股票基础集合
 
