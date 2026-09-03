@@ -48,6 +48,8 @@ export interface ThemeFactorSnapshot {
   snapshotId?: string
   timestamp: number
   heatScore: number
+  /** 0-100 rank 百分位相对分（2026-09 口径迁移）；null = 热度缺失，不伪装 0 */
+  heatLevel: number | null
   momentumScore: number
   breadthScore: number
   fundScore: number | null
@@ -73,6 +75,7 @@ export type ThemeStockRole = 'leader' | 'core' | 'follower' | 'independent' | 'n
 export interface ThemeHeatApiFactor
   extends Omit<ThemeFactorSnapshot, 'heatScore' | 'fundScore' | 'netInflow'> {
   heatScore: number | null
+  heatLevel: number | null
   fundScore: number | null
   netInflow?: number | null
   mainNetInflow: number | null
@@ -110,6 +113,8 @@ export interface ThemePanelSummary {
   heatIcon: string
   heatColor: string
   heatLevel: string
+  /** 0-100 相对分；null = 热度缺失（12 处阈值消费点统一输入） */
+  heatLevelScore: number | null
   momentumScore: number
   breadthScore: number
   fundScore: number | null
@@ -148,7 +153,8 @@ export interface ThemeStockExposure {
   themeName: string
   exposureWeight: number
   source: 'static' | 'realtime' | 'mixed'
-  themeScore: number
+  /** = 主导 factor 的 heatLevel 相对分；null = 热度缺失，不伪装 0 */
+  themeScore: number | null
   role: ThemeStockRole
   roleScore: number
   themeContribution: number

@@ -11,7 +11,8 @@ export interface StockThemeLike {
 
 export interface StockThemeSnapshot {
   mainTheme?: string
-  themeHeat: number
+  /** 主题材 heatLevel 相对分（0-100）；null = 热度缺失或无题材，不伪装 0 */
+  themeHeat: number | null
   themeLevel: string
 }
 
@@ -31,7 +32,10 @@ function themeSourceWeight(source?: string): number {
   return 0
 }
 
-export function deriveThemeHeatLevel(score: number): string {
+export function deriveThemeHeatLevel(score: number | null | undefined): string {
+  // JS 陷阱（评审 H-2d）：hasFiniteNumber(null) === true（Number(null) === 0），
+  // 旧写法会把缺失热度判成 0 度"冰"；必须显式 null/undefined 判断，缺失返回 ''。
+  if (score == null || typeof score !== 'number' || !Number.isFinite(score)) return ''
   if (score >= 80) return '热门'
   if (score >= 60) return '活跃'
   if (score >= 40) return '温'
@@ -69,14 +73,17 @@ export function sortStockThemes<T extends StockThemeLike>(themes: T[]): T[] {
 export function resolvePrimaryStockTheme(themes: StockThemeLike[]): StockThemeSnapshot {
   const [primaryTheme] = sortStockThemes(themes).filter((theme) => String(theme?.name || '').trim())
   if (!primaryTheme) {
-    return {
-      mainTheme: undefined,
-      themeHeat: 0,
-      themeLevel: '冷',
-    }
+    return { mainTheme: undefined, themeHeat: null, themeLevel: '' }
   }
 
-  const themeHeat = normalizeThemeHeatScore(primaryTheme.heatScore)
+  // 同一陷阱：hasFiniteNumber(null) === true 会让 null 经 normalizeThemeHeatScore
+  // 伪装成 0，必须显式守卫，缺失热度返回 null 而非 0。
+  const themeHeat =
+    primaryTheme.heatScore != null &&
+    typeof primaryTheme.heatScore === 'number' &&
+    Number.isFinite(primaryTheme.heatScore)
+      ? normalizeThemeHeatScore(primaryTheme.heatScore)
+      : null
   return {
     mainTheme: String(primaryTheme.name || '').trim() || undefined,
     themeHeat,

@@ -42,3 +42,21 @@ describe('stockThemeMeta', () => {
     expect(deriveThemeHeatLevel(10)).toBe('冰')
   })
 })
+
+describe('deriveThemeHeatLevel missing handling', () => {
+  it('returns empty label for missing heat (not coldest tier)', () => {
+    // 评审 H-2d：hasFiniteNumber(null) === true（Number(null) === 0），
+    // 旧实现会把 null 判成 0 度"冰"；必须返回空标签表示缺失。
+    expect(deriveThemeHeatLevel(null)).toBe('')
+    expect(deriveThemeHeatLevel(undefined)).toBe('')
+    expect(deriveThemeHeatLevel(Number.NaN)).toBe('')
+  })
+})
+
+describe('resolvePrimaryStockTheme missing heat', () => {
+  it('keeps themeHeat null when primary theme has no heatScore (not 0)', () => {
+    const snap = resolvePrimaryStockTheme([{ id: 'AI', name: '人工智能', heatScore: null }])
+    expect(snap.themeHeat).toBeNull()
+    expect(snap.themeLevel).toBe('')
+  })
+})

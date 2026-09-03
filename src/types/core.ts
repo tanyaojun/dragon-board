@@ -88,7 +88,7 @@ export interface Stock {
   limitUpReason?: string
   fundPenetration?: number
   mainTheme?: string
-  themeHeat?: number
+  themeHeat?: number | null
   themeLevel?: string
   rankChange?: number
   candidatePoolStatus?: FusionStrategyState

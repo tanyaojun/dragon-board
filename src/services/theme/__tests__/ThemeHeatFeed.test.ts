@@ -17,6 +17,7 @@ const apiSnapshot: ThemeHeatApiSnapshot = {
       source: 'market_aggregate',
       timestamp: 1782018300000,
       heatScore: 88,
+      heatLevel: 88,
       momentumScore: 90,
       breadthScore: 80,
       fundScore: null,
@@ -51,6 +52,7 @@ const apiSnapshot: ThemeHeatApiSnapshot = {
       source: 'market_aggregate',
       timestamp: 1782018300000,
       heatScore: null,
+      heatLevel: null,
       momentumScore: 0,
       breadthScore: 0,
       fundScore: null,
@@ -181,6 +183,27 @@ describe('ThemeHeatFeed', () => {
     expect(api.getThemeHeatStocks).toHaveBeenCalledTimes(1)
 
     feed.clear()
+  })
+
+  it('passes heatLevel through to runtime factors and keeps missing as null', async () => {
+    const feed = new ThemeHeatFeed({
+      getThemeHeat: async () => ({
+        data: {
+          ...apiSnapshot,
+          factors: [
+            { ...apiSnapshot.factors[0], heatLevel: 96.3 },
+            // 覆盖 rankEligible/heatScore 使其通过 getRuntimeFactors 过滤器，只留 heatLevel 缺失
+            { ...apiSnapshot.factors[1], rankEligible: true, heatScore: 30 },
+          ],
+        },
+      }),
+      getThemeHeatStocks: async () => ({ data: { stocks: [] } }),
+    } as any)
+    await feed.refresh({ force: true })
+    const [ai, low] = feed.getRuntimeFactors()
+    expect(ai.heatLevel).toBe(96.3)
+    expect(low.heatLevel).toBeNull()
+    feed.destroy()
   })
 })
 

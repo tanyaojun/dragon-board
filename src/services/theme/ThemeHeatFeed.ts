@@ -86,6 +86,7 @@ function toRuntimeFactor(factor: ThemeHeatApiFactor, computedAt: number): ThemeF
     snapshotId: factor.snapshotId,
     timestamp: finite(factor.timestamp, computedAt),
     heatScore,
+    heatLevel: nullableFinite(factor.heatLevel),
     momentumScore: finite(factor.momentumScore),
     breadthScore: finite(factor.breadthScore),
     fundScore,

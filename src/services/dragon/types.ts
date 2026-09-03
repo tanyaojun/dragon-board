@@ -84,7 +84,7 @@ export interface ReviewHotStock {
   reason?: string
   isNew?: boolean
   mainTheme?: string
-  themeHeat?: number
+  themeHeat?: number | null
   themeLevel?: string
 }
 

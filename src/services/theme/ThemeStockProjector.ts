@@ -22,9 +22,12 @@ function roleFor(
 
   const leadStatus = String((stock as any)?.leadStatus || '')
   if (leadStatus.includes('龙')) return 'leader'
-  if (factor.heatScore >= 70 && toFiniteNumber(stock?.change) >= 5) return 'core'
-  if (factor.heatScore >= 45 && toFiniteNumber(stock?.change) > 0) return 'follower'
-  if (factor.heatScore < 20 || toFiniteNumber(stock?.change) < -5) return 'noise'
+  // 热度阈值（70/45/20）消费 heatLevel 相对分（0-100，后端 rank 百分位）。
+  // 注意 JS 陷阱：null < 20 === true，必须显式 != null；缺失热度只按涨跌判定 noise。
+  const heat = factor.heatLevel
+  if (heat != null && heat >= 70 && toFiniteNumber(stock?.change) >= 5) return 'core'
+  if (heat != null && heat >= 45 && toFiniteNumber(stock?.change) > 0) return 'follower'
+  if ((heat != null && heat < 20) || toFiniteNumber(stock?.change) < -5) return 'noise'
   return 'independent'
 }
 
@@ -48,7 +51,7 @@ function reasonsFor(factor: ThemeFactorSnapshot, role: ThemeStockRole): string[]
   if (factor.rotationState === 'mainline') reasons.push('题材处于主线')
   else if (factor.rotationState === 'inflow') reasons.push('题材资金流入')
   else if (factor.rotationState === 'quick') reasons.push('题材快速轮动')
-  if (factor.heatScore >= 70) reasons.push('题材热度强')
+  if ((factor.heatLevel ?? 0) >= 70) reasons.push('题材热度强')
   if (factor.leadershipScore >= 55) reasons.push('题材有龙头带动')
   if (factor.correlationScore >= 65) reasons.push('板块联动较强')
   if (factor.crowdingRisk >= 55) reasons.push('题材拥挤风险偏高')
@@ -71,7 +74,8 @@ function buildExposure(
   const exposureWeight =
     role === 'leader' ? 1 : role === 'core' ? 0.82 : role === 'follower' ? 0.62 : role === 'independent' ? 0.38 : 0.15
   const themeContribution = clamp(
-    round((factor.heatScore * 0.1 + stockRoleScore * 0.08 + factor.persistenceScore * 0.03 - riskPenalty) * exposureWeight, 1),
+    // 热度分量消费 heatLevel 相对分；加权合成项缺失→0（不伪装，仅参与加权）
+    round(((factor.heatLevel ?? 0) * 0.1 + stockRoleScore * 0.08 + factor.persistenceScore * 0.03 - riskPenalty) * exposureWeight, 1),
     0,
     MAX_THEME_CONTRIBUTION,
   )
@@ -84,7 +88,7 @@ function buildExposure(
     themeName: factor.themeName,
     exposureWeight: round(exposureWeight, 2),
     source: sourceFor(factor, stockThemeIds),
-    themeScore: factor.heatScore,
+    themeScore: factor.heatLevel,
     role,
     roleScore: stockRoleScore,
     themeContribution,
@@ -130,7 +134,7 @@ export function projectThemeStockExposures(
       exposures.sort(
         (left, right) =>
           right.themeContribution - left.themeContribution ||
-          right.themeScore - left.themeScore ||
+          (right.themeScore ?? 0) - (left.themeScore ?? 0) ||
           left.themeName.localeCompare(right.themeName, 'zh-CN'),
       ),
     )

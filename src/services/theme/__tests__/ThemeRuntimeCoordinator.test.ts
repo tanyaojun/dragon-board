@@ -14,6 +14,7 @@ function feedFactor(overrides: Record<string, unknown> = {}): any {
     source: 'market_aggregate',
     timestamp: 1713751200000,
     heatScore: 80,
+    heatLevel: 80,
     momentumScore: 60,
     breadthScore: 60,
     fundScore: 60,
@@ -144,8 +145,19 @@ describe('ThemeRuntimeCoordinator', () => {
 
     expect(result.syncedStockCount).toBe(1)
     expect(stock.mainTheme).toBe('人工智能')
-    expect(stock.themeHeat).toBeGreaterThan(0)
+    expect(stock.themeHeat).toBe(80)
     expect(stock.themes?.[0]?.themeContribution).toBeGreaterThanOrEqual(0)
+  })
+
+  it('propagates missing theme heat without disguising zero', () => {
+    dataLayer.setMergedStocks([{ code: '000001', name: '样本一', change: 10 } as any])
+    vi.mocked(themeHeatFeed.getRuntimeFactors).mockReturnValue([feedFactor({ heatLevel: null })])
+
+    refreshRuntime({ source: 'test', context: context(), syncStocks: true, emitAlerts: false })
+    const stock = dataLayer.getStock('000001') as any
+
+    expect(stock.themeHeat).toBeUndefined()
+    expect(stock.themeLevel).toBeUndefined()
   })
 
   it('keeps facade read models in sync when refreshing through refreshRuntime', () => {

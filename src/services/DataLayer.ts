@@ -282,7 +282,7 @@ class DataLayer {
       code: string
       themes: any[]
       mainTheme?: string
-      themeHeat?: number
+      themeHeat?: number | null
       themeLevel?: string
     }>,
   ) {
@@ -296,8 +296,9 @@ class DataLayer {
       if (stock) {
         stock.themes = themes
         stock.mainTheme = mainTheme || undefined
-        stock.themeHeat = themeHeat ?? 0
-        stock.themeLevel = themeLevel || '冷'
+        // 热度缺失保持 undefined（不伪装 0/'冷'，2026-09 heatLevel 口径迁移）
+        stock.themeHeat = themeHeat ?? undefined
+        stock.themeLevel = themeLevel || undefined
         stockMap.set(code, stock)
         touchedMergedStocks = true
       }

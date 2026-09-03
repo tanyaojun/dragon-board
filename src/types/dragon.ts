@@ -92,7 +92,7 @@ export interface LeaderInfo {
     heatScore?: number
     heatLevel?: string
   } | null
-  themeHeat: number
+  themeHeat: number | null
   themeLevel: string
 
   sentimentInfo?: {

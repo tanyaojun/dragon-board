@@ -111,12 +111,14 @@ function syncStocks(exposures: ThemeExposureProjection): number {
   const updates = Array.from(exposures.byCode.entries()).map(([code, items]) => {
     const sorted = [...items].sort((a, b) => b.themeContribution - a.themeContribution)
     const main = sorted[0]
+    // themeHeat = 主题材 heatLevel 相对分（0-100）或缺失（undefined，不伪装 0）
+    const mainHeat = main?.themeScore ?? undefined
     return {
       code,
       themes: sorted.map((exposure) => ({
         id: exposure.themeId,
         name: exposure.themeName,
-        heatScore: exposure.themeScore,
+        heatScore: exposure.themeScore ?? undefined,
         role: exposure.role,
         roleScore: exposure.roleScore,
         exposureWeight: exposure.exposureWeight,
@@ -125,8 +127,8 @@ function syncStocks(exposures: ThemeExposureProjection): number {
         reasons: exposure.reasons,
       })),
       mainTheme: main?.themeName,
-      themeHeat: main?.themeScore || 0,
-      themeLevel: deriveThemeHeatLevel(main?.themeScore || 0),
+      themeHeat: mainHeat,
+      themeLevel: deriveThemeHeatLevel(main?.themeScore ?? null),
     }
   })
   if (updates.length) dataLayer.updateStockThemes(updates)

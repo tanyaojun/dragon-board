@@ -220,7 +220,7 @@ export interface MergedStock {
   limitUpReason?: string
   fundPenetration?: number
   mainTheme?: string
-  themeHeat?: number
+  themeHeat?: number | null
   themeLevel?: string
   algorithmScore?: number
   algorithmVersion?: number

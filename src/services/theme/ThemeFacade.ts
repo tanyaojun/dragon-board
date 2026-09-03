@@ -275,7 +275,10 @@ export function toHotThemeSummary(
   factor: ThemeFactorSnapshot,
   apiFactor?: ThemeHeatApiFactor,
 ): ThemePanelSummary & Record<string, unknown> {
-  const heatLevel = deriveThemeHeatLevel(factor.heatScore)
+  // heatLevelScore：0-100 相对分（12 处阈值消费点统一输入）；heatScore 保持 KPL
+  // 人气绝对值（人气量级展示/排序专用，如 DragonBreathPanel 3000/1500）。
+  const heatLevelScore = factor.heatLevel ?? null
+  const heatLevel = deriveThemeHeatLevel(heatLevelScore)
   const apiNetInflow = apiFactor
     ? Object.prototype.hasOwnProperty.call(apiFactor, 'netInflow')
       ? apiFactor.netInflow ?? null
@@ -286,9 +289,10 @@ export function toHotThemeSummary(
     name: factor.themeName,
     rank: factor.rank,
     heatScore: factor.heatScore,
-    heatIcon: factor.heatScore >= 80 ? '🔥' : factor.heatScore >= 60 ? '⚡' : factor.heatScore >= 40 ? '🌟' : '❄️',
-    heatColor: factor.heatScore >= 80 ? '#ff4757' : factor.heatScore >= 60 ? '#f39c12' : '#3498db',
+    heatIcon: heatLevelScore == null ? '❄️' : heatLevelScore >= 80 ? '🔥' : heatLevelScore >= 60 ? '⚡' : heatLevelScore >= 40 ? '🌟' : '❄️',
+    heatColor: heatLevelScore != null && heatLevelScore >= 80 ? '#ff4757' : heatLevelScore != null && heatLevelScore >= 60 ? '#f39c12' : '#3498db',
     heatLevel,
+    heatLevelScore,
     stockCount: factor.stockCount,
     ztCount: factor.ztCount,
     leaderCount: factor.leaderCount,
@@ -317,7 +321,7 @@ export function toStockTheme(exposure: ThemeStockExposure) {
     id: exposure.themeId,
     name: exposure.themeName,
     source: exposure.source,
-    heatScore: exposure.themeScore,
+    heatScore: exposure.themeScore ?? undefined,
     heatLevel: deriveThemeHeatLevel(exposure.themeScore),
     correlation: exposure.roleScore / 100,
     exposureWeight: exposure.exposureWeight,
