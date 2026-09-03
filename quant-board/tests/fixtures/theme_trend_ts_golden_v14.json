@@ -1,0 +1,232 @@
+{
+  "caseId": "theme_trend_ts_runtime_golden_v14",
+  "source": "ts-runtime-replay",
+  "snapshotType": "half_hour",
+  "input": {
+    "frames": [
+      {
+        "snapshotId": "half_hour:2026-04-22:10:00",
+        "timestamp": 1782018300000,
+        "tradingDate": "2026-04-22",
+        "slotTime": "10:00",
+        "stocks": [
+          {
+            "code": "000001",
+            "name": "样本一",
+            "change": 10,
+            "amount": 100000000,
+            "volumeRatio": 3,
+            "boardHeight": 2,
+            "hotlistLeader": true,
+            "leadStatus": "龙一"
+          },
+          {
+            "code": "000002",
+            "name": "样本二",
+            "change": 5,
+            "amount": 100000000,
+            "volumeRatio": 2
+          },
+          {
+            "code": "000003",
+            "name": "样本三",
+            "change": -2,
+            "amount": 50000000,
+            "volumeRatio": 1
+          },
+          {
+            "code": "000004",
+            "name": "样本四",
+            "change": 1,
+            "amount": 50000000,
+            "volumeRatio": 1
+          }
+        ],
+        "themeContext": {
+          "mappingVersion": "theme-v8-test",
+          "themes": [
+            {
+              "id": "AI",
+              "name": "人工智能"
+            },
+            {
+              "id": "POWER",
+              "name": "电力"
+            }
+          ],
+          "themeStocks": {
+            "AI": [
+              "000001",
+              "000002"
+            ],
+            "POWER": [
+              "000003",
+              "000004"
+            ]
+          },
+          "stockThemes": {
+            "000001": [
+              "AI"
+            ],
+            "000002": [
+              "AI"
+            ],
+            "000003": [
+              "POWER"
+            ],
+            "000004": [
+              "POWER"
+            ]
+          },
+          "funds": {
+            "000001": {
+              "code": "000001",
+              "mainNetInflow": 10000000
+            },
+            "000002": {
+              "code": "000002",
+              "mainNetInflow": -5000000
+            }
+          },
+          "previousFactors": {
+            "AI": {
+              "heatScore": 1800,
+              "consecutiveHotBuckets": 2
+            }
+          },
+          "rotationAnalysis": {
+            "marketPhase": "rising",
+            "mainLines": [
+              {
+                "themeId": "AI",
+                "themeName": "人工智能",
+                "persistentDays": 3
+              }
+            ],
+            "quickRotation": [],
+            "inflowThemes": [],
+            "outflowThemes": []
+          },
+          "correlations": {
+            "AI": {
+              "overallCorrelation": 1,
+              "stocks": {
+                "000001": {
+                  "role": "leader",
+                  "avgCorrelation": 0.8
+                },
+                "000002": {
+                  "role": "follower",
+                  "avgCorrelation": 0.55
+                }
+              }
+            }
+          },
+          "kplHots": {
+            "AI": {
+              "000001": 1200,
+              "000002": 800
+            }
+          }
+        }
+      }
+    ]
+  },
+  "expected": {
+    "factors": [
+      {
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "heatScore": 2000,
+        "momentumScore": 97,
+        "breadthScore": 87.5,
+        "fundScore": 58.75,
+        "leadershipScore": 57.0,
+        "correlationScore": 100.0,
+        "crowdingRisk": 14.0,
+        "persistenceScore": 40,
+        "rotationState": "mainline",
+        "rank": 1,
+        "qualityFlags": [],
+        "heatLevel": 100.0
+      },
+      {
+        "themeId": "POWER",
+        "themeName": "电力",
+        "heatScore": null,
+        "momentumScore": 0,
+        "breadthScore": 22.5,
+        "fundScore": null,
+        "leadershipScore": 0.0,
+        "correlationScore": 50.0,
+        "crowdingRisk": 0.0,
+        "persistenceScore": 0,
+        "rotationState": "neutral",
+        "rank": 0,
+        "qualityFlags": [
+          "fund_flow_unavailable",
+          "persistence_history_insufficient",
+          "kpl_hotness_unavailable"
+        ],
+        "heatLevel": null
+      }
+    ],
+    "exposures": [
+      {
+        "code": "000001",
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "role": "leader",
+        "roleScore": 84,
+        "exposureWeight": 1,
+        "themeContribution": 17.9,
+        "riskPenalty": 0,
+        "reasons": [
+          "题材处于主线",
+          "题材热度强",
+          "题材有龙头带动",
+          "板块联动较强",
+          "个股是题材龙头"
+        ]
+      },
+      {
+        "code": "000002",
+        "themeId": "AI",
+        "themeName": "人工智能",
+        "role": "follower",
+        "roleScore": 56,
+        "exposureWeight": 0.62,
+        "themeContribution": 9.7,
+        "riskPenalty": 0,
+        "reasons": [
+          "题材处于主线",
+          "题材热度强",
+          "题材有龙头带动",
+          "板块联动较强"
+        ]
+      },
+      {
+        "code": "000003",
+        "themeId": "POWER",
+        "themeName": "电力",
+        "role": "independent",
+        "roleScore": 34,
+        "exposureWeight": 0.38,
+        "themeContribution": 1.0,
+        "riskPenalty": 0,
+        "reasons": []
+      },
+      {
+        "code": "000004",
+        "themeId": "POWER",
+        "themeName": "电力",
+        "role": "independent",
+        "roleScore": 34,
+        "exposureWeight": 0.38,
+        "themeContribution": 1.0,
+        "riskPenalty": 0,
+        "reasons": []
+      }
+    ]
+  }
+}
