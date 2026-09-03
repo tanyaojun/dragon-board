@@ -1,12 +1,11 @@
 from __future__ import annotations
 import gzip
-import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
-from backend.analysis.theme.heat_level import HEAT_CALIBER_V1, heat_caliber_of, resolve_heat_level
+from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
     BacktestEngine,
@@ -217,35 +216,14 @@ def _price_quality_diagnostics(
 
 
 def _persisted_heat_level(factor: object) -> float:
-    """落库热度相对分解释（0-100，design §4.2 消费规则，2026-09 heatLevel 落库迁移）：
+    """落库热度相对分（0-100 置信度合成项，缺失按 0 计）。
 
-    factor.heatLevel key 存在 → 数值（0-100）直接用，缺失（None/非法）按 0 计
-    （置信度合成项，缺失不伪装满分）；key 不存在 → 按 heatFactorVersion /
-    metadata.factorVersion 口径回退 heatScore：theme-market-v1 或未标记且 ≤100
-    有效，theme-market-v2 绝对值不回退按 0 计。"""
+    口径解释唯一实现是 `heat_level.resolve_heat_level`（design §4.2 三分支）；
+    本包装只做非 dict 输入与 `None → 0.0` 兜底（缺失不伪装满分），
+    不重复实现口径规则。"""
     if not isinstance(factor, dict):
         return 0.0
-    if "heatLevel" in factor:
-        numeric = _heat_score_number(factor.get("heatLevel"))
-        if numeric is None:
-            return 0.0
-        return max(0.0, min(100.0, numeric))  # clamp 与 resolve_heat_level 一致
-    numeric = _heat_score_number(factor.get("heatScore"))
-    if numeric is None or not 0.0 <= numeric <= 100.0:
-        return 0.0
-    if heat_caliber_of(factor) in ("", HEAT_CALIBER_V1):
-        return numeric
-    return 0.0
-
-
-def _heat_score_number(value: object) -> float | None:
-    try:
-        numeric = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(numeric):
-        return None
-    return numeric
+    return resolve_heat_level(factor) or 0.0
 
 
 class BacktestService:

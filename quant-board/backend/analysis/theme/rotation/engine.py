@@ -297,10 +297,14 @@ class ThemeRotationEngine:
 
         # ── 主线判定（设计 §5.2：横向 z-score Top3 且 资金集中度 Top3） ──
         theme_rows = {_theme_key(r): r for r in current_sector_rows}
-        heat_zs = {
-            key: robust_z(resolve_heat_level(r) or 0.0, all_heats)
-            for key, r in theme_rows.items()
-        }
+        # 热度缺失（resolve 返回 None）的题材不伪造 0 参与 z-score：robust_z(0, []) 恒 0.0
+        # 会让全缺失截面按 key 顺序任意产生 rank 1，凭空评出主线。缺失题材不进 heat_zs，
+        # z_rank 兜底 999 永不满足 min_mainline_z_rank。
+        heat_zs: dict[str, float] = {}
+        for key, r in theme_rows.items():
+            heat = resolve_heat_level(r)
+            if heat is not None:
+                heat_zs[key] = robust_z(heat, all_heats)
         z_rank = {
             key: index
             for index, (key, _) in enumerate(

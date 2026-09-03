@@ -123,6 +123,28 @@ def test_market_inflow_outflow_carry_theme_names():
     assert any(item["themeId"] == "BKAK" and item["themeName"] == "退潮题材" for item in outflow)
 
 
+def test_engine_missing_heat_not_fabricated_into_mainline_z_rank():
+    # heatLevel 迁移审计修复：热度缺失（显式 None 的 v2 行）不伪造 0 参与主线 z-score。
+    # 旧行为 robust_z(0.0, []) 恒 0.0，并列排序会让任一题材凭 z_rank=1 进主线候选；
+    # 新行为缺失题材不进 heat_zs（z_rank 兜底 999），全市场热度缺失时不得凭空评主线。
+    engine = ThemeRotationEngine()
+    caliber = {"metadata": {"factorVersion": "theme-market-v2"}}
+    current = [
+        {**_sector("BKAI", "人工智能", 1, 99999.0, momentum=80, crowding=40, inflow=5.0, zt=8),
+         "heatLevel": None, **caliber},
+        {**_sector("BKAG", "机器人", 2, 88888.0, momentum=70, crowding=40, inflow=4.0, zt=6),
+         "heatLevel": None, **caliber},
+    ]
+    stocks = [
+        _stock("600001", 8, "涨停", ["BKAI"]),
+        _stock("600002", 2, "", ["BKAG"]),
+    ]
+    result = engine.compute(current, _history(), stocks, computed_at=3000)
+    by_key = {s.theme_id: s for s in result.statuses}
+    assert by_key["BKAI"].rotation_state != "mainline"
+    assert by_key["BKAG"].rotation_state != "mainline"
+
+
 def test_engine_stock_theme_label_normalization_matches_chinese_names():
     # R6：真实 stock rows 的 themes 是中文名（可能带“概念/板块”后缀），
     # 与 sector entityName 归一化后应正确归集主题内股票（boardHeight 不再缺失）
