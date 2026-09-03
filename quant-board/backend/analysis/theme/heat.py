@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.analysis.theme.heat_level import attach_heat_levels
+
 
 # 2026-09 热度口径切换：heatScore 从 0-100 归一加权分改为 KPL 题材库人气总和
 # （对齐 tck2.js fetchThemeData：成分股 Hot/HotNum 按 StockID 去重求和，绝对值口径）。
@@ -325,6 +327,10 @@ def _rank_and_summarize(
             key=lambda factor: str(factor.get("themeName") or ""),
         )
         factors = eligible + ineligible
+
+    # heatLevel（0-100 rank 百分位相对分）与 rank 同步附加：无热度/无 rank 的 factor
+    # 显式 None（不回退 heatScore 绝对值），见 analysis/theme/heat_level.py。
+    attach_heat_levels(factors)
 
     # KPL 人气覆盖是结构化暴露项（不阻断 rank）：缺失题材已带
     # kpl_hotness_unavailable 标记，这里给出全市场覆盖比例供前端诊断展示。
