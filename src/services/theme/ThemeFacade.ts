@@ -14,6 +14,11 @@ import {
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel, deriveThemeHeatMeta } from './stockThemeMeta'
 import { themeHeatFeed } from './ThemeHeatFeed'
+import {
+  compareThemesBySpec,
+  themeSortConfigStore,
+  type ThemeSortSpec,
+} from './themeSortConfig'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
@@ -40,6 +45,8 @@ let lastRotationSummary: RotationAnalysis | null = null
 let lastMomentumScoreMap: Map<string, number | null> = new Map()
 let momentumScoresLoaded = false
 const momentumScoresVersion = shallowRef(0)
+// 排序配置版本号：setThemeSortSpec 时 bump，让依赖 getHotThemes 的响应式列表自动重排
+const themeSortVersion = shallowRef(0)
 
 function buildStockThemesMap(): Map<string, string[]> {
   const result = new Map<string, string[]>()
@@ -338,9 +345,12 @@ export function toStockTheme(exposure: ThemeStockExposure) {
 export function getHotThemes(limit: number = 10) {
   // 建立响应式依赖：v2 动量分缓存加载完成后自动刷新
   momentumScoresVersion.value
+  // 建立响应式依赖：用户排序配置变化时列表自动重排
+  themeSortVersion.value
   if (!momentumScoresLoaded) {
     void loadThemeMomentumScores()
   }
+  const spec = themeSortConfigStore.getSpec()
   const apiById = new Map((themeHeatFeed.getSnapshot()?.factors || []).map((item) => [item.themeId, item]))
   return getThemeFactors()
     .map((factor) => {
@@ -353,13 +363,36 @@ export function getHotThemes(limit: number = 10) {
       }
       return summary
     })
-    // 全消费方统一口径：按涨停家数降序；同涨停数时按热度降序保持确定性
-    .sort((a, b) => b.ztCount - a.ztCount || b.heatScore - a.heatScore)
+    // 全消费方统一口径：按用户排序配置（默认 热度→涨停→动量 全降序）；
+    // 比较器自动补位默认键保证确定性，缺失/非有限值恒排尾部
+    .sort((a, b) => compareThemesBySpec(a, b, spec))
     .slice(0, limit)
 }
 
 export function getThemeSummaries(limit: number = 20): ThemePanelSummary[] {
   return getHotThemes(limit)
+}
+
+/**
+ * 读取/设置/重置用户排序配置。spec 归一化后交给 themeSortConfigStore 保存并持久化，
+ * 同时 bump themeSortVersion 让所有依赖 getHotThemes 的响应式列表立即重排。
+ */
+export function getThemeSortSpec(): ThemeSortSpec {
+  // 读取版本号建立响应式依赖，配置变化时组件 computed 自动重算
+  themeSortVersion.value
+  return themeSortConfigStore.getSpec()
+}
+
+export function setThemeSortSpec(spec: unknown): ThemeSortSpec {
+  const next = themeSortConfigStore.save(spec)
+  themeSortVersion.value++
+  return next
+}
+
+export function resetThemeSortSpec(): ThemeSortSpec {
+  const next = themeSortConfigStore.reset()
+  themeSortVersion.value++
+  return next
 }
 
 export function getThemeSummary(themeId: string): ThemePanelSummary | null {
@@ -483,6 +516,9 @@ export const themeFacade = {
   getHotThemes,
   getThemeSummaries,
   getThemeSummary,
+  getThemeSortSpec,
+  setThemeSortSpec,
+  resetThemeSortSpec,
   getThemeLastUpdate,
   getThemeFeedState,
   getThemeDetail,

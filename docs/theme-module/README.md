@@ -61,3 +61,14 @@
 - 核心变更（D1/D2/D5/D10）：题材动量从共振解耦为独立第四维；lifecycle 状态机废弃，rotationState 改方向标签；日线聚合 + 槽位日内双层
 - 新 API：GET /api/theme-momentum/summary；前端 OBSERVATION 第4轨 + ThemeMomentumPanel 面板
 - 旧 v1 融合（esonance.theme）已废弃，	heme/momentum.py 保留 v1 函数仅供回放对比
+
+## 2026-09-04 题材列表排序用户可配置
+
+- 排序规则不再硬编码：用户在题材分析面板通过 `ThemeSortControl.vue`（热门题材卡片栏 + 题材列表左栏两处入口）配置多键排序，最多 3 键，每键可选字段与升/降序。
+- 字段白名单：热度/涨停/动量/主力净额/量比/资金分（`THEME_SORT_FIELDS`，见 `src/services/theme/themeSortConfig.ts`）。
+- 生效范围：`themeFacade.getHotThemes` 全部消费方（热门题材卡片、题材列表左栏、联动分析、导出、预警等）统一跟随用户配置。注意：`sectorAnalyzer.triggerHeatCalculation` 会把排序后的热门题材回写 `dataLayer.updateHotThemes`，因此复盘投影（FrameNormalizer）、龙息面板和快照 context 的 hotThemes 顺序同样跟随用户配置——这是"全部消费方跟随"口径的一部分（2026-09-04 已确认）。
+- 确定性与缺失语义：用户键之后自动补默认键（去重保序）保证同值顺序稳定；null/非有限值恒排尾部，不伪装 0。
+- 默认口径：热度↓ → 涨停↓ → 动量↓（`DEFAULT_THEME_SORT_SPEC`）；非法/空配置归一化回默认。
+- 持久化：localStorage key `theme_sort_config`（`STORAGE_KEYS.THEME_SORT`），读写与归一化集中在 `themeSortConfigStore`，服务层不依赖 Pinia。
+- 响应式：`ThemeFacade` 内 `themeSortVersion` shallowRef，配置变更 bump 后所有依赖 `getHotThemes` 的 computed 自动重排。
+- 测试：`themeSortConfig.test.ts`（归一化/比较器/持久化）、`themeSummariesOrdering.test.ts`（facade 应用 spec）、`ThemeSortControl.test.ts`（挂载与合同）。

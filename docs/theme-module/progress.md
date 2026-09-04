@@ -840,3 +840,13 @@
   - `DragonBreathPanel` 热榜视图展示 ThemeTrend 共振摘要、股票共振分、题材角色、进入/过滤原因；QuantBoard 摘要不可用时不影响热榜情绪主流程。
 - 文档同步：
   - `docs/theme-module/README.md`、`quant-board/docs/api-cli.md`、`quant-board/docs/AI_COLLABORATION.md` 更新为当前真实口径。
+
+## 2026-09-04 题材列表排序用户可配置
+
+- 需求演进：题材列表排序三改（涨停→热度 → 热度→涨停→动量 → 用户可配置），最终方案为界面多键排序器，避免每次调整口径都改代码。
+- 实现：
+  - `src/services/theme/themeSortConfig.ts`：字段白名单（6 个展示字段）、spec 归一化（剔除非法/去重取首/截断 3 键/空回默认）、`compareThemesBySpec` 确定性比较器（用户键后补默认键、null/非有限值恒排尾部）、`ThemeSortConfigStore` localStorage 持久化（key `theme_sort_config`）。
+  - `ThemeFacade`：`getHotThemes` 排序改走 `compareThemesBySpec`；新增 `getThemeSortSpec/setThemeSortSpec/resetThemeSortSpec`，`themeSortVersion` shallowRef 广播响应式刷新（沿用 momentumScoresVersion 模式）。
+  - `ThemeSortControl.vue`：多键排序控件（字段下拉+升降序+删除+添加+恢复默认），挂载在 SectorPanel 热门题材标签栏与 SectorStocksTree 题材列表标题栏，共享同一配置实时同步。
+- TDD：比较器/归一化/持久化 12 用例、facade 应用 spec 3 用例（先红后绿）、控件结构合同 4 用例；全量 1041 用例通过，vue-tsc 无错误。
+- 流程注记：brainstorming 确认多键排序器形态与"全部消费方跟随"范围；设计批准后实施。

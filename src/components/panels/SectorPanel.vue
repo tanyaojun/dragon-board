@@ -49,6 +49,7 @@
 
       <!-- 视图模式切换 -->
       <div class="tabs-right">
+        <ThemeSortControl v-if="view === 'hot' && viewMode === 'grid'" class="panel-sort-control" />
         <button class="view-mode-btn" :class="{ active: viewMode === 'grid' }" @click="viewMode = 'grid'" title="网格视图">
           <span>📇</span>
         </button>
@@ -238,6 +239,7 @@ import type { SnapshotFrameRow } from '../../services/snapshot/types'
 import SectorStocksTree from './SectorStocksTree.vue'
 import SectorDetail from './SectorDetail.vue'
 import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
+import ThemeSortControl from './ThemeSortControl.vue'
 import { useUIStore } from '../../stores/ui'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
@@ -737,9 +739,14 @@ onMounted(() => {
 /* 树型视图 */
 .tabs-right {
   display: flex;
+  align-items: center;
   gap: 4px;
   margin-left: auto;
   padding-right: 16px;
+}
+
+.panel-sort-control {
+  margin-right: 8px;
 }
 
 .view-mode-btn {

@@ -15,6 +15,7 @@
       <div class="sector-tree">
       <div class="tree-header">
         <h4>📊 题材列表</h4>
+        <ThemeSortControl class="tree-sort-control" />
         <div class="tree-search">
           <input v-model="treeSearch" placeholder="搜索题材..." class="search-input" />
         </div>
@@ -191,6 +192,7 @@ import {
 } from '@/services/theme/stockLimitUpRows'
 import { useThemeRuntimeSnapshot } from '@/composables/useThemeRuntimeSnapshot'
 import ThemeMomentumPanel from './ThemeMomentumPanel.vue'
+import ThemeSortControl from './ThemeSortControl.vue'
 
 // Props
 const props = defineProps<{
@@ -466,9 +468,16 @@ watch([stockSearch, sortBy, sortDesc], () => {
 }
 
 .tree-header h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 0 0 12px 0;
   font-size: 14px;
   color: var(--text-primary);
+}
+
+.tree-sort-control {
+  font-size: 12px;
 }
 
 .tree-search {
