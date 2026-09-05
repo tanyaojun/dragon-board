@@ -35,7 +35,6 @@
         </button>
         <button class="tab-btn" :class="{ active: view === 'rotation' }" @click="view = 'rotation'">
           🔄 题材轮动
-          <span v-if="rotationData" class="tab-count">{{ rotationData.rotationSpeed }}%</span>
           <em v-if="rotationMeta?.slotTime" class="rotation-time-note"
             :title="`轮动数据时间: ${formatTime(rotationMeta.computedAt || rotationMeta.timestamp || 0)}`">
             {{ rotationMeta.slotTime }}<template v-if="rotationMeta.stale">·旧</template>
@@ -157,7 +156,7 @@
             <div class="phase-header">
               <span class="phase-icon">{{ getMarketPhaseIcon(rotationData.marketPhase) }}</span>
               <span class="phase-name">{{ getMarketPhaseName(rotationData.marketPhase) }}</span>
-              <span class="phase-speed">轮动速度 {{ rotationData.rotationSpeed }}%</span>
+              <span class="phase-speed">轮动速度 {{ rotationSpeedText }}%</span>
             </div>
             <div class="phase-suggestion">{{ rotationData.summary.suggestion }}</div>
           </div>
@@ -315,6 +314,12 @@ const lastUpdate = computed(() => {
 const rotationData = computed(() => {
   // 只消费后端落库结果；无后端数据时保持 null（空态，不本地补算）
   return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary()
+})
+
+// 轮动速度展示文本：缺失/非有限值回退 '--'，不渲染原始浮点数
+const rotationSpeedText = computed(() => {
+  const speed = rotationData.value?.rotationSpeed
+  return typeof speed === 'number' && Number.isFinite(speed) ? speed.toFixed(1) : '--'
 })
 
 
