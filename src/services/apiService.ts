@@ -911,6 +911,40 @@ export class ApiService {
     })
   }
 
+  /** 题材成分股成交量/成交额槽位聚合序列（按题材名聚合 snapshot_stock_rows） */
+  async getThemeStockVolumeSeries(
+    params: {
+      themeName: string
+      datasetId?: string
+      snapshotType?: string
+      types?: string
+      tradingDate?: string
+      startDate?: string
+      endDate?: string
+      limit?: number
+    },
+    options?: RequestConfig,
+  ) {
+    const query = new URLSearchParams()
+    if (params.themeName) query.set('theme_name', params.themeName)
+    if (params.datasetId) query.set('dataset_id', params.datasetId)
+    if (params.snapshotType) query.set('snapshot_type', params.snapshotType)
+    if (params.types) query.set('types', params.types)
+    if (params.tradingDate) query.set('trading_date', params.tradingDate)
+    if (params.startDate) query.set('start_date', params.startDate)
+    if (params.endDate) query.set('end_date', params.endDate)
+    if (params.limit && params.limit > 0) query.set('limit', String(params.limit))
+    return this.get<any>(`/api/themes/stock-volume-series?${query.toString()}`, {
+      context: 'quant-board',
+      priority: 'medium',
+      retries: 1,
+      timeout: 15000,
+      cache: false,
+      throwOnHttpError: true,
+      ...options,
+    })
+  }
+
   /** 从 QuantBoard MongoDB 主库读取快照事实集合行数 */
   async getMongoSnapshotCounts(datasetId?: string, options?: RequestConfig) {
     const query = this.buildMongoSnapshotQuery({ datasetId })

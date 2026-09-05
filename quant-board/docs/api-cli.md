@@ -1339,6 +1339,14 @@ Dragon Board `ThemeDataService` 的正式读口。返回结构兼容旧 `ThemeMa
 
 按股票代码读取所属题材、标签和原因。股票代码使用六位数字口径。
 
+### `GET /api/themes/stock-volume-series`
+
+题材成分股成交量/成交额槽位聚合序列，服务 Dragon Board 题材详情面板"历史趋势"页签（前端装配层 `src/services/theme/themeHistorySeries.ts`，与 `/api/snapshots/sector-rows` 两源并行、按 timestamp 对齐）。聚合对象为 `snapshot_stock_rows`（`themes` 题材名数组等值匹配 = 元素包含语义），`$group` 按 `tradingDate + slotTime + timestamp` 输出 `totalVolume/totalAmount/stockCount`，并附 `volumeCount/amountCount`（组内可加数值行数）——某槽位全缺时 MongoDB `$sum` 语义为 0，消费方以对应 count 是否为 0 区分"真实 0"与"缺失"，缺失在前端保持 `null` 不伪造曲线。
+
+- 参数：`theme_name`（必填，空返回 400 `theme_name_required`）、`dataset_id`（默认 `dragonboard_live`）、`snapshot_type`/`types`（逗号分隔，对应 `_snapshot_row_query` 的 `$in` 语义）、`trading_date`（优先于区间）、`start_date`/`end_date`、`limit`（默认 2000，上限 20000）。
+- 仅 MongoDB 主链提供：`storage_backend != mongodb` 一律返回 503 `storage_unavailable`（守卫只看 storage label 不看 `db` 是否为 None——sqlite 模式 `get_db` 会给出 session，而 SQL Repository 没有该聚合方法，落过去会变成 AttributeError 500 而非结构化 503）。
+- 实测性能（2026-09-05）：2 个月窗口 494 行 0.6~1.1 秒，暂无需额外索引。
+
 ### `GET /api/themes/counts`
 
 读取 MongoDB 题材基础集合行数，用于迁移验收和排障。返回 `ok`、`source=mongodb` 和 `counts`；`counts` 至少包含 `themeCount`、`mappingCount`、`stockCount`、`version`、`lastUpdate`、`source=mongodb`。

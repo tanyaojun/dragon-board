@@ -399,35 +399,52 @@
           <button class="indicator-btn" :class="{ active: selectedIndicators.includes('change') }"
             @click="toggleIndicator('change')">💹 涨跌</button>
           <button class="indicator-btn" :class="{ active: selectedIndicators.includes('volume') }"
-            @click="toggleIndicator('volume')">📊 成交量</button>
+            @click="toggleIndicator('volume')">📊 成交额</button>
         </div>
 
-        <div class="history-chart" ref="chartRef"></div>
+        <!-- 历史数据结构化状态：加载/错误/空态，不伪造曲线 -->
+        <div v-if="historyLoading" class="history-state">
+          <div class="loading-spinner"></div>
+          <span>加载历史快照数据...</span>
+        </div>
+        <div v-else-if="historyError" class="history-state">
+          <span class="error-icon">⚠️</span>
+          <span>{{ historyError }}</span>
+          <button class="retry-btn" @click="loadHistoryData">重试</button>
+        </div>
+        <div v-else-if="historyPoints.length === 0" class="history-state">
+          <span class="empty-icon">📊</span>
+          <span>暂无历史快照数据（统计口径 half_hour）</span>
+        </div>
+        <template v-else>
+          <div v-if="historySourceHint" class="history-source-hint">⚠️ {{ historySourceHint }}</div>
+          <div class="history-chart" ref="chartRef"></div>
 
-        <div class="history-stats-grid">
-          <div class="history-stat-card">
-            <div class="stat-label">最高热度</div>
-            <div class="stat-value">{{ formatHeat(historyStats.max) }}</div>
-            <div class="stat-time">{{ formatTime(historyStats.maxTime) }}</div>
-          </div>
-          <div class="history-stat-card">
-            <div class="stat-label">最低热度</div>
-            <div class="stat-value">{{ formatHeat(historyStats.min) }}</div>
-            <div class="stat-time">{{ formatTime(historyStats.minTime) }}</div>
-          </div>
-          <div class="history-stat-card">
-            <div class="stat-label">平均热度</div>
-            <div class="stat-value">{{ formatHeat(historyStats.avg) }}</div>
-            <div class="stat-trend" :class="historyStats.trend >= 0 ? 'up' : 'down'">
-              {{ historyStats.trend > 0 ? '+' : '' }}{{ historyStats.trend.toFixed(1) }}
+          <div class="history-stats-grid">
+            <div class="history-stat-card">
+              <div class="stat-label">最高热度</div>
+              <div class="stat-value">{{ historyStats.max === null ? '--' : formatHeat(historyStats.max) }}</div>
+              <div class="stat-time">{{ formatTime(historyStats.maxTime) }}</div>
+            </div>
+            <div class="history-stat-card">
+              <div class="stat-label">最低热度</div>
+              <div class="stat-value">{{ historyStats.min === null ? '--' : formatHeat(historyStats.min) }}</div>
+              <div class="stat-time">{{ formatTime(historyStats.minTime) }}</div>
+            </div>
+            <div class="history-stat-card">
+              <div class="stat-label">平均热度</div>
+              <div class="stat-value">{{ historyStats.avg === null ? '--' : formatHeat(historyStats.avg) }}</div>
+              <div class="stat-trend" :class="historyStats.trend >= 0 ? 'up' : 'down'">
+                {{ historyStats.trend > 0 ? '+' : '' }}{{ historyStats.trend.toFixed(1) }}
+              </div>
+            </div>
+            <div class="history-stat-card">
+              <div class="stat-label">涨停峰值</div>
+              <div class="stat-value">{{ historyStats.maxZT === null ? '--' : historyStats.maxZT }}</div>
+              <div class="stat-time">{{ formatTime(historyStats.maxZTTime) }}</div>
             </div>
           </div>
-          <div class="history-stat-card">
-            <div class="stat-label">涨停峰值</div>
-            <div class="stat-value">{{ historyStats.maxZT }}</div>
-            <div class="stat-time">{{ formatTime(historyStats.maxZTTime) }}</div>
-          </div>
-        </div>
+        </template>
       </div>
 
       <div class="panel-footer" v-if="hasThemeData && !loading">
@@ -460,6 +477,11 @@ import {
   formatOpenNum,
 } from '../../services/theme/stockLimitUpRows'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
+import {
+  fetchThemeHistorySeries,
+  type ThemeHistoryPoint,
+  type ThemeHistoryTimeRange,
+} from '../../services/theme/themeHistorySeries'
 import { StockUtils } from '../../utils/common'
 
 const props = defineProps<{
@@ -705,81 +727,88 @@ watch(() => props.sectorName, async (newName) => {
   }
 }, { immediate: true })
 
-// ========== 历史趋势 ==========
-const timeRange = ref<'1h' | '6h' | '1d' | '1w' | '1m'>('1d')
+// ========== 历史趋势（生产数据：MongoDB 快照 sector rows + 成分股成交量聚合） ==========
+const timeRange = ref<ThemeHistoryTimeRange>('1d')
 const selectedIndicators = ref<string[]>(['heat', 'zt', 'leader'])
 const chartRef = ref<HTMLElement | null>(null)
 let chart: echarts.ECharts | null = null
 
-// 模拟历史数据 - 实际应用中应该从 API 获取历史数据
-const generateHistoryData = () => {
-  const now = Date.now()
-  const data = []
-  for (let i = 30; i >= 0; i--) {
-    data.push({
-      timestamp: now - i * 5 * 60 * 1000, // 每5分钟一个点
-      heatScore: Math.floor(Math.random() * 500) + 3000,
-      ztCount: Math.floor(Math.random() * 10) + 5,
-      leaderCount: Math.floor(Math.random() * 3) + 1,
-      avgChange: (Math.random() * 4) - 2,
-      volume: Math.floor(Math.random() * 1000) + 500
+const historyLoading = ref(false)
+// 全源失败的结构化原因；部分源失败用 historySourceHint 提示，不清空已有数据
+const historyError = ref<string | null>(null)
+const historySourceHint = ref<string | null>(null)
+const historyPoints = ref<ThemeHistoryPoint[]>([])
+let historyRequestId = 0
+
+async function loadHistoryData() {
+  if (!blockCode.value || !props.sectorName) return
+  const requestId = ++historyRequestId
+  historyLoading.value = true
+  try {
+    const result = await fetchThemeHistorySeries({
+      themeId: blockCode.value,
+      themeName: props.sectorName,
+      timeRange: timeRange.value,
     })
+    if (requestId !== historyRequestId) return // 过期响应丢弃
+    historyPoints.value = result.points
+    const failedSources = [result.sectorRows, result.volumeSeries].filter(s => !s.ok)
+    if (!result.ok) {
+      historyError.value = result.message || '历史数据不可用'
+      historySourceHint.value = null
+    } else {
+      historyError.value = null
+      historySourceHint.value = failedSources.length
+        ? `部分数据源不可用: ${failedSources.map(s => s.message).filter(Boolean).join('; ')}`
+        : null
+    }
+    // 先解除 loading 态：v-else 分支挂载图表容器（chartRef）后才能渲染 ECharts
+    historyLoading.value = false
+    await nextTick()
+    renderChart()
+  } catch (err) {
+    if (requestId !== historyRequestId) return
+    historyError.value = err instanceof Error ? err.message : '加载历史数据失败'
+  } finally {
+    if (requestId === historyRequestId) historyLoading.value = false
   }
-  return data
 }
 
-// 如果有真实的历史数据，可以从这里获取
-const themeHistory = computed(() => {
-  return generateHistoryData()
-})
-
-const filteredHistory = computed(() => {
-  const now = Date.now()
-  const ranges = {
-    '1h': 60 * 60 * 1000,
-    '6h': 6 * 60 * 60 * 1000,
-    '1d': 24 * 60 * 60 * 1000,
-    '1w': 7 * 24 * 60 * 60 * 1000,
-    '1m': 30 * 24 * 60 * 60 * 1000,
-  }
-  const cutoff = now - ranges[timeRange.value]
-  return themeHistory.value.filter((p: any) => p.timestamp >= cutoff)
-})
-
+// 统计卡片：热度缺失的槽位不参与计算（不补 0），全缺时字段为 null 显示 '--'
 const historyStats = computed(() => {
-  const history = filteredHistory.value
-  if (history.length === 0) {
-    return { max: 0, maxTime: 0, min: 0, minTime: 0, avg: 0, trend: 0, maxZT: 0, maxZTTime: 0 }
-  }
+  const history = historyPoints.value
+  const heats = history.map(h => h.heat).filter((v): v is number => v !== null)
+  const ztCounts = history.map(h => h.ztCount).filter((v): v is number => v !== null)
+  const empty = { max: null, maxTime: 0, min: null, minTime: 0, avg: null, trend: 0, maxZT: null, maxZTTime: 0 }
+  if (heats.length === 0) return empty
 
-  const scores = history.map((h: any) => h.heatScore)
-  const ztCounts = history.map((h: any) => h.ztCount)
+  const max = Math.max(...heats)
+  const maxTime = history.find(h => h.heat === max)?.timestamp || 0
+  const min = Math.min(...heats)
+  const minTime = history.find(h => h.heat === min)?.timestamp || 0
+  const avg = heats.reduce((a, b) => a + b, 0) / heats.length
+  const maxZT = ztCounts.length ? Math.max(...ztCounts) : null
+  const maxZTTime = maxZT === null ? 0 : history.find(h => h.ztCount === maxZT)?.timestamp || 0
 
-  const max = Math.max(...scores)
-  const maxTime = history.find((h: any) => h.heatScore === max)?.timestamp || 0
-  const min = Math.min(...scores)
-  const minTime = history.find((h: any) => h.heatScore === min)?.timestamp || 0
-  const avg = scores.reduce((a: number, b: number) => a + b, 0) / scores.length
-  const maxZT = Math.max(...ztCounts)
-  const maxZTTime = history.find((h: any) => h.ztCount === maxZT)?.timestamp || 0
-
+  // 趋势斜率：仅对热度可计算的连续样本做最小二乘
   let trend = 0
-  if (history.length >= 3) {
-    const n = history.length
+  if (heats.length >= 3) {
+    const n = heats.length
     const indices = Array.from({ length: n }, (_, i) => i)
     const sumX = indices.reduce((a, b) => a + b, 0)
-    const sumY = scores.reduce((a: number, b: number) => a + b, 0)
-    const sumXY = indices.reduce((a, b, i) => a + b * scores[i], 0)
+    const sumY = heats.reduce((a, b) => a + b, 0)
+    const sumXY = indices.reduce((a, b, i) => a + b * heats[i], 0)
     const sumX2 = indices.reduce((a, b) => a + b * b, 0)
-    trend = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX)
+    const denominator = n * sumX2 - sumX * sumX
+    trend = denominator === 0 ? 0 : (n * sumXY - sumX * sumY) / denominator
   }
 
   return { max, maxTime, min, minTime, avg, trend, maxZT, maxZTTime }
 })
 
-function setTimeRange(range: '1h' | '6h' | '1d' | '1w' | '1m') {
+function setTimeRange(range: ThemeHistoryTimeRange) {
   timeRange.value = range
-  nextTick(() => renderChart())
+  loadHistoryData()
 }
 
 function toggleIndicator(indicator: string) {
@@ -791,22 +820,28 @@ function toggleIndicator(indicator: string) {
   nextTick(() => renderChart())
 }
 
-function formatHeat(heat: number): string {
-  if (!heat) return '0'
+function formatHeat(heat: number | null): string {
+  if (heat === null) return '--'
   if (heat >= 10000) return (heat / 10000).toFixed(1) + '万'
   if (heat >= 1000) return (heat / 1000).toFixed(1) + 'k'
   return heat.toString()
 }
 
-// ✅ 完整的 ECharts 渲染函数
+// ✅ 完整的 ECharts 渲染函数（null 缺失值断线，不补 0）
 function renderChart() {
-  if (!chartRef.value || filteredHistory.value.length === 0) return
+  if (!chartRef.value || historyPoints.value.length === 0) return
 
+  // loading/空态的 v-if 状态链会卸载并重挂图表容器（如切换时间范围）：
+  // 旧实例绑定的 DOM 已分离，必须 dispose 后重建，否则 setOption 落空、图表空白
+  if (chart && chart.getDom() !== chartRef.value) {
+    chart.dispose()
+    chart = null
+  }
   if (!chart) {
     chart = echarts.init(chartRef.value)
   }
 
-  const history = filteredHistory.value
+  const history = historyPoints.value
   const indicators = selectedIndicators.value
   const series: any[] = []
 
@@ -815,10 +850,11 @@ function renderChart() {
     series.push({
       name: '热度',
       type: 'line',
-      data: history.map((h: any) => h.heatScore),
+      data: history.map(h => h.heat),
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
+      connectNulls: false,
       lineStyle: { color: '#ff7f50', width: 2 },
       areaStyle: {
         color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -834,7 +870,7 @@ function renderChart() {
     series.push({
       name: '涨停股',
       type: 'bar',
-      data: history.map((h: any) => h.ztCount),
+      data: history.map(h => h.ztCount),
       itemStyle: { color: '#ff4757' },
       barWidth: 8,
       yAxisIndex: 1
@@ -846,7 +882,7 @@ function renderChart() {
     series.push({
       name: '龙头股',
       type: 'bar',
-      data: history.map((h: any) => h.leaderCount),
+      data: history.map(h => h.leaderCount),
       itemStyle: { color: '#ffd700' },
       barWidth: 8,
       yAxisIndex: 1
@@ -858,8 +894,9 @@ function renderChart() {
     series.push({
       name: '平均涨跌',
       type: 'line',
-      data: history.map((h: any) => h.avgChange),
+      data: history.map(h => h.avgChange),
       smooth: true,
+      connectNulls: false,
       lineStyle: { color: '#2ed573', width: 1.5, type: 'dashed' },
       symbol: 'diamond',
       symbolSize: 4,
@@ -867,13 +904,14 @@ function renderChart() {
     })
   }
 
-  // 成交量曲线
+  // 成交额曲线（题材成分股 stock rows 聚合，单位元）
   if (indicators.includes('volume')) {
     series.push({
-      name: '成交量',
+      name: '成交额',
       type: 'line',
-      data: history.map((h: any) => h.volume),
+      data: history.map(h => h.totalAmount),
       smooth: true,
+      connectNulls: false,
       lineStyle: { color: '#3498db', width: 1.5 },
       symbol: 'none',
       areaStyle: {
@@ -885,6 +923,12 @@ function renderChart() {
       yAxisIndex: 3
     })
   }
+
+  // 跨天范围时 x 轴标签带日期，单日内只显示槽位时间
+  const uniqueDates = new Set(history.map(h => h.tradingDate))
+  const xLabels = history.map(h =>
+    uniqueDates.size > 1 ? `${h.tradingDate.slice(5)} ${h.slotTime}` : h.slotTime
+  )
 
   const option = {
     grid: {
@@ -907,10 +951,7 @@ function renderChart() {
     },
     xAxis: {
       type: 'category',
-      data: history.map((h: any) => {
-        const date = new Date(h.timestamp)
-        return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}`
-      }),
+      data: xLabels,
       axisLabel: {
         color: 'var(--text-secondary)',
         fontSize: 10,
@@ -939,7 +980,7 @@ function renderChart() {
       },
       {
         type: 'value',
-        name: '成交量',
+        name: '成交额',
         splitLine: { show: false },
         axisLabel: { color: 'var(--text-secondary)' }
       }
@@ -952,26 +993,29 @@ function renderChart() {
   chart.resize()
 }
 
-// 监听窗口大小变化
+// 监听窗口大小变化（具名 handler：卸载时可移除，避免面板反复开关累积监听器）
+function handleWindowResize() {
+  if (chart) {
+    chart.resize()
+  }
+}
+
 onMounted(() => {
-  window.addEventListener('resize', () => {
-    if (chart) {
-      chart.resize()
-    }
-  })
+  window.addEventListener('resize', handleWindowResize)
 })
 
 // 在组件卸载时销毁图表
 onUnmounted(() => {
+  window.removeEventListener('resize', handleWindowResize)
   if (chart) {
     chart.dispose()
     chart = null
   }
 })
 
-// 监听数据变化重新渲染
+// 监听指标选择变化重新渲染（数据加载由 loadHistoryData 负责）
 watch(
-  [filteredHistory, selectedIndicators],
+  selectedIndicators,
   () => {
     if (view.value === 'history') {
       nextTick(() => renderChart())
@@ -995,6 +1039,10 @@ const refresh = async () => {
     await themeFacade.refreshRuntime({ force: true, source: 'ui' })
     if (blockCode.value) {
       themeStockRows.value = await sectorAnalyzer.loadSectorStocks(blockCode.value, props.sectorName, true)
+    }
+    // 历史趋势页签打开时同步刷新历史序列
+    if (view.value === 'history') {
+      await loadHistoryData()
     }
 
     await nextTick()
@@ -1115,7 +1163,12 @@ onMounted(() => {
 
 watch(view, (newView) => {
   if (newView === 'history') {
-    nextTick(() => renderChart())
+    // 首次进入或数据为空时拉取；已有数据只重渲染
+    if (historyPoints.value.length === 0 && !historyError.value) {
+      loadHistoryData()
+    } else {
+      nextTick(() => renderChart())
+    }
   }
 })
 
@@ -2178,6 +2231,30 @@ td.outflow {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* 历史数据结构化状态（加载/错误/空态） */
+.history-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.history-source-hint {
+  padding: 6px 10px;
+  background: rgba(255, 177, 66, 0.12);
+  border: 1px solid rgba(255, 177, 66, 0.3);
+  border-radius: 8px;
+  color: #ffb142;
+  font-size: 11px;
 }
 
 .time-range-selector,

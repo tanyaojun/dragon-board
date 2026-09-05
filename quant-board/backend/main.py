@@ -22,6 +22,7 @@ from backend.api.market_data_routes import router as market_data_router
 from backend.api.ranktrend_routes import router as ranktrend_router
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 from backend.api.theme_heat_routes import router as theme_heat_router
+from backend.api.theme_history_routes import router as theme_history_router
 from backend.api.theme_momentum_routes import router as theme_momentum_router
 from backend.api.theme_rotation_routes import router as theme_rotation_router
 from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
@@ -114,6 +115,7 @@ app.include_router(hotlist_router)
 app.include_router(fusion_strategy_projection_router)
 app.include_router(snapshot_collector_router)
 app.include_router(theme_heat_router)
+app.include_router(theme_history_router)
 app.include_router(theme_momentum_router)
 app.include_router(theme_rotation_router)
 app.include_router(ths_main_monitor_router)

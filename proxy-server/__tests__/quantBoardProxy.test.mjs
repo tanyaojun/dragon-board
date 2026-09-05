@@ -10,6 +10,16 @@ test('theme heat summary and stock detail use QuantBoard proxy prefix', () => {
   assert.equal(shouldProxyToQuantBoard('/api/themes/fund-rows'), true)
 })
 
+test('theme stock volume series (history tab) proxies to QuantBoard', () => {
+  assert.equal(
+    shouldProxyToQuantBoard(
+      '/api/themes/stock-volume-series?theme_name=%E5%85%B3%E7%A8%8E%E6%88%98%E6%A6%82%E5%BF%B5',
+    ),
+    true,
+  )
+  assert.equal(shouldProxyToQuantBoard('/api/themes/stock-volume-series'), true)
+})
+
 test('theme momentum summary proxies to QuantBoard (v2 4th dimension)', () => {
   assert.equal(shouldProxyToQuantBoard('/api/theme-momentum/summary'), true)
   assert.equal(

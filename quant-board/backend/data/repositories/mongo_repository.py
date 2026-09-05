@@ -731,6 +731,80 @@ class MongoRepository:
             cursor = cursor.limit(limit)
         return {"rows": [self.local_sector_to_bundle_dict(row) for row in cursor], "source": "mongodb"}
 
+    def aggregate_stock_volume_by_theme(
+        self,
+        dataset_id: str,
+        theme_name: str,
+        *,
+        snapshot_type: str | None = None,
+        snapshot_types: list[str] | None = None,
+        trading_date: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        allowed_capture_modes: list[str] | None = None,
+        exclude_restored: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """按题材名聚合 snapshot_stock_rows 的成交量/成交额为槽位序列。
+
+        - themes 是题材名数组，MongoDB 等值匹配即数组元素包含语义。
+        - 每槽位聚合 totalVolume/totalAmount/stockCount；volumeCount/amountCount
+          记录组内可加数值的行数，全缺时对应总和按 MongoDB $sum 语义为 0，
+          消费方以 count 字段区分"真实 0"与"缺失"。
+        - 缺槽不补零：只返回实际有 stock rows 的槽位。
+        """
+        query = self._snapshot_row_query(
+            dataset_id,
+            snapshot_id=None,
+            snapshot_type=snapshot_type,
+            snapshot_types=snapshot_types,
+            trading_date=trading_date,
+            start_date=start_date,
+            end_date=end_date,
+            before_trading_date=None,
+            slot_time=None,
+            allowed_capture_modes=allowed_capture_modes,
+            exclude_restored=exclude_restored,
+        )
+        query["themes"] = theme_name
+        pipeline: list[dict[str, Any]] = [
+            {"$match": query},
+            {
+                "$group": {
+                    "_id": {
+                        "tradingDate": "$tradingDate",
+                        "slotTime": "$slotTime",
+                        "timestamp": "$timestamp",
+                    },
+                    "totalVolume": {"$sum": "$volume"},
+                    "totalAmount": {"$sum": "$amount"},
+                    "stockCount": {"$sum": 1},
+                    "volumeCount": {"$sum": {"$cond": [{"$isNumber": "$volume"}, 1, 0]}},
+                    "amountCount": {"$sum": {"$cond": [{"$isNumber": "$amount"}, 1, 0]}},
+                }
+            },
+            {"$sort": {"_id.timestamp": 1}},
+        ]
+        if limit and limit > 0:
+            pipeline.append({"$limit": limit})
+        cursor = self.db["snapshot_stock_rows"].aggregate(pipeline, allowDiskUse=True)
+        rows: list[dict[str, Any]] = []
+        for doc in cursor:
+            key = doc.get("_id") or {}
+            rows.append(
+                {
+                    "tradingDate": key.get("tradingDate"),
+                    "slotTime": key.get("slotTime"),
+                    "timestamp": key.get("timestamp"),
+                    "totalVolume": doc.get("totalVolume"),
+                    "totalAmount": doc.get("totalAmount"),
+                    "stockCount": doc.get("stockCount"),
+                    "volumeCount": doc.get("volumeCount"),
+                    "amountCount": doc.get("amountCount"),
+                }
+            )
+        return {"rows": rows, "count": len(rows), "source": "mongodb"}
+
     def snapshot_table_counts(self, dataset_id: str | None = None) -> dict[str, int]:
         query = {"datasetId": dataset_id} if dataset_id else {}
         return {
