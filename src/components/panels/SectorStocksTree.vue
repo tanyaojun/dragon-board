@@ -15,9 +15,11 @@
       <div class="sector-tree">
       <div class="tree-header">
         <h4>📊 题材列表</h4>
-        <ThemeSortControl class="tree-sort-control" />
-        <div class="tree-search">
-          <input v-model="treeSearch" placeholder="搜索题材..." class="search-input" />
+        <div class="tree-filter-row">
+          <ThemeSortControl class="tree-sort-control" />
+          <div class="tree-search">
+            <input v-model="treeSearch" placeholder="搜索题材..." class="search-input" />
+          </div>
         </div>
         <div class="tree-stats">
           共 {{ filteredSectors.length }} 个题材
@@ -476,12 +478,26 @@ watch([stockSearch, sortBy, sortDesc], () => {
   color: var(--text-primary);
 }
 
+.tree-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 .tree-sort-control {
+  flex-shrink: 0;
   font-size: 12px;
 }
 
+/* 行内空间有限：压缩排序摘要文本宽度，完整口径由触发按钮 title 提供 */
+.tree-sort-control :deep(.trigger-text) {
+  max-width: 96px;
+}
+
 .tree-search {
-  margin-bottom: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .search-input {
