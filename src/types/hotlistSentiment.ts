@@ -1,6 +1,6 @@
 // src/types/hotlistSentiment.ts
 // 热榜情绪类型契约：仅类型契约，计算在 QuantBoard 后端（GET /api/hotlist-sentiment/series）。
-// 类型区从 src/services/hotlist/HotListSentimentAnalyzer.ts 原样迁移，字段不加不减。
+// 类型区与后端 backend/analysis/hotlist/sentiment.py 输出契约保持一致，字段不加不减。
 import type { EmotionCycleStage, UnifiedEmotionStage } from './emotion'
 import type { ThsLimitUpPoolEvidence } from './index'
 

@@ -7,7 +7,7 @@
  * 当前系统只保留五阶段标准：
  * 冰点 / 启动 / 发酵 / 高潮 / 退潮
  *
- * DragonBreathAnalyzer 与 HotListSentimentAnalyzer 都应输出这套阶段。
+ * DragonBreathAnalyzer（前端）与 backend/analysis/hotlist/sentiment.py（后端，热榜情绪唯一实现）都应输出这套阶段。
  * 阶段必须由规则证据判定；旧 overall 字段只作为历史数据兼容，不参与阶段判断和展示。
  */
 export type UnifiedEmotionStage = '冰点' | '启动' | '发酵' | '高潮' | '退潮'

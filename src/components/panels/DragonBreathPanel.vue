@@ -1279,8 +1279,13 @@ async function loadHotListSentiment() {
     if (result.degraded || result.items.length === 0) {
       hotListSentiment.value = null
       hotListSentimentSlotTime.value = ''
-      hotListSentimentMissingDays.value = []
-      hotListSentimentError.value = result.reason || '热榜情绪数据暂不可用'
+      // 全窗口缺失（ok + items 全为 missing 条目）时保留逐日缺失明细，不吞成泛化文案；
+      // degraded 分支 missingDays 恒为空数组，赋值后行为与原实现一致
+      hotListSentimentMissingDays.value = result.missingDays
+      hotListSentimentError.value =
+        result.missingDays.length > 0
+          ? result.reason || `热榜情绪数据暂不可用（窗口缺失 ${result.missingDays.length} 日）`
+          : result.reason || '热榜情绪数据暂不可用'
       scheduleHotListSentimentRetry()
       return
     }
