@@ -372,12 +372,17 @@ def assemble_observation(
     analysis: dict[str, Any],
     stock: dict[str, Any],
     config: RankTrendConfig | None = None,
+    lc_tier_override: str | None = None,
 ) -> dict[str, Any]:
     """组装 observation.volumePrice / observation.synergy + 各维 signalTier（回测方案 §3.2）。
 
     与 API 单股链路（原 ranktrend_routes.py 内联组装）同源：resonance 已写入 analysis 时参与
     synergy 投票；replay 链路无 resonance（缺横截面市场 median）时共振维缺票（vote=0），
     synergy 仍可计算。返回写入后的 observation。
+
+    lc_tier_override（WP2a）：B/D 环境降档 K 帧确认未达时由 engine 传入确认值（如 "C"），
+    仅替换传入 _synergy_tier 的 lc_tier（synergy 连锁降档判断）；None = 现行为，
+    照旧取 observation.lifecycle.signalTier，发布输出 lifecycle.signalTier 不受影响。
     """
     c = config or RankTrendConfig()
     observation = analysis.setdefault("observation", {})
@@ -406,7 +411,8 @@ def assemble_observation(
         resonance.get("signalTier"), resonance.get("direction"),
         (observation.get("rankTrend") or {}).get("signalTier"), (observation.get("rankTrend") or {}).get("direction"),
         vp.get("signalTier"), vp.get("direction"),
-        (observation.get("lifecycle") or {}).get("signalTier"),
+        # WP2a：B/D 降档确认 override（None = 现行为，照旧取 lifecycle.signalTier）
+        str(lc_tier_override) if lc_tier_override else (observation.get("lifecycle") or {}).get("signalTier"),
         c,
         cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
         pm_tier=((observation.get("priceMomentum") or {}).get("signalTier")),

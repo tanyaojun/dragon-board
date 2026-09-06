@@ -1119,6 +1119,29 @@ class RankTrendPythonEngine:
             "risk": risk,
             "decision": decision,
         }, config=self.config)
+        # WP2a：B/D 环境降档连续确认（K>1 且激活时；E 连锁由上方 action 确认覆盖）。
+        # 仅 override synergy 侧 lc_tier 判断，observation.lifecycle.signalTier 发布输出保持原始值。
+        # R-C2 同源：active 且 K>1 时每帧无条件过 confirmed_value（非 B/D 帧更新基线/中断计数）。
+        # R-C4：抑制标注在 assemble_observation 之后追加（assemble 会重写 synergy.tierReasons）。
+        # R-C5：与 action 确认共用同一状态机实例，key 加 ":lc" 命名空间隔离
+        # （两通道同 key 会互相污染 streak/confirmed——K2 集成测试实证）。
+        _lc_tier_override = None
+        _bd_suppression = None
+        if self._gate_confirm_ctx.get("active") and self._gate_confirm_state.required_frames > 1:
+            _bd_key = f"{code}:lc"
+            _raw_lc = str((observation.get("lifecycle") or {}).get("signalTier") or "")
+            _required = self._gate_confirm_state.required_frames
+            if _raw_lc in ("B", "D"):
+                _confirmed_lc = self._gate_confirm_state.confirmed_value(
+                    _bd_key, _raw_lc, when_in=("B", "D"), default="C"
+                )
+                if _confirmed_lc != _raw_lc:
+                    _lc_tier_override = _confirmed_lc
+                    _bd_suppression = gate_reason(
+                        f"周期 {_raw_lc} 环境降档", self._gate_confirm_state.streak(_bd_key), _required
+                    )
+            else:
+                self._gate_confirm_state.confirmed_value(_bd_key, _raw_lc, when_in=("B", "D"), default="C")
         # 顶层 candidateTier/action 按 meta 模式选择，保持回测消费兼容；两个分层同时输出
         tier_source = execution_strategy if self._candidate_tier_mode(meta) == "execution" else strategy
         jump = _compat_callable("detect_rank_jumps")(
@@ -1302,7 +1325,10 @@ class RankTrendPythonEngine:
                     },
                     self.config,
                 )
-            assemble_observation(rank_trend, stock, self.config)
+            assemble_observation(rank_trend, stock, self.config, lc_tier_override=_lc_tier_override)
+            # R-C4：assemble 重写 synergy.tierReasons，抑制标注在此追加才可见
+            if _bd_suppression:
+                rank_trend["observation"]["synergy"].setdefault("tierReasons", []).append(_bd_suppression)
         return {
             "snapshotId": frame.get("snapshotId"),
             "timestamp": frame.get("timestamp"),
