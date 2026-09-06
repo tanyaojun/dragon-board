@@ -226,8 +226,8 @@ def _calculate_hot_trin(up_count: int, down_count: int, up_turnover: float, down
 
 
 def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_date: str | None = None) -> dict:
-    # TS: buildDayMetricsFromSorted L458-546；状态计数依赖 resolve_stock_status，
-    # Task 3 完成前走 fallback 版（Task 3 接入后自动升级为 displayStatus 优先）。
+    # TS: buildDayMetricsFromSorted L458-546；状态计数经 resolve_stock_status（displayStatus 优先）。
+    # statusSourceCounts 为后端超集约定（非 TS HotListDayMetrics 字段），Task 6 series 文档透出。
     top = sorted_rows[:top_n]
     status_counts = {label: 0 for label in STATUS_LABELS}
     status_source = {"displayStatus": 0, "fallback": 0}
@@ -268,7 +268,7 @@ def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_d
     opportunity = active + status_counts["新入观察"]
     risk = status_counts["资金背离"] + status_counts["转弱预警"]
     crowded = status_counts["高位拥挤"]
-    return {
+    result = {
         "tradingDate": trading_date,
         "total": len(sorted_rows),
         "topN": total,
@@ -298,6 +298,8 @@ def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_d
         "crowdedCount": crowded,
         "crowdedShare": _safe_divide(crowded, total),
     }
+    result["statusSourceCounts"] = status_source
+    return result
 
 
 def build_layer_metrics(rows: list[dict], trading_date: str | None = None) -> dict:
@@ -312,7 +314,15 @@ def build_layer_metrics(rows: list[dict], trading_date: str | None = None) -> di
 
 
 def resolve_stock_status(stock: dict, context_rows: list[dict], status_source: dict | None = None) -> str:
-    # Task 3 将替换为 displayStatus 优先 + fallback 的正式实现
+    # TS: createStockStatusResolver L419-426 —— rankTrend displayStatus 优先，fallback 兜底。
+    # 后端行由编排层注入 displayStatusLabel（snapshot_analysis.displayStatus 的规范 label）。
+    label = stock.get("displayStatusLabel")
+    if isinstance(label, str) and label in STATUS_LABELS:
+        if status_source is not None:
+            status_source["displayStatus"] += 1
+        return label
+    if status_source is not None:
+        status_source["fallback"] += 1
     return fallback_status_label(stock)
 
 
@@ -339,3 +349,233 @@ def fallback_status_label(stock: dict) -> str:
     if change >= 3 or rank <= 100:
         return "新入观察"
     return "样本不足"
+
+
+def _empty_ths_pools() -> dict:
+    # TS: createEmptyThsPoolsEvidence
+    return {
+        "source": "ths-limitup-pools", "degraded": False, "errors": [],
+        "poolCounts": {"one": 0, "two": 0, "three": 0, "four": 0, "high": 0, "failed": 0, "rushing": 0, "drawdown": 0},
+        "failedCount": 0, "rushingCount": 0, "drawdownCount": 0,
+        "drawdownRiskLabel": "涨停股回撤榜", "maxDrawdown": None, "avgDrawdown": None,
+    }
+
+
+def build_market_limit_evidence(market_data: dict | None) -> dict:
+    # TS: buildMarketLimitEvidence L586-607
+    if not market_data:
+        return {
+            "ztCount": 0, "zhabanCount": 0, "fengbanRate": 0,
+            "board1": 0, "board2": 0, "board3": 0, "board4Plus": 0,
+            "maxContinuousDays": 0, "thsPools": _empty_ths_pools(),
+        }
+    zhaban = market_data.get("zhaban") if isinstance(market_data.get("zhaban"), dict) else {}
+    limit_data = market_data.get("limitData") if isinstance(market_data.get("limitData"), dict) else {}
+    board1 = to_number(limit_data.get("yiban"))
+    board2 = to_number(limit_data.get("erban"))
+    board3 = to_number(limit_data.get("sanban"))
+    board4_plus = to_number(limit_data.get("sibanPlus"))
+    fallback_max_days = 4 if board4_plus > 0 else 3 if board3 > 0 else 2 if board2 > 0 else 1 if board1 > 0 else 0
+    return {
+        "ztCount": to_number(market_data.get("ztCount")),
+        "zhabanCount": to_number(zhaban.get("count")),
+        "fengbanRate": to_number(zhaban.get("fengbanRate")),
+        "board1": board1, "board2": board2, "board3": board3, "board4Plus": board4_plus,
+        "maxContinuousDays": to_number(market_data.get("maxContinuousDays")) or fallback_max_days,
+        "thsPools": market_data.get("thsLimitUpPools") if isinstance(market_data.get("thsLimitUpPools"), dict) else _empty_ths_pools(),
+    }
+
+
+def build_limit_intersection_evidence(sorted_rows: list[dict], top_n: int | None) -> dict:
+    # TS: buildLimitIntersectionEvidence L613-643
+    top20 = sorted_rows[:20]
+    top50 = sorted_rows[:50]
+    top100 = sorted_rows[: _resolve_sample_size(sorted_rows, top_n)]
+    near = board2plus = 0
+    max_height = 0
+    zhaban = 0
+    for stock in top100:
+        signal = get_stock_limit_signal(stock)
+        if signal["isAlmostLimitUp"]:
+            near += 1
+        if signal["isBoard2Plus"]:
+            board2plus += 1
+        max_height = max(max_height, signal["boardHeight"])
+        if _has_stock_zhaban_signal(stock):
+            zhaban += 1
+    limit_up = sum(1 for stock in top100 if _has_limit_up_evidence(stock))
+    size = len(top100)
+    return {
+        "top20LimitUpCount": sum(1 for stock in top20 if _has_limit_up_evidence(stock)),
+        "top50LimitUpCount": sum(1 for stock in top50 if _has_limit_up_evidence(stock)),
+        "top100LimitUpCount": limit_up,
+        "top100LimitUpShare": _safe_divide(limit_up, size),
+        "top100NearLimitUpCount": near,
+        "top100Board2PlusCount": board2plus,
+        "top100MaxBoardHeight": max_height,
+        "top100ZhabanCount": zhaban,
+        "top100ZhabanShare": _safe_divide(zhaban, size),
+    }
+
+
+def build_yesterday_hot_limit_evidence(yesterday_rows: list[dict], today_rows: list[dict], top_n: int | None) -> dict:
+    # TS: buildYesterdayHotLimitEvidence L656-712
+    empty = {"count": 0, "retainedTop100Count": 0, "avgChange": None, "positiveRate": None, "weakeningRate": None, "failedOrWeakRate": None}
+    if not yesterday_rows:
+        return empty
+    today_by_code = {normalize_code(row.get("code")): row for row in today_rows if normalize_code(row.get("code"))}
+    today_size = _resolve_sample_size(today_rows, top_n)
+    yesterday_size = _resolve_sample_size(yesterday_rows, top_n)
+    today_top_codes = {normalize_code(row.get("code")) for row in today_rows[:today_size]}
+    yesterday_limit_codes = [
+        normalize_code(row.get("code"))
+        for row in yesterday_rows[:yesterday_size]
+        if _has_limit_up_evidence(row) and normalize_code(row.get("code"))
+    ]
+    if not yesterday_limit_codes:
+        return empty
+
+    matched = retained = positive = weakening = failed_or_weak = 0
+    change_sum = 0.0
+    for code in yesterday_limit_codes:
+        stock = today_by_code.get(code)
+        if not stock:
+            weakening += 1
+            failed_or_weak += 1
+            continue
+        change = to_number(stock.get("change"))
+        today_label = resolve_stock_status(stock, today_rows)
+        is_risk = today_label in ("资金背离", "转弱预警")
+        matched += 1
+        change_sum += change
+        if change > 0:
+            positive += 1
+        if code in today_top_codes:
+            retained += 1
+        if change <= -2 or is_risk:
+            weakening += 1
+        if change <= 0 or is_risk or not get_stock_limit_signal(stock)["isAlmostLimitUp"]:
+            failed_or_weak += 1
+    return {
+        "count": len(yesterday_limit_codes),
+        "retainedTop100Count": retained,
+        "avgChange": _safe_divide(change_sum, matched) if matched else None,
+        "positiveRate": _safe_divide(positive, matched) if matched else None,
+        "weakeningRate": _safe_divide(weakening, len(yesterday_limit_codes)),
+        "failedOrWeakRate": _safe_divide(failed_or_weak, len(yesterday_limit_codes)),
+    }
+
+
+def build_limit_evidence(today_rows: list[dict], yesterday_rows: list[dict], top_n: int | None, market_data: dict | None) -> dict:
+    # TS: buildLimitEvidence L714-725
+    return {
+        "market": build_market_limit_evidence(market_data),
+        "intersection": build_limit_intersection_evidence(today_rows, top_n),
+        "yesterdayHotLimit": build_yesterday_hot_limit_evidence(yesterday_rows, today_rows, top_n),
+    }
+
+
+def build_yesterday_strong_performance(yesterday_rows: list[dict], today_rows: list[dict], top_n: int | None) -> dict:
+    # TS: buildYesterdayStrongPerformance L754-814
+    empty = {"count": 0, "matchedCount": 0, "retainedTop100Count": 0, "avgChange": None,
+             "positiveCount": 0, "positiveRate": None, "weakeningCount": 0, "weakeningRate": None}
+    if not yesterday_rows:
+        return empty
+    today_by_code = {normalize_code(row.get("code")): row for row in today_rows if normalize_code(row.get("code"))}
+    today_size = _resolve_sample_size(today_rows, top_n)
+    yesterday_size = _resolve_sample_size(yesterday_rows, top_n)
+    today_top_codes = {normalize_code(row.get("code")) for row in today_rows[:today_size]}
+    strong_codes = [
+        normalize_code(row.get("code"))
+        for row in yesterday_rows[:yesterday_size]
+        if resolve_stock_status(row, yesterday_rows) in _YESTERDAY_STRONG_LABELS and normalize_code(row.get("code"))
+    ]
+    if not strong_codes:
+        return empty
+
+    matched = retained = positive = weakening = 0
+    change_sum = 0.0
+    for code in strong_codes:
+        stock = today_by_code.get(code)
+        if not stock:
+            weakening += 1
+            continue
+        change = to_number(stock.get("change"))
+        today_label = resolve_stock_status(stock, today_rows)
+        matched += 1
+        change_sum += change
+        if change > 0:
+            positive += 1
+        if code in today_top_codes:
+            retained += 1
+        if change <= -2 or today_label in ("资金背离", "转弱预警"):
+            weakening += 1
+    return {
+        "count": len(strong_codes),
+        "matchedCount": matched,
+        "retainedTop100Count": retained,
+        "avgChange": _safe_divide(change_sum, matched) if matched else None,
+        "positiveCount": positive,
+        "positiveRate": _safe_divide(positive, matched) if matched else None,
+        "weakeningCount": weakening,
+        "weakeningRate": _safe_divide(weakening, len(strong_codes)),
+    }
+
+
+def build_comparison(stocks: list[dict], yesterday_rows: list[dict], day_before_rows: list[dict], top_n: int | None) -> dict:
+    # TS: buildComparison L816-892
+    today_rows = sort_rows(stocks)
+    yesterday_sorted = sort_rows(yesterday_rows)
+    day_before_sorted = sort_rows(day_before_rows)
+    today_size = _resolve_sample_size(today_rows, top_n)
+    yesterday_size = _resolve_sample_size(yesterday_sorted, top_n)
+    day_before_size = _resolve_sample_size(day_before_sorted, top_n)
+
+    today = build_day_metrics_from_sorted(today_rows, today_size)
+    yesterday = build_day_metrics_from_sorted(yesterday_sorted, yesterday_size) if yesterday_sorted else None
+    day_before = build_day_metrics_from_sorted(day_before_sorted, day_before_size) if day_before_sorted else None
+
+    today_top_codes = {normalize_code(row.get("code")) for row in today_rows[:today_size]}
+    yesterday_top_codes = {normalize_code(row.get("code")) for row in yesterday_sorted[:yesterday_size]}
+    day_before_top_codes = {normalize_code(row.get("code")) for row in day_before_sorted[:day_before_size]}
+    today_by_code = {normalize_code(row.get("code")): row for row in today_rows if normalize_code(row.get("code"))}
+
+    retain_from_yesterday = len([code for code in today_top_codes if code in yesterday_top_codes])
+    retain_from_day_before = len([code for code in today_top_codes if code in day_before_top_codes])
+    new_top_codes = [code for code in today_top_codes if code not in yesterday_top_codes]
+    new_strong = sum(
+        1 for code in new_top_codes
+        if code in today_by_code and resolve_stock_status(today_by_code[code], today_rows) == "强资确认"
+    )
+    yesterday_strong_codes = [
+        normalize_code(row.get("code")) for row in yesterday_sorted[:yesterday_size]
+        if resolve_stock_status(row, yesterday_sorted) == "强资确认" and normalize_code(row.get("code"))
+    ]
+    yesterday_crowded_codes = [
+        normalize_code(row.get("code")) for row in yesterday_sorted[:yesterday_size]
+        if resolve_stock_status(row, yesterday_sorted) == "高位拥挤" and normalize_code(row.get("code"))
+    ]
+    yesterday_strong_retain = (
+        _safe_divide(len([code for code in yesterday_strong_codes if code in today_top_codes]), len(yesterday_strong_codes))
+        if yesterday_strong_codes else None
+    )
+    yesterday_crowded_risk = sum(
+        1 for code in yesterday_crowded_codes
+        if code in today_by_code and resolve_stock_status(today_by_code[code], today_rows) in ("资金背离", "转弱预警")
+    )
+    return {
+        "today": today,
+        "yesterday": yesterday,
+        "dayBefore": day_before,
+        "totalChange1d": today["total"] - yesterday["total"] if yesterday else None,
+        "totalChange2d": today["total"] - day_before["total"] if day_before else None,
+        "top100RetainFromYesterday": retain_from_yesterday,
+        "top100RetainFromDayBefore": retain_from_day_before,
+        "top100RetainRateFromYesterday": _safe_divide(retain_from_yesterday, yesterday_size or today_size),
+        "top100RetainRateFromDayBefore": _safe_divide(retain_from_day_before, day_before_size or today_size),
+        "newTop100Count": len(new_top_codes),
+        "newTop100StrongMoneyCount": new_strong,
+        "yesterdayStrongRetainRate": yesterday_strong_retain,
+        "yesterdayCrowdedRiskCount": yesterday_crowded_risk,
+        "yesterdayStrongPerformance": build_yesterday_strong_performance(yesterday_sorted, today_rows, top_n),
+    }
