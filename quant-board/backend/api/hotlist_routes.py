@@ -43,3 +43,22 @@ def ingest_hotlist_sentiment(payload: HotListSentimentPayload) -> dict[str, Any]
         raise HTTPException(status_code=503, detail=f"MongoDB primary is unavailable: {exc}") from exc
 
     return {"status": "ok", **query}
+
+
+@router.get("/series")
+def get_hotlist_sentiment_series(
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+    days: int = 3,
+) -> dict[str, Any]:
+    capped_days = max(1, min(int(days), 30))
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}", "items": []}
+    try:
+        from backend.services.theme.hotlist_sentiment_compute import HotListSentimentComputeService
+
+        return HotListSentimentComputeService(db).ensure_series(dataset_id, snapshot_type, capped_days)
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"series_compute_failed: {exc}", "items": []}
