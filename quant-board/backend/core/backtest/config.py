@@ -10,6 +10,7 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     "feeRate": 0.0003,
     "stampTaxRate": 0.0005,
     "slippageRate": 0.001,
+    "fallbackSlippageRate": 0.001,  # 快照退化成交（fillFallbackMode=fallback_penalized）额外滑点罚（WP3.1 定值）
     "maxHoldingBars": 40,
     "minHoldingBars": 0,  # 阶段6 退出结构研究：最小持有帧数，默认 0 不改变行为
     "signalExitDelayBars": 0,  # 阶段6 方向2 信号驱动退出去噪：最小持有期内抑制信号驱动退出，默认 0 不改变行为
