@@ -579,3 +579,335 @@ def build_comparison(stocks: list[dict], yesterday_rows: list[dict], day_before_
         "yesterdayCrowdedRiskCount": yesterday_crowded_risk,
         "yesterdayStrongPerformance": build_yesterday_strong_performance(yesterday_sorted, today_rows, top_n),
     }
+
+
+# ---------------------------------------------------------------------------
+# Task 4: 5 证据 evaluator + resolveStage 级联 + 主入口（TS L894-1303）
+# ---------------------------------------------------------------------------
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def _js_to_fixed(value: float, digits: int = 0) -> str:
+    # JS Number.toFixed 等价：对 double 的精确二进制值做四舍五入（ties 取大）。
+    # 必须用 Decimal(value)（float 精确展开）而非 Decimal(str(value))：
+    # toFixed 语义作用在二进制浮点精确值上，例如 (1.005).toFixed(2) === "1.00"。
+    quantum = Decimal(1).scaleb(-digits)
+    return str(Decimal(value).quantize(quantum, rounding=ROUND_HALF_UP))
+
+
+def _js_num_text(value: Any) -> str:
+    # JS 模板字符串 ${number} 等价：整数值 number 不带小数点（98.0 → "98"）。
+    # TS 侧 ztCount/zhabanCount 等经 toNumber 后仍是 JS number，插值时整数不出现 ".0"。
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+# TS: EMOTION_CYCLE_STAGE_CONFIG.confidenceBase（src/types/emotion.ts L51-75，已逐字核对）
+_STAGE_CONFIDENCE_BASE = {"冰点": 56, "启动": 58, "发酵": 62, "高潮": 64, "退潮": 64}
+# TS: getEmotionCycleStageSummary —— EMOTION_CYCLE_STAGE_CONFIG.summary（src/types/emotion.ts L51-75 逐字复制）
+_STAGE_SUMMARY = {
+    "冰点": "机会稀少，风险或弱承接占优，优先控制仓位和交易频率。",
+    "启动": "情绪开始修复，新增线索和点火机会增多，但持续性仍待确认。",
+    "发酵": "强资金、点火和主线扩散形成合力，交易情绪处于扩散阶段。",
+    "高潮": "前排强度和资金承接较强，但拥挤明显，适合强势识别，不宜盲目追高。",
+    "退潮": "风险状态升温或强票承接走弱，交易情绪进入防守优先阶段。",
+}
+
+
+def _push_if(target: list[str], condition: bool, text: str) -> None:
+    if condition:
+        target.append(text)
+
+
+def _evaluate_tape_strength(today: dict, layers: dict | None) -> dict:
+    # TS: evaluateTapeStrength L918-936
+    top20 = (layers or {}).get("top20") or today
+    top50 = (layers or {}).get("top50") or today
+    signals: list[str] = []
+    warnings: list[str] = []
+    strong = top20["upRatio"] >= 0.65 and top50["upRatio"] >= 0.55 and today["upRatio"] >= 0.55
+    firm = top20["upRatio"] >= 0.6 and today["upRatio"] >= 0.48
+    weak = today["upRatio"] <= 0.42 or (top20["upRatio"] < 0.5 and top50["upRatio"] < 0.45)
+    level = "strong" if strong else "firm" if firm else "weak" if weak else "mixed"
+    _push_if(signals, strong, "前20/前50/全池上涨扩散较强")
+    _push_if(signals, not strong and firm, "前排上涨修复，全池仍有承接")
+    _push_if(signals, today["nearLimitUpCount"] >= 8, f"全池近涨停 {today['nearLimitUpCount']} 只")
+    _push_if(signals, today["highGainCount"] >= 18, f"全池高涨幅 {today['highGainCount']} 只")
+    _push_if(warnings, weak, f"热榜上涨宽度偏弱，全池上涨 {_js_to_fixed(today['upRatio'] * 100)}%")
+    return {"level": level, "signals": signals, "warnings": warnings}
+
+
+def _evaluate_money_acceptance(today: dict) -> dict:
+    # TS: evaluateMoneyAcceptance L938-954（isTrinStrong <1 / isTrinWeak >1.15）
+    signals: list[str] = []
+    warnings: list[str] = []
+    level = "neutral"
+    trin = today["hotTrin"]
+    if trin is None:
+        level = "unknown"
+    elif trin < 1:
+        level = "strong"
+        signals.append(f"热榜 TRIN {_js_to_fixed(trin, 2)}，上涨股成交承接占优")
+    elif trin > 1.15:
+        level = "weak"
+        warnings.append(f"热榜 TRIN {_js_to_fixed(trin, 2)}，上涨家数与成交承接不匹配")
+    return {"level": level, "signals": signals, "warnings": warnings}
+
+
+def _evaluate_opportunity_expansion(comparison: dict) -> dict:
+    # TS: evaluateOpportunityExpansion L956-978
+    today = comparison["today"]
+    yesterday = comparison.get("yesterday")
+    signals: list[str] = []
+    warnings: list[str] = []
+    active_share = today["activeOpportunityShare"]
+    strong_money_share = today["statusShares"]["强资确认"]
+    opportunity_rising = bool(yesterday and active_share > yesterday["activeOpportunityShare"] + 0.04)
+    broad = active_share >= 0.18 and strong_money_share >= 0.08
+    improving = opportunity_rising or comparison["newTop100Count"] >= 25
+    scarce = active_share < 0.08
+    level = "broad" if broad else "improving" if improving else "scarce" if scarce else "normal"
+    _push_if(signals, broad, f"强资确认与点火观察形成扩散，占比 {_js_to_fixed(active_share * 100)}%")
+    _push_if(signals, not broad and opportunity_rising, "有效机会占比较昨日改善")
+    _push_if(signals, not broad and comparison["newTop100Count"] >= 25, f"今日新入全池 {comparison['newTop100Count']} 只")
+    _push_if(warnings, scarce, f"有效机会偏少，占比 {_js_to_fixed(active_share * 100)}%")
+    return {"level": level, "signals": signals, "warnings": warnings}
+
+
+def _evaluate_risk_pressure(comparison: dict) -> dict:
+    # TS: evaluateRiskPressure L980-1005
+    today = comparison["today"]
+    yesterday = comparison.get("yesterday")
+    signals: list[str] = []
+    warnings: list[str] = []
+    risk_rising = bool(yesterday and today["riskShare"] > yesterday["riskShare"] + 0.04)
+    crowded_rising = bool(yesterday and today["crowdedShare"] > yesterday["crowdedShare"] + 0.04)
+    if today["riskShare"] >= 0.35:
+        level = "severe"
+    elif today["riskShare"] >= 0.2 or risk_rising:
+        level = "high"
+    elif today["crowdedShare"] >= 0.18 or crowded_rising:
+        level = "crowded"
+    else:
+        level = "low"
+    _push_if(warnings, today["riskShare"] >= 0.35, f"风险压力 {_js_to_fixed(today['riskShare'] * 100)}%，资金背离与转弱预警偏高")
+    _push_if(warnings, 0.2 <= today["riskShare"] < 0.35, f"风险压力 {_js_to_fixed(today['riskShare'] * 100)}%")
+    _push_if(warnings, risk_rising, "资金背离与转弱预警占比上升")
+    _push_if(warnings, today["crowdedShare"] >= 0.18, f"高位拥挤 {_js_to_fixed(today['crowdedShare'] * 100)}%")
+    _push_if(warnings, crowded_rising, "高位拥挤占比上升")
+    _push_if(signals, level == "low", "风险压力暂未扩散")
+    return {"level": level, "signals": signals, "warnings": warnings}
+
+
+def _evaluate_continuity(comparison: dict) -> dict:
+    # TS: evaluateContinuity L1007-1036
+    signals: list[str] = []
+    warnings: list[str] = []
+    retain_rate = comparison.get("yesterdayStrongRetainRate")
+    performance = comparison["yesterdayStrongPerformance"]
+    positive_rate = performance.get("positiveRate")
+    weakening_rate = performance.get("weakeningRate")
+    weak = (weakening_rate is not None and weakening_rate >= 0.45) or (retain_rate is not None and retain_rate <= 0.25)
+    strong = (not weak) and (
+        (positive_rate is not None and positive_rate >= 0.6) or (retain_rate is not None and retain_rate >= 0.6)
+    )
+    _push_if(signals, retain_rate is not None and retain_rate >= 0.6, "昨日强资确认留榜率较高")
+    _push_if(warnings, retain_rate is not None and retain_rate <= 0.25, "昨日强资确认留榜率偏低")
+    _push_if(signals, positive_rate is not None and positive_rate >= 0.6,
+             f"昨日强票今日正收益率 {_js_to_fixed((positive_rate or 0) * 100)}%")
+    _push_if(warnings, weakening_rate is not None and weakening_rate >= 0.45,
+             f"昨日强票转弱或掉榜率 {_js_to_fixed((weakening_rate or 0) * 100)}%")
+    return {"level": "weak" if weak else "strong" if strong else "normal", "signals": signals, "warnings": warnings}
+
+
+def _collect_limit_evidence_messages(limit_evidence: dict | None) -> dict:
+    # TS: collectLimitEvidenceMessages L1038-1091
+    signals: list[str] = []
+    warnings: list[str] = []
+    if not limit_evidence:
+        return {"level": "neutral", "signals": signals, "warnings": warnings}
+    market = limit_evidence["market"]
+    intersection = limit_evidence["intersection"]
+    yesterday_hot = limit_evidence["yesterdayHotLimit"]
+    ths = market.get("thsPools") or {}
+    _push_if(signals, intersection["top100LimitUpCount"] > 0 or intersection["top100NearLimitUpCount"] > 0,
+             f"热榜全池涨停 {intersection['top100LimitUpCount']} 只，近涨停 {intersection['top100NearLimitUpCount']} 只")
+    _push_if(signals, intersection["top100Board2PlusCount"] > 0,
+             f"热榜全池二板以上 {intersection['top100Board2PlusCount']} 只，最高 {intersection['top100MaxBoardHeight']} 板")
+    _push_if(signals, market["ztCount"] > 0,
+             f"全市场涨停 {_js_num_text(market['ztCount'])} 只，封板率 {_js_to_fixed(market['fengbanRate'])}%")
+    positive = yesterday_hot.get("positiveRate")
+    _push_if(signals, positive is not None and positive >= 0.55,
+             f"昨日热榜涨停今日正收益率 {_js_to_fixed((positive or 0) * 100)}%")
+    _push_if(warnings, intersection["top100ZhabanCount"] > 0, f"热榜全池个股炸板 {intersection['top100ZhabanCount']} 只")
+    failed_weak = yesterday_hot.get("failedOrWeakRate")
+    _push_if(warnings, failed_weak is not None and failed_weak >= 0.5,
+             f"昨日热榜涨停走弱或冲板失败率 {_js_to_fixed((failed_weak or 0) * 100)}%")
+    _push_if(warnings, market["zhabanCount"] > 0, f"全市场炸板 {_js_num_text(market['zhabanCount'])} 只，仅作背景参考")
+    _push_if(warnings, (ths.get("failedCount") or 0) > 0, f"THS炸板池 {ths.get('failedCount')} 只，仅作全市场炸板补充证据")
+    _push_if(warnings, (ths.get("drawdownCount") or 0) > 0,
+             f"{ths.get('drawdownRiskLabel')} {_js_num_text(ths.get('drawdownCount'))} 只，不等同于全市场亏钱效应")
+    return {"level": "neutral", "signals": signals, "warnings": warnings}
+
+
+def _resolve_risk_level(risk_pressure: dict, continuity: dict) -> str:
+    # TS: resolveRiskLevel L1097-1108
+    risk = risk_pressure["level"]
+    cont = continuity["level"]
+    if risk == "severe" or (risk == "high" and cont == "weak"):
+        return "高"
+    if risk in ("high", "crowded") or cont == "weak":
+        return "中"
+    return "低"
+
+
+def resolve_stage(comparison: dict, layers: dict | None = None, limit_evidence: dict | None = None) -> dict:
+    # TS: resolveStage L1110-1267 —— 级联顺序 retreat → climax → ferment → start → ice，逐条布尔条件不许简化
+    today = comparison["today"]
+    tape = _evaluate_tape_strength(today, layers)
+    money = _evaluate_money_acceptance(today)
+    expansion = _evaluate_opportunity_expansion(comparison)
+    risk_pressure = _evaluate_risk_pressure(comparison)
+    continuity = _evaluate_continuity(comparison)
+    limit_messages = _collect_limit_evidence_messages(limit_evidence)
+    signals = tape["signals"] + money["signals"] + expansion["signals"] + risk_pressure["signals"] + continuity["signals"] + limit_messages["signals"]
+    warnings = tape["warnings"] + money["warnings"] + expansion["warnings"] + risk_pressure["warnings"] + continuity["warnings"] + limit_messages["warnings"]
+
+    change1d = comparison.get("totalChange1d")
+    total_expanded = change1d is not None and change1d > 0
+    total_shrank = change1d is not None and change1d < 0
+    risk_elevated = risk_pressure["level"] in ("high", "severe")
+    risk_level = _resolve_risk_level(risk_pressure, continuity)
+    tape_weak = tape["level"] == "weak"
+    tape_strong = tape["level"] == "strong"
+    tape_at_least_firm = tape["level"] in ("strong", "firm")
+    money_weak = money["level"] == "weak"
+    money_not_weak = money["level"] != "weak"
+    money_strong = money["level"] == "strong"
+    effective_spread = today["activeOpportunityShare"] >= 0.12 and today["statusShares"]["强资确认"] >= 0.08
+    broad_spread = expansion["level"] == "broad"
+    high_heat = today["nearLimitUpCount"] >= 10 or (today["highGainCount"] >= 25 and today["highTurnoverCount"] >= 20)
+    intersection = (limit_evidence or {}).get("intersection")
+    yesterday_hot = (limit_evidence or {}).get("yesterdayHotLimit")
+    limit_spread = bool(intersection and (intersection["top100LimitUpCount"] >= 6 or intersection["top100NearLimitUpCount"] >= 10))
+    front_limit_hot = bool(intersection and (intersection["top20LimitUpCount"] >= 3 or intersection["top50LimitUpCount"] >= 6))
+    limit_height_confirmed = bool(intersection and (intersection["top100Board2PlusCount"] >= 3 or intersection["top100MaxBoardHeight"] >= 3))
+    yesterday_limit_weak = bool(
+        yesterday_hot and yesterday_hot["count"] >= 3
+        and yesterday_hot.get("failedOrWeakRate") is not None and yesterday_hot["failedOrWeakRate"] >= 0.5
+    )
+    severe_risk_shrink = (
+        risk_pressure["level"] == "severe" and total_shrank
+        and expansion["level"] != "broad" and money["level"] != "strong"
+    )
+
+    _push_if(signals, total_expanded, f"热榜池较上一日扩张 {comparison['totalChange1d']} 只")
+    _push_if(warnings, total_shrank, f"热榜池较上一日收缩 {abs(comparison.get('totalChange1d') or 0)} 只")
+    _push_if(warnings, risk_level == "高" and not tape_weak and not money_weak,
+             "风险等级高，但上涨和成交承接尚未破坏，按阶段主方向处理")
+
+    retreat = (
+        severe_risk_shrink
+        or (yesterday_limit_weak and risk_elevated and (tape_weak or money_weak))
+        or (risk_elevated and (tape_weak or money_weak))
+        or (risk_pressure["level"] == "severe" and continuity["level"] == "weak"
+            and today["upRatio"] < 0.52 and money["level"] != "strong")
+        or (total_shrank and expansion["level"] == "scarce" and today["upRatio"] < 0.5 and (risk_elevated or money_weak))
+    )
+    if retreat:
+        return {"stage": "退潮", "riskLevel": risk_level, "signals": signals,
+                "warnings": warnings or ["风险状态占比偏高，先按防守阶段处理"]}
+
+    climax = tape_strong and money_not_weak and (
+        (money_strong and high_heat and broad_spread)
+        or (front_limit_hot and limit_height_confirmed and today["crowdedShare"] >= 0.16 and broad_spread)
+        or (today["nearLimitUpCount"] >= 8 and today["crowdedShare"] >= 0.18 and broad_spread)
+        or (today["crowdedShare"] >= 0.28 and today["activeOpportunityShare"] >= 0.22)
+    )
+    if climax:
+        return {"stage": "高潮", "riskLevel": risk_level,
+                "signals": signals or ["前排高涨幅与高位拥挤同时增加"],
+                "warnings": warnings or ["热度强但追击赔率下降，注意高位兑现风险"]}
+
+    ferment = (
+        (expansion["level"] == "broad" or effective_spread or (limit_spread and today["activeOpportunityShare"] >= 0.12))
+        and tape_at_least_firm and money_not_weak
+    )
+    if ferment:
+        return {"stage": "发酵", "riskLevel": risk_level,
+                "signals": signals or ["强资确认与点火观察形成有效扩散"], "warnings": warnings}
+
+    start = (
+        (total_expanded or expansion["level"] == "improving" or comparison["newTop100Count"] >= 25
+         or ((intersection or {}).get("top100NearLimitUpCount") or 0) >= 3)
+        and today["upRatio"] >= 0.42 and money_not_weak and not tape_weak
+    )
+    if start:
+        return {"stage": "启动", "riskLevel": risk_level,
+                "signals": signals or ["热榜新增和机会状态开始改善"], "warnings": warnings}
+
+    return {"stage": "冰点", "riskLevel": risk_level,
+            "signals": signals or ["热榜机会状态尚未形成有效扩散"],
+            "warnings": warnings or ["强资确认与点火观察偏少，等待下一轮扩散确认"]}
+
+
+def _calculate_confidence(stage: str, signals: list[str], warnings: list[str]) -> int:
+    # TS: calculateConfidence L1269-1273
+    base = _STAGE_CONFIDENCE_BASE.get(stage, 58)
+    adjustment = min(18, len(signals) * 5) - min(12, len(warnings) * 3)
+    return max(45, min(90, base + adjustment))
+
+
+def compute_hotlist_sentiment(
+    stocks: list[dict],
+    yesterday: dict | None = None,
+    day_before: dict | None = None,
+    market_data: dict | None = None,
+    top_n: int | None = None,
+) -> dict:
+    # TS: HotListSentimentAnalyzer.analyze L1276-1303 的 Python 等价主入口
+    sorted_stocks = sort_rows(stocks)
+    yesterday_rows = sort_rows((yesterday or {}).get("rows") or [])
+    top_n = top_n if top_n and top_n > 0 else None
+    sample_size = _resolve_sample_size(sorted_stocks, top_n)
+    layers = build_layer_metrics(stocks)
+    comparison = build_comparison(stocks, yesterday_rows, sort_rows((day_before or {}).get("rows") or []), top_n)
+    # TS buildComparison 从 snapshot 注入 tradingDate（L833/L836）；Python build_comparison 只收 rows，
+    # tradingDate 在编排层回填（Task 3 审查裁决落实，snapshot 缺失时保持 None）。
+    if comparison.get("yesterday") and (yesterday or {}).get("tradingDate") is not None:
+        comparison["yesterday"]["tradingDate"] = (yesterday or {}).get("tradingDate")
+    if comparison.get("dayBefore") and (day_before or {}).get("tradingDate") is not None:
+        comparison["dayBefore"]["tradingDate"] = (day_before or {}).get("tradingDate")
+    limit_evidence = build_limit_evidence(sorted_stocks, yesterday_rows, top_n, market_data)
+    stage_evidence = resolve_stage(comparison, layers, limit_evidence)
+    confidence = _calculate_confidence(stage_evidence["stage"], stage_evidence["signals"], stage_evidence["warnings"])
+
+    status_source = {"displayStatus": 0, "fallback": 0}
+    for row in sorted_stocks:
+        resolve_stock_status(row, sorted_stocks, status_source)
+
+    missing_evidence: list[str] = []
+    if not market_data:
+        missing_evidence.append("marketData")
+    if not yesterday_rows:
+        missing_evidence.append("yesterday")
+
+    return {
+        "stage": stage_evidence["stage"],
+        "riskLevel": stage_evidence["riskLevel"],
+        "confidence": confidence,
+        # TS: getEmotionCycleStageSummary —— 未知阶段回退启动 summary
+        "summary": _STAGE_SUMMARY.get(stage_evidence["stage"]) or _STAGE_SUMMARY["启动"],
+        "metrics": {
+            "topN": sample_size,
+            "layers": layers,
+            "comparison": comparison,
+            "limitEvidence": limit_evidence,
+        },
+        "turnover": compute_turnover(sorted_stocks, yesterday_rows),
+        "signals": stage_evidence["signals"],
+        "warnings": stage_evidence["warnings"],
+        "statusSourceCounts": status_source,
+        "missingEvidence": missing_evidence,
+    }

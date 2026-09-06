@@ -11,6 +11,7 @@ from backend.analysis.hotlist.sentiment import (
     build_limit_evidence,
     build_yesterday_strong_performance,
     check_limit_status,
+    compute_hotlist_sentiment,
     compute_turnover,
     resolve_stock_status,
     sort_rows,
@@ -160,3 +161,81 @@ def test_display_status_fallback_when_missing():
 def test_display_status_invalid_label_falls_back():
     row = {"code": "000001", "change": 5, "displayStatusLabel": "无效标签"}
     assert resolve_stock_status(row, [row]) == "新入观察"
+
+
+# 阶段判定 + 风险 + 信号/警告文案全量对齐的 7+3 个 case（名称与 golden_cases.json 一致）
+STAGE_CASES = [
+    "强扩散但高拥挤时识别为高潮",
+    "强资确认增加且风险低时识别为发酵",
+    "新入和机会状态改善时识别为启动",
+    "风险状态上升且 TRIN 偏弱时识别为退潮",
+    "上涨承接较强时高风险压力不直接判为退潮",
+    "严重风险叠加昨日强票失败且成交承接转弱时识别为退潮",
+    "热榜收缩且机会少时识别为冰点",
+    "输出前20、前50、前100分层统计",
+    "输出全池 all 分层统计",
+    "按A股板块阈值统计热榜涨停和近涨停证据",
+    "热榜涨停证据只使用热榜交集，全市场数据仅作为背景",
+    "THS炸板池和涨停股回撤榜只作为全市场补充证据",
+    "昨日热榜涨停今日表现纳入持续性证据",
+    "fallback status ignores suspicious capped volume ratio when detecting crowded stocks",
+    "统计昨日强票今日平均涨幅、正收益率和转弱率",
+    "默认使用全热榜池统计主情绪指标",
+    "分析结果包含当日 turnover 汇总",
+]
+
+
+def _to_py_input(raw_input: dict) -> dict:
+    def snap(snapshot: dict | None) -> dict | None:
+        if not snapshot:
+            return None
+        return {"tradingDate": snapshot.get("tradingDate"), "rows": snapshot.get("hotlist") or snapshot.get("rows") or []}
+    return {
+        "stocks": raw_input.get("stocks") or [],
+        "yesterday": snap(raw_input.get("yesterday")),
+        "day_before": snap(raw_input.get("dayBefore")),
+        "market_data": raw_input.get("marketData"),
+        "top_n": raw_input.get("topN"),
+    }
+
+
+@pytest.mark.parametrize("name", STAGE_CASES)
+def test_golden_stage_full_alignment(name: str) -> None:
+    case = get_case(load_golden_cases(), name)
+    if "todayStocks" in case["input"]:   # computeTurnover 直测 case，不经 analyze
+        pytest.skip("computeTurnover case 已由 test_golden_turnover_details 覆盖")
+    result = compute_hotlist_sentiment(**_to_py_input(case["input"]))
+    expected = case["expected"]
+    assert result["stage"] == expected["stage"], f"stage: {result['stage']} != {expected['stage']}"
+    assert result["riskLevel"] == expected["riskLevel"]
+    assert result["confidence"] == expected["confidence"]
+    assert result["summary"] == expected["summary"]
+    assert result["signals"] == expected["signals"], f"signals 差异:\n got={result['signals']}\n exp={expected['signals']}"
+    assert result["warnings"] == expected["warnings"], f"warnings 差异:\n got={result['warnings']}\n exp={expected['warnings']}"
+    assert result["turnover"] == expected["turnover"]
+    expected_metrics = expected["metrics"]
+    assert result["metrics"]["topN"] == expected_metrics["topN"]
+    for layer in ("top20", "top50", "top100", "all"):
+        assert result["metrics"]["layers"][layer]["statusCounts"] == expected_metrics["layers"][layer]["statusCounts"], layer
+        assert result["metrics"]["layers"][layer]["hotTrin"] == expected_metrics["layers"][layer]["hotTrin"], layer
+        assert result["metrics"]["layers"][layer]["nearLimitUpCount"] == expected_metrics["layers"][layer]["nearLimitUpCount"], layer
+    cmp_expected = expected_metrics["comparison"]
+    cmp_result = result["metrics"]["comparison"]
+    for key in ("totalChange1d", "totalChange2d", "top100RetainFromYesterday", "top100RetainFromDayBefore",
+                "newTop100Count", "newTop100StrongMoneyCount", "yesterdayStrongRetainRate", "yesterdayCrowdedRiskCount"):
+        assert cmp_result[key] == cmp_expected[key], key
+    assert cmp_result["yesterdayStrongPerformance"] == cmp_expected["yesterdayStrongPerformance"]
+    assert result["metrics"]["limitEvidence"] == expected_metrics["limitEvidence"]
+
+
+def test_insufficient_data_marks_missing_evidence():
+    result = compute_hotlist_sentiment([])
+    assert result["stage"] == "冰点"
+    assert result["metrics"]["comparison"]["today"]["topN"] == 0
+    assert result["statusSourceCounts"] == {"displayStatus": 0, "fallback": 0}
+
+
+def test_summary_generated_for_each_stage():
+    from backend.analysis.hotlist.sentiment import _STAGE_SUMMARY
+    for stage in _STAGE_SUMMARY:
+        assert _STAGE_SUMMARY[stage]
