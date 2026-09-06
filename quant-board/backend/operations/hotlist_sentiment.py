@@ -221,6 +221,7 @@ def build_hotlist_sentiment_document(
     market_data: dict[str, Any] | None = None,
     yesterday_trading_date: str | None = None,
     day_before_trading_date: str | None = None,
+    slot_time: str | None = None,
 ) -> dict[str, Any]:
     # 编排纯函数唯一口径（Task 5）：EOD 入库文档 = compute_hotlist_sentiment 结果的库 schema 投影。
     # yesterday/day_before 是 {"tradingDate"?, "rows": [...]} 形态——rows 必须是扁平快照行，
@@ -231,6 +232,10 @@ def build_hotlist_sentiment_document(
     day_before_payload: dict[str, Any] = {"rows": list(day_before_stocks or [])}
     if day_before_trading_date:
         day_before_payload["tradingDate"] = day_before_trading_date
+    # _id/slotTime 契约唯一构造点（计划 B Task 1）：slot_time=None → EOD 哨兵（日级终值，
+    # _id 无后缀，存量行形态不变）；传 "HH:MM" → slotTime=slot 且 _id 追加 :{slot} 槽位后缀。
+    slot = str(slot_time) if slot_time else "EOD"
+    suffix = f":{slot}" if slot_time else ""
     result = compute_hotlist_sentiment(
         stocks,
         yesterday=yesterday_payload,
@@ -238,12 +243,12 @@ def build_hotlist_sentiment_document(
         market_data=market_data,
     )
     return {
-        "_id": f"{dataset_id}:{snapshot_type}:{trading_date}",
+        "_id": f"{dataset_id}:{snapshot_type}:{trading_date}{suffix}",
         "datasetId": dataset_id,
         "snapshotType": snapshot_type,
         "tradingDate": trading_date,
         "snapshotId": frame.get("snapshotId"),
-        "slotTime": frame.get("slotTime"),
+        "slotTime": slot,
         "timestamp": frame.get("timestamp"),
         "computedAt": int(time.time()),
         "stage": result["stage"],

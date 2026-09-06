@@ -18,32 +18,55 @@ from backend.data.repositories import repository_factory
 
 class HotListSentimentService:
     def __init__(self, mongo_db: Any) -> None:
+        self._db = mongo_db  # provider 闭包 _query_trading_dates 经此访问 snapshot_frames
         self._collection = mongo_db["hotlist_sentiment"]
 
     def upsert(self, payload: dict[str, Any]) -> None:
-        """按 (datasetId, snapshotType, tradingDate) replace_one upsert 一条情绪文档。"""
+        """按 _id 精确 upsert 一条情绪文档（slotTime="EOD" 哨兵 / "HH:MM" 槽位）。
+
+        _id 由 build_hotlist_sentiment_document 构造（唯一构造点）；payload 缺 _id 时
+        按四键格式构造兜底。query 用 _id 而非业务四键——存量行 slotTime 为旧 "HH:MM"
+        值时，业务 query 命中 _id 不同的行会导致 MongoDB 拒绝改 _id（DuplicateKeyError）。
+        """
         dataset_id = str(payload.get("datasetId") or "")
         snapshot_type = str(payload.get("snapshotType") or "")
         trading_date = str(payload.get("tradingDate") or "")
-        query = {
-            "datasetId": dataset_id,
-            "snapshotType": snapshot_type,
-            "tradingDate": trading_date,
-        }
+        slot_time = str(payload.get("slotTime") or "EOD")
         doc = dict(payload)
-        doc["_id"] = f"{dataset_id}:{snapshot_type}:{trading_date}"
+        doc.setdefault("slotTime", slot_time)
+        doc.setdefault(
+            "_id",
+            f"{dataset_id}:{snapshot_type}:{trading_date}"
+            + ("" if slot_time == "EOD" else f":{slot_time}"),
+        )
         doc["computedAt"] = int(time.time())
-        self._collection.replace_one(query, doc, upsert=True)
+        self._collection.replace_one({"_id": doc["_id"]}, doc, upsert=True)
 
     def get_by_date(self, dataset_id: str, snapshot_type: str, trading_date: str) -> dict[str, Any] | None:
-        """按 (datasetId, snapshotType, tradingDate) 读取情绪文档（无则 None）。"""
-        return self._collection.find_one(
-            {
-                "datasetId": dataset_id,
-                "snapshotType": snapshot_type,
-                "tradingDate": trading_date,
-            }
+        """按日读取 EOD 终值文档（按 _id 精确命中——存量行与迁移后哨兵行同 _id，均返回）。"""
+        return self._collection.find_one({"_id": f"{dataset_id}:{snapshot_type}:{trading_date}"})
+
+    def list_slot_documents(self, dataset_id: str, snapshot_type: str, trading_date: str) -> list[dict[str, Any]]:
+        """当日全部槽位文档，按 slotTime 升序。
+
+        双条件排除 EOD：_id $ne 滤掉存量 EOD 行（slotTime 仍为旧 "HH:MM" 值），
+        slotTime $ne "EOD" 滤掉迁移后哨兵行。
+        """
+        return list(
+            self._collection.find(
+                {
+                    "datasetId": dataset_id,
+                    "snapshotType": snapshot_type,
+                    "tradingDate": trading_date,
+                    "_id": {"$ne": f"{dataset_id}:{snapshot_type}:{trading_date}"},
+                    "slotTime": {"$ne": "EOD"},
+                }
+            ).sort([("slotTime", 1)])
         )
+
+    def get_eod_document(self, dataset_id: str, snapshot_type: str, trading_date: str) -> dict[str, Any] | None:
+        """指定交易日的 EOD 终值文档（get_by_date 的显式命名别名，供 as-of 回退用）。"""
+        return self.get_by_date(dataset_id, snapshot_type, trading_date)
 
 
 _hotlist_sentiment_service: HotListSentimentService | None = None

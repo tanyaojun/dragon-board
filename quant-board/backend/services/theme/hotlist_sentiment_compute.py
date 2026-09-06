@@ -18,6 +18,7 @@ from backend.operations.hotlist_sentiment import (
     HotListSentimentBackfillService,
     build_hotlist_sentiment_document,
 )
+from backend.services.theme.hotlist_sentiment_service import HotListSentimentService
 
 
 def _normalize_display_label(entry: Any) -> str | None:
@@ -86,6 +87,7 @@ def _join_warning(join_stats: dict[str, Any]) -> str | None:
 
 class HotListSentimentComputeService:
     def __init__(self, mongo_db: Any) -> None:
+        self._db = mongo_db
         self._backfill = HotListSentimentBackfillService(mongo_db)
         self._sentiment = mongo_db["hotlist_sentiment"]
 
@@ -98,9 +100,8 @@ class HotListSentimentComputeService:
 
         items: list[dict[str, Any]] = []
         for trading_date in window:
-            doc = self._sentiment.find_one({
-                "datasetId": dataset_id, "snapshotType": snapshot_type, "tradingDate": trading_date,
-            })
+            # EOD 终值读口统一走 service 读原语（按 _id 精确命中，避免查询形状漂移）
+            doc = HotListSentimentService(self._db).get_eod_document(dataset_id, snapshot_type, trading_date)
             if doc is None and trading_date == latest:
                 # lazy compute：仅最新交易日，幂等 upsert（取数→join→纯函数→upsert 一体）
                 computed = self._compute_and_persist(dataset_id, snapshot_type, trading_date)
@@ -148,7 +149,5 @@ class HotListSentimentComputeService:
         join_note = _join_warning(join_stats)
         if join_note:
             doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
-        from backend.services.theme.hotlist_sentiment_service import HotListSentimentService
-
         HotListSentimentService(self._backfill._db).upsert(doc)
         return {key: value for key, value in doc.items() if key != "_id"}

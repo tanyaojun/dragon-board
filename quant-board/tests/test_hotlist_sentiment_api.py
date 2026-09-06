@@ -58,12 +58,11 @@ def test_hotlist_sentiment_ingest_writes_mongodb_document(monkeypatch) -> None:
     assert body["tradingDate"] == "2026-06-05"
 
     query, doc, upsert = fake_db.hotlist_sentiment.replace_calls[0]
-    assert query == {
-        "datasetId": "dragonboard_live",
-        "snapshotType": "half_hour",
-        "tradingDate": "2026-06-05",
-    }
+    # 计划 B Task 1 契约：upsert 按 _id 精确命中（业务四键 query 在存量行 slotTime
+    # 为旧值时会命中 _id 不同的行导致 DuplicateKeyError，故弃用）
+    assert query == {"_id": "dragonboard_live:half_hour:2026-06-05"}
     assert doc["_id"] == "dragonboard_live:half_hour:2026-06-05"
+    assert doc["slotTime"] == "EOD"  # ingest 无 slotTime → EOD 哨兵兜底
     assert doc["stage"] == "高潮"
     assert upsert is True
 
