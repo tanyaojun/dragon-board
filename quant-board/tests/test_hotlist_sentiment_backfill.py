@@ -226,3 +226,151 @@ def test_hotlist_sentiment_backfill_dry_run_does_not_write() -> None:
     assert result["written"] == 0
     assert result["planned"] == 1
     assert db["hotlist_sentiment"].replace_calls == []
+
+
+def test_build_document_uses_pure_function_schema() -> None:
+    from backend.operations.hotlist_sentiment import build_hotlist_sentiment_document
+
+    frame = {"snapshotId": "s1", "slotTime": "14:30", "timestamp": 1757000000}
+    stocks = [
+        {"code": "000001", "name": "甲", "compRank": 1, "change": 9.9, "turnover": 15e8,
+         "zlje": 2e8, "zljzb": 15, "cddje": 8000e4, "cddjzb": 6, "volumeRatio": 2.0, "turnoverRate": 12},
+        {"code": "000002", "name": "乙", "compRank": 2, "change": -3.5, "turnover": 3e8,
+         "zlje": -1e8, "zljzb": -9, "cddje": -4000e4, "cddjzb": -4},
+    ]
+    doc = build_hotlist_sentiment_document(
+        dataset_id="dragonboard_live", snapshot_type="half_hour",
+        trading_date="2026-06-05", frame=frame, stocks=stocks,
+    )
+    assert doc["_id"] == "dragonboard_live:half_hour:2026-06-05"
+    for key in ("datasetId", "snapshotType", "tradingDate", "snapshotId", "slotTime", "timestamp",
+                "computedAt", "stage", "riskLevel", "confidence", "summary", "metrics", "turnover", "signals", "warnings"):
+        assert key in doc, key
+    metrics = doc["metrics"]
+    for key in ("poolSize", "allPoolUpRatio", "hotTrin", "retentionRate1d", "retentionRate2d",
+                "limitIntersectionRate", "newEntryCount", "eliminatedCount", "nearLimitUpCount",
+                "highGainCount", "riskShare", "activeOpportunityShare", "strongMoneyShare", "crowdedShare"):
+        assert key in metrics, key
+    assert metrics["poolSize"] == 2
+    assert doc["stage"] in ("冰点", "启动", "发酵", "高潮", "退潮")
+    assert doc["riskLevel"] in ("低", "中", "高")
+    assert "layers" in metrics and "limitEvidence" in metrics   # 超集键透出
+
+
+def test_build_document_passes_previous_trading_dates_to_comparison() -> None:
+    # Task 4 审查裁决落实：取数路径能拿到昨日/前日 tradingDate 时透传给纯函数，
+    # 回填 comparison.yesterday/dayBefore.tradingDate（安全超集，缺失时保持 None）。
+    from backend.operations.hotlist_sentiment import build_hotlist_sentiment_document
+
+    frame = {"snapshotId": "s1", "slotTime": "14:30", "timestamp": 1757000000}
+    stocks = [{"code": "000001", "name": "甲", "compRank": 1, "change": 5, "turnover": 10e8}]
+    doc = build_hotlist_sentiment_document(
+        dataset_id="dragonboard_live", snapshot_type="half_hour",
+        trading_date="2026-06-05", frame=frame, stocks=stocks,
+        yesterday_stocks=[{"code": "000001", "name": "甲", "compRank": 1, "change": 3, "turnover": 8e8}],
+        day_before_stocks=[{"code": "000001", "name": "甲", "compRank": 1, "change": 1, "turnover": 6e8}],
+        yesterday_trading_date="2026-06-04",
+        day_before_trading_date="2026-06-03",
+    )
+    assert doc["metrics"]["comparison"]["yesterday"]["tradingDate"] == "2026-06-04"
+    assert doc["metrics"]["comparison"]["dayBefore"]["tradingDate"] == "2026-06-03"
+
+
+def day_stock(snapshot_id: str, trading_date: str, code: str, rank: int, change: float) -> dict[str, Any]:
+    return {
+        "datasetId": "dragonboard_live",
+        "snapshotId": snapshot_id,
+        "type": "half_hour",
+        "tradingDate": trading_date,
+        "timestamp": 100,
+        "code": code,
+        "name": f"股票{code}",
+        "rank": rank,
+        "change": change,
+    }
+
+
+def test_previous_day_stocks_returns_yesterday_and_day_before_rows() -> None:
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s0", "type": "half_hour", "tradingDate": "2026-06-03", "timestamp": 90},
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "type": "half_hour", "tradingDate": "2026-06-04", "timestamp": 100},
+        {"datasetId": "dragonboard_live", "snapshotId": "s2", "type": "half_hour", "tradingDate": "2026-06-05", "timestamp": 200},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        day_stock("s0", "2026-06-03", "000001", 1, 5),
+        day_stock("s0", "2026-06-03", "000009", 2, 2),
+        day_stock("s1", "2026-06-04", "000002", 1, 4),
+        day_stock("s1", "2026-06-04", "000009", 2, 1),
+        day_stock("s2", "2026-06-05", "000002", 1, 6),
+        day_stock("s2", "2026-06-05", "000003", 2, 3),
+    ]
+
+    previous = HotListSentimentBackfillService(db).previous_day_stocks(
+        "dragonboard_live", "half_hour", "2026-06-05"
+    )
+
+    assert [row["code"] for row in previous["yesterday"]] == ["000002", "000009"]
+    assert [row["code"] for row in previous["day_before"]] == ["000001", "000009"]
+
+
+def test_previous_day_stocks_returns_empty_lists_without_history() -> None:
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s0", "type": "half_hour", "tradingDate": "2026-06-03", "timestamp": 90},
+        {"datasetId": "dragonboard_live", "snapshotId": "s2", "type": "half_hour", "tradingDate": "2026-06-05", "timestamp": 200},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        day_stock("s0", "2026-06-03", "000001", 1, 5),
+        day_stock("s2", "2026-06-05", "000002", 1, 6),
+    ]
+
+    previous = HotListSentimentBackfillService(db).previous_day_stocks(
+        "dragonboard_live", "half_hour", "2026-06-05"
+    )
+
+    # 只有 06-03 一个先前交易日：yesterday 命中，day_before 无历史返回空（不伪造）
+    assert [row["code"] for row in previous["yesterday"]] == ["000001"]
+    assert previous["day_before"] == []
+
+    earliest = HotListSentimentBackfillService(db).previous_day_stocks(
+        "dragonboard_live", "half_hour", "2026-06-03"
+    )
+    assert earliest["yesterday"] == []
+    assert earliest["day_before"] == []
+
+
+def test_run_for_date_persists_day_before_metrics() -> None:
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s0", "type": "half_hour", "tradingDate": "2026-06-03", "timestamp": 90},
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "type": "half_hour", "tradingDate": "2026-06-04", "timestamp": 100},
+        {"datasetId": "dragonboard_live", "snapshotId": "s2", "type": "half_hour", "tradingDate": "2026-06-05", "timestamp": 200},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        day_stock("s0", "2026-06-03", "000001", 1, 5),
+        day_stock("s0", "2026-06-03", "000003", 2, 2),
+        day_stock("s1", "2026-06-04", "000002", 1, 4),
+        day_stock("s1", "2026-06-04", "000009", 2, 1),
+        day_stock("s2", "2026-06-05", "000002", 1, 6),
+        day_stock("s2", "2026-06-05", "000003", 2, 3),
+    ]
+
+    result = HotListSentimentBackfillService(db).run_for_date(
+        dataset_id="dragonboard_live",
+        snapshot_type="half_hour",
+        trading_date="2026-06-05",
+    )
+
+    assert result["ok"] is True
+    query, doc, upsert = db["hotlist_sentiment"].replace_calls[0]
+    # top 留榜：今日 {000002,000003} ∩ 昨日 {000002,000009} = 1/2；∩ 前日 {000001,000003} = 1/2
+    assert doc["metrics"]["retentionRate1d"] == 0.5
+    assert doc["metrics"]["retentionRate2d"] == 0.5
+    assert doc["metrics"]["comparison"]["dayBefore"] is not None
