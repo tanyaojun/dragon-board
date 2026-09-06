@@ -113,7 +113,8 @@ def _seed(fake_db) -> None:
 
 
 def _make_provider(fake_db, monkeypatch):
-    # 台账 R2：工厂创建时即经单例 getter 绑定 service，测试必须 monkeypatch 到 fake db
+    # 原 R2（工厂期绑定）已按 R5 修订：service 改为 provider 首调时惰性获取，
+    # monkeypatch 在调用时解析，fake db 注入方式不变
     import backend.services.theme.hotlist_sentiment_service as module
 
     monkeypatch.setattr(
@@ -191,3 +192,41 @@ def test_engine_provider_exception_marks_missing():
     assert frames[0]["hotlistSentiment"] is None
     assert frames[0]["hotlistSentimentStatus"] == "missing"
     assert "db down" in frames[0]["hotlistSentimentReason"]
+
+
+def test_provider_factory_binds_service_lazily(monkeypatch):
+    # R5（计划 B 回归修复）：工厂期不得触碰 MongoDB——compute_analyze 每个请求都会
+    # 构造 engine（ranktrend_routes.compute_analyze），若工厂期即取单例，engine 构造
+    # 会在 fake/降级 db 环境直接失败，违反旧合同“provider 惰性获取 service，
+    # MongoDB 不可用时由 engine 内部 try/except 降级，不影响 engine 构造与回放”。
+    import backend.services.theme.hotlist_sentiment_service as module
+
+    calls = {"n": 0}
+
+    def _lazy_service(database=None):
+        calls["n"] += 1
+        return HotListSentimentService(FakeMongoDb())
+
+    monkeypatch.setattr(module, "get_hotlist_sentiment_service", _lazy_service)
+    provider = make_hotlist_sentiment_provider("d1", "half_hour")
+    assert calls["n"] == 0                                  # 工厂期零构造
+    provider("2026-06-05", "10:30")
+    assert calls["n"] == 1                                  # 首调才构造
+    provider("2026-06-06", "10:00")
+    assert calls["n"] == 1                                  # 闭包生命周期内复用
+
+
+def test_provider_factory_survives_unavailable_service(monkeypatch):
+    # 单 getter 失败时：工厂期安全，首调才抛（由 engine _ensure_hotlist_sentiment
+    # try/except 转为 missing 状态，见 test_engine_provider_exception_marks_missing）
+    import pytest
+
+    import backend.services.theme.hotlist_sentiment_service as module
+
+    def _boom(database=None):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(module, "get_hotlist_sentiment_service", _boom)
+    provider = make_hotlist_sentiment_provider("d1", "half_hour")   # 不抛
+    with pytest.raises(RuntimeError, match="db unavailable"):
+        provider("2026-06-05", "10:30")

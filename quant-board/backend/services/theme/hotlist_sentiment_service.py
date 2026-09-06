@@ -115,29 +115,37 @@ def make_hotlist_sentiment_provider(
 
     缓存：闭包生命周期 = 单次回测/请求；trading_dates 与当日槽位文档按日期缓存，
     库查询 O(天数)，逐帧选择纯内存。
+    service 惰性获取（R5）：工厂期不触碰 MongoDB——compute_analyze 每请求构造
+    engine，工厂期即取单例会让 engine 构造在 fake/降级 db 环境直接失败；
+    首调才取，MongoDB 不可用时由 engine 内部 try/except 降级为 missing。
     """
-    service = get_hotlist_sentiment_service()
     dates_cache: dict[str, list[str]] = {}
     slots_cache: dict[str, list[dict[str, Any]]] = {}
     eod_cache: dict[str, dict[str, Any]] = {}
+    service_holder: list[Any] = []
+
+    def _service() -> Any:
+        if not service_holder:
+            service_holder.append(get_hotlist_sentiment_service())
+        return service_holder[0]
 
     def _trading_dates() -> list[str]:
         if "dates" not in dates_cache:
-            dates_cache["dates"] = _query_trading_dates(service, dataset_id, snapshot_type)
+            dates_cache["dates"] = _query_trading_dates(_service(), dataset_id, snapshot_type)
         return dates_cache["dates"]
 
     def provider(trading_date: str, slot_time: str | None = None) -> tuple[dict[str, Any] | None, str]:
         if slot_time is None:
-            doc = service.get_by_date(dataset_id, snapshot_type, trading_date)
+            doc = _service().get_by_date(dataset_id, snapshot_type, trading_date)
             return (doc, "ok") if doc else (None, "missing")
         if trading_date not in slots_cache:
-            slots_cache[trading_date] = service.list_slot_documents(dataset_id, snapshot_type, trading_date)
+            slots_cache[trading_date] = _service().list_slot_documents(dataset_id, snapshot_type, trading_date)
         eligible = [doc for doc in slots_cache[trading_date] if str(doc.get("slotTime") or "") <= slot_time]
         if eligible:
             return eligible[-1], "ok"
         prev = _previous_trading_date(trading_date)
         if prev and prev not in eod_cache:
-            eod_cache[prev] = service.get_eod_document(dataset_id, snapshot_type, prev)
+            eod_cache[prev] = _service().get_eod_document(dataset_id, snapshot_type, prev)
         doc = eod_cache.get(prev) if prev else None
         return (doc, "stale") if doc else (None, "missing")
 
