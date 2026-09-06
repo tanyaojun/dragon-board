@@ -145,6 +145,10 @@ def market_regime(frame: dict[str, Any]) -> dict[str, Any]:
     if market_phase:
         reasons.append(f"全市场情绪对照={market_phase}")
 
+    # WP1c：stale 情绪回退标注（fail-visible，不改打分——分数构成见上）
+    if str(frame.get("hotlistSentimentStatus") or "") == "stale":
+        reasons.append("热榜情绪为前日 stale 口径（as-of 回退）")
+
     score = clamp(score, 0, 100)
     state = (
         "strong" if score >= REGIME_STRONG_SCORE
