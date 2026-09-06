@@ -159,7 +159,7 @@ ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 2. 分析阶段
    - 输入：按 `dataset_id + snapshot_type + date range` 查询的标准快照序列。
    - 输出：Python rankTrend 结果，结构对齐 golden case。
-   - 热榜情绪：日终热榜情绪写入 MongoDB `hotlist_sentiment`，按 `datasetId + snapshotType + tradingDate` 唯一定位；RankTrend 策略层读取该集合替代全市场 `market_regime()` 作为候选分层情绪输入。
+   - 热榜情绪：槽位级写入 MongoDB `hotlist_sentiment`（collector 每槽落帧后同源计算；另保留日终 EOD 终值，`slotTime="EOD"` 哨兵），唯一索引 `datasetId + snapshotType + tradingDate + slotTime`；RankTrend 策略层经 as-of 时点查询消费（当日 ≤slot 最新槽位 → 前日 EOD stale 回退 → missing，消 lookahead），替代全市场 `market_regime()` 作为候选分层情绪输入。
    - V12 目标：ThemeTrend 读取标准快照中的题材/板块行、股票行和 MongoDB 题材基础映射，输出题材强度、扩散、持续性、拥挤、风险和质量报告。ThemeTrend 与 RankTrend 并列，不替代 RankTrend golden 链。
 
 3. 策略阶段
@@ -377,7 +377,7 @@ MongoDB 模式下保存在 `backtest_quality_reports` 集合，保存样本覆�
 
 ### hotlist_sentiment
 
-MongoDB 模式下保存在 `hotlist_sentiment` 集合，保存每日热榜情绪研究输入。唯一业务键是 `datasetId + snapshotType + tradingDate`，默认 `snapshotType=half_hour`。字段包括 `stage`、`riskLevel`、`confidence`、`metrics`、`turnover`、`signals` 和 `warnings`。历史回填和日终调度都必须复用同一字段合同，不得用临时简化口径生成参与回测的 `stage/riskLevel`。
+MongoDB 模式下保存在 `hotlist_sentiment` 集合，保存热榜情绪研究输入。唯一业务键是 `datasetId + snapshotType + tradingDate + slotTime`（2026-09-06 起四键；文档 `_id` 为 `{dataset}:{type}:{date}` + EOD 无后缀/槽位 `:{slot}` 后缀），默认 `snapshotType=half_hour`。槽位文档 `slotTime` 为 "HH:MM"，日终终值为 `slotTime="EOD"` 哨兵行。字段包括 `stage`、`riskLevel`、`confidence`、`metrics`、`turnover`、`signals` 和 `warnings`。历史回填（`backfill(mode="slots")`）、collector 每槽挂载和日终调度都必须复用同一字段合同，不得用临时简化口径生成参与回测的 `stage/riskLevel`。
 
 ### trade_journal
 

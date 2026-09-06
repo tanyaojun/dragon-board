@@ -521,6 +521,19 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
 
 后续若引入版本号或更新时间戳作为自动合并依据，必须同步更新 API 返回字段和本文规则。
 
+## hotlist_sentiment 槽位级文档（2026-09-06）
+
+- 唯一索引 `(datasetId, snapshotType, tradingDate)` → `(datasetId, snapshotType, tradingDate, slotTime)`；
+  **旧三元组唯一索引必须显式 drop**（迁移脚本顺带执行），否则同日第二槽 upsert 被旧索引拒绝。
+- EOD 终值文档：`_id = {dataset}:{type}:{date}`，`slotTime = "EOD"` 哨兵；槽位文档 `_id` 追加 `:{slot}`。
+- 读口契约：`get_by_date`/`upsert` 按 `_id` 精确命中（存量行与哨兵行同 `_id`）；`list_slot_documents`
+  以 `_id $ne EOD` + `slotTime $ne "EOD"` 双条件排除 EOD。
+- 存量迁移：`python -m backend.operations.migrate_hotlist_sentiment_slot_eod [--dry-run]`（幂等，
+  实跑时顺带 drop 旧唯一索引；`--skip-index-drop` 可跳过）。
+- 写入口：snapshot_collector 每槽落帧后 `compute_and_upsert_for_slot`；历史回填 `backfill(mode="slots")`
+  （收尾自动补写当日 EOD）。
+- 读口：as-of provider（当日 ≤slot 最新槽位 → 前日 EOD stale 回退 → missing）。
+
 ## 环境变量
 
 | 变量 | 说明 |

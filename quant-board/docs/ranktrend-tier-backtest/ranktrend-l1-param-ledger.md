@@ -85,4 +85,6 @@
   新参数不得再引用；
 - **复核触发**：9 月数据累积后（train 窗口自然扩展），对组 5 参数重新走 rolling
   walk-forward（A/B 纪律）；A 档样本 >500 后复核双强观察项；
+- **2026-09-06 WP1c 修复 regime 情绪注入 lookahead；组 5 参数结论待 9 月数据积累后按 §6 重验**；
+
 - **golden 约束**：任何参数改动不得破坏 golden（test_ranktrend_golden_alignment 全绿）。
