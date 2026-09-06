@@ -22,6 +22,7 @@ class HotListSentimentBackfillService:
         end_date: str | None = None,
         dry_run: bool = False,
         limit: int | None = None,
+        mode: str = "eod",
     ) -> dict[str, Any]:
         dates = self.trading_dates(
             dataset_id=dataset_id,
@@ -36,11 +37,21 @@ class HotListSentimentBackfillService:
         written = 0
         skipped = 0
         for trading_date in dates:
-            result = self.run_for_date(
-                dataset_id=dataset_id,
-                snapshot_type=snapshot_type,
-                trading_date=trading_date,
-                dry_run=dry_run,
+            # mode="slots"：按帧遍历逐槽落库（WP1b 历史回填）；默认 "eod" 维持日级终值
+            result = (
+                self.run_for_date_slots(
+                    dataset_id=dataset_id,
+                    snapshot_type=snapshot_type,
+                    trading_date=trading_date,
+                    dry_run=dry_run,
+                )
+                if mode == "slots"
+                else self.run_for_date(
+                    dataset_id=dataset_id,
+                    snapshot_type=snapshot_type,
+                    trading_date=trading_date,
+                    dry_run=dry_run,
+                )
             )
             results.append(result)
             written += int(result.get("written") or 0)
@@ -49,6 +60,7 @@ class HotListSentimentBackfillService:
         return {
             "ok": True,
             "dryRun": dry_run,
+            "mode": mode,
             "datasetId": dataset_id,
             "snapshotType": snapshot_type,
             "planned": len(dates),
@@ -131,7 +143,9 @@ class HotListSentimentBackfillService:
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
         )
         if not dry_run:
-            self._sentiment.replace_one(_business_key(dataset_id, snapshot_type, trading_date), doc, upsert=True)
+            # 按 _id 精确写库（Task 1 契约）：存量行 slotTime 为旧值时业务四键 query 会
+            # 命中 _id 不同的行导致 MongoDB 拒绝改 _id（DuplicateKeyError）
+            self._sentiment.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return {
             "ok": True,
             "dryRun": dry_run,
@@ -193,6 +207,86 @@ class HotListSentimentBackfillService:
             )
         )
         return [_drop_mongo_id(row) for row in rows]
+
+    def frame_for_slot(
+        self, dataset_id: str, snapshot_type: str, trading_date: str, slot_time: str
+    ) -> dict[str, Any] | None:
+        return self._frames.find_one(
+            {
+                "datasetId": dataset_id,
+                "type": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": slot_time,
+            },
+            sort=[("timestamp", -1), ("snapshotId", -1)],
+        )
+
+    def _slot_times_of_date(self, dataset_id: str, snapshot_type: str, trading_date: str) -> list[str]:
+        return sorted({
+            str(row.get("slotTime") or "")
+            for row in self._frames.find(
+                {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date},
+                {"slotTime": 1},
+            )
+            if row.get("slotTime")
+        })
+
+    def run_for_date_slots(
+        self,
+        *,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """按帧遍历：当日全部槽位逐槽计算情绪并 upsert 槽位文档（WP1b 历史回填模式）。
+
+        单槽失败记 slotErrors 继续（无质量阻断）；前一交易日取数与 EOD 模式同口径。
+        全部槽位完成后收尾补写当日 EOD 终值（stale 回退链路依赖每日 EOD 存在）。
+        """
+        previous = self.previous_day_stocks(dataset_id, snapshot_type, trading_date)
+        written = 0
+        slot_errors: list[dict[str, Any]] = []
+        for slot_time in self._slot_times_of_date(dataset_id, snapshot_type, trading_date):
+            try:
+                frame = self.frame_for_slot(dataset_id, snapshot_type, trading_date, slot_time)
+                stocks = self.stocks_for_frame(dataset_id, str(frame.get("snapshotId") or "")) if frame else []
+                if not frame or not stocks:
+                    slot_errors.append({"slotTime": slot_time, "reason": "no_frame" if not frame else "empty_stock_rows"})
+                    continue
+                doc = build_hotlist_sentiment_document(
+                    dataset_id=dataset_id,
+                    snapshot_type=snapshot_type,
+                    trading_date=trading_date,
+                    frame=frame,
+                    stocks=stocks,
+                    yesterday_stocks=previous.get("yesterday") or [],
+                    day_before_stocks=previous.get("day_before") or [],
+                    slot_time=slot_time,
+                )
+                if not dry_run:
+                    # 按 _id 写库（Task 1 契约）——业务四键 query 在存量行 slotTime 为旧值时
+                    # 会命中 _id 不同的行导致 MongoDB 拒绝改 _id
+                    self._sentiment.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+                written += 0 if dry_run else 1
+            except Exception as exc:  # 无质量阻断：单槽失败不中断整日回填
+                slot_errors.append({"slotTime": slot_time, "reason": f"error: {exc}"})
+        eod_written = False
+        if not dry_run:
+            # 收尾补写当日 EOD 终值（槽位文档不含 EOD；as-of stale 回退与既有 EOD 消费方依赖它）
+            eod_result = self.run_for_date(dataset_id=dataset_id, snapshot_type=snapshot_type, trading_date=trading_date)
+            eod_written = bool(eod_result.get("written"))
+        return {
+            "ok": True,
+            "dryRun": dry_run,
+            "mode": "slots",
+            "datasetId": dataset_id,
+            "snapshotType": snapshot_type,
+            "tradingDate": trading_date,
+            "written": written,
+            "eodWritten": eod_written,
+            "slotErrors": slot_errors,
+        }
 
 
 def run_hotlist_sentiment_for_latest_day(

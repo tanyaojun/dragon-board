@@ -138,12 +138,11 @@ def test_hotlist_sentiment_service_writes_last_frame_document() -> None:
     assert result["ok"] is True
     assert result["written"] == 1
     query, doc, upsert = db["hotlist_sentiment"].replace_calls[0]
-    assert query == {
-        "datasetId": "dragonboard_live",
-        "snapshotType": "half_hour",
-        "tradingDate": "2026-06-05",
-    }
+    # 计划 B Task 5：EOD 模式写库同步改按 _id 精确命中（与 Task 1 upsert 契约同理，
+    # 存量行 slotTime 为旧值时业务四键 query 会命中 _id 不同的行导致 DuplicateKeyError）
+    assert query == {"_id": "dragonboard_live:half_hour:2026-06-05"}
     assert doc["_id"] == "dragonboard_live:half_hour:2026-06-05"
+    assert doc["slotTime"] == "EOD"  # build_hotlist_sentiment_document 无 slot_time → EOD 哨兵
     assert doc["metrics"]["poolSize"] == 2
     assert doc["metrics"]["allPoolUpRatio"] == 1
     assert doc["metrics"]["newEntryCount"] == 1
