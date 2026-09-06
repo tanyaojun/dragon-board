@@ -91,18 +91,58 @@ def get_hotlist_sentiment_service(database: Any | None = None) -> HotListSentime
     return _hotlist_sentiment_service
 
 
+def _query_trading_dates(service: HotListSentimentService, dataset_id: str, snapshot_type: str) -> list[str]:
+    """snapshot_frames 的 distinct tradingDate（与 BackfillService.trading_dates 同口径，避免跨层实例化）。"""
+    return sorted({
+        str(row.get("tradingDate") or "")
+        for row in service._db["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": snapshot_type}, {"tradingDate": 1}
+        )
+        if row.get("tradingDate")
+    })
+
+
 def make_hotlist_sentiment_provider(
     dataset_id: str,
     snapshot_type: str = "half_hour",
-) -> Callable[[str], dict[str, Any] | None]:
-    """构造 ranktrend engine 注入用的 sentiment provider：(trading_date) -> doc | None。
+) -> Callable[[str, str | None], tuple[dict[str, Any] | None, str]]:
+    """构造 ranktrend engine 注入用的 as-of sentiment provider。
 
-    provider 惰性获取 service，MongoDB 不可用时由 engine 内部 try/except 降级，
-    不影响 engine 构造与 analysis 模式回放。
+    合同：(trading_date, slot_time) -> (doc | None, status)。
+    status: "ok"=当日 ≤slot_time 的最新槽位文档；"stale"=回退前一交易日 EOD；
+    "missing"=两者皆无（fail-visible，由 engine 写 frame["hotlistSentimentStatus"]）。
+    slot_time=None 时走旧按日路径（get_by_date，防御性兼容旧调用方）。
+
+    缓存：闭包生命周期 = 单次回测/请求；trading_dates 与当日槽位文档按日期缓存，
+    库查询 O(天数)，逐帧选择纯内存。
     """
+    service = get_hotlist_sentiment_service()
+    dates_cache: dict[str, list[str]] = {}
+    slots_cache: dict[str, list[dict[str, Any]]] = {}
+    eod_cache: dict[str, dict[str, Any]] = {}
 
-    def provider(trading_date: str) -> dict[str, Any] | None:
-        service = get_hotlist_sentiment_service()
-        return service.get_by_date(dataset_id, snapshot_type, trading_date)
+    def _trading_dates() -> list[str]:
+        if "dates" not in dates_cache:
+            dates_cache["dates"] = _query_trading_dates(service, dataset_id, snapshot_type)
+        return dates_cache["dates"]
+
+    def provider(trading_date: str, slot_time: str | None = None) -> tuple[dict[str, Any] | None, str]:
+        if slot_time is None:
+            doc = service.get_by_date(dataset_id, snapshot_type, trading_date)
+            return (doc, "ok") if doc else (None, "missing")
+        if trading_date not in slots_cache:
+            slots_cache[trading_date] = service.list_slot_documents(dataset_id, snapshot_type, trading_date)
+        eligible = [doc for doc in slots_cache[trading_date] if str(doc.get("slotTime") or "") <= slot_time]
+        if eligible:
+            return eligible[-1], "ok"
+        prev = _previous_trading_date(trading_date)
+        if prev and prev not in eod_cache:
+            eod_cache[prev] = service.get_eod_document(dataset_id, snapshot_type, prev)
+        doc = eod_cache.get(prev) if prev else None
+        return (doc, "stale") if doc else (None, "missing")
+
+    def _previous_trading_date(trading_date: str) -> str | None:
+        dates = [date for date in _trading_dates() if date < trading_date]
+        return dates[-1] if dates else None
 
     return provider

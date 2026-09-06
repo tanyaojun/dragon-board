@@ -965,17 +965,18 @@ class RankTrendPythonEngine:
             # 未注入 provider 时跳过补全（不报错、不写字段）
             return
         try:
-            by_key: dict[str, dict] = {}
+            # as-of 时点注入（WP1c）：逐帧按 (tradingDate, slotTime) 取 ≤ 帧时点的最新情绪，
+            # 同日不同帧可注入不同文档；无当日文档回退前日 EOD（stale），不再按日共享同一 doc。
             for frame in missing_frames:
                 trading_date = str(frame.get("tradingDate") or "")
+                slot_time = str(frame.get("slotTime") or "") or None
                 if not trading_date:
+                    frame["hotlistSentiment"] = None
+                    frame["hotlistSentimentStatus"] = "missing"
                     continue
-                if trading_date not in by_key:
-                    doc = provider(trading_date)
-                    if doc:
-                        by_key[trading_date] = doc
-                frame["hotlistSentiment"] = by_key.get(trading_date)
-                frame["hotlistSentimentStatus"] = "ok" if frame.get("hotlistSentiment") else "missing"
+                doc, status = provider(trading_date, slot_time)
+                frame["hotlistSentiment"] = doc
+                frame["hotlistSentimentStatus"] = status if doc else "missing"
         except Exception as exc:
             reason = f"MongoDB hotlist sentiment unavailable: {exc}"
             for frame in missing_frames:
