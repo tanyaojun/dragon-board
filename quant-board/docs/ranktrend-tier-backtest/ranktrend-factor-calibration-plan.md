@@ -1,5 +1,7 @@
 # RankTrend 因子参数抽取与校准计划
 
+> 命名注记（2026-09-06，WP3.1）：本文"四维"为历史命名；当前口径为 **5 投票维（res/rank/vp/cs + 热榜情绪）+ 1 环境门（lifecycle）**，lifecycle 不进投票、以 veto/降档影响合成。
+
 > 主题：RankTrend 四维观察信号 + 决策链路的硬编码参数治理、统一入口管理、回测调参打通
 > 状态：计划稿（未实现）
 > 范围：`engine.py` / `volume_price.py` / `ranktrend_routes.py` 全部 magic number 抽取

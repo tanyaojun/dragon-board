@@ -1,5 +1,7 @@
 # RankTrend 五维信号阈值参数搜索回测方案
 
+> 命名注记（2026-09-06，WP3.1）：本文"四维"为历史命名；当前口径为 **5 投票维（res/rank/vp/cs + 热榜情绪）+ 1 环境门（lifecycle）**，lifecycle 不进投票、以 veto/降档影响合成。
+
 > 主题：共振/趋势/量价/周期四维观察信号 + synergy 四维合并档位的参数阈值治理与回测优化
 > 状态：**已落地**（§3–§5 已全部实现并通过 golden；本文保留方案原文，就地标注实现位置与核对行号；核对日期 2026-08-15）
 > 前置文档：`ranktrend-observation-discrete-tiers-design.md`（档位规则）、`ranktrend-factor-calibration-plan.md`（参数抽取）
@@ -237,6 +239,17 @@ def score(result, objective, request):   # 现有签名扩展 request
 | 5 | 回测运行（Phase A/B/C） | 产出 `quant-board/data/reports/` 敏感性报告 + 最优参数报告，满足 §5.2 硬约束且优于基线 | ⏳ 待办（后续长期回测计划） |
 | 6 | 参数采纳后：更新 golden case + 提升 `ranktrend_version`/`strategy_version` | 按 `ranktrend-golden.md` 第 6 节变更管理；历史回测不覆盖 | ⏳ 待办 |
 | 7 | 文档同步 | `ranktrend-golden.md` 配置节 + 输出合同节 + `backtest-policy.md` + `architecture.md` | ⏳ 待办（golden 已补档位字段说明，其余随参数采纳同步） |
+
+## 验收口径声明（2026-09-06，WP3.1）
+
+- **h1 降级为诊断口径**（本征尺度）：h1 帧间噪音敏感度过高，不再作为策略/门控验收的唯一依据。
+- **策略/门控验收口径 = h4/h8（日内多档）+ 持有到收盘（hold-to-close）**：
+  - h4/h8：`tier_forward_returns(horizon=4/8)` 与 `OutcomeEvaluator.evaluate(horizons=[1,3,5,10])` 并行输出。
+  - hold-to-close：`OutcomeEvaluator.evaluate(..., include_hold_to_close=True)`，entry 帧 → 同 tradingDate 尾帧强制出场。
+- **成本敏感性**：近盈亏平衡结论（four_dim pf 1.0377，lifecycle-layer-rearchitecture §7）引用前必须附
+  `diagnose_cost_sensitivity` 弹性表；`fallbackSlippageRate` 自本声明起显式定值 0.001
+  （此前运行时默认 0，快照退化成交未计罚金——口径切换点，历史数字不回改）。
+- 8 月冻结纪律适用：口径切换不重算历史结论，仅声明切换点与新旧口径映射。
 
 ## 8. 实施步骤（建议顺序，均为小步可回退）
 
