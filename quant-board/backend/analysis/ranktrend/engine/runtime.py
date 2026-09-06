@@ -266,7 +266,7 @@ def _confirm_jump(
 
 from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision
 
-from ..trend.risk import analyze_risk, market_regime
+from ..trend.risk import REGIME_STRONG_SCORE, analyze_risk, market_regime
 from ..trend.gate_confirm import GateConfirmState, gate_reason
 
 
@@ -865,6 +865,10 @@ class RankTrendPythonEngine:
             required_frames=int(getattr(self.config, "lifecycleConfirmFrames", 1))
         )
         self._gate_confirm_ctx = {"active": True}
+        # WP2b：regime 平滑状态随 replay 重置（与确认状态同批；实例由 _smooth_regime 惰性创建）
+        _smoother = getattr(self, "_regime_smoother", None)
+        if _smoother is not None:
+            _smoother.reset()
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
         requested_codes = {str(code) for code in codes} if codes else None
@@ -907,7 +911,8 @@ class RankTrendPythonEngine:
             if index < start:
                 continue
 
-            regime = market_regime(frame)
+            # WP2b：regime 输出经平滑包装（默认参数原样返回同一 dict，零行为变化）
+            regime = self._smooth_regime(market_regime(frame))
             # 阶段 3 修复方向 1：每帧一次性计算横截面市场上下文（与 API 链路同口径），
             # 供 _build_signal 补共振维参与 synergy 投票；窗口不足/样本不足时如实为 None（fail-visible）。
             market_median, market_sample_count = frame_market_median(frames, index)
@@ -992,6 +997,25 @@ class RankTrendPythonEngine:
                 frame["hotlistSentiment"] = None
                 frame["hotlistSentimentStatus"] = "missing"
                 frame["hotlistSentimentReason"] = reason
+
+    def _smooth_regime(self, regime: dict[str, Any]) -> dict[str, Any]:
+        """WP2b：replay 帧循环的 regime 平滑挂载点（默认参数直通返回同一 dict，零行为变化）。
+
+        仅 replay 帧循环挂载；单帧 replay_frame_at / API 单股链路保持 market_regime 直通
+        （无确认上下文的轻量链路，与 WP2a 单股直通边界一致）。
+        """
+        smoother = getattr(self, "_regime_smoother", None)
+        if smoother is None:
+            from backend.analysis.ranktrend.trend.regime_smoother import RegimeSmoother
+
+            smoother = RegimeSmoother(
+                alpha=float(getattr(self.config, "regimeScoreEmaAlpha", 1.0)),
+                hysteresis=bool(getattr(self.config, "regimeStateHysteresis", False)),
+                strong_enter=float(REGIME_STRONG_SCORE),
+                strong_exit_band=float(getattr(self.config, "regimeStrongHysteresisBand", 5.0)),
+            )
+            self._regime_smoother = smoother
+        return smoother.smooth(regime)
 
     def replay_frame_at(self, frames: list[dict[str, Any]], index: int, window_size: int = 50, meta: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         frame = frames[index]
