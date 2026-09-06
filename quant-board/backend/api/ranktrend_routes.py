@@ -24,6 +24,7 @@ from backend.analysis.ranktrend.volume_price import (
     _synergy_tier,
     assemble_observation,
 )
+from backend.analysis.ranktrend.trend.gate_confirm import GateConfirmState
 from backend.analysis.theme.momentum import (
     compute_theme_momentum_series,
     stock_theme_exposure,
@@ -377,7 +378,13 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     price_changes = history_args[0] if history_args else None
     amount_history = history_args[1] if len(history_args) > 1 else None
     atr_history = history_args[2] if len(history_args) > 2 else None
+    gate_confirm_state = history_args[3] if len(history_args) > 3 else None
     engine = RankTrendPythonEngine(config=config)
+    if gate_confirm_state is not None:
+        # WP2a：live frames 链路（_analyze_frames 串行）传入请求级确认状态；单股链路
+        # 不传该参数 → history_args[3] 为 None → ctx 不激活，直通 = 现行为
+        engine._gate_confirm_state = gate_confirm_state
+        engine._gate_confirm_ctx = {"active": True}
     # API 与 replay/backtest 共用完整 observation 组装入口；单帧 API 的 ATR
     # 历史不足时由引擎返回 insufficient，而不是省略维度。
     signal = engine._build_signal(
@@ -499,6 +506,11 @@ def _analyze_frames(
     # 2026-08-23 前后端分离 G3：全市场量能分位（后端 golden，替代前端当前视图自算分位）。
     # 2026-08-25：current 帧含量能字段时取实时分位（量能判定用），缺量能字段回退最近快照帧。
     market_percentiles = _latest_market_percentiles(frames)
+    # WP2a：请求级门控确认状态（_analyze_frames 串行执行，同一实例贯穿全部 full_task；
+    # 单股链路不传该参数 → history_args[3] 为 None → 直通 = 现行为）
+    gate_confirm_state = GateConfirmState(
+        required_frames=int(getattr(engine.config, "lifecycleConfirmFrames", 1))
+    )
     for index, frame in enumerate(frames):
         key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
         regime = market_regime(frame)
@@ -582,6 +594,7 @@ def _analyze_frames(
                 momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
                 price_changes, amount_history,
                 atr_history,
+                gate_confirm_state,
             ))
 
         # 完整四信号计算：单股逐股纯 Python 计算仅 ~1ms/股，全市场 224 股串行 ~0.2s。

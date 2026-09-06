@@ -267,6 +267,7 @@ def _confirm_jump(
 from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision
 
 from ..trend.risk import analyze_risk, market_regime
+from ..trend.gate_confirm import GateConfirmState, gate_reason
 
 
 def _compat_callable(name: str):
@@ -858,6 +859,12 @@ class RankTrendPythonEngine:
         self._index_by_snapshot = {str(frame.get("snapshotId")): i for i, frame in enumerate(frames)}
         # ATR 波动观察（2026-08-17）：个股跨帧 bar 累积（断档重置/截断，见 _build_signal assemble 分支）
         self._atr_meta_by_code: dict[str, dict[str, Any]] = {}
+        # WP2a：本次 replay 独占确认状态（两次 replay 互不污染）；帧循环无提前 return，
+        # 出口对称复位等价 try/finally（避免整段重排）
+        self._gate_confirm_state = GateConfirmState(
+            required_frames=int(getattr(self.config, "lifecycleConfirmFrames", 1))
+        )
+        self._gate_confirm_ctx = {"active": True}
         min_count = warmup_count or get_technical_min_samples(self.config)
         start = min_count - 1 if len(frames) >= min_count else 0
         requested_codes = {str(code) for code in codes} if codes else None
@@ -949,6 +956,8 @@ class RankTrendPythonEngine:
                         )
                     prev_candidate_by_code[code] = signal.get("candidateTier")
                     signals.append(signal)
+        # WP2a：replay 出口对称复位（上下文不跨请求存活）
+        self._gate_confirm_ctx = {"active": False}
         return signals
 
     @staticmethod
@@ -1076,6 +1085,29 @@ class RankTrendPythonEngine:
         cycle = _compat_callable("analyze_cycle_with_risk")(
             cycle, risk, technical.get("momentumProfile"), self.config
         )
+        # WP2a：lifecycle veto（action）多帧确认（K>1 且帧序列上下文才生效；K=1 直通 = 现行为）。
+        # 后端 decision 无 veto 布尔键，veto 恒以 action=="veto" 表达；抑制时改写 action，
+        # 下游 _lifecycle_tier（不产 E）/E 连锁/compose_analysis_candidate_tier/compose_observation_scores/
+        # compose_strategy/交易侧 _lifecycle_decision_action 全部自动跟随。
+        # R-C2 裁决：active 且 K>1 时每帧无条件过 confirmed_value——非 veto 值走其非触发分支
+        # （基线更新 + 原样返回），veto 值走连续计数；只对 veto 调用会让"维持上一帧已确认
+        # action"无从成立（非 veto 帧基线永不更新）。
+        self._gate_confirm_state = getattr(self, "_gate_confirm_state", None) or GateConfirmState(
+            required_frames=int(getattr(self.config, "lifecycleConfirmFrames", 1))
+        )
+        self._gate_confirm_ctx = getattr(self, "_gate_confirm_ctx", None) or {"active": False}
+        if self._gate_confirm_ctx.get("active") and self._gate_confirm_state.required_frames > 1:
+            _decision = cycle.setdefault("decision", {})
+            _action = str(_decision.get("action") or "")
+            _confirmed_action = self._gate_confirm_state.confirmed_value(
+                code, _action, when_in=("veto",), default="caution"
+            )
+            if _confirmed_action != _action:
+                _decision["action"] = _confirmed_action
+                _decision.setdefault("reasons", []).append(
+                    gate_reason("周期 veto", self._gate_confirm_state.streak(code), self._gate_confirm_state.required_frames)
+                )
+        # 其余情况（未激活 / K=1）：直通，不触碰状态与决策。
         decision = _compat_callable("compose_decision")(technical, cycle, risk, self.config)
         strategy = _compat_callable("compose_analysis_candidate_tier")(
             technical, cycle, risk, regime, self.config
