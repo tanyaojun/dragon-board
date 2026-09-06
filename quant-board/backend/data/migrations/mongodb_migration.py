@@ -189,7 +189,7 @@ def build_mongodb_indexes() -> dict[str, list[dict[str, Any]]]:
         "backtest_quality_reports": [{"keys": [("backtestRunId", 1)]}],
         "hotlist_sentiment": [
             {
-                "keys": [("datasetId", 1), ("snapshotType", 1), ("tradingDate", 1)],
+                "keys": [("datasetId", 1), ("snapshotType", 1), ("tradingDate", 1), ("slotTime", 1)],
                 "unique": True,
             },
             {"keys": [("datasetId", 1), ("snapshotType", 1), ("computedAt", -1)]},
