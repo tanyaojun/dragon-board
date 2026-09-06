@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import logging
 import math
 import time
 import uuid
@@ -537,6 +538,22 @@ class SnapshotCollectorService:
                 stock_rows=stock_rows,
                 sector_rows=sector_rows,
             )
+        if run_status == "completed":
+            # WP1b：每槽落帧后同源计算热榜情绪（失败不阻断采集——无质量阻断，AGENTS.md §10）
+            try:
+                from backend.services.theme.hotlist_sentiment_compute import compute_and_upsert_for_slot
+
+                sentiment_result = compute_and_upsert_for_slot(
+                    self._repo.db,  # MongoRepository 已暴露公开 db 句柄（mongo_repository.py L48-51，已核实）
+                    dataset_id=dataset_id,
+                    snapshot_type=snapshot_type,
+                    trading_date=trading_date,
+                    slot_time=slot_time,
+                )
+                if not sentiment_result.get("written"):
+                    quality.warnings.append(f"hotlist_sentiment_slot_skipped: {sentiment_result.get('reason')}")
+            except Exception as exc:
+                logging.warning("hotlist_sentiment slot compute failed for %s %s: %s", trading_date, slot_time, exc)
         run_doc = {
             "runId": run_id,
             "datasetId": dataset_id,

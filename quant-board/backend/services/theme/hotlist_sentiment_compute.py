@@ -151,3 +151,49 @@ class HotListSentimentComputeService:
             doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
         HotListSentimentService(self._backfill._db).upsert(doc)
         return {key: value for key, value in doc.items() if key != "_id"}
+
+
+def compute_and_upsert_for_slot(
+    mongo_db: Any,
+    *,
+    dataset_id: str,
+    snapshot_type: str,
+    trading_date: str,
+    slot_time: str,
+) -> dict[str, Any]:
+    """collector 每槽落帧后的情绪计算入口（WP1b）。
+
+    与 series lazy compute 的差异：指定槽位帧（非当日最新帧）、产出槽位 _id 文档。
+    全库取数（不信任内存对象，保证 save-后-计算的数据一致性）；缺失返回 reason 不抛异常
+    ——调用方（collector）负责不阻断帧采集。
+    """
+    try:
+        from backend.operations.hotlist_sentiment import (
+            HotListSentimentBackfillService,
+            build_hotlist_sentiment_document,
+        )
+
+        backfill = HotListSentimentBackfillService(mongo_db)
+        frame = backfill.frame_for_slot(dataset_id, snapshot_type, trading_date, slot_time)
+        if not frame:
+            return {"written": False, "reason": "no_snapshot_frame"}
+        stocks = backfill.stocks_for_frame(dataset_id, str(frame.get("snapshotId") or ""))
+        if not stocks:
+            return {"written": False, "reason": "empty_stock_rows"}
+        previous = backfill.previous_day_stocks(dataset_id, snapshot_type, trading_date)
+        _join_display_status(backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
+        doc = build_hotlist_sentiment_document(
+            dataset_id=dataset_id,
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            frame=frame,
+            stocks=stocks,
+            yesterday_stocks=previous.get("yesterday") or [],
+            day_before_stocks=previous.get("day_before") or [],
+            market_data=_build_market_data_like(frame.get("limitSummary")),
+            slot_time=slot_time,
+        )
+        HotListSentimentService(mongo_db).upsert(doc)
+        return {"written": True, "reason": None}
+    except Exception as exc:  # 无质量阻断：情绪失败不阻断帧采集
+        return {"written": False, "reason": f"error: {exc}"}
