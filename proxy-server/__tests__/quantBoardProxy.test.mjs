@@ -33,6 +33,15 @@ test('deprecated theme batch route is not captured by QuantBoard proxy', () => {
   assert.equal(shouldProxyToQuantBoard('/api/themes/batch'), false)
 })
 
+test('hotlist sentiment series proxies to QuantBoard (prefix boundary safe)', () => {
+  assert.equal(shouldProxyToQuantBoard('/api/hotlist-sentiment/series'), true)
+  assert.equal(
+    shouldProxyToQuantBoard('/api/hotlist-sentiment/series?dataset_id=dragonboard_live&days=3'),
+    true,
+  )
+  assert.equal(shouldProxyToQuantBoard('/api/hotlist-sentimentx/series'), false)
+})
+
 
 test('QuantBoard target honors configured API base', () => {
   const previous = process.env.QUANT_BOARD_API_BASE

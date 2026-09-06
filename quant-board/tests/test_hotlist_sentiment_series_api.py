@@ -167,18 +167,19 @@ def test_series_days_default_and_cap(monkeypatch):
     from backend.data.repositories import repository_factory
 
     fake_db = FakeMongoDb()
-    _seed_frames(fake_db, "dragonboard_live", "half_hour", [f"2026-05-{d:02d}" for d in range(1, 11)])
+    # 种子 35 天 > cap 30：确保 cap-30 截断真实生效（10 天种子下 <=30 恒真，测不到截断）
+    _seed_frames(fake_db, "dragonboard_live", "half_hour", [f"2026-05-{d:02d}" for d in range(1, 36)])
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: fake_db
     )
     client = TestClient(app)
 
     body = client.get("/api/hotlist-sentiment/series", params={"dataset_id": "dragonboard_live"}).json()
-    assert len(body["items"]) <= 3
+    assert len(body["items"]) == 3
 
     body = client.get("/api/hotlist-sentiment/series",
                       params={"dataset_id": "dragonboard_live", "days": "99"}).json()
-    assert len(body["items"]) <= 30
+    assert len(body["items"]) == 30
 
 
 def test_series_no_frames_returns_degraded(monkeypatch):
