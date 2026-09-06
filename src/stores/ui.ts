@@ -152,7 +152,7 @@ function getStockSortValue(stock: Stock, field: SortField): string | number | nu
     return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.volumePrice?.score)
   }
   if (field === 'synergyTier') {
-    // 四维等级值（S=5 → E=0）；unknown/缺失 → null 排最后
+    // synergy 合并档位等级值（S=5 → E=0）；unknown/缺失 → null 排最后
     const tier = getSynergyTier(stock)
     return tier && tier !== 'unknown' ? SYNERGY_TIER_LEVEL[tier] : null
   }

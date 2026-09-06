@@ -69,7 +69,7 @@ export interface RankTrendSignalScore {
   score: number
 }
 
-/** 四维观察信号离散档位（后端 Python golden 生产，前端只消费；unknown=样本不足/数据缺失） */
+/** 投票维观察信号离散档位（后端 Python golden 生产，前端只消费；unknown=样本不足/数据缺失） */
 export type RankTrendSignalTier = 'S' | 'A' | 'B' | 'C' | 'D' | 'E' | 'unknown'
 
 /** 档位命中规则原文（后端 tierReasons） */

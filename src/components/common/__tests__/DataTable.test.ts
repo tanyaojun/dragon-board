@@ -294,7 +294,7 @@ describe('DataTable row detail interactions', () => {
     // visibleColumns 过滤观察列
     expect(source).toContain('COLLAPSIBLE_OBSERVATION_KEYS.has(col.key)')
     expect(source).toContain('const toggleObservationColumns')
-    // 四维列左侧三角按钮（与综合列折叠方式一致）
+    // synergy 列左侧三角按钮（与综合列折叠方式一致）
     expect(source).toContain("@click.stop=\"toggleObservationColumns\"")
     expect(source).toContain("observationColumnsCollapsed ? '◀' : '▶'")
   })
@@ -311,7 +311,7 @@ describe('DataTable row detail interactions', () => {
     // visibleColumns 过滤行情列
     expect(source).toContain('COLLAPSIBLE_QUOTE_KEYS.has(col.key)')
     expect(source).toContain('const toggleQuoteColumns')
-    // 成交额列 title 右侧三角按钮（与综合/四维折叠方式一致）
+    // 成交额列 title 右侧三角按钮（与综合/synergy 折叠方式一致）
     expect(source).toContain("@click.stop=\"toggleQuoteColumns\"")
     expect(source).toContain("quoteColumnsCollapsed ? '◀' : '▶'")
   })

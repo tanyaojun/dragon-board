@@ -1,5 +1,5 @@
 /**
- * 档位展示投影（四维列方案 §3.3/§4.3）。
+ * 档位展示投影（原四维列方案 §3.3/§4.3；现口径 5 投票维 + 1 环境门，见 docs 命名注记）。
  *
  * 只消费后端已产字段（stock.rankTrend.*），缺字段返回 null（回退纯连续分展示，不渲染空徽章、
  * 不报错）。tierBadgeClass 供 DataTable 徽章样式映射。
@@ -71,12 +71,12 @@ export function getCrossSectionDetail(stock: unknown): string | null {
   return `热度 ${pct ?? '-'}/${delta ?? '-'}/${rel ?? '-'}`
 }
 
-/** 四维合并档位：stock.rankTrend.observation.synergy.signalTier（缺字段返回 null，回退纯连续分展示） */
+/** synergy 合并档位：stock.rankTrend.observation.synergy.signalTier（缺字段返回 null，回退纯连续分展示） */
 export function getSynergyTier(stock: unknown): RankTrendSignalTier | null {
   return asTier((stock as { rankTrend?: { observation?: { synergy?: { signalTier?: unknown } } } } | undefined)?.rankTrend?.observation?.synergy?.signalTier)
 }
 
-/** 四维合并档位命中规则（悬停展示用）；非数组/缺字段回退空数组 */
+/** synergy 合并档位命中规则（悬停展示用）；非数组/缺字段回退空数组 */
 export function getSynergyTierReasons(stock: unknown): string[] {
   const reasons = (stock as { rankTrend?: { observation?: { synergy?: { tierReasons?: unknown } } } } | undefined)?.rankTrend?.observation?.synergy?.tierReasons
   return Array.isArray(reasons) ? (reasons as string[]) : []

@@ -88,7 +88,7 @@ describe('tierBadgeClass / tierBadgeLabel', () => {
 })
 
 describe('getSynergyTierDetail', () => {
-  it('拼四维明细，缺维显示 -', () => {
+  it('拼投票维明细，缺维显示 -', () => {
     const stock = makeStock()
     expect(getSynergyTierDetail(stock)).toEqual(['共振 A', '趋势 S', '量价 B', '周期 A', '热度 -'])
     expect(getSynergyTierDetail({})).toEqual(['共振 -', '趋势 -', '量价 -', '周期 -', '热度 -'])

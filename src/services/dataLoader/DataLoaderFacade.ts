@@ -1111,7 +1111,7 @@ class DataLoaderService {
   }
 
   /**
-   * 5. 计算信号（排名变化 + 四维信号）
+   * 5. 计算信号（排名变化 + 投票维信号）
    */
   private async calculateSignals(
     merged: any[],

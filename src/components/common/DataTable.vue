@@ -192,7 +192,7 @@
               </div>
             </template>
 
-            <!-- 四维合并档位列（回测方案配套：消费 synergy.signalTier，前端只展示） -->
+            <!-- synergy 合并档位列（回测方案配套：消费 synergy.signalTier，前端只展示） -->
             <template v-else-if="col.key === 'synergyTier'">
               <div class="observation-cell synergy-tier-cell"
                 @mouseenter="showTierTooltip($event, stock, 'synergyTier')" @mousemove="moveConfidenceTooltip($event)"
@@ -1257,7 +1257,7 @@ const getTierReasonsOf = (stock: any, field: string): string[] => {
 }
 
 // 档位悬停：四列（共振/趋势/量价/周期）tooltip 显示"档位字母，原因"（如"B，方向确认但路径持续不足"），
-// 单元格不再渲染徽章以免与【四维】最终信号混淆；四维列保留徽章与完整说明
+// 单元格不再渲染徽章以免与【synergy】最终信号混淆；synergy 列保留徽章与完整说明
 const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
   hideRowTooltip()
   const lines: string[] = []
