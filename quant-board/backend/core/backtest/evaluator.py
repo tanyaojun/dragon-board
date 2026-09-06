@@ -89,9 +89,19 @@ class OutcomeEvaluator:
             "warnings": warnings,
         }
 
-    def evaluate(self, frames: list[dict[str, Any]], signals: list[dict[str, Any]], horizons: list[int]) -> dict[str, Any]:
+    def evaluate(
+        self,
+        frames: list[dict[str, Any]],
+        signals: list[dict[str, Any]],
+        horizons: list[int],
+        include_hold_to_close: bool = False,
+    ) -> dict[str, Any]:
         lookup = build_frame_lookup(frames)
         reports = [self._horizon(frames, signals, horizon, lookup) for horizon in horizons]
+        # WP3.1 hold-to-close 口径（默认关闭，现行为零变化）：同日尾帧强制出场，与 horizons 同构
+        hold_to_close = None
+        if include_hold_to_close:
+            hold_to_close = self._horizon(frames, signals, "hold_to_close", lookup, self._last_entry_index(frames))
         signal_by_snapshot_code = {f"{s['snapshotId']}:{s['code']}": s for s in signals}
         b_signals = [s for s in signals if s["candidateTier"] == "B_IGNITION"]
         b_to_a = []
@@ -106,6 +116,7 @@ class OutcomeEvaluator:
         d_decay = [s for s, outcome in d_outcomes if outcome.get("found") and ((outcome.get("rankDelta") or 0) < 0 or (outcome.get("percentileDelta") or 0) < 0)]
         return {
             "horizons": reports,
+            "holdToClose": hold_to_close,
             "bToATransitionRate": share(len(b_to_a), len(b_signals)),
             "dDecayRate": share(len(d_decay), len(d_signals)),
             "buyBaselineComparison": [
@@ -118,8 +129,15 @@ class OutcomeEvaluator:
             ],
         }
 
-    def _horizon(self, frames: list[dict[str, Any]], signals: list[dict[str, Any]], horizon: int, lookup: dict[str, Any]) -> dict[str, Any]:
-        pairs = [(signal, self._outcome(frames, signal, horizon, lookup)) for signal in signals]
+    def _horizon(
+        self,
+        frames: list[dict[str, Any]],
+        signals: list[dict[str, Any]],
+        horizon: Any,
+        lookup: dict[str, Any],
+        last_entry_index: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        pairs = [(signal, self._outcome(frames, signal, horizon, lookup, last_entry_index)) for signal in signals]
         return {
             "horizon": horizon,
             "byTier": self._group_stats(pairs, lambda s: s["candidateTier"], self.tiers),
@@ -130,10 +148,24 @@ class OutcomeEvaluator:
             "byMomentumBucket": self._group_stats(pairs, momentum_bucket),
         }
 
-    def _outcome(self, frames: list[dict[str, Any]], signal: dict[str, Any], horizon: int, lookup: dict[str, Any]) -> dict[str, Any]:
+    def _outcome(
+        self,
+        frames: list[dict[str, Any]],
+        signal: dict[str, Any],
+        horizon: Any,
+        lookup: dict[str, Any],
+        last_entry_index: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
         code = str(signal["code"])
         entry = lookup["index_by_snapshot_id"].get(str(signal["snapshotId"]), -1)
-        future = entry + horizon
+        if horizon == "hold_to_close" and last_entry_index is not None:
+            # WP3.1：hold-to_close 出场点 = 同一 tradingDate 最后一帧；entry 缺 tradingDate
+            # → future=len(frames) 越界走 found=False（fail-visible）；entry 即尾帧 → 零收益自然成立
+            entry_frame = frames[entry] if entry >= 0 else None
+            entry_date = str((entry_frame or {}).get("tradingDate") or "")
+            future = last_entry_index.get(entry_date, len(frames)) if entry_date else len(frames)
+        else:
+            future = entry + horizon
         current_frame = frames[entry] if entry >= 0 else None
         future_frame = frames[future] if future < len(frames) else None
         current = lookup["stock_by_frame_code"][entry].get(code) if current_frame else None
@@ -159,6 +191,15 @@ class OutcomeEvaluator:
             "stayedTop20": all((row or {}).get("rank", 999) <= 20 for row in stock_window),
             "stayedTop50": all((row or {}).get("rank", 999) <= 50 for row in stock_window),
         }
+
+    @staticmethod
+    def _last_entry_index(frames: list[dict[str, Any]]) -> dict[str, int]:
+        last: dict[str, int] = {}
+        for idx, frame in enumerate(frames):
+            trading_date = str(frame.get("tradingDate") or "")
+            if trading_date:
+                last[trading_date] = idx  # 顺序末次出现 = 当日最后帧
+        return last
 
     def _group(self, signals: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
         total = len(signals)
