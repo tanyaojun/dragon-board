@@ -195,6 +195,15 @@
                 <span class="hotlist-stage-label">热榜情绪</span>
                 <span class="hotlist-stage-value">{{ hotListStage.name }}</span>
                 <span class="hotlist-confidence">置信 {{ hotListSentiment.confidence }}%</span>
+                <span v-if="hotListSentimentSlotTime" class="slot-time"
+                  >数据时点 {{ hotListSentimentSlotTime }}</span
+                >
+                <span
+                  v-if="hotListSentimentMissingDays.length > 0"
+                  class="slot-time missing-days"
+                  :title="hotListSentimentMissingDaysTitle"
+                  >窗口缺失 {{ hotListSentimentMissingDays.length }} 日</span
+                >
               </div>
               <div class="hotlist-summary">{{ hotListSentiment.summary }}</div>
             </div>
@@ -578,16 +587,12 @@ import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import {
-  hotListSentimentAnalyzer,
-  type HotListDayMetrics,
-  type HotListSentimentResult,
-  type HotListStatusLabel,
-} from '@/services/hotlist/HotListSentimentAnalyzer'
-import type { SnapshotFrameBundle } from '@/services/snapshot/types'
-import { FORMAL_SNAPSHOT_READ_POLICY } from '@/services/snapshot/readPolicy'
-import { snapshotFacade } from '@/services/snapshot/facade'
-import { cacheManager } from '@/services/LRUCache'
+import { fetchHotlistSentimentSeries } from '@/services/hotlist/hotlistSentimentApi'
+import type {
+  HotListDayMetrics,
+  HotListSentimentDayDoc,
+  HotListStatusLabel,
+} from '@/types/hotlistSentiment'
 import {
   EMOTION_PHASE_BY_VALUE,
   EMOTION_PHASE_LIST,
@@ -676,57 +681,21 @@ const view = ref<'overview' | 'hotlist' | 'limit' | 'money' | 'plates' | 'factor
 const selectedPlate = ref<number | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 const unsubscribeFns: (() => void)[] = []
-const hotListSentiment = ref<HotListSentimentResult | null>(null)
+const hotListSentiment = ref<HotListSentimentDayDoc | null>(null)
 const hotListSentimentLoading = ref(false)
 const hotListSentimentError = ref<string | null>(null)
+// 后端 series 窗口内被标注 missing 的交易日（含结构化原因），供模板展示「窗口缺失 N 日」
+const hotListSentimentMissingDays = ref<Array<{ tradingDate: string; reason: string | null }>>([])
+const hotListSentimentSlotTime = ref('')
 const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 let hotListSentimentTimer: ReturnType<typeof setTimeout> | null = null
 let hotListSentimentRetryCount = 0
-// 热榜情绪读取防风暴：in-flight 锁 + 最小间隔节流 + visible 判断，
-// 避免 merged.stocks 高频事件把 frames 请求打满前端 high 队列（饿死观察面板等交互请求）。
-// daily 帧一天变化有限，情绪数据半小时（1800s）刷新一次足够。
+// 热榜情绪读取防风暴：in-flight 锁 + visible 判断，
+// 避免 merged.stocks 高频事件把 series 请求打满前端 high 队列（饿死观察面板等交互请求）。
+// 数据全部来自后端 series 读口（GET /api/hotlist-sentiment/series），前端不再自算。
 let hotListSentimentInFlight = false
 let hotListSentimentLastRunAt = 0
 const HOT_LIST_SENTIMENT_MIN_INTERVAL_MS = 1800_000
-// daily 历史帧查询投影缓存：6 小时失效。查询过滤 beforeTradingDate=today，结果仅含昨日及更早帧，
-// 当日入库的新帧不会改变结果；key 含 today，次日自动换 key 重新查询，不会跨日陈旧。
-// 6h 在"当天内历史回填可见性"与"减少 MongoDB 压力"之间取平衡。
-const HOT_LIST_SENTIMENT_FRAMES_CACHE_TTL_MS = 6 * 60 * 60 * 1000
-const hotListSentimentFramesCache = cacheManager.createCache('hotlistSentimentFrames', {
-  capacity: 8,
-  defaultTTL: HOT_LIST_SENTIMENT_FRAMES_CACHE_TTL_MS,
-  maxMemory: 8 * 1024 * 1024,
-  ttlConfig: { hotlistSentimentFrames: HOT_LIST_SENTIMENT_FRAMES_CACHE_TTL_MS },
-})
-
-// 热榜情绪分析所需的 stock 行字段白名单（frames fields 投影）：
-// 涨停/炸板信号与连板高度依赖这些行级字段；full 投影整行 107 字段会让 3 帧响应达 27MB
-const HOT_LIST_SENTIMENT_ROW_FIELDS = [
-  'code',
-  'name',
-  'rank',
-  'change',
-  'avgRankNum',
-  'boardHeight',
-  'highDays',
-  'continuousDays',
-  'lianbanStr',
-  'lianban',
-  'firstZtTime',
-  'lastZtTime',
-  'first_limit_up_time',
-  'last_limit_up_time',
-  'isZhaban',
-  'zhaban',
-  'openedLimit',
-  'limitOpened',
-  'failedLimitUp',
-  'isFailedLimitUp',
-  'volumeRatio',
-  'zlje',
-  'zljzb',
-]
-
 
 
 // ========== 从 dataLayer 获取数据 ==========
@@ -882,6 +851,15 @@ const hotPlates = computed(() => {
 })
 
 const hotListComparison = computed(() => hotListSentiment.value?.metrics.comparison ?? null)
+// 窗口缺失标注的 hover 明细：逐日「日期：原因」，reason 缺失时只列日期
+const hotListSentimentMissingDaysTitle = computed(() =>
+  hotListSentimentMissingDays.value
+    .map((day) => {
+      const dateText = day.tradingDate || '未知日期'
+      return day.reason ? `${dateText}：${day.reason}` : dateText
+    })
+    .join('；'),
+)
 const hotListToday = computed<HotListDayMetrics | null>(() => hotListComparison.value?.today ?? null)
 const hotListLimitEvidence = computed(() => hotListSentiment.value?.metrics.limitEvidence ?? null)
 const hotListMarketLimitEvidence = computed(() => hotListLimitEvidence.value?.market ?? null)
@@ -1290,67 +1268,37 @@ function scheduleHotListSentimentRetry() {
 }
 
 async function loadHotListSentiment() {
-  // in-flight 防重入：上一次未完成时直接丢弃新触发，避免并发 frames 请求堆积
+  // in-flight 防重入保留；历史 daily 帧查询/30min LRU 缓存删除（数据全部来自后端 series）
   if (hotListSentimentInFlight) return
   hotListSentimentInFlight = true
   hotListSentimentLoading.value = true
   hotListSentimentError.value = null
 
   try {
-    const stocks = dataLayer.getStocks()
-    if (!Array.isArray(stocks) || stocks.length === 0) {
+    const result = await fetchHotlistSentimentSeries(3)
+    if (result.degraded || result.items.length === 0) {
       hotListSentiment.value = null
-      hotListSentimentError.value = '等待当前热榜池数据...'
+      hotListSentimentSlotTime.value = ''
+      hotListSentimentMissingDays.value = []
+      hotListSentimentError.value = result.reason || '热榜情绪数据暂不可用'
       scheduleHotListSentimentRetry()
       return
     }
-
     hotListSentimentRetryCount = 0
     hotListSentimentLastRunAt = Date.now()
-    // 按需过滤：只看今天之前的历史 daily 帧（limit 3 + beforeTradingDate 后端过滤），
-    // 不拉取今天全量帧；情绪分析只需昨日/前日对比，今天数据来自 dataLayer 实时 stocks。
-    // 查询结果 30 分钟 LRU 缓存，减少对 MongoDB 的重复查询
-    const today = formatLocalDate(new Date())
-    const framesCacheKey = `daily:${today}:fields`
-    const cachedBundles = hotListSentimentFramesCache.get(framesCacheKey) as
-      | SnapshotFrameBundle[]
-      | null
-    let historicalBundles: SnapshotFrameBundle[]
-    if (cachedBundles) {
-      historicalBundles = cachedBundles
-    } else {
-      historicalBundles = await snapshotFacade.listSnapshotFrameBundles({
-        type: 'daily',
-        beforeTradingDate: today,
-        allowedCaptureModes: FORMAL_SNAPSHOT_READ_POLICY.allowedCaptureModes,
-        excludeRestored: FORMAL_SNAPSHOT_READ_POLICY.excludeRestored,
-        sort: 'desc',
-        limit: 3,
-        // fields 行字段白名单投影：只取情绪分析所需字段，避免 full 投影 27MB 大响应
-        fields: HOT_LIST_SENTIMENT_ROW_FIELDS,
-      })
-      hotListSentimentFramesCache.setWithType(
-        framesCacheKey,
-        historicalBundles,
-        'hotlistSentimentFrames',
-      )
-    }
-
-    const historical = historicalBundles
-      .filter((bundle: SnapshotFrameBundle) => bundle.tradingDate !== today)
-      .slice(0, 2)
-
-    hotListSentiment.value = hotListSentimentAnalyzer.analyze({
-      stocks,
-      yesterday: historical[0] || null,
-      dayBefore: historical[1] || null,
-      marketData: marketData.value,
-    })
-    // 注：不再前端 persist 热榜情绪——proxy-server 无 /api/hotlist-sentiment 转发（404 死链），
-    // 且 QuantBoard 后端 startup 的 run_after_market_once 已按最新交易日自动入库（operations/schedule.py）。
+    const latest = result.items[result.items.length - 1]
+    hotListSentiment.value = latest
+    hotListSentimentSlotTime.value = latest.slotTime || ''
+    hotListSentimentMissingDays.value = result.missingDays
+    // 失败原因可见：后端标注的 missingEvidence / statusSourceCounts 不在此吞掉，
+    // 模板可经 hotListSentiment.metrics.missingEvidence 展示
   } catch (err: any) {
-    console.warn('[DragonBreathPanel] 热榜情绪分析失败:', err)
-    hotListSentimentError.value = err?.message || '热榜情绪分析失败'
+    console.warn('[DragonBreathPanel] 热榜情绪加载失败:', err)
+    hotListSentiment.value = null
+    hotListSentimentSlotTime.value = ''
+    hotListSentimentMissingDays.value = []
+    hotListSentimentError.value = err?.message || '热榜情绪加载失败'
+    scheduleHotListSentimentRetry()
   } finally {
     hotListSentimentInFlight = false
     hotListSentimentLoading.value = false
@@ -1441,13 +1389,6 @@ function formatSignedInt(value?: number | null): string {
 function getDeltaClass(value?: number | null): string {
   if (value === undefined || value === null || !Number.isFinite(Number(value))) return ''
   return value > 0 ? 'up-text' : value < 0 ? 'down-text' : ''
-}
-
-function formatLocalDate(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
 }
 
 function getChangeClass(value?: number): string {
@@ -2164,7 +2105,8 @@ onUnmounted(() => {
 }
 
 .hotlist-stage-label,
-.hotlist-confidence {
+.hotlist-confidence,
+.slot-time {
   font-size: 11px;
   color: var(--text-secondary);
 }

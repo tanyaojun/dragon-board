@@ -71,7 +71,7 @@ describe('fetchHotlistSentimentSeries', () => {
     expect(result.reason).toBe('HTTP 502')
   })
 
-  it('missing 日被过滤', async () => {
+  it('missing 日被过滤并收集进 missingDays（reason 原样）', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -81,6 +81,7 @@ describe('fetchHotlistSentimentSeries', () => {
             items: [
               docStub,
               { tradingDate: '2026-09-05', missing: true, reason: 'empty_stock_rows' },
+              { tradingDate: '2026-09-04', missing: true, reason: 'no_snapshot' },
             ],
           }),
           { status: 200 },
@@ -90,6 +91,44 @@ describe('fetchHotlistSentimentSeries', () => {
     const result = await fetchHotlistSentimentSeries()
     expect(result.items).toHaveLength(1)
     expect(result.items[0].tradingDate).toBe('2026-09-06')
+    expect(result.missingDays).toHaveLength(2)
+    expect(result.missingDays).toEqual([
+      { tradingDate: '2026-09-05', reason: 'empty_stock_rows' },
+      { tradingDate: '2026-09-04', reason: 'no_snapshot' },
+    ])
+  })
+
+  it('missing 条目缺 tradingDate 时 missingDays 用空字符串占位', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            items: [docStub, { missing: true, reason: 'no_snapshot' }],
+          }),
+          { status: 200 },
+        ),
+      ),
+    )
+    const result = await fetchHotlistSentimentSeries()
+    expect(result.items).toHaveLength(1)
+    expect(result.missingDays).toEqual([{ tradingDate: '', reason: 'no_snapshot' }])
+  })
+
+  it('degraded 响应 missingDays 为空数组', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: false, degraded: true, reason: 'no_snapshot', items: [] }),
+          { status: 200 },
+        ),
+      ),
+    )
+    const result = await fetchHotlistSentimentSeries()
+    expect(result.degraded).toBe(true)
+    expect(result.missingDays).toEqual([])
   })
 
   it('请求参数包含 dataset_id 与 days', async () => {
