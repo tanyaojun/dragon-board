@@ -88,3 +88,15 @@
 - **2026-09-06 WP1c 修复 regime 情绪注入 lookahead；组 5 参数结论待 9 月数据积累后按 §6 重验**；
 
 - **golden 约束**：任何参数改动不得破坏 golden（test_ranktrend_golden_alignment 全绿）。
+
+## 7. 环境门去噪参数（WP2，2026-09-06）
+
+| 参数 | 默认值 | 语义 | 状态 |
+|---|---|---|---|
+| lifecycleConfirmFrames | 1 | veto/B-D 降档连续确认帧数（1=单帧即触发，现行为） | 待扫描 |
+| regimeScoreEmaAlpha | 1.0 | regime score EMA 系数（1=直通） | 待扫描 |
+| regimeStateHysteresis | false | strong 边界迟滞开关 | 待扫描 |
+| regimeStrongHysteresisBand | 5.0 | strong 退出阈值 = 进入阈值(70.0) − band | 待扫描 |
+
+- 扫描前置条件：WP1c lookahead 修复 + WP3.2 翻转率基线；K∈{1,2,3}、α 档位单变量。
+- 冻结纪律：未经 longterm-test 流程"证实"，默认值不得变更。

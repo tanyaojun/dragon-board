@@ -118,6 +118,11 @@ class RankTrendConfig:
     # banStrongA=banStrongB=True 等价旧全禁；banStrongB=False = A 禁 B 观察（默认值由验证定）
     banStrongA: bool = True
     banStrongB: bool = True
+    # WP2 环境门去噪参数（默认值 = 现行为；L1 档案登记，未经 longterm-test 证实不得改默认）
+    lifecycleConfirmFrames: int = 1        # veto/B-D 降档连续确认帧数
+    regimeScoreEmaAlpha: float = 1.0       # regime score EMA 系数（1=直通）
+    regimeStateHysteresis: bool = False    # strong 边界迟滞开关
+    regimeStrongHysteresisBand: float = 5.0  # strong 退出阈值 = 进入阈值 - band
     tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
     tierSynergyCrossSectionVote: float = 1.0  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；验证 all+10%/8月+237%）
     tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
