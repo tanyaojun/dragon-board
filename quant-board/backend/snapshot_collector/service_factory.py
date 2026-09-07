@@ -36,6 +36,16 @@ class _MongoSnapshotCollectorRepository:
         self._mongo = mongo_repo
         self._db = db
 
+    @property
+    def db(self) -> Any:
+        """运行库句柄（WP1b 槽位情绪 compute_and_upsert_for_slot 经 self._repo.db 取库）。
+
+        注意：service.py 持有的是本包装类而非内层 MongoRepository——"db 已核实"必须
+        对准实际注入的类（2026-09-07 生产核对：缺此属性曾致 AttributeError 被外层
+        except 吞成 log-only，全天槽位情绪文档静默缺失）。
+        """
+        return self._db
+
     # ── snapshot layer (reuses MongoRepository) ──────────────────────────
 
     def snapshot_exists(self, dataset_id: str, snapshot_id: str) -> bool:

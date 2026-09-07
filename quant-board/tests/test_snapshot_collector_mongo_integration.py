@@ -74,8 +74,16 @@ class FakeCollection:
         if upsert:
             self.rows.append(dict(document))
 
-    def find_one(self, query: dict[str, Any]) -> dict[str, Any] | None:
-        return next(iter(self.find(query)), None)
+    def find_one(
+        self,
+        query: dict[str, Any] | None = None,
+        sort: Any = None,
+    ) -> dict[str, Any] | None:
+        # sort 形参对齐 pymongo（frame_for_slot 等以 find_one(query, sort=[...]) 取最新帧）
+        rows = list(self.find(query or {}))
+        if sort:
+            rows = list(FakeCursor(rows).sort(sort))
+        return rows[0] if rows else None
 
     def find(
         self,
@@ -1009,3 +1017,53 @@ class TestMongoCollectorCompareContract:
         assert len(restored_frames) == 1
         assert len(restored_rows) == 1
         assert restored_rows[0]["price"] == 10.0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WP1b 槽位情绪接线回归（2026-09-07 生产核对发现：self._repo.db 在真实包装类上
+# 不存在 → AttributeError 被外层 except 吞成 log-only → 全天槽位情绪文档缺失）。
+# 这组测试走真实 _MongoSnapshotCollectorRepository + 完整 service 链路，锁住该接缝。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestMongoIntegrationSentimentSlot:
+    """completed 槽位 run 必须产出槽位级热榜情绪文档（真实 repo 包装类链路）。"""
+
+    def test_repo_wrapper_exposes_db_for_slot_sentiment(self) -> None:
+        """repo 包装类必须暴露公开 db 句柄（WP1b service.py 以 self._repo.db 取库）。"""
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+        assert repo.db is db
+
+    def test_completed_slot_run_writes_slot_sentiment_doc(self) -> None:
+        from backend.snapshot_collector.models import CollectorRunRequest
+        from backend.snapshot_collector.service import SnapshotCollectorService
+        from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository
+
+        db = FakeMongoDatabase()
+        repo = _MongoSnapshotCollectorRepository(_mongo_repo(db), db)
+        fake_collect = _fake_collect_fn(stocks=_standard_stocks(), source_health=_standard_health())
+
+        service = SnapshotCollectorService(
+            repo=repo,
+            collect_fn=fake_collect,
+            normalize_fn=_passthrough_normalize,
+        )
+
+        request = CollectorRunRequest(
+            dataset_id="dragonboard_backend_shadow",
+            snapshot_type="half_hour",
+            trading_date="2026-06-11",
+            slot_time="10:00",
+            dry_run=False,
+        )
+
+        result = service.run_once(request)
+
+        assert result.status == "completed"
+        docs = list(db["hotlist_sentiment"].find({}))
+        assert len(docs) == 1, f"expected slot sentiment doc, got {docs}"
+        assert docs[0]["_id"] == "dragonboard_backend_shadow:half_hour:2026-06-11:10:00"
+        assert docs[0]["slotTime"] == "10:00"

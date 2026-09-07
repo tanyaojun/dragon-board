@@ -544,7 +544,7 @@ class SnapshotCollectorService:
                 from backend.services.theme.hotlist_sentiment_compute import compute_and_upsert_for_slot
 
                 sentiment_result = compute_and_upsert_for_slot(
-                    self._repo.db,  # MongoRepository 已暴露公开 db 句柄（mongo_repository.py L48-51，已核实）
+                    self._repo.db,  # db 由 SnapshotRepository 协议契约暴露（service_factory 包装类属性，勿对内层 MongoRepository 核实）
                     dataset_id=dataset_id,
                     snapshot_type=snapshot_type,
                     trading_date=trading_date,

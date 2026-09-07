@@ -25,6 +25,11 @@ class SnapshotRepository(Protocol):
         """Return `True` when *snapshot_id* already exists in *dataset_id*."""
         ...
 
+    @property
+    def db(self) -> Any:
+        """Runtime database handle（WP1b 槽位情绪 compute 经 ``self._repo.db`` 取库）."""
+        ...
+
     def save_snapshot_ingest(
         self,
         dataset: dict[str, Any],
