@@ -1639,3 +1639,56 @@ K=3 → -0.3308 / 0.0279 / veto 0.01117；α 各档交易指标与 baseline 一�
 - 复核触发：regime 门禁扩展消费非 strong 状态时重扫 α/迟滞；K 结论随 9 月数据按
   L1 §6 滚动重验。
 - 同步记录：L1 台账 §7 四参数状态已更新（含缺陷修复 commit d34f71bb 注记）。
+
+## 阶段 13：趋势因子参数补扫（2026-09-09）
+
+### 13.1 背景（用户审阅发现台账缺口）
+
+- 用户指出 L1 台账 §2 核心信号参数缺趋势维度 MA/MACD/zeroCross——核实结论：
+  ① 8.4 已扫的 8 个参数（方向/加速度/zeroCross confirm/MACD 金叉侧阈值）当时未录入
+  台账（文档债，已补 §2b）；② MACD 周期本体（macdFast/Slow/Signal）、死叉侧 3 参数、
+  zeroCross 合成 2 参数、buyScoreThreshold/sellScoreThreshold 确实从未扫描；
+  ③ **MA5/MA10 裁定为显示字段不扫**：technical.py `movingAverage` 全后端无决策消费方
+  （不进 direction/acceleration/zeroCross/macd 信号与档位判定），趋势维决策主承载是
+  momentumPeriods（8.6 已扫）与 direction 阈值（8.4 已扫）。
+- 无生产代码改动（全部参数已在 config），纯扫描 + 台账补全。
+- harness：`backend/operations/optimize_trend_factor_parameters.py`（复用
+  `evaluate_gate` 口径：h1 tier score + WP3.2 三类翻转率；窗口纪律同阶段 12）。
+
+### 13.2 扫描结果（20 档 × 三窗口；score / synergy saEx）
+
+**决策窗 04-15~07-31**（baseline score 1.3623 / saEx 0.0811 / pass True）：
+
+| 组 | 档位 → score（saEx） |
+|---|---|
+| MACD 周期 | Fast 11→1.3630(0.0815) / 15→1.3624(0.0812)；Slow 17→1.3629(0.0815) / **26→1.3591(0.0795) 最差**；Signal 5→1.3624(0.0812) / 12→1.3631(0.0815) |
+| 死叉侧 | deathScale 0.06→1.3623 / 0.24→1.3626；deathStrong 0.10 / 0.26 → **1.3623 逐位一致**；rawW [0.5,0.5]→1.3623 / [0.9,0.1]→1.3624 |
+| zeroCross | zeroW [0.6,0.4]→1.3628 / [0.8,0.2]→1.3624；bonus 0 / 10 → **1.3623 逐位一致** |
+| 决策阈值 | **buyThr 0.08→1.3616(0.0808) / 0.18→1.3699(0.0849) 最大变动**；sellThr −0.08→1.3623 / −0.18→1.3626 |
+
+**OOS-1 08-15~08-31**（baseline −0.2963 / 0.0713）：buyThr=0.18 → −0.2926 / **0.0732**（同向改善，bd 0.0808→0.0783）；macdSlow=26 → −0.2592（score 最好但 saEx 0.0706 微降）；其余 ±0.005 内。
+
+**OOS-2 09-01~09-09**（baseline −0.3022 / 0.0422）：**buyThr=0.18 → −0.3051 / 0.0407（反向）**；macdSlow=26 → −0.0085 / 0.0458（score 大幅改善由 trend 维驱动，与决策窗方向矛盾）；macdFast=15 → −0.2510 / 0.0431；其余平坦。
+
+### 13.3 四类判定
+
+| 参数 | 判定 | 依据 |
+|---|---|---|
+| MACD 周期（Fast/Slow/Signal） | **冗余** | 决策窗各档波动 <±0.25%；macdSlow=26 跨窗方向矛盾（决策窗最差 vs OOS 最好）不采纳 |
+| 死叉侧（deathScale/deathStrong/rawW） | **冗余** | deathStrong 两档三窗逐位一致（零效应）；其余微弱 |
+| zeroCross（zeroW/bonus） | **冗余** | bonus 三窗逐位一致（复现 8.4 confidence-only 结论）；zeroW ±0.0005 |
+| buyScoreThreshold | **缺复核** | 0.18 两窗同向（决策窗 +0.0076、OOS-1 +0.0037）但 OOS-2 反向（−0.0029），幅度 <0.5% saEx，不满足"跨窗稳健"+passHard 门槛；9 月样本扩展后复扫 |
+| sellScoreThreshold | **冗余** | 各档平坦 |
+| buyThr=0.18 采纳判定 | 不采纳 | baseline 自身 OOS passHard=False 未解决；0.18 不改变 passHard 任何窗口 |
+
+- **默认值全部不变**；golden 无漂移（无生产代码改动）。
+- **平坦机制**：MACD 仅以二值金叉参与 trend_buy（`direction buy OR acceleration buy
+  OR macd golden` 三选一 OR 之一），gap 阈值/权重只动 rawScore/confidence 展示层；
+  周期参数虽改变金叉时机，但被 OR 结构与档位上游条件（stage/momentum）稀释。
+  buyScoreThreshold 消费于决策合成（runtime L298-307），对档位/翻转率同样边缘生效。
+- **实盘观察的对齐说明**：趋势维"信号重要"的决策承载是 momentumPeriods + direction
+  阈值（已扫，8.4/8.6）与 crossSection 投票（已上线）；MACD/zeroCross 参数面在当前
+  结构下对采纳指标近乎无感——这与实盘体感不矛盾（实盘看到的是信号输出，不是参数
+  弹性）。
+- 复核触发：buyThr=0.18 随 9 月样本扩展复扫（与 crossSection 复核、双强降级验证
+  同批，见 §11.5/阶段 12 触发条件）。

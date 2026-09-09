@@ -36,6 +36,39 @@
 | jumpResetLookback | 3 | 阶段 7/8 | 769 帧 | 8.8 |
 | jumpSustainCount | 2 | 阶段 7/8 | 769 帧 | 8.8 |
 
+### 2b. 趋势因子参数补录（8.4 扫描 2026-08-17，2026-09-09 补录入账）
+
+| 参数 | 当前值 | 定值来源 | 窗口 | 样本外 |
+|---|---|---|---|---|
+| momentumDirectionThreshold | 0.2 | 8.4 五档扫描 | 769 帧 | 默认最优（各档持平）；窗口含 8 月，按现纪律待复核 |
+| momentumSignalShareMin | 0.6 | 8.4 | 769 帧 | 0.8 微升未采纳；同上待复核 |
+| momentumLongOpposeThreshold | 0.25 | 8.4 | 769 帧 | 默认最优 |
+| momentumZeroConfirmThreshold | 0.15 | 8.4 | 769 帧 | 0.25 微升未采纳 |
+| momentumZeroStrongConfirmThreshold | 0.15 | 8.4 | 769 帧 | **零效应**（只影响 confidence 不影响档位） |
+| macdGoldenStrongGapMin | 0.2 | 8.4 | 769 帧 | 0.3 微升未采纳 |
+| macdGoldenGapScaleRatio | 0.18 | 8.4 | 769 帧 | 0.26 微升未采纳 |
+
+- **趋势因子未扫参数（2026-09-09 阶段 13 补扫完成，20 档 × 三窗口）**：
+
+| 参数 | 当前值 | 来源 | 结果 |
+|---|---|---|---|
+| macdFast / macdSlow / macdSignal | 13 / 21 / 8 | 阶段 13 补扫 | **冗余**（各档 score 波动 <±0.25%；macdSlow=26 决策窗最差、OOS 两窗反而最好——跨窗方向矛盾不采纳） |
+| macdDeathGapScaleRatio / macdDeathStrongGapMin | 0.12 / 0.18 | 阶段 13 补扫 | **冗余**（deathStrong 两档三窗逐位一致=零效应；deathScale 微弱） |
+| macdRawScoreWeights | [0.7,0.3] | 阶段 13 补扫 | **冗余** |
+| momentumZeroWeights | [0.7,0.3] | 阶段 13 补扫 | **冗余**（微弱 ±0.0005） |
+| momentumZeroStrongConfirmBonus | 5.0 | 阶段 13 补扫 | **零效应**（三窗逐位一致，复现 8.4 confidence-only 结论） |
+| buyScoreThreshold | 0.12 | 阶段 13 补扫 | **缺复核**：0.18 决策窗 score +0.0076 / saEx 0.0811→0.0849、OOS-1 同向（0.0713→0.0732），但 OOS-2 反向（→0.0407）；幅度 <0.5% saEx，不满足采纳门槛；9 月样本扩展后复扫 |
+| sellScoreThreshold | −0.12 | 阶段 13 补扫 | **冗余** |
+
+- **平坦机制**：MACD 仅以二值金叉参与 trend_buy（三选一 OR 条件之一），gap 阈值/权重
+  只动 rawScore/confidence 展示层；buyScoreThreshold 只在决策合成边缘生效。趋势维的
+  决策主承载是 momentumPeriods（8.6 已扫）与 direction 阈值（8.4 已扫）。
+- **MA5/MA10 不参数化不扫描**：technical.py `movingAverage` 为显示字段，全后端无决策
+  消费方（不进 direction/acceleration/zeroCross/macd 信号与档位判定）；趋势维决策入口
+  是 momentumPeriods（8.6 已扫）与 direction 阈值（8.4 已扫）。
+- 其余动量侧未扫：momentumScoreThreshold(35)/momentumConfidenceSlope(0.45)/
+  momentumLongAgreeThreshold(0.15)/momentumDirectionShareBoost/momentumAccelShareBoost。
+
 ## 3. 量价参数（阶段 9，7 个，commit 2f8e1a1）
 
 | 参数 | 当前值 | 窗口 | 样本外 |
