@@ -93,13 +93,27 @@
 
 | 参数 | 默认值 | 语义 | 状态 |
 |---|---|---|---|
-| lifecycleConfirmFrames | 1 | veto/B-D 降档连续确认帧数（1=单帧即触发，现行为） | 待扫描 |
-| regimeScoreEmaAlpha | 1.0 | regime score EMA 系数（1=直通） | 待扫描 |
-| regimeStateHysteresis | false | strong 边界迟滞开关 | 待扫描 |
-| regimeStrongHysteresisBand | 5.0 | strong 退出阈值 = 进入阈值(70.0) − band | 待扫描 |
+| lifecycleConfirmFrames | 1 | veto/B-D 降档连续确认帧数（1=单帧即触发，现行为） | **证伪**（2026-09-09 2c 三窗扫描）：veto 去噪真实（0.127→0.023/0.010）但 synergy saEx 三窗一致恶化，OOS 全部 <0.05，K=3 决策窗掉 passHard |
+| regimeScoreEmaAlpha | 1.0 | regime score EMA 系数（1=直通） | **冗余**（采纳口径，2026-09-09 2c）：交易指标三窗 4 位小数下与默认一致；仅展示层 state 去噪（market 翻转 183→49 次@α=0.25）+ 0.87% 边缘档位赋值变化、无收益 |
+| regimeStateHysteresis | false | strong 边界迟滞开关 | **冗余**（2026-09-09 2c）：OOS 两窗逐位一致，决策窗仅 market 翻转微降（183→178）；strong 保持效应存在（信号 19333→21407）但不产生采纳收益 |
+| regimeStrongHysteresisBand | 5.0 | strong 退出阈值 = 进入阈值(70.0) − band | 跟随 regimeStateHysteresis（冗余） |
 
 - 扫描前置条件：WP1c lookahead 修复 + WP3.2 翻转率基线；K∈{1,2,3}、α 档位单变量。
 - 默认零漂移验证（2026-09-06 WP2 Task 6）：K=1/α=1.0/迟滞关下 8 月冻结段端到端重跑
   `diagnose_gate_flip_rate`，翻转率与 WP3.2 基线逐位一致（veto=0.13760 / bd=0.08345 /
   regime_state=0.00103，202 帧 / 45686 信号 / 1813 code）→ 接线本身零行为变化。
+- **扫描执行**（2026-09-09 WP2 2c，longterm-test 8 步）：harness
+  `backend/operations/optimize_gate_denoise_parameters.py`（可 resume）；决策窗
+  2026-04-15~07-31（659 帧）+ 准样本外 08-15~08-31 + 未见窗 09-01~09-09；报告
+  `data/reports/gate-denoise-scan_*.json`（本地运行产物，不入库）。扫描表与判定详见
+  `ranktrend-longterm-backtest-plan.md` 阶段 12。
+- **扫描暴露实现缺陷（已修复，commit d34f71bb）**：RegimeSmoother 首版 state=raw_state
+  原样透传，α<1 时 state 不随平滑分数变化（违反 spec §2b），α 轴首扫全档与 baseline
+  逐位一致才暴露；修复后 state 由 EMA 分数按 market_regime 同源阈值（70/50/30）整体重判，
+  直通路径（α≥1 且迟滞关）保持同一引用，golden 无漂移。
+- **机制注记**：veto/bd 翻转源自 lifecycle 门控，与 regime state 无关——三参数中只有 K
+  能动它；regime strong 禁入 A/B 仅边缘生效（α 改变 1150/132078=0.87% 档位赋值），
+  h1 聚合统计 4 位小数下不可分辨。
+- **复核触发**：regime 门禁若扩展消费非 strong 状态（normal/weak/retreat），α/迟滞轴
+  需重扫；K 结论待 9 月数据积累后按 §6 滚动重验。
 - 冻结纪律：未经 longterm-test 流程"证实"，默认值不得变更。

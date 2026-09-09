@@ -1566,3 +1566,76 @@ regimeGateStrongBan=True 默认，False 回退旧规则）；weak 市场放开 A
 - **rt=A cs=A 双强共振**（synA −0.0469，n=264）疑似过热——9 月复核
   （样本 >500 后验证“双强降级”是否成立）；
 - 前端四维面板：crossSection/priceMomentum 观察字段可扩展展示（视用户需求）。
+
+## 阶段 12：环境门去噪参数扫描（WP2 2c，2026-09-09）
+
+### 12.1 背景与扫描前缺陷修复
+
+- 2c 目标：对环境门三个去噪参数做单变量扫描（longterm-test 8 步流程）——
+  K（lifecycleConfirmFrames∈{2,3}）、α（regimeScoreEmaAlpha∈{0.9,0.75,0.5,0.25}）、
+  迟滞（regimeStateHysteresis=True × band∈{2.5,5.0,7.5}）；效果度量 = WP3.2 三类
+  翻转率前后对比 + h1 tier 统计（synergy 主 / 关注维 rankTrend，score 公式与阶段 7/8 一致）。
+- **扫描暴露实现缺陷（TDD 修复，commit d34f71bb）**：RegimeSmoother 首版非直通路径
+  `state = raw_state` 原样透传（缺陷源头是计划文档自身的代码片段），α<1 时 state 不随
+  平滑分数变化，违反 spec §2b"state 由 EMA 后的分数判定"。首次扫描四档 α 与 baseline
+  逐位一致才暴露。修复后 state 由 EMA 分数按 market_regime 同源阈值（70/50/30）整体
+  重判，strong 迟滞带仅叠加在退出侧；直通路径（α≥1 且迟滞关）保持同一引用返回，
+  golden 无漂移（smoother 9/9 + golden/门控/引擎回归 70/70）。失效缓存清除后重扫。
+- 窗口纪律：决策扫描 2026-04-15~07-31（TRAIN/VAL/TEST，659 帧，`assert_not_frozen`
+  守卫，FINAL 8/1-8/14 未进入决策）；准样本外 08-15~08-31（决策期后生成）；未见窗
+  09-01~09-09（9/7 前无槽位情绪文档 → EOD stale 回退，各档一致不影响相对比较）。
+- harness：`backend/operations/optimize_gate_denoise_parameters.py`（单次 replay 同时
+  产出翻转率 + h1 tier 统计；报告 JSON 可 resume；报告落 `data/reports/`，不入库）。
+
+### 12.2 扫描结果（score / synergy saEx / passHard / veto / bd / regime 翻转率）
+
+**决策窗 04-15~07-31**（659 帧 / 132078 信号 / 可比对 129285；regime 翻转为市场级计数/率）：
+
+| 档位 | score | syn saEx | pass | veto | bd | regime |
+|---|---|---|---|---|---|---|
+| baseline | 1.3623 | 0.0811 | True | 0.12703 | 0.06930 | 0.00142（183 次） |
+| K=2 | 1.3077 | 0.0539 | True | 0.02286 | 0.05199 | 0.00142 |
+| K=3 | -0.0091 | 0.0454 | **False** | 0.00956 | 0.04248 | 0.00142 |
+| α=0.9 / 0.75 / 0.5 / 0.25 | 1.3623 | 0.0811 | True | 0.12703 | 0.06930 | 0.00132 / 0.00116 / 0.00078 / 0.00038（49 次） |
+| 迟滞 band 2.5 / 5.0 / 7.5 | 1.3623 | 0.0811 | True | 0.12703 | 0.06930 | 0.00139 / 0.00138（178 次）/ 0.00138 |
+| 组合 K2+α0.5+迟滞5 | 1.3077 | 0.0539 | True | 0.02286 | 0.05199 | 0.00073 |
+
+**准样本外 08-15~08-31**（121 帧）：baseline score -0.2963 / saEx 0.0713 / pass False /
+veto 0.14314 / bd 0.08083 / regime 0.00096；K=2 → -0.3496 / 0.0447 / veto 0.02548；
+K=3 → -0.3720 / 0.0335 / veto 0.00999；α 各档交易指标与 baseline 一致（regime 降至
+0.00091/0.00086/0.00055/0.00025）；迟滞三档全部逐位一致。
+
+**未见窗 09-01~09-09**（77 帧）：baseline score -0.3022 / saEx 0.0422 / pass False /
+veto 0.14094 / bd 0.07753 / regime 0.00108；K=2 → -0.3406 / 0.0230 / veto 0.02587；
+K=3 → -0.3308 / 0.0279 / veto 0.01117；α 各档交易指标与 baseline 一致（regime 降至
+0.00108/0.00098/0.00078/0.00020）；迟滞三档全部逐位一致。
+
+### 12.3 机制解释（决策窗诊断，`extract_gate_states` 口径）
+
+- **veto/bd 翻转源自 lifecycle 门控，与 regime state 无关**——三参数中只有 K 能动它
+  （K=2/3 使 veto 翻转 -82%/-92%）；α/迟滞的 veto/bd 计数三窗完全一致（16423/8960）。
+- α 平滑实际大幅改变 state 流：baseline 信号级分布 weak 35589 / normal 74323 /
+  retreat 2833 / strong 19333，strong 边界转换 43 次；α=0.25 下 28% 信号 state 变化，
+  strong 降至 9416、边界转换 11 次、retreat 归零。迟滞则延长 strong 保持
+  （19333→21407 信号）。
+- 但 h1 聚合统计 4 位小数下不可分辨：regime strong 禁入 A/B 仅边缘生效——strong 期间
+  档位实际全为 D_EXIT_RISK 8354 / N_NEUTRAL 9785 / C_CROWDED 1194（A/B=0，上游
+  crowded/exit 条件先于禁入命中）；α=0.25 仅改变 1150/132078=0.87% 档位赋值，不足以
+  移动 synergy/rankTrend 的 saEx 与 passHard。
+- 组合验证：K2+α0.5+迟滞5 与 K=2 单变量交易指标逐位一致 → α/迟滞与 K 无交互。
+
+### 12.4 四类判定
+
+| 参数 | 判定 | 依据 |
+|---|---|---|
+| lifecycleConfirmFrames（K=2/3） | **证伪** | 去噪收益真实（veto 翻转大幅下降）但 synergy saEx 三窗一致单调恶化（0.0811→0.0539→0.0454；0.0713→0.0447→0.0335；0.0422→0.0230→0.0279），OOS 两窗全部 <0.05、K=3 决策窗掉 passHard——被滤掉的"单帧噪声 veto"里含真实信息 |
+| regimeScoreEmaAlpha（α<1） | **冗余**（采纳口径） | 交易指标三窗与默认一致、无 synergy 改善；展示层 state 去噪有效（market 翻转 183→49），保留为可调参数 |
+| regimeStateHysteresis + band | **冗余** | OOS 两窗逐位一致，决策窗仅 regime 翻转微降（183→178）；strong 保持效应存在但不产生采纳收益 |
+| regimeStrongHysteresisBand | 跟随迟滞 | 同上 |
+
+- **默认值全部不变**（K=1 / α=1.0 / 迟滞关）；golden 无漂移。
+- 采纳判定门槛（spec §2c）无人达标：需"干净窗口样本外 synergy saEx ≥0.05 且 passHard
+  且跨窗稳健"，仅 baseline 决策窗自身满足，任何去噪档位均未改善。
+- 复核触发：regime 门禁扩展消费非 strong 状态时重扫 α/迟滞；K 结论随 9 月数据按
+  L1 §6 滚动重验。
+- 同步记录：L1 台账 §7 四参数状态已更新（含缺陷修复 commit d34f71bb 注记）。
