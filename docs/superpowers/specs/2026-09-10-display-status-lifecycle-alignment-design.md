@@ -57,9 +57,21 @@
 2. **面板来源透出**(DragonBreathPanel.vue):全池状态结构底部增加"golden 判定 N / fallback 接管 M"(消费已有 `statusSourceCounts`,缺字段时隐藏,不做硬门禁)。
 3. **文案区分**(可选):面板顶部"当前周期"改"市场情绪阶段",与个股生命周期区分。
 
-## 5. 前端兜底同步(statusClassifier.ts)
+## 5. 前端只消费后端生产数据(删除本地兜底级联)
 
-离线 fallback `getRankTrendDisplayStatus`(仅旧缓存/离线触达)按 §3 级联重写;强资金判据沿用 TS `isStrongMoney`(含 moneyFlowEstimated 变体),量能承接以 `classifyVolumeConfirmation === 'healthy'` 近似后端 signalTier ∈ {A,B}(离线路径,接受既有偏差并注释说明)。注释块优先级表同步。
+`statusClassifier.ts` 收敛为纯消费 + label 映射,前端不做任何状态逻辑计算:
+
+- `getRankTrendDisplayStatus` 仅直通后端 `rankTrend.displayStatus`;缺失(旧缓存/离线)时返回
+  结构化未知态 `{label:'未知', classKey:'unknown', tooltip:'后端 displayStatus 缺失(旧缓存/离线)'}`,
+  不做本地分类(fail-visible:缺失原因结构化透出,不伪造本地结论)。
+- 删除兜底级联及其专属计算:`buildRankTrendStatusContext`(全市场分位前端自算)、
+  `buildRankTrendStatusContextFromMarketPercentiles`、`classifyVolumeConfirmation`、
+  `isStrongMoney`/`isMoneyWeak`/`isHighCrowded`/`isHotAttention`、`FALLBACK_STATUS_CONTEXT`、
+  无效行情本地判、tier 分支级联与注释块优先级表。
+- 保留纯展示投影(仅重排后端字段,不产生新判断):`CYCLE_LABELS`、`CANDIDATE_TIER_*`、
+  `SAMPLE_QUALITY_LABELS`、`RISK_LABELS`、`getRankTrendDisplayBreakdown` 的 tooltip 组装。
+- 消费方同步:`RankTrendPanel.vue` 移除 statusContext 构建与传参(已核实为兜底专属,
+  消费方仅此一处);`compat.ts` re-export 清单同步收敛。
 
 ## 6. 兼容与历史数据
 
@@ -71,12 +83,12 @@
 
 - `test_display_status.py`(现 8 用例)按 §3 重写:stage 主轴逐态映射、reversal 与 cooling 分叉(含强资修正正反例)、风险修正优先序、candidateTier 不再驱动、无效行情、边界缺失。
 - 新增对账测试:同一 analysis 批次内,8 类计数按映射聚合(剔除样本不足/资金背离/风险升级修正)后 = 5 态计数。
-- `statusClassifier.test.ts`:TS 兜底级联同步用例。
+- `statusClassifier.test.ts`:改为消费合同测试——后端 displayStatus 有值直通(label/classKey/tooltip 透传)、缺失返回结构化未知态、breakdown 纯 label 映射;删除全部本地级联用例。
 - `DataTable.test.ts`:周期列样本不足显示与排序归类。
 - sentiment golden fixtures 零变化(已验证不含 displayStatusLabel,走 fallback 路径)。
 
 ## 8. 影响面与文档同步
 
-- 代码:`quant-board/backend/analysis/ranktrend/trend/display_status.py`、`src/services/rankTrend/statusClassifier.ts`、`src/components/common/DataTable.vue`、`src/components/panels/DragonBreathPanel.vue`(及 sentiment TS 类型若缺 `statusSourceCounts`)。
+- 代码:`quant-board/backend/analysis/ranktrend/trend/display_status.py`、`src/services/rankTrend/statusClassifier.ts`、`src/services/rankTrend/compat.ts`、`src/components/panels/RankTrendPanel.vue`、`src/components/common/DataTable.vue`、`src/components/panels/DragonBreathPanel.vue`(及 sentiment TS 类型若缺 `statusSourceCounts`)。
 - 文档:`docs/ranktrend/lifecycle-layering-contract.md`(展示状态节重写为新级联+对账关系);检查 `quant-board/docs/ranktrend-python-port.md` displayStatus 相关节。
 - 验证:quant-board `pytest`(collect-only + display_status/sentiment/snapshot_analysis 子集,规避全量挂起);根项目 `pnpm test`(相关子集)+ `vue-tsc`。
