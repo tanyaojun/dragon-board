@@ -26,26 +26,14 @@ def median_of(values: list[float]) -> float | None:
 
 def frame_cross_section(frame: dict[str, Any]) -> dict[str, float]:
     """旧 TS buildFrameCrossSections 合同（阶段 3 修复方向 1 下沉自 routes）：过滤 avgRankNum > 0，
-    按 (avgRankNum, code) 升序，百分位 = ((n - idx) / n) * 100（idx 从 0 开始）。"""
-    stocks = frame.get("stocks") or []
-    valid: list[tuple[str, float]] = []
-    for stock in stocks:
-        if not isinstance(stock, dict):
-            continue
-        code = str(stock.get("code") or "")
-        if not code:
-            continue
-        avg_num = stock.get("avgRankNum")
-        try:
-            avg_num = float(avg_num)
-        except (TypeError, ValueError):
-            continue
-        if not math.isfinite(avg_num) or avg_num <= 0:
-            continue
-        valid.append((code, avg_num))
-    valid.sort(key=lambda item: (item[1], item[0]))
-    total = len(valid)
-    return {code: ((total - index) / total) * 100 for index, (code, _avg) in enumerate(valid)}
+    按 (avgRankNum, code) 升序，百分位 = ((n - idx) / n) * 100（idx 从 0 开始）。
+
+    2026-09-12 口径合一：重排与百分位统一委托 attention_rank_lookup + percentile_rank
+    （与趋势 replay / routes rank-series 同一实现，avgRankNum→序号/百分位唯一权威口径）；
+    rank=idx+1（1-based）代入 percentile_rank 得 ((total-idx)/total)*100，与原实现逐位一致
+    （回归护栏 tests/test_avg_ranknum_percentile_unification.py）。"""
+    ranks, total = attention_rank_lookup(frame.get("stocks") or [])
+    return {code: percentile_rank(rank, total) for code, rank in ranks.items()}
 
 
 def frame_market_median(frames: list[dict[str, Any]], index: int) -> tuple[float | None, int]:
@@ -287,6 +275,17 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
         {"signal": technical["signals"]["zeroCross"]["signal"], "rawScore": clamp(technical["signals"]["zeroCross"]["score"], -1, 1), "weight": config.crossWeight},
         {"signal": cross_signal(technical["macd"]["cross"]), "rawScore": clamp(technical["macd"]["rawScore"], -1, 1), "weight": config.macdWeight},
     ]
+    # 阶段 17 MA 交叉因子（观察接线）：maWeight>0 才进决策合成（默认 0=关闭，golden 逐位不变）；
+    # 旧调用方/测试夹具的 technical 缺 maCross 键按无信号处理（不抛错）。
+    if config.maWeight > 0:
+        ma_cross = technical.get("maCross") or {}
+        components.append(
+            {
+                "signal": cross_signal(str(ma_cross.get("cross") or "none")),
+                "rawScore": clamp(float(ma_cross.get("rawScore") or 0.0), -1, 1),
+                "weight": config.maWeight,
+            }
+        )
     combined = sum(c["rawScore"] * c["weight"] for c in components)
     positive = sum(c["weight"] * max(c["rawScore"], 0) for c in components)
     negative = sum(c["weight"] * max(-c["rawScore"], 0) for c in components)
@@ -419,8 +418,12 @@ def compose_strategy(
 ) -> dict[str, Any]:
     momentum = technical["momentumProfile"]
     stage = cycle["stage"]
-    trend_buy = technical["signals"]["direction"]["signal"] == "buy" or technical["signals"]["acceleration"]["signal"] == "buy" or technical["macd"]["cross"] == "golden"
     c = config or RankTrendConfig()
+    # 阶段 17 MA 交叉因子：maCrossTrendBuy=True 时 MA 金叉进 trend_buy OR 链（默认 False=关闭）；
+    # config 直接属性访问（与 compose_analysis_candidate_tier 的 c.maCrossTrendBuy 同风格），
+    # config=None 由上一行兜底为默认配置。
+    ma_golden = bool(c.maCrossTrendBuy) and (technical.get("maCross") or {}).get("cross") == "golden"
+    trend_buy = technical["signals"]["direction"]["signal"] == "buy" or technical["signals"]["acceleration"]["signal"] == "buy" or technical["macd"]["cross"] == "golden" or ma_golden
     hotlist_missing = not isinstance(hotlist, dict)
     hotlist_stage = str((hotlist or {}).get("stage") or "") if not hotlist_missing else ""
     hotlist_risk = str((hotlist or {}).get("riskLevel") or "") if not hotlist_missing else ""
@@ -765,10 +768,14 @@ def compose_analysis_candidate_tier(
         if gate_strong_ban
         else regime_data["state"] == "retreat"
     )
+    # 阶段 17 MA 交叉因子：maCrossTrendBuy=True 时 MA 金叉进 trend_buy OR 链（默认 False=关闭）；
+    # 旧调用方/测试夹具的 technical 缺 maCross 键按无信号处理（不抛错）。
+    ma_golden = bool(c.maCrossTrendBuy) and (technical.get("maCross") or {}).get("cross") == "golden"
     trend_buy = (
         technical["signals"]["direction"]["signal"] == "buy"
         or technical["signals"]["acceleration"]["signal"] == "buy"
         or technical["macd"]["cross"] == "golden"
+        or ma_golden
     )
     tier = "N_NEUTRAL"
     lifecycle_decision_data = cycle.get("decision") or {}

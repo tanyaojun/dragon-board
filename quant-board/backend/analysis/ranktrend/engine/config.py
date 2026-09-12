@@ -36,6 +36,13 @@ class RankTrendConfig:
     macdDeathGapScaleRatio: float = 0.12  # death gap/gap_scale 比例（原 0.12）
     macdDeathStrongGapMin: float = 0.18  # death strong_gap 阈值（原 0.18）
     macdRawScoreWeights: list[float] = field(default_factory=lambda: [0.7, 0.3])  # rawScore strong_gap/impulse 权重（原 0.7/0.3）
+    # ── MA 交叉因子（2026-09-12 阶段 17：MA10/20 观察接线，默认全关，golden 不漂移）──
+    # 排名百分位序列上的快慢均线金叉/死叉，与 MACD 同输入同二值交叉参与语义（阶段 17 评估结论见
+    # docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md）。
+    maFastPeriod: int = 10  # MA 快线周期（用户指定 10）
+    maSlowPeriod: int = 20  # MA 慢线周期（用户指定 20；from_patch 保证 > maFastPeriod）
+    maWeight: float = 0.0  # compose_decision 第 5 分量权重（0=关闭；from_patch 归一化含此字段）
+    maCrossTrendBuy: bool = False  # MA 金叉是否参与 trend_buy OR 链（False=关闭）
     # ── ATR 真实波动均值回归（2026-08-17，设计 v2；独立观察维度，不进 synergy 投票）──
     atrPeriod: int = 14  # ATR 周期（简单均值，与 execution.py::_atr_of 一致）
     atrRefPeriod: int = 20  # close 参考均值周期
@@ -269,12 +276,17 @@ class RankTrendConfig:
         _validate_tier_constraints(base)
         if base.macdSlow <= base.macdFast:
             base.macdSlow = base.macdFast + 1
-        total = base.directionWeight + base.accelerationWeight + base.crossWeight + base.macdWeight
+        if base.maFastPeriod < 1 or base.maSlowPeriod < 1:
+            raise ValueError(f"MA 周期需 ≥1，实际 fast={base.maFastPeriod}, slow={base.maSlowPeriod}")
+        if base.maSlowPeriod <= base.maFastPeriod:
+            base.maSlowPeriod = base.maFastPeriod + 1
+        total = base.directionWeight + base.accelerationWeight + base.crossWeight + base.macdWeight + base.maWeight
         if total > 0:
             base.directionWeight /= total
             base.accelerationWeight /= total
             base.crossWeight /= total
             base.macdWeight /= total
+            base.maWeight /= total
         return base
 
 

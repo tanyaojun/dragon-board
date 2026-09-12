@@ -90,6 +90,43 @@ def calculate_macd(values: list[float], config: RankTrendConfig) -> dict[str, An
     return {"dif": dif, "dea": dea, "histogram": hist, "cross": cross, "confirmed": confirmed, "rawScore": raw_score}
 
 
+def calculate_ma_cross(percentiles: list[float], config: RankTrendConfig) -> dict[str, Any]:
+    """MA 快慢线交叉因子（2026-09-12 阶段 17 观察因子，排名百分位序列，与 MACD 同输入）。
+
+    - fast/slow = 简单均线全窗均值（maFastPeriod/maSlowPeriod，默认 10/20）；
+    - 样本不足（len < maSlowPeriod）→ fast/slow=None、state="unknown"（fail-visible 不伪造 0）；
+      len == maSlowPeriod 无前值 → 只算值不判交叉；
+    - rawScore 仅交叉帧非零（golden +1 / death -1），镜像 MACD 二值参与语义；
+      强度加权有意省略（阶段 13 实证 MACD gap 阈值面全冗余，不引入新参数）；
+    - 周期合同（fast≥1 且 slow>fast）运行期复检：from_patch 之外直接构造 RankTrendConfig
+      不触发校验/修复，非法周期在此 fail-fast 抛 ValueError（不静默产出空因子）。
+    """
+    fast_period = int(config.maFastPeriod)
+    slow_period = int(config.maSlowPeriod)
+    if fast_period < 1 or slow_period <= fast_period:
+        raise ValueError(
+            f"MA 周期需 fast>=1 且 slow>fast，实际 fast={fast_period}, slow={slow_period}"
+        )
+    if len(percentiles) < slow_period:
+        return {"fast": None, "slow": None, "state": "unknown", "cross": "none", "rawScore": 0.0}
+    fast = average(percentiles[-fast_period:])
+    slow = average(percentiles[-slow_period:])
+    state = "bull" if fast > slow else "bear" if fast < slow else "flat"
+    if len(percentiles) < slow_period + 1:
+        return {"fast": fast, "slow": slow, "state": state, "cross": "none", "rawScore": 0.0}
+    prev_fast = average(percentiles[-1 - fast_period : -1])
+    prev_slow = average(percentiles[-1 - slow_period : -1])
+    cross = "none"
+    raw_score = 0.0
+    if prev_fast <= prev_slow and fast > slow:
+        cross = "golden"
+        raw_score = 1.0
+    elif prev_fast >= prev_slow and fast < slow:
+        cross = "death"
+        raw_score = -1.0
+    return {"fast": fast, "slow": slow, "state": state, "cross": cross, "rawScore": raw_score}
+
+
 def momentum_profile(percentiles: list[float]) -> dict[str, float]:
     def avg_mom(periods: list[int]) -> float:
         return average([period_momentum(percentiles, period) for period in periods])
@@ -273,6 +310,7 @@ def analyze_technical(percentiles: list[float], config: RankTrendConfig, fallbac
     return {
         "movingAverage": {"ma5": ma5, "ma10": ma10, "trend": "up" if ma5 > ma10 else "down" if ma5 < ma10 else "steady"},
         "macd": macd,
+        "maCross": calculate_ma_cross(percentiles, config),
         "signals": signals,
         "momentumScore": score,
         "momentumProfile": profile,

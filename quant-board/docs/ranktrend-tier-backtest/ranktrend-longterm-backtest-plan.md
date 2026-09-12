@@ -1692,3 +1692,350 @@ K=3 → -0.3308 / 0.0279 / veto 0.01117；α 各档交易指标与 baseline 一�
   弹性）。
 - 复核触发：buyThr=0.18 随 9 月样本扩展复扫（与 crossSection 复核、双强降级验证
   同批，见 §11.5/阶段 12 触发条件）。
+
+## 阶段 14：OOS 失败解剖复核——regime 分桶 × saEx 分解（2026-09-10）
+
+### 14.1 背景与方法
+
+- OOS-1/OOS-2 两窗 baseline passHard=False、score 为负。会话解剖提出三机制假说：
+  ① 决策窗 strong 内部本就塌陷（A 档 exAcc≈0、B>A 反序、saEx 0.0224），OOS-2 strong
+  占比 15%→25.7% 放大拖累；② OOS-1 唯一反序 A>S（"好消息型失败"）；③ B/C/D 三窗
+  一致无区分度。本阶段用 regime 分桶分解逐项复核后落盘。
+- harness：`backend/operations/diagnose_regime_saex_decomposition.py`（只读诊断）。
+  baseline replay（`RankTrendPythonEngine(config=RankTrendConfig()).replay(frames, meta={})`）
+  → 按 `rankTrend.strategy.regime.state`（市场级，同帧全股相同）分桶 → 每桶
+  `tier_forward_returns(horizon=1, dimension="synergy", signal_filter=...)`（分位桶基线
+  在桶内重算）→ raw directionAccuracy 按桶×样本数加权重构校验 + 逐日 strong 帧占比表。
+  报告：`data/reports/regime-saex-decomposition.json`。
+- 样本覆盖说明（fail-visible）：replay 有 warm-up（`get_technical_min_samples`≥30 →
+  前 29 帧不产出信号，引擎设计行为非数据缺失）。OOS-2 加载 77 帧但信号实际覆盖
+  09-03~09-09 五天（09-01/09-02 的 22 帧为热身）；阶段 12/13 同口径，可比性不受影响。
+
+### 14.2 三窗分解结果（桶内 saEx / S、A 档 exAcc / 反序）
+
+**ALL 对照**（与阶段 12 报告一致）：决策窗 0.0811 pass=True / OOS-1 0.0713 pass=False /
+OOS-2 0.0422 pass=False；OOS-2 spearman=1.0（无反序）。
+
+| 窗口 | state | 信号占比 | saEx | S exAcc (n) | A exAcc (n) | 反序 |
+|---|---|---|---|---|---|---|
+| 决策窗 | normal | 56.3% | 0.0988 | 0.1183 (795) | 0.0904 (1830) | 无（spearman 1.0，pass=True） |
+| 决策窗 | weak | 27.0% | 0.0684 | 0.1029 (503) | 0.0525 (1092) | 无（pass=True） |
+| 决策窗 | strong | 14.6% | **0.0224** | 0.0788 (222) | **0.0001 (562)** | B>A gap 0.0022（pass=False） |
+| 决策窗 | retreat | 2.1% | 0.1888 | 0.0921 (88) | 0.2655 (111) | A>S gap 0.0129 |
+| OOS-1 | normal | 76.3% | 0.0908 | 0.0408 (179) | 0.1091 (490) | **A>S gap 0.0085** |
+| OOS-1 | weak | 12.1% | **-0.0659** | **-0.1216 (33)** | -0.0397 (70) | A>S、B>A |
+| OOS-1 | strong | 9.4% | **0.1139** | **0.1943 (29)** | 0.0888 (93) | 无（spearman 1.0） |
+| OOS-1 | retreat | 2.2% | 0.0242 | 0.0777 (15) | -0.0045 (28) | 无 |
+| OOS-2 | normal | 66.4% | 0.0676 | 0.1468 (81) | 0.0307 (174) | B>A gap 0.0025 |
+| OOS-2 | weak | 5.8% | **-0.0406** | 0.0143 (33) | -0.0938 (34) | A>S gap 0.0014 |
+| OOS-2 | strong | 25.7% | **0.0271** | 0.0226 (38) | 0.0285 (125) | A>S gap 0.0019（spearman -0.5） |
+| OOS-2 | retreat | 2.1% | —（S=0，A n=1 不足） | — | — | — |
+
+- raw directionAccuracy 加权重构：三窗 S/A/B 全部 match=true（桶划分完备的数学证明）。
+- exAcc 不可跨桶线性重构（分位桶基线桶内重算）；saEx 近似加权和与 ALL 的残差即
+  基线组间差异（OOS-2 ≈0.0495 vs 0.0422）。
+- 逐日表（详见报告 JSON）：strong 占比高日 saEx 有偏低倾向但非决定论——决策窗
+  5/6 占比 0.9→saEx 0.0688、6/25 占比 0.2→0.2646 为反例；7 月末股灾日
+  （7/29~7/31 占比 0.18~1.0）saEx -0.10~-0.14；OOS-2 内 9/7（占比 0.73→0.0343）、
+  9/8（0.36→0.0147）低于 strong=0% 的 9/4（0.0799）、9/9（0.0961），9/3 反例
+  （占比 0→-0.0667）。
+
+### 14.3 解剖假说核对结论
+
+| 假说 | 判定 | 复核依据 |
+|---|---|---|
+| ① strong 塌陷 × 占比放大拖累 OOS-2 | **确认（带边界修正）** | 决策窗 strong saEx 0.0224/A exAcc 0.0001/B>A 精确复现；OOS-2 strong 0.0271 拖累 ALL 至 0.0422。**但 OOS-1 strong 不塌陷反而全窗最强（0.1139，S exAcc 0.1943）——strong 状态非同质** |
+| ② OOS-1 A>S 反序（好消息型失败） | **确认** | normal 桶 A>S gap 0.0085 精确复现；A 档 0.0853 强于决策窗 A（0.0699）。另 retreat（决策窗 0.0129）与 weak/strong 桶内亦有微弱 A>S |
+| ③ B/C/D 三窗无区分度 | **确认** | B 档三窗各桶 exAcc ∈ [-0.027, +0.011]，C 更弱或为负；体系价值集中 S/A |
+
+**新增发现（超出原解剖）**：
+
+1. **strong 状态是双峰的**：塌陷（决策窗 A 档死、OOS-2 S/A 皆弱）与强劲（OOS-1 全窗
+   最强）并存，8/27 strong 占比 0.73 的交易日 saEx 0.0625 也不差。塌陷与 strong 期
+   结构（持续时长/上游 crowded·exit 触发/市况性质）有关，非状态本身决定。
+2. **OOS-2 strong 期 exMean 全负**（S -0.0040 / A -0.0021 / B -0.0038，分位基线
+   0.42 亦低于 normal 0.44-0.45）：strong 期追强是负 alpha（高位拥挤/均值回归）。
+   OOS-2 失败是"量"的失败（saEx 距 0.05 门槛的缺口），不是"序"的失败（spearman 1.0）。
+3. **OOS-1 的失败源与 strong 无关**：weak 桶 S exAcc -0.1216（acc 0.2424，弱市追强
+   强负 alpha）+ normal 桶 A>S 反序。
+4. **决策窗 ALL pass=True 的掩盖被定量证实**：同窗 strong 桶 passHard=False
+   （saEx 0.0224 + B>A），ALL 被 normal/weak 的体量稀释——分状态报告的必要性成立。
+
+### 14.4 对结构性方案的修正意见（评估结论，未实施）
+
+- **"strong 下放宽 S≥A≥B 硬序"不对症，不采纳**：OOS-2 失败是量不是序（放宽硬序
+  不能补 saEx 0.0271→0.05 的缺口）；OOS-1 strong 序完全正常（放宽无对象）；决策窗
+  strong 反序 gap 仅 0.0022（修正价值微小）。
+- **"strong 期一刀切降级/禁入"同样不采纳**：OOS-1 strong 是全窗最好的桶
+  （0.1139），禁入将错过 8/27 类交易日。
+- **站稳的方向**（后续课题，需另行设计评审）：
+  1. 寻找区分"塌陷 strong / 强劲 strong"的可观测变量（上游 crowded/exit 触发状态、
+     strong 持续时长、市况内部结构），先做分状态观察研究再谈门控；
+  2. passHard 分状态诊断报告（原队列 3）：决策窗 ALL=True 掩盖 strong=False 的盲区
+     已定量证实，属评估基建改造，不动生产判定；
+  3. 接受体系价值边界：S/A 价值集中在 normal/weak 期与部分 strong 期，weak 期追强
+     的负 alpha（OOS-1 S exAcc -0.1216）本身是独立研究课题。
+- 默认值零变更；golden 无漂移（无生产代码改动，纯只读诊断）。
+
+### 14.5 遗留与复核触发
+
+- 9/10 当天快照未入库（当日查询 0 帧）；9 月数据累积后 OOS-2 结论随队列 4 复扫
+  （buyThr=0.18 / crossSection）同批滚动重验。
+- cs tier 提取路径修复 + §11.5 双强降级复核（原队列 2）不受本阶段影响，仍待执行。
+- 9/1、9/2 无槽位情绪文档（EOD stale 回退）+ warm-up 覆盖：OOS-2 有效样本 5 天，
+  月内数据扩展后 n<500 的桶（本阶段 strong S n=38、OOS-1 retreat n=15 等）结论
+  保持观察级。
+
+
+## 阶段 15：§11.5 双强降级复核——口径澄清与三窗重判（2026-09-10，原队列 2）
+
+### 15.1 口径澄清（上会话"cs tier 提取路径不对"的真相）
+
+- **cs tier 提取本身无问题**：`tier_signal_of(signal, "crossSection")` 走
+  `DIMENSION_PATHS` 公开路径（`rankTrend.observation.crossSection.signalTier`），
+  决策窗 132078 信号 0 缺失（A 1692 / B 41309 / C 82567 / D 6510）。
+- **真正的口径差是 synA 交集**：§11.4f 的 n=264 是 **synA ∩ rt=A ∩ cs=A**（先圈
+  synergy=A 档，再交叉 rt×cs），不是 rt×cs 共现全集——rt=A × cs=A 信号级共现
+  838/132078=0.63%，与 §11.4f "A×A 共现仅 0.6%" 精确吻合。上会话直接用共现全集
+  复核所以测不到。
+- 本次决策窗双强有效样本 233（vs §11.4f 264，差 12%：8/19 后引擎有修复
+  ——RegimeSmoother d34f71bb 等影响 gate→veto→syn tier 分布），量级一致可对照。
+
+### 15.2 方法与一个重要统计口径认知
+
+- harness：`backend/operations/diagnose_dual_strength_syna.py`（只读，报告落
+  `data/reports/dual-strength-syna-review.json`）。分组统计复用
+  `tier_forward_returns(signal_filter=...)`，h1、synergy 主口径。
+- **分桶基线塌缩认知**：`tier_forward_returns` 的 signal_filter 基线是"过滤后同口径
+  重算"（`tests/test_tier_monotonicity.py::test_tier_forward_returns_signal_filter_buckets`
+  锁定的合同行为）。synA 信号全集中在最高分位段 → 同质小组（synA ∩ rt=A × cs=X）
+  的分位桶基线退化为组自身 → 组内 excess 恒 0，无信息量。该口径仅对覆盖全分位段的
+  大组有意义（阶段 14 regime 分桶未受影响）。**主判定口径改用原始
+  meanFutureReturn / directionAccuracy 组间差**（同 synA 同 rt=A 背景下均值回归
+  背景近似相同，组间原始差即 cs 维增量信息）。
+- §11.4f 的 −0.0469 统计口径无存档脚本可考（当时为会话内临时统计），按当前可复现
+  口径重判，不复现过期数字。
+
+### 15.3 三窗结果（synA 内 rt=A 行按 cs 分层，原始 h1 口径）
+
+| 组 | 决策窗 n / dirAcc / meanRet | OOS-1 n / dirAcc / meanRet | OOS-2 n / dirAcc / meanRet |
+|---|---|---|---|
+| 双强 cs=A | 233 / 0.4378 / −0.0061 | 32 / 0.2812 / −0.0102 | 18 / 0.3333 / −0.0077 |
+| cs=B | 803 / 0.4471 / −0.0096 | 114 / 0.4474 / −0.0186 | 47 / 0.5319 / −0.0089 |
+| cs=C | 259 / 0.4749 / −0.0074 | 57 / 0.4561 / −0.0378 | 33 / 0.3939 / −0.0474 |
+| rt=A 全 cs | 1295 / 0.4510 / −0.0086 | 203 / 0.4236 / −0.0227 | 98 / 0.4490 / −0.0216 |
+| synA 全体 | 3595 / 0.4498 / −0.0055 | 681 / 0.5066 / −0.0133 | 334 / 0.4551 / −0.0248 |
+
+- meanRet(csA−csC)：决策窗 +0.0013 / OOS-1 +0.0276 / OOS-2 +0.0397——**三窗一致
+  非负，双强不比 cs=C 差，OOS 两窗反而更好**。三窗合并加权复核（样本数加权）：
+  csA −0.0067（n=283）vs csC −0.0161（n=349），合并差 +0.0095，方向不变。
+- dirAcc(csA−csC)：三窗均为负（−0.0371 / −0.1749 / −0.0606）——双强方向精度一致
+  偏低但收益不弱（追强档位靠少数大赢单机制；OOS-1 差值 n=32 无统计意义）。
+- regime 视图样本不足（双强@strong：决策窗 12 / OOS-1 2 / OOS-2 1），"strong 期
+  双强更差"与阶段 14 双峰假说的交叉检验**无法进行**，如实记录不强行解读。
+
+### 15.4 判定
+
+- **正式判定：缺复核**——三窗双强有效样本合计 283 < §11.5 触发线 500。
+- **方向证据不支持"双强降级"**：可获得样本上三窗 meanRet 全部 csA≥csC，无一个窗
+  支持过热降级；§11.4f −0.0469 在可复现口径下不复现（决策窗 csA meanRet 仅 −0.0061）。
+  若样本累积后仍维持该方向，将转为正式证伪。
+- **默认值零变更**；触发线维持 n>500。按 OOS 双强共现速率（OOS-2 约 3.6/日），自然
+  累积到 500 需一年以上——建议后续复扫改为"三窗合并滚动统计"（合并 283+新累积），
+  或接受该观察项长期挂起为低优先级。
+- 队列 2 就此收口：cs tier 提取路径确认无缺陷（tier_signal_of 合同正常），§11.5
+  复核以"缺复核 + 现有证据方向相反"落盘。队列 3（passHard 分状态诊断报告）与
+  队列 4（buyThr=0.18 / crossSection 随 9 月数据复扫）保持待办。
+
+
+## 阶段 16：passHard 分状态诊断视图接入评估基建（2026-09-10，原队列 3）
+
+### 16.1 背景与目标
+
+阶段 14 定量证实：决策窗 ALL passHard=True 掩盖同窗 strong 桶 passHard=False
+（ALL 被 normal/weak 体量稀释）。本阶段把分状态视图从一次性诊断脚本
+（diagnose_regime_saex_decomposition.py）提升为评估基建的常驻输出——未来任何
+gate/tier 扫描的报告自动带上分状态摘要，防"均值掩盖"复发。评估基建改造，
+不动生产判定。
+
+### 16.2 改动（TDD）
+
+- 新增纯函数模块 `backend/analysis/ranktrend/research/regime_saex.py`：
+  `regime_saex_stats(signals, frames, horizon, dimension)` 按 market regime state
+  分桶输出 tier_forward_returns 统计集合；state 走 extract_gate_states 公开路径；
+  state 缺失信号计入 `<missing>` 计数不产出桶（fail-visible）；桶内 passHard 为
+  桶内口径（样本不足 S<30 如实判 False，与阶段 14 口径一致）。
+  测试 `tests/test_regime_saex.py` 4 例：路径读取/分桶守恒/缺失计数/空信号。
+- 接线 `backend/operations/optimize_gate_denoise_parameters.py`：
+  `evaluate_gate` result 新增 `regimeView`（synergy 主口径分状态 _tier_summary）
+  与 `regimeStateCounts`；`_fmt` 打印分状态摘要（旧缓存报告 resume 缺该字段时
+  不打印，不崩）。rankTrend 关注维不重复分桶（控制扫描成本）。
+
+### 16.3 接线自检（decision 窗 baseline-only，659 帧）
+
+- ALL 口径与阶段 12 baseline **逐位一致**：score=1.3623 / syn saEx=0.0811 /
+  pass=True / flip(veto=0.12703 bd=0.06930 regime=0.00142)——接线未破坏原口径。
+- 分状态视图与阶段 14 **逐位一致**：weak 0.0684 / normal 0.0988 / retreat 0.1888 /
+  **strong 0.0224 pass=False**——掩盖的盲区现在直接出现在扫描打印里。
+  retreat pass=False 属样本不足型（S<30），按 distribution 区分。
+- pytest：`test_regime_saex` 4 例 + tier 相关回归 22 例全绿；全量 collect-only
+  1990 collected 无 import 断裂。
+
+### 16.4 边界与遗留
+
+- 默认值零变更；golden 无漂移（新增纯函数 + harness 输出字段，无生产判定改动）。
+- 旧扫描缓存报告（阶段 12/13 的 gate-denoise-scan JSON）不含 regimeView，重跑
+  对应档位即可补齐；score 判定字段不受影响。
+- 队列 3 就此收口。队列 4（buyThr=0.18 / crossSection 复扫）等 9 月数据累积，
+  复扫时自动产出分状态视图。
+
+## 阶段 17：均线 MA10×MA20 交叉因子贡献度评估——与 MACD 同台对比（2026-09-12）
+
+### 17.1 背景（用户命题）
+
+用户审阅 RankTrend 观察弹窗技术结构（四子分：方向一致性/多周期加速度/零线交叉/MACD）后
+提出：技术结构漏了均线 MA 因子，趋势技术结构进展不明显，要求评估 MA（参数定 10/20）与
+MACD 在回测中的贡献度，决定是否加入技术信号。
+
+与阶段 13 裁定的差异：MA5/MA10（`movingAverage` 显示字段）因全后端无决策消费方而"不参数化
+不扫描"；本次是新增**有决策消费方**的 MA10×MA20 交叉因子（排名百分位序列上的快慢均线金叉/
+死叉，与 MACD 同输入、同二值交叉参与语义），从零实现并三窗口评估。
+
+### 17.2 因子实现与零漂移保障（TDD，four-dim-algorithm-research 步骤 1）
+
+- 纯函数 `backend/analysis/ranktrend/trend/technical.py::calculate_ma_cross(percentiles, config)`：
+  fast/slow = 排名百分位序列简单均线（maFastPeriod/maSlowPeriod，默认 10/20）；样本不足
+  （len < slow）→ fast/slow=None、state="unknown"（fail-visible 不伪造 0）；rawScore 仅交叉帧
+  ±1（golden +1 / death −1），其余 0——镜像 MACD 二值参与语义；强度加权有意省略（阶段 13
+  实证 MACD gap 阈值面全冗余，不引入新参数）。
+- `RankTrendConfig` 新增 4 字段：`maFastPeriod=10` / `maSlowPeriod=20` / `maWeight=0.0` /
+  `maCrossTrendBuy=False`；from_patch 校验周期 ≥1、slow≤fast 自动修正（镜像 MACD），
+  归一化总权重计入 maWeight（=0 时归一化结果与今日逐位一致）。
+- 三处接线（默认全关）：compose_decision 第 5 分量（maWeight>0 才追加，避免 buy_count
+  计数漂移）；compose_strategy 与 compose_analysis_candidate_tier 的 trend_buy OR 链
+  （maCrossTrendBuy=True 才参与）。
+- 测试 `tests/test_ranktrend_ma_cross_factor.py` 11 例（默认值/交叉检测/样本不足/参数生效/
+  周期修复/接线生效/零漂移/缺字段容忍）；golden alignment 10 例 + MA 11 例 = 21 passed。
+  **默认值零变更，golden 逐位不漂移。**
+
+### 17.3 评估方法（三口径 × 三窗口，评估 harness `backend/operations/evaluate_ma_factor_contribution.py`）
+
+- A 事件级：MA 金叉/死叉帧 vs MACD 金叉/死叉帧子集 h1 synergy saEx（tier_forward_returns +
+  signal_filter，分位桶基线子集内重算，与阶段 14 regime 分桶同口径）；
+- B 状态级：MA 多头排列(fast>slow) vs MACD 多头(dif>dea) 同上；
+- C 边际贡献：evaluate_gate 7 组 trial——baseline / macd_off / ma_join（MA 第 5 分量并存）/
+  ma_replace（MA 替代 MACD 决策分量）/ ma_replace_full（+trend_buy 位）/ ma_trendbuy /
+  ma_full；权重类走 from_patch 5 权重归一化保证同量纲。
+- 窗口纪律沿用阶段 13/14：决策窗 04-15~07-31（655 帧）、OOS-1 08-15~08-31（110 帧）、
+  OOS-2 09-01~09-09（70 帧）；FINAL(8/1-8/14) 冻结（assert_not_frozen purpose=scan）。
+  报告 `data/reports/ma-factor-contribution.json`（增量落盘可 resume）。
+
+### 17.4 事件级/状态级区分度（h1 synergy saEx / n / passHard）
+
+| 子集 | 决策窗 | OOS-1 | OOS-2 |
+|---|---|---|---|
+| all | 0.0821 / 115724 / T | 0.0654 / 16023 / F | 0.0568 / 8021 / T |
+| MA 金叉事件 | **0.0899 / 2384 / T** | 0.0141 / 361 / F | **0.0411 / 160 / F** |
+| MACD 金叉事件 | 0.0834 / 2616 / F | 0.0240 / 400 / F | **−0.0716 / 184 / F** |
+| MA 死叉事件 | 0.0398 / 2739 / F | −0.1178 / 389 / F | None / 198 / F |
+| MACD 死叉事件 | None / 3071 / F | None / 498 / F | None / 241 / F |
+| MA 多头排列 | 0.0873 / 33294 / T | 0.0308 / 4597 / F | 0.0595 / 2389 / T |
+| MA 空头排列 | 0.0847 / 41753 / T | 0.0868 / 6438 / F | −0.0148 / 3063 / F |
+| MACD 多头 | 0.0888 / 32194 / T | 0.0562 / 4628 / F | 0.0515 / 2149 / F |
+| MACD 空头 | 0.0997 / 41433 / T | 0.0861 / 6250 / F | 0.0402 / 3223 / F |
+| 两者同帧金叉 | 0.0439 / 80 / F | 0.3888 / 14 / F | None / 4 / F |
+
+- **MA 金叉事件三窗口均 ≥0 且 2/3 窗口优于 MACD 金叉**（决策窗 0.0899 过硬门 vs MACD
+  0.0834 未过；OOS-2 +0.041 vs −0.072；OOS-1 打平均弱、全窗市场性走弱）。
+- 事件重叠仅 3-4%（决策窗 both=84/maGolden=2504=3.4%；OOS-1 3.7%；OOS-2 2.4%）——
+  MA 不是 MACD 的影子，是独立事件源。
+- **MACD 金叉事件 OOS-2 负超额 −0.0716**：与阶段 13"MACD 参数面全冗余"互证，事件级也现疑点。
+- 决策窗 MACD 多空状态反序复现（bear 0.0997 > bull 0.0888，与阶段 13 结论一致）；
+  MA 状态级区分度弱（bull 0.0873 ≈ bear 0.0847）。
+- saEx=None 均为 spearman=±1.0 完全单调/反单调下的统计退化（如决策窗 MACD 死叉反单调、
+  死叉帧 52-68% 集中 D 档——单调方向本身正确），非数据缺失；OOS-2 both_golden 仅 4 样本降级观察。
+- unknown 率：MA 36-39%（样本不足 20 帧的短历史标的），与 MACD 同量级，如实披露。
+
+### 17.5 边际贡献（evaluate_gate 7 组 trial，score / syn saEx / trend saEx）
+
+| trial | 决策窗 | OOS-1 | OOS-2 |
+|---|---|---|---|
+| baseline | 1.3642 / 0.0821 T / 0.0565 | −0.3275 / 0.0654 F / 0.0342 | 1.3135 / 0.0568 T / 0.0540 |
+| macd_off | 1.1167 / 0.0803 T / 0.0456 | −0.4005 / 0.0657 F / 0.0268 | 0.9946 / 0.0544 T / 0.0386 |
+| ma_join | 1.3671 / 0.0835 T / 0.0611 | 0.0314 / 0.0657 F / 0.0514 | 1.0471 / 0.0556 T / 0.0436 |
+| ma_replace | 1.3601 / 0.0801 T / 0.0539 | −0.3214 / 0.0670 F / 0.0345 | 1.1112 / 0.0582 T / 0.0495 |
+| ma_replace_full | 同 ma_replace 逐位 | 同 ma_replace 逐位 | 同 ma_replace 逐位 |
+| ma_trendbuy | 同 baseline 逐位 | 同 baseline 逐位 | 同 baseline 逐位 |
+| ma_full | 同 ma_join 逐位 | 同 ma_join 逐位 | 同 ma_join 逐位 |
+
+机制解释（数据驱动）：
+
+- **ma_join score 摆动被 trend pass(0.05) 线二值放大**：连续效应量 = trend saEx Δ 仅
+  +0.0046 / +0.0172 / −0.0104（决策窗/OOS-1/OOS-2，2 正 1 负）；OOS-1 从 0.0342 跨线到
+  0.0514 拿回 +0.2（score −0.33→+0.03），OOS-2 从 0.0540 跌线到 0.0436 失去 0.2
+  （score 1.31→1.05）。表面 ±0.3 的摆动主体是门槛效应，不是 MA 本身的稳定增益。
+- **trend_buy 接线位零增量的机制**：MA 金叉帧 64.9%/65.2%/67.6% 已被既有 OR 链
+  （direction buy / acceleration buy / MACD 金叉）覆盖；其余 ~35% 帧的 trend_buy 变化
+  未传导到候选分层/决策指标（其余门条件未满足）。
+- macd_off 三窗口全受损（score −0.25/−0.07/−0.32，trend saEx 全降）→ MACD 决策分量证实有效。
+- ma_replace 一致优于 macd_off（+0.24/+0.08/+0.12）→ MA 作为决策分量的信号质量不差；
+  但 vs baseline：决策窗 −0.004、OOS-1 +0.006、OOS-2 **−0.20** → 替代不划算。
+
+### 17.6 四类判定
+
+| 命题 | 判定 | 依据 |
+|---|---|---|
+| MACD 决策分量保留 | **证实** | macd_off 三窗全受损，trend saEx 全降 |
+| MA 替代 MACD | **证伪** | OOS-2 score −0.20；虽一致优于 macd_off，替代不如共存 |
+| trend_buy 接线位（maCrossTrendBuy） | **冗余** | 4 组对照（含共存/替代两场景）三窗逐位一致；65% 事件帧已被覆盖 |
+| MA 共存第 5 分量（ma_join） | **缺复核，暂不采纳** | 连续效应量 ±0.01 量级且 2 正 1 负；score 摆动主体是 pass 线二值放大 |
+| MA 金叉事件独立信息 | **证实** | 三窗重叠仅 3-4%；事件质量 2/3 窗优于 MACD 金叉、1/3 打平 |
+
+**结论（回答用户命题）**：MA10×MA20 因子**暂不加入技术信号默认链**。事件级证据支持
+"MA 金叉有独立信息且质量不劣于 MACD"，但决策级边际贡献小、跨窗口不稳定，不满足
+"正贡献仅成候选默认值"的稳定标准。实现与接线全部保留（默认全关），随时可从 patch
+开启复核，golden 零漂移。
+
+### 17.7 遗留与复核触发
+
+- 复核触发一：OOS-2"MACD 金叉事件负超额（−0.0716）"若在 9 月后续数据中复现，
+  优先重估"MA 替换 MACD 决策分量"（ma_replace 路线），而非 ma_join 共存。
+- 复核触发二：9 月样本扩展后（OOS-2 当前仅 70 帧/8021 信号）重跑 ma_join 三窗口，
+  观察 trend saEx 连续效应量是否收敛为一致正。
+- 事件级用法（金叉事件作为独立加分项而非决策权重）未评估，留待后续队列。
+- 前端链路（技术结构面板 MA 子分展示）按 skill 步骤 8 仅在采纳后处理，当前不做。
+- 报告：`data/reports/ma-factor-contribution.json`（7 trial × 3 窗 + 11 子集 × 3 窗，
+  含 fail-visible 的 unknown 率与 saEx=None 退化说明）。
+
+### 17.8 附带收口：avgRankNum 重排口径合一（2026-09-12，防口径漂移）
+
+MA 因子评估引出的口径审计：avgRankNum→序号/百分位在 Python 端存在两份等价实现
+（`frame_cross_section` 横截面环境门 vs `attention_rank_lookup + percentile_rank` 趋势
+replay/routes 权威口径），过滤（finite>0）、排序键 `(avgRankNum, code)` 升序、百分位
+公式（先除后乘，1 ULP 级）逐位一致但代码重复，存在漂移风险。avgRankNum 是核心资产
+（全量化计算原始材料），收口如下：
+
+- **Python 端 2→1**：`frame_cross_section` 重构为委托 `attention_rank_lookup +
+  percentile_rank`（runtime.py，import 原已存在）；rank=idx+1 代入 percentile_rank
+  与原实现逐位一致。三处调用方（frame_market_median / frame_market_median_percentile）
+  零改动。
+- **回归护栏**：新增 `tests/test_avg_ranknum_percentile_unification.py` 6 例——
+  与权威口径等价、锚点值（锁先除后乘计算顺序，golden 逐位对齐下计算顺序即合同）、
+  tie-break、脏数据过滤（缺失/非数值/≤0/NaN/Inf/空 code/非 dict 行）、空池/单元素、
+  percentile_rank 守卫。
+- **全链路侦察结论**（消费端非重排语义不动）：comprehensive_rank（五维合成）、
+  回测退出判据（avgRankNum 相对恶化）、存储透传/门禁/migration、main.py warmup
+  组装——不涉及重排口径，无合并对象。routes 两处（current 帧/attention series）
+  原本已复用权威实现；crossSection 第 5 维消费的 percentile 亦来自该口径。
+- **TS 端第三份实现**（`src/services/dataLoader/RankTrendSignalService.ts::
+  buildAttentionRankMap`）与 Python 权威口径同构，tie-break 为 `localeCompare`
+  （6 位数字 code 下与码点比较等价）。**运行时角色澄清（2026-09-12 用户复核指出）**：
+  前端 golden 计算链已全部切至 Python analyze API（RankTrendAnalyzer.ts
+  "前端不再保留本地 golden 计算链"，analysisSource='py_golden'），该函数不是 golden——
+  rank 值仅两处残存用途：① getRankTrends 入参只取 code 列表（rank 不发送，后端用
+  G3 权威算法自算）；② stock.attentionRank 仅作 RankTrendPanel 展示排序第三级
+  fallback（attentionRank ?? meta.currentRank ?? rank）。过滤口径（isFinite && >0）
+  两端语义一致，漂移影响面 = 展示排序兜底次序，非分析计算。本次不动。
+- 验证：新口径 6 例 + replay_resonance + golden alignment + MA + api authoritative
+  + analyze_api = 59 passed；全量 collect-only 2083 collected 无 import 断裂。
+  默认值零变更、API/存储合同零变更。

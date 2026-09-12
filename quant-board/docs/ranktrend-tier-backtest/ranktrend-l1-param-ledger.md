@@ -69,6 +69,25 @@
 - 其余动量侧未扫：momentumScoreThreshold(35)/momentumConfidenceSlope(0.45)/
   momentumLongAgreeThreshold(0.15)/momentumDirectionShareBoost/momentumAccelShareBoost。
 
+### 2c. MA 交叉因子（阶段 17，2026-09-12：新增观察因子，默认全关）
+
+排名百分位序列上的 MA10×MA20 金叉/死叉（`technical.py::calculate_ma_cross`，与 MACD
+同输入同二值交叉参与语义）；与上面"MA5/MA10 显示字段不扫描"裁定不冲突——本次因子
+有决策消费方（compose_decision 第 5 分量 + trend_buy OR 链两个接线位）。
+
+| 参数 | 当前值 | 来源 | 阶段 17 评估结论 |
+|---|---|---|---|
+| maFastPeriod | 10 | 用户指定（10/20） | 未扫（单点评估，参数面未开） |
+| maSlowPeriod | 20 | 用户指定（10/20） | 未扫（同上；slow≤fast 自动修正） |
+| maWeight | 0.0（关） | 阶段 17 三窗 7 trial | **缺复核暂不采纳**：共存第 5 分量连续效应量 trend saEx Δ +0.0046/+0.0172/−0.0104（2 正 1 负），score 摆动主体是 trend pass 0.05 线二值放大 |
+| maCrossTrendBuy | False（关） | 阶段 17 4 组对照 | **冗余**：三窗逐位一致；MA 金叉帧 65-68% 已被既有 trend_buy OR 链覆盖，余量未传导 |
+
+- 事件级证据（支持保留观察）：MA 金叉事件三窗 saEx 0.0899(T)/0.0141/0.0411，2/3 窗优于
+  MACD 金叉事件（0.0834 未过硬门 / 0.0240 / **−0.0716**），事件重叠仅 3-4%（独立信息源）。
+- 替代路线证伪：ma_replace 一致优于 macd_off 但 OOS-2 vs baseline −0.20，替代不划算。
+- 复核触发见长测计划 §17.7（MACD 金叉 OOS-2 负超额复现 → 重估 ma_replace；9 月样本
+  扩展 → 重跑 ma_join）。报告 `data/reports/ma-factor-contribution.json`。
+
 ## 3. 量价参数（阶段 9，7 个，commit 2f8e1a1）
 
 | 参数 | 当前值 | 窗口 | 样本外 |

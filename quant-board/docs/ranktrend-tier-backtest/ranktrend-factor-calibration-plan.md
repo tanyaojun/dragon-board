@@ -111,7 +111,7 @@ _STRATEGY_PARAM_KEYS = _SCALAR_KEYS + (
 > 类型列：A=可调算法参数（进 config+搜索）；B=结构常量（抽命名常量，不搜索）；⚠️=与已 config 化字段重复，须合并。所有行号基于当前代码。
 > 说明：A/B 类 magic number 已逐函数盘点；`analyze_risk` 的逐项加减分系数、`cycle_confidence` 的四组判定阈值属同质参数组，以"主系数 + 实现阶段逐条命名"方式列出（见各小节注），非逐数字枚举。C 类展示标签见 §5.13。
 
-### 5.1 技术信号层（momentum_profile / rank_shock / rank_path_commitment / calculate_macd / momentum_data / analyze_momentum_signals）
+### 5.1 技术信号层（momentum_profile / rank_shock / rank_path_commitment / calculate_macd / calculate_ma_cross / momentum_data / analyze_momentum_signals）
 
 | 字段名 | 当前值 | 类型 | 位置 |
 |---|---|---|---|
@@ -163,8 +163,13 @@ _STRATEGY_PARAM_KEYS = _SCALAR_KEYS + (
 | `crossSectionWeakDeltaDown` | `-5`（D 档 delta 下降确认） | A | engine.py RankTrendConfig |
 | `crossSectionMidMax` | `50`（C 档中位上限） | A | engine.py RankTrendConfig |
 | `crossSectionMidDeltaDown` | `-15`（C 档 delta 显著下降） | A | engine.py RankTrendConfig |
+| `maFastPeriod` | `10`（MA 交叉快线周期，2026-09-12 阶段 17 新增观察因子） | A | trend/technical.py calculate_ma_cross + engine/config.py |
+| `maSlowPeriod` | `20`（MA 交叉慢线周期；slow≤fast 自动修正） | A | 同上 |
+| `maWeight` | `0.0`（决策合成第 5 分量权重，默认关；阶段 17 评估缺复核暂不采纳） | A | engine/config.py + runtime.py compose_decision |
+| `maCrossTrendBuy` | `False`（MA 金叉进 trend_buy OR 链，默认关；阶段 17 判定冗余） | A | engine/config.py + runtime.py trend_buy 两处 |
 
 > MACD `hist = 2*(dif−dea)` 的 `2` 与 EMA `multiplier = 2/(period+1)` 的 `2` 均为标准公式系数，属数学定义，不需抽取（加注释说明即可）。
+> MA 交叉因子 rawScore 仅交叉帧 ±1（无强度加权参数——阶段 13 实证 MACD gap 阈值面全冗余，不引入同类参数）；评估结论与复核触发见 `ranktrend-longterm-backtest-plan.md` §17.6/§17.7 与 `ranktrend-l1-param-ledger.md` §2c。
 
 ### 5.2 排名跳跃检测 `detect_rank_jumps`（engine.py:444-533）
 
