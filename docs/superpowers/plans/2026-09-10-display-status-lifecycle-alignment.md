@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+> **2026-09-10 对抗性升级（详见文末「对抗性审查与升级」，spec §9）**：本计划正文的代码块只作**首版草稿，以落地源码为唯一事实**；执行前必须先叠加补丁 **P1–P9**；spec §9.7 的 **U1–U4 已裁决**（U1-a 保持 8 类标签 + tooltip 结构化原因 + 面板单列计数 / U2-b 仅文档声明混排不可比 / U3-a 删除启动确认分支 / U4-a `classKey` 缺省回退 `'unknown'`），补丁预期值已按裁决写死。已确认必须修正的 4 处：对账测试同义反复（P2）、`synergy.state=启动确认` 分支被静默删除（P1）、`turnover=0` 口径与 spec 文字矛盾（spec §3 已修订）、未核实消费点 + 未列入 Files 的 `RankTrendPanel.test.ts`（P3）。
+
 - **golden 引擎零漂移**：不修改 `engine/runtime.py`、`analyze_cycle`、`compose_analysis_candidate_tier`、synergy 计算；只改 `trend/display_status.py` 这个消费侧纯函数。
 - **8 标签枚举与输出结构不变**：`主升确认/点火观察/强资确认/新入观察/高位拥挤/资金背离/转弱预警/样本不足`；`displayStatus = {label, classKey, tooltip}` 结构不变；`statusCounts`/`snapshot_analysis.displayStatus`/join 链路合同零变更。
 - **candidateTier 不参与展示状态生产**（前后端一致）；reversal 无条件转弱预警；cooling 保留强资修正（`zlje>0 且 zljzb≥8` 且 `volumePrice.signalTier ∈ {A,B}` → 强资确认）。
@@ -21,6 +23,10 @@
 - **bash cwd 会重置**：每条命令显式 `cd /d/dragon-board/...` 前缀；pytest 用 `./.venv/Scripts/python.exe`。
 - **禁止** `rm -rf`、`git reset --hard`、批量删除；一次只删明确路径文件。
 - 全程中文沟通；每个任务独立 commit（不携带用户未提交的无关改动：`.claude/settings*.json`、`src/stores/ui.ts`、`quant-board/backend/operations/optimize_gate_denoise_parameters.py`、`quant-board/docs/ranktrend-tier-backtest/*`、`quant-board/backend/analysis/ranktrend/research/regime_saex.py`、`quant-board/backend/operations/diagnose_*.py`、`quant-board/tests/test_regime_saex.py`）。
+- **回退方案（§9.5 E4）**：每个 Task 独立 commit；出现不可接受分布时按 Task 逆序 revert（Task 6→1），回退后必须重跑 Task 7 的验证子集并记录被 revert 的具体 commit。
+- **上线首日人工核对（AGENTS.md §11 第 5 条）**：首个完整交易日必须记录改造前后同帧的 `statusCounts` / `statusShares` / `statusSourceCounts` 实测值，并核验 `statusSourceCounts.fallback` 的口径是否与新级联一致（sentiment.py L316/L329）；不得只看 API status。
+- **消费点核查（§9.5 E2/E3）**：改造前逐个核实 `src/services/apiService.ts`、`src/services/snapshot/**`、`src/components/common/SplashScreen.vue` 的 `displayStatus` 引用是否属同一链路（属实则补进 Files 与验证，否则记录"已核实无关"）；`src/components/panels/__tests__/RankTrendPanel.test.ts` 必须补进 Task 3 的 Files。
+- **浏览器验收流程（SKILLS.md §7.2）**：Task 7 必须按 `skills/e2e-verification/SKILL.md` 与 `skills/playwright-cli/SKILL.md` 执行，不派发子代理。
 
 ---
 
@@ -625,9 +631,9 @@ describe('getRankTrendDisplayStatus（后端直通）', () => {
     expect(status).toEqual({ label: '主升确认', classKey: 'main_confirmed', tooltip: '主升扩散确认，趋势向上。' })
   })
 
-  it('后端 classKey 缺省时回退 n_neutral', () => {
+  it('后端 classKey 缺省时回退 unknown（U4-a：不再用 n_neutral，避免与已删除的 candidateTier 命名撞车）', () => {
     const status = getRankTrendDisplayStatus(createRankTrend({ displayStatus: { label: '强资确认' } }))
-    expect(status.classKey).toBe('n_neutral')
+    expect(status.classKey).toBe('unknown')
     expect(status.tooltip).toBe('')
   })
 
@@ -829,7 +835,7 @@ export function getRankTrendDisplayStatus(
   if (backendStatus && typeof backendStatus.label === 'string') {
     return {
       label: backendStatus.label,
-      classKey: backendStatus.classKey ?? 'n_neutral',
+      classKey: backendStatus.classKey ?? 'unknown', // U4-a：不再回退 'n_neutral'（与已删除的 candidateTier 命名撞车，且不在 8 类白名单内）
       tooltip: backendStatus.tooltip ?? '',
     }
   }
@@ -1230,3 +1236,166 @@ cd /d/dragon-board && pnpm exec vue-tsc --noEmit -p tsconfig.app.json --pretty f
 - **Spec 覆盖**：§3 → Task 1；§4.1 → Task 4；§4.2/§4.3 → Task 5；§5 → Task 3；§7 → Task 1/2/3/4 测试；§8 → Task 6/7。§6（兼容与历史数据）无需代码任务，落在 Task 7 风险说明。
 - **占位符扫描**：无 TBD/TODO；所有代码步骤给出完整可粘贴内容。
 - **类型一致性**：`compute_display_status(analysis, stock)` 签名前后端调用点一致；TS `getRankTrendDisplayStatus(rankTrend?)` 单参与 RankTrendPanel 调用点、compat re-export、测试一致；`statusSourceCounts` 字段名与 `hotlistSentiment.ts:184`、`_metrics_projection` 一致。
+
+---
+
+## 对抗性审查与升级（2026-09-10）
+
+审查基准：`AGENTS.md` §4.0/§4.1/§11、`skills/fail-visible-data-pipelines/SKILL.md`、当前工作区源码实测。
+完整事实基线与缺陷清单见 spec `2026-09-10-display-status-lifecycle-alignment-design.md` §9（§9.1 源码核对表 / §9.2 设计缺陷 A1-A3 / §9.3 硬约束冲突 B1-B3 / §9.4 未声明变更 C1-C3 / §9.5 覆盖缺口 E1-E5 / §9.7 决策项 U1-U4）。
+
+**本计划的引用型断言经核对基本可靠**（display_status.py 位置与 97 行、`routes.py:453-455`、`statusClassifier.ts` 541 行、`statusClassifier.test.ts` 717 行、`compat.ts:4-13`、`types.ts` L354、`hotlistSentiment.ts:184`、`sentiment.py` L17/L40/L228、DataTable L179/L886/L890/L3161 均与实测一致）。必须叠加的修订集中在**语义层**，见下 P1–P8。
+
+### P1 — Task 1 测试补齐（6 类缺失用例 + 1 处断言修正，预期值已按 U1-a / U3-a 裁决写死）
+
+在原 Step 1 测试文件基础上追加，并在 Step 3 实现中同步满足：
+
+1. `test_invalid_turnover_zero_is_valid`：`turnover=0` → 走 stage 主轴（**不是**"样本不足"），锁定 spec §3 修订后的口径（`0` 有效，集合竞价），防止实现者按 spec 旧文字写成 `<= 0`。
+2. `test_missing_stage_reason_is_visible`（U1-a 已定稿）：`stage` 缺失且非强资金时 `label` 仍为 `新入观察`，**tooltip 必须逐字等于 `阶段数据缺失或非法，未参与主轴判定（按新入观察兜底）。`**；`stage` 缺失与 `stage='garbage'` 走同一判据、同一文案（禁止第二套枚举判断）。
+3. `test_invalid_stage_enum_is_marked`：把现有 `test_invalid_stage_enum_falls_back` 从"只断言 `新入观察`"改为"断言 `新入观察` + tooltip 含 `阶段数据缺失`"，否则该用例自身把"数据异常伪装成业务状态"固化下来（违反 fail-visible）。
+4. `test_missing_field_matrix`：按 spec §3 字段缺失矩阵逐行覆盖——价格类字段全缺（不判无效）、`turnover` 缺失（不判无效）、`zljzb=NaN`（不触发资金背离）、`observation.volumePrice` 缺失（量能承接=false）。
+5. `test_legacy_startup_confirmation_branch`（U3-a 已定稿）：`synergy.state=启动确认` + stage 缺失 + 非强资金 → 期望 `新入观察` 且 tooltip 含 `阶段数据缺失`（旧实现为"点火观察"）；测试注释标注 `U3-a：旧分支已删除，此处为新合同`。另补一条正例：`stage='ignition' + 启动确认` → 仍为 `点火观察`（证明语义由 stage 主轴承接）。
+6. `test_stage_missing_counted_in_status_source`（U1-a 新增链路）：join 注入 `displayStatusReason='stage_missing'` 后，`statusSourceCounts.stageMissing` 等于 stage 缺失/非法的行数、非缺失行不计数，且该计数不影响 `statusCounts` 的 8 类结果（`sum(statusCounts.values()) == 总行数` 仍成立）。
+
+### P2 — Task 2 对账测试重写（当前写法是同义反复，必须替换）
+
+现写法把 `compute_display_status` 的输出当输入喂给计数函数，再断言"计数等于输入分布"，只能证明计数器与映射函数自洽，**无法发现映射漂移**。替换为"携带 per-row `cycle.stage` 真值"的单向一致性 + 不可逆性合同：
+
+```python
+# -*- coding: utf-8 -*-
+"""对账测试（2026-09-10 对抗性修订版）：以 per-row cycle.stage 真值为锚。
+
+不可逆性合同：8 类计数无法反向还原 5 态计数（reversal 与 cooling 同落"转弱预警"，
+且修正层可改写任意 stage 的落点）。任何"从 8 类还原 5 态"的实现都应被判失败。
+"""
+from backend.analysis.hotlist.sentiment import build_day_metrics_from_sorted, sort_rows
+from backend.analysis.ranktrend.display_status import compute_display_status
+
+_STAGE_SOURCES = {  # 8 类标签允许的来源 stage 集合（修正类为 None 表示与 stage 无绑定）
+    "点火观察": {"ignition"},
+    "主升确认": {"expansion"},
+    "高位拥挤": {"crowded"},
+    "转弱预警": {"reversal", "cooling"},
+    "样本不足": None,
+    "资金背离": None,
+    "强资确认": None,
+    "新入观察": None,
+}
+
+
+def _row(stage, index, *, sample_quality="ok", synergy_state=None, zljzb=1.0, signal_tier=None):
+    analysis = {
+        "meta": {"sampleQuality": {"status": sample_quality}},
+        "observation": {"synergy": {"state": synergy_state} if synergy_state else {}},
+        "cycle": {"stage": stage},
+    }
+    if signal_tier:
+        analysis["observation"]["volumePrice"] = {"signalTier": signal_tier}
+    label = compute_display_status(analysis, {"zlje": 1e8, "zljzb": zljzb})["label"]
+    return {"code": f"{index:06d}", "compRank": index + 1, "displayStatusLabel": label, "_stageTruth": stage}
+
+
+def _counts(rows):
+    return build_day_metrics_from_sorted(sort_rows(rows), len(rows))["statusCounts"]
+
+
+def test_stage_axis_labels_only_come_from_mapped_stages():
+    rows = [_row(s, i) for i, s in enumerate(["ignition", "expansion", "crowded", "reversal", "cooling"])]
+    assert _counts(rows)["转弱预警"] == 2  # reversal + cooling(无强资金承接)
+    seen = {}
+    for row in rows:
+        seen.setdefault(row["displayStatusLabel"], set()).add(row["_stageTruth"])
+    for label, stages in seen.items():
+        allowed = _STAGE_SOURCES[label]
+        if allowed is not None:
+            assert stages <= allowed, f"{label} 出现越界来源: {stages - allowed}"
+
+
+def test_counts_conservation_and_correction_buckets():
+    rows = [
+        _row("reversal", 0, sample_quality="insufficient"),
+        _row("expansion", 1, synergy_state="存疑", zljzb=-9.0),
+        _row("expansion", 2),
+        _row("cooling", 3, signal_tier="A", zljzb=12.0),
+    ]
+    counts = _counts(rows)
+    assert counts["样本不足"] == 1 and counts["资金背离"] == 1
+    assert counts["主升确认"] == 1 and counts["强资确认"] == 1 and counts["转弱预警"] == 0
+    assert sum(counts.values()) == len(rows)  # 守恒：主轴类 + 修正类 + 兜底类 = 总行数
+
+
+def test_five_states_are_not_recoverable_from_eight_labels():
+    """不可逆性合同：weakening 计数 ≠ 任一单态计数，防止后续有人误以为可逆。"""
+    rows = [_row("reversal", 0), _row("cooling", 1)]
+    counts = _counts(rows)
+    reversal_only = _counts([_row("reversal", 0)])
+    cooling_only = _counts([_row("cooling", 0)])
+    assert counts["转弱预警"] == 2
+    # 注意：不能写成 `a != b != c` —— 链式比较等价于 `(a != b) and (b != c)`，
+    # 当 b 与 c 同为 1 时会静默变成 False（本骨架初版即有此缺陷，实现时已修正）。
+    assert reversal_only["转弱预警"] == 1
+    assert cooling_only["转弱预警"] == 1
+    assert counts["转弱预警"] != reversal_only["转弱预警"]
+    assert counts["转弱预警"] != cooling_only["转弱预警"]
+```
+
+同时必须核实并记录 `statusSourceCounts.fallback` 的口径（sentiment.py L316 `resolve_stock_status` → L329 `fallback_status_label`）：若 fallback 仍是旧口径，则面板 8 类分布 = 两种口径之和，本节对账只覆盖 displayStatus 侧，需在测试与文档中明写该边界（spec §9.5 E1）。
+
+> 已落地（2026-09-10）：`quant-board/tests/test_display_status_reconciliation.py` 按本节骨架实现（3 用例），并修正了骨架里 `a != b != c` 的链式比较缺陷；`pytest tests/test_display_status.py tests/test_display_status_reconciliation.py` → 28 passed。
+
+### P3 — Task 3 消费点与 Files 修正
+
+- Files 补 `src/components/panels/__tests__/RankTrendPanel.test.ts`（38 行，Step 7 已运行却未列入）。
+- 改造前核实并登记 `src/services/apiService.ts`、`src/services/snapshot/**`、`src/components/common/SplashScreen.vue` 的 `displayStatus` 引用归属（同一链路则补进 Files 与验证步骤，否则记录"已核实无关"，避免漏改或误改）；**核实完成前不得删除或改写这些位置上的任何 `displayStatus` 逻辑**。
+- §5 的"行为差异登记"（spec §5，含 U4-a 第 5 条）必须落到本 Task 的验收里：至少逐条判定"无效行情本地判被删除后 `turnover=0` 行的展示状态是否变化"、"缺 `marketPercentiles` 时旧自算兜底 → 新直通后端"、"缺 `displayStatus` 时旧级联 → 新未知态（classKey `unknown`）" 这三项是被接受的修正还是需补齐。
+- **U4-a 已裁决并已同步正文**（替代原"按 U4 裁决"的待定表述）：Task 3 Step 1 测试断言改为 `expect(status.classKey).toBe('unknown')`；Step 4 直通回退改为 `classKey: backendStatus.classKey ?? 'unknown'`（两处正文已改）。
+
+### P4 — Task 5 来源注释与消费字段扩展（U1-a + U2-b 落地）
+
+- `hotListStatusSourceNote` 文案按 U1-a 扩展为三通道：`golden 判定 N / fallback 接管 M / 阶段缺失 K`（K 取 `statusSourceCounts.stageMissing`；缺字段时整段隐藏，不做硬门禁）。
+- 若核实 `fallback_status_label` 与新级联不同源，`M` 必须标注"（旧口径）"，并在文档中写明这部分**不计入新级联对账**；只有核实为同口径时才可写统一表述（spec §9.5 E1）。
+- **U2-b 已裁决**：不新增口径版本字段、不新增混排提示。因此本 Task **不得**顺手加"新旧口径"提示 UI；混排风险只写进 Task 7 汇总报告（spec §6）。
+- TS 类型同步：`src/types/hotlistSentiment.ts` 的 `statusSourceCounts` 增补可选 `stageMissing?: number`（原有 `displayStatus`/`fallback` 语义不变）。
+
+### P5 — Task 6 文档同步范围扩展
+
+`docs/ranktrend/lifecycle-layering-contract.md` 展示状态节除新级联与对账关系外，必须同步：spec §3 的**字段缺失语义矩阵**、**stage 缺失的可辨识性要求**（U1-a：tooltip 固定文案 + `statusSourceCounts.stageMissing`）、**8 类不可反向还原 5 态**的结论、**历史帧混排两套口径且不加标识**（C3 / U2-b）。同时 `quant-board/docs` 的 sentiment 专题文档需登记新增可选字段 `stageMissing`。
+
+### P6 — Task 7 验收强度提升
+
+- 按 `skills/e2e-verification/SKILL.md` + `skills/playwright-cli/SKILL.md` 执行，不派发子代理。
+- 新增核对项：(a) `stage` 缺失行 tooltip 逐字含 `阶段数据缺失`（不是"无明确信号"）；(b) "周期列=冷却 / 展示状态=强资确认"这类修正组合的解读文案符合预期（spec §9.3 B3）；(c) 面板底部出现"阶段缺失 K"，且 K>0 时对应行仍落在 8 类之一（不新增标签）；(d) 因 U2-b 裁决**确认 UI 未新增任何口径提示**，混排风险只出现在报告里。
+- 汇总报告必须包含改造前后 `statusCounts` / `statusShares` / `statusSourceCounts`（含 `stageMissing`）的实测对比（spec §6 上线判据），并逐条列出 U2-b 的三项已知风险（同股前后不一致无法自证原因、跨日/跨缓存不可比、只能回到 spec §6 解释），不得只写"分布预期显著变化"。
+
+### P7 — 体量与第二真相源
+
+正文内联了全部测试与实现全文（1200+ 行），对照 `AGENTS.md` §11"设计文档要短、实施计划要更短"。内联块只作首版草稿；实现落地后以源码为唯一事实，若与内联块偏离必须回写文档或删除内联块，避免文档与代码双写漂移。
+
+### P8 — 提交前增量验证
+
+除 Task 7 既有命令外，提交前必须补跑：`cd /d/dragon-board && pnpm test`（覆盖 statusClassifier/DataTable/RankTrendPanel 之外的消费点回归）与 `cd /d/dragon-board/quant-board && ./.venv/Scripts/python.exe -m pytest --collect-only -q`（确认新增测试文件无 import 断裂）。
+
+### P9 — U1-a 阶段缺失可辨识链路（新增实现增量，须单独 commit）
+
+任务边界：只补"缺失可辨识"，不改 §3 级联的其它分支，不新增第 9 类标签。
+
+1. 后端 `compute_display_status` 第 4 步：`stage` 缺失/非法时 `label` 仍取 8 类之一，tooltip 固定为 `阶段数据缺失或非法，未参与主轴判定（按新入观察兜底）。`；该步走"强资金+量能承接 → 强资确认"时，tooltip 追加前缀 `阶段数据缺失`。第 5 步纯兜底（理论不可达）保留原 tooltip。
+2. join 层 `_join_display_status`（`quant-board/backend/services/theme/hotlist_sentiment_compute.py`）：与注入 `displayStatusLabel` 同址注入 `row["displayStatusReason"] = "stage_missing"`，判据为 `is_stage_missing_fallback(analysis, label)`（stage 缺失/非法 **且** label ∈ `STAGE_MISSING_LABELS = {新入观察, 强资确认}`，F1 收紧）。**枚举判定只允许存在一份实现**，禁止前后端各写一套；只按 stage 计数会把被样本门/风险层接管的行误计入 K。
+3. 纯函数 `resolve_stock_status` / `build_day_metrics_from_sorted`（`quant-board/backend/analysis/hotlist/sentiment.py`）：`statusSourceCounts` 增加 `stageMissing` 计数（后端超集可选字段，不改变 `statusCounts` 8 类与既有字段语义）；`join` 异常/缺失仍按既有 fail-visible 方式写 `warnings`。
+4. 前端：`src/types/hotlistSentiment.ts` 增补 `stageMissing?: number`；`DragonBreathPanel.vue` 按 P4 输出三通道文案。
+5. 测试：后端 P1 第 6 项 `test_stage_missing_counted_in_status_source`；前端补面板来源文案单测（含"缺字段时隐藏"分支）。
+6. 兜底约定：若该链路最终未能落地，U1-a 只剩 tooltip 一条通道，**必须在 Task 7 报告中显式记为"未完成的裁决项"**，不得静默降级。
+
+### P10 — E1/E2 核实结论（2026-09-10 已完成，详见 spec §9.9）
+
+- **E1（fallback 口径）**：`fallback_status_label`（sentiment.py:329-351）是独立的量价启发式，不读 `cycle.stage` / `synergy.state` / `candidateTier` / `sampleQuality`，也**不可能产出** 点火观察 / 主升确认 / 转弱预警。因此面板 8 类 = 新 stage 口径 + 第三方 fallback 口径之和：P4 的 `M` 必须标注"（旧口径）"且不计入对账；其"样本不足"判据与 spec §3 的 `sampleQuality` 门不同源，文案不得声称等价。附带发现（本轮不改）：`resolve_stock_status` 把"缺失"与"label 非法"合并计入同一 `fallback`，将来可拆 `fallbackMissing` / `fallbackInvalid`。
+- **E2（消费点归属）**：`SplashScreen.vue` 的 `displayStatus` 已核实**无关**（启动页文案 computed）→ Task 3 不列入；`apiService.ts:127-130` / `apiService.ts:565-580` / `snapshotAnalysisReader.ts` 已核实**同链路**，但 `loadSnapshotAnalysis` 当前**无生产调用方**，故 Task 3 的消费面仍只有 `RankTrendPanel`（P3 的"核实完成前不得删除"约束可解除）。
+- **Task 3 追加要求（新）**：`SnapshotAnalysisEntry.displayStatus`（全可选）与 `RankTrendAnalysisResult.displayStatus`（Task 3 计划为全必填）是两处重复定义，必须显式声明关系（复用同一类型，或注明可空差异），避免将来接线 `loadSnapshotAnalysis` 时丢字段或类型不匹配。
+- **测试进度（2026-09-10，全部 Task 达成）**：Task 1 Step 1 + P1 六项测试重写后 RED 为 21 failed / 4 passed；实现落地后 `pytest tests/test_display_status.py` → **25 passed**；Task 2 对账测试（3 用例）落地后 `test_display_status.py + test_display_status_reconciliation.py` → **28 passed**；六文件子集（另加 hotlist_sentiment_compute / hotlist_sentiment_backfill / snapshot_analysis / snapshot_analysis_service）→ **72 passed**；`pytest --collect-only -q` → **2010 collected / exit 0**。前端 `vitest run`（statusClassifier / DataTable / RankTrendPanel / DragonBreathPanel）→ **45 passed**；`vue-tsc --noEmit -p tsconfig.app.json` → **0 error**。
+- **浏览器验收（Task 7 Step 4，2026-09-10）**：本机已有服务在跑（uvicorn `127.0.0.1:8000` + vite `127.0.0.1:5173`），用 chromium 真实渲染 `http://localhost:5173`（脚本在 gitignored 的 `.playwright-cli/task7-*.mjs`，截图 `task7-*.png`）。**通过项**：(a) 热榜情绪面板"全池状态结构"底部渲染出 **`golden 判定 0 / fallback 接管（旧口径）235`**；(b) 顶部文案 = **"市场情绪阶段"**；(c) 控制台 **0 报错**。**未稳定项**：周期列"样本不足"灰框只在一次采样中命中 16 个，其余观测为 `--`（主表数据加载时序波动 8s~51s）→ **未获得确定性结论，需数据稳定时复验**。
+- **验收结论修正（2026-09-10 主代理复核，重要）**：上条的 (a) **已被推翻重述** —— 它只证明"代码编译进 bundle"，**不构成可见效果验收**：`.breath-panel` 默认 `v-show=false`（不展开整块 `display:none`）、`.status-source-note` 当时 **DOM count=0**；当时唯一可见变化是行情主页 16/237 行的周期列。并且 `golden 判定 0` **不是** E1/U2-b 的实证，而是 `snapshot_analysis` 集合为空（analyze 持久化只挂 ingest 后台任务，日常采集由 `snapshot_collector` 直写库绕过它）→ **本改动当时零可见效果**。完整证据与修复后实测见 spec §9.9 末四条。
+- **修复后实测（2026-09-10，用户本地执行补跑 + 重算）**：`snapshot-analysis-backfill --limit 1 --apply` → `totalWritten=235`；`hotlist-sentiment-recompute --apply` → `stageMissing`：**5 → 0**，`displayStatus=235 / fallback=0`，8 类与 5 态严格对账（转弱预警 220 = cooling 213 − 强资确认 5 + reversal 12；高位拥挤 3 + 样本不足 6 = crowded 9）。期间发现并修复真实缺陷：`persist_snapshot_analysis` 未落 `cycle` 导致 `stageMissing` 假阳性。
+- **计划骨架缺陷已修正（2026-09-10）**：P2 对账骨架初版的 `assert a != b != c` 是链式比较（等价 `(a != b) and (b != c)`，b、c 同为 1 时静默变 False）→ 文档与实现均已改为分步断言。
+- **执行中发现的计划缺口（新增警示）**：`statusSourceCounts` 新增 `stageMissing` 会命中既有**精确等值断言** `tests/test_hotlist_sentiment_compute.py:235`（`== {"displayStatus": 0, "fallback": 0}`）→ 已按新契约同步为三键断言。**Task 2/6 及后续任何改 `statusSourceCounts` / `statusCounts` 的任务，必须先 grep 等值断言**（`Select-String -Pattern 'statusSourceCounts|statusCounts'`），不能只跑"相关文件"。
+- **code review 修复（2026-09-10，F1–F6 + 测试缺口全部落地）**：F1 收紧 `stageMissing` 判据（`display_status.is_stage_missing_fallback` + `STAGE_MISSING_LABELS`，join 层复用；**K = 仅确实由第 4 步兜底的行**，与 8 类分布严格对账）；F2 `display_status` 全链路 `_as_dict` 形状归一（非法输入不再抛异常）；F3/F4/F5 注释登记（DataTable 判据前提 / 第 9 个 classKey 的有意选择 / "（旧口径）"硬编码文案的风险与同步点）；F6 前端源码契约测试跨行正则收敛为稳定结构串；测试新增 6 项（阶段缺失+insufficient 不计入、`STAGE_MISSING_LABELS` 契约、`is_stage_missing` 枚举契约、非法形状健壮性、前端 label 非 string）。判据收紧已同步 spec §3 与 `docs/ranktrend/lifecycle-layering-contract.md`。
+

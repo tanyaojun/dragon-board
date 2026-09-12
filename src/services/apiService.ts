@@ -127,9 +127,18 @@ type StockNameQueryOptions = {
 export interface SnapshotAnalysisEntry {
   /** 后端持久化的 analyze 产物（MongoDB snapshot_analysis），供历史回放/对比。 */
   observation?: Record<string, any>
-  displayStatus?: { label?: string; classKey?: string; tooltip?: string }
+  /** 展示状态：stage 纯投影（2026-09-10；与 rankTrend/types 的 RankTrendDisplayStatus 同形状）。 */
+  displayStatus?: { stage?: string | null; label?: string; tooltip?: string }
+  technical?: Record<string, any>
+  risk?: Record<string, any>
+  strategy?: Record<string, any>
+  executionStrategy?: Record<string, any>
+  jump?: Record<string, any>
+  decision?: Record<string, any>
+  cycle?: Record<string, any>
   meta?: Record<string, any>
   resonance?: Record<string, any>
+  themeMomentum?: Record<string, any>
 }
 
 export class ApiHttpError extends Error {
@@ -1036,7 +1045,10 @@ export class ApiService {
       context: 'quant-board',
       priority: 'medium',
       retries: 1,
-      timeout: 8000,
+      // 2026-09-12：后端缓存失效后首次重建需全量 load_frame_bundles(200) + 引擎重放
+      // （实测 8~18s），8s 超时必然 abort（"signal is aborted without reason"）→ 放宽到 30s；
+      // 常态命中后端 Redis 缓存，毫秒级返回
+      timeout: 30000,
       cache: false,
       throwOnHttpError: false,
       silent: true,

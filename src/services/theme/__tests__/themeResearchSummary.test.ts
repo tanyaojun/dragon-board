@@ -1,5 +1,18 @@
-import { describe, expect, it } from 'vitest'
-import { buildHotlistThemeResearchItems, buildThemeResearchExplanation } from '../themeResearchSummary'
+import { describe, expect, it, vi } from 'vitest'
+
+import { apiService } from '@/services/apiService'
+
+import {
+  buildHotlistThemeResearchItems,
+  buildThemeResearchExplanation,
+  loadThemeResearchExplanation,
+} from '../themeResearchSummary'
+
+vi.mock('@/services/apiService', () => ({
+  apiService: {
+    getThemeResearchSummary: vi.fn(),
+  },
+}))
 
 describe('themeResearchSummary', () => {
   it('builds unavailable explanation without blocking runtime themeFacade flow', () => {
@@ -98,5 +111,29 @@ describe('themeResearchSummary', () => {
       noise: false,
     })
     expect(items[0].confluenceScore).toBeGreaterThanOrEqual(80)
+  })
+})
+
+describe('loadThemeResearchExplanation 请求失败转写（2026-09-12）', () => {
+  it('超时/中止错误转可读文案，不透出 "signal is aborted without reason" 原文', async () => {
+    vi.mocked(apiService.getThemeResearchSummary).mockRejectedValueOnce(
+      new DOMException('signal is aborted without reason', 'AbortError'),
+    )
+
+    const explanation = await loadThemeResearchExplanation()
+
+    expect(explanation.available).toBe(false)
+    expect(explanation.statusText).toContain('研究摘要不可用')
+    expect(explanation.statusText).toContain('超时')
+    expect(explanation.statusText).not.toContain('signal is aborted without reason')
+  })
+
+  it('普通请求错误仍透出原始 message（fail-visible）', async () => {
+    vi.mocked(apiService.getThemeResearchSummary).mockRejectedValueOnce(new Error('backend_error: boom'))
+
+    const explanation = await loadThemeResearchExplanation()
+
+    expect(explanation.available).toBe(false)
+    expect(explanation.statusText).toContain('backend_error: boom')
   })
 })

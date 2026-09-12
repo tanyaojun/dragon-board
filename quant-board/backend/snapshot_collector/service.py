@@ -554,6 +554,10 @@ class SnapshotCollectorService:
                     quality.warnings.append(f"hotlist_sentiment_slot_skipped: {sentiment_result.get('reason')}")
             except Exception as exc:
                 logging.warning("hotlist_sentiment slot compute failed for %s %s: %s", trading_date, slot_time, exc)
+            # 注：analyze 产物落库（observation/displayStatus/meta/resonance/cycle）**不再在此提交** ——
+            # 2026-09-10 已下移到数据层 `save_snapshot_ingest` 的共享 after-save 钩子
+            # （backend/services/snapshot_post_save_hooks.py），与 ingest 路由路径自动一致，
+            # 避免"两条写入路径各写一份后处理"。提交仍走后台线程 worker（不阻塞采集）。
         run_doc = {
             "runId": run_id,
             "datasetId": dataset_id,

@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.data.cache import snapshot_cache
 from backend.data.models.models import Dataset
+from backend.data.repositories.snapshot_post_save import run_snapshot_post_save_hooks
 from backend.core.settings import get_settings
 from backend.core.utils import json_dumps, json_loads
 
@@ -117,6 +118,18 @@ class MongoRepository:
         existing = self.db["migration_audit"].find_one({"idempotencyKey": idempotency_key, "opType": "snapshot_ingest"})
         if existing and not replace_existing:
             saved_dataset = self.get_dataset(dataset.id) or dataset
+            # after-save 钩子（2026-09-10）：两条写入路径（ingest 路由 / collector 直写）
+            # 共用本方法，钩子在这里触发 → 后处理不可能“只加在一边”。deduped 早退同样触发
+            # （与改造前 ingest 路由“无条件调用后处理”行为等价），钩子自行决定是否跳过。
+            run_snapshot_post_save_hooks(
+                dataset_id=dataset.id,
+                frames=frames,
+                stock_rows=stock_rows,
+                sector_rows=sector_rows,
+                records=records,
+                deduped=True,
+                source=source,
+            )
             return {
                 "dataset": self.dataset_to_dict(saved_dataset),
                 "status": "done",
@@ -139,6 +152,15 @@ class MongoRepository:
             and not replace_existing
         ):
             saved_dataset = self.get_dataset(dataset.id) or dataset
+            run_snapshot_post_save_hooks(
+                dataset_id=dataset.id,
+                frames=frames,
+                stock_rows=stock_rows,
+                sector_rows=sector_rows,
+                records=records,
+                deduped=True,
+                source=source,
+            )
             return {
                 "dataset": self.dataset_to_dict(saved_dataset),
                 "status": "deduped",
@@ -182,6 +204,15 @@ class MongoRepository:
                 self._restore_snapshot_replacement(dataset.id, snapshot_ids, rollback)
             raise
         saved_dataset = self.get_dataset(dataset.id) or dataset
+        run_snapshot_post_save_hooks(
+            dataset_id=dataset.id,
+            frames=frames,
+            stock_rows=stock_rows,
+            sector_rows=sector_rows,
+            records=records,
+            deduped=False,
+            source=source,
+        )
         return {
             "dataset": self.dataset_to_dict(saved_dataset),
             "status": "done",

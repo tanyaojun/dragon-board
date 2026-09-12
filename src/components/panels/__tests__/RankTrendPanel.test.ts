@@ -13,7 +13,8 @@ describe('RankTrendPanel display contract', () => {
     expect(source).toMatch(/statusLabel:\s*breakdown\.tierLabel/)
     expect(source).toMatch(/statusClass:\s*breakdown\.classKeys\.tier/)
     expect(source).toMatch(/displayStatusLabel:\s*breakdown\.displayStatusLabel/)
-    expect(source).toMatch(/riskLabel:\s*breakdown\.riskLabel/)
+    // 2026-09-10：8 类风险栏随分类层删除，riskLabel 占位为 '--'
+    expect(source).toMatch(/riskLabel:\s*'--'/)
     expect(source).toMatch(/currentStock\.displayStatusLabel/)
     expect(source).toMatch(/currentStock\.riskLabel/)
     expect(source).not.toMatch(/statusLabel:\s*status\.label/)

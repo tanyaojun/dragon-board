@@ -376,7 +376,7 @@ def _metrics_projection(result: dict[str, Any]) -> dict[str, Any]:
         "highGainCount": all_layer["highGainCount"],
         "riskShare": all_layer["riskShare"],
         "activeOpportunityShare": all_layer["activeOpportunityShare"],
-        "strongMoneyShare": all_layer["statusShares"]["强资确认"],
+        "strongMoneyShare": all_layer["strongMoneyShare"],
         "crowdedShare": all_layer["crowdedShare"],
         "layers": result["metrics"]["layers"],
         "comparison": comparison,

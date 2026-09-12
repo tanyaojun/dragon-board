@@ -712,3 +712,149 @@ class TestSnapshotCollectorScheduler:
         assert scheduler._last_error is None
         assert scheduler._last_error_at is None
         assert scheduler._last_error_slot is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Missed-slot visibility (fail-visible) — 2026-09-11 机器睡眠丢数据复盘
+#
+# 场景：机器 12:00 进入待机、19:02 唤醒，下午 6 个槽位跨过 grace 窗口且从未
+# 触发采集。旧实现把过期槽位静默标记完成（无 run 记录、无 last_error），
+# 数据无痕丢失。契约：唤醒后自检必须对「过期且未入库」的槽位写 blocked
+# run 记录（blockingIssues=["slot_missed_grace_window"]）并置 last_error，
+# 且同一槽位只写一次。
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class RunRecordingRepo(FakeRepo):
+    """FakeRepo with run-record capture for missed-slot assertions."""
+
+    inserted_runs: list = field(default_factory=list)
+
+    def insert_run(self, run: dict) -> None:
+        self.inserted_runs.append(dict(run))
+
+
+def _day_slot(slot_time: str, trading_date: str = "2026-06-15"):
+    ts = _ts_ms(
+        datetime.datetime.strptime(
+            f"{trading_date} {slot_time}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=TZ_SHANGHAI)
+    )
+    return make_test_slot(trading_date=trading_date, slot_time=slot_time, timestamp_ms=ts)
+
+
+class TestMissedSlotVisibility:
+    """_record_missed_slots_now：睡眠/冻结唤醒后的缺失槽位 fail-visible 自检。"""
+
+    @pytest.mark.asyncio
+    async def test_wakeup_after_freeze_records_missed_run_docs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now_ms = _ts_ms(datetime.datetime(2026, 6, 15, 19, 2, 0, tzinfo=TZ_SHANGHAI))
+        slots = [_day_slot("11:30"), _day_slot("13:00"), _day_slot("15:30")]
+        repo = RunRecordingRepo()
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
+        _patch_dispatch(monkeypatch, slots, repo=repo)
+        scheduler = _scheduler(monkeypatch)
+
+        await scheduler._record_missed_slots_now()
+
+        assert {r["snapshotId"] for r in repo.inserted_runs} == {s.snapshot_id for s in slots}
+        for run in repo.inserted_runs:
+            assert run["status"] == "blocked"
+            assert "slot_missed_grace_window" in (run.get("blockingIssues") or [])
+            assert run["datasetId"] == "test_dataset"
+            assert run["tradingDate"] == "2026-06-15"
+            assert run["snapshotType"] == "half_hour"
+        assert scheduler._last_error is not None
+        assert "grace window" in scheduler._last_error
+        assert scheduler._last_error_slot is not None
+        assert scheduler._error_count == len(slots)
+        assert {s.snapshot_id for s in slots} <= scheduler._completed_today
+
+    @pytest.mark.asyncio
+    async def test_missed_slots_recorded_only_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """idle recheck 反复唤醒时，同一缺失槽位不得重复写记录。"""
+        now_ms = _ts_ms(datetime.datetime(2026, 6, 15, 19, 2, 0, tzinfo=TZ_SHANGHAI))
+        slots = [_day_slot("13:00")]
+        repo = RunRecordingRepo()
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
+        _patch_dispatch(monkeypatch, slots, repo=repo)
+        scheduler = _scheduler(monkeypatch)
+
+        await scheduler._record_missed_slots_now()
+        first_count = len(repo.inserted_runs)
+        assert first_count == 1
+
+        await scheduler._record_missed_slots_now()
+        assert len(repo.inserted_runs) == first_count
+
+    @pytest.mark.asyncio
+    async def test_persisted_slots_not_recorded_missed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """已入库的过期槽位只标完成，不得误报缺失。"""
+        now_ms = _ts_ms(datetime.datetime(2026, 6, 15, 19, 2, 0, tzinfo=TZ_SHANGHAI))
+        slots = [_day_slot("13:00")]
+        repo = RunRecordingRepo(existing_snapshots={slots[0].snapshot_id})
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
+        _patch_dispatch(monkeypatch, slots, repo=repo)
+        scheduler = _scheduler(monkeypatch)
+
+        await scheduler._record_missed_slots_now()
+
+        assert repo.inserted_runs == []
+        assert slots[0].snapshot_id in scheduler._completed_today
+        assert scheduler._last_error is None
+
+    @pytest.mark.asyncio
+    async def test_slots_within_grace_not_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """grace 窗口内的槽位尚未过期，自检不得抢跑。"""
+        slot = _day_slot("13:00")
+        now_ms = slot.timestamp_ms + 2 * 60 * 1000  # 过期前 3 分钟
+        repo = RunRecordingRepo()
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
+        _patch_dispatch(monkeypatch, [slot], repo=repo)
+        scheduler = _scheduler(monkeypatch)
+
+        await scheduler._record_missed_slots_now()
+
+        assert repo.inserted_runs == []
+        assert slot.snapshot_id not in scheduler._completed_today
+
+    @pytest.mark.asyncio
+    async def test_in_flight_slots_not_recorded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """仍在采集中的槽位不得被误报缺失。"""
+        slot = _day_slot("13:00")
+        now_ms = slot.timestamp_ms + 10 * 60 * 1000  # 已超 grace，但采集还在跑
+        repo = RunRecordingRepo()
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date="2026-06-15")
+        _patch_dispatch(monkeypatch, [slot], repo=repo)
+        scheduler = _scheduler(monkeypatch)
+        scheduler._in_flight_slots.add(slot.snapshot_id)
+
+        await scheduler._record_missed_slots_now()
+
+        assert repo.inserted_runs == []
+
+    @pytest.mark.asyncio
+    async def test_non_trading_day_is_noop(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now_ms = _ts_ms(datetime.datetime(2026, 6, 14, 19, 2, 0, tzinfo=TZ_SHANGHAI))
+        repo = RunRecordingRepo()
+        _patch_clock(monkeypatch, now_ms=now_ms, trading_date=None)
+        _patch_dispatch(monkeypatch, [], repo=repo)
+        scheduler = _scheduler(monkeypatch)
+
+        await scheduler._record_missed_slots_now()
+
+        assert repo.inserted_runs == []
+        assert scheduler._last_error is None

@@ -5,11 +5,21 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.core.settings import get_settings
+from backend.data.cache import snapshot_cache
 from backend.data.repositories import repository_factory
 from backend.services.theme.hotlist_sentiment_service import get_hotlist_sentiment_service
 
 
 router = APIRouter(prefix="/api/hotlist-sentiment", tags=["hotlist-sentiment"])
+
+# 读口缓存版本号：响应结构变化时递增，避免旧结构响应被命中（2026-09-10 新增）
+_SERIES_CACHE_VERSION = "v1"
+
+
+def _series_cache_key(dataset_id: str, snapshot_type: str, days: int) -> str:
+    prefix = get_settings().redis_key_prefix.strip(":")
+    return f"{prefix}:hotlist:sentiment:series:{dataset_id}:{snapshot_type}:{days}:{_SERIES_CACHE_VERSION}"
 
 
 class HotListSentimentPayload(BaseModel):
@@ -51,7 +61,29 @@ def get_hotlist_sentiment_series(
     snapshot_type: str = "half_hour",
     days: int = 3,
 ) -> dict[str, Any]:
+    """EOD 情绪序列读口：**Redis TTL 缓存 + 数据依赖失效**（2026-09-10）。
+
+    此前该读口每次请求直读 MongoDB，最新交易日还可能触发 lazy compute
+    （单日 analyze 级重算）——用户要求读口统一走 Redis TTL 缓存。
+
+    缓存要点：
+
+    - 命中即返回，响应标注 ``cache.hit``（可观测，不静默掩盖数据来源）；
+    - **只缓存 ``ok=True`` 的成功响应**：降级/异常响应不缓存，避免把"MongoDB 不可用"
+      固化成"看起来正常的历史序列"（fail-visible）；
+    - TTL = ``QUANT_BOARD_HOTLIST_SENTIMENT_CACHE_TTL_SECONDS``（默认 60s）；
+    - 依赖注册到 ``<prefix>:snapshot:index:dataset:<dataset_id>``：**任何**快照写入
+      （ingest 路由或 collector 直写，统一经数据层 after-save 钩子）与 hotlist 重算
+      都会立即失效本缓存，无需等 TTL 过期。
+    """
     capped_days = max(1, min(int(days), 30))
+    settings = get_settings()
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    cache_key = _series_cache_key(dataset_id, snapshot_type, capped_days)
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return {**cached, "cache": {"hit": True, "store": "redis"}}
+
     try:
         db = repository_factory.get_runtime_mongodb_database()
     except Exception as exc:
@@ -59,6 +91,22 @@ def get_hotlist_sentiment_series(
     try:
         from backend.services.theme.hotlist_sentiment_compute import HotListSentimentComputeService
 
-        return HotListSentimentComputeService(db).ensure_series(dataset_id, snapshot_type, capped_days)
+        response = HotListSentimentComputeService(db).ensure_series(dataset_id, snapshot_type, capped_days)
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"series_compute_failed: {exc}", "items": []}
+
+    if response.get("ok"):
+        response = {**response, "cache": {"hit": False, "store": "mongodb"}}
+        cache.set_response(
+            cache_key,
+            response,
+            ttl_seconds=settings.hotlist_sentiment_cache_ttl_seconds,
+        )
+        cache.register_dependencies(
+            cache_key,
+            snapshot_cache.build_snapshot_cache_index_keys(
+                prefix=settings.redis_key_prefix,
+                dataset_id=dataset_id,
+            ),
+        )
+    return response

@@ -82,7 +82,7 @@ cd quant-board
 - 空 formal snapshot 补行
 - `snapshot_record` 缺失补造
 - frame `stockRowCount/sectorRowCount` 漂移修正
-- 缺失盘后固定价格交易槽位时补造：`quarter_hour` 新增 `15:15`，`half_hour` 新增 `15:30`，`daily` 的唯一终值槽调整为 `15:30`；`hourly` 槽位不变。补造优先同粒度最近 donor，必要时允许显式跨粒度 donor。
+- 缺失盘后固定价格交易槽位时补造：`quarter_hour` 新增 `15:15`，`daily` 的唯一终值槽调整为 `15:30`；`hourly` 槽位不变。`half_hour` 曾含 `15:30`，2026-09-11 起止于 `15:00`（单日 10 槽），15:30 收盘定格值由 `daily` 独占。补造优先同粒度最近 donor，必要时允许显式跨粒度 donor。
 - runtime MongoDB 缺失索引补回
 
 验收命令：
@@ -962,7 +962,17 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，当前
 
 同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。MongoDB 模式不再登记 Supabase outbox，也不通过 `push-backup` 补偿。
 
-MongoDB 生产态下，ingest 成功后会**后台**（FastAPI `BackgroundTasks`，不阻塞响应）对每个 frame 执行 `analyze_snapshot_and_persist`，把 `observation/displayStatus/meta/resonance` 写入 `snapshot_analysis`，供 `GET /api/snapshots/analysis` 读取（稳定回放口径）。失败静默（不吞数据、不阻塞 ingest），后续可手动补跑或依赖下次 ingest。
+快照写入成功后的**后处理统一由数据层钩子触发**（2026-09-10 重构，见 `backend/data/repositories/snapshot_post_save.py` 与 `backend/services/snapshot_post_save_hooks.py`）：`save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）在返回前调用注册的钩子，默认钩子为 **① 快照缓存失效**、**② analyze 产物落库**（`observation/displayStatus/meta/resonance/cycle` 写入 `snapshot_analysis`，供 `GET /api/snapshots/analysis` 读取）。钩子异常只记 warning，绝不影响写库结果，也不改写库返回值。
+
+**为什么改成数据层触发**：该写库方法有两条调用路径（本 ingest 路由 与 `snapshot_collector` 直写库），after-save 后处理原先**各写一份、从未对齐** —— 2026-07-28 审计已发现"缓存失效只在 ingest 侧"（`docs/ranktrend/2026-07-28-resonance-chain-audit-findings.md:151`），当时打的是单点补丁；2026-08-23 新增 analyze 持久化时又踩同一个坑（只挂本路由 → `snapshot_analysis` 空了一个多月，2026-09-10 才发现，热榜情绪面板 `displayStatus` join 恒为 0、8 类分布 100% 走 fallback 旧口径）。下移到数据层后，**任何写库路径都自动获得同样的后处理**，不可能再"只加在一边"。
+
+**analyze 落库的细节**：
+
+- 由 `backend/snapshot_collector/analysis_worker.py` 的**进程内单工作线程 + 有界队列**（`QUEUE_MAXSIZE=8`）执行：提交只入队（O(1)），单帧约 18~30s CPU 在后台跑，不阻塞写库/采集，也不阻塞 8001 事件循环（行情/热榜刷新同进程）；
+- **失败不阻断**：异常只记 `logging.warning` 并计入 `analysis_worker.stats()`（`/api/health` 的 `snapshotCollector.background.analysisWorker` 可见：`submitted/written/failed/dropped`）；`deduped` 帧跳过（补历史用 CLI `snapshot-analysis-backfill`）；
+- **不是独立进程/计划任务**（`AGENTS.md` §11 要求集成到主进程生命周期）；8001 退出时由 `collector_main.lifespan` 调 `analysis_worker.shutdown()` 优雅排空（线程为 daemon）；
+- **开关**：环境变量 `QUANT_BOARD_SNAPSHOT_ANALYSIS_ENABLED`，默认 `1`（开启）；置 `0` 关闭；
+- `current_frame` 直接用该 bundle 的 `stockRows` 组装（含 `stocks`，`ranktrend_routes` 依赖 `current_frame["stocks"]`），无需回查库。
 
 正式快照入库要求每个非 `five_minute` frame 至少有一条股票行。若 v4 bundle 中的 `items/records` 热榜为空，或显式 `stockRows` 缺失导致正式 frame 无股票行，接口返回 400，错误信息包含 `formal snapshot hotlist is empty`。历史导入数据中已经存在的空热榜快照仍由回测质量门禁和运行时过滤处理，不通过该正式写入口继续新增。
 
@@ -970,13 +980,17 @@ MongoDB 不可用时接口必须结构化失败，不回退 Supabase/SQLite 并�
 
 ### `GET /api/snapshots/analysis`
 
-读取后端持久化的 **analyze 产物**（`observation/displayStatus/meta/resonance`），供**历史回放/对比**（当前帧仍保留实时 analyze）。仅 MongoDB 生产态有效；非 MongoDB 返回 `degraded=true` 且 `analysis={}`。
+读取后端持久化的 **analyze 产物**（**顶层字段全集**：`observation` / `resonance` / `technical` / `risk` / `strategy` / `executionStrategy` / `jump` / `decision` / `cycle` / `meta` / `displayStatus` / `themeMomentum` —— 2026-09-10 起不再裁剪落库），供**历史回放/对比**（当前帧仍保留实时 analyze）。仅 MongoDB 生产态有效；非 MongoDB 返回 `degraded=true` 且 `analysis={}`。
 
 ```powershell
 Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/analysis?dataset_id=dragonboard_live&snapshot_id=half_hour%3A2026-04-21%3A10%3A00'
 ```
 
-查询参数：`dataset_id`、`snapshot_id` 必填；`codes` 可选（逗号分隔，缺省返回该快照全部）。返回 `{ ok, dataset_id, snapshot_id, analysis: { code: { observation, displayStatus, meta, resonance } } }`。该数据由 `POST /api/snapshots/ingest` 后台触发 `analyze_snapshot_and_persist` 写入（MongoDB 生产态），属稳定回放口径。
+查询参数：`dataset_id`、`snapshot_id` 必填；`codes` 可选（逗号分隔，缺省返回该快照全部）。返回 `{ ok, dataset_id, snapshot_id, analysis: { code: {…12 个顶层字段} } }`。
+
+其中 **`displayStatus` 是 `cycle.stage` 的纯投影**（2026-09-10）：`{stage, label, tooltip}`，`stage` 为 5 态之一或 `null`（缺失/非法 → `label="无阶段"`）。**不再有 8 类 label/classKey**；阶段缺失直接体现为 EOD 文档的 `stageCounts.unknown`，`statusSourceCounts.stageMissing` 已删除（详见 `docs/ranktrend/lifecycle-layering-contract.md` 与 `docs/superpowers/specs/2026-09-10-displaystatus-stage-projection-design.md`）。
+
+写入路径：快照入库后的**数据层 after-save 钩子**统一触发（ingest 路由与 collector 直写两条路径一致），属稳定回放口径；历史帧用 `snapshot-analysis-backfill` 补跑（**旧文档字段更少且仍是 8 类投影，必须重跑才切到新结构**）。`cycle` 必须一并落库 —— join 侧与 `stageCounts` 都读 `analysis.cycle.stage`。
 
 ### `GET /api/snapshots/frames`
 
@@ -2621,6 +2635,126 @@ max_drawdown: -0.08
   ]
 }
 ```
+
+### `snapshot-analysis-backfill`
+
+对**已入库的帧**补跑 golden analyze，把 analyze **顶层字段全集**（`ANALYSIS_PERSIST_FIELDS`：
+`observation` / `resonance` / `technical` / `risk` / `strategy` / `executionStrategy` / `jump` /
+`decision` / `cycle` / `meta` / `displayStatus` / `themeMomentum`）幂等写入 `snapshot_analysis`
+（MongoDB 以 `(dataset_id, snapshot_id, code)` 为唯一键）。
+
+**为什么需要它**：analyze 产物原本只由 `POST /api/snapshots/ingest` 的后台任务写入，而日常采集走
+`snapshot_collector` 直写库、**绕过该路由** → `snapshot_analysis` 长期为空（2026-09-10 实测 0 文档），
+热榜情绪面板的 `displayStatus` join 恒为 0、8 类分布 100% 走 fallback 旧口径。（该触发点已于同日
+**下移到数据层 after-save 钩子**，两条写入路径自动一致；本命令用于补齐历史。）
+
+**2026-09-10 字段补齐**：此前只落 5 个字段（`observation/displayStatus/meta/resonance/cycle`），
+而 `technical`（macd/movingAverage/momentumScore/crossSection/signals）、`risk`、`strategy`、
+`executionStrategy`、`jump`、`decision`、`themeMomentum` 全部丢失 → 读口只能拿到残缺分析。
+四信号中「共振」= `resonance`（顶层）、「趋势」= `observation.rankTrend`、「横截面」=
+`observation.crossSection`、「量价」= `observation.volumePrice`，后三者随 `observation` 落库。
+**已存在的旧文档仍只有 5 字段**，必须重跑本命令才会补齐。
+
+**2026-09-10 零兜底补全（用户裁决 B）**：部分股票在整个历史窗口内没有有效 `avgRankNum`
+（八平台均榜排名）→ 建不起 attention 序列 → 被 `_analyze_frames` 的 gate 跳过（
+`if not bars or pos is None: continue`）→ 原本**不落库** → hotlist join 取不到 `displayStatus`
+→ 落旧口径 `fallback` 兜底（实测 `2026-07-06`：该帧 205 行只有 187 份 analyze，差 18 只，
+正好等于 `fallback: 18`）。全库约 1/5 的 `snapshot_stock_rows` 无有效 `avgRankNum`
+（625,218 行中仅 490,974 行 `> 0`），所以兜底靠"补算"永远消不掉。
+
+现在 `compute_snapshot_analysis` 对此类行**补一条落库 entry**：`meta.sampleQuality.status=insufficient`
++ `observation.status=insufficient` + 由 `compute_display_status` 第 1 步样本质量门产出的
+`displayStatus`（8 类中的「样本不足」，**不新增类目**）。效果：
+
+- 每帧 `snapshot_analysis` 覆盖该帧**全部股票行** → hotlist join 100% 命中 → `fallback` 归零；
+- **不伪造结论**（不编造 stage / 趋势 / 量价），"算不出来"仍 fail-visible（label + tooltip +
+  8 类计数都看得到），未被静默、未被伪装成别的状态；
+- **不动 golden 在线链路**：`POST /api/ranktrend/analyze`（前端实时 analyze）口径不变，
+  改动只在落库侧 `compute_snapshot_analysis`；
+- 无帧 / 无输出时也整帧落「样本不足」，不再静默返回 0 条。
+
+实测（`half_hour:2026-07-06:14:00` dry-run）：205 行 → **205 entries、0 行无 label**，
+label 分布 `转弱预警 165 / 样本不足 38 / 高位拥挤 2`（其中 18 只来自本次补全，20 只是引擎
+自身判定的样本不足，`165 + 38 + 2 = 205` 与 `fallback: 0` 严格一致）。
+
+**旧文档既只有 5 字段、也不含补全行**，必须重跑本命令才会同时补齐两者。
+
+```powershell
+# 单帧验证（dry-run，默认不写库）
+.\.venv\Scripts\python.exe -m backend.cli snapshot-analysis-backfill `
+  --dataset-id dragonboard_live --snapshot-type half_hour --limit 1
+
+# 全量历史回填（4 种帧类型；已算过的帧会重算，幂等、可重复执行）
+.\.venv\Scripts\python.exe -m backend.cli snapshot-analysis-backfill `
+  --dataset-id dragonboard_live `
+  --snapshot-type half_hour --snapshot-type quarter_hour --snapshot-type hourly --snapshot-type daily `
+  --start-date 2026-01-01 --limit 0 --workers 6 --apply
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 否 | 默认 `dragonboard_live` |
+| `--snapshot-type` | 否 | 可重复或逗号分隔；默认 `half_hour` |
+| `--limit` | 否 | 补跑最近 N 帧（按 `tradingDate`+`slotTime` 倒序），默认 `1`；`0` = 不限（需配合 `--start-date`） |
+| `--start-date` | 否 | `YYYY-MM-DD` 下界（含当日），用于按日期范围回填、断点续跑 |
+| `--workers` | 否 | 并行进程数，默认 `1`（串行）。全量回填用 `6~8`；进度写 stderr，stdout 保持纯 JSON。子进程自建 Mongo 连接（spawn context），单帧失败只标记该帧 `written=0` + `reason`，不阻断整批 |
+| `--apply` | 否 | **不传为 dry-run**（只算不写）；传了才写库 |
+
+**注意**：analyze 的 `current_frame` 必须是**含 stocks 行的帧**，而 `snapshot_frames` 文档只有
+`stockRowCount` → 本命令从 `snapshot_stock_rows` 组装。单帧全市场 analyze 约 20~40s CPU；
+全量历史（~2800 帧）串行需十几小时，`--workers 6` 约 3 小时。
+
+### `hotlist-sentiment-recompute`
+
+强制重算并**覆盖**指定交易日（默认最新交易日）的 `hotlist_sentiment` EOD 文档。
+
+**为什么需要它**：series 读口只对**最新**交易日 lazy compute —— 已持久化文档不会被重算，
+因此补跑 analyze 之后必须重算，新的 `displayStatus` join 与 `statusSourceCounts` 才会生效。
+重算前旧文档会写入 `hotlist_sentiment_recompute_backup`（新集合）以便回滚；重算写库后会
+**立即失效** `GET /api/hotlist-sentiment/series` 的读口缓存。
+
+```powershell
+# 全量历史重算（全部交易日；消除 fallback 兜底口径）
+.\.venv\Scripts\python.exe -m backend.cli hotlist-sentiment-recompute `
+  --dataset-id dragonboard_live --snapshot-type half_hour --days 0 --apply
+
+# 最近 10 个交易日
+.\.venv\Scripts\python.exe -m backend.cli hotlist-sentiment-recompute `
+  --dataset-id dragonboard_live --snapshot-type half_hour --days 10 --apply
+```
+
+参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `--dataset-id` | 否 | 默认 `dragonboard_live` |
+| `--snapshot-type` | 否 | 默认 `half_hour` |
+| `--trading-date` | 否 | `YYYY-MM-DD`；给了它则忽略 `--days` |
+| `--days` | 否 | 重算最近 N 个交易日；**`0` = 全部交易日**；默认 `1` |
+| `--apply` | 否 | **不传为 dry-run**（只算不写） |
+
+输出为 before/after 摘要（`statusSourceCounts` / `stageCounts` / `stage`）。
+
+**读口缓存（2026-09-10）**：`GET /api/hotlist-sentiment/series` 现在走 Redis TTL 缓存 —— key 为
+`<prefix>:hotlist:sentiment:series:<dataset_id>:<snapshot_type>:<days>:v1`，TTL 由
+`QUANT_BOARD_HOTLIST_SENTIMENT_CACHE_TTL_SECONDS` 控制（默认 60s），命中时响应带
+`cache.hit=true`。缓存**只存 `ok=true` 的成功响应**（降级/异常响应不入缓存，fail-visible），并注册
+依赖到 `<prefix>:snapshot:index:dataset:<dataset_id>` —— **任何**快照写入（ingest 路由或 collector
+直写，统一经数据层 after-save 钩子）**或**本命令重算都会立即失效它，不必等 TTL 过期。
+
+**读口缓存（2026-09-12）**：`GET /api/research/theme-summary` 同口径走 Redis TTL 缓存 —— key 为
+`<prefix>:research:theme-summary:<dataset_id>:<snapshot_type>`，TTL 由
+`QUANT_BOARD_THEME_RESEARCH_SUMMARY_CACHE_TTL_SECONDS` 控制（默认 600s）。背景：该读口每次
+请求全量 `load_frame_bundles(limit=200)` + ThemeTrend 引擎重放（实测 8~18s），前端超时必然
+abort。缓存**只存 `available=true` 的成功响应**（降级/异常不入缓存），依赖注册与失效口径与
+series 读口相同（任何快照写入立即失效）。
+
+**上线核对口径（2026-09-10 实测）**：`displayStatus=235 / fallback=0 / stageMissing=0`，
+且 8 类分布与 5 态严格对账 —— `转弱预警 220`（=`cooling 213 − 强资确认 5` + `reversal 12`）、
+`强资确认 5`（cooling 中强资金+量能承接）、`高位拥挤 3` + `样本不足 6`（= `crowded 9`）、
+`点火观察 1`（= `ignition 1`）。
 
 ### `snapshot-collector-audit`
 

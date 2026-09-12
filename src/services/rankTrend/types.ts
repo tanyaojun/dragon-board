@@ -352,6 +352,29 @@ export interface RankTrendAnalysisResult {
   strategy?: RankTrendStrategyResult
   // V5 执行层分层，镜像 Python candidateTierMode=execution 的热榜情绪融合语义。
   executionStrategy?: RankTrendStrategyResult
+  /**
+   * 展示状态（2026-09-10 口径统一）：后端 Python `compute_display_status` 生产
+   * （lifecycle.stage 主轴），前端只消费不分类；缺失（旧缓存/离线）时 statusClassifier
+   * 返回结构化未知态。
+   *
+   * 注意：与 `apiService.SnapshotAnalysisEntry.displayStatus` 是同形状的**两处定义**
+   * （后者三字段全可选，供 `/api/snapshots/analysis` 读口）。将来把
+   * `loadSnapshotAnalysis` 接进 `stock.rankTrend` 时必须复用同一类型，避免丢字段。
+   */
+  displayStatus?: RankTrendDisplayStatus
+}
+
+/**
+ * 后端 displayStatus 三字段投影（单一来源：`compute_display_status`，2026-09-10 spec §3）。
+ * 前端只消费，不自维护词表（历史教训：本目录曾有自己的 CYCLE_LABELS 用"降温"，
+ * 而 DataTable 用"冷却"，同一状态两套词）。
+ */
+export interface RankTrendDisplayStatus {
+  /** 生命周期 5 态之一；缺失/非法为 `null`（此时 label 为"无阶段"）。 */
+  stage: string | null
+  /** `stage` 的展示词（后端 `STAGE_LABELS`）；`stage` 为 `null` 时为"无阶段"。 */
+  label: string
+  tooltip: string
 }
 
 export const ATTENTION_STAGE_SEQUENCE: AttentionStage[] = [

@@ -17,7 +17,8 @@ from .models import SnapshotSlot
 # Matches the design document and the frontend schedule.
 #
 # quarter_hour: 19 slots  (09:30-11:30 + 13:00-15:15)
-# half_hour:    11 slots (including 15:30 Shanghai fixed-price after-hours)
+# half_hour:    10 slots (intraday series ends at 15:00 close fixing; the
+#               15:30 post-close value is daily-only — 2026-09-11 口径)
 # hourly:        5 slots
 # daily:         1 slot  (15:30 post-close value)
 
@@ -37,7 +38,6 @@ SLOT_TIMES: dict[str, list[str]] = {
         "13:00", "13:30",
         "14:00", "14:30",
         "15:00",
-        "15:30",
     ],
     "hourly": [
         "10:00", "11:00",

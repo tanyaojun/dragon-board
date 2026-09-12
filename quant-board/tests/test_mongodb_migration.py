@@ -472,12 +472,13 @@ def test_verify_mongodb_migration_detects_missing_half_hour_close_slot_without_d
     result = verify_mongodb_migration(fake_db, dataset_id="dragonboard_live", snapshot_type="half_hour")
 
     assert result["ok"] is False
+    # 2026-09-11 口径：half_hour 收盘定格槽为 15:00（15:30 收盘值由 daily 独占）
     assert result["continuity"]["missingSlots"] == [
         {
-                "snapshotId": "half_hour:2026-06-10:15:30",
+                "snapshotId": "half_hour:2026-06-10:15:00",
             "type": "half_hour",
             "tradingDate": "2026-06-10",
-                "slotTime": "15:30",
+                "slotTime": "15:00",
             "actualSlots": ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"],
         }
     ]

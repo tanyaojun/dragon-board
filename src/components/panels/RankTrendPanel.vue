@@ -331,12 +331,7 @@ import * as echarts from 'echarts'
 import { usePanel } from '@/composables/usePanel'
 import { dataLayer } from '@/services/DataLayer'
 import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
-import {
-  buildRankTrendStatusContext,
-  buildRankTrendStatusContextFromMarketPercentiles,
-  getRankTrendDisplayBreakdown,
-  type RankTrendStatusContext,
-} from '@/services/rankTrend/compat'
+import { getRankTrendDisplayBreakdown } from '@/services/rankTrend/compat'
 import {
   buildRankTrendSnapshotPriority,
   cloneDefaultRankTrendRuntimeConfig,
@@ -671,14 +666,13 @@ function buildPanelStockView(
   stock: any,
   analysis: RankTrendResult | null,
   rank: number,
-  statusContext?: RankTrendStatusContext,
 ): PanelStockView {
   const strategy = analysis?.strategy
   const technical = analysis?.technical
   const cycle = analysis?.cycle
   const risk = analysis?.risk
   const finalSignal = (analysis?.decision?.final?.signal ?? stock?.finalSignal ?? 'hold') as Signal
-  const breakdown = getRankTrendDisplayBreakdown(analysis, stock, statusContext)
+  const breakdown = getRankTrendDisplayBreakdown(analysis)
 
   return {
     code: normalizeCode(stock?.code),
@@ -710,7 +704,8 @@ function buildPanelStockView(
     statusLabel: breakdown.tierLabel,
     statusClass: breakdown.classKeys.tier,
     displayStatusLabel: breakdown.displayStatusLabel,
-    riskLabel: breakdown.riskLabel,
+    // 2026-09-10：8 类风险栏已随分类层删除（风险由周期 stage 与行内 tooltip 表达）
+    riskLabel: '--',
     qualityLabel: breakdown.qualityLabel,
     cycleLabel: breakdown.cycleLabel,
     tier: String(strategy?.candidateTier ?? 'N_NEUTRAL'),
@@ -781,10 +776,7 @@ async function loadStock(force = false) {
     const analysis = results.get(code) ?? (sourceStock.rankTrend as RankTrendResult | undefined) ?? null
     const rank = rankMap.get(code) ?? Number(sourceStock.compRank ?? 0)
 
-    const statusContext =
-      buildRankTrendStatusContextFromMarketPercentiles(analysis?.meta?.marketPercentiles) ??
-      buildRankTrendStatusContext(stocks)
-    currentStock.value = buildPanelStockView(sourceStock, analysis, rank, statusContext)
+    currentStock.value = buildPanelStockView(sourceStock, analysis, rank)
     breathData.value = dataLayer.getBreathData()
     const sampleQuality = analysis?.meta?.sampleQuality
     const runtimeSummary = `${runtimeConfig.macdFast}/${runtimeConfig.macdSlow}/${runtimeConfig.macdSignal}`

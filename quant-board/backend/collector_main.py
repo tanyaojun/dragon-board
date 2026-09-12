@@ -107,8 +107,28 @@ async def _acquire_lock_with_retry(
     return False
 
 
-async def _catchup_missing_slots(settings: Any) -> None:
-    """当日缺槽自动补采：错过 grace 窗口且尚未入库的槽位用当日数据补上。"""
+_CLOSE_BACKFILL_MIN_SLOT_TIME = "15:00"
+
+
+class _CatchupState:
+    """缺失补采循环的跨轮状态：已成功补采的槽位与当前交易日。"""
+
+    def __init__(self) -> None:
+        self.attempted: set[str] = set()
+        self.last_date: str | None = None
+
+
+async def _catchup_cycle(settings: Any, state: _CatchupState) -> None:
+    """单轮缺失补采（由 _catchup_missing_slots 每 15 分钟驱动一次）。
+
+    - 采集窗口内（09:00-16:00）：所有过期未入库槽位均可补采。
+    - 收盘后（16:00 至次日 09:00）：行情已定格，仅补 15:00 及之后的收盘类
+      槽位（half_hour 15:00 / daily 15:30，回填不失真）；盘中槽不补——用收盘价
+      伪造盘中数据会失真（2026-09-11 复盘：机器待机 7 小时，唤醒后旧实现
+      对缺失槽位完全不作为）。
+    - attempted 仅在成功（completed/deduped）后登记：blocked/failed 的
+      槽位下一轮重试（blocked 已由 service 写入 run 记录，缺失保持可见）。
+    """
     from backend.snapshot_collector.models import CollectorRunRequest
     from backend.snapshot_collector.service_factory import (
         create_snapshot_collector_repository,
@@ -121,68 +141,82 @@ async def _catchup_missing_slots(settings: Any) -> None:
         trading_date_from_ts,
     )
 
-    attempted: set[str] = set()
-    last_date: str | None = None
+    now_ts = int(time.time() * 1000)
+    in_window = is_in_collect_window(
+        datetime.fromtimestamp(now_ts / 1000, TZ_SHANGHAI)
+    )
+    trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
+    if not trading_date:
+        return
+    if state.last_date != trading_date:
+        state.last_date = trading_date
+        state.attempted.clear()
+    grace_ms = settings.snapshot_collector_close_grace_minutes * 60 * 1000
+    types = [
+        t.strip()
+        for t in settings.snapshot_collector_types.split(",")
+        if t.strip()
+    ]
+    repo = await asyncio.to_thread(create_snapshot_collector_repository)
+    missing: list[Any] = []
+    for slot in generate_slots(trading_date, types):
+        if slot.snapshot_id in state.attempted:
+            continue
+        if slot.timestamp_ms + grace_ms >= now_ts:
+            continue  # 调度器仍在处理或未到期，不抢
+        # 收盘后只补收盘定格槽位；盘中槽交给人工决策（失真数据不入库）。
+        if not in_window and slot.slot_time < _CLOSE_BACKFILL_MIN_SLOT_TIME:
+            continue
+        exists = await asyncio.to_thread(
+            repo.snapshot_exists,
+            settings.snapshot_collector_dataset_id,
+            slot.snapshot_id,
+        )
+        if not exists:
+            missing.append(slot)
+    if not missing:
+        return
+    service = await asyncio.to_thread(create_snapshot_collector_service, repo)
+    for slot in missing:
+        try:
+            result = await service.arun_once(
+                CollectorRunRequest(
+                    dataset_id=settings.snapshot_collector_dataset_id,
+                    snapshot_type=slot.snapshot_type,
+                    trading_date=slot.trading_date,
+                    slot_time=slot.slot_time,
+                    dry_run=False,
+                    force=False,
+                )
+            )
+            if result.status in ("completed", "deduped"):
+                state.attempted.add(slot.snapshot_id)
+                logger.warning(
+                    "catch-up: %s -> %s (%s)",
+                    slot.snapshot_id,
+                    result.status,
+                    result.message,
+                )
+            else:
+                # 失败不登记 attempted：下一轮重试；blocked 的 run 记录由
+                # service 落库，缺失与原因保持可见（fail-visible）。
+                logger.warning(
+                    "catch-up: %s -> %s (%s); will retry next cycle",
+                    slot.snapshot_id,
+                    result.status,
+                    result.message,
+                )
+        except Exception:
+            logger.exception("catch-up failed: %s", slot.snapshot_id)
+
+
+async def _catchup_missing_slots(settings: Any) -> None:
+    """当日缺槽自动补采循环：每 15 分钟执行一轮 _catchup_cycle。"""
+    state = _CatchupState()
     while True:
         await asyncio.sleep(900)  # 每 15 分钟检查一次
         try:
-            now_ts = int(time.time() * 1000)
-            # 非采集窗口（收盘后至次日 09:00）：当日槽位已定格，不补采，
-            # 避免收盘后继续用实时行情回填历史槽位。
-            if not is_in_collect_window(
-                datetime.fromtimestamp(now_ts / 1000, TZ_SHANGHAI)
-            ):
-                continue
-            trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
-            if not trading_date:
-                continue
-            if last_date != trading_date:
-                last_date = trading_date
-                attempted.clear()
-            grace_ms = settings.snapshot_collector_close_grace_minutes * 60 * 1000
-            types = [
-                t.strip()
-                for t in settings.snapshot_collector_types.split(",")
-                if t.strip()
-            ]
-            repo = await asyncio.to_thread(create_snapshot_collector_repository)
-            missing: list[Any] = []
-            for slot in generate_slots(trading_date, types):
-                if slot.snapshot_id in attempted:
-                    continue
-                if slot.timestamp_ms + grace_ms >= now_ts:
-                    continue  # 调度器仍在处理或未到期，不抢
-                exists = await asyncio.to_thread(
-                    repo.snapshot_exists,
-                    settings.snapshot_collector_dataset_id,
-                    slot.snapshot_id,
-                )
-                if not exists:
-                    missing.append(slot)
-            if not missing:
-                continue
-            service = await asyncio.to_thread(create_snapshot_collector_service, repo)
-            for slot in missing:
-                attempted.add(slot.snapshot_id)
-                try:
-                    result = await service.arun_once(
-                        CollectorRunRequest(
-                            dataset_id=settings.snapshot_collector_dataset_id,
-                            snapshot_type=slot.snapshot_type,
-                            trading_date=slot.trading_date,
-                            slot_time=slot.slot_time,
-                            dry_run=False,
-                            force=False,
-                        )
-                    )
-                    logger.warning(
-                        "catch-up: %s -> %s (%s)",
-                        slot.snapshot_id,
-                        result.status,
-                        result.message,
-                    )
-                except Exception:
-                    logger.exception("catch-up failed: %s", slot.snapshot_id)
+            await _catchup_cycle(settings, state)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -270,6 +304,16 @@ async def lifespan(app: FastAPI):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        # 采集链路 analyze worker 优雅停止（2026-09-10）：先等队列排空再退进程，
+        # 避免已采集帧的分析被丢掉（超时则放弃等待；worker 线程为 daemon，不阻塞退出）。
+        try:
+            from backend.snapshot_collector.analysis_worker import (
+                shutdown as shutdown_analysis_worker,
+            )
+
+            await asyncio.to_thread(shutdown_analysis_worker, 30.0)
+        except Exception:
+            logger.exception("failed to stop snapshot analysis worker")
         await snapshot_collector_scheduler.stop()
         await market_fund_scheduler.stop()
         await stop_hotlist_refresh()
@@ -280,6 +324,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="QuantBoard Snapshot Collector", lifespan=lifespan)
+
+# after-save 钩子注册（2026-09-10）：8001 进程同样注册，保证 collector 直写库路径与 ingest
+# 路由的快照后处理（缓存失效 + analyze 产物落库）由同一处（数据层 `save_snapshot_ingest`）触发。
+# 在**模块导入时**注册（而非 lifespan）：不依赖 startup/lifespan 是否被执行。
+try:
+    from backend.services.snapshot_post_save_hooks import (
+        register_default_snapshot_post_save_hooks,
+    )
+
+    register_default_snapshot_post_save_hooks()
+except Exception:
+    logger.exception("snapshot post-save hooks registration failed; continue startup")
 
 from backend.api.snapshot_collector_routes import router as snapshot_collector_router
 
@@ -411,4 +467,19 @@ def _background_task_status() -> dict[str, Any]:
         }
     except Exception as exc:
         result["limitup"] = {"ok": False, "error": str(exc)[:200]}
+    try:
+        # 采集链路 analyze worker 状态（2026-09-10）：submitted/written/failed/dropped 可见，
+        # 便于核对"新帧是否真的产出了 displayStatus"（fail-visible，不做质量阻断）。
+        from backend.snapshot_collector.analysis_worker import (
+            analysis_enabled,
+            stats as analysis_worker_stats,
+        )
+
+        result["analysisWorker"] = {
+            "ok": True,
+            "enabled": analysis_enabled(),
+            **analysis_worker_stats(),
+        }
+    except Exception as exc:
+        result["analysisWorker"] = {"ok": False, "error": str(exc)[:200]}
     return result

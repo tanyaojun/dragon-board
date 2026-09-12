@@ -1896,7 +1896,127 @@ def build_parser() -> argparse.ArgumentParser:
     field_backfill_cmd.add_argument("--limit", default="0")
     field_backfill_cmd.set_defaults(func=cmd_snapshot_field_backfill)
 
+    analysis_backfill_cmd = sub.add_parser(
+        "snapshot-analysis-backfill",
+        help="Backfill snapshot_analysis (analyze 全字段) for frames; default dry-run",
+    )
+    analysis_backfill_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    analysis_backfill_cmd.add_argument("--snapshot-type", action="append", default=None)
+    analysis_backfill_cmd.add_argument("--limit", type=int, default=1, help="recent frames to backfill (newest first); 0 = unlimited when --start-date is given")
+    analysis_backfill_cmd.add_argument("--start-date", default=None, help="YYYY-MM-DD lower bound (inclusive) for date-range backfill")
+    analysis_backfill_cmd.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="parallel worker processes (default 1 = serial). 单帧约 20~40s CPU；全量历史回填请用 6~8",
+    )
+    analysis_backfill_cmd.add_argument("--apply", dest="apply", action="store_true")
+    analysis_backfill_cmd.set_defaults(func=cmd_snapshot_analysis_backfill, apply=False)
+
+    sentiment_recompute_cmd = sub.add_parser(
+        "hotlist-sentiment-recompute",
+        help="Force recompute (overwrite) hotlist_sentiment EOD documents; default dry-run",
+    )
+    sentiment_recompute_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    sentiment_recompute_cmd.add_argument("--snapshot-type", default="half_hour")
+    sentiment_recompute_cmd.add_argument("--trading-date", default=None, help="YYYY-MM-DD; overrides --days when given")
+    sentiment_recompute_cmd.add_argument(
+        "--days",
+        type=int,
+        default=1,
+        help="recompute the latest N trading days; 0 = ALL trading days (全量历史重算)",
+    )
+    sentiment_recompute_cmd.add_argument("--apply", dest="apply", action="store_true")
+    sentiment_recompute_cmd.set_defaults(func=cmd_hotlist_sentiment_recompute, apply=False)
+
     return parser
+
+
+def cmd_snapshot_analysis_backfill(args: argparse.Namespace) -> None:
+    """补跑 snapshot_analysis（analyze 顶层字段全集）；默认 dry-run，--apply 才写库。
+
+    背景：analyze 持久化只挂 ingest 路由，而日常采集由 collector 直写库 → 集合长期为空。
+    ``--workers > 1`` 时按帧并行（进程池），用于全量历史回填。
+    """
+    from backend.data.repositories import repository_factory
+    from backend.services.snapshot_analysis_backfill import (
+        backfill_frames,
+        normalize_snapshot_types,
+        select_recent_frames,
+    )
+
+    try:
+        snapshot_types = normalize_snapshot_types(args.snapshot_type)
+    except ValueError as error:
+        print_json({"ok": False, "error": str(error)})
+        return
+    db = repository_factory.get_runtime_mongodb_database()
+    frames = select_recent_frames(
+        db,
+        args.dataset_id,
+        snapshot_types,
+        args.limit,
+        start_date=args.start_date or None,
+    )
+    if not frames:
+        print_json(
+            {
+                "ok": False,
+                "reason": "no_frames_matched",
+                "dataset_id": args.dataset_id,
+                "snapshotTypes": snapshot_types,
+            }
+        )
+        return
+    print_json(
+        backfill_frames(
+            db,
+            args.dataset_id,
+            frames,
+            apply=bool(args.apply),
+            workers=max(1, int(args.workers or 1)),
+        )
+    )
+
+
+def cmd_hotlist_sentiment_recompute(args: argparse.Namespace) -> None:
+    """强制重算指定交易日（默认最新一天）的 hotlist_sentiment EOD 文档；默认 dry-run。
+
+    ``--days 0`` = 该 dataset/snapshot_type 的**全部**交易日（全量历史重算，
+    用于消除历史 fallback 兜底口径）。重算会先备份旧文档到
+    ``hotlist_sentiment_recompute_backup``，且落库后立即失效读口缓存。
+    """
+    from backend.data.repositories import repository_factory
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+    from backend.services.theme.hotlist_sentiment_compute import HotListSentimentComputeService
+
+    db = repository_factory.get_runtime_mongodb_database()
+    service = HotListSentimentComputeService(db)
+    if args.trading_date:
+        targets = [args.trading_date]
+    else:
+        dates = HotListSentimentBackfillService(db).trading_dates(
+            dataset_id=args.dataset_id, snapshot_type=args.snapshot_type
+        )
+        if not dates:
+            print_json({"ok": False, "reason": "no_snapshot_trading_date", "dataset_id": args.dataset_id})
+            return
+        days = int(args.days or 0)
+        targets = dates if days <= 0 else dates[-days:]
+    results = [
+        service.recompute(
+            args.dataset_id,
+            args.snapshot_type,
+            trading_date,
+            persist=bool(args.apply),
+        )
+        for trading_date in targets
+    ]
+    print_json(
+        results[0]
+        if len(results) == 1
+        else {"ok": True, "applied": bool(args.apply), "days": len(results), "results": results}
+    )
 
 
 def main() -> None:

@@ -216,3 +216,37 @@ def test_series_empty_stock_rows_marks_missing_day(monkeypatch):
     assert body["ok"] is True
     assert body["items"][0]["missing"] is True
     assert body["items"][0]["reason"] == "empty_stock_rows"
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _disable_snapshot_cache(monkeypatch):
+    """读口缓存隔离（2026-09-10 系列读口新增 Redis TTL 缓存）：测试必须走真实计算路径。
+
+    若本机 Redis 可达，缓存会跨测试命中（前一个测试写入的响应被复用），series 断言会随机失败。
+    """
+    from backend.data.cache import snapshot_cache
+
+    class _NoCache:
+        def get_response(self, key):
+            return None
+
+        def set_response(self, key, response, *, ttl_seconds=None):
+            return None
+
+        def register_dependencies(self, response_key, index_keys):
+            return None
+
+        def invalidate_indexes(self, index_keys):
+            return None
+
+        def get_generation(self, key):
+            return 0
+
+        def bump_generation(self, key):
+            return 0
+
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: _NoCache())
+

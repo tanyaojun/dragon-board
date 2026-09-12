@@ -176,7 +176,12 @@
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
                 <!-- 生命周期为环境门（2026-08-16 优化：lifecycle 档位无方向区分度，不做方向色徽章）：
                      显示 stage 中文 + 环境色；veto 状态在悬停提示中注明（2026-08-16 去"否决"二字） -->
-                <template v-if="getLifecycleStage(stock) != null">
+                <!-- 样本不足（2026-09-10 口径统一，spec §4.1）：数据质量声明优先于 lifecycle 兜底"冷却"，
+                     不再显示误导性默认状态（fail-visible：样本不足不伪装成业务态） -->
+                <template v-if="isLifecycleSampleInsufficient(stock)">
+                  <span class="lifecycle-env-insufficient">样本不足</span>
+                </template>
+                <template v-else-if="getLifecycleStage(stock) != null">
                   <span :class="lifecycleEnvClass(stock)">{{ getLifecycleStageLabel(stock) }}</span>
                 </template>
                 <span v-else class="trend-steady">--</span>
@@ -883,11 +888,21 @@ const getLifecycleOpportunityValue = (stock: any): number | null => {
 const getLifecycleStage = (stock: any) =>
   stock._lifecycleStage ?? getRankTrendAnalysis(stock)?.observation?.lifecycle?.stage ?? null
 
+// 样本不足（2026-09-10 口径统一，spec §4.1）：数据质量声明优先于 stage 兜底标签，
+// 避免周期列显示生命周期兜底"冷却"而展示状态判"样本不足"的同股两判。
+// 前提（code review F3）：判据取 rankTrend.meta.sampleQuality（与后端同一字段），而 stage
+// 允许 stock._lifecycleStage 投影回退；当只有投影存在、rankTrend 缺失时，周期列显示 stage
+// 中文而非"样本不足"。这是数据可用性差异，不是两者矛盾的证据。
+const isLifecycleSampleInsufficient = (stock: any): boolean =>
+  getRankTrendAnalysis(stock)?.meta?.sampleQuality?.status === 'insufficient'
+
 const getLifecycleStageLabel = (stock: any) =>
-  getAttentionStageDisplayText(getLifecycleStage(stock))
+  isLifecycleSampleInsufficient(stock) ? '样本不足' : getAttentionStageDisplayText(getLifecycleStage(stock))
 
 // 生命周期方向（与 uiStore 排序方向组语义一致）：点火/扩散=上升(buy)，拥挤/反转/降温=下降(sell)
 const getLifecycleDirection = (stock: any) => {
+  // 样本不足按中性处理，不进买入/卖出方向组（spec §4.1）
+  if (isLifecycleSampleInsufficient(stock)) return 'hold'
   const stage = getLifecycleStage(stock)
   if (stage === 'ignition' || stage === 'expansion') return 'buy'
   if (stage === 'crowded' || stage === 'reversal' || stage === 'cooling') return 'sell'
@@ -3164,6 +3179,17 @@ defineExpose({
   padding: 1px 4px;
   border-radius: 3px;
   background: rgba(143, 153, 156, 0.1);
+}
+
+/* 样本不足（2026-09-10 口径统一，spec §4.1）：历史样本不足时周期列显示数据质量声明（中性虚线框），
+   不再显示 lifecycle 兜底"冷却"；排序方向归中性 */
+.lifecycle-env-insufficient {
+  color: #8f999c !important;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(143, 153, 156, 0.08);
+  border: 1px dashed rgba(143, 153, 156, 0.4);
 }
 
 .lifecycle-env-neutral {

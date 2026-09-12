@@ -3,6 +3,28 @@
 移植源: src/services/hotlist/HotListSentimentAnalyzer.ts（golden 对齐基线见
 quant-board/tests/fixtures/hotlist_sentiment/golden_cases.json）。
 纯函数：不做 I/O、不持有 db 句柄；缺失/NaN 按 fail-visible 输出标注，不伪造状态。
+
+2026-09-10 口径统一（spec: docs/superpowers/specs/2026-09-10-displaystatus-stage-projection-design.md）：
+**8 类展示分类层已删除**，规则引擎不再以 8 类 label 作判据，改为消费 join 层注入的一等字段派生标记
+（等价内联，用户裁决 B1）：
+
+- `displayStatusStage`：`cycle.stage`（5 态，缺失/非法 → `None`）
+- `displayStatusStrongMoney`：原「强资确认」判据（`cooling` + 强资金 + 量能承接）
+- `displayStatusRisk`：原「资金背离 + 转弱预警」判据
+
+判据等价对照（因此 `stage`/`signals`/`warnings`/`riskLevel` 不变）：
+  昨强 = stage ∈ {ignition, expansion} 或 displayStatusStrongMoney（旧：主升确认+点火观察+强资确认）
+  拥挤 = stage == crowded（旧：高位拥挤）
+  风险 = displayStatusRisk（旧：资金背离+转弱预警）
+  强资 = displayStatusStrongMoney（旧：强资确认）
+
+对外分布改为 `stageCounts`/`stageShares`（5 态 + unknown）；`statusCounts`（8 类）与展示用派生指标
+（`activeOpportunityCount`/`opportunityCount`/`riskCount`/`crowdedCount` 及各自 share）已删除。
+规则引擎仍需要的四个量（`activeOpportunityShare`/`strongMoneyShare`/`riskShare`/`crowdedShare`）
+按 stage 桶等价重定义，**仅作规则输入，不进展示层**。
+
+**本轮不动**：`signals`/`warnings` 文案中的 8 类措辞（如“强资确认与点火观察…”）保持原样——它们
+是纯展示文本、不参与判据；改文案会改变 golden 的 signals/warnings 期望值，属独立后续专项。
 """
 from __future__ import annotations
 
@@ -10,12 +32,15 @@ import math
 import re
 from typing import Any
 
+from backend.analysis.ranktrend.display_status import STAGE_ENUM, STAGE_LABELS, STAGE_UNKNOWN_LABEL
+
 # TS: src/config/constants.ts LIMIT_UP_CONFIG
 _LIMIT_THRESHOLDS = {"MAIN": 9.8, "GEM": 19.8, "STAR": 19.8, "NORTH": 29.8}
 _CHANGE_TOLERANCE = 0.5
 
-STATUS_LABELS = ["主升确认", "点火观察", "强资确认", "新入观察", "高位拥挤", "资金背离", "转弱预警", "样本不足"]
-_YESTERDAY_STRONG_LABELS = {"主升确认", "点火观察", "强资确认"}
+# 对外分布键：5 态 + unknown（stage 缺失/非法）。词表单一来源在 display_status。
+STAGE_KEYS: tuple[str, ...] = (*STAGE_ENUM, "unknown")
+STAGE_LABEL_BY_KEY: dict[str, str] = {**STAGE_LABELS, "unknown": STAGE_UNKNOWN_LABEL}
 
 
 def to_number(value: Any) -> float:
@@ -226,10 +251,12 @@ def _calculate_hot_trin(up_count: int, down_count: int, up_turnover: float, down
 
 
 def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_date: str | None = None) -> dict:
-    # TS: buildDayMetricsFromSorted L458-546；状态计数经 resolve_stock_status（displayStatus 优先）。
-    # statusSourceCounts 为后端超集约定（非 TS HotListDayMetrics 字段），Task 6 series 文档透出。
+    # TS: buildDayMetricsFromSorted L458-546；分布经 resolve_row_stage（5 态 + unknown）。
+    # statusSourceCounts 为后端超集约定（非 TS HotListDayMetrics 字段），series 文档透出。
     top = sorted_rows[:top_n]
-    status_counts = {label: 0 for label in STATUS_LABELS}
+    stage_counts = {key: 0 for key in STAGE_KEYS}
+    # 规则引擎需要的三个行级量（原 8 类派生，现按 stage / 注入标记等价重定义；仅作规则输入）
+    strong_money = risk_rows = crowded_rows = 0
     status_source = {"displayStatus": 0, "fallback": 0}
 
     up_count = down_count = flat_count = 0
@@ -241,8 +268,19 @@ def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_d
         change = to_number(stock.get("change"))
         turnover = to_number(stock.get("turnover"))
         turnover_rate = to_number(stock.get("turnoverRate"))
-        label = resolve_stock_status(stock, sorted_rows, status_source)
-        status_counts[label] += 1
+        stage_key, row_strong, row_risk, row_fallback = resolve_row_signals(stock, sorted_rows, status_source)
+        # spec「fallback 行归 unknown 桶」：展示桶与规则输入解耦 —— fallback 行即使启发式
+        # 判出 crowded/cooling 也归 unknown 展示桶，规则输入（下方 strong/crowded 计数）仍按判据计。
+        stage_counts["unknown" if row_fallback else stage_key] += 1
+        if row_strong and stage_key == "cooling":
+            # 结构保证：strong_money ⊆ cooling 判定行（按 stage_key 口径，非展示桶——fallback
+            # 强资行 stage_key=cooling 但桶为 unknown，仍须进 strongMoneyShare 保持 B1 等价）。
+            # 同时兜住注入标记与 stage 不一致的行，确保 active = ignition + expansion + 强资 不双计。
+            strong_money += 1
+        if row_risk:
+            risk_rows += 1
+        if stage_key == "crowded":
+            crowded_rows += 1
         total_turnover += turnover
         main_net += to_number(stock.get("zlje"))
         super_net += to_number(stock.get("cddje"))
@@ -263,11 +301,15 @@ def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_d
             high_turnover += 1
 
     total = len(top)
-    status_shares = {label: _safe_divide(status_counts[label], total) for label in STATUS_LABELS}
-    active = status_counts["主升确认"] + status_counts["点火观察"] + status_counts["强资确认"]
-    opportunity = active + status_counts["新入观察"]
-    risk = status_counts["资金背离"] + status_counts["转弱预警"]
-    crowded = status_counts["高位拥挤"]
+    stage_shares = {key: _safe_divide(stage_counts[key], total) for key in STAGE_KEYS}
+    # 规则输入四量（等价重定义；不对外展示）：
+    #   activeOpportunityShare = (ignition + expansion + 强资) / total（旧：主升+点火+强资）
+    #   riskShare              = risk 行 / total                  （旧：资金背离 + 转弱预警）
+    #   crowdedShare           = crowded / total                  （旧：高位拥挤）
+    #   strongMoneyShare       = 强资 / total                     （旧：强资确认）
+    active = stage_counts["ignition"] + stage_counts["expansion"] + strong_money
+    risk = risk_rows
+    crowded = crowded_rows
     result = {
         "tradingDate": trading_date,
         "total": len(sorted_rows),
@@ -287,15 +329,12 @@ def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_d
         "nearLimitUpCount": near_limit_up,
         "highGainCount": high_gain,
         "highTurnoverCount": high_turnover,
-        "statusCounts": status_counts,
-        "statusShares": status_shares,
-        "activeOpportunityCount": active,
+        "stageCounts": stage_counts,
+        "stageShares": stage_shares,
+        # 规则输入（不进展示层）：名称保持规则侧既有用法，语义按 stage 桶 / 注入标记等价重定义
         "activeOpportunityShare": _safe_divide(active, total),
-        "opportunityCount": opportunity,
-        "opportunityShare": _safe_divide(opportunity, total),
-        "riskCount": risk,
+        "strongMoneyShare": _safe_divide(strong_money, total),
         "riskShare": _safe_divide(risk, total),
-        "crowdedCount": crowded,
         "crowdedShare": _safe_divide(crowded, total),
     }
     result["statusSourceCounts"] = status_source
@@ -313,17 +352,153 @@ def build_layer_metrics(rows: list[dict], trading_date: str | None = None) -> di
     }
 
 
-def resolve_stock_status(stock: dict, context_rows: list[dict], status_source: dict | None = None) -> str:
-    # TS: createStockStatusResolver L419-426 —— rankTrend displayStatus 优先，fallback 兜底。
-    # 后端行由编排层注入 displayStatusLabel（snapshot_analysis.displayStatus 的规范 label）。
-    label = stock.get("displayStatusLabel")
-    if isinstance(label, str) and label in STATUS_LABELS:
+def derive_fallback_row_signals(stock: dict) -> tuple[str, bool, bool]:
+    """无 join 记录时的行信号（原 `fallback_status_label` 判据的**等价**改写）。
+
+    返回 `(stage, strong_money, risk)`。为什么必须保留这套判据（B1 等价内联的前提）：golden
+    fixture 的输入行只有原始行情字段（无 displayStatus），旧链路由 `fallback_status_label`
+    得出 8 类 label，规则引擎再据此算 `activeOpportunityShare`/`riskShare`/`crowdedShare`/
+    `strongMoneyShare`。分类层删除后这些量改由 stage + 标记表达，所以这里把旧判据**逐条等价**映射：
+
+    - 旧「资金背离」→ `risk=True`（无 stage 信息 → stage 归 `unknown`）
+    - 旧「高位拥挤」→ `stage="crowded"`
+    - 旧「强资确认」→ `stage="cooling", strong=True`（与 display_status 的 cooling 强资判据一致）
+    - 旧「新入观察」/「样本不足」→ `unknown`（旧口径里两者都不是 lifecycle 阶段）
+
+    等价性由 golden case 守护（stage/riskLevel/signals/warnings/confidence 期望值不变）。
+    """
+    change = to_number(stock.get("change"))
+    rank = to_number(stock.get("compRank") if stock.get("compRank") is not None else stock.get("rank"))
+    zlje = to_number(stock.get("zlje"))
+    zljzb = to_number(stock.get("zljzb"))
+    cddje = to_number(stock.get("cddje"))
+    cddjzb = to_number(stock.get("cddjzb"))
+    volume_ratio = get_trusted_volume_ratio(stock)
+    turnover_rate = to_number(stock.get("turnoverRate"))
+    strong_money = zlje > 0 and zljzb >= 8 and (cddje > 0 or cddjzb >= 3)
+    money_weak = zlje < 0 or zljzb <= -8 or (cddje < 0 and cddjzb <= -3)
+    high_position = change >= 8 or rank <= 30
+    overheated = high_position and (volume_ratio >= 1.8 or turnover_rate >= 10)
+    if money_weak and (rank <= 80 or change > 0):
+        return "unknown", False, True    # 旧「资金背离」
+    if overheated:
+        return "crowded", False, False   # 旧「高位拥挤」
+    if strong_money:
+        return "cooling", True, False    # 旧「强资确认」
+    return "unknown", False, False       # 旧「新入观察」/「样本不足」
+
+
+def resolve_row_signals(
+    stock: dict,
+    context_rows: list[dict],
+    status_source: dict | None = None,
+) -> tuple[str, bool, bool, bool]:
+    """行的 `(stage, strong_money, risk, is_fallback)`。
+
+    优先用 join 层注入的三个标记（`displayStatusStage` / `displayStatusStrongMoney` /
+    `displayStatusRisk`）；无任何 join 记录时落到 `derive_fallback_row_signals`（与旧 8 类逐条等价）。
+    来源计数：join 命中 → `displayStatus`；无记录（或 annotate 补齐的 fallback 行，带
+    `_stageFromFallback` 标记）→ `fallback`（fail-visible，可辨源）。
+
+    第 4 分量 `is_fallback` 供计量层分桶：spec 规定 fallback 行的展示桶一律归 `unknown`，
+    但规则输入（strongMoneyShare 等）仍按判据计，因此 stage 分量保留 fallback 启发式的
+    原始判定（crowded/cooling），由调用方决定是否进展示桶。
+    """
+    if stock.get("_stageFromFallback"):
+        # annotate 补齐的 fallback 行（注入过等价 stage/标记）：来源仍计 fallback。
+        # 原始行情字段未被 annotate 改写，按 fallback 判据重算结果稳定。
+        if status_source is not None:
+            status_source["fallback"] += 1
+        stage, strong, risk = derive_fallback_row_signals(stock)
+        return stage, strong, risk, True
+    stage = stock.get("displayStatusStage")
+    if isinstance(stage, str) and stage in STAGE_ENUM:
         if status_source is not None:
             status_source["displayStatus"] += 1
-        return label
+        return stage, is_strong_money_row(stock), is_risk_row(stock), False
+    if isinstance(stock.get("displayStatusLabel"), str) and stock.get("displayStatusLabel"):
+        # 有记录但 stage 缺失（unknown 投影）→ 归 unknown，仍算 join 命中
+        if status_source is not None:
+            status_source["displayStatus"] += 1
+        return "unknown", is_strong_money_row(stock), is_risk_row(stock), False
     if status_source is not None:
         status_source["fallback"] += 1
-    return fallback_status_label(stock)
+    stage, strong, risk = derive_fallback_row_signals(stock)
+    return stage, strong, risk, True
+
+
+def resolve_row_stage(stock: dict, context_rows: list[dict], status_source: dict | None = None) -> str:
+    """行的 stage key（5 态或 `unknown`）—— `resolve_row_signals` 的第一个分量。"""
+    return resolve_row_signals(stock, context_rows, status_source)[0]
+
+
+def annotate_rows_with_signals(rows: list[dict] | None) -> None:
+    """给每行就地补齐三个规则标记（幂等）。
+
+    规则引擎（`is_strong_money_row` / `is_risk_row` / `is_yesterday_strong_row`）统一读这三个标记，
+    避免各规则自建第二套判据。join 层（`_join_display_status`）已在写入前注入；本函数是**幂等补齐**：
+    缺标记的行（golden fixture 这类只有行情字段的输入）按 `derive_fallback_row_signals` 等价补上。
+    """
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if isinstance(row.get("displayStatusStrongMoney"), bool) and isinstance(
+            row.get("displayStatusRisk"), bool
+        ):
+            continue
+        stage, strong, risk, is_fallback = resolve_row_signals(row, rows or [], None)
+        current_stage = row.get("displayStatusStage")
+        if not (isinstance(current_stage, str) and current_stage in STAGE_ENUM):
+            row["displayStatusStage"] = stage if stage in STAGE_ENUM else None
+        row["displayStatusStrongMoney"] = strong
+        row["displayStatusRisk"] = risk
+        if is_fallback:
+            # provenance 标记：该行的 stage/标记来自 fallback 等价判据（非 join 记录）。
+            # resolve_row_signals 据此把来源仍计为 fallback（而非被注入的 stage 骗成
+            # displayStatus），build_day_metrics 据此把展示桶归 unknown（spec：fallback
+            # 行归 unknown 桶）。幂等性由上方“双标记已存在即跳过”保证。
+            row["_stageFromFallback"] = True
+
+
+def resolve_stock_status(stock: dict, context_rows: list[dict], status_source: dict | None = None) -> str:
+    """兼容壳（旧 8 类 API）：返回 stage 对应的展示 label。
+
+    分类层删除后 8 类 label 不再存在，本函数只做 stage → 词表映射，供尚未迁移的调用点/测试使用；
+    新代码请用 `resolve_row_stage`。
+    """
+    return STAGE_LABEL_BY_KEY[resolve_row_stage(stock, context_rows, status_source)]
+
+
+def is_strong_money_row(stock: dict) -> bool:
+    """原「强资确认」判据。
+
+    优先读 join 层注入的 `displayStatusStrongMoney`；行上没有该标记时（golden fixture 这类
+    只有行情字段的输入）按 `derive_fallback_row_signals` 的等价判据现算。
+    """
+    flag = stock.get("displayStatusStrongMoney")
+    if isinstance(flag, bool):
+        return flag
+    return derive_fallback_row_signals(stock)[1]
+
+
+def is_risk_row(stock: dict) -> bool:
+    """原「资金背离 + 转弱预警」判据。同上：优先读注入标记，否则等价 fallback 现算。"""
+    flag = stock.get("displayStatusRisk")
+    if isinstance(flag, bool):
+        return flag
+    return derive_fallback_row_signals(stock)[2]
+
+
+def is_yesterday_strong_row(stock: dict) -> bool:
+    """原「主升确认 + 点火观察 + 强资确认」判据（昨强）。
+
+    `displayStatusStage` 存在（含显式 `None`）时以它为准；完全无标记时用等价 fallback 现算。
+    """
+    if "displayStatusStage" in stock:
+        stage = stock.get("displayStatusStage")
+        return bool(stage in ("ignition", "expansion")) or is_strong_money_row(stock)
+    fallback_stage, fallback_strong, _ = derive_fallback_row_signals(stock)
+    return bool(fallback_stage in ("ignition", "expansion")) or fallback_strong
 
 
 def fallback_status_label(stock: dict) -> str:
@@ -349,6 +524,39 @@ def fallback_status_label(stock: dict) -> str:
     if change >= 3 or rank <= 100:
         return "新入观察"
     return "样本不足"
+
+
+def derive_row_flags(analysis: dict | None, row: dict) -> dict:
+    """从 `analysis` 派生规则层需要的两个判据标记（**唯一来源**，与 display_status 同判据）。
+
+    为什么放在这里：热榜行自身只有 `zlje`/`zljzb`（无 `cycle.stage`、无 `volumePrice.signalTier`），
+    而规则引擎（昨强/强资/拥挤/风险）需要 8 类时代的等价判据——因此由 join 层调本函数**算一次**
+    并注入行（`displayStatusStrongMoney` / `displayStatusRisk`），避免规则层自建第二套。
+
+    - `strong_money`：原「强资确认」= `stage == cooling` 且强资金且量能承接（合同判据表；
+      stage 门控必须显式判断——否则非 cooling 阶段的强资行会在 activeOpportunityShare 里双计）
+    - `risk`：原「资金背离 + 转弱预警」= stage == reversal，或 cooling 且非强资，或资金背离
+      （`synergy.state == 存疑` 且 `zljzb <= 0`）
+    """
+    from backend.analysis.ranktrend.display_status import _is_strong_money, _is_volume_supported
+
+    data = analysis if isinstance(analysis, dict) else {}
+    stage = ((data.get("cycle") or {}) if isinstance(data.get("cycle"), dict) else {}).get("stage")
+    strong = bool(stage == "cooling" and _is_strong_money(row) and _is_volume_supported(data))
+    synergy = ((data.get("observation") or {}) if isinstance(data.get("observation"), dict) else {}).get("synergy")
+    synergy_state = (synergy or {}).get("state") if isinstance(synergy, dict) else None
+    money_divergence = str(synergy_state or "") == "存疑" and zljzb_le_zero(row)
+    return {
+        "strongMoney": strong,
+        "risk": bool(stage == "reversal" or (stage == "cooling" and not strong) or money_divergence),
+    }
+
+
+def zljzb_le_zero(row: dict) -> bool:
+    try:
+        return float(row.get("zljzb")) <= 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _empty_ths_pools() -> dict:
@@ -444,8 +652,7 @@ def build_yesterday_hot_limit_evidence(yesterday_rows: list[dict], today_rows: l
             failed_or_weak += 1
             continue
         change = to_number(stock.get("change"))
-        today_label = resolve_stock_status(stock, today_rows)
-        is_risk = today_label in ("资金背离", "转弱预警")
+        is_risk = is_risk_row(stock)
         matched += 1
         change_sum += change
         if change > 0:
@@ -488,7 +695,7 @@ def build_yesterday_strong_performance(yesterday_rows: list[dict], today_rows: l
     strong_codes = [
         normalize_code(row.get("code"))
         for row in yesterday_rows[:yesterday_size]
-        if resolve_stock_status(row, yesterday_rows) in _YESTERDAY_STRONG_LABELS and normalize_code(row.get("code"))
+        if is_yesterday_strong_row(row) and normalize_code(row.get("code"))
     ]
     if not strong_codes:
         return empty
@@ -501,14 +708,13 @@ def build_yesterday_strong_performance(yesterday_rows: list[dict], today_rows: l
             weakening += 1
             continue
         change = to_number(stock.get("change"))
-        today_label = resolve_stock_status(stock, today_rows)
         matched += 1
         change_sum += change
         if change > 0:
             positive += 1
         if code in today_top_codes:
             retained += 1
-        if change <= -2 or today_label in ("资金背离", "转弱预警"):
+        if change <= -2 or is_risk_row(stock):
             weakening += 1
     return {
         "count": len(strong_codes),
@@ -545,15 +751,15 @@ def build_comparison(stocks: list[dict], yesterday_rows: list[dict], day_before_
     new_top_codes = [code for code in today_top_codes if code not in yesterday_top_codes]
     new_strong = sum(
         1 for code in new_top_codes
-        if code in today_by_code and resolve_stock_status(today_by_code[code], today_rows) == "强资确认"
+        if code in today_by_code and is_strong_money_row(today_by_code[code])
     )
     yesterday_strong_codes = [
         normalize_code(row.get("code")) for row in yesterday_sorted[:yesterday_size]
-        if resolve_stock_status(row, yesterday_sorted) == "强资确认" and normalize_code(row.get("code"))
+        if is_strong_money_row(row) and normalize_code(row.get("code"))
     ]
     yesterday_crowded_codes = [
         normalize_code(row.get("code")) for row in yesterday_sorted[:yesterday_size]
-        if resolve_stock_status(row, yesterday_sorted) == "高位拥挤" and normalize_code(row.get("code"))
+        if row.get("displayStatusStage") == "crowded" and normalize_code(row.get("code"))
     ]
     yesterday_strong_retain = (
         _safe_divide(len([code for code in yesterday_strong_codes if code in today_top_codes]), len(yesterday_strong_codes))
@@ -561,7 +767,7 @@ def build_comparison(stocks: list[dict], yesterday_rows: list[dict], day_before_
     )
     yesterday_crowded_risk = sum(
         1 for code in yesterday_crowded_codes
-        if code in today_by_code and resolve_stock_status(today_by_code[code], today_rows) in ("资金背离", "转弱预警")
+        if code in today_by_code and is_risk_row(today_by_code[code])
     )
     return {
         "today": today,
@@ -662,7 +868,7 @@ def _evaluate_opportunity_expansion(comparison: dict) -> dict:
     signals: list[str] = []
     warnings: list[str] = []
     active_share = today["activeOpportunityShare"]
-    strong_money_share = today["statusShares"]["强资确认"]
+    strong_money_share = today["strongMoneyShare"]
     opportunity_rising = bool(yesterday and active_share > yesterday["activeOpportunityShare"] + 0.04)
     broad = active_share >= 0.18 and strong_money_share >= 0.08
     improving = opportunity_rising or comparison["newTop100Count"] >= 25
@@ -785,7 +991,7 @@ def resolve_stage(comparison: dict, layers: dict | None = None, limit_evidence: 
     money_weak = money["level"] == "weak"
     money_not_weak = money["level"] != "weak"
     money_strong = money["level"] == "strong"
-    effective_spread = today["activeOpportunityShare"] >= 0.12 and today["statusShares"]["强资确认"] >= 0.08
+    effective_spread = today["activeOpportunityShare"] >= 0.12 and today["strongMoneyShare"] >= 0.08
     broad_spread = expansion["level"] == "broad"
     high_heat = today["nearLimitUpCount"] >= 10 or (today["highGainCount"] >= 25 and today["highTurnoverCount"] >= 20)
     intersection = (limit_evidence or {}).get("intersection")
@@ -869,10 +1075,16 @@ def compute_hotlist_sentiment(
     # TS: HotListSentimentAnalyzer.analyze L1276-1303 的 Python 等价主入口
     sorted_stocks = sort_rows(stocks)
     yesterday_rows = sort_rows((yesterday or {}).get("rows") or [])
+    day_before_rows = sort_rows((day_before or {}).get("rows") or [])
+    # 规则标记幂等补齐（join 层已注入的行不动；golden fixture 这类只有行情字段的输入按
+    # derive_fallback_row_signals 等价补齐），保证规则引擎读到同一套判据。
+    annotate_rows_with_signals(sorted_stocks)
+    annotate_rows_with_signals(yesterday_rows)
+    annotate_rows_with_signals(day_before_rows)
     top_n = top_n if top_n and top_n > 0 else None
     sample_size = _resolve_sample_size(sorted_stocks, top_n)
     layers = build_layer_metrics(stocks)
-    comparison = build_comparison(stocks, yesterday_rows, sort_rows((day_before or {}).get("rows") or []), top_n)
+    comparison = build_comparison(stocks, yesterday_rows, day_before_rows, top_n)
     # TS buildComparison 从 snapshot 注入 tradingDate（L833/L836）；Python build_comparison 只收 rows，
     # tradingDate 在编排层回填（Task 3 审查裁决落实，snapshot 缺失时保持 None）。
     if comparison.get("yesterday") and (yesterday or {}).get("tradingDate") is not None:
@@ -885,7 +1097,7 @@ def compute_hotlist_sentiment(
 
     status_source = {"displayStatus": 0, "fallback": 0}
     for row in sorted_stocks:
-        resolve_stock_status(row, sorted_stocks, status_source)
+        resolve_row_signals(row, sorted_stocks, status_source)
 
     missing_evidence: list[str] = []
     if not market_data:

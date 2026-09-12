@@ -4,15 +4,23 @@
 import type { EmotionCycleStage, UnifiedEmotionStage } from './emotion'
 import type { ThsLimitUpPoolEvidence } from './index'
 
-export type HotListStatusLabel =
-  | '主升确认'
-  | '点火观察'
-  | '强资确认'
-  | '新入观察'
-  | '高位拥挤'
-  | '资金背离'
-  | '转弱预警'
-  | '样本不足'
+/**
+ * 全池状态结构键：生命周期 5 态 + 阶段缺失（无阶段）。
+ *
+ * 2026-09-10 口径统一（spec §10）：8 类展示分类层已删除，分布锚定 `cycle.stage` 黄金真值。
+ * 不再使用 8 类 label（主升确认/点火观察/强资确认/新入观察/高位拥挤/资金背离/转弱预警/样本不足）。
+ */
+export type HotListStageKey = 'ignition' | 'expansion' | 'crowded' | 'reversal' | 'cooling' | 'unknown'
+
+/** 5 态 + 无阶段的展示词（与后端 `STAGE_LABELS` / `STAGE_UNKNOWN_LABEL` 逐字一致）。 */
+export const HOT_LIST_STAGE_LABELS: Record<HotListStageKey, string> = {
+  ignition: '点火',
+  expansion: '扩散',
+  crowded: '拥挤',
+  reversal: '反转',
+  cooling: '冷却',
+  unknown: '无阶段',
+}
 
 export interface HotListDayMetrics {
   tradingDate?: string
@@ -33,16 +41,9 @@ export interface HotListDayMetrics {
   nearLimitUpCount: number
   highGainCount: number
   highTurnoverCount: number
-  statusCounts: Record<HotListStatusLabel, number>
-  statusShares: Record<HotListStatusLabel, number>
-  activeOpportunityCount: number
-  activeOpportunityShare: number
-  opportunityCount: number
-  opportunityShare: number
-  riskCount: number
-  riskShare: number
-  crowdedCount: number
-  crowdedShare: number
+  /** 全池状态分布：生命周期 5 态 + 无阶段（2026-09-10 替代原 8 类 statusCounts，spec §4）。 */
+  stageCounts: Record<HotListStageKey, number>
+  stageShares: Record<HotListStageKey, number>
 }
 
 export type HotListLayerKey = 'top20' | 'top50' | 'top100' | 'all'
@@ -181,6 +182,7 @@ export interface HotListSentimentDayDoc {
     limitIntersectionRate?: number
     newEntryCount?: number
     eliminatedCount?: number
+    /** 状态来源：金标投影命中 / fallback 接管（阶段缺失已并入「无阶段」格，无独立计数） */
     statusSourceCounts?: { displayStatus: number; fallback: number }
     missingEvidence?: string[]
   }

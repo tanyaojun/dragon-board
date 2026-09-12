@@ -94,3 +94,6 @@ def test_analyze_snapshot_persists_observation(monkeypatch):
     docs = db["snapshot_analysis"]._docs
     assert all("observation" in d for d in docs)
     assert all("displayStatus" in d for d in docs)
+    # cycle 必须一并落库：hotlist join 侧用 analysis["cycle"]["stage"] 判"阶段是否缺失"，
+    # 缺它会把"字段未持久化"误判成"阶段真缺失"（2026-09-10 stageMissing 假阳性）。
+    assert all("cycle" in d for d in docs)

@@ -33,9 +33,10 @@ class TestSlotTimes:
         """half_hour slots must include 15:00."""
         assert "15:00" in SLOT_TIMES["half_hour"]
 
-    def test_half_hour_includes_1530_post_close_slot(self):
-        """Shanghai fixed-price after-hours trading requires a 15:30 snapshot."""
-        assert SLOT_TIMES["half_hour"][-1] == "15:30"
+    def test_half_hour_excludes_1530_daily_owns_post_close_value(self):
+        """15:30 收盘定格值只由 daily 承担；half_hour 盘中序列止于 15:00（2026-09-11 口径）。"""
+        assert "15:30" not in SLOT_TIMES["half_hour"]
+        assert SLOT_TIMES["half_hour"][-1] == "15:00"
 
     def test_daily_slot_is_1530_post_close_value(self):
         assert SLOT_TIMES["daily"] == ["15:30"]
@@ -44,8 +45,8 @@ class TestSlotTimes:
         """quarter_hour adds only the 15:30 after-hours close."""
         assert len(SLOT_TIMES["quarter_hour"]) == 19
 
-    def test_half_hour_has_11_slots(self):
-        assert len(SLOT_TIMES["half_hour"]) == 11
+    def test_half_hour_has_10_slots(self):
+        assert len(SLOT_TIMES["half_hour"]) == 10
 
     def test_hourly_has_5_slots(self):
         assert len(SLOT_TIMES["hourly"]) == 5
@@ -139,10 +140,10 @@ class TestGenerateSlots:
 
     def test_generates_half_hour_slots(self):
         slots = generate_slots("2026-06-11", ["half_hour"])
-        assert len(slots) == 11
+        assert len(slots) == 10
         slot_times = [s.slot_time for s in slots]
         assert "15:00" in slot_times
-        assert "15:30" in slot_times
+        assert "15:30" not in slot_times
         assert "09:30" in slot_times
 
     def test_generates_daily_slot(self):
@@ -158,8 +159,8 @@ class TestGenerateSlots:
 
     def test_generates_multiple_types(self):
         slots = generate_slots("2026-06-11", ["half_hour", "daily"])
-        # 11 half_hour + 1 daily = 12
-        assert len(slots) == 12
+        # 10 half_hour + 1 daily = 11
+        assert len(slots) == 11
         types = {s.snapshot_type for s in slots}
         assert types == {"half_hour", "daily"}
 
@@ -196,7 +197,7 @@ class TestGenerateSlots:
 
     def test_generate_slots_returns_expected_count(self):
         slots = generate_slots("2026-06-11", ["half_hour"])
-        assert len(slots) == 11  # half_hour includes the 15:30 after-hours slot
+        assert len(slots) == 10  # half_hour 止于 15:00；15:30 收盘定格值由 daily 承担
 
 
 # ── is_slot_eligible ──────────────────────────────────────────────────────────

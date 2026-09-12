@@ -149,7 +149,7 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getLifecycleOpportunityValue')
     expect(source).toContain('RankTrendObservationPanel')
     expect(source).toContain('getRankTrendStrengthValue(stock) != null')
-    expect(source).toContain('v-if="getLifecycleStage(stock) != null"')
+    expect(source).toContain('v-else-if="getLifecycleStage(stock) != null"')
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
@@ -184,6 +184,25 @@ describe('DataTable row detail interactions', () => {
     // 三指标数值列保持紧凑：不混入中文确认标记
     expect(source).not.toContain('vp-badge')
     expect(source).not.toContain('getVolumePriceBadge')
+  })
+
+  test('shows insufficient-sample label instead of misleading cooling stage in lifecycle column', () => {
+    const source = dataTableSource()
+
+    // 2026-09-10 口径统一（spec §4.1）：样本不足显示数据质量声明，不显示 lifecycle 兜底"冷却"
+    expect(source).toContain('v-if="isLifecycleSampleInsufficient(stock)"')
+    expect(source).toContain('v-else-if="getLifecycleStage(stock) != null"')
+    expect(source).toContain('lifecycle-env-insufficient')
+    expect(source).toContain("getRankTrendAnalysis(stock)?.meta?.sampleQuality?.status === 'insufficient'")
+    expect(source).toContain('const isLifecycleSampleInsufficient')
+    // 排序方向：样本不足按中性处理，不进买入/卖出方向组
+    // 锚点收敛（code review F6）：改为两条稳定结构串断言，避免跨行正则受注释/换行影响
+    expect(source).toContain('const getLifecycleDirection = (stock: any) => {')
+    expect(source).toContain("if (isLifecycleSampleInsufficient(stock)) return 'hold'")
+    // tooltip 阶段行同步显示样本不足（与周期列一致，不出现同股两判）
+    expect(source).toContain(
+      "isLifecycleSampleInsufficient(stock) ? '样本不足' : getAttentionStageDisplayText(getLifecycleStage(stock))",
+    )
   })
 
   test('splits observation tooltips per field (D: resonance/rankTrend/lifecycle)', () => {

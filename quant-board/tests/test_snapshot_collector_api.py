@@ -750,9 +750,9 @@ class TestBackfillSlotsDateRange:
         assert response.status_code == 200
         body = response.json()
         assert body["ok"] is True
-        # half_hour includes the 15:30 after-hours slot
-        assert body["data"]["total"] == 11
-        assert len(captured[0]) == 11
+        # half_hour ends at 15:00; the 15:30 close value is daily-only (2026-09-11)
+        assert body["data"]["total"] == 10
+        assert len(captured[0]) == 10
 
     def test_date_range_inclusive(self, monkeypatch: Any) -> None:
         """Both startDate and endDate are included."""
@@ -1056,9 +1056,9 @@ class TestBackfillSlotsSlotGeneration:
             },
         )
 
-        # half_hour includes the 15:30 after-hours slot
-        assert len(captured[0]) == 11
-        assert captured[0][-1]["slot_time"] == "15:30"
+        # half_hour ends at 15:00; the 15:30 close value is daily-only (2026-09-11)
+        assert len(captured[0]) == 10
+        assert captured[0][-1]["slot_time"] == "15:00"
         # All should have same trading_date
         for s in captured[0]:
             assert s["trading_date"] == "2026-06-11"

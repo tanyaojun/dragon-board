@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from backend.analysis.hotlist.sentiment import (
+    STAGE_KEYS,
     build_comparison,
     build_layer_metrics,
     build_limit_evidence,
@@ -13,7 +14,8 @@ from backend.analysis.hotlist.sentiment import (
     check_limit_status,
     compute_hotlist_sentiment,
     compute_turnover,
-    resolve_stock_status,
+    derive_fallback_row_signals,
+    resolve_row_signals,
     sort_rows,
 )
 
@@ -50,8 +52,10 @@ def test_golden_layer_top20_50_100():
     assert layers["top50"]["topN"] == 50
     assert layers["top100"]["topN"] == 100
     assert layers["top20"]["upRatio"] > layers["top100"]["upRatio"]
-    assert layers["top20"]["activeOpportunityCount"] > 0
-    assert layers["top20"]["statusCounts"] == expected["top20"]["statusCounts"]
+    # 2026-09-10（spec §10）：8 类 statusCounts 与展示派生指标已删除，分布改为 stageCounts。
+    # 语义等价性由 test_display_status_reconciliation.py 与下方 golden stage case 守护。
+    assert layers["top20"]["strongMoneyShare"] >= 0
+    assert set(layers["top20"]["stageCounts"]) == set(STAGE_KEYS)
 
 
 def test_golden_turnover_details():
@@ -144,23 +148,31 @@ def test_golden_comparison_three_day():
     assert comparison["totalChange2d"] == case["expected"]["metrics"]["comparison"]["totalChange2d"] < 0
 
 
-def test_display_status_preferred_over_fallback():
-    row = {"code": "000001", "change": 5, "displayStatusLabel": "资金背离"}
+def test_join_signals_preferred_over_fallback():
+    # join 层注入 stage + 标记 → 直接采用，来源计 displayStatus
+    row = {"code": "000001", "change": 5, "displayStatusStage": "cooling",
+           "displayStatusStrongMoney": True, "displayStatusRisk": False}
     source = {"displayStatus": 0, "fallback": 0}
-    assert resolve_stock_status(row, [row], source) == "资金背离"
+    assert resolve_row_signals(row, [row], source) == ("cooling", True, False, False)
     assert source == {"displayStatus": 1, "fallback": 0}
 
 
-def test_display_status_fallback_when_missing():
+def test_fallback_signals_when_no_join_record():
+    # 无 join 记录 → 走等价 fallback 判据（旧「新入观察」等价为 unknown），来源计 fallback
     row = {"code": "000001", "change": 5}
     source = {"displayStatus": 0, "fallback": 0}
-    assert resolve_stock_status(row, [row], source) == "新入观察"
+    assert resolve_row_signals(row, [row], source) == ("unknown", False, False, True)
     assert source == {"displayStatus": 0, "fallback": 1}
 
 
-def test_display_status_invalid_label_falls_back():
-    row = {"code": "000001", "change": 5, "displayStatusLabel": "无效标签"}
-    assert resolve_stock_status(row, [row]) == "新入观察"
+def test_fallback_signals_classify_old_categories_equivalently():
+    # 旧「强资确认」→ cooling + strong；旧「高位拥挤」→ crowded；旧「资金背离」→ risk
+    strong = {"change": 5, "compRank": 1, "zlje": 1e8, "zljzb": 12, "cddje": 1e8}
+    assert derive_fallback_row_signals(strong) == ("cooling", True, False)
+    overheated = {"change": 9, "compRank": 10, "volumeRatio": 2.0}
+    assert derive_fallback_row_signals(overheated) == ("crowded", False, False)
+    divergence = {"change": 5, "compRank": 10, "zlje": -1e8, "zljzb": -9}
+    assert derive_fallback_row_signals(divergence) == ("unknown", False, True)
 
 
 # 阶段判定 + 风险 + 信号/警告文案全量对齐的 7+3 个 case（名称与 golden_cases.json 一致）
@@ -216,7 +228,8 @@ def test_golden_stage_full_alignment(name: str) -> None:
     expected_metrics = expected["metrics"]
     assert result["metrics"]["topN"] == expected_metrics["topN"]
     for layer in ("top20", "top50", "top100", "all"):
-        assert result["metrics"]["layers"][layer]["statusCounts"] == expected_metrics["layers"][layer]["statusCounts"], layer
+        # 8 类 statusCounts 已删除：分布改为 stageCounts，其守恒性由 test_display_status_reconciliation.py 守护
+        assert set(result["metrics"]["layers"][layer]["stageCounts"]) == set(STAGE_KEYS), layer
         assert result["metrics"]["layers"][layer]["hotTrin"] == expected_metrics["layers"][layer]["hotTrin"], layer
         assert result["metrics"]["layers"][layer]["nearLimitUpCount"] == expected_metrics["layers"][layer]["nearLimitUpCount"], layer
     cmp_expected = expected_metrics["comparison"]
@@ -232,10 +245,35 @@ def test_insufficient_data_marks_missing_evidence():
     result = compute_hotlist_sentiment([])
     assert result["stage"] == "冰点"
     assert result["metrics"]["comparison"]["today"]["topN"] == 0
+    # 2026-09-10：stageMissing 随分类层删除；阶段缺失体现在 stageCounts.unknown
     assert result["statusSourceCounts"] == {"displayStatus": 0, "fallback": 0}
+    assert result["metrics"]["layers"]["all"]["stageCounts"]["unknown"] == 0
 
 
 def test_summary_generated_for_each_stage():
     from backend.analysis.hotlist.sentiment import _STAGE_SUMMARY
     for stage in _STAGE_SUMMARY:
         assert _STAGE_SUMMARY[stage]
+
+
+def test_status_source_summary_reads_stage_counts():
+    # 2026-09-12：8 类 statusCounts 退役后，recompute 的 before/after 摘要必须读
+    # stageCounts（实施计划 Task 2 Step 5 遗留）；读不到时保持 None，不伪造 0。
+    from backend.services.theme import hotlist_sentiment_compute as svc
+
+    doc = {
+        "slotTime": "EOD",
+        "stage": "退潮",
+        "metrics": {
+            "layers": {
+                "all": {"stageCounts": {"ignition": 1, "cooling": 2, "unknown": 0}},
+            },
+            "statusSourceCounts": {"displayStatus": 3, "fallback": 0},
+        },
+    }
+
+    summary = svc._status_source_summary(doc)
+
+    assert summary["stageCounts"] == {"ignition": 1, "cooling": 2, "unknown": 0}
+    assert summary["statusSourceCounts"] == {"displayStatus": 3, "fallback": 0}
+    assert "statusCounts" not in summary

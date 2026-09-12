@@ -11,9 +11,9 @@
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
-from backend.analysis.hotlist.sentiment import STATUS_LABELS
 from backend.operations.hotlist_sentiment import (
     HotListSentimentBackfillService,
     build_hotlist_sentiment_document,
@@ -22,10 +22,15 @@ from backend.services.theme.hotlist_sentiment_service import HotListSentimentSer
 
 
 def _normalize_display_label(entry: Any) -> str | None:
-    # snapshot_analysis 的 displayStatus 条目：dict 取 label，str 直接用；非法标签返回 None
+    """snapshot_analysis 的 displayStatus 条目 → label（dict 取 label，str 直接用）。
+
+    2026-09-10：分类层删除后不再有 8 类白名单，label 是后端 `STAGE_LABELS` 的投影
+    （5 态词 + "无阶段"），词表单一来源在 `display_status`，本层不做第二套校验；
+    只要求"非空字符串"，空值返回 None（fail-visible：无投影的行由 join 统计兜底）。
+    """
     label = entry.get("label") if isinstance(entry, dict) else entry
     label = str(label or "").strip()
-    return label if label in STATUS_LABELS else None
+    return label or None
 
 
 def _build_market_data_like(limit_summary: Any) -> dict | None:
@@ -49,12 +54,22 @@ def _build_market_data_like(limit_summary: Any) -> dict | None:
 
 
 def _join_display_status(db: Any, dataset_id: str, snapshot_id: str, rows: list[dict]) -> dict[str, Any]:
-    """snapshot_analysis.displayStatus → rows[].displayStatusLabel（就地注入）。
+    """snapshot_analysis.displayStatus → rows[] 注入展示与规则标记（就地）。
 
     fail-visible：查询异常与个股无 displayStatus 分开结构化标注，不静默、不抛出（无质量阻断）。
+
+    分类层删除后（spec §10）不再有 8 类 label / classKey / `stageMissing`：
+
+    - 注入 `displayStatusStage` / `displayStatusLabel`（后端投影 `{stage, label, tooltip}`）；
+    - 注入规则标记 `displayStatusStrongMoney` / `displayStatusRisk`（等价内联 B1）：判据唯一来源是
+      `analysis.hotlist.sentiment.derive_row_flags`（内部复用 `display_status._is_strong_money` /
+      `_is_volume_supported`），本层不得再写第二套判据。
+
     返回 {"joined": N, "noDisplayStatus": M, "joinFailed": bool, "reason": str | None}；
-    调用方 _compute_and_persist 把标注追加进 doc["warnings"]。
+    调用方 `_compute_and_persist` 把标注追加进 `doc["warnings"]`。
     """
+    from backend.analysis.hotlist.sentiment import derive_row_flags
+
     try:
         from backend.data.repositories.mongo_repository import MongoRepository
 
@@ -62,7 +77,12 @@ def _join_display_status(db: Any, dataset_id: str, snapshot_id: str, rows: list[
             dataset_id, snapshot_id, [str(row.get("code") or "") for row in rows]
         )
     except Exception as exc:
-        return {"joined": 0, "noDisplayStatus": 0, "joinFailed": True, "reason": f"join_failed: {exc}"}
+        return {
+            "joined": 0,
+            "noDisplayStatus": 0,
+            "joinFailed": True,
+            "reason": f"join_failed: {exc}",
+        }
     joined = no_display = 0
     for row in rows:
         analysis = analysis_by_code.get(str(row.get("code") or ""))
@@ -71,10 +91,20 @@ def _join_display_status(db: Any, dataset_id: str, snapshot_id: str, rows: list[
         label = _normalize_display_label(entry)
         if label:
             row["displayStatusLabel"] = label
+            stage = entry.get("stage") if isinstance(entry, dict) else None
+            row["displayStatusStage"] = stage if isinstance(stage, str) and stage else None
+            flags = derive_row_flags(analysis, row)
+            row["displayStatusStrongMoney"] = bool(flags.get("strongMoney"))
+            row["displayStatusRisk"] = bool(flags.get("risk"))
             joined += 1
         else:
             no_display += 1
-    return {"joined": joined, "noDisplayStatus": no_display, "joinFailed": False, "reason": None}
+    return {
+        "joined": joined,
+        "noDisplayStatus": no_display,
+        "joinFailed": False,
+        "reason": None,
+    }
 
 
 def _join_warning(join_stats: dict[str, Any]) -> str | None:
@@ -83,6 +113,63 @@ def _join_warning(join_stats: dict[str, Any]) -> str | None:
     if join_stats.get("noDisplayStatus"):
         return f"displayStatus missing on {join_stats['noDisplayStatus']} stocks（fallback 分类接管）"
     return None
+
+
+def _status_source_summary(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    """文档的展示状态来源/分布摘要（重算 before/after 对比用；缺字段保持缺失）。"""
+    if not isinstance(doc, dict):
+        return None
+    metrics = doc.get("metrics") if isinstance(doc.get("metrics"), dict) else {}
+    layers = metrics.get("layers") if isinstance(metrics.get("layers"), dict) else {}
+    all_layer = layers.get("all") if isinstance(layers.get("all"), dict) else {}
+    return {
+        "slotTime": doc.get("slotTime"),
+        "computedAt": doc.get("computedAt"),
+        "statusSourceCounts": metrics.get("statusSourceCounts"),
+        # 2026-09-12：8 类 statusCounts 已退役，分布只存在于 metrics.layers.<layer>.stageCounts
+        # （文档无顶层 stageCounts）→ 三级回退，否则摘要恒为 None。
+        "stageCounts": (
+            doc.get("stageCounts")
+            or metrics.get("stageCounts")
+            or all_layer.get("stageCounts")
+        ),
+        "stage": doc.get("stage"),
+    }
+
+
+def _invalidate_hotlist_sentiment_cache(dataset_id: str) -> None:
+    """hotlist EOD 文档写库后失效读口缓存（``GET /api/hotlist-sentiment/series``）。
+
+    依赖注册口径与读口一致（``<prefix>:snapshot:index:dataset:<dataset_id>``），
+    所以这里只需重算同一个 index key，无需知道具体 response key。快照写入路径
+    （ingest / collector，统一经数据层 after-save 钩子）失效的也是同一个 key，
+    因此两条写入来源共用一套失效口径。
+
+    fail-safe：任何异常只记 warning，绝不影响已经完成的写库结果
+    （与 `run_snapshot_post_save_hooks` 的异常隔离同一原则）。
+    """
+    try:
+        from backend.core.settings import get_settings
+        from backend.data.cache.snapshot_cache import (
+            build_snapshot_cache_index_keys,
+            get_snapshot_redis_cache,
+        )
+
+        settings = get_settings()
+        get_snapshot_redis_cache().invalidate_indexes(
+            build_snapshot_cache_index_keys(
+                prefix=settings.redis_key_prefix,
+                dataset_id=dataset_id,
+            )
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "hotlist sentiment cache invalidation failed (dataset=%s)",
+            dataset_id,
+            exc_info=True,
+        )
 
 
 class HotListSentimentComputeService:
@@ -116,8 +203,15 @@ class HotListSentimentComputeService:
             items.append({key: value for key, value in doc.items() if key != "_id"})
         return {"ok": True, "items": items}
 
-    def _compute_and_persist(self, dataset_id: str, snapshot_type: str, trading_date: str) -> dict | None:
-        # 取数 → join displayStatus → 纯函数（含 limitSummary 市场证据）→ upsert。
+    def _compute_and_persist(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str,
+        *,
+        persist: bool = True,
+    ) -> dict | None:
+        # 取数 → join displayStatus → 纯函数（含 limitSummary 市场证据）→ upsert（persist=False 只算不写）。
         # 与 backfill.run_for_date 的差异仅两点：displayStatus join + limitSummary 市场证据注入。
         # market_data 缺失时 fail-visible：missingEvidence 由纯函数标注，不阻断入库。
         frame = self._backfill.latest_frame(dataset_id, snapshot_type, trading_date)
@@ -149,8 +243,46 @@ class HotListSentimentComputeService:
         join_note = _join_warning(join_stats)
         if join_note:
             doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
-        HotListSentimentService(self._backfill._db).upsert(doc)
+        if persist:
+            HotListSentimentService(self._backfill._db).upsert(doc)
+            # 写口（lazy compute / recompute / 批量重算）统一失效读口缓存
+            _invalidate_hotlist_sentiment_cache(dataset_id)
         return {key: value for key, value in doc.items() if key != "_id"}
+
+    def recompute(
+        self,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str,
+        *,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        """强制重算并覆盖指定交易日的 EOD 文档（绕过 lazy compute 的“已存在即跳过”）。
+
+        用途（2026-09-10 displayStatus 补跑）：`ensure_series` 只在“无库行”时计算，
+        已持久化文档不会重算 → 新 join 到的 golden displayStatus 与 stageMissing
+        永远不会生效。本方法显式重算 + 覆盖，并先把旧文档写入
+        `hotlist_sentiment_recompute_backup`（新集合，不动原文档）作回滚安全网；
+        重算本身可复现（纯函数 + 库内帧），备份只是安全网。
+        """
+        service = HotListSentimentService(self._backfill._db)
+        before = service.get_eod_document(dataset_id, snapshot_type, trading_date)
+        if isinstance(before, dict):
+            backup = {key: value for key, value in before.items() if key != "_id"}
+            backup["sourceId"] = before.get("_id")
+            backup["backedUpAt"] = int(time.time())
+            backup["_id"] = f"{before.get('_id')}:recompute:{int(time.time())}"
+            self._db["hotlist_sentiment_recompute_backup"].insert_one(backup)
+        after = self._compute_and_persist(dataset_id, snapshot_type, trading_date, persist=persist)
+        return {
+            "ok": True,
+            "dataset_id": dataset_id,
+            "snapshot_type": snapshot_type,
+            "trading_date": trading_date,
+            "applied": bool(persist),
+            "before": _status_source_summary(before),
+            "after": _status_source_summary(after),
+        }
 
 
 def compute_and_upsert_for_slot(

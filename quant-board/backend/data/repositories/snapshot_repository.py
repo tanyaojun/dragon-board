@@ -150,11 +150,24 @@ class SnapshotRepositoryMixin:
         trading_date: str | None = None,
         source: str = "dragon_board_runtime",
     ) -> dict[str, Any]:
+        from backend.data.repositories.snapshot_post_save import run_snapshot_post_save_hooks
+
         if self.session is None:
             raise RuntimeError("primary database is unavailable")
 
         existing = self.get_outbox_by_idempotency_key(idempotency_key)
         if existing:
+            # after-save 钩子（2026-09-10）：与 MongoRepository 实现对齐（两条写入路径
+            # 的 after-save 后处理统一在数据层触发；deduped 早退同样触发，行为与改造前一致）。
+            run_snapshot_post_save_hooks(
+                dataset_id=dataset.id,
+                frames=frames,
+                stock_rows=stock_rows,
+                sector_rows=sector_rows,
+                records=records,
+                deduped=True,
+                source=source,
+            )
             return {
                 "dataset": self.dataset_to_dict(dataset),
                 "status": existing.status,
@@ -174,6 +187,15 @@ class SnapshotRepositoryMixin:
         if existing_snapshot_ids and len(existing_snapshot_ids) == len(snapshot_ids):
             outbox = self._latest_snapshot_ingest_outbox(dataset.id, snapshot_ids)
             saved_dataset = self.session.get(Dataset, dataset.id) or dataset
+            run_snapshot_post_save_hooks(
+                dataset_id=dataset.id,
+                frames=frames,
+                stock_rows=stock_rows,
+                sector_rows=sector_rows,
+                records=records,
+                deduped=True,
+                source=source,
+            )
             return {
                 "dataset": self.dataset_to_dict(saved_dataset),
                 "status": outbox.status if outbox else "deduped",
@@ -234,6 +256,15 @@ class SnapshotRepositoryMixin:
             refreshed_outbox = self._finalize_outbox_mirror(idempotency_key, mirror_ok)
             if refreshed_outbox:
                 outbox = refreshed_outbox
+        run_snapshot_post_save_hooks(
+            dataset_id=dataset.id,
+            frames=frames,
+            stock_rows=stock_rows,
+            sector_rows=sector_rows,
+            records=records,
+            deduped=False,
+            source=source,
+        )
         return {
             "dataset": self.dataset_to_dict(saved_dataset),
             "status": outbox.status,

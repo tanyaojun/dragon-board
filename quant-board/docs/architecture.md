@@ -67,6 +67,8 @@ backend/snapshot_collector/
 - 写目标：通过 `QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID` 指定（生产环境设为 `dragonboard_live`）。写入 live 数据集需同时设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，其它任意 dataset 仍被 quality gate 和 CLI 预检拒绝，防止误写。
 - 质量语义（fail-visible）：**只有全部数据源都无任何原始记录时才拒写**（写入 `snapshot_collector_runs` 状态 `blocked`）。空热榜但存在 sector/指数等部分数据时，保存并打 `empty_hotlist_with_partial_data` 标记；`normalize_snapshot_ingest` 不再因空热榜整批抛错。
 - 自动调度器：`SnapshotCollectorScheduler` 在 `collector_main` lifespan 中管理，next-slot 精确定时（`QUANT_BOARD_SNAPSHOT_COLLECTOR_POLL_MS` 已废弃）。非 MongoDB 模式或 `ENABLED=0` 时自动禁用。
+- 缺失自检（fail-visible，2026-09-11）：每次定时器唤醒后先执行 `_record_missed_slots_now`——对"已过 grace 且未入库"的当日槽位写 `blocked` run 记录（`blockingIssues=["slot_missed_grace_window"]`）并置 `last_error`（/api/health 转 degraded），再触发到点采集。机器睡眠/事件循环冻结跨过槽位时，缺失必须以 run 记录暴露，不允许静默标记完成（同槽位只记录一次）。
+- 缺槽自动补采（catch-up）：`collector_main` 后台任务每 15 分钟检查当日缺失槽位并补采。采集窗口内（09:00-16:00）补全部缺失槽；收盘后（16:00 至次日 09:00）行情已定格，仅补 15:00 及之后的收盘类槽位（half_hour 15:00 / daily 15:30），盘中槽不自动回填（用收盘价伪造盘中数据会失真，交人工决策）。补采仅在 completed/deduped 后登记 `attempted`，失败槽位下一轮重试（blocked 已由 service 写 run 记录保持可见）。
 - 单实例协调：`collector_main` 与 8000 启动时竞争 Redis 锁（`snapshot-collector:instance-lock:<dataset>`，TTL 120s + 60s 心跳续期，值含持有者 PID）；持有者进程已死时残留锁自动清理重抢，避免强杀后等待与双进程双采。
 - 交易日历：bridge → 本地缓存（`quant-board/data/trading_calendar_cache.json`）→ 工作日启发式三级降级，桥挂只降级不停采。
 - 股票池：优先通过 `StartupBundleStockProvider` 读取 proxy-server 的 live 前端 startup bundle；缓存缺失时通过 `ProxyMergedHotlistProvider` 做八平台热榜 union fallback。单平台 `ProxyHotlistProvider` 只保留为诊断工具。
@@ -195,14 +197,14 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 
 - MongoDB 是正式快照、研究结果、题材基础映射和股票基础库的运行事实源。
 - Dragon Board 前端仍只能通过 QuantBoard 后端 API 访问正式数据，不直连 MongoDB。
-- `POST /api/snapshots/ingest` 是 Dragon Board 正式快照进入 MongoDB 的主入口。
+- `POST /api/snapshots/ingest` 与后台采集进程 `snapshot_collector`（8001 直写 MongoDB）是正式快照进入 MongoDB 的**两条写入路径**，二者共用同一数据层方法 `save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）：2026-07 起日常生产写入由 collector 承担，ingest 保留给手工/离线导入与前端诊断（前端 `snapshot.sweep` 默认关闭）。**写入后的后处理（快照缓存失效、analyze 产物落库）统一由数据层 after-save 钩子触发**（`backend/data/repositories/snapshot_post_save.py` + `backend/services/snapshot_post_save_hooks.py`），不得在各路径各写一份。
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
 - `GET /api/ranktrend/rank-series?rank_basis=attention` 必须携带非空 `codes`，且仅允许 MongoDB 主库；非 MongoDB 环境返回 `503`。读取时在限窗前过滤无效 `avgRankNum`，再按每帧有效 `avgRankNum ASC, code ASC` 重建关注度排名，不改写快照事实字段，也不回退到 `rank` 或 `compRank`。
 - `POST /api/ranktrend/analyze` 帧级输出 `themeContext` 与 `themeMomentumContext`、每股输出 `analysis.themeMomentum`（只读投影，第4轨数据源）：题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 纯函数基于已落库 `snapshot_sector_rows`（`entityType=hot_theme`）按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象（D2 解耦，2026-08-06）。`projection="ranktrend"` 读口同时携带 `hotThemes` 与股票 `themes/mainTheme/themeRole/themeContribution/leadStatus`。题材动量独立为 `GET /api/theme-momentum/summary`，不新增 MongoDB 集合。
 - RankTrend 批量读按 `code` 分区在 MongoDB 端截取窗口，前端先发布 RankTrend/Jump/resonance，再异步同步 Fusion、候选日志和执行投影。Redis 响应通过 `cache.hit` 与统一耗时日志观测；API ingest 和后台 snapshot collector 的成功事实写入都会递增 dataset cache generation，阻止慢读回写已失效响应。
 - `GET /api/themes/mapping`、`GET /api/themes/stocks/{theme_id}`、`GET /api/themes/stocks/by-code/{code}` 和 `GET /api/themes/counts` 从 MongoDB 题材集合读取。
 - `POST /api/hotlist-sentiment/ingest`、历史回填脚本和 MongoDB 模式 `after-market-once` 共同写入 `hotlist_sentiment`；MongoDB 不可用时结构化失败，策略回测只能显式中性回退并保留原因。
-- 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的正式收盘槽位（`quarter_hour=15:15`、`half_hour=15:30`、`daily=15:30`），以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。
+- 正式主库的历史残缺修复通过 `backfill-empty-mongodb-snapshots` 统一处理，允许补空快照、补 `snapshot_record`、修 frame 计数、补缺失的正式收盘槽位（`quarter_hour=15:15`、`half_hour=15:00`、`daily=15:30`；`half_hour` 自 2026-09-11 起止于 15:00，不再有 15:30 槽），以及补运行库缺失索引；补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor；修复动作必须写 `migration_audit(opType=mongodb_snapshot_repair)`。
 - 旧 SQLite/Supabase/Parquet 同步、归档、清理和历史 JSON 导入入口在 Mongo 模式下返回 410 或 CLI 拒绝执行；不得静默触碰旧主链。
 - MongoDB 不可用时正式接口必须结构化失败，不回退到 Supabase、SQLite、Parquet 或 IndexedDB 并伪装成功。
 
@@ -548,7 +550,7 @@ snapshot_type = half_hour
 支持：
 
 - `half_hour`：首期默认和主要验收口径。
-- 上海盘后固定价格交易延长到 `15:30`：`quarter_hour` 单日 19 槽（新增 `15:15`）、`half_hour` 单日 11 槽（新增 `15:30`）、`hourly` 仍为单日 5 槽、`daily` 的唯一终值槽从 `15:00` 调整为 `15:30`。四类槽位均由同一调度、审计和回填合同生成。
+- 上海盘后固定价格交易延长到 `15:30`：`quarter_hour` 单日 19 槽（新增 `15:15`）、`hourly` 仍为单日 5 槽、`daily` 的唯一终值槽从 `15:00` 调整为 `15:30`。`half_hour` 曾为 11 槽（含 `15:30`），**2026-09-11 起收敛为 10 槽（止于 `15:00` 收盘定格）**：15:30 收盘定格值只由 `daily` 采集，避免与 daily 终值重复。四类槽位均由同一调度、审计和回填合同生成。
 - 交易日只由 python-bridge 的 `mootdx` 上交所日历确认；前端与 QuantBoard 均通过 `GET /api/calendar` 使用该结果。日历不可用时必须报告未知/暂停，禁止用周末或工作日推测。交易时段统一以 `15:30` 为盘后固定价格交易结束，`15:31` 后才视为当日收盘完成。
 - `quarter_hour`：显式选择的可选研究口径。
 - `hourly`、`daily`：可导入和诊断，首期不作为主回测默认。

@@ -137,6 +137,11 @@ class SnapshotCollectorScheduler:
             try:
                 until_next = await self._seconds_until_next_slot()
                 await asyncio.sleep(until_next)
+                # 唤醒后先做缺失自检再触发采集：机器睡眠/事件循环冻结跨过槽位时，
+                # 过期未入库的槽位在此写 blocked run 记录并置 last_error（fail-visible）。
+                # 顺序不能反——_collect_due_slots 会把过期槽位静默标记完成，先跑会
+                # 掩盖缺失（2026-09-11 复盘：12:00-19:02 待机导致下午 6 槽无痕丢失）。
+                await self._record_missed_slots_now()
                 await self._collect_due_slots()
             except asyncio.CancelledError:
                 raise
@@ -147,6 +152,77 @@ class SnapshotCollectorScheduler:
                 self._error_count += 1
                 logger.exception("snapshot collector scheduler cycle failed")
                 await asyncio.sleep(30)
+
+    # ── missed-slot visibility ──────────────────────────────────────────────
+
+    async def _record_missed_slots_now(self) -> None:
+        """唤醒后自检：当日已过 grace 且未入库的槽位写 blocked run 记录。
+
+        调度器按 next-slot 定时休眠，机器睡眠或进程冻结跨过槽位后不会有任何
+        采集动作；此前过期槽位被静默标记完成，数据无痕丢失。此处保证缺失以
+        run 记录 + last_error（/api/health degraded 契约）暴露，供 launcher 与
+        人工发现、backfill。不做补采决策——补采由 catch-up（收盘定格槽）或
+        人工 backfill 承担（盘中槽用收盘数据回填会失真，见 _catchup_cycle）。
+        """
+        from backend.snapshot_collector.service_factory import (
+            create_snapshot_collector_repository,
+        )
+        from backend.snapshot_collector.slots import generate_slots
+        from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+        now_ts = int(time.time() * 1000)
+        trading_date = await asyncio.to_thread(trading_date_from_ts, now_ts)
+        if trading_date is None:
+            return
+        if trading_date != self._completed_date:
+            self._completed_date = trading_date
+            self._completed_today.clear()
+
+        grace_ms = self.grace_minutes * 60 * 1000
+        repo = await asyncio.to_thread(create_snapshot_collector_repository)
+        for slot in generate_slots(trading_date, self.snapshot_types):
+            sid = slot.snapshot_id
+            if sid in self._completed_today or sid in self._in_flight_slots:
+                continue
+            if now_ts < slot.timestamp_ms + grace_ms:
+                continue  # 未过期：调度器仍在处理或尚未到期
+            if await asyncio.to_thread(repo.snapshot_exists, self.dataset_id, sid):
+                self._completed_today.add(sid)
+                continue
+            self._record_missed_slot(repo, slot)
+            self._completed_today.add(sid)
+
+    def _record_missed_slot(self, repo: Any, slot: Any) -> None:
+        """写单条缺失记录并置 last_error；记录失败不阻断自检循环。"""
+        from backend.snapshot_collector.state import record_run as _record_run
+
+        reason = (
+            f"slot missed: {self.grace_minutes}m grace window expired with no run "
+            f"(scheduler freeze or machine sleep); backfill manually if needed"
+        )
+        try:
+            _record_run(
+                repo,
+                {
+                    "runId": f"missed-{slot.snapshot_id}-{int(time.time() * 1000)}",
+                    "datasetId": self.dataset_id,
+                    "snapshotId": slot.snapshot_id,
+                    "snapshotType": slot.snapshot_type,
+                    "tradingDate": slot.trading_date,
+                    "slotTime": slot.slot_time,
+                    "status": "blocked",
+                    "deduped": False,
+                    "dryRun": False,
+                    "blockingIssues": ["slot_missed_grace_window"],
+                    "error": reason,
+                },
+            )
+        except Exception:
+            logger.exception("failed to record missed slot %s", slot.snapshot_id)
+        self._last_error = reason
+        self._last_error_at = datetime.datetime.now(TZ_SHANGHAI).isoformat()
+        self._last_error_slot = slot.snapshot_id
+        self._error_count += 1
 
     # ── next-slot calculation ───────────────────────────────────────────────
 

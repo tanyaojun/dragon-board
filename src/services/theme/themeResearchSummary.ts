@@ -138,6 +138,17 @@ export function buildHotlistThemeResearchItems(
   })
 }
 
+function describeRequestFailure(error: unknown): string {
+  // 2026-09-12：fetch 超时/被中止抛 AbortError，浏览器默认 message 是
+  // "signal is aborted without reason"，对用户没有诊断价值 → 转可读文案（fail-visible 但可读）。
+  const name = (error as { name?: string } | null)?.name
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  if (name === 'AbortError' || /abort/i.test(message)) {
+    return '请求超时（ThemeTrend 引擎全量重放过慢），本次读取已中止，请稍后重试'
+  }
+  return message || 'request_failed'
+}
+
 export async function loadThemeResearchExplanation(): Promise<ThemeResearchExplanation> {
   try {
     const summary = await apiService.getThemeResearchSummary({
@@ -148,7 +159,7 @@ export async function loadThemeResearchExplanation(): Promise<ThemeResearchExpla
   } catch (error) {
     return buildThemeResearchExplanation({
       available: false,
-      reason: error instanceof Error ? error.message : 'request_failed',
+      reason: describeRequestFailure(error),
     })
   }
 }

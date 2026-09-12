@@ -221,7 +221,7 @@ QuantBoard 的规则以 `quant-board/docs/README.md`、`quant-board/docs/AI_COLL
 - 默认 `snapshot_type` 是 `half_hour`；`quarter_hour` 只能由用户显式选择，不能替代默认口径。
 - 回测、优化、API、CLI 和前端展示必须保留 `dataset_id`、`snapshot_type`、`strategy_version`、`config_hash`、`random_seed`。
 - QuantBoard 存储主链为 MongoDB 主库 + Supabase 后端备份库；Supabase 必须按 `quant-board/backend/data/supabase_schema.sql` 与 MongoDB 同构，超大 JSON 只允许在备份适配层透明压缩，存储、同步、恢复和冲突规则以 `quant-board/docs/database-migration-plan.md` 为准。
-- Dragon Board 正式快照写库必须走 QuantBoard 后端 `POST /api/snapshots/ingest`，正式保存判重以 MongoDB/后端 `snapshot_id` 为准；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 快照缓存默认关闭，只保留为迁移源、显式缓存或非正式临时数据来源。
+- Dragon Board 正式快照的**生产写入由 QuantBoard 后台采集进程 `snapshot_collector`（8001）直写 MongoDB** 承担（2026-07 起）；`POST /api/snapshots/ingest` 保留为**手工/离线导入与前端诊断**写入入口（前端 `SnapshotRuntime` 的 `snapshot.sweep` 默认关闭，只在显式诊断时启动）。两条路径共用同一数据层方法 `save_snapshot_ingest`（MongoDB 与 SQLite 两个实现），**写入后的后处理（快照缓存失效、analyze 产物落库）必须由该数据层的共享 after-save 钩子触发，不得在各写入路径各写一份**——2026-09-10 重构；此前 analyze 只挂在 ingest 路由上，而日常采集绕过该路由，导致 `snapshot_analysis` 空置一个多月、热榜情绪面板 `displayStatus` join 恒为 0。正式保存判重以 MongoDB/后端 `snapshot_id` 为准；历史 JSON/IndexedDB 迁移入口为 `POST /api/migrations/snapshots/import-json`，IndexedDB 快照缓存默认关闭，只保留为迁移源、显式缓存或非正式临时数据来源。
 - Dragon Board 正式快照读口走 QuantBoard 后端 `GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows`；IndexedDB 只保留为历史迁移源和缓存，不再新增或恢复浏览器端 IndexedDB 校验/补齐 API。迁移阶段只保留后端 `import-json` 和离线导入工具，字段映射不得随意删改。
 - Python RankTrend 输出字段是 golden 合同本身（`RankTrendAnalysisResult`），TS 消费方按该合同校验。
 - 前端展示不得把 `finalSignal` 当成唯一交易结论，应展示状态、候选分层、风险、样本质量和解释。

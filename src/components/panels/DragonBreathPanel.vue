@@ -37,7 +37,7 @@
             <span class="stage-badge-icon"></span>
           </div>
           <div class="sentiment-info">
-            <span class="sentiment-label">当前周期</span>
+            <span class="sentiment-label">市场情绪阶段</span>
             <div class="sentiment-phase">
               {{ displaySentiment.stageName }}
             </div>
@@ -271,8 +271,8 @@
               </div>
               <div class="metric-item">
                 <span class="metric-label">风险压力</span>
-                <span class="metric-value down-text">{{ hotListToday?.riskCount || 0 }}</span>
-                <span class="metric-percent">{{ formatShare(hotListToday?.riskShare) }}</span>
+                <span class="metric-value down-text">{{ hotListRiskCount }}</span>
+                <span class="metric-percent">{{ formatShare(hotListRiskShare) }}</span>
               </div>
             </div>
 
@@ -322,6 +322,7 @@
                   <span class="status-share">{{ item.shareText }}</span>
                 </div>
               </div>
+              <div v-if="hotListStatusSourceNote" class="status-source-note">{{ hotListStatusSourceNote }}</div>
             </div>
 
             <div class="hotlist-section">
@@ -331,7 +332,7 @@
                   <span class="history-label">{{ item.label }}</span>
                   <span class="history-main">{{ item.total }}</span>
                   <span class="history-sub">
-                    强资 {{ item.strongMoney }} · 拥挤 {{ item.crowded }} · 风险 {{ item.risk }}
+                    冷却 {{ item.cooling }} · 拥挤 {{ item.crowded }} · 风险 {{ item.risk }}
                   </span>
                 </div>
               </div>
@@ -591,8 +592,9 @@ import { fetchHotlistSentimentSeries } from '@/services/hotlist/hotlistSentiment
 import type {
   HotListDayMetrics,
   HotListSentimentDayDoc,
-  HotListStatusLabel,
+  HotListStageKey,
 } from '@/types/hotlistSentiment'
+import { HOT_LIST_STAGE_LABELS } from '@/types/hotlistSentiment'
 import {
   EMOTION_PHASE_BY_VALUE,
   EMOTION_PHASE_LIST,
@@ -866,14 +868,26 @@ const hotListMarketLimitEvidence = computed(() => hotListLimitEvidence.value?.ma
 const hotListYesterdayStrongPerformance = computed(
   () => hotListComparison.value?.yesterdayStrongPerformance ?? null,
 )
+// 2026-09-10（spec §10）：8 类 statusCounts 已删除 → “活跃机会”改用攻击态 stage 桶。
+// 语义从“强资确认 + 点火观察”变为“点火 + 扩散”（stage 主轴下可复现）。
 const hotListActiveOpportunityCount = computed(() => {
-  const counts = hotListToday.value?.statusCounts
+  const counts = hotListToday.value?.stageCounts
   if (!counts) return 0
-  return hotListToday.value?.activeOpportunityCount ?? counts['强资确认'] + counts['点火观察']
+  return counts.ignition + counts.expansion
 })
 const hotListActiveOpportunityShare = computed(() => {
   const sampleSize = hotListToday.value?.topN || 0
   return sampleSize ? hotListActiveOpportunityCount.value / sampleSize : 0
+})
+// 风险压力 = 反转 + 冷却桶。展示口径：全冷却桶都视为风险暴露（含 cooling 强资行）；
+// 注意与后端规则输入 riskShare 不同源——后端剔除 cooling 强资行，此处不做该剔除。
+const hotListRiskCount = computed(() => {
+  const counts = hotListToday.value?.stageCounts
+  return counts ? counts.reversal + counts.cooling : 0
+})
+const hotListRiskShare = computed(() => {
+  const sampleSize = hotListToday.value?.topN || 0
+  return sampleSize ? hotListRiskCount.value / sampleSize : 0
 })
 
 const hotlistThemeResearchItems = computed<HotlistThemeResearchItem[]>(() =>
@@ -896,25 +910,35 @@ const displaySentiment = computed<DisplaySentiment>(() => {
   return sentiment.value
 })
 
-const hotListStatusOrder: Array<{ label: HotListStatusLabel; classKey: string }> = [
-  { label: '主升确认', classKey: 'main' },
-  { label: '点火观察', classKey: 'ignition' },
-  { label: '强资确认', classKey: 'strong' },
-  { label: '新入观察', classKey: 'new' },
-  { label: '高位拥挤', classKey: 'crowded' },
-  { label: '资金背离', classKey: 'divergence' },
-  { label: '转弱预警', classKey: 'weakening' },
-  { label: '样本不足', classKey: 'insufficient' },
+// 全池状态结构 = 6 格（点火/扩散/拥挤/反转/冷却/无阶段），锚定 cycle.stage 黄金真值（spec §10.4）
+const hotListStageOrder: Array<{ key: HotListStageKey; classKey: string }> = [
+  { key: 'ignition', classKey: 'ignition' },
+  { key: 'expansion', classKey: 'expansion' },
+  { key: 'crowded', classKey: 'crowded' },
+  { key: 'reversal', classKey: 'reversal' },
+  { key: 'cooling', classKey: 'cooling' },
+  { key: 'unknown', classKey: 'unknown' },
 ]
 
 const hotListStatusItems = computed(() => {
   const today = hotListToday.value
   if (!today) return []
-  return hotListStatusOrder.map((item) => ({
-    ...item,
-    count: today.statusCounts[item.label] || 0,
-    shareText: formatShare(today.statusShares[item.label] || 0),
+  return hotListStageOrder.map((item) => ({
+    label: HOT_LIST_STAGE_LABELS[item.key],
+    classKey: item.classKey,
+    count: today.stageCounts[item.key] || 0,
+    shareText: formatShare(today.stageShares[item.key] || 0),
   }))
+})
+
+// 状态来源透出（spec §4）：golden 判定（displayStatus 命中）vs fallback 接管。
+// 阶段缺失不再单列计数：分类层删除后它直接体现为「无阶段」格（stageCounts.unknown）。
+// 缺字段（旧 EOD 文档）时整段隐藏，不做硬门禁。fallback 量价启发式与新级联不同源——
+// 若将来收敛为同口径，必须同步改此处文案 + spec + 合同文档（code review F5）。
+const hotListStatusSourceNote = computed(() => {
+  const counts = hotListSentiment.value?.metrics?.statusSourceCounts
+  if (!counts) return ''
+  return [`golden 判定 ${counts.displayStatus}`, `fallback 接管 ${counts.fallback}`].join(' / ')
 })
 
 const hotListLayerItems = computed(() => {
@@ -925,15 +949,28 @@ const hotListLayerItems = computed(() => {
     { label: '前20', metrics: layers.top20 },
     { label: '前50', metrics: layers.top50 },
     { label: '前100', metrics: layers.top100 },
-  ].map(({ label, metrics }) => ({
-    label,
-    upRatio: formatShare(metrics.upRatio),
-    activeOpportunity: `${metrics.activeOpportunityCount} / ${formatShare(metrics.activeOpportunityShare)}`,
-    crowded: `${metrics.crowdedCount} / ${formatShare(metrics.crowdedShare)}`,
-    risk: `${metrics.riskCount} / ${formatShare(metrics.riskShare)}`,
-    trin: formatTrin(metrics.hotTrin),
-    avgChange: formatPercent(metrics.avgChange),
-  }))
+  ].map(({ label, metrics }) => {
+    // 2026-09-12 fail-visible：8 类旧结构 EOD 文档（如 2026-09-11 EOD）无 stageCounts/stageShares，
+    // 裸属性访问会在渲染期抛 TypeError 并中断面板渲染（分层结构整段空白的根因）。
+    // 缺字段显示 '--' 占位，不伪装成 0（数据质量异常不得伪造数值）。
+    const counts = metrics?.stageCounts
+    const shares = metrics?.stageShares
+    const topN = metrics?.topN || 0
+    const activeCount = counts ? counts.ignition + counts.expansion : null
+    const activeShare = counts && topN ? (counts.ignition + counts.expansion) / topN : null
+    return {
+      label,
+      upRatio: formatShare(metrics?.upRatio),
+      // 2026-09-10：改读 stage 桶（8 类派生指标已删除）。列名保持模板兼容。
+      activeOpportunity: `${formatNullableCount(activeCount)} / ${formatShare(activeShare)}`,
+      crowded: `${formatNullableCount(counts?.crowded ?? null)} / ${formatShare(shares?.crowded ?? null)}`,
+      risk: `${formatNullableCount(counts ? counts.reversal + counts.cooling : null)} / ${formatShare(
+        shares ? shares.reversal + shares.cooling : null,
+      )}`,
+      trin: formatTrin(metrics?.hotTrin),
+      avgChange: formatPercent(metrics?.avgChange),
+    }
+  })
 })
 
 const hotListLimitEvidenceItems = computed(() => {
@@ -973,9 +1010,12 @@ const hotListHistoryItems = computed(() => {
   const toItem = (label: string, metrics?: HotListDayMetrics | null) => ({
     label,
     total: metrics ? `${metrics.total}只` : '--',
-    strongMoney: metrics?.statusCounts['强资确认'] ?? 0,
-    crowded: metrics?.statusCounts['高位拥挤'] ?? 0,
-    risk: metrics ? metrics.statusCounts['资金背离'] + metrics.statusCounts['转弱预警'] : 0,
+    // 2026-09-10：改读 stage 桶。2026-09-12（code review Medium 3）：键名同步改为 cooling——
+    // cooling 桶 ≠ 强资（强资只是 cooling 的强资金子集），模板文案同步「冷却」。
+    cooling: metrics?.stageCounts?.cooling ?? 0,
+    crowded: metrics?.stageCounts?.crowded ?? 0,
+    // risk = 反转 + 冷却全桶（展示口径，含 cooling 强资行；后端规则输入 riskShare 剔除之）
+    risk: metrics ? (metrics.stageCounts?.reversal ?? 0) + (metrics.stageCounts?.cooling ?? 0) : 0,
   })
 
   return [
@@ -1379,7 +1419,9 @@ function getTrinClass(value?: number | null): string {
 }
 
 function getTrinText(value?: number | null): string {
-  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '样本不足'
+  // TRIN 缺数据 → "数据不足"。不写"样本不足"：该词是已退役的 8 类展示状态 label，
+  // DragonBreathPanel.test.ts 锁定它不得在面板源码中回潮（2026-09-12）。
+  if (value === undefined || value === null || !Number.isFinite(Number(value))) return '数据不足'
   if (value < 1) return '承接偏强'
   if (value > 1.15) return '承接偏弱'
   return '承接均衡'
@@ -2188,35 +2230,37 @@ onUnmounted(() => {
   text-align: right;
 }
 
-.status-main {
-  background: #ff4757;
+/* 状态来源透出（spec §4.2 / U1-a）：golden 判定 / fallback（旧口径）接管 / 阶段缺失 */
+.status-source-note {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.85;
 }
 
+/* 全池状态结构 6 格（2026-09-10 spec §10.4）：点火/扩散/拥挤/反转/冷却/无阶段 */
 .status-ignition {
-  background: #ffa502;
+  background: #e7bd4d;
 }
 
-.status-strong {
-  background: #3498db;
-}
-
-.status-new {
-  background: #2dd4bf;
+.status-expansion {
+  background: #ff5b62;
 }
 
 .status-crowded {
-  background: rgba(255, 255, 255, 0.85);
+  background: #ff9f43;
 }
 
-.status-divergence {
-  background: #9b59b6;
+.status-reversal {
+  background: #38c98b;
 }
 
-.status-weakening {
-  background: #2ed573;
+.status-cooling {
+  background: #5b8def;
 }
 
-.status-insufficient {
+.status-unknown {
   background: #7f8c8d;
 }
 

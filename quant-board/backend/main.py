@@ -99,6 +99,19 @@ app = FastAPI(
     description="Python RankTrend 回测平台",
 )
 
+# after-save 钩子注册（2026-09-10）：快照写入后的后处理（快照缓存失效 + analyze 产物落库）
+# 统一由数据层 `save_snapshot_ingest` 触发，两条写入路径（ingest 路由 / collector 直写）自动一致。
+# **在模块导入时注册**（而非 startup 事件）：TestClient / CLI / 后台任务等不触发 startup 的场景
+# 同样需要钩子生效 —— 2026-09-10 实测该差异会让后处理静默失效（`test_snapshot_read_api` 抓到）。
+try:
+    from backend.services.snapshot_post_save_hooks import (
+        register_default_snapshot_post_save_hooks,
+    )
+
+    register_default_snapshot_post_save_hooks()
+except Exception:
+    logger.exception("snapshot post-save hooks registration failed; continue startup")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -196,6 +209,7 @@ async def restore_fund_flow_from_mongodb() -> None:
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    # 注：after-save 钩子已在**模块导入时**注册（见上方 app 定义处），此处不重复注册。
     # 清理策略（2026-08-12）：启动时给存量永久 Redis key 补 TTL
     # （ths-main-monitor:raw / snapshot:generation / theme-fund version）——
     # 修复"只管杀不管埋"：历史无 TTL 缓存补过期时间，best-effort 不阻塞启动
@@ -675,55 +689,15 @@ def ingest_snapshot(
             trading_date=request.trading_date,
             source=request.source,
         )
-        _invalidate_snapshot_cache_after_ingest(
-            dataset_id=dataset.id,
-            records=records,
-            frames=frames,
-            stock_rows=stock_rows,
-            sector_rows=sector_rows,
-        )
-        # G4-3（2026-08-23 前后端分离，用户授权追加）：ingest 后后台对快照帧全量 analyze 并
-        # 持久化 observation/displayStatus（稳定回放口径，不阻塞 ingest 响应）。仅 MongoDB 生产态。
-        _schedule_snapshot_analysis(background_tasks, dataset.id, frames, db)
+        # after-save 后处理（快照缓存失效 + analyze 产物落库）已**下移到数据层**
+        # `save_snapshot_ingest` 的共享钩子（2026-09-10）：此处不再显式调用，
+        # 由 backend/services/snapshot_post_save_hooks.py 注册的钩子统一执行，
+        # 从而与 snapshot_collector 直写库路径自动一致（原先两条路径各写一份、从未对齐）。
         return {"ok": True, **result}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-
-
-def _schedule_snapshot_analysis(
-    background_tasks: BackgroundTasks,
-    dataset_id: str,
-    frames: list[dict[str, Any]],
-    db: Session | None,
-) -> None:
-    """G4-3：ingest 后后台触发 analyze 入库。仅 MongoDB 生产态；失败静默（不吞数据/不阻塞 ingest）。"""
-    try:
-        if storage_source_label() != "mongodb":
-            return
-        if not frames:
-            return
-        task_repo = create_repository(db)
-    except Exception:
-        return
-    for frame in frames:
-        snapshot_id = str(frame.get("snapshotId") or frame.get("id") or "")
-        if not snapshot_id:
-            continue
-        # 每帧用自身 snapshot_type（同批混型时不共用 frames[0] 口径）
-        snapshot_type = str(frame.get("type") or "half_hour")
-        try:
-            background_tasks.add_task(
-                analyze_snapshot_and_persist,
-                task_repo,
-                dataset_id,
-                snapshot_id,
-                snapshot_type,
-                frame,
-            )
-        except Exception:
-            continue
 
 
 @app.get("/api/snapshots/analysis")
@@ -859,23 +833,6 @@ def _cached_snapshot_response(
         round((perf_counter() - started_at) * 1000),
     )
     return response
-
-
-def _invalidate_snapshot_cache_after_ingest(
-    *,
-    dataset_id: str,
-    records: list[Any],
-    frames: list[Any],
-    stock_rows: list[Any],
-    sector_rows: list[Any],
-) -> None:
-    snapshot_cache.invalidate_snapshot_cache_after_ingest(
-        dataset_id=dataset_id,
-        records=records,
-        frames=frames,
-        stock_rows=stock_rows,
-        sector_rows=sector_rows,
-    )
 
 
 @app.get("/api/snapshots/frames")
@@ -1992,7 +1949,44 @@ def get_theme_research_summary(
     snapshot_type: str = "half_hour",
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。"""
+    """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。
+
+    2026-09-12 读口缓存：该读口每次请求全量 ``load_frame_bundles(limit=200)`` + ThemeTrend
+    引擎重放（实测 8~18s），前端超时必然 abort。与 ``GET /api/hotlist-sentiment/series`` 同口径
+    —— Redis TTL 缓存 + 快照依赖失效；**只缓存 ``available=True`` 的成功响应**，降级/异常
+    不缓存（fail-visible，不把"引擎失败"固化成"看起来正常的历史摘要"）。
+    """
+    settings = get_settings()
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    prefix = settings.redis_key_prefix.strip(":")
+    cache_key = f"{prefix}:research:theme-summary:{dataset_id}:{snapshot_type}"
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return cached
+
+    response = _compute_theme_research_summary(dataset_id, snapshot_type, db)
+    if response.get("available"):
+        response = {**response, "cache": {"hit": False, "store": "redis"}}
+        cache.set_response(
+            cache_key,
+            response,
+            ttl_seconds=settings.theme_research_summary_cache_ttl_seconds,
+        )
+        cache.register_dependencies(
+            cache_key,
+            snapshot_cache.build_snapshot_cache_index_keys(
+                prefix=settings.redis_key_prefix,
+                dataset_id=dataset_id,
+            ),
+        )
+    return response
+
+
+def _compute_theme_research_summary(
+    dataset_id: str,
+    snapshot_type: str,
+    db: Session | None,
+) -> dict[str, Any]:
     try:
         repo = create_repository(db)
         frames = repo.load_frame_bundles(dataset_id, snapshot_type=snapshot_type, limit=200)

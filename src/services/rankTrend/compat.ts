@@ -2,15 +2,10 @@ import type { RankTrendAnalysisResult } from './types'
 import type { JumpSignalResult } from './jumpSignalService'
 import type { JumpResult } from './types'
 export {
-  buildRankTrendStatusContext,
-  buildRankTrendStatusContextFromMarketPercentiles,
-  classifyVolumeConfirmation,
   getRankTrendDisplayBreakdown,
   getRankTrendDisplayStatus,
   type RankTrendDisplayBreakdown,
   type RankTrendDisplayStatus,
-  type RankTrendStatusContext,
-  type VolumeConfirmation,
 } from './statusClassifier'
 
 export function applyRankTrendAnalysis(target: any, rankTrend?: RankTrendAnalysisResult | null): void {
