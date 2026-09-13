@@ -178,6 +178,8 @@ Python rankTrend 输出应对齐 `RankTrendAnalysisResult`：
 - `rankTrend.observation.rankTrend.signalTier` / `tierReasons`：趋势档位（`_rank_trend_tier`）。
 - `rankTrend.observation.lifecycle.signalTier` / `tierReasons`：周期档位（`_lifecycle_tier`）。
 - `rankTrend.observation.volumePrice.signalTier` / `tierReasons`：量价档位（`_volume_price_tier`）。
+- `rankTrend.observation.crossSection.signalTier` / `tierReasons`：横截面相对强弱档位（第 5 维投票，`compute_cross_section`，UI 展示名「热度」）。档位规则：A=`percentile>=85 且 percentileDelta>=+5`（高位+上升确认）、D=`percentile<=15 且 percentileDelta<=-5`，B/C 兼有绝对档与 delta 分支。
+  - **2026-09-13 delta 复活修复**：此前两条供给链路让 `percentileDelta` 恒 0（入库链路 current_frame 与最后一帧 bundle 同帧重复 append；live 链路 2026-08-23 修复 A 的复制尾），A/D 档自因子上线以来数学不可达（snapshot_analysis 全库 24 万条实证 A=0/D=0）。修复后：入库链路同帧不再重复 append，且最后一帧股票行用 ingest 原始行替换读侧 `ranktrend+themes` 白名单投影行（否则 amount/price/turnover/OHLC 丢失会让 amountRatio/ATR 降级、displayStatus tooltip 回退），同帧语义 = 权威序列 + ingest 原始行；live 链路 crossSection 输入去掉复制尾（level 仍取权威 pct 展示稳定，delta=上一权威帧 vs 上上权威帧，滞后一个快照周期），technical/cycle/趋势/共振等其它因子输入不变（golden 不漂移，回归护栏 `tests/test_cross_section_delta_revival.py`）。
 - `rankTrend.observation.synergy.signalTier` / `tierReasons`：四维合并档位（`_synergy_tier`，组装下沉前仅在 API 单股链路生产，下沉后 replay 信号亦含）。
 
 档位枚举：`S / A / B / C / D / E / unknown`（`unknown` = 样本不足/数据缺失，前端显示 `--`，不归零、不伪装）。API 与 replay 由 `assemble_observation`（`backend/analysis/ranktrend/volume_price.py`）统一组装；replay 链路无横截面 resonance 时共振维缺票（vote=0），属已知限制。

@@ -1082,7 +1082,14 @@ class RankTrendPythonEngine:
         price_changes: list[Any] | None = None,
         amount_history: list[Any] | None = None,
         atr_history: list[Any] | None = None,
+        cross_section_percentiles: list[float] | None = None,
     ) -> dict[str, Any] | None:
+        """cross_section_percentiles（2026-09-13 delta 复活）：crossSection 因子的独立输入。
+
+        live 链路 current 帧的 percentiles 末项是权威 pct 复制尾（防漂移，见
+        ranktrend_routes._load_frames_for_analysis），保留它 delta 恒 0、A/D 档不可达。
+        调用方传去复制尾序列（level 不变、delta=权威帧差），None 回退 percentiles
+        （replay/backtest/research 现行为，golden 不漂移）。"""
         if not ranks:
             return None
         code = str(stock.get("code") or "")
@@ -1295,10 +1302,12 @@ class RankTrendPythonEngine:
             rank_trend["technical"]["atrMeanReversion"] = rank_trend["observation"]["atrMeanReversion"]
             # 横截面相对强弱因子（2026-08-17 方向 A）：个股 percentile 序列（histories item[2]）
             # + 市场 median percentile（market_ctx）。第 5 维投票默认打开（tierSynergyCrossSectionVote=1.0）。
+            # 2026-09-13 delta 复活：live current 帧复制尾场景用调用方供给的去尾序列
+            # （level 不变、delta=权威帧差）；None 回退 percentiles（replay/backtest 现行为）。
             from backend.analysis.ranktrend.trend.cross_section import compute_cross_section
 
             rank_trend["observation"]["crossSection"] = compute_cross_section(
-                percentiles,
+                cross_section_percentiles if cross_section_percentiles is not None else percentiles,
                 (market_ctx or {}).get("marketMedianPercentile"),
                 self.config,
             )

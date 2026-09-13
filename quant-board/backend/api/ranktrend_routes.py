@@ -198,36 +198,56 @@ def _load_frames_for_analysis(
     if current_frame:
         current_stocks = current_frame.get("stocks") or []
         current_key = f"{current_frame.get('tradingDate')} {current_frame.get('slotTime')}".strip()
-        # current 帧全市场 attention rank/percentile（与历史帧同构：按 avgRankNum 排序，
-        # G3 权威算法），供新进热榜（历史无记录）股票注册单点序列用。
-        cur_ranks, cur_total = attention_rank_lookup(current_stocks)
-        cur_pcts = {code: percentile_rank(rank, cur_total) for code, rank in cur_ranks.items()}
-        for code in {str(s.get("code")) for s in current_stocks if isinstance(s, dict)}:
-            bars = series_by_code.get(code)
-            if bars:
-                # 2026-08-23 修复 A（防过拟合排查）：当前帧 percentile 不再用前端派生的
-                # rank/avgRankNum（随 zljzb/八平台热榜重算、会漂移，污染横截面/趋势/周期）。
-                # 改为复用该 code 在权威历史帧的最后一个 percentile——横截面/趋势/周期只用
-                # 权威源，当前帧仅作展示帧（量价仍用其字段）。
-                _key, _rank, _pct = bars[-1]
-                series_by_code[code].append((current_key, _rank, _pct))
-            elif code in cur_pcts:
-                # 2026-08-24 新进热榜（历史无该 code）：用 current 帧截面 percentile 注册
-                # 单点序列（与历史帧同构的 attention percentile，非前端派生值），使新股
-                # 也能获得五维信号——横截/量价/共振可算，趋势/周期因单点样本走
-                # sampleQuality=insufficient 降级（fail-visible），不再整只被丢弃。
-                series_by_code[code] = [(current_key, cur_ranks[code], cur_pcts[code])]
-        frames.append({
-            "tradingDate": current_frame.get("tradingDate"),
-            "slotTime": current_frame.get("slotTime"),
-            "type": snapshot_type,
-            "timestamp": 0,
-            "stocks": current_frame.get("stocks") or [],
-            "marketContext": {
-                "sentiment": current_frame.get("sentiment") or {},
-                "marketStats": current_frame.get("marketStats") or {},
-            },
-        })
+        # 2026-09-13 delta 复活修复（根因 1）：snapshot analyze 链路
+        # （compute_snapshot_analysis）的 current_frame 就是刚入库的最后一帧 bundle——
+        # 再 append 一次（帧 + series 复制尾）会让序列末两项恒相等，crossSection
+        # percentileDelta 恒 0，A/D 档数学不可达（snapshot_analysis 全库实证 delta≡0）。
+        # 同 key 时整段跳过：frames/series 以真实权威帧结束，delta = 真实跨帧变化。
+        current_is_last_bundle_frame = bool(frames) and (
+            f"{frames[-1].get('tradingDate')} {frames[-1].get('slotTime')}".strip() == current_key
+        )
+        if current_is_last_bundle_frame:
+            # 同帧跳过 append，但必须用 ingest 原始行替换读侧投影行：bundle 走
+            # ranktrend+themes 白名单（code/name/rank/avgRankNum/change/volumeRatio/
+            # zlje/zljzb + themes 五字段），amount/price/turnover/OHLC 不在白名单——
+            # 直接用投影行 analyze 会让 amountRatio/ATR 降级 insufficient、displayStatus
+            # tooltip 价格/成交额回退。同帧语义 = 权威序列 + ingest 原始行（与修复前
+            # output[-1] 的输入一致，且省掉整帧重复计算）。
+            frames[-1]["stocks"] = current_stocks
+        else:
+            # current 帧全市场 attention rank/percentile（与历史帧同构：按 avgRankNum 排序，
+            # G3 权威算法），供新进热榜（历史无记录）股票注册单点序列用。
+            cur_ranks, cur_total = attention_rank_lookup(current_stocks)
+            cur_pcts = {code: percentile_rank(rank, cur_total) for code, rank in cur_ranks.items()}
+            for code in {str(s.get("code")) for s in current_stocks if isinstance(s, dict)}:
+                bars = series_by_code.get(code)
+                if bars:
+                    # 2026-08-23 修复 A（防过拟合排查）：当前帧 percentile 不再用前端派生的
+                    # rank/avgRankNum（随 zljzb/八平台热榜重算、会漂移，污染横截面/趋势/周期）。
+                    # 改为复用该 code 在权威历史帧的最后一个 percentile——横截面/趋势/周期只用
+                    # 权威源，当前帧仅作展示帧（量价仍用其字段）。
+                    # 2026-09-13（根因 2）：复制尾会让 crossSection 的 delta 恒 0——
+                    # _analyze_frames 对 current 帧的 crossSection 输入去尾（delta 滞后一拍
+                    # 取权威帧差），复制尾仅保留给 technical/cycle 等其它因子（输入不变）。
+                    _key, _rank, _pct = bars[-1]
+                    series_by_code[code].append((current_key, _rank, _pct))
+                elif code in cur_pcts:
+                    # 2026-08-24 新进热榜（历史无该 code）：用 current 帧截面 percentile 注册
+                    # 单点序列（与历史帧同构的 attention percentile，非前端派生值），使新股
+                    # 也能获得五维信号——横截/量价/共振可算，趋势/周期因单点样本走
+                    # sampleQuality=insufficient 降级（fail-visible），不再整只被丢弃。
+                    series_by_code[code] = [(current_key, cur_ranks[code], cur_pcts[code])]
+            frames.append({
+                "tradingDate": current_frame.get("tradingDate"),
+                "slotTime": current_frame.get("slotTime"),
+                "type": snapshot_type,
+                "timestamp": 0,
+                "stocks": current_stocks,
+                "marketContext": {
+                    "sentiment": current_frame.get("sentiment") or {},
+                    "marketStats": current_frame.get("marketStats") or {},
+                },
+            })
     if frame_keys:
         wanted = set(frame_keys)
         # 保留请求帧及其前 ANALYZE_MAX_TRACK_WINDOW-1 帧：共振/技术/生命周期算法需要
@@ -367,6 +387,8 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
 
     args 依次为 (config, stock, frame, ranks, percentiles, regime, hot_themes,
     momentum_v2_ctx, market_median, market_sample_count, market_median_percentile)。
+    history_args: [price_changes, amount_history, atr_history, gate_confirm_state,
+    cross_section_percentiles(2026-09-13 delta 复活，None 回退 percentiles)]。
     返回 {code, analysis} 或 None。engine 按需构造轻量实例（仅含 config，不注入
     sentiment_provider——_build_signal 不依赖它，hotlistSentiment 已预置进 frame）。
     """
@@ -379,6 +401,7 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     amount_history = history_args[1] if len(history_args) > 1 else None
     atr_history = history_args[2] if len(history_args) > 2 else None
     gate_confirm_state = history_args[3] if len(history_args) > 3 else None
+    cross_section_percentiles = history_args[4] if len(history_args) > 4 else None
     engine = RankTrendPythonEngine(config=config)
     if gate_confirm_state is not None:
         # WP2a：live frames 链路（_analyze_frames 串行）传入请求级确认状态；单股链路
@@ -403,6 +426,7 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
         price_changes=price_changes,
         amount_history=amount_history,
         atr_history=atr_history,
+        cross_section_percentiles=cross_section_percentiles,
     )
     if not signal:
         return None
@@ -437,11 +461,12 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     # 2026-08-18（前端链路对齐）：_build_signal(assemble=False) 不挂载 crossSection，
     # 而 synergy 第 5 维投票（tierSynergyCrossSectionVote=1.0 默认打开）需要 cs_tier——
     # 否则前端【四维】档位停留在旧投票口径。这里与 replay 链路同源补挂载
-    # （percentiles/market_median_percentile 已在 args 中）。
+    # （percentiles/market_median_percentile 已在 args 中）。2026-09-13：与 _build_signal
+    # 同源使用去复制尾输入（cross_section_percentiles），两处挂载保持一致。
     from backend.analysis.ranktrend.cross_section import compute_cross_section
 
     analysis.setdefault("observation", {})["crossSection"] = compute_cross_section(
-        percentiles,
+        cross_section_percentiles if cross_section_percentiles is not None else percentiles,
         market_median_percentile,
         config,
     )
@@ -556,6 +581,15 @@ def _analyze_frames(
             prefix = bars[: pos + 1]
             ranks = [item[1] for item in prefix]
             percentiles = [item[2] for item in prefix]
+            # 2026-09-13 delta 复活修复（根因 2）：current 帧 series 末项是
+            # _load_frames_for_analysis 的复制项（复用 bars[-1] 权威 pct 防漂移），
+            # 保留它 crossSection 的 delta 恒 0（A/D 档数学不可达）。crossSection 输入
+            # 去掉复制尾：level 不变（权威 pct），delta = 上一权威帧 vs 上上权威帧
+            # （滞后一个快照周期的真实变化）。technical/cycle/趋势/共振等其它因子
+            # 仍用完整 prefix（golden 不漂移）。单点序列（新进热榜）无复制尾，不去。
+            cross_section_percentiles: list[float] | None = None
+            if _is_current_frame(frame) and len(percentiles) >= 2:
+                cross_section_percentiles = percentiles[:-1]
             if not full_history and index != last_frame_index:
                 # 首屏全市场场景（无 frame_keys）：历史帧仅输出轻量 meta，
                 # 前端 updateLatestAnalysisSeries 只消费 currentRank/currentPercentile；
@@ -595,6 +629,7 @@ def _analyze_frames(
                 price_changes, amount_history,
                 atr_history,
                 gate_confirm_state,
+                cross_section_percentiles,
             ))
 
         # 完整四信号计算：单股逐股纯 Python 计算仅 ~1ms/股，全市场 224 股串行 ~0.2s。
