@@ -867,9 +867,10 @@ class TestMongoCollectorCompareContract:
             "live", "shadow", "half_hour", trading_date="2026-06-11"
         )
 
-        assert result["summary"]["totalSlotsCompared"] == 11
-        assert result["summary"]["slotsMissingInBoth"] == 10
-        assert len(result["perDate"][0]["slotsMissingInBoth"]) == 10
+        # half_hour 2026-09-11 口径 10 slots（15:30 移为 daily-only）：10 期望槽 = 9 缺失 + 1 在场
+        assert result["summary"]["totalSlotsCompared"] == 10
+        assert result["summary"]["slotsMissingInBoth"] == 9
+        assert len(result["perDate"][0]["slotsMissingInBoth"]) == 9
 
     def test_compare_uses_canonical_stock_fields(self) -> None:
         from backend.snapshot_collector.service_factory import _MongoSnapshotCollectorRepository

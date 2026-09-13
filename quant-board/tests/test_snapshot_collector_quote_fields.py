@@ -134,14 +134,15 @@ def test_builder_derives_gem_limit_prices_with_st_overrides() -> None:
     payload = build_ingest_payload(_slot(), ctx, dataset_id="dragonboard_live")
     row = payload["stockRows"][0]
     assert row["limitUpPrice"] == round(390.0 * 1.2, 2)
-    # ST 5%
+    # 主板 ST：2026-09 口径（commit de99ef67，与前端 StockUtils 一致）涨跌幅 ±10%，无 ST 特判
     ctx = MarketDataContext(
         stocks=[{"code": "000001", "name": "*ST平安", "rank": 1}],
         quotes=[{"code": "000001", "price": 5.0, "preClose": 5.0}],
     )
     payload = build_ingest_payload(_slot(), ctx, dataset_id="dragonboard_live")
     row = payload["stockRows"][0]
-    assert row["limitUpPrice"] == round(5.0 * 1.05, 2)
+    assert row["limitUpPrice"] == round(5.0 * 1.1, 2)
+    assert row["limitDownPrice"] == round(5.0 * 0.9, 2)
 
 
 def test_service_enriches_volume_ratios_from_golden(monkeypatch) -> None:

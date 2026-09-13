@@ -195,10 +195,12 @@ def test_build_mongodb_indexes_contains_snapshot_and_stock_name_unique_keys() ->
     assert indexes["migration_audit"][0]["keys"] == [("opType", 1), ("idempotencyKey", 1)]
     assert indexes["migration_audit"][0]["unique"] is True
     assert "hotlist_sentiment" in ALL_COLLECTIONS
+    # 2026-09 commit 499b94d0：唯一索引扩 slotTime（同日多 slot 情绪共存，存量 EOD 哨兵有迁移脚本）
     assert indexes["hotlist_sentiment"][0]["keys"] == [
         ("datasetId", 1),
         ("snapshotType", 1),
         ("tradingDate", 1),
+        ("slotTime", 1),
     ]
     assert indexes["hotlist_sentiment"][0]["unique"] is True
 

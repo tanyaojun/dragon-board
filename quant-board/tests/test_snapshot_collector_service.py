@@ -86,6 +86,12 @@ class FakeSnapshotRepository:
     def snapshot_exists(self, dataset_id: str, snapshot_id: str) -> bool:
         return snapshot_id in self._snapshots.get(dataset_id, set())
 
+    @property
+    def db(self) -> Any:
+        """协议成员（commit c3b2d3f9）：WP1b 槽位情绪经 self._repo.db 取库；
+        内存 fake 返回自身句柄（truthy，服务侧异常兜底不变）。"""
+        return self
+
     def save_snapshot_ingest(
         self,
         dataset: dict[str, Any],
