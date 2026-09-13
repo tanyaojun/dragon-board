@@ -2487,3 +2487,40 @@ histogram 消费；requireMacdGoldenCross（默认 False）；回测交易层 4 
   连续为负；② WP3.2 翻转率异常上升（veto/bd > 旧口径 +0.01）；③ 交易层复核
   （jump 入场/平仓规则语义不受影响，仅打分面变化）出现负偏离；
 - 回退动作：默认值还原 + L1 档案记录回退原因，无结构迁移。
+
+### 21.7 方案修订：五因子合同化（2026-09-13 用户纠偏，取代 §21.2 档位 1）
+
+用户纠偏：TS 归一化合同只认 4 权重，扩展为 5 权重**无论哪条路都逃不掉**——既然
+合同必须动，正确设计是**技术信号四因子 + MA = 五因子**（合同对称：TS 5 权重归一化
+↔ py 5 分量合成），而非"替换后 macdWeight 恒 0"的伪四因子挂零状态。§21.2 档位 1
+（参数替换）作废，修订方案如下。
+
+**修订后语义：MA 作为第 5 因子正式加入决策合成（ma_join 口径），MACD 权重位完整保留。**
+
+- py `config.py:44`：maWeight 0.0→0.25（唯一默认值改动）；macdWeight 保持 0.25；
+  归一化后五权重 = 0.24/0.20/0.16/0.20/0.20——与 ma_join trial 实证口径逐位一致；
+- runtime.py:280 `if config.maWeight > 0` 条件分支保留（maWeight 可配置回 0，
+  向后兼容 + 回退能力）；trend_buy OR 链 / risk histogram / requireMacdGoldenCross /
+  观察字段 / 回测交易层 **全部不动**（§21.1 表 #3-#10 零改动）；
+- TS 合同三处：`types.ts` config 类型加 maWeight: number + 技术信号观察类型补
+  maCross（当前缺失，:241 只有 movingAverage）；`rankTrendDefaults.ts` 加
+  maWeight: 0.25 默认 + :147-152 归一化和扩展为 5 权重（与 py 对齐）；
+- MACD 退位路径保留为纯参数行为：未来若实证支持，macdWeight→0 即"替换"，
+  无需任何合同变更——合同一次到位，参数面随时可调。
+
+**实证口径变化（如实声明）**：五因子化 = ma_join（decision +1.7%/oos1 +0.5%/
+oos2-ext +0.2%，三窗全正、全部候选中唯一方向一致），而非 ma_replace（decision
+−2.4%/oos1 +2.4%/oos2 +3.7%）。两者 Track 2 均为 OBSERVE（都未达 C1 +3% 线）；
+用户选择以架构正确性 + 方向稳定性优先，接受增益幅度更弱——风险声明与 §21.6
+回退条件继续适用（回退 = maWeight 回 0，比替换回退更轻）。
+
+**修订后改动清单**：
+1. py config.py 一行默认值 + 新增 TDD 测试（锁五因子默认合成行为 + 归一化）；
+2. TS types.ts / rankTrendDefaults.ts 合同同步（含 maCross 观察类型补缺）；
+3. L1 档案 + 本计划实施记录；
+4. 端到端复验：track2 harness 重跑 baseline 须逐位复现 ma_join 三窗读数
+   （0.0835/0.0657/0.0572）。
+
+**实施顺序**（§21.5 步骤 0 票移除补验作废——MACD 票位在五因子语义下本来就保留，
+无需补验；其余步骤沿用：TDD → py 默认值 → TS 合同 → 全量回归 → 端到端复验 →
+提交；golden alignment 合同测试逐个核对，多数显式传参不受默认值影响）。
