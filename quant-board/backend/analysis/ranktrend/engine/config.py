@@ -110,6 +110,15 @@ class RankTrendConfig:
     crossSectionWeakDeltaDown: float = -5.0  # D 档 delta 下降确认
     crossSectionMidMax: float = 50.0  # C 档中位上限
     crossSectionMidDeltaDown: float = -15.0  # C 档 delta 显著下降
+    # ── crossSection 持续高位 A 档替代路径（2026-09-13 方案2；默认关闭 golden 不漂移）──
+    # 数学边界：delta = pct[-1] − pct[-2] ≤ 100 − pct[-1]，pct > 95 的强势股（榜首
+    # pct=100）永远无法满足 A 档 delta≥5 上升确认——强势体现在"持续停留高位"而非
+    # "继续上升"。路径：pct ≥ PersistMin 且近 Frames 帧均值 ≥ PersistMeanMin 且窗口满
+    # Frames 帧合法值（证据不足不伪造）。判定顺序 A-delta > A-persist > 原分支，
+    # 开启后行为变更 = 纯增量（部分 B 升 A），默认值是否落地由实证数据决定。
+    crossSectionPersistFrames: int = 0  # 持续高位窗口 N（近 N 帧 percentile 均值）；0=关闭（默认）
+    crossSectionPersistMin: float = 90.0  # 当前 pct 门槛（路径开启时生效）
+    crossSectionPersistMeanMin: float = 85.0  # 近 N 帧均值门槛
     jumpConfirmChangeMin: float = 3.0  # Jump 价格确认：涨跌幅 ≥3%（up）/ ≤-3%（down），2026-08-17 G4 默认生效
     jumpConfirmVolumeRatioMin: float = 1.0  # Jump 量确认：量比 ≥1（放量配合）
     # ── amount 成交额量比（2026-08-18 G3：跨帧成交额量比进量价，"价量资金"落地）──

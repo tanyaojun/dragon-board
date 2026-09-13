@@ -169,3 +169,15 @@
 - **复核触发**：regime 门禁若扩展消费非 strong 状态（normal/weak/retreat），α/迟滞轴
   需重扫；K 结论待 9 月数据积累后按 §6 滚动重验。
 - 冻结纪律：未经 longterm-test 流程"证实"，默认值不得变更。
+
+## 8. crossSection 持续高位 A 档替代路径（2026-09-13 方案2）
+
+| 参数 | 默认值 | 语义 | 状态 |
+|---|---|---|---|
+| crossSectionPersistFrames | 0 | 持续高位窗口 N（近 N 帧 attention percentile 均值）；0=关闭 | **不落默认/关闭观察**（2026-09-13 阶段 18 实证：H1 成立（exDirAcc +0.006~+0.014 跨 12 窗口点全正且 >high_B）但 H2 证伪（vs delta_A 0.087 量级差距，门槛收紧不改善），合并稀释 A 档跌破 0.05 线，FINAL high_B 反超；机制保留待投票语义拆分后重评） |
+| crossSectionPersistMin | 90.0 | 当前 pct 门槛（路径开启时生效） | 跟随 Frames（关闭） |
+| crossSectionPersistMeanMin | 85.0 | 近 N 帧均值门槛（窗口满帧合法值才触发） | 跟随 Frames（关闭） |
+
+- 默认 Frames=0 = golden 不漂移（`test_cross_section_persist_tier.py` 13 例锚点）；
+- 实证 harness：`backend/analysis/ranktrend/research/cross_section_persist_research.py`
+  （4 变体 × train/val/test + FINAL 只读；8 月冻结纪律全程遵守，决策仅引用 4-15~07-31）。

@@ -2039,3 +2039,79 @@ replay/routes 权威口径），过滤（finite>0）、排序键 `(avgRankNum, c
 - 验证：新口径 6 例 + replay_resonance + golden alignment + MA + api authoritative
   + analyze_api = 59 passed；全量 collect-only 2083 collected 无 import 断裂。
   默认值零变更、API/存储合同零变更。
+
+## 阶段 18：crossSection 持续高位 A 档替代路径实证——H2 证伪不落默认（2026-09-13）
+
+### 18.1 背景（用户命题 + 方案1 修复后的数学边界）
+
+用户实盘观察热度（crossSection）A 档从未出现。方案1（2026-09-13 delta 复活修复，
+commit bb04c0a9）解决了两条供给链路的 delta≡0（入库同帧重复 append + live 复制尾），
+但数学边界仍在：delta = pct[-1] − pct[-2] ≤ 100 − pct[-1]，pct > 95 的强势股
+（榜首 pct=100）永远无法满足 A 档 delta≥5 上升确认——它们没有"继续上升"的空间，
+强势体现在"持续停留高位"。方案2 给 A 档加替代路径并实证其信息量是否撑得起 strong 票。
+
+### 18.2 因子实现与零漂移保障（TDD，four-dim-algorithm-research 步骤 1）
+
+- `compute_cross_section` 新增持续高位分支：pct ≥ `crossSectionPersistMin`(90) 且
+  近 `crossSectionPersistFrames` 帧 attention percentile 均值 ≥ `crossSectionPersistMeanMin`(85)
+  且窗口满帧合法值（非法值/NaN 断窗，证据不足不伪造持续性，fail-visible）；
+- 判定顺序 A-delta > A-persist > 原 B/C/D 分支——开启后变更面 = 纯增量（部分 B 升 A），
+  原 A/B/C/D 输出与文案零漂移；结构性事实：persist 窗口含 [-2] 项 ⟹ persist 非 None 时
+  delta 必非 None，首帧/单点/新股天然不触发；
+- **默认 `crossSectionPersistFrames=0`（关闭）→ golden 不漂移**；文案"持续高位（近N帧均值 XX.X）"；
+- 回归护栏：`tests/test_cross_section_persist_tier.py` 13 例（默认关闭锚点、A 触发、
+  部分窗/均值不足/当前值回落/非法值断窗/单点不触发、delta 路径优先、live 去尾端到端
+  默认 B vs 开启 A、technical/observation 两挂载一致）+ 既有 crossSection 19 例全绿；
+  golden alignment + market_regime + engine 30 passed（默认关闭零漂移）。
+
+### 18.3 实证方法（评估 harness `backend/analysis/ranktrend/research/cross_section_persist_research.py`）
+
+- 数据：dragonboard_live/half_hour，决策窗 2026-04-15~07-31（655 帧，`assert_not_frozen`
+  守卫）+ FINAL 08-01~08-14（100 帧，只读 report）；同 key 重复帧去重（保留后出现，
+  与方案1 同帧跳过语义一致）；
+- 档位输入序列：每股出现序列 attention percentile（与 `_build_code_attention_series`
+  同构）；h1 收益与 tier_forward_returns 同口径（相邻帧 rank 字段 `_percentile` 差/100 +
+  每 10 分位桶基线去趋势）；分桶 delta_A / persist_only_A（B 升 A 增量）/ high_B
+  （留 B 且 pct≥85 对照）/ C / D；
+- 假设（先列判定标准再跑数据）：H1 persist_only_A exDirAcc>0 且 >high_B；
+  H2 persist_only_A ≥ delta_A−0.02（不稀释）；H3 persist_only_A n≥500；
+- 变体：V0 主候选 (90,85,N=3) / V1 长窗 (90,85,N=5) / V2 宽松 (88,82,N=3) /
+  V3 严格 (92,88,N=3)。
+
+### 18.4 三窗结果（exDirAcc / exMeanRet / n）
+
+| 变体 | persist_only_A 三窗 exDirAcc | high_B 三窗 exDirAcc | delta_A 三窗 exDirAcc | persist n 合计 |
+|---|---|---|---|---|
+| V0 (90,85,3) | +0.0091 / +0.0105 / +0.0092 | −0.0090 / −0.0142 / +0.0072 | +0.0998 / +0.1455 / +0.0151 | 11,555 |
+| V1 (90,85,5) | +0.0140 / +0.0137 / +0.0059 | −0.0154 / −0.0188 / +0.0134 | 同上 | 11,018 |
+| V2 (88,82,3) | +0.0058 / +0.0087 / +0.0128 | −0.0074 / −0.0225 / −0.0083 | 同上 | 13,707 |
+| V3 (92,88,3) | +0.0084 / +0.0140 / +0.0109 | −0.0031 / −0.0113 / +0.0057 | 同上 | 9,361 |
+
+FINAL（8 月，V0 只读 report）：persist_only_A +0.0093（n=2070）vs high_B +0.0158
+（n=1006）——high_B 反超，同样不支持落地。
+
+### 18.5 判定（数据驱动决策）
+
+- **H1 成立（微弱但跨窗口稳健）**：persist_only_A 全部 12 个决策窗口点 exDirAcc 为正
+  （+0.0058~+0.0140）且全部高于 high_B 对照——"持续高位"携带真实增量信息，不是噪声；
+- **H2 证伪（全部变体一致）**：persist_only_A ≈ +0.01 vs delta_A ≈ +0.087，差距 ~0.077
+  为量级差距；门槛收紧（V3）与窗口拉长（V1）均不改善——"上升确认"的信息量在热榜语境
+  下结构性强于"持续高位"（上升驱动关注涌入 → 次日惯性；持续高位 → 关注饱和）；
+- **H3 达标**：n ≈ 9,400~13,700，非样本不足问题；
+- **决策：不落默认**（`crossSectionPersistFrames=0` 关闭观察，机制保留）。理由：
+  ① 合并稀释——888 个 delta_A + ~11.5k persist 合并后 A 档 exAcc 被拉到 ~0.02，
+  跌破 saExcessAccuracy≥0.05 硬约束线；② 投票语义——A=strong 正票，+0.01 的信息
+  强度撑不起 strong 权重，该样本现为 B（weak 正票），升 A 无增量收益、有稀释成本；
+  ③ FINAL 反向（high_B 反超）。
+- **副证（方案1 修复有效性）**：重算序列（无复制尾）下 delta_A 样本充足
+  （train 888 / val 606 / test 157 / FINAL 276）——A 档在修复后的生产链路真实可达，
+  历史 snapshot_analysis A=0 纯属供给链 bug 而非因子无效。
+
+### 18.6 遗留与复核触发
+
+- 机制保留（参数化完整），若未来 synergy 投票引入"分强度正票"（如 B+/A− 中间档）
+  或 A 档语义拆分（delta_A 与 persist_A 分开计票），可重新评估落地；
+- D 档对称边界（pct<5 时 delta≤−5 不可达）未扩路径：D 为卖出/风险标记，miss 代价低
+  （C 档兜底），且低分位已属均值回归目标变量性质（阶段 3 修复方向 3 口径），不扩；
+- 验证：persist 13 例 + 既有 crossSection/delta_revival 19 例 + golden/regime/engine
+  30 例全绿；全量 pytest 见阶段 18 提交说明。

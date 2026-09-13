@@ -15,6 +15,10 @@ tierSynergyCrossSectionVote=1.0，2026-08-17 用户决策；实证 all syn +10%/
 
 档位规则（config 可调，默认值 = 设计值，golden 不漂移）：
 - A 强：percentile >= strongMin(85) 且 delta >= strongDeltaUp(5)（高位 + 上升确认）
+- A 强（持续高位替代路径，2026-09-13 方案2，默认关闭）：percentile >= persistMin(90)
+  且近 persistFrames 帧均值 >= persistMeanMin(85) 且窗口满帧合法——数学边界
+  delta <= 100 - percentile 使 pct > 95 的强势股（榜首）delta 确认永不可达，
+  其强势体现在持续停留高位；判定顺序 A-delta > A-persist，开启后纯增量 B 升 A
 - B 偏强：percentile >= 70 或 (percentile >= 50 且 delta >= 15)
 - C 偏弱：percentile <= 30 或 (percentile <= 50 且 delta <= -15)
 - D 弱：percentile <= weakMax(15) 且 delta <= weakDeltaDown(-5)（低位 + 下降确认）
@@ -36,6 +40,10 @@ CROSS_SECTION_DEFAULTS: dict[str, float] = {
     "crossSectionWeakDeltaDown": -5.0,
     "crossSectionMidMax": 50.0,
     "crossSectionMidDeltaDown": -15.0,
+    # 持续高位 A 档替代路径（方案2）：Frames=0 关闭（默认，golden 不漂移）
+    "crossSectionPersistFrames": 0.0,
+    "crossSectionPersistMin": 90.0,
+    "crossSectionPersistMeanMin": 85.0,
 }
 
 
@@ -49,11 +57,26 @@ def _finite(value: Any) -> float | None:
     return num if math.isfinite(num) else None
 
 
-def _tier_from(percentile: float, delta: float | None, c: Any) -> tuple[str, list[str]]:
-    """档位判定。delta=None（首帧/缺历史）时降级绝对档，A/D 需要 delta 确认。"""
+def _tier_from(
+    percentile: float,
+    delta: float | None,
+    persist: tuple[int, float] | None,
+    c: Any,
+) -> tuple[str, list[str]]:
+    """档位判定。delta=None（首帧/缺历史）时降级绝对档，A/D 需要 delta 确认。
+
+    persist=(窗口N, 近N帧均值)：持续高位 A 档替代路径（方案2）。放在 A-delta 之后：
+    开启后原 A/B/C/D 输出与文案零漂移，变更面 = 纯增量（部分 B 升 A）。
+    """
     if delta is not None:
         if percentile >= c.crossSectionStrongMin and delta >= c.crossSectionStrongDeltaUp:
             return "A", ["高位 + 热度排名上升（横截面强势确认）"]
+        if (
+            persist is not None
+            and percentile >= c.crossSectionPersistMin
+            and persist[1] >= c.crossSectionPersistMeanMin
+        ):
+            return "A", [f"持续高位（近{persist[0]}帧均值 {persist[1]:.1f}）"]
         if percentile >= c.crossSectionMidMin and delta >= c.crossSectionMidDeltaUp:
             return "B", ["中位之上 + 热度显著上升"]
         if percentile <= c.crossSectionWeakMax and delta <= c.crossSectionWeakDeltaDown:
@@ -114,9 +137,18 @@ def compute_cross_section(
         prev = _finite(percentiles[-2])
         if prev is not None:
             delta = percentile - prev
+    # 持续高位窗口（方案2）：近 N 帧全部合法才计算均值（证据不足不伪造持续性）。
+    # 窗口含 [-2] 项 → persist 非 None 时 delta 必非 None，首帧/单点天然不触发。
+    persist: tuple[int, float] | None = None
+    persist_frames = int(_finite(getattr(config, "crossSectionPersistFrames", 0)) or 0)
+    if persist_frames >= 2:
+        window = [_finite(v) for v in percentiles[-persist_frames:]]
+        values = [v for v in window if v is not None]
+        if len(values) == persist_frames:
+            persist = (persist_frames, sum(values) / persist_frames)
     market = _finite(market_median)
     relative = percentile - market if market is not None else None
-    tier, reasons = _tier_from(percentile, delta, config)
+    tier, reasons = _tier_from(percentile, delta, persist, config)
     if market is None:
         reasons = reasons + ["市场 median 缺失（relativeToMarket 不可算）"]
     return {
