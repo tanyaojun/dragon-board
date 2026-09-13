@@ -59,6 +59,8 @@ export interface RankTrendRuntimeConfig {
   accelerationWeight: number
   crossWeight: number
   macdWeight: number
+  /** MA 均线交叉第 5 决策分量权重（2026-09-13 五因子化；0 = 显式关闭） */
+  maWeight: number
   buyScoreThreshold: number
   sellScoreThreshold: number
 }
@@ -250,6 +252,15 @@ export interface RankTrendAnalysisResult {
       cross: MacdCross
       rawScore: number
       confirmed: boolean
+    }
+    /** MA10×MA20 排名百分位金死叉（2026-09-13 五因子化 additive 字段；py golden 生产）
+     *  fast/slow=null 表示样本不足；rawScore 仅在交叉帧取 ±1，其余帧 0 */
+    maCross?: {
+      fast: number | null
+      slow: number | null
+      state: 'bull' | 'bear' | 'flat' | 'unknown'
+      cross: 'golden' | 'death' | 'none'
+      rawScore: number
     }
     signals: {
       direction: RankTrendSignalScore

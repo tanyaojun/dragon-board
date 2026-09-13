@@ -151,8 +151,9 @@
                   }}%</span>
                 </template>
                 <span v-else class="trend-steady">--</span>
-                <span v-if="getMacdCross(stock) === 'golden'" class="macd-badge golden">▲</span>
-                <span v-else-if="getMacdCross(stock) === 'death'" class="macd-badge death">▼</span>
+                <!-- 2026-09-13 五因子化：趋势徽章换 MA10×MA20 金死叉（py technical.maCross，缺字段→无徽章） -->
+                <span v-if="getMaCross(stock) === 'golden'" class="ma-badge golden" title="MA10×MA20 金叉">▲</span>
+                <span v-else-if="getMaCross(stock) === 'death'" class="ma-badge death" title="MA10×MA20 死叉">▼</span>
               </div>
             </template>
 
@@ -953,11 +954,13 @@ const getGateCheckStatusText = (status?: string | null) => {
 }
 
 const countTradingPoolBuyVotes = (stock: any) => {
+  // 2026-09-13 五因子化：技术信号 4 票 + MA 金叉 = 5 票（与 py compose_decision 分量对齐）
   return [
     getDirectionSignal(stock) === 'buy',
     getAccelerationSignal(stock) === 'buy',
     getZeroCrossSignal(stock) === 'buy',
     getMacdCross(stock) === 'golden',
+    getMaCross(stock) === 'golden',
   ].filter(Boolean).length
 }
 
@@ -1175,6 +1178,10 @@ const getFieldTooltip = (field: string, stock: any): string => {
       title += `零线交叉: ${crossText} (${formatTooltipNumber(getZeroCrossConfidence(stock), 2)}%)\n`
       const macdCross = getMacdCross(stock)
       title += `MACD: ${getMacdDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
+      const maCrossValue = getMaCross(stock)
+      if (maCrossValue !== 'none') {
+        title += `MA10×MA20: ${getMacdDisplayText(maCrossValue)}${maCrossValue === 'golden' ? ' ✅' : ''}\n`
+      }
       const macdDif = getMacdDif(stock)
       if (macdDif !== undefined) {
         title += `MACD值: DIF=${macdDif.toFixed(2)}  DEA=${getMacdDea(stock)?.toFixed(2)}  柱=${getMacdHistogram(stock)?.toFixed(2)}\n`
@@ -1648,6 +1655,11 @@ function getResonanceCellClass(stock: any): string {
 
 const getMacdCross = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'
+
+// MA10×MA20 排名百分位金死叉（2026-09-13 五因子化 additive 字段）：
+// 只认 py golden 的 technical.maCross，无 stock.* 历史回退——缺字段 → 'none' → 无徽章
+const getMaCross = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.maCross?.cross ?? 'none'
 
 const getMacdDif = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.dif ?? stock?.macd
@@ -3074,21 +3086,21 @@ defineExpose({
   border: 1px solid rgba(143, 153, 168, 0.18);
 }
 
-/* MACD 徽章样式 */
-.macd-badge {
+/* MA 金死叉徽章样式（2026-09-13 五因子化：趋势列徽章 MACD→MA） */
+.ma-badge {
   font-size: 14px;
   margin-left: 4px;
   display: inline-block;
   vertical-align: middle;
 }
 
-.macd-badge.golden {
+.ma-badge.golden {
   color: #ffd700;
   text-shadow: 0 0 3px rgba(255, 215, 0, 0.5);
   filter: drop-shadow(0 0 2px rgba(255, 215, 0, 0.8));
 }
 
-.macd-badge.death {
+.ma-badge.death {
   color: #3498db;
   text-shadow: 0 0 2px rgba(52, 152, 219, 0.5);
   filter: drop-shadow(0 0 2px rgba(52, 152, 219, 0.8));

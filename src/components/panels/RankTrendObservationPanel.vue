@@ -685,11 +685,15 @@ const technicalSignals = computed(() => {
   const signals = analysis?.technical?.signals
   const macd = analysis?.technical?.macd
   const macdScore = Number(macd?.rawScore)
+  // 2026-09-13 五因子化：第 5 行「MA均线」（py technical.maCross.rawScore，缺字段=不可用）
+  const maCross = analysis?.technical?.maCross
+  const maScore = Number(maCross?.rawScore)
   return [
     { label: '方向一致性', direction: signals?.direction?.signal, value: technicalValue(signals?.direction), available: Boolean(signals?.direction) },
     { label: '多周期加速度', direction: signals?.acceleration?.signal, value: technicalValue(signals?.acceleration), available: Boolean(signals?.acceleration) },
     { label: '零线交叉', direction: signals?.zeroCross?.signal, value: technicalValue(signals?.zeroCross), available: Boolean(signals?.zeroCross) },
     { label: 'MACD', direction: macdScore > 0 ? 'buy' : macdScore < 0 ? 'sell' : 'hold', value: Number.isFinite(macdScore) ? Math.max(-1, Math.min(1, macdScore)) : null, available: Boolean(macd) && Number.isFinite(macdScore) },
+    { label: 'MA均线', direction: maScore > 0 ? 'buy' : maScore < 0 ? 'sell' : 'hold', value: Number.isFinite(maScore) ? Math.max(-1, Math.min(1, maScore)) : null, available: Boolean(maCross) && Number.isFinite(maScore) },
   ] as Array<{ label: string; direction?: RankSignalDirection; value: number | null; available: boolean }>
 })
 

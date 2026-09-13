@@ -181,3 +181,27 @@
 - 默认 Frames=0 = golden 不漂移（`test_cross_section_persist_tier.py` 13 例锚点）；
 - 实证 harness：`backend/analysis/ranktrend/research/cross_section_persist_research.py`
   （4 变体 × train/val/test + FINAL 只读；8 月冻结纪律全程遵守，决策仅引用 4-15~07-31）。
+
+## 9. MA 交叉因子落默认——五因子化（2026-09-13 阶段 21.8，取代 §2c maWeight 暂不采纳裁定）
+
+| 参数 | 旧默认 | 新默认 | 来源 | 状态 |
+|---|---|---|---|---|
+| maWeight | 0.0（关） | **0.2** | 阶段 20.4/20.5 ma_join 实证口径（设计值 0.25 五权重归一化） | **落默认**（2026-09-13 用户决策：架构对称 + MA 金叉三窗方向一致性优先，接受 OBSERVE 增益幅度） |
+| directionWeight | 0.30 | 0.24 | 归一化精确值 | 联动（相对比例不变） |
+| accelerationWeight | 0.25 | 0.20 | 归一化精确值 | 联动 |
+| crossWeight | 0.20 | 0.16 | 归一化精确值 | 联动 |
+| macdWeight | 0.25 | 0.20 | 归一化精确值 | 联动（MACD 分量/票位/链路全保留） |
+| maFastPeriod / maSlowPeriod | 10 / 20 | 不变 | 用户指定 | 不变 |
+| maCrossTrendBuy | False | False | 阶段 17 零增量已证 | 不变（保持关闭） |
+
+- **落默认口径锚（端到端已验证）**：track2 harness 重跑 baseline 三窗全字段逐位复现
+  ma_join 读数（decision 0.0835 / oos1 0.0657 / oos2 0.0572）；实现取"默认值直接写
+  归一化精确值"设计（`__post_init__` 归一化会污染 from_patch 相对语义，弃用），
+  TS `normalizeRankTrendRuntimeConfig` 同构扩展 5 权重（幂等锚已测试锁定）。
+- **TS 合同同步**：归一化合同 4 权重→5 权重（rankTrendDefaults.ts）；TS 买票计数
+  4 票→5 票（+MA 金叉，与 py compose_decision 分量对齐）；signalSnapshot/对照快照
+  补 maCross 字段。
+- **回退**：`maWeight: 0`（TS/py 同构）→ 其余四权重按比例归一化回填旧四因子口径；
+  或整体 revert 本次提交。
+- 实施详情见长测计划 §21.8；判定报告 `data/reports/track2-candidates.json`
+  （落默认前基线备份 `track2-candidates-pre5factor.json`）。

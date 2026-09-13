@@ -50,13 +50,15 @@ function hasOwnValue(source: Record<string, any> | null | undefined, key: string
 
 function countBuyVotes(signals: Pick<
   TradingPoolSignalSnapshot,
-  'directionSignal' | 'accelerationSignal' | 'zeroCrossSignal' | 'macdCross'
+  'directionSignal' | 'accelerationSignal' | 'zeroCrossSignal' | 'macdCross' | 'maCross'
 >): number {
+  // 2026-09-13 五因子化：技术信号 4 票 + MA 金叉 = 5 票（与 py compose_decision 分量对齐）
   return [
     signals.directionSignal === 'buy',
     signals.accelerationSignal === 'buy',
     signals.zeroCrossSignal === 'buy',
     signals.macdCross === 'golden',
+    signals.maCross === 'golden',
   ].filter(Boolean).length
 }
 
@@ -192,6 +194,7 @@ function readTradingSignals(stock: TradingPoolCandidateLike): TradingPoolSignalS
       normalizeConfidence(rankTrend?.jump?.confidence ?? stock.jumpConfidence) ??
       readGateCheckNumber(stock, 'jump_confidence'),
     macdCross: rankTrend?.technical?.macd?.cross ?? stock.macdCross ?? null,
+    maCross: rankTrend?.technical?.maCross?.cross ?? null,
     accelerationSignal:
       rankTrend?.technical?.signals?.acceleration?.signal ?? stock.accelerationSignal ?? null,
     accelerationConfidence: normalizeConfidence(

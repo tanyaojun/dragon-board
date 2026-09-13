@@ -10,6 +10,7 @@ export interface RankTrendRuntimeDefaults {
   accelerationWeight: number
   crossWeight: number
   macdWeight: number
+  maWeight: number
   buyScoreThreshold: number
   sellScoreThreshold: number
 }
@@ -49,10 +50,14 @@ export const DEFAULT_RANK_TREND_RUNTIME_CONFIG: RankTrendRuntimeDefaults = {
   macdFast: 13,
   macdSlow: 21,
   macdSignal: 8,
-  directionWeight: 0.3,
-  accelerationWeight: 0.25,
-  crossWeight: 0.2,
-  macdWeight: 0.25,
+  // 决策合成五权重（2026-09-13 阶段 21.7 五因子化：技术四因子 + MA）：
+  // 设计值 0.30/0.25/0.20/0.25 + MA 0.25 经五权重归一化的精确值，和恒=1；
+  // 与 py RankTrendConfig 默认值逐位对齐（= 阶段 20.4 ma_join 实证口径）。
+  directionWeight: 0.24,
+  accelerationWeight: 0.2,
+  crossWeight: 0.16,
+  macdWeight: 0.2,
+  maWeight: 0.2,
   buyScoreThreshold: 0.12,
   sellScoreThreshold: -0.12,
 }
@@ -139,17 +144,24 @@ export function normalizeRankTrendRuntimeConfig(
     accelerationWeight: normalizeNumber(overrides.accelerationWeight, base.accelerationWeight, 0.01, 1),
     crossWeight: normalizeNumber(overrides.crossWeight, base.crossWeight, 0.01, 1),
     macdWeight: normalizeNumber(overrides.macdWeight, base.macdWeight, 0.01, 1),
+    // maWeight 允许 0：显式关闭 MA 第 5 分量（其余四权重按比例归一化回填）
+    maWeight: normalizeNumber(overrides.maWeight, base.maWeight, 0, 1),
     buyScoreThreshold: normalizeNumber(overrides.buyScoreThreshold, base.buyScoreThreshold, 0.01, 1),
     sellScoreThreshold: normalizeNumber(overrides.sellScoreThreshold, base.sellScoreThreshold, -1, -0.01),
   }
 
   const signalWeightSum =
-    next.directionWeight + next.accelerationWeight + next.crossWeight + next.macdWeight
+    next.directionWeight +
+    next.accelerationWeight +
+    next.crossWeight +
+    next.macdWeight +
+    next.maWeight
   if (signalWeightSum > 0) {
     next.directionWeight = Number((next.directionWeight / signalWeightSum).toFixed(6))
     next.accelerationWeight = Number((next.accelerationWeight / signalWeightSum).toFixed(6))
     next.crossWeight = Number((next.crossWeight / signalWeightSum).toFixed(6))
     next.macdWeight = Number((next.macdWeight / signalWeightSum).toFixed(6))
+    next.maWeight = Number((next.maWeight / signalWeightSum).toFixed(6))
   }
 
   if (next.macdSlow <= next.macdFast) next.macdSlow = next.macdFast + 1

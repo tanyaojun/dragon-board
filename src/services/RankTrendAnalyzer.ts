@@ -228,6 +228,7 @@ export class RankTrendAnalyzer {
       accelerationWeight: runtimeConfig.accelerationWeight,
       crossWeight: runtimeConfig.crossWeight,
       macdWeight: runtimeConfig.macdWeight,
+      maWeight: runtimeConfig.maWeight,
       buyScoreThreshold: runtimeConfig.buyScoreThreshold,
       sellScoreThreshold: runtimeConfig.sellScoreThreshold,
     }

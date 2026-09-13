@@ -41,7 +41,7 @@ class RankTrendConfig:
     # docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md）。
     maFastPeriod: int = 10  # MA 快线周期（用户指定 10）
     maSlowPeriod: int = 20  # MA 慢线周期（用户指定 20；from_patch 保证 > maFastPeriod）
-    maWeight: float = 0.0  # compose_decision 第 5 分量权重（0=关闭；from_patch 归一化含此字段）
+    maWeight: float = 0.2  # compose_decision 第 5 分量权重（2026-09-13 阶段 21.7 五因子落默认：设计值 0.25 经五权重归一化 = 0.2）
     maCrossTrendBuy: bool = False  # MA 金叉是否参与 trend_buy OR 链（False=关闭）
     # ── ATR 真实波动均值回归（2026-08-17，设计 v2；独立观察维度，不进 synergy 投票）──
     atrPeriod: int = 14  # ATR 周期（简单均值，与 execution.py::_atr_of 一致）
@@ -55,10 +55,14 @@ class RankTrendConfig:
     jumpDeltaPct: float = 15.0  # 对齐旧 TS detectRankJumps 固定 delta=15
     jumpResetLookback: int = 3  # 事件触发后重置窗口（原硬编码 min(3, i+1)）
     jumpSustainCount: int = 2  # 持续事件判定阈值 surge/collapse 次数（原硬编码 2）
-    directionWeight: float = 0.3
-    accelerationWeight: float = 0.25
-    crossWeight: float = 0.2
-    macdWeight: float = 0.25
+    # ── 决策合成五权重（2026-09-13 阶段 21.7 五因子化：技术四因子 + MA）──
+    # 默认值 = 设计值（0.30/0.25/0.20/0.25 + MA 0.25）经五权重归一化后的精确值，和恒=1；
+    # 直接构造与 from_patch 归一化结果逐位一致（= ma_join 实证口径）；
+    # MACD 项保留（权重位/共识票/trend_buy 链/风险面/观察字段零改动）。
+    directionWeight: float = 0.24
+    accelerationWeight: float = 0.2
+    crossWeight: float = 0.16
+    macdWeight: float = 0.2
     buyScoreThreshold: float = 0.12
     sellScoreThreshold: float = -0.12
     # compose_strategy tier thresholds (configurable, defaults match legacy hardcoded values)

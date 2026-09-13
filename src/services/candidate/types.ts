@@ -288,6 +288,8 @@ export interface TradingPoolSignalSnapshot {
   directionConfidence: number | null
   jumpConfidence: number | null
   macdCross: string | null
+  /** MA10×MA20 金死叉（2026-09-13 五因子化 additive；缺字段为 null=无信号） */
+  maCross: string | null
   accelerationSignal: string | null
   accelerationConfidence: number | null
   zeroCrossSignal: string | null

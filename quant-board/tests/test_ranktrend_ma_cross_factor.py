@@ -28,11 +28,12 @@ DEATH_SERIES = [50.0] * 21 + [5.0]  # 末帧 fast 45.5 < slow 47.75，前帧 50=
 
 
 def test_ma_cross_fields_default_to_closed_state() -> None:
-    """新字段默认值：周期 10/20（用户指定）、权重 0、trend_buy 不参与（golden 不漂移）。"""
+    """字段默认值（2026-09-13 阶段 21.7 五因子落默认后）：周期 10/20（用户指定）、
+    权重 0.2（设计值 0.25 归一化）、trend_buy 不参与（零增量已证，保持关闭）。"""
     c = RankTrendConfig()
     assert c.maFastPeriod == 10
     assert c.maSlowPeriod == 20
-    assert c.maWeight == 0.0
+    assert c.maWeight == pytest.approx(0.2)
     assert c.maCrossTrendBuy is False
 
 
@@ -135,8 +136,9 @@ _RISK = {
 
 
 def test_compose_decision_zero_drift_when_ma_disabled() -> None:
-    """默认 maWeight=0：technical 含/不含 maCross 的决策合成逐位一致（golden 不漂移）。"""
-    config = RankTrendConfig()
+    """显式关闭（maWeight=0）：technical 含/不含 maCross 的决策合成逐位一致
+    （阶段 17 关闭语义保留为可配置行为；2026-09-13 起默认已开启）。"""
+    config = RankTrendConfig.from_patch({"maWeight": 0.0})
     with_ma = compose_decision(_technical_dict(with_ma=True), _CYCLE, _RISK, config)
     without_ma = compose_decision(_technical_dict(with_ma=False), _CYCLE, _RISK, config)
     assert with_ma["base"]["combinedScore"] == without_ma["base"]["combinedScore"]
@@ -144,21 +146,23 @@ def test_compose_decision_zero_drift_when_ma_disabled() -> None:
 
 
 def test_compose_decision_ma_weight_joins_as_fifth_component() -> None:
-    """maWeight>0：MA 金叉进决策合成，且 from_patch 归一化 5 权重和为 1。
+    """五因子默认（2026-09-13 阶段 21.7 落默认）：MA 金叉进决策合成。
 
-    权重归一化 [0.3,0.25,0.2,0.25,0.25]/1.25=[0.24,0.2,0.16,0.2,0.2]：
+    默认五权重 = ma_join 实证口径 [0.24, 0.2, 0.16, 0.2, 0.2]（和=1）：
     combined = 0.5*0.24 + 0*0.2 + 0*0.16 + 0*0.2 + 1*0.2 = 0.32；
     buy_count 由 1（仅 direction）增至 2（+MA），越过 decisionMinAgreement=2 → buy。
     """
-    config = RankTrendConfig.from_patch({"maWeight": 0.25})
+    config = RankTrendConfig()
     assert config.maWeight == pytest.approx(0.2)
     assert config.directionWeight == pytest.approx(0.24)
     result = compose_decision(_technical_dict(with_ma=True), _CYCLE, _RISK, config)
     assert result["base"]["combinedScore"] == pytest.approx(0.32)
     assert result["base"]["signal"] == "buy"
-    # 对照：同一 technical 在默认配置下只有 1 个 buy 分量 → hold
-    legacy = compose_decision(_technical_dict(with_ma=True), _CYCLE, _RISK, RankTrendConfig())
-    assert legacy["base"]["signal"] == "hold"
+    # 对照：显式关闭 maWeight → 只有 1 个 buy 分量且 combined 更低 → hold
+    disabled = compose_decision(
+        _technical_dict(with_ma=True), _CYCLE, _RISK, RankTrendConfig.from_patch({"maWeight": 0.0})
+    )
+    assert disabled["base"]["signal"] == "hold"
 
 
 def test_candidate_tier_ma_cross_trend_buy_wiring() -> None:

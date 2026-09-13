@@ -2524,3 +2524,49 @@ oos2-ext +0.2%，三窗全正、全部候选中唯一方向一致），而非 ma
 **实施顺序**（§21.5 步骤 0 票移除补验作废——MACD 票位在五因子语义下本来就保留，
 无需补验；其余步骤沿用：TDD → py 默认值 → TS 合同 → 全量回归 → 端到端复验 →
 提交；golden alignment 合同测试逐个核对，多数显式传参不受默认值影响）。
+
+### 21.8 实施记录（2026-09-13 完成）
+
+§21.7 方案已实施落默认，与原方案的一处设计修正如实声明：
+
+**设计修正：默认值直接写归一化精确值，不引入 `__post_init__` 归一化。**
+实施中发现：若在 `__post_init__` 做 5 权重归一化，`from_patch`（先 `cls()` 再 setattr
+再归一化）会把 patch 值作用在"已归一化基座"上，破坏其"相对 patch"语义——例如
+`from_patch({"maWeight": 0.25})` 将得到 0.2286 而非实证口径 0.2。最终设计：
+`config.py` 默认值直接写 0.24/0.20/0.16/0.20/0.20（和恒=1），归一化仍只在
+`from_patch` 尾部执行（和=1 时幂等）。直接构造与 `from_patch({全 raw 设计值})`
+逐位一致，两条构造路径合同统一；TS 端 `normalizeRankTrendRuntimeConfig` 同理
+（默认值已归一化，归一化和扩展为 5 权重、幂等 no-op）。
+
+**实际落地清单**：
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| py 配置 | `backend/analysis/ranktrend/engine/config.py` | 五权重默认 = 0.24/0.20/0.16/0.20/0.20（maWeight 0→0.2，MACD 权重位 0.25→0.2 归一化值）；归一化仍只在 from_patch |
+| py 测试 | `tests/test_ranktrend_five_factor_decision.py`（新增 9 用例）+ `test_ranktrend_ma_cross_factor.py`（3 用例改新合同锚） | 锁默认合成/归一化幂等/落默认=ma_join 实证口径锚/显式关闭回退 |
+| TS 合同 | `src/services/rankTrend/types.ts` | config 类型 + maWeight；technical 观察类型补 maCross（additive 可选，fast/slow 可 null） |
+| TS 默认 | `src/types/rankTrendDefaults.ts` | 五权重默认值 + 归一化和扩展 5 权重（maWeight min=0 保留显式关闭路径） |
+| TS 服务 | `RankTrendAnalyzer.ts` / `candidate/types.ts` / `TradingPoolAnalysisService.ts` | getRuntimeConfig 带 maWeight；signalSnapshot + maCross；buyVotes 4 票→5 票（+MA 金叉，与 py compose_decision 分量对齐） |
+| TS 面板 | `RankTrendPanel.vue` | 参数表单 + MA 权重输入位（min 0 允许关闭） |
+| TS 展示 | `DataTable.vue`（用户指定） | 趋势列徽章 MACD→MA10×MA20 金死叉三角（ma-badge，缺字段→无徽章）；tooltip 加 MA 行（保留 MACD 行）；买票计数 + MA 票 |
+| TS 展示 | `RankTrendObservationPanel.vue`（用户指定） | 技术结构观察 + 第 5 行「MA均线」（technical.maCross.rawScore） |
+| TS 快照 | `candidatePoolTradingPool.ts` | 三处 comparable snapshot 补 maCross 字段（journal 对比完整性） |
+| TS 测试 | `src/types/__tests__/rankTrendDefaults.test.ts`（新增 4 用例） | 锁五权重默认值/归一化幂等/显式关闭回填旧四因子口径/clone 一致 |
+
+**零改动确认**（§21.7 承诺兑现）：trend_buy OR 链（maCrossTrendBuy 默认 False）、
+risk histogram→overheat、requireMacdGoldenCross、观察字段 technical.macd、回测交易层
+（jump 金叉硬门/死叉退出）全部未动；runtime.py 零改动（maWeight>0 条件分支原本就在）。
+
+**验证结果**：
+- py：新增/更新 21 用例全绿；全量 pytest 2110 passed（4 个失败为 mongo/collector
+  域存量失败，与本改动无关；另修复 1 个与 shared.py "打标不阻断"语义脱节的过时
+  测试 test_money_flow_quality_gate）；
+- 端到端锚：track2 harness 重跑 baseline 三窗 **全字段逐位复现 ma_join 读数**
+  （decision 0.0835 / oos1 0.0657 / oos2 0.0572；旧报告备份
+  `data/reports/track2-candidates-pre5factor.json`）；
+- TS：pnpm test 1043 passed（130 文件）；vue-tsc 零错误；test:ranktrend 156 passed；
+  typecheck:ranktrend 零错误。
+
+**回退路径**：py+TS 各一处 patch（`from_patch({"maWeight": 0.0})` /
+`maWeight: 0`），或整体 revert 本次提交；maWeight=0 时其余四权重按比例归一化
+回填旧四因子口径（TS/py 同构，已测试锁定）。

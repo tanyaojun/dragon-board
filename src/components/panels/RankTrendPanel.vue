@@ -105,6 +105,10 @@
             <input v-model.number="runtimeConfigForm.macdWeight" type="number" min="0.01" max="1" step="0.01" />
           </label>
           <label class="config-field">
+            <span>MA 权重</span>
+            <input v-model.number="runtimeConfigForm.maWeight" type="number" min="0" max="1" step="0.01" />
+          </label>
+          <label class="config-field">
             <span>买入综合阈值</span>
             <input v-model.number="runtimeConfigForm.buyScoreThreshold" type="number" min="0.01" max="1" step="0.01" />
           </label>
@@ -359,6 +363,7 @@ interface RuntimeConfigForm {
   accelerationWeight: number
   crossWeight: number
   macdWeight: number
+  maWeight: number
   buyScoreThreshold: number
   sellScoreThreshold: number
 }
@@ -558,6 +563,7 @@ function createRuntimeConfigForm(
     accelerationWeight: config.accelerationWeight,
     crossWeight: config.crossWeight,
     macdWeight: config.macdWeight,
+    maWeight: config.maWeight,
     buyScoreThreshold: config.buyScoreThreshold,
     sellScoreThreshold: config.sellScoreThreshold,
   }
@@ -575,6 +581,7 @@ function applyRuntimeConfigForm(next: RuntimeConfigForm) {
   runtimeConfigForm.accelerationWeight = next.accelerationWeight
   runtimeConfigForm.crossWeight = next.crossWeight
   runtimeConfigForm.macdWeight = next.macdWeight
+  runtimeConfigForm.maWeight = next.maWeight
   runtimeConfigForm.buyScoreThreshold = next.buyScoreThreshold
   runtimeConfigForm.sellScoreThreshold = next.sellScoreThreshold
 }
@@ -621,6 +628,7 @@ function buildRuntimeConfigFromForm(): RankTrendRuntimeDefaults {
     accelerationWeight: runtimeConfigForm.accelerationWeight,
     crossWeight: runtimeConfigForm.crossWeight,
     macdWeight: runtimeConfigForm.macdWeight,
+    maWeight: runtimeConfigForm.maWeight,
     buyScoreThreshold: runtimeConfigForm.buyScoreThreshold,
     sellScoreThreshold: runtimeConfigForm.sellScoreThreshold,
   })
