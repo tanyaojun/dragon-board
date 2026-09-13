@@ -207,7 +207,8 @@ def test_positive_price_research_filter_drops_only_explicit_non_positive_rows() 
     assert stats["emptySnapshotIdsAfterFilter"] == ["s2"]
 
 
-def test_runtime_price_filters_block_when_usable_snapshots_drop_below_minimum() -> None:
+def test_runtime_price_filters_mark_gate_failed_when_usable_snapshots_drop_below_minimum() -> None:
+    """可用快照低于下限：就地打标 failed（2026-07-13 起禁质量阻断），不抛 ValueError。"""
     frames = [
         {"snapshotId": "s1", "stocks": []},
         {"snapshotId": "s2", "stocks": [{"code": "000001"}]},
@@ -225,14 +226,17 @@ def test_runtime_price_filters_block_when_usable_snapshots_drop_below_minimum() 
         },
     }
 
-    with pytest.raises(ValueError) as error:
-        _ensure_runtime_filtered_frames_usable(frames, quality_gate)
+    _ensure_runtime_filtered_frames_usable(frames, quality_gate)
 
-    failed_gate = error.value.args[0]["qualityGate"]
-    assert failed_gate["passed"] is False
-    assert failed_gate["severity"] == "fail"
-    assert failed_gate["runtimeFilter"] == quality_gate["runtimeFilter"]
-    assert failed_gate["issues"] == [
+    assert quality_gate["passed"] is False
+    assert quality_gate["severity"] == "fail"
+    assert quality_gate["runtimeFilter"] == {
+        "priceFilter": {
+            "reason": "positive_price_stock_rows_only",
+            "emptySnapshotsAfterFilter": 1,
+        }
+    }
+    assert quality_gate["issues"] == [
         "runtime filters left usable snapshots below minimum 2: 1",
     ]
 
