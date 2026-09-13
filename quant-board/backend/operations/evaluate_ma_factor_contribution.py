@@ -38,7 +38,8 @@ from backend.operations.optimize_resonance_parameters import _tier_summary, load
 WINDOWS: dict[str, tuple[str, str]] = {
     "decision": ("2026-04-15", "2026-07-31"),
     "oos1": ("2026-08-15", "2026-08-31"),
-    "oos2": ("2026-09-01", "2026-09-09"),
+    # 2026-09-13 扩到 09-12（9/10 补录 + 9/11，86 帧），与阶段 20 Track 2 口径一致
+    "oos2": ("2026-09-01", "2026-09-12"),
 }
 
 # 边际贡献 trial 组（权重类经 from_patch 归一化，5 权重和恒为 1，与 baseline 同量纲）。
