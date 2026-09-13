@@ -50,14 +50,15 @@ export const DEFAULT_RANK_TREND_RUNTIME_CONFIG: RankTrendRuntimeDefaults = {
   macdFast: 13,
   macdSlow: 21,
   macdSignal: 8,
-  // 决策合成五权重（2026-09-13 阶段 21.7 五因子化：技术四因子 + MA）：
-  // 设计值 0.30/0.25/0.20/0.25 + MA 0.25 经五权重归一化的精确值，和恒=1；
-  // 与 py RankTrendConfig 默认值逐位对齐（= 阶段 20.4 ma_join 实证口径）。
-  directionWeight: 0.24,
-  accelerationWeight: 0.2,
-  crossWeight: 0.16,
-  macdWeight: 0.2,
-  maWeight: 0.2,
+  // 决策合成五权重（2026-09-13 阶段 21.7 五因子化 → 阶段 22.8 权重重定义落默认）：
+  // 当前默认 = 阶段 22 p2_aggressive 实证口径（用户决策），和恒=1；
+  // 与 py RankTrendConfig 默认值逐位对齐（依据：evaluate_ts_factor_weights 三窗
+  // 两层实证 + Track 2 判定卡 PASS_CANDIDATE，详见长测计划 §22）。
+  directionWeight: 0.06,
+  accelerationWeight: 0.04,
+  crossWeight: 0.24,
+  macdWeight: 0.29,
+  maWeight: 0.37,
   buyScoreThreshold: 0.12,
   sellScoreThreshold: -0.12,
 }

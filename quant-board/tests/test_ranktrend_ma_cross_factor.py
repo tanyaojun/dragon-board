@@ -28,12 +28,12 @@ DEATH_SERIES = [50.0] * 21 + [5.0]  # 末帧 fast 45.5 < slow 47.75，前帧 50=
 
 
 def test_ma_cross_fields_default_to_closed_state() -> None:
-    """字段默认值（2026-09-13 阶段 21.7 五因子落默认后）：周期 10/20（用户指定）、
-    权重 0.2（设计值 0.25 归一化）、trend_buy 不参与（零增量已证，保持关闭）。"""
+    """字段默认值（2026-09-13 阶段 22.8 权重重定义后）：周期 10/20（用户指定）、
+    权重 0.37（阶段 22 p2_aggressive 实证口径）、trend_buy 不参与（零增量已证，保持关闭）。"""
     c = RankTrendConfig()
     assert c.maFastPeriod == 10
     assert c.maSlowPeriod == 20
-    assert c.maWeight == pytest.approx(0.2)
+    assert c.maWeight == pytest.approx(0.37)
     assert c.maCrossTrendBuy is False
 
 
@@ -146,17 +146,17 @@ def test_compose_decision_zero_drift_when_ma_disabled() -> None:
 
 
 def test_compose_decision_ma_weight_joins_as_fifth_component() -> None:
-    """五因子默认（2026-09-13 阶段 21.7 落默认）：MA 金叉进决策合成。
+    """五因子默认（2026-09-13 阶段 22.8 权重重定义后）：MA 金叉进决策合成。
 
-    默认五权重 = ma_join 实证口径 [0.24, 0.2, 0.16, 0.2, 0.2]（和=1）：
-    combined = 0.5*0.24 + 0*0.2 + 0*0.16 + 0*0.2 + 1*0.2 = 0.32；
+    默认五权重 = 阶段 22 p2_aggressive 实证口径 [0.06, 0.04, 0.24, 0.29, 0.37]（和=1）：
+    combined = 0.5*0.06 + 0*0.04 + 0*0.24 + 0*0.29 + 1*0.37 = 0.40；
     buy_count 由 1（仅 direction）增至 2（+MA），越过 decisionMinAgreement=2 → buy。
     """
     config = RankTrendConfig()
-    assert config.maWeight == pytest.approx(0.2)
-    assert config.directionWeight == pytest.approx(0.24)
+    assert config.maWeight == pytest.approx(0.37)
+    assert config.directionWeight == pytest.approx(0.06)
     result = compose_decision(_technical_dict(with_ma=True), _CYCLE, _RISK, config)
-    assert result["base"]["combinedScore"] == pytest.approx(0.32)
+    assert result["base"]["combinedScore"] == pytest.approx(0.40)
     assert result["base"]["signal"] == "buy"
     # 对照：显式关闭 maWeight → 只有 1 个 buy 分量且 combined 更低 → hold
     disabled = compose_decision(

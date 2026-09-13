@@ -2581,3 +2581,153 @@ risk histogram→overheat、requireMacdGoldenCross、观察字段 technical.macd
    权重和校验（和≈1 或全 0，负权重拒绝，违反 fail-fast）——运维脚本
    `RankTrendConfig(**{**__dict__, **overrides})` 模式未来若加权重类 trial，
    未归一化状态会被立即拒绝而非静默失真，自定义权重必须走 from_patch。
+
+## 阶段 22：技术信号五因子权重实证评估与重定义提案（2026-09-13，提案待用户决策）
+
+**结论先行**：五权重 0.24/0.20/0.16/0.20/0.20（阶段 21.8 落默认值）经两层实证
+（层 1 事件级区分度 + 层 2 留一/半权/剂量扫描边际贡献，decision/oos1/oos2 三窗），
+产出三档重定义提案，**三档全部 PASS_CANDIDATE**（Track 2 判定卡 C1∧C2∧C3 全过，
+OOS 双窗同向改善）。首选 **p1_moderate（0.12/0.10/0.20/0.26/0.32）**：decision
+saEx +10.3%、oos1 +8.1%、oos2 +19.2%，唯一负项是 retreat 桶 −0.013（附加卡 C4，
+随提案激进度递增至 −0.060，故不推荐更激进档）。**本轮不落默认**，待用户决策。
+
+### 22.1 命题与方法
+
+- 命题（用户 2026-09-13）：五因子权重是历史比例继承值（设计值 0.30/0.25/0.20/0.25
+  + MA 0.25 归一化的产物），需按各因子正向贡献率科学重定义。
+- 口径（用户决策）：两层结合——层 1 事件级（各因子 buy/sell 事件帧 h1 saEx，
+  阶段 17 口径）定方向与质量；层 2 边际贡献（留一 weight→0 + 半权 ×0.5 +
+  剂量扫描 ×0.25/×1.5，evaluate_gate trial）定真实增量，**权重以边际贡献为主、
+  事件级为佐证**。
+- 交付边界：评估→提案→用户决策后才落默认；buyScoreThreshold 不动，只出触发率
+  漂移复核建议。
+- harness：`backend/operations/evaluate_ts_factor_weights.py`（可 resume，trial 级
+  缓存；8 月 FINAL 冻结守卫 `assert_not_frozen`）；测试
+  `tests/test_ts_factor_weights_harness.py`（17 用例）。报告：
+  `data/reports/ts-factor-weights.json`。
+- **锚点验证**：三窗 baseline 逐位复现阶段 21.8 端到端锚（decision 0.0835 /
+  oos1 0.0657 / oos2 0.0572）；且 `loo_ma` 三窗读数 −1.7%/−0.5%/−0.2% 与阶段 17
+  旧证据「MA 三窗全正但极弱 +1.7%/+0.5%/+0.2%」完全吻合（独立口径交叉验证）。
+- 窗口：decision 04-15~07-31（655 帧）/ oos1 08-15~31（110 帧）/ oos2 09-01~12
+  （86 帧）；trial 数 core 11×3 + up 5×3 + proposal 3×3 = 57 次全量 replay。
+
+### 22.2 层 1 事件级区分度（decision 窗，655 帧）
+
+| 事件子集 | saEx | spearman | rawHits | 解读 |
+|---|---|---|---|---|
+| 全量 | +0.0835 | +1.0 | 131197 | 单调、过硬门 |
+| direction_buy / sell | +0.0760 / **+0.1774** | +1.0 / +1.0 | 46032/44032 | 双向事件帧内排序单调且超额高 |
+| acceleration_buy / sell | +0.0474 / **−0.0322** | +1.0 / **−1.0** | 40389/35770 | sell 侧反单调 |
+| zeroCross_buy / sell | +0.0429 / None | +1.0 / −1.0 | 11802/9354 | sell 侧退化 |
+| macd_golden / death | +0.0857 / None | +0.5 / −1.0 | 2730/3303 | 金叉不突出、死叉退化 |
+| ma_golden / death | +0.0465 / −0.0237 | +1.0 / +1.0 | 2504/2945 | 双向皆弱 |
+
+（分位桶基线在子集内重算；None = 完全反单调统计退化，如实输出不伪造。）
+
+### 22.3 层 2 边际贡献（三窗留一 rel，>0 = 移除改善 = 负贡献）
+
+| 因子 | decision loo/half | oos1 loo/half | oos2 loo/half | 三窗结论 |
+|---|---|---|---|---|
+| direction | **+13.9%** / +4.0% | −2.4% / −1.5% | **+17.0%** / +5.1% | 2/3 窗强负，负窗幅度悬殊 |
+| acceleration | +2.6% / +0.5% | **+7.0%** / +5.5% | **+6.8%** / +4.9% | **唯一三窗一致负** |
+| cross | −3.1% / −1.3% | +6.4% / 0.0% | +5.1% / +4.9% | 不一致 |
+| macd | **−4.1%** / −1.4% | +2.0% / +2.1% | +3.5% / +0.2% | 不一致（decision 独撑正贡献） |
+| ma | −1.7% / −1.4% | −0.5% / 0.0% | −0.2% / +0.2% | 三窗近零弱正 |
+
+留一与半权三窗×5 因子共 30 组对比**方向全部一致**（单变量结论内部自洽）。
+
+剂量扫描（up 组，补齐"降多少/升多少"）：
+
+- `quarter_direction`（×0.25）：decision 单调 +7.3%（×0.5→+4.0%、→0→+13.9%），
+  oos1 轻微受损 −2.0%，oos2 +2.8%——降权剂量曲线单调，幅度越大 decision 收益越大；
+- `quarter_acceleration`（×0.25）：oos1 达峰值 +9.0%，三窗全正；
+- `up_cross`/`up_macd`（×1.5）：无稳定增益（macd oos1 −2.0%）→ **不动**；
+- `up_ma`（×1.5）：**三窗全正**（+1.4%/+0.9%/+1.6%）→ 唯一可升权因子。
+
+### 22.4 提案三档与 Track 2 判定卡
+
+| 提案 | direction | accel | cross | macd | ma | C1 dec rel | C2 oos rel | C3 passHard | C4 regime Δ | C5 flip Δ | 结论 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| p1_moderate | 0.12 | 0.10 | 0.20 | 0.26 | 0.32 | **+10.3%** | +8.1%/+19.2% | ✓ | retreat −0.013 ⚠ | 0 | **PASS_CANDIDATE** |
+| p2_aggressive | 0.06 | 0.04 | 0.24 | 0.29 | 0.37 | +12.5% | +30.0%/+28.9% | ✓ | retreat −0.045 ⚠ | 0 | PASS_CANDIDATE |
+| p3_zero_negative | 0 | 0 | 0.26 | 0.34 | 0.40 | +13.9% | +33.6%/+26.9% | ✓ | retreat −0.060 ⚠ | 0 | PASS_CANDIDATE |
+
+判定卡口径与 `evaluate_track2_candidates.py` 完全同构（C1∧C2∧C3=PASS_CANDIDATE，
+C4/C5 为附加观察卡）；C2 实际双窗同向（强于"≥1 窗"门槛）；C5 veto/bd 翻转率三档
+逐位不变——veto 走 lifecycle 层一票否决、不经五权重合成（结构性不敏感，非数据
+异常）。
+
+**推荐：p1_moderate**。理由：C1/C2/C3 全过且 OOS 双窗同向；retreat 桶恶化最小
+（−0.013，勉强越 0.01 附加阈值；p2/p3 达 −0.045/−0.060，与"跨窗不一致取保守值"
+纪律冲突）；方向/幅度全部落在单变量验证域内或附近。p3 虽组合层面三窗皆改善，
+但 direction 归 0 与 oos1 单变量正贡献证据相悖且不可逆单点，不推荐。
+
+### 22.5 证伪与否定结论（如实记录）
+
+1. **证伪「事件级强正 → 权重应高」**：direction 事件级 buy/sell 帧 saEx 强正
+   （+0.076/+0.177），但全帧加权边际贡献三窗两窗强负——事件帧内排序质量 ≠ 合成
+   贡献。与既有复盘「排位变化 ≠ 价格方向」互为印证：direction 分量捕捉的排位
+   变化方向在 4-7 月与 9 月市况下系统性把合成分数推错。
+2. **否定「macd 应升权」假设**：先验假设 macd 是最强正贡献因子（decision loo
+   −4.1% 支持），但 ×1.5 上探在 oos1 受损 −2.0%，oos 两窗留一也改善——其最优
+   权重 ≤ 当前 0.20，维持不动（与阶段 20「MACD 金叉事件 9 月转负 −0.0428」呼应）。
+3. **否定「零线交叉冗余可归零」外推**：cross 在 decision 窗有真实正贡献
+   （loo −3.1%），oos 负贡献未达可关停强度，维持 0.16 不动。
+4. **acceleration 负贡献证实但不足以单独归零**：三窗一致负（唯一），但 p3
+   （accel=0）的 retreat 恶化 −0.060 显示其在回退期市况仍有保护价值，降权至
+   0.10（p1）而非归 0。
+
+### 22.6 buyScoreThreshold 触发率漂移复核建议（不动阈值）
+
+p1 权重下 S+A 档触发率三窗一致下降：decision 4.5%→3.9%、oos1 5.1%→4.6%、
+oos2 4.7%→4.1%（相对 −13%；p2/p3 达 −22~25%）——触发更保守且与 saEx 改善同向
+（弱信号从 S/A 挤入 B/C，排序质量提升）。建议：观察期（落默认后 10 个交易日）
+监控 S+A 绝对触发率，若持续 <3.5% 再评估 buyScoreThreshold 微调，本轮不动。
+
+### 22.7 复现与回退
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m pytest tests\test_ts_factor_weights_harness.py -q
+.\.venv\Scripts\python.exe -m backend.operations.evaluate_ts_factor_weights --window all --group all
+```
+
+（resume：trial 级缓存逐个跳过；报告 `data/reports/ts-factor-weights.json` 含
+层 1 events、57 trial、contribution 汇总与 proposalVerdicts 判定卡。）
+
+落默认流程：py `config.py` 五权重默认值 + TS `rankTrendDefaults.ts` 同步 +
+双端测试锚更新——已于用户决策后执行，见 §22.8（实际采纳 p2_aggressive）。
+
+### 22.8 落默认实施记录（2026-09-13 用户决策：采用 p2_aggressive）
+
+用户在 p1（推荐）/p2/p3 三档中选择 **p2_aggressive**（接受更高 retreat 桶代价
+−0.045 换取 decision +12.5% / oos +30.0%/+28.9% 的更强改善）。
+
+**实际落地清单**：
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| py 配置 | `backend/analysis/ranktrend/engine/config.py` | 五权重默认 0.24/0.20/0.16/0.20/0.20 → **0.06/0.04/0.24/0.29/0.37** + 来源注释（阶段 22 实证依据） |
+| py 测试 | `tests/test_ranktrend_five_factor_decision.py` | 默认值锚/compose 合成锚（0.37/0.29）更新；ma_join 历史 patch 归一化锚独立保留（0.24/0.20/0.16/0.20/0.20，归一化只看 patch 自身和）；新增 p2 patch=默认 采纳锚 |
+| py 测试 | `tests/test_ranktrend_ma_cross_factor.py` | maWeight 默认锚 0.37 + 五因子合成读数 0.5×0.06+1×0.37=0.40 |
+| py 测试 | `tests/test_ts_factor_weights_harness.py` | loo 比例断言改动态引用默认；proposal 组改梯度互比断言 + p2=当前默认采纳锚（提案组保留为历史评估记录） |
+| TS 默认 | `src/types/rankTrendDefaults.ts` | 五权重默认同步 0.06/0.04/0.24/0.29/0.37 |
+| TS 测试 | `src/types/__tests__/rankTrendDefaults.test.ts` | 默认值锚更新；maWeight=0 回填语义修订（p2 比例下回填 = 0.06/0.04/0.24/0.29 ÷ 0.63，不再是旧四因子口径 0.30/0.25/0.20/0.25） |
+
+**验证结果**：
+- py：三测试文件 44 passed（TDD 先红 10 failed 后改实现转绿）；全量 pytest
+  2136 passed 零失败（--ignore=tests/test_archive_research.py 本机挂起规避）；
+- TS：pnpm test 1044 passed（130 文件）；test:ranktrend 156 passed；
+  typecheck:ranktrend 零错误；vue-tsc 零错误；
+- **端到端新锚（已验证）**：落默认后 baseline（`from_patch({})`）三窗逐位复现
+  评估报告 p2_aggressive 读数（decision 0.0939 / oos1 0.0854 / oos2 0.0737，
+  oos1 score −0.1292 = 旧基线 0.0314 + dScore −0.1606 一致）；
+
+**运维注记**：
+1. S+A 触发率预期下降 ~22%（decision 4.5%→3.5%、oos1 5.1%→4.1%、oos2
+   4.7%→3.6%）——触发更保守且与 saEx 改善同向；观察期若 S+A 绝对触发率持续
+   <3.5%，按 §22.6 评估 buyScoreThreshold 微调（本轮不动）。
+2. retreat 状态市况下 saEx 预期下降 ~0.045（附加卡 C4 已知代价）；weak 状态
+   改善 +0.021。regime 面板展示无需处理。
+3. 回退：恢复五权重 0.24/0.20/0.16/0.20/0.20（py `config.py` + TS
+   `rankTrendDefaults.ts` 各一处 + 测试锚），或整体 revert 本次提交。

@@ -41,7 +41,7 @@ class RankTrendConfig:
     # docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md）。
     maFastPeriod: int = 10  # MA 快线周期（用户指定 10）
     maSlowPeriod: int = 20  # MA 慢线周期（用户指定 20；from_patch 保证 > maFastPeriod）
-    maWeight: float = 0.2  # compose_decision 第 5 分量权重（2026-09-13 阶段 21.7 五因子落默认：设计值 0.25 经五权重归一化 = 0.2）
+    maWeight: float = 0.37  # compose_decision 第 5 分量权重（2026-09-13 阶段 22.8 落默认：p2_aggressive 实证口径）
     maCrossTrendBuy: bool = False  # MA 金叉是否参与 trend_buy OR 链（False=关闭）
     # ── ATR 真实波动均值回归（2026-08-17，设计 v2；独立观察维度，不进 synergy 投票）──
     atrPeriod: int = 14  # ATR 周期（简单均值，与 execution.py::_atr_of 一致）
@@ -55,14 +55,18 @@ class RankTrendConfig:
     jumpDeltaPct: float = 15.0  # 对齐旧 TS detectRankJumps 固定 delta=15
     jumpResetLookback: int = 3  # 事件触发后重置窗口（原硬编码 min(3, i+1)）
     jumpSustainCount: int = 2  # 持续事件判定阈值 surge/collapse 次数（原硬编码 2）
-    # ── 决策合成五权重（2026-09-13 阶段 21.7 五因子化：技术四因子 + MA）──
-    # 默认值 = 设计值（0.30/0.25/0.20/0.25 + MA 0.25）经五权重归一化后的精确值，和恒=1；
-    # 直接构造与 from_patch 归一化结果逐位一致（= ma_join 实证口径）；
-    # MACD 项保留（权重位/共识票/trend_buy 链/风险面/观察字段零改动）。
-    directionWeight: float = 0.24
-    accelerationWeight: float = 0.2
-    crossWeight: float = 0.16
-    macdWeight: float = 0.2
+    # ── 决策合成五权重（2026-09-13 阶段 21.7 五因子化 → 阶段 22.8 权重重定义落默认）──
+    # 当前默认 = 阶段 22 p2_aggressive 实证口径（用户决策），和恒=1；
+    # 依据：evaluate_ts_factor_weights 两层实证（层 1 事件级 + 层 2 边际贡献/剂量扫描，
+    # decision/oos1/oos2 三窗）+ Track 2 判定卡 PASS_CANDIDATE（C1 +12.5%、
+    # C2 oos 双窗同向 +30.0%/+28.9%、C3 passHard 保持；详见长测计划 §22）。
+    # 历史口径：阶段 21.7 落默认 0.24/0.20/0.16/0.20/0.20（设计值归一化）。
+    # 直接构造与 from_patch 归一化结果逐位一致；MACD 项保留（权重位/共识票/trend_buy
+    # 链/风险面/观察字段零改动）。
+    directionWeight: float = 0.06
+    accelerationWeight: float = 0.04
+    crossWeight: float = 0.24
+    macdWeight: float = 0.29
     buyScoreThreshold: float = 0.12
     sellScoreThreshold: float = -0.12
     # compose_strategy tier thresholds (configurable, defaults match legacy hardcoded values)

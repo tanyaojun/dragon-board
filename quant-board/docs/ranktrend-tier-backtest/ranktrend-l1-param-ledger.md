@@ -182,7 +182,7 @@
 - 实证 harness：`backend/analysis/ranktrend/research/cross_section_persist_research.py`
   （4 变体 × train/val/test + FINAL 只读；8 月冻结纪律全程遵守，决策仅引用 4-15~07-31）。
 
-## 9. MA 交叉因子落默认——五因子化（2026-09-13 阶段 21.8，取代 §2c maWeight 暂不采纳裁定）
+## 9. MA 交叉因子落默认——五因子化（2026-09-13 阶段 21.8，取代 §2c maWeight 暂不采纳裁定；五权重数值已被 §10 取代）
 
 | 参数 | 旧默认 | 新默认 | 来源 | 状态 |
 |---|---|---|---|---|
@@ -205,3 +205,33 @@
   或整体 revert 本次提交。
 - 实施详情见长测计划 §21.8；判定报告 `data/reports/track2-candidates.json`
   （落默认前基线备份 `track2-candidates-pre5factor.json`）。
+
+## 10. 技术信号五权重实证重定义（2026-09-13 阶段 22.8，取代 §9 归一化继承口径）
+
+五权重自阶段 21.8 落默认后经两层实证重评估（层 1 事件级区分度 + 层 2 留一/半权/
+剂量扫描边际贡献，decision/oos1/oos2 三窗，57 次全量 replay；harness
+`backend/operations/evaluate_ts_factor_weights.py`，报告
+`data/reports/ts-factor-weights.json`），用户决策采纳 **p2_aggressive** 档。
+
+| 参数 | 旧默认（§9） | 新默认 | 来源 | 状态 |
+|---|---|---|---|---|
+| directionWeight | 0.24 | **0.06** | 阶段 22 三窗边际贡献：2/3 窗强负（loo +13.9%/+17.0%），剂量单调 | **落默认**（2026-09-13 用户决策） |
+| accelerationWeight | 0.20 | **0.04** | 唯一三窗一致负（+2.6%/+7.0%/+6.8%） | **落默认**（同上） |
+| crossWeight | 0.16 | **0.24** | decision 正贡献（loo −3.1%），余量吸收 | **落默认**（同上） |
+| macdWeight | 0.20 | **0.29** | decision 正贡献最强（loo −4.1%）；oos 上探受损故升幅受控 | **落默认**（同上） |
+| maWeight | 0.20 | **0.37** | 唯一 ×1.5 上探三窗全正（+1.4%/+0.9%/+1.6%） | **落默认**（同上） |
+
+- **提案判定卡（Track 2 同口径）**：p2_aggressive = PASS_CANDIDATE——C1 决策窗
+  saEx rel +12.5%；C2 oos 双窗同向 +30.0%/+28.9%；C3 passHard 保持；附加卡 C4
+  retreat 桶 −0.045（已知代价，用户知情采纳）、weak 桶 +0.021；C5 翻转率不变
+  （veto 走 lifecycle 层，与五权重解耦）。
+- **端到端新锚（已验证）**：落默认 baseline 三窗逐位复现 p2 读数（decision
+  0.0939 / oos1 0.0854 / oos2 0.0737）。
+- **maJoin 历史 patch 锚保留**：`from_patch(设计值 1.25)` 归一化仍得
+  0.24/0.20/0.16/0.20/0.20（归一化只看 patch 自身和，与默认解耦，测试锁定）。
+- **TS 同步**：`rankTrendDefaults.ts` 五权重同值；maWeight=0 回填语义随比例联动
+  （其余四权重 ÷0.63），不再是旧四因子口径。
+- **回退**：五权重恢复 0.24/0.20/0.16/0.20/0.20（py/TS 各一处 + 测试锚），或整体
+  revert 本次提交。
+- 实施详情见长测计划 §22.8；buyScoreThreshold 不变（S+A 触发率预期 −22%，
+  观察期 <3.5% 再评估，见长测计划 §22.6）。

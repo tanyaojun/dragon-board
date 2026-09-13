@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""技术信号五因子化：MA 作为第 5 决策分量正式落默认（2026-09-13 阶段 21.7）。
+"""技术信号五因子决策合同锁（2026-09-13 阶段 21.7 五因子化 → 阶段 22.8 权重重定义）。
 
-用户决策（阶段 21.7 修订，取代 §21.2 参数替换）：TS 归一化合同扩展为 5 权重，
-技术信号 = 四因子 + MA 五因子结构；py 默认 maWeight 0→0.25，并新增 __post_init__
-权重归一化（任何构造路径权重和恒=1，直接构造与 from_patch 行为统一）。
+当前默认 = 阶段 22 p2_aggressive 实证口径 0.06/0.04/0.24/0.29/0.37（用户 2026-09-13
+决策落默认；来源：evaluate_ts_factor_weights 三窗两层实证 + Track 2 判定卡
+PASS_CANDIDATE，oos 双窗同向 +30.0%/+28.9%，详见长测计划 §22）。
 
-核心锚：落默认口径必须与阶段 20.4/20.5 的 ma_join 实证口径逐位一致——
-from_patch({"maWeight": 0.25}) 归一化后 0.24/0.20/0.16/0.20/0.20。
+历史沿革：阶段 21.7 五因子落默认 0.24/0.20/0.16/0.20/0.20（= 阶段 20.4 ma_join
+设计值归一化口径）；阶段 22 重定义为实证口径。
 
-MACD 完整保留：权重位（0.25）、共识票、trend_buy OR 链、risk histogram、
+MACD 完整保留：权重位、共识票、trend_buy OR 链、risk histogram、
 观察字段（technical.macd）零改动；maCross 缺键的旧调用方/测试夹具不抛错。
 """
 from __future__ import annotations
@@ -30,27 +30,44 @@ GOLDEN_SERIES = [10.0] * 21 + [95.0]  # len 22 = maSlow(20)+1，末帧 fast 18.5
 
 
 def test_default_config_ma_weight_enabled() -> None:
-    """默认 maWeight=0.2（设计值 0.25 五权重归一化后），MACD 权重位保留同值。"""
+    """默认 maWeight=0.37（阶段 22 p2_aggressive 实证口径），MACD 权重位 0.29。"""
     c = RankTrendConfig()
-    assert c.maWeight == pytest.approx(0.2)
-    assert c.macdWeight == pytest.approx(0.2)
+    assert c.maWeight == pytest.approx(0.37)
+    assert c.macdWeight == pytest.approx(0.29)
 
 
 def test_default_config_weights_normalized_to_one() -> None:
-    """__post_init__ 归一化：直接构造权重和恒=1（0.24/0.20/0.16/0.20/0.20）。"""
+    """__post_init__ 归一化：直接构造权重和恒=1（0.06/0.04/0.24/0.29/0.37）。"""
     c = RankTrendConfig()
     total = sum(getattr(c, f) for f in WEIGHT_FIELDS)
     assert total == pytest.approx(1.0)
-    assert c.directionWeight == pytest.approx(0.24)
-    assert c.accelerationWeight == pytest.approx(0.20)
-    assert c.crossWeight == pytest.approx(0.16)
-    assert c.macdWeight == pytest.approx(0.20)
-    assert c.maWeight == pytest.approx(0.20)
+    assert c.directionWeight == pytest.approx(0.06)
+    assert c.accelerationWeight == pytest.approx(0.04)
+    assert c.crossWeight == pytest.approx(0.24)
+    assert c.macdWeight == pytest.approx(0.29)
+    assert c.maWeight == pytest.approx(0.37)
 
 
-def test_ma_join_patch_equals_default_config() -> None:
-    """落默认 = 实证口径锚：全 raw 设计值 patch（阶段 20.4 ma_join trial 的展开形式）
-    经 from_patch 归一化后与默认构造五权重逐位一致。"""
+def test_stage22_p2_patch_equals_default_config() -> None:
+    """落默认 = 实证口径锚：阶段 22 p2_aggressive 五权重（和=1）patch 与默认构造
+    逐位一致（from_patch 归一化幂等）。"""
+    p2 = RankTrendConfig.from_patch(
+        {
+            "directionWeight": 0.06,
+            "accelerationWeight": 0.04,
+            "crossWeight": 0.24,
+            "macdWeight": 0.29,
+            "maWeight": 0.37,
+        }
+    )
+    default = RankTrendConfig()
+    for field in WEIGHT_FIELDS:
+        assert getattr(p2, field) == pytest.approx(getattr(default, field)), field
+
+
+def test_legacy_ma_join_patch_normalization_unchanged() -> None:
+    """历史口径锚（阶段 20.4 ma_join 设计值 1.25 归一化）不随落默认漂移：
+    归一化只看 patch 自身和，与当前默认无关 → 0.24/0.20/0.16/0.20/0.20。"""
     joined = RankTrendConfig.from_patch(
         {
             "directionWeight": 0.3,
@@ -60,9 +77,11 @@ def test_ma_join_patch_equals_default_config() -> None:
             "maWeight": 0.25,
         }
     )
-    default = RankTrendConfig()
-    for field in WEIGHT_FIELDS:
-        assert getattr(joined, field) == pytest.approx(getattr(default, field)), field
+    assert joined.directionWeight == pytest.approx(0.24)
+    assert joined.accelerationWeight == pytest.approx(0.20)
+    assert joined.crossWeight == pytest.approx(0.16)
+    assert joined.macdWeight == pytest.approx(0.20)
+    assert joined.maWeight == pytest.approx(0.20)
 
 
 def test_patch_equal_to_default_is_noop() -> None:
@@ -71,7 +90,7 @@ def test_patch_equal_to_default_is_noop() -> None:
     注意 from_patch 是"替换+归一化"的相对语义——以归一化后的值再 patch 一次会得到
     不同基座下的结果（非幂等场景），故幂等锚只在"和已=1"时成立。
     """
-    once = RankTrendConfig.from_patch({"maWeight": 0.2})
+    once = RankTrendConfig.from_patch({"maWeight": 0.37})
     default = RankTrendConfig()
     for field in WEIGHT_FIELDS:
         assert getattr(once, field) == pytest.approx(getattr(default, field)), field
@@ -109,21 +128,21 @@ def _compose(technical: dict) -> dict:
 
 
 def test_compose_decision_ma_contributes_to_combined() -> None:
-    """四信号全 hold + MA golden(rawScore=1) → combined == 归一化 maWeight(0.2)。"""
+    """四信号全 hold + MA golden(rawScore=1) → combined == 归一化 maWeight(0.37)。"""
     result = _compose(_technical(ma={"cross": "golden", "rawScore": 1.0}))
-    assert result["base"]["combinedScore"] == pytest.approx(0.20)
+    assert result["base"]["combinedScore"] == pytest.approx(0.37)
 
 
 def test_compose_decision_ma_death_negative() -> None:
-    """MA death(rawScore=-1) → combined == -0.2（负向贡献对称）。"""
+    """MA death(rawScore=-1) → combined == -0.37（负向贡献对称）。"""
     result = _compose(_technical(ma={"cross": "death", "rawScore": -1.0}))
-    assert result["base"]["combinedScore"] == pytest.approx(-0.20)
+    assert result["base"]["combinedScore"] == pytest.approx(-0.37)
 
 
 def test_compose_decision_macd_component_retained() -> None:
-    """MACD 分量保留：MACD golden(rawScore=1) → combined == 归一化 macdWeight(0.2)。"""
+    """MACD 分量保留：MACD golden(rawScore=1) → combined == 归一化 macdWeight(0.29)。"""
     result = _compose(_technical(macd_cross="golden", macd_raw=1.0))
-    assert result["base"]["combinedScore"] == pytest.approx(0.20)
+    assert result["base"]["combinedScore"] == pytest.approx(0.29)
 
 
 def test_compose_decision_legacy_technical_without_macross_key() -> None:
@@ -148,8 +167,8 @@ def test_compose_decision_baseline_hold_unchanged() -> None:
 
 def test_direct_construction_with_legacy_four_weight_dict_raises() -> None:
     """历史陷阱锚：旧四权重全量字典直接构造（缺 maWeight，和=1.0≠1？不，和=1 但缺第 5 项）——
-    旧字典和=1.0 但只含 4 权重 → maWeight 取默认 0.2 → 和=1.2 ≠ 1 → 必须拒绝，
-    否则 combinedScore 静默放大 20%。自定义权重应走 from_patch（自动归一化）。"""
+    旧字典和=1.0 但只含 4 权重 → maWeight 取默认 0.37 → 和=1.37 ≠ 1 → 必须拒绝，
+    否则 combinedScore 静默放大。自定义权重应走 from_patch（自动归一化）。"""
     legacy = dict(
         directionWeight=0.3,
         accelerationWeight=0.25,
