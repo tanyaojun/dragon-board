@@ -2397,3 +2397,93 @@ MACD 金死叉**。oos2 扩为 86 帧重算（evaluate_ma_factor_contribution WI
    不稀释权重），证据面"两 OOS 正、decision 微负"差 C1 线一步；维持机制保留、
    默认不动，触发条件：decision 窗读数随新月度数据复验转正 ≥+3% 即按 Track 2
    PASS_CANDIDATE 走 golden 变更流程（替换是单参数位换面，回归面与 §20.2 同）。
+
+## 阶段 21：MA 替换 MACD 金死叉——实施方案（2026-09-13 用户决策，待确认后实施）
+
+> 用户决策：做 MA 替换 MACD 金死叉信号（阶段 20.5 替换命题推进）。
+> 本节为侦查结果 + 实施方案，**未动任何代码**；确认后按 §21.5 顺序实施。
+> 风险声明（双轨制如实呈现）：本候选 Track 2 判定为 OBSERVE（decision 窗 −2.4%
+> 未达 C1 +3% 线，两 OOS 窗 +2.4%/+3.7%）——用户决策推进接受 decision 窗微负，
+> 以 §21.6 回退条件兜底。
+
+### 21.1 侦查：MACD 金死叉全部参与位（10 处，5 层）
+
+| # | 层 | 位置 | 语义 | 替换是否触及 |
+|---|---|---|---|---|
+| 1 | 决策合成 | runtime.py:276（components） | cross_signal+rawScore×macdWeight(0.25) | **是（核心）** |
+| 2 | 决策合成 | runtime.py:292-297（buy/sell_count） | 权重=0 时 MACD 票**仍计入共识计数** | 档位1保留/档位2移除 |
+| 3 | trend_buy OR 链 | runtime.py:426、775-780（两处） | `macd.cross=="golden"` 硬编码 OR 位 | 否（零增量已证） |
+| 4 | MACD 买入门 | runtime.py:295-299（requireMacdGoldenCross） | 默认 False 不生效 | 否 |
+| 5 | 风险面 | risk.py:18-19 | `histogram<0` → overheat 最多+10 | 否（动量状态非事件） |
+| 6 | 观察输出 | technical.py:312（technical.macd） | 展示/快照/回测数据源 | 否（保留） |
+| 7 | 观察输出 | technical.py:313（technical.maCross） | 阶段 17 MA 观察字段 | 否（已就绪） |
+| 8 | 回测交易层 | execution.py:951 | 入场打分 golden +5 | 否（交易层规则） |
+| 9 | 回测交易层 | execution.py:976 | **jump 入场硬门：必须 MACD golden** | 否（交易层规则） |
+| 10 | 回测交易层 | execution.py:992/1025 | **jump 平仓硬规则：MACD death 平仓** | 否（交易层规则） |
+
+TS golden 端：types.ts:61 类型合同（无 maWeight 字段）、rankTrendDefaults.ts:55
+macdWeight=0.25 + :147-152 **4 权重归一化（不含 maWeight）**；TS 无生产计算职责
+（bridge 已移除），改动属合同同步。py 分析入口 config 服务端默认构造
+（ranktrend_routes.py:718），前端 overrides 不进计算链——**改 py 默认值即全链生效**。
+
+### 21.2 替换语义分档与推荐
+
+- **档位 1（推荐）：参数替换** = macdWeight 0.25→0 + maWeight 0→0.25。
+  与阶段 20.5 实证口径（ma_replace trial）**完全一致**，证据直接复用、零补实验；
+  MACD 保留：观察字段、trend_buy OR 链位、风险 histogram、共识票（权重 0）——
+  MACD 从"决策参与者"退为"观察指标 + 交易层规则输入"；
+- **档位 2（不推荐现在做）：信号位替换** = 档位 1 + 移除 components 的 MACD 项
+  （票也不算）。实证口径是"0 权重+保留票"，移除票是**未实证行为**（decisionMinAgreement
+  边界可能不同）——若要做须先补 trial；但 ma_replace_full ≡ ma_replace 逐位一致
+  暗示票移除影响极小，可选补验（见 §21.5 步骤 0）；
+- **档位 3（否决）：彻底移除 MACD**（删 calculate_macd/观察字段/交易层规则）——
+  破坏前端展示、历史快照兼容、jump 交易规则，实证零支持。
+
+### 21.3 改动清单（档位 1，预计 5 文件）
+
+1. `backend/analysis/ranktrend/engine/config.py`：macdWeight 0.25→0.0、
+   maWeight 0.0→0.25（默认值两行；5 权重归一化公式不动，total 仍=1 行为不变）；
+2. `../src/types/rankTrendDefaults.ts`：macdWeight 0.25→0.0、新增 maWeight: 0.25、
+   归一化和加入 maWeight（4→5 权重，与 py 对齐）；
+3. `../src/services/rankTrend/types.ts`：config 类型加 maWeight: number；
+4. 新增测试 `tests/test_ranktrend_ma_replace_default.py`（TDD 先行）：
+   锁默认配置下 compose_decision 行为——MACD 项权重 0（combined 无 MACD 贡献）、
+   MACD 票保留、MA 项参与合成、与 ma_replace trial 口径一致；
+5. 文档：L1 档案（§8 后追加 macdWeight/maWeight 落默认记录）+ 本计划阶段 21 实施记录。
+
+**不动清单**（明确边界）：technical.macd 观察字段与 calculate_macd（保留）；
+trend_buy OR 链 MACD 位与 maCrossTrendBuy 门（默认关，零增量已证）；risk.py
+histogram 消费；requireMacdGoldenCross（默认 False）；回测交易层 4 处 MACD 规则
+（jump 硬门/平仓是交易合同，替换属决策权重面，交易层另行走查）；前端面板展示。
+
+### 21.4 风险与兼容
+
+1. **golden 对齐**：改默认值后 py 输出与既有 golden 预期漂移——test_ranktrend_golden_alignment
+   等合同测试需逐个核对（多数显式传参不受影响，受影响的更新默认值断言）；
+2. **config_hash 合同**：历史快照/回测记录带旧 config_hash，不迁移不重算；新分析
+   用新默认——config_hash 天然区分两代口径，符合"回测可复现"合同；
+3. **决策置信度面**：risk overheat 仍消费 MACD histogram，final_confidence 行为不变；
+4. **可回退**：默认值改回即回滚，无数据/结构迁移。
+
+### 21.5 实施顺序（确认后执行）
+
+1. **步骤 0（可选补验，~10 分钟）**：track2 harness 加 `ma_replace_noticket` trial
+   （py 侧临时移除 MACD 项跑三窗）——若与 ma_replace 逐位一致，档位 1 证据覆盖
+   档位 2 语义，票保留的决定有实证背书；若不一致，向用户回报差异再定；
+2. **TDD**：先写 test_ranktrend_ma_replace_default.py（失败态）→ 改 config 默认值
+   → 测试转绿；
+3. **TS 合同同步** + `pnpm test`（ranktrend 相关）+ vue-tsc；
+4. **全量回归**：`.venv/Scripts/python.exe -m pytest --ignore=tests/test_archive_research.py`
+   （本机挂起规避），破损合同测试逐个核对更新；
+5. **端到端复验（最强验证）**：track2 harness 重跑 baseline trial——新默认的
+   baseline 必须复现 ma_replace 三窗读数（0.0801/0.0670/0.0592），逐位对上即证明
+   "落默认 = 实证口径"；
+6. 提交（一次一候选）+ 文档同步。
+
+### 21.6 上线后观察与回退条件
+
+- **观察窗**：10 月上旬以 9 月全月为窗口复验（Track 2 判定卡）；
+- **回退触发**：① 9 月窗 synergy saEx 低于旧 baseline 口径（绝对差 < 0）且 10 月窗
+  连续为负；② WP3.2 翻转率异常上升（veto/bd > 旧口径 +0.01）；③ 交易层复核
+  （jump 入场/平仓规则语义不受影响，仅打分面变化）出现负偏离；
+- 回退动作：默认值还原 + L1 档案记录回退原因，无结构迁移。
