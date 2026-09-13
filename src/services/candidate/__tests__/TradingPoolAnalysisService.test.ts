@@ -344,6 +344,41 @@ describe('TradingPoolAnalysisService', () => {
     expect(result.rows[0].reasons).toContain('strong_consensus')
   })
 
+  it('counts MA golden cross as the fifth buy vote (2026-09-13 five-factor alignment)', () => {
+    const buildCandidate = (maCross: string | undefined) => ({
+      code: '600000',
+      rankTrend: {
+        decision: { final: { signal: 'hold', confidence: 60 } },
+        jump: { direction: 'hold' },
+        technical: {
+          macd: { cross: 'none' },
+          ...(maCross ? { maCross: { cross: maCross } } : {}),
+          signals: {
+            direction: { signal: 'buy', confidence: 90 },
+            acceleration: { signal: 'hold', confidence: 50 },
+            zeroCross: { signal: 'hold', confidence: 50 },
+          },
+        },
+        cycle: { decision: { action: 'allow' } },
+      },
+    })
+
+    // 方向 buy + MA 金叉 = 2 票（技术四票中仅方向，MA 为第 5 票）
+    const withMa = analyzeTradingPoolCandidate({ candidates: [buildCandidate('golden')] })
+    expect(withMa.rows[0].signalSnapshot.maCross).toBe('golden')
+    expect(withMa.rows[0].signalSnapshot.buyVotes).toBe(2)
+
+    // MA 死叉不算买票：仅方向 1 票
+    const withDeath = analyzeTradingPoolCandidate({ candidates: [buildCandidate('death')] })
+    expect(withDeath.rows[0].signalSnapshot.maCross).toBe('death')
+    expect(withDeath.rows[0].signalSnapshot.buyVotes).toBe(1)
+
+    // 旧数据缺 maCross 字段 = 无信号：仅方向 1 票（不抛错）
+    const withoutMa = analyzeTradingPoolCandidate({ candidates: [buildCandidate(undefined)] })
+    expect(withoutMa.rows[0].signalSnapshot.maCross).toBeNull()
+    expect(withoutMa.rows[0].signalSnapshot.buyVotes).toBe(1)
+  })
+
   it('keeps double-risk strong consensus in watch instead of ready state', () => {
     const result = analyzeTradingPoolCandidate({
       candidates: [

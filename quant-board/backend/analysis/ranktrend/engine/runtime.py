@@ -275,7 +275,8 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
         {"signal": technical["signals"]["zeroCross"]["signal"], "rawScore": clamp(technical["signals"]["zeroCross"]["score"], -1, 1), "weight": config.crossWeight},
         {"signal": cross_signal(technical["macd"]["cross"]), "rawScore": clamp(technical["macd"]["rawScore"], -1, 1), "weight": config.macdWeight},
     ]
-    # 阶段 17 MA 交叉因子（观察接线）：maWeight>0 才进决策合成（默认 0=关闭，golden 逐位不变）；
+    # 阶段 17 MA 交叉因子（观察接线）：maWeight>0 才进决策合成（2026-09-13 阶段 21.8 五因子落默认：
+    # 默认 maWeight=0.2 参与，maWeight=0 显式关闭并按比例回填四因子口径）；
     # 旧调用方/测试夹具的 technical 缺 maCross 键按无信号处理（不抛错）。
     if config.maWeight > 0:
         ma_cross = technical.get("maCross") or {}
