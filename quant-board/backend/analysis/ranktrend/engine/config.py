@@ -253,6 +253,12 @@ class RankTrendConfig:
     cycleConfCrowdedDrawdownMax: float = 1.0
     cycleConfReversalDrawdownMin: float = 1.0
 
+    def __post_init__(self) -> None:
+        # 决策合成五权重不变量（2026-09-13 review 跟进）：直接构造 fail-fast——
+        # 旧四权重全量字典等未归一化状态会让 combinedScore 静默失真，禁止落引擎；
+        # from_patch 不受影响（cls() 时默认值和=1 通过，patch 后由归一化保证）。
+        _validate_decision_weights(self)
+
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
         base = cls()
@@ -287,6 +293,10 @@ class RankTrendConfig:
                     value = float(value)
                 setattr(base, key, value)
         _validate_tier_constraints(base)
+        # setattr 绕过 __post_init__：归一化前显式拒绝负权重（负值会扭曲归一化比例）
+        for _w in _DECISION_WEIGHT_FIELDS:
+            if getattr(base, _w) < 0:
+                raise ValueError(f"决策权重 {_w} 不能为负，实际 {getattr(base, _w)}")
         if base.macdSlow <= base.macdFast:
             base.macdSlow = base.macdFast + 1
         if base.maFastPeriod < 1 or base.maSlowPeriod < 1:
@@ -301,6 +311,34 @@ class RankTrendConfig:
             base.macdWeight /= total
             base.maWeight /= total
         return base
+
+
+_DECISION_WEIGHT_FIELDS = (
+    "directionWeight",
+    "accelerationWeight",
+    "crossWeight",
+    "macdWeight",
+    "maWeight",
+)
+
+
+def _validate_decision_weights(config: "RankTrendConfig") -> None:
+    """决策合成五权重不变量校验（2026-09-13 review 跟进，直接构造路径 fail-fast）。
+
+    合法状态：五权重和 ≈1（默认值/任意 from_patch 归一化后状态），
+    或全 0（显式全关闭哨兵，与 from_patch 全 0 patch 行为一致）；
+    负权重一律拒绝。违反抛 ValueError——from_patch 自动归一化不受影响。
+    """
+    weights = [getattr(config, name) for name in _DECISION_WEIGHT_FIELDS]
+    if any(w < 0 for w in weights):
+        raise ValueError(f"决策权重不能为负：{dict(zip(_DECISION_WEIGHT_FIELDS, weights))}")
+    total = sum(weights)
+    if not (math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1e-6) or total == 0.0):
+        raise ValueError(
+            f"决策合成五权重和须为 1（或全 0 显式关闭），实际和={total}："
+            f"{dict(zip(_DECISION_WEIGHT_FIELDS, weights))}；"
+            "自定义权重请走 RankTrendConfig.from_patch（自动归一化）"
+        )
 
 
 def _validate_tier_constraints(config: "RankTrendConfig") -> None:

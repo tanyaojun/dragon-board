@@ -2570,3 +2570,14 @@ risk histogram→overheat、requireMacdGoldenCross、观察字段 technical.macd
 **回退路径**：py+TS 各一处 patch（`from_patch({"maWeight": 0.0})` /
 `maWeight: 0`），或整体 revert 本次提交；maWeight=0 时其余四权重按比例归一化
 回填旧四因子口径（TS/py 同构，已测试锁定）。
+
+**上线运维注记（2026-09-13 review 跟进）**：
+1. 部署首日 trading-pool 旧持久化 signalSnapshot（4 票、缺 maCross）与新对照快照
+   结构不等 → `isTradingPoolSnapshotEqual` false → 全池条目一次性重算 + journal
+   更新写入。量级 bounded（池内数十条），属预期行为勿当异常处理。
+2. 新旧 buyVotes 口径短暂并存：未重算的旧快照保持 4 票口径，重算后为 5 票
+   （+MA 金叉）。研究侧跨日对比时注意代差，展示层无需处理。
+3. 权重不变量守卫（同批加固）：`RankTrendConfig` 直接构造现带 `__post_init__`
+   权重和校验（和≈1 或全 0，负权重拒绝，违反 fail-fast）——运维脚本
+   `RankTrendConfig(**{**__dict__, **overrides})` 模式未来若加权重类 trial，
+   未归一化状态会被立即拒绝而非静默失真，自定义权重必须走 from_patch。

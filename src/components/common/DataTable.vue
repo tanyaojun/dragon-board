@@ -359,7 +359,7 @@ const localSignalLabels: Record<string, string> = {
   none: '无',
 }
 
-const localMacdLabels: Record<string, string> = {
+const localCrossLabels: Record<string, string> = {
   golden: '金叉',
   death: '死叉',
   none: '无',
@@ -804,9 +804,10 @@ const getSignalDisplayText = (signal?: string | null, fallback = '--') => {
   return localSignalLabels[signal] ?? signal
 }
 
-const getMacdDisplayText = (value?: string | null) => {
+// 金死叉通用显示文案（MACD / MA10×MA20 共用 golden|death|none 词表）
+const getCrossDisplayText = (value?: string | null) => {
   if (!value) return '--'
-  return localMacdLabels[value] ?? value
+  return localCrossLabels[value] ?? value
 }
 
 const getAttentionStageDisplayText = (value?: string | null) => {
@@ -1083,7 +1084,7 @@ const getConfidenceTitle = (stock: any) => {
 
     // MACD信号
     const macdCross = getMacdCross(stock)
-    title += `MACD: ${getMacdDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
+    title += `MACD: ${getCrossDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
 
     // MACD值
     const macdDif = getMacdDif(stock)
@@ -1177,10 +1178,10 @@ const getFieldTooltip = (field: string, stock: any): string => {
       title += `多周期加速度: ${accelerationText} (${formatTooltipNumber(getAccelerationConfidence(stock), 2)}%)\n`
       title += `零线交叉: ${crossText} (${formatTooltipNumber(getZeroCrossConfidence(stock), 2)}%)\n`
       const macdCross = getMacdCross(stock)
-      title += `MACD: ${getMacdDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
+      title += `MACD: ${getCrossDisplayText(macdCross)}${macdCross === 'golden' ? ' ✅' : ''}\n`
       const maCrossValue = getMaCross(stock)
       if (maCrossValue !== 'none') {
-        title += `MA10×MA20: ${getMacdDisplayText(maCrossValue)}${maCrossValue === 'golden' ? ' ✅' : ''}\n`
+        title += `MA10×MA20: ${getCrossDisplayText(maCrossValue)}${maCrossValue === 'golden' ? ' ✅' : ''}\n`
       }
       const macdDif = getMacdDif(stock)
       if (macdDif !== undefined) {

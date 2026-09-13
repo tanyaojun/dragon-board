@@ -20,6 +20,9 @@ from backend.analysis.ranktrend.engine.runtime import compose_decision
 
 WEIGHT_FIELDS = ("directionWeight", "accelerationWeight", "crossWeight", "macdWeight", "maWeight")
 
+# 与 test_ranktrend_ma_cross_factor.py 同构的金叉序列（本地定义，避免跨测试模块导入）
+GOLDEN_SERIES = [10.0] * 21 + [95.0]  # len 22 = maSlow(20)+1，末帧 fast 18.5 > slow 14.25
+
 
 # ---------------------------------------------------------------------------
 # 默认配置：五权重归一化 + 落默认 = 实证口径锚
@@ -136,3 +139,56 @@ def test_compose_decision_baseline_hold_unchanged() -> None:
     result = _compose(_technical())
     assert result["base"]["signal"] == "hold"
     assert result["base"]["combinedScore"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# 权重不变量校验（2026-09-13 review 跟进：直接构造 fail-fast）
+# ---------------------------------------------------------------------------
+
+
+def test_direct_construction_with_legacy_four_weight_dict_raises() -> None:
+    """历史陷阱锚：旧四权重全量字典直接构造（缺 maWeight，和=1.0≠1？不，和=1 但缺第 5 项）——
+    旧字典和=1.0 但只含 4 权重 → maWeight 取默认 0.2 → 和=1.2 ≠ 1 → 必须拒绝，
+    否则 combinedScore 静默放大 20%。自定义权重应走 from_patch（自动归一化）。"""
+    legacy = dict(
+        directionWeight=0.3,
+        accelerationWeight=0.25,
+        crossWeight=0.2,
+        macdWeight=0.25,
+    )
+    with pytest.raises(ValueError, match="from_patch"):
+        RankTrendConfig(**legacy)
+
+
+def test_direct_construction_negative_weight_raises() -> None:
+    """负权重直接构造：拒绝（负值会静默扭曲其余权重比例）。"""
+    with pytest.raises(ValueError, match="不能为负"):
+        RankTrendConfig(maWeight=-0.1, directionWeight=0.34)
+
+
+def test_from_patch_negative_weight_raises() -> None:
+    """from_patch 负权重：拒绝（setattr 绕过 __post_init__，需在归一化前显式校验）。"""
+    with pytest.raises(ValueError, match="不能为负"):
+        RankTrendConfig.from_patch({"maWeight": -0.1})
+
+
+def test_direct_construction_all_zero_weights_allowed() -> None:
+    """全 0 哨兵：五权重全 0 = 显式全关闭，直接构造合法（与 from_patch 全 0 patch 行为一致）。"""
+    c = RankTrendConfig(
+        directionWeight=0.0,
+        accelerationWeight=0.0,
+        crossWeight=0.0,
+        macdWeight=0.0,
+        maWeight=0.0,
+    )
+    assert sum(getattr(c, f) for f in WEIGHT_FIELDS) == 0.0
+
+
+def test_analyze_technical_emits_ma_cross_even_when_ma_weight_zero() -> None:
+    """观察字段与决策门控解耦锚：maWeight=0（关闭决策参与）时 analyze_technical
+    仍无条件产出 maCross 观察字段——前端徽章/观察行不随决策关闭消失。"""
+    from backend.analysis.ranktrend.engine import analyze_technical
+
+    technical = analyze_technical(GOLDEN_SERIES, RankTrendConfig.from_patch({"maWeight": 0.0}))
+    assert technical["maCross"]["cross"] == "golden"
+    assert technical["maCross"]["rawScore"] == 1.0

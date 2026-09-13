@@ -105,7 +105,7 @@
             <input v-model.number="runtimeConfigForm.macdWeight" type="number" min="0.01" max="1" step="0.01" />
           </label>
           <label class="config-field">
-            <span>MA 权重</span>
+            <span>MA 权重（0=关闭）</span>
             <input v-model.number="runtimeConfigForm.maWeight" type="number" min="0" max="1" step="0.01" />
           </label>
           <label class="config-field">
