@@ -79,6 +79,16 @@ TRIALS: list[dict[str, Any]] = [
         "overrides": {"crossSectionPersistFrames": 3},
     },
     {"key": "combo_all", "desc": "全组合：P1 四参 + persist（跨维度交互检测）", "overrides": {**P1_OVERRIDES, "crossSectionPersistFrames": 3}},
+    {
+        "key": "ma_join",
+        "desc": "MA 补验（2026-09-13 用户质询）：MA 进决策合成第 5 分量（与 MACD 并存，阶段 17 ±0.01）",
+        "overrides": {"maWeight": 0.25},
+    },
+    {
+        "key": "ma_full",
+        "desc": "MA 补验：决策分量 + trend_buy 参与位全开（阶段 17 接线零增量复核）",
+        "overrides": {"maWeight": 0.25, "maCrossTrendBuy": True},
+    },
 ]
 
 # 组合交互提示用：combo 由哪些单因子 trial 组成（判定卡输出 combo vs 最优单因子对比行）
