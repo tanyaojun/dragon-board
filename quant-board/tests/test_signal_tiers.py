@@ -65,13 +65,13 @@ def test_synergy_tier_veto_and_hard_risk():
 
 
 def test_synergy_tier_direction_vote():
-    # 档位加权 v2（vote 语义改进 2026-08-15）：A=1.0，保持旧票数门槛
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "A")[0] == "S"  # v=3.0 → S
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", None)[0] == "S"  # v=3.0, lc 非 B/D → S 保持
-    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None)[0] == "A"  # v=2.0 == strong → A（旧门槛保持）
-    assert _synergy_tier("A", "buy", "A", "buy", "B", "buy", "B")[0] == "B"  # v=2.5 → A，lc=B 降 B
-    assert _synergy_tier("B", "buy", "C", "hold", "C", "neutral", "A")[0] == "C"  # v=0.5 < weak → C（弱档单票不升）
-    assert _synergy_tier("D", "sell", "D", "sell", "D", "sell", "A")[0] == "D"  # v=-1.5 ≤ reverse → D
+    # 采纳口径（2026-09-14 阶段 23.9：res/rank/cs ×0.75、vp ×1.0）
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "A")[0] == "A"  # v=2.5 → A（<3）
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", None)[0] == "A"  # v=2.5, lc 非 B/D → A
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None)[0] == "B"  # v=1.5 ≥ weak → B
+    assert _synergy_tier("A", "buy", "A", "buy", "B", "buy", "B")[0] == "B"  # v=2.3 → A，lc=B 降 B
+    assert _synergy_tier("B", "buy", "C", "hold", "C", "neutral", "A")[0] == "C"  # v=0.6 < weak → C（弱档单票不升）
+    assert _synergy_tier("D", "sell", "D", "sell", "D", "sell", "A")[0] == "D"  # v=-2.25 ≤ reverse → D
 
 
 def test_synergy_tier_none_tier_boundary():
@@ -80,7 +80,7 @@ def test_synergy_tier_none_tier_boundary():
 
 
 def test_synergy_tier_lifecycle_env_downgrade():
-    # 周期 B（caution）时 S 降一档为 A（v=3.0 高票一致 → S → 降 A）
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "B")[0] == "A"
-    # 周期 B 时 A 降一档为 B（v=2.0 → A → 降 B）
+    # 周期 B（caution）时 A 降一档为 B（v=2.5 → A → 降 B）
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "buy", "B")[0] == "B"
+    # 周期 B 时 B 保持（v=1.5 → B，仅 S/A 降档）
     assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "B")[0] == "B"

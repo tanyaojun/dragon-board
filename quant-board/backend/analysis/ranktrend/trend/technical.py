@@ -306,7 +306,7 @@ def analyze_technical(percentiles: list[float], config: RankTrendConfig, fallbac
         signals = analyze_momentum_signals(data, config)
         score = data["score"]
     else:
-        signals, macd, score = fallback_signals(percentiles, macd, fallback or {}, len(percentiles) >= get_macd_min_samples(config))
+        signals, macd, score = fallback_signals(percentiles, macd, fallback or {}, len(percentiles) >= get_macd_min_samples(config), config)
     return {
         "movingAverage": {"ma5": ma5, "ma10": ma10, "trend": "up" if ma5 > ma10 else "down" if ma5 < ma10 else "steady"},
         "macd": macd,
@@ -317,38 +317,52 @@ def analyze_technical(percentiles: list[float], config: RankTrendConfig, fallbac
     }
 
 
-def fallback_signals(percentiles: list[float], macd: dict[str, Any], fallback: dict[str, Any], macd_available: bool) -> tuple[dict[str, Any], dict[str, Any], float]:
+def fallback_signals(percentiles: list[float], macd: dict[str, Any], fallback: dict[str, Any], macd_available: bool, config: RankTrendConfig | None = None) -> tuple[dict[str, Any], dict[str, Any], float]:
+    # 阈值/权重 2026-09-14 参数化（config.fallback*，默认值=原硬编码，golden 不漂移）
+    c = config or RankTrendConfig()
+    dir_w = list(c.fallbackDirectionWeights or [0.4, 0.3, 0.2, 0.1])
+    accel_w = list(c.fallbackAccelWeights or [0.55, 0.25, 0.2])
+    zero_w = list(c.fallbackZeroWeights or [0.5, 0.35, 0.15])
+    cap_w = list(c.fallbackCapitalWeights or [0.6, 0.4])
+
     def value(key: str) -> float | None:
         raw = fallback.get(key)
         return float(raw) if _is_finite_number(raw) else None
 
     display_raw, price_raw, volume_raw = value("displayChange"), value("stockChange"), value("volumeRatio")
     zlje, zljzb = value("zlje"), value("zljzb")
-    display = normalize_signed(display_raw, 8, 8) if display_raw is not None else None
-    price = normalize_signed(price_raw, 6, 6) if price_raw is not None else None
-    volume = clamp(math.tanh((volume_raw - 1) / 0.75), -1, 1) if volume_raw is not None else None
+    display = normalize_signed(display_raw, c.fallbackDisplayNormScale, c.fallbackDisplayNormScale) if display_raw is not None else None
+    price = normalize_signed(price_raw, c.fallbackPriceNormScale, c.fallbackPriceNormScale) if price_raw is not None else None
+    volume = clamp(math.tanh((volume_raw - 1) / c.fallbackVolumeTanhScale), -1, 1) if volume_raw is not None else None
     capital_parts = []
     if zlje is not None:
-        capital_parts.append(0.6 if zlje > 0 else -0.6 if zlje < 0 else 0)
+        capital_parts.append(cap_w[0] if zlje > 0 else -cap_w[0] if zlje < 0 else 0)
     if zljzb is not None:
-        capital_parts.append(0.4 if zljzb > 0 else -0.4 if zljzb < 0 else 0)
-    capital = sum(capital_parts) / (0.6 + 0.4 if len(capital_parts) == 2 else (0.6 if zlje is not None else 0.4)) if capital_parts else None
+        capital_parts.append(cap_w[1] if zljzb > 0 else -cap_w[1] if zljzb < 0 else 0)
+    if len(capital_parts) == 2:
+        capital = sum(capital_parts) / (cap_w[0] + cap_w[1])
+    elif len(capital_parts) == 1:
+        # 单边可用时按该分量的自身权重归一（忠实原分支语义：zlje 在用 cap_w[0]，否则 cap_w[1]）
+        single_weight = cap_w[0] if zlje is not None else cap_w[1]
+        capital = capital_parts[0] / single_weight if single_weight else None
+    else:
+        capital = None
 
     def weighted(parts: list[tuple[float | None, float]]) -> float:
         available = [(v, w) for v, w in parts if v is not None]
         return clamp(sum(v * w for v, w in available) / sum(w for _, w in available), -1, 1) if available else 0.0
 
-    direction_score = weighted([(display, 0.4), (price, 0.3), (capital, 0.2), (volume, 0.1)])
-    accel_score = weighted([(display, 0.55), (price, 0.25), (volume, 0.2)])
-    zero_base = weighted([(display, 0.5), (price, 0.35), (volume, 0.15)])
-    direction_signal = "buy" if direction_score >= 0.2 else "sell" if direction_score <= -0.2 else "hold"
+    direction_score = weighted([(display, dir_w[0]), (price, dir_w[1]), (capital, dir_w[2]), (volume, dir_w[3])])
+    accel_score = weighted([(display, accel_w[0]), (price, accel_w[1]), (volume, accel_w[2])])
+    zero_base = weighted([(display, zero_w[0]), (price, zero_w[1]), (volume, zero_w[2])])
+    direction_signal = "buy" if direction_score >= c.fallbackDirectionThreshold else "sell" if direction_score <= -c.fallbackDirectionThreshold else "hold"
     if direction_signal == "buy":
         direction_agreement = int(display is not None and display > 0) + int(price is not None and price > 0) + int(capital is not None and capital >= 0)
     elif direction_signal == "sell":
         direction_agreement = int(display is not None and display < 0) + int(price is not None and price < 0) + int(capital is not None and capital <= 0)
     else:
         direction_agreement = 0
-    accel_signal = "buy" if accel_score >= 0.18 and ((display is not None and display > 0) or (price is not None and price > 0)) else "sell" if accel_score <= -0.18 and ((display is not None and display < 0) or (price is not None and price < 0)) else "hold"
+    accel_signal = "buy" if accel_score >= c.fallbackAccelThreshold and ((display is not None and display > 0) or (price is not None and price > 0)) else "sell" if accel_score <= -c.fallbackAccelThreshold and ((display is not None and display < 0) or (price is not None and price < 0)) else "hold"
     if accel_signal == "buy":
         accel_agreement = int(display is not None and display > 0) + int(price is not None and price > 0) + int(volume is not None and volume > 0)
     elif accel_signal == "sell":
@@ -357,10 +371,10 @@ def fallback_signals(percentiles: list[float], macd: dict[str, Any], fallback: d
         accel_agreement = 0
     zero_signal = "hold"
     zero_score = 0.0
-    if display is not None and price is not None and volume is not None and display > 0.15 and price > 0 and volume >= -0.2:
+    if display is not None and price is not None and volume is not None and display > c.fallbackZeroDisplayMin and price > 0 and volume >= -c.fallbackZeroVolumeBand:
         zero_signal = "buy"
         zero_score = max(0, zero_base)
-    elif display is not None and price is not None and volume is not None and display < -0.15 and price < 0 and volume <= 0.2:
+    elif display is not None and price is not None and volume is not None and display < -c.fallbackZeroDisplayMin and price < 0 and volume <= c.fallbackZeroVolumeBand:
         zero_signal = "sell"
         zero_score = min(0, zero_base)
     if zero_signal == "buy":

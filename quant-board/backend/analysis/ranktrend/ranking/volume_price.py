@@ -81,8 +81,8 @@ def _direction_bucket(code: Any, chg: float, config: RankTrendConfig | None = No
     if chg <= -_daily_limit_pct(code):
         return -c.volumePriceDirectionBuckets[0]
     magnitude = abs(chg)
-    thresholds = (7.0, 5.0, 3.0, 2.0, 1.0, 0.5)
-    for index, threshold in enumerate(thresholds, start=1):
+    # 档位边界 2026-09-14 参数化（config.volumePriceDirectionThresholds，默认=原硬编码）
+    for index, threshold in enumerate(c.volumePriceDirectionThresholds, start=1):
         if magnitude >= threshold:
             return c.volumePriceDirectionBuckets[index] if chg > 0 else -c.volumePriceDirectionBuckets[index]
     if magnitude > 0:
@@ -159,37 +159,40 @@ def compute_volume_price_score(
     if chg > 0:
         if vr <= c.volumePriceShrinkRatio:
             # 缩量涨停封板买不进：只保留弱加成（方向分已含涨停溢价），不给交易满分
-            volume_score = 8.0 if limit_up else min(15.0, 10 + (c.volumePriceShrinkRatio - vr) * 15)
+            volume_score = (
+                c.volumeScoreUpShrinkLimitUp if limit_up
+                else min(c.volumeScoreUpCap, c.volumeScoreUpShrinkBase + (c.volumePriceShrinkRatio - vr) * c.volumeScoreUpShrinkSlope)
+            )
         elif vr <= c.volumePriceMildRatio:
             # 准缩量涨停同理压低；非涨停常态 5 分
-            volume_score = 10.0 if limit_up else 5.0
+            volume_score = c.volumeScoreUpMildLimitUp if limit_up else c.volumeScoreUpMildNormal
         elif vr <= c.volumePriceNormalRatio:
-            volume_score = min(15.0, 10 + (vr - 1) * 5)
+            volume_score = min(c.volumeScoreUpCap, c.volumeScoreUpNormalBase + (vr - 1) * c.volumeScoreUpNormalSlope)
         elif vr <= c.volumePriceOverVolumeRatio:
-            volume_score = max(5.0, 15 - (vr - 2) * 10)
+            volume_score = max(c.volumeScoreUpOverFloor, c.volumeScoreUpOverBase - (vr - 2) * c.volumeScoreUpOverSlope)
         else:
-            volume_score = -min(20.0, 15 + (vr - c.volumePriceOverVolumeRatio) * 10)
+            volume_score = -min(c.volumeScoreUpExcessCap, c.volumeScoreUpExcessBase + (vr - c.volumePriceOverVolumeRatio) * c.volumeScoreUpExcessSlope)
     elif chg < 0:
         if vr > c.volumePriceMildRatio:
-            volume_score = -20.0
+            volume_score = c.volumeScoreDownOverMild
         elif vr >= c.volumePriceShrinkRatio:
-            volume_score = -5.0
+            volume_score = c.volumeScoreDownShrink
         else:
             # 缩量跌停封死卖不出，风险加重（对称于涨停不可买）
-            volume_score = -15.0 if limit_down else -10.0
+            volume_score = c.volumeScoreDownLimitDown if limit_down else c.volumeScoreDownNormal
 
-    # 资金（净占比；>20% 判对倒出货）
+    # 资金（净占比；>abnormal 判对倒出货）——系数 2026-09-14 参数化
     ratio = _finite(zljzb)
     inflow = _finite(zlje)
     fund_score = 0.0
     if ratio is not None and ratio > c.volumePriceAbnormalFundRatio:
-        fund_score = -min(15.0, 10 + (ratio - c.volumePriceAbnormalFundRatio) * 0.5)
+        fund_score = -min(c.fundScoreCap, c.fundScoreDumpBase + (ratio - c.volumePriceAbnormalFundRatio) * c.fundScoreDumpSlope)
     elif ratio is not None and ratio > 0:
-        fund_score = min(15.0, ratio * 3)
+        fund_score = min(c.fundScoreCap, ratio * c.fundScoreNetSlope)
     elif ratio is not None and ratio < 0:
-        fund_score = -min(15.0, abs(ratio) * 3)
+        fund_score = -min(c.fundScoreCap, abs(ratio) * c.fundScoreNetSlope)
     elif ratio is None and inflow is not None:
-        fund_score = 5.0 if inflow > 0 else -5.0 if inflow < 0 else 0.0
+        fund_score = c.fundScoreInOutStep if inflow > 0 else -c.fundScoreInOutStep if inflow < 0 else 0.0
 
     score = round(_clamp(c.volumePriceBase + direction_score + volume_score + fund_score))
 
@@ -228,10 +231,10 @@ def compute_volume_price_score(
     ar = _finite(amount_ratio)
     if ar is not None and ar > 0:
         if ar >= c.amountRatioHigh:
-            amount_score = 5.0
+            amount_score = c.amountScoreStep
             reasons.append(f"成交额放量资金（量比 {ar:.2f} ≥ {c.amountRatioHigh}）")
         elif ar <= c.amountRatioLow:
-            amount_score = -5.0
+            amount_score = -c.amountScoreStep
             reasons.append(f"成交额缩量资金（量比 {ar:.2f} ≤ {c.amountRatioLow}）")
         score = round(_clamp(score + amount_score))
     elif ar is not None and ar <= 0:
@@ -283,10 +286,12 @@ def compute_amount_ratio(amount_history: list[Any] | None, config: RankTrendConf
 
 
 # ── synergy 档位强度权重（vote 语义改进 2026-08-15，v4 权重，horizon=1 验收口径）──
-# 模块级常量便于权重扫描/实证迭代；方案 1 方向主导（vote = strength × dir_sign）。
+# 2026-09-14 参数化：默认值迁移至 config.tierSynergyVoteStrengths（S/A/B/C/D/E），
+# 本模块常量保留为向后兼容 fallback（config 缺失/长度不符时使用）。
 # v4 = 权重扫描最优（saEx=0.0651、passHard=True、spearman=1.0，优于 v0 基线 0.0519）：
 # S=1.2/A=1.0/B=0.8/C=0.5/D=1.0/E=1.0 —— 档位区分体现在 S/B/C，D/E 恢复方向主导。
-_VOTE_STRENGTH: dict[str, float] = {"S": 1.2, "A": 1.0, "B": 0.8, "C": 0.5, "D": 1.0, "E": 1.0}
+_VOTE_STRENGTH_ORDER: tuple[str, ...] = ("S", "A", "B", "C", "D", "E")
+_VOTE_STRENGTH_FALLBACK: dict[str, float] = {"S": 1.2, "A": 1.0, "B": 0.8, "C": 0.5, "D": 1.0, "E": 1.0}
 
 
 def _synergy_tier(
@@ -318,25 +323,35 @@ def _synergy_tier(
     if vp_tier == "E":
         return "D", ["量价出货硬风险"]
 
-    _CS_STRENGTH = {"A": 1.0, "B": 0.5, "C": -0.5, "D": -1.0}
+    _CS_STRENGTH_ORDER = ("A", "B", "C", "D")  # 强度值 2026-09-14 参数化（config.tierSynergyCsStrengths）
+    cs_strengths = list(getattr(c, "tierSynergyCsStrengths") or [])
+    _CS_STRENGTH = dict(zip(_CS_STRENGTH_ORDER, cs_strengths)) if len(cs_strengths) == 4 else {"A": 1.0, "B": 0.5, "C": -0.5, "D": -1.0}
 
     def _vote(tier: str | None, direction: str | None) -> float:
         """档位强度加权投票（vote 语义改进 2026-08-15，方案 1：方向主导 × 档位幅度）。
 
         vote = strength(tier) × dir_sign(direction)，dir_sign: buy/up=+1, sell/down=-1, hold=0。
         方向主导（D/E 档 buy 仍投正分），档位强度决定幅度（v4：S=1.2/A=1.0/B=0.8/C=0.5/
-        D=1.0/E=1.0，权重扫描最优）。全 1.0 权重 = 旧票数语义（方向 ±1）。
+        D=1.0/E=1.0，权重扫描最优；2026-09-14 起读 config.tierSynergyVoteStrengths）。
+        全 1.0 权重 = 旧票数语义（方向 ±1）。
         """
         if tier in ("unknown", None) or not direction:
             return 0.0
-        strength = _VOTE_STRENGTH.get(tier, 0.0)
+        strengths = getattr(c, "tierSynergyVoteStrengths") or []
+        strength = strengths[_VOTE_STRENGTH_ORDER.index(tier)] if tier in _VOTE_STRENGTH_ORDER and len(strengths) == 6 else _VOTE_STRENGTH_FALLBACK.get(tier, 0.0)
         if direction in ("buy", "up"):
             return strength
         if direction in ("sell", "down"):
             return -strength
         return 0.0
 
-    v = _vote(res_tier, res_dir) + _vote(rank_tier, rank_dir) + _vote(vp_tier, vp_dir)
+    # 维度票权重参数化（2026-09-14）：res/rank/vp 默认 1.0=原硬编码行为（golden 不漂移）；
+    # cs 既有 config 权重。vp E→D 硬降为结构规则（上方早退分支），不随权重归零。
+    v = (
+        _vote(res_tier, res_dir) * float(getattr(c, "tierSynergyResonanceVote", 1.0) or 0.0)
+        + _vote(rank_tier, rank_dir) * float(getattr(c, "tierSynergyRankVote", 1.0) or 0.0)
+        + _vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0)
+    )
     cs_weight = float(getattr(c, "tierSynergyCrossSectionVote", 0.0) or 0.0)
     if cs_weight and cs_tier and cs_tier in _CS_STRENGTH:
         v += _CS_STRENGTH[cs_tier] * cs_weight

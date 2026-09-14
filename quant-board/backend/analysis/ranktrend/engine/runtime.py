@@ -316,7 +316,19 @@ def compose_decision(technical: dict[str, Any], cycle: dict[str, Any], risk: dic
     return {"base": {"signal": base, "confidence": confidence, "combinedScore": combined, "scoreMargin": score_margin}, "final": {"signal": final, "confidence": final_conf}}
 
 
-STAGE_FITNESS = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
+# 生命周期阶段适配度（2026-09-14 参数化：默认值迁移至 config.lifecycleStageFitness，
+# expansion/ignition/crowded/cooling/reversal 顺序；本表保留为兼容 fallback，仅展示分面）
+_STAGE_FITNESS_ORDER: tuple[str, ...] = ("expansion", "ignition", "crowded", "cooling", "reversal")
+STAGE_FITNESS: dict[str, float] = {"expansion": 1.0, "ignition": 0.8, "crowded": 0.35, "cooling": 0.2, "reversal": 0.0}
+
+
+def _stage_fitness(stage: str, config: RankTrendConfig | None = None) -> float:
+    """阶段适配度读值：config.lifecycleStageFitness 优先，长度不符回退 STAGE_FITNESS。"""
+    c = config or RankTrendConfig()
+    values = list(getattr(c, "lifecycleStageFitness") or [])
+    if stage in _STAGE_FITNESS_ORDER and len(values) == 5:
+        return float(values[_STAGE_FITNESS_ORDER.index(stage)])
+    return STAGE_FITNESS.get(stage, 0.0)
 
 
 def _tier_as_dict(pair: tuple[str, list[str]]) -> dict[str, Any]:
@@ -380,7 +392,7 @@ def compose_observation_scores(input: dict[str, Any], config: RankTrendConfig | 
         + c.lifecycleMomentumWeights[2] * clamp(float(momentum.get("acceleration") or 0) / c.lifecycleMomentumScales[2], 0, 1)
     )
     factors = {
-        "stageFitness": STAGE_FITNESS.get(str(cycle["stage"]), 0.0),
+        "stageFitness": _stage_fitness(str(cycle["stage"]), c),
         "pathCommitment": clamp(float(cycle.get("metrics", {}).get("rankPathCommitment") or 0), 0, 1),
         "momentumConfirmation": clamp(momentum_confirmation, 0, 1),
         "riskSafety": 1 - clamp(float(risk.get("pressure") or 0), 0, 1),
@@ -482,9 +494,9 @@ def compose_strategy(
         reasons.append("热榜情绪缺失，按中性处理")
     elif hotlist_stage:
         reasons.append(f"热榜情绪: {hotlist_stage}(风险{hotlist_risk or '未知'})")
-    if risk["divergence"]["severity"] >= 0.6:
+    if risk["divergence"]["severity"] >= c.strategyDivergenceReasonMin:
         reasons.append("注意力与资金存在背离")
-    if risk["overheat"]["severity"] >= 0.65:
+    if risk["overheat"]["severity"] >= c.strategyOverheatReasonMin:
         reasons.append("过热压力较高")
     reasons.append(f"动量结构 短{momentum['short']:+.1f} 中{momentum['mid']:+.1f} 长{momentum['long']:+.1f} 加速度{momentum['acceleration']:+.1f}")
     # 阶段6 业务口径（用户决策 2026-08-15）：A_MAIN 高位出货不作为买点，
@@ -504,7 +516,20 @@ def _positive(value: float) -> float:
     return max(0.0, value)
 
 
-def _resonance_label(score: float) -> str:
+def _resonance_label(score: float, config: RankTrendConfig | None = None) -> str:
+    """共振分数标签（展示面）。阈值 2026-09-14 参数化（config.resonanceLabelThresholds）。"""
+    c = config or RankTrendConfig()
+    thresholds = list(getattr(c, "resonanceLabelThresholds") or [])
+    if len(thresholds) == 4:
+        if score >= thresholds[0]:
+            return "非常强"
+        if score >= thresholds[1]:
+            return "强"
+        if score >= thresholds[2]:
+            return "中等"
+        if score >= thresholds[3]:
+            return "较弱"
+        return "非常弱"
     if score >= 85:
         return "非常强"
     if score >= 67:
@@ -614,7 +639,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
             "status": "ok",
             "direction": "buy" if entry_strength > 0 else "hold",
             "score": score,
-            "label": _resonance_label(score),
+            "label": _resonance_label(score, c),
             "relativeMomentum": entry_strength,
             "acceleration": 0,
             "persistence": 0,
@@ -697,7 +722,7 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         "status": "ok",
         "direction": direction,
         "score": score,
-        "label": _resonance_label(score),
+        "label": _resonance_label(score, c),
         "relativeMomentum": round(relative_momentum, 6),
         "acceleration": round(acceleration, 6),
         "persistence": round(persistence, 6),
@@ -821,9 +846,9 @@ def compose_analysis_candidate_tier(
         reasons.append("市场环境强，允许跟踪点火/扩散机会")
     if regime_data["state"] == "retreat":
         reasons.append("市场退潮，优先控制回撤风险")
-    if risk["divergence"]["severity"] >= 0.6:
+    if risk["divergence"]["severity"] >= c.strategyDivergenceReasonMin:
         reasons.append("注意力与资金存在背离")
-    if risk["overheat"]["severity"] >= 0.65:
+    if risk["overheat"]["severity"] >= c.strategyOverheatReasonMin:
         reasons.append("过热压力较高")
     reasons.append(
         f"动量结构 短{momentum['short']:+.1f} 中{momentum['mid']:+.1f} 长{momentum['long']:+.1f} 加速度{momentum['acceleration']:+.1f}"
@@ -920,7 +945,7 @@ class RankTrendPythonEngine:
                 continue
 
             # WP2b：regime 输出经平滑包装（默认参数原样返回同一 dict，零行为变化）
-            regime = self._smooth_regime(market_regime(frame))
+            regime = self._smooth_regime(market_regime(frame, self.config))
             # 阶段 3 修复方向 1：每帧一次性计算横截面市场上下文（与 API 链路同口径），
             # 供 _build_signal 补共振维参与 synergy 投票；窗口不足/样本不足时如实为 None（fail-visible）。
             market_median, market_sample_count = frame_market_median(frames, index)
@@ -1019,7 +1044,7 @@ class RankTrendPythonEngine:
             smoother = RegimeSmoother(
                 alpha=float(getattr(self.config, "regimeScoreEmaAlpha", 1.0)),
                 hysteresis=bool(getattr(self.config, "regimeStateHysteresis", False)),
-                strong_enter=float(REGIME_STRONG_SCORE),
+                strong_enter=float(getattr(self.config, "regimeStrongScore", REGIME_STRONG_SCORE)),
                 strong_exit_band=float(getattr(self.config, "regimeStrongHysteresisBand", 5.0)),
             )
             self._regime_smoother = smoother
@@ -1032,7 +1057,7 @@ class RankTrendPythonEngine:
         self._index_by_snapshot = {str(f.get("snapshotId")): i for i, f in enumerate(frames)}
         history_start = max(0, index - window_size + 1)
         history = frames[history_start: index + 1]
-        regime = market_regime(frame)
+        regime = market_regime(frame, self.config)
         output = []
         for stock in frame.get("stocks", []):
             signal = self._replay_stock(stock, frame, history, history_start, regime, meta or {})

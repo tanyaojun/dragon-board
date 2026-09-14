@@ -2731,3 +2731,322 @@ cd quant-board
    改善 +0.021。regime 面板展示无需处理。
 3. 回退：恢复五权重 0.24/0.20/0.16/0.20/0.20（py `config.py` + TS
    `rankTrendDefaults.ts` 各一处 + 测试锚），或整体 revert 本次提交。
+
+## 阶段 23：周期（lifecycle）维参数贡献率实证评估——阈值族整体钝感，判 OBSERVE 不落默认（2026-09-13）
+
+**结论先行**：五维信号最后一维（周期/lifecycle）按阶段 22 方法论完成两层实证
+（层 1 事件级区分度 + 层 2 单变量/组合 trial，decision/oos1/oos2 三窗，51 trial/窗；
+harness `backend/operations/evaluate_lifecycle_dimension.py`，报告
+`data/reports/lifecycle-dimension.json`）。**两个组合提案均判 OBSERVE**（C2/C3/C4/C5
+全过但 C1 决策窗 +0.3%/+0.6% 远低于 +3% 线）——周期维阈值族对 synergy saEx 的
+可调空间整体钝感，**维持默认，不落默认**。A 组展示分权重 5/5 trial 逐位零效应，
+判冗余（signal-neutral）。至此五维参数空间实证闭环：唯一落默认的是趋势五权重
+（阶段 22），共振/量价/周期维存量候选全部 OBSERVE。
+
+### 23.1 命题与评估口径（用户确认，brainstorming 2026-09-13）
+
+- 命题：周期维做与阶段 22 同类的贡献率实证评估与优化。
+- 口径三决策（用户确认）：① **B 组为主**（lifecycle_decision 阈值族 + decisionReversal*
+  + riskPressureWeights 是真杠杆）+ **A 组冗余验证**（lifecycleWeights 等 5 trial 验证
+  零效应即判冗余，不做深扫）；② **两轮制**（第一轮粗筛 ×0.5/×1.5/×2 找敏感参数，
+  第二轮按证据补精扫）；③ A 组 list patch **显式和=1**（from_patch 对 list 整体替换
+  无归一化）。
+- 范围排除（不得推翻既有裁定）：cycleRaw*/cycleNorm*/cycleConf* 50 结构参数
+  （overfitting-audit §5.1 D 项裁定不扫描）；lifecycleConfirmFrames（阶段 12 已证伪）；
+  decisionReversalFinalConfCap（confidence-only 不改信号方向）。
+- 锚点：baseline 三窗逐位复现阶段 22.8 端到端锚（decision 0.0939 / oos1 0.0854 /
+  oos2 0.0737）；oos1 窗 passHard=False 为该窗口既有口径，C3 判定卡按 decision 窗计。
+- trial 预算：A 组 5 + B 组粗筛 42（baseline + 13 阈值 ×3 档 + riskPressureWeights 3 档）
+  + 精扫 6 + 提案 2 = 55 trial/窗 × 3 窗。
+
+### 23.2 层 1 事件级区分度：周期档位分布极端偏斜（结构性事实）
+
+| 子集 | decision rawHits（占比） | oos1 | oos2 | saEx |
+|---|---|---|---|---|
+| 全量 | 131197 | 18476 | 13098 | +0.0939/+0.0854/+0.0737 |
+| lc_tier_D（冷却/拥挤回避） | 100322（**76.4%**） | 13683 | 9629 | saEx=None（统计退化） |
+| lc_tier_A（优选路径） | 18264（13.9%） | 2902 | 2112 | +0.0360 / +0.0302 / **−0.0006** |
+| lc_tier_E（veto） | 11003（8.4%） | 1656 | 1205 | saEx=None |
+| lc_tier_B（谨慎观察） | 1608（**1.2%**） | 235 | 152 | saEx=None |
+| lc_stage_reversal | 8816 | 1357 | 1000 | saEx=None |
+
+结构性结论：① 档位分布被 cooling 主导（D 档 76%），**阈值族只作用于边界帧**，
+可动空间天然受限；② veto 主要由 stage reversal 驱动（8816/11003），
+HighRisk 冲突路径占比小；③ lc_tier_A 区分度逐窗衰减、oos2 转负（−0.0006）——
+与"9 月市况下优选路径失效"的既有观察（阶段 20 MACD 金叉 OOS-2 负超额）同向。
+
+### 23.3 A 组冗余验证：5/5 逐位零效应（判冗余）
+
+| trial | patch | 判定 |
+|---|---|---|
+| a_equal_weights | lifecycleWeights [0.25×4] | zero_effect_confirmed |
+| a_drop_risksafety | [0.4,0.35,0.25,0] | zero_effect_confirmed |
+| a_stage_lean | [0.5,0.2,0.15,0.15] | zero_effect_confirmed |
+| a_momentum_mid_lean | lifecycleMomentumWeights [0.15,0.6,0.25] | zero_effect_confirmed |
+| a_risk_penalty_half | decisionRiskPenaltyWeights [5.5,4.5,2.5] | zero_effect_confirmed |
+
+证实交接前的事实核查：lifecycleWeights/lifecycleMomentumWeights 只进
+`compose_observation_scores` 展示分（engine/runtime.py:388-393），
+decisionRiskPenaltyWeights 只进 final confidence——三窗对 synergy saEx/passHard/
+翻转率/信号量逐位零效应（`zero_effect_summary` 判定）。**处置：判冗余
+（signal-neutral 展示层参数），不做深扫，默认值保留（展示分语义仍在）**。
+
+### 23.4 B 组第一轮粗筛（42 trial/窗）
+
+有读数的参数（saExRel = trial vs baseline，>0 = 该档改善）：
+
+| trial（语义） | decision | oos1 | oos2 | 判读 |
+|---|---|---|---|---|
+| HighRiskPressureMin ×0.5（放宽 veto） | −2.3% | −0.5% | +5.3% | 更多 veto 决策窗受损；×1.5/×2 零效应=默认 0.75 已在"基本不触发"位 |
+| WeakPathCommitmentMax ×2（放宽） | +1.3% | **−7.6%** | +8.1% | oos1 大损，排除 |
+| WeakPathCommitmentMax ×1.5（放宽） | +1.2% | **−5.0%** | +8.1% | 同上 |
+| WeakPathCommitmentMax ×0.5（收紧） | −1.1% | +0.8% | −0.1% | 微弱 |
+| VelocityMin ×0.5（放宽） | −1.7% | +0.9% | −1.6% | 不一致 |
+| VelocityMin ×1.5（收紧） | +0.4% | −0.9% | +6.0% | oos2 正但 oos1 微负 |
+| **MidLongCommitmentMin ×1.5/×2（收紧）** | +0.1~0.6% | **+0.9%** | **+3.5%** | **唯一三窗全正方向** |
+| LowVisibilityPathMax ×1.5/×2 | +0.3% | +1.8% | +0.1% | 三窗全正但微弱（×1.5=×2 平台） |
+| 其余（AccelMin/AccelCommitmentMin/LowVisibilityMomentumMin） | ±1% 内 | 不一致 | — | 钝感 |
+
+结构性零效应清单（如实区分"从未触发"与"敏感度低"）：
+
+- `lifecycleHighRiskDivergenceMin` / `lifecycleHighRiskOverheatMin` 全档零效应——
+  high_risk_conflict 的背离∧过热组合分支在窗口内从未越过阈值（pressure 分支是
+  唯一活跃 veto 路径，见 ×0.5 有读数）；
+- `decisionReversal*` 3 参数全档零效应——**saEx 口径结构性盲区**：`decision.final`
+  只进交易层/展示（runtime.py:1414），不进 synergy 投票链（投票消费
+  rankTrend tier ← decision.base.combinedScore），本 harness 口径测不到其交易层效应；
+- `riskPressureWeights` 3 档（[0.7,0.3]/[0.5,0.5]/[0.42,0.58]）全零效应——±0.12
+  权重漂移不跨越任何活跃消费阈值（lifecycle veto pressure 门 0.75 基本不触发、
+  compose_strategy 各压力门在此区间不变档）。
+
+### 23.5 第二轮精扫与组合提案判定卡（b_refine 6 + proposal 2）
+
+精扫（全收紧侧）：
+
+| trial | decision | oos1 | oos2 | 判读 |
+|---|---|---|---|---|
+| MidLongCommitmentMin ×1.25 | +0.4% | +0.0% | +3.5% | 剂量曲线平稳 |
+| MidLongCommitmentMin ×1.75 | +0.4% | +0.9% | +3.5% | 同上 |
+| MidLongCommitmentMin ×3.0 | +0.6% | +0.9% | **+7.1%** | oos2 剂量单调未现平台，但 decision 恒 <1% |
+| VelocityMin ×1.25 | +0.4% | +0.0% | +1.5% | 全窗 ≥0，温和甜点 |
+| VelocityMin ×1.75 | −0.6% | −0.1% | +2.4% | 过度收紧转负 |
+| WeakPathCommitmentMax ×0.75 | −0.9% | +2.6% | +3.3% | 与放宽侧合成完整 U 型：0.45 附近最优，两侧各窗受损 |
+
+组合提案 Track 2 判定卡（C1∧C2∧C3=PASS_CANDIDATE）：
+
+| 提案 | 内容 | C1 dec rel | C2 oos rel | C3 passHard | C4 regime Δ | C5 flip Δ | 结论 |
+|---|---|---|---|---|---|---|---|
+| c1_commit_tight | MidLong ×1.5 + Velocity ×1.5 | **+0.3%** | +0.0%/+9.5% | ✓ | retreat −0.0038 | 0 / −0.0010 | **OBSERVE** |
+| c2_commit_tight_ext | MidLong ×2 + Velocity ×1.5 + AccelMin ×1.5 | **+0.6%** | −0.1%/+9.5% | ✓ | retreat −0.0004 | 0 / −0.0008 | **OBSERVE** |
+
+两提案 C2/C3/C4/C5 全过——oos2 +9.5% 显著、regime 四桶几乎无损（retreat 桶
+−0.0004~−0.0038，远好于阶段 22 p2 的 −0.045）、翻转率不升——但 **C1 决策窗
++0.3%/+0.6% 距 +3% 采纳线差距一个数量级**，组合读数近似单变量线性叠加，
+无组合增益涌现。
+
+### 23.6 判定与否定结论（如实记录）
+
+1. **周期维阈值族判 OBSERVE，不落默认**：唯一方向一致的候选（MidLongCommitmentMin
+   收紧，三窗全正 + oos2 剂量单调）decision 窗增益 +0.4~0.6%，单变量与组合均远
+   低于 C1 +3% 线。判"钝感"而非"冗余"——机制真实（假突破识别门槛更严有正贡献）
+   但量级不足。
+2. **WeakPathCommitmentMax 0.45 是 U 型谷底最优**：放宽侧（×1.5/×2）oos1 −5~−7.6%、
+   收紧侧（×0.75）decision −0.9%——维持不动。
+3. **VelocityMin 收紧止步 ×1.25**：×1.75 decision/oos1 转负，×1.5 oos1 微负——
+   跨窗不稳，维持不动。
+4. **A 组展示分权重判冗余**（signal-neutral）：lifecycleWeights/lifecycleMomentumWeights/
+   decisionRiskPenaltyWeights 的实证角色是展示与 confidence 语义，不承担信号合成职责。
+5. **decisionReversal* 与 riskPressureWeights 的零效应是口径盲区**：前者不进 synergy
+   投票链（交易层效应需 Track 1 交易回测口径才能评估，本轮不做）；后者需
+   pressure 消费门（0.75）先活跃才有杠杆——两参数组的"钝感"是结构性的，
+   不应解读为"已优化"。
+6. **五维闭环**：共振（阶段 7/8）、量价（阶段 9）、周期（本阶段）的存量候选全部
+   OBSERVE，唯一落默认的是趋势五权重（阶段 22 p2_aggressive）——saEx 口径下
+   参数空间接近饱和，后续增益更可能来自口径/因子层而非阈值微调。
+
+### 23.7 复现与复核触发
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m pytest tests\test_lifecycle_dimension_harness.py -q
+.\.venv\Scripts\python.exe -m backend.operations.evaluate_lifecycle_dimension --window all --group all
+```
+
+（resume：trial 级缓存逐个跳过；报告 `data/reports/lifecycle-dimension.json` 含层 1
+events、55 trial、contribution 汇总与 proposalVerdicts 判定卡；harness 测试
+20 用例 + 全量 pytest 2158 passed。）
+
+- **复核触发 1**：9 月全月数据累积后重扫 MidLongCommitmentMin 剂量曲线——oos2
+  （9/1~9/12）+3.5~+7.1% 的信号若在全月复现且 decision 窗读数抬升，按 Track 2
+  流程重出提案；
+- **复核触发 2**：HighRisk veto pressure 门（0.75）若因 risk 链改动变活跃，
+  HighRisk 三参数与 riskPressureWeights 需重扫（当前结构性零效应以"门不活跃"为前提）；
+- **复核触发 3**：decisionReversal* 的交易层效应若需评估，走 Track 1 交易回测口径
+  （独立任务，不属 saEx harness 能力范围）；
+- 回退：本阶段零代码默认值改动，无需回退路径；harness/测试可整体 revert。
+
+### 23.8 附录：维度话语权归零对照（2026-09-14，用户追问"谁在总档投票中话语权最大"）
+
+**方法**：整维归零对照（每维从 synergy 合成中移除 vs baseline 的 ΔsaEx + 档位翻转率）
++ 结构统计（各维实际投票率、环境门触发率）。harness
+`backend/operations/evaluate_dimension_voting_power.py`（TDD 7 用例），报告
+`data/reports/dimension-voting-power.json`；baseline 三窗逐位复现阶段 22.8 锚。
+归零路径：cs 走 config patch（tierSynergyCrossSectionVote=0）；rank/vp/lc_gate 走
+`_synergy_tier` wrapper 评估态注入（跑完恢复，无默认值改动）；
+~~res 无法归零（replay 链路 100% 缺票）~~——**2026-09-14 复核勘误：该判断错误**。
+resonance 自阶段 3 修复方向 1 起已在 replay 投票（runtime.py `_build_signal` 内
+market_ctx 分支重算共振，实测 replay 信号 100% 含 resonance、约 44% 帧有 buy/sell
+方向票，4 月样本；"replay 缺共振"为阶段 3 时期旧口径，tier_monotonicity.py 头部
+注释已同步修正）。故 res 的话语权在 §23.9 维度权重扫描（config 路径）中补测。
+
+**投票算术事实（volume_price.py:339-367 核实）**：v = res票 + rank票 + vp票 + cs票，
+**res/rank/vp 权重硬编码 1.0，无维度级权重扫描记录**（"等权"是结构选择非实证值）；
+档位强度 v4（S=1.2/A=1.0/B=0.8/C=0.5，2026-08-15 实证）与 cs 权重（G2）有实证。
+热榜情绪不进 v 求和（走 regime strong 门 + 候选池通道）。
+
+**层 1 结构统计（实际票流，三窗稳定）**：
+
+| 维度 | 实际投票率 | 档位分布特征（decision 窗） |
+|---|---|---|
+| rank 趋势 | **17.2%**（oos 19.9~20.0%） | C 档 hold 占 82.9%——五分之四的帧弃权 |
+| vp 量价 | **80.3%**（oos 93~96%） | D+E 负票 44.2%、unknown 缺数据 18.8% |
+| cs 横截面 | 100%（按档位符号投票） | C 档 62.5% 持续投 −0.5、B 档 31.3% 投 +0.5——净票流系统性偏负 |
+| lc 周期门 | 不投票 | veto 8.4% + B/D 降档 4.3% ≈ 12.7% 帧被改判 |
+| res 共振 | **~44%（2026-09-14 复核勘误）** | replay 已在投票（阶段 3 修复方向 1）；insufficient 帧 unknown 档不计票（4 月样本 48%） |
+
+**层 2 归零对照（saExRel = 移除后 vs baseline）**：
+
+| 归零 trial | decision | oos1 | oos2 | 档位翻转率 | 解读 |
+|---|---|---|---|---|---|
+| **no_lc_gate（去周期门）** | **−61.0%** | **−48.8%** | **−49.4%** | 13.0% | **话语权+价值双最大**：去门排序质量近腰斩，三窗方向一致——环境门是 saEx 的第一支柱 |
+| no_cs（去横截面） | −6.1% | +7.7% | −6.8% | 14.4% | 2/3 窗受损，与 G2 正贡献结论同向；oos1 反向 |
+| no_rank（去趋势票） | −2.0% | +3.6% | **+32.6%** | **5.5%（最小）** | 投票率 17% 决定了低翻转；边际贡献跨窗矛盾（oos2 去掉大改善） |
+| no_vp（去量价票） | **+14.0%** | **−27.6%** | **+43.4%** | **38.5%（最大）** | **翻转最大但方向最不稳**：量价是最大的扰动源，贡献正负剧烈摆动（no_vp 同时移除 vp E→D 硬降，如实标注） |
+
+**结构性发现（如实记录，非提案）**：
+1. 名义等权 1.0 下**实际票流完全不对等**：vp 每帧都投（涨跌方向直接成票）、
+   rank 五分之四弃权、cs 连中位档都投 −0.5——"谁话语权大"首先由投票率结构决定，
+   其次才是权重数字。cs 的 C 档负票设计使 v 基线系统性下压（synergy D 档 42.2% 偏多
+   的直接来源之一）。
+2. **话语权 ≠ 价值**：no_vp 翻转 38.5% 但三窗 ±14~43% 剧烈矛盾——量价维当前形态
+   更接近"高方差扰动源"而非稳定贡献者；no_lc_gate 翻转仅 13% 但去门 saEx 腰斩——
+   环境门是低频高杠杆。
+3. **与阶段 22 的张力（合并解读）**：阶段 22 证明趋势维内部五权重重排有效（+12.5%），
+   本实验证明趋势维的票流整体边际跨窗矛盾且参与率仅 17%——趋势维的价值在"少数
+   关键帧的票"与"内部权重结构"，不在"每帧等权参与"。
+4. **本测量非采纳提案**：单维归零改变整个合成分布，ΔsaEx 是"该维当前形态的边际"
+   而非"应否移除"；若后续要做维度权重实证（rep 维度权重可配置化 → 5 档扫描），
+   需先把 res/rank/vp 硬编码 1.0 参数化（golden 不漂移模式），这是独立任务。
+5. 复核触发：~~共振维接入 replay 链路后重跑本对照补 res 行~~（已勘误：res 在 replay
+   投票，其权重轴已由 §23.9 扫描覆盖，无需另行接入）。
+
+### 23.9 维度票权重两轮扫描 + 硬编码参数化（2026-09-14，提案待用户决策）
+
+**结论先行**：维度票权重（res/rank/vp/cs，参数化后 5 档粗扫 + 精扫 × 3 窗共 58 trial）
+产出 **6 个 PASS_CANDIDATE**，首选 **combo_three_quarter（res/rank/cs 三轴 ×0.75、
+vp 1.0 不动）**：decision +11.2% / oos1 +7.5% / oos2 +26.6%，C1∧C2∧C3 全过、
+regime 四桶不恶化（retreat −0.0091，远好于阶段 22 p2 的 −0.045）、bd 翻转率
+下降 0.029。**默认值不动，待用户决策**（一次一候选：组合 vs 单轴 res ×0.625）。
+
+**前置工程（同日完成）**：
+1. 维度票权重参数化：`tierSynergyResonanceVote/RankVote/VolumePriceVote` 三字段
+   （默认 1.0 = 原硬编码，golden 不漂移；cs 权重 2026-08-17 已参数化）+ 负权重
+   fail-fast（`_validate_tier_constraints`）；
+2. 事实勘误：resonance 自阶段 3 修复方向 1 起已在 replay 投票（实测信号 100% 含
+   resonance、~44% 帧有方向票），"replay 缺共振票"为过时口径（§23.8 已勘误）；
+3. 硬编码参数化清点（六区域 ~90 项，默认值=原值零漂移，全量 2187 passed）：
+   synergy 档位强度 2 组（`tierSynergyVoteStrengths`/`tierSynergyCsStrengths`）、
+   量价阶梯 26 项、风险阶梯与乘数与阈值 33 项、regime 五因子 22 项、技术 fallback
+   11 项、展示面 7 项（`lifecycleStageFitness`/`resonanceLabelThresholds`/strategy
+   reasons 线）——登记为结构参数未扫描；测试 `tests/test_hardcoded_parameterization.py`。
+
+**第一轮粗扫（4 维 × {×0,×0.5,×1.5,×2}，saExRel 三窗 dec/oos1/oos2）**：
+
+| 轴 | ×0.5 | ×1.5 | ×2.0 | ×0 归零 |
+|---|---|---|---|---|
+| res | **+19.5/+17.9/+2.4** | −34.1/−27.9/−0.7 | −51.0/−46.0/−29.7 | oos2 统计退化+pass 全掉 |
+| rank | **+5.0/+3.8/+19.0** | −8.8/+3.0/+0.5 | −19.0/−7.0/−23.3 | pass 全掉 |
+| cs | **+2.7/+14.4/+10.3** | −4.6/−10.0/−14.5 | −31.5/−44.9/−4.3 | 跨窗不一致 |
+| vp | +6.4/−18.9/−1.1 | −30.5/−8.0/+1.4 | −42.4/−25.2/−17.2 | oos1 −64.4 崩塌 |
+
+格局：res/rank/cs 三轴 ×0.5 三窗全正、加权方向全域受损（无任何轴从加权受益）；
+vp 当前 1.0 在窄峰（两侧受损）。归零档全部不可行——四票各有不可替代结构贡献。
+交叉验证：config 归零与 monkeypatch 归零（§23.8）三轴逐位一致。
+
+**第二轮精扫 + 组合判定卡**：
+
+| trial | dec | oos1 | oos2 | 结论 |
+|---|---|---|---|---|
+| res ×0.625 | +8.3% | +18.4% | +17.4% | **PASS_CANDIDATE**（retreat +0.033 改善） |
+| res ×0.75 | +6.6% | +16.9% | +10.6% | PASS_CANDIDATE |
+| rank ×0.625 | +3.9% | +4.3% | +11.8% | PASS_CANDIDATE（C4 retreat −0.017 ⚠） |
+| cs ×0.75 | +6.2% | +13.7% | +3.0% | PASS_CANDIDATE（retreat +0.030） |
+| vp ×1.25 | +0.3% | +2.7% | +1.4% | OBSERVE（未达 C1）→ vp 维持 1.0 |
+| **combo 三轴 ×0.75** | **+11.2%** | **+7.5%** | **+26.6%** | **PASS_CANDIDATE（首选）** |
+| combo 三轴 ×0.5 / ×0.25 | 三窗 saEx=None | — | — | **统计崩溃 REJECT**：v 上限 2.6/1.8 < A 线 2，S/A 档塌到分位桶退化 |
+
+判定卡明细（combo_three_quarter）：C1 +11.2% ✓；C2 双窗同向 ✓；C3 decision
+passHard 保持 ✓；C4 strong +0.0345 / normal +0.0145 / weak −0.0093 / retreat
+−0.0091（全部 |Δ|≤0.01 线内）✓；C5 veto Δ=0、bd Δ=−0.029（改善）✓。
+
+**机制分析（如实记录）**：
+1. 三轴减权的改善含"档位校准"成分——票权降低收紧 S/A 触发（与阶段 22.6 S+A
+   触发率下降同构）；×0.5/×0.25 组合把 A/S 档打碎（v 上限 2.6/1.8 < A 线 2），
+   证明存在不可逾越的结构下限，×0.75 是"减权收益"与"档位结构保全"的边界档；
+2. combo_three_quarter decision +11.2% ≈ 三单轴线性叠加 +15.9% 的 70%——无超线性
+   涌现，主要是三票各自的真实过重（res 最重：单轴 ×0.625 就拿走 +8.3%）；
+3. **附加观察（不否决但要监控）**：res/rank/cs 减权档在 oos2 窗 passHard=False
+   （baseline oos2=True）——9 月窗的 S/A 单调约束在减权后边缘失效，是 9 月滚动
+   复验的第一观察项；
+4. vp 量价两轮证据合并定性：权重已调准（×0.75~1.25 均无可采纳改善）、归零不可行
+   （oos1 −64.4%）、独立信息源（价格/资金数据 res/rank/cs 均不具备）——"高方差
+   扰动源"修正为"权重已调准的独立票"。
+
+**提案与决策边界（默认值不动，等用户决策，一次一候选）**：
+- **首选：combo_three_quarter**（res/rank/cs ×0.75）——三轴共同证据直译，判定卡全过，
+  改动 3 个 config 字段各一处（0.75），回退 = 三字段还原 1.0；
+- 保守替代：单轴 res ×0.625——最小改动（1 字段），decision +8.3%，retreat 改善最大
+  （+0.033），但放弃 rank/cs 的已过线增益；
+- 复核触发：9 月全月复验（oos2 passHard 边缘失效为第一观察项）；若采纳，10 月上旬
+  以 9 月全月重跑三窗判定卡复现方可保持。
+
+**复现**：
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m pytest tests\test_dimension_voting_power.py tests\test_synergy_dimension_weights.py tests\test_hardcoded_parameterization.py -q
+.\.venv\Scripts\python.exe -m backend.operations.evaluate_dimension_voting_power --window all
+```
+报告 `data/reports/dimension-voting-power.json`（58 trial + power 汇总）；harness
+`backend/operations/evaluate_dimension_voting_power.py`（18 用例）。
+
+#### 23.9.1 落默认实施记录（2026-09-14 用户决策：采纳 combo_three_quarter）
+
+用户在首选组合与保守单轴之间选择 **combo_three_quarter**（res/rank/cs 票权 ×0.75、
+vp 1.0 不动）。
+
+**落地清单**：
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| py 配置 | `engine/config.py` | tierSynergyResonanceVote/RankVote/CrossSectionVote 1.0→**0.75**、VolumePriceVote 维持 1.0 + 来源注释；旧 cs 字段定义（151 行）并入新区块（消除重复定义） |
+| py 测试 | `tests/test_synergy_dimension_weights.py` | 默认值锚改 0.75 口径 + 采纳锚（默认构造 ≡ from_patch(combo patch)）+ 票值算术重算（9 用例） |
+| py 测试 | 12 个过时合同测试更新为 0.75 采纳口径（tier_functions 3 / signal_tiers 2 / synergy_vote 2 / assemble_observation 3 / replay_resonance 1 / gate_confirm_bd 1）——逐个重算票值算术，非批量改期望 |
+| TS 投影 | `src/services/rankTrend/tierDisplay.ts` | 悬停票值展示改加权分值（res/rank ×0.75、vp ×1.0、cs ×0.75，round 2 位）+ 注释同步 |
+| TS 测试 | `tierDisplay.test.ts` | 票值断言改加权值（+0.75/+0.6/+0.8/+0.38） |
+
+**验证结果**：
+- py：全量 pytest **2190 passed** 零失败（--ignore=tests/test_archive_research.py）；
+- 端到端锚：新默认（`RankTrendConfig()`）三窗 replay **逐位复现** combo_three_quarter
+  实证读数（decision 0.1044 / oos1 0.0918 / oos2 0.0933）——"落默认 = 实证口径"；
+- TS：pnpm test **1044 passed**（130 文件）、test:ranktrend 156 passed、
+  typecheck:ranktrend 与 vue-tsc 零错误。
+
+**行为变化预告（运维注记）**：
+1. synergy S 档触发大幅收紧（v≥3 需 vp 强票同向参与）——S+A 触发率预期下降，
+   排序质量改善为本次改动目的；前端悬停票值展示为加权后分值；
+2. 单维反向票（如单 res D/sell = −0.75）不再触发 D 档（reverse 线 −1）——
+   反向确认需两维同向，属档位重分布的预期语义变化；
+3. oos2（9 月窗）passHard 边缘失效为第一观察项：**9 月全月复验**（10 月上旬，
+   Track 2 判定卡三窗重跑复现方可保持）；
+4. 回退：py 三字段还原 1.0 + TS tierDisplay 权重常量还原（或整体 revert 本次提交）；
+   快照/回测 config_hash 天然区分两代口径，历史数据不迁移不重算。

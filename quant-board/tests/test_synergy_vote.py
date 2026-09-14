@@ -26,13 +26,13 @@ def syn(res_tier="B", rank_tier="B", vp_tier="B", lc_tier="A", cs_tier=None, **c
 
 def test_default_vote_includes_cross_section() -> None:
     c = RankTrendConfig()
-    assert c.tierSynergyCrossSectionVote == 1.0
+    assert c.tierSynergyCrossSectionVote == 0.75  # 阶段 23.9 采纳 combo_three_quarter（2026-09-14 用户决策）
     assert c.tierSynergyPriceMomentumVote == 0.0  # G1 实证负贡献，观察不进投票
 
 
 def test_cross_section_a_tier_upgrades_synergy() -> None:
-    # 三票 B（+0.8×3=2.4）+ cs A（+1.0）> strong+1 → S
-    assert syn(cs_tier="A") == "S"
+    # 三票 B（0.6+0.6+0.8=2.0）+ cs A（1.0×0.75=0.75）= 2.75 ≥ strong → A（<3 不达 S）
+    assert syn(cs_tier="A") == "A"
 
 
 def test_cross_section_d_tier_downgrades_synergy() -> None:

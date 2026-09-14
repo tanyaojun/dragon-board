@@ -16,8 +16,10 @@ TIER_ORDER = ["S", "A", "B", "C"]
 TIER_VALUES = {"S", "A", "B", "C", "D", "E", "unknown"}
 
 # 四维信号（+ synergy 合并）的 signalTier 在 signal 内的路径（阶段 3 区分度诊断）：
-# resonance 由 API 单股链路写入 rankTrend.resonance（replay 链路缺横截面数据，无该维）；
-# 其余四维由 engine 层 assemble_observation / compose_observation_scores 写入 observation.<dim>。
+# resonance 由 engine 层写入 rankTrend.resonance（阶段 3 修复方向 1 起 replay 链路
+# 经 market_ctx 每帧重算共振并与 API 单股链路同源；2026-09-14 复核实证：replay 信号
+# 100% 含 resonance，insufficient 帧为 unknown 档不计票）；
+# 其余各维由 engine 层 assemble_observation / compose_observation_scores 写入 observation.<dim>。
 DIMENSION_PATHS: dict[str, tuple[str, ...]] = {
     "resonance": ("rankTrend", "resonance", "signalTier"),
     "rankTrend": ("rankTrend", "observation", "rankTrend", "signalTier"),

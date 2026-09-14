@@ -199,10 +199,10 @@ def test_replay_resonance_participates_in_synergy_vote() -> None:
     with_res = signal["rankTrend"]["observation"]["synergy"]["signalTier"]
     without_res = analysis["observation"]["synergy"]["signalTier"]
 
-    # 共振 buy 票必须参与 synergy 投票：手工构造共振 buy（+1 票）→ S/A 强档
+    # 共振 hold 不产生票（fixture 相对动量不足）：rank+vp 两票 v=1.75 → B（采纳票权 0.75）
     assert _synergy_tier(resonance.get("signalTier"), resonance.get("direction"), "A", "buy", "A", "up", "A", config)[0] in (
-        "S",
         "A",
+        "B",
     )
     # fixture 实际共振 direction=hold（相对动量不足/中位 0）→ 不贡献票 →
     # 带共振与清空共振的 synergy 档位必须一致（证明 resonance 被读取但 hold 无票）

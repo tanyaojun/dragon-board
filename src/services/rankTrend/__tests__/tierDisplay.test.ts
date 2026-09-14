@@ -164,11 +164,12 @@ describe('getSynergyVoteBreakdown（三票一票制用户友好解释）', () =>
       },
     }
     const lines = getSynergyVoteBreakdown(stock)
-    // 三维票附分值（1.0 + 0.8 + 0.8）+ 热度第 5 维票 +0.5（合计 3.1 ≥ S 线 3.0）
-    expect(lines[0]).toContain('共振 买入·涨(+1)')
-    expect(lines[0]).toContain('趋势 弱买·涨(+0.8)')
+    // 三维票附加权后分值（阶段 23.9 采纳票权：res/rank ×0.75、vp ×1.0：0.75 + 0.75 + 0.8）
+    // + 热度第 5 维票 0.5×0.75=+0.375（合计 2.675 ≥ S 线 3.0 之下 → A 区间）
+    expect(lines[0]).toContain('共振 买入·涨(+0.75)')
+    expect(lines[0]).toContain('趋势 弱买·涨(+0.6)')
     expect(lines[0]).toContain('量价 弱买·涨(+0.8)')
-    expect(lines[0]).toContain('热度 偏强（第5维票 +0.5）')
+    expect(lines[0]).toContain('热度 偏强（第5维票 +0.38）')
     // 周期环境门
     expect(lines[1]).toContain('周期 回避（拥挤）')
     // 总档：A 是 S 降一档后的结果，标注降档前档位

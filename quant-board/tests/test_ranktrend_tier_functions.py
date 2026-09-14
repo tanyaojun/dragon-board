@@ -107,57 +107,57 @@ def test_synergy_tier_default_matches_hardcoded() -> None:
     assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "E")[0] == "E"
     # vp=E 硬分支
     assert _synergy_tier("A", "buy", "A", "buy", "E", "down", None)[0] == "D"
-    # 档位加权 vote v2（方案 2026-08-15）：S=1.5/A=1.0/B=0.5/C=0.25/D=0.5/E=1.0，保持旧票数门槛
-    # 3× A+buy = 3.0 ≥ strong+1=3 → S
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "A")[0] == "S"
-    # 2× A+buy = 2.0 ≥ strong=2 → A（旧门槛保持，档位加权不降档线）
-    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None)[0] == "A"
-    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "A")[0] == "A"
-    # 1× A+buy = 1.0 ≥ weak=1 → B（旧 1 票门槛保持）
-    assert _synergy_tier("A", "buy", "B", "hold", "C", "hold", None)[0] == "B"
+    # 采纳口径（2026-09-14 阶段 23.9：res/rank/cs 票权 ×0.75、vp ×1.0）
+    # 3× A+buy：v = 0.75+0.75+1.0(vp) = 2.5 ≥ strong=2 → A
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "A")[0] == "A"
+    # 2× A+buy = 1.5 ≥ weak=1 → B
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None)[0] == "B"
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "A")[0] == "B"
+    # 1× A+buy = 0.75 < weak → C（单票不再过 B 线）
+    assert _synergy_tier("A", "buy", "B", "hold", "C", "hold", None)[0] == "C"
     # 全 hold → C
     assert _synergy_tier("C", "hold", "C", "hold", "C", "hold", None)[0] == "C"
-    # D+sell 单维 = -1.0 ≤ reverse → D（v4 D=1.0 恢复方向主导，单维空即 D，同旧票数语义）
-    assert _synergy_tier("D", "sell", "C", "hold", "C", "hold", None)[0] == "D"
-    # lc=B/D 时 S/A 降一档：v=3.0 且 lc=B → S 降 A
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "B")[0] == "A"  # S→A
-    # v=2.0 且 lc=D → A 降 B（原语义：v=2 → A → 降 B）
-    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "D")[0] == "B"  # A→B
+    # D+sell 单维 = -0.75 → C（单维反向不足 reverse 线 -1；反向确认需双维）
+    assert _synergy_tier("D", "sell", "C", "hold", "C", "hold", None)[0] == "C"
+    # lc=B/D 时 S/A 降一档：v=2.5 → A 且 lc=B → A 降 B
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", "B")[0] == "B"  # A→B
+    # v=1.5 → B 且 lc=D → B 保持（仅 S/A 降档）
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", "D")[0] == "B"
 
 
 def test_synergy_tier_weighted_vote() -> None:
-    """档位强度加权投票核心语义（vote 语义改进方案 §3.3 场景表，v4 权重 S=1.2/B=0.8/C=0.5/D=1.0）。"""
-    # 1× S+buy = 1.2 → B（单维强信号仍 B，保持旧 1 票门槛）
-    assert _synergy_tier("S", "buy", "C", "hold", "C", "hold", None)[0] == "B"
-    # S+buy(1.2) + A+buy(1.0) = 2.2 ≥ strong → A
-    assert _synergy_tier("S", "buy", "A", "buy", "C", "hold", None)[0] == "A"
-    # S+buy + B+buy = 2.0 ≥ strong → A（S 档参与 2 维达 A）
-    assert _synergy_tier("S", "buy", "B", "buy", "C", "hold", None)[0] == "A"
-    # 2× S+buy = 2.4 → A（S 档 2 票不升 S，维度一致优先）
-    assert _synergy_tier("S", "buy", "S", "buy", "C", "hold", None)[0] == "A"
-    # 3× S+buy = 3.6 ≥ strong+1 → S（S 档 3 票升 S）
+    """档位强度加权投票核心语义（vote 语义改进方案 §3.3 场景表，v4 强度 + 阶段 23.9 采纳票权 0.75）。"""
+    # 1× S+buy = 0.9 → C（单维强信号不足 weak 线）
+    assert _synergy_tier("S", "buy", "C", "hold", "C", "hold", None)[0] == "C"
+    # S+buy(0.9) + A+buy(0.75) = 1.65 ≥ weak → B
+    assert _synergy_tier("S", "buy", "A", "buy", "C", "hold", None)[0] == "B"
+    # S+buy + B+buy = 0.9 + 0.6 = 1.5 → B
+    assert _synergy_tier("S", "buy", "B", "buy", "C", "hold", None)[0] == "B"
+    # 2× S+buy = 1.8 → B
+    assert _synergy_tier("S", "buy", "S", "buy", "C", "hold", None)[0] == "B"
+    # 3× S+buy = 0.9+0.9+1.2(vp) = 3.0 ≥ strong+1 → S（S 线需 vp 强票同向参与）
     assert _synergy_tier("S", "buy", "S", "buy", "S", "buy", None)[0] == "S"
-    # 1× B+buy = 0.8 < weak → C（弱档单票不升 B）
+    # 1× B+buy = 0.6 < weak → C（弱档单票不升 B）
     assert _synergy_tier("B", "buy", "C", "hold", "C", "hold", None)[0] == "C"
-    # 1× C+buy = 0.5 < weak → C（弱信号不误导升档）
+    # 1× C+buy = 0.375 < weak → C（弱信号不误导升档）
     assert _synergy_tier("C", "buy", "C", "hold", "C", "hold", None)[0] == "C"
-    # 3× C+buy = 1.5 ≥ weak → B（C 档 3 票弱确认）
+    # 3× C+buy = 1.125 ≥ weak → B（C 档 3 票弱确认）
     assert _synergy_tier("C", "buy", "C", "buy", "C", "buy", None)[0] == "B"
-    # D+buy（方向主导 v4）= 1.0 → B（D 档 buy 投正分，同旧票数语义）
-    assert _synergy_tier("D", "buy", "C", "hold", "C", "hold", None)[0] == "B"
-    # 两维空：D+sell + D+sell = -2.0 ≤ reverse → D（反向确认）
+    # D+buy（方向主导 v4）= 0.75 → C（单 D 票不足 weak 线）
+    assert _synergy_tier("D", "buy", "C", "hold", "C", "hold", None)[0] == "C"
+    # 两维空：D+sell + D+sell = -1.5 ≤ reverse → D（反向确认）
     assert _synergy_tier("D", "sell", "D", "sell", "C", "hold", None)[0] == "D"
-    # S+sell（强卖）= -1.2 ≤ reverse → D
-    assert _synergy_tier("S", "sell", "C", "hold", "C", "hold", None)[0] == "D"
+    # S+sell（强卖）= -0.9 → C（单维反向不足 reverse 线）
+    assert _synergy_tier("S", "sell", "C", "hold", "C", "hold", None)[0] == "C"
 
 
 def test_synergy_tier_uses_config_vote_thresholds() -> None:
-    # 档位加权 v2（A+buy=1.0）：strong=3, weak=2 时 A+A+C = 2.0 → v==weak → B
+    # 采纳票权 0.75：strong=3, weak=2 时 A+A+C = 1.5 < weak → C
     c = RankTrendConfig.from_patch({"tierSynergyVoteStrong": 3, "tierSynergyVoteWeak": 2})
-    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None, c)[0] == "B"
-    # A+A+A = 3.0 == strong → A
-    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", None, c)[0] == "A"
-    # strong=3, weak=1：A+A+C = 2.0 既不满足 S/A（<3）也不满足 B/D（≥1）→ 介于 weak/strong → B
+    assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None, c)[0] == "C"
+    # A+A+A = 2.25 < strong=3，≥ weak=2 → B
+    assert _synergy_tier("A", "buy", "A", "buy", "A", "up", None, c)[0] == "B"
+    # strong=3, weak=1：A+A+C = 1.5 ≥ weak=1 → B
     c2 = RankTrendConfig.from_patch({"tierSynergyVoteStrong": 3, "tierSynergyVoteWeak": 1})
     assert _synergy_tier("A", "buy", "A", "buy", "C", "hold", None, c2)[0] == "B"
     # reverse=0：v=0 不再 C → D

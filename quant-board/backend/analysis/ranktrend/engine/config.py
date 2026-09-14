@@ -148,8 +148,124 @@ class RankTrendConfig:
     regimeStateHysteresis: bool = False    # strong 边界迟滞开关
     regimeStrongHysteresisBand: float = 5.0  # strong 退出阈值 = 进入阈值 - band
     tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
-    tierSynergyCrossSectionVote: float = 1.0  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；验证 all+10%/8月+237%）
     tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
+    # ── 维度票权重（2026-09-14 参数化 + 阶段 23.9 实证落默认）──
+    # 用户决策采纳 combo_three_quarter：res/rank/cs 1.0 → 0.75（判定卡 C1 +11.2%/
+    # oos +7.5%/+26.6%，C1-C5 全过），vp 两轮证据维持 1.0（窄峰，两侧受损）。
+    # 回退 = 三字段还原 1.0。结构下限：三轴同减 ≤0.5 时 S/A 档塌缩（长测计划 §23.9）。
+    tierSynergyResonanceVote: float = 0.75  # resonance 票权重（共振维自阶段 3 修复方向 1 起在 replay 投票）
+    tierSynergyRankVote: float = 0.75  # rankTrend 票权重
+    tierSynergyVolumePriceVote: float = 1.0  # volumePrice 票权重（注意：vp E→D 出货硬降为结构规则，不随权重归零）
+    tierSynergyCrossSectionVote: float = 0.75  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；2026-09-14 阶段 23.9 降权 0.75）
+    # ── 硬编码参数化清点（2026-09-14，六区域全面 config 化；默认值=参数化前硬编码值，
+    # golden 不漂移；全部登记为结构参数未扫描，无自由度消耗）──
+    # 批 1：synergy 总档档位强度（原 volume_price._VOTE_STRENGTH / _CS_STRENGTH 模块硬编码）
+    tierSynergyVoteStrengths: list[float] = field(default_factory=lambda: [1.2, 1.0, 0.8, 0.5, 1.0, 1.0])  # S/A/B/C/D/E
+    tierSynergyCsStrengths: list[float] = field(default_factory=lambda: [1.0, 0.5, -0.5, -1.0])  # A/B/C/D（cs/pm/dv 三维共用映射）
+    # 批 2：量价打分阶梯（原 compute_volume_price_score 内硬编码）
+    volumePriceDirectionThresholds: list[float] = field(default_factory=lambda: [7.0, 5.0, 3.0, 2.0, 1.0, 0.5])  # 涨跌幅档位边界（涨停外 7-0.5%）
+    volumeScoreUpShrinkLimitUp: float = 8.0   # 缩量涨停弱加成
+    volumeScoreUpShrinkBase: float = 10.0     # 缩量上涨基准
+    volumeScoreUpShrinkSlope: float = 15.0    # 缩量斜率（×(shrink−vr)）
+    volumeScoreUpCap: float = 15.0            # 上涨侧常态/缩量段封顶
+    volumeScoreUpMildLimitUp: float = 10.0    # 准缩量涨停
+    volumeScoreUpMildNormal: float = 5.0      # 准缩量常态
+    volumeScoreUpNormalBase: float = 10.0     # 常态量基准（min(cap, base+(vr−1)×slope)）
+    volumeScoreUpNormalSlope: float = 5.0
+    volumeScoreUpOverBase: float = 15.0       # 放量段（max(floor, base−(vr−2)×slope)）
+    volumeScoreUpOverSlope: float = 10.0
+    volumeScoreUpOverFloor: float = 5.0
+    volumeScoreUpExcessBase: float = 15.0     # 过度放量负分（−min(cap, base+(vr−2)×slope)）
+    volumeScoreUpExcessSlope: float = 10.0
+    volumeScoreUpExcessCap: float = 20.0
+    volumeScoreDownOverMild: float = -20.0    # 放量下跌
+    volumeScoreDownShrink: float = -5.0       # 准缩量下跌
+    volumeScoreDownLimitDown: float = -15.0   # 缩量跌停（封死卖不出，重于常态）
+    volumeScoreDownNormal: float = -10.0      # 缩量下跌常态
+    fundScoreCap: float = 15.0                # 资金分封顶
+    fundScoreDumpBase: float = 10.0           # 对倒出货基准（−min(cap, base+(ratio−abnormal)×slope)）
+    fundScoreDumpSlope: float = 0.5
+    fundScoreNetSlope: float = 3.0            # 净流入/流出斜率（min(cap, ratio×slope)）
+    fundScoreInOutStep: float = 5.0           # 净额方向步进（inflow>0 → +step）
+    amountScoreStep: float = 5.0              # 成交额量比放量/缩量加分（G3）
+    # 批 3：风险阶梯（原 risk.analyze_risk 内硬编码；over/div 分数 → severity → pressure
+    # → decision 风险惩罚 / lifecycle veto / compose_strategy 退出门槛）
+    riskOverheatPercentileMin: float = 70.0   # 关注度过热线（×slope 计分）
+    riskOverheatPercentileSlope: float = 1.2
+    riskOverheatShockSlope: float = 12.0      # ×rankShock
+    riskOverheatVelocitySlope: float = 1.5    # ×rankVelocity（min cap）
+    riskOverheatVelocityCap: float = 15.0
+    riskOverheatAccelSlope: float = 4.0       # ×|rankAcceleration|（负加速，min cap）
+    riskOverheatAccelCap: float = 20.0
+    riskOverheatMacdSlope: float = 15.0       # ×|histogram|（负柱，min cap）
+    riskOverheatMacdCap: float = 10.0
+    riskOverheatDirectionBuyBonus: float = 5.0        # direction buy 逆温加成
+    riskOverheatAccelMissPenalty: float = 10.0        # acceleration 非 buy
+    riskOverheatZeroCrossSellPenalty: float = 18.0    # zeroCross sell
+    riskHotAttentionPercentileMin: float = 70.0       # 高关注度判定线（divergence 前提）
+    riskDivergenceHotBonus: float = 10.0              # 高关注度基础加分
+    riskDivergenceHotOutflowPenalty: float = 25.0     # 高关注度+主力流出
+    riskDivergenceHotDumpPenalty: float = 18.0        # 高关注度+净占比负
+    riskDivergenceVolumeHighMin: float = 2.0          # 高量比线
+    riskDivergenceVolumeOutflowPenalty: float = 15.0  # 高量比+流出
+    riskDivergenceVolumeDumpPenalty: float = 8.0      # 高量比+净占比负
+    riskDivergenceShockMin: float = 0.8               # 高震幅线
+    riskDivergenceShockOutflowPenalty: float = 12.0   # 高震幅+流出
+    riskDivergenceStageOutflowPenalty: float = 12.0   # 拥挤/反转+流出
+    riskDivergenceInflowRelief: float = 15.0          # 主力流入缓释
+    riskDivergenceDumpRelief: float = 10.0            # 净占比正缓释
+    riskDivergenceShrinkVolumeMax: float = 1.5        # 缩量缓释量比上限
+    riskDivergenceShrinkInflowRelief: float = 6.0     # 缩量+流入缓释
+    riskOverheatStageMultipliers: list[float] = field(default_factory=lambda: [0.3, 0.55, 0.85, 1.0, 0.3])  # ignition/expansion/crowded/reversal/cooling
+    riskDivergenceStageMultipliers: list[float] = field(default_factory=lambda: [0.35, 0.65, 0.9, 1.0, 0.35])
+    riskOverheatSellMin: float = 70.0         # overheat signal=sell 线（且 crowded/reversal）
+    riskOverheatHoldMin: float = 45.0         # overheat signal=hold 线
+    riskDivergenceSellMin: float = 65.0
+    riskDivergenceHoldMin: float = 40.0
+    riskSynergyOverheatSevMin: float = 0.65   # risk.synergy 双门（over_sev）
+    riskSynergyDivergenceSevMin: float = 0.6  # risk.synergy 双门（div_sev）
+    # regime 环境打分（原 market_regime 内硬编码；REGIME_* 模块常量保留为向后兼容默认）
+    regimeStageAdjust: list[float] = field(default_factory=lambda: [8.0, 5.0, 0.0, -6.0, -8.0])  # 高潮/发酵/启动/退潮/冰点
+    regimeStrongScore: float = 70.0
+    regimeNormalScore: float = 50.0
+    regimeWeakScore: float = 30.0
+    regimeLimitUpChange: float = 9.8          # 池内涨停判定涨幅线
+    regimeLimitUpBaseShare: float = 0.08      # 涨停占比基线
+    regimeRiskHighAdjust: float = -8.0        # 热榜情绪风险高修正
+    regimeRiskLowAdjust: float = 3.0          # 热榜情绪风险低修正
+    regimeBaseScore: float = 50.0             # regime 打分基线
+    regimeUpShareSlope: float = 40.0          # 池内上涨占比因子（clamp(floor, cap)）
+    regimeUpShareFloor: float = -20.0
+    regimeUpShareCap: float = 20.0
+    regimeLimitUpSlope: float = 80.0          # 涨停占比因子
+    regimeLimitUpFloor: float = -15.0
+    regimeLimitUpCap: float = 25.0
+    regimeActiveVolumeMin: float = 1.2        # 量能活跃判定线
+    regimeActiveBaseShare: float = 0.35       # 活跃占比基线
+    regimeActiveSlope: float = 10.0
+    regimeActiveFloor: float = -5.0
+    regimeActiveCap: float = 7.0
+    regimeMoneySlope: float = 20.0            # 资金正向占比因子
+    regimeMoneyFloor: float = -10.0
+    regimeMoneyCap: float = 10.0
+    # 批 4：技术信号 fallback（原 fallback_signals 内硬编码；percentile 序列不足时兜底路径）
+    fallbackDirectionThreshold: float = 0.2   # direction buy/sell 线
+    fallbackAccelThreshold: float = 0.18
+    fallbackZeroDisplayMin: float = 0.15      # 零线交叉 display 门
+    fallbackZeroVolumeBand: float = 0.2       # 零线交叉 volume 容带
+    fallbackDisplayNormScale: float = 8.0     # displayChange 归一化尺度
+    fallbackPriceNormScale: float = 6.0       # stockChange 归一化尺度
+    fallbackVolumeTanhScale: float = 0.75     # 量比 tanh 尺度
+    fallbackDirectionWeights: list[float] = field(default_factory=lambda: [0.4, 0.3, 0.2, 0.1])  # display/price/capital/volume
+    fallbackAccelWeights: list[float] = field(default_factory=lambda: [0.55, 0.25, 0.2])  # display/price/volume
+    fallbackZeroWeights: list[float] = field(default_factory=lambda: [0.5, 0.35, 0.15])
+    fallbackCapitalWeights: list[float] = field(default_factory=lambda: [0.6, 0.4])  # zlje/zljzb
+    # 批 4：共振 label 阈值（展示面）
+    resonanceLabelThresholds: list[float] = field(default_factory=lambda: [85.0, 67.0, 50.0, 27.0])
+    # 批 4：展示面（observation.lifecycle 展示分与 strategy reasons，2026-09-13 已证 signal-neutral）
+    lifecycleStageFitness: list[float] = field(default_factory=lambda: [1.0, 0.8, 0.35, 0.2, 0.0])  # expansion/ignition/crowded/cooling/reversal
+    strategyDivergenceReasonMin: float = 0.6       # strategy reasons 背离提示线
+    strategyOverheatReasonMin: float = 0.65        # strategy reasons 过热提示线
     # ── priceMomentum（价格动量观察因子，2026-08-17 审计缺口 G1；不进 synergy 投票）──
     priceMaShort: float = 5.0  # 价格（change）短均线周期
     priceMaLong: float = 10.0  # 价格（change）长均线周期
@@ -352,6 +468,16 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
     0 <= tierResonance*Min <= 1。不满足抛 ValueError（回测 trial 记 failed）。
     weak 必须严格小于 strong，防止 _synergy_tier 的 v==weak 分支被 v>=strong 吞掉而不可达。
     """
+    for _field in (
+        "tierSynergyResonanceVote",
+        "tierSynergyRankVote",
+        "tierSynergyVolumePriceVote",
+        "tierSynergyCrossSectionVote",
+        "tierSynergyPriceMomentumVote",
+        "tierSynergyDivergenceVote",
+    ):
+        if getattr(config, _field) < 0:
+            raise ValueError(f"synergy 投票权重 {_field} 不能为负（负值翻转票向），实际 {getattr(config, _field)}")
     if not (0 < config.tierRankTrendConfirmMin < config.tierRankTrendStrongMin <= 1):
         raise ValueError(
             f"tierRankTrend 约束失败：需要 0 < confirm < strong <= 1，"

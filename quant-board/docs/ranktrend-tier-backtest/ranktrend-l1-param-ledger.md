@@ -235,3 +235,63 @@
   revert 本次提交。
 - 实施详情见长测计划 §22.8；buyScoreThreshold 不变（S+A 触发率预期 −22%，
   观察期 <3.5% 再评估，见长测计划 §22.6）。
+
+## 11. 周期（lifecycle）维参数贡献率评估（2026-09-13 阶段 23，OBSERVE 不落默认）
+
+评估 harness `backend/operations/evaluate_lifecycle_dimension.py`（三窗 51 trial/窗，
+报告 `data/reports/lifecycle-dimension.json`）；口径与判定详见长测计划阶段 23。
+**结论：B 组阈值族整体钝感（组合提案 OBSERVE，C1 decision +0.3~0.6% 远低于 +3% 线），
+A 组展示分权重 5/5 逐位零效应判冗余——全部维持默认，零默认值改动。**
+
+| 参数 | 默认值 | 阶段 23 评估结论 |
+|---|---|---|
+| lifecycleMidLongCommitmentMin | 15.0 | **钝感（唯一三窗全正方向）**：收紧 ×1.5~×3 oos2 +3.5~+7.1% 剂量单调、oos1 +0.9%，但 decision 恒 <1% 不达 C1 +3%；复核=9 月全月重扫 |
+| lifecycleWeakPathCommitmentMax | 0.45 | **U 型谷底最优**：放宽侧 oos1 −5~−7.6%、收紧侧 decision −0.9%，维持不动 |
+| lifecycleVelocityMin | 18.0 | 收紧止步 ×1.25（×1.75 decision/oos1 转负），跨窗不稳，维持不动 |
+| lifecycleAccelMin / AccelCommitmentMin / LowVisibility* | 12.0/8.0/0.7/18.0 | 钝感（±1% 内、跨窗不一致） |
+| lifecycleHighRiskPressureMin | 0.75 | 默认已在"基本不触发"位（×1.5/×2 零效应）；×0.5 放宽 veto decision −2.3% 不划算 |
+| lifecycleHighRiskDivergenceMin / OverheatMin | 0.8/0.7 | 结构性零效应（背离∧过热组合分支从未触发）；前提=pressure 门 0.75 不活跃，门变活跃需重扫 |
+| riskPressureWeights | [0.58,0.42] | 结构性零效应（±0.12 漂移不跨任何活跃消费阈值） |
+| decisionReversalPressureMin/OverheatMin/MarginMax | 0.78/0.7/0.05 | **saEx 口径结构性盲区**：final 信号不进 synergy 投票链，只进交易层；交易层效应需 Track 1 口径另评 |
+| decisionReversalFinalConfCap | 62.0 | confidence-only 不入扫（不改信号方向） |
+| lifecycleWeights | [0.35,0.25,0.2,0.2] | **判冗余（signal-neutral）**：5/5 trial 三窗对 synergy saEx/passHard/翻转率/信号量逐位零效应；只承担 observation.lifecycle.score 展示分，默认保留 |
+| lifecycleMomentumWeights | [0.3,0.45,0.25] | 同上（判冗余，展示分面） |
+| decisionRiskPenaltyWeights | [11,9,5] | 同上（判冗余，confidence-only 面） |
+
+- **范围排除重申**：cycleRaw*/cycleNorm*/cycleConf* 50 结构参数维持 §5.1 D 项裁定
+  （不扫描）；lifecycleConfirmFrames 维持阶段 12 证伪结论（K=1）。
+- **五维闭环注记**：共振/量价/周期维存量候选全部 OBSERVE，唯一落默认=趋势五权重
+  （§10 p2_aggressive）；saEx 口径参数空间接近饱和，后续增益优先找口径/因子层抓手。
+- **复核触发**：① 9 月全月重扫 MidLongCommitmentMin（oos2 信号全月复现则重出提案）；
+  ② HighRisk pressure 门变活跃时重扫 HighRisk 三参数 + riskPressureWeights；
+  ③ decisionReversal* 交易层评估走 Track 1 独立任务。
+
+## 12. synergy 维度票权重与档位强度（2026-09-14 阶段 23.9，已落默认）
+
+| 参数 | 旧默认 | 新默认 | 来源 | 状态 |
+|---|---|---|---|---|
+| tierSynergyResonanceVote | 1.0 | **0.75** | 阶段 23.9 两轮扫描（×0.5/×0.625/×0.75 三窗全正，单轴最强 +8.3/+18.4/+17.4） | **落默认**（2026-09-14 用户决策 combo_three_quarter） |
+| tierSynergyRankVote | 1.0 | **0.75** | ×0.5/×0.625/×0.75 三窗全正 | **落默认**（同上） |
+| tierSynergyVolumePriceVote | 1.0 | **1.0（不变）** | 两轮证据：窄峰（×0.75 oos2 −6.4、×1.25 OBSERVE、×0 oos1 −64.4、×1.5 dec −30.5） | 维持（唯一不动轴） |
+| tierSynergyCrossSectionVote | 1.0 | **0.75** | ×0.5/×0.75 三窗全正（×0.75：+6.2/+13.7/+3.0） | **落默认**（同上） |
+| tierSynergyVoteStrengths | — | [1.2,1.0,0.8,0.5,1.0,1.0] | 2026-09-14 参数化（原 _VOTE_STRENGTH，v4 实证值） | 结构参数登记，未扫描 |
+| tierSynergyCsStrengths | — | [1.0,0.5,−0.5,−1.0] | 同上（原 _CS_STRENGTH） | 同上 |
+
+- **落默认口径锚（端到端已验证）**：新默认三窗 replay 逐位复现 combo_three_quarter
+  实证读数（decision 0.1044 / oos1 0.0918 / oos2 0.0933）；判定卡 C1 +11.2% /
+  C2 oos +7.5%/+26.6% / C3 passHard 保持 / C4 regime 四桶 \|Δ\|≤0.01（retreat −0.0091）/
+  C5 veto Δ=0、bd Δ=−0.029 改善。
+- **结构性下限（已实证）**：三轴同减至 ≤0.5 → v 上限 2.6 < A 线 2 → S/A 档塌缩、
+  saEx 统计退化（三窗 None）——票权与档位线（tierSynergyVote*）耦合，减票权的
+  同减下限是 0.75。
+- **TS 同步**：`tierDisplay.ts` 悬停票值改加权分值（res/rank ×0.75、vp ×1.0、cs ×0.75）；
+  后端 py 为唯一 golden 计算链，TS 无生产投票职责。
+- **硬编码参数化清点（2026-09-14，同批）**：synergy 档位强度/量价阶梯/风险阶梯与
+  regime 五因子/技术 fallback/展示面共 ~90 项 config 化（默认值=原值零漂移），
+  登记为结构参数未扫描；清单见长测计划 §23.9。
+- **运维注记**：S 档触发收紧（v≥3 需 vp 强票同向）；单维反向票不再触发 D 档
+  （reverse 线 −1，反向确认需两维同向）；oos2 passHard 边缘失效为 9 月全月复验
+  第一观察项（10 月上旬 Track 2 三窗重跑复现方可保持）。
+- **回退**：py 三字段还原 1.0 + TS tierDisplay 权重常量还原，或整体 revert 本次提交；
+  config_hash 天然区分两代口径，历史数据不迁移不重算。
+- 实施详情见长测计划 §23.9/§23.9.1；报告 `data/reports/dimension-voting-power.json`。

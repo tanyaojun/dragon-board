@@ -130,9 +130,10 @@ function dimDirection(stock: unknown, path: string): string | null {
 
 /** 五维信号"三票一票制"用户友好解释（悬停展示，2026-08-16；2026-08-26 补齐第 5 维热度票与降档前档位）：
  *  方向投票（共振/趋势/量价三维 + 第 5 维热度（crossSection），有明确方向/档位才投）+ 周期环境门（否决/谨慎/回避/放行）+ 最终结果。
- *  分值映射与后端一致（_VOTE_STRENGTH v4 / _CS_STRENGTH × tierSynergyCrossSectionVote=1.0），仅作解释投影，不产出档位。
+ *  分值映射与后端一致（_VOTE_STRENGTH v4 / _CS_STRENGTH × 维度票权：阶段 23.9 采纳
+ *  res/rank/cs ×0.75、vp ×1.0，2026-09-14 用户决策），仅作解释投影，不产出档位。
  *  示例：
- *    共振 强买·涨(+1.2)  趋势 买入·涨(+1.0)  量价 弱买·涨(+0.8)  热度 偏强（第5维票 +0.5）
+ *    共振 强买·涨(+0.9)  趋势 买入·涨(+0.75)  量价 弱买·涨(+0.8)  热度 偏强（第5维票 +0.75）
  *    周期 拥挤（回避）→ 若为 S/A 则降一档
  *    票数汇总 → 总档 买入（周期环境门降档后，降档前 S）       */
 export function getSynergyVoteBreakdown(stock: unknown): string[] {
@@ -147,29 +148,35 @@ export function getSynergyVoteBreakdown(stock: unknown): string[] {
   const vpDir = dimDirection(stock, 'rankTrend.observation.volumePrice.direction')
   const stage = dimDirection(stock, 'rankTrend.observation.lifecycle.stage')
 
-  // 档位加权票数（展示投影，与后端 volume_price.py _VOTE_STRENGTH v4 一致）
+  // 档位强度 × 维度票权（展示投影，与后端 volume_price.py _VOTE_STRENGTH v4 +
+  // config.tierSynergy{Resonance,Rank,VolumePrice,CrossSection}Vote 一致；阶段 23.9）
   const VOTE_STRENGTH: Record<string, number> = { S: 1.2, A: 1.0, B: 0.8, C: 0.5, D: 1.0, E: 1.0 }
   const CS_TIER_CN: Record<string, string> = { A: '强', B: '偏强', C: '偏弱', D: '弱' }
   const CS_VOTE: Record<string, number> = { A: 1.0, B: 0.5, C: -0.5, D: -1.0 }
+  const RES_VOTE_WEIGHT = 0.75
+  const RANK_VOTE_WEIGHT = 0.75
+  const VP_VOTE_WEIGHT = 1.0
+  const CS_VOTE_WEIGHT = 0.75
+  const round2 = (v: number): number => Number(v.toFixed(2))
 
-  const voteText = (tier: RankTrendSignalTier | null, dir: string | null, defaultTxt: string) => {
+  const voteText = (tier: RankTrendSignalTier | null, dir: string | null, defaultTxt: string, weight: number) => {
     if (!tier || tier === 'unknown') return null
-    const score = VOTE_STRENGTH[tier] ?? 0
+    const score = round2((VOTE_STRENGTH[tier] ?? 0) * weight)
     const scoreTxt = score > 0 ? `(+${score})` : `(${score})`
     if (dir === 'buy' || dir === 'up') return `${TIER_CN[tier]}·涨${scoreTxt}`
     if (dir === 'sell' || dir === 'down') return `${TIER_CN[tier]}·跌${scoreTxt}`
     return `${TIER_CN[tier]}（${defaultTxt}）`
   }
-  const vRes = voteText(resTier, resDir, '共振观望')
-  const vRank = voteText(rankTier, rankDir, '趋势观望')
-  const vVp = voteText(vpTier, vpDir, '量价常态')
+  const vRes = voteText(resTier, resDir, '共振观望', RES_VOTE_WEIGHT)
+  const vRank = voteText(rankTier, rankDir, '趋势观望', RANK_VOTE_WEIGHT)
+  const vVp = voteText(vpTier, vpDir, '量价常态', VP_VOTE_WEIGHT)
   if (vRes) votes.push(`共振 ${vRes}`)
   if (vRank) votes.push(`趋势 ${vRank}`)
   if (vVp) votes.push(`量价 ${vVp}`)
-  // 第 5 维热度（技术字段 crossSection）：默认参与投票（后端 tierSynergyCrossSectionVote=1.0，2026-08-17 用户决策）
+  // 第 5 维热度（技术字段 crossSection）：参与投票（后端 tierSynergyCrossSectionVote=0.75，阶段 23.9）
   const csTier = getCrossSectionTier(stock)
   if (csTier && csTier !== 'unknown' && CS_VOTE[csTier] != null) {
-    const csVote = CS_VOTE[csTier]
+    const csVote = round2(CS_VOTE[csTier] * CS_VOTE_WEIGHT)
     votes.push(`热度 ${CS_TIER_CN[csTier] ?? csTier}（第5维票 ${csVote > 0 ? '+' : ''}${csVote}）`)
   }
   if (votes.length) {

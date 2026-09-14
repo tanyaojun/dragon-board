@@ -34,12 +34,12 @@ def _sample_analysis(res_tier: str | None = "A", res_dir: str | None = "buy") ->
 
 
 def test_assemble_observation_basic() -> None:
-    """resonance + rankTrend + vp 三票 buy → v=3，lc==A → S。"""
+    """resonance + rankTrend + vp 三票 buy → v=0.75+0.75+1.0=2.5，lc==A → A（采纳票权 0.75）。"""
     analysis = _sample_analysis()
     observation = assemble_observation(analysis, _vp_positive_stock())
     vp = observation["volumePrice"]
     assert vp["signalTier"] == "A"
-    assert observation["synergy"]["signalTier"] == "S"
+    assert observation["synergy"]["signalTier"] == "A"
     assert observation["synergy"]["tierReasons"]
     # 同步写回 analysis.observation
     assert analysis["observation"] is observation
@@ -50,22 +50,22 @@ def test_assemble_observation_without_resonance() -> None:
     analysis = _sample_analysis()
     analysis.pop("resonance")
     observation = assemble_observation(analysis, _vp_neutral_stock())
-    # rank A/buy=1 + vp 0 票 → v=1 → B
-    assert observation["synergy"]["signalTier"] == "B"
+    # rank A/buy=0.75 + vp 0 票 → v=0.75 → C（采纳票权 0.75）
+    assert observation["synergy"]["signalTier"] == "C"
 
 
 def test_assemble_observation_resonance_vote_affects_tier() -> None:
-    """有 resonance 票时 v=2.0 → A；无 resonance 时 v=1.0 → B（共振票参与投票的差异可见）。
-    lc 置 None 隔离周期升档影响（档位加权 v2 保持旧票数门槛）。"""
+    """有 resonance 票时 v=1.5 → B；无 resonance 时 v=0.75 → C（共振票参与投票的差异可见）。
+    lc 置 None 隔离周期升档影响（采纳票权 0.75，阶段 23.9）。"""
     analysis = _sample_analysis()
     analysis["observation"]["lifecycle"]["signalTier"] = None
     observation = assemble_observation(analysis, _vp_neutral_stock())
-    assert observation["synergy"]["signalTier"] == "A"  # rank A/buy + res A/buy → v=2.0
+    assert observation["synergy"]["signalTier"] == "B"  # rank A/buy + res A/buy → v=1.5
     analysis_no_res = _sample_analysis()
     analysis_no_res["observation"]["lifecycle"]["signalTier"] = None
     analysis_no_res.pop("resonance")
     observation_no_res = assemble_observation(analysis_no_res, _vp_neutral_stock())
-    assert observation_no_res["synergy"]["signalTier"] == "B"  # 仅 rank A/buy=1.0 → B
+    assert observation_no_res["synergy"]["signalTier"] == "C"  # 仅 rank A/buy=0.75 → C
 
 
 def test_assemble_observation_config_vote_thresholds() -> None:

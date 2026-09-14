@@ -87,14 +87,14 @@ def test_assemble_lc_tier_override_suppresses_bd_downgrade(monkeypatch):
         return {"observation": {
             "rankTrend": {"signalTier": "A", "direction": "up"},
             "lifecycle": {"signalTier": lc, "stage": "发酵"},
-            "crossSection": {"signalTier": "A"},          # rank A(+1.0) + cs A(+1.0) + vp A(+1.0) = 3.0 → S
+            "crossSection": {"signalTier": "A"},          # rank A(0.75) + cs A(0.75) + vp A(1.0) = 2.5 → A（采纳票权）
         }}
 
-    base = assemble_observation(_analysis("D"), stock)    # 无 override：S 被降档为 A
+    base = assemble_observation(_analysis("D"), stock)    # 无 override：A 被降档为 B
     assert "周期 D 环境降档" in base["synergy"]["tierReasons"]
     assert base["lifecycle"]["signalTier"] == "D"
 
     held = assemble_observation(_analysis("D"), stock, lc_tier_override="C")   # override：不降档
     assert "周期 D 环境降档" not in held["synergy"]["tierReasons"]
-    assert held["synergy"]["signalTier"] == "S"           # 保持未降档档位
+    assert held["synergy"]["signalTier"] == "A"           # 保持未降档档位
     assert held["lifecycle"]["signalTier"] == "D"         # 发布输出保持原始值

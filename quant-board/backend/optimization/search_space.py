@@ -268,10 +268,17 @@ _STRATEGY_LIST_KEYS = (
     "momentumDirectionShareBoost", "momentumAccelShareBoost",  # 趋势因子（2026-08-17 参数化）
     "momentumZeroWeights", "macdRawScoreWeights",
     "volumePriceDirectionBuckets",  # 量价方向八档（2026-08-17 参数化）
+    "volumePriceDirectionThresholds",  # 量价涨跌幅档位边界（2026-09-14 参数化）
+    "tierSynergyVoteStrengths", "tierSynergyCsStrengths",  # synergy 档位强度（2026-09-14 参数化）
     "resonanceWeights", "resonanceNewEntryWeights",
     "decisionRiskPenaltyWeights",
     "lifecycleWeights", "lifecycleMomentumWeights", "lifecycleMomentumScales",
+    "lifecycleStageFitness",  # 生命周期阶段适配度（2026-09-14 参数化，展示分面）
+    "riskOverheatStageMultipliers", "riskDivergenceStageMultipliers",  # 风险阶段乘数（2026-09-14 参数化）
+    "regimeStageAdjust",  # regime 情绪阶段调整（2026-09-14 参数化）
     "riskPressureWeights",
+    "fallbackDirectionWeights", "fallbackAccelWeights", "fallbackZeroWeights", "fallbackCapitalWeights",  # 技术 fallback 权重（2026-09-14 参数化）
+    "resonanceLabelThresholds",  # 共振 label 阈值（2026-09-14 参数化，展示面）
 )
 _STRATEGY_PARAM_KEYS = _STRATEGY_SCALAR_KEYS + _STRATEGY_LIST_KEYS
 
