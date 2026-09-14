@@ -311,3 +311,49 @@ A 组展示分权重 5/5 逐位零效应判冗余——全部维持默认，零�
   入观察池（复核触发：9 月全月复验与 §12 挂起复验同批）；
 - 方案 B 连续环境分（lifecycle.score）方向内容 FAIL（U 形，spearman −0.1）——score 保持
   展示/解释语义，不得升级为门控输入（否则 §4.2.2 台账变更义务触发）。
+
+## 14. 维度信号再审视四方案（2026-09-15 阶段 25，全部零默认值改动）
+
+### 14.1 synergy 维度票权（23.9.1 临时默认的 Track 1 直验，方案 A）
+
+| 参数 | 当前值 | 交易层直验（decision 窗，w1_old 臂） | 状态 |
+|---|---|---|---|
+| tierSynergyResonance/Rank/CrossSectionVote | 0.75/0.75/0.75 | wrxpf 0.4702 vs 旧 1.0 票权 0.2913（−38%） | **0.75 获交易层直验证据**；L1 §12 补记挂起至 9 月全月复验（m2） |
+| 四维票权（归零臂） | — | 归零受损 23~55%（res/rank/vp/cs），无翻转 | 票权>0 交易层证据存档 |
+
+### 14.2 cs 档位强度表（方案 B 扫描）
+
+| 参数 | 当前值 | 结果 |
+|---|---|---|
+| tierSynergyCsStrengths | [1.0, 0.5, −0.5, −1.0] | **现值即峰**：csC 两侧全负（松绑触发回灌兑现）、csD 结构惰性、csA OOS 全负；csB_025 C1+C2 但 C3 硬门失败（passHard=False）；B2 等价对照对（整表缩放 ≡ 票权轴）三窗逐位验证含崩溃面 |
+
+### 14.3 vp 量价批 2 字段（方案 C-b 扫描，取代 23.9"未扫描"登记）
+
+| 字段族 | 结果 |
+|---|---|
+| volumeScoreUp(14)/Down(4)/fundScore(5)/directionThresholds/amountScoreStep | **10/10 零效应（结构性）**：全部为分值幅度面——×正缩放不改符号比较（fund_score>0 A/B 分界）与阈值比较（对倒/过度放量由 AbnormalFundRatio/OverVolumeRatio 触发）；档位决定面 = 阶段 9 已扫的 4 个 ratio 阈值。冗余归档（23.3 A 组模式，不删实现） |
+
+### 14.4 vp C-a 新基线复核（阶段 9 旧结论存活对照）
+
+| 参数 | 当前值 | 新基线三窗（dec/oos1/oos2） | 结果 |
+|---|---|---|---|
+| volumePriceAbnormalFundRatio | **10.0**（2026-09-15 用户决策落默认，原 20.0） | **+7.3/−4.1/+1.9%**，Track 1 decision wrxpf +2.9%（oos2 23 笔观察级 −39%） | **已落默认**：端到端新锚 decision 0.1120 / oos1 0.0880 / oos2 0.0951 逐位复现实证读数；回退 = 还原 20.0；主计划 §25.7 |
+| volumePriceOverVolumeRatio | 2.5 | 0.0/−22.2/−34.5% | 基线漂移失效，维持 2.5 |
+| fund10+over2 | — | +11.4/−25.2/−31.2% | 观察池方向未恢复，维持挂起 |
+| volumePriceMildRatio | 1.05 | −2.7/+7.7/+14.7% | 跨窗矛盾 OBSERVE |
+
+### 14.5 共振频率轴与展示面（方案 D）
+
+| 参数 | 当前值 | 结果 |
+|---|---|---|
+| resonanceMinMarketSampleCount | 20 | **结构性惰性**（10/40 两档三窗逐位=baseline；缺票帧由 NaN median 拦截非计数值） |
+| resonanceMidWindowBars | 8 | 跨窗矛盾（mid6 oos2 −18.3% 确认 H1 保护机制；mid10 OOS 双正但 decision −0.7% 不过 C1） |
+| resonanceLabelThresholds / resonanceWeights | [85,67,50,27] / [0.35,0.25,0.2,0.2,0.2] | **zero_effect_redundant**（23.3 A 组模式收口；代码事实：只进 raw_score→score 展示分）——"批 5 展示面未扫描"状态关闭 |
+
+- D-a 结构普查修正：res 真实投票率 72-79%（三窗），23.8"~44%"勘误口径作废；缺票主导
+  分支 = 排名序列不足（13-15%）；H1 保护机制成立（回收反事实三窗全负），H2 线索
+  （NaN median 帧 exAcc +5.7%）属代码级课题；
+- 投票率分母口径注记：D-a 的 72.2%（decision）分母 = 有 res 数据的信号（弃权按缺票
+  原因分解）；D-b `resonanceParticipation`（decision 69.0%）分母 = 全部信号（含无
+  res 数据帧，记空方向）。两数分母不同不可直接对照，缺票结构对照以 D-a 分解表为准；
+- fund10 已落默认（§14.4）；23.9.1 §12 补记挂起至 9 月复验；锚点代际：23.9.1 锚（0.1044/0.0918/0.0933）属 pre-fund10 口径，当前基线锚 = 0.1120/0.0880/0.0951（post-fund10）。

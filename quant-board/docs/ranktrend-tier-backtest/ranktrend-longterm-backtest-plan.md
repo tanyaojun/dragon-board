@@ -3168,3 +3168,178 @@ cd quant-board
 报告：`data/reports/lifecycle-gate-score-diagnosis.json` / `lifecycle-gate-form.json`
 （19 trial × 3 窗 + summary + anchorChain）/ `track1-lifecycle-gate-{decision,oos2}.json`。
 回退：本阶段零默认值改动，无需回退；harness/诊断脚本/测试可整体 revert。
+
+## 阶段 25：维度信号再审视四方案——话语权交易复核 / cs 强度表 / vp 信号参数 / 共振缺票结构（2026-09-15）
+
+**结论先行**：用户命题"生命周期收官后重审共振/横截面/量价维"按四方案（A/B/C/D，
+方案文档 `ranktrend-dimension-trade-review-cs-strength-proposal.md` 审计修订版）实施完毕。
+**四方案 harness 零默认值改动；唯一走完全部纪律的候选是 fund10（C-a 复核出土）**——saEx
+三窗判定卡 PASS_CANDIDATE + Track 1 交易复核主窗无害（+2.9%），进用户决策队列后
+**已于 2026-09-15 当日用户决策落默认（§25.7，全阶段唯一默认值改动）**；9 月全月复验
+同批转为落默认后复核裁决。全量 pytest 2298 passed（四方案完成时点，口径见 §25.8）。
+
+### 25.1 方案 A：维度话语权 Track 1 交易复核（6 臂 × 3 窗，`track1_dimension_power.py`）
+
+- **M4 锚校验全过**：baseline saEx 副产三窗逐位复现 23.9.1 锚、w1_old 逐位复现 24.3 a1 锚
+  （本轮读数属 pre-fund10 口径，见 §25.7 锚点代际注记）；
+- **w1_old 裁决臂（M1：0.75 vs 1.0 只看此臂）**：decision 窗 wrxpf 0.4702 vs 0.2913
+  （**−38%**），wr 0.486 vs 0.419、ret −5.2% vs −20.2%——**0.75 组合交易层直验胜出**，
+  23.9.1 获交易层直验证据（OOS 两窗 27/19 笔观察级不反证；L1 §12 补记按 m2 挂起至
+  9 月复验）；
+- **四维归零臂（M1：只证"票权>0"）**：no_res/no_rank/no_vp/no_cs decision wrxpf
+  0.210/0.260/0.327/0.361——归零受损 23~55%，四维票权>0 全部获交易层证据；无 e1a 式
+  翻转，无重审候选产出；
+- **M2 触发面漂移卡**：w1_old 触发率 0.0349 近翻倍但质量更差——"0.75 收紧触发"在
+  交易层是质量改善而非单纯少交易；归零臂入场集合变形 58~133 笔新增（结构性重塑），
+  佐证 wrxpf 差异含入场集合效应；
+- 报告：`data/reports/track1-dimension-power.json`（windowsConsumed=true，M3 折扣标注）。
+
+### 25.2 方案 B：cs 档位强度表两轮粗扫（13 trial × 3 窗，`evaluate_cs_strengths.py`）
+
+- **B2 等价对照对逐位一致**（uni_half ≡ cs_vote_0375 三窗，含 oos2 双双 saEx=None 的
+  统计崩溃面）——强度表消费路径乘性等价验证通过，整表均匀缩放无信息增量（≡ 23.9
+  已扫票权轴）；
+- **13 trial 全 OBSERVE，无一 PASS_CANDIDATE**：csC 核心轴现值即峰（松绑 0/−0.25
+  decision −3.9/−1.5% 且触发率回灌兑现 e1a 同构预警；加压 −0.75 −2.2%）；csD 结构
+  惰性（两侧逐位=baseline，D 票强度不在活跃阈值边界）；csA OOS 全负；**csB_025 是
+  唯一 C1+C2 候选但 C3 硬门失败**（decision passHard=False，S/A/B 单调链破裂）+
+  C4 越线（strong 非空两窗 −0.025~−0.053；oos1 strong saEx=None 记 null）——
+  B 轴不进精扫（三窗全正标准不满足）；
+- **判定：现值 [1.0, 0.5, −0.5, −1.0] 经剂量曲线确认为峰，"力度标定未扫描"命题以
+  "已扫、现值最优"收口**；报告 `data/reports/cs-strengths.json`。
+
+### 25.3 方案 C：vp 量价维信号参数再审视（C-a 复核 5 trial × 3 窗 + C-b 家族探针 10 trial，`evaluate_vp_signal_parameters.py`）
+
+- **C-b：10/10 家族/单参数探针零效应（结构性）**——批 2 全部 25 字段（volumeScoreUp 14/
+  volumeScoreDown 4/fundScore 5/directionThresholds/amountScoreStep）经代码核实为
+  **分值幅度面**：×正缩放不改符号比较（fund_score>0 的 A/B 分界）、不改阈值比较
+  （对倒/过度放量由 `ratio>AbnormalFundRatio`/`vr>OverVolumeRatio` 触发）——档位
+  决定面的 4 个 ratio 阈值阶段 9 已扫。**§4.1.3"fundScore/directionThresholds 位于
+  档位决定面"的先验被数据证伪**。按 §7.4 预登记：不进 C-c，方案 C 以"新基线加固
+  证据"收口——"vp 票权 1.0 已调准"命题的最终回答：参数面已扫尽、批 2 无档位杠杆、
+  1.0 在现结构下成立；
+- **C-a 旧结论新基线存活对照**：
+  - **fund10：PASS_CANDIDATE**（decision +7.3% / oos1 −4.1% / oos2 +1.9%，C1✓C2✓C3✓）
+    ——阶段 9 最显著单参数在新基线存活并过卡；**Track 1 交易复核（e1a 教训闭环）**：
+    decision wrxpf 0.4839 vs 0.4702（**+2.9%**，150 笔）无害偏正，oos2 0.1032（−39%）
+    为 23 笔观察级如实登记为阻力项——**唯一走完 saEx 卡 + Track 1 双纪律的候选，
+    进用户决策队列（2026-09-15 当日已裁决落默认，实施记录见 §25.7；9 月全月复验
+    同批做落默认后复核）**；
+  - over2 / fund10+over2：**基线漂移失效**（OOS −22~−34%）；观察池最高优先的
+    fund10+over2 在新基线下方向未恢复（旧 −29.4/−47.1% → 新 −25.2/−31.2%），维持
+    观察池挂起，触发条件不变；
+  - mild115：跨窗矛盾（dec −2.7 / oos1 +7.7 / oos2 +14.7），OBSERVE；
+- 报告：`data/reports/vp-signal-parameters.json` / `track1-vp-fund10-{decision,oos2}.json`。
+
+### 25.4 方案 D：共振缺票结构研究（D-a 解剖 + D-b 频率轴首批 + D-c label 收口）
+
+- **D-a（`diagnose_resonance_vote_structure.py`，三窗）三项修正性发现**：
+  1. **23.8 勘误口径"~44% 参与率"被系统普查推翻**：真实投票率 **72.2%/78.0%/78.7%**
+     （三窗，res 信号级）；弃权 = 排名序列不足 13-15%（主导）+ 横截面样本不足
+     0-4.6%（decision 独有）+ 有数据 hold 票 ~8%；23.8 structural 表本无 res 行
+     （44% 出自勘误注记的临时实测）；
+  2. **投票驱动分解（调和 G4 矛盾）**：方向票由排名序列 direction_score 主导
+     （buy 25% + sell 34-41%），Jump 事件 12-14%，新入榜 entry_strength 仅
+     0.3-0.6%——G4"Jump 为 0"与"有方向票"的矛盾主体是排名序列票，非新入榜；
+  3. **H1/H2 反事实（两假说部分并存，按 §5.2 预登记裁决）**：主导分支"排名序列
+     不足"回收反事实三窗全负（exMean −0.002~−0.010 / exAcc −0.022~−0.046）→
+     **H1 保护机制成立**；小分支"横截面样本不足"（decision，n=5321）exAcc +5.7%
+     → H2 线索但 oos 两窗 0 帧、幅度稳定性不足单独回收；voted_buy 自身 exMean
+     三窗全负——res buy 票投向已连涨股踩均值回归，即"res 单维 saEx 为负"的机制根源；
+  4. regime 交叉：decision weak 桶缺票率 27.4% vs strong 11.3%（§7.5"weak 69.1%"为
+     旧 walk-forward 子窗口径，未复现）；
+- **D-b 首批 4 trial 全 OBSERVE**（`evaluate_resonance_participation.py`）：ms 轴
+  （门槛 20→10/40）三窗逐位=baseline——5321 帧由 NaN median 拦截（非计数值），
+  门槛参数两侧不触发，判结构性惰性（同阶段 23 HighRiskPressureMin 0.75 形态）；
+  mid 轴（序列窗口 6/10）活跃但跨窗矛盾（mid6 oos2 −18.3% 确认 H1；mid10 OOS 双正
+  +9.6/+2.9 但 decision −0.7% 不过 C1）——无候选，D-b 二轮不启动（§8.5 门槛判定：
+  主导分支可调满足，但剂量读数无正候选）；
+- **D-c：label 阈值 + resonanceWeights 三 trial zero_effect_redundant**（23.3 A 组
+  模式收口；代码事实兜底：weights/label 只进 raw_score→score 展示分，
+  runtime.py:702-721 方向与 signalTier 先于 raw_score 独立计算）——"23.9 清点批 5
+  展示面未扫描"状态关闭；
+- 报告：`data/reports/resonance-vote-structure.json` / `resonance-participation.json`。
+
+### 25.5 工程与测试
+
+- 新增：`track1_dimension_power.py`（M2 样本量门槛 30 笔 + 入场集合漂移卡 + M4 锚校验）、
+  `evaluate_cs_strengths.py`（B2 等价对照对机制）、`evaluate_vp_signal_parameters.py`
+  （C-a/C-b 分组 + 家族 verdict）、`diagnose_resonance_vote_structure.py`（六出口/
+  驱动分解/反事实/regime 四表）、`evaluate_resonance_participation.py`（D-b 剂量 +
+  D-c 零效应检查）、`track1_lifecycle_gate_trade.py` 加 `--extra-arm`；
+- 测试：test_track1_dimension_power（15）/ test_cs_strengths_harness（15）/
+  test_vp_signal_parameters_harness（12）/ test_resonance_vote_structure（6）/
+  test_resonance_participation_harness（11）（含 §25.8 review 修复补测后的最终数）；
+  四方案完成时点全量 pytest 2298 passed（--ignore=tests/test_archive_research.py，
+  验证口径见 §25.8）；
+- 全部评估零默认值改动（combo_three_quarter 维持"临时默认"标注，回退路径见方案 §9）；
+- D harness 修补一处如实记录：zero_effect 检查的 dirs 比较在缓存 baseline 缺字段时
+  降级为诊断项（判定以 tiers+saEx 为准），测试同步更新。
+
+### 25.6 遗留与复核触发
+
+1. **fund10 已裁决**（2026-09-15 用户决策落默认，§25.7；L1 §14.4 补记同批完成）：
+   9 月全月复验同批（10 月上旬）做落默认后复核；若复验推翻 = 还原 20.0；
+2. 23.9.1 临时默认的 L1 §12 补记挂起至 9 月复验（本轮已获交易层直验证据备用）；
+3. p2（阶段 24 观察池）与 fund10+over2（观察池）复核条件不变；
+4. 窗口消费折扣（M3）：本轮全部结论标注"窗口已消费"，最终裁决窗用 09-13 之后未消费帧；
+5. D-a 的 H2 线索（NaN median 拦截帧含正信息）若未来立项，属代码级修复（NaN 处理/
+   前值填充），不在阈值参数空间。
+
+### 25.7 fund10 落默认实施记录（2026-09-15 用户决策）
+
+**落地清单**：
+
+| 层 | 文件 | 改动 |
+|---|---|---|
+| py 配置 | `engine/config.py:104` | `volumePriceAbnormalFundRatio 20.0→10.0` + 来源/回退注释（唯一默认值改动；TS 无此字段，合同零改动） |
+| py 测试 | `tests/test_volume_price_score.py` | 默认值锚 10.0 + 新增 `test_fund10_default_classifies_moderate_ratio_as_dump`（ratio ∈ (10,20] 从净流入正分转对倒出货 E 档，TDD 先红后绿） |
+
+**验证结果**：
+- 全量 pytest **2299 passed** 零失败（golden 对齐无漂移；--ignore=tests/test_archive_research.py）；
+- **端到端新锚（已验证）**：新默认三窗 baseline 逐位复现 C-a fund10 实证读数
+  （decision 0.1120 / oos1 0.0880 / oos2 0.0951，即旧 23.9.1 锚 ± fund10 rel%）
+  ——"落默认 = 实证口径"；报告 `data/reports/baseline-anchor-post-fund10.json`；
+
+**锚点代际注记**：23.9.1 锚（0.1044/0.0918/0.0933）与阶段 24/25 各 harness 缓存报告
+属 **pre-fund10 口径**，历史报告不迁移不重算（config_hash 天然区分）；后续评估以
+fund10 锚（0.1120/0.0880/0.0951）为当前基线；oos2 passHard=False 为该窗口既有口径。
+
+**行为变化预告（运维注记）**：ratio ∈ (10,20] 的帧从净流入正分转对倒出货 E 档 →
+vp E 增多 → synergy D（硬短路）增多 → S+A 触发率预期小幅下降（decision 窗 1.74%→
+~1.7%，Track 1 实测 150 vs 144 笔入场微增，对倒拦截与放宽效应部分对冲）；风险升级
+"资金对倒"分支（fund_suspect）同步放宽至 ratio>10。
+
+**回退路径**：config 字段还原 20.0（或整体 revert）；无数据/结构迁移。
+
+### 25.8 code review 修复落地（2026-09-15 同日二轮）
+
+四方案实施后对抗性 code review 的问题全部修复，TDD 先红后绿：
+
+- **C1 override 生效性守卫**：`from_patch` 对未知字段静默忽略（hasattr 无 else），
+  字段拼错会静默跑成 baseline 复刻、产出假零效应/假惰性结论——五个 harness
+  （track1_dimension_power / evaluate_cs_strengths / evaluate_vp_signal_parameters /
+  evaluate_resonance_participation / track1_lifecycle_gate_trade）统一加
+  `_assert_overrides_applied` 逐键断言 + 各自回归测试；
+- **C2 `--extra-trial` 死路**：三个扫描 harness 的 extra trial 只进 summary 不进
+  run_window specs，"未跑"会伪装成 `insufficient_data`——main 统一传 specs；
+  cs harness 加 `run_window_executes_extra_trial` 执行性回归测试；
+- **I1 帧缓存泄漏**：三个 harness 的 `__frames__` 帧缓存随报告整盘落盘（实测
+  cs-strengths.json 1011MB / resonance-participation.json 1055MB /
+  vp-signal-parameters.json 1060MB，合计 ~3.1GB）——`_save` 过滤 `__frames__`；
+- **I2 resume 绕过冻结守卫**：四个 harness 的 assert_not_frozen 原在
+  `if "window" not in entry` 缓存分支内，resume 路径不执行——移到守卫外无条件
+  执行 + resume 触发冻结窗的回归测试（test_resume_reruns_freeze_guard）；
+- **I3 锚代际策略**：fund10 落默认后四个 harness 锚常量过期——baseline 锚更新为
+  post-fund10 代际（0.112/0.088/0.0951）且失配即 raise；w1_old 等代际绑定锚失配
+  改为警告 + `staleAnchor` 标记不阻断（track1_dimension_power 新增 anchor_enforce）；
+- **I4 `--extra-arm` 输入校验**：track1_lifecycle_gate_trade 追加臂 key 非空/
+  与既有臂不冲突/strategy_config 必须为 dict，删除死导入 `copy`；
+- 勘误（对照 §25.1-25.7 与 L1 §14.4/14.5）：fund10 落默认时序（结论先行/§25.3/
+  §25.6.1 与 §25.7 矛盾）、归零臂 entryNew 51→58、fund10 oos2 22→23 笔、C4 strong
+  两窗非空（oos1 null）、§25.5 测试计数、方案 §4.2 volumeScoreUp 15→14 项、
+  D-a/D-b 投票率分母口径注记。
+
+**验证口径**：全量 pytest 均为 `--ignore=tests/test_archive_research.py`
+（该文件本机独立运行卡死 >240s）；修复后全量 **2308 passed** 零失败
+（136s，golden 对齐无漂移；四方案相关 8 测试文件 102 passed）。
