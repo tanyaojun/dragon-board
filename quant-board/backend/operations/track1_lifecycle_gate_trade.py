@@ -39,6 +39,17 @@ ARMS: list[dict[str, Any]] = [
     {"key": "p2_e1a_b1", "desc": "e1a × veto 负票 0.75（Track 2 PASS_CANDIDATE 首选）", "strategy_config": {"volumePriceGateMode": "off", "lifecycleVetoGateMode": "soft", "lifecycleVetoVoteStrength": 0.75}},
 ]
 
+_OVERRIDE_MISSING = object()
+
+
+def _assert_overrides_applied(config: Any, overrides: dict[str, Any]) -> None:
+    """override 生效性守卫（review C1）：from_patch 对未知字段静默忽略（hasattr 无 else），
+    字段改名/拼错会静默跑成 baseline 复刻——逐键断言。"""
+    for key, value in overrides.items():
+        actual = getattr(config, key, _OVERRIDE_MISSING)
+        if actual is _OVERRIDE_MISSING or actual != value:
+            raise AssertionError(f"override 未生效: {key}={value!r}（config 实际={actual!r}）——检查字段名/配置代际")
+
 
 def _trade_metrics(sim: dict[str, Any]) -> dict[str, Any]:
     """从 TradeSimulator summary 直取指标（totalReturn/maxDrawdown/winRate 已含未平仓市值口径）。"""
@@ -66,6 +77,7 @@ def run_window(window: str) -> dict[str, Any]:
     for arm in ARMS:
         t0 = time.time()
         config = RankTrendConfig.from_patch(arm["strategy_config"])
+        _assert_overrides_applied(config, arm["strategy_config"])
         engine = RankTrendPythonEngine(config=config)
         signals = engine.replay(frames, meta={"candidateTierMode": "execution", "strategyName": "rank_trend_candidate"})
         sim = TradeSimulator().run(frames, signals, {"entryStrategy": "rank_trend_candidate"})
@@ -94,8 +106,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Track 1 交易层复核：环境门形态候选（阶段 24 §5.2）")
     parser.add_argument("--window", default="decision", choices=["decision", "oos1", "oos2"])
     parser.add_argument("--out", default="")
+    parser.add_argument("--extra-arm", default="", help="追加臂：JSON {key,desc,strategy_config}（候选 Track 1 复核）")
     args = parser.parse_args()
 
+    if args.extra_arm:
+        extra = json.loads(args.extra_arm)
+        key = extra.get("key")
+        if not isinstance(key, str) or not key.strip():
+            raise SystemExit("extra arm key 必须是非空字符串（review I4）")
+        if any(arm["key"] == key for arm in ARMS):
+            raise SystemExit(f"extra arm key 冲突: {key}（与既有臂重名会污染对照读数，review I4）")
+        strategy_config = extra.get("strategy_config", {})
+        if not isinstance(strategy_config, dict):
+            raise SystemExit("extra arm strategy_config 必须是对象（dict）")
+        extra["strategy_config"] = strategy_config
+        extra.setdefault("desc", "extra arm")
+        ARMS.append(extra)
     report = run_window(args.window)
     out_path = Path(args.out) if args.out else REPORT_DIR / f"track1-lifecycle-gate-{args.window}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)

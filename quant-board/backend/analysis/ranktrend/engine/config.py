@@ -101,7 +101,7 @@ class RankTrendConfig:
     # ── volume_price（compute_volume_price_score / compute_synergy_state） ──
     volumePriceBase: float = 50.0
     volumePriceOverVolumeRatio: float = 2.5
-    volumePriceAbnormalFundRatio: float = 20.0
+    volumePriceAbnormalFundRatio: float = 10.0  # 2026-09-15 阶段 25 fund10 落默认（20→10）：C-a 新基线三窗判定卡 PASS（+7.3/−4.1/+1.9%）+ Track 1 交易复核主窗无害（wrxpf +2.9%）；回退 = 还原 20.0
     volumePriceShrinkRatio: float = 0.95
     volumePriceMildRatio: float = 1.05
     # ── 量价硬编码参数化（2026-08-17，默认值=原硬编码，golden 不漂移）──
@@ -162,7 +162,8 @@ class RankTrendConfig:
     # 批 1：synergy 总档档位强度（原 volume_price._VOTE_STRENGTH / _CS_STRENGTH 模块硬编码）
     tierSynergyVoteStrengths: list[float] = field(default_factory=lambda: [1.2, 1.0, 0.8, 0.5, 1.0, 1.0])  # S/A/B/C/D/E
     tierSynergyCsStrengths: list[float] = field(default_factory=lambda: [1.0, 0.5, -0.5, -1.0])  # A/B/C/D（cs/pm/dv 三维共用映射）
-    # 批 2：量价打分阶梯（原 compute_volume_price_score 内硬编码）
+    # 批 2：量价打分阶梯（原 compute_volume_price_score 内硬编码；2026-09-15 阶段 25 方案 C-b
+    # 扫描判零效应冗余——全部为分值幅度面，×正缩放不改符号/阈值比较，无档位杠杆，冗余归档不删实现）
     volumePriceDirectionThresholds: list[float] = field(default_factory=lambda: [7.0, 5.0, 3.0, 2.0, 1.0, 0.5])  # 涨跌幅档位边界（涨停外 7-0.5%）
     volumeScoreUpShrinkLimitUp: float = 8.0   # 缩量涨停弱加成
     volumeScoreUpShrinkBase: float = 10.0     # 缩量上涨基准

@@ -34,7 +34,7 @@ EXPECTED_DEFAULTS: dict[str, object] = {
     # 批 1：synergy 总档档位强度
     "tierSynergyVoteStrengths": [1.2, 1.0, 0.8, 0.5, 1.0, 1.0],  # S/A/B/C/D/E
     "tierSynergyCsStrengths": [1.0, 0.5, -0.5, -1.0],  # A/B/C/D
-    # 批 2：量价
+    # 批 2：量价（2026-09-15 阶段 25 方案 C-b 扫描判零效应冗余：分值幅度面，无档位杠杆）
     "volumePriceDirectionThresholds": [7.0, 5.0, 3.0, 2.0, 1.0, 0.5],
     "volumeScoreUpShrinkLimitUp": 8.0,
     "volumeScoreUpShrinkBase": 10.0,

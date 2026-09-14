@@ -52,6 +52,13 @@ def test_over_volume_is_selloff() -> None:
     assert "过度放量上涨（疑似出货）" in r["reasons"]
 
 
+def test_fund10_default_classifies_moderate_ratio_as_dump() -> None:
+    """fund10 落默认（阶段 25）：ratio ∈ (10,20] 从净流入正分转为对倒出货惩罚。"""
+    r = compute_volume_price_score("600001", 3.0, 1.5, 999999.0, 15.0)  # ratio=15 ∈ (10,20]
+    assert "主力净占比异常高（疑似对倒出货）" in r["reasons"]
+    assert r["signalTier"] == "E"
+
+
 def test_abnormal_fund_ratio_is_selloff() -> None:
     r = compute_volume_price_score("600001", 3.0, 1.5, 999999.0, 53.83)
     assert r["score"] == 56  # 50 + 8 + 12.5 - 15（对倒惩罚）
@@ -174,7 +181,7 @@ def test_vp_param_config_defaults() -> None:
     assert c.volumePriceNormalRatio == 2.0
     assert c.volumePriceBase == 50.0
     assert c.volumePriceOverVolumeRatio == 2.5
-    assert c.volumePriceAbnormalFundRatio == 20.0
+    assert c.volumePriceAbnormalFundRatio == 10.0  # 2026-09-15 阶段 25 fund10 落默认（20→10，C-a PASS + Track 1 主窗无害）
     assert c.volumePriceShrinkRatio == 0.95
     assert c.volumePriceMildRatio == 1.05
 
