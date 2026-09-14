@@ -294,6 +294,38 @@ _VOTE_STRENGTH_ORDER: tuple[str, ...] = ("S", "A", "B", "C", "D", "E")
 _VOTE_STRENGTH_FALLBACK: dict[str, float] = {"S": 1.2, "A": 1.0, "B": 0.8, "C": 0.5, "D": 1.0, "E": 1.0}
 
 
+def _lc_veto_keep_hard(config: RankTrendConfig, lc_veto_path: str | None) -> bool:
+    """soft 模式下 E 帧是否保留硬否决（阶段 24 d1/d2 路径分流）。
+
+    all_soft 恒转负票；*_hard 模式按 lc_veto_path 分流，路径未知（None：直接构造/测试
+    调用未派生时）保守保留硬否决——风险门 fail-safe，生产链路 assemble_observation 恒派生。
+    """
+    path_mode = str(getattr(config, "lifecycleVetoPathMode", "all_soft") or "all_soft")
+    if path_mode not in ("all_soft", "reversal_hard", "highrisk_hard"):
+        raise ValueError(f"lifecycleVetoPathMode 非法枚举 {path_mode!r}（可选 all_soft/reversal_hard/highrisk_hard）")
+    if path_mode == "all_soft":
+        return False
+    if lc_veto_path is None:
+        return True
+    if path_mode == "reversal_hard":
+        return lc_veto_path == "reversal"
+    return lc_veto_path == "highrisk"
+
+
+def _lc_gate_veto_path(lifecycle_obs: dict[str, Any]) -> str:
+    """lifecycle veto 路径派生（阶段 24，与阶段 23.2 的 8816/11003 分流统计同源）。
+
+    reasons 含"反转路径" → reversal；含"风险背离/过热" → highrisk；兜底按 stage 判
+    （reversal → reversal，否则 highrisk）。仅 lc 档位为 E 时由 assemble_observation 调用。
+    """
+    reasons_text = " ".join(str(r) for r in (lifecycle_obs.get("reasons") or []))
+    if "反转路径" in reasons_text:
+        return "reversal"
+    if "风险背离" in reasons_text or "过热" in reasons_text:
+        return "highrisk"
+    return "reversal" if str(lifecycle_obs.get("stage") or "") == "reversal" else "highrisk"
+
+
 def _synergy_tier(
     res_tier: str | None,
     res_dir: str | None,
@@ -306,6 +338,8 @@ def _synergy_tier(
     cs_tier: str | None = None,
     pm_tier: str | None = None,
     dv_tier: str | None = None,
+    *,
+    lc_veto_path: str | None = None,
 ) -> tuple[str, list[str]]:
     """四维合并档位（synergy.signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §7。
 
@@ -318,10 +352,41 @@ def _synergy_tier(
     档位自带方向（A/B 强势、C/D 弱势），投票 = 档位符号 × 强度 × 权重。
     """
     c = config or RankTrendConfig()
+    # 阶段 24 方案 A：环境门干预形态（默认 hard/hard/hard = 现行为，golden 不漂移）。
+    # E 短路否决：hard 恒短路；soft 下按 pathMode 分流（*_hard 保留侧/路径未知 fail-safe
+    # 仍短路），转负票侧在票值求和后扣 strength 重走阶梯；off 不干预（评估锚 ≡ 23.8
+    # wrapper 把 lc_tier 置 "C" 的删除面）。vp E→D 出货短路（同构位）：off 静默不计票、
+    # soft 强制负票（E 强度 × vp 权重）替代短路。
+    veto_mode = str(getattr(c, "lifecycleVetoGateMode", "hard") or "hard")
+    downgrade_mode = str(getattr(c, "lifecycleDowngradeGateMode", "hard") or "hard")
+    vp_gate_mode = str(getattr(c, "volumePriceGateMode", "hard") or "hard")
+    for _name, _mode, _legal in (
+        ("lifecycleVetoGateMode", veto_mode, ("hard", "soft", "off")),
+        ("lifecycleDowngradeGateMode", downgrade_mode, ("hard", "soft", "off")),
+        ("volumePriceGateMode", vp_gate_mode, ("hard", "soft", "off")),
+    ):
+        if _mode not in _legal:
+            raise ValueError(f"{_name} 非法枚举 {_mode!r}（可选 {'/'.join(_legal)}）")
+    veto_strength = float(getattr(c, "lifecycleVetoVoteStrength", 1.5))
+    downgrade_penalty = float(getattr(c, "lifecycleDowngradePenalty", 0.5))
+    if veto_strength < 0 or downgrade_penalty < 0:
+        raise ValueError(f"lifecycleVetoVoteStrength/lifecycleDowngradePenalty 不能为负（{veto_strength}/{downgrade_penalty}）")
+
+    lc_e_negative_vote = False
     if lc_tier == "E":
-        return "E", ["周期一票否决"]
+        if veto_mode == "hard" or (veto_mode == "soft" and _lc_veto_keep_hard(c, lc_veto_path)):
+            return "E", ["周期一票否决"]
+        if veto_mode == "soft":
+            lc_e_negative_vote = True
+
+    vp_e_forced_vote: float | None = None
     if vp_tier == "E":
-        return "D", ["量价出货硬风险"]
+        if vp_gate_mode == "hard":
+            return "D", ["量价出货硬风险"]
+        strengths = getattr(c, "tierSynergyVoteStrengths") or []
+        e_strength = strengths[_VOTE_STRENGTH_ORDER.index("E")] if len(strengths) == 6 else _VOTE_STRENGTH_FALLBACK["E"]
+        vp_weight = float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0)
+        vp_e_forced_vote = 0.0 if vp_gate_mode == "off" else -e_strength * vp_weight
 
     _CS_STRENGTH_ORDER = ("A", "B", "C", "D")  # 强度值 2026-09-14 参数化（config.tierSynergyCsStrengths）
     cs_strengths = list(getattr(c, "tierSynergyCsStrengths") or [])
@@ -350,7 +415,7 @@ def _synergy_tier(
     v = (
         _vote(res_tier, res_dir) * float(getattr(c, "tierSynergyResonanceVote", 1.0) or 0.0)
         + _vote(rank_tier, rank_dir) * float(getattr(c, "tierSynergyRankVote", 1.0) or 0.0)
-        + _vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0)
+        + (_vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0) if vp_e_forced_vote is None else vp_e_forced_vote)
     )
     cs_weight = float(getattr(c, "tierSynergyCrossSectionVote", 0.0) or 0.0)
     if cs_weight and cs_tier and cs_tier in _CS_STRENGTH:
@@ -366,20 +431,38 @@ def _synergy_tier(
     # v>=strong 且 lc∉{A,B,D} 的 A 分支永远不可达 → synergy A 档 n=0（阶段 3 诊断实证）。
     # 新规则：S = v>=strong+1（高票一致，如四维至少 3 票同向），A = v==strong（刚达强买线），
     # B/D/C 语义不变；周期 B/D 时 S/A 降一档规则保留。
-    if v >= c.tierSynergyVoteStrong + 1:
-        tier, reasons = "S", ["方向一致强买（档位加权高分）"]
-    elif v >= c.tierSynergyVoteStrong:
-        tier, reasons = "A", ["方向一致强买"]
-    elif v >= c.tierSynergyVoteWeak:
-        tier, reasons = "B", ["方向分歧，弱买"]
-    elif v <= c.tierSynergyVoteReverse:
-        tier, reasons = "D", ["反向"]
-    else:
-        tier, reasons = "C", ["无明确方向"]
-    # 周期 B（caution）/D（cooling/crowded 回避）时 S/A 降一档
+    gate_reasons: list[str] = []
+    if lc_e_negative_vote:
+        v -= veto_strength
+        gate_reasons.append("周期否决负票（soft）")
+    if vp_e_forced_vote is not None and vp_gate_mode == "soft":
+        gate_reasons.append("量价出货负票（soft）")
+
+    def _ladder(vote_sum: float) -> tuple[str, list[str]]:
+        if vote_sum >= c.tierSynergyVoteStrong + 1:
+            return "S", ["方向一致强买（档位加权高分）"]
+        if vote_sum >= c.tierSynergyVoteStrong:
+            return "A", ["方向一致强买"]
+        if vote_sum >= c.tierSynergyVoteWeak:
+            return "B", ["方向分歧，弱买"]
+        if vote_sum <= c.tierSynergyVoteReverse:
+            return "D", ["反向"]
+        return "C", ["无明确方向"]
+
+    tier, reasons = _ladder(v)
+    reasons = reasons + gate_reasons
+    # 周期 B（caution）/D（cooling/crowded 回避）对已达 S/A 的干预（阶段 24 双轴形态）：
+    # hard=降一档（现行为）；soft=连续惩罚重走阶梯（首评作用域与 hard 一致，仅 S/A）；
+    # off=不干预。
     if lc_tier in ("B", "D") and tier in ("S", "A"):
-        tier = "A" if tier == "S" else "B"
-        reasons = reasons + [f"周期 {lc_tier} 环境降档"]
+        if downgrade_mode == "hard":
+            tier = "A" if tier == "S" else "B"
+            reasons = reasons + [f"周期 {lc_tier} 环境降档"]
+        elif downgrade_mode == "soft":
+            first_tier = tier
+            tier, _ = _ladder(v - downgrade_penalty)
+            if tier != first_tier:
+                reasons = reasons + [f"周期 {lc_tier} 环境惩罚（{first_tier}→{tier}，soft）"]
     return tier, reasons
 
 
@@ -422,6 +505,8 @@ def assemble_observation(
         c,
         cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
     )
+    _lc_obs = observation.get("lifecycle") or {}
+    _lc_effective_tier = str(lc_tier_override) if lc_tier_override else str(_lc_obs.get("signalTier") or "")
     _syn_tier, _syn_reasons = _synergy_tier(
         resonance.get("signalTier"), resonance.get("direction"),
         (observation.get("rankTrend") or {}).get("signalTier"), (observation.get("rankTrend") or {}).get("direction"),
@@ -432,6 +517,8 @@ def assemble_observation(
         cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
         pm_tier=((observation.get("priceMomentum") or {}).get("signalTier")),
         dv_tier=((observation.get("priceRankDivergence") or {}).get("signalTier")),
+        # 阶段 24 方案 A：veto 路径派生（仅生效档位为 E 时需要；soft + *_hard 分流消费）
+        lc_veto_path=_lc_gate_veto_path(_lc_obs) if _lc_effective_tier == "E" else None,
     )
     observation["synergy"]["signalTier"] = _syn_tier
     observation["synergy"]["tierReasons"] = _syn_reasons

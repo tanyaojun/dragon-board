@@ -3050,3 +3050,121 @@ vp 1.0 不动）。
    Track 2 判定卡三窗重跑复现方可保持）；
 4. 回退：py 三字段还原 1.0 + TS tierDisplay 权重常量还原（或整体 revert 本次提交）；
    快照/回测 config_hash 天然区分两代口径，历史数据不迁移不重算。
+
+## 阶段 24：生命周期环境门干预形态实证——三轴剂量曲线闭合，hard 全线为峰，判 OBSERVE 不落默认（2026-09-14）
+
+**结论先行**：用户命题"周期 D/E 直接降档/否决总档信号，否决权过大且武断（拍脑袋式），未经
+回测验证"成立为方法论缺口，按审计修订稿（`ranktrend-lifecycle-gate-redesign-proposal.md`）
+完成环境门干预形态参数化 + 两轮扫描 + 方案 B 前置验证 + Track 1 交易复核。**三轴剂量曲线
+全部闭合，hard 现行为在每一轴上都是峰值或交易层最优：维持默认，零代码默认值改动**。
+p2（vp 短路 off × veto 负票 0.75）saEx 判定卡三窗全正 PASS_CANDIDATE，但 Track 1 交易复核
+主窗 wrxpf −32% 否决——saEx 盲区闭环（§5.2）首次实际拦截一个 saEx 假阳候选。方案 B 前置
+验证判"连续环境分方向内容 FAIL（U 形）"，收缩为展示语义澄清（未立项）。
+
+### 24.1 参数化落地（TDD，默认值=现行为，golden 不漂移）
+
+- `engine/config.py` 新增 6 字段：`lifecycleVetoGateMode`（hard/soft/off）、
+  `lifecycleVetoPathMode`（all_soft/reversal_hard/highrisk_hard）、`lifecycleVetoVoteStrength`（1.5）、
+  `lifecycleDowngradeGateMode`（hard/soft/off）、`lifecycleDowngradePenalty`（0.5）、
+  `volumePriceGateMode`（hard/soft/off）；`_validate_tier_constraints` 枚举/负值 fail-fast，
+  `_synergy_tier` 消费侧二次 fail-fast；
+- **实施偏差（如实声明，偏离审计稿 §3.1）**：审计稿单一 `lifecycleGateMode` 枚举把 veto/
+  降档两轴绑死，与 §5.1 trial 表的 b 组（只动 veto 剂量）/c 组（只动降档形态）单变量归因
+  要求冲突——实施拆为两个正交开关，trial 语义与审计稿完全一致；
+- `ranking/volume_price.py`：`_synergy_tier` soft/off 语义（E 负票扣 strength 重走阶梯、
+  B/D 首评 S/A 惩罚重走、vp E 三态）+ `_lc_gate_veto_path` 路径派生（reasons 含"反转路径/
+  风险背离"→ 分流，兜底按 stage）+ `assemble_observation` 接线 `lc_veto_path`（唯一点，
+  API 路径自动跟随）；
+- 范围（§3.3）：只动总档合成面；候选池面/交易层 `lifecycle.veto` 入场腿保持现行为；
+  出场腿经 §5.2 Track 1 覆盖；
+- 测试：`tests/test_lifecycle_gate_form.py`（39 用例：hard 零漂移/off≡删除面/soft 边界
+  映射/路径分流/守恒性质/校验 fail-fast）+ `tests/test_lifecycle_gate_form_harness.py`
+  （18 用例）；全量 pytest **2247 passed**。
+
+### 24.2 方案 B 前置验证（只读，`diagnose_lifecycle_gate_score.py`，decision 窗 131197 信号）
+
+1. 步骤 0 分布：5 等宽桶可用（最大桶 41.3% ≤ 60% 线）；
+2. **方向内容 FAIL**：score 分桶 saEx = +0.037/+0.000/−0.011/+0.007/+0.037——U 形，
+   spearman −0.1，首末桶差 −0.0004；连续环境分（lifecycle.score）没有 A/B/C/D(E) 没有
+   的方向内容，`vetoFloor/downgradeKnee` 迁移函数不成立；
+3. veto 覆盖 PASS：t=50 时 recall 0.838 / fpr 0.585（veto 帧中位分 30，低分尾承载 veto
+   信息——只可作解释性辅助）；
+4. **按预登记收缩条款：方案 B 收缩为"展示语义澄清"（退役伪方向标尺、双轴发布），门控
+   保持标签驱动**——与 §0.4 预期管理一致，未立项。
+
+### 24.3 扫描执行与锚链（harness `evaluate_lifecycle_gate_form.py`，15+4 trial × 3 窗）
+
+**三点等价链逐位复现（三窗全 match）**：a0 新基线 0.1044/0.0918/0.0933（23.9.1 锚）✓；
+a1 旧票权 0.0939/0.0854/0.0737（22.8 锚）✓；a2=a1+gate_off 0.0366/0.0437/0.0373
+（23.8 no_lc_gate 锚）✓——config 路径 mode=off 与 23.8 wrapper 注入删除面完全等价。
+**C5 结构守恒（审计重定义）除票权锚 trial 外全部通过**：b/c/d/e/p 各 trial 三窗非门
+作用帧（lc∉{B,D,E}，e 组加 vp≠E）synergy 档位零翻转——soft 实现正确性最强断言；
+a1/a2 与 a0 票权口径不同、守恒不适用（harness 显式标 N/A，不产出伪 violations），
+其等价性由上方锚链逐位复现保证。
+
+**粗扫（15 trial）+ 精扫（c 轴 3 档 + 组合 p2）saEx 三窗 rel（dec/oos1/oos2）**：
+
+| trial | decision | oos1 | oos2 | 判读 |
+|---|---|---|---|---|
+| b0 veto 负票 0.375 | −4.6% | −5.3% | +5.5% | 软化 decision 受损 |
+| b1 veto 负票 0.75 | −3.2% | +6.2% | +7.9% | OOS 双正但 C1 无过卡可能（decision 剂量单调） |
+| b2/b3 负票 1.5/2.25 | 逐位=baseline | 同 | 同 | E 帧负票后落 C/D 不进链，saEx 无感 |
+| c1 降档关闭 | −39.4% | −34.4% | −5.8% | 降档正价值确认（§2.3 裁决：cooling 降档非负价值） |
+| c2a/c2b penalty 0.25/0.5 | −24.2%/+3.5% | −28.1%/−6.8% | −4.4%/−7.7% | c2b decision 正为单窗假阳（OOS 双负 C2✗） |
+| c3 penalty 1.0 | **逐位=baseline** | 同 | 同 | **penalty 1.0 数学等价硬降一档（S:v−1≥2=A；A:1≤v−1<2=B）——实现正确性交叉验证** |
+| c4/c5 penalty 1.25/1.5 | −3.9%/−4.4% | −16.8%/−16.8% | +0.5%/+3.1% | 过度惩罚受损；c 轴 U 型峰=1.0≡hard |
+| d1/d2 路径分流 | 逐位=baseline | 同 | 同 | HighRisk/reversal 分流负票不进链，零效应 |
+| e1a vp 短路 off | **+9.8%** | −3.0% | **+33.4%** | saEx 最强；C4 retreat(dec) −0.017 ⚠ |
+| e1b vp 短路 soft | 逐位=baseline | 同 | 同 | vp E 帧负票(−1.0)后落 D 与硬短路同档 |
+| **p2 = e1a×b1** | **+6.7%** | **+2.7%** | **+39.3%** | 三窗全正，C1∧C2∧C3 全过 **PASS_CANDIDATE**；C5 ✓；C4 仅 retreat −0.017 ⚠ |
+
+判定卡：e1a 同 PASS_CANDIDATE（C2 靠 oos2 +33.4%，oos1 −3.0% 负）。触发率：e1a/p2
+S+A 升至 2.0~2.6%（仍 <3.5% 观察线）；veto 翻转率逐位不变（vp 门不碰 lc veto，范围隔离
+兑现）；bd 翻转 +0.003（处理效应观测）。
+
+### 24.4 Track 1 交易层复核（§5.2，`track1_lifecycle_gate_trade.py`，rank_trend_candidate 默认交易配置）
+
+| 臂 | 窗 | trades | winRate | pf | wrxpf | totalReturn | maxDD |
+|---|---|---|---|---|---|---|---|
+| baseline | decision | 144 | 0.4861 | 0.9673 | 0.4702 | −0.0516 | −0.1811 |
+| e1a | decision | 164 | 0.4329 | 0.7357 | **0.3185（−32%）** | −0.2184 | **−0.3178** |
+| p2 | decision | 164 | 0.4329 | 0.7357 | 0.3185（逐位=e1a） | −0.2184 | −0.3178 |
+| baseline | oos2 | 22 | 0.3182 | 0.5339 | 0.1699 | −0.0599 | −0.0675 |
+| e1a/p2 | oos2 | 23 | 0.3478 | 0.8037 | 0.2795（+64%） | −0.0298 | −0.0545 |
+
+- **p2 ≡ e1a 逐位**：veto 负票交易层零效应（`lifecycle.veto` 入场腿未放开 + 改判帧不在
+  S/A 入场池）；
+- **机制**：vp E→D 短路把"对倒出货/过度放量"帧挡在 S/A 入场池外；e1a 放开后多买 20 笔，
+  新增交易 wr/pf 显著更差——**出货硬风险对交易入场是真保护**；oos2 改善为 22 笔小样本，
+  不足以推翻主窗（144-164 笔）结论；
+- **§5.2 盲区闭环生效**：saEx 排序质量改善 ≠ 交易盈亏改善，Track 1 拦截 saEx 假阳候选
+  （阶段 24 首例）。
+
+### 24.5 最终判定与命题回答（用户 2026-09-14 长测复盘两命题）
+
+1. **命题 1（否决权过大且武断）**：定性成立（三处 0/1 硬干预从未进参数空间），但经本阶段
+   完整剂量曲线实证——**veto 软化 decision 单调受损（与阶段 12 K 实验、23.8 归零先验三重
+   同向）、降档 penalty U 型峰在 1.0（≡hard）、vp 短路 saEx 改善但交易层 wrxpf −32% 否决**。
+   "武断"的答案是否定的：三处干预均为数据验证后的局部最优，**维持 hard 现行为，不落默认**。
+   否决权经"归零对照（23.8）+ 覆盖率实验（阶段 12）+ 形态剂量曲线（本阶段）"三重验证存档。
+2. **命题 2（A/B/C/D(E) 无方向贡献）**：维持证伪结论且加码——连续环境分方向内容同样
+   FAIL（U 形），"换成连续分"的救法也被证伪；分层价值在负向过滤与出场通道，不在方向
+   排序。方案 B 收缩为展示语义澄清（signalTier 降级展示投影、path/gateAction 双轴发布），
+   属低优先级独立任务，未立项。
+3. **遗留观察池**：p2（saEx 三窗全正 + oos2 交易层 +64%）标注"观察池最高优先（交易层
+   主窗受损为阻力）"；复核触发与 23.9.1 挂起的 9 月全月复验同批（10 月上旬）：若 9 月
+   全月 saEx 复现 + oos2 交易层改善在扩样后保持，可重提 Track 1 复核。
+
+### 24.6 复现
+
+```powershell
+cd quant-board
+.\.venv\Scripts\python.exe -m pytest tests\test_lifecycle_gate_form.py tests\test_lifecycle_gate_form_harness.py -q
+.\.venv\Scripts\python.exe -m backend.operations.diagnose_lifecycle_gate_score --window decision
+.\.venv\Scripts\python.exe -m backend.operations.evaluate_lifecycle_gate_form --window all
+.\.venv\Scripts\python.exe -m backend.operations.track1_lifecycle_gate_trade --window decision
+```
+
+报告：`data/reports/lifecycle-gate-score-diagnosis.json` / `lifecycle-gate-form.json`
+（19 trial × 3 窗 + summary + anchorChain）/ `track1-lifecycle-gate-{decision,oos2}.json`。
+回退：本阶段零默认值改动，无需回退；harness/诊断脚本/测试可整体 revert。

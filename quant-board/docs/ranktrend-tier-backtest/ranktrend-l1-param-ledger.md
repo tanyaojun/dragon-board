@@ -295,3 +295,19 @@ A 组展示分权重 5/5 逐位零效应判冗余——全部维持默认，零�
 - **回退**：py 三字段还原 1.0 + TS tierDisplay 权重常量还原，或整体 revert 本次提交；
   config_hash 天然区分两代口径，历史数据不迁移不重算。
 - 实施详情见长测计划 §23.9/§23.9.1；报告 `data/reports/dimension-voting-power.json`。
+
+## 13. 生命周期环境门干预形态参数（2026-09-14 阶段 24，参数化+全轴扫描，默认=hard 不变）
+
+| 参数 | 当前值 | 来源 | 结果 |
+|---|---|---|---|
+| lifecycleVetoGateMode | "hard" | 阶段 24 两轮扫描 | **hard 为峰**：软化 decision 单调受损（0.375/0.75 档 −4.6/−3.2%），强负票 1.5/2.25 零效应；与阶段 12 K 实验、23.8 归零三重同向 |
+| lifecycleVetoPathMode | "all_soft" | 阶段 24 | reversal_hard/highrisk_hard 分流三窗逐位零效应（负票不进链） |
+| lifecycleVetoVoteStrength | 1.5 | 阶段 24 | 仅 soft 模式消费（默认 hard 不生效） |
+| lifecycleDowngradeGateMode | "hard" | 阶段 24 | penalty 剂量 U 型峰=1.0（数学等价硬降档）；0.25~0.75 与 1.25~off 全受损；降档关闭 −39/−34/−5.8% |
+| lifecycleDowngradePenalty | 0.5 | 阶段 24 | 仅 soft 模式消费（默认 hard 不生效） |
+| volumePriceGateMode | "hard" | 阶段 24 | off 档 saEx +9.8/−3.0/+33.4% 但 Track 1 交易复核主窗 wrxpf −32%、maxDD 加深——**交易层否决维持 hard**；soft 逐位=hard（vp E 负票落 D 同档） |
+
+- 组合 p2（vp off × veto 负票 0.75）：saEx 三窗全正 PASS_CANDIDATE，Track 1 主窗否决，
+  入观察池（复核触发：9 月全月复验与 §12 挂起复验同批）；
+- 方案 B 连续环境分（lifecycle.score）方向内容 FAIL（U 形，spearman −0.1）——score 保持
+  展示/解释语义，不得升级为门控输入（否则 §4.2.2 台账变更义务触发）。

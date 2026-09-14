@@ -36,6 +36,7 @@ from typing import Any
 sys.path.insert(0, r"D:\dragon-board\quant-board")
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
+from backend.analysis.ranktrend.research.regime_saex import regime_saex_stats
 from backend.analysis.ranktrend.tier_monotonicity import tier_forward_returns
 from backend.operations.diagnose_gate_flip_rate import collect_flip_report
 from backend.operations.optimize_core_signal_parameters import _clamp
@@ -67,6 +68,11 @@ def evaluate_gate(config: RankTrendConfig, frames: list[dict[str, Any]]) -> dict
     signals = engine.replay(frames, meta={})
     trend = tier_forward_returns(signals, frames, horizon=1, dimension="rankTrend")
     syn = tier_forward_returns(signals, frames, horizon=1, dimension="synergy")
+    # 分状态视图（阶段 14 盲区闭环）：ALL 口径被大状态体量稀释，桶内失效不可见。
+    # 只对 synergy 主口径分桶（rankTrend 关注维不重复，控制扫描成本）；
+    # 桶内 passHard 为桶内口径，样本不足（S<30）如实判 False，区分看 _tier_summary.distribution。
+    regime = regime_saex_stats(signals, frames, horizon=1, dimension="synergy")
+    regime_view = {state: _tier_summary(stats) for state, stats in regime["states"].items()}
 
     syn_sa = sa_excess_of(syn)
     trend_sa = sa_excess_of(trend)
@@ -88,6 +94,8 @@ def evaluate_gate(config: RankTrendConfig, frames: list[dict[str, Any]]) -> dict
         "score": round(score, 4),
         "synergy": _tier_summary(syn),
         "rankTrend": _tier_summary(trend),
+        "regimeView": regime_view,
+        "regimeStateCounts": regime["stateCounts"],
         "signalCount": len(signals),
         "flipRates": flip["flip_rates"],
         "flipCounts": flip["flip_counts"],
@@ -99,9 +107,15 @@ def evaluate_gate(config: RankTrendConfig, frames: list[dict[str, Any]]) -> dict
 
 def _fmt(result: dict[str, Any]) -> str:
     flips = result["flipRates"]
+    # 分状态摘要（regimeView 为 2026-09-10 新增字段，旧缓存报告 resume 时缺省不打印）
+    states = " ".join(
+        f"{state}(saEx={summary['saEx']} pass={summary['passHard']})"
+        for state, summary in (result.get("regimeView") or {}).items()
+    )
     return (
         f"score={result['score']} syn(saEx={result['synergy']['saEx']} pass={result['synergy']['passHard']}) "
         f"flip(veto={flips['veto']:.5f} bd={flips['bd_downgrade']:.5f} regime={flips['regime_state']:.5f})"
+        + (f" | {states}" if states else "")
     )
 
 

@@ -119,6 +119,21 @@ lifecycleDowngradePenalty: float = 0.5  # soft：B/D 帧且首评 ∈ {S,A} 时 
 前者与 vetoVoteStrength 语义重叠且乘法组合下默认 0 会静默归零干预；后者单一 bool
 无法表达 d1/d2 两个方向。）
 
+**实施记录（2026-09-14 阶段 24 落地后回填；扫描读数与判定见长测计划 §24，台账见
+`ranktrend-l1-param-ledger.md` §13）**：
+
+1. `lifecycleGateMode` 单枚举拆为 `lifecycleVetoGateMode` + `lifecycleDowngradeGateMode`
+   两个正交开关——trial 表 b 组（只动 veto 剂量）/ c 组（只动降档形态）要求单变量归因，
+   单枚举把两轴绑死；trial 语义与本节 spec 完全一致。
+2. `volumePriceGateMode=off` 定稿为"移除短路**且 E 帧静默不计票**"（强制 0 票），非
+   "按方向自然计票"：E 是硬风险标记（对倒出货/过度放量），方向主导投票会让它按涨价投
+   正票、继承 §4.1 已证伪的伪方向序；静默口径也与交叉参照 23.8 no_vp（归零 vp 票）更近。
+   e1a/e1b 读数按此口径归档，后续复跑须用同一语义。
+3. C5 守恒只对与 a0 同票权口径的 trial 适用；a1/a2（旧票权锚）不适用，harness 显式标
+   N/A——其等价性由锚链三窗逐位复现保证。
+4. 实验结论：三轴剂量曲线闭合、hard 全线为峰，**维持默认零漂移**；p2 入观察池
+   （Track 1 交易层主窗 wrxpf −32% 否决）；方案 B 连续环境分 FAIL 收缩为展示语义澄清。
+
 **soft 模式合成语义（实施 spec，TDD 按此逐条断言）**：
 
 1. **E 帧（action=veto）**：按 lifecycle decision 驱动路径分流（分流口径与 23.2 的
@@ -139,7 +154,8 @@ lifecycleDowngradePenalty: float = 0.5  # soft：B/D 帧且首评 ∈ {S,A} 时 
 
 ### 3.2 同构位顺带扫描
 
-`volumePriceGateMode`（vp E→D 短路，形态参数：off=移除短路 / soft=改负票）作为附加
+`volumePriceGateMode`（vp E→D 短路，形态参数：off=移除短路且 E 帧静默不计票——实施
+定稿见 §3.1 实施记录 2 / soft=改强制负票）作为附加
 trial 组——同一 harness、一行 patch，避免留下第二处未验证硬干预。
 
 ### 3.3 范围声明（一次只动一个面，避免无法归因）
@@ -261,7 +277,8 @@ config.py:318-320）。E 帧 A 档可达条件 v_raw ≥ 2.0 + strength：
 | 组合 | p1-p2 | 上述有正读数单变量组合 | Track 2 判定卡 |
 
 trial 预算：锚 4 + b 4 + c 3 + d 2 + e 2 + p 2 = **17 组 × 3 窗 ≈ 51 次 replay**
-（对照：阶段 22 共 57 次、阶段 23 为 55 trial/窗）。
+（对照：阶段 22 共 57 次、阶段 23 为 55 trial/窗）；实际执行 **19 trial × 3 窗 = 57 次**
+（15 粗扫 + c 轴精扫 3 档 + 组合 p2，含 4 锚），读数见长测计划 §24.3。
 
 ### 5.2 交易层复核（saEx 口径盲区，必做）
 

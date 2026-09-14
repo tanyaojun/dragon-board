@@ -302,6 +302,15 @@ class RankTrendConfig:
     lifecycleHighRiskPressureMin: float = 0.75
     lifecycleHighRiskDivergenceMin: float = 0.8
     lifecycleHighRiskOverheatMin: float = 0.7
+    # ── lifecycle 环境门干预形态（2026-09-14 阶段 24 方案 A 参数化；默认=现行为，golden 不漂移）──
+    # 审计修订稿 §3.1 单一 lifecycleGateMode 实施时拆为 veto/降档两个正交开关：§5.1 trial 表
+    # 的 b 组（只动 veto 剂量）与 c 组（只动降档形态）要求单变量归因，单枚举会把两轴绑死。
+    lifecycleVetoGateMode: str = "hard"        # E 干预形态：hard=短路否决（现行为）| soft=负票 | off=不干预（评估锚）
+    lifecycleVetoPathMode: str = "all_soft"    # 仅 soft 生效，veto 双路径分流：all_soft | reversal_hard | highrisk_hard
+    lifecycleVetoVoteStrength: float = 1.5     # soft：E 帧 v_final = v_raw − strength 后重走阈值阶梯
+    lifecycleDowngradeGateMode: str = "hard"   # lc B/D 对已达 S/A 的干预：hard=降一档（现行为）| soft=惩罚 | off=不干预
+    lifecycleDowngradePenalty: float = 0.5     # soft：首评 ∈ {S,A} 时 v −= penalty 后重走阶梯
+    volumePriceGateMode: str = "hard"          # vp E→D 出货短路（同构位）：hard=现行为 | soft=强制负票 | off=静默
     # ── risk（analyze_risk）：压力合成与严重度归一 ──
     riskPressureWeights: list[float] = field(default_factory=lambda: [0.58, 0.42])
     riskOverheatOffset: float = 45.0
@@ -478,6 +487,21 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
     ):
         if getattr(config, _field) < 0:
             raise ValueError(f"synergy 投票权重 {_field} 不能为负（负值翻转票向），实际 {getattr(config, _field)}")
+    # 环境门干预形态枚举与强度校验（2026-09-14 阶段 24 方案 A）
+    for _mode_field, _legal in (
+        ("lifecycleVetoGateMode", ("hard", "soft", "off")),
+        ("lifecycleVetoPathMode", ("all_soft", "reversal_hard", "highrisk_hard")),
+        ("lifecycleDowngradeGateMode", ("hard", "soft", "off")),
+        ("volumePriceGateMode", ("hard", "soft", "off")),
+    ):
+        _mode_value = str(getattr(config, _mode_field))
+        if _mode_value not in _legal:
+            raise ValueError(f"{_mode_field} 非法枚举 {_mode_value!r}（可选 {'/'.join(_legal)}）")
+    if config.lifecycleVetoVoteStrength < 0 or config.lifecycleDowngradePenalty < 0:
+        raise ValueError(
+            f"lifecycleVetoVoteStrength/lifecycleDowngradePenalty 不能为负，"
+            f"实际 {config.lifecycleVetoVoteStrength}/{config.lifecycleDowngradePenalty}"
+        )
     if not (0 < config.tierRankTrendConfirmMin < config.tierRankTrendStrongMin <= 1):
         raise ValueError(
             f"tierRankTrend 约束失败：需要 0 < confirm < strong <= 1，"
