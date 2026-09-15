@@ -102,3 +102,64 @@ def test_config_thresholds_effective() -> None:
     c2 = cfg(jumpConfirmVolumeRatioMin=0.0)
     r2 = _confirm_jump(jump("up"), stock(change=3.0, volume_ratio=0.1), c2)
     assert r2["direction"] == "up"
+
+
+# ---------- 生产枚举 buy/sell（2026-09-15 断线修复）----------
+# detect_rank_jumps（runtime.py detect_rank_jumps docstring + L176）外层 direction 只产
+# "buy"/"sell"/"hold"——2026-08-17 G4 落地时 _confirm_jump 只匹配 "up"/"down"，生产枚举
+# 全部落 else: ok=True 放行，确认门上线以来从未拦截（P6-c 消费面实证 10936 事件全放行）。
+# 本组用例锁定生产枚举语义；"up"/"down" 保留为语义别名（上一节用例继续有效）。
+
+def prod_jump(direction="buy") -> dict:
+    """贴近 detect_rank_jumps 真实输出：子事件 direction 为 surge/collapse。"""
+    sub = "surge" if direction == "buy" else "collapse"
+    return {"direction": direction, "event": "jump", "events": [{"index": 1, "direction": sub, "magnitude": 30}]}
+
+
+def test_buy_confirmed_with_price_and_volume() -> None:
+    r = _confirm_jump(prod_jump("buy"), stock(change=3.0, volume_ratio=1.0), cfg())
+    assert r["direction"] == "buy"
+    assert r["confirmed"] is True
+    assert r["events"][0]["direction"] == "surge"  # 确认通过时子事件保持原枚举
+
+
+def test_buy_unconfirmed_without_price() -> None:
+    r = _confirm_jump(prod_jump("buy"), stock(change=2.0, volume_ratio=1.5), cfg())
+    assert r["direction"] == "hold"
+    assert r["confirmed"] is False
+    assert any("缺价格/量确认" in x for x in r["unconfirmedReasons"])
+    # events 内 direction 同步降级（2026-08-19 P0-1 口径一致约束同样适用于生产枚举）
+    assert all(e["direction"] == "hold" for e in r["events"])
+
+
+def test_buy_unconfirmed_without_volume() -> None:
+    r = _confirm_jump(prod_jump("buy"), stock(change=5.0, volume_ratio=0.8), cfg())
+    assert r["direction"] == "hold"
+    assert r["confirmed"] is False
+
+
+def test_buy_unconfirmed_when_missing_fields() -> None:
+    r = _confirm_jump(prod_jump("buy"), {"code": "000001"}, cfg())
+    assert r["direction"] == "hold"
+    assert r["confirmed"] is False
+
+
+def test_sell_confirmed_with_price_and_volume() -> None:
+    r = _confirm_jump(prod_jump("sell"), stock(change=-4.0, volume_ratio=1.3), cfg())
+    assert r["direction"] == "sell"
+    assert r["confirmed"] is True
+    assert r["events"][0]["direction"] == "collapse"
+
+
+def test_sell_unconfirmed_without_price() -> None:
+    r = _confirm_jump(prod_jump("sell"), stock(change=-2.0, volume_ratio=1.2), cfg())
+    assert r["direction"] == "hold"
+    assert r["confirmed"] is False
+    assert any("缺价格/量确认" in x for x in r["unconfirmedReasons"])
+    assert all(e["direction"] == "hold" for e in r["events"])
+
+
+def test_sell_unconfirmed_without_volume() -> None:
+    r = _confirm_jump(prod_jump("sell"), stock(change=-5.0, volume_ratio=0.5), cfg())
+    assert r["direction"] == "hold"
+    assert r["confirmed"] is False

@@ -212,10 +212,16 @@ def _confirm_jump(
 ) -> dict[str, Any]:
     """2026-08-17 G4：Jump 价格/量确认（默认生效）。
 
-    排名 Jump 可能来自热榜噪声（无价格/成交配合的假 Jump）。up 需 change ≥
-    jumpConfirmChangeMin 且 volumeRatio ≥ jumpConfirmVolumeRatioMin；down 需 change ≤
+    排名 Jump 可能来自热榜噪声（无价格/成交配合的假 Jump）。生产枚举来自
+    detect_rank_jumps：buy（排名跳跃式上升）需 change ≥ jumpConfirmChangeMin 且
+    volumeRatio ≥ jumpConfirmVolumeRatioMin；sell（排名崩塌式下降）需 change ≤
     -jumpConfirmChangeMin 且 volumeRatio ≥ jumpConfirmVolumeRatioMin（放量配合）。
     不满足 → direction 降级 hold 并记录 unconfirmed（fail-visible，不阻断原始事件）。
+
+    2026-09-15 断线修复：确认分支此前只匹配 "up"/"down"，生产枚举 buy/sell 全部落
+    else 放行（G4 上线以来从未实际拦截，P6-c 消费面实证 10936 事件全放行）。现按
+    生产枚举 buy/sell 匹配，"up"/"down" 保留为语义别名（防测试夹具/历史 fixture
+    静默放行）。
     """
     c = config or RankTrendConfig()
     direction = jump.get("direction")
@@ -227,9 +233,9 @@ def _confirm_jump(
     vr = float(stock.get("volumeRatio")) if _is_finite_number(stock.get("volumeRatio")) else None
     confirm_change = float(getattr(c, "jumpConfirmChangeMin", 3.0))
     confirm_vr = float(getattr(c, "jumpConfirmVolumeRatioMin", 1.0))
-    if direction == "up":
+    if direction in ("buy", "up"):
         ok = chg is not None and vr is not None and chg >= confirm_change and vr >= confirm_vr
-    elif direction == "down":
+    elif direction in ("sell", "down"):
         ok = chg is not None and vr is not None and chg <= -confirm_change and vr >= confirm_vr
     else:
         ok = True
@@ -240,14 +246,14 @@ def _confirm_jump(
     jump["direction"] = "hold"
     jump["confirmed"] = False
     # 2026-08-19 P0-1：events 内 direction 同步降级——共振用 events 算 freshness、
-    # 外层判方向，两处口径必须一致（否则 events 仍报 up/down 与降级矛盾）
+    # 外层判方向，两处口径必须一致（否则 events 仍报 surge/collapse 与降级矛盾）
     jump["events"] = [
         {"index": e.get("index"), "direction": "hold", "magnitude": e.get("magnitude")}
         for e in jump.get("events", [])
     ]
     jump["unconfirmedReasons"] = [
         f"Jump {direction} 缺价格/量确认（change={chg}%，volumeRatio={vr} vs "
-        f"需 ≥{confirm_change if direction == 'up' else -confirm_change}% / ≥{confirm_vr}）"
+        f"需 ≥{confirm_change if direction in ('buy', 'up') else -confirm_change}% / ≥{confirm_vr}）"
     ]
     return jump
 
@@ -1216,9 +1222,10 @@ class RankTrendPythonEngine:
             sustain_count=self.config.jumpSustainCount,
         )
         # 2026-08-17 G4：Jump 价格/量确认（审计缺口——排名 Jump 可能来自热榜噪声，无成交配合）。
-        # 默认生效（jumpConfirmChangeMin=3.0 / jumpConfirmVolumeRatioMin=1.0）：up 需
-        # change ≥3% 且量比 ≥1，down 需 change ≤-3% 且量比 ≥1（放量配合）；不满足 → 降级
+        # 默认生效（jumpConfirmChangeMin=3.0 / jumpConfirmVolumeRatioMin=1.0）：buy 需
+        # change ≥3% 且量比 ≥1，sell 需 change ≤-3% 且量比 ≥1（放量配合）；不满足 → 降级
         # direction=hold 并记录 unconfirmed（fail-visible），避免假 Jump 污染共振投票。
+        # （2026-09-15 断线修复：此前分支只匹配 up/down，生产枚举 buy/sell 全放行。）
         jump = _confirm_jump(jump, stock, self.config)
         # 阶段 2 数据质量治理：ok 判定用动量可计算门槛（momentumPeriods.max+1），
         # 不再混入 MACD 预热需求。旧口径 get_technical_min_samples=34 帧在 50 帧滑动窗口
