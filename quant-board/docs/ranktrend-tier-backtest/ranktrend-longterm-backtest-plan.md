@@ -3343,3 +3343,154 @@ vp E 增多 → synergy D（硬短路）增多 → S+A 触发率预期小幅下�
 **验证口径**：全量 pytest 均为 `--ignore=tests/test_archive_research.py`
 （该文件本机独立运行卡死 >240s）；修复后全量 **2308 passed** 零失败
 （136s，golden 对齐无漂移；四方案相关 8 测试文件 102 passed）。
+
+## 阶段 26：六案参数缺口补扫（2026-09-15，方案 ranktrend-param-gap-scan-plan.md v2）
+
+> 六案 P1-P6 补扫"批 3 57 项只扫阈值比较面"缺口；用户裁决三线复扫（P2 未决问题 3）。
+> 基线锚 post-fund10（0.1120/0.0880/0.0951）三案全窗扫描 baseline 逐位复现。
+> **全部零默认值改动；golden 对齐零漂移。台账登记 L1 §15。**
+> **方法论主发现：saEx = S/A 两档合并 excessDirectionAccuracy（`sa_excess_of`），
+> B/C/D 档不在统计集——只迁移负票/中性档的阈值线 saEx 结构性不可见（P1/P2/P5 三处实证）。
+> 判定语义从"惰性/活跃"细化为三层：真惰性（分布 identical）/ saEx 盲区（分布迁移但 S/A 不动，
+> 效应面=交易层）/ saEx 活跃（S/A 桶边际变化）。**
+
+### 26.1 六案判定汇总
+
+| 案 | 范围 | 执行方式 | 结果 |
+|---|---|---|---|
+| P1 cs 档位阈值族 | 9 轴 37 trial（含 P1-0 新参数化 StrongAbsMin 4 档） | 全窗三窗扫描 | 零候选；StrongAbsMin 默认 70 即跨窗权衡峰；弱侧四轴分层归档（26.3） |
+| P2 synergy 三线+五值 | 33 trial 全窗 + vsB Track 1 ×2 | 全窗三窗扫描 | vsB_070 OBSERVE（观察池）、vsB_060 Track 1 拒绝；strong 维持 3；weak/reverse=saEx 盲区 |
+| P3 regime/risk 线位 | 9 线位→诊断砍到 3 轴 13 trial | P3-0 诊断 + smoke（全窗取消） | StrongScore=交易层课题；Normal/Weak 惰性；risk 四线消费面收口；sev 双轴 confidence-only 冗余 |
+| P4 vp amount 族 | 13 trial oos2 + 消费链 | smoke + 消费链收口（全窗取消） | zero_effect（不进投票链）；amount 可算率 decision 6.12%/oos2 95.82% |
+| P5 趋势漏网 | 23 trial 全窗 | 全窗三窗扫描 | 零候选；longAgree dead output；momentumScoreThreshold 零效应；macd 开启对照 −9.4% 确认默认 |
+| P6 ATR/Jump | 诊断 + smoke | 诊断收口（不开发） | ATR 数据不足（unknown 60-73%）；**Jump 确认门断线发现**（26.7） |
+
+### 26.2 P1-0 参数化 crossSectionStrongAbsMin（golden 不漂移）
+
+- `engine/config.py` 新增 `crossSectionStrongAbsMin: float = 70.0`（原 cross_section.py 硬编码
+  `percentile >= 70` 绝对线，两个分支：delta 分支 + 首帧降级分支）；CROSS_SECTION_DEFAULTS 同步；
+- 守卫纪律（P5-0 同批）：`_validate_tier_constraints` 新增 **list 形状守卫**——buyThresholds/
+  sellThresholds len==5、tierSynergyVoteStrengths len==6（长度不符时 `_vote` 静默回退旧硬编码
+  volume_price.py:405-406 产出假绿 trial）、tierSynergyCsStrengths len==4，违规 ValueError fail-fast；
+- 测试：test_cross_section 4 新增（默认值锚/B↔C 降档/首帧分支/弱侧 30 无效轴归档）+
+  test_ranktrend_tier_config 2 新增（守卫 raises 参数化 + 不误伤）；golden alignment 63 passed 零漂移；
+- **扫描结论（默认即峰）**：收紧 75/80 → decision +4.2/+12.0% 但 oos 双大负（−13.3/−19.8 / −2.2/−20.5）；
+  放宽 60/65 → decision 负而 oos1 +9.0/+9.9。70 为三窗权衡最优点，维持。
+
+### 26.3 P1 cs 档位阈值族（37 trial）
+
+- **活跃但无候选**：strongMin_80 唯一 C1 过线（+3.0%）但 oos 双负 C2 失败；midMin/midDeltaUp
+  decision 弱 + oos 矛盾方向（midMin_60 oos2 +16.6% vs oos1 −11.4%）；cs 档位分布结构性代价
+  旗标（A 塌缩>30%/C ≥+10pp）未触发任何 PASS 方向；
+- **弱侧四轴分层归档（本批方法论样本）**：
+  - midMax/midDeltaDown（8 trial）：**真惰性**——三窗 cs 档位分布逐位 identical（移动区间无
+    分布密度；midDeltaDown 被 delta≤−15 前置分支短路同款）；
+  - weakMax/weakDeltaDown（8 trial）：**C/D 归类活跃、下游零传导**——weakMax_20 使 D 档
+    6477→8170（+26%）三窗同向，但 A/B 桶逐位不动、saEx 逐位不变：负票增减不足以翻转任何
+    B↔A/C 边界，效应链终止于投票输入；
+- cs 档位分布统计 + 结构代价旗标为本 harness 新增监控（372 行 harness，AXIS_LEVELS 表驱动 9 轴）。
+
+### 26.4 P2 三线复扫 + 五值轴（33 trial + Track 1 复核）
+
+- **vsB 轴（B 档票强度）唯一 saEx 活跃**：vsB_070/060 三卡全过（C1 +8.7/+6.4%、C2 oos1
+  +14.2/+10.3 & oos2 +7.4 双窗正、C3 passHard 保持）；机制=边际 A/S 信号退出统计桶
+  （A 1285→1113/1076）；vsB_090/100 反向全负，剂量对称成立；
+- **Track 1 交易复核（decision 窗，track1_lifecycle_gate_trade --extra-arm）**：
+  - vsb070：149 笔 wrxpf 0.4882 vs baseline 0.4839（**+0.9% 中性**，胜率升 pf 降互抵）→
+    不否决不证实 → **OBSERVE 观察池**，复核挂 9 月全月复验同批；
+  - vsb060：129 笔 wrxpf **−7.9%**、ret −10.2%（baseline −4.4%）、dd −23.8% → **拒绝**；
+  - 剂量自洽：B 强度降越深入场面收缩越狠（150→149/129 笔）；
+- **strong 线维持 3**：2.25/2.5 档 saEx 剂量升（+4.5/+23.8%）但 passHard 三窗全崩
+  （S 线降低→边际样本进 S 桶破坏单调性硬约束）+ oos2 负；
+- **weak/reverse 线 = saEx 盲区非惰性（复扫核心答案）**：weak_150 使 B 档腰斩
+  （12181→5962，−51%）三窗同向；reverse_neg050 使 C→D 迁移 +21%；S/A 桶逐位不动
+  → 用户裁决的"维持钝感是否成立"答案 = **钝感判定在 saEx 口径内成立、口径外高度活跃，
+  效应面=候选池构成，需 Track 1 口径终判**（并入 26.8 课题清单）；
+- vsS_100 三窗全正但 C3 违反（S 档单调性约束与收益增益对峙）；vsA/vsC/vsD 无候选。
+
+### 26.5 P3 regime/risk 线位（P3-0 诊断 + smoke，全窗扫描取消）
+
+- **P3-0 活跃度诊断**（diagnose_regime_risk_activity.py，573 行，判据=±10 扰动 candidateTier
+  档位赋值迁移率 ≥1% 即活跃，§12.3 同款钝感形态）：
+  - regimeStrongScore 唯一 regime 活跃线（1.14% 过线，迁移全部经 strong 禁入门单一路径）；
+  - regimeNormalScore/WeakScore 惰性免扫（迁移 0%/0.27%/0.57% <1%；且默认
+    regimeGateStrongBan=True 下 normal↔weak 迁移不接门——runtime.py:787-796 消费面证据）；
+  - risk Overheat/Divergence Sell/Hold 四线**消费面收口**：risk signal 唯一消费方
+    execution.py:1441 回测展示文本，决策面零消费（强于触发率判据的主证据）；
+  - riskSynergy 双 sev 轴决策面活跃（decisionRiskPenaltyWeights[2]）但 AND 触发率 0.38-0.72%；
+- **P3-a smoke 揭示盲区链（13 trial 取消全窗）**：12 trial oos2 逐位=baseline，含 StrongScore
+  4 档（分桶剧烈重划：strongN 6728→460、分桶 saEx 0.079→0.272 单调，整体 saEx 不动）——
+  regime state 不在 synergy 信号计算链（只进 evaluate_gate 禁入面 + reasons 文案）；
+  sev 轴 `final=base` confidence 不回写方向（runtime.py:311-312）→ 三轴 saEx 结构性零效应；
+  zero_effect 双要素齐备（消费链主证据 + 多 trial 逐位验证），按 P4-a 先例收口；
+- P3-a harness（evaluate_regime_risk_thresholds.py，25 tests）：线序预检 fail-fast
+  （from_patch 对 regime 三线无校验，乱序静默退化）、regimeView 四桶 + 禁入面比值监控、
+  锚 trial 级即时 raise。
+
+### 26.6 P4 vp amount 族（zero_effect 收口）
+
+- 13 trial oos2 smoke 逐位=baseline（oos2 amount 可算率 95.82% 排除数据不可算假惰性；
+  decision 窗可算率仅 6.12% 本身即低杠杆证据）；decision 窗全窗扫描取消（省 ~40 分钟）；
+- 消费链：amount_score→score，`_volume_price_tier(quadrant, fund_score, reasons)` 不消费
+  score（volume_price.py:243）；`_synergy_tier` 入参全部 signalTier（:509-525）；
+  score→compute_synergy_state→observation.synergy.state 下游仅 sentiment.py:547 非交易链；
+- 冗余归档不删实现；P4-0 诊断随 baseline 留痕（--diagnose-only）。
+
+### 26.7 P6 ATR/Jump（诊断收口 + 断线发现）
+
+- **P6-a ATR 确认门**：三窗 ATR unknown 率 60.7/67.7/72.8% 全 >50% 硬判据 → 数据不足不开发；
+  根因=轮动断档 gapResets 82.3 万比 missingBars 42.5 万高一个量级（非 high/low 缺失）；
+  oos 两窗覆盖已修复至 98%+，9 月全月复验时重测；
+- **P6-b Cross-trend 确认**：不开发；
+- **P6-c Jump 确认门断线（结构性发现，主代理双段代码核实）**：生产枚举
+  direction="buy"/"sell"/"hold"（runtime.py:176）vs 确认门只匹配 "up"/"down"
+  （runtime.py:220-241，buy/sell 落 `else: ok = True` 无条件放行）——10936 事件全部放行，
+  确认门自上线起未实际过滤。接线修复属 engine 行为变更（会改变现有信号序列），登记后续
+  课题待用户决策；修复前 evaluate_jump_confirm_parameters 的 confirm 参数扫描无意义（死开关）。
+- **P6-c 断线已修复（2026-09-15 当日，用户决策"请修复"）**：`_confirm_jump` 改按生产枚举
+  buy/sell 匹配（up/down 保留为语义别名；hold/None/未知仍无确认需求放行），G4 门默认
+  （change≥3% / 量比≥1）自修复起真实拦截。TDD 全程（RED 5 失败 → GREEN 17 passed）、
+  harness 断线锁定测试翻转为修复回归锚、影响面 130 相关测试全绿（golden_alignment /
+  v5_live_contract 无漂移）。**修复后首跑量化（decision 单窗，M3 折扣）**：syn saEx 0.1323
+  vs 断线代际锚 0.1120（相对 +18.1%）、passHard 保持、降级率 80.42%（84496/105064）——
+  断线代际下八万余假 Jump 全部放行进共振票，G4 设计意图（热榜噪声过滤）被数据强证实。
+  详录见 L1 台账 §15.6 修复记录。
+
+### 26.8 交易层口径课题清单（合并登记）
+
+saEx 盲区三案同构（效应面=交易层，saEx/synergy 口径结构性不可见）：
+
+1. tierSynergyVoteWeak / tierSynergyVoteReverse（P2：B 档 ±51% / D 档 +21% 候选池构成迁移）；
+2. regimeStrongScore（P3：strong 禁入门面，分桶 saEx 0.079→0.272 单调区分度已证）；
+3. decisionReversalPressureMin/OverheatMin/MarginMax（§11 既有登记）；
+4. momentumScoreThreshold（P5 归档注记：零效应=档位区间不可达，若未来重扫需先查 momentum
+   score 分布，效应面含 candidateTier/trend_buy 链）；
+
+工具已备：track1_lifecycle_gate_trade --extra-arm / track1_dimension_power（M2 30 笔门槛）；
+建议同批立项一次跑完。
+
+### 26.9 工程与测试
+
+- 新增 harness/诊断（3194 行）：evaluate_cs_tier_thresholds（425）/ evaluate_synergy_tier_thresholds
+  （400）/ evaluate_trend_leftover_parameters（402）/ evaluate_vp_amount_ratio（376）/
+  evaluate_regime_risk_thresholds（363）/ diagnose_regime_risk_activity（573）/
+  evaluate_jump_confirm_parameters（395）/ diagnose_atr_discrimination（260）；
+- 范式强化沿袭 §25.8：_assert_overrides_applied 逐键、WINDOWS import 零日期字面量、
+  assert_not_frozen 无条件、_save 剥离、resume、--extra-trial、锚 trial 级即时 raise（P3-a 强化）；
+- 测试：本批 9 测试文件 177 passed（含 P1-0/P5-0 工程测试与上批 track1_dimension_power）；
+  全量验证口径同 §25.8（--ignore=tests/test_archive_research.py）；
+- 报告（本地产物）：cs-tier-thresholds.json / synergy-tier-thresholds.json /
+  trend-leftover-parameters.json / vp-amount-ratio.json / regime-risk-activity.json /
+  regime-risk-thresholds-smoke.json / atr-discrimination.json / jump-confirm-smoke.json /
+  track1-p2-vsb0{70,60}-decision.json。
+
+### 26.10 遗留与复核触发
+
+1. **vsB_070 观察池**（VoteStrengths[2] 0.8→0.7）：9 月全月复验同批裁决；
+2. **Jump 确认门接线修复**：✅ 已修复（2026-09-15 当日，用户决策；见 §26.7 修复记录）——
+   遗留动作：jumpConfirm 两参在修复后代际的 5 档扫描待立项（门真实生效后剂量才有意义），
+   与 9 月全月复验同批评估；
+3. **交易层口径课题批**（26.8）：建议与 9 月复验同批立项；
+4. **P6-a ATR**：9 月全月数据重测 unknown 率后决定是否立项；
+5. §23.7 重扫触发条件维持（regime/risk 线位环境变化时重扫）；
+6. 窗口消费折扣（M3）延续：本批 decision/oos1/oos2 已消费，最终裁决窗用 09-13 后未消费帧。

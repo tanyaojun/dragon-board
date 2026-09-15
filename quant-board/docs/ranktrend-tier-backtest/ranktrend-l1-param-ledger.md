@@ -122,8 +122,8 @@
 | tierSynergyPriceMomentumVote | 0.0 | G1 实证负（−32%） | 关闭观察 |
 | regimeGateStrongBan | True | 数据修正（strong 负贡献） | 方向 C 验证现状最优 |
 | banStrongA / banStrongB | True / True | 方向 C 三模式验证（M2 最优） | 分层可调 |
-| jumpConfirmChangeMin | 3.0 | G4（half_hour Jump 事件 0） | 未实触 |
-| jumpConfirmVolumeRatioMin | 1.0 | G4 | 未实触 |
+| jumpConfirmChangeMin | 3.0 | G4（half_hour Jump 事件 0） | **2026-09-15 断线修复后真实生效**（§15.6）；此前未实触（门断线） |
+| jumpConfirmVolumeRatioMin | 1.0 | G4 | 同上（断线修复后真实生效） |
 | amountRatioPeriod | 5 | G3 方案 C 设计 | **未扫描**（C 项：冻结前窗口零差异） |
 | amountRatioHigh | 1.5 | G3 设计 | 未扫描（同上） |
 | amountRatioLow | 0.5 | G3 设计 | 未扫描（同上） |
@@ -357,3 +357,85 @@ A 组展示分权重 5/5 逐位零效应判冗余——全部维持默认，零�
   原因分解）；D-b `resonanceParticipation`（decision 69.0%）分母 = 全部信号（含无
   res 数据帧，记空方向）。两数分母不同不可直接对照，缺票结构对照以 D-a 分解表为准；
 - fund10 已落默认（§14.4）；23.9.1 §12 补记挂起至 9 月复验；锚点代际：23.9.1 锚（0.1044/0.0918/0.0933）属 pre-fund10 口径，当前基线锚 = 0.1120/0.0880/0.0951（post-fund10）。
+
+## 15. 六案参数缺口补扫（2026-09-15 阶段 26，方案 ranktrend-param-gap-scan-plan.md，全部零默认值改动）
+
+> 判定卡：C1 decision saEx rel ≥+3% ∧ C2 OOS ≥1 窗同向为正 ∧ C3 decision passHard 不降。
+> 基线锚 post-fund10（0.1120/0.0880/0.0951）三案全窗扫描逐位复现。
+> **关键方法论发现：saEx = S/A 两档合并加权 excessDirectionAccuracy
+> （optimize_resonance_parameters.py `sa_excess_of`），B/C/D 档完全不在统计集——
+> 凡只迁移负票/中性档的阈值线，saEx 结构性不可见（本批 3 处实证，见 §15.2/15.3/15.5）。**
+
+### 15.1 cs 档位阈值族（P1，37 trial 全窗 + P1-0 参数化 crossSectionStrongAbsMin）
+
+| 参数 | 默认 | 扫描结论 |
+|---|---|---|
+| crossSectionStrongAbsMin | 70.0（本轮参数化，原硬编码） | **默认即跨窗权衡峰**：收紧 75/80 decision +4.2/+12.0% 但 oos 双大负（−13.3/−19.8 / −2.2/−20.5）；放宽 60/65 decision −3.2/+0.3 而 oos1 +9.0/+9.9。维持 70 |
+| crossSectionStrongMin | 85 | strongMin_80 唯一 C1 过线（+3.0%）但 oos 双负 C2 失败；维持 |
+| crossSectionStrongDeltaUp | 5 | 全档弱（≤±2.4%），维持 |
+| crossSectionMidMin / MidDeltaUp | 50 / 15 | decision 弱、oos 矛盾方向（midMin_60 oos2 +16.6% 但 decision 0.0/oos1 −11.4%）；维持 |
+| crossSectionMidMax / MidDeltaDown | 50 / −15 | **真惰性**（8 trial 三窗 cs 档位分布逐位 identical，移动区间无分布密度）；归档 |
+| crossSectionWeakMax / WeakDeltaDown | 15 / −5 | **C/D 归类活跃但下游零传导**（weakMax_20 D 档 6477→8170 +26% 而 A/B 桶逐位不动，效应链终止于投票输入）；归档 |
+
+### 15.2 synergy 三线与档位强度（P2，33 trial 全窗 + Track 1 复核 ×2）
+
+| 参数 | 默认 | 结论 |
+|---|---|---|
+| tierSynergyVoteStrengths[2]（B 档强度） | 0.8 | **vsB_070/060 唯一三卡全过**（C1 +8.7/+6.4%、C2 oos +14.2/+10.3/+7.4、C3 保持）；Track 1 复核：vsb070 wrxpf +0.9%（149 笔，中性）→ **OBSERVE 观察池**；vsb060 wrxpf −7.9%、ret −10.2%、dd −23.8% → 拒绝。剂量自洽：降越深交易层入场面收缩越狠（−1/−21 笔）。复核触发挂 9 月全月复验同批 |
+| tierSynergyVoteStrengths[0]（S 档强度） | 1.2 | vsS_100 三窗全正但 C3 违反（档位单调性硬约束破）；维持 |
+| tierSynergyVoteStrengths[1/3/4/5]（A/C/D/E） | 1.0/0.5/1.0/1.0 | vsA decision 全负；vsC 跨窗反向；vsD 无信号；维持 |
+| tierSynergyVoteStrong | 3 | 2.25/2.5 档 saEx 剂量升（+4.5/+23.8%）但 passHard 三窗全崩 + oos2 负；**维持 3** |
+| tierSynergyVoteWeak | 1 | **saEx 盲区非惰性**：weak_150 使 B 档腰斩（12181→5962）三窗同向，但 S/A 桶逐位不动 → 效应面=候选池构成，Track 1 口径课题 |
+| tierSynergyVoteReverse | −1 | 同上：reverse_neg050 使 D 档 +21%（C→D 迁移），saEx 不可见；Track 1 口径课题 |
+
+### 15.3 regime/risk 线位（P3，P3-0 活跃度诊断 + smoke 12 trial，全窗扫描取消）
+
+| 线位 | 裁定 | 依据 |
+|---|---|---|
+| regimeStrongScore | 70 | **非惰性，saEx 盲区** → Track 1 交易层课题（禁入门面）。smoke 分桶强区分度：strong 桶 saEx 0.079→0.272 单调（60→75 档）、桶样本 6728→460 |
+| regimeNormalScore / WeakScore | 50 / 30 | 惰性免扫（±10 迁移 <1%；默认 regimeGateStrongBan=True 下 normal↔weak 迁移不接门，runtime.py:787-796） |
+| risk Overheat/Divergence Sell/Hold 四线 | — | **消费面收口**：唯一消费方 execution.py:1441 回测展示文本，决策面零消费 |
+| riskSynergyOverheat/DivergenceSevMin | 0.65 / 0.6 | **confidence-only 面冗余**（final_conf 不回写方向 runtime.py:311-312 + 双门 AND 触发率 0.38-0.72%）；smoke 8 档 oos2 逐位=baseline |
+
+### 15.4 vp 量价 amount 族（P4，zero_effect 收口，全窗取消）
+
+volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（消费链：amount_score→score 而 `_volume_price_tier` 不消费 score，`_synergy_tier` 只吃各维 signalTier；decision 窗 amount 可算率仅 6.12% 低杠杆、oos2 95.82% 排除假惰性）。冗余归档不删实现。
+
+### 15.5 趋势漏网（P5，23 trial 全窗 + 消费链核实）
+
+| 参数 | 默认 | 结论 |
+|---|---|---|
+| buyThresholds/sellThresholds（镜像缩放） | [2.5,4,6.5,10.5,17] | decision 全负 −0.2~−2.2%；oos1 剂量正（×1.5 +17.5%）但跨窗矛盾不达 C1；维持 |
+| trendLongAgreeMin | — | **dead output**（config 定义、引擎零消费点）；冗余归档（同 momentumConfidenceSlope 模式） |
+| momentumScoreThreshold | 35 | **零效应**（25↔45 全区间 candidateTier 逐信号 diff=0 + saEx 三窗逐位；消费真实 technical.py:219 但档位区间不可达）；归档，未来动此参数需先查 momentum score 分布 |
+| directionThresholds/accelerationThresholds 重加权 | — | 弱负/零，维持 |
+| requireMacdGoldenCross | False | 对照确认默认关闭正确（开启 decision −9.4%）；关闭对照存档 |
+
+### 15.6 ATR/Jump（P6，诊断 + smoke，不开发）
+
+- **P6-a ATR 确认门**：三窗 unknown 60.7/67.7/72.8% 全 >50% 硬判据 → 数据不足不开发；根因=轮动断档 gapResets 82.3 万（比 missingBars 高一个量级），oos 两窗覆盖已修复至 98%+，未来全月复验时重测；
+- **P6-c Jump 确认门断线（结构性发现）**：生产枚举 direction="buy"/"sell"/"hold"（runtime.py:176）vs 确认门只匹配 "up"/"down"（runtime.py:220-241），10936 事件全部落 `else: ok=True` 无条件放行——确认门自上线起未实际过滤。接线修复属 engine 行为变更，**登记后续课题待用户决策**（修复后确认参数才有扫描意义）。
+- **P6-c 断线已修复（2026-09-15 当日，用户决策"请修复"）**：`_confirm_jump` 确认分支改按生产枚举匹配
+  （`buy`/`up` → 向上确认；`sell`/`down` → 向下确认；`hold`/None/未知仍视为无确认需求放行，audit
+  2026-08-18 语义不变），G4 确认门（jumpConfirmChangeMin=3.0 / jumpConfirmVolumeRatioMin=1.0）自修复起
+  真实生效。TDD：test_confirm_jump.py 追加 8 个生产枚举用例（RED 5 失败精确暴露断线面 → GREEN 全绿，
+  17 passed）；harness 断线锁定测试翻转为接线修复回归锚（test_confirm_gate_wiring_fixed）；影响面
+  130 个相关测试全绿（jump/engine/golden_alignment/v5_live_contract/replay/signal_tiers/resonance/
+  synergy_gate 等）。**行为影响**：修复后默认输出信号序列与断线代际不同（弱确认 buy/sell Jump 降级
+  hold，不进共振票）；evaluate_jump_confirm_parameters 既有 baseline 锚为断线代际读数，修复后重跑
+  锚漂移 raise 属预期；修复后代际效应量化 = data/reports/jump-confirm-postfix-baseline.json
+  （decision 窗）。
+- **修复后门效应量化（decision 窗单窗首跑，280s；窗口已消费 M3 折扣，oos 双窗未跑——锚漂移即停纪律）**：
+  syn saEx **0.1323** vs 断线代际锚 0.1120（**相对 +18.1%**），passHard=True 保持；G4 降级率
+  **84496/105064 = 80.42%**（门真实拦截的直接读数，断线代际恒为 0——此前八万余假 Jump 全部
+  放行进共振票）；核验后放行 20568（19.58%）；jumpVoteShare 10.95%（断线代际 D-a 基线 12-14%，
+  过滤后下降方向符合）。**解读纪律**：单窗读数非落默认证据（本次为 bug 修复使 G4 已评审设计生效，
+  默认值未动，判定卡流程不适用）；jumpConfirm 两参的剂量扫描在修复后代际重新立项（§26.10 遗留 2）。
+
+### 15.7 交易层口径课题清单（本批合并登记，均 saEx 盲区、效应面=交易层）
+
+1. **tierSynergyVoteWeak / tierSynergyVoteReverse**（P2：B 档 ±51% / D 档 +21% 分布迁移）；
+2. **regimeStrongScore**（P3：禁入门面，分桶 saEx 单调区分）；
+3. **decisionReversalPressureMin/OverheatMin/MarginMax**（§11 既有登记）；
+- 三项共用 Track 1 口径（track1_lifecycle_gate_trade --extra-arm / track1_dimension_power，M2 30 笔门槛）；
+建议同批立项一次跑完；9 月全月复验（10 月上旬）时 vsB_070 观察池结论同批裁决。
