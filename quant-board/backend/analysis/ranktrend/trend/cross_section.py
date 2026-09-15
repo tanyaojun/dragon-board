@@ -19,8 +19,9 @@ tierSynergyCrossSectionVote=1.0，2026-08-17 用户决策；实证 all syn +10%/
   且近 persistFrames 帧均值 >= persistMeanMin(85) 且窗口满帧合法——数学边界
   delta <= 100 - percentile 使 pct > 95 的强势股（榜首）delta 确认永不可达，
   其强势体现在持续停留高位；判定顺序 A-delta > A-persist，开启后纯增量 B 升 A
-- B 偏强：percentile >= 70 或 (percentile >= 50 且 delta >= 15)
-- C 偏弱：percentile <= 30 或 (percentile <= 50 且 delta <= -15)
+- B 偏强：percentile >= strongAbsMin(70) 或 (percentile >= 50 且 delta >= 15)
+- C 偏弱：percentile <= 30（无效轴，与中位兜底同返回 C，审计 I-1 归档）或
+  (percentile <= 50 且 delta <= -15)
 - D 弱：percentile <= weakMax(15) 且 delta <= weakDeltaDown(-5)（低位 + 下降确认）
 - unknown：percentile 不可得（不在横截面）
 - 首帧缺 delta：降级绝对档（不给 A/D，delta 是 A/D 的必要确认；中位无上升证据给 C）
@@ -40,6 +41,8 @@ CROSS_SECTION_DEFAULTS: dict[str, float] = {
     "crossSectionWeakDeltaDown": -5.0,
     "crossSectionMidMax": 50.0,
     "crossSectionMidDeltaDown": -15.0,
+    # B 档绝对线（P1-0 参数化，默认=原硬编码 70；<=30 低位线为无效轴不参数化，审计 I-1）
+    "crossSectionStrongAbsMin": 70.0,
     # 持续高位 A 档替代路径（方案2）：Frames=0 关闭（默认，golden 不漂移）
     "crossSectionPersistFrames": 0.0,
     "crossSectionPersistMin": 90.0,
@@ -83,7 +86,7 @@ def _tier_from(
             return "D", ["低位 + 热度排名下降（横截面弱势确认）"]
         if percentile <= c.crossSectionMidMax and delta <= c.crossSectionMidDeltaDown:
             return "C", ["热度排名显著下降"]
-        if percentile >= 70:
+        if percentile >= c.crossSectionStrongAbsMin:
             return "B", ["横截面高位"]
         if percentile <= 30:
             return "C", ["横截面低位"]
@@ -92,7 +95,7 @@ def _tier_from(
     # 首帧缺 delta：绝对档降级，不给 A/D
     if percentile >= c.crossSectionStrongMin:
         return "B", ["高位但缺 delta 确认（首帧）"]
-    if percentile >= 70:
+    if percentile >= c.crossSectionStrongAbsMin:
         return "B", ["横截面高位（首帧缺 delta）"]
     if percentile <= c.crossSectionWeakMax:
         return "C", ["低位但缺 delta 确认（首帧）"]

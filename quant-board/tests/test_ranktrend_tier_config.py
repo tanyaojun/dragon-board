@@ -134,3 +134,36 @@ def test_tier_fields_synergy_vote_float_allowed() -> None:
     c = RankTrendConfig.from_patch({"tierSynergyVoteWeak": 1.5, "tierSynergyVoteStrong": 2.5})
     assert c.tierSynergyVoteWeak == 1.5
     assert c.tierSynergyVoteStrong == 2.5
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"buyThresholds": [5, 8, 13, 21]},  # 短 list：tanh 消费侧 index 越界 IndexError
+        {"sellThresholds": [-5, -8, -13, -21, -34, -50]},  # 长 list：静默截断
+        {"tierSynergyVoteStrengths": [1.2, 1.0, 0.8, 0.5, 1.0]},  # len!=6：_vote 静默回退旧硬编码 fallback（trial 假绿）
+        {"tierSynergyCsStrengths": [1.0, 0.5, -0.5]},  # len!=4
+    ],
+)
+def test_tier_fields_list_shape_guard_raises(patch: dict) -> None:
+    """list 形状守卫（2026-09-15 补扫总纲预检纪律 1 / P5-0）：from_patch 此前对 list
+    长度零校验——短 list 运行期 IndexError、长 list 静默截断、VoteStrengths 长度不符
+    时 _vote 静默回退旧硬编码（volume_price.py:405-406）产出假绿 trial。fail-fast。"""
+    with pytest.raises(ValueError, match="长度"):
+        RankTrendConfig.from_patch(patch)
+
+
+def test_tier_fields_list_shape_guard_allows_correct_lengths() -> None:
+    """守卫不误伤：正确长度的 list patch 与默认构造照常通过。"""
+    ok = RankTrendConfig.from_patch(
+        {
+            "buyThresholds": [2.5, 4, 6.5, 10.5, 17],
+            "sellThresholds": [-2.5, -4, -6.5, -10.5, -17],
+            "tierSynergyVoteStrengths": [1.0, 1.0, 0.8, 0.5, 1.0, 1.0],
+            "tierSynergyCsStrengths": [1.0, 0.5, -0.5, -1.0],
+        }
+    )
+    assert ok.buyThresholds == [2.5, 4, 6.5, 10.5, 17]
+    assert len(ok.tierSynergyVoteStrengths) == 6
+    assert len(ok.tierSynergyCsStrengths) == 4
+    RankTrendConfig()  # 默认构造（未触发 from_patch 校验路径）不受影响

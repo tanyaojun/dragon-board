@@ -33,10 +33,12 @@ def test_cross_section_defaults_match_engine_config() -> None:
     assert c.crossSectionStrongDeltaUp == CROSS_SECTION_DEFAULTS["crossSectionStrongDeltaUp"]
     assert c.crossSectionWeakMax == CROSS_SECTION_DEFAULTS["crossSectionWeakMax"]
     assert c.crossSectionWeakDeltaDown == CROSS_SECTION_DEFAULTS["crossSectionWeakDeltaDown"]
+    assert c.crossSectionStrongAbsMin == CROSS_SECTION_DEFAULTS["crossSectionStrongAbsMin"]
     assert c.crossSectionStrongMin == 85.0
     assert c.crossSectionStrongDeltaUp == 5.0
     assert c.crossSectionWeakMax == 15.0
     assert c.crossSectionWeakDeltaDown == -5.0
+    assert c.crossSectionStrongAbsMin == 70.0  # 2026-09-15 P1-0 参数化：原硬编码绝对线，默认=原值 golden 不漂移
 
 
 # ---------- 档位判定 ----------
@@ -107,3 +109,42 @@ def test_config_thresholds_effective() -> None:
     c2 = cfg(crossSectionStrongDeltaUp=10.0)
     r2 = compute_cross_section(percentiles=[80.0, 88.0], market_median=50.0, config=c2)
     assert r2["signalTier"] == "B"  # delta=8 < 10
+
+
+# ---------- StrongAbsMin 绝对线参数化（2026-09-15 P1-0，默认=原硬编码 70，golden 不漂移） ----------
+
+def test_strong_abs_min_default_boundary_b() -> None:
+    """percentile=72、delta=+1（无任何 delta 确认路径命中）→ 默认 AbsMin=70 绝对线给 B。"""
+    r = compute_cross_section(percentiles=[71.0, 72.0], market_median=50.0, config=cfg())
+    assert r["signalTier"] == "B"
+    assert r["tierReasons"] == ["横截面高位"]
+
+
+def test_strong_abs_min_raised_b_falls_to_c() -> None:
+    """AbsMin 提高到 75：同一序列 72 < 75 不再过绝对线 → 中位兜底 C（参数生效证据）。"""
+    c = cfg(crossSectionStrongAbsMin=75.0)
+    r = compute_cross_section(percentiles=[71.0, 72.0], market_median=50.0, config=c)
+    assert r["signalTier"] == "C"
+    assert r["tierReasons"] == ["中位区间无强势证据"]
+
+
+def test_strong_abs_min_first_frame_branch_effective() -> None:
+    """首帧降级分支复用同一 AbsMin：[72] 默认 → B（首帧文案）；AbsMin=75 → C（首帧文案）。"""
+    r = compute_cross_section(percentiles=[72.0], market_median=50.0, config=cfg())
+    assert r["signalTier"] == "B"
+    assert r["tierReasons"] == ["横截面高位（首帧缺 delta）"]
+    c = cfg(crossSectionStrongAbsMin=75.0)
+    r2 = compute_cross_section(percentiles=[72.0], market_median=50.0, config=c)
+    assert r2["signalTier"] == "C"
+    assert r2["tierReasons"] == ["中位区间无强势证据（首帧缺 delta）"]
+
+
+def test_weak_abs_30_line_is_inactive_axis() -> None:
+    """无效轴归档（2026-09-15 审计 I-1）：`percentile <= 30` 线两侧同返回 C 档——
+    31（中位兜底）与 30（显式低位线）仅 tierReasons 文案不同，signalTier 相同。
+    该线任何取值都不改档位，锁住此事实防止未来误参数化为活跃轴。"""
+    r_above = compute_cross_section(percentiles=[32.0, 31.0], market_median=50.0, config=cfg())
+    r_on = compute_cross_section(percentiles=[32.0, 30.0], market_median=50.0, config=cfg())
+    assert r_above["signalTier"] == "C"
+    assert r_on["signalTier"] == "C"
+    assert r_above["tierReasons"] != r_on["tierReasons"]  # 文案不同：兜底 vs 低位线

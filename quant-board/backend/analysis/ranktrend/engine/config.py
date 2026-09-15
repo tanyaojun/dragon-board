@@ -118,6 +118,10 @@ class RankTrendConfig:
     crossSectionWeakDeltaDown: float = -5.0  # D 档 delta 下降确认
     crossSectionMidMax: float = 50.0  # C 档中位上限
     crossSectionMidDeltaDown: float = -15.0  # C 档 delta 显著下降
+    # B 档绝对线（2026-09-15 P1-0 参数化：原 _tier_from 硬编码 70，delta 分支与首帧降级分支复用；
+    # 默认=原值 golden 不漂移。注意 percentile<=30 的 C 档低位线为无效轴（与中位兜底同返回 C），
+    # 审计 I-1 已归档不参数化）
+    crossSectionStrongAbsMin: float = 70.0
     # ── crossSection 持续高位 A 档替代路径（2026-09-13 方案2；默认关闭 golden 不漂移）──
     # 数学边界：delta = pct[-1] − pct[-2] ≤ 100 − pct[-1]，pct > 95 的强势股（榜首
     # pct=100）永远无法满足 A 档 delta≥5 上升确认——强势体现在"持续停留高位"而非
@@ -478,6 +482,21 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
     0 <= tierResonance*Min <= 1。不满足抛 ValueError（回测 trial 记 failed）。
     weak 必须严格小于 strong，防止 _synergy_tier 的 v==weak 分支被 v>=strong 吞掉而不可达。
     """
+    # list 形状守卫（2026-09-15 补扫总纲预检纪律 1 / P5-0）：此前对 list 长度零校验——
+    # 短 list 运行期 IndexError、长 list 静默截断、tierSynergyVoteStrengths 长度不符时
+    # _vote 静默回退旧硬编码 fallback（volume_price.py:405-406，trial 假绿）。fail-fast。
+    for _list_name, _expected_len in (
+        ("buyThresholds", 5),
+        ("sellThresholds", 5),
+        ("tierSynergyVoteStrengths", 6),
+        ("tierSynergyCsStrengths", 4),
+    ):
+        _list_value = getattr(config, _list_name, None)
+        if isinstance(_list_value, list) and len(_list_value) != _expected_len:
+            raise ValueError(
+                f"{_list_name} 长度必须为 {_expected_len}，实际 {len(_list_value)}"
+                "（短 list 运行期越界、长 list 静默截断、VoteStrengths 长度不符会静默回退旧硬编码）"
+            )
     for _field in (
         "tierSynergyResonanceVote",
         "tierSynergyRankVote",
