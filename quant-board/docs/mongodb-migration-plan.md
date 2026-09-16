@@ -30,7 +30,7 @@
 - `cleanup-mongodb-datasets` 已实现：默认 dry-run；`--apply` 只删除非保留 dataset、四个快照子集合、可通过 `datasetId/backtestRunId` 追踪的研究结果，不删除 `dragonboard_live`、`stock_names`、题材主数据或 `migration_audit`。
 - `backfill-empty-mongodb-snapshots` 已扩展为 MongoDB 正式快照修复入口：默认 dry-run；`--apply` 可同时处理空快照补齐、`snapshot_record` 缺失补造、frame 计数字段漂移、缺失 `15:00` close slot 补造，以及运行库缺失索引补回，并写 `migration_audit(opType=mongodb_snapshot_repair)`。补槽位优先同粒度最近 donor，必要时允许显式跨粒度 donor。
 - `hotlist_sentiment` 已作为 MongoDB 研究集合接入，唯一业务键为 `datasetId + snapshotType + tradingDate`；历史回填脚本 `scripts/backfill_hotlist_sentiment.py` 默认 dry-run，显式 `--apply` 才会写入。
-- MongoDB 模式下 `/api/operations/after-market-once` 和 CLI `after-market-once` 不再调用旧 archive/prune 链路，只执行 `hotlistSentiment` 日终步骤。
+- MongoDB 模式下 `/api/operations/after-market-once` 和 CLI `after-market-once` 不再调用旧 archive/prune 链路，执行 `hotlistSentiment` 日终步骤 + `mongodbBackup` 备份链（交易日 light / 周五 full -> verify -> prune -> 周五 push R2；2026-09-16 起备份并入盘后链，独立备份计划任务已删除）。
 - 后端采集器已补齐股票行排名事实字段和 frame `metadata.rankProvenance`。历史 `source=quantboard_backend_collector` 数据中可精确恢复的 `compRank=rank` 已回填 271 个槽位、58581 行，`migration_audit` 审计 ID 为 `rank-field-backfill-31b03a5b1f1a4707aadcb407f623914c`；缺少历史平台原始名次的 `platforms/avgRank/avgRankNum` 不做推测回填。
 - 2026-09-03 heatLevel 落库迁移已实施（`snapshot_sector_rows.heatLevel` 数值 tri-state、stock row `themeHeat` 相对分口径、研究集合 factor 文档 `heatLevel/heatFactorVersion`、SQL/Supabase varchar 转文本），统一消费走 `backend/analysis/theme/heat_level.py`。实施记录见 `docs/theme-rotation/2026-09-03-heatlevel-persistence-migration-implementation.md`。
 
@@ -524,6 +524,8 @@ RankTrend 查询必须携带非空 `codes`，使用单次 `$in` 聚合，并按 
 | `QUANT_BOARD_MONGODB_SERVER_SELECTION_TIMEOUT_MS` | server selection 超时 |
 | `QUANT_BOARD_MONGODB_BACKUP_DIR` | 本地 MongoDB 备份目录，默认 `quant-board/data/backups/mongodb` |
 | `QUANT_BOARD_MONGODB_BACKUP_RETENTION_DAYS` | 本地备份保留天数，只作用备份文件，不删除 MongoDB 主库明细 |
+| `QUANT_BOARD_MONGODB_REMOTE_BACKUP_KEEP` | R2 远端保留的全量备份份数（push 成功后清理更早备份），默认 4 |
+| `QUANT_BOARD_MONGODB_TOOLS_BIN` | MongoDB Database Tools（mongodump/mongorestore）bin 目录，默认 `D:\APP_SOFT\MongoDB\tools\bin` |
 | `QUANT_BOARD_MONGODB_OBJECT_BACKUP_ENABLED` | 是否把 MongoDB 备份上传到 Cloudflare R2/S3 兼容对象存储 |
 | `QUANT_BOARD_MONGODB_OBJECT_BACKUP_BUCKET` | MongoDB 备份使用的 R2 bucket |
 | `QUANT_BOARD_MONGODB_OBJECT_BACKUP_PREFIX` | MongoDB 备份对象存储前缀，建议 `quant-board/mongodb-backups/` |
@@ -558,13 +560,13 @@ Parquet/R2 相关变量可以保留为离线备份能力，但不得再作为 Ra
 | `verify-archive` / `restore-archive` | 只用于旧归档资产核验。若恢复到 MongoDB，必须走显式人工恢复脚本和迁移审计。 |
 | `prune-backup` / `BackupRetentionRunner` | Supabase 灾备清理废止。MongoDB 切换后不得继续清理 Supabase 并把结果视为正式备份状态。 |
 | `sync_outbox` | 不进入新运行主链。迁移后不再登记 SQLite/Supabase outbox。 |
-| Windows `after-market-once` 任务 | 停服前必须禁用旧任务；迁移后重建为 MongoDB 盘后任务，当前只执行 `hotlistSentiment` 日终落库，确认不调用旧 archive/prune 命令。 |
+| Windows `after-market-once` 任务 | 停服前必须禁用旧任务；迁移后重建为 MongoDB 盘后任务，执行 `hotlistSentiment` 日终落库 + `mongodbBackup` 备份链（2026-09-16 起），确认不调用旧 archive/prune 命令。 |
 
 已实现的 Mongo 模式行为：
 
 - `/api/sync/push-backup`、`/api/sync/pull-backup`、`/api/sync/push-outbox`、`/api/sync/auto-once`、`/api/sync/prune-backup`、`/api/sync/smoke-backup` 返回 410。
 - `/api/storage/archive/*` 旧 SQLite/Parquet 归档接口返回 410。
-- `/api/operations/after-market-once` 在 MongoDB 模式下执行 `hotlistSentiment` 步骤，从 `snapshot_frames/snapshot_stock_rows` 读取最新交易日最后一帧并 upsert `hotlist_sentiment`；旧 archive/prune 步骤不执行。
+- `/api/operations/after-market-once` 在 MongoDB 模式下执行 `hotlistSentiment` 步骤，从 `snapshot_frames/snapshot_stock_rows` 读取最新交易日最后一帧并 upsert `hotlist_sentiment`；随后执行 `mongodbBackup` 备份链（交易日 light / 周五 full -> verify -> prune -> 周五 push R2，任一步失败非零退出）；旧 archive/prune 步骤不执行。
 - `/api/migrations/snapshots/import-json` 返回 410；Mongo 全量切换后历史导入只允许走停服迁移脚本。
 - CLI 旧 SQLite/Supabase/Parquet 命令在 Mongo 模式下直接拒绝；业务回测、优化、查询命令通过 Mongo repository 运行。
 
@@ -598,13 +600,16 @@ quant-board/data/backups/mongodb/
 
 `manifest.json` 至少记录：
 
+- `schemaVersion`：`mongodb_backup.v2`（mongodump 引擎）或 `mongodb_backup.v1`（历史 JSONL 备份）
+- `engine`：v2 为 `mongodump`
 - `backupId`
 - `database`
 - `createdAt`
 - `gitCommit`
 - `sourceMongoUriRedacted`
-- `collections`：每个集合的文档数、索引摘要、文件 hash 和字节数
-- `strategy`：`full_dump`、`collection_dump` 或 `pre_migration_snapshot`
+- `docCounts`：v2 由 bson.gz 按 BSON 边界解析得出
+- `collections`：每个集合的文档数、文件相对路径、文件 hash 和字节数（v1 另含索引摘要 indexHash）
+- `strategy`：`full_dump` 或 `light_dump`
 - `objectKey`
 - `objectStore`：例如 `cloudflare_r2`
 - `bucket`
@@ -626,30 +631,37 @@ R2 中的 `archive_index.jsonl` 只作为备份索引，记录每次备份的 `b
 
 ### 备份命令合同
 
-新增 CLI：
+CLI：
 
 ```powershell
 cd quant-board
 .\.venv\Scripts\python.exe -m backend.cli backup-mongodb --full
+.\.venv\Scripts\python.exe -m backend.cli backup-mongodb --light
 .\.venv\Scripts\python.exe -m backend.cli verify-mongodb-backup --backup-id <backup_id>
 .\.venv\Scripts\python.exe -m backend.cli push-mongodb-backup --backup-id <backup_id>
 .\.venv\Scripts\python.exe -m backend.cli pull-mongodb-backup --backup-id <backup_id> --dry-run
+.\.venv\Scripts\python.exe -m backend.cli restore-mongodb-backup --backup-id <backup_id> [--target-db dragon_board_quant_restore_staging] [--drop]
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-restore-staging --backup-id <backup_id>
 .\.venv\Scripts\python.exe -m backend.cli list-mongodb-backups
 .\.venv\Scripts\python.exe -m backend.cli prune-mongodb-backups --dry-run
-.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets
-.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets --apply
-.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots
-.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots --apply
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-datasets [--apply]
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-dead-data --drop-dead-collections --cleanup-datasets --purge-result-chunks [--compact] [--apply]
+.\.venv\Scripts\python.exe -m backend.cli backfill-empty-mongodb-snapshots [--apply]
 ```
 
-行为要求：
+行为要求（2026-09-16 起 mongodump 引擎）：
 
-- `backup-mongodb --full` 使用 MongoDB 原生 dump 或等价驱动导出，导出所有业务集合和索引元数据。
-- 备份成功后必须计算 sha256、写 manifest，并执行一次本地 verify。
-- `push-mongodb-backup` 只上传已 `verified=true` 的备份到 Cloudflare R2。
+- 备份产物为 `mongodump --gzip` 原生布局：`dump/<db>/<collection>.bson.gz` + `.metadata.json`，mongorestore 可直接消费；`mongodump`/`mongorestore` 以绝对路径调用，目录由 `QUANT_BOARD_MONGODB_TOOLS_BIN`（默认 `D:\APP_SOFT\MongoDB\tools\bin`）配置，tools 缺失时结构化报错，不静默回退。
+- manifest `schemaVersion=mongodb_backup.v2`，`docCounts` 来自对 bson.gz 按 BSON 边界实际解析（metadata.json 不含 count）；verify 重算 sha256、字节数和文档数。
+- v1（pymongo JSONL，2026-05~09 历史）备份仍可由 `verify-mongodb-backup` 校验：verify 按 `schemaVersion` 分派，v1 走 JSONL 行数校验。
+- `backup-mongodb --full` 一次 mongodump 全库导出；`--light` 对快照四表（`snapshot_records/frames/stock_rows/sector_rows`）逐集合导出。
+- 备份成功后必须写 manifest + sha256sums，并执行一次本地 verify。
+- `push-mongodb-backup` 只上传已 `verified=true` 的备份到 Cloudflare R2；上传成功后自动执行远端保留清理：全量备份只保留最近 `QUANT_BOARD_MONGODB_REMOTE_BACKUP_KEEP`（默认 4）份，更早 backup_id 的全部对象被删除（只匹配标准 `YYYYMMDDTHHMMSSZ` backup_id，防误删其它前缀）。远端清理失败只结构化附报在 `remotePrune`，不影响 push 结论。
 - `pull-mongodb-backup` 只下载到本地 `restore-staging`，不得直接覆盖正式 MongoDB。
+- `restore-mongodb-backup` 封装 `mongorestore --gzip --nsFrom "<db>.*" --nsTo "<target>.*"`：positional 必须是 dump 根目录（含 `<db>/` 子目录；传 `<db>` 子目录本身会导致 mongorestore 跳过全部文件且返回 0）；只允许恢复到非正式库名，目标为 `dragon_board_quant` 本身时直接拒绝；恢复前要求备份已 verify。
 - 自动备份默认只在盘后任务中运行，不在交易时间抢占资源。
-- `prune-mongodb-backups` 只删除超过 `QUANT_BOARD_MONGODB_BACKUP_RETENTION_DAYS` 的本地备份目录，不删除 MongoDB 主库数据，也不删除 R2 对象。
+- `prune-mongodb-backups` 只删除超过 `QUANT_BOARD_MONGODB_BACKUP_RETENTION_DAYS` 的本地备份目录，不删除 MongoDB 主库数据；R2 远端保留由 push 后的远端清理负责（保留最近 4 份）。
+- `cleanup-mongodb-dead-data` 是一次性死数据清理入口（默认 dry-run）：drop 全仓库零引用的死集合、清理数据集残留（SQLite 导入测试数据集、空壳元数据、five_minute 单日残留）、删旧研究 run 的 `backtest_result_chunks`（run 元数据保留，读取路径返回 `resultPurged` 结构化标记）。apply 时逐集合先 mongodump 到 `data/backups/mongodb/pre-cleanup-<ts>/`，结果写 `migration_audit`（opType=`mongodb_dead_data_cleanup`）。可选 `--compact` 在删除后对涉及集合执行 compact 回收磁盘（drop 集合由文件释放无需 compact；单独 `--compact` 无删除步骤时对历史大删除热点集合执行）。MongoDB 无原生 auto compact：日常增删的空闲页由 WiredTiger 自动复用，只有大删除后才需要 compact。
 
 ### Cloudflare R2 复用边界
 
@@ -672,17 +684,19 @@ R2 凭据只能由 QuantBoard 后端读取，禁止进入 `VITE_*`、Dragon Boar
 
 ### 盘后调度
 
-迁移后的盘后任务建议替换为：
+2026-09-16 起盘后链统一收敛到 `QuantBoard After Market` 计划任务（每日 15:30，`scripts/register_after_market_task.ps1` 可重建；旧的 `QuantBoard-LightBackup` / `QuantBoard-FullBackup` 独立任务已删除）。MongoDB 模式下 `after-market-once` 执行：
 
 ```text
-mongodb-health-check
-  -> backup-mongodb --full
-  -> verify-mongodb-backup
-  -> push-mongodb-backup to Cloudflare R2
-  -> prune-local-mongodb-backups
+hotlistSentiment（日终热榜情绪落库）
+  -> mongodbBackup（交易日 light / 周五 full）
+     -> verify -> prune 本地 ->（周五）push Cloudflare R2
 ```
 
-禁止在新盘后任务中调用旧 `archive-auto-once`、`prune-backup` 或任何会删除主库快照明细的命令。
+- 备份链独立于 hotlistSentiment：hotlist 失败也继续备份；任一步失败结构化记录 `failedStep` 并使 CLI 以非零码退出（任务计划历史可见）。
+- 非交易日与 dry-run 时备份步骤跳过（`reason=non_trading_day` / `dry_run`）。
+- 注册脚本带 `StartWhenAvailable`、不限制电池条件，错过窗口后尽快补跑。
+
+禁止在盘后任务中调用旧 `archive-auto-once`、`prune-backup` 或任何会删除主库快照明细的命令。
 
 ### 恢复策略
 
@@ -692,7 +706,7 @@ mongodb-health-check
 2. 选择一个 `verified=true` 的备份。
 3. 如果本地没有该备份，先从 Cloudflare R2 执行 `pull-mongodb-backup --dry-run` 校验远端对象列表，再下载到 `restore-staging`。
 4. 校验下载后的 sha256 和 manifest。
-5. 将备份恢复到临时库，例如 `dragon_board_quant_restore_staging`。
+5. 将备份恢复到临时库：`restore-mongodb-backup --backup-id <id> --target-db dragon_board_quant_restore_staging --drop`（拒绝把正式库名作为目标； mongorestore 语义见"备份命令合同"）。
 6. 对临时库运行 `verify-mongodb-migration` 同级校验：
    - 集合文档数。
    - 关键 unique index。

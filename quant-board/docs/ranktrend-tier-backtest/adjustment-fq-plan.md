@@ -77,9 +77,9 @@
 
 - **结构性算法改动**：前复权会改变除权股历史价格 → 改变 `change/volumeRatio/amount` →
   量价分 → synergy 档位 → **影响 golden**；
-- **必须走 `four-dim-algorithm-research` skill 纪律**：
+- **必须走 `ranktrend-signal-research` skill 纪律**（2026-09-16 合并原 four-dim-algorithm-research）：
   - 8 月冻结（`assert_not_frozen`），参数/因子决策禁用 8 月；
-  - rolling walk-forward（train/val/test），7 月股灾样本外排除；
+  - 固定三窗样本外复核（decision/oos1/oos2，8 月 FINAL 08-01~08-14 冻结），7 月股灾样本外排除；
   - golden 不漂移：新增复权参数默认=原不复权行为（可控开关），复权未启用前 golden 不变；
   - 结论不写回默认值，除非用户决策；
 - **数据质量**：部分历史帧缺 `amount`（早期 29% 覆盖），前复权对 `amount` 的归一需 fail-visible；

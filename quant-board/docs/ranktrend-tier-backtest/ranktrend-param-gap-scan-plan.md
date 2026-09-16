@@ -8,7 +8,8 @@
 > 来源：2026-09-15 对照
 > `ranktrend-longterm-backtest-plan.md` 阶段 1-25 与 `backend/analysis/ranktrend/engine/config.py`
 > 全量字段的缺口盘点（用户采纳）。六案各自独立立项、独立 harness、独立判定，
-> 全程遵守 `skills/ranktrend-tier-longterm-test/SKILL.md` 8 步流程 + Track 2 判定卡 + Track 1 交易复核双纪律。
+> 全程遵守 `skills/ranktrend-signal-research/SKILL.md` 统一流程（2026-09-16 合并原
+> ranktrend-tier-longterm-test）+ Track 2 判定卡 + Track 1 交易复核双纪律。
 > 各案完成后按 skill 步骤 6 固化为长测计划阶段 26+，并同步 L1 台账。
 >
 > **v2（2026-09-15 对抗性审计修订）**：经三路只读核查（代码断言 / 长测计划交叉引用 /
@@ -313,7 +314,7 @@ sellThresholds 为 tanh 尺度参数（连续幅度面），预期**剂量曲线
 
 ---
 
-## 方案 P6：ATR + Jump 确认（因子级验证，four-dim-algorithm-research 口径）
+## 方案 P6：ATR + Jump 确认（因子级验证，ranktrend-signal-research Track B 口径）
 
 **性质声明**：不是调参案——ATR 是"观察因子信息量从未验证"（阶段 10 crossSection
 同款流程：先区分度、后谈参数）；Jump 确认是"设计值从未复验"（D-a 推翻
@@ -321,7 +322,7 @@ sellThresholds 为 tanh 尺度参数（连续幅度面），预期**剂量曲线
 交易复核（不进投票、无落默认候选时），判定按观察因子标准。
 
 **P6-a ATR 区分度验证（只读）**：
-1. **数据可用性先行**（skill 教训 6，SKILL.md L122）：`atrAggregateByDay=False`
+1. **数据可用性先行**（skill 前置纪律：先确认数据可用性再下结论）：`atrAggregateByDay=False`
    逐帧口径下 high/low 覆盖率重测——曾因 high/low 缺失 28% 使 ATR 全 unknown；
    unknown >50% → 判"数据不足"收口，不调参；
 2. 区分度验证：`research/tier_monotonicity.py` DIMENSION_PATHS 已含 atr（:29）——
@@ -330,7 +331,7 @@ sellThresholds 为 tanh 尺度参数（连续幅度面），预期**剂量曲线
 **P6-b ATR 参数扫描（仅当 P6-a 有区分度）**：单变量 5 档——`atrChannelK
 1.5/1.75/**2.0**/2.25/2.5`、`atrDeepDeviation 2.0/2.5/**3.0**/3.5/4.0`、
 `atrRefPeriod 10/15/**20**/25/30`；判定按观察因子标准（不进投票，vote 维度不新增），
-若区分度显著再按 four-dim-algorithm-research 走"是否进投票"的数据驱动决策。
+若区分度显著再按 ranktrend-signal-research Track B 走"是否进投票"的数据驱动决策。
 
 **P6-c Jump 确认阈值**：两单轴各 5 档（`jumpConfirmChangeMin 1/2/**3**/4/5` ×
 `jumpConfirmVolumeRatioMin 0.6/0.8/**1.0**/1.25/1.5`；4+4+1 = **9 trial × 3 窗**，

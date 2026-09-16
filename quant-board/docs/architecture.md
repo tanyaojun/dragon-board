@@ -188,7 +188,7 @@ ProxyQuoteProvider — 当前默认 quote 数据源（过渡方案）：
 当前数据库模式是 MongoDB 运行主库，R2/S3 保存 MongoDB dump/manifest 异地备份：
 
 ```text
-QuantBoard API/CLI -> MongoDB primary -> MongoDB full backup -> R2/S3 object backup
+QuantBoard API/CLI -> MongoDB primary -> MongoDB mongodump backup -> R2/S3 object backup
 Dragon Board theme mapping -> QuantBoard API -> MongoDB theme collections
 SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints in Mongo mode
 ```
@@ -197,7 +197,7 @@ SQLite/Supabase/Parquet legacy paths -> migration source or disabled endpoints i
 
 - MongoDB 是正式快照、研究结果、题材基础映射和股票基础库的运行事实源。
 - Dragon Board 前端仍只能通过 QuantBoard 后端 API 访问正式数据，不直连 MongoDB。
-- `POST /api/snapshots/ingest` 与后台采集进程 `snapshot_collector`（8001 直写 MongoDB）是正式快照进入 MongoDB 的**两条写入路径**，二者共用同一数据层方法 `save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）：2026-07 起日常生产写入由 collector 承担，ingest 保留给手工/离线导入与前端诊断（前端 `snapshot.sweep` 默认关闭）。**写入后的后处理（快照缓存失效、analyze 产物落库）统一由数据层 after-save 钩子触发**（`backend/data/repositories/snapshot_post_save.py` + `backend/services/snapshot_post_save_hooks.py`），不得在各路径各写一份。
+- `POST /api/snapshots/ingest` 与后台采集进程 `snapshot_collector`（8001 直写 MongoDB）是正式快照进入 MongoDB 的**两条写入路径**，二者共用同一数据层方法 `save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）：2026-07 起日常生产写入由 collector 承担，ingest 保留给手工/离线导入与前端诊断（前端 `snapshot.sweep` 默认关闭）。**写入后的快照缓存失效由数据层 after-save 钩子统一触发**（`backend/data/repositories/snapshot_post_save.py` + `backend/services/snapshot_post_save_hooks.py`），不得在各路径各写一份。**analyze 产物落库（`snapshot_analysis`）是写路径自身的同步步骤**（2026-09-15 重构）：采集主链在 `snapshot_collector/service.py` `_run_post_persist_chain` 内按 落帧 → analyze → 槽位情绪（displayStatus join）→ 当日 EOD 顺序同步执行（线程池，不阻塞事件循环）；ingest 路由由 BackgroundTasks 同步执行。此前的"数据层钩子 + 后台 worker 异步提交"路径（2026-09-10）在落帧与 analyze 之间留时序空窗，已退役删除——任何把 analyze 重新挪出写路径的改动都会复现 displayStatus join 恒 miss 的回归。
 - `GET /api/snapshots/frames`、`GET /api/snapshots/records`、`GET /api/snapshots/stock-rows`、`GET /api/snapshots/sector-rows` 和 `GET /api/snapshots/counts` 从 MongoDB 读取，响应字段保持既有 camelCase API 合同。
 - `GET /api/ranktrend/rank-series?rank_basis=attention` 必须携带非空 `codes`，且仅允许 MongoDB 主库；非 MongoDB 环境返回 `503`。读取时在限窗前过滤无效 `avgRankNum`，再按每帧有效 `avgRankNum ASC, code ASC` 重建关注度排名，不改写快照事实字段，也不回退到 `rank` 或 `compRank`。
 - `POST /api/ranktrend/analyze` 帧级输出 `themeContext` 与 `themeMomentumContext`、每股输出 `analysis.themeMomentum`（只读投影，第4轨数据源）：题材动量 v2 由 `backend/analysis/theme/momentum.py` + `daily_series.py` 纯函数基于已落库 `snapshot_sector_rows`（`entityType=hot_theme`）按交易日聚合成日线序列计算（RPS 5/10/20 / 距年内高点 / 多窗口动量 / 整体性 / 资金量能 / 拥挤惩罚）；`resonance` 回归纯个股六因子，不再含 `theme` 子对象（D2 解耦，2026-08-06）。`projection="ranktrend"` 读口同时携带 `hotThemes` 与股票 `themes/mainTheme/themeRole/themeContribution/leadStatus`。题材动量独立为 `GET /api/theme-momentum/summary`，不新增 MongoDB 集合。
@@ -380,6 +380,14 @@ MongoDB 模式下保存在 `backtest_quality_reports` 集合，保存样本覆�
 ### hotlist_sentiment
 
 MongoDB 模式下保存在 `hotlist_sentiment` 集合，保存热榜情绪研究输入。唯一业务键是 `datasetId + snapshotType + tradingDate + slotTime`（2026-09-06 起四键；文档 `_id` 为 `{dataset}:{type}:{date}` + EOD 无后缀/槽位 `:{slot}` 后缀），默认 `snapshotType=half_hour`。槽位文档 `slotTime` 为 "HH:MM"，日终终值为 `slotTime="EOD"` 哨兵行。字段包括 `stage`、`riskLevel`、`confidence`、`metrics`、`turnover`、`signals` 和 `warnings`。历史回填（`backfill(mode="slots")`）、collector 每槽挂载和日终调度都必须复用同一字段合同，不得用临时简化口径生成参与回测的 `stage/riskLevel`。
+
+2026-09-15 修复口径：所有 EOD 写口（盘后 `after-market-once`、历史回填 `run_for_date`/`run_for_date_slots`、读口 lazy compute `_compute_and_persist`）统一执行 golden displayStatus join（`snapshot_analysis` → 行级 `displayStatusStage` 等标记）并注入 `frame.limitSummary` 全市场证据——此前盘后任务用无 join 的旧口径每日覆盖 EOD 文档，导致 `statusSourceCounts=displayStatus 0`、面板「全池状态结构」六格全 0。EOD 市场证据取帧口径：最新帧 `limitSummary` 无有效内容时回退当日最近有效槽位（收盘后涨停/炸板池数据不再变化），回退来源写入 `warnings`（fail-visible）；displayStatus join 仍锚定最新帧。修复工具：`python -m backend.cli hotlist-sentiment-recompute --trading-date <date> --apply`（自动备份旧文档到 `hotlist_sentiment_recompute_backup`）。
+
+2026-09-15 盘中重构（同日，根因级）：采集主链 `_run_post_persist_chain` 每槽同步执行 analyze → 槽位情绪 → 当日 EOD 刷新（见写入路径一节）——槽位文档与 EOD 随每帧落库即为 golden 口径，不再依赖读口 lazy compute 补算。读口 `ensure_series` 对最新交易日保留兜底刷新：EOD 锚定帧落后于最新帧且最新帧 analyze 已就绪时重算（防采集链异常导致盘中显示滞留旧帧）；analyze 未就绪时保留旧文档不降级。
+2026-09-16 P2 增补：`jump.events[].direction` 合同为 `'surge' | 'collapse' | 'hold'` 三值——`'hold'` 是 `_confirm_jump`（2026-08-19 P0-1）对未获价格/量能确认的跳动的同步降级态（events 与外层 direction 口径一致），**不是**枚举缺失；消费方遇到 `'hold'` 必须按未知方向中性渲染，不得猜测涨跌正负号。RankTrendPanel「最近排名跳动」小节消费 `jump.events` 明细，风险条透出 `risk.overheat/divergence` 两轴（score+signal）。
+2026-09-16 P3 增补：观察详情弹层（`RankTrendObservationPanel`）新增「因子全景」track（`ObservationTrack` 扩型 `'factors'`，窗口 1 帧），消费 `observation` 深层子字段（priceMomentum / atrMeanReversion / amountRatio / priceRankDivergence，单轴缺数据显示「缺数据」行，不隐藏轴的存在）与 `meta.marketPercentiles`（市场 P50/P70/P85 参考表，缺失整块隐藏）。打开面板时若 DataLayer 该股尚无完整 analyze 产物，先补一次单股 remote analyze（与 RankTrendPanel 同路径），失败不阻断面板加载。
+
+2026-09-16 增补：`hotlist_sentiment` 文档 `metrics.transitionCounts` 承载阶段迁移分布——displayStatus join 同步注入 `cycle.transition`（行级 `cycleTransition`），纯函数 `build_transition_counts` 只统计 golden join 行并按次数降序；fallback 行不计入，避免旧口径混入迁移分布。前端 Dragon Breath「日内情绪轨迹」消费（迁移预警条），RankTrendPanel 经 `loadSnapshotAnalysis`（`snapshot_analysis` 历史回放，2026-09-16 首次接入前端）消费「昨日同时点对比」。
 
 ### trade_journal
 

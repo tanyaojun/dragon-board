@@ -962,17 +962,15 @@ Dragon Board 正式快照写入入口。前端提交 v4 snapshot bundle，当前
 
 同一 `idempotencyKey` 重放时返回 `deduped=true`，不会重复写入事实行。MongoDB 模式不再登记 Supabase outbox，也不通过 `push-backup` 补偿。
 
-快照写入成功后的**后处理统一由数据层钩子触发**（2026-09-10 重构，见 `backend/data/repositories/snapshot_post_save.py` 与 `backend/services/snapshot_post_save_hooks.py`）：`save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）在返回前调用注册的钩子，默认钩子为 **① 快照缓存失效**、**② analyze 产物落库**（`observation/displayStatus/meta/resonance/cycle` 写入 `snapshot_analysis`，供 `GET /api/snapshots/analysis` 读取）。钩子异常只记 warning，绝不影响写库结果，也不改写库返回值。
+快照写入成功后的**缓存失效统一由数据层钩子触发**（2026-09-10 重构，见 `backend/data/repositories/snapshot_post_save.py` 与 `backend/services/snapshot_post_save_hooks.py`）：`save_snapshot_ingest`（MongoDB 与 SQLite 两个实现）在返回前调用注册的钩子，默认钩子只剩**快照缓存失效**。钩子异常只记 warning，绝不影响写库结果，也不改写库返回值。
 
-**为什么改成数据层触发**：该写库方法有两条调用路径（本 ingest 路由 与 `snapshot_collector` 直写库），after-save 后处理原先**各写一份、从未对齐** —— 2026-07-28 审计已发现"缓存失效只在 ingest 侧"（`docs/ranktrend/2026-07-28-resonance-chain-audit-findings.md:151`），当时打的是单点补丁；2026-08-23 新增 analyze 持久化时又踩同一个坑（只挂本路由 → `snapshot_analysis` 空了一个多月，2026-09-10 才发现，热榜情绪面板 `displayStatus` join 恒为 0、8 类分布 100% 走 fallback 旧口径）。下移到数据层后，**任何写库路径都自动获得同样的后处理**，不可能再"只加在一边"。
+**analyze 产物落库（`snapshot_analysis`）是写路径自身的同步步骤**（2026-09-15 重构）：
 
-**analyze 落库的细节**：
-
-- 由 `backend/snapshot_collector/analysis_worker.py` 的**进程内单工作线程 + 有界队列**（`QUEUE_MAXSIZE=8`）执行：提交只入队（O(1)），单帧约 18~30s CPU 在后台跑，不阻塞写库/采集，也不阻塞 8001 事件循环（行情/热榜刷新同进程）；
-- **失败不阻断**：异常只记 `logging.warning` 并计入 `analysis_worker.stats()`（`/api/health` 的 `snapshotCollector.background.analysisWorker` 可见：`submitted/written/failed/dropped`）；`deduped` 帧跳过（补历史用 CLI `snapshot-analysis-backfill`）；
-- **不是独立进程/计划任务**（`AGENTS.md` §11 要求集成到主进程生命周期）；8001 退出时由 `collector_main.lifespan` 调 `analysis_worker.shutdown()` 优雅排空（线程为 daemon）；
-- **开关**：环境变量 `QUANT_BOARD_SNAPSHOT_ANALYSIS_ENABLED`，默认 `1`（开启）；置 `0` 关闭；
-- `current_frame` 直接用该 bundle 的 `stockRows` 组装（含 `stocks`，`ranktrend_routes` 依赖 `current_frame["stocks"]`），无需回查库。
+- **采集主链**（`snapshot_collector/service.py` `_run_post_persist_chain`，经 `asyncio.to_thread` 在线程池执行）：落帧 → analyze 落库 → 槽位情绪（displayStatus join）→ 当日 EOD 刷新，顺序同步执行；每步失败只记 warning 进 run doc（fail-visible），不阻断采集；
+- **本 ingest 路由**（手工/诊断导入）：响应后由 FastAPI `BackgroundTasks` 同步执行逐帧 analyze（`_analyze_ingested_snapshots`），失败只记日志；
+- **为什么不再用"数据层钩子 + 后台 worker"**：2026-09-10 曾把 analyze 下移到数据层钩子并交给进程内单线程 worker（`analysis_worker.py`，已退役删除）异步执行——该路径在"落帧完成"与"analyze 落库"之间留 30s~2min 时序空窗，热榜情绪的 displayStatus join 恒 miss（槽位文档长期 100% fallback），盘中 EOD 首算落在空窗内则全天固化 fallback 口径（2026-09-08~09-15 生产实测）。同步链让顺序本身保证正确性；
+- **开关**：环境变量 `QUANT_BOARD_SNAPSHOT_ANALYSIS_ENABLED`，默认 `1`（开启）；置 `0` 关闭（情绪计算照常，join miss → fallback 带 warning，fail-visible）；`/api/health` 的 `snapshotCollector.snapshotAnalysis` 可见开关与模式；
+- `deduped` 帧跳过（补历史用 CLI `snapshot-analysis-backfill`）；`current_frame` 直接用该 bundle 的 `stockRows` 组装（含 `stocks`，`ranktrend_routes` 依赖 `current_frame["stocks"]`），无需回查库。
 
 正式快照入库要求每个非 `five_minute` frame 至少有一条股票行。若 v4 bundle 中的 `items/records` 热榜为空，或显式 `stockRows` 缺失导致正式 frame 无股票行，接口返回 400，错误信息包含 `formal snapshot hotlist is empty`。历史导入数据中已经存在的空热榜快照仍由回测质量门禁和运行时过滤处理，不通过该正式写入口继续新增。
 
@@ -2756,6 +2754,24 @@ series 读口相同（任何快照写入立即失效）。
 `强资确认 5`（cooling 中强资金+量能承接）、`高位拥挤 3` + `样本不足 6`（= `crowded 9`）、
 `点火观察 1`（= `ignition 1`）。
 
+### `GET /api/hotlist-sentiment/slots`
+
+当日槽位情绪文档序列读口（2026-09-15 新增，Dragon Breath「日内情绪轨迹」消费）。与 `series`
+（EOD 日终值，回答"近几日怎么变"）互补，本读口返回当日 9:30→15:00 逐槽文档升序（回答
+"今天情绪怎么走到现在"）。槽位文档由采集主链同步后处理链逐槽写入（见"快照写入"一节：
+analyze → 槽位情绪 → EOD）。
+
+- 参数：`dataset_id`（默认 `dragonboard_live`）、`snapshot_type`（默认 `half_hour`）、
+  `trading_date`（缺省回落最新交易日）；
+- 响应：`{ok, datasetId, snapshotType, tradingDate, items[]}`，`items` 为当日槽位文档
+  （`slotTime` 升序，剔除 EOD 哨兵行），字段与 series 文档一致；`metrics.transitionCounts`
+  （2026-09-16 新增）为阶段迁移计数——join 层注入 `cycleTransition` 后按 golden 行聚合，
+  键为 `cycle.transition` 原始串（`"a->b"` 迁移 / 单段 `"a"` 延续），按次数降序，供
+  Dragon Breath「日内情绪轨迹」迁移预警条消费；
+- 无帧时 `{ok:false, degraded:true, reason:"no_snapshot_trading_date"}`（fail-visible）；
+- 缓存与 series 同口径：Redis TTL（key 后缀 `:hotlist:sentiment:slots:...`）+ dataset 索引
+  依赖失效，只缓存 `ok=true` 响应。
+
 ### `snapshot-collector-audit`
 
 审计覆盖率并输出结构化 JSON。
@@ -2963,46 +2979,58 @@ series 读口相同（任何快照写入立即失效）。
 
 #### MongoDB 备份
 
-**手动备份：**
+2026-09-16 起备份引擎为 `mongodump --gzip`（manifest `schemaVersion=mongodb_backup.v2`），产物 mongorestore 可直接恢复；历史 v1（JSONL）备份仍可校验。mongodump/mongorestore 路径由 `QUANT_BOARD_MONGODB_TOOLS_BIN` 配置（默认 `D:\APP_SOFT\MongoDB\tools\bin`）。
+
+**手动备份与恢复：**
 
 ```powershell
-# 轻量备份（仅 snapshot/backtest/trade 集合，~1.2GB，约30秒）
+# 轻量备份（仅快照四表）
 .\.venv\Scripts\python.exe -m backend.cli backup-mongodb --light
 
-# 全量备份（所有集合，~1.7GB，约60秒）
+# 全量备份（一次 mongodump 全库）
 .\.venv\Scripts\python.exe -m backend.cli backup-mongodb --full
 
 # 查看备份列表
 .\.venv\Scripts\python.exe -m backend.cli list-mongodb-backups
 
 # 校验备份
-.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-backup --backup-id 20260619T063348Z
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-backup --backup-id 20260916T140348Z
+
+# 恢复到 staging 库（拒绝恢复到正式库名；备份需已 verify）
+.\.venv\Scripts\python.exe -m backend.cli restore-mongodb-backup --backup-id 20260916T140348Z --drop
+
+# 校验 restore-staging 拉回的备份
+.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-restore-staging --backup-id 20260916T140348Z
 
 # 清理过期备份（默认保留30天）
 .\.venv\Scripts\python.exe -m backend.cli prune-mongodb-backups --dry-run
 .\.venv\Scripts\python.exe -m backend.cli prune-mongodb-backups
 ```
 
-**自动备份（Windows 计划任务）：**
+**盘后自动备份（并入 after-market-once）：**
 
-| 任务名 | 频率 | 时间 | 类型 |
+| 任务名 | 频率 | 时间 | 内容 |
 |--------|------|------|------|
-| `QuantBoard-LightBackup` | 周一至周五 | 15:30 | 轻量（13个集合） |
-| `QuantBoard-FullBackup` | 周五 | 16:00 | 全量（25个集合）+ 上传 R2 |
+| `QuantBoard After Market` | 周一至周五 | 15:30 | hotlistSentiment + mongodbBackup（交易日 light / 周五 full + verify + prune，周五 push R2；push 后远端自动保留最近 4 份全量，`QUANT_BOARD_MONGODB_REMOTE_BACKUP_KEEP` 可调） |
 
-脚本 `scripts/scheduled_backup.py` 内置交易日历判断，非交易日自动跳过。周五全量备份执行后自动上传到 R2 云存储并清理本地过期备份。
+2026-09-16 起旧的 `QuantBoard-LightBackup`、`QuantBoard-FullBackup` 独立任务已删除，备份并入 `QuantBoard After Market` 盘后链；任务由 `scripts/register_after_market_task.ps1` 注册（幂等，可重建），带 `StartWhenAvailable` 可靠性设置。任务失败以非零码退出，任务计划历史可见。非交易日备份自动跳过。
 
 ```powershell
-# 手动运行（自动判断类型）
-.venv\Scripts\python.exe scripts\scheduled_backup.py
+# 注册/重建计划任务（需要管理员权限运行一次）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register_after_market_task.ps1
 
-# 强制指定类型
-.venv\Scripts\python.exe scripts\scheduled_backup.py --light
-.venv\Scripts\python.exe scripts\scheduled_backup.py --full
-
-# 查看备份日志
-type data\backups\mongodb\scheduled_backup.log
+# 手动执行盘后链
+.venv\Scripts\python.exe -m backend.cli after-market-once
 ```
+
+**一次性死数据清理（默认 dry-run）：**
+
+```powershell
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-dead-data --drop-dead-collections --cleanup-datasets --purge-result-chunks                        # 预览
+.\.venv\Scripts\python.exe -m backend.cli cleanup-mongodb-dead-data --drop-dead-collections --cleanup-datasets --purge-result-chunks --compact --apply      # 执行（删除后 compact 回收磁盘）
+```
+
+三个子步骤独立开关：drop 全仓库零引用死集合（逐集合先 mongodump）、清理数据集残留（非保留 dataset + five_minute 残留）、删旧研究 run 的 `backtest_result_chunks`（run 元数据保留，读取返回 `resultPurged` 标记）。`--compact` 在删除后对涉及集合执行 compact 回收磁盘（drop 集合由文件释放无需 compact；单独 `--compact` 无删除步骤时对历史大删除热点集合执行）。apply 时产物备份到 `data/backups/mongodb/pre-cleanup-<ts>/` 并写 `migration_audit(opType=mongodb_dead_data_cleanup)`。2026-09-16 已执行一轮：7 个死集合 drop、`ds_ffa379a00efe47d0` 与 `dragonboard_backend_shadow` 清理、five_minute 50 条 records 删除、18 个旧 run 共 281 条 chunks 删除；compact 后库 storage 从 8.45GB 降至 1.71GB。
 
 ### 存储收敛 CLI
 
