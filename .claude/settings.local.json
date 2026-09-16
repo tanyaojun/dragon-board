@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python _fix_main.py)"
+      "Bash(python _fix_main.py)",
+      "Bash(pnpm exec *)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm vitest *)",
+      "Bash(sleep 90; ls -la /d/mongodb-backups/dragon_board_quant_20260911_204946/*.bson.gz 2>/dev/null | tail -6; tail -4 \"C:\\\\Users\\\\Think\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--dragon-board\\\\fbdf4e95-ced8-4825-ab78-e938f98af2f9\\\\tasks\\\\b20j8a84q.output\")",
+      "Read(//d/mongodb-backups/dragon_board_quant_20260911_204946/**)",
+      "Bash(./.venv/Scripts/python.exe -m backend.operations.mongodb_full_backup --help)",
+      "Bash(./.venv/Scripts/python.exe -m pytest tests/test_snapshot_collector_slots.py tests/test_snapshot_collector_api.py tests/test_snapshot_collector_catchup.py tests/test_snapshot_collector_scheduler.py tests/test_mongodb_migration.py -q)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Think\\AppData\\Local\\Temp"
     ]
   }
 }
