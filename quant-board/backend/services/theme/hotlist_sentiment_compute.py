@@ -93,6 +93,10 @@ def _join_display_status(db: Any, dataset_id: str, snapshot_id: str, rows: list[
             row["displayStatusLabel"] = label
             stage = entry.get("stage") if isinstance(entry, dict) else None
             row["displayStatusStage"] = stage if isinstance(stage, str) and stage else None
+            # 阶段迁移透传（2026-09-16）：cycle.transition 原样注入，供 transitionCounts 聚合
+            cycle = analysis.get("cycle") if isinstance(analysis, dict) else None
+            transition = cycle.get("transition") if isinstance(cycle, dict) else None
+            row["cycleTransition"] = transition if isinstance(transition, str) and transition.strip() else None
             flags = derive_row_flags(analysis, row)
             row["displayStatusStrongMoney"] = bool(flags.get("strongMoney"))
             row["displayStatusRisk"] = bool(flags.get("risk"))
@@ -189,8 +193,10 @@ class HotListSentimentComputeService:
         for trading_date in window:
             # EOD 终值读口统一走 service 读原语（按 _id 精确命中，避免查询形状漂移）
             doc = HotListSentimentService(self._db).get_eod_document(dataset_id, snapshot_type, trading_date)
-            if doc is None and trading_date == latest:
-                # lazy compute：仅最新交易日，幂等 upsert（取数→join→纯函数→upsert 一体）
+            if trading_date == latest and self._should_refresh_latest_eod(
+                doc, dataset_id=dataset_id, snapshot_type=snapshot_type, trading_date=trading_date
+            ):
+                # lazy compute / 盘中陈旧刷新：仅最新交易日，幂等 upsert（取数→join→纯函数→upsert 一体）
                 computed = self._compute_and_persist(dataset_id, snapshot_type, trading_date)
                 if computed is None or computed.get("missing"):
                     items.append(computed or {"tradingDate": trading_date, "missing": True, "reason": "unknown"})
@@ -203,6 +209,37 @@ class HotListSentimentComputeService:
             items.append({key: value for key, value in doc.items() if key != "_id"})
         return {"ok": True, "items": items}
 
+    def _should_refresh_latest_eod(
+        self,
+        doc: dict[str, Any] | None,
+        *,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str,
+    ) -> bool:
+        """最新交易日 EOD 是否需要（重）算：无库行、或锚定帧落后且最新帧 analysis 已就绪。
+
+        2026-09-15 盘中修复：lazy compute 原先"存在即跳过"，若首次触发落在
+        "帧已落、analyze 产物未就绪"窗口（worker 异步 30s~2min），写入的 fallback
+        EOD 全天固化。现在锚定帧落后于最新帧时刷新，但仅在最新帧已有 analyze 产物时
+        （避免把旧的好口径降级重算成新帧的 fallback）；analysis 未就绪则保留旧文档。
+        fail-visible：全日无 analyze 产物时按原 lazy compute 语义兜底（无库行才写）。
+        """
+        if doc is None:
+            return True
+        frame = self._backfill.latest_frame(dataset_id, snapshot_type, trading_date)
+        if not frame:
+            return False
+        latest_snapshot_id = str(frame.get("snapshotId") or "")
+        if not latest_snapshot_id or str(doc.get("snapshotId") or "") == latest_snapshot_id:
+            return False  # 已锚定最新帧，不重算（防写放大）
+        return (
+            self._db["snapshot_analysis"].find_one(
+                {"datasetId": dataset_id, "snapshotId": latest_snapshot_id}
+            )
+            is not None
+        )
+
     def _compute_and_persist(
         self,
         dataset_id: str,
@@ -214,7 +251,9 @@ class HotListSentimentComputeService:
         # 取数 → join displayStatus → 纯函数（含 limitSummary 市场证据）→ upsert（persist=False 只算不写）。
         # 与 backfill.run_for_date 的差异仅两点：displayStatus join + limitSummary 市场证据注入。
         # market_data 缺失时 fail-visible：missingEvidence 由纯函数标注，不阻断入库。
-        frame = self._backfill.latest_frame(dataset_id, snapshot_type, trading_date)
+        frame, evidence_frame, evidence_slot = self._backfill.latest_frame_with_market_evidence(
+            dataset_id, snapshot_type, trading_date
+        )
         if not frame:
             return {"tradingDate": trading_date, "missing": True, "reason": "no_snapshot_frame"}
         stocks = self._backfill.stocks_for_frame(dataset_id, str(frame.get("snapshotId") or ""))
@@ -236,13 +275,18 @@ class HotListSentimentComputeService:
             stocks=stocks,
             yesterday_stocks=previous.get("yesterday") or [],
             day_before_stocks=previous.get("day_before") or [],
-            market_data=_build_market_data_like(frame.get("limitSummary")),
+            market_data=_build_market_data_like(evidence_frame.get("limitSummary")) if evidence_frame else None,
             yesterday_trading_date=prior_dates[-1] if prior_dates else None,
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
         )
         join_note = _join_warning(join_stats)
         if join_note:
             doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
+        if evidence_slot:
+            # 与 run_for_date 同口径：市场证据回退来源随文档落库（fail-visible，不静默近似）
+            doc.setdefault("warnings", []).append(
+                f"最新帧 limitSummary 缺失，全市场证据回退自 {evidence_slot} 槽位"
+            )
         if persist:
             HotListSentimentService(self._backfill._db).upsert(doc)
             # 写口（lazy compute / recompute / 批量重算）统一失效读口缓存
@@ -313,7 +357,7 @@ def compute_and_upsert_for_slot(
         if not stocks:
             return {"written": False, "reason": "empty_stock_rows"}
         previous = backfill.previous_day_stocks(dataset_id, snapshot_type, trading_date)
-        _join_display_status(backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
+        join_stats = _join_display_status(backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -325,6 +369,9 @@ def compute_and_upsert_for_slot(
             market_data=_build_market_data_like(frame.get("limitSummary")),
             slot_time=slot_time,
         )
+        join_note = _join_warning(join_stats)
+        if join_note:
+            doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
         HotListSentimentService(mongo_db).upsert(doc)
         return {"written": True, "reason": None}
     except Exception as exc:  # 无质量阻断：情绪失败不阻断帧采集

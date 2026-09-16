@@ -110,3 +110,72 @@ def get_hotlist_sentiment_series(
             ),
         )
     return response
+
+
+@router.get("/slots")
+def get_hotlist_sentiment_slots(
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+    trading_date: str | None = None,
+) -> dict[str, Any]:
+    """当日槽位情绪文档序列读口（2026-09-15，前端「日内情绪轨迹」消费）。
+
+    槽位文档由采集主链同步后处理链逐槽写入（analyze → 槽位情绪 → EOD），
+    回答"今天情绪怎么走到现在"；series 读口（EOD 终值）回答"近几日怎么变"。
+    trading_date 缺省回落最新交易日；无帧结构化降级（fail-visible，不伪装空序列）。
+    缓存与 series 同口径：Redis TTL + dataset 索引依赖失效（采集链每槽写库即失效）。
+    """
+    capped_version = "v1"
+    settings = get_settings()
+    cache = snapshot_cache.get_snapshot_redis_cache()
+    trading_date = (trading_date or "").strip() or None
+    cache_key = (
+        f"{settings.redis_key_prefix.strip(':')}:hotlist:sentiment:slots:"
+        f"{dataset_id}:{snapshot_type}:{trading_date or 'latest'}:{capped_version}"
+    )
+    cached = cache.get_response(cache_key)
+    if cached is not None:
+        return {**cached, "cache": {"hit": True, "store": "redis"}}
+
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}", "items": []}
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+    from backend.services.theme.hotlist_sentiment_service import get_hotlist_sentiment_service
+
+    dates = HotListSentimentBackfillService(db).trading_dates(
+        dataset_id=dataset_id, snapshot_type=snapshot_type
+    )
+    if not dates:
+        return {"ok": False, "degraded": True, "reason": "no_snapshot_trading_date", "items": []}
+    resolved_date = trading_date if trading_date in dates else dates[-1]
+    try:
+        docs = get_hotlist_sentiment_service(db).list_slot_documents(
+            dataset_id, snapshot_type, resolved_date
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "degraded": True,
+            "reason": f"slots_read_failed: {exc}",
+            "tradingDate": resolved_date,
+            "items": [],
+        }
+    response = {
+        "ok": True,
+        "datasetId": dataset_id,
+        "snapshotType": snapshot_type,
+        "tradingDate": resolved_date,
+        "items": [{key: value for key, value in doc.items() if key != "_id"} for doc in docs],
+        "cache": {"hit": False, "store": "mongodb"},
+    }
+    cache.set_response(cache_key, response, ttl_seconds=settings.hotlist_sentiment_cache_ttl_seconds)
+    cache.register_dependencies(
+        cache_key,
+        snapshot_cache.build_snapshot_cache_index_keys(
+            prefix=settings.redis_key_prefix,
+            dataset_id=dataset_id,
+        ),
+    )
+    return response

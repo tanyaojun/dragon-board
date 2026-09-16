@@ -1065,6 +1065,11 @@ class TestMongoIntegrationSentimentSlot:
 
         assert result.status == "completed"
         docs = list(db["hotlist_sentiment"].find({}))
-        assert len(docs) == 1, f"expected slot sentiment doc, got {docs}"
-        assert docs[0]["_id"] == "dragonboard_backend_shadow:half_hour:2026-06-11:10:00"
-        assert docs[0]["slotTime"] == "10:00"
+        # 2026-09-15 同步后处理链：completed run 同时写槽位文档 + 当日 EOD 终值
+        # （analyze → 槽位情绪 → EOD 顺序同步执行，EOD 随最新帧刷新）
+        assert len(docs) == 2, f"expected slot + EOD sentiment docs, got {[d['_id'] for d in docs]}"
+        slot_doc = next(d for d in docs if d["_id"] == "dragonboard_backend_shadow:half_hour:2026-06-11:10:00")
+        eod_doc = next(d for d in docs if d["_id"] == "dragonboard_backend_shadow:half_hour:2026-06-11")
+        assert slot_doc["slotTime"] == "10:00"
+        assert eod_doc["slotTime"] == "EOD"
+        assert eod_doc["snapshotId"] == slot_doc["snapshotId"], "EOD 锚定当日最新帧"

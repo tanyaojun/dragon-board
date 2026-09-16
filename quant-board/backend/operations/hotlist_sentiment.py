@@ -13,6 +13,42 @@ class HotListSentimentBackfillService:
         self._stock_rows = mongo_db["snapshot_stock_rows"]
         self._sentiment = mongo_db["hotlist_sentiment"]
 
+    def _join_display_status_for_frame(
+        self, dataset_id: str, frame: dict[str, Any], stocks: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """golden displayStatus join（就地注入 rows）——与 services 层读口编排同源。
+
+        2026-09-15 修复：本服务此前不 join，盘后任务（run_after_market_once）用它把当日
+        EOD 文档覆盖成 fallback 236 口径，读口 ensure_series 见库行不重算，坏文档当天固化。
+        延迟 import：services.hotlist_sentiment_compute 模块顶层 import 本模块，反向引用只能在函数内。
+        """
+        from backend.services.theme.hotlist_sentiment_compute import _join_display_status
+
+        return _join_display_status(self._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
+
+    @staticmethod
+    def _market_data_for_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
+        """frame.limitSummary → 全市场证据（面板顶部涨停/炸板/THS 池/封板率快捷指标）。"""
+        from backend.services.theme.hotlist_sentiment_compute import _build_market_data_like
+
+        return _build_market_data_like(frame.get("limitSummary"))
+
+    @staticmethod
+    def _append_join_warning(doc: dict[str, Any], join_stats: dict[str, Any]) -> None:
+        # fail-visible：join 异常/缺失随文档落库（与 _compute_and_persist 同一口径），不静默
+        from backend.services.theme.hotlist_sentiment_compute import _join_warning
+
+        join_note = _join_warning(join_stats)
+        if join_note:
+            doc.setdefault("warnings", []).append(join_note)
+
+    @staticmethod
+    def _invalidate_series_cache(dataset_id: str) -> None:
+        """写库后失效 series 读口缓存（fail-safe，与 services 层同口径；异常只记日志）。"""
+        from backend.services.theme.hotlist_sentiment_compute import _invalidate_hotlist_sentiment_cache
+
+        _invalidate_hotlist_sentiment_cache(dataset_id)
+
     def backfill(
         self,
         *,
@@ -101,7 +137,9 @@ class HotListSentimentBackfillService:
         trading_date: str,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        frame = self.latest_frame(dataset_id, snapshot_type, trading_date)
+        frame, evidence_frame, evidence_slot = self.latest_frame_with_market_evidence(
+            dataset_id, snapshot_type, trading_date
+        )
         if not frame:
             return {
                 "ok": True,
@@ -131,6 +169,7 @@ class HotListSentimentBackfillService:
             for date in self.trading_dates(dataset_id=dataset_id, snapshot_type=snapshot_type)
             if date < trading_date
         ]
+        join_stats = self._join_display_status_for_frame(dataset_id, frame, stocks)
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -139,13 +178,21 @@ class HotListSentimentBackfillService:
             stocks=stocks,
             yesterday_stocks=previous.get("yesterday") or [],
             day_before_stocks=previous.get("day_before") or [],
+            market_data=self._market_data_for_frame(evidence_frame) if evidence_frame else None,
             yesterday_trading_date=prior_dates[-1] if prior_dates else None,
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
         )
+        self._append_join_warning(doc, join_stats)
+        if evidence_slot:
+            # fail-visible：市场证据回退来源随文档落库，不静默近似
+            doc.setdefault("warnings", []).append(
+                f"最新帧 limitSummary 缺失，全市场证据回退自 {evidence_slot} 槽位"
+            )
         if not dry_run:
             # 按 _id 精确写库（Task 1 契约）：存量行 slotTime 为旧值时业务四键 query 会
             # 命中 _id 不同的行导致 MongoDB 拒绝改 _id（DuplicateKeyError）
             self._sentiment.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+            self._invalidate_series_cache(dataset_id)
         return {
             "ok": True,
             "dryRun": dry_run,
@@ -187,6 +234,38 @@ class HotListSentimentBackfillService:
             {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date},
             sort=[("timestamp", -1), ("snapshotId", -1)],
         )
+
+    @staticmethod
+    def _limit_summary_has_evidence(limit_summary: Any) -> bool:
+        if not isinstance(limit_summary, dict):
+            return False
+        return any(
+            isinstance(limit_summary.get(key), dict) and limit_summary.get(key)
+            for key in ("continuousBoards", "zhaban", "thsPools", "yesterdayZt")
+        )
+
+    def latest_frame_with_market_evidence(
+        self, dataset_id: str, snapshot_type: str, trading_date: str
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
+        """(最新帧, 市场证据帧, 回退槽位)——EOD 市场证据的取帧口径。
+
+        上游涨停/炸板池接口间歇失败时最新帧 limitSummary 全 null（2026-09-14/15 生产形态），
+        EOD 文档若直接透传会让面板顶部全市场指标显示 0。收盘后该数据不再变化，回退到
+        当日最近有效槽位是合理近似；fail-visible：回退来源由调用方写入 warnings，全日
+        无有效帧时证据帧返回 None（缺失可见，不伪造）。
+        """
+        latest = self.latest_frame(dataset_id, snapshot_type, trading_date)
+        if latest is None:
+            return None, None, None
+        if self._limit_summary_has_evidence(latest.get("limitSummary")):
+            return latest, latest, None
+        for slot_time in sorted(
+            self._slot_times_of_date(dataset_id, snapshot_type, trading_date), reverse=True
+        ):
+            frame = self.frame_for_slot(dataset_id, snapshot_type, trading_date, slot_time)
+            if frame and self._limit_summary_has_evidence(frame.get("limitSummary")):
+                return latest, frame, str(frame.get("slotTime") or slot_time)
+        return latest, None, None
 
     def previous_day_stocks(self, dataset_id: str, snapshot_type: str, trading_date: str) -> dict[str, list[dict[str, Any]]]:
         # 取前两个交易日的最新 frame 快照行；历史缺失的槽位返回空列表，不伪造数据。
@@ -254,6 +333,7 @@ class HotListSentimentBackfillService:
                 if not frame or not stocks:
                     slot_errors.append({"slotTime": slot_time, "reason": "no_frame" if not frame else "empty_stock_rows"})
                     continue
+                join_stats = self._join_display_status_for_frame(dataset_id, frame, stocks)
                 doc = build_hotlist_sentiment_document(
                     dataset_id=dataset_id,
                     snapshot_type=snapshot_type,
@@ -262,8 +342,10 @@ class HotListSentimentBackfillService:
                     stocks=stocks,
                     yesterday_stocks=previous.get("yesterday") or [],
                     day_before_stocks=previous.get("day_before") or [],
+                    market_data=self._market_data_for_frame(frame),
                     slot_time=slot_time,
                 )
+                self._append_join_warning(doc, join_stats)
                 if not dry_run:
                     # 按 _id 写库（Task 1 契约）——业务四键 query 在存量行 slotTime 为旧值时
                     # 会命中 _id 不同的行导致 MongoDB 拒绝改 _id
@@ -383,6 +465,7 @@ def _metrics_projection(result: dict[str, Any]) -> dict[str, Any]:
         "limitEvidence": result["metrics"]["limitEvidence"],
         "statusSourceCounts": result["statusSourceCounts"],
         "missingEvidence": result["missingEvidence"],
+        "transitionCounts": result["metrics"].get("transitionCounts") or {},
     }
 
 

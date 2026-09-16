@@ -69,6 +69,9 @@ class FakeCollection:
             if isinstance(expected, dict) and "$in" in expected:
                 if actual not in expected["$in"]:
                     return False
+            elif isinstance(expected, dict) and "$ne" in expected:
+                if actual == expected["$ne"]:
+                    return False
             elif actual != expected:
                 return False
         return True

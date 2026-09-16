@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""快照 after-save 钩子机制与默认钩子单测（2026-09-10）。
+"""快照 after-save 钩子机制与默认钩子单测（2026-09-10；2026-09-15 收窄）。
 
-覆盖：注册/触发/异常隔离/幂等；默认钩子（缓存失效 + analyze 落库）的分组与跳过条件；
-以及数据层 `save_snapshot_ingest` 三个返回点都触发钩子的源码契约。
+覆盖：注册/触发/异常隔离/幂等；默认钩子（缓存失效）行为；analyze 落库已退役为
+写路径自身步骤（防回归断言：注册表不得再出现 analyze 钩子——2026-09-15 重构，
+异步钩子路径曾致 displayStatus join 时序空窗）；以及数据层 `save_snapshot_ingest`
+三个返回点都触发钩子的源码契约。
 """
 from pathlib import Path
 
@@ -93,7 +95,18 @@ def test_default_hooks_register_twice_without_duplication():
     default_hooks.register_default_snapshot_post_save_hooks()
     default_hooks.register_default_snapshot_post_save_hooks()
 
-    assert len(hooks_mod.registered_snapshot_post_save_hooks()) == 2
+    assert len(hooks_mod.registered_snapshot_post_save_hooks()) == 1
+
+
+def test_default_hooks_do_not_register_analyze():
+    """防回归（2026-09-15 重构）：analyze 落库是写路径自身的同步步骤
+    （采集主链 _run_post_persist_chain / ingest 路由 BackgroundTasks），
+    不得再以异步钩子形式回到数据层——该路径在落帧与 analyze 之间留时序空窗。"""
+    default_hooks.register_default_snapshot_post_save_hooks()
+
+    names = [getattr(hook, "__name__", "") for hook in hooks_mod.registered_snapshot_post_save_hooks()]
+    assert names == ["_invalidate_snapshot_cache_hook"]
+    assert not any("analysis" in name for name in names)
 
 
 def test_cache_hook_calls_snapshot_cache(monkeypatch):
@@ -107,76 +120,6 @@ def test_cache_hook_calls_snapshot_cache(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["dataset_id"] == "ds"
-
-
-def test_analysis_hook_groups_rows_by_snapshot(monkeypatch):
-    submitted = []
-    monkeypatch.setattr(
-        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
-        lambda: "DB",
-    )
-    monkeypatch.setattr(
-        "backend.snapshot_collector.analysis_worker.analysis_enabled", lambda: True
-    )
-    monkeypatch.setattr(
-        "backend.snapshot_collector.analysis_worker.submit_frame_analysis",
-        lambda **kw: submitted.append(kw) or True,
-    )
-
-    default_hooks._persist_snapshot_analysis_hook(
-        **_kwargs(
-            frames=[
-                {
-                    "snapshotId": "s1",
-                    "type": "half_hour",
-                    "tradingDate": "2026-09-10",
-                    "slotTime": "15:30",
-                },
-                {
-                    "snapshotId": "s2",
-                    "type": "half_hour",
-                    "tradingDate": "2026-09-10",
-                    "slotTime": "15:00",
-                },
-            ],
-            stock_rows=[
-                {"snapshotId": "s1", "code": "600000"},
-                {"snapshotId": "s2", "code": "600001"},
-            ],
-        )
-    )
-
-    assert [item["snapshot_id"] for item in submitted] == ["s1", "s2"]
-    assert submitted[0]["stock_rows"] == [{"snapshotId": "s1", "code": "600000"}]
-    assert submitted[1]["stock_rows"] == [{"snapshotId": "s2", "code": "600001"}]
-    assert submitted[0]["db"] == "DB"
-    assert submitted[0]["snapshot_type"] == "half_hour"
-
-
-def test_analysis_hook_skips_deduped_and_disabled(monkeypatch):
-    submitted = []
-    monkeypatch.setattr(
-        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
-        lambda: "DB",
-    )
-    monkeypatch.setattr(
-        "backend.snapshot_collector.analysis_worker.analysis_enabled", lambda: True
-    )
-    monkeypatch.setattr(
-        "backend.snapshot_collector.analysis_worker.submit_frame_analysis",
-        lambda **kw: submitted.append(kw) or True,
-    )
-
-    # deduped 帧不重复算
-    default_hooks._persist_snapshot_analysis_hook(**_kwargs(deduped=True))
-    assert submitted == []
-
-    # 开关关闭时不提交
-    monkeypatch.setattr(
-        "backend.snapshot_collector.analysis_worker.analysis_enabled", lambda: False
-    )
-    default_hooks._persist_snapshot_analysis_hook(**_kwargs())
-    assert submitted == []
 
 
 def test_repositories_trigger_hooks_contract():

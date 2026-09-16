@@ -689,15 +689,72 @@ def ingest_snapshot(
             trading_date=request.trading_date,
             source=request.source,
         )
-        # after-save 后处理（快照缓存失效 + analyze 产物落库）已**下移到数据层**
-        # `save_snapshot_ingest` 的共享钩子（2026-09-10）：此处不再显式调用，
-        # 由 backend/services/snapshot_post_save_hooks.py 注册的钩子统一执行，
-        # 从而与 snapshot_collector 直写库路径自动一致（原先两条路径各写一份、从未对齐）。
+        # after-save 缓存失效由数据层钩子统一执行。analyze 产物落库（2026-09-15 重构）
+        # 是写路径自身的同步步骤：采集主链在 snapshot_collector._run_post_persist_chain
+        # 内联执行；本路由（手工/诊断导入）在响应后由 BackgroundTasks 同步执行——
+        # 不再经数据层钩子 + 后台 worker 异步提交（该路径在落帧与 analyze 之间留时序
+        # 空窗，热榜情绪 displayStatus join 恒 miss，详见 snapshot_post_save_hooks.py）。
+        if not result.get("deduped"):
+            background_tasks.add_task(
+                _analyze_ingested_snapshots,
+                dataset.id,
+                frames,
+                stock_rows,
+            )
         return {"ok": True, **result}
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+def _analyze_ingested_snapshots(
+    dataset_id: str,
+    frames: list[dict[str, Any]],
+    stock_rows: list[dict[str, Any]],
+) -> None:
+    """ingest 路由的 analyze 后处理（BackgroundTasks 同步执行，失败只记日志）。
+
+    与采集主链同口径：逐帧 ``analyze_snapshot_and_persist``；deduped 帧不会走到这里
+    （调用方已跳过）。补历史批量分析用 CLI ``snapshot-analysis-backfill``。
+    """
+    import logging
+
+    rows_by_snapshot: dict[str, list[dict[str, Any]]] = {}
+    for row in stock_rows:
+        snapshot_id = str(row.get("snapshotId") or row.get("snapshot_id") or "")
+        if snapshot_id:
+            rows_by_snapshot.setdefault(snapshot_id, []).append(row)
+    for frame in frames:
+        snapshot_id = str(frame.get("snapshotId") or frame.get("snapshot_id") or frame.get("id") or "")
+        if not snapshot_id:
+            continue
+        rows = rows_by_snapshot.get(snapshot_id)
+        if rows is None:
+            rows = list(stock_rows) if len(frames) == 1 else []
+        if not rows:
+            continue
+        try:
+            from backend.data.repositories import repository_factory
+            from backend.data.repositories.mongo_repository import MongoRepository
+
+            analyze_snapshot_and_persist(
+                MongoRepository(repository_factory.get_runtime_mongodb_database()),
+                dataset_id,
+                snapshot_id,
+                str(frame.get("type") or "half_hour"),
+                {
+                    "tradingDate": str(frame.get("tradingDate") or ""),
+                    "slotTime": str(frame.get("slotTime") or ""),
+                    "type": str(frame.get("type") or "half_hour"),
+                    "snapshotId": snapshot_id,
+                    "stocks": rows,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 —— 失败不阻断导入结果，只记日志（fail-visible）
+            logging.getLogger(__name__).warning(
+                "ingest analyze failed for %s: %s", snapshot_id, exc
+            )
 
 
 @app.get("/api/snapshots/analysis")

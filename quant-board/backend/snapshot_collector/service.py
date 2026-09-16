@@ -40,6 +40,18 @@ from .state import record_run as _record_run
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _snapshot_analysis_enabled() -> bool:
+    """采集主链是否执行 analyze 落库（``QUANT_BOARD_SNAPSHOT_ANALYSIS_ENABLED``，默认开）。
+
+    2026-09-15 重构：analyze 由采集主链同步执行（见 ``_run_post_persist_chain``），
+    开关语义沿用原 analysis_worker（worker 已退役）。关闭时情绪计算照常——
+    join miss → fallback 带 fail-visible warning，不阻断。
+    """
+    import os
+
+    raw = str(os.environ.get("QUANT_BOARD_SNAPSHOT_ANALYSIS_ENABLED", "1")).strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
 
 def _slot_timestamp_ms(snapshot_type: str, trading_date: str, slot_time: str) -> int:
     from .slots import _make_timestamp_ms
@@ -539,25 +551,21 @@ class SnapshotCollectorService:
                 sector_rows=sector_rows,
             )
         if run_status == "completed":
-            # WP1b：每槽落帧后同源计算热榜情绪（失败不阻断采集——无质量阻断，AGENTS.md §10）
-            try:
-                from backend.services.theme.hotlist_sentiment_compute import compute_and_upsert_for_slot
-
-                sentiment_result = compute_and_upsert_for_slot(
-                    self._repo.db,  # db 由 SnapshotRepository 协议契约暴露（service_factory 包装类属性，勿对内层 MongoRepository 核实）
-                    dataset_id=dataset_id,
-                    snapshot_type=snapshot_type,
-                    trading_date=trading_date,
-                    slot_time=slot_time,
-                )
-                if not sentiment_result.get("written"):
-                    quality.warnings.append(f"hotlist_sentiment_slot_skipped: {sentiment_result.get('reason')}")
-            except Exception as exc:
-                logging.warning("hotlist_sentiment slot compute failed for %s %s: %s", trading_date, slot_time, exc)
-            # 注：analyze 产物落库（observation/displayStatus/meta/resonance/cycle）**不再在此提交** ——
-            # 2026-09-10 已下移到数据层 `save_snapshot_ingest` 的共享 after-save 钩子
-            # （backend/services/snapshot_post_save_hooks.py），与 ingest 路由路径自动一致，
-            # 避免"两条写入路径各写一份后处理"。提交仍走后台线程 worker（不阻塞采集）。
+            # 2026-09-15 重构：analyze 落库 + 槽位情绪 + 当日 EOD 是采集主链的**同步后处理链**。
+            # 此前 analyze 挂在写路径之外（数据层钩子 + 后台 worker 异步），落帧与 analyze 之间
+            # 存在时序空窗 → 槽位情绪 displayStatus join 恒 miss、盘中 EOD 首算落在空窗内则
+            # 全天固化 fallback 口径。链式顺序（analyze 先落库）保证 join 必然命中；
+            # 重活走线程池（analyze 单帧 ~20-30s CPU），不阻塞 8001 事件循环。
+            chain_warnings = await asyncio.to_thread(
+                self._run_post_persist_chain,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                snapshot_id=snapshot_id,
+                trading_date=trading_date,
+                slot_time=slot_time,
+                stock_rows=stock_rows,
+            )
+            quality.warnings.extend(chain_warnings)
         run_doc = {
             "runId": run_id,
             "datasetId": dataset_id,
@@ -629,6 +637,80 @@ class SnapshotCollectorService:
             request.trading_date
         )
         return await self._persist_one(request, market_context, theme_snapshot)
+
+    def _run_post_persist_chain(
+        self,
+        *,
+        dataset_id: str,
+        snapshot_type: str,
+        snapshot_id: str,
+        trading_date: str,
+        slot_time: str,
+        stock_rows: list[dict[str, Any]],
+    ) -> list[str]:
+        """同步后处理链（由 ``_persist_one`` 经线程池调用）：analyze → 槽位情绪 → 当日 EOD。
+
+        顺序即正确性：analyze 产物先落库，情绪计算的 displayStatus join 才能命中
+        （2026-09-15 重构，替代数据层钩子 + 后台 worker 的异步路径）。
+        每步独立容错（fail-visible）：失败只记 warning 返回给 run doc，绝不阻断
+        采集与后续步骤；analyze 失败/关闭时情绪照算（join miss → fallback 带 warning）。
+        """
+        warnings: list[str] = []
+        # db 由 SnapshotRepository 协议契约暴露（service_factory 包装类属性，勿对内层 MongoRepository 核实）。
+        # 协议违规（缺 db 句柄）显式标注进 run doc，不静默也不阻断采集。
+        db = getattr(self._repo, "db", None)
+        if db is None:
+            return ["post_persist_skipped: repo_missing_db_handle"]
+        if _snapshot_analysis_enabled():
+            try:
+                from backend.data.repositories.mongo_repository import MongoRepository
+                from backend.services.snapshot_analysis_service import analyze_snapshot_and_persist
+
+                analyze_snapshot_and_persist(
+                    MongoRepository(db),
+                    dataset_id,
+                    snapshot_id,
+                    snapshot_type,
+                    {
+                        "tradingDate": trading_date,
+                        "slotTime": slot_time,
+                        "type": snapshot_type,
+                        "snapshotId": snapshot_id,
+                        "stocks": stock_rows,
+                    },
+                )
+            except Exception as exc:  # 无质量阻断：analyze 失败只标注，帧事实数据已落库
+                warnings.append(f"snapshot_analysis_failed: {exc}")
+                logging.warning("post-persist analyze failed for %s: %s", snapshot_id, exc)
+        try:
+            from backend.services.theme.hotlist_sentiment_compute import compute_and_upsert_for_slot
+
+            sentiment_result = compute_and_upsert_for_slot(
+                db,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                slot_time=slot_time,
+            )
+            if not sentiment_result.get("written"):
+                warnings.append(f"hotlist_sentiment_slot_skipped: {sentiment_result.get('reason')}")
+        except Exception as exc:
+            warnings.append(f"hotlist_sentiment_slot_failed: {exc}")
+            logging.warning("post-persist slot sentiment failed for %s %s: %s", trading_date, slot_time, exc)
+        try:
+            from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+            eod_result = HotListSentimentBackfillService(db).run_for_date(
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+            )
+            if not eod_result.get("written"):
+                warnings.append(f"hotlist_sentiment_eod_skipped: {eod_result.get('reason')}")
+        except Exception as exc:
+            warnings.append(f"hotlist_sentiment_eod_failed: {exc}")
+            logging.warning("post-persist EOD sentiment failed for %s: %s", trading_date, exc)
+        return warnings
 
     async def arun_once_multi(
         self,

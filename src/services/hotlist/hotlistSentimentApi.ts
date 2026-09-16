@@ -57,3 +57,47 @@ export async function fetchHotlistSentimentSeries(
   }
   return { items: docs, degraded: false, reason: body.reason || null, missingDays }
 }
+
+export interface HotlistSentimentSlotsResult {
+  items: HotListSentimentDayDoc[]
+  /** 槽位所属交易日（缺省请求回落到后端最新交易日） */
+  tradingDate: string
+  degraded: boolean
+  reason: string | null
+}
+
+/**
+ * 当日槽位情绪序列（GET /api/hotlist-sentiment/slots）：日内 9:30→15:00 逐槽 EOD 级文档，
+ * 由采集主链每槽同步写入（analyze → 槽位情绪 → EOD）。与 series（日终值）互补：
+ * 回答"今天情绪怎么走到现在"。槽位缺失/降级时透传错误态，不伪造数据。
+ */
+export async function fetchHotlistSentimentSlots(
+  datasetId = 'dragonboard_live',
+): Promise<HotlistSentimentSlotsResult> {
+  const params = new URLSearchParams({ dataset_id: datasetId })
+  const response = await fetch(`/api/hotlist-sentiment/slots?${params.toString()}`)
+  if (!response.ok) {
+    return { items: [], tradingDate: '', degraded: true, reason: `HTTP ${response.status}` }
+  }
+  const body = (await response.json()) as {
+    ok: boolean
+    degraded?: boolean
+    reason?: string
+    tradingDate?: string
+    items?: HotListSentimentDayDoc[]
+  }
+  if (!body.ok || body.degraded) {
+    return {
+      items: [],
+      tradingDate: body.tradingDate || '',
+      degraded: true,
+      reason: body.reason || 'degraded',
+    }
+  }
+  return {
+    items: body.items || [],
+    tradingDate: body.tradingDate || '',
+    degraded: false,
+    reason: null,
+  }
+}

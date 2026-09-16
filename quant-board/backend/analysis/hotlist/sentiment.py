@@ -341,6 +341,20 @@ def build_day_metrics_from_sorted(sorted_rows: list[dict], top_n: int, trading_d
     return result
 
 
+def build_transition_counts(rows: list[dict]) -> dict[str, int]:
+    """阶段迁移计数（2026-09-16）：join 层注入的 cycleTransition 原样计数，按次数降序。
+
+    只统计 golden join 行（join 层对无 analyze 产物行注入 None）；fallback 行不计入，
+    避免旧口径混入迁移分布。键为后端原始迁移串（"a->b" 或单段 "a"=阶段延续）。
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        transition = row.get("cycleTransition")
+        if isinstance(transition, str) and transition.strip():
+            counts[transition.strip()] = counts.get(transition.strip(), 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: kv[1], reverse=True))
+
+
 def build_layer_metrics(rows: list[dict], trading_date: str | None = None) -> dict:
     # TS: buildLayerMetrics L731-739
     sorted_rows = sort_rows(rows)
@@ -1116,6 +1130,7 @@ def compute_hotlist_sentiment(
             "layers": layers,
             "comparison": comparison,
             "limitEvidence": limit_evidence,
+            "transitionCounts": build_transition_counts(sorted_stocks),
         },
         "turnover": compute_turnover(sorted_stocks, yesterday_rows),
         "signals": stage_evidence["signals"],

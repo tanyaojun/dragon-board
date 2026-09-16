@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchHotlistSentimentSeries } from '../hotlistSentimentApi'
+import { fetchHotlistSentimentSeries, fetchHotlistSentimentSlots } from '../hotlistSentimentApi'
 
 const docStub = {
   datasetId: 'dragonboard_live',
@@ -140,5 +140,53 @@ describe('fetchHotlistSentimentSeries', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/hotlist-sentiment/series?dataset_id=my_dataset&days=5',
     )
+  })
+})
+
+describe('fetchHotlistSentimentSlots', () => {
+  it('正常响应返回当日槽位升序 items 与 tradingDate', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            datasetId: 'dragonboard_live',
+            tradingDate: '2026-09-15',
+            items: [
+              { ...docStub, slotTime: '09:30' },
+              { ...docStub, slotTime: '10:00' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    )
+    const result = await fetchHotlistSentimentSlots()
+    expect(result.degraded).toBe(false)
+    expect(result.tradingDate).toBe('2026-09-15')
+    expect(result.items.map((item) => item.slotTime)).toEqual(['09:30', '10:00'])
+  })
+
+  it('degraded 响应透传错误态，不伪造数据', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ ok: false, degraded: true, reason: 'no_snapshot_trading_date' }), {
+          status: 200,
+        }),
+      ),
+    )
+    const result = await fetchHotlistSentimentSlots()
+    expect(result.degraded).toBe(true)
+    expect(result.items).toHaveLength(0)
+    expect(result.reason).toBe('no_snapshot_trading_date')
+  })
+
+  it('HTTP 错误返回错误态', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('err', { status: 502 })))
+    const result = await fetchHotlistSentimentSlots()
+    expect(result.degraded).toBe(true)
+    expect(result.reason).toBe('HTTP 502')
   })
 })

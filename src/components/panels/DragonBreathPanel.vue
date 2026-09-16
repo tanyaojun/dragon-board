@@ -346,6 +346,37 @@
               </div>
             </div>
 
+            <div v-if="hotListSlotTrackItems.length" class="hotlist-section">
+              <div class="section-title">⏱️ 日内情绪轨迹</div>
+              <div v-if="hotListTransitionItems.length" class="slot-track-transitions">
+                <span
+                  v-for="item in hotListTransitionItems"
+                  :key="item.key"
+                  class="slot-track-transition-chip"
+                  :class="{ 'slot-track-transition-risk': item.text.includes('→') }"
+                >{{ item.text }} {{ item.count }}</span>
+              </div>
+              <div class="slot-track">
+                <div
+                  v-for="item in hotListSlotTrackItems"
+                  :key="item.key"
+                  class="slot-track-row"
+                  :class="{ 'slot-track-row-latest': item.isLatest }"
+                >
+                  <span class="slot-track-time">
+                    {{ item.label }}<span v-if="item.isLatest" class="slot-track-now">当前</span>
+                  </span>
+                  <span class="slot-track-stage" :class="`stage-${item.stageClass}`">{{ item.stage }}</span>
+                  <span class="slot-track-metric">池 {{ item.pool ?? '--' }}</span>
+                  <span class="slot-track-metric">涨 {{ item.upRatio }}</span>
+                  <span class="slot-track-metric">攻击 {{ item.attack }}</span>
+                  <span class="slot-track-metric down-text">风险 {{ item.risk }}</span>
+                  <span class="slot-track-metric">TRIN {{ item.trin }}</span>
+                </div>
+              </div>
+              <div v-if="hotListSlotTrackNote" class="status-source-note">{{ hotListSlotTrackNote }}</div>
+            </div>
+
             <div class="hotlist-evidence-grid">
               <div class="hotlist-section">
                 <div class="section-title">✅ 强证据</div>
@@ -588,7 +619,8 @@ import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import { fetchHotlistSentimentSeries } from '@/services/hotlist/hotlistSentimentApi'
+import { fetchHotlistSentimentSeries, fetchHotlistSentimentSlots } from '@/services/hotlist/hotlistSentimentApi'
+import { formatTransitionCounts } from '@/services/hotlist/hotlistTransition'
 import type {
   HotListDayMetrics,
   HotListSentimentDayDoc,
@@ -688,6 +720,11 @@ const hotListSentimentLoading = ref(false)
 const hotListSentimentError = ref<string | null>(null)
 // 后端 series 窗口内被标注 missing 的交易日（含结构化原因），供模板展示「窗口缺失 N 日」
 const hotListSentimentMissingDays = ref<Array<{ tradingDate: string; reason: string | null }>>([])
+// 日内情绪轨迹（2026-09-15）：当日逐槽情绪文档（采集主链每槽同步写入，golden 口径）。
+// 缺失/降级可见（fail-visible）：degradedReason 透传后端 reason，不用空数组伪装。
+const hotListSentimentSlots = ref<HotListSentimentDayDoc[]>([])
+const hotListSentimentSlotsTradingDate = ref('')
+const hotListSentimentSlotsDegradedReason = ref<string | null>(null)
 const hotListSentimentSlotTime = ref('')
 const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 let hotListSentimentTimer: ReturnType<typeof setTimeout> | null = null
@@ -939,6 +976,54 @@ const hotListStatusSourceNote = computed(() => {
   const counts = hotListSentiment.value?.metrics?.statusSourceCounts
   if (!counts) return ''
   return [`golden 判定 ${counts.displayStatus}`, `fallback 接管 ${counts.fallback}`].join(' / ')
+})
+
+// 日内情绪轨迹（2026-09-15）：逐槽行装配。缺字段的槽位用 '--' 占位，不伪造 0；
+// 区块仅在存在槽位文档时渲染（无硬门禁）。
+const hotListSlotTrackItems = computed(() => {
+  const slots = hotListSentimentSlots.value
+  if (!slots.length) return []
+  return slots.map((doc, index) => {
+    const all = doc.metrics?.layers?.all
+    const counts = all?.stageCounts
+    const shares = all?.stageShares
+    const topN = all?.topN || 0
+    const attackCount = counts ? counts.ignition + counts.expansion : null
+    const attackShare = counts && topN ? ((counts.ignition + counts.expansion) as number) / topN : null
+    const riskCount = counts ? counts.reversal + counts.cooling : null
+    const riskShare = counts && topN ? ((counts.reversal + counts.cooling) as number) / topN : null
+    const stage = getDisplayEmotionStage(doc.stage)
+    return {
+      key: doc.slotTime || `slot-${index}`,
+      label: doc.slotTime || '--',
+      isLatest: index === slots.length - 1,
+      stage: stage.name,
+      stageClass: stage.classKey,
+      confidence: typeof doc.confidence === 'number' ? `${doc.confidence}%` : '--',
+      pool: doc.metrics?.poolSize ?? all?.total ?? null,
+      upRatio: formatShare(all?.upRatio ?? null),
+      attack: `${formatNullableCount(attackCount)} / ${formatShare(attackShare)}`,
+      risk: `${formatNullableCount(riskCount)} / ${formatShare(riskShare)}`,
+      trin: formatTrin(all?.hotTrin),
+    }
+  })
+})
+
+// 阶段迁移预警（2026-09-16）：transitionCounts 由采集链 golden join 聚合；取最新槽位，
+// 回退当日 EOD。缺字段→空数组整行隐藏（fail-visible，不伪造）。
+const hotListTransitionItems = computed(() => {
+  const latestSlot = hotListSentimentSlots.value[hotListSentimentSlots.value.length - 1]
+  const counts =
+    latestSlot?.metrics?.transitionCounts || hotListSentiment.value?.metrics?.transitionCounts
+  return formatTransitionCounts(counts as Record<string, number> | null | undefined, 4)
+})
+
+const hotListSlotTrackNote = computed(() => {
+  const date = hotListSentimentSlotsTradingDate.value
+  const degraded = hotListSentimentSlotsDegradedReason.value
+  if (degraded) return degraded
+  if (!hotListSlotTrackItems.value.length) return ''
+  return date ? `${date} · 每半小时一帧，随采集实时更新` : ''
 })
 
 const hotListLayerItems = computed(() => {
@@ -1319,6 +1404,9 @@ async function loadHotListSentiment() {
     if (result.degraded || result.items.length === 0) {
       hotListSentiment.value = null
       hotListSentimentSlotTime.value = ''
+      hotListSentimentSlots.value = []
+      hotListSentimentSlotsTradingDate.value = ''
+      hotListSentimentSlotsDegradedReason.value = null
       // 全窗口缺失（ok + items 全为 missing 条目）时保留逐日缺失明细，不吞成泛化文案；
       // degraded 分支 missingDays 恒为空数组，赋值后行为与原实现一致
       hotListSentimentMissingDays.value = result.missingDays
@@ -1337,16 +1425,35 @@ async function loadHotListSentiment() {
     hotListSentimentMissingDays.value = result.missingDays
     // 失败原因可见：后端标注的 missingEvidence / statusSourceCounts 不在此吞掉，
     // 模板可经 hotListSentiment.metrics.missingEvidence 展示
+    await loadHotListSentimentSlots()
   } catch (err: any) {
     console.warn('[DragonBreathPanel] 热榜情绪加载失败:', err)
     hotListSentiment.value = null
     hotListSentimentSlotTime.value = ''
+    hotListSentimentSlots.value = []
+    hotListSentimentSlotsTradingDate.value = ''
+    hotListSentimentSlotsDegradedReason.value = null
     hotListSentimentMissingDays.value = []
     hotListSentimentError.value = err?.message || '热榜情绪加载失败'
     scheduleHotListSentimentRetry()
   } finally {
     hotListSentimentInFlight = false
     hotListSentimentLoading.value = false
+  }
+}
+
+async function loadHotListSentimentSlots() {
+  // 独立容错（fail-visible）：轨迹降级只透传 reason，不拖垮主视图，也不静默
+  try {
+    const slots = await fetchHotlistSentimentSlots()
+    hotListSentimentSlots.value = slots.items
+    hotListSentimentSlotsTradingDate.value = slots.tradingDate
+    hotListSentimentSlotsDegradedReason.value = slots.degraded ? slots.reason : null
+  } catch (err: any) {
+    console.warn('[DragonBreathPanel] 日内情绪轨迹加载失败:', err)
+    hotListSentimentSlots.value = []
+    hotListSentimentSlotsTradingDate.value = ''
+    hotListSentimentSlotsDegradedReason.value = err?.message || '加载失败'
   }
 }
 
@@ -2237,6 +2344,109 @@ onUnmounted(() => {
   font-size: 10px;
   color: var(--text-secondary);
   opacity: 0.85;
+}
+
+/* 日内情绪轨迹（2026-09-15）：逐槽一行，时间/阶段徽标/池/涨/攻击/风险/TRIN */
+.slot-track {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slot-track-row {
+  display: grid;
+  grid-template-columns: 76px 56px repeat(5, minmax(72px, 1fr));
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
+}
+
+.slot-track-transitions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.slot-track-transition-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.04));
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.slot-track-transition-risk {
+  background: rgba(255, 91, 98, 0.14);
+  color: #fca5a5;
+}
+
+.slot-track-row-latest {
+  outline: 1px solid var(--accent-color, rgba(231, 189, 77, 0.45));
+  color: var(--text-primary);
+}
+
+.slot-track-time {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.slot-track-now {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #e7bd4d;
+  color: #1b1b1b;
+  font-weight: 600;
+}
+
+.slot-track-stage {
+  display: inline-block;
+  min-width: 40px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.slot-track-stage.stage-ice {
+  background: rgba(96, 165, 250, 0.18);
+  color: #7dd3fc;
+}
+
+.slot-track-stage.stage-start {
+  background: rgba(125, 211, 252, 0.16);
+  color: #bae6fd;
+}
+
+.slot-track-stage.stage-ferment {
+  background: rgba(231, 189, 77, 0.18);
+  color: #fcd34d;
+}
+
+.slot-track-stage.stage-climax {
+  background: rgba(255, 91, 98, 0.2);
+  color: #fca5a5;
+}
+
+.slot-track-stage.stage-retreat {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+}
+
+.slot-track-metric {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* 全池状态结构 6 格（2026-09-10 spec §10.4）：点火/扩散/拥挤/反转/冷却/无阶段 */

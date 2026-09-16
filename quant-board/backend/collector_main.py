@@ -304,16 +304,9 @@ async def lifespan(app: FastAPI):
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-        # 采集链路 analyze worker 优雅停止（2026-09-10）：先等队列排空再退进程，
-        # 避免已采集帧的分析被丢掉（超时则放弃等待；worker 线程为 daemon，不阻塞退出）。
-        try:
-            from backend.snapshot_collector.analysis_worker import (
-                shutdown as shutdown_analysis_worker,
-            )
-
-            await asyncio.to_thread(shutdown_analysis_worker, 30.0)
-        except Exception:
-            logger.exception("failed to stop snapshot analysis worker")
+        # 2026-09-15 重构：analyze 落库已内联为采集主链的同步后处理链
+        # （service._run_post_persist_chain，落帧 → analyze → 槽位情绪 → EOD），
+        # 后台 analysis_worker 退役，进程退出无需再排空分析队列。
         await snapshot_collector_scheduler.stop()
         await market_fund_scheduler.stop()
         await stop_hotlist_refresh()
@@ -468,18 +461,15 @@ def _background_task_status() -> dict[str, Any]:
     except Exception as exc:
         result["limitup"] = {"ok": False, "error": str(exc)[:200]}
     try:
-        # 采集链路 analyze worker 状态（2026-09-10）：submitted/written/failed/dropped 可见，
-        # 便于核对"新帧是否真的产出了 displayStatus"（fail-visible，不做质量阻断）。
-        from backend.snapshot_collector.analysis_worker import (
-            analysis_enabled,
-            stats as analysis_worker_stats,
-        )
+        # 2026-09-15 重构：analyze 已内联为采集主链同步后处理链（worker 退役）。
+        # 可观测口径改为链开关状态；链内每步失败进 run doc warnings（fail-visible）。
+        from backend.snapshot_collector.service import _snapshot_analysis_enabled
 
-        result["analysisWorker"] = {
+        result["snapshotAnalysis"] = {
             "ok": True,
-            "enabled": analysis_enabled(),
-            **analysis_worker_stats(),
+            "enabled": _snapshot_analysis_enabled(),
+            "mode": "inline_post_persist_chain",
         }
     except Exception as exc:
-        result["analysisWorker"] = {"ok": False, "error": str(exc)[:200]}
+        result["snapshotAnalysis"] = {"ok": False, "error": str(exc)[:200]}
     return result

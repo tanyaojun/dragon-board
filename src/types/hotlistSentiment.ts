@@ -184,6 +184,8 @@ export interface HotListSentimentDayDoc {
     eliminatedCount?: number
     /** 状态来源：金标投影命中 / fallback 接管（阶段缺失已并入「无阶段」格，无独立计数） */
     statusSourceCounts?: { displayStatus: number; fallback: number }
+    /** 阶段迁移计数（2026-09-16）：键为 cycle.transition 原始串（"a->b"/单段延续），按次数降序 */
+    transitionCounts?: Record<string, number>
     missingEvidence?: string[]
   }
   turnover: TurnoverResult

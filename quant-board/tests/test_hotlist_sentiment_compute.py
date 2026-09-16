@@ -10,6 +10,7 @@ from backend.analysis.hotlist.sentiment import (
     build_comparison,
     build_layer_metrics,
     build_limit_evidence,
+    build_transition_counts,
     build_yesterday_strong_performance,
     check_limit_status,
     compute_hotlist_sentiment,
@@ -277,3 +278,57 @@ def test_status_source_summary_reads_stage_counts():
     assert summary["stageCounts"] == {"ignition": 1, "cooling": 2, "unknown": 0}
     assert summary["statusSourceCounts"] == {"displayStatus": 3, "fallback": 0}
     assert "statusCounts" not in summary
+
+
+def test_transition_counts_aggregated_from_joined_rows():
+    """阶段迁移聚合（2026-09-16）：join 注入 cycleTransition → metrics.transitionCounts 计数降序。"""
+    rows = [
+        {"code": "000001", "rank": 1, "change": 5, "cycleTransition": "ignition->cooling"},
+        {"code": "000002", "rank": 2, "change": 3, "cycleTransition": "ignition->cooling"},
+        {"code": "000003", "rank": 3, "change": 2, "cycleTransition": "cooling"},
+        {"code": "000004", "rank": 4, "change": 1},  # 无 join（fallback 行）→ 不计数
+        {"code": "000005", "rank": 5, "change": 1, "cycleTransition": None},
+    ]
+    counts = build_transition_counts(rows)
+    assert counts == {"ignition->cooling": 2, "cooling": 1}
+
+
+def test_join_injects_cycle_transition():
+    """join 层注入 cycleTransition（analysis.cycle.transition 原样透传，缺则为 None）。"""
+    from backend.services.theme.hotlist_sentiment_compute import _join_display_status
+
+    class _Coll:
+        def find(self, query, projection):
+            return [_Row("000001", {"cycle": {"transition": "ignition->cooling"},
+                                    "displayStatus": {"stage": "cooling", "label": "冷却"}}),
+                    _Row("000002", {"displayStatus": {"stage": "cooling", "label": "冷却"}})]
+
+    class _Row(dict):
+        def __init__(self, code, analysis):
+            super().__init__(code=code, analysis=analysis)
+
+    class _FakeMongoRepoDB(dict):
+        pass
+
+    rows = [{"code": "000001"}, {"code": "000002"}]
+    import backend.services.theme.hotlist_sentiment_compute as mod
+
+    class _FakeRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def load_snapshot_analysis(self, dataset_id, snapshot_id, codes):
+            return {"000001": {"cycle": {"transition": "ignition->cooling"},
+                               "displayStatus": {"stage": "cooling", "label": "冷却"}},
+                    "000002": {"displayStatus": {"stage": "cooling", "label": "冷却"}}}
+
+    import backend.data.repositories.mongo_repository as mongo_mod
+    orig = mongo_mod.MongoRepository
+    mongo_mod.MongoRepository = _FakeRepo
+    try:
+        stats = _join_display_status(_FakeMongoRepoDB(), "ds", "snap", rows)
+    finally:
+        mongo_mod.MongoRepository = orig
+    assert stats["joined"] == 2
+    assert rows[0]["cycleTransition"] == "ignition->cooling"
+    assert rows[1]["cycleTransition"] is None
