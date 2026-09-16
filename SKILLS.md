@@ -96,45 +96,35 @@ npm run build
 - 不能用旧运行结果、局部检查或“看起来没问题”代替验证。
 - 如果环境限制导致无法验证，最终回复必须明确说明未验证项和风险。
 
-### 2.4 `ranktrend-tier-longterm-test`
+### 2.4 `ranktrend-signal-research`
 
-项目级正文：`skills/ranktrend-tier-longterm-test/SKILL.md`。
+项目级正文：`skills/ranktrend-signal-research/SKILL.md`。
 
-用于四维信号（共振/趋势/量价/周期/新因子）参数长测的**标准流程**——参数盘点与参数化
-（TDD golden 不漂移）→ 逐参数 5 档扫描（防过拟合）→ 组合验证 → **市场状态窗口感知**
-的样本外复核（第一轮教训：7 月股灾月污染 validation）→ 判定分类（证实/缺复核/证伪/冗余）
-→ 文档固化 → golden 变更。N 阶段长测直接调用本 skill，无需反复查阅历史长测记录
-（第一轮实践见 `quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`
-阶段 7/8/9）。
+RankTrend 信号实证研究**统一流程**（2026-09-16 合并原 `ranktrend-tier-longterm-test` 与
+`four-dim-algorithm-research` 两个 skill；旧名引用按新名理解）——共享前置纪律（golden 锁
+基线、三窗+8 月 FINAL 冻结、M3 窗口消费折扣、极端行情月感知、参数化不漂移、fail-visible、
+机理优先）→ 双轨执行：**Track A 参数线**（盘点参数化 → 逐参数 5 档扫描 → 三层判定语义）
+/ **Track B 因子算法线**（设计 → 区分度 → 接线 → 边际贡献）→ **统一收口**：Track 2 判定卡
+C1-C5（PASS_CANDIDATE）→ saEx 盲区检查 → Track 1 交易复核终判（wrxpf + 30 笔门槛）→
+六类判定 → 一次一候选落默认。另含**月度复验批次模式**（窗口推进、已落默认栈回退复核、
+观察池裁决）、harness 工程范式 8 项、锚代际纪律。实践记录见
+`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-26）；
+批次化复跑范例见同目录 `ranktrend-202610-rerun-plan.md`。
 
 使用要求：
 
 - 硬编码阈值先参数化（默认值=原值，golden 不漂移），list 字段必须同步
   `_STRATEGY_LIST_KEYS` 白名单；
-- 每参数 5 档单变量扫描（非打包 3 组），多档位单调性判定真实可调参数；
-- 样本外复核必须检查 validation 窗口是否含极端行情月，单独跑干净窗口交叉验证；
-- 全程不写回默认值，只有"证实"类（干净窗口 ≥0.05 且跨窗口稳健）才走 golden 变更流程。
-
-### 2.5 `four-dim-algorithm-research`
-
-项目级正文：`skills/four-dim-algorithm-research/SKILL.md`。
-
-用于四维信号**核心算法研发与优化**（区别于参数扫描）——新增/修改 synergy 投票维度、
-观察因子、投票权重、regime 门控或评估口径时调用：因子设计（参数化 golden 不漂移）→
-区分度验证（h1 exAcc + A 档样本门槛）→ 投票/门控接线 → 数据驱动决策（正贡献落默认/
-负贡献 vote=0 关闭观察，假设可证伪）→ rolling walk-forward 组合验证（**8 月冻结纪律**、
-7 月股灾样本外排除）→ golden 回归 → 定值档案更新。与 2.4 `ranktrend-tier-longterm-test`
-互补：本 skill 管"加不加因子/开不开投票/怎么门控"，长测 skill 管"已有参数怎么调"。
-（第一轮实践见 `quant-board/docs/ranktrend-tier-backtest/overfitting-audit.md` 与
-`ranktrend-longterm-backtest-plan.md` 阶段 10/11。）
-
-使用要求：
-
-- 动核心算法前先确认数据窗口纪律（`backend/optimization/data_windows.py`：8 月冻结，
-  `assert_not_frozen` 守卫），参数决策禁止引用 8 月数据；
+- 每参数 5 档单变量扫描（非打包 3 组），多档位单调性判定真实可调参数；只迁移负票/
+  中性档的阈值线属 saEx 盲区，直接转 Track 1 交易复核终判；
+- 样本外复核必须检查窗口是否含极端行情月，单独跑干净窗口交叉验证；已消费窗口结论
+  打折扣标注，最终裁决窗用未消费帧（M3）；
 - 新增维度须登记 `tier_monotonicity.py DIMENSION_PATHS`，否则分档统计不可见；
-- 负贡献/冗余因子一律 vote=0 关闭观察（机制保留），不删除实现；
-- 结构改动完成后必须 golden 回归全绿 + L1 定值档案（`ranktrend-l1-param-ledger.md`）同步。
+  负贡献/冗余因子一律 vote=0 关闭观察（机制保留），不删除实现；
+- 全程不自动写回默认值，只有用户决策后才落默认（一次一候选、端到端锚逐位复现）；
+  已落默认项复核用"单项还原"回退 trial，不是晋升期对照；
+- 观察池候选登记必须绑定锚代际、触发条件与对照基线；月度复验按批次方案先行
+  （范例 `ranktrend-202610-rerun-plan.md`），不再单点开批。
 
 ## 3. 设计和范围控制 Skills
 
