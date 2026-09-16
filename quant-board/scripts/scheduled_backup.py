@@ -21,8 +21,6 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from backend.data.backup.mongodb_backup import get_mongodb_backup_service
-from backend.data.migrations.mongodb_migration import get_mongodb_database
-from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -70,19 +68,12 @@ def run() -> int:
 
     _log(f"开始 {mode} 备份 交易日={today.isoformat()} 周五={is_friday}")
 
-    settings = get_settings()
-    db = get_mongodb_database(
-        settings.mongodb_uri,
-        settings.mongodb_database,
-        connect_timeout_ms=settings.mongodb_connect_timeout_ms,
-        server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
-    )
     service = get_mongodb_backup_service()
 
     if mode == "light":
-        result = service.create_light_backup(db)
+        result = service.create_light_backup()
     else:
-        result = service.create_full_backup(db)
+        result = service.create_full_backup()
 
     if not result.get("ok"):
         _log(f"备份失败: {result.get('error')}")

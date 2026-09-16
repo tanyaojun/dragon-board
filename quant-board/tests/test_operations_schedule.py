@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
@@ -267,6 +269,11 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
         or {"ok": True, "written": 1, "tradingDate": "2026-06-05"},
     )
     monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: calls.append(f"backup:{dry_run}")
+        or {"ok": True, "skipped": True, "reason": "dry_run"},
+    )
+    monkeypatch.setattr(
         "backend.operations.schedule.run_archive_auto_once",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy archive must not run")),
     )
@@ -276,9 +283,10 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup"]
     assert result["results"]["hotlistSentiment"]["written"] == 1
-    assert calls == ["hotlist:mongo-db:dragonboard_live:half_hour:True"]
+    assert result["results"]["mongodbBackup"]["skipped"] is True
+    assert calls == ["hotlist:mongo-db:dragonboard_live:half_hour:True", "backup:True"]
 
 
 def test_after_market_job_in_mongodb_mode_surfaces_hotlist_sentiment_failure(monkeypatch: Any) -> None:
@@ -318,3 +326,230 @@ def test_after_market_job_in_mongodb_mode_surfaces_hotlist_sentiment_failure(mon
     assert result["results"]["hotlistSentiment"]["ok"] is False
     assert result["results"]["hotlistSentiment"]["error"]["code"] == "hotlist_sentiment_after_market_failed"
     assert "MongoDB connection lost" in result["results"]["hotlistSentiment"]["error"]["message"]
+
+
+def test_after_market_job_in_mongodb_mode_hotlist_failure_still_backs_up(monkeypatch: Any) -> None:
+    """hotlist 失败不阻断备份链：快照数据可能已入库，备份独立完成。"""
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "storage_backend": "mongodb",
+                "archive_auto_dataset_id": "dragonboard_live",
+                "archive_auto_snapshot_types": "half_hour",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: "mongo-db",
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: (_ for _ in ()).throw(
+            RuntimeError("MongoDB connection lost")
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: calls.append("backup")
+        or {"ok": True, "backupId": "b1", "strategy": "light_dump"},
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=False)
+
+    assert result["ok"] is False
+    assert result["stoppedAt"] == "hotlistSentiment"
+    assert calls == ["backup"]
+    assert result["results"]["mongodbBackup"]["ok"] is True
+    assert result["results"]["mongodbBackup"]["backupId"] == "b1"
+
+
+def test_after_market_job_in_mongodb_mode_surfaces_backup_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "storage_backend": "mongodb",
+                "archive_auto_dataset_id": "dragonboard_live",
+                "archive_auto_snapshot_types": "half_hour",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: "mongo-db",
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: {"ok": True, "written": 1},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: {
+            "ok": False,
+            "friday": False,
+            "strategy": "light_dump",
+            "failedStep": "create",
+            "error": {"code": "mongodump_failed", "returncode": 2},
+        },
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=False)
+
+    assert result["ok"] is False
+    assert result["stoppedAt"] == "mongodbBackup"
+    assert result["results"]["hotlistSentiment"]["ok"] is True
+    assert result["results"]["mongodbBackup"]["failedStep"] == "create"
+
+
+class FakeBackupService:
+    """按调用顺序记录备份链动作。"""
+
+    def __init__(self, calls: list[str], *, full_ok: bool = True, verify_ok: bool = True, push_ok: bool = True) -> None:
+        self.calls = calls
+        self.full_ok = full_ok
+        self.verify_ok = verify_ok
+        self.push_ok = push_ok
+
+    def create_full_backup(self, *, backup_id: str | None = None) -> dict[str, Any]:
+        self.calls.append("create_full")
+        if not self.full_ok:
+            return {"ok": False, "error": {"code": "mongodump_failed", "returncode": 2}}
+        return {"ok": True, "backupId": backup_id or "b-full"}
+
+    def create_light_backup(self, *, backup_id: str | None = None) -> dict[str, Any]:
+        self.calls.append("create_light")
+        return {"ok": True, "backupId": backup_id or "b-light"}
+
+    def verify_backup(self, backup_id: str) -> dict[str, Any]:
+        self.calls.append(f"verify:{backup_id}")
+        if not self.verify_ok:
+            return {"ok": False, "error": {"code": "backup_doc_count_mismatch"}}
+        return {"ok": True}
+
+    def prune_local_backups(self, *, dry_run: bool = False) -> dict[str, Any]:
+        self.calls.append(f"prune:{dry_run}")
+        return {"ok": True, "deleted": [{"backupId": "old"}]}
+
+    def push_backup(self, backup_id: str) -> dict[str, Any]:
+        self.calls.append(f"push:{backup_id}")
+        if not self.push_ok:
+            return {"ok": False, "error": {"code": "upload_failed"}}
+        return {"ok": True, "files": [{"name": "manifest.json"}]}
+
+
+def test_run_mongodb_backup_once_friday_runs_full_with_push(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    friday = datetime(2026, 9, 18, 15, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert friday.weekday() == 4
+
+    result = run_mongodb_backup_once(now=friday)
+
+    assert result["ok"] is True
+    assert result["friday"] is True
+    assert result["strategy"] == "full_dump"
+    assert result["backupId"] == "b-full"
+    assert result["push"]["ok"] is True
+    assert calls == ["create_full", "verify:b-full", "prune:False", "push:b-full"]
+
+
+def test_run_mongodb_backup_once_weekday_runs_light_without_push(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    wednesday = datetime(2026, 9, 16, 15, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert wednesday.weekday() == 2
+
+    result = run_mongodb_backup_once(now=wednesday)
+
+    assert result["ok"] is True
+    assert result["friday"] is False
+    assert result["strategy"] == "light_dump"
+    assert "push" not in result
+    assert all(not call.startswith("push") for call in calls)
+    assert calls == ["create_light", "verify:b-light", "prune:False"]
+
+
+def test_run_mongodb_backup_once_structured_failure_on_create(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls, full_ok=False),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    friday = datetime(2026, 9, 18, 15, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    result = run_mongodb_backup_once(now=friday)
+
+    assert result["ok"] is False
+    assert result["failedStep"] == "create"
+    assert result["error"]["code"] == "mongodump_failed"
+    # create 失败后不再 verify/prune/push
+    assert calls == ["create_full"]
+
+
+def test_run_mongodb_backup_once_structured_failure_on_verify(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls, verify_ok=False),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    wednesday = datetime(2026, 9, 16, 15, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    result = run_mongodb_backup_once(now=wednesday)
+
+    assert result["ok"] is False
+    assert result["failedStep"] == "verify"
+    assert calls == ["create_light", "verify:b-light"]
+
+
+def test_run_mongodb_backup_once_skips_non_trading_day_and_dry_run(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: False)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    saturday = datetime(2026, 9, 19, 15, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
+    non_trading = run_mongodb_backup_once(now=saturday)
+    dry_run = run_mongodb_backup_once(dry_run=True, now=saturday)
+
+    assert non_trading["ok"] is True
+    assert non_trading["skipped"] is True
+    assert non_trading["reason"] == "non_trading_day"
+    assert dry_run["skipped"] is True
+    assert dry_run["reason"] == "dry_run"
+    assert calls == []

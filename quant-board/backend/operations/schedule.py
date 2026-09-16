@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from backend.data.repositories import repository_factory
 from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.service import ArchiveService
 from backend.data.backup.backup_retention import run_backup_retention_once
+from backend.data.backup.mongodb_backup import get_mongodb_backup_service
 from backend.data.models.database import SessionLocal, init_db
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
 from backend.core.settings import get_settings
+from backend.snapshot_collector.trading_calendar import is_trading_day
+
+_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def run_after_market_once(
@@ -42,15 +47,24 @@ def run_after_market_once(
                 "datasetId": settings.archive_auto_dataset_id,
                 "snapshotType": snapshot_type,
             }
+        # 备份链独立于 hotlistSentiment 结果：hotlist 失败也继续备份（快照数据可能已入库）
+        backup_result = run_mongodb_backup_once(dry_run=dry_run)
+        hotlist_ok = bool(hotlist_result.get("ok"))
+        backup_ok = bool(backup_result.get("ok"))
+        stopped_at = None
+        if not hotlist_ok:
+            stopped_at = "hotlistSentiment"
+        elif not backup_ok:
+            stopped_at = "mongodbBackup"
         return _result(
-            ok=bool(hotlist_result.get("ok")),
+            ok=hotlist_ok and backup_ok,
             started_at=started_at,
-            steps=["hotlistSentiment"],
-            results={"hotlistSentiment": hotlist_result},
+            steps=["hotlistSentiment", "mongodbBackup"],
+            results={"hotlistSentiment": hotlist_result, "mongodbBackup": backup_result},
             archive_limit=archive_limit,
             backup_limit=backup_limit,
             dry_run=dry_run,
-            stopped_at=None if hotlist_result.get("ok") else "hotlistSentiment",
+            stopped_at=stopped_at,
         )
     snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
     init_db()
@@ -137,6 +151,56 @@ def run_after_market_once(
         backup_limit=backup_limit,
         dry_run=dry_run,
     )
+
+
+def run_mongodb_backup_once(*, dry_run: bool = False, now: datetime | None = None) -> dict[str, Any]:
+    """盘后 MongoDB 备份链：创建（交易日 light / 周五 full）→ verify → prune →（周五）push R2。
+
+    独立于 hotlistSentiment：任一步失败结构化记录并使整体失败（非零退出可见），
+    但不回滚其它步骤已完成的事实。
+    """
+    now = now or datetime.now(_TZ)
+    is_friday = now.weekday() == 4
+    summary: dict[str, Any] = {"ok": True, "friday": is_friday, "tradingDate": now.date().isoformat()}
+    if dry_run:
+        return {**summary, "skipped": True, "reason": "dry_run"}
+    if not is_trading_day(now.date()):
+        return {**summary, "skipped": True, "reason": "non_trading_day"}
+
+    service = get_mongodb_backup_service()
+    strategy = "full_dump" if is_friday else "light_dump"
+    summary["strategy"] = strategy
+    try:
+        created = service.create_full_backup() if is_friday else service.create_light_backup()
+    except Exception as exc:
+        return {**summary, "ok": False, "failedStep": "create", "error": {"code": "backup_create_exception", "message": str(exc)}}
+    if not created.get("ok"):
+        return {**summary, "ok": False, "failedStep": "create", "error": created.get("error")}
+    backup_id = created["backupId"]
+    summary["backupId"] = backup_id
+
+    verify = service.verify_backup(backup_id)
+    if not verify.get("ok"):
+        return {**summary, "ok": False, "failedStep": "verify", "error": verify.get("error")}
+
+    prune = service.prune_local_backups(dry_run=False)
+    summary["pruneDeleted"] = len(prune.get("deleted") or [])
+    if not prune.get("ok"):
+        return {**summary, "ok": False, "failedStep": "prune", "error": prune.get("error")}
+
+    if is_friday:
+        try:
+            pushed = service.push_backup(backup_id)
+        except Exception as exc:
+            pushed = {"ok": False, "error": {"code": "backup_push_exception", "message": str(exc)}}
+        summary["push"] = {
+            "ok": bool(pushed.get("ok")),
+            "fileCount": len(pushed.get("files") or []),
+            **({} if pushed.get("ok") else {"error": pushed.get("error")}),
+        }
+        if not pushed.get("ok"):
+            return {**summary, "ok": False, "failedStep": "push"}
+    return summary
 
 
 def _result(

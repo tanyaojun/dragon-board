@@ -27,6 +27,7 @@ from backend.data.migrations.mongodb_migration import (
     verify_mongodb_migration,
 )
 from backend.data.migrations.mongodb_cleanup import plan_mongodb_dataset_cleanup
+from backend.operations.mongodb_dead_data_cleanup import plan_dead_data_cleanup
 from backend.data.migrations.mongodb_snapshot_repair import (
     backfill_empty_snapshot_rows,
     copy_missing_snapshot_slots_from_dataset,
@@ -361,13 +362,14 @@ def cmd_backup_snapshot_day(args: argparse.Namespace) -> None:
 
 
 def cmd_after_market_once(args: argparse.Namespace) -> None:
-    print_json(
-        run_after_market_once(
-            archive_limit=args.archive_limit,
-            backup_limit=args.backup_limit,
-            dry_run=bool(args.dry_run),
-        )
+    result = run_after_market_once(
+        archive_limit=args.archive_limit,
+        backup_limit=args.backup_limit,
+        dry_run=bool(args.dry_run),
     )
+    print_json(result)
+    if not result.get("ok"):
+        raise SystemExit(1)
 
 
 def cmd_migrate_mongodb(args: argparse.Namespace) -> None:
@@ -436,6 +438,20 @@ def cmd_cleanup_mongodb_datasets(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_cleanup_mongodb_dead_data(args: argparse.Namespace) -> None:
+    result = plan_dead_data_cleanup(
+        _runtime_mongodb_database(),
+        drop_dead_collections=bool(args.drop_dead_collections),
+        cleanup_datasets=bool(args.cleanup_datasets),
+        purge_result_chunks=bool(args.purge_result_chunks),
+        compact=bool(args.compact),
+        apply=bool(args.apply),
+    )
+    print_json(result)
+    if not result.get("ok"):
+        raise SystemExit(1)
+
+
 def cmd_backfill_empty_mongodb_snapshots(args: argparse.Namespace) -> None:
     print_json(
         backfill_empty_snapshot_rows(
@@ -495,23 +511,27 @@ def cmd_snapshot_field_backfill(args: argparse.Namespace) -> None:
 
 
 def cmd_backup_mongodb(args: argparse.Namespace) -> None:
-    settings = get_settings()
-    db = get_mongodb_database(
-        settings.mongodb_uri,
-        settings.mongodb_database,
-        connect_timeout_ms=settings.mongodb_connect_timeout_ms,
-        server_selection_timeout_ms=settings.mongodb_server_selection_timeout_ms,
-    )
     service = get_mongodb_backup_service()
     if args.light:
-        result = service.create_light_backup(db)
+        result = service.create_light_backup()
     elif args.full:
-        result = service.create_full_backup(db)
+        result = service.create_full_backup()
     else:
         raise SystemExit("use --full or --light")
     if result.get("ok"):
         result["verify"] = service.verify_backup(result["backupId"])
     print_json(result)
+
+
+def cmd_restore_mongodb_backup(args: argparse.Namespace) -> None:
+    result = get_mongodb_backup_service().restore_backup(
+        args.backup_id,
+        target_database=args.target_db,
+        drop=bool(args.drop),
+    )
+    print_json(result)
+    if not result.get("ok"):
+        raise SystemExit(1)
 
 
 def cmd_verify_mongodb_backup(args: argparse.Namespace) -> None:
@@ -1561,6 +1581,21 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_mongodb_cmd.add_argument("--apply", action="store_true")
     cleanup_mongodb_cmd.set_defaults(func=cmd_cleanup_mongodb_datasets)
 
+    cleanup_dead_data_cmd = sub.add_parser(
+        "cleanup-mongodb-dead-data",
+        help="Preview or delete dead MongoDB collections / dataset residue / old research result chunks (default dry-run)",
+    )
+    cleanup_dead_data_cmd.add_argument("--drop-dead-collections", action="store_true")
+    cleanup_dead_data_cmd.add_argument("--cleanup-datasets", action="store_true")
+    cleanup_dead_data_cmd.add_argument("--purge-result-chunks", action="store_true")
+    cleanup_dead_data_cmd.add_argument(
+        "--compact",
+        action="store_true",
+        help="After deletion, run compact on affected collections to reclaim disk space",
+    )
+    cleanup_dead_data_cmd.add_argument("--apply", action="store_true")
+    cleanup_dead_data_cmd.set_defaults(func=cmd_cleanup_mongodb_dead_data)
+
     backfill_mongodb_cmd = sub.add_parser("backfill-empty-mongodb-snapshots", help="Preview or repair MongoDB formal snapshots: empty rows, missing records, count drift, missing slots, and missing indexes")
     backfill_mongodb_cmd.add_argument("--dataset-id", default="dragonboard_live")
     backfill_mongodb_cmd.add_argument("--snapshot-id", action="append", default=None)
@@ -1596,6 +1631,19 @@ def build_parser() -> argparse.ArgumentParser:
     verify_mongodb_restore_cmd = sub.add_parser("verify-mongodb-restore-staging", help="Verify a pulled MongoDB backup under restore-staging")
     verify_mongodb_restore_cmd.add_argument("--backup-id", required=True)
     verify_mongodb_restore_cmd.set_defaults(func=cmd_verify_mongodb_restore_staging)
+
+    restore_mongodb_backup_cmd = sub.add_parser(
+        "restore-mongodb-backup",
+        help="Restore a verified local MongoDB backup via mongorestore into a staging database",
+    )
+    restore_mongodb_backup_cmd.add_argument("--backup-id", required=True)
+    restore_mongodb_backup_cmd.add_argument(
+        "--target-db",
+        default="dragon_board_quant_restore_staging",
+        help="Target database name (must not be the primary database)",
+    )
+    restore_mongodb_backup_cmd.add_argument("--drop", action="store_true")
+    restore_mongodb_backup_cmd.set_defaults(func=cmd_restore_mongodb_backup)
 
     push_mongodb_backup_cmd = sub.add_parser("push-mongodb-backup", help="Push a verified MongoDB backup to R2/S3")
     push_mongodb_backup_cmd.add_argument("--backup-id", required=True)

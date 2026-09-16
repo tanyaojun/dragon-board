@@ -112,6 +112,10 @@ class Settings(BaseModel):
     mongodb_max_pool_size: int = Field(default=20)
     mongodb_backup_dir: Path = BASE_DIR / "data" / "backups" / "mongodb"
     mongodb_backup_retention_days: int = Field(default=30)
+    # 远端对象存储（R2）保留的全量备份份数，push 成功后清理更早备份
+    mongodb_remote_backup_keep: int = Field(default=4)
+    # MongoDB Database Tools（mongodump/mongorestore）所在 bin 目录，备份引擎用绝对路径调用
+    mongodb_tools_bin: Path = Path(r"D:\APP_SOFT\MongoDB\tools\bin")
     storage_backend: str = Field(default="sqlite")
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
     redis_key_prefix: str = Field(default="hellobiga:dragon-board:local")
@@ -329,6 +333,13 @@ class Settings(BaseModel):
             1,
             _env_int("QUANT_BOARD_MONGODB_BACKUP_RETENTION_DAYS", self.mongodb_backup_retention_days),
         )
+        self.mongodb_remote_backup_keep = max(
+            1,
+            _env_int("QUANT_BOARD_MONGODB_REMOTE_BACKUP_KEEP", self.mongodb_remote_backup_keep),
+        )
+        mongodb_tools_bin = os.environ.get("QUANT_BOARD_MONGODB_TOOLS_BIN")
+        if mongodb_tools_bin:
+            self.mongodb_tools_bin = Path(mongodb_tools_bin)
         self.storage_backend = os.environ.get("QUANT_BOARD_STORAGE_BACKEND", self.storage_backend).strip().lower()
         if self.storage_backend not in {"sqlite", "mongodb"}:
             raise ValueError(f"unsupported QUANT_BOARD_STORAGE_BACKEND: {self.storage_backend}")

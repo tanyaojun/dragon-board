@@ -620,6 +620,7 @@ class MongoResearchRepository(MongoRepository):
 
     def _backtest_run_from_doc(self, row: dict[str, Any]) -> BacktestRun:
         result_compressed = str(row.get("resultCompressed") or "")
+        result_json_value: Any = row.get("result")
         if row.get("resultChunked"):
             chunks = list(
                 self.db["backtest_result_chunks"]
@@ -628,6 +629,16 @@ class MongoResearchRepository(MongoRepository):
             )
             if chunks:
                 result_compressed = "".join(str(chunk.get("payload") or "") for chunk in chunks)
+            elif not result_compressed:
+                # chunks 已被清理（如 dead-data cleanup）时返回结构化缺失标记，
+                # 不静默返回伪空结果（fail-visible）
+                result_json_value = {
+                    "resultPurged": True,
+                    "reason": "backtest_result_chunks_missing",
+                    "expectedChunkCount": int(row.get("resultChunkCount") or 0),
+                }
+        if not isinstance(result_json_value, dict):
+            result_json_value = loads_json_field(result_compressed, {})
         return BacktestRun(
             id=str(row.get("id") or ""),
             dataset_id=str(row.get("datasetId") or ""),
@@ -641,11 +652,7 @@ class MongoResearchRepository(MongoRepository):
             date_end=row.get("dateEnd"),
             error_reason=row.get("errorReason"),
             request_json=json_dumps(row.get("request") or {}),
-            result_json=dumps_json_field(
-                row.get("result")
-                if isinstance(row.get("result"), dict)
-                else loads_json_field(result_compressed, {})
-            ),
+            result_json=dumps_json_field(result_json_value),
             created_at=_datetime_or_now(row.get("createdAt")),
             finished_at=_datetime_or_none(row.get("finishedAt")),
         )

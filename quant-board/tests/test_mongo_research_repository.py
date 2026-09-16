@@ -960,3 +960,36 @@ def test_factor_doc_keeps_heat_level_and_caliber() -> None:
     missing = MongoResearchRepository._factor_doc({"datasetId": "d", "snapshotId": "s", "themeId": "ai"})
     assert missing["heatLevel"] is None
     assert missing["heatFactorVersion"] is None
+
+
+def test_backtest_run_chunked_with_missing_chunks_returns_structured_purged_marker(monkeypatch) -> None:
+    """chunks 被清理后（run 元数据保留），读取必须返回 resultPurged 结构化标记而非伪空结果。"""
+    db = FakeMongoDatabase()
+    repo = MongoResearchRepository(db)
+    monkeypatch.setattr(mongo_research_module, "BACKTEST_RESULT_CHUNK_THRESHOLD", 20)
+    monkeypatch.setattr(mongo_research_module, "BACKTEST_RESULT_CHUNK_SIZE", 10)
+    result = {"signals": [{"code": f"{index:06d}", "payload": "sample" * 20} for index in range(80)]}
+
+    repo.save_backtest_run(
+        BacktestRun(
+            id="bt_purged",
+            dataset_id="ds_1",
+            strategy_name="rank_trend_candidate",
+            snapshot_type="half_hour",
+            config_hash="hash_purged",
+            random_seed=20260430,
+            request_json='{"datasetId":"ds_1"}',
+            result_json=json_dumps(result),
+        )
+    )
+
+    expected_chunk_count = db["backtest_runs"].rows[0]["resultChunkCount"]
+    # 模拟 dead-data 清理：仅删 chunks，run 元数据保留
+    db["backtest_result_chunks"].delete_many({})
+
+    restored = repo.get_backtest_run("bt_purged")
+    marker = loads_json_field(restored.result_json, {})
+
+    assert marker.get("resultPurged") is True
+    assert marker.get("reason") == "backtest_result_chunks_missing"
+    assert marker.get("expectedChunkCount") == expected_chunk_count
