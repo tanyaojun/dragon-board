@@ -225,7 +225,7 @@ export const useUIStore = defineStore('ui', () => {
   const expandedRows = ref<Set<string>>(new Set())
 
   const sort = ref<SortConfig>({
-    field: 'resonanceIntensity',
+    field: 'synergyTier',
     order: 'desc',
   })
 

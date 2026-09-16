@@ -43,7 +43,7 @@ const CANDIDATE_TIER_LABELS: Record<string, string> = {
   N_NEUTRAL: 'N_NEUTRAL / 中性观察',
 }
 
-const CANDIDATE_TIER_SHORT_LABELS: Record<string, string> = {
+export const CANDIDATE_TIER_SHORT_LABELS: Record<string, string> = {
   A_MAIN: '主升候选',
   B_IGNITION: '点火候选',
   C_CROWDED: '拥挤候选',

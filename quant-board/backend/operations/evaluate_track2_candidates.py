@@ -14,15 +14,19 @@ Trial 组（用户批准清单）：
 
 Track 2 判定卡（简化流程：一次 evaluate_gate 自动产出全部口径，替代人工拼表）：
   C1 决策窗 synergy saEx 相对改善 ≥ +3%（相对 baseline，baseline saEx>0）
-  C2 OOS ≥1 窗（oos1/oos2）同向为正改善
+  C2 OOS ≥1 窗（oos1/oos2u）同向为正改善
   C3 决策窗 passHard 不降（baseline True → trial False 一票否决）
   C4 regime 四桶（strong/normal/weak/retreat）决策窗 saEx 相对 baseline 下降 ≤ 0.01（绝对差）
   C5 决策窗翻转率 veto/bd_downgrade 相对 baseline 上升 ≤ +0.01（绝对差）
   结论：C1∧C2 = PASS_CANDIDATE（进入交易层复核+golden 变更流程）；C3 False = REJECT；
         其余 = OBSERVE。
 
-窗口纪律：决策窗 04-15~07-31（assert_not_frozen purpose=scan）+ OOS-1 08-15~08-31 +
-OOS-2 09-01~09-12（9 月 10 个交易日复验窗，用户批准）；FINAL(8/1-8/14) 冻结不进判定。
+窗口纪律（B-202610 口径，2026-09-16 用户裁决，单一事实源 data_windows.WINDOWS）：
+决策窗 04-15~07-31（assert_not_frozen purpose=scan）+ OOS-1 08-15~08-31 +
+OOS-2 09-01~09-30 全月（09-13 前帧已被阶段 0-26 harness 消费，读数仅作折扣参考）+
+OOS-2u 09-13~09-30 未消费裁决子窗（**C2 判定读数以 oos2u 为准**，M3 窗口消费折扣）；
+FINAL(8/1-8/14) 冻结不进判定。oos2u 消费禁令（2026-09-16 起）：09-13 后新帧除批次
+执行外不得跑结论性扫描。历史口径（oos2=09-01~09-12）见阶段 20 原始记录。
 组合交互提示：combo 相对"其组成单因子最优值"的改善输出对比行（检测相互抵消），不作硬门槛。
 
 口径来源：evaluate_gate（WP2 harness，含 regimeView 四桶 + WP3.2 翻转率 + passHard）；
@@ -30,7 +34,7 @@ load_frames（optimize_resonance_parameters，projection=ranktrend）。fail-vis
 样本量/缺失桶/None saEx 如实输出，不伪造 0。
 
 用法：
-  python -m backend.operations.evaluate_track2_candidates [--window decision|oos1|oos2|all]
+  python -m backend.operations.evaluate_track2_candidates [--window decision|oos1|oos2|oos2u|all]
       [--verdict-only] [--out <path>]
 """
 from __future__ import annotations
@@ -44,13 +48,14 @@ from typing import Any
 
 sys.path.insert(0, r"D:\dragon-board\quant-board")
 
+from backend.optimization.data_windows import WINDOWS as ALL_STANDARD_WINDOWS
 from backend.operations.optimize_gate_denoise_parameters import REPORT_DIR, evaluate_gate
 from backend.operations.optimize_resonance_parameters import load_frames
 
+# 窗口单一事实源：backend/optimization/data_windows.py（2026-09-16 B-202610 口径）。
+# oos2 判定读数以 oos2u 未消费子窗为准（M3），oos2 全月仅作折扣参考披露。
 WINDOWS: dict[str, tuple[str, str]] = {
-    "decision": ("2026-04-15", "2026-07-31"),
-    "oos1": ("2026-08-15", "2026-08-31"),
-    "oos2": ("2026-09-01", "2026-09-12"),
+    k: ALL_STANDARD_WINDOWS[k] for k in ("decision", "oos1", "oos2", "oos2u")
 }
 
 P1_OVERRIDES: dict[str, Any] = {
@@ -189,7 +194,8 @@ def verdict(report: dict[str, Any]) -> dict[str, Any]:
 
     out: dict[str, Any] = {"criteria": "C1决策窗saEx相对≥+3% C2 OOS≥1窗同向 C3 passHard不降 C4 regime桶降幅≤0.01 C5翻转升幅≤0.01"}
     dec = cards.get("decision") or {}
-    oos = [cards.get(w) for w in ("oos1", "oos2")]
+    # C2 判定读数以 oos2u（未消费子窗）为准，oos2 全月仅作折扣参考（M3 纪律）
+    oos = [cards.get(w) for w in ("oos1", "oos2u")]
     for key in [s["key"] for s in TRIALS if s["key"] != "baseline"]:
         if key not in dec:
             continue
@@ -211,7 +217,7 @@ def verdict(report: dict[str, Any]) -> dict[str, Any]:
         c5 = d["flipVeto"] - base_flip["veto"] <= 0.01 and d["flipBd"] - base_flip["bd_downgrade"] <= 0.01
         oos_detail = {
             win: (cards[win][key]["saExRel"] if cards.get(win) and key in cards[win] else None)
-            for win in ("oos1", "oos2")
+            for win in ("oos1", "oos2u", "oos2")
         }
         conclusion = "PASS_CANDIDATE" if (c1 and c2 and c3) else ("REJECT" if not c3 else "OBSERVE")
         card: dict[str, Any] = {
@@ -263,7 +269,7 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Track 2 统一判定 harness（阶段 20）")
-    parser.add_argument("--window", default="all", choices=["decision", "oos1", "oos2", "all"])
+    parser.add_argument("--window", default="all", choices=["decision", "oos1", "oos2", "oos2u", "all"])
     parser.add_argument("--verdict-only", action="store_true", help="只从缓存报告组装判定卡，不跑 trial")
     parser.add_argument("--out", default="")
     args = parser.parse_args()

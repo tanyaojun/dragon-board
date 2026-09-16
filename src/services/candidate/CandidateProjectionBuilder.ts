@@ -18,6 +18,16 @@ function buildFrameTime(tradingDate: string, slotTime: string, fallback: string)
   return fallback || ''
 }
 
+/** 候选行的 rankTrend 取源（与投影同规则）：auto 触发用冻结快照，其余用 live 股票。 */
+export function resolveCandidateRankTrendSource(
+  entry: CandidateJournalEntry,
+  liveStockInput?: Record<string, any> | null,
+): Record<string, any> | null {
+  const stockCode = normalizeCode(entry.stockCode)
+  const liveStock = liveStockInput || (dataLayer.getStock(stockCode) as Record<string, any> | undefined) || {}
+  return resolveFrozenRankTrendSnapshot(entry) || liveStock.rankTrend || null
+}
+
 function resolveFrozenRankTrendSnapshot(entry: CandidateJournalEntry): Record<string, any> | null {
   const triggerMeta = (entry.signalsSnapshot?.triggerMeta as Record<string, any> | undefined) || {}
   const snapshotRankTrend = (entry.signalsSnapshot?.rankTrend as Record<string, any> | undefined) || null

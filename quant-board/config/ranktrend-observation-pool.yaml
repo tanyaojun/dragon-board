@@ -1,0 +1,200 @@
+# RankTrend 观察池 / 复核登记表（结构化单一源，2026-09-16 首次落盘）
+#
+# 用途：终结"遗留与复核触发"散落长测文档 16 处小节的人工汇总模式。
+# 批次 runner 从本文件直接生成执行清单；每批收口后更新 status / evidenceGeneration。
+#
+# kind:
+#   default_review  已落默认栈的回退复核项（复核 = 单项还原 patch，不是晋升期对照）
+#   observe         观察池候选（未落默认，条件触发重判）
+#   proposal        待立项评估（未立项，批次评估后转 observe / 关闭）
+# status:
+#   in_default      已在生产默认栈（default_review 专用）
+#   pending_rerun   待 B-202610 批次重判
+#   proposal_pending 待批次评估是否立项
+# evidenceGeneration: 证据所属锚代际（见 config/ranktrend-anchors.json）；批次重判后更新为重判代际。
+# 判定纪律：见 skills/ranktrend-signal-research/SKILL.md 统一收口（Track 2 判定卡 → saEx 盲区
+# 检查 → Track 1 终判 → 六类判定 → 用户决策 → 一次一候选落默认）。
+
+schema: ranktrend-observation-pool/v1
+updatedAt: '2026-09-16'
+anchorsRef: ranktrend-anchors.json
+factSource: ../docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md
+rerunPlan: ../docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md
+currentBatch: B-202610
+
+items:
+  # ============ 已落默认栈回退复核（rerun-plan §4 阶段 2，R1-R5） ============
+  - id: R1_fund10
+    kind: default_review
+    desc: volumePriceAbnormalFundRatio 20→10（阶段 25.7 用户决策落默认，全链唯一走完双纪律候选）
+    status: in_default
+    revertPatch: 20.0
+    revertNote: 还原 AbnormalFundRatio=20.0
+    verdictRule: 9 月窗判定卡推翻 → 还原 20.0
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [longterm §25.6.1, §25.7, L1 §14.4]
+
+  - id: R2_combo_three_quarter
+    kind: default_review
+    desc: combo_three_quarter——resonance/rankTrend/crossSection 三维票权 ×0.75（23.9.1 临时默认）
+    status: in_default
+    revertPatch: 1.0
+    revertNote: 三维票权还原 1.0（py 三字段 + TS tierDisplay 权重常量同步，见 §23.9.1 回退条目）
+    verdictRule: 三窗判定卡复现方可保持；oos2 passHard 边缘失效为第一观察项
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §23.9.1, L1 §12（补记挂起至 9 月复验）]
+
+  - id: R3_ts_weights_p2aggressive
+    kind: default_review
+    desc: 五因子权重 p2_aggressive（0.06/0.04/0.24/0.29/0.37，阶段 22 落默认）
+    status: in_default
+    revertPatch: 0.24/0.20/0.16/0.20/0.20
+    revertNote: 还原旧五权重（字段与数值见 §22.8 回退条件）
+    verdictRule: 9 月全月判定卡 + S+A 触发率监控（持续 <3.5% 评估 buyScoreThreshold 微调）+ retreat 桶 -0.045 代价监控
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §22.6, §22.8]
+
+  - id: R4_ma_join
+    kind: default_review
+    desc: ma_join 五因子合同（MA 进决策合成第 5 分量，阶段 21 落默认）
+    status: in_default
+    revertPatch: 0.0
+    revertNote: maWeight→0
+    verdictRule: §21.6 三条回退触发——① 9 月窗 synergy saEx 低于旧 baseline 口径（绝对差<0）且 10 月窗连续为负；② WP3.2 翻转率异常上升（veto/bd > 旧口径 +0.01）；③ 交易层复核负偏离
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §21.6]
+
+  - id: R5_jump_fix
+    kind: default_review
+    desc: Jump 确认门断线修复（buy/sell 枚举真实生效，2026-09-15 用户决策）
+    status: in_default
+    revertPatch: null
+    revertNote: 无回退项——以批次阶段 1 跨代际对照替代（decision +18.1% 已知，oos 两窗未知）
+    verdictRule: 三窗确认降级率与 saEx 收益
+    evidenceGeneration: gen-2026-09-15-jump-fix
+    evidence: [longterm §26.7, §26.10.2]
+
+  # ============ 观察池候选（rerun-plan §4 阶段 3，O1-O8） ============
+  - id: O1_p2
+    kind: observe
+    desc: p2 = vp 短路 off × veto 0.75（阶段 24，观察池最高优先）
+    status: pending_rerun
+    trigger: 9 月全月 saEx 复现 + oos2u 交易层改善扩样保持 → 重提 Track 1 复核
+    blockerNote: saEx 三窗全正但交易层主窗受损（阶段 24 e1a 首例拦截原型）
+    evidenceGeneration: 阶段24（pre-fund10 + pre-jump-fix）
+    evidence: [longterm §24.5]
+
+  - id: O2_fund10_over2
+    kind: observe
+    desc: fund10+over2 叠加（观察池最高优先；§25.3 实测 fund10 落默认后基线漂移失效 OOS -22~-34%）
+    status: pending_rerun
+    trigger: 新月度窗口 C2 通过
+    baselineNote: 对照基线必须显式声明为 fund10 回退口径（R1 的 revert patch 状态），否则被已落默认的 fund10 污染
+    evidenceGeneration: 阶段20（pre-fund10）
+    evidence: [longterm §20.3, §25.3]
+
+  - id: O3_vsb070
+    kind: observe
+    desc: vsB_070——VoteStrengths[2] B 档票强度 0.8→0.7（§26.9 Track 1 decision +0.9% 中性 149 笔，不否决不证实）
+    status: pending_rerun
+    trigger: 9 月全月复验同批裁决
+    evidenceGeneration: 阶段26（jump-fix 交界，批次重判时确认）
+    evidence: [longterm §26.9, §26.10.1]
+
+  - id: O4_jump25_fresh06
+    kind: observe
+    desc: jumpDeltaPct 15→25 + JumpFreshnessMin 0.5→0.6（阶段 9.5 组合）
+    status: pending_rerun
+    trigger: 与 O2 同批复验
+    evidenceGeneration: 阶段20（pre-fund10）
+    evidence: [longterm §19.4 P1, §20 Track2 P1 复验]
+
+  - id: O5_buyThr018
+    kind: observe
+    desc: buyScoreThreshold=0.18（阶段 13 复扫：两窗同向一窗反向）
+    status: pending_rerun
+    trigger: 9 月样本扩展复扫（与 O7/O8 同批）
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §13.3, §16.4]
+
+  - id: O6_midlong_commitment_dose
+    kind: observe
+    desc: MidLongCommitmentMin 剂量曲线（阶段 23 重扫：oos2 +3.5~+7.1% 信号待全月复现）
+    status: pending_rerun
+    trigger: 9 月全月信号复现且 decision 窗读数抬升 → 按 Track 2 流程重出提案
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §23.7]
+
+  - id: O7_cs_a_tier
+    kind: observe
+    desc: crossSection 投票 A 档复核（首次核心算法默认变更后的持续观察）
+    status: pending_rerun
+    trigger: A 档样本 >500 + 新窗口 synergy 稳定 >0.05
+    evidenceGeneration: gen-2026-08-22_8 起（跨代际持续观察项）
+    evidence: [longterm §10.4, §11.5]
+
+  - id: O8_dual_strength
+    kind: observe
+    desc: 双强共振 rt=A×cs=A（§15.4 判定"缺复核"，方向证据不支持降级：meanRet csA≥csC 三窗一致）
+    status: pending_rerun
+    trigger: 合并滚动统计口径（2026-09-16 裁决）：合并 283（233+32+18）+ 各批新增，每批重算 meanRet(csA-csC) 方向与 n；仅服务降级命题，不用于参数晋升
+    falsifyRule: 转正式证伪三条件 = 合并 n≥500 ∧ jump-fix 新代际子样本 n≥200 ∧ 方向仍不支持降级
+    evidenceGeneration: 阶段15（pre-fund10，断线代际 283 样本）
+    evidence: [longterm §11.4f, §15.4, §21.5]
+
+  # ============ 待立项评估（rerun-plan §4 阶段 4，N1-N7） ============
+  - id: N1_jump_confirm_scan
+    kind: proposal
+    desc: jumpConfirm 两参 5 档扫描（jumpConfirmChangeMin × jumpConfirmVolumeRatioMin；门修复后剂量才有意义）
+    status: proposal_pending
+    trigger: B-202610 批次评估立项（新代际首批）
+    evidenceGeneration: gen-2026-09-15-jump-fix
+    evidence: [longterm §26.10.2, param-gap-scan 方案 P6-c]
+
+  - id: N2_trade_layer_topics
+    kind: proposal
+    desc: 交易层口径课题批四项——weak/reverse 线、regimeStrongScore、decisionReversal*、momentumScoreThreshold（saEx 盲区三案同构）
+    status: proposal_pending
+    trigger: 与 9 月复验同批立项一次跑完；工具已备（track1_lifecycle_gate_trade --extra-arm / track1_dimension_power）
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [longterm §26.8]
+
+  - id: N3_atr_discrimination
+    kind: proposal
+    desc: P6-a ATR 观察因子区分度（unknown>50% 硬判据 → 数据不足不开发；根因轮动断档 gapResets 82.3 万）
+    status: proposal_pending
+    trigger: 9 月全月 unknown 率重测后决定（oos 两窗覆盖已修复至 98%+）
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [longterm §26.7 P6-a, §26.10.4]
+
+  - id: N4_ma_replace_trigger
+    kind: proposal
+    desc: MA 替换触发检查（macdWeight→0，条件触发型）
+    status: proposal_pending
+    trigger: decision 窗复验转正 ≥+3% 即走 PASS_CANDIDATE
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §20.5]
+
+  - id: N5_ma_cross_event
+    kind: proposal
+    desc: MA 金叉事件级加分项评估（事件级用法：非决策权重、非 trend_buy 接线位）
+    status: proposal_pending
+    trigger: 批次评估是否立项（从未评估）
+    evidenceGeneration: gen-2026-09-09_23_9_1
+    evidence: [longterm §17.7, §19.4 P3]
+
+  - id: N6_regime_gate_alpha_hysteresis
+    kind: proposal
+    desc: regime 门禁扩展消费非 strong 状态时的 α/迟滞重扫（条件触发型）
+    status: proposal_pending
+    trigger: 批次仅核对触发条件是否成立（门禁扩展消费非 strong 状态未发生则不触发）
+    evidenceGeneration: gen-2026-08-22_8
+    evidence: [longterm §12.4]
+
+  - id: N7_res_nan_median_h2
+    kind: proposal
+    desc: res NaN median 拦截帧含正信息（H2 线索）——代码级修复候选（NaN 处理/前值填充），非阈值参数空间
+    status: proposal_pending
+    trigger: 只登记不实施；未来立项属代码级修复
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [longterm §25.6.5, §25.6 运维注记 5]

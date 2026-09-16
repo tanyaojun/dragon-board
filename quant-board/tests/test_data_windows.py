@@ -5,6 +5,7 @@ import pytest
 from backend.optimization.data_windows import (
     FINAL_START,
     TRAIN_END,
+    TRAIN_START,
     WINDOWS,
     assert_not_frozen,
     in_window,
@@ -55,3 +56,34 @@ def test_assert_not_frozen_blocks_decision() -> None:
     assert_not_frozen(frames, purpose="report")
     # 非冻结窗口放行
     assert_not_frozen(_frames(start="2026-05-01"), purpose="scan")
+
+
+def test_ranktrend_windows_registered() -> None:
+    # B-202610 口径（2026-09-16 用户裁决）：RankTrend 四窗注册进 WINDOWS 单一事实源
+    assert WINDOWS["decision"] == ("2026-04-15", "2026-07-31")
+    assert WINDOWS["oos1"] == ("2026-08-15", "2026-08-31")
+    assert WINDOWS["oos2"] == ("2026-09-01", "2026-09-30")
+    assert WINDOWS["oos2u"] == ("2026-09-13", "2026-09-30")
+
+
+def test_ranktrend_windows_sequencing() -> None:
+    # decision = train+val+test 全域（in-sample 锚定窗）；FINAL 冻结窗与 oos1 无缝；
+    # oos2u ⊂ oos2（未消费裁决子窗，M3 纪律）
+    assert WINDOWS["decision"] == (TRAIN_START, WINDOWS["test"][1])
+    assert WINDOWS["final"][1] < WINDOWS["oos1"][0]
+    assert WINDOWS["oos2"][0] <= WINDOWS["oos2u"][0] < WINDOWS["oos2u"][1] <= WINDOWS["oos2"][1]
+
+
+def test_split_window_oos2u_excludes_consumed_frames() -> None:
+    # oos2u 子窗排除 09-13 前已被阶段 0-26 harness 消费的帧（M3 窗口消费折扣）
+    frames = (
+        _frames(1, "2026-09-12")
+        + _frames(1, "2026-09-13")
+        + _frames(1, "2026-09-30")
+        + _frames(1, "2026-10-01")
+    )
+    picked = split_window(frames, "oos2u")
+    assert [f["tradingDate"] for f in picked] == ["2026-09-13", "2026-09-30"]
+    # oos2 全月含 09-12 已消费帧，不含 10 月帧
+    picked_oos2 = split_window(frames, "oos2")
+    assert [f["tradingDate"] for f in picked_oos2] == ["2026-09-12", "2026-09-13", "2026-09-30"]

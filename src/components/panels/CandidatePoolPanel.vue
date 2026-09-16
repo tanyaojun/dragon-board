@@ -110,6 +110,15 @@
                   <span class="trading-pool-summary">
                     总数 {{ tradingPoolStats.total }} · 观察 {{ tradingPoolStats.watch }} · 准备 {{ tradingPoolStats.ready }} · 介入 {{ tradingPoolStats.intervened }} · 退出 {{ tradingPoolStats.exited }} · 过期 {{ tradingPoolStats.stale }}
                   </span>
+                  <button
+                    type="button"
+                    class="text-btn compact-btn"
+                    :class="{ 'quality-filter-active': qualityFilterOnly }"
+                    :title="qualityFilterOnly ? '点击显示全部候选' : '点击只看样本降级/不足的候选'"
+                    @click="qualityFilterOnly = !qualityFilterOnly"
+                  >
+                    样本不足 {{ candidateQualitySummary.insufficient }} · 降级 {{ candidateQualitySummary.degraded }}{{ qualityFilterOnly ? ' ✓' : '' }}
+                  </button>
                   <button type="button" class="text-btn compact-btn" @click="refreshTradingPool">
                     刷新交易池
                   </button>
@@ -528,6 +537,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { buildCandidateJournalProjection } from '@/services/candidate/CandidateProjectionBuilder'
+import { resolveCandidateRankTrendSource } from '@/services/candidate/CandidateProjectionBuilder'
+import { hasSampleQualityIssue, summarizeSampleQuality } from '@/services/candidate/sampleQualityCounts'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { analyzeTradingPoolCandidate, normalizeResonanceIntensity } from '@/services/candidate/TradingPoolAnalysisService'
 import { dataLayer } from '@/services/DataLayer'
@@ -601,6 +612,14 @@ const tradingDecisionFilter = ref('')
 const tradingStatusFilter = ref('')
 const sortMode = ref<'state-priority' | 'trigger-desc' | 'holding-desc'>('state-priority')
 const keyword = ref('')
+// 样本质量透出（2026-09-16 P1-3）：池顶栏计数 + 点击过滤，只看质量降级/不足的候选。
+// 质量取源与投影同规则（auto 冻结快照优先，其余 live），缺源不打问题标（fail-visible）。
+const qualityFilterOnly = ref(false)
+const candidateQualitySummary = computed(() =>
+  summarizeSampleQuality(
+    strategyRows.value.map((row) => resolveCandidateRankTrendSource(row.entry)),
+  ),
+)
 const pendingStrategyMode = ref<RankTrendLiveStrategyMode>('balanced')
 const transientRow = ref<CandidatePoolRow | null>(null)
 const liveDecisionOverrides = ref<Record<string, FusionStrategyProjection>>({})
@@ -960,6 +979,7 @@ const visibleRows = computed<CandidatePoolRow[]>(() => {
 
   return [...strategyRows.value]
     .filter((row) => !statusFilter.value || row.projection.strategyState === statusFilter.value)
+    .filter((row) => !qualityFilterOnly.value || hasSampleQualityIssue(resolveCandidateRankTrendSource(row.entry)))
     .filter((row) => {
       if (!normalizedKeyword) return true
       return (
@@ -1928,6 +1948,11 @@ textarea:focus-visible {
   color: var(--candidate-muted);
   font-family: var(--candidate-font-data);
   font-size: 12px;
+}
+
+.quality-filter-active {
+  color: #fcd34d;
+  border-color: rgba(252, 211, 77, 0.6);
 }
 
 .trading-pool-filters {

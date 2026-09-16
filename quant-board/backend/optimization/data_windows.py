@@ -27,11 +27,31 @@ TEST_END = "2026-07-31"
 FINAL_START = "2026-08-01"
 FINAL_END = "2026-08-14"
 
+# ---- RankTrend 复跑批次窗口（B-202610 口径，2026-09-16 用户裁决）----
+# decision = in-sample 锚定窗（train+val+test 全域）；
+# oos1 与 FINAL 冻结窗无缝衔接；FINAL 冻结纪律对四窗全部适用（assert_not_frozen）。
+# oos2 = 9 月全月（09-13 前的帧已被阶段 0-26 harness 消费，结论须标注"含已消费帧"折扣）；
+# oos2u = 09-13~09-30 未消费裁决子窗——判定卡 OOS 判定读数以此为准（M3 窗口消费折扣）。
+# oos2u 消费禁令（2026-09-16 起）：09-13 后产生的帧除批次执行外不得跑结论性扫描
+# （只读数据质量盘点不受限）；见 docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md §2.1。
+DECISION_START = "2026-04-15"
+DECISION_END = "2026-07-31"
+OOS1_START = "2026-08-15"
+OOS1_END = "2026-08-31"
+OOS2_START = "2026-09-01"
+OOS2_END = "2026-09-30"
+OOS2U_START = "2026-09-13"
+OOS2U_END = "2026-09-30"
+
 WINDOWS: dict[str, tuple[str, str]] = {
     "train": (TRAIN_START, TRAIN_END),
     "val": (VAL_START, VAL_END),
     "test": (TEST_START, TEST_END),
     "final": (FINAL_START, FINAL_END),
+    "decision": (DECISION_START, DECISION_END),
+    "oos1": (OOS1_START, OOS1_END),
+    "oos2": (OOS2_START, OOS2_END),
+    "oos2u": (OOS2U_START, OOS2U_END),
 }
 
 _FROZEN_WINDOW = "final"

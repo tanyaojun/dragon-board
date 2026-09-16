@@ -225,8 +225,42 @@
               <article>
                 <span>风险压力</span>
                 <strong>{{ formatNumber(currentStock.riskPressure, 2) }}</strong>
-                <small>协同 {{ formatNumber(currentStock.riskSynergy, 2) }}</small>
+                <small>
+                  协同 {{ formatNumber(currentStock.riskSynergy, 2) }}
+                  · 过热 {{ currentStock.riskOverheat ? formatNumber(currentStock.riskOverheat.score, 0) + '（' + signalText(currentStock.riskOverheat.signal) + '）' : '--' }}
+                  · 背离 {{ currentStock.riskDivergence ? formatNumber(currentStock.riskDivergence.score, 0) + '（' + signalText(currentStock.riskDivergence.signal) + '）' : '--' }}
+                </small>
               </article>
+            </div>
+
+            <div class="history-compare">
+              <div class="section-head compact">
+                <div>
+                  <h4>昨日同时点对比</h4>
+                  <span>历史 analyze 回放 · 缺数据时占位</span>
+                </div>
+                <strong v-if="historyComparisonState === 'loading'">读取中…</strong>
+                <strong v-else-if="historyComparisonState === 'missing'">无昨日数据</strong>
+                <strong v-else-if="historyComparison?.changed" class="history-compare-flag">有变化</strong>
+                <strong v-else>持平</strong>
+              </div>
+              <div v-if="historyComparison" class="history-compare-grid">
+                <article>
+                  <span>状态</span>
+                  <strong>{{ historyComparison.stageLabel }}</strong>
+                  <small>{{ historyComparison.transition || '—' }}</small>
+                </article>
+                <article>
+                  <span>分层</span>
+                  <strong>{{ historyTierText(historyComparison.tier) }}</strong>
+                  <small>当前 {{ currentStock.statusLabel }}</small>
+                </article>
+                <article>
+                  <span>信号</span>
+                  <strong>{{ signalText(historyComparison.signal) }}</strong>
+                  <small>当前 {{ signalText(currentStock.finalSignal) }}</small>
+                </article>
+              </div>
             </div>
 
             <div class="momentum-card">
@@ -245,6 +279,31 @@
                   </div>
                   <strong :class="item.className">{{ item.text }}</strong>
                 </div>
+              </div>
+            </div>
+
+            <div v-if="jumpHistoryView" class="jump-history">
+              <div class="section-head compact">
+                <div>
+                  <h4>最近排名跳动</h4>
+                  <span>上冲 / 下坠明细 · 分析师复核窗口</span>
+                </div>
+                <strong :class="signalClass(jumpHistoryView.directionText === '买入' ? 'buy' : jumpHistoryView.directionText === '卖出' ? 'sell' : 'hold')">
+                  {{ jumpHistoryView.directionText }} {{ jumpHistoryView.magnitudeText }}{{ jumpHistoryView.confirmed ? ' · 已确认' : '' }}
+                </strong>
+              </div>
+              <div class="jump-history-summary">
+                <span>窗口事件 {{ jumpHistoryView.eventCount }}</span>
+                <span class="jump-surge">上冲 {{ jumpHistoryView.surgeCount }}</span>
+                <span class="jump-collapse">下坠 {{ jumpHistoryView.collapseCount }}</span>
+              </div>
+              <div class="jump-history-list">
+                <span
+                  v-for="item in jumpHistoryView.items"
+                  :key="item.key"
+                  class="jump-history-chip"
+                  :class="item.isSurge ? 'jump-surge' : item.isCollapse ? 'jump-collapse' : 'jump-neutral'"
+                >{{ item.label }} {{ item.magnitudeText }}</span>
               </div>
             </div>
 
@@ -336,6 +395,13 @@ import { usePanel } from '@/composables/usePanel'
 import { dataLayer } from '@/services/DataLayer'
 import { rankTrendAnalyzer, type RankTrendResult } from '@/services/RankTrendAnalyzer'
 import { getRankTrendDisplayBreakdown } from '@/services/rankTrend/compat'
+import { CANDIDATE_TIER_SHORT_LABELS } from '@/services/rankTrend/statusClassifier'
+import { buildJumpHistoryView } from '@/services/rankTrend/jumpHistory'
+import {
+  buildHistoryComparisonView,
+  loadHistoryComparisonEntry,
+  type HistoryComparisonView,
+} from '@/services/rankTrend/historyComparison'
 import {
   buildRankTrendSnapshotPriority,
   cloneDefaultRankTrendRuntimeConfig,
@@ -408,6 +474,8 @@ interface PanelStockView {
   regimeScore: number
   riskPressure: number
   riskSynergy: number
+  riskOverheat: { score?: number; signal?: string; severity?: number } | null
+  riskDivergence: { score?: number; signal?: string; severity?: number } | null
   entryReason: string
   momentum: NonNullable<RankTrendResult['strategy']>['momentum'] | null
   rankTrend: RankTrendResult | null
@@ -443,6 +511,14 @@ const showConfigEditor = ref(false)
 const loading = ref(false)
 const loadingText = ref('正在计算策略结构')
 const currentStock = ref<PanelStockView | null>(null)
+// 昨日同时点对比（2026-09-16 P1-1）：snapshot_analysis 历史回放链首次接入盘面。
+// null = 无昨日产物（新上榜股）或读取失败——UI 显示占位，不伪造。
+const historyComparison = ref<HistoryComparisonView | null>(null)
+const historyComparisonState = ref<'idle' | 'loading' | 'ready' | 'missing'>('idle')
+
+// 排名跳动历史（2026-09-16 P2-1）：live analyze 的 jump 事件明细（最近 N 次上冲/下坠）。
+// 无跳动历史时为 null，区块整段隐藏（fail-visible）。
+const jumpHistoryView = computed(() => buildJumpHistoryView(currentStock.value?.rankTrend?.jump ?? null))
 const breathData = ref<any>(null)
 const rankHistory = ref<number[]>([])
 const historySource = ref('')
@@ -723,6 +799,9 @@ function buildPanelStockView(
     regimeScore: Number(strategy?.regime?.score ?? 0),
     riskPressure: Number(risk?.pressure ?? 0),
     riskSynergy: Number(risk?.synergy ?? 0),
+    // P2-2：过热/背离两轴透出（后端 {score, signal, severity}，展示 score+信号）
+    riskOverheat: risk?.overheat ?? null,
+    riskDivergence: risk?.divergence ?? null,
     entryReason: String(cycle?.entryAdvice?.reason ?? '-'),
     momentum: strategy?.momentum ?? null,
     rankTrend: analysis,
@@ -758,6 +837,8 @@ async function loadStock(force = false) {
   errorMessage.value = ''
   currentStock.value = null
   rankHistory.value = []
+  historyComparison.value = null
+  historyComparisonState.value = 'idle'
   disposeChart()
 
   try {
@@ -786,6 +867,38 @@ async function loadStock(force = false) {
 
     currentStock.value = buildPanelStockView(sourceStock, analysis, rank)
     breathData.value = dataLayer.getBreathData()
+    // 昨日同时点对比：独立容错加载（fail-visible），失败/缺失只置 missing 占位
+    const sampleQualityMeta = analysis?.meta?.sampleQuality
+    const histDate = String(sampleQualityMeta?.latestTradingDate || '')
+    const histSlot = String(sampleQualityMeta?.latestSlotTime || '')
+    if (histDate && histSlot) {
+      historyComparisonState.value = 'loading'
+      loadHistoryComparisonEntry({
+        snapshotType: selectedSnapshotType.value,
+        tradingDate: histDate,
+        slotTime: histSlot,
+        code,
+      })
+        .then((loaded) => {
+          if (!loaded || !currentStock.value || normalizeCode(code) !== currentStock.value.code) {
+            historyComparison.value = null
+            historyComparisonState.value = 'missing'
+            return
+          }
+          historyComparison.value = buildHistoryComparisonView(loaded.entry, {
+            stageLabel: currentStock.value.displayStatusLabel || '',
+            tier: currentStock.value.tier,
+            signal: currentStock.value.finalSignal,
+          })
+          historyComparisonState.value = historyComparison.value ? 'ready' : 'missing'
+        })
+        .catch(() => {
+          historyComparison.value = null
+          historyComparisonState.value = 'missing'
+        })
+    } else {
+      historyComparisonState.value = 'missing'
+    }
     const sampleQuality = analysis?.meta?.sampleQuality
     const runtimeSummary = `${runtimeConfig.macdFast}/${runtimeConfig.macdSlow}/${runtimeConfig.macdSignal}`
     dataStatus.value = analysis
@@ -953,6 +1066,11 @@ function formatMoney(value?: number): string {
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp)
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
+}
+
+function historyTierText(tier?: string): string {
+  if (!tier || tier === '--') return '--'
+  return CANDIDATE_TIER_SHORT_LABELS[tier] ?? tier
 }
 
 function signalText(signal?: string): string {
@@ -1566,6 +1684,92 @@ onUnmounted(() => {
 
 .context-grid small {
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jump-history {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
+}
+
+.jump-history-summary {
+  display: flex;
+  gap: 12px;
+  margin: 8px 0 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.jump-history-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.jump-history-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.jump-history-chip.jump-surge,
+.jump-surge {
+  color: #f87171;
+}
+
+.jump-history-chip.jump-collapse,
+.jump-collapse {
+  color: #4ade80;
+}
+
+.jump-history-chip.jump-neutral {
+  color: var(--text-secondary);
+}
+
+.history-compare {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
+}
+
+.history-compare-flag {
+  color: #fcd34d;
+}
+
+.history-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.history-compare-grid article {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.history-compare-grid article span {
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.history-compare-grid article strong {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.history-compare-grid article small {
+  font-size: 10px;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

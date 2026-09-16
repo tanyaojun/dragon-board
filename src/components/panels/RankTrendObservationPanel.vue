@@ -259,6 +259,44 @@
               </ul>
             </section>
 
+            <section v-if="activeTrack === 'factors'" class="track-section">
+              <div class="section-heading">
+                <div>
+                  <span class="section-kicker">TRACK 05</span>
+                  <h2>因子全景</h2>
+                </div>
+              </div>
+
+              <div class="factor-panorama">
+                <div v-for="row in observationFactorRows" :key="row.key" class="factor-panorama-row">
+                  <span class="factor-panorama-label">{{ row.label }}</span>
+                  <span class="factor-panorama-tier" :class="row.tier ? `tier-badge tier-${String(row.tier).toLowerCase()}` : 'tier-unknown'">{{
+                    row.tier || '--'
+                  }}</span>
+                  <span class="factor-panorama-primary">{{ row.primary }}</span>
+                  <span class="factor-panorama-reason">{{ row.reason || '—' }}</span>
+                </div>
+              </div>
+
+              <div v-if="marketPercentileRows" class="market-percentiles">
+                <div class="section-head compact">
+                  <div>
+                    <h4>市场百分位参考</h4>
+                    <span>全市场分位数 · 个股所处位置的外部标尺</span>
+                  </div>
+                </div>
+                <div class="percentile-table">
+                  <div class="percentile-row percentile-head">
+                    <span>指标</span><span>P50</span><span>P70</span><span>P85</span>
+                  </div>
+                  <div v-for="row in marketPercentileRows" :key="row.label" class="percentile-row">
+                    <span>{{ row.label }}{{ row.unit ? `（${row.unit}）` : '' }}</span>
+                    <span>{{ row.p50 }}</span><span>{{ row.p70 }}</span><span>{{ row.p85 }}</span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
             <footer class="frame-timeline">
               <div class="timeline-heading">
                 <strong>最近 {{ trackFrames.length }} 帧</strong>
@@ -293,7 +331,13 @@ import {
   type RankTrendObservationViewModel,
 } from '@/services/rankTrend/RankTrendObservationService'
 import type { AttentionStage, RankSignalDirection } from '@/services/rankTrend/types'
+import { rankTrendAnalyzer } from '@/services/RankTrendAnalyzer'
+import { applyRankTrendAnalysis } from '@/services/rankTrend/compat'
 import { getVolumePriceQuadrantLabel } from '@/services/rankTrend/volumePriceValidation'
+import {
+  buildMarketPercentileRows,
+  buildObservationFactorRows,
+} from '@/services/rankTrend/observationFactors'
 
 const props = defineProps<{
   visible: boolean
@@ -308,9 +352,21 @@ const tracks: Array<{ id: ObservationTrack; index: string; label: string }> = [
   { id: 'technical', index: '02', label: '技术结构' },
   { id: 'lifecycle', index: '03', label: '阶段与风险' },
   { id: 'volumePrice', index: '04', label: '量能协同' },
+  { id: 'factors', index: '05', label: '因子全景' },
 ]
 
 const activeTrack = ref<ObservationTrack>('resonance')
+
+// 因子全景（2026-09-16 P3）：observation 深层子字段 + 市场百分位参考。
+// 单轴缺数据 → 行仍显示「缺数据」（fail-visible）；percentiles 缺失 → 整块隐藏。
+const observationFactorRows = computed(() =>
+  buildObservationFactorRows(selectedAnalysis.value?.observation as Record<string, any> | null | undefined),
+)
+const marketPercentileRows = computed(() =>
+  buildMarketPercentileRows(
+    selectedAnalysis.value?.meta?.marketPercentiles as Record<string, any> | null | undefined,
+  ),
+)
 const viewModel = ref<RankTrendObservationViewModel | null>(null)
 const selectedIndex = ref(0)
 const loading = ref(false)
@@ -371,6 +427,27 @@ watch(
     loading.value = true
     loadError.value = ''
     try {
+      // 因子全景（2026-09-16 P3）：observation 深层字段/市场百分位需要完整 analyze 产物。
+      // DataLayer 批量 analyze 未覆盖该股时先补一次单股 remote analyze（与 RankTrendPanel 同路径）；
+      // 失败不阻断面板加载（因子行将显示「缺数据」，fail-visible）。
+      const target = props.stock as any
+      if (target && (!target.rankTrend?.observation || !target.rankTrend?.meta?.marketPercentiles)) {
+        try {
+          const codeStr = String(code)
+          const rankMap = new Map<string, number>()
+          const rank = Number(target.compRank ?? target.rank ?? 0)
+          rankMap.set(codeStr, Number.isFinite(rank) && rank > 0 ? rank : 1)
+          const results = await rankTrendAnalyzer.getRankTrends(rankMap, {
+            updateSignalStore: false,
+            skipLocalCompute: true,
+            remoteCodes: [codeStr],
+          })
+          const remote = results.get(codeStr)
+          if (remote) applyRankTrendAnalysis(target, remote)
+        } catch {
+          // 保留原状态
+        }
+      }
       const result = await rankTrendObservationService.load(props.stock, { signal: controller.signal })
       if (token !== loadToken) return
       viewModel.value = result
@@ -956,6 +1033,105 @@ const riskSignals = computed(() => {
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #3a4447 transparent;
+}
+
+.factor-panorama {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.factor-panorama-row {
+  display: grid;
+  grid-template-columns: 96px 36px minmax(180px, 1.2fr) minmax(160px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.factor-panorama-label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.factor-panorama-tier {
+  display: inline-block;
+  min-width: 22px;
+  text-align: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.factor-panorama-tier.tier-a {
+  background: rgba(248, 113, 113, 0.2);
+  color: #fca5a5;
+}
+
+.factor-panorama-tier.tier-b {
+  background: rgba(252, 211, 77, 0.18);
+  color: #fcd34d;
+}
+
+.factor-panorama-tier.tier-c {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+}
+
+.factor-panorama-tier.tier-s,
+.factor-panorama-tier.tier-d,
+.factor-panorama-tier.tier-e {
+  background: rgba(125, 211, 252, 0.16);
+  color: #bae6fd;
+}
+
+.factor-panorama-tier.tier-unknown {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+}
+
+.factor-panorama-primary {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.factor-panorama-reason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-percentiles {
+  margin-top: 14px;
+}
+
+.percentile-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.percentile-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 10px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: var(--surface-tertiary, rgba(255, 255, 255, 0.03));
+}
+
+.percentile-head {
+  color: var(--text-primary);
+  font-weight: 600;
 }
 
 .track-section {

@@ -1,0 +1,66 @@
+{
+  "schema": "ranktrend-anchor-registry/v1",
+  "updatedAt": "2026-09-16",
+  "purpose": "RankTrend 锚代际注册表：harness baseline 对照基准的单一事实源。锚读数 = baseline（当前默认栈全开）三窗 synergy saEx；代际变更（默认值落库/结构性修复）使历史 trial 全部过期，新代际第一动作是重建三窗锚。失配必须显式标记，不许带病继续。",
+  "factSource": "docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（各阶段写入的锚读数）",
+  "rerunPlan": "docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md",
+  "windowNote": "gen-1~gen-4 的 oos2 窗口为历史口径 2026-09-01~09-12（部分阶段 14 harness 为 09-09），B-202610 起统一为 09-01~09-30（oos2）+ 09-13~09-30 未消费子窗（oos2u，判定读数以此为准），见 data_windows.py WINDOWS。",
+  "currentGeneration": "gen-2026-09-15-jump-fix",
+  "generations": [
+    {
+      "id": "gen-2026-08-22_8",
+      "name": "22.8 代际（五维组合基线，crossSection 投票前）",
+      "anchors": { "decision": 0.0939, "oos1": 0.0854, "oos2": 0.0737 },
+      "establishedAt": "2026-08-22",
+      "gitCommit": null,
+      "configHash": null,
+      "sourceSections": ["longterm §22.8"],
+      "supersededBy": "gen-2026-09-09_23_9_1",
+      "note": "gitCommit/configHash 待补录（历史 harness 注释可查）。仍被 evaluate_dimension_voting_power / evaluate_lifecycle_dimension 的 BASELINE_ANCHOR 引用（历史口径冻结）。"
+    },
+    {
+      "id": "gen-2026-09-09_23_9_1",
+      "name": "23.9.1 代际（pre-fund10，combo_three_quarter 实证口径）",
+      "anchors": { "decision": 0.1044, "oos1": 0.0918, "oos2": 0.0933 },
+      "establishedAt": "2026-09-09",
+      "gitCommit": null,
+      "configHash": null,
+      "sourceSections": ["longterm §23.9.1"],
+      "supersededBy": "gen-2026-09-15-fund10",
+      "note": "23.9.1 临时默认的 L1 §12 补记挂起至 9 月复验（§25.6 运维注记 2）。"
+    },
+    {
+      "id": "gen-2026-09-15-fund10",
+      "name": "fund10 代际（volumePriceAbnormalFundRatio 20→10 落默认后实测）",
+      "anchors": { "decision": 0.112, "oos1": 0.088, "oos2": 0.0951 },
+      "establishedAt": "2026-09-15",
+      "gitCommit": "dbc4e044",
+      "configHash": null,
+      "sourceSections": ["longterm §25.7", "L1 §14.4"],
+      "supersededBy": "gen-2026-09-15-jump-fix",
+      "note": "多数量价/门控 evaluate_* harness 的 ANCHOR_BASELINE 仍引用本代际（历史口径冻结，B-202610 起以本注册表为准）。"
+    },
+    {
+      "id": "gen-2026-09-15-jump-fix",
+      "name": "jump-fix 代际（Jump 确认门断线修复后，当前生产代际）",
+      "anchors": { "decision": 0.1323, "oos1": null, "oos2": null },
+      "establishedAt": "2026-09-15",
+      "gitCommit": "6cc94c7f",
+      "configHash": null,
+      "sourceSections": ["longterm §26.7"],
+      "supersededBy": null,
+      "note": "decision +18.1% vs fund10 代际为单窗 M3 折扣口径快速量化；oos1/oos2 锚缺失——B-202610 阶段 1 预建（decision/oos1 现已启动，oos2/oos2u 待 9 月全月落库）。"
+    },
+    {
+      "id": "gen-2026-10-b202610",
+      "name": "B-202610 复跑代际（第四代正式三窗锚）",
+      "anchors": { "decision": 0.1323, "oos1": 0.0862, "oos2": null, "oos2u": null },
+      "establishedAt": "2026-09-16（decision/oos1 预建；oos2/oos2u 待 10 月批次）",
+      "gitCommit": "83bd7d0d",
+      "configHash": null,
+      "sourceSections": ["data/reports/track2-candidates.json（B-202610 预建 baseline）", "longterm 阶段 27（待批次收口写入）"],
+      "supersededBy": null,
+      "note": "decision 0.1323 与 §26.7 jump-fix 单窗锚逐位复现（代际无漂移校验 ✓，evaluate_track2_candidates baseline，passHard=True，655 帧）；oos1 0.0862 vs fund10 代际 0.0880（−2.0%，Jump 修复跨窗净效应为 decision 大幅正迁移 + oos1 轻微回落）。oos2/oos2u 待 10 月上旬 9 月全月落库后批次执行填充；填充后本代际成为 currentGeneration。"
+    }
+  ]
+}

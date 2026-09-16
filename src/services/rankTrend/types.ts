@@ -189,7 +189,11 @@ export interface RankTrendResonance {
 
 export interface JumpEvent {
   index: number
-  direction: 'surge' | 'collapse'
+  /**
+   * 'surge' 上冲 / 'collapse' 下坠；'hold' = 跳动未获价格/量能确认后的同步降级
+   * （后端 _confirm_jump P0-1：events 与外层 direction 口径必须一致，2026-08-19）。
+   */
+  direction: 'surge' | 'collapse' | 'hold'
   magnitude: number
 }
 
@@ -351,7 +355,8 @@ export interface RankTrendAnalysisResult {
     limitUp?: boolean
     events?: Array<{
       index: number
-      direction: 'surge' | 'collapse'
+      /** 同 JumpEvent.direction：'hold' 为未确认降级态 */
+      direction: 'surge' | 'collapse' | 'hold'
       magnitude: number
     }>
   }
