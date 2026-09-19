@@ -170,3 +170,140 @@ def test_arun_once_multi_collects_once_derives_per_type() -> None:
     assert all(result.status == "dry_run" for result in results)
     assert results[0].snapshot_id == "half_hour:2026-08-04:15:30"
     assert results[1].snapshot_id == "daily:2026-08-04:15:30"
+
+
+def _async(value):
+    async def _inner():
+        return value
+
+    return _inner()
+
+
+def test_collect_market_context_async_autonomous_merged_is_primary() -> None:
+    from backend.snapshot_collector.models import SourceHealth
+    from backend.snapshot_collector.providers import (
+        ProxyMergedHotlistProvider,
+        StartupBundleStockProvider,
+    )
+
+    startup = StartupBundleStockProvider(base_url="http://127.0.0.1:3000")
+    startup.snapshot_context = {"breathData": {"k": "v"}}
+    startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+    merged_rows = [{"code": "000001", "name": "平安银行", "rank": 1}]
+    startup.collect = lambda *args, **kwargs: (
+        startup_rows,
+        SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)),
+    )
+    merged = ProxyMergedHotlistProvider(base_url="http://127.0.0.1:3000")
+    merged_health = SourceHealth(source="merged_hotlist_proxy", ok=True, row_count=1)
+    merged.acollect = lambda **kwargs: _async((merged_rows, merged_health))
+
+    ctx = asyncio.run(
+        collect_market_context_async(
+            [startup, merged],
+            [],
+            timeout_ms=5000,
+            pool_source_mode="autonomous",
+        )
+    )
+
+    assert [row["code"] for row in ctx.stocks] == ["000001"]
+    assert ctx.stocks[0]["poolSource"] == "autonomous"
+    assert ctx.snapshot_context == {"breathData": {"k": "v"}}
+
+
+def test_collect_market_context_async_merged_failure_falls_back_to_bundle_rows() -> None:
+    # 兜底快路径（镜像同步版）：merged 空 rows + ok=False，bundle 行立即兜底入池，
+    # 下游 provider 必须按兜底池 codes 补齐（fail-visible：不构成丢帧）。
+    from backend.snapshot_collector.models import SourceHealth
+    from backend.snapshot_collector.providers import (
+        ProxyMergedHotlistProvider,
+        StartupBundleStockProvider,
+        TencentBasicQuoteProvider,
+    )
+
+    startup = StartupBundleStockProvider(base_url="http://127.0.0.1:3000")
+    startup.snapshot_context = {"breathData": {"k": "v"}}
+    startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+    startup.collect = lambda *args, **kwargs: (
+        startup_rows,
+        SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)),
+    )
+    merged = ProxyMergedHotlistProvider(base_url="http://127.0.0.1:3000")
+    failed_health = SourceHealth(
+        source="merged_hotlist_proxy",
+        ok=False,
+        row_count=0,
+        error="eastmoney: degraded",
+        failed_batches=["eastmoney"],
+        details={"rankProvenance": {"platformTotals": {"eastmoney": 0}, "platformWeights": {}}},
+    )
+    merged.acollect = lambda **kwargs: _async(([], failed_health))
+
+    tencent = TencentBasicQuoteProvider(base_url="http://127.0.0.1:3000")
+    captured: dict[str, Any] = {}
+
+    async def fake_tencent_acollect(codes, *, timeout_ms=5000):
+        captured["codes"] = list(codes)
+        return (
+            {"600000": {"code": "600000", "volumeRatio": 1.5}},
+            SourceHealth("theme_quote_tencent", True, row_count=1),
+        )
+
+    tencent.acollect = fake_tencent_acollect
+
+    ctx = asyncio.run(
+        collect_market_context_async(
+            [startup, merged, tencent],
+            [],
+            timeout_ms=5000,
+            pool_source_mode="autonomous",
+        )
+    )
+
+    assert [row["code"] for row in ctx.stocks] == ["600000"]
+    assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+    assert captured["codes"] == ["600000"]
+    assert ctx.quotes == [{"code": "600000", "volumeRatio": 1.5}]
+    composition = failed_health.details["poolComposition"]
+    assert composition["failedPlatforms"] == ["eastmoney"]
+    assert composition["poolSize"] == 1
+
+
+def test_collect_market_context_async_bundle_first_keeps_legacy_behavior() -> None:
+    # bundle_first 旧行为（镜像同步版）：bundle 在前供池、merged 被 skip、无 poolSource 标记。
+    from backend.snapshot_collector.models import SourceHealth
+    from backend.snapshot_collector.providers import (
+        ProxyMergedHotlistProvider,
+        StartupBundleStockProvider,
+    )
+
+    startup = StartupBundleStockProvider(base_url="http://127.0.0.1:3000")
+    startup.snapshot_context = {"breathData": {"k": "v"}}
+    startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+    startup.collect = lambda *args, **kwargs: (
+        startup_rows,
+        SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)),
+    )
+    merged = ProxyMergedHotlistProvider(base_url="http://127.0.0.1:3000")
+    merged_calls: list[bool] = []
+
+    async def fake_merged_acollect(**kwargs):
+        merged_calls.append(True)
+        return ([], SourceHealth(source="merged_hotlist_proxy", ok=True, row_count=0))
+
+    merged.acollect = fake_merged_acollect
+
+    ctx = asyncio.run(
+        collect_market_context_async(
+            [startup, merged],
+            [],
+            timeout_ms=5000,
+            pool_source_mode="bundle_first",
+        )
+    )
+
+    assert [row["code"] for row in ctx.stocks] == ["600000"]
+    assert "poolSource" not in ctx.stocks[0]
+    assert ctx.snapshot_context == {"breathData": {"k": "v"}}
+    assert merged_calls == []

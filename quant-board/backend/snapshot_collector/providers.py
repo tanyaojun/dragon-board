@@ -2073,37 +2073,94 @@ async def collect_market_context_async(
     codes: list[str],
     *,
     timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    pool_source_mode: str = "autonomous",
 ) -> MarketDataContext:
-    """异步采集：await 各 provider 的 acollect（进程内直连真实服务）。"""
+    """异步采集：await 各 provider 的 acollect（进程内直连真实服务）。
+
+    Provider 路由与同步版 ``collect_market_context``（pool_source_mode）逐语义一致：
+    * ``autonomous``（默认）: ``ProxyMergedHotlistProvider`` 为主池来源；
+      ``StartupBundleStockProvider`` 只供 ``snapshot_context``（其 stocks 不入池），
+      merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）：bundle 缓存就绪时
+      立即兜底（下游 provider 按兜底池补齐）；bundle 在 merged 之后才出现时由循环
+      结束后的安全网统一兜底——不依赖 provider 顺序。
+      ``ProxyHotlistProvider``（单平台诊断源）不入池。
+    * ``bundle_first``（回退）: 旧行为——bundle 为主池，merged/单平台热榜仅 fallback。
+    * ``TencentBasicQuoteProvider`` → ``ctx.quotes``；``BridgeQuoteProvider`` → quotes/depth/market_meta；
+      ``ThemeMappingProvider`` → ``ctx.themes``；``ProxyLimitUpProvider`` → ``ctx.limit_up``
+
+    Unknown provider types are silently ignored.
+    """
     ctx = MarketDataContext()
     active_codes = [str(code).strip() for code in codes if str(code).strip()]
+    mode = _normalize_pool_source_mode(pool_source_mode)
 
+    bundle_fallback_rows: list[dict[str, Any]] = []
+    merged_failed_empty = False
+    merged_health: SourceHealth | None = None
     for provider in providers:
         try:
             if isinstance(provider, StartupBundleStockProvider):
                 rows, health = await provider.acollect(timeout_ms=timeout_ms)
                 ctx.source_health.append(health)
-                if rows:
-                    ctx.stocks = rows
-                    ctx.snapshot_context = dict(provider.snapshot_context)
-                    active_codes = [
-                        str(row.get("code") or "").strip()
-                        for row in rows
-                        if isinstance(row, dict) and str(row.get("code") or "").strip()
-                    ]
+                if mode == "bundle_first":
+                    if rows:
+                        ctx.stocks = rows
+                        ctx.snapshot_context = dict(provider.snapshot_context)
+                        active_codes = _codes_of(rows)
+                else:
+                    # autonomous：bundle 只供 context；rows 留作 merged 全挂时的兜底池
+                    if provider.snapshot_context:
+                        ctx.snapshot_context = dict(provider.snapshot_context)
+                    bundle_fallback_rows = [row for row in rows if isinstance(row, dict)]
 
-            elif isinstance(provider, (ProxyMergedHotlistProvider, ProxyHotlistProvider)):
+            elif isinstance(provider, ProxyMergedHotlistProvider):
                 if ctx.stocks:
                     continue
-                rows, health = await provider.acollect(timeout_ms=timeout_ms)
+                try:
+                    rows, health = await provider.acollect(timeout_ms=timeout_ms)
+                except Exception as exc:
+                    # 正常实现下 merged.acollect 按平台聚合失败、不抛错；若意外抛错，
+                    # 折叠为失败 health 继续走下方 bundle 兜底，不让异常跳过兜底（fail-visible）。
+                    rows = []
+                    health = SourceHealth(
+                        source="merged_hotlist_proxy",
+                        ok=False,
+                        error=str(exc),
+                        captured_at=_iso_now(),
+                    )
+                ctx.source_health.append(health)
+                merged_health = health
+                if mode == "bundle_first":
+                    if not ctx.stocks:
+                        ctx.stocks.extend(rows)
+                        if not active_codes:
+                            active_codes = _codes_of(rows)
+                elif rows:
+                    _mark_pool_source(rows, _POOL_SOURCE_AUTONOMOUS)
+                    ctx.stocks = rows
+                    active_codes = _codes_of(rows)
+                else:
+                    # autonomous：merged 全挂/空池——置位供循环后安全网兜底（顺序反转场景）。
+                    merged_failed_empty = True
+                    if bundle_fallback_rows:
+                        # 快路径：bundle 缓存行已就绪——立即兜底入池，下游 quote/theme/limitup
+                        # provider 仍按兜底池补齐（fail-visible：不构成丢帧）
+                        _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
+                        ctx.stocks = bundle_fallback_rows
+                        active_codes = _codes_of(bundle_fallback_rows)
+                _append_pool_composition(health, mode=mode, pool_size=len(ctx.stocks))
+
+            elif isinstance(provider, ProxyHotlistProvider):
+                # 单平台诊断源：仅 bundle_first 且池为空时沿用旧行为；autonomous 不入池。
+                # 跳过发生在 collect 之前，故 autonomous 下没有该源的 health 记录——有意省略。
+                if mode == "autonomous" or ctx.stocks:
+                    continue
+                # 该 provider 未实现 acollect，按文件内既有适配模式经线程池走同步 collect。
+                rows, health = await asyncio.to_thread(provider.collect, timeout_ms=timeout_ms)
                 ctx.stocks.extend(rows)
                 ctx.source_health.append(health)
                 if not active_codes:
-                    active_codes = [
-                        str(row.get("code") or "").strip()
-                        for row in rows
-                        if isinstance(row, dict) and str(row.get("code") or "").strip()
-                    ]
+                    active_codes = _codes_of(rows)
 
             elif isinstance(provider, TencentBasicQuoteProvider):
                 rows, health = await provider.acollect(active_codes, timeout_ms=timeout_ms)
@@ -2147,6 +2204,21 @@ async def collect_market_context_async(
                 captured_at=_iso_now(),
             )
             ctx.source_health.append(health)
+
+    if (
+        mode == "autonomous"
+        and merged_failed_empty
+        and not ctx.stocks
+        and bundle_fallback_rows
+    ):
+        # 顺序反转安全网：merged 失败时 bundle 尚未缓存（bundle 在后），快路径未命中；
+        # 循环后统一兜底（不依赖 provider 顺序，fail-visible：不构成丢帧）。
+        # not ctx.stocks 守卫使快路径已兜底的场景在此天然跳过，不会双重入池。
+        _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
+        ctx.stocks = bundle_fallback_rows
+        active_codes = _codes_of(bundle_fallback_rows)
+        if merged_health is not None:
+            _append_pool_composition(merged_health, mode=mode, pool_size=len(ctx.stocks))
 
     _append_quote_coverage_warning(ctx, active_codes)
     return ctx

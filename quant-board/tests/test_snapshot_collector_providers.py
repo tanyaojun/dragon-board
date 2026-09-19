@@ -1310,6 +1310,10 @@ class TestCollectMarketContextAutonomous:
 
         assert [row["code"] for row in ctx.stocks] == ["600000"]
         assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+        # raise 路径下 collector 折叠出独立 health（helper 缓存的 merged_health 是孤儿对象）；
+        # 安全网兜底后必须对该 health 二次修正 poolComposition（poolSize 由 0 修为 1）
+        folded_health = next(h for h in ctx.source_health if h.source == "merged_hotlist_proxy")
+        assert folded_health.details["poolComposition"]["poolSize"] == 1
 
     def test_fallback_pool_codes_reach_downstream_providers(self) -> None:
         # 兜底触发时，下游 provider 必须按兜底池 codes 请求行情（bundle 在前的生产顺序）
