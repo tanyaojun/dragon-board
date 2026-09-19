@@ -29,6 +29,8 @@
 6. Task 4 测试假 settings 补 `snapshot_collector_pool_source_mode` 属性与元组解包。
 7. Task 5 两处一行健壮性修复（`_pool_source_mode` 去 getattr 第三参改为直接属性访问 + 路由锚点契约注释，来自 Task 4 code review Minor 1/3）。
 
+**交付后收尾（2026-09-20，`389cc4e3`）：** 落实 final review 遗留三项——① Route 锚点收敛：`collect_fn=None` 语义化为"内置默认路由"（`_collect_context` 不再依赖与同步版函数的 identity 比较，mode 传参只依赖单一 None 判断），自定义 collect_fn 完全接管（mode 不注入，新增 bypass 守护用例）；② `normalize_pool_source_mode` 公开化（原 `_normalize` 下划线名，service↔providers 合同显式化，全引用点同批改）；③ sync/async parity 测试（4 场景 × 双跑归一化 ctx 等价：autonomous 成功 / 快路径兜底 / 顺序反转安全网 / bundle_first），任一版单独改动机械失败。全量 2515 passed（排除环境性 `test_archive_research.py`）。
+
 **验证命令（quant-board 目录）：**
 
 ```powershell
