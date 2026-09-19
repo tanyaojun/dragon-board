@@ -440,6 +440,10 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_allow_live_dataset is False
 
+    def test_default_pool_source_mode_is_autonomous(self) -> None:
+        settings = Settings()
+        assert settings.snapshot_collector_pool_source_mode == "autonomous"
+
 
 class TestCollectorAuditHelpers:
     def test_count_drift_detects_frame_zero_with_actual_rows(self) -> None:
@@ -516,6 +520,11 @@ class TestSettingsEnvOverrides:
         monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET", "1")
         settings = Settings()
         assert settings.snapshot_collector_allow_live_dataset is True
+
+    def test_pool_source_mode_via_env(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE", "bundle_first")
+        settings = Settings()
+        assert settings.snapshot_collector_pool_source_mode == "bundle_first"
 
 
 class TestLiveDatasetBlocked:

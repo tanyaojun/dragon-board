@@ -140,6 +140,10 @@ class Settings(BaseModel):
     snapshot_collector_proxy_base_url: str = Field(default="http://127.0.0.1:3000")
     snapshot_collector_bridge_base_url: str = Field(default="http://127.0.0.1:8765")
     snapshot_collector_provider_timeout_ms: int = Field(default=30000)
+    # 采集池来源模式（2026-09-20 spec：docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md）
+    # autonomous = 八平台热榜实时合并池为主池（bundle 只供 snapshotContext）；
+    # bundle_first = 旧行为（bundle 为主池，merged 仅 fallback）。改后重启采集进程生效。
+    snapshot_collector_pool_source_mode: str = Field(default="autonomous")
     snapshot_collector_allow_live_dataset: bool = Field(default=False)
     theme_heat_batch_size: int = Field(default=50)
     theme_heat_max_concurrency: int = Field(default=3)
@@ -442,6 +446,10 @@ class Settings(BaseModel):
                 "QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS",
                 self.snapshot_collector_provider_timeout_ms,
             ),
+        )
+        self.snapshot_collector_pool_source_mode = os.environ.get(
+            "QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE",
+            self.snapshot_collector_pool_source_mode,
         )
         self.snapshot_collector_allow_live_dataset = _env_bool(
             "QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET",
