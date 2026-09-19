@@ -271,7 +271,9 @@ class SnapshotCollectorService:
 
         self._repo = repo
         self._settings = settings
-        self._collect_fn = collect_fn or providers_module.collect_market_context
+        # None = 内置默认路由（collect_market_context_async，含 pool_source_mode 传参）；
+        # 传自定义 collect_fn = 完全接管执行路径（mode 不注入，签名 (providers, codes, timeout_ms)）。
+        self._collect_fn = collect_fn
         self._normalize_fn = normalize_fn or _default_normalize
         self._quality_fn = quality_fn or quality_gate_module.evaluate_quality
         self._cache_invalidate_fn = cache_invalidate_fn
@@ -289,9 +291,9 @@ class SnapshotCollectorService:
         providers_list = self._create_providers(trading_date=trading_date)
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
-        # mode 必须在此分支传入 async 路由；判断锚点须与 __init__ 的 collect_fn 默认值
-        # （providers_module.collect_market_context）保持一致，否则 mode 静默丢失、回退开关失效。
-        if self._collect_fn is providers_module.collect_market_context:
+        if self._collect_fn is None:
+            # 内置默认路由：mode 必须在此传入 async 版（生产实际执行路径），
+            # 否则紧急回退开关（QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE）静默失效。
             market_context = await providers_module.collect_market_context_async(
                 providers_list,
                 codes,
@@ -962,7 +964,7 @@ class SnapshotCollectorService:
         return self._settings_or_default().snapshot_collector_provider_timeout_ms
 
     def _pool_source_mode(self) -> str:
-        return providers_module._normalize_pool_source_mode(
+        return providers_module.normalize_pool_source_mode(
             self._settings_or_default().snapshot_collector_pool_source_mode
         )
 

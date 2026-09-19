@@ -5,6 +5,7 @@ All external HTTP/Mongo calls are mocked so tests run offline.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from contextlib import contextmanager
@@ -27,6 +28,7 @@ from backend.snapshot_collector.providers import (
     ThemeMappingProvider,
     _append_quote_coverage_warning,
     collect_market_context,
+    collect_market_context_async,
 )
 from backend.services.theme.fund_cache import ThemeFundCache
 
@@ -1201,9 +1203,9 @@ class TestNormalizePoolSourceMode:
         import logging
 
         with caplog.at_level(logging.WARNING, logger="backend.snapshot_collector.providers"):
-            assert providers_module._normalize_pool_source_mode("bundle_frist") == "autonomous"
-            assert providers_module._normalize_pool_source_mode(None) == "autonomous"
-            assert providers_module._normalize_pool_source_mode("") == "autonomous"
+            assert providers_module.normalize_pool_source_mode("bundle_frist") == "autonomous"
+            assert providers_module.normalize_pool_source_mode(None) == "autonomous"
+            assert providers_module.normalize_pool_source_mode("") == "autonomous"
 
         warnings = [r for r in caplog.records if "pool_source_mode" in r.message]
         assert len(warnings) == 3
@@ -1212,8 +1214,8 @@ class TestNormalizePoolSourceMode:
         import logging
 
         with caplog.at_level(logging.WARNING, logger="backend.snapshot_collector.providers"):
-            assert providers_module._normalize_pool_source_mode("autonomous") == "autonomous"
-            assert providers_module._normalize_pool_source_mode("bundle_first") == "bundle_first"
+            assert providers_module.normalize_pool_source_mode("autonomous") == "autonomous"
+            assert providers_module.normalize_pool_source_mode("bundle_first") == "bundle_first"
 
         assert not [r for r in caplog.records if "pool_source_mode" in r.message]
 
@@ -1556,3 +1558,126 @@ def test_append_quote_coverage_warning_empty_guards() -> None:
     _append_quote_coverage_warning(ctx, [])
     _append_quote_coverage_warning(ctx, ["000001"])
     assert not ctx.source_health
+
+
+async def _aresolved(value: Any):
+    """把同步返回值包装成可 await 的 coroutine（parity 测试用）。"""
+    return value
+
+
+class TestSyncAsyncRouteParity:
+    """sync/async 路由 parity（2026-09-20 锚点收敛配套）。
+
+    两版路由是人工维护的镜像（docstring 互引），历史上曾漂移三个 commit。
+    本类用同一组 fake provider（collect 供 sync、acollect 委托供 async）对
+    四个关键场景双跑，机械锁定归一化 ctx 等价；任一版单独改动都会在此失败。
+    """
+
+    def _make_providers(
+        self,
+        *,
+        merged_raises: bool = False,
+        merged_rows_empty: bool = False,
+        reverse_order: bool = False,
+    ) -> list[Any]:
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
+        startup.snapshot_context = {"breathData": {"k": "v"}}
+        startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+        startup_startup_health = SourceHealth(
+            source="startup_bundle", ok=True, row_count=len(startup_rows)
+        )
+        startup.collect = lambda *a, **kw: (startup_rows, startup_startup_health)
+        startup.acollect = lambda **kw: _aresolved((startup_rows, startup_startup_health))
+
+        merged_rows = [] if merged_rows_empty else [{"code": "000001", "name": "平安银行", "rank": 1}]
+        merged = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
+        if merged_raises:
+            def raise_collect(*args, **kwargs):
+                raise RuntimeError("all platforms failed")
+
+            async def raise_acollect(**kwargs):
+                raise RuntimeError("all platforms failed")
+
+            merged.collect = raise_collect
+            merged.acollect = raise_acollect
+        else:
+            merged_health = SourceHealth(
+                source="merged_hotlist_proxy",
+                ok=bool(merged_rows),
+                row_count=len(merged_rows),
+                details={
+                    "rankProvenance": {
+                        "platformTotals": {"eastmoney": len(merged_rows)},
+                        "platformWeights": {},
+                    }
+                },
+            )
+            merged.collect = lambda *a, **kw: (merged_rows, merged_health)
+            merged.acollect = lambda **kw: _aresolved((merged_rows, merged_health))
+
+        return [merged, startup] if reverse_order else [startup, merged]
+
+    @staticmethod
+    def _normalized(ctx: MarketDataContext) -> dict[str, Any]:
+        merged_health = next(
+            (h for h in ctx.source_health if h.source == "merged_hotlist_proxy"), None
+        )
+        composition = (merged_health.details or {}).get("poolComposition") if merged_health else None
+        return {
+            "stocks": [(row["code"], row.get("poolSource")) for row in ctx.stocks],
+            "snapshot_context": ctx.snapshot_context,
+            "poolComposition": composition,
+        }
+
+    def _run_both(self, *, mode: str, **provider_kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        ctx_sync = collect_market_context(
+            self._make_providers(**provider_kwargs),
+            [],
+            timeout_ms=5000,
+            pool_source_mode=mode,
+        )
+        ctx_async = asyncio.run(
+            collect_market_context_async(
+                self._make_providers(**provider_kwargs),
+                [],
+                timeout_ms=5000,
+                pool_source_mode=mode,
+            )
+        )
+        return self._normalized(ctx_sync), self._normalized(ctx_async)
+
+    def test_parity_autonomous_success(self) -> None:
+        sync_norm, async_norm = self._run_both(mode="autonomous")
+        expected = {
+            "stocks": [("000001", "autonomous")],
+            "snapshot_context": {"breathData": {"k": "v"}},
+            "poolComposition": {"mode": "autonomous", "poolSize": 1},
+        }
+        assert sync_norm == async_norm
+        assert sync_norm["stocks"] == expected["stocks"]
+        assert sync_norm["snapshot_context"] == expected["snapshot_context"]
+        assert sync_norm["poolComposition"]["mode"] == expected["poolComposition"]["mode"]
+        assert sync_norm["poolComposition"]["poolSize"] == expected["poolComposition"]["poolSize"]
+
+    def test_parity_autonomous_fallback_merged_raises(self) -> None:
+        sync_norm, async_norm = self._run_both(
+            mode="autonomous", merged_raises=True
+        )
+        expected_stocks = [("600000", "bundle_fallback")]
+        assert sync_norm == async_norm
+        assert sync_norm["stocks"] == expected_stocks
+        assert sync_norm["poolComposition"]["poolSize"] == 1
+
+    def test_parity_autonomous_fallback_reversed_order_safety_net(self) -> None:
+        sync_norm, async_norm = self._run_both(
+            mode="autonomous", merged_raises=True, reverse_order=True
+        )
+        assert sync_norm == async_norm
+        assert sync_norm["stocks"] == [("600000", "bundle_fallback")]
+        assert sync_norm["poolComposition"]["poolSize"] == 1
+
+    def test_parity_bundle_first_legacy(self) -> None:
+        sync_norm, async_norm = self._run_both(mode="bundle_first")
+        assert sync_norm == async_norm
+        assert sync_norm["stocks"] == [("600000", None)]
+        assert sync_norm["snapshot_context"] == {"breathData": {"k": "v"}}

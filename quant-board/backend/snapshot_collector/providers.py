@@ -94,7 +94,7 @@ _POOL_SOURCE_AUTONOMOUS = "autonomous"
 _POOL_SOURCE_BUNDLE_FALLBACK = "bundle_fallback"
 
 
-def _normalize_pool_source_mode(value: Any) -> str:
+def normalize_pool_source_mode(value: Any) -> str:
     mode = str(value or "").strip()
     if mode in POOL_SOURCE_MODES:
         return mode
@@ -1937,7 +1937,7 @@ def collect_market_context(
     """
     ctx = MarketDataContext()
     active_codes = [str(code).strip() for code in codes if str(code).strip()]
-    mode = _normalize_pool_source_mode(pool_source_mode)
+    mode = normalize_pool_source_mode(pool_source_mode)
 
     bundle_fallback_rows: list[dict[str, Any]] = []
     merged_failed_empty = False
@@ -2093,7 +2093,7 @@ async def collect_market_context_async(
     """
     ctx = MarketDataContext()
     active_codes = [str(code).strip() for code in codes if str(code).strip()]
-    mode = _normalize_pool_source_mode(pool_source_mode)
+    mode = normalize_pool_source_mode(pool_source_mode)
 
     bundle_fallback_rows: list[dict[str, Any]] = []
     merged_failed_empty = False

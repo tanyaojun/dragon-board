@@ -181,7 +181,11 @@ def test_arun_once_multi_collects_once_derives_per_type() -> None:
 def test_collect_context_passes_pool_source_mode_to_real_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """真实链路（collect_fn is collect_market_context）必须把 settings 的 mode 传给 async 路由。"""
+    """collect_fn=None（内置默认路由）时，settings 的 mode 必须传给 async 路由。
+
+    2026-09-20 锚点收敛：默认路由以 collect_fn is None 判定（不再是与同步版
+    collect_market_context 的 identity 比较），mode 传参只依赖这一个分支。
+    """
     from backend.snapshot_collector import providers as providers_module
     from backend.snapshot_collector.models import MarketDataContext
     from backend.snapshot_collector.service import SnapshotCollectorService
@@ -198,8 +202,6 @@ def test_collect_context_passes_pool_source_mode_to_real_route(
         captured["mode"] = pool_source_mode
         return MarketDataContext()
 
-    # 判断锚点（is 判断）与调用点（async 调用）都指向 fake_route
-    monkeypatch.setattr(providers_module, "collect_market_context", fake_route)
     monkeypatch.setattr(providers_module, "collect_market_context_async", fake_route)
 
     class FakeRepo:
@@ -217,20 +219,74 @@ def test_collect_context_passes_pool_source_mode_to_real_route(
         },
     )()
 
+    # collect_fn 不传 = 默认路由（None 哨兵），mode 必须注入
     service = SnapshotCollectorService(
         FakeRepo(),
         settings=settings,
-        collect_fn=providers_module.collect_market_context,
         normalize_fn=lambda *a, **k: None,
         quality_fn=lambda **k: None,
         theme_heat_service=None,
     )
+    assert service._collect_fn is None
 
     ctx, theme_snapshot = asyncio.run(service._collect_context("2026-09-20"))
 
     assert captured["mode"] == "bundle_first"
     assert isinstance(ctx, MarketDataContext)
     assert theme_snapshot is None
+
+
+def test_collect_context_custom_fn_bypasses_mode_injection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """自定义 collect_fn 完全接管执行路径：mode 不注入（旧 identity 语义已移除）。"""
+    from backend.snapshot_collector import providers as providers_module
+    from backend.snapshot_collector.models import MarketDataContext
+    from backend.snapshot_collector.service import SnapshotCollectorService
+
+    captured: dict[str, Any] = {"sync_calls": 0}
+
+    def fake_sync_route(
+        providers_list: list[Any],
+        codes: list[str],
+        *,
+        timeout_ms: int | None = None,
+    ) -> MarketDataContext:
+        captured["sync_calls"] += 1
+        return MarketDataContext()
+
+    async def fake_async_route(*args: Any, **kwargs: Any) -> MarketDataContext:
+        raise AssertionError("自定义 collect_fn 不应再走内置 async 路由")
+
+    monkeypatch.setattr(providers_module, "collect_market_context_async", fake_async_route)
+
+    class FakeRepo:
+        """_collect_context 不触 repo，仅满足构造器签名。"""
+
+    settings = type(
+        "S",
+        (),
+        {
+            "snapshot_collector_pool_source_mode": "bundle_first",
+            "snapshot_collector_proxy_base_url": "http://127.0.0.1:3000",
+            "snapshot_collector_bridge_base_url": "http://127.0.0.1:8765",
+            "snapshot_collector_provider_timeout_ms": 5000,
+        },
+    )()
+
+    service = SnapshotCollectorService(
+        FakeRepo(),
+        settings=settings,
+        collect_fn=fake_sync_route,
+        normalize_fn=lambda *a, **k: None,
+        quality_fn=lambda **k: None,
+        theme_heat_service=None,
+    )
+
+    ctx, _ = asyncio.run(service._collect_context("2026-09-20"))
+
+    assert captured["sync_calls"] == 1
+    assert isinstance(ctx, MarketDataContext)
 
 
 def _async(value):
