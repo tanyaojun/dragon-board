@@ -1924,8 +1924,9 @@ def collect_market_context(
     -----------------------------------
     * ``autonomous``（默认）: ``ProxyMergedHotlistProvider`` 为主池来源；
       ``StartupBundleStockProvider`` 只供 ``snapshot_context``（其 stocks 不入池），
-      merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）——兜底解析在
-      全部 provider 处理完后统一进行，不依赖 provider 顺序。
+      merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）：bundle 缓存就绪时
+      立即兜底（下游 provider 按兜底池补齐）；bundle 在 merged 之后才出现时由循环
+      结束后的安全网统一兜底——不依赖 provider 顺序。
       ``ProxyHotlistProvider``（单平台诊断源）不入池。
     * ``bundle_first``（回退）: 旧行为——bundle 为主池，merged/单平台热榜仅 fallback。
     * ``TencentBasicQuoteProvider`` → ``ctx.quotes``；``BridgeQuoteProvider`` → quotes/depth/market_meta；
@@ -1983,8 +1984,14 @@ def collect_market_context(
                     ctx.stocks = rows
                     active_codes = _codes_of(rows)
                 else:
-                    # autonomous：merged 全挂/空池——兜底延后到循环结束后统一解析（顺序无关）
+                    # autonomous：merged 全挂/空池——置位供循环后安全网兜底（顺序反转场景）。
                     merged_failed_empty = True
+                    if bundle_fallback_rows:
+                        # 快路径：bundle 缓存行已就绪——立即兜底入池，下游 quote/theme/limitup
+                        # provider 仍按兜底池补齐（fail-visible：不构成丢帧）
+                        _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
+                        ctx.stocks = bundle_fallback_rows
+                        active_codes = _codes_of(bundle_fallback_rows)
                 _append_pool_composition(health, mode=mode, pool_size=len(ctx.stocks))
 
             elif isinstance(provider, ProxyHotlistProvider):
@@ -2048,8 +2055,9 @@ def collect_market_context(
         and not ctx.stocks
         and bundle_fallback_rows
     ):
-        # merged 主池失败/空且缓存有 bundle 行：循环后统一兜底（不依赖 provider 顺序，
-        # fail-visible：不构成丢帧）
+        # 顺序反转安全网：merged 失败时 bundle 尚未缓存（bundle 在后），快路径未命中；
+        # 循环后统一兜底（不依赖 provider 顺序，fail-visible：不构成丢帧）。
+        # not ctx.stocks 守卫使快路径已兜底的场景在此天然跳过，不会双重入池。
         _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
         ctx.stocks = bundle_fallback_rows
         active_codes = _codes_of(bundle_fallback_rows)

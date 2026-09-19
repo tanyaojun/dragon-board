@@ -1311,6 +1311,23 @@ class TestCollectMarketContextAutonomous:
         assert [row["code"] for row in ctx.stocks] == ["600000"]
         assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
 
+    def test_fallback_pool_codes_reach_downstream_providers(self) -> None:
+        # 兜底触发时，下游 provider 必须按兜底池 codes 请求行情（bundle 在前的生产顺序）
+        startup, merged, tencent = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[],
+            merged_raises=True,
+        )
+        tencent.collect = MagicMock(return_value=(
+            {"600000": {"code": "600000", "volumeRatio": 1.5}},
+            SourceHealth("theme_quote_tencent", True, row_count=1),
+        ))
+
+        ctx = collect_market_context([startup, merged, tencent], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        tencent.collect.assert_called_once_with(["600000"], timeout_ms=5000)
+        assert ctx.quotes == [{"code": "600000", "volumeRatio": 1.5}]
+
     def test_merged_all_platforms_failed_real_shape_falls_back(self) -> None:
         # 真实全平台失败形态：collect 不 raise，返回空 rows + ok=False health + failed_batches
         startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
