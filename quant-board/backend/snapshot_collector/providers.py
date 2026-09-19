@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import re
 import time
@@ -40,6 +41,7 @@ from .models import MarketDataContext, SourceHealth
 
 # ── constants ───────────────────────────────────────────────────────────────
 
+logger = logging.getLogger(__name__)
 _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
@@ -94,7 +96,10 @@ _POOL_SOURCE_BUNDLE_FALLBACK = "bundle_fallback"
 
 def _normalize_pool_source_mode(value: Any) -> str:
     mode = str(value or "").strip()
-    return mode if mode in POOL_SOURCE_MODES else "autonomous"
+    if mode in POOL_SOURCE_MODES:
+        return mode
+    logger.warning("snapshot collector pool_source_mode 非法值 %r，折算为 autonomous", value)
+    return "autonomous"
 
 
 def _mark_pool_source(rows: list[dict[str, Any]], source: str) -> None:
@@ -111,7 +116,7 @@ def _codes_of(rows: list[dict[str, Any]]) -> list[str]:
     ]
 
 
-def _append_pool_composition(health: Any, *, mode: str, pool_size: int) -> None:
+def _append_pool_composition(health: SourceHealth, *, mode: str, pool_size: int) -> None:
     composition = {
         "poolComposition": {
             "mode": mode,
@@ -1919,7 +1924,8 @@ def collect_market_context(
     -----------------------------------
     * ``autonomous``（默认）: ``ProxyMergedHotlistProvider`` 为主池来源；
       ``StartupBundleStockProvider`` 只供 ``snapshot_context``（其 stocks 不入池），
-      merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）。
+      merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）——兜底解析在
+      全部 provider 处理完后统一进行，不依赖 provider 顺序。
       ``ProxyHotlistProvider``（单平台诊断源）不入池。
     * ``bundle_first``（回退）: 旧行为——bundle 为主池，merged/单平台热榜仅 fallback。
     * ``TencentBasicQuoteProvider`` → ``ctx.quotes``；``BridgeQuoteProvider`` → quotes/depth/market_meta；
@@ -1932,6 +1938,8 @@ def collect_market_context(
     mode = _normalize_pool_source_mode(pool_source_mode)
 
     bundle_fallback_rows: list[dict[str, Any]] = []
+    merged_failed_empty = False
+    merged_health: SourceHealth | None = None
     for provider in providers:
         try:
             if isinstance(provider, StartupBundleStockProvider):
@@ -1964,6 +1972,7 @@ def collect_market_context(
                         captured_at=_iso_now(),
                     )
                 ctx.source_health.append(health)
+                merged_health = health
                 if mode == "bundle_first":
                     if not ctx.stocks:
                         ctx.stocks.extend(rows)
@@ -1973,15 +1982,14 @@ def collect_market_context(
                     _mark_pool_source(rows, _POOL_SOURCE_AUTONOMOUS)
                     ctx.stocks = rows
                     active_codes = _codes_of(rows)
-                elif bundle_fallback_rows:
-                    # 全平台失败但有 bundle 行：fail-visible 兜底（不构成丢帧）
-                    _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
-                    ctx.stocks = bundle_fallback_rows
-                    active_codes = _codes_of(bundle_fallback_rows)
+                else:
+                    # autonomous：merged 全挂/空池——兜底延后到循环结束后统一解析（顺序无关）
+                    merged_failed_empty = True
                 _append_pool_composition(health, mode=mode, pool_size=len(ctx.stocks))
 
             elif isinstance(provider, ProxyHotlistProvider):
-                # 单平台诊断源：仅 bundle_first 且池为空时沿用旧行为；autonomous 不入池
+                # 单平台诊断源：仅 bundle_first 且池为空时沿用旧行为；autonomous 不入池。
+                # 跳过发生在 collect 之前，故 autonomous 下没有该源的 health 记录——有意省略。
                 if mode == "autonomous" or ctx.stocks:
                     continue
                 rows, health = provider.collect(timeout_ms=timeout_ms)
@@ -2033,6 +2041,20 @@ def collect_market_context(
                 captured_at=_iso_now(),
             )
             ctx.source_health.append(health)
+
+    if (
+        mode == "autonomous"
+        and merged_failed_empty
+        and not ctx.stocks
+        and bundle_fallback_rows
+    ):
+        # merged 主池失败/空且缓存有 bundle 行：循环后统一兜底（不依赖 provider 顺序，
+        # fail-visible：不构成丢帧）
+        _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
+        ctx.stocks = bundle_fallback_rows
+        active_codes = _codes_of(bundle_fallback_rows)
+        if merged_health is not None:
+            _append_pool_composition(merged_health, mode=mode, pool_size=len(ctx.stocks))
 
     _append_quote_coverage_warning(ctx, active_codes)
     return ctx

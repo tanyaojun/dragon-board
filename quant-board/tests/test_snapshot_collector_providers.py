@@ -1298,6 +1298,75 @@ class TestCollectMarketContextAutonomous:
         assert [row["code"] for row in ctx.stocks] == ["600000"]
         assert "poolSource" not in ctx.stocks[0]
 
+    def test_fallback_is_order_independent_merged_first(self) -> None:
+        # merged 在前且失败、bundle 在后：兜底仍须触发（不依赖 provider 顺序）
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[],
+            merged_raises=True,
+        )
+
+        ctx = collect_market_context([merged, startup], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert [row["code"] for row in ctx.stocks] == ["600000"]
+        assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+
+    def test_merged_all_platforms_failed_real_shape_falls_back(self) -> None:
+        # 真实全平台失败形态：collect 不 raise，返回空 rows + ok=False health + failed_batches
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
+        startup.snapshot_context = {"breathData": {"k": "v"}}
+        startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+        startup.collect = lambda *args, **kwargs: (
+            startup_rows,
+            SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)),
+        )
+        merged = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
+        all_platforms = ["eastmoney", "ths", "kpl", "tdx", "xueqiu", "cls", "tgb", "dzh"]
+        merged_health = SourceHealth(
+            source="merged_hotlist_proxy",
+            ok=False,
+            row_count=0,
+            error="; ".join(f"{p}: degraded" for p in all_platforms),
+            failed_batches=list(all_platforms),
+            details={"rankProvenance": {"platformTotals": {p: 0 for p in all_platforms}, "platformWeights": {}}},
+        )
+        merged.collect = lambda *args, **kwargs: ([], merged_health)
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert [row["code"] for row in ctx.stocks] == ["600000"]
+        assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+        composition = merged_health.details["poolComposition"]
+        assert composition["failedPlatforms"] == all_platforms
+        assert composition["poolSize"] == 1
+
+    def test_merged_and_bundle_both_empty_yields_honest_empty_pool(self) -> None:
+        # merged 与 bundle 均无数据：诚实空池，不抛错、不伪装
+        startup, merged, _ = self._make_providers(
+            startup_rows=[],
+            merged_rows=[],
+        )
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert ctx.stocks == []
+
+    def test_single_platform_hotlist_skipped_in_autonomous(self) -> None:
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[{"code": "000001", "name": "平安银行", "rank": 1}],
+        )
+        hotlist_rows = [{"code": "600300", "name": "单平台行", "rank": 1}]
+        hotlist = ProxyHotlistProvider(base_url=PROXY_BASE_URL)
+        hotlist.collect = MagicMock(return_value=(hotlist_rows, SourceHealth("hotlist_proxy", True, row_count=1)))
+
+        ctx = collect_market_context([startup, merged, hotlist], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert [row["code"] for row in ctx.stocks] == ["000001"]
+        assert all(row["code"] != "600300" for row in ctx.stocks)
+        hotlist.collect.assert_not_called()
+        assert "hotlist_proxy" not in {h.source for h in ctx.source_health}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ProxyLimitUpProvider
