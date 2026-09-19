@@ -1,6 +1,6 @@
 # 快照采集池单一事实源（自治热榜池）设计
 
-> 状态：设计已确认（2026-09-19 用户逐项确认：对齐口径 = 采集池为前端池超集；实现路径 = 单一事实源纯自治池；四节设计整体确认）
+> 状态：设计已确认（2026-09-19 用户逐项确认：对齐口径 = 采集池为前端池超集；实现路径 = 单一事实源纯自治池；四节设计整体确认）；实施完成（2026-09-20，提交链 300aad60..bd6e96d2 及后续 Task 5 健壮性修复与文档同步提交，实施计划与审查记录见 quant-board/docs/snapshot-collector/2026-09-20-pool-autonomous-source-implementation-plan.md）
 > 触发：2026-09-19 用户裁决——「采集池实时跟随前端池」必须彻底解决，正式立项
 > 依据：`AGENTS.md §4.0`、`skills/fail-visible-data-pipelines/SKILL.md`、仓库代码与 MongoDB 实测证据（本文 §2）
 
@@ -60,7 +60,7 @@
 
 | 场景 | 行为 | 不允许的行为 |
 | --- | --- | --- |
-| 8 平台全部失败 | bundle 行兜底入库（`poolSource: bundle_fallback`）；bundle 也不可用才如实报告本轮无数据（唯一允许不写入的情形） | 有一方可数据源时静默丢帧 |
+| 8 平台全部失败 | bundle 行兜底入库（`poolSource: bundle_fallback`）；bundle 也不可用才如实报告本轮无数据（唯一允许不写入的情形）。兜底池在 bundle 先于 merged 时正常获得下游行情/题材/涨停补齐；provider 顺序反转时由循环后安全网兜底（字段诚实缺省） | 有一方可数据源时静默丢帧 |
 | 部分平台失败 | 照常采集可用平台，`failedPlatforms` 记入 health（现有行为） | 因个别平台失败丢弃整帧 |
 | 前端离线 / bundle 缺失 | `autonomous` 模式无影响；context 缺失打标降级 | 阻断采集或伪造 context |
 | 行情/资金补齐失败 | 字段如实缺失/为 0，quote 覆盖率 <80% 打 warning（现有行为） | 用估算值伪装 |

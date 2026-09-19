@@ -10,6 +10,25 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md`（2026-09-19 用户已确认）
 
+**实施状态（2026-09-20 回填）：** Task 1-5 全部完成；Task 2/3 各经两轮独立 code review 后修复。各 Task 实际提交（`git log --oneline` 核实）：
+
+- Task 1（settings 配置项）：`300aad60`
+- Task 2（同步版路由重写）：`e2c175b9`（主提交）、`3dc46010`（contract 用例锚定 bundle_first）、`dabbec01`（review 修复：兜底顺序无关化 + 非法 mode 告警）、`38472a8a`（review 修复：快路径 + 顺序安全网混合式）
+- Task 3（async 变体同步）：`ed9f7581`（主提交）、`88afa85c`（review 修复：async 安全网与折叠路径用例补齐 + docstring 镜像义务）
+- Task 4（service 传参 + snapshot_context_missing 打标）：`bd6e96d2`
+- Task 5（全量验证 + 文档同步 + 健壮性修复）：`79304723`（pool_source_mode 访问器收紧 + 路由锚点契约注释）+ 文档同步提交
+- Task 6（下一交易日实测验收）：待人工执行
+
+实施中的计划偏离（简要）：
+
+1. Task 2 merged 分支加内层 try/except 折叠——计划 3c 的 bundle 兜底在 `merged.collect` 意外抛错场景不可达，折叠为失败 health 后继续兜底（fail-visible）。
+2. pipeline_contract 3 用例锚定 bundle_first（计划缺口：Task 2 Step 4 未逐个列名旧用例，实施时按实际依赖补齐）。
+3. 兜底演化为"快路径 + 循环后顺序安全网"混合式（两轮 review 迭代：bundle 先于 merged 时立即兜底并保留下游补齐；顺序反转由安全网兜底，不再依赖 provider 顺序）。
+4. async `ProxyHotlistProvider` 用 `asyncio.to_thread` 适配（该类无 `acollect` 的既有隐患）。
+5. poolSize 安全网断言与 async 补充用例。
+6. Task 4 测试假 settings 补 `snapshot_collector_pool_source_mode` 属性与元组解包。
+7. Task 5 两处一行健壮性修复（`_pool_source_mode` 去 getattr 第三参改为直接属性访问 + 路由锚点契约注释，来自 Task 4 code review Minor 1/3）。
+
 **验证命令（quant-board 目录）：**
 
 ```powershell
@@ -48,7 +67,7 @@ cd quant-board
 - Modify: `quant-board/backend/core/settings.py`（约 140 行 `snapshot_collector_*` 字段区；约 431 行 env 覆盖区）
 - Test: `quant-board/tests/test_snapshot_collector_service.py`
 
-- [ ] **Step 1: 写失败测试（默认值 + env 覆盖）**
+- [x] **Step 1: 写失败测试（默认值 + env 覆盖）**
 
 在 `quant-board/tests/test_snapshot_collector_service.py` 的 `TestSettingsDefaults` 类末尾（`test_default_allow_live_dataset_is_false` 之后）追加：
 
@@ -67,12 +86,12 @@ cd quant-board
         assert settings.snapshot_collector_pool_source_mode == "bundle_first"
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_service.py::TestSettingsDefaults::test_default_pool_source_mode_is_autonomous tests/test_snapshot_collector_service.py::TestSettingsEnvOverrides::test_pool_source_mode_via_env -v`
 Expected: FAIL（`Settings` object has no attribute `snapshot_collector_pool_source_mode`）
 
-- [ ] **Step 3: 最小实现**
+- [x] **Step 3: 最小实现**
 
 `quant-board/backend/core/settings.py`：在 `snapshot_collector_provider_timeout_ms: int = Field(default=30000)`（约 142 行）之后新增字段：
 
@@ -92,12 +111,12 @@ Expected: FAIL（`Settings` object has no attribute `snapshot_collector_pool_sou
         )
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_service.py -v`
 Expected: PASS（全部用例）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add quant-board/backend/core/settings.py quant-board/tests/test_snapshot_collector_service.py
@@ -112,7 +131,7 @@ git commit -m "feat(collector): snapshot_collector_pool_source_mode 配置项（
 - Modify: `quant-board/backend/snapshot_collector/providers.py`（模块常量区约 46 行；`collect_market_context` 1865-1963）
 - Test: `quant-board/tests/test_snapshot_collector_providers.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `quant-board/tests/test_snapshot_collector_providers.py` 的 `TestCollectMarketContext` 类之后新增类（沿用该文件的 mock 模式；文件顶部已有 `SourceHealth`、`StartupBundleStockProvider`、`ProxyMergedHotlistProvider`、`TencentBasicQuoteProvider`、`collect_market_context` 导入）：
 
@@ -222,12 +241,12 @@ class TestCollectMarketContextAutonomous:
         assert "poolSource" not in ctx.stocks[0]
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_providers.py::TestCollectMarketContextAutonomous -v`
 Expected: FAIL（`collect_market_context() got an unexpected keyword argument 'pool_source_mode'`）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `quant-board/backend/snapshot_collector/providers.py`：
 
@@ -358,7 +377,7 @@ docstring 的 Provider routing 段落同步改写为：
 
 其余分支（Tencent/Bridge/Fund/Theme/LimitUp）与结尾 `_append_quote_coverage_warning(ctx, active_codes)` 不变。
 
-- [ ] **Step 4: 更新现有用例守护回退路径**
+- [x] **Step 4: 更新现有用例守护回退路径**
 
 `TestCollectMarketContext` 中以下用例在 `collect_market_context(...)` 调用中追加实参 `pool_source_mode="bundle_first"`（保持验证旧行为，成为回退路径守护测试）：
 `test_assembles_stocks_from_hotlist_provider`、`test_merges_bounded_tencent_quotes_after_stock_codes_are_known`、`test_assembles_quotes_from_bridge_provider`、`test_assembles_depth_from_bridge_provider`、`test_assembles_themes_from_theme_provider`、`test_aggregates_source_health` 及该类中其余断言 `ctx.stocks` 依赖 bundle/hotlist 供池的用例（逐个核对：凡用例内未 mock merged provider 且依赖 startup/hotlist 行入池的，都要加）。
@@ -366,7 +385,7 @@ docstring 的 Provider routing 段落同步改写为：
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_providers.py -v`
 Expected: PASS（新旧全部用例）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add quant-board/backend/snapshot_collector/providers.py quant-board/tests/test_snapshot_collector_providers.py
@@ -381,7 +400,7 @@ git commit -m "feat(collector): autonomous 采集池路由——merged 热榜为
 - Modify: `quant-board/backend/snapshot_collector/providers.py`（`collect_market_context_async` 1966 起）
 - Test: `quant-board/tests/test_snapshot_collector_async_pipeline.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `quant-board/tests/test_snapshot_collector_async_pipeline.py` 末尾追加（文件顶部已导入 `collect_market_context_async`；`_merged_provider`/`FakeHotlistService` 为该文件既有 helper，`MarketDataContext`/`SourceHealth` 在用例内局部导入的模式沿用）：
 
@@ -428,12 +447,12 @@ def _async(value: Any):
 
 （若文件顶部无 `from typing import Any` 则补充导入。）
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_async_pipeline.py::test_collect_market_context_async_autonomous_merged_is_primary -v`
 Expected: FAIL（unexpected keyword argument `pool_source_mode`）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `collect_market_context_async` 签名加 `pool_source_mode: str = "autonomous"`（keyword-only，与同步版一致）；函数体开头 `mode = _normalize_pool_source_mode(pool_source_mode)`；把 StartupBundle 与 merged 两个分支改为与 Task 2 Step 3c 完全相同的 autonomous/bundle_first 逻辑（`provider.acollect` 代替 `provider.collect`，其余逐字一致）：
 
@@ -496,12 +515,12 @@ async def collect_market_context_async(
 
 其余分支不变。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_async_pipeline.py tests/test_snapshot_collector_providers.py -v`
 Expected: PASS（含现有 `test_collect_market_context_async_orchestrates`——单 merged provider 在 autonomous 下行为与旧断言一致：merged 行入池）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add quant-board/backend/snapshot_collector/providers.py quant-board/tests/test_snapshot_collector_async_pipeline.py
@@ -516,7 +535,7 @@ git commit -m "feat(collector): async 采集路由同步 autonomous 模式"
 - Modify: `quant-board/backend/snapshot_collector/service.py`（`_collect_context` 284-303；`_settings_or_default` 辅助区约 943 行；`_persist_one` quality 生成后约 451 行）
 - Test: `quant-board/tests/test_snapshot_collector_async_pipeline.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `test_snapshot_collector_async_pipeline.py` 的 `test_arun_once_multi_collects_once_derives_per_type` 中，`ctx` 构造不含 `snapshot_context`（默认空 dict）——在该测试末尾追加断言（dry_run 结果的 warnings 已带标记）：
 
@@ -572,12 +591,12 @@ def test_collect_context_passes_pool_source_mode_to_real_route(
 
 （`FakeRepo` 为该文件既有类；`_collect_context` 内部 `self._create_providers` 只构造 provider 对象不触网，`theme_heat_service=None` 时返回空 sectors，均为既有行为。）
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_async_pipeline.py -v`
 Expected: FAIL（`snapshot_context_missing` 断言处 warning 缺失；传参用例因 `_collect_context` 尚未传 mode 而失败）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 3a. `service.py` 辅助区（`_provider_timeout_ms` 之后）新增：
 
@@ -611,12 +630,12 @@ Expected: FAIL（`snapshot_context_missing` 断言处 warning 缺失；传参用
             quality.warnings.append("snapshot_context_missing")
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest tests/test_snapshot_collector_async_pipeline.py tests/test_snapshot_collector_service.py -v`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add quant-board/backend/snapshot_collector/service.py quant-board/tests/test_snapshot_collector_async_pipeline.py
@@ -632,12 +651,12 @@ git commit -m "feat(collector): 采集链传参 pool_source_mode + snapshot_cont
 - Modify: `docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md`（状态行回填）
 - Modify: 本计划文件（勾选完成项）
 
-- [ ] **Step 1: 全量后端测试**
+- [x] **Step 1: 全量后端测试**
 
 Run: `cd quant-board && .\.venv\Scripts\python.exe -m pytest`
 Expected: 全部 PASS，无 import 断裂（backend 归档硬约束：目录调整必须全量 pytest 验证）
 
-- [ ] **Step 2: 文档同步**
+- [x] **Step 2: 文档同步**
 
 `architecture.md`：在 snapshot_collector 相关段落补充一句（按该文档现有格式，找到描述采集器 provider/池的段落）：
 
@@ -651,7 +670,7 @@ Expected: 全部 PASS，无 import 断裂（backend 归档硬约束：目录调�
 
 spec 状态行追加：`> 状态：设计已确认（2026-09-19）；实施完成（2026-09-20，见 quant-board/docs/snapshot-collector/2026-09-20-pool-autonomous-source-implementation-plan.md）`。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add quant-board/docs/architecture.md docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md quant-board/docs/snapshot-collector/2026-09-20-pool-autonomous-source-implementation-plan.md

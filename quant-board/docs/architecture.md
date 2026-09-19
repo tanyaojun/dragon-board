@@ -71,7 +71,8 @@ backend/snapshot_collector/
 - 缺槽自动补采（catch-up）：`collector_main` 后台任务每 15 分钟检查当日缺失槽位并补采。采集窗口内（09:00-16:00）补全部缺失槽；收盘后（16:00 至次日 09:00）行情已定格，仅补 15:00 及之后的收盘类槽位（half_hour 15:00 / daily 15:30），盘中槽不自动回填（用收盘价伪造盘中数据会失真，交人工决策）。补采仅在 completed/deduped 后登记 `attempted`，失败槽位下一轮重试（blocked 已由 service 写 run 记录保持可见）。
 - 单实例协调：`collector_main` 与 8000 启动时竞争 Redis 锁（`snapshot-collector:instance-lock:<dataset>`，TTL 120s + 60s 心跳续期，值含持有者 PID）；持有者进程已死时残留锁自动清理重抢，避免强杀后等待与双进程双采。
 - 交易日历：bridge → 本地缓存（`quant-board/data/trading_calendar_cache.json`）→ 工作日启发式三级降级，桥挂只降级不停采。
-- 股票池：优先通过 `StartupBundleStockProvider` 读取 proxy-server 的 live 前端 startup bundle；缓存缺失时通过 `ProxyMergedHotlistProvider` 做八平台热榜 union fallback。单平台 `ProxyHotlistProvider` 只保留为诊断工具。
+- 股票池：默认由 `ProxyMergedHotlistProvider` 直连 market_proxy 热榜服务实时合并八平台构成（`autonomous` 模式，见下条）；`bundle_first` 回退模式下 startup bundle 为主池、merged 仅 fallback。单平台 `ProxyHotlistProvider` 只保留为诊断工具。
+- 采集池来源（2026-09-20）：默认 `autonomous`——每槽直连 market_proxy 热榜服务实时合并八平台全量（`ProxyMergedHotlistProvider` 主池），行级 `poolSource` provenance（autonomous / bundle_fallback）；bundle 降级为只供 `snapshotContext`，自治池全挂时 bundle 行兜底（快路径 + 顺序安全网混合式，下游行情/题材/涨停按兜底池正常补齐）。回退开关 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE=bundle_first`（bundle 为主池的旧行为）。设计与实测验收见 `docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md`。
 
 数据源覆盖：
 
@@ -498,6 +499,7 @@ V12 后续 Phase 中，ThemeTrend 和 Theme Confluence 回测/优化仍复用现
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROXY_BASE_URL` | proxy-server 基础 URL，默认 `http://127.0.0.1:3000` |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL` | python-bridge 基础 URL，默认 `http://127.0.0.1:8765` |
 | `QUANT_BOARD_SNAPSHOT_COLLECTOR_PROVIDER_TIMEOUT_MS` | 数据源请求超时（毫秒），默认 30000；覆盖 `proxy-server` EastMoney quote fallback 的慢请求窗口 |
+| `QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE` | 采集池来源模式，默认 `autonomous`（每槽直连 market_proxy 实时合并八平台热榜为主池，bundle 只供 snapshotContext），可选 `bundle_first`（bundle 为主池的旧行为）；改后重启采集进程生效 |
 | `QUANT_BOARD_THEME_HEAT_BATCH_SIZE` | 腾讯题材基础行情批大小，默认 50 |
 | `QUANT_BOARD_THEME_HEAT_MAX_CONCURRENCY` | 腾讯批次最大并发，默认 3 |
 | `QUANT_BOARD_ANALYZE_MAX_CONCURRENCY` | `/api/ranktrend/analyze` 全局 golden 计算并发上限，默认 2；per-key 单飞在此基础上保证同 key 只算一次 |
