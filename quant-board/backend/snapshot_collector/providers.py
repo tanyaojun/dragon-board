@@ -84,6 +84,45 @@ _HOTLIST_WEIGHTS = {
     "cls": 0.35,
 }
 
+# 采集池来源模式（2026-09-20 spec：docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md）
+# autonomous = 八平台热榜实时合并池为主池（bundle 只供 snapshotContext，merged 全挂时 bundle 行兜底）；
+# bundle_first = 旧行为（bundle 为主池，merged/单平台热榜仅 fallback）。
+POOL_SOURCE_MODES = ("autonomous", "bundle_first")
+_POOL_SOURCE_AUTONOMOUS = "autonomous"
+_POOL_SOURCE_BUNDLE_FALLBACK = "bundle_fallback"
+
+
+def _normalize_pool_source_mode(value: Any) -> str:
+    mode = str(value or "").strip()
+    return mode if mode in POOL_SOURCE_MODES else "autonomous"
+
+
+def _mark_pool_source(rows: list[dict[str, Any]], source: str) -> None:
+    for row in rows:
+        if isinstance(row, dict):
+            row["poolSource"] = source
+
+
+def _codes_of(rows: list[dict[str, Any]]) -> list[str]:
+    return [
+        str(row.get("code") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("code") or "").strip()
+    ]
+
+
+def _append_pool_composition(health: Any, *, mode: str, pool_size: int) -> None:
+    composition = {
+        "poolComposition": {
+            "mode": mode,
+            "poolSize": pool_size,
+            "failedPlatforms": list(health.failed_batches or []),
+            "platformTotals": (health.details or {}).get("rankProvenance", {}).get("platformTotals", {}),
+        }
+    }
+    if isinstance(health.details, dict):
+        health.details.update(composition)
+
 _LIMIT_UP_POOL_KEYS = ("one", "two", "three", "four", "high", "failed", "rushing", "drawdown")
 _TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -1867,6 +1906,7 @@ def collect_market_context(
     codes: list[str],
     *,
     timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    pool_source_mode: str = "autonomous",
 ) -> MarketDataContext:
     """Collect data from all *providers* and assemble a ``MarketDataContext``.
 
@@ -1875,45 +1915,80 @@ def collect_market_context(
     ``MarketDataContext`` aggregates all returned data rows and health
     records.
 
-    Provider routing
-    ----------------
-    * ``StartupBundleStockProvider`` / ``ProxyMergedHotlistProvider`` / ``ProxyHotlistProvider`` → ``ctx.stocks``
-    * ``TencentBasicQuoteProvider`` → ``ctx.quotes``
-    * ``BridgeQuoteProvider``   → ``ctx.quotes``, ``ctx.depth``, ``ctx.market_meta``
-    * ``ThemeMappingProvider``  → ``ctx.themes``
-    * ``ProxyLimitUpProvider``  → ``ctx.limit_up``
+    Provider routing（pool_source_mode）
+    -----------------------------------
+    * ``autonomous``（默认）: ``ProxyMergedHotlistProvider`` 为主池来源；
+      ``StartupBundleStockProvider`` 只供 ``snapshot_context``（其 stocks 不入池），
+      merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）。
+      ``ProxyHotlistProvider``（单平台诊断源）不入池。
+    * ``bundle_first``（回退）: 旧行为——bundle 为主池，merged/单平台热榜仅 fallback。
+    * ``TencentBasicQuoteProvider`` → ``ctx.quotes``；``BridgeQuoteProvider`` → quotes/depth/market_meta；
+      ``ThemeMappingProvider`` → ``ctx.themes``；``ProxyLimitUpProvider`` → ``ctx.limit_up``
 
     Unknown provider types are silently ignored.
     """
     ctx = MarketDataContext()
     active_codes = [str(code).strip() for code in codes if str(code).strip()]
+    mode = _normalize_pool_source_mode(pool_source_mode)
 
+    bundle_fallback_rows: list[dict[str, Any]] = []
     for provider in providers:
         try:
             if isinstance(provider, StartupBundleStockProvider):
                 rows, health = provider.collect(timeout_ms=timeout_ms)
                 ctx.source_health.append(health)
-                if rows:
-                    ctx.stocks = rows
-                    ctx.snapshot_context = dict(provider.snapshot_context)
-                    active_codes = [
-                        str(row.get("code") or "").strip()
-                        for row in rows
-                        if isinstance(row, dict) and str(row.get("code") or "").strip()
-                    ]
+                if mode == "bundle_first":
+                    if rows:
+                        ctx.stocks = rows
+                        ctx.snapshot_context = dict(provider.snapshot_context)
+                        active_codes = _codes_of(rows)
+                else:
+                    # autonomous：bundle 只供 context；rows 留作 merged 全挂时的兜底池
+                    if provider.snapshot_context:
+                        ctx.snapshot_context = dict(provider.snapshot_context)
+                    bundle_fallback_rows = [row for row in rows if isinstance(row, dict)]
 
-            elif isinstance(provider, (ProxyMergedHotlistProvider, ProxyHotlistProvider)):
+            elif isinstance(provider, ProxyMergedHotlistProvider):
                 if ctx.stocks:
+                    continue
+                try:
+                    rows, health = provider.collect(timeout_ms=timeout_ms)
+                except Exception as exc:
+                    # 正常实现下 merged.collect 按平台聚合失败、不抛错；若意外抛错，
+                    # 折叠为失败 health 继续走下方 bundle 兜底，不让异常跳过兜底（fail-visible）。
+                    rows = []
+                    health = SourceHealth(
+                        source="merged_hotlist_proxy",
+                        ok=False,
+                        error=str(exc),
+                        captured_at=_iso_now(),
+                    )
+                ctx.source_health.append(health)
+                if mode == "bundle_first":
+                    if not ctx.stocks:
+                        ctx.stocks.extend(rows)
+                        if not active_codes:
+                            active_codes = _codes_of(rows)
+                elif rows:
+                    _mark_pool_source(rows, _POOL_SOURCE_AUTONOMOUS)
+                    ctx.stocks = rows
+                    active_codes = _codes_of(rows)
+                elif bundle_fallback_rows:
+                    # 全平台失败但有 bundle 行：fail-visible 兜底（不构成丢帧）
+                    _mark_pool_source(bundle_fallback_rows, _POOL_SOURCE_BUNDLE_FALLBACK)
+                    ctx.stocks = bundle_fallback_rows
+                    active_codes = _codes_of(bundle_fallback_rows)
+                _append_pool_composition(health, mode=mode, pool_size=len(ctx.stocks))
+
+            elif isinstance(provider, ProxyHotlistProvider):
+                # 单平台诊断源：仅 bundle_first 且池为空时沿用旧行为；autonomous 不入池
+                if mode == "autonomous" or ctx.stocks:
                     continue
                 rows, health = provider.collect(timeout_ms=timeout_ms)
                 ctx.stocks.extend(rows)
                 ctx.source_health.append(health)
                 if not active_codes:
-                    active_codes = [
-                        str(row.get("code") or "").strip()
-                        for row in rows
-                        if isinstance(row, dict) and str(row.get("code") or "").strip()
-                    ]
+                    active_codes = _codes_of(rows)
 
             elif isinstance(provider, TencentBasicQuoteProvider):
                 rows, health = provider.collect(active_codes, timeout_ms=timeout_ms)

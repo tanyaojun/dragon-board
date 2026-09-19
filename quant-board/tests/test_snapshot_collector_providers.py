@@ -984,7 +984,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert len(ctx.stocks) == 3
@@ -1008,7 +1008,7 @@ class TestCollectMarketContext:
                 ),
             ) as collect_quotes,
         ):
-            ctx = collect_market_context([startup, tencent], [], timeout_ms=5000)
+            ctx = collect_market_context([startup, tencent], [], timeout_ms=5000, pool_source_mode="bundle_first")
 
         collect_quotes.assert_called_once_with(["000001", "600000"], timeout_ms=5000)
         assert ctx.quotes == [{"code": "000001", "volumeRatio": 1.8}]
@@ -1025,7 +1025,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert len(ctx.quotes) == 3
@@ -1043,7 +1043,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert len(ctx.depth) == 3
@@ -1060,7 +1060,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert ctx.themes["000001"] == ["银行", "深圳"]
@@ -1078,7 +1078,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert len(ctx.source_health) == 3
@@ -1097,7 +1097,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert ctx.market_meta["totalVolume"] == 500000000000
@@ -1117,7 +1117,7 @@ class TestCollectMarketContext:
             return BRIDGE_SNAPSHOT_RESPONSE
 
         with _mock_http_client(responder=record_http):
-            ctx = collect_market_context([hotlist, bridge, theme], [], timeout_ms=5000)
+            ctx = collect_market_context([hotlist, bridge, theme], [], timeout_ms=5000, pool_source_mode="bundle_first")
 
         assert len(ctx.stocks) == 3
         assert len(ctx.quotes) == 3
@@ -1138,7 +1138,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         # Hotlist still contributed
@@ -1168,7 +1168,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx_ordered = collect_market_context(
-                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000
+                [hotlist, bridge, theme], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         with _mock_http_client(
@@ -1178,7 +1178,7 @@ class TestCollectMarketContext:
             ],
         ):
             ctx_reversed = collect_market_context(
-                [bridge, theme, hotlist], TEST_CODES, timeout_ms=5000
+                [bridge, theme, hotlist], TEST_CODES, timeout_ms=5000, pool_source_mode="bundle_first"
             )
 
         assert len(ctx_ordered.stocks) == len(ctx_reversed.stocks)
@@ -1192,6 +1192,111 @@ class TestCollectMarketContext:
             _, health = hotlist.collect()
 
         assert health.ok is True
+
+
+class TestCollectMarketContextAutonomous:
+    """autonomous 模式（spec 2026-09-19）：merged 热榜池为主池，bundle 只供 snapshotContext。"""
+
+    def _make_providers(self, startup_rows, merged_rows, startup_context=None, merged_raises=False):
+        startup = StartupBundleStockProvider(base_url=PROXY_BASE_URL)
+        startup.snapshot_context = startup_context if startup_context is not None else {"breathData": {"k": "v"}}
+        startup_rows = startup_rows if startup_rows is not None else [
+            {"code": "600000", "name": "浦发银行", "rank": 2},
+        ]
+        merged = ProxyMergedHotlistProvider(base_url=PROXY_BASE_URL)
+        merged_health = SourceHealth(
+            source="merged_hotlist_proxy",
+            ok=True,
+            row_count=len(merged_rows),
+            details={"rankProvenance": {"platformTotals": {"eastmoney": len(merged_rows)}, "platformWeights": {}}},
+        )
+        self.merged_health = merged_health
+        if merged_raises:
+            def merged_collect(*args, **kwargs):
+                raise RuntimeError("all platforms failed")
+            merged.collect = merged_collect
+        else:
+            merged.collect = lambda *args, **kwargs: (merged_rows, merged_health)
+        startup.collect = lambda *args, **kwargs: (startup_rows, SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)))
+        tencent = TencentBasicQuoteProvider(base_url=PROXY_BASE_URL)
+        return startup, merged, tencent
+
+    def test_merged_is_primary_pool_and_rows_marked_autonomous(self) -> None:
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[{"code": "000001", "name": "平安银行", "rank": 1}],
+        )
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert [row["code"] for row in ctx.stocks] == ["000001"]
+        assert ctx.stocks[0]["poolSource"] == "autonomous"
+
+    def test_bundle_rows_do_not_enter_pool_but_supply_snapshot_context(self) -> None:
+        context = {"breathData": {"up": 1}, "marketData": {"index": 3000}}
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[{"code": "000001", "name": "平安银行", "rank": 1}],
+            startup_context=context,
+        )
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert all(row["code"] != "600000" for row in ctx.stocks)
+        assert ctx.snapshot_context == context
+
+    def test_merged_failure_falls_back_to_bundle_rows_marked_bundle_fallback(self) -> None:
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[],
+            merged_raises=True,
+        )
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert [row["code"] for row in ctx.stocks] == ["600000"]
+        assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+
+    def test_quotes_request_autonomous_pool_codes(self) -> None:
+        startup, merged, tencent = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[{"code": "000001", "name": "平安银行", "rank": 1}],
+        )
+        tencent.collect = lambda codes, **kwargs: (
+            {"000001": {"code": "000001", "volumeRatio": 1.8}},
+            SourceHealth("theme_quote_tencent", True, row_count=1),
+        )
+
+        ctx = collect_market_context([startup, merged, tencent], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        assert ctx.quotes == [{"code": "000001", "volumeRatio": 1.8}]
+
+    def test_pool_composition_in_merged_health_details(self) -> None:
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[{"code": "000001", "name": "平安银行", "rank": 1}],
+        )
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="autonomous")
+
+        merged_health = next(h for h in ctx.source_health if h.source == "merged_hotlist_proxy")
+        composition = merged_health.details["poolComposition"]
+        assert composition["mode"] == "autonomous"
+        assert composition["poolSize"] == 1
+        assert composition["platformTotals"] == {"eastmoney": 1}
+        assert "rankProvenance" in merged_health.details
+
+    def test_bundle_first_mode_keeps_legacy_behavior(self) -> None:
+        startup, merged, _ = self._make_providers(
+            startup_rows=[{"code": "600000", "name": "浦发银行", "rank": 2}],
+            merged_rows=[{"code": "000001", "name": "平安银行", "rank": 1}],
+        )
+
+        ctx = collect_market_context([startup, merged], [], timeout_ms=5000, pool_source_mode="bundle_first")
+
+        # 旧行为：bundle 为主池，merged 被 skip，无 poolSource 标记
+        assert [row["code"] for row in ctx.stocks] == ["600000"]
+        assert "poolSource" not in ctx.stocks[0]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
