@@ -289,6 +289,8 @@ class SnapshotCollectorService:
         providers_list = self._create_providers(trading_date=trading_date)
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
+        # mode 必须在此分支传入 async 路由；判断锚点须与 __init__ 的 collect_fn 默认值
+        # （providers_module.collect_market_context）保持一致，否则 mode 静默丢失、回退开关失效。
         if self._collect_fn is providers_module.collect_market_context:
             market_context = await providers_module.collect_market_context_async(
                 providers_list,
@@ -961,11 +963,7 @@ class SnapshotCollectorService:
 
     def _pool_source_mode(self) -> str:
         return providers_module._normalize_pool_source_mode(
-            getattr(
-                self._settings_or_default(),
-                "snapshot_collector_pool_source_mode",
-                "autonomous",
-            )
+            self._settings_or_default().snapshot_collector_pool_source_mode
         )
 
     def _close_grace_minutes(self) -> int:
