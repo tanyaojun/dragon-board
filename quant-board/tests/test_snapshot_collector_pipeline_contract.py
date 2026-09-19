@@ -215,6 +215,7 @@ def test_pipeline_produces_non_empty_bundle() -> None:
         ),
         ["000001", "600000"],
         timeout_ms=5000,
+        pool_source_mode="bundle_first",
     )
     assert ctx.stocks
     assert all(health.ok for health in ctx.source_health)
@@ -238,6 +239,7 @@ def test_pipeline_partial_failure_still_produces_payload() -> None:
         ),
         ["000001", "600000"],
         timeout_ms=5000,
+        pool_source_mode="bundle_first",
     )
     assert ctx.stocks
     assert any(health.ok is False for health in ctx.source_health)
@@ -259,6 +261,7 @@ def test_pipeline_all_sources_offline_reports_failed_context() -> None:
         ),
         ["000001"],
         timeout_ms=5000,
+        pool_source_mode="bundle_first",
     )
     assert ctx.stocks == []
     assert any(health.ok is False for health in ctx.source_health)
