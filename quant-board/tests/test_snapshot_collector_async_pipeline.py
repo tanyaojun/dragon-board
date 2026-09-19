@@ -170,6 +170,67 @@ def test_arun_once_multi_collects_once_derives_per_type() -> None:
     assert all(result.status == "dry_run" for result in results)
     assert results[0].snapshot_id == "half_hour:2026-08-04:15:30"
     assert results[1].snapshot_id == "daily:2026-08-04:15:30"
+    # ctx 无 snapshotContext → fail-visible 打标（不阻断 dry_run 结果）
+    assert any(
+        "snapshot_context_missing" in warning
+        for result in results
+        for warning in (result.quality.warnings or [])
+    )
+
+
+def test_collect_context_passes_pool_source_mode_to_real_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实链路（collect_fn is collect_market_context）必须把 settings 的 mode 传给 async 路由。"""
+    from backend.snapshot_collector import providers as providers_module
+    from backend.snapshot_collector.models import MarketDataContext
+    from backend.snapshot_collector.service import SnapshotCollectorService
+
+    captured: dict[str, Any] = {}
+
+    async def fake_route(
+        providers_list: list[Any],
+        codes: list[str],
+        *,
+        timeout_ms: int | None = None,
+        pool_source_mode: str = "autonomous",
+    ) -> MarketDataContext:
+        captured["mode"] = pool_source_mode
+        return MarketDataContext()
+
+    # 判断锚点（is 判断）与调用点（async 调用）都指向 fake_route
+    monkeypatch.setattr(providers_module, "collect_market_context", fake_route)
+    monkeypatch.setattr(providers_module, "collect_market_context_async", fake_route)
+
+    class FakeRepo:
+        """_collect_context 不触 repo，仅满足构造器签名。"""
+
+    # 假 settings 需满足 _create_providers 读取的 proxy/bridge/timeout 属性
+    settings = type(
+        "S",
+        (),
+        {
+            "snapshot_collector_pool_source_mode": "bundle_first",
+            "snapshot_collector_proxy_base_url": "http://127.0.0.1:3000",
+            "snapshot_collector_bridge_base_url": "http://127.0.0.1:8765",
+            "snapshot_collector_provider_timeout_ms": 5000,
+        },
+    )()
+
+    service = SnapshotCollectorService(
+        FakeRepo(),
+        settings=settings,
+        collect_fn=providers_module.collect_market_context,
+        normalize_fn=lambda *a, **k: None,
+        quality_fn=lambda **k: None,
+        theme_heat_service=None,
+    )
+
+    ctx, theme_snapshot = asyncio.run(service._collect_context("2026-09-20"))
+
+    assert captured["mode"] == "bundle_first"
+    assert isinstance(ctx, MarketDataContext)
+    assert theme_snapshot is None
 
 
 def _async(value):

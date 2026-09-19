@@ -291,7 +291,10 @@ class SnapshotCollectorService:
         timeout_ms = self._provider_timeout_ms()
         if self._collect_fn is providers_module.collect_market_context:
             market_context = await providers_module.collect_market_context_async(
-                providers_list, codes, timeout_ms=timeout_ms
+                providers_list,
+                codes,
+                timeout_ms=timeout_ms,
+                pool_source_mode=self._pool_source_mode(),
             )
         elif inspect.iscoroutinefunction(self._collect_fn):
             market_context = await self._collect_fn(
@@ -449,6 +452,10 @@ class SnapshotCollectorService:
             actual_timestamp_ms=actual_ts,
             grace_minutes=grace_minutes,
         )
+        if not market_context.snapshot_context:
+            # autonomous 模式下前端离线 → bundle 缺失 → snapshotContext 证据缺位：
+            # fail-visible 打标，不阻断采集（spec §4 错误处理表）
+            quality.warnings.append("snapshot_context_missing")
         diagnostic_flags = [*quality.warnings, *quality.blocking_issues]
         if diagnostic_flags:
             for item in [*records, *frames]:
@@ -951,6 +958,15 @@ class SnapshotCollectorService:
 
     def _provider_timeout_ms(self) -> int:
         return self._settings_or_default().snapshot_collector_provider_timeout_ms
+
+    def _pool_source_mode(self) -> str:
+        return providers_module._normalize_pool_source_mode(
+            getattr(
+                self._settings_or_default(),
+                "snapshot_collector_pool_source_mode",
+                "autonomous",
+            )
+        )
 
     def _close_grace_minutes(self) -> int:
         return self._settings_or_default().snapshot_collector_close_grace_minutes

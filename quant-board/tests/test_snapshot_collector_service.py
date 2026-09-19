@@ -440,7 +440,8 @@ class TestSettingsDefaults:
         settings = Settings()
         assert settings.snapshot_collector_allow_live_dataset is False
 
-    def test_default_pool_source_mode_is_autonomous(self) -> None:
+    def test_default_pool_source_mode_is_autonomous(self, monkeypatch: Any) -> None:
+        monkeypatch.delenv("QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE", raising=False)
         settings = Settings()
         assert settings.snapshot_collector_pool_source_mode == "autonomous"
 
