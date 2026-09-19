@@ -1922,6 +1922,7 @@ def collect_market_context(
 
     Provider routing（pool_source_mode）
     -----------------------------------
+    修改本函数时必须同步镜像 ``collect_market_context_async``，反之亦然。
     * ``autonomous``（默认）: ``ProxyMergedHotlistProvider`` 为主池来源；
       ``StartupBundleStockProvider`` 只供 ``snapshot_context``（其 stocks 不入池），
       merged 全挂时 bundle 行兜底（``poolSource=bundle_fallback``）：bundle 缓存就绪时

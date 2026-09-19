@@ -307,3 +307,96 @@ def test_collect_market_context_async_bundle_first_keeps_legacy_behavior() -> No
     assert "poolSource" not in ctx.stocks[0]
     assert ctx.snapshot_context == {"breathData": {"k": "v"}}
     assert merged_calls == []
+
+
+def test_collect_market_context_async_fallback_is_order_independent_merged_first() -> None:
+    # merged 在前且 raise、bundle 在后：async 路径同样由循环后安全网兜底（不依赖 provider 顺序）
+    from backend.snapshot_collector.models import SourceHealth
+    from backend.snapshot_collector.providers import (
+        ProxyMergedHotlistProvider,
+        StartupBundleStockProvider,
+    )
+
+    startup = StartupBundleStockProvider(base_url="http://127.0.0.1:3000")
+    startup.snapshot_context = {"breathData": {"k": "v"}}
+    startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+    startup.collect = lambda *args, **kwargs: (
+        startup_rows,
+        SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)),
+    )
+    merged = ProxyMergedHotlistProvider(base_url="http://127.0.0.1:3000")
+
+    async def raising_acollect(**kwargs):
+        raise RuntimeError("all platforms failed")
+
+    merged.acollect = raising_acollect
+
+    ctx = asyncio.run(
+        collect_market_context_async(
+            [merged, startup],
+            [],
+            timeout_ms=5000,
+            pool_source_mode="autonomous",
+        )
+    )
+
+    assert [row["code"] for row in ctx.stocks] == ["600000"]
+    assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+    # raise 折叠出的 merged health 必须在安全网兜底后被二次修正 poolComposition（poolSize 0 -> 1）
+    folded_health = next(h for h in ctx.source_health if h.source == "merged_hotlist_proxy")
+    assert folded_health.details["poolComposition"]["poolSize"] == 1
+
+
+def test_collect_market_context_async_merged_raise_folds_and_fallback_reaches_downstream() -> None:
+    # merged.acollect 意外 raise：折叠为失败 health 后继续走兜底快路径（fail-visible），
+    # 下游 provider 仍按兜底池 codes 补齐，异常不得阻断兜底。
+    from backend.snapshot_collector.models import SourceHealth
+    from backend.snapshot_collector.providers import (
+        ProxyMergedHotlistProvider,
+        StartupBundleStockProvider,
+        TencentBasicQuoteProvider,
+    )
+
+    startup = StartupBundleStockProvider(base_url="http://127.0.0.1:3000")
+    startup.snapshot_context = {"breathData": {"k": "v"}}
+    startup_rows = [{"code": "600000", "name": "浦发银行", "rank": 2}]
+    startup.collect = lambda *args, **kwargs: (
+        startup_rows,
+        SourceHealth(source="startup_bundle", ok=True, row_count=len(startup_rows)),
+    )
+    merged = ProxyMergedHotlistProvider(base_url="http://127.0.0.1:3000")
+
+    async def raising_acollect(**kwargs):
+        raise RuntimeError("all platforms failed")
+
+    merged.acollect = raising_acollect
+
+    tencent = TencentBasicQuoteProvider(base_url="http://127.0.0.1:3000")
+    captured: dict[str, Any] = {}
+
+    async def fake_tencent_acollect(codes, *, timeout_ms=5000):
+        captured["codes"] = list(codes)
+        return (
+            {"600000": {"code": "600000", "volumeRatio": 1.5}},
+            SourceHealth("theme_quote_tencent", True, row_count=1),
+        )
+
+    tencent.acollect = fake_tencent_acollect
+
+    ctx = asyncio.run(
+        collect_market_context_async(
+            [startup, merged, tencent],
+            [],
+            timeout_ms=5000,
+            pool_source_mode="autonomous",
+        )
+    )
+
+    assert [row["code"] for row in ctx.stocks] == ["600000"]
+    assert ctx.stocks[0]["poolSource"] == "bundle_fallback"
+    # raise 被折叠为 merged 失败 health（而不是跳到外层 except 阻断兜底）
+    folded_health = next(h for h in ctx.source_health if h.source == "merged_hotlist_proxy")
+    assert folded_health.ok is False
+    assert "all platforms failed" in folded_health.error
+    assert captured["codes"] == ["600000"]
+    assert ctx.quotes == [{"code": "600000", "volumeRatio": 1.5}]
