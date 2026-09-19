@@ -1194,6 +1194,30 @@ class TestCollectMarketContext:
         assert health.ok is True
 
 
+class TestNormalizePoolSourceMode:
+    """非法 mode 折算告警（2026-09-20 final review）：回退开关拼写笔误必须可观察，不得静默。"""
+
+    def test_invalid_value_falls_back_to_autonomous_with_warning(self, caplog) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="backend.snapshot_collector.providers"):
+            assert providers_module._normalize_pool_source_mode("bundle_frist") == "autonomous"
+            assert providers_module._normalize_pool_source_mode(None) == "autonomous"
+            assert providers_module._normalize_pool_source_mode("") == "autonomous"
+
+        warnings = [r for r in caplog.records if "pool_source_mode" in r.message]
+        assert len(warnings) == 3
+
+    def test_valid_values_pass_through_silently(self, caplog) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="backend.snapshot_collector.providers"):
+            assert providers_module._normalize_pool_source_mode("autonomous") == "autonomous"
+            assert providers_module._normalize_pool_source_mode("bundle_first") == "bundle_first"
+
+        assert not [r for r in caplog.records if "pool_source_mode" in r.message]
+
+
 class TestCollectMarketContextAutonomous:
     """autonomous 模式（spec 2026-09-19）：merged 热榜池为主池，bundle 只供 snapshotContext。"""
 
