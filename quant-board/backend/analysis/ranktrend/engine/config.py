@@ -152,6 +152,12 @@ class RankTrendConfig:
     regimeStateHysteresis: bool = False    # strong 边界迟滞开关
     regimeStrongHysteresisBand: float = 5.0  # strong 退出阈值 = 进入阈值 - band
     tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
+    # ── P_repool_timeline_gap 研究参数（2026-09-20 参数化，默认值=原硬编码 5，golden 不漂移）──
+    # 出池回池重建期三档判定的中档线（runtime sample_status）：degradedSampleFloor
+    # <= len(percentiles) < momentum_min_samples → degraded（有判定，前端显示真实 stage）；
+    # 低于该线 → insufficient（前端周期列显示「样本不足」）。中期扫描档位：3/4/5(默认)/7/10。
+    # 约束（validate 校验）：1 <= degradedSampleFloor < momentum_min_samples。
+    degradedSampleFloor: int = 5
     tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
     # ── 维度票权重（2026-09-14 参数化 + 阶段 23.9 实证落默认）──
     # 用户决策采纳 combo_three_quarter：res/rank/cs 1.0 → 0.75（判定卡 C1 +11.2%/
@@ -392,6 +398,7 @@ class RankTrendConfig:
         # 旧四权重全量字典等未归一化状态会让 combinedScore 静默失真，禁止落引擎；
         # from_patch 不受影响（cls() 时默认值和=1 通过，patch 后由归一化保证）。
         _validate_decision_weights(self)
+        _validate_repool_params(self)
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "RankTrendConfig":
@@ -427,6 +434,7 @@ class RankTrendConfig:
                     value = float(value)
                 setattr(base, key, value)
         _validate_tier_constraints(base)
+        _validate_repool_params(base)
         # setattr 绕过 __post_init__：归一化前显式拒绝负权重（负值会扭曲归一化比例）
         for _w in _DECISION_WEIGHT_FIELDS:
             if getattr(base, _w) < 0:
@@ -454,6 +462,16 @@ _DECISION_WEIGHT_FIELDS = (
     "macdWeight",
     "maWeight",
 )
+
+
+def _validate_repool_params(config: "RankTrendConfig") -> None:
+    """P_repool_timeline_gap：degraded 门槛必须落在 [1, momentum_min_samples) 开区间。"""
+    _momentum_floor = max(2, max(config.momentumPeriods) + 1)
+    if not (1 <= config.degradedSampleFloor < _momentum_floor):
+        raise ValueError(
+            f"degradedSampleFloor 必须在 [1, momentum_min_samples={_momentum_floor}) 内，"
+            f"实际 {config.degradedSampleFloor}"
+        )
 
 
 def _validate_decision_weights(config: "RankTrendConfig") -> None:
@@ -507,6 +525,14 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
     ):
         if getattr(config, _field) < 0:
             raise ValueError(f"synergy 投票权重 {_field} 不能为负（负值翻转票向），实际 {getattr(config, _field)}")
+    # P_repool_timeline_gap：degraded 门槛必须落在 [1, momentum_min_samples) 开区间内
+    # （>= momentum_min_samples 会吞掉 ok 档；< 1 会让 insufficient 桶永空 = 伪造样本充足）
+    _momentum_floor = max(2, max(config.momentumPeriods) + 1)
+    if not (1 <= config.degradedSampleFloor < _momentum_floor):
+        raise ValueError(
+            f"degradedSampleFloor 必须在 [1, momentum_min_samples={_momentum_floor}) 内，"
+            f"实际 {config.degradedSampleFloor}"
+        )
     # 环境门干预形态枚举与强度校验（2026-09-14 阶段 24 方案 A）
     for _mode_field, _legal in (
         ("lifecycleVetoGateMode", ("hard", "soft", "off")),

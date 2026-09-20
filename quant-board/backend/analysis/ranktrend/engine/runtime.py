@@ -1233,7 +1233,7 @@ class RankTrendPythonEngine:
         # MACD 预热状态由 _macd_diagnostics.hasStableObservationBars 单独暴露（fail-visible）。
         sample_status = (
             "ok" if len(percentiles) >= get_momentum_min_samples(self.config)
-            else "degraded" if len(percentiles) >= 5
+            else "degraded" if len(percentiles) >= self.config.degradedSampleFloor
             else "insufficient"
         )
         if missing_market_fields and sample_status == "ok":
