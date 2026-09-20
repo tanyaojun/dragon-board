@@ -23,20 +23,21 @@
 判定本身是 golden 的诚实行为（fail-visible：拒绝用断裂历史伪装结论），**本课题不质疑判定诚实性**，
 研究的问题是：**重建期长度是否可通过「容忍中断历史做降级判定」显著缩短，且不劣化交易层质量**。
 
-## 3. 判定链盘点（A1 初盘点，两项待精确确认）
+## 3. 判定链盘点（A1 精确盘点已完成，2026-09-20）
 
 | # | 判定点 | 位置 | 当前行为 |
 | --- | --- | --- | --- |
 | 1 | 趋势/动量轨道 sample_status 三档 | `engine/runtime.py:1235-1238` | `len(percentiles) >= momentum_min_samples` → ok；`>= 5` → degraded；否则 insufficient |
-| 2 | 共振轨道 timeline 门 | `engine/runtime.py:615-619` | `timelineValid is False` → 共振 insufficient |
-| 3 | 新进热榜单点分支 | `api/ranktrend_routes.py:230-240` | 历史无记录 → 单点序列 → insufficient（fail-visible 注释） |
-| 4 | 双窗结构 | `api/ranktrend_routes.py:77-87` | 序列窗 280 帧（全量）vs 分析帧窗 `ANALYZE_MAX_TRACK_WINDOW=30`；序列构建在截断**之前**（280 帧历史进入 series） |
+| 2 | 共振轨道 timeline 门 | `engine/runtime.py:615-619` | `timelineValid is False` → 共振 insufficient（**实测确认引擎无任何写入 timelineValid=False 的代码点**——该字段仅透传，恒 True） |
+| 3 | 新进热榜单点分支 | `api/ranktrend_routes.py:230-240` | 历史无记录 → 单点序列 → insufficient |
+| 4 | 双窗结构 | `api/ranktrend_routes.py:77-87` | 序列窗 280 帧 vs 分析帧窗 30 帧；`series_by_code` 只用于新股判定与 current 帧注入，**不进引擎** |
 
-待 A1 精确确认：
+### A1 关键结论（修正立项预设）
 
-- replay 中 `percentiles` 的实际来源（`series_by_code` 复制尾直接消费，还是逐帧累积）——决定 gap 参数化的落点是「序列构建层」还是「轨道判定层」；
-- 周期轨道的序列长度要求（15 点）与 insufficient 的传导路径（`cycle.stage` 在样本不足时的兜底行为）；
-- `momentum_min_samples` 当前默认值与 config 字段名。
+1. **percentiles 的唯一来源 = replay 帧窗内实际出现**（`runtime.py:_replay_stock`，`window_size=50`，逐帧查该股出现才 append）。不存在显式 gap/timeline 断裂判定——**insufficient 是「帧窗（50）内实际出现次数 <5」的隐式结果**。出池 >50 帧（约 3.3 个交易日）→ 帧窗内零出现 → percentiles 仅当前帧 1 点 → insufficient。
+2. **`momentum_min_samples` = max(2, max(momentumPeriods)+1) = 22**（momentumPeriods 默认 [3,5,8,13,21]）。三档门槛 22/5。
+3. **重建期真实长度 ≈ 5 个出现帧（约 2.5 个交易日）**：回池股攒够 5 点即升 degraded——`isLifecycleSampleInsufficient` 只查 insufficient，**degraded 股票显示真实 stage**。因此「样本不足」仅覆盖出池 >3.3 交易日且回池后前 5 帧内的股票。
+4. **补桥（用中断前历史预填序列）升格为结构变更**：序列消费方（ATR gap 重置、共振 path window、momentum 多周期）全部假设「序列点 = 真实出现帧」——伪造连续帧索引的桥点会系统性扭曲这些消费方；携带真实 gap 的桥点需要 280 帧坐标系传入引擎并让帧窗裁剪理解桥点，接口与语义双重变更。实现路线（三落点）需批次评审裁决，不做单点实现。
 
 ## 4. 研究假设（先立标准后跑数据）
 
@@ -44,10 +45,14 @@
 - **H2（参数假设）**：timeline gap 容忍阈值（单位与落点待 A1 确认：帧 gap 或日 gap）参数化后存在非端点档位，在判定卡上不劣于现状。
 - **H0（反面假设，必须正面检验）**：中断前历史与当前市场结构脱节（题材轮动、排名结构重排），用旧历史判定 = 用 19 天前的点火伪装今天的点火——若 H0 成立，维持现状（insufficient 是正确行为），转**展示语义**方案（中性化显示 / 重建进度）。
 
-## 5. 扫描设计（A2，A1 确认落点后细化）
+## 5. 扫描设计（A2，按 A1 修正后的参数空间）
 
-- gap 容忍阈值 5 档单变量扫描（含现状 = 0 容忍为对照档），每档独立 commit-able 参数（默认值=原值，golden 不漂移）；
-- 评估口径：`tier_forward_returns`（h1/h8）→ synergy saEx + lifecycle 维 saEx；**信号覆盖面变化（insufficient → 判定）是本课题特有的第一观察项**——新增判定样本的分布与质量单独出报告；
+参数空间按 A1 结论重定义（原「gap 阈值」参数不存在——判定是隐式的出现次数三档）：
+
+- **参数 β（三档门槛，首选）**：degraded 门槛 5 → 5 档扫描（如 3/4/5/7/10）——回池股更早进入 degraded（有判定）；insufficient 门槛 22 亦为候选参数（需评估 momentum 多周期在高噪声短序列上的档位质量）；
+- **参数 α（分析帧窗 window_size，次选）**：50 → 5 档（50/80/120/200/280）——帧窗加长让出池更久的股票保留残段序列；代价：每帧序列更长的跨中断连接（TR 膨胀防护已有 gap 重置，需验证有效性）；
+- **补桥方案（结构变更）**：三落点选项（api 层序列注入 / replay 预填 / sample_status 计数放宽）的侵入度与序列消费方适配矩阵，作为设计决策点进批次评审，不在本研究内单点实现；
+- 评估口径：`tier_forward_returns`（h1/h8）→ synergy saEx + lifecycle 维 saEx；**信号覆盖面变化（insufficient/degraded → 判定）是本课题特有的第一观察项**——新增判定样本的分布与质量单独出报告；
 - 三层判定语义适用：本课题候选**天然涉及 saEx 盲区**（insufficient 行不参与档位统计，放开后进入统计的变化不是阈值迁移而是样本集扩张）→ 直接按盲区候选处理，终判必跑 Track 1（wrxpf + 30 笔门槛）。
 
 ## 6. 窗口与代际纪律
