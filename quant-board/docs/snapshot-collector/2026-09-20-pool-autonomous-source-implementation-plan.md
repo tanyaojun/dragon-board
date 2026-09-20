@@ -31,6 +31,8 @@
 
 **交付后收尾（2026-09-20，`389cc4e3`）：** 落实 final review 遗留三项——① Route 锚点收敛：`collect_fn=None` 语义化为"内置默认路由"（`_collect_context` 不再依赖与同步版函数的 identity 比较，mode 传参只依赖单一 None 判断），自定义 collect_fn 完全接管（mode 不注入，新增 bypass 守护用例）；② `normalize_pool_source_mode` 公开化（原 `_normalize` 下划线名，service↔providers 合同显式化，全引用点同批改）；③ sync/async parity 测试（4 场景 × 双跑归一化 ctx 等价：autonomous 成功 / 快路径兜底 / 顺序反转安全网 / bundle_first），任一版单独改动机械失败。全量 2515 passed（排除环境性 `test_archive_research.py`）。
 
+**parity 结构收敛（2026-09-20，`7a7f62ee`）：** 用户拍板在 Task 6 实测前执行（parity 测试已就位作为安全网）。路由状态机收敛为 `collect_market_context_async` 单一实现，sync 入口 `collect_market_context` 整体替换为 `asyncio.run` 薄壳（净删 137 行人工镜像；生产代码无 sync 直调点，已核实全部消费者无 running-loop 环境）。漂移风险在结构上归零——不再依赖人工镜像义务与 parity 测试兜底，parity 测试保留用于锁定薄壳参数透传。约束：sync 入口调用方不得处于 running event loop 内（docstring 已注明）。
+
 **验证命令（quant-board 目录）：**
 
 ```powershell
