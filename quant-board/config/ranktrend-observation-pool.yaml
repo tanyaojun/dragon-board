@@ -198,3 +198,11 @@ items:
     trigger: 只登记不实施；未来立项属代码级修复
     evidenceGeneration: gen-2026-09-15-fund10
     evidence: [longterm §25.6.5, §25.6 运维注记 5]
+
+  - id: P_repool_timeline_gap
+    kind: proposal
+    desc: 出池回池股票 timeline gap 容忍参数化——「中断历史降级判定」vs「insufficient 不可用」（频繁出入池股重建期过长，2026-09-20 用户立项；含 H0 反面假设正面检验：中断历史可能伪装当前结论）
+    status: proposal_pending
+    trigger: 已立项（2026-09-20），A1 精确盘点 → gap 阈值 5 档单变量扫描 → Track 2 判定卡 + 盲区检查（本候选天然涉及样本集扩张，按盲区候选处理）+ Track 1 终判；判定不劣于现状且 insufficient 覆盖显著下降方可进用户决策；H0 成立则维持现状转展示语义
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [repool-research-proposal（quant-board/docs/ranktrend-tier-backtest/ranktrend-repool-timeline-gap-research-proposal.md）, 实测 002440 中断 19 天探针复现 2026-09-20]
