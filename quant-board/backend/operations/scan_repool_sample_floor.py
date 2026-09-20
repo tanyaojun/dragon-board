@@ -90,10 +90,14 @@ def _newly_judged_metrics(
         )
 
     newly = [signal for signal in trial_signals if newly_judged(signal)]
+    # lifecycle.signalTier 正确路径 = signal["rankTrend"]["observation"]["lifecycle"]["signalTier"]
+    # （DIMENSION_PATHS["lifecycle"] 同款；2026-09-20 修正：误读 signal["observation"] 曾产出
+    # 「100% unknown」假阴性结论，见立项文档 §5.1 更正记录）
     tier_dist: dict[str, int] = {}
     for signal in newly:
         tier = str(
-            ((signal.get("observation") or {}).get("lifecycle") or {}).get("signalTier") or "unknown"
+            (((signal.get("rankTrend") or {}).get("observation") or {}).get("lifecycle") or {}).get("signalTier")
+            or "unknown"
         )
         tier_dist[tier] = tier_dist.get(tier, 0) + 1
     quality = tier_forward_returns(newly, frames, horizon=1, dimension="lifecycle")

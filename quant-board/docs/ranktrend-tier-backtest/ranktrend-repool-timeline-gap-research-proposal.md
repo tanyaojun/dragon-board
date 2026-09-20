@@ -61,30 +61,41 @@ harness：`backend/operations/scan_repool_sample_floor.py`；报告（易失运�
 `data/reports/repool-midterm/repool-sample-floor-scan.json`。窗口：decision（655 帧）+ oos1
 （110 帧）；oos2/oos2u 未触碰（10 月批次终判保留）。
 
-**参数 β（degradedSampleFloor）中期判定：REJECT。** 双窗一致的机制证据：
+### 5.1.1 更正记录（审计透明）
 
-| 档位 | decision insufficient 占比 | 新增判定样本 lifecycle 档位 |
-| --- | --- | --- |
-| baseline(5) | 14.18% | — |
-| floor3 | 8.32% | **n=7683，100% unknown** |
-| floor4 | 11.41% | **n=3628，100% unknown** |
-| floor7 / floor10 | 18.88% / 24.77% | 无新增（与诉求反向） |
+首轮扫描曾产出「新增判定样本 lifecycle.signalTier 100% unknown → 参数 β 证伪」结论，
+**系 harness 字段路径 bug 的假阴性**：tier_dist 误读 `signal["observation"]`（实际路径
+`signal["rankTrend"]["observation"]`，与 DIMENSION_PATHS["lifecycle"] 一致）。bug 已修复
+（同 commit），污染报告已删除并干净重跑；`tier_forward_returns` 主读数（走 tier_signal_of
+正确路径）未受影响。
 
-机制解释：`sampleQuality.status`（趋势轨道序列长度三档）与 `lifecycle.signalTier`（周期轨道，
-要求 15 点序列）是**两条独立判定**。降 trend 门槛只把 status 标签从 insufficient 改成
-degraded，周期轨道在短序列下依然产不出档位（signalTier=unknown）——前端随后会显示
-`cycle.stage` 兜底标签（冷却），即**把诚实的「样本不足」替换为误导性的「冷却」**，
-比现状更糟。H0 假设（短序列降级判定产出的是噪声/标签替换，不是信号）被中期读数支持。
+### 5.1.2 真实中期读数（干净重跑）
 
-**对用户问题的推论**：周期列有效判定的真正门槛在 **lifecycle 轨道自身的 15 点序列要求**，
-不在 trend 的三档门槛。后续可行路线（进批次评审，按预期收益排序）：
+| 档位 | decision insufficient 占比 | 新增判定 n | 新增样本 lifecycle 档位质量（h1 exAcc） |
+| --- | --- | --- | --- |
+| baseline(5) | 14.18% | — | A +0.0534 / D -0.0122 / E -0.0101（全量基线） |
+| **floor3** | **8.32%** | **7683** | **A +0.0584 / B +0.0757(n=91) / D -0.0057 / E -0.0658** |
+| floor4 | 11.41% | 3628 | A +0.0434 / B +0.0807(n=91) / D -0.0051 / E -0.0589 |
+| floor7 / floor10 | 18.88% / 24.77% | 0（与诉求反向） | — |
 
-1. **参数 α（分析帧窗 window_size）扫描**——未扫（本中期只扫 β）；帧窗加长让出池股保留残段序列，可能同时改善 trend 三档与 lifecycle 序列积累；
-2. **lifecycle 序列要求（15 点）参数化 + 补桥结构变更**——三落点设计决策矩阵（§5）进批次评审；
-3. **展示语义**（用户可独立决策）：在算法侧解决前，「样本不足」标签可中性化（灰字「--」+tooltip），
-   与本课题解耦。
+oos1（样本外）同方向：floor3 新增 n=1023，A +0.0638 / E -0.0261。
 
-## 6. 窗口与代际纪律
+### 5.1.3 中期判定：参数 β 方向性支持（待 oos2u 终判）
+
+1. **H0（短序列判定是噪声）被双窗数据推翻**：出池回池股在 3-4 点序列下的 lifecycle
+   档位质量与全量基线基本一致——A 档 exAcc +0.0584 ≥ 基线 +0.0534（样本外 +0.0638），
+   E 档负向正确（风险股确实跑输），D 档与基线同向。**降门槛产出的判定有真实信息量**。
+2. **floor3 的直接效果**：insufficient 占比 14.2% → 8.3%（-5.9pp），新增判定样本前端
+   周期列将从「样本不足」显示为真实 stage（degraded 状态不被 `isLifecycleSampleInsufficient`
+   拦截）——用户诉求（频繁出入池股不再显示样本不足）直接缓解约四成。
+3. **未决项（终判范围）**：h1 单一口径（h8 待补）；B 档样本量小（n≈91）；幸存者偏差
+   （回池后再出池样本从 forward-return 中缺失，标注不修正）；A 档略优于基线是否稳定
+   需 oos2u 复核。
+4. **落地语义（若终判通过）**：degradedSampleFloor 3 落默认 = 一次一候选 + 端到端锚逐位
+   复现 + strategy_version 提升 + 前端「样本不足」显示逻辑确认（degraded 不受
+   `isLifecycleSampleInsufficient` 拦截，无需前端改动）。
+
+## 6. 窗口与代际纪律## 6. 窗口与代际纪律
 
 - 三窗 decision/oos1/oos2 + 8 月 FINAL 冻结；扫描前 `assert_not_frozen`；
 - 证据代际绑定当前默认栈（Jump 修复后代际，见 `config/ranktrend-anchors.json`）；B-202610 批次重判后更新；
