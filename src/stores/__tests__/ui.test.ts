@@ -134,22 +134,25 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
   })
 
-  it('sorts lifecycle opportunity by tier groups then score within group', () => {
+  it('sorts lifecycle opportunity by stage order then score within group', () => {
+    // 2026-09-19 修复：周期列显示 stage（点火/扩散/拥挤/反转/冷却），排序值必须与显示
+    // 同字段——按生命周期阶段序数聚簇（点火>扩散>拥挤>反转>冷却），不再按 signalTier
+    // （tier 与 stage 是两套轴，tier 排序会让同档内 stage 交错，看起来"排序不正确"）。
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
-      { code: '000001', name: 'A档低分', rankTrend: { observation: { lifecycle: { signalTier: 'A', score: 30 } } } },
-      { code: '000002', name: 'B档', rankTrend: { observation: { lifecycle: { signalTier: 'B', score: 80 } } } },
-      { code: '000003', name: 'A档高分', rankTrend: { observation: { lifecycle: { signalTier: 'A', score: 90 } } } },
+      { code: '000001', name: '扩散低分', rankTrend: { observation: { lifecycle: { stage: 'expansion', score: 30 } } } },
+      { code: '000002', name: '点火', rankTrend: { observation: { lifecycle: { stage: 'ignition', score: 80 } } } },
+      { code: '000003', name: '扩散高分', rankTrend: { observation: { lifecycle: { stage: 'expansion', score: 90 } } } },
       { code: '000004', name: '缺失', rankTrend: { observation: {} } },
     ])
 
-    // asc（↑）：低档在前 → B(3) < A(4)，同档组内分值升序，缺失最后
+    // asc（↑）：低阶段在前 → 扩散组（组内分值升序 30<90）→ 点火 → 缺失最后
     uiStore.toggleSort('lifecycleOpportunity')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003', '000004'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002', '000004'])
 
-    // desc（↓）：高档在前 → A 组（组内分值降序 90 前）> B 组，缺失仍最后
+    // desc（↓）：点火在前 → 扩散组（组内分值降序 90>30）→ 缺失仍最后
     uiStore.toggleSort('lifecycleOpportunity')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000002', '000004'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001', '000004'])
   })
 
   it('keeps missing limit-up fields last and distinct from real zero when sorting limit-up columns', () => {
@@ -192,7 +195,7 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
   })
 
-  it('sorts lifecycle opportunity by tier (stage-derived), not direction group', () => {
+  it('sorts lifecycle opportunity by stage (display field), not signalTier', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       { code: '000001', name: '冷却高分', _lifecyclePct: 91, rankTrend: { observation: { lifecycle: { signalTier: 'D', stage: 'cooling', score: 91 } } } },
@@ -201,11 +204,29 @@ describe('UIStore table sorting', () => {
       { code: '000004', name: '拥挤', _lifecyclePct: 85, rankTrend: { observation: { lifecycle: { signalTier: 'D', stage: 'crowded', score: 85 } } } },
     ])
 
-    // asc（↑）：D 档(1) 组在前（组内分值升序 85<91），A 档(4) 组在后（55<63）
+    // asc（↑）：冷却(1) → 拥挤(3) → 扩散(4) → 点火(5)；stage 与 tier 矛盾时以显示的 stage 为准
     uiStore.toggleSort('lifecycleOpportunity')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000004', '000001', '000003', '000002'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000004', '000002', '000003'])
 
-    // desc（↓）：A 档组在前（组内分值降序 63>55），D 档组在后（91>85）
+    // desc（↓）：点火 → 扩散 → 拥挤 → 冷却
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
+  })
+
+  it('keeps unknown/missing lifecycle stage last in both directions', () => {
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '无阶段', rankTrend: { observation: { lifecycle: { stage: null, score: 60 } } } },
+      { code: '000002', name: '反转', rankTrend: { observation: { lifecycle: { stage: 'reversal', score: 40 } } } },
+      { code: '000003', name: '冷却', rankTrend: { observation: { lifecycle: { stage: 'cooling', score: 70 } } } },
+      { code: '000004', name: '无信号' },
+    ])
+
+    // asc（↑）：冷却(1) → 反转(2)；无阶段/缺失(null) 恒最后，不伪装成任何阶段
+    uiStore.toggleSort('lifecycleOpportunity')
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001', '000004'])
+
+    // desc（↓）：反转 → 冷却；无阶段/缺失仍最后
     uiStore.toggleSort('lifecycleOpportunity')
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001', '000004'])
   })
@@ -332,7 +353,9 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
   })
 
-  it('sorts lifecycle opportunity direction-first by attention stage', () => {
+  it('sorts lifecycle opportunity by stage from _lifecycleStage projection fallback', () => {
+    // 投影回退路径：只有 _lifecycleStage/_lifecyclePct、无 rankTrend.observation 的股票，
+    // 排序同样按显示的 stage 序数聚簇（2026-09-19 修复）。
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       { code: '000001', name: '冷却高分', _lifecyclePct: 91, _lifecycleStage: 'cooling' },
@@ -342,11 +365,33 @@ describe('UIStore table sorting', () => {
     ])
 
     uiStore.toggleSort('lifecycleOpportunity')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
+    // asc（↑）：冷却(1) → 拥挤(3) → 扩散(4) → 点火(5)
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000004', '000002', '000003'])
 
     uiStore.toggleSort('lifecycleOpportunity')
-    // desc：方向组随 order 反转（冷却/拥挤下降组在前），组内降序 → [冷却91, 拥挤85, 扩散63, 点火55]
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000004', '000002', '000003'])
+    // desc（↓）：点火 → 扩散 → 拥挤 → 冷却（与列显示 stage 顺序一致）
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000004', '000001'])
+  })
+
+  it('sorts sample-insufficient stocks after all real stages in both directions', () => {
+    // 2026-09-20 用户裁决：样本不足（meta.sampleQuality.status=insufficient）的股票
+    // 显示覆盖标签「样本不足」，排序归末组——不得按其底层 stage 混入真实阶段聚簇
+    // （实测：降序时「样本不足」插在点火组中间，观感即排序错误）。
+    const uiStore = useUIStore()
+    dataLayer.setMergedStocks([
+      { code: '000001', name: '点火正常', rankTrend: { observation: { lifecycle: { stage: 'ignition', score: 80 } } } },
+      { code: '000002', name: '样本不足但底层点火', rankTrend: { meta: { sampleQuality: { status: 'insufficient' } }, observation: { lifecycle: { stage: 'ignition', score: 95 } } } },
+      { code: '000003', name: '扩散', rankTrend: { observation: { lifecycle: { stage: 'expansion', score: 60 } } } },
+      { code: '000004', name: '样本不足底层冷却', rankTrend: { meta: { sampleQuality: { status: 'insufficient' } }, observation: { lifecycle: { stage: 'cooling', score: 40 } } } },
+    ])
+
+    uiStore.toggleSort('lifecycleOpportunity')
+    // asc（↑）：扩散(4) → 点火(5)；两只样本不足归末组（组内 score 升序 40<95）
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000001', '000004', '000002'])
+
+    uiStore.toggleSort('lifecycleOpportunity')
+    // desc（↓）：点火 → 扩散 → 末组（样本不足，组内 score 降序 95>40）
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002', '000004'])
   })
 
   it('keeps missing observation direction between up and down groups in both sort directions', () => {

@@ -29,16 +29,34 @@ function getRankTrendAnalysis(stock: any) {
 /** 档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后。五维度（synergy）与周期（lifecycle）共用 */
 const SYNERGY_TIER_LEVEL: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 }
 
-/** 生命周期分值（投影优先，回退 observation.lifecycle.score；周期同档位组内次级排序用） */
+/**
+ * 生命周期阶段序数（2026-09-19 修复）：周期列显示 stage（点火/扩散/拥挤/反转/冷却），
+ * 排序值必须与显示同字段——按阶段序数聚簇，不再按 signalTier（tier 与 stage 是两套轴，
+ * tier 排序会让同档内 stage 交错，出现"扩散点火混排"）。unknown/缺失/非法值 → null 恒排最后。
+ */
+const LIFECYCLE_STAGE_ORDER: Record<string, number> = {
+  ignition: 5,
+  expansion: 4,
+  crowded: 3,
+  reversal: 2,
+  cooling: 1,
+}
+
+/** 生命周期分值（投影优先，回退 observation.lifecycle.score；周期同阶段组内次级排序用） */
 function getLifecycleScoreOf(stock: any): number | null {
   if (stock?._lifecyclePct !== undefined) return toFiniteNumber(stock._lifecyclePct)
   return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.lifecycle?.score)
 }
 
-/** 生命周期档位（observation.lifecycle.signalTier；缺失返回 null） */
-function getLifecycleTierOf(stock: any): string | null {
-  const tier = getRankTrendAnalysis(stock)?.observation?.lifecycle?.signalTier
-  return typeof tier === 'string' && tier !== 'unknown' ? tier : null
+/** 生命周期阶段（投影优先，回退 observation.lifecycle.stage；缺失/未知返回 null）。
+ * 样本不足（meta.sampleQuality.status=insufficient，周期列显示覆盖标签「样本不足」）
+ * 的股票排序归末组（返回 null）：2026-09-20 用户裁决——显示「样本不足」的行混在
+ * 点火等真实阶段组中间，观感即排序错误；样本质量降级的股票不再参与阶段聚簇。 */
+function getLifecycleStageOf(stock: any): string | null {
+  if (getRankTrendAnalysis(stock)?.meta?.sampleQuality?.status === 'insufficient') return null
+  const stage =
+    stock?._lifecycleStage ?? getRankTrendAnalysis(stock)?.observation?.lifecycle?.stage ?? null
+  return typeof stage === 'string' && stage in LIFECYCLE_STAGE_ORDER ? stage : null
 }
 
 /**
@@ -52,7 +70,7 @@ const dirRankOf = (dir: unknown): number =>
 /**
  * 2026-08-24：共振/趋势/热度/量价四信号——方向组固定「向上（buy/up）恒前」，
  * 不随 order 反转（升序/降序都向上优先）；五维度/周期不走方向组
- * （2026-08-26 起改为纯档位排序，见 sortedStocks 专用分支）。
+ * （周期 2026-09-19 起按显示的 stage 序数排序，见 sortedStocks 专用分支）。
  */
 function isDirectionFixedSortField(field: SortField): boolean {
   return (
@@ -140,10 +158,11 @@ function getStockSortValue(stock: Stock, field: SortField): string | number | nu
   if (field === 'rankTrendStrength') return getRankTrendStrengthScoreOf(stock)
   // 2026-08-24：热度（技术字段 crossSection）排序值取 percentile
   if (field === 'crossSection') return getCrossSectionPercentileOf(stock)
-  // 2026-08-26：周期列排序值取周期档位等级（A=4 → E=0，无 S 档）；同档位组内按分值次级排序（见 sortedStocks）
+  // 2026-09-19 修复：周期列排序值取生命周期阶段序数（与列显示的 stage 同字段，点火=5 → 冷却=1）；
+  // 同阶段组内按分值次级排序（见 sortedStocks）；无阶段/缺失 → null 恒排最后
   if (field === 'lifecycleOpportunity') {
-    const tier = getLifecycleTierOf(stock)
-    return tier ? SYNERGY_TIER_LEVEL[tier] ?? null : null
+    const stage = getLifecycleStageOf(stock)
+    return stage ? LIFECYCLE_STAGE_ORDER[stage] ?? null : null
   }
   if (field === 'volumePriceQuadrant') {
     // 量价分（0-100）：投影优先，回退 rankTrend.observation.volumePrice.score（与三指标回退口径一致）
@@ -327,8 +346,9 @@ export const useUIStore = defineStore('ui', () => {
     dataVersion.value
 
     result.sort((a, b) => {
-      // 五维度/周期（2026-08-26 用户需求）：纯档位排序——↓降序=高档（A/S）在前、↑升序=低档（E）在前；
-      // 周期同档位组内按分值次级排序；档位缺失（null）恒排最后（fail-visible，不伪装）。
+      // 五维度（2026-08-26 用户需求）：纯档位排序——↓降序=高档（A/S）在前、↑升序=低档（E）在前；
+      // 周期（2026-09-19 修复）：按显示的 stage 序数聚簇（点火>扩散>拥挤>反转>冷却），
+      // 同阶段组内按分值次级排序；档位/阶段缺失（null）恒排最后（fail-visible，不伪装）。
       if (field === 'synergyTier' || field === 'lifecycleOpportunity') {
         const byTier = compareSortValues(getStockSortValue(a, field), getStockSortValue(b, field), order)
         if (byTier !== 0) return byTier
