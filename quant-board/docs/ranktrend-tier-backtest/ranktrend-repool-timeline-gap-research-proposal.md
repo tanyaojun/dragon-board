@@ -55,6 +55,35 @@
 - 评估口径：`tier_forward_returns`（h1/h8）→ synergy saEx + lifecycle 维 saEx；**信号覆盖面变化（insufficient/degraded → 判定）是本课题特有的第一观察项**——新增判定样本的分布与质量单独出报告；
 - 三层判定语义适用：本课题候选**天然涉及 saEx 盲区**（insufficient 行不参与档位统计，放开后进入统计的变化不是阈值迁移而是样本集扩张）→ 直接按盲区候选处理，终判必跑 Track 1（wrxpf + 30 笔门槛）。
 
+## 5.1 中期扫描结果（2026-09-20，decision + oos1 双窗，M3 折扣标注）
+
+harness：`backend/operations/scan_repool_sample_floor.py`；报告（易失运行产物，结论以下文为准）：
+`data/reports/repool-midterm/repool-sample-floor-scan.json`。窗口：decision（655 帧）+ oos1
+（110 帧）；oos2/oos2u 未触碰（10 月批次终判保留）。
+
+**参数 β（degradedSampleFloor）中期判定：REJECT。** 双窗一致的机制证据：
+
+| 档位 | decision insufficient 占比 | 新增判定样本 lifecycle 档位 |
+| --- | --- | --- |
+| baseline(5) | 14.18% | — |
+| floor3 | 8.32% | **n=7683，100% unknown** |
+| floor4 | 11.41% | **n=3628，100% unknown** |
+| floor7 / floor10 | 18.88% / 24.77% | 无新增（与诉求反向） |
+
+机制解释：`sampleQuality.status`（趋势轨道序列长度三档）与 `lifecycle.signalTier`（周期轨道，
+要求 15 点序列）是**两条独立判定**。降 trend 门槛只把 status 标签从 insufficient 改成
+degraded，周期轨道在短序列下依然产不出档位（signalTier=unknown）——前端随后会显示
+`cycle.stage` 兜底标签（冷却），即**把诚实的「样本不足」替换为误导性的「冷却」**，
+比现状更糟。H0 假设（短序列降级判定产出的是噪声/标签替换，不是信号）被中期读数支持。
+
+**对用户问题的推论**：周期列有效判定的真正门槛在 **lifecycle 轨道自身的 15 点序列要求**，
+不在 trend 的三档门槛。后续可行路线（进批次评审，按预期收益排序）：
+
+1. **参数 α（分析帧窗 window_size）扫描**——未扫（本中期只扫 β）；帧窗加长让出池股保留残段序列，可能同时改善 trend 三档与 lifecycle 序列积累；
+2. **lifecycle 序列要求（15 点）参数化 + 补桥结构变更**——三落点设计决策矩阵（§5）进批次评审；
+3. **展示语义**（用户可独立决策）：在算法侧解决前，「样本不足」标签可中性化（灰字「--」+tooltip），
+   与本课题解耦。
+
 ## 6. 窗口与代际纪律
 
 - 三窗 decision/oos1/oos2 + 8 月 FINAL 冻结；扫描前 `assert_not_frozen`；

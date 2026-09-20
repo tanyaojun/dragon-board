@@ -203,6 +203,6 @@ items:
     kind: proposal
     desc: 出池回池股票 timeline gap 容忍参数化——「中断历史降级判定」vs「insufficient 不可用」（频繁出入池股重建期过长，2026-09-20 用户立项；含 H0 反面假设正面检验：中断历史可能伪装当前结论）
     status: proposal_pending
-    trigger: 已立项（2026-09-20），A1 精确盘点 → gap 阈值 5 档单变量扫描 → Track 2 判定卡 + 盲区检查（本候选天然涉及样本集扩张，按盲区候选处理）+ Track 1 终判；判定不劣于现状且 insufficient 覆盖显著下降方可进用户决策；H0 成立则维持现状转展示语义
+    trigger: 中期扫描（2026-09-20，decision+oos1，M3 折扣）已证伪参数 β（degradedSampleFloor）：降 trend 三档门槛只换 status 标签，lifecycle.signalTier 100% unknown（decision 窗 n=7683），前端将把「样本不足」替换为兜底「冷却」——REJECT。剩余路线：参数 α（帧窗 window_size）扫描、lifecycle 15 点要求参数化 + 补桥三落点设计评审、展示语义中性化（用户可独立决策）。oos2u 终判仅对 α/补桥路线适用
     evidenceGeneration: gen-2026-09-15-fund10
-    evidence: [repool-research-proposal（quant-board/docs/ranktrend-tier-backtest/ranktrend-repool-timeline-gap-research-proposal.md）, 实测 002440 中断 19 天探针复现 2026-09-20]
+    evidence: [repool-research-proposal §5.1 中期扫描结果（quant-board/docs/ranktrend-tier-backtest/ranktrend-repool-timeline-gap-research-proposal.md）, data/reports/repool-midterm/repool-sample-floor-scan.json（易失运行产物）, 实测 002440 中断 19 天探针复现 2026-09-20]
