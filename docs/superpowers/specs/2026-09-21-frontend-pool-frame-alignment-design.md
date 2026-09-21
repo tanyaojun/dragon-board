@@ -44,8 +44,8 @@
    - 产出 `{ codes: Set<string>, slotTime, tradingDate, rowsByCode }`；HTTP 失败/当日无帧/空 rows 一律返回结构化 null（含 reason），不抛异常。
 2. **`mergeData()` 池源切换**（`DataLoaderFacade.ts` mergeData 入口）：
    - `allCodes` 优先取帧池 codes；`platformData` 行过滤到帧池范围。
-   - 帧池中无热榜行的股票以帧行做种子进入合并链：名称/compRank 取帧行（compRank 为后端 golden 值，直接采用），价格/成交量由实时行情链覆盖，热度/量比/信号照常计算。
-   - 种子行构建细节（字段映射、缺字段回退）在实施计划阶段按 `SnapshotStockRow` 实际字段落定。
+   - 帧池中无热榜行的股票以帧行做种子进入合并链：名称取帧行，价格/成交量等帧行值仅作实时行情到达前的兜底（实时行情覆盖）。帧行内排名字段只作占位——合并链最终由前端 `ComprehensiveRankEngine` 对全列表统一重算 avgRankNum/compScore/compRank（与 2026-08-24 前后端分离回滚口径一致，见 `StockMergeCoordinator.ts` 内注记），列表排序口径单一。
+   - 种子行字段映射与缺字段回退在实施计划中按 `SnapshotStockRow` 实际字段落定（Task 级代码给出）。
 3. **降级 fail-visible**：帧池不可用（请求失败/当日无帧/空 codes）→ 回退现行为（热榜合并池）+ provenance 打 `{ source: 'hotlist-merged', degradeReason }`；启动快路径打 `startup-bundle`；帧池成功打 `frame-pool` + slotTime。不允许静默吞掉后伪装一致。
 4. **刷新时机**：现有 30min 到期检查 `maybeRefreshPlatformCache` 处同步探测新槽（比对当前 provenance.slotTime 与最新帧 slotTime），有新帧即以帧池重建列表。热榜平台加载链保留。
 5. **白名单语义变化（明确的行为变化）**：`loadActiveStockCodes` 白名单不再裁剪列表池 membership（帧池股票全量展示）；白名单仍可用于 platformData 行字段处理的场合。这是「完全一致」的隐含项。
