@@ -225,6 +225,19 @@ C1-C5（PASS_CANDIDATE）→ saEx 盲区检查 → Track 1 交易复核终判（
 - 更新计划时只改对应计划文件，不在根目录新增一次性草稿。
 - 文件计划不能替代源码、测试和专题文档；合同变化仍要同步正式文档。
 
+### 3.6 `single-source-of-truth`
+
+项目级正文：`skills/single-source-of-truth/SKILL.md`。
+
+用于任何可能新增、保留或重复「Dragon Board 前端 vs QuantBoard 后端」事实源的设计与方案审查：数据池、快照生产、热榜合并、业务口径、分析算法、派生指标。核心立场：单一事实源在后端，前端只消费与展示；允许的双源只限保留面（实时行情链等）与已登记收敛路径的迁移面，统一登记在 `docs/single-source-of-truth-architecture.md` 盘点表。
+
+使用要求：
+
+- 前端自建任何数据生产/计算前，先回答「后端有没有、该不该由后端有」。
+- 方案文档必须显式回答三问：消除还是保留双源；权威侧与收敛路径；「前端零改动」是否使目标原理性不可达。双源不得写进「非目标」静默带过。
+- 双源存在期间必须声明权威侧与消费侧；发现未登记双源先补登记，再决定动不动代码。
+- 双源收敛改动必须有对齐验证（golden case、对账脚本或口径测试）；降级缓存必须打标且不得长成第二事实源。
+
 ## 4. Review Skills
 
 ### 4.1 `superpowers:receiving-code-review`
@@ -396,6 +409,7 @@ UI/前端改动交付前，由主代理按真实浏览器流程做 e2e 验收（
 
 ```text
 fail-visible-data-pipelines
+single-source-of-truth
 systematic-debugging（已有异常时）或 brainstorming（新设计时）
 test-driven-development
 verification-before-completion
@@ -413,6 +427,7 @@ verification-before-completion
 
 ```text
 brainstorming
+single-source-of-truth
 autoplan / plan review
 writing-plans
 计划落盘
@@ -435,6 +450,7 @@ verification-before-completion
 
 ```text
 brainstorming
+single-source-of-truth
 autoplan / plan review
 writing-plans
 计划落盘
