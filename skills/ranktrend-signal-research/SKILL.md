@@ -1,6 +1,7 @@
 ---
 name: ranktrend-signal-research
-description: RankTrend 信号参数长测与因子算法研发统一流程（合并原 ranktrend-tier-longterm-test 与 four-dim-algorithm-research，2026-09-16）——Track A 参数线（盘点参数化 → 5 档扫描 → 三层判定语义）/ Track B 因子算法线（设计 → 区分度 → 接线 → 边际贡献）/ 月度复验批次模式（窗口推进、已落默认栈回退复核、观察池裁决）。统一收口：Track 2 判定卡 C1-C5 → saEx 盲区检查 → Track 1 交易复核终判 → 六类判定 → 一次一候选落默认。含 harness 工程范式 8 项、锚代际纪律、窗口消费折扣（M3）。实践记录见 quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（阶段 0-26）；批次化复跑范例见同目录 ranktrend-202610-rerun-plan.md。
+description: RankTrend 信号参数长测与因子算法研发统一流程（合并原 ranktrend-tier-longterm-test 与 four-dim-algorithm-research，2026-09-16）——Track A 参数线（盘点参数化 → 5 档扫描 → 三层判定语义）/ Track B 因子算法线（设计 → 区分度 → 接线 → 边际贡献）/ 月度复验批次模式（窗口推进、已落默认栈回退复核、观察池裁决）。统一收口：Track 2 判定卡 C1-C5 → saEx 盲区检查 → Track 1 交易复核终判 → 六类判定 → 一次一候选落默认。含 harness 工程范式 13 项（公共库
+`backend/operations/harness_common.py` + 2026-09-21 审计纪律）、锚代际纪律、窗口消费折扣（M3）。实践记录见 quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（阶段 0-26）；批次化复跑范例见同目录 ranktrend-202610-rerun-plan.md。
 ---
 
 # RankTrend 信号研究统一流程（参数长测 × 因子算法 × 月度复验）
@@ -113,22 +114,52 @@ wrxpf = winRate×profitFactor 主窗复核 + 30 笔样本门槛 + 入场集合�
 3. **锚代际纪律**：代际变更（如 Jump 门修复）使历史 trial 全部过期——新代际第一个动作是重建三窗锚；观察池候选证据必须绑定代际，跨代际比较显式声明；
 4. **产出三件**：批次判定报告（`data/reports/<batch-id>/`）+ 长测文档阶段 N + 观察池/锚注册表/L1 同步。
 
-## harness 工程范式 8 项（新 harness 必查清单）
+## harness 工程范式 13 项（新 harness 必查清单，2026-09-21 审计后扩充）
 
-1. WINDOWS import 零日期字面量（窗口常量单点维护）；
-2. `_assert_overrides_applied` 逐键断言（防 override 静默失效产出假结论）；
-3. `assert_not_frozen` 无条件执行（含 resume 路径）；
-4. trial 级缓存 resume（断点续跑）；
-5. `_save` 剥离 `__frames__`（防 GB 级报告文件）；
+前置：**新 harness 一律基于 `backend/operations/harness_common.py` 编写**（load_frames /
+sample_status_of / dimension_tier_of / status_buckets / tier_summary / sa_excess /
+assert_overrides_applied / new_report / load_resume / save_report / assert_known_answer），
+本清单各项多数已内置于公共库；审计依据 `quant-board/docs/ranktrend-tier-backtest/harness-audit-20260921.md`。
+
+1. WINDOWS import 零日期字面量（窗口常量单点维护）；需要子集时从
+   `data_windows.WINDOWS` **派生**（`{k: WINDOWS[k] for k in (...)}`，track2 范式），
+   禁止手写日期字面量副本——副本与权威同名不同义时（audit §5.1 oos2=09-12 截断）
+   报告读者会错认覆盖范围；
+2. `_assert_overrides_applied` 逐键断言（harness_common 提供；from_patch 对未知字段
+   静默忽略，dataclass kwargs 构造的 TypeError 是等价保护）；
+3. `assert_not_frozen` 无条件执行（含 resume 路径）——公共库 load_frames 已内联；
+   不要放在 `if "window" not in entry` 之类缓存命中分支里（audit §5.2 四文件教训）；
+4. trial 级缓存 resume（断点续跑），且 resume 必须 schemaVersion 校验
+   （load_resume 版本不匹配返回 None 全新跑，防跨 schema 混合读数）；
+5. `_save` 剥离 `__frames__`（防 GB 级报告文件），报告带 `windowsConsumed` /
+   `nature` / `generatedAt` 机器可读元数据（M3 折扣可审计，不能只活在 docstring）；
 6. 锚 trial 级即时 raise（baseline 失配立刻失败，不跑完全批再报）；
+   anchorChain 只断言已跑窗（单窗/渐进 resume 下全窗 all() 会误报）；
 7. `--extra-trial/--extra-arm` 扩展位（组合/Track 1 对照不另起脚本）；
-8. M2 样本门槛（n<500 结论降级观察，披露样本量）。
+8. M2 样本门槛（n<500 结论降级观察，披露样本量）——交易层 30 笔门槛同理代码化；
+9. **字段路径单一源强制（2026-09-20 事故）**：维度档位一律 `dimension_tier_of` /
+   `tier_signal_of` + DIMENSION_PATHS，sampleQuality 一律 `sample_status_of`；
+   禁止手写嵌套 get 链。新增维度先登记 DIMENSION_PATHS。手写路径与权威路径逐键
+   对照（signal 顶层无 observation/meta——它们在 rankTrend 下）；
+10. **已知答案校验（新 harness 跑全窗前强制）**：`assert_known_answer()` 合成 mini
+    replay 断言信号结构与指标链路（顶层键/rankTrend 九键/sampleQuality 三值/
+    DIMENSION_PATHS 可达/tiers 有样本）；直接跑全窗=拿生产数据当试验场；
+11. **分析脚本键名复核**：消费评估工具返回值前对照权威合同打印/断言——
+    tier_forward_returns 返回 `tiers/unknownRate/monotonicity`（无 byTier、无
+    hardOrderViolations），tier_monotonicity_score 返回 `checks/passHardConstraint`。
+    「打印为空」先怀疑键名错，不要当场解读为「无数据」（2026-09-20 二连教训）；
+12. **结论×机制交叉验证义务**：数据结论与机制认知矛盾时（如映射表无 unknown 分支
+    vs 数据 100% unknown），先怀疑测量工具（mini replay 打印结构实锤），再考虑
+    修正机制认知；不带交叉验证的「意外结论」不得直接写入文档；
+13. **审计透明**：假阴性/假阳性结论一经发现，污染报告删除、干净重跑、立项文档留
+    更正记录（§5.1.1 范式）；harness 修复与结论更正同一个 commit 链可溯源。
 
 ## 关键文件索引
 
 - 引擎/config：`quant-board/backend/analysis/ranktrend/engine.py`（RankTrendConfig + compose）
 - 投票/档位：`quant-board/backend/analysis/ranktrend/volume_price.py`（compute_synergy_state）
-- 分档统计：`quant-board/backend/analysis/ranktrend/tier_monotonicity.py`（DIMENSION_PATHS）
+- 分档统计：`quant-board/backend/analysis/ranktrend/research/tier_monotonicity.py`（DIMENSION_PATHS）
+- harness 公共库：`quant-board/backend/operations/harness_common.py`（帧加载/访问器/指标装配/报告/已知答案校验；审计文档 `quant-board/docs/ranktrend-tier-backtest/harness-audit-20260921.md`）
 - 冻结守卫：`quant-board/backend/optimization/data_windows.py`（assert_not_frozen）
 - 测试基准：`quant-board/tests/test_ranktrend_golden_alignment.py`（golden 不漂移）
 - 事实源/档案：`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-26 结论与锚读数）、`ranktrend-l1-param-ledger.md`、`overfitting-audit.md`

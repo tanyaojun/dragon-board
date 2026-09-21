@@ -35,10 +35,7 @@ sys.path.insert(0, r"D:\dragon-board\quant-board")
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.ranktrend.tier_monotonicity import tier_forward_returns
-from backend.data.repositories.mongo_repository import MongoRepository
-from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.optimization.validation import split_frames
-from backend.services.shared import BACKTEST_RANKTREND_STOCK_FIELDS
 
 REPORT_PATH = Path(r"D:\dragon-board\quant-board\data\reports\resonance-parameter-search.json")
 
@@ -168,13 +165,22 @@ def evaluate(config: RankTrendConfig, frames: list[dict[str, Any]]) -> dict[str,
     }
 
 
-def load_frames(start_date: str, end_date: str) -> list[dict[str, Any]]:
-    repo = MongoRepository(get_runtime_mongodb_database())
-    return repo.load_frame_bundles(
-        "dragonboard_live", snapshot_type="half_hour",
-        start_date=start_date, end_date=end_date,
-        projection="ranktrend", fields=list(BACKTEST_RANKTREND_STOCK_FIELDS),
-    )
+def load_frames(
+    start_date: str,
+    end_date: str,
+    *,
+    purpose: str = "scan",
+) -> list[dict[str, Any]]:
+    """权威实现已收敛到 harness_common.load_frames（2026-09-21 审计，内联
+    assert_not_frozen 冻结守卫）；保留同名转发兼容既有 import（历史口径 26+ 处）。
+    purpose 透传：scan（默认）在帧含 FINAL 冻结窗时 raise；仅最终报告呈现传
+    purpose="report"。注意：两个未迁移 harness（optimize_ranktrend_parameters /
+    optimize_core_signal_parameters）的默认 --end 2026-08-14 会触发该守卫 fail-fast，
+    属审计 e 类 FAIL 修复的本意——重跑请显式传 --end 2026-07-31 或分窗加载。
+    """
+    from backend.operations.harness_common import load_frames as _common_load_frames
+
+    return _common_load_frames(start_date, end_date, purpose=purpose)
 
 
 def _inherited(base: dict[str, Any], key: str, value: Any) -> dict[str, Any]:
@@ -193,8 +199,11 @@ def _fmt(result: dict[str, Any]) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="共振参数搜索（只读，不写回默认值）")
+    # 默认窗 = decision（04-15~07-31）。2026-09-21 审计修复：原默认 --end 08-14 覆盖
+    # FINAL 冻结窗且无守卫（8 月冻结令 2026-08-19 设立前写就）；冻结守卫现内联于
+    # harness_common.load_frames，含 FINAL 帧的加载会当场 raise。
     parser.add_argument("--start", default="2026-04-15")
-    parser.add_argument("--end", default="2026-08-14")
+    parser.add_argument("--end", default="2026-07-31")
     parser.add_argument("--phase", type=int, default=1, choices=(1, 2, 3, 4), help="1=单维敏感性, 2=定向组合验证, 3=walk-forward 样本外复核, 4=regime 分桶复核")
     parser.add_argument("--resume", action="store_true", help="复用已有报告已完成候选，跳过重跑")
     parser.add_argument("--rounds", type=int, default=2, help="Phase 2 坐标下降轮数")

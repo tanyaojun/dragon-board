@@ -94,8 +94,12 @@ oos1（样本外）同方向：floor3 新增 n=1023，A +0.0638 / E -0.0261。
 4. **落地语义（若终判通过）**：degradedSampleFloor 3 落默认 = 一次一候选 + 端到端锚逐位
    复现 + strategy_version 提升 + 前端「样本不足」显示逻辑确认（degraded 不受
    `isLifecycleSampleInsufficient` 拦截，无需前端改动）。
+5. **harness 收敛（2026-09-21）**：中期扫描 harness 已改造为 `backend/operations/
+   harness_common.py` 公共库第一个使用者，oos1 窗回归重跑 5 trial 读数与 2026-09-20
+   干净重跑逐位一致；全量 harness 五类风险审计见
+   `harness-audit-20260921.md`（字段路径单一源/已知答案校验等 13 项纪律已写入 skill）。
 
-## 6. 窗口与代际纪律## 6. 窗口与代际纪律
+## 6. 窗口与代际纪律
 
 - 三窗 decision/oos1/oos2 + 8 月 FINAL 冻结；扫描前 `assert_not_frozen`；
 - 证据代际绑定当前默认栈（Jump 修复后代际，见 `config/ranktrend-anchors.json`）；B-202610 批次重判后更新；

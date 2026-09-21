@@ -18,8 +18,11 @@
   (snapshotId, code) 增量集合的 lifecycle 档位分布与 h1 质量——回答「放开门槛后新进
   判定的样本到底是信号还是噪声」（H0 反面假设的直接检验）。
 
-harness 纪律（8 项清单）：WINDOWS import 零日期字面量；`_assert_overrides_applied` 逐键断言；
-`assert_not_frozen` 无条件执行；零默认值改动（扫描只读）；报告缓存 resume（帧缓存不落盘）。
+2026-09-21 改造：harness 工程范式收敛后成为 `harness_common` 第一个使用者（审计文档
+§7.1）——帧加载（内联 assert_not_frozen）/信号访问器（dimension_tier_of 走 DIMENSION_PATHS
+单一源）/指标装配/报告落盘（schemaVersion 校验 resume）/已知答案校验器全部来自公共库，
+本文件只保留本课题特有的 trial 编排。读数与 2026-09-20 f686ada5 干净重跑逐位一致
+（回归验证见审计文档）。
 
 用法：
   python -m backend.operations.scan_repool_sample_floor [--window oos1|decision|all]
@@ -28,46 +31,29 @@ harness 纪律（8 项清单）：WINDOWS import 零日期字面量；`_assert_o
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
-REPORT_DIR = Path("data/reports/repool-midterm")
+from backend.analysis.ranktrend.research.tier_monotonicity import tier_forward_returns
+from backend.operations.harness_common import (
+    assert_known_answer,
+    assert_overrides_applied,
+    cache_frames,
+    cached_frames,
+    dimension_tier_of,
+    load_frames,
+    load_resume,
+    new_report,
+    sample_status_of,
+    save_report,
+    status_buckets,
+)
+
+SCHEMA_VERSION = "repool-scan-v2"
 
 # 档位：baseline(5) 必须首个跑（其余档位的增量样本以它为对照）
 FLOORS: list[int] = [5, 3, 4, 7, 10]
-
-
-def _assert_overrides_applied(config: Any, overrides: dict[str, Any]) -> None:
-    """逐键断言 override 真正落到 config（防静默失效产出假结论，harness 清单 2）。"""
-    for key, value in overrides.items():
-        actual = getattr(config, key, None)
-        if actual != value:
-            raise RuntimeError(f"override 未生效：{key} 期望 {value}，实际 {actual}")
-
-
-def _sample_status_of(signal: dict[str, Any]) -> str:
-    meta = ((signal.get("rankTrend") or {}).get("meta") or {}).get("sampleQuality") or {}
-    return str(meta.get("status") or "insufficient")
-
-
-def _status_buckets(signals: list[dict[str, Any]]) -> dict[str, Any]:
-    buckets = {"ok": 0, "degraded": 0, "insufficient": 0}
-    for signal in signals:
-        status = _sample_status_of(signal)
-        buckets[status] = buckets.get(status, 0) + 1
-    total = sum(buckets.values())
-    shares = {k: round(v / total, 4) for k, v in buckets.items()} if total else {}
-    return {**buckets, "total": total, "share": shares}
-
-
-def _status_key_map(signals: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
-    return {
-        (str(signal.get("snapshotId")), str(signal.get("code"))): _sample_status_of(signal)
-        for signal in signals
-    }
 
 
 def _newly_judged_metrics(
@@ -80,25 +66,19 @@ def _newly_judged_metrics(
     H0 反面假设的直接检验：这些样本的 lifecycle 档位 forward-return 若与随机无异
     （excessDirectionAccuracy ≈ 0），说明中断历史降级判定产出的是噪声 → 维持现状。
     """
-    from backend.analysis.ranktrend.research.tier_monotonicity import tier_forward_returns
-
     def newly_judged(signal: dict[str, Any]) -> bool:
         key = (str(signal.get("snapshotId")), str(signal.get("code")))
         return (
             baseline_status.get(key) == "insufficient"
-            and _sample_status_of(signal) != "insufficient"
+            and sample_status_of(signal) != "insufficient"
         )
 
     newly = [signal for signal in trial_signals if newly_judged(signal)]
-    # lifecycle.signalTier 正确路径 = signal["rankTrend"]["observation"]["lifecycle"]["signalTier"]
-    # （DIMENSION_PATHS["lifecycle"] 同款；2026-09-20 修正：误读 signal["observation"] 曾产出
-    # 「100% unknown」假阴性结论，见立项文档 §5.1 更正记录）
+    # lifecycle.signalTier 统一走 DIMENSION_PATHS 读取器（2026-09-20 事故防线：
+    # 误读 signal["observation"] 曾产出「100% unknown」假阴性，见立项文档 §5.1 更正记录）
     tier_dist: dict[str, int] = {}
     for signal in newly:
-        tier = str(
-            (((signal.get("rankTrend") or {}).get("observation") or {}).get("lifecycle") or {}).get("signalTier")
-            or "unknown"
-        )
+        tier = dimension_tier_of(signal, "lifecycle")
         tier_dist[tier] = tier_dist.get(tier, 0) + 1
     quality = tier_forward_returns(newly, frames, horizon=1, dimension="lifecycle")
     return {
@@ -109,34 +89,49 @@ def _newly_judged_metrics(
 
 
 def _lifecycle_saex(signals: list[dict[str, Any]], frames: list[dict[str, Any]]) -> dict[str, Any]:
-    from backend.analysis.ranktrend.research.tier_monotonicity import tier_forward_returns
-
     return tier_forward_returns(signals, frames, horizon=1, dimension="lifecycle")
 
 
 def run_window(window: str, report: dict[str, Any]) -> None:
     from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
-    from backend.optimization.data_windows import WINDOWS, assert_not_frozen
-    from backend.operations.optimize_resonance_parameters import load_frames
+    from backend.optimization.data_windows import WINDOWS
 
     start, end = WINDOWS[window]
     entry = report.setdefault(window, {})
-    cache = report.get("__frames__") or {}
-    if window not in cache:
-        cache[window] = load_frames(start, end)
-        report["__frames__"] = cache
-    frames = cache[window]
-    assert_not_frozen(frames, "scan")  # 无条件执行（含 resume 路径，harness 清单 3）
+    frames = cached_frames(report, window)
+    if frames is None:
+        # load_frames 内联 assert_not_frozen（无条件守卫，含 resume 后的重新加载）
+        frames = load_frames(start, end)
+        cache_frames(report, window, frames)
     if "window" not in entry:
         entry["window"] = {"start": start, "end": end, "frameCount": len(frames)}
         print(f"[repool-scan] {window} frames={len(frames)}", file=sys.stderr)
     if not frames:
         entry["error"] = "no frames"
-        _save(report)
+        save_report(report)
         return
 
     trials = entry.setdefault("trials", {})
     baseline_status: dict[tuple[str, str], str] = {}
+    _has_missing_non_baseline = any(
+        (f"floor{floor}" if floor != FLOORS[0] else "baseline") not in trials
+        for floor in FLOORS
+        if floor != FLOORS[0]
+    )
+    if "baseline" in trials and _has_missing_non_baseline:
+        # 渐进 resume 防线（2026-09-21 review Critical）：baseline trial 已缓存时循环会
+        # skip，但新增判定样本的对照集（baseline insufficient → trial 判 degraded/ok）
+        # 不能为空——空对照会把 newlyJudged 全部伪装成 0（「无新增样本」假结论，违反
+        # fail-visible）。replay 确定性：重算 status map 与首跑逐位一致，仅不重复落盘。
+        overrides = {"degradedSampleFloor": FLOORS[0]}
+        config = RankTrendConfig.from_patch(overrides)
+        assert_overrides_applied(config, overrides)
+        engine = RankTrendPythonEngine(config=config)
+        print("[repool-scan] resume: rebuild baseline status map ...", file=sys.stderr)
+        baseline_status = {
+            (str(signal.get("snapshotId")), str(signal.get("code"))): sample_status_of(signal)
+            for signal in engine.replay(frames, meta={})
+        }
     for floor in FLOORS:
         key = f"floor{floor}" if floor != 5 else "baseline"
         if key in trials:
@@ -147,10 +142,10 @@ def run_window(window: str, report: dict[str, Any]) -> None:
         print(f"[repool-scan] {window} {key} {overrides} ...", file=sys.stderr)
         t0 = time.time()
         config = RankTrendConfig.from_patch(overrides)
-        _assert_overrides_applied(config, overrides)
+        assert_overrides_applied(config, overrides)
         engine = RankTrendPythonEngine(config=config)
         signals = engine.replay(frames, meta={})
-        buckets = _status_buckets(signals)
+        buckets = status_buckets(signals)
         result: dict[str, Any] = {
             "desc": desc,
             "overrides": overrides,
@@ -158,7 +153,10 @@ def run_window(window: str, report: dict[str, Any]) -> None:
             "lifecycleH1": _lifecycle_saex(signals, frames),
         }
         if floor == 5:
-            baseline_status = _status_key_map(signals)
+            baseline_status = {
+                (str(signal.get("snapshotId")), str(signal.get("code"))): sample_status_of(signal)
+                for signal in signals
+            }
             result["isBaseline"] = True
         else:
             result["newlyJudged"] = _newly_judged_metrics(signals, frames, baseline_status)
@@ -168,17 +166,7 @@ def run_window(window: str, report: dict[str, Any]) -> None:
             f"({round(time.time() - t0, 1)}s)",
             file=sys.stderr,
         )
-        _save(report)
-
-
-def _save(report: dict[str, Any]) -> None:
-    report["generatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    report["windowsConsumed"] = list(report.get("__frames__") or {})  # 审计 M3
-    report["nature"] = "midterm-scan（方向性读数，M3 折扣；终判以 B-202610 批次 oos2u 为准）"
-    out_path = Path(report["__out__"]) if report.get("__out__") else REPORT_DIR / "repool-sample-floor-scan.json"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {k: v for k, v in report.items() if k not in ("__out__", "__frames__")}  # 帧缓存不落盘
-    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        save_report(report)
 
 
 def main() -> int:
@@ -188,18 +176,24 @@ def main() -> int:
     args = parser.parse_args()
 
     windows = ["oos1", "decision"] if args.window == "all" else [args.window]
-    report: dict[str, Any] = {"__out__": args.out, "__frames__": {}}
-    if Path(args.out).exists() if args.out else False:
-        try:
-            cached = json.loads(Path(args.out).read_text(encoding="utf-8"))
-            cached_frames = cached.pop("windowsConsumed", None)
-            report.update(cached)
-            print(f"[resume] cached windows: {list(cached.get('trials', {}))}", file=sys.stderr)
-        except (OSError, json.JSONDecodeError):
-            pass
+    out = args.out or "data/reports/repool-midterm/repool-sample-floor-scan.json"
+
+    # 已知答案校验（2026-09-21 纪律）：mini replay 结构断言先于全窗跑
+    assert_known_answer()
+
+    report = load_resume(out, schema_version=SCHEMA_VERSION)
+    if report is not None:
+        print(f"[resume] schema={SCHEMA_VERSION} cached windows: "
+              f"{[w for w in windows if w in report]}", file=sys.stderr)
+    else:
+        report = new_report(
+            out,
+            schema_version=SCHEMA_VERSION,
+            nature="midterm-scan（方向性读数，M3 折扣；终判以 B-202610 批次 oos2u 为准）",
+        )
     for window in windows:
         run_window(window, report)
-    print(f"[repool-scan] done -> {args.out or REPORT_DIR / 'repool-sample-floor-scan.json'}", file=sys.stderr)
+    print(f"[repool-scan] done -> {out}", file=sys.stderr)
     return 0
 
 
