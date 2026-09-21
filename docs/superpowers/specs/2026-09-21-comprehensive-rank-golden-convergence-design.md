@@ -45,6 +45,7 @@
 | 2 | `StockMergeCoordinator.ts` | 删除 `rankMergedStocks` 调用；8 平台 rank 字段（emRank 等）保留实时合并但降级为**纯展示字段**（原始平台数据，非计算输入）；`getRankField` 迁移为本文件内部工具（rg 确认唯一消费方）；merge 后排序按 `compRank ?? DEFAULT_RANK` + code 稳定排序；08-24 回滚注记改写为收敛注记 |
 | 3 | `RankTrendSignalService.ts:222-224` | 注记同步为收敛口径（保持不覆盖本地值的行为，此时「本地值」已即 golden 值） |
 | 4 | 排序消费方 | `ui.ts` compRank 排序字段、`stock.ts`（`?? 9999`）、`FrameNormalizer`（`|| 999`）、`CandidatePoolBuilder`/`BattlefieldBuilder`（`|| 999`）等既有回退保留不动 |
+| 5 | `framePoolSource.ts` `applyGoldenFieldsToMerged`（审查 C1 修复，2026-09-21） | 帧池模式每轮 merge 后用最新帧行**刷新既有行** golden 字段子集——种子只补缺失会使 golden 冻结在首次入池帧、降级恢复后不回填；golden 字段清单单一源 `applyGoldenFields`（种子与刷新共用，防两处漂移） |
 
 ## 4. 降级语义（后端/帧池不可用，fail-visible）
 
@@ -52,8 +53,15 @@
 - 可见性三层：`poolSource` provenance 批级标记（已有）+ 行级 `qualityFlags`/`missingFields`（golden 行自带；降级行如实缺省）+ 面板注脚复用 09-21 机制，注明「降级期间无综合排名」。
 - **NaN 加固**（本方案唯一新增防御）：`BusinessRules.ts:149` `100 - stock.compRank * 5` 在 compRank undefined 时产生 NaN——改显式 `?? DEFAULT_RANK` 回退，先写失败测试再修（TDD）。其余消费方既有 `|| 999`/`?? 9999`/`isFinite` 回退逐一 rg 复核，实施时以测试锁定。
 - hotness：`StockHotnessCalculator` 已有 `isValidRank` 守卫，avgRankNum 缺失时 avgRank 分量按无效剔除（既有测试确认，不新增结构）。
+- 降级模式 `platforms` 保持 `createEmptyMergedStock` 占位 0（引擎已删不再重算），hotness 的 platformCoverage 分量随之归零；`poolSource` provenance 已打标，影响随降级面如实透出（审查 M2 补记）。
 
-> **实施期勘误（2026-09-21）**：本节 planned 的 `BusinessRules.ts:149` NaN 防御**未实施**——实施时核实该文件被 `tsconfig.app.json` 显式排除且全仓库零 import（`StockContext` 亦未声明 `compRank`），属未挂载历史遗留文件，非活跃消费方；活跃 compRank 消费方（`stores/stock.ts`、`dragon/CandidatePoolBuilder`、`BattlefieldBuilder`、`FrameNormalizer`、`config/factors`、`exportService`、`DataFreshness`）已逐一核实全部自带安全回退（`|| 999`/`?? 9999`/`isFinite` 守卫），不存在 NaN 污染路径，故无需新增防御。此为设计阶段盘点疏漏（rg 命中即列为消费面，未核实排除清单），特此记录。
+> **实施与审查期勘误（2026-09-21）**
+>
+> 1. **BusinessRules NaN 防御未实施**：核实该文件被 `tsconfig.app.json` 显式排除且全仓库零 import（`StockContext` 亦未声明 `compRank`），属未挂载历史遗留文件，非活跃消费方；活跃 compRank 消费方（`stores/stock.ts`、`dragon/CandidatePoolBuilder`、`BattlefieldBuilder`、`FrameNormalizer`、`config/factors`、`exportService`、`DataFreshness`）已逐一核实全部自带安全回退（`|| 999`/`?? 9999`/`isFinite` 守卫），不存在 NaN 污染路径。此为设计阶段盘点疏漏（rg 命中即列为消费面，未核实排除清单）。
+> 2. **§8 代价模型修正（审查 C1，Critical）**：初版实现种子只补缺失，golden 实际冻结在股票首次入池帧、降级恢复后不回填——「帧内冻结 ≤30min」不成立（实为会话内冻结）。已修复：帧池模式每轮 merge 后以最新帧行刷新既有行 golden 字段子集（`applyGoldenFieldsToMerged`，§3 改造点 5），裁决代价口径据此成立；真实行刷新语义由单测锁定。
+> 3. **fundPenetration 占位口径**：种子行缺失时保持 `createEmptyMergedStock` 既有占位 0（非 undefined），与「缺失不伪造」的边界一致——占位 0 是引擎时代既有约定，不属本轮伪造。
+> 4. **§3 改造点 4 路径勘误**：排序消费方 `ui.ts` 实际为 `src/stores/ui.ts`。
+> 5. **spec §6.1 真实帧 fixture 在初版实施中被自备用例替代**（审查 I1），已补真实帧合同锁（见 §6.1 落地记录）。
 
 ## 5. 删除与保留清单（rg 逐符号核实）
 
@@ -63,7 +71,7 @@
 
 ## 6. 测试与对齐验证（TDD：先锁行为再改）
 
-1. `framePoolSource.test.ts`：seed 行透传 golden 字段——用真实 frames API 一帧做 fixture 逐位断言（golden 对齐验证：前端读到 = 后端行）。
+1. `framePoolSource.test.ts`：seed 行透传 golden 字段——用真实 frames API 一帧做 fixture 逐位断言（golden 对齐验证：前端读到 = 后端行）。【落地记录 2026-09-21：已用当日 15:00 收盘帧真实行（600127/002185/000636）做合同锁 fixture，含种子逐位一致与既有行刷新逐位一致两组用例（审查 I1 修复）】
 2. 合并链：帧池模式 compRank 来自后端行、无本地重算；`compRank ?? DEFAULT_RANK` + code 稳定排序。
 3. 降级行：无排名不被伪造、provenance/qualityFlags 可诊断、消费方回退无 NaN（含 `BusinessRules` 新用例，先红后绿）。
 4. hotness：avgRankNum 缺失时 8 分量仍可计算且 avgRank 分量剔除。
