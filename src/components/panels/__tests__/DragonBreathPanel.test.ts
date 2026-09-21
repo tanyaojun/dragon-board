@@ -18,13 +18,30 @@ describe('DragonBreathPanel 状态来源透出（spec §4）', () => {
     expect(source).toContain('class="status-source-note"')
   })
 
-  test('缺 statusSourceCounts（旧 EOD 文档）时整段隐藏，不做硬门禁', () => {
+  test('缺 statusSourceCounts（旧 EOD 文档）时不硬门禁：回退池差异注，无差异才隐藏', () => {
     const source = panelSource()
 
     // 锚点收敛（code review F6）：不用跨行正则，避免注释/换行调整后误报
     expect(source).toContain('const hotListStatusSourceNote = computed(() => {')
-    expect(source).toContain("if (!counts) return ''")
+    // 2026-09-19：counts 缺失不再直接返回空串——池口径差异（快照池 vs 行情列表）仍要可见；
+    // poolGapNote 自身为空（无差异/缺 topN）时才整段隐藏
+    expect(source).toContain('if (!counts) return hotListPoolGapNote.value')
     expect(source).toContain('v-if="hotListStatusSourceNote"')
+  })
+
+  test('池口径差异透出（2026-09-19）：快照池 ≠ 行情列表时在注脚解释，一致时不产生噪音', () => {
+    const source = panelSource()
+
+    // 面板全池 = 快照帧池（采集时点），行情列表 = 前端当前合并池；盘后进出榜会让两池分叉，
+    // 用户直接对账会误判为分类不一致（如「点火 2 vs 3」）。差异必须可见并解释（fail-visible）。
+    expect(source).toContain('const hotListPoolGapNote = computed(() => {')
+    expect(source).toContain('marketListPoolCount')
+    expect(source).toContain('snapshotPool === listPool')
+    // 差异说明必须点名「进出榜时点不同」与「只统计快照池」，避免用户误读计数口径
+    expect(source).toContain('两池进出榜时点不同，各格计数只统计快照池')
+    // 列表池规模由 merged.stocks 订阅维护（响应式），挂载时初始化一次
+    expect(source).toContain("dataLayer.subscribe('merged.stocks', () => {")
+    expect(source).toContain('marketListPoolCount.value = (dataLayer.getStocks()')
   })
 
   test('全池状态结构为 6 格且不含 8 类修正栏', () => {
