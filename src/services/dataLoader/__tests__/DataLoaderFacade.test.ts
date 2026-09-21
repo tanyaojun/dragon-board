@@ -121,6 +121,8 @@ vi.mock('../framePoolSource', () => ({
     turnoverRate: Number(row.turnoverRate) || 0,
     platforms: 0,
   })),
+  // golden 刷新行为在 framePoolSource.test.ts 单测锁定，此处为边界 no-op
+  applyGoldenFieldsToMerged: vi.fn(),
   filterPlatformDataToCodes: vi.fn(
     (platformData: Record<string, any[]>, codes: Set<string>) => {
       const filtered: Record<string, any[]> = {}

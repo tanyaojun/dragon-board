@@ -19,6 +19,7 @@ import {
 import { extraDataProjector } from './ExtraDataProjector'
 import {
   buildFrameSeedStock,
+  applyGoldenFieldsToMerged,
   fetchLatestFramePool,
   filterPlatformDataToCodes,
 } from './framePoolSource'
@@ -969,6 +970,11 @@ class DataLoaderService {
         existingMap,
       }),
     )
+    if (framePoolMode) {
+      // C1 修复（2026-09-21 审查）：种子只补缺失会让 golden 冻结在首次入池帧、降级恢复不回填；
+      // 帧池模式下每轮用最新帧行刷新既有行 golden 字段子集（裁决口径：排名滞后 ≤30min）
+      applyGoldenFieldsToMerged(merged, framePool!.pool!.rowsByCode)
+    }
 
     // 4. 合并额外数据
     merged = this.mergeExtraData(merged)
@@ -1075,10 +1081,11 @@ class DataLoaderService {
       mergedCount += 1
       return {
         ...stock,
-        // 2026-08-24 根治：合并时补齐 compRank/avgRankNum 与 precomputeDisplayFields 输出的全部
+        // 根治（2026-08-24）：合并时补齐 compRank/avgRankNum 与 precomputeDisplayFields 输出的全部
         // 展示缓存字段（与 RankTrendSignalService.precomputeDisplayFields 保持同步，勿漏字段，
         // 否则 stock.compRank 恒 undefined → 综合列 "--"、avgRankNum 恒 999、startup-bundle
-        // 校验（compRank>0）失败不写缓存）。
+        // 校验（compRank>0）失败不写缓存）。2026-09-21 起 compRank/avgRankNum 权威来源为后端
+        // golden（帧池种子透传 + applyGoldenFieldsToMerged 每轮刷新）。
         compRank: signalStock.compRank ?? stock.compRank,
         avgRankNum: signalStock.avgRankNum ?? stock.avgRankNum,
         rankTrend: signalStock.rankTrend,

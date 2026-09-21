@@ -805,13 +805,13 @@ describe('RankTrendSignalService', () => {
       })
     })
 
-    it('keeps front-end computed compRank untouched (precompute no longer backfills from backend meta)', () => {
-      // 2026-08-24 回滚前后端分离迁移：compRank/avgRankNum 由前端本地实时计算
-      // （ComprehensiveRankEngine.rankMergedStocks），precomputeDisplayFields 不再从
-      // analyze meta 回填，保留本地计算值（此处 stock.compRank=25 为本地值）。
+    it('keeps seed-transmitted golden compRank untouched (precompute no longer backfills from backend meta)', () => {
+      // 2026-09-21 口径唯一化：compRank/avgRankNum 消费后端 golden（帧池种子透传，
+      // ComprehensiveRankEngine 已删除），precomputeDisplayFields 不从 analyze meta 回填，
+      // 保留种子值（此处 stock.compRank=25 为种子 golden 值）。
       const stock: any = {
         code: '000001',
-        compRank: 25, // 前端本地计算值
+        compRank: 25, // 帧池种子 golden 值
         rankTrend: {
           meta: { code: '000001', compRank: 3 },
           jump: { direction: 'buy', confidence: 80 },

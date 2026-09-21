@@ -75,6 +75,28 @@ function toFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+/** golden 排名字段子集（前端消费后端 golden 的唯一字段清单；种子与既有行刷新共用，防两处漂移） */
+function applyGoldenFields(stock: MergedStock, row: SnapshotStockRow): void {
+  // golden 排名字段逐位透传，缺失不伪造（保持 createEmptyMergedStock 占位语义）
+  const avgRankNum = toFiniteNumber(row?.avgRankNum)
+  if (avgRankNum !== null) {
+    stock.avgRankNum = avgRankNum
+    stock.avgRank = row?.avgRank ?? avgRankNum.toFixed(1)
+  }
+  if (toFiniteNumber(row?.platforms) !== null) stock.platforms = row.platforms
+  const compRank = toFiniteNumber(row?.compRank)
+  if (compRank !== null) {
+    stock.compRank = compRank
+    stock.rank = compRank
+  }
+  const compScore = toFiniteNumber(row?.compScore)
+  if (compScore !== null) stock.compScore = compScore
+  const fundPenetration = toFiniteNumber(row?.fundPenetration)
+  if (fundPenetration !== null) stock.fundPenetration = fundPenetration
+  if (Array.isArray(row?.qualityFlags)) stock.qualityFlags = [...row.qualityFlags]
+  if (Array.isArray(row?.missingFields)) stock.missingFields = [...row.missingFields]
+}
+
 /**
  * 帧行 → 种子行：名称与快照时点行情为兜底值（实时行情到达后被覆盖）；
  * 排名字段直接透传后端 golden（2026-09-21 口径唯一化裁决 A，
@@ -97,25 +119,24 @@ export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
   const turnoverRate = toFiniteNumber(row?.turnoverRate)
   if (turnoverRate !== null && turnoverRate > 0) stock.turnoverRate = turnoverRate
 
-  // golden 排名字段逐位透传，缺失不伪造（保持 createEmptyMergedStock 占位语义）
-  const avgRankNum = toFiniteNumber(row?.avgRankNum)
-  if (avgRankNum !== null) {
-    stock.avgRankNum = avgRankNum
-    stock.avgRank = row?.avgRank ?? avgRankNum.toFixed(1)
-  }
-  if (toFiniteNumber(row?.platforms) !== null) stock.platforms = row.platforms
-  const compRank = toFiniteNumber(row?.compRank)
-  if (compRank !== null) {
-    stock.compRank = compRank
-    stock.rank = compRank
-  }
-  const compScore = toFiniteNumber(row?.compScore)
-  if (compScore !== null) stock.compScore = compScore
-  const fundPenetration = toFiniteNumber(row?.fundPenetration)
-  if (fundPenetration !== null) stock.fundPenetration = fundPenetration
-  if (Array.isArray(row?.qualityFlags)) stock.qualityFlags = [...row.qualityFlags]
-  if (Array.isArray(row?.missingFields)) stock.missingFields = [...row.missingFields]
+  applyGoldenFields(stock, row)
   return stock
+}
+
+/**
+ * 帧池模式下用最新帧行刷新既有行的 golden 排名字段子集（审查 C1 修复，2026-09-21）：
+ * 种子只补缺失会让 golden 冻结在首次入池帧、降级恢复后不回填；每轮 merge 后统一刷新，
+ * 保证「排名帧内滞后 ≤30min」的裁决口径成立。只动 golden 字段，name/price 等
+ * 实时字段不受帧行覆盖；不在帧池中的行不触碰。
+ */
+export function applyGoldenFieldsToMerged(
+  stocks: MergedStock[],
+  rowsByCode: Map<string, SnapshotStockRow>,
+): void {
+  for (const stock of stocks || []) {
+    const row = rowsByCode?.get(String(stock?.code || ''))
+    if (row) applyGoldenFields(stock, row)
+  }
 }
 
 /** 帧池模式下 platformData 行过滤到帧池范围；空平台不保留键（platformTotals 由后端帧内计算） */

@@ -14,6 +14,7 @@ vi.mock('../../snapshot/backendRead', () => ({
 }))
 
 import {
+  applyGoldenFieldsToMerged,
   buildFrameSeedStock,
   fetchLatestFramePool,
   filterPlatformDataToCodes,
@@ -188,6 +189,147 @@ describe('buildFrameSeedStock', () => {
     expect(seed.volume).toBe(0)
     expect(seed.name).toBe('')
     expect(seed.platformName).toBe('')
+  })
+})
+
+describe('applyGoldenFieldsToMerged（C1：既有行 golden 随新帧刷新）', () => {
+  it('existing 行 golden 随新帧刷新，实时字段不被帧行覆盖', () => {
+    const stocks = [
+      {
+        code: '600000',
+        name: '浦发银行',
+        price: 12.5,
+        compRank: 200,
+        compScore: 10,
+        avgRankNum: 999,
+        platforms: 0,
+      },
+    ] as any
+    const rowsByCode = new Map([
+      [
+        '600000',
+        makeRow({ compRank: 3, compScore: 88.1234, avgRankNum: 37.5, avgRank: '37.5', platforms: 5 }),
+      ],
+    ])
+    applyGoldenFieldsToMerged(stocks, rowsByCode)
+
+    expect(stocks[0].compRank).toBe(3)
+    expect(stocks[0].rank).toBe(3)
+    expect(stocks[0].compScore).toBe(88.1234)
+    expect(stocks[0].avgRankNum).toBe(37.5)
+    expect(stocks[0].avgRank).toBe('37.5')
+    expect(stocks[0].platforms).toBe(5)
+    // 实时字段不被帧行覆盖
+    expect(stocks[0].price).toBe(12.5)
+    expect(stocks[0].name).toBe('浦发银行')
+  })
+
+  it('降级行（无 golden）在帧池恢复后回填，行缺字段时占位保持不伪造', () => {
+    const stocks = [{ code: '600000', compRank: undefined, avgRankNum: DEFAULT_RANK }] as any
+    applyGoldenFieldsToMerged(stocks, new Map([['600000', makeRow()]]))
+
+    expect(stocks[0].compRank).toBe(1)
+    expect(stocks[0].rank).toBe(1)
+    // makeRow 未提供 avgRankNum：占位保持，不伪造
+    expect(stocks[0].avgRankNum).toBe(DEFAULT_RANK)
+  })
+
+  it('不在帧池中的行不触碰', () => {
+    const stocks = [{ code: '000001', compRank: 9 }] as any
+    applyGoldenFieldsToMerged(stocks, new Map())
+
+    expect(stocks[0].compRank).toBe(9)
+  })
+})
+
+// 2026-09-21 15:00 收盘帧真实数据（GET /api/snapshots/stock-rows，仅保留契约相关字段）。
+// golden 合同锁：后端字段名/语义变化（如 compRank 改名、avgRank 缺失）会让本组用例变红，
+// 防止前端静默丢排名（spec §6.1 对齐验证）。
+const REAL_FRAME_ROWS = [
+  {
+    id: 'half_hour:2026-09-21:15:00:600127',
+    snapshotId: 'half_hour:2026-09-21:15:00',
+    type: 'half_hour',
+    tradingDate: '2026-09-21',
+    slotTime: '15:00',
+    code: '600127',
+    name: '金健米业',
+    price: 15.75,
+    platforms: 8,
+    avgRankNum: 12.48483166851646,
+    avgRank: '12.5',
+    rank: 1,
+    compScore: 81.3782,
+    compRank: 1,
+    qualityFlags: ['missing_comprehensive_fields'],
+    missingFields: ['zljzb', 'fundPenetration'],
+  },
+  {
+    id: 'half_hour:2026-09-21:15:00:002185',
+    snapshotId: 'half_hour:2026-09-21:15:00',
+    type: 'half_hour',
+    tradingDate: '2026-09-21',
+    slotTime: '15:00',
+    code: '002185',
+    name: '华天科技',
+    price: 18.53,
+    platforms: 7,
+    avgRankNum: 14.220495745467995,
+    avgRank: '14.2',
+    rank: 2,
+    compScore: 80.0196,
+    compRank: 2,
+    qualityFlags: ['missing_comprehensive_fields'],
+    missingFields: ['zljzb', 'fundPenetration'],
+  },
+  {
+    id: 'half_hour:2026-09-21:15:00:000636',
+    snapshotId: 'half_hour:2026-09-21:15:00',
+    type: 'half_hour',
+    tradingDate: '2026-09-21',
+    slotTime: '15:00',
+    code: '000636',
+    name: '风华高科',
+    price: 59.25,
+    platforms: 7,
+    avgRankNum: 17.059563448020715,
+    avgRank: '17.1',
+    rank: 3,
+    compScore: 77.7974,
+    compRank: 3,
+    qualityFlags: ['missing_comprehensive_fields'],
+    missingFields: ['zljzb', 'fundPenetration'],
+  },
+] as unknown as SnapshotStockRow[]
+
+describe('真实帧 golden 对齐验证（2026-09-21 15:00 收盘帧合同锁）', () => {
+  it('种子行 golden 字段与后端行逐位一致，rank := compRank', () => {
+    for (const row of REAL_FRAME_ROWS) {
+      const seed = buildFrameSeedStock(row)
+
+      expect(seed.compRank).toBe(row.compRank)
+      expect(seed.rank).toBe(row.compRank)
+      expect(seed.compScore).toBe(row.compScore)
+      expect(seed.avgRankNum).toBe(row.avgRankNum)
+      expect(seed.avgRank).toBe(row.avgRank)
+      expect(seed.platforms).toBe(row.platforms)
+      expect(seed.qualityFlags).toEqual(row.qualityFlags)
+      expect(seed.missingFields).toEqual(row.missingFields)
+    }
+  })
+
+  it('既有行经刷新后与后端行逐位一致（对齐验证）', () => {
+    const stocks = [{ code: '600127', compRank: 200, compScore: 10, avgRankNum: 999 }] as any
+    applyGoldenFieldsToMerged(
+      stocks,
+      new Map(REAL_FRAME_ROWS.map((row) => [String(row.code), row])),
+    )
+
+    expect(stocks[0].compRank).toBe(1)
+    expect(stocks[0].compScore).toBe(81.3782)
+    expect(stocks[0].avgRankNum).toBe(12.48483166851646)
+    expect(stocks[0].avgRank).toBe('12.5')
+    expect(stocks[0].platforms).toBe(8)
   })
 })
 
