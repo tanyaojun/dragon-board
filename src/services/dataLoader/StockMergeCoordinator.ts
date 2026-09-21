@@ -4,6 +4,71 @@ import { stockCodeManager } from '../StockCodeManager'
 import { shouldApplyMoneyFlowUpdate } from '../moneyFlowSourcePriority'
 import { getRankField, rankMergedStocks } from './ComprehensiveRankEngine'
 
+function isValidStockName(name: string): boolean {
+  return !!(name && name !== '-' && name !== 'null' && name !== 'undefined' && name.trim() !== '')
+}
+
+/**
+ * 构建 MergedStock 全字段空壳（含各平台 DEFAULT_RANK 占位）。
+ * 供合并链与帧池种子行共用，保证种子行结构与普通合并行同形。
+ */
+export function createEmptyMergedStock(code: string): MergedStock {
+  let defaultName = ''
+  const codeInfo = stockCodeManager.getStockInfo(code)
+  if (codeInfo && isValidStockName(codeInfo.name)) {
+    defaultName = codeInfo.name
+  }
+
+  return {
+    code,
+    name: defaultName,
+    price: 0,
+    change: 0,
+    volume: 0,
+    turnover: 0,
+    turnoverRate: 0,
+    pe: 0,
+    pb: 0,
+    totalMV: 0,
+    cirMV: 0,
+    zlje: 0,
+    zljzb: 0,
+    cddje: 0,
+    cddjzb: 0,
+    emRank: DEFAULT_RANK,
+    thsRank: DEFAULT_RANK,
+    kplRank: DEFAULT_RANK,
+    tdxRank: DEFAULT_RANK,
+    xqRank: DEFAULT_RANK,
+    clsRank: DEFAULT_RANK,
+    tgbRank: DEFAULT_RANK,
+    dzhRank: DEFAULT_RANK,
+    platforms: 0,
+    avgRankNum: DEFAULT_RANK,
+    avgRank: DEFAULT_RANK.toString(),
+    compRank: undefined,
+    compScore: 0,
+    updatedAt: Date.now(),
+    continuousDays: 1,
+    themes: [],
+    hotness: 0,
+    tags: [],
+    reason: '',
+    isNew: false,
+    firstZtTime: '',
+    lastZtTime: '',
+    boardHeight: 0,
+    highDays: 0,
+    platformName: '',
+    fundPenetration: 0,
+    firstSeen: undefined,
+    lastSeen: undefined,
+    mainTheme: undefined,
+    themeHeat: 0,
+    themeLevel: '冷',
+  }
+}
+
 export interface StockMergeCoordinatorInput {
   platformData: Record<string, any[]>
   latestQuotes?: Map<string, any>
@@ -189,64 +254,11 @@ export class StockMergeCoordinator {
   }
 
   private createEmptyStock(code: string): MergedStock {
-    let defaultName = ''
-    const codeInfo = stockCodeManager.getStockInfo(code)
-    if (codeInfo && this.isValidName(codeInfo.name)) {
-      defaultName = codeInfo.name
-    }
-
-    return {
-      code,
-      name: defaultName,
-      price: 0,
-      change: 0,
-      volume: 0,
-      turnover: 0,
-      turnoverRate: 0,
-      pe: 0,
-      pb: 0,
-      totalMV: 0,
-      cirMV: 0,
-      zlje: 0,
-      zljzb: 0,
-      cddje: 0,
-      cddjzb: 0,
-      emRank: DEFAULT_RANK,
-      thsRank: DEFAULT_RANK,
-      kplRank: DEFAULT_RANK,
-      tdxRank: DEFAULT_RANK,
-      xqRank: DEFAULT_RANK,
-      clsRank: DEFAULT_RANK,
-      tgbRank: DEFAULT_RANK,
-      dzhRank: DEFAULT_RANK,
-      platforms: 0,
-      avgRankNum: DEFAULT_RANK,
-      avgRank: DEFAULT_RANK.toString(),
-      compRank: undefined,
-      compScore: 0,
-      updatedAt: Date.now(),
-      continuousDays: 1,
-      themes: [],
-      hotness: 0,
-      tags: [],
-      reason: '',
-      isNew: false,
-      firstZtTime: '',
-      lastZtTime: '',
-      boardHeight: 0,
-      highDays: 0,
-      platformName: '',
-      fundPenetration: 0,
-      firstSeen: undefined,
-      lastSeen: undefined,
-      mainTheme: undefined,
-      themeHeat: 0,
-      themeLevel: '冷',
-    }
+    return createEmptyMergedStock(code)
   }
 
   private isValidName(name: string): boolean {
-    return !!(name && name !== '-' && name !== 'null' && name !== 'undefined' && name.trim() !== '')
+    return isValidStockName(name)
   }
 }
 
