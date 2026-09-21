@@ -1,6 +1,6 @@
 # 快照采集池单一事实源（自治热榜池）设计
 
-> 状态：设计已确认（2026-09-19 用户逐项确认：对齐口径 = 采集池为前端池超集；实现路径 = 单一事实源纯自治池；四节设计整体确认）；实施完成（2026-09-20，提交链 300aad60..bd6e96d2 及后续 Task 5 健壮性修复与文档同步提交，实施计划与审查记录见 quant-board/docs/snapshot-collector/2026-09-20-pool-autonomous-source-implementation-plan.md）
+> 状态：设计已确认（2026-09-19 用户逐项确认：对齐口径 = 采集池为前端池超集；实现路径 = 单一事实源纯自治池；四节设计整体确认）；实施完成（2026-09-20，提交链 300aad60..bd6e96d2 及后续 Task 5 健壮性修复与文档同步提交，实施计划与审查记录见 quant-board/docs/snapshot-collector/2026-09-20-pool-autonomous-source-implementation-plan.md）；实测验收通过（2026-09-21 全交易日，记录见同计划 Task 6 验收记录。**§7.5 口径修正**：实测发现八平台热榜源盘后仍持续轮动、前端列表池自带 30min 缓存层，「盘后重载列表 ⊆ 收盘帧」不成立且属两池时点差的诚实呈现——「列表 ⊆ 帧池」验收语义限定在采集活跃窗口内，盘后以同源性验证为准）
 > 触发：2026-09-19 用户裁决——「采集池实时跟随前端池」必须彻底解决，正式立项
 > 依据：`AGENTS.md §4.0`、`skills/fail-visible-data-pipelines/SKILL.md`、仓库代码与 MongoDB 实测证据（本文 §2）
 
@@ -41,6 +41,7 @@
 
 - 不回补历史缺失帧（股票行不在库中，无法凭空补数据；历史分析序列随未来帧自然补齐）。
 - 不做前端周期刷新、不重写 bundle 写入逻辑（前端零改动；bundle 降级为只供 `snapshotContext`）。
+  - 交叉引用（2026-09-21）：「前端零改动」非目标已由池源替换 spec 取代——`docs/superpowers/specs/2026-09-21-frontend-pool-frame-alignment-design.md`（前端列表池 membership 改为读取后端最新 half_hour 帧池，实测对账闭环）；本条中采集器与 bundle 写入侧不改动的约定仍然有效。
 - 不改 analyze 引擎、面板注脚、sentiment join（2026-09-19 已交付部分保持不动）。
 - 不引入新的 MongoDB 集合 / API（复用现有帧入库与 health 通道）。
 

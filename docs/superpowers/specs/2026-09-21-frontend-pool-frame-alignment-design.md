@@ -1,6 +1,6 @@
 # 前端列表池对齐后端快照帧池（池源替换）设计
 
-> 状态：设计已确认（2026-09-21 用户确认：语义 = 列表池 membership 等于后端最新 half_hour 帧池；实现架构 = 方案 A 池源替换；四节设计整体确认）
+> 状态：设计已确认（2026-09-21 用户确认：语义 = 列表池 membership 等于后端最新 half_hour 帧池；实现架构 = 方案 A 池源替换；四节设计整体确认）；实施完成（2026-09-21，实施计划 docs/superpowers/plans/2026-09-21-frontend-pool-frame-alignment.md）；同日盘后实测核对通过（`pnpm test` 136 文件 1088 用例、`pnpm test:ranktrend` 20 文件 171 用例、两类 typecheck 全绿；真实浏览器两个会话复现：列表 provenance = `frame-pool@15:00`，列表 codes 与 15:00 收盘帧 stock-rows 全集精确一致 239/239，「全池状态结构」各格合计 239 与列表同数、无两池差异文案，注脚按「列表为 15:00 帧池 239 只，情绪区块为 EOD 槽，槽位暂不同步」的槽位滞后语义如实透出。未覆盖项留待办：停 8000 降级演练按任务约束禁止执行（不得启停用户生产服务）；devtools 网络面板直接目击两次请求 200 因 Vite dev 模块请求冲掉 performance 缓冲区未截取，以 curl 直连 8000 frames/stock-rows 均 200 + 页面 provenance/集合一致作等价证据；非交易日「当日无帧回退」真实环境待自然观察）
 > 触发：2026-09-21 用户裁决——「PLATFORM_CACHE_TTL_MS = 30 分钟——前端列表池是带缓存层的合并视图，其时点与采集时点天然错位，这个问题需要解决，前端列表池需和后端完全一致」
 > 前序：`docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md`（后端自治池已上线并实测验收；本 spec 取代其「前端零改动」非目标）
 > 依据：`AGENTS.md` §4.1/§10、`skills/fail-visible-data-pipelines/SKILL.md`、2026-09-21 全交易日实测证据（本文 §1）
