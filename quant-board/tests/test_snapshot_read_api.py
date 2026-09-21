@@ -79,6 +79,107 @@ def test_snapshot_stock_rows_api_supports_field_projection() -> None:
     ]
 
 
+def test_snapshot_stock_rows_include_analysis_attaches_persisted_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """include_analysis=true 把 snapshot_analysis 落库产物按 code 注入行（2026-09-21）。
+
+    行情列表观察六列首屏同步投影的读口：帧池种子行带上帧内 analyze 产物后，
+    前端不必等异步增强即可显示。fail-visible 合同：无落库产物的行不加 analysis 键
+    （不伪造空产物）；仓库无 load_snapshot_analysis（SQLite 本地/测试态）时
+    analysisAttached=0 且不报错。
+    """
+    rows = [
+        {"code": "600001", "snapshotId": "half_hour:2026-04-21:10:00", "name": "样本A", "rank": 1},
+        {"code": "600002", "snapshotId": "half_hour:2026-04-21:10:00", "name": "样本B", "rank": 2},
+    ]
+    persisted = {"600001": {"observation": {"lifecycle": {"stage": "crowded"}}}}
+    load_calls: list[tuple[str, str]] = []
+    suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+    dataset_id = f"dragonboard_analysis_attach_{suffix}"
+
+    class FakeDataset:
+        id = dataset_id
+        frame_count = 1
+        snapshot_count = 1
+        stock_row_count = len(rows)
+        sector_row_count = 0
+
+    class FakeRepo:
+        def get_dataset(self, dataset_id):
+            return FakeDataset()
+
+        def dataset_to_dict(self, dataset):
+            return {"id": dataset.id}
+
+        def list_snapshot_stock_rows(self, dataset_id, **kwargs):
+            return {"rows": [dict(row) for row in rows], "source": "mongodb"}
+
+        def load_snapshot_analysis(self, dataset_id, snapshot_id, codes=None):
+            load_calls.append((dataset_id, snapshot_id))
+            return dict(persisted)
+
+    class RepoWithoutAnalysis:
+        """模拟 SQLite 本地/测试态仓库：不实现 snapshot_analysis 读方法。"""
+
+        def get_dataset(self, dataset_id):
+            return FakeDataset()
+
+        def dataset_to_dict(self, dataset):
+            return {"id": dataset.id}
+
+        def list_snapshot_stock_rows(self, dataset_id, **kwargs):
+            return {"rows": [dict(row) for row in rows], "source": "sqlite"}
+
+    monkeypatch.setattr(
+        "backend.main.create_repository", lambda db, enable_backup=True: FakeRepo()
+    )
+    client = TestClient(app)
+
+    attached = client.get(
+        "/api/snapshots/stock-rows",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_id": "half_hour:2026-04-21:10:00",
+            "include_analysis": True,
+        },
+    )
+    assert attached.status_code == 200, attached.text
+    body = attached.json()
+    assert load_calls == [(dataset_id, "half_hour:2026-04-21:10:00")]
+    assert body["analysisAttached"] == 1
+    assert body["rows"][0]["analysis"] == persisted["600001"]
+    assert "analysis" not in body["rows"][1]
+
+    bare = client.get(
+        "/api/snapshots/stock-rows",
+        params={
+            "dataset_id": dataset_id,
+            "snapshot_id": "half_hour:2026-04-21:10:00",
+        },
+    )
+    assert bare.status_code == 200, bare.text
+    assert bare.json()["analysisAttached"] == 0
+    assert all("analysis" not in row for row in bare.json()["rows"])
+
+    monkeypatch.setattr(
+        "backend.main.create_repository",
+        lambda db, enable_backup=True: RepoWithoutAnalysis(),
+    )
+    without_loader = client.get(
+        "/api/snapshots/stock-rows",
+        params={
+            "dataset_id": dataset_id,
+            # 与 attached 请求区分缓存 key：本机 Redis 存活时同 key 会命中上一响应
+            "snapshot_id": "half_hour:2026-04-21:10:30",
+            "include_analysis": True,
+        },
+    )
+    assert without_loader.status_code == 200, without_loader.text
+    assert without_loader.json()["analysisAttached"] == 0
+    assert all("analysis" not in row for row in without_loader.json()["rows"])
+
+
 def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")

@@ -438,9 +438,12 @@ def test_analyze_new_hotlist_stock_without_history_gets_signals_from_current_fra
     assert analysis["decision"]["final"]["signal"] in ("hold", "buy", "sell")
 
 
-def test_analyze_new_stock_without_avg_rank_num_stays_fail_visible(monkeypatch):
-    # 2026-08-25（P1 复盘）：新股 avgRankNum 全平台缺失（<=0 被 attention_rank_lookup 过滤）
-    # 时无法算出截面 percentile —— 保持 fail-visible（不产出、不编造），待快照落库后有历史再算。
+def test_analyze_new_stock_without_avg_rank_num_gets_live_average_rank(monkeypatch):
+    # 2026-09-22 用户裁决（更新 2026-08-25 P1 复盘的"不产出"口径）：收盘帧后新入榜、
+    # 行上无有效 avgRankNum 的股票，实时链按八平台 rank 补均榜
+    # （weighted_platform_percentile_v1）后注册单点序列进分析，不再整只丢弃；
+    # fail-visible 精神由样本不足降级保留（趋势/周期单点样本走 insufficient，
+    # 不伪造历史 percentile——序列仍只有实时单点）。
     frames = [
         {
             "tradingDate": f"2026-08-0{day}",
@@ -464,7 +467,7 @@ def test_analyze_new_stock_without_avg_rank_num_stays_fail_visible(monkeypatch):
         "backend.data.repositories.repository_factory.create_repository",
         lambda db, enable_backup=True: FakeRepo(frames),
     )
-    # 新 code=688888 只在 currentFrame 出现，且 avgRankNum=0（全平台缺失）
+    # 新 code=688888 只在 currentFrame 出现，且 avgRankNum=0（无均榜输入，仅有行级 rank）
     response = client.post("/api/ranktrend/analyze", json={
         "snapshotType": "half_hour",
         "codes": ["688888"],
@@ -472,6 +475,10 @@ def test_analyze_new_stock_without_avg_rank_num_stays_fail_visible(monkeypatch):
             "tradingDate": "2026-08-05",
             "slotTime": "current:1",
             "stocks": [
+                {"code": f"F{index:02d}", "emRank": index + 1, "avgRankNum": float(index + 1),
+                 "change": 1.0, "volumeRatio": 1.0, "zlje": 10, "zljzb": 0.1}
+                for index in range(60)
+            ] + [
                 {"code": "002279", "rank": 1, "avgRankNum": 1, "change": 5.0, "volumeRatio": 1.5, "zlje": 10, "zljzb": 0.1, "turnover": 8.0, "turnoverRate": 9.0},
                 {"code": "603580", "rank": 2, "avgRankNum": 2, "change": 3.0, "volumeRatio": 1.2, "zlje": 5, "zljzb": 0.05, "turnover": 6.0, "turnoverRate": 7.0},
                 {"code": "688888", "rank": 3, "avgRankNum": 0, "change": 20.0, "volumeRatio": 3.0, "zlje": 30, "zljzb": 0.3, "turnover": 15.0, "turnoverRate": 18.0},
@@ -480,8 +487,17 @@ def test_analyze_new_stock_without_avg_rank_num_stays_fail_visible(monkeypatch):
     })
     assert response.status_code == 200
     last = response.json()["frames"][-1]
-    # 不产出（fail-visible）：cur_pcts 无该 code（avgRankNum<=0 被过滤）→ 不注册、不编造 percentile
-    assert all(s["code"] != "688888" for s in last["stocks"])
+    by_code = {stock["code"]: stock for stock in last["stocks"]}
+    # 新进股票产出分析并带实时排名（不整只丢弃）
+    assert "688888" in by_code
+    new_analysis = by_code["688888"]["analysis"]
+    # 无任何平台 rank 字段 → 均榜按"缺失平台=榜尾满权"规则计（filler 提供 em 榜
+    # total=60，688888 无 em rank → 100 分）：不编造成靠前排名，fail-visible
+    assert new_analysis["meta"]["liveRanking"]["avgRankNum"] == 100.0
+    assert new_analysis["meta"]["liveRanking"]["compRank"] is not None
+    # 单点序列：样本不足如实降级，不伪造趋势/周期结论
+    sample_quality = new_analysis["meta"].get("sampleQuality") or {}
+    assert sample_quality.get("status") == "insufficient"
 
 
 def test_analyze_current_frame_market_median_uses_last_snapshot_frame(monkeypatch):
@@ -545,6 +561,137 @@ def test_analyze_current_frame_market_median_uses_last_snapshot_frame(monkeypatc
     # relativeToMarket 使用同一快照口径（crossSection 一致）
     cs = last["stocks"][0]["analysis"]["observation"]["crossSection"]
     assert cs["relativeToMarket"] is not None
+
+
+def _cycle_divergence_frames():
+    """C00 位次序列 [2,1,3]（30 只截面）：权威口径 cycle.stage=reversal（引擎实证），
+    复制尾口径判 cooling——两条口径可判别。"""
+
+    def make_rows(c00_rank):
+        rows = []
+        for index, value in enumerate(v for v in range(1, 32) if v != c00_rank):
+            rows.append({
+                "code": f"C{index + 1:02d}",
+                "rank": value,
+                "avgRankNum": float(value),
+                "change": 1.0,
+                "volumeRatio": 1.2,
+                "zlje": 10,
+                "zljzb": 0.1,
+            })
+        rows.append({
+            "code": "C00",
+            "rank": c00_rank,
+            "avgRankNum": float(c00_rank),
+            "change": 1.0,
+            "volumeRatio": 1.2,
+            "zlje": 10,
+            "zljzb": 0.1,
+        })
+        return rows
+
+    return [
+        {
+            "tradingDate": f"2026-07-{day:02d}",
+            "slotTime": "14:00",
+            "type": "half_hour",
+            "timestamp": day,
+            "rows": make_rows(c00_rank),
+            "sentiment": {"phaseName": "启动"},
+            "marketStats": {},
+        }
+        for day, c00_rank in zip((1, 2, 3), (2, 1, 3))
+    ]
+
+
+def test_analyze_live_ranking_skipped_below_min_pool_size(monkeypatch):
+    # code review C1：单股/小池请求（current 帧行数 < 门槛）不得注入 liveRanking。
+    # 池截断会让 infer_platform_totals 把榜单总数推断为池内最大 rank → avgRankNum 恒
+    # 100、compRank 恒 1 的失真值，经前端写回污染主列表排名字段。门槛下 analysis 本体
+    # 照常产出（面板不受影响），仅跳过 liveRanking。
+    frames = [{
+        "tradingDate": "2026-07-31",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 31,
+        "rows": [
+            {"code": f"C{index:02d}", "rank": index + 1, "avgRankNum": float(index + 1),
+             "change": 1.0, "volumeRatio": 1.2, "zlje": 10, "zljzb": 0.1}
+            for index in range(5)
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C00"],
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            "stocks": [
+                {"code": "C00", "emRank": 1, "avgRankNum": 12.5, "change": 5.0,
+                 "volumeRatio": 2.0, "zlje": 100, "zljzb": 3.0, "turnover": 500,
+                 "turnoverRate": 10},
+            ],
+        },
+    })
+    assert response.status_code == 200
+    stock = response.json()["frames"][-1]["stocks"][0]
+    # analysis 本体照常（面板可用）
+    assert stock["analysis"].get("observation")
+    # 失真 liveRanking 不注入
+    assert "liveRanking" not in (stock["analysis"].get("meta") or {})
+
+
+def test_analyze_current_frame_cycle_matches_authoritative_series(monkeypatch):
+    # 2026-09-19 修复：live current 帧的序列复制尾点不得进入 cycle 等趋势因子输入。
+    # 复制尾让 velocity 恒 0、accel=-真实velocity，点火/扩散/反转判据系统性失效
+    # （实测 2026-09-18 EOD 全池分布：反转 29→7、扩散 10→1、点火 2→0），导致行情
+    # 总览周期列与热榜情绪面板「全池状态结构」分布不一致。
+    # 合同：current 帧 cycle.stage 必须与权威序列（无 currentFrame）最后帧一致；
+    # 与 2026-09-13 crossSection 去复制尾同模式（2026-08-23 设计意图：横截面/趋势/
+    # 周期只用权威源，当前帧仅作展示帧）。单点序列（新进热榜）无复制尾，不受影响。
+    frames = _cycle_divergence_frames()
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    base_payload = {"snapshotType": "half_hour", "codes": ["C00"]}
+
+    authoritative = client.post("/api/ranktrend/analyze", json=base_payload).json()
+    auth_stage = authoritative["frames"][-1]["stocks"][0]["analysis"]["cycle"]["stage"]
+    # 权威口径判别力锚：该序列必须判 reversal（若引擎参数未来调整导致此锚失效，
+    # 应同步更换序列，保持「两口径可判别」的测试目的）
+    assert auth_stage == "reversal"
+
+    # current 帧行与最后历史帧截面相同（周六/盘后打开页面的复制尾场景）
+    replicated = client.post("/api/ranktrend/analyze", json={
+        **base_payload,
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            "stocks": frames[-1]["rows"],
+        },
+    }).json()
+    assert replicated["frames"][-1]["frameKey"] == "2026-07-31 current:1"
+    live_stage = replicated["frames"][-1]["stocks"][0]["analysis"]["cycle"]["stage"]
+    assert live_stage == auth_stage, (
+        f"current 帧复制尾改变了 cycle 判定: 权威={auth_stage}, live={live_stage}"
+    )
+    observation_stage = replicated["frames"][-1]["stocks"][0]["analysis"]["observation"]["lifecycle"]["stage"]
+    assert observation_stage == auth_stage
 
 
 def test_analyze_fuses_insufficient_resonance_into_hold_final(monkeypatch):
@@ -1218,3 +1365,164 @@ def test_analyze_full_market_single_frame_over_threshold(monkeypatch):
         assert "observation" in analysis
         assert "technical" in analysis
         assert "meta" in analysis
+
+
+def test_analyze_current_frame_attaches_live_ranking(monkeypatch):
+    """2026-09-22 实时口径（用户裁决）：current 帧响应附 meta.liveRanking
+    （实时 compScore/compRank/avgRankNum/platforms，均榜按平台 rank 实时推算）。
+    帧池 golden（快照行）自此降级为历史回溯兜底；落库 snapshot_analysis 不含
+    liveRanking（稳定帧口径，与实时口径分离）。"""
+    frames = [{
+        "tradingDate": "2026-07-31",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 31,
+        "rows": [
+            {"code": f"C{index:02d}", "rank": index + 1, "avgRankNum": float(index + 1),
+             "change": 1.0, "volumeRatio": 1.2, "zlje": 10, "zljzb": 0.1}
+            for index in range(5)
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    # 池规模 ≥ MIN_LIVE_RANKING_POOL_SIZE（code review C1：小池 totals 推断失真不注入）
+    current_stocks = [
+        {
+            "code": f"F{index:02d}",
+            "emRank": index + 1,
+            "avgRankNum": float(index + 1),
+            "change": 1.0,
+            "volumeRatio": 1.0,
+            "zlje": 10,
+            "zljzb": 0.1,
+        }
+        for index in range(60)
+    ]
+    current_stocks += [
+        {
+            "code": "C00",
+            "emRank": 1,
+            "thsRank": 2,
+            "kplRank": 1,
+            "avgRankNum": 1.5,
+            "change": 5.0,
+            "volumeRatio": 2.0,
+            "zlje": 100,
+            "zljzb": 3.0,
+            "turnover": 500,
+            "turnoverRate": 10,
+        },
+        {
+            "code": "C01",
+            "emRank": 5,
+            "thsRank": 4,
+            "avgRankNum": 4.5,
+            "change": -1.0,
+            "volumeRatio": 0.8,
+            "zlje": -50,
+            "zljzb": -2.0,
+            "turnover": 80,
+            "turnoverRate": 3,
+        },
+    ]
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C00", "C01"],
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            # 池规模 ≥ MIN_LIVE_RANKING_POOL_SIZE（code review C1：小池不注入 liveRanking）
+            "stocks": [
+                {"code": f"F{index:02d}", "emRank": index + 1, "avgRankNum": float(index + 1),
+                 "change": 1.0, "volumeRatio": 1.0, "zlje": 10, "zljzb": 0.1}
+                for index in range(60)
+            ] + [
+                {"code": "C00", "emRank": 1, "thsRank": 2, "kplRank": 1, "avgRankNum": 1.5,
+                 "change": 5.0, "volumeRatio": 2.0, "zlje": 100, "zljzb": 3.0,
+                 "turnover": 500, "turnoverRate": 10},
+                {"code": "C01", "emRank": 5, "thsRank": 4, "avgRankNum": 4.5,
+                 "change": -1.0, "volumeRatio": 0.8, "zlje": -50, "zljzb": -2.0,
+                 "turnover": 80, "turnoverRate": 3},
+            ],
+        },
+    })
+    assert response.status_code == 200
+    last = response.json()["frames"][-1]
+    by_code = {stock["code"]: stock for stock in last["stocks"]}
+    live_a = by_code["C00"]["analysis"]["meta"].get("liveRanking")
+    live_b = by_code["C01"]["analysis"]["meta"].get("liveRanking")
+    assert live_a and live_b, "current 帧必须携带 meta.liveRanking"
+    # C00 平台排名全面靠前 → 实时综合排名优于 C01
+    assert live_a["compRank"] < live_b["compRank"]
+    assert live_a["avgRankNum"] < live_b["avgRankNum"]
+    assert live_a["platforms"] == 3  # em/ths/kpl 三平台有效
+    # 实时注入不污染请求行（调用方数据不被修改）
+    assert "compScore" not in current_stocks[0]
+    assert "avgRank" not in current_stocks[0]
+
+
+def test_analyze_newly_listed_stock_without_avg_rank_gets_live_ranking(monkeypatch):
+    """收盘帧后新入榜股票（无历史序列、行无 avgRankNum）不被 gate 整只丢弃（2026-09-22 实测反馈）。
+
+    合同：实时链对缺失 avgRankNum 的行按八平台 rank 补均榜（weighted_platform_percentile_v1），
+    使其注册单点序列进分析（共振/热度/量价可算，趋势/周期样本不足按既有 insufficient 口径），
+    并携带 meta.liveRanking（实时均榜+综合排名）。已有有效 avgRankNum 的行不被覆盖。
+    """
+    frames = [{
+        "tradingDate": "2026-07-31",
+        "slotTime": "14:00",
+        "type": "half_hour",
+        "timestamp": 31,
+        "rows": [
+            {"code": "C00", "rank": 1, "avgRankNum": 12.5,
+             "change": 1.0, "volumeRatio": 1.2, "zlje": 10, "zljzb": 0.1}
+            for _ in range(1)
+        ],
+        "sentiment": {"phaseName": "启动"},
+        "marketStats": {},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.create_repository",
+        lambda db, enable_backup=True: FakeRepo(frames),
+    )
+    response = client.post("/api/ranktrend/analyze", json={
+        "snapshotType": "half_hour",
+        "codes": ["C00", "NEW1"],
+        "currentFrame": {
+            "tradingDate": "2026-07-31",
+            "slotTime": "current:1",
+            "stocks": [
+                # C00：帧池 golden 行，带有效 avgRankNum（不得被实时均榜覆盖）
+                {"code": "C00", "emRank": 1, "avgRankNum": 12.5, "change": 2.0,
+                 "volumeRatio": 1.5, "zlje": 20, "zljzb": 1.0, "turnover": 400, "turnoverRate": 10},
+                # NEW1：收盘帧后新入榜，无历史、无 avgRankNum，仅当前平台排名
+                {"code": "NEW1", "emRank": 30, "avgRankNum": None, "change": 9.9,
+                 "volumeRatio": 3.0, "zlje": 50, "zljzb": 2.0, "turnover": 900, "turnoverRate": 20},
+            ],
+        },
+    })
+    assert response.status_code == 200
+    last = response.json()["frames"][-1]
+    by_code = {stock["code"]: stock for stock in last["stocks"]}
+    # 新进股票不再被 gate 整只丢弃：补实时均榜后注册单点序列，产出分析
+    assert "NEW1" in by_code, f"新进股票缺失: {sorted(by_code)}"
+    new_analysis = by_code["NEW1"]["analysis"]
+    # 单点序列：样本不足如实降级，不伪造趋势/周期结论
+    sample_quality = new_analysis["meta"].get("sampleQuality") or {}
+    assert sample_quality.get("status") == "insufficient"
+    # 小池（2 行 < MIN_LIVE_RANKING_POOL_SIZE）不注入 liveRanking（review C1 门槛，
+    # 失真防护由 test_analyze_live_ranking_skipped_below_min_pool_size 锁定）；
+    # NEW1 的实时均榜已补在行输入上（attention 序列可用），只是不以 liveRanking 下发
+    assert "liveRanking" not in (new_analysis.get("meta") or {})

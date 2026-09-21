@@ -32,6 +32,11 @@ from backend.analysis.theme.momentum import (
 from backend.data.repositories import repository_factory
 from backend.data.cache import snapshot_cache
 from backend.core.settings import get_settings
+from backend.analysis.ranktrend.ranking.comprehensive_rank import (
+    average_rank_fields,
+    compute_live_ranking,
+    infer_platform_totals,
+)
 
 router = APIRouter(tags=["ranktrend-analyze"])
 
@@ -44,6 +49,10 @@ SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
 # 因此 TTL 只作为兜底，不需要再对齐某个固定刷新周期。
 RANK_TREND_ANALYZE_CACHE_TTL_INTRA_DAY_SECONDS = 300
 RANK_TREND_ANALYZE_CACHE_TTL_AFTER_HOURS_SECONDS = 1800
+
+# liveRanking 注入的最小 current 帧池规模（code review C1）：
+# 全池 ≈240 只，单股/小池面板请求的榜单总数无法从池内推断，注入即失真。
+MIN_LIVE_RANKING_POOL_SIZE = 50
 
 
 def _is_intraday_trading_time(now: datetime) -> bool:
@@ -585,11 +594,21 @@ def _analyze_frames(
             # _load_frames_for_analysis 的复制项（复用 bars[-1] 权威 pct 防漂移），
             # 保留它 crossSection 的 delta 恒 0（A/D 档数学不可达）。crossSection 输入
             # 去掉复制尾：level 不变（权威 pct），delta = 上一权威帧 vs 上上权威帧
-            # （滞后一个快照周期的真实变化）。technical/cycle/趋势/共振等其它因子
-            # 仍用完整 prefix（golden 不漂移）。单点序列（新进热榜）无复制尾，不去。
+            # （滞后一个快照周期的真实变化）。单点序列（新进热榜）无复制尾，不去。
+            # 2026-09-19 修复（行情总览周期列与热榜情绪面板分布不一致）：复制尾同样
+            # 污染 cycle/趋势/共振等序列因子——末两项恒相等使 velocity 恒 0、
+            # accel=-真实velocity，点火/扩散/反转判据系统性失效（实测 2026-09-18
+            # EOD 全池分布：反转 29→7、扩散 10→1、点火 2→0，大量翻 cooling）。
+            # 序列因子输入统一去复制尾，回到权威序列口径（与快照分析链
+            # current_is_last_bundle_frame 同帧跳过等价）；meta 展示值不受影响
+            # （复制项 rank/pct 与权威尾值相同）。原注释"technical/cycle 等其它因子
+            # 仍用完整 prefix（输入不变）"是错的——序列多一个点就是输入变了。
+            trend_ranks, trend_percentiles = ranks, percentiles
             cross_section_percentiles: list[float] | None = None
             if _is_current_frame(frame) and len(percentiles) >= 2:
                 cross_section_percentiles = percentiles[:-1]
+                trend_ranks = ranks[:-1]
+                trend_percentiles = percentiles[:-1]
             if not full_history and index != last_frame_index:
                 # 首屏全市场场景（无 frame_keys）：历史帧仅输出轻量 meta，
                 # 前端 updateLatestAnalysisSeries 只消费 currentRank/currentPercentile；
@@ -624,7 +643,7 @@ def _analyze_frames(
                     parsed_bar = bar_of(row)
                     atr_history.append(parsed_bar)
             full_tasks.append((
-                engine.config, stock, frame, ranks, percentiles, regime, hot_themes,
+                engine.config, stock, frame, trend_ranks, trend_percentiles, regime, hot_themes,
                 momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
                 price_changes, amount_history,
                 atr_history,
@@ -761,6 +780,10 @@ def _normalize_current_frame(current_frame: dict[str, Any] | None) -> dict[str, 
             {key: stock.get(key) for key in (
                 "code", "rank", "avgRankNum", "change", "volumeRatio", "zlje", "zljzb",
                 "amount", "turnover", "turnoverRate", "fundPenetration", "platforms",
+                # 2026-09-22 实时均榜输入（code review I1）：八平台 rank 参与 liveRanking
+                # 与 attention 横截面，必须进指纹，否则 rank 变化时命中旧 liveRanking 缓存
+                "emRank", "thsRank", "kplRank", "tdxRank",
+                "xqRank", "clsRank", "tgbRank", "dzhRank",
             )}
             for stock in stocks
             if isinstance(stock, dict)
@@ -803,6 +826,20 @@ def _analyze_cache_key(
     )
 
 
+def _has_valid_avg_rank(row: dict[str, Any]) -> bool:
+    """行是否带可用的 avgRankNum（有限、>0、<999 哨兵）。
+
+    帧池 golden 行与前端已算均榜的行均视为有效；缺失/占位行由实时链
+    （analyze currentFrame）按八平台 rank 实时补均榜，使新进股票能进
+    attention 横截面。
+    """
+    try:
+        avg = float(row.get("avgRankNum"))
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(avg) and 0 < avg < 999
+
+
 @router.post("/api/ranktrend/analyze")
 async def analyze_ranktrend(
     payload: dict[str, Any],
@@ -838,6 +875,25 @@ async def analyze_ranktrend(
         engine = RankTrendPythonEngine(
             sentiment_provider=make_hotlist_sentiment_provider(dataset_id, snapshot_type),
         )
+        # 收盘帧后新入榜股票（2026-09-22 实测反馈）：无历史帧序列、行上也无 avgRankNum
+        # （前端实时热榜行不带均榜）→ attention_rank_lookup 会整只跳过 → 五维信号/均榜/
+        # 综合排名全缺。对**缺失 avgRankNum 的行**实时补均榜（weighted_platform_percentile_v1，
+        # 与采集入库同公式；已有有效 avgRankNum 的行不动，保持帧池 golden 口径），
+        # 使新进股票能注册单点序列进分析（趋势/周期样本不足按既有 insufficient 口径降级）。
+        # 仅实时链填充；snapshot_analysis 持久化链不走本闭包，帧内稳定口径不受影响。
+        if current_frame:
+            current_input_rows = [
+                row for row in (current_frame.get("stocks") or []) if isinstance(row, dict)
+            ]
+            missing_avg_rows = [
+                row
+                for row in current_input_rows
+                if not _has_valid_avg_rank(row)
+            ]
+            if missing_avg_rows:
+                totals = infer_platform_totals(current_input_rows)
+                for row in missing_avg_rows:
+                    average_rank_fields(row, totals)
         raw_frames, series_by_code = _load_frames_for_analysis(
             repo, dataset_id, snapshot_type, frame_keys, current_frame, codes=codes
         )
@@ -845,6 +901,42 @@ async def analyze_ranktrend(
             engine, raw_frames, series_by_code, codes, dataset_id=dataset_id,
             full_history=bool(frame_keys),
         )
+        # 实时综合排名（2026-09-22 用户裁决：列表均榜/综合改 current_frame 实时口径）：
+        # 对 current 帧行跑 golden 五维评分 + weighted_platform_percentile_v1 均榜
+        # （backend.analysis.ranktrend.ranking，与采集入库同一实现），注入最后一帧
+        # stocks 的 ``analysis.meta.liveRanking``。帧池 golden（快照行 compRank/
+        # avgRankNum）降级为 analyze 不可用时的历史回溯兜底。缓存键含 currentFrame
+        # 指纹，注入结果随响应整体缓存，不破坏命中一致性。
+        #
+        # 池规模门槛（code review C1）：单股面板请求（codes=[code]）的池被截断，
+        # infer_platform_totals 会把榜单总数推断为池内最大 rank → avgRankNum 恒
+        # 100、compRank 恒 1 的失真值，随缓存/写回污染主列表排名字段。低于门槛
+        # 不注入 liveRanking（面板消费 analysis 本体，不受影响）。
+        if current_frame and frames_out:
+            current_rows = [row for row in (current_frame.get("stocks") or []) if isinstance(row, dict)]
+            live_by_code: dict[str, dict[str, Any]] = {}
+            if len(current_rows) >= MIN_LIVE_RANKING_POOL_SIZE:
+                scored = compute_live_ranking([dict(row) for row in current_rows])
+                live_by_code = {
+                    str(row.get("code")): row
+                    for row in scored
+                    if row.get("code")
+                }
+            for item in frames_out[-1].get("stocks", []):
+                live_row = live_by_code.get(str(item.get("code")))
+                if not live_row:
+                    continue
+                analysis = item.get("analysis")
+                if not isinstance(analysis, dict):
+                    continue
+                meta = analysis.setdefault("meta", {})
+                if isinstance(meta, dict):
+                    meta["liveRanking"] = {
+                        "compScore": live_row.get("compScore"),
+                        "compRank": live_row.get("compRank"),
+                        "avgRankNum": live_row.get("avgRankNum"),
+                        "platforms": live_row.get("platforms"),
+                    }
         return {
             "ok": True,
             "frames": frames_out,

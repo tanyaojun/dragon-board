@@ -2,13 +2,17 @@
 """comprehensive_rank 后端五维综合排名单测（2026-08-23 前后端分离 G1）。"""
 from backend.analysis.ranktrend.comprehensive_rank import (
     FUND_PENETRATION,
+    HOTLIST_WEIGHTS,
     HOT_RANK,
     MONEY_RATIO,
     OPTIMAL_TURNOVER,
     TURNOVER_RATE,
     TURNOVER_SIGMA,
     VOLUME,
+    average_rank_fields,
     compute_comprehensive_scores,
+    compute_live_ranking,
+    infer_platform_totals,
 )
 
 
@@ -65,3 +69,54 @@ def test_normalize_reverse_gives_higher_for_smaller_rank():
     r = compute_comprehensive_scores([good, bad])
     by = {s["code"]: s for s in r}
     assert by["g"]["compScore"] > by["b"]["compScore"]
+
+
+def test_average_rank_fields_matches_weighted_percentile_formula():
+    # weighted_platform_percentile_v1：rank/total*100*weight 加权平均；缺失平台按 100 计权
+    row = {"code": "a", "emRank": 1, "thsRank": 10, "kplRank": 999}
+    totals = {"eastmoney": 100, "ths": 100, "kpl": 50}
+    average_rank_fields(row, totals)
+    expected = (
+        (1 / 100) * 100 * HOTLIST_WEIGHTS["eastmoney"]
+        + (10 / 100) * 100 * HOTLIST_WEIGHTS["ths"]
+        + 100 * HOTLIST_WEIGHTS["kpl"]
+    ) / (HOTLIST_WEIGHTS["eastmoney"] + HOTLIST_WEIGHTS["ths"] + HOTLIST_WEIGHTS["kpl"])
+    assert row["platforms"] == 2  # 999 哨兵 = kpl 缺失
+    assert abs(row["avgRankNum"] - expected) < 1e-9
+    assert row["avgRank"] == f"{row['avgRankNum']:.1f}"
+
+
+def test_average_rank_fields_total_missing_platform_skips_weight():
+    # platform_totals 缺某平台 → 该平台不计权（与采集链 total<=0 语义一致）
+    row = {"code": "a", "emRank": 1}
+    average_rank_fields(row, {"eastmoney": 100})
+    assert abs(row["avgRankNum"] - 1.0) < 1e-9
+    assert row["platforms"] == 1
+
+
+def test_infer_platform_totals_uses_max_rank_below_sentinel():
+    rows = [
+        {"emRank": 96, "xqRank": 58, "kplRank": 999},
+        {"emRank": 40, "xqRank": 3, "kplRank": 50},
+    ]
+    totals = infer_platform_totals(rows)
+    assert totals["eastmoney"] == 96
+    assert totals["xueqiu"] == 58
+    assert totals["kpl"] == 50
+    assert totals["tgb"] == 0  # 整榜缺失
+
+
+def test_compute_live_ranking_produces_full_row_ranking():
+    # 2026-09-22 实时口径：均榜输入由平台 rank 实时推算，compScore/compRank 随之产出
+    rows = [
+        {"code": "a", "emRank": 1, "thsRank": 2, "zljzb": 5, "turnoverRate": 12, "turnover": 300},
+        {"code": "b", "emRank": 90, "thsRank": 80, "zljzb": -5, "turnoverRate": 30, "turnover": 100},
+    ]
+    out = compute_live_ranking([dict(r) for r in rows])
+    by = {r["code"]: r for r in out}
+    assert by["a"]["compRank"] < by["b"]["compRank"]
+    assert by["a"]["platforms"] == 2
+    assert by["a"]["avgRankNum"] < by["b"]["avgRankNum"]  # a 平台排名全面靠前
+    # 原输入行不被污染（路由层传副本调用）
+    assert "compScore" not in rows[0]
+    assert "avgRankNum" not in rows[0]

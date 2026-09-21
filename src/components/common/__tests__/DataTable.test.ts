@@ -48,28 +48,18 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/trade_hypothesis/)
   })
 
-  test('renders compact opening weak-to-strong badge in the stock name cell', () => {
+  test('removes the opening weak-to-strong row highlight and badge (2026-09-17 用户口径)', () => {
     const source = dataTableSource()
 
-    expect(source).toContain('opening-signal-badge')
-    expect(source).toContain('opening-signal-row')
-    expect(source).toContain('竞强')
-    expect(source).toMatch(/openingSignalStore\.signalsByCode/)
-    expect(source).toMatch(/openingSignalStore\.start\(\)/)
-    expect(source).toMatch(/openingSignalStore\.stop\(\)/)
-    expect(source).toMatch(/hasOpeningWeakToStrongSignal\(\s*stock\s*\)/)
-    expect(source).not.toMatch(/fetchTodaySignals/)
-    expect(source).not.toMatch(/openingSignalClient\.postSignal/)
-  })
-
-  test('only highlights positive opening weak-to-strong stages', () => {
-    const source = dataTableSource()
-
-    expect(source).toContain('isOpeningWeakToStrongHighlightStage')
-    expect(source).toMatch(/hasOpeningWeakToStrongSignal[\s\S]*isOpeningWeakToStrongHighlightStage/)
-    expect(source).toContain("stage === 'auctionConditionPassed'")
-    expect(source).toContain("stage === 'gapAlert'")
-    expect(source).toContain("stage === 'trendConfirm'")
+    // 行高亮、竞强徽章、store 消费与启停全部清理，不再残留
+    expect(source).not.toContain('opening-signal-row')
+    expect(source).not.toContain('opening-signal-badge')
+    expect(source).not.toContain('竞强')
+    expect(source).not.toContain('hasOpeningWeakToStrongSignal')
+    expect(source).not.toContain('openingSignalTitle')
+    expect(source).not.toContain('isOpeningWeakToStrongHighlightStage')
+    expect(source).not.toContain('openingSignalStore')
+    expect(source).not.toContain('openingSignalsByCode')
   })
 
   test('does not render the redundant RankTrend lifecycle status column', () => {
@@ -481,6 +471,24 @@ describe('DataTable row detail interactions', () => {
     // 采集器全平台缺失时 avgRankNum=999 → avgRank="999.0" 字符串，须与 compRank/平台 rank 999 一致显示 '-'
     const source = dataTableSource()
     expect(source).toContain("Number(value) >= 999 ? '-' : value")
+  })
+
+  test('trend column triangle badge is driven by MACD cross events (2026-09-21 用户裁决)', () => {
+    const source = dataTableSource()
+
+    // 趋势列 ▲▼ 徽章只认 py golden technical.macd.cross（交叉帧才非 none 的事件语义），
+    // 不再使用 MA10×MA20 徽章口径；缺字段 → 'none' → 无徽章
+    expect(source).toContain("getMacdCrossBadge(stock) === 'golden'")
+    expect(source).toContain("getMacdCrossBadge(stock) === 'death'")
+    expect(source).toContain('title="MACD 金叉"')
+    expect(source).toContain('title="MACD 死叉"')
+    expect(source).toMatch(/const\s+getMacdCrossBadge\s*=\s*\(stock:\s*any\)\s*=>\s*[\s\S]*?technical\?\.macd\?\.cross/)
+    // 徽章行不再消费 MA 交叉口径（ma-badge 只由 getMacdCrossBadge 驱动）
+    expect(source).not.toMatch(/getMaCross\(stock\)[^?]*\?\?\s*'[\s\S]{0,80}ma-badge/)
+    expect(source).not.toContain('title="MA10×MA20 金叉"')
+    expect(source).not.toContain('title="MA10×MA20 死叉"')
+    // MA 交叉因子本身保留：五因子投票与 tooltip 展示仍消费 getMaCross
+    expect(source).toContain('getMaCross(stock)')
   })
 
 })

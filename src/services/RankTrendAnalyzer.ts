@@ -464,12 +464,18 @@ export class RankTrendAnalyzer {
     }
 
     const stocks = typeof dataLayer.getStocks === 'function' ? dataLayer.getStocks() : []
+    // rank 类哨兵（DEFAULT_RANK=999 / ≥999 占位）不传后端：实时综合评分与均榜
+    // 的归一化会把占位值当真实排名（2026-09-22 实时口径修复）
+    const finiteRank = (value: unknown): number | undefined => {
+      const parsed = toOptionalFiniteNumber(value)
+      return parsed != null && parsed < 999 ? parsed : undefined
+    }
     const currentFrameStocks = stocks
       .filter((stock: any) => remoteCodes.includes(String(stock?.code)))
       .map((stock: any) => ({
         code: String(stock?.code),
-        rank: toOptionalFiniteNumber(stock?.compRank ?? stock?.rank),
-        avgRankNum: toOptionalFiniteNumber(stock?.avgRankNum),
+        rank: finiteRank(stock?.compRank ?? stock?.rank),
+        avgRankNum: finiteRank(stock?.avgRankNum),
         change: toOptionalFiniteNumber(stock?.change),
         volumeRatio: toOptionalFiniteNumber(stock?.volumeRatio),
         zlje: toOptionalFiniteNumber(stock?.zlje),
@@ -487,6 +493,16 @@ export class RankTrendAnalyzer {
         turnoverRate: toOptionalFiniteNumber(stock?.turnoverRate),
         fundPenetration: toOptionalFiniteNumber(stock?.fundPenetration),
         platforms: toOptionalFiniteNumber(stock?.platforms),
+        // 八平台 rank 透传（2026-09-22 实时均榜输入）：后端按 weighted_platform_percentile_v1
+        // 对 current 帧行实时算 avgRankNum（榜单总数由行内每平台最大 rank 推断）
+        emRank: finiteRank(stock?.emRank),
+        thsRank: finiteRank(stock?.thsRank),
+        kplRank: finiteRank(stock?.kplRank),
+        tdxRank: finiteRank(stock?.tdxRank),
+        xqRank: finiteRank(stock?.xqRank),
+        clsRank: finiteRank(stock?.clsRank),
+        tgbRank: finiteRank(stock?.tgbRank),
+        dzhRank: finiteRank(stock?.dzhRank),
         // 题材暴露字段：题材动量共振需要在当前帧内做个股-题材匹配；
         // dataLayer 的 themes 是详情对象数组，这里规范化为名称/ID 列表
         themes: Array.isArray(stock?.themes)

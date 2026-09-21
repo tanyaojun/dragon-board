@@ -20,6 +20,8 @@ import { extraDataProjector } from './ExtraDataProjector'
 import {
   buildFrameSeedStock,
   applyGoldenFieldsToMerged,
+  fetchLatestGoldenFrameRows,
+  fetchGoldenRowsForCodes,
   fetchLatestFramePool,
   filterPlatformDataToCodes,
 } from './framePoolSource'
@@ -970,10 +972,39 @@ class DataLoaderService {
         existingMap,
       }),
     )
+    let goldenFrameInfo: { tradingDate: string; slotTime: string } | null = null
     if (framePoolMode) {
       // C1 修复（2026-09-21 审查）：种子只补缺失会让 golden 冻结在首次入池帧、降级恢复不回填；
       // 帧池模式下每轮用最新帧行刷新既有行 golden 字段子集（裁决口径：排名滞后 ≤30min）
       applyGoldenFieldsToMerged(merged, framePool!.pool!.rowsByCode)
+    } else {
+      // 凌晨/开盘前空窗修复（2026-09-22）：当日无帧时 membership 走热榜合并池（实时），
+      // golden 排名与帧内 analyze 产物从最近可用帧透传（前端不重算，口径唯一化不变）；
+      // 滞后帧来源由 provenance 的 tradingDate/slotTime 如实打标。
+      const goldenFrame = await fetchLatestGoldenFrameRows()
+      if (goldenFrame) {
+        applyGoldenFieldsToMerged(merged, goldenFrame.rowsByCode)
+        goldenFrameInfo = {
+          tradingDate: goldenFrame.tradingDate,
+          slotTime: goldenFrame.slotTime,
+        }
+        // 第二段回溯（2026-09-22 盘中上榜、收盘帧掉出的股票）：对最新帧未覆盖的行，
+        // 跨帧取该 code 当日最近一次入池帧的 golden/analysis；全天未入池的行如实缺省。
+        // compRank=999 哨兵行同样视为未覆盖（review M4）。
+        const missingCodes = merged
+          .filter((stock) => {
+            const rank = Number(stock?.compRank)
+            return !(rank > 0) || rank >= 999
+          })
+          .map((stock) => String(stock?.code || ''))
+          .filter(Boolean)
+        if (missingCodes.length) {
+          const backtrackRows = await fetchGoldenRowsForCodes(missingCodes, {
+            tradingDate: goldenFrame.tradingDate,
+          })
+          if (backtrackRows) applyGoldenFieldsToMerged(merged, backtrackRows)
+        }
+      }
     }
 
     // 4. 合并额外数据
@@ -981,6 +1012,11 @@ class DataLoaderService {
 
     // 5. 计算个股热度
     this.updateStockHotness(merged)
+
+    // 5.5 首屏观察列同步投影（2026-09-21）：帧池种子行携带帧内 analysis 产物时，
+    // 发布前同步预计算 _ 前缀展示缓存（排序与取数与 signal 阶段同口径），
+    // 共振/趋势/热度/量价/周期/五维首屏即可显示；无产物行缓存为 undefined，如实 "--"。
+    rankTrendSignalService.precomputeDisplayFields(merged)
 
     // 6. 先存储基础热榜，RankTrend 信号属于后置增强，不能阻塞首屏数据可见。
     const basePublishVersion = this.publishStocks(merged, { reason: 'base-merge' })
@@ -1000,6 +1036,10 @@ class DataLoaderService {
         : {
             source: 'hotlist-merged',
             degradeReason: framePool?.reason || 'mode-disabled',
+            // golden 投影来源帧（凌晨/开盘前空窗时为最近可用帧；无可用帧则缺省）
+            ...(goldenFrameInfo
+              ? { slotTime: goldenFrameInfo.slotTime, tradingDate: goldenFrameInfo.tradingDate }
+              : {}),
             updatedAt: Date.now(),
           },
     )
@@ -1087,7 +1127,11 @@ class DataLoaderService {
         // 校验（compRank>0）失败不写缓存）。2026-09-21 起 compRank/avgRankNum 权威来源为后端
         // golden（帧池种子透传 + applyGoldenFieldsToMerged 每轮刷新）。
         compRank: signalStock.compRank ?? stock.compRank,
+        compScore: signalStock.compScore ?? stock.compScore,
         avgRankNum: signalStock.avgRankNum ?? stock.avgRankNum,
+        // avgRank（展示字符串）与 avgRankNum 配套：2026-09-22 实时口径下 liveRanking
+        // 只改写 avgRankNum+avgRank，漏拷字符串会让均榜列显示旧占位 "999"
+        avgRank: signalStock.avgRank ?? stock.avgRank,
         rankTrend: signalStock.rankTrend,
         rankTrendCoverageWarning: signalStock.rankTrendCoverageWarning,
         _rankChange: signalStock._rankChange,

@@ -7,6 +7,7 @@ import { FRAME_POOL_ROW_LIMIT } from '@/config/listPool'
 import { snapshotBackendRead } from '../snapshot/backendRead'
 import { toLocalTradingDate } from '../snapshot/identity'
 import type { SnapshotStockRow } from '../snapshot/types'
+import { isRankTrendAnalysisResult } from '../rankTrend/compat'
 import { createEmptyMergedStock } from './StockMergeCoordinator'
 
 export interface FramePoolSnapshot {
@@ -22,6 +23,15 @@ export interface FramePoolFetchResult {
   pool: FramePoolSnapshot | null
   reason?: FramePoolUnavailableReason
   message?: string
+}
+
+/** golden 回退帧最大回看自然日数（覆盖常规假期；再往前属冷数据，如实放弃） */
+const GOLDEN_FRAME_LOOKBACK_DAYS = 7
+
+export interface GoldenFrameRows {
+  rowsByCode: Map<string, SnapshotStockRow>
+  tradingDate: string
+  slotTime: string
 }
 
 /** 读取当日最新 half_hour 帧的全量股票行；两步读取（先帧后行），失败逐级结构化降级 */
@@ -47,6 +57,10 @@ export async function fetchLatestFramePool(
       slotTime: frame.slotTime,
       sort: 'asc',
       limit: FRAME_POOL_ROW_LIMIT,
+      // 附带后端 snapshot_analysis 帧内 analyze 产物（2026-09-21）：观察六列
+      // （共振/趋势/热度/量价/周期/五维）随种子行首屏同步投影，不等异步 signal 增强；
+      // 缺产物行如实无值，不构成读取门禁。
+      includeAnalysis: true,
     })
     const rowsByCode = new Map<string, SnapshotStockRow>()
     for (const row of rows || []) {
@@ -67,6 +81,94 @@ export async function fetchLatestFramePool(
       reason: 'http-error',
       message: error instanceof Error ? error.message : String(error),
     }
+  }
+}
+
+/**
+ * 最近可用帧的全量行（2026-09-22 凌晨/开盘前空窗修复）：当日无 half_hour 帧时
+ * 向前回退最多 GOLDEN_FRAME_LOOKBACK_DAYS 个自然日取最新帧行（含帧内 analyze 产物）。
+ *
+ * **只用于降级链（热榜合并池）的 golden 排名与 analysis 投影，不参与 membership**：
+ * 帧池 membership 仍按当日帧（fetchLatestFramePool），热榜合并池 membership 保持实时。
+ * 帧行透传的 compRank/avgRankNum 是该时段唯一可用的后端 golden（口径唯一化后前端
+ * 不再本地重算），滞后帧如实由 provenance 的 tradingDate/slotTime 打标。
+ * 全部交易日无帧/查询失败返回结构化 null（fail-visible，不抛异常打断加载链）。
+ */
+export async function fetchLatestGoldenFrameRows(
+  options: { tradingDate?: string } = {},
+): Promise<GoldenFrameRows | null> {
+  const startDate = options.tradingDate || toLocalTradingDate(new Date())
+  const baseDay = new Date(`${startDate}T00:00:00`)
+  for (let offset = 0; offset < GOLDEN_FRAME_LOOKBACK_DAYS; offset++) {
+    const day = new Date(baseDay)
+    day.setDate(day.getDate() - offset)
+    const tradingDate = toLocalTradingDate(day)
+    try {
+      const frames = await snapshotBackendRead.listSnapshotFrames({
+        type: 'half_hour',
+        tradingDate,
+        sort: 'desc',
+        limit: 1,
+      })
+      const frame = frames[0]
+      if (!frame?.slotTime) continue
+      const rows = await snapshotBackendRead.listSnapshotStockRows({
+        type: 'half_hour',
+        tradingDate,
+        slotTime: frame.slotTime,
+        sort: 'asc',
+        limit: FRAME_POOL_ROW_LIMIT,
+        includeAnalysis: true,
+      })
+      const rowsByCode = new Map<string, SnapshotStockRow>()
+      for (const row of rows || []) {
+        const code = String(row?.code || '')
+        if (code && !rowsByCode.has(code)) rowsByCode.set(code, row)
+      }
+      if (rowsByCode.size) {
+        return { rowsByCode, tradingDate, slotTime: frame.slotTime }
+      }
+    } catch (error) {
+      // fail-visible（review M3）：单日失败不中断回退，但保留诊断线索
+      console.warn(`[framePoolSource] golden 回退帧查询失败 ${tradingDate}:`, error)
+    }
+  }
+  return null
+}
+
+/**
+ * 指定股票在 ``tradingDate`` 当日的 golden 帧行回溯（2026-09-22 空窗修复第二段）：
+ * 最新帧不在池、但当日更早帧入过池的股票（盘中上过榜、收盘帧掉出），按 code 跨帧
+ * 取**最近一次入池帧**的行（含帧内 analyze 产物）。请求一次（codes + trading_date
+ * 跨帧查询），``sort=desc`` 时每 code 首次出现的行即最近帧行。
+ * 与 fetchLatestGoldenFrameRows 同口径：只做降级链投影，不参与 membership；
+ * 全天从未入池的 code 无行返回，如实缺省（fail-visible，不伪造）。
+ */
+export async function fetchGoldenRowsForCodes(
+  codes: string[],
+  options: { tradingDate?: string } = {},
+): Promise<Map<string, SnapshotStockRow> | null> {
+  const wanted = Array.from(new Set((codes || []).map((code) => String(code || '').trim()).filter(Boolean)))
+  if (!wanted.length) return null
+  const tradingDate = options.tradingDate || toLocalTradingDate(new Date())
+  try {
+    const rows = await snapshotBackendRead.listSnapshotStockRows({
+      type: 'half_hour',
+      tradingDate,
+      codes: wanted,
+      sort: 'desc',
+      limit: Math.max(wanted.length * 12, FRAME_POOL_ROW_LIMIT),
+      includeAnalysis: true,
+    })
+    const rowsByCode = new Map<string, SnapshotStockRow>()
+    for (const row of rows || []) {
+      const code = String(row?.code || '')
+      if (code && !rowsByCode.has(code)) rowsByCode.set(code, row)
+    }
+    return rowsByCode.size ? rowsByCode : null
+  } catch {
+    // 回溯失败不影响主投影：调用方保留最新帧结果，结构化降级
+    return null
   }
 }
 
@@ -102,6 +204,10 @@ function applyGoldenFields(stock: MergedStock, row: SnapshotStockRow): void {
  * 排名字段直接透传后端 golden（2026-09-21 口径唯一化裁决 A，
  * spec: docs/superpowers/specs/2026-09-21-comprehensive-rank-golden-convergence-design.md），
  * 前端零排名计算；前端 rank 语义 := 后端 compRank（compScore 降序 + code 稳定序）。
+ *
+ * 2026-09-21 首屏同步观察六列：种子行同时挂上帧内 analyze 产物（row.analysis，
+ * 仅种子阶段；applyGoldenFieldsToMerged 不回写，避免旧帧行回滚 signal 增强的实时值）。
+ * 形状不符（isRankTrendAnalysisResult 不过）不挂载，观察列如实显示 "--"。
  */
 export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
   const stock = createEmptyMergedStock(String(row?.code || ''))
@@ -120,6 +226,9 @@ export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
   if (turnoverRate !== null && turnoverRate > 0) stock.turnoverRate = turnoverRate
 
   applyGoldenFields(stock, row)
+  if (isRankTrendAnalysisResult(row?.analysis)) {
+    stock.rankTrend = row.analysis
+  }
   return stock
 }
 
@@ -128,6 +237,11 @@ export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
  * 种子只补缺失会让 golden 冻结在首次入池帧、降级恢复后不回填；每轮 merge 后统一刷新，
  * 保证「排名帧内滞后 ≤30min」的裁决口径成立。只动 golden 字段，name/price 等
  * 实时字段不受帧行覆盖；不在帧池中的行不触碰。
+ *
+ * 2026-09-22 降级链观察列投影：行无 rankTrend 且帧行带合法 analyze 产物（row.analysis，
+ * include_analysis 读口附带）时回填帧内分析，供共振/趋势/热度/量价/周期/五维在
+ * 降级/空窗时段首屏可显示；已有 rankTrend（种子行或 signal 增强写入）一律不回滚，
+ * 形状不符不挂载，不伪造。
  */
 export function applyGoldenFieldsToMerged(
   stocks: MergedStock[],
@@ -135,7 +249,11 @@ export function applyGoldenFieldsToMerged(
 ): void {
   for (const stock of stocks || []) {
     const row = rowsByCode?.get(String(stock?.code || ''))
-    if (row) applyGoldenFields(stock, row)
+    if (!row) continue
+    applyGoldenFields(stock, row)
+    if (!stock.rankTrend && isRankTrendAnalysisResult(row?.analysis)) {
+      stock.rankTrend = row.analysis
+    }
   }
 }
 

@@ -108,3 +108,111 @@ def compute_comprehensive_scores(stocks: list[dict[str, Any]]) -> list[dict[str,
     for index, s in enumerate(ranked, start=1):
         s["compRank"] = index
     return valid
+
+
+# ---------------------------------------------------------------------------
+# 八平台热榜均榜（weighted_platform_percentile_v1）
+#
+# 2026-09-22 从 snapshot_collector.providers._calculate_average_rank_fields 提升
+# 为唯一权威实现（采集链 import 本表，防止采集/实时两处公式漂移）：
+# avgRankNum = Σ 平台 (rank/榜单总数)*100*权重 / Σ 权重；rank≥DEFAULT_RANK 视为
+# 该平台缺失，按 100 分（榜尾）计权。platforms = 有效平台数。
+# ---------------------------------------------------------------------------
+
+HOTLIST_PLATFORMS = ("eastmoney", "ths", "kpl", "tdx", "xueqiu", "cls", "tgb", "dzh")
+HOTLIST_RANK_FIELDS = {
+    "eastmoney": "emRank",
+    "ths": "thsRank",
+    "kpl": "kplRank",
+    "tdx": "tdxRank",
+    "xueqiu": "xqRank",
+    "cls": "clsRank",
+    "tgb": "tgbRank",
+    "dzh": "dzhRank",
+}
+HOTLIST_WEIGHTS = {
+    "kpl": 1.0,
+    "tdx": 0.9,
+    "ths": 0.85,
+    "eastmoney": 0.75,
+    "dzh": 0.7,
+    "tgb": 0.4,
+    "xueqiu": 0.35,
+    "cls": 0.35,
+}
+HOTLIST_DEFAULT_RANK = 999
+
+
+def average_rank_fields(
+    row: dict[str, Any],
+    platform_totals: dict[str, int],
+) -> None:
+    """按 weighted_platform_percentile_v1 赋值行的 avgRankNum/avgRank/platforms。
+
+    与采集链入座行同公式；platform_totals 缺某平台时该平台不计权（与采集链
+    ``total <= 0: continue`` 语义一致）。
+    """
+    weighted_sum = 0.0
+    total_weight = 0.0
+    platforms = 0
+    for platform in HOTLIST_PLATFORMS:
+        total = platform_totals.get(platform, 0)
+        if total <= 0:
+            continue
+        field = HOTLIST_RANK_FIELDS[platform]
+        weight = HOTLIST_WEIGHTS[platform]
+        total_weight += weight
+        rank = _safe_int_rank(row.get(field))
+        if rank < HOTLIST_DEFAULT_RANK:
+            platforms += 1
+            weighted_sum += (rank / total) * 100 * weight
+        else:
+            weighted_sum += 100 * weight
+    row["platforms"] = platforms
+    row["avgRankNum"] = weighted_sum / total_weight if total_weight else float(HOTLIST_DEFAULT_RANK)
+    row["avgRank"] = f"{row['avgRankNum']:.1f}"
+
+
+def _safe_int_rank(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return HOTLIST_DEFAULT_RANK
+
+
+def infer_platform_totals(stocks: list[dict[str, Any]]) -> dict[str, int]:
+    """从 current 帧全池行推各平台榜单总数：每平台 rank(<DEFAULT_RANK) 的最大值。
+
+    榜单返回前 N 名且 rank 连续时 max(rank)=N（与前端顶部状态条的平台计数一致）；
+    平台整榜缺失时 total=0，average_rank_fields 会跳过该平台。
+    """
+    totals = {platform: 0 for platform in HOTLIST_PLATFORMS}
+    for s in stocks if isinstance(stocks, list) else []:
+        if not isinstance(s, dict):
+            continue
+        for platform, field in HOTLIST_RANK_FIELDS.items():
+            rank = _safe_int_rank(s.get(field))
+            if HOTLIST_DEFAULT_RANK > rank >= 1 and rank > totals[platform]:
+                totals[platform] = rank
+    return totals
+
+
+def compute_live_ranking(
+    stocks: list[dict[str, Any]],
+    platform_totals: dict[str, int] | None = None,
+) -> list[dict[str, Any]]:
+    """current_frame 实时排名（2026-09-22 用户裁决：列表均榜/综合实时口径）。
+
+    对当前热榜合并行依次：① average_rank_fields 实时均榜（weights 与采集入库同源）；
+    ② compute_comprehensive_scores 实时五维综合评分。**原地修改并返回**行列表；
+    帧池 golden（快照行 compRank/avgRankNum）自此降级为 analyze 不可用时的历史回溯兜底。
+    platform_totals 缺省时按行内 rank 推断（infer_platform_totals）。
+    """
+    valid = [s for s in (stocks or []) if isinstance(s, dict)]
+    if not valid:
+        return []
+    # 仅未传时推断；显式传 {} 表示"无平台榜单数据"，不应被静默改为推断（语义显式化，review M6）
+    totals = infer_platform_totals(valid) if platform_totals is None else platform_totals
+    for row in valid:
+        average_rank_fields(row, totals)
+    return compute_comprehensive_scores(valid)

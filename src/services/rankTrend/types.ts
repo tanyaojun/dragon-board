@@ -230,6 +230,18 @@ export interface RankTrendAnalysisResult {
      * 后端未提供（旧缓存/离线）时缺省，前端回退自算/兜底。
      */
     marketPercentiles?: Record<string, number>
+    /**
+     * current_frame 实时综合排名（2026-09-22 用户裁决：列表均榜/综合实时口径）。
+     * 后端 analyze 对 current 帧行实时算五维综合评分与均榜（与采集入库同公式）；
+     * 帧池 golden（快照行 compRank/avgRankNum）降级为历史回溯兜底。
+     * 仅实时 analyze 响应携带；snapshot_analysis 落库产物与历史帧查询不含。
+     */
+    liveRanking?: {
+      compScore?: number | null
+      compRank?: number | null
+      avgRankNum?: number | null
+      platforms?: number | null
+    }
     sampleQuality?: {
       snapshotType: RankTrendSnapshotType
       sampleCount: number

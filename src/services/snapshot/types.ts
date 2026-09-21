@@ -128,6 +128,12 @@ export interface SnapshotStockRow {
   lastTradeVolume?: number
   volumeRatio?: number
   speed?: number
+  /**
+   * 后端 snapshot_analysis 已落库的帧内 analyze 产物（include_analysis=true 读口附带）。
+   * 宽松 Record 形状：挂载到 stock.rankTrend 前必须经 isRankTrendAnalysisResult 校验，
+   * 缺产物/形状不符的行如实无值，不伪造。
+   */
+  analysis?: Record<string, unknown>
   leadStatus?: string
   leadTimes?: number
   lianbanStr?: string
@@ -315,6 +321,8 @@ export interface SnapshotStockRowQueryOptions {
   limit?: number
   /** 后端字段投影：只返回指定字段，用于大范围全市场读取瘦身 */
   fields?: string[]
+  /** 附带 snapshot_analysis 已落库的帧内 analyze 产物（行 .analysis 字段，缺产物行无该键） */
+  includeAnalysis?: boolean
 }
 
 export interface RankTrendRankSeriesQueryOptions {

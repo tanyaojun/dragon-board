@@ -1054,6 +1054,10 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/snapshots/sector-rows?dataset_id=dr
 
 `stock-rows` 额外支持投影参数 `fields`（逗号分隔字段名）：指定后后端只返回这些 camelCase 字段（`_id` 不返回），用于大范围全市场横截面读取瘦身；不传时保持原有全量行合同（仅排除 `depth10`）。RankTrend 观察舱按帧市场基准读取即使用 `fields=tradingDate,slotTime,code,avgRankNum`，避免 2 万行全字段响应超过前端读超时。
 
+`stock-rows` 额外支持 `include_analysis=true`（2026-09-21）：把该快照帧在 `snapshot_analysis` 集合已落库的 analyze 产物按 `code` 注入每行 `analysis` 字段，并在响应体返回 `analysisAttached`（成功注入的行数）。用于 Dragon Board 行情列表观察六列（共振/趋势/热度/量价/周期/五维）随帧池种子行**首屏同步投影**，不必等前端异步 signal 增强。fail-visible：无落库产物的行不带 `analysis` 键（不伪造空产物）；SQLite 本地/测试态仓库无 snapshot_analysis 读方法时 `analysisAttached=0` 且不报错。落库产物由采集 after-save 钩子（`save_snapshot_ingest` 共享钩子）与 `snapshot-analysis-backfill` 补跑写入，读口不现算。
+
+**`meta.liveRanking`（2026-09-22 实时口径裁决）**：`POST /api/ranktrend/analyze` 携带 `currentFrame` 时，路由层对 current 帧行调用 `compute_live_ranking`（`analysis/ranktrend/ranking/comprehensive_rank.py`，与采集入库同模块同公式）实时计算 compScore/compRank/avgRankNum/platforms，注入最后一帧 `stocks[].analysis.meta.liveRanking`；均榜输入为 currentFrame 行的八平台 rank 字段（调用方须过滤 ≥999 哨兵），榜单总数由行内每平台最大 rank 推断。该字段**仅存在于实时 analyze 响应**（缓存键含 currentFrame 指纹）；`snapshot_analysis` 落库产物与历史帧查询保持帧内稳定口径、不含 liveRanking。Dragon Board 列表均榜/综合两列以此为权威 live 面，帧池 golden 降级为 analyze 不可用时的历史回溯兜底。
+
 Dragon Board `snapshotFacade.listSnapshots/getSnapshotById/listSnapshotFrames/listSnapshotStockRows/listSnapshotSectorRows/getStockVolumeHistory`
 均通过这些 MongoDB 明细读口实现。列表读口返回 `cache` 诊断字段，单条 `records/{snapshot_id}` 仍直接读取 MongoDB。`getStockVolumeHistory` 固定读取 `daily` 的
 `snapshot_stock_rows`，不再扫描浏览器 IndexedDB 原始快照。

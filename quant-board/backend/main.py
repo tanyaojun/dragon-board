@@ -1186,6 +1186,36 @@ def get_snapshot_record(
     }
 
 
+def _attach_snapshot_analysis(repo: Any, dataset_id: str, rows: list[dict[str, Any]]) -> int:
+    """把 ``snapshot_analysis`` 已落库的 analyze 产物按行注入股票行（include_analysis 读口）。
+
+    2026-09-21：行情列表观察六列（共振/趋势/热度/量价/周期/五维）此前只能等前端
+    异步 analyze 增强后才显示；帧池种子行带上帧内分析产物后可首屏同步投影。
+    按 (snapshotId, code) 二元组匹配（code review I2）：跨帧查询同 code 多帧均有行时，
+    各帧行只取自己帧的产物，不互相覆盖。fail-visible：SQLite 本地/测试态仓库无该读
+    方法、或行无落库产物时不注入键，不伪造空 analysis；返回注入行数供调用方诊断。
+    """
+    loader = getattr(repo, "load_snapshot_analysis", None)
+    if loader is None:
+        return 0
+    analysis_by_snapshot: dict[str, dict[str, dict[str, Any]]] = {}
+    for snapshot_id in dict.fromkeys(str(row.get("snapshotId") or "") for row in rows):
+        if snapshot_id:
+            analysis_by_snapshot[snapshot_id] = loader(dataset_id, snapshot_id)
+    if not analysis_by_snapshot:
+        return 0
+    attached = 0
+    for row in rows:
+        per_snapshot = analysis_by_snapshot.get(str(row.get("snapshotId") or ""))
+        if not per_snapshot:
+            continue
+        analysis = per_snapshot.get(str(row.get("code") or ""))
+        if analysis:
+            row["analysis"] = analysis
+            attached += 1
+    return attached
+
+
 @app.get("/api/snapshots/stock-rows")
 def list_snapshot_stock_rows(
     dataset_id: str | None = None,
@@ -1204,6 +1234,7 @@ def list_snapshot_stock_rows(
     sort: str = "desc",
     limit: int | None = 500,
     fields: str | None = None,
+    include_analysis: bool = False,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
@@ -1232,14 +1263,17 @@ def list_snapshot_stock_rows(
             sort=sort,
             fields=_parse_csv(fields),
         )
-        row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in result["rows"] if row.get("snapshotId"))
+        rows = result["rows"]
+        row_snapshot_ids.extend(str(row.get("snapshotId") or "") for row in rows if row.get("snapshotId"))
+        analysis_attached = _attach_snapshot_analysis(repo, resolved_dataset_id, rows) if include_analysis else 0
         return {
             "ok": True,
             "dataset": repo.dataset_to_dict(dataset),
             "datasetId": resolved_dataset_id,
-            "rows": result["rows"],
-            "count": len(result["rows"]),
+            "rows": rows,
+            "count": len(rows),
             "source": result["source"],
+            "analysisAttached": analysis_attached,
         }
 
     return _cached_snapshot_response(
@@ -1261,6 +1295,7 @@ def list_snapshot_stock_rows(
             "sort": sort,
             "limit": limit,
             "fields": fields,
+            "include_analysis": include_analysis,
         },
         snapshot_type=snapshot_type,
         trading_date=trading_date,

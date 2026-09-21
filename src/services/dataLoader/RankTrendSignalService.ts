@@ -4,7 +4,7 @@ import { candidateJournalService } from '../candidate/CandidateJournalService'
 import { applyCandidatePoolProjections } from '../candidate/CandidatePoolStatusProjector'
 import { dataLayer } from '../DataLayer'
 import { rankTrendAnalyzer } from '../RankTrendAnalyzer'
-import { applyJumpSignal, applyRankTrendAnalysis } from '../rankTrend/compat'
+import { applyJumpSignal, applyRankTrendAnalysis, isRankTrendAnalysisResult } from '../rankTrend/compat'
 import { evaluateJumpSignal, incrementJumpBar, registerJumpEntry, unregisterJumpPosition } from '../rankTrend/jumpSignalService'
 import { fusionCandidateNotifier } from '../rankTrend/FusionCandidateNotifier'
 import { buildFusionStrategyProjections } from '../rankTrend/FusionStrategyProjector'
@@ -12,18 +12,6 @@ import { autoFavoriteSyncService } from '../favorite/AutoFavoriteSyncService'
 import type { RankTrendAnalysisResult } from '../rankTrend/types'
 import { extraDataProjector } from './ExtraDataProjector'
 import type { StockSignalUpdate } from './types'
-
-function isRankTrendAnalysisResult(value: unknown): value is RankTrendAnalysisResult {
-  return !!(
-    value &&
-    typeof value === 'object' &&
-    'meta' in value &&
-    'technical' in value &&
-    'cycle' in value &&
-    'risk' in value &&
-    'decision' in value
-  )
-}
 
 function logCoverageWarning(message: string, coverageWarning: string) {
   if (/^包含 \d+ 个 delayed 快照$/.test(coverageWarning)) {
@@ -212,15 +200,30 @@ export class RankTrendSignalService {
   /**
    * 批量预计算观察指标并写入 stock 对象缓存。
    * DataTable 模板和 uiStore 排序直接读取 _ 前缀缓存字段，消除 O(n) 次重量级分析调用。
+   * 2026-09-21 公开：首屏 base-merge 携带帧内 analysis 产物（帧池种子行透传）时，
+   * 发布前同步预计算，观察六列首屏即可显示，不必等异步 signal 增强。
    */
-  private precomputeDisplayFields(stocks: any[]): void {
+  precomputeDisplayFields(stocks: any[]): void {
     if (!stocks.length) return
 
     for (const stock of stocks) {
       const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
 
-      // 2026-09-21 口径唯一化：compRank/avgRankNum 消费后端 golden（帧池种子透传），
-      // analyze 不注入/回填，此处不覆盖种子值。
+      // 2026-09-22 实时口径（用户裁决，覆盖 09-21"analyze 不回填"口径）：
+      // meta.liveRanking（analyze 对 current 帧实时算的 compScore/compRank/avgRankNum）
+      // 优先写回；帧池 golden（种子透传）降级为 analyze 未返回时的兜底，不删除。
+      // compScore 为 null（五维输入全缺）时不得被 Number(null)=0 伪装成 0 分（fail-visible）。
+      const liveRanking = rankTrend?.meta?.liveRanking
+      if (liveRanking && liveRanking.compRank != null && Number.isFinite(Number(liveRanking.compRank))) {
+        stock.compRank = Number(liveRanking.compRank)
+      }
+      if (liveRanking && liveRanking.compScore != null && Number.isFinite(Number(liveRanking.compScore))) {
+        stock.compScore = Number(liveRanking.compScore)
+      }
+      if (liveRanking && liveRanking.avgRankNum != null && Number.isFinite(Number(liveRanking.avgRankNum))) {
+        stock.avgRankNum = Number(liveRanking.avgRankNum)
+        stock.avgRank = Number(liveRanking.avgRankNum).toFixed(1)
+      }
 
       // 变化% 和 跃迁度：直接从 rankTrend 读取
       stock._rankChange = Math.round(rankTrend?.meta?.change ?? 0)

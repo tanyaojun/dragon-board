@@ -111,6 +111,8 @@ const framePoolState = vi.hoisted(() => ({
 // 默认降级（pool: null）：既有用例全部走热榜合并池回退路径，断言不受帧池切换影响
 vi.mock('../framePoolSource', () => ({
   fetchLatestFramePool: vi.fn(async () => framePoolState.result),
+  // 降级链 golden 补投影（2026-09-22 空窗修复）：默认无可用帧，跨日回退用例单独覆写
+  fetchLatestGoldenFrameRows: vi.fn(async () => null),
   buildFrameSeedStock: vi.fn((row: any) => ({
     code: String(row.code),
     name: String(row.name || ''),
@@ -199,6 +201,8 @@ vi.mock('../../apiService', () => ({
 
 vi.mock('../RankTrendSignalService', () => ({
   rankTrendSignalService: {
+    // 首屏观察列同步投影（2026-09-21）：base-merge 发布前调用，mock 为空实现
+    precomputeDisplayFields: vi.fn(),
     applySignalsToMerged: vi.fn(async (stocks) => {
       signalApplyCount++
       if (signalCalculationError) throw signalCalculationError

@@ -1108,6 +1108,7 @@ export class ApiService {
     append('rank_basis', (params as RankTrendRankSeriesApiQueryOptions).rankBasis)
     append('slot_time', stockParams.slotTime)
     append('fields', stockParams.fields)
+    append('include_analysis', stockParams.includeAnalysis)
 
     const sectorParams = params as MongoSnapshotSectorRowQueryOptions
     append('entity_type', sectorParams.entityType)

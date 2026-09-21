@@ -86,7 +86,6 @@
           index % 2 === 0 ? 'row-even' : 'row-odd',
           {
             selected: uiStore.selectedCode === stock.code,
-            'opening-signal-row': hasOpeningWeakToStrongSignal(stock),
           },
         ]" :style="gridTemplateStyle" @click="onRowClick($event, stock.code)"
           @dblclick="openStockDetailFromRow($event, stock)" @contextmenu.prevent="showContextMenu($event, stock)">
@@ -119,8 +118,6 @@
 
             <template v-else-if="col.key === 'name'">
               <span class="stock-name-text">{{ formatCell(col.key, stock) }}</span>
-              <span v-if="hasOpeningWeakToStrongSignal(stock)" class="opening-signal-badge"
-                :title="openingSignalTitle(stock)">竞强</span>
             </template>
 
             <!-- 共振强度列：方向+数值%（2026-08-24 取消档位徽章） -->
@@ -151,9 +148,10 @@
                   }}%</span>
                 </template>
                 <span v-else class="trend-steady">--</span>
-                <!-- 2026-09-13 五因子化：趋势徽章换 MA10×MA20 金死叉（py technical.maCross，缺字段→无徽章） -->
-                <span v-if="getMaCross(stock) === 'golden'" class="ma-badge golden" title="MA10×MA20 金叉">▲</span>
-                <span v-else-if="getMaCross(stock) === 'death'" class="ma-badge death" title="MA10×MA20 死叉">▼</span>
+                <!-- 2026-09-21 用户裁决：趋势徽章改 MACD 金/死叉事件触发（py technical.macd.cross，
+                     交叉帧才非 none 的事件语义；缺字段→无徽章） -->
+                <span v-if="getMacdCrossBadge(stock) === 'golden'" class="ma-badge golden" title="MACD 金叉">▲</span>
+                <span v-else-if="getMacdCrossBadge(stock) === 'death'" class="ma-badge death" title="MACD 死叉">▼</span>
               </div>
             </template>
 
@@ -301,7 +299,6 @@ import { useFavoriteStore } from '../../stores/favorite'
 import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
-import { openingSignalStore } from '@/services/hotlist/OpeningSignalStore'
 import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge'
 import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
 import RankTrendObservationPanel from '../../components/panels/RankTrendObservationPanel.vue'
@@ -400,7 +397,6 @@ const rowTooltip = ref({
 const observationPanelVisible = ref(false)
 const observationPanelStock = ref<any | null>(null)
 const observationPanelTrack = ref<ObservationTrack>('resonance')
-const openingSignalsByCode = openingSignalStore.signalsByCode
 
 // 板块列表状态
 const boardList = ref<Board[]>([])
@@ -559,34 +555,6 @@ const gridTemplateStyle = computed(() => {
   }
 })
 const candidateMenuLabel = computed(() => (openCandidateId.value ? '查看候选详情' : '加入候选池'))
-
-const isOpeningWeakToStrongHighlightStage = (stage?: string) =>
-  stage === 'auctionConditionPassed' || stage === 'gapAlert' || stage === 'trendConfirm'
-
-const hasOpeningWeakToStrongSignal = (stock: Stock) => {
-  const signal = openingSignalsByCode.value.get(stock.code)
-  return isOpeningWeakToStrongHighlightStage(signal?.stage)
-}
-
-const openingSignalTitle = (stock: Stock) => {
-  const signal = openingSignalsByCode.value.get(stock.code)
-  if (!signal) return ''
-  const stageName =
-    signal.stage === 'gapAlert'
-      ? '开盘承接转强'
-      : signal.stage === 'trendConfirm'
-        ? '开盘反攻确认'
-        : signal.stage === 'auctionConditionPassed'
-          ? '候选成立'
-          : signal.stage === 'auctionConditionFailed'
-            ? '候选不成立'
-            : signal.stage === 'noGap'
-              ? '无跳空'
-              : signal.stage === 'trendWeak'
-                ? '承接转弱'
-                : '最终状态'
-  return `竞价弱转强｜${stageName}`
-}
 
 // ========== 从表格数据获取题材信息 ==========
 
@@ -1662,6 +1630,12 @@ const getMacdCross = (stock: any) =>
 const getMaCross = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.maCross?.cross ?? 'none'
 
+// MACD 金/死叉事件徽章（2026-09-21 用户裁决，趋势列 ▲▼ 取数源）：
+// 只认 py golden 的 technical.macd.cross（后端仅交叉帧产出 golden/death 的事件语义），
+// 无 stock.* 历史回退——缺字段 → 'none' → 无徽章
+const getMacdCrossBadge = (stock: any) =>
+  getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? 'none'
+
 const getMacdDif = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.dif ?? stock?.macd
 
@@ -2145,7 +2119,6 @@ const handleClickOutside = (e: MouseEvent) => {
 // ========== 生命周期 ==========
 onMounted(() => {
   document.addEventListener('click', handleClickOutside)
-  openingSignalStore.start()
 
   // 恢复滚动位置
   if (bodyRef.value && uiStore.scrollPosition) {
@@ -2155,7 +2128,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
-  openingSignalStore.stop()
 })
 
 defineExpose({
@@ -2494,15 +2466,6 @@ defineExpose({
   background: rgba(0, 0, 0, 0.02);
 }
 
-.data-row.opening-signal-row {
-  background: linear-gradient(90deg, rgba(255, 71, 87, 0.13), rgba(255, 179, 92, 0.06)) !important;
-  box-shadow: inset 3px 0 0 rgba(255, 179, 92, 0.92);
-}
-
-.data-row.opening-signal-row:hover {
-  background: linear-gradient(90deg, rgba(255, 71, 87, 0.18), rgba(255, 179, 92, 0.09)) !important;
-}
-
 /* 单元格通用样式 */
 .cell {
   padding: 0 8px;
@@ -2543,22 +2506,6 @@ defineExpose({
 }
 
 .stock-name-text {
-  vertical-align: middle;
-}
-
-.opening-signal-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  margin-left: 4px;
-  padding: 0 5px;
-  border: 1px solid rgba(255, 167, 38, 0.6);
-  border-radius: 3px;
-  background: rgba(255, 71, 87, 0.14);
-  color: #ffb35c;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 18px;
   vertical-align: middle;
 }
 

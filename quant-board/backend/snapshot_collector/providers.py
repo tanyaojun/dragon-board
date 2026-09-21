@@ -29,6 +29,14 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from backend.analysis.ranktrend.ranking.comprehensive_rank import (
+    average_rank_fields,
+    HOTLIST_DEFAULT_RANK as _DEFAULT_RANK,
+    HOTLIST_PLATFORMS as _HOTLIST_PLATFORMS,
+    HOTLIST_RANK_FIELDS as _HOTLIST_RANK_FIELDS,
+    HOTLIST_WEIGHTS as _HOTLIST_WEIGHTS,
+)
+
 from backend.core.fund_sources import (
     FUND_SOURCE_THS_MAIN_MONITOR,
     SUPPORTED_FUND_SOURCES,
@@ -45,24 +53,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
-_DEFAULT_RANK = 999
 
 # 默认数据网关：CLI/手动链路走 HTTP（proxy 转发）；collector_main 独立采集进程
 # 通过 set_default_gateway() 切换为进程内直连，避免 8000 自环依赖。
 _DEFAULT_GATEWAY: Any | None = None
-
-_HOTLIST_PLATFORMS = ("eastmoney", "ths", "kpl", "tdx", "xueqiu", "cls", "tgb", "dzh")
-_HOTLIST_RANK_FIELDS = {
-    "eastmoney": "emRank",
-    "ths": "thsRank",
-    "kpl": "kplRank",
-    "tdx": "tdxRank",
-    "xueqiu": "xqRank",
-    "cls": "clsRank",
-    "tgb": "tgbRank",
-    "dzh": "dzhRank",
-}
-
 
 def _rank_provenance(platform_totals: dict[str, int]) -> dict[str, Any]:
     return {
@@ -75,16 +69,6 @@ def _rank_provenance(platform_totals: dict[str, int]) -> dict[str, Any]:
         "rankFields": dict(_HOTLIST_RANK_FIELDS),
         "defaultRank": _DEFAULT_RANK,
     }
-_HOTLIST_WEIGHTS = {
-    "kpl": 1.0,
-    "tdx": 0.9,
-    "ths": 0.85,
-    "eastmoney": 0.75,
-    "dzh": 0.7,
-    "tgb": 0.4,
-    "xueqiu": 0.35,
-    "cls": 0.35,
-}
 
 # 采集池来源模式（2026-09-20 spec：docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md）
 # autonomous = 八平台热榜实时合并池为主池（bundle 只供 snapshotContext，merged 全挂时 bundle 行兜底）；
@@ -252,25 +236,13 @@ def _calculate_average_rank_fields(
     row: dict[str, Any],
     platform_totals: dict[str, int],
 ) -> None:
-    weighted_sum = 0.0
-    total_weight = 0.0
-    platforms = 0
-    for platform in _HOTLIST_PLATFORMS:
-        total = platform_totals.get(platform, 0)
-        if total <= 0:
-            continue
-        field = _HOTLIST_RANK_FIELDS[platform]
-        weight = _HOTLIST_WEIGHTS[platform]
-        total_weight += weight
-        rank = _safe_int(row.get(field), _DEFAULT_RANK)
-        if rank < _DEFAULT_RANK:
-            platforms += 1
-            weighted_sum += (rank / total) * 100 * weight
-        else:
-            weighted_sum += 100 * weight
-    row["platforms"] = platforms
-    row["avgRankNum"] = weighted_sum / total_weight if total_weight else float(_DEFAULT_RANK)
-    row["avgRank"] = f"{row['avgRankNum']:.1f}"
+    """均榜计算（weighted_platform_percentile_v1）。
+
+    2026-09-22 实现提升到 analysis 层（backend.analysis.ranktrend.ranking.
+    comprehensive_rank，采集/实时共用唯一实现，防两处公式漂移）；本函数保留
+    模块内调用点别名。
+    """
+    average_rank_fields(row, platform_totals)
 
 
 def _normalize_stock_code(value: Any) -> str:

@@ -17,6 +17,8 @@ import {
   applyGoldenFieldsToMerged,
   buildFrameSeedStock,
   fetchLatestFramePool,
+  fetchLatestGoldenFrameRows,
+  fetchGoldenRowsForCodes,
   filterPlatformDataToCodes,
 } from '../framePoolSource'
 
@@ -190,6 +192,84 @@ describe('buildFrameSeedStock', () => {
     expect(seed.name).toBe('')
     expect(seed.platformName).toBe('')
   })
+
+  it('种子行注入帧内 analysis 产物为 rankTrend（2026-09-21 观察六列首屏同步）', () => {
+    const analysis = {
+      meta: { code: '600000', sampleQuality: { status: 'ok' } },
+      technical: { macd: { cross: 'golden' } },
+      cycle: { stage: 'crowded' },
+      risk: {},
+      decision: { final: { signal: 'hold' } },
+      observation: {
+        rankTrend: { direction: 'hold', score: 12 },
+        lifecycle: { stage: 'crowded', score: 31 },
+        crossSection: { percentile: 88 },
+        volumePrice: { score: 44, direction: 'up' },
+        synergy: { signalTier: 'B' },
+      },
+      resonance: { status: 'ok', score: 66 },
+    }
+    const seed = buildFrameSeedStock(makeRow({ analysis } as unknown as Partial<SnapshotStockRow>))
+
+    // 逐位透传，不做前端深拷贝重算
+    expect(seed.rankTrend).toBe(analysis)
+  })
+
+  it('analysis 缺失或形状不符时不挂载 rankTrend，观察列如实无值', () => {
+    const missing = buildFrameSeedStock(makeRow())
+    expect(missing.rankTrend).toBeUndefined()
+
+    // 缺 decision 分组 → 不满足 RankTrendAnalysisResult 最小形状，不挂载
+    const malformed = buildFrameSeedStock(
+      makeRow({ analysis: { meta: {}, technical: {} } } as unknown as Partial<SnapshotStockRow>),
+    )
+    expect(malformed.rankTrend).toBeUndefined()
+  })
+
+  it('既有行刷新不回写 rankTrend：signal 增强的实时值不被旧帧行 analysis 回滚', () => {
+    const liveRankTrend = { meta: { code: '600000' }, live: true }
+    const stocks = [
+      { code: '600000', compRank: 200, rankTrend: liveRankTrend },
+      { code: '000001', compRank: 201 }, // 无 rankTrend 的行也不被注入
+    ] as any
+    const rowsByCode = new Map([
+      ['600000', makeRow({ analysis: { meta: {}, stale: true } } as unknown as SnapshotStockRow)],
+      ['000001', makeRow({ code: '000001', analysis: { meta: {}, fresh: true } } as unknown as SnapshotStockRow)],
+    ])
+    applyGoldenFieldsToMerged(stocks, rowsByCode)
+
+    expect(stocks[0].rankTrend).toBe(liveRankTrend)
+    expect(stocks[1].rankTrend).toBeUndefined()
+  })
+
+  it('降级链 golden 投影：行无 rankTrend 时回填合法帧行 analysis（2026-09-22 空窗修复）', () => {
+    const frameAnalysis = {
+      meta: { code: '600000', sampleQuality: { status: 'ok' } },
+      technical: {},
+      cycle: { stage: 'crowded' },
+      risk: {},
+      decision: { final: { signal: 'hold' } },
+    }
+    const stocks = [{ code: '600000', compRank: 200 }] as any
+    applyGoldenFieldsToMerged(
+      stocks,
+      new Map([['600000', makeRow({ compRank: 3, analysis: frameAnalysis } as unknown as SnapshotStockRow)]]),
+    )
+
+    // golden 排名照常刷新 + 帧内 analysis 回填（降级链观察列首屏可显示）
+    expect(stocks[0].compRank).toBe(3)
+    expect(stocks[0].rankTrend).toBe(frameAnalysis)
+  })
+
+  it('降级链 golden 投影：形状不符的 analysis 不挂载（不伪造）', () => {
+    const stocks = [{ code: '600000' }] as any
+    applyGoldenFieldsToMerged(
+      stocks,
+      new Map([['600000', makeRow({ analysis: { meta: {} } } as unknown as SnapshotStockRow)]]),
+    )
+
+    expect(stocks[0].rankTrend).toBeUndefined()
+  })
 })
 
 describe('applyGoldenFieldsToMerged（C1：既有行 golden 随新帧刷新）', () => {
@@ -330,6 +410,99 @@ describe('真实帧 golden 对齐验证（2026-09-21 15:00 收盘帧合同锁）
     expect(stocks[0].avgRankNum).toBe(12.48483166851646)
     expect(stocks[0].avgRank).toBe('12.5')
     expect(stocks[0].platforms).toBe(8)
+  })
+})
+
+describe('fetchLatestGoldenFrameRows（2026-09-22 凌晨/开盘前空窗修复）', () => {
+  beforeEach(() => {
+    listSnapshotFrames.mockReset()
+    listSnapshotStockRows.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('当日无帧时向前回退到最近有帧交易日，行请求带 includeAnalysis', async () => {
+    listSnapshotFrames.mockImplementation(async (options: { tradingDate?: string }) =>
+      options.tradingDate === '2026-09-21'
+        ? [{ slotTime: '15:00', tradingDate: '2026-09-21' }]
+        : [],
+    )
+    listSnapshotStockRows.mockResolvedValue([
+      makeRow({ compRank: 1, avgRankNum: 12.5, analysis: { meta: {}, technical: {} } } as unknown as SnapshotStockRow),
+    ])
+
+    const result = await fetchLatestGoldenFrameRows({ tradingDate: '2026-09-22' })
+
+    expect(listSnapshotFrames).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'half_hour', tradingDate: '2026-09-22' }),
+    )
+    expect(listSnapshotStockRows).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'half_hour',
+        tradingDate: '2026-09-21',
+        slotTime: '15:00',
+        includeAnalysis: true,
+      }),
+    )
+    expect(result).not.toBeNull()
+    expect(result!.tradingDate).toBe('2026-09-21')
+    expect(result!.slotTime).toBe('15:00')
+    expect(result!.rowsByCode.get('600000')?.compRank).toBe(1)
+  })
+
+  it('回看窗口内全部无帧：返回结构化 null', async () => {
+    listSnapshotFrames.mockResolvedValue([])
+
+    const result = await fetchLatestGoldenFrameRows({ tradingDate: '2026-09-22' })
+
+    expect(result).toBeNull()
+    expect(listSnapshotFrames.mock.calls.length).toBeGreaterThanOrEqual(7)
+    expect(listSnapshotStockRows).not.toHaveBeenCalled()
+  })
+})
+
+describe('fetchGoldenRowsForCodes（2026-09-22 盘中上榜、收盘帧掉出股票的回溯）', () => {
+  beforeEach(() => {
+    listSnapshotFrames.mockReset()
+    listSnapshotStockRows.mockReset()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('跨帧取每 code 最近一次入池帧行（sort=desc 首 现），请求带 codes+includeAnalysis', async () => {
+    // sort=desc：最新帧（15:00）行在前；600000 只在 14:30 帧出现过
+    listSnapshotStockRows.mockResolvedValue([
+      makeRow({ code: '000001', snapshotId: 'half_hour:2026-09-21:14:30', compRank: 7 }),
+      makeRow({ code: '600000', snapshotId: 'half_hour:2026-09-21:15:00', compRank: 1 }),
+      makeRow({ code: '000001', snapshotId: 'half_hour:2026-09-21:09:30', compRank: 40 }),
+    ])
+
+    const result = await fetchGoldenRowsForCodes(['600000', '000001'], { tradingDate: '2026-09-21' })
+
+    expect(listSnapshotStockRows).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'half_hour',
+        tradingDate: '2026-09-21',
+        codes: ['600000', '000001'],
+        sort: 'desc',
+        includeAnalysis: true,
+      }),
+    )
+    expect(result).not.toBeNull()
+    // 每 code 首次出现 = 最近帧行：000001 取 14:30 帧而非 09:30 帧
+    expect(result!.get('000001')?.snapshotId).toBe('half_hour:2026-09-21:14:30')
+    expect(result!.get('600000')?.compRank).toBe(1)
+  })
+
+  it('空 codes / 请求失败：返回结构化 null，不打断主投影', async () => {
+    expect(await fetchGoldenRowsForCodes([], { tradingDate: '2026-09-21' })).toBeNull()
+
+    listSnapshotStockRows.mockRejectedValue(new Error('http error'))
+    expect(await fetchGoldenRowsForCodes(['600000'], { tradingDate: '2026-09-21' })).toBeNull()
   })
 })
 
