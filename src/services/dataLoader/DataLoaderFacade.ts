@@ -683,6 +683,10 @@ class DataLoaderService {
         }
       }
 
+      // 帧槽探测同样挂在 WS 健康分支尾部：生产环境 python-bridge WS 常驻，
+      // 只挂 HTTP 兜底路径时探测在生产模式永不触发（2026-09-21 controller 修复）
+      await this.maybeRefreshFramePool()
+
       return
     }
 

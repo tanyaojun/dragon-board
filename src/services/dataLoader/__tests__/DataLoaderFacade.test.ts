@@ -1600,6 +1600,30 @@ describe('DataLoaderFacade', () => {
       expect(fetchLatestFramePool).toHaveBeenCalledTimes(2)
       expect(platformLoadCount).toBe(1)
     })
+
+    it('WS 主链健康分支同样触发帧池探测（新槽时 provenance 跟随更新）', async () => {
+      framePoolState.result = framePoolAt('10:30', [{ code: '600000', name: '浦发银行' }])
+      realtimePrimaryHealthy = true
+      const { dataLoader } = await import('../../dataLoader')
+      const { fetchLatestFramePool } = await import('../framePoolSource')
+
+      await dataLoader.loadAllPlatforms(true)
+      expect(dataLayer.getListPoolProvenance()?.slotTime).toBe('10:30')
+      vi.mocked(fetchLatestFramePool).mockClear()
+
+      // 生产环境 python-bridge WS 常驻：探测必须同样挂在 WS 健康分支尾部，
+      // 否则 WS 模式下行情刷新链永不探测、列表永不跟随新帧槽
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(1)
+
+      framePoolState.result = framePoolAt('11:00', [{ code: '600000', name: '浦发银行' }])
+      await vi.advanceTimersByTimeAsync(FRAME_POOL_PROBE_INTERVAL_MS + 1)
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(dataLayer.getListPoolProvenance()).toMatchObject({
+        source: 'frame-pool',
+        slotTime: '11:00',
+      })
+    })
   })
 
   describe('publishStartupBundle provenance', () => {
