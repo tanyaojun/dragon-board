@@ -4,6 +4,7 @@ import { debugLog } from '@/utils/logger'
 import { ref, readonly } from 'vue'
 import { dataLayer } from '../DataLayer'
 import type { MergedStock } from '@/types'
+import { LIST_POOL_SOURCE_MODE } from '@/config/listPool'
 import { themeFacade } from '../theme/ThemeFacade'
 import { isTradingTime } from '@/utils/time'
 import { EventManager } from '../../utils/eventManager'
@@ -16,6 +17,11 @@ import {
   QUOTE_REFRESH_INTERVAL_MS,
 } from './constants'
 import { extraDataProjector } from './ExtraDataProjector'
+import {
+  buildFrameSeedStock,
+  fetchLatestFramePool,
+  filterPlatformDataToCodes,
+} from './framePoolSource'
 import {
   loadLimitUpData as loadLimitUpFeedData,
   loadThsLimitUpPoolData,
@@ -382,6 +388,8 @@ class DataLoaderService {
     this.state.value.data = bundle.platformData || {}
     this.state.value.lastUpdate = Number(bundle.createdAt) || Date.now()
     dataLayer.updatePlatforms(this.state.value.data)
+    // 启动缓存快路径：membership 仍为上次启动时点的热榜池，如实打标（后台刷新随即对齐帧池）
+    dataLayer.setListPoolProvenance({ source: 'startup-bundle', updatedAt: Date.now() })
     this.publishStocks(bundle.stocks || [], {
       reason: 'base-merge',
       startupCache: {
@@ -871,7 +879,11 @@ class DataLoaderService {
       deferSignalEnrichment?: boolean
     } = {},
   ): Promise<any[]> {
-    const allCodes = this.getAllHotCodes()
+    // 池源切换（2026-09-21 spec）：帧池优先，失败/关闭回退热榜合并池（结构化降级）
+    const framePool =
+      LIST_POOL_SOURCE_MODE === 'frame-pool' ? await fetchLatestFramePool() : null
+    const framePoolMode = Boolean(framePool?.pool && framePool.pool.codes.size > 0)
+    const allCodes = framePoolMode ? framePool!.pool!.codes : this.getAllHotCodes()
     const codesArray = Array.from(allCodes)
 
     // 1. 先加载行情数据（量比历史由后端统一计算，前端不再读快照历史）
@@ -899,12 +911,20 @@ class DataLoaderService {
     const existingMap = new Map(
       existingStocks.filter((stock) => allCodes.has(stock.code)).map((stock) => [stock.code, stock]),
     )
+    if (framePoolMode) {
+      // 帧池中无热榜行的股票以帧行做种子，保证 membership 精确等于帧池
+      for (const [code, row] of framePool!.pool!.rowsByCode) {
+        if (!existingMap.has(code)) existingMap.set(code, buildFrameSeedStock(row))
+      }
+    }
 
     // 3. 构建股票数据并计算综合排名
     this.updateProgress(this.startupProgress.mergeStart, '合并热榜与行情数据...', 'merge')
     let merged = await this.measureStartupStep('merge', () =>
       stockMergeCoordinator.merge({
-        platformData: this.state.value.data || {},
+        platformData: framePoolMode
+          ? filterPlatformDataToCodes(this.state.value.data || {}, allCodes)
+          : this.state.value.data || {},
         latestQuotes: quotesMap,
         existingMap,
       }),
@@ -920,6 +940,23 @@ class DataLoaderService {
     const basePublishVersion = this.publishStocks(merged, { reason: 'base-merge' })
     this.syncRealtimeSubscription()
     this.updateProgress(this.startupProgress.mergeEnd, '基础榜单已就绪', 'merge')
+
+    // 池来源 provenance 随本次合并发布打标（在 deferSignalEnrichment 早返回之前，
+    // 保证延迟增强与同步增强两条返回路径都已打标）
+    dataLayer.setListPoolProvenance(
+      framePoolMode
+        ? {
+            source: 'frame-pool',
+            slotTime: framePool!.pool!.slotTime,
+            tradingDate: framePool!.pool!.tradingDate,
+            updatedAt: Date.now(),
+          }
+        : {
+            source: 'hotlist-merged',
+            degradeReason: framePool?.reason || 'mode-disabled',
+            updatedAt: Date.now(),
+          },
+    )
 
     // 7. 量比由后端计算（Python golden + Redis TTL），前端只消费结果。
     if (codesArray.length) {

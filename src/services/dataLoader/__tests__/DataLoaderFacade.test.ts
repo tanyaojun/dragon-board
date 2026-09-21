@@ -103,6 +103,39 @@ vi.mock('../PlatformHotlistService', () => ({
   },
 }))
 
+const framePoolState = vi.hoisted(() => ({
+  result: { pool: null, reason: 'http-error' } as any,
+}))
+
+// 默认降级（pool: null）：既有用例全部走热榜合并池回退路径，断言不受帧池切换影响
+vi.mock('../framePoolSource', () => ({
+  fetchLatestFramePool: vi.fn(async () => framePoolState.result),
+  buildFrameSeedStock: vi.fn((row: any) => ({
+    code: String(row.code),
+    name: String(row.name || ''),
+    platformName: String(row.name || ''),
+    price: Number(row.price) || 0,
+    change: Number(row.change) || 0,
+    volume: Number(row.volume) || 0,
+    turnoverRate: Number(row.turnoverRate) || 0,
+    platforms: 0,
+  })),
+  filterPlatformDataToCodes: vi.fn(
+    (platformData: Record<string, any[]>, codes: Set<string>) => {
+      const filtered: Record<string, any[]> = {}
+      for (const [platform, rows] of Object.entries(platformData || {})) {
+        if (!Array.isArray(rows)) {
+          filtered[platform] = rows
+          continue
+        }
+        const kept = rows.filter((row) => codes.has(String(row?.code || '')))
+        if (kept.length) filtered[platform] = kept
+      }
+      return filtered
+    },
+  ),
+}))
+
 vi.mock('../QuoteService', () => ({
   quoteService: {
     getQuoteBatch: vi.fn(async (_codes, _force, options) => {
@@ -1392,5 +1425,107 @@ describe('DataLoaderFacade', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  describe('mergeData frame-pool membership', () => {
+    beforeEach(() => {
+      // dataLayer.reset() 不清 provenance（任务 1 语义：跨测试显式归零，避免上一用例残留）
+      dataLayer.setListPoolProvenance(null)
+      // platformRows 夹具含 000001；帧池另有 600000/300750 无平台行（验证种子补齐）
+      framePoolState.result = {
+        pool: {
+          codes: new Set(['600000', '300750', '000001']),
+          slotTime: '10:30',
+          tradingDate: '2026-09-21',
+          rowsByCode: new Map([
+            ['600000', { code: '600000', name: '浦发银行', price: 12.34 }],
+            ['300750', { code: '300750', name: '宁德时代', price: 300 }],
+            ['000001', { code: '000001', name: '平安银行', price: 15 }],
+          ]),
+        },
+      }
+    })
+
+    afterEach(() => {
+      framePoolState.result = { pool: null, reason: 'http-error' }
+    })
+
+    it('membership 等于帧池 codes：平台行被过滤、帧行种子补齐', async () => {
+      quoteBatchResult = new Map([['600000', { price: 12.5, change: 0.16 }]])
+      const { dataLoader } = await import('../../dataLoader')
+
+      await dataLoader.loadAllPlatforms(true)
+
+      const stocks = dataLayer.getStocks()
+      const codes = new Set(stocks.map((s: any) => s.code))
+      expect(codes).toEqual(new Set(['600000', '300750', '000001']))
+      // 600000 无平台行 → 来自帧行种子，名称取帧行
+      const seedStock = stocks.find((s: any) => s.code === '600000')
+      expect(seedStock?.name).toBe('浦发银行')
+    })
+
+    it('帧池模式打 provenance frame-pool + slotTime', async () => {
+      const { dataLoader } = await import('../../dataLoader')
+
+      await dataLoader.loadAllPlatforms(true)
+
+      const provenance = dataLayer.getListPoolProvenance()
+      expect(provenance?.source).toBe('frame-pool')
+      expect(provenance?.slotTime).toBe('10:30')
+    })
+
+    it('帧池不可用回退热榜合并池并打 provenance', async () => {
+      framePoolState.result = { pool: null, reason: 'http-error', message: 'boom' }
+      const { dataLoader } = await import('../../dataLoader')
+
+      await dataLoader.loadAllPlatforms(true)
+
+      const provenance = dataLayer.getListPoolProvenance()
+      expect(provenance?.source).toBe('hotlist-merged')
+      expect(provenance?.degradeReason).toBe('http-error')
+      // membership 回到热榜合并池（现有夹具 platformRows 的 000001）
+      const codes = new Set(dataLayer.getStocks().map((s: any) => s.code))
+      expect(codes.has('000001')).toBe(true)
+    })
+  })
+
+  describe('publishStartupBundle provenance', () => {
+    it('启动缓存发布打 startup-bundle provenance', async () => {
+      blockPlatformLoad = true
+      startupBundle = {
+        schemaVersion: 1,
+        tradingDate: '2026-05-18',
+        createdAt: Date.now(),
+        snapshotContext: completeSnapshotContext,
+        platformData: {
+          eastmoney: [{ code: '000001', name: '缓存数据', rank: 1, source: 'eastmoney' }],
+        },
+        stocks: [
+          {
+            code: '000001',
+            name: '缓存数据',
+            rank: 1,
+            compRank: 1,
+            source: 'eastmoney',
+            rankTrend: { meta: { change: 8 } },
+          },
+        ],
+        cacheMeta: { stale: true },
+      }
+      const { dataLoader } = await import('../../dataLoader')
+
+      const summaryPromise = dataLoader.bootstrapInitialData({ force: false })
+
+      try {
+        // 缓存快发布必须立即可观测 startup-bundle 来源（平台加载被 block，后台刷新不会先覆盖）
+        await vi.waitFor(() => {
+          expect(dataLayer.getListPoolProvenance()?.source).toBe('startup-bundle')
+        })
+      } finally {
+        blockPlatformLoad = false
+        releasePlatformLoad?.()
+        await summaryPromise.catch(() => undefined)
+      }
+    })
   })
 })
