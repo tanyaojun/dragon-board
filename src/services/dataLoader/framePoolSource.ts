@@ -118,7 +118,7 @@ export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
   return stock
 }
 
-/** 帧池模式下 platformData 行过滤到帧池范围；空平台不保留键（calculatePlatformTotals 按行数计 0） */
+/** 帧池模式下 platformData 行过滤到帧池范围；空平台不保留键（platformTotals 由后端帧内计算） */
 export function filterPlatformDataToCodes(
   platformData: Record<string, any[]>,
   codes: Set<string>,

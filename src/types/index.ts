@@ -64,13 +64,9 @@ export {
   DEFAULT_THRESHOLD_MULTIPLIERS,
   type MarketPhase,
 
-  // 权重相关
+  // 平台权重与缺省占位
   PLATFORM_WEIGHTS,
-  COMPREHENSIVE_WEIGHTS,
-  PENALTY_SCORE,
   DEFAULT_RANK,
-  OPTIMAL_TURNOVER,
-  TURNOVER_SIGMA,
 
   // 事件相关
   AppEvents,

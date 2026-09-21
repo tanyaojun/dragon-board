@@ -433,18 +433,9 @@ export const PLATFORM_WEIGHTS = {
   cls: 0.35,
 } as const
 
-export const COMPREHENSIVE_WEIGHTS = {
-  HOT_RANK: 0.45,
-  MONEY_RATIO: 0.25,
-  FUND_PENETRATION: 0.1,
-  TURNOVER_RATE: 0.12,
-  VOLUME: 0.08,
-} as const
-
-export const PENALTY_SCORE = 100
+// 综合排名五维口径 golden 在后端（backend/analysis/ranktrend/ranking/comprehensive_rank.py，
+// 2026-09-21 口径唯一化裁决 A）；前端仅保留缺省占位语义。
 export const DEFAULT_RANK = 999
-export const OPTIMAL_TURNOVER = 15
-export const TURNOVER_SIGMA = 10
 
 // ========== 性能监控配置 ==========
 export const PERFORMANCE_CONFIG = {

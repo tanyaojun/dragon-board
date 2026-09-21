@@ -958,7 +958,7 @@ class DataLoaderService {
       }
     }
 
-    // 3. 构建股票数据并计算综合排名
+    // 3. 构建股票数据（综合排名消费后端 golden，帧池种子行透传；2026-09-21 口径唯一化）
     this.updateProgress(this.startupProgress.mergeStart, '合并热榜与行情数据...', 'merge')
     let merged = await this.measureStartupStep('merge', () =>
       stockMergeCoordinator.merge({

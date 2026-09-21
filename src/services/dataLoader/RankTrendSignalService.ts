@@ -219,8 +219,8 @@ export class RankTrendSignalService {
     for (const stock of stocks) {
       const rankTrend = stock.rankTrend as RankTrendAnalysisResult | undefined
 
-      // 2026-08-24 回滚前后端分离迁移：compRank/avgRankNum 由前端本地实时计算
-      // （ComprehensiveRankEngine.rankMergedStocks），analyze 不再注入/回填，此处不覆盖本地值。
+      // 2026-09-21 口径唯一化：compRank/avgRankNum 消费后端 golden（帧池种子透传），
+      // analyze 不注入/回填，此处不覆盖种子值。
 
       // 变化% 和 跃迁度：直接从 rankTrend 读取
       stock._rankChange = Math.round(rankTrend?.meta?.change ?? 0)
