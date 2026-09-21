@@ -627,6 +627,7 @@ import type {
   HotListStageKey,
 } from '@/types/hotlistSentiment'
 import { HOT_LIST_STAGE_LABELS } from '@/types/hotlistSentiment'
+import type { ListPoolProvenance } from '@/types'
 import {
   EMOTION_PHASE_BY_VALUE,
   EMOTION_PHASE_LIST,
@@ -728,6 +729,9 @@ const hotListSentimentSlotsDegradedReason = ref<string | null>(null)
 const hotListSentimentSlotTime = ref('')
 // 当前行情列表池规模（merged.stocks 订阅内维护，响应式）：与快照池 topN 对账用（2026-09-19）
 const marketListPoolCount = ref(0)
+// 列表池 provenance（2026-09-21 池源替换）：dataLayer 状态非 Vue 响应式，
+// 跟随 merged.stocks 订阅同步到本地 ref 供 computed 依赖
+const listPoolProvenance = ref<ListPoolProvenance | null>(dataLayer.getListPoolProvenance())
 const themeResearch = ref<ThemeResearchExplanation>(buildThemeResearchExplanation({ available: false, reason: 'not_loaded' }))
 let hotListSentimentTimer: ReturnType<typeof setTimeout> | null = null
 let hotListSentimentRetryCount = 0
@@ -975,17 +979,38 @@ const hotListStatusItems = computed(() => {
 // 缺字段（旧 EOD 文档）时整段隐藏，不做硬门禁。fallback 量价启发式与新级联不同源——
 // 若将来收敛为同口径，必须同步改此处文案 + spec + 合同文档（code review F5）。
 //
-// 池口径差异透出（2026-09-19，fail-visible）：本区块全池 = 快照帧池（采集时点的
-// startup-bundle 池），行情列表 = 前端当前合并池。页面盘后加载/刷新后两池会因进出榜
-// 时点不同而分叉（如盘后新进榜股票只在列表有周期判定），用户直接对账会把「点火 2 vs 3」
-// 误判为分类不一致；差异必须可见并解释，而不是让两处数字静默不一致。
+// 池对账注脚（2026-09-21，fail-visible）：本区块全池 = 快照帧池，行情列表池以
+// dataLayer provenance 为准。同槽一致时不产生噪音；降级（回退热榜合并池）、启动
+// 缓存快路径、列表帧槽落后于情绪槽、同槽残余差异都必须如实透出，不允许两处数字静默不一致。
 const hotListPoolGapNote = computed(() => {
-  const snapshotPool = hotListToday.value?.topN || 0
+  const provenance = listPoolProvenance.value
   const listPool = marketListPoolCount.value
-  if (!snapshotPool || !listPool || snapshotPool === listPool) return ''
-  const slotTime = hotListSentimentSlotTime.value
-  const snapshotLabel = slotTime ? `快照池 ${snapshotPool} 只（${slotTime}）` : `快照池 ${snapshotPool} 只`
-  return `${snapshotLabel} ≠ 行情列表 ${listPool} 只，两池进出榜时点不同，各格计数只统计快照池`
+  const snapshotPool = hotListToday.value?.topN || 0
+  if (!listPool) return ''
+  // 降级：帧池不可用回退热榜合并池，与快照池口径不同，必须如实透出
+  if (!provenance || provenance.source === 'hotlist-merged') {
+    const reason = provenance?.degradeReason ? `（${provenance.degradeReason}）` : ''
+    return `后端帧池暂不可用${reason}，行情列表已回退热榜合并池 ${listPool} 只，各格计数只统计快照池`
+  }
+  // 启动缓存快路径：后台刷新随即对齐帧池，短暂透出
+  if (provenance.source === 'startup-bundle') {
+    return `行情列表暂为启动缓存池 ${listPool} 只，正在对齐快照帧池`
+  }
+  // 槽位滞后：列表帧槽落后于情绪区块最新槽
+  const sentimentSlot = hotListSentimentSlotTime.value
+  if (
+    snapshotPool &&
+    provenance.slotTime &&
+    sentimentSlot &&
+    provenance.slotTime !== sentimentSlot
+  ) {
+    return `行情列表为 ${provenance.slotTime} 帧池 ${listPool} 只，情绪区块为 ${sentimentSlot} 槽，槽位暂不同步`
+  }
+  // 同槽理论上一致；若仍不等（如分析文档滞后），保留最小差异提示
+  if (snapshotPool && snapshotPool !== listPool) {
+    return `快照池 ${snapshotPool} 只 ≠ 行情列表 ${listPool} 只（列表帧槽 ${provenance.slotTime || '--'}），各格计数只统计快照池`
+  }
+  return ''
 })
 
 const hotListStatusSourceNote = computed(() => {
@@ -1656,13 +1681,14 @@ onMounted(() => {
   const unsubStocks = dataLayer.subscribe('merged.stocks', () => {
     // 列表池规模对账（2026-09-19）：与快照池 topN 差异在「全池状态结构」注脚透出
     marketListPoolCount.value = (dataLayer.getStocks() as Array<Record<string, any>>).length
+    listPoolProvenance.value = dataLayer.getListPoolProvenance()
     // 仅面板可见时调度；schedule 内部另有 5s 节流与 in-flight 锁兜底
     if (props.visible) scheduleHotListSentimentLoad()
   })
   unsubscribeFns.push(unsubStocks)
 
   marketListPoolCount.value = (dataLayer.getStocks() as Array<Record<string, any>>).length
-
+  listPoolProvenance.value = dataLayer.getListPoolProvenance()
   loadHotListSentiment()
   loadThemeResearch()
 })

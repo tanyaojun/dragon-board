@@ -29,19 +29,30 @@ describe('DragonBreathPanel 状态来源透出（spec §4）', () => {
     expect(source).toContain('v-if="hotListStatusSourceNote"')
   })
 
-  test('池口径差异透出（2026-09-19）：快照池 ≠ 行情列表时在注脚解释，一致时不产生噪音', () => {
+  test('池对账注脚按列表池 provenance 语义透出（2026-09-21）：一致不提示，降级/启动缓存/槽位滞后如实透出', () => {
     const source = panelSource()
 
-    // 面板全池 = 快照帧池（采集时点），行情列表 = 前端当前合并池；盘后进出榜会让两池分叉，
-    // 用户直接对账会误判为分类不一致（如「点火 2 vs 3」）。差异必须可见并解释（fail-visible）。
+    // 面板全池 = 快照帧池，行情列表池以 dataLayer provenance 为准；同槽一致不产生噪音，
+    // 降级（回退热榜合并池）/启动缓存/槽位滞后/同槽残余差异必须如实透出（fail-visible），
+    // 不允许两处数字静默不一致，也不再用「两池时点差」旧语义解释。
     expect(source).toContain('const hotListPoolGapNote = computed(() => {')
     expect(source).toContain('marketListPoolCount')
-    expect(source).toContain('snapshotPool === listPool')
-    // 差异说明必须点名「进出榜时点不同」与「只统计快照池」，避免用户误读计数口径
-    expect(source).toContain('两池进出榜时点不同，各格计数只统计快照池')
-    // 列表池规模由 merged.stocks 订阅维护（响应式），挂载时初始化一次
+    // provenance 读取接入（订阅 + computed 依赖），帧池切换随 merged.stocks 响应式刷新
+    expect(source).toContain('dataLayer.getListPoolProvenance()')
+    // 列表池规模与 provenance 均由 merged.stocks 订阅维护（响应式），挂载时初始化一次
     expect(source).toContain("dataLayer.subscribe('merged.stocks', () => {")
     expect(source).toContain('marketListPoolCount.value = (dataLayer.getStocks()')
+    // 降级提示：帧池不可用回退热榜合并池必须可见
+    expect(source).toContain("'hotlist-merged'")
+    expect(source).toContain('回退热榜合并池')
+    // 启动缓存快路径提示
+    expect(source).toContain("'startup-bundle'")
+    // 槽位滞后提示：列表帧槽 ≠ 情绪区块最新槽
+    expect(source).toContain('槽位暂不同步')
+    // 同槽残余差异仍保留最小对账口径说明
+    expect(source).toContain('snapshotPool !== listPool')
+    // 一致时不产生两池差异文案（旧「两池时点差」关键词必须消失，注释一并扫）
+    expect(source).not.toContain('两池进出榜时点不同')
   })
 
   test('全池状态结构为 6 格且不含 8 类修正栏', () => {
