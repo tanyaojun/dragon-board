@@ -11,6 +11,8 @@ export type {
   DataVersion,
   LeaderLookupRecord,
   LimitUpExtData,
+  ListPoolProvenance,
+  ListPoolSource,
   MergedStock,
   StockExtData,
   ThemeMetrics as DataLayerThemeMetrics,

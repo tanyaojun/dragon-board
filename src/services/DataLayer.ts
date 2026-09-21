@@ -17,6 +17,7 @@ import {
 import type {
   DataState,
   LimitUpExtData,
+  ListPoolProvenance,
   MergedStock,
   PlatformStatusInfo,
   StockExtData,
@@ -58,6 +59,7 @@ class DataLayer {
       lastUpdate: null,
     },
     merged: { stocks: [], themes: [] },
+    listPoolProvenance: null as ListPoolProvenance | null,
 
     // 龙头数据单独存储
     leader: {
@@ -1134,6 +1136,20 @@ class DataLayer {
     this.state.meta.lastMergeTime = Date.now()
     this.throttledNotify('merged.stocks', this.state.merged.stocks)
     this.throttledNotify('version.stocks', this.state.version.stocks)
+  }
+
+  /**
+   * 行情列表池 provenance（2026-09-21 池源替换）：
+   * 记录当前列表 membership 来自哪个池（帧池/热榜合并池/启动缓存），
+   * 供面板对账注脚与诊断使用，不参与任何业务计算。
+   */
+  setListPoolProvenance(provenance: ListPoolProvenance | null) {
+    this.state.listPoolProvenance = provenance
+    this.throttledNotify('listPool.provenance', provenance)
+  }
+
+  getListPoolProvenance(): ListPoolProvenance | null {
+    return this.state.listPoolProvenance
   }
 
   private applyRealtimeProjection(stock: MergedStock): MergedStock {

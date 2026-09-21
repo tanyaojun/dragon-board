@@ -264,6 +264,7 @@ export interface DataState {
     stocks: MergedStock[]
     themes: any[]
   }
+  listPoolProvenance: ListPoolProvenance | null
   leader: {
     byCode: Map<string, LeaderLookupRecord>
     byLevel: Record<string, LeaderLookupRecord[]>
@@ -348,4 +349,16 @@ export interface DataState {
     lastMergeTime: number | null
     marketMode: 'hot' | 'full'
   }
+}
+
+/** 行情列表池来源（2026-09-21 池源替换）：frame-pool=后端最新 half_hour 帧池 */
+export type ListPoolSource = 'frame-pool' | 'hotlist-merged' | 'startup-bundle'
+
+/** 列表池 provenance：对账注脚与诊断依据，随每次池发布更新 */
+export interface ListPoolProvenance {
+  source: ListPoolSource
+  slotTime?: string
+  tradingDate?: string
+  degradeReason?: string
+  updatedAt: number
 }

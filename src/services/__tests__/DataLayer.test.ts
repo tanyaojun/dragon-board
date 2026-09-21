@@ -302,3 +302,28 @@ describe('DataLayer money flow source precedence', () => {
     }
   })
 })
+
+describe('DataLayer list pool provenance', () => {
+  test('默认 provenance 为 null，set/get 返回同一对象', () => {
+    dataLayer.reset()
+
+    try {
+      dataLayer.setListPoolProvenance(null)
+      expect(dataLayer.getListPoolProvenance()).toBeNull()
+
+      const provenance = {
+        source: 'frame-pool' as const,
+        slotTime: '10:30',
+        tradingDate: '2026-09-21',
+        updatedAt: 1758426600000,
+      }
+      dataLayer.setListPoolProvenance(provenance)
+      expect(dataLayer.getListPoolProvenance()).toEqual(provenance)
+
+      dataLayer.setListPoolProvenance(null)
+      expect(dataLayer.getListPoolProvenance()).toBeNull()
+    } finally {
+      dataLayer.reset()
+    }
+  })
+})
