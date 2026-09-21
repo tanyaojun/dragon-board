@@ -158,6 +158,10 @@ export interface MergedStock {
   avgRank?: string
   compRank?: number
   compScore?: number
+  /** 综合排名（语义 := compRank，compScore 降序 + code 稳定序；golden 来自后端快照行） */
+  rank?: number
+  qualityFlags?: string[]
+  missingFields?: string[]
   updatedAt?: number
   firstSeen?: number
   lastSeen?: number

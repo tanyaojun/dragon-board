@@ -75,6 +75,10 @@ export interface SnapshotStockRow {
   name: string
   rank: number
   compRank: number
+  compScore?: number | null
+  fundPenetration?: number | null
+  qualityFlags?: string[]
+  missingFields?: string[]
   platforms: number
   avgRank?: string
   avgRankNum?: number
