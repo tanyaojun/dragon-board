@@ -2,7 +2,23 @@ import type { MergedStock } from '@/types'
 import { DEFAULT_RANK } from '@/types/config'
 import { stockCodeManager } from '../StockCodeManager'
 import { shouldApplyMoneyFlowUpdate } from '../moneyFlowSourcePriority'
-import { getRankField, rankMergedStocks } from './ComprehensiveRankEngine'
+
+// 8 平台 rank 字段映射（原 ComprehensiveRankEngine 导出，2026-09-21 口径唯一化后仅剩
+// 展示合并这一处消费方，收编为模块私有）。平台 rank 是原始平台数据展示字段，非计算输入。
+const RANK_FIELD_MAP: Record<string, string> = {
+  eastmoney: 'emRank',
+  ths: 'thsRank',
+  kpl: 'kplRank',
+  tdx: 'tdxRank',
+  xueqiu: 'xqRank',
+  cls: 'clsRank',
+  tgb: 'tgbRank',
+  dzh: 'dzhRank',
+}
+
+function getRankField(platform: string): string | null {
+  return RANK_FIELD_MAP[platform] || null
+}
 
 function isValidStockName(name: string): boolean {
   return !!(name && name !== '-' && name !== 'null' && name !== 'undefined' && name.trim() !== '')
@@ -81,11 +97,16 @@ export class StockMergeCoordinator {
   async merge(input: StockMergeCoordinatorInput): Promise<any[]> {
     const stockMap = await this.buildStockMap(input)
     this.applyStockNameFallbacks(stockMap)
-    // 2026-08-24 回滚前后端分离迁移（b82835a/0ea572b/98ab74b/b5cd1a7）：
-    // 均榜 avgRankNum + 综合 compRank 恢复前端本地实时计算（ComprehensiveRankEngine.rankMergedStocks，
-    // 与采集器/附件 HTML 同源公式），保证全部热榜股票都有排名（热榜股票池实时动态变化，
-    // 后端快照/analyze 覆盖不全导致历史无记录股票无排名的设计缺陷不再成立）。
-    return rankMergedStocks(stockMap, input.platformData)
+    // 2026-09-21 口径唯一化（spec: 2026-09-21-comprehensive-rank-golden-convergence-design.md）：
+    // 删除本地综合排名/均榜计算（2026-08-24 回滚口径作废），compScore/compRank/avgRankNum
+    // 一律消费后端 golden（帧池种子行透传，framePoolSource.buildFrameSeedStock）；
+    // 降级链行无排名，如实缺省并由 poolSource provenance 打标（fail-visible，不伪造）。
+    const merged = Array.from(stockMap.values())
+    return merged.sort(
+      (a, b) =>
+        (a.compRank ?? DEFAULT_RANK) - (b.compRank ?? DEFAULT_RANK) ||
+        String(a.code).localeCompare(String(b.code)),
+    )
   }
 
   private async buildStockMap(input: StockMergeCoordinatorInput): Promise<Map<string, any>> {

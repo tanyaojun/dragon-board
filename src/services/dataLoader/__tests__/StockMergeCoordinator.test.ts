@@ -185,4 +185,50 @@ describe('StockMergeCoordinator', () => {
       moneyFlowSource: 'eastmoney',
     })
   })
+
+  it('口径唯一化：golden compRank 不被本地重算覆盖（2026-09-21 裁决 A）', async () => {
+    const stocks = await new StockMergeCoordinator().merge({
+      platformData: {
+        eastmoney: [{ code: '000001', name: '样本股', rank: 1 }],
+      },
+      latestQuotes: new Map(),
+      existingMap: new Map([
+        ['000001', { code: '000001', name: '样本股', compRank: 7, compScore: 55.5, avgRankNum: 37.5, rank: 7 }],
+      ]),
+    })
+
+    expect(stocks[0].compRank).toBe(7)
+    expect(stocks[0].compScore).toBe(55.5)
+    expect(stocks[0].avgRankNum).toBe(37.5)
+    expect(stocks[0].rank).toBe(7)
+  })
+
+  it('列表排序按 golden compRank 降序稳定（缺省垫底，并列按 code）', async () => {
+    const stocks = await new StockMergeCoordinator().merge({
+      platformData: {},
+      latestQuotes: new Map(),
+      existingMap: new Map([
+        ['300002', { code: '300002', name: '丙', compRank: undefined }],
+        ['000001', { code: '000001', name: '乙', compRank: 3 }],
+        ['600001', { code: '600001', name: '甲', compRank: 1 }],
+      ]),
+    })
+
+    expect(stocks.map((s: { code: string }) => s.code)).toEqual(['600001', '000001', '300002'])
+  })
+
+  it('平台 rank 字段仍实时合并（展示字段），降级行无排名不伪造', async () => {
+    const stocks = await new StockMergeCoordinator().merge({
+      platformData: {
+        eastmoney: [{ code: '000001', name: '样本股', rank: 2 }],
+      },
+      latestQuotes: new Map(),
+      // compScore: 0 是 createEmptyMergedStock 的占位默认，真实存量行都带该形状
+      existingMap: new Map([['000001', { code: '000001', name: '样本股', compScore: 0 }]]),
+    })
+
+    expect(stocks[0].emRank).toBe(2)
+    expect(stocks[0].compRank).toBeUndefined()
+    expect(stocks[0].compScore).toBe(0)
+  })
 })
