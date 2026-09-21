@@ -33,7 +33,7 @@
 | 3 | RankTrend golden | `RankTrendAnalyzer.ts:75,438` 只消费 analyze API；`rankTrend/*` 仅投影/应用层，零算法残留 | `analysis/ranktrend/engine.py`（`api/ranktrend_routes.py:405`） | ✅ 已收敛 | 后端 | — |
 | 4 | 热榜情绪（逐日全市场） | `hotlist/hotlistSentimentApi.ts:2` 薄客户端（TS 算法已删） | `analysis/hotlist/sentiment.py:1` 唯一权威口径 | ✅ 已收敛 | 后端 | — |
 | 5 | 正式快照生产 | `snapshot/facade.ts:26` sweep 默认关；`runtime.ts:1321` 仅补传/备份回放 | `snapshot_collector/service.py:778,652` 直写 MongoDB；`main.py:674` ingest 路由=手工/诊断；after-save 钩子 `data/repositories/snapshot_post_save.py` | ✅ 已收敛 | 后端 | — |
-| 6 | 五维综合评分 compScore/compRank | `dataLoader/ComprehensiveRankEngine.ts:97-170`（mergeData 链活跃，`StockMergeCoordinator.ts:88`） | `analysis/ranktrend/ranking/comprehensive_rank.py:53`（`providers.py:1047` 快照链调用） | ⚠️ 双实现并存（迁移面） | 待裁决（§5 P1） | P1 |
+| 6 | 五维综合评分 compScore/compRank | 已删除 `ComprehensiveRankEngine.ts`；帧池种子行透传 golden（`framePoolSource.ts` buildFrameSeedStock），前端零排名计算 | `analysis/ranktrend/ranking/comprehensive_rank.py:53`（`providers.py:1047` 快照链调用） | ✅ 已收敛（2026-09-21 用户裁决方向 A） | 后端 | 2026-09-21 口径唯一化 spec |
 | 7 | 个股热度 hotness | `hotness/StockHotnessCalculator.ts:11-20`（8 分量加权）+ `dataLoader/StockHotnessService.ts:5` | 无对应实现 | ⚠️ 前端独有（迁移面候选） | 前端（暂） | P2 |
 | 8 | 实时行情 | `websocket.ts:94-103`（ws://127.0.0.1:8765/ws/quotes → `QuoteService`/`RealtimeQuoteCoordinator`） | `python-bridge/main.py:666-667`（WS 生产）；`market_proxy/quotes.py`（HTTP 兜底+采集链 in-process） | 🔵 保留面 | — | 长期保留（用途不同） |
 | 9 | 题材热度 heat | `theme/ThemeHeatFeed.ts` 消费 `/api/themes/heat` | `analysis/theme/heat.py:8`（题材人气聚合） | ✅ 后端唯一 | 后端 | —（互补领域） |
@@ -58,6 +58,7 @@
 - 现状变化：09-21 池源替换后，列表 = 帧池全集，帧行自带后端 golden compRank——回滚理由已部分消解；但新约束出现：帧槽 30 分钟一档，前端本地算可秒级跟随热榜轮动，后端口径有 ≤30min 排名滞后。
 - 待裁决权衡：**口径唯一**（后端权威，前端删算法消费帧行/analyze 产物，代价是排名时效降级）vs **排名时效**（前端保留本地实时算，登记为保留面，代价是永久双实现与代际差，靠 `poolSource` provenance 区分）。
 - 未裁决前维持现状；裁决后立项（立项时按 skill 三问出 spec）。任何一侧都不得在无登记的情况下静默改动口径。
+- **裁决与落地（2026-09-21）**：用户裁决方向 A（口径唯一）；前端删除 ComprehensiveRankEngine 本地计算（含均榜 avgRankNum），帧池种子行透传后端 golden，降级行无排名如实缺省（provenance/qualityFlags 打标）。代价（主列表排名帧内冻结 ≤30min）已由用户接受。spec：`docs/superpowers/specs/2026-09-21-comprehensive-rank-golden-convergence-design.md`。
 
 **P2：hotness 个股热度后端化评估。**
 

@@ -1,6 +1,6 @@
 # 五维综合评分口径唯一化：前端全面消费后端 golden（compScore/compRank/avgRankNum 双实现收敛）设计
 
-> 状态：设计已确认（2026-09-21 用户裁决方向 A「口径唯一」+ 六节设计整体通过；实施未开始）。
+> 状态：设计已确认（2026-09-21 用户裁决方向 A「口径唯一」+ 六节设计整体通过）；实施完成（2026-09-21，实施计划 `docs/superpowers/plans/2026-09-21-comprehensive-rank-golden-convergence.md`，提交 c7119887/3ceadf54/76ab655b/e0e24b6b，`pnpm test` 134 文件 1087 用例、`pnpm test:ranktrend` 171 用例、两类 typecheck 全绿）。实施期勘误见 §4 末尾注。
 > 触发：`docs/single-source-of-truth-architecture.md` §3 盘点表第 6 行——五维综合评分是 2026-09-21 源码盘点确认的唯一活跃双源；§5 P1 要求裁决后立项。
 > 前序：`docs/superpowers/specs/2026-09-21-frontend-pool-frame-alignment-design.md`（池源替换已上线实测，帧行自带后端 golden 排名，是本方案的数据前提）。
 > 依据：`AGENTS.md` §4.1/§4.2/§10/§11、`skills/single-source-of-truth/SKILL.md`（三问见 §1）、`skills/fail-visible-data-pipelines/SKILL.md`（降级语义见 §4）。
@@ -52,6 +52,8 @@
 - 可见性三层：`poolSource` provenance 批级标记（已有）+ 行级 `qualityFlags`/`missingFields`（golden 行自带；降级行如实缺省）+ 面板注脚复用 09-21 机制，注明「降级期间无综合排名」。
 - **NaN 加固**（本方案唯一新增防御）：`BusinessRules.ts:149` `100 - stock.compRank * 5` 在 compRank undefined 时产生 NaN——改显式 `?? DEFAULT_RANK` 回退，先写失败测试再修（TDD）。其余消费方既有 `|| 999`/`?? 9999`/`isFinite` 回退逐一 rg 复核，实施时以测试锁定。
 - hotness：`StockHotnessCalculator` 已有 `isValidRank` 守卫，avgRankNum 缺失时 avgRank 分量按无效剔除（既有测试确认，不新增结构）。
+
+> **实施期勘误（2026-09-21）**：本节 planned 的 `BusinessRules.ts:149` NaN 防御**未实施**——实施时核实该文件被 `tsconfig.app.json` 显式排除且全仓库零 import（`StockContext` 亦未声明 `compRank`），属未挂载历史遗留文件，非活跃消费方；活跃 compRank 消费方（`stores/stock.ts`、`dragon/CandidatePoolBuilder`、`BattlefieldBuilder`、`FrameNormalizer`、`config/factors`、`exportService`、`DataFreshness`）已逐一核实全部自带安全回退（`|| 999`/`?? 9999`/`isFinite` 守卫），不存在 NaN 污染路径，故无需新增防御。此为设计阶段盘点疏漏（rg 命中即列为消费面，未核实排除清单），特此记录。
 
 ## 5. 删除与保留清单（rg 逐符号核实）
 
