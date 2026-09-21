@@ -473,7 +473,7 @@ describe('fetchGoldenRowsForCodes（2026-09-22 盘中上榜、收盘帧掉出股
     vi.restoreAllMocks()
   })
 
-  it('跨帧取每 code 最近一次入池帧行（sort=desc 首 现），请求带 codes+includeAnalysis', async () => {
+  it('跨帧取每 code 最近一次入池帧行（sort=desc 首 现），请求带 codes+includeAnalysis+fields 投影', async () => {
     // sort=desc：最新帧（15:00）行在前；600000 只在 14:30 帧出现过
     listSnapshotStockRows.mockResolvedValue([
       makeRow({ code: '000001', snapshotId: 'half_hour:2026-09-21:14:30', compRank: 7 }),
@@ -490,6 +490,8 @@ describe('fetchGoldenRowsForCodes（2026-09-22 盘中上榜、收盘帧掉出股
         codes: ['600000', '000001'],
         sort: 'desc',
         includeAnalysis: true,
+        // review M2：fields 投影收窄回溯响应体积（golden 字段子集，analysis 由后端独立注入）
+        fields: expect.arrayContaining(['code', 'snapshotId', 'compRank', 'avgRankNum']),
       }),
     )
     expect(result).not.toBeNull()

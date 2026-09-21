@@ -28,6 +28,25 @@ export interface FramePoolFetchResult {
 /** golden 回退帧最大回看自然日数（覆盖常规假期；再往前属冷数据，如实放弃） */
 const GOLDEN_FRAME_LOOKBACK_DAYS = 7
 
+/**
+ * 跨帧回溯请求的字段投影（code review M2）：回溯行的消费面只有 applyGoldenFields
+ * 的 golden 排名字段子集 + 行级 analysis 回填（后端注入与 fields 过滤独立执行）。
+ * code/snapshotId 是匹配键必须携带；不投影则数百 missing codes × 多帧 × 完整
+ * analyze 产物的响应可达数十 MB，且串行阻塞首屏发布。
+ */
+const GOLDEN_BACKTRACK_FIELDS = [
+  'code',
+  'snapshotId',
+  'compRank',
+  'compScore',
+  'avgRankNum',
+  'avgRank',
+  'platforms',
+  'fundPenetration',
+  'qualityFlags',
+  'missingFields',
+]
+
 export interface GoldenFrameRows {
   rowsByCode: Map<string, SnapshotStockRow>
   tradingDate: string
@@ -151,15 +170,17 @@ export async function fetchGoldenRowsForCodes(
   const wanted = Array.from(new Set((codes || []).map((code) => String(code || '').trim()).filter(Boolean)))
   if (!wanted.length) return null
   const tradingDate = options.tradingDate || toLocalTradingDate(new Date())
-  try {
-    const rows = await snapshotBackendRead.listSnapshotStockRows({
-      type: 'half_hour',
-      tradingDate,
-      codes: wanted,
-      sort: 'desc',
-      limit: Math.max(wanted.length * 12, FRAME_POOL_ROW_LIMIT),
-      includeAnalysis: true,
-    })
+    try {
+      const rows = await snapshotBackendRead.listSnapshotStockRows({
+        type: 'half_hour',
+        tradingDate,
+        codes: wanted,
+        sort: 'desc',
+        limit: Math.max(wanted.length * 12, FRAME_POOL_ROW_LIMIT),
+        includeAnalysis: true,
+        // 体积投影（review M2）：只取 golden 字段子集，analysis 由后端独立注入
+        fields: [...GOLDEN_BACKTRACK_FIELDS],
+      })
     const rowsByCode = new Map<string, SnapshotStockRow>()
     for (const row of rows || []) {
       const code = String(row?.code || '')
