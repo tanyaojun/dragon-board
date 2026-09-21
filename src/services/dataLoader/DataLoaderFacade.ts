@@ -4,7 +4,7 @@ import { debugLog } from '@/utils/logger'
 import { ref, readonly } from 'vue'
 import { dataLayer } from '../DataLayer'
 import type { MergedStock } from '@/types'
-import { LIST_POOL_SOURCE_MODE } from '@/config/listPool'
+import { FRAME_POOL_PROBE_INTERVAL_MS, LIST_POOL_SOURCE_MODE } from '@/config/listPool'
 import { themeFacade } from '../theme/ThemeFacade'
 import { isTradingTime } from '@/utils/time'
 import { EventManager } from '../../utils/eventManager'
@@ -101,6 +101,8 @@ class DataLoaderService {
   private volumeRatioRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private volumeRatioRefreshRunning = false
   private lastVolumeRatioRefreshAt = 0
+  private framePoolProbeRunning = false
+  private lastFramePoolProbeAt = 0
   private failedPlatformRetryTimer: ReturnType<typeof setInterval> | null = null
   private startupSnapshotContext: StartupSnapshotContext | null = null
   private startupCurrentContextWritten = false
@@ -228,6 +230,38 @@ class DataLoaderService {
 
     platformHotlistService.markRefreshed()
     return false
+  }
+
+  /**
+   * 帧池新槽探测（2026-09-21 spec）：行情刷新链尾部低频探测后端最新帧，
+   * 发现新 slotTime 即以帧池重建列表。探测失败静默跳过——不打扰实时行情主链，
+   * 下次再探；全量路径的降级已在 mergeData 内如实打标。
+   */
+  private async maybeRefreshFramePool(): Promise<void> {
+    if (LIST_POOL_SOURCE_MODE !== 'frame-pool') return
+    if (this.framePoolProbeRunning) return
+    const now = Date.now()
+    if (now - this.lastFramePoolProbeAt < FRAME_POOL_PROBE_INTERVAL_MS) return
+    this.lastFramePoolProbeAt = now
+    this.framePoolProbeRunning = true
+    try {
+      const result = await fetchLatestFramePool()
+      if (!result.pool) return
+      const current = dataLayer.getListPoolProvenance()
+      if (
+        current?.source === 'frame-pool' &&
+        current.slotTime === result.pool.slotTime &&
+        current.tradingDate === result.pool.tradingDate
+      ) {
+        return
+      }
+      debugLog('[DataLoader] 发现新帧槽，重建列表池', result.pool.slotTime)
+      await this.loadPlatformAndMerge(false, { allowWhileLoading: true })
+    } catch (error) {
+      console.warn('[DataLoader] 帧池探测失败，跳过本轮:', error)
+    } finally {
+      this.framePoolProbeRunning = false
+    }
   }
 
   // ========== 加载状态管理 ==========
@@ -685,6 +719,8 @@ class DataLoaderService {
     }
 
     await this.maybeRefreshPlatformCache()
+
+    await this.maybeRefreshFramePool()
 
     debugLog('[DataLoader] 行情刷新完成')
   }

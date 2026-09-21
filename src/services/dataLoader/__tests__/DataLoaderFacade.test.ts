@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 import { AppEvents } from '@/types'
+import { FRAME_POOL_PROBE_INTERVAL_MS } from '@/config/listPool'
 import { EventManager } from '@/utils/eventManager'
 import { dataLayer } from '../../DataLayer'
 import { clearVolumeRatioCache } from '../volumeRatioCache'
@@ -1486,6 +1487,118 @@ describe('DataLoaderFacade', () => {
       // membership 回到热榜合并池（现有夹具 platformRows 的 000001）
       const codes = new Set(dataLayer.getStocks().map((s: any) => s.code))
       expect(codes.has('000001')).toBe(true)
+    })
+  })
+
+  describe('maybeRefreshFramePool slot probe', () => {
+    // 帧池夹具：codes/rowsByCode 由同一 rows 派生，保证 membership 与种子行一致
+    const framePoolAt = (slotTime: string, rows: Array<{ code: string; name: string }>) => ({
+      pool: {
+        codes: new Set(rows.map((row) => row.code)),
+        slotTime,
+        tradingDate: '2026-09-21',
+        rowsByCode: new Map(
+          rows.map((row) => [row.code, { code: row.code, name: row.name, price: 12 }]),
+        ),
+      },
+    })
+
+    beforeEach(async () => {
+      // dataLayer.reset() 不清 provenance（沿用 Task 3 用例模式：涉 provenance 显式归零）
+      dataLayer.setListPoolProvenance(null)
+      // 单例探测门限跨用例残留：显式归零保证每用例首次探测必过门限；
+      // 门限行为本身由「间隔门限」用例经 fake timers 推进时钟单独锁定
+      const { dataLoader } = await import('../../dataLoader')
+      ;(dataLoader as any).lastFramePoolProbeAt = 0
+      ;(dataLoader as any).framePoolProbeRunning = false
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2027-01-04T09:30:00+08:00'))
+    })
+
+    afterEach(async () => {
+      vi.useRealTimers()
+      framePoolState.result = { pool: null, reason: 'http-error' }
+    })
+
+    it('同槽不重复重建；新槽出现则重建并更新 provenance', async () => {
+      framePoolState.result = framePoolAt('10:30', [{ code: '600000', name: '浦发银行' }])
+      const { dataLoader } = await import('../../dataLoader')
+      const { fetchLatestFramePool } = await import('../framePoolSource')
+
+      // 1. 先驱动一次帧池 merge，进入 frame-pool provenance 状态
+      await dataLoader.loadAllPlatforms(true)
+      expect(dataLayer.getListPoolProvenance()).toMatchObject({
+        source: 'frame-pool',
+        slotTime: '10:30',
+      })
+      const platformLoadsAfterSeed = platformLoadCount
+      vi.mocked(fetchLatestFramePool).mockClear()
+
+      // 2. 行情刷新 tick：探测到同槽 → 不触发重建（platformLoad 不变、provenance 不变）
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(1)
+      expect(platformLoadCount).toBe(platformLoadsAfterSeed)
+      expect(dataLayer.getListPoolProvenance()?.slotTime).toBe('10:30')
+
+      // 3. 后端切到新帧槽 + 推进门限 → 以帧池重建列表并更新 provenance/membership
+      framePoolState.result = framePoolAt('11:00', [
+        { code: '600000', name: '浦发银行' },
+        { code: '000001', name: '平安银行' },
+      ])
+      await vi.advanceTimersByTimeAsync(FRAME_POOL_PROBE_INTERVAL_MS + 1)
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(dataLayer.getListPoolProvenance()).toMatchObject({
+        source: 'frame-pool',
+        slotTime: '11:00',
+      })
+      const codes = new Set(dataLayer.getStocks().map((s: any) => s.code))
+      expect(codes).toEqual(new Set(['600000', '000001']))
+      expect(platformLoadCount).toBe(platformLoadsAfterSeed + 1)
+    })
+
+    it('探测失败（http-error）静默跳过，不影响当前列表与 provenance，且下一间隔仍会再探', async () => {
+      framePoolState.result = framePoolAt('10:30', [{ code: '600000', name: '浦发银行' }])
+      const { dataLoader } = await import('../../dataLoader')
+      const { fetchLatestFramePool } = await import('../framePoolSource')
+
+      await dataLoader.loadAllPlatforms(true)
+      const stocksBefore = dataLayer.getStocks()
+      const provenanceBefore = dataLayer.getListPoolProvenance()
+
+      framePoolState.result = { pool: null, reason: 'http-error', message: 'boom' }
+      vi.mocked(fetchLatestFramePool).mockClear()
+
+      // 探测失败返回结构化 null：不抛异常、不改列表与 provenance，行情链正常完成
+      await expect((dataLoader as any).runQuoteRefresh(50)).resolves.toBeUndefined()
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(1)
+      expect(dataLayer.getListPoolProvenance()).toEqual(provenanceBefore)
+      expect(dataLayer.getStocks()).toEqual(stocksBefore)
+
+      // 失败不卡死门限：推进一个间隔后仍会再探（下次再探）
+      await vi.advanceTimersByTimeAsync(FRAME_POOL_PROBE_INTERVAL_MS + 1)
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(2)
+    })
+
+    it('探测间隔门限内不重复探测（1min 低频跟随 30min 帧槽）', async () => {
+      framePoolState.result = framePoolAt('10:30', [{ code: '600000', name: '浦发银行' }])
+      const { dataLoader } = await import('../../dataLoader')
+      const { fetchLatestFramePool } = await import('../framePoolSource')
+
+      await dataLoader.loadAllPlatforms(true)
+      vi.mocked(fetchLatestFramePool).mockClear()
+
+      // 门限内连续两跳只探测一次，避免 10s 行情刷新链反复打后端
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(1)
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(1)
+
+      // 推进门限后恢复探测；同槽仍不重建（platformLoad 保持 seed merge 那一次）
+      await vi.advanceTimersByTimeAsync(FRAME_POOL_PROBE_INTERVAL_MS + 1)
+      await (dataLoader as any).runQuoteRefresh(50)
+      expect(fetchLatestFramePool).toHaveBeenCalledTimes(2)
+      expect(platformLoadCount).toBe(1)
     })
   })
 
