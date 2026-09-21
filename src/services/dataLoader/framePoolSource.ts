@@ -77,8 +77,9 @@ function toFiniteNumber(value: unknown): number | null {
 
 /**
  * 帧行 → 种子行：名称与快照时点行情为兜底值（实时行情到达后被覆盖）；
- * 排名字段保持 DEFAULT_RANK 占位——合并链由 ComprehensiveRankEngine 对全列表
- * 统一重算（2026-08-24 回滚口径），列表排序口径单一，不混用后端帧内排名。
+ * 排名字段直接透传后端 golden（2026-09-21 口径唯一化裁决 A，
+ * spec: docs/superpowers/specs/2026-09-21-comprehensive-rank-golden-convergence-design.md），
+ * 前端零排名计算；前端 rank 语义 := 后端 compRank（compScore 降序 + code 稳定序）。
  */
 export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
   const stock = createEmptyMergedStock(String(row?.code || ''))
@@ -95,6 +96,25 @@ export function buildFrameSeedStock(row: SnapshotStockRow): MergedStock {
   if (volume !== null && volume > 0) stock.volume = volume
   const turnoverRate = toFiniteNumber(row?.turnoverRate)
   if (turnoverRate !== null && turnoverRate > 0) stock.turnoverRate = turnoverRate
+
+  // golden 排名字段逐位透传，缺失不伪造（保持 createEmptyMergedStock 占位语义）
+  const avgRankNum = toFiniteNumber(row?.avgRankNum)
+  if (avgRankNum !== null) {
+    stock.avgRankNum = avgRankNum
+    stock.avgRank = row?.avgRank ?? avgRankNum.toFixed(1)
+  }
+  if (toFiniteNumber(row?.platforms) !== null) stock.platforms = row.platforms
+  const compRank = toFiniteNumber(row?.compRank)
+  if (compRank !== null) {
+    stock.compRank = compRank
+    stock.rank = compRank
+  }
+  const compScore = toFiniteNumber(row?.compScore)
+  if (compScore !== null) stock.compScore = compScore
+  const fundPenetration = toFiniteNumber(row?.fundPenetration)
+  if (fundPenetration !== null) stock.fundPenetration = fundPenetration
+  if (Array.isArray(row?.qualityFlags)) stock.qualityFlags = [...row.qualityFlags]
+  if (Array.isArray(row?.missingFields)) stock.missingFields = [...row.missingFields]
   return stock
 }
 
