@@ -48,6 +48,25 @@ from tdx_hq_cache import OfficialHQCacheDepthReader
 # 北交所（920 号段）行情兼容 patch：mootdx/tdxpy 未实现北交所，运行时替换
 # （幂等；失败仅告警，不影响行情主链路）。
 tdx_bj_compat.install_bj_compat()
+
+# tdxpy 握手身份 patch（2026-09-23）：TdxHq_API.setup() 默认连发 SetupCmd1/2/3，
+# 其中 SetupCmd3 携带旧版"招商证券金钻"客户端标识串。通达信官方现行主站
+# （connect.cfg 双线主站）将该标识会话判定为旧第三方客户端，对 quotes/bars
+# 返回 4 字节空响应（软拒绝）；实测只发 SetupCmd1+2 时官方主站行情/K线/指数
+# 全部正常返回，券商老主站（国泰君安）不受影响。探测证据与变体矩阵：
+# python-bridge/research/tdx_official_protocol_probe.py
+# 设 TDX_KEEP_TDXPY_SETUP3=1 可恢复 tdxpy 原始三连握手（回退开关）。
+def _tdx_hq_setup_without_legacy_identity(self):
+    from tdxpy.parser.setup_commands import SetupCmd1, SetupCmd2
+
+    SetupCmd1(self.client).call_api()
+    SetupCmd2(self.client).call_api()
+
+
+if os.getenv("TDX_KEEP_TDXPY_SETUP3", "") not in ("1", "true", "True"):
+    from tdxpy.hq import TdxHq_API
+
+    TdxHq_API.setup = _tdx_hq_setup_without_legacy_identity
 from trading_time import (
     MORNING_CONTINUOUS_START_HHMM,
     hhmm,
@@ -247,6 +266,37 @@ def parse_server_candidates(raw: str) -> list[tuple[str, int]]:
         if pair[0] and pair not in candidates:
             candidates.append(pair)
     return candidates
+
+
+TDX_HOSTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdx_hosts.json")
+
+
+def load_tdx_hosts() -> list[dict[str, Any]]:
+    """加载本地行情服务器池（tdx_hosts.json）。
+
+    池来源：通达信客户端 connect.cfg [HQHOST] 现行官方主站 + 实测仍兼容 tdxpy
+    协议的券商老主站。配合模块顶部的握手补丁（跳过 SetupCmd3），官方主站与
+    券商老主站均为可用的生产候选。文件缺失或损坏时返回空列表，
+    调用方回退到 mootdx/tdxpy 内置列表。
+    """
+    try:
+        with open(TDX_HOSTS_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    hosts: list[dict[str, Any]] = []
+    for item in data.get("candidates", []):
+        if not isinstance(item, dict):
+            continue
+        ip = str(item.get("ip", "")).strip()
+        try:
+            port = int(item.get("port", 0))
+        except (TypeError, ValueError):
+            continue
+        if not ip or not 0 < port < 65536:
+            continue
+        hosts.append({"name": str(item.get("name", ip)), "ip": ip, "port": port})
+    return hosts
 
 
 def now_ms() -> int:
@@ -1696,6 +1746,7 @@ class TdxL2Bridge:
         return max(min_size, min(max_size, value))
 
     def candidate_servers(self) -> list[tuple[str, int]]:
+        """显式指定的候选来源：手动选择 / L2 / 环境变量（不含 tdx_hosts.json 服务器池）。"""
         candidates: list[tuple[str, int]] = []
 
         if self._manual_server:
@@ -1714,6 +1765,33 @@ class TdxL2Bridge:
                 candidates.append(pair)
 
         return candidates
+
+    def pool_candidates(self) -> list[tuple[str, int]]:
+        """本地服务器池（tdx_hosts.json）候选：官方现行主站 + 实测兼容券商节点。
+
+        显式候选之外也始终走池，避免回落 mootdx bestip 的"仅测 TCP"路径
+        （会把重连带到 TCP 可达但行情返回空的节点上反复失败）。
+        """
+        candidates: list[tuple[str, int]] = []
+        for host in load_tdx_hosts():
+            pair = (host["ip"], host["port"])
+            if pair not in candidates:
+                candidates.append(pair)
+        return candidates
+
+    def _rank_pool_servers_by_latency(self) -> list[tuple[str, int]]:
+        """并行探测池内节点，按行情可用 + TCP 延迟排序。
+
+        scan_tdx_servers 的排序规则天然满足需求：当前连接（若仍行情可用）置顶
+        保持粘性，其后按 tcpMs 升序。探测异常或无可用节点时返回空列表，
+        调用方回退池文件顺序。
+        """
+        try:
+            results = self.scan_tdx_servers()
+        except Exception as error:  # noqa: BLE001
+            logger.warning("ranked pool scan failed, fallback to file order: %s", error)
+            return []
+        return [(r["ip"], int(r["port"])) for r in results if r["quoteOk"]]
 
     def next_l2_probe_server(self) -> tuple[str, int] | None:
         candidates = self.l2_candidate_servers()
@@ -1740,7 +1818,17 @@ class TdxL2Bridge:
 
         last_error: Exception | None = None
 
-        for server in self.candidate_servers() or [None]:
+        # 候选顺序：显式指定（手动选择/L2/环境变量）优先；服务器池默认按
+        # "行情可用 + 延迟最低"排序（启动/重连时并行实测一遍），让连接落在
+        # 最快节点上而非池文件首位；手动选择时跳过测速直接连用户选的节点。
+        explicit = self.candidate_servers()
+        pool = self.pool_candidates()
+        if pool and not self._manual_server:
+            ranked = await asyncio.to_thread(self._rank_pool_servers_by_latency)
+            if ranked:
+                pool = ranked
+
+        for server in explicit + pool or [None]:
             try:
                 def _create_client():
                     timeout_seconds = (
@@ -1951,10 +2039,15 @@ class TdxL2Bridge:
     def scan_tdx_servers(self) -> list[dict[str, Any]]:
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        from mootdx.consts import HQ_HOSTS
-        from tdxpy.constants import hq_hosts
+        file_hosts = load_tdx_hosts()
+        if file_hosts:
+            all_hosts = [(h["name"], h["ip"], h["port"]) for h in file_hosts]
+        else:
+            # 回退：tdx_hosts.json 缺失时使用 mootdx/tdxpy 内置列表（已严重过期）
+            from mootdx.consts import HQ_HOSTS
+            from tdxpy.constants import hq_hosts
 
-        all_hosts = list(hq_hosts) + list(HQ_HOSTS)
+            all_hosts = list(hq_hosts) + list(HQ_HOSTS)
         active_addr = f"{self.active_server[0]}:{self.active_server[1]}" if self.active_server else ""
 
         results: list[dict[str, Any]] = []
