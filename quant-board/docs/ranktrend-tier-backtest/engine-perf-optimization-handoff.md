@@ -6,8 +6,14 @@
 > **✅ 已执行（2026-09-23 晚）**：层 1（lifecycle/rank_shock 有界窗口 +
 > evaluator._group_stats 单遍分组，逐位一致三重复现验证）与层 2（dryRun 开关 +
 > runner --dry-run）均已落地；全窗 dry-run 单 trial 520s（基线 ~20 分钟）。
-> 结果与证据详见 `exit-rules-scan-plan.md` "2026-09-23 晚 引擎提速执行" 小节；
-> 批次预估与剩余缺口（6-trial 预估 25-35 分钟，未达 <15 分钟）也在该小节。
+> 结果与证据详见 `exit-rules-scan-plan.md` "2026-09-23 晚 引擎提速执行" 小节。
+> **✅ 验收复盘收口（2026-09-24 凌晨）**：硬门槛 4 条全部满足——护栏先落地 ✓ /
+> 全窗逐位一致（dry-run 双轮 + 持久化 run bt_91a356067c9e4704（839s）经原版逐位
+> 脚本与锚 run 一致）✓ / pnpm 合同 ✓ / 全量 pytest 2572 passed 零新失败 ✓。
+> 数值目标如实披露：6-trial 批次实测 9.7 分钟（<15 分钟达成）、dry-run 单 trial
+> 分钟级（hit ≈1 分钟）达成；**全窗单 trial <5 分钟子目标未达**（最优实测
+> dry-run ≈5.3-6.3 分钟，受逐位一致约束下 replay 固有成本所限）。详见
+> `exit-rules-scan-plan.md` "2026-09-24 凌晨 verification-before-completion 复盘收口"。
 
 ## 必读（新会话第一步）
 

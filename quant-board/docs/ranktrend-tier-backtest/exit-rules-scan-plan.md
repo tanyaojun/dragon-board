@@ -412,3 +412,30 @@ JSON 序列化 OOM——与 perf 会话实测的"69 分钟死在 save 前"互为
   固定装配成本）；再往下只剩有 golden 风险的大结构改造（增量状态机仅序列增长期
   有效），收益/风险比不划算。**结论：5.5-6.5 分钟/trial 已接近「逐位一致」约束下
   的实际下限，本立项收口。**
+
+### 2026-09-24 凌晨 verification-before-completion 复盘收口（engine-perf 会话）
+
+对照 handoff 验收 4 道门禁逐项复盘，识别三项缺口并当夜补齐，全部通过（均为新鲜证据）：
+
+- **GAP-1 全量 pytest 复跑（验收 #4）**：2572 passed / 2 failed——失败仅 archive_research
+  ×2 既有环境失败（与基线一致，零新失败），覆盖第二轮 efficacy/pkl 缓存与全部 review
+  修复之后的完整回归。
+- **GAP-2 6-trial 批次实测（验收 #3）**：`--batch --dry-run --local-frames`，6 个 trade
+  变体（tp 0.04~0.09）同 strategy_config，**实测 581s ≈ 9.7 分钟 < 15 分钟目标达成**
+  （信号 1 miss + 5 hit，hit trial ≈1 分钟/个；证据 `.perf-batch-timing/`，各 trial
+  trades 52/54/54/54/55/57 随 tp 变化属预期）。此前「预估 25-35 分钟」系 efficacy 修复前的悲观
+  估计，实测推翻。
+- **GAP-3 全窗持久化 run + 原版逐位脚本（验收 #2 字面）**：内存充裕时段（空闲 8GB）
+  持久化全窗 run **成功**（bt_91a356067c9e4704，839s ≈ 14 分钟，含五表落库 +
+  result_json 序列化——此前 MemoryError 未复现）；原版
+  `exit-default-replication-verify.py` 判定与锚 bt_7baae93651234140 **54 trades +
+  1011 equity points 逐位一致**——优化后引擎的持久化链端到端闭环。常规持久化全窗
+  trial：20 分钟 → 14 分钟（内存压力时段读数不可比，见上节 69 分钟失败记录）。
+- `pnpm test:ranktrend` 171/171 + `pnpm typecheck:ranktrend` 干净（00:55 新鲜复跑）。
+- 本轮复盘**零代码改动**，全部为验证与实测补齐。**硬门槛 4 条全部满足：
+  护栏先落地 ✓ / 全窗逐位一致（dry-run 双轮 + 持久化 run 原版脚本）✓ /
+  pnpm 合同 ✓ / 全量 pytest 零新失败 ✓。验收 #3 数值目标如实披露：6-trial 批次
+  <15 分钟 ✓（实测 9.7 分钟）、dry-run 单 trial 分钟级 ✓（hit trial ≈1 分钟）；
+  **全窗单 trial <5 分钟子目标未达**（最优实测 dry-run 318-380s ≈ 5.3-6.3 分钟，
+  持久化 839s ≈ 14 分钟），受「逐位一致」约束下的 replay 固有成本所限（见
+  装配瘦身实测小节）。收口。**
