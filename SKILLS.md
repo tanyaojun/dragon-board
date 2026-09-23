@@ -109,6 +109,9 @@ C1-C5（PASS_CANDIDATE）→ saEx 盲区检查 → Track 1 交易复核终判（
 六类判定 → 一次一候选落默认。另含**月度复验批次模式**（窗口推进、已落默认栈回退复核、
 观察池裁决）、harness 工程范式 13 项（公共库 `quant-board/backend/operations/harness_common.py`，
 2026-09-21 全量审计后扩充：字段路径单一源、已知答案校验、键名复核、结论×机制交叉验证）、
+**扫描执行资源纪律**（2026-09-23 内存冻结事故沉淀：批量扫描独立进程单 trial、optimization
+队列护栏 MAX_PENDING_JOBS=2 + 429 串行提交、交易时段禁大批次、frames 本地化——harness
+侧改造不碰 golden 链、冻结处置 SOP）、
 锚代际纪律。实践记录见
 `quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-26）；
 批次化复跑范例见同目录 `ranktrend-202610-rerun-plan.md`。

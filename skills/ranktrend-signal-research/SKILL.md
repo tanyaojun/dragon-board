@@ -1,7 +1,7 @@
 ---
 name: ranktrend-signal-research
 description: RankTrend 信号参数长测与因子算法研发统一流程（合并原 ranktrend-tier-longterm-test 与 four-dim-algorithm-research，2026-09-16）——Track A 参数线（盘点参数化 → 5 档扫描 → 三层判定语义）/ Track B 因子算法线（设计 → 区分度 → 接线 → 边际贡献）/ 月度复验批次模式（窗口推进、已落默认栈回退复核、观察池裁决）。统一收口：Track 2 判定卡 C1-C5 → saEx 盲区检查 → Track 1 交易复核终判 → 六类判定 → 一次一候选落默认。含 harness 工程范式 13 项（公共库
-`backend/operations/harness_common.py` + 2026-09-21 审计纪律）、锚代际纪律、窗口消费折扣（M3）。实践记录见 quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（阶段 0-26）；批次化复跑范例见同目录 ranktrend-202610-rerun-plan.md。
+`backend/operations/harness_common.py` + 2026-09-21 审计纪律）、扫描执行资源纪律（2026-09-23 内存冻结事故：独立进程单 trial、队列护栏、frames 本地化、冻结处置 SOP）、锚代际纪律、窗口消费折扣（M3）。实践记录见 quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（阶段 0-26）；批次化复跑范例见同目录 ranktrend-202610-rerun-plan.md。
 ---
 
 # RankTrend 信号研究统一流程（参数长测 × 因子算法 × 月度复验）
@@ -154,12 +154,51 @@ assert_overrides_applied / new_report / load_resume / save_report / assert_known
 13. **审计透明**：假阴性/假阳性结论一经发现，污染报告删除、干净重跑、立项文档留
     更正记录（§5.1.1 范式）；harness 修复与结论更正同一个 commit 链可溯源。
 
+## 扫描执行资源纪律（2026-09-23 内存冻结事故沉淀）
+
+事故：批次扫描经 8000 API / 常驻进程连续执行时，每 trial 全量装载 frames（生产数据集
+原始约 700MB → Python 对象 2-4GB），无界队列堆积后整机换页（14.8GB 机器余 0.7GB、
+pagefile 18GB 在用），mongod 工作集被挤到 43MB，行情列表读链整进程冻结。
+
+**执行纪律（预防）**
+
+1. 批量扫描一律**独立进程单 trial** 执行（`exit-scan-trial-runner.py` 范式：
+   runtime_session + BacktestService 与 CLI 同链路，进程退出即释放全部内存）；
+   禁止在 uvicorn / 常驻 python 进程内循环多 trial，禁止通过 8000 API 连续 POST 跑批。
+2. optimization API 有队列护栏（`backend/optimization/jobs.py` `MAX_PENDING_JOBS=2`，
+   超限 HTTP 429 `OPTIMIZATION_QUEUE_FULL`，入队失败自动把已落库 running 收口 failed）：
+   批次驱动必须**串行提交 + 轮询等待**前序完成，不并发轰任务。
+3. 大批次避开交易时段（9:15-15:00）——行情链与 MongoDB 是生产链，研究负载不得与其
+   共享内存与 I/O 预算。
+4. **frames 本地化（下一批扫描前的首选改造）**：把 frames 从仓库**一次性导出本地文件**、
+   trial runner **改读本地**，实现扫描全程**零 MongoDB 压力**。边界约束：**改动只落在
+   harness 侧**（导出脚本 + runner 读入口），**不碰 BacktestService / golden 数据加载链**；
+   本地缓存必须与仓库读取逐位一致（先跑一个对照 trial 验证指标逐位复现）后才允许切换，
+   避免缓存内容漂移污染 trial 可比性。落地前接受每 trial 瞬态峰值（约 8GB，跑完即释放，
+   不算异常）。
+
+**故障处置 SOP（冻结已发生时）**
+
+5. 诊断顺序固定，证据齐了才动手：进程证据（python RSS/命令行、`netstat :27017` 连接
+   分布）→ 系统证据（空闲内存 / pagefile）→ 服务证据（`/docs` 静态页超时 = 整进程
+   冻结，不是慢查询）→ MongoDB 证据（collstats 体量、索引清单、explain 是否 COLLSCAN、
+   running 僵尸任务）。
+6. 止血顺序：重启被冻结服务（8000 可自行重启；独立 trial 进程不受影响）→ 补缺失索引
+   （在线后台建，纯增益；实例：snapshot_analysis 复合索引把 25.8 万全表扫降到 251 点查
+   /18ms）→ 僵尸 running 记录逐条按显式 id 收口 failed（附结构化原因，不删除记录）。
+7. 修复验收：explain 前后对比（totalDocsExamined 全表→点查）+ 护栏 TDD 测试 + 重启后
+   健康检查（/docs、行情读口测速）。批次占内存期间全量 pytest 可延后，但必须声明
+   未验证项，批次收尾补跑。
+8. 文档同批同步：API 行为变化进 `quant-board/docs/api-cli.md`，索引/schema 变化进
+   `quant-board/docs/database-migration-plan.md`。
+
 ## 关键文件索引
 
 - 引擎/config：`quant-board/backend/analysis/ranktrend/engine.py`（RankTrendConfig + compose）
 - 投票/档位：`quant-board/backend/analysis/ranktrend/volume_price.py`（compute_synergy_state）
 - 分档统计：`quant-board/backend/analysis/ranktrend/research/tier_monotonicity.py`（DIMENSION_PATHS）
 - harness 公共库：`quant-board/backend/operations/harness_common.py`（帧加载/访问器/指标装配/报告/已知答案校验；审计文档 `quant-board/docs/ranktrend-tier-backtest/harness-audit-20260921.md`）
+- 隔离执行/队列护栏：`quant-board/docs/ranktrend-tier-backtest/exit-scan-trial-runner.py`（独立进程单 trial 执行范式）、`quant-board/backend/optimization/jobs.py`（MAX_PENDING_JOBS 队列护栏，2026-09-23）
 - 冻结守卫：`quant-board/backend/optimization/data_windows.py`（assert_not_frozen）
 - 测试基准：`quant-board/tests/test_ranktrend_golden_alignment.py`（golden 不漂移）
 - 事实源/档案：`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-26 结论与锚读数）、`ranktrend-l1-param-ledger.md`、`overfitting-audit.md`
