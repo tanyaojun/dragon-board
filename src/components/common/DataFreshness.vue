@@ -4,7 +4,7 @@
     <span class="status-icon">{{ combinedIcon }}</span>
     <span class="status-text">
       {{ streamLabel }}
-      <span class="subscribed-count">({{ subscribedCount }})</span>
+      <span class="subscribed-count">({{ badgeServerCountText }})</span>
     </span>
 
     <div v-if="showDetails" class="freshness-details" @click.stop>
@@ -208,6 +208,10 @@ const realtimeSubscribedStocks = computed(() => {
 })
 
 const subscribedCount = computed(() => streamStatus.value.subscribedCount || subscribedCodes.value.length || 0)
+
+// 徽章数量 = 可用 TDX 行情 IP 数（行情探测通过 quoteOk 的节点），非订阅股票数
+const usableServerCount = computed(() => tdxServers.value.filter((srv) => srv.quoteOk).length)
+const badgeServerCountText = computed(() => (tdxServers.value.length ? String(usableServerCount.value) : '…'))
 const l2DepthLevelCount = computed(() => Number(streamStatus.value.l2?.depthLevelCount) || 0)
 const l2StatusText = computed(() => {
   const l2 = streamStatus.value.l2
@@ -540,6 +544,11 @@ onMounted(() => {
       await refreshServers()
     }
   })
+
+  // 徽章显示可用 IP 数，挂载即拉取一次（未加载前显示占位符）
+  if (!tdxServers.value.length) {
+    void refreshServers()
+  }
 })
 
 onUnmounted(() => {
