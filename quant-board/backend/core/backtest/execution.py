@@ -120,6 +120,13 @@ class TradeSimulator:
                 pos["lastTradingDate"] = frame.get("tradingDate")
                 pos["lastRank"] = signal.get("rank")
                 pos["lastSignal"] = signal
+                # 阶段 B1：启用移动止盈时按 bar high 粘性记录持仓峰值价（默认关闭不维护）。
+                if config.get("trailingStopActivateGain") is not None:
+                    peak = float(pos.get("peakPrice") or pos.get("entryPrice") or 0)
+                    bar_high = quote.get("high")
+                    if bar_high is not None and float(bar_high) > 0:
+                        peak = max(peak, float(bar_high))
+                    pos["peakPrice"] = max(peak, raw_price)
                 if config.get("enforceT1", True) and str(frame.get("tradingDate") or "") <= str(pos.get("entryTradingDate") or ""):
                     continue
                 # 方向5（阶段6 退出结构研究）：minHoldingBars 强制持有——最小持有期内
@@ -193,6 +200,33 @@ class TradeSimulator:
                     if signal_exit_delay > 0 and pos["holdingBars"] < signal_exit_delay:
                         signal_exit = False
                     should_exit = price_exit or signal_exit
+                # 阶段 B2 断板事件卖出（全策略生效，默认关闭零行为变化）：
+                # 持仓期曾触及涨停（bar high 或现价达 limitUpPrice×0.999 容差，对齐
+                # _limit_state 口径；粘性记录，含卖出未成交 bar）且当前 bar 未封板
+                # （price < 容差线，或封单 fengdan 归零）→ 卖出 reason="断板"。
+                # fengdan 从 fill_signal 原始字段读取：_quote/_first_number 会把 0
+                # 归一为 None，而封单归零是有意义的断板信号，不能当缺失（fail-visible）；
+                # limitUpPrice 缺失（None/0）时不判定——fail-visible 不误杀。
+                if TradeSimulator._config_bool(config, "breakBoardExit"):
+                    limit_up_price = float(quote.get("limitUpPrice") or 0)
+                    if limit_up_price > 0:
+                        touch_level = limit_up_price * 0.999
+                        break_board_high = quote.get("high")
+                        touched_now = raw_price >= touch_level or (
+                            break_board_high is not None and float(break_board_high) >= touch_level
+                        )
+                        if touched_now:
+                            pos["touchedLimitUp"] = True
+                        if pos.get("touchedLimitUp") and int(pos.get("holdingBars") or 0) >= int(config.get("breakBoardMinBars") or 1):
+                            fengdan_raw = fill_signal.get("fengdan", fill_signal.get("sealAmount"))
+                            try:
+                                fengdan_value = float(fengdan_raw) if fengdan_raw is not None else None
+                            except (TypeError, ValueError):
+                                fengdan_value = None
+                            still_sealed = raw_price >= touch_level and not (fengdan_value is not None and fengdan_value <= 0)
+                            if not still_sealed and not should_exit:
+                                should_exit = True
+                                strategy_exit_reason = "断板"
                 exit_trigger = None
                 trigger_price = raw_price
                 intrabar = self._intrabar_exit_trigger(pos, quote, config, atr=atr, gross_return=gross_return)
@@ -589,6 +623,15 @@ class TradeSimulator:
             pos["breakevenActivated"] = True  # 粘性：激活后不回退
             stop_price = max(stop_price, entry_price)
             notes.append("breakeven")
+        # 阶段 B1 真·移动止盈：peak（bar high 粘性记录）相对入场涨幅达 activate 后，
+        # 止损线抬升至 peak×(1-drawdown)。peak 粘性 → 激活与止损线天然不回退。
+        activate_gain = config.get("trailingStopActivateGain")
+        if activate_gain is not None:
+            peak_price = float(pos.get("peakPrice") or 0)
+            drawdown = config.get("trailingStopDrawdown")
+            if entry_price > 0 and peak_price > 0 and (peak_price / entry_price - 1) >= float(activate_gain):
+                stop_price = max(stop_price, peak_price * (1 - (float(drawdown) if drawdown is not None else 0.5)))
+                notes.append("trailing")
         return stop_price, take_price, notes
 
     @staticmethod

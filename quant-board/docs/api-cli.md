@@ -3116,6 +3116,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\register_after_marke
 | `randomSeed` | `20260430` |
 | `tradeConfig.useThemeFactorForExecution` | `false` |
 
+v3 锚专属默认（`strategyName=ranktrend_early_big_move_v3_lifecycle_fusion` 时覆盖上表，
+2026-09-23 落默认；依据 `docs/ranktrend-tier-backtest/exit-scan-batch3-verdict.md`）：
+
+| 参数 | 默认 | 变更 |
+| --- | --- | --- |
+| `maxHoldingBars` | `30` | — |
+| `stopLoss` | `-0.05` | — |
+| `takeProfit` | `0.06` | 2026-09-23 由 9.99 落默认 |
+| `breakevenTrailing` | `true` | 2026-09-23 由 false 落默认 |
+| `breakevenThreshold` | `0.02` | — |
+| `volumeParticipationRate` | `0.1` | — |
+
 V12 ThemeTrend 默认：
 
 | 参数 | 默认 |

@@ -38,6 +38,26 @@ randomSeed         = 20260430
 
 半小时快照按每天约 8 个 bars 估算，`maxHoldingBars=40` 表示最多持有约 5 个交易日。这个限制是交易持仓周期，不是 MACD 预热窗口。
 
+### v3 锚专属默认（ranktrend_early_big_move_v3_lifecycle_fusion）
+
+`ranktrend_early_big_move_v3_lifecycle_fusion` 的 trade 参数默认覆盖（`V5_LIFECYCLE_FUSION_TRADE_DEFAULTS`，2026-09-23 用户裁决落默认）：
+
+```text
+minJumpConfidence        = 90.0
+maxHoldingBars           = 30
+stopLoss                 = -0.05
+takeProfit               = 0.06     # 2026-09-23 由 9.99(≈关闭) 落默认
+breakevenTrailing        = true     # 2026-09-23 落默认（原 false）
+breakevenThreshold       = 0.02
+volumeParticipationRate  = 0.1
+```
+
+落默认依据：阶段 A 卖点扫描 27+2 trial（`docs/ranktrend-tier-backtest/exit-rules-scan-plan.md` 与
+`exit-scan-batch3-verdict.md`），tp0.06 × breakeven 0.02 组合 wrxpf 0.9756（旧默认 0.4824）、
+ret +13.52%、maxDD -4.72%。端到端锚 run_id `bt_1c35ee7c74e441d2`。
+**披露**：decision 窗（2026-04-15~07-31）读数与旧默认逐位相同，改善 100% 来自 8 月中旬后
+样本外——"平衡市零成本、高波动市保护"定位；`stopLoss` 保持 -0.05（扫描非单调，未动）。
+
 ## 档位阈值与 synergy 交易门（回测方案 §3.1/§3.3）
 
 - 五维观察档位阈值（`tierResonance*`/`tierRankTrend*`/`tierSynergyVote*`，9 个）已参数化进 `RankTrendConfig`，默认值 = 旧硬编码；`from_patch` 强校验（`0 < confirm < strong <= 1`、`reverse <= weak < strong`、`resonance* ∈ [0,1]`），非法阈值抛 ValueError → 回测 trial 记 failed。
@@ -108,7 +128,10 @@ rank_trend_candidate
 
 ## 出场规则
 
-当前出场条件：
+当前出场条件分两条链：通用链（对照组/旧策略）与 v3 锚专属链
+（`_ranktrend_early_big_move_v2_exit_decision`，两链并存，策略名决定走哪条）。
+
+通用链出场条件：
 
 - `D_EXIT_RISK`；
 - `C_CROWDED` 且动量加速度转弱；
@@ -118,6 +141,31 @@ rank_trend_candidate
 - 触发止盈。
 
 MACD 死叉不会单独触发卖出。
+
+v3 锚专属出场规则（仅 5 条，2026-09-23 扫描核实；weakStateExit/signalExitDelayBars/
+minHoldingBars 等通用链参数不经过本链）：
+
+- 退出热榜连续 3 个 bar；
+- 触发止损（`stopLoss`，当前 -0.05）；
+- 生命周期 B 反对且未盈利；
+- 排名大幅下降且 MACD 死叉；
+- 达到 `maxHoldingBars`（当前 30）。
+
+另有价格保护线对全链生效（经 intrabar 盘中触发）：`takeProfit`（v3 当前 0.06）与
+`breakevenTrailing` 保本线（v3 当前启用，阈值 0.02——浮盈达阈值后止损上移至入场价）。
+
+阶段 B 新增规则（2026-09-23，默认关闭零行为变化；批次 4 判定卡
+`docs/ranktrend-tier-backtest/exit-scan-batch4-verdict.md`：本窗口零增量，
+**均不落默认**，接线保留供后续窗口观察）：
+
+- `trailingStopActivateGain`（null=不启用）+ `trailingStopDrawdown`（0.5）：
+  真·移动止盈——peak（bar high 粘性）相对入场涨幅达 activate 后，止损线抬升至
+  `peak×(1-drawdown)`。注意与 breakeven 并存时，只有 trailing 线高于保本线
+  （需 `peak/entry > 1/(1-drawdown)`，即 drawdown 0.03~0.08 量级）才有独立身份；
+  0.3~0.6 量级恒低于保本线，结构性冗余（批次 4 实证）。
+- `breakBoardExit`（false）+ `breakBoardMinBars`（1）：断板事件卖出——持仓期曾
+  触及涨停且当前未封板时卖出，reason="断板"。2026-03-27~09-21 窗口内 0 触发
+  （样本不存在，无法评估）。
 
 ## A 股交易规则
 

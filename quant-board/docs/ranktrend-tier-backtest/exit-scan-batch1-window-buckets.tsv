@@ -1,0 +1,49 @@
+run_id	param	value	window	n	winRate	pf	wrxpf	netSum	note
+bt_8d451aab2e834c7e	baseline	default	decision	26	0.4615	3.287	1.5171	0.3264	insufficient<30
+bt_8d451aab2e834c7e	baseline	default	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_8d451aab2e834c7e	baseline	default	oos1	9	0.0000	0.0	0.0	-0.4564	insufficient<30
+bt_8d451aab2e834c7e	baseline	default	oos2	5	0.2000	0.3495	0.0699	-0.0893	insufficient<30; consumed-frames-discount
+bt_28316b5ae48b470d	stopLoss	-0.03	decision	26	0.4231	2.7742	1.1737	0.3660	insufficient<30
+bt_28316b5ae48b470d	stopLoss	-0.03	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_28316b5ae48b470d	stopLoss	-0.03	oos1	9	0.0000	0.0	0.0	-0.4144	insufficient<30
+bt_28316b5ae48b470d	stopLoss	-0.03	oos2	5	0.8000	195.6443	156.5154	0.0366	insufficient<30; consumed-frames-discount
+bt_bbabff54e7ff487f	stopLoss	-0.06	decision	26	0.4615	3.1287	1.444	0.3353	insufficient<30
+bt_bbabff54e7ff487f	stopLoss	-0.06	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_bbabff54e7ff487f	stopLoss	-0.06	oos1	9	0.0000	0.0	0.0	-0.5048	insufficient<30
+bt_bbabff54e7ff487f	stopLoss	-0.06	oos2	5	0.2000	0.3722	0.0744	-0.0845	insufficient<30; consumed-frames-discount
+bt_8867cbda9ac841ec	stopLoss	-0.08	decision	26	0.4615	3.1454	1.4517	0.3791	insufficient<30
+bt_8867cbda9ac841ec	stopLoss	-0.08	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_8867cbda9ac841ec	stopLoss	-0.08	oos1	9	0.1111	0.0001	0.0	-0.4653	insufficient<30
+bt_8867cbda9ac841ec	stopLoss	-0.08	oos2	5	0.2000	0.3714	0.0743	-0.1092	insufficient<30; consumed-frames-discount
+bt_258e67596ec942dc	stopLoss	-0.10	decision	26	0.4615	3.1454	1.4517	0.3791	insufficient<30
+bt_258e67596ec942dc	stopLoss	-0.10	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_258e67596ec942dc	stopLoss	-0.10	oos1	9	0.1111	0.0002	0.0	-0.3527	insufficient<30
+bt_258e67596ec942dc	stopLoss	-0.10	oos2	5	0.2000	0.509	0.1018	-0.1351	insufficient<30; consumed-frames-discount
+bt_a5115f765a6048bb	takeProfit	0.06	decision	26	0.4615	3.287	1.5171	0.3264	insufficient<30
+bt_a5115f765a6048bb	takeProfit	0.06	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_a5115f765a6048bb	takeProfit	0.06	oos1	9	0.3333	0.9981	0.3327	-0.0370	insufficient<30
+bt_a5115f765a6048bb	takeProfit	0.06	oos2	5	0.4000	0.929	0.3716	-0.0431	insufficient<30; consumed-frames-discount
+bt_3ad6d9a9f6b84d7c	takeProfit	0.09	decision	26	0.4615	3.287	1.5171	0.3264	insufficient<30
+bt_3ad6d9a9f6b84d7c	takeProfit	0.09	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_3ad6d9a9f6b84d7c	takeProfit	0.09	oos1	9	0.1111	0.0099	0.0011	-0.3083	insufficient<30
+bt_3ad6d9a9f6b84d7c	takeProfit	0.09	oos2	5	0.4000	1.576	0.6304	0.0003	insufficient<30; consumed-frames-discount
+bt_883513eff7474d5f	takeProfit	0.16	decision	26	0.4615	3.287	1.5171	0.3264	insufficient<30
+bt_883513eff7474d5f	takeProfit	0.16	final	3	0.3333	0.0216	0.0072	-0.0149	insufficient<30; frozen-report-only
+bt_883513eff7474d5f	takeProfit	0.16	oos1	9	0.0000	0.0	0.0	-0.4564	insufficient<30
+bt_883513eff7474d5f	takeProfit	0.16	oos2	5	0.2000	0.3495	0.0699	-0.0893	insufficient<30; consumed-frames-discount
+bt_18ad64d5a34a46c6	maxHoldingBars	16	decision	28	0.3929	2.2793	0.8954	0.0081	insufficient<30
+bt_18ad64d5a34a46c6	maxHoldingBars	16	final	3	0.0000	0.0	0.0	-0.0637	insufficient<30; frozen-report-only
+bt_18ad64d5a34a46c6	maxHoldingBars	16	oos1	9	0.4444	0.6084	0.2704	-0.0919	insufficient<30
+bt_18ad64d5a34a46c6	maxHoldingBars	16	oos2	5	0.4000	1.8985	0.7594	-0.0069	insufficient<30; consumed-frames-discount
+bt_73b4e29e39bc4fbe	maxHoldingBars	24	decision	27	0.4074	3.1569	1.2861	0.2661	insufficient<30
+bt_73b4e29e39bc4fbe	maxHoldingBars	24	final	3	0.3333	0.0252	0.0084	-0.0086	insufficient<30; frozen-report-only
+bt_73b4e29e39bc4fbe	maxHoldingBars	24	oos1	9	0.0000	0.0	0.0	-0.4346	insufficient<30
+bt_73b4e29e39bc4fbe	maxHoldingBars	24	oos2	5	0.4000	0.319	0.1276	-0.0939	insufficient<30; consumed-frames-discount
+bt_0aa110e7d924445f	maxHoldingBars	40	decision	25	0.4400	2.3996	1.0558	0.1599	insufficient<30
+bt_0aa110e7d924445f	maxHoldingBars	40	final	3	0.3333	0.0085	0.0028	-0.0380	insufficient<30; frozen-report-only
+bt_0aa110e7d924445f	maxHoldingBars	40	oos1	9	0.0000	0.0	0.0	-0.4715	insufficient<30
+bt_0aa110e7d924445f	maxHoldingBars	40	oos2	3	0.0000	0.0	0.0	-0.1043	insufficient<30; consumed-frames-discount
+bt_c7b9b03b872d4172	maxHoldingBars	56	decision	24	0.3750	2.1547	0.808	0.0423	insufficient<30
+bt_c7b9b03b872d4172	maxHoldingBars	56	final	3	0.0000	0.0	0.0	-0.0561	insufficient<30; frozen-report-only
+bt_c7b9b03b872d4172	maxHoldingBars	56	oos1	9	0.0000	0.0	0.0	-0.4715	insufficient<30
+bt_c7b9b03b872d4172	maxHoldingBars	56	oos2	3	0.0000	0.0	0.0	-0.1043	insufficient<30; consumed-frames-discount

@@ -1,0 +1,8 @@
+param	value	run_id	elapsed_s	chain
+trailing	a0.06_d0.6	bt_ca40c2fc8e434f52	1189	isolated
+trailing	a0.05_d0.5	bt_b254c72d09604fb3	1200	isolated-batch
+trailing	a0.04_d0.4	bt_9417016b037c45d9	1848	isolated
+trailing	a0.03_d0.3	bt_5e55268a2d8742c0	918	isolated
+breakBoardMinBars	1	bt_1572627776dc4807	954	isolated
+breakBoardMinBars	3	bt_3d62c9de27834213	1142	isolated
+batch4 all done

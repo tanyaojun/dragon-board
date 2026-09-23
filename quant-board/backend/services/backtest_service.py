@@ -35,6 +35,25 @@ from backend.services.efficacy import (
 )
 
 
+def _apply_trade_config_defaults_and_patch(
+    trade_config: dict[str, Any],
+    trade_defaults: dict[str, Any],
+    trade_config_patch: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """策略级 defaults 中未显式构造的键 setdefault 并入，patch 最后覆盖一切。
+
+    显式构造键已用 defaults 作默认值，setdefault 防止 defaults 反向覆盖显式语义；
+    payload patch（trade_config/tradeConfig）优先级最高（显式请求 > 策略默认）。
+    回归背景：2026-09-23 落默认发现 v5 defaults 独有键（breakevenTrailing 等）
+    从未进入 trade_config——显式构造只引用了个别 defaults 值（见
+    tests/test_v5_trade_defaults.py::test_run_ranktrend_merges_defaults_keys_not_explicitly_built）。
+    """
+    for key, value in trade_defaults.items():
+        trade_config.setdefault(key, value)
+    trade_config.update(trade_config_patch or {})
+    return trade_config
+
+
 def _positive_price_stock_rows(frames: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     output: list[dict[str, Any]] = []
     dropped_rows = 0
@@ -587,7 +606,7 @@ class BacktestService:
             "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", trade_defaults["intrabarAmbiguity"]),
             "entryStrategy": strategy_name,
         }
-        trade_config.update(trade_config_patch)
+        trade_config = _apply_trade_config_defaults_and_patch(trade_config, trade_defaults, trade_config_patch)
         trade_config["entryStrategy"] = strategy_name
         strategy_config = {
             **DEFAULT_BACKTEST_STRATEGY_CONFIG,
@@ -1216,7 +1235,7 @@ class BacktestService:
             "intrabarAmbiguity": camel_get(payload, "intrabar_ambiguity", "intrabarAmbiguity", trade_defaults["intrabarAmbiguity"]),
             "entryStrategy": strategy_name,
         }
-        config.update(patch)
+        config = _apply_trade_config_defaults_and_patch(config, trade_defaults, patch)
         config["entryStrategy"] = strategy_name
         return config
 

@@ -27,7 +27,10 @@ def test_theme_trade_config_uses_v5_lifecycle_fusion_defaults(monkeypatch: pytes
     assert config["minJumpConfidence"] == 90.0
     assert config["maxHoldingBars"] == 30
     assert config["stopLoss"] == -0.05
-    assert config["takeProfit"] == 9.99
+    # 2026-09-23 落默认（docs/ranktrend-tier-backtest/exit-scan-batch3-verdict.md）
+    assert config["takeProfit"] == 0.06
+    assert config["breakevenTrailing"] is True
+    assert config["breakevenThreshold"] == 0.02
     assert config["volumeParticipationRate"] == 0.1
 
 

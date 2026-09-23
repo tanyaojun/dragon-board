@@ -55,12 +55,33 @@ DEFAULT_TRADE_CONFIG: dict[str, Any] = {
     # 资金强流出(zljzb < weakStateExitZljzb，默认 -5) 预测继续下跌（winRate 0.4778/0.4832）。
     "weakStateExit": False,
     "weakStateExitZljzb": -5.0,
+    # 阶段 B1 真·移动止盈（2026-09-23 立项，docs/ranktrend-tier-backtest/exit-rules-scan-plan.md，
+    # 默认关闭零行为变化，golden 不漂移）：trailingStopActivateGain=null 不启用；启用时
+    # peakPrice（按 bar high 粘性记录）相对入场的涨幅 >= activate 后，止损线
+    # = max(现线, peakPrice × (1 - trailingStopDrawdown))；peak 粘性 → 激活与止损线均不回退。
+    # 生效路径与 breakeven 相同：_exit_prices 止损线（通用链 bar 级 + 全链 intrabar 盘中线）。
+    "trailingStopActivateGain": None,
+    "trailingStopDrawdown": 0.5,
+    # 阶段 B2 断板事件卖出（2026-09-23 立项，默认关闭零行为变化）：持仓期曾触及涨停
+    # （bar high 或现价达 limitUpPrice×0.999 容差，粘性）且当前 bar 未封板（price 低于
+    # 容差线，或封单 fengdan 归零——fengdan 从原始字段读取，0 是有效信号不视为缺失）
+    # → 卖出 reason="断板"；breakBoardMinBars 是总持仓 bar 数门槛（holdingBars >= N
+    # 才允许断板卖出，防入场初期噪声）；limitUpPrice 缺失时不判定（fail-visible 不误杀）。
+    "breakBoardExit": False,
+    "breakBoardMinBars": 1,
 }
 
 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS: dict[str, Any] = {
     "minJumpConfidence": 90.0,
     "maxHoldingBars": 30,
     "stopLoss": -0.05,
-    "takeProfit": 9.99,
+    # 2026-09-23 用户裁决落默认（阶段 A 终局，docs/ranktrend-tier-backtest/
+    # exit-scan-batch3-verdict.md）：tp0.06 × breakeven 0.02 组合 wrxpf 0.9756
+    # （基线 0.4824）/ ret +13.52% / maxDD -4.72%。警示（四次复现）：decision 窗
+    # （4-7 月）读数与旧默认逐位相同，改善 100% 来自 8 月中后样本外——
+    # "平衡市零成本、高波动市保护"定位。端到端锚 bt_1c35ee7c74e441d2。
+    "takeProfit": 0.06,
+    "breakevenTrailing": True,
+    "breakevenThreshold": 0.02,
     "volumeParticipationRate": 0.1,
 }

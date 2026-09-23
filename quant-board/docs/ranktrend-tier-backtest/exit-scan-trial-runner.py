@@ -16,6 +16,7 @@ BacktestService.run_ranktrend），进程退出即释放全部内存。
     --local-frames：读本地导出的 frames（exit-frames-export.py 产物），扫描全程
     零 MongoDB 大读——仅 monkeypatch repo.load_frames（harness 侧），quality gate、
     引擎与结果落库链路不变；小表（a_share_codes）与结果写入仍走正常链路。
+    首次加载后自动写同名 .pkl 缓存（源 gzip 变更自动失效，异常降级直读）。
     --dry-run（2026-09-23 引擎提速立项层 2）：payload 注入 dryRun=true，跳过五表
     落库与 result_json 大序列化；runId 仅为响应标识，全量 trades/equityCurve 随
     响应返回，runner 把摘要落盘为 <runid-out 同目录>/<名字>-summary.json（单 trial）
@@ -38,12 +39,55 @@ from backend.cli import runtime_session  # noqa: E402
 from backend.services.backtest_service import BacktestService  # noqa: E402
 
 
+def _load_local_frames(local_path: Path) -> list[dict]:
+    """读本地 frames；同名 .pkl 缓存命中则跳过 gzip json 解析（省 ~50s/进程）。
+
+    缓存守卫：记录源 gzip 的 mtime_ns/size，源文件更新自动失效重建；缓存读/写任何
+    异常都降级回 gzip json 直读（fail-visible 打印原因，不阻断扫描）。
+    pickle 只读本 runner 写出的本机缓存文件，勿指向不可信路径。
+    pickle 与 json 路径产出同一份 json.load 对象的精确还原（值与类型逐位一致）。
+    """
+    import pickle
+
+    pkl_path = local_path.with_suffix(".pkl")
+    source_stat = local_path.stat()
+    if pkl_path.exists():
+        try:
+            with pkl_path.open("rb") as fh:
+                cached = pickle.load(fh)
+            if (
+                isinstance(cached, dict)
+                and cached.get("sourceMtimeNs") == source_stat.st_mtime_ns
+                and cached.get("sourceSize") == source_stat.st_size
+                and isinstance(cached.get("frames"), list)
+            ):
+                print(f"local frames from pickle cache: {len(cached['frames'])} frames ({pkl_path.name})")
+                return cached["frames"]
+            print("pickle cache stale (source changed); reloading gzip json")
+        except Exception as exc:
+            print(f"pickle cache unreadable ({exc!r}); falling back to gzip json")
+
+    with gzip.open(local_path, "rt", encoding="utf-8") as fh:
+        frames = json.load(fh)
+
+    try:
+        with pkl_path.open("wb") as fh:
+            pickle.dump(
+                {"sourceMtimeNs": source_stat.st_mtime_ns, "sourceSize": source_stat.st_size, "frames": frames},
+                fh,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+        print(f"pickle cache written: {pkl_path.name} ({pkl_path.stat().st_size / 1_000_000:.0f} MB)")
+    except Exception as exc:
+        print(f"pickle cache write skipped ({exc!r}); scans still use gzip json")
+    return frames
+
+
 def _install_local_frames_loader(local_path: Path) -> None:
     """monkeypatch MongoRepository.load_frames 读本地导出（runner 进程内，不进生产链）。"""
     from backend.data.repositories import mongo_repository
 
-    with gzip.open(local_path, "rt", encoding="utf-8") as fh:
-        local_frames = json.load(fh)
+    local_frames = _load_local_frames(local_path)
 
     def _load_frames_local(
         self,
@@ -111,8 +155,29 @@ def main() -> None:
     if args and args[0] == "--batch":
         if len(args) < 3:
             raise SystemExit("usage: --batch <payloads.json> <outdir> [--local-frames <frames.json.gz>] [--dry-run]")
-        payloads = json.loads(Path(args[1]).read_text(encoding="utf-8"))
+        if not isinstance(payloads := json.loads(Path(args[1]).read_text(encoding="utf-8")), list):
+            raise SystemExit("payloads.json must be a JSON array of payload objects")
         outdir = Path(args[2])
+
+        def _batch_identity(p: dict) -> tuple:
+            # 信号缓存键只含 RankTrendConfig——窗口/数据集/策略/种子不同的 payload
+            # 混入同批会静默拿到第一个窗口的信号（fail-visible：批首校验，不一致拒跑）
+            return (
+                p.get("dataset_id"),
+                p.get("snapshot_type"),
+                p.get("start_date"),
+                p.get("end_date"),
+                p.get("strategy_name"),
+                p.get("random_seed"),
+                json.dumps(p.get("strategy_config") or {}, sort_keys=True),
+            )
+
+        identities = {_batch_identity(p) for p in payloads}
+        if len(identities) != 1:
+            raise SystemExit(
+                "batch payloads vary in dataset/window/strategy_config/seed: "
+                f"{identities} —— 信号缓存要求批次同源，请拆批"
+            )
         outdir.mkdir(parents=True, exist_ok=True)
         if local_path is not None:
             _install_local_frames_loader(local_path)
