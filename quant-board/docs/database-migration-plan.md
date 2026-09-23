@@ -534,6 +534,15 @@ Dragon Board 前端正式分析入口 `listSnapshotFrameBundles` 必须调用该
   （收尾自动补写当日 EOD）。
 - 读口：as-of provider（当日 ≤slot 最新槽位 → 前日 EOD stale 回退 → missing）。
 
+## snapshot_analysis 读索引（2026-09-23）
+
+- 新增复合索引 `(datasetId, snapshotId)`（`db.snapshot_analysis.create_index`，在线后台建）。
+- 背景：行情列表观察六列注入（`main.py` `_attach_snapshot_analysis`）与 displayStatus join 按键读
+  `load_snapshot_analysis`，此前该集合 25.8 万文档/1.8GB 只有 `_id` 索引，每次读口全表扫；
+  2026-09-23 参数扫描内存挤占 mongod 缓存时，该全表扫是把行情列表查询拖死的放大器。
+- 实测（explain）：`totalDocsExamined` 258317 → 251（等值点查），executionTimeMillis 18ms。
+- 集合结构未变，无迁移脚本；MongoDB 与 Supabase 备份库 schema 不受影响（索引不进 payload）。
+
 ## 环境变量
 
 | 变量 | 说明 |

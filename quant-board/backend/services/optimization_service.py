@@ -10,7 +10,7 @@ from backend.core.backtest import (
 from backend.data.models.models import BacktestRun, OptimizationRun
 from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
 from backend.data.repositories.repository_factory import create_repository
-from backend.optimization.jobs import submit_optimization_job
+from backend.optimization.jobs import OptimizationQueueFull, submit_optimization_job
 from backend.optimization.runner import OptimizationRunner
 from backend.optimization.search_space import candidate_count, select_candidates
 from backend.core.utils import new_id, stable_hash
@@ -55,17 +55,43 @@ class OptimizationService:
                 payload_for_request_json,
                 config_hash,
             )
-        submit_optimization_job(
-            run_id=run_id,
-            frames=run_frames,
-            request=request,
-            dataset_id=dataset_id,
-            snapshot_type=snapshot_type,
-            strategy_name=strategy_name,
-            random_seed=request["random_seed"],
-            config_hash=config_hash,
-            payload_for_request_json=payload_for_request_json,
-        )
+        try:
+            submit_optimization_job(
+                run_id=run_id,
+                frames=run_frames,
+                request=request,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                strategy_name=strategy_name,
+                random_seed=request["random_seed"],
+                config_hash=config_hash,
+                payload_for_request_json=payload_for_request_json,
+            )
+        except OptimizationQueueFull as error:
+            # initial 记录已落库为 running；入队被拒必须立即收口，避免制造僵尸 running
+            self.repo.save_optimization_run(
+                OptimizationRun(
+                    id=run_id,
+                    dataset_id=dataset_id,
+                    strategy_name=strategy_name,
+                    method=request["method"],
+                    random_seed=request["random_seed"],
+                    status="failed",
+                    config_hash=config_hash,
+                    request_json=dumps_json_field(payload_for_request_json),
+                    result_json=dumps_json_field(
+                        {
+                            "status": "failed",
+                            "runId": run_id,
+                            "error": {
+                                "code": "OPTIMIZATION_QUEUE_FULL",
+                                "message": str(error),
+                            },
+                        }
+                    ),
+                )
+            )
+            raise
         return {
             "id": run_id,
             "runId": run_id,

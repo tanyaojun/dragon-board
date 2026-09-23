@@ -11,9 +11,29 @@ from backend.data.repositories.repository_factory import create_repository, stor
 from backend.optimization.runner import OptimizationRunner
 from backend.core.utils import stable_hash
 
+# 每个 pending 任务都持有全量 frames（生产数据集约 2-4GB Python 对象）。
+# 2026-09-23 事故：无界队列堆积多份 frames 副本 → 整机换页冻结行情链。
+# 上限 = 执行中 1 + 排队 2，超限直接拒绝（fail-visible，由调用方决定重试）。
+MAX_PENDING_JOBS = 2
+
+
+class OptimizationQueueFull(Exception):
+    """优化任务排队数超过 MAX_PENDING_JOBS 时拒绝新任务。"""
+
+    def __init__(self, pending: int) -> None:
+        self.pending = pending
+        super().__init__(
+            f"optimization job queue is full (pending={pending}, limit={MAX_PENDING_JOBS}); "
+            "wait for running jobs to finish before submitting"
+        )
+
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="quant-optimization")
 _FUTURES: dict[str, Future[Any]] = {}
+
+
+def _pending_job_count() -> int:
+    return sum(1 for future in _FUTURES.values() if not future.done() and not future.running())
 
 
 def submit_optimization_job(
@@ -29,6 +49,8 @@ def submit_optimization_job(
     payload_for_request_json: dict[str, Any],
     session_factory: Callable[[], Any] = SessionLocal,
 ) -> Future[Any]:
+    if _pending_job_count() >= MAX_PENDING_JOBS:
+        raise OptimizationQueueFull(_pending_job_count())
     future = _EXECUTOR.submit(
         _run_job,
         run_id,
@@ -43,10 +65,13 @@ def submit_optimization_job(
         session_factory,
     )
     _FUTURES[run_id] = future
+    # 任务结束后从登记表移除：释放引用，也让排队容量随之恢复
+    future.add_done_callback(lambda _done, rid=run_id: _FUTURES.pop(rid, None))
     return future
 
 
 def get_job_status(run_id: str) -> str | None:
+    """返回任务执行态；完成的任务会被移出登记表（终态以仓库记录为准）。"""
     future = _FUTURES.get(run_id)
     if not future:
         return None

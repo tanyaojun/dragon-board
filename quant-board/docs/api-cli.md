@@ -2001,6 +2001,8 @@ openPositionCount
 
 启动异步参数优化任务。接口创建 `optimization_runs` 记录后立即返回 `status=running` 和 `runId`，完整结果通过 `GET /api/optimizations/{run_id}` 轮询读取。优化结果只生成候选参数，不会自动写回任何默认参数。
 
+**队列护栏（2026-09-23）**：每个优化任务都会持有全量 frames 数据（生产数据集约 2-4GB 内存）。执行中 1 个 + 排队最多 2 个；排队已满时新任务返回 **HTTP 429**，同时已落库的 `running` 记录立即收口为 `failed`（错误码 `OPTIMIZATION_QUEUE_FULL`）。调用方（批次脚本）应串行提交、轮询等待前序任务完成后再提交下一个，不要并发轰任务。
+
 ```json
 {
   "datasetId": "ds_xxx",

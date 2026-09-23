@@ -67,6 +67,7 @@ from backend.services.market.ths_fund_refresh_scheduler import (
     get_ths_fund_refresh_scheduler,
 )
 from backend.operations.schedule import run_after_market_once
+from backend.optimization.jobs import OptimizationQueueFull
 from backend.services import (
     BacktestService,
     GoldenService,
@@ -1999,6 +2000,8 @@ def cleanup_research(payload: dict[str, Any], db: Session | None = Depends(get_d
 def run_ranktrend_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return OptimizationService(db).run_ranktrend(payload)
+    except OptimizationQueueFull as error:
+        raise HTTPException(status_code=429, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
