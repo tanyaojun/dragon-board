@@ -39,15 +39,24 @@ def compute_signal_efficacy(
     n_correct = 0
     n_total = 0
 
+    # 性能契约（2026-09-23 引擎提速）：逐帧 code→row 首现映射替代逐信号线性扫描；
+    # setdefault 保留首现行，与 next(...) 首个匹配语义逐位一致，键表达式不变。
+    stock_map_by_pos: dict[int, dict[str, dict[str, Any]]] = {}
+
     for signal in signals:
         tier = str(signal.get("candidateTier") or "?")
         sid = str(signal.get("snapshotId") or "")
         frame_pos = frame_index.get(sid)
         if frame_pos is None or frame_pos + 1 >= len(frames):
             continue
-        next_frame = frames[frame_pos + 1]
-        next_stocks = next_frame.get("stocks") or []
-        next_stock = next((s for s in next_stocks if str(s.get("code") or "") == str(signal.get("code") or "")), None)
+        next_pos = frame_pos + 1
+        stock_map = stock_map_by_pos.get(next_pos)
+        if stock_map is None:
+            stock_map = {}
+            for row in frames[next_pos].get("stocks") or []:
+                stock_map.setdefault(str(row.get("code") or ""), row)
+            stock_map_by_pos[next_pos] = stock_map
+        next_stock = stock_map.get(str(signal.get("code") or ""))
         if next_stock is None:
             continue
         try:

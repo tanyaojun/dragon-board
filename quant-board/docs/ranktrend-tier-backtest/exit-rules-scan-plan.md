@@ -379,3 +379,27 @@ JSON 序列化 OOM——与 perf 会话实测的"69 分钟死在 save 前"互为
 - **阶段 B 收口**：B1/B2 均不落默认（维持默认关），golden 不漂移已实证（默认关闭
   逐位一致 + 8 单测）；backtest-policy.md 已补 B1/B2 条目。剩余：月度复验批次登记
   （观察池：trailing 修正档位 dd 0.03~0.08 重扫 / 断板触发观察，绑定锚代际）。
+
+### 2026-09-23 深夜 提速第二轮：efficacy 线性扫 + frames pickle 缓存（engine-perf 会话）
+
+- **efficacy 修复**：`compute_signal_efficacy` 逐信号 `next()` 线性扫（25998+ 信号 ×
+  ~百股）改为逐帧 code→row **首现映射**（setdefault 保首个匹配，键表达式不变）；
+  差分 300 组（含重复 code/无效价/缺帧）零分歧，efficacy 相关 56 测试全绿。
+- **frames pickle 缓存**：runner `--local-frames` 首次加载 gzip json 后自动写同名
+  `.pkl`（558MB，`data/` 下 gitignore）；源 gzip mtime_ns/size 守卫自动失效，读写
+  异常一律降级直读（fail-visible）。独立进程干净实测：**pickle 9.3s vs gzip 42.9s
+  （省 ~34s/进程），内容与 gzip 解析逐位相等（1011 帧 == True）**。parquet 路线
+  弃用（类型列序列化有结构漂移风险，pickle 为同对象精确还原零验证负担）。
+- **候选 C（replay MACD/technical 有界化）评估后放弃**：MACD 的 EMA 是全序列
+  递归，有界化不可能逐位一致；其余 technical 组件已 O(L) 且常数极小——收益
+  （估 <10s/trial）不抵 golden 风险与重构成本。剩余耗时为 replay 装配/撮合/服务
+  层结构成本，无平方级热点残留。
+- **验证**：全窗 dry-run 双轮（gzip 轮 bt_ca8b7af1dc464fa1 / pickle 轮
+  bt_50146208c1d148a6）vs 锚 run **均逐位一致**（54 trades + 1011 points）——
+  pickle 路径与 efficacy 修复端到端输出中性实锤；批次 4c MemoryError 与本会话
+  69 分钟 save 前 OOM 构成 dry-run 必要性双实证（见上节）。
+- **计时**（当晚系统负载波动 ±60s，读数为区间）：全窗 dry-run 单 trial
+  520s → **318-380s**（写缓存轮 318s 含 pickle 写入；缓存命中轮 380s 为高负载
+  读数；加载节省 ~34s 为干净实测）。单 trial 累计 ≈ **20 分钟 → 5.5-6.5 分钟**。
+  6-trial 批量预估仍 >15 分钟，批量实测与进一步优化（evaluator `_outcome` 复用、
+  服务层装配瘦身）留待下批扫描前按需评估。
