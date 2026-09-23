@@ -12,12 +12,13 @@ def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTren
     current_raw = None
     previous_normalized = None
     metrics = {}
+    # 性能契约（2026-09-23 引擎提速）：cycle_metrics 输出只依赖末 ≤8 档窗口，
+    # 逐步传尾窗而非重建整个前缀切片（原 O(L²) 切片/逐差 → O(L)），逐位一致。
     for index in range(len(percentiles)):
-        prefix_ranks = ranks[: index + 1]
-        prefix_percentiles = percentiles[: index + 1]
-        metrics = cycle_metrics(prefix_ranks, prefix_percentiles)
-        raw = raw_stage(len(prefix_percentiles), prefix_percentiles[-1], metrics, config=config)
-        normalized = normalize_stage(current_stage, raw, prefix_percentiles[-1], metrics, config=config)
+        window_start = index - 7 if index >= 7 else 0
+        metrics = cycle_metrics_window(ranks[window_start : index + 1], percentiles[window_start : index + 1])
+        raw = raw_stage(index + 1, percentiles[index], metrics, config=config)
+        normalized = normalize_stage(current_stage, raw, percentiles[index], metrics, config=config)
         previous_stage = current_raw
         previous_normalized = current_stage
         current_raw = raw
@@ -40,26 +41,36 @@ def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTren
 
 
 def cycle_metrics(ranks: list[float], percentiles: list[float]) -> dict[str, Any]:
-    current_rank = ranks[-1] if ranks else 999
-    rank_window = ranks[-8:]
-    percentile_window = percentiles[-8:]
+    return cycle_metrics_window(ranks[-8:], percentiles[-8:])
+
+
+def cycle_metrics_window(rank_window: list[float], percentile_window: list[float]) -> dict[str, Any]:
+    """尾窗（≤8 档）版 cycle_metrics：与全量前缀输入逐位一致的前提是窗口取自同一序列尾部。
+
+    前置条件：rank_window 与 percentile_window 必须是同一序列的**等长**尾切片（调用方保证；
+    不等长输入下 hotZoneStreak 的配对语义与旧实现不可比）。语义等价依据：hot_streak/best/
+    rankPathCommitment 本来就只用末 8 档；velocity 门槛 len>=2/3 与 rankShock 门槛 len>=6 在
+    「窗口=min(长度,8)」下与全量门槛同真同假（长度 >=8 时两者恒真，<8 时窗口即全量）。
+    """
+    current_rank = rank_window[-1] if rank_window else 999
     hot_streak = 0
-    for rank, percentile in reversed(list(zip(rank_window, percentile_window))):
+    for rank, percentile in zip(reversed(rank_window), reversed(percentile_window)):
         if rank <= 10 or percentile >= 88:
             hot_streak += 1
         else:
             break
     best = min(rank_window) if rank_window else current_rank
-    velocity = percentiles[-1] - percentiles[-2] if len(percentiles) >= 2 else 0
-    previous_velocity = percentiles[-2] - percentiles[-3] if len(percentiles) >= 3 else 0
+    count = len(percentile_window)
+    velocity = percentile_window[-1] - percentile_window[-2] if count >= 2 else 0
+    previous_velocity = percentile_window[-2] - percentile_window[-3] if count >= 3 else 0
     return {
         "rankVelocity": velocity,
         "rankAcceleration": velocity - previous_velocity,
-        "rankShock": cycle_rank_shock(percentiles),
+        "rankShock": cycle_rank_shock(percentile_window),
         "hotZoneStreak": hot_streak,
         "bestRecentRank": best,
         "drawdownFromPeak": max(0, current_rank - best),
-        "rankPathCommitment": rank_path_commitment(percentiles),
+        "rankPathCommitment": rank_path_commitment(percentile_window),
     }
 
 

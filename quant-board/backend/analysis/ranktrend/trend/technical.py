@@ -154,10 +154,13 @@ def momentum_profile(percentiles: list[float]) -> dict[str, float]:
 
 
 def rank_shock(percentiles: list[float], lookback: int = 5) -> float:
-    if len(percentiles) < 6:
+    # 性能契约（2026-09-23 引擎提速）：输出只依赖末 lookback 个速度差，
+    # 只计算这些差值——与全量逐差后取尾 lookback 逐位一致（同表达式同序）。
+    # 前置条件：lookback >= 1（旧实现对 lookback=0 的 -0 切片行为不在契约内）。
+    count = len(percentiles)
+    if count < 6:
         return 0.0
-    velocities = [percentiles[i] - percentiles[i - 1] for i in range(1, len(percentiles))]
-    recent = velocities[-lookback:]
+    recent = [percentiles[j] - percentiles[j - 1] for j in range(max(1, count - lookback), count)]
     current = recent[-1]
     baseline = recent[:-1] if lookback > 5 else recent
     if len(baseline) < 3:
@@ -169,11 +172,13 @@ def rank_shock(percentiles: list[float], lookback: int = 5) -> float:
 
 
 def cycle_rank_shock(percentiles: list[float]) -> float:
-    if len(percentiles) < 6:
+    # 性能契约（2026-09-23 引擎提速）：输出只依赖末 6 档（末 5 个速度差），
+    # 因此只计算这 5 个差值——与全量列表逐差后取尾 5 逐位一致（同表达式同序）。
+    count = len(percentiles)
+    if count < 6:
         return 0.0
-    velocities = [percentiles[i] - percentiles[i - 1] for i in range(1, len(percentiles))]
-    recent = velocities[-5:]
-    current = recent[-1] if recent else 0.0
+    recent = [percentiles[j] - percentiles[j - 1] for j in range(count - 5, count)]
+    current = recent[-1]
     mean = average(recent)
     variance = average([(value - mean) ** 2 for value in recent])
     std = math.sqrt(variance)

@@ -332,15 +332,30 @@ class BacktestService:
         return normalized
 
     @staticmethod
-    def _summary_response(run_id: str, result: dict[str, Any], metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _summary_response(
+        run_id: str,
+        result: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        full_attribution: bool = False,
+    ) -> dict[str, Any]:
         signals = result.get("signals") or []
         signal_count = int(result.get("signalCount") or len(signals))
         compact = BacktestService._compact_backtest_result(result, signal_count=signal_count)
         compact["signalCount"] = signal_count
         compact["isCompact"] = True
+        if full_attribution:
+            # dry-run（2026-09-23 引擎提速立项）：结果不落库，归因数据（全量 trades/equityCurve）
+            # 直接随轻量摘要返回，扫描分析脚本从响应体取而不是读 Mongo。
+            simulation = result.get("tradeSimulation") if isinstance(result.get("tradeSimulation"), dict) else {}
+            compact["trades"] = list(simulation.get("trades") or [])
+            compact["equityCurve"] = list(simulation.get("equityCurve") or [])
         compact["notes"] = [
             *(result.get("notes") or []),
-            f"接口默认返回轻量摘要和前 120 条 signals 预览，完整压缩结果已落库：{run_id}",
+            (
+                "dry-run：跳过落库与 result_json 序列化，runId 仅为响应标识；全量 trades/equityCurve 已随响应返回。"
+                if full_attribution
+                else f"接口默认返回轻量摘要和前 120 条 signals 预览，完整压缩结果已落库：{run_id}"
+            ),
         ]
         meta = metadata or {}
         return {"id": run_id, "runId": run_id, "run_id": run_id, **meta, "result": compact, **compact}
@@ -632,7 +647,25 @@ class BacktestService:
             "trade_config": trade_config,
             "research_filters": options["research_filters"],
         }
+        # dry-run 开关注入在服务层之后（runner 注入 payload），剔除后 configHash 才能与
+        # 同参数持久化 run 对账一致；默认路径 payload 无此键，零行为变化。
+        request_meta.pop("dry_run", None)
+        request_meta.pop("dryRun", None)
         trading_dates = sorted({str(f.get("tradingDate") or "") for f in run_frames if f.get("tradingDate")})
+        summary_metadata = {
+            "datasetId": dataset_id,
+            "dataset_id": dataset_id,
+            "strategyName": strategy_name,
+            "strategyVersion": strategy_version,
+            "snapshotType": snapshot_type,
+            "randomSeed": request_meta["random_seed"],
+            "configHash": stable_hash(request_meta),
+        }
+        dry_run = bool(camel_get(payload, "dry_run", "dryRun", False))
+        if dry_run:
+            # 扫描/harness 专用（2026-09-23 引擎提速立项层 2）：跳过五表落库与
+            # result_json 大 JSON gzip 序列化；默认 False，正式回测与既有 API 合同不变。
+            return self._summary_response(run_id, result, {**summary_metadata, "dryRun": True}, full_attribution=True)
         run = BacktestRun(
             id=run_id,
             dataset_id=dataset_id,
@@ -641,7 +674,7 @@ class BacktestService:
             snapshot_type=snapshot_type,
             random_seed=request_meta["random_seed"],
             status="completed",
-            config_hash=stable_hash(request_meta),
+            config_hash=summary_metadata["configHash"],
             date_start=trading_dates[0] if trading_dates else None,
             date_end=trading_dates[-1] if trading_dates else None,
             request_json=dumps_json_field(request_meta),
@@ -659,15 +692,7 @@ class BacktestService:
         return self._summary_response(
             run_id,
             result,
-            {
-                "datasetId": dataset_id,
-                "dataset_id": dataset_id,
-                "strategyName": strategy_name,
-                "strategyVersion": strategy_version,
-                "snapshotType": snapshot_type,
-                "randomSeed": request_meta["random_seed"],
-                "configHash": run.config_hash,
-            },
+            summary_metadata,
         )
 
     def run_theme_trend(self, payload: dict[str, Any]) -> dict[str, Any]:

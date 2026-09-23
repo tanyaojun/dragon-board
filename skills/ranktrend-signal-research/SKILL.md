@@ -176,20 +176,26 @@ pagefile 18GB 在用），mongod 工作集被挤到 43MB，行情列表读链整
    本地缓存必须与仓库读取逐位一致（先跑一个对照 trial 验证指标逐位复现）后才允许切换，
    避免缓存内容漂移污染 trial 可比性。落地前接受每 trial 瞬态峰值（约 8GB，跑完即释放，
    不算异常）。
+5. **扫描 trial 一律 dry-run**（2026-09-23 引擎提速落地）：runner `--dry-run`（或 payload
+   `dryRun=true`，默认 false 不改 API 合同）跳过五表落库与 result_json 大序列化——
+   全窗单 trial ~20 分钟 → ~8.7 分钟，且消除落库链 MemoryError/换页放大（常规持久化
+   run 曾在 result_json 序列化 commit 18GB 后整机换页）；全量 trades/equityCurve 随
+   响应返回、runner 落盘 summary 供归因，复现验证用
+   `exit-dryrun-replication-verify.py` 对照锚 run 逐位一致。
 
 **故障处置 SOP（冻结已发生时）**
 
-5. 诊断顺序固定，证据齐了才动手：进程证据（python RSS/命令行、`netstat :27017` 连接
+6. 诊断顺序固定，证据齐了才动手：进程证据（python RSS/命令行、`netstat :27017` 连接
    分布）→ 系统证据（空闲内存 / pagefile）→ 服务证据（`/docs` 静态页超时 = 整进程
    冻结，不是慢查询）→ MongoDB 证据（collstats 体量、索引清单、explain 是否 COLLSCAN、
    running 僵尸任务）。
-6. 止血顺序：重启被冻结服务（8000 可自行重启；独立 trial 进程不受影响）→ 补缺失索引
+7. 止血顺序：重启被冻结服务（8000 可自行重启；独立 trial 进程不受影响）→ 补缺失索引
    （在线后台建，纯增益；实例：snapshot_analysis 复合索引把 25.8 万全表扫降到 251 点查
    /18ms）→ 僵尸 running 记录逐条按显式 id 收口 failed（附结构化原因，不删除记录）。
-7. 修复验收：explain 前后对比（totalDocsExamined 全表→点查）+ 护栏 TDD 测试 + 重启后
+8. 修复验收：explain 前后对比（totalDocsExamined 全表→点查）+ 护栏 TDD 测试 + 重启后
    健康检查（/docs、行情读口测速）。批次占内存期间全量 pytest 可延后，但必须声明
    未验证项，批次收尾补跑。
-8. 文档同批同步：API 行为变化进 `quant-board/docs/api-cli.md`，索引/schema 变化进
+9. 文档同批同步：API 行为变化进 `quant-board/docs/api-cli.md`，索引/schema 变化进
    `quant-board/docs/database-migration-plan.md`。
 
 ## 关键文件索引

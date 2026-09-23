@@ -1648,6 +1648,8 @@ V2 Layer 3 新增 7 个执行字段（与回测信号对齐）：
 
 默认回测还会输出只读价格质量诊断，不触发过滤、不写入 warnings、不改变 `severity` 或 `researchGrade`。字段位于 `dataQuality.reportOnlyDiagnostics.priceQuality`，包含 `crossMarketZeroPriceRows`、`allZeroPriceFrames` 和 `partialAshareZeroPriceRows`，用于后续长测 checkpoint 观察价格污染来源。
 
+`dryRun`（2026-09-23 引擎提速立项层 2）默认 `false`，正式回测与既有 API 合同不变。显式设为 `true` 时跳过五表落库（`backtest_runs` / `backtest_trades` / `backtest_equity_curve` / `backtest_signals` / `backtest_quality_reports`）与 `result_json` 大 JSON gzip 序列化；响应 `dryRun=true`，`runId` 仅为响应标识、不可追溯（不落库），全量 `trades` 与 `equityCurve` 直接随轻量摘要返回（不做 120 条截断），notes 显式说明未落库。全量返回仅限顶层 `trades` 与 `equityCurve` 两键；其余归因列表（`tradeEvents`、`roundTripTrades`、`openPositions`、`tradeSimulation` 内层列表）仍为 120 条预览。该开关供 harness / 隔离扫描 runner（`exit-scan-trial-runner.py --dry-run`）使用，优化链接入预留；分析脚本从响应体取 trades 归因，而不是读 Mongo。
+
 ### `GET /api/backtests/{run_id}`
 
 读取兼容回测报告。SQLite 模式读取 `backtest_runs.result_json`；MongoDB 模式读取 `backtest_runs.resultCompressed`，或在 `resultChunked=true` 时读取 `backtest_result_chunks` 后透明拼接解压；旧 `result` 子文档仅作为兼容字段。新页面需要完整交易、权益曲线、信号和质量报告时，应继续调用下列归一化结果端点。

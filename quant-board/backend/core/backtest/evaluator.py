@@ -207,8 +207,14 @@ class OutcomeEvaluator:
         return [{"key": item, "count": len([s for s in signals if str(s.get(key)) == item]), "share": share(len([s for s in signals if str(s.get(key)) == item]), total)} for item in keys]
 
     def _group_stats(self, pairs: list[tuple[dict[str, Any], dict[str, Any]]], selector, order: list[str] | None = None) -> list[dict[str, Any]]:
-        keys = order or sorted({selector(signal) for signal, _ in pairs})
-        return [self._stats(key, [(s, o) for s, o in pairs if selector(s) == key]) for key in keys]
+        # 性能契约（2026-09-23 引擎提速）：selector 纯函数，单遍分组替代
+        # 「set 建键 + 逐键全量重扫」（momentum_bucket 曾被重复调用 1200 万+ 次/小窗）。
+        # 键集合、组内 pairs 顺序、order 缺组行为与原实现逐位一致。
+        grouped: dict[Any, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+        for pair in pairs:
+            grouped.setdefault(selector(pair[0]), []).append(pair)
+        keys = order or sorted(grouped)
+        return [self._stats(key, grouped.get(key, [])) for key in keys]
 
     def _stats(self, key: str, items: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
         found = [outcome for _, outcome in items if outcome.get("found")]

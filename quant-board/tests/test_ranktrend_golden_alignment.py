@@ -1,3 +1,8 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+
 from backend.analysis import ranktrend
 from backend.analysis.ranktrend import engine as ranktrend_engine
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
@@ -387,3 +392,263 @@ def test_golden_service_compare_reports_nested_cycle_path() -> None:
     issues = GoldenService._compare(expected, actual, tolerance=1e-6, strict=True)
 
     assert issues == ["$[0].cycle.transition: expected 'ignition->expansion' actual 'expansion->crowded'"]
+
+
+# ---------------------------------------------------------------------------
+# 引擎性能优化 golden 护栏（2026-09-23）：代表性帧集 replay 输出全字段快照逐位比对。
+#
+# 覆盖路径：多 lifecycle stage（ignition/expansion/crowded/reversal/cooling）、
+# regime 四相位（发酵/高潮/退潮/冰点）+ hotlistSentiment 有/无双分支、样本不足
+# （sparse 股）、市场字段缺失（change/volumeRatio/zlje/zljzb 轮流缺失）、
+# 滑动窗口跨越（64 帧 > window_size=50）、ATR high/low 缺失与 close 全缺、
+# avgRankNum<=0 池过滤、analysis/execution 双档位源、lifecycleConfirmFrames=2
+# 的 veto/B-D 连续确认链、replay_frame_at 单帧链、BacktestEngine 撮合链。
+#
+# 重建快照（仅限引擎行为有意变更且已评审后）：
+#   Git Bash: RANKTREND_GOLDEN_SNAPSHOT_REGEN=1 python -m pytest tests/test_ranktrend_golden_alignment.py -k snapshot -q
+#   PowerShell: $env:RANKTREND_GOLDEN_SNAPSHOT_REGEN="1" 后运行同命令
+# 帧集生成器与本快照必须同步演化；改动 _guardrail_frames 后必须重建快照并逐行 review diff。
+# ---------------------------------------------------------------------------
+
+GOLDEN_SNAPSHOT_PATH = Path(__file__).parent / "fixtures" / "ranktrend_golden_replay_snapshot_v1.json.gz"
+
+
+def _write_golden_snapshot(snapshot: dict) -> None:
+    import gzip
+
+    with gzip.open(GOLDEN_SNAPSHOT_PATH, "wt", encoding="utf-8", compresslevel=9) as fh:
+        json.dump(snapshot, fh, sort_keys=True, ensure_ascii=False, indent=1, allow_nan=False)
+        fh.write("\n")
+
+
+def _read_golden_snapshot() -> dict:
+    import gzip
+
+    with gzip.open(GOLDEN_SNAPSHOT_PATH, "rt", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _canonical_json(payload) -> str:
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def _guardrail_frames() -> list[dict]:
+    phases = [
+        {"phaseName": "发酵期", "marketData": {"ztCount": 42, "dtCount": 1, "upCount": 3200, "downCount": 900}},
+        {"phaseName": "高潮期", "marketData": {"ztCount": 88, "dtCount": 3, "upCount": 4100, "downCount": 500}},
+        {"phaseName": "退潮期", "marketData": {"ztCount": 18, "dtCount": 12, "upCount": 1200, "downCount": 3300}},
+        {"phaseName": "冰点期", "marketData": {"ztCount": 5, "dtCount": 25, "upCount": 600, "downCount": 4200}},
+    ]
+    hotlist_stages = [("冰点", "高"), ("发酵", "中"), ("高潮", "低"), ("退潮", "中")]
+    slots = ["10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30"]
+    frames: list[dict] = []
+    for i in range(64):
+        phase = phases[(i // 16) % 4]
+        stocks: list[dict] = []
+
+        def _bar(code: str, close: float, *, with_hl: bool = True) -> dict:
+            bar = {"code": code, "close": close, "price": close, "amount": 50_000_000 + i * 1_000_000, "volume": 120_000 + i * 900}
+            if with_hl:
+                bar["high"] = close + 0.15
+                bar["low"] = close - 0.2
+            return bar
+
+        riser_close = 10 + i * 0.2
+        stocks.append({
+            **_bar("600001", riser_close),
+            "name": "连板晋升", "rank": max(1, 44 - i * 2 // 3),
+            "avgRankNum": max(1.0, 44 - i * 0.65),
+            "change": 2.5 + (i % 5), "volumeRatio": 1.1 + (i % 4) * 0.4,
+            "zlje": 800 + i * 120, "zljzb": 0.8 + (i % 6) * 0.3,
+        })
+        crowded_avg = 1.2 + (i % 3) * 0.4 if i <= 52 else 1.2 + (i - 52) * 2.2
+        stocks.append({
+            **_bar("600002", 20 + i * 0.1),
+            "name": "龙头横盘", "rank": 1 if i <= 52 else 1 + (i - 52),
+            "avgRankNum": crowded_avg,
+            "change": 6.9 - (i % 3), "volumeRatio": 2.2,
+            "zlje": 5200 + i * 60, "zljzb": 2.4,
+        })
+        if i < 30:
+            reverser_avg, reverser_chg = 2.5 + (i % 2), 5.0
+        elif i < 48:
+            reverser_avg, reverser_chg = 3 + (i - 30) * 2.6, -1 - (i % 4)
+        else:
+            reverser_avg, reverser_chg = 50 + i, -3 - (i % 3)
+        stocks.append({
+            **_bar("600003", max(3.0, 18 - i * 0.12)),
+            "name": "断板回落", "rank": max(1, int(reverser_avg)),
+            "avgRankNum": reverser_avg, "change": reverser_chg,
+            "volumeRatio": 0.7 + (i % 3) * 0.5, "zlje": -400 + i * 30, "zljzb": -0.6 + (i % 4) * 0.4,
+        })
+        stocks.append({
+            **_bar("600004", 8 + (i % 9) * 0.1),
+            "name": "温和退潮", "rank": 9 + i // 3,
+            "avgRankNum": 9 + i * 0.35,
+            "change": 1.2 - (i % 3) * 0.8, "volumeRatio": 0.9,
+            "zlje": 120 - i * 9, "zljzb": 0.3 - (i % 5) * 0.2,
+        })
+        stocks.append({
+            **_bar("600005", 6 + (i % 6) * 0.35),
+            "name": "榜单震荡", "rank": 6 + (i * 7) % 23,
+            "avgRankNum": 6 + (i * 7) % 23,
+            "change": ((i * 11) % 13) - 6, "volumeRatio": 0.6 + ((i * 5) % 9) * 0.35,
+            "zlje": ((i * 13) % 19) * 100 - 900, "zljzb": ((i * 3) % 7) - 3,
+        })
+        if i % 3 == 0:
+            stocks.append({
+                **_bar("600006", 15 + i * 0.1, with_hl=False),
+                "name": "间歇在榜", "rank": 4,
+                "avgRankNum": 4.4, "change": 3.3, "volumeRatio": 1.6, "zlje": 900, "zljzb": 1.1,
+            })
+        if i < 2 or 30 <= i < 32:
+            stocks.append({
+                **_bar("600009", 12.0 + (i % 4), with_hl=False),
+                "name": "短暂在榜", "rank": 8,
+                "avgRankNum": 8.8, "change": 2.0, "volumeRatio": 1.2, "zlje": 500, "zljzb": 0.5,
+            })
+        no_fields: dict = {
+            "code": "600007", "name": "缺字段样本", "rank": 12 + (i * 3) % 9,
+            "avgRankNum": 12 + (i * 3) % 9,
+        }
+        if i % 2:
+            no_fields["change"] = 1.8
+        if i % 3 != 0:
+            no_fields["volumeRatio"] = 1.0 + (i % 2) * 0.5
+        if i % 4 != 0:
+            no_fields["zlje"] = 300 + i * 7
+        if i % 5 != 0:
+            no_fields["zljzb"] = 0.4
+        if i % 7 != 0:
+            no_fields["price"] = 9.5 + (i % 4) * 0.1
+            no_fields["close"] = no_fields["price"]
+        stocks.append(no_fields)
+        stocks.append({
+            "code": "600008", "name": "零均榜过滤", "rank": 20, "avgRankNum": 0,
+            "change": 0.5, "volumeRatio": 0.8, "zlje": 10, "zljzb": 0.1,
+            "close": 5.0, "price": 5.0, "amount": 8_000_000, "volume": 30_000,
+        })
+        frame = {
+            "snapshotId": f"gg:2026-06-{i // 8 + 1:02d}:{slots[i % 8]}",
+            "type": "half_hour",
+            "timestamp": 1_782_000_000_000 + i * 1_800_000,
+            "tradingDate": f"2026-06-{i // 8 + 1:02d}",
+            "slotTime": slots[i % 8],
+            "marketContext": {"payload": {"sentiment": {"phaseName": phase["phaseName"]}, "marketData": phase["marketData"]}},
+            "stocks": stocks,
+        }
+        if i >= 24:
+            stage, risk = hotlist_stages[(i // 8) % 4]
+            frame["hotlistSentiment"] = {"stage": stage, "riskLevel": risk, "confidence": 55 + (i % 9)}
+            frame["hotlistSentimentStatus"] = "ok"
+        frames.append(frame)
+    return frames
+
+
+def _build_golden_snapshot() -> dict:
+    frames = _guardrail_frames()
+    meta_ok = {"sampleQuality": "ok"}
+    scenarios: dict[str, dict] = {}
+
+    engine = RankTrendPythonEngine(RankTrendConfig())
+    scenarios["replayDefaultAnalysis"] = {
+        "configRepr": repr(engine.config),
+        "signals": engine.replay(frames, meta=meta_ok),
+    }
+    engine_exec = RankTrendPythonEngine(RankTrendConfig())
+    scenarios["replayDefaultExecution"] = {
+        "configRepr": repr(engine_exec.config),
+        "signals": engine_exec.replay(frames, meta={"sampleQuality": "ok", "candidateTierMode": "execution"}),
+    }
+    engine_k2 = RankTrendPythonEngine(RankTrendConfig.from_patch({"minSampleCount": 3, "lifecycleConfirmFrames": 2}))
+    scenarios["replayPatchedConfirmK2"] = {
+        "configRepr": repr(engine_k2.config),
+        "signals": engine_k2.replay(frames, meta=meta_ok),
+    }
+    for index in (10, 40, 63):
+        engine_at = RankTrendPythonEngine(RankTrendConfig())
+        scenarios[f"frameAt{index}"] = {
+            "configRepr": repr(engine_at.config),
+            "signals": engine_at.replay_frame_at(frames, index, window_size=50, meta=meta_ok),
+        }
+    result = BacktestEngine().run(
+        _guardrail_frames(),
+        {
+            "strategy_config": {},
+            "strategy_name": "ranktrend_early_big_move_v3_lifecycle_fusion",
+            "enable_trade_simulation": True,
+            "quality_gate": {},
+            "random_seed": 20260430,
+        },
+    )
+    simulation = result.get("tradeSimulation") or {}
+    scenarios["backtestSimulation"] = {
+        "trades": simulation.get("trades") or [],
+        "equityCurve": simulation.get("equityCurve") or [],
+        "equityHistory": simulation.get("equityHistory") or [],
+        "tradeEvents": simulation.get("tradeEvents") or [],
+    }
+    return {
+        "schemaVersion": 1,
+        "framesDigest": hashlib.sha256(_canonical_json(frames).encode("utf-8")).hexdigest(),
+        "scenarios": scenarios,
+    }
+
+
+def _structural_diffs(expected, actual, prefix: str, limit: int = 8) -> list[str]:
+    diffs: list[str] = []
+    if type(expected) is not type(actual):
+        diffs.append(f"{prefix}: type {type(expected).__name__} vs {type(actual).__name__}")
+        return diffs
+    if isinstance(expected, dict):
+        for key in sorted(set(expected) | set(actual)):
+            if key not in expected:
+                diffs.append(f"{prefix}.{key}: 快照缺键，输出多出")
+            elif key not in actual:
+                diffs.append(f"{prefix}.{key}: 输出缺键")
+            else:
+                diffs.extend(_structural_diffs(expected[key], actual[key], f"{prefix}.{key}", limit))
+            if len(diffs) >= limit:
+                break
+    elif isinstance(expected, list):
+        if len(expected) != len(actual):
+            diffs.append(f"{prefix}: list 长度 {len(expected)} vs {len(actual)}")
+        for idx in range(min(len(expected), len(actual))):
+            diffs.extend(_structural_diffs(expected[idx], actual[idx], f"{prefix}[{idx}]", limit))
+            if len(diffs) >= limit:
+                break
+    elif expected != actual:
+        diffs.append(f"{prefix}: snapshot={expected!r} vs output={actual!r}")
+    return diffs
+
+
+def test_golden_replay_full_field_snapshot_unchanged() -> None:
+    snapshot = _build_golden_snapshot()
+    if os.environ.get("RANKTREND_GOLDEN_SNAPSHOT_REGEN") == "1":
+        _write_golden_snapshot(snapshot)
+        # 重建运行永不计绿：regen 模式下写入后即失败，必须去掉开关重跑逐位通过才算数
+        # （否则环境变量泄漏会让护栏变成写入后自比的恒真测试）。
+        raise AssertionError(
+            "golden 快照已重建：请去掉 RANKTREND_GOLDEN_SNAPSHOT_REGEN 后重跑本测试确认逐位通过，"
+            "并 review 快照 diff 后才允许提交。"
+        )
+    assert GOLDEN_SNAPSHOT_PATH.exists(), (
+        f"缺少 golden 快照 fixture：{GOLDEN_SNAPSHOT_PATH}。"
+        "首次生成请显式运行 RANKTREND_GOLDEN_SNAPSHOT_REGEN=1 并 review 快照内容后再入库。"
+    )
+    stored = _read_golden_snapshot()
+    assert stored["schemaVersion"] == snapshot["schemaVersion"], "快照 schemaVersion 不一致，需确认版本演进"
+    assert stored["framesDigest"] == snapshot["framesDigest"], (
+        "护栏帧集已变化：必须显式 RANKTREND_GOLDEN_SNAPSHOT_REGEN=1 重建快照并逐行 review diff，"
+        "否则无法判断引擎输出漂移来源。"
+    )
+    for name, actual_scenario in snapshot["scenarios"].items():
+        expected_scenario = stored["scenarios"].get(name)
+        assert expected_scenario is not None, f"快照缺少场景 {name}，需重建快照"
+        if "configRepr" in actual_scenario:
+            assert expected_scenario.get("configRepr") == actual_scenario["configRepr"], f"{name}: config 指纹漂移"
+        if _canonical_json(expected_scenario) != _canonical_json(actual_scenario):
+            diffs = _structural_diffs(expected_scenario, actual_scenario, f"{name}")
+            raise AssertionError(
+                f"场景 {name} 输出与 golden 快照不一致（逐位护栏，引擎行为发生漂移）：\n" + "\n".join(diffs)
+            )
