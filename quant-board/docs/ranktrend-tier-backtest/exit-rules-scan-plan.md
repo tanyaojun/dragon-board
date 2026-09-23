@@ -403,3 +403,12 @@ JSON 序列化 OOM——与 perf 会话实测的"69 分钟死在 save 前"互为
   读数；加载节省 ~34s 为干净实测）。单 trial 累计 ≈ **20 分钟 → 5.5-6.5 分钟**。
   6-trial 批量预估仍 >15 分钟，批量实测与进一步优化（evaluator `_outcome` 复用、
   服务层装配瘦身）留待下批扫描前按需评估。
+- **「服务层装配瘦身」实测后关闭（当晚 cProfile 定向测量，小窗）**：质量门禁
+  （5 遍行级扫描）、`_price_quality_diagnostics`、efficacy ×2、researchDiagnostics
+  二次评估、**22 个对照 TradeSimulator** 全部合计 ≈ 1.5-2s（profile 口径），
+  占全窗 trial <1%——推测瓶颈被证伪，瘦身上限秒级，不值得做。装配链中唯一值钱的
+  落库+回读+大序列化（~25-30s profiled）已被 dry-run 拿走。剩余真大头：
+  `_build_signal` replay（55.8s / 122.7s profiled ≈ 45%，无平方级热点，为每票每帧
+  固定装配成本）；再往下只剩有 golden 风险的大结构改造（增量状态机仅序列增长期
+  有效），收益/风险比不划算。**结论：5.5-6.5 分钟/trial 已接近「逐位一致」约束下
+  的实际下限，本立项收口。**
