@@ -391,6 +391,13 @@
                 </ul>
               </div>
             </div>
+            <!-- 数据质量诊断（2026-09-24 与业务风险提示分离）：join 失败/缺失、市场证据回退
+                 来源等采集链标注独立小字透出，不与交易类风险提示混淆；旧结构文档无该字段
+                 时整块隐藏（fail-visible，不硬门禁）。 -->
+            <div v-if="hotListSentiment.diagnostics?.length" class="hotlist-diagnostics">
+              <span class="diagnostics-tag">数据诊断</span>
+              <span v-for="item in hotListSentiment.diagnostics" :key="item" class="diagnostics-item">{{ item }}</span>
+            </div>
           </template>
           <div v-else class="empty-state">暂无热榜情绪数据</div>
         </div>
@@ -996,8 +1003,10 @@ const hotListPoolGapNote = computed(() => {
   if (provenance.source === 'startup-bundle') {
     return `行情列表暂为启动缓存池 ${listPool} 只，正在对齐快照帧池`
   }
-  // 槽位滞后：列表帧槽落后于情绪区块最新槽
-  const sentimentSlot = hotListSentimentSlotTime.value
+  // 槽位滞后：列表帧槽落后于情绪区块锚定帧槽。EOD 文档 slotTime 是"EOD"哨兵（非槽位），
+  // 对账必须用 anchoredSlotTime（锚定帧实际采集槽位），否则同帧也会误报「槽位暂不同步」。
+  const sentimentSlot =
+    hotListSentiment.value?.anchoredSlotTime || hotListSentimentSlotTime.value
   if (
     snapshotPool &&
     provenance.slotTime &&
@@ -1136,16 +1145,23 @@ const hotListHistoryItems = computed(() => {
   const comparison = hotListComparison.value
   if (!comparison) return []
 
-  const toItem = (label: string, metrics?: HotListDayMetrics | null) => ({
-    label,
-    total: metrics ? `${metrics.total}只` : '--',
-    // 2026-09-10：改读 stage 桶。2026-09-12（code review Medium 3）：键名同步改为 cooling——
-    // cooling 桶 ≠ 强资（强资只是 cooling 的强资金子集），模板文案同步「冷却」。
-    cooling: metrics?.stageCounts?.cooling ?? 0,
-    crowded: metrics?.stageCounts?.crowded ?? 0,
-    // risk = 反转 + 冷却全桶（展示口径，含 cooling 强资行；后端规则输入 riskShare 剔除之）
-    risk: metrics ? (metrics.stageCounts?.reversal ?? 0) + (metrics.stageCounts?.cooling ?? 0) : 0,
-  })
+  const toItem = (label: string, metrics?: HotListDayMetrics | null) => {
+    // 2026-09-24 fail-visible（BUG2 收尾）：stageCounts 缺失（旧结构文档）时显示 '--' 占位，
+    // 不再 `?? 0` 把缺失伪装成 0——三日对比 T-1/T-2 曾因此恒显「冷却 0 · 拥挤 0 · 风险 0」。
+    // 后端已修复昨日/前日行的 displayStatus join，正常路径有真实值；此处只兜旧文档缺失。
+    const counts = metrics?.stageCounts
+    const cooling = counts ? counts.cooling : null
+    const crowdedCount = counts ? counts.crowded : null
+    const risk = counts ? counts.reversal + counts.cooling : null
+    return {
+      label,
+      total: metrics ? `${metrics.total}只` : '--',
+      cooling: formatNullableCount(cooling),
+      crowded: formatNullableCount(crowdedCount),
+      // risk = 反转 + 冷却全桶（展示口径，含 cooling 强资行；后端规则输入 riskShare 剔除之）
+      risk: formatNullableCount(risk),
+    }
+  }
 
   return [
     toItem('T 今日', comparison.today),
@@ -2392,6 +2408,31 @@ onUnmounted(() => {
   margin-top: 2px;
   font-size: 10px;
   color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+/* 数据质量诊断（2026-09-24）：采集链标注独立小字区，与交易类风险提示视觉分离 */
+.hotlist-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0.9;
+}
+
+.hotlist-diagnostics .diagnostics-tag {
+  font-weight: 600;
+  color: #d97706;
+  opacity: 0.85;
+}
+
+.hotlist-diagnostics .diagnostics-item {
   opacity: 0.85;
 }
 

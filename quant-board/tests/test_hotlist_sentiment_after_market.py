@@ -165,8 +165,13 @@ def test_eod_market_evidence_falls_back_to_latest_valid_slot() -> None:
     assert doc["snapshotId"] == "s_1500", "join/锚定帧必须是当日最新帧"
     market = doc["metrics"]["limitEvidence"]["market"]
     assert market["ztCount"] == 7, "市场证据应回退到 14:30 槽位"
-    assert any("14:30" in warning and "limitSummary" in warning for warning in doc["warnings"]), (
-        "回退来源必须随 warnings 标注（fail-visible）"
+    # 2026-09-24 诊断与业务提示分离：回退来源属数据诊断，随 diagnostics 标注（fail-visible），
+    # 不再混入业务风险提示 warnings
+    assert any("14:30" in item and "limitSummary" in item for item in doc["diagnostics"]), (
+        "回退来源必须随 diagnostics 标注（fail-visible）"
+    )
+    assert all("limitSummary" not in item for item in doc["warnings"]), (
+        "业务 warnings 不得混入数据回退类诊断标注"
     )
 
 

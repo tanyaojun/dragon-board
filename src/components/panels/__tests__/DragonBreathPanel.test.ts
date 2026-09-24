@@ -95,4 +95,41 @@ describe('DragonBreathPanel 状态来源透出（spec §4）', () => {
     // 缺字段显示 '--' 占位（formatNullableCount），不伪装成 0
     expect(source).toContain('formatNullableCount')
   })
+
+  test('三日对比对 stageCounts 缺失 fail-visible（2026-09-24）：不得用 ?? 0 把缺失伪装成 0', () => {
+    const source = panelSource()
+
+    // T-1/T-2 曾因历史文档缺 stageCounts 恒显「冷却 0 · 拥挤 0 · 风险 0」；
+    // 修复后缺失显示 '--' 占位，与分层结构同一口径。
+    expect(source).toContain('const counts = metrics?.stageCounts')
+    expect(source).toContain('formatNullableCount(cooling)')
+    expect(source).toContain('formatNullableCount(crowdedCount)')
+    expect(source).toContain('formatNullableCount(risk)')
+    // 不允许恢复 `?? 0` 伪装缺失
+    expect(source).not.toContain('stageCounts?.cooling ?? 0')
+    expect(source).not.toContain('stageCounts?.crowded ?? 0')
+  })
+
+  test('池对账注脚用 anchoredSlotTime 对账（2026-09-24）：EOD 哨兵 slotTime 不得参与槽位比较', () => {
+    const source = panelSource()
+
+    // EOD 文档 slotTime 是文档类型哨兵（恒 "EOD"），拿它和行情列表帧槽位（如 "11:00"）
+    // 比较会对同帧数据误报「槽位暂不同步」；必须优先用锚定帧实际采集槽位。
+    expect(source).toContain('anchoredSlotTime')
+    expect(source).toContain(
+      'hotListSentiment.value?.anchoredSlotTime || hotListSentimentSlotTime.value',
+    )
+  })
+
+  test('诊断与业务提示分离（2026-09-24）：diagnostics 独立渲染，warnings 保持业务风险提示', () => {
+    const source = panelSource()
+
+    // 风险提示列表保持渲染 warnings（业务证据），诊断标注走独立区块
+    expect(source).toContain('v-for="warning in hotListSentiment.warnings"')
+    expect(source).toContain('hotListSentiment.diagnostics?.length')
+    expect(source).toContain('hotlist-diagnostics')
+    expect(source).toContain('数据诊断')
+    // 旧结构文档无 diagnostics 字段 → 区块隐藏，不硬门禁
+    expect(source).toContain('v-if="hotListSentiment.diagnostics?.length"')
+  })
 })

@@ -165,7 +165,8 @@ def test_post_persist_chain_survives_analyze_failure(monkeypatch):
     assert slot_doc is not None
     source = slot_doc["metrics"]["statusSourceCounts"]
     assert source["displayStatus"] == 0 and source["fallback"] >= 1
-    assert any("displayStatus" in w for w in slot_doc.get("warnings", []))
+    # 2026-09-24 诊断与业务提示分离：join miss 标注随 diagnostics（fail-visible），不混业务 warnings
+    assert any("displayStatus" in item for item in slot_doc.get("diagnostics", []))
     assert repo.runs, "run doc 已记录"
     assert any("analysis" in w for w in (repo.runs[-1].get("warnings") or [])), (
         "analyze 失败必须进 run doc warnings（fail-visible）"

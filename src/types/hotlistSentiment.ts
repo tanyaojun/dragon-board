@@ -161,6 +161,11 @@ export interface HotListSentimentResult {
   turnover: TurnoverResult
   signals: string[]
   warnings: string[]
+  /**
+   * 数据质量诊断标注（2026-09-24 与业务风险提示分离）：join 失败/缺失、市场证据回退来源等。
+   * 由后端编排层填充；旧结构文档无此字段（诊断信息曾混入 warnings）。
+   */
+  diagnostics?: string[]
 }
 
 export interface HotListSentimentDayDoc {
@@ -169,6 +174,8 @@ export interface HotListSentimentDayDoc {
   tradingDate: string
   snapshotId?: string
   slotTime?: string
+  /** 文档锚定帧的采集槽位（EOD 文档为实际锚定的最新帧槽位；槽位文档与 slotTime 相同）。 */
+  anchoredSlotTime?: string
   timestamp?: number
   stage: UnifiedEmotionStage
   riskLevel: HotListSentimentRiskLevel
@@ -191,6 +198,8 @@ export interface HotListSentimentDayDoc {
   turnover: TurnoverResult
   signals: string[]
   warnings: string[]
+  /** 数据质量诊断标注（2026-09-24 与业务风险提示分离）；旧结构文档无此字段。 */
+  diagnostics?: string[]
   missing?: boolean
   reason?: string
 }

@@ -373,3 +373,79 @@ def test_run_for_date_persists_day_before_metrics() -> None:
     assert doc["metrics"]["retentionRate1d"] == 0.5
     assert doc["metrics"]["retentionRate2d"] == 0.5
     assert doc["metrics"]["comparison"]["dayBefore"] is not None
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 BUG2 修复：previous_day_stocks 返回的昨日/前日行必须完成 displayStatus join
+# （此前不 join → comparison.yesterday/dayBefore 的 stageCounts 全部 fallback 归 unknown，
+# 前端三日对比 T-1/T-2 冷却/拥挤/风险恒 0）。join 失败 fail-visible：joinIssues 随返回透出，
+# 行保持无标记（fallback 兜底），不伪造数据。
+# ---------------------------------------------------------------------------
+
+
+def test_previous_day_stocks_join_display_status_marks() -> None:
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s0", "type": "half_hour", "tradingDate": "2026-06-03", "timestamp": 90},
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "type": "half_hour", "tradingDate": "2026-06-04", "timestamp": 100},
+        {"datasetId": "dragonboard_live", "snapshotId": "s2", "type": "half_hour", "tradingDate": "2026-06-05", "timestamp": 200},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        day_stock("s0", "2026-06-03", "000001", 1, 5),
+        day_stock("s1", "2026-06-04", "000002", 1, 4),
+        day_stock("s2", "2026-06-05", "000003", 1, 6),
+    ]
+    db["snapshot_analysis"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "code": "000002",
+         "analysis": {"cycle": {"stage": "ignition"},
+                      "displayStatus": {"stage": "ignition", "label": "点火"},
+                      "meta": {"sampleQuality": {"status": "ok"}}}},
+        {"datasetId": "dragonboard_live", "snapshotId": "s0", "code": "000001",
+         "analysis": {"cycle": {"stage": "cooling"},
+                      "displayStatus": {"stage": "cooling", "label": "冷却"},
+                      "meta": {"sampleQuality": {"status": "insufficient"}}}},
+    ]
+
+    previous = HotListSentimentBackfillService(db).previous_day_stocks(
+        "dragonboard_live", "half_hour", "2026-06-05"
+    )
+
+    assert previous["joinIssues"] == []
+    assert [row["code"] for row in previous["yesterday"]] == ["000002"]
+    assert previous["yesterday"][0]["displayStatusStage"] == "ignition"
+    assert previous["yesterday"][0]["displayStatusSampleInsufficient"] is False
+    assert [row["code"] for row in previous["day_before"]] == ["000001"]
+    assert previous["day_before"][0]["displayStatusStage"] == "cooling"
+    assert previous["day_before"][0]["displayStatusSampleInsufficient"] is True
+
+
+def test_previous_day_stocks_join_failure_is_fail_visible() -> None:
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+    class _BrokenCollection:
+        def find(self, query=None, projection=None):
+            raise RuntimeError("boom")
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "s0", "type": "half_hour", "tradingDate": "2026-06-03", "timestamp": 90},
+        {"datasetId": "dragonboard_live", "snapshotId": "s1", "type": "half_hour", "tradingDate": "2026-06-04", "timestamp": 100},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        day_stock("s0", "2026-06-03", "000001", 1, 4),
+    ]
+
+    service = HotListSentimentBackfillService(db)
+    # 注入会抛错的 snapshot_analysis 集合，模拟 join 查询失败
+    service._db.collections["snapshot_analysis"] = _BrokenCollection()
+
+    # 请求 06-04：prior 交易日 = [06-03] → yesterday = s0 行，join 时查询抛错
+    previous = service.previous_day_stocks("dragonboard_live", "half_hour", "2026-06-04")
+
+    assert len(previous["joinIssues"]) == 1
+    assert "yesterday" in previous["joinIssues"][0]
+    assert "boom" in previous["joinIssues"][0]
+    # 行保持无标记 → 下游 fallback 兜底，不伪造 stage
+    assert "displayStatusStage" not in previous["yesterday"][0]

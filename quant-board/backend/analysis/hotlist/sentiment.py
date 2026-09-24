@@ -40,6 +40,10 @@ _CHANGE_TOLERANCE = 0.5
 
 # 对外分布键：5 态 + unknown（stage 缺失/非法）。词表单一来源在 display_status。
 STAGE_KEYS: tuple[str, ...] = (*STAGE_ENUM, "unknown")
+
+# 日内边际证据阈值（2026-09-24）：首末占比变化 ≥4pp 才生成趋势文案（与 risk_rising /
+# opportunity_rising 的 0.04 同口径）；只进 signals/warnings，不参与情绪阶段级联。
+INTRADAY_TREND_MIN_DELTA = 0.04
 STAGE_LABEL_BY_KEY: dict[str, str] = {**STAGE_LABELS, "unknown": STAGE_UNKNOWN_LABEL}
 
 
@@ -414,9 +418,10 @@ def resolve_row_signals(
     来源计数：join 命中 → `displayStatus`；无记录（或 annotate 补齐的 fallback 行，带
     `_stageFromFallback` 标记）→ `fallback`（fail-visible，可辨源）。
 
-    第 4 分量 `is_fallback` 供计量层分桶：spec 规定 fallback 行的展示桶一律归 `unknown`，
-    但规则输入（strongMoneyShare 等）仍按判据计，因此 stage 分量保留 fallback 启发式的
-    原始判定（crowded/cooling），由调用方决定是否进展示桶。
+    第 4 分量供计量层分桶：spec 规定 fallback 行与样本不足行（meta.sampleQuality，
+    2026-09-24 口径统一）的展示桶一律归 `unknown`，但规则输入（strongMoneyShare 等）
+    仍按判据计，因此 stage 分量保留 golden/fallback 的原始判定（crowded/cooling），
+    由调用方决定是否进展示桶。
     """
     if stock.get("_stageFromFallback"):
         # annotate 补齐的 fallback 行（注入过等价 stage/标记）：来源仍计 fallback。
@@ -429,6 +434,13 @@ def resolve_row_signals(
     if isinstance(stage, str) and stage in STAGE_ENUM:
         if status_source is not None:
             status_source["displayStatus"] += 1
+        if stock.get("displayStatusSampleInsufficient") is True:
+            # 2026-09-24 口径统一（与行情列表「样本不足」同源同判）：meta.sampleQuality
+            # insufficient 的行展示桶归 unknown（第 4 分量复用分桶通道），避免行情列表声明
+            # 「样本不足」而情绪面板把同一批股票计进 cooling/ignition 的同股两判。
+            # 来源仍计 displayStatus（join 命中、非 fallback）；stage 保留 golden 判定，
+            # 规则输入（strong_money ⊆ cooling 计数等）按原口径计，不受展示桶影响。
+            return stage, is_strong_money_row(stock), is_risk_row(stock), True
         return stage, is_strong_money_row(stock), is_risk_row(stock), False
     if isinstance(stock.get("displayStatusLabel"), str) and stock.get("displayStatusLabel"):
         # 有记录但 stage 缺失（unknown 投影）→ 归 unknown，仍算 join 命中
@@ -971,6 +983,68 @@ def _collect_limit_evidence_messages(limit_evidence: dict | None) -> dict:
     return {"level": "neutral", "signals": signals, "warnings": warnings}
 
 
+def _evaluate_intraday_trend(today: dict, history: list | None, current_slot: str | None) -> dict:
+    """日内边际证据（2026-09-24）：当日已有槽位 shares 首末对比 → 趋势类文案。
+
+    输入 `history` 是编排层从当日槽位文档提取的升序序列（不含当前槽），每项
+    `{"slotTime": "HH:MM", "stageShares": {...}}`；当前点取 `today["stageShares"]`。
+
+    规则：有效点 <2（无历史）不生成任何证据（不伪造趋势）；首末变化 ≥4pp 才触发
+    （与 risk_rising/expansion 阈值同口径）；缺 stageShares 的历史点跳过。
+
+    边界（重要）：本 evaluator 只产出 signals/warnings 文案，**不产生 level、不参与
+    情绪阶段级联**——传入与否不影响 stage/riskLevel（golden 零漂移），仅丰富证据表达。
+    4pp 阈值单一来源 `INTRADAY_TREND_MIN_DELTA`。
+    """
+    signals: list[str] = []
+    warnings: list[str] = []
+    points: list[tuple[str | None, dict]] = []
+    for item in history or []:
+        shares = (item or {}).get("stageShares") if isinstance(item, dict) else None
+        if isinstance(shares, dict) and shares:
+            points.append(((item or {}).get("slotTime"), shares))
+    today_shares = today.get("stageShares")
+    if not isinstance(today_shares, dict) or not today_shares:
+        return {"level": "neutral", "signals": signals, "warnings": warnings}
+    points.append((current_slot, today_shares))
+    if len(points) < 2:
+        return {"level": "neutral", "signals": signals, "warnings": warnings}
+
+    first_slot, first_shares = points[0]
+    last_slot, last_shares = points[-1]
+    first_label = str(first_slot or "--")
+    last_label = str(last_slot or "--")
+
+    def _attack(shares: dict) -> float:
+        return to_number(shares.get("ignition")) + to_number(shares.get("expansion"))
+
+    cooling_delta = to_number(last_shares.get("cooling")) - to_number(first_shares.get("cooling"))
+    attack_start = _attack(first_shares)
+    attack_end = _attack(last_shares)
+    attack_delta = attack_end - attack_start
+    if cooling_delta >= INTRADAY_TREND_MIN_DELTA:
+        warnings.append(
+            f"冷却占比盘中走高 {_js_to_fixed(first_shares.get('cooling') * 100)}%→"
+            f"{_js_to_fixed(last_shares.get('cooling') * 100)}%（{first_label}→{last_label}）"
+        )
+    elif cooling_delta <= -INTRADAY_TREND_MIN_DELTA:
+        signals.append(
+            f"冷却占比盘中回落 {_js_to_fixed(first_shares.get('cooling') * 100)}%→"
+            f"{_js_to_fixed(last_shares.get('cooling') * 100)}%（{first_label}→{last_label}）"
+        )
+    if attack_delta >= INTRADAY_TREND_MIN_DELTA:
+        signals.append(
+            f"攻击占比盘中走高 {_js_to_fixed(attack_start * 100)}%→"
+            f"{_js_to_fixed(attack_end * 100)}%（{first_label}→{last_label}）"
+        )
+    elif attack_delta <= -INTRADAY_TREND_MIN_DELTA:
+        warnings.append(
+            f"攻击占比盘中走低 {_js_to_fixed(attack_start * 100)}%→"
+            f"{_js_to_fixed(attack_end * 100)}%（{first_label}→{last_label}）"
+        )
+    return {"level": "neutral", "signals": signals, "warnings": warnings}
+
+
 def _resolve_risk_level(risk_pressure: dict, continuity: dict) -> str:
     # TS: resolveRiskLevel L1097-1108
     risk = risk_pressure["level"]
@@ -982,7 +1056,8 @@ def _resolve_risk_level(risk_pressure: dict, continuity: dict) -> str:
     return "低"
 
 
-def resolve_stage(comparison: dict, layers: dict | None = None, limit_evidence: dict | None = None) -> dict:
+def resolve_stage(comparison: dict, layers: dict | None = None, limit_evidence: dict | None = None,
+                  intraday_history: list | None = None, current_slot: str | None = None) -> dict:
     # TS: resolveStage L1110-1267 —— 级联顺序 retreat → climax → ferment → start → ice，逐条布尔条件不许简化
     today = comparison["today"]
     tape = _evaluate_tape_strength(today, layers)
@@ -991,8 +1066,10 @@ def resolve_stage(comparison: dict, layers: dict | None = None, limit_evidence: 
     risk_pressure = _evaluate_risk_pressure(comparison)
     continuity = _evaluate_continuity(comparison)
     limit_messages = _collect_limit_evidence_messages(limit_evidence)
-    signals = tape["signals"] + money["signals"] + expansion["signals"] + risk_pressure["signals"] + continuity["signals"] + limit_messages["signals"]
-    warnings = tape["warnings"] + money["warnings"] + expansion["warnings"] + risk_pressure["warnings"] + continuity["warnings"] + limit_messages["warnings"]
+    # 日内边际证据（2026-09-24）：只拼文案，level 恒 neutral 不进级联（golden 零漂移）
+    intraday = _evaluate_intraday_trend(today, intraday_history, current_slot)
+    signals = tape["signals"] + money["signals"] + expansion["signals"] + risk_pressure["signals"] + continuity["signals"] + limit_messages["signals"] + intraday["signals"]
+    warnings = tape["warnings"] + money["warnings"] + expansion["warnings"] + risk_pressure["warnings"] + continuity["warnings"] + limit_messages["warnings"] + intraday["warnings"]
 
     change1d = comparison.get("totalChange1d")
     total_expanded = change1d is not None and change1d > 0
@@ -1085,6 +1162,8 @@ def compute_hotlist_sentiment(
     day_before: dict | None = None,
     market_data: dict | None = None,
     top_n: int | None = None,
+    intraday_history: list | None = None,
+    current_slot: str | None = None,
 ) -> dict:
     # TS: HotListSentimentAnalyzer.analyze L1276-1303 的 Python 等价主入口
     sorted_stocks = sort_rows(stocks)
@@ -1106,7 +1185,7 @@ def compute_hotlist_sentiment(
     if comparison.get("dayBefore") and (day_before or {}).get("tradingDate") is not None:
         comparison["dayBefore"]["tradingDate"] = (day_before or {}).get("tradingDate")
     limit_evidence = build_limit_evidence(sorted_stocks, yesterday_rows, top_n, market_data)
-    stage_evidence = resolve_stage(comparison, layers, limit_evidence)
+    stage_evidence = resolve_stage(comparison, layers, limit_evidence, intraday_history, current_slot)
     confidence = _calculate_confidence(stage_evidence["stage"], stage_evidence["signals"], stage_evidence["warnings"])
 
     status_source = {"displayStatus": 0, "fallback": 0}

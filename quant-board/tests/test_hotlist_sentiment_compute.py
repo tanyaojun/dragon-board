@@ -332,3 +332,181 @@ def test_join_injects_cycle_transition():
     assert stats["joined"] == 2
     assert rows[0]["cycleTransition"] == "ignition->cooling"
     assert rows[1]["cycleTransition"] is None
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 口径统一（行情列表「样本不足」 vs 情绪聚合桶不一致修复）：
+# meta.sampleQuality.status=insufficient 的行，展示桶归 unknown（与行情列表口径一致），
+# 来源仍计 displayStatus（join 命中），规则输入（strongMoneyShare 等）保持按判据计。
+# ---------------------------------------------------------------------------
+
+
+def _patch_analysis_repo(monkeypatch, analysis_by_code: dict):
+    import backend.data.repositories.mongo_repository as mongo_mod
+
+    class _FakeRepo:
+        def __init__(self, db):
+            self.db = db
+
+        def load_snapshot_analysis(self, dataset_id, snapshot_id, codes=None):
+            return analysis_by_code
+
+    monkeypatch.setattr(mongo_mod, "MongoRepository", _FakeRepo)
+
+
+def test_join_injects_sample_insufficient_flag(monkeypatch):
+    """join 层按 analysis.meta.sampleQuality.status 注入 displayStatusSampleInsufficient 布尔。"""
+    from backend.services.theme.hotlist_sentiment_compute import _join_display_status
+
+    _patch_analysis_repo(
+        monkeypatch,
+        {
+            "000001": {
+                "cycle": {"stage": "cooling"},
+                "displayStatus": {"stage": "cooling", "label": "冷却"},
+                "meta": {"sampleQuality": {"status": "insufficient"}},
+            },
+            "000002": {
+                "cycle": {"stage": "cooling"},
+                "displayStatus": {"stage": "cooling", "label": "冷却"},
+                "meta": {"sampleQuality": {"status": "ok"}},
+            },
+        },
+    )
+    rows = [{"code": "000001"}, {"code": "000002"}]
+    stats = _join_display_status({}, "ds", "snap", rows)
+    assert stats["joined"] == 2
+    assert rows[0]["displayStatusSampleInsufficient"] is True
+    assert rows[1]["displayStatusSampleInsufficient"] is False
+
+
+def test_insufficient_join_row_maps_to_unknown_display_bucket():
+    """join 命中但样本不足 → 来源仍计 displayStatus；stage 保留 golden 判定（规则输入用），
+    第 4 分量置位 → 计量层展示桶归 unknown（下一条测试验证），非 fallback 来源。"""
+    row = {"code": "000001", "change": 5, "displayStatusStage": "cooling",
+           "displayStatusStrongMoney": True, "displayStatusRisk": False,
+           "displayStatusSampleInsufficient": True}
+    source = {"displayStatus": 0, "fallback": 0}
+    assert resolve_row_signals(row, [row], source) == ("cooling", True, False, True)
+    assert source == {"displayStatus": 1, "fallback": 0}
+
+
+def test_insufficient_rows_counted_in_unknown_stage_bucket():
+    """计量层：样本不足行进 unknown 展示桶；规则输入（strongMoneyShare）保持按判据计。"""
+    from backend.analysis.hotlist.sentiment import build_day_metrics_from_sorted
+
+    rows = [
+        {"code": "000001", "rank": 1, "change": 5, "zlje": 1e8, "zljzb": 12,
+         "displayStatusStage": "cooling", "displayStatusStrongMoney": True,
+         "displayStatusRisk": False, "displayStatusSampleInsufficient": True},
+        {"code": "000002", "rank": 2, "change": 3,
+         "displayStatusStage": "cooling", "displayStatusStrongMoney": False,
+         "displayStatusRisk": False},
+    ]
+    metrics = build_day_metrics_from_sorted(sort_rows(rows), 2)
+    assert metrics["stageCounts"]["unknown"] == 1
+    assert metrics["stageCounts"]["cooling"] == 1
+    # 规则输入不受展示桶影响：样本不足行的强资判定（cooling + zlje/zljzb）仍进 strongMoneyShare
+    assert metrics["strongMoneyShare"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 盘中趋势证据（日内边际）：编排层透传当日已有槽位的 stageShares 序列，
+# 纯函数生成首末对比类证据文案。规则：
+# - 少于 2 个有效点（无历史）→ 不生成任何证据（不伪造趋势）
+# - 阈值 0.04 与 risk_rising/expansion 现有口径一致
+# - 证据只进 signals/warnings 文案，不产生 level、不参与情绪阶段级联（golden 零漂移）
+# ---------------------------------------------------------------------------
+
+
+def test_intraday_trend_needs_history():
+    from backend.analysis.hotlist.sentiment import _evaluate_intraday_trend
+
+    """无历史（None / 空 / 单点）→ 无趋势证据，不伪造。"""
+    today = {"stageShares": {"cooling": 0.8, "ignition": 0.05, "expansion": 0.05}}
+    for history in (None, [], [{"slotTime": "09:30", "stageShares": today["stageShares"]}]):
+        r = _evaluate_intraday_trend(today, history, "11:30")
+        assert r["signals"] == [] and r["warnings"] == []
+
+
+def test_intraday_trend_cooling_rising_warning():
+    from backend.analysis.hotlist.sentiment import _evaluate_intraday_trend
+    """冷却占比首末走高 ≥4pp → 风险提示；文案含首末槽位与百分比。"""
+    today = {"stageShares": {"cooling": 0.82, "ignition": 0.04, "expansion": 0.04}}
+    history = [
+        {"slotTime": "09:30", "stageShares": {"cooling": 0.76, "ignition": 0.08, "expansion": 0.06}},
+        {"slotTime": "10:00", "stageShares": {"cooling": 0.79, "ignition": 0.06, "expansion": 0.05}},
+    ]
+    r = _evaluate_intraday_trend(today, history, "11:30")
+    assert r["signals"] == []
+    # 攻击（点火+扩散）0.14→0.08 走低 ≥4pp → 同步风险提示
+    assert r["warnings"] == [
+        "冷却占比盘中走高 76%→82%（09:30→11:30）",
+        "攻击占比盘中走低 14%→8%（09:30→11:30）",
+    ]
+
+
+def test_intraday_trend_attack_rising_signal():
+    from backend.analysis.hotlist.sentiment import _evaluate_intraday_trend
+    """攻击占比走高 ≥4pp → 强证据。"""
+    today = {"stageShares": {"cooling": 0.70, "ignition": 0.10, "expansion": 0.08}}
+    history = [{"slotTime": "09:30", "stageShares": {"cooling": 0.78, "ignition": 0.07, "expansion": 0.05}}]
+    r = _evaluate_intraday_trend(today, history, "10:00")
+    # 冷却 0.78→0.70 同步回落 ≥4pp → 两条强证据
+    assert r["warnings"] == []
+    assert r["signals"] == [
+        "冷却占比盘中回落 78%→70%（09:30→10:00）",
+        "攻击占比盘中走高 12%→18%（09:30→10:00）",
+    ]
+
+
+def test_intraday_trend_small_change_no_evidence():
+    from backend.analysis.hotlist.sentiment import _evaluate_intraday_trend
+    """首末变化 <4pp → 不生成证据（噪音不进文案）。"""
+    today = {"stageShares": {"cooling": 0.78, "ignition": 0.06, "expansion": 0.05}}
+    history = [{"slotTime": "09:30", "stageShares": {"cooling": 0.76, "ignition": 0.07, "expansion": 0.05}}]
+    r = _evaluate_intraday_trend(today, history, "10:00")
+    assert r["signals"] == [] and r["warnings"] == []
+
+
+def test_intraday_trend_skips_invalid_history_points():
+    from backend.analysis.hotlist.sentiment import _evaluate_intraday_trend
+    """缺 stageShares 的历史点跳过；全部无效时等同于无历史。"""
+    today = {"stageShares": {"cooling": 0.82, "ignition": 0.04, "expansion": 0.04}}
+    history = [{"slotTime": "09:30"}, {"slotTime": "10:00", "stageShares": None}]
+    r = _evaluate_intraday_trend(today, history, "11:30")
+    assert r["signals"] == [] and r["warnings"] == []
+
+
+def test_intraday_trend_not_in_golden_without_history():
+    """不传 history → 输出与旧行为完全一致（golden 零漂移）。"""
+    case = get_case(load_golden_cases(), "热榜收缩且机会少时识别为冰点")
+    raw = case["input"]
+    result_a = compute_hotlist_sentiment(_to_py_input(raw)["stocks"], yesterday=_to_py_input(raw).get("yesterday"),
+                                         day_before=_to_py_input(raw).get("dayBefore"), market_data=raw.get("marketData"))
+    result_b = compute_hotlist_sentiment(_to_py_input(raw)["stocks"], yesterday=_to_py_input(raw).get("yesterday"),
+                                         day_before=_to_py_input(raw).get("dayBefore"), market_data=raw.get("marketData"),
+                                         intraday_history=None, current_slot=None)
+    assert result_a["signals"] == result_b["signals"]
+    assert result_a["warnings"] == result_b["warnings"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 诊断与业务提示分离：编排层标注（join 失败/缺失、市场证据回退）进
+# doc["diagnostics"]，不再混入业务 warnings；纯函数 warnings 保持纯业务证据。
+# 文档构造默认带空 diagnostics（schema 稳定，前端按字段存在性渲染）。
+# ---------------------------------------------------------------------------
+
+
+def test_document_has_diagnostics_field():
+    """文档构造输出 diagnostics 字段（默认空数组，编排层填充）。"""
+    from backend.operations.hotlist_sentiment import build_hotlist_sentiment_document
+
+    frame = {"snapshotId": "s1", "slotTime": "10:00", "timestamp": 100}
+    doc = build_hotlist_sentiment_document(
+        dataset_id="dragonboard_live", snapshot_type="half_hour", trading_date="2026-06-04",
+        frame=frame, stocks=[{"code": "000001", "rank": 1, "change": 5, "zlje": 0, "volumeRatio": 1.5}],
+    )
+    assert doc["diagnostics"] == []
+    # 诊断类标注不再写入 warnings 的由编排层保证，此处锁 schema
+    assert isinstance(doc["warnings"], list)

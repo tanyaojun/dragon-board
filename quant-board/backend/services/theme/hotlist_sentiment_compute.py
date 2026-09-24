@@ -93,6 +93,14 @@ def _join_display_status(db: Any, dataset_id: str, snapshot_id: str, rows: list[
             row["displayStatusLabel"] = label
             stage = entry.get("stage") if isinstance(entry, dict) else None
             row["displayStatusStage"] = stage if isinstance(stage, str) and stage else None
+            # 样本质量声明透传（2026-09-24 口径统一）：meta.sampleQuality.status=insufficient
+            # 的行与行情列表「样本不足」同源同判，resolve_row_signals 据此把展示桶归 unknown；
+            # 缺 meta 时按 False 处理（老文档无该字段 → 维持 stage 桶，不回溯改历史口径）。
+            meta = analysis.get("meta") if isinstance(analysis, dict) else None
+            sample_quality = meta.get("sampleQuality") if isinstance(meta, dict) else None
+            row["displayStatusSampleInsufficient"] = bool(
+                isinstance(sample_quality, dict) and sample_quality.get("status") == "insufficient"
+            )
             # 阶段迁移透传（2026-09-16）：cycle.transition 原样注入，供 transitionCounts 聚合
             cycle = analysis.get("cycle") if isinstance(analysis, dict) else None
             transition = cycle.get("transition") if isinstance(cycle, dict) else None
@@ -139,6 +147,57 @@ def _status_source_summary(doc: dict[str, Any] | None) -> dict[str, Any] | None:
         ),
         "stage": doc.get("stage"),
     }
+
+
+def _collect_intraday_history(
+    db: Any,
+    dataset_id: str,
+    snapshot_type: str,
+    trading_date: str,
+    *,
+    exclude_slot: str | None = None,
+) -> list[dict[str, Any]]:
+    """当日已有槽位文档的 shares 升序序列（不含 EOD；exclude_slot 再排除当前锚定槽）。
+
+    供纯函数 `_evaluate_intraday_trend` 生成日内边际证据。fail-visible：读取异常返回空
+    列表（等同无历史，不生成趋势文案），不阻断主计算；槽位缺 stageShares 的由纯函数跳过。
+    """
+    try:
+        rows = db["hotlist_sentiment"].find(
+            {
+                "datasetId": dataset_id,
+                "snapshotType": snapshot_type,
+                "tradingDate": trading_date,
+                "slotTime": {"$ne": "EOD"},
+            },
+            {"_id": 0, "slotTime": 1, "metrics.layers.all.stageShares": 1},
+        )
+        points: list[dict[str, Any]] = []
+        for row in rows:
+            slot_time = row.get("slotTime")
+            if not slot_time or (exclude_slot and str(slot_time) == str(exclude_slot)):
+                continue
+            shares = (((row.get("metrics") or {}).get("layers") or {}).get("all") or {}).get("stageShares")
+            if not isinstance(shares, dict) or not shares:
+                continue
+            points.append({"slotTime": str(slot_time), "stageShares": shares})
+        return sorted(points, key=lambda p: str(p["slotTime"]))
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "intraday history read failed (dataset=%s date=%s)",
+            dataset_id,
+            trading_date,
+            exc_info=True,
+        )
+        return []
+
+
+def _append_diagnostic(doc: dict[str, Any], message: str | None) -> None:
+    """数据质量诊断标注进 doc["diagnostics"]（2026-09-24 与业务风险提示 warnings 分离）。"""
+    if message:
+        doc.setdefault("diagnostics", []).append(message)
 
 
 def _invalidate_hotlist_sentiment_cache(dataset_id: str) -> None:
@@ -267,6 +326,11 @@ class HotListSentimentComputeService:
             if date < trading_date
         ]
         join_stats = _join_display_status(self._backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
+        # 日内边际证据：当日已有槽位 shares 序列（排除锚定槽自身，升序）；读取失败返回空
+        anchored_slot = frame.get("slotTime")
+        intraday_history = _collect_intraday_history(
+            self._backfill._db, dataset_id, snapshot_type, trading_date, exclude_slot=anchored_slot
+        )
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -278,15 +342,16 @@ class HotListSentimentComputeService:
             market_data=_build_market_data_like(evidence_frame.get("limitSummary")) if evidence_frame else None,
             yesterday_trading_date=prior_dates[-1] if prior_dates else None,
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
+            intraday_history=intraday_history,
+            current_slot=str(anchored_slot) if anchored_slot else None,
         )
         join_note = _join_warning(join_stats)
-        if join_note:
-            doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
+        _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
+        for issue in previous.get("joinIssues") or []:
+            _append_diagnostic(doc, issue)
         if evidence_slot:
             # 与 run_for_date 同口径：市场证据回退来源随文档落库（fail-visible，不静默近似）
-            doc.setdefault("warnings", []).append(
-                f"最新帧 limitSummary 缺失，全市场证据回退自 {evidence_slot} 槽位"
-            )
+            _append_diagnostic(doc, f"最新帧 limitSummary 缺失，全市场证据回退自 {evidence_slot} 槽位")
         if persist:
             HotListSentimentService(self._backfill._db).upsert(doc)
             # 写口（lazy compute / recompute / 批量重算）统一失效读口缓存
@@ -358,6 +423,10 @@ def compute_and_upsert_for_slot(
             return {"written": False, "reason": "empty_stock_rows"}
         previous = backfill.previous_day_stocks(dataset_id, snapshot_type, trading_date)
         join_stats = _join_display_status(backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
+        # 日内边际证据：当日已写的更早槽位文档（排除当前槽自身）
+        intraday_history = _collect_intraday_history(
+            backfill._db, dataset_id, snapshot_type, trading_date, exclude_slot=str(slot_time)
+        )
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -368,10 +437,13 @@ def compute_and_upsert_for_slot(
             day_before_stocks=previous.get("day_before") or [],
             market_data=_build_market_data_like(frame.get("limitSummary")),
             slot_time=slot_time,
+            intraday_history=intraday_history,
+            current_slot=str(slot_time),
         )
         join_note = _join_warning(join_stats)
-        if join_note:
-            doc.setdefault("warnings", []).append(join_note)  # fail-visible：join 异常/缺失随文档落库
+        _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
+        for issue in previous.get("joinIssues") or []:
+            _append_diagnostic(doc, issue)
         HotListSentimentService(mongo_db).upsert(doc)
         return {"written": True, "reason": None}
     except Exception as exc:  # 无质量阻断：情绪失败不阻断帧采集
