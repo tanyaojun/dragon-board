@@ -11,10 +11,12 @@
 """
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
 import pytest
 
 from backend.data.cache import snapshot_cache
-from tests.test_hotlist_sentiment_series_api import FakeMongoDb, _seed_frames
+from tests.test_hotlist_sentiment_series_api import FakeMongoDb, _RecordingCache, _seed_frames
 
 
 @pytest.fixture(autouse=True)
@@ -115,3 +117,47 @@ def test_slots_no_frames_returns_degraded(monkeypatch):
     assert body["ok"] is False
     assert body["degraded"] is True
     assert body["reason"] == "no_snapshot_trading_date"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认字段：slots 读口未命中与缓存命中均保留确认字段（v2 缓存）。
+# ---------------------------------------------------------------------------
+
+
+def test_slots_keeps_confirmation_fields_on_miss_and_hit(monkeypatch):
+    from backend.data.cache import snapshot_cache
+    from backend.main import app
+
+    fake_db = FakeMongoDb()
+    _seed_frames(fake_db, "dragonboard_live", "half_hour", ["2026-06-05"])
+    doc = _slot_doc("2026-06-05", "14:30", stage="退潮")
+    doc["rawStage"] = "高潮"
+    doc["stageConfirmState"] = {
+        "pending": True,
+        "pendingStage": "高潮",
+        "pendingSince": "14:30",
+        "confirmSlots": 2,
+        "historyStatus": "complete",
+    }
+    fake_db["hotlist_sentiment"].rows.append(doc)
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: fake_db,
+    )
+    cache = _RecordingCache()
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: cache)
+    client = TestClient(app)
+
+    first = client.get("/api/hotlist-sentiment/slots?dataset_id=dragonboard_live")
+    assert first.status_code == 200
+    assert first.json()["cache"]["hit"] is False
+    target = [item for item in first.json()["items"] if item.get("slotTime") == "14:30"][0]
+    assert target["rawStage"] == "高潮"
+    assert target["stageConfirmState"]["pendingSince"] == "14:30"
+
+    second = client.get("/api/hotlist-sentiment/slots?dataset_id=dragonboard_live")
+    assert second.status_code == 200
+    assert second.json()["cache"]["hit"] is True
+    target2 = [item for item in second.json()["items"] if item.get("slotTime") == "14:30"][0]
+    assert target2["rawStage"] == "高潮"
+    assert target2["stageConfirmState"]["pendingStage"] == "高潮"

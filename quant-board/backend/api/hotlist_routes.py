@@ -13,8 +13,10 @@ from backend.services.theme.hotlist_sentiment_service import get_hotlist_sentime
 
 router = APIRouter(prefix="/api/hotlist-sentiment", tags=["hotlist-sentiment"])
 
-# 读口缓存版本号：响应结构变化时递增，避免旧结构响应被命中（2026-09-10 新增）
-_SERIES_CACHE_VERSION = "v1"
+# 读口缓存版本号：响应结构变化时递增，避免旧结构响应被命中（2026-09-10 新增）。
+# v2（2026-09-24）：series/slots 响应新增 rawStage/stageConfirmState/diagnostics 确认字段。
+_HOTLIST_SENTIMENT_CACHE_VERSION = "v2"
+_SERIES_CACHE_VERSION = _HOTLIST_SENTIMENT_CACHE_VERSION
 
 
 def _series_cache_key(dataset_id: str, snapshot_type: str, days: int) -> str:
@@ -34,6 +36,12 @@ class HotListSentimentPayload(BaseModel):
     turnover: dict[str, Any] = Field(default_factory=dict)
     signals: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # 阶段多帧确认字段（2026-09-24）：rawStage=截面事实、stage=确认投影、
+    # stageConfirmState=确认状态（pending/pendingStage/pendingSince/confirmSlots/historyStatus）。
+    # 未提供时不伪造（exclude_none 排除），旧结构手工导入保持原样入库。
+    rawStage: str | None = None
+    stageConfirmState: dict[str, Any] | None = None
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 @router.post("/ingest")
@@ -48,7 +56,7 @@ def ingest_hotlist_sentiment(payload: HotListSentimentPayload) -> dict[str, Any]
         # 每次取当前运行时 db 传入 service，兼容测试 monkeypatch（单例缓存不阻塞注入）
         get_hotlist_sentiment_service(
             repository_factory.get_runtime_mongodb_database()
-        ).upsert(payload.model_dump())
+        ).upsert(payload.model_dump(exclude_none=True))
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"MongoDB primary is unavailable: {exc}") from exc
 
@@ -125,7 +133,7 @@ def get_hotlist_sentiment_slots(
     trading_date 缺省回落最新交易日；无帧结构化降级（fail-visible，不伪装空序列）。
     缓存与 series 同口径：Redis TTL + dataset 索引依赖失效（采集链每槽写库即失效）。
     """
-    capped_version = "v1"
+    capped_version = _HOTLIST_SENTIMENT_CACHE_VERSION
     settings = get_settings()
     cache = snapshot_cache.get_snapshot_redis_cache()
     trading_date = (trading_date or "").strip() or None

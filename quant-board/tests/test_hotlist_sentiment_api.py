@@ -73,3 +73,81 @@ def test_hotlist_sentiment_ingest_rejects_missing_trading_date() -> None:
     response = client.post("/api/hotlist-sentiment/ingest", json={"stage": "高潮"})
 
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认字段合同：ingest 必须透传 rawStage/stageConfirmState/diagnostics
+# （禁止 Pydantic 静默丢弃）；旧结构 payload 不伪造确认字段（exclude_none）。
+# ---------------------------------------------------------------------------
+
+
+def test_hotlist_sentiment_ingest_preserves_confirmation_fields(monkeypatch) -> None:
+    fake_db = FakeMongoDb()
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: fake_db,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/hotlist-sentiment/ingest",
+        json={
+            "tradingDate": "2026-06-05",
+            "stage": "退潮",
+            "riskLevel": "高",
+            "confidence": 70,
+            "summary": "确认阶段投影",
+            "metrics": {},
+            "turnover": {},
+            "signals": [],
+            "warnings": [],
+            "rawStage": "高潮",
+            "stageConfirmState": {
+                "pending": True,
+                "pendingStage": "高潮",
+                "pendingSince": "11:00",
+                "confirmSlots": 2,
+                "historyStatus": "complete",
+            },
+            "diagnostics": ["stage_confirm_legacy_fallback:1"],
+        },
+    )
+
+    assert response.status_code == 200
+    _, doc, _ = fake_db.hotlist_sentiment.replace_calls[0]
+    assert doc["rawStage"] == "高潮"
+    assert doc["stageConfirmState"] == {
+        "pending": True,
+        "pendingStage": "高潮",
+        "pendingSince": "11:00",
+        "confirmSlots": 2,
+        "historyStatus": "complete",
+    }
+    assert doc["diagnostics"] == ["stage_confirm_legacy_fallback:1"]
+
+
+def test_hotlist_sentiment_ingest_legacy_payload_does_not_invent_confirmation(monkeypatch) -> None:
+    fake_db = FakeMongoDb()
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: fake_db,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/hotlist-sentiment/ingest",
+        json={
+            "tradingDate": "2026-06-05",
+            "stage": "高潮",
+            "metrics": {},
+            "turnover": {},
+            "signals": [],
+            "warnings": [],
+        },
+    )
+
+    assert response.status_code == 200
+    _, doc, _ = fake_db.hotlist_sentiment.replace_calls[0]
+    # 旧结构 payload：未提供确认字段时不得伪造（None 被 exclude_none 排除）
+    assert "rawStage" not in doc
+    assert "stageConfirmState" not in doc

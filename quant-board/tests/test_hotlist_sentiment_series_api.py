@@ -253,3 +253,80 @@ def _disable_snapshot_cache(monkeypatch):
 
     monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: _NoCache())
 
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认字段：series 读口未命中（Mongo 路径）与缓存命中均保留
+# rawStage/stageConfirmState（含 pendingSince），响应结构变化已升缓存版本 v2。
+# ---------------------------------------------------------------------------
+
+
+class _RecordingCache:
+    """带 dict 存储的响应缓存替身：可先未命中再命中，捕获首次写入的 key/payload。"""
+
+    def __init__(self) -> None:
+        self.store: dict[str, dict[str, Any]] = {}
+
+    def get_response(self, key: str) -> dict[str, Any] | None:
+        return self.store.get(key)
+
+    def set_response(self, key: str, payload: dict[str, Any], **kwargs: Any) -> None:
+        self.store[key] = payload
+
+    def invalidate_indexes(self, index_keys: list[str]) -> None:
+        self.store.pop(next(iter(self.store), ""), None)
+
+    def register_dependencies(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def test_series_keeps_confirmation_fields_on_miss_and_hit(monkeypatch) -> None:
+    from backend.data.cache import snapshot_cache
+    from backend.main import app
+
+    fake_db = FakeMongoDb()
+    _seed_frames(fake_db, "dragonboard_live", "half_hour", ["2026-06-05"])
+    db_doc = {
+        "_id": "dragonboard_live:half_hour:2026-06-05",
+        "datasetId": "dragonboard_live",
+        "snapshotType": "half_hour",
+        "tradingDate": "2026-06-05",
+        "slotTime": "EOD",
+        "stage": "退潮",
+        "rawStage": "高潮",
+        "stageConfirmState": {
+            "pending": True,
+            "pendingStage": "高潮",
+            "pendingSince": "14:30",
+            "confirmSlots": 2,
+            "historyStatus": "complete",
+        },
+        "diagnostics": [],
+        "riskLevel": "高",
+        "confidence": 70,
+        "summary": "",
+        "metrics": {"topN": 1, "layers": {}, "comparison": {}, "limitEvidence": {}},
+        "turnover": {"newEntries": [], "eliminated": []},
+        "signals": [],
+        "warnings": [],
+    }
+    fake_db["hotlist_sentiment"].rows.append(db_doc)
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: fake_db,
+    )
+    cache = _RecordingCache()
+    monkeypatch.setattr(snapshot_cache, "get_snapshot_redis_cache", lambda: cache)
+    client = TestClient(app)
+
+    first = client.get("/api/hotlist-sentiment/series?dataset_id=dragonboard_live&days=1")
+    assert first.status_code == 200
+    assert first.json()["cache"]["hit"] is False
+    assert first.json()["items"][-1]["rawStage"] == "高潮"
+    assert first.json()["items"][-1]["stageConfirmState"]["pendingSince"] == "14:30"
+
+    second = client.get("/api/hotlist-sentiment/series?dataset_id=dragonboard_live&days=1")
+    assert second.status_code == 200
+    assert second.json()["cache"]["hit"] is True
+    assert second.json()["items"][-1]["rawStage"] == "高潮"
+    assert second.json()["items"][-1]["stageConfirmState"]["pendingStage"] == "高潮"
