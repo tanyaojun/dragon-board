@@ -27,14 +27,38 @@ class FakeCollection:
         self.rows = list(rows or [])
         self.replace_calls: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
 
+    @staticmethod
+    def _project(row: dict[str, Any], projection: dict[str, Any]) -> dict[str, Any]:
+        projected: dict[str, Any] = {}
+        for key, enabled in projection.items():
+            if not enabled:
+                continue
+            if "." not in key:
+                projected[key] = row.get(key)
+                continue
+            # 点路径投影按真实 Mongo 语义展开为嵌套结构；行内路径缺失则该字段不出现
+            value: Any = row
+            found = True
+            for part in key.split("."):
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    found = False
+                    break
+            if not found:
+                continue
+            node = projected
+            parts = key.split(".")
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = value
+        return projected
+
     def find(self, query: dict[str, Any] | None = None, projection: dict[str, Any] | None = None) -> FakeCursor:
         query = query or {}
         rows = [row for row in self.rows if self._matches(row, query)]
         if projection:
-            projected = []
-            for row in rows:
-                projected.append({key: row.get(key) for key, enabled in projection.items() if enabled})
-            rows = projected
+            rows = [self._project(row, projection) for row in rows]
         return FakeCursor(rows)
 
     def find_one(
@@ -64,6 +88,9 @@ class FakeCollection:
             actual = row.get(key)
             if isinstance(expected, dict) and "$in" in expected:
                 if actual not in expected["$in"]:
+                    return False
+            elif isinstance(expected, dict) and "$ne" in expected:
+                if actual == expected["$ne"]:
                     return False
             elif actual != expected:
                 return False
@@ -449,3 +476,82 @@ def test_previous_day_stocks_join_failure_is_fail_visible() -> None:
     assert "boom" in previous["joinIssues"][0]
     # 行保持无标记 → 下游 fallback 兜底，不伪造 stage
     assert "displayStatusStage" not in previous["yesterday"][0]
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认（spec 2026-09-24-emotion-stage-multiframe-confirm）：
+# _collect_intraday_state 因果截断收集两条独立日内轨道——stageShares 趋势点（points）
+# 与截面阶段序列（rawStagePoints）独立追加、独立降级；双 EOD 形态排除；非标准槽
+# fail-visible 进 diagnostics；读取失败返回空结构不阻断。
+# ---------------------------------------------------------------------------
+
+
+def test_collect_intraday_state_is_causal_and_excludes_both_eod_shapes() -> None:
+    from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_state
+
+    db = FakeMongoDb()
+    db["hotlist_sentiment"].rows = [
+        {"_id": "d1:half_hour:2026-06-04:09:30", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "09:30", "rawStage": "退潮"},
+        {"_id": "d1:half_hour:2026-06-04:10:00", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "10:00", "rawStage": "高潮"},
+        {"_id": "d1:half_hour:2026-06-04:11:00", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "11:00", "rawStage": "发酵"},
+        {"_id": "d1:half_hour:2026-06-04", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "15:00", "stage": "启动"},
+        {"_id": "legacy-eod", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "EOD", "stage": "冰点"},
+    ]
+
+    state = _collect_intraday_state(db, "d1", "half_hour", "2026-06-04", before_slot="10:30")
+
+    assert state["rawStagePoints"] == [("09:30", "退潮"), ("10:00", "高潮")]
+    assert state["historyStatus"] == "complete"
+
+
+def test_collect_intraday_state_keeps_points_and_stage_tracks_independent() -> None:
+    from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_state
+
+    db = FakeMongoDb()
+    db["hotlist_sentiment"].rows = [
+        {"_id": "d1:half_hour:2026-06-04:09:30", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "09:30",
+         "metrics": {"layers": {"all": {"stageShares": {"cooling": 0.7}}}}},
+        {"_id": "d1:half_hour:2026-06-04:10:00", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "10:00", "rawStage": "高潮"},
+    ]
+
+    state = _collect_intraday_state(db, "d1", "half_hour", "2026-06-04", before_slot="10:30")
+
+    assert [point["slotTime"] for point in state["points"]] == ["09:30"]
+    assert state["rawStagePoints"] == [("10:00", "高潮")]
+
+
+def test_collect_intraday_state_marks_legacy_fallback() -> None:
+    from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_state
+
+    db = FakeMongoDb()
+    db["hotlist_sentiment"].rows = [
+        {"_id": "d1:half_hour:2026-06-04:09:30", "datasetId": "d1", "snapshotType": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "09:30", "stage": "退潮"},
+    ]
+    state = _collect_intraday_state(db, "d1", "half_hour", "2026-06-04", before_slot="10:00")
+    assert state["rawStagePoints"] == [("09:30", "退潮")]
+    assert state["historyStatus"] == "legacy_fallback"
+    assert state["diagnostics"]
+
+
+def test_collect_intraday_state_read_failure_is_visible() -> None:
+    from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_state
+
+    class BrokenCollection:
+        def find(self, query=None, projection=None):
+            raise RuntimeError("boom")
+
+    db = FakeMongoDb()
+    db.collections["hotlist_sentiment"] = BrokenCollection()
+    state = _collect_intraday_state(db, "d1", "half_hour", "2026-06-04", before_slot="10:00")
+    assert state["points"] == []
+    assert state["rawStagePoints"] == []
+    assert state["historyStatus"] == "unavailable"
+    assert "boom" in state["diagnostics"][0]

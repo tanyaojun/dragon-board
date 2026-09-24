@@ -185,12 +185,12 @@ class HotListSentimentBackfillService:
             if date < trading_date
         ]
         join_stats = self._join_display_status_for_frame(dataset_id, frame, stocks)
-        # 日内边际证据：当日已有槽位 shares 序列（排除锚定槽自身，升序）
-        anchored_slot = frame.get("slotTime")
-        from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_history
+        # 日内双轨道收集：shares 趋势点 + 截面阶段序列（因果截断于锚定帧槽位）
+        anchored_slot = str(frame.get("slotTime") or "")
+        from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_state
 
-        intraday_history = _collect_intraday_history(
-            self._db, dataset_id, snapshot_type, trading_date, exclude_slot=anchored_slot
+        intraday_state = _collect_intraday_state(
+            self._db, dataset_id, snapshot_type, trading_date, before_slot=anchored_slot
         )
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
@@ -203,7 +203,7 @@ class HotListSentimentBackfillService:
             market_data=self._market_data_for_frame(evidence_frame) if evidence_frame else None,
             yesterday_trading_date=prior_dates[-1] if prior_dates else None,
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
-            intraday_history=intraday_history,
+            intraday_history=intraday_state["points"],
             current_slot=str(anchored_slot) if anchored_slot else None,
         )
         self._append_join_warning(doc, join_stats)
@@ -379,11 +379,11 @@ class HotListSentimentBackfillService:
                     slot_errors.append({"slotTime": slot_time, "reason": "no_frame" if not frame else "empty_stock_rows"})
                     continue
                 join_stats = self._join_display_status_for_frame(dataset_id, frame, stocks)
-                # 日内边际证据：当日已写槽位文档（排除当前槽）
-                from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_history
+                # 日内双轨道收集：因果截断于当前槽位
+                from backend.services.theme.hotlist_sentiment_compute import _collect_intraday_state
 
-                intraday_history = _collect_intraday_history(
-                    self._db, dataset_id, snapshot_type, trading_date, exclude_slot=str(slot_time)
+                intraday_state = _collect_intraday_state(
+                    self._db, dataset_id, snapshot_type, trading_date, before_slot=str(slot_time)
                 )
                 doc = build_hotlist_sentiment_document(
                     dataset_id=dataset_id,
@@ -395,7 +395,7 @@ class HotListSentimentBackfillService:
                     day_before_stocks=previous.get("day_before") or [],
                     market_data=self._market_data_for_frame(frame),
                     slot_time=slot_time,
-                    intraday_history=intraday_history,
+                    intraday_history=intraday_state["points"],
                     current_slot=str(slot_time),
                 )
                 self._append_join_warning(doc, join_stats)

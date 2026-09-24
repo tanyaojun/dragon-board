@@ -149,19 +149,31 @@ def _status_source_summary(doc: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-def _collect_intraday_history(
+def _collect_intraday_state(
     db: Any,
     dataset_id: str,
     snapshot_type: str,
     trading_date: str,
     *,
-    exclude_slot: str | None = None,
-) -> list[dict[str, Any]]:
-    """当日已有槽位文档的 shares 升序序列（不含 EOD；exclude_slot 再排除当前锚定槽）。
+    before_slot: str,
+) -> dict[str, Any]:
+    """因果截断地收集当日两条独立日内轨道（升序，双 EOD 形态排除）。
 
-    供纯函数 `_evaluate_intraday_trend` 生成日内边际证据。fail-visible：读取异常返回空
-    列表（等同无历史，不生成趋势文案），不阻断主计算；槽位缺 stageShares 的由纯函数跳过。
+    - ``points``：日内边际证据轨道（slotTime + layers.all.stageShares），缺 shares 的槽跳过；
+    - ``rawStagePoints``：阶段确认轨道（rawStage 优先、旧文档回退 stage），供
+      ``stage_confirm.confirm_stage`` 重放；stage 缺失不影响 points 保留（独立轨道降级）；
+    - ``historyStatus``：complete / empty / legacy_fallback / unavailable；
+    - 非标准槽位（非 ``HH:MM``）保留在库但跳过收集，原因写入 ``diagnostics``。
+
+    因果边界由调用方以 ``before_slot=当前帧槽位`` 给定：``slotTime >= before_slot`` 的
+    记录一律不进入序列——数据库中已存在的未来槽不得污染历史重算（spec §5.1）。
+    fail-visible：读取异常返回空结构 + 结构化诊断，不阻断主计算。
     """
+    eod_id = f"{dataset_id}:{snapshot_type}:{trading_date}"
+    points: list[dict[str, Any]] = []
+    raw_stage_points: list[tuple[str, str]] = []
+    diagnostics: list[str] = []
+    legacy_count = 0
     try:
         rows = db["hotlist_sentiment"].find(
             {
@@ -170,28 +182,46 @@ def _collect_intraday_history(
                 "tradingDate": trading_date,
                 "slotTime": {"$ne": "EOD"},
             },
-            {"_id": 0, "slotTime": 1, "metrics.layers.all.stageShares": 1},
+            {"_id": 1, "slotTime": 1, "stage": 1, "rawStage": 1,
+             "metrics.layers.all.stageShares": 1},
         )
-        points: list[dict[str, Any]] = []
         for row in rows:
-            slot_time = row.get("slotTime")
-            if not slot_time or (exclude_slot and str(slot_time) == str(exclude_slot)):
+            if str(row.get("_id") or "") == eod_id:
+                continue
+            slot_time = str(row.get("slotTime") or "")
+            if len(slot_time) != 5 or slot_time[2] != ":":
+                diagnostics.append(f"stage_confirm_nonstandard_slot:{slot_time or '<missing>'}")
+                continue
+            if slot_time >= before_slot:
                 continue
             shares = (((row.get("metrics") or {}).get("layers") or {}).get("all") or {}).get("stageShares")
-            if not isinstance(shares, dict) or not shares:
-                continue
-            points.append({"slotTime": str(slot_time), "stageShares": shares})
-        return sorted(points, key=lambda p: str(p["slotTime"]))
-    except Exception:
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "intraday history read failed (dataset=%s date=%s)",
-            dataset_id,
-            trading_date,
-            exc_info=True,
-        )
-        return []
+            if isinstance(shares, dict) and shares:
+                points.append({"slotTime": slot_time, "stageShares": shares})
+            raw_stage = str(row.get("rawStage") or "").strip()
+            if not raw_stage:
+                raw_stage = str(row.get("stage") or "").strip()
+                if raw_stage:
+                    legacy_count += 1
+            if raw_stage:
+                raw_stage_points.append((slot_time, raw_stage))
+        points.sort(key=lambda item: item["slotTime"])
+        raw_stage_points.sort(key=lambda item: item[0])
+        if legacy_count:
+            diagnostics.append(f"stage_confirm_legacy_fallback:{legacy_count}")
+        status = "legacy_fallback" if legacy_count else "complete" if raw_stage_points else "empty"
+        return {
+            "points": points,
+            "rawStagePoints": raw_stage_points,
+            "historyStatus": status,
+            "diagnostics": diagnostics,
+        }
+    except Exception as exc:
+        return {
+            "points": [],
+            "rawStagePoints": [],
+            "historyStatus": "unavailable",
+            "diagnostics": [f"stage_confirm_history_unavailable:{type(exc).__name__}:{exc}"],
+        }
 
 
 def _append_diagnostic(doc: dict[str, Any], message: str | None) -> None:
@@ -326,10 +356,10 @@ class HotListSentimentComputeService:
             if date < trading_date
         ]
         join_stats = _join_display_status(self._backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
-        # 日内边际证据：当日已有槽位 shares 序列（排除锚定槽自身，升序）；读取失败返回空
-        anchored_slot = frame.get("slotTime")
-        intraday_history = _collect_intraday_history(
-            self._backfill._db, dataset_id, snapshot_type, trading_date, exclude_slot=anchored_slot
+        # 日内双轨道收集：shares 趋势点 + 截面阶段序列（因果截断于锚定帧槽位）
+        anchored_slot = str(frame.get("slotTime") or "")
+        intraday_state = _collect_intraday_state(
+            self._backfill._db, dataset_id, snapshot_type, trading_date, before_slot=anchored_slot
         )
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
@@ -342,7 +372,7 @@ class HotListSentimentComputeService:
             market_data=_build_market_data_like(evidence_frame.get("limitSummary")) if evidence_frame else None,
             yesterday_trading_date=prior_dates[-1] if prior_dates else None,
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
-            intraday_history=intraday_history,
+            intraday_history=intraday_state["points"],
             current_slot=str(anchored_slot) if anchored_slot else None,
         )
         join_note = _join_warning(join_stats)
@@ -423,9 +453,9 @@ def compute_and_upsert_for_slot(
             return {"written": False, "reason": "empty_stock_rows"}
         previous = backfill.previous_day_stocks(dataset_id, snapshot_type, trading_date)
         join_stats = _join_display_status(backfill._db, dataset_id, str(frame.get("snapshotId") or ""), stocks)
-        # 日内边际证据：当日已写的更早槽位文档（排除当前槽自身）
-        intraday_history = _collect_intraday_history(
-            backfill._db, dataset_id, snapshot_type, trading_date, exclude_slot=str(slot_time)
+        # 日内双轨道收集：shares 趋势点 + 截面阶段序列（因果截断于当前槽位）
+        intraday_state = _collect_intraday_state(
+            backfill._db, dataset_id, snapshot_type, trading_date, before_slot=str(slot_time)
         )
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
@@ -437,7 +467,7 @@ def compute_and_upsert_for_slot(
             day_before_stocks=previous.get("day_before") or [],
             market_data=_build_market_data_like(frame.get("limitSummary")),
             slot_time=slot_time,
-            intraday_history=intraday_history,
+            intraday_history=intraday_state["points"],
             current_slot=str(slot_time),
         )
         join_note = _join_warning(join_stats)
