@@ -66,57 +66,14 @@
             </div>
 
             <div class="sub-block">
-              <div class="block-title">🔁 池换手明细</div>
+              <div class="block-title">🔁 池换手汇总</div>
               <div class="turnover-chips">
                 <span class="chip">昨池 {{ turnover.previousPoolSize }}</span>
                 <span class="chip">今池 {{ turnover.currentPoolSize }}</span>
                 <span class="chip">留存 {{ turnover.retainedFromYesterday }}</span>
                 <span class="chip up-text">新入 {{ doc.metrics.comparison.newTop100Count }}</span>
                 <span class="chip down-text">剔除 {{ eliminatedCount }}</span>
-              </div>
-              <div class="table-two-col">
-                <div class="table-col">
-                  <div class="col-title up-text">新入明细（{{ entryDetails.length }}）</div>
-                  <table class="data-table">
-                    <thead>
-                      <tr><th>#</th><th>代码</th><th>名称</th><th>涨幅</th><th>排名</th><th>入选原因</th></tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(row, i) in entryDetails" :key="`e${row.code}`">
-                        <td>{{ i + 1 }}</td>
-                        <td>{{ row.code }}</td>
-                        <td>{{ row.name }}</td>
-                        <td class="num" :class="row.changePct >= 0 ? 'up-text' : 'down-text'">{{ formatPercent(row.changePct) }}</td>
-                        <td class="num">{{ row.rank }}</td>
-                        <td><span class="reason-chip">{{ ENTRY_REASON_TEXT[row.entryReason] || row.entryReason }}</span></td>
-                      </tr>
-                      <tr v-if="!entryDetails.length">
-                        <td colspan="6" class="empty-row">暂无新入明细</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="table-col">
-                  <div class="col-title down-text">剔除明细（{{ exitDetails.length }}）</div>
-                  <table class="data-table">
-                    <thead>
-                      <tr><th>#</th><th>代码</th><th>名称</th><th>涨幅</th><th>排名</th><th>剔除原因</th></tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="(row, i) in exitDetails" :key="`x${row.code}`">
-                        <td>{{ i + 1 }}</td>
-                        <td>{{ row.code }}</td>
-                        <td>{{ row.name }}</td>
-                        <td class="num" :class="row.changePct >= 0 ? 'up-text' : 'down-text'">{{ formatPercent(row.changePct) }}</td>
-                        <td class="num">{{ row.rank }}</td>
-                        <td><span class="reason-chip">{{ EXIT_REASON_TEXT[row.exitReason] || row.exitReason }}</span></td>
-                      </tr>
-                      <tr v-if="!exitDetails.length">
-                        <td colspan="6" class="empty-row">暂无剔除明细</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                <span class="chip">进出明细见「池换手」页签</span>
               </div>
             </div>
           </section>
@@ -181,6 +138,59 @@
                 </div>
               </div>
             </div>
+          </section>
+
+          <!-- ③b 池换手（分池+出池合并明细，成分股列表风格） -->
+          <section v-show="view === 'turnover'" class="tab-pane">
+            <div class="to-header">
+              <div class="to-filters">
+                <button class="to-filter-btn" :class="{ active: turnoverFilter === 'all' }"
+                  @click="turnoverFilter = 'all'">全部</button>
+                <button class="to-filter-btn" :class="{ active: turnoverFilter === 'entry' }"
+                  @click="turnoverFilter = 'entry'">新入</button>
+                <button class="to-filter-btn" :class="{ active: turnoverFilter === 'exit' }"
+                  @click="turnoverFilter = 'exit'">剔除</button>
+              </div>
+              <span class="to-stats">
+                新入 {{ entryDetails.length }} · 剔除 {{ exitDetails.length }} · 显示 {{ filteredTurnoverRows.length }} 只
+              </span>
+            </div>
+            <div class="to-table-container" v-if="filteredTurnoverRows.length">
+              <table class="to-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>涨跌幅</th>
+                    <th>排名</th>
+                    <th>变动</th>
+                    <th>变动原因</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, i) in filteredTurnoverRows" :key="`${row.kind}-${row.code}`"
+                    :class="{ 'entry-row': row.kind === 'entry' }">
+                    <td>{{ i + 1 }}</td>
+                    <td><span class="to-code">{{ row.code }}</span></td>
+                    <td>{{ row.name || '-' }}</td>
+                    <td class="num change" :class="row.changePct >= 0 ? 'up-text' : 'down-text'">
+                      {{ row.changePct > 0 ? '+' : '' }}{{ (row.changePct || 0).toFixed(2) }}%
+                    </td>
+                    <td class="num">{{ row.rank }}</td>
+                    <td>
+                      <span class="to-kind-badge" :class="row.kind === 'entry' ? 'entry' : 'exit'">
+                        {{ row.kind === 'entry' ? '新入' : '剔除' }}
+                      </span>
+                    </td>
+                    <td>
+                      <span class="to-reason" :title="row.reasonDetail || ''">{{ row.reasonDetail || '--' }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else class="empty-row">暂无换手明细</div>
           </section>
 
           <!-- ④ 状态结构 -->
@@ -317,6 +327,7 @@ const TABS = [
   { key: 'overview', label: '热榜概览', icon: '📊' },
   { key: 'layers', label: '分层结构', icon: '🧱' },
   { key: 'limit', label: '涨停证据', icon: '🔥' },
+  { key: 'turnover', label: '池换手', icon: '🔁' },
   { key: 'structure', label: '状态结构', icon: '🧭' },
   { key: 'compare', label: '三日对比', icon: '🗓️' },
   { key: 'track', label: '日内轨迹', icon: '⏱️' },
@@ -446,6 +457,25 @@ const turnover = computed(
 const entryDetails = computed(() => turnover.value.newEntryDetails ?? [])
 const exitDetails = computed(() => turnover.value.eliminatedDetails ?? [])
 const eliminatedCount = computed(() => turnover.value.eliminated?.length ?? 0)
+
+// 池换手明细（分池+出池合并单表）：新入在前按涨幅降序，剔除在后按排名升序
+const turnoverFilter = ref<'all' | 'entry' | 'exit'>('all')
+const mergedTurnoverRows = computed(() => {
+  const entries = entryDetails.value
+    .slice()
+    .sort((a, b) => (b.changePct ?? 0) - (a.changePct ?? 0))
+    .map((row) => ({ ...row, kind: 'entry' as const, reasonDetail: ENTRY_REASON_TEXT[row.entryReason] || row.entryReason }))
+  const exits = exitDetails.value
+    .slice()
+    .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999))
+    .map((row) => ({ ...row, kind: 'exit' as const, reasonDetail: EXIT_REASON_TEXT[row.exitReason] || row.exitReason }))
+  return [...entries, ...exits]
+})
+const filteredTurnoverRows = computed(() =>
+  turnoverFilter.value === 'all'
+    ? mergedTurnoverRows.value
+    : mergedTurnoverRows.value.filter((row) => row.kind === turnoverFilter.value),
+)
 const comparison = computed(() => doc.value?.metrics.comparison ?? null)
 const allLayer = computed(() => doc.value?.metrics.layers.all ?? null)
 
@@ -880,6 +910,95 @@ const trackNote = computed(() => {
   padding: 4px 8px; font-size: 11px; color: var(--text-secondary);
 }
 .diag-tag { font-weight: 600; color: #d97706; }
+
+/* 池换手明细（2026-09-24）：对齐 SectorDetail 成分股列表语言 */
+.to-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.to-filters { display: flex; gap: 6px; }
+.to-filter-btn {
+  padding: 4px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.to-filter-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.to-filter-btn.active { background: var(--color-highlight); border-color: var(--color-highlight); color: #fff; }
+.to-stats {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  border-radius: 8px;
+  padding: 6px 12px;
+}
+.to-table-container {
+  max-height: 460px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+.to-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.to-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-header);
+  padding: 9px 10px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+  z-index: 1;
+}
+.to-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.to-table tbody tr:hover { background: var(--bg-hover); }
+.to-table tbody tr.entry-row { border-left: 4px solid #2ecc71; }
+.to-code {
+  color: var(--color-highlight);
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 127, 80, 0.5);
+  font-weight: 500;
+}
+.to-table .change { font-variant-numeric: tabular-nums; text-align: right; }
+.to-table .num { font-variant-numeric: tabular-nums; }
+.to-kind-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+}
+.to-kind-badge.entry {
+  background: rgba(46, 204, 113, 0.15);
+  border: 1px solid rgba(46, 204, 113, 0.3);
+  color: #2ecc71;
+}
+.to-kind-badge.exit {
+  background: rgba(255, 71, 87, 0.15);
+  border: 1px solid rgba(255, 71, 87, 0.3);
+  color: #ff4757;
+}
+.to-reason {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  color: var(--text-secondary);
+}
 
 @media (max-width: 720px) {
   .table-two-col, .evidence-columns { grid-template-columns: 1fr; }

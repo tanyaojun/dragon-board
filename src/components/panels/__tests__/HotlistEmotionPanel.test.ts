@@ -48,12 +48,19 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).not.toContain('当前截面证据')
   })
 
-  test('池换手明细并入概览：进出原因中文映射', () => {
+  test('池换手独立页签：分池出池合并单表，成分股列表语言（2026-09-24 用户裁决）', () => {
     const source = panelSource()
 
-    expect(source).toContain('池换手明细')
-    expect(source).toContain('ENTRY_REASON_TEXT')
-    expect(source).toContain('EXIT_REASON_TEXT')
+    // 独立页签，位置在状态结构之前
+    expect(source).toContain("{ key: 'turnover', label: '池换手', icon: '🔁' }")
+    // 合并单表 + 类型筛选（全部/新入/剔除）+ 统计行
+    expect(source).toContain('mergedTurnoverRows')
+    expect(source).toContain('turnoverFilter')
+    expect(source).toContain('新入 {{ entryDetails.length }} · 剔除 {{ exitDetails.length }}')
+    // 成分股列表语言：sticky 表头/行 hover/代码下划线/类型徽章/原因省略
+    expect(source).toContain('to-table-container')
+    expect(source).toContain('to-code')
+    expect(source).toContain('to-kind-badge')
     expect(source).toContain('涨停入选')
     expect(source).toContain('跌出榜单')
   })
