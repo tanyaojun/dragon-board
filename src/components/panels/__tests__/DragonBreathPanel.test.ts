@@ -121,18 +121,24 @@ describe('DragonBreathPanel 状态来源透出（spec §4）', () => {
     )
   })
 
-  test('阶段多帧确认双轨展示（2026-09-24）：确认主值+截面辅值，pending 可审计', () => {
+  test('阶段多帧确认双轨展示（2026-09-24 情绪路径裁决）：轨迹主值=确认路径，分歧人话标注', () => {
     const source = panelSource()
 
-    // 旧文档兼容：原始阶段读取用 rawStage || doc.stage，不允许裸访问
-    expect(source).toContain('rawStage || doc.stage')
+    // 轨迹主值是确认阶段（总体情绪路径）；当帧分歧用「短暂走高/短暂回落」人话标注
     expect(source).toContain('confirmedStage')
+    expect(source).toContain('stageDriftText')
+    expect(source).toContain('短暂走高')
+    expect(source).toContain('短暂回落')
+    // 旧文档兼容：原始阶段读取用 rawStage || doc.stage（tooltip 审计用），不允许裸访问
+    expect(source).toContain('rawStage || doc.stage')
     // pending 角标必须携带候选起点（审计用）
     expect(source).toContain('pendingSince')
-    // summary/置信度明确标注为当前截面证据，不与确认阶段混淆
-    expect(source).toContain('当前截面证据')
-    expect(source).toContain('截面置信')
+    // 技术词汇不得进入界面：截面/确认 字样的标签不出现（盘面/情绪措辞替代）
+    expect(source).toContain('盘面证据')
+    expect(source).toContain('盘面置信')
     expect(source).toContain('stage-confirm-pending')
+    expect(source).not.toContain('截面置信')
+    expect(source).not.toContain('当前截面证据')
   })
 
   test('诊断与业务提示分离（2026-09-24）：diagnostics 独立渲染，warnings 保持业务风险提示', () => {

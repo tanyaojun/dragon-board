@@ -197,10 +197,10 @@
                 <span
                   v-if="hotListStagePending"
                   class="slot-time stage-confirm-pending"
-                  :title="`待确认：本次截面判定为「${hotListStagePending.rawStage}」，自 ${hotListStagePending.pendingSince} 起连续 ${hotListStagePending.confirmSlots} 槽复现后切换`"
-                  >待确认 {{ hotListStagePending.rawStage }}</span
+                  :title="`盘中出现「${hotListStagePending.rawStage}」迹象（自 ${hotListStagePending.pendingSince} 起），连续 ${hotListStagePending.confirmSlots} 槽成立后切换`"
+                  >情绪波动：现{{ hotListStagePending.rawStage }}迹象</span
                 >
-                <span class="hotlist-confidence">截面置信 {{ hotListSentiment.confidence }}%</span>
+                <span class="hotlist-confidence">盘面置信 {{ hotListSentiment.confidence }}%</span>
                 <span v-if="hotListSentimentSlotTime" class="slot-time"
                   >数据时点 {{ hotListSentimentSlotTime }}</span
                 >
@@ -211,7 +211,7 @@
                   >窗口缺失 {{ hotListSentimentMissingDays.length }} 日</span
                 >
               </div>
-              <div class="hotlist-summary">当前截面证据：{{ hotListSentiment.summary }}</div>
+              <div class="hotlist-summary">盘面证据：{{ hotListSentiment.summary }}</div>
             </div>
 
             <div class="hotlist-section research-hotlist-card">
@@ -372,12 +372,12 @@
                   <span class="slot-track-time">
                     {{ item.label }}<span v-if="item.isLatest" class="slot-track-now">当前</span>
                   </span>
-                  <span class="slot-track-stage" :class="`stage-${item.stageClass}`">截面 {{ item.stage }}</span>
+                  <span class="slot-track-stage" :class="`stage-${item.stageClass}`">{{ item.stage }}</span>
                   <span
-                    v-if="item.confirmedStage !== item.stage"
-                    class="slot-track-stage slot-track-confirmed"
-                    :class="`stage-${item.confirmedStageClass}`"
-                    >确认 {{ item.confirmedStage }}</span
+                    v-if="item.divergence"
+                    class="slot-track-stage slot-track-drift"
+                    :title="`当帧盘面判定：${item.divergence.rawStage}`"
+                    >{{ item.divergence.text }}</span
                   >
                   <span class="slot-track-metric">池 {{ item.pool ?? '--' }}</span>
                   <span class="slot-track-metric">涨 {{ item.upRatio }}</span>
@@ -958,6 +958,18 @@ const hotlistThemeResearchItems = computed<HotlistThemeResearchItem[]>(() =>
 
 const hotListStage = computed(() => getDisplayEmotionStage(hotListSentiment.value?.stage))
 
+// 阶段冷热两档（交易者语感）：启动/发酵/高潮=热，冰点/退潮=冷。分歧小标据此给
+// 「短暂走高 / 短暂回落 / 盘中波动」的人话描述；同侧细分不展开（避免过度解读）。
+const STAGE_HEAT: Record<string, number> = { 冰点: 0, 退潮: 0, 启动: 1, 发酵: 2, 高潮: 3 }
+
+function stageDriftText(rawStage: string, confirmedStage: string): string {
+  const rawHeat = STAGE_HEAT[rawStage] ?? 1
+  const confirmedHeat = STAGE_HEAT[confirmedStage] ?? 1
+  if (rawHeat > confirmedHeat) return '短暂走高'
+  if (rawHeat < confirmedHeat) return '短暂回落'
+  return '盘中波动'
+}
+
 // 阶段多帧确认（2026-09-24）：stage 是确认值；pending=本帧截面判定与确认值不一致，
 // 等待连续 confirmSlots 槽复现。角标 tooltip 展示原始截面判定与候选起点（fail-visible：
 // 平滑不隐藏原始数据）。旧结构文档无 stageConfirmState 时角标不渲染。
@@ -1072,19 +1084,22 @@ const hotListSlotTrackItems = computed(() => {
     const attackShare = counts && topN ? ((counts.ignition + counts.expansion) as number) / topN : null
     const riskCount = counts ? counts.reversal + counts.cooling : null
     const riskShare = counts && topN ? ((counts.reversal + counts.cooling) as number) / topN : null
-    // 日内轨迹双轨（2026-09-24）：主值=本帧截面判定（rawStage ?? stage 兼容旧文档），
-    // 确认阶段不同时辅值标注；不用空串或默认阶段伪装缺失。
+    // 日内轨迹 = 总体情绪路径（2026-09-24 用户裁决）：主值是确认阶段（滞回平滑后的
+    // 情绪趋势），当帧盘面判定与路径不同时加人话小标（短暂走高/短暂回落），tooltip
+    // 展开当帧判定——技术词汇（截面/确认）不进入界面。不用空串或默认阶段伪装缺失。
     const rawStage = getDisplayEmotionStage(doc.rawStage || doc.stage)
     const confirmedStage = getDisplayEmotionStage(doc.stage)
+    const divergence =
+      rawStage.name !== confirmedStage.name
+        ? { text: stageDriftText(rawStage.name, confirmedStage.name), rawStage: rawStage.name }
+        : null
     return {
       key: doc.slotTime || `slot-${index}`,
       label: doc.slotTime || '--',
       isLatest: index === slots.length - 1,
-      stage: rawStage.name,
-      stageClass: rawStage.classKey,
-      confirmedStage: confirmedStage.name,
-      confirmedStageClass: confirmedStage.classKey,
-      stagePending: Boolean(doc.stageConfirmState?.pending),
+      stage: confirmedStage.name,
+      stageClass: confirmedStage.classKey,
+      divergence,
       confidence: typeof doc.confidence === 'number' ? `${doc.confidence}%` : '--',
       pool: doc.metrics?.poolSize ?? all?.total ?? null,
       upRatio: formatShare(all?.upRatio ?? null),
@@ -2478,8 +2493,8 @@ onUnmounted(() => {
   cursor: help;
 }
 
-/* 轨迹确认辅值（2026-09-24 双轨展示）：与截面主值同色阶，虚线下划线区分语义 */
-.slot-track-confirmed {
+/* 轨迹分歧小标（2026-09-24 情绪路径展示）：人话标注，虚线下划线可悬停审计 */
+.slot-track-drift {
   border-bottom: 1px dashed currentColor;
   opacity: 0.85;
 }
