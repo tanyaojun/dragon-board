@@ -510,3 +510,34 @@ def test_document_has_diagnostics_field():
     assert doc["diagnostics"] == []
     # 诊断类标注不再写入 warnings 的由编排层保证，此处锁 schema
     assert isinstance(doc["warnings"], list)
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认：确认槽数配置解析（fail-visible——非法值回裁决默认 2 并
+# 返回结构化诊断，禁止静默退化为 1 关闭平滑）。
+# ---------------------------------------------------------------------------
+
+
+def test_stage_confirm_config_default_is_two(monkeypatch):
+    import backend.services.theme.hotlist_sentiment_compute as compute_mod
+
+    monkeypatch.delenv("HOTLIST_STAGE_CONFIRM_SLOTS", raising=False)
+    assert compute_mod._stage_confirm_config() == (2, None)
+
+
+def test_stage_confirm_config_accepts_legal_values(monkeypatch):
+    import backend.services.theme.hotlist_sentiment_compute as compute_mod
+
+    for value in (1, 3):
+        monkeypatch.setenv("HOTLIST_STAGE_CONFIRM_SLOTS", str(value))
+        assert compute_mod._stage_confirm_config() == (value, None)
+
+
+def test_stage_confirm_config_invalid_values_fall_back_with_diagnostic(monkeypatch):
+    import backend.services.theme.hotlist_sentiment_compute as compute_mod
+
+    for raw in ("abc", "0", "-2", "1.5"):
+        monkeypatch.setenv("HOTLIST_STAGE_CONFIRM_SLOTS", raw)
+        slots, diagnostic = compute_mod._stage_confirm_config()
+        assert slots == 2
+        assert diagnostic is not None and "stage_confirm_invalid_config" in diagnostic

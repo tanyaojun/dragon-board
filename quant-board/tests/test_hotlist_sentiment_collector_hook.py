@@ -33,10 +33,7 @@ class FakeCollection:
         query = query or {}
         rows = [row for row in self.rows if self._matches(row, query)]
         if projection:
-            projected = []
-            for row in rows:
-                projected.append({key: row.get(key) for key, enabled in projection.items() if enabled})
-            rows = projected
+            rows = [self._project(row, projection) for row in rows]
         return FakeCursor(rows)
 
     def find_one(
@@ -61,11 +58,41 @@ class FakeCollection:
         return FakeReplaceResult()
 
     @staticmethod
+    def _project(row: dict[str, Any], projection: dict[str, Any]) -> dict[str, Any]:
+        projected: dict[str, Any] = {}
+        for key, enabled in projection.items():
+            if not enabled:
+                continue
+            if "." not in key:
+                projected[key] = row.get(key)
+                continue
+            # 点路径投影按真实 Mongo 语义展开为嵌套结构；行内路径缺失则该字段不出现
+            value: Any = row
+            found = True
+            for part in key.split("."):
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    found = False
+                    break
+            if not found:
+                continue
+            node = projected
+            parts = key.split(".")
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = value
+        return projected
+
+    @staticmethod
     def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
         for key, expected in query.items():
             actual = row.get(key)
             if isinstance(expected, dict) and "$in" in expected:
                 if actual not in expected["$in"]:
+                    return False
+            elif isinstance(expected, dict) and "$ne" in expected:
+                if actual == expected["$ne"]:
                     return False
             elif actual != expected:
                 return False
@@ -129,3 +156,121 @@ def test_compute_and_upsert_for_slot_idempotent():
     compute_and_upsert_for_slot(fake_db, dataset_id="d1", snapshot_type="half_hour",
                                 trading_date="2026-06-05", slot_time="10:30")
     assert len(fake_db["hotlist_sentiment"].rows) == 1  # replace_one 幂等
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认（spec §5.1/§8.1.5）：因果边界——计算槽位 T 只消费
+# slotTime < T 的截面；数据库中已存在的未来槽不得提前确认。期望值写死，
+# 不调用被测 confirm_stage 生成（测试独立性）。
+# ---------------------------------------------------------------------------
+
+
+def _sentiment_stage_payload(stage: str) -> dict[str, Any]:
+    return {
+        "stage": stage, "riskLevel": "中", "confidence": 60, "summary": f"{stage}截面摘要",
+        "metrics": {"topN": 0, "layers": {"all": {"total": 0, "topN": 0,
+            "upRatio": 0, "downRatio": 0, "hotTrin": None, "stageCounts": {}, "stageShares": {},
+            "nearLimitUpCount": 0, "highGainCount": 0, "highTurnoverCount": 0,
+            "riskShare": 0, "activeOpportunityShare": 0, "strongMoneyShare": 0, "crowdedShare": 0}},
+            "comparison": {"top100RetainRateFromYesterday": None,
+                "top100RetainRateFromDayBefore": None},
+            "limitEvidence": {"intersection": {"top100LimitUpShare": 0}},
+            "transitionCounts": {}},
+        "turnover": {"newEntries": [], "eliminated": []},
+        "signals": [], "warnings": [], "statusSourceCounts": {"displayStatus": 0, "fallback": 0},
+        "missingEvidence": [],
+    }
+
+
+def test_future_slot_does_not_confirm_current_slot(monkeypatch):
+    import backend.operations.hotlist_sentiment as ops_mod
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "type": "half_hour",
+         "tradingDate": "2026-06-05", "slotTime": "10:00", "timestamp": 2},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "code": "000001",
+         "rank": 1, "change": 5, "zlje": 0, "volumeRatio": 1.5},
+    ]
+    # 库中已存在：过去槽 09:30=退潮（rawStage），以及未来槽 11:00=高潮
+    db["hotlist_sentiment"].rows = [
+        {"_id": "dragonboard_live:half_hour:2026-06-05:09:30", "datasetId": "dragonboard_live",
+         "snapshotType": "half_hour", "tradingDate": "2026-06-05", "slotTime": "09:30",
+         "rawStage": "退潮", "stage": "退潮"},
+        {"_id": "dragonboard_live:half_hour:2026-06-05:11:00", "datasetId": "dragonboard_live",
+         "snapshotType": "half_hour", "tradingDate": "2026-06-05", "slotTime": "11:00",
+         "rawStage": "高潮", "stage": "高潮"},
+    ]
+    monkeypatch.setattr(ops_mod, "compute_hotlist_sentiment",
+                        lambda *args, **kwargs: _sentiment_stage_payload("高潮"))
+
+    result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live", snapshot_type="half_hour",
+                                         trading_date="2026-06-05", slot_time="10:00")
+    assert result["written"] is True
+
+    doc = db["hotlist_sentiment"].find_one({"_id": "dragonboard_live:half_hour:2026-06-05:10:00"})
+    assert doc is not None
+    # 期望值写死：09:30 退潮 + 本次高潮 → 候选未达标（阈值 2）→ 保持退潮 pending；
+    # 未来 11:00 的"第二次高潮"不得进入序列，否则会被提前确认
+    assert doc["rawStage"] == "高潮"
+    assert doc["stage"] == "退潮"
+    assert doc["stageConfirmState"]["pending"] is True
+    assert doc["stageConfirmState"]["pendingSince"] == "10:00"
+
+
+def test_write_order_does_not_change_per_slot_results(monkeypatch):
+    """顺序写入与乱序回填：逐槽 (slotTime, stage, rawStage) 必须完全一致（spec §8.1.5）。"""
+    import backend.operations.hotlist_sentiment as ops_mod
+
+    def build_db() -> tuple[FakeMongoDb, list[dict[str, Any]]]:
+        db = FakeMongoDb()
+        db["snapshot_frames"].rows = [
+            {"datasetId": "dragonboard_live", "snapshotId": f"f{slot.replace(':', '')}", "type": "half_hour",
+             "tradingDate": "2026-06-05", "slotTime": slot, "timestamp": index + 1}
+            for index, slot in enumerate(["09:30", "10:00", "10:30"])
+        ]
+        db["snapshot_stock_rows"].rows = [
+            {"datasetId": "dragonboard_live", "snapshotId": f"f{slot.replace(':', '')}", "code": "000001",
+             "rank": 1, "change": 5, "zlje": 0, "volumeRatio": 1.5}
+            for slot in ["09:30", "10:00", "10:30"]
+        ]
+        return db
+
+    stages_by_slot = {"09:30": "退潮", "10:00": "高潮", "10:30": "高潮"}
+
+    # 顺序写入：逐槽 mock 对应截面
+    ordered_db = build_db()
+    for slot in ["09:30", "10:00", "10:30"]:
+        monkeypatch.setattr(ops_mod, "compute_hotlist_sentiment",
+                            lambda *args, _s=stages_by_slot[slot], **kwargs: _sentiment_stage_payload(_s))
+        result = compute_and_upsert_for_slot(ordered_db, dataset_id="dragonboard_live", snapshot_type="half_hour",
+                                             trading_date="2026-06-05", slot_time=slot)
+        assert result["written"] is True
+    ordered_docs = [ordered_db["hotlist_sentiment"].find_one({"_id": f"dragonboard_live:half_hour:2026-06-05:{slot}"})
+                    for slot in ["09:30", "10:00", "10:30"]]
+
+    # 乱序回填：库中先只有 10:30 文档，再按槽升序重算三槽（因果截断保证未来槽不参与）
+    out_of_order_db = build_db()
+    out_of_order_db["hotlist_sentiment"].rows = [
+        {"_id": "dragonboard_live:half_hour:2026-06-05:10:30", "datasetId": "dragonboard_live",
+         "snapshotType": "half_hour", "tradingDate": "2026-06-05", "slotTime": "10:30",
+         "rawStage": "高潮", "stage": "高潮"},
+    ]
+    for slot in ["09:30", "10:00", "10:30"]:
+        monkeypatch.setattr(ops_mod, "compute_hotlist_sentiment",
+                            lambda *args, _s=stages_by_slot[slot], **kwargs: _sentiment_stage_payload(_s))
+        result = compute_and_upsert_for_slot(out_of_order_db, dataset_id="dragonboard_live",
+                                             snapshot_type="half_hour", trading_date="2026-06-05", slot_time=slot)
+        assert result["written"] is True
+    out_of_order_docs = [out_of_order_db["hotlist_sentiment"].find_one({"_id": f"dragonboard_live:half_hour:2026-06-05:{slot}"})
+                         for slot in ["09:30", "10:00", "10:30"]]
+
+    assert [(d["slotTime"], d["stage"], d["rawStage"]) for d in ordered_docs if d] == [
+        (d["slotTime"], d["stage"], d["rawStage"]) for d in out_of_order_docs if d
+    ]
+    # 期望值写死：退潮 → pending 退潮（高潮第一槽）→ 确认高潮
+    assert [(d["slotTime"], d["stage"], d["rawStage"]) for d in ordered_docs if d] == [
+        ("09:30", "退潮", "退潮"), ("10:00", "退潮", "高潮"), ("10:30", "高潮", "高潮"),
+    ]

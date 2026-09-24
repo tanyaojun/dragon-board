@@ -224,6 +224,24 @@ def _collect_intraday_state(
         }
 
 
+def _stage_confirm_config() -> tuple[int, str | None]:
+    """确认槽数配置（HOTLIST_STAGE_CONFIRM_SLOTS，默认 2）。
+
+    非法值（非整数 / <1）回到裁决默认 2，并返回结构化原因供文档 diagnostics 落库；
+    禁止静默退化为 1（那会关闭平滑且不可见，违反 fail-visible）。
+    """
+    import os
+
+    raw = os.environ.get("HOTLIST_STAGE_CONFIRM_SLOTS", "2")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return 2, f"stage_confirm_invalid_config:{raw!r}:fallback=2"
+    if value < 1:
+        return 2, f"stage_confirm_invalid_config:{raw!r}:fallback=2"
+    return value, None
+
+
 def _append_diagnostic(doc: dict[str, Any], message: str | None) -> None:
     """数据质量诊断标注进 doc["diagnostics"]（2026-09-24 与业务风险提示 warnings 分离）。"""
     if message:
@@ -361,6 +379,9 @@ class HotListSentimentComputeService:
         intraday_state = _collect_intraday_state(
             self._backfill._db, dataset_id, snapshot_type, trading_date, before_slot=anchored_slot
         )
+        confirm_slots, config_diagnostic = _stage_confirm_config()
+        if config_diagnostic:
+            intraday_state["diagnostics"].append(config_diagnostic)
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -374,6 +395,8 @@ class HotListSentimentComputeService:
             day_before_trading_date=prior_dates[-2] if len(prior_dates) >= 2 else None,
             intraday_history=intraday_state["points"],
             current_slot=str(anchored_slot) if anchored_slot else None,
+            stage_history=intraday_state,
+            stage_confirm_slots=confirm_slots,
         )
         join_note = _join_warning(join_stats)
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
@@ -457,6 +480,9 @@ def compute_and_upsert_for_slot(
         intraday_state = _collect_intraday_state(
             backfill._db, dataset_id, snapshot_type, trading_date, before_slot=str(slot_time)
         )
+        confirm_slots, config_diagnostic = _stage_confirm_config()
+        if config_diagnostic:
+            intraday_state["diagnostics"].append(config_diagnostic)
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -469,6 +495,8 @@ def compute_and_upsert_for_slot(
             slot_time=slot_time,
             intraday_history=intraday_state["points"],
             current_slot=str(slot_time),
+            stage_history=intraday_state,
+            stage_confirm_slots=confirm_slots,
         )
         join_note = _join_warning(join_stats)
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
