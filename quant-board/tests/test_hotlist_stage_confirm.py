@@ -33,6 +33,13 @@ def test_two_consecutive_candidates_switch() -> None:
 
 def test_candidate_change_restarts_count() -> None:
     confirmed, state = confirm_stage(
+        [("09:30", "退潮"), ("10:00", "高潮"), ("10:30", "发酵")], 2
+    )
+    assert confirmed == "退潮"
+    assert state["pending"] is True
+    assert state["pendingStage"] == "发酵"
+    assert state["pendingSince"] == "10:30"
+    confirmed, state = confirm_stage(
         [("09:30", "退潮"), ("10:00", "高潮"), ("10:30", "发酵"), ("11:00", "发酵")], 2
     )
     assert confirmed == "发酵"
@@ -58,3 +65,14 @@ def test_empty_sequence_is_defensive_empty_result() -> None:
     confirmed, state = confirm_stage([], 2)
     assert confirmed == ""
     assert state["pending"] is False
+
+
+def test_confirm_slots_below_one_clamps_to_one() -> None:
+    confirmed, state = confirm_stage([("09:30", "退潮"), ("10:00", "高潮")], 0)
+    assert confirmed == "高潮"
+    assert state["confirmSlots"] == 1
+
+
+def test_stage_whitespace_is_stripped_before_compare() -> None:
+    confirmed, state = confirm_stage([("09:30", " 退潮 "), ("10:00", "高潮")], 2)
+    assert confirmed == "退潮"

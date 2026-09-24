@@ -1,3 +1,5 @@
+"""情绪阶段多帧确认滞回（纯函数、按输入序重放）；独立成文件以避免触碰 golden 对齐的 sentiment.py。"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -17,14 +19,15 @@ def confirm_stage(
     - 候选阶段连续 ``confirm_slots`` 个槽位复现才切换确认阶段；
     - 候选变回当前确认阶段即清空候选（吸收单槽抖动）；
     - ``confirm_slots`` 阈值下限收敛到 1，1 等价于逐槽原始透传；
+    - stage 为空或纯空白的点视为缺失槽位，跳过且不参与“连续”计数；
     - 空序列防御性返回空确认阶段与无候选状态。
     """
-    slots = max(1, int(confirm_slots))
+    required_slots = max(1, int(confirm_slots))
     state: dict[str, object] = {
         "pending": False,
         "pendingStage": None,
         "pendingSince": None,
-        "confirmSlots": slots,
+        "confirmSlots": required_slots,
     }
     points = [(str(slot), str(stage).strip()) for slot, stage in raw_points if str(stage).strip()]
     if not points:
@@ -47,7 +50,7 @@ def confirm_stage(
             pending_stage = raw_stage
             pending_since = slot_time
             pending_count = 1
-        if pending_count >= slots:
+        if pending_count >= required_slots:
             confirmed = raw_stage
             pending_stage = None
             pending_since = None
