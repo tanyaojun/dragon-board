@@ -618,3 +618,25 @@ snapshot_type = half_hour
 `backend.services.big_order_archive_service.BigOrderArchiveService` 是独立的只读文件适配层，供桌面端历史会话查看使用。它精确读取上述 Longhu 或 THS gzip 文件，验证归档中的 `sessionDate`、`stockCode`、`source` 和数据结构，再由 `/api/big-order/history` 返回原始归档。
 
 该链路不写 MongoDB，不参与快照事实、RankTrend、回测或优化，也不扫描或回退其他交易日期。缺档和损坏必须结构化失败，避免把其他交易日的大单叠加到所选分钟线。
+
+---
+
+## 阶段多帧确认字段合同（2026-09-24）
+
+`hotlist_sentiment` 文档新增三个字段：`rawStage`（本帧截面事实，`resolve_stage` 输出，唯一权威真值）、
+`stage`（确认投影——当日「严格早于当前槽」的截面序列 + 本帧一次，重放 `stage_confirm.confirm_stage`
+滞回；候选阶段连续 `confirmSlots` 槽复现才切换，默认 2）、`stageConfirmState`
+（`pending` / `pendingStage` / `pendingSince` / `confirmSlots` / `historyStatus`，枚举
+complete / empty / legacy_fallback / unavailable）。`summary`/`riskLevel`/`confidence`/
+`signals`/`warnings` 仍是本帧截面证据，不按确认阶段二次计算。
+
+关键语义：EOD 与其锚定槽同帧只计一次（结果一致）；历史重算按当前槽因果截断，未来槽不得污染；
+旧文档以 `rawStage ?? stage` 兼容读取（`legacy_fallback` 计数进 `diagnostics`）；
+EOD 双形态排除（日级 `_id` 与 `slotTime="EOD"`）；独立轨道降级（`stageShares` 缺失不影响
+阶段序列，反之亦然）。
+
+读写与回退：四个生产写口（lazy compute、`compute_and_upsert_for_slot`、`run_for_date`、
+`run_for_date_slots`）与 `/api/hotlist-sentiment/ingest` 共用同一投影；ingest 未提供确认字段时
+不伪造（`exclude_none`）。series/slots 响应合同变化已升 Redis 缓存版本 `v2`（共享常量
+`_HOTLIST_SENTIMENT_CACHE_VERSION`）。回退：`HOTLIST_STAGE_CONFIRM_SLOTS=1` 逐槽等价
+（`stage == rawStage`），非法配置回裁决默认 2 并落诊断；不删除任何历史字段或文档。

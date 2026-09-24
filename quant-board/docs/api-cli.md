@@ -3172,3 +3172,27 @@ GET /api/big-order/history?source=ths&stockCode=002297&sessionDate=2026-07-24
 该接口只读 `data/big-order` 本地 gzip 归档，并按数据源、六位股票代码和 ISO 日期精确匹配。龙虎文件为 `longhu/<date>/<code>.money0.json.gz`，THS 文件为 `ths/<date>/<code>.json.gz`；不回退相邻日期。
 
 成功返回 `{ "ok": true, "data": <archive> }`。文件不存在返回 HTTP 404 和 `errorCode=archive_not_found`；gzip、JSON、元数据或 payload 结构错误返回 HTTP 422 和 `errorCode=archive_invalid`；非法数据源或股票代码返回 HTTP 422 和 `errorCode=invalid_request`。
+
+---
+
+## 阶段多帧确认字段合同（2026-09-24）
+
+`hotlist_sentiment` 文档新增三个字段：`rawStage`（本帧截面事实，`resolve_stage` 输出，唯一权威真值）、
+`stage`（确认投影——当日「严格早于当前槽」的截面序列 + 本帧一次，重放 `stage_confirm.confirm_stage`
+滞回；候选阶段连续 `confirmSlots` 槽复现才切换，默认 2）、`stageConfirmState`
+（`pending` / `pendingStage` / `pendingSince` / `confirmSlots` / `historyStatus`，枚举
+complete / empty / legacy_fallback / unavailable）。`summary`/`riskLevel`/`confidence`/
+`signals`/`warnings` 仍是本帧截面证据，不按确认阶段二次计算。
+
+关键语义：EOD 与其锚定槽同帧只计一次（结果一致）；历史重算按当前槽因果截断，未来槽不得污染；
+旧文档以 `rawStage ?? stage` 兼容读取（`legacy_fallback` 计数进 `diagnostics`）；
+EOD 双形态排除（日级 `_id` 与 `slotTime="EOD"`）；独立轨道降级（`stageShares` 缺失不影响
+阶段序列，反之亦然）。
+
+读写与回退：四个生产写口（lazy compute、`compute_and_upsert_for_slot`、`run_for_date`、
+`run_for_date_slots`）与 `/api/hotlist-sentiment/ingest` 共用同一投影；ingest 未提供确认字段时
+不伪造（`exclude_none`）。series/slots 响应合同变化已升 Redis 缓存版本 `v2`（共享常量
+`_HOTLIST_SENTIMENT_CACHE_VERSION`）。回退：`HOTLIST_STAGE_CONFIRM_SLOTS=1` 逐槽等价
+（`stage == rawStage`），非法配置回裁决默认 2 并落诊断；不删除任何历史字段或文档。
+
+回放验收基线（2026-09-24，14 个交易日，输入 `rawStage ?? stage`）：原始切换 39 → 确认后 15（减少 61.5%）、确认延迟 max=1 avg=1.00、吸收单槽候选 8 次、阈值 1 逐槽等价 PASS（`operations/replay_stage_confirm.py`，只读）。

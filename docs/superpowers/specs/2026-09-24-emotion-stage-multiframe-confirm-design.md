@@ -1,7 +1,7 @@
 # 市场情绪阶段多帧确认平滑——设计规格
 
 - 日期：2026-09-24
-- 状态：**方向与默认值已裁决；对抗性审计已修订，待按实施计划执行**
+- 状态：**已实施（2026-09-24）——confirmSlots=2 默认，`HOTLIST_STAGE_CONFIRM_SLOTS` 可调；回放验收达标（61.5%）**
 - 关联：`2026-09-10-displaystatus-stage-projection-design.md`（stage 主轴口径）、`docs/热榜情绪分析器方案.md`（历史方案）
 - 作者：AI 协作产出（brainstorming + 对抗性审计修订）
 
