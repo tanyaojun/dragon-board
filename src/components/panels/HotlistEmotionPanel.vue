@@ -65,17 +65,6 @@
               </div>
             </div>
 
-            <div class="sub-block">
-              <div class="block-title">🔁 池换手汇总</div>
-              <div class="turnover-chips">
-                <span class="chip">昨池 {{ turnover.previousPoolSize }}</span>
-                <span class="chip">今池 {{ turnover.currentPoolSize }}</span>
-                <span class="chip">留存 {{ turnover.retainedFromYesterday }}</span>
-                <span class="chip up-text">新入 {{ doc.metrics.comparison.newTop100Count }}</span>
-                <span class="chip down-text">剔除 {{ eliminatedCount }}</span>
-                <span class="chip">进出明细见「池换手」页签</span>
-              </div>
-            </div>
           </section>
 
           <!-- ② 分层结构 -->
@@ -142,6 +131,16 @@
 
           <!-- ③b 池换手（分池+出池合并明细，成分股列表风格） -->
           <section v-show="view === 'turnover'" class="tab-pane">
+            <div class="sub-block">
+              <div class="block-title">🔁 池换手汇总</div>
+              <div class="turnover-chips">
+                <span class="chip">昨池 {{ turnover.previousPoolSize }}</span>
+                <span class="chip">今池 {{ turnover.currentPoolSize }}</span>
+                <span class="chip">留存 {{ turnover.retainedFromYesterday }}</span>
+                <span class="chip up-text">新入 {{ doc.metrics.comparison.newTop100Count }}</span>
+                <span class="chip down-text">剔除 {{ eliminatedCount }}</span>
+              </div>
+            </div>
             <div class="to-header">
               <div class="to-filters">
                 <button class="to-filter-btn" :class="{ active: turnoverFilter === 'all' }"
@@ -173,7 +172,7 @@
                     :class="{ 'entry-row': row.kind === 'entry' }">
                     <td>{{ i + 1 }}</td>
                     <td><span class="to-code">{{ row.code }}</span></td>
-                    <td>{{ row.name || '-' }}</td>
+                    <td>{{ resolveStockName(row) }}</td>
                     <td class="num change" :class="row.changePct >= 0 ? 'up-text' : 'down-text'">
                       {{ row.changePct > 0 ? '+' : '' }}{{ (row.changePct || 0).toFixed(2) }}%
                     </td>
@@ -308,6 +307,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { dataLayer } from '@/services/DataLayer'
 import {
   fetchHotlistSentimentSeries,
   fetchHotlistSentimentSlots,
@@ -454,6 +454,20 @@ const statusSource = computed(() => doc.value?.metrics.statusSourceCounts ?? { d
 const turnover = computed(
   () => doc.value?.turnover ?? { previousPoolSize: 0, currentPoolSize: 0, retainedFromYesterday: 0, newEntries: [], eliminated: [], newEntryDetails: [], eliminatedDetails: [] },
 )
+// 名称兜底（2026-09-24）：采集行 name 可能为 "-" 占位，用行情列表名称回填展示
+const stockNameMap = computed(() => {
+  const map = new Map<string, string>()
+  for (const stock of dataLayer.getStocks()) {
+    const name = stock.name?.trim() ?? ''
+    if (stock.code && name && name !== '-') map.set(stock.code, name)
+  }
+  return map
+})
+function resolveStockName(row: { code: string; name?: string | null }): string {
+  const raw = (row.name || '').trim()
+  if (raw && raw !== '-') return raw
+  return stockNameMap.value.get(row.code) || raw || '-'
+}
 const entryDetails = computed(() => turnover.value.newEntryDetails ?? [])
 const exitDetails = computed(() => turnover.value.eliminatedDetails ?? [])
 const eliminatedCount = computed(() => turnover.value.eliminated?.length ?? 0)
@@ -947,7 +961,7 @@ const trackNote = computed(() => {
   border-radius: 8px;
   background: var(--bg-primary);
 }
-.to-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.to-table { border-collapse: collapse; font-size: 12px; width: auto; min-width: 100%; table-layout: auto; }
 .to-table th {
   position: sticky;
   top: 0;
@@ -966,6 +980,9 @@ const trackNote = computed(() => {
   white-space: nowrap;
   color: var(--text-primary);
 }
+/* 涨红跌绿（与成分股列表一致）：特异性需压过上方 td 的 color */
+.to-table .up-text { color: #ef4444; }
+.to-table .down-text { color: #22c55e; }
 .to-table tbody tr:hover { background: var(--bg-hover); }
 .to-table tbody tr.entry-row { border-left: 4px solid #2ecc71; }
 .to-code {
