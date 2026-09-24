@@ -240,6 +240,48 @@ def _default_normalize(norm_request: Any) -> tuple:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+_STOCK_NAME_PLACEHOLDERS = ("", "-")
+
+
+def enrich_stock_names_from_registry(db: Any, stock_rows: list[dict[str, Any]]) -> None:
+    """入库前从 `stock_names` 注册集合回填占位名称（2026-09-24）。
+
+    部分平台来源的 stock row name 是 "-"/空占位，下游（情绪换手明细等）展示缺名。
+    判据：name 缺失或为占位符 → 批量查注册集合回填；查不到保持原样（fail-visible
+    不伪造）；已有名称不覆盖。任何异常不阻断采集。
+    """
+    if not stock_rows:
+        return
+    try:
+        pending_codes = sorted({
+            str(row.get("code") or "").strip()
+            for row in stock_rows
+            if str(row.get("name") or "").strip() in _STOCK_NAME_PLACEHOLDERS and str(row.get("code") or "").strip()
+        })
+        if not pending_codes:
+            return
+        name_by_code: dict[str, str] = {}
+        for row in db["stock_names"].find(
+            {"code": {"$in": pending_codes}, "active": True}, {"code": 1, "name": 1}
+        ):
+            name = str(row.get("name") or "").strip()
+            if name and name not in _STOCK_NAME_PLACEHOLDERS:
+                name_by_code[str(row.get("code") or "")] = name
+        if not name_by_code:
+            return
+        for row in stock_rows:
+            code = str(row.get("code") or "").strip()
+            name = str(row.get("name") or "").strip()
+            if name in _STOCK_NAME_PLACEHOLDERS and code in name_by_code:
+                row["name"] = name_by_code[code]
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "stock name enrichment failed (rows=%s)", len(stock_rows), exc_info=True,
+        )
+
+
 class SnapshotCollectorService:
     """Orchestrates the snapshot collection pipeline.
 
@@ -397,6 +439,7 @@ class SnapshotCollectorService:
         await asyncio.to_thread(
             self._enrich_volume_ratios, derived.stock_rows
         )
+        await asyncio.to_thread(self._enrich_stock_names, derived.stock_rows)
 
         norm_request = self._SnapshotIngestRequest(
             dataset_id=dataset_id,
@@ -912,6 +955,13 @@ class SnapshotCollectorService:
             return MongoThemeRepository(get_runtime_mongodb_database())
         except Exception:
             return None
+
+    def _enrich_stock_names(self, stock_rows: list[dict[str, Any]]) -> None:
+        """入库前回填占位名称（stock_names 注册集合）；失败不阻断采集。"""
+        db = getattr(self._repo, "db", None)
+        if db is None:
+            return
+        enrich_stock_names_from_registry(db, stock_rows)
 
     def _enrich_volume_ratios(self, stock_rows: list[dict[str, Any]]) -> None:
         """用量比 golden（Python volume_ratio_service）统一 stock row 量比口径。
