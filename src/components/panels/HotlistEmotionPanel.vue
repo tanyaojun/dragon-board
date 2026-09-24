@@ -57,11 +57,31 @@
               </div>
             </div>
 
-            <div class="card-grid">
-              <div v-for="card in overviewCards" :key="card.label" class="metric-card">
+            <div class="metrics-grid">
+              <div v-for="card in primaryCards" :key="card.label" class="metric-card">
                 <div class="metric-icon">{{ card.icon }}</div>
-                <div class="metric-value" :class="card.toneClass">{{ card.value }}</div>
-                <div class="metric-label">{{ card.label }}</div>
+                <div class="metric-content">
+                  <div class="metric-label">{{ card.label }}</div>
+                  <div class="metric-value" :class="card.toneClass">{{ card.value }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="funds-grid">
+              <div v-for="card in fundCards" :key="card.label" class="fund-card">
+                <div class="fund-icon">{{ card.icon }}</div>
+                <div class="fund-content">
+                  <div class="fund-label">{{ card.label }}</div>
+                  <div class="fund-value" :class="card.toneClass">{{ card.value }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stats-grid">
+              <div v-for="card in statCards" :key="card.label" class="stat-card">
+                <div class="stat-icon">{{ card.icon }}</div>
+                <div class="stat-value" :class="card.toneClass">{{ card.value }}</div>
+                <div class="stat-label">{{ card.label }}</div>
               </div>
             </div>
 
@@ -100,29 +120,35 @@
             <div class="evidence-columns">
               <div class="sub-block">
                 <div class="block-title">🔥 热榜池涨停交集</div>
-                <div class="card-grid compact">
-                  <div v-for="item in intersectionCards" :key="item.label" class="metric-card">
-                    <div class="metric-value">{{ item.value }}</div>
-                    <div class="metric-label">{{ item.label }}</div>
+                <div class="funds-grid">
+                  <div v-for="item in intersectionCards" :key="item.label" class="fund-card">
+                    <div class="fund-content">
+                      <div class="fund-label">{{ item.label }}</div>
+                      <div class="fund-value" :class="item.toneClass">{{ item.value }}</div>
+                    </div>
                   </div>
                 </div>
               </div>
               <div class="sub-block">
                 <div class="block-title">🌐 全市场背景（非热榜池口径）</div>
-                <div class="card-grid compact">
-                  <div v-for="item in marketCards" :key="item.label" class="metric-card">
-                    <div class="metric-value">{{ item.value }}</div>
-                    <div class="metric-label">{{ item.label }}</div>
+                <div class="funds-grid">
+                  <div v-for="item in marketCards" :key="item.label" class="fund-card">
+                    <div class="fund-content">
+                      <div class="fund-label">{{ item.label }}</div>
+                      <div class="fund-value" :class="item.toneClass">{{ item.value }}</div>
+                    </div>
                   </div>
                 </div>
                 <div v-if="marketEvidenceNote" class="note-line">{{ marketEvidenceNote }}</div>
               </div>
               <div class="sub-block">
                 <div class="block-title">📜 昨日热榜涨停表现</div>
-                <div class="card-grid compact">
-                  <div v-for="item in yesterdayLimitCards" :key="item.label" class="metric-card">
-                    <div class="metric-value">{{ item.value }}</div>
-                    <div class="metric-label">{{ item.label }}</div>
+                <div class="funds-grid">
+                  <div v-for="item in yesterdayLimitCards" :key="item.label" class="fund-card">
+                    <div class="fund-content">
+                      <div class="fund-label">{{ item.label }}</div>
+                      <div class="fund-value" :class="item.toneClass">{{ item.value }}</div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -246,10 +272,12 @@
             </div>
             <div class="sub-block">
               <div class="block-title">💪 昨日强票今日表现</div>
-              <div class="card-grid compact">
-                <div v-for="item in strongPerformanceCards" :key="item.label" class="metric-card">
-                  <div class="metric-value">{{ item.value }}</div>
-                  <div class="metric-label">{{ item.label }}</div>
+              <div class="funds-grid">
+                <div v-for="item in strongPerformanceCards" :key="item.label" class="fund-card">
+                  <div class="fund-content">
+                    <div class="fund-label">{{ item.label }}</div>
+                    <div class="fund-value" :class="item.toneClass">{{ item.value }}</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -508,20 +536,33 @@ const missingDaysTitle = computed(() =>
   missingDays.value.map((d) => `${d.tradingDate || '未知日期'}：${d.reason || '缺失'}`).join('；'),
 )
 
-const overviewCards = computed(() => {
+// 概览三级卡组（SectorDetail 概览结构）：主指标 2×2 大卡 + 资金中卡 + 统计小卡
+const primaryCards = computed(() => {
+  const layer = allLayer.value
+  if (!layer) return []
+  return [
+    { icon: '📈', label: '上涨占比', value: formatShare(layer.upRatio), toneClass: 'up' },
+    { icon: '📉', label: '下跌占比', value: formatShare(layer.downRatio), toneClass: 'down' },
+    { icon: '⚖️', label: '热榜 TRIN', value: formatTrin(layer.hotTrin), toneClass: '' },
+    { icon: '💰', label: '主力净额', value: formatMoney(layer.mainNetAmount), toneClass: (layer.mainNetAmount ?? 0) >= 0 ? 'up' : 'down' },
+  ]
+})
+const fundCards = computed(() => {
+  const layer = allLayer.value
+  if (!layer) return []
+  return [
+    { icon: '🏦', label: '超大单净额', value: formatMoney(layer.superNetAmount), toneClass: (layer.superNetAmount ?? 0) >= 0 ? 'up' : 'down' },
+    { icon: '🔥', label: '近涨停', value: formatNullableCount(layer.nearLimitUpCount), toneClass: '' },
+    { icon: '🚀', label: '高涨幅≥7%', value: formatNullableCount(layer.highGainCount), toneClass: '' },
+    { icon: '🌀', label: '高换手≥10%', value: formatNullableCount(layer.highTurnoverCount), toneClass: '' },
+  ]
+})
+const statCards = computed(() => {
   const layer = allLayer.value
   const comp = comparison.value
   if (!layer) return []
   return [
     { icon: '📊', label: '参与统计', value: formatNullableCount(layer.topN), toneClass: '' },
-    { icon: '📈', label: '上涨占比', value: formatShare(layer.upRatio), toneClass: 'up-text' },
-    { icon: '📉', label: '下跌占比', value: formatShare(layer.downRatio), toneClass: 'down-text' },
-    { icon: '⚖️', label: '热榜 TRIN', value: formatTrin(layer.hotTrin), toneClass: '' },
-    { icon: '🔥', label: '近涨停', value: formatNullableCount(layer.nearLimitUpCount), toneClass: '' },
-    { icon: '🚀', label: '高涨幅≥7%', value: formatNullableCount(layer.highGainCount), toneClass: '' },
-    { icon: '🌀', label: '高换手≥10%', value: formatNullableCount(layer.highTurnoverCount), toneClass: '' },
-    { icon: '💰', label: '主力净额', value: formatMoney(layer.mainNetAmount), toneClass: (layer.mainNetAmount ?? 0) >= 0 ? 'up-text' : 'down-text' },
-    { icon: '🏦', label: '超大单净额', value: formatMoney(layer.superNetAmount), toneClass: (layer.superNetAmount ?? 0) >= 0 ? 'up-text' : 'down-text' },
     { icon: '🆕', label: '今日新入', value: formatNullableCount(comp?.newTop100Count ?? null), toneClass: '' },
     { icon: '💪', label: '新入强资', value: formatNullableCount(comp?.newTop100StrongMoneyCount ?? null), toneClass: '' },
     { icon: '🔁', label: '昨日强资留榜', value: formatShare(comp?.yesterdayStrongRetainRate ?? null), toneClass: '' },
@@ -565,7 +606,7 @@ const intersectionCards = computed(() => {
     { label: '最高板', value: `${formatNullableCount(it.top100MaxBoardHeight)} 板` },
     { label: '前50 涨停', value: formatNullableCount(it.top50LimitUpCount) },
     { label: '前20 涨停', value: formatNullableCount(it.top20LimitUpCount) },
-    { label: '池内炸板', value: `${formatNullableCount(it.top100ZhabanCount)}（${formatShare(it.top100ZhabanShare)}）` },
+    { label: '池内炸板', value: `${formatNullableCount(it.top100ZhabanCount)}（${formatShare(it.top100ZhabanShare)}）`, toneClass: 'down' },
   ]
 })
 const marketCards = computed(() => {
@@ -573,16 +614,16 @@ const marketCards = computed(() => {
   if (!market) return []
   const ths = market.thsPools ?? null
   return [
-    { label: '全市场涨停', value: formatNullableCount(market.ztCount) },
-    { label: '封板率', value: market.fengbanRate != null ? `${market.fengbanRate.toFixed(0)}%` : '--' },
-    { label: '全市场炸板', value: formatNullableCount(market.zhabanCount) },
-    { label: '首板', value: formatNullableCount(market.board1) },
-    { label: '2板', value: formatNullableCount(market.board2) },
-    { label: '3板', value: formatNullableCount(market.board3) },
-    { label: '4板+', value: formatNullableCount(market.board4Plus) },
-    { label: '最高连板', value: `${formatNullableCount(market.maxContinuousDays)} 板` },
-    { label: 'THS 炸板池', value: ths ? formatNullableCount(ths.failedCount) : '--' },
-    { label: 'THS 回撤榜', value: ths ? formatNullableCount(ths.drawdownCount) : '--' },
+    { label: '全市场涨停', value: formatNullableCount(market.ztCount), toneClass: '' },
+    { label: '封板率', value: market.fengbanRate != null ? `${market.fengbanRate.toFixed(0)}%` : '--', toneClass: '' },
+    { label: '全市场炸板', value: formatNullableCount(market.zhabanCount), toneClass: 'down' },
+    { label: '首板', value: formatNullableCount(market.board1), toneClass: '' },
+    { label: '2板', value: formatNullableCount(market.board2), toneClass: '' },
+    { label: '3板', value: formatNullableCount(market.board3), toneClass: '' },
+    { label: '4板+', value: formatNullableCount(market.board4Plus), toneClass: '' },
+    { label: '最高连板', value: `${formatNullableCount(market.maxContinuousDays)} 板`, toneClass: '' },
+    { label: 'THS 炸板池', value: ths ? formatNullableCount(ths.failedCount) : '--', toneClass: 'down' },
+    { label: 'THS 回撤榜', value: ths ? formatNullableCount(ths.drawdownCount) : '--', toneClass: 'down' },
   ]
 })
 const marketEvidenceNote = computed(() => {
@@ -593,12 +634,12 @@ const yesterdayLimitCards = computed(() => {
   const y = limitEvidence.value?.yesterdayHotLimit
   if (!y) return []
   return [
-    { label: '昨日涨停数', value: formatNullableCount(y.count) },
-    { label: '留榜数', value: formatNullableCount(y.retainedTop100Count) },
-    { label: '今日均涨', value: formatPercent(y.avgChange) },
-    { label: '正收益率', value: formatShare(y.positiveRate) },
-    { label: '走弱率', value: formatShare(y.weakeningRate) },
-    { label: '冲板失败率', value: formatShare(y.failedOrWeakRate) },
+    { label: '昨日涨停数', value: formatNullableCount(y.count), toneClass: '' },
+    { label: '留榜数', value: formatNullableCount(y.retainedTop100Count), toneClass: '' },
+    { label: '今日均涨', value: formatPercent(y.avgChange), toneClass: '' },
+    { label: '正收益率', value: formatShare(y.positiveRate), toneClass: 'up' },
+    { label: '走弱率', value: formatShare(y.weakeningRate), toneClass: 'down' },
+    { label: '冲板失败率', value: formatShare(y.failedOrWeakRate), toneClass: 'down' },
   ]
 })
 
@@ -646,12 +687,12 @@ const strongPerformanceCards = computed(() => {
   const perf = comparison.value?.yesterdayStrongPerformance
   if (!perf) return []
   return [
-    { label: '昨日强票数', value: formatNullableCount(perf.count) },
-    { label: '可比对数', value: formatNullableCount(perf.matchedCount) },
-    { label: '留榜数', value: formatNullableCount(perf.retainedTop100Count) },
-    { label: '今日均涨', value: formatPercent(perf.avgChange) },
-    { label: '正收益率', value: formatShare(perf.positiveRate) },
-    { label: '转弱率', value: formatShare(perf.weakeningRate) },
+    { label: '昨日强票数', value: formatNullableCount(perf.count), toneClass: '' },
+    { label: '可比对数', value: formatNullableCount(perf.matchedCount), toneClass: '' },
+    { label: '留榜数', value: formatNullableCount(perf.retainedTop100Count), toneClass: '' },
+    { label: '今日均涨', value: formatPercent(perf.avgChange), toneClass: '' },
+    { label: '正收益率', value: formatShare(perf.positiveRate), toneClass: 'up' },
+    { label: '转弱率', value: formatShare(perf.weakeningRate), toneClass: 'down' },
   ]
 })
 
@@ -694,268 +735,291 @@ const trackNote = computed(() => {
 </script>
 
 <style scoped>
+/* ========== 面板基础（token 对齐 SectorPanel/SectorDetail，2026-09-24 重写） ========== */
 .hotlist-emotion-panel {
   position: fixed;
-  z-index: 1200;
   width: 960px;
-  max-width: calc(100vw - 16px);
-  max-height: min(78vh, 780px);
+  max-width: calc(100vw - 40px);
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 10006;
+  font-size: 12px;
+  overflow: hidden;
+  backdrop-filter: blur(10px);
   color: var(--text-primary);
-  font-family: inherit;
 }
 
+/* ========== 头部 ========== */
 .panel-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  background: var(--bg-header);
+  align-items: center;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--border-color);
-  border-radius: 8px 8px 0 0;
+  background: var(--bg-header);
 }
-.header-left { display: flex; align-items: center; gap: 10px; }
-.header-left h3 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+.header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.panel-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--color-highlight);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .version-badge {
   font-size: 10px;
-  color: var(--color-highlight);
-  border: 1px solid var(--color-highlight);
-  border-radius: 3px;
-  padding: 0 3px;
+  background: var(--color-highlight);
+  color: #000;
+  padding: 2px 6px;
+  border-radius: 12px;
 }
 .time-badge {
-  font-size: 11px;
+  font-size: 10px;
+  background: var(--bg-secondary);
   color: var(--text-secondary);
-  background: var(--bg-secondary);
-  border-radius: 3px;
-  padding: 1px 6px;
+  padding: 2px 6px;
+  border-radius: 12px;
+  cursor: help;
 }
-.time-badge.warn { color: #d97706; }
-.panel-actions { display: flex; gap: 6px; }
+.time-badge.warn { color: #ff4757; }
+.panel-actions { display: flex; gap: 8px; }
 .btn-icon {
-  background: var(--bg-secondary);
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-primary);
-  padding: 3px 8px;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--text-secondary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 16px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.btn-icon:hover { background: var(--bg-hover); }
+.btn-icon:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--color-highlight);
+}
+.btn-icon:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-icon.loading .rotate-animation { display: inline-block; animation: he-rotate 1s linear infinite; }
 @keyframes he-rotate { to { transform: rotate(360deg); } }
 
+/* ========== 页签 ========== */
 .panel-tabs {
   display: flex;
-  padding: 6px 10px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-secondary);
 }
-.tabs-left { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs-left { display: flex; gap: 4px; flex: 1; }
 .tab-btn {
-  background: transparent;
+  flex: 1;
+  padding: 8px;
   border: none;
+  background: transparent;
   color: var(--text-secondary);
-  padding: 5px 12px;
-  border-radius: 4px;
   cursor: pointer;
-  font-size: 13px;
+  border-radius: 8px;
+  font-size: 12px;
+  transition: all 0.2s;
 }
-.tab-btn.active { background: var(--color-highlight); color: #fff; }
-.tab-btn:hover:not(.active) { background: var(--bg-hover); color: var(--text-primary); }
+.tab-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-btn.active { background: var(--color-highlight); color: #000; font-weight: 500; }
 
-.panel-content { padding: 12px 14px; overflow-y: auto; flex: 1; }
-.tab-pane { display: flex; flex-direction: column; gap: 12px; }
+/* ========== 内容区 ========== */
+.panel-content {
+  padding: 20px;
+  max-height: calc(80vh - 120px);
+  overflow-y: auto;
+}
+.tab-pane { display: flex; flex-direction: column; gap: 16px; }
 .state-block {
   display: flex; align-items: center; gap: 8px;
   padding: 24px; color: var(--text-secondary); justify-content: center;
 }
-.state-block.error { color: #ef4444; }
+.state-block.error { color: #ff4757; }
 .spinner {
   width: 14px; height: 14px; border: 2px solid var(--border-color);
   border-top-color: var(--color-highlight); border-radius: 50%;
   animation: he-rotate 0.8s linear infinite;
 }
 .retry-btn {
-  background: var(--color-highlight); color: #fff; border: none;
-  border-radius: 4px; padding: 3px 10px; cursor: pointer;
+  background: var(--color-highlight); color: #000; border: none;
+  border-radius: 16px; padding: 4px 12px; cursor: pointer; font-size: 12px;
 }
 
-/* 阶段主卡 */
+/* ========== 概览：阶段主卡（info-card 语言） ========== */
 .stage-hero {
-  border: 1px solid var(--border-color);
-  border-left: 4px solid var(--color-highlight);
-  border-radius: 6px;
   background: var(--bg-secondary);
-  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
 }
-.hero-label { font-size: 12px; color: var(--text-secondary); }
-.hero-stage { font-size: 30px; font-weight: 700; margin: 2px 0 6px; }
-.stage-tone-hot .hero-stage { color: #ef4444; }
-.stage-tone-warm .hero-stage { color: #f59e0b; }
-.stage-tone-cold .hero-stage { color: #22c55e; }
-.hero-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.hero-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+.hero-stage { font-size: 28px; font-weight: bold; color: var(--text-title); line-height: 1.2; margin-bottom: 8px; }
+.hero-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .risk-chip, .conf-chip, .pending-chip {
-  font-size: 11px; border-radius: 3px; padding: 1px 8px;
-  background: var(--bg-primary); border: 1px solid var(--border-color);
+  font-size: 10px; border-radius: 10px; padding: 2px 8px; display: inline-block;
 }
-.risk-high { color: #ef4444; }
-.risk-mid { color: #f59e0b; }
-.risk-low { color: #22c55e; }
-.pending-chip { color: #d97706; border-style: dashed; cursor: help; }
-.hero-summary { font-size: 13px; color: var(--text-secondary); }
+.risk-high { background: rgba(255, 71, 87, 0.15); color: #ff4757; }
+.risk-mid { background: rgba(255, 177, 66, 0.15); color: #ffb142; }
+.risk-low { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+.conf-chip { background: var(--bg-primary); border: 1px solid var(--border-color); color: var(--text-secondary); }
+.pending-chip {
+  background: rgba(255, 177, 66, 0.15);
+  color: #ffb142;
+  cursor: help;
+}
+.hero-summary { font-size: 12px; color: var(--text-secondary); }
 
-/* 指标卡 */
-.card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
-  gap: 8px;
-}
-.card-grid.compact { grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); }
+/* ========== 三级卡片体系（SectorDetail 概览结构） ========== */
+/* 主指标 2×2 大卡：横向 + 48px 圆形图标底座 */
+.metrics-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .metric-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 10px 8px;
-  text-align: center;
+  border-radius: 12px;
 }
-.metric-icon { font-size: 15px; margin-bottom: 2px; }
-.metric-value { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.metric-label { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+.metric-icon {
+  font-size: 28px;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  border-radius: 24px;
+  flex-shrink: 0;
+}
+.metric-content { flex: 1; min-width: 0; }
+.metric-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+.metric-value { font-size: 22px; font-weight: bold; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.metric-value.up { color: #ff4757; }
+.metric-value.down { color: #2ed573; }
 
-/* 子块与表格 */
+/* 资金/证据中卡 3-4 列：横向 + 32px 圆形底座 */
+.funds-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.fund-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+.fund-icon {
+  font-size: 20px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  border-radius: 16px;
+  flex-shrink: 0;
+}
+.fund-content { flex: 1; min-width: 0; }
+.fund-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 2px; }
+.fund-value { font-size: 14px; font-weight: bold; font-variant-numeric: tabular-nums; }
+.fund-value.up { color: #ff4757; }
+.fund-value.down { color: #2ed573; }
+
+/* 统计小卡 4 列：竖排居中 */
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+.stat-icon { font-size: 18px; margin-bottom: 4px; }
+.stat-value { font-size: 18px; font-weight: bold; color: var(--text-title); font-variant-numeric: tabular-nums; }
+.stat-value.up { color: #ff4757; }
+.stat-value.down { color: #2ed573; }
+.stat-label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; text-align: center; }
+
+/* ========== 子块（leaders-section 语言） ========== */
 .sub-block {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 10px 12px;
+  border-radius: 12px;
+  padding: 16px;
 }
-.block-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
-.note-line { font-size: 11px; color: var(--text-secondary); margin-top: 6px; }
+.block-title { font-size: 14px; font-weight: 500; color: var(--text-title); margin-bottom: 12px; }
+.note-line { font-size: 11px; color: var(--text-secondary); margin-top: 8px; }
 .chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
-  font-size: 11px;
+  font-size: 10px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 10px;
-  padding: 2px 9px;
+  border-radius: 12px;
+  padding: 2px 8px;
+  color: var(--text-secondary);
 }
-.chip.diag { color: var(--text-secondary); border-style: dashed; }
-.up-text { color: #ef4444; }
-.down-text { color: #22c55e; }
+.chip.diag { border-style: dashed; }
+.up-text { color: #ff4757; }
+.down-text { color: #2ed573; }
 .empty-row { color: var(--text-secondary); text-align: center; padding: 8px 0; }
 
+/* ========== 通用数据表（layers 等，stocks-table 语言） ========== */
 .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .data-table th {
-  text-align: left; color: var(--text-secondary); font-weight: 500;
-  padding: 5px 8px; border-bottom: 1px solid var(--border-color);
-  white-space: nowrap;
+  text-align: left; color: var(--text-primary); font-weight: 600;
+  padding: 10px 6px; border-bottom: 2px solid var(--border-color);
+  white-space: nowrap; background: var(--bg-header);
 }
-.data-table td { padding: 5px 8px; border-bottom: 1px solid var(--border-color); }
+.data-table td { padding: 8px 6px; border-bottom: 1px solid var(--border-color); white-space: nowrap; }
 .data-table tbody tr:hover { background: var(--bg-hover); }
 .data-table .num { font-variant-numeric: tabular-nums; text-align: right; }
-.layers-table .layer-name { font-weight: 600; }
+.layers-table .layer-name { font-weight: 500; color: var(--text-title); }
 .money { font-variant-numeric: tabular-nums; }
-
-.table-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.table-col .col-title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
-.reason-chip {
-  font-size: 11px; border: 1px solid var(--border-color);
-  border-radius: 3px; padding: 0 5px; color: var(--text-secondary);
+.layers-table-wrap {
+  max-height: 460px; overflow-y: auto;
+  border: 1px solid var(--border-color); border-radius: 8px;
+  background: var(--bg-primary);
 }
 
-/* 状态结构 */
-.status-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
-.status-label { width: 48px; font-size: 12px; }
-.status-bar-wrap { flex: 1; height: 8px; background: var(--bg-primary); border-radius: 4px; overflow: hidden; }
-.status-bar { height: 100%; background: var(--color-highlight); border-radius: 4px; min-width: 2px; }
-.status-count { width: 36px; text-align: right; }
-.status-share { width: 44px; text-align: right; color: var(--text-secondary); }
-
-/* 三日对比 */
-.compare-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.compare-card {
-  background: var(--bg-secondary); border: 1px solid var(--border-color);
-  border-radius: 6px; padding: 10px; text-align: center;
-}
-.compare-label { font-size: 12px; color: var(--text-secondary); }
-.compare-total { font-size: 22px; font-weight: 700; margin: 2px 0; }
-.compare-sub { font-size: 11px; color: var(--text-secondary); }
-
-/* 日内轨迹 */
-.slot-track { display: flex; flex-direction: column; gap: 2px; }
-.track-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 5px 10px; border-radius: 4px; font-size: 12px;
-}
-.track-row:hover { background: var(--bg-hover); }
-.track-row.latest { border: 1px solid var(--color-highlight); }
-.track-time { width: 60px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.now-chip {
-  margin-left: 4px; font-size: 10px; color: #fff;
-  background: var(--color-highlight); border-radius: 3px; padding: 0 4px;
-}
-.track-stage {
-  min-width: 44px; text-align: center; border-radius: 3px;
-  padding: 1px 6px; background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-}
-.stage-tone-3, .stage-tone-2 { color: #ef4444; }
-.stage-tone-1 { color: #f59e0b; }
-.stage-tone-0 { color: #22c55e; }
-.track-drift {
-  color: #d97706; border-bottom: 1px dashed currentColor;
-  cursor: help; font-size: 11px;
-}
-.track-metric { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-
-/* 证据 */
-.evidence-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.evidence-columns.two { align-items: start; }
-.evidence-list { margin: 0; padding-left: 16px; line-height: 1.7; font-size: 12px; }
-.diag-block {
-  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
-  border: 1px dashed var(--border-color); border-radius: 4px;
-  padding: 4px 8px; font-size: 11px; color: var(--text-secondary);
-}
-.diag-tag { font-weight: 600; color: #d97706; }
-
-/* 池换手明细（2026-09-24）：对齐 SectorDetail 成分股列表语言 */
-.to-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.to-filters { display: flex; gap: 6px; }
+/* ========== 池换手明细（stocks-table 语言） ========== */
+.to-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.to-filters { display: flex; gap: 4px; }
 .to-filter-btn {
-  padding: 4px 14px;
+  padding: 6px 12px;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 16px;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
   transition: all 0.2s;
 }
 .to-filter-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.to-filter-btn.active { background: var(--color-highlight); border-color: var(--color-highlight); color: #fff; }
+.to-filter-btn.active { background: var(--color-highlight); border-color: var(--color-highlight); color: #000; }
 .to-stats {
   font-size: 12px;
   color: var(--text-primary);
   font-weight: 500;
   background: var(--bg-tertiary, var(--bg-secondary));
   border-radius: 8px;
-  padding: 6px 12px;
+  padding: 8px 12px;
 }
 .to-table-container {
-  max-height: 460px;
+  max-height: 500px;
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -966,7 +1030,7 @@ const trackNote = computed(() => {
   position: sticky;
   top: 0;
   background: var(--bg-header);
-  padding: 9px 10px;
+  padding: 10px 6px;
   text-align: left;
   font-weight: 600;
   color: var(--text-primary);
@@ -975,16 +1039,12 @@ const trackNote = computed(() => {
   z-index: 1;
 }
 .to-table td {
-  padding: 8px 10px;
+  padding: 8px 6px;
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
-  color: var(--text-primary);
 }
-/* 涨红跌绿（与成分股列表一致）：特异性需压过上方 td 的 color */
-.to-table .up-text { color: #ef4444; }
-.to-table .down-text { color: #22c55e; }
 .to-table tbody tr:hover { background: var(--bg-hover); }
-.to-table tbody tr.entry-row { border-left: 4px solid #2ecc71; }
+.to-table tbody tr.entry-row { border-left: 4px solid #2ed573; }
 .to-code {
   color: var(--color-highlight);
   text-decoration: underline;
@@ -993,21 +1053,16 @@ const trackNote = computed(() => {
 }
 .to-table .change { font-variant-numeric: tabular-nums; text-align: right; }
 .to-table .num { font-variant-numeric: tabular-nums; }
+/* 涨红跌绿：特异性压过 td color（与成分股列表一致） */
+.to-table .up-text { color: #ff4757; }
+.to-table .down-text { color: #2ed573; }
 .to-kind-badge {
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 10px;
   font-size: 10px;
 }
-.to-kind-badge.entry {
-  background: rgba(46, 204, 113, 0.15);
-  border: 1px solid rgba(46, 204, 113, 0.3);
-  color: #2ecc71;
-}
-.to-kind-badge.exit {
-  background: rgba(255, 71, 87, 0.15);
-  border: 1px solid rgba(255, 71, 87, 0.3);
-  color: #ff4757;
-}
+.to-kind-badge.entry { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+.to-kind-badge.exit { background: rgba(255, 71, 87, 0.15); color: #ff4757; }
 .to-reason {
   display: inline-block;
   max-width: 180px;
@@ -1016,6 +1071,66 @@ const trackNote = computed(() => {
   vertical-align: bottom;
   color: var(--text-secondary);
 }
+
+/* ========== 状态结构 ========== */
+.status-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.status-label { width: 48px; font-size: 12px; color: var(--text-title); }
+.status-bar-wrap { flex: 1; height: 8px; background: var(--bg-primary); border-radius: 4px; overflow: hidden; }
+.status-bar { height: 100%; background: var(--color-highlight); border-radius: 4px; min-width: 2px; }
+.status-count { width: 36px; text-align: right; font-variant-numeric: tabular-nums; }
+.status-share { width: 44px; text-align: right; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ========== 三日对比 ========== */
+.compare-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.compare-card {
+  background: var(--bg-secondary); border: 1px solid var(--border-color);
+  border-radius: 10px; padding: 12px; text-align: center;
+}
+.compare-label { font-size: 10px; color: var(--text-secondary); }
+.compare-total { font-size: 20px; font-weight: bold; color: var(--text-title); margin: 2px 0; font-variant-numeric: tabular-nums; }
+.compare-sub { font-size: 10px; color: var(--text-secondary); }
+
+/* ========== 日内轨迹（leader-item 行语言） ========== */
+.slot-track { display: flex; flex-direction: column; gap: 8px; }
+.track-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+.track-row:hover { background: var(--bg-hover); border-color: var(--color-highlight); }
+.track-row.latest { border-left: 4px solid var(--color-highlight); }
+.track-time { width: 60px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.now-chip {
+  margin-left: 4px; font-size: 10px; color: #000;
+  background: var(--color-highlight); border-radius: 10px; padding: 0 6px;
+}
+.track-stage {
+  min-width: 44px; text-align: center; border-radius: 10px;
+  padding: 2px 8px; font-size: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+.track-drift {
+  color: #ffb142; border-bottom: 1px dashed currentColor;
+  cursor: help; font-size: 10px;
+}
+.track-metric { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+/* ========== 证据与风险 ========== */
+.evidence-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.evidence-columns.two { align-items: start; }
+.evidence-list { margin: 0; padding-left: 16px; line-height: 1.7; font-size: 12px; }
+.diag-block {
+  display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+  border: 1px dashed var(--border-color); border-radius: 8px;
+  padding: 8px 12px; font-size: 11px; color: var(--text-secondary);
+}
+.diag-tag { font-weight: 600; color: #ffb142; }
 
 @media (max-width: 720px) {
   .table-two-col, .evidence-columns { grid-template-columns: 1fr; }
