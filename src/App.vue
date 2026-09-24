@@ -51,6 +51,11 @@
           <span class="icon">🔥</span>
         </button>
 
+        <!-- 热榜情绪（独立面板） -->
+        <button ref="hotlistEmotionBtnRef" class="btn-icon" title="热榜情绪" @click="openPanel('hotlistEmotion', $event)">
+          <span class="icon">📊</span>
+        </button>
+
         <!-- 算法中心 -->
         <button ref="algorithmBtnRef" class="btn-icon algorithm-core-btn" title="算法中心 (Ctrl+Shift+A)"
           @click="openPanel('algorithm', $event)">
@@ -166,6 +171,8 @@
     <DragonHeadPanel v-model:visible="panels.dragon" :trigger-rect="panelRects.dragon" @close="panels.dragon = false" />
     <DragonBreathPanel v-model:visible="panels.breath" :trigger-rect="panelRects.breath"
       @close="panels.breath = false" />
+    <HotlistEmotionPanel v-model:visible="panels.hotlistEmotion" :trigger-rect="panelRects.hotlistEmotion"
+      @close="panels.hotlistEmotion = false" />
     <KeyboardHelpPanel v-model:visible="panels.help" @close="panels.help = false" />
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
@@ -214,6 +221,7 @@ const AlgorithmPanel = defineAsyncComponent(() => import('./components/panels/Al
 const SectorPanel = defineAsyncComponent(() => import('./components/panels/SectorPanel.vue'))
 const DragonHeadPanel = defineAsyncComponent(() => import('./components/panels/DragonHeadPanel.vue'))
 const DragonBreathPanel = defineAsyncComponent(() => import('./components/panels/DragonBreathPanel.vue'))
+const HotlistEmotionPanel = defineAsyncComponent(() => import('./components/panels/HotlistEmotionPanel.vue'))
 const KeyboardHelpPanel = defineAsyncComponent(() => import('./components/panels/KeyboardHelpPanel.vue'))
 const ExportPanel = defineAsyncComponent(() => import('./components/panels/ExportPanel.vue'))
 const FavoritePanel = defineAsyncComponent(() => import('./components/panels/FavoritePanel.vue'))
@@ -321,6 +329,7 @@ const panels = ref({
   settings: false,
   config: false,
   algorithm: false,
+  hotlistEmotion: false,
   sector: false,
   dragon: false,
   breath: false,
