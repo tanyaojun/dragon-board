@@ -454,6 +454,8 @@ def build_hotlist_sentiment_document(
     slot_time: str | None = None,
     intraday_history: list[dict[str, Any]] | None = None,
     current_slot: str | None = None,
+    stage_history: dict[str, Any] | None = None,
+    stage_confirm_slots: int = 2,
 ) -> dict[str, Any]:
     # 编排纯函数唯一口径（Task 5）：EOD 入库文档 = compute_hotlist_sentiment 结果的库 schema 投影。
     # yesterday/day_before 是 {"tradingDate"?, "rows": [...]} 形态——rows 必须是扁平快照行，
@@ -476,6 +478,23 @@ def build_hotlist_sentiment_document(
         intraday_history=intraday_history,
         current_slot=current_slot,
     )
+    # 阶段多帧确认（2026-09-24 spec：emotion-stage-multiframe-confirm）：
+    # rawStage=本帧截面事实（resolve_stage 输出，永远保留）；stage=确认投影——当日
+    # 「严格早于当前槽」的截面序列 + 本帧一次，重放 stage_confirm.confirm_stage 滞回。
+    # summary/riskLevel/confidence/signals/warnings 仍是本帧截面证据，不按确认阶段二次计算。
+    from backend.analysis.hotlist.stage_confirm import confirm_stage
+
+    raw_stage_value = str(result["stage"])
+    history = stage_history or {"rawStagePoints": [], "historyStatus": "empty", "diagnostics": []}
+    history_status = str(history.get("historyStatus") or "empty")
+    prior_points = list(history.get("rawStagePoints") or [])
+    current_stage_slot = str(current_slot or frame.get("slotTime") or slot)
+    # historyStatus=unavailable 时历史不可信：只用本帧截面确认（fail-visible 不伪造历史）
+    points = [(current_stage_slot, raw_stage_value)] if history_status == "unavailable" else [
+        *prior_points, (current_stage_slot, raw_stage_value)
+    ]
+    confirmed_stage, confirm_state = confirm_stage(points, stage_confirm_slots)
+    confirm_state["historyStatus"] = history_status
     return {
         "_id": f"{dataset_id}:{snapshot_type}:{trading_date}{suffix}",
         "datasetId": dataset_id,
@@ -489,7 +508,9 @@ def build_hotlist_sentiment_document(
         "anchoredSlotTime": frame.get("slotTime"),
         "timestamp": frame.get("timestamp"),
         "computedAt": int(time.time()),
-        "stage": result["stage"],
+        "stage": confirmed_stage or raw_stage_value,
+        "rawStage": raw_stage_value,
+        "stageConfirmState": confirm_state,
         "riskLevel": result["riskLevel"],
         "confidence": result["confidence"],
         "summary": result["summary"],
@@ -499,7 +520,8 @@ def build_hotlist_sentiment_document(
         "warnings": result["warnings"],
         # 诊断与业务提示分离（2026-09-24）：join 失败/缺失、市场证据回退来源等数据质量
         # 标注由编排层追加进 diagnostics，不混入业务风险提示 warnings；前端分区块渲染。
-        "diagnostics": [],
+        # 初值携带历史收集层的诊断（legacy fallback / 非标准槽 / 读取失败）。
+        "diagnostics": list(history.get("diagnostics") or []),
     }
 
 

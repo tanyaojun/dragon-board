@@ -555,3 +555,94 @@ def test_collect_intraday_state_read_failure_is_visible() -> None:
     assert state["rawStagePoints"] == []
     assert state["historyStatus"] == "unavailable"
     assert "boom" in state["diagnostics"][0]
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 阶段多帧确认：build_hotlist_sentiment_document 落 stage(确认值)/
+# rawStage(截面)/stageConfirmState 三字段；summary/riskLevel/confidence/signals/warnings
+# 仍是本帧截面证据（不按确认阶段二次计算）；EOD 与锚定槽同帧只计一次且结果一致。
+# 测试用 monkeypatch 固定截面输出，期望值写死，不用被测确认函数生成。
+# ---------------------------------------------------------------------------
+
+
+def _fake_sentiment_result(stage: str) -> dict[str, Any]:
+    return {
+        "stage": stage, "riskLevel": "中", "confidence": 60, "summary": f"{stage}截面摘要",
+        "metrics": {"topN": 0, "layers": {"all": {"total": 0, "topN": 0,
+            "upRatio": 0, "downRatio": 0, "hotTrin": None, "stageCounts": {}, "stageShares": {},
+            "nearLimitUpCount": 0, "highGainCount": 0, "highTurnoverCount": 0,
+            "riskShare": 0, "activeOpportunityShare": 0, "strongMoneyShare": 0, "crowdedShare": 0}},
+            "comparison": {"top100RetainRateFromYesterday": None,
+                "top100RetainRateFromDayBefore": None},
+            "limitEvidence": {"intersection": {"top100LimitUpShare": 0}},
+            "transitionCounts": {}},
+        "turnover": {"newEntries": [], "eliminated": []},
+        "signals": [], "warnings": [], "statusSourceCounts": {"displayStatus": 0, "fallback": 0},
+        "missingEvidence": [],
+    }
+
+
+def test_document_persists_raw_and_pending_state(monkeypatch) -> None:
+    import backend.operations.hotlist_sentiment as module
+
+    monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("高潮"))
+    doc = module.build_hotlist_sentiment_document(
+        dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
+        frame={"snapshotId": "s1030", "slotTime": "10:30", "timestamp": 1}, stocks=[{"code": "000001"}],
+        slot_time="10:30", current_slot="10:30",
+        stage_history={"rawStagePoints": [("09:30", "退潮"), ("10:00", "退潮")],
+            "historyStatus": "complete", "diagnostics": []}, stage_confirm_slots=2,
+    )
+    assert doc["stage"] == "退潮"
+    assert doc["rawStage"] == "高潮"
+    assert doc["stageConfirmState"]["pendingStage"] == "高潮"
+    assert doc["stageConfirmState"]["pendingSince"] == "10:30"
+    assert doc["summary"] == "高潮截面摘要"
+
+
+def test_document_switches_after_second_candidate(monkeypatch) -> None:
+    import backend.operations.hotlist_sentiment as module
+
+    monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("高潮"))
+    doc = module.build_hotlist_sentiment_document(
+        dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
+        frame={"snapshotId": "s1100", "slotTime": "11:00", "timestamp": 2}, stocks=[{"code": "000001"}],
+        slot_time="11:00", current_slot="11:00",
+        stage_history={"rawStagePoints": [("09:30", "退潮"), ("10:30", "高潮")],
+            "historyStatus": "complete", "diagnostics": []}, stage_confirm_slots=2,
+    )
+    assert doc["stage"] == "高潮"
+    assert doc["rawStage"] == "高潮"
+    assert doc["stageConfirmState"]["pending"] is False
+
+
+def test_unavailable_history_keeps_raw_and_diagnostic(monkeypatch) -> None:
+    import backend.operations.hotlist_sentiment as module
+
+    monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("发酵"))
+    doc = module.build_hotlist_sentiment_document(
+        dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
+        frame={"snapshotId": "s1000", "slotTime": "10:00", "timestamp": 1}, stocks=[{"code": "000001"}],
+        slot_time="10:00", current_slot="10:00",
+        stage_history={"rawStagePoints": [], "historyStatus": "unavailable",
+            "diagnostics": ["stage_confirm_history_unavailable:RuntimeError:boom"]}, stage_confirm_slots=2,
+    )
+    assert doc["stage"] == doc["rawStage"] == "发酵"
+    assert doc["stageConfirmState"]["historyStatus"] == "unavailable"
+    assert doc["diagnostics"] == ["stage_confirm_history_unavailable:RuntimeError:boom"]
+
+
+def test_eod_does_not_count_anchored_frame_twice(monkeypatch) -> None:
+    import backend.operations.hotlist_sentiment as module
+
+    monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("高潮"))
+    common = dict(
+        dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
+        frame={"snapshotId": "s1030", "slotTime": "10:30", "timestamp": 1}, stocks=[{"code": "000001"}],
+        current_slot="10:30", stage_history={"rawStagePoints": [("09:30", "退潮")],
+            "historyStatus": "complete", "diagnostics": []}, stage_confirm_slots=2,
+    )
+    slot_doc = module.build_hotlist_sentiment_document(**common, slot_time="10:30")
+    eod_doc = module.build_hotlist_sentiment_document(**common)
+    assert slot_doc["stage"] == eod_doc["stage"] == "退潮"
+    assert slot_doc["stageConfirmState"] == eod_doc["stageConfirmState"]
