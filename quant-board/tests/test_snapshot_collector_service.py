@@ -1005,6 +1005,8 @@ class TestServiceDryRun:
             "BridgeQuoteProvider",
             "MarketFundCacheProvider",
             "ProxyLimitUpProvider",
+            # 服务端直连 THS/指数源构建 limitSummary + indices（2026-09-25）
+            "ServerMarketEvidenceProvider",
             "ThemeMappingProvider",
         }
         assert BridgeQuoteProvider in provider_types

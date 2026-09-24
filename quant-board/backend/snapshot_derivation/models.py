@@ -33,6 +33,11 @@ class MarketFactBundle:
     snapshot_context: dict[str, Any] = field(default_factory=dict)
     market_meta: dict[str, Any] = field(default_factory=dict)
     quality_issues: list[dict[str, Any]] = field(default_factory=list)
+    # 服务端直连 THS 构建的 limitSummary（2026-09-25 根治浏览器 bundle 断供依赖，
+    # 非空时优先于 snapshot_context.marketData / market_meta 原料）
+    limit_summary: dict[str, Any] = field(default_factory=dict)
+    # 服务端指数证据（sh/hs300/zz500/zz1000 涨跌），题材轮动 _market_change 输入
+    indices: dict[str, Any] = field(default_factory=dict)
 
     algorithm_version: str = "snapshot_derivation_v1"
     config_hash: str = "snapshot_derivation_v1_default"

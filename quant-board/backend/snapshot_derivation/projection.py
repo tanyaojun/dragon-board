@@ -434,14 +434,33 @@ def build_ingest_payload(
         else market_context.market_meta
     )
     sentiment = snapshot_context.get("breathData")
-    indices = market_data.get("indices") if isinstance(market_data, dict) else None
+    # indices：服务端直连指数源优先（2026-09-25 根治浏览器 bundle 断供依赖，
+    # 题材轮动引擎 _market_change 消费），缺失时回退浏览器原料
+    server_indices = (
+        dict(market_context.indices)
+        if isinstance(getattr(market_context, "indices", None), dict)
+        and market_context.indices
+        else None
+    )
+    indices = server_indices or (
+        market_data.get("indices") if isinstance(market_data, dict) else None
+    )
     money_flow_summary = market_data.get("moneyFlow") if isinstance(market_data, dict) else None
-    limit_summary = {
+    # 服务端直连 THS 构建的 limitSummary 优先（2026-09-25 根治浏览器 bundle 断供依赖）；
+    # 服务端失败时回退浏览器原料，仍为空则 None（下游 fail-visible 回退最近有效帧）。
+    server_limit_summary = (
+        dict(market_context.limit_summary)
+        if isinstance(getattr(market_context, "limit_summary", None), dict)
+        and market_context.limit_summary
+        else None
+    )
+    browser_limit_summary = {
         "continuousBoards": market_data.get("limitData"),
         "zhaban": market_data.get("zhaban"),
         "yesterdayZt": market_data.get("yesterdayLimit"),
         "thsPools": market_data.get("thsLimitUpPools"),
     } if isinstance(market_data, dict) else None
+    limit_summary = server_limit_summary or browser_limit_summary
     rotation_summary = snapshot_context.get("rotationAnalysis")
     normalized_hotlist = [
         dict(stock) if isinstance(stock, dict) else stock

@@ -424,6 +424,8 @@ class SnapshotCollectorService:
             source_health=list(market_context.source_health),
             snapshot_context=dict(market_context.snapshot_context),
             market_meta=dict(market_context.market_meta),
+            limit_summary=dict(market_context.limit_summary),
+            indices=dict(market_context.indices),
         )
         derived = SnapshotDerivationService().derive(fact)
         if self._theme_rotation_service is not None:
@@ -922,6 +924,7 @@ class SnapshotCollectorService:
             MarketFundCacheProvider,
             ProxyLimitUpProvider,
             ProxyMergedHotlistProvider,
+            ServerMarketEvidenceProvider,
             StartupBundleStockProvider,
             TencentBasicQuoteProvider,
             ThemeMappingProvider,
@@ -935,6 +938,9 @@ class SnapshotCollectorService:
             BridgeQuoteProvider(base_url=self._bridge_base_url()),
             MarketFundCacheProvider(self._create_market_fund_cache()),
             ProxyLimitUpProvider(base_url=proxy_url, trading_date=trading_date),
+            # 服务端直连 THS/指数源构建 limitSummary + indices
+            # （2026-09-25 根治浏览器 startup-bundle 断供依赖）
+            ServerMarketEvidenceProvider(trading_date=trading_date),
         ]
         theme_repo = self._create_theme_repository()
         if theme_repo is not None:

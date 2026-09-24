@@ -104,6 +104,11 @@ class MarketDataContext:
     source_health: list[SourceHealth] = field(default_factory=list)
     market_meta: dict[str, Any] = field(default_factory=dict)
     snapshot_context: dict[str, Any] = field(default_factory=dict)
+    # 服务端直连 THS 构建的 limitSummary（ServerMarketEvidenceProvider），
+    # 优先于浏览器 startup-bundle 原料（根治浏览器断供导致 limitSummary 为空）。
+    limit_summary: dict[str, Any] = field(default_factory=dict)
+    # 服务端指数证据（sh/hs300/zz500/zz1000 涨跌），题材轮动 _market_change 输入
+    indices: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

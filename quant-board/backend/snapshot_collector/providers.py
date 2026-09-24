@@ -2032,6 +2032,17 @@ async def collect_market_context_async(
                             ctx.limit_up[code] = row
                 ctx.source_health.append(health)
 
+            elif isinstance(provider, ServerMarketEvidenceProvider):
+                evidence, health = await provider.acollect(timeout_ms=timeout_ms)
+                ctx.source_health.append(health)
+                if isinstance(evidence, dict) and evidence:
+                    limit_summary = evidence.get("limitSummary")
+                    if isinstance(limit_summary, dict) and limit_summary:
+                        ctx.limit_summary = limit_summary
+                    indices = evidence.get("indices")
+                    if isinstance(indices, dict) and indices:
+                        ctx.indices = indices
+
         except Exception as exc:
             health = SourceHealth(
                 source=getattr(provider, "__class__", type(provider)).__name__,
@@ -2058,3 +2069,239 @@ async def collect_market_context_async(
 
     _append_quote_coverage_warning(ctx, active_codes)
     return ctx
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ServerLimitSummaryProvider
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _limit_board_bucket(item: dict[str, Any]) -> int:
+    """THS 涨停池条目 → 连板高度（1=首板，0=未知）。解析链同 LimitUpPoolProvider._normalize_item。"""
+    if "首板" in str(item.get("high_days") or ""):
+        return 1
+    for key in ("continue_day", "continue_day_cnt"):
+        value = _positive_int(item.get(key))
+        if value:
+            return value
+    for key in ("high_days", "high_days_value"):
+        value = _parse_board_text(item.get(key))
+        if value:
+            return value
+    return 0
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_server_limit_summary(
+    info_items: list[dict[str, Any]],
+    ths_pools: dict[str, Any],
+) -> dict[str, Any]:
+    """THS 涨停池原始数据 → frame.limitSummary（服务端构建，脱离浏览器 startup-bundle）。
+
+    2026-09-24 排查：limitSummary 此前取自前端写入 proxy 的 startup-bundle（TTL 300s），
+    浏览器断供的槽位帧该字段为空（11:00/11:30/14:00/15:00 四帧），触发情绪文档全市场
+    证据回退。本函数用进程内 THS 涨停池接口构建同形数据：
+
+    - continuousBoards：limit_up_pool 条目按连板高度分桶（yiban/erban/sanban/sibanPlus/maxBoard）；
+    - zhaban：count=炸板池家数（poolCounts.failed 缺失时按 pools.failed.items 派生，
+      禁止把「取不到」伪装成 0），fengbanRate=zt/(zt+炸板)；
+    - thsPools：get_ths_pools 响应透传，failedCount/rushingCount/drawdownCount 缺失时按
+      对应池 items 数派生；
+    - yesterdayZt 不再产出（下游 limitEvidence 未消费，仅历史帧遗留键）。
+    """
+    if not isinstance(info_items, list) or not info_items:
+        # 上游无数据：空 dict（falsy），由调用方回退浏览器原料/最近有效帧，
+        # 绝不产出全零结构（会被 _limit_summary_has_evidence 误判为有效证据）
+        return {}
+    boards = {"yiban": 0, "erban": 0, "sanban": 0, "sibanPlus": 0, "maxBoard": 0}
+    for item in info_items if isinstance(info_items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        height = _limit_board_bucket(item)
+        if height <= 0:
+            continue
+        if height == 1:
+            boards["yiban"] += 1
+        elif height == 2:
+            boards["erban"] += 1
+        elif height == 3:
+            boards["sanban"] += 1
+        else:
+            boards["sibanPlus"] += 1
+        boards["maxBoard"] = max(boards["maxBoard"], height)
+
+    pools = ths_pools.get("pools") if isinstance(ths_pools, dict) else None
+    pools = pools if isinstance(pools, dict) else {}
+
+    def _pool_items(key: str) -> list[dict[str, Any]]:
+        pool = pools.get(key)
+        items = pool.get("items") if isinstance(pool, dict) else None
+        return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+    def _pool_count(key: str) -> int | None:
+        explicit = ths_pools.get(key) if isinstance(ths_pools, dict) else None
+        if isinstance(explicit, (int, float)):
+            return int(explicit)
+        counts = ths_pools.get("poolCounts") if isinstance(ths_pools, dict) else None
+        from_counts = counts.get(key) if isinstance(counts, dict) else None
+        if isinstance(from_counts, (int, float)):
+            return int(from_counts)
+        items = _pool_items(key)
+        if items:
+            return len(items)
+        pool = pools.get(key)
+        if isinstance(pool, dict) and pool.get("ok") is False:
+            return None  # 单池上游失败：取不到，禁止伪装成 0
+        return 0 if pools else None
+
+    failed = _pool_count("failed")
+    zt_count = len([i for i in info_items if isinstance(i, dict)]) if isinstance(info_items, list) else 0
+    if failed is None:
+        # 炸板池不可用（缺失/上游失败）：不产出数值，禁止伪装成 0/封板率 100%
+        zhaban = {"count": None, "rate": None, "fengbanRate": None, "ztCount": zt_count}
+    else:
+        total = zt_count + failed
+        zhaban = {
+            "count": failed,
+            "rate": round(failed / total * 100, 2) if total else 0,
+            "fengbanRate": round(zt_count / total * 100, 2) if total else 0,
+            "ztCount": zt_count,
+        }
+
+    ths_pools_out = dict(ths_pools) if isinstance(ths_pools, dict) else {}
+    for count_key, pool_key in (
+        ("failedCount", "failed"),
+        ("rushingCount", "rushing"),
+        ("drawdownCount", "drawdown"),
+    ):
+        if ths_pools_out.get(count_key) is None:
+            derived = _pool_count(pool_key)
+            if derived is not None:
+                ths_pools_out[count_key] = derived
+
+    return {
+        "continuousBoards": boards,
+        "zhaban": zhaban,
+        "thsPools": ths_pools_out,
+        "source": "server-limitup",
+        "capturedAt": _iso_now(),
+    }
+
+
+# 浏览器原 indices 键位（rotation 引擎 _market_change 仅对各 change 求均值）
+_INDEX_ALIASES = {
+    "sh000001": "sh",
+    "sh000300": "hs300",
+    "sh000905": "zz500",
+    "sh000852": "zz1000",
+}
+
+
+def build_server_indices(overview: dict[str, Any]) -> dict[str, Any]:
+    """MarketOverviewService overview → frame.indices（键位对齐原浏览器 marketData.indices）。"""
+    items = overview.get("items") if isinstance(overview, dict) else []
+    out: dict[str, Any] = {}
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        alias = _INDEX_ALIASES.get(str(item.get("code") or ""))
+        change = item.get("change")
+        if alias and isinstance(change, (int, float)):
+            out[alias] = {"change": change}
+    return out
+
+
+class ServerMarketEvidenceProvider:
+    """服务端直连构建 frame 的浏览器依赖证据：limitSummary + indices。
+
+    2026-09-24/25 排查：limitSummary 与 indices 此前均取自前端写入 proxy 的
+    startup-bundle（TTL 300s），浏览器断供的槽位帧相应字段为空——limitSummary 空
+    触发情绪文档全市场证据回退（09-24 四帧），indices 空导致题材轮动引擎
+    `_market_change` 输入缺失。本 provider 进程内直连：
+
+    - market_proxy.limitup（THS 涨停池/炸板池）→ limitSummary；
+    - market_proxy.indices（MarketOverviewService，akshare-sina，Redis 缓存）→ indices
+      （sh/hs300/zz500/zz1000 四指数涨跌，与原浏览器键位对齐）。
+
+    上游失败返回空 dict + 失败 health（fail-visible，不阻断采集）；
+    frames 帧级 moneyFlow/sentiment 为遗留键（无下游消费方/仅对照），不从服务端重建。
+    """
+
+    def __init__(
+        self,
+        *,
+        trading_date: str | None = None,
+        gateway: Any = None,
+    ) -> None:
+        self._trading_date = trading_date
+        self._gateway = gateway or _get_default_gateway()
+
+    async def acollect(
+        self,
+        *,
+        timeout_ms: int = _DEFAULT_TIMEOUT_MS,
+    ) -> tuple[dict[str, Any], SourceHealth]:
+        start = time.monotonic()
+        digits = "".join(ch for ch in str(self._trading_date or "") if ch.isdigit())
+        date = digits if len(digits) == 8 else None
+        info_items: list[dict[str, Any]] = []
+        pools_body: dict[str, Any] = {}
+        indices: dict[str, Any] = {}
+        limit_summary: dict[str, Any] = {}
+        errors: list[str] = []
+        try:
+            if _is_in_process_gateway(self._gateway):
+                from backend.market_proxy.indices import get_market_overview_service
+                from backend.market_proxy.limitup import get_limitup_service
+
+                service = get_limitup_service()
+                list_body = await service.get_limit_up_list(date or None)
+                pools_body = await service.get_ths_pools(date or None)
+                data = list_body.get("data") if isinstance(list_body, dict) else None
+                raw_info = data.get("info") if isinstance(data, dict) else None
+                if isinstance(raw_info, list):
+                    info_items = [i for i in raw_info if isinstance(i, dict)]
+                if info_items:
+                    limit_summary = build_server_limit_summary(info_items, pools_body)
+                else:
+                    errors.append("THS limit_up_pool info 为空")
+                # 单池上游失败冒泡为可观察标记（get_ths_pools 对单池独立 try/except 不抛出）
+                pools = pools_body.get("pools") if isinstance(pools_body, dict) else None
+                if isinstance(pools, dict):
+                    for pool_key, pool in pools.items():
+                        if isinstance(pool, dict) and pool.get("ok") is False:
+                            errors.append(f"ths pool {pool_key} 上游失败")
+                try:
+                    overview = await get_market_overview_service().get_overview()
+                    indices = build_server_indices(overview)
+                except Exception as exc:
+                    errors.append(f"indices_failed: {str(exc)[:120]}")
+            else:
+                errors.append("in-process gateway unavailable")
+        except Exception as exc:
+            errors.append(str(exc)[:200])
+
+        # Critical（评审 2026-09-25）：上游失败/无数据时绝不携带 limitSummary——
+        # 全零结构会被下游误判为有效证据（_limit_summary_has_evidence=True），
+        # 既伪装「取不到为 0」又废掉情绪文档的 EOD 回退机制；不携带则由下游
+        # 回退浏览器原料，再回退最近有效槽位。
+        evidence: dict[str, Any] = {"indices": indices}
+        if limit_summary:
+            evidence["limitSummary"] = limit_summary
+        return (
+            evidence,
+            SourceHealth(
+                source="server_market_evidence",
+                ok=not errors,
+                latency_ms=int((time.monotonic() - start) * 1000),
+                row_count=len(info_items),
+                error="; ".join(errors),
+                captured_at=_iso_now(),
+            ),
+        )

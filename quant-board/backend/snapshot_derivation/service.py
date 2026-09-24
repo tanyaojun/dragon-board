@@ -37,6 +37,8 @@ class SnapshotDerivationService:
             source_health=list(fact.source_health),
             market_meta=dict(fact.market_meta),
             snapshot_context=dict(fact.snapshot_context),
+            limit_summary=dict(fact.limit_summary),
+            indices=dict(fact.indices),
         )
         payload = build_ingest_payload(
             slot,
