@@ -187,3 +187,119 @@ def get_hotlist_sentiment_slots(
         ),
     )
     return response
+
+def _normalize_market_limit_rows(items: Any) -> list[dict[str, Any]]:
+    """THS 涨停池原始条目 → 明细面板行映射（纯映射，不含口径判定）。
+
+    连板高度复用 analysis._parse_board_height_text（"首板"→1、"N连板"→N）；时间戳支持
+    北京时间 unix 秒与 "HH:MM[:SS]" 文本两种形态 → HH:MM。数值字段缺失保留 None
+    （前端显示 --），不伪造 0。
+    """
+    import re
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from backend.analysis.hotlist.sentiment import _parse_board_height_text
+
+    tz = ZoneInfo("Asia/Shanghai")
+
+    def _opt_number(value: Any) -> float | None:
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def _hhmm(raw: Any) -> str:
+        if isinstance(raw, str):
+            match = re.match(r"^(\d{1,2}):(\d{2})", raw.strip())
+            if match:
+                return f"{int(match.group(1)):02d}:{match.group(2)}"
+        try:
+            seconds = int(float(raw))
+        except (TypeError, ValueError):
+            return ""
+        if seconds <= 1_000_000_000:  # 非 epoch 秒量级（如 HHMMSS 数字）不误读为时间戳
+            return ""
+        return datetime.fromtimestamp(seconds, tz).strftime("%H:%M")
+
+    rows: list[dict[str, Any]] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("code") or "").strip().zfill(6)
+        if not code:
+            continue
+        rows.append(
+            {
+                "code": code,
+                "name": str(item.get("name") or "").strip(),
+                "change": _opt_number(item.get("change_rate")),
+                "highDays": str(item.get("high_days") or "").strip(),
+                "boardHeight": max(
+                    _parse_board_height_text(item.get("high_days")),
+                    _parse_board_height_text(item.get("continue_day")),
+                ),
+                "firstLimitUpTime": _hhmm(item.get("first_limit_up_time")),
+                "lastLimitUpTime": _hhmm(item.get("last_limit_up_time")),
+                "turnoverRate": _opt_number(item.get("turnover_rate")),
+                "openNum": _opt_number(item.get("open_num")),
+                "limitUpType": str(item.get("limit_up_type") or "").strip(),
+                "reasonType": str(item.get("reason_type") or "").strip(),
+            }
+        )
+    return rows
+
+
+@router.get("/limit-stocks")
+async def get_hotlist_sentiment_limit_stocks(
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+) -> dict[str, Any]:
+    """涨停池成分股明细读口（2026-09-25，市场概览三容器 → 明细面板消费）。
+
+    一次返回热榜池涨停 / 昨日热榜涨停两份名单（复用 analysis 涨停证据口径，与
+    limitEvidence 聚合同源）+ 全市场涨停名单（THS 涨停池实时接口，指定最近交易日取数，
+    非交易日自然回落上一交易日）。各部分失败结构化标注不互相阻断（fail-visible）。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "degraded": True,
+            "reason": f"mongodb_unavailable: {exc}",
+            "tradingDate": "",
+            "diagnostics": [],
+            "pool": {"rows": []},
+            "market": {"rows": [], "degraded": True, "reason": "not_loaded"},
+            "yesterday": {"rows": []},
+        }
+    import asyncio
+
+    from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+    # 同步 Mongo 多次往返放线程池，避免阻塞事件循环（本路由因 THS 上游为 async 而 async def）
+    detail = await asyncio.to_thread(
+        HotListSentimentBackfillService(db).limit_stocks_detail, dataset_id, snapshot_type
+    )
+    if not detail.get("ok"):
+        detail.setdefault("market", {"rows": [], "degraded": True, "reason": "not_loaded"})
+        return detail
+
+    market: dict[str, Any] = {"rows": [], "degraded": False, "reason": None}
+    trading_date = str(detail.get("tradingDate") or "")
+    if trading_date:
+        try:
+            from backend.market_proxy.limitup import get_limitup_service
+
+            payload = await get_limitup_service().get_limit_up_list(trading_date.replace("-", ""))
+            data = payload.get("data") if isinstance(payload, dict) else None
+            items = data.get("info") if isinstance(data, dict) else None
+            market["rows"] = _normalize_market_limit_rows(items)
+            if not market["rows"]:
+                market["degraded"] = True
+                market["reason"] = "THS 涨停池当日无数据（info 为空）"
+        except Exception as exc:
+            market = {"rows": [], "degraded": True, "reason": f"limitup_upstream_failed: {exc}"}
+    else:
+        market["degraded"] = True
+        market["reason"] = "no trading date resolved"
+    detail["market"] = market
+    return detail

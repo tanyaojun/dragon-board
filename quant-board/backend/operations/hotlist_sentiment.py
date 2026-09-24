@@ -340,6 +340,143 @@ class HotListSentimentBackfillService:
         )
         return [_drop_mongo_id(row) for row in rows]
 
+    def limit_stocks_detail(self, dataset_id: str, snapshot_type: str) -> dict[str, Any]:
+        """涨停池成分股明细（市场概览三容器 → 明细面板数据源；市场名单由路由层异步补充）。
+
+        口径唯一来源 = analysis.hotlist.sentiment 纯函数：涨停判定 _has_limit_up_evidence /
+        get_stock_limit_signal，与 limitEvidence 聚合完全同源（生产文档 top_n=None → 全池口径，
+        此处同样不截断，明细行数可与聚合数对账）。fail-visible：昨日行缺失 / join 异常不阻断，
+        各自结构化标注进 diagnostics，返回可用部分，不伪造名单。
+        """
+        empty: dict[str, Any] = {
+            "ok": False, "degraded": True, "reason": "", "diagnostics": [],
+            "tradingDate": "", "prevTradingDate": "",
+            "pool": {"rows": []}, "yesterday": {"rows": []},
+        }
+        dates = self.trading_dates(dataset_id=dataset_id, snapshot_type=snapshot_type)
+        if not dates:
+            return {**empty, "reason": "no trading dates in dataset"}
+        trading_date = dates[-1]
+        prev_trading_date = dates[-2] if len(dates) >= 2 else ""
+        frame = self.latest_frame(dataset_id, snapshot_type, trading_date)
+        if frame is None:
+            return {
+                **empty,
+                "reason": f"no snapshot frame on {trading_date}",
+                "tradingDate": trading_date,
+                "prevTradingDate": prev_trading_date,
+            }
+        snapshot_id = str(frame.get("snapshotId") or "")
+        today_rows = self.stocks_for_frame(dataset_id, snapshot_id)
+        from backend.services.theme.hotlist_sentiment_compute import _join_display_status
+
+        join_stats = _join_display_status(self._db, dataset_id, snapshot_id, today_rows)
+        diagnostics: list[str] = []
+        if join_stats.get("joinFailed"):
+            diagnostics.append(f"displayStatus join failed: {join_stats.get('reason')}")
+        elif join_stats.get("noDisplayStatus"):
+            diagnostics.append(f"displayStatus missing on {join_stats['noDisplayStatus']} stocks（fallback 分类接管）")
+
+        from backend.analysis.hotlist.sentiment import (
+            _has_limit_up_evidence,
+            _has_stock_zhaban_signal,
+            get_rank,
+            get_stock_limit_signal,
+            is_risk_row,
+            normalize_code,
+            sort_rows,
+            to_number,
+        )
+
+        today_sorted = sort_rows(today_rows)
+        today_by_code = {
+            normalize_code(row.get("code")): row for row in today_sorted if normalize_code(row.get("code"))
+        }
+
+        # ① 热榜池涨停名单：当日全池行按涨停证据口径过滤（与 top100LimitUpCount 同源同径）
+        pool_rows = []
+        for row in today_sorted:
+            code = normalize_code(row.get("code"))
+            if not code or not _has_limit_up_evidence(row):
+                continue
+            signal = get_stock_limit_signal(row)
+            pool_rows.append(
+                {
+                    "code": code,
+                    "name": str(row.get("name") or "").strip(),
+                    "rank": get_rank(row, len(pool_rows)),
+                    "change": to_number(row.get("change")),
+                    "boardHeight": signal["boardHeight"],
+                    # 展示徽章口径：未封板但触及近涨停阈值（isAlmostLimitUp 单判据）；
+                    # 与聚合 top100NearLimitUpCount（含涨停行）对账时注意口径差
+                    "nearLimitUp": bool(signal["isAlmostLimitUp"] and not signal["isLimitUp"]),
+                    "zhaban": _has_stock_zhaban_signal(row),
+                    "mainNet": to_number(row.get("zlje")),
+                    "firstLimitUpTime": str(
+                        row.get("firstZtTime") or row.get("first_limit_up_time") or ""
+                    ).strip(),
+                    "lastLimitUpTime": str(
+                        row.get("lastZtTime") or row.get("last_limit_up_time") or ""
+                    ).strip(),
+                    "statusLabel": str(row.get("displayStatusLabel") or "").strip(),
+                }
+            )
+
+        # ② 昨日热榜涨停名单：昨日全池涨停行 × 今日表现（判据同 build_yesterday_hot_limit_evidence）
+        previous = self.previous_day_stocks(dataset_id, snapshot_type, trading_date)
+        for issue in (previous or {}).get("joinIssues") or []:
+            diagnostics.append(str(issue))
+        yesterday_sorted = sort_rows((previous or {}).get("yesterday") or [])
+        yesterday_rows = []
+        for row in yesterday_sorted:
+            code = normalize_code(row.get("code"))
+            if not code or not _has_limit_up_evidence(row):
+                continue
+            signal = get_stock_limit_signal(row)
+            today = today_by_code.get(code)
+            today_change = to_number(today.get("change")) if today else None
+            today_signal = get_stock_limit_signal(today) if today else None
+            is_risk = bool(today and is_risk_row(today))
+            matched = today is not None
+            positive = matched and today_change is not None and today_change > 0
+            weakened = (not matched) or (today_change is not None and today_change <= -2) or is_risk
+            failed_or_weak = (
+                (not matched)
+                or (today_change is not None and today_change <= 0)
+                or is_risk
+                or bool(today_signal and not today_signal["isAlmostLimitUp"])
+            )
+            yesterday_rows.append(
+                {
+                    "code": code,
+                    "name": str(row.get("name") or "").strip(),
+                    "rank": get_rank(row, len(yesterday_rows)),
+                    "yesterdayChange": to_number(row.get("change")),
+                    "boardHeight": signal["boardHeight"],
+                    "matched": matched,
+                    "todayChange": today_change,
+                    "todayRank": get_rank(today, 0) if today else 0,
+                    "retained": matched and code in today_by_code,
+                    "positive": positive,
+                    "weakened": weakened,
+                    "failedOrWeak": failed_or_weak,
+                }
+            )
+
+        return {
+            "ok": True,
+            "degraded": False,
+            "reason": None,
+            "datasetId": dataset_id,
+            "snapshotType": snapshot_type,
+            "tradingDate": trading_date,
+            "prevTradingDate": prev_trading_date,
+            "snapshotId": snapshot_id,
+            "diagnostics": diagnostics,
+            "pool": {"rows": pool_rows},
+            "yesterday": {"rows": yesterday_rows},
+        }
+
     def frame_for_slot(
         self, dataset_id: str, snapshot_type: str, trading_date: str, slot_time: str
     ) -> dict[str, Any] | None:

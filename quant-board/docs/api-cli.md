@@ -2780,6 +2780,29 @@ analyze → 槽位情绪 → EOD）。
 - 缓存与 series 同口径：Redis TTL（key 后缀 `:hotlist:sentiment:slots:...`）+ dataset 索引
   依赖失效，只缓存 `ok=true` 响应。
 
+### `GET /api/hotlist-sentiment/limit-stocks`
+
+涨停池成分股明细读口（2026-09-25 新增，热榜情绪面板「市场概览」三容器 → `HotlistLimitStocksPanel`
+明细面板消费）。一次返回三份名单，口径唯一来源 = `analysis.hotlist.sentiment` 涨停证据纯函数，
+与 `metrics.limitEvidence` 聚合同源（明细行数可与聚合数对账，生产口径 `top_n=None` → 全池不截断）：
+
+- **`pool` 热榜池涨停**：最新交易日最新帧全池快照行按 `_has_limit_up_evidence` 过滤，行含
+  `code/name/rank/change/boardHeight/nearLimitUp/zhaban/mainNet/firstLimitUpTime/lastLimitUpTime/
+  statusLabel`（displayStatus join 注入，异常进 `diagnostics`）；
+- **`yesterday` 昨日热榜涨停**：上一交易日全池涨停行 × 今日表现 join（判据同
+  `build_yesterday_hot_limit_evidence`：`matched/retained/positive/weakened/failedOrWeak/
+  todayChange/todayRank`）；
+- **`market` 全市场涨停**：THS 涨停池实时接口（`backend.market_proxy.limitup`）按最近交易日
+  取数，非交易日自然回落上一交易日；行含 `code/name/change/highDays/boardHeight/
+  firstLimitUpTime/lastLimitUpTime/turnoverRate/openNum/limitUpType/reasonType`；
+- 参数：`dataset_id`（默认 `dragonboard_live`）、`snapshot_type`（默认 `half_hour`）；
+- 响应：`{ok, degraded, reason, tradingDate, prevTradingDate, snapshotId, diagnostics[],
+  pool{rows}, market{rows, degraded, reason}, yesterday{rows}}`；
+- fail-visible：昨日行缺失 / displayStatus join 异常 / THS 上游失败互不阻断，各自结构化
+  标注（`diagnostics` / `market.degraded+reason`），返回可用部分不伪造名单；无交易日或
+  无帧时 `{ok:false, degraded:true, reason}`；
+- 无缓存（直读 MongoDB + THS 实时接口）。
+
 ### `snapshot-collector-audit`
 
 审计覆盖率并输出结构化 JSON。
