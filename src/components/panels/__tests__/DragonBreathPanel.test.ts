@@ -121,6 +121,20 @@ describe('DragonBreathPanel 状态来源透出（spec §4）', () => {
     )
   })
 
+  test('阶段多帧确认双轨展示（2026-09-24）：确认主值+截面辅值，pending 可审计', () => {
+    const source = panelSource()
+
+    // 旧文档兼容：原始阶段读取用 rawStage || doc.stage，不允许裸访问
+    expect(source).toContain('rawStage || doc.stage')
+    expect(source).toContain('confirmedStage')
+    // pending 角标必须携带候选起点（审计用）
+    expect(source).toContain('pendingSince')
+    // summary/置信度明确标注为当前截面证据，不与确认阶段混淆
+    expect(source).toContain('当前截面证据')
+    expect(source).toContain('截面置信')
+    expect(source).toContain('stage-confirm-pending')
+  })
+
   test('诊断与业务提示分离（2026-09-24）：diagnostics 独立渲染，warnings 保持业务风险提示', () => {
     const source = panelSource()
 

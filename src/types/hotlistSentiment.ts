@@ -166,6 +166,19 @@ export interface HotListSentimentResult {
    * 由后端编排层填充；旧结构文档无此字段（诊断信息曾混入 warnings）。
    */
   diagnostics?: string[]
+  /**
+   * 阶段多帧确认（2026-09-24）：`stage` 是确认值（当日截面序列重放滞回），`rawStage`
+   * 是本帧截面事实。summary/riskLevel/confidence/signals/warnings 仍是当前截面证据，
+   * 不按确认阶段二次计算。旧结构文档无这些字段（`rawStage ?? stage` 兼容读取，不写回）。
+   */
+  rawStage?: UnifiedEmotionStage
+  stageConfirmState?: {
+    pending: boolean
+    pendingStage?: UnifiedEmotionStage | null
+    pendingSince?: string | null
+    confirmSlots: number
+    historyStatus: 'complete' | 'empty' | 'legacy_fallback' | 'unavailable'
+  }
 }
 
 export interface HotListSentimentDayDoc {
@@ -200,6 +213,15 @@ export interface HotListSentimentDayDoc {
   warnings: string[]
   /** 数据质量诊断标注（2026-09-24 与业务风险提示分离）；旧结构文档无此字段。 */
   diagnostics?: string[]
+  /** 阶段多帧确认字段（2026-09-24）；语义同 HotListSentimentResult，旧文档缺省。 */
+  rawStage?: UnifiedEmotionStage
+  stageConfirmState?: {
+    pending: boolean
+    pendingStage?: UnifiedEmotionStage | null
+    pendingSince?: string | null
+    confirmSlots: number
+    historyStatus: 'complete' | 'empty' | 'legacy_fallback' | 'unavailable'
+  }
   missing?: boolean
   reason?: string
 }
