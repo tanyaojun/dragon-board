@@ -168,10 +168,10 @@ import TradingStatus from './components/common/TradingStatus.vue'
 import SearchBox from './components/common/SearchBox.vue'
 import DataTable from './components/common/DataTable.vue'
 import DataFreshness from './components/common/DataFreshness.vue'
-import RankTrendPanel from './components/panels/RankTrendPanel.vue'
 import type { CandidatePoolOpenPayload } from './types/candidatePoolOpenPayload'
 
 // 面板组件体积较大，按需异步加载，降低首屏 chunk 体积。
+const RankTrendPanel = defineAsyncComponent(() => import('./components/panels/RankTrendPanel.vue'))
 const SettingsPanel = defineAsyncComponent(() => import('./components/panels/SettingsPanel.vue'))
 const ConfigPanel = defineAsyncComponent(() => import('./components/panels/ConfigPanel.vue'))
 const SectorPanel = defineAsyncComponent(() => import('./components/panels/SectorPanel.vue'))
@@ -206,25 +206,14 @@ import { PLATFORM_FAILURE_THRESHOLD } from './services/dataLoader/constants'
 
 
 // ========== 2. 数据加载服务（依赖 dataLayer）==========
-import { themeMapping } from './services/ThemeDataService'    // 题材静态映射
+// 注意：themeMapping/分析服务改为 lazyLoadServices 内动态 import，
+// 不进首屏 bundle（见阶段化启动编排，2026-09-26）。
 import { dataLoader } from './services/dataLoader'            // 八平台数据加载
-
-// ========== 3. 业务分析服务（依赖 dataLayer + dataLoader）==========
-import { sectorAnalyzer } from './services/sectorAnalyzer'    // 题材分析
-import { themeSyncAdapter } from './services/theme/ThemeSyncAdapter'
-import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer' // 情绪分析
-import { dragonReviewService } from './services/dragon/DragonReviewService'  // 龙头分析
-import { rotationService } from './services/rotationService'  // 轮动分析
-import { ThemeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer' // 联动分析
-import { RankTrendAnalyzer } from './services/RankTrendAnalyzer' // 排名趋势分析
 import { stockCodeManager } from './services/StockCodeManager'
 
 // ========== 5. 刷新和更新服务 ==========
 import { refreshCoordinator } from './services/RefreshCoordinator'
 import { RefreshManager } from './services/RefreshManager'
-
-// ========== 6. 通知服务（最上层）==========
-import { alertService } from './services/alertService'        // 预警服务
 
 
 // ========== Stores ==========
@@ -531,22 +520,22 @@ watch(
 // ========== 优化启动流程 ==========
 const initializeAll = async () => {
   try {
-    await updateSplash('加载平台数据...', 5, async () => {
-      await dataLoader.bootstrapInitialData({ force: false })
-    })
+    splashStatus.value = '加载平台数据...'
+    splashProgress.value = 5
+    const summary = await dataLoader.bootstrapInitialData({ force: false })
 
-    // ========== 第3步：完成基础启动 ==========
+    // ========== 完成基础启动 ==========
     splashProgress.value = 100
     splashStatus.value = '准备就绪'
     lastUpdateTime.value = Date.now()
     splashClosing.value = true
 
-    // 延迟关闭启动画面
+    // 启动缓存命中（快路径）时尽快收起启动画面；慢路径保留缓冲让"准备就绪"可见
     setTimeout(() => {
       showSplash.value = false
-    }, 500)
+    }, summary?.fromCache ? 150 : 500)
 
-    // ========== 后台加载其他服务 ==========
+    // ========== 后台加载分析服务 ==========
     lazyLoadServices()
 
   } catch (error) {
@@ -559,77 +548,87 @@ const initializeAll = async () => {
   }
 }
 
-// ========== 后台懒加载其他服务 ==========
-const lazyLoadServices = () => {
-
-  // 使用 requestIdleCallback 在浏览器空闲时执行
-  const idleCallback = window.requestIdleCallback || ((cb) => setTimeout(cb, 50))
-
-  idleCallback(() => {
-    // 第1批：核心分析服务（延迟0.5秒）
-    setTimeout(() => {
-      // 题材分析 - 加载板块列表
-      safeExecute(sectorAnalyzer, 'init', '题材分析器')
-
-      if (themeMapping && typeof themeMapping.waitForLoaded === 'function') {
-        themeMapping.waitForLoaded().then(() => {
-        })
-      }
-
-      // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
-      safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算').then(() => { })
-    }, 500)
-
-    // 第2批：辅助分析服务（延迟1.5秒）
-    setTimeout(() => {
-      // 龙息分析
-      safeExecute(dragonBreathAnalyzer, 'init', '龙息分析器')
-
-      // 真龙复盘
-      safeExecute(dragonReviewService, 'runFullUpdate', '真龙复盘')
-    }, 1500)
-
-    // 第4批：刷新相关服务（延迟3.5秒）
-    setTimeout(() => {
-      if (refreshCoordinator?.registerService) {
-        const services = [
-          { name: 'dataLoader', instance: dataLoader },
-          { name: 'themeRuntime', instance: themeSyncAdapter },
-          { name: 'sectorAnalyzer', instance: sectorAnalyzer },
-          { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
-          { name: 'dragonReviewService', instance: dragonReviewService },
-        ]
-        services.forEach(({ name, instance }) => {
-          if (instance) {
-            refreshCoordinator.registerService(name, instance)
-          }
-        })
-      }
-
-      // 刷新管理器
-      safeExecute(RefreshManager, 'init', '刷新管理器')
-      safeExecute(RefreshManager, 'start', '启动刷新')
-
-    }, 3500)
+// 空闲时机执行（保留主线程让出语义，替代原固定 500/1500/3500ms 延迟；timeout 兜底防止长任务无限顺延）
+const nextIdle = (): Promise<void> =>
+  new Promise((resolve) => {
+    if (window.requestIdleCallback) {
+      window.requestIdleCallback(() => resolve(), { timeout: 2000 })
+    } else {
+      setTimeout(resolve, 50)
+    }
   })
+
+// 动态加载的题材分析器实例（unmount 时若已加载则销毁）
+let loadedSectorAnalyzer: { destroy?: () => void } | null = null
+
+// ========== 后台懒加载分析服务（动态 import，不进首屏 bundle） ==========
+const lazyLoadServices = () => {
+  void (async () => {
+    // 第1批：核心分析服务（splash 收起后首个空闲时机）
+    await nextIdle()
+    const [{ sectorAnalyzer }, { dragonReviewService }, { themeMapping }] = await Promise.all([
+      import('./services/sectorAnalyzer'),
+      import('./services/dragon/DragonReviewService'),
+      import('./services/ThemeDataService'),
+    ])
+
+    // 题材分析 - 加载板块列表
+    safeExecute(sectorAnalyzer, 'init', '题材分析器')
+    loadedSectorAnalyzer = sectorAnalyzer
+
+    if (themeMapping && typeof themeMapping.waitForLoaded === 'function') {
+      void themeMapping.waitForLoaded()
+    }
+
+    // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
+    void safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算')
+
+    // 轮动服务：模块顶层副作用启动 theme.runtime 周期任务（30s 题材运行态刷新），必须保留加载
+    await import('./services/rotationService')
+
+    // 第2批：辅助分析服务
+    await nextIdle()
+    const [{ dragonBreathAnalyzer }, { themeSyncAdapter }] = await Promise.all([
+      import('./services/DragonBreathAnalyzer'),
+      import('./services/theme/ThemeSyncAdapter'),
+      // 预警服务：模块顶层副作用启动 alert.check 周期任务（10s），是 SectorAlert 面板唯一数据源
+      import('./services/alertService'),
+    ])
+
+    // 龙息分析
+    safeExecute(dragonBreathAnalyzer, 'init', '龙息分析器')
+
+    // 真龙复盘
+    void safeExecute(dragonReviewService, 'runFullUpdate', '真龙复盘')
+
+    // 第3批：刷新体系（服务实例就绪即注册；RefreshManager.start 只设定时器，不会立即拉数据）
+    await nextIdle()
+    if (refreshCoordinator?.registerService) {
+      const services = [
+        { name: 'dataLoader', instance: dataLoader },
+        { name: 'themeRuntime', instance: themeSyncAdapter },
+        { name: 'sectorAnalyzer', instance: sectorAnalyzer },
+        { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
+        { name: 'dragonReviewService', instance: dragonReviewService },
+      ]
+      services.forEach(({ name, instance }) => {
+        if (instance) {
+          refreshCoordinator.registerService(name, instance)
+        }
+      })
+    }
+
+    // 全市场股票列表后台补齐（不与首屏数据抢带宽）
+    void stockCodeManager.getAllStocks()
+
+    // 刷新管理器
+    safeExecute(RefreshManager, 'init', '刷新管理器')
+    safeExecute(RefreshManager, 'start', '启动刷新')
+  })()
 }
 
 // ========== 辅助函数 ==========
 
-/**
- * 更新启动画面状态并执行任务
- */
-async function updateSplash(status: string, progress: number, task: () => Promise<void> | void) {
-  splashStatus.value = status
-  splashProgress.value = progress
-
-  try {
-    await task()
-  } catch (error) {
-    console.error(`[App] ❌ ${status}失败:`, error)
-    throw error // 重新抛出，让外层 catch 处理
-  }
-}
 
 /**
  * 安全执行对象方法
@@ -666,7 +665,6 @@ onMounted(async () => {
   themeStore.init()
   disposeUIStore = uiStore.init()
   favoriteStore.init()
-  void stockCodeManager.getAllStocks()
 
   for (const path of ['raw.platforms', 'raw.platformStatus', 'merged.stocks', 'quotes:batch']) {
     eventUnsubscribers.push(dataLayer.subscribe(path, () => marketSummaryVersion.value++))
@@ -737,7 +735,7 @@ onUnmounted(() => {
   document.removeEventListener('click', handleClickOutside)
   eventUnsubscribers.forEach((fn) => fn())
   eventUnsubscribers.length = 0
-  sectorAnalyzer.destroy?.()
+  loadedSectorAnalyzer?.destroy?.()
 })
 </script>
 

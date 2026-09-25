@@ -7,6 +7,7 @@ import { cacheManager } from '@/services/LRUCache'
 import { debugLog } from '@/utils/logger'
 import { apiService } from './apiService'
 import { dataLayer } from './DataLayer'
+import { KPL_THEME_DATA } from '@/data/kpl_theme_data'
 import type { ThemeBase, ThemeMapping, ThemeMappingData } from '../types/sector'
 
 // 题材映射 LRU TTL 缓存（复用 src/services/LRUCache.ts；10 分钟 TTL，force 绕过）
@@ -18,18 +19,6 @@ export const themeMappingCache = cacheManager.createCache('themeMapping', {
   maxMemory: 4 * 1024 * 1024,
   ttlConfig: { themeMapping: THEME_MAPPING_TTL_MS },
 })
-
-declare global {
-  interface Window {
-    KPL_THEME_DATA?: Array<{
-      ID: string
-      Name: string
-      ZSCode?: string
-      LimitUpCount?: number
-      ChangePercent?: number
-    }>
-  }
-}
 
 class ThemeDataService {
   private static instance: ThemeDataService
@@ -133,17 +122,15 @@ class ThemeDataService {
   }
 
   /**
-   * 从 window.KPL_THEME_DATA 获取题材列表
+   * 从静态题材快照获取题材列表（原 index.html window 桥接已下沉为直接 import）
    */
   private loadKPLThemes(): void {
-    if (typeof window !== 'undefined' && window.KPL_THEME_DATA) {
-      this.kplThemes = window.KPL_THEME_DATA.map((item) => ({
-        id: String(item.ID),
-        name: item.Name,
-        zsCode: item.ZSCode || '',
-      }))
-      debugLog(`[ThemeDataService] 📋 从 KPL_THEME_DATA 加载: ${this.kplThemes.length}个题材`)
-    }
+    this.kplThemes = KPL_THEME_DATA.map((item) => ({
+      id: String(item.ID),
+      name: item.Name,
+      zsCode: item.ZSCode || '',
+    }))
+    debugLog(`[ThemeDataService] 📋 KPL题材数据加载: ${this.kplThemes.length}个题材`)
   }
 
   /**

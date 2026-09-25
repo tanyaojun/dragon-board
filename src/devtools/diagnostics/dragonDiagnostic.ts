@@ -35,7 +35,7 @@
       results.dragonReviewService.leaders = leaders
       results.dragonReviewService.status = '✅'
     } else {
-      console.log('❌ DragonReviewService 未加载')
+      console.log('❌ DragonReviewService 未加载（分析服务为首帧空闲后延迟挂载，请稍后重试）')
     }
 
     // 3. 检查情绪阶段对阈值的影响

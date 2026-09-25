@@ -289,7 +289,7 @@
 import { FUND_SOURCE } from '@/config/fundSources'
 import { debugLog } from '@/utils/logger'
 import TierBadge from '@/components/common/TierBadge.vue'
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted, onUnmounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { Stock, Board } from '../../types'
 import { EventManager } from '../../utils/eventManager'
@@ -300,8 +300,9 @@ import { dataLoader } from '../../services/dataLoader'
 import { candidateJournalService } from '@/services/candidate/CandidateJournalService'
 import { analyzeTradingPoolCandidate } from '@/services/candidate/TradingPoolAnalysisService'
 import { sendHotlistSelection } from '@/services/hotlist/ThsBigOrderFollowBridge'
-import RankTrendPanel from '../../components/panels/RankTrendPanel.vue'
-import RankTrendObservationPanel from '../../components/panels/RankTrendObservationPanel.vue'
+// RankTrend 面板引 echarts，异步加载避免拖累首屏 chunk
+const RankTrendPanel = defineAsyncComponent(() => import('../../components/panels/RankTrendPanel.vue'))
+const RankTrendObservationPanel = defineAsyncComponent(() => import('../../components/panels/RankTrendObservationPanel.vue'))
 import type { ObservationTrack } from '@/services/rankTrend/RankTrendObservationService'
 import {
   getLifecycleTier,
