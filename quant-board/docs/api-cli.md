@@ -2782,13 +2782,17 @@ analyze → 槽位情绪 → EOD）。
 
 ### `GET /api/hotlist-sentiment/limit-stocks`
 
-涨停池成分股明细读口（2026-09-25 新增，热榜情绪面板「市场概览」三容器 → `HotlistLimitStocksPanel`
+涨停池成分股明细读口（2026-09-25 新增，热榜情绪面板「热榜概览」三容器 → `HotlistLimitStocksPanel`
 明细面板消费）。一次返回三份名单，口径唯一来源 = `analysis.hotlist.sentiment` 涨停证据纯函数，
 与 `metrics.limitEvidence` 聚合同源（明细行数可与聚合数对账，生产口径 `top_n=None` → 全池不截断）：
 
 - **`pool` 热榜池涨停**：最新交易日最新帧全池快照行按 `_has_limit_up_evidence` 过滤，行含
   `code/name/rank/change/boardHeight/nearLimitUp/zhaban/mainNet/firstLimitUpTime/lastLimitUpTime/
-  statusLabel`（displayStatus join 注入，异常进 `diagnostics`）；
+  statusLabel`（displayStatus join 注入，异常进 `diagnostics`）。炸板（`zhaban`）口径：
+  优先行上 TS 时代炸板布尔字段，缺失时价格推导兜底（`high ≥ limitUpPrice` 且当前未封住，
+  2026-09-25 修复采集链炸板恒 0）；推导依赖行情行 `high/limitUpPrice`（bridge 行情透传，
+  bridge 离线或停牌股缺失时按未炸计），输入缺失行数由编排层写进情绪文档 `diagnostics`
+  （「炸板推导输入缺失 N 行」），与「真无炸板」可分辨；
 - **`yesterday` 昨日热榜涨停**：上一交易日全池涨停行 × 今日表现 join（判据同
   `build_yesterday_hot_limit_evidence`：`matched/retained/positive/weakened/failedOrWeak/
   todayChange/todayRank`）；

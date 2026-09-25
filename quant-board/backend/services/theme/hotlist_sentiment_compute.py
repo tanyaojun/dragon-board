@@ -402,6 +402,13 @@ class HotListSentimentComputeService:
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
         for issue in previous.get("joinIssues") or []:
             _append_diagnostic(doc, issue)
+        # fail-visible（2026-09-25 review）：炸板价格推导输入缺失行数随文档落库，
+        # 让「真无炸板」与「bridge 行情离线导致输入缺失回 0」可分辨
+        from backend.analysis.hotlist.sentiment import count_zhaban_input_missing
+
+        zhaban_missing = count_zhaban_input_missing(stocks)
+        if zhaban_missing:
+            _append_diagnostic(doc, f"炸板推导输入缺失 {zhaban_missing} 行（无炸板标记且无 high/limitUpPrice，按未炸计）")
         if evidence_slot:
             # 与 run_for_date 同口径：市场证据回退来源随文档落库（fail-visible，不静默近似）
             _append_diagnostic(doc, f"最新帧 limitSummary 缺失，全市场证据回退自 {evidence_slot} 槽位")
@@ -502,6 +509,13 @@ def compute_and_upsert_for_slot(
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
         for issue in previous.get("joinIssues") or []:
             _append_diagnostic(doc, issue)
+        # fail-visible（2026-09-25 review）：炸板价格推导输入缺失行数随文档落库（与
+        # _compute_and_persist / run_for_date 同口径）
+        from backend.analysis.hotlist.sentiment import count_zhaban_input_missing
+
+        zhaban_missing = count_zhaban_input_missing(stocks)
+        if zhaban_missing:
+            _append_diagnostic(doc, f"炸板推导输入缺失 {zhaban_missing} 行（无炸板标记且无 high/limitUpPrice，按未炸计）")
         HotListSentimentService(mongo_db).upsert(doc)
         return {"written": True, "reason": None}
     except Exception as exc:  # 无质量阻断：情绪失败不阻断帧采集

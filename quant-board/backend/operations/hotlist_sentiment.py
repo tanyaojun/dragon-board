@@ -58,6 +58,18 @@ class HotListSentimentBackfillService:
         _append_diagnostic(doc, f"最新帧 limitSummary 缺失，全市场证据回退自 {evidence_slot} 槽位")
 
     @staticmethod
+    def _append_zhaban_input_missing(doc: dict[str, Any], stocks: list[dict[str, Any]]) -> None:
+        # fail-visible（2026-09-25 review）：炸板价格推导依赖行情行 high/limitUpPrice
+        # （bridge 行情透传，bridge 离线时缺失），输入缺失按未炸计回 0——缺失行数随文档
+        # 落库，让「真无炸板」与「输入缺失回 0」可分辨；进 diagnostics（业务分离）
+        from backend.analysis.hotlist.sentiment import count_zhaban_input_missing
+        from backend.services.theme.hotlist_sentiment_compute import _append_diagnostic
+
+        missing = count_zhaban_input_missing(stocks)
+        if missing:
+            _append_diagnostic(doc, f"炸板推导输入缺失 {missing} 行（无炸板标记且无 high/limitUpPrice，按未炸计）")
+
+    @staticmethod
     def _invalidate_series_cache(dataset_id: str) -> None:
         """写库后失效 series 读口缓存（fail-safe，与 services 层同口径；异常只记日志）。"""
         from backend.services.theme.hotlist_sentiment_compute import _invalidate_hotlist_sentiment_cache
@@ -216,6 +228,7 @@ class HotListSentimentBackfillService:
         )
         self._append_join_warning(doc, join_stats)
         self._append_previous_join_issues(doc, previous)
+        self._append_zhaban_input_missing(doc, stocks)
         if evidence_slot:
             # fail-visible：市场证据回退来源随文档落库，不静默近似；进 diagnostics（业务分离）
             self._append_evidence_fallback(doc, evidence_slot)

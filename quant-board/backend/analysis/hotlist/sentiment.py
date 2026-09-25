@@ -206,13 +206,50 @@ def _has_limit_up_marker(stock: dict) -> bool:
     )
 
 
+_ZHABAN_FLAG_KEYS = ("isZhaban", "zhaban", "openedLimit", "limitOpened", "failedLimitUp", "isFailedLimitUp")
+
+
+def _has_stock_zhaban_flag(stock: dict) -> bool:
+    # TS 时代浏览器原料的炸板布尔字段（采集链行不产出）
+    return any(stock.get(key) is True for key in _ZHABAN_FLAG_KEYS)
+
+
 def _has_stock_zhaban_signal(stock: dict) -> bool:
-    # TS: hasStockZhabanSignal
-    return bool(
-        stock.get("isZhaban") is True or stock.get("zhaban") is True
-        or stock.get("openedLimit") is True or stock.get("limitOpened") is True
-        or stock.get("failedLimitUp") is True or stock.get("isFailedLimitUp") is True
-    )
+    if _has_stock_zhaban_flag(stock):
+        return True
+    # 2026-09-25：采集链行（poolSource=autonomous）不产出上述炸板布尔字段（TS 时代浏览器
+    # 原料合同），池内炸板自采集上线起恒 0。补价格推导兜底：盘中触及涨停价（high ≥
+    # limitUpPrice）但当前未封住（change 低于本模块涨停判据）。limitUpPrice/high 缺失时
+    # 保持 False（不伪造）；golden fixture 输入行无价格字段，推导不触碰 golden 期望值。
+    # 两个已知口径边界（review 2026-09-25）：
+    # - 依赖行情行 high/limitUpPrice（bridge 行情透传；Tencent 直连行情行无 high），
+    #   bridge 离线时输入缺失 → 按未炸计回 0，编排层经 count_zhaban_input_missing
+    #   把缺失行数写进文档 diagnostics（「真无炸板」与「输入缺失回 0」可分辨）；
+    # - 「未封住」沿用 check_limit_status 的 ±0.5pp 容差（TS StockUtils 口径继承），
+    #   收盘涨幅落在阈值-0.5pp~阈值 区间的真实炸板股会被判为封住（golden 对齐所需）。
+    limit_price = to_number(stock.get("limitUpPrice"))
+    high = to_number(stock.get("high"))
+    if limit_price <= 0 or high <= 0 or high + 1e-9 < limit_price:
+        return False
+    return not check_limit_status(to_number(stock.get("change")), normalize_code(stock.get("code")))["isLimitUp"]
+
+
+def count_zhaban_input_missing(rows: list[dict]) -> int:
+    """炸板判定输入缺失行数：无炸板布尔标记且缺 high/limitUpPrice（推导无法进行）。
+
+    布尔字段存在（True/False 均可）视为数据源已定性，不计缺失；编排层把计数写进
+    文档 diagnostics（fail-visible，AGENTS 4.0）：bridge 行情离线时价格推导输入缺失，
+    炸板按未炸计回 0——该诊断让「真无炸板」与「输入缺失回 0」可分辨。
+    """
+    missing = 0
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if any(row.get(key) is not None for key in _ZHABAN_FLAG_KEYS):
+            continue
+        if to_number(row.get("limitUpPrice")) <= 0 or to_number(row.get("high")) <= 0:
+            missing += 1
+    return missing
 
 
 def get_stock_limit_signal(stock: dict) -> dict:

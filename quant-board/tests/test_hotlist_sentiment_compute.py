@@ -97,6 +97,70 @@ def test_golden_limit_intersection_board_thresholds():
     assert evidence["intersection"]["top100NearLimitUpCount"] == expected["intersection"]["top100NearLimitUpCount"] == 3
 
 
+def test_zhaban_signal_boolean_flag_precedence():
+    # TS 时代浏览器原料合同布尔字段仍优先（golden fixture 兼容）
+    from backend.analysis.hotlist.sentiment import _has_stock_zhaban_signal
+
+    assert _has_stock_zhaban_signal({"isZhaban": True}) is True
+    assert _has_stock_zhaban_signal({"failedLimitUp": True}) is True
+    # 布尔字段全缺 + 无价格字段（采集链前的输入形态）→ False，不伪造
+    assert _has_stock_zhaban_signal({"change": 5.0}) is False
+
+
+def test_zhaban_signal_price_derivation():
+    # 2026-09-25 采集链行无炸板布尔字段：high ≥ limitUpPrice 且当前未封住 → 炸板
+    from backend.analysis.hotlist.sentiment import _has_stock_zhaban_signal
+
+    touched_open = {"code": "000001", "high": 11.0, "limitUpPrice": 11.0, "change": 2.0}
+    assert _has_stock_zhaban_signal(touched_open) is True
+    # 触及但当前仍封住（change ≥ 阈值-容差）→ 不算炸板
+    touched_sealed = {"code": "000001", "high": 11.0, "limitUpPrice": 11.0, "change": 9.98}
+    assert _has_stock_zhaban_signal(touched_sealed) is False
+    # 未触及涨停价（high < limitUpPrice）→ 不算
+    not_touched = {"code": "000001", "high": 10.5, "limitUpPrice": 11.0, "change": 2.0}
+    assert _has_stock_zhaban_signal(not_touched) is False
+    # 字段缺失/非法 → False
+    assert _has_stock_zhaban_signal({"code": "000001", "high": 11.0, "change": 2.0}) is False
+    # 创业板 20% 阈值按 code 判定：触及 20% 价后回到 11% → 炸板
+    gem = {"code": "301001", "high": 12.0, "limitUpPrice": 12.0, "change": 11.0}
+    assert _has_stock_zhaban_signal(gem) is True
+    # 北交所 30% 阈值：触及 30% 价后回落到 +15% → 炸板；贴近阈值 (+29.9%) 判封住
+    bj_open = {"code": "830001", "high": 13.0, "limitUpPrice": 13.0, "change": 15.0}
+    assert _has_stock_zhaban_signal(bj_open) is True
+    bj_sealed = {"code": "830001", "high": 13.0, "limitUpPrice": 13.0, "change": 29.9}
+    assert _has_stock_zhaban_signal(bj_sealed) is False
+
+
+def test_count_zhaban_input_missing():
+    # 炸板推导输入缺失统计（bridge 离线时 high 缺失 → 编排层写 diagnostics，fail-visible）
+    from backend.analysis.hotlist.sentiment import count_zhaban_input_missing
+
+    rows = [
+        {"code": "000001", "change": 5.0},                                        # 无标记无价格 → 缺失
+        {"code": "000002", "high": 11.0, "limitUpPrice": 11.0, "change": 2.0},    # 价格齐全 → 不缺
+        {"code": "000003", "isZhaban": False, "change": 5.0},                     # 布尔已定性 → 不缺
+        {"code": "000004", "isZhaban": True},                                     # 布尔定性 → 不缺
+        {"code": "000005", "high": 0, "limitUpPrice": 0, "change": 5.0},          # 非法价格 → 缺失
+        "not-a-dict",
+    ]
+    assert count_zhaban_input_missing(rows) == 2
+    assert count_zhaban_input_missing([]) == 0
+    assert count_zhaban_input_missing(None) == 0
+
+
+def test_limit_intersection_counts_price_derived_zhaban():
+    # intersection 聚合消费价格推导：1 涨停 + 1 炸板 + 1 未触板
+    rows = [
+        {"code": "000001", "name": "甲", "change": 9.98, "compRank": 1},
+        {"code": "000002", "name": "乙", "change": 3.0, "compRank": 2, "high": 11.0, "limitUpPrice": 11.0},
+        {"code": "000003", "name": "丙", "change": 5.0, "compRank": 3, "high": 10.0, "limitUpPrice": 11.0},
+    ]
+    evidence = build_limit_evidence(rows, [], None, None)["intersection"]
+    assert evidence["top100LimitUpCount"] == 1
+    assert evidence["top100ZhabanCount"] == 1
+    assert evidence["top100ZhabanShare"] == pytest.approx(1 / 3)
+
+
 def test_golden_market_evidence_passthrough():
     case = get_case(load_golden_cases(), "热榜涨停证据只使用热榜交集，全市场数据仅作为背景")
     rows = sort_rows(case["input"]["stocks"])
