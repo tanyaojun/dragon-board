@@ -88,7 +88,11 @@ from backend.operations.optimize_gate_denoise_parameters import REPORT_DIR, eval
 
 # 锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后）；
 # pre-fund10 代际锚 = {"decision": 0.1044, "oos1": 0.0918, "oos2": 0.0933}（23.9.1，方案 B harness 口径）
-ANCHOR_BASELINE: dict[str, float] = {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+# 锚单一事实源（2026-09-25 B-202610 演练落地）：硬编码 fund10 代际冻结锚改为运行时读
+# 锚注册表 currentGeneration（gen-2026-10-b202610）——注册表更新后自动跟随（审计 D3）。
+from backend.operations.harness_common import baseline_anchor
+
+ANCHOR_BASELINE: dict[str, float] = baseline_anchor()[1]
 
 # 引擎当前默认（config.py:167）；E=index 5=1.0 收口免扫（hard 门早退惰性，soft 模式时生效）
 BASE_VOTE_STRENGTHS = [1.2, 1.0, 0.8, 0.5, 1.0, 1.0]

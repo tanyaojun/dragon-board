@@ -14,6 +14,9 @@ Trial 组（B-202610 前置修复后口径，2026-09-25；原 2026-09-13 用户�
     combo_all（三参 + persist，检测跨维度交互）
   - P2 A/B：persist_on（crossSectionPersistFrames=3，阶段 18 H1成立/H2证伪后的组合面复验）
   - MA 补验：ma_join / ma_full（阶段 17 口径）
+  - B-202610 阶段 2/3 增补（2026-09-25）：R2_revert（三轴票权还原 1.0）、
+    R3_revert（五因子权重还原）、O3_vsb070（B 档票强度 0.7）、O5_buyThr018
+    （buyScoreThreshold 0.18）——default_review 回退 trial 与观察池候选同卡判定
 
 Track 2 判定卡（简化流程：一次 evaluate_gate 自动产出全部口径，替代人工拼表）：
   C1 决策窗 synergy saEx 相对改善 ≥ +3%（相对 baseline，baseline saEx>0）
@@ -101,6 +104,28 @@ TRIALS: list[dict[str, Any]] = [
         "key": "ma_full",
         "desc": "MA 补验：决策分量 + trend_buy 参与位全开（阶段 17 接线零增量复核）",
         "overrides": {"maWeight": 0.25, "maCrossTrendBuy": True},
+    },
+    # ── B-202610 阶段 2/3 增补 trial（2026-09-25 演练；default_review 回退 trial 判定卡读数
+    #    = 回退相对当前默认栈的效应：C1/C2 全过=回退更优提示回退，反之保持）──
+    {
+        "key": "R2_revert_combo_three_quarter",
+        "desc": "R2 回退：res/rank/cs 三轴票权 0.75→1.0（§23.9.1 combo_three_quarter 单项还原）",
+        "overrides": {"tierSynergyResonanceVote": 1.0, "tierSynergyRankVote": 1.0, "tierSynergyCrossSectionVote": 1.0},
+    },
+    {
+        "key": "R3_revert_ts_weights",
+        "desc": "R3 回退：五因子权重还原 0.24/0.20/0.16/0.20/0.20（§22.8 p2_aggressive 单项还原）",
+        "overrides": {"directionWeight": 0.24, "accelerationWeight": 0.20, "crossWeight": 0.16, "macdWeight": 0.20, "maWeight": 0.20},
+    },
+    {
+        "key": "O3_vsb070",
+        "desc": "O3 观察池：tierSynergyVoteStrengths[2] B 档票强度 0.8→0.7（§26.4 Track 1 +0.9% 中性）",
+        "overrides": {"tierSynergyVoteStrengths": [1.2, 1.0, 0.7, 0.5, 1.0, 1.0]},
+    },
+    {
+        "key": "O5_buyThr018",
+        "desc": "O5 观察池：buyScoreThreshold 0.12→0.18（§13.3 两窗同向一窗反向）",
+        "overrides": {"buyScoreThreshold": 0.18},
     },
 ]
 

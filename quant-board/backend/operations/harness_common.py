@@ -330,3 +330,31 @@ def assert_known_answer() -> None:
     issues = known_answer_issues()
     if issues:
         raise RuntimeError("已知答案校验失败（先修 harness 再跑全窗）：" + "; ".join(issues))
+
+
+# ── 锚单一事实源（2026-09-25 B-202610 演练落地，审计 D3 统一锚纪律方向）──
+
+_ANCHOR_REGISTRY_PATH = Path(__file__).resolve().parents[2] / "config" / "ranktrend-anchors.json"
+
+
+def baseline_anchor() -> tuple[str, dict[str, float]]:
+    """从锚注册表 config/ranktrend-anchors.json 读取 currentGeneration 的 baseline 锚。
+
+    替代 10 处硬编码 ANCHOR_BASELINE（fund10 代际冻结值）的双源模式：注册表更新
+    （如 10/3 正式复跑重跑 oos2 全月锚）后全部 harness 自动跟随，消除"注册表与
+    harness 硬编码锚各自演进"的口径漂移面。锚值缺失（None，窗口未建锚）不进入
+    返回 dict——消费方按各自窗口键 lookup，未建锚窗口由调用方决定跳过校验。
+    """
+    registry = json.loads(_ANCHOR_REGISTRY_PATH.read_text(encoding="utf-8"))
+    gen = registry["currentGeneration"]
+    for entry in registry["generations"]:
+        if entry["id"] == gen:
+            anchors = {
+                window: float(value)
+                for window, value in (entry.get("anchors") or {}).items()
+                if value is not None
+            }
+            if not anchors:
+                raise KeyError(f"锚注册表 currentGeneration={gen} 的 anchors 全为空/None，无法校验 baseline")
+            return str(entry.get("id")), anchors
+    raise KeyError(f"锚注册表 currentGeneration={gen} 未在 generations 中找到")

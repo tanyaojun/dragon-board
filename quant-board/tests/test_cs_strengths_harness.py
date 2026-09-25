@@ -78,8 +78,14 @@ def test_no_uniform_scaling_only_trials_beyond_pair():
 
 
 def test_baseline_anchor_constant():
-    """锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一事实源（2026-09-25）：ANCHOR_BASELINE 运行时读锚注册表 currentGeneration，
+    不再硬编码代际值——注册表更新（如 10/3 全月重跑 oos2 锚）后自动跟随。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    gen, anchors = baseline_anchor()
+    assert gen == "gen-2026-10-b202610"
+    assert ANCHOR_BASELINE == anchors
+    assert ANCHOR_BASELINE["decision"] == 0.1323  # 演练锚（决策窗封闭，正式不变）
 
 
 def test_assert_overrides_applied_rejects_unknown_field():

@@ -53,11 +53,14 @@ sys.path.insert(0, r"D:\dragon-board\quant-board")
 from backend.operations.optimize_gate_denoise_parameters import REPORT_DIR, evaluate_gate
 from backend.operations.optimize_resonance_parameters import _tier_summary
 
-WINDOWS: dict[str, tuple[str, str]] = {
-    "decision": ("2026-04-15", "2026-07-31"),
-    "oos1": ("2026-08-15", "2026-08-31"),
-    "oos2": ("2026-09-01", "2026-09-12"),
-}
+# 窗口单一事实源派生（2026-09-25 B-202610 演练，审计 D1 修复）：历史手写副本
+# oos2=(09-01, 09-12) 截断口径与 data_windows.WINDOWS（oos2 全月 09-30）同名不同义，
+# 本源头切换为单一源派生；键集合保持 decision/oos1/oos2 不变（下游 for-in 行为范围
+# 不扩）。历史报告引用旧"oos2"读数按 09-12 截断口径解读；正式批次重跑前删除旧
+# oos2 缓存报告（截断窗 trial 会按窗名冒充全月缓存）。
+from backend.optimization.data_windows import WINDOWS as _STANDARD_WINDOWS
+
+WINDOWS: dict[str, tuple[str, str]] = {k: _STANDARD_WINDOWS[k] for k in ("decision", "oos1", "oos2")}
 
 WEIGHT_FIELDS = ("directionWeight", "accelerationWeight", "crossWeight", "macdWeight", "maWeight")
 

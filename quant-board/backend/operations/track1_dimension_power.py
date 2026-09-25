@@ -38,7 +38,11 @@ from backend.operations.track1_lifecycle_gate_trade import _trade_metrics
 # 锚（审计 M4）代际注记（2026-09-15 fund10 落默认）：baseline = post-fund10 基线锚
 # （报告 baseline-anchor-post-fund10.json；pre-fund10 代际 = 0.1044/0.0918/0.0933）；
 # w1_old = 24.3 a1 实测（pre-fund10 代际，重跑漂移时按代际漂移处理——警告 + staleAnchor，不阻断）
-ANCHOR_BASELINE: dict[str, float] = {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+# 锚单一事实源（2026-09-25 B-202610 演练落地）：硬编码 fund10 代际冻结锚改为运行时读
+# 锚注册表 currentGeneration（gen-2026-10-b202610）——注册表更新后自动跟随（审计 D3）。
+from backend.operations.harness_common import baseline_anchor
+
+ANCHOR_BASELINE: dict[str, float] = baseline_anchor()[1]
 ANCHOR_W1_OLD: dict[str, float] = {"decision": 0.0939, "oos1": 0.0854, "oos2": 0.0737}
 _OVERRIDE_MISSING = object()
 

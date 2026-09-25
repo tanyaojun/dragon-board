@@ -50,7 +50,11 @@ from backend.operations.evaluate_ts_factor_weights import WINDOWS, _rel_improve
 from backend.operations.optimize_gate_denoise_parameters import REPORT_DIR, evaluate_gate
 
 # 锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后实测；报告 baseline-anchor-post-fund10.json）
-ANCHOR_BASELINE: dict[str, float] = {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+# 锚单一事实源（2026-09-25 B-202610 演练落地）：硬编码 fund10 代际冻结锚改为运行时读
+# 锚注册表 currentGeneration（gen-2026-10-b202610）——注册表更新后自动跟随（审计 D3）。
+from backend.operations.harness_common import baseline_anchor
+
+ANCHOR_BASELINE: dict[str, float] = baseline_anchor()[1]
 TRIGGER_RATE_FLAG = 0.035  # S+A 触发率旗标（阶段 22.6 观察线）
 C5_FLIP_RISE_FLAG = 0.01  # C5 附加卡：veto/bd 翻转升幅对照线（§19.3）
 A_TIER_SAMPLE_REFERENCE = 500  # 长测计划 §11.5 A 档触发线（fund10 前旧口径，首跑重测）

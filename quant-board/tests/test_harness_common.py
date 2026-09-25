@@ -167,3 +167,34 @@ def test_assert_not_frozen_blocks_final_frames_for_scan():
         assert_not_frozen([final_frame], "scan")
     assert_not_frozen([final_frame], "report")  # 报告用途豁免
     assert_not_frozen([{"tradingDate": "2026-07-31"}], "scan")  # decision 尾帧安全
+
+
+def test_baseline_anchor_reads_registry():
+    """锚单一事实源（2026-09-25）：baseline_anchor 运行时读注册表 currentGeneration。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    gen, anchors = baseline_anchor()
+    assert gen == "gen-2026-10-b202610"
+    assert anchors["decision"] == 0.1323 and anchors["oos1"] == 0.0862
+    assert anchors["oos2"] == 0.0998 and anchors["oos2u"] == 0.0812  # 演练口径，10/3 全月后注册表更新即自动跟随
+    assert all(v > 0 for v in anchors.values())
+
+
+def test_baseline_anchor_missing_generation_raises(tmp_path):
+    """currentGeneration 指向不存在的代际时 fail-fast，不许静默用旧锚。"""
+    import json as _json
+    from unittest import mock as _mock
+
+    import backend.operations.harness_common as hc
+
+    registry = _json.loads(hc._ANCHOR_REGISTRY_PATH.read_text(encoding="utf-8"))
+    registry["currentGeneration"] = "gen-not-exist"
+    fake = tmp_path / "anchors.json"
+    fake.write_text(_json.dumps(registry), encoding="utf-8")
+    with _mock.patch.object(hc, "_ANCHOR_REGISTRY_PATH", fake):
+        raised = False
+        try:
+            hc.baseline_anchor()
+        except KeyError:
+            raised = True
+    assert raised, "未知代际应 raise 而非静默返回旧锚"

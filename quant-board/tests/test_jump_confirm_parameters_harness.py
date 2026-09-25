@@ -26,8 +26,12 @@ from backend.operations.evaluate_jump_confirm_parameters import (
 
 
 def test_baseline_anchor_constant():
-    """锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后，主代理实测 oos2=0.0951）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一事实源（2026-09-25）：运行时读锚注册表 currentGeneration，不再硬编码代际值。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    gen, anchors = baseline_anchor()
+    assert gen == "gen-2026-10-b202610"
+    assert ANCHOR_BASELINE == anchors
 
 
 def test_jump_trial_table_completeness():
@@ -127,7 +131,7 @@ def test_run_window_executes_extra_trial(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "backend.operations.evaluate_jump_confirm_parameters.evaluate_gate",
-        lambda config, frames: {"synergy": {"saEx": 0.112, "passHard": True}},  # decision 锚值，避免误触漂移守卫
+        lambda config, frames: {"synergy": {"saEx": 0.1323, "passHard": True}},  # decision 锚值（gen-2026-10-b202610），避免误触漂移守卫
     )
     specs = build_specs('[{"key":"grid_chg3_vr12","desc":"交互精扫探针","overrides":{"jumpConfirmChangeMin":3.0,"jumpConfirmVolumeRatioMin":1.25}}]')
     keys = [s["key"] for s in specs]
