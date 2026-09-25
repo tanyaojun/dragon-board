@@ -1,7 +1,8 @@
 # RankTrend 202610 复跑批次方案（B-202610）
 
 **状态**：口径已裁决（A2/B13 定案），待 10 月上旬 9 月数据全量落库后执行。
-**性质**：系统性复跑方案——终结"边开发边回测"的碎片化模式。本批**零默认值预判、零代码结构改动**，全部产出为判定与登记；唯一允许的代码动作是 harness 的 trial 行追加。
+**2026-09-25 增补**：批次清单扩充——新增 R6 / O9-O11 / N8-N14 与阶段 0 前置修复（0.4-0.6）。来源 = 9/16 方案定稿后 9/17-9/25 四条证据线（卖点扫描阶段 A/B 收口、harness 39 文件审计、P_repool 中期扫描、引擎性能优化收口）+ L1 台账缺口核对，增补依据与明确排除项见 §9；观察池 YAML 已同步登记。
+**性质**：系统性复跑方案——终结"边开发边回测"的碎片化模式。本批**零默认值预判、零代码结构改动**，全部产出为判定与登记；唯一允许的代码动作是 harness 的 trial 行追加（前置修复 0.4 属守卫/口径修正，不改引擎行为）。
 **事实源**：`ranktrend-longterm-backtest-plan.md` 阶段 0-26 写入的结论与锚读数（本方案不依赖 `data/reports/` 本地报告产物）。
 **统一流程**：`skills/ranktrend-signal-research/SKILL.md`（合并原 `ranktrend-tier-longterm-test` 与 `four-dim-algorithm-research`）。
 
@@ -56,10 +57,19 @@ warm-up  : 各窗前 29 帧无信号（引擎设计行为），不计判定样�
 ### 阶段 0｜批次前准备（半天）
 
 > **执行状态（2026-09-16）**：0.2/0.3 已完成——窗口常量已推进（`data_windows.py` WINDOWS 单一事实源新增 decision/oos1/oos2/oos2u 四窗，TDD 7 passed；`evaluate_track2_candidates` 已改用单一源 + C2 判定读数切换 oos2u）；锚注册表 `config/ranktrend-anchors.json`、观察池 `config/ranktrend-observation-pool.yaml`、盘点脚本 `operations/diagnose_batch_data_quality.py` 已落地。0.1 三项已出中期版（`data/reports/batch-data-quality.json`）：9/1-9/2 槽位情绪缺文档已闭合（集合中两日有文档，内容是否 EOD 回退版待批次核）、LOW 帧日 8 个（04-15 首批日 + 7 月股灾月 6 日 + 9/11 收 6 帧，与 §20 一致）、ATR oos1 unknown 67.7% 与 §26.7 逐位复现；9-16 之后帧的全月版 10 月复跑同一脚本。
+>
+> **执行状态增量（2026-09-25）**：0.1-0.3 维持；**0.4 三项前置修复已完成**（TDD，新增 tests/test_track2_candidates_harness.py / test_ma_factor_contribution_harness.py / test_core_signal_parameters_harness.py 共 19 用例全绿，相邻 harness 测试 48 passed 无回归）：① evaluate_track2_candidates 补 BASELINE_ANCHORS（gen-2026-10-b202610 decision 0.1323/oos1 0.0862，trial 级即时 raise）+ `_assert_overrides_applied` 逐键断言（决策五权重归一化字段豁免值比较，见下）+ fund10_over2 重定义为仅 over 轴 + 新增 fund10_revert 对照臂（O2 baselineNote 落地）；② evaluate_ma_factor_contribution baseline 更正五因子口径 + 补 override 守卫 + oos2 截断口径源码标注；③ optimize_core_signal_parameters evaluate 返回体补 volumePrice 键 + `_fmt` 维度映射缺键 fail-fast（修复 resonance 冒充量价）。**执行注意**：守卫实测发现 from_patch 对决策五权重有归一化语义（patch 0.25 → 实际 0.25/总和解 0.2841），守卫对 `_DECISION_WEIGHT_FIELDS` 豁免值比较只断言字段存在——后续 harness 写权重 trial 时同样适用。0.5 观察池补登记已完成（同日）；0.6 待批次数据盘点时执行。
 
 1. 数据质量只读盘点（不阻断，打标记）：ATR unknown 率（§26.10.4：oos 两窗已修复至 98%+，9 月全月重测）、amount 可算率（§26.6：decision 窗 6.12%）、槽位情绪覆盖（9/1-9/2 stale 回退）、缺帧清单、warm-up 有效帧数——作为批次报告第一章；
 2. 窗口常量推进：oos2 按 §2.1 定案更新（ WINDOWS 单点修改 + 全部受影响锚声明失效）；
-3. 建立锚注册表 `anchors.json` 与结构化观察池 `observation-pool.yaml`（首次落地，见 §8）。
+3. 建立锚注册表 `anchors.json` 与结构化观察池 `observation-pool.yaml`（首次落地，见 §8）；
+4. **批次前置修复三项**（2026-09-21 harness 审计 §7.2，`harness-audit-20260921.md`）：
+   - `evaluate_track2_candidates`（本批判定器）：补 baseline 锚断言 + `_assert_overrides_applied` 逐键断言；fund10_over2 trial 的 AbnormalFundRatio 轴已落默认（10.0=现值）不再是扰动轴，须重定义扰动轴或显式标注"本 trial 仅测 over 轴"，否则 O2 判定卡失真；
+   - `evaluate_ma_factor_contribution`：baseline desc 仍写"四因子"（maWeight 0.37 已于 §22.8 落默认）——更正五因子口径，或固定 patch 复现四因子基线（R3/R4 回退判读依赖 baseline 语义正确）；
+   - `optimize_core_signal_parameters`：`_fmt` 在 focus_dim="volumePrice" 时打印 resonance 冒充、evaluate 返回缺 volumePrice 键；
+   - 关联违规（审计 A3，未列入前置三项）：`optimize_lifecycle_thresholds` 的 `excessMeanFutureReturn or 0` 把缺失伪装成 0 参与单调性判定——**批次涉及 lifecycle 阈值重扫（O6/N10）前必须修**；
+5. **观察池补登记**：exit-rules-scan 阶段 C 第 3 项遗留动作（trailing 重扫/断板观察/tp×be 落默认复核原不在 YAML）+ L1 台账缺口项，已于 2026-09-25 登记进 `config/ranktrend-observation-pool.yaml`（R6/O9-O11/N9-N14；N8 复用已有 P_repool_timeline_gap 条目）；
+6. **数据质量盘点补充两项标记**：① 采集池代际——9 月内快照采集池改造（超集切换）前后池构成差异，批次报告披露切换日期与影响帧范围；② 历史读数口径——operations 下 5 处 WINDOWS 手写副本的"oos2"为 09-01~09-12 截断口径（evaluate_ts_factor_weights 源头 + 4 反向 import 文件 + diagnose_regime_saex 本地副本），批次报告引用历史"oos2"读数时按截断口径解读（审计 §5.1/D1）。
 
 ### 阶段 1｜新代际锚建立
 
@@ -81,6 +91,9 @@ warm-up  : 各窗前 29 帧无信号（引擎设计行为），不计判定样�
 | R3 | 五因子权重 p2_aggressive（0.06/0.04/0.24/0.29/0.37） | 还原 0.24/0.20/0.16/0.20/0.20 | 9 月全月判定卡 + S+A 触发率监控（持续 <3.5% 评估 buyScoreThreshold 微调）+ retreat 桶 −0.045 代价监控 | §22.8/§22.6 |
 | R4 | ma_join 五因子合同 | maWeight→0 | §21.6 三条回退触发核对：① 9 月窗 synergy saEx 低于旧 baseline 口径（绝对差<0）且 10 月窗连续为负；② WP3.2 翻转率异常上升（veto/bd > 旧口径 +0.01）；③ 交易层复核负偏离 | §21.6 |
 | R5 | Jump 确认门修复 | （无回退项） | 以阶段 1 跨代际对照替代；三窗确认降级率与 saEx 收益 | §26.7 |
+| R6 | 卖点默认 tp0.06×be0.02（takeProfit 9.99→0.06 + breakevenTrailing 0.02，2026-09-23 落默认，阶段 A 终局 wrxpf 0.9756=基线 2.02 倍） | 还原 takeProfit=9.99 + breakevenTrailing=False | 9 月窗 Track 1 复核（wrxpf + 30 笔门槛，隔离 runner `exit-scan-trial-runner.py`）；**decision 窗逐位=还原口径属预期**（市场状态依赖四次复现，改善全部来自 8 月中旬后样本外），判定看 oos2/oos2u 保护效应延续性；显著负偏离才评估回退 | exit-rules-scan-plan 阶段 A 终局（commit b251cf1c）；2026-09-25 增补 |
+
+注：R6 为 trade 层参数（`V5_LIFECYCLE_FUSION_TRADE_DEFAULTS`），不影响信号层 saEx 锚（gen-2026-10-b202610 预建于 9/16，在其落默认之前，代际关系不受影响）；落默认时间晚于本方案定稿，故为增补项。
 
 Track 1 交易复核只对判定卡亮红灯的项跑（wrxpf 主窗 + 30 笔门槛 + 入场集合漂移卡）。落默认决策归用户，本批只产出"保持/回退"建议。
 
@@ -96,6 +109,9 @@ Track 1 交易复核只对判定卡亮红灯的项跑（wrxpf 主窗 + 30 笔门
 | O6 | MidLongCommitmentMin 剂量曲线 | 9 月全月重扫——oos2（9/1~9/12）+3.5~+7.1% 信号若在全月复现且 decision 窗读数抬升，按 Track 2 流程重出提案 | §23.7 |
 | O7 | crossSection A 档复核 | A 档样本 >500 + 新窗口 synergy 稳定 >0.05（§11.5 触发线） | §10.4/§11.5 |
 | O8 | 双强共振 rt=A×cs=A | 按 §2.2 合并滚动统计口径重算（合并 283+9 月新增），报告披露合并 n、代际构成与方向一致性；证伪三条件见 §2.2 | §15.4 |
+| O9 | trailing stop 修正档位重扫 | 批次 4 四档 (activate,drawdown)=(0.06,0.6)~(0.03,0.3) 与 tp×be 基线逐位零增量系**档位设计失误**（be0.02 已在场，dd 0.3~0.6 需峰值 +43%~+150%，远超窗口最大浮盈）；有意义空间 dd 0.03~0.08 × activate 0.04/0.05（3-5 trial）；**是否批准重扫待用户决策**；若上线需与 tp×be 同窗对比 | exit-scan-batch4-verdict / exit-rules-scan-plan 批次 4 小节；2026-09-25 增补 |
+| O10 | 断板卖出 breakBoardExit 触发观察 | B2 已实现+单测、默认关；阶段 A 全窗 43 笔持仓 0 触发（样本不存在≠无效，fail-visible 不下结论）；批次复跑顺带核对 9 月窗是否出现"断板" reason 桶，出现即自动进入分桶观察 | exit-scan-batch4-verdict；2026-09-25 增补 |
+| O11 | volumePriceMildRatio 1.05 | L1 §14.4 OBSERVE（−2.7/+7.7/+14.7% 跨窗矛盾），原登记无复验安排——本批补登记做轻量复扫或维持挂起裁决（低优先） | L1 §14.4；2026-09-25 增补 |
 
 ### 阶段 4｜待立项评估
 
@@ -108,13 +124,21 @@ Track 1 交易复核只对判定卡亮红灯的项跑（wrxpf 主窗 + 30 笔门
 | N5 | MA 金叉事件级加分项评估 | 事件级用法（非权重、非 trend_buy 接线位）从未评估 | §17.7/§19.4 P3 |
 | N6 | regime 门禁扩展消费非 strong 状态时 α/迟滞重扫 | 条件触发型，本批仅核对触发条件是否成立 | §12.4 |
 | N7 | res NaN median 拦截帧 H2 线索 | 代码级修复候选（非阈值空间），只登记不实施 | §25.6.5 |
+| N8 | P_repool_timeline_gap oos2u 终判 | 已立项（观察池 P_repool_timeline_gap 条目）：中期双窗方向性支持 floor3（insufficient 14.2%→8.3%，A 档质量不劣于基线，H0 被双窗数据推翻）；终判 = 补 h8 口径 + B 档样本量核对 + 幸存者偏差标注 + oos2u A 档优势稳定性；天然 saEx 盲区候选（样本集扩张而非阈值迁移）→ Track 2 判定卡 + 盲区检查 + **Track 1 终判（wrxpf + 30 笔门槛）**全链必跑；通过则 degradedSampleFloor 3 落默认（一次一候选 + strategy_version 提升）；参数 α（window_size 50→280）视 β 终判结果决定 | ranktrend-repool-timeline-gap-research-proposal §5/§8；2026-09-25 增补 |
+| N9 | 组 5 参数 rolling walk-forward 重验 | L1 §6 挂起项：9 月数据累积后对组 5（G1-G7/方向 A-C，含 regimeGateStrongBan 等）重新走 rolling walk-forward（A/B 纪律）；含 WP1c lookahead 修复（2026-09-06）后的组 5 参数结论重验；momentumDirectionThreshold 0.2 / momentumSignalShareMin 0.6 定值窗口含 8 月冻结帧的轻量复核并入本项；工作量较大，批次评估立项（可拆下一批） | L1 §6；2026-09-25 增补 |
+| N10 | lifecycleConfirmFrames（K）结论滚动重验 | L1 §7 挂起项：K=1 证伪结论待 9 月数据按 §6 滚动重验（轻量） | L1 §7；2026-09-25 增补 |
+| N11 | takeProfit 0.04/0.05 边界复核（可选） | 批次 1 判定卡建议的 2 trial 轻量确认更紧档峰值位置（0.06 单调方向与 oos 双窗支持已足够支撑落默认，不构成阻塞） | exit-scan-batch1-verdict / exit-rules-scan-plan GAP-2；2026-09-25 增补 |
+| N12 | HighRisk pressure 门变活跃核对 | 条件触发型：门 0.75 现基本不触发；若 risk 链改动致变活跃 → 重扫 HighRisk 三参数 + riskPressureWeights；批次仅核对触发条件（与 N6 同类） | L1 §11 复核触发②/§23.4；2026-09-25 增补 |
+| N13 | crossSectionPersistFrames 重评 | H1 成立、H2 证伪，0=关闭；"待投票语义拆分后重评"——前置条件（投票语义拆分）未立项，本批仅登记维持关闭，长期挂起 | L1 §8 / longterm §18；2026-09-25 增补 |
+| N14 | strong 双峰"分状态门控"设计评审 | P3 前置标定（strong 线位移动分离塌陷/强劲双峰）的服务对象（serve P4 分状态门控，长测 §14.4 后续课题）；设计类课题，批次评估是否立项 | ranktrend-param-gap-scan-plan P3 关联课题；2026-09-25 增补 |
 
 ### 阶段 5｜批次收口
 
 1. 单一批次报告：`data/reports/b-202610/`（判定卡汇总表 + trial 明细 + 数据质量章 + 代际对照章 + oos2/oos2u 双披露章）；
 2. 长测文档追加"阶段 27：9 月全月复验批次 B-202610"（含证伪/否定结论）；
 3. L1 台账（`ranktrend-l1-param-ledger.md`）、观察池 YAML、锚注册表三件同步；
-4. 全程纪律：8 月 FINAL 冻结、一次一候选落默认（每项独立 commit）、判定卡自动产出、负贡献即回退。
+4. 台账落痕顺带核对：P1-b persist 交叉对照 trial（crossSectionPersistFrames 置 3，gap-scan 方案 P1-b）结果在台账侧无记载，收口时核对是否实际执行；
+5. 全程纪律：8 月 FINAL 冻结、一次一候选落默认（每项独立 commit）、判定卡自动产出、负贡献即回退。
 
 ## 5. 判定与落默认纪律（本批适用）
 
@@ -140,7 +164,10 @@ Track 1 交易复核只对判定卡亮红灯的项跑（wrxpf 主窗 + 30 笔门
 1. **统计效力**：本批实质只有 1 个全新 OOS 窗（9 月），判定卡 C2 统计效力薄；warm-up 后 9 月有效交易日约 15-16 天，须逐项披露样本量；
 2. **循环性**：已落默认项的"落默认后复核"天然存在"用同一段数据验证自己"的循环——以回退 trial 设计（R1-R4）+ oos2u 未消费子窗缓解，不能消除，批次报告如实标注；
 3. **代际断裂**：阶段 0-26 全部观察池证据属断线代际，本批为首次新代际全量重判；O2 等候选的对照基线必须显式声明（fund10 回退口径），否则被已落默认的 fund10 污染；
-4. **执行成本**：新代际下历史 trial 全部过期，全量重跑无 resume 缓存可用，按小时级全量 replay 预算（与报告产物无关，报告不作为对照物——对照物是文档代际锚）。
+4. **执行成本（2026-09-24 引擎性能优化收口后更新，handoff 文档实测）**：全窗 dry-run 单 trial 318-380s（≈5.3-6.3 分钟，含 ~70s frames 加载）；持久化全窗 run 839s≈14 分钟（内存充裕时段）；6-trial 批量 `--batch --dry-run --local-frames` 实测 581s≈9.7 分钟。信号缓存仅 trade_config 恒定时命中，B-202610 多为 strategy 层参数扫描基本无缓存命中，按"每 trial dry-run 5.3-6.3 分钟 / 持久化 ~14 分钟 + 首次 frames 加载"估算。**判定留痕口径**：dry-run summary JSON（`<runid>-summary.json`）即可作 trial 证据；持久化落库 run 仅 Track 1 完整交易复核需要时使用。报告产物不作为对照物——对照物是文档代际锚；
+5. **引擎版本注记**：批次执行引擎为 9/23 性能优化后引擎（a50ab16d + f5930be6），与 exit-scan 锚逐位一致三重实证；对本批代际锚的关系由阶段 1 锚复现自然校验（decision 0.1323 逐位复现在案），批次报告注明引擎版本；
+6. **市场状态依赖披露义务**：卖点默认 tp×be 的全部改善来自 8 月中旬后样本外（decision 窗逐位=基线，四次独立复现）——批次报告判定卡须携带该披露，decision 窗零改善属预期非失效信号；
+7. **执行资源纪律**（2026-09-23 内存冻结事故沉淀）：多 trial 扫描一律走 CLI/隔离 runner（`--batch` 范式），禁止经 8000 API 连续跑批；禁止并行 ≥2 个回测进程；交易时段（9:30-11:30 / 13:00-15:00）不排大批次、不重启 8000。
 
 ## 8. 平台化挂钩（本批沉淀 / 批次后立项）
 
@@ -154,3 +181,47 @@ Track 1 交易复核只对判定卡亮红灯的项跑（wrxpf 主窗 + 30 笔门
 4. **批次报告归档**：`data/reports/<batch-id>/` 目录纪律，归档最小集 = 判定卡汇总 + 锚读数 + trial 参数 + 代码版本。
 
 **批次后立项**（不在本批关键路径）：公共 harness 库抽取（范式 8 项：WINDOWS import 零日期字面量、`_assert_overrides_applied` 逐键断言、`assert_not_frozen` 无条件执行含 resume 路径、trial 级缓存 resume、`_save` 剥离 `__frames__`、锚 trial 级即时 raise、`--extra-trial/--extra-arm`、M2 样本门槛）、判定卡单一实现、Track 1/Track 2 候选级统一 runner（一 trial 出双轨）、窗口 registry 带消费状态、月度批次自动汇总。
+> 2026-09-21 更新：公共 harness 库已提前落地（`backend/operations/harness_common.py`，commit ec46ef5e，39 文件审计产物，五类风险各对应一能力）；批次内新/改 harness 应基于公共库。其余（判定卡单一实现、统一 runner 等）维持批次后立项，见 §9.3。
+
+## 9. 2026-09-25 增补：9 月长测收尾项全量清点（批次清单扩充依据）
+
+本方案 2026-09-16 定稿后，9/17-9/25 四条证据线继续产出结论与遗留项；另对 L1 参数台账（`ranktrend-l1-param-ledger.md`）全量核对，发现少量 9/16 版未承接的挂起项。本节为增补依据存档；**执行清单以 §4 各表（含新增 R6/O9-O11/N8-N14）与观察池 YAML 为准**。
+
+### 9.1 四条证据线状态与贡献
+
+| 证据线 | 文档 | 状态（截至 09-25） | 对本批的贡献 |
+|---|---|---|---|
+| 卖点规则扫描阶段 A/B | exit-rules-scan-plan.md + 4 个 batch verdict | 阶段 A 终局（tp0.06×be0.02 组合最优，9/23 落默认）；阶段 B 收口（B1 trailing / B2 断板默认关，golden 不漂移，全量 pytest 2572 passed） | R6（tp×be 代际复核）、O9（trailing 重扫，待用户决策）、O10（断板观察）、N11（tp 0.04/0.05 可选）、市场状态依赖披露义务（§7.6）、死参数排除清单（§9.3）、隔离 runner 纪律（§7.7） |
+| harness 39 文件×5 类风险审计 | harness-audit-20260921.md | 审计完成；公共库 harness_common.py 落地（ec46ef5e，范式 8→13 项）；**3 FAIL 前置修复均未做**（git 核实 09-25） | 阶段 0 前置修复三项（0.4）、A3 or-0 违规（O6/N10 前置）、WINDOWS oos2 截断口径解读（0.6②）、D 类改造批不阻塞（§9.3） |
+| P_repool_timeline_gap 研究 | ranktrend-repool-timeline-gap-research-proposal.md | 已立项（9/20）；A1 盘点完成；中期双窗方向性支持 floor3，oos2u 未触碰；首轮假阴性事故已修复闭合（770838c9→f686ada5） | N8（oos2u 终判全链）；代际纪律——本课题证据代际随批次重判更新 |
+| 引擎性能优化 | engine-perf-optimization-handoff.md | 收口（a50ab16d+f5930be6+b71ab521，4 硬门槛全过） | 执行预算更新（§7.4：小时级→分钟级）、dry-run 留痕口径、禁并行/交易时段纪律（§7.7）、引擎版本注记（§7.5） |
+
+### 9.2 L1 台账缺口核对结论（9/16 版未承接项 → 增补去向）
+
+| 项点 | L1 出处 | 处置 |
+|---|---|---|
+| 组 5 参数 rolling walk-forward 重验 + WP1c 修复后结论重验 | §6 | → N9 |
+| lifecycleConfirmFrames（K）证伪结论滚动重验 | §7 | → N10 |
+| crossSectionPersistFrames"待投票语义拆分后重评" | §8 | → N13（登记维持关闭） |
+| HighRisk pressure 门变活跃时重扫 | §11 | → N12（条件核对） |
+| volumePriceMildRatio 1.05 OBSERVE 无复验安排 | §14.4 | → O11 |
+| momentumDirectionThreshold 0.2 / momentumSignalShareMin 0.6 定值窗口含 8 月冻结帧"待复核" | §2b | 轻量核对，并入 N9（非独立 trial） |
+| strong 双峰"分状态门控"设计评审课题 | gap-scan-plan P3 | → N14 |
+
+B-202610 其余"9 月复验/10 月"表述（§23.9.1 补记、buyScoreThreshold、ma_join/ma_replace、MidLongCommitmentMin、vsB_070、fund10+over2、组合 p2、jumpConfirm 重扫、ATR 重测、交易层四课题、双强合并统计、H2 NaN median 线索、组 5 以外的 walk-forward 项）经逐一核对均已被 9/16 版 R1-R5/O1-O8/N1-N7 承接，无重复登记。
+
+### 9.3 明确排除项（不纳入本批）
+
+- **zljzb 资金流口径归属**：weakStateExit 对 v3 锚结构性零影响（未接线 v3），口径确认挂起，仅未来接线 v3 时有意义；
+- **死参数/REJECT 排除清单**（后续任何卖点/参数扫描不再花算力）：stopLoss（非单调，默认 -0.05 维持）、useAtrStops（负贡献 + multiplier≥2.0 不活跃）、weakStateExit / signalExitDelayBars（未接线 v3 锚逐位零影响）、minHoldingBars（half_hour+T+1 下档位 ≤4 无意义）、maxHoldingBars（与 tp×be 组合 REJECT，截断盈利尾巴，已收口）；
+- **adjustment-fq-plan.md**：整体已作废（2026-08-23，前提系读图错误，复权口径实际无分裂），四条待决策项全部失效，不纳入；
+- **审计 D 类改造批**（不阻塞本批，批次后执行）：WINDOWS 手写副本 5 处派生化、resume 守卫 4 文件（evaluate_ts_factor_weights / evaluate_dimension_voting_power / evaluate_lifecycle_dimension / evaluate_lifecycle_gate_form）、锚纪律统一"漂移即落盘+停"3 文件、windowsConsumed 6 文件补齐、旧 optimize_* 5 文件守卫（公共库迁移时自动解决）。
+
+### 9.4 增补后批次规模概览
+
+- 阶段 0：6 项（新增前置修复 0.4、观察池补登记 0.5、盘点补充 0.6）；
+- 阶段 1：不变（decision/oos1 锚已预建，oos2/oos2u 待批次填充）；
+- 阶段 2：R1-R6（+1，tp×be trade 层复核）；
+- 阶段 3：O1-O11（+3，其中 O9 待用户决策批准、O10 仅核对、O11 低优先）；
+- 阶段 4：N1-N14（+7，其中 N8 为重点终判项，N9 可拆下一批，N11-N14 为轻量/条件型）；
+- 阶段 5：+台账落痕核对 1 件。

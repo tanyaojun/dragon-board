@@ -16,7 +16,7 @@
 # 检查 → Track 1 终判 → 六类判定 → 用户决策 → 一次一候选落默认）。
 
 schema: ranktrend-observation-pool/v1
-updatedAt: '2026-09-16'
+updatedAt: '2026-09-25'
 anchorsRef: ranktrend-anchors.json
 factSource: ../docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md
 rerunPlan: ../docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md
@@ -73,6 +73,16 @@ items:
     verdictRule: 三窗确认降级率与 saEx 收益
     evidenceGeneration: gen-2026-09-15-jump-fix
     evidence: [longterm §26.7, §26.10.2]
+
+  - id: R6_exit_tp_be
+    kind: default_review
+    desc: 卖点默认 tp0.06×be0.02（takeProfit 9.99→0.06 + breakevenTrailing=True/threshold=0.02，2026-09-23 用户决策落默认，阶段 A 终局 wrxpf 0.9756=基线 2.02 倍；trade 层参数 V5_LIFECYCLE_FUSION_TRADE_DEFAULTS，不影响信号层 saEx 锚）
+    status: in_default
+    revertPatch: takeProfit=9.99 + breakevenTrailing=False
+    revertNote: 还原旧 trade 默认（9.99 + breakeven 关）
+    verdictRule: 9 月窗 Track 1 复核（wrxpf + 30 笔门槛，隔离 runner exit-scan-trial-runner.py）；decision 窗逐位=还原口径属预期（市场状态依赖四次复现，改善全部来自 8 月中旬后样本外），判定看 oos2/oos2u 保护效应延续性；显著负偏离才评估回退
+    evidenceGeneration: gen-2026-09-23-exit-default（trade 层，commit b251cf1c）
+    evidence: [exit-rules-scan-plan 阶段 A 终局, exit-scan-batch3-verdict]
 
   # ============ 观察池候选（rerun-plan §4 阶段 3，O1-O8） ============
   - id: O1_p2
@@ -142,6 +152,30 @@ items:
     evidenceGeneration: 阶段15（pre-fund10，断线代际 283 样本）
     evidence: [longterm §11.4f, §15.4, §21.5]
 
+  - id: O9_trailing_rescan
+    kind: observe
+    desc: trailing stop 修正档位重扫——批次 4 四档 (activate,drawdown) (0.06,0.6)~(0.03,0.3) 与 tp×be 基线逐位零增量系档位设计失误（be0.02 已在场，dd 0.3~0.6 需峰值 +43%~+150%，远超窗口最大浮盈）
+    status: pending_rerun
+    trigger: 有意义空间 dd 0.03~0.08 × activate 0.04/0.05（3-5 trial）；是否批准重扫待用户决策；若上线需与 tp×be 同窗对比
+    evidenceGeneration: gen-2026-09-23-exit-default
+    evidence: [exit-scan-batch4-verdict, exit-rules-scan-plan 批次 4 小节]
+
+  - id: O10_break_board_watch
+    kind: observe
+    desc: 断板卖出 breakBoardExit 触发观察——B2 已实现+单测、默认关；阶段 A 全窗 43 笔持仓 0 触发（样本不存在≠无效，fail-visible 不下结论）
+    status: pending_rerun
+    trigger: 批次复跑顺带核对 9 月窗是否出现"断板" reason 桶；出现即自动进入分桶观察
+    evidenceGeneration: gen-2026-09-23-exit-default
+    evidence: [exit-scan-batch4-verdict]
+
+  - id: O11_mild_ratio_105
+    kind: observe
+    desc: volumePriceMildRatio 1.05——L1 §14.4 OBSERVE（−2.7/+7.7/+14.7% 跨窗矛盾），原登记无复验安排，2026-09-25 补登记
+    status: pending_rerun
+    trigger: 批次轻量复扫或维持挂起裁决（低优先）
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [L1 §14.4]
+
   # ============ 待立项评估（rerun-plan §4 阶段 4，N1-N7） ============
   - id: N1_jump_confirm_scan
     kind: proposal
@@ -198,6 +232,54 @@ items:
     trigger: 只登记不实施；未来立项属代码级修复
     evidenceGeneration: gen-2026-09-15-fund10
     evidence: [longterm §25.6.5, §25.6 运维注记 5]
+
+  - id: N9_group5_walkforward
+    kind: proposal
+    desc: 组 5 参数（G1-G7/方向 A-C）rolling walk-forward 重验 + WP1c lookahead 修复（2026-09-06）后组 5 参数结论重验；momentumDirectionThreshold 0.2/momentumSignalShareMin 0.6 定值窗口含 8 月冻结帧的轻量复核并入本项
+    status: proposal_pending
+    trigger: L1 §6 挂起项——9 月数据累积后按 §6（A/B 纪律）重验；批次评估立项（工作量较大，可拆下一批）
+    evidenceGeneration: gen-2026-09-06_wp1c 前
+    evidence: [L1 §6]
+
+  - id: N10_confirm_frames_k
+    kind: proposal
+    desc: lifecycleConfirmFrames（K）证伪结论滚动重验（现值 K=1）
+    status: proposal_pending
+    trigger: L1 §7——9 月数据积累后按 §6 滚动重验；批次评估立项（轻量）
+    evidenceGeneration: gen-2026-08-22_8
+    evidence: [L1 §7]
+
+  - id: N11_tp_finer_boundary
+    kind: proposal
+    desc: takeProfit 0.04/0.05 边界复核（可选 2 trial 轻量确认更紧档峰值位置）
+    status: proposal_pending
+    trigger: 批次选择性执行（0.06 单调方向与 oos 双窗支持已足够支撑落默认，不构成阻塞）
+    evidenceGeneration: gen-2026-09-23-exit-default
+    evidence: [exit-scan-batch1-verdict, exit-rules-scan-plan GAP-2]
+
+  - id: N12_highrisk_pressure_gate
+    kind: proposal
+    desc: HighRisk pressure 门（0.75）变活跃时重扫 HighRisk 三参数 + riskPressureWeights（条件触发型，现基本不触发）
+    status: proposal_pending
+    trigger: 批次仅核对触发条件是否成立（与 N6 同类）；变活跃才立项重扫
+    evidenceGeneration: gen-2026-08-22_8
+    evidence: [L1 §11 复核触发②, §23.4]
+
+  - id: N13_persist_reeval
+    kind: proposal
+    desc: crossSectionPersistFrames（0=关闭）重评——H1 成立、H2 证伪，"待投票语义拆分后重评"
+    status: proposal_pending
+    trigger: 前置条件（投票语义拆分）未立项，本批仅登记维持关闭；长期挂起
+    evidenceGeneration: 阶段18
+    evidence: [L1 §8, longterm §18]
+
+  - id: N14_strong_bimodal_gating
+    kind: proposal
+    desc: strong 双峰"分状态门控"设计评审——P3 前置标定（strong 线位移动分离塌陷/强劲双峰）产出喂设计评审（serve P4 分状态门控，长测 §14.4 后续课题）
+    status: proposal_pending
+    trigger: 设计类课题，批次评估是否立项；无自动触发
+    evidenceGeneration: gen-2026-09-15-fund10
+    evidence: [ranktrend-param-gap-scan-plan P3 关联课题]
 
   - id: P_repool_timeline_gap
     kind: proposal
