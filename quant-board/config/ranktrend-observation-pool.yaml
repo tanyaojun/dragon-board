@@ -41,8 +41,9 @@ items:
     revertPatch: 1.0
     revertNote: 三维票权还原 1.0（py 三字段 + TS tierDisplay 权重常量同步，见 §23.9.1 回退条目）
     verdictRule: 三窗判定卡复现方可保持；oos2 passHard 边缘失效为第一观察项
+    dryrunVerdict: 2026-09-25 演练判定卡回退不成立——回退 trial C1 -11.1% + C4 strong -36.8% + C5 翻转率违反；oos1 +22.2%/oos2u +1.35% 局部转正观察披露 → R2 保持
     evidenceGeneration: gen-2026-09-09_23_9_1
-    evidence: [longterm §23.9.1, L1 §12（补记挂起至 9 月复验）]
+    evidence: [longterm §23.9.1, L1 §12（补记挂起至 9 月复验）, data/reports/b-202610/batch-summary.json]
 
   - id: R3_ts_weights_p2aggressive
     kind: default_review
@@ -51,8 +52,9 @@ items:
     revertPatch: 0.24/0.20/0.16/0.20/0.20
     revertNote: 还原旧五权重（字段与数值见 §22.8 回退条件）
     verdictRule: 9 月全月判定卡 + S+A 触发率监控（持续 <3.5% 评估 buyScoreThreshold 微调）+ retreat 桶 -0.045 代价监控
+    dryrunVerdict: 2026-09-25 演练判定卡回退不成立——回退 trial C1 -0.83% + C4 strong -20.6%；oos2u +3.82% 局部转正观察披露 → R3 保持
     evidenceGeneration: gen-2026-09-09_23_9_1
-    evidence: [longterm §22.6, §22.8]
+    evidence: [longterm §22.6, §22.8, data/reports/b-202610/batch-summary.json]
 
   - id: R4_ma_join
     kind: default_review
@@ -108,8 +110,9 @@ items:
     desc: vsB_070——VoteStrengths[2] B 档票强度 0.8→0.7（§26.9 Track 1 decision +0.9% 中性 149 笔，不否决不证实）
     status: pending_rerun
     trigger: 9 月全月复验同批裁决
+    dryrunVerdict: 2026-09-25 演练判定卡 PASS_CANDIDATE（C1 +5.97% ∧ C2 三 OOS 全正 +15.89/+6.4/+4.71 ∧ C3 保持；C4 strong/retreat -9.6% 非否决）——进用户决策队列，先补 9 月窗 Track 1 终判（wrxpf + 30 笔门槛）
     evidenceGeneration: 阶段26（jump-fix 交界，批次重判时确认）
-    evidence: [longterm §26.9, §26.10.1]
+    evidence: [longterm §26.9, §26.10.1, data/reports/b-202610/batch-summary.json]
 
   - id: O4_jump25_fresh06
     kind: observe
