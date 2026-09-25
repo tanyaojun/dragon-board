@@ -1,4 +1,0 @@
-param	value	run_id	wr	pf	wrxpf	trades	exitSlices	totalReturn	maxDD
-baseline	default	bt_8d451aab2e834c7e	0.3256	1.4818	0.4824	43	51	0.0646	-0.0846
-combo	tp0.06_be0.02	bt_1c35ee7c74e441d2	0.4186	2.3306	0.9756	43	54	0.1352	-0.0472
-combo	tp0.06_be0.02_mh16	bt_0d73d541714249f8	0.3778	1.8479	0.6981	45	59	0.0835	-0.0419
