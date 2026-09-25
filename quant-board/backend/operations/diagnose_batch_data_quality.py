@@ -70,7 +70,10 @@ def main() -> int:
     args = parser.parse_args()
 
     t0 = time.time()
-    frames = load_frames(DECISION_START, OOS2_END)
+    # purpose="report"：本脚本只读统计、不产出参数结论（批次报告第一章），允许加载
+    # 含 8 月 FINAL 的全窗做覆盖披露；9/21 审计后 load_frames 内联冻结守卫，scan 用途
+    # 会被正确拦截——此处为守卫语义内的合法用途（harness-audit-20260921 §2/§7.4）
+    frames = load_frames(DECISION_START, OOS2_END, purpose="report")
     print(f"[dq] frames={len(frames)} range={DECISION_START}~{OOS2_END} ({time.time() - t0:.0f}s)", file=sys.stderr)
 
     by_day = Counter(str(f.get("tradingDate") or "") for f in frames)

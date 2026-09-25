@@ -119,6 +119,31 @@ def test_run_window_asserts_overrides_per_trial(monkeypatch, tmp_path):
         run_window("decision", report)
 
 
+def test_run_window_reruns_trial_when_overrides_changed(monkeypatch, tmp_path):
+    """trial 定义随代际/口径更新（如 fund10_over2 两参→仅 over 轴）后，旧口径缓存不得按 key
+    跳过冒充新口径读数——overrides 不一致必须重跑覆盖。"""
+    gate_calls: list[str] = []
+
+    def gate(config, frames):
+        gate_calls.append("x")
+        return _gate_result(0.1323)
+
+    monkeypatch.setattr(
+        "backend.operations.evaluate_track2_candidates.load_frames",
+        lambda s, e: [{"tradingDate": "2026-05-04"}],
+    )
+    monkeypatch.setattr("backend.operations.evaluate_track2_candidates.evaluate_gate", gate)
+    stale_overrides = {"volumePriceAbnormalFundRatio": 10.0, "volumePriceOverVolumeRatio": 2.0}
+    report = {
+        "__out__": str(tmp_path / "t2.json"),
+        "decision": {"trials": {"fund10_over2": {"desc": "旧口径", "overrides": stale_overrides, "result": {**_gate_result(0.0), "elapsedSec": 0.0}}}},
+    }
+    run_window("decision", report)
+    rerun = report["decision"]["trials"]["fund10_over2"]
+    assert rerun["overrides"] == {"volumePriceOverVolumeRatio": 2.0}, "旧口径缓存被冒充保留"
+    assert gate_calls, "overrides 变更的 trial 未重跑"
+
+
 def test_run_window_full_trials_pass_and_cache(monkeypatch, tmp_path):
     """合法 TRIALS 全量跑通：守卫不误伤，trial 结果与 overrides 进缓存报告。"""
     calls: list[str] = []

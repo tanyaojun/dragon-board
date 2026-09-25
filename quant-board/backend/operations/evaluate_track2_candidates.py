@@ -169,9 +169,15 @@ def run_window(window: str, report: dict[str, Any]) -> None:
 
     trials = entry.setdefault("trials", {})
     for spec in TRIALS:
-        if spec["key"] in trials:
-            print(f"[skip] {window}/{spec['key']} (cached)", file=sys.stderr)
-            continue
+        cached = trials.get(spec["key"])
+        if cached is not None:
+            if cached.get("overrides") == spec["overrides"]:
+                print(f"[skip] {window}/{spec['key']} (cached)", file=sys.stderr)
+                continue
+            # trial 定义随代际/口径更新（如 fund10_over2 两参→仅 over 轴）：旧口径缓存
+            # 不得按 key 跳过冒充新口径读数，重跑覆盖（fail-visible）
+            print(f"[rerun] {window}/{spec['key']} overrides 变更，旧口径缓存作废重跑", file=sys.stderr)
+            del trials[spec["key"]]
         config = RankTrendConfig.from_patch(spec["overrides"])
         _assert_overrides_applied(config, spec["overrides"])
         print(f"[track2] {window} {spec['key']} {spec['overrides']} ...", file=sys.stderr)
