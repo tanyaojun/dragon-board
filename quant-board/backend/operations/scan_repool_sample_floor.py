@@ -60,11 +60,13 @@ def _newly_judged_metrics(
     trial_signals: list[dict[str, Any]],
     frames: list[dict[str, Any]],
     baseline_status: dict[tuple[str, str], str],
+    horizon: int = 1,
 ) -> dict[str, Any]:
-    """新增判定样本（baseline insufficient → 本档 degraded/ok）的 lifecycle 档位与 h1 质量。
+    """新增判定样本（baseline insufficient → 本档 degraded/ok）的 lifecycle 档位与 h{horizon} 质量。
 
     H0 反面假设的直接检验：这些样本的 lifecycle 档位 forward-return 若与随机无异
     （excessDirectionAccuracy ≈ 0），说明中断历史降级判定产出的是噪声 → 维持现状。
+    键名 h{horizon} 动态生成（默认 1 时保持历史键名 h1）。
     """
     def newly_judged(signal: dict[str, Any]) -> bool:
         key = (str(signal.get("snapshotId")), str(signal.get("code")))
@@ -80,19 +82,19 @@ def _newly_judged_metrics(
     for signal in newly:
         tier = dimension_tier_of(signal, "lifecycle")
         tier_dist[tier] = tier_dist.get(tier, 0) + 1
-    quality = tier_forward_returns(newly, frames, horizon=1, dimension="lifecycle")
+    quality = tier_forward_returns(newly, frames, horizon=horizon, dimension="lifecycle")
     return {
         "newlyJudgedCount": len(newly),
         "lifecycleTierDist": dict(sorted(tier_dist.items(), key=lambda kv: -kv[1])),
-        "h1": quality,
+        f"h{horizon}": quality,
     }
 
 
-def _lifecycle_saex(signals: list[dict[str, Any]], frames: list[dict[str, Any]]) -> dict[str, Any]:
-    return tier_forward_returns(signals, frames, horizon=1, dimension="lifecycle")
+def _lifecycle_saex(signals: list[dict[str, Any]], frames: list[dict[str, Any]], horizon: int = 1) -> dict[str, Any]:
+    return tier_forward_returns(signals, frames, horizon=horizon, dimension="lifecycle")
 
 
-def run_window(window: str, report: dict[str, Any]) -> None:
+def run_window(window: str, report: dict[str, Any], horizon: int = 1) -> None:
     from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
     from backend.optimization.data_windows import WINDOWS
 
@@ -139,7 +141,7 @@ def run_window(window: str, report: dict[str, Any]) -> None:
             continue
         overrides = {"degradedSampleFloor": floor}
         desc = "默认（现状）" if floor == 5 else f"degraded 门槛 5 → {floor}"
-        print(f"[repool-scan] {window} {key} {overrides} ...", file=sys.stderr)
+        print(f"[repool-scan] {window} {key} {overrides} horizon={horizon} ...", file=sys.stderr)
         t0 = time.time()
         config = RankTrendConfig.from_patch(overrides)
         assert_overrides_applied(config, overrides)
@@ -149,8 +151,10 @@ def run_window(window: str, report: dict[str, Any]) -> None:
         result: dict[str, Any] = {
             "desc": desc,
             "overrides": overrides,
+            "horizon": horizon,
             "statusBuckets": buckets,
-            "lifecycleH1": _lifecycle_saex(signals, frames),
+            # 键名按 horizon 动态生成：默认 1 时与历史键名 lifecycleH1/h1 逐字一致（golden 不漂移）
+            f"lifecycleH{horizon}": _lifecycle_saex(signals, frames, horizon=horizon),
         }
         if floor == 5:
             baseline_status = {
@@ -159,7 +163,7 @@ def run_window(window: str, report: dict[str, Any]) -> None:
             }
             result["isBaseline"] = True
         else:
-            result["newlyJudged"] = _newly_judged_metrics(signals, frames, baseline_status)
+            result["newlyJudged"] = _newly_judged_metrics(signals, frames, baseline_status, horizon=horizon)
         trials[key] = result
         print(
             f"[repool-scan] {window} {key} -> buckets={buckets} "
@@ -171,7 +175,11 @@ def run_window(window: str, report: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="P_repool_timeline_gap degradedSampleFloor 中期扫描")
-    parser.add_argument("--window", default="oos1", choices=["oos1", "decision", "all"])
+    # 2026-09-25 B-202610 演练：--window 增 oos2u（N8 终判窗，本批次执行属 §2.1 消费禁令
+    # 豁免场景；"all" 保持中期扫描语义 [oos1, decision] 不扩）；--horizon 透传（N8 终判要求
+    # 补 h8 口径，默认 1 golden 不漂移）。h8 读数须用独立 --out（trial 缓存按 key 冒充防线）。
+    parser.add_argument("--window", default="oos1", choices=["oos1", "decision", "oos2u", "all"])
+    parser.add_argument("--horizon", type=int, default=1)
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
@@ -192,7 +200,7 @@ def main() -> int:
             nature="midterm-scan（方向性读数，M3 折扣；终判以 B-202610 批次 oos2u 为准）",
         )
     for window in windows:
-        run_window(window, report)
+        run_window(window, report, horizon=args.horizon)
     print(f"[repool-scan] done -> {out}", file=sys.stderr)
     return 0
 

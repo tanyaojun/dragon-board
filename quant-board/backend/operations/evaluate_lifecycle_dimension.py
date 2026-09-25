@@ -50,9 +50,18 @@ from typing import Any
 sys.path.insert(0, r"D:\dragon-board\quant-board")
 
 from backend.analysis.ranktrend.engine.config import RankTrendConfig
-from backend.operations.evaluate_ts_factor_weights import WINDOWS, contribution_summary, proposal_verdict
+from backend.operations.evaluate_ts_factor_weights import contribution_summary, proposal_verdict
 from backend.operations.optimize_gate_denoise_parameters import REPORT_DIR, evaluate_gate
 from backend.operations.optimize_resonance_parameters import _tier_summary
+
+# 窗口单一事实源派生（2026-09-25 B-202610 演练，审计 D1）：曾经 ts_factor_weights 的
+# 三窗派生（其源头已切单一源），本 harness 切换为直接派生并新增 oos2u——O6 剂量曲线
+# 重扫需在未消费裁决窗演练（§2.1；本批次执行属 oos2u 消费禁令豁免场景）。
+from backend.optimization.data_windows import WINDOWS as _STANDARD_WINDOWS
+
+WINDOWS: dict[str, tuple[str, str]] = {
+    key: _STANDARD_WINDOWS[key] for key in ("decision", "oos1", "oos2", "oos2u")
+}
 
 # 阶段 22.8 端到端锚（p2_aggressive 落默认后 baseline 三窗 synergy saEx）
 BASELINE_ANCHOR: dict[str, float] = {"decision": 0.0939, "oos1": 0.0854, "oos2": 0.0737}
@@ -370,6 +379,19 @@ def zero_effect_summary(report: dict[str, Any], key: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def filter_specs(specs: list[dict[str, Any]], only_expr: str) -> list[dict[str, Any]]:
+    """--only 缩围过滤（2026-09-25 B-202610 演练）：key 前缀匹配（逗号分隔），
+    baseline 恒保留（contribution_summary 的对照依赖）；空表达式=全量。"""
+    prefixes = tuple(p.strip() for p in only_expr.split(",") if p.strip())
+    if not prefixes:
+        return specs
+    return [
+        spec
+        for spec in specs
+        if spec["key"] == "baseline" or spec["key"].startswith(prefixes)
+    ]
+
+
 def frames_entry(report: dict[str, Any], window: str) -> list[dict[str, Any]]:
     """窗口帧缓存：载入一次存 report 内存态（不落盘，落盘只存统计摘要）。"""
     cache = report.get("__frames__") or {}
@@ -382,7 +404,12 @@ def frames_entry(report: dict[str, Any], window: str) -> list[dict[str, Any]]:
     return cache[window]
 
 
-def run_window(window: str, report: dict[str, Any], groups: list[str], events_only: bool = False) -> None:
+def run_window(
+    window: str,
+    report: dict[str, Any],
+    specs: list[dict[str, Any]] | None = None,
+    events_only: bool = False,
+) -> None:
     from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
     from backend.optimization.data_windows import assert_not_frozen
 
@@ -415,9 +442,10 @@ def run_window(window: str, report: dict[str, Any], groups: list[str], events_on
     if events_only:
         return
 
-    specs: list[dict[str, Any]] = []
-    for group in groups:
-        specs.extend(TRIAL_GROUPS.get(group) or [])
+    if specs is None:
+        specs = []
+        for group in ("a_display", "b_scan", "b_refine", "proposal"):
+            specs.extend(TRIAL_GROUPS.get(group) or [])
     seen: set[str] = set()
     trials = entry.setdefault("trials", {})
     for spec in specs:
@@ -461,8 +489,9 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="周期维参数贡献率实证评估（长测阶段 23 预研）")
-    parser.add_argument("--window", default="all", choices=["decision", "oos1", "oos2", "all"])
+    parser.add_argument("--window", default="all", choices=["decision", "oos1", "oos2", "oos2u", "all"])
     parser.add_argument("--group", default="all", choices=["a_display", "b_scan", "b_refine", "proposal", "all"])
+    parser.add_argument("--only", default="", help="只跑 key 前缀匹配（逗号分隔）的 trial（baseline 恒保留）；空=全组")
     parser.add_argument("--events-only", action="store_true", help="只跑层 1 事件级区分度（不跑 trial）")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
@@ -475,9 +504,13 @@ def main() -> int:
     report["__out__"] = str(out_path)
 
     groups = ["a_display", "b_scan", "b_refine", "proposal"] if args.group == "all" else [args.group]
+    specs: list[dict[str, Any]] = []
+    for group in groups:
+        specs.extend(TRIAL_GROUPS.get(group) or [])
+    specs = filter_specs(specs, args.only)
     windows = list(WINDOWS) if args.window == "all" else [args.window]
     for window in windows:
-        run_window(window, report, groups, events_only=args.events_only)
+        run_window(window, report, specs)
 
     # 汇总：B 组边际贡献逐 trial + A 组零效应判定 + 提案判定卡
     summary: dict[str, Any] = {}

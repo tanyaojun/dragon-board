@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable
@@ -44,9 +45,20 @@ sys.path.insert(0, r"D:\dragon-board\quant-board")
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.ranktrend.research.gate_flip_stats import extract_gate_states
 from backend.analysis.ranktrend.research.tier_monotonicity import tier_forward_returns, tier_signal_of
-from backend.operations.diagnose_regime_saex_decomposition import WINDOWS
 from backend.operations.optimize_gate_denoise_parameters import REPORT_DIR
 from backend.operations.optimize_resonance_parameters import load_frames
+
+# 窗口单一事实源派生（2026-09-25 B-202610 演练，审计 D1 同族缺陷修复）：曾 import
+# diagnose_regime_saex_decomposition.WINDOWS 手写截断副本（oos2=(09-01,09-09)，比
+# 09-12 更老），全月读数会被截断口径冒充。改自 data_windows.WINDOWS 派生并新增 oos2u
+# （§2.1 判定读数窗）；bounds 保持 {"start","end"} dict 格式（analyze_window 消费面不变）。
+from backend.optimization.data_windows import WINDOWS as _STANDARD_WINDOWS
+
+WINDOWS: dict[str, dict[str, str]] = {
+    key: {"start": bounds[0], "end": bounds[1]}
+    for key, bounds in _STANDARD_WINDOWS.items()
+    if key in ("decision", "oos1", "oos2", "oos2u")
+}
 
 CS_TIERS = ("A", "B", "C", "D")
 
@@ -169,7 +181,7 @@ def analyze_window(name: str, bounds: dict[str, str]) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="§11.5 双强降级复核（只读）")
-    parser.add_argument("--window", default="all", choices=["all", "decision", "oos1", "oos2"])
+    parser.add_argument("--window", default="all", choices=["all", "decision", "oos1", "oos2", "oos2u"])
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
@@ -193,7 +205,7 @@ def main() -> int:
     out_path = Path(args.out) if args.out else REPORT_DIR / "dual-strength-syna-review.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
-        json.dumps({"generatedAt": "2026-09-10", "results": results}, ensure_ascii=False, indent=2),
+        json.dumps({"generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S"), "results": results}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     print(f"[dual-strength] report -> {out_path}", file=sys.stderr)

@@ -66,13 +66,19 @@ def test_baseline_anchor_is_stage_22_8_end_to_end() -> None:
 
 
 def test_windows_avoid_frozen_final() -> None:
-    """三窗纪律：decision 04-15~07-31 / oos1 08-15~31 / oos2 09-01~12；FINAL(8/1-8/14) 无窗覆盖。"""
+    """四窗纪律（B-202610 口径 §2.1/§3）：decision/oos1/oos2 全月/oos2u 未消费子窗；
+    FINAL(8/1-8/14) 无窗覆盖。WINDOWS 派生自 data_windows 单一源（审计 D1 同族防线）。
+    （旧断言 oos2=(09-01,09-12) 为截断口径，已随 §2.1 定案废弃。）"""
+    from backend.optimization.data_windows import WINDOWS as STANDARD
+
     assert WINDOWS == {
         "decision": ("2026-04-15", "2026-07-31"),
         "oos1": ("2026-08-15", "2026-08-31"),
-        "oos2": ("2026-09-01", "2026-09-12"),
+        "oos2": ("2026-09-01", "2026-09-30"),
+        "oos2u": ("2026-09-13", "2026-09-30"),
     }
-    for start, end in WINDOWS.values():
+    for name, (start, end) in WINDOWS.items():
+        assert (start, end) == STANDARD[name], name
         assert not (start <= "2026-08-14" and end >= "2026-08-01"), (start, end)
 
 

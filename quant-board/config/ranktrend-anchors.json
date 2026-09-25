@@ -56,12 +56,12 @@
       "name": "B-202610 复跑代际（第四代正式三窗锚）",
       "anchors": { "decision": 0.1323, "oos1": 0.0862, "oos2": 0.0998, "oos2u": 0.0812 },
       "passHard": { "decision": true, "oos1": true, "oos2": false, "oos2u": false },
-      "establishedAt": "2026-09-16（decision/oos1 预建）；2026-09-25 oos2/oos2u 填充，本代际成为 currentGeneration",
+      "establishedAt": "2026-09-16（decision/oos1 预建）；2026-09-25 演练填充 oos2/oos2u（占位）",
       "gitCommit": "83bd7d0d",
       "configHash": null,
-      "sourceSections": ["data/reports/track2-candidates.json（B-202610 baseline，decision/oos1 于 09-25 当前引擎重跑锚复现逐位一致 0.1323/0.0862；oos2 176 帧/oos2u 90 帧为 9 月全月新读数）", "longterm 阶段 27（待批次收口写入）"],
+      "sourceSections": ["data/reports/track2-candidates.json（B-202610 baseline）", "data/reports/b-202610/batch-summary.json（演练汇总）", "longterm 阶段 27（待 10/3 正式批次收口写入）"],
       "supersededBy": null,
-      "note": "oos2/oos2u passHard=False 为 9 月窗单调性边缘失效既有口径延续（fund10 代际 oos2 亦 False）；oos2u warm-up 29 帧至 09-16，有效 61 帧。9 月窗为最终裁决窗（oos2u 判定读数为准），消费禁令自本批执行后对参数结论生效。"
+      "note": "【演练口径警示】oos2=0.0998/oos2u=0.0812 为 2026-09-25 提前演练读数——9 月数据仅至 09-24（176 帧），尚缺 09-28/29/30 三个交易日，正式复跑（2026-10-03，全月约 206 帧）后 oos2/oos2u 锚必须重跑更新；decision/oos1 为封闭窗，演练读数即正式锚（decision/oos1 baseline 已于当前引擎重跑逐位复现 0.1323/0.0862，代际无漂移）。passHard：decision/oos1=True，oos2/oos2u=False（9 月窗单调性边缘失效既有口径延续，正式口径以 10/3 全月重跑为准）。oos2u warm-up 29 帧至 09-16（演练口径）。"
     }
   ]
 }

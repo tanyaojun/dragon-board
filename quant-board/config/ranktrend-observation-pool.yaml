@@ -83,8 +83,9 @@ items:
     revertPatch: takeProfit=9.99 + breakevenTrailing=False
     revertNote: 还原旧 trade 默认（9.99 + breakeven 关）
     verdictRule: 9 月窗 Track 1 复核（wrxpf + 30 笔门槛，隔离 runner exit-scan-trial-runner.py）；decision 窗逐位=还原口径属预期（市场状态依赖四次复现，改善全部来自 8 月中旬后样本外），判定看 oos2/oos2u 保护效应延续性；显著负偏离才评估回退
+    dryrunVerdict: 2026-09-25 演练回退不成立建议保持——decision 窗两栈 36 笔逐位相同（市场状态依赖第五次复现）；oos2 演练窗默认栈 12 笔 wrxpf 0.3473/sum -5.7%/maxDD -1.86% vs 回退栈 11 笔 0.1064/-21.6%/-2.39%，oos2u 同向 → 保护效应延续；披露：9 月窗 11-12 笔未达 M2 30 笔门槛，10/3 全月重跑复核
     evidenceGeneration: gen-2026-09-23-exit-default（trade 层，commit b251cf1c）
-    evidence: [exit-rules-scan-plan 阶段 A 终局, exit-scan-batch3-verdict]
+    evidence: [exit-rules-scan-plan 阶段 A 终局, exit-scan-batch3-verdict, data/reports/b-202610/dryrun-progress.md T6]
 
   # ============ 观察池候选（rerun-plan §4 阶段 3，O1-O8） ============
   - id: O1_p2
@@ -135,16 +136,18 @@ items:
     desc: MidLongCommitmentMin 剂量曲线（阶段 23 重扫：oos2 +3.5~+7.1% 信号待全月复现）
     status: pending_rerun
     trigger: 9 月全月信号复现且 decision 窗读数抬升 → 按 Track 2 流程重出提案
-    evidenceGeneration: gen-2026-09-09_23_9_1
-    evidence: [longterm §23.7]
+    dryrunVerdict: 2026-09-25 演练两条触发前提均成立且放大——9 月全月收紧侧单调 x1.25→x3 +2.5%→+8.1%（x2 恰复现 +7.1%）、oos2u x2 +10.7%/x3 +13.3%、decision x3 +3.9% 过 C1 线 → 10/3 全月重跑后重出 Track 2 判定卡提案（含 C3/C4/C5）
+    evidenceGeneration: gen-2026-09-09_23_9_1（历史）；演练=gen-2026-10-b202610（截至 09-24）
+    evidence: [longterm §23.7, data/reports/b-202610/dryrun-progress.md T4, lifecycle-midlong-dose-dryrun.json]
 
   - id: O7_cs_a_tier
     kind: observe
     desc: crossSection 投票 A 档复核（首次核心算法默认变更后的持续观察）
     status: pending_rerun
     trigger: A 档样本 >500 + 新窗口 synergy 稳定 >0.05
+    dryrunVerdict: 2026-09-25 演练触发不成立维持挂起——csA 样本仅 decision 单窗 >500（1684），9 月两窗 A 档内 synergy saEx −0.030/−0.149 推翻"稳定>0.05"；附带发现 cs 维 A 档自身 excessDirAcc 四窗 ≈0（信息量在交叉项非单维）
     evidenceGeneration: gen-2026-08-22_8 起（跨代际持续观察项）
-    evidence: [longterm §10.4, §11.5]
+    evidence: [longterm §10.4, §11.5, data/reports/b-202610/cs-a-tier-stats-dryrun.json]
 
   - id: O8_dual_strength
     kind: observe
@@ -152,8 +155,9 @@ items:
     status: pending_rerun
     trigger: 合并滚动统计口径（2026-09-16 裁决）：合并 283（233+32+18）+ 各批新增，每批重算 meanRet(csA-csC) 方向与 n；仅服务降级命题，不用于参数晋升
     falsifyRule: 转正式证伪三条件 = 合并 n≥500 ∧ jump-fix 新代际子样本 n≥200 ∧ 方向仍不支持降级
-    evidenceGeneration: 阶段15（pre-fund10，断线代际 283 样本）
-    evidence: [longterm §11.4f, §15.4, §21.5]
+    dryrunVerdict: 2026-09-25 演练合并 n=283+149=432（①未达）∧ 新代际子样本 149（②未达）→ 维持挂起不关闭；**方向证据转向**——新代际 4 窗中 3 窗 meanRet(csA−csC)<0 开始支持降级（历史三窗一致不支持）；代际披露：新代际 decision 双强样本 233→91 缩水系 Jump 确认门真实拦截
+    evidenceGeneration: 阶段15（pre-fund10，断线代际 283 样本）+ 演练新代际 149
+    evidence: [longterm §11.4f, §15.4, §21.5, data/reports/b-202610/dual-strength-syna-review-dryrun.json]
 
   - id: O9_trailing_rescan
     kind: observe
