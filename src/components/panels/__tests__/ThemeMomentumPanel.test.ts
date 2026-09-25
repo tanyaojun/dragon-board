@@ -47,17 +47,17 @@ describe('ThemeMomentumPanel', () => {
     expect(tree).toContain('embedded')
   })
 
-  it('is mounted in App.vue with panel state', () => {
-    expect(app).toContain('ThemeMomentumPanel')
-    expect(app).toContain('panels.themeMomentum')
-    expect(app).toContain('themeMomentum: false')
+  it('is no longer mounted standalone in App.vue (embedded in sector tree only)', () => {
+    // 2026-09-25：题材动量面板仅作为 SectorStocksTree 内嵌页签存在，App.vue 不再独立挂载
+    expect(app).not.toContain('ThemeMomentumPanel')
+    expect(app).not.toContain('panels.themeMomentum')
   })
 
-  it('opens theme momentum panel when sector tab selected', () => {
-    // 题材热点 tab → panelMap 映射到 themeMomentum（不再同开旧 SectorPanel）
-    expect(app).toContain("sector: 'themeMomentum'")
+  it('opens SectorPanel when sector tab selected', () => {
+    // 题材分析 tab → panelMap 映射到 SectorPanel 弹层
+    expect(app).toContain("sector: 'sector'")
     expect(app).toContain('panels.value[panelMap[tabId]] = true')
-    // 行情列表不承载题材动量列/字段点击入口（面板仅由顶部 tab 打开）
+    // 行情列表不承载题材动量列/字段点击入口
     expect(app).not.toContain('openThemeMomentumFromTable')
   })
 

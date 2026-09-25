@@ -28,34 +28,6 @@
 
         <DragonThemeToggle />
 
-        <!-- 题材分析 -->
-        <button ref="sectorBtnRef" class="btn-icon" title="题材分析 (Ctrl+S)" @click="openPanel('sector', $event)">
-          <span class="icon">📊</span>
-        </button>
-
-        <button ref="themeRiskBtnRef" class="btn-icon" title="题材风险看板" @click="openPanel('themeRisk', $event)">
-          <span class="icon">🎯</span>
-        </button>
-
-        <button ref="eventMonitorBtnRef" class="btn-icon" title="异动雷达" @click="openPanel('eventMonitor', $event)">
-          <span class="icon">🔔</span>
-        </button>
-
-        <!-- 龙头监测 -->
-        <button ref="dragonBtnRef" class="btn-icon" title="龙头监测 (Ctrl+D)" @click="openPanel('dragon', $event)">
-          <span class="icon">🐲</span>
-        </button>
-
-        <!-- 龙息分析 -->
-        <button ref="breathBtnRef" class="btn-icon" title="龙息分析 (Ctrl+B)" @click="openPanel('breath', $event)">
-          <span class="icon">🔥</span>
-        </button>
-
-        <!-- 热榜情绪（独立面板） -->
-        <button ref="hotlistEmotionBtnRef" class="btn-icon" title="热榜情绪" @click="openPanel('hotlistEmotion', $event)">
-          <span class="icon">📊</span>
-        </button>
-
         <!-- 自选股 -->
         <button ref="favoriteBtnRef" class="btn-icon" title="自选股 (Ctrl+F)" @click="openPanel('favorite', $event)"
           data-favorite-trigger>
@@ -180,10 +152,6 @@
       :trigger-rect="panelRects.sectorDetail" @close="panels.sectorDetail = false" @select-theme="openSectorDetail" />
     <SectorAlert v-model:visible="panels.sectorAlert" :trigger-rect="panelRects.sectorAlert"
       @close="panels.sectorAlert = false" @show-detail="openSectorDetail" />
-    <ThemeMomentumPanel v-model:visible="panels.themeMomentum" :trigger-rect="panelRects.themeMomentum"
-      @close="panels.themeMomentum = false" />
-    <ThemeRiskDashboard v-model:visible="panels.themeRisk" :trigger-rect="panelRects.themeRisk"
-      @close="panels.themeRisk = false" />
   </div>
 </template>
 
@@ -217,8 +185,6 @@ const CandidatePoolPanel = defineAsyncComponent(() => import('./components/panel
 const StockL2DetailPanel = defineAsyncComponent(() => import('./components/panels/StockL2DetailPanel.vue'))
 const SectorDetail = defineAsyncComponent(() => import('./components/panels/SectorDetail.vue'))
 const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
-const ThemeMomentumPanel = defineAsyncComponent(() => import('./components/panels/ThemeMomentumPanel.vue'))
-const ThemeRiskDashboard = defineAsyncComponent(() => import('./components/panels/ThemeRiskDashboard.vue'))
 const HotStockEventMonitorPanel = defineAsyncComponent(() => import('./components/panels/HotStockEventMonitorPanel.vue'))
 import TradeJournalPanel from './components/panels/TradeJournalPanel.vue'
 
@@ -287,13 +253,8 @@ const marketSummaryVersion = ref(0)
 
 // 按钮引用
 const refreshBtnRef = ref<HTMLElement>()
-const sectorBtnRef = ref<HTMLElement>()
-const dragonBtnRef = ref<HTMLElement>()
-const breathBtnRef = ref<HTMLElement>()
 const favoriteBtnRef = ref<HTMLElement>()
 const dropdownRef = ref<HTMLElement | null>(null)
-const themeRiskBtnRef = ref<HTMLElement>()
-const eventMonitorBtnRef = ref<HTMLElement>()
 const candidatePoolPanelRef = ref<{
   openCandidate: (data?: CandidatePoolOpenPayload) => Promise<void>
 } | null>(null)
@@ -303,7 +264,7 @@ const navTabs = [
   { id: 'market', label: '行情总览', icon: '📊' },
   { id: 'dragon', label: '龙头监测', icon: '🐲' },
   { id: 'emotion', label: '龙息监测', icon: '📈' },
-  { id: 'sector', label: '题材热点', icon: '🎯' },
+  { id: 'sector', label: '题材分析', icon: '🎯' },
   { id: 'events', label: '异动雷达', icon: '🔔' },
   { id: 'hotlistEmotion', label: '热榜情绪', icon: '🔥' },
 ]
@@ -321,8 +282,6 @@ const panels = ref({
   favorite: false,
   sectorDetail: false,
   sectorAlert: false,
-  themeMomentum: false,
-  themeRisk: false,
   stockDetail: false,
   rankTrend: false,
   candidatePool: false,
@@ -391,9 +350,8 @@ const openPanel = (panelName: keyof typeof panels.value, event: MouseEvent) => {
 }
 
 const openPanelFromShortcut = (panelName: keyof typeof panels.value, triggerRef?: HTMLElement) => {
-  if (triggerRef) {
-    panelRects.value[panelName] = triggerRef.getBoundingClientRect()
-  }
+  // 无触发源（顶栏图标已移除）时清掉旧 rect，让面板走默认定位
+  panelRects.value[panelName] = triggerRef?.getBoundingClientRect()
   panels.value[panelName] = true
 }
 
@@ -408,7 +366,7 @@ const openExportPanel = (event?: MouseEvent) => {
 const openSectorDetail = (sectorName: string, event?: MouseEvent) => {
   panelRects.value.sectorDetail = event?.currentTarget
     ? (event.currentTarget as HTMLElement).getBoundingClientRect()
-    : sectorBtnRef.value?.getBoundingClientRect()
+    : undefined
   sectorDetailName.value = sectorName
   panels.value.sectorDetail = true
 }
@@ -451,9 +409,9 @@ const focusSearchInput = () => {
 }
 
 useKeyboardShortcuts({
-  onDragon: () => openPanelFromShortcut('dragon', dragonBtnRef.value),
-  onSector: () => openPanelFromShortcut('sector', sectorBtnRef.value),
-  onBreath: () => openPanelFromShortcut('breath', breathBtnRef.value),
+  onDragon: () => openPanelFromShortcut('dragon'),
+  onSector: () => openPanelFromShortcut('sector'),
+  onBreath: () => openPanelFromShortcut('breath'),
   onFavorite: () => openPanelFromShortcut('favorite', favoriteBtnRef.value),
   onExport: () => openPanelFromShortcut('export'),
   onRefresh: () => handleRefresh(),
@@ -477,7 +435,7 @@ const handleTabChange = (tabId: string) => {
   const panelMap: Record<string, keyof typeof panels.value> = {
     dragon: 'dragon',
     emotion: 'breath',
-    sector: 'themeMomentum',
+    sector: 'sector',
     events: 'eventMonitor',
     hotlistEmotion: 'hotlistEmotion',
   }

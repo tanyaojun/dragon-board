@@ -48,7 +48,8 @@ describe('HotStockEventMonitorPanel speech settings', () => {
     expect(source).toContain('<h3>异动雷达</h3>')
     expect(source).toContain('aria-label="关闭异动雷达"')
     expect(source).toContain('aria-label="异动雷达分类"')
-    expect(app).toContain('title="异动雷达"')
+    // 2026-09-25 顶栏重复图标按钮移除，入口收敛为导航栏 tab
+    expect(app).not.toContain('title="异动雷达"')
     expect(app).toContain("{ id: 'events', label: '异动雷达', icon: '🔔' }")
     expect(refreshTask).toContain('异动雷达面板或飞书推送启用时轮询选股通异动数据')
     expect(source).not.toContain('历史交易日志')

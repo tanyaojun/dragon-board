@@ -44,7 +44,6 @@ class KeyboardService {
       // 其他
       { key: '?', description: '显示帮助', category: 'other', action: () => {} },
       { key: 'Shift+?', description: '显示帮助', category: 'other', action: () => {} },
-      { key: 'Ctrl+Shift+A', description: '算法配置', category: 'other', action: () => {} },
       { key: 'Ctrl+E', description: '导出数据', category: 'other', action: () => {} }
     ]
     
