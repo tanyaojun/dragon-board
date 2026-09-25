@@ -5,12 +5,15 @@
 （9 月已有 10 个交易日数据）；P2 安排 A/B 实验。本 harness 把 P1 复验 + P1 组合 + P2
 persist A/B 收敛为一次跑完的 trial 表，每 trial 自动产出判定卡（无需人工汇总多份报告）。
 
-Trial 组（用户批准清单）：
-  - P1 复验：fund10_over2（volumePriceAbnormalFundRatio 20→10 + OverVolumeRatio 2.5→2.0，
-    阶段 9.5 8月 +438%）；jump25_fresh06（jumpDeltaPct 15→25 + tierResonanceJumpFreshnessMin
-    0.5→0.6，阶段 9.5 8月 +283%）
-  - P1 多信号组合验证：combo_p1（四参叠加）；combo_all（四参 + persist，检测跨维度交互）
+Trial 组（B-202610 前置修复后口径，2026-09-25；原 2026-09-13 用户批准清单见阶段 20）：
+  - P1 复验：fund10_over2（OverVolumeRatio 2.5→2.0；**fund10 已于 2026-09-15 落默认**，
+    AbnormalFundRatio=10.0 即现值不再是扰动轴，本 trial 在新默认栈上仅测 over 轴）+
+    fund10_revert（O2 对照基线：AbnormalFundRatio 还原 20.0，观察池 O2 baselineNote）；
+    jump25_fresh06（jumpDeltaPct 15→25 + tierResonanceJumpFreshnessMin 0.5→0.6）
+  - P1 多信号组合验证：combo_p1（over2+jump25+fresh06 三参叠加，fund10 已在默认栈）；
+    combo_all（三参 + persist，检测跨维度交互）
   - P2 A/B：persist_on（crossSectionPersistFrames=3，阶段 18 H1成立/H2证伪后的组合面复验）
+  - MA 补验：ma_join / ma_full（阶段 17 口径）
 
 Track 2 判定卡（简化流程：一次 evaluate_gate 自动产出全部口径，替代人工拼表）：
   C1 决策窗 synergy saEx 相对改善 ≥ +3%（相对 baseline，baseline saEx>0）
@@ -58,8 +61,8 @@ WINDOWS: dict[str, tuple[str, str]] = {
     k: ALL_STANDARD_WINDOWS[k] for k in ("decision", "oos1", "oos2", "oos2u")
 }
 
+# 组合扰动轴（fund10 已于 2026-09-15 落默认进默认栈，combo 相对当前默认栈定义，不再重复写该轴）
 P1_OVERRIDES: dict[str, Any] = {
-    "volumePriceAbnormalFundRatio": 10.0,
     "volumePriceOverVolumeRatio": 2.0,
     "jumpDeltaPct": 25.0,
     "tierResonanceJumpFreshnessMin": 0.6,
@@ -68,22 +71,27 @@ P1_OVERRIDES: dict[str, Any] = {
 TRIALS: list[dict[str, Any]] = [
     {"key": "baseline", "desc": "默认配置", "overrides": {}},
     {
+        "key": "fund10_revert",
+        "desc": "O2 对照基线：fund10 回退口径（AbnormalFundRatio 还原 20.0，观察池 O2 baselineNote）",
+        "overrides": {"volumePriceAbnormalFundRatio": 20.0},
+    },
+    {
         "key": "fund10_over2",
-        "desc": "P1：量价 fund 阈值 20→10 + over 阈值 2.5→2.0（阶段 9.5 8月 +438%）",
-        "overrides": {"volumePriceAbnormalFundRatio": 10.0, "volumePriceOverVolumeRatio": 2.0},
+        "desc": "P1 复验：over 阈值 2.5→2.0（fund10 已落默认，本 trial 在新默认栈上仅测 over 轴；旧两参口径见阶段 20）",
+        "overrides": {"volumePriceOverVolumeRatio": 2.0},
     },
     {
         "key": "jump25_fresh06",
         "desc": "P1：jumpDeltaPct 15→25 + freshnessMin 0.5→0.6（阶段 9.5 8月 +283%）",
         "overrides": {"jumpDeltaPct": 25.0, "tierResonanceJumpFreshnessMin": 0.6},
     },
-    {"key": "combo_p1", "desc": "P1 多信号组合：fund10+over2+jump25+fresh06 四参叠加", "overrides": dict(P1_OVERRIDES)},
+    {"key": "combo_p1", "desc": "P1 多信号组合：over2+jump25+fresh06 三参叠加（fund10 已在默认栈）", "overrides": dict(P1_OVERRIDES)},
     {
         "key": "persist_on",
         "desc": "P2 A/B：crossSection 持续高位路径 N=3（阶段 18 H1成立/H2证伪）",
         "overrides": {"crossSectionPersistFrames": 3},
     },
-    {"key": "combo_all", "desc": "全组合：P1 四参 + persist（跨维度交互检测）", "overrides": {**P1_OVERRIDES, "crossSectionPersistFrames": 3}},
+    {"key": "combo_all", "desc": "全组合：P1 三参 + persist（跨维度交互检测）", "overrides": {**P1_OVERRIDES, "crossSectionPersistFrames": 3}},
     {
         "key": "ma_join",
         "desc": "MA 补验（2026-09-13 用户质询）：MA 进决策合成第 5 分量（与 MACD 并存，阶段 17 ±0.01）",
@@ -98,6 +106,47 @@ TRIALS: list[dict[str, Any]] = [
 
 # 组合交互提示用：combo 由哪些单因子 trial 组成（判定卡输出 combo vs 最优单因子对比行）
 COMBO_PARTS: dict[str, list[str]] = {"combo_p1": ["fund10_over2", "jump25_fresh06"], "combo_all": ["fund10_over2", "jump25_fresh06", "persist_on"]}
+
+# baseline 锚（gen-2026-10-b202610，config/ranktrend-anchors.json，2026-09-16 预建；
+# 来源=本 harness baseline trial 逐位读数 decision 655 帧 / oos1 110 帧）。
+# oos2/oos2u 锚待批次阶段 1 用 9 月全月数据填充，填充前 None 不校验。
+BASELINE_ANCHORS: dict[str, float | None] = {"decision": 0.1323, "oos1": 0.0862, "oos2": None, "oos2u": None}
+
+_OVERRIDE_MISSING = object()
+
+# 决策五权重经 from_patch 整体归一化（engine/config.py from_patch，和恒为 1）——patch 值≠
+# config 实际值是设计行为（evaluate_ma_factor_contribution 同款语义），豁免值比较只断言字段
+# 存在；typo 字段不存在仍被拦截（守卫核心目标）。
+_NORMALIZED_WEIGHT_FIELDS = frozenset(
+    {"directionWeight", "accelerationWeight", "crossWeight", "macdWeight", "maWeight"}
+)
+
+
+def _assert_overrides_applied(config: Any, overrides: dict[str, Any]) -> None:
+    """override 生效性守卫（审计 §7.2.1-B1，范式同 evaluate_cs_strengths review C1）：
+    from_patch 对未知字段静默忽略（hasattr 无 else），字段拼错会静默跑成 baseline 复刻、
+    产出假零效应结论——逐键断言。"""
+    for key, value in overrides.items():
+        actual = getattr(config, key, _OVERRIDE_MISSING)
+        if actual is _OVERRIDE_MISSING:
+            raise AssertionError(f"override 未生效: {key}={value!r}（config 无此字段）——检查字段名拼写/配置代际")
+        if key in _NORMALIZED_WEIGHT_FIELDS:
+            continue
+        if actual != value:
+            raise AssertionError(f"override 未生效: {key}={value!r}（config 实际={actual!r}）——检查字段名/配置代际")
+
+
+def _assert_baseline_anchor(window: str, sa_ex: float | None) -> None:
+    """baseline 锚 trial 级即时 raise（B-202610 批判定器）：漂移=代际/config 污染，不许带病出判定卡。"""
+    anchor = BASELINE_ANCHORS.get(window)
+    if anchor is None:
+        return
+    actual = None if sa_ex is None else round(float(sa_ex), 4)
+    if actual != round(float(anchor), 4):
+        raise AssertionError(
+            f"baseline 锚漂移: {window} saEx={actual} vs gen-2026-10-b202610 锚 {anchor}"
+            f"——检查 config 代际/frames 窗口完整性，校准后重跑（锚注册表 {window} 值以 anchors.json 为准）"
+        )
 
 
 def run_window(window: str, report: dict[str, Any]) -> None:
@@ -124,11 +173,14 @@ def run_window(window: str, report: dict[str, Any]) -> None:
             print(f"[skip] {window}/{spec['key']} (cached)", file=sys.stderr)
             continue
         config = RankTrendConfig.from_patch(spec["overrides"])
+        _assert_overrides_applied(config, spec["overrides"])
         print(f"[track2] {window} {spec['key']} {spec['overrides']} ...", file=sys.stderr)
         t0 = time.time()
         result = evaluate_gate(config, frames)  # type: ignore[name-defined] # noqa: F821
         result["elapsedSec"] = round(time.time() - t0, 1)
         trials[spec["key"]] = {"desc": spec["desc"], "overrides": spec["overrides"], "result": result}
+        if spec["key"] == "baseline":
+            _assert_baseline_anchor(window, result["synergy"]["saEx"])
         r = result
         print(
             f"[track2] {window} {spec['key']} -> score={r['score']} syn(saEx={r['synergy']['saEx']} "

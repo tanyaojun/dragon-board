@@ -38,13 +38,18 @@ from backend.operations.optimize_resonance_parameters import _tier_summary, load
 WINDOWS: dict[str, tuple[str, str]] = {
     "decision": ("2026-04-15", "2026-07-31"),
     "oos1": ("2026-08-15", "2026-08-31"),
-    # 2026-09-13 扩到 09-12（9/10 补录 + 9/11，86 帧），与阶段 20 Track 2 口径一致
+    # oos2 为历史截断口径 09-01~09-12（2026-09-13 扩到 9/10 补录 + 9/11，86 帧，与阶段 20
+    # Track 2 当时口径一致）；B-202610 批次判定读数以 data_windows.WINDOWS 的 oos2 全月/oos2u
+    # 为准，引用本 harness 历史"oos2"读数须按截断口径解读（harness-audit-20260921 §5.1/D1；
+    # WINDOWS 派生化列入批次后改造批）。
     "oos2": ("2026-09-01", "2026-09-12"),
 }
 
 # 边际贡献 trial 组（权重类经 from_patch 归一化，5 权重和恒为 1，与 baseline 同量纲）。
+# baseline 语义（审计 B2 修正，2026-09-25）：ma_join 五因子合同已于 §22.8 随 p2_aggressive
+# 落默认（maWeight=0.37），baseline=当前生产默认栈五因子口径，不再写"四因子"。
 TRIALS: list[dict[str, Any]] = [
-    {"key": "baseline", "desc": "默认配置（四因子）", "overrides": {}},
+    {"key": "baseline", "desc": "默认配置（五因子 p2_aggressive，ma_join 2026-09-13 落默认 maWeight=0.37）", "overrides": {}},
     {"key": "macd_off", "desc": "MACD 退出决策合成（其余权重归一化放大）", "overrides": {"macdWeight": 0.0}},
     {"key": "ma_join", "desc": "MA 加入决策合成第 5 分量（与 MACD 并存）", "overrides": {"maWeight": 0.25}},
     {"key": "ma_replace", "desc": "MA 替代 MACD 决策分量", "overrides": {"maWeight": 0.25, "macdWeight": 0.0}},
@@ -75,6 +80,29 @@ def _macd_trend(signal: dict[str, Any]) -> str:
     if dif == 0 and dea == 0:
         return "unknown"  # calculate_macd 预热期哨兵值
     return "bull" if dif > dea else "bear" if dif < dea else "flat"
+
+
+_OVERRIDE_MISSING = object()
+
+# 决策五权重经 from_patch 整体归一化（engine/config.py from_patch，和恒为 1，见本文件 TRIALS
+# 注释"权重类经 from_patch 归一化"）——patch 值≠config 实际值是设计行为，豁免值比较只断言
+# 字段存在；typo 字段不存在仍被拦截（守卫核心目标）。
+_NORMALIZED_WEIGHT_FIELDS = frozenset(
+    {"directionWeight", "accelerationWeight", "crossWeight", "macdWeight", "maWeight"}
+)
+
+
+def _assert_overrides_applied(config: Any, overrides: dict[str, Any]) -> None:
+    """override 生效性守卫（B-202610 阶段 0.4 补齐，范式同 evaluate_cs_strengths review C1）：
+    from_patch 对未知字段静默忽略——字段拼错会静默跑成 baseline 复刻、产出假零效应结论——逐键断言。"""
+    for key, value in overrides.items():
+        actual = getattr(config, key, _OVERRIDE_MISSING)
+        if actual is _OVERRIDE_MISSING:
+            raise AssertionError(f"override 未生效: {key}={value!r}（config 无此字段）——检查字段名拼写/配置代际")
+        if key in _NORMALIZED_WEIGHT_FIELDS:
+            continue
+        if actual != value:
+            raise AssertionError(f"override 未生效: {key}={value!r}（config 实际={actual!r}）——检查字段名/配置代际")
 
 
 SUBSETS: dict[str, tuple[str, Callable[[dict[str, Any]], bool]]] = {
@@ -171,6 +199,7 @@ def run_window(window: str, report: dict[str, Any], skip_trials: bool) -> None:
                 print(f"[skip] {window}/{spec['key']} (cached)", file=sys.stderr)
                 continue
             config = RankTrendConfig.from_patch(spec["overrides"])
+            _assert_overrides_applied(config, spec["overrides"])
             print(f"[ma-eval] {window} {spec['key']} {spec['overrides']} ...", file=sys.stderr)
             t0 = time.time()
             result = evaluate_gate(config, frames)

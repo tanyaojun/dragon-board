@@ -109,17 +109,35 @@ def evaluate(config: RankTrendConfig, frames: list[dict[str, Any]], focus_dim: s
         score += 1.0 * _clamp(focus_sa, 0.0, 0.05) * 10.0
     score += 0.2 if focus_pass else 0.0
     score -= 0.5 * max(0.0, focus_unknown - 0.10)
+    # 审计 B3（harness-audit-20260921 §7.2.3）：返回体必须含 focus 维全集——此前缺 volumePrice
+    # 键，_fmt 在量价 trial 时只能拿 resonance 顶替（读数冒充）。
     return {
         "score": round(score, 4),
         "synergy": _tier_summary(syn),
         "rankTrend": _tier_summary(trend),
         "resonance": _tier_summary(res),
+        "volumePrice": _tier_summary(vp),
         "signalCount": len(signals),
     }
 
 
+# focus 维 → 返回体键单一映射；未知维度/缺键 fail-fast，不许静默用别的维度顶替。
+_FOCUS_KEYS: dict[str, str] = {
+    "rankTrend": "rankTrend",
+    "resonance": "resonance",
+    "volumePrice": "volumePrice",
+}
+
+
 def _fmt(result: dict[str, Any], focus_dim: str) -> str:
-    focus = result["rankTrend"] if focus_dim == "rankTrend" else result["resonance"]
+    key = _FOCUS_KEYS.get(focus_dim)
+    if key is None:
+        raise KeyError(f"_fmt: 未知 focus_dim={focus_dim!r}（支持 {sorted(_FOCUS_KEYS)}）")
+    if key not in result:
+        raise KeyError(
+            f"_fmt: result 缺 {key} 键（现有键={sorted(result)}）——旧缓存报告缺 volumePrice 摘要，删除该报告重跑"
+        )
+    focus = result[key]
     return (
         f"score={result['score']} syn(saEx={result['synergy']['saEx']} pass={result['synergy']['passHard']}) "
         f"focus[{focus_dim}](saEx={focus['saEx']} pass={focus['passHard']} unk={focus['unknownRate']})"
