@@ -35,13 +35,13 @@
 2. `sectorAnalyzer`
 3. `dragonBreathAnalyzer`
 4. `dragonReviewService`
-5. `algorithmManager`
 
 这里的含义很关键：
 
 - 先把个股、题材、情绪都准备好
 - 再做真龙复盘
-- 最后算法中心再吃这批结果
+
+（算法中心已于 2026-09-25 整体移除，不再参与刷新链路。）
 
 
 ## 3. 核心 orchestrator

@@ -42,7 +42,6 @@ export interface DataVersion {
   platforms: number
   platformStatus: number
   breath: number
-  algorithm: number
   rotation?: number
 }
 
@@ -226,10 +225,6 @@ export interface MergedStock {
   mainTheme?: string
   themeHeat?: number | null
   themeLevel?: string
-  algorithmScore?: number
-  algorithmVersion?: number
-  algorithmId?: string
-  lastCalculated?: number
   rankTrend?: RankTrendAnalysisResult
   rankTrendCoverageWarning?: string
 }
@@ -324,11 +319,6 @@ export interface DataState {
         category?: string
       }>
       history: any[]
-      lastUpdate: number | null
-    }
-    algorithm: {
-      config: any
-      results: Map<string, any>
       lastUpdate: number | null
     }
     rotation: {

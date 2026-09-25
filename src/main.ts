@@ -40,8 +40,6 @@ import { dataLoader } from './services/dataLoader'
 import { sectorAnalyzer } from './services/sectorAnalyzer'
 import { dragonReviewService } from './services/dragon/DragonReviewService'
 import { dragonBreathAnalyzer } from './services/DragonBreathAnalyzer'
-import { algorithmManager } from './services/algorithm'
-import { algorithmConfigManager } from './services/algorithm/AlgorithmConfigManager'
 
 // ========== 股票代码管理器 ==========
 import { stockCodeManager } from './services/StockCodeManager'
@@ -66,10 +64,6 @@ if (typeof window !== 'undefined') {
   ;(window as any).sectorAnalyzer = sectorAnalyzer
   ;(window as any).dragonReviewService = dragonReviewService
   ;(window as any).dragonBreathAnalyzer = dragonBreathAnalyzer
-
-  //算法服务
-  ;(window as any).algorithmManager = algorithmManager
-  ;(window as any).algorithmConfigManager = algorithmConfigManager
 
   //apiService
   ;(window as any).apiService = apiService
@@ -102,7 +96,6 @@ if (typeof window !== 'undefined') {
   console.log('   ├─ themeFacade: 题材领域 facade')
   console.log('   ├─ dragonReviewService: 龙头分析')
   console.log('   ├─ dragonBreathAnalyzer: 情绪分析')
-  console.log('   ├─ algorithmManager: 算法管理')
   console.log('   ├─ dataLayer: 统一数据层') // 新增
   console.log('   └─ dataLoader: 八平台数据加载')
   console.log('   └─ stockCodeManager: 股票代码管理')

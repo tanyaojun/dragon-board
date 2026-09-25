@@ -3,7 +3,7 @@ import { debugLog } from '@/utils/logger'
 
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { AppConfig, SystemConfig, UserConfig, AlgorithmConfig } from '../types'
+import type { AppConfig, SystemConfig, UserConfig } from '../types'
 import { ErrorHandler } from '../utils/errorHandler'
 
 // 默认配置
@@ -83,16 +83,6 @@ const DEFAULT_CONFIG: AppConfig = {
     fullRefreshInterval: 60 * 60 * 1000,
     favoriteGroups: ['默认'],
   },
-  algorithm: {
-    current: 'balanced',
-    thresholds: {
-      totalLeader: 80,
-      sectorLeader: 65,
-      continuousLeader: 70,
-      middleLeader: 60,
-      emotionLeader: 55,
-    },
-  },
 }
 
 function sanitizeUserConfig(user: any): any {
@@ -104,6 +94,8 @@ function sanitizeUserConfig(user: any): any {
 function sanitizeAppConfig(input: any): any {
   if (!input || typeof input !== 'object') return input
   const nextConfig = { ...input }
+  // 算法中心已移除（2026-09-25），清洗旧存储里残留的 algorithm 配置块
+  delete nextConfig.algorithm
   if (nextConfig.user) {
     nextConfig.user = sanitizeUserConfig(nextConfig.user)
   }
@@ -118,7 +110,6 @@ export const useConfigStore = defineStore('config', () => {
   // ========== Getters ==========
   const system = computed(() => config.value.system)
   const user = computed(() => config.value.user)
-  const algorithm = computed(() => config.value.algorithm)
   const fullConfig = computed(() => config.value)
 
   // ========== Actions ==========
@@ -153,18 +144,8 @@ export const useConfigStore = defineStore('config', () => {
       config.value.user.refreshStrategy = oldStrategy as UserConfig['refreshStrategy']
     }
 
-    const oldAlgorithm = localStorage.getItem('algorithm')
-    const validAlgorithms = [
-      'balanced',
-      'dragonFirst',
-      'moneyDriven',
-      'techDriven',
-      'sentimentDriven',
-      'ml',
-    ]
-    if (oldAlgorithm && validAlgorithms.includes(oldAlgorithm)) {
-      config.value.algorithm.current = oldAlgorithm
-    }
+    // 算法中心已移除，清掉旧版独立存储键
+    localStorage.removeItem('algorithm')
   }
 
   function saveConfig() {
@@ -175,7 +156,6 @@ export const useConfigStore = defineStore('config', () => {
       // 向后兼容
       localStorage.setItem('kpl_theme', config.value.user.theme)
       localStorage.setItem('refresh_strategy', config.value.user.refreshStrategy)
-      localStorage.setItem('algorithm', config.value.algorithm.current)
 
       debugLog('[ConfigStore] 💾 配置已保存')
     } catch (error) {
@@ -208,28 +188,6 @@ export const useConfigStore = defineStore('config', () => {
     )
   }
 
-  function setAlgorithm(algorithmId: AlgorithmConfig['current']) {
-    config.value.algorithm.current = algorithmId
-    saveConfig()
-
-    window.dispatchEvent(
-      new CustomEvent('algorithm-changed', {
-        detail: { algorithm: algorithmId },
-      }),
-    )
-  }
-
-  function setThreshold(threshold: keyof AlgorithmConfig['thresholds'], value: number) {
-    config.value.algorithm.thresholds[threshold] = value
-    saveConfig()
-
-    window.dispatchEvent(
-      new CustomEvent('thresholds-changed', {
-        detail: { threshold, value },
-      }),
-    )
-  }
-
   function resetToDefaults() {
     config.value = sanitizeAppConfig({ ...DEFAULT_CONFIG })
     saveConfig()
@@ -258,13 +216,10 @@ export const useConfigStore = defineStore('config', () => {
     // getters
     system,
     user,
-    algorithm,
     fullConfig,
     // actions
     setUserConfig,
     setSystemConfig,
-    setAlgorithm,
-    setThreshold,
     resetToDefaults,
     loadConfig,
     saveConfig,

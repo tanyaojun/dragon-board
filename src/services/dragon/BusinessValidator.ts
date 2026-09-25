@@ -82,24 +82,6 @@ export class BusinessValidator {
       details: results
     }
   }
-  
-  /**
-   * 调整权重 - 基于验证结果
-   */
-  adjustWeights(report: ValidationReport): void {
-    // 如果某类型龙头平均分低于60，降低权重
-    Object.entries(report.byLevel).forEach(([level, score]) => {
-      if (score < 60) {
-        // 降低该类型权重
-        algorithmManager.adjustFactorWeight(level, -0.05)
-        console.log(`[DragonValidator] ⚖️ 降低${level}权重，表现分${score}`)
-      } else if (score > 80) {
-        // 提高该类型权重
-        algorithmManager.adjustFactorWeight(level, +0.03)
-        console.log(`[DragonValidator] ⚖️ 提高${level}权重，表现分${score}`)
-      }
-    })
-  }
 }
 
 interface ValidationReport {

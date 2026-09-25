@@ -60,14 +60,12 @@ import { usePanel } from '@/composables/usePanel'
 import SystemConfig from './config/SystemConfig.vue'
 import UserConfig from './config/UserConfig.vue'
 import CacheConfig from './config/CacheConfig.vue'
-import AlgorithmConfig from './config/AlgorithmConfig.vue'
 import AboutConfig from './config/AboutConfig.vue'
 
 const TABS = {
   system: { name: '系统配置', icon: '⚙️', component: SystemConfig },
   user: { name: '用户配置', icon: '👤', component: UserConfig },
   cache: { name: '缓存配置', icon: '💾', component: CacheConfig },
-  algorithm: { name: '算法配置', icon: '🧠', component: AlgorithmConfig },
   about: { name: '关于', icon: 'ℹ️', component: AboutConfig },
 }
 
@@ -141,18 +139,6 @@ function applyChanges() {
       Object.entries(pendingChanges.value.user).forEach(([key, value]) => {
         configStore.setUserConfig(key as any, value as any)
       })
-    }
-
-    // 应用算法配置更改
-    if (pendingChanges.value.algorithm) {
-      if (pendingChanges.value.algorithm.current) {
-        configStore.setAlgorithm(pendingChanges.value.algorithm.current)
-      }
-      if (pendingChanges.value.algorithm.thresholds) {
-        Object.entries(pendingChanges.value.algorithm.thresholds).forEach(([key, value]) => {
-          configStore.setThreshold(key as any, value as number)
-        })
-      }
     }
 
     // 清空待处理更改
@@ -239,17 +225,6 @@ function importConfig() {
           Object.entries(imported.user).forEach(([key, value]) => {
             configStore.setUserConfig(key as any, value as any)
           })
-        }
-
-        if (imported.algorithm) {
-          if (imported.algorithm.current) {
-            configStore.setAlgorithm(imported.algorithm.current)
-          }
-          if (imported.algorithm.thresholds) {
-            Object.entries(imported.algorithm.thresholds).forEach(([key, value]) => {
-              configStore.setThreshold(key as any, value as number)
-            })
-          }
         }
 
         EventManager.emit(AppEvents.UI.TOAST, {

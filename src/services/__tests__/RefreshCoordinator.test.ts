@@ -27,11 +27,6 @@ describe('RefreshCoordinator service registry', () => {
     expect(registry.find((service) => service.name === 'dataLoader')).not.toHaveProperty(
       'syncMethod',
     )
-    expect(registry.find((service) => service.name === 'algorithmManager')).toEqual(
-      expect.objectContaining({
-        fullMethod: 'runFullUpdate',
-      }),
-    )
   })
 
   it('executes a normalized request and returns structured task results', async () => {

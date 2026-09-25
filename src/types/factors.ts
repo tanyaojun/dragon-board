@@ -91,22 +91,6 @@ export interface LeaderThresholds {
   }
 }
 
-/**
- * 算法定义
- */
-export interface Algorithm {
-  id?: string
-  name: string
-  icon: string
-  description: string
-  category: string
-  color: string
-  factors: Record<string, FactorConfig>
-  leaderThresholds?: LeaderThresholds
-  adaptive?: boolean
-  learningRate?: number
-}
-
 // ===== 题材因子定义（新增）=====
 
 /**

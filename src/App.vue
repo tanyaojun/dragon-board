@@ -56,12 +56,6 @@
           <span class="icon">📊</span>
         </button>
 
-        <!-- 算法中心 -->
-        <button ref="algorithmBtnRef" class="btn-icon algorithm-core-btn" title="算法中心 (Ctrl+Shift+A)"
-          @click="openPanel('algorithm', $event)">
-          <span class="icon">🧠</span>
-        </button>
-
         <!-- 自选股 -->
         <button ref="favoriteBtnRef" class="btn-icon" title="自选股 (Ctrl+F)" @click="openPanel('favorite', $event)"
           data-favorite-trigger>
@@ -81,9 +75,6 @@
             </div>
             <div class="dropdown-item" @click="openSettings('config')">
               <span class="item-icon">⚙️</span>配置管理
-            </div>
-            <div class="dropdown-item" @click="openSettings('algorithm')">
-              <span class="item-icon">🧠</span>算法中心
             </div>
             <div class="dropdown-divider"></div>
             <div class="dropdown-item" @click="panels.help = true">
@@ -164,8 +155,6 @@
     <SettingsPanel v-model:visible="panels.settings" :trigger-rect="panelRects.settings"
       @close="panels.settings = false" />
     <ConfigPanel v-model:visible="panels.config" :trigger-rect="panelRects.config" @close="panels.config = false" />
-    <AlgorithmPanel v-model:visible="panels.algorithm" :trigger-rect="panelRects.algorithm"
-      @close="panels.algorithm = false" />
     <SectorPanel v-model:visible="panels.sector" :trigger-rect="panelRects.sector" @close="panels.sector = false"
       @show-detail="openSectorDetail" />
     <DragonHeadPanel v-model:visible="panels.dragon" :trigger-rect="panelRects.dragon" @close="panels.dragon = false" />
@@ -217,7 +206,6 @@ import type { CandidatePoolOpenPayload } from './types/candidatePoolOpenPayload'
 // 面板组件体积较大，按需异步加载，降低首屏 chunk 体积。
 const SettingsPanel = defineAsyncComponent(() => import('./components/panels/SettingsPanel.vue'))
 const ConfigPanel = defineAsyncComponent(() => import('./components/panels/ConfigPanel.vue'))
-const AlgorithmPanel = defineAsyncComponent(() => import('./components/panels/AlgorithmPanel.vue'))
 const SectorPanel = defineAsyncComponent(() => import('./components/panels/SectorPanel.vue'))
 const DragonHeadPanel = defineAsyncComponent(() => import('./components/panels/DragonHeadPanel.vue'))
 const DragonBreathPanel = defineAsyncComponent(() => import('./components/panels/DragonBreathPanel.vue'))
@@ -265,9 +253,6 @@ import { ThemeCorrelationAnalyzer } from './services/ThemeCorrelationAnalyzer' /
 import { RankTrendAnalyzer } from './services/RankTrendAnalyzer' // 排名趋势分析
 import { stockCodeManager } from './services/StockCodeManager'
 
-// ========== 4. 算法服务 ==========
-import { algorithmManager } from './services/algorithm'       // 算法管理
-
 // ========== 5. 刷新和更新服务 ==========
 import { refreshCoordinator } from './services/RefreshCoordinator'
 import { RefreshManager } from './services/RefreshManager'
@@ -305,7 +290,6 @@ const refreshBtnRef = ref<HTMLElement>()
 const sectorBtnRef = ref<HTMLElement>()
 const dragonBtnRef = ref<HTMLElement>()
 const breathBtnRef = ref<HTMLElement>()
-const algorithmBtnRef = ref<HTMLElement>()
 const favoriteBtnRef = ref<HTMLElement>()
 const dropdownRef = ref<HTMLElement | null>(null)
 const themeRiskBtnRef = ref<HTMLElement>()
@@ -321,14 +305,13 @@ const navTabs = [
   { id: 'emotion', label: '龙息监测', icon: '📈' },
   { id: 'sector', label: '题材热点', icon: '🎯' },
   { id: 'events', label: '异动雷达', icon: '🔔' },
-  { id: 'algorithm', label: '算法中心', icon: '🧠' },
+  { id: 'hotlistEmotion', label: '热榜情绪', icon: '🔥' },
 ]
 
 // 面板管理
 const panels = ref({
   settings: false,
   config: false,
-  algorithm: false,
   hotlistEmotion: false,
   sector: false,
   dragon: false,
@@ -459,7 +442,6 @@ const openSettings = (type: string) => {
   showDropdown.value = false
   if (type === 'refresh') panels.value.settings = true
   else if (type === 'config') panels.value.config = true
-  else if (type === 'algorithm') panels.value.algorithm = true
 }
 
 const focusSearchInput = () => {
@@ -473,7 +455,6 @@ useKeyboardShortcuts({
   onSector: () => openPanelFromShortcut('sector', sectorBtnRef.value),
   onBreath: () => openPanelFromShortcut('breath', breathBtnRef.value),
   onFavorite: () => openPanelFromShortcut('favorite', favoriteBtnRef.value),
-  onAlgorithm: () => openPanelFromShortcut('algorithm', algorithmBtnRef.value),
   onExport: () => openPanelFromShortcut('export'),
   onRefresh: () => handleRefresh(),
   onHelp: () => {
@@ -498,7 +479,7 @@ const handleTabChange = (tabId: string) => {
     emotion: 'breath',
     sector: 'themeMomentum',
     events: 'eventMonitor',
-    algorithm: 'algorithm',
+    hotlistEmotion: 'hotlistEmotion',
   }
   if (panelMap[tabId]) {
     panels.value[panelMap[tabId]] = true
@@ -648,9 +629,6 @@ const lazyLoadServices = () => {
 
       // 真龙复盘
       safeExecute(dragonReviewService, 'runFullUpdate', '真龙复盘')
-
-      // 算法中心
-      safeExecute(algorithmManager, 'init', '算法中心')
     }, 1500)
 
     // 第4批：刷新相关服务（延迟3.5秒）
@@ -662,7 +640,6 @@ const lazyLoadServices = () => {
           { name: 'sectorAnalyzer', instance: sectorAnalyzer },
           { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
           { name: 'dragonReviewService', instance: dragonReviewService },
-          { name: 'algorithmManager', instance: algorithmManager },
         ]
         services.forEach(({ name, instance }) => {
           if (instance) {

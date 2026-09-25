@@ -109,11 +109,6 @@ class DataLayer {
         history: [],
         lastUpdate: null,
       },
-      algorithm: {
-        config: null,
-        results: new Map(),
-        lastUpdate: null,
-      },
       // ✅ 添加 rotation
       rotation: {
         current: null,
@@ -152,7 +147,6 @@ class DataLayer {
       platforms: 0,
       platformStatus: 0,
       breath: 0,
-      algorithm: 0,
       rotation: 0,
     },
 
@@ -930,38 +924,6 @@ class DataLayer {
     return this.state.analysis.breath.history
   }
 
-  // ========== 算法结果管理 ==========
-  updateAlgorithmResult(code: string, result: any) {
-    if (!this.state.analysis.algorithm) {
-      this.state.analysis.algorithm = {
-        config: null, // ✅ 添加 config 属性
-        results: new Map(),
-        lastUpdate: null,
-      }
-    }
-
-    this.state.analysis.algorithm.results.set(code, result)
-    this.state.analysis.algorithm.lastUpdate = Date.now()
-    this.state.version.algorithm = (this.state.version.algorithm || 0) + 1
-  }
-
-  getAlgorithmResult(code: string) {
-    return this.state.analysis?.algorithm?.results?.get(code)
-  }
-
-  updateAlgorithmConfig(config: any) {
-    this.state.analysis.algorithm.config = {
-      ...config,
-      timestamp: Date.now(),
-    }
-    this.state.version.algorithm = (this.state.version.algorithm || 0) + 1
-    this.throttledNotify('analysis.algorithm.config', config)
-  }
-
-  getAlgorithmConfig() {
-    return this.state.analysis.algorithm.config
-  }
-
   // ========== 题材库数据管理 ==========
 
   private initTck2Store() {
@@ -1542,11 +1504,6 @@ class DataLayer {
         history: [],
         lastUpdate: null,
       },
-      algorithm: {
-        config: null,
-        results: new Map(),
-        lastUpdate: null,
-      },
       rotation: {
         current: null,
         history: [],
@@ -1594,7 +1551,6 @@ class DataLayer {
       platforms: 0,
       platformStatus: 0,
       breath: 0,
-      algorithm: 0,
       rotation: 0,
     }
     this.state.meta = {

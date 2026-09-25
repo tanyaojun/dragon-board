@@ -492,7 +492,8 @@ function openLimitStocks(kind: HotlistLimitStockKind, event?: MouseEvent) {
 
 const panelStyle = computed(() => {
   const rect = props.triggerRect
-  if (!rect) return {}
+  // 无触发源（导航标签打开）时落到视口内默认位置，与 usePanel 的 fallback 一致
+  if (!rect) return { top: '100px', right: '20px' }
   const width = 960
   const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2))
   return { left: `${left}px`, top: `${Math.min(rect.bottom + 8, window.innerHeight - 520)}px` }

@@ -21,7 +21,6 @@ export type {
   Factor,
   FactorConfig,
   LeaderThresholds,
-  Algorithm,
   ThemeFactors,
   ThemeFactorId,
   BreathFactorId,
@@ -33,7 +32,6 @@ export type {
   AppConfig,
   SystemConfig,
   UserConfig,
-  AlgorithmConfig,
   ModulesConfig,
   CacheConfig,
   DataLoaderConfig,
@@ -44,11 +42,6 @@ export type {
 
 // 如果需要单独导出某些常量（保持现有导出）
 export {
-  // 算法相关
-  DEFAULT_THRESHOLDS,
-  THRESHOLD_RANGES,
-  STORAGE_KEYS,
-
   // 龙头相关
   LEADER_LEVELS,
   LEADER_CHANGE_TYPES,

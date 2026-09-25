@@ -259,12 +259,6 @@ export const API_CONFIG = {
     BATCH_SPLIT_SIZE: 50,
   },
 
-  // ===== 反馈配置 =====
-  FEEDBACK: {
-    ENABLED: true,
-    COOLDOWN: 5000,
-  },
-
   // ===== 日志配置 =====
   LOG_LEVEL: {
     DEBUG: false,

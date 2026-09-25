@@ -122,10 +122,6 @@ export interface Stock {
   // 时间戳
   updatedAt: number
   updateTime?: number
-  algorithmScore?: number
-  algorithmVersion?: number
-  algorithmId?: string
-  lastCalculated?: number
 
   // L2 摘要字段（十档盘口 / 逐笔聚合）
   bid1Price?: number
@@ -284,14 +280,6 @@ export interface FactorDetail {
   score: number
   weight: number
   contribution: number
-}
-
-export interface ScoreResult {
-  score: number
-  details: Record<string, FactorDetail>
-  timestamp: number
-  algorithm: string
-  algorithmName: string
 }
 
 // ========== 情绪相关 ==========
@@ -519,21 +507,6 @@ export interface BreathHistorySnapshot {
 }
 
 // ========== 性能监控类型 ==========
-export interface PerformanceRecord {
-  algorithm: string
-  score: number
-  success: boolean
-  timestamp: number
-}
-
-export interface PerformanceStat {
-  count: number
-  successCount: number
-  totalScore: number
-  avgScore: number
-  successRate: string
-}
-
 export interface Board {
   id: string
   name: string // 板块名称（如：电力、AI硬件、石油油气等）
@@ -907,11 +880,6 @@ export interface ExtendedAnalysis {
     history: any[]
     lastUpdate: number | null
   }
-  algorithm: {
-    config: any
-    results: Map<string, any>
-    lastUpdate: number | null
-  }
   rotation: RotationStore // 新增轮动存储
   alerts: AlertStore // 新增预警存储
 }
@@ -988,21 +956,9 @@ export interface UserConfig {
   favoriteGroups: string[]
 }
 
-export interface AlgorithmConfig {
-  current: string
-  thresholds: {
-    totalLeader: number
-    sectorLeader: number
-    continuousLeader: number
-    middleLeader: number
-    emotionLeader: number
-  }
-}
-
 export interface AppConfig {
   system: SystemConfig
   modules: ModulesConfig
   cache: CacheConfig
   user: UserConfig
-  algorithm: AlgorithmConfig
 }

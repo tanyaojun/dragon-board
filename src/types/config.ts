@@ -238,123 +238,10 @@ export interface EmotionFactorWeights {
   [key: string]: number
 }
 
-export interface EmotionFeedback {
-  phase: string
-  score: number
-  ztCount: number
-  dtCount: number
-  hotThemesCount: number
-  themeImpact: number
-  timestamp: number
-}
-
-export interface PhaseAdjustment {
-  [factorId: string]: number // 正数为增加权重，负数为减少
-}
-
-export const PHASE_ADJUSTMENTS: Record<string, PhaseAdjustment> = {
-  // ===== 冰点：防守为主，关注逆势 =====
-  冰点: {
-    contrarian: 0.05, // 逆势因子大幅提高（找抗跌股）
-    compRank: 0.02, // 综合排名稍提高（找强势股）
-    breathDtCount: 0.03, // 跌停数权重提高（风险警示）
-    themeHeat: -0.03, // 题材热度降权（题材失效）
-    breathZtCount: -0.02, // 涨停数降权
-    breathPassRate: -0.02, // 晋级率降权
-    zlje: -0.02, // 主力净额降权
-  },
-
-  // ===== 启动：轻仓试错，关注率先修复 =====
-  启动: {
-    themeHeat: 0.02, // 题材热度开始重要
-    compRank: 0.02, // 排名重要（找领涨）
-    breathPassRate: 0.03, // 晋级率提高
-    breathZtCount: 0.01, // 涨停数略增
-    continuousDays: 0.01, // 连板开始关注
-    zlje: 0.01, // 主力开始进场
-    contrarian: -0.02, // 逆势降权
-  },
-
-  // ===== 发酵：适度加仓，紧跟主线 =====
-  发酵: {
-    themeHeat: 0.03, // 题材热度最重要
-    themeMomentum: 0.03, // 题材动量最重要
-    continuousDays: 0.02, // 连板开始发力
-    breathPassRate: 0.02, // 晋级率提高
-    zlje: 0.02, // 主力开始加仓
-    breathZtCount: 0.01,
-    compRank: -0.01, // 排名适当降低（题材更重要）
-  },
-
-  // ===== 高潮：持股为主，注意分化 =====
-  高潮: {
-    continuousDays: 0.04, // 连板最重要（高度板）
-    breathZtCount: 0.02,
-    breathPhase: 0.02,
-    themeHeat: -0.02, // 题材热度降权（注意分化）
-    themeMomentum: -0.02,
-    zlje: -0.02, // 主力降权（高潮期不看主力）
-    contrarian: -0.03, // 逆势大幅降权
-  },
-
-  // ===== 退潮：减仓防守，规避高位 =====
-  退潮: {
-    breathDtCount: 0.04, // 跌停数最重要（风险警示）
-    breathZhabanRate: 0.03, // 炸板率重要
-    contrarian: 0.02, // 逆势回升
-    continuousDays: -0.03, // 连板大幅降权（不追高）
-    themeHeat: -0.02,
-    themeMomentum: -0.02,
-    zlje: -0.03, // 主力大幅降权
-    breathPassRate: -0.02,
-  },
-} as const
-
-// ========== 算法配置常量 ==========
-export interface Thresholds {
-  totalLeader: number
-  sectorLeader: number
-  continuousLeader: number
-  middleLeader: number
-  emotionLeader: number
-}
-
-export const DEFAULT_THRESHOLDS: Thresholds = {
-  totalLeader: 80, // 总龙头：市场绝对核心，连板高度+带动性
-  continuousLeader: 68, // 连板龙头：至少3连板，且有换手
-  sectorLeader: 58, // 板块龙头：板块内最强，带动板块跟风
-  middleLeader: 48, // 中军龙头：大市值+高成交额+趋势
-  emotionLeader: 45, // 情绪龙头：涨停+高换手+带动情绪
-}
-
-export interface ThresholdRange {
-  min: number
-  max: number
-}
-
-export interface ThresholdRanges {
-  totalLeader: ThresholdRange
-  sectorLeader: ThresholdRange
-  continuousLeader: ThresholdRange
-  middleLeader: ThresholdRange
-  emotionLeader: ThresholdRange
-}
-
-export const THRESHOLD_RANGES: ThresholdRanges = {
-  totalLeader: { min: 75, max: 95 }, // 总龙头不能低于75
-  sectorLeader: { min: 60, max: 85 }, // 板块龙头不能低于60
-  continuousLeader: { min: 65, max: 90 }, // 连板龙头不能低于65
-  middleLeader: { min: 55, max: 80 }, // 中军龙头不能低于55
-  emotionLeader: { min: 52, max: 75 }, // 情绪龙头最低52（比原来提高17分）
-}
 /**
  * 存储键名 - 添加阈值乘数配置
  */
 export const STORAGE_KEYS = {
-  ALGORITHM: 'algorithm',
-  WEIGHTS: 'lgorithm_weights',
-  THRESHOLDS: 'algorithm_thresholds',
-  HISTORY: 'algorithm_history',
   THRESHOLD_MULTIPLIERS: 'threshold_multipliers', //情绪计算阈值乘数配置
 }
 
@@ -437,41 +324,6 @@ export const PLATFORM_WEIGHTS = {
 // 2026-09-21 口径唯一化裁决 A）；前端仅保留缺省占位语义。
 export const DEFAULT_RANK = 999
 
-// ========== 性能监控配置 ==========
-export const PERFORMANCE_CONFIG = {
-  MAX_HISTORY: 1000,
-  UPDATE_INTERVAL: 60 * 1000, // 1分钟
-  EMOTION_HISTORY_SIZE: 100,
-  ADJUSTMENT_HISTORY_SIZE: 200,
-} as const
-
-// ========== 情绪监控相关类型 ==========
-export interface EmotionRecord {
-  phase: string
-  score: number
-  ztCount: number
-  dtCount: number
-  hotThemesCount: number
-  timestamp: number
-}
-
-export interface AdjustmentRecord {
-  factorId: string
-  oldWeight: number
-  newWeight: number
-  delta: number
-  reason: string
-  timestamp: number
-}
-
-export interface PerformanceStats {
-  avgCalcTime: number
-  p95CalcTime: number
-  cacheHitRate: number
-  emotionStats: Record<string, { count: number; avgScore: number }>
-  adjustmentStats: Record<string, { count: number; totalDelta: number }>
-}
-
 // ========== 事件常量 ==========
 export const AppEvents = {
   // ===== 股票相关事件 =====
@@ -523,19 +375,7 @@ export const AppEvents = {
     UPDATED: 'breath:updated',
     PHASE_CHANGED: 'breath:phase-changed',
     METRICS_UPDATED: 'breath:metrics-updated',
-    FEEDBACK: 'breath:feedback',
     THRESHOLD_MULTIPLIERS_UPDATED: 'threshold-multipliers-updated',
-  },
-
-  // ===== 算法相关事件 =====
-  ALGORITHM: {
-    CHANGED: 'algorithm-changed',
-    WEIGHTS_ADJUSTED: 'algorithm:weights-adjusted',
-    THRESHOLDS_CHANGED: 'thresholds-changed',
-    CONFIG_CHANGED: 'algorithm:config-changed',
-    INITIALIZED: 'algorithm:initialized',
-    CONFIG_SAVED: 'algorithm:config-saved',
-    WEIGHTS_NORMALIZED: 'algorithm:weights-normalized',
   },
 
   // ===== WebSocket相关事件 =====

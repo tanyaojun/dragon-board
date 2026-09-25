@@ -67,13 +67,6 @@ class RefreshCoordinator {
       syncMethod: 'syncData',
       dependsOn: ['dataLoader', 'themeRuntime', 'dragonBreathAnalyzer'],
     },
-    {
-      name: 'algorithmManager',
-      priority: 50,
-      fullMethod: 'runFullUpdate',
-      syncMethod: 'syncData',
-      dependsOn: ['dragonReviewService', 'themeRuntime'],
-    },
   ]
 
   constructor() {

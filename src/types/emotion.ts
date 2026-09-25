@@ -323,57 +323,6 @@ export const EMOTION_IMPACT = {
       correlation: 0.1,
     },
   },
-
-  ALGORITHM: {
-    FACTOR_ADJUSTMENTS: {
-      冰点: {
-        contrarian: 0.05,
-        compRank: 0.02,
-        breathDtCount: 0.03,
-        themeHeat: -0.03,
-        breathZtCount: -0.02,
-        breathPassRate: -0.02,
-        zlje: -0.02,
-      },
-      启动: {
-        themeHeat: 0.02,
-        compRank: 0.02,
-        breathPassRate: 0.03,
-        breathZtCount: 0.01,
-        continuousDays: 0.01,
-        zlje: 0.01,
-        contrarian: -0.02,
-      },
-      发酵: {
-        themeHeat: 0.03,
-        themeMomentum: 0.03,
-        continuousDays: 0.02,
-        breathPassRate: 0.02,
-        zlje: 0.02,
-        breathZtCount: 0.01,
-        compRank: -0.01,
-      },
-      高潮: {
-        continuousDays: 0.04,
-        breathZtCount: 0.02,
-        breathPhase: 0.02,
-        themeHeat: -0.02,
-        themeMomentum: -0.02,
-        zlje: -0.02,
-        contrarian: -0.03,
-      },
-      退潮: {
-        breathDtCount: 0.04,
-        breathZhabanRate: 0.03,
-        contrarian: 0.02,
-        continuousDays: -0.03,
-        themeHeat: -0.02,
-        themeMomentum: -0.02,
-        zlje: -0.03,
-        breathPassRate: -0.02,
-      },
-    },
-  },
 } as const
 
 export const UNIFIED_EMOTION = {

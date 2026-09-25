@@ -13,7 +13,6 @@
       <li>DataLoader: 7.0.0</li>
       <li>RefreshManager: 3.0.0</li>
       <li>ThemeManager: 3.0.0</li>
-      <li>AlgorithmManager: 2.4.0</li>
     </ul>
 
     <h4>🔧 配置说明</h4>

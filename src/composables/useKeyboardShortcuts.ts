@@ -12,21 +12,11 @@ export function useKeyboardShortcuts(actions: {
   onRefresh?: () => void
   onHelp?: () => void
   onSearch?: () => void
-  onAlgorithm?: () => void
   onExport?: () => void
 }) {
   onMounted(() => {
     keyboardService.registerPanelShortcuts(actions)
-    
-    if (actions.onAlgorithm) {
-      keyboardService.registerShortcut({
-        key: 'Ctrl+Shift+A',
-        description: '算法配置',
-        category: 'other',
-        action: actions.onAlgorithm
-      })
-    }
-    
+
     if (actions.onExport) {
       keyboardService.registerShortcut({
         key: 'Ctrl+E',

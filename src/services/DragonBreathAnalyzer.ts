@@ -11,7 +11,6 @@ import type {
   ThsLimitUpPoolEvidence,
   ThsLimitUpPoolKey,
   BreathHistorySnapshot,
-  EmotionFeedback,
 } from '../types'
 
 import { AppEvents } from '../types'
@@ -138,12 +137,6 @@ interface DragonBreathState {
   themeImpact: number
   hotThemesCount: number
 
-  // 反馈状态
-  lastFeedback: {
-    phase: string
-    timestamp: number
-  } | null
-
   // 缓存
   cache: {
     marketStats: any
@@ -179,7 +172,6 @@ export class DragonBreathAnalyzer {
       _fetching: false,
       themeImpact: 0,
       hotThemesCount: 0,
-      lastFeedback: null,
       cache: {
         marketStats: null,
         limitStats: null,
@@ -332,41 +324,6 @@ export class DragonBreathAnalyzer {
         upDownRatio: 0,
       },
     }
-  }
-
-  // ===== 反馈情绪给算法管理器 =====
-  private feedbackToAlgorithm() {
-    if (!API_CONFIG.FEEDBACK.ENABLED) return
-
-    try {
-      const sentiment = this.state.sentiment
-      const marketData = this.state.marketData
-
-      if (
-        this.state.lastFeedback &&
-        sentiment.phase === this.state.lastFeedback.phase &&
-        Date.now() - this.state.lastFeedback.timestamp < API_CONFIG.FEEDBACK.COOLDOWN
-      ) {
-        return
-      }
-
-      const feedback: EmotionFeedback = {
-        phase: sentiment.phase,
-        score: 0,
-        ztCount: marketData.ztCount,
-        dtCount: marketData.dtCount,
-        hotThemesCount: this.state.hotThemesCount,
-        themeImpact: this.state.themeImpact,
-        timestamp: Date.now(),
-      }
-
-      EventManager.emit(AppEvents.BREATH.FEEDBACK, feedback)
-
-      this.state.lastFeedback = {
-        phase: sentiment.phase,
-        timestamp: Date.now(),
-      }
-    } catch (error) {}
   }
 
   /**
@@ -1430,7 +1387,6 @@ private buildFactorData(): any[] {
         timestamp: Date.now(),
       })
 
-      this.feedbackToAlgorithm()
       this.recordHistory()
       this.lastAnalysisTime = Date.now()
 
