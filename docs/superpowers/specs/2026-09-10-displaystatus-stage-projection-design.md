@@ -207,3 +207,22 @@ def compute_display_status(analysis, stock) -> dict:
 **前端测试**：`src/services/rankTrend/__tests__/statusClassifier.test.ts`、`src/components/common/__tests__/DataTable.test.ts`、`src/components/panels/__tests__/RankTrendPanel.test.ts`、`src/components/panels/__tests__/DragonBreathPanel.test.ts`
 
 **文档**：`docs/ranktrend/lifecycle-layering-contract.md`、`quant-board/docs/api-cli.md`、`quant-board/docs/architecture.md`、原 spec §3 废弃标注（已完成）
+
+## 11. 2026-09-19 注记：全池口径 vs 行情列表池（面板注脚透出）
+
+「全池状态结构」的恒等式 `sum(stageCounts) == 全池行数` 中的**全池 = 快照帧池**（采集时点
+由前端 startup-bundle 提供的合并池），**不等于**行情列表当前合并池：页面盘后加载/刷新后，
+前端池会含盘后进出榜股票（如 2026-09-18 快照池 240 只 vs 盘后列表 278 只），且同一股票
+两边判定同源（`cycle.stage`）不会矛盾——差异全部来自池 membership 与时点。
+
+用户把面板计数与行情列表「周期」列直接对账会把池差异误判为分类不一致（实测案例：
+面板点火 2 = 002050+301487，列表点火 3 = 002050+002192+603138，交集仅 002050）。
+处置（fail-visible）：面板「全池状态结构」注脚在 `topN ≠ 行情列表股票数` 时追加
+「快照池 N 只（HH:MM）≠ 行情列表 M 只，两池进出榜时点不同，各格计数只统计快照池」；
+两池一致或数据缺失时不产生噪音。实现：`DragonBreathPanel.vue` `hotListPoolGapNote` /
+`marketListPoolCount`（merged.stocks 订阅维护），合同测试见
+`DragonBreathPanel.test.ts`「池口径差异透出」。
+
+采集侧根因备注：快照池锚定前端启动时写入的 startup-bundle（盘中 30 分钟周期只刷行情
+与信号、不重写 bundle、不重拉热榜），盘后重载页面后的新进榜股票当日不会进快照帧——
+属已知口径边界，如需彻底对齐需评估采集链改造（另行立项，不在本注记范围）。

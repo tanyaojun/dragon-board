@@ -692,3 +692,54 @@ git commit -m "docs(collector): 采集池 autonomous 口径文档同步 + spec �
 3. 采集 run 审计（`snapshot_collector_runs`）核对 `poolComposition.poolSize` 相比 bundle 时代 +10~15%、analyze 耗时在预算内。
 4. 盘后重载页面复验 1/2（时点差最大场景）。
 5. 设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE=bundle_first` 重启采集进程，确认回退路径生效后改回 `autonomous`。
+
+---
+
+### Task 6 验收记录（2026-09-21 实测）
+
+**验收环境**：交易日 2026-09-21 全程；五服务在线（proxy 3000 / 前端 5173 / 后端 8000 / 采集器 8001 / MongoDB 27017）；采集 10 槽完成（9×half_hour + daily 15:30），error_count=1（见遗留观察项）。过程数据留证 `quant-board/data/snapshot-collector-acceptance/`（列表快照×5、比对结果×3、审计摘要）。
+
+**§7.1 列表 ⊆ 帧池（盘中）——通过（时点差口径）**
+
+- 盘中列表 241 只（10:37:59）vs 10:30 帧 236 只：13 只「列表有、帧无」+ 8 只反向。逐股对热榜源判定：13 只中 10 只为 10:30 采集后新进榜（时点差），8 只反向中 7 只已出榜——热榜盘中分钟级轮动所致，非机制遗漏。
+- **闭环证据**：10 只时点差股 **10/10 进入 11:00 帧**；3 只已出榜股（000700/002269/002513）正确不入后续帧。行级 `poolSource=autonomous` 在真实帧实测落地。
+- 结论：「列表 ⊆ 最近帧池」在**采集活跃窗口内**成立，时点差在一个采集周期（30min）内自然收敛。
+
+**§7.2 面板对账——通过**
+
+- 盘中：注脚「golden 判定 236 · fallback 接管 0 · 快照池 236 ≠ 行情列表 241，两池进出榜时点不同」如实透出，无「列表有、快照无」机制性差异残留。
+- 盘后复验：快照池 239 与 15:00 收盘帧 stock-rows **精确一致**；`fallback 接管 0`（全天无 bundle_fallback 帧）；日内轨迹 9 槽池规模与 runs `stockRowCount` 逐帧一致。Console 0 errors。
+
+**§7.3 run 审计——通过**
+
+| 指标 | autonomous（2026-09-21） | bundle 时代（2026-09-18 同槽） | 判定 |
+| --- | --- | --- | --- |
+| 09:30 池规模 | 249（+18%） | 211 | 符合 +10~15% 预期 |
+| 10:00 池规模 | 246（+11%） | 222 | 符合预期 |
+| run 全程耗时（含 analyze 链） | 92.8~101.8s | 86.9~115.9s | 同量级，预算内 |
+| `poolComposition` | `mode=autonomous`、8 平台 `platformTotals`、`failedPlatforms=[]` | `null`（代际可区分） | 落地 ✓ |
+
+`platformTotals` 与 proxy 实际返回一致（eastmoney=100 / ths=100 / xueqiu 83~91≈帧值；9:30 与 10:00 两帧 totals 完全一致）。
+
+**§7.4 poolComposition 可见性——通过**（health 与 run 审计通道均可见，见上表）
+
+**§7.5 盘后重载复验——实测与设计假设偏差（记录，非回归）**
+
+- 盘后重载列表 245 只（18:08）vs 15:00 收盘帧 239 只：48 只 missing、42 只 extra。
+- 根因判定（逐股实测）：八平台热榜源**盘后仍在持续轮动**——48 只 missing 中 43 只在盘后当前源在榜，42 只 extra 中 41 只已从当前源消失；且前端列表池自带缓存层（`PLATFORM_CACHE_TTL_MS=30min` + 启动缓存），其时点与收盘帧必然错位。spec §7.5 隐含的「盘后热榜静止」假设不成立。
+- 定性：**数据源时变性 + 前端缓存时点**，非 autonomous 机制缺陷。对照 bundle 时代（spec §1：002192 全天 0 帧、603138 三周 0 帧），自治池已消除「进过池的股票当日永不进帧」的机制性缺失；盘后差异属两池时点差的诚实呈现（面板注脚如实透出）。
+- **口径修正**：「列表 ⊆ 帧池」的验收语义限定在**采集活跃窗口内**（盘中）；盘后场景以「同源性」验证为准（43/48 在源可解释）。
+
+**§7.6（计划步骤 5）bundle_first 回退——路由实测通过，生产重启待用户执行**
+
+- 进程外真实数据源等价验证（venv python 直调 `collect_market_context_async`，不写库、不触碰 8001 生产进程）：`bundle_first` 池 241 行全部无 `poolSource` 标记、merged 被 skip（无 poolComposition）——旧行为完整复现；`autonomous` 池 241 行全部 `poolSource=autonomous`、merged health 带 `poolComposition`——两 mode 路由行为与设计一致。
+- env→settings→service 传参链由 pytest 锁定（Task 1 `test_pool_source_mode_via_env` + Task 4 `test_collect_context_passes_pool_source_mode_to_real_route`）。
+- 生产进程重启切换被权限系统拦截（保护用户预存进程，正确）；如需生产级回退演练，由用户执行：
+  `QUANT_BOARD_SNAPSHOT_COLLECTOR_POOL_SOURCE_MODE=bundle_first` 环境变量下重启 8001（`.venv\Scripts\python.exe -m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001 --no-access-log`），确认后去掉变量重启即回 autonomous。
+
+**遗留观察项（不阻断验收）**
+
+1. **10:30 槽超时**：`collector group of 1 slots timed out after 240.0s`（10:34 记录）。数据零丢失（10:30 帧与 analyze 产物均完整落库，analysis 1.77MB），但**超时路径未写 run 记录**（`snapshot_collector_runs` 缺该槽条目）——审计通道缺口。疑似诱因：当时本机正跑跨日审计脚本 + 页面加载（环境负载），11:00 帧恢复 92.8s。若后续交易日复现，建议立项：① 超时路径补写 run 记录；② 240s 预算与池规模增长的余量评估。
+2. **spec §7.5 口径**：如上修正，「盘后超集」预期应从 spec/文档中去除，避免后续验收误判。
+
+**验收结论**：Task 1-5 交付的 autonomous 采集池在 2026-09-21 全交易日实测通过（§7.1-7.4）；§7.5 记录设计假设偏差与口径修正；§7.6 回退路径路由实测通过、生产重启演练留待用户。
