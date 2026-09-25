@@ -15,7 +15,7 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     for (const key of ['overview', 'layers', 'turnover', 'structure', 'compare', 'track']) {
       expect(source).toContain(`'${key}'`)
     }
-    for (const label of ['市场概览', '分层结构', '池换手', '阶段分布', '历史对比', '情绪趋势']) {
+    for (const label of ['热榜概览', '分层结构', '池换手', '阶段分布', '历史对比', '情绪趋势']) {
       expect(source).toContain(label)
     }
   })
@@ -113,8 +113,8 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     // 1天=最新交易日盘中槽位（非交易日回落上一交易日），3日/1周/1月=日线
     expect(source).toContain('LAYER_RANGES')
     expect(source).toContain("layersRange = ref<LayerTimeRange>('1d')")
-    // 超大单净额全 0：分层视图不再展示该字段
-    expect(source).not.toContain('superNetAmount')
+    // 超大单净额全 0：分层图表指标不含该字段（完整文档明细表中的 superNetAmount 列不受限）
+    expect(source).not.toContain("{ key: 'superNet'")
     // 旧当日分层表格语言不得回流
     expect(source).not.toContain('layers-table')
     expect(source).not.toContain('layerRows')
@@ -136,12 +136,19 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('to-kind-badge')
     expect(source).toContain('涨停入选')
     expect(source).toContain('跌出榜单')
+    // 汇总卡改阶段迁移 metric-card 风格（2026-09-25 用户裁决），chips 语言不回流
+    expect(source).toContain('turnover-grid')
+    expect(source).toContain('turnoverSummaryCards')
+    expect(source).not.toContain('turnover-chips')
+    // 列宽固定值方案（不铺满自适应拉伸；具体像素值允许视觉调参，不锁死）
+    expect(source).toContain('.to-table th:nth-child(2) { width:')
+    expect(source).not.toContain('min-width: 100%')
   })
 
-  test('市场概览合并涨停证据：三容器全宽堆叠（标题行+计数徽章），涨停证据页签移除（2026-09-25）', () => {
+  test('热榜概览合并涨停证据：三容器全宽堆叠（标题行+计数徽章），涨停证据页签移除（2026-09-25）', () => {
     const source = panelSource()
 
-    expect(source).toContain("{ key: 'overview', label: '市场概览', icon: '📊' }")
+    expect(source).toContain("{ key: 'overview', label: '热榜概览', icon: '📊' }")
     expect(source).not.toContain("{ key: 'limit', label: '涨停证据', icon: '🔥' }")
     expect(source).toContain('热榜池涨停交集')
     expect(source).toContain('全市场背景（非热榜池口径）')
@@ -154,7 +161,7 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('grid-6')
   })
 
-  test('证据与风险并入市场概览末尾（强证据/风险提示双栏 + 数据诊断），独立页签移除（2026-09-25）', () => {
+  test('证据与风险并入热榜概览末尾（强证据/风险提示双栏 + 数据诊断），独立页签移除（2026-09-25）', () => {
     const source = panelSource()
 
     expect(source).not.toContain("{ key: 'evidence', label: '证据与风险', icon: '⚖️' }")
@@ -166,7 +173,7 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('diag-block')
   })
 
-  test('市场概览三容器点击打开涨停池明细面板（SectorPanel→SectorDetail 交互语言，2026-09-25）', () => {
+  test('热榜概览三容器点击打开涨停池明细面板（SectorPanel→SectorDetail 交互语言，2026-09-25）', () => {
     const source = panelSource()
 
     expect(source).toContain('HotlistLimitStocksPanel')
@@ -178,12 +185,48 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('doc?.metrics?.limitEvidence ?? null')
   })
 
-  test('市场概览涨停证据显式区分口径：全市场背景标注非热榜池', () => {
+  test('热榜概览涨停证据显式区分口径：全市场背景标注非热榜池', () => {
     const source = panelSource()
 
     expect(source).toContain('非热榜池口径')
     expect(source).toContain('board4Plus')
     expect(source).toContain('yesterdayHotLimit')
+  })
+
+  test('EOD 文档明细：全字段分组展示 + 截面表 + 未归类兜底（2026-09-25）', () => {
+    const source = panelSource()
+
+    // 区块与标题
+    expect(source).toContain('doc-full-block')
+    expect(source).toContain('EOD 文档明细')
+    // 分组：元信息/阶段确认/核心指标/三日对比/昨强表现/池换手
+    expect(source).toContain("title: '文档元信息'")
+    expect(source).toContain("title: '阶段多帧确认'")
+    expect(source).toContain("title: '核心指标（metrics 顶层）'")
+    expect(source).toContain("title: '三日对比'")
+    expect(source).toContain("title: '昨日强票表现'")
+    expect(source).toContain("title: '池换手概况（明细见池换手页签）'")
+    // 两张截面表（三日/分层）与共用列集
+    expect(source).toContain('docDayColumns')
+    expect(source).toContain("title: '三日截面指标'")
+    expect(source).toContain('分层指标（top20 / top50 / top100 / 全池）')
+    expect(source).toContain('doc-table-scroll')
+    // fail-visible：未归类字段兜底（后端新增字段自动透出），缺失值 -- 不伪造
+    expect(source).toContain('walkUncoveredDoc')
+    expect(source).toContain('未归类字段')
+    expect(source).toContain("fmtDocValue(confirmState?.pending, 'bool')")
+    // 兜底完整性（review 2026-09-25）：子树必须逐字段 mark，整树 mark 会吞掉未来新增字段
+    expect(source).not.toContain("mark('stageConfirmState')")
+    expect(source).not.toContain("mark('turnover')")
+    expect(source).not.toContain("mark('metrics.comparison.yesterdayStrongPerformance')")
+    expect(source).toContain("'stageConfirmState.pending'")
+    expect(source).toContain("'turnover.newEntryDetails'")
+    expect(source).toContain("'metrics.comparison.yesterdayStrongPerformance.matchedCount'")
+    // 折叠交互（2026-09-25 用户裁决）：标题即折叠按钮，默认已折叠，🗒️ 图标不回流
+    expect(source).toContain('docFullCollapsed = ref(true)')
+    expect(source).toContain('doc-collapse-btn')
+    expect(source).toContain('v-show="!docFullCollapsed"')
+    expect(source).not.toContain('🗒️')
   })
 
   test('风格走主题变量（SectorDetail 语言），不继承旧面板金融渐变', () => {

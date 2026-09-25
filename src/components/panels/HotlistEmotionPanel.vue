@@ -39,7 +39,7 @@
         <div v-else-if="!doc" class="state-block">暂无热榜情绪数据</div>
 
         <template v-else>
-          <!-- ① 市场概览（含涨停证据三容器 + 证据与风险 + 数据诊断） -->
+          <!-- ① 热榜概览（含涨停证据三容器 + 证据与风险 + 数据诊断 + EOD 文档明细） -->
           <section v-show="view === 'overview'" class="tab-pane">
             <div class="stage-hero" :class="`stage-tone-${stageTone}`">
               <div class="hero-main">
@@ -151,6 +151,62 @@
               <span class="diag-tag">数据诊断</span>
               <span v-for="item in diagnostics" :key="item" class="diag-item">{{ item }}</span>
             </div>
+
+            <!-- EOD 文档明细（2026-09-25）：文档全字段分组完整展示；未归类字段兜底透出（fail-visible）。
+                 标题即折叠按钮（2026-09-25 用户裁决）：默认折叠，点开展开全部明细 -->
+            <div class="sub-block doc-full-block">
+              <div class="block-header">
+                <button class="block-title doc-collapse-btn" :class="{ expanded: !docFullCollapsed }"
+                  :title="docFullCollapsed ? '展开文档全部明细' : '折叠文档明细'"
+                  @click="docFullCollapsed = !docFullCollapsed">
+                  <span class="doc-collapse-arrow">▶</span> EOD 文档明细
+                </button>
+                <span class="section-count">{{ docFull.groups.length }} 组</span>
+              </div>
+              <div v-show="!docFullCollapsed" class="doc-full-content">
+              <div v-for="group in docFull.groups" :key="group.title" class="doc-group">
+                <div class="doc-group-title">{{ group.title }}</div>
+                <div class="doc-grid">
+                  <div v-for="row in group.rows" :key="group.title + row.label" class="doc-field"
+                    :class="{ 'doc-field-wide': row.wide }">
+                    <span class="doc-label">{{ row.label }}</span>
+                    <span class="doc-value" :class="row.tone">{{ row.value }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-for="table in docFull.tables" :key="table.title" class="doc-group">
+                <div class="doc-group-title">{{ table.title }}</div>
+                <div class="doc-table-scroll">
+                  <table class="doc-table">
+                    <thead>
+                      <tr>
+                        <th class="doc-table-corner">{{ table.rowLabel }}</th>
+                        <th v-for="col in docDayColumns" :key="col.label">{{ col.label }}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="line in table.rows" :key="line.label">
+                        <th class="doc-table-rowhead">{{ line.label }}</th>
+                        <td v-for="col in docDayColumns" :key="col.key" class="doc-table-cell"
+                          :class="docCellTone(line.m ? line.m[col.key] : null, col.fmt)">
+                          {{ fmtDocValue(line.m ? line.m[col.key] : null, col.fmt) }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div v-if="docFull.remaining.length" class="doc-group">
+                <div class="doc-group-title">未归类字段（文档结构新增时自动透出）</div>
+                <div class="doc-remaining">
+                  <div v-for="item in docFull.remaining" :key="item.path" class="doc-remaining-row">
+                    <span class="doc-label">{{ item.path }}</span>
+                    <span class="doc-value">{{ item.value }}</span>
+                  </div>
+                </div>
+              </div>
+              </div>
+            </div>
           </section>
 
           <!-- ② 分层结构（ECharts：多日分层对比，语言同情绪趋势/历史对比；超大单净额全 0 不展示） -->
@@ -191,12 +247,15 @@
           <section v-show="view === 'turnover'" class="tab-pane">
             <div class="sub-block">
               <div class="block-title">🔁 池换手汇总</div>
-              <div class="turnover-chips">
-                <span class="chip">昨池 {{ turnover.previousPoolSize }}</span>
-                <span class="chip">今池 {{ turnover.currentPoolSize }}</span>
-                <span class="chip">留存 {{ turnover.retainedFromYesterday }}</span>
-                <span class="chip up-text">新入 {{ doc.metrics.comparison.newTop100Count }}</span>
-                <span class="chip down-text">剔除 {{ eliminatedCount }}</span>
+              <!-- 汇总卡（2026-09-25 用户裁决）：阶段迁移 metric-card 风格，5 列一行 -->
+              <div class="turnover-grid">
+                <div v-for="card in turnoverSummaryCards" :key="card.label" class="metric-card">
+                  <div class="metric-icon">{{ card.icon }}</div>
+                  <div class="metric-content">
+                    <div class="metric-label">{{ card.label }}</div>
+                    <div class="metric-value">{{ card.value }}<span class="metric-unit">只</span></div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="to-header">
@@ -390,7 +449,7 @@ const props = defineProps<{ visible: boolean; triggerRect?: DOMRect | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const TABS = [
-  { key: 'overview', label: '市场概览', icon: '📊' },
+  { key: 'overview', label: '热榜概览', icon: '📊' },
   { key: 'layers', label: '分层结构', icon: '🧱' },
   { key: 'turnover', label: '池换手', icon: '🔁' },
   { key: 'structure', label: '阶段分布', icon: '🧭' },
@@ -423,7 +482,7 @@ function close() {
   emit('close')
 }
 
-// ---------- 涨停池明细面板（市场概览三容器点击进入，SectorPanel→SectorDetail 交互语言） ----------
+// ---------- 涨停池明细面板（热榜概览三容器点击进入，SectorPanel→SectorDetail 交互语言） ----------
 const limitStocksDetail = ref<{ visible: boolean; kind: HotlistLimitStockKind; rect: DOMRect | null } | null>(null)
 
 function openLimitStocks(kind: HotlistLimitStockKind, event?: MouseEvent) {
@@ -545,6 +604,15 @@ function resolveStockName(row: { code: string; name?: string | null }): string {
 const entryDetails = computed(() => turnover.value.newEntryDetails ?? [])
 const exitDetails = computed(() => turnover.value.eliminatedDetails ?? [])
 const eliminatedCount = computed(() => turnover.value.eliminated?.length ?? 0)
+
+// 池换手汇总卡（2026-09-25：chips 改阶段迁移 metric-card 风格，数值来源与原 chips 一致）
+const turnoverSummaryCards = computed(() => [
+  { icon: '📤', label: '昨池', value: formatNullableCount(turnover.value.previousPoolSize) },
+  { icon: '📥', label: '今池', value: formatNullableCount(turnover.value.currentPoolSize) },
+  { icon: '🔁', label: '留存', value: formatNullableCount(turnover.value.retainedFromYesterday) },
+  { icon: '🆕', label: '新入', value: formatNullableCount(doc.value?.metrics.comparison.newTop100Count ?? null) },
+  { icon: '🚪', label: '剔除', value: formatNullableCount(eliminatedCount.value) },
+])
 
 // 池换手明细（分池+出池合并单表）：新入在前按涨幅降序，剔除在后按排名升序
 const turnoverFilter = ref<'all' | 'entry' | 'exit'>('all')
@@ -937,6 +1005,326 @@ const yesterdayLimitCards = computed(() => {
     { label: '走弱率', value: formatShare(y.weakeningRate), toneClass: 'down' },
     { label: '冲板失败率', value: formatShare(y.failedOrWeakRate), toneClass: 'down' },
   ]
+})
+
+// ---------- EOD 文档明细（2026-09-25：文档全字段在热榜概览完整展示） ----------
+// 设计：已知字段走中文标签分组/表格；遗漏路径由「未归类字段」兜底透出（fail-visible，
+// 后端文档新增字段时无需改本面板即可见）。缺失值一律 '--'，不伪造 0。
+type DocFmt =
+  | 'text' | 'count' | 'share' | 'pct' | 'percentRaw' | 'money' | 'trin'
+  | 'datetime' | 'bool' | 'arrayLen' | 'stageCounts' | 'stageShares' | 'statusSource' | 'transition'
+interface DocRow { label: string; value: string; tone?: string; wide?: boolean }
+interface DocGroup { title: string; rows: DocRow[] }
+interface DocTableLine { label: string; m: Record<string, unknown> | null }
+interface DocTable { title: string; rowLabel: string; rows: DocTableLine[] }
+
+function pickDocPath(root: unknown, path: string): unknown {
+  let cur: unknown = root
+  for (const seg of path.split('.')) {
+    if (cur === null || typeof cur !== 'object') return undefined
+    cur = (cur as Record<string, unknown>)[seg]
+  }
+  return cur
+}
+
+function formatDocDatetime(value: unknown): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '--'
+  const ms = value < 1e12 ? value * 1000 : value
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+function fmtStageCountsCompact(value: unknown): string {
+  if (!value || typeof value !== 'object') return '--'
+  const counts = value as Record<string, unknown>
+  return (Object.keys(HOT_LIST_STAGE_LABELS) as HotListStageKey[])
+    .map((key) => `${HOT_LIST_STAGE_LABELS[key]}${typeof counts[key] === 'number' ? counts[key] : '--'}`)
+    .join(' ')
+}
+
+function fmtStageSharesCompact(value: unknown): string {
+  if (!value || typeof value !== 'object') return '--'
+  const shares = value as Record<string, unknown>
+  return (Object.keys(HOT_LIST_STAGE_LABELS) as HotListStageKey[])
+    .map((key) => {
+      const v = shares[key]
+      return `${HOT_LIST_STAGE_LABELS[key]}${typeof v === 'number' ? `${Math.round(v * 100)}%` : '--'}`
+    })
+    .join(' ')
+}
+
+function fmtStatusSourceCompact(value: unknown): string {
+  if (!value || typeof value !== 'object') return '--'
+  const src = value as Record<string, unknown>
+  const joined = typeof src.displayStatus === 'number' || typeof src.fallback === 'number'
+    ? `金标${typeof src.displayStatus === 'number' ? src.displayStatus : '--'}·回退${typeof src.fallback === 'number' ? src.fallback : '--'}`
+    : ''
+  return joined || '--'
+}
+
+function fmtDocValue(value: unknown, fmt: DocFmt): string {
+  if (value === undefined || value === null || value === '') return '--'
+  const num = typeof value === 'number' ? value : Number(value)
+  switch (fmt) {
+    case 'count':
+      return Number.isFinite(num) ? String(Math.round(num)) : '--'
+    case 'share':
+      return Number.isFinite(num) ? `${Math.round(num * 100)}%` : '--'
+    case 'pct':
+      return Number.isFinite(num) ? `${num >= 0 ? '+' : ''}${num.toFixed(2)}%` : '--'
+    case 'percentRaw':
+      return Number.isFinite(num) ? `${num}%` : '--'
+    case 'money':
+      return Number.isFinite(num) ? formatMoney(num) : '--'
+    case 'trin':
+      return Number.isFinite(num) ? num.toFixed(2) : '--'
+    case 'datetime':
+      return formatDocDatetime(value)
+    case 'bool':
+      return value === true ? '是' : value === false ? '否' : '--'
+    case 'arrayLen':
+      return Array.isArray(value) ? String(value.length) : '--'
+    case 'stageCounts':
+      return fmtStageCountsCompact(value)
+    case 'stageShares':
+      return fmtStageSharesCompact(value)
+    case 'statusSource':
+      return fmtStatusSourceCompact(value)
+    case 'transition': {
+      if (!value || typeof value !== 'object') return '无'
+      const entries = Object.entries(value as Record<string, unknown>)
+      if (!entries.length) return '无'
+      return entries.map(([text, count]) => `${transitionZh(text)}×${String(count)}`).join('；')
+    }
+    default:
+      if (Array.isArray(value)) return value.length ? value.join('；') : '无'
+      if (typeof value === 'object') return JSON.stringify(value)
+      return String(value)
+  }
+}
+
+function docCellTone(value: unknown, fmt: DocFmt): string {
+  if (fmt !== 'money' && fmt !== 'pct') return ''
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num) || num === 0) return ''
+  return num > 0 ? 'up' : 'down'
+}
+
+// 截面指标表（三日截面 / 四分层共用列集）：字段缺失显示 --；超大单净额保留（部分历史文档有值）
+const docDayColumns: { label: string; key: string; fmt: DocFmt }[] = [
+  { label: '样本', key: 'topN', fmt: 'count' },
+  { label: '涨家', key: 'upCount', fmt: 'count' },
+  { label: '跌家', key: 'downCount', fmt: 'count' },
+  { label: '平家', key: 'flatCount', fmt: 'count' },
+  { label: '涨占比', key: 'upRatio', fmt: 'share' },
+  { label: '跌占比', key: 'downRatio', fmt: 'share' },
+  { label: '平均涨幅', key: 'avgChange', fmt: 'pct' },
+  { label: 'TRIN', key: 'hotTrin', fmt: 'trin' },
+  { label: '主力净额', key: 'mainNetAmount', fmt: 'money' },
+  { label: '超大单净额', key: 'superNetAmount', fmt: 'money' },
+  { label: '总成交', key: 'totalTurnover', fmt: 'money' },
+  { label: '涨成交', key: 'upTurnover', fmt: 'money' },
+  { label: '跌成交', key: 'downTurnover', fmt: 'money' },
+  { label: '近涨停', key: 'nearLimitUpCount', fmt: 'count' },
+  { label: '高涨幅', key: 'highGainCount', fmt: 'count' },
+  { label: '高换手', key: 'highTurnoverCount', fmt: 'count' },
+  { label: '风险占比', key: 'riskShare', fmt: 'share' },
+  { label: '拥挤占比', key: 'crowdedShare', fmt: 'share' },
+  { label: '强资占比', key: 'strongMoneyShare', fmt: 'share' },
+  { label: '活跃机会', key: 'activeOpportunityShare', fmt: 'share' },
+  { label: '阶段分布', key: 'stageCounts', fmt: 'stageCounts' },
+  { label: '阶段占比', key: 'stageShares', fmt: 'stageShares' },
+  { label: '状态来源', key: 'statusSourceCounts', fmt: 'statusSource' },
+  { label: '交易日', key: 'tradingDate', fmt: 'text' },
+]
+
+function walkUncoveredDoc(prefix: string, node: unknown, covered: Set<string>, out: { path: string; value: string }[]) {
+  if (node === null || typeof node !== 'object' || Array.isArray(node)) {
+    if (prefix && !covered.has(prefix)) {
+      out.push({ path: prefix, value: fmtDocValue(node, 'text') })
+    }
+    return
+  }
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    const path = prefix ? `${prefix}.${key}` : key
+    if (covered.has(path)) continue
+    walkUncoveredDoc(path, value, covered, out)
+  }
+}
+
+// 折叠状态（2026-09-25 用户裁决）：标题即折叠按钮，默认已折叠
+const docFullCollapsed = ref(true)
+
+const docFull = computed<{ groups: DocGroup[]; tables: DocTable[]; remaining: { path: string; value: string }[] }>(() => {
+  const raw = doc.value as unknown as Record<string, unknown> | null
+  if (!raw) return { groups: [], tables: [], remaining: [] }
+  const groups: DocGroup[] = []
+  const covered = new Set<string>()
+  const mark = (...paths: string[]) => paths.forEach((p) => covered.add(p))
+  const row = (path: string, label: string, fmt: DocFmt = 'text', wide = false): DocRow => {
+    mark(path)
+    const value = pickDocPath(raw, path)
+    return { label, value: fmtDocValue(value, fmt), tone: docCellTone(value, fmt), wide }
+  }
+
+  groups.push({
+    title: '文档元信息',
+    rows: [
+      row('datasetId', '数据集'),
+      row('snapshotType', '快照类型'),
+      row('tradingDate', '交易日'),
+      row('slotTime', '文档槽位'),
+      row('anchoredSlotTime', '锚定槽位'),
+      row('snapshotId', '快照ID', 'text', true),
+      row('timestamp', '帧时间', 'datetime'),
+      row('computedAt', '计算时间', 'datetime'),
+      row('stage', '确认阶段'),
+      row('rawStage', '本帧截面阶段'),
+      row('riskLevel', '风险等级'),
+      row('confidence', '置信度', 'percentRaw'),
+      row('missing', '缺失标记', 'bool'),
+      row('reason', '缺失原因'),
+      row('summary', '盘面证据', 'text', true),
+    ],
+  })
+  // 逐字段 mark（review 2026-09-25）：整树 mark 会吞掉子树内未来新增字段（兜底失效）；
+  // 后端 stageConfirmState 新增键时自动落「未归类字段」
+  mark(
+    'stageConfirmState.pending',
+    'stageConfirmState.pendingStage',
+    'stageConfirmState.pendingSince',
+    'stageConfirmState.confirmSlots',
+    'stageConfirmState.historyStatus',
+  )
+  const confirmState = (pickDocPath(raw, 'stageConfirmState') ?? null) as Record<string, unknown> | null
+  groups.push({
+    title: '阶段多帧确认',
+    rows: [
+      { label: '摆动中', value: fmtDocValue(confirmState?.pending, 'bool') },
+      { label: '摆动阶段', value: fmtDocValue(confirmState?.pendingStage, 'text') },
+      { label: '摆动自', value: fmtDocValue(confirmState?.pendingSince, 'text') },
+      { label: '确认槽数', value: fmtDocValue(confirmState?.confirmSlots, 'count') },
+      { label: '历史状态', value: fmtDocValue(confirmState?.historyStatus, 'text') },
+    ],
+  })
+
+  groups.push({
+    title: '核心指标（metrics 顶层）',
+    rows: [
+      row('metrics.poolSize', '池规模', 'count'),
+      row('metrics.topN', '参与统计', 'count'),
+      row('metrics.allPoolUpRatio', '全池上涨占比', 'share'),
+      row('metrics.hotTrin', '热榜 TRIN', 'trin'),
+      row('metrics.retentionRate1d', '留存率 1 日', 'share'),
+      row('metrics.retentionRate2d', '留存率 2 日', 'share'),
+      row('metrics.limitIntersectionRate', '涨停交集占比', 'share'),
+      row('metrics.newEntryCount', '新入数', 'count'),
+      row('metrics.eliminatedCount', '剔除数', 'count'),
+      row('metrics.nearLimitUpCount', '近涨停', 'count'),
+      row('metrics.highGainCount', '高涨幅≥7%', 'count'),
+      row('metrics.riskShare', '风险占比', 'share'),
+      row('metrics.activeOpportunityShare', '活跃机会占比', 'share'),
+      row('metrics.strongMoneyShare', '强资占比', 'share'),
+      row('metrics.crowdedShare', '拥挤占比', 'share'),
+      row('metrics.statusSourceCounts', '状态来源', 'statusSource'),
+      row('metrics.transitionCounts', '阶段迁移', 'transition', true),
+      row('metrics.missingEvidence', '缺失证据', 'text', true),
+    ],
+  })
+
+  groups.push({
+    title: '三日对比',
+    rows: [
+      row('metrics.comparison.totalChange1d', '池规模变动 1 日', 'count'),
+      row('metrics.comparison.totalChange2d', '池规模变动 2 日', 'count'),
+      row('metrics.comparison.top100RetainFromYesterday', '留榜数（对昨日）', 'count'),
+      row('metrics.comparison.top100RetainRateFromYesterday', '留榜率（对昨日）', 'share'),
+      row('metrics.comparison.top100RetainFromDayBefore', '留榜数（对前日）', 'count'),
+      row('metrics.comparison.top100RetainRateFromDayBefore', '留榜率（对前日）', 'share'),
+      row('metrics.comparison.newTop100Count', '新入数', 'count'),
+      row('metrics.comparison.newTop100StrongMoneyCount', '新入强资数', 'count'),
+      row('metrics.comparison.yesterdayStrongRetainRate', '昨日强资留榜率', 'share'),
+      row('metrics.comparison.yesterdayCrowdedRiskCount', '昨日拥挤转风险数', 'count'),
+    ],
+  })
+
+  // 逐字段 mark（review 2026-09-25）：整树 mark 会吞掉子树内未来新增字段
+  mark(
+    'metrics.comparison.yesterdayStrongPerformance.count',
+    'metrics.comparison.yesterdayStrongPerformance.matchedCount',
+    'metrics.comparison.yesterdayStrongPerformance.retainedTop100Count',
+    'metrics.comparison.yesterdayStrongPerformance.avgChange',
+    'metrics.comparison.yesterdayStrongPerformance.positiveCount',
+    'metrics.comparison.yesterdayStrongPerformance.positiveRate',
+    'metrics.comparison.yesterdayStrongPerformance.weakeningCount',
+    'metrics.comparison.yesterdayStrongPerformance.weakeningRate',
+  )
+  const ysp = (pickDocPath(raw, 'metrics.comparison.yesterdayStrongPerformance') ?? null) as Record<string, unknown> | null
+  groups.push({
+    title: '昨日强票表现',
+    rows: [
+      { label: '昨强数量', value: fmtDocValue(ysp?.count, 'count') },
+      { label: '今日在榜', value: fmtDocValue(ysp?.matchedCount, 'count') },
+      { label: '留榜数', value: fmtDocValue(ysp?.retainedTop100Count, 'count') },
+      { label: '平均涨幅', value: fmtDocValue(ysp?.avgChange, 'pct'), tone: docCellTone(ysp?.avgChange, 'pct') },
+      { label: '上涨家数', value: fmtDocValue(ysp?.positiveCount, 'count') },
+      { label: '正收益率', value: fmtDocValue(ysp?.positiveRate, 'share') },
+      { label: '走弱家数', value: fmtDocValue(ysp?.weakeningCount, 'count') },
+      { label: '走弱率', value: fmtDocValue(ysp?.weakeningRate, 'share') },
+    ],
+  })
+
+  const turnoverNode = (raw.turnover ?? null) as Record<string, unknown> | null
+  groups.push({
+    title: '池换手概况（明细见池换手页签）',
+    rows: [
+      row('turnover.previousPoolSize', '昨池规模', 'count'),
+      row('turnover.currentPoolSize', '今池规模', 'count'),
+      row('turnover.retainedFromYesterday', '留存数', 'count'),
+      { label: '新入明细', value: `${fmtDocValue(turnoverNode?.newEntries, 'arrayLen')} 只` },
+      { label: '剔除明细', value: `${fmtDocValue(turnoverNode?.eliminated, 'arrayLen')} 只` },
+    ],
+  })
+  // 明细四键逐字段 mark（review 2026-09-25）：整树 mark 会吞掉子树内未来新增字段；
+  // details 数组在池换手页签展示，新入/剔除 code 列表由上面两行计数展示
+  mark('turnover.newEntries', 'turnover.eliminated', 'turnover.newEntryDetails', 'turnover.eliminatedDetails')
+
+  // limitEvidence 三容器已完整展示于本页签上方，signals/warnings/diagnostics 见强证据/风险/诊断块
+  mark('metrics.limitEvidence', 'signals', 'warnings', 'diagnostics')
+
+  const comp = (raw.metrics as Record<string, unknown> | undefined)?.comparison as Record<string, unknown> | undefined
+  const layers = (raw.metrics as Record<string, unknown> | undefined)?.layers as Record<string, unknown> | undefined
+  const tables: DocTable[] = []
+  if (comp) {
+    mark('metrics.comparison.today', 'metrics.comparison.yesterday', 'metrics.comparison.dayBefore')
+    tables.push({
+      title: '三日截面指标',
+      rowLabel: '截面',
+      rows: [
+        { label: '今日', m: (comp.today ?? null) as Record<string, unknown> | null },
+        { label: '昨日', m: (comp.yesterday ?? null) as Record<string, unknown> | null },
+        { label: '前日', m: (comp.dayBefore ?? null) as Record<string, unknown> | null },
+      ],
+    })
+  }
+  if (layers) {
+    mark('metrics.layers')
+    tables.push({
+      title: '分层指标（top20 / top50 / top100 / 全池）',
+      rowLabel: '分层',
+      rows: [
+        { label: '前20', m: (layers.top20 ?? null) as Record<string, unknown> | null },
+        { label: '前50', m: (layers.top50 ?? null) as Record<string, unknown> | null },
+        { label: '前100', m: (layers.top100 ?? null) as Record<string, unknown> | null },
+        { label: '全池', m: (layers.all ?? null) as Record<string, unknown> | null },
+      ],
+    })
+  }
+
+  const remaining: { path: string; value: string }[] = []
+  walkUncoveredDoc('', raw, covered, remaining)
+  return { groups, tables, remaining }
 })
 
 // ---------- 阶段分布（ECharts 饼图：全池六态占比） ----------
@@ -1861,12 +2249,12 @@ const trackNote = computed(() => {
 }
 .tab-pane { display: flex; flex-direction: column; gap: 16px; }
 .state-block {
-  display: flex; align-items: center; gap: 8px;
-  padding: 24px; color: var(--text-secondary); justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 60px 20px; color: var(--text-secondary);
 }
 .state-block.error { color: #ff4757; }
 .spinner {
-  width: 14px; height: 14px; border: 2px solid var(--border-color);
+  width: 40px; height: 40px; border: 3px solid var(--border-color);
   border-top-color: var(--color-highlight); border-radius: 50%;
   animation: he-rotate 0.8s linear infinite;
 }
@@ -1879,9 +2267,14 @@ const trackNote = computed(() => {
 .stage-hero {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
+  border-left-width: 4px;
   border-radius: 12px;
   padding: 16px;
 }
+/* 情绪冷热左色条（SectorPanel market-phase-card 语言）：hot红/warm琥珀/cold灰 */
+.stage-tone-hot { border-left-color: #ff4757; }
+.stage-tone-warm { border-left-color: #ffb142; }
+.stage-tone-cold { border-left-color: #7f8c8d; }
 .hero-label { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
 .hero-stage { font-size: 28px; font-weight: bold; color: var(--text-title); line-height: 1.2; margin-bottom: 8px; }
 .hero-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -1930,6 +2323,8 @@ const trackNote = computed(() => {
 .metric-unit { font-size: 11px; font-weight: normal; color: var(--text-secondary); margin-left: 2px; }
 /* 阶段迁移卡（metric-card 语言，3×2） */
 .transition-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+/* 池换手汇总卡（同迁移卡语言，5 列一行） */
+.turnover-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
 
 /* 资金/证据中卡 3-4 列：横向 + 32px 圆形底座 */
 .funds-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
@@ -1988,7 +2383,7 @@ const trackNote = computed(() => {
   padding: 16px;
 }
 .block-title { font-size: 14px; font-weight: 500; color: var(--text-title); margin-bottom: 12px; }
-/* 市场概览三容器可点击（sector-card 悬浮语言） */
+/* 热榜概览三容器可点击（sector-card 悬浮语言） */
 .sub-block.clickable { cursor: pointer; transition: all 0.2s; }
 .sub-block.clickable:hover {
   transform: translateY(-2px);
@@ -2052,11 +2447,20 @@ const trackNote = computed(() => {
 .to-table-container {
   max-height: 500px;
   overflow-y: auto;
+  overflow-x: auto;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--bg-primary);
 }
-.to-table { border-collapse: collapse; font-size: 12px; width: auto; min-width: 100%; table-layout: auto; }
+/* 2026-09-25 用户裁决：列宽不用自适应铺满，固定值匹配字段内容宽度（nowrap 内容超出才撑开） */
+.to-table { border-collapse: collapse; font-size: 12px; width: auto; table-layout: auto; }
+.to-table th:nth-child(1) { width: 44px; }   /* 序号 */
+.to-table th:nth-child(2) { width: 84px; }   /* 代码 */
+.to-table th:nth-child(3) { width: 108px; }  /* 名称 */
+.to-table th:nth-child(4) { width: 92px; text-align: right; } /* 涨跌幅：右对齐同数值 */
+.to-table th:nth-child(5) { width: 68px; }   /* 排名 */
+.to-table th:nth-child(6) { width: 76px; }   /* 变动 */
+.to-table th:nth-child(7) { width: 118px; }  /* 变动原因 */
 .to-table th {
   position: sticky;
   top: 0;
@@ -2177,6 +2581,67 @@ const trackNote = computed(() => {
 }
 .diag-tag { font-weight: 600; color: #ffb142; }
 
+/* ========== EOD 文档明细（全字段分组展示，2026-09-25） ========== */
+.doc-full-block { margin-top: 4px; }
+.doc-collapse-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--text-title);
+  transition: color 0.15s ease;
+}
+.doc-collapse-btn:hover { color: var(--color-highlight); }
+.doc-collapse-arrow {
+  display: inline-block; font-size: 10px; color: var(--text-secondary);
+  transition: transform 0.15s ease;
+}
+.doc-collapse-btn.expanded .doc-collapse-arrow { transform: rotate(90deg); }
+.doc-full-content { margin-top: 10px; }
+.doc-group { margin-top: 14px; }
+.doc-group-title {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  padding-bottom: 6px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px;
+}
+.doc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 12px; }
+.doc-field {
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--bg-tertiary); border-radius: 8px; padding: 8px 10px;
+}
+.doc-field-wide { grid-column: 1 / -1; }
+.doc-label { font-size: 10px; color: var(--text-secondary); }
+.doc-value {
+  font-size: 13px; font-weight: 600; color: var(--text-title);
+  font-variant-numeric: tabular-nums; word-break: break-all; line-height: 1.4;
+}
+.doc-table-scroll { overflow-x: auto; border: 1px solid var(--border-color); border-radius: 8px; }
+.doc-table { width: 100%; border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+.doc-table th, .doc-table td {
+  padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--border-color);
+  font-variant-numeric: tabular-nums;
+}
+.doc-table thead th {
+  position: sticky; top: 0; background: var(--bg-header); color: var(--text-secondary);
+  font-weight: 600; font-size: 10px;
+}
+.doc-table tbody tr:last-child th, .doc-table tbody tr:last-child td { border-bottom: none; }
+.doc-table-corner, .doc-table-rowhead {
+  text-align: left !important; color: var(--text-title); font-weight: 600;
+  background: var(--bg-secondary); position: sticky; left: 0;
+}
+.doc-remaining {
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--bg-tertiary); border-radius: 8px; padding: 10px 12px;
+}
+.doc-remaining-row {
+  display: flex; gap: 10px; align-items: baseline;
+  font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.doc-remaining-row .doc-label { flex: 0 0 auto; font-family: monospace; }
+.doc-remaining-row .doc-value { font-size: 11px; font-weight: 400; word-break: break-all; }
+
+@media (max-width: 720px) {
+  .doc-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
 @media (max-width: 720px) {
   .evidence-columns { grid-template-columns: 1fr; }
   .metrics-grid, .grid-4 { grid-template-columns: repeat(2, 1fr); }
@@ -2185,5 +2650,6 @@ const trackNote = computed(() => {
   .stage-layout { flex-direction: column; }
   .stage-pie { width: 200px; height: 200px; }
   .hotlist-emotion-panel { width: calc(100vw - 16px); }
+  .turnover-grid { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

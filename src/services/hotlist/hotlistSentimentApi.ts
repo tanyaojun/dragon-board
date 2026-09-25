@@ -102,7 +102,7 @@ export async function fetchHotlistSentimentSlots(
   }
 }
 
-// ---------- 涨停池成分股明细（2026-09-25，市场概览三容器 → 明细面板） ----------
+// ---------- 涨停池成分股明细（2026-09-25，热榜概览三容器 → 明细面板） ----------
 
 export interface HotlistPoolLimitStockRow {
   code: string

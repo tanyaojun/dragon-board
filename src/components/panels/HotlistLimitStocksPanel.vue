@@ -1,5 +1,5 @@
 <!-- src/components/panels/HotlistLimitStocksPanel.vue -->
-<!-- 涨停池成分股明细面板（2026-09-25）：市场概览三容器（热榜池涨停/全市场涨停/昨日热榜涨停）
+<!-- 涨停池成分股明细面板（2026-09-25）：热榜概览三容器（热榜池涨停/全市场涨停/昨日热榜涨停）
      点击进入。结构对齐 SectorDetail 三页签语言：涨停概览 / 成分股 / 历史趋势；
      数据源 = /api/hotlist-sentiment/limit-stocks（三份名单）+ hotlist-sentiment/series（历史聚合）。 -->
 <template>
@@ -45,7 +45,7 @@
         <div v-else-if="!detail" class="state-block">暂无涨停池明细数据</div>
 
         <template v-else>
-          <!-- ① 涨停概览：当日聚合卡（summary = 最新日文档 limitEvidence，与市场概览容器同源） -->
+          <!-- ① 涨停概览：当日聚合卡（summary = 最新日文档 limitEvidence，与热榜概览容器同源） -->
           <section v-show="view === 'overview'" class="tab-pane">
             <div v-if="overviewPrimary.length" class="metrics-grid">
               <div v-for="card in overviewPrimary" :key="card.label" class="metric-card">
@@ -436,7 +436,7 @@ watch(sortFields, (fields) => {
   if (!sortBy.value && fields.length) sortBy.value = fields[0].key
 }, { immediate: true })
 
-// ---------- 涨停概览卡（summary 与市场概览容器同源：最新日文档 limitEvidence） ----------
+// ---------- 涨停概览卡（summary 与热榜概览容器同源：最新日文档 limitEvidence） ----------
 interface OverviewCard { icon: string; label: string; value: string; toneClass?: string }
 
 const overviewPrimary = computed<OverviewCard[]>(() => {
@@ -959,12 +959,12 @@ watch(
 }
 .tab-pane { display: flex; flex-direction: column; gap: 16px; }
 .state-block {
-  display: flex; align-items: center; gap: 8px;
-  padding: 24px; color: var(--text-secondary); justify-content: center;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 60px 20px; color: var(--text-secondary);
 }
 .state-block.error { color: #ff4757; }
 .spinner {
-  width: 14px; height: 14px; border: 2px solid var(--border-color);
+  width: 40px; height: 40px; border: 3px solid var(--border-color);
   border-top-color: var(--color-highlight); border-radius: 50%;
   animation: ls-rotate 0.8s linear infinite;
 }

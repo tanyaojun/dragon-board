@@ -190,6 +190,8 @@ export interface HotListSentimentDayDoc {
   /** 文档锚定帧的采集槽位（EOD 文档为实际锚定的最新帧槽位；槽位文档与 slotTime 相同）。 */
   anchoredSlotTime?: string
   timestamp?: number
+  /** 文档计算时间（unix 秒；后端 build_hotlist_sentiment_document 写入） */
+  computedAt?: number
   stage: UnifiedEmotionStage
   riskLevel: HotListSentimentRiskLevel
   confidence: number
