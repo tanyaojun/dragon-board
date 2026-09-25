@@ -1,11 +1,11 @@
 {
   "schema": "ranktrend-anchor-registry/v1",
-  "updatedAt": "2026-09-16",
+  "updatedAt": "2026-09-25",
   "purpose": "RankTrend 锚代际注册表：harness baseline 对照基准的单一事实源。锚读数 = baseline（当前默认栈全开）三窗 synergy saEx；代际变更（默认值落库/结构性修复）使历史 trial 全部过期，新代际第一动作是重建三窗锚。失配必须显式标记，不许带病继续。",
   "factSource": "docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（各阶段写入的锚读数）",
   "rerunPlan": "docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md",
   "windowNote": "gen-1~gen-4 的 oos2 窗口为历史口径 2026-09-01~09-12（部分阶段 14 harness 为 09-09），B-202610 起统一为 09-01~09-30（oos2）+ 09-13~09-30 未消费子窗（oos2u，判定读数以此为准），见 data_windows.py WINDOWS。",
-  "currentGeneration": "gen-2026-09-15-jump-fix",
+  "currentGeneration": "gen-2026-10-b202610",
   "generations": [
     {
       "id": "gen-2026-08-22_8",
@@ -54,13 +54,14 @@
     {
       "id": "gen-2026-10-b202610",
       "name": "B-202610 复跑代际（第四代正式三窗锚）",
-      "anchors": { "decision": 0.1323, "oos1": 0.0862, "oos2": null, "oos2u": null },
-      "establishedAt": "2026-09-16（decision/oos1 预建；oos2/oos2u 待 10 月批次）",
+      "anchors": { "decision": 0.1323, "oos1": 0.0862, "oos2": 0.0998, "oos2u": 0.0812 },
+      "passHard": { "decision": true, "oos1": true, "oos2": false, "oos2u": false },
+      "establishedAt": "2026-09-16（decision/oos1 预建）；2026-09-25 oos2/oos2u 填充，本代际成为 currentGeneration",
       "gitCommit": "83bd7d0d",
       "configHash": null,
-      "sourceSections": ["data/reports/track2-candidates.json（B-202610 预建 baseline）", "longterm 阶段 27（待批次收口写入）"],
+      "sourceSections": ["data/reports/track2-candidates.json（B-202610 baseline，decision/oos1 于 09-25 当前引擎重跑锚复现逐位一致 0.1323/0.0862；oos2 176 帧/oos2u 90 帧为 9 月全月新读数）", "longterm 阶段 27（待批次收口写入）"],
       "supersededBy": null,
-      "note": "decision 0.1323 与 §26.7 jump-fix 单窗锚逐位复现（代际无漂移校验 ✓，evaluate_track2_candidates baseline，passHard=True，655 帧）；oos1 0.0862 vs fund10 代际 0.0880（−2.0%，Jump 修复跨窗净效应为 decision 大幅正迁移 + oos1 轻微回落）。oos2/oos2u 待 10 月上旬 9 月全月落库后批次执行填充；填充后本代际成为 currentGeneration。"
+      "note": "oos2/oos2u passHard=False 为 9 月窗单调性边缘失效既有口径延续（fund10 代际 oos2 亦 False）；oos2u warm-up 29 帧至 09-16，有效 61 帧。9 月窗为最终裁决窗（oos2u 判定读数为准），消费禁令自本批执行后对参数结论生效。"
     }
   ]
 }
