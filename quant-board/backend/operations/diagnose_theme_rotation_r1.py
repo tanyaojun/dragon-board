@@ -19,7 +19,8 @@
 非 ranktrend 决策链，不受 ranktrend 冻结窗守卫约束（题材域冻结纪律
 在 Phase 4 verdict 阶段另行建立）。
 fail-visible：缺日/缺槽/缺因子如实打标输出，不伪造 0，不中断。
-样本量声明：弱势段约 14 个交易日，结论为探索性描述统计，非正式判定。
+样本量声明：弱势段 18 个交易日（2026-09-01~2026-09-24 实际有 daily sector rows
+的天数，实测校准），结论为探索性描述统计，非正式判定。
 """
 
 from __future__ import annotations
@@ -163,6 +164,43 @@ def normalize_theme_names(themes: Any) -> list[str]:
     return out
 
 
+def theme_id_to_name_map(series: dict[str, Any]) -> tuple[dict[str, str], int]:
+    """从收盘槽 sector rows 构建 entityKey(ID) → entityName(题材名) 映射。
+
+    返回 (映射, 名称冲突数)。同名不同 ID 视为冲突（保留首个，计数上报）。
+    """
+    id2name: dict[str, str] = {}
+    conflicts = 0
+    for info in series["series"].values():
+        if info["status"] != "ok":
+            continue
+        for row in info["rows"]:
+            k, n = row.get("entityKey"), row.get("entityName")
+            if k is None or n is None:
+                continue
+            ks, ns = str(k), str(n)
+            existing = id2name.setdefault(ks, ns)
+            if existing != ns:
+                conflicts += 1
+    return id2name, conflicts
+
+
+def rekey_scores_by_name(
+    scores: dict[str, dict[str, Any]], id2name: dict[str, str]
+) -> dict[str, dict[str, Any]]:
+    """判定链得分键从 entityKey(ID) 重键为 entityName(题材名)。
+
+    与个股 stock rows themes/mainTheme 的名称命名空间对齐（§5.5 归属判定的
+    跨集合契约）。无映射的 ID 丢弃（该题材不在收盘横截面上）。
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for k, v in scores.items():
+        name = id2name.get(k)
+        if name and name not in out:
+            out[name] = v
+    return out
+
+
 def diff_main_theme(
     repo: MongoRepository, start: str, end: str, series: dict[str, Any]
 ) -> dict[str, Any]:
@@ -182,6 +220,7 @@ def diff_main_theme(
     for r in res["rows"]:
         if str(r.get("slotTime")) in CLOSE_SLOTS:
             by_day.setdefault(str(r.get("tradingDate")), []).append(r)
+    id2name, name_conflicts = theme_id_to_name_map(series)
     days_out: dict[str, Any] = {}
     total = same = fallback_n = tie_n = 0
     for d, srows in sorted(by_day.items()):
@@ -189,6 +228,8 @@ def diff_main_theme(
         if not info or info["status"] != "ok":
             continue
         scores = mainline_scores(info["rows"])
+        # stock rows themes/mainTheme 是题材名命名空间，判定链得分须先重键对齐
+        scores_by_name = rekey_scores_by_name(scores, id2name)
         d_total = d_same = 0
         reasons: dict[str, int] = {}
         for r in srows:
@@ -199,7 +240,7 @@ def diff_main_theme(
             # 涨停原因文本来自 stock rows 的 reason 字段（THS 涨停池 reasonType 透传）
             reason_text = str(r.get("reason") or "") if limit_up else None
             res_a = assign_main_theme(
-                themes, scores,
+                themes, scores_by_name,
                 reason_text=reason_text,
                 fallback_theme=str(r.get("mainTheme") or themes[0]),
             )
@@ -228,6 +269,7 @@ def diff_main_theme(
             "diff_rate": round(1 - same / total, 4) if total else None,
             "fallback_count": fallback_n,
             "tie_break_count": tie_n,
+            "name_conflicts": name_conflicts,
         },
     }
 
@@ -293,7 +335,12 @@ def dedup_limit_stats(
     no_scores_days = {d for d, info in series["series"].items() if info["status"] != "ok"}
     owner_fallback_no_scores_count = 0
     day_map = {d: info for d, info in series["series"].items() if info["status"] == "ok"}
-    day_scores = {d: mainline_scores(info["rows"]) for d, info in day_map.items()}
+    # 与 diff_main_theme 同一跨集合契约：得分先重键为题材名再喂归属判定
+    id2name, _name_conflicts = theme_id_to_name_map(series)
+    day_scores = {
+        d: rekey_scores_by_name(mainline_scores(info["rows"]), id2name)
+        for d, info in day_map.items()
+    }
     for r in res["rows"]:
         if str(r.get("slotTime")) not in CLOSE_SLOTS:
             continue
