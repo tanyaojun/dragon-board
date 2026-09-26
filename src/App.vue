@@ -580,6 +580,11 @@ const lazyLoadServices = () => {
       void themeMapping.waitForLoaded()
     }
 
+    // window 诊断挂载（原 main.ts 职责并入；消费方仅控制台诊断脚本）
+    ;(window as any).sectorAnalyzer = sectorAnalyzer
+    ;(window as any).dragonReviewService = dragonReviewService
+    ;(window as any).themeMapping = themeMapping
+
     // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
     void safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算')
 
@@ -597,6 +602,8 @@ const lazyLoadServices = () => {
 
     // 龙息分析
     safeExecute(dragonBreathAnalyzer, 'init', '龙息分析器')
+    ;(window as any).dragonBreathAnalyzer = dragonBreathAnalyzer
+    ;(window as any).themeRuntime = themeSyncAdapter
 
     // 真龙复盘
     void safeExecute(dragonReviewService, 'runFullUpdate', '真龙复盘')
@@ -624,6 +631,40 @@ const lazyLoadServices = () => {
     // 刷新管理器
     safeExecute(RefreshManager, 'init', '刷新管理器')
     safeExecute(RefreshManager, 'start', '启动刷新')
+
+    // 第4批：window 常量与调试服务挂载（原 main.ts 职责并入，消费方仅控制台诊断）
+    await nextIdle()
+    const [
+      { FACTORS },
+      constants,
+      { apiService },
+      { themeCorrelationAnalyzer },
+      { themeFacade },
+      { openingRealtimeEventBridge },
+    ] = await Promise.all([
+      import('@/config/factors'),
+      import('./types/config'),
+      import('./services/apiService'),
+      import('./services/ThemeCorrelationAnalyzer'),
+      import('./services/theme/ThemeFacade'),
+      import('./services/hotlist/OpeningRealtimeEventBridge'),
+    ])
+    ;(window as any).FACTORS = FACTORS
+    ;(window as any).AppEvents = constants.AppEvents
+    ;(window as any).LEADER_LEVELS = constants.LEADER_LEVELS
+    ;(window as any).THEME_FACTOR_IDS = constants.THEME_FACTOR_IDS
+    ;(window as any).THEME_FACTORS_META = constants.THEME_FACTORS_META
+    ;(window as any).BREATH_FACTOR_IDS = constants.BREATH_FACTOR_IDS
+    ;(window as any).BREATH_FACTORS_META = constants.BREATH_FACTORS_META
+    ;(window as any).MARKET_PHASES = constants.MARKET_PHASES
+    ;(window as any).apiService = apiService
+    ;(window as any).dataLoader = dataLoader
+    ;(window as any).stockCodeManager = stockCodeManager
+    ;(window as any).themeCorrelationAnalyzer = themeCorrelationAnalyzer
+    ;(window as any).themeFacade = themeFacade
+    ;(window as any).openingRealtimeEventBridge = openingRealtimeEventBridge
+
+    console.log('[App] 📦 诊断服务已挂载到 window（空闲批）')
   })()
 }
 
