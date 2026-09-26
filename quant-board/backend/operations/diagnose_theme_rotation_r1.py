@@ -327,7 +327,12 @@ def sentiment_background(
     """
     by_day: dict[str, dict[str, Any]] = {}
     for doc in repo.db["snapshot_frames"].find(
-        {"tradingDate": {"$gte": start, "$lte": end}, "slotTime": "15:30"}
+        {
+            "tradingDate": {"$gte": start, "$lte": end},
+            "slotTime": "15:30",
+            "datasetId": DATASET_ID,
+            "type": "daily",
+        }
     ):
         ls = doc.get("limitSummary")
         if not isinstance(ls, dict) or not ls:
