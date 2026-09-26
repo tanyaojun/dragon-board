@@ -16,5 +16,4 @@
 - `refreshManagerDiagnostic.ts`：刷新管理手工诊断。
 - `dataQualityChecker.ts` / `dataQualityDiagnostic.ts`：数据质量检查工具和入口。
 - `integrationDiagnostic.ts`：应用集成状态诊断。
-- `dragonDiagnostic.ts`：龙头相关手工诊断。
 - `validateRankTrendAnalyzer.ts` / `verifyRankTrendAnalyzer.ts`：RankTrend 浏览器侧验证脚本。

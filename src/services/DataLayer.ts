@@ -60,7 +60,6 @@ class DataLayer {
       metrics: {
         byTheme: new Map(),
         hotList: [],
-        rotation: [],
         lastUpdate: null,
       },
     },
@@ -227,9 +226,6 @@ class DataLayer {
     return this.state.theme.metrics.hotList
   }
 
-  /**
-   * 获取题材轮动数据
-   */
   // ========== 股票数据管理 ==========
   /**
    * 更新股票数据 - 供 dataLoader 调用
@@ -1170,7 +1166,6 @@ class DataLayer {
     return limit ? this.denseOrderAlerts.slice(0, limit) : [...this.denseOrderAlerts]
   }
 
-  // ========== 预警数据管理 ==========
   getStats() {
     const now = Date.now()
     return {
@@ -1218,7 +1213,6 @@ class DataLayer {
       metrics: {
         byTheme: new Map(),
         hotList: [],
-        rotation: [],
         lastUpdate: null,
       },
     }

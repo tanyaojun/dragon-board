@@ -6,12 +6,6 @@ import { AppEvents } from '@/types'
 import { EventManager } from '@/utils/eventManager'
 import { useStockStore } from '../stock'
 
-vi.mock('@/services/dragon/DragonReviewService', () => ({
-  dragonReviewService: {
-    getAllLeaders: vi.fn(() => []),
-  },
-}))
-
 describe('StockStore refresh listeners', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

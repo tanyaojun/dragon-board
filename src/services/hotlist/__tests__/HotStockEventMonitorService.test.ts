@@ -122,7 +122,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const tdxBlockPool = makeTdxBlockPool(['300001'])
     const service = new HotStockEventMonitorService({
@@ -149,7 +148,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed: firstFeed,
@@ -194,7 +192,6 @@ describe('HotStockEventMonitorService', () => {
         { code: '600001', name: '一号' },
         { code: '000002', name: '二号' },
       ]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,
@@ -229,7 +226,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,
@@ -260,7 +256,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '002552', name: '宝鼎科技' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const tdxBlockPool = makeTdxBlockPool(['600001'])
     const service = new HotStockEventMonitorService({
@@ -298,7 +293,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '002552', name: '宝鼎科技' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,
@@ -342,7 +336,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,
@@ -372,7 +365,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([{ code: '600001', name: '一号' }]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,
@@ -414,7 +406,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,
@@ -442,7 +433,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const tdxBlockPool = makeTdxBlockPool()
     const service = new HotStockEventMonitorService({
@@ -474,7 +464,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const tdxBlockPool = {
       ...makeTdxBlockPool(['300001']),
@@ -505,7 +494,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const tdxBlockPool = {
       ...makeTdxBlockPool(),
@@ -548,7 +536,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const tdxBlockPool = {
       ...makeTdxBlockPool(),
@@ -575,7 +562,6 @@ describe('HotStockEventMonitorService', () => {
     }
     const dataLayer = {
       getStocks: vi.fn().mockReturnValue([]),
-      getDragonReview: vi.fn().mockReturnValue(null),
     }
     const service = new HotStockEventMonitorService({
       feed,

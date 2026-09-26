@@ -234,7 +234,6 @@ export interface DataState {
     metrics: {
       byTheme: Map<string, ThemeMetrics>
       hotList: any[]
-      rotation: any[]
       lastUpdate: number | null
     }
   }
