@@ -23,8 +23,18 @@ class TestEmaToplists:
 
     def test_first_seen_theme_uses_raw_score(self):
         out = ema_toplists({"d1": {"A": 10.0}, "d2": {"A": 20.0, "B": 15.0}}, alpha=0.5, k=2)
-        # d2: A smooth=15, B 首见=15 → 并列，按 sorted 稳定序（A 先入 smooth）
-        assert len(out["d2"]) == 2
+        # d2: A smooth=15, B 首见=15 → 精确并列，排序键规范化后按字典序 A 先
+        assert out["d2"] == ["A", "B"]
+
+    def test_missing_day_carries_forward_smooth(self):
+        out = ema_toplists(
+            {"d1": {"A": 100.0, "B": 50.0}, "d2": {}, "d3": {"B": 80.0}},
+            alpha=0.5,
+            k=2,
+        )
+        # d2 全缺：沿用 d1 smooth → [A,B]；d3: B=0.5*80+0.5*50=65 < A=100 → [A,B]
+        assert out["d2"] == ["A", "B"]
+        assert out["d3"] == ["A", "B"]
 
     def test_none_score_skipped(self):
         out = ema_toplists({"d1": {"A": None, "B": 5.0}}, alpha=0.5, k=2)
@@ -51,6 +61,15 @@ class TestWindowToplists:
     def test_empty_day_yields_empty_list(self):
         out = window_toplists({"d1": {}}, window=3, broad_k=2, k=2)
         assert out["d1"] == []
+
+    def test_tie_broken_by_current_day_score(self):
+        scores = {
+            "d1": {"A": 50.0, "B": 40.0},
+            "d2": {"A": 10.0, "B": 90.0},
+        }
+        out = window_toplists(scores, window=2, broad_k=2, k=2)
+        # 近 2 日计数 A=2、B=2 全并列 → 按当日分 d2: B=90 > A=10 → [B, A]
+        assert out["d2"] == ["B", "A"]
 
 
 class TestHysteresisToplists:
@@ -80,3 +99,29 @@ class TestHysteresisToplists:
         }
         out = hysteresis_toplists(scores, k=3, exit_rank=4)
         assert "X" in out["d2"]
+
+    def test_all_missing_day_preserves_membership(self):
+        scores = {
+            "d1": {"A": 90.0, "B": 60.0, "C": 30.0},
+            "d2": {"A": None, "B": None, "C": None},  # 全缺 → 名单保留不洗白
+            "d3": {"B": 90.0, "C": 60.0, "D": 30.0, "A": 10.0},
+        }
+        out = hysteresis_toplists(scores, k=3, exit_rank=4)
+        assert out["d2"] == ["A", "B", "C"]
+        # d3: A rank4 <= exit 4 仍保留；D rank3 进列
+        assert "A" in out["d3"] and "D" in out["d3"]
+
+    def test_first_day_equals_pure_topk(self):
+        scores = {"d1": {"A": 30.0, "B": 90.0, "C": 60.0, "D": 10.0}}
+        out = hysteresis_toplists(scores, k=3, exit_rank=4)
+        # 首日无在列成员，名单 == 纯 TopK（D rank4 > k=3 不进列）
+        assert out["d1"] == ["B", "C", "A"]
+
+
+class TestDeterministicOrdering:
+    def test_all_equal_scores_yield_lexicographic_order(self):
+        # 3 题材全等分 + dict 插入序刻意打乱（C,A,B），断言名单 == 字典序（跨进程确定）
+        scores = {f"d{i}": {"C": 50.0, "A": 50.0, "B": 50.0} for i in (1, 2)}
+        assert ema_toplists(scores, alpha=0.5, k=3)["d1"] == ["A", "B", "C"]
+        assert window_toplists(scores, window=2, broad_k=3, k=3)["d2"] == ["A", "B", "C"]
+        assert hysteresis_toplists(scores, k=3, exit_rank=4)["d1"] == ["A", "B", "C"]
