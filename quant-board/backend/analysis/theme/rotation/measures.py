@@ -16,14 +16,14 @@ def rotation_speed(top_sets: list[set[str]]) -> dict[str, Any]:
 
     rotation_speed_t = 1 - |TopN_t ∩ TopN_{t-1}| / |TopN_t ∪ TopN_{t-1}|
     值域 0-1：0=名单完全不变（主线极稳），1=名单完全换血（极速轮动）。
-    空集合日该次转移标 insufficient，不参与均值但保留在 series：
-    空集日作为转移起点时无法度量轮出（可能是缺数据而非真换血），标 insufficient；
-    前一天轮入空集日的转移仍可计算（并集非空，距离必然为 1.0）。
+    空集合日两侧转移均标 insufficient，不参与均值但保留在 series：
+    空集只来自断采缺槽日，缺失日两侧的转移都无信息（可能是缺数据而非真换血）；
+    若把"流入缺失日"计为 1.0 满分轮动并进均值，会系统性抬高轮动速度、污染核心度量。
     """
     series: list[dict[str, Any]] = []
     for i in range(1, len(top_sets)):
         a, b = top_sets[i - 1], top_sets[i]
-        if not a:
+        if not a or not b:
             series.append({"index": i, "value": None, "status": "insufficient"})
             continue
         union = a | b
@@ -51,6 +51,7 @@ def mainline_persistence(mainline_by_day: dict[str, str | None]) -> dict[str, An
     """每日主线题材（Top1）序列 → 主线连续保持天数分布与切换频率。
 
     None（缺失/未判出）日断开连续段：结束当前段、不计切换、不并入下一段。
+    键需为零填充可排序日期串（ISO 格式），内部按字典序确定时序。
     comparable 统计同段内相邻两天均有主线的转移总数（含主题相同者），
     switch_rate = switches / comparable；无任何可比转移时为 None（不伪装成 0）。
     """
@@ -99,8 +100,10 @@ def rank_entropy(top_counts: dict[str, int]) -> dict[str, Any]:
     p_i = 题材 i 进入 TopN 的天数 / Σ(全部题材霸榜天数)；
     熵低 = 少数题材霸榜（主线集中）；熵高 = 频繁换脸（轮动混沌）。
     归一化基准 log(k)，k=出现过的题材数。
+    零/负计数视为非法输入，直接过滤不参与分布（fail-visible：不抛异常、不伪装成 0 熵）。
     """
-    total_hits = sum(top_counts.values())
+    # 只累计正数计数：负数计数非法但不中断，避免 math.log 抛 ValueError
+    total_hits = sum(c for c in top_counts.values() if c > 0)
     if total_hits == 0:
         return {"status": "insufficient", "reason": "no_top_hits"}
     probs = [c / total_hits for c in top_counts.values() if c > 0]

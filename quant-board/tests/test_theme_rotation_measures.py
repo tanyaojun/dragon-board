@@ -29,9 +29,14 @@ class TestRotationSpeed:
         assert rotation_speed([{"a"}])["status"] == "insufficient"
 
     def test_empty_day_breaks_series_but_keeps_rest(self):
-        result = rotation_speed([{"a", "b"}, set(), {"a", "b"}])
+        result = rotation_speed([{"a", "b"}, {"a", "b"}, set(), {"a", "b"}, {"a", "b"}])
+        # 空集日两侧转移均无信息：流入缺失日与流出缺失日都标 insufficient
         assert result["series"][1]["status"] == "insufficient"
+        assert result["series"][2]["status"] == "insufficient"
+        # 缺口后首个可比转移正常计算，整体保留可计算部分
+        assert result["series"][3]["value"] == 0.0
         assert result["status"] == "ok"
+        assert result["mean"] == 0.0
 
 
 class TestMainlinePersistence:
@@ -45,7 +50,7 @@ class TestMainlinePersistence:
     def test_daily_rotation_max_switches(self):
         result = mainline_persistence({"d1": "AI", "d2": "机器人", "d3": "AI"})
         assert result["switches"] == 2
-        assert result["streaks"] == [1, 1] or result["streaks"] == [1, 1, 1]
+        assert result["streaks"] == [1, 1, 1]
         assert result["switch_rate"] == 1.0
 
     def test_none_day_breaks_segment_without_counting_switch(self):
@@ -53,6 +58,12 @@ class TestMainlinePersistence:
         # d2 缺失：AI 段结束记 streak=1，d3 新段不计切换
         assert result["switches"] == 0
         assert result["streaks"] == [1, 1]
+
+    def test_switch_rate_none_when_no_comparable_transition(self):
+        result = mainline_persistence({"d1": "AI", "d2": None})
+        assert result["status"] == "ok"
+        assert result["switch_rate"] is None
+        assert result["comparable_transitions"] == 0
 
     def test_insufficient_no_known_mainline(self):
         assert mainline_persistence({"d1": None})["status"] == "insufficient"
@@ -74,6 +85,12 @@ class TestRankEntropy:
 
     def test_insufficient_empty(self):
         assert rank_entropy({})["status"] == "insufficient"
+
+    def test_zero_count_filtered_out(self):
+        result = rank_entropy({"a": 5, "b": 0})
+        assert result["status"] == "ok"
+        assert result["k_themes"] == 1
+        assert result["normalized"] == 0.0
 
 
 class TestDedupLimitCount:
