@@ -14,6 +14,8 @@ describe('SectorRotationTab', () => {
     expect(tab).toContain('getRotationSummary')
     expect(facade).toContain('export async function getRotationSummary')
     expect(facade).toContain('/api/theme-rotation/summary')
+    // 交互式读取：绕过后台轮询请求队列，避免页签"加载中"被队列滞留卡死
+    expect(facade).toContain('bypassQueue: true')
   })
 
   it('renders summary fields with explicit engine-no-mainline copy', () => {

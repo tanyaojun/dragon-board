@@ -562,7 +562,11 @@ export async function getRotationSummary(params: {
       dataset_id: params.datasetId || 'dragonboard_live',
       snapshot_type: params.snapshotType,
     })
-    return await apiService.get<ThemeRotationSummary>(`/api/theme-rotation/summary?${query.toString()}`)
+    // 交互式读取：bypassQueue 避免被后台轮询队列滞留（页签"加载中"卡死根因之一），不重试快速暴露空态
+    return await apiService.get<ThemeRotationSummary>(`/api/theme-rotation/summary?${query.toString()}`, {
+      bypassQueue: true,
+      retries: 0,
+    })
   } catch {
     return null
   }

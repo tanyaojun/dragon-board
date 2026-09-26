@@ -30,6 +30,7 @@ const QUANT_BOARD_PREFIXES = [
   '/api/themes/fund-rows',
   '/api/themes/stock-volume-series',
   '/api/theme-momentum/',
+  '/api/theme-rotation/',
   '/api/research/',
   '/api/stocks/',
   '/api/hotlist-sentiment/',
