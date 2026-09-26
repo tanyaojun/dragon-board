@@ -414,9 +414,6 @@ export const AppEvents = {
 
   // ===== 刷新管理相关事件 =====
   REFRESH: {
-    FULL_REQUESTED: 'refresh:full-requested',
-    MANUAL_REQUESTED: 'refresh:manual-requested',
-    MAINTENANCE_REQUESTED: 'refresh:maintenance-requested',
     COMPLETE: 'refresh:complete',
     FULL_COMPLETE: 'refresh:full-complete', // ✅ 新增
     FAILED: 'refresh:failed',

@@ -8,7 +8,6 @@ describe('RefreshCoordinator service registry', () => {
     ;(refreshCoordinator as any).reset?.()
     ;(refreshCoordinator as any).pendingRequests?.clear()
     ;(refreshCoordinator as any).services?.clear()
-    ;(refreshCoordinator as any).setupListeners?.()
     vi.unstubAllGlobals()
   })
 
@@ -173,82 +172,6 @@ describe('RefreshCoordinator service registry', () => {
     })
   })
 
-  it('forwards legacy refresh events to an uninitialized manager instead of executing directly', async () => {
-    ;(refreshCoordinator as any).reset()
-    ;(refreshCoordinator as any).pendingRequests.clear()
-    ;(refreshCoordinator as any).services.clear()
-
-    const requestRefresh = vi.fn(async () => undefined)
-    const runUpdate = vi.fn(async () => undefined)
-    refreshCoordinator.registerService('dataLoader', { runUpdate })
-    vi.stubGlobal('window', {
-      RefreshManager: {
-        getStatus: () => ({ initialized: false }),
-        requestRefresh,
-      },
-    })
-
-    const { EventManager } = await import('../../utils/eventManager')
-    const { AppEvents } = await import('../../types')
-
-    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
-      source: 'legacy',
-      force: true,
-    })
-    await Promise.resolve()
-
-    expect(requestRefresh).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'full',
-        source: 'legacy',
-        trigger: 'manual',
-        force: true,
-      }),
-    )
-    expect(runUpdate).not.toHaveBeenCalled()
-  })
-
-  it('does not execute legacy refresh events directly when the manager is unavailable', async () => {
-    ;(refreshCoordinator as any).reset()
-    ;(refreshCoordinator as any).pendingRequests.clear()
-    ;(refreshCoordinator as any).services.clear()
-
-    const runUpdate = vi.fn(async () => undefined)
-    refreshCoordinator.registerService('dataLoader', { runUpdate })
-
-    const { EventManager } = await import('../../utils/eventManager')
-    const { AppEvents } = await import('../../types')
-
-    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
-      source: 'legacy-without-manager',
-      force: true,
-    })
-    await Promise.resolve()
-
-    expect(runUpdate).not.toHaveBeenCalled()
-  })
-
-  it('leaves legacy refresh events to RefreshManager when the manager is mounted', async () => {
-    ;(refreshCoordinator as any).reset()
-    ;(refreshCoordinator as any).pendingRequests.clear()
-    ;(refreshCoordinator as any).services.clear()
-
-    const runUpdate = vi.fn(async () => undefined)
-    refreshCoordinator.registerService('dataLoader', { runUpdate })
-    vi.stubGlobal('window', { RefreshManager: { requestRefresh: vi.fn() } })
-
-    const { EventManager } = await import('../../utils/eventManager')
-    const { AppEvents } = await import('../../types')
-
-    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
-      source: 'legacy',
-      force: true,
-    })
-    await Promise.resolve()
-
-    expect(runUpdate).not.toHaveBeenCalled()
-  })
-
   it('does not auto-register services from window after import', async () => {
     vi.useFakeTimers()
     try {
@@ -266,32 +189,5 @@ describe('RefreshCoordinator service registry', () => {
       vi.useRealTimers()
       vi.resetModules()
     }
-  })
-
-  it('removes legacy refresh event listeners when destroyed', async () => {
-    ;(refreshCoordinator as any).reset()
-    ;(refreshCoordinator as any).pendingRequests.clear()
-    ;(refreshCoordinator as any).services.clear()
-
-    const requestRefresh = vi.fn(async () => undefined)
-    vi.stubGlobal('window', {
-      RefreshManager: {
-        getStatus: () => ({ initialized: false }),
-        requestRefresh,
-      },
-    })
-
-    refreshCoordinator.destroy()
-
-    const { EventManager } = await import('../../utils/eventManager')
-    const { AppEvents } = await import('../../types')
-
-    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
-      source: 'legacy-after-destroy',
-      force: true,
-    })
-    await Promise.resolve()
-
-    expect(requestRefresh).not.toHaveBeenCalled()
   })
 })

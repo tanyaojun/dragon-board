@@ -52,7 +52,8 @@ describe('RefreshTaskRegistry', () => {
       visibilityPolicy: 'run',
     })
     expect(registry.getTask('theme.runtime')).toMatchObject({
-      tradingTimeOnly: false,
+      // 2026-09-26 按需化：非交易时段后端题材数据静止，限定交易时段执行
+      tradingTimeOnly: true,
       visibilityPolicy: 'pause',
     })
     expect(registry.getTask('dragon.breath')).toMatchObject({

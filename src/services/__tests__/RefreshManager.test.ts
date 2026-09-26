@@ -170,29 +170,6 @@ describe('RefreshManager Phase 0 behavior', () => {
     expect(RefreshManager.getStatus().isRefreshing).toBe(false)
   })
 
-  it('routes legacy manual refresh events through the unified manager entry', async () => {
-    const { RefreshManager, coordinatorExecuteRequest } = await loadRefreshManager()
-    const { EventManager } = await import('../../utils/eventManager')
-    const { AppEvents } = await import('../../types')
-
-    await RefreshManager.init()
-
-    EventManager.emit(AppEvents.REFRESH.MANUAL_REQUESTED, {
-      source: 'data-freshness',
-      force: true,
-    })
-    await Promise.resolve()
-
-    expect(coordinatorExecuteRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'full',
-        source: 'data-freshness',
-        trigger: 'manual',
-        force: true,
-      }),
-    )
-  })
-
   it('reports busy without invoking the coordinator when a refresh is already running', async () => {
     let resolveFirst!: (value: RefreshRequestResult) => void
     const firstRefresh = new Promise<RefreshRequestResult>((resolve) => {

@@ -83,7 +83,6 @@ class RefreshManagerService {
   private unsubscribeFns: (() => void)[] = []
   private destroyed = false
   private isTradingTimeCache = false
-  private refreshEventsBound = false
 
   constructor() {
     this.currentConfig = { ...REFRESH_STRATEGY_CONFIGS.balanced }
@@ -518,36 +517,6 @@ class RefreshManagerService {
 
   // ========== 事件监听 ==========
   private setupListeners(): void {
-    if (!this.refreshEventsBound) {
-      this.refreshEventsBound = true
-
-      const unsubFull = EventManager.on(AppEvents.REFRESH.FULL_REQUESTED, (data: any) => {
-        if (this.destroyed) return
-        void this.requestRefresh({
-          kind: 'full',
-          source: data?.source || 'event',
-          trigger: data?.trigger || 'event',
-          force: Boolean(data?.force),
-          retryCount: data?.retryCount,
-          timestamp: data?.timestamp,
-        })
-      })
-      this.unsubscribeFns.push(unsubFull)
-
-      const unsubManual = EventManager.on(AppEvents.REFRESH.MANUAL_REQUESTED, (data: any) => {
-        if (this.destroyed) return
-        void this.requestRefresh({
-          kind: 'full',
-          source: data?.source || 'manual',
-          trigger: 'manual',
-          force: data?.force !== false,
-          retryCount: data?.retryCount,
-          timestamp: data?.timestamp,
-        })
-      })
-      this.unsubscribeFns.push(unsubManual)
-    }
-
     // 监听数据合并完成，更新统计
     const unsub1 = EventManager.on(AppEvents.DATA.MERGED, (data: any) => {
       if (this.destroyed) return
@@ -692,7 +661,6 @@ class RefreshManagerService {
       }
     })
     this.unsubscribeFns = []
-    this.refreshEventsBound = false
 
     this.clearAllTimers()
 

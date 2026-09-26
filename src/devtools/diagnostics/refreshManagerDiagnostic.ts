@@ -54,7 +54,7 @@ export async function testRefreshManager() {
   console.log('\n--- 测试手动刷新 ---')
   const result = await RefreshManager.manualRefresh('full')
   console.assert(result === true, '手动刷新应成功')
-  console.log('查看控制台是否有 "AppEvents.REFRESH.FULL_REQUESTED" 事件日志')
+  console.log('查看控制台是否有 "refresh:full-complete" 事件日志（Coordinator 执行完毕后发出）')
 
   console.log('\n========== 测试完成 ==========')
 }

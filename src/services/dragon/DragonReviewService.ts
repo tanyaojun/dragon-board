@@ -81,10 +81,12 @@ class DragonReviewService {
   }
 
   async runFullUpdate(date?: string): Promise<number> {
+    // 刷新编排会透传 RefreshRequest 对象，这里只接受日期字符串，其余按默认日期处理
+    const reviewDate = typeof date === 'string' ? date : undefined
     const locked = await refreshResourceLocks.runExclusive(
       'dragon-review',
       async () => {
-        const result = await this.rebuildReview(date)
+        const result = await this.rebuildReview(reviewDate)
         this.syncData()
         return result.trueLeaders.length
       },

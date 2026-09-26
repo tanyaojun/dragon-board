@@ -29,7 +29,6 @@ class RefreshCoordinator {
   private isRefreshing = false
   private currentContext: RefreshContext | null = null
   private pendingRequests = new Map<string, number>()
-  private unsubscribeFns: (() => void)[] = []
   private destroyed = false
   private readonly REQUEST_COOLDOWN = 5000
 
@@ -69,46 +68,7 @@ class RefreshCoordinator {
     },
   ]
 
-  constructor() {
-    this.setupListeners()
-  }
-
-  private setupListeners(): void {
-    if (this.destroyed) {
-      this.destroyed = false
-    }
-
-    if (this.unsubscribeFns.length) return
-
-    const unsubFull = EventManager.on(AppEvents.REFRESH.FULL_REQUESTED, async (data: any) => {
-      await this.forwardLegacyRequest({ source: 'event', trigger: 'event', force: false, ...(data || {}) })
-    })
-    this.unsubscribeFns.push(unsubFull)
-
-    const unsubManual = EventManager.on(AppEvents.REFRESH.MANUAL_REQUESTED, async (data: any) => {
-      await this.forwardLegacyRequest({ source: 'manual', trigger: 'manual', force: true, ...(data || {}) })
-    })
-    this.unsubscribeFns.push(unsubManual)
-  }
-
-  private async forwardLegacyRequest(data: any): Promise<void> {
-    if (this.destroyed) return
-    const manager = typeof window !== 'undefined' ? (window as any).RefreshManager : null
-    if (manager?.requestRefresh) {
-      if (!manager.getStatus?.().initialized) {
-        await manager.requestRefresh({
-          kind: 'full',
-          source: data?.source || 'event',
-          trigger: data?.trigger || 'event',
-          force: Boolean(data?.force),
-          timestamp: data?.timestamp || Date.now(),
-        })
-      }
-      return
-    }
-
-    console.warn('[RefreshCoordinator] 忽略旧刷新事件：RefreshManager 未就绪')
-  }
+  constructor() {}
 
   registerService(name: string, instance: any): void {
     const definition = this.SERVICE_REGISTRY.find((item) => item.name === name)
@@ -343,14 +303,6 @@ class RefreshCoordinator {
     this.currentContext = null
     this.services.clear()
     this.pendingRequests.clear()
-    this.unsubscribeFns.forEach((unsubscribe) => {
-      try {
-        unsubscribe()
-      } catch (error) {
-        console.warn('[RefreshCoordinator] 清理监听失败:', error)
-      }
-    })
-    this.unsubscribeFns = []
   }
 }
 

@@ -46,7 +46,9 @@ export const REFRESH_TASK_DEFINITIONS: RefreshTaskDefinition[] = [
     owner: 'ThemeRuntimeCoordinator',
     intervalMs: 5_000,
     timeoutMs: 15_000,
-    tradingTimeOnly: false,
+    // 2026-09-26 按需化：非交易时段后端题材数据静止，30s 轮询为空转；消费链
+    // （regime 分类/快照上下文）仅在交易时段需要新鲜度，故限定交易时段执行
+    tradingTimeOnly: true,
     visibilityPolicy: 'pause',
     description: '题材轮动运行态刷新',
   },
