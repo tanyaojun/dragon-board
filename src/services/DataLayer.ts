@@ -2,18 +2,7 @@
 
 import { ref, reactive } from 'vue'
 import type { BreathData, Depth10Book, L2Summary, TickTrade } from '../types'
-import { ALERT_CONFIG } from '../config/constants'
 import { applyRankTrendAnalysis } from './rankTrend/compat'
-import type { RotationAnalysis, StockAlert, AlertStats } from '../types'
-import type { AlertType } from '../types/core'
-import type { DragonReviewResult } from './dragon/types'
-import type { ThemeCorrelationDetail } from './ThemeCorrelationAnalyzer'
-import {
-  applyReviewProjectionToStock,
-  buildReviewLeaderProjection,
-  normalizeLeaderRole,
-  stripLegacyLeaderFields,
-} from './dragon/reviewProjection'
 import type {
   DataState,
   LimitUpExtData,
@@ -61,26 +50,6 @@ class DataLayer {
     merged: { stocks: [], themes: [] },
     listPoolProvenance: null as ListPoolProvenance | null,
 
-    // 龙头数据单独存储
-    leader: {
-      byCode: new Map(),
-      byLevel: {},
-      lastUpdate: null,
-    },
-
-    review: {
-      result: null,
-      marketCore: null,
-      trueLeaders: [],
-      heightBoard: [],
-      attentionBoard: [],
-      pseudoLeaderGraveyard: [],
-      battlefields: [],
-      transitions: [],
-      summaryLines: [],
-      lastUpdate: null,
-    },
-
     // ========== 题材数据  ==========
     theme: {
       base: {
@@ -94,10 +63,6 @@ class DataLayer {
         rotation: [],
         lastUpdate: null,
       },
-      correlation: {
-        byTheme: new Map(),
-        lastUpdate: null,
-      },
     },
 
     // 分析结果
@@ -107,26 +72,6 @@ class DataLayer {
         marketData: undefined,
         factors: undefined,
         history: [],
-        lastUpdate: null,
-      },
-      // ✅ 添加 rotation
-      rotation: {
-        current: null,
-        history: [],
-        lastUpdate: null,
-      },
-
-      // 预警存储
-      alerts: {
-        items: [],
-        stats: {
-          total: 0,
-          critical: 0,
-          warning: 0,
-          info: 0,
-          byType: {} as Record<AlertType, number>,
-          lastUpdate: 0,
-        },
         lastUpdate: null,
       },
     },
@@ -141,13 +86,10 @@ class DataLayer {
     version: {
       stocks: 0,
       themes: 0,
-      leaders: 0,
-      review: 0,
       quotes: 0,
       platforms: 0,
       platformStatus: 0,
       breath: 0,
-      rotation: 0,
     },
 
     meta: {
@@ -160,99 +102,6 @@ class DataLayer {
   private subscribers = new Map<string, Set<(data: any) => void>>()
   private notifyTimer: ReturnType<typeof setTimeout> | null = null
   private pendingNotify = new Map<string, any>()
-
-  // ========== 复盘兼容查询（只服务旧入口读取，不再产出龙头结论） ==========
-
-  /**
-   * 获取单个龙头信息
-   */
-  getLeaderByCode(code: string) {
-    return this.state.leader.byCode.get(code) || null
-  }
-
-  /**
-   * 按级别获取龙头
-   */
-  getLeadersByLevel(level: string) {
-    const normalizedLevel = normalizeLeaderRole(level) || level
-    return this.state.leader.byLevel[normalizedLevel] || []
-  }
-
-  /**
-   * 获取所有龙头
-   */
-  getAllLeaders() {
-    return Array.from(this.state.leader.byCode.values())
-  }
-
-  updateReviewData(result: DragonReviewResult) {
-    const timestamp = Date.now()
-    this.state.review = {
-      result,
-      marketCore: result.marketCore,
-      trueLeaders: result.trueLeaders || [],
-      heightBoard: result.heightBoard || [],
-      attentionBoard: result.attentionBoard || [],
-      pseudoLeaderGraveyard: result.pseudoLeaderGraveyard || [],
-      battlefields: result.battlefields || [],
-      transitions: result.transitions || [],
-      summaryLines: result.summaryLines || [],
-      lastUpdate: timestamp,
-    }
-
-    const { byCode, byLevel } = buildReviewLeaderProjection(result, timestamp)
-
-    this.state.leader = {
-      byCode,
-      byLevel,
-      lastUpdate: timestamp,
-    }
-
-    if (this.state.merged.stocks.length) {
-      this.state.merged.stocks = this.state.merged.stocks.map((stock) =>
-        applyReviewProjectionToStock(stock, byCode.get(stock.code) || null),
-      )
-      this.throttledNotify('merged.stocks', this.state.merged.stocks)
-    }
-
-    this.state.version.review = (this.state.version.review || 0) + 1
-    this.state.version.leaders++
-    this.throttledNotify('review.result', result)
-    this.throttledNotify('version.review', this.state.version.review)
-    this.throttledNotify('version.leaders', this.state.version.leaders)
-  }
-
-  getDragonReview(): DragonReviewResult | null {
-    return this.state.review.result
-  }
-
-  getMarketCore() {
-    return this.state.review.marketCore
-  }
-
-  getTrueLeaders() {
-    return this.state.review.trueLeaders
-  }
-
-  getHeightBoard() {
-    return this.state.review.heightBoard
-  }
-
-  getAttentionBoard() {
-    return this.state.review.attentionBoard
-  }
-
-  getPseudoLeaderGraveyard() {
-    return this.state.review.pseudoLeaderGraveyard
-  }
-
-  getReviewBattlefields() {
-    return this.state.review.battlefields
-  }
-
-  getReviewTransitions() {
-    return this.state.review.transitions
-  }
 
   // ========== 题材数据管理 ==========
   /**
@@ -313,15 +162,6 @@ class DataLayer {
    */
   updateHotThemes(hotThemes: any[]) {
     this.state.theme.metrics.hotList = hotThemes
-    this.state.theme.metrics.lastUpdate = Date.now()
-    this.state.version.themes++
-  }
-
-  /**
-   * 更新轮动数据
-   */
-  updateRotation(rotation: any[]) {
-    this.state.theme.metrics.rotation = rotation
     this.state.theme.metrics.lastUpdate = Date.now()
     this.state.version.themes++
   }
@@ -390,25 +230,6 @@ class DataLayer {
   /**
    * 获取题材轮动数据
    */
-  getThemeRotation() {
-    return this.state.theme.metrics.rotation
-  }
-
-  // ========== 题材个股联动管理 ==========
-  updateThemeCorrelation(themeId: string, correlation: ThemeCorrelationDetail) {
-    if (!this.state.theme.correlation) {
-      this.state.theme.correlation = { byTheme: new Map(), lastUpdate: null }
-    }
-    this.state.theme.correlation.byTheme.set(themeId, correlation)
-    this.state.theme.correlation.lastUpdate = Date.now()
-    this.state.version.themes++
-  }
-
-  // 获取方法
-  getThemeCorrelation(themeId: string): ThemeCorrelationDetail | undefined {
-    return this.state.theme.correlation?.byTheme.get(themeId)
-  }
-
   // ========== 股票数据管理 ==========
   /**
    * 更新股票数据 - 供 dataLoader 调用
@@ -416,7 +237,7 @@ class DataLayer {
   updateStocks(data: any[]) {
     // 保存原始数据
     this.state.raw.stocks = data.map((s) => ({
-      ...stripLegacyLeaderFields(s),
+      ...s,
       timestamp: Date.now(),
     }))
 
@@ -1083,14 +904,11 @@ class DataLayer {
    */
   setMergedStocks(stocks: any[]) {
     const normalizedStocks = (stocks as MergedStock[]).map((stock) => {
-      const normalized = this.applyRealtimeProjection(stripLegacyLeaderFields(stock))
+      const normalized = this.applyRealtimeProjection(stock)
       if ('rankTrend' in normalized) {
         applyRankTrendAnalysis(normalized, normalized.rankTrend ?? null)
       }
-      return applyReviewProjectionToStock(
-        normalized,
-        this.state.leader.byCode.get(normalized.code) || null,
-      )
+      return normalized
     })
 
     this.state.merged.stocks = normalizedStocks
@@ -1236,11 +1054,6 @@ class DataLayer {
     this.throttledNotify('version.stocks', this.state.version.stocks)
   }
 
-  bumpLeadersVersion() {
-    this.state.version.leaders++
-    this.throttledNotify('version.leaders', this.state.version.leaders)
-  }
-
   // ========== 初始化状态 ==========
 
   isInitialized() {
@@ -1310,28 +1123,6 @@ class DataLayer {
     }, 50)
   }
 
-  // ========== 轮动数据管理 ==========
-
-  updateRotationAnalysis(analysis: RotationAnalysis) {
-    this.state.analysis.rotation.current = analysis
-    this.state.analysis.rotation.history.push(analysis)
-    if (this.state.analysis.rotation.history.length > 100) {
-      this.state.analysis.rotation.history.shift()
-    }
-    this.state.analysis.rotation.lastUpdate = Date.now()
-    this.state.version.rotation = (this.state.version.rotation || 0) + 1
-    this.throttledNotify('analysis.rotation', analysis)
-  }
-
-  getCurrentRotation(): RotationAnalysis | null {
-    return this.state.analysis.rotation.current
-  }
-
-  getRotationHistory(limit?: number): RotationAnalysis[] {
-    const history = this.state.analysis.rotation.history
-    return limit ? history.slice(-limit) : [...history]
-  }
-
   // ========== 大单数据管理 ==========
   updateBigOrderData(
     stockCode: string,
@@ -1380,50 +1171,6 @@ class DataLayer {
   }
 
   // ========== 预警数据管理 ==========
-  addAlert(alert: StockAlert) {
-    this.state.analysis.alerts.items.unshift(alert)
-    if (this.state.analysis.alerts.items.length > ALERT_CONFIG.MAX_ALERTS) {
-      this.state.analysis.alerts.items.pop()
-    }
-    this.updateAlertStats()
-    this.state.analysis.alerts.lastUpdate = Date.now()
-    this.throttledNotify('analysis.alerts', alert)
-  }
-
-  getAlerts(limit?: number): StockAlert[] {
-    const items = this.state.analysis.alerts.items
-    return limit ? items.slice(0, limit) : [...items]
-  }
-
-  getUnreadAlerts(): StockAlert[] {
-    return this.state.analysis.alerts.items.filter((a) => a.status === 'pending')
-  }
-
-  markAlertAsRead(alertId: string) {
-    const alert = this.state.analysis.alerts.items.find((a) => a.id === alertId)
-    if (alert && alert.status === 'pending') {
-      alert.status = 'read'
-      alert.readTime = Date.now()
-      this.updateAlertStats()
-    }
-  }
-
-  private updateAlertStats() {
-    const items = this.state.analysis.alerts.items
-    const stats = {
-      total: items.length,
-      critical: items.filter((a) => a.level === 'critical').length,
-      warning: items.filter((a) => a.level === 'warning').length,
-      info: items.filter((a) => a.level === 'info').length,
-      byType: {} as Record<string, number>,
-      lastUpdate: Date.now(),
-    }
-    items.forEach((alert) => {
-      stats.byType[alert.type] = (stats.byType[alert.type] || 0) + 1
-    })
-    this.state.analysis.alerts.stats = stats
-  }
-
   getStats() {
     const now = Date.now()
     return {
@@ -1462,23 +1209,6 @@ class DataLayer {
       lastUpdate: null,
     }
     this.state.merged = { stocks: [], themes: [] }
-    this.state.leader = {
-      byCode: new Map(),
-      byLevel: {},
-      lastUpdate: null,
-    }
-    this.state.review = {
-      result: null,
-      marketCore: null,
-      trueLeaders: [],
-      heightBoard: [],
-      attentionBoard: [],
-      pseudoLeaderGraveyard: [],
-      battlefields: [],
-      transitions: [],
-      summaryLines: [],
-      lastUpdate: null,
-    }
     this.state.theme = {
       base: {
         byCode: new Map(),
@@ -1491,10 +1221,6 @@ class DataLayer {
         rotation: [],
         lastUpdate: null,
       },
-      correlation: {
-        byTheme: new Map(),
-        lastUpdate: null,
-      },
     }
     this.state.analysis = {
       breath: {
@@ -1502,36 +1228,6 @@ class DataLayer {
         marketData: undefined,
         factors: undefined,
         history: [],
-        lastUpdate: null,
-      },
-      rotation: {
-        current: null,
-        history: [],
-        lastUpdate: null,
-      },
-      alerts: {
-        items: [],
-        stats: {
-          total: 0,
-          critical: 0,
-          warning: 0,
-          info: 0,
-          byType: {
-            leader_fall: 0,
-            leader_emerge: 0,
-            batch_limit_up: 0,
-            batch_explode: 0,
-            strength_surge: 0,
-            strength_plunge: 0,
-            money_flow: 0,
-            data_anomaly: 0,
-            volume_surge: 0,
-            rocket_launch: 0,
-            waterfall_dive: 0,
-            fengdan_drop: 0,
-          },
-          lastUpdate: 0,
-        },
         lastUpdate: null,
       },
     }
@@ -1545,13 +1241,10 @@ class DataLayer {
     this.state.version = {
       stocks: 0,
       themes: 0,
-      leaders: 0,
-      review: 0,
       quotes: 0,
       platforms: 0,
       platformStatus: 0,
       breath: 0,
-      rotation: 0,
     }
     this.state.meta = {
       initialized: false,

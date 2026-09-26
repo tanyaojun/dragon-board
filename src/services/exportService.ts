@@ -3,7 +3,6 @@ import { debugLog } from '@/utils/logger'
 // 优化版：添加防抖、错误处理和事件清理
 
 import { useStockStore } from '@/stores/stock'
-import { dragonReviewService } from './dragon/DragonReviewService'
 import { themeFacade } from './theme/ThemeFacade'
 import { dragonBreathAnalyzer } from './DragonBreathAnalyzer'
 import { dataLayer } from './DataLayer'
@@ -106,7 +105,6 @@ class ExportService {
         market: {
           sentiment: dragonBreathAnalyzer.getMarketSentiment(),
           marketData: dragonBreathAnalyzer.getMarketData(),
-          leaders: dragonReviewService.getStats(),
         },
         timestamp: Date.now(),
       }
@@ -128,7 +126,6 @@ class ExportService {
         market: {
           sentiment: dragonBreathAnalyzer.getMarketSentiment(),
           marketData: dragonBreathAnalyzer.getMarketData(),
-          leaders: dragonReviewService.getStats(),
         },
         timestamp: Date.now(),
       }
@@ -320,8 +317,7 @@ class ExportService {
   private isLeaderStock(stock: Stock): boolean {
     if (stock.isSectorLeader) return true
 
-    const leaders = dragonReviewService.getAllLeaders?.() || []
-    return leaders.some((leader: any) => leader.code === stock.code)
+    return false
   }
 
   private getFileExtension(format: ExportOptions['format']): string {

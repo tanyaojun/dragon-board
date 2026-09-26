@@ -22,7 +22,7 @@ class KeyboardService {
       // 导航
       { key: '↑', description: '上一行', category: 'navigation', action: () => {} },
       { key: '↓', description: '下一行', category: 'navigation', action: () => {} },
-      { key: 'Enter', description: '查看详情/龙头面板', category: 'navigation', action: () => {} },
+      { key: 'Enter', description: '查看详情', category: 'navigation', action: () => {} },
       { key: 'Space', description: '快速查看', category: 'navigation', action: () => {} },
       
       // 搜索
@@ -36,7 +36,6 @@ class KeyboardService {
       { key: 'F11', description: '全屏模式', category: 'view', action: () => {} },
       
       // 面板
-      { key: 'Ctrl+D', description: '显示龙头面板', category: 'panels', action: () => {} },
       { key: 'Ctrl+S', description: '显示题材分析', category: 'panels', action: () => {} },
       { key: 'Ctrl+B', description: '显示龙息分析', category: 'panels', action: () => {} },
       { key: 'Ctrl+F', description: '显示自选股', category: 'panels', action: () => {} },
@@ -162,7 +161,6 @@ class KeyboardService {
   // ========== 注册面板快捷键 ==========
 
   registerPanelShortcuts(actions: {
-    onDragon?: () => void
     onSector?: () => void
     onConfig?: () => void
     onBreath?: () => void
@@ -171,15 +169,6 @@ class KeyboardService {
     onHelp?: () => void
     onSearch?: () => void
   }) {
-    if (actions.onDragon) {
-      this.registerShortcut({
-        key: 'Ctrl+D',
-        description: '显示龙头面板',
-        category: 'panels',
-        action: actions.onDragon
-      })
-    }
-    
     if (actions.onSector) {
       this.registerShortcut({
         key: 'Ctrl+S',

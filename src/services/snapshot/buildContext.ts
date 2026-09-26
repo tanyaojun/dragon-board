@@ -1,6 +1,5 @@
 import { dataLayer } from '../DataLayer'
 import { themeHeatFeed } from '../theme/ThemeHeatFeed'
-import { getBackendRotationSummaryRaw } from '../theme/ThemeRuntimeCoordinator'
 import type { SnapshotBuildContext } from './builders'
 
 export type StartupSnapshotContext = Omit<
@@ -49,9 +48,6 @@ export function getCurrentSnapshotBuildContext(): SnapshotBuildContext {
         factorVersion: heatFactorVersion,
       },
     })),
-    rotationAnalysis: dataLayer.getCurrentRotation(),
-    // 原始后端引擎 rotationSummary（camelCase 全字段）；快照构建原样透传，不重序列化
-    backendRotationSummary: getBackendRotationSummaryRaw(),
     breathHistory: dataLayer.getBreathHistory(),
     breathFactors: dataLayer.getBreathFactors(),
     marketMode: dataLayer.getMarketMode(),

@@ -7,7 +7,6 @@ import { EventManager } from '@/utils/eventManager'
 import { AppEvents } from '@/types'
 import { dataLayer } from '@/services/DataLayer'
 import type { MergedStock } from '@/types'
-import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 import { StockUtils } from '@/utils/common'
 
 // 批量更新配置
@@ -285,53 +284,6 @@ export const useStockStore = defineStore('stock', () => {
     }
   }
 
-  // ===== 刷新龙头数据 =====
-  function refreshLeaders() {
-    if (stocks.value.length === 0) return 0
-
-    const leaders = dragonReviewService.getAllLeaders?.() || []
-    const leaderMap = new Map()
-
-    leaders.forEach((leader: any) => {
-      leaderMap.set(leader.code, {
-        isSectorLeader: true,
-        leaderLevel: leader.levelName,
-        leaderScore: leader.score,
-        leaderReasons: leader.reasons,
-        continuousDays: leader.continuousDays,
-      })
-    })
-
-    let updatedCount = 0
-    const newStocks = stocks.value.map(stock => {
-      const leaderInfo = leaderMap.get(stock.code)
-      if (leaderInfo) {
-        updatedCount++
-        const updatedStock = { ...stock, ...leaderInfo }
-        updatedStock.hotScore = calculateHotScore(updatedStock)
-        return updatedStock
-      }
-      return {
-        ...stock,
-        isSectorLeader: false,
-        leaderLevel: '非龙头',
-        leaderScore: 0,
-        leaderReasons: [],
-        continuousDays: stock.continuousDays || 1,
-      }
-    })
-
-    stocks.value = newStocks
-    updateStockCache()
-    version.value++
-
-    if (updatedCount > 0) {
-      debugLog(`[StockStore] 🔄 刷新龙头: ${updatedCount}只`)
-    }
-
-    return updatedCount
-  }
-
   // ===== 更新单个股票 =====
   function updateStock(code: string, data: Partial<Stock>) {
     queueUpdate(code, data)
@@ -420,14 +372,6 @@ export const useStockStore = defineStore('stock', () => {
       }
     })
     listeners.push(unsubQuotes)
-
-    // 监听龙头变化
-    const unsubDragon = EventManager.on(AppEvents.DRAGON.UPDATED, (data: any) => {
-      if (data?.changes) {
-        refreshLeaders()
-      }
-    })
-    listeners.push(unsubDragon)
 
     // 监听题材更新
     const unsubSector = EventManager.on(AppEvents.SECTOR.UPDATED, () => {
@@ -537,7 +481,6 @@ export const useStockStore = defineStore('stock', () => {
     batchUpdate,
     getStockByCode,
     calculateHotScore,
-    refreshLeaders,
     setMarketMode,
     waitForReady,
     init,

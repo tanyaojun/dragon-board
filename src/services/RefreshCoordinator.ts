@@ -1,5 +1,5 @@
 // src/services/RefreshCoordinator.ts
-// 统一全量刷新协调器：数据 -> 题材 -> 龙息 -> 真龙复盘 -> 算法
+// 统一全量刷新协调器：数据 -> 题材 -> 龙息（按依赖顺序编排执行）
 
 import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
@@ -39,32 +39,18 @@ class RefreshCoordinator {
       fullMethod: 'runUpdate',
     },
     {
-      name: 'themeRuntime',
-      priority: 20,
-      fullMethod: 'runUpdate',
-      syncMethod: 'syncData',
-      dependsOn: ['dataLoader'],
-    },
-    {
       name: 'sectorAnalyzer',
       priority: 21,
       fullMethod: 'runUpdate',
       syncMethod: 'syncData',
-      dependsOn: ['themeRuntime'],
+      dependsOn: ['dataLoader'],
     },
     {
       name: 'dragonBreathAnalyzer',
       priority: 30,
       fullMethod: 'runFullUpdate',
       syncMethod: 'syncData',
-      dependsOn: ['dataLoader', 'themeRuntime'],
-    },
-    {
-      name: 'dragonReviewService',
-      priority: 40,
-      fullMethod: 'runFullUpdate',
-      syncMethod: 'syncData',
-      dependsOn: ['dataLoader', 'themeRuntime', 'dragonBreathAnalyzer'],
+      dependsOn: ['dataLoader'],
     },
   ]
 

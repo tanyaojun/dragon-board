@@ -14,7 +14,8 @@ SQLite 快照模块采用一套“原始事实表 + 正式读模型表”的结�
   - `payload` 已做瘦身，不再持久化旧版镜像字段和冗余大数组。
 - `snapshot_frames`
   - 一条正式快照对应一条 frame。
-  - 保存帧级摘要：`marketStats / sentiment / moneyFlow / indices / limitSummary / rotationSummary`。
+  - 保存帧级摘要：`marketStats / sentiment / moneyFlow / indices / limitSummary`。
+  - 变更（2026-09-26 前端瘦身）：前端 ingest 链的 `rotationSummary` 已停止生产（题材轮动引擎移除，题材结论统一由 QuantBoard 后端生产）；collector 直写链不受影响。历史快照中的 `rotationSummary` 字段保留可读，`rotation_main_line` sector 行停止新增、历史行保留。
 - `snapshot_stock_rows`
   - 一条快照中的一只股票一行。
   - 用于量比、排名趋势、复盘等正式查询。

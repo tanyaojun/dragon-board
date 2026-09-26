@@ -4,7 +4,6 @@ import { onMounted, onUnmounted } from 'vue'
 import { keyboardService } from '@/services/keyboardService'
 
 export function useKeyboardShortcuts(actions: {
-  onDragon?: () => void
   onSector?: () => void
   onConfig?: () => void
   onBreath?: () => void

@@ -5,10 +5,9 @@ import {
   toFiniteNumber,
   volumeRatioStateLabel,
 } from '@/utils/volumeRatio'
-import { ALERT_THRESHOLDS } from '@/config/constants'
-
-const UP = ALERT_THRESHOLDS.VOLUME_RATIO_ABSOLUTE.UP
-const DOWN = ALERT_THRESHOLDS.VOLUME_RATIO_ABSOLUTE.DOWN
+// 与 volumeRatio.ts 内联阈值一致（golden 3 日口径）
+const UP = 1.05
+const DOWN = 0.95
 
 describe('classifyVolumeRatio（3 日量比绝对阈值：>1 放量、<1 缩量）', () => {
   it('量比 ≥ 1.05 判定为放量（超过 3 日同期均量）', () => {

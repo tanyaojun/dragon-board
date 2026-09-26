@@ -131,11 +131,7 @@ function canDeriveSectorEntityType(
   if (entityType === 'hot_theme') {
     return Array.isArray(payload.hotThemes) || Array.isArray(buildContext?.hotThemes)
   }
-  return (
-    Array.isArray(payload.rotation?.mainLines) ||
-    Array.isArray(payload.rotationSummary?.mainLines) ||
-    Array.isArray(buildContext?.rotationAnalysis?.mainLines)
-  )
+  return false
 }
 
 function normalizeExistingStockRows(record: SnapshotRecord, rows: SnapshotStockRow[]): SnapshotStockRow[] {
@@ -219,8 +215,7 @@ function reconcileSectorRows(
   if (derivedRows.length === 0) {
     const hasAnyDerivableEntityType =
       canDeriveSectorEntityType(record, 'sector', buildContext) ||
-      canDeriveSectorEntityType(record, 'hot_theme', buildContext) ||
-      canDeriveSectorEntityType(record, 'rotation_main_line', buildContext)
+      canDeriveSectorEntityType(record, 'hot_theme', buildContext)
     return hasAnyDerivableEntityType ? [] : normalizedExisting
   }
 

@@ -163,7 +163,6 @@ export async function init(): Promise<() => void> {
     source: 'sectorAnalyzer',
     force: true,
     syncStocks: true,
-    emitAlerts: false,
   })
   await initTagsAndReasons()
   state.initialized = true
@@ -184,7 +183,6 @@ export async function triggerHeatCalculation() {
     source: 'sectorAnalyzer',
     force: true,
     syncStocks: true,
-    emitAlerts: false,
   })
   dataLayer.updateHotThemes(themeFacade.getHotThemes(CONFIG.HOT_THEMES_LIMIT))
   return result
@@ -221,7 +219,7 @@ export async function updateFullThemeMapping(): Promise<{ success: boolean; mess
       source: 'sectorAnalyzer',
       force: true,
       syncStocks: true,
-      emitAlerts: false,
+
     })
     return { success: true, message: `${base.byId.size}个题材, ${base.byCode.size}只股票` }
   } catch (error) {
@@ -236,7 +234,6 @@ export function syncThemesToStocks(): number {
     source: 'sectorAnalyzer',
     context: themeFacade.buildCurrentThemeSourceContext(),
     syncStocks: true,
-    emitAlerts: false,
   })
   return result.syncedStockCount
 }
@@ -400,7 +397,7 @@ export const sectorAnalyzer = {
       source: 'sectorAnalyzer',
       force: true,
       syncStocks: true,
-      emitAlerts: false,
+
     })
   },
 
@@ -409,7 +406,7 @@ export const sectorAnalyzer = {
     await themeFacade.refreshRuntime({
       source: 'sectorAnalyzer',
       syncStocks: true,
-      emitAlerts: false,
+
     })
   },
 

@@ -16,8 +16,6 @@ describe('RefreshTaskRegistry', () => {
       'dataLoader.ranktrendSignal',
       'theme.runtime',
       'dragon.breath',
-      'dragon.review',
-      'alert.check',
       'snapshot.sweep',
       'snapshot.backupSync',
       'websocket.staleCheck',
@@ -58,10 +56,6 @@ describe('RefreshTaskRegistry', () => {
     })
     expect(registry.getTask('dragon.breath')).toMatchObject({
       tradingTimeOnly: true,
-      visibilityPolicy: 'pause',
-    })
-    expect(registry.getTask('alert.check')).toMatchObject({
-      tradingTimeOnly: false,
       visibilityPolicy: 'pause',
     })
     expect(registry.getTask('snapshot.sweep')).toMatchObject({

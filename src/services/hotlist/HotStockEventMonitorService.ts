@@ -67,20 +67,6 @@ function collectCodes(value: unknown, codes: Set<string>) {
   if (code) codes.add(code)
 }
 
-function getCandidateCodes(review: ReturnType<HotStockEventDataLayer['getDragonReview']>): Set<string> {
-  const codes = new Set<string>()
-  if (!review) return codes
-
-  const candidateReview = review as unknown as Record<string, unknown>
-  collectCodes(candidateReview.candidates, codes)
-  collectCodes(candidateReview.trueLeaders, codes)
-  collectCodes(candidateReview.attentionBoard, codes)
-  collectCodes(candidateReview.marketCore, codes)
-  collectCodes(candidateReview.heightBoard, codes)
-
-  return codes
-}
-
 function dedupeById(events: HotStockAbnormalEvent[]): HotStockAbnormalEvent[] {
   const byId = new Map<string, HotStockAbnormalEvent>()
   for (const event of events) {
@@ -212,7 +198,6 @@ export class HotStockEventMonitorService {
     const previousHotStockIds = new Set(this.hotStockEvents.map(event => event.id))
     const watchedCodeSet = new Set(watchedCodes)
     const tdxBlockCodeSet = new Set(tdxBlockCodes)
-    const candidateCodes = getCandidateCodes(this.dataLayer.getDragonReview())
     const today = this.now()
 
     try {
@@ -229,7 +214,7 @@ export class HotStockEventMonitorService {
         .map(event => ({
           ...event,
           matchedHotStock: event.category === 'stock' && watchedCodeSet.has(event.code),
-          matchedCandidate: event.category === 'stock' && candidateCodes.has(event.code),
+          matchedCandidate: false,
         }))
         .sort((a, b) => b.timestamp - a.timestamp)
 
@@ -271,7 +256,7 @@ export class HotStockEventMonitorService {
         .map(event => ({
           ...event,
           matchedHotStock: event.category === 'stock' && watchedCodeSet.has(event.code),
-          matchedCandidate: event.category === 'stock' && candidateCodes.has(event.code),
+          matchedCandidate: false,
         }))
         .sort((a, b) => b.timestamp - a.timestamp)
       const { nextEvents, nextHotStockEvents, nextOtherStockEvents, nextSectorEvents } =

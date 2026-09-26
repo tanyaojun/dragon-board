@@ -1,5 +1,4 @@
 import type { MergedStock } from '@/types/data-layer'
-import type { DragonReviewResult } from '../dragon/types'
 
 export type HotStockEventDirection = 'up' | 'down' | 'neutral'
 export type HotStockEventSeverity = 'normal' | 'important'
@@ -58,7 +57,6 @@ export interface HotStockEventFetcher {
 
 export interface HotStockEventDataLayer {
   getStocks: () => MergedStock[]
-  getDragonReview: () => (DragonReviewResult & { candidates?: Array<{ code?: string }> }) | null
 }
 
 export interface HotStockEventRefreshResult {

@@ -1,15 +1,12 @@
 import { dataLayer } from '@/services/DataLayer'
 import { apiService } from '../apiService'
-import type { RotationAnalysis } from '@/types/core'
 import { shallowRef } from 'vue'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { themeRepository } from './ThemeRepository'
 import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '@/types/rankTrendDefaults'
 import {
   refreshRuntime,
-  setBackendRotationSummary,
-  getBackendRotationMeta,
-  getBackendRotationSummaryRaw,
+  startRuntimeRefresh,
 } from './ThemeRuntimeCoordinator'
 import { refreshResourceLocks } from '../refresh/RefreshResourceLocks'
 import { deriveThemeHeatLevel, deriveThemeHeatMeta } from './stockThemeMeta'
@@ -35,7 +32,6 @@ let lastExposureProjection: ThemeExposureProjection = {
   byCode: new Map(),
   byTheme: new Map(),
 }
-let lastRotationSummary: RotationAnalysis | null = null
 
 /**
  * theme_momentum v2 题材动量分缓存（themeId → score）。
@@ -73,12 +69,6 @@ export function buildCurrentThemeSourceContext(options?: {
     themeStocks.set(theme.id, themeRepository.getThemeStocks(theme.id))
   })
 
-  const correlations = new Map<string, any>()
-  themes.forEach((theme) => {
-    const detail = dataLayer.getThemeCorrelation?.(theme.id)
-    if (detail) correlations.set(theme.id, detail)
-  })
-
   return {
     timestamp: options?.timestamp || Date.now(),
     snapshotId: options?.snapshotId,
@@ -86,8 +76,6 @@ export function buildCurrentThemeSourceContext(options?: {
     themeStocks,
     stockThemes: buildStockThemesMap(),
     stocks: dataLayer.getStocks(),
-    rotationAnalysis: dataLayer.getCurrentRotation?.() || null,
-    correlations,
   }
 }
 
@@ -98,7 +86,6 @@ export function refreshThemeFactors(context: ThemeSourceContext = buildCurrentTh
   refreshRuntimeState({
     source: 'themeFacade',
     context,
-    emitAlerts: false,
   } as ThemeRefreshOptions & { source: string; context: ThemeSourceContext })
   return {
     factors: lastFactors,
@@ -109,7 +96,6 @@ export function refreshThemeFactors(context: ThemeSourceContext = buildCurrentTh
 function applyRuntimeResult(result: ThemeRuntimeRefreshResult) {
   lastFactors = result.factors
   lastExposureProjection = result.exposures
-  lastRotationSummary = result.rotationSummary
   const apiFactors = themeHeatFeed.getSnapshot()?.factors || []
   const apiById = new Map(apiFactors.map((item) => [item.themeId, item]))
   dataLayer.updateHotThemes(
@@ -157,8 +143,6 @@ export function refreshThemeFacadeState(options: ThemeRefreshOptions & {
   const project = (result: ThemeRuntimeRefreshResult) => ({
     factors: lastFactors,
     exposures: lastExposureProjection,
-    rotationSummary: lastRotationSummary,
-    events: result.events,
     qualitySummary: result.qualitySummary,
     changedFields: result.changedFields,
     inputSignature: result.inputSignature,
@@ -193,11 +177,6 @@ export function getStockExposures(code?: string): ThemeStockExposure[] | Map<str
 
 export function getThemeExposureProjection(): ThemeExposureProjection {
   return lastExposureProjection
-}
-
-export function getRotationSummary(): RotationAnalysis | null {
-  // 只返回后端映射缓存；无后端结果时不本地补算（空态由面板展示）
-  return lastRotationSummary
 }
 
 export interface ThemeMomentumSummaryFactor {
@@ -272,10 +251,6 @@ export async function loadThemeMomentumScores(force = false): Promise<void> {
     momentumLoadPromise = null
   })
   return momentumLoadPromise
-}
-
-export function getThemeEvents() {
-  return themeRuntimeStore.getSnapshot().events
 }
 
 export function toHotThemeSummary(
@@ -505,13 +480,12 @@ export const themeFacade = {
   refreshThemeFacadeState,
   refreshThemeFactors,
   refreshRuntime: refreshRuntimeState,
+  startRuntimeRefresh,
   getThemeFactors,
   getStockExposures,
   getThemeExposureProjection,
-  getRotationSummary,
   getThemeMomentumSummary,
   loadThemeMomentumScores,
-  getThemeEvents,
   getRuntimeSnapshot,
   getHotThemes,
   getThemeSummaries,
@@ -526,8 +500,5 @@ export const themeFacade = {
   loadThemeStocks,
   toHotThemeSummary,
   toStockTheme,
-  setBackendRotationSummary,
-  getBackendRotationMeta,
-  getBackendRotationSummaryRaw,
   runtimeStore: themeRuntimeStore,
 }

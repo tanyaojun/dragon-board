@@ -533,15 +533,6 @@ class RefreshManagerService {
     })
     this.unsubscribeFns.push(unsub2)
 
-    // 同时保留对 DRAGON.UPDATED 的监听（向后兼容）
-    const unsub2b = EventManager.on(AppEvents.DRAGON.UPDATED, (data: any) => {
-      if (this.destroyed) return
-      if (data?.totalLeaders) {
-        this.state.stats.totalLeadersFound = data.totalLeaders
-      }
-    })
-    this.unsubscribeFns.push(unsub2b)
-
     // 监听题材更新
     const unsubThemes = EventManager.on('theme.updated', () => {
       if (this.destroyed) return

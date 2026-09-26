@@ -34,18 +34,6 @@ export interface SectorReadyEvent {
 }
 
 /**
- * 题材预警事件
- */
-export interface SectorAlertEvent {
-  themeId: string
-  type: 'heat_surge' | 'momentum_break' | 'leader_change' | 'rotation_signal'
-  level: 'info' | 'warning' | 'danger'
-  message: string
-  data: any
-  timestamp: number
-}
-
-/**
  * 股票选中事件
  */
 export interface StockSelectedEvent {

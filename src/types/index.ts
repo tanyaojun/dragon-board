@@ -9,7 +9,6 @@ export * from './rankTrendDefaults'
 export type {
   DataState,
   DataVersion,
-  LeaderLookupRecord,
   LimitUpExtData,
   ListPoolProvenance,
   ListPoolSource,

@@ -1,7 +1,7 @@
 <!-- src/App.vue -->
 
 <template>
-  <!-- 启动界面 -->
+  <!-- 启动界面（数据就绪前遮住主界面，避免空态列表闪现） -->
   <SplashScreen v-model:visible="showSplash" v-model:progress="splashProgress" v-model:status="splashStatus" />
 
   <!-- 主界面 -->
@@ -129,7 +129,6 @@
     <ConfigPanel v-model:visible="panels.config" :trigger-rect="panelRects.config" @close="panels.config = false" />
     <SectorPanel v-model:visible="panels.sector" :trigger-rect="panelRects.sector" @close="panels.sector = false"
       @show-detail="openSectorDetail" />
-    <DragonHeadPanel v-model:visible="panels.dragon" :trigger-rect="panelRects.dragon" @close="panels.dragon = false" />
     <DragonBreathPanel v-model:visible="panels.breath" :trigger-rect="panelRects.breath"
       @close="panels.breath = false" />
     <HotlistEmotionPanel v-model:visible="panels.hotlistEmotion" :trigger-rect="panelRects.hotlistEmotion"
@@ -150,8 +149,6 @@
     <!-- 题材相关面板 -->
     <SectorDetail v-model:visible="panels.sectorDetail" :sector-name="sectorDetailName"
       :trigger-rect="panelRects.sectorDetail" @close="panels.sectorDetail = false" @select-theme="openSectorDetail" />
-    <SectorAlert v-model:visible="panels.sectorAlert" :trigger-rect="panelRects.sectorAlert"
-      @close="panels.sectorAlert = false" @show-detail="openSectorDetail" />
   </div>
 </template>
 
@@ -161,8 +158,8 @@ import { storeToRefs } from 'pinia'
 
 // 通用组件
 import DragonThemeToggle from './components/theme/DragonThemeToggle.vue'
-import Toast from './components/common/Toast.vue'
 import SplashScreen from './components/common/SplashScreen.vue'
+import Toast from './components/common/Toast.vue'
 import NavTabs from './components/common/NavTabs.vue'
 import TradingStatus from './components/common/TradingStatus.vue'
 import SearchBox from './components/common/SearchBox.vue'
@@ -175,7 +172,6 @@ const RankTrendPanel = defineAsyncComponent(() => import('./components/panels/Ra
 const SettingsPanel = defineAsyncComponent(() => import('./components/panels/SettingsPanel.vue'))
 const ConfigPanel = defineAsyncComponent(() => import('./components/panels/ConfigPanel.vue'))
 const SectorPanel = defineAsyncComponent(() => import('./components/panels/SectorPanel.vue'))
-const DragonHeadPanel = defineAsyncComponent(() => import('./components/panels/DragonHeadPanel.vue'))
 const DragonBreathPanel = defineAsyncComponent(() => import('./components/panels/DragonBreathPanel.vue'))
 const HotlistEmotionPanel = defineAsyncComponent(() => import('./components/panels/HotlistEmotionPanel.vue'))
 const KeyboardHelpPanel = defineAsyncComponent(() => import('./components/panels/KeyboardHelpPanel.vue'))
@@ -184,7 +180,6 @@ const FavoritePanel = defineAsyncComponent(() => import('./components/panels/Fav
 const CandidatePoolPanel = defineAsyncComponent(() => import('./components/panels/CandidatePoolPanel.vue'))
 const StockL2DetailPanel = defineAsyncComponent(() => import('./components/panels/StockL2DetailPanel.vue'))
 const SectorDetail = defineAsyncComponent(() => import('./components/panels/SectorDetail.vue'))
-const SectorAlert = defineAsyncComponent(() => import('./components/panels/SectorAlert.vue'))
 const HotStockEventMonitorPanel = defineAsyncComponent(() => import('./components/panels/HotStockEventMonitorPanel.vue'))
 import TradeJournalPanel from './components/panels/TradeJournalPanel.vue'
 
@@ -251,7 +246,6 @@ const candidatePoolPanelRef = ref<{
 // 导航标签
 const navTabs = [
   { id: 'market', label: '行情总览', icon: '📊' },
-  { id: 'dragon', label: '龙头监测', icon: '🐲' },
   { id: 'emotion', label: '龙息监测', icon: '📈' },
   { id: 'sector', label: '题材分析', icon: '🎯' },
   { id: 'events', label: '异动雷达', icon: '🔔' },
@@ -264,13 +258,11 @@ const panels = ref({
   config: false,
   hotlistEmotion: false,
   sector: false,
-  dragon: false,
   breath: false,
   help: false,
   export: false,
   favorite: false,
   sectorDetail: false,
-  sectorAlert: false,
   stockDetail: false,
   rankTrend: false,
   candidatePool: false,
@@ -398,7 +390,6 @@ const focusSearchInput = () => {
 }
 
 useKeyboardShortcuts({
-  onDragon: () => openPanelFromShortcut('dragon'),
   onSector: () => openPanelFromShortcut('sector'),
   onBreath: () => openPanelFromShortcut('breath'),
   onFavorite: () => openPanelFromShortcut('favorite', favoriteBtnRef.value),
@@ -422,7 +413,6 @@ const handleClickOutside = (e: MouseEvent) => {
 // ========== 标签切换 ==========
 const handleTabChange = (tabId: string) => {
   const panelMap: Record<string, keyof typeof panels.value> = {
-    dragon: 'dragon',
     emotion: 'breath',
     sector: 'sector',
     events: 'eventMonitor',
@@ -517,7 +507,8 @@ watch(
   { deep: true },
 )
 
-// ========== 优化启动流程 ==========
+// ========== 启动流程 ==========
+// 启动画面遮住主界面直至数据就绪；缓存命中（快路径）150ms 收起，慢路径保留缓冲让"准备就绪"可见
 const initializeAll = async () => {
   try {
     splashStatus.value = '加载平台数据...'
@@ -530,7 +521,6 @@ const initializeAll = async () => {
     lastUpdateTime.value = Date.now()
     splashClosing.value = true
 
-    // 启动缓存命中（快路径）时尽快收起启动画面；慢路径保留缓冲让"准备就绪"可见
     setTimeout(() => {
       showSplash.value = false
     }, summary?.fromCache ? 150 : 500)
@@ -564,11 +554,10 @@ let loadedSectorAnalyzer: { destroy?: () => void } | null = null
 // ========== 后台懒加载分析服务（动态 import，不进首屏 bundle） ==========
 const lazyLoadServices = () => {
   void (async () => {
-    // 第1批：核心分析服务（splash 收起后首个空闲时机）
+    // 第1批：核心分析服务（首个空闲时机）
     await nextIdle()
-    const [{ sectorAnalyzer }, { dragonReviewService }, { themeMapping }] = await Promise.all([
+    const [{ sectorAnalyzer }, { themeMapping }] = await Promise.all([
       import('./services/sectorAnalyzer'),
-      import('./services/dragon/DragonReviewService'),
       import('./services/ThemeDataService'),
     ])
 
@@ -582,41 +571,29 @@ const lazyLoadServices = () => {
 
     // window 诊断挂载（原 main.ts 职责并入；消费方仅控制台诊断脚本）
     ;(window as any).sectorAnalyzer = sectorAnalyzer
-    ;(window as any).dragonReviewService = dragonReviewService
     ;(window as any).themeMapping = themeMapping
 
-    // 旧龙头分析保留兼容；真龙复盘结果才是新主结论
-    void safeExecute(dragonReviewService, 'recalculateAll', '旧龙头兼容计算')
-
-    // 轮动服务：模块顶层副作用启动 theme.runtime 周期任务（30s 题材运行态刷新），必须保留加载
-    await import('./services/rotationService')
+    // 热门题材因子周期刷新（theme.runtime 任务，交易时段限定；显式启动）
+    const { themeFacade: facadeForRefresh } = await import('./services/theme/ThemeFacade')
+    facadeForRefresh.startRuntimeRefresh()
 
     // 第2批：辅助分析服务
     await nextIdle()
-    const [{ dragonBreathAnalyzer }, { themeSyncAdapter }] = await Promise.all([
+    const [{ dragonBreathAnalyzer }] = await Promise.all([
       import('./services/DragonBreathAnalyzer'),
-      import('./services/theme/ThemeSyncAdapter'),
-      // 预警服务：模块顶层副作用启动 alert.check 周期任务（10s），是 SectorAlert 面板唯一数据源
-      import('./services/alertService'),
     ])
 
     // 龙息分析
     safeExecute(dragonBreathAnalyzer, 'init', '龙息分析器')
     ;(window as any).dragonBreathAnalyzer = dragonBreathAnalyzer
-    ;(window as any).themeRuntime = themeSyncAdapter
-
-    // 真龙复盘
-    void safeExecute(dragonReviewService, 'runFullUpdate', '真龙复盘')
 
     // 第3批：刷新体系（服务实例就绪即注册；RefreshManager.start 只设定时器，不会立即拉数据）
     await nextIdle()
     if (refreshCoordinator?.registerService) {
       const services = [
         { name: 'dataLoader', instance: dataLoader },
-        { name: 'themeRuntime', instance: themeSyncAdapter },
         { name: 'sectorAnalyzer', instance: sectorAnalyzer },
         { name: 'dragonBreathAnalyzer', instance: dragonBreathAnalyzer },
-        { name: 'dragonReviewService', instance: dragonReviewService },
       ]
       services.forEach(({ name, instance }) => {
         if (instance) {
@@ -638,14 +615,12 @@ const lazyLoadServices = () => {
       { FACTORS },
       constants,
       { apiService },
-      { themeCorrelationAnalyzer },
       { themeFacade },
       { openingRealtimeEventBridge },
     ] = await Promise.all([
       import('@/config/factors'),
       import('./types/config'),
       import('./services/apiService'),
-      import('./services/ThemeCorrelationAnalyzer'),
       import('./services/theme/ThemeFacade'),
       import('./services/hotlist/OpeningRealtimeEventBridge'),
     ])
@@ -660,7 +635,6 @@ const lazyLoadServices = () => {
     ;(window as any).apiService = apiService
     ;(window as any).dataLoader = dataLoader
     ;(window as any).stockCodeManager = stockCodeManager
-    ;(window as any).themeCorrelationAnalyzer = themeCorrelationAnalyzer
     ;(window as any).themeFacade = themeFacade
     ;(window as any).openingRealtimeEventBridge = openingRealtimeEventBridge
 
@@ -725,7 +699,6 @@ onMounted(async () => {
   const events = [
     [AppEvents.DATA.MERGED, updateLastTime],
     [AppEvents.REFRESH.COMPLETE, updateLastTime],
-    [AppEvents.DRAGON.UPDATED, updateLastTime],
     [
       'candidate-pool:open',
       (data: any) => {

@@ -70,11 +70,6 @@ describe('HotStockEventMonitorService', () => {
         { code: '600001', name: '一号' },
         { code: '000002', name: '二号' },
       ]),
-      getDragonReview: vi.fn().mockReturnValue({
-        candidates: [{ code: '600001' }],
-        trueLeaders: [{ code: '000003' }],
-        attentionBoard: [],
-      }),
     }
     const tdxBlockPool = makeTdxBlockPool(['300001'])
     const service = new HotStockEventMonitorService({
@@ -101,7 +96,7 @@ describe('HotStockEventMonitorService', () => {
     expect(result.hotStockEvents[1]).toMatchObject({
       code: '600001',
       matchedHotStock: true,
-      matchedCandidate: true,
+      matchedCandidate: false,
     })
     expect(result.otherStockEvents[0]).toMatchObject({
       code: '300001',

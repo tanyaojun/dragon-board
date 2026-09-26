@@ -33,17 +33,6 @@
           🔥 热门题材
           <span v-if="themeSummaries.length" class="tab-count">{{ themeSummaries.length }}</span>
         </button>
-        <button class="tab-btn" :class="{ active: view === 'rotation' }" @click="view = 'rotation'">
-          🔄 题材轮动
-          <em v-if="rotationMeta?.slotTime" class="rotation-time-note"
-            :title="`轮动数据时间: ${formatTime(rotationMeta.computedAt || rotationMeta.timestamp || 0)}`">
-            {{ rotationMeta.slotTime }}<template v-if="rotationMeta.stale">·旧</template>
-          </em>
-        </button>
-        <!-- 联动分析 -->
-        <button class="tab-btn" :class="{ active: view === 'correlation' }" @click="view = 'correlation'">
-          🔗 联动分析
-        </button>
       </div>
 
       <!-- 视图模式切换 -->
@@ -77,11 +66,6 @@
       <div v-else-if="view === 'hot' && viewMode === 'tree'" class="tree-view">
         <SectorStocksTree ref="treeRef" :initialSector="selectedSectorName" @select-stock="handleSelectStock"
           class="sector-tree-component" />
-      </div>
-
-      <!-- 联动分析视图 -->
-      <div v-else-if="view === 'correlation'" class="correlation-view">
-        <ThemeCorrelationPanel :visible="true" embedded @select-stock="handleSelectStock" @close="view = 'hot'" />
       </div>
 
       <!-- 热门题材视图 -->
@@ -147,72 +131,6 @@
         </div>
       </div>
 
-      <!-- 轮动视图 -->
-      <div v-else-if="view === 'rotation'" class="rotation-view">
-        <div v-if="!rotationData" class="empty-state">暂无轮动数据</div>
-        <div v-else class="rotation-content">
-          <!-- 市场阶段 -->
-          <div class="market-phase-card" :class="rotationData.marketPhase">
-            <div class="phase-header">
-              <span class="phase-icon">{{ getMarketPhaseIcon(rotationData.marketPhase) }}</span>
-              <span class="phase-name">{{ getMarketPhaseName(rotationData.marketPhase) }}</span>
-              <span class="phase-speed">轮动速度 {{ rotationSpeedText }}%</span>
-            </div>
-            <div class="phase-suggestion">{{ rotationData.summary.suggestion }}</div>
-          </div>
-
-          <!-- 主线板块 -->
-          <div class="rotation-section" v-if="rotationData.mainLines.length">
-            <div class="section-header">
-              <span class="section-title">👑 主线板块</span>
-              <span class="section-count">{{ rotationData.mainLines.length }}</span>
-            </div>
-            <div class="rotation-items">
-              <div v-for="item in rotationData.mainLines" :key="item.themeId" class="rotation-item mainline"
-                @click="showSectorDetail(item.themeName, $event)">
-                <div class="item-header">
-                  <span class="item-name">{{ item.themeName }}</span>
-                  <span class="item-days">{{ item.persistentDays ?? '--' }}天</span>
-                </div>
-                <div class="item-flow">
-                  <span class="flow-value inflow" v-if="item.netInflow !== undefined && item.netInflow > 0">
-                    +{{ formatMoney(item.netInflow) }}
-                  </span>
-                  <span class="flow-value outflow" v-else>
-                    {{ formatMoney(item.netInflow) }}
-                  </span>
-                </div>
-                <div class="item-stats">
-                  <span>📈 {{ item.ztCount || 0 }}涨停</span>
-                  <span class="item-days">{{ item.strengthScore }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 如果没有主线，就不显示这个区域，而不是用资金流入冒充 -->
-          <div v-else-if="!rotationData.mainLines.length && rotationData.inflowThemes.length" class="empty-hint">
-            <span class="empty-icon">🔄</span>
-            <span class="empty-text">暂无明确主线，市场轮动较快</span>
-          </div>
-
-          <!-- 资金流入流出概览 -->
-          <div class="rotation-summary">
-            <div class="summary-item">
-              <span class="summary-label">📈 流入</span>
-              <span class="summary-value">{{ rotationData.inflowThemes.length }}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">📉 流出</span>
-              <span class="summary-value">{{ rotationData.outflowThemes.length }}</span>
-            </div>
-            <div class="summary-item">
-              <span class="summary-label">⚡ 轮动</span>
-              <span class="summary-value">{{ rotationData.quickRotation.length }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
 
     </div>
 
@@ -230,19 +148,13 @@
 <script setup lang="ts">
 import { debugLog } from '@/utils/logger'
 import { ref, computed, onMounted } from 'vue'
-import { snapshotFacade } from '../../services/snapshot/facade'
-import { rotationFramesCache } from '../../services/snapshot/rotationFramesCache'
 import { usePanel } from '../../composables/usePanel'
-import type { RotationAnalysis } from '../../types/core'
-import type { SnapshotFrameRow } from '../../services/snapshot/types'
 import SectorStocksTree from './SectorStocksTree.vue'
 import SectorDetail from './SectorDetail.vue'
-import ThemeCorrelationPanel from './ThemeCorrelationPanel.vue'
 import ThemeSortControl from './ThemeSortControl.vue'
 import { useUIStore } from '../../stores/ui'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
-import { DEFAULT_RANK_TREND_SNAPSHOT_TYPE } from '../../types/rankTrendDefaults'
 
 // 状态
 const viewMode = ref<'grid' | 'tree'>('grid') // 默认网格视图
@@ -251,16 +163,8 @@ const selectedSectorName = ref('')
 const error = ref<string | null>(null)
 const loading = ref(false)
 const version = '6.0.0'
-const view = ref<'hot' | 'rotation' | 'correlation'>('hot')
+const view = ref<'hot'>('hot')
 const themeRuntime = useThemeRuntimeSnapshot()
-const ROTATION_SNAPSHOT_TYPE = DEFAULT_RANK_TREND_SNAPSHOT_TYPE
-const rotationMeta = ref<{
-  tradingDate?: string
-  slotTime?: string
-  computedAt?: number
-  timestamp?: number
-  stale?: boolean
-} | null>(null)
 
 // 题材详情弹窗状态
 const sectorDetail = ref<{
@@ -311,66 +215,13 @@ const lastUpdate = computed(() => {
   return themeRuntime.value.lastUpdate || themeFacade.getThemeLastUpdate()
 })
 
-const rotationData = computed(() => {
-  // 只消费后端落库结果；无后端数据时保持 null（空态，不本地补算）
-  return themeRuntime.value.rotationSummary || themeFacade.getRotationSummary()
-})
-
-// 轮动速度展示文本：缺失/非有限值回退 '--'，不渲染原始浮点数
-const rotationSpeedText = computed(() => {
-  const speed = rotationData.value?.rotationSpeed
-  return typeof speed === 'number' && Number.isFinite(speed) ? speed.toFixed(1) : '--'
-})
-
 
 // ========== 加载数据 ==========
-const loadBackendRotation = async (force = false) => {
-  try {
-    const framesCacheKey = `rotation:${ROTATION_SNAPSHOT_TYPE}`
-    const cachedFrames = rotationFramesCache.get(framesCacheKey) as SnapshotFrameRow[] | null
-    let frames: SnapshotFrameRow[]
-    if (cachedFrames && !force) {
-      frames = cachedFrames
-    } else {
-      // ranktrend 行投影瘦身：轮动摘要只需帧级 rotationSummary，不需要整行 107 字段
-      frames = ((await snapshotFacade.listSnapshotFrames({
-        type: ROTATION_SNAPSHOT_TYPE,
-        sort: 'desc',
-        limit: 2,
-        projection: 'ranktrend',
-      })) || []) as SnapshotFrameRow[]
-      rotationFramesCache.setWithType(framesCacheKey, frames, 'sectorRotationFrames')
-    }
-    const rows = frames
-    const withRotation = rows.filter(
-      (frame) => frame.rotationSummary && typeof frame.rotationSummary === 'object',
-    )
-    const chosen = withRotation[0]
-    // 最新槽位无引擎结果、回退展示上一槽数据时打 stale 标记（fail-visible）
-    const stale = Boolean(
-      rows[0] && !withRotation.includes(rows[0]) && chosen && rows[0] !== chosen,
-    )
-    const summary = chosen?.rotationSummary ?? null
-    themeFacade.setBackendRotationSummary(summary, {
-      tradingDate: chosen?.tradingDate,
-      slotTime: chosen?.slotTime,
-      computedAt: typeof summary?.computedAt === 'number' ? summary.computedAt : undefined,
-      timestamp: chosen?.timestamp,
-      stale,
-    })
-    rotationMeta.value = themeFacade.getBackendRotationMeta()
-  } catch {
-    themeFacade.setBackendRotationSummary(null)
-    rotationMeta.value = null
-  }
-}
-
 const loadData = async () => {
   loading.value = true
   error.value = null
 
   try {
-    await loadBackendRotation()
     await themeFacade.refreshRuntime({ force: true, source: 'ui' })
 
     // 验证数据是否存在
@@ -390,8 +241,6 @@ const refresh = async () => {
     loading.value = true
     error.value = null
 
-    // force 绕过 30 分钟缓存：手动刷新必须拉到最新轮动帧
-    await loadBackendRotation(true)
     await themeFacade.refreshRuntime({ force: true, source: 'ui' })
 
     // 如果当前是树形视图，刷新树组件
@@ -474,27 +323,6 @@ function formatTime(timestamp: number | null): string {
   if (!timestamp) return '--:--'
   const date = new Date(timestamp)
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
-}
-
-// 轮动相关
-function getMarketPhaseIcon(phase: string): string {
-  const icons: Record<string, string> = {
-    accumulation: '🏗️',
-    rising: '📈',
-    distribution: '📊',
-    falling: '📉'
-  }
-  return icons[phase] || '🔄'
-}
-
-function getMarketPhaseName(phase: string): string {
-  const names: Record<string, string> = {
-    accumulation: '筑底期',
-    rising: '上升期',
-    distribution: '出货期',
-    falling: '下降期'
-  }
-  return names[phase] || phase
 }
 
 // ========== 生命周期 ==========
@@ -897,17 +725,7 @@ onMounted(() => {
 }
 
 /* ========== 轮动视图样式 ========== */
-.rotation-view {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
 
-.rotation-content {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
 
 .market-phase-card {
   padding: 16px;
@@ -960,11 +778,6 @@ onMounted(() => {
   color: var(--text-primary);
 }
 
-.rotation-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
 
 .section-header {
   display: flex;
@@ -986,41 +799,12 @@ onMounted(() => {
   font-size: 10px;
 }
 
-.rotation-items {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 
-.rotation-item {
-  padding: 12px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
 
-.rotation-item:hover {
-  background: var(--bg-hover);
-  border-color: var(--color-highlight);
-}
 
-.rotation-item.mainline {
-  border-left: 4px solid #ffd700;
-}
 
-.rotation-item.inflow {
-  border-left: 4px solid #ff4757;
-}
 
-.rotation-item.outflow {
-  border-left: 4px solid #3498db;
-}
 
-.rotation-item.quick {
-  border-left: 4px solid #f39c12;
-}
 
 .item-header {
   display: flex;
@@ -1081,12 +865,6 @@ onMounted(() => {
   color: #2ed573;
 }
 
-.rotation-summary {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin-top: 8px;
-}
 
 .summary-item {
   display: flex;

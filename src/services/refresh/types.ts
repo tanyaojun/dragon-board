@@ -4,8 +4,6 @@ export type RefreshTaskId =
   | 'dataLoader.ranktrendSignal'
   | 'theme.runtime'
   | 'dragon.breath'
-  | 'dragon.review'
-  | 'alert.check'
   | 'snapshot.sweep'
   | 'snapshot.backupSync'
   | 'websocket.staleCheck'
@@ -28,7 +26,6 @@ export type RefreshResourceKey =
   | 'quote-http'
   | 'theme-runtime'
   | 'dragon-breath'
-  | 'dragon-review'
   | 'ranktrend-signal'
   | 'snapshot-write'
   | (string & {})

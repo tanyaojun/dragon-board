@@ -285,8 +285,6 @@ describe('RefreshManager Phase 0 behavior', () => {
       'dataLoader.ranktrendSignal',
       'theme.runtime',
       'dragon.breath',
-      'dragon.review',
-      'alert.check',
       'snapshot.sweep',
       'snapshot.backupSync',
       'websocket.staleCheck',

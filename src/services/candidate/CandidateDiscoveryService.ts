@@ -1,6 +1,5 @@
 import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 import { getRankTrendAnalysis } from '@/services/rankTrend/compat'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { analyzeCandidateStock } from './CandidateAnalysisService'
@@ -98,22 +97,6 @@ function compactReasons(analysis: CandidateAnalysisResult): string[] {
   ]
     .filter(Boolean)
     .slice(0, 3)
-}
-
-function findDragonRecord(stockCode: string): Record<string, any> | null {
-  const review = dragonReviewService.getLatestReview()
-  if (!review) return null
-  const groups = [
-    review.trueLeaders || [],
-    review.heightBoard || [],
-    review.attentionBoard || [],
-  ] as Array<Array<Record<string, any>>>
-  for (const group of groups) {
-    const record = group.find((item) => normalizeCode(item.code) === stockCode)
-    if (record) return record
-  }
-  const marketCore = review.marketCore as Record<string, any> | undefined
-  return marketCore && normalizeCode(marketCore.code) === stockCode ? marketCore : null
 }
 
 export class CandidateDiscoveryService {
@@ -220,8 +203,8 @@ export class CandidateDiscoveryService {
       allStocks,
       rankTrend: getRankTrendAnalysis(sourceStock),
       themeExposures: themeFacade.getStockExposures(stock.code) as any,
-      rotationSummary: themeFacade.getRotationSummary() as any,
-      dragonRecord: findDragonRecord(stock.code),
+      rotationSummary: null,
+      dragonRecord: null,
       sentiment: dragonBreathAnalyzer.getMarketSentiment() as any,
       now: this.now(),
     }

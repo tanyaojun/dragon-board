@@ -25,38 +25,33 @@ function cloneSnapshot(snapshot: ThemeRuntimeSnapshot): ThemeRuntimeSnapshot {
         ]),
       ),
     },
-    rotationSummary: clonePlain(snapshot.rotationSummary),
-    events: [...snapshot.events],
-      correlations: new Map(snapshot.correlations),
-      lastUpdate: snapshot.lastUpdate,
-      inputSignature: snapshot.inputSignature,
-      factorVersion: snapshot.factorVersion,
-      eventVersion: snapshot.eventVersion,
-      qualitySummary: clonePlain(snapshot.qualitySummary),
-      refreshSource: snapshot.refreshSource,
-      changedFields: snapshot.changedFields ? [...snapshot.changedFields] : undefined,
-    }
+    lastUpdate: snapshot.lastUpdate,
+    inputSignature: snapshot.inputSignature,
+    factorVersion: snapshot.factorVersion,
+    qualitySummary: clonePlain(snapshot.qualitySummary),
+    refreshSource: snapshot.refreshSource,
+    changedFields: snapshot.changedFields ? [...snapshot.changedFields] : undefined,
+  }
 }
 
-export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>) {
-  let snapshot: ThemeRuntimeSnapshot = {
+function emptySnapshot(): ThemeRuntimeSnapshot {
+  return {
     factors: [],
     exposures: {
       byCode: new Map(),
       byTheme: new Map(),
     },
-    rotationSummary: null,
-    events: [],
-    correlations: new Map(),
     lastUpdate: null,
     inputSignature: undefined,
     factorVersion: undefined,
-    eventVersion: undefined,
     qualitySummary: undefined,
     refreshSource: undefined,
     changedFields: undefined,
-    ...initial,
   }
+}
+
+export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>) {
+  let snapshot: ThemeRuntimeSnapshot = { ...emptySnapshot(), ...initial }
   const listeners = new Set<ThemeRuntimeListener>()
 
   function notify() {
@@ -85,23 +80,7 @@ export function createThemeRuntimeStore(initial?: Partial<ThemeRuntimeSnapshot>)
     },
 
     clear() {
-      snapshot = {
-        factors: [],
-        exposures: {
-          byCode: new Map(),
-          byTheme: new Map(),
-        },
-        rotationSummary: null,
-        events: [],
-        correlations: new Map(),
-        lastUpdate: null,
-        inputSignature: undefined,
-        factorVersion: undefined,
-        eventVersion: undefined,
-        qualitySummary: undefined,
-        refreshSource: undefined,
-        changedFields: undefined,
-      }
+      snapshot = emptySnapshot()
       notify()
     },
   }

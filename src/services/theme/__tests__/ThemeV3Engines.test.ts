@@ -1,13 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createThemeRuntimeStore } from '../ThemeRuntimeStore'
-import { buildThemeEvents } from '../ThemeAlertEngine'
 import { projectThemeStockExposures } from '../ThemeStockProjector'
-import { mapBackendRotationSummary } from '../backendRotationAdapter'
 import { themeHeatFeed } from '../ThemeHeatFeed'
 import {
   refreshThemeFacadeState,
   getHotThemes,
-  getRotationSummary,
   getRuntimeSnapshot,
 } from '../ThemeFacade'
 import type { ThemeFactorSnapshot, ThemeSourceContext } from '../types'
@@ -69,8 +66,6 @@ function context(): ThemeSourceContext {
       { code: '000002', name: '样本二', change: 4, volumeRatio: 1.5 },
       { code: '000003', name: '样本三', change: -3, volumeRatio: 0.8 },
     ],
-    rotationAnalysis: null,
-    correlations: new Map(),
   }
 }
 
@@ -82,21 +77,12 @@ describe('ThemeRuntimeStore', () => {
 
     store.update({
       factors: [factor({ themeId: 'AI' })],
-      rotationSummary: mapBackendRotationSummary({
-        marketPhase: 'rising',
-        mainLines: [{ themeId: 'AI', themeName: '人工智能', rotationScore: 78 }],
-        inflowThemes: [],
-        outflowThemes: [],
-        algorithmVersion: 'theme_rotation_v2',
-      }),
     })
     const snapshot = store.getSnapshot()
     snapshot.factors.push(factor({ themeId: 'MUTATED' }))
-    snapshot.rotationSummary?.mainLines.push({ themeId: 'MUTATED', themeName: '污染题材' } as any)
 
     expect(listener).toHaveBeenCalledTimes(1)
     expect(store.getSnapshot().factors).toHaveLength(1)
-    expect(store.getSnapshot().rotationSummary?.mainLines).toHaveLength(1)
 
     unsubscribe()
     store.update({ factors: [] })
@@ -104,80 +90,41 @@ describe('ThemeRuntimeStore', () => {
   })
 })
 
-describe('ThemeAlertEngine', () => {
-  it('creates structured theme events from factors and stock exposures', () => {
+describe('ThemeStockProjector', () => {
+  it('projects stock exposures with roles derived from heat and lead status', () => {
     const factors = [
-      factor({ themeId: 'AI', themeName: '人工智能', snapshotId: 's1' }),
+      factor({ themeId: 'AI', themeName: '人工智能' }),
       factor({ themeId: 'POWER', themeName: '电力设备', rotationState: 'neutral', heatScore: 30 }),
     ]
     const exposures = projectThemeStockExposures(context(), factors)
-    const events = buildThemeEvents({
-      factors,
-      exposures,
-      previousFactors: [],
-      timestamp: 1713751200000,
-    })
 
-    expect(events.map((event) => event.type)).toEqual(
-      expect.arrayContaining(['theme_mainline_started', 'theme_strength_surge', 'theme_fund_inflow']),
-    )
-    expect(events[0]).toMatchObject({
+    expect(exposures.byCode.get('000001')?.[0]).toMatchObject({
       themeId: 'AI',
-      source: 'theme',
+      role: 'leader',
     })
-    expect(events[0].stockCodes.length).toBeGreaterThan(0)
-  })
-
-  it('does not emit strong events for fatal or empty quality factors', () => {
-    const events = buildThemeEvents({
-      factors: [
-        factor({
-          themeId: 'EMPTY',
-          themeName: '空题材',
-          heatScore: 90,
-          rotationState: 'mainline',
-          qualityFlags: [{ code: 'empty_theme', level: 'fatal', message: 'empty' }],
-        }),
-      ],
-      timestamp: 1713751200000,
-    })
-
-    expect(events.some((event) => event.type === 'theme_mainline_started')).toBe(false)
-    expect(events.map((event) => event.type)).toContain('theme_mapping_quality_warning')
+    expect(exposures.byTheme.get('POWER')?.length).toBeGreaterThan(0)
   })
 })
 
 describe('ThemeFacade runtime views', () => {
-  it('refreshes runtime state and exposes hot theme and rotation views', () => {
+  it('refreshes runtime state and exposes hot theme views', () => {
     vi.spyOn(themeHeatFeed, 'getRuntimeFactors').mockReturnValue([
       factor({ themeId: 'AI', themeName: '人工智能' }),
     ])
     const result = refreshThemeFacadeState({
-      context: {
-        ...context(),
-        backendRotationSummary: {
-          marketPhase: 'rising',
-          mainLines: [{ themeId: 'BKAI', themeName: '人工智能', rotationScore: 78 }],
-          inflowThemes: [],
-          outflowThemes: [],
-          algorithmVersion: 'theme_rotation_v2',
-          computedAt: 1713751200000,
-        },
-      },
-      emitAlerts: false,
+      context: context(),
     })
     const hotThemes = getHotThemes(3)
 
     expect(result.factors[0].themeName).toBe('人工智能')
     expect(hotThemes[0]).toMatchObject({ id: 'AI', name: '人工智能' })
-    expect(getRotationSummary()?.mainLines[0]?.themeId).toBe('BKAI')
   })
 })
 
 describe('ThemeFacade UI read models', () => {
   it('exposes immutable runtime snapshots', () => {
     const freshTimestamp = Date.now()
-    refreshThemeFacadeState({ context: { ...context(), timestamp: freshTimestamp }, emitAlerts: false })
+    refreshThemeFacadeState({ context: { ...context(), timestamp: freshTimestamp } })
 
     const snapshot = getRuntimeSnapshot()
 
@@ -188,13 +135,10 @@ describe('ThemeFacade UI read models', () => {
     expect(getRuntimeSnapshot().exposures.byCode.has('999999')).toBe(false)
   })
 
-  it('keeps factor, rotation and event output deterministic for the same context', () => {
-    const first = refreshThemeFacadeState({ context: context(), emitAlerts: false })
-    const second = refreshThemeFacadeState({ context: context(), emitAlerts: false })
+  it('keeps factor output deterministic for the same context', () => {
+    const first = refreshThemeFacadeState({ context: context() })
+    const second = refreshThemeFacadeState({ context: context() })
 
     expect(second.factors).toEqual(first.factors)
-    expect(second.rotationSummary).toEqual(first.rotationSummary)
-    expect(second.events).toEqual(first.events)
   })
-
 })

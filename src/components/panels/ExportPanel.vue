@@ -101,7 +101,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { exportService } from '@/services/exportService'
-import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
 import { sectorAnalyzer } from '@/services/sectorAnalyzer'
 import { themeFacade } from '@/services/theme/ThemeFacade'
@@ -159,14 +158,6 @@ const previewStats = computed(() => {
     )
   }
 
-  if (previewData.value.leaders) {
-    const byLevel = dragonReviewService.getStats()
-    stats.push(
-      { label: '总龙头', value: byLevel.totalLeadersCount },
-      { label: '板块龙头', value: byLevel.sectorLeaders },
-      { label: '连板龙头', value: byLevel.continuousLeaders },
-    )
-  }
 
   if (previewData.value.sectors) {
     stats.push(
@@ -186,9 +177,9 @@ const previewStats = computed(() => {
   return stats
 })
 
-function isLeaderStock(code: string): boolean {
-  const leaders = dragonReviewService.getAllLeaders?.() || []
-  return leaders.some((leader: any) => leader.code === code)
+// 真龙复盘引擎已移除（2026-09-26 瘦身），恒为非龙头
+function isLeaderStock(_code: string): boolean {
+  return false
 }
 
 // ========== 方法 ==========
@@ -219,7 +210,6 @@ async function preview() {
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
               marketData: dragonBreathAnalyzer.getMarketData(),
-              leaders: dragonReviewService.getStats(),
             },
           }
           break
@@ -231,7 +221,6 @@ async function preview() {
             market: {
               sentiment: dragonBreathAnalyzer.getMarketSentiment(),
               marketData: dragonBreathAnalyzer.getMarketData(),
-              leaders: dragonReviewService.getStats(),
             },
           }
           break

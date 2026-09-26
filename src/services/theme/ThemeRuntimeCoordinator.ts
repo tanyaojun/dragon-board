@@ -1,12 +1,12 @@
 import { dataLayer } from '@/services/DataLayer'
 import { debugLog } from '@/utils/logger'
 import { projectThemeStockExposures } from './ThemeStockProjector'
-import { mapBackendRotationSummary } from './backendRotationAdapter'
-import { buildThemeEvents } from './ThemeAlertEngine'
 import { themeHeatFeed } from './ThemeHeatFeed'
 import { themeRuntimeStore } from './ThemeRuntimeStore'
 import { themeRepository } from './ThemeRepository'
 import { deriveThemeHeatLevel } from './stockThemeMeta'
+import { refreshScheduler } from '@/services/refresh/RefreshTaskRuntime'
+import { ROTATION_CONFIG } from '@/config/constants'
 import type {
   ThemeExposureProjection,
   ThemeFactorSnapshot,
@@ -18,40 +18,8 @@ import type {
 } from './types'
 
 export const THEME_FACTOR_VERSION = 'theme-factor-v1'
-export const THEME_EVENT_VERSION = 'theme-event-v1'
 
 let previousSignature = ''
-let previousFactors: ThemeFactorSnapshot[] = []
-let previousEvents: ThemeRuntimeRefreshResult['events'] = []
-let latestBackendRotationSummary: Record<string, any> | null = null
-let latestBackendRotationMeta: BackendRotationMeta | null = null
-
-export interface BackendRotationMeta {
-  tradingDate?: string
-  slotTime?: string
-  computedAt?: number
-  timestamp?: number
-  /** 最新槽位无引擎结果、展示的是上一槽数据时为 true */
-  stale?: boolean
-}
-
-/** 设置最新后端 frame.rotationSummary 及其来源元信息（面板/读取方在拿到 frame 后调用）。 */
-export function setBackendRotationSummary(
-  payload: Record<string, any> | null | undefined,
-  meta?: BackendRotationMeta | null,
-): void {
-  latestBackendRotationSummary = payload && typeof payload === 'object' ? payload : null
-  latestBackendRotationMeta = meta && typeof meta === 'object' ? meta : null
-}
-
-export function getBackendRotationMeta(): BackendRotationMeta | null {
-  return latestBackendRotationMeta
-}
-
-/** 原始后端 rotationSummary（camelCase 全字段），供快照构建等消费方原样透传，避免前端重序列化丢字段。 */
-export function getBackendRotationSummaryRaw(): Record<string, any> | null {
-  return latestBackendRotationSummary
-}
 
 export function themeInputSignature(context: ThemeSourceContext): string {
   return JSON.stringify({
@@ -94,15 +62,12 @@ function changedFieldsFor(
   signature: string,
   factors: ThemeFactorSnapshot[],
   exposures: ThemeExposureProjection,
-  events: ThemeRuntimeRefreshResult['events'],
   qualitySummary: ThemeRuntimeQualitySummary,
 ): ThemeRuntimeChangedField[] {
   if (signature === previousSignature) return []
   return [
     factors.length ? 'factors' : null,
     exposures.byCode.size ? 'exposures' : null,
-    'rotation',
-    events.length ? 'events' : null,
     qualitySummary.totalFlags ? 'quality' : null,
   ].filter(Boolean) as ThemeRuntimeChangedField[]
 }
@@ -158,8 +123,6 @@ function buildDefaultContext(timestamp?: number, snapshotId?: string): ThemeSour
     themeStocks,
     stockThemes,
     stocks: dataLayer.getStocks(),
-    rotationAnalysis: dataLayer.getCurrentRotation?.() || null,
-    correlations: new Map(),
   }
 }
 
@@ -175,41 +138,27 @@ function executeWithFactors(
     factors: factors.map((factor) => [factor.themeId, factor.heatScore, factor.momentumScore, factor.rank]),
   })
   const exposures = projectThemeStockExposures(context, factors)
-  // 轮动结果唯一来源是后端引擎落库的 rotationSummary；无则 null（空态，不本地补算）
-  const rotationSummary = mapBackendRotationSummary(
-    context.backendRotationSummary ?? latestBackendRotationSummary,
-  )
-  const events = buildThemeEvents({ factors, exposures, previousFactors, timestamp })
   const qualitySummary = buildQualitySummary(factors)
-  const changedFields = changedFieldsFor(signature, factors, exposures, events, qualitySummary)
+  const changedFields = changedFieldsFor(signature, factors, exposures, qualitySummary)
   const syncedStockCount = options.syncStocks ? syncStocks(exposures) : 0
   if (syncedStockCount > 0 && !changedFields.includes('stocks')) changedFields.push('stocks')
 
   themeRuntimeStore.update({
     factors,
     exposures,
-    rotationSummary,
-    events,
-    correlations: context.correlations || new Map(),
     lastUpdate: timestamp,
     inputSignature: signature,
     factorVersion,
-    eventVersion: THEME_EVENT_VERSION,
     qualitySummary,
     refreshSource: options.source,
     changedFields,
   })
-  if (rotationSummary) dataLayer.updateRotationAnalysis(rotationSummary)
 
   previousSignature = signature
-  previousFactors = factors
-  previousEvents = events
 
   const result: ThemeRuntimeRefreshResult = {
     factors,
     exposures,
-    rotationSummary,
-    events,
     qualitySummary,
     changedFields,
     inputSignature: signature,
@@ -220,8 +169,7 @@ function executeWithFactors(
   debugLog('[ThemeRuntimeCoordinator] refreshRuntime', {
     source: result.source,
     changedFields: result.changedFields,
-    factors: factors.length,
-    events: events.length,
+    factors: result.factors.length,
   })
   return result
 }
@@ -255,3 +203,18 @@ export function refreshRuntime(
     )
   })
 }
+
+/**
+ * 显式启动热门题材因子周期刷新（theme.runtime 任务，交易时段限定）。
+ * 由 App.vue 启动编排调用；不采用模块顶层副作用自启动。
+ */
+export function startRuntimeRefresh(interval: number = ROTATION_CONFIG.ANALYSIS_INTERVAL): void {
+  if (!ROTATION_CONFIG.ENABLED) return
+  // 不传 syncStocks：股票主题同步由 dataLoader/sectorAnalyzer 在数据变化时驱动，
+  // 周期任务只刷新因子，避免每 30s 无条件全量写 merged.stocks
+  refreshScheduler.registerRunner('theme.runtime', () => {
+    void refreshRuntime({ source: 'themeRuntime' })
+  })
+  refreshScheduler.startTask('theme.runtime', interval)
+}
+

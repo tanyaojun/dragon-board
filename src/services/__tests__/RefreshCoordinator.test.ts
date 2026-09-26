@@ -38,7 +38,6 @@ describe('RefreshCoordinator service registry', () => {
     const syncTheme = vi.fn(async () => undefined)
 
     refreshCoordinator.registerService('dataLoader', { runUpdate })
-    refreshCoordinator.registerService('themeRuntime', { runUpdate: runTheme, syncData: syncTheme })
 
     await expect(
       refreshCoordinator.executeRequest({
@@ -54,7 +53,7 @@ describe('RefreshCoordinator service registry', () => {
       skipped: false,
       busy: false,
       errors: {},
-      executedTasks: ['dataLoader', 'themeRuntime'],
+      executedTasks: ['dataLoader'],
     })
   })
 

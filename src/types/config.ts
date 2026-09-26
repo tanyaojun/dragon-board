@@ -239,13 +239,6 @@ export interface EmotionFactorWeights {
 }
 
 /**
- * 存储键名 - 添加阈值乘数配置
- */
-export const STORAGE_KEYS = {
-  THRESHOLD_MULTIPLIERS: 'threshold_multipliers', //情绪计算阈值乘数配置
-}
-
-/**
  * 阈值乘数配置
  */
 export interface ThresholdMultiplier {

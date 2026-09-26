@@ -3,12 +3,12 @@
  * 量比 = 当前成交量 / (近 3 日同期均量 × 交易进度)：>1 放量、<1 缩量，业务语义清晰。
  * 1.0 附近 ±0.05 缓冲（常态区间）避免噪声抖动。纯函数、无状态。
  */
-import { ALERT_THRESHOLDS } from '@/config/constants'
 
 export type VolumeRatioState = 'up' | 'down' | 'normal' | 'unknown'
 
-const UP_THRESHOLD = ALERT_THRESHOLDS.VOLUME_RATIO_ABSOLUTE.UP
-const DOWN_THRESHOLD = ALERT_THRESHOLDS.VOLUME_RATIO_ABSOLUTE.DOWN
+// 量比绝对阈值（golden 3 日口径）：≥1.05 放量、≤0.95 缩量
+const UP_THRESHOLD = 1.05
+const DOWN_THRESHOLD = 0.95
 
 export function toFiniteNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null

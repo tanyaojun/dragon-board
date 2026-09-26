@@ -1,6 +1,4 @@
 import type { MergedStock } from '@/types'
-import type { AlertLevel, AlertType, RotationAnalysis } from '@/types/core'
-import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
 
 export type ThemeRotationState = 'mainline' | 'inflow' | 'outflow' | 'quick' | 'cooling' | 'neutral'
 
@@ -170,10 +168,6 @@ export interface ThemeSourceContext {
   themeStocks: Map<string, string[]>
   stockThemes: Map<string, string[]>
   stocks: Array<Partial<MergedStock> & { code: string; name?: string }>
-  rotationAnalysis?: RotationAnalysis | null
-  /** 后端引擎 frame.rotationSummary 原始载荷（camelCase）；无则 null（H3 按 algorithmVersion 分支） */
-  backendRotationSummary?: Record<string, any> | null
-  correlations?: Map<string, ThemeCorrelationDetail>
 }
 
 export interface ThemeExposureProjection {
@@ -181,53 +175,22 @@ export interface ThemeExposureProjection {
   byTheme: Map<string, ThemeStockExposure[]>
 }
 
-export type ThemeEventType =
-  | 'theme_mainline_started'
-  | 'theme_strength_surge'
-  | 'theme_fund_inflow'
-  | 'theme_crowding_high'
-  | 'theme_cooling'
-  | 'theme_leader_fall'
-  | 'theme_mapping_quality_warning'
-
-export interface ThemeEvent {
-  id: string
-  type: ThemeEventType
-  level: AlertLevel
-  themeId: string
-  themeName: string
-  timestamp: number
-  source: 'theme'
-  alertType?: AlertType
-  factorSnapshotId?: string
-  stockCodes: string[]
-  metrics: Record<string, number | string | boolean | null>
-  riskFlags: string[]
-  reasons: string[]
-}
-
 export interface ThemeRuntimeSnapshot {
   factors: ThemeFactorSnapshot[]
   exposures: ThemeExposureProjection
-  rotationSummary: RotationAnalysis | null
-  events: ThemeEvent[]
-  correlations: Map<string, ThemeCorrelationDetail>
   lastUpdate: number | null
   inputSignature?: string
   factorVersion?: string
-  eventVersion?: string
   qualitySummary?: ThemeRuntimeQualitySummary
   refreshSource?: ThemeRefreshSource
   changedFields?: ThemeRuntimeChangedField[]
 }
 
-export type ThemeRefreshSource = 'ui' | 'dataLoader' | 'timer' | 'manual' | 'sectorAnalyzer' | 'rotationService' | 'test' | string
+export type ThemeRefreshSource = 'ui' | 'dataLoader' | 'timer' | 'manual' | 'sectorAnalyzer' | 'themeRuntime' | 'test' | string
 
 export type ThemeRuntimeChangedField =
   | 'factors'
   | 'exposures'
-  | 'rotation'
-  | 'events'
   | 'quality'
   | 'stocks'
 
@@ -242,8 +205,6 @@ export interface ThemeRuntimeQualitySummary {
 export interface ThemeRuntimeRefreshResult {
   factors: ThemeFactorSnapshot[]
   exposures: ThemeExposureProjection
-  rotationSummary: RotationAnalysis | null
-  events: ThemeEvent[]
   qualitySummary: ThemeRuntimeQualitySummary
   changedFields: ThemeRuntimeChangedField[]
   inputSignature: string
@@ -256,7 +217,6 @@ export interface ThemeRefreshOptions {
   timestamp?: number
   snapshotId?: string
   force?: boolean
-  emitAlerts?: boolean
   source?: ThemeRefreshSource
   syncStocks?: boolean
   context?: ThemeSourceContext

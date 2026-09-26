@@ -15,11 +15,6 @@ function roleFor(
   factor: ThemeFactorSnapshot,
   context: ThemeSourceContext,
 ): ThemeStockRole {
-  const correlation = context.correlations?.get(factor.themeId)
-  const correlatedRole = correlation?.stocks?.get(code)?.role
-  if (correlatedRole === 'leader') return 'leader'
-  if (correlatedRole === 'follower') return 'follower'
-
   const leadStatus = String((stock as any)?.leadStatus || '')
   if (leadStatus.includes('龙')) return 'leader'
   // 热度阈值（70/45/20）消费 heatLevel 相对分（0-100，后端 rank 百分位）。

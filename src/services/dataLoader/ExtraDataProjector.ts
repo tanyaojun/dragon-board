@@ -42,10 +42,6 @@ export class ExtraDataProjector {
 
   private projectStock(stock: any): any {
     const {
-      reviewAuthority: _reviewAuthority,
-      reviewRole: _reviewRole,
-      tradeability: _tradeability,
-      chaseRisk: _chaseRisk,
       ...merged
     } = stock
 
@@ -61,14 +57,6 @@ export class ExtraDataProjector {
     const hasRealtimeSpeed = Number.isFinite(realtimeSpeed)
     if (hasRealtimeSpeed) {
       merged.speed = realtimeSpeed
-    }
-
-    const leaderRecord = dataLayer.getLeaderByCode(stock.code)
-    if (leaderRecord) {
-      merged.reviewAuthority = leaderRecord.authority
-      merged.reviewRole = leaderRecord.primaryRole
-      merged.tradeability = leaderRecord.tradeability
-      merged.chaseRisk = leaderRecord.chaseRisk
     }
 
     const stockTags = dataLayer.getStockTags?.(stock.code)
@@ -94,7 +82,7 @@ export class ExtraDataProjector {
       merged.isNew = limitUpData.isNew ?? merged.isNew
     }
 
-    merged.continuousDays = this.resolveContinuousDays(merged, limitUpData, leaderRecord)
+    merged.continuousDays = this.resolveContinuousDays(merged, limitUpData)
     return merged
   }
 
@@ -115,10 +103,8 @@ export class ExtraDataProjector {
   private resolveContinuousDays(
     stock: any,
     limitUpData: any,
-    leaderRecord: ReturnType<typeof dataLayer.getLeaderByCode>,
   ): number {
     const candidates = [
-      leaderRecord?.continuousDays,
       limitUpData?.highDays,
       this.parseContinuousDays(limitUpData?.lianbanStr),
       this.parseContinuousDays(stock.lianbanStr),

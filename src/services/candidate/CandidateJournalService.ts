@@ -1,7 +1,6 @@
 import { apiService } from '@/services/apiService'
 import { dataLayer } from '@/services/DataLayer'
 import { dragonBreathAnalyzer } from '@/services/DragonBreathAnalyzer'
-import { dragonReviewService } from '@/services/dragon/DragonReviewService'
 import { getRankTrendAnalysis } from '@/services/rankTrend/compat'
 import { themeFacade } from '@/services/theme/ThemeFacade'
 import { useFavoriteStore } from '@/stores/favorite'
@@ -144,22 +143,6 @@ function normalizeEntry(raw: any): CandidateJournalEntry {
     createdAt: String(raw?.createdAt || raw?.created_at || ''),
     updatedAt: String(raw?.updatedAt || raw?.updated_at || ''),
   }
-}
-
-function findDragonRecord(stockCode: string): Record<string, any> | null {
-  const review = dragonReviewService.getLatestReview()
-  if (!review) return null
-  const groups = [
-    review.trueLeaders || [],
-    review.heightBoard || [],
-    review.attentionBoard || [],
-  ] as Array<Array<Record<string, any>>>
-  for (const group of groups) {
-    const record = group.find((item) => normalizeCode(item.code) === stockCode)
-    if (record) return record
-  }
-  const marketCore = review.marketCore as Record<string, any> | undefined
-  return marketCore && normalizeCode(marketCore.code) === stockCode ? marketCore : null
 }
 
 function normalizeSavedAnalysis(snapshot: Record<string, any> | null | undefined): CandidateSavedAnalysis {
@@ -691,8 +674,8 @@ export class CandidateJournalService {
       allStocks: dataLayer.getStocks() as CandidateStockLike[],
       rankTrend: getRankTrendAnalysis(sourceStock),
       themeExposures: themeFacade.getStockExposures(stockCode) as any,
-      rotationSummary: themeFacade.getRotationSummary() as any,
-      dragonRecord: findDragonRecord(stockCode),
+      rotationSummary: null,
+      dragonRecord: null,
       sentiment: dragonBreathAnalyzer.getMarketSentiment() as any,
       now: this.now(),
     }

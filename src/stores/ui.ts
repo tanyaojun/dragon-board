@@ -312,7 +312,8 @@ export const useUIStore = defineStore('ui', () => {
     let result = rawStocks.value
 
     if (filters.value.onlyLeaders) {
-      result = result.filter((s: Stock) => !!dataLayer.getLeaderByCode(s.code))
+      // 真龙复盘引擎已移除（2026-09-26 瘦身），无龙头数据源，过滤结果恒为空
+      result = result.filter(() => false)
     }
 
     if (filters.value.onlyFavorites) {
@@ -384,7 +385,7 @@ export const useUIStore = defineStore('ui', () => {
   const stats = computed(() => ({
     total: rawStocks.value.length,
     filtered: filteredStocks.value.length,
-    leaders: rawStocks.value.filter((s) => !!dataLayer.getLeaderByCode(s.code)).length,
+    leaders: 0,
     totalPages: Math.ceil(filteredStocks.value.length / pagination.value.pageSize),
   }))
 
@@ -470,13 +471,11 @@ export const useUIStore = defineStore('ui', () => {
     const unsubStocksVersion = dataLayer.subscribe('version.stocks', syncStocksVersion)
     const unsubMerged = EventManager.on(AppEvents.DATA.MERGED, updateFromMergedEvent)
     const unsubUpdated = EventManager.on(AppEvents.DATA.UPDATED, updateFromMergedEvent)
-    const unsubDragon = EventManager.on(AppEvents.DRAGON.UPDATED, updateDataVersion)
 
     return () => {
       unsubStocksVersion()
       unsubMerged()
       unsubUpdated()
-      unsubDragon()
     }
   }
 

@@ -10,7 +10,7 @@ function source(name: string): string {
 
 describe('theme panel data contract', () => {
   it('uses market theme summaries without retired block contracts', () => {
-    const panels = ['SectorPanel.vue', 'SectorDetail.vue', 'SectorStocksTree.vue', 'ThemeCorrelationPanel.vue']
+    const panels = ['SectorPanel.vue', 'SectorDetail.vue', 'SectorStocksTree.vue']
       .map(source)
       .join('\n')
 

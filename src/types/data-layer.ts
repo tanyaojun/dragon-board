@@ -1,48 +1,13 @@
-import type { ThemeCorrelationDetail } from '@/services/ThemeCorrelationAnalyzer'
 import type { RankTrendAnalysisResult } from '@/services/rankTrend/types'
-import type {
-  AuthorityClass,
-  BattlefieldRecord,
-  ChaseRisk,
-  DragonReviewResult,
-  LeaderRecord,
-  LeaderRole,
-  LeaderTransition,
-  PseudoLeaderRecord,
-  Tradeability,
-} from '@/services/dragon/types'
-import type { RotationAnalysis } from './core'
-import type { AlertStats, StockAlert } from './core'
-import type { AlertType } from './core'
 import type { BreathData, Depth10Book, L2Summary, TickTrade } from './core'
-
-export interface LeaderLookupRecord {
-  code: string
-  name: string
-  level: LeaderRole
-  levelName: string
-  score: number
-  continuousDays: number
-  authority: AuthorityClass
-  primaryRole: LeaderRole
-  roles: LeaderRole[]
-  tradeability: Tradeability
-  chaseRisk: ChaseRisk
-  status?: LeaderRecord['status']
-  themeName?: string
-  lastUpdate: number
-}
 
 export interface DataVersion {
   stocks: number
   themes: number
-  leaders: number
-  review?: number
   quotes: number
   platforms: number
   platformStatus: number
   breath: number
-  rotation?: number
 }
 
 /** 单平台热榜加载状态：区分“真实空榜”与“来源失败/降级”，失败原因结构化保留。 */
@@ -165,10 +130,6 @@ export interface MergedStock {
   firstSeen?: number
   lastSeen?: number
   platformName?: string
-  reviewAuthority?: AuthorityClass
-  reviewRole?: LeaderRole
-  tradeability?: Tradeability
-  chaseRisk?: ChaseRisk
   continuousDays?: number
   themes?: any[]
   speed?: number
@@ -264,23 +225,6 @@ export interface DataState {
     themes: any[]
   }
   listPoolProvenance: ListPoolProvenance | null
-  leader: {
-    byCode: Map<string, LeaderLookupRecord>
-    byLevel: Record<string, LeaderLookupRecord[]>
-    lastUpdate: number | null
-  }
-  review: {
-    result: DragonReviewResult | null
-    marketCore: LeaderRecord | null
-    trueLeaders: LeaderRecord[]
-    heightBoard: LeaderRecord[]
-    attentionBoard: LeaderRecord[]
-    pseudoLeaderGraveyard: PseudoLeaderRecord[]
-    battlefields: BattlefieldRecord[]
-    transitions: LeaderTransition[]
-    summaryLines: string[]
-    lastUpdate: number | null
-  }
   theme: {
     base: {
       byCode: Map<string, any[]>
@@ -291,10 +235,6 @@ export interface DataState {
       byTheme: Map<string, ThemeMetrics>
       hotList: any[]
       rotation: any[]
-      lastUpdate: number | null
-    }
-    correlation: {
-      byTheme: Map<string, ThemeCorrelationDetail>
       lastUpdate: number | null
     }
   }
@@ -319,16 +259,6 @@ export interface DataState {
         category?: string
       }>
       history: any[]
-      lastUpdate: number | null
-    }
-    rotation: {
-      current: RotationAnalysis | null
-      history: RotationAnalysis[]
-      lastUpdate: number | null
-    }
-    alerts: {
-      items: StockAlert[]
-      stats: AlertStats
       lastUpdate: number | null
     }
   }

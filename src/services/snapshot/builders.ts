@@ -24,9 +24,6 @@ export interface SnapshotBuildContext {
   marketData: any
   hotThemes: any[]
   themeHeatFactors?: any[]
-  rotationAnalysis: any
-  /** 后端引擎 rotationSummary 原始载荷（camelCase 全字段）；快照构建原样透传，不重序列化 */
-  backendRotationSummary?: Record<string, any> | null
   breathHistory: any[]
   breathFactors: any[]
   marketMode: 'hot' | 'full'
@@ -546,8 +543,6 @@ export function buildHourlySnapshot(context: SnapshotBuildContext, snapshotTime:
       zhaban,
       thsPools: clonePlainObject(context.marketData?.thsLimitUpPools || null),
     }),
-    // 只透传后端引擎结果；无后端数据则不生产（不本地补算/重序列化）
-    rotationSummary: context.backendRotationSummary ?? null,
   }
 }
 
@@ -643,7 +638,6 @@ export function buildDailySnapshot(context: SnapshotBuildContext, snapshotTime: 
     limitSummary,
     sectors,
     hotlist,
-    rotationSummary: context.backendRotationSummary ?? null,
     stats: {
       totalStocks: context.stocks.length,
       totalSectors: sectors.length,
@@ -910,20 +904,6 @@ export function buildSnapshotSectorRows(
     const key = String(theme?.id || theme?.themeId || name).trim()
     if (!name || !key) return
     rows.push(buildSectorRow(record, 'hot_theme', key, name, index + 1, theme))
-  })
-
-  const rotationLines = Array.isArray(buildContext?.rotationAnalysis?.mainLines)
-    ? buildContext?.rotationAnalysis?.mainLines
-    : Array.isArray(payload.rotation?.mainLines)
-      ? payload.rotation.mainLines
-      : Array.isArray(payload.rotationSummary?.mainLines)
-        ? payload.rotationSummary.mainLines
-        : []
-  rotationLines.forEach((line: any, index: number) => {
-    const name = String(line?.themeName || line?.name || '').trim()
-    const key = String(line?.themeName || line?.name || `line_${index + 1}`).trim()
-    if (!name || !key) return
-    rows.push(buildSectorRow(record, 'rotation_main_line', key, name, index + 1, line))
   })
 
   return rows
