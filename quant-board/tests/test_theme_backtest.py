@@ -735,3 +735,92 @@ def test_theme_chase_crowding_overrides_sg_trigger() -> None:
     )
     assert signals[0]["candidateTier"] == "C_CROWDED"
     assert "sg2" in signals[0]["themeReasons"]
+
+
+def _sg1_frame(date: str, entities: list[dict]) -> dict:
+    return {
+        "snapshotId": f"half_hour:{date}:sg1", "timestamp": 100,
+        "tradingDate": date, "slotTime": "15:00",
+        "entities": entities,
+    }
+
+
+def _sg1_entity(name: str, change: float | None) -> dict:
+    return {
+        "entityType": "hot_theme", "entityName": name, "entityKey": name,
+        "rotationState": "neutral", "change": change,
+    }
+
+
+def test_theme_sg_inputs_sg1_uses_close_slot_series() -> None:
+    """R3b：SG1 change 序列改吃 15:00 收盘槽 entities（daily 7 月仅 15 天结构性饿死 SG1）。
+
+    A=[-10,-2,+3] vs B=[0,0,0]（基准=全题材等权）→ d2 lagging、d3 lagging→improving 触发。
+    """
+    svc = BacktestService(None)
+    days = ["2026-07-06", "2026-07-07", "2026-07-08"]
+    changes = {"2026-07-06": -10.0, "2026-07-07": -2.0, "2026-07-08": 3.0}
+    frames = [
+        _sg1_frame(d, [_sg1_entity("A", changes[d]), _sg1_entity("B", 0.0)]) for d in days
+    ]
+    sg = svc._theme_sg_inputs("ds-sg1", frames)
+    flags_a = sg["sgFlags"]["A"]
+    assert flags_a["2026-07-06"]["sg1"] is None   # 首日象限不可知
+    assert flags_a["2026-07-07"]["sg1"] is None   # 首个已知象限日（lagging），前日象限不可知
+    assert flags_a["2026-07-08"]["sg1"] is True   # lagging→improving 迁移
+    # B 相对基准 leading→weakening，无目标迁移 → False（可判定）
+    flags_b = sg["sgFlags"]["B"]
+    assert flags_b["2026-07-07"]["sg1"] is None and flags_b["2026-07-08"]["sg1"] is False
+    assert not any(f.startswith("sg1_insufficient") for f in sg["qualityFlags"])
+
+
+def test_theme_sg_inputs_sg1_missing_change_stays_none() -> None:
+    """entities 无 change（现夹具形态）→ SG1 全 None + insufficient 计数，不伪造。"""
+    svc = BacktestService(None)
+    days = ["2026-07-06", "2026-07-07", "2026-07-08"]
+    frames = [_sg1_frame(d, [_sg1_entity("A", None), _sg1_entity("B", None)]) for d in days]
+    sg = svc._theme_sg_inputs("ds-sg1", frames)
+    for name in ("A", "B"):
+        assert all(v["sg1"] is None for v in sg["sgFlags"][name].values())
+    assert "sg1_insufficient_count:2" in sg["qualityFlags"]
+
+
+def test_theme_sg_inputs_sg1_attendance_gap_insufficient() -> None:
+    """span 内缺勤（7-07 A 无行）→ A 整题材 insufficient；全出勤的 B 正常可判定。"""
+    svc = BacktestService(None)
+    frames = [
+        _sg1_frame("2026-07-06", [_sg1_entity("A", -1.0), _sg1_entity("B", 0.0)]),
+        _sg1_frame("2026-07-07", [_sg1_entity("B", 0.0)]),
+        _sg1_frame("2026-07-08", [_sg1_entity("A", 1.0), _sg1_entity("B", 0.0)]),
+    ]
+    sg = svc._theme_sg_inputs("ds-sg1", frames)
+    assert all(v["sg1"] is None for v in sg["sgFlags"]["A"].values())
+    assert "sg1_insufficient_count:1" in sg["qualityFlags"]
+    assert sg["sgFlags"]["B"]["2026-07-08"]["sg1"] is False
+
+
+def test_theme_sg_inputs_sg1_void_gap_truncates_series() -> None:
+    """4-15→7-06 空洞（>7 自然日）→ series 截断为 7-06 起重算，跨空洞动量不产生。"""
+    svc = BacktestService(None)
+    changes = {
+        "2026-04-15": -10.0, "2026-04-27": 5.0,
+        "2026-07-06": -10.0, "2026-07-07": -2.0, "2026-07-08": 3.0,
+    }
+    frames = [
+        _sg1_frame(d, [_sg1_entity("A", changes[d]), _sg1_entity("B", 0.0)]) for d in sorted(changes)
+    ]
+    sg = svc._theme_sg_inputs("ds-sg1", frames)
+    flags_a = sg["sgFlags"]["A"]
+    # 空洞前段丢弃（不可判定），7-06 起与新 series 同基重算
+    assert flags_a["2026-04-15"]["sg1"] is None and flags_a["2026-04-27"]["sg1"] is None
+    assert flags_a["2026-07-07"]["sg1"] is None and flags_a["2026-07-08"]["sg1"] is True
+    assert not any(f.startswith("sg1_insufficient") for f in sg["qualityFlags"])
+
+
+def test_theme_sg_inputs_sg1_single_observation_insufficient() -> None:
+    """单观测题材 → 不足以构成象限链 → insufficient 计数，SG1 全 None。"""
+    svc = BacktestService(None)
+    frames = [_sg1_frame("2026-07-06", [_sg1_entity("A", 1.0)])]
+    sg = svc._theme_sg_inputs("ds-sg1", frames)
+    assert sg["sgFlags"]["A"]["2026-07-06"]["sg1"] is None
+    assert "sg1_insufficient_count:1" in sg["qualityFlags"]

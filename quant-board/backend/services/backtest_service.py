@@ -1,6 +1,6 @@
 from __future__ import annotations
 import gzip
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from sqlalchemy.orm import Session
@@ -278,6 +278,47 @@ def _close_slot_rows_by_day(rows: list[dict[str, Any]]) -> dict[str, list[dict[s
         if picked:
             out[d] = picked
     return out
+
+
+_SG1_MAX_GAP_NATURAL_DAYS = 7
+
+
+def _natural_days_between(start: str, end: str) -> int:
+    ya, ma, da = map(int, start.split("-"))
+    yb, mb, db = map(int, end.split("-"))
+    return date(yb, mb, db).toordinal() - date(ya, ma, da).toordinal()
+
+
+def _sg1_close_slot_flags(
+    change_seq: dict[str, float | None],
+    benchmark_by_day: dict[str, float],
+) -> tuple[dict[str, bool | None], bool]:
+    """R3b SG1 收盘槽序列：严格出勤 + >7 自然日空洞截断（task_plan_r3b.md 语义定版）。
+
+    - 观测日 = change 非空的 15:00 日；span = [首观测, 末观测] 内的全部基准日历日；
+    - 相邻日历日自然间隔 > _SG1_MAX_GAP_NATURAL_DAYS（4-5 月题材行空洞类）→ 截断为
+      最后一个断点之后，跨空洞动量不产生（防 7-06 边界系统性假触发）；
+    - 截断后 <2 天或 span 内任一日缺勤 → ({}, False)，调用方计 insufficient、全 None。
+    返回 ({date: sg1 flag}, sufficient)；未观测日不在返回 dict 中（消费方 .get 默认 None）。
+    """
+    obs = {d: v for d, v in change_seq.items() if v is not None}
+    if not obs:
+        return {}, False
+    first = min(obs)
+    last = max(obs)
+    span = [d for d in sorted(benchmark_by_day) if first <= d <= last]
+    start_idx = 0
+    for idx, (a, b) in enumerate(zip(span, span[1:])):
+        if _natural_days_between(a, b) > _SG1_MAX_GAP_NATURAL_DAYS:
+            start_idx = idx + 1
+    series = span[start_idx:]
+    if len(series) < 2 or any(d not in obs for d in series):
+        return {}, False
+    quadrants = rrg_quadrants(
+        [obs[d] for d in series], [benchmark_by_day[d] for d in series]
+    )
+    flags = sg1_rrg_migration_flags(dict(zip(series, quadrants)))
+    return flags, True
 
 
 class BacktestService:
@@ -1279,10 +1320,13 @@ class BacktestService:
         """SG 变体输入预计算（Phase R3，fail-visible：缺失打标，不伪造触发）。
 
         - SG2 序列：frames 中每日 15:00 帧的题材 rotationState（缺失日补 None）；
-        - mainLines /（诊断用）按 15:00 帧 rotationSummary 提取；None=缺失、[]=引擎判定无主线；
-        - SG1/SG3：daily 收盘横截面（snapshot_type="daily" 硬过滤，R1 锚点口径）的
-          change / mainNetInflow 日序列；SG1 要求窗口内题材与基准序列完整，否则整段
-          None 打 sg1_insufficient 标记（不压缩缺失日）。
+        - SG1（R3b 口径修正）：frames 15:00 帧题材 change 收盘槽序列——daily 类型
+          7 月仅 15 天曾结构性饿死 SG1（全 248 题材 insufficient）。严格出勤语义：
+          题材 span 内 15:00 日历日全出勤、相邻日历日自然间隔 >7 天截断（4-5 月空洞）、
+          不足 2 天或缺勤 → 整题材 sg1_insufficient 计数、全 None（_sg1_close_slot_flags）；
+        - SG3：daily 收盘横截面（snapshot_type="daily" 硬过滤，R1 锚点口径）的
+          mainNetInflow 日序列（15:00 口径另批评估，一次一变量）；
+        - mainLines /（诊断用）按 15:00 帧 rotationSummary 提取；None=缺失、[]=引擎判定无主线。
         返回 {sgFlags: {theme: {date: {sg1,sg2,sg3}}}, mainlineNamesByDay: {date: list|None},
         qualityFlags: [str]}。
         """
@@ -1292,6 +1336,7 @@ class BacktestService:
             return {"sgFlags": {}, "mainlineNamesByDay": {}, "qualityFlags": ["no_trading_days"]}
 
         rotation_by_theme: dict[str, dict[str, str | None]] = {}
+        close_changes_by_theme: dict[str, dict[str, float | None]] = {}
         mainlines_by_day: dict[str, list[str] | None] = {}
         day_has_15h: set[str] = set()
         for frame in frames:
@@ -1309,6 +1354,12 @@ class BacktestService:
                 name = str(row.get("entityName") or "")
                 if name:
                     rotation_by_theme.setdefault(name, {})[d] = str(row.get("rotationState") or "") or None
+                    chg = row.get("change")
+                    # 落库 change 为百分数单位（2.5=+2.5%），rrg_quadrants 虚拟指数契约是
+                    # 小数（0.025=+2.5%）——此处统一换算，防止 RS 水平分类被量纲扭曲。
+                    close_changes_by_theme.setdefault(name, {})[d] = (
+                        float(chg) / 100.0 if isinstance(chg, (int, float)) else None
+                    )
             rs = frame.get("rotationSummary") or {}
             ml = rs.get("mainLines")
             mainlines_by_day[d] = (
@@ -1324,7 +1375,6 @@ class BacktestService:
             for d in days:
                 seq.setdefault(d, None)
 
-        changes_by_theme: dict[str, dict[str, float | None]] = {}
         inflow_by_theme: dict[str, dict[str, float | None]] = {}
         res = self.repo.list_snapshot_sector_rows(
             dataset_id,
@@ -1339,30 +1389,30 @@ class BacktestService:
                 name = str(row.get("entityName") or "")
                 if not name:
                     continue
-                chg, inflow = row.get("change"), row.get("mainNetInflow")
-                changes_by_theme.setdefault(name, {})[d] = float(chg) if isinstance(chg, (int, float)) else None
+                inflow = row.get("mainNetInflow")
                 inflow_by_theme.setdefault(name, {})[d] = float(inflow) if isinstance(inflow, (int, float)) else None
 
-        benchmark_changes: dict[str, float | None] = {}
-        for d in days:
-            vals = [seq[d] for seq in changes_by_theme.values() if seq.get(d) is not None]
-            benchmark_changes[d] = sum(vals) / len(vals) if vals else None
+        # SG1 基准：SG1 日历日（有 ≥1 题材 15:00 change）全题材等权 change 均值
+        sg1_calendar = sorted({
+            d
+            for seq in close_changes_by_theme.values()
+            for d, v in seq.items()
+            if v is not None
+        })
+        benchmark_close: dict[str, float] = {}
+        for d in sg1_calendar:
+            vals = [seq[d] for seq in close_changes_by_theme.values() if seq.get(d) is not None]
+            benchmark_close[d] = sum(vals) / len(vals)
 
         sg_flags: dict[str, dict[str, dict[str, bool | None]]] = {}
         sg1_insufficient = 0
-        all_themes = sorted(set(rotation_by_theme) | set(changes_by_theme) | set(inflow_by_theme))
+        all_themes = sorted(set(rotation_by_theme) | set(close_changes_by_theme) | set(inflow_by_theme))
         for name in all_themes:
             entry = sg_flags.setdefault(name, {})
-            chg_seq = changes_by_theme.get(name) or {}
-            sg1_complete = (
-                len(days) >= 2
-                and all(chg_seq.get(d) is not None and benchmark_changes[d] is not None for d in days)
+            sg1_flags, sg1_ok = _sg1_close_slot_flags(
+                close_changes_by_theme.get(name) or {}, benchmark_close
             )
-            if sg1_complete:
-                quadrants = rrg_quadrants([chg_seq[d] for d in days], [benchmark_changes[d] for d in days])
-                sg1_flags = sg1_rrg_migration_flags(dict(zip(days, quadrants)))
-            else:
-                sg1_flags = {d: None for d in days}
+            if not sg1_ok:
                 sg1_insufficient += 1
             sg2_flags = sg2_rotation_switch_flags({d: (rotation_by_theme.get(name) or {}).get(d) for d in days})
             inflow_seq = inflow_by_theme.get(name) or {}
