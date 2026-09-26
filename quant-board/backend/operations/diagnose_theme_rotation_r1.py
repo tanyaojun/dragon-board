@@ -46,14 +46,32 @@ from backend.data.repositories.repository_factory import get_runtime_mongodb_dat
 
 DATASET_ID = "dragonboard_live"
 TOP_N = 10
-CLOSE_SLOTS = ("15:30", "15:00")  # Phase 0：15:30 THS 池最全，15:00 偶发空洞
+# Phase 0/审查实测：题材收盘横截面落在 daily 类型（15:30 为主、11 个早期交易日仅 15:00），
+# 与 RankTrend half_hour 快照口径不同，勿改 half_hour。
+# snapshot_rows 同集合混存 daily/half_hour/hourly/quarter_hour 四型，全部查询必须显式
+# snapshot_type="daily"，否则 15:00 槽会混入四型大杂烩（rank 口径不同，TopN 失真）。
+CLOSE_SLOTS = ("15:30", "15:00")
+
+# THS 涨停池分类语义（providers.py:_LIMIT_UP_POOL_KEYS）：one/two/three/four/high=封住板，
+# failed=炸板、rushing=冲板未封、drawdown=回落——仅封住池计为涨停（limitUpPool 是枚举非布尔，
+# bool() 会把 failed/rushing/drawdown 约 34% 的非涨停行误计为涨停）。
+SEALED_POOL_VALUES = frozenset({"one", "two", "three", "four", "high"})
+
+
+def _is_sealed_limit_up(value: Any) -> bool:
+    return value in SEALED_POOL_VALUES
+
 
 # 权重敏感性扫描组（研究参数，非生产默认）
 WEIGHT_GRID = {
-    "default_heat_heavy": DEFAULT_MAINLINE_WEIGHTS,
+    "default_heat_heavy": dict(DEFAULT_MAINLINE_WEIGHTS),  # 拷贝防御：不与模块默认共享可变对象
     "equal": {k: 0.25 for k in DEFAULT_MAINLINE_WEIGHTS},
-    "momentum_heavy": {"heatLevel": 0.15, "momentumScore": 0.50, "ztCount": 0.20, "fundScore": 0.15},
-    "limit_count_heavy": {"heatLevel": 0.20, "momentumScore": 0.20, "ztCount": 0.45, "fundScore": 0.15},
+    "momentum_heavy": {
+        "heatLevel": 0.15, "momentumScore": 0.50, "ztCount": 0.20, "fundScore": 0.15,
+    },
+    "limit_count_heavy": {
+        "heatLevel": 0.20, "momentumScore": 0.20, "ztCount": 0.45, "fundScore": 0.15,
+    },
 }
 
 
@@ -62,7 +80,8 @@ def load_close_slot_series(
 ) -> dict[str, Any]:
     """每交易日收盘槽 sector rows 横截面（15:30 优先，回退 15:00，均缺打标）。"""
     res = repo.list_snapshot_sector_rows(
-        DATASET_ID, start_date=start, end_date=end, entity_type="hot_theme", sort="asc"
+        DATASET_ID, start_date=start, end_date=end,
+        snapshot_type="daily", entity_type="hot_theme", sort="asc",
     )
     by_day_slot: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for row in res["rows"]:
@@ -109,7 +128,8 @@ def build_top_sets(
         ordered = _sorted_rows(info["rows"])
         top = {str(r.get("entityKey")) for r in ordered[:TOP_N] if r.get("entityKey") is not None}
         tops.append(top)
-        mainline[d] = str(ordered[0].get("entityKey")) if ordered and ordered[0].get("entityKey") is not None else None
+        first_key = ordered[0].get("entityKey") if ordered else None
+        mainline[d] = str(first_key) if first_key is not None else None
     return tops, mainline
 
 
@@ -151,10 +171,11 @@ def diff_main_theme(
         DATASET_ID,
         start_date=start,
         end_date=end,
+        snapshot_type="daily",
         sort="asc",
         fields=[
-            "tradingDate", "slotTime", "code", "name", "themes",
-            "mainTheme", "boardHeight", "change", "limitUpPool", "reason",
+            "tradingDate", "slotTime", "code", "themes",
+            "mainTheme", "limitUpPool", "reason",
         ],
     )
     by_day: dict[str, list[dict[str, Any]]] = {}
@@ -174,7 +195,7 @@ def diff_main_theme(
             themes = normalize_theme_names(r.get("themes"))
             if not themes:
                 continue
-            limit_up = bool(r.get("limitUpPool"))
+            limit_up = _is_sealed_limit_up(r.get("limitUpPool"))
             # 涨停原因文本来自 stock rows 的 reason 字段（THS 涨停池 reasonType 透传）
             reason_text = str(r.get("reason") or "") if limit_up else None
             res_a = assign_main_theme(
@@ -223,7 +244,14 @@ def weight_sensitivity(series: dict[str, Any]) -> dict[str, Any]:
     }
     top3 = {
         w_name: {
-            d: [t for t, _ in sorted(sc.items(), key=lambda kv: kv[1].get("score") or -1, reverse=True)[:3]]
+            d: [
+                t
+                for t, _ in sorted(
+                    sc.items(),
+                    key=lambda kv: kv[1]["score"] if kv[1].get("score") is not None else -1,
+                    reverse=True,
+                )[:3]
+            ]
             for d, sc in daily_scores[w_name].items()
         }
         for w_name in WEIGHT_GRID
@@ -249,21 +277,33 @@ def weight_sensitivity(series: dict[str, Any]) -> dict[str, Any]:
 def dedup_limit_stats(
     repo: MongoRepository, start: str, end: str, series: dict[str, Any]
 ) -> dict[str, Any]:
-    """守恒 vs 重复涨停计数（以判定链归属为 owner）。"""
+    """守恒 vs 重复涨停计数（以判定链归属为 owner），附缺得分日降级统计。
+
+    fail-visible：series 中 status != ok 的日期无 sector rows 得分，落入这些日期的
+    涨停股 assign_main_theme 必然走 themes[0] 兜底，与 diff_main_theme 的口径偏差
+    在此显式计数（owner_fallback_no_scores_count），不静默混入守恒结论。
+    """
     res = repo.list_snapshot_stock_rows(
-        DATASET_ID, start_date=start, end_date=end, sort="asc",
-        fields=["tradingDate", "slotTime", "code", "themes", "mainTheme", "limitUpPool"],
+        DATASET_ID, start_date=start, end_date=end,
+        snapshot_type="daily", sort="asc",
+        fields=["tradingDate", "slotTime", "code", "themes", "limitUpPool"],
     )
     repeat_by_theme: dict[str, set[str]] = {}
     owner: dict[str, str] = {}
+    no_scores_days = {d for d, info in series["series"].items() if info["status"] != "ok"}
+    owner_fallback_no_scores_count = 0
     day_map = {d: info for d, info in series["series"].items() if info["status"] == "ok"}
     day_scores = {d: mainline_scores(info["rows"]) for d, info in day_map.items()}
     for r in res["rows"]:
-        if str(r.get("slotTime")) not in CLOSE_SLOTS or not r.get("limitUpPool"):
+        if str(r.get("slotTime")) not in CLOSE_SLOTS:
+            continue
+        if not _is_sealed_limit_up(r.get("limitUpPool")):
             continue
         themes = normalize_theme_names(r.get("themes"))
         if not themes:
             continue
+        if str(r.get("tradingDate")) in no_scores_days:
+            owner_fallback_no_scores_count += 1
         res_a = assign_main_theme(
             themes, day_scores.get(str(r.get("tradingDate")), {}), fallback_theme=str(themes[0])
         )
@@ -271,25 +311,48 @@ def dedup_limit_stats(
             repeat_by_theme.setdefault(t, set()).add(str(r.get("code")))
         if res_a["mainTheme"]:
             owner[str(r.get("code"))] = res_a["mainTheme"]
-    return dedup_limit_count(repeat_by_theme, owner)
+    result = dedup_limit_count(repeat_by_theme, owner)
+    result["no_scores_days"] = sorted(no_scores_days)
+    result["owner_fallback_no_scores_count"] = owner_fallback_no_scores_count
+    return result
 
 
-def sentiment_background(repo: MongoRepository, start: str, end: str) -> list[dict[str, Any]]:
-    """弱势段每日 15:30 帧 limitSummary 情绪背景。"""
-    out: list[dict[str, Any]] = []
+def sentiment_background(
+    repo: MongoRepository, series: dict[str, Any], start: str, end: str
+) -> list[dict[str, Any]]:
+    """弱势段每日 15:30 帧 limitSummary 情绪背景（与 series 交易日集合对齐）。
+
+    fail-visible：窗口内缺帧或帧无 limitSummary 字段的交易日输出 insufficient
+    打标行，不静默跳过（审查实测：11 个回退日 daily 帧落在 15:00 且无 limitSummary）。
+    """
+    by_day: dict[str, dict[str, Any]] = {}
     for doc in repo.db["snapshot_frames"].find(
         {"tradingDate": {"$gte": start, "$lte": end}, "slotTime": "15:30"}
-    ).sort("tradingDate", 1):
-        ls = doc.get("limitSummary") or {}
+    ):
+        ls = doc.get("limitSummary")
+        if not isinstance(ls, dict) or not ls:
+            continue
         z, cb = ls.get("zhaban") or {}, ls.get("continuousBoards") or {}
-        out.append({
+        by_day[str(doc.get("tradingDate"))] = {
+            "status": "ok",
             "tradingDate": str(doc.get("tradingDate")),
             "ztCount": z.get("ztCount"),
             "zhaban_rate": z.get("rate"),
             "fengban_rate": z.get("fengbanRate"),
             "max_board": cb.get("maxBoard"),
-        })
-    return out
+        }
+    return [
+        by_day.get(
+            d,
+            {
+                "status": "insufficient",
+                "tradingDate": d,
+                "reason": "frame_or_limit_summary_missing",
+            },
+        )
+        for d in sorted(series["series"])
+        if start <= d <= end
+    ]
 
 
 def run_stats(series: dict[str, Any]) -> dict[str, Any]:
@@ -327,16 +390,28 @@ def main() -> int:
         "main_theme_diff": diff_main_theme(repo, args.start, args.end, full),
         "weight_sensitivity": weight_sensitivity(full),
         "dedup_limit": dedup_limit_stats(repo, args.start, args.end, full),
-        "sentiment_background": sentiment_background(repo, args.weak_start, args.weak_end),
+        "sentiment_background": sentiment_background(repo, full, args.weak_start, args.weak_end),
     }
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    fw, ww, diff = report["full_window"], report["weak_window"], report["main_theme_diff"]["overall"]
-    print(f"[full] days={fw['n_days']} missing={fw['missing_days']} rot_speed={fw['rotation_speed'].get('mean')} "
-          f"switch_rate={fw['mainline_persistence'].get('switch_rate')} entropy={fw['rank_entropy'].get('normalized')}")
-    print(f"[weak] days={ww['n_days']} rot_speed={ww['rotation_speed'].get('mean')} "
-          f"switch_rate={ww['mainline_persistence'].get('switch_rate')} entropy={ww['rank_entropy'].get('normalized')}")
+    out_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    fw = report["full_window"]
+    ww = report["weak_window"]
+    diff = report["main_theme_diff"]["overall"]
+    print(
+        f"[full] days={fw['n_days']} missing={fw['missing_days']} "
+        f"rot_speed={fw['rotation_speed'].get('mean')} "
+        f"switch_rate={fw['mainline_persistence'].get('switch_rate')} "
+        f"entropy={fw['rank_entropy'].get('normalized')}"
+    )
+    print(
+        f"[weak] days={ww['n_days']} "
+        f"rot_speed={ww['rotation_speed'].get('mean')} "
+        f"switch_rate={ww['mainline_persistence'].get('switch_rate')} "
+        f"entropy={ww['rank_entropy'].get('normalized')}"
+    )
     print(f"[mainTheme diff] {diff}")
     print(f"report -> {out_path}")
     return 0
