@@ -16,6 +16,9 @@ describe('SectorRotationTab', () => {
     expect(facade).toContain('/api/theme-rotation/summary')
     // 交互式读取：绕过后台轮询请求队列，避免页签"加载中"被队列滞留卡死
     expect(facade).toContain('bypassQueue: true')
+    // 信封口径：theme-rotation 返回 {ok, status, data}（theme-momentum 平铺，两接口不一致），
+    // facade 必须拆信封取 data，否则组件拿到信封体渲染即崩（2026-09-27 空白页根因）
+    expect(facade).toContain("body?.ok === true && body.data ? body.data : null")
   })
 
   it('renders summary fields with explicit engine-no-mainline copy', () => {

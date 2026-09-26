@@ -550,7 +550,8 @@ export interface ThemeRotationSummary {
 
 /**
  * 拉取题材轮动状态（/api/theme-rotation/summary，Redis 缓存）。
- * 404（窗口内无含 rotationSummary 的帧）与网络失败统一返回 null，
+ * 注意信封口径：theme-rotation 返回 {ok, status, data}（theme-momentum 是平铺顶层字段，
+ * 两接口不一致）——此处拆信封取 data；ok:false / data 缺失 / 网络失败统一返回 null，
  * 由调用方呈现"暂无轮动数据"+重试（fail-visible，不以空对象伪装）。
  */
 export async function getRotationSummary(params: {
@@ -563,10 +564,11 @@ export async function getRotationSummary(params: {
       snapshot_type: params.snapshotType,
     })
     // 交互式读取：bypassQueue 避免被后台轮询队列滞留（页签"加载中"卡死根因之一），不重试快速暴露空态
-    return await apiService.get<ThemeRotationSummary>(`/api/theme-rotation/summary?${query.toString()}`, {
-      bypassQueue: true,
-      retries: 0,
-    })
+    const body = await apiService.get<{ ok?: boolean; data?: ThemeRotationSummary }>(
+      `/api/theme-rotation/summary?${query.toString()}`,
+      { bypassQueue: true, retries: 0 },
+    )
+    return body?.ok === true && body.data ? body.data : null
   } catch {
     return null
   }
