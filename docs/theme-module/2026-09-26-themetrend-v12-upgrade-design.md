@@ -147,13 +147,13 @@ Phase 0 已确认情绪字段全部可得（见 §6.0）。本轮设计评审（
 - R1 轮动速度 rotation_speed：Top N 题材名单日间重合率（1 − Jaccard）或排名秩相关变化；rotation 引擎已有 rotation_speed 概念，扩展口径并落库；
 - R2 主线持续性 mainline_persistence：mainline 题材连续保持天数与切换频率（`rotationState` + `mainlineConcentrationRank` 自 2026-08-04 落库，可直接算）；
 - R3 排名熵 rank_entropy：题材 rank 分布的时序熵，熵高 = 轮动快且无主线；
-- 轮动状态标签 rotation_regime：主线集中 / 轮动加速 / 混沌无主线（由 R1-R3 阈值化，阈值经 Phase R2 验证后落默认）。
+- 轮动状态标签 rotation_regime：**2026-09-26 用户裁决（Phase R2 实证后）按提案重构为引擎权威口径**——轮动状态 = 引擎 `rotationSummary.rotationState` 六值原值（half_hour 15:00 槽：cooling/emerging/inflow/mainline/neutral/outflow）+ Top1 稳定性辅助维度（rank Top1 连续保持天数，阈值参数化）；不自算第三套状态体系（single-source-of-truth）。原 rot×entropy 双轴三态降级为诊断对照函数——Phase R2 实证 rank Top10 口径下两轴正相关、"快+聚" rotating 态 9 组阈值全 0 天，不能进生产消费。
 
 **双维状态矩阵与门控语义**：
 
 ```text
-市场状态 = market_phase（ice/rising/climax/cooling/chaos）
-         × rotation_regime（主线集中/轮动加速/混沌无主线）
+市场状态 = market_phase（引擎 half_hour 15:00 帧真值；ice/rising/climax/cooling/chaos）
+         × rotation_regime（引擎 rotationState 六值 + Top1 稳定性辅助标签）
 ```
 
 - 例：弱势（cooling/ice）× 轮动加速状态下，主线确认类信号（A_MAIN/B_IGNITION）降可信度标签，轮动切换类信号（§5.4）升权重；主线集中状态下反之；
@@ -202,6 +202,8 @@ Phase 0 已确认情绪字段全部可得（见 §6.0）。本轮设计评审（
 
 **兼容策略（修正原 hotTheme 并行方案）**：直接升级 `mainTheme` 判定链（替换列表第一个逻辑），落库新增 `mainThemeReason`（归属依据：mainline_score / tie_break_reason / fallback + 得分差）；旧逻辑（列表第一个）在 Phase R3 **离线重算**做对照——"新链路好于现状"是用户假设，也是待验证假设，用数据裁决。回测输入变化的风险可控：题材域本就因 heatLevel 迁移（2026-09-03）需重跑。不再新增 hotTheme 字段（避免 mainTheme/hotTheme 双源）。
 
+**mainline 消费口径（2026-09-26 第四轮用户裁决，Phase R2 实证后）**：轮动交易信号（§5.4 SG1/SG2/SG3）与 Phase R3 回测变体的主线名单**一律消费引擎口径**（`rotationSummary.mainLines`，热度 z-rank Top3 ∧ 资金集中度 Top3 双门槛）。依据：Phase R2 实测 MainlineScore 判定链 Top1 切换率全程 0.88-0.93（与引擎 rotationState=mainline 仅 8 天、重合度 0.167），合成层 percentile 排序的日间抖动是首要问题，平滑候选只能缓解不能根治。MainlineScore 判定链**降级为诊断输出**：判定算子与测试保留（已提交），接线 projection 与"判定链 vs 旧逻辑"离线对照实验随之暂缓，待合成层结构改造（rank 稳健合成 / 原料因子先平滑，后续候选）后再议。
+
 **落地形态**：判定算子为纯函数放 `backend/analysis/theme/mainline_assignment.py`（暂名；输入：个股 themes 列表 + 同帧 sector rows 题材因子快照 + limitSummary + 配置权重；输出：每股 mainTheme + 依据标记），接线于 projection 派生管线替换 `row_themes[0]` 兜底；逐槽记录即时归属 + 日频 15:30 收盘冻结（回测用冻结值保证可复现）。
 
 **已知限制（如实）**：①主线得分权重未定版前，判定层行为依赖 Phase R1 的描述性实证；②涨停原因仅作消歧，对未涨停且题材得分接近的个股，归属稳定性依赖因子原料的日内稳定性；③题材映射本身的噪声（longhuvip 概念划分粒度不一）会传入归属结果，映射质量治理不在本设计范围。
@@ -245,11 +247,11 @@ Track 轮动线（题材轮动研究，响应 2026-09-26 设计评审追加）�
            ①现有 theme_rotation（主线确认进场，不变）②轮动补涨型变体
            （SG1 RRG 象限迁移 + SG2 rotationState 切换 + SG3 资金迁移
            进场）③混合（市场状态门控切换），按 market_phase ×
-           rotation_regime 分层评估——验证"主线不明环境下主线确认
+           rotation_regime（引擎 rotationState + Top1 稳定性，§5.3
+           2026-09-26 裁决）分层评估——验证"主线不明环境下主线确认
            失效、轮动补涨占优"的假设，与既有"市场状态依赖"复现结论
-           同构对接；顺带对照 mainTheme 新判定链（MainlineScore）vs
-           旧逻辑（列表第一个，离线重算）对回测结果的影响（§5.5
-           兼容策略的实证环节，裁决"判定链是否好于现状"）
+           同构对接；主线名单消费引擎 mainLines 口径（§5.5 第四轮
+           裁决），mainTheme 判定链对照实验随判定链降级暂缓（§5.5）
 
 汇合：
   Phase 4  两轨过验项进 combine → v12 三窗回测重跑 → 首份题材域
@@ -289,7 +291,5 @@ Track 轮动线（题材轮动研究，响应 2026-09-26 设计评审追加）�
 
 - 2026-09-26：现状盘点 + 业界因子调研 + 分层架构设计确认，本文档落盘（e46cea50）；
 - 2026-09-26：Phase 0 数据可得性 spike 完成（§6.0）；设计评审追加题材轮动研究线（§5.3 双维门控、§5.4 轮动交易信号、§6.1 双轨验证路径），三处修订回写（D1 口径 / S2 复用 / 情绪取数规则）；题材归属方案经两轮演进定版为 **mainTheme 判定计算链**（§5.5：原料层不动 + 判定层新建 MainlineScore → 个股归属 + 消费层守恒自然达成，第三轮裁决替代三轨制/hotTheme 并行）。仍未实施。
-- 下一步候选（待用户拍板）：
-  1. **Phase R1 轮动度量因子构建 + 9 月弱势段描述性实证**（用户裁决优先：弱势轮动是当前主要市场特征；数据已就绪，可立即启动）；
-  2. Phase 1 情绪相位门控假设验证（与 R1 并行可行，消费同一批 sector rows）；
-  3. 按 `writing-plans` 流程把 R1/Phase 1 拆成可执行实施计划。
+- 2026-09-26：Phase R1 完成（轮动度量 harness + 判定链权重定版 + 9 月弱势段实证，9 提交）；Phase R2 完成（判定链稳定性三候选 + regime 阈值化 + 双指标实证，7 提交）。关键实证：regime 双轴结构性缺陷（rotating 态 9 组阈值全 0 天）、稳定-收益权衡（hysteresis_k3_exit5 为收益最优平滑候选）、引擎 mainLines 空值率 79.5% 且与判定链重合仅 0.167。**第四轮用户裁决**：①轮动信号与 R3 回测消费引擎 mainline 口径（§5.5）；②regime 按提案重构为引擎 rotationState + Top1 稳定性权威口径（§5.3）；③完成前两项后进入 Phase R3。报告：`2026-09-26-phase-r1-findings.md`、`2026-09-26-phase-r2-findings.md`。
+- 下一步：**Phase R3 策略变体对照回测**（SG1/SG2/SG3，引擎口径；实施计划 `docs/theme-module/plans/task_plan_r3.md`）；R3 候选=MainlineScore 合成层结构改造（暂缓项）；Phase 1 解锁项=limitSummary 覆盖修复（回退取值或 KPL 补源）。
