@@ -36,6 +36,26 @@ class TestMainlineScores:
         assert scores["X"]["status"] == "insufficient"
         assert scores["X"]["score"] is None
 
+    def test_nan_and_inf_factors_excluded(self):
+        scores = mainline_scores([
+            {"entityKey": "A", "heatLevel": float("nan"), "momentumScore": 80.0, "ztCount": 3, "fundScore": 60.0},
+            {"entityKey": "B", "heatLevel": 70.0, "momentumScore": float("inf"), "ztCount": 3, "fundScore": 60.0},
+        ])
+        # A 的 heatLevel / B 的 momentumScore 缺失 → 双方 degraded，但其余因子仍出分
+        assert scores["A"]["status"] == "degraded"
+        assert scores["B"]["status"] == "degraded"
+        assert scores["A"]["score"] is not None and scores["B"]["score"] is not None
+
+    def test_duplicate_entity_key_flagged(self):
+        scores = mainline_scores([
+            {"entityKey": "A", "heatLevel": 90.0, "momentumScore": 80.0, "ztCount": 5, "fundScore": 70.0},
+            {"entityKey": "A", "heatLevel": 10.0, "momentumScore": 20.0, "ztCount": 1, "fundScore": 30.0},
+        ])
+        assert "duplicate_entity" in scores["A"].get("qualityFlags", [])
+
+    def test_empty_rows_return_empty_dict(self):
+        assert mainline_scores([]) == {}
+
     def test_single_theme_gets_neutral_percentile(self):
         scores = mainline_scores([{"entityKey": "AI", "heatLevel": 88.0, "momentumScore": 55.0, "ztCount": 3, "fundScore": 60.0}])
         assert scores["AI"]["score"] == 50.0  # 唯一题材 percentile 归中
@@ -79,3 +99,30 @@ class TestAssignMainTheme:
         result = assign_main_theme([], self._scores())
         assert result["mainTheme"] is None
         assert result["mainThemeReason"] == "unassigned"
+
+    def test_gap_equal_to_eps_does_not_tie_break(self):
+        # gap 恰为 2.0（== EPS）不满足 gap < eps，即使原因命中第二名也不消歧
+        scores = {"AI": {"score": 60.0, "status": "ok"}, "芯片": {"score": 58.0, "status": "ok"}}
+        result = assign_main_theme(["AI", "芯片"], scores, reason_text="芯片 涨停")
+        assert result["mainTheme"] == "AI"
+        assert result["mainThemeReason"] == "mainline_score"
+
+    def test_tie_break_only_considers_top3(self):
+        # 第 4 名命中原因文本不消歧：hits 只在 ranked[:3] 内找
+        scores = {
+            "甲": {"score": 60.0, "status": "ok"},
+            "乙": {"score": 59.0, "status": "ok"},
+            "丙": {"score": 58.0, "status": "ok"},
+            "丁": {"score": 57.0, "status": "ok"},
+        }
+        result = assign_main_theme(["甲", "乙", "丙", "丁"], scores, reason_text="丁 涨停")
+        assert result["mainTheme"] == "甲"
+        assert result["mainThemeReason"] == "mainline_score"
+
+    def test_tie_break_matches_normalized_theme_label(self):
+        # 后缀剥除：候选"算力概念"归一为"算力"，原因文本"算力 涨停"子串命中
+        scores = {"AI": {"score": 60.0, "status": "ok"}, "算力概念": {"score": 59.0, "status": "ok"}}
+        result = assign_main_theme(["AI", "算力概念"], scores, reason_text="算力 涨停")
+        assert result["mainTheme"] == "算力概念"
+        assert result["mainThemeReason"] == "tie_break_reason"
+        assert "tie_break:算力概念" in result["qualityFlags"]

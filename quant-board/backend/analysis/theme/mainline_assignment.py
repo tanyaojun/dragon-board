@@ -5,11 +5,14 @@
 （如成交额占比拥挤度）严禁回流——循环依赖防护，新增输入需设计评审。
 fail-visible：因子缺失按可用因子重分配权重并打 factorCoverage 标记；
 归属无据时回退 themes[0]（旧口径）打 fallback 标记，不伪造。
+已知限制：传入 weights 中白名单外的 key 会被忽略且无提示；调用方传错因子名不会报错，
+属已知限制（白名单封闭的代价）。
 接线位置（后续任务）：snapshot_derivation/projection.py 替换 row_themes[0] 兜底。
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 # 原料白名单：封闭。全部为 sector rows 同槽可用、且不依赖归属判定的独立原料。
@@ -62,8 +65,10 @@ def mainline_scores(
     """单槽题材横截面 → {themeKey: {score, status, factorCoverage, factorsUsed}}。
 
     每因子在当槽横截面做 percentile rank 后加权合成（0-100 分）。
-    缺失因子：该题材按可用因子重分配权重，coverage<1 标 degraded；
-    全缺标 insufficient、score=None。
+    缺失因子（含 NaN/inf/bool 等非 finite 数值）：该题材按可用因子重分配权重，
+    coverage<1 标 degraded；全缺标 insufficient、score=None。
+    同一 entityKey/entityName 在横截面重复出现时保留后行计算结果并打
+    duplicate_entity 标记（qualityFlags），计算口径不变、只补可诊断性。
     """
     w = {
         k: float((weights or DEFAULT_MAINLINE_WEIGHTS).get(k, 0.0))
@@ -75,13 +80,29 @@ def mainline_scores(
         for row in sector_rows:
             v = row.get(key)
             tkey = row.get("entityKey") or row.get("entityName")
-            if isinstance(v, (int, float)) and tkey is not None:
+            if (
+                isinstance(v, (int, float))
+                and not isinstance(v, bool)
+                and math.isfinite(float(v))
+                and tkey is not None
+            ):
                 vals[str(tkey)] = float(v)
         if vals:
             ranks[key] = _percentile_ranks(vals)
+    key_counts: dict[str, int] = {}
+    for row in sector_rows:
+        raw_key = row.get("entityKey") or row.get("entityName")
+        if raw_key is None:
+            continue
+        skey = str(raw_key)
+        key_counts[skey] = key_counts.get(skey, 0) + 1
     out: dict[str, dict[str, Any]] = {}
     for row in sector_rows:
-        tkey = str(row.get("entityKey") or row.get("entityName"))
+        raw_key = row.get("entityKey") or row.get("entityName")
+        if raw_key is None:
+            # 与因子收集阶段一致：entityKey/entityName 双缺失的 row 不产出条目
+            continue
+        tkey = str(raw_key)
         num = 0.0
         den = 0.0
         used: list[str] = []
@@ -93,12 +114,14 @@ def mainline_scores(
             den += w[key]
             used.append(key)
         total_w = sum(w.values())
+        flags = ["duplicate_entity"] if key_counts.get(tkey, 0) > 1 else []
         if den <= 0:
             out[tkey] = {
                 "score": None,
                 "status": "insufficient",
                 "factorCoverage": 0.0,
                 "factorsUsed": [],
+                "qualityFlags": flags,
             }
             continue
         out[tkey] = {
@@ -106,6 +129,7 @@ def mainline_scores(
             "status": "ok" if abs(den - total_w) < 1e-9 else "degraded",
             "factorCoverage": round(den / total_w, 4) if total_w else 0.0,
             "factorsUsed": used,
+            "qualityFlags": flags,
         }
     return out
 
@@ -123,7 +147,8 @@ def assign_main_theme(
     stock_themes: 该股所属题材名列表（market_context.themes 顺序）。
     reason_text: 涨停原因文本（THS reasonType / 复合原因"机器人+军工"）；
       Top1/Top2 分差 < tie_break_eps 且原因含某候选题材名（归一后子串匹配）
-      时选该题材，reason=tie_break_reason。
+      时选该题材，reason=tie_break_reason。注意：短题材名可能子串误命中，
+      消歧仅作平局处理、非第一优先级（命中会追加 tie_break:{题材} 标记可审计）。
     fallback_theme: 兜底，通常 = stock_themes[0]（旧口径 themes[0]）。
     """
     candidates = [
@@ -165,6 +190,7 @@ def assign_main_theme(
             chosen = hits[0]
             reason = "tie_break_reason"
             flags.append("tie_broken")
+            flags.append(f"tie_break:{chosen}")
     if gap is not None:
         flags.append(f"gap:{round(gap, 2)}")
     return {
