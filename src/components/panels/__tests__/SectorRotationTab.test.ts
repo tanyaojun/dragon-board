@@ -40,4 +40,11 @@ describe('SectorRotationTab', () => {
     expect(tab).toContain('重试')
     expect(tab).toContain('state-unknown')
   })
+
+  it('is wired as a rotation tab inside SectorPanel', () => {
+    const panel = readFileSync(join(process.cwd(), 'src', 'components', 'panels', 'SectorPanel.vue'), 'utf8')
+    expect(panel).toContain("view === 'rotation'")
+    expect(panel).toContain('轮动状态')
+    expect(panel).toContain('SectorRotationTab')
+  })
 })

@@ -33,6 +33,9 @@
           🔥 热门题材
           <span v-if="themeSummaries.length" class="tab-count">{{ themeSummaries.length }}</span>
         </button>
+        <button class="tab-btn" :class="{ active: view === 'rotation' }" @click="view = 'rotation'">
+          🔄 轮动状态
+        </button>
       </div>
 
       <!-- 视图模式切换 -->
@@ -131,7 +134,10 @@
         </div>
       </div>
 
-
+      <!-- 轮动状态视图 -->
+      <div v-else-if="view === 'rotation'" class="rotation-view">
+        <SectorRotationTab />
+      </div>
     </div>
 
     <div class="panel-footer">
@@ -152,6 +158,7 @@ import { usePanel } from '../../composables/usePanel'
 import SectorStocksTree from './SectorStocksTree.vue'
 import SectorDetail from './SectorDetail.vue'
 import ThemeSortControl from './ThemeSortControl.vue'
+import SectorRotationTab from './SectorRotationTab.vue'
 import { useUIStore } from '../../stores/ui'
 import { themeFacade } from '../../services/theme/ThemeFacade'
 import { useThemeRuntimeSnapshot } from '../../composables/useThemeRuntimeSnapshot'
@@ -163,7 +170,7 @@ const selectedSectorName = ref('')
 const error = ref<string | null>(null)
 const loading = ref(false)
 const version = '6.0.0'
-const view = ref<'hot'>('hot')
+const view = ref<'hot' | 'rotation'>('hot')
 const themeRuntime = useThemeRuntimeSnapshot()
 
 // 题材详情弹窗状态
