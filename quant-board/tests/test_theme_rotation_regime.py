@@ -31,6 +31,9 @@ class TestClassifyRegime:
         assert classify_regime(None, 0.9) is None
         assert classify_regime(0.5, None) is None
 
+    def test_custom_thresholds(self):
+        assert classify_regime(0.65, 0.96, rot_hi=0.60, entropy_hi=0.95) == "chaotic"
+
 
 class TestRegimeSequence:
     def test_sequence_and_missing_days(self):
@@ -42,9 +45,22 @@ class TestRegimeSequence:
         seq = regime_sequence(metrics)
         assert seq == {"d1": "chaotic", "d2": None, "d3": "concentrated"}
 
+    def test_empty_sequence(self):
+        assert regime_sequence({}) == {}
+        assert transition_counts({}) == {}
+
 
 class TestTransitionCounts:
     def test_transition_matrix_counts(self):
         seq = {"d1": "chaotic", "d2": "chaotic", "d3": "concentrated", "d4": None, "d5": "concentrated"}
         counts = transition_counts(seq)
         assert counts == {("chaotic", "concentrated"): 1}
+
+    def test_none_day_resets_transition_chain(self):
+        # None 重置 prev：concentrated →(None)→ chaotic 不产生跨缺口转移
+        seq = {"d1": "concentrated", "d2": None, "d3": "chaotic"}
+        assert transition_counts(seq) == {}
+
+    def test_same_state_after_none_not_recounted(self):
+        seq = {"d1": "chaotic", "d2": None, "d3": "chaotic"}
+        assert transition_counts(seq) == {}

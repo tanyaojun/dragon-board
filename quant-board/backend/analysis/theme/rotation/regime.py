@@ -48,7 +48,7 @@ def regime_sequence(
     rot_hi: float = DEFAULT_ROT_HI,
     entropy_hi: float = DEFAULT_ENTROPY_HI,
 ) -> dict[str, str | None]:
-    """逐日三指标 {date: {rot_speed, entropy}} → {date: regime|None}。"""
+    """逐日两指标（rot_speed、entropy）{date: {rot_speed, entropy}} → {date: regime|None}。"""
     return {
         d: classify_regime(m.get("rot_speed"), m.get("entropy"), rot_hi=rot_hi, entropy_hi=entropy_hi)
         for d, m in daily_metrics.items()
@@ -56,7 +56,7 @@ def regime_sequence(
 
 
 def transition_counts(seq: dict[str, str | None]) -> dict[tuple[str, str], int]:
-    """相邻可计算日的态转移计数（None 日断开不计）。键按字典序输出。"""
+    """相邻可计算日的态切换计数（相同态不计；None 日断开不计）。键按字典序输出。返回 tuple 键，不可直接 json 序列化；落 JSON 报告时需转为 'chaotic->concentrated' 形式字符串键（R2 runner 已处理）。"""
     days = sorted(seq)
     counts: dict[tuple[str, str], int] = {}
     prev: str | None = None
