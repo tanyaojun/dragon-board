@@ -650,3 +650,88 @@ def test_theme_sg_variants_not_used_by_baseline_strategy(tmp_path: Path) -> None
     assert tier_by_day["2026-04-01"] == "D_EXIT_RISK"
     assert tier_by_day["2026-04-02"] == "A_MAIN"
     assert tier_by_day["2026-04-03"] == "A_MAIN"
+
+
+def _sg_hybrid_frames() -> list[dict]:
+    return [{
+        "snapshotId": "snap_sg_hybrid_gate", "timestamp": 100,
+        "tradingDate": "2026-09-03", "slotTime": "15:00",
+        "stocks": [{"code": "600001", "name": "样本", "rank": 1, "price": 10.0, "change": 5.0}],
+    }]
+
+
+def _sg_hybrid_exposures() -> list[dict]:
+    return [{
+        "snapshotId": "snap_sg_hybrid_gate", "code": "600001", "themeName": "人工智能",
+        "role": "core", "themeContribution": 10.0, "exposureWeight": 82.0,
+    }]
+
+
+def test_theme_hybrid_mainline_day_gates_non_listed_theme() -> None:
+    """hybrid 主线日非名单题材 → N_NEUTRAL + not_in_engine_mainlines 标记（R3 复审补强：
+    共享夹具单题材在名单内，覆盖不到该分支）；outflow 基线 D_EXIT_RISK 亦被覆盖为
+    N_NEUTRAL（计划原文"不在名单 N_NEUTRAL"语义，档位退出让位于主线日门控）。"""
+    factors = [{
+        "snapshotId": "snap_sg_hybrid_gate", "themeName": "人工智能",
+        "rotationState": "outflow", "crowdingRisk": 30,
+    }]
+    sg_inputs = {
+        "sgFlags": {"人工智能": {"2026-09-03": {"sg1": None, "sg2": True, "sg3": None}}},
+        "mainlineNamesByDay": {"2026-09-03": ["机器人主线"]},
+        "qualityFlags": [],
+    }
+    signals = BacktestService._theme_execution_signals(
+        _sg_hybrid_frames(), factors, _sg_hybrid_exposures(), "theme_state_hybrid", sg_inputs=sg_inputs,
+    )
+    assert signals[0]["candidateTier"] == "N_NEUTRAL"
+    assert "not_in_engine_mainlines" in signals[0]["themeRiskFlags"]
+    assert "engine_mainline_day" in signals[0]["themeReasons"]
+
+
+def test_theme_hybrid_missing_mainlines_takes_sg_arm() -> None:
+    """hybrid mainLines 缺失（None）→ missing_mainlines 标记 + 补涨臂：SG 触发 B_IGNITION
+    （补涨不给 A_MAIN），未触发 N_NEUTRAL（inflow+高暴露的基线 A_MAIN 被覆盖）。"""
+    factors = [{
+        "snapshotId": "snap_sg_hybrid_gate", "themeName": "人工智能",
+        "rotationState": "inflow", "crowdingRisk": 30,
+    }]
+    sg_inputs_hit = {
+        "sgFlags": {"人工智能": {"2026-09-03": {"sg1": None, "sg2": True, "sg3": None}}},
+        "mainlineNamesByDay": {"2026-09-03": None},
+        "qualityFlags": [],
+    }
+    signals_hit = BacktestService._theme_execution_signals(
+        _sg_hybrid_frames(), factors, _sg_hybrid_exposures(), "theme_state_hybrid", sg_inputs=sg_inputs_hit,
+    )
+    assert signals_hit[0]["candidateTier"] == "B_IGNITION"
+    assert "missing_mainlines" in signals_hit[0]["themeRiskFlags"]
+    assert "sg2" in signals_hit[0]["themeReasons"]
+
+    sg_inputs_miss = {
+        "sgFlags": {"人工智能": {"2026-09-03": {"sg1": None, "sg2": False, "sg3": None}}},
+        "mainlineNamesByDay": {"2026-09-03": None},
+        "qualityFlags": [],
+    }
+    signals_miss = BacktestService._theme_execution_signals(
+        _sg_hybrid_frames(), factors, _sg_hybrid_exposures(), "theme_state_hybrid", sg_inputs=sg_inputs_miss,
+    )
+    assert signals_miss[0]["candidateTier"] == "N_NEUTRAL"
+    assert "missing_mainlines" in signals_miss[0]["themeRiskFlags"]
+
+
+def test_theme_chase_crowding_overrides_sg_trigger() -> None:
+    """chase 拥挤优先：crowding≥75 时即使 SG 触发仍保持 C_CROWDED，SG 归因保留可追溯。"""
+    factors = [{
+        "snapshotId": "snap_sg_hybrid_gate", "themeName": "人工智能",
+        "rotationState": "inflow", "crowdingRisk": 80,
+    }]
+    sg_inputs = {
+        "sgFlags": {"人工智能": {"2026-09-03": {"sg1": None, "sg2": True, "sg3": None}}},
+        "mainlineNamesByDay": {},
+        "qualityFlags": [],
+    }
+    signals = BacktestService._theme_execution_signals(
+        _sg_hybrid_frames(), factors, _sg_hybrid_exposures(), "theme_rotation_chase", sg_inputs=sg_inputs,
+    )
+    assert signals[0]["candidateTier"] == "C_CROWDED"
+    assert "sg2" in signals[0]["themeReasons"]
