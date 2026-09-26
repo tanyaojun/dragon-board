@@ -42,6 +42,7 @@ from backend.data.repositories.repository_factory import get_runtime_mongodb_dat
 from backend.operations.diagnose_theme_rotation_r1 import (
     DATASET_ID,
     TOP_N,
+    _sorted_rows,
     load_close_slot_series,
 )
 
@@ -300,9 +301,18 @@ def main() -> int:
             "next_day_excess": next_day_excess(toplists, change_by_day),
         }
 
-    # regime：用 none 配置名单计算滚动两指标；平滑对 regime 的影响留 R3
-    metrics = rolling_daily_metrics(series, toplists_by_cfg["none"])
+    # regime 两轴用 rank 字段 Top10 名单（与 R1 分月锚点同口径：rank 是后端热度排名，
+    # 而 MainlineScore Top3 日间 Jaccard 距离≈0.91 已饱和超 rot_hi，无区分度——R2 核对发现）。
+    # MainlineScore 口径 regime 降为附加诊断输出。
+    rank_top10 = {
+        d: [str(r.get("entityKey")) for r in _sorted_rows(info["rows"])[:TOP_N] if r.get("entityKey") is not None]
+        if info["status"] == "ok"
+        else []
+        for d, info in series["series"].items()
+    }
+    metrics = rolling_daily_metrics(series, rank_top10)
     regime_seq = regime_sequence(metrics)
+    regime_seq_mlscore = regime_sequence(rolling_daily_metrics(series, toplists_by_cfg["none"]))
     regime_days: dict[str, int] = {}
     for v in regime_seq.values():
         if v is not None:
@@ -325,6 +335,10 @@ def main() -> int:
         "stability_vs_excess": stability,
         "regime_sequence": regime_seq,
         "regime_days_default": regime_days,
+        "regime_days_mainscore_diag": {
+            k: sum(1 for v in regime_seq_mlscore.values() if v == k)
+            for k in ("chaotic", "concentrated", "rotating")
+        },
         "regime_transitions_default": transitions_to_json(regime_seq),
         "threshold_sensitivity": threshold_sensitivity,
         "market_phase_alignment": market_phase_alignment(repo, args.start, args.end, regime_seq),
