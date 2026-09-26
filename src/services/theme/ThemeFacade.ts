@@ -502,3 +502,68 @@ export const themeFacade = {
   toStockTheme,
   runtimeStore: themeRuntimeStore,
 }
+
+export interface ThemeRotationThemeRef {
+  themeId: string
+  themeName: string
+}
+
+export interface ThemeRotationStatusRow {
+  entityKey: string
+  entityName: string
+  rank: number | null
+  rankChange: number | null
+  rotationState: string | null
+  rotationScore: number | null
+  factorBreakdown: {
+    strength: number | null
+    flow: number | null
+    breadth: number | null
+    crowding: number | null
+    lifecycle: number | null
+  } | null
+  flowTrend: number | null
+  heatTrend: number | null
+  breadthTrend: number | null
+  crowdingTrend: number | null
+  qualityFlags: string[]
+}
+
+export interface ThemeRotationSummary {
+  frame: {
+    tradingDate: string
+    slotTime: string
+    snapshotId: string
+    timestamp: number
+    rotationSummary: {
+      marketPhase: string | null
+      rotationSpeed: number | null
+      mainlineConcentration: number | null
+      maxBoardHeight: number | null
+      mainLines: ThemeRotationThemeRef[]
+      inflowThemes: ThemeRotationThemeRef[]
+      outflowThemes: ThemeRotationThemeRef[]
+    } | null
+  }
+  statuses: ThemeRotationStatusRow[]
+}
+
+/**
+ * 拉取题材轮动状态（/api/theme-rotation/summary，Redis 缓存）。
+ * 404（窗口内无含 rotationSummary 的帧）与网络失败统一返回 null，
+ * 由调用方呈现"暂无轮动数据"+重试（fail-visible，不以空对象伪装）。
+ */
+export async function getRotationSummary(params: {
+  snapshotType: string
+  datasetId?: string
+}): Promise<ThemeRotationSummary | null> {
+  try {
+    const query = new URLSearchParams({
+      dataset_id: params.datasetId || 'dragonboard_live',
+      snapshot_type: params.snapshotType,
+    })
+    return await apiService.get<ThemeRotationSummary>(`/api/theme-rotation/summary?${query.toString()}`)
+  } catch {
+    return null
+  }
+}
