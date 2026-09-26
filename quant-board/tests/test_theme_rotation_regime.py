@@ -1,8 +1,10 @@
-"""rotation_regime 三态划分已知答案校验（Phase R2，设计文档 §5.3）。"""
+"""rotation_regime 已知答案校验（Phase R2 三态 + Phase R3 引擎权威口径重构，设计文档 §5.3）。"""
 
 from backend.analysis.theme.rotation.regime import (
     classify_regime,
     regime_sequence,
+    rotation_state_context,
+    top1_streaks,
     transition_counts,
 )
 
@@ -64,3 +66,70 @@ class TestTransitionCounts:
     def test_same_state_after_none_not_recounted(self):
         seq = {"d1": "chaotic", "d2": None, "d3": "chaotic"}
         assert transition_counts(seq) == {}
+
+
+class TestTop1Streaks:
+    def test_same_theme_accrues(self):
+        seq = {"d1": "AI", "d2": "AI", "d3": "AI"}
+        assert top1_streaks(seq) == {"d1": 1, "d2": 2, "d3": 3}
+
+    def test_switch_resets_to_one(self):
+        seq = {"d1": "AI", "d2": "AI", "d3": "机器人"}
+        assert top1_streaks(seq) == {"d1": 1, "d2": 2, "d3": 1}
+
+    def test_none_day_breaks_segment(self):
+        # None 日计数中断且如实输出 None；下一个已知日从 1 重算（不接断前段）
+        seq = {"d1": "AI", "d2": "AI", "d3": None, "d4": "AI"}
+        assert top1_streaks(seq) == {"d1": 1, "d2": 2, "d3": None, "d4": 1}
+
+    def test_dates_sorted_not_insertion_order(self):
+        # 键序无关：按日期字典序累计，乱序插入结果一致
+        seq = {"d3": "AI", "d1": "AI", "d2": "AI"}
+        assert top1_streaks(seq) == {"d1": 1, "d2": 2, "d3": 3}
+
+    def test_empty_and_all_none(self):
+        assert top1_streaks({}) == {}
+        assert top1_streaks({"d1": None, "d2": None}) == {"d1": None, "d2": None}
+
+
+class TestRotationStateContext:
+    def test_full_inputs_no_flags(self):
+        ctx = rotation_state_context("mainline", "cooling", 4)
+        assert ctx == {
+            "rotationState": "mainline",
+            "marketPhase": "cooling",
+            "top1Streak": 4,
+            "headStable": True,
+            "qualityFlags": [],
+        }
+
+    def test_head_stable_boundary_inclusive(self):
+        assert rotation_state_context("inflow", "chaos", 3)["headStable"] is True
+        assert rotation_state_context("inflow", "chaos", 2)["headStable"] is False
+
+    def test_missing_top1_streak_keeps_state_but_flags(self):
+        ctx = rotation_state_context("neutral", "rising", None)
+        assert ctx["rotationState"] == "neutral"
+        assert ctx["headStable"] is None
+        assert ctx["qualityFlags"] == ["missing_top1_streak"]
+
+    def test_missing_state_and_phase_flagged_not_fabricated(self):
+        ctx = rotation_state_context(None, None, None)
+        assert ctx["rotationState"] is None
+        assert ctx["marketPhase"] is None
+        assert sorted(ctx["qualityFlags"]) == ["missing_market_phase", "missing_rotation_state", "missing_top1_streak"]
+
+    def test_empty_string_treated_as_missing(self):
+        ctx = rotation_state_context("", "cooling", 1)
+        assert ctx["rotationState"] is None
+        assert ctx["qualityFlags"] == ["missing_rotation_state"]
+
+    def test_custom_min_days(self):
+        assert rotation_state_context("inflow", "cooling", 2, head_stable_min_days=2)["headStable"] is True
+        assert rotation_state_context("inflow", "cooling", 1, head_stable_min_days=2)["headStable"] is False
+
+    def test_invalid_min_days_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            rotation_state_context("inflow", "cooling", 2, head_stable_min_days=0)
