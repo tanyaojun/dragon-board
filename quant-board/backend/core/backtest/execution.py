@@ -726,8 +726,9 @@ class TradeSimulator:
                 continue
             # theme_rotation：题材引擎独立信号（rotationState=mainline/inflow 题材资金流入），
             # 与 RankTrend 生命周期分层的 A_MAIN 不同源，不随 A_MAIN 降级（阶段6 业务口径）；
-            # 保留题材 A_MAIN/B_IGNITION 入场。
-            if strategy_key == "theme_rotation":
+            # 保留题材 A_MAIN/B_IGNITION 入场。R3 变体（chase/hybrid）共用同一进场规则——
+            # 变体差异全部在候选池构造层（_theme_execution_signals 的 SG 驱动 tier）。
+            if strategy_key in {"theme_rotation", "theme_rotation_chase", "theme_state_hybrid"}:
                 if signal["candidateTier"] in {"A_MAIN", "B_IGNITION"} and signal["regime"] != "weak":
                     result.append(signal)
                 continue

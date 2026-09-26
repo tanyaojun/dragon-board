@@ -6,6 +6,12 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.theme.heat_level import resolve_heat_level
+from backend.analysis.theme.rotation.signals import (
+    rrg_quadrants,
+    sg1_rrg_migration_flags,
+    sg2_rotation_switch_flags,
+    sg3_inflow_turn_positive_flags,
+)
 from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
     BacktestEngine,
@@ -243,6 +249,35 @@ def _persisted_heat_level(factor: object) -> float:
     if not isinstance(factor, dict):
         return 0.0
     return resolve_heat_level(factor) or 0.0
+
+
+# Phase R3 SG 变体（设计文档 §5.4/§6.1）：仅这两个策略触发 SG 预计算，既有策略零开销。
+THEME_SG_STRATEGIES = frozenset({"theme_rotation_chase", "theme_state_hybrid"})
+
+_THEME_SG_SOURCES = ("sg1", "sg2", "sg3")
+
+
+def _theme_sg_hit(sg_inputs: dict[str, Any] | None, theme_name: str, trading_date: str) -> tuple[bool, list[str]]:
+    """查 (theme, date) 的 SG 触发与来源（仅 True 计触发；False/None 均不触发）。"""
+    if not sg_inputs:
+        return False, []
+    per_day = (sg_inputs.get("sgFlags") or {}).get(theme_name) or {}
+    entry = per_day.get(trading_date) or {}
+    sources = [name for name in _THEME_SG_SOURCES if entry.get(name) is True]
+    return bool(sources), sources
+
+
+def _close_slot_rows_by_day(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """daily 题材行按日取收盘槽横截面（15:30 优先 / 15:00 回退，R1 锚点口径）。"""
+    by_day_slot: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in rows:
+        by_day_slot.setdefault(str(row.get("tradingDate")), {}).setdefault(str(row.get("slotTime")), []).append(row)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for d, slots in by_day_slot.items():
+        picked = next((slots[s] for s in ("15:30", "15:00") if s in slots), None)
+        if picked:
+            out[d] = picked
+    return out
 
 
 class BacktestService:
@@ -741,7 +776,8 @@ class BacktestService:
         factors = theme_result.get("factors", [])
         signals = theme_result.get("signals", [])
         exposures = theme_result.get("exposures", [])
-        execution_signals = self._theme_execution_signals(frames, factors, exposures, strategy_name)
+        sg_inputs = self._theme_sg_inputs(dataset_id, frames) if strategy_name in THEME_SG_STRATEGIES else None
+        execution_signals = self._theme_execution_signals(frames, factors, exposures, strategy_name, sg_inputs=sg_inputs)
         trade_config = self._theme_trade_config(payload, strategy_name)
         trade_simulation = (
             TradeSimulator().run(frames, execution_signals, trade_config)
@@ -1239,12 +1275,115 @@ class BacktestService:
         config["entryStrategy"] = strategy_name
         return config
 
+    def _theme_sg_inputs(self, dataset_id: str, frames: list[dict[str, Any]]) -> dict[str, Any]:
+        """SG 变体输入预计算（Phase R3，fail-visible：缺失打标，不伪造触发）。
+
+        - SG2 序列：frames 中每日 15:00 帧的题材 rotationState（缺失日补 None）；
+        - mainLines /（诊断用）按 15:00 帧 rotationSummary 提取；None=缺失、[]=引擎判定无主线；
+        - SG1/SG3：daily 收盘横截面（snapshot_type="daily" 硬过滤，R1 锚点口径）的
+          change / mainNetInflow 日序列；SG1 要求窗口内题材与基准序列完整，否则整段
+          None 打 sg1_insufficient 标记（不压缩缺失日）。
+        返回 {sgFlags: {theme: {date: {sg1,sg2,sg3}}}, mainlineNamesByDay: {date: list|None},
+        qualityFlags: [str]}。
+        """
+        days = sorted({str(f.get("tradingDate")) for f in frames if f.get("tradingDate")})
+        quality_flags: list[str] = []
+        if not days:
+            return {"sgFlags": {}, "mainlineNamesByDay": {}, "qualityFlags": ["no_trading_days"]}
+
+        rotation_by_theme: dict[str, dict[str, str | None]] = {}
+        mainlines_by_day: dict[str, list[str] | None] = {}
+        day_has_15h: set[str] = set()
+        for frame in frames:
+            if str(frame.get("slotTime")) != "15:00":
+                continue
+            d = str(frame.get("tradingDate") or "")
+            day_has_15h.add(d)
+            for row in frame.get("entities") or frame.get("hotThemes") or []:
+                if not isinstance(row, dict):
+                    continue
+                # 只排除 H4 派生主线行；真实数据为 hot_theme、测试夹具落库为 sector，
+                # 白名单会在任一环境漏收（2026-09-26 调试实证）。
+                if str(row.get("entityType") or "") == "rotation_main_line":
+                    continue
+                name = str(row.get("entityName") or "")
+                if name:
+                    rotation_by_theme.setdefault(name, {})[d] = str(row.get("rotationState") or "") or None
+            rs = frame.get("rotationSummary") or {}
+            ml = rs.get("mainLines")
+            mainlines_by_day[d] = (
+                [str(m.get("themeName")) for m in ml if isinstance(m, dict) and m.get("themeName")]
+                if isinstance(ml, list)
+                else None
+            )
+        for d in days:
+            if d not in day_has_15h:
+                quality_flags.append(f"missing_15h_frame:{d}")
+                mainlines_by_day.setdefault(d, None)
+        for seq in rotation_by_theme.values():
+            for d in days:
+                seq.setdefault(d, None)
+
+        changes_by_theme: dict[str, dict[str, float | None]] = {}
+        inflow_by_theme: dict[str, dict[str, float | None]] = {}
+        res = self.repo.list_snapshot_sector_rows(
+            dataset_id,
+            start_date=days[0],
+            end_date=days[-1],
+            snapshot_type="daily",
+            entity_type="hot_theme",
+            sort="asc",
+        )
+        for d, rows in _close_slot_rows_by_day(res.get("rows") or []).items():
+            for row in rows:
+                name = str(row.get("entityName") or "")
+                if not name:
+                    continue
+                chg, inflow = row.get("change"), row.get("mainNetInflow")
+                changes_by_theme.setdefault(name, {})[d] = float(chg) if isinstance(chg, (int, float)) else None
+                inflow_by_theme.setdefault(name, {})[d] = float(inflow) if isinstance(inflow, (int, float)) else None
+
+        benchmark_changes: dict[str, float | None] = {}
+        for d in days:
+            vals = [seq[d] for seq in changes_by_theme.values() if seq.get(d) is not None]
+            benchmark_changes[d] = sum(vals) / len(vals) if vals else None
+
+        sg_flags: dict[str, dict[str, dict[str, bool | None]]] = {}
+        sg1_insufficient = 0
+        all_themes = sorted(set(rotation_by_theme) | set(changes_by_theme) | set(inflow_by_theme))
+        for name in all_themes:
+            entry = sg_flags.setdefault(name, {})
+            chg_seq = changes_by_theme.get(name) or {}
+            sg1_complete = (
+                len(days) >= 2
+                and all(chg_seq.get(d) is not None and benchmark_changes[d] is not None for d in days)
+            )
+            if sg1_complete:
+                quadrants = rrg_quadrants([chg_seq[d] for d in days], [benchmark_changes[d] for d in days])
+                sg1_flags = sg1_rrg_migration_flags(dict(zip(days, quadrants)))
+            else:
+                sg1_flags = {d: None for d in days}
+                sg1_insufficient += 1
+            sg2_flags = sg2_rotation_switch_flags({d: (rotation_by_theme.get(name) or {}).get(d) for d in days})
+            inflow_seq = inflow_by_theme.get(name) or {}
+            sg3_flags = sg3_inflow_turn_positive_flags({d: inflow_seq.get(d) for d in days}, positive_min_days=1)
+            for d in days:
+                entry[d] = {"sg1": sg1_flags.get(d), "sg2": sg2_flags.get(d), "sg3": sg3_flags.get(d)}
+        if sg1_insufficient:
+            quality_flags.append(f"sg1_insufficient_count:{sg1_insufficient}")
+        return {
+            "sgFlags": sg_flags,
+            "mainlineNamesByDay": mainlines_by_day,
+            "qualityFlags": quality_flags,
+        }
+
     @staticmethod
     def _theme_execution_signals(
         frames: list[dict[str, Any]],
         factors: list[dict[str, Any]],
         exposures: list[dict[str, Any]],
         strategy_name: str,
+        sg_inputs: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         factor_by_snapshot_theme = {
             (str(factor.get("snapshotId") or ""), str(factor.get("themeName") or "")): factor
@@ -1258,6 +1397,7 @@ class BacktestService:
         output: list[dict[str, Any]] = []
         for frame in frames:
             snapshot_id = str(frame.get("snapshotId") or "")
+            trading_date = str(frame.get("tradingDate") or "")
             for stock in frame.get("stocks") or frame.get("rows") or frame.get("hotlist") or []:
                 if not isinstance(stock, dict):
                     continue
@@ -1312,6 +1452,27 @@ class BacktestService:
                         tier = "N_NEUTRAL"
                         theme_risk_flags.append("theme_noise_or_weak_confluence")
                         theme_reasons.append("hotlist_filtered")
+                elif strategy_name == "theme_rotation_chase" and sg_inputs is not None:
+                    # R3 变体：SG 驱动补涨——退出/拥挤优先保持，触发给 B_IGNITION（不给 A_MAIN）
+                    sg_hit, sg_sources = _theme_sg_hit(sg_inputs, theme_name, trading_date)
+                    if tier not in {"C_CROWDED", "D_EXIT_RISK"}:
+                        tier = "B_IGNITION" if sg_hit else "N_NEUTRAL"
+                    theme_reasons.extend(sg_sources)
+                elif strategy_name == "theme_state_hybrid" and sg_inputs is not None:
+                    # R3 变体：引擎 mainLines 非空日走主线确认规则（保留初判），空/缺失日走 SG 补涨
+                    sg_hit, sg_sources = _theme_sg_hit(sg_inputs, theme_name, trading_date)
+                    mainlines = (sg_inputs.get("mainlineNamesByDay") or {}).get(trading_date)
+                    if isinstance(mainlines, list) and mainlines:
+                        if theme_name not in mainlines and tier != "C_CROWDED":
+                            tier = "N_NEUTRAL"
+                            theme_risk_flags.append("not_in_engine_mainlines")
+                        theme_reasons.append("engine_mainline_day")
+                    else:
+                        if mainlines is None:
+                            theme_risk_flags.append("missing_mainlines")
+                        if tier not in {"C_CROWDED", "D_EXIT_RISK"}:
+                            tier = "B_IGNITION" if sg_hit else "N_NEUTRAL"
+                        theme_reasons.extend(sg_sources)
                 else:
                     theme_reasons.append("theme_rotation")
                 output.append({

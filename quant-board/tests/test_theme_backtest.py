@@ -16,7 +16,12 @@ from backend.core.backtest import DEFAULT_TRADE_CONFIG
 from backend.main import app
 from backend.services import BacktestService
 
-from tests.fixtures.helpers import add_theme_follower_to_bundle, make_bundle, make_theme_trade_bundle
+from tests.fixtures.helpers import (
+    add_theme_follower_to_bundle,
+    make_bundle,
+    make_theme_sg_bundle,
+    make_theme_trade_bundle,
+)
 
 
 def test_theme_trade_config_uses_v5_lifecycle_fusion_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -555,3 +560,93 @@ def test_execution_signal_theme_heat_relative_caliber() -> None:
         frames, factors_missing, exposures, "theme_rotation",
     )
     assert signals_missing[0]["themeHeat"] == 0.0
+
+
+def test_theme_rotation_chase_uses_sg_flags(tmp_path: Path) -> None:
+    """chase 变体：SG2 触发日给 B_IGNITION（补涨语义不给 A_MAIN），未触发日 N_NEUTRAL，outflow 保持 D_EXIT_RISK。"""
+    client = TestClient(app)
+    bundle = make_theme_sg_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-sg-chase", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "theme_rotation_chase", "randomSeed": 20260430},
+    )
+    assert response.status_code == 200, response.text
+    signals = response.json()["result"]["executionSignals"]
+    tier_by_day = {}
+    reasons_by_day = {}
+    for s in signals:
+        if s["slotTime"] == "15:00":
+            tier_by_day[s["tradingDate"]] = s["candidateTier"]
+            reasons_by_day[s["tradingDate"]] = s["themeReasons"]
+    # d1 outflow：保持 D_EXIT_RISK（退出预警优先于 SG）
+    assert tier_by_day["2026-04-01"] == "D_EXIT_RISK"
+    # d2 inflow 且 SG2（outflow→inflow）触发：B_IGNITION + sg2 归因
+    assert tier_by_day["2026-04-02"] == "B_IGNITION"
+    assert "sg2" in reasons_by_day["2026-04-02"]
+    # d3 inflow 但 SG 未触发（rotationState 无新切换，daily 缺数据 SG1/SG3 不可判）：N_NEUTRAL
+    assert tier_by_day["2026-04-03"] == "N_NEUTRAL"
+
+
+def test_theme_state_hybrid_gates_by_engine_mainlines(tmp_path: Path) -> None:
+    """hybrid 变体：引擎 mainLines 非空日走主线确认规则，空/缺失日走 SG 驱动补涨并打标。"""
+    client = TestClient(app)
+    bundle = make_theme_sg_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-sg-hybrid", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "theme_state_hybrid", "randomSeed": 20260430},
+    )
+    assert response.status_code == 200, response.text
+    signals = response.json()["result"]["executionSignals"]
+    by_day = {}
+    for s in signals:
+        if s["slotTime"] == "15:00":
+            by_day[s["tradingDate"]] = s
+    # d1 mainLines=[]（引擎判定无主线）→ 补涨臂；SG 未触发；rotationState=outflow
+    # 退出预警优先于补涨（与 chase 同规则）→ D_EXIT_RISK
+    assert by_day["2026-04-01"]["candidateTier"] == "D_EXIT_RISK"
+    assert "missing_mainlines" not in by_day["2026-04-01"]["themeRiskFlags"]
+    # d2 mainLines 键缺失 → 补涨臂；SG2 触发 → B_IGNITION。
+    # （missing_mainlines 标记仅在 Mongo 生产链路可打出：SQLite H4 会给缺键帧兜底
+    # 塞 mainLines=[]，两环境对"缺失"的呈现不同，语义结果一致——都走补涨臂。）
+    assert by_day["2026-04-02"]["candidateTier"] == "B_IGNITION"
+    assert "engine_mainline_day" not in by_day["2026-04-02"]["themeReasons"]
+    # d3 引擎主线日且题材在名单 → 主线确认规则（inflow+exposure 88 → A_MAIN）
+    assert by_day["2026-04-03"]["candidateTier"] == "A_MAIN"
+    assert "engine_mainline_day" in by_day["2026-04-03"]["themeReasons"]
+
+
+def test_theme_sg_variants_not_used_by_baseline_strategy(tmp_path: Path) -> None:
+    """回归保护：theme_rotation 基线在 SG 接线后行为不变（同夹具下 d2/d3 仍 A_MAIN）。"""
+    client = TestClient(app)
+    bundle = make_theme_sg_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-sg-baseline", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={"datasetId": dataset["id"], "snapshotType": "half_hour", "strategyName": "theme_rotation", "randomSeed": 20260430},
+    )
+    assert response.status_code == 200, response.text
+    signals = response.json()["result"]["executionSignals"]
+    tier_by_day = {s["tradingDate"]: s["candidateTier"] for s in signals if s["slotTime"] == "15:00"}
+    assert tier_by_day["2026-04-01"] == "D_EXIT_RISK"
+    assert tier_by_day["2026-04-02"] == "A_MAIN"
+    assert tier_by_day["2026-04-03"] == "A_MAIN"

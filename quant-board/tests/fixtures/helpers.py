@@ -204,6 +204,91 @@ def add_theme_follower_to_bundle(bundle: Path) -> None:
     bundle.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
+def make_theme_sg_bundle(path: Path) -> Path:
+    """SG 变体合同测试夹具（Phase R3）：3 交易日 × 2 槽（10:30/15:00）。
+
+    题材"机器人" rotationState 序列（15:00 槽）：d1=outflow → d2=inflow（SG2 触发）
+    → d3=inflow；mainLines：d1=[]（引擎判定无主线）、d2 键缺失（缺失打标）、
+    d3=[机器人]（引擎主线日）。
+    """
+    rotation_states = {"2026-04-01": "outflow", "2026-04-02": "inflow", "2026-04-03": "inflow"}
+    main_lines = {
+        "2026-04-01": [],
+        # entityName 与 themeName 同值：SQLite H4 会把 mainLines 派生为 rotation_main_line
+        # 行（视图 themeName=entityName），缺 entityName 会退化为 rotation_main_line_0
+        "2026-04-03": [{"themeId": "robot", "themeName": "机器人", "entityName": "机器人", "rotationScore": 60, "rotationState": "mainline", "rankChange": 0}],
+    }
+    records = []
+    index = 0
+    for date in ("2026-04-01", "2026-04-02", "2026-04-03"):
+        for slot in ("10:30", "15:00"):
+            snapshot_id = f"half_hour:{date}:sg:{index:02d}"
+            sectors = [
+                {
+                    "name": "机器人",
+                    "entityName": "机器人",
+                    "entityKey": "robot",
+                    "rank": 1,
+                    "heatScore": 86,
+                    "momentumScore": 82,
+                    "breadthScore": 68,
+                    "fundScore": 70,
+                    "leadershipScore": 85,
+                    "correlationScore": 65,
+                    "crowdingRisk": 35,
+                    "persistenceScore": 72,
+                    "rotationState": rotation_states[date],
+                }
+            ]
+            hotlist = [
+                {
+                    "code": "600001",
+                    "name": "题材龙头",
+                    "rank": 1,
+                    "price": 10 + index * 0.5,
+                    "lastTradePrice": 10 + index * 0.5,
+                    "change": 1.2,
+                    "volume": 10000000,
+                    "turnover": 100000000,
+                    "volumeRatio": 2.2,
+                    "zlje": 3000000,
+                    "zljzb": 6,
+                    "mainTheme": "机器人",
+                    "themeRole": "leader",
+                    "themeContribution": 20,
+                    "themeExposureWeight": 88,
+                }
+            ]
+            payload = {
+                "type": "half_hour",
+                "tradingDate": date,
+                "slotTime": slot,
+                "timestamp": 1775000000000 + index * 1800000,
+                "hotlist": hotlist,
+                "sectors": sectors,
+            }
+            if slot == "15:00":
+                rotation_summary: dict[str, object] = {"marketPhase": "chaos"}
+                if date in main_lines:
+                    rotation_summary["mainLines"] = main_lines[date]
+                payload["rotationSummary"] = rotation_summary
+            records.append(
+                {
+                    "id": snapshot_id,
+                    "type": "half_hour",
+                    "tradingDate": date,
+                    "slotTime": slot,
+                    "timestamp": 1775000000000 + index * 1800000,
+                    "captureMode": "real_time",
+                    "payload": payload,
+                }
+            )
+            index += 1
+    bundle = path / "theme_sg_bundle.json"
+    bundle.write_text(json.dumps({"records": records}, ensure_ascii=False), encoding="utf-8")
+    return bundle
+
+
 class MemoryBackup:
     last_error = None
 
