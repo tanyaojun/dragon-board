@@ -46,13 +46,12 @@ describe('SectorRotationTab', () => {
     expect(tab).toContain('state-unknown')
   })
 
-  it('embeds the rotation tree list and detail flyout (second-round spec)', () => {
+  it('embeds the two-pane rotation tree list (second-round spec: directory left, detail right)', () => {
     expect(tab).toContain('SectorRotationTree')
     expect(tab).toContain(':statuses="filteredStatuses"')
-    expect(tab).toContain('@select="openRotationDetail"')
-    expect(tab).toContain('<SectorRotation')
-    expect(tab).toContain('openRotationDetail')
-    expect(tab).toContain('closeRotationDetail')
+    // 2026-09-27 二轮修正：明细弹出面板删除，轮动字段并入 SectorDetail 概览
+    expect(tab).not.toContain('<SectorRotation ')
+    expect(tab).not.toContain('openRotationDetail')
   })
 
   it('is wired as a rotation tab inside SectorPanel', () => {

@@ -57,3 +57,9 @@
 - **`SectorRotation.vue`（新建）**：题材轮动明细弹出面板——Teleport + usePanel 弹出范式（参照 `SectorDetail.vue`）：←返回头部 + info-card（名称/状态/数据时点）+ metrics-grid（轮动分/排名/净流入趋势）+ 四维因子卡（强度/资金/广度/拥挤，进度条）+ 质量标记；数据直接取自 statuses 行（零额外 API）。
 - **交互链**：轮动状态页签 = 摘要区 + 状态筛选 chips（上移为树形/表格共用）+ SectorRotationTree（主列表）+ 展开状态表（保留折叠）；点击树形卡片 → SectorRotation 弹出面板（triggerRect 定位），←返回关闭。
 - 数据时点/筛选状态由 SectorRotationTab 统一持有，两个视图共用。
+
+## 三轮修正（2026-09-27 用户验收反馈：二轮两个新组件被判定多余）
+
+1. **删除 `SectorRotation.vue`**（及其测试）：轮动明细字段（轮动状态/轮动分/热度排名/净流入趋势/四维因子/质量标记）**合并进 `SectorDetail.vue` 概览**——stats-grid 后新增"🔄 轮动状态"区（复用 stat-card 样式），数据由 SectorDetail 自行调 `getRotationSummary({snapshotType:'half_hour'})` 按题材名匹配 statuses 行；匹配不到 → "该题材不在轮动快照中"如实显示；轮动取数独立 try 不影响题材主体数据。
+2. **`SectorRotationTree.vue` 重写为「左目录右列表」两栏**（同 SectorStocksTree 布局）：左栏 280px 题材卡片目录（名称/#rank/状态徽章/轮动分/资金流，内部选中态），右栏选中题材的轮动明细字段表（13 行：状态/轮动分/排名/排名变化/四维/三趋势/质量标记）；选中行在筛选后不可见时自动回落首行。
+3. 教训沉淀：新增组件前先对照用户指认的参照组件做 playwright 实际操作，确认交互形态（左右分栏 vs 弹出面板）再动手，避免按字面造出冗余组件。

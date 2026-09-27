@@ -176,6 +176,58 @@
               </div>
             </div>
 
+            <!-- 轮动状态（引擎 half_hour 15:00 快照，按题材名匹配；字段合并自轮动快照） -->
+            <div class="rotation-section" v-if="rotationLoaded && rotationRow">
+              <div class="section-header">
+                <span class="section-title">🔄 轮动状态</span>
+                <span class="section-count">{{ rotationDataTime }}</span>
+              </div>
+              <div class="rotation-metrics">
+                <div class="stat-card">
+                  <span class="state-badge" :class="rotationStateTone">{{ rotationStateLabel }}</span>
+                  <span class="stat-label">轮动状态</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value">{{ rotationRow.rotationScore ?? '—' }}</span>
+                  <span class="stat-label">轮动分</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value">{{ rotationRow.rank ?? '—' }}</span>
+                  <span class="stat-label">热度排名</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value" :class="rotationFlowClass">{{ formatRotationFlow(rotationRow.flowTrend) }}</span>
+                  <span class="stat-label">净流入趋势</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value">{{ rotationRow.factorBreakdown?.strength ?? '—' }}</span>
+                  <span class="stat-label">强度</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value">{{ rotationRow.factorBreakdown?.flow ?? '—' }}</span>
+                  <span class="stat-label">资金</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value">{{ rotationRow.factorBreakdown?.breadth ?? '—' }}</span>
+                  <span class="stat-label">广度</span>
+                </div>
+                <div class="stat-card">
+                  <span class="stat-value">{{ rotationRow.factorBreakdown?.crowding ?? '—' }}</span>
+                  <span class="stat-label">拥挤</span>
+                </div>
+              </div>
+              <div class="info-row" v-if="rotationRow.qualityFlags?.length">
+                <span class="info-label">质量标记</span>
+                <span class="info-value flags">{{ rotationRow.qualityFlags.join(', ') }}</span>
+              </div>
+            </div>
+            <div class="rotation-section" v-else-if="rotationLoaded && !rotationRow">
+              <div class="section-header">
+                <span class="section-title">🔄 轮动状态</span>
+              </div>
+              <div class="rotation-missing">该题材不在轮动快照中</div>
+            </div>
+
             <!-- 龙头股 -->
             <div class="leaders-section" v-if="themeLeaders.length">
               <div class="section-header">
@@ -466,6 +518,11 @@ import * as echarts from 'echarts'
 import { nextTick } from 'vue'
 import { sectorAnalyzer } from '../../services/sectorAnalyzer'
 import { themeFacade } from '../../services/theme/ThemeFacade'
+import { getRotationSummary, type ThemeRotationStatusRow } from '../../services/theme/ThemeFacade'
+import {
+  rotationStateLabel as rotationStateLabelText,
+  ROTATION_STATE_META,
+} from '../../services/theme/rotationDisplay'
 import { deriveThemeHeatBand, deriveThemeHeatLevel, deriveThemeHeatMeta } from '../../services/theme/stockThemeMeta'
 import type { ThemeHeatStock } from '../../services/theme/types'
 import type { ThemeStockWithLimitUp } from '../../services/theme/stockLimitUpRows'
@@ -516,6 +573,8 @@ const loadData = async () => {
 
   loading.value = true
   error.value = null
+  rotationRow.value = null
+  rotationLoaded.value = false
 
   try {
     const summary = themeFacade.getThemeSummaries(Number.MAX_SAFE_INTEGER)
@@ -524,6 +583,16 @@ const loadData = async () => {
       // 打开面板走 30 秒 LRU 缓存（themeHeatStocksCache），避免每次打开都强制后端查 MongoDB 重算；
       // 手动刷新按钮（refresh）才 force 绕过缓存
       themeStockRows.value = await sectorAnalyzer.loadSectorStocks(summary.id, summary.name)
+    }
+
+    // 轮动状态（独立 try：轮动取数失败不影响题材主体数据展示，降级为"不在快照中"）
+    try {
+      const rotation = await getRotationSummary({ snapshotType: 'half_hour' })
+      rotationRow.value = rotation?.statuses.find((row) => row.entityName === props.sectorName) ?? null
+      rotationDataTime.value = rotation ? `${rotation.frame.tradingDate} ${rotation.frame.slotTime}` : ''
+      rotationLoaded.value = true
+    } catch {
+      rotationLoaded.value = false
     }
 
     // 验证数据是否存在
@@ -540,6 +609,11 @@ const loadData = async () => {
 
 // enrichStocksWithLimitUp 输出：ThemeHeatStock + 涨停池字段 + leaderRank（龙一/龙二编位）
 const themeStockRows = ref<Array<ThemeStockWithLimitUp<ThemeHeatStock>>>([])
+
+// 轮动状态行（/api/theme-rotation/summary，按题材名匹配；无匹配=该题材不在快照中，如实显示）
+const rotationRow = ref<ThemeRotationStatusRow | null>(null)
+const rotationDataTime = ref('')
+const rotationLoaded = ref(false)
 
 const blockCode = computed(() => {
   if (!themeRuntime.value.factors.length) return null
@@ -592,6 +666,26 @@ const themeStocks = computed(() => {
 })
 
 const hasThemeData = computed(() => blockData.value !== null || themeStocks.value.length > 0)
+
+// 轮动状态展示（概览合并字段，来自 /api/theme-rotation/summary 按题材名匹配的行）
+const rotationStateLabel = computed(() =>
+  rotationRow.value ? rotationStateLabelText(rotationRow.value.rotationState) : '—',
+)
+const rotationStateTone = computed(() => {
+  const state = rotationRow.value?.rotationState
+  return (state && ROTATION_STATE_META[state]?.tone) || 'state-unknown'
+})
+const rotationFlowClass = computed(() => ({
+  'rotation-flow-up': (rotationRow.value?.flowTrend ?? 0) > 0,
+  'rotation-flow-down': (rotationRow.value?.flowTrend ?? 0) < 0,
+}))
+
+function formatRotationFlow(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  const text = abs >= 1e8 ? `${(abs / 1e8).toFixed(1)}亿` : abs >= 1e4 ? `${(abs / 1e4).toFixed(0)}万` : String(abs)
+  return (value > 0 ? '+' : value < 0 ? '-' : '') + text
+}
 
 // 统计指标
 // 涨停判定统一走 StockUtils 分板块阈值（主板10%/创业科创20%/北交所30%，主板ST 5%）
@@ -2427,5 +2521,43 @@ td.outflow {
 td:empty::before {
   content: '-';
   color: var(--text-secondary);
+}
+
+/* 轮动状态区（概览合并字段） */
+.rotation-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.rotation-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.rotation-metrics .stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.state-badge {
+  padding: 1px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-size: 11px;
+}
+.state-mainline { color: #f5c15b; border-color: #f5c15b; }
+.state-inflow { color: #f55b5b; border-color: rgba(245, 91, 91, 0.5); }
+.state-emerging { color: #5bd4f5; border-color: #5bd4f5; }
+.state-neutral { color: var(--text-secondary); }
+.state-outflow { color: #4caf7d; border-color: rgba(76, 175, 125, 0.5); }
+.state-cooling { color: #5ba3f5; border-color: rgba(91, 163, 245, 0.5); }
+.state-unknown { color: var(--text-secondary); }
+.rotation-flow-up { color: #f55b5b; }
+.rotation-flow-down { color: #4caf7d; }
+.info-value.flags { color: #f5c15b; }
+.rotation-missing {
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 </style>
