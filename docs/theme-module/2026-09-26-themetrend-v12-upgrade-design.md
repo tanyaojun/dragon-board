@@ -1,7 +1,7 @@
 # ThemeTrend v12.5 升级设计（方向性方案）
 
 - 日期：2026-09-26
-- 状态：设计已确认；Phase 0 spike / 双轨 R1-R3b + Phase 1-3 全部完成（§6.0/§10）；Phase 4 接线层完成（2026-09-27：theme_daily_factors 落库 + 门控机制默认关，见 §10 与 `plans/task_plan_phase4.md`）；终判跑批待 10 月批次合流
+- 状态：设计已确认；Phase 0 spike / 双轨 R1-R3b + Phase 1-3 全部完成（§6.0/§10）；2026-09-27 **Phase 4 接线层完成**（theme_daily_factors 落库 + 条件层门控机制默认关，`plans/task_plan_phase4.md`）与**因子口径收敛批完成**（动量 v2 入库 + 边际贡献研究 + 持续性算子出生即死实证，`2026-09-27-factor-marginal-findings.md`）；终判跑批待 10 月批次合流（P4-1 数据积累确认 → P4-5 一次一候选落默认 + verdict）
 - 定位：升级现有 `theme-trend-v12` 回测骨架，补业界因子与真实数据结论存档；新增题材轮动研究线（弱势/主线不明环境的轮动度量与策略变体）；不推翻既有回测结论
 - 关联文档：
   - `docs/theme-module/README.md`（V1→V12 演进总纲）
@@ -9,6 +9,8 @@
   - `quant-board/docs/theme-rotation/2026-08-04-theme-rotation-engine-design.md`（轮动引擎现行口径）
   - `quant-board/docs/theme-rotation/2026-08-06-theme-momentum-redesign.md`（动量 v2 现行口径）
   - `quant-board/docs/theme-rotation/2026-09-03-heatlevel-persistence-migration-design.md`（heatLevel 相对分口径；已声明旧题材回测数字不可沿用）
+  - `docs/theme-module/2026-09-27-themetrend-factor-convergence-design.md`（因子口径收敛批：联动/持续进因子 · 先验通道取舍 · 动量 v2 入链；已实施）
+  - `docs/theme-module/2026-09-27-factor-marginal-findings.md`（边际贡献研究 findings；含 persistenceScore 出生即死 Critical 实证）
 
 ## 1. 背景与现状结论
 
@@ -301,3 +303,5 @@ Track 轮动线（题材轮动研究，响应 2026-09-26 设计评审追加）�
 - 2026-09-26：**Phase 3 完成（因子线 D2/D3/F1 逐因子区分度，报告 `2026-09-26-phase3-findings.md`）**。`factor_series.py`（TDD 17 用例）+ 六因子同面板对照。核心裁决：**三因子均未通过"优于原始动量"检验，不进 Phase 4 combine**——①**D2 夏普动量方向与假设相反**（20 日 Sharpe IC −0.13、8/9 两月一致负："平稳无回撤上行"预测次日退潮，与 A 股短期反转特性同构；华泰月度行业轮动语境移植日频题材域错位），登记为反转语义观察项另批立项；②D3 动量连续性条件视图 n=7 不足以确认增量，观察池等 10 月样本；③F1 资金流持续性 IC +0.034 低于 mainNetInflow 水平的 +0.051，"持续性"立意无增量（附带确认资金流水平因子本身有正向区分度）；④接口事实修正：fund_cache 为 Redis 运行态无逐日历史，F1 源=daily 行 mainNetInflow（§5.2 口径修正）。因子线过验项维持：情绪相位门控（Phase 1）+ 拥挤度分位（Phase 2）。
 - 2026-09-27：**设计文档勘误**——§1/§9 中"bayesian/tpe 未接入（另立任务）"为过时陈述：实测优化器已于 2026-05-03（0e6de8e5）接入 optuna GPSampler/TPESampler，API 测试双路径全绿（optuna 4.3.0/torch 2.6.0 在位）；无需另立任务。前端轮动展示缺口维持另案：后端 `/api/theme-rotation/summary` 在位（Redis 缓存），`src/` 零消费。
 - 2026-09-27：**Phase 4 接线层完成**（①拥挤度分位生产接线 ②条件层机制接线默认关，实施计划 `plans/task_plan_phase4.md`）。①`theme_daily_factors` 集合落地：`analysis/theme/factors_daily.py`（纯函数装配，复用 crowding_percentile 原语）+ `data/repositories/theme_daily_factor_repository.py` + `services/theme/daily_factors_service.py`（daily 收盘槽取数、自动 catch-up 缺行日期、Redis 缓存写穿）+ `daily_factors_scheduler.py`（每日 18:30 挂 main.py lifespan，仅 mongodb 后端，status 经状态端点 `themeDailyFactors` 暴露）；零覆盖题材当日不入序列、分位历史不足 None+标记（不伪造中性值）。②条件层机制接线（§5.3）：`_theme_gating_inputs`（15:00 帧 marketPhase 引擎口径 + 分位读取，缺帧/非 Mongo 显式降级标记）+ `_theme_execution_signals` 门控块（cooling/ice 等 gated 相位与 BC≥阈值对 A_MAIN/B_IGNITION 降 confidence + 打标，**tier 不变、不做硬门禁**，两门控可叠加）+ `run_theme_trend` payload 开关（`sentimentGatingEnabled`/`crowdingPercentileEnabled` 等，全部默认关——一次一候选纪律）。验证：新增 25 用例（`tests/test_theme_daily_factors.py` 13 + `tests/test_theme_gating.py` 12）+ `test_theme_backtest.py` 29 用例回归全绿（既有三策略零变化）。门控参数数值为提案默认，待 P4-3 扫描 + P4-5 三窗终判。
+- 2026-09-27：**前端轮动展示缺口另案落地**（`2026-09-27-theme-rotation-panel-design.md` + `plans/task_plan_rotation_panel.md`，440770af..b737d050）：SectorPanel 新增"🔄 轮动状态"页签消费 `/api/theme-rotation/summary`（摘要 + 左目录右明细两栏树 + 可展开状态表），SectorDetail 概览并入轮动字段；proxy-server `QUANT_BOARD_PREFIXES` 白名单补 `/api/theme-rotation/`（新 API 前缀必须同步该清单并重启 3000）。
+- 2026-09-27：**因子口径收敛批完成**（设计 `2026-09-27-themetrend-factor-convergence-design.md`，findings `2026-09-27-factor-marginal-findings.md`，提交 4cf071dd；三方向用户确认：①联动/持续进因子先研究后接线 ②rotation 四组 vs v12 六因子重构为"先验通道归属 + 原料单源收敛"两问 ③动量 v2 入回测链三步走）。①**动量 v2 入 `theme_daily_factors`**：`build_momentum_v2_daily_values`（逐目标日截断日线序列调 compute_theme_momentum_v2，as-of 语义——序列不含目标日不产值防陈旧伪装）+ `merge_momentum_v2_into_rows`（同键并 factors.momentumV2，v2-only 题材产行拥挤字段 None+标记）+ auto 模式完整度自愈（repo `dates_with_factor_key`，新增因子维度后缺维旧日期自动补算，不依赖一次性回填）；生产回填 54 研究日 13,188 行含 momentumV2，v2 得分覆盖率 7 月 69% → 8 月 99% → 9 月 100%。②**边际贡献研究**（`rank_ic.marginal_spearman_ic` 秩 OLS 残差法 + 只读 runner `diagnose_theme_factor_marginal`）：**persistenceScore 出生即死（Critical）**——写侧 `metadata.consecutiveHotBuckets` 与读侧顶层路径错位 + 递增逻辑缺失，daily/half_hour 全库恒 0（既有回测不含持续性效应，无需回溯修订）；修复=重定义"热门桶"递增语义，属口径裁决登记待用户立项；联动度/D3 边际 IC −0.001/−0.009 无增量**不进 combine**；拥挤度分位边际 −0.063 维持过验项；v2Breadth 边际 −0.083 观察项。③**先验通道 ablation**（纯消费侧，不动 rotation 引擎核心）：本窗 v12 六维合成分 +0.047 胜 v2Score −0.050（弱势段反转加深——v2 价值候选=退潮预警语义，与 D2 反转观察项同批归档）；rotationScore 历史未落库（仅 mainLines 8 天），引擎逐槽回放 harness 登记 Phase 4 前置。④双源盘点表补登第 10 条（breadth/crowding/fund 后端内双管线，权威侧=rotation 引擎，收敛随 Phase 4 终判）。验证 66 用例全绿；全部参数裁决归 Phase 4 三窗一次一候选。
