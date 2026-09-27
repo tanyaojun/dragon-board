@@ -130,6 +130,9 @@ class Settings(BaseModel):
     # load_frame_bundles(200) + 引擎重放（实测 8~18s），TTL 取长（10 分钟）兜底；
     # 快照写入（数据层 after-save 钩子经依赖 index）会即时失效该缓存。
     theme_research_summary_cache_ttl_seconds: int = Field(default=600)
+    # 题材日频因子（theme_daily_factors，2026-09-27 Task1 接线）最近一日横截面
+    # 读口缓存 TTL：盘后每日计算一次，读口消费在 Phase 4 接线，TTL 仅兜底。
+    theme_daily_factors_cache_ttl_seconds: int = Field(default=3600)
     snapshot_cache_connect_timeout_seconds: float = Field(default=0.2)
     snapshot_cache_socket_timeout_seconds: float = Field(default=0.2)
     snapshot_collector_enabled: bool = Field(default=False)

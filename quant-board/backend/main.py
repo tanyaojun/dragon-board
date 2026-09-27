@@ -60,6 +60,7 @@ from backend.data.repositories.theme_repository import ThemeRepository
 from backend.data.migrations.theme_migration import ThemeMigrationError, ThemeMigrationService
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
+from backend.services.theme.daily_factors_scheduler import theme_daily_factors_scheduler
 from backend.services.market.ths_main_monitor_service import close_ths_main_monitor_service
 from backend.services.market.fund_scheduler import market_fund_scheduler
 from backend.services.market.ths_fund_refresh_scheduler import (
@@ -248,6 +249,9 @@ async def on_startup() -> None:
     # 本 API 进程不再启动采集 scheduler，避免双进程争锁/双采。
     stock_name_refresh_scheduler.start()
     theme_mapping_refresh_scheduler.start()
+    # 题材日频因子盘后补算（2026-09-27 Task1）：仅 mongodb 后端启用，
+    # 每日 18:30 补算缺因子行的交易日，幂等覆盖写 theme_daily_factors。
+    theme_daily_factors_scheduler.start()
     # KPL 题材个股人气缓存（2026-09 热度口径 = KPL 人气总和，tck2.js）：后台线程
     # 每 10 分钟全量刷新，启动即预热一轮。best-effort：失败不阻断启动，
     # 题材热度缺失会以 kpl_hotness_unavailable 标记暴露在前端。
@@ -402,6 +406,7 @@ async def on_shutdown() -> None:
     await snapshot_collector_scheduler.stop()
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
+    await theme_daily_factors_scheduler.stop()
     # KPL 缓存只在 mongodb 模式启动（与 startup 对称）：非 mongo 部署不尝试
     # 停止，避免每次关闭都打印 "kpl hotness shutdown failed" 异常栈（审计 L4）。
     if get_settings().storage_backend == "mongodb":
@@ -489,6 +494,7 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
         "snapshotCollector": snapshot_collector_scheduler.status(),
         "stockNameRefresh": stock_name_refresh_scheduler.status(),
         "themeMappingRefresh": theme_mapping_refresh_scheduler.status(),
+        "themeDailyFactors": theme_daily_factors_scheduler.status(),
         "marketFundRefresh": market_fund_scheduler.status(),
         "thsFundRefresh": get_ths_fund_refresh_scheduler().status(),
         "kplHotness": _kpl_hotness_health(),

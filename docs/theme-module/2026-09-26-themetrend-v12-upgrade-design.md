@@ -1,7 +1,7 @@
 # ThemeTrend v12.5 升级设计（方向性方案）
 
 - 日期：2026-09-26
-- 状态：设计已确认；Phase 0 数据可得性 spike 已完成（结论见 §6.0）；未实施（不改代码、不跑回测）
+- 状态：设计已确认；Phase 0 spike / 双轨 R1-R3b + Phase 1-3 全部完成（§6.0/§10）；Phase 4 接线层完成（2026-09-27：theme_daily_factors 落库 + 门控机制默认关，见 §10 与 `plans/task_plan_phase4.md`）；终判跑批待 10 月批次合流
 - 定位：升级现有 `theme-trend-v12` 回测骨架，补业界因子与真实数据结论存档；新增题材轮动研究线（弱势/主线不明环境的轮动度量与策略变体）；不推翻既有回测结论
 - 关联文档：
   - `docs/theme-module/README.md`（V1→V12 演进总纲）
@@ -300,3 +300,4 @@ Track 轮动线（题材轮动研究，响应 2026-09-26 设计评审追加）�
 - 2026-09-26：**Phase R3b 完成（SG1 收盘槽口径修正 + 三变体复跑，报告 `2026-09-26-phase-r3b-findings.md`）**。SG1 change 序列改吃 frames 15:00 收盘槽（daily 7 月仅 15 天曾结构性饿死 SG1）：严格出勤 + >7 自然日空洞截断 + 百分数→小数换算（单位地雷），触发 0→51 天。复跑裁决：**"主线不明环境补涨占优不成立"在信号集完整后依然成立**（chase -8.02%→-5.03% 仍跑输基线 +1.71%，RRG 迁移是三信号中质量最高者）；**hybrid 占优扩大至 +4.15%（三变体最优，观察池维持）**，代价 PF 1.16→1.10；headStable=True 组 chase -0.97%/hybrid +0.99%——门控价值复现。chase 两轮均否定不再列候选；SG3 15:00 口径另批；hybrid 月度复验绑 runId 等 10 月批次。
 - 2026-09-26：**Phase 3 完成（因子线 D2/D3/F1 逐因子区分度，报告 `2026-09-26-phase3-findings.md`）**。`factor_series.py`（TDD 17 用例）+ 六因子同面板对照。核心裁决：**三因子均未通过"优于原始动量"检验，不进 Phase 4 combine**——①**D2 夏普动量方向与假设相反**（20 日 Sharpe IC −0.13、8/9 两月一致负："平稳无回撤上行"预测次日退潮，与 A 股短期反转特性同构；华泰月度行业轮动语境移植日频题材域错位），登记为反转语义观察项另批立项；②D3 动量连续性条件视图 n=7 不足以确认增量，观察池等 10 月样本；③F1 资金流持续性 IC +0.034 低于 mainNetInflow 水平的 +0.051，"持续性"立意无增量（附带确认资金流水平因子本身有正向区分度）；④接口事实修正：fund_cache 为 Redis 运行态无逐日历史，F1 源=daily 行 mainNetInflow（§5.2 口径修正）。因子线过验项维持：情绪相位门控（Phase 1）+ 拥挤度分位（Phase 2）。
 - 2026-09-27：**设计文档勘误**——§1/§9 中"bayesian/tpe 未接入（另立任务）"为过时陈述：实测优化器已于 2026-05-03（0e6de8e5）接入 optuna GPSampler/TPESampler，API 测试双路径全绿（optuna 4.3.0/torch 2.6.0 在位）；无需另立任务。前端轮动展示缺口维持另案：后端 `/api/theme-rotation/summary` 在位（Redis 缓存），`src/` 零消费。
+- 2026-09-27：**Phase 4 接线层完成**（①拥挤度分位生产接线 ②条件层机制接线默认关，实施计划 `plans/task_plan_phase4.md`）。①`theme_daily_factors` 集合落地：`analysis/theme/factors_daily.py`（纯函数装配，复用 crowding_percentile 原语）+ `data/repositories/theme_daily_factor_repository.py` + `services/theme/daily_factors_service.py`（daily 收盘槽取数、自动 catch-up 缺行日期、Redis 缓存写穿）+ `daily_factors_scheduler.py`（每日 18:30 挂 main.py lifespan，仅 mongodb 后端，status 经状态端点 `themeDailyFactors` 暴露）；零覆盖题材当日不入序列、分位历史不足 None+标记（不伪造中性值）。②条件层机制接线（§5.3）：`_theme_gating_inputs`（15:00 帧 marketPhase 引擎口径 + 分位读取，缺帧/非 Mongo 显式降级标记）+ `_theme_execution_signals` 门控块（cooling/ice 等 gated 相位与 BC≥阈值对 A_MAIN/B_IGNITION 降 confidence + 打标，**tier 不变、不做硬门禁**，两门控可叠加）+ `run_theme_trend` payload 开关（`sentimentGatingEnabled`/`crowdingPercentileEnabled` 等，全部默认关——一次一候选纪律）。验证：新增 25 用例（`tests/test_theme_daily_factors.py` 13 + `tests/test_theme_gating.py` 12）+ `test_theme_backtest.py` 29 用例回归全绿（既有三策略零变化）。门控参数数值为提案默认，待 P4-3 扫描 + P4-5 三窗终判。

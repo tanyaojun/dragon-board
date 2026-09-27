@@ -21,7 +21,13 @@ from backend.core.backtest import (
 from backend.data.models.models import BacktestRun
 from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
 from backend.data.models.database import SessionLocal
-from backend.data.repositories.repository_factory import create_repository, storage_source_label
+from backend.data.repositories.repository_factory import (
+    create_repository,
+    get_runtime_mongodb_database,
+    storage_source_label,
+)
+from backend.core.settings import get_settings
+from backend.data.repositories.theme_daily_factor_repository import ThemeDailyFactorRepository
 from backend.core.utils import json_dumps, new_id, stable_hash
 from backend.services.shared import (
     DEFAULT_BACKTEST_STRATEGY_CONFIG,
@@ -255,6 +261,24 @@ def _persisted_heat_level(factor: object) -> float:
 THEME_SG_STRATEGIES = frozenset({"theme_rotation_chase", "theme_state_hybrid"})
 
 _THEME_SG_SOURCES = ("sg1", "sg2", "sg3")
+
+
+def _payload_float(value: Any, default: float) -> float:
+    """payload 数值参数安全转换：非法/NaN 回退默认（门控参数防御）。"""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return numeric if numeric == numeric else default
+
+
+def _gating_number(value: Any) -> float:
+    """门控惩罚值读取：缺失/非法按 0 处理（不调整），由构建侧默认值兜底。"""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return numeric if numeric == numeric else 0.0
 
 
 def _theme_sg_hit(sg_inputs: dict[str, Any] | None, theme_name: str, trading_date: str) -> tuple[bool, list[str]]:
@@ -818,7 +842,34 @@ class BacktestService:
         signals = theme_result.get("signals", [])
         exposures = theme_result.get("exposures", [])
         sg_inputs = self._theme_sg_inputs(dataset_id, frames) if strategy_name in THEME_SG_STRATEGIES else None
-        execution_signals = self._theme_execution_signals(frames, factors, exposures, strategy_name, sg_inputs=sg_inputs)
+        # 条件层门控（设计 §5.3，2026-09-27 Task2 机制接线）：默认关，显式开关才
+        # 生效（一次一候选纪律）；门控只降可信 + 打标，不做硬门禁，不影响 tier。
+        sentiment_gating_enabled = bool(camel_get(payload, "sentiment_gating_enabled", "sentimentGatingEnabled", False))
+        crowding_percentile_enabled = bool(camel_get(payload, "crowding_percentile_enabled", "crowdingPercentileEnabled", False))
+        gating_inputs: dict[str, Any] | None = None
+        if sentiment_gating_enabled or crowding_percentile_enabled:
+            gating_inputs = {
+                **self._theme_gating_inputs(frames, dataset_id, include_crowding_percentile=crowding_percentile_enabled),
+                "sentimentPhases": tuple(
+                    str(item)
+                    for item in (
+                        camel_get(payload, "sentiment_gating_phases", "sentimentGatingPhases")
+                        or ("cooling", "ice")
+                    )
+                ),
+                "sentimentConfidencePenalty": _payload_float(
+                    camel_get(payload, "sentiment_gating_confidence_penalty", "sentimentGatingConfidencePenalty", 10.0), 10.0
+                ),
+                "crowdingPercentileHighThreshold": _payload_float(
+                    camel_get(payload, "crowding_percentile_high_threshold", "crowdingPercentileHighThreshold", 90.0), 90.0
+                ),
+                "crowdingPercentileConfidencePenalty": _payload_float(
+                    camel_get(payload, "crowding_percentile_confidence_penalty", "crowdingPercentileConfidencePenalty", 10.0), 10.0
+                ),
+            }
+        execution_signals = self._theme_execution_signals(
+            frames, factors, exposures, strategy_name, sg_inputs=sg_inputs, gating_inputs=gating_inputs
+        )
         trade_config = self._theme_trade_config(payload, strategy_name)
         trade_simulation = (
             TradeSimulator().run(frames, execution_signals, trade_config)
@@ -874,6 +925,9 @@ class BacktestService:
                 "warnings": quality_report.get("warnings", []),
             },
         }
+        if gating_inputs and gating_inputs.get("qualityFlags"):
+            # 门控 context 的结构化降级原因随 run 落库可观察（fail-visible）
+            result["dataQuality"]["themeGatingQualityFlags"] = list(gating_inputs["qualityFlags"])
 
         trading_dates = sorted({str(f.get("tradingDate") or "") for f in frames if f.get("tradingDate")})
         run = BacktestRun(
@@ -1428,12 +1482,72 @@ class BacktestService:
         }
 
     @staticmethod
+    def _theme_gating_inputs(
+        frames: list[dict[str, Any]],
+        dataset_id: str,
+        *,
+        include_crowding_percentile: bool,
+    ) -> dict[str, Any]:
+        """条件层门控 context（设计 §5.3，Task2 接线）。
+
+        情绪维：half_hour 15:00 帧 rotationSummary.marketPhase（引擎权威口径，
+        对齐 _theme_sg_inputs 取数）；缺失 15:00 帧的交易日 → None + missing 标记。
+        拥挤度分位维（可选）：读 theme_daily_factors 落库行（Task1），仅 mongodb
+        后端；非 Mongo / 读失败 / 无行 → 显式降级标记。
+        消费端（_theme_execution_signals）对 None 值不调整——不伪造中性门控。
+        """
+        market_phase_by_day: dict[str, str | None] = {}
+        day_has_15h: set[str] = set()
+        for frame in frames:
+            if str(frame.get("slotTime")) != "15:00":
+                continue
+            d = str(frame.get("tradingDate") or "")
+            day_has_15h.add(d)
+            rotation_summary = frame.get("rotationSummary")
+            phase = rotation_summary.get("marketPhase") if isinstance(rotation_summary, dict) else None
+            market_phase_by_day[d] = str(phase or "") or None
+        all_days = sorted({str(f.get("tradingDate") or "") for f in frames if f.get("tradingDate")})
+        quality_flags: list[str] = []
+        for d in all_days:
+            if d not in day_has_15h:
+                quality_flags.append(f"missing_15h_frame:{d}")
+                market_phase_by_day.setdefault(d, None)
+        crowding_by_theme_day: dict[str, dict[str, float | None]] = {}
+        if include_crowding_percentile:
+            if get_settings().storage_backend != "mongodb":
+                quality_flags.append("crowding_percentile_source_unavailable:storage_backend_not_mongodb")
+            elif not all_days:
+                quality_flags.append("crowding_percentile_source_unavailable:no_trading_days")
+            else:
+                try:
+                    factor_repo = ThemeDailyFactorRepository(get_runtime_mongodb_database())
+                    docs = factor_repo.list_range(dataset_id, all_days[0], all_days[-1])
+                    for doc in docs:
+                        factors_doc = doc.get("factors")
+                        percentile = factors_doc.get("crowdingPercentile") if isinstance(factors_doc, dict) else None
+                        value = float(percentile) if isinstance(percentile, (int, float)) else None
+                        d = str(doc.get("tradingDate") or "")
+                        # themeId 与 themeName 双键：信号层按 entityName 查，分位行按映射 themeId 存
+                        for key in {str(doc.get("themeId") or ""), str(doc.get("themeName") or "")} - {""}:
+                            crowding_by_theme_day.setdefault(key, {})[d] = value
+                    if not docs:
+                        quality_flags.append("crowding_percentile_no_rows")
+                except Exception as exc:
+                    quality_flags.append(f"crowding_percentile_source_unavailable:{exc}")
+        return {
+            "marketPhaseByDay": market_phase_by_day,
+            "crowdingPercentileByDay": crowding_by_theme_day,
+            "qualityFlags": quality_flags,
+        }
+
+    @staticmethod
     def _theme_execution_signals(
         frames: list[dict[str, Any]],
         factors: list[dict[str, Any]],
         exposures: list[dict[str, Any]],
         strategy_name: str,
         sg_inputs: dict[str, Any] | None = None,
+        gating_inputs: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         factor_by_snapshot_theme = {
             (str(factor.get("snapshotId") or ""), str(factor.get("themeName") or "")): factor
@@ -1525,6 +1639,24 @@ class BacktestService:
                         theme_reasons.extend(sg_sources)
                 else:
                     theme_reasons.append("theme_rotation")
+                if gating_inputs and tier in {"A_MAIN", "B_IGNITION"}:
+                    # 条件层门控（设计 §5.3）：只降可信 + 打标，不改 tier（不做硬门禁）；
+                    # 相位缺失/分位缺失 → 不调整不伪造；两门控可叠加。
+                    phase = (gating_inputs.get("marketPhaseByDay") or {}).get(trading_date)
+                    if phase and phase in (gating_inputs.get("sentimentPhases") or ()):
+                        confidence = min(100.0, max(0.0, confidence - _gating_number(gating_inputs.get("sentimentConfidencePenalty"))))
+                        theme_reasons.append(f"sentiment_gate:{phase}")
+                        theme_risk_flags.append(f"sentiment_phase:{phase}")
+                    percentile = ((gating_inputs.get("crowdingPercentileByDay") or {}).get(theme_name) or {}).get(trading_date)
+                    threshold = gating_inputs.get("crowdingPercentileHighThreshold")
+                    if (
+                        isinstance(percentile, (int, float))
+                        and isinstance(threshold, (int, float))
+                        and percentile >= threshold
+                    ):
+                        confidence = min(100.0, max(0.0, confidence - _gating_number(gating_inputs.get("crowdingPercentileConfidencePenalty"))))
+                        theme_reasons.append(f"crowding_percentile_high:{round(float(percentile), 1)}")
+                        theme_risk_flags.append("crowding_percentile_high")
                 output.append({
                     **stock,
                     "snapshotId": snapshot_id,
