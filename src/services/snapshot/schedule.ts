@@ -1,5 +1,17 @@
 import type { SnapshotType } from './types'
 
+export const FIVE_MINUTES_SLOTS = [
+  '09:30', '09:35', '09:40', '09:45', '09:50', '09:55',
+  '10:00', '10:05', '10:10', '10:15', '10:20', '10:25',
+  '10:30', '10:35', '10:40', '10:45', '10:50', '10:55',
+  '11:00', '11:05', '11:10', '11:15', '11:20', '11:25', '11:30',
+  '13:00', '13:05', '13:10', '13:15', '13:20', '13:25',
+  '13:30', '13:35', '13:40', '13:45', '13:50', '13:55',
+  '14:00', '14:05', '14:10', '14:15', '14:20', '14:25',
+  '14:30', '14:35', '14:40', '14:45', '14:50', '14:55',
+  '15:00',
+] as const
+
 export const QUARTER_HOUR_SLOTS = [
   '09:30', '09:45', '10:00', '10:15', '10:30', '10:45',
   '11:00', '11:15', '11:30',
@@ -24,6 +36,7 @@ export function slotTimeToMinutes(slotTime: string): number {
 
 export function getExpectedSlots(type: SnapshotType): string[] {
   // 这里返回的是“理论完整槽位表”，盘中 coverage 会再结合 latestObserved 做截断。
+  if (type === 'five_minutes') return [...FIVE_MINUTES_SLOTS]
   if (type === 'quarter_hour') return [...QUARTER_HOUR_SLOTS]
   if (type === 'half_hour') return [...HALF_HOUR_SLOTS]
   if (type === 'hourly') return [...HOURLY_SLOTS]

@@ -66,6 +66,45 @@ def _safe_archive_part(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in str(value))
 
 
+def _strip_mongo_row(row: dict[str, Any]) -> dict[str, Any]:
+    """去掉 ``_id`` 并把 bson 原生类型（ObjectId/Decimal128 等）转为字符串。
+
+    parquet 编码层（``_encode_nested_values``）只接受 JSON 原生标量；ObjectId
+    带 ``binary`` 属性、Decimal128 带 ``to_decimal``，用鸭子类型兑底不强依赖
+    bson 包。datetime 保留（pyarrow 原生支持）。
+    """
+    clean: dict[str, Any] = {}
+    for key, value in row.items():
+        if key == "_id":
+            continue
+        if hasattr(value, "binary") or hasattr(value, "to_decimal"):
+            clean[key] = str(value)
+        else:
+            clean[key] = value
+    return clean
+
+
+def _mongodb_snapshot_rows(
+    mongo_db: Any,
+    dataset_id: str,
+    snapshot_type: str,
+    trading_date: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """从 Mongo 读某 dataset/type/date 的四表行（排序保证 parquet 可重现）。"""
+    spec = {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date}
+    collections = {
+        "records": ("snapshot_records", [("snapshotId", 1)]),
+        "frames": ("snapshot_frames", [("snapshotId", 1)]),
+        "stockRows": ("snapshot_stock_rows", [("snapshotId", 1), ("code", 1)]),
+        "sectorRows": ("snapshot_sector_rows", [("snapshotId", 1), ("entityKey", 1)]),
+    }
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for key, (collection, sort_spec) in collections.items():
+        cursor = mongo_db[collection].find(spec).sort(sort_spec)
+        rows[key] = [_strip_mongo_row(row) for row in cursor]
+    return rows
+
+
 class ArchiveService:
     def __init__(self, session: Session, *, research_session: Session | None = None, archive_dir: Path | None = None, compression: str | None = None) -> None:
         settings = get_settings()
@@ -252,6 +291,127 @@ class ArchiveService:
             "files": files,
             "createdAt": datetime.now(timezone.utc).isoformat(),
             "sqliteRetained": True,
+        }
+        write_manifest(local_path / "manifest.json", manifest_payload)
+        self._upsert_manifest(
+            archive_id=archive_id,
+            scope="snapshot_backup",
+            dataset_id=dataset_id,
+            snapshot_type=snapshot_type,
+            trading_date=trading_date,
+            run_id=None,
+            local_path=local_path,
+            status="verified",
+            row_counts=base["rowCounts"],
+            files=files,
+        )
+        result = store.push_archive(local_path, archive_id=archive_id)
+        if not result.get("ok"):
+            self._mark_manifest_failed(archive_id, "verified", result.get("error"))
+            return {**base, "ok": False, "files": files, "error": result.get("error")}
+        manifest = self.get_manifest(archive_id)
+        if manifest:
+            manifest.object_key = store.archive_prefix(archive_id)
+            manifest.uploaded_at = datetime.now(timezone.utc)
+            manifest.status = "uploaded"
+            manifest.last_error = None
+            self.session.commit()
+        return {
+            **base,
+            "files": files,
+            "uploadResult": result,
+            "objectKey": store.archive_prefix(archive_id),
+        }
+
+    def backup_mongodb_snapshot_day_to_object(
+        self,
+        mongo_db: Any,
+        *,
+        dataset_id: str,
+        snapshot_type: str,
+        trading_date: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """MongoDB 快照日归档到 R2（mongodb 后端生产路径，2026-09-28）。
+
+        与 SQLite 版 ``backup_snapshot_day_to_object`` 同构：按 dataset/type/date
+        读取 Mongo 四表 → parquet → R2 push → ArchiveManifest 登记（scope=
+        snapshot_backup，status=uploaded）。差异：
+
+        * **只归档不删 Mongo**：frames API 无归档回读，删除热数据会让历史窗口
+          静默变短；是否清理 Mongo 待归档回读链路就绪后单独决策；
+        * 幂等去重：manifest 已 uploaded 的日期直接 skip（推送失败/未上传的
+          允许重试）；
+        * 当日无帧返回结构化 no_snapshot_frames（诚实暴露，不伪造空归档）。
+        """
+        rows = _mongodb_snapshot_rows(mongo_db, dataset_id, snapshot_type, trading_date)
+        row_counts = {key: len(value) for key, value in rows.items()}
+        safe_dataset_id = _safe_archive_part(dataset_id)
+        safe_snapshot_type = _safe_archive_part(snapshot_type)
+        safe_trading_date = _safe_archive_part(trading_date)
+        archive_id = f"snapshot_backup_{safe_dataset_id}_{safe_snapshot_type}_{safe_trading_date}"
+        local_path = self.archive_dir / "backups" / f"dataset_id={safe_dataset_id}" / f"snapshot_type={safe_snapshot_type}" / f"trading_date={safe_trading_date}"
+        base = {
+            "ok": True,
+            "dryRun": dry_run,
+            "archiveId": archive_id,
+            "scope": "snapshot_backup",
+            "source": "mongodb",
+            "target": "r2_object_backup",
+            "localPath": str(local_path),
+            "rowCounts": {
+                "records": row_counts["records"],
+                "frames": row_counts["frames"],
+                "stockRows": row_counts["stockRows"],
+                "sectorRows": row_counts["sectorRows"],
+            },
+            "files": [],
+            "mongoRetained": True,
+            "errors": [],
+        }
+        existing = self.get_manifest(archive_id)
+        if existing is not None and existing.status == "uploaded":
+            return {**base, "skipped": True, "reason": "already_archived"}
+        if dry_run:
+            return base
+        if not rows["frames"]:
+            return {
+                **base,
+                "ok": False,
+                "skipped": True,
+                "reason": "no_snapshot_frames",
+            }
+        if not rows["stockRows"] and not rows["sectorRows"]:
+            return {
+                **base,
+                "ok": False,
+                "skipped": True,
+                "reason": "backup_empty_table",
+            }
+        store = get_object_backup_store()
+        if not store:
+            return {**base, "ok": False, "skipped": True, "reason": "object_backup_not_configured"}
+
+        files = self._write_tables(
+            local_path,
+            {
+                "records": rows["records"] or [{"archiveId": archive_id}],
+                "frames": rows["frames"] or [{"archiveId": archive_id}],
+                "stock_rows": rows["stockRows"],
+                "sector_rows": rows["sectorRows"],
+            },
+        )
+        manifest_payload = {
+            "archiveId": archive_id,
+            "scope": "snapshot_backup",
+            "source": "mongodb",
+            "datasetId": dataset_id,
+            "snapshotType": snapshot_type,
+            "tradingDates": [trading_date],
+            "rowCounts": base["rowCounts"],
+            "files": files,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            "mongoRetained": True,
         }
         write_manifest(local_path / "manifest.json", manifest_payload)
         self._upsert_manifest(

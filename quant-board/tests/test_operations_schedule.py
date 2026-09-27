@@ -277,16 +277,30 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
         "backend.operations.schedule.run_archive_auto_once",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy archive must not run")),
     )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: calls.append(f"archiveR2:{dry_run}")
+        or {
+            "ok": True,
+            "dryRun": dry_run,
+            "snapshotTypes": {"half_hour": {"ok": True, "skipped": True, "reason": "dry_run"}},
+        },
+    )
 
     from backend.operations.schedule import run_after_market_once
 
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2"]
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
-    assert calls == ["hotlist:mongo-db:dragonboard_live:half_hour:True", "backup:True"]
+    assert result["results"]["snapshotArchiveR2"]["ok"] is True
+    assert calls == [
+        "hotlist:mongo-db:dragonboard_live:half_hour:True",
+        "backup:True",
+        "archiveR2:True",
+    ]
 
 
 def test_after_market_job_in_mongodb_mode_surfaces_hotlist_sentiment_failure(monkeypatch: Any) -> None:
@@ -315,6 +329,10 @@ def test_after_market_job_in_mongodb_mode_surfaces_hotlist_sentiment_failure(mon
     monkeypatch.setattr(
         "backend.operations.schedule.run_archive_auto_once",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy archive must not run")),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
     )
 
     from backend.operations.schedule import run_after_market_once
@@ -359,6 +377,11 @@ def test_after_market_job_in_mongodb_mode_hotlist_failure_still_backs_up(monkeyp
         lambda *, dry_run=False, now=None: calls.append("backup")
         or {"ok": True, "backupId": "b1", "strategy": "light_dump"},
     )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: calls.append("archiveR2")
+        or {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
+    )
 
     from backend.operations.schedule import run_after_market_once
 
@@ -366,7 +389,7 @@ def test_after_market_job_in_mongodb_mode_hotlist_failure_still_backs_up(monkeyp
 
     assert result["ok"] is False
     assert result["stoppedAt"] == "hotlistSentiment"
-    assert calls == ["backup"]
+    assert calls == ["backup", "archiveR2"]
     assert result["results"]["mongodbBackup"]["ok"] is True
     assert result["results"]["mongodbBackup"]["backupId"] == "b1"
 
@@ -401,6 +424,10 @@ def test_after_market_job_in_mongodb_mode_surfaces_backup_failure(monkeypatch: A
             "failedStep": "create",
             "error": {"code": "mongodump_failed", "returncode": 2},
         },
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
     )
 
     from backend.operations.schedule import run_after_market_once

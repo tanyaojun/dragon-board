@@ -17,6 +17,60 @@ from backend.snapshot_collector.trading_calendar import is_trading_day
 _TZ = ZoneInfo("Asia/Shanghai")
 
 
+def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any]:
+    """盘后快照日归档到 R2（mongodb 后端，2026-09-28）。
+
+    按 ``archive_auto_snapshot_types`` 逐类型归档**最近已收盘交易日**（严格早于
+    今日）：当日 15:30 任务触发时 daily:15:30 槽可能仍在采集，归档当日会把
+    不完整帧固化进 manifest 并被幂等去重永久跳过；归档 T-1 无此竞态。
+    每类型独立成败（fail-visible）：单类型失败不阻断其它类型，整体 ok 汇总。
+    Mongo 保留不动（归档只进 R2，见 ArchiveService.backup_mongodb_snapshot_day_to_object）。
+    """
+    from backend.data.archive.service import ArchiveService
+
+    settings = get_settings()
+    snapshot_types = [item.strip() for item in settings.archive_auto_snapshot_types.split(",") if item.strip()]
+    today = datetime.now(_TZ).strftime("%Y-%m-%d")
+    db = repository_factory.get_runtime_mongodb_database()
+    init_db()
+    per_type: dict[str, Any] = {}
+    ok = True
+    with SessionLocal() as session:
+        service = ArchiveService(session)
+        for snapshot_type in snapshot_types:
+            try:
+                latest_date = db["snapshot_frames"].find_one(
+                    {"datasetId": settings.archive_auto_dataset_id, "type": snapshot_type, "tradingDate": {"$lt": today}},
+                    sort=[("tradingDate", -1)],
+                    projection={"tradingDate": 1, "_id": 0},
+                )
+                trading_date = str((latest_date or {}).get("tradingDate") or "")
+                if not trading_date:
+                    per_type[snapshot_type] = {"ok": True, "skipped": True, "reason": "no_snapshot_frames"}
+                    continue
+                result = service.backup_mongodb_snapshot_day_to_object(
+                    db,
+                    dataset_id=settings.archive_auto_dataset_id,
+                    snapshot_type=snapshot_type,
+                    trading_date=trading_date,
+                    dry_run=dry_run,
+                )
+                per_type[snapshot_type] = {**result, "tradingDate": trading_date}
+                skipped_reason = str(result.get("reason") or "")
+                if not result.get("ok") and skipped_reason not in ("already_archived",):
+                    ok = False
+            except Exception as exc:
+                per_type[snapshot_type] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                ok = False
+    return {
+        "ok": ok,
+        "dryRun": dry_run,
+        "datasetId": settings.archive_auto_dataset_id,
+        "snapshotTypes": per_type,
+        "archivedBefore": today,
+    }
+
+
 def run_after_market_once(
     *,
     archive_limit: int | None = None,
@@ -49,18 +103,27 @@ def run_after_market_once(
             }
         # 备份链独立于 hotlistSentiment 结果：hotlist 失败也继续备份（快照数据可能已入库）
         backup_result = run_mongodb_backup_once(dry_run=dry_run)
+        # R2 快照归档链独立于备份链：备份失败也尝试归档（两条链互不覆盖，各自 fail-visible）
+        archive_result = run_mongodb_snapshot_archive_once(dry_run=dry_run)
         hotlist_ok = bool(hotlist_result.get("ok"))
         backup_ok = bool(backup_result.get("ok"))
+        archive_ok = bool(archive_result.get("ok"))
         stopped_at = None
         if not hotlist_ok:
             stopped_at = "hotlistSentiment"
         elif not backup_ok:
             stopped_at = "mongodbBackup"
+        elif not archive_ok:
+            stopped_at = "snapshotArchiveR2"
         return _result(
-            ok=hotlist_ok and backup_ok,
+            ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup"],
-            results={"hotlistSentiment": hotlist_result, "mongodbBackup": backup_result},
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2"],
+            results={
+                "hotlistSentiment": hotlist_result,
+                "mongodbBackup": backup_result,
+                "snapshotArchiveR2": archive_result,
+            },
             archive_limit=archive_limit,
             backup_limit=backup_limit,
             dry_run=dry_run,

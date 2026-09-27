@@ -15,12 +15,20 @@ export interface RankTrendRuntimeDefaults {
   sellScoreThreshold: number
 }
 
-export type RankTrendSnapshotType = 'quarter_hour' | 'half_hour' | 'hourly' | 'daily'
+// five_minutes 为后端采集的研究类型（2026-09-28 入采，题材行只走 half_hour/daily）；
+// 浏览器本地临时类型是单数 'five_minute'（见 services/snapshot/types.ts），两者互不冲突
+export type RankTrendSnapshotType =
+  | 'five_minutes'
+  | 'quarter_hour'
+  | 'half_hour'
+  | 'hourly'
+  | 'daily'
 export type RankTrendIntradaySnapshotType = Extract<RankTrendSnapshotType, 'quarter_hour' | 'half_hour'>
 export type RTConfigPatch = Partial<RankTrendRuntimeDefaults>
 
 export const DEFAULT_RANK_TREND_SNAPSHOT_TYPE: RankTrendSnapshotType = 'half_hour'
 export const RANK_TREND_SNAPSHOT_TYPES: RankTrendSnapshotType[] = [
+  'five_minutes',
   'quarter_hour',
   'half_hour',
   'hourly',
@@ -30,12 +38,24 @@ export const RANK_TREND_INTRADAY_SNAPSHOT_TYPES: RankTrendIntradaySnapshotType[]
   'quarter_hour',
   'half_hour',
 ]
+
+// 默认 coverage 门禁口径（无显式类型过滤时）：保持 2026-09-28 前的四类型。
+// five_minutes 是后端采集的研究类型（历史日期无该类型帧），若纳入默认门禁会把
+// 全部历史日期过滤掉（数据可见性回归）；显式选择 five_minutes 时仍按其自身槽位参与 coverage。
+export const RANK_TREND_DEFAULT_COVERAGE_TYPES: RankTrendSnapshotType[] = [
+  'quarter_hour',
+  'half_hour',
+  'hourly',
+  'daily',
+]
 export const RANK_TREND_SNAPSHOT_OPTIONS: Array<{
   type: RankTrendSnapshotType
   label: string
   shortLabel: string
   historyLimit: number
 }> = [
+  // five_minutes：50 帧 ≈ 1 个交易日，与 quarter_hour 同默认窗口
+  { type: 'five_minutes', label: '五分快照', shortLabel: '五分', historyLimit: 50 },
   { type: 'quarter_hour', label: '一刻快照', shortLabel: '一刻', historyLimit: 50 },
   { type: 'half_hour', label: '半小时快照', shortLabel: '半小时', historyLimit: 50 },
   { type: 'hourly', label: '整点快照', shortLabel: '整点', historyLimit: 50 },

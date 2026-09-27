@@ -372,6 +372,74 @@ def cmd_after_market_once(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_snapshot_archive_backfill(args: argparse.Namespace) -> None:
+    """MongoDB 快照历史日归档到 R2（mongodb 后端，补历史；盘后任务只归档 T-1）。
+
+    逐交易日幂等补归档：manifest 已 uploaded 的日期自动跳过，可安全重跑。
+    """
+    from backend.data.repositories import repository_factory
+    from backend.data.models.database import SessionLocal, init_db
+
+    if args.start_date > args.end_date:
+        raise SystemExit("--start-date must be <= --end-date")
+    db = repository_factory.get_runtime_mongodb_database()
+    init_db()
+    summary: dict[str, Any] = {
+        "datasetId": args.dataset_id,
+        "snapshotType": args.snapshot_type,
+        "startDate": args.start_date,
+        "endDate": args.end_date,
+        "dryRun": bool(args.dry_run),
+        "days": [],
+        "archived": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+    with SessionLocal() as session:
+        service = ArchiveService(session)
+        cursor = (
+            db["snapshot_frames"]
+            .find(
+                {
+                    "datasetId": args.dataset_id,
+                    "type": args.snapshot_type,
+                    "tradingDate": {"$gte": args.start_date, "$lte": args.end_date},
+                },
+                {"tradingDate": 1, "_id": 0},
+            )
+            .sort("tradingDate", 1)
+        )
+        dates = sorted({str(row.get("tradingDate") or "") for row in cursor} - {""})
+        for trading_date in dates:
+            try:
+                result = service.backup_mongodb_snapshot_day_to_object(
+                    db,
+                    dataset_id=args.dataset_id,
+                    snapshot_type=args.snapshot_type,
+                    trading_date=trading_date,
+                    dry_run=bool(args.dry_run),
+                )
+            except Exception as exc:
+                result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            status = (
+                "failed" if not result.get("ok") and not result.get("skipped")
+                else "skipped" if result.get("skipped")
+                else "archived"
+            )
+            summary[status] = int(summary.get(status, 0)) + 1
+            summary["days"].append(
+                {
+                    "tradingDate": trading_date,
+                    "status": status,
+                    "reason": result.get("reason") or result.get("error") or "",
+                    "rowCounts": result.get("rowCounts") or {},
+                }
+            )
+    print_json(summary)
+    if summary["failed"]:
+        raise SystemExit(1)
+
+
 def cmd_migrate_mongodb(args: argparse.Namespace) -> None:
     settings = get_settings()
     if args.apply and args.dry_run:
@@ -1553,6 +1621,17 @@ def build_parser() -> argparse.ArgumentParser:
     after_market_cmd.add_argument("--backup-limit", type=int, default=None)
     after_market_cmd.add_argument("--dry-run", action="store_true")
     after_market_cmd.set_defaults(func=cmd_after_market_once)
+
+    archive_backfill_cmd = sub.add_parser(
+        "snapshot-archive-backfill",
+        help="Backfill MongoDB snapshot days to R2 archives (idempotent per trading date)",
+    )
+    archive_backfill_cmd.add_argument("--dataset-id", default="dragonboard_live")
+    archive_backfill_cmd.add_argument("--snapshot-type", choices=["five_minutes", "quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    archive_backfill_cmd.add_argument("--start-date", required=True)
+    archive_backfill_cmd.add_argument("--end-date", required=True)
+    archive_backfill_cmd.add_argument("--dry-run", action="store_true")
+    archive_backfill_cmd.set_defaults(func=cmd_snapshot_archive_backfill)
 
     migrate_mongodb_cmd = sub.add_parser("migrate-mongodb", help="Inspect SQLite sources for one-shot MongoDB migration")
     migrate_mongodb_cmd.add_argument("--snapshot-db", default=None)

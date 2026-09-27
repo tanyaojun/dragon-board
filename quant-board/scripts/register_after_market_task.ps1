@@ -2,6 +2,8 @@
 #
 # 盘后链（backend/operations/schedule.py run_after_market_once，mongodb 后端）：
 #   hotlistSentiment -> mongodbBackup（交易日 light / 周五 full -> verify -> prune -> 周五 push R2）
+#   -> snapshotArchiveR2（2026-09-28：四类型快照日归档 parquet 进 R2，T-1 幂等；
+#      历史回填用 backend.cli snapshot-archive-backfill）
 # 任一步失败以非零码退出，任务计划历史可见。
 #
 # 2026-09-16 起备份并入本任务；旧的 QuantBoard-LightBackup / QuantBoard-FullBackup

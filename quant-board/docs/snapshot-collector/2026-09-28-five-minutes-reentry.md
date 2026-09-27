@@ -36,11 +36,19 @@
 
 ## 待决策（未做）
 
-- **归档/保留策略**：`QUANT_BOARD_ARCHIVE_AUTO_SNAPSHOT_TYPES` 目前仅 `half_hour`。
-  five_minutes 数据量最大（50 帧/天），若不纳入归档将无限增长（≈500 万行/年，Mongo 可扛）。
-  归档后数据移出 Mongo 进 R2（DuckDB 查询口），frames API 不再直读——是否将
-  `five_minutes,quarter_hour` 纳入归档需用户确认后改 `.env.local`。
-- 根前端/QuantBoard 前端的类型选择器尚未加入 `five_minutes` 选项（研究消费 UI 属后续任务）。
+- ~~归档/保留策略~~ **已决策（2026-09-28 第二轮）**：四类型全部归档进 R2。
+  mongodb 后端下 SQLite 版 archive auto 从不启动（runner 只在非 mongodb 分支 start，
+  API 410），仅改 `QUANT_BOARD_ARCHIVE_AUTO_SNAPSHOT_TYPES` 是静默空转；因此新增
+  mongodb 生产路径：盘后链新增 `snapshotArchiveR2` 步骤（`run_mongodb_snapshot_archive_once`，
+  每类型归档最近**已收盘**交易日 T-1，manifest 幂等去重），
+  `ArchiveService.backup_mongodb_snapshot_day_to_object` 读 Mongo 四表 → parquet → R2。
+  **只归档不删 Mongo**（frames API 无归档回读，删热数据会让历史窗口静默变短；
+  清理待归档回读链路就绪后单独决策）。历史回填：
+  `python -m backend.cli snapshot-archive-backfill --dataset-id dragonboard_live --snapshot-type five_minutes --start-date ... --end-date ...`（逐日幂等，可重跑）。
+- ~~根前端类型选择器~~ **已加（2026-09-28 第二轮）**：`RankTrendSnapshotType` 纳入
+  `five_minutes`（标签「五分快照」），槽位表同步；默认 coverage 门禁保持四类型
+  （`RANK_TREND_DEFAULT_COVERAGE_TYPES`，防止历史日期被整体过滤），浏览器
+  本地定时保存不含 five_minutes（仅后端采集）。
 
 ## 验证
 

@@ -91,7 +91,9 @@ class Settings(BaseModel):
     archive_auto_interval_seconds: float = Field(default=3600.0)
     archive_auto_initial_delay_seconds: float = Field(default=30.0)
     archive_auto_max_partitions: int = Field(default=5)
-    archive_auto_snapshot_types: str = Field(default="half_hour")
+    # 2026-09-28：R2 快照日归档类型扩到全类型（half_hour 必须首位：盘后链
+    # _first_snapshot_type 用首类型取最新帧算当日情绪）
+    archive_auto_snapshot_types: str = Field(default="half_hour,quarter_hour,five_minutes,daily")
     archive_auto_dataset_id: str = Field(default="dragonboard_live")
     archive_auto_research_enabled: bool = Field(default=False)
     object_backup_enabled: bool = Field(default=False)

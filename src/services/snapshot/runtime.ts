@@ -28,6 +28,7 @@ import {
 import {
   isRankTrendSnapshotType,
   RANK_TREND_SNAPSHOT_TYPES,
+  RANK_TREND_DEFAULT_COVERAGE_TYPES,
   type RankTrendIntradaySnapshotType,
   type RankTrendSnapshotType,
 } from '../../types/rankTrendDefaults'
@@ -1458,7 +1459,9 @@ export class SnapshotRuntime {
       return coverageTypes
     }
 
-    return [...RANK_TREND_SNAPSHOT_TYPES]
+    // 默认门禁口径保持四类型（见 RANK_TREND_DEFAULT_COVERAGE_TYPES 注释）：
+    // 历史日期无 five_minutes 帧，纳入默认门禁会把它们整体过滤掉。
+    return [...RANK_TREND_DEFAULT_COVERAGE_TYPES]
   }
 
   private buildCoverageReport(
@@ -1574,7 +1577,9 @@ export class SnapshotRuntime {
 
   private async collectPendingSnapshotSlots(now: Date): Promise<Array<{ type: SnapshotType; slotTime: Date }>> {
     const candidates: Array<{ type: SnapshotType; slotTime: Date }> = []
-    const types: SnapshotType[] = [...RANK_TREND_SNAPSHOT_TYPES]
+    // five_minutes 是后端采集的研究类型（2026-09-28 入采），浏览器不做本地定时保存；
+    // 其余类型维持浏览器定时补采链路。
+    const types: SnapshotType[] = [...RANK_TREND_SNAPSHOT_TYPES].filter((type) => type !== 'five_minutes')
 
     // 每秒扫一次槽位，但真正允许补采的时间范围由各类型 backfill window 控制。
     for (const type of types) {
