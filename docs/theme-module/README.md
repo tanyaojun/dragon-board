@@ -48,7 +48,7 @@
 ## V12 ThemeTrend 平台化口径
 
 - 计划文件：`plans/task_plan_v12.md`。
-- V12 后端研究链已进入可运行主链；完整平台化仍需继续深化 TS golden 多场景自动导出、walk-forward/样本外报告和真实 bayesian/tpe 搜索器接入。
+- V12 后端研究链已进入可运行主链；剩余深化项为 TS golden 多场景自动导出与 walk-forward/样本外报告（bayesian/tpe 搜索器已于 2026-05-03 `0e6de8e5` 接入 Optuna GPSampler/TPESampler，见 `2026-09-26-themetrend-v12-upgrade-design.md` §9 勘误）。
 - ThemeTrend 与 RankTrend 并列：RankTrend 继续负责个股候选趋势，ThemeTrend 负责题材强度、扩散、持续性、拥挤和共振解释。
 - 已落地 QuantBoard 合同：`POST /api/backtests/theme-trend`、`POST /api/backtests/theme-confluence`、`POST /api/optimizations/theme-trend`、`POST /api/optimizations/theme-confluence`；CLI 对应 `run-theme-trend`、`run-theme-confluence`、`optimize-theme-trend`、`optimize-theme-confluence`。
 - ThemeTrend 回测现在会把题材暴露映射为可执行股票信号，复用现有 `TradeSimulator`，并双写 `/trades`、`/equity`、`/signals`、`/quality` 读口。
