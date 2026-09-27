@@ -9,6 +9,9 @@ export interface PhaseMeta {
   tone: string
 }
 
+/** 轮动树形列表固定目录类别（2026-09-27 用户定版：全部/流入/流出/中性） */
+export type RotationCategory = 'all' | 'inflow' | 'outflow' | 'neutral'
+
 export const MARKET_PHASE_META: Record<string, PhaseMeta> = {
   rising: { label: '升温', tone: 'phase-rising' },
   climax: { label: '高潮', tone: 'phase-climax' },

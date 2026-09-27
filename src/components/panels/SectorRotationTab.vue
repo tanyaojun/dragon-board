@@ -52,21 +52,11 @@
         </div>
       </section>
 
-      <div class="table-filters">
-        <button
-          v-for="option in filterOptions"
-          :key="option.value"
-          class="filter-btn"
-          :class="{ active: stateFilter === option.value }"
-          @click="stateFilter = option.value"
-        >
-          {{ option.label }}
-        </button>
-      </div>
-
       <section class="rotation-tree-section">
         <SectorRotationTree
-          :statuses="filteredStatuses"
+          :statuses="statuses"
+          :category="stateFilter"
+          @update:category="stateFilter = $event"
         />
       </section>
 
@@ -126,6 +116,7 @@ import {
   marketPhaseLabel,
   rotationStateLabel,
   ROTATION_STATE_META,
+  type RotationCategory,
 } from '@/services/theme/rotationDisplay'
 import SectorRotationTree from './SectorRotationTree.vue'
 
@@ -133,7 +124,7 @@ const loading = ref(false)
 const error = ref<string | null>(null)
 const summary = ref<ThemeRotationSummary | null>(null)
 const tableOpen = ref(false)
-const stateFilter = ref<string>('all')
+const stateFilter = ref<RotationCategory>('all')
 const sortKey = ref<string>('rank')
 const sortDir = ref<1 | -1>(1)
 
@@ -175,12 +166,6 @@ const outflowPreview = computed(() => outflowThemes.value.slice(0, PREVIEW_COUNT
 const outflowRestCount = computed(() => Math.max(0, outflowThemes.value.length - PREVIEW_COUNT))
 const statuses = computed(() => summary.value?.statuses ?? [])
 const stateBuckets = computed(() => countRotationStates(statuses.value))
-
-const filteredStatuses = computed(() =>
-  stateFilter.value === 'all'
-    ? statuses.value
-    : statuses.value.filter((row) => (row.rotationState || 'unknown') === stateFilter.value),
-)
 
 const columns = [
   { key: 'entityName', label: '题材', sortable: false },
@@ -235,14 +220,6 @@ const visibleRows = computed(() => {
   })
 })
 
-const filterOptions = computed(() => [
-  { value: 'all', label: `全部 ${statuses.value.length}` },
-  ...stateBuckets.value.map((bucket) => ({
-    value: bucket.state,
-    label: `${rotationStateLabel(bucket.state)} ${bucket.count}`,
-  })),
-])
-
 function formatNumber(value: number | null | undefined, digits = 1): string {
   return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—'
 }
@@ -295,8 +272,7 @@ function stateToneOf(state: string | null | undefined): string {
 }
 .refresh-btn,
 .retry-btn,
-.table-toggle,
-.filter-btn {
+.table-toggle {
   background: var(--bg-tertiary, transparent);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -307,13 +283,8 @@ function stateToneOf(state: string | null | undefined): string {
 }
 .refresh-btn:hover,
 .retry-btn:hover,
-.table-toggle:hover,
-.filter-btn:hover {
+.table-toggle:hover {
   border-color: var(--accent-color, #4a9eff);
-}
-.filter-btn.active {
-  border-color: var(--accent-color, #4a9eff);
-  color: var(--accent-color, #4a9eff);
 }
 .rotation-error,
 .rotation-empty {
@@ -387,11 +358,6 @@ function stateToneOf(state: string | null | undefined): string {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-.table-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
 }
 .rotation-table-wrap {
   overflow-x: auto;

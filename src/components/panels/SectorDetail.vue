@@ -446,12 +446,21 @@
             @click="toggleIndicator('heat')">🔥 热度</button>
           <button class="indicator-btn" :class="{ active: selectedIndicators.includes('zt') }"
             @click="toggleIndicator('zt')">📈 涨停</button>
-          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('leader') }"
-            @click="toggleIndicator('leader')">👑 龙头</button>
+          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('rank') }"
+            @click="toggleIndicator('rank')">📊 热度排名</button>
+          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('rotationState') }"
+            @click="toggleIndicator('rotationState')">🔄 轮动状态</button>
+          <button class="indicator-btn" :class="{ active: selectedIndicators.includes('mainNetInflow') }"
+            @click="toggleIndicator('mainNetInflow')">💰 净流入趋势</button>
           <button class="indicator-btn" :class="{ active: selectedIndicators.includes('change') }"
             @click="toggleIndicator('change')">💹 涨跌</button>
           <button class="indicator-btn" :class="{ active: selectedIndicators.includes('volume') }"
             @click="toggleIndicator('volume')">📊 成交额</button>
+        </div>
+
+        <!-- 窗口锚定提示：非交易日/数据间歇时窗口锚定到最后可用交易日 -->
+        <div v-if="historyAnchorHint" class="history-anchor-hint">
+          所选窗口内无交易数据，已锚定到最后可用交易日 {{ historyAnchorHint }}
         </div>
 
         <!-- 历史数据结构化状态：加载/错误/空态，不伪造曲线 -->
@@ -823,9 +832,13 @@ watch(() => props.sectorName, async (newName) => {
 
 // ========== 历史趋势（生产数据：MongoDB 快照 sector rows + 成分股成交量聚合） ==========
 const timeRange = ref<ThemeHistoryTimeRange>('1d')
-const selectedIndicators = ref<string[]>(['heat', 'zt', 'leader'])
+const selectedIndicators = ref<string[]>(['heat', 'zt', 'rank', 'rotationState', 'mainNetInflow'])
 const chartRef = ref<HTMLElement | null>(null)
 let chart: echarts.ECharts | null = null
+
+// 轮动状态类别轴（自下而上：退潮→流出→中性→萌发→流入→主线，语义热度递增）
+const ROTATION_STATE_AXIS_CATEGORIES = ['退潮', '流出', '中性', '萌发', '流入', '主线']
+const historyAnchorHint = ref<string | null>(null)
 
 const historyLoading = ref(false)
 // 全源失败的结构化原因；部分源失败用 historySourceHint 提示，不清空已有数据
@@ -846,6 +859,7 @@ async function loadHistoryData() {
     })
     if (requestId !== historyRequestId) return // 过期响应丢弃
     historyPoints.value = result.points
+    historyAnchorHint.value = result.anchorDate ?? null
     const failedSources = [result.sectorRows, result.volumeSeries].filter(s => !s.ok)
     if (!result.ok) {
       historyError.value = result.message || '历史数据不可用'
@@ -971,15 +985,50 @@ function renderChart() {
     })
   }
 
-  // 龙头柱状图
-  if (indicators.includes('leader')) {
+  // 热度排名曲线（y 轴反向：排名越靠前数值越小，向上=走强）
+  if (indicators.includes('rank')) {
     series.push({
-      name: '龙头股',
-      type: 'bar',
-      data: history.map(h => h.leaderCount),
-      itemStyle: { color: '#ffd700' },
-      barWidth: 8,
-      yAxisIndex: 1
+      name: '热度排名',
+      type: 'line',
+      data: history.map(h => h.rank),
+      smooth: true,
+      connectNulls: false,
+      lineStyle: { color: '#e67e22', width: 1.5 },
+      symbol: 'triangle',
+      symbolSize: 5,
+      yAxisIndex: 4
+    })
+  }
+
+  // 轮动状态阶梯线（离散六态，类别轴；缺失/未知断线不伪造）
+  if (indicators.includes('rotationState')) {
+    series.push({
+      name: '轮动状态',
+      type: 'line',
+      step: 'middle',
+      data: history.map(h => {
+        const label = h.rotationState ? rotationStateLabelText(h.rotationState) : null
+        return label && ROTATION_STATE_AXIS_CATEGORIES.includes(label) ? label : null
+      }),
+      connectNulls: false,
+      lineStyle: { color: '#9b59b6', width: 1.5 },
+      symbol: 'rect',
+      symbolSize: 5,
+      yAxisIndex: 5
+    })
+  }
+
+  // 净流入趋势曲线（half_hour rows mainNetInflow，部分槽位缺失断线）
+  if (indicators.includes('mainNetInflow')) {
+    series.push({
+      name: '净流入趋势',
+      type: 'line',
+      data: history.map(h => h.mainNetInflow),
+      smooth: true,
+      connectNulls: false,
+      lineStyle: { color: '#1abc9c', width: 1.5 },
+      symbol: 'none',
+      yAxisIndex: 6
     })
   }
 
@@ -1077,6 +1126,29 @@ function renderChart() {
         name: '成交额',
         splitLine: { show: false },
         axisLabel: { color: 'var(--text-secondary)' }
+      },
+      {
+        type: 'value',
+        name: '热度排名',
+        inverse: true,
+        splitLine: { show: false },
+        axisLabel: { color: 'var(--text-secondary)' }
+      },
+      {
+        type: 'category',
+        name: '轮动状态',
+        data: ROTATION_STATE_AXIS_CATEGORIES,
+        splitLine: { show: false },
+        axisLabel: { color: 'var(--text-secondary)', fontSize: 10 }
+      },
+      {
+        type: 'value',
+        name: '净流入',
+        splitLine: { show: false },
+        axisLabel: {
+          color: 'var(--text-secondary)',
+          formatter: (value: number) => (Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(1)}亿` : `${(value / 1e4).toFixed(0)}万`)
+        }
       }
     ],
     series,
@@ -1454,7 +1526,8 @@ defineExpose({ themeStocks, filteredStocks, paginatedStocks })
 /* 指标卡片网格 - 2x2 布局 */
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* 概览指标一行四列（2026-09-27 用户反馈） */
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
 }
 
@@ -2354,9 +2427,9 @@ td.outflow {
 .time-range-selector,
 .indicator-selector {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
-  flex-wrap: wrap;
 }
 
 .time-btn,
@@ -2521,6 +2594,14 @@ td.outflow {
 td:empty::before {
   content: '-';
   color: var(--text-secondary);
+}
+
+.history-anchor-hint {
+  padding: 6px 12px;
+  border: 1px dashed var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 /* 轮动状态区（概览合并字段） */

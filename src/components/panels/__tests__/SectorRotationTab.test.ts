@@ -46,12 +46,14 @@ describe('SectorRotationTab', () => {
     expect(tab).toContain('state-unknown')
   })
 
-  it('embeds the two-pane rotation tree list (second-round spec: directory left, detail right)', () => {
+  it('embeds the two-pane rotation tree with fixed four-category directory (third-round spec)', () => {
     expect(tab).toContain('SectorRotationTree')
-    expect(tab).toContain(':statuses="filteredStatuses"')
-    // 2026-09-27 二轮修正：明细弹出面板删除，轮动字段并入 SectorDetail 概览
+    expect(tab).toContain(':statuses="statuses"')
+    expect(tab).toContain(':category="stateFilter"')
+    expect(tab).toContain('@update:category="stateFilter = $event"')
+    // 轮动字段并入 SectorDetail 概览后，弹出面板与旧筛选 chips 均已删除
     expect(tab).not.toContain('<SectorRotation ')
-    expect(tab).not.toContain('openRotationDetail')
+    expect(tab).not.toContain('table-filters')
   })
 
   it('is wired as a rotation tab inside SectorPanel', () => {

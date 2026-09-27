@@ -27,6 +27,9 @@ export interface ThemeHistoryPoint {
   stockCount: number | null
   volumeCount: number | null
   amountCount: number | null
+  rank: number | null
+  mainNetInflow: number | null
+  rotationState: string | null
 }
 
 export interface ThemeHistorySourceStatus {
@@ -41,6 +44,8 @@ export interface ThemeHistorySeriesResult {
   sectorRows: ThemeHistorySourceStatus
   volumeSeries: ThemeHistorySourceStatus
   message?: string
+  /** 窗口锚定的最后可用数据交易日（YYYY-MM-DD）；与今天不同时 UI 提示"已锚定最后交易日" */
+  anchorDate?: string
 }
 
 export interface ThemeHistorySectorRowsParams {
@@ -49,7 +54,7 @@ export interface ThemeHistorySectorRowsParams {
   types: RankTrendSnapshotType[]
   startDate: string
   endDate: string
-  sort: 'asc'
+  sort: 'asc' | 'desc'
   limit: number
 }
 
@@ -108,6 +113,9 @@ function toPointBase(row: any): ThemeHistoryPoint {
     stockCount: null,
     volumeCount: null,
     amountCount: null,
+    rank: numOrNull(row?.rank),
+    mainNetInflow: numOrNull(row?.mainNetInflow),
+    rotationState: row?.rotationState ? String(row.rotationState) : null,
   }
 }
 
@@ -141,9 +149,42 @@ export async function fetchThemeHistorySeries(
 ): Promise<ThemeHistorySeriesResult> {
   const { themeId, themeName, timeRange } = options
   const nowMs = options.nowMs ?? Date.now()
-  const cutoff = nowMs - RANGE_MS[timeRange]
+
+  const fetchSectorRows = fetchers?.fetchSectorRows ?? defaultFetchSectorRows
+  const fetchVolumeSeries = fetchers?.fetchVolumeSeries ?? defaultFetchVolumeSeries
+
+  // 窗口锚点探测：按自然日从"现在"回望在非交易日/长假会整窗落空（2026-09-27 实证：
+  // 周末+中秋窗口 0 行）。先探最后一条可用数据行，把窗口锚定到最后交易日——
+  // "最近1天"=最后一个交易日的槽位序列，而不是"昨天到现在"。
+  let anchorMs = nowMs
+  let anchorDate: string | undefined
+  try {
+    const probe = await fetchSectorRows({
+      entityType: 'hot_theme',
+      entityKey: themeId,
+      types: [DEFAULT_RANK_TREND_SNAPSHOT_TYPE],
+      startDate: '',
+      endDate: '',
+      sort: 'desc',
+      limit: 1,
+    })
+    // 取返回行中时间戳最大者（不依赖调用方的排序实现）
+    let probeRow: any = null
+    for (const row of Array.isArray(probe?.rows) ? probe.rows : []) {
+      if (!probeRow || (Number(row?.timestamp) || 0) > (Number(probeRow.timestamp) || 0)) probeRow = row
+    }
+    if (probeRow?.tradingDate) {
+      anchorMs = Number(probeRow.timestamp) || Date.parse(`${probeRow.tradingDate}T15:00:00`) || nowMs
+      const todayStr = toDateStr(nowMs)
+      if (String(probeRow.tradingDate) !== todayStr) anchorDate = String(probeRow.tradingDate)
+    }
+  } catch {
+    // 探测失败不阻断：退回按"现在"锚定的原口径
+  }
+
+  const cutoff = anchorMs - RANGE_MS[timeRange]
   const startDate = toDateStr(cutoff)
-  const endDate = toDateStr(nowMs)
+  const endDate = toDateStr(anchorMs)
 
   const sectorParams: ThemeHistorySectorRowsParams = {
     entityType: 'hot_theme',
@@ -161,9 +202,6 @@ export async function fetchThemeHistorySeries(
     endDate,
     limit: SECTOR_ROW_LIMIT,
   }
-
-  const fetchSectorRows = fetchers?.fetchSectorRows ?? defaultFetchSectorRows
-  const fetchVolumeSeries = fetchers?.fetchVolumeSeries ?? defaultFetchVolumeSeries
 
   // 两源独立成败：任一失败保留另一源数据并结构化记录原因（fail-visible）
   const [sectorOutcome, volumeOutcome] = await Promise.allSettled([
@@ -225,6 +263,7 @@ export async function fetchThemeHistorySeries(
     points,
     sectorRows: sectorStatus,
     volumeSeries: volumeStatus,
+    anchorDate,
     message: allFailed ? `题材历史数据不可用: ${sectorStatus.message}; ${volumeStatus.message}` : undefined,
   }
 }
