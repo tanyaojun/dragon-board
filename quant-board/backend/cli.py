@@ -1891,7 +1891,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     collector_run_cmd = sub.add_parser("snapshot-collector-run-once", help="Execute a single snapshot collection run")
     collector_run_cmd.add_argument("--dataset-id", required=True)
-    collector_run_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_run_cmd.add_argument("--snapshot-type", choices=["five_minutes", "quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_run_cmd.add_argument("--trading-date", required=True)
     collector_run_cmd.add_argument("--slot-time", required=True)
     collector_run_cmd.add_argument("--dry-run", action="store_true")
@@ -1900,7 +1900,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     collector_backfill_cmd = sub.add_parser("snapshot-collector-backfill", help="Run collection for all slots across a date range")
     collector_backfill_cmd.add_argument("--dataset-id", required=True)
-    collector_backfill_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_backfill_cmd.add_argument("--snapshot-type", choices=["five_minutes", "quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_backfill_cmd.add_argument("--start-date", required=True)
     collector_backfill_cmd.add_argument("--end-date", required=True)
     collector_backfill_cmd.add_argument("--dry-run", dest="dry_run", action="store_true")
@@ -1910,7 +1910,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     collector_audit_cmd = sub.add_parser("snapshot-collector-audit", help="Audit snapshot coverage for a dataset/type")
     collector_audit_cmd.add_argument("--dataset-id", required=True)
-    collector_audit_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_audit_cmd.add_argument("--snapshot-type", choices=["five_minutes", "quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_audit_cmd.add_argument("--trading-date", default=None)
     collector_audit_cmd.set_defaults(func=cmd_snapshot_collector_audit)
 
@@ -1920,7 +1920,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collector_compare_cmd.add_argument("--dataset-id-a", required=True, help="First dataset ID (e.g. dragonboard_live)")
     collector_compare_cmd.add_argument("--dataset-id-b", required=True, help="Second dataset ID (e.g. another_dataset)")
-    collector_compare_cmd.add_argument("--snapshot-type", choices=["quarter_hour", "half_hour", "hourly", "daily"], required=True)
+    collector_compare_cmd.add_argument("--snapshot-type", choices=["five_minutes", "quarter_hour", "half_hour", "hourly", "daily"], required=True)
     collector_compare_cmd.add_argument("--trading-date", default=None, help="Optional single date to compare")
     collector_compare_cmd.set_defaults(func=cmd_snapshot_collector_compare)
 

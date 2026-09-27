@@ -16,6 +16,8 @@ from .models import SnapshotSlot
 #
 # Matches the design document and the frontend schedule.
 #
+# five_minutes:  50 slots (09:30-11:30 + 13:00-15:00, every 5 minutes; 2026-09-28
+#                重新入采——短间距研究口径，盘中序列止于 15:00，不含盘后槽)
 # quarter_hour: 19 slots  (09:30-11:30 + 13:00-15:15)
 # half_hour:    10 slots (intraday series ends at 15:00 close fixing; the
 #               15:30 post-close value is daily-only — 2026-09-11 口径)
@@ -23,6 +25,17 @@ from .models import SnapshotSlot
 # daily:         1 slot  (15:30 post-close value)
 
 SLOT_TIMES: dict[str, list[str]] = {
+    "five_minutes": [
+        "09:30", "09:35", "09:40", "09:45", "09:50", "09:55",
+        "10:00", "10:05", "10:10", "10:15", "10:20", "10:25",
+        "10:30", "10:35", "10:40", "10:45", "10:50", "10:55",
+        "11:00", "11:05", "11:10", "11:15", "11:20", "11:25", "11:30",
+        "13:00", "13:05", "13:10", "13:15", "13:20", "13:25",
+        "13:30", "13:35", "13:40", "13:45", "13:50", "13:55",
+        "14:00", "14:05", "14:10", "14:15", "14:20", "14:25",
+        "14:30", "14:35", "14:40", "14:45", "14:50", "14:55",
+        "15:00",
+    ],
     "quarter_hour": [
         "09:30", "09:45",
         "10:00", "10:15", "10:30", "10:45",
@@ -46,6 +59,12 @@ SLOT_TIMES: dict[str, list[str]] = {
     ],
     "daily": ["15:30"],
 }
+
+# 题材/板块行（theme heat → sectorRows）的携带类型（2026-09-28 用户决策）：
+# 题材热度半小时一档已够研究用，five_minutes / quarter_hour 帧不携带题材行，
+# 题材序列研究走 half_hour / hourly / daily 帧。采集侧同时按此决策跳过
+# 纯高频槽位唤醒的 theme heat 计算（上游开销不随 5 分钟频率放大）。
+SECTOR_SNAPSHOT_TYPES: frozenset[str] = frozenset({"half_hour", "hourly", "daily"})
 
 
 # ── Internal helpers ─────────────────────────────────────────────────────────

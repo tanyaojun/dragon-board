@@ -137,7 +137,9 @@ class Settings(BaseModel):
     snapshot_cache_socket_timeout_seconds: float = Field(default=0.2)
     snapshot_collector_enabled: bool = Field(default=False)
     snapshot_collector_dataset_id: str = Field(default="dragonboard_backend_shadow")
-    snapshot_collector_types: str = Field(default="half_hour,daily")
+    # 2026-09-28：quarter_hour / five_minutes 重新入采（默认含全部五类；
+    # 生产实际类型由 quant-board/.env.local 的同名环境变量覆盖）
+    snapshot_collector_types: str = Field(default="five_minutes,quarter_hour,half_hour,daily")
     snapshot_collector_poll_ms: int = Field(default=30000)
     snapshot_collector_close_grace_minutes: int = Field(default=5)
     snapshot_collector_proxy_base_url: str = Field(default="http://127.0.0.1:3000")

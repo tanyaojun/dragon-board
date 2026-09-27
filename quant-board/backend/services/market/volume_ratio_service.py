@@ -23,7 +23,8 @@ VOLUME_RATIO_HISTORY_WEIGHTS = (5, 3, 2)
 VOLUME_RATIO_HISTORY_DAYS = 3
 LOOKBACK_DAYS = 4
 DATASET_ID = "dragonboard_live"
-INTRADAY_TYPES = ("quarter_hour", "half_hour", "hourly")
+# 分时历史分母来源类型：five_minutes 入采后加入，取相邻槽位时用最密集序列（2026-09-28）
+INTRADAY_TYPES = ("five_minutes", "quarter_hour", "half_hour", "hourly")
 
 # 日级历史均量（量比分母）缓存：日级快照低频变化（一天数次），长 TTL 避免重 IO 反复读历史快照
 DAILY_CACHE_TTL_SECONDS = 1800

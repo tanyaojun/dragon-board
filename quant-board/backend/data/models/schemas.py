@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-SnapshotType = Literal["quarter_hour", "half_hour", "hourly", "daily"]
+SnapshotType = Literal["five_minutes", "quarter_hour", "half_hour", "hourly", "daily"]
 
 
 class ImportDatasetRequest(BaseModel):

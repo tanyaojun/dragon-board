@@ -11,7 +11,7 @@ from backend.core.settings import get_settings
 from backend.core.utils import read_json_file, stable_hash, utc_now_iso
 
 
-VALID_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
+VALID_SNAPSHOT_TYPES = {"five_minutes", "quarter_hour", "half_hour", "hourly", "daily"}
 
 
 class ImporterError(RuntimeError):

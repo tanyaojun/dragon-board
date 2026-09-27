@@ -51,6 +51,34 @@ class TestSlotTimes:
     def test_hourly_has_5_slots(self):
         assert len(SLOT_TIMES["hourly"]) == 5
 
+    def test_five_minutes_has_50_slots(self):
+        """five_minutes：09:30-11:30 + 13:00-15:00，每 5 分钟一槽，共 50 槽。"""
+        assert len(SLOT_TIMES["five_minutes"]) == 50
+
+    def test_five_minutes_boundaries(self):
+        """首槽 09:30（与 half/quarter 开盘槽对齐），止于 15:00，不含盘后槽。"""
+        assert SLOT_TIMES["five_minutes"][0] == "09:30"
+        assert SLOT_TIMES["five_minutes"][-1] == "15:00"
+        assert "15:15" not in SLOT_TIMES["five_minutes"]
+        assert "15:30" not in SLOT_TIMES["five_minutes"]
+
+    def test_five_minutes_exact_5min_spacing(self):
+        """相邻槽位间隔恒为 5 分钟（午休 11:30→13:00 跳档除外），无其它跳档。"""
+        times = SLOT_TIMES["five_minutes"]
+        for prev, cur in zip(times, times[1:]):
+            if prev == "11:30" and cur == "13:00":
+                continue  # 午休跳档：与 quarter_hour/half_hour 同口径
+            ph, pm = map(int, prev.split(":"))
+            ch, cm = map(int, cur.split(":"))
+            assert (ch * 60 + cm) - (ph * 60 + pm) == 5, f"{prev} -> {cur} 不是 5 分钟间隔"
+
+    def test_five_minutes_aligns_with_coarser_types(self):
+        """对齐时刻（如 10:00/11:30/15:00）与 half_hour/quarter_hour 共享一次唤醒采集。"""
+        for t in ("09:30", "10:00", "11:30", "13:00", "14:30", "15:00"):
+            assert t in SLOT_TIMES["five_minutes"]
+            assert t in SLOT_TIMES["half_hour"]
+            assert t in SLOT_TIMES["quarter_hour"]
+
     def test_daily_has_1_slot(self):
         assert len(SLOT_TIMES["daily"]) == 1
 
@@ -122,7 +150,13 @@ class TestSnapshotSlot:
         """Constructing a SnapshotSlot with an unknown type must raise."""
         ts = _make_ts("2026-06-11", "15:00")
         with pytest.raises(ValueError, match="Unknown snapshot_type"):
-            SnapshotSlot("five_minute", "2026-06-11", "15:00", ts)
+            SnapshotSlot("one_minute", "2026-06-11", "15:00", ts)
+
+    def test_five_minutes_is_a_valid_type(self):
+        """five_minutes 入果后必须能构造 SnapshotSlot（防止枚举遗漏）。"""
+        ts = _make_ts("2026-06-11", "10:05")
+        slot = SnapshotSlot("five_minutes", "2026-06-11", "10:05", ts)
+        assert slot.snapshot_id == "five_minutes:2026-06-11:10:05"
 
     def test_equality_by_value(self):
         """Two slots with same fields should be equal."""
@@ -156,6 +190,13 @@ class TestGenerateSlots:
         slots = generate_slots("2026-06-11", ["quarter_hour"])
         assert len(slots) == 19
         assert slots[-1].slot_time == "15:15"
+
+    def test_generates_five_minutes_slots(self):
+        slots = generate_slots("2026-06-11", ["five_minutes"])
+        assert len(slots) == 50
+        assert slots[0].slot_time == "09:30"
+        assert slots[-1].slot_time == "15:00"
+        assert slots[0].snapshot_type == "five_minutes"
 
     def test_generates_multiple_types(self):
         slots = generate_slots("2026-06-11", ["half_hour", "daily"])

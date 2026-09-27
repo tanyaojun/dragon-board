@@ -17,7 +17,7 @@ class SnapshotSlot:
     Fields align with the MongoDB / API camelCase contract but use Python
     snake_case internally:
 
-    * snapshot_type  — ``quarter_hour`` | ``half_hour`` | ``hourly`` | ``daily``
+    * snapshot_type  — ``five_minutes`` | ``quarter_hour`` | ``half_hour`` | ``hourly`` | ``daily``
     * trading_date   — ``YYYY-MM-DD`` in Asia/Shanghai calendar
     * slot_time      — ``HH:MM`` (24h)
     * timestamp_ms   — epoch milliseconds of the slot instant in Asia/Shanghai
@@ -28,7 +28,9 @@ class SnapshotSlot:
     slot_time: str
     timestamp_ms: int
 
-    _VALID_TYPES: frozenset[str] = frozenset({"quarter_hour", "half_hour", "hourly", "daily"})
+    _VALID_TYPES: frozenset[str] = frozenset(
+        {"five_minutes", "quarter_hour", "half_hour", "hourly", "daily"}
+    )
 
     def __post_init__(self) -> None:
         if self.snapshot_type not in self._VALID_TYPES:
@@ -117,7 +119,7 @@ class CollectorRunRequest:
 
     Fields:
     * dataset_id    — target dataset (e.g. ``dragonboard_backend_shadow``)
-    * snapshot_type — ``quarter_hour`` | ``half_hour`` | ``hourly`` | ``daily``
+    * snapshot_type — ``five_minutes`` | ``quarter_hour`` | ``half_hour`` | ``hourly`` | ``daily``
     * trading_date  — ``YYYY-MM-DD`` in Asia/Shanghai calendar
     * slot_time     — ``HH:MM`` (24h)
     * dry_run       — when True, go through the full pipeline except the fact write

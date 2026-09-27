@@ -917,7 +917,7 @@ def list_snapshot_frames(
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
-    if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
+    if snapshot_type not in {"five_minutes", "quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
     if limit is not None and limit <= 0:
         limit = None
@@ -1008,7 +1008,7 @@ def get_ranktrend_rank_series(
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
-    if snapshot_type not in {"quarter_hour", "half_hour", "hourly", "daily"}:
+    if snapshot_type not in {"five_minutes", "quarter_hour", "half_hour", "hourly", "daily"}:
         raise HTTPException(status_code=400, detail=f"unsupported snapshot_type: {snapshot_type}")
     if rank_basis not in {"composite", "attention"}:
         raise HTTPException(status_code=400, detail=f"unsupported rank_basis: {rank_basis}")

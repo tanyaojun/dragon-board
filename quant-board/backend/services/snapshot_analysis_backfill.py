@@ -30,7 +30,7 @@ DEFAULT_DATASET_ID = "dragonboard_live"
 DEFAULT_SNAPSHOT_TYPES = ("half_hour",)
 
 # 帧类型枚举（与 snapshot_collector / snapshot_frames.type 一致）
-SNAPSHOT_TYPE_ENUM = ("quarter_hour", "half_hour", "hourly", "daily")
+SNAPSHOT_TYPE_ENUM = ("five_minutes", "quarter_hour", "half_hour", "hourly", "daily")
 
 
 def normalize_snapshot_types(raw: Any) -> list[str]:

@@ -36,6 +36,7 @@ from .models import (
     SnapshotSlot,
     SourceHealth,
 )
+from .slots import SECTOR_SNAPSHOT_TYPES
 from .state import record_run as _record_run
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -328,8 +329,15 @@ class SnapshotCollectorService:
     async def _collect_context(
         self,
         trading_date: str,
+        *,
+        include_sectors: bool = True,
     ) -> tuple[MarketDataContext, dict[str, Any] | None]:
-        """采集一次原始上下文（八榜/行情/资金/涨停池/题材/主题热度）。"""
+        """采集一次原始上下文（八榜/行情/资金/涨停池/题材/主题热度）。
+
+        ``include_sectors=False``（本组快照均不在 ``SECTOR_SNAPSHOT_TYPES`` 内，
+        如纯 five_minutes/quarter_hour 槽位唤醒）时跳过 theme heat 计算：
+        题材热度半小时一档已够，高频槽位不重复算题材（2026-09-28 决策）。
+        """
         providers_list = self._create_providers(trading_date=trading_date)
         codes: list[str] = []
         timeout_ms = self._provider_timeout_ms()
@@ -351,7 +359,7 @@ class SnapshotCollectorService:
                 self._collect_fn, providers_list, codes, timeout_ms=timeout_ms
             )
         theme_snapshot: dict[str, Any] | None = None
-        if self._theme_heat_service is not None:
+        if self._theme_heat_service is not None and include_sectors:
             try:
                 theme_snapshot = await asyncio.to_thread(
                     self._theme_heat_service.get_snapshot,
@@ -406,6 +414,16 @@ class SnapshotCollectorService:
         from backend.snapshot_derivation import SnapshotDerivationService
         from backend.snapshot_derivation.models import MarketFactBundle
 
+        # 题材行携带策略（2026-09-28）：five_minutes/quarter_hour 帧不携带题材行，
+        # 题材序列只走 half_hour/hourly/daily。同刻共享上下文时（如 10:00 三类型
+        # 同组）在高频帧上剥离题材原料，不影响同组 half_hour 帧；剥离是口径决策
+        # 而非采集失败，落 qualityFlags 供下游识别（fail-visible，不伪造空数据充数）。
+        sector_rows_enabled = snapshot_type in SECTOR_SNAPSHOT_TYPES
+        fact_snapshot_context = dict(market_context.snapshot_context)
+        if not sector_rows_enabled:
+            for context_key in ("hotThemes", "themeHeatFactors", "rotationAnalysis"):
+                fact_snapshot_context.pop(context_key, None)
+
         fact = MarketFactBundle(
             snapshot_type=snapshot_type,
             trading_date=trading_date,
@@ -420,15 +438,15 @@ class SnapshotCollectorService:
             money_flow=list(market_context.money_flow),
             themes=dict(market_context.themes),
             limit_up=dict(market_context.limit_up),
-            sectors=list(market_context.sectors),
+            sectors=list(market_context.sectors) if sector_rows_enabled else [],
             source_health=list(market_context.source_health),
-            snapshot_context=dict(market_context.snapshot_context),
+            snapshot_context=fact_snapshot_context,
             market_meta=dict(market_context.market_meta),
             limit_summary=dict(market_context.limit_summary),
             indices=dict(market_context.indices),
         )
         derived = SnapshotDerivationService().derive(fact)
-        if self._theme_rotation_service is not None:
+        if self._theme_rotation_service is not None and sector_rows_enabled:
             await self._theme_rotation_service.enrich_bundle(
                 derived,
                 dataset_id=dataset_id,
@@ -505,6 +523,10 @@ class SnapshotCollectorService:
             # autonomous 模式下前端离线 → bundle 缺失 → snapshotContext 证据缺位：
             # fail-visible 打标，不阻断采集（spec §4 错误处理表）
             quality.warnings.append("snapshot_context_missing")
+        if not sector_rows_enabled:
+            # 高频类型不携带题材行是口径决策（题材只走 half_hour/hourly/daily）：
+            # 打标进 qualityFlags，防止下游把空题材行误读为采集失败。
+            quality.warnings.append("sector_rows_skipped_sector_cadence")
         diagnostic_flags = [*quality.warnings, *quality.blocking_issues]
         if diagnostic_flags:
             for item in [*records, *frames]:
@@ -690,7 +712,8 @@ class SnapshotCollectorService:
                     message="Snapshot already exists",
                 )
         market_context, theme_snapshot = await self._collect_context(
-            request.trading_date
+            request.trading_date,
+            include_sectors=request.snapshot_type in SECTOR_SNAPSHOT_TYPES,
         )
         return await self._persist_one(request, market_context, theme_snapshot)
 
@@ -811,8 +834,13 @@ class SnapshotCollectorService:
         if not active:
             return results
 
+        # 本组含任一题材携带类型（half_hour/hourly/daily）才算 theme heat；
+        # 纯 five_minutes/quarter_hour 唤醒跳过，题材上游开销不随 5 分钟频率放大。
         market_context, theme_snapshot = await self._collect_context(
-            active[0].trading_date
+            active[0].trading_date,
+            include_sectors=any(
+                req.snapshot_type in SECTOR_SNAPSHOT_TYPES for req in active
+            ),
         )
         for request in active:
             results.append(

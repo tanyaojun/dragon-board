@@ -40,7 +40,7 @@ from backend.analysis.ranktrend.ranking.comprehensive_rank import (
 
 router = APIRouter(tags=["ranktrend-analyze"])
 
-SUPPORTED_SNAPSHOT_TYPES = {"quarter_hour", "half_hour", "hourly", "daily"}
+SUPPORTED_SNAPSHOT_TYPES = {"five_minutes", "quarter_hour", "half_hour", "hourly", "daily"}
 
 # analyze 缓存 TTL 动态化（2026-08-13）：
 # - 盘中交易时段（9:15-11:30 / 13:00-15:30）：300s，保证盘中数据新鲜度；

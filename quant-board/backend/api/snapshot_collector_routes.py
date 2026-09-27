@@ -30,7 +30,9 @@ from backend.snapshot_collector.trading_calendar import is_trading_day
 
 router = APIRouter(prefix="/api/snapshot-collector")
 
-_VALID_SNAPSHOT_TYPES = frozenset({"quarter_hour", "half_hour", "hourly", "daily"})
+_VALID_SNAPSHOT_TYPES = frozenset(
+    {"five_minutes", "quarter_hour", "half_hour", "hourly", "daily"}
+)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
