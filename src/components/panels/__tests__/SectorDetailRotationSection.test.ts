@@ -29,4 +29,9 @@ describe('SectorDetail 概览轮动状态合并（2026-09-27 二轮反馈）', (
     expect(detail).toContain('该题材不在轮动快照中')
     expect(detail).toContain('rotationLoaded.value = false')
   })
+
+  it('abbreviates long heat values with K/M to avoid four-column overflow', () => {
+    expect(detail).toContain('function formatHeatK')
+    expect(detail).toContain('formatHeatK(heatScore)')
+  })
 })

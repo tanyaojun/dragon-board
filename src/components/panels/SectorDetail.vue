@@ -647,7 +647,8 @@ const heatDisplay = computed(() => {
   }
   const meta = deriveThemeHeatMeta(heatLevelScore)
   return {
-    value: String(Math.round(heatScore)),
+    // 概览一行四列后卡片变窄：千分位 K 缩写（384942 → 384.9K）防长数值溢出截断
+    value: formatHeatK(heatScore),
     level: deriveThemeHeatLevel(heatLevelScore) || '-',
     band: deriveThemeHeatBand(heatLevelScore),
     color: meta.color,
@@ -694,6 +695,14 @@ function formatRotationFlow(value: number | null | undefined): string {
   const abs = Math.abs(value)
   const text = abs >= 1e8 ? `${(abs / 1e8).toFixed(1)}亿` : abs >= 1e4 ? `${(abs / 1e4).toFixed(0)}万` : String(abs)
   return (value > 0 ? '+' : value < 0 ? '-' : '') + text
+}
+
+// 热度千分位缩写：>=1e6 用 M，>=1e3 用 K（一位小数），<1e3 原值——防四列卡片溢出截断
+function formatHeatK(value: number): string {
+  const rounded = Math.round(value)
+  if (Math.abs(rounded) >= 1e6) return `${(rounded / 1e6).toFixed(1)}M`
+  if (Math.abs(rounded) >= 1e3) return `${(rounded / 1e3).toFixed(1)}K`
+  return String(rounded)
 }
 
 // 统计指标
