@@ -27,7 +27,7 @@ def rrg_quadrants(changes: list[float], benchmark_changes: list[float]) -> list[
     """题材日 change 序列 vs 基准日 change 序列 → 逐日 RRG 象限（首日动量不可知 → None）。
 
     RS 线 = 题材虚拟指数 / 基准虚拟指数；RS 动量 = RS 日差分。
-    象限（含边界：RS>=1 记强势、动量>=0 讱上行）：leading / weakening / lagging / improving。
+    象限（含边界：RS>=1 记强势、动量>=0 记上行）：leading / weakening / lagging / improving。
     长度不一致截短到较小长度；基准指数非正（极端 -100% 累乘）时该日 RS 不可算 → None。
     """
     n = min(len(changes), len(benchmark_changes))

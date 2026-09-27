@@ -880,3 +880,269 @@ def test_theme_backtest_pnl_invariant_to_persistence_score(tmp_path: Path) -> No
     assert signal_digest(zero) == signal_digest(full)
     assert zero["result"]["tradeSimulation"] == full["result"]["tradeSimulation"]
     assert zero["result"]["executionSignals"], "合同测试需要非空执行信号才有约束力"
+
+
+def _run_theme_trend_with_payload(
+    client: TestClient,
+    tmp_path: Path,
+    name: str,
+    extra_payload: dict | None = None,
+) -> dict:
+    """theme-trend 回测助手：同一 bundle + 可选 payload 覆盖（persistenceScoreWeight 接线用）。"""
+    bundle = make_theme_trade_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": name, "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+            **(extra_payload or {}),
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _theme_signal_scores(body: dict) -> list[float]:
+    return [item["score"] for item in body["result"]["themeTrend"]["signals"]]
+
+
+def test_theme_trend_persistence_score_weight_payload_defaults_off(tmp_path: Path) -> None:
+    """payload 缺省 / 显式 0.0 / 非法值 → 与历史逐位一致（默认关，一次一候选）。"""
+    client = TestClient(app)
+    default_body = _run_theme_trend_with_payload(client, tmp_path, "theme-psw-default")
+    explicit_zero = _run_theme_trend_with_payload(client, tmp_path, "theme-psw-zero", {"persistenceScoreWeight": 0.0})
+    invalid = _run_theme_trend_with_payload(client, tmp_path, "theme-psw-invalid", {"persistenceScoreWeight": -1.0})
+    non_numeric = _run_theme_trend_with_payload(client, tmp_path, "theme-psw-nan", {"persistenceScoreWeight": "abc"})
+
+    base_scores = _theme_signal_scores(default_body)
+    assert base_scores, "合同测试需要非空题材信号才有约束力"
+    assert _theme_signal_scores(explicit_zero) == base_scores
+    assert _theme_signal_scores(invalid) == base_scores
+    assert _theme_signal_scores(non_numeric) == base_scores
+
+
+def test_theme_trend_persistence_score_weight_payload_flags_when_source_unavailable(tmp_path: Path) -> None:
+    """API 级降级路径（测试环境非 Mongo）：weight>0 时分数不变，
+    但逐信号打 persistence_daily_key_missing——fail-visible，不静默按 0。"""
+    client = TestClient(app)
+    base_body = _run_theme_trend_with_payload(client, tmp_path, "theme-psw-base")
+    weighted_body = _run_theme_trend_with_payload(
+        client, tmp_path, "theme-psw-on", {"persistenceScoreWeight": 0.5}
+    )
+
+    base_scores = _theme_signal_scores(base_body)
+    weighted_scores = _theme_signal_scores(weighted_body)
+    assert len(base_scores) == len(weighted_scores)
+    assert base_scores == weighted_scores  # 非 Mongo 无原料 → 附加项 = 0
+    assert all(
+        "persistence_daily_key_missing" in (sig.get("qualityFlags") or [])
+        for sig in weighted_body["result"]["themeTrend"]["signals"]
+    )
+    assert all("qualityFlags" not in sig for sig in base_body["result"]["themeTrend"]["signals"])
+    # 分层与成交不受持续性权重影响（只改 score 归因通道）
+    assert base_body["result"]["executionSignals"] == weighted_body["result"]["executionSignals"]
+    assert base_body["result"]["tradeSimulation"] == weighted_body["result"]["tradeSimulation"]
+
+
+def test_theme_trend_persistence_score_weight_injects_daily_factors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """端到端正向接线证明：payload weight>0 → 服务读日级原料 → 引擎合成分变化。
+
+    测试环境非 Mongo，仓储正路径无法直测（API 级降级另测），此处 monkeypatch
+    load_daily_persistence_inputs 证明服务层确实把原料送进引擎。
+    """
+    client = TestClient(app)
+    base_body = _run_theme_trend_with_payload(client, tmp_path, "theme-psw-inj-base")
+    captured: dict = {}
+
+    def fake_inputs(dataset_id: str, days: list[str]) -> tuple[dict, list[str]]:
+        captured["days"] = days
+        captured["dataset_id"] = dataset_id
+        return {d: {"机器人": {"heatLevelStreak": 6}} for d in days}, []
+
+    import backend.services.theme.daily_factors_service as daily_factors_service_module
+
+    monkeypatch.setattr(daily_factors_service_module, "load_daily_persistence_inputs", fake_inputs)
+    weighted_body = _run_theme_trend_with_payload(
+        client, tmp_path, "theme-psw-inj-on", {"persistenceScoreWeight": 1.0}
+    )
+
+    assert captured.get("days"), "weight>0 必须读取日级原料"
+    base_scores = _theme_signal_scores(base_body)
+    weighted_scores = _theme_signal_scores(weighted_body)
+    assert len(base_scores) == len(weighted_scores)
+    assert any(w > b for b, w in zip(base_scores, weighted_scores))
+    injected = [
+        sig for sig in weighted_body["result"]["themeTrend"]["signals"]
+        if sig["themeName"] == "机器人"
+    ]
+    assert injected, "夹具主题必须命中"
+    assert all("qualityFlags" not in sig for sig in injected)  # 注入命中 → 无降级标记
+
+
+def test_grid_requests_daily_factors_detection() -> None:
+    """搜索空间探测：list choices / range spec / 缺失 / 全零四态。"""
+    from backend.services.optimization_service import _grid_requests_daily_factors
+
+    assert _grid_requests_daily_factors({"persistenceScoreWeight": [0, 0.5, 1]}) is True
+    assert _grid_requests_daily_factors({"persistenceScoreWeight": {"type": "float", "low": 0.0, "high": 2.0}}) is True
+    assert _grid_requests_daily_factors({"persistenceScoreWeight": [0, 0]}) is False
+    assert _grid_requests_daily_factors({"persistenceScoreWeight": {"type": "float", "low": 0.0, "high": 0.0}}) is False
+    assert _grid_requests_daily_factors({}) is False
+    assert _grid_requests_daily_factors({"crowdingBlockThreshold": [70, 80]}) is False
+
+
+def test_theme_optimization_injects_daily_factors_for_positive_weight_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """优化器正向接线（P4-3 前置）：grid 含 >0 权重 → 装载原料并透传引擎。
+
+    monkeypatch 双点：装载帮手返回夹具 + 引擎 replay_sequence 侦听 daily_factors
+    实参，证明「搜索空间探测 → 一次装载 → 逐 trial 透传」全链贯通。
+    """
+    client = TestClient(app)
+    bundle = make_theme_trade_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-opt-inject", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    import backend.services.theme.daily_factors_service as daily_factors_service_module
+    from backend.analysis.theme.trend import ThemeTrendPythonEngine
+
+    monkeypatch.setattr(
+        daily_factors_service_module,
+        "load_daily_persistence_inputs",
+        lambda dataset_id, days: ({d: {"机器人": {"heatLevelStreak": 6}} for d in days}, []),
+    )
+    seen: list = []
+    real_replay = ThemeTrendPythonEngine.replay_sequence
+
+    def spy(self, frames, config=None, meta=None, daily_factors=None):
+        seen.append(daily_factors)
+        return real_replay(self, frames, config=config, meta=meta, daily_factors=daily_factors)
+
+    monkeypatch.setattr(ThemeTrendPythonEngine, "replay_sequence", spy)
+
+    response = client.post(
+        "/api/optimizations/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "method": "grid",
+            "trials": 4,
+            "parameterGrid": {"persistenceScoreWeight": [0, 1]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen, "至少一次引擎回放"
+    assert all(df is not None and df for df in seen), "grid 含 >0 权重 → 每个 trial 都必须拿到注入原料"
+
+
+def test_theme_optimization_skips_daily_factor_loading_for_default_grid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """负向控制：默认网格（无该参数）→ 不读原料、引擎收到 None（零 IO 默认路径）。"""
+    client = TestClient(app)
+    bundle = make_theme_trade_bundle(tmp_path)
+    imported = client.post(
+        "/api/datasets/import",
+        json={"sourceType": "json_bundle", "sourcePath": str(bundle), "name": "theme-opt-noinject", "snapshotTypes": ["half_hour"]},
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+
+    import backend.services.theme.daily_factors_service as daily_factors_service_module
+    from backend.analysis.theme.trend import ThemeTrendPythonEngine
+
+    def forbidden(dataset_id: str, days: list[str]) -> tuple[dict, list[str]]:
+        raise AssertionError("默认网格不得触发日级原料装载")
+
+    monkeypatch.setattr(daily_factors_service_module, "load_daily_persistence_inputs", forbidden)
+    seen: list = []
+    real_replay = ThemeTrendPythonEngine.replay_sequence
+
+    def spy(self, frames, config=None, meta=None, daily_factors=None):
+        seen.append(daily_factors)
+        return real_replay(self, frames, config=config, meta=meta, daily_factors=daily_factors)
+
+    monkeypatch.setattr(ThemeTrendPythonEngine, "replay_sequence", spy)
+
+    response = client.post(
+        "/api/optimizations/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "method": "grid",
+            "trials": 2,
+            "parameterGrid": {"crowdingBlockThreshold": [70, 80]},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert seen and all(df is None for df in seen), "默认路径必须零注入"
+
+
+def _theme_tier_set(body: dict) -> set[str]:
+    return {item["candidateTier"] for item in body["result"]["executionSignals"]}
+
+
+def test_theme_trend_crowding_hard_layer_payload_moves_tier(tmp_path: Path) -> None:
+    """payload 阈值 35（夹具 sector crowdingRisk=35）→ 硬层触发 C_CROWDED；
+    默认 75 不触发。信号层与执行层共用同一 payload 键（单旋钮双消费点）。"""
+    client = TestClient(app)
+    default_body = _run_theme_trend_with_payload(client, tmp_path, "theme-hl-default")
+    lowered_body = _run_theme_trend_with_payload(
+        client, tmp_path, "theme-hl-35", {"crowdingHardLayerThreshold": 35.0}
+    )
+
+    default_tiers = _theme_tier_set(default_body)
+    lowered_tiers = _theme_tier_set(lowered_body)
+    assert "C_CROWDED" not in default_tiers, "默认 75 下夹具（crowding=35）不得触发硬层"
+    assert "C_CROWDED" in lowered_tiers, "阈值 35 应使夹具题材进入 C_CROWDED"
+    # 信号层同旋钮：降阈值后题材信号 label 变 risk
+    lowered_theme_signals = lowered_body["result"]["themeTrend"]["signals"]
+    assert any(sig["signal"] == "risk" for sig in lowered_theme_signals)
+
+
+def test_theme_trend_crowding_hard_layer_payload_default_zero_drift(tmp_path: Path) -> None:
+    """显式默认 75.0 与缺省逐位一致（零漂移合同）。"""
+    client = TestClient(app)
+    default_body = _run_theme_trend_with_payload(client, tmp_path, "theme-hl-base")
+    explicit_body = _run_theme_trend_with_payload(
+        client, tmp_path, "theme-hl-explicit", {"crowdingHardLayerThreshold": 75.0}
+    )
+
+    assert default_body["result"]["executionSignals"] == explicit_body["result"]["executionSignals"]
+    assert default_body["result"]["themeTrend"]["signals"] == explicit_body["result"]["themeTrend"]["signals"]
+    assert default_body["result"]["tradeSimulation"] == explicit_body["result"]["tradeSimulation"]
+
+
+def test_confluence_execution_signals_crowding_hard_layer_threshold() -> None:
+    """confluence 执行层第六消费点（code review M-6）：阈值 35 时 crowding=35 题材
+    降 D_EXIT_RISK；默认 75 不触发。直接调静态方法（无 API 依赖）。"""
+    factor = {"snapshotId": "s1", "themeName": "机器人", "crowdingRisk": 35, "lifecycle": "mainline", "rotationState": "mainline"}
+    rank_signal = {"snapshotId": "s1", "code": "600001", "name": "题材龙头", "rank": 1, "candidateTier": "A_MAIN", "confidence": 80.0}
+    exposure = {"snapshotId": "s1", "code": "600001", "themeName": "机器人", "role": "leader", "themeContribution": 20}
+    frames = [{"snapshotId": "s1", "timestamp": 100, "tradingDate": "2026-04-01", "slotTime": "10:00", "stocks": [{"code": "600001"}]}]
+
+    default_out = BacktestService._confluence_execution_signals([rank_signal], [factor], [exposure])
+    lowered_out = BacktestService._confluence_execution_signals([rank_signal], [factor], [exposure], crowded_hard_layer_threshold=35.0)
+
+    assert all(item["candidateTier"] != "D_EXIT_RISK" for item in default_out)
+    assert all(item["candidateTier"] == "D_EXIT_RISK" for item in lowered_out)
+
+
+def test_grid_requests_daily_factors_accepts_numeric_strings() -> None:
+    """code review M-5：探测数值化口径与 from_patch 一致（"0.5" 可析即算）。"""
+    from backend.services.optimization_service import _grid_requests_daily_factors
+
+    assert _grid_requests_daily_factors({"persistenceScoreWeight": [0, "0.5"]}) is True
+    assert _grid_requests_daily_factors({"persistenceScoreWeight": ["abc"]}) is False

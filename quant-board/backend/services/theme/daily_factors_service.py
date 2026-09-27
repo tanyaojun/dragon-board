@@ -22,6 +22,8 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import logging
+
 from backend.analysis.theme.daily_series import build_daily_series
 from backend.analysis.theme.factors_daily import (
     build_daily_factor_rows,
@@ -35,6 +37,8 @@ from backend.core.settings import get_settings
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.data.repositories.theme_daily_factor_repository import ThemeDailyFactorRepository
 from backend.services.backtest_service import _close_slot_rows_by_day
+
+logger = logging.getLogger(__name__)
 
 DATASET_ID = "dragonboard_live"
 DEFAULT_WINDOW = 60
@@ -325,3 +329,51 @@ def compute_and_store_daily_factors(
         "startedAt": started_at,
         "finishedAt": datetime.now(UTC).isoformat(),
     }
+
+
+def load_daily_persistence_inputs(
+    dataset_id: str, days: list[str]
+) -> tuple[dict[str, dict[str, dict[str, Any]]], list[str]]:
+    """读取日级持续性原料（theme_daily_factors.factors.heatLevelStreak）供回测注入。
+
+    Phase 4 P4-3 前置接线（2026-09-27 Path B）：返回
+    ``(mapping, source_flags)`` 二元组，mapping =
+    ``{trading_date: {theme_key: {"heatLevelStreak": float | None}}}``，由
+    backtest_service / optimization_service 在 persistenceScoreWeight > 0 时
+    显式传给 ``ThemeTrendPythonEngine.replay_sequence(daily_factors=...)``；
+    source_flags 为数据源级结构化原因（调用方负责透出，code review I-4：
+    禁止把读库异常折叠成"无行"失真归因，对标 _theme_gating_inputs 三分模板）。
+
+    双键（themeId/themeName）索引：生产形态因子行按映射 themeId+themeName 存，
+    half_hour sector rows 因子只有 entityKey/entityName → 实测 07-06~09-24
+    entityName ∩ themeName = 245/245 完全对齐、∩ themeId = 0，themeName 是
+    唯一有效对齐键（与 _theme_gating_inputs 拥挤度分位读取同一模板）。
+
+    fail-visible：非 mongodb 后端 / 读失败 / 无行分别打
+    persistence_source_unavailable:storage_backend_not_mongodb /
+    persistence_source_unavailable:{exc}（同步落日志）/ persistence_source_no_rows，
+    mapping 均为 {}，引擎逐信号另打 persistence_daily_key_missing。
+    """
+    days = sorted(days)  # 防御：list_range 假定有序，不依赖调用方（code review M-7）
+    if not days or get_settings().storage_backend != "mongodb":
+        return {}, ["persistence_source_unavailable:storage_backend_not_mongodb"]
+    try:
+        factor_repo = ThemeDailyFactorRepository(get_runtime_mongodb_database())
+        docs = factor_repo.list_range(dataset_id, days[0], days[-1])
+        out: dict[str, dict[str, dict[str, Any]]] = {}
+        for doc in docs:
+            factors_doc = doc.get("factors")
+            streak = factors_doc.get("heatLevelStreak") if isinstance(factors_doc, dict) else None
+            value = float(streak) if isinstance(streak, (int, float)) else None
+            trading_date = str(doc.get("tradingDate") or "")
+            for key in {str(doc.get("themeId") or ""), str(doc.get("themeName") or "")} - {""}:
+                out.setdefault(trading_date, {}).setdefault(key, {})["heatLevelStreak"] = value
+        if not out:
+            return {}, ["persistence_source_no_rows"]
+        return out, []
+    except Exception as exc:
+        logger.warning(
+            "load_daily_persistence_inputs failed: dataset=%s days=%s error=%s",
+            dataset_id, days, exc,
+        )
+        return {}, [f"persistence_source_unavailable:{exc}"]

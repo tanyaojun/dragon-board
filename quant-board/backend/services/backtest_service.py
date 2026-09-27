@@ -833,9 +833,35 @@ class BacktestService:
         engine_config = {
             "crowdedRiskThreshold": int(camel_get(payload, "crowdingBlockThreshold", "crowdingBlockThreshold", 75)),
             "minFrames": 2,
+            # 持续性因子进合成分的权重（Phase 4 P4-3 前置接线）：默认 0.0 = 关，
+            # 与历史逐位一致；显式传值才生效（一次一候选纪律）。
+            "persistenceScoreWeight": _payload_float(
+                camel_get(payload, "persistence_score_weight", "persistenceScoreWeight"), 0.0
+            ),
+            # 拥挤硬层阈值（D2① 参数化）：信号层（ThemeTrendConfig）与执行层
+            # （_theme_execution_signals 入参）共用同一 payload 键，单旋钮双消费点
+            "crowdedHardLayerThreshold": _payload_float(
+                camel_get(payload, "crowding_hard_layer_threshold", "crowdingHardLayerThreshold", 75.0), 75.0
+            ),
         }
         config = ThemeTrendConfig.from_patch(engine_config)
-        theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
+        # 日级持续性原料注入（Path B，2026-09-27）：仅 weight>0 时读库，默认路径零 IO；
+        # 非 Mongo / 读失败返回 {}，引擎逐信号打 persistence_daily_key_missing。
+        persistence_score_weight = engine_config["persistenceScoreWeight"]
+        daily_factors = None
+        if persistence_score_weight > 0:
+            # 帮手在 daily_factors_service（无环：该模块本就模块级依赖
+            # backtest_service._close_slot_rows_by_day，反向模块级导入会成环）
+            from backend.services.theme.daily_factors_service import load_daily_persistence_inputs
+
+            trading_days = sorted({str(f.get("tradingDate") or "") for f in frames} - {""})
+            daily_factors, daily_source_flags = load_daily_persistence_inputs(dataset_id, trading_days)
+        theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config, daily_factors=daily_factors)
+        if persistence_score_weight > 0 and daily_source_flags:
+            # 数据源级结构化原因透出（code review I-4：禁止单靠信号级 key_missing 失真归因）
+            theme_result["qualityReport"]["warnings"] = list(dict.fromkeys(
+                [*theme_result["qualityReport"].get("warnings", []), *daily_source_flags]
+            ))
 
         quality_report = theme_result.get("qualityReport", {})
         factors = theme_result.get("factors", [])
@@ -868,7 +894,10 @@ class BacktestService:
                 ),
             }
         execution_signals = self._theme_execution_signals(
-            frames, factors, exposures, strategy_name, sg_inputs=sg_inputs, gating_inputs=gating_inputs
+            frames, factors, exposures, strategy_name, sg_inputs=sg_inputs, gating_inputs=gating_inputs,
+            crowded_hard_layer_threshold=_payload_float(
+                camel_get(payload, "crowding_hard_layer_threshold", "crowdingHardLayerThreshold", 75.0), 75.0
+            ),
         )
         trade_config = self._theme_trade_config(payload, strategy_name)
         trade_simulation = (
@@ -1004,13 +1033,32 @@ class BacktestService:
             raise ValueError(f"dataset has no frames for {snapshot_type}: {dataset_id}")
 
 
+        confluence_weight = _payload_float(
+            camel_get(payload, "persistence_score_weight", "persistenceScoreWeight"), 0.0
+        )
         config = ThemeTrendConfig.from_patch(
             {
                 "crowdedRiskThreshold": int(camel_get(payload, "maxThemeCrowding", "maxThemeCrowding", 85)),
                 "minFrames": 2,
+                # 持续性因子进合成分的权重（Phase 4 P4-3 前置接线）：默认 0.0 = 关
+                "persistenceScoreWeight": confluence_weight,
+                "crowdedHardLayerThreshold": _payload_float(
+                    camel_get(payload, "crowding_hard_layer_threshold", "crowdingHardLayerThreshold", 75.0), 75.0
+                ),
             }
         )
-        theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
+        # 日级持续性原料注入（Path B）：仅 weight>0 时读库，默认路径零 IO
+        confluence_daily = None
+        if confluence_weight > 0:
+            from backend.services.theme.daily_factors_service import load_daily_persistence_inputs
+
+            confluence_days = sorted({str(f.get("tradingDate") or "") for f in frames} - {""})
+            confluence_daily, confluence_source_flags = load_daily_persistence_inputs(dataset_id, confluence_days)
+        theme_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config, daily_factors=confluence_daily)
+        if confluence_weight > 0 and confluence_source_flags:
+            theme_result["qualityReport"]["warnings"] = list(dict.fromkeys(
+                [*theme_result["qualityReport"].get("warnings", []), *confluence_source_flags]
+            ))
 
         rank_trend_control: dict[str, Any] = {}
         rank_frames: list[dict[str, Any]] = []
@@ -1050,7 +1098,12 @@ class BacktestService:
         factors = theme_result.get("factors", [])
         exposures = theme_result.get("exposures", [])
         execution_frames = rank_frames or frames
-        execution_signals = self._confluence_execution_signals(rank_signals, factors, exposures)
+        execution_signals = self._confluence_execution_signals(
+            rank_signals, factors, exposures,
+            crowded_hard_layer_threshold=_payload_float(
+                camel_get(payload, "crowding_hard_layer_threshold", "crowdingHardLayerThreshold", 75.0), 75.0
+            ),
+        )
         trade_config = self._theme_trade_config(payload, strategy_name)
         trade_simulation = (
             TradeSimulator().run(execution_frames, execution_signals, trade_config)
@@ -1548,6 +1601,7 @@ class BacktestService:
         strategy_name: str,
         sg_inputs: dict[str, Any] | None = None,
         gating_inputs: dict[str, Any] | None = None,
+        crowded_hard_layer_threshold: float = 75.0,
     ) -> list[dict[str, Any]]:
         factor_by_snapshot_theme = {
             (str(factor.get("snapshotId") or ""), str(factor.get("themeName") or "")): factor
@@ -1578,7 +1632,7 @@ class BacktestService:
                 contribution = float((exposure or {}).get("themeContribution") or stock.get("themeContribution") or 0)
                 exposure_weight = float((exposure or {}).get("exposureWeight") or stock.get("themeExposureWeight") or 0)
                 tier = "N_NEUTRAL"
-                if crowding >= 75:
+                if crowding >= crowded_hard_layer_threshold:
                     tier = "C_CROWDED"
                 elif rotation_state in {"mainline", "inflow"} and (exposure_weight >= 55 or contribution >= 8):
                     tier = "A_MAIN"
@@ -1589,7 +1643,7 @@ class BacktestService:
                 role = str((exposure or {}).get("role") or stock.get("themeRole") or "")
                 heat_level = _persisted_heat_level(factor)
                 confidence = min(100.0, max(0.0, exposure_weight or heat_level))
-                theme_risk_flags = [f"crowding:{crowding}"] if crowding >= 75 else []
+                theme_risk_flags = [f"crowding:{crowding}"] if crowding >= crowded_hard_layer_threshold else []
                 theme_reasons = [f"lifecycle:{lifecycle}", f"strategy:{strategy_name}"]
                 confluence_score = round(
                     min(100.0, max(0.0, heat_level * 0.45 + exposure_weight * 0.35 + contribution * 0.8)),
@@ -1601,15 +1655,15 @@ class BacktestService:
                 if raw_theme_heat is None:
                     raw_theme_heat = stock.get("themeHeat")
                 if strategy_name == "leader_theme_confirmation":
-                    if role == "leader" and tier in {"A_MAIN", "B_IGNITION"} and crowding < 75:
+                    if role == "leader" and tier in {"A_MAIN", "B_IGNITION"} and crowding < crowded_hard_layer_threshold:
                         theme_reasons.append("leader_confirmation")
                         confidence = min(100.0, confidence + 6.0)
                     else:
-                        tier = "D_EXIT_RISK" if lifecycle in {"cooling", "reversal"} or crowding >= 75 else "N_NEUTRAL"
+                        tier = "D_EXIT_RISK" if lifecycle in {"cooling", "reversal"} or crowding >= crowded_hard_layer_threshold else "N_NEUTRAL"
                         theme_risk_flags.append("leader_required")
                         theme_reasons.append("leader_downgraded_to_watch")
                 elif strategy_name == "hotlist_theme_confluence":
-                    if confluence_score >= 75 and tier in {"A_MAIN", "B_IGNITION"} and crowding < 75:
+                    if confluence_score >= 75 and tier in {"A_MAIN", "B_IGNITION"} and crowding < crowded_hard_layer_threshold:
                         theme_reasons.append("hotlist_confluence")
                         confidence = min(100.0, max(confidence, confluence_score))
                     elif confluence_score < 45 or role == "noise":
@@ -1688,6 +1742,7 @@ class BacktestService:
         rank_signals: list[dict[str, Any]],
         factors: list[dict[str, Any]],
         exposures: list[dict[str, Any]],
+        crowded_hard_layer_threshold: float = 75.0,
     ) -> list[dict[str, Any]]:
         factor_by_snapshot_theme = {
             (str(factor.get("snapshotId") or ""), str(factor.get("themeName") or "")): factor
@@ -1719,7 +1774,7 @@ class BacktestService:
             item["themeSupportScore"] = float((exposure or {}).get("exposureWeight") or signal.get("themeSupportScore") or 0)
             item["themeReasons"] = [*([str(v) for v in signal.get("themeReasons") or []]), f"theme_lifecycle:{lifecycle}"]
             item["themeRiskFlags"] = [*([str(v) for v in signal.get("themeRiskFlags") or []])]
-            if lifecycle in {"cooling", "reversal"} or crowding >= 75:
+            if lifecycle in {"cooling", "reversal"} or crowding >= crowded_hard_layer_threshold:
                 item["candidateTier"] = "D_EXIT_RISK"
                 item["regime"] = "retreat"
                 item["themeRiskFlags"].append("theme_blocked")

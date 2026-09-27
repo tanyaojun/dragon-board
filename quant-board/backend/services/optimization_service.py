@@ -22,6 +22,28 @@ from backend.services.shared import (
 )
 
 
+def _grid_requests_daily_factors(search_space: dict[str, Any]) -> bool:
+    """搜索空间是否含 >0 的 persistenceScoreWeight（list choices 或 range spec）。
+
+    Phase 4 P4-3 前置接线（2026-09-27 Path B）：为真时才读 theme_daily_factors
+    装载日级持续性原料（一次装载、全 trial 复用），避免默认路径零必要 IO。
+    数值化口径与 ThemeTrendConfig.from_patch 一致（float() 可析的字符串也算，
+    code review M-5：否则 "0.5" 会被探测漏掉而引擎侧生效，全 trial source_not_provided）。
+    """
+    def _positive(value: Any) -> bool:
+        try:
+            return not isinstance(value, bool) and float(value) > 0
+        except (TypeError, ValueError):
+            return False
+
+    spec = search_space.get("persistenceScoreWeight")
+    if isinstance(spec, dict):
+        return any(_positive(v) for v in (spec.get("low"), spec.get("high")))
+    if isinstance(spec, list):
+        return any(_positive(v) for v in spec)
+    return False
+
+
 class OptimizationService:
     def __init__(self, session: Session | None):
         self.repo = create_repository(session)
@@ -145,12 +167,22 @@ class OptimizationService:
         trial_params_list = select_candidates(search_space, max_trials, method, random_seed)
 
         trial_errors: list[dict[str, Any]] = []
+        # 日级持续性原料（Path B，2026-09-27）：搜索空间含 >0 权重时才装载，
+        # 一次装载全 trial 复用；非 Mongo/读失败/无行 → {} + 结构化源级标记，
+        # 引擎逐信号打 persistence_daily_key_missing（fail-visible，不静默按 0）。
+        daily_factors = None
+        daily_source_flags: list[str] = []
+        if _grid_requests_daily_factors(search_space):
+            from backend.services.theme.daily_factors_service import load_daily_persistence_inputs
+
+            trading_days = sorted({str(f.get("tradingDate") or "") for f in frames} - {""})
+            daily_factors, daily_source_flags = load_daily_persistence_inputs(dataset_id, trading_days)
         for trial_idx, trial_params in enumerate(trial_params_list):
             try:
                 config = ThemeTrendConfig.from_patch({
                     k: v for k, v in trial_params.items()
                 })
-                engine_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config)
+                engine_result = ThemeTrendPythonEngine().replay_sequence(frames, config=config, daily_factors=daily_factors)
                 score = score_theme_trend(engine_result, objective)
                 trial_results.append({
                     "trialId": trial_idx,
@@ -182,6 +214,9 @@ class OptimizationService:
             "best": best,
             "trialList": trial_results[:50],
         }
+        if daily_source_flags:
+            # 数据源级结构化原因透出（code review I-4）
+            result_payload["dailyFactorSourceFlags"] = daily_source_flags
 
         opt_run = OptimizationRun(
             id=run_id,

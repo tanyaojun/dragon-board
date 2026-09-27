@@ -104,6 +104,10 @@ class ThemeSignalRow:
     risk: str = "none"
     lifecycle: str = "neutral"
     score: float = 0.0
+    # 持续性日频原料 fail-visible 三态标记（2026-09-27 Path B）：
+    # persistence_daily_source_not_provided / persistence_daily_key_missing /
+    # persistence_daily_value_insufficient；默认空列表 = 因子关闭/注入命中。
+    qualityFlags: list[str] = field(default_factory=list)
 
     datasetId: str = ""
     snapshotId: str = ""
@@ -153,6 +157,25 @@ class ThemeTrendConfig:
     ignitionMomentumThreshold: float = 50
     coolingMomentumThreshold: float = 35
     reversalMomentumThreshold: float = 25
+    # 持续性因子进 v12 六维合成分的权重（Phase 4 P4-3 前置接线，2026-09-27）。
+    # 默认 0.0 = 机制在位、零行为变化（一次一候选纪律：过验后才逐个启用）。
+    # 合成语义定版为「附加项、不重新归一」：基础六维权重和本为 0.85 而非 1.0，
+    # 重新归一会在 weight=0 时也改变分值（违反 golden 不变）。
+    # 原料已定版 Path B：注入的日级 heatLevelStreak（replay_sequence 新参
+    # daily_factors，theme_daily_factors.factors 键，连续 N 日 heatLevel ≥ 70），
+    # **非** in-frame persistenceScore（实测全研究窗 15:00 收盘帧 99.3% 恒 92.0，
+    # 横截面零方差，已弃用）。量纲 = 日计数（实测 max 15/p95 2），P4-3 权重候选
+    # 需按「每天贡献 X 分」重推（原 {0,0.03,0.05,0.08} 按 0-100 因子定，过小）。
+    persistenceScoreWeight: float = 0.0
+    # 拥挤硬层阈值（2026-09-27 D2① 参数化）：原信号层 + 执行层共七处硬编码
+    # 比较点（trend.py 1 + backtest_service 6，含 leader/confluence 分支）单旋钮，
+    # 信号层 signal="risk" 分支与执行层 C_CROWDED/D_EXIT_RISK/leader/confluence
+    # 门共享。
+    # 默认 75.0 = 逐位不变；Phase 2 实测 crowdingRisk 量纲（daily max 24.8 /
+    # half_hour max 71.08）与旧阈值差一个数量级、本窗零触发，P4-3-S3 扫描
+    # {35,45,55} 需可设置。注意与 crowdedRiskThreshold（默认 80，仅 quality
+    # flag crowding_risk_high）语义不同，勿混用。
+    crowdedHardLayerThreshold: float = 75.0
 
     @classmethod
     def from_patch(cls, patch: dict[str, Any] | None = None) -> "ThemeTrendConfig":
@@ -165,6 +188,12 @@ class ThemeTrendConfig:
         config.minFrames = max(1, int(config.minFrames))
         config.minStocksPerFrame = max(0, int(config.minStocksPerFrame))
         config.minSectorsPerFrame = max(0, int(config.minSectorsPerFrame))
+        # fail-visible：负值/非有限/非数值权重回落 0.0（关闭），不伪造负向因子
+        weight = config.persistenceScoreWeight
+        if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(float(weight)):
+            config.persistenceScoreWeight = 0.0
+        else:
+            config.persistenceScoreWeight = max(0.0, float(weight))
         return config
 
 
@@ -646,11 +675,36 @@ def _build_exposure(stock: dict[str, Any], factors: list[dict[str, Any]]) -> dic
     }
 
 
-def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
+def _match_daily_factor_row(day_rows: Any, factor: dict[str, Any]) -> dict[str, Any]:
+    """日频因子行双键匹配（themeId / themeName），确定序不依赖 hash 种子。
+
+    生产形态：theme_daily_factors 行按映射 themeId+themeName 存，half_hour
+    sector rows 因子只有 entityKey/entityName（无 themeId）→ 实测 07-06~09-24
+    entityName ∩ themeName = 245/245 完全对齐、∩ themeId = 0，故 themeName
+    是唯一有效对齐键。匹配序固定为 themeName 优先、themeId 冗余补位（禁止
+    set 迭代序：两键同中不同值时结果必须可复现，回测带 randomSeed 复现纪律）；
+    同名因子字段先到非 None 值优先，后到 None 不覆盖。
+    """
+    matched: dict[str, Any] = {}
+    if not isinstance(day_rows, dict):
+        return matched
+    keys = [str(factor.get("themeName") or ""), str(factor.get("themeId") or "")]
+    for key in dict.fromkeys(k for k in keys if k):  # 去重保序：themeName 在前
+        row = day_rows.get(key)
+        if not isinstance(row, dict):
+            continue
+        for name, value in row.items():
+            if name not in matched or matched[name] is None:
+                matched[name] = value
+    return matched
+
+
+def _build_signal(factor: dict[str, Any], config: "ThemeTrendConfig | None" = None) -> dict[str, Any]:
     # D5：lifecycle 状态机废弃；信号基于 rotationState 方向标签 + 拥挤度
     rotation_state = _name(factor.get("rotationState"))
     crowding = _num(factor.get("crowdingRisk"))
-    if crowding >= 75.0:
+    hard_layer = config.crowdedHardLayerThreshold if config is not None else 75.0
+    if crowding >= hard_layer:
         signal = "risk"
         risk = "crowded"
     elif rotation_state == "mainline":
@@ -665,7 +719,27 @@ def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
     else:
         signal = "watch"
         risk = "none"
-    return {
+    # 持续性附加项（Phase 4 P4-3 前置接线，2026-09-27 Path B 裁决）：默认权重 0
+    # → 与历史逐位一致。原料 = 注入的日级 heatLevelStreak（replay_sequence
+    # daily_factors 参数，theme_daily_factors.factors 键），**不吃 in-frame
+    # persistenceScore**——实测全研究窗 15:00 收盘帧 99.3% 恒 92.0（公式 d=5
+    # 饱和 + 同日题材集只增不减），横截面零方差不可作因子。
+    # fail-visible 三态：weight>0 时未注入/键未中/值 None 分别显式打标，不静默按 0。
+    persistence_weight = config.persistenceScoreWeight if config is not None else 0.0
+    flags: list[str] = []
+    daily_streak: float | None = None
+    if persistence_weight > 0:
+        if "dailyFactors" not in factor:
+            flags.append("persistence_daily_source_not_provided")
+        else:
+            daily = factor.get("dailyFactors")
+            if not isinstance(daily, dict) or "heatLevelStreak" not in daily:
+                flags.append("persistence_daily_key_missing")
+            else:
+                daily_streak = daily.get("heatLevelStreak")
+                if daily_streak is None:
+                    flags.append("persistence_daily_value_insufficient")
+    result = {
         "themeId": factor["themeId"],
         "themeName": factor["themeName"],
         "signal": signal,
@@ -678,8 +752,13 @@ def _build_signal(factor: dict[str, Any]) -> dict[str, Any]:
             + _num(factor["fundScore"]) * 0.15
             + factor["leadershipScore"] * 0.2
             - factor["crowdingRisk"] * 0.15
+            + _num(daily_streak) * persistence_weight
         ),
     }
+    if flags:
+        # 仅在有话可说时挂 qualityFlags：默认路径（weight=0）信号 dict 逐位不变
+        result["qualityFlags"] = flags
+    return result
 
 
 class ThemeTrendPythonEngine:
@@ -720,7 +799,7 @@ class ThemeTrendPythonEngine:
                 report["warnings"].append("unmatched_theme_stock")
                 report["warnings"] = list(dict.fromkeys(report["warnings"]))
 
-        signals = [_build_signal(factor) for factor in factors]
+        signals = [_build_signal(factor, resolved_config) for factor in factors]
         return self._result(factors, exposures, signals, report, meta)
 
     def replay_typed(
@@ -737,8 +816,16 @@ class ThemeTrendPythonEngine:
         frames: list[dict[str, Any]] | Any,
         config: ThemeTrendConfig | dict[str, Any] | None = None,
         meta: dict[str, Any] | None = None,
+        daily_factors: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> dict[str, Any]:
-        """多帧回放：逐帧计算因子，同时追踪题材生命周期在帧间的迁移和持续性。"""
+        """多帧回放：逐帧计算因子，同时追踪题材生命周期在帧间的迁移和持续性。
+
+        daily_factors（可选，Phase 4 P4-3 前置接线）：日频因子注入源，形态
+        ``{trading_date: {theme_key: {factor_name: value|None}}}``，由调用方从
+        theme_daily_factors 读出后显式传入（as-of：只传 ≤ 帧日的行）。逐帧按
+        双键（themeId/themeName）匹配注入 ``factor["dailyFactors"]``；参数为
+        None 时不注入该键，weight>0 时信号打 persistence_daily_source_not_provided。
+        """
         resolved_config = config if isinstance(config, ThemeTrendConfig) else ThemeTrendConfig.from_patch(config)
         report = build_theme_quality_report(frames)
         valid_frames = sorted(
@@ -762,6 +849,13 @@ class ThemeTrendPythonEngine:
                 _build_factor(sector, resolved_config) for sector in _sector_rows(frame)
             ]
             frame_factors.sort(key=lambda item: item["rank"] if item["rank"] > 0 else 999999)
+
+            # 日频因子注入（可选）：参数为 None 不注入（保持旧调用方 dict 形态），
+            # 提供但该日无行 → 空 dailyFactors → 信号打 persistence_daily_key_missing
+            if daily_factors is not None:
+                day_rows = daily_factors.get(trading_date)
+                for factor in frame_factors:
+                    factor["dailyFactors"] = _match_daily_factor_row(day_rows, factor)
 
             for factor in frame_factors:
                 theme_id = factor["themeId"]
@@ -818,11 +912,16 @@ class ThemeTrendPythonEngine:
 
             all_exposures.extend(frame_exposures)
 
-            for sig in [_build_signal(factor) for factor in frame_factors]:
+            for sig in [_build_signal(factor, resolved_config) for factor in frame_factors]:
                 sig["snapshotId"] = snapshot_id
                 sig["tradingDate"] = trading_date
                 sig["slotTime"] = slot_time
                 all_signals.append(sig)
+
+            # 剥离注入键（code review M-2）：dailyFactors 仅服务 _build_signal，
+            # 不得随 factors 泄漏进持久化产物（result_json/themeTrend.factors）
+            for factor in frame_factors:
+                factor.pop("dailyFactors", None)
 
         # 合并额外警告到质量报告，不去原地修改 build_theme_quality_report 返回值
         if extra_warnings:
@@ -836,8 +935,9 @@ class ThemeTrendPythonEngine:
         frames: list[dict[str, Any]] | Any,
         config: ThemeTrendConfig | dict[str, Any] | None = None,
         meta: dict[str, Any] | None = None,
+        daily_factors: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> ThemeTrendResult:
-        raw = self.replay_sequence(frames, config, meta)
+        raw = self.replay_sequence(frames, config, meta, daily_factors=daily_factors)
         return _to_typed_result(raw, meta)
 
     def _result(
