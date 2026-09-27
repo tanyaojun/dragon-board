@@ -50,3 +50,10 @@
 ## 非目标
 
 - 不做轮询/自动刷新；不做虚拟滚动；不动后端 API；不新增顶栏入口；不在本批消费 mainlineConcentrationRank 做额外分析。
+
+## 二轮增补（2026-09-27 用户验收反馈，已确认）
+
+- **`SectorRotationTree.vue`（新建）**：轮动状态页签的嵌入式树形视图列表——按 rotationState 分组（mainline/inflow/emerging/neutral/outflow/cooling/unknown）的 tree-node 卡片列表，样式参照 `SectorStocksTree.vue`（node-header/node-metrics/node-progress/选中高亮）；卡片含题材名/状态徽章/rank 徽章/轮动分/rankChange/flowTrend/rotationScore 进度条；点击卡片 emit select。
+- **`SectorRotation.vue`（新建）**：题材轮动明细弹出面板——Teleport + usePanel 弹出范式（参照 `SectorDetail.vue`）：←返回头部 + info-card（名称/状态/数据时点）+ metrics-grid（轮动分/排名/净流入趋势）+ 四维因子卡（强度/资金/广度/拥挤，进度条）+ 质量标记；数据直接取自 statuses 行（零额外 API）。
+- **交互链**：轮动状态页签 = 摘要区 + 状态筛选 chips（上移为树形/表格共用）+ SectorRotationTree（主列表）+ 展开状态表（保留折叠）；点击树形卡片 → SectorRotation 弹出面板（triggerRect 定位），←返回关闭。
+- 数据时点/筛选状态由 SectorRotationTab 统一持有，两个视图共用。

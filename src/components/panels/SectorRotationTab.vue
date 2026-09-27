@@ -52,22 +52,31 @@
         </div>
       </section>
 
+      <div class="table-filters">
+        <button
+          v-for="option in filterOptions"
+          :key="option.value"
+          class="filter-btn"
+          :class="{ active: stateFilter === option.value }"
+          @click="stateFilter = option.value"
+        >
+          {{ option.label }}
+        </button>
+      </div>
+
+      <section class="rotation-tree-section">
+        <SectorRotationTree
+          :statuses="filteredStatuses"
+          :selected-key="rotationDetail?.row.entityKey"
+          @select="openRotationDetail"
+        />
+      </section>
+
       <section class="rotation-table-section">
         <button class="table-toggle" @click="tableOpen = !tableOpen">
           {{ tableOpen ? '收起题材状态表' : `展开题材状态表（${statuses.length}）` }}
         </button>
         <div v-if="tableOpen" class="rotation-table-wrap">
-          <div class="table-filters">
-            <button
-              v-for="option in filterOptions"
-              :key="option.value"
-              class="filter-btn"
-              :class="{ active: stateFilter === option.value }"
-              @click="stateFilter = option.value"
-            >
-              {{ option.label }}
-            </button>
-          </div>
           <table class="rotation-table">
             <thead>
               <tr>
@@ -103,6 +112,14 @@
         </div>
       </section>
     </template>
+
+    <SectorRotation
+      :visible="rotationDetail !== null"
+      :row="rotationDetail?.row ?? null"
+      :trigger-rect="rotationDetail?.triggerRect"
+      :data-time="dataTimeText"
+      @close="closeRotationDetail"
+    />
   </div>
 </template>
 
@@ -120,6 +137,8 @@ import {
   rotationStateLabel,
   ROTATION_STATE_META,
 } from '@/services/theme/rotationDisplay'
+import SectorRotationTree from './SectorRotationTree.vue'
+import SectorRotation from './SectorRotation.vue'
 
 const loading = ref(false)
 const error = ref<string | null>(null)
@@ -167,6 +186,27 @@ const outflowPreview = computed(() => outflowThemes.value.slice(0, PREVIEW_COUNT
 const outflowRestCount = computed(() => Math.max(0, outflowThemes.value.length - PREVIEW_COUNT))
 const statuses = computed(() => summary.value?.statuses ?? [])
 const stateBuckets = computed(() => countRotationStates(statuses.value))
+
+// 轮动明细弹出面板（SectorRotation.vue）：状态由本组件持有，树形列表点击打开
+const rotationDetail = ref<{ row: ThemeRotationStatusRow; triggerRect?: DOMRect } | null>(null)
+
+const filteredStatuses = computed(() =>
+  stateFilter.value === 'all'
+    ? statuses.value
+    : statuses.value.filter((row) => (row.rotationState || 'unknown') === stateFilter.value),
+)
+
+function openRotationDetail(row: ThemeRotationStatusRow, event: MouseEvent) {
+  rotationDetail.value = {
+    row,
+    triggerRect:
+      event.currentTarget instanceof HTMLElement ? event.currentTarget.getBoundingClientRect() : undefined,
+  }
+}
+
+function closeRotationDetail() {
+  rotationDetail.value = null
+}
 
 const columns = [
   { key: 'entityName', label: '题材', sortable: false },

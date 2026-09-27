@@ -46,6 +46,15 @@ describe('SectorRotationTab', () => {
     expect(tab).toContain('state-unknown')
   })
 
+  it('embeds the rotation tree list and detail flyout (second-round spec)', () => {
+    expect(tab).toContain('SectorRotationTree')
+    expect(tab).toContain(':statuses="filteredStatuses"')
+    expect(tab).toContain('@select="openRotationDetail"')
+    expect(tab).toContain('<SectorRotation')
+    expect(tab).toContain('openRotationDetail')
+    expect(tab).toContain('closeRotationDetail')
+  })
+
   it('is wired as a rotation tab inside SectorPanel', () => {
     const panel = readFileSync(join(process.cwd(), 'src', 'components', 'panels', 'SectorPanel.vue'), 'utf8')
     expect(panel).toContain("view === 'rotation'")
