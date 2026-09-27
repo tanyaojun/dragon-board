@@ -579,9 +579,11 @@ class TestBuildHeatLevelStreakValues:
         assert values == {"2026-09-01": {"T1": 1}, "2026-09-02": {"T1": 2}, "2026-09-03": {"T1": 0}}
 
     def test_empty_reported(self) -> None:
+        """空输入必须显式标记（与 build_momentum_v2_daily_values 的
+        momentum_v2_no_series 同型）：sector rows 全缺时不得静默空。"""
         values, flags = build_heat_level_streak_values({}, target_dates=["2026-09-01"])
         assert values == {}
-        assert flags == []
+        assert flags == ["heat_level_streak_no_series"]
 
     def test_target_date_outside_series_skipped(self) -> None:
         heat = {"T1": {"2026-09-01": 80.0}}
@@ -605,3 +607,26 @@ class TestMergeHeatLevelStreakIntoRows:
         assert t2["factors"]["heatLevelStreak"] == 1
         assert "crowding_unobservable" in t2["qualityFlags"]
         assert "heat_level_streak_rows_created:1" in flags
+
+    def test_none_streak_marks_insufficient_not_fabricates(self) -> None:
+        """streak=None（当日无 heatLevel 观测）如实落 None + 显式标记，不伪造 0。"""
+        rows, _ = build_daily_factor_rows(
+            make_stock_daily(), {"T1": {"A"}}, target_dates=["2026-09-03"], min_periods=3,
+        )
+        merged, flags = merge_heat_level_streak_into_rows(
+            {"2026-09-03": {"T1": None}}, rows,
+        )
+        t1 = merged[0]
+        assert t1["factors"]["heatLevelStreak"] is None
+        assert "heat_level_streak_insufficient" in t1["qualityFlags"]
+        assert flags == []
+
+    def test_insufficient_marker_deduplicated(self) -> None:
+        """重复合入同一日不重复打标（与 momentum_v2_insufficient 去重同型）。"""
+        rows, _ = build_daily_factor_rows(
+            make_stock_daily(), {"T1": {"A"}}, target_dates=["2026-09-03"], min_periods=3,
+        )
+        merged, _ = merge_heat_level_streak_into_rows({"2026-09-03": {"T1": None}}, rows)
+        merged, _ = merge_heat_level_streak_into_rows({"2026-09-03": {"T1": None}}, merged)
+        t1 = merged[0]
+        assert t1["qualityFlags"].count("heat_level_streak_insufficient") == 1

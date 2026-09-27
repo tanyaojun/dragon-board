@@ -247,12 +247,13 @@ def build_heat_level_streak_values(
     target_dates 缺省 = 全部源日期（与 build_momentum_v2_daily_values 同口径：
     不在序列内的目标日不产出该主题条目，调用方按该日无值处理）。
     返回：({date: {themeId: streak|None}}, flags)；None 日断链、低于阈值归 0、
-    断链后首个达标日=1（factor_series.level_streak 同语义）。
+    断链后首个达标日=1（factor_series.level_streak 同语义）；空输入返回
+    heat_level_streak_no_series 标记（与 momentum_v2_no_series 同型，不静默空）。
     与 D3 top_membership_streak 不同型：本算子衡量"持续处于高位水平"（绝对阈值），
     D3 衡量"持续留在截面 Top 集合"（相对排名）——两者同面板对照防双持续性重复计分。
     """
     if not heat_level_by_theme:
-        return {}, []
+        return {}, ["heat_level_streak_no_series"]
     targets = sorted(set(target_dates)) if target_dates is not None else sorted(
         {d for seq in heat_level_by_theme.values() for d in seq}
     )
