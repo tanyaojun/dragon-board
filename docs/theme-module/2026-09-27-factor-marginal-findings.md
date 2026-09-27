@@ -3,7 +3,7 @@
 - 日期：2026-09-27
 - 设计：`2026-09-27-themetrend-factor-convergence-design.md`；runner：`backend/operations/diagnose_theme_factor_marginal.py`（只读）；报告：`data/reports/theme-factor-marginal.json`
 - 窗口：2026-07-06 → 09-24，54 个评估日、247 题材键（**已消费窗口，全部结论探索性，正式裁决归 Phase 4 三窗**）
-- **状态更新（2026-09-27 当日）**：§1 persistenceScore 已立项重建（heat.py 管道修复提交 `80c7cbee`、日级 heatLevelStreak 算子提交 `ef82ea45`），runner candidate 已就位；本报告数据仍为重建前窗口（persistenceScore 恒 0），**heatLevelStreak 边际结论待 Mongo 27017 可用后重跑补录**。
+- **状态更新（2026-09-27 当日，已重跑）**：§1 persistenceScore 重建三提交完成（`80c7cbee`/`ef82ea45`/`224506da`）；heatLevelStreak 已补算 13,188 行并重跑 marginal 研究，结论见 §1"重跑结论"（**本窗无增量、不进 combine**）。
 
 ## 1. 头号发现：persistenceScore 是"出生即死"的算子（**已立项重建**，2026-09-27 当日）
 
@@ -14,7 +14,12 @@
   2. Q1=c 主口径（已提交 `ef82ea45`）：日级 `factor_series.level_streak`（连续 N 日 heatLevel ≥ 70）入 `theme_daily_factors.factors.heatLevelStreak`（momentumV2 同型接线，auto 模式自愈补算）。与 D3（截面 Top 成员连续）**不同型**，同面板对照防双持续性重复计分；
   3. Q2=c：日级算子原料 = 已落库 daily sector rows 的 heatLevel（`resolve_heat_level` 统一消费规则），54 天历史窗口即时可算，无回填依赖。
 - **修复前后对照**：历史 Mongo 数据恒 0（该因子从未生效）——回测 PnL 不变合同测试钉住（`test_theme_backtest.py::test_theme_backtest_pnl_invariant_to_persistence_score`：persistenceScore 0 vs 100 极端值下 tier/confidence/成交逐条一致），既有回测结论无需回溯修订；
-- **重跑待办**：`heatLevelStreak` candidate 已入 runner（`diagnose_theme_factor_marginal.py` CANDIDATES + load_stored_factors 投影），边际结论待管理员启动 MongoDB 27017 后重跑补录（见 §6 与 §7 状态标注）。
+- **重跑结论（2026-09-27 Mongo 重启后补算 + 重跑，runner 输出见 `data/reports/theme-factor-marginal.json`）**：
+  1. **补算与修复**：theme_daily_factors 13,188 行补 `factors.heatLevelStreak`（显式 target_dates 补算，既有字段零漂移、60 行样本验证）；补算实测发现**生产形态缺口**——daily sector rows 无 `themeId` 字段、题材标识走 `entityKey`（daily_series.py:84 同口径），Commit B 接线只取 themeId 致 streak 恒空，已修复并补生产形态回归用例（TDD）。
+  2. **覆盖实况（fail-visible）**：54 窗内仅 **15 天可评估**（7 月 1 天 / 8 月 0 天 / 9 月 14 天）——7/8 月 daily rows `heatLevel` 落库率 **0%**（e51219be 前落库行无该字段；v1 口径回退 heatScore≤100 实测 38/52 普遍 <70 → streak≈0 无横截面变异）；9 月覆盖 78%、streak>0 行 1,039（8%）。
+  3. **9 月 14 天实测**：pooled IC +0.004（icNeg 0.5 方向抛硬币）、**边际 IC +0.004（≈0）**、Q5−Q1 **−0.323**（大幅倒挂但 n 稀疏）。
+  4. **裁决：不进 combine**（与 D3 同族——本窗持续性方向无增量）；Q5−Q1 负向若 10 月未消费窗复现，与 D2 夏普动量反转 / Phase 1 cooling 反转同批归档"退潮预警"语义观察，不作为同向因子；n=14 不足以立项。
+  5. **修复前后对照**：persistenceScore 历史落库值恒 0 → 重跑 icDays=0 全 None（复证"出生即死"）；修复后日内粒度自 09-27 起积累，本窗无数据（符合预期）。
 
 ## 2. 联动度（correlationScore）：数据健康、无增量信息
 
@@ -48,7 +53,7 @@
 
 1. 拥挤度分位（crowdingPercentile）：边际 IC −0.063 持续为负向增量（8/9 月 IC −0.083/−0.092）——维持 Phase 2 过验项地位，进 Phase 4 参数扫描；
 2. 联动度/持续性/D3：均无边际信息，**不进 combine**，机制保留；
-3. persistenceScore 重建：**已实施**（Q3 heat.py 管道修复提交 `80c7cbee`；日级 heatLevelStreak 算子提交 `ef82ea45`）——runner candidate 已就位，**边际结论待 Mongo 重启后重跑补录**；接线归 Phase 4 终判（`ThemeTrendConfig.persistenceScoreWeight` 默认 0，golden 不变）；
+3. persistenceScore 重建：**已实施 + 已重跑**（Q3 heat.py 管道修复 `80c7cbee`；日级 heatLevelStreak 算子 `ef82ea45`；runner + 补算 + 文档 `224506da`）——heatLevelStreak 本窗 15 天可评估、边际 IC ≈0 **不进 combine**（Q5−Q1 −0.323 负向登记 10 月复验）；接线归 Phase 4 终判（`ThemeTrendConfig.persistenceScoreWeight` 默认 0，golden 不变）；
 4. 先验通道：本窗 v12 合成分胜出；rotationScore 回放后三方终判；
 5. v2 score：不作为同向先验入链；"弱势段反转/退潮预警"语义与 D2 同批另立。
 
@@ -56,9 +61,8 @@
 
 ```powershell
 cd quant-board
-# 注意：persistenceScore 重建后重跑需 Mongo 27017 运行（当前会话启动服务
-# 权限不足，报告数据停留在重建前窗口——heatLevelStreak 结论 pending，
-# 不伪造、不用重建前恒 0 数据代替新算子结论）。
+# 2026-09-27 已重跑（Mongo 27017 运行）；heatLevelStreak 补算命令：
+# compute_and_store_daily_factors(target_dates=[窗口日历日], write_redis_cache=False)
 .\.venv\Scripts\python.exe -m backend.operations.diagnose_theme_factor_marginal
 # 报告落 data/reports/theme-factor-marginal.json
 ```

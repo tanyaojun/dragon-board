@@ -1,6 +1,6 @@
 # persistenceScore 持续性算子重建实施计划
 
-- 日期：2026-09-27（立项会话）；状态：**已完成（Commit A/B/C 全部提交；C 的重跑结论待 Mongo 27017 可用后补录，见 §6）**
+- 日期：2026-09-27（立项会话）；状态：**已完成（Commit A/B/C 全部提交 + 补算重跑结论落档，见 §6）**
 - 上游：`2026-09-27-factor-marginal-findings.md` §1（Critical 待裁决项）；设计 `2026-09-27-themetrend-factor-convergence-design.md` §2.1；总设计 `2026-09-26-themetrend-v12-upgrade-design.md`
 - 纪律：TDD（RED→GREEN→REFACTOR）；一次一候选；fail-visible（缺测打标不伪造 0）；测试只跑专项
 
@@ -45,7 +45,7 @@
   - `tests/test_theme_daily_factors.py`：build+merge 端到端（序列→streak 落 factors 键；v2-only 式新建行标记）。
 - 验证：`pytest tests/test_theme_factor_series.py tests/test_theme_daily_factors.py` + `tests/test_theme_momentum_daily_series.py` 回归。
 
-### 提交 C：边际研究重跑 + 文档收敛——**代码/文档已提交（重跑结论 pending，见 §6）**
+### 提交 C：边际研究重跑 + 文档收敛——**已提交 `224506da`（含补算修复与重跑结论，见 §6）**
 
 - `backend/operations/diagnose_theme_factor_marginal.py`：`load_stored_factors` 增补 `heatLevelStreak`（factors 键）；CANDIDATES 增加 `heatLevelStreak`（与 d3Streak 同面板；persistenceScore candidate 保留——历史恒 0 复证"出生即死"，形成修复前后对照）。
 - 重跑（Mongo 27017 需运行；非交易时段）：`.\.venv\Scripts\python.exe -m backend.operations.diagnose_theme_factor_marginal` → `data/reports/theme-factor-marginal.json`。
@@ -80,5 +80,5 @@
 
 - **Commit A** `80c7cbee`：heat.py 路径对齐 + 递增/重置（含 6 个 known-answer 用例、golden v3 fixture 更新、trend golden v14→v15 bump、回测 PnL 不变合同测试）。
 - **Commit B** `ef82ea45`：`factor_series.level_streak` + `factors_daily` build/merge + `daily_factors_service` 接线（投影加 heatLevel/heatScore、auto 完整度含 heatLevelStreak 自愈）；13 个新用例（factor_series 6 + daily_factors 7）；专项回归 149 全绿。
-- **Commit C**：runner `diagnose_theme_factor_marginal.py` heatLevelStreak candidate 已就位（CANDIDATES + load_stored_factors 投影 + 面板字段）；文档收敛（findings §1/§6/§7、v12 设计 §10、phase4 计划 P4-3 第 4 项 + 未决问题）随本提交落盘。
-- **重跑 pending（fail-visible）**：本次会话 MongoDB 服务启动权限不足（net start 拒绝访问），`data/reports/theme-factor-marginal.json` 停留在重建前窗口；heatLevelStreak 边际结论不伪造，待管理员启动 27017 后执行 §4 命令补录，届时同步更新 findings §1/§6 与 v12 设计 §10 对应条目。
+- **Commit C**（`224506da`）：runner `diagnose_theme_factor_marginal.py` heatLevelStreak candidate（CANDIDATES + load_stored_factors 投影 + 面板字段）+ 文档收敛。
+- **补算 + 重跑（Commit C 后续，用户重启 Mongo 后执行）**：① 发现 Commit B 生产形态缺口——daily sector rows 无 `themeId`、题材标识走 `entityKey`（daily_series.py:84 口径），streak 接线只取 themeId 致恒空；TDD 修复（生产形态回归用例 `test_heat_level_streak_stored_from_entity_key_sector_rows`）+ 13,188 行补算（既有字段零漂移、60 行样本验证）；② 重跑结论：heatLevelStreak 本窗仅 15 天可评估（7/8 月 heatLevel 落库率 0% → v1 回退值 <70 → streak 无变异；9 月 14 天 IC +0.004、边际 IC +0.004 ≈0、Q5−Q1 −0.323）——**不进 combine**（与 D3 同族），Q5−Q1 负向登记 10 月未消费窗复验（若复现与 D2/Phase 1 反转观察项同批归档）；persistenceScore 历史恒 0 复证修复前状态（对照组成立）。

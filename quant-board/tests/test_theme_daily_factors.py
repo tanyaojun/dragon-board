@@ -460,6 +460,34 @@ class TestComputeAndStoreDailyFactors:
         assert by_tid["T9"]["factors"]["momentumV2"]["score"] is None
         assert "crowding_unobservable" in by_tid["T9"]["qualityFlags"]
 
+    def test_heat_level_streak_stored_from_entity_key_sector_rows(self) -> None:
+        """生产形态回归（2026-09-27 补算实测）：daily sector rows 无 themeId 字段、
+        题材标识走 entityKey（daily_series._theme_key 同口径 themeId or entityKey），
+        heatLevel 序列 known-answer 落 factors.heatLevelStreak。"""
+        db = FakeDb()
+        _seed_stock_rows(db)
+        _seed_mappings(db)
+        sector = db.collection("snapshot_sector_rows")
+        levels = {"2026-09-01": 100.0, "2026-09-02": 80.0, "2026-09-03": 50.0, "2026-09-04": 90.0}
+        for day, level in levels.items():
+            sector.rows.append({
+                "datasetId": "dsx", "type": "daily", "entityType": "hot_theme",
+                "tradingDate": day, "slotTime": "15:30",
+                "entityKey": "T1", "entityName": "名称T1",  # 无 themeId 键（生产形态）
+                "heatLevel": level, "heatScore": 395901, "metadata": {},
+            })
+        result = compute_and_store_daily_factors(
+            db, dataset_id="dsx", target_dates=["2026-09-04"],
+            min_periods=3, write_redis_cache=False, today="2026-09-27",
+        )
+        assert result["status"] == "ok"
+        row = next(
+            r for r in db.collection("theme_daily_factors").rows
+            if r["tradingDate"] == "2026-09-04" and r["themeId"] == "T1"
+        )
+        # 100→80 连续 2 天，09-03 归 0，09-04 断链后首个达标 = 1
+        assert row["factors"]["heatLevelStreak"] == 1
+
     def test_auto_mode_backfills_missing_v2_for_covered_dates(self) -> None:
         """自愈合同：已有拥挤行但序列覆盖内缺 momentumV2 的日期会被自动重算补齐。"""
         db = FakeDb()

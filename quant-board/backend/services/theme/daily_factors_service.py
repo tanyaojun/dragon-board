@@ -262,7 +262,10 @@ def compute_and_store_daily_factors(
     # v1 回退 heatScore≤100、v2 不回退、缺失显式 None）；连续 ≥ 70 计数。
     heat_level_by_theme: dict[str, dict[str, float | None]] = defaultdict(dict)
     for row in sector_rows:
-        theme_id = str(row.get("themeId") or "")
+        # 题材键口径与 daily_series._theme_key 一致（daily_series.py:84）：
+        # themeId 优先、entityKey 回退——生产 daily sector rows 无 themeId 字段，
+        # 只取 themeId 会全量 continue 致 streak 恒空（2026-09-27 补算实测复现）。
+        theme_id = str(row.get("themeId") or row.get("entityKey") or "").strip()
         if not theme_id:
             continue
         day = str(row.get("tradingDate") or "")

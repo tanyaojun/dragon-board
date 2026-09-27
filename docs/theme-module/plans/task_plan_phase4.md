@@ -43,6 +43,6 @@ cd quant-board
 ## 5. 未决问题
 
 - 拥挤度分位"替换还是并列瞬时口径"（Phase 2 留待三窗裁决）；
-- persistenceScore 重建后 heatLevelStreak 边际研究重跑（Mongo 27017 需管理员启动；runner candidate 已就位，报告 `2026-09-27-factor-marginal-findings.md` §1 结论 pending，不伪造）；
+- persistenceScore 重建后 heatLevelStreak 边际研究**已重跑**（2026-09-27，结论 findings §1：本窗无增量不进 combine；Q5−Q1 −0.323 负向随 10 月未消费窗复验）；
 - 另批不阻塞本计划：D2 夏普动量反转语义、SG3 15:00 口径、腾讯日 K 回溯交叉验证、D3/F1 10 月复验、hybrid 月度复验（10 月批次）；
 - MainlineScore 合成层结构改造（暂缓项）不进本批次，待后续候选再议。
