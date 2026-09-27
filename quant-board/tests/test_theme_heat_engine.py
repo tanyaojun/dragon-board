@@ -271,3 +271,126 @@ def test_main_board_st_uses_main_board_threshold_since_rule_change() -> None:
     )
 
     assert result["factors"][0]["ztCount"] == 1
+
+
+# ── persistenceScore 持续性算子重建（2026-09-27 立项，Q1=c/Q3=一并修）──────────
+# 修复前双重缺陷：写侧 metadata.consecutiveHotBuckets / 读侧顶层路径错位恒 None；
+# 递增逻辑整体缺失（读 prev 直接 ×20）。修复后口径：
+#   计数 = 上一帧 heatLevel ≥ HOT_LEVEL_THRESHOLD(70) ? prev计数+1 : 0
+#   分数 = min(计数 × 20, 100)（日内槽位粒度；跨日研究口径 = theme_daily_factors
+#          factors.heatLevelStreak，factor_series.level_streak）
+
+_QUOTES_2 = {
+    "000001": {"code": "000001", "change": 6, "amount": 100000000, "volumeRatio": 2},
+    "000002": {"code": "000002", "change": 2, "amount": 80000000, "volumeRatio": 1.5},
+}
+
+
+def test_persistence_increments_on_previous_hot_level_from_metadata_path() -> None:
+    """上一帧高位（heatLevel 85）+ metadata 计数 2 → 本帧计数 3、分数 60。
+
+    读侧必须走 metadata.consecutiveHotBuckets（heat_service._last_success 供给形态），
+    顶层路径是历史缺陷共生面（golden fixture 曾喂顶层掩盖生产断链）。
+    """
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes=_QUOTES_2,
+        funds={},
+        previous_factors={"AI": {"heatLevel": 85, "metadata": {"consecutiveHotBuckets": 2}}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["metadata"]["consecutiveHotBuckets"] == 3
+    assert factor["persistenceScore"] == 60
+
+
+def test_persistence_threshold_is_inclusive_at_seventy() -> None:
+    """边界：heatLevel 恰等于阈值 70 计为热门桶（≥ 语义）。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes=_QUOTES_2,
+        funds={},
+        previous_factors={"AI": {"heatLevel": 70, "metadata": {"consecutiveHotBuckets": 1}}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["metadata"]["consecutiveHotBuckets"] == 2
+    assert factor["persistenceScore"] == 40
+
+
+def test_persistence_resets_when_previous_level_below_threshold() -> None:
+    """上一帧 heatLevel 50（不够热）→ 计数归 0、分数 0（无持续性伪装）。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes=_QUOTES_2,
+        funds={},
+        previous_factors={"AI": {"heatLevel": 50, "metadata": {"consecutiveHotBuckets": 5}}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["metadata"]["consecutiveHotBuckets"] == 0
+    assert factor["persistenceScore"] == 0
+    assert "persistence_previous_unobserved" not in factor["qualityFlags"]
+
+
+def test_persistence_caps_at_one_hundred() -> None:
+    """封顶：计数 6 + 上一帧高位 → 7 × 20 = 140 → 100。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes=_QUOTES_2,
+        funds={},
+        previous_factors={"AI": {"heatLevel": 90, "metadata": {"consecutiveHotBuckets": 6}}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["metadata"]["consecutiveHotBuckets"] == 7
+    assert factor["persistenceScore"] == 100
+
+
+def test_persistence_first_frame_scores_zero_with_insufficient_flag() -> None:
+    """previous_factor 缺失（进程首帧/重启断链）→ 0 + persistence_history_insufficient。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes=_QUOTES_2,
+        funds={},
+        previous_factors={},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["persistenceScore"] == 0
+    assert factor["metadata"]["consecutiveHotBuckets"] == 0
+    assert "persistence_history_insufficient" in factor["qualityFlags"]
+
+
+def test_persistence_previous_unobserved_resets_and_flags() -> None:
+    """上一帧存在但 heatLevel 缺失（降级帧/无排名）→ 归 0 并显式打标，不续接断链前计数。"""
+    result = compute_theme_heat(
+        themes=[{"id": "AI", "name": "人工智能", "stocks": ["000001", "000002"]}],
+        quotes=_QUOTES_2,
+        funds={},
+        previous_factors={"AI": {"heatLevel": None, "metadata": {"consecutiveHotBuckets": 3}}},
+        computed_at=1782018300000,
+        mapping_version="v1",
+        kpl_hots={"AI": {"000001": 1200, "000002": 800}},
+    )
+
+    factor = result["factors"][0]
+    assert factor["metadata"]["consecutiveHotBuckets"] == 0
+    assert factor["persistenceScore"] == 0
+    assert "persistence_previous_unobserved" in factor["qualityFlags"]
+    assert "persistence_history_insufficient" not in factor["qualityFlags"]

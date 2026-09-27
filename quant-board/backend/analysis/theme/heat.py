@@ -17,6 +17,10 @@ _LIMIT_UP_GEM = 19.3  # 创业板（300-302，±20%）
 _LIMIT_UP_STAR = 19.3  # 科创板（688/689，±20%）
 _LIMIT_UP_BSE = 29.3  # 北交所（43xxxx / 82-88xxxx / 920xxx，±30%）
 
+# persistenceScore 热门桶阈值：上一帧 heatLevel（0-100 rank 百分位相对分）≥ 该值
+# 计为热门桶，连续性计数 +1；与日级持续性算子 factor_series.level_streak 默认阈值同源。
+HOT_LEVEL_THRESHOLD = 70.0
+
 
 def _limit_up_threshold(code: object) -> float:
     value = str(code or "").strip()
@@ -188,9 +192,30 @@ def _compute_theme_factor(
     hotness_covered_count = len(hot_values)
 
     crowding_risk, average_volume_ratio = _crowding_risk(rows, changes)
-    consecutive_hot_buckets = int(
-        max(0.0, _number((previous_factor or {}).get("consecutiveHotBuckets")))
-    )
+    # persistenceScore 持续性算子（2026-09-27 重建立项，Q1=c 主口径为日级）：
+    # 日内槽位粒度——上一帧 heatLevel ≥ HOT_LEVEL_THRESHOLD（热门）→ 连续计数 +1，
+    # 否则归 0；previous_factor 缺失（进程首帧/重启断链）→ 0（下方打
+    # persistence_history_insufficient）；previous 存在但 heatLevel 缺失（降级帧/
+    # 无排名）→ 归 0 并打 persistence_previous_unobserved（fail-visible：缺测显式
+    # 打标，不续接断链前计数、不用 0 分伪装中性）。
+    # 读侧走 metadata.consecutiveHotBuckets 与写侧对齐（heat_service._last_success
+    # 供给的是含 metadata 的完整因子；历史顶层路径错位曾致全库恒 0）。
+    # 跨日持续性口径 = theme_daily_factors factors.heatLevelStreak
+    # （factor_series.level_streak，与 D3 同面板对照防双持续性重复计分）。
+    # 公式 min(计数×20, 100) 日内粒度约 5 桶饱和，仅供实时观察；研究口径以日级为准。
+    previous_metadata = (previous_factor or {}).get("metadata")
+    previous_metadata = previous_metadata if isinstance(previous_metadata, dict) else {}
+    previous_count = int(max(0.0, _number(previous_metadata.get("consecutiveHotBuckets"))))
+    previous_level = (previous_factor or {}).get("heatLevel")
+    persistence_previous_unobserved = False
+    if previous_factor is None:
+        consecutive_hot_buckets = 0
+    elif _is_number(previous_level):
+        hot_bucket = _number(previous_level) >= HOT_LEVEL_THRESHOLD
+        consecutive_hot_buckets = previous_count + 1 if hot_bucket else 0
+    else:
+        consecutive_hot_buckets = 0
+        persistence_previous_unobserved = True
     persistence_score = _score(min(consecutive_hot_buckets * 20, 100))
     trimmed_mean_change = _trimmed_mean_change(changes)
 
@@ -242,6 +267,8 @@ def _compute_theme_factor(
         quality_flags.append("fund_flow_unavailable")
     if previous_factor is None:
         quality_flags.append("persistence_history_insufficient")
+    if persistence_previous_unobserved:
+        quality_flags.append("persistence_previous_unobserved")
     if not kpl_available:
         quality_flags.append("kpl_hotness_unavailable")
     if baseline_reset:

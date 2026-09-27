@@ -824,3 +824,59 @@ def test_theme_sg_inputs_sg1_single_observation_insufficient() -> None:
     sg = svc._theme_sg_inputs("ds-sg1", frames)
     assert sg["sgFlags"]["A"]["2026-07-06"]["sg1"] is None
     assert "sg1_insufficient_count:1" in sg["qualityFlags"]
+
+
+def _run_theme_rotation_with_persistence(client: TestClient, tmp_path: Path, value: float) -> dict:
+    """persistenceScore 取指定值时跑一轮 theme_rotation 回测（确定性种子）。"""
+    bundle = make_theme_trade_bundle(tmp_path)
+    data = json.loads(bundle.read_text(encoding="utf-8"))
+    for record in data["records"]:
+        for sector in record["payload"]["sectors"]:
+            sector["persistenceScore"] = value
+    bundle.write_text(json.dumps({"records": data["records"]}, ensure_ascii=False), encoding="utf-8")
+    imported = client.post(
+        "/api/datasets/import",
+        json={
+            "sourceType": "json_bundle",
+            "sourcePath": str(bundle),
+            "name": f"theme-persistence-{value}",
+            "snapshotTypes": ["half_hour"],
+        },
+    )
+    assert imported.status_code == 200, imported.text
+    dataset = imported.json()
+    response = client.post(
+        "/api/backtests/theme-trend",
+        json={
+            "datasetId": dataset["id"],
+            "snapshotType": "half_hour",
+            "strategyName": "theme_rotation",
+            "randomSeed": 20260430,
+            "maxHoldingBars": 2,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_theme_backtest_pnl_invariant_to_persistence_score(tmp_path: Path) -> None:
+    """回测 PnL 不变合同（2026-09-27 persistenceScore 重建立项）：
+
+    修复后 persistenceScore 从恒 0 变真值（sector rows 落库值/themeSupportScore/
+    exposure ×0.03 变化），但候选分层、置信度与进出场不得变化——同一 bundle 仅
+    persistenceScore 取 0 与 100 两个极端，回测执行信号与成交事件必须逐条一致。
+    历史 Mongo 数据恒 0，既有回测结论本就**不含**持续性效应，无需回溯修订。
+    """
+    client = TestClient(app)
+    zero = _run_theme_rotation_with_persistence(client, tmp_path, 0)
+    full = _run_theme_rotation_with_persistence(client, tmp_path, 100)
+
+    def signal_digest(body: dict) -> list[tuple]:
+        return [
+            (item["code"], item["candidateTier"], item["confidence"])
+            for item in body["result"]["executionSignals"]
+        ]
+
+    assert signal_digest(zero) == signal_digest(full)
+    assert zero["result"]["tradeSimulation"] == full["result"]["tradeSimulation"]
+    assert zero["result"]["executionSignals"], "合同测试需要非空执行信号才有约束力"

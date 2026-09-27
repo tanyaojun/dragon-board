@@ -64,7 +64,10 @@
     "previous_factors": {
       "AI": {
         "heatScore": 1800,
-        "consecutiveHotBuckets": 2
+        "heatLevel": 85,
+        "metadata": {
+          "consecutiveHotBuckets": 2
+        }
       }
     },
     "computed_at": 1782018300000,
@@ -95,7 +98,7 @@
         "leadershipScore": 57.0,
         "correlationScore": 100.0,
         "crowdingRisk": 14.0,
-        "persistenceScore": 40,
+        "persistenceScore": 60,
         "stockCount": 2,
         "quoteCoveredCount": 2,
         "fundCoveredCount": 2,
@@ -111,7 +114,7 @@
           "quoteCoverage": 1.0,
           "fundCoverage": 1.0,
           "trimmedMeanChange": 7.5,
-          "consecutiveHotBuckets": 2,
+          "consecutiveHotBuckets": 3,
           "hotnessChangeRatio": 0.1111
         }
       },
