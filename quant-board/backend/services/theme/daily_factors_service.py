@@ -22,7 +22,12 @@ from collections import defaultdict
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from backend.analysis.theme.factors_daily import build_daily_factor_rows
+from backend.analysis.theme.daily_series import build_daily_series
+from backend.analysis.theme.factors_daily import (
+    build_daily_factor_rows,
+    build_momentum_v2_daily_values,
+    merge_momentum_v2_into_rows,
+)
 from backend.core.settings import get_settings
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.data.repositories.theme_daily_factor_repository import ThemeDailyFactorRepository
@@ -74,6 +79,36 @@ def _load_stock_daily(
     return out, missing
 
 
+def _load_daily_sector_rows(db: Any, dataset_id: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+    """daily 类型 hot_theme sector rows（v2 日线序列源，245 题材全覆盖）。"""
+    return list(
+        db["snapshot_sector_rows"].find(
+            {
+                "datasetId": dataset_id,
+                "type": "daily",
+                "entityType": "hot_theme",
+                "tradingDate": {"$gte": start_date, "$lte": end_date},
+            },
+            {
+                "_id": 0,
+                "tradingDate": 1,
+                "slotTime": 1,
+                "entityType": 1,
+                "entityKey": 1,
+                "themeId": 1,
+                "entityName": 1,
+                "themeName": 1,
+                "change": 1,
+                "ztCount": 1,
+                "breadthScore": 1,
+                "mainNetInflow": 1,
+                "crowdingRisk": 1,
+                "metadata": 1,
+            },
+        )
+    )
+
+
 def _load_theme_members(db: Any) -> dict[str, set[str]]:
     members: dict[str, set[str]] = defaultdict(set)
     for doc in db["theme_stock_mappings"].find({}, {"themeId": 1, "stockCode": 1}):
@@ -111,8 +146,13 @@ def _write_latest_cache(dataset_id: str, trading_date: str, day_rows: list[dict[
                 for row in day_rows
             },
         }
-        cache.set_response(key, payload, ttl_seconds=settings.theme_daily_factors_cache_ttl_seconds)
-        return True
+        try:
+            cache.set_response(key, payload, ttl_seconds=settings.theme_daily_factors_cache_ttl_seconds)
+            return True
+        except Exception:
+            # 连接超时（0.2s 预算）在重计算进程内偶发：重试一次（连接懒建，第二次通常已就绪）
+            cache.set_response(key, payload, ttl_seconds=settings.theme_daily_factors_cache_ttl_seconds)
+            return True
     except Exception:
         return False
 
@@ -142,8 +182,9 @@ def compute_and_store_daily_factors(
     ).isoformat()
 
     stock_daily, missing = _load_stock_daily(db, dataset_id, start_day, end_day)
+    sector_rows = _load_daily_sector_rows(db, dataset_id, start_day, end_day)
     mode = "auto" if target_dates is None else "explicit"
-    if not stock_daily:
+    if not stock_daily and not sector_rows:
         return {
             "status": "no_source_data",
             "ok": False,
@@ -164,18 +205,32 @@ def compute_and_store_daily_factors(
             "finishedAt": datetime.now(UTC).isoformat(),
         }
 
+    # v2 序列源与覆盖日历（2026-09-27 因子口径收敛批）
+    series_by_theme = build_daily_series(sector_rows, [])
+    series_dates: set[str] = set()
+    for series in series_by_theme.values():
+        series_dates.update(series.dates)
+    source_dates = set(stock_daily) | {str(r.get("tradingDate")) for r in sector_rows if r.get("tradingDate")}
+
     skipped_existing: list[str] = []
     deferred: list[str] = []
     if target_dates is None:
-        already = set(factor_repo.computed_dates(dataset_id, start_day, end_day))
-        candidates = sorted(set(stock_daily) - already)
-        skipped_existing = sorted(set(stock_daily) & already)
+        # 完整度 = 拥挤行存在 且（v2 行存在 或 该日不在 v2 序列覆盖内）：
+        # 新增因子维度后，缺新维度的旧日期自动补算（自愈），不依赖一次性回填。
+        already_crowding = set(factor_repo.computed_dates(dataset_id, start_day, end_day))
+        already_v2 = set(
+            factor_repo.dates_with_factor_key(dataset_id, start_day, end_day, "factors.momentumV2")
+        )
+        complete = {d for d in already_crowding if d not in series_dates or d in already_v2}
+        candidates = sorted(source_dates - complete)
+        skipped_existing = sorted(source_dates & complete)
         targets = candidates[-max_dates_per_run:] if len(candidates) > max_dates_per_run else candidates
         deferred = sorted(set(candidates) - set(targets))
     else:
         targets = sorted(set(target_dates))
 
     members = _load_theme_members(db)
+    theme_names = _load_theme_names(db)
     flags: list[str] = []
     if not members:
         flags.append("theme_mappings_empty")
@@ -183,11 +238,17 @@ def compute_and_store_daily_factors(
         stock_daily,
         members,
         target_dates=targets,
-        theme_names=_load_theme_names(db),
+        theme_names=theme_names,
         window=window,
         min_periods=min_periods,
     )
     flags.extend(build_flags)
+    # 动量 v2（设计 §2.3，2026-09-27 因子口径收敛批）：同一调度同一集合，
+    # 序列源=daily sector rows；v2-only 题材产行（拥挤字段 None + 标记）。
+    v2_by_day, v2_flags = build_momentum_v2_daily_values(series_by_theme, target_dates=targets)
+    rows, v2_merge_flags = merge_momentum_v2_into_rows(rows, v2_by_day, theme_names=theme_names)
+    flags.extend(v2_flags)
+    flags.extend(v2_merge_flags)
 
     rows_by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:

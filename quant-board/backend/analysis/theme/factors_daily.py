@@ -15,6 +15,7 @@ fail-visible：缺日/缺成员/缺原料全部以 None + qualityFlags 显式落
 
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 from typing import Any
 
@@ -26,10 +27,23 @@ from backend.analysis.theme.crowding_percentile import (
     theme_amount_share,
     theme_turnover_mean,
 )
+from backend.analysis.theme.daily_series import ThemeDailySeries
+from backend.analysis.theme.momentum import ThemeMomentumConfig, compute_theme_momentum_v2
 
 FACTOR_VERSION = "theme-daily-factors-v1"
 
 _FACTOR_KEYS = ("amountShare", "turnoverMean", "amountSharePct", "turnoverMeanPct", "crowdingPercentile")
+
+_MOMENTUM_V2_KEYS = (
+    "score",
+    "direction",
+    "rps",
+    "nearHigh",
+    "windowMomentum",
+    "breadth",
+    "flowVolume",
+    "crowdingPenalty",
+)
 
 
 def build_daily_factor_rows(
@@ -95,7 +109,7 @@ def build_daily_factor_rows(
 
     flags: list[str] = []
     if unknown_targets:
-        flags.extend(f"target_date_missing:{d}" for d in unknown_targets)
+        flags.extend(f"target_date_no_stock_rows:{d}" for d in unknown_targets)
     zero_coverage_days = sum(1 for d in known_targets for tid in members if tid not in observable_by_day[d])
     if zero_coverage_days:
         flags.append(f"zero_coverage_theme_days:{zero_coverage_days}")
@@ -145,4 +159,121 @@ def build_daily_factor_rows(
             })
     if insufficient_rows:
         flags.append(f"insufficient_history_rows:{insufficient_rows}")
+    return rows, flags
+
+
+def _truncate_series(series: ThemeDailySeries, end_date: str) -> ThemeDailySeries | None:
+    """截断到 end_date（含）；该日未观测（序列不含 end_date）→ None。
+
+    as-of 语义：D 日的 v2 值 = 用 ≤D 且**包含 D** 的序列计算——序列在 D 之前
+    结束说明该题材 D 日不可观测，不产值（防陈旧值伪装成当日，fail-visible）。
+    """
+    count = 0
+    for d in series.dates:
+        if d <= end_date:
+            count += 1
+        else:
+            break
+    if count == 0 or series.dates[count - 1] != end_date:
+        return None
+    if count == len(series.dates):
+        return series
+    return dataclasses.replace(
+        series,
+        dates=series.dates[:count],
+        changes=series.changes[:count],
+        zt_counts=series.zt_counts[:count],
+        breadths=series.breadths[:count],
+        inflows=series.inflows[:count],
+        amount_ratios=series.amount_ratios[:count],
+        crowding_days=series.crowding_days[:count],
+        latest_slots=series.latest_slots[:count],
+        _day_flags=series._day_flags[:count],
+    )
+
+
+def build_momentum_v2_daily_values(
+    series_by_theme: dict[str, ThemeDailySeries],
+    *,
+    target_dates: list[str],
+    cfg: ThemeMomentumConfig | None = None,
+) -> tuple[dict[str, dict[str, dict[str, Any]]], list[str]]:
+    """逐目标日截断日线序列调用 compute_theme_momentum_v2（纯函数，无 I/O）。
+
+    截断语义 = "D 日的 v2 值只用 ≤D 的序列"（与面板"最新值"同口径回溯）。
+    返回 ({date: {themeId: v2 因子字典}}, quality_flags)；序列未覆盖的目标日
+    不产出该日条目（调用方按该日无值处理，不伪造）。
+    """
+    if not series_by_theme:
+        return {}, ["momentum_v2_no_series"]
+    resolved_cfg = cfg or ThemeMomentumConfig()
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    flags: list[str] = []
+    for d in sorted(set(target_dates)):
+        truncated = [
+            cut
+            for cut in (_truncate_series(series, d) for series in series_by_theme.values())
+            if cut is not None
+        ]
+        if not truncated:
+            continue
+        result = compute_theme_momentum_v2(truncated, cfg=resolved_cfg)
+        day_values: dict[str, dict[str, Any]] = {}
+        for theme_id, factor in result["factors"].items():
+            day_values[str(theme_id)] = {
+                "score": factor.get("score"),
+                "direction": factor.get("direction"),
+                "rps": factor.get("rps"),
+                "nearHigh": factor.get("nearHigh"),
+                "windowMomentum": factor.get("windowMomentum"),
+                "breadth": factor.get("breadth"),
+                "flowVolume": factor.get("flowVolume"),
+                "crowdingPenalty": factor.get("crowdingPenalty"),
+                "qualityFlags": [str(reason) for reason in factor.get("reasons") or []],
+            }
+        out[d] = day_values
+        for cross_flag in result.get("qualityFlags") or []:
+            flags.append(f"momentum_v2:{d}:{cross_flag}")
+    return out, flags
+
+
+def merge_momentum_v2_into_rows(
+    rows: list[dict[str, Any]],
+    v2_by_day: dict[str, dict[str, dict[str, Any]]],
+    *,
+    theme_names: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """把 v2 值合并进日频因子行（同键并入 factors.momentumV2；缺行主题新建）。
+
+    v2-only 主题（无拥挤原料）新建行：拥挤字段全 None + crowding_unobservable
+    标记（不伪造）；v2 score None → momentum_v2_insufficient 标记。
+    返回 (rows, flags)，flags 记新建行数等结构化信息。
+    """
+    names = theme_names or {}
+    flags: list[str] = []
+    index: dict[tuple[str, str], dict[str, Any]] = {
+        (str(row.get("tradingDate")), str(row.get("themeId"))): row for row in rows
+    }
+    created = 0
+    for d in sorted(v2_by_day):
+        for theme_id in sorted(v2_by_day[d]):
+            v2 = v2_by_day[d][theme_id]
+            row = index.get((d, theme_id))
+            if row is None:
+                row = {
+                    "tradingDate": d,
+                    "themeId": theme_id,
+                    "themeName": str(names.get(theme_id) or ""),
+                    "factorVersion": FACTOR_VERSION,
+                    "factors": {key: None for key in _FACTOR_KEYS},
+                    "qualityFlags": ["crowding_unobservable"],
+                }
+                rows.append(row)
+                index[(d, theme_id)] = row
+                created += 1
+            row["factors"]["momentumV2"] = v2
+            if v2.get("score") is None and "momentum_v2_insufficient" not in row["qualityFlags"]:
+                row["qualityFlags"].append("momentum_v2_insufficient")
+    if created:
+        flags.append(f"momentum_v2_rows_created:{created}")
     return rows, flags

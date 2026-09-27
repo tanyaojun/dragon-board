@@ -39,3 +39,41 @@ def spearman_rank_ic(xs: list[float], ys: list[float]) -> float | None:
     if var_x == 0 or var_y == 0:
         return None
     return cov / (var_x * var_y) ** 0.5
+
+
+def marginal_spearman_ic(
+    values: list[float | None],
+    baseline: list[float | None],
+    forward: list[float | None],
+) -> float | None:
+    """边际 Spearman IC：候选因子秩对基准秩 OLS 残差后与 forward 的秩相关。
+
+    回答"候选因子在基准之上是否仍有增量信息"（因子口径收敛批 TaskB，
+    Phase 3 裁决标准的统计实现）。None 成对剔除（任一侧缺失 → 该观测丢弃，
+    不伪造 0）；剔除后 n<3 → None；候选与基准秩完全共线（残差全等）→ None。
+    """
+    if len(values) != len(baseline) or len(values) != len(forward):
+        return None
+    pairs = [
+        (float(v), float(b), float(f))
+        for v, b, f in zip(values, baseline, forward)
+        if v is not None and b is not None and f is not None
+    ]
+    if len(pairs) < 3:
+        return None
+    v = [p[0] for p in pairs]
+    b = [p[1] for p in pairs]
+    f = [p[2] for p in pairs]
+    rank_v = _average_ranks(v)
+    rank_b = _average_ranks(b)
+    mean_v = sum(rank_v) / len(rank_v)
+    mean_b = sum(rank_b) / len(rank_b)
+    cov = sum((rb - mean_b) * (rv - mean_v) for rb, rv in zip(rank_b, rank_v))
+    var_b = sum((rb - mean_b) ** 2 for rb in rank_b)
+    if var_b == 0:
+        residuals = [rv - mean_v for rv in rank_v]
+    else:
+        slope = cov / var_b
+        intercept = mean_v - slope * mean_b
+        residuals = [rv - (slope * rb + intercept) for rv, rb in zip(rank_v, rank_b)]
+    return spearman_rank_ic(residuals, f)

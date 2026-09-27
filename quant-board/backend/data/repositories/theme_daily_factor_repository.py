@@ -65,6 +65,24 @@ class ThemeDailyFactorRepository:
         )
         return sorted({str(doc.get("tradingDate")) for doc in docs if doc.get("tradingDate")})
 
+    def dates_with_factor_key(
+        self, dataset_id: str, start_date: str, end_date: str, field_path: str
+    ) -> list[str]:
+        """已写入指定因子键（如 factors.momentumV2）的交易日列表（去重升序）。
+
+        用于 auto 模式"完整度"判定：新增因子维度后，已有拥挤行但缺新维度的
+        日期会被自动补算（自愈），不再依赖一次性回填。
+        """
+        docs = self.db[COLLECTION_NAME].find(
+            {
+                "datasetId": dataset_id,
+                "tradingDate": {"$gte": start_date, "$lte": end_date},
+                field_path: {"$exists": True},
+            },
+            {"tradingDate": 1},
+        )
+        return sorted({str(doc.get("tradingDate")) for doc in docs if doc.get("tradingDate")})
+
     def latest_date(self, dataset_id: str) -> str | None:
         doc = self.db[COLLECTION_NAME].find_one(
             {"datasetId": dataset_id}, sort=[("tradingDate", -1)]

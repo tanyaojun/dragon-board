@@ -15,7 +15,13 @@ from typing import Any
 
 import pytest
 
-from backend.analysis.theme.factors_daily import FACTOR_VERSION, build_daily_factor_rows
+from backend.analysis.theme.daily_series import ThemeDailySeries
+from backend.analysis.theme.factors_daily import (
+    FACTOR_VERSION,
+    build_daily_factor_rows,
+    build_momentum_v2_daily_values,
+    merge_momentum_v2_into_rows,
+)
 from backend.data.repositories.theme_daily_factor_repository import ThemeDailyFactorRepository
 from backend.services.theme.daily_factors_service import compute_and_store_daily_factors
 
@@ -33,10 +39,23 @@ class FakeCursor:
         return iter(self.rows)
 
 
+def _resolve_path(row: dict[str, Any], key: str) -> Any:
+    """点路径取值（factors.momentumV2 等），缺失返回 None。"""
+    value: Any = row
+    for part in key.split("."):
+        if isinstance(value, dict) and part in value:
+            value = value[part]
+        else:
+            return None
+    return value
+
+
 def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
     for key, expected in query.items():
-        actual = row.get(key)
+        actual = _resolve_path(row, key)
         if isinstance(expected, dict):
+            if "$exists" in expected and (actual is not None) != bool(expected["$exists"]):
+                return False
             if "$gte" in expected and not (actual is not None and actual >= expected["$gte"]):
                 return False
             if "$lte" in expected and not (actual is not None and actual <= expected["$lte"]):
@@ -205,12 +224,96 @@ class TestBuildDailyFactorRows:
             make_stock_daily(), MEMBERS, target_dates=["2026-09-03", "2026-09-99"], min_periods=3,
         )
         assert {row["tradingDate"] for row in rows} == {"2026-09-03"}
-        assert "target_date_missing:2026-09-99" in flags
+        assert "target_date_no_stock_rows:2026-09-99" in flags
 
     def test_empty_source_reports_no_data(self) -> None:
         rows, flags = build_daily_factor_rows({}, MEMBERS, target_dates=["2026-09-03"])
         assert rows == []
         assert flags == ["no_stock_rows"]
+
+
+def make_series(theme_id: str, n_days: int, base_change: float = 1.0) -> ThemeDailySeries:
+    """构造 n_days 天的合成日线序列（日期递增、恒定涨幅）。"""
+    from datetime import date, timedelta
+
+    dates = [(date(2026, 6, 1) + timedelta(days=i)).isoformat() for i in range(n_days)]
+    slots = [
+        {"tradingDate": d, "slotTime": "15:30", "change": base_change, "ztCount": 2, "mainNetInflow": 100.0}
+        for d in dates
+    ]
+    return ThemeDailySeries(
+        theme_id=theme_id,
+        theme_name=f"名称{theme_id}",
+        dates=dates,
+        changes=[base_change] * n_days,
+        zt_counts=[2] * n_days,
+        breadths=[60.0] * n_days,
+        inflows=[100.0] * n_days,
+        amount_ratios=[0.0] * n_days,
+        crowding_days=[30.0] * n_days,
+        quality_flags=[],
+        latest_slots=slots,
+        _day_flags=[[] for _ in dates],
+    )
+
+
+class TestBuildMomentumV2DailyValues:
+    def test_full_history_produces_score(self) -> None:
+        series = make_series("T1", 25)
+        values, flags = build_momentum_v2_daily_values(
+            {"T1": series}, target_dates=[series.dates[-1]],
+        )
+        day_values = values[series.dates[-1]]
+        v2 = day_values["T1"]
+        assert isinstance(v2["score"], float)
+        for key in ("direction", "rps", "nearHigh", "windowMomentum", "breadth", "flowVolume", "crowdingPenalty", "qualityFlags"):
+            assert key in v2
+
+    def test_truncation_early_dates_per_dim_insufficient(self) -> None:
+        """截断语义：早期目标日只用 ≤D 数据——3 天截断下 rps d5/d10/d20 不足为 None，
+        其余可用维度照常产分（逐维度 fail-visible，不整票伪造）。"""
+        series = make_series("T1", 25)
+        early = series.dates[2]
+        values, _ = build_momentum_v2_daily_values({"T1": series}, target_dates=[early])
+        v2 = values[early]["T1"]
+        assert v2["rps"]["d5"] is None
+        assert "rps_d5_history_insufficient" in v2["qualityFlags"]
+        assert isinstance(v2["score"], float)
+
+    def test_target_date_beyond_series_absent(self) -> None:
+        series = make_series("T1", 5)
+        values, _ = build_momentum_v2_daily_values({"T1": series}, target_dates=["2027-01-01"])
+        assert values == {}
+
+    def test_empty_series_reported(self) -> None:
+        values, flags = build_momentum_v2_daily_values({}, target_dates=["2026-09-01"])
+        assert values == {}
+        assert flags == ["momentum_v2_no_series"]
+
+
+class TestMergeMomentumV2IntoRows:
+    def test_merge_into_existing_and_create_v2_only_row(self) -> None:
+        rows, _ = build_daily_factor_rows(
+            make_stock_daily(), {"T1": {"A"}}, target_dates=["2026-09-03"], min_periods=3,
+        )
+        v2_t1 = {"score": 62.0, "direction": "up", "qualityFlags": []}
+        v2_t2 = {"score": None, "direction": "neutral", "qualityFlags": ["insufficient_factors"]}
+        merged, flags = merge_momentum_v2_into_rows(
+            rows, {"2026-09-03": {"T1": v2_t1, "T2": v2_t2}}, theme_names={"T2": "题材二"},
+        )
+        by_key = {(row["tradingDate"], row["themeId"]): row for row in merged}
+        # 既有拥挤行获得 momentumV2 子结构
+        t1 = by_key[("2026-09-03", "T1")]
+        assert t1["factors"]["momentumV2"]["score"] == 62.0
+        assert t1["factors"]["amountShare"] is not None
+        # v2-only 题材新建行：拥挤字段 None + 显式标记，不伪造
+        t2 = by_key[("2026-09-03", "T2")]
+        assert t2["factors"]["amountShare"] is None
+        assert t2["factors"]["momentumV2"]["score"] is None
+        assert "crowding_unobservable" in t2["qualityFlags"]
+        assert "momentum_v2_insufficient" in t2["qualityFlags"]
+        assert t2["themeName"] == "题材二"
+        assert "momentum_v2_rows_created:1" in flags
 
 
 class TestThemeDailyFactorRepository:
@@ -323,6 +426,67 @@ class TestComputeAndStoreDailyFactors:
         assert result["status"] == "up_to_date"
         assert result["computedDates"] == []
         assert len(db.collection("theme_daily_factors").rows) == before
+
+    def test_momentum_v2_stored_from_daily_sector_rows(self) -> None:
+        """v2 从 daily sector rows 构建序列落库；v2-only 题材产行（拥挤字段 None + 标记）。"""
+        db = FakeDb()
+        _seed_stock_rows(db)
+        _seed_mappings(db)
+        sector = db.collection("snapshot_sector_rows")
+        for day in DAYS:
+            for tid in ("T1", "T9"):
+                sector.rows.append({
+                    "datasetId": "dsx", "type": "daily", "entityType": "hot_theme",
+                    "tradingDate": day, "slotTime": "15:30",
+                    "themeId": tid, "entityKey": tid, "entityName": f"名称{tid}",
+                    "change": 1.5, "ztCount": 3, "breadthScore": 55.0,
+                    "mainNetInflow": 200.0, "crowdingRisk": 20.0, "metadata": {},
+                })
+        result = compute_and_store_daily_factors(
+            db, dataset_id="dsx", target_dates=["2026-09-03"],
+            min_periods=3, write_redis_cache=False, today="2026-09-27",
+        )
+        assert result["status"] == "ok"
+        stored = db.collection("theme_daily_factors").rows
+        by_tid = {row["themeId"]: row for row in stored if row["tradingDate"] == "2026-09-03"}
+        # 4 天序列不足 d5/d10/d20 → v2 score=None + insufficient 标记（不伪造）
+        assert by_tid["T1"]["factors"]["momentumV2"]["score"] is None
+        assert "momentum_v2_insufficient" in by_tid["T1"]["qualityFlags"]
+        assert by_tid["T1"]["factors"]["amountShare"] is not None
+        # v2-only 题材 T9：不在 stock mappings → 拥挤字段 None + 显式标记
+        assert by_tid["T9"]["factors"]["amountShare"] is None
+        assert by_tid["T9"]["factors"]["momentumV2"]["score"] is None
+        assert "crowding_unobservable" in by_tid["T9"]["qualityFlags"]
+
+    def test_auto_mode_backfills_missing_v2_for_covered_dates(self) -> None:
+        """自愈合同：已有拥挤行但序列覆盖内缺 momentumV2 的日期会被自动重算补齐。"""
+        db = FakeDb()
+        _seed_stock_rows(db)
+        _seed_mappings(db)
+        sector = db.collection("snapshot_sector_rows")
+        for day in DAYS:
+            sector.rows.append({
+                "datasetId": "dsx", "type": "daily", "entityType": "hot_theme",
+                "tradingDate": day, "slotTime": "15:30",
+                "themeId": "T1", "entityKey": "T1", "entityName": "名称T1",
+                "change": 1.5, "ztCount": 3, "breadthScore": 55.0,
+                "mainNetInflow": 200.0, "crowdingRisk": 20.0, "metadata": {},
+            })
+        # 模拟 v2 接线前写入的旧行（09-01 只有拥挤面）
+        ThemeDailyFactorRepository(db).upsert_day(
+            "dsx", "2026-09-01",
+            [{"themeId": "T1", "themeName": "题材一", "factors": {"amountShare": 0.2}, "qualityFlags": []}],
+        )
+        result = compute_and_store_daily_factors(
+            db, dataset_id="dsx", min_periods=3, write_redis_cache=False, today="2026-09-27",
+        )
+        # 09-01 序列覆盖内缺 v2 → 重算；其余 3 天正常补算
+        assert "2026-09-01" in result["computedDates"]
+        row = next(
+            r for r in db.collection("theme_daily_factors").rows
+            if r["tradingDate"] == "2026-09-01" and r["themeId"] == "T1"
+        )
+        assert "momentumV2" in row["factors"]
 
     def test_no_source_data_writes_nothing(self) -> None:
         db = FakeDb()
