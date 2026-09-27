@@ -951,121 +951,115 @@ function renderChart() {
 
   const history = historyPoints.value
   const indicators = selectedIndicators.value
-  const series: any[] = []
-
-  // 热度曲线
-  if (indicators.includes('heat')) {
-    series.push({
-      name: '热度',
-      type: 'line',
-      data: history.map(h => h.heat),
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: 6,
-      connectNulls: false,
-      lineStyle: { color: '#ff7f50', width: 2 },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(255, 127, 80, 0.3)' },
-          { offset: 1, color: 'rgba(255, 127, 80, 0)' }
-        ])
-      }
-    })
+  // 指标定义驱动的 series/yAxis 构建：轴按所选指标动态生成、右侧多轴错位排布，
+  // 避免全量静态轴在右缘互相压盖（2026-09-27 视觉反馈）。
+  interface MetricDef {
+    key: string
+    name: string
+    type: 'line' | 'bar'
+    color: string
+    category?: boolean
+    inverse?: boolean
+    area?: boolean
+    dashed?: boolean
+    symbol?: string
   }
 
-  // 涨停柱状图
-  if (indicators.includes('zt')) {
-    series.push({
-      name: '涨停股',
-      type: 'bar',
-      data: history.map(h => h.ztCount),
-      itemStyle: { color: '#ff4757' },
-      barWidth: 8,
-      yAxisIndex: 1
-    })
-  }
+  const METRIC_DEFS: MetricDef[] = [
+    { key: 'heat', name: '热度', type: 'line', color: '#ff7f50', area: true },
+    { key: 'zt', name: '涨停股', type: 'bar', color: '#ff4757' },
+    { key: 'rank', name: '热度排名', type: 'line', color: '#e67e22', inverse: true, symbol: 'triangle' },
+    { key: 'rotationState', name: '轮动状态', type: 'line', color: '#9b59b6', category: true, symbol: 'rect' },
+    { key: 'mainNetInflow', name: '净流入趋势', type: 'line', color: '#1abc9c' },
+    { key: 'change', name: '平均涨跌', type: 'line', color: '#2ed573', dashed: true, symbol: 'diamond' },
+    { key: 'volume', name: '成交额', type: 'line', color: '#3498db', area: true },
+  ]
 
-  // 热度排名曲线（y 轴反向：排名越靠前数值越小，向上=走强）
-  if (indicators.includes('rank')) {
-    series.push({
-      name: '热度排名',
-      type: 'line',
-      data: history.map(h => h.rank),
-      smooth: true,
-      connectNulls: false,
-      lineStyle: { color: '#e67e22', width: 1.5 },
-      symbol: 'triangle',
-      symbolSize: 5,
-      yAxisIndex: 4
-    })
-  }
-
-  // 轮动状态阶梯线（离散六态，类别轴；缺失/未知断线不伪造）
-  if (indicators.includes('rotationState')) {
-    series.push({
-      name: '轮动状态',
-      type: 'line',
-      step: 'middle',
-      data: history.map(h => {
+  const metricValue = (key: string, h: ThemeHistoryPoint): number | string | null => {
+    switch (key) {
+      case 'heat': return h.heat
+      case 'zt': return h.ztCount
+      case 'rank': return h.rank
+      case 'rotationState': {
         const label = h.rotationState ? rotationStateLabelText(h.rotationState) : null
         return label && ROTATION_STATE_AXIS_CATEGORIES.includes(label) ? label : null
-      }),
-      connectNulls: false,
-      lineStyle: { color: '#9b59b6', width: 1.5 },
-      symbol: 'rect',
-      symbolSize: 5,
-      yAxisIndex: 5
-    })
+      }
+      case 'mainNetInflow': return h.mainNetInflow
+      case 'change': return h.avgChange
+      case 'volume': return h.totalAmount
+      default: return null
+    }
   }
 
-  // 净流入趋势曲线（half_hour rows mainNetInflow，部分槽位缺失断线）
-  if (indicators.includes('mainNetInflow')) {
-    series.push({
-      name: '净流入趋势',
-      type: 'line',
-      data: history.map(h => h.mainNetInflow),
-      smooth: true,
+  const series: any[] = []
+  const yAxes: any[] = []
+  let leftAxisUsed = false
+  let rightOffset = 0
+
+  for (const def of METRIC_DEFS) {
+    if (!indicators.includes(def.key)) continue
+    const yAxisIndex = yAxes.length
+    if (!leftAxisUsed) {
+      // 首个选中指标占左侧主轴（带基准网格线）
+      yAxes.push({
+        type: 'value',
+        name: def.name,
+        splitLine: { lineStyle: { color: 'var(--border-color)', type: 'dashed' } },
+        axisLabel: { color: 'var(--text-secondary)', fontSize: 10 },
+      })
+      leftAxisUsed = true
+    } else {
+      yAxes.push({
+        type: def.category ? 'category' : 'value',
+        name: def.name,
+        position: 'right',
+        offset: rightOffset,
+        inverse: !!def.inverse,
+        data: def.category ? ROTATION_STATE_AXIS_CATEGORIES : undefined,
+        splitLine: { show: false },
+        axisLine: { show: false },
+        axisLabel: {
+          color: 'var(--text-secondary)',
+          fontSize: 9,
+          formatter: def.key === 'mainNetInflow'
+            ? (value: number) => (Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(0)}亿` : `${(value / 1e4).toFixed(0)}万`)
+            : undefined,
+        },
+      })
+      rightOffset += 30
+    }
+
+    const entry: any = {
+      name: def.name,
+      type: def.type,
+      data: history.map(h => metricValue(def.key, h)),
       connectNulls: false,
-      lineStyle: { color: '#1abc9c', width: 1.5 },
-      symbol: 'none',
-      yAxisIndex: 6
-    })
+      yAxisIndex,
+    }
+    if (def.type === 'line') {
+      entry.smooth = !def.category
+      entry.symbol = def.symbol ?? 'circle'
+      entry.symbolSize = 5
+      entry.lineStyle = { color: def.color, width: 1.5, type: def.dashed ? 'dashed' : 'solid' }
+      if (def.area) {
+        entry.areaStyle = {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: def.color + '4d' },
+            { offset: 1, color: def.color + '00' },
+          ]),
+        }
+      }
+      if (def.category) entry.step = 'middle'
+    } else {
+      entry.itemStyle = { color: def.color }
+      entry.barWidth = 8
+    }
+    series.push(entry)
   }
 
-  // 平均涨跌曲线
-  if (indicators.includes('change')) {
-    series.push({
-      name: '平均涨跌',
-      type: 'line',
-      data: history.map(h => h.avgChange),
-      smooth: true,
-      connectNulls: false,
-      lineStyle: { color: '#2ed573', width: 1.5, type: 'dashed' },
-      symbol: 'diamond',
-      symbolSize: 4,
-      yAxisIndex: 2
-    })
-  }
-
-  // 成交额曲线（题材成分股 stock rows 聚合，单位元）
-  if (indicators.includes('volume')) {
-    series.push({
-      name: '成交额',
-      type: 'line',
-      data: history.map(h => h.totalAmount),
-      smooth: true,
-      connectNulls: false,
-      lineStyle: { color: '#3498db', width: 1.5 },
-      symbol: 'none',
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(52, 152, 219, 0.2)' },
-          { offset: 1, color: 'rgba(52, 152, 219, 0)' }
-        ])
-      },
-      yAxisIndex: 3
-    })
-  }
+  // 右侧多轴错位：按占位扩展右留白，防止轴标签互相压盖
+  const rightAxesCount = Math.round(rightOffset / 30)
+  const gridRight = rightAxesCount === 0 ? '8%' : `${Math.min(32, 12 + rightAxesCount * 6)}%`
 
   // 跨天范围时 x 轴标签带日期，单日内只显示槽位时间
   const uniqueDates = new Set(history.map(h => h.tradingDate))
@@ -1075,10 +1069,10 @@ function renderChart() {
 
   const option = {
     grid: {
-      left: '8%',
-      right: '8%',
-      top: '15%',
-      bottom: '10%',
+      left: '6%',
+      right: gridRight,
+      top: '14%',
+      bottom: '12%',
       containLabel: true
     },
     tooltip: {
@@ -1087,10 +1081,10 @@ function renderChart() {
     },
     legend: {
       data: series.map(s => s.name),
-      bottom: 0,
+      top: 0,
       itemWidth: 12,
       itemHeight: 8,
-      textStyle: { color: 'var(--text-secondary)' }
+      textStyle: { color: 'var(--text-secondary)', fontSize: 10 }
     },
     xAxis: {
       type: 'category',
@@ -1102,55 +1096,7 @@ function renderChart() {
       },
       axisLine: { lineStyle: { color: 'var(--border-color)' } }
     },
-    yAxis: [
-      {
-        type: 'value',
-        name: '热度',
-        splitLine: { lineStyle: { color: 'var(--border-color)', type: 'dashed' } },
-        axisLabel: { color: 'var(--text-secondary)' }
-      },
-      {
-        type: 'value',
-        name: '数量',
-        splitLine: { show: false },
-        axisLabel: { color: 'var(--text-secondary)' }
-      },
-      {
-        type: 'value',
-        name: '涨跌%',
-        splitLine: { show: false },
-        axisLabel: { color: 'var(--text-secondary)' }
-      },
-      {
-        type: 'value',
-        name: '成交额',
-        splitLine: { show: false },
-        axisLabel: { color: 'var(--text-secondary)' }
-      },
-      {
-        type: 'value',
-        name: '热度排名',
-        inverse: true,
-        splitLine: { show: false },
-        axisLabel: { color: 'var(--text-secondary)' }
-      },
-      {
-        type: 'category',
-        name: '轮动状态',
-        data: ROTATION_STATE_AXIS_CATEGORIES,
-        splitLine: { show: false },
-        axisLabel: { color: 'var(--text-secondary)', fontSize: 10 }
-      },
-      {
-        type: 'value',
-        name: '净流入',
-        splitLine: { show: false },
-        axisLabel: {
-          color: 'var(--text-secondary)',
-          formatter: (value: number) => (Math.abs(value) >= 1e8 ? `${(value / 1e8).toFixed(1)}亿` : `${(value / 1e4).toFixed(0)}万`)
-        }
-      }
-    ],
+    yAxis: yAxes,
     series,
     backgroundColor: 'transparent'
   }
@@ -1526,46 +1472,55 @@ defineExpose({ themeStocks, filteredStocks, paginatedStocks })
 /* 指标卡片网格 - 2x2 布局 */
 .metrics-grid {
   display: grid;
-  /* 概览指标一行四列（2026-09-27 用户反馈） */
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  /* 概览指标一行四列（2026-09-27 用户反馈）；minmax(0,1fr) 防卡片内容最小宽度把网格撑出面板 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .metric-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 10px;
+  min-width: 0;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 12px;
 }
 
 .metric-icon {
-  font-size: 28px;
-  width: 48px;
-  height: 48px;
+  font-size: 20px;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-primary);
-  border-radius: 24px;
+  border-radius: 17px;
 }
 
 .metric-content {
   flex: 1;
+  min-width: 0;
 }
 
 .metric-label {
   font-size: 11px;
   color: var(--text-secondary);
   margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .metric-value {
-  font-size: 22px;
+  font-size: 19px;
   font-weight: bold;
   line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .metric-value.up {
