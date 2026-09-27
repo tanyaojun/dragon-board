@@ -1,6 +1,6 @@
 # persistenceScore 持续性算子重建实施计划
 
-- 日期：2026-09-27（立项会话）；状态：**口径已裁决（Q1=c / Q2=c / Q3=一并修单独提交），实施中**
+- 日期：2026-09-27（立项会话）；状态：**已完成（Commit A/B/C 全部提交；C 的重跑结论待 Mongo 27017 可用后补录，见 §6）**
 - 上游：`2026-09-27-factor-marginal-findings.md` §1（Critical 待裁决项）；设计 `2026-09-27-themetrend-factor-convergence-design.md` §2.1；总设计 `2026-09-26-themetrend-v12-upgrade-design.md`
 - 纪律：TDD（RED→GREEN→REFACTOR）；一次一候选；fail-visible（缺测打标不伪造 0）；测试只跑专项
 
@@ -18,7 +18,7 @@
 
 ## 2. 提交拆分（三个提交，各自可回退）
 
-### 提交 A：heat.py 管道修复（bugfix，单独提交）
+### 提交 A：heat.py 管道修复（bugfix，单独提交）——**已提交 `80c7cbee`**
 
 - 文件：`quant-board/backend/analysis/theme/heat.py`
   - 读侧改读 `previous_factor["metadata"]["consecutiveHotBuckets"]`（与写侧对齐，非数值容错归 0）；
@@ -35,7 +35,7 @@
 - **回测 PnL 不变合同测试**（同提交）：同一批 frames 输入 trend 引擎，persistenceScore=0 vs 100 → tier/confidence/signal/进出场断言相同（仅 themeContribution 可差）。防"修 bug 改变既有结论"质疑——历史 Mongo 数据恒 0，回放结论本就不含持续性效应。
 - 验证：`pytest tests/test_theme_heat_engine.py tests/test_theme_heat_collector_contract.py tests/test_theme_heat_service.py` + trend/backtest 回归（`tests/test_theme_backtest.py tests/test_theme_trend_heat_level.py` 等 trend 相关全套）。
 
-### 提交 B：日级持续性算子入 theme_daily_factors（新语义）
+### 提交 B：日级持续性算子入 theme_daily_factors（新语义）——**已提交 `ef82ea45`**
 
 - `backend/analysis/theme/factor_series.py`：新增 `level_streak(values_by_day, *, threshold=70.0)`——≥threshold 连续计数；<threshold 归 0；None/缺日断链（下个观测日重计，首个达标=1）；与 `top_membership_streak`/`positive_streak` 并列同文档string 风格。
 - `backend/analysis/theme/factors_daily.py`：新增 `build_heat_level_streak_values(heat_level_by_theme, target_dates, threshold)` + `merge_heat_level_streak_into_rows`（momentumV2 同型：并入 `factors.heatLevelStreak`；缺行主题新建行、拥挤字段 None + 标记，不伪造）。
@@ -45,7 +45,7 @@
   - `tests/test_theme_daily_factors.py`：build+merge 端到端（序列→streak 落 factors 键；v2-only 式新建行标记）。
 - 验证：`pytest tests/test_theme_factor_series.py tests/test_theme_daily_factors.py` + `tests/test_theme_momentum_daily_series.py` 回归。
 
-### 提交 C：边际研究重跑 + 文档收敛
+### 提交 C：边际研究重跑 + 文档收敛——**代码/文档已提交（重跑结论 pending，见 §6）**
 
 - `backend/operations/diagnose_theme_factor_marginal.py`：`load_stored_factors` 增补 `heatLevelStreak`（factors 键）；CANDIDATES 增加 `heatLevelStreak`（与 d3Streak 同面板；persistenceScore candidate 保留——历史恒 0 复证"出生即死"，形成修复前后对照）。
 - 重跑（Mongo 27017 需运行；非交易时段）：`.\.venv\Scripts\python.exe -m backend.operations.diagnose_theme_factor_marginal` → `data/reports/theme-factor-marginal.json`。
@@ -75,3 +75,10 @@
 - 提交 A 改变 heat 引擎输出 → 既有 golden/快照测试若 fixture 带 `metadata.consecutiveHotBuckets` 期望值需同步（已查：现有 fixture 的 previous_factors 均无该键，行为不变，回归可证）；
 - Mongo 27017 偶尔停（需管理员 net start）——提交 C 重跑前确认；
 - 双持续性因子（heatLevelStreak vs D3）相关性需在重跑报告中同面板观测，防重复计分。
+
+## 6. 实施结果（2026-09-27）
+
+- **Commit A** `80c7cbee`：heat.py 路径对齐 + 递增/重置（含 6 个 known-answer 用例、golden v3 fixture 更新、trend golden v14→v15 bump、回测 PnL 不变合同测试）。
+- **Commit B** `ef82ea45`：`factor_series.level_streak` + `factors_daily` build/merge + `daily_factors_service` 接线（投影加 heatLevel/heatScore、auto 完整度含 heatLevelStreak 自愈）；13 个新用例（factor_series 6 + daily_factors 7）；专项回归 149 全绿。
+- **Commit C**：runner `diagnose_theme_factor_marginal.py` heatLevelStreak candidate 已就位（CANDIDATES + load_stored_factors 投影 + 面板字段）；文档收敛（findings §1/§6/§7、v12 设计 §10、phase4 计划 P4-3 第 4 项 + 未决问题）随本提交落盘。
+- **重跑 pending（fail-visible）**：本次会话 MongoDB 服务启动权限不足（net start 拒绝访问），`data/reports/theme-factor-marginal.json` 停留在重建前窗口；heatLevelStreak 边际结论不伪造，待管理员启动 27017 后执行 §4 命令补录，届时同步更新 findings §1/§6 与 v12 设计 §10 对应条目。

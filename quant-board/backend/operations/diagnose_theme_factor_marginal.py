@@ -53,6 +53,7 @@ CANDIDATES = (
     "correlationScore",
     "persistenceScore",
     "d3Streak",
+    "heatLevelStreak",
     "crowdingPercentile",
     "v2Score",
     "v2NearHigh",
@@ -109,6 +110,7 @@ def load_stored_factors(
         v2 = factors.get("momentumV2") if isinstance(factors.get("momentumV2"), dict) else {}
         payload = {
             "crowdingPercentile": _f(factors.get("crowdingPercentile")),
+            "heatLevelStreak": _f(factors.get("heatLevelStreak")),
             "v2Score": _f(v2.get("score")),
             "v2NearHigh": _f(v2.get("nearHigh")),
             "v2WindowMomentum": _f(v2.get("windowMomentum")),
@@ -202,6 +204,7 @@ def main() -> int:
                 "correlationScore": row["correlationScore"],
                 "persistenceScore": row["persistenceScore"],
                 "d3Streak": (streaks.get(key) or {}).get(d),
+                "heatLevelStreak": stored_row.get("heatLevelStreak"),
                 "crowdingPercentile": stored_row.get("crowdingPercentile"),
                 "v2Score": stored_row.get("v2Score"),
                 "v2NearHigh": stored_row.get("v2NearHigh"),

@@ -26,7 +26,8 @@
 - **P4-3 参数扫描**（隔离 runner、单 trial、本地 frames、一律 dry-run）：
   1. 情绪门控：phases ∈ {cooling / cooling+ice / cooling+ice+chaos} × penalty ∈ {5, 10, 15, 20}；
   2. 拥挤度分位：threshold ∈ {80, 90, 95} × 替换 vs 并列瞬时口径 × penalty ∈ {5, 10, 15}；
-  3. 75 硬层 / 60 起扣形同虚设修正：阈值重定 ∈ {35, 45, 55}（crowdingRisk 量纲 daily max 24.8 / half_hour max 71.08，与阈值差一个数量级——Phase 2 实测）。
+  3. 75 硬层 / 60 起扣形同虚设修正：阈值重定 ∈ {35, 45, 55}（crowdingRisk 量纲 daily max 24.8 / half_hour max 71.08，与阈值差一个数量级——Phase 2 实测）；
+  4. **persistenceScoreWeight ∈ {0, 0.03, 0.05, 0.08}**（2026-09-27 persistenceScore 重建立项登记；接线形态 = `ThemeTrendConfig` 新参数默认 0 + v12 合成分新增项，**合成式归一化语义待本阶段定版**；候选原料=trend.py 六维合成分之外的日级 `heatLevelStreak`（连续 N 日 heatLevel ≥ 70，theme_daily_factors.factors 键），与 D3 同面板对照防双持续性重复计分；heat.py 日内粒度 consecutiveHotBuckets 仅实时观察不进扫描）。
 - **P4-4 三窗回测重跑**：过验项开启 + 参数扫描结果，按 market_phase × rotation_regime（引擎 rotationState + Top1 稳定性）分层评估。
 - **P4-5 落默认裁决 + verdict 存档**：一次一候选；verdict 文档对标 RankTrend 域 `exit-scan-batch*-verdict.md`，落 `docs/theme-module/`。
 
@@ -42,5 +43,6 @@ cd quant-board
 ## 5. 未决问题
 
 - 拥挤度分位"替换还是并列瞬时口径"（Phase 2 留待三窗裁决）；
+- persistenceScore 重建后 heatLevelStreak 边际研究重跑（Mongo 27017 需管理员启动；runner candidate 已就位，报告 `2026-09-27-factor-marginal-findings.md` §1 结论 pending，不伪造）；
 - 另批不阻塞本计划：D2 夏普动量反转语义、SG3 15:00 口径、腾讯日 K 回溯交叉验证、D3/F1 10 月复验、hybrid 月度复验（10 月批次）；
 - MainlineScore 合成层结构改造（暂缓项）不进本批次，待后续候选再议。
