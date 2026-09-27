@@ -156,7 +156,8 @@ function stateToneOf(state: string | null | undefined): string {
 <style scoped>
 .sector-rotation-panel {
   position: fixed;
-  z-index: 3000;
+  /* 与 SectorDetail 同层（10005）：须高于打开它的 SectorPanel（10004），否则标题层拦截点击 */
+  z-index: 10005;
   width: 420px;
   max-height: 80vh;
   overflow-y: auto;

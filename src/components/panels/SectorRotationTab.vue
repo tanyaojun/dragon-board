@@ -114,9 +114,10 @@
     </template>
 
     <SectorRotation
-      :visible="rotationDetail !== null"
-      :row="rotationDetail?.row ?? null"
-      :trigger-rect="rotationDetail?.triggerRect"
+      v-if="rotationDetail"
+      :visible="rotationDetail.visible"
+      :row="rotationDetail.row"
+      :trigger-rect="rotationDetail.triggerRect"
       :data-time="dataTimeText"
       @close="closeRotationDetail"
     />
@@ -187,8 +188,10 @@ const outflowRestCount = computed(() => Math.max(0, outflowThemes.value.length -
 const statuses = computed(() => summary.value?.statuses ?? [])
 const stateBuckets = computed(() => countRotationStates(statuses.value))
 
-// 轮动明细弹出面板（SectorRotation.vue）：状态由本组件持有，树形列表点击打开
-const rotationDetail = ref<{ row: ThemeRotationStatusRow; triggerRect?: DOMRect } | null>(null)
+// 轮动明细弹出面板（SectorRotation.vue）：状态由本组件持有，树形列表点击打开。
+// 组件级 v-if 条件挂载（对齐 SectorPanel→SectorDetail 范式）：每次打开重新 setup，
+// usePanel 的 triggerRect/visible 是非响应式快照，常驻挂载会冻结定位且被面板层遮挡。
+const rotationDetail = ref<{ visible: boolean; row: ThemeRotationStatusRow; triggerRect?: DOMRect } | null>(null)
 
 const filteredStatuses = computed(() =>
   stateFilter.value === 'all'
@@ -198,6 +201,7 @@ const filteredStatuses = computed(() =>
 
 function openRotationDetail(row: ThemeRotationStatusRow, event: MouseEvent) {
   rotationDetail.value = {
+    visible: true,
     row,
     triggerRect:
       event.currentTarget instanceof HTMLElement ? event.currentTarget.getBoundingClientRect() : undefined,
