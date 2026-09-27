@@ -134,7 +134,7 @@
         </div>
       </div>
 
-      <!-- 轮动状态视图 -->
+      <!-- 轮动状态视图（容器规格对齐 .tree-view，承载轮动树形两栏） -->
       <div v-else-if="view === 'rotation'" class="rotation-view">
         <SectorRotationTab />
       </div>
@@ -617,6 +617,12 @@ onMounted(() => {
 }
 
 .tree-view {
+  height: 100%;
+  min-height: 500px;
+  padding: 16px;
+}
+
+.rotation-view {
   height: 100%;
   min-height: 500px;
   padding: 16px;

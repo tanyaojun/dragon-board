@@ -10,10 +10,13 @@ describe('SectorRotationTree（左固定四目录右分类明细表）', () => {
   )
 
   it('renders the two-pane layout like SectorStocksTree (directory left, list right)', () => {
-    expect(tree).toContain('tree-layout')
+    expect(tree).toContain('tree-body')
     expect(tree).toContain('tree-directory')
     expect(tree).toContain('tree-detail')
-    expect(tree).toContain('grid-template-columns: 200px 1fr')
+    // 与 SectorStocksTree 同款视觉令牌：橙色选中/进度条、悬停底色、左栏固定宽
+    expect(tree).toContain('--color-highlight')
+    expect(tree).toContain('--bg-hover')
+    expect(tree).toContain('width: 200px')
   })
 
   it('left directory is exactly four fixed entries in user-defined order', () => {

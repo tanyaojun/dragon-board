@@ -9,6 +9,10 @@ describe('SectorRotationTab', () => {
     'utf8',
   )
   const facade = readFileSync(join(process.cwd(), 'src', 'services', 'theme', 'ThemeFacade.ts'), 'utf8')
+  const tree = readFileSync(
+    join(process.cwd(), 'src', 'components', 'panels', 'SectorRotationTree.vue'),
+    'utf8',
+  )
 
   it('fetches via themeFacade.getRotationSummary against the rotation summary API', () => {
     expect(tab).toContain('getRotationSummary')
@@ -18,42 +22,36 @@ describe('SectorRotationTab', () => {
     expect(facade).toContain('bypassQueue: true')
     // 信封口径：theme-rotation 返回 {ok, status, data}（theme-momentum 平铺，两接口不一致），
     // facade 必须拆信封取 data，否则组件拿到信封体渲染即崩（2026-09-27 空白页根因）
-    expect(facade).toContain("body?.ok === true && body.data ? body.data : null")
+    expect(facade).toContain('body?.ok === true && body.data ? body.data : null')
   })
 
-  it('renders summary fields with explicit engine-no-mainline copy', () => {
+  it('keeps the summary minimal: phase metrics + engine-mainline row only (fourth-round feedback)', () => {
     expect(tab).toContain('phase-badge')
     expect(tab).toContain('rotationSpeed')
     expect(tab).toContain('mainlineConcentration')
     expect(tab).toContain('maxBoardHeight')
     expect(tab).toContain('引擎判定无主线')
-    expect(tab).toContain('inflowThemes')
-    expect(tab).toContain('outflowThemes')
-    expect(tab).toContain('state-distribution')
+    // 流入/流出 chips 与 分布 计数行已删（与树形目录/明细表重复）
+    expect(tab).not.toContain('inflowPreview')
+    expect(tab).not.toContain('state-distribution')
+    expect(tab).not.toContain('chip-inflow')
   })
 
-  it('supports sortable and filterable status table with quality flags', () => {
-    expect(tab).toContain('rotation-table')
-    expect(tab).toContain('toggleSort')
-    expect(tab).toContain('stateFilter')
-    expect(tab).toContain('qualityFlags')
-    expect(tab).toContain('展开题材状态表')
-  })
-
-  it('stays fail-visible on empty data and unknown states', () => {
-    expect(tab).toContain('暂无轮动数据')
-    expect(tab).toContain('重试')
-    expect(tab).toContain('state-unknown')
-  })
-
-  it('embeds the two-pane rotation tree with fixed four-category directory (third-round spec)', () => {
+  it('delegates the category directory and detail table to SectorRotationTree', () => {
     expect(tab).toContain('SectorRotationTree')
     expect(tab).toContain(':statuses="statuses"')
     expect(tab).toContain(':category="stateFilter"')
     expect(tab).toContain('@update:category="stateFilter = $event"')
-    // 轮动字段并入 SectorDetail 概览后，弹出面板与旧筛选 chips 均已删除
-    expect(tab).not.toContain('<SectorRotation ')
-    expect(tab).not.toContain('table-filters')
+    // 目录计数在树组件内维护
+    expect(tree).toContain('DIRECTORY')
+    // 展开题材状态表已删（与树形右栏明细表重复）
+    expect(tab).not.toContain('展开题材状态表')
+    expect(tab).not.toContain('visibleRows')
+  })
+
+  it('stays fail-visible on empty data', () => {
+    expect(tab).toContain('暂无轮动数据')
+    expect(tab).toContain('重试')
   })
 
   it('is wired as a rotation tab inside SectorPanel', () => {

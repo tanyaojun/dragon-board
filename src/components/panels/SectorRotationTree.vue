@@ -1,10 +1,10 @@
 <template>
   <div class="sector-rotation-tree">
-    <div class="tree-toolbar">
+    <div class="rotation-toolbar">
       <h4 class="tree-title">🔄 轮动题材列表</h4>
       <span class="tree-count">共 {{ statuses.length }} 个题材</span>
     </div>
-    <div class="tree-layout">
+    <div class="tree-body">
       <!-- 左：固定四目录（全部/流入/流出/中性） -->
       <div class="tree-directory">
         <div
@@ -25,43 +25,41 @@
           <h4 class="detail-title">{{ categoryLabel }} · 题材轮动明细</h4>
           <span class="detail-count">{{ categoryRows.length }} 个题材</span>
         </div>
-        <div class="detail-table-wrap">
-          <table class="detail-table">
-            <thead>
-              <tr>
-                <th>题材</th>
-                <th>轮动状态</th>
-                <th>轮动分</th>
-                <th>热度排名</th>
-                <th>排名变化</th>
-                <th>强度</th>
-                <th>资金</th>
-                <th>广度</th>
-                <th>拥挤</th>
-                <th>净流入趋势</th>
-                <th>质量标记</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in categoryRows" :key="row.entityKey">
-                <td class="cell-name">{{ row.entityName }}</td>
-                <td><span class="state-badge" :class="stateToneOf(row.rotationState)">{{ stateLabelOf(row.rotationState) }}</span></td>
-                <td>{{ formatNumber(row.rotationScore, 1) }}</td>
-                <td>{{ row.rank ?? '—' }}</td>
-                <td :class="trendClass(row.rankChange)">{{ formatSigned(row.rankChange) }}</td>
-                <td>{{ formatNumber(row.factorBreakdown?.strength, 1) }}</td>
-                <td>{{ formatNumber(row.factorBreakdown?.flow, 1) }}</td>
-                <td>{{ formatNumber(row.factorBreakdown?.breadth, 1) }}</td>
-                <td>{{ formatNumber(row.factorBreakdown?.crowding, 1) }}</td>
-                <td :class="trendClass(row.flowTrend)">{{ formatFlowTrend(row.flowTrend) }}</td>
-                <td class="cell-flags">{{ row.qualityFlags?.length ? row.qualityFlags.join(',') : '—' }}</td>
-              </tr>
-              <tr v-if="!categoryRows.length">
-                <td colspan="11" class="tree-empty">该目录下无题材</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <table class="detail-table">
+          <thead>
+            <tr>
+              <th>题材</th>
+              <th>轮动状态</th>
+              <th>轮动分</th>
+              <th>热度排名</th>
+              <th>排名变化</th>
+              <th>强度</th>
+              <th>资金</th>
+              <th>广度</th>
+              <th>拥挤</th>
+              <th>净流入趋势</th>
+              <th>质量标记</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in categoryRows" :key="row.entityKey">
+              <td class="cell-name">{{ row.entityName }}</td>
+              <td><span class="state-badge" :class="stateToneOf(row.rotationState)">{{ stateLabelOf(row.rotationState) }}</span></td>
+              <td>{{ formatNumber(row.rotationScore, 1) }}</td>
+              <td>{{ row.rank ?? '—' }}</td>
+              <td :class="trendClass(row.rankChange)">{{ formatSigned(row.rankChange) }}</td>
+              <td>{{ formatNumber(row.factorBreakdown?.strength, 1) }}</td>
+              <td>{{ formatNumber(row.factorBreakdown?.flow, 1) }}</td>
+              <td>{{ formatNumber(row.factorBreakdown?.breadth, 1) }}</td>
+              <td>{{ formatNumber(row.factorBreakdown?.crowding, 1) }}</td>
+              <td :class="trendClass(row.flowTrend)">{{ formatFlowTrend(row.flowTrend) }}</td>
+              <td class="cell-flags">{{ row.qualityFlags?.length ? row.qualityFlags.join(',') : '—' }}</td>
+            </tr>
+            <tr v-if="!categoryRows.length">
+              <td colspan="11" class="tree-empty">该目录下无题材</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -137,90 +135,102 @@ function trendClass(value: number | null | undefined) {
 </script>
 
 <style scoped>
+/* 样式对齐 SectorStocksTree：同款容器/卡片/表格语言（--color-highlight 橙色选中系） */
 .sector-rotation-tree {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  height: 100%;
+  min-height: 480px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
 }
-.tree-toolbar {
+.rotation-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color);
 }
 .tree-title {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   color: var(--text-primary);
 }
 .tree-count {
-  font-size: 12px;
-  color: var(--text-secondary, #9aa5b1);
+  font-size: 11px;
+  color: var(--text-secondary);
 }
-/* 左目录右列表两栏（SectorStocksTree 范式） */
-.tree-layout {
-  display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 10px;
-  align-items: start;
+.tree-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
 }
 .tree-directory {
+  width: 200px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  position: sticky;
-  top: 0;
+  gap: 4px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
 }
 .directory-item {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  padding: 9px 12px;
-  background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
+  align-items: center;
+  padding: 10px;
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition: all 0.2s;
 }
 .directory-item:hover {
-  border-color: var(--accent-color, #4a9eff);
+  background: var(--bg-hover);
+  border-color: var(--color-highlight);
 }
 .directory-item.selected {
-  border-color: var(--accent-color, #4a9eff);
-  background: var(--bg-tertiary, rgba(74, 158, 255, 0.08));
+  border-color: var(--color-highlight);
+  background: rgba(255, 127, 80, 0.1);
 }
 .directory-label {
-  font-size: 13px;
+  font-weight: 500;
   color: var(--text-primary);
+  font-size: 13px;
 }
 .directory-count {
-  font-size: 12px;
-  color: var(--text-secondary, #9aa5b1);
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 .tree-detail {
-  background: var(--bg-secondary, rgba(255, 255, 255, 0.03));
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 10px 12px;
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px 16px;
 }
 .detail-header {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
+  align-items: center;
+  margin-bottom: 10px;
 }
 .detail-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-primary);
 }
 .detail-count {
-  font-size: 12px;
-  color: var(--text-secondary, #9aa5b1);
-}
-.detail-table-wrap {
-  max-height: 480px;
-  overflow-y: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
 }
 .detail-table {
   width: 100%;
@@ -229,7 +239,7 @@ function trendClass(value: number | null | undefined) {
 }
 .detail-table th,
 .detail-table td {
-  padding: 6px 8px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border-color);
   text-align: right;
   white-space: nowrap;
@@ -237,9 +247,10 @@ function trendClass(value: number | null | undefined) {
 .detail-table th {
   position: sticky;
   top: 0;
-  background: var(--bg-primary, #1a1d24);
-  color: var(--text-secondary, #9aa5b1);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
   font-weight: 400;
+  z-index: 1;
 }
 .detail-table th:first-child,
 .detail-table td:first-child {
@@ -248,26 +259,29 @@ function trendClass(value: number | null | undefined) {
 .detail-table td:first-child {
   color: var(--text-primary);
 }
+.detail-table tr:hover td {
+  background: var(--bg-hover);
+}
 .cell-flags { color: #f5c15b; }
 .state-badge {
-  padding: 1px 8px;
-  border-radius: 8px;
+  padding: 2px 8px;
+  border-radius: 12px;
   border: 1px solid var(--border-color);
   font-size: 11px;
 }
-.state-mainline { color: #f5c15b; border-color: #f5c15b; }
-.state-inflow { color: #f55b5b; border-color: rgba(245, 91, 91, 0.5); }
+.state-mainline { color: #ff7f50; border-color: #ff7f50; }
+.state-inflow { color: #ff4757; border-color: rgba(255, 71, 87, 0.5); }
 .state-emerging { color: #5bd4f5; border-color: #5bd4f5; }
-.state-neutral { color: var(--text-secondary, #9aa5b1); }
-.state-outflow { color: #4caf7d; border-color: rgba(76, 175, 125, 0.5); }
+.state-neutral { color: var(--text-secondary); }
+.state-outflow { color: #2ed573; border-color: rgba(46, 213, 115, 0.5); }
 .state-cooling { color: #5ba3f5; border-color: rgba(91, 163, 245, 0.5); }
-.state-unknown { color: var(--text-secondary, #9aa5b1); }
-.trend-up { color: #f55b5b; }
-.trend-down { color: #4caf7d; }
+.state-unknown { color: var(--text-secondary); }
+.trend-up { color: #ff4757; }
+.trend-down { color: #2ed573; }
 .tree-empty {
   padding: 16px;
   text-align: center;
-  color: var(--text-secondary, #9aa5b1);
+  color: var(--text-secondary);
   font-size: 13px;
 }
 </style>
