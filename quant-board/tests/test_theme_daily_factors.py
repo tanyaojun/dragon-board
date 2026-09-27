@@ -19,7 +19,9 @@ from backend.analysis.theme.daily_series import ThemeDailySeries
 from backend.analysis.theme.factors_daily import (
     FACTOR_VERSION,
     build_daily_factor_rows,
+    build_heat_level_streak_values,
     build_momentum_v2_daily_values,
+    merge_heat_level_streak_into_rows,
     merge_momentum_v2_into_rows,
 )
 from backend.data.repositories.theme_daily_factor_repository import ThemeDailyFactorRepository
@@ -513,3 +515,65 @@ class TestComputeAndStoreDailyFactors:
         )
         assert result["stockRowMissing"]["amount"] >= 1
         assert result["stockRowMissing"]["turnoverRate"] >= 1
+
+
+
+
+class TestBuildHeatLevelStreakValues:
+    def test_known_answer_accrue_reset_and_none_break(self) -> None:
+        heat = {
+            "T1": {"2026-09-01": 80.0, "2026-09-02": 72.0, "2026-09-03": 90.0, "2026-09-04": 50.0, "2026-09-05": 75.0},
+            "T2": {"2026-09-01": 80.0, "2026-09-03": 85.0},
+        }
+        values, flags = build_heat_level_streak_values(heat, target_dates=sorted(heat["T1"]))
+        assert values == {
+            "2026-09-01": {"T1": 1, "T2": 1},
+            "2026-09-02": {"T1": 2},
+            "2026-09-03": {"T1": 3, "T2": 2},
+            "2026-09-04": {"T1": 0},
+            "2026-09-05": {"T1": 1},
+        }
+        assert flags == []
+
+    def test_threshold_default_seventy_is_inclusive(self) -> None:
+        heat = {"T1": {"2026-09-01": 70.0, "2026-09-02": 69.9}}
+        values, _ = build_heat_level_streak_values(heat, target_dates=sorted(heat["T1"]))
+        assert values == {"2026-09-01": {"T1": 1}, "2026-09-02": {"T1": 0}}
+
+    def test_none_day_breaks_not_resumes(self) -> None:
+        heat = {"T1": {"2026-09-01": 80.0, "2026-09-02": None, "2026-09-03": 85.0}}
+        values, _ = build_heat_level_streak_values(heat, target_dates=sorted(heat["T1"]))
+        assert values == {"2026-09-01": {"T1": 1}, "2026-09-02": {"T1": None}, "2026-09-03": {"T1": 1}}
+
+    def test_custom_threshold(self) -> None:
+        heat = {"T1": {"2026-09-01": 55.0, "2026-09-02": 60.0, "2026-09-03": 40.0}}
+        values, _ = build_heat_level_streak_values(heat, target_dates=sorted(heat["T1"]), threshold=50.0)
+        assert values == {"2026-09-01": {"T1": 1}, "2026-09-02": {"T1": 2}, "2026-09-03": {"T1": 0}}
+
+    def test_empty_reported(self) -> None:
+        values, flags = build_heat_level_streak_values({}, target_dates=["2026-09-01"])
+        assert values == {}
+        assert flags == []
+
+    def test_target_date_outside_series_skipped(self) -> None:
+        heat = {"T1": {"2026-09-01": 80.0}}
+        values, _ = build_heat_level_streak_values(heat, target_dates=["2026-09-01", "2026-09-05"])
+        assert values == {"2026-09-01": {"T1": 1}}
+class TestMergeHeatLevelStreakIntoRows:
+    def test_merge_into_existing_and_create_streak_only_row(self) -> None:
+        rows, _ = build_daily_factor_rows(
+            make_stock_daily(), {"T1": {"A"}}, target_dates=["2026-09-03"], min_periods=3,
+        )
+        streak = {"2026-09-03": {"T1": 3, "T2": 1}}
+        merged, flags = merge_heat_level_streak_into_rows(
+            streak, rows, theme_names={"T2": "题材二"},
+        )
+        by_key = {(row["tradingDate"], row["themeId"]): row for row in merged}
+        t1 = by_key[("2026-09-03", "T1")]
+        assert t1["factors"]["heatLevelStreak"] == 3
+        assert t1["factors"]["amountShare"] is not None
+        t2 = by_key[("2026-09-03", "T2")]
+        assert t2["factors"]["amountShare"] is None
+        assert t2["factors"]["heatLevelStreak"] == 1
+        assert "crowding_unobservable" in t2["qualityFlags"]
+        assert "heat_level_streak_rows_created:1" in flags

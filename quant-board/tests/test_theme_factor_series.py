@@ -1,6 +1,7 @@
 """因子时间序列小模块已知答案校验（Phase 3，设计文档 §5.1 D2/D3、§5.2 F1 研究口径）。"""
 
 from backend.analysis.theme.factor_series import (
+    level_streak,
     positive_streak,
     sharpe_momentum,
     top_membership_streak,
@@ -98,3 +99,35 @@ class TestPositiveStreak:
 
     def test_empty(self):
         assert positive_streak({}) == {}
+
+
+class TestLevelStreak:
+    """日级持续性（2026-09-27 persistenceScore 重建立项 Q1=c）：连续 heatLevel ≥ threshold。
+
+    与 D3 top_membership_streak 不同型：本算子衡量"持续处于高位水平"（绝对阈值），
+    D3 衡量"持续留在截面 Top 集合"（相对排名）——两者同面板对照防双持续性重复计分。
+    """
+
+    def test_accrue_and_reset(self):
+        values = {"d1": 80.0, "d2": 72.0, "d3": 90.0, "d4": 50.0, "d5": 75.0}
+        assert level_streak(values) == {"d1": 1, "d2": 2, "d3": 3, "d4": 0, "d5": 1}
+
+    def test_none_day_breaks_chain(self):
+        values = {"d1": 80.0, "d2": None, "d3": 85.0}
+        assert level_streak(values) == {"d1": 1, "d2": None, "d3": 1}
+
+    def test_threshold_is_inclusive(self):
+        values = {"d1": 70.0, "d2": 69.9}
+        assert level_streak(values) == {"d1": 1, "d2": 0}
+
+    def test_custom_threshold(self):
+        values = {"d1": 55.0, "d2": 60.0, "d3": 40.0}
+        assert level_streak(values, threshold=50.0) == {"d1": 1, "d2": 2, "d3": 0}
+
+    def test_dates_sorted_not_insertion_order(self):
+        a = level_streak({"d3": 90.0, "d1": 80.0, "d2": 75.0})
+        b = level_streak({"d1": 80.0, "d2": 75.0, "d3": 90.0})
+        assert a == b == {"d1": 1, "d2": 2, "d3": 3}
+
+    def test_empty(self):
+        assert level_streak({}) == {}

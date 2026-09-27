@@ -25,9 +25,12 @@ from typing import Any
 from backend.analysis.theme.daily_series import build_daily_series
 from backend.analysis.theme.factors_daily import (
     build_daily_factor_rows,
+    build_heat_level_streak_values,
     build_momentum_v2_daily_values,
+    merge_heat_level_streak_into_rows,
     merge_momentum_v2_into_rows,
 )
+from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.core.settings import get_settings
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.data.repositories.theme_daily_factor_repository import ThemeDailyFactorRepository
@@ -103,6 +106,8 @@ def _load_daily_sector_rows(db: Any, dataset_id: str, start_date: str, end_date:
                 "breadthScore": 1,
                 "mainNetInflow": 1,
                 "crowdingRisk": 1,
+                "heatLevel": 1,
+                "heatScore": 1,
                 "metadata": 1,
             },
         )
@@ -221,7 +226,10 @@ def compute_and_store_daily_factors(
         already_v2 = set(
             factor_repo.dates_with_factor_key(dataset_id, start_day, end_day, "factors.momentumV2")
         )
-        complete = {d for d in already_crowding if d not in series_dates or d in already_v2}
+        already_streak = set(
+            factor_repo.dates_with_factor_key(dataset_id, start_day, end_day, "factors.heatLevelStreak")
+        )
+        complete = {d for d in already_crowding if d not in series_dates or (d in already_v2 and d in already_streak)}
         candidates = sorted(source_dates - complete)
         skipped_existing = sorted(source_dates & complete)
         targets = candidates[-max_dates_per_run:] if len(candidates) > max_dates_per_run else candidates
@@ -249,6 +257,26 @@ def compute_and_store_daily_factors(
     rows, v2_merge_flags = merge_momentum_v2_into_rows(rows, v2_by_day, theme_names=theme_names)
     flags.extend(v2_flags)
     flags.extend(v2_merge_flags)
+    # 日级持续性（2026-09-27 persistenceScore 重建立项 Q1=c）：
+    # 原料= daily sector rows 的 heatLevel（resolve_heat_level 统一消费规则，
+    # v1 回退 heatScore≤100、v2 不回退、缺失显式 None）；连续 ≥ 70 计数。
+    heat_level_by_theme: dict[str, dict[str, float | None]] = defaultdict(dict)
+    for row in sector_rows:
+        theme_id = str(row.get("themeId") or "")
+        if not theme_id:
+            continue
+        day = str(row.get("tradingDate") or "")
+        if not day:
+            continue
+        heat_level_by_theme[theme_id][day] = resolve_heat_level(row)
+    streak_by_day, streak_flags = build_heat_level_streak_values(
+        dict(heat_level_by_theme), target_dates=targets,
+    )
+    rows, streak_merge_flags = merge_heat_level_streak_into_rows(
+        streak_by_day, rows, theme_names=theme_names,
+    )
+    flags.extend(streak_flags)
+    flags.extend(streak_merge_flags)
 
     rows_by_day: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:

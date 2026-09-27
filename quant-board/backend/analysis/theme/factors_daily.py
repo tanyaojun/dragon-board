@@ -28,6 +28,7 @@ from backend.analysis.theme.crowding_percentile import (
     theme_turnover_mean,
 )
 from backend.analysis.theme.daily_series import ThemeDailySeries
+from backend.analysis.theme.factor_series import level_streak
 from backend.analysis.theme.momentum import ThemeMomentumConfig, compute_theme_momentum_v2
 
 FACTOR_VERSION = "theme-daily-factors-v1"
@@ -44,6 +45,48 @@ _MOMENTUM_V2_KEYS = (
     "flowVolume",
     "crowdingPenalty",
 )
+
+
+def merge_heat_level_streak_into_rows(
+    streak_by_day: dict[str, dict[str, dict[str, Any]]],
+    rows: list[dict[str, Any]],
+    *,
+    theme_names: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """把日级持续性值合并进日频因子行（同 momentumV2 接线：factors.heatLevelStreak）。
+
+    streak-only 题材（无拥挤原料）新建行：拥挤字段全 None + crowding_unobservable
+    标记（不伪造）；streak 为 None 时如实落 None + heat_level_streak_insufficient
+    标记（fail-visible）。
+    """
+    names = theme_names or {}
+    flags: list[str] = []
+    index: dict[tuple[str, str], dict[str, Any]] = {
+        (str(row.get("tradingDate")), str(row.get("themeId"))): row for row in rows
+    }
+    created = 0
+    for d in sorted(streak_by_day):
+        for theme_id, value in sorted(streak_by_day[d].items()):
+            theme_id = str(theme_id)
+            row = index.get((d, theme_id))
+            if row is None:
+                row = {
+                    "tradingDate": d,
+                    "themeId": theme_id,
+                    "themeName": str(names.get(theme_id) or ""),
+                    "factorVersion": FACTOR_VERSION,
+                    "factors": {key: None for key in _FACTOR_KEYS},
+                    "qualityFlags": ["crowding_unobservable"],
+                }
+                rows.append(row)
+                index[(d, theme_id)] = row
+                created += 1
+            row["factors"]["heatLevelStreak"] = value
+            if value is None and "heat_level_streak_insufficient" not in row["qualityFlags"]:
+                row["qualityFlags"].append("heat_level_streak_insufficient")
+    if created:
+        flags.append(f"heat_level_streak_rows_created:{created}")
+    return rows, flags
 
 
 def build_daily_factor_rows(
@@ -190,6 +233,36 @@ def _truncate_series(series: ThemeDailySeries, end_date: str) -> ThemeDailySerie
         latest_slots=series.latest_slots[:count],
         _day_flags=series._day_flags[:count],
     )
+
+
+def build_heat_level_streak_values(
+    heat_level_by_theme: dict[str, dict[str, float | None]],
+    *,
+    target_dates: list[str] | None = None,
+    threshold: float = 70.0,
+) -> tuple[dict[str, dict[str, int | None]], list[str]]:
+    """连续 heatLevel ≥ threshold 的日级持续性（2026-09-27 persistenceScore 重建立项 Q1=c）。
+
+    输入：{themeId: {date: heatLevel|None}}（daily sector rows 的 heatLevel 截面）；
+    target_dates 缺省 = 全部源日期（与 build_momentum_v2_daily_values 同口径：
+    不在序列内的目标日不产出该主题条目，调用方按该日无值处理）。
+    返回：({date: {themeId: streak|None}}, flags)；None 日断链、低于阈值归 0、
+    断链后首个达标日=1（factor_series.level_streak 同语义）。
+    与 D3 top_membership_streak 不同型：本算子衡量"持续处于高位水平"（绝对阈值），
+    D3 衡量"持续留在截面 Top 集合"（相对排名）——两者同面板对照防双持续性重复计分。
+    """
+    if not heat_level_by_theme:
+        return {}, []
+    targets = sorted(set(target_dates)) if target_dates is not None else sorted(
+        {d for seq in heat_level_by_theme.values() for d in seq}
+    )
+    out: dict[str, dict[str, int | None]] = {}
+    for theme_id, seq in heat_level_by_theme.items():
+        streaks = level_streak(seq, threshold=threshold)
+        for d in targets:
+            if d in streaks:
+                out.setdefault(d, {})[str(theme_id)] = streaks[d]
+    return out, []
 
 
 def build_momentum_v2_daily_values(
