@@ -58,7 +58,9 @@ Mongo 全库 14.6GB 中 `backtest_result_chunks` 占 11.4GB(2,895 个文档)。�
 - 全库 storage 14,640MB → **2,914MB**;`backtest_result_chunks` count=0 storage=0;
 - `backtest_runs` 186 行全保留(71 chunked 元数据在,读路径返回
   `resultPurged=true / expectedChunkCount=71` 抽查通过);
-- 安全网 dump:`data/backups/mongodb/pre-cleanup-20260928T034528Z/`;
+- 安全网 dump:`data/backups/mongodb/pre-cleanup-20260928T034528Z/`(3 文件/8.2GB;
+  用户验收首跑后确认不需要,已于 2026-09-28 当日删除,恢复这 53 run 明细的最后
+  手段=从 R2 2026-09-16/09-28 全量 mongorestore 回 staging 库);
 - 审计记录:`migration_audit` opType=mongodb_dead_data_cleanup。
 
 ## 5. 过程教训(供后续扫描任务引用)
