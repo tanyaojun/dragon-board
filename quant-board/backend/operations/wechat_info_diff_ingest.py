@@ -5,7 +5,7 @@
 写入语义：
 - 该集合每股一题材一条（多题材=多条），同一 stockCode 的全部映射条目统一更新；
 - 当日信息差文本**前置**进 stockReason，原业务底座描述保留在其后（不毁底座）；
-- 文本带日期标记（【M.DD信息差】），同日重复执行先剥离旧标记段再前置——幂等；
+- 幂等：existing 已含当日文本则跳过（内容判重，不引入任何标记词）；
 - 集合每日 00:30 由上游刷新重置，本写入天然按日滚动。
 """
 from __future__ import annotations
@@ -35,12 +35,12 @@ def match_codes(db, names: list[str]) -> dict[str, str]:
     return out
 
 
-def merge_reason(existing: str | None, diff_text: str, month: int, day: int) -> str:
-    """当日信息差前置进 stockReason：剥离旧日期标记段（幂等），新文本置顶，原底座保留。"""
+def merge_reason(existing: str | None, diff_text: str) -> str:
+    """当日信息差前置进 stockReason，原业务底座保留；已含同段文本则原样返回（幂等）。"""
     old = (existing or "").lstrip("；")
-    old = re.sub(r"【\d{1,2}\.\d{1,2}信息差】[^；]*；?", "", old).lstrip("；")
-    marker = f"【{month}.{day}信息差】{diff_text}"
-    return f"{marker}；{old}" if old else marker
+    if diff_text in old:
+        return old
+    return f"{diff_text}；{old}" if old else diff_text
 
 
 def ingest(db, url: str, date: str, discovery_title: str | None = None) -> dict:
@@ -50,9 +50,6 @@ def ingest(db, url: str, date: str, discovery_title: str | None = None) -> dict:
     if not entries:
         return {"status": "no_entries", "entries": 0, "matched": 0, "unmatched": 0}
     codes = match_codes(db, [e["name"] for e in entries])
-    md = re.search(r"(\d{1,2})\.(\d{1,2})个股信息差", discovery_title or "")
-    month, day = (int(md.group(1)), int(md.group(2))) if md else (
-        datetime.date.today().month, datetime.date.today().day)
     matched = unmatched = 0
     updates: list[tuple] = []
     for e in entries:
@@ -62,7 +59,7 @@ def ingest(db, url: str, date: str, discovery_title: str | None = None) -> dict:
             continue
         matched += 1
         for doc in db["theme_stock_mappings"].find({"stockCode": code}, {"_id": 1, "stockReason": 1}):
-            updates.append((doc["_id"], merge_reason(doc.get("stockReason"), e["reason"], month, day)))
+            updates.append((doc["_id"], merge_reason(doc.get("stockReason"), e["reason"])))
     # 先收集后统一写：边遍历游标边改同集合会导致 document move / 游标失效跳文档
     for _id, reason in updates:
         db["theme_stock_mappings"].update_one({"_id": _id}, {"$set": {"stockReason": reason}})
