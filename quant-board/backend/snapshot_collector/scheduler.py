@@ -67,6 +67,9 @@ class SnapshotCollectorScheduler:
         # timer can skip already-persisted slots without a round-trip to Mongo.
         self._completed_today: set[str] = set()
         self._completed_date: str | None = None
+        # 微信「个股信息差」支线（16:30/17:00/17:30，每日≤3 次）
+        self._info_diff_task: asyncio.Task[None] | None = None
+        self._info_diff_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -78,15 +81,22 @@ class SnapshotCollectorScheduler:
         except RuntimeError:
             return
         self._task = loop.create_task(self._run_loop())
+        if self._info_diff_task is None or self._info_diff_task.done():
+            self._info_diff_task = loop.create_task(run_info_diff_loop(self))
 
     async def stop(self) -> None:
         task = self._task
         self._task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        info_task = self._info_diff_task
+        self._info_diff_task = None
+        if info_task is not None:
+            info_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await info_task
 
     @property
     def running(self) -> bool:
@@ -128,6 +138,7 @@ class SnapshotCollectorScheduler:
             "collection_count": self._collection_count,
             "error_count": self._error_count,
             "in_flight_slots": sorted(self._in_flight_slots),
+            "info_diff": self._info_diff_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -437,3 +448,70 @@ class SnapshotCollectorScheduler:
 
 # Module-level singleton — start/stop via the FastAPI lifespan or CLI.
 snapshot_collector_scheduler = SnapshotCollectorScheduler()
+
+
+# ── 微信「个股信息差」每日抓取（N：飞火挖掘社，16:30 主爬 + 17:00/17:30 补爬） ──────────
+
+_INFODIFF_ATTEMPT_TIMES = (
+    datetime.time(16, 30),
+    datetime.time(17, 0),
+    datetime.time(17, 30),
+)
+_INFODIFF_MAX_ATTEMPTS = 3
+
+
+def next_info_diff_attempt(now: datetime.datetime) -> datetime.datetime:
+    """下一个抓取时点：今日 16:30/17:00/17:30 中未到的最早一个，否则明日 16:30。"""
+    naive = now.replace(tzinfo=None)
+    for t in _INFODIFF_ATTEMPT_TIMES:
+        candidate = datetime.datetime.combine(now.date(), t)
+        if candidate > naive:
+            return candidate.replace(tzinfo=now.tzinfo)
+    return datetime.datetime.combine(now.date() + datetime.timedelta(days=1),
+                                     _INFODIFF_ATTEMPT_TIMES[0]).replace(tzinfo=now.tzinfo)
+
+
+async def run_info_diff_attempt() -> dict:
+    """单次抓取尝试（供调度循环与测试调用）：发现→日期守卫→入库。"""
+    from backend.operations.wechat_info_diff_ingest import ingest_today_if_published
+
+    return await asyncio.to_thread(ingest_today_if_published)
+
+
+_INFO_DIFF_META_OK = "ok"
+
+
+async def run_info_diff_loop(sched: "SnapshotCollectorScheduler") -> None:
+    """每日 16:30/17:00/17:30 抓「个股信息差」，每日≤3 次；失败/未发布按计划补爬。
+
+    与主采集循环互不阻塞：抓取走 asyncio.to_thread（同步网络 IO）。attempts 计数
+    仅存进程内存（服务长驻；重启后当日重新计数，代价只是最多 3 次额外抓取）。
+    非交易日由 trading calendar 直接跳过。
+    """
+    from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+    state = {"date": None, "attempts": 0}
+    while True:
+        try:
+            now = datetime.datetime.now(TZ_SHANGHAI)
+            trading_date = trading_date_from_ts(int(now.timestamp() * 1000))
+            due = (now.hour, now.minute) >= (16, 30)
+            if trading_date and due:
+                if state["date"] != trading_date:
+                    state = {"date": trading_date, "attempts": 0}
+                if state["attempts"] < _INFODIFF_MAX_ATTEMPTS:
+                    result = await run_info_diff_attempt()
+                    state["attempts"] += 1
+                    sched._info_diff_last = {**result, "attempts": state["attempts"],
+                                             "tradingDate": trading_date,
+                                             "at": now.isoformat(timespec="seconds")}
+                    logger.info("info-diff attempt %s/%s: %s", state["attempts"],
+                                _INFODIFF_MAX_ATTEMPTS, result.get("status"))
+            until_next = (next_info_diff_attempt(now) - now).total_seconds()
+            await asyncio.sleep(max(30.0, until_next))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("info-diff scheduler cycle failed")
+            sched._info_diff_last = {"status": "loop_error", "at": datetime.datetime.now(TZ_SHANGHAI).isoformat()}
+            await asyncio.sleep(60)

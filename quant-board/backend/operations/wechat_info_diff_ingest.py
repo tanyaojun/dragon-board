@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""微信「个股信息差」入库 runner：发现(--discover)或手动(--url) → 解析 → 匹配 → stock_info_diff。
+"""微信「个股信息差」入库 runner：发现(--discover)或手动(--url) → 解析 → 匹配代码
+→ 直接更新 theme_stock_mappings.stockReason（不建新集合、不存任何抓取元数据）。
 
-用法（Git Bash）：
-  ./.venv/Scripts/python.exe -u -m backend.operations.wechat_info_diff_ingest --discover
-  ./.venv/Scripts/python.exe -u -m backend.operations.wechat_info_diff_ingest \
-      --url "https://mp.weixin.qq.com/s/xxxx" --date 2026-09-28
-
-存储：stock_info_diff（_id={date}:{code}，unmatched 用 {date}:un:{idx}；meta 文档 _id={date}:_meta）。
-stock_rows 不动（槽级快照 + Supabase 同构契约）；消费端（jev 驱动打标/研究）按 code join。
+写入语义：
+- 该集合每股一题材一条（多题材=多条），同一 stockCode 的全部映射条目统一更新；
+- 当日信息差文本**前置**进 stockReason，原业务底座描述保留在其后（不毁底座）；
+- 文本带日期标记（【M.DD信息差】），同日重复执行先剥离旧标记段再前置——幂等；
+- 集合每日 00:30 由上游刷新重置，本写入天然按日滚动。
 """
 from __future__ import annotations
 
 import argparse
 import datetime
-import time
+import re
 
 from pymongo import MongoClient
 
@@ -23,11 +22,11 @@ from backend.operations.wechat_info_diff import (
     discover_latest_article,
     fetch_html,
     parse_info_diff_entries,
+    title_month_day,
 )
 
 
-def match_codes(names: list[str]) -> dict[str, str]:
-    db = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)["dragon_board_quant"]
+def match_codes(db, names: list[str]) -> dict[str, str]:
     out = {}
     for name in names:
         hit = db["stock_names"].find_one({"name": name, "type": "stock"}, {"code": 1})
@@ -36,37 +35,55 @@ def match_codes(names: list[str]) -> dict[str, str]:
     return out
 
 
-def ingest(url: str, date: str, discovery_title: str | None = None):
-    db = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)["dragon_board_quant"]
-    col = db["stock_info_diff"]
+def merge_reason(existing: str | None, diff_text: str, month: int, day: int) -> str:
+    """当日信息差前置进 stockReason：剥离旧日期标记段（幂等），新文本置顶，原底座保留。"""
+    old = (existing or "").lstrip("；")
+    old = re.sub(r"【\d{1,2}\.\d{1,2}信息差】[^；]*；?", "", old).lstrip("；")
+    marker = f"【{month}.{day}信息差】{diff_text}"
+    return f"{marker}；{old}" if old else marker
+
+
+def ingest(db, url: str, date: str, discovery_title: str | None = None) -> dict:
     html = fetch_html(url)
     text = article_text(html)
     entries = parse_info_diff_entries(text)
-    codes = match_codes([e["name"] for e in entries])
-    now = time.strftime("%Y-%m-%dT%H:%M:%S")
-    source = f"{SOURCE_NAME}（搜狗发现）" if discovery_title else SOURCE_NAME
-
-    meta = {"_id": f"{date}:_meta", "tradingDate": date, "sourceName": source, "sourceUrl": url,
-            "articleTitle": discovery_title or "", "entries": len(entries),
-            "matched": sum(1 for e in entries if e["name"] in codes),
-            "unmatched": sum(1 for e in entries if e["name"] not in codes),
-            "rawText": text[:20000], "status": "ok" if entries else "no_entries", "createdAt": now}
-    col.replace_one({"_id": meta["_id"]}, meta, upsert=True)
-
-    un_idx = 0
+    if not entries:
+        return {"status": "no_entries", "entries": 0, "matched": 0, "unmatched": 0}
+    codes = match_codes(db, [e["name"] for e in entries])
+    md = re.search(r"(\d{1,2})\.(\d{1,2})个股信息差", discovery_title or "")
+    month, day = (int(md.group(1)), int(md.group(2))) if md else (
+        datetime.date.today().month, datetime.date.today().day)
+    matched = unmatched = 0
+    updates: list[tuple] = []
     for e in entries:
         code = codes.get(e["name"])
-        _id = f"{date}:{code}" if code else f"{date}:un:{un_idx}"
         if not code:
-            un_idx += 1
-        col.replace_one({"_id": _id}, {
-            "_id": _id, "tradingDate": date, "code": code, "name": e["name"],
-            "reasonText": e["reason"], "matchStatus": "matched" if code else "unmatched",
-            "sourceName": source, "sourceUrl": url, "createdAt": now}, upsert=True)
-    print(f"[{date}] entries={len(entries)} matched={meta['matched']} unmatched={meta['unmatched']} -> stock_info_diff")
-    for e in entries:
-        mark = codes.get(e["name"], "unmatched")
-        print(f"  {e['name']:8} -> {mark:8} | {e['reason'][:50]}")
+            unmatched += 1
+            continue
+        matched += 1
+        for doc in db["theme_stock_mappings"].find({"stockCode": code}, {"_id": 1, "stockReason": 1}):
+            updates.append((doc["_id"], merge_reason(doc.get("stockReason"), e["reason"], month, day)))
+    # 先收集后统一写：边遍历游标边改同集合会导致 document move / 游标失效跳文档
+    for _id, reason in updates:
+        db["theme_stock_mappings"].update_one({"_id": _id}, {"$set": {"stockReason": reason}})
+    return {"status": "ok", "entries": len(entries), "matched": matched, "unmatched": unmatched}
+
+
+def ingest_today_if_published(today_iso: str | None = None) -> dict:
+    """采集器调度入口：发现最新一篇 → 标题日期==今天才入库，否则视为"今日未发布"。"""
+    today = today_iso or datetime.date.today().isoformat()
+    try:
+        url, title = discover_latest_article()
+        md = title_month_day(title)
+        now = datetime.date.today()
+        if md != (now.month, now.day):
+            return {"status": "not_published", "title": title}
+        result = ingest(MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)[
+            "dragon_board_quant"], url, today, discovery_title=title)
+        return {"status": result["status"], "title": title, "entries": result["entries"],
+                "matched": result["matched"]}
+    except Exception as exc:  # noqa: BLE001 — 调度器要求任何失败都结构化返回
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:200]}
 
 
 if __name__ == "__main__":
@@ -75,15 +92,14 @@ if __name__ == "__main__":
     ap.add_argument("--discover", action="store_true", help="搜狗自动发现最新一篇")
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     args = ap.parse_args()
+    db = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)["dragon_board_quant"]
     if args.url:
-        ingest(args.url, args.date)
+        result = ingest(db, args.url, args.date)
     elif args.discover:
         url, title = discover_latest_article()
         print(f"发现: {title} -> {url[:80]}")
-        m = __import__("re").search(r"(\d{1,2})\.(\d{1,2})个股信息差", title)
-        date = args.date
-        if m:
-            date = f"{datetime.date.today().year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
-        ingest(url, date, discovery_title=title)
+        result = ingest(db, url, args.date, discovery_title=title)
     else:
         ap.error("需要 --url 或 --discover")
+    print(f"[{args.date}] {SOURCE_NAME}: entries={result['entries']} matched={result['matched']} "
+          f"unmatched={result['unmatched']} -> theme_stock_mappings.stockReason")

@@ -1,23 +1,26 @@
 # -*- coding: utf-8 -*-
-"""微信「个股信息差」（飞火挖掘社）爬取入库：搜狗发现 → 抓文章 → 解析 → 匹配代码 → stock_info_diff。
+"""微信「个股信息差」（飞火挖掘社）抓取与解析。
 
-来源：用户提供的补充信息源（个股信息差系列，日更，正文为个股业务/催化描述）。
-存储：独立日级集合 stock_info_diff（_id={date}:{code}，unmatched 用 {date}:un:{idx}），
-      meta 文档 _id={date}:_meta 存抓取状态与原文——stock_rows 不动（槽级快照 + Supabase 同构契约）。
-fail-visible：解析/匹配/发现每步失败都落 meta 状态，不静默；代码无法匹配的条目保留 unmatched。
+数据流：搜狗微信文章搜索发现最新一篇（或手动 URL）→ 抓取正文 → 解析个股条目
+→ 由调用方（wechat_info_diff_ingest）匹配代码并更新 theme_stock_mappings.stockReason。
+不建任何新集合；本模块不做 IO 落库。
 """
 from __future__ import annotations
 
 import re
-import time
 import urllib.parse
 import urllib.request
-from collections import Counter
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36",
       "Referer": "https://weixin.sogou.com/"}
 SOURCE_NAME = "飞火挖掘社"
 SEARCH_QUERY = "个股信息差 飞火挖掘社"
+
+
+def title_month_day(title: str) -> tuple[int, int] | None:
+    """标题里的系列日期（'9.28个股信息差'）→ (月, 日)；无则 None。"""
+    m = re.search(r"(\d{1,2})\.(\d{1,2})个股信息差", title or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def fetch_html(url: str, timeout: int = 30, opener=None) -> str:
@@ -37,8 +40,8 @@ def article_text(html: str) -> str:
 def parse_info_diff_entries(text: str, known_names: set[str] | None = None) -> list[dict]:
     """解析「个股信息差」段：按 N、 分条，条内首段"名称：描述"。
 
-    子编号陷阱：条目描述内部常带"1、…2、…"小点——用"候选名是否像股票名"
-    （在 known_names 中，或短且无顿号/句号）区分顶层条目与子条目，子条目并入上一条。
+    子编号陷阱：描述内部常带"1、…2、…"小点——用"候选名是否像股票名"（在
+    known_names 中，或短且无顿号/句号）区分顶层条目与子条目，子条目并入上一条。
     """
     idx = text.find("个股信息差")
     if idx < 0:
@@ -47,23 +50,19 @@ def parse_info_diff_entries(text: str, known_names: set[str] | None = None) -> l
     parts = re.split(r"(?:^|\n)\s*(\d{1,2})、", seg)
     known = known_names or set()
     entries: list[dict] = []
-    # parts = [前导, 序号, 内容, 序号, 内容, ...]
     for i in range(1, len(parts) - 1, 2):
-        body = parts[i + 1].strip()
+        body = re.sub(r"\s+", "", parts[i + 1])
         if not body:
             continue
         m = re.match(r"([^：\n]{2,12})：", body)
-        is_new = False
-        if m:
-            candidate = m.group(1).strip()
-            is_new = (candidate in known
-                      or ("、" not in candidate and "。" not in candidate and len(candidate) <= 8))
-        if is_new and m:
-            entries.append({"name": m.group(1).strip(),
-                            "reason": re.sub(r"\s+", "", body[m.end():]).lstrip("；")[:600]})
-        elif entries and entries[-1]["reason"] is not None:
+        candidate = m.group(1).strip() if m else ""
+        is_new = bool(candidate) and (candidate in known
+                                      or ("、" not in candidate and "。" not in candidate and len(candidate) <= 8))
+        if is_new:
+            entries.append({"name": candidate, "reason": body[m.end():].lstrip("；")[:600]})
+        elif entries:
             prev = entries[-1]
-            prev["reason"] = (prev["reason"] + "；" + re.sub(r"\s+", "", body).lstrip("；"))[:600]
+            prev["reason"] = (prev["reason"] + "；" + body.lstrip("；"))[:600]
     return entries
 
 
@@ -73,17 +72,16 @@ def pick_latest_discovery(html: str) -> dict | None:
     best = None
     for href, title_html in items:
         title = re.sub(r"<[^>]+>", "", title_html)
-        m = re.search(r"(\d{1,2})\.(\d{1,2})个股信息差", title)
-        if not m:
+        md = title_month_day(title)
+        if not md:
             continue
-        key = (int(m.group(1)), int(m.group(2)))
-        if best is None or key > best["key"]:
-            best = {"key": key, "title": title.strip(), "href": href}
+        if best is None or md > best["md"]:
+            best = {"md": md, "title": title.strip(), "href": href}
     if not best:
         return None
     return {"title": best["title"],
             "href": "https://weixin.sogou.com" + best["href"].replace("&amp;", "&"),
-            "month": best["key"][0], "day": best["key"][1]}
+            "month": best["md"][0], "day": best["md"][1]}
 
 
 def resolve_sogou_link(opener, href: str) -> str:

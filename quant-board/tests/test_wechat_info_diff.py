@@ -28,7 +28,8 @@ SOGOU_HTML = """
 
 
 def test_parse_entries():
-    entries = parse_info_diff_entries(article_text(FIXTURE_HTML))
+    entries = parse_info_diff_entries(article_text(FIXTURE_HTML),
+                                      known_names={"善水科技", "雪龙集团", "福建水泥"})
     names = [e["name"] for e in entries]
     assert names == ["善水科技", "雪龙集团", "福建水泥"]
     assert entries[0]["reason"].startswith("公司生产2-氯吡啶")
@@ -57,7 +58,8 @@ def test_parse_subnumbered_entry_merged():
     <p>6、</p>
     <p><strong>巨力索具：</strong>公司为商业航天地面发射提供了系统性保障</p>
     </div><script>x</script>"""
-    entries = parse_info_diff_entries(article_text(html))
+    entries = parse_info_diff_entries(article_text(html),
+                                      known_names={"襄阳轴承", "巨力索具"})
     assert [e["name"] for e in entries] == ["襄阳轴承", "巨力索具"]
     assert "军民融合企业" in entries[0]["reason"] and "柔性轴承" in entries[0]["reason"]
     assert "商业航天" in entries[1]["reason"]
