@@ -108,8 +108,8 @@
 
 | 阶段 | 内容 | 验收 | 状态 |
 |---|---|---|---|
-| 0 可行性 | REST 终验 + Worker 桥部署 + 假 state 实测 | Go/No-Go：免费计划能否跑通（无 Free-plan 拦截、无绑卡）、中文 instructions 有效、延迟/单次消耗实测 | **进行中** |
-| 1 回放验证 | 历史快照锚定帧重建 state 回放近 20-40 交易日；jev 档位 vs 规则档位 vs 次日晋级率/溢价 | 对比报告（信息增量结论），数据说话 | 待阶段 0 Go |
+| 0 可行性 | REST 终验 + Worker 桥部署 + 假 state 实测 | Go/No-Go：免费计划能否跑通（无 Free-plan 拦截、无绑卡）、中文 instructions 有效、延迟/单次消耗实测 | **NO-GO（2026-09-28）：jev 为纯付费转售模型（402 铁证），免费计划零额度；条件 GO 见 §10/§12** |
+| 1 回放验证 | 历史快照锚定帧重建 state 回放近 20-40 交易日；jev 档位 vs 规则档位 vs 次日晋级率/溢价 | 对比报告（信息增量结论），数据说话 | 待用户充值决策 |
 | 2 盘中旁观 | 调度上线（默认关→用户开），只落库打标，与现有链路隔离 | 连续 5 交易日轨道数据 + degraded 率 < 阈值 | 待阶段 1 过 |
 | 3 用户裁决 | 是否作辅助特征，一次一候选走研究纪律 | — | 未启动 |
 
@@ -117,12 +117,23 @@
 
 - jev 绕过免费计划门禁：REST chat/completions 直调时错误来自模型执行层（schema 校验），非 "not available on Free plan"。
 - REST 死锁：OpenAI 兼容网关强制要求 `messages`，模型强制拒绝 `messages`/`stream`/`max_tokens`（只认 `state`+`questions`）；`/ai/run/typesafe/jev` 返回 7000 无路由。唯一官方调用方式=Worker 绑定 `env.AI.run`（模型页明示"绑定不需要 API 令牌"）。
+- REST 终验（2026-09-28，阶段 0 Task 1）：A `/ai/v1/responses`=网关不要求 messages 且可透传 state/questions，但网关自动注入 `stream` 字段被模型拒绝（HTTP 400 invalid_prompt）；B chat+`messages:[]`=死锁复现（模型拒 messages 字段本身，与内容无关）；C chat+messages 无 stream=同样拒 messages+stream；D `/ai/run/typesafe/jev`=7000 无路由。**四变体全死，Worker 绑定为唯一通道，已定案。**
 - choice.criteria 是 `{label: description}` 对象非数组；state 支持 string|object|any[]|null。
 - 模型版本样例响应 `model: "jev-1.13.0"`，provider model `jev-latest`。
 
-## 11. 未决问题
+## 11. 未决问题（以用户充值决策为前提）
 
-- score 类型问题的 min/max 语义（阶段 0 探测）。
-- 用户 API 令牌当前仅 Workers AI:Edit，部署 Worker 需 Workers Scripts:Edit——阶段 0 由用户补权限或手动部署（代码由 AI 提供）。
-- workers.dev 子域名是否在帐户上启用（部署时确认）。
-- 中文 instructions 的评估质量（阶段 0 用双语对照验证）。
+- score 类型问题的 min/max 语义（充值后 Task 4 探测）。
+- 中文 instructions 的评估质量（充值后双语对照验证）。
+- 统一计费积分最低充值额度（面板查看）。
+
+## 12. 阶段 0 终局结论（2026-09-28）
+
+**判定：对"免费"前提 = NO-GO；技术通道 = 全通（条件 GO）。**
+
+1. **jev 不免费（铁证）**：统一端点 `POST /accounts/{acc}/ai/run`（带不带 `cf-aig-gateway-id` 头均同）+ 正确 payload `{"model":"typesafe/jev","input":{state,questions}}` → HTTP 402 `Insufficient balance; add money to your gateway or use BYOK`（code 2021）。第三方转售模型按 token 积分计费（模型页 $0.042/1M input tokens），**免费计划的 10,000 neurons/天只覆盖 @cf 系模型，jev 零免费额度**。对照实验：同路径 llama（@cf 系）当日免费 neurons 耗尽报 429（code 4006），二元计费结构实锤。
+2. **通道已打通（唯一正确姿势）**：统一端点在 `api.cloudflare.com`（CN 网络实测畅通），模型放 body.model、输入包 `input` 字段、网关用 `cf-aig-gateway-id: default` 头路由（帐户已有 default 网关，面板可查日志）。**此姿势下无需 Worker 桥**——§4 架构若用户选择充值推进，则简化为后端直连 `/ai/run`；jev-bridge Worker（已部署 jev-bridge.tanny.workers.dev）保留为备用，但 workers.dev 域名被 GFW SNI 封锁（同 IP 对照实验实锤），本机不可达，仅边缘内部可用。
+3. **用户侧澄清**：AI Gateway 免费套案的 "200K events/day" 是日志事件额度（超出仅日志采样），与调用额度无关，对本项目（~11 次/日）完全无影响。
+4. **成本估算（若充值推进）**：state ~4K token × 11 次/日 ≈ 5 万 token/日 ≈ **$0.002/日（约 $0.06/月）**，最低充值额（面板显示 $0.00 积分）可用数年。
+5. **wrangler 本地 dev 的 remote AI binding 对所有模型报 InferenceUpstreamError（21s 后 internal error）**——与模型无关的 dev 代理层问题，判定与计费门禁在 binding 路径的表现可能相关，未深究（已不影响结论）。
+6. **后续**：阶段 1-3 全部以用户"是否充值"决策为门。若充值：先跑 Task 4 探测（score schema/中文判别/延迟实测）再进回放。

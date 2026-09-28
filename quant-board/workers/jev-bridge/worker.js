@@ -22,7 +22,7 @@ export default {
     }
     const t0 = Date.now();
     try {
-      const result = await env.AI.run("typesafe/jev", payload);
+      const result = await env.AI.run(payload.model || "typesafe/jev", payload);
       return Response.json({ ok: true, latencyMs: Date.now() - t0, result });
     } catch (e) {
       return Response.json(
