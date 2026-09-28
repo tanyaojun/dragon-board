@@ -146,3 +146,10 @@
 - **积分不解锁计划门禁 @cf 模型**：glm-5.3-flash 仍 403 Free plan（文档"credits 解锁付费模型"的说法对 /ai/run 路径不成立）。
 - 探测总消耗 <$0.002；当日免费 neurons 已耗尽（429，按天重置）不影响 jev（走积分）。
 - 阶段 1 启动条件满足：Task 4 探测完成，schema/端点/成本全部锁定。
+
+
+## 14. 数据与代码清理注记（2026-09-28，用户指令）
+
+- **已 drop**：hotlist_jev_sentiment（330）、hotlist_jev_stock_labels（660）、hotlist_jev_driver_labels（9,223）——三者均可再生（阶段1 ≈$0.05 / 阶段2 ≈$0.02 / 阶段3 重打 ≈$0.35），判定数字已留档本目录报告；WiredTiger drop 即时释放空间，全库碎片扫描无 compact 候选。
+- **已移除代码**：阶段1（jev_replay.py / jev_replay_report.py / build_replay_state 及辅助）、阶段2（jev_label_stocks.py / jev_label_report.py / build_stock_config_narrative）、jev-bridge Worker（仓内代码 + 已部署实例，REST 通道定型后无用）。
+- **N15 保留件**：jev_client.py（统一 /ai/run 通道）、build_driver_label_narrative、jev_label_driver.py、jev_label_driver_report.py——扩窗复验（B-202610 N15）直接续跑，标签重建后判定复算。

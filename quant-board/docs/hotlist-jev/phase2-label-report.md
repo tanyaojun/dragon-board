@@ -44,5 +44,5 @@
 - 总成本 ≈ $0.17（阶段 0 探测 $0.002 + 阶段 1 三版 $0.13 + 阶段 2 $0.03 + 稳定性 $0.002）
 - 沉淀：统一 /ai/run 通道姿势、jev_state/jev_client/runner/报告四件套、
   两条被数据钉死的边界（文本判别强、市场归纳与配置标签均无次日信息）、
-  hotlist_jev_sentiment 330 条 + hotlist_jev_stock_labels 660 条留档
+  hotlist_jev_sentiment 330 条 + hotlist_jev_stock_labels 660 条留档〔2026-09-28 注：已按用户指令清理，可再生〕
 - jev 正式退役；剩余积分 ≈ $9.97 保留在帐户
