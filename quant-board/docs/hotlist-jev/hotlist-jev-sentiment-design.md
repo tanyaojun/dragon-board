@@ -88,8 +88,8 @@
 | score | `temperature` | 短线情绪温度 0-100 | 分数 |
 | score | `crowding` | 高位拥挤度 0-100 | 分数 |
 
-- choice/score 的确切 schema 以阶段 0 探测为准（已知 choice.criteria 为 `{label: 说明}` 对象；score 的 min/max 表达待探）。
-- 响应格式（截图样本）：`{model, answers: {<key>: {type, choice|noul|score, confidence?, probabilities?}}}`；落库存原始响应。
+- choice/score schema **已定案（2026-09-28 实测）**：choice.criteria=`{label: 说明}` 对象；score.criteria=**字符串锚点数组（≤10 档）**，返回 score=锚点下标的概率加权期望 + legend + 全档位概率分布（温度/拥挤度用 10 档 0-100 锚点，后端按 idx/9×100 还原，天然拿到校准直方图）；score 档位超 10 报 `Too many score levels`。
+- 响应包络：`{result:{state:"Completed", result:{model:"jev-1.13.0", answers:{<key>:{type, choice|noul|score, probabilities?, confidence?, legend?}}, usage:{input_tokens,output_tokens}}}, gatewayMetadata:{keySource:"Unified"}}`；落库存原始响应。
 
 ## 7. 落库与 API
 
@@ -108,7 +108,7 @@
 
 | 阶段 | 内容 | 验收 | 状态 |
 |---|---|---|---|
-| 0 可行性 | REST 终验 + Worker 桥部署 + 假 state 实测 | Go/No-Go：免费计划能否跑通（无 Free-plan 拦截、无绑卡）、中文 instructions 有效、延迟/单次消耗实测 | **NO-GO（2026-09-28）：jev 为纯付费转售模型（402 铁证），免费计划零额度；条件 GO 见 §10/§12** |
+| 0 可行性 | REST 终验 + Worker 桥部署 + 假 state 实测 | Go/No-Go：免费计划能否跑通（无 Free-plan 拦截、无绑卡）、中文 instructions 有效、延迟/单次消耗实测 | **GO（2026-09-28 终版）：用户充值 $10 统一积分后全项过验；免费前提修正为 ≈$0.0001/次，见 §12** |
 | 1 回放验证 | 历史快照锚定帧重建 state 回放近 20-40 交易日；jev 档位 vs 规则档位 vs 次日晋级率/溢价 | 对比报告（信息增量结论），数据说话 | 待用户充值决策 |
 | 2 盘中旁观 | 调度上线（默认关→用户开），只落库打标，与现有链路隔离 | 连续 5 交易日轨道数据 + degraded 率 < 阈值 | 待阶段 1 过 |
 | 3 用户裁决 | 是否作辅助特征，一次一候选走研究纪律 | — | 未启动 |
@@ -137,3 +137,12 @@
 4. **成本估算（若充值推进）**：state ~4K token × 11 次/日 ≈ 5 万 token/日 ≈ **$0.002/日（约 $0.06/月）**，最低充值额（面板显示 $0.00 积分）可用数年。
 5. **wrangler 本地 dev 的 remote AI binding 对所有模型报 InferenceUpstreamError（21s 后 internal error）**——与模型无关的 dev 代理层问题，判定与计费门禁在 binding 路径的表现可能相关，未深究（已不影响结论）。
 6. **后续**：阶段 1-3 全部以用户"是否充值"决策为门。若充值：先跑 Task 4 探测（score schema/中文判别/延迟实测）再进回放。
+
+## 13. 阶段 0 终版实测（2026-09-28 用户充值 $10 积分后，GO）
+
+- **五问全量一次通过**：object state（市场层+生命周期计数+3 只股票行+热榜+质量）1,121 input token / 124 output token，**五问并发返回 1.11s，单次 ≈$0.0001**（$10 积分 ≈ 十万次，完全免疫成本）。
+- **中文判别力**：紧急文本 noul=0.98 / 平静文本 noul=0.02；退潮特征描述 → choice=retreat P=0.82 conf=0.78；混合行情 object state → stage=ferment P=0.65 + 温度直方图（峰值 67-89 档）+ 拥挤度直方图，全部合理。
+- **score 定案**：criteria=字符串锚点数组（≤10 档），score=锚点下标期望，附 legend + 全档位概率——后端用 10 档 0-100 锚点，`temperature/100 = score_idx/9`，天然获得校准分布。
+- **积分不解锁计划门禁 @cf 模型**：glm-5.3-flash 仍 403 Free plan（文档"credits 解锁付费模型"的说法对 /ai/run 路径不成立）。
+- 探测总消耗 <$0.002；当日免费 neurons 已耗尽（429，按天重置）不影响 jev（走积分）。
+- 阶段 1 启动条件满足：Task 4 探测完成，schema/端点/成本全部锁定。
