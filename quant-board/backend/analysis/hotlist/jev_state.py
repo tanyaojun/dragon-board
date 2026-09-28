@@ -15,11 +15,16 @@ def _degraded(items: list, code: str, detail: str) -> None:
     items.append({"code": code, "detail": detail[:120]})
 
 
-def _market(frame: dict, deg: list) -> dict:
-    """market 层：marketStats 优先（zt/dt/炸板率/涨跌比/晋级率），limitSummary.zhaban 兜底。"""
+def _market(frame: dict, sentiment_doc: dict | None, deg: list) -> dict:
+    """market 层三级取数：frame.marketStats → 情绪桶 limitEvidence 重构 → limitSummary.zhaban。
+
+    8 月老帧无 marketStats（实测 150/326），limitEvidence 覆盖 359/359，为通用兜底。
+    """
     ms = frame.get("marketStats") or {}
     ls = frame.get("limitSummary") or {}
     idx = frame.get("indices") or {}
+    le = ((sentiment_doc or {}).get("metrics") or {}).get("limitEvidence") or {}
+    lem = le.get("market") or {}
     m: dict = {}
     if "sh" in idx and isinstance(idx["sh"], dict):
         m["sh"] = round(idx["sh"]["change"], 2)
@@ -27,25 +32,67 @@ def _market(frame: dict, deg: list) -> dict:
         m["zz500"] = round(idx["zz500"]["change"], 2)
 
     zt = ms.get("ztCount")
+    if zt is None:
+        zt = lem.get("ztCount")
     dt = ms.get("dtCount")
-    zb = (ms.get("zhaban") or {}).get("rate")
+    zb = (ms.get("zhaban") or {}).get("rate") or (ls.get("zhaban") or {}).get("rate")
     if zb is None:
-        zb = (ls.get("zhaban") or {}).get("rate")
+        zbc, ztc = lem.get("zhabanCount"), lem.get("ztCount")
+        if zbc is not None and ztc is not None and (zbc + ztc) > 0:
+            zb = round(zbc / (zbc + ztc) * 100, 1)
     up, down = ms.get("upCount"), ms.get("downCount")
     if up is not None and down is not None and (up + down) > 0:
         m["upRatio"] = round(up / (up + down), 3)
     boards = ms.get("limitData") or ls.get("continuousBoards") or {}
-    yiban, promoted = boards.get("yiban"), 0
-    for k in ("erban", "sanban", "sibanPlus"):
-        promoted += boards.get(k) or 0
+    if not boards and lem:
+        boards = {k: lem.get(k) for k in ("board1", "board2", "board3", "board4Plus")}
+    yiban = boards.get("yiban") or boards.get("board1")
+    promoted = sum(boards.get(k) or 0 for k in ("erban", "sanban", "sibanPlus", "board2", "board3", "board4Plus"))
     if yiban:
         m["promotionRate"] = round(promoted / yiban, 3)
+    if lem.get("maxContinuousDays") is not None:
+        m["maxBoard"] = int(lem["maxContinuousDays"])
+    if lem.get("fengbanRate") is not None:
+        m["fengbanRate"] = round(lem["fengbanRate"], 1)
     for k, v in (("zt", zt), ("dt", dt), ("zhabanRate", zb)):
         if v is not None:
-            m[k] = v
+            m[k] = round(v, 1) if isinstance(v, float) else v
         else:
-            _degraded(deg, "market", f"{k} 缺失（marketStats/limitSummary 均无）")
+            _degraded(deg, "market", f"{k} 缺失（三级源均无）")
     return m
+
+
+def _narrative(market: dict, lifecycle: dict | None, stocks: list) -> str:
+    """模板化中文行情叙事：只用存在的字段，缺失部分静默跳过（不伪造）。"""
+    parts = []
+    if market.get("zt") is not None:
+        parts.append(f"涨停{market['zt']}家")
+    if market.get("dt") is not None:
+        parts.append(f"跌停{market['dt']}家")
+    if market.get("zhabanRate") is not None:
+        parts.append(f"炸板率{market['zhabanRate']}%")
+    if market.get("promotionRate") is not None:
+        parts.append(f"晋级率{int(market['promotionRate'] * 100)}%")
+    if market.get("maxBoard"):
+        parts.append(f"最高{market['maxBoard']}板")
+    if market.get("sh") is not None:
+        parts.append(f"上证{market['sh']:+.2f}%")
+    if parts:
+        parts = ["今日" + "，".join(parts) + "。"]
+    if lifecycle and lifecycle.get("counts"):
+        c = lifecycle["counts"]
+        parts.append(f"生命周期点火{c.get('ignition')}扩散{c.get('expansion')}拥挤{c.get('crowded')}"
+                     f"反转{c.get('reversal')}冷却{c.get('cooling')}。")
+    if lifecycle and lifecycle.get("migration"):
+        mig = [f"{k}{'+' if v > 0 else ''}{v}" for k, v in lifecycle["migration"].items() if v]
+        if mig:
+            parts.append("较上一槽：" + "、".join(mig) + "。")
+    top = [s for s in stocks if s.get("pct") is not None][:3]
+    if top:
+        moves = "、".join(f"{s['n']}{s['pct']:+.1f}%" for s in top if s.get("n"))
+        if moves:
+            parts.append(f"热度前{'三' if len(top) >= 3 else len(top)}：{moves}。")
+    return "".join(parts)
 
 
 def _lifecycle(sentiment_doc: dict | None, prev_counts: dict | None, deg: list) -> dict | None:
@@ -88,19 +135,33 @@ def _stocks(rows: list, analysis_by_code: dict, deg: list) -> list:
     return out
 
 
+def _platform_count(r: dict) -> int:
+    """platforms 兼容两种存量形态：int（上榜平台数）或 list（平台名集合）。"""
+    p = r.get("platforms")
+    if isinstance(p, int):
+        return p
+    if isinstance(p, (list, tuple, set)):
+        return len(p)
+    return 0
+
+
 def build_replay_state(frame: dict, rows: list, analysis_by_code: dict,
                        sentiment_doc: dict | None, prev_counts: dict | None,
                        prev_codes: set) -> dict:
     """锚定帧 + 行 + 行级 stage 映射 + 情绪桶 → jev state（§5 四层结构）。"""
     deg: list = []
     codes = {r.get("code") for r in rows if r.get("code")}
+    market = _market(frame, sentiment_doc, deg)
+    lifecycle = _lifecycle(sentiment_doc, prev_counts, deg)
+    stocks = _stocks(rows, analysis_by_code, deg)
     return {
         "asOf": f"{frame.get('tradingDate')} {frame.get('slotTime')}",
         "slot": (frame.get("slotTime") or "").replace(":", "") + "+0",
-        "market": _market(frame, deg),
-        "lifecycle": _lifecycle(sentiment_doc, prev_counts, deg),
-        "stocks": _stocks(rows, analysis_by_code, deg),
-        "hotlist": {"platforms": len({p for r in rows for p in (r.get("platforms") or [])}),
+        "narrative": _narrative(market, lifecycle, stocks),
+        "market": market,
+        "lifecycle": lifecycle,
+        "stocks": stocks,
+        "hotlist": {"platforms": max((_platform_count(r) for r in rows), default=0),
                     "entries": len(rows),
                     "newEntries": len(codes - set(prev_codes or set()))},
         "quality": {"degraded": deg},

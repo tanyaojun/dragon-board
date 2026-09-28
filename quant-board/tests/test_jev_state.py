@@ -67,3 +67,20 @@ def test_top_stocks_sorted_by_heat():
                             sentiment_doc=_sentiment(FULL_COUNTS), prev_counts=None, prev_codes=set())
     assert [s["n"] for s in st["stocks"]] == ["s1", "s2", "s0"]  # heat 降序
     assert len(st["stocks"]) == 3
+
+
+def test_limit_evidence_fallback_and_narrative():
+    """8 月老帧无 marketStats → limitEvidence 兜底；narrative 由存在字段生成。"""
+    frame = _frame(market_stats={})  # 老帧：marketStats 空
+    sent = {**_sentiment(FULL_COUNTS),
+            "metrics": {"layers": {"top50": {"stageCounts": FULL_COUNTS}},
+                        "limitEvidence": {"market": {"ztCount": 39, "zhabanCount": 13,
+                                                     "board1": 26, "board2": 10, "board3": 1,
+                                                     "board4Plus": 2, "maxContinuousDays": 4}}}}
+    st = build_replay_state(frame=frame, rows=[], analysis_by_code={}, sentiment_doc=sent,
+                            prev_counts=None, prev_codes=set())
+    assert st["market"]["zt"] == 39
+    assert st["market"]["zhabanRate"] == round(13 / 52 * 100, 1)   # 25.0
+    assert st["market"]["promotionRate"] == round(13 / 26, 3)
+    assert st["market"]["maxBoard"] == 4
+    assert "涨停39家" in st["narrative"] and "炸板率25.0%" in st["narrative"]
