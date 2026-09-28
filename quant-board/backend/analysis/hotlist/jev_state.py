@@ -166,3 +166,53 @@ def build_replay_state(frame: dict, rows: list, analysis_by_code: dict,
                     "newEntries": len(codes - set(prev_codes or set()))},
         "quality": {"degraded": deg},
     }
+
+
+MACD_CROSS_CN = {"death": "死叉", "golden": "金叉"}
+
+
+def build_stock_config_narrative(analysis: dict, row: dict) -> str:
+    """单股五维配置 → 叙事文本（jev Choice 打标输入）。缺维跳过对应行，不伪造。"""
+    parts: list = []
+    name = row.get("name") or row.get("code") or "未知"
+    head = f"{name}"
+    if row.get("rank") is not None:
+        head += f"（热榜第{row['rank']}名）"
+    parts.append(head + "：")
+    res = analysis.get("resonance") or {}
+    if res.get("score") is not None:
+        extra = []
+        if res.get("relativeMomentum") is not None:
+            extra.append(f"相对动量{res['relativeMomentum']:.2f}")
+        if res.get("acceleration") is not None:
+            extra.append(f"加速度{res['acceleration']:.2f}")
+        parts.append(f"共振{res.get('label') or ''}{res['score']}分方向{res.get('direction')}"
+                     + (f"（{'，'.join(extra)}）" if extra else "") + "；")
+    tech = analysis.get("technical") or {}
+    ma = (tech.get("movingAverage") or {}).get("trend")
+    macd = tech.get("macd") or {}
+    if ma or macd.get("cross"):
+        seg = "技术 "
+        if ma:
+            seg += f"MA趋势{ma}"
+        if macd.get("cross"):
+            seg += f"、MACD{MACD_CROSS_CN.get(macd['cross'], macd['cross'])}"
+            seg += "已确认" if macd.get("confirmed") else "未确认"
+        parts.append(seg + "；")
+    cyc = analysis.get("cycle") or {}
+    if cyc.get("stage"):
+        cm = cyc.get("metrics") or {}
+        seg = f"周期 {cyc['stage']}（前一{cyc.get('previousStage') or '无'}，置信{cyc.get('confidence')}）"
+        if cm.get("rankVelocity") is not None:
+            seg += f"，rankVelocity{cm['rankVelocity']:.1f}"
+        parts.append(seg + "；")
+    tm = analysis.get("themeMomentum") or {}
+    if tm.get("themeName"):
+        parts.append(f"题材 {tm['themeName']}动量{tm.get('score')}分{tm.get('phaseLabel') or ''}；")
+    dec = ((analysis.get("decision") or {}).get("final")) or {}
+    if dec.get("signal"):
+        parts.append(f"决策信号 {dec['signal']}（置信{dec.get('confidence')}）")
+    rt = ((analysis.get("observation") or {}).get("rankTrend")) or {}
+    if rt.get("signalTier"):
+        parts.append(f"，信号层{rt['signalTier']}（{'，'.join(rt.get('tierReasons') or [])}）")
+    return "".join(parts)[:800]

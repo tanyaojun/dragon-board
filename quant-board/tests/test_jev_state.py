@@ -84,3 +84,28 @@ def test_limit_evidence_fallback_and_narrative():
     assert st["market"]["promotionRate"] == round(13 / 26, 3)
     assert st["market"]["maxBoard"] == 4
     assert "涨停39家" in st["narrative"] and "炸板率25.0%" in st["narrative"]
+
+
+def test_stock_config_narrative():
+    from backend.analysis.hotlist.jev_state import build_stock_config_narrative
+    analysis = {"resonance": {"score": 45.2, "label": "较弱", "direction": "sell",
+                              "relativeMomentum": -0.78, "acceleration": -0.99},
+                "technical": {"movingAverage": {"trend": "down"},
+                              "macd": {"cross": "death", "confirmed": True}},
+                "cycle": {"stage": "cooling", "transition": "cooling", "confidence": 90,
+                          "metrics": {"rankVelocity": -12.1}},
+                "themeMomentum": {"themeName": "高股息", "score": 53.8, "direction": "neutral",
+                                  "phaseLabel": "中性"},
+                "decision": {"final": {"signal": "sell", "confidence": 45.2}},
+                "observation": {"rankTrend": {"signalTier": "D", "tierReasons": ["趋势转弱/反向"]}}}
+    row = {"code": "000592", "name": "平潭发展", "rank": 3}
+    s = build_stock_config_narrative(analysis, row)
+    assert "平潭发展" in s and "热榜第3" in s
+    assert "共振" in s and "45.2" in s and "MACD" in s and "死叉" in s
+    assert "cooling" in s and "高股息" in s and "D" in s
+
+
+def test_stock_config_narrative_partial_missing():
+    from backend.analysis.hotlist.jev_state import build_stock_config_narrative
+    s = build_stock_config_narrative({"resonance": {"score": 70.0, "label": "强", "direction": "buy"}}, {"name": "X"})
+    assert "共振" in s and "70" in s and "MACD" not in s  # 缺技术维则跳过该行，不伪造
