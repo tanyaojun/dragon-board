@@ -169,6 +169,11 @@ def build_replay_state(frame: dict, rows: list, analysis_by_code: dict,
 
 
 MACD_CROSS_CN = {"death": "死叉", "golden": "金叉"}
+DIRECTION_CN = {"buy": "看多", "sell": "看空", "neutral": "中性", "up": "向上", "down": "向下"}
+
+
+def _dir_cn(v):
+    return DIRECTION_CN.get(v, v) if isinstance(v, str) else v
 
 
 def build_stock_config_narrative(analysis: dict, row: dict) -> str:
@@ -186,16 +191,16 @@ def build_stock_config_narrative(analysis: dict, row: dict) -> str:
             extra.append(f"相对动量{res['relativeMomentum']:.2f}")
         if res.get("acceleration") is not None:
             extra.append(f"加速度{res['acceleration']:.2f}")
-        parts.append(f"共振{res.get('label') or ''}{res['score']}分方向{res.get('direction')}"
+        parts.append(f"共振{res.get('label') or ''}{res['score']}分方向{_dir_cn(res.get('direction'))}"
                      + (f"（{'，'.join(extra)}）" if extra else "") + "；")
     tech = analysis.get("technical") or {}
     ma = (tech.get("movingAverage") or {}).get("trend")
     macd = tech.get("macd") or {}
-    if ma or macd.get("cross"):
+    if ma or (macd.get("cross") and macd.get("cross") != "none"):
         seg = "技术 "
         if ma:
-            seg += f"MA趋势{ma}"
-        if macd.get("cross"):
+            seg += f"MA趋势{_dir_cn(ma)}"
+        if macd.get("cross") and macd.get("cross") != "none":
             seg += f"、MACD{MACD_CROSS_CN.get(macd['cross'], macd['cross'])}"
             seg += "已确认" if macd.get("confirmed") else "未确认"
         parts.append(seg + "；")
@@ -216,3 +221,31 @@ def build_stock_config_narrative(analysis: dict, row: dict) -> str:
     if rt.get("signalTier"):
         parts.append(f"，信号层{rt['signalTier']}（{'，'.join(rt.get('tierReasons') or [])}）")
     return "".join(parts)[:800]
+
+
+def _tag_names(tags) -> list:
+    """tags 兼容两种形态：[{Name:...}] 对象数组或字符串数组。"""
+    out = []
+    for t in tags or []:
+        if isinstance(t, dict) and t.get("Name"):
+            out.append(str(t["Name"]))
+        elif isinstance(t, str) and t:
+            out.append(t)
+    return out
+
+
+def build_driver_label_narrative(ths_reason: str, row: dict, mappings: list) -> str:
+    """涨停驱动打标叙事：THS 涨停原因 + 行业/题材上下文 + 业务底座映射（≤4 条）。
+
+    映射缺失时如实输出"无题材映射记录"（该缺失本身是判别信号）。
+    """
+    name = row.get("name") or row.get("code") or "未知"
+    head = f"{name}（{row.get('mainTheme') or '行业未标注'}，热榜第{row.get('rank')}名）：今日涨停原因：{ths_reason}。"
+    segs = []
+    for m in (mappings or [])[:4]:
+        theme = m.get("themeName") or m.get("themeId") or "未知题材"
+        tags = "/".join(_tag_names(m.get("tags")))
+        reason = str(m.get("reason") or "")[:60]
+        segs.append(f"【{theme}】{('标签:' + tags + '；') if tags else ''}{reason}")
+    base = "；".join(segs) if segs else "无题材映射记录"
+    return f"{head}公司业务底座（题材映射）：{base}。"[:1200]
