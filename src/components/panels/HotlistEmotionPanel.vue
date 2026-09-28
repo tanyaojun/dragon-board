@@ -701,7 +701,7 @@ const LAYER_RANGES = [
 ] as const
 type LayerTimeRange = (typeof LAYER_RANGES)[number]['key']
 const layersRange = ref<LayerTimeRange>('1d')
-const layersLayer = ref<LayerKey>('top100')
+const layersLayer = ref<LayerKey>('all')
 const layersChartRef = ref<HTMLElement | null>(null)
 let layersChart: echarts.ECharts | null = null
 
@@ -717,7 +717,8 @@ const LAYER_INDICATORS = [
   { key: 'mainNet', label: '主力净额', icon: '💰' },
 ] as const
 type LayerIndicatorKey = (typeof LAYER_INDICATORS)[number]['key']
-const layersIndicators = ref<LayerIndicatorKey[]>(['upRatio', 'nearLimitUp', 'mainNet'])
+// 默认四维（2026-09-28 用户裁决）：涨/跌占比 + 平均涨幅 + TRIN
+const layersIndicators = ref<LayerIndicatorKey[]>(['upRatio', 'downRatio', 'avgChange', 'trin'])
 
 // 每日/每槽位所选分层的数值点：null 缺失直传图表断线，不补 0。
 // 1天=slots 最新交易日盘中槽位（label=槽位时间）；多日=series 日线 EOD 文档（label=交易日 MM-DD）
@@ -797,25 +798,23 @@ function renderLayersChart() {
   const points = layerPoints.value
   const indicators = layersIndicators.value
   const series: any[] = []
+  // 涨/跌占比与平均涨幅为柱图（红/绿/蓝，2026-09-28 用户裁决），同走 % 轴并列簇状
   if (indicators.includes('upRatio')) {
     series.push({
-      name: '涨占比', type: 'line', data: points.map((p) => p.upRatioPct),
-      smooth: true, symbol: 'circle', symbolSize: 5, connectNulls: false,
-      lineStyle: { color: '#ff4757', width: 2 }, yAxisIndex: 0,
+      name: '涨占比', type: 'bar', data: points.map((p) => p.upRatioPct),
+      itemStyle: { color: '#ff4757' }, yAxisIndex: 0,
     })
   }
   if (indicators.includes('downRatio')) {
     series.push({
-      name: '跌占比', type: 'line', data: points.map((p) => p.downRatioPct),
-      smooth: true, symbol: 'circle', symbolSize: 5, connectNulls: false,
-      lineStyle: { color: '#2ed573', width: 2 }, yAxisIndex: 0,
+      name: '跌占比', type: 'bar', data: points.map((p) => p.downRatioPct),
+      itemStyle: { color: '#2ed573' }, yAxisIndex: 0,
     })
   }
   if (indicators.includes('avgChange')) {
     series.push({
-      name: '平均涨幅', type: 'line', data: points.map((p) => p.avgChange),
-      smooth: true, symbol: 'diamond', symbolSize: 4, connectNulls: false,
-      lineStyle: { color: '#ff7f50', width: 1.5, type: 'dashed' }, yAxisIndex: 0,
+      name: '平均涨幅', type: 'bar', data: points.map((p) => p.avgChange),
+      itemStyle: { color: '#1e90ff' }, yAxisIndex: 0,
     })
   }
   if (indicators.includes('trin')) {

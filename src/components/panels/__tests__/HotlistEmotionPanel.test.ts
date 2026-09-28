@@ -121,6 +121,27 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).not.toContain('data-table')
   })
 
+  test('分层结构默认视图：全池 + 涨/跌占比·平均涨幅·TRIN 四维，三指标柱图化（2026-09-28 用户裁决）', () => {
+    const source = panelSource()
+
+    // 默认分层=全池；默认指标=涨占比/跌占比/平均涨幅/TRIN
+    expect(source).toContain("layersLayer = ref<LayerKey>('all')")
+    expect(source).toContain(
+      "layersIndicators = ref<LayerIndicatorKey[]>(['upRatio', 'downRatio', 'avgChange', 'trin'])",
+    )
+    // 三指标改柱图：涨占比红 / 跌占比绿 / 平均涨幅蓝，仍走 % 轴
+    expect(source).toContain("name: '涨占比', type: 'bar'")
+    expect(source).toContain("name: '跌占比', type: 'bar'")
+    expect(source).toContain("name: '平均涨幅', type: 'bar'")
+    expect(source).toContain("itemStyle: { color: '#ff4757' }, yAxisIndex: 0")
+    expect(source).toContain("itemStyle: { color: '#2ed573' }, yAxisIndex: 0")
+    expect(source).toContain("itemStyle: { color: '#1e90ff' }, yAxisIndex: 0")
+    // 旧折线语言不得回流
+    expect(source).not.toContain("name: '涨占比', type: 'line'")
+    expect(source).not.toContain("name: '跌占比', type: 'line'")
+    expect(source).not.toContain("name: '平均涨幅', type: 'line'")
+  })
+
   test('池换手独立页签：分池出池合并单表，成分股列表语言（2026-09-24 用户裁决）', () => {
     const source = panelSource()
 
