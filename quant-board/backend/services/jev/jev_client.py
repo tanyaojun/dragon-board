@@ -33,6 +33,9 @@ def call_jev(account_id: str, api_token: str, state: dict, questions: dict,
         except Exception:
             detail = f"HTTP {e.code}"
         return {"success": False, "errors": [{"message": detail}]}, int((time.time() - t0) * 1000)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        # 网络层（读超时/连接重置等）：degraded 返回，不炸 run（fail-visible）
+        return {"success": False, "errors": [{"message": f"network: {str(e)[:200]}"}]}, int((time.time() - t0) * 1000)
 
 
 def parse_jev_response(envelope: dict, latency_ms: int) -> dict:
