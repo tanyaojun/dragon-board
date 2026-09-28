@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -443,11 +443,26 @@ def test_after_market_job_in_mongodb_mode_surfaces_backup_failure(monkeypatch: A
 class FakeBackupService:
     """按调用顺序记录备份链动作。"""
 
-    def __init__(self, calls: list[str], *, full_ok: bool = True, verify_ok: bool = True, push_ok: bool = True) -> None:
+    def __init__(
+        self,
+        calls: list[str],
+        *,
+        full_ok: bool = True,
+        verify_ok: bool = True,
+        push_ok: bool = True,
+        last_full_info: dict[str, Any] | None = None,
+        has_object_store: bool = False,
+    ) -> None:
         self.calls = calls
         self.full_ok = full_ok
         self.verify_ok = verify_ok
         self.push_ok = push_ok
+        self.last_full_info = last_full_info
+        self.object_store = object() if has_object_store else None
+
+    def latest_full_backup_info(self) -> dict[str, Any] | None:
+        self.calls.append("latest_full")
+        return self.last_full_info
 
     def create_full_backup(self, *, backup_id: str | None = None) -> dict[str, Any]:
         self.calls.append("create_full")
@@ -519,7 +534,10 @@ def test_run_mongodb_backup_once_weekday_runs_light_without_push(monkeypatch: An
     assert result["strategy"] == "light_dump"
     assert "push" not in result
     assert all(not call.startswith("push") for call in calls)
-    assert calls == ["create_light", "verify:b-light", "prune:False"]
+    assert calls == ["latest_full", "create_light", "verify:b-light", "prune:False"]
+    # 未配置 object store 且查不到全量历史：保持 light 并结构化记录原因
+    assert result["lastFullBackup"]["skipped"] is True
+    assert "fullCatchUp" not in result["lastFullBackup"]
 
 
 def test_run_mongodb_backup_once_structured_failure_on_create(monkeypatch: Any) -> None:
@@ -557,7 +575,7 @@ def test_run_mongodb_backup_once_structured_failure_on_verify(monkeypatch: Any) 
 
     assert result["ok"] is False
     assert result["failedStep"] == "verify"
-    assert calls == ["create_light", "verify:b-light"]
+    assert calls == ["latest_full", "create_light", "verify:b-light"]
 
 
 def test_run_mongodb_backup_once_skips_non_trading_day_and_dry_run(monkeypatch: Any) -> None:
@@ -580,3 +598,76 @@ def test_run_mongodb_backup_once_skips_non_trading_day_and_dry_run(monkeypatch: 
     assert dry_run["skipped"] is True
     assert dry_run["reason"] == "dry_run"
     assert calls == []
+
+
+def test_run_mongodb_backup_once_forces_full_when_last_full_older_than_8_days(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    last_full = {
+        "backupId": "20260904T080002Z",
+        "source": "remote",
+        "createdAt": datetime(2026, 9, 4, 8, 0, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls, last_full_info=last_full, has_object_store=True),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    monday = datetime(2026, 9, 21, 18, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    result = run_mongodb_backup_once(now=monday)
+
+    # 错过周五后周一补全量：strategy=full_dump 且走完整 push 链
+    assert result["strategy"] == "full_dump"
+    assert result["lastFullBackup"]["backupId"] == "20260904T080002Z"
+    assert result["lastFullBackup"]["fullCatchUp"]["reason"] == "last_full_older_than_8_days"
+    assert calls == [
+        "latest_full",
+        "create_full",
+        "verify:b-full",
+        "prune:False",
+        "push:b-full",
+    ]
+
+
+def test_run_mongodb_backup_once_keeps_light_when_last_full_recent(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    last_full = {
+        "backupId": "20260925T100000Z",
+        "source": "remote",
+        "createdAt": datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls, last_full_info=last_full, has_object_store=True),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    monday = datetime(2026, 9, 28, 18, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    result = run_mongodb_backup_once(now=monday)
+
+    assert result["strategy"] == "light_dump"
+    assert "fullCatchUp" not in result["lastFullBackup"]
+    assert "push" not in result
+    assert calls == ["latest_full", "create_light", "verify:b-light", "prune:False"]
+
+
+def test_run_mongodb_backup_once_no_full_history_with_object_store_forces_first_full(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_mongodb_backup_service",
+        lambda: FakeBackupService(calls, last_full_info=None, has_object_store=True),
+    )
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+
+    from backend.operations.schedule import run_mongodb_backup_once
+
+    wednesday = datetime(2026, 9, 16, 18, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    result = run_mongodb_backup_once(now=wednesday)
+
+    assert result["strategy"] == "full_dump"
+    assert result["lastFullBackup"]["fullCatchUp"]["reason"] == "no_full_backup_found"
+    assert calls == ["latest_full", "create_full", "verify:b-full", "prune:False", "push:b-full"]

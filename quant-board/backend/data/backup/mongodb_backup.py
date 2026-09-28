@@ -854,6 +854,44 @@ class MongoBackupService:
     def full_backup_dir(self, backup_id: str) -> Path:
         return self.backup_dir / "full" / f"backup_id={backup_id}"
 
+    def latest_full_backup_info(self) -> dict[str, Any] | None:
+        """最近一次全量备份信息（backupId/createdAt/source），找不到返回 None。
+
+        优先远端 R2：本地备份按保留期清理（可能短于全量周间隔），错过周五时
+        本地可能已看不到上一次全量；远端列表只依赖 backup_id（UTC 时间戳），
+        无需逐个读 manifest。远端不可用时回退本地 manifest 扫描。
+        """
+        if self.object_store is not None:
+            try:
+                remote_ids = self._remote_full_backup_ids()
+            except Exception:
+                remote_ids = []
+            if remote_ids:
+                latest = remote_ids[-1]
+                return {
+                    "backupId": latest,
+                    "source": "remote",
+                    "createdAt": _parse_backup_time(latest),
+                }
+        latest_local: tuple[str, datetime] | None = None
+        root = self.backup_dir / "full"
+        if root.is_dir():
+            for path in sorted(root.iterdir()):
+                if not path.is_dir() or not path.name.startswith("backup_id="):
+                    continue
+                manifest_result = self._read_manifest(path)
+                if not manifest_result["ok"]:
+                    continue
+                manifest = manifest_result["manifest"]
+                if str(manifest.get("strategy") or "") != "full_dump":
+                    continue
+                created = _parse_backup_time(manifest.get("createdAt"))
+                if created and (latest_local is None or created > latest_local[1]):
+                    latest_local = (path.name.removeprefix("backup_id="), created)
+        if latest_local:
+            return {"backupId": latest_local[0], "source": "local", "createdAt": latest_local[1]}
+        return None
+
     def _backup_files(self, local_dir: Path) -> list[Path]:
         """上传清单：manifest + sha256sums + dump 下全部产物（bson.gz 与 metadata.json）。"""
         files = [

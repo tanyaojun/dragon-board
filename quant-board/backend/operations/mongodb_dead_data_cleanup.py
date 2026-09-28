@@ -7,7 +7,8 @@ mongodump-cleanup-design.md 第 6 节），三个独立子步骤：
 2. 数据集残留清理：ds_ffa379a00efe47d0（SQLite 导入测试）、dragonboard_backend_shadow
    （空壳元数据）复用 plan_mongodb_dataset_cleanup；另删 five_minute 单日实验 records
    及其关联 frames/rows。
-3. 删旧研究 run（2026-06~08，resultChunked）的 backtest_result_chunks 文档；
+3. 删旧研究 run（resultChunked 且 createdAt 早于时间边界，默认 2026-09-01，
+   可用 --purge-result-chunks-before 覆盖）的 backtest_result_chunks 文档；
    run 元数据保留，读取路径返回结构化 resultPurged 标记。删前按 runId 条件 mongodump。
 
 apply 时产物备份到 data/backups/mongodb/pre-cleanup-<ts>/，结果写 migration_audit
@@ -75,12 +76,18 @@ def plan_dead_data_cleanup(
     drop_dead_collections: bool = False,
     cleanup_datasets: bool = False,
     purge_result_chunks: bool = False,
+    purge_result_chunks_before: datetime | None = None,
     compact: bool = False,
     apply: bool = False,
     dump_runner: DumpRunner | None = None,
     pre_cleanup_root: Path | None = None,
 ) -> dict[str, Any]:
-    """预览/执行死数据清理。默认 dry-run；--apply 时先 dump 再删并写审计。"""
+    """预览/执行死数据清理。默认 dry-run；--apply 时先 dump 再删并写审计。
+
+    ``purge_result_chunks_before`` 覆盖 chunks 清理的时间边界（默认
+    ``PURGE_RESULT_CHUNKS_BEFORE``=2026-09-01）；边界只作用于 resultChunked
+    run 的 createdAt，run 元数据一律保留。
+    """
     if not (drop_dead_collections or cleanup_datasets or purge_result_chunks or compact):
         return {
             "ok": False,
@@ -95,7 +102,9 @@ def plan_dead_data_cleanup(
     if cleanup_datasets:
         steps["cleanupDatasets"] = _preview_dataset_residue(database)
     if purge_result_chunks:
-        steps["purgeResultChunks"] = _preview_result_chunks(database)
+        steps["purgeResultChunks"] = _preview_result_chunks(
+            database, purge_result_chunks_before or PURGE_RESULT_CHUNKS_BEFORE
+        )
     if compact:
         steps["compact"] = _preview_compact(
             database,
@@ -181,14 +190,15 @@ def _preview_dataset_residue(database: Any) -> dict[str, Any]:
     }
 
 
-def _preview_result_chunks(database: Any) -> dict[str, Any]:
-    run_ids = _purgeable_run_ids(database)
+def _preview_result_chunks(database: Any, cutoff: datetime | None = None) -> dict[str, Any]:
+    before = cutoff or PURGE_RESULT_CHUNKS_BEFORE
+    run_ids = _purgeable_run_ids(database, before)
     chunk_count = int(
         database[RESULT_CHUNK_COLLECTION].count_documents({"backtestRunId": {"$in": run_ids}})
     )
     return {
         "ok": True,
-        "before": PURGE_RESULT_CHUNKS_BEFORE.isoformat(),
+        "before": before.isoformat(),
         "purgedRunIds": run_ids,
         "chunkCount": chunk_count,
         "runMetadataKept": True,
@@ -398,11 +408,12 @@ def _five_minute_counts(database: Any, snapshot_ids: list[str]) -> dict[str, int
     return counts
 
 
-def _purgeable_run_ids(database: Any) -> list[str]:
+def _purgeable_run_ids(database: Any, cutoff: datetime | None = None) -> list[str]:
+    before = cutoff or PURGE_RESULT_CHUNKS_BEFORE
     return sorted(
         str(row.get("id") or "")
         for row in database["backtest_runs"].find(
-            {"resultChunked": True, "createdAt": {"$lt": PURGE_RESULT_CHUNKS_BEFORE}}
+            {"resultChunked": True, "createdAt": {"$lt": before}}
         )
         if row.get("id")
     )

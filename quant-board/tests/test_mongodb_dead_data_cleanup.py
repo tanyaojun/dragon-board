@@ -408,3 +408,46 @@ def _matches(row: dict[str, Any], query: dict[str, Any]) -> bool:
         elif actual != expected:
             return False
     return True
+
+def test_purge_result_chunks_cutoff_is_overridable(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "backend.operations.mongodb_dead_data_cleanup._utc_now_text",
+        lambda: "20260928T080000Z",
+    )
+    db = _seed_database()
+    runner = FakeDumpRunner()
+
+    # 默认边界 2026-09-01：只清 bt_old_1；边界推到 2026-10-01 后 bt_new_1 一并清
+    default_result = plan_dead_data_cleanup(
+        db, purge_result_chunks=True, apply=False, pre_cleanup_root=tmp_path
+    )
+    assert default_result["steps"]["purgeResultChunks"]["purgedRunIds"] == ["bt_old_1"]
+    assert default_result["steps"]["purgeResultChunks"]["before"] == "2026-09-01T00:00:00"
+
+    extended = plan_dead_data_cleanup(
+        db,
+        purge_result_chunks=True,
+        purge_result_chunks_before=datetime(2026, 10, 1),
+        apply=True,
+        dump_runner=runner,
+        pre_cleanup_root=tmp_path,
+    )
+    step = extended["steps"]["purgeResultChunks"]
+    assert step["ok"] is True
+    assert step["purgedRunIds"] == ["bt_new_1", "bt_old_1"]
+    assert step["deletedChunks"] == 3
+    # run 元数据保留，chunks 全清
+    assert [row["backtestRunId"] for row in db["backtest_result_chunks"].rows] == []
+    assert {row["id"] for row in db["backtest_runs"].rows} == {"bt_old_1", "bt_new_1", "bt_plain_1"}
+    query_arg = next(cmd[cmd.index("--query") + 1] for cmd in runner.commands if "--query" in cmd)
+    assert "bt_new_1" in query_arg
+
+
+def test_dead_data_cleanup_cli_parses_purge_cutoff() -> None:
+    from backend.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["cleanup-mongodb-dead-data", "--purge-result-chunks", "--purge-result-chunks-before", "2026-09-25"]
+    )
+    assert args.purge_result_chunks is True
+    assert args.purge_result_chunks_before == "2026-09-25"

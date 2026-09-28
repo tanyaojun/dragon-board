@@ -368,8 +368,69 @@ def cmd_after_market_once(args: argparse.Namespace) -> None:
         dry_run=bool(args.dry_run),
     )
     print_json(result)
+    _write_after_market_log(result)
     if not result.get("ok"):
         raise SystemExit(1)
+
+
+_AFTER_MARKET_LOG_NAME = "after_market.log"
+
+
+def _after_market_log_summary(result: dict[str, Any]) -> dict[str, Any]:
+    """盘后链结果摘要（任务计划历史只有退出码，摘要行必须可追溯）。"""
+    steps = result.get("results") or {}
+    backup = steps.get("mongodbBackup") or {}
+    archive = steps.get("snapshotArchiveR2") or {}
+    hotlist = steps.get("hotlistSentiment") or {}
+    types: dict[str, Any] = {}
+    for name, item in (archive.get("snapshotTypes") or {}).items():
+        files = item.get("files") or []
+        types[name] = {
+            "ok": bool(item.get("ok")),
+            "tradingDate": item.get("tradingDate"),
+            "reason": item.get("reason") or "",
+            "uploadedFiles": len(files),
+            "uploadedBytes": sum(int(f.get("bytes") or 0) for f in files),
+        }
+    summary: dict[str, Any] = {
+        "logAt": datetime.now(timezone.utc).isoformat(),
+        "startedAt": result.get("startedAt"),
+        "finishedAt": result.get("finishedAt"),
+        "ok": bool(result.get("ok")),
+        "hotlistSentimentOk": bool(hotlist.get("ok")),
+        "mongodbBackup": {
+            "ok": bool(backup.get("ok")),
+            "strategy": backup.get("strategy"),
+            "backupId": backup.get("backupId"),
+            "pushOk": bool((backup.get("push") or {}).get("ok")),
+            **({"fullCatchUpReason": (backup.get("lastFullBackup") or {}).get("fullCatchUp", {}).get("reason")}
+               if (backup.get("lastFullBackup") or {}).get("fullCatchUp") else {}),
+        },
+        "snapshotArchiveR2": {"ok": bool(archive.get("ok")), "types": types},
+    }
+    if result.get("stoppedAt"):
+        summary["stoppedAt"] = result.get("stoppedAt")
+    return summary
+
+
+def _write_after_market_log(result: dict[str, Any]) -> None:
+    """盘后链结果落盘：ok 时追加一行摘要，失败时另存完整 JSON 便于诊断。
+
+    落盘本身失败只打警告，不影响盘后链退出码。
+    """
+    try:
+        log_dir = get_settings().mongodb_backup_dir
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / _AFTER_MARKET_LOG_NAME).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(_after_market_log_summary(result), ensure_ascii=False, sort_keys=True) + "\n")
+        if not result.get("ok"):
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            (log_dir / f"after_market-failure-{ts}.json").write_text(
+                json.dumps(result, ensure_ascii=False, indent=1, default=str),
+                encoding="utf-8",
+            )
+    except Exception as exc:
+        print(f"after-market 日志落盘失败（不影响退出码）: {exc}", file=sys.stderr)
 
 
 def cmd_snapshot_archive_backfill(args: argparse.Namespace) -> None:
@@ -507,11 +568,18 @@ def cmd_cleanup_mongodb_datasets(args: argparse.Namespace) -> None:
 
 
 def cmd_cleanup_mongodb_dead_data(args: argparse.Namespace) -> None:
+    purge_before = None
+    if args.purge_result_chunks_before:
+        try:
+            purge_before = datetime.strptime(args.purge_result_chunks_before, "%Y-%m-%d")
+        except ValueError as exc:
+            raise SystemExit(f"--purge-result-chunks-before 需为 YYYY-MM-DD：{exc}")
     result = plan_dead_data_cleanup(
         _runtime_mongodb_database(),
         drop_dead_collections=bool(args.drop_dead_collections),
         cleanup_datasets=bool(args.cleanup_datasets),
         purge_result_chunks=bool(args.purge_result_chunks),
+        purge_result_chunks_before=purge_before,
         compact=bool(args.compact),
         apply=bool(args.apply),
     )
@@ -1667,6 +1735,11 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_dead_data_cmd.add_argument("--drop-dead-collections", action="store_true")
     cleanup_dead_data_cmd.add_argument("--cleanup-datasets", action="store_true")
     cleanup_dead_data_cmd.add_argument("--purge-result-chunks", action="store_true")
+    cleanup_dead_data_cmd.add_argument(
+        "--purge-result-chunks-before",
+        default=None,
+        help="Override the result-chunks purge cutoff (YYYY-MM-DD, default 2026-09-01)",
+    )
     cleanup_dead_data_cmd.add_argument(
         "--compact",
         action="store_true",

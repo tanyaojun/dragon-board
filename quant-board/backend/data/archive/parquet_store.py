@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -54,10 +55,18 @@ def _encode_nested_values(row: dict[str, Any]) -> dict[str, Any]:
     encoded: dict[str, Any] = {}
     for key, value in row.items():
         if isinstance(value, (dict, list)):
-            encoded[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            # Mongo 行的嵌套结构里可能藏 datetime/ObjectId 等非 JSON 原生类型
+            # （2026-07-29 half_hour 实测 TypeError），统一降级为字符串
+            encoded[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=_json_default)
         else:
             encoded[key] = value
     return encoded
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
 
 
 def _decode_nested_values(row: dict[str, Any]) -> dict[str, Any]:

@@ -232,9 +232,12 @@ def run_mongodb_backup_once(*, dry_run: bool = False, now: datetime | None = Non
 
     service = get_mongodb_backup_service()
     strategy = "full_dump" if is_friday else "light_dump"
+    if not is_friday:
+        strategy, catch_up = _maybe_force_full_catch_up(service, now)
+        summary["lastFullBackup"] = catch_up
     summary["strategy"] = strategy
     try:
-        created = service.create_full_backup() if is_friday else service.create_light_backup()
+        created = service.create_full_backup() if strategy == "full_dump" else service.create_light_backup()
     except Exception as exc:
         return {**summary, "ok": False, "failedStep": "create", "error": {"code": "backup_create_exception", "message": str(exc)}}
     if not created.get("ok"):
@@ -251,7 +254,8 @@ def run_mongodb_backup_once(*, dry_run: bool = False, now: datetime | None = Non
     if not prune.get("ok"):
         return {**summary, "ok": False, "failedStep": "prune", "error": prune.get("error")}
 
-    if is_friday:
+    if strategy == "full_dump":
+        # 周五全量与断档补跑全量都立即上云（push 失败使整体失败可见）
         try:
             pushed = service.push_backup(backup_id)
         except Exception as exc:
@@ -290,6 +294,39 @@ def _result(
     if stopped_at:
         payload["stoppedAt"] = stopped_at
     return payload
+
+
+def _maybe_force_full_catch_up(service: Any, now: datetime) -> tuple[str, dict[str, Any]]:
+    """非周五交易日检查最近全量：距上次成功 full 超过 8 天则强制补 full。
+
+    背景：周五停机错过全量时，周末补跑因非交易日跳过、当周只剩 light，
+    R2 侧全量断档一整周。远端 R2 是唯一完整视图（本地 light 保留期短于
+    全量周间隔）；未配置 R2 时无法可靠判断，保持 light 并结构化记录原因。
+    返回 (strategy, lastFullBackup 摘要)。
+    """
+    info: dict[str, Any] | None = None
+    try:
+        info = service.latest_full_backup_info()
+    except Exception as exc:
+        return "light_dump", {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if info and info.get("createdAt"):
+        created = info["createdAt"]
+        age_days = (now.astimezone(timezone.utc) - created).total_seconds() / 86400.0
+        detail = {
+            "ok": True,
+            "backupId": info.get("backupId"),
+            "source": info.get("source"),
+            "createdAt": created.isoformat(),
+            "ageDays": round(age_days, 2),
+        }
+        if age_days >= 8:
+            detail["fullCatchUp"] = {"reason": "last_full_older_than_8_days"}
+            return "full_dump", detail
+        return "light_dump", detail
+    if getattr(service, "object_store", None) is not None:
+        # 配置了 R2 却查不到任何全量：尚未有上云全量，补一次
+        return "full_dump", {"ok": True, "fullCatchUp": {"reason": "no_full_backup_found"}}
+    return "light_dump", {"ok": True, "skipped": True, "reason": "full_history_unavailable_without_object_store"}
 
 
 def _first_snapshot_type(raw: str) -> str:
