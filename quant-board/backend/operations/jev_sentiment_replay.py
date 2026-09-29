@@ -65,7 +65,6 @@ def run(days: int = 3, dry_run: bool = False, start: str | None = None,
                 {"datasetId": dataset_id, "type": HALF_HOUR, "tradingDate": trading_date})
             if row.get("slotTime")
         })
-        day_result: dict = {}
         if dry_run:
             print(f"[{index}/{len(dates)}] {trading_date} slots={slots}（dry-run 不调用不落库）")
             continue
@@ -73,9 +72,11 @@ def run(days: int = 3, dry_run: bool = False, start: str | None = None,
             result = compute_and_upsert_for_slot(
                 db, dataset_id=dataset_id, trading_date=trading_date, slot_time=slot, origin="replay", force=True)
             counts[result.get("status", "unknown")] = counts.get(result.get("status", "unknown"), 0) + 1
+            counts["written"] += int(result.get("written") or 0)
         day_result = compute_and_upsert_for_day(
             db, dataset_id=dataset_id, trading_date=trading_date, origin="replay", force=True)
         counts[day_result.get("status", "unknown")] = counts.get(day_result.get("status", "unknown"), 0) + 1
+        counts["written"] += int(day_result.get("written") or 0)
         print(f"[{index}/{len(dates)}] {trading_date} slots={len(slots)} day={day_result.get('status')}")
     print("FINAL:", counts)
     return 0
