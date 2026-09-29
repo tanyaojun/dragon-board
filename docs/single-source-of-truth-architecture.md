@@ -38,6 +38,7 @@
 | 8 | 实时行情 | `websocket.ts:94-103`（ws://127.0.0.1:8765/ws/quotes → `QuoteService`/`RealtimeQuoteCoordinator`） | `python-bridge/main.py:666-667`（WS 生产）；`market_proxy/quotes.py`（HTTP 兜底+采集链 in-process） | 🔵 保留面 | — | 长期保留（用途不同） |
 | 9 | 题材热度 heat | `theme/ThemeHeatFeed.ts` 消费 `/api/themes/heat` | `analysis/theme/heat.py:8`（题材人气聚合） | ✅ 后端唯一 | 后端 | —（互补领域） |
 | 10 | 题材因子原料（breadth/crowding/fund）后端内双管线 | —（纯后端域） | `analysis/theme/heat.py`（瞬时口径，喂 v12 六维合成分）vs `analysis/theme/rotation/factors.py`（robust-z 口径，喂 rotationScore/rotationState） | ⚠️ 后端内双管线（2026-09-27 登记） | rotation 引擎（2026-09-27 因子口径收敛批裁决方向，终判归 Phase 4 先验通道 ablation） | `2026-09-27-factor-marginal-findings.md` §4 + `2026-09-27-themetrend-factor-convergence-design.md` §2.2：胜者占先验通道，败者降级诊断字段；heat.py 侧保留兼容展示、退役路径随裁决 |
+| 11 | 热榜情绪档位判定 | HotlistEmotionPanel 只读展示两轨结论（不自算） | 规则轨道 `analysis/hotlist/sentiment.py` vs jev 轨道 `services/jev/jev_sentiment_compute.py`（2026-10-08 登记） | 🔵 保留面（并列观察者） | **未定（无预设权威）**：两轨从未进入回测验证，golden 不当 ground truth（2026-10-08 用户裁决）；裁决方式=用户在面板盘中对照论证，采用后另立收敛立项 | `quant-board/docs/hotlist-jev/hotlist-jev-emotion-observe-design.md`：jev 轨道纯原始证据（零规则输出）落 `hotlist_jev_sentiment`，只展示不回写不进信号；前端并列展示供论证 |
 
 补注：
 

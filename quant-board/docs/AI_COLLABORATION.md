@@ -171,3 +171,16 @@ EOD 双形态排除（日级 `_id` 与 `slotTime="EOD"`）；独立轨道降级�
 不伪造（`exclude_none`）。series/slots 响应合同变化已升 Redis 缓存版本 `v2`（共享常量
 `_HOTLIST_SENTIMENT_CACHE_VERSION`）。回退：`HOTLIST_STAGE_CONFIRM_SLOTS=1` 逐槽等价
 （`stage == rawStage`），非法配置回裁决默认 2 并落诊断；不删除任何历史字段或文档。
+
+## jev 热榜情绪观察轨道（2026-10-08）
+
+独立观察轨道，设计唯一来源 `docs/hotlist-jev/hotlist-jev-emotion-observe-design.md`（方向重置版）：
+
+- **定位**：Cloudflare `typesafe/jev` 从纯原始市场证据回答两问（当前帧五档 + 当日连续帧序列五档），
+  盘后固定日级总体；与规则情绪轨道是**并列观察者**（无预设权威，golden 不当 ground truth——
+  2026-10-08 用户裁决推翻旧验证路线），裁决方式=用户在前端热榜情绪面板盘中对照论证。
+- **红线**：聚合/叙事/文档零规则五档输出（不读 `hotlist_sentiment`）；零预测问题（无 noul）；
+  三态 ok/degraded/no_data 不伪造；采集链第 4 步失败只记 warning 绝不阻断；gate
+  `JEV_SENTIMENT_ENABLED` 默认关；只落库只展示不回写、不进信号不进交易路径。
+- **改动边界**：改叙事/问题/合同先改 design 文档；`jev_client.py` 是 N15 保留件勿轻动；
+  token 走 `JEV_CF_TOKEN` 环境变量不入仓；pytest 数据只入 `dragon_board_test`。

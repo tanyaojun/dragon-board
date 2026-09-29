@@ -642,3 +642,19 @@ EOD 双形态排除（日级 `_id` 与 `slotTime="EOD"`）；独立轨道降级�
 不伪造（`exclude_none`）。series/slots 响应合同变化已升 Redis 缓存版本 `v2`（共享常量
 `_HOTLIST_SENTIMENT_CACHE_VERSION`）。回退：`HOTLIST_STAGE_CONFIRM_SLOTS=1` 逐槽等价
 （`stage == rawStage`），非法配置回裁决默认 2 并落诊断；不删除任何历史字段或文档。
+
+## jev 热榜情绪观察轨道（2026-10-08）
+
+独立观察轨道（方向重置版设计见 `docs/hotlist-jev/hotlist-jev-emotion-observe-design.md`）：
+Cloudflare `typesafe/jev` 从**纯原始市场证据**（帧 limitSummary/indices + 行 pctChange/zlje/rank/reason +
+displayStatus 生命周期 + 昨日承接，**零规则五档输出**）回答两问——`frame_stage`（仅当前帧五档判定）与
+`sequence_stage`（当日已落库连续帧序列判定，half_hour 10 槽）；附温度/拥挤描述性 score；daily 15:30
+快照落库后固定日级总体（`day_stage`/`day_pattern` 七类/日级分数）。零预测问（questionsRaw 落库可审计）。
+
+落库 `hotlist_jev_sentiment`（`_id={dataset}:half_hour:{date}:{slot}` / `...:eod`，kind slot/eod，
+status ok/degraded/no_data 三态）。采集链第 4 步挂接（`_run_post_persist_chain`，gate
+`JEV_SENTIMENT_ENABLED` 默认关，失败只记 warning 绝不阻断采集）；手动 `POST /api/hotlist-jev/evaluate`
+不受 gate 限制；读口 `GET /api/hotlist-jev/series`（v1 无缓存）；回放 runner
+`backend/operations/jev_sentiment_replay.py --days 3`（origin=replay，token 走 `JEV_CF_TOKEN` 不入仓）。
+前端 HotlistEmotionPanel 顶部并列 jev 判定 + 逐槽区块 + 日级总体（只读展示不进信号）。
+与规则轨道是**并列观察者**（无预设权威，裁决=用户盘中论证），已登记单一事实源双源表。

@@ -633,6 +633,35 @@ MongoDB 模式下，该入口只执行日终热榜情绪落库：
 
 迁移前 SQLite 模式仍保留旧 `backup-snapshot-day -> archive-auto-once -> push-archive-backup -> prune-backup` 编排；MongoDB 模式不得触碰旧 archive/prune 链路。
 
+## jev 热榜情绪观察轨道 API（2026-10-08）
+
+独立观察轨道（详见 `architecture.md` jev 节与 `docs/hotlist-jev/hotlist-jev-emotion-observe-design.md`）。
+
+### `POST /api/hotlist-jev/evaluate`
+
+手动触发双问题评判，**不受 `JEV_SENTIMENT_ENABLED` gate 限制**（显式意图），origin=manual：
+
+```json
+{ "tradingDate": "2026-10-08", "scope": "slot", "slotTime": "10:00", "datasetId": "dragonboard_live" }
+```
+
+`scope` = `slot`（缺省 slotTime 取当日最新已采 half_hour 槽）或 `day`（盘后日级固定）。返回
+`{ok, status: ok|degraded|no_data, ...}`；当日无帧且未给 slotTime → 404 `errorCode=no_slot`。
+
+### `GET /api/hotlist-jev/series`
+
+单日读口：`?dataset_id=&date=YYYY-MM-DD`（缺省取库内最新交易日）→
+`{ok, date, slots: [槽位文档升序], eod, degradedCount}`；无文档时返回空集不报错（v1 无缓存）。
+
+### 回放 runner
+
+```bash
+export JEV_CF_TOKEN=<token>   # 不入仓
+cd quant-board
+./.venv/Scripts/python.exe -m backend.operations.jev_sentiment_replay --days 3 --dry-run
+./.venv/Scripts/python.exe -m backend.operations.jev_sentiment_replay --days 3
+```
+
 ## Parquet 归档与 DuckDB 查询
 
 本节为迁移前 SQLite/Parquet 历史合同。MongoDB 模式下这些接口不再是生产链路。
