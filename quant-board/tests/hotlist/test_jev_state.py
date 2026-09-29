@@ -46,18 +46,25 @@ def _v3_frame():
 
 
 def _v3_rows():
-    # sentiment 链行字段口径：change = pctChange（涨跌幅）
+    # sentiment 链行字段口径：change = pctChange（涨跌幅）；turnover = 成交额
     return [
         {"code": "000001", "name": "甲", "rank": 1, "heat": 99, "pctChange": 9.98, "change": 9.98,
-         "price": 9.66, "limitUpPrice": 9.66, "mainTheme": "算力", "reason": "算力租赁"},
+         "price": 9.66, "limitUpPrice": 9.66, "mainTheme": "算力", "reason": "算力租赁",
+         "turnover": 1.2e8, "zlje": 5.0e6},
         {"code": "000002", "name": "乙", "rank": 2, "heat": 90, "pctChange": 6.0, "change": 6.0,
-         "price": 5.0, "limitUpPrice": None, "mainTheme": "固态电池"},
-        {"code": "000003", "name": "丙", "rank": 3, "heat": 80, "pctChange": 3.0, "change": 3.0, "mainTheme": "AI应用"},
-        {"code": "000004", "name": "丁", "rank": 4, "heat": 70, "pctChange": -1.0, "change": -1.0},
-        {"code": "000005", "name": "戊", "rank": 5, "heat": 60, "pctChange": -6.0, "change": -6.0},
-        {"code": "000006", "name": "己", "rank": 6, "heat": 50, "pctChange": None, "change": None, "zlje": None},
-        {"code": "000007", "name": "庚", "rank": 7, "heat": 40, "pctChange": 1.0, "change": 1.0, "zlje": 5.0e6},
-        {"code": "000008", "name": "辛", "rank": 8, "heat": 30, "pctChange": 2.0, "change": 2.0, "zlje": -3.0e6},
+         "price": 5.0, "limitUpPrice": None, "mainTheme": "固态电池", "turnover": 3.0e7},
+        {"code": "000003", "name": "丙", "rank": 3, "heat": 80, "pctChange": 3.0, "change": 3.0,
+         "mainTheme": "AI应用", "turnover": 2.0e7},
+        {"code": "000004", "name": "丁", "rank": 4, "heat": 70, "pctChange": -1.0, "change": -1.0,
+         "turnover": 5.0e7},
+        {"code": "000005", "name": "戊", "rank": 5, "heat": 60, "pctChange": -6.0, "change": -6.0,
+         "turnover": 8.0e7},
+        {"code": "000006", "name": "己", "rank": 6, "heat": 50, "pctChange": None, "change": None,
+         "zlje": None},
+        {"code": "000007", "name": "庚", "rank": 7, "heat": 40, "pctChange": 1.0, "change": 1.0,
+         "turnover": 1.0e7, "zlje": 5.0e6},
+        {"code": "000008", "name": "辛", "rank": 8, "heat": 30, "pctChange": 2.0, "change": 2.0,
+         "turnover": 1.5e7, "zlje": -3.0e6},
     ]
 
 
@@ -92,8 +99,11 @@ def test_collect_slot_evidence_shape():
     assert breadth["up0"] == 3 and breadth["down0"] == 1 and breadth["down5"] == 1
     assert breadth["pctMissing"] == 1
     fund = ev["fund"]
-    assert fund["zljeSum"] == 2.0e6 and fund["zljePos"] == 1 and fund["zljeNeg"] == 1
-    assert fund["zljeMissing"] == 6
+    assert fund["zljeSum"] == 7.0e6 and fund["zljePos"] == 2 and fund["zljeNeg"] == 1
+    assert fund["zljeMissing"] == 5
+    # TRIN：(5/2)/(1.95亿/1.3亿) = 2.5/1.5 ≈ 1.667（涨势缩量背离）
+    assert abs(ev["breadth"]["trin"] - 1.667) < 0.001
+    assert ev["breadth"]["upTurnover"] == 1.95e8 and ev["breadth"]["downTurnover"] == 1.3e8
     assert ev["turnover"]["newCount"] == 7 and ev["turnover"]["droppedCount"] == 1
     assert ev["yesterdayLimit"] is not None and ev["yesterdayLimit"]["count"] >= 1
     lifecycle = ev["lifecycle"]
@@ -113,8 +123,16 @@ def test_collect_slot_evidence_degrades_not_fabricates():
     assert "指数缺失" in degraded and "涨停证据缺失" in degraded and "昨日行缺失" in degraded
     assert ev["fund"]["zljeSum"] is None and ev["fund"]["zljeMissing"] == 1
     assert ev["turnover"]["newCount"] is None and ev["turnover"]["droppedCount"] is None
+    assert ev["breadth"]["trin"] is None  # 单行且无方向对比，不可算
     assert ev["yesterdayLimit"] is None
     assert ev["lifecycleMissing"] == 1
+
+
+def test_collect_slot_evidence_trin_one_sided_is_none():
+    rows = [{"code": "A", "pctChange": 5.0, "change": 5.0, "turnover": 1.0e7}]
+    ev = collect_slot_evidence(frame=_v3_frame(), rows=rows, yesterday_rows=[],
+                               analysis_by_code={}, slot_time="10:00")
+    assert ev["breadth"]["trin"] is None  # 跌向无数据（单边），不发明数值
 
 
 def test_collect_slot_evidence_zt_count_from_boards_when_zhaban_missing():
@@ -143,8 +161,10 @@ def test_build_slot_jev_state_full_shape():
     assert "2026-10-08 10:30" in s and "【当前帧证据】" in s and "【当日已走帧证据】" in s and "【数据质量】" in s
     assert "沪指 -12.20点" in s and "中证500 -23.40点" in s
     assert "涨停 68" in s and "最高 6 连板" in s and "炸板率 15%" in s
+    assert "热榜TRIN：1.67" in s and "量价背离" in s
+    assert "TRIN 1.67" in s  # 压缩行也携带
     assert "新进 7" in s and "淘汰 1" in s
-    assert "主力净额" in s and "+0.02亿" in s
+    assert "主力净额" in s and "+0.07亿" in s
     assert "昨涨停承接" in s
     assert "点火 1" in s and "扩散 1" in s and "冷却 1" in s
     assert "甲" in s and "算力" in s and "涨停" in s and "点火" in s

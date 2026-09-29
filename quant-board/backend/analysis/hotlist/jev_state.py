@@ -80,6 +80,13 @@ def _finite(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
+def _calc_trin(up_count: int, down_count: int, up_turnover: float, down_turnover: float) -> float | None:
+    """热榜 TRIN（Arms Index）：广度比 / 量能比。任一分母不可算返回 None（不发明数值）。"""
+    if (up_count <= 0 or down_count <= 0 or up_turnover <= 0 or down_turnover <= 0):
+        return None
+    return round((up_count / down_count) / (up_turnover / down_turnover), 3)
+
+
 def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: list,
                           analysis_by_code: dict, slot_time: str) -> dict:
     """单帧原始证据聚合（纯函数，无 IO）。
@@ -123,16 +130,21 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         if zt is None:
             degraded.append("涨停证据缺失")
 
-    # ── 行级：涨跌分布（五桶互斥 + 缺失计数）──
+    # ── 行级：涨跌分布（五桶互斥 + 缺失计数）+ 热榜 TRIN（量价确认，自算不读规则文档）──
     breadth = {"total": len(rows), "limitUp": 0, "up5": 0, "up0": 0,
                "down0": 0, "down5": 0, "pctMissing": 0}
     fund = {"zljeSum": None, "zljePos": 0, "zljeNeg": 0, "zljeMissing": 0}
     fund_total = 0.0
     fund_seen = 0
+    # TRIN 原料：change>0 涨/<0 跌（与规则链同分桶），按行 turnover（成交额）分向合计；
+    # TRIN = (涨家/跌家) / (涨向额/跌向额)，任一分母不可算（含单边）保持 None，不发明数值。
+    trin_up_count = trin_down_count = 0
+    trin_up_turnover = trin_down_turnover = 0.0
     for row in rows:
         pct = row.get("pctChange")
         price, lup = row.get("price"), row.get("limitUpPrice")
         is_zt = (_finite(price) and _finite(lup) and float(price) >= float(lup) * _ZT_EPS)
+        row_turnover = row.get("turnover")
         if _finite(pct):
             pct = float(pct)
             if is_zt:
@@ -145,6 +157,13 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
                 breadth["down0"] += 1
             else:
                 breadth["down5"] += 1
+            if _finite(row_turnover):
+                if pct > 0:
+                    trin_up_count += 1
+                    trin_up_turnover += float(row_turnover)
+                elif pct < 0:
+                    trin_down_count += 1
+                    trin_down_turnover += float(row_turnover)
         else:
             breadth["pctMissing"] += 1
         zlje = row.get("zlje")
@@ -159,6 +178,9 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
             fund["zljeMissing"] += 1
     if fund_seen:
         fund["zljeSum"] = fund_total
+    breadth["trin"] = _calc_trin(trin_up_count, trin_down_count, trin_up_turnover, trin_down_turnover)
+    breadth["upTurnover"] = round(trin_up_turnover, 2) if trin_up_turnover else None
+    breadth["downTurnover"] = round(trin_down_turnover, 2) if trin_down_turnover else None
 
     # ── 跨日：新进/淘汰 + 昨日涨停今日表现 ──
     today_codes = {str(row.get("code")) for row in rows if row.get("code")}
@@ -256,6 +278,9 @@ def format_evidence_line(ev: dict) -> str:
                    f"/涨{breadth.get('up0', 0)}/跌{breadth.get('down0', 0)}/大跌{breadth.get('down5', 0)}")
     if breadth.get("pctMissing"):
         breadth_bit += f"(缺{breadth['pctMissing']})"
+    trin = breadth.get("trin")
+    if trin is not None:
+        breadth_bit += f"｜TRIN {float(trin):.2f}"
     parts.append(breadth_bit)
     fund = ev.get("fund") or {}
     if fund.get("zljeSum") is not None:
@@ -313,6 +338,13 @@ def _format_current_evidence_section(ev: dict) -> str:
     lines.append(f"涨跌分布：共 {breadth.get('total', 0)} 只——涨停 {breadth.get('limitUp', 0)}、"
                  f"涨≥5% {breadth.get('up5', 0)}、涨0~5% {breadth.get('up0', 0)}、"
                  f"跌0~5% {breadth.get('down0', 0)}、跌≥5% {breadth.get('down5', 0)}{missing_bit}")
+    trin = breadth.get("trin")
+    if trin is not None:
+        up_t, down_t = breadth.get("upTurnover"), breadth.get("downTurnover")
+        side = "涨势放量" if trin < 1 else "量价背离（涨势缩量或跌势放量）"
+        lines.append(f"热榜TRIN：{float(trin):.2f}（{side}；涨向成交 {_fmt_yi(up_t)} vs 跌向成交 {_fmt_yi(down_t)}）")
+    else:
+        lines.append("热榜TRIN：不可算（单边或成交额缺失）")
     fund = ev.get("fund") or {}
     if fund.get("zljeSum") is not None:
         lines.append(f"主力资金：净额合计 {_fmt_yi(fund['zljeSum'])}（正 {fund.get('zljePos', 0)} 家"
