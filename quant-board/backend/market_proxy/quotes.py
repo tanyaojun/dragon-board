@@ -199,6 +199,31 @@ class MarketQuotesCache:
             self._redis_set_all(rows)
             return True
 
+    def all_codes(self) -> list[str]:
+        """全市场代码列表（题材资金刷新 universe，供东财 ulist 批量 secids）。
+
+        进程内 last-good 优先；未就绪（冷启动/重启）回退 Redis hash 字段
+        （跨进程/重启兜底）；两者都无返回空列表——调用方按 universe 缺失
+        处理，不伪装成空成功。
+        """
+        if self._rows:
+            return sorted(self._rows.keys())
+        if self._redis is not None:
+            try:
+                raw_keys = self._redis.hkeys(self._redis_key())
+                codes = {
+                    normalize_stock_code(
+                        key.decode("utf-8") if isinstance(key, bytes) else str(key)
+                    )
+                    for key in raw_keys or []
+                }
+                codes.discard("")
+                if codes:
+                    return sorted(codes)
+            except Exception:
+                logger.warning("market quotes redis hkeys fallback failed", exc_info=True)
+        return []
+
     def get_diff(self, codes: list[str]) -> dict[str, Any]:
         normalized = [normalize_stock_code(raw) for raw in codes]
         unique = list(dict.fromkeys(code for code in normalized if code))

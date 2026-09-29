@@ -177,7 +177,7 @@ async def test_fetch_timeout_opens_cooldown_and_exposes_status() -> None:
     assert await scheduler.run_once() is True
 
     status = scheduler.status()
-    assert status["lastError"] == "ths_timeout"
+    assert status["lastError"] == "fund_fetch_timeout"
     assert status["circuitOpenUntil"] >= current.timestamp() + 300
     assert status["lastRowCount"] == 0
     assert status["primedCodes"] == 0
@@ -400,3 +400,144 @@ async def test_save_timeout_keeps_rows_for_retry() -> None:
     assert len(cache.rows) == 2
     assert len(stream.published) == 4
 
+
+
+@pytest.mark.asyncio
+async def test_truncated_batch_saves_partial_rows_and_opens_cooldown() -> None:
+    """东财命中风控中止剩余批次：已成功批次照常保存（fail-visible），同时熔断冷却。"""
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    provider = FakeProvider(
+        batch=AkshareFundBatch(
+            rows=[FakeProvider.row("000001", "2026-07-30")],
+            failures=[{"batchStart": 1, "reason": "em_rate_limited"}],
+            fetched_at_ms=1,
+            session_date="2026-07-30",
+        )
+    )
+    provider.batch.truncated_by = "em_rate_limited"  # type: ignore[union-attr]
+    cache = FakeCache()
+    scheduler = _scheduler(provider=provider, current=current, cache=cache)
+
+    await scheduler.run_once()
+
+    # 部分失败仍写入：已成功行落缓存
+    assert "000001" in cache.rows
+    status = scheduler.status()
+    # 同时结构化暴露中止原因并熔断，本轮结束后不会立即再打上游
+    assert status["lastError"] == "em_rate_limited"
+    assert status["circuitOpenUntil"] >= current.timestamp() + 300
+    assert status["lastRowCount"] == 1
+
+
+class _SourceTrackingProvider(FakeProvider):
+    """带 source 标识的 FakeProvider，用于行源一致性检测测试。"""
+
+    def __init__(self, source: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.source = source
+
+
+@pytest.mark.asyncio
+async def test_non_systemic_truncated_exposed_in_status_even_with_rows() -> None:
+    """连续坏负载（em_invalid_payload）中止：无论是否有部分行，原因都必须可见。"""
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    batch = AkshareFundBatch(
+        rows=[FakeProvider.row("000001", "2026-07-30")],
+        failures=[{"batchStart": 3, "reason": "em_invalid_payload"}],
+        fetched_at_ms=1,
+        session_date="2026-07-30",
+    )
+    batch.truncated_by = "em_invalid_payload"  # type: ignore[union-attr]
+    provider = FakeProvider(batch=batch)
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+
+    status = scheduler.status()
+    assert status["lastError"] == "em_invalid_payload"
+    # 非系统性截断不熔断（风控熔断只留给 systemic），但原因不得被成功状态冲掉
+    assert status["circuitOpenUntil"] == 0
+    assert status["parseFailureCount"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_non_systemic_truncated_empty_batch_still_exposes_failures() -> None:
+    """空行 + 非系统性截断：lastError 与批级失败都不被静默吞掉（M1）。"""
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    batch = AkshareFundBatch(
+        rows=[],
+        failures=[{"batchStart": 0, "reason": "em_invalid_payload"}],
+        fetched_at_ms=1,
+        session_date="2026-07-30",
+    )
+    batch.truncated_by = "em_invalid_payload"  # type: ignore[union-attr]
+    provider = FakeProvider(batch=batch)
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+
+    status = scheduler.status()
+    assert status["lastError"] == "em_invalid_payload"
+    assert status["parseFailureCount"] == 1
+    assert status["lastRowCount"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_source_rows_detected_when_provider_source_differs() -> None:
+    """同日切源回退：缓存返回旧源行（rank 高者权威）时必须暴露陈旧信号（M2）。"""
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    provider = _SourceTrackingProvider(
+        "eastmoney_main",
+        batch=AkshareFundBatch(
+            rows=[
+                {
+                    "code": "000001",
+                    "zlje": 1.0,
+                    "sessionDate": "2026-07-30",
+                    "tradingDate": "2026-07-30",
+                    "source": "akshare_ths_individual",
+                    "moneyFlowSource": "akshare_ths_individual",
+                    "sourceTs": 1,
+                }
+            ],
+            failures=[],
+            fetched_at_ms=1,
+            session_date="2026-07-30",
+        ),
+    )
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+
+    # 旧行照常保存/推送（fail-visible），但 status 明确提示行源与 provider 不一致
+    assert scheduler.status()["lastError"] == "provider_source_stale_rows"
+
+
+@pytest.mark.asyncio
+async def test_matching_source_rows_report_no_error() -> None:
+    """正常场景：行源与 provider 一致时 lastError 保持 None。"""
+    current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
+    provider = _SourceTrackingProvider(
+        "eastmoney_main",
+        batch=AkshareFundBatch(
+            rows=[
+                {
+                    "code": "000001",
+                    "zlje": 1.0,
+                    "sessionDate": "2026-07-30",
+                    "tradingDate": "2026-07-30",
+                    "source": "eastmoney_main",
+                    "moneyFlowSource": "eastmoney_main",
+                    "sourceTs": 1,
+                }
+            ],
+            failures=[],
+            fetched_at_ms=1,
+            session_date="2026-07-30",
+        ),
+    )
+    scheduler = _scheduler(provider=provider, current=current)
+
+    await scheduler.run_once()
+
+    assert scheduler.status()["lastError"] is None

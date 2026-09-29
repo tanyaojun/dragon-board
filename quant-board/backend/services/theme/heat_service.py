@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 from backend.analysis.theme.heat import compute_theme_heat
 from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-from backend.core.fund_sources import FUND_SOURCE_THS_MAIN_MONITOR
 from backend.core.settings import get_settings
 from backend.snapshot_collector.providers import TencentBasicQuoteProvider
 from backend.services.theme.fund_cache import get_theme_fund_cache
@@ -199,7 +198,7 @@ class ThemeHeatService:
 
     def get_fund_rows(self, codes: list[str]) -> dict[str, dict[str, object]]:
         normalized = list(dict.fromkeys(str(code).strip() for code in codes if str(code).strip()))
-        # 题材聚合统一用 akshare 估算口径（2026-08-14 用户确认），读独立 akshare hash
+        # 题材聚合统一用估算口径（2026-09-29 用户确认切换东财，回退 akshare），读题材 hash
         rows = self._fund_cache.get_akshare_latest(normalized)
         return {
             code: {
@@ -266,12 +265,33 @@ class ThemeHeatService:
         else:
             quote_rows, quote_health = cached_quotes
         fund_rows = self.get_fund_rows(stock_codes) if include_runtime_funds else {}
-        # 运行态资金行可能来自 ths_web_seed（akshare 全市场种子，估算）或
-        # ths_main_monitor（L2 主源），按实际行来源标注，不把估算伪装成 L2 权威。
-        fund_sources = sorted({str(row.get("moneyFlowSource") or "") for row in fund_rows.values()})
+        # 运行态资金行按实际行来源标注（题材源默认 eastmoney_main、回退
+        # akshare_ths_individual；L2 行不会出现在题材 hash），不把估算伪装成 L2 权威。
+        # 同 hash 过渡期可能混有 eastmoney/akshare 行：source 取行数多数，
+        # 混合态显式标 mixed，不冒充单一来源。
+        fund_source_counts: dict[str, int] = {}
+        for row in fund_rows.values():
+            source_key = str(row.get("moneyFlowSource") or "")
+            fund_source_counts[source_key] = fund_source_counts.get(source_key, 0) + 1
+        fund_sources = sorted(fund_source_counts)
+        if not include_runtime_funds:
+            health_source = "formal_fund_unavailable"
+        elif not fund_source_counts:
+            health_source = "fund_rows_empty"
+        elif len(fund_sources) == 1:
+            health_source = fund_sources[0]
+        else:
+            health_source = "mixed"
         fund_health = {
-            "source": FUND_SOURCE_THS_MAIN_MONITOR if include_runtime_funds else "formal_fund_unavailable",
-            "ok": include_runtime_funds,
+            "source": health_source,
+            "dominantSource": (
+                max(fund_source_counts.items(), key=lambda item: item[1])[0]
+                if fund_source_counts
+                else ""
+            ),
+            "sources": fund_sources,
+            # 覆盖为 0 时不是健康状态：ok 必须反映实际返回，不伪装成功
+            "ok": bool(fund_rows) if include_runtime_funds else False,
             "requested_count": len(stock_codes),
             "returned_count": len(fund_rows),
             "coverage_ratio": len(fund_rows) / len(stock_codes) if stock_codes else 1.0,

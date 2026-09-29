@@ -13,6 +13,7 @@ from backend.core.fund_sources import (
     FUND_HASH_AKSHARE,
     FUND_HASH_LATEST,
     FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
+    FUND_SOURCE_EASTMONEY_MAIN,
     FUND_SOURCE_HASH,
     FUND_SOURCE_THS_MAIN_MONITOR,
     SUPPORTED_FUND_SOURCES,
@@ -23,12 +24,14 @@ logger = logging.getLogger(__name__)
 
 
 # 允许写入运行态资金缓存的来源由 backend.core.fund_sources.SUPPORTED_FUND_SOURCES
-# 统一提供（L2 主源 + akshare 题材源）；本模块不再本地重定义（2026-08-14 清理，
-# 此前本地 frozenset 覆盖了统一入口，导致种子源被误接受）。
-# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(2) > akshare 题材估算(1)。
+# 统一提供（L2 主源 + 东财题材源 + akshare 题材回退源）；本模块不再本地重定义。
+# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(3) > 东财题材(2) >
+# akshare 题材回退(1)。rank 只在各自 hash 内比较（latest 仅 ths_main_monitor，
+# 题材 hash 内 eastmoney 压过 akshare），跨 hash 永不相遇。
 FUND_SOURCE_RANK: dict[str, int] = {
     FUND_SOURCE_AKSHARE_THS_INDIVIDUAL: 1,
-    FUND_SOURCE_THS_MAIN_MONITOR: 2,
+    FUND_SOURCE_EASTMONEY_MAIN: 2,
+    FUND_SOURCE_THS_MAIN_MONITOR: 3,
 }
 
 
@@ -45,8 +48,10 @@ class ThemeFundCache:
         self._base = f"{prefix.strip(':')}:theme-fund:v3"
         # L2 主源（ths_main_monitor）行：供热榜资金列 / fund-stream
         self._latest: dict[str, dict[str, object]] = {}
-        # akshare 题材源（akshare_ths_individual）行：供 theme_fund 题材聚合。
-        # 2026-08-14 用户确认：题材统一用 akshare 估算口径，与 L2 分 hash 存储互不覆盖。
+        # 题材估算源（eastmoney_main 默认 / akshare_ths_individual 回退）行：供
+        # theme_fund 题材聚合。2026-09-29 用户确认：题材默认切东财 push2 口径，
+        # 与 L2 分 hash 存储互不覆盖；hash 内 eastmoney rank 高于 akshare，
+        # 切换后同日残留 akshare 行会被东财行自动覆盖。
         self._akshare: dict[str, dict[str, object]] = {}
         self._owners: dict[str, list[str]] = {}
         self._owners_loaded = False
@@ -321,7 +326,9 @@ class ThemeFundCache:
         return result
 
     def get_akshare_latest(self, codes: list[str]) -> dict[str, dict[str, object]]:
-        """读 akshare 题材源 hash 的最新行（题材聚合统一估算口径，2026-08-14）。"""
+        """读题材估算源 hash 的最新行（题材聚合统一估算口径；2026-09-29 起默认
+        东财 eastmoney_main，回退 akshare_ths_individual——两者同 hash，按
+        FUND_SOURCE_HASH 路由过滤，其他源不进内存）。"""
         normalized = list(dict.fromkeys(str(value).strip() for value in codes if str(value).strip()))
         result: dict[str, dict[str, object]] = {}
         with self._lock:
@@ -365,10 +372,11 @@ class ThemeFundCache:
             return False
 
     def akshare_memory_rows(self) -> list[dict[str, object]]:
-        """导出进程内 akshare 题材源全部行（Redis akshare key 缺失时写回）。
+        """导出进程内题材估算源 hash 全部行（Redis key 缺失时写回）。
 
-        只导出 akshare_ths_individual 源：历史串线的 ths_main_monitor 行不得被
-        _ensure_redis_cache_alive 写回 akshare hash（2026-08-14）。
+        只导出路由到题材 hash 的源（eastmoney_main / akshare_ths_individual）：
+        历史串线的 ths_main_monitor 行不得被 _ensure_redis_cache_alive 写回
+        题材 hash（2026-08-14）。
         """
         with self._lock:
             return [

@@ -67,6 +67,9 @@ class AkshareFundProvider:
     are mapped to stable codes and callers keep last-good data.
     """
 
+    # 调度器 status() 的数据源诚实标识（与 batch.source 一致）
+    source = FUND_SOURCE_AKSHARE_THS_INDIVIDUAL
+
     def __init__(
         self,
         *,
@@ -80,7 +83,15 @@ class AkshareFundProvider:
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         self.request_timeout_seconds = max(5.0, float(request_timeout_seconds))
 
-    async def fetch_all(self, *, session_date: str) -> AkshareFundBatch:
+    async def fetch_all(
+        self,
+        *,
+        session_date: str,
+        codes: list[str] | None = None,
+    ) -> AkshareFundBatch:
+        # codes 参数与东财 provider 签名对齐（调度器统一调用形态）；
+        # akshare 接口天然返回全市场，codes 被忽略。
+        del codes
         return await asyncio.to_thread(self._fetch_all_sync, session_date)
 
     def _fetch_all_sync(self, session_date: str) -> AkshareFundBatch:

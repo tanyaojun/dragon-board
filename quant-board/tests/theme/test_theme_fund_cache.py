@@ -433,3 +433,68 @@ def test_put_rejects_akshare_source() -> None:
     cache = ThemeFundCache(FakeRedis(), prefix="test")
     with pytest.raises(ValueError):
         cache.put(row("000001", "2026-07-24", 1.0, source="akshare_ths_individual"))
+
+
+def test_put_many_accepts_eastmoney_main_source() -> None:
+    # 2026-XX 题材主力资金切换东财：eastmoney_main 路由到题材 hash，get_akshare_latest 可读
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    em_row = {
+        "code": "600000",
+        "zlje": -9876543.21,
+        "cddje": -12345678.0,
+        "cddjzb": -5.5,
+        "zljzb": -2.34,
+        "source": "eastmoney_main",
+        "moneyFlowSource": "eastmoney_main",
+        "sessionDate": "2026-07-30",
+        "sourceTs": 1,
+    }
+
+    saved, failures = cache.put_many([em_row])
+
+    assert failures == []
+    assert saved[0]["source"] == "eastmoney_main"
+    stored = cache.get_akshare_latest(["600000"])["600000"]
+    assert stored["source"] == "eastmoney_main"
+    assert stored["zlje"] == -9876543.21
+
+
+def test_eastmoney_row_overwrites_same_day_akshare_row_by_rank() -> None:
+    # 同一 sessionDate 下 rank：eastmoney(2) > akshare(1)——切换东财后同日残留
+    # akshare 行被东财行自动覆盖；反向（akshare 覆盖东财）被拒绝
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put_many([row("600000", "2026-07-30", 1.0, source="akshare_ths_individual", source_ts=200)])
+
+    saved, _failures = cache.put_many(
+        [row("600000", "2026-07-30", 2.0, source="eastmoney_main", source_ts=100)]
+    )
+
+    assert saved[0]["source"] == "eastmoney_main"
+    assert saved[0]["zlje"] == 2.0
+
+    rejected, _failures = cache.put_many(
+        [row("600000", "2026-07-30", 3.0, source="akshare_ths_individual", source_ts=999)]
+    )
+
+    # akshare 行 rank 低 + sourceTs 虽新：同日 rank 高者权威，akshare 不能覆盖东财
+    assert rejected[0]["source"] == "eastmoney_main"
+    assert cache.get_akshare_latest(["600000"])["600000"]["zlje"] == 2.0
+
+
+def test_eastmoney_memory_rows_exported_for_redis_restore() -> None:
+    # Redis 题材 hash key 丢失时，东财行同样从内存 last-good 写回
+    redis = FakeRedis()
+    cache = ThemeFundCache(redis, prefix="test", ttl_seconds=900)
+    cache.put_many(
+        [
+            row("600000", "2026-07-30", 1.0, source="eastmoney_main"),
+            row("000001", "2026-07-30", 2.0, source="ths_main_monitor"),
+        ]
+    )
+
+    exported = cache.akshare_memory_rows()
+
+    assert [entry["code"] for entry in exported] == ["600000"]
+    assert exported[0]["source"] == "eastmoney_main"

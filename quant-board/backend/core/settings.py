@@ -1,3 +1,4 @@
+import logging
 import os
 import warnings
 from functools import lru_cache
@@ -164,10 +165,24 @@ class Settings(BaseModel):
     # akshare 同花顺网页全市场资金源开关（2026-08-14：默认启用，专供 theme_fund
     # 题材资金聚合；原“种子首屏占位”方案废弃，冷启动改由 Redis dump.rdb 恢复 L2）
     theme_fund_seed_enabled: bool = Field(default=True)
+    # 题材主力资金上游（2026-09-29 用户确认切换）：默认 eastmoney（push2 ulist.np
+    # 独立 URL 直连，不走 akshare——东财接口风控限流严重，必须精确控制请求节奏）；
+    # akshare 同花顺网页口径保留为回退（QUANT_BOARD_THEME_FUND_SOURCE=akshare）。
+    # 注意：同 sessionDate 下 rank 高者权威（eastmoney > akshare），当日盘中
+    # 切回 akshare 不会覆盖当日已写入的东财行——切源需跨交易日生效，
+    # 调度器 status 以 provider_source_stale_rows 暴露行源不一致（fail-visible）。
+    theme_fund_source: str = Field(default="eastmoney")
+    # 东财批量参数（风控纪律）：每请求最多 N 只 secids + 相邻请求最小间隔。
+    # 默认 300 只/1.5s → 全市场约 18 批，300s 一轮均摊约 3.6 req/min。
+    theme_fund_em_batch_size: int = Field(default=300)
+    theme_fund_em_request_interval_seconds: float = Field(default=1.5)
+    theme_fund_em_request_timeout_seconds: float = Field(default=15.0)
     # KPL 题材个股人气后台刷新周期（2026-09：热度口径切换为 KPL 人气总和，
     # 对齐 tck2.js 的 10 分钟全量刷新节奏；下限 60s 由 KplHotnessCache 兜底）
     theme_kpl_hotness_refresh_seconds: int = Field(default=600)
-    market_fund_fetch_timeout_seconds: float = Field(default=60.0)
+    # 题材主力资金全市场一轮的 fetch 预算：东财批量模式 18 批 × (请求 + 1.5s 间隔)
+    # 约 40-60s，60s 预算过紧会掐断尾部批次（partial 保存 + 熔断），默认提到 90s
+    market_fund_fetch_timeout_seconds: float = Field(default=90.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)
     xueqiu_cookie: str = Field(default="")
@@ -484,6 +499,36 @@ class Settings(BaseModel):
         seed_flag = os.environ.get("QUANT_BOARD_THEME_FUND_SEED_ENABLED")
         if seed_flag is not None:
             self.theme_fund_seed_enabled = seed_flag.strip().lower() in {"1", "true", "yes", "on"}
+        fund_source = os.environ.get("QUANT_BOARD_THEME_FUND_SOURCE", "").strip().lower()
+        if fund_source in {"eastmoney", "akshare"}:
+            self.theme_fund_source = fund_source
+        elif fund_source:
+            # 拼错源名（如 em/east）静默回落默认会误导排障：显式告警（m5）
+            logging.getLogger(__name__).warning(
+                "QUANT_BOARD_THEME_FUND_SOURCE=%r not in {eastmoney, akshare}; keep default %s",
+                fund_source,
+                self.theme_fund_source,
+            )
+        # 风控安全下限：interval 0 等于关闭节流（封 IP 风险），batch 过小（如 1）
+        # 会把全市场拆成 5000+ 请求（结合超时僵尸线程边界放大风险），均设下限
+        self.theme_fund_em_batch_size = max(
+            50,
+            _env_int("QUANT_BOARD_THEME_FUND_EM_BATCH_SIZE", self.theme_fund_em_batch_size),
+        )
+        self.theme_fund_em_request_interval_seconds = max(
+            0.5,
+            _env_float(
+                "QUANT_BOARD_THEME_FUND_EM_REQUEST_INTERVAL_SECONDS",
+                self.theme_fund_em_request_interval_seconds,
+            ),
+        )
+        self.theme_fund_em_request_timeout_seconds = max(
+            5.0,
+            _env_float(
+                "QUANT_BOARD_THEME_FUND_EM_REQUEST_TIMEOUT_SECONDS",
+                self.theme_fund_em_request_timeout_seconds,
+            ),
+        )
         self.theme_kpl_hotness_refresh_seconds = max(
             60,
             _env_int(

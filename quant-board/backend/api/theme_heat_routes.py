@@ -59,7 +59,7 @@ def get_theme_heat(force: bool = False) -> dict[str, object] | JSONResponse:
 @router.get("/fund-rows", response_model=None)
 def get_theme_fund_rows(codes: str = "") -> dict[str, object] | JSONResponse:
     requested_codes = list(dict.fromkeys(code.strip() for code in codes.split(",") if code.strip()))
-    # 题材资金行统一用 akshare 估算口径（2026-08-14 用户确认）
+    # 题材资金行统一用估算口径（2026-09-29 用户确认切换东财，回退 akshare）
     rows = get_theme_fund_cache().get_akshare_latest(requested_codes)
     return {
         "ok": True,

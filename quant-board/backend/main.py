@@ -374,14 +374,16 @@ async def on_startup() -> None:
                 logger.exception("ranktrend analyze warmup failed; continue startup")
 
         asyncio.create_task(_warmup_ranktrend_analyze())
-    market_fund_scheduler.start()
-    # mainMonitorDetail 展示池资金校准（L2 主源，覆盖 akshare 种子）
-    get_ths_fund_refresh_scheduler().start()
     from backend.market_proxy.quotes import start_market_quotes_refresh
     from backend.market_proxy.hotlists import start_hotlist_refresh
 
+    # 行情（腾讯全市场）先行预热：东财题材资金 provider 的 universe 取自
+    # quotes 缓存，顺序颠倒会使冷启动首轮必然 em_universe_unavailable（m3）
     await start_market_quotes_refresh()
     await start_hotlist_refresh()
+    market_fund_scheduler.start()
+    # mainMonitorDetail 展示池资金校准（L2 主源，覆盖 akshare 种子）
+    get_ths_fund_refresh_scheduler().start()
 
 
 @app.on_event("shutdown")

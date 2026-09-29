@@ -524,3 +524,62 @@ def asyncio_run(coro):
     import asyncio
 
     return asyncio.run(coro)
+
+
+@pytest.mark.asyncio
+async def test_quotes_cache_all_codes_in_memory_and_redis_fallback() -> None:
+    """all_codes：进程内优先；未就绪回退 Redis hash 字段（东财 universe 唯一来源）。"""
+    ak = FakeTxAkshare(frame=_tx_frame())
+    cache = MarketQuotesCache(
+        refresh_interval_seconds=300,
+        akshare_module=ak,
+        now_ms=lambda: 1000,
+    )
+
+    # 未刷新且无 Redis：空列表（调用方按 universe 缺失处理，不伪装空成功）
+    assert cache.all_codes() == []
+
+    await cache.refresh()
+    codes = cache.all_codes()
+    assert "600519" in codes
+    assert all(len(code) == 6 and code.isdigit() for code in codes)
+
+    # 冷启动/重启场景：内存空，Redis hash 兜底（含非法字段过滤）
+    class FakeRedis:
+        def __init__(self, mapping: dict[bytes, bytes]) -> None:
+            self._mapping = mapping
+
+        def hkeys(self, key: str) -> list[bytes]:
+            return list(self._mapping.keys())
+
+        def hmget(self, key: str, fields: list[str]) -> list[bytes | None]:
+            return [self._mapping.get(field.encode()) for field in fields]
+
+    cold = MarketQuotesCache(
+        refresh_interval_seconds=300,
+        akshare_module=ak,
+        redis_client=FakeRedis(
+            {
+                b"000001": b"{}",
+                b"600519": b"{}",
+                b"bad": b"{}",
+            }
+        ),
+        redis_key_prefix="test",
+        ttl_seconds=300,
+    )
+    assert cold.all_codes() == ["000001", "600519"]
+
+    # Redis 异常：告警并返回空，不炸调用方
+    class BrokenRedis:
+        def hkeys(self, key: str) -> list[bytes]:
+            raise RuntimeError("redis down")
+
+    broken = MarketQuotesCache(
+        refresh_interval_seconds=300,
+        akshare_module=ak,
+        redis_client=BrokenRedis(),
+        redis_key_prefix="test",
+        ttl_seconds=300,
+    )
+    assert broken.all_codes() == []

@@ -3,18 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import date, datetime, timedelta
-from typing import Callable
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from backend.market_proxy.akshare_fund_provider import (
-    SYSTEMIC_ERRORS,
-    AkshareFundBatch,
-    AkshareFundProvider,
-    AkshareFundProviderError,
-    get_akshare_fund_provider,
+    SYSTEMIC_ERRORS as AKSHARE_SYSTEMIC_ERRORS,
 )
+from backend.market_proxy.akshare_fund_provider import get_akshare_fund_provider
+from backend.market_proxy.eastmoney_fund_provider import (
+    SYSTEMIC_ERRORS as EASTMONEY_SYSTEMIC_ERRORS,
+)
+from backend.market_proxy.eastmoney_fund_provider import get_eastmoney_fund_provider
 from backend.services.market.fund_stream import MarketFundStream, get_market_fund_stream
-from backend.core.fund_sources import FUND_SOURCE_AKSHARE_THS_INDIVIDUAL
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 from backend.services.theme.fund_cache import ThemeFundCache, get_theme_fund_cache
@@ -25,16 +25,19 @@ TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 class MarketFundScheduler:
-    """Full-market akshare fund flow refresher for theme_fund.
+    """theme_fund 题材主力资金全市场刷新调度器。
 
-    One akshare call returns the whole market, so the scheduler refreshes all
-    listed A-shares (theme_fund 题材股票约 4000 只) in a single batch every
-    refresh interval. Rows are written to Redis with a TTL (shared across
-    processes/restarts) and kept as last-good in the in-memory ThemeFundCache.
-    Startup warmup prefetches the whole market once without waiting for WebSocket
-    subscribers so the theme_fund aggregation can be served immediately.
-    Upstream failures never clear existing rows; they open a cooldown and expose
-    a structured status so consumers can keep last-good.
+    上游可插拔（2026-XX 用户确认题材主力资金切换东财口径）：
+    - 默认 ``EastmoneyFundProvider``：东财 push2 ulist.np 批量（httpx 独立
+      URL 直连，不走 akshare），universe 用腾讯全市场行情缓存；风控纪律
+      （串行 + 请求间隔 + 命中 429 立即中止）由 provider 内部保证，调度器
+      收到系统性错误/截断标记即熔断冷却，不会短时间连续打东财 API；
+    - 回退 ``AkshareFundProvider``（QUANT_BOARD_THEME_FUND_SOURCE=akshare）：
+      akshare 同花顺网页个股资金流，一次调用返回全市场。
+
+    行写入 Redis theme-fund 题材 hash（TTL，跨进程/重启共享）+ 进程内
+    last-good。启动预热在无订阅者时也抓一轮，题材聚合首屏可直接命中。
+    上游失败从不清空已有行；打开冷却并暴露结构化 status，消费方 keep last-good。
     """
 
     def __init__(
@@ -42,7 +45,7 @@ class MarketFundScheduler:
         *,
         cache: ThemeFundCache,
         stream: MarketFundStream,
-        provider: AkshareFundProvider,
+        provider: Any,
         is_trading_day: Callable = is_trading_day,
         now: Callable[[], datetime] | None = None,
         min_refresh_interval_seconds: float = 60.0,
@@ -52,10 +55,19 @@ class MarketFundScheduler:
         save_timeout_seconds: float = 90.0,
         max_pending_save_rows: int = 30000,
         enabled: bool = True,
+        systemic_error_codes: frozenset[str] | None = None,
     ) -> None:
         self.cache = cache
         self.stream = stream
+        # provider 鸭子类型：fetch_all(*, session_date, codes=None) →
+        # batch(rows/failures/fetched_at_ms/session_date/source[/truncated_by])；
+        # 失败异常带 .code 结构化错误码（Akshare/Eastmoney provider 均满足）。
         self.provider = provider
+        # 系统性错误码合并两源命名空间（ems/ths 前缀不同，合并不会误伤），
+        # 显式传参仍可覆盖（测试用）。
+        self._systemic_error_codes = systemic_error_codes or (
+            AKSHARE_SYSTEMIC_ERRORS | EASTMONEY_SYSTEMIC_ERRORS
+        )
         self._is_trading_day = is_trading_day
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
         self.min_refresh_interval_seconds = max(30.0, float(min_refresh_interval_seconds))
@@ -90,11 +102,11 @@ class MarketFundScheduler:
         if not self.enabled or (self._task and not self._task.done()):
             return
         if not get_settings().theme_fund_seed_enabled:
-            # 2026-08-14：akshare 同花顺网页全市场源默认启用，专供 theme_fund 题材
-            # 资金聚合；该开关关闭时跳过 akshare 刷新，冷启动改从 Redis dump.rdb
-            # 恢复 L2 数据（见 docs/theme-module 资金源口径文档）。
+            # 题材主力资金全市场源开关（东财默认 / akshare 回退）；关闭时跳过刷新，
+            # 冷启动改从 Redis dump.rdb 恢复 L2 数据（见 docs/theme-module 资金源口径文档）。
             logger.info(
-                "akshare theme_fund source disabled (QUANT_BOARD_THEME_FUND_SEED_ENABLED=false); skip akshare refresh"
+                "theme_fund source disabled (QUANT_BOARD_THEME_FUND_SEED_ENABLED=false); skip %s refresh",
+                self.provider_source(),
             )
             return
         self._task = asyncio.create_task(
@@ -102,11 +114,23 @@ class MarketFundScheduler:
             name="market-fund-scheduler",
         )
 
+    def provider_source(self) -> str:
+        """当前 provider 的数据源标识（无 source 属性的 stub 返回 unknown）。"""
+        return str(getattr(self.provider, "source", "") or "unknown")
+
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
+        # provider 自有资源（如东财 provider 的 owned httpx.Client）随停释放；
+        # 无 close 的 provider（akshare/stub）静默跳过
+        close = getattr(self.provider, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                logger.warning("fund provider close failed", exc_info=True)
 
     async def run_once(self, *, ignore_subscribers: bool = False) -> bool:
         codes = self.stream.market_codes()
@@ -142,11 +166,14 @@ class MarketFundScheduler:
         elif after_close and self._finalized:
             return False
         elif not intraday and not after_close and self._primed:
-            # 盘后暂停——但 akshare 题材源缓存缺失（重启后 RDB 无此 key/被误清）时
+            # 盘后暂停——但题材估算源缓存缺失（重启后 RDB 无此 key/被误清）时
             # 冷启动拉一次填充（2026-08-12 修复：否则题材资金空直到下个交易日）
             if self.cache.has_akshare_redis_data():
                 return False
-            logger.info("theme-fund akshare cache missing; cold-start refresh outside trading hours")
+            logger.info(
+                "theme-fund %s cache missing; cold-start refresh outside trading hours",
+                self.provider_source(),
+            )
             self._primed = False
 
         self._next_refresh_at = now_ts + self.min_refresh_interval_seconds
@@ -158,23 +185,39 @@ class MarketFundScheduler:
             )
         except asyncio.TimeoutError:
             # 上游挂起不能拖死调度器：超时熔断 + 冷却，状态结构化可见
-            self._last_error = "ths_timeout"
+            self._last_error = "fund_fetch_timeout"
             self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
             return True
-        except AkshareFundProviderError as error:
-            self._last_error = error.code
-            if error.code in SYSTEMIC_ERRORS:
-                self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
-            return True
-        except Exception:
-            logger.exception("market fund akshare refresh failed unexpectedly")
+        except Exception as error:
+            code = getattr(error, "code", None)
+            if isinstance(code, str) and code:
+                # provider 结构化错误（akshare ths_* / 东财 em_*）：
+                # 系统性错误（限流/风控/上游故障）打开熔断冷却，不短时间重打 API
+                self._last_error = code
+                if code in self._systemic_error_codes:
+                    self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+                return True
+            logger.exception("market fund refresh failed unexpectedly")
             self._last_error = "unexpected_fetch_error"
             self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
             return True
 
+        truncated_by = str(getattr(batch, "truncated_by", "") or "")
+        if truncated_by:
+            # provider 中止剩余批次：系统性错误（限流/风控/上游故障）另加熔断冷却；
+            # 非系统性截断（连续超时/坏负载，典型为东财拦截页）同样必须暴露原因，
+            # 不能因为 status 尾部“成功清理”而被冲掉（fail-visible）。
+            self._last_error = truncated_by
+            if truncated_by in self._systemic_error_codes:
+                self._circuit_open_until = now_ts + self.systemic_cooldown_seconds
+
         if not batch.rows:
-            # 空批次视为质量问题而非成功：保留 last-good、状态暴露原因，min 间隔后重试
-            self._last_error = "empty_batch"
+            # 空批次视为质量问题而非成功：保留 last-good、状态暴露原因与批级失败，
+            # min 间隔后重试。早退前同步 parse failure 计数，避免截断轮失败完全不可见。
+            if not truncated_by:
+                self._last_error = "empty_batch"
+            self._parse_failure_count = len(batch.failures)
+            self._parse_failure_samples = list(batch.failures)[:10]
             return True
 
         saved_rows: list[dict[str, object]] = []
@@ -220,7 +263,20 @@ class MarketFundScheduler:
             self._finalized = True
         if intraday:
             self._next_refresh_at = now_ts + self.refresh_interval_seconds
-        self._last_error = None
+        # truncated（provider 中止）：保留中止原因，不得被成功状态冲掉。
+        # 另：行源与 provider 不一致（如当日盘中从东财切回 akshare 时，同日旧
+        # eastmoney 行因 rank 高者权威仍被原样返回/推送）必须结构化暴露——
+        # rank 语义决定切源回退需跨交易日生效，运维需从 status 看到陈旧信号。
+        if truncated_by:
+            pass  # last_error 已在上面设置，不得清空
+        else:
+            stale_source = str(getattr(self.provider, "source", "") or "")
+            if stale_source and any(
+                str(row.get("moneyFlowSource") or "") != stale_source for row in saved_rows
+            ):
+                self._last_error = "provider_source_stale_rows"
+            else:
+                self._last_error = None
         self._last_saved_at = now_ts
         self._last_session_date = session_date
         self._last_row_count = len(saved_rows)
@@ -241,7 +297,7 @@ class MarketFundScheduler:
 
     async def _save_batch(
         self,
-        batch: AkshareFundBatch,
+        batch: Any,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         return await self._save_rows(batch.rows)
 
@@ -293,7 +349,10 @@ class MarketFundScheduler:
             "enabled": self.enabled,
             "seedEnabled": get_settings().theme_fund_seed_enabled,
             "running": self._task is not None,
-            "source": FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
+            # 数据源诚实标识：东财默认源 / akshare 回退源按实际 provider 暴露；
+            # configuredSource 便于核对 env 覆盖是否生效
+            "source": self.provider_source(),
+            "configuredSource": get_settings().theme_fund_source,
             "queueLength": len(self.stream.market_codes()),
             "currentCode": self._last_code,
             "requestsLastMinute": len(self._request_times),
@@ -352,10 +411,21 @@ class MarketFundScheduler:
             await self._ensure_redis_cache_alive()
 
 
+def _build_default_provider() -> Any:
+    """按 QUANT_BOARD_THEME_FUND_SOURCE 选择题材主力资金上游。
+
+    默认 eastmoney（东财 push2 独立 URL 直连）；akshare 保留为显式回退。
+    """
+    settings = get_settings()
+    if settings.theme_fund_source == "eastmoney":
+        return get_eastmoney_fund_provider()
+    return get_akshare_fund_provider()
+
+
 market_fund_scheduler = MarketFundScheduler(
     cache=get_theme_fund_cache(),
     stream=get_market_fund_stream(),
-    provider=get_akshare_fund_provider(),
+    provider=_build_default_provider(),
     refresh_interval_seconds=get_settings().theme_fund_refresh_interval_seconds,
     fetch_timeout_seconds=get_settings().market_fund_fetch_timeout_seconds,
 )
