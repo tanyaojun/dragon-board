@@ -223,6 +223,191 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     }
 
 
+def _fmt_yi(value) -> str:
+    """元 → 亿（带符号，2 位小数）；非数返回 缺。"""
+    return f"{float(value) / 1e8:+.2f}亿" if _finite(value) else "缺"
+
+
+_LIFECYCLE_NAMES = {"ignition": "点火", "expansion": "扩散", "crowded": "拥挤",
+                    "reversal": "反转", "cooling": "冷却", "unknown": "未知"}
+_INDEX_NAMES = {"sh": "沪指", "hs300": "沪深300", "zz500": "中证500", "zz1000": "中证1000"}
+
+
+def format_evidence_line(ev: dict) -> str:
+    """单帧证据压缩行（槽位已走段与日级逐帧段共用）。缺项如实写缺。"""
+    parts = [str(ev.get("slotTime") or "?")]
+    idx = ev.get("indices") or {}
+    idx_bits = [f"{_INDEX_NAMES[k]} {idx[k]:+.2f}点" for k in _INDEX_KEYS if _finite(idx.get(k))]
+    parts.append("·".join(idx_bits) if idx_bits else "指数缺")
+    limit = ev.get("limit") or {}
+    lim_bits = []
+    if limit.get("ztCount") is not None:
+        lim_bits.append(f"涨停 {int(limit['ztCount'])}")
+    if limit.get("maxBoard"):
+        lim_bits.append(f"最高 {int(limit['maxBoard'])} 连板")
+    if limit.get("zhabanRate") is not None:
+        lim_bits.append(f"炸板率 {float(limit['zhabanRate']):.0f}%")
+    elif limit.get("zhabanCount") is not None:
+        lim_bits.append(f"炸板 {int(limit['zhabanCount'])} 家")
+    parts.append("·".join(lim_bits) if lim_bits else "涨停证据缺")
+    breadth = ev.get("breadth") or {}
+    breadth_bit = (f"涨跌 涨停{breadth.get('limitUp', 0)}/涨5+{breadth.get('up5', 0)}"
+                   f"/涨{breadth.get('up0', 0)}/跌{breadth.get('down0', 0)}/大跌{breadth.get('down5', 0)}")
+    if breadth.get("pctMissing"):
+        breadth_bit += f"(缺{breadth['pctMissing']})"
+    parts.append(breadth_bit)
+    fund = ev.get("fund") or {}
+    if fund.get("zljeSum") is not None:
+        fund_bit = f"主力净额 {_fmt_yi(fund['zljeSum'])}(正{fund.get('zljePos', 0)}负{fund.get('zljeNeg', 0)})"
+        if fund.get("zljeMissing"):
+            fund_bit += f"缺{fund['zljeMissing']}"
+        parts.append(fund_bit)
+    else:
+        parts.append("主力净额缺")
+    turnover = ev.get("turnover") or {}
+    if turnover.get("newCount") is not None:
+        parts.append(f"新进 {turnover['newCount']}·淘汰 {turnover['droppedCount']}")
+    else:
+        parts.append("新进淘汰缺")
+    yl = ev.get("yesterdayLimit")
+    if isinstance(yl, dict) and yl.get("count"):
+        yl_bits = [f"昨涨停承接 {int(yl['count'])} 只"]
+        if yl.get("avgChange") is not None:
+            yl_bits.append(f"均{float(yl['avgChange']):+.2f}%")
+        if yl.get("positiveRate") is not None:
+            yl_bits.append(f"红盘率{float(yl['positiveRate']) * 100:.0f}%")
+        parts.append("·".join(yl_bits))
+    else:
+        parts.append("昨涨停承接缺")
+    lifecycle = ev.get("lifecycle") or {}
+    parts.append("·".join(f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}"
+                          for k in ("ignition", "expansion", "crowded", "cooling")))
+    return "｜".join(parts)
+
+
+def _format_current_evidence_section(ev: dict) -> str:
+    lines = ["【当前帧证据】"]
+    idx = ev.get("indices") or {}
+    idx_bits = [f"{_INDEX_NAMES[k]} {idx[k]:+.2f}点" for k in _INDEX_KEYS if _finite(idx.get(k))]
+    lines.append("指数：" + ("、".join(idx_bits) if idx_bits else "缺失"))
+    limit = ev.get("limit") or {}
+    boards = limit.get("boards") or {}
+    lim_bits = []
+    if limit.get("ztCount") is not None:
+        lim_bits.append(f"涨停 {int(limit['ztCount'])} 家")
+    if limit.get("maxBoard"):
+        lim_bits.append(f"最高 {int(limit['maxBoard'])} 连板")
+    if any(boards.get(k) is not None for k in ("yiban", "erban", "sanban", "sibanPlus")):
+        lim_bits.append(f"（一板{boards.get('yiban', 0) or 0}/二板{boards.get('erban', 0) or 0}"
+                        f"/三板{boards.get('sanban', 0) or 0}/四板以上{boards.get('sibanPlus', 0) or 0}）")
+    if limit.get("zhabanCount") is not None:
+        lim_bits.append(f"炸板 {int(limit['zhabanCount'])} 家")
+    if limit.get("zhabanRate") is not None:
+        lim_bits.append(f"炸板率 {float(limit['zhabanRate']):.0f}%")
+    if limit.get("fengbanRate") is not None:
+        lim_bits.append(f"封板率 {float(limit['fengbanRate']):.0f}%")
+    lines.append("涨停与炸板：" + ("、".join(lim_bits) if lim_bits else "缺失"))
+    breadth = ev.get("breadth") or {}
+    missing_bit = f"（涨幅缺失 {breadth['pctMissing']}）" if breadth.get("pctMissing") else ""
+    lines.append(f"涨跌分布：共 {breadth.get('total', 0)} 只——涨停 {breadth.get('limitUp', 0)}、"
+                 f"涨≥5% {breadth.get('up5', 0)}、涨0~5% {breadth.get('up0', 0)}、"
+                 f"跌0~5% {breadth.get('down0', 0)}、跌≥5% {breadth.get('down5', 0)}{missing_bit}")
+    fund = ev.get("fund") or {}
+    if fund.get("zljeSum") is not None:
+        lines.append(f"主力资金：净额合计 {_fmt_yi(fund['zljeSum'])}（正 {fund.get('zljePos', 0)} 家"
+                     f"/负 {fund.get('zljeNeg', 0)} 家/缺失 {fund.get('zljeMissing', 0)} 家）")
+    else:
+        lines.append("主力资金：缺失")
+    turnover = ev.get("turnover") or {}
+    if turnover.get("newCount") is not None:
+        lines.append(f"新进淘汰：新进 {turnover['newCount']}、淘汰 {turnover['droppedCount']}（对比昨日）")
+    else:
+        lines.append("新进淘汰：缺失（昨日行缺失）")
+    yl = ev.get("yesterdayLimit")
+    if isinstance(yl, dict) and yl.get("count"):
+        yl_bits = [f"{int(yl['count'])} 只"]
+        if yl.get("avgChange") is not None:
+            yl_bits.append(f"平均 {float(yl['avgChange']):+.2f}%")
+        if yl.get("positiveRate") is not None:
+            yl_bits.append(f"红盘率 {float(yl['positiveRate']) * 100:.0f}%")
+        if yl.get("weakeningRate") is not None:
+            yl_bits.append(f"转弱率 {float(yl['weakeningRate']) * 100:.0f}%")
+        if yl.get("failedOrWeakRate") is not None:
+            yl_bits.append(f"失败或走弱率 {float(yl['failedOrWeakRate']) * 100:.0f}%")
+        lines.append("昨日涨停今日表现：" + "、".join(yl_bits))
+    else:
+        lines.append("昨日涨停今日表现：缺失")
+    lifecycle = ev.get("lifecycle") or {}
+    missing = ev.get("lifecycleMissing") or 0
+    missing_bit = f"（缺失 {missing}）" if missing else ""
+    lines.append("池内生命周期：" + "、".join(
+        f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}" for k in _LIFECYCLE_KEYS) + missing_bit)
+    leaders = ev.get("leaders") or []
+    if leaders:
+        leader_bits = []
+        for leader in leaders:
+            pct = leader.get("pct")
+            bits = [str(leader.get("name") or "?"),
+                    str(leader.get("theme") or "题材缺"),
+                    f"{float(pct):+.2f}%" if _finite(pct) else "涨幅缺"]
+            if leader.get("zt"):
+                bits.append("涨停")
+            if leader.get("stage"):
+                bits.append(_LIFECYCLE_NAMES.get(leader["stage"], str(leader["stage"])))
+            leader_bits.append("／".join(bits) + f"（热度 {leader.get('heat')}）")
+        lines.append("焦点个股：" + "；".join(leader_bits))
+    reasons = ev.get("reasons") or []
+    if reasons:
+        lines.append("涨停原因：" + "、".join(f"{reason} ×{count}" for reason, count in reasons))
+    return "\n".join(lines)
+
+
+def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
+                         priors: list, missing_slots: list | None = None) -> str:
+    """槽位叙事 state（Q1 当前帧 + Q2 当日序列共用一次调用的输入）。
+
+    priors = 当日早于本槽各帧的 evidence（升序）；missing_slots = 预期槽位中无帧的槽。
+    零规则输出：输入输出均不含规则五档/摘要/信号。
+    """
+    degraded = list((current.get("quality") or {}).get("degradedSources") or [])
+    if missing_slots:
+        degraded.append("缺失槽位：" + "、".join(missing_slots))
+    prior_lines = [format_evidence_line(ev) for ev in priors if isinstance(ev, dict)]
+    lines = [
+        f"{trading_date} {slot_time} 时点快照（A股短线热榜情绪观察，原始市场证据）。",
+        _format_current_evidence_section(current),
+        "【当日已走帧证据】\n" + ("\n".join(prior_lines) if prior_lines else "（本日暂无更早已落库帧）"),
+        "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
+    ]
+    return "\n".join(lines)[:4000]
+
+
+def build_day_jev_state(*, trading_date: str, evidences: list) -> str:
+    """日级叙事 state（盘后固定当日总体）。evidences = 全日各帧 evidence 升序。"""
+    if not evidences:
+        return f"{trading_date} 交易日全天热榜情绪证据轨迹：无帧证据。"
+    degraded: list[str] = []
+    for ev in evidences:
+        for item in (ev.get("quality") or {}).get("degradedSources") or []:
+            if item not in degraded:
+                degraded.append(item)
+    last = evidences[-1]
+    turnover = last.get("turnover") or {}
+    fund = last.get("fund") or {}
+    max_board = max(((ev.get("limit") or {}).get("maxBoard") or 0)
+                    for ev in evidences if isinstance(ev, dict))
+    new_bit = f"新进 {turnover['newCount']}" if turnover.get("newCount") is not None else "新进 缺"
+    dropped_bit = f"淘汰 {turnover['droppedCount']}" if turnover.get("droppedCount") is not None else "淘汰 缺"
+    lines = [
+        f"{trading_date} 交易日全天热榜情绪证据轨迹（A股短线情绪观察，原始市场证据）。",
+        "【逐帧证据】\n" + "\n".join(format_evidence_line(ev) for ev in evidences if isinstance(ev, dict)),
+        f"【当日累计】{new_bit}、{dropped_bit}（对比昨日）；主力净额合计 {_fmt_yi(fund.get('zljeSum'))}；"
+        f"最高连板峰值 {int(max_board)} 板",
+        "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
+    ]
+    return "\n".join(lines)[:6000]
+
+
 def _tag_names(tags) -> list:
     """tags 兼容两种形态：[{Name:...}] 对象数组或字符串数组。"""
     out = []

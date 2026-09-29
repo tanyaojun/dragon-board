@@ -44,17 +44,18 @@ def _v3_frame():
 
 
 def _v3_rows():
+    # sentiment 链行字段口径：change = pctChange（涨跌幅）
     return [
-        {"code": "000001", "name": "甲", "rank": 1, "heat": 99, "pctChange": 9.98,
+        {"code": "000001", "name": "甲", "rank": 1, "heat": 99, "pctChange": 9.98, "change": 9.98,
          "price": 9.66, "limitUpPrice": 9.66, "mainTheme": "算力", "reason": "算力租赁"},
-        {"code": "000002", "name": "乙", "rank": 2, "heat": 90, "pctChange": 6.0,
+        {"code": "000002", "name": "乙", "rank": 2, "heat": 90, "pctChange": 6.0, "change": 6.0,
          "price": 5.0, "limitUpPrice": None, "mainTheme": "固态电池"},
-        {"code": "000003", "name": "丙", "rank": 3, "heat": 80, "pctChange": 3.0, "mainTheme": "AI应用"},
-        {"code": "000004", "name": "丁", "rank": 4, "heat": 70, "pctChange": -1.0},
-        {"code": "000005", "name": "戊", "rank": 5, "heat": 60, "pctChange": -6.0},
-        {"code": "000006", "name": "己", "rank": 6, "heat": 50, "pctChange": None, "zlje": None},
-        {"code": "000007", "name": "庚", "rank": 7, "heat": 40, "pctChange": 1.0, "zlje": 5.0e6},
-        {"code": "000008", "name": "辛", "rank": 8, "heat": 30, "pctChange": 2.0, "zlje": -3.0e6},
+        {"code": "000003", "name": "丙", "rank": 3, "heat": 80, "pctChange": 3.0, "change": 3.0, "mainTheme": "AI应用"},
+        {"code": "000004", "name": "丁", "rank": 4, "heat": 70, "pctChange": -1.0, "change": -1.0},
+        {"code": "000005", "name": "戊", "rank": 5, "heat": 60, "pctChange": -6.0, "change": -6.0},
+        {"code": "000006", "name": "己", "rank": 6, "heat": 50, "pctChange": None, "change": None, "zlje": None},
+        {"code": "000007", "name": "庚", "rank": 7, "heat": 40, "pctChange": 1.0, "change": 1.0, "zlje": 5.0e6},
+        {"code": "000008", "name": "辛", "rank": 8, "heat": 30, "pctChange": 2.0, "change": 2.0, "zlje": -3.0e6},
     ]
 
 
@@ -119,6 +120,72 @@ def test_collect_slot_evidence_zt_count_from_boards_when_zhaban_missing():
     ev = collect_slot_evidence(frame=frame, rows=[], yesterday_rows=[], analysis_by_code={}, slot_time="09:30")
     assert ev["limit"]["ztCount"] == 68
     assert "指数缺失" in " ".join(ev["quality"]["degradedSources"])
+
+
+# ── 观察轨道 v3：槽位/日级叙事构建器 ──
+
+
+from backend.analysis.hotlist.jev_state import build_day_jev_state, build_slot_jev_state  # noqa: E402
+
+
+def _v3_current_evidence():
+    return collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time="10:30")
+
+
+def test_build_slot_jev_state_full_shape():
+    prior = collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time="10:00")
+    s = build_slot_jev_state(
+        trading_date="2026-10-08", slot_time="10:30",
+        current=_v3_current_evidence(), priors=[prior])
+    assert "2026-10-08 10:30" in s and "【当前帧证据】" in s and "【当日已走帧证据】" in s and "【数据质量】" in s
+    assert "沪指 -12.20点" in s and "中证500 -23.40点" in s
+    assert "涨停 68" in s and "最高 6 连板" in s and "炸板率 15%" in s
+    assert "新进 7" in s and "淘汰 1" in s
+    assert "主力净额" in s and "+0.02亿" in s
+    assert "昨涨停承接" in s
+    assert "点火 1" in s and "扩散 1" in s and "冷却 1" in s
+    assert "甲" in s and "算力" in s and "涨停" in s and "点火" in s
+    assert "10:00｜" in s  # 压缩行进入已走帧段
+    assert "无缺失" in s
+    assert len(s) <= 4000
+
+
+def test_build_slot_jev_state_missing_sources_and_slots():
+    deg = collect_slot_evidence(frame=None, rows=[], yesterday_rows=[], analysis_by_code={}, slot_time="10:30")
+    s = build_slot_jev_state(
+        trading_date="2026-10-08", slot_time="10:30", current=deg, priors=[],
+        missing_slots=["09:30", "10:00"])
+    assert "缺失" in s and "09:30" in s and "10:00" in s
+    assert "无缺失" not in s.split("【数据质量】")[-1]
+
+
+def test_build_slot_jev_state_no_rule_output():
+    s = build_slot_jev_state(
+        trading_date="2026-10-08", slot_time="10:30",
+        current=_v3_current_evidence(), priors=[])
+    assert "确认阶段" not in s and "规则摘要" not in s and "rawStage" not in s
+
+
+def test_build_day_jev_state_full_shape():
+    evidences = [
+        collect_slot_evidence(frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+                              analysis_by_code=_v3_analysis(), slot_time="09:30"),
+        _v3_current_evidence(),
+    ]
+    s = build_day_jev_state(trading_date="2026-10-08", evidences=evidences)
+    assert "2026-10-08" in s and "【逐帧证据】" in s
+    assert "09:30｜" in s and "10:30｜" in s
+    assert "【当日累计】" in s and "新进 7" in s and "最高连板峰值 6 板" in s
+    assert "【数据质量】" in s and len(s) <= 6000
+
+
+def test_build_day_jev_state_empty_defensive():
+    s = build_day_jev_state(trading_date="2026-10-08", evidences=[])
+    assert "无帧证据" in s
 
 
 def test_driver_label_narrative():
