@@ -2,6 +2,14 @@
 
 本文是 QuantBoard 从 SQLite 主链切换到 MongoDB 的设计方案和实施记录。2026-05-12 停服窗口已完成真实数据迁移、`.env.local` 切换、MongoDB 本地全库备份、Cloudflare R2 上传和 R2 拉回到 `restore-staging` 校验。2026-06-11 已完成一轮正式快照质量修复，详见 [mongodb-snapshot-audit-2026-06-11.md](mongodb-snapshot-audit-2026-06-11.md) 和 [mongodb-snapshot-repair-log-2026-06-11.md](mongodb-snapshot-repair-log-2026-06-11.md)。
 
+## 2026-09-29 增补：sqlite 运行链物理退役 + 生产/测试完全隔离
+
+- **代码删除**：sqlite 仓库链（repository/snapshot_repository/backtest_repository/outbox_repository/shared/theme_repository）、sqlite 归档（auto_archive）、Supabase sync runner（backup_sync/auto_sync/backup_retention）、legacy 迁移（migration/legacy_split_migration）全部删除；`models/database.py`、`models/theme_database.py` 收缩为 shim（保留 ORM Base 与状态函数）；`ArchiveService` 重写为 mongodb 单链（manifest 台账迁到 Mongo `archive_manifests` 集合，camelCase 形状与 2026-09 迁移批次一致）。`theme_migration.py` 保留（verify-themes 的 mongodb 活跃路径）；`mongodb_migration.py` 及 `cli migrate-mongodb` 保留（读 sqlite 历史源的诊断/回填工具）。
+- **配置**：`storage_backend` 默认 `mongodb`；sqlite 需显式 `QUANT_BOARD_ALLOW_SQLITE_BACKEND=1`；8000/8001 startup fail-fast。
+- **隔离**：pytest 强制 `dragon_board_test` + Redis pytest 前缀（conftest 四断言 + `get_mongodb_database` 护栏）；operations 三文件（wechat_info_diff_ingest/jev_label_driver/jev_label_driver_report）的硬编码生产库直连改走 `repository_factory.get_runtime_mongodb_database()`。
+- **测试库**：`dragon_board_test` 瘦身为「空结构+基础参照集合」（`clone_mongo_test_db.py --mode structure` 默认）；全量 pytest 2838 绿 / 0 skip（research 锚 17 处存量漂移交用户裁决）。
+- 详见 `docs/test-suite/2026-09-29-env-isolation-plan.md` 与三份调研报告。
+
 ## 目标结论
 
 - 一次性切换运行主库到 MongoDB，不做 SQLite/MongoDB 双写，不保留 SQLite 运行时 fallback，不做灰度降级。

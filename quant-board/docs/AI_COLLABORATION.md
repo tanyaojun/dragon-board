@@ -14,7 +14,7 @@
 - 默认快照：`snapshot_type=half_hour`。
 - 可选快照：`quarter_hour` 可用于细颗粒度研究，但必须显式选择，不能替代默认口径。
 - Fusion 候选池历史语义：`GET /api/backtests/{run_id}/fusion-projections` 以 `ranktrend_early_big_move_v3_lifecycle_fusion` 为唯一策略锚点，必须基于 `signals + trades + tradeEvents/openPositions` 构建 projection rows；不得按股票代码把整次回测粗暴折叠成一条。
-- 存储主链：当前运行主库是 MongoDB。SQLite/Supabase/Parquet 旧链路只保留为迁移前历史说明、审计/离线备份资产或 Mongo 模式下显式禁用的维护入口；实施状态、备份恢复和禁用清单以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
+- 存储主链：当前运行主库是 MongoDB（单主链 + R2 对象备份）。**2026-09-29 起 SQLite/Supabase 运行链代码已物理删除**，旧 API/CLI 由 410 桩直接返回；`storage_backend` 默认 mongodb，sqlite 仅剩显式 opt-in 的一次性诊断口。回测/生产写库只入 `dragon_board_quant`，pytest 数据只入 `dragon_board_test` + Redis pytest 前缀。实施状态以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
 - 当前同步批次：MongoDB 模式不再登记 SQLite/Supabase `sync_outbox`，不再运行 Supabase 自动同步、`push-backup`、`prune-backup` 或 SQLite 90 天明细归档作为生产链路；旧 API/CLI 在 Mongo 模式下应返回 410 或拒绝执行。
 - MongoDB 替换 IndexedDB/SQLite 的当前切口：Dragon Board 正式写入和读取仍只通过 QuantBoard 后端 API；`POST /api/snapshots/ingest` 写入 MongoDB，`GET /api/snapshots/frames`、`/api/snapshots/records`、`/api/snapshots/stock-rows`、`/api/snapshots/sector-rows` 从 MongoDB 读取并保持 camelCase 字段合同。IndexedDB 和历史 JSON 只作为迁移前来源，不再作为正式 fallback。
 - 题材映射当前切口：Dragon Board `ThemeDataService` 正式读口调用 QuantBoard `GET /api/themes/mapping`，数据来自 MongoDB 题材集合；旧 `themeDATA.db` 和旧浏览器 `ThemeDataDB/theme_mapping` 只作为迁移源或审计参考。
@@ -27,7 +27,7 @@
 - V12 策略口径：`theme_rotation`、`leader_theme_confirmation`、`hotlist_theme_confluence` 必须在执行信号中保留独立入场、降级、过滤和解释字段；Dragon Board 只展示 QuantBoard 研究摘要，不在根项目实现交易模拟。
 - L2 资金流口径：`estimated_l1` 只允许作为观察指标；正式资金流回测必须使用 `broker_l2` 或 `official_l2`，并在质量门禁中保留 `capital_flow_source`、`capital_flow_confidence`、`money_flow_estimated`。
 - 后端快照采集器：`backend/snapshot_collector/` 已正式切换为生产快照主链，写入 `dragonboard_live`。由**独立进程** `backend/collector_main`（默认端口 8001）承载调度器，经 DragonBoardLauncher 作为核心启动项管理；8000 Quant API 进程不再启动采集调度器（避免双采/争锁）。写入 live 数据集需显式设置 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED=1`、`QUANT_BOARD_SNAPSHOT_COLLECTOR_DATASET_ID=dragonboard_live` 和 `QUANT_BOARD_SNAPSHOT_COLLECTOR_ALLOW_LIVE_DATASET=1`，CLI 预检和 quality gate 才会放行；任意其它 dataset 仍被拒绝。Dragon Board 前端已默认关闭正式快照自动写库，手动诊断入口保留。该模块的改动必须通过以下测试链路验证：
-  - 后端 pytest：`tests/test_snapshot_collector_*.py`（覆盖 models、slots、providers、builder、quality_gate、state、service、service_factory、routes 和 repository 合同）
+  - 后端 pytest：`tests/snapshot_collector/`（2026-09-29 起测试按领域归档到 tests/ 子目录，覆盖 models、slots、providers、builder、quality_gate、state、service、service_factory、routes 和 repository 合同）
   - python-bridge 接口测试：`python -m unittest discover python-bridge -p "test_*.py"`（覆盖 `GET /api/quotes/snapshot?codes=...` 行情接口）
   - MongoDB 审计命令：`.\.venv\Scripts\python.exe -m backend.cli verify-mongodb-migration --dataset-id dragonboard_live --snapshot-type half_hour`
 - 通达信 L2 能力边界以当前 bridge 源码验证结果为准，不得把五档 L1 描述成官方客户端级 L2；任何 L2 相关功能描述必须标注已验证的 bridge 能力来源。

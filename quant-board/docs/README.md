@@ -32,6 +32,7 @@ QuantBoard 是 `dragon-board` 的量化回测与参数研究子项目。RankTren
 | [frontend.md](frontend.md) | 前端页面、交互、结果展示与联调约定 |
 | [development-roadmap.md](development-roadmap.md) | 分阶段落地路线和验收清单 |
 | [AI_COLLABORATION.md](AI_COLLABORATION.md) | AI 协作硬约束和交接规范 |
+| [test-suite/README.md](test-suite/README.md) | 测试体系：目录归档、marker 分层、MongoDB 测试库（dragon_board_test）硬隔离与克隆 |
 | [2026-05-26-longtest-v2-design.md](optimization-long-task/2026-05-26-longtest-v2-design.md) | V2 长测方案：四层决策框架设计文档 |
 | [optimization-long-task/task_plan.md](optimization-long-task/task_plan.md) | 长测优化任务计划、阶段和决策记录 |
 | [optimization-long-task/findings.md](optimization-long-task/findings.md) | 长测优化研究发现和 checkpoint 分析 |

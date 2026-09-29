@@ -1,6 +1,6 @@
 # SQLite 热库、Parquet 冷归档与对象备份实施计划
 
-> 当前状态：本文是迁移前 SQLite/Supabase/Parquet 方案的历史计划，不再代表 QuantBoard 运行主链。QuantBoard 当前运行主库已切换到 MongoDB；SQLite/Supabase/Parquet 旧链路只保留为迁移源、历史审计或离线备份参考，在 MongoDB 模式下相关 API/CLI 维护入口应显式 410 或拒绝执行。当前主库、备份恢复和禁用清单以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
+> 当前状态：本文是迁移前 SQLite/Supabase/Parquet 方案的历史计划，不再代表 QuantBoard 运行主链。**2026-09-29 起 sqlite 运行链代码已物理删除（不再是「保留但禁用」，而是不存在），仅迁移工具保留读 sqlite 历史源的能力。**QuantBoard 当前运行主库已切换到 MongoDB；SQLite/Supabase/Parquet 旧链路只保留为迁移源、历史审计或离线备份参考，在 MongoDB 模式下相关 API/CLI 维护入口应显式 410 或拒绝执行。当前主库、备份恢复和禁用清单以 [mongodb-migration-plan.md](mongodb-migration-plan.md) 为准。
 
 本文保留 QuantBoard 迁移前存储迁移、归档、备份同步计划，供追溯 SQLite 源库、Supabase 同构备份和旧 Parquet 归档语义。涉及当前 MongoDB 主库、备份恢复、快照入库、同步接口、API/CLI 合同或相关配置的改动，必须先对齐 [mongodb-migration-plan.md](mongodb-migration-plan.md)，再同步更新 [architecture.md](architecture.md)、[api-cli.md](api-cli.md)、[development-roadmap.md](development-roadmap.md) 和 [AI_COLLABORATION.md](AI_COLLABORATION.md)。
 
