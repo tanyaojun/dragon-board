@@ -789,6 +789,27 @@ class SnapshotCollectorService:
         except Exception as exc:
             warnings.append(f"hotlist_sentiment_eod_failed: {exc}")
             logging.warning("post-persist EOD sentiment failed for %s: %s", trading_date, exc)
+        # ── 第 4 步：jev 热榜情绪观察轨道（2026-10-08，gate=JEV_SENTIMENT_ENABLED 默认关）──
+        # 独立观察轨道：纯原始证据、零规则输出；失败只记 warning，绝不阻断采集与前三步。
+        try:
+            from backend.services.jev.jev_sentiment_compute import run_jev_post_persist
+
+            jev_result = run_jev_post_persist(
+                db,
+                dataset_id=dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                slot_time=slot_time,
+            )
+            jev_status = str(jev_result.get("status") or "")
+            if jev_status in ("degraded", "no_data"):
+                warnings.append(
+                    f"hotlist_jev_{jev_status}: "
+                    f"{jev_result.get('errorCode') or jev_result.get('reason')}"
+                )
+        except Exception as exc:
+            warnings.append(f"hotlist_jev_failed: {exc}")
+            logging.warning("post-persist jev failed for %s %s: %s", trading_date, slot_time, exc)
         return warnings
 
     async def arun_once_multi(

@@ -83,14 +83,14 @@ def _make_service(monkeypatch, repo: FakeRepo, analyze_impl):
     )
 
 
-def _run_slot(service, slot_time: str = "10:00"):
+def _run_slot(service, slot_time: str = "10:00", snapshot_type: str = "half_hour"):
     from backend.snapshot_collector.models import CollectorRunRequest
 
     return asyncio.run(
         service.arun_once(
             CollectorRunRequest(
                 dataset_id="dragonboard_live",
-                snapshot_type="half_hour",
+                snapshot_type=snapshot_type,
                 trading_date="2026-09-15",
                 slot_time=slot_time,
                 dry_run=False,
@@ -235,3 +235,85 @@ def test_ingest_analyze_task_groups_frames_and_swallows_failure(monkeypatch):
     _analyze_ingested_snapshots("ds", frames, rows)  # 不得抛异常
 
     assert [sid for _, sid in calls] == ["s1", "s_bad"], "逐帧分析；无行的帧跳过；失败被吞掉"
+
+
+# ── 后处理链第 4 步：jev 观察轨道（2026-10-08，gate 默认关）──
+
+
+def _mock_chain_jev_ok(monkeypatch):
+    import backend.services.jev.jev_sentiment_compute as jev_module
+
+    envelope = {"result": {"state": "Completed", "result": {
+        "model": "jev-1.13.0",
+        "answers": {
+            "frame_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+            "sequence_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+        },
+        "usage": {"input_tokens": 900, "output_tokens": 100}}}, "success": True}
+
+    def fake_call(account_id, api_token, state, questions, model="typesafe/jev", timeout=60):
+        return envelope, 900
+
+    monkeypatch.setattr(jev_module, "call_jev", fake_call)
+
+
+def test_post_persist_jev_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("JEV_SENTIMENT_ENABLED", raising=False)
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service)
+
+    assert result.status == "completed"
+    assert repo.db["hotlist_jev_sentiment"].rows == []
+    assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
+
+
+def test_post_persist_jev_slot_written_when_enabled(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "true")
+    monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
+    _mock_chain_jev_ok(monkeypatch)
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service)
+
+    assert result.status == "completed"
+    docs = repo.db["hotlist_jev_sentiment"].rows
+    assert len(docs) == 1 and docs[0]["kind"] == "slot"
+    assert docs[0]["_id"] == "dragonboard_live:half_hour:2026-09-15:10:00"
+    assert docs[0]["status"] == "ok"
+    assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
+
+
+def test_post_persist_jev_failure_only_warns(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "true")
+    monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
+    import backend.services.jev.jev_sentiment_compute as jev_module
+
+    def broken_call(*args, **kwargs):
+        raise RuntimeError("jev boom")
+
+    monkeypatch.setattr(jev_module, "call_jev", broken_call)
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service)
+
+    assert result.status == "completed", "jev 失败不得阻断采集"
+    # 前三步产物完好
+    assert _slot_doc(repo.db, "10:00") is not None
+    assert any("hotlist_jev_failed" in w for w in (repo.runs[-1].get("warnings") or []))
+
+
+def test_post_persist_jev_skips_five_minutes(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "true")
+    monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
+    _mock_chain_jev_ok(monkeypatch)
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service, slot_time="09:35", snapshot_type="five_minutes")
+
+    assert result.status == "completed"
+    assert repo.db["hotlist_jev_sentiment"].rows == [], "five_minutes 不触发 jev"
