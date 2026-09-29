@@ -65,7 +65,8 @@ def _half_hour_slots() -> list[str]:
 def _slots_of_date(db: Any, dataset_id: str, snapshot_type: str, trading_date: str) -> list[str]:
     slots = set()
     for f in db["snapshot_frames"].find(
-            {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date}):
+            {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date},
+            {"slotTime": 1}):
         slot = str(f.get("slotTime") or "")
         if len(slot) == 5 and slot[2] == ":":
             slots.add(slot)
@@ -90,7 +91,8 @@ def _latest_yesterday_rows(db: Any, dataset_id: str, snapshot_type: str, trading
     """上一交易日最新 half_hour 帧行（昨日承接/新进淘汰的对比基线）。"""
     dates = sorted({
         str(f.get("tradingDate"))
-        for f in db["snapshot_frames"].find({"datasetId": dataset_id, "type": snapshot_type})
+        for f in db["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": snapshot_type}, {"tradingDate": 1})
         if f.get("tradingDate") and str(f.get("tradingDate")) < trading_date
     })
     if not dates:
@@ -122,7 +124,7 @@ def _base_doc(*, dataset_id: str, snapshot_type: str, trading_date: str, slot_la
         "snapshotType": snapshot_type,
         "tradingDate": trading_date,
         "slotTime": "EOD" if kind == "eod" else slot_label,
-        "asOf": f"{trading_date} {slot_label}+08:00",
+        "asOf": f"{trading_date} {'EOD' if kind == 'eod' else slot_label}+08:00",
         "computedAt": int(time.time()),
         "evidenceRaw": evidence,
         "narrativeRaw": narrative,
@@ -185,7 +187,11 @@ def compute_and_upsert_for_slot(
         evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot, yesterday_rows)
         if evidence is not None:
             priors.append(evidence)
-    current_evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot_time, yesterday_rows)
+    # 当前槽复用已加载的 frame/rows（上方 no_data 判定取过），避免重复查询
+    current_evidence = collect_slot_evidence(
+        frame=frame, rows=rows, yesterday_rows=yesterday_rows,
+        analysis_by_code=_load_analysis_by_code(db, dataset_id, str(frame.get("snapshotId") or "")),
+        slot_time=slot_time)
     narrative = build_slot_jev_state(
         trading_date=trading_date, slot_time=slot_time,
         current=current_evidence or {}, priors=priors, missing_slots=missing_slots)

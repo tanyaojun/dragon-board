@@ -27,8 +27,10 @@ HALF_HOUR = "half_hour"
 
 
 def _trading_dates(db, dataset_id: str, days: int, start: str | None, end: str | None) -> list[str]:
+    """显式 start/end 时取全窗口（days 不截断）；否则取最近 N 个交易日。"""
+    explicit_window = bool(start or end)
     query: dict = {"datasetId": dataset_id, "type": HALF_HOUR}
-    if start or end:
+    if explicit_window:
         range_query: dict = {}
         if start:
             range_query["$gte"] = start
@@ -40,7 +42,7 @@ def _trading_dates(db, dataset_id: str, days: int, start: str | None, end: str |
         for row in db["snapshot_frames"].find(query, {"tradingDate": 1})
         if row.get("tradingDate")
     })
-    return dates[-days:] if days and days > 0 else dates
+    return dates[-days:] if (not explicit_window and days and days > 0) else dates
 
 
 def run(days: int = 3, dry_run: bool = False, start: str | None = None,

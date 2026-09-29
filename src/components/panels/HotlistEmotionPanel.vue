@@ -522,7 +522,6 @@ const missingDays = ref<HotlistSentimentMissingDay[]>([])
 // ---------- jev 观察轨道（独立 AI 评判，只读对照；缺失/降级如实展示，不进信号） ----------
 const jevSlots = ref<HotlistJevDoc[]>([])
 const jevEod = ref<HotlistJevDoc | null>(null)
-const jevDate = ref('')
 const jevDegradedReason = ref<string | null>(null)
 
 const version = '6.0.0'
@@ -583,7 +582,6 @@ async function loadAll() {
     slotsDegradedReason.value = slotResult.degraded ? slotResult.reason : null
     jevSlots.value = jevResult.slots
     jevEod.value = jevResult.eod
-    jevDate.value = jevResult.date
     jevDegradedReason.value = jevResult.degraded ? jevResult.reason : null
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败'

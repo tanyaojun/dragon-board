@@ -8,7 +8,9 @@ import json
 from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS,
     JEV_SLOT_QUESTIONS,
+    build_day_jev_state,
     build_driver_label_narrative,
+    build_slot_jev_state,
     collect_slot_evidence,
 )
 
@@ -123,9 +125,6 @@ def test_collect_slot_evidence_zt_count_from_boards_when_zhaban_missing():
 
 
 # ── 观察轨道 v3：槽位/日级叙事构建器 ──
-
-
-from backend.analysis.hotlist.jev_state import build_day_jev_state, build_slot_jev_state  # noqa: E402
 
 
 def _v3_current_evidence():

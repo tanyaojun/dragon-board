@@ -166,6 +166,7 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         yesterday_codes = {str(row.get("code")) for row in yesterday_rows if row.get("code")}
         turnover = {"newCount": len(today_codes - yesterday_codes),
                     "droppedCount": len(yesterday_codes - today_codes)}
+        # top_n=None = 全池口径（有意区别于规则链的池大小截断：jev 看全量昨日涨停承接）
         yesterday_limit = build_yesterday_hot_limit_evidence(yesterday_rows, rows, None)
     else:
         turnover = {"newCount": None, "droppedCount": None}
