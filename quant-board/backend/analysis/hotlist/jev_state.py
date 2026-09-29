@@ -96,7 +96,7 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     fail-visible：缺源记 quality.degradedSources，保持 None/缺失，不伪造 0。
     indices.change 为涨跌额点数（帧现口径，无百分比）。
     """
-    from backend.analysis.hotlist.sentiment import build_yesterday_hot_limit_evidence
+    from backend.analysis.hotlist.sentiment import build_yesterday_hot_limit_evidence, derive_row_flags
 
     degraded: list[str] = []
 
@@ -208,6 +208,23 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     if rows and lifecycle_missing == len(rows):
         degraded.append("生命周期join缺失")
 
+    # ── 行级标记：强资确认/风险预警（derive_row_flags 唯一来源，不重写判据）──
+    # 行级形态判定（强资=冷却阶段强资金且量能承接；风险=反转/冷却未确认/共振存疑且主力占比转负），
+    # 是规则五档的上游特征而非档位本身；只喂计数不给比率与阈值语义（保留 jev 独立解读空间）。
+    strong_money_rows = 0
+    risk_rows = 0
+    for row in rows:
+        analysis = analysis_by_code.get(str(row.get("code") or ""))
+        if not isinstance(analysis, dict):
+            continue
+        flags = derive_row_flags(analysis, row)
+        if flags.get("strongMoney"):
+            strong_money_rows += 1
+        if flags.get("risk"):
+            risk_rows += 1
+    row_flags = {"strongMoney": strong_money_rows, "risk": risk_rows,
+                 "judgeable": len(rows) - lifecycle_missing}
+
     # ── 焦点个股（热度 top）与涨停原因分布 ──
     def _sort_key(row):
         return (-(row.get("heat") or 0), row.get("rank") or 9999)
@@ -240,6 +257,7 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         "yesterdayLimit": yesterday_limit,
         "lifecycle": lifecycle,
         "lifecycleMissing": lifecycle_missing,
+        "rowFlags": row_flags,
         "leaders": leaders,
         "reasons": reasons,
         "quality": {"degradedSources": degraded},
@@ -308,6 +326,9 @@ def format_evidence_line(ev: dict) -> str:
     lifecycle = ev.get("lifecycle") or {}
     parts.append("·".join(f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}"
                           for k in ("ignition", "expansion", "crowded", "cooling")))
+    row_flags = ev.get("rowFlags") or {}
+    if row_flags:
+        parts.append(f"强资{row_flags.get('strongMoney', 0)}·风险{row_flags.get('risk', 0)}")
     return "｜".join(parts)
 
 
@@ -375,6 +396,10 @@ def _format_current_evidence_section(ev: dict) -> str:
     missing_bit = f"（缺失 {missing}）" if missing else ""
     lines.append("池内生命周期：" + "、".join(
         f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}" for k in _LIFECYCLE_KEYS) + missing_bit)
+    row_flags = ev.get("rowFlags") or {}
+    if row_flags and row_flags.get("judgeable"):
+        lines.append(f"行级标记：资金确认 {row_flags.get('strongMoney', 0)} 只（冷却阶段强资金且量能承接，攻击强度）"
+                     f"/ 风险预警 {row_flags.get('risk', 0)} 只（反转、冷却未确认、或共振存疑且主力净占比转负，撤退压力）")
     leaders = ev.get("leaders") or []
     if leaders:
         leader_bits = []
