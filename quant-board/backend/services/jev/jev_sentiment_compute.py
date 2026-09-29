@@ -159,9 +159,11 @@ def compute_and_upsert_for_slot(
     snapshot_type: str = "half_hour",
     origin: str = "collector",
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
+    """force=True 时不检查 gate（手动 API 显式意图）；token 缺失仍 degraded。"""
     enabled, token, account = _jev_config()
-    if not enabled:
+    if not enabled and not force:
         return {"written": False, "skipped": True, "reason": "jev_disabled"}
     frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
     rows = _load_rows(db, dataset_id, str(frame.get("snapshotId") or "")) if frame else []
@@ -230,9 +232,10 @@ def compute_and_upsert_for_day(
     snapshot_type: str = "half_hour",
     origin: str = "collector",
     dry_run: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     enabled, token, account = _jev_config()
-    if not enabled:
+    if not enabled and not force:
         return {"written": False, "skipped": True, "reason": "jev_disabled"}
     slots = [slot for slot in _slots_of_date(db, dataset_id, snapshot_type, trading_date)]
     base = _base_doc(dataset_id=dataset_id, snapshot_type=snapshot_type, trading_date=trading_date,
