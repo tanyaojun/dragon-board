@@ -52,9 +52,46 @@
                     :title="`盘中出现「${pendingBadge.rawStage}」迹象（自 ${pendingBadge.pendingSince} 起），连续 ${pendingBadge.confirmSlots} 槽成立后切换`">
                     情绪波动：现{{ pendingBadge.rawStage }}迹象
                   </span>
+                  <span v-if="jevLatestSequenceName" class="jev-chip" :title="jevLatestTitle">
+                    🤖 jev 日内序列 {{ jevLatestSequenceName }}<template
+                      v-if="jevLatestProbability != null">（P{{ Math.round(jevLatestProbability * 100) }}%）</template><template
+                      v-if="jevLatestFrameName && jevLatestFrameName !== jevLatestSequenceName">｜当前帧 {{ jevLatestFrameName }}</template><template
+                      v-if="jevLatestTemperature != null">｜温 {{ jevLatestTemperature }}·挤 {{ jevLatestCrowding ?? '--' }}</template>
+                  </span>
                 </div>
                 <div class="hero-summary">盘面证据：{{ doc.summary }}</div>
               </div>
+            </div>
+
+            <!-- ② jev 观察轨道（2026-10-08）：独立 AI 评判，原始市场证据，仅供盘中对照论证 -->
+            <div class="sub-block jev-block">
+              <div class="block-header">
+                <span class="block-title">🤖 jev 观察轨道（AI 独立评判 · 仅供对照论证）</span>
+                <span class="section-count">{{ jevRows.length }}</span>
+              </div>
+              <div v-if="jevDegradedReason" class="note-line">
+                jev 轨道不可用：{{ jevDegradedReason }}（独立采集轨道，可能未开启）
+              </div>
+              <div v-else-if="!jevRows.length" class="note-line">暂无 jev 评判数据（独立采集轨道，可能未开启）</div>
+              <template v-else>
+                <div class="jev-grid">
+                  <div v-for="row in jevRows" :key="row.slotTime" class="jev-row"
+                    :class="{ 'jev-row-degraded': row.degraded, 'jev-row-nodata': row.noData }" :title="row.title">
+                    <span class="jev-slot">{{ row.slotTime }}</span>
+                    <span class="jev-main">序列 {{ row.sequenceName || '缺失' }}</span>
+                    <span v-if="row.frameName && row.frameName !== row.sequenceName" class="jev-sub">帧 {{ row.frameName }}</span>
+                    <span class="jev-scores">温 {{ row.temperature ?? '--' }}·挤 {{ row.crowding ?? '--' }}</span>
+                    <span v-if="row.degraded" class="jev-flag">降级</span>
+                    <span v-else-if="row.noData" class="jev-flag">无数据</span>
+                  </div>
+                </div>
+                <div v-if="jevEodRow && jevEodRow.dayName" class="jev-eod">
+                  📌 日级总体（盘后固定）：{{ jevEodRow.dayName }}<template
+                    v-if="jevEodRow.patternName"> · {{ jevEodRow.patternName }}</template><template
+                    v-if="jevEodRow.temperature != null"> · 温度 {{ jevEodRow.temperature }}</template><template
+                    v-if="jevEodRow.crowding != null"> · 拥挤 {{ jevEodRow.crowding }}</template>
+                </div>
+              </template>
             </div>
 
             <div class="metrics-grid">
@@ -438,6 +475,13 @@ import {
   type HotlistLimitStockKind,
   type HotlistSentimentMissingDay,
 } from '@/services/hotlist/hotlistSentimentApi'
+import {
+  fetchHotlistJevSeries,
+  jevChoiceName,
+  jevChoiceProbability,
+  jevScore,
+} from '@/services/hotlist/hotlistJevApi'
+import type { HotlistJevDoc } from '@/types/hotlistJev'
 import HotlistLimitStocksPanel from '@/components/panels/HotlistLimitStocksPanel.vue'
 import {
   HOT_LIST_STAGE_LABELS,
@@ -475,6 +519,11 @@ const slots = ref<HotListSentimentDayDoc[]>([])
 const slotsTradingDate = ref('')
 const slotsDegradedReason = ref<string | null>(null)
 const missingDays = ref<HotlistSentimentMissingDay[]>([])
+// ---------- jev 观察轨道（独立 AI 评判，只读对照；缺失/降级如实展示，不进信号） ----------
+const jevSlots = ref<HotlistJevDoc[]>([])
+const jevEod = ref<HotlistJevDoc | null>(null)
+const jevDate = ref('')
+const jevDegradedReason = ref<string | null>(null)
 
 const version = '6.0.0'
 
@@ -504,10 +553,13 @@ async function loadAll() {
   loading.value = true
   loadError.value = null
   try {
-    const [series, slotResult] = await Promise.all([
+    const [series, slotResult, jevResult] = await Promise.all([
       fetchHotlistSentimentSeries(3),
       fetchHotlistSentimentSlots().catch((err) => ({
         items: [], tradingDate: '', degraded: true, reason: err?.message || '加载失败',
+      })),
+      fetchHotlistJevSeries().catch(() => ({
+        date: '', slots: [], eod: null, degraded: true, reason: '加载失败',
       })),
     ])
     if (series.degraded || !series.items.length) {
@@ -529,6 +581,10 @@ async function loadAll() {
     slots.value = slotResult.items
     slotsTradingDate.value = slotResult.tradingDate
     slotsDegradedReason.value = slotResult.degraded ? slotResult.reason : null
+    jevSlots.value = jevResult.slots
+    jevEod.value = jevResult.eod
+    jevDate.value = jevResult.date
+    jevDegradedReason.value = jevResult.degraded ? jevResult.reason : null
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败'
     doc.value = null
@@ -544,6 +600,51 @@ watch(
   },
   { immediate: true },
 )
+
+// ---------- jev 观察轨道展示投影（缺失返回 null，不伪造档位/0 分） ----------
+const jevLatest = computed(() =>
+  jevSlots.value.length ? jevSlots.value[jevSlots.value.length - 1] : null)
+const jevLatestSequenceName = computed(() =>
+  jevLatest.value ? jevChoiceName(jevLatest.value, 'sequence_stage') : null)
+const jevLatestFrameName = computed(() =>
+  jevLatest.value ? jevChoiceName(jevLatest.value, 'frame_stage') : null)
+const jevLatestProbability = computed(() =>
+  jevLatest.value ? jevChoiceProbability(jevLatest.value, 'sequence_stage') : null)
+const jevLatestTemperature = computed(() =>
+  jevLatest.value ? jevScore(jevLatest.value, 'temperature') : null)
+const jevLatestCrowding = computed(() =>
+  jevLatest.value ? jevScore(jevLatest.value, 'crowding') : null)
+const jevLatestTitle = computed(() => {
+  const slot = jevLatest.value
+  if (!slot) return ''
+  const parts = [`槽位 ${slot.slotTime || '--'}`]
+  if (slot.model) parts.push(`模型 ${slot.model}`)
+  if (slot.status === 'degraded') parts.push(`降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`)
+  return parts.join(' · ')
+})
+const jevRows = computed(() =>
+  jevSlots.value.map((slot) => ({
+    slotTime: slot.slotTime || '--',
+    sequenceName: jevChoiceName(slot, 'sequence_stage'),
+    frameName: jevChoiceName(slot, 'frame_stage'),
+    temperature: jevScore(slot, 'temperature'),
+    crowding: jevScore(slot, 'crowding'),
+    degraded: slot.status === 'degraded',
+    noData: slot.status === 'no_data',
+    title: slot.status === 'degraded'
+      ? `降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`.trim()
+      : '',
+  })),
+)
+const jevEodRow = computed(() => {
+  if (!jevEod.value) return null
+  return {
+    dayName: jevChoiceName(jevEod.value, 'day_stage'),
+    patternName: jevChoiceName(jevEod.value, 'day_pattern'),
+    temperature: jevScore(jevEod.value, 'day_temperature'),
+    crowding: jevScore(jevEod.value, 'day_crowding'),
+  }
+})
 
 // ---------- 基础格式化（fail-visible：缺失显示 --，不伪造 0） ----------
 function formatNullableCount(value?: number | null): string {
@@ -2407,6 +2508,54 @@ const trackNote = computed(() => {
   color: var(--text-secondary);
 }
 .note-line { font-size: 11px; color: var(--text-secondary); margin-top: 8px; }
+
+/* ── jev 观察轨道（2026-10-08）：独立 AI 评判对照，缺失/降级如实展示 ── */
+.jev-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: rgba(127, 140, 141, 0.08);
+}
+.jev-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+.jev-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  font-size: 12px;
+}
+.jev-row-degraded { border-color: rgba(243, 156, 18, 0.45); }
+.jev-row-nodata { opacity: 0.6; }
+.jev-slot { font-weight: 600; color: var(--text-primary); }
+.jev-main { color: var(--text-primary); }
+.jev-sub, .jev-scores { color: var(--text-secondary); font-size: 11px; }
+.jev-flag {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: #f39c12;
+  border: 1px solid rgba(243, 156, 18, 0.45);
+}
+.jev-eod {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  padding: 6px 8px;
+  border-left: 2px solid rgba(52, 152, 219, 0.6);
+}
 .chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   font-size: 10px;

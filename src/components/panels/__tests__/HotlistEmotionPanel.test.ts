@@ -269,4 +269,32 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('fetchHotlistSentimentSeries')
     expect(source).toContain('fetchHotlistSentimentSlots')
   })
+
+  // ── jev 观察轨道（2026-10-08）：独立 AI 评判对照，缺失/降级如实展示 ──
+
+  test('jev 观察轨道：读口接入 + 顶部并列 chip + 逐槽区块 + 日级总固定', () => {
+    const source = panelSource()
+
+    expect(source).toContain('fetchHotlistJevSeries')
+    expect(source).toContain("jevChoiceName(jevLatest.value, 'sequence_stage')")
+    expect(source).toContain("jevChoiceName(jevLatest.value, 'frame_stage')")
+    expect(source).toContain('jev-chip')
+    expect(source).toContain('jev 日内序列')
+    expect(source).toContain('jev 观察轨道')
+    expect(source).toContain('jev-row-degraded')
+    expect(source).toContain('jev-row-nodata')
+    expect(source).toContain('日级总体（盘后固定）')
+    // 缺失/未开启如实展示，不伪造数据
+    expect(source).toContain('暂无 jev 评判数据')
+    expect(source).toContain("sequenceName: jevChoiceName(slot, 'sequence_stage')")
+    expect(source).toContain("row.sequenceName || '缺失'")
+  })
+
+  test('jev 轨道零规则输出：不读规则情绪文档字段作 jev 展示源', () => {
+    const source = panelSource()
+
+    // jev 展示只来自 hotlistJevApi（独立轨道），不把规则 doc 的 stage 当 jev 结论
+    expect(source).toContain("from '@/services/hotlist/hotlistJevApi'")
+    expect(source).toContain("from '@/types/hotlistJev'")
+  })
 })
