@@ -555,18 +555,20 @@ class TestLiveDatasetBlocked:
 class TestSettingsPreserveExistingDefaults:
     """Adding collector fields must not change existing non-collector defaults."""
 
-    def test_storage_backend_default_preserved(self) -> None:
+    def test_storage_backend_default_preserved(self, monkeypatch: Any) -> None:
+        # 保护 Settings 类默认值；conftest 会强制 env=mongodb，需先摘除再验证类默认
+        # 2026-09-29 隔离裁决：默认后端翻转为 mongodb，sqlite 需显式 opt-in
+        monkeypatch.delenv("QUANT_BOARD_STORAGE_BACKEND", raising=False)
         settings = Settings()
-        assert settings.storage_backend == "sqlite"
+        assert settings.storage_backend == "mongodb"
 
     def test_mongodb_database_default_preserved(self, monkeypatch: Any) -> None:
         monkeypatch.delenv("QUANT_BOARD_MONGODB_DATABASE", raising=False)
         settings = Settings()
         assert settings.mongodb_database == "dragon_board_quant"
 
-    def test_backup_batch_size_default_preserved(self) -> None:
-        settings = Settings()
-        assert settings.backup_auto_sync_batch_size == 50
+    # 2026-09-29：backup_auto_sync_batch_size 已随 Supabase 备份链整链删除（D1 裁决），
+    # 原 test_backup_batch_size_default_preserved 失去被测对象，一并移除。
 
 
 # ── Repository port tests ─────────────────────────────────────────────────────

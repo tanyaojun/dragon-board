@@ -4,9 +4,7 @@ from sqlalchemy import create_engine, inspect, text
 
 from backend.analysis.theme.support_index import build_theme_candidate_support, build_theme_support_index
 from backend.core.backtest.strategy import RankTrendCandidateStrategy, StrategyInput
-from backend.data.models.database import _apply_column_migrations
 from backend.data.models.models import BacktestSignal, SnapshotSectorRowModel, SnapshotStockRowModel
-from backend.data.repositories.repository import Repository
 
 
 def _ranktrend_final(signal: str = "buy") -> dict:
@@ -112,59 +110,6 @@ def test_theme_support_ignores_non_finite_numeric_values() -> None:
 
     assert support["themeSupportScore"] == 0
     assert support["riskFlags"] == []
-
-
-def test_column_migrations_are_idempotent_for_existing_sqlite_columns() -> None:
-    engine = create_engine("sqlite:///:memory:")
-    with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE sample (id TEXT PRIMARY KEY)"))
-
-    migrations = [("sample", "theme_role", "VARCHAR(32)")]
-    _apply_column_migrations(engine, migrations)
-    _apply_column_migrations(engine, migrations)
-
-    columns = {column["name"] for column in inspect(engine).get_columns("sample")}
-    assert "theme_role" in columns
-
-
-def test_repository_persists_theme_snapshot_columns() -> None:
-    stock = SnapshotStockRowModel(
-        dataset_id="ds_theme",
-        row_id="snap_1:000001",
-        snapshot_id="snap_1",
-        type="half_hour",
-        trading_date="2026-05-05",
-        timestamp=1,
-        code="000001",
-        name="样本股",
-        rank=1,
-        theme_contribution=16,
-        theme_role="leader",
-        theme_exposure_weight=1,
-        theme_risk_flags_json='["riskPenalty:2"]',
-    )
-    sector = SnapshotSectorRowModel(
-        dataset_id="ds_theme",
-        row_id="snap_1:hot_theme:AI",
-        snapshot_id="snap_1",
-        type="half_hour",
-        trading_date="2026-05-05",
-        timestamp=1,
-        entity_type="hot_theme",
-        entity_key="AI",
-        entity_name="人工智能",
-        rank=1,
-        momentum_score=77,
-        crowding_risk=21,
-        rotation_state="mainline",
-        theme_quality_flags_json='[{"code":"low_sample"}]',
-    )
-
-    assert Repository.local_stock_to_bundle_dict(stock)["themeContribution"] == 16
-    sector_dict = Repository.local_sector_to_bundle_dict(sector)
-    assert sector_dict["momentumScore"] == 77
-    assert sector_dict["rotationState"] == "mainline"
-    assert sector_dict["themeQualityFlags"] == [{"code": "low_sample"}]
 
 
 def test_strategy_adds_theme_explanation_without_execution_by_default() -> None:

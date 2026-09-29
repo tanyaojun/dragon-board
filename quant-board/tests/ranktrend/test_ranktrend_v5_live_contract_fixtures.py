@@ -6,7 +6,7 @@ from pathlib import Path
 from backend.core.backtest.execution import TradeSimulator
 
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ranktrend_v5_live_execution_contract.json"
+FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "ranktrend_v5_live_execution_contract.json"
 
 
 def _load_fixture() -> dict:

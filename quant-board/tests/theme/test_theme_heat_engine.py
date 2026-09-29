@@ -8,7 +8,7 @@ from backend.analysis.theme.heat import FACTOR_VERSION, compute_theme_heat
 
 def test_compute_theme_heat_matches_v3_contract() -> None:
     """v3 起锁定 factors[].heatLevel（rank 百分位相对分）；v2 fixture 不可变。"""
-    fixture_path = Path(__file__).parent / "fixtures" / "theme_heat_market_golden_v3.json"
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "theme_heat_market_golden_v3.json"
     case = json.loads(fixture_path.read_text(encoding="utf-8"))
 
     result = compute_theme_heat(**case["input"])

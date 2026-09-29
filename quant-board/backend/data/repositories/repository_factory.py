@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from backend.data.repositories.mongo_research_repository import MongoResearchRepository
 from backend.data.migrations.mongodb_migration import get_mongodb_database
-from backend.data.repositories.repository import Repository
 from backend.core.settings import get_settings
 
 
@@ -15,18 +13,18 @@ _runtime_mongodb_database: Any | None = None
 
 
 def create_repository(session: Session | None, *, enable_backup: bool = True) -> Any:
+    """mongodb 单链唯一仓库入口（sqlite Repository 已随 2026-09-29 退役删除）。"""
     settings = get_settings()
     if settings.storage_backend == "mongodb":
         return MongoResearchRepository(get_runtime_mongodb_database())
-    return Repository(session, enable_backup=enable_backup)
+    raise RuntimeError("sqlite 存储链已退役（2026-09-29）：请使用 mongodb 后端")
 
 
 def get_runtime_mongodb_database() -> Any:
     global _runtime_mongodb_database
     if _runtime_mongodb_database is None:
         settings = get_settings()
-        if os.environ.get("PYTEST_CURRENT_TEST") and settings.mongodb_database == "dragon_board_quant":
-            raise RuntimeError("pytest must not connect to production MongoDB database dragon_board_quant")
+        # pytest 库护栏统一在 get_mongodb_database 内实施（含生产库禁连与 test 库白名单）
         _runtime_mongodb_database = get_mongodb_database(
             settings.mongodb_uri,
             settings.mongodb_database,

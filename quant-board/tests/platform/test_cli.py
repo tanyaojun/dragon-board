@@ -1,5 +1,5 @@
 """CLI subcommand tests: run-ranktrend, run-longtest-baselines,
-export-report, migrate-snapshots, verify-themes.
+export-report, verify-themes.
 
 Extracted from tests/test_quant_board.py.
 """
@@ -15,7 +15,6 @@ from backend.cli import (
     build_longtest_baseline_payloads,
     build_parser,
     build_ranktrend_payload,
-    cmd_migrate_snapshots,
     cmd_verify_themes,
     summarize_longtest_baseline,
 )
@@ -524,27 +523,11 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     assert build_dataset_args.func.__name__ == "cmd_build_dataset"
     assert build_dataset_args.source_dataset_id == "dragonboard_live"
     assert build_dataset_args.dry_run is True
-    assert parser.parse_args(["push-backup"]).func.__name__ == "cmd_push_backup"
-    push_backup_args = parser.parse_args(["push-backup", "--full-history"])
-    assert push_backup_args.func.__name__ == "cmd_push_backup"
-    assert push_backup_args.full_history is True
-    assert parser.parse_args(["push-outbox", "--limit", "7"]).limit == 7
-    assert parser.parse_args(["pull-backup"]).func.__name__ == "cmd_pull_backup"
-    assert parser.parse_args(["smoke-backup"]).func.__name__ == "cmd_smoke_backup"
-    prune_backup_args = parser.parse_args(["prune-backup", "--dry-run"])
-    assert prune_backup_args.func.__name__ == "cmd_prune_backup"
-    assert prune_backup_args.dry_run is True
     after_market_args = parser.parse_args(["after-market-once", "--archive-limit", "3", "--backup-limit", "2", "--dry-run"])
     assert after_market_args.func.__name__ == "cmd_after_market_once"
     assert after_market_args.archive_limit == 3
     assert after_market_args.backup_limit == 2
     assert after_market_args.dry_run is True
-    backup_day_args = parser.parse_args(["backup-snapshot-day", "--trading-date", "2026-05-06", "--dry-run"])
-    assert backup_day_args.func.__name__ == "cmd_backup_snapshot_day"
-    assert backup_day_args.dataset_id == "dragonboard_live"
-    assert backup_day_args.snapshot_type == "half_hour"
-    assert backup_day_args.trading_date == "2026-05-06"
-    assert backup_day_args.dry_run is True
     compare_args = parser.parse_args(["compare-backtests", "--run-ids", "bt_1", "bt_2", "--metrics", "totalReturn,winRate"])
     assert compare_args.func.__name__ == "cmd_compare_backtests"
     assert compare_args.run_ids == ["bt_1", "bt_2"]
@@ -562,48 +545,8 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
     )
     assert gzip_args.format == "json.gz"
 
-    bundle_path = tmp_path / "migration.json"
-    bundle_path.write_text(
-        json.dumps(
-            {
-                "items": [
-                    {
-                        "id": "half_hour:2026-04-25:10:00",
-                        "type": "half_hour",
-                        "tradingDate": "2026-04-25",
-                        "slotTime": "10:00",
-                        "timestamp": 1777092000000,
-                        "payload": {
-                            "type": "half_hour",
-                            "tradingDate": "2026-04-25",
-                            "slotTime": "10:00",
-                            "timestamp": 1777092000000,
-                            "hotlist": [{"code": "600001", "rank": 1}],
-                        },
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
     captured: list[dict[str, object]] = []
     monkeypatch.setattr("backend.cli.print_json", lambda payload: captured.append(payload))
-    args = parser.parse_args(
-        [
-            "migrate-snapshots",
-            "--path",
-            str(bundle_path),
-            "--dataset-id",
-            "cli_migration_dry_run",
-            "--dry-run",
-        ]
-    )
-    cmd_migrate_snapshots(args)
-    assert captured
-    assert captured[0]["ok"] is True
-    assert captured[0]["report"]["dry_run"] is True
-    assert captured[0]["report"]["scanned"] == 1
-
     theme_path = tmp_path / "themes.json"
     theme_payload = {
         "version": "cli-theme-test",

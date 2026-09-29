@@ -494,7 +494,7 @@ def test_load_hotlist_anchor_samples_reads_minimal_contract(tmp_path) -> None:
 
 
 def test_hotlist_anchor_fixture_keeps_tfwd_borderline_until_bar_is_confirmed() -> None:
-    fixture_path = Path(__file__).parent / "fixtures" / "ranktrend_hotlist_anchor_samples.json"
+    fixture_path = Path(__file__).resolve().parents[1] / "fixtures" / "ranktrend_hotlist_anchor_samples.json"
 
     anchors = load_hotlist_anchor_samples(fixture_path)
     tfwd = next(item for item in anchors if item["code"] == "002156")

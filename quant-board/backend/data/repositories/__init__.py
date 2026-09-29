@@ -1,4 +1,2 @@
-from backend.data.repositories.repository import Repository
-from backend.data.repositories.snapshot_repository import SnapshotRepositoryMixin
-from backend.data.repositories.backtest_repository import BacktestRepositoryMixin
-from backend.data.repositories.outbox_repository import OutboxRepositoryMixin
+# 2026-09-29 sqlite 仓库链退役：本包不再聚合导出任何 Repository。
+# 运行时入口统一走 repository_factory.create_repository / get_runtime_mongodb_database。

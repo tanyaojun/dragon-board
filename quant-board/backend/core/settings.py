@@ -72,19 +72,7 @@ class Settings(BaseModel):
     snapshot_database_url: str = Field(default="")
     research_database_url: str = Field(default="")
     theme_database_url: str = Field(default="")
-    supabase_url: str = Field(default="")
-    supabase_secret_key: str = Field(default="")
-    backup_mirror_enabled: bool = Field(default=True)
-    backup_timeout_seconds: float = Field(default=10.0)
-    backup_auto_sync_enabled: bool = Field(default=False)
-    backup_auto_sync_interval_seconds: float = Field(default=60.0)
-    backup_auto_sync_initial_delay_seconds: float = Field(default=10.0)
-    backup_auto_sync_batch_size: int = Field(default=50)
-    supabase_retention_enabled: bool = Field(default=False)
-    supabase_retention_keep_trading_days: int = Field(default=10)
-    supabase_retention_dataset_ids: str = Field(default="dragonboard_live")
-    supabase_retention_interval_seconds: float = Field(default=86400.0)
-    supabase_retention_initial_delay_seconds: float = Field(default=120.0)
+    # Supabase 备份链已于 2026-09-29 随 supabase_homomorphic.py 删除，相关字段/解析一并移除
     archive_retention_trading_days: int = Field(default=90)
     archive_parquet_compression: str = Field(default="zstd")
     archive_auto_enabled: bool = Field(default=False)
@@ -118,7 +106,10 @@ class Settings(BaseModel):
     mongodb_remote_backup_keep: int = Field(default=4)
     # MongoDB Database Tools（mongodump/mongorestore）所在 bin 目录，备份引擎用绝对路径调用
     mongodb_tools_bin: Path = Path(r"D:\APP_SOFT\MongoDB\tools\bin")
-    storage_backend: str = Field(default="sqlite")
+    # 2026-09-29 隔离裁决：sqlite 链退役，mongodb 是唯一默认后端；裸环境不再静默落 sqlite。
+    storage_backend: str = Field(default="mongodb")
+    # sqlite 仅剩一次性本地诊断用途，必须显式 opt-in（QUANT_BOARD_ALLOW_SQLITE_BACKEND=1）
+    allow_sqlite_backend: bool = Field(default=False)
     redis_url: str = Field(default="redis://127.0.0.1:6379/0")
     redis_key_prefix: str = Field(default="hellobiga:dragon-board:local")
     snapshot_cache_enabled: bool = Field(default=True)
@@ -183,6 +174,8 @@ class Settings(BaseModel):
     data_source: DataSourceConfig = Field(default_factory=DataSourceConfig)
 
     def model_post_init(self, __context: Any) -> None:
+        # allow_sqlite_backend 必须先于下方 sqlite URL 兜底解析（A1：兜底仅 opt-in 后填充）
+        self.allow_sqlite_backend = _env_bool("QUANT_BOARD_ALLOW_SQLITE_BACKEND", self.allow_sqlite_backend)
         old_db_url = os.environ.get("QUANT_BOARD_DATABASE_URL")
         if old_db_url and not os.environ.get("QUANT_BOARD_SNAPSHOT_DATABASE_URL"):
             if "quant_board.db" in old_db_url.replace("\\", "/"):
@@ -201,66 +194,38 @@ class Settings(BaseModel):
                     DeprecationWarning,
                     stacklevel=2,
                 )
+        # 2026-09-29 隔离裁决（A1）：sqlite URL 兜底仅在显式 opt-in 后填充，否则留空串。
+        # sqlite 引擎已随链退役删除，空值即 fail-visible，不再静默指向 warehouse .db；
+        # 显式 env（SNAPSHOT/RESEARCH/THEME_DATABASE_URL、deprecated DATABASE_URL）仍照常生效。
         if not self.snapshot_database_url:
             self.snapshot_database_url = (
                 os.environ.get("QUANT_BOARD_SNAPSHOT_DATABASE_URL")
                 or old_db_url
-                or f"sqlite:///{self.warehouse_dir / 'quant_board_snapshots.db'}"
+                or (
+                    f"sqlite:///{self.warehouse_dir / 'quant_board_snapshots.db'}"
+                    if self.allow_sqlite_backend
+                    else ""
+                )
             )
         if not self.research_database_url:
             self.research_database_url = (
                 os.environ.get("QUANT_BOARD_RESEARCH_DATABASE_URL")
-                or f"sqlite:///{self.warehouse_dir / 'quant_board_research.db'}"
+                or (
+                    f"sqlite:///{self.warehouse_dir / 'quant_board_research.db'}"
+                    if self.allow_sqlite_backend
+                    else ""
+                )
             )
         if not self.theme_database_url:
             self.theme_database_url = (
                 os.environ.get("QUANT_BOARD_THEME_DATABASE_URL")
-                or f"sqlite:///{self.warehouse_dir / 'themeDATA.db'}"
+                or (
+                    f"sqlite:///{self.warehouse_dir / 'themeDATA.db'}"
+                    if self.allow_sqlite_backend
+                    else ""
+                )
             )
         self.database_url = self.snapshot_database_url
-        self.supabase_url = os.environ.get("SUPABASE_URL", self.supabase_url).rstrip("/")
-        self.supabase_secret_key = os.environ.get("SUPABASE_SECRET_KEY", self.supabase_secret_key)
-        self.backup_mirror_enabled = _env_bool(
-            "QUANT_BOARD_ENABLE_SUPABASE_BACKUP",
-            bool(self.supabase_url and self.supabase_secret_key),
-        )
-        self.backup_timeout_seconds = _env_float("QUANT_BOARD_BACKUP_TIMEOUT_SECONDS", self.backup_timeout_seconds)
-        self.backup_auto_sync_enabled = _env_bool("QUANT_BOARD_AUTO_SYNC_ENABLED", self.backup_auto_sync_enabled)
-        self.backup_auto_sync_interval_seconds = max(
-            5.0,
-            _env_float("QUANT_BOARD_AUTO_SYNC_INTERVAL_SECONDS", self.backup_auto_sync_interval_seconds),
-        )
-        self.backup_auto_sync_initial_delay_seconds = max(
-            0.0,
-            _env_float("QUANT_BOARD_AUTO_SYNC_INITIAL_DELAY_SECONDS", self.backup_auto_sync_initial_delay_seconds),
-        )
-        self.backup_auto_sync_batch_size = max(
-            1,
-            _env_int("QUANT_BOARD_AUTO_SYNC_BATCH_SIZE", self.backup_auto_sync_batch_size),
-        )
-        self.supabase_retention_enabled = _env_bool(
-            "QUANT_BOARD_SUPABASE_RETENTION_ENABLED",
-            self.supabase_retention_enabled,
-        )
-        self.supabase_retention_keep_trading_days = max(
-            1,
-            _env_int("QUANT_BOARD_SUPABASE_RETENTION_KEEP_TRADING_DAYS", self.supabase_retention_keep_trading_days),
-        )
-        self.supabase_retention_dataset_ids = os.environ.get(
-            "QUANT_BOARD_SUPABASE_RETENTION_DATASET_IDS",
-            self.supabase_retention_dataset_ids,
-        )
-        self.supabase_retention_interval_seconds = max(
-            60.0,
-            _env_float("QUANT_BOARD_SUPABASE_RETENTION_INTERVAL_SECONDS", self.supabase_retention_interval_seconds),
-        )
-        self.supabase_retention_initial_delay_seconds = max(
-            0.0,
-            _env_float(
-                "QUANT_BOARD_SUPABASE_RETENTION_INITIAL_DELAY_SECONDS",
-                self.supabase_retention_initial_delay_seconds,
-            ),
-        )
         archive_dir = os.environ.get("QUANT_BOARD_ARCHIVE_DIR")
         if archive_dir:
             self.archive_dir = Path(archive_dir)
@@ -354,6 +319,12 @@ class Settings(BaseModel):
         self.storage_backend = os.environ.get("QUANT_BOARD_STORAGE_BACKEND", self.storage_backend).strip().lower()
         if self.storage_backend not in {"sqlite", "mongodb"}:
             raise ValueError(f"unsupported QUANT_BOARD_STORAGE_BACKEND: {self.storage_backend}")
+        # allow_sqlite_backend 已在 model_post_init 顶部解析（先于 sqlite URL 兜底）
+        if self.storage_backend == "sqlite" and not self.allow_sqlite_backend:
+            raise RuntimeError(
+                "生产禁止 sqlite 存储链：默认后端为 mongodb/dragon_board_quant；"
+                "如确需 sqlite（仅限一次性本地诊断），显式设置 QUANT_BOARD_ALLOW_SQLITE_BACKEND=1"
+            )
         self.redis_url = os.environ.get("QUANT_BOARD_REDIS_URL", self.redis_url)
         self.redis_key_prefix = os.environ.get("QUANT_BOARD_REDIS_KEY_PREFIX", self.redis_key_prefix).strip(":")
         self.snapshot_cache_enabled = _env_bool(
@@ -575,6 +546,18 @@ class Settings(BaseModel):
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.archive_dir.mkdir(parents=True, exist_ok=True)
         self.mongodb_backup_dir.mkdir(parents=True, exist_ok=True)
+
+
+def assert_production_storage_backend(settings: "Settings | None" = None) -> None:
+    """生产入口 fail-fast（8000 API / 8001 采集器 startup 调用）：
+    sqlite 后端未显式 opt-in 即拒绝启动，防止裸环境静默写 warehouse sqlite。"""
+    resolved = settings if settings is not None else get_settings()
+    if resolved.storage_backend != "mongodb" and not getattr(resolved, "allow_sqlite_backend", False):
+        raise RuntimeError(
+            "生产入口禁止 sqlite 存储链：请使用 mongodb/dragon_board_quant，"
+            "或显式设置 QUANT_BOARD_ALLOW_SQLITE_BACKEND=1（仅限一次性本地诊断）"
+        )
+    return None
 
 
 def _load_yaml_config() -> dict[str, Any]:

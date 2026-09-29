@@ -70,7 +70,7 @@ import backend.analysis.ranktrend.trend.lifecycle as _lifecycle_mod
 import backend.analysis.ranktrend.engine.runtime as _runtime_mod
 from backend.analysis.ranktrend.engine import RankTrendPythonEngine
 from backend.analysis.ranktrend.engine.config import RankTrendConfig
-from tests.test_ranktrend_golden_alignment import _make_frames
+from tests.ranktrend.test_ranktrend_golden_alignment import _make_frames
 
 
 def _force_actions(monkeypatch, veto_frames: set[int]):

@@ -6,9 +6,11 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from backend.core.settings import get_settings
 from backend.data.models.theme_database import ThemeBase
-from backend.data.repositories.theme_repository import ThemeRepository
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.data.migrations.theme_migration import ThemeMigrationError, ThemeMigrationService
+
 
 
 def _theme_session(tmp_path: Path):
@@ -46,104 +48,23 @@ def _mapping_payload() -> dict:
     }
 
 
-def test_theme_database_initialization_is_repeatable(tmp_path: Path) -> None:
-    engine = create_engine(f"sqlite:///{tmp_path / 'themeDATA.db'}")
-
-    ThemeBase.metadata.create_all(bind=engine)
-    ThemeBase.metadata.create_all(bind=engine)
-
-    assert {"theme_metadata", "themes", "theme_stock_mappings"} <= set(ThemeBase.metadata.tables)
-    engine.dispose()
 
 
-def test_import_theme_mapping_is_idempotent_and_keeps_reverse_lookup_consistent(tmp_path: Path) -> None:
-    engine, session = _theme_session(tmp_path)
-    service = ThemeMigrationService(session)
 
-    first = service.import_mapping(_mapping_payload())
-    second = service.import_mapping(_mapping_payload())
+@pytest.fixture(autouse=True)
+def _clean_test_themes_mongo_rows():
+    """mongodb 测试库跨轮持久：克隆库 themes/theme_stock_mappings 已含同名主题，
+    幂等导入用例需先清掉本测试的两条固定主题再验证 inserted 计数。"""
+    from backend.core.settings import get_settings
 
-    assert first["ok"] is True
-    assert first["inserted"]["themes"] == 2
-    assert first["inserted"]["mappings"] == 4
-    assert second["ok"] is True
-    assert second["inserted"] == {"themes": 0, "mappings": 0}
-    assert second["updated"]["themes"] == 2
+    if get_settings().storage_backend == "mongodb":
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
-    repo = ThemeRepository(session)
-    mapping = repo.get_mapping()
-    assert mapping["version"] == "theme-v8-test"
-    assert mapping["totalThemes"] == 2
-    assert [theme["id"] for theme in mapping["themes"]] == ["AI", "POWER"]
-    assert mapping["themes"][0]["stocks"] == ["000001", "600001"]
-
-    assert repo.get_theme_stocks("AI")["stocks"] == ["000001", "600001"]
-    reverse = repo.get_stock_themes("600001")
-    assert [theme["id"] for theme in reverse["themes"]] == ["AI", "POWER"]
-    assert reverse["tags"] == [{"Name": "应用"}, {"Name": "电网"}]
-    assert reverse["reason"] == "AI 应用落地；电网建设"
-
-    counts = repo.counts()
-    assert counts == {
-        "themeCount": 2,
-        "mappingCount": 4,
-        "stockCount": 3,
-        "version": "theme-v8-test",
-        "lastUpdate": "2026-05-05T09:30:00.000Z",
-        "source": "sqlite",
-    }
-    session.close()
-    engine.dispose()
-
-
-def test_verify_theme_mapping_reports_counts_and_diffs_without_writing(tmp_path: Path) -> None:
-    engine, session = _theme_session(tmp_path)
-    service = ThemeMigrationService(session)
-    service.import_mapping(_mapping_payload())
-
-    matched = service.verify_mapping(_mapping_payload())
-    assert matched["ok"] is True
-    assert matched["expected"] == {
-        "themeCount": 2,
-        "mappingCount": 4,
-        "stockCount": 3,
-    }
-    assert matched["actual"]["themeCount"] == 2
-    assert matched["actual"]["mappingCount"] == 4
-    assert matched["actual"]["stockCount"] == 3
-    assert matched["mismatches"] == {}
-    assert matched["missingThemes"] == []
-    assert matched["extraThemes"] == []
-    assert matched["missingMappings"] == []
-    assert matched["extraMappings"] == []
-    assert matched["source"] == "sqlite"
-
-    changed = _mapping_payload()
-    changed["themes"] = [
-        {
-            "id": "AI",
-            "name": "人工智能",
-            "stocks": ["SZ000001", "600001", "000003"],
-        },
-        {
-            "id": "ROBOT",
-            "name": "机器人",
-            "stocks": ["300001"],
-        },
-    ]
-    diff = service.verify_mapping(changed)
-    assert diff["ok"] is False
-    assert diff["expected"] == {"themeCount": 2, "mappingCount": 4, "stockCount": 4}
-    assert diff["actual"]["themeCount"] == 2
-    assert diff["missingThemes"] == [{"id": "ROBOT", "name": "机器人"}]
-    assert diff["extraThemes"] == [{"id": "POWER", "name": "电力"}]
-    assert {"themeId": "AI", "stockCode": "000003"} in diff["missingMappings"]
-    assert {"themeId": "ROBOT", "stockCode": "300001"} in diff["missingMappings"]
-    assert {"themeId": "POWER", "stockCode": "000002"} in diff["extraMappings"]
-    assert service.verify_mapping(_mapping_payload())["ok"] is True
-
-    session.close()
-    engine.dispose()
+        db = get_runtime_mongodb_database()
+        db["themes"].delete_many({"id": {"$in": ["AI", "POWER"]}})
+        db["theme_stock_mappings"].delete_many({"themeId": {"$in": ["AI", "POWER"]}})
+        db["theme_metadata"].delete_many({"key": {"$in": ["theme-v8-test"]}})
+    yield
 
 
 @pytest.mark.parametrize(

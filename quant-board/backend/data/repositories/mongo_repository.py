@@ -426,6 +426,9 @@ class MongoRepository:
                 code_rows = list(cursor)
                 if not code_rows:
                     continue
+                # mongo 链合同：codes 窗口路径 totalCount=取回行数（见 test_mongo_repository
+                # "生产实现：codes + limit 路径按窗口返回行数统计 totalCount"）；
+                # sqlite 旧链为全量计数，两链语义差异在 test_snapshot_read_api 条件断言中记录
                 total_count_by_code[code] = len(code_rows)
                 picked_by_code[code] = sorted(
                     code_rows,

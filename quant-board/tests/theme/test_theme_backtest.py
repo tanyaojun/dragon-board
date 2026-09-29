@@ -21,6 +21,7 @@ from tests.fixtures.helpers import (
     make_bundle,
     make_theme_sg_bundle,
     make_theme_trade_bundle,
+    strip_dataset_id,
 )
 
 
@@ -949,7 +950,10 @@ def test_theme_trend_persistence_score_weight_payload_flags_when_source_unavaila
     )
     assert all("qualityFlags" not in sig for sig in base_body["result"]["themeTrend"]["signals"])
     # 分层与成交不受持续性权重影响（只改 score 归因通道）
-    assert base_body["result"]["executionSignals"] == weighted_body["result"]["executionSignals"]
+    # mongodb 读链在信号行注入 datasetId（每轮回测不同），比较需剥离
+    assert strip_dataset_id(base_body["result"]["executionSignals"]) == strip_dataset_id(
+        weighted_body["result"]["executionSignals"]
+    )
     assert base_body["result"]["tradeSimulation"] == weighted_body["result"]["tradeSimulation"]
 
 
@@ -1120,7 +1124,9 @@ def test_theme_trend_crowding_hard_layer_payload_default_zero_drift(tmp_path: Pa
         client, tmp_path, "theme-hl-explicit", {"crowdingHardLayerThreshold": 75.0}
     )
 
-    assert default_body["result"]["executionSignals"] == explicit_body["result"]["executionSignals"]
+    assert strip_dataset_id(default_body["result"]["executionSignals"]) == strip_dataset_id(
+        explicit_body["result"]["executionSignals"]
+    )
     assert default_body["result"]["themeTrend"]["signals"] == explicit_body["result"]["themeTrend"]["signals"]
     assert default_body["result"]["tradeSimulation"] == explicit_body["result"]["tradeSimulation"]
 

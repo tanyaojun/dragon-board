@@ -168,7 +168,7 @@ def test_series_route_does_not_cache_degraded_response(monkeypatch) -> None:
 
 def test_hotlist_write_path_invalidates_series_cache_index() -> None:
     source = (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parents[2]
         / "backend"
         / "services"
         / "theme"
@@ -247,7 +247,7 @@ def test_backfill_frames_defaults_to_serial_dry_run() -> None:
 
 def test_parallel_backfill_shares_single_frame_implementation() -> None:
     source = (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parents[2]
         / "backend"
         / "services"
         / "snapshot_analysis_backfill.py"

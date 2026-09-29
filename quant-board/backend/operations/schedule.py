@@ -5,11 +5,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from backend.data.repositories import repository_factory
-from backend.data.archive.auto_archive import run_archive_auto_once
 from backend.data.archive.service import ArchiveService
-from backend.data.backup.backup_retention import run_backup_retention_once
 from backend.data.backup.mongodb_backup import get_mongodb_backup_service
-from backend.data.models.database import SessionLocal, init_db
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
@@ -32,36 +29,34 @@ def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any
     snapshot_types = [item.strip() for item in settings.archive_auto_snapshot_types.split(",") if item.strip()]
     today = datetime.now(_TZ).strftime("%Y-%m-%d")
     db = repository_factory.get_runtime_mongodb_database()
-    init_db()
     per_type: dict[str, Any] = {}
     ok = True
-    with SessionLocal() as session:
-        service = ArchiveService(session)
-        for snapshot_type in snapshot_types:
-            try:
-                latest_date = db["snapshot_frames"].find_one(
-                    {"datasetId": settings.archive_auto_dataset_id, "type": snapshot_type, "tradingDate": {"$lt": today}},
-                    sort=[("tradingDate", -1)],
-                    projection={"tradingDate": 1, "_id": 0},
-                )
-                trading_date = str((latest_date or {}).get("tradingDate") or "")
-                if not trading_date:
-                    per_type[snapshot_type] = {"ok": True, "skipped": True, "reason": "no_snapshot_frames"}
-                    continue
-                result = service.backup_mongodb_snapshot_day_to_object(
-                    db,
-                    dataset_id=settings.archive_auto_dataset_id,
-                    snapshot_type=snapshot_type,
-                    trading_date=trading_date,
-                    dry_run=dry_run,
-                )
-                per_type[snapshot_type] = {**result, "tradingDate": trading_date}
-                skipped_reason = str(result.get("reason") or "")
-                if not result.get("ok") and skipped_reason not in ("already_archived",):
-                    ok = False
-            except Exception as exc:
-                per_type[snapshot_type] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    service = ArchiveService(db)
+    for snapshot_type in snapshot_types:
+        try:
+            latest_date = db["snapshot_frames"].find_one(
+                {"datasetId": settings.archive_auto_dataset_id, "type": snapshot_type, "tradingDate": {"$lt": today}},
+                sort=[("tradingDate", -1)],
+                projection={"tradingDate": 1, "_id": 0},
+            )
+            trading_date = str((latest_date or {}).get("tradingDate") or "")
+            if not trading_date:
+                per_type[snapshot_type] = {"ok": True, "skipped": True, "reason": "no_snapshot_frames"}
+                continue
+            result = service.backup_mongodb_snapshot_day_to_object(
+                db,
+                dataset_id=settings.archive_auto_dataset_id,
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                dry_run=dry_run,
+            )
+            per_type[snapshot_type] = {**result, "tradingDate": trading_date}
+            skipped_reason = str(result.get("reason") or "")
+            if not result.get("ok") and skipped_reason not in ("already_archived",):
                 ok = False
+        except Exception as exc:
+            per_type[snapshot_type] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            ok = False
     return {
         "ok": ok,
         "dryRun": dry_run,
@@ -79,7 +74,6 @@ def run_after_market_once(
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc).isoformat()
     results: dict[str, Any] = {}
-    steps = ["dailySnapshotBackup", "archive", "pushArchiveBackup", "pruneBackup"]
 
     settings = get_settings()
     if settings.storage_backend == "mongodb":
@@ -129,92 +123,6 @@ def run_after_market_once(
             dry_run=dry_run,
             stopped_at=stopped_at,
         )
-    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
-    init_db()
-    with SessionLocal() as session:
-        service = ArchiveService(session)
-        trading_date = service.latest_snapshot_trading_date(
-            dataset_id=settings.archive_auto_dataset_id,
-            snapshot_type=snapshot_type,
-        )
-        if trading_date:
-            daily_result = service.backup_snapshot_day_to_object(
-                dataset_id=settings.archive_auto_dataset_id,
-                snapshot_type=snapshot_type,
-                trading_date=trading_date,
-                dry_run=dry_run,
-            )
-        else:
-            daily_result = {
-                "ok": True,
-                "skipped": True,
-                "reason": "no_snapshot_trading_date",
-                "datasetId": settings.archive_auto_dataset_id,
-                "snapshotType": snapshot_type,
-            }
-    results["dailySnapshotBackup"] = daily_result
-
-    archive_result = run_archive_auto_once(archive_limit, dry_run=dry_run)
-    results["archive"] = archive_result
-    if not archive_result.get("ok"):
-        return _result(
-            ok=False,
-            started_at=started_at,
-            steps=steps,
-            results=results,
-            archive_limit=archive_limit,
-            backup_limit=backup_limit,
-            dry_run=dry_run,
-            stopped_at="archive",
-        )
-
-    if dry_run:
-        results["pushArchiveBackup"] = {
-            "ok": True,
-            "skipped": True,
-            "reason": "dry_run",
-        }
-    else:
-        init_db()
-        with SessionLocal() as session:
-            push_result = ArchiveService(session).push_archive_backup(limit=backup_limit)
-        results["pushArchiveBackup"] = push_result
-        if not push_result.get("ok"):
-            return _result(
-                ok=False,
-                started_at=started_at,
-                steps=steps,
-                results=results,
-                archive_limit=archive_limit,
-                backup_limit=backup_limit,
-                dry_run=dry_run,
-                stopped_at="pushArchiveBackup",
-            )
-
-    prune_result = run_backup_retention_once(dry_run=dry_run)
-    results["pruneBackup"] = prune_result
-    if not prune_result.get("ok"):
-        return _result(
-            ok=False,
-            started_at=started_at,
-            steps=steps,
-            results=results,
-            archive_limit=archive_limit,
-            backup_limit=backup_limit,
-            dry_run=dry_run,
-            stopped_at="pruneBackup",
-        )
-
-    return _result(
-        ok=True,
-        started_at=started_at,
-        steps=steps,
-        results=results,
-        archive_limit=archive_limit,
-        backup_limit=backup_limit,
-        dry_run=dry_run,
-    )
-
 
 def run_mongodb_backup_once(*, dry_run: bool = False, now: datetime | None = None) -> dict[str, Any]:
     """盘后 MongoDB 备份链：创建（交易日 light / 周五 full）→ verify → prune →（周五）push R2。

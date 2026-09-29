@@ -410,7 +410,7 @@ def test_golden_service_compare_reports_nested_cycle_path() -> None:
 # 帧集生成器与本快照必须同步演化；改动 _guardrail_frames 后必须重建快照并逐行 review diff。
 # ---------------------------------------------------------------------------
 
-GOLDEN_SNAPSHOT_PATH = Path(__file__).parent / "fixtures" / "ranktrend_golden_replay_snapshot_v1.json.gz"
+GOLDEN_SNAPSHOT_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "ranktrend_golden_replay_snapshot_v1.json.gz"
 
 
 def _write_golden_snapshot(snapshot: dict) -> None:

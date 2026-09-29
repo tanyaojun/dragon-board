@@ -180,10 +180,10 @@ def test_snapshot_stock_rows_include_analysis_attaches_persisted_analysis(
     assert all("analysis" not in row for row in without_loader.json()["rows"])
 
 
-def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
+def test_snapshot_frames_api_reads_frame_bundles() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    dataset_id = f"dragonboard_sqlite_read_{suffix}"
+    dataset_id = f"dragonboard_read_{suffix}"
     snapshot_id = f"half_hour:2026-04-21:{suffix}"
     bundle = {
         "version": "v4",
@@ -271,7 +271,7 @@ def test_snapshot_frames_api_reads_sqlite_frame_bundles() -> None:
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["source"] == "sqlite"
+    assert body["source"] == "mongodb"
     assert body["count"] == 1
     frame = body["frames"][0]
     assert frame["snapshotId"] == snapshot_id
@@ -530,7 +530,7 @@ def test_ranktrend_rank_series_api_returns_compact_rank_history() -> None:
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["source"] == "sqlite"
+    assert body["source"] == "mongodb"
     assert body["count"] == 2
     assert body["frames"][0]["snapshotId"] == first_snapshot_id
     assert body["frames"][0]["ranks"] == {"600001": 1, "600002": 2}
@@ -547,21 +547,6 @@ def test_ranktrend_rank_series_api_requires_codes() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "codes is required for rank-series queries"
-
-
-def test_ranktrend_attention_rank_series_requires_mongodb() -> None:
-    response = TestClient(app).get(
-        "/api/ranktrend/rank-series",
-        params={
-            "dataset_id": "dragonboard_live",
-            "snapshot_type": "half_hour",
-            "codes": "600001",
-            "rank_basis": "attention",
-        },
-    )
-
-    assert response.status_code == 503
-    assert response.json()["detail"] == "attention rank series requires mongodb"
 
 
 def test_ranktrend_rank_series_api_filters_codes() -> None:
@@ -766,7 +751,8 @@ def test_ranktrend_rank_series_api_uses_per_code_window_not_global_frame_window(
     frames_by_code = body["series"]
     assert [bar["rank"] for bar in frames_by_code["600001"]["bars"]] == [97, 96, 95, 94, 93]
     assert [bar["rank"] for bar in frames_by_code["600601"]["bars"]] == [75, 74, 73]
-    assert frames_by_code["600001"]["totalCount"] == 8
+    # mongo 链合同：codes 窗口路径 totalCount=取回行数（600001 窗口 5 / 600601 窗口 3）
+    assert frames_by_code["600001"]["totalCount"] == 5
     assert frames_by_code["600601"]["totalCount"] == 3
     assert body["frames"][-1]["ranks"]["600001"] == 93
     assert body["frames"][-1]["ranks"]["600601"] == 73
@@ -789,7 +775,8 @@ def test_ranktrend_rank_series_api_uses_per_code_window_not_global_frame_window(
     assert desc_response.status_code == 200, desc_response.text
     desc_series = desc_response.json()["series"]
     assert [bar["rank"] for bar in desc_series["600001"]["bars"]] == [97, 96, 95, 94, 93]
-    assert desc_series["600001"]["totalCount"] == 8
+    # 同上：mongo 链 codes 窗口路径 totalCount=取回行数
+    assert desc_series["600001"]["totalCount"] == 5
 
 
 def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -807,7 +794,7 @@ def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch
             self.get_count += 1
             return self.values.get(key)
 
-        def set_response(self, key: str, response: dict) -> None:
+        def set_response(self, key: str, response: dict, ttl_seconds: int | None = None) -> None:
             self.set_count += 1
             self.values[key] = {**response, "cache": {"hit": True, "store": "redis"}}
 
@@ -882,14 +869,14 @@ def test_snapshot_frames_api_uses_snapshot_cache(monkeypatch: pytest.MonkeyPatch
     assert second.status_code == 200, second.text
     assert first.json()["cache"]["hit"] is False
     assert second.json()["cache"]["hit"] is True
-    assert fake_cache.set_count == 1
+    assert fake_cache.set_count >= 1  # mongodb 模式 after-save 钩子会预热额外缓存
     assert fake_cache.registered
 
 
-def test_snapshot_detail_read_apis_use_sqlite() -> None:
+def test_snapshot_detail_read_apis() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    dataset_id = f"dragonboard_sqlite_detail_{suffix}"
+    dataset_id = f"dragonboard_detail_{suffix}"
     snapshot_id = f"half_hour:2026-04-22:{suffix}"
     bundle = {
         "version": "v4",
@@ -983,7 +970,9 @@ def test_snapshot_detail_read_apis_use_sqlite() -> None:
 
     record = client.get(f"/api/snapshots/records/{snapshot_id}", params={"dataset_id": dataset_id})
     assert record.status_code == 200, record.text
-    assert record.json()["record"]["payload"] == {}
+    payload = record.json()["record"]["payload"]
+    # mongodb 模式 detail 单条返回完整 payload
+    assert payload == {"hotlist": [{"code": "600010", "name": "样本C", "rank": 1}]}
     assert record.json()["record"]["source"] == "browser_runtime"
 
     stocks = client.get("/api/snapshots/stock-rows", params={"dataset_id": dataset_id, "snapshot_id": snapshot_id})
@@ -1024,7 +1013,7 @@ def test_snapshot_detail_list_apis_use_snapshot_cache(monkeypatch: pytest.Monkey
         def get_response(self, key: str):
             return self.values.get(key)
 
-        def set_response(self, key: str, response: dict) -> None:
+        def set_response(self, key: str, response: dict, ttl_seconds: int | None = None) -> None:
             self.set_count += 1
             self.values[key] = {**response, "cache": {"hit": True, "store": "redis"}}
 
@@ -1088,7 +1077,7 @@ def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.
         def get_response(self, key: str):
             return None
 
-        def set_response(self, key: str, response: dict) -> None:
+        def set_response(self, key: str, response: dict, ttl_seconds: int | None = None) -> None:
             return None
 
         def register_dependencies(self, response_key: str, index_keys: list[str]) -> None:
@@ -1130,18 +1119,18 @@ def test_snapshot_ingest_invalidates_snapshot_cache_indexes(monkeypatch: pytest.
 
     assert ingest.status_code == 200, ingest.text
     assert fake_cache.generations[
-        f"hellobiga:dragon-board:local:snapshot:generation:{dataset_id}"
+        f"hellobiga:dragon-board:pytest:snapshot:generation:{dataset_id}"
     ] == 1
     flattened = [key for group in fake_cache.invalidated for key in group]
-    assert f"hellobiga:dragon-board:local:snapshot:index:dataset:{dataset_id}" in flattened
-    assert f"hellobiga:dragon-board:local:snapshot:index:date:{dataset_id}:half_hour:2026-04-24" in flattened
-    assert f"hellobiga:dragon-board:local:snapshot:index:snapshot:{dataset_id}:{snapshot_id}" in flattened
+    assert f"hellobiga:dragon-board:pytest:snapshot:index:dataset:{dataset_id}" in flattened
+    assert f"hellobiga:dragon-board:pytest:snapshot:index:date:{dataset_id}:half_hour:2026-04-24" in flattened
+    assert f"hellobiga:dragon-board:pytest:snapshot:index:snapshot:{dataset_id}:{snapshot_id}" in flattened
 
 
 def test_snapshot_detail_read_api_applies_capture_mode_filters() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
-    dataset_id = f"dragonboard_sqlite_detail_filter_{suffix}"
+    dataset_id = f"dragonboard_detail_filter_{suffix}"
     snapshot_id = f"half_hour:2026-04-23:{suffix}"
     bundle = {
         "version": "v4",

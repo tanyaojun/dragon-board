@@ -179,8 +179,7 @@ def test_theme_api_reads_mongo_repository_when_storage_backend_is_mongodb(monkey
     import backend.main as main
 
     monkeypatch.setattr(main, "storage_source_label", lambda: "mongodb")
-    monkeypatch.setattr(main, "get_theme_repository", lambda db=None: repo, raising=False)
-    main.app.dependency_overrides[main.get_theme_db] = lambda: None
+    monkeypatch.setattr(main, "get_theme_repository", lambda: repo, raising=False)
     client = TestClient(main.app)
     try:
         mapping = client.get("/api/themes/mapping")

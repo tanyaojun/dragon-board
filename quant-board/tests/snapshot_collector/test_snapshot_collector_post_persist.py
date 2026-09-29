@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.test_hotlist_sentiment_backfill import FakeCollection, FakeMongoDb
+from tests.hotlist.test_hotlist_sentiment_backfill import FakeCollection, FakeMongoDb
 
 
 class FakeRepo:

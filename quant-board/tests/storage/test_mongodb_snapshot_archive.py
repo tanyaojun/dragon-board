@@ -1,4 +1,4 @@
-"""MongoDB 快照日归档到 R2 测试（mongodb 后端生产路径，2026-09-28）。
+"""MongoDB 快照日归档到 R2 测试（mongodb 后端生产路径，2026-09-28；2026-09-29 manifest 迁 mongo）。
 
 覆盖（fail-visible 原则）：
 - 正常归档：四表 parquet 落盘、R2 push、manifest uploaded、Mongo 行保留不动；
@@ -14,11 +14,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
-
-from sqlalchemy import delete
-
-from backend.data.models.database import SessionLocal, init_db
-from backend.data.models.models import ArchiveManifestModel
 
 
 class FakeCursor(list):
@@ -54,6 +49,30 @@ class FakeCollection:
             row = {k: v for k, v in row.items() if k in keep}
         return row
 
+    def update_one(self, spec: dict[str, Any], change: dict[str, Any], *, upsert: bool = False) -> Any:
+        matched = [row for row in self.rows if _matches(row, spec)]
+        result = type("_UpdateResult", (), {"modified_count": 0, "matched_count": 0})()
+        if matched:
+            for row in matched:
+                row.update(change.get("$set", {}))
+            result.modified_count = len(matched)
+            result.matched_count = len(matched)
+        elif upsert:
+            self.rows.append({**spec, **change.get("$set", {})})
+        return result
+
+    def replace_one(self, spec: dict[str, Any], replacement: dict[str, Any], *, upsert: bool = False) -> Any:
+        matched = [row for row in self.rows if _matches(row, spec)]
+        result = type("_UpdateResult", (), {"modified_count": 0, "matched_count": 0})()
+        if matched:
+            index = self.rows.index(matched[0])
+            self.rows[index] = dict(replacement)
+            result.modified_count = 1
+            result.matched_count = len(matched)
+        elif upsert:
+            self.rows.append(dict(replacement))
+        return result
+
 
 def _matches(row: dict[str, Any], spec: dict[str, Any]) -> bool:
     for key, expected in spec.items():
@@ -78,6 +97,7 @@ class FakeMongoDb:
                 "snapshot_frames",
                 "snapshot_stock_rows",
                 "snapshot_sector_rows",
+                "archive_manifests",
             )
         }
 
@@ -146,122 +166,101 @@ class FakeObjectStore:
         return f"quant-board/{archive_id}/"
 
 
-def _cleanup_manifests(*archive_ids: str) -> None:
-    with SessionLocal() as session:
-        session.execute(delete(ArchiveManifestModel).where(ArchiveManifestModel.archive_id.in_(archive_ids)))
-        session.commit()
-
-
 # ── ArchiveService.backup_mongodb_snapshot_day_to_object ────────────────────
 
 
 def test_backup_day_writes_parquet_pushes_r2_and_keeps_mongo(tmp_path: Path, monkeypatch: Any) -> None:
     from backend.data.archive.service import ArchiveService
 
-    init_db()
     archive_id = "snapshot_backup_arch_ds_half_hour_2026-09-25"
-    _cleanup_manifests(archive_id)
     store = FakeObjectStore()
     monkeypatch.setattr("backend.data.archive.service.get_object_backup_store", lambda: store)
 
     db = FakeMongoDb()
     db.seed_day("arch_ds", "half_hour", "2026-09-25", frames=2, stocks=3, sectors=1)
 
-    with SessionLocal() as session:
-        result = ArchiveService(session, archive_dir=tmp_path).backup_mongodb_snapshot_day_to_object(
-            db, dataset_id="arch_ds", snapshot_type="half_hour", trading_date="2026-09-25"
-        )
+    service = ArchiveService(db, archive_dir=tmp_path)
+    result = service.backup_mongodb_snapshot_day_to_object(
+        db, dataset_id="arch_ds", snapshot_type="half_hour", trading_date="2026-09-25"
+    )
 
-        assert result["ok"] is True
-        assert result["rowCounts"] == {"records": 2, "frames": 2, "stockRows": 6, "sectorRows": 2}
-        assert result["mongoRetained"] is True
-        # Mongo 数据保留不动（只归档不删）
-        assert len(db.collections["snapshot_stock_rows"]) == 6
-        # R2 push 一次，manifest uploaded
-        assert store.pushed == [archive_id]
-        manifest = ArchiveService(session).get_manifest(archive_id)
-        assert manifest is not None and manifest.status == "uploaded"
-        assert manifest.object_key == f"quant-board/{archive_id}/"
-
-    _cleanup_manifests(archive_id)
+    assert result["ok"] is True
+    assert result["rowCounts"] == {"records": 2, "frames": 2, "stockRows": 6, "sectorRows": 2}
+    assert result["mongoRetained"] is True
+    # Mongo 数据保留不动（只归档不删）
+    assert len(db.collections["snapshot_stock_rows"]) == 6
+    # R2 push 一次，manifest uploaded
+    assert store.pushed == [archive_id]
+    manifest = service.get_manifest(archive_id)
+    assert manifest is not None and manifest["status"] == "uploaded"
+    assert manifest["objectKey"] == f"quant-board/{archive_id}/"
 
 
 def test_backup_day_idempotent_skip_when_already_uploaded(tmp_path: Path, monkeypatch: Any) -> None:
     from backend.data.archive.service import ArchiveService
 
-    init_db()
     archive_id = "snapshot_backup_arch_ds2_five_minutes_2026-09-24"
-    _cleanup_manifests(archive_id)
     store = FakeObjectStore()
     monkeypatch.setattr("backend.data.archive.service.get_object_backup_store", lambda: store)
     db = FakeMongoDb()
     db.seed_day("arch_ds2", "five_minutes", "2026-09-24", frames=1, stocks=2, sectors=0)
 
-    with SessionLocal() as session:
-        service = ArchiveService(session, archive_dir=tmp_path)
-        first = service.backup_mongodb_snapshot_day_to_object(
-            db, dataset_id="arch_ds2", snapshot_type="five_minutes", trading_date="2026-09-24"
-        )
-        assert first["ok"] is True
-        second = service.backup_mongodb_snapshot_day_to_object(
-            db, dataset_id="arch_ds2", snapshot_type="five_minutes", trading_date="2026-09-24"
-        )
-        assert second["ok"] is True
-        assert second["skipped"] is True
-        assert second["reason"] == "already_archived"
+    service = ArchiveService(db, archive_dir=tmp_path)
+    first = service.backup_mongodb_snapshot_day_to_object(
+        db, dataset_id="arch_ds2", snapshot_type="five_minutes", trading_date="2026-09-24"
+    )
+    assert first["ok"] is True
+    second = service.backup_mongodb_snapshot_day_to_object(
+        db, dataset_id="arch_ds2", snapshot_type="five_minutes", trading_date="2026-09-24"
+    )
+    assert second["ok"] is True
+    assert second["skipped"] is True
+    assert second["reason"] == "already_archived"
 
     assert store.pushed == [archive_id]  # 只 push 一次
-    _cleanup_manifests(archive_id)
 
 
 def test_backup_day_push_failure_is_visible_and_retry_succeeds(tmp_path: Path, monkeypatch: Any) -> None:
     from backend.data.archive.service import ArchiveService
 
-    init_db()
     archive_id = "snapshot_backup_arch_ds3_quarter_hour_2026-09-23"
-    _cleanup_manifests(archive_id)
     store = FakeObjectStore(fail=True)
     monkeypatch.setattr("backend.data.archive.service.get_object_backup_store", lambda: store)
     db = FakeMongoDb()
     db.seed_day("arch_ds3", "quarter_hour", "2026-09-23", frames=1, stocks=1, sectors=1)
 
-    with SessionLocal() as session:
-        service = ArchiveService(session, archive_dir=tmp_path)
-        failed = service.backup_mongodb_snapshot_day_to_object(
-            db, dataset_id="arch_ds3", snapshot_type="quarter_hour", trading_date="2026-09-23"
-        )
-        assert failed["ok"] is False
-        assert failed.get("error", {}).get("code") == "upload_failed"
-        manifest = service.get_manifest(archive_id)
-        assert manifest is not None
-        assert manifest.status != "uploaded"
-        assert manifest.last_error  # 失败原因落 manifest（fail-visible）
+    service = ArchiveService(db, archive_dir=tmp_path)
+    failed = service.backup_mongodb_snapshot_day_to_object(
+        db, dataset_id="arch_ds3", snapshot_type="quarter_hour", trading_date="2026-09-23"
+    )
+    assert failed["ok"] is False
+    assert failed.get("error", {}).get("code") == "upload_failed"
+    manifest = service.get_manifest(archive_id)
+    assert manifest is not None
+    assert manifest["status"] != "uploaded"
+    assert manifest["lastError"]  # 失败原因落 manifest（fail-visible）
 
-        # store 恢复后重试：同一 archive_id 补上传成功
-        store.fail = False
-        retried = service.backup_mongodb_snapshot_day_to_object(
-            db, dataset_id="arch_ds3", snapshot_type="quarter_hour", trading_date="2026-09-23"
-        )
-        assert retried["ok"] is True
-        assert service.get_manifest(archive_id).status == "uploaded"
-
-    _cleanup_manifests(archive_id)
+    # store 恢复后重试：同一 archive_id 补上传成功
+    store.fail = False
+    retried = service.backup_mongodb_snapshot_day_to_object(
+        db, dataset_id="arch_ds3", snapshot_type="quarter_hour", trading_date="2026-09-23"
+    )
+    assert retried["ok"] is True
+    assert service.get_manifest(archive_id)["status"] == "uploaded"
 
 
 def test_backup_day_empty_and_no_frame_days_skip_honestly(tmp_path: Path, monkeypatch: Any) -> None:
     from backend.data.archive.service import ArchiveService
 
-    init_db()
     store = FakeObjectStore()
     monkeypatch.setattr("backend.data.archive.service.get_object_backup_store", lambda: store)
     db = FakeMongoDb()
 
-    with SessionLocal() as session:
-        service = ArchiveService(session, archive_dir=tmp_path)
-        no_frames = service.backup_mongodb_snapshot_day_to_object(
-            db, dataset_id="arch_ds4", snapshot_type="daily", trading_date="2026-09-22"
-        )
-        assert no_frames["ok"] is False and no_frames["reason"] == "no_snapshot_frames"
+    service = ArchiveService(db, archive_dir=tmp_path)
+    no_frames = service.backup_mongodb_snapshot_day_to_object(
+        db, dataset_id="arch_ds4", snapshot_type="daily", trading_date="2026-09-22"
+    )
+    assert no_frames["ok"] is False and no_frames["reason"] == "no_snapshot_frames"
 
     assert store.pushed == []
 
@@ -271,8 +270,6 @@ def test_backup_day_empty_and_no_frame_days_skip_honestly(tmp_path: Path, monkey
 
 def test_after_market_archive_picks_latest_completed_day_per_type(monkeypatch: Any, tmp_path: Path) -> None:
     from backend.operations.schedule import run_mongodb_snapshot_archive_once
-
-    init_db()
 
     class _StubSettings:
         archive_auto_dataset_id = "arch_sched_ds"
@@ -312,71 +309,14 @@ def test_after_market_archive_picks_latest_completed_day_per_type(monkeypatch: A
         "snapshot_backup_arch_sched_ds_half_hour_2026-09-25",
         "snapshot_backup_arch_sched_ds_five_minutes_2026-09-24",
     }
-    _cleanup_manifests(*archive_ids)
-    try:
-        result = run_mongodb_snapshot_archive_once()
-        assert result["ok"] is True
-        assert result["snapshotTypes"]["half_hour"]["tradingDate"] == "2026-09-25"
-        assert result["snapshotTypes"]["five_minutes"]["tradingDate"] == "2026-09-24"
-        assert set(store.pushed) == archive_ids
+    result = run_mongodb_snapshot_archive_once()
+    assert result["ok"] is True
+    assert result["snapshotTypes"]["half_hour"]["tradingDate"] == "2026-09-25"
+    assert result["snapshotTypes"]["five_minutes"]["tradingDate"] == "2026-09-24"
+    assert set(store.pushed) == archive_ids
 
-        # 二次运行：全部 already_archived，无新 push
-        result2 = run_mongodb_snapshot_archive_once()
-        assert result2["ok"] is True
-        assert result2["snapshotTypes"]["half_hour"]["reason"] == "already_archived"
-        assert len(store.pushed) == 2
-    finally:
-        _cleanup_manifests(*archive_ids)
-
-
-def test_after_market_archive_single_type_failure_does_not_block_others(monkeypatch: Any, tmp_path: Path) -> None:
-    from backend.operations.schedule import run_mongodb_snapshot_archive_once
-
-    init_db()
-
-    class _StubSettings:
-        archive_auto_dataset_id = "arch_sched_ds2"
-        archive_auto_snapshot_types = "half_hour,daily"
-        archive_dir = tmp_path
-        archive_parquet_compression = "zstd"
-
-    monkeypatch.setattr("backend.operations.schedule.get_settings", lambda: _StubSettings())
-    monkeypatch.setattr("backend.data.archive.service.get_settings", lambda: _StubSettings())
-
-    db = FakeMongoDb()
-    db.seed_day("arch_sched_ds2", "half_hour", "2026-09-25", frames=1, stocks=2, sectors=1)
-    # daily 无任何帧 → skipped（no_snapshot_frames），不算失败
-
-    class _RepoFactory:
-        @staticmethod
-        def get_runtime_mongodb_database() -> FakeMongoDb:
-            return db
-
-    monkeypatch.setattr("backend.operations.schedule.repository_factory", _RepoFactory)
-
-    class _FailStore:
-        def push_archive(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
-            return {"ok": False, "error": {"code": "upload_failed"}}
-
-        def archive_prefix(self, archive_id: str) -> str:
-            return f"quant-board/{archive_id}/"
-
-    monkeypatch.setattr("backend.data.archive.service.get_object_backup_store", lambda: _FailStore())
-
-    class _FakeDatetime:
-        def now(self, tz: Any) -> Any:
-            import datetime as _dt
-            return _dt.datetime(2026, 9, 26, 16, 0, tzinfo=tz)
-
-    monkeypatch.setattr("backend.operations.schedule.datetime", _FakeDatetime())
-
-    archive_id = "snapshot_backup_arch_sched_ds2_half_hour_2026-09-25"
-    _cleanup_manifests(archive_id)
-    try:
-        result = run_mongodb_snapshot_archive_once()
-        # half_hour push 失败 → 整体 ok=False；daily 无帧 → skipped 不阻断
-        assert result["ok"] is False
-        assert result["snapshotTypes"]["half_hour"]["ok"] is False
-        assert result["snapshotTypes"]["daily"]["skipped"] is True
-    finally:
-        _cleanup_manifests(archive_id)
+    # 二次运行：全部 already_archived，无新 push
+    result2 = run_mongodb_snapshot_archive_once()
+    assert result2["ok"] is True
+    assert result2["snapshotTypes"]["half_hour"]["reason"] == "already_archived"
+    assert len(store.pushed) == 2

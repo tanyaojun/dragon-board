@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend.data.cache import snapshot_cache
-from tests.test_hotlist_sentiment_series_api import FakeMongoDb, _RecordingCache, _seed_frames
+from tests.hotlist.test_hotlist_sentiment_series_api import FakeMongoDb, _RecordingCache, _seed_frames
 
 
 @pytest.fixture(autouse=True)

@@ -18,7 +18,7 @@ from typing import Any
 from backend.services import snapshot_analysis_service as svc
 
 SERVICE_PATH = (
-    Path(__file__).resolve().parent.parent / "backend" / "services" / "snapshot_analysis_service.py"
+    Path(__file__).resolve().parents[2] / "backend" / "services" / "snapshot_analysis_service.py"
 )
 
 

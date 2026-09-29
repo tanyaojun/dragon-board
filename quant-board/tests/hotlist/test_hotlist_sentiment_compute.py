@@ -20,7 +20,7 @@ from backend.analysis.hotlist.sentiment import (
     sort_rows,
 )
 
-FIXTURE = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "hotlist_sentiment" / "golden_cases.json"
+FIXTURE = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "hotlist_sentiment" / "golden_cases.json"
 
 
 def load_golden_cases() -> dict:

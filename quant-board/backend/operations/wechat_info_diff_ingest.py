@@ -14,8 +14,6 @@ import argparse
 import datetime
 import re
 
-from pymongo import MongoClient
-
 from backend.operations.wechat_info_diff import (
     SOURCE_NAME,
     article_text,
@@ -24,6 +22,14 @@ from backend.operations.wechat_info_diff import (
     parse_info_diff_entries,
     title_month_day,
 )
+
+
+def _db():
+    """运行时库入口：经 repository_factory 吃 settings（URI/库名），pytest 下受护栏约束。
+    禁止硬编码 MongoClient 直连生产库（2026-09-29 隔离裁决）。"""
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+
+    return get_runtime_mongodb_database()
 
 
 def match_codes(db, names: list[str]) -> dict[str, str]:
@@ -75,8 +81,7 @@ def ingest_today_if_published(today_iso: str | None = None) -> dict:
         now = datetime.date.today()
         if md != (now.month, now.day):
             return {"status": "not_published", "title": title}
-        result = ingest(MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)[
-            "dragon_board_quant"], url, today, discovery_title=title)
+        result = ingest(_db(), url, today, discovery_title=title)
         return {"status": result["status"], "title": title, "entries": result["entries"],
                 "matched": result["matched"]}
     except Exception as exc:  # noqa: BLE001 — 调度器要求任何失败都结构化返回
@@ -89,7 +94,7 @@ if __name__ == "__main__":
     ap.add_argument("--discover", action="store_true", help="搜狗自动发现最新一篇")
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     args = ap.parse_args()
-    db = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)["dragon_board_quant"]
+    db = _db()
     if args.url:
         result = ingest(db, args.url, args.date)
     elif args.discover:

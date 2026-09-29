@@ -3,9 +3,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tests.test_mongo_research_repository import FakeMongoDatabase
+from tests.storage.test_mongo_research_repository import FakeMongoDatabase
 
 
 def _seed_frames_with_signals(db: FakeMongoDatabase) -> None:

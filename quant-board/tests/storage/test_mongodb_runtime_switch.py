@@ -88,7 +88,7 @@ def test_optimization_background_job_uses_repository_factory_in_mongodb_mode(mon
 
 
 def test_theme_research_builder_reads_frames_from_repository_factory(monkeypatch) -> None:
-    service_path = Path(__file__).resolve().parents[1] / "backend" / "services" / "theme_research_service.py"
+    service_path = Path(__file__).resolve().parents[2] / "backend" / "services" / "theme_research_service.py"
     spec = importlib.util.spec_from_file_location("theme_research_service_under_test", service_path)
     assert spec and spec.loader
     service = importlib.util.module_from_spec(spec)
@@ -165,11 +165,6 @@ def test_mongodb_mode_disables_supabase_health_probe_and_runs_hotlist_after_mark
     monkeypatch.setattr(main, "storage_source_label", lambda: "mongodb")
     monkeypatch.setattr(main, "primary_status", lambda: {"mode": "mongodb", "connected": True})
     monkeypatch.setattr(main, "theme_status", lambda: {"source": "mongodb", "connected": True})
-    monkeypatch.setattr(
-        main,
-        "get_backup_client",
-        lambda: (_ for _ in ()).throw(AssertionError("Supabase backup client must not be touched")),
-    )
     main.app.dependency_overrides[main.get_db] = lambda: None
     client = TestClient(main.app)
     try:
@@ -198,11 +193,6 @@ def test_mongodb_mode_disables_supabase_health_probe_and_runs_hotlist_after_mark
 def test_theme_status_reports_mongodb_connection_failure(monkeypatch) -> None:
     import backend.data.models.theme_database as theme_database
 
-    monkeypatch.setattr(
-        theme_database,
-        "get_settings",
-        lambda: type("Settings", (), {"storage_backend": "mongodb"})(),
-    )
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.mongodb_status",
         lambda: {
@@ -304,45 +294,15 @@ def test_pytest_cannot_connect_to_production_mongodb_database(monkeypatch) -> No
                 "mongodb_database": "dragon_board_quant",
                 "mongodb_connect_timeout_ms": 100,
                 "mongodb_server_selection_timeout_ms": 100,
+                "mongodb_socket_timeout_ms": 100,
+                "mongodb_max_pool_size": 1,
             },
         )(),
     )
 
-    with pytest.raises(RuntimeError, match="pytest must not connect"):
+    # 护栏已下沉到 get_mongodb_database（唯一真理源）
+    with pytest.raises(RuntimeError, match="禁止连接生产"):
         repository_factory.get_runtime_mongodb_database()
 
     repository_factory._runtime_mongodb_database = None
 
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "push-backup",
-        "push-outbox",
-        "pull-backup",
-        "smoke-backup",
-        "prune-backup",
-        "migrate-snapshots",
-        "migrate-legacy-db",
-        "compact-json-fields",
-        "archive-snapshots",
-        "archive-research",
-        "verify-archive",
-        "restore-archive",
-        "archive-auto-once",
-        "push-archive-backup",
-        "backup-snapshot-day",
-        "after-market-once",
-        "pull-archive-backup",
-        "verify-snapshot-migration",
-    ],
-)
-def test_legacy_cli_storage_commands_are_rejected_in_mongodb_mode(monkeypatch, command: str) -> None:
-    import backend.cli as cli
-
-    monkeypatch.setattr(cli, "get_settings", lambda: type("Settings", (), {"storage_backend": "mongodb"})())
-
-    with pytest.raises(SystemExit) as exc_info:
-        cli.reject_legacy_storage_command_in_mongodb(command)
-
-    assert command in str(exc_info.value)

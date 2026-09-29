@@ -17,10 +17,16 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from pymongo import MongoClient
-
 from backend.analysis.hotlist.jev_state import build_driver_label_narrative
 from backend.services.jev.jev_client import call_jev, parse_jev_response
+
+
+def _db():
+    """运行时库入口：经 repository_factory 吃 settings（URI/库名），pytest 下受护栏约束。
+    禁止硬编码 MongoClient 直连生产库（2026-09-29 隔离裁决）。"""
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+
+    return get_runtime_mongodb_database()
 
 QUESTIONS = {
     "driver_type": {"type": "choice",
@@ -73,7 +79,7 @@ def _label_one(db, labels_col, acc, token, date, code, row, mappings, had_yester
 
 
 def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2):
-    db = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)["dragon_board_quant"]
+    db = _db()
     labels_col = db["hotlist_jev_driver_labels"]
     mappings_col = db["theme_stock_mappings"]
     dates = sorted({d["tradingDate"] for d in db["snapshot_stock_rows"].find(

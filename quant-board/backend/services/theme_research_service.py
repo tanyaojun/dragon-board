@@ -14,7 +14,6 @@ from backend.analysis.theme.trend import (
     FACTOR_VERSION,
     SIGNAL_VERSION,
 )
-from backend.data.models.database import SessionLocal
 from backend.data.repositories.repository_factory import create_repository, storage_source_label
 from backend.data.repositories.theme_research_repository import ThemeResearchRepository
 from backend.core.utils import stable_hash
@@ -28,15 +27,15 @@ def build_theme_research(
     meta: dict[str, Any] | None = None,
     random_seed: int = 0,
 ) -> ThemeTrendResult:
-    """从正式快照事实表回放构建题材研究帧，结果写入 research SQLite。
+    """从正式快照事实表回放构建题材研究帧，结果写入 mongodb（theme_factor_frames 等）。
 
     使用多帧序列回放（replay_sequence）以追踪题材生命周期在帧间的迁移和持续性。
-    不修改 themeDATA.db，不进入 Supabase 链路。
+    只写 mongodb（sqlite themeDATA.db / Supabase 备份链均已退役）。
 
     已知限制：多帧回放依赖 snapshot sector rows 中的预计算因子值（由 TS engine 在捕获时计算）；
     跨帧概念（persistence/cooling/reversal 等）基于帧间 state 追踪而非 TS rotationAnalysis。
     """
-    session = None if storage_source_label() == "mongodb" else SessionLocal()
+    session = None  # mongodb 单链（2026-09-29 sqlite 退役）
     repo = create_repository(session)
     research_repo = ThemeResearchRepository()
 

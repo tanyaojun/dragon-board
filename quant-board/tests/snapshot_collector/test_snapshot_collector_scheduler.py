@@ -181,6 +181,10 @@ def _make_settings(**overrides: Any):
     else:
         env_overrides["QUANT_BOARD_STORAGE_BACKEND"] = "mongodb"
 
+    if env_overrides["QUANT_BOARD_STORAGE_BACKEND"] == "sqlite":
+        # sqlite 需显式 opt-in 才能构造 Settings（2026-09-29 隔离裁决）；假件用于测非 mongodb 分支
+        env_overrides["QUANT_BOARD_ALLOW_SQLITE_BACKEND"] = "1"
+
     if "snapshot_collector_enabled" in overrides:
         env_overrides["QUANT_BOARD_SNAPSHOT_COLLECTOR_ENABLED"] = str(
             overrides["snapshot_collector_enabled"]

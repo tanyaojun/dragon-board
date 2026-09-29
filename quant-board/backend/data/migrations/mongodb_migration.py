@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import UTC, datetime
 from dataclasses import dataclass
@@ -858,6 +859,15 @@ def get_mongodb_database(
 ) -> Any:
     if not uri:
         raise RuntimeError("QUANT_BOARD_MONGODB_URI is required for MongoDB migration apply mode")
+    # 硬护栏：pytest 进程内所有 MongoDB 连接只允许落在测试库 dragon_board_test，
+    # 覆盖 repository_factory、cli 等全部调用点（唯一真理源，勿在调用方重复实现）。
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        if database_name == "dragon_board_quant":
+            raise RuntimeError("pytest 禁止连接生产 MongoDB 库 dragon_board_quant")
+        if database_name != "dragon_board_test":
+            raise RuntimeError(
+                f"pytest 只允许连接测试库 dragon_board_test，当前请求：{database_name}"
+            )
     try:
         from pymongo import MongoClient
     except ImportError as exc:  # pragma: no cover - depends on deployment environment

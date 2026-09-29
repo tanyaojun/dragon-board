@@ -26,21 +26,14 @@ from backend.api.theme_history_routes import router as theme_history_router
 from backend.api.theme_momentum_routes import router as theme_momentum_router
 from backend.api.theme_rotation_routes import router as theme_rotation_router
 from backend.api.ths_main_monitor_routes import router as ths_main_monitor_router
-from backend.data.backup.auto_sync import auto_sync_runner, run_outbox_auto_sync_once
-from backend.data.archive.auto_archive import archive_auto_runner, run_archive_auto_once
 from backend.data.archive.object_store import get_object_backup_store
-from backend.data.archive.service import ArchiveService
-from backend.data.backup.backup_retention import backup_retention_runner, run_backup_retention_once
 from backend.snapshot_collector.scheduler import snapshot_collector_scheduler
-from backend.data.backup.backup_sync import BackupSyncService
-from backend.data.models.database import ResearchSessionLocal, get_db, init_db, primary_status
-from backend.data.ingest.dataset_service import DatasetService
 from backend.data.ingest.importers import ImporterError
+from backend.data.models.database import get_db, init_db, primary_status
+from backend.data.ingest.dataset_service import DatasetService
 from backend.data.ingest.snapshot_ingest_normalizer import normalize_snapshot_ingest
-from backend.data.migrations.migration import SnapshotMigrationService
 from backend.data.models.models import Dataset
 from backend.data.ingest.json_codec import loads_json_field
-from backend.data.repositories.repository import Repository
 from backend.data.repositories.repository_factory import create_repository, get_runtime_mongodb_database, storage_source_label
 from backend.data.models.schemas import (
     GoldenImportRequest,
@@ -53,11 +46,8 @@ from backend.data.repositories.stock_name_repository import STOCK_NAMES_VERSION,
 from backend.services.market.stock_name_refresh_scheduler import stock_name_refresh_scheduler
 from backend.services.snapshot_analysis_service import analyze_snapshot_and_persist
 from backend.data.cache import snapshot_cache
-from backend.data.backup.supabase_backup import get_backup_client
-from backend.data.models.theme_database import get_theme_db, init_theme_db, theme_status
+from backend.data.models.theme_database import theme_status
 from backend.data.repositories.mongo_theme_repository import MongoThemeRepository
-from backend.data.repositories.theme_repository import ThemeRepository
-from backend.data.migrations.theme_migration import ThemeMigrationError, ThemeMigrationService
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.services.theme.mapping_scheduler import theme_mapping_refresh_scheduler
 from backend.services.theme.daily_factors_scheduler import theme_daily_factors_scheduler
@@ -211,6 +201,10 @@ async def restore_fund_flow_from_mongodb() -> None:
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    # 2026-09-29 隔离裁决：生产入口 fail-fast——sqlite 后端未显式 opt-in 即拒绝启动
+    from backend.core.settings import assert_production_storage_backend
+
+    assert_production_storage_backend()
     # 注：after-save 钩子已在**模块导入时**注册（见上方 app 定义处），此处不重复注册。
     # 清理策略（2026-08-12）：启动时给存量永久 Redis key 补 TTL
     # （ths-main-monitor:raw / snapshot:generation / theme-fund version）——
@@ -239,12 +233,6 @@ async def on_startup() -> None:
                     continue
     except Exception:
         pass
-    if get_settings().storage_backend != "mongodb":
-        init_db()
-        init_theme_db()
-        auto_sync_runner.start()
-        archive_auto_runner.start()
-        backup_retention_runner.start()
     # 快照采集已迁移到独立进程 backend.collector_main（8001，由 launcher 管理），
     # 本 API 进程不再启动采集 scheduler，避免双进程争锁/双采。
     stock_name_refresh_scheduler.start()
@@ -399,10 +387,6 @@ async def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    if get_settings().storage_backend != "mongodb":
-        await auto_sync_runner.stop()
-        await archive_auto_runner.stop()
-        await backup_retention_runner.stop()
     await snapshot_collector_scheduler.stop()
     await stock_name_refresh_scheduler.stop()
     await theme_mapping_refresh_scheduler.stop()
@@ -457,11 +441,9 @@ def _kpl_hotness_health() -> dict[str, Any]:
 
 
 @app.get("/api/health")
-def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def health_check(deep: bool = False) -> dict[str, Any]:
+    # 2026-09-29 sqlite 链退役：supabase 备份状态恒为未配置占位（字段保留给 launcher 契约）
     backup_status = {"configured": False, "connected": False, "last_error": None}
-    backup = None if storage_source_label() == "mongodb" else get_backup_client()
-    if backup:
-        backup_status = backup.deep_health() if deep else backup.health()
     return {
         # launcher 健康契约：8000 进程存活即 ok/none，采集器状态见 collector_main。
         "status": "ok",
@@ -475,16 +457,13 @@ def health_check(deep: bool = False, db: Session | None = Depends(get_db)) -> di
             "primary": primary_status(),
             "theme": theme_status(),
             "backup": backup_status,
-            "mode": "mongodb_primary" if storage_source_label() == "mongodb" else "sqlite_primary_supabase_backup",
-            "outbox": None if storage_source_label() == "mongodb" else (Repository(db, enable_backup=False).outbox_status() if db is not None else None),
-            "autoSync": auto_sync_runner.status(),
-            "backupRetention": backup_retention_runner.status(),
+            "mode": "mongodb_primary",
+            "outbox": None,
         },
         "archive": {
             "dir": str(get_settings().archive_dir),
             "retentionTradingDays": get_settings().archive_retention_trading_days,
             "parquetCompression": get_settings().archive_parquet_compression,
-            "autoArchive": archive_auto_runner.status(),
             "objectBackup": {
                 "enabled": get_settings().object_backup_enabled,
                 "bucketConfigured": bool(get_settings().object_backup_bucket),
@@ -505,12 +484,8 @@ def get_stock_name_repository() -> StockNameRepository:
     return StockNameRepository(get_runtime_mongodb_database())
 
 
-def get_theme_repository(db: Session | None = None) -> ThemeRepository | MongoThemeRepository:
-    if storage_source_label() == "mongodb":
-        return MongoThemeRepository(get_runtime_mongodb_database())
-    if db is None:
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    return ThemeRepository(db)
+def get_theme_repository() -> MongoThemeRepository:
+    return MongoThemeRepository(get_runtime_mongodb_database())
 
 
 @app.get("/api/stocks/names")
@@ -576,48 +551,33 @@ def search_stock_names(
 
 
 @app.post("/api/sync/push-backup")
-def push_backup(full_history: bool = False, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
-    return BackupSyncService(db).push_all_to_backup(full_history=full_history)
+def push_backup(full_history: bool = False) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
 
 
 @app.post("/api/sync/pull-backup")
-def pull_backup(db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
-    return BackupSyncService(db).pull_backup_to_primary()
+def pull_backup() -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
 
 
 @app.post("/api/sync/push-outbox")
-def push_outbox(limit: int | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="sync_outbox is disabled after MongoDB migration")
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    repo = Repository(db, enable_backup=False)
-    return BackupSyncService(db).push_outbox_to_backup(repo, limit=limit or get_settings().backup_auto_sync_batch_size)
+def push_outbox(limit: int | None = None) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="sync_outbox is disabled after MongoDB migration")
 
 
 @app.post("/api/sync/auto-once")
 def run_auto_sync_once(limit: int | None = None) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="sync_outbox auto sync is disabled after MongoDB migration")
-    return run_outbox_auto_sync_once(limit)
+    raise HTTPException(status_code=410, detail="sync_outbox auto sync is disabled after MongoDB migration")
 
 
 @app.post("/api/sync/prune-backup")
 def prune_backup(dry_run: bool = False) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="Supabase retention is disabled after MongoDB migration")
-    return run_backup_retention_once(dry_run=dry_run)
+    raise HTTPException(status_code=410, detail="Supabase retention is disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/auto-once")
 def run_archive_auto_once_api(limit: int | None = None) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="SQLite archive auto cleanup is disabled after MongoDB migration")
-    return run_archive_auto_once(limit)
+    raise HTTPException(status_code=410, detail="SQLite archive auto cleanup is disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/backup-snapshot-day")
@@ -626,37 +586,8 @@ def backup_snapshot_day(
     snapshot_type: str = "half_hour",
     trading_date: str | None = None,
     dry_run: bool = False,
-    db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="SQLite snapshot-day backup endpoint is disabled after MongoDB migration")
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    service = ArchiveService(db)
-    target_date = trading_date or service.latest_snapshot_trading_date(
-        dataset_id=dataset_id,
-        snapshot_type=snapshot_type,
-    )
-    if not target_date:
-        return {
-            "ok": False,
-            "error": {
-                "code": "no_snapshot_trading_date",
-                "datasetId": dataset_id,
-                "snapshotType": snapshot_type,
-            },
-        }
-    return service.backup_snapshot_day_to_object(
-        dataset_id=dataset_id,
-        snapshot_type=snapshot_type,
-        trading_date=target_date,
-        dry_run=dry_run,
-    )
-
-
-def _reject_sqlite_archive_for_mongodb() -> None:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
+    raise HTTPException(status_code=410, detail="SQLite snapshot-day backup endpoint is disabled after MongoDB migration")
 
 
 @app.post("/api/operations/after-market-once")
@@ -670,12 +601,7 @@ def run_after_market_once_api(
 
 @app.post("/api/sync/smoke-backup")
 def smoke_backup() -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
-    backup = get_backup_client()
-    if not backup:
-        return {"ok": False, "configured": False, "error": "supabase backup is not configured"}
-    return backup.smoke_test()
+    raise HTTPException(status_code=410, detail="Supabase backup is disabled after MongoDB migration")
 
 
 @app.post("/api/snapshots/ingest")
@@ -1414,89 +1340,38 @@ def get_snapshot_counts(
 
 
 @app.post("/api/storage/archive/snapshots/preview")
-def preview_snapshot_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).archive_snapshots(
-        dataset_id=str(payload.get("datasetId") or payload.get("dataset_id") or "dragonboard_live"),
-        snapshot_type=str(payload.get("snapshotType") or payload.get("snapshot_type") or "half_hour"),
-        before_trading_date=str(payload.get("beforeTradingDate") or payload.get("before_trading_date") or ""),
-        dry_run=True,
-        max_partitions=payload.get("maxPartitions") or payload.get("max_partitions"),
-    )
+def preview_snapshot_archive(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/snapshots")
-def archive_snapshots(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).archive_snapshots(
-        dataset_id=str(payload.get("datasetId") or payload.get("dataset_id") or "dragonboard_live"),
-        snapshot_type=str(payload.get("snapshotType") or payload.get("snapshot_type") or "half_hour"),
-        before_trading_date=str(payload.get("beforeTradingDate") or payload.get("before_trading_date") or ""),
-        apply=True,
-        max_partitions=payload.get("maxPartitions") or payload.get("max_partitions"),
-    )
+def archive_snapshots(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/research/preview")
-def preview_research_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    with ResearchSessionLocal() as research_session:
-        return ArchiveService(db, research_session=research_session).archive_research(
-            run_id=payload.get("runId") or payload.get("run_id"),
-            older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
-            keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
-            dry_run=True,
-        )
+def preview_research_archive(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/research")
-def archive_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    with ResearchSessionLocal() as research_session:
-        return ArchiveService(db, research_session=research_session).archive_research(
-            run_id=payload.get("runId") or payload.get("run_id"),
-            older_than_days=int(payload.get("olderThanDays") or payload.get("older_than_days") or 30),
-            keep_latest_per_group=int(payload.get("keepLatestPerGroup") or payload.get("keep_latest_per_group") or 10),
-            apply=True,
-        )
+def archive_research(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.get("/api/storage/archive/manifests")
-def list_archive_manifests(scope: str | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    manifests = ArchiveService(db).list_manifests(scope=scope)
-    return {"ok": True, "manifests": manifests, "count": len(manifests)}
+def list_archive_manifests(scope: str | None = None) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/verify")
-def verify_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    archive_id = str(payload.get("archiveId") or payload.get("archive_id") or "")
-    return ArchiveService(db).verify_archive(archive_id)
+def verify_archive(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/restore")
-def restore_archive(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).restore_archive(
-        str(payload.get("archiveId") or payload.get("archive_id") or ""),
-        dry_run=bool(payload.get("dryRun") or payload.get("dry_run")),
-        apply=bool(payload.get("apply")),
-    )
+def restore_archive(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/smoke-object-backup")
@@ -1508,23 +1383,13 @@ def smoke_object_backup() -> dict[str, Any]:
 
 
 @app.post("/api/storage/archive/push-backup")
-def push_archive_backup(limit: int | None = None, db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).push_archive_backup(limit=limit)
+def push_archive_backup(limit: int | None = None) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/storage/archive/pull-backup")
-def pull_archive_backup(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
-    _reject_sqlite_archive_for_mongodb()
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    return ArchiveService(db).pull_archive_backup(
-        str(payload.get("archiveId") or payload.get("archive_id") or ""),
-        dry_run=bool(payload.get("dryRun") or payload.get("dry_run")),
-        apply=bool(payload.get("apply")),
-    )
+def pull_archive_backup(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite archive endpoints are disabled after MongoDB migration")
 
 
 @app.post("/api/migrations/snapshots/import-json")
@@ -1532,61 +1397,38 @@ def import_snapshot_json_migration(
     request: SnapshotJsonMigrationRequest,
     db: Session | None = Depends(get_db),
 ) -> dict[str, Any]:
-    if storage_source_label() == "mongodb":
-        raise HTTPException(status_code=410, detail="SQLite snapshot JSON migration endpoint is disabled after MongoDB migration")
-    if db is None:
-        raise HTTPException(status_code=503, detail="primary database is unavailable")
-    try:
-        return SnapshotMigrationService(db).import_json(request.model_dump(by_alias=True))
-    except (ImporterError, ValueError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    raise HTTPException(status_code=410, detail="SQLite snapshot JSON migration endpoint is disabled after MongoDB migration")
 
 
 @app.post("/api/migrations/themes/import-json")
-def import_theme_json_migration(
-    payload: dict[str, Any],
-    db: Session | None = Depends(get_theme_db),
-) -> dict[str, Any]:
-    if db is None and storage_source_label() != "mongodb":
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    try:
-        return ThemeMigrationService(db).import_mapping(payload)
-    except ThemeMigrationError as error:
-        raise HTTPException(status_code=400, detail=error.detail) from error
+def import_theme_json_migration(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite theme migration endpoint is disabled after MongoDB migration")
 
 
 @app.post("/api/migrations/themes/verify-json")
-def verify_theme_json_migration(
-    payload: dict[str, Any],
-    db: Session | None = Depends(get_theme_db),
-) -> dict[str, Any]:
-    if db is None and storage_source_label() != "mongodb":
-        raise HTTPException(status_code=503, detail="theme database is unavailable")
-    try:
-        return ThemeMigrationService(db).verify_mapping(payload)
-    except ThemeMigrationError as error:
-        raise HTTPException(status_code=400, detail=error.detail) from error
+def verify_theme_json_migration(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=410, detail="SQLite theme migration endpoint is disabled after MongoDB migration")
 
 
 @app.get("/api/themes/mapping")
-def get_theme_mapping(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    mapping = get_theme_repository(db).get_mapping()
+def get_theme_mapping() -> dict[str, Any]:
+    mapping = get_theme_repository().get_mapping()
     return {"ok": True, "mapping": mapping, "source": storage_source_label()}
 
 
 @app.get("/api/themes/stocks/{theme_id}")
-def get_theme_stocks(theme_id: str, db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    return get_theme_repository(db).get_theme_stocks(theme_id)
+def get_theme_stocks(theme_id: str) -> dict[str, Any]:
+    return get_theme_repository().get_theme_stocks(theme_id)
 
 
 @app.get("/api/themes/stocks/by-code/{code}")
-def get_stock_themes(code: str, db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    return get_theme_repository(db).get_stock_themes(code)
+def get_stock_themes(code: str) -> dict[str, Any]:
+    return get_theme_repository().get_stock_themes(code)
 
 
 @app.get("/api/themes/counts")
-def get_theme_counts(db: Session | None = Depends(get_theme_db)) -> dict[str, Any]:
-    return {"ok": True, "counts": get_theme_repository(db).counts(), "source": storage_source_label()}
+def get_theme_counts() -> dict[str, Any]:
+    return {"ok": True, "counts": get_theme_repository().counts(), "source": storage_source_label()}
 
 
 @app.post("/api/themes/refresh-mappings")

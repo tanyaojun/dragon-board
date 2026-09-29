@@ -225,6 +225,10 @@ async def _catchup_missing_slots(settings: Any) -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    from backend.core.settings import assert_production_storage_backend
+
+    # 2026-09-29 隔离裁决：生产入口 fail-fast——sqlite 后端未显式 opt-in 即拒绝启动
+    assert_production_storage_backend()
     from backend.services.market.fund_scheduler import market_fund_scheduler
     from backend.market_proxy.hotlists import (
         close_hotlist_client,

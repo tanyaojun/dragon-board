@@ -150,8 +150,12 @@ class TestGatingInputsBuilder:
         assert ctx["marketPhaseByDay"]["2026-09-04"] is None
         assert "missing_15h_frame:2026-09-04" in ctx["qualityFlags"]
 
-    def test_crowding_percentile_disabled_by_storage_backend(self) -> None:
-        # 测试环境 storage_backend=sqlite（conftest）：非 Mongo 后端显式降级并打标
+    def test_crowding_percentile_disabled_by_storage_backend(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 非 Mongo 后端显式降级并打标；默认后端已是 mongodb，需显式模拟 sqlite
+        monkeypatch.setattr(
+            "backend.services.backtest_service.get_settings",
+            lambda: type("Settings", (), {"storage_backend": "sqlite"})(),
+        )
         frames = [{"tradingDate": "2026-09-03", "slotTime": "15:00", "rotationSummary": {"marketPhase": "cooling"}}]
         ctx = BacktestService._theme_gating_inputs(frames, "dsx", include_crowding_percentile=True)
         assert ctx["crowdingPercentileByDay"] == {}

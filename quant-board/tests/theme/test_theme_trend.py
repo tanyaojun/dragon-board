@@ -25,7 +25,7 @@ def test_theme_trend_python_matches_ts_runtime_golden_case() -> None:
     # AI 连续热门桶 2+1=3 → 60；exposure themeContribution 连锁）；v14 及以前不可变。
     # 热度口径 theme-market-v2（KPL 人气总和）；POWER 无 KPL → heatScore=None（诚实缺失）。
     fixture = json.loads(
-        (Path(__file__).parent / "fixtures" / "theme_trend_ts_golden_v15.json").read_text(encoding="utf-8")
+        (Path(__file__).resolve().parents[1] / "fixtures" / "theme_trend_ts_golden_v15.json").read_text(encoding="utf-8")
     )
 
     result = ThemeTrendPythonEngine().replay(fixture["input"]["frames"], config=ThemeTrendConfig())
@@ -66,7 +66,7 @@ def test_theme_trend_python_matches_ts_runtime_golden_case() -> None:
 
 def test_theme_trend_ts_runtime_golden_case_supports_typed_replay_and_quality_gate() -> None:
     fixture = json.loads(
-        (Path(__file__).parent / "fixtures" / "theme_trend_ts_golden_v15.json").read_text(encoding="utf-8")
+        (Path(__file__).resolve().parents[1] / "fixtures" / "theme_trend_ts_golden_v15.json").read_text(encoding="utf-8")
     )
 
     typed = ThemeTrendPythonEngine().replay_typed(fixture["input"]["frames"], config=ThemeTrendConfig())

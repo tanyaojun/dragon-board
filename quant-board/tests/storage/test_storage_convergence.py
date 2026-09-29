@@ -12,7 +12,6 @@ from backend.cli import build_parser
 from backend.data.ingest.importers import LevelDbIndexedDbImporter
 from backend.data.ingest.json_codec import COMPRESSED_TEXT_PREFIX, dumps_json_field, loads_json_field
 from backend.data.ingest.json_compaction import compact_json_fields
-from backend.data.migrations.legacy_split_migration import migrate_legacy_db
 from backend.data.models.models import BacktestRun, Base, ResearchBase
 from backend.data.ingest.storage_inspector import inspect_storage
 from backend.core.settings import Settings
@@ -71,82 +70,9 @@ def test_compact_json_fields_dry_run_and_apply(tmp_path: Path) -> None:
     assert loads_json_field(encoded, {}) == large
 
 
-def test_research_session_compresses_large_json_before_flush(tmp_path: Path) -> None:
-    db_path = tmp_path / "research_guard.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    ResearchBase.metadata.create_all(bind=engine)
-    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
-    large = {"items": [{"value": "x" * 200} for _ in range(80)]}
-    raw = json.dumps(large)
-
-    with Session() as session:
-        session.add(
-            BacktestRun(
-                id="bt_guard",
-                dataset_id="dataset",
-                request_json="{}",
-                result_json=raw,
-            )
-        )
-        session.commit()
-
-    with sqlite3.connect(db_path) as conn:
-        stored = conn.execute("select result_json from backtest_runs where id='bt_guard'").fetchone()[0]
-
-    assert stored.startswith(COMPRESSED_TEXT_PREFIX)
-    assert loads_json_field(stored, {}) == large
-
-
-def test_migrate_legacy_db_splits_snapshot_and_research_without_payload_outbox(tmp_path: Path) -> None:
-    legacy = tmp_path / "legacy.db"
-    snapshot = tmp_path / "snapshots.db"
-    research = tmp_path / "research.db"
-    _create_legacy_db(legacy)
-    _create_target_dbs(snapshot, research)
-
-    dry = migrate_legacy_db(
-        source=legacy,
-        snapshot_database_url=f"sqlite:///{snapshot}",
-        research_database_url=f"sqlite:///{research}",
-        apply=False,
-    )
-    assert dry["applied"] is False
-    assert dry["plan"]["snapshot_records"] == 1
-    assert dry["plan"]["backtest_runs"] == 1
-
-    result = migrate_legacy_db(
-        source=legacy,
-        snapshot_database_url=f"sqlite:///{snapshot}",
-        research_database_url=f"sqlite:///{research}",
-        apply=True,
-    )
-    assert result["applied"] is True
-    assert result["migrated"]["snapshot_records"] == 1
-    assert result["migrated"]["snapshot_stock_rows"] == 1
-    assert result["migrated"]["backtest_runs"] == 1
-
-    with sqlite3.connect(snapshot) as conn:
-        assert conn.execute("select count(*) from snapshot_records").fetchone()[0] == 1
-        assert conn.execute("select count(*) from snapshot_frames").fetchone()[0] == 1
-        assert conn.execute("select count(*) from snapshot_stock_rows").fetchone()[0] == 1
-        outbox_columns = [row[1] for row in conn.execute("pragma table_info(sync_outbox)").fetchall()]
-        assert "payload_json" not in outbox_columns
-
-    with sqlite3.connect(research) as conn:
-        assert conn.execute("select count(*) from backtest_runs").fetchone()[0] == 1
-
-
 def test_cli_exposes_storage_convergence_commands() -> None:
     parser = build_parser()
     assert parser.parse_args(["inspect-storage"]).func.__name__ == "cmd_inspect_storage"
-    assert parser.parse_args(["compact-json-fields", "--apply"]).apply is True
-    args = parser.parse_args(["migrate-legacy-db", "--source", "data/warehouse/quant_board.db", "--apply"])
-    assert args.func.__name__ == "cmd_migrate_legacy_db"
-    assert args.apply is True
-    verify = parser.parse_args(
-        ["verify-snapshot-migration", "--dataset-id", "dragonboard_live", "--source-report", "report.json"]
-    )
-    assert verify.func.__name__ == "cmd_verify_snapshot_migration"
 
 
 def test_leveldb_importer_parses_dfindexeddb_jsonl_projection_stores() -> None:
@@ -259,8 +185,8 @@ def test_settings_ignore_legacy_quant_board_database_url(monkeypatch) -> None:
     monkeypatch.setenv("QUANT_BOARD_DATABASE_URL", "sqlite:///data/warehouse/quant_board.db")
     monkeypatch.delenv("QUANT_BOARD_SNAPSHOT_DATABASE_URL", raising=False)
     settings = Settings()
-    assert settings.snapshot_database_url.endswith("quant_board_snapshots.db")
-    assert "quant_board.db" not in settings.snapshot_database_url
+    # 2026-09-29 sqlite 链退役：legacy quant_board.db 被忽略，且未 opt-in 时不回落 warehouse 默认 .db（留空）
+    assert settings.snapshot_database_url == ""
 
 
 def _dfindexeddb_record(object_store_id: int, value: dict) -> str:
@@ -388,27 +314,3 @@ def test_hot_theme_projection_whitelist_includes_heat_level() -> None:
 
 # ── heatLevel 落库迁移（2026-09 design）：heat_level varchar 列数值写入统一转文本 ──
 
-def test_sector_model_heat_level_numeric_persists_as_text() -> None:
-    """heat_level 列是 varchar(40)：数值 heatLevel 统一转文本存储，读侧回字符串。"""
-    from backend.data.repositories.snapshot_repository import SnapshotRepositoryMixin
-
-    model = SnapshotRepositoryMixin._sector_model("ds1", {
-        "entityType": "hot_theme", "entityKey": "ai", "entityName": "人工智能",
-        "rank": 1, "heatScore": 2000.0, "heatLevel": 96.3,
-    })
-    assert model.heat_level == "96.3"
-
-    label = SnapshotRepositoryMixin._sector_model("ds1", {
-        "entityType": "hot_theme", "entityKey": "x", "entityName": "X",
-        "heatLevel": "热门",
-    })
-    assert label.heat_level == "热门"
-
-    none_case = SnapshotRepositoryMixin._sector_model("ds1", {
-        "entityType": "hot_theme", "entityKey": "y", "entityName": "Y",
-        "heatLevel": None,
-    })
-    assert none_case.heat_level is None
-
-    bundle = SnapshotRepositoryMixin.local_sector_to_bundle_dict(model)
-    assert bundle["heatLevel"] == "96.3"

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.utils import json_dumps
 from backend.data.models.models import BacktestRun, Dataset
-from backend.data.repositories.repository import Repository
+from backend.data.repositories.mongo_repository import MongoRepository
 
 
 def wait_for_optimization(client: TestClient, run_id: str, timeout: float = 20.0) -> dict:
@@ -313,7 +313,7 @@ class MemoryBackup:
 
     def list_rows(self, record_type, source=None, page_size=500):
         if record_type == "qb_dataset":
-            return [{"payload": {"dataset": Repository.dataset_to_dict(dataset)}, "display_key": dataset.id} for dataset in self.datasets.values()]
+            return [{"payload": {"dataset": MongoRepository.dataset_to_dict(dataset)}, "display_key": dataset.id} for dataset in self.datasets.values()]
         if record_type == "qb_snapshot_bundle":
             return list(self.frames.get(source, []))
         return []
@@ -321,7 +321,7 @@ class MemoryBackup:
     def get_row(self, record_type, display_key, source=None):
         if record_type == "qb_dataset" and display_key in self.datasets:
             dataset = self.datasets[display_key]
-            return {"payload": {"dataset": Repository.dataset_to_dict(dataset)}, "display_key": dataset.id}
+            return {"payload": {"dataset": MongoRepository.dataset_to_dict(dataset)}, "display_key": dataset.id}
         return None
 
     def dataset_from_row(self, row):
@@ -411,3 +411,56 @@ def _make_export_run(run_id: str, result: dict[str, Any] | None = None) -> Backt
         request_json=json_dumps({"datasetId": "ds_export", "runId": run_id}),
         result_json=json_dumps(result or {"totalReturn": 0.12, "tradeCount": 2, "winRate": 0.5}),
     )
+
+
+class BacktestRepoWriter:
+    """回测造数器：直写 MongoResearchRepository（测试库 dragon_board_test）。
+
+    sqlite 分支已随 2026-09-29 sqlite 链退役删除。
+    """
+
+    def __init__(self) -> None:
+        from backend.data.repositories.mongo_research_repository import (
+            MongoResearchRepository,
+        )
+        from backend.data.repositories.repository_factory import (
+            get_runtime_mongodb_database,
+        )
+
+        self._session = None
+        self._repo = MongoResearchRepository(get_runtime_mongodb_database())
+
+    def save_run(self, run: BacktestRun) -> None:
+        self._repo.save_backtest_run(run)
+
+    def save_trades(self, run_id: str, trades: list[dict[str, Any]]) -> None:
+        self._repo.save_backtest_trades(run_id, trades)
+
+    def save_equity_curve(self, run_id: str, curve: list[dict[str, Any]]) -> None:
+        self._repo.save_backtest_equity_curve(run_id, curve)
+
+    def save_signals(self, run_id: str, decisions: dict[str, Any]) -> None:
+        self._repo.save_backtest_signals(run_id, decisions)
+
+    def save_quality_report(
+        self, run_id: str, data_quality: dict[str, Any], quality_gate: dict[str, Any]
+    ) -> None:
+        self._repo.save_backtest_quality_report(run_id, data_quality, quality_gate)
+
+    def delete_run(self, run_id: str) -> None:
+        self._repo.delete_backtest_run(run_id)
+
+    def close(self) -> None:  # 兼容 with 语法的历史调用
+        return None
+
+    def __enter__(self) -> "BacktestRepoWriter":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+def strip_dataset_id(signals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """mongodb 读链会在 executionSignals 行内注入 datasetId（sqlite 链不会），
+    跨轮回测比较信号需剥离该字段。"""
+    return [{k: v for k, v in row.items() if k != "datasetId"} for row in signals]

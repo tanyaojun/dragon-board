@@ -421,121 +421,26 @@ def test_save_and_read_quality_report(tmp_path: Path) -> None:
     engine.dispose()
 
 
-def test_delete_theme_research_removes_all_tables(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
-    repo = ThemeResearchRepository()
-    repo._session = session
 
-    # 写入测试数据
-    repo.save_factor_frames(
-        [
-            {
-                "datasetId": "ds_test",
-                "snapshotId": "snap_1",
-                "snapshotType": "half_hour",
-                "tradingDate": "2026-05-05",
-                "slotTime": "10:00",
-                "strategyVersion": "theme-trend-v12",
-                "configHash": "abc123",
-                "randomSeed": 20260430,
-                "themeId": "ai",
-                "themeName": "AI",
-                "heatScore": 80.0,
-                "momentumScore": 70.0,
-                "breadthScore": 60.0,
-                "fundScore": 50.0,
-                "leadershipScore": 40.0,
-                "correlationScore": 30.0,
-                "crowdingRisk": 20.0,
-                "persistenceScore": 10.0,
-                "rotationState": "neutral",
-                "rank": 1,
-                "qualityFlags": [],
-                "lifecycle": "neutral",
-            }
-        ]
-    )
-    repo.save_stock_exposures(
-        [
-            {
-                "datasetId": "ds_test",
-                "snapshotId": "snap_1",
-                "snapshotType": "half_hour",
-                "tradingDate": "2026-05-05",
-                "slotTime": "10:00",
-                "strategyVersion": "theme-trend-v12",
-                "configHash": "abc123",
-                "randomSeed": 20260430,
-                "code": "000001",
-                "themeId": "ai",
-                "themeName": "AI",
-                "role": "leader",
-                "roleScore": 100.0,
-                "exposureWeight": 80.0,
-                "themeContribution": 15.0,
-                "riskPenalty": 0.0,
-                "reasons": [],
-            }
-        ]
-    )
-    repo.save_signals(
-        [
-            {
-                "datasetId": "ds_test",
-                "snapshotId": "snap_1",
-                "snapshotType": "half_hour",
-                "tradingDate": "2026-05-05",
-                "slotTime": "10:00",
-                "strategyVersion": "theme-trend-v12",
-                "configHash": "abc123",
-                "randomSeed": 20260430,
-                "themeId": "ai",
-                "themeName": "AI",
-                "signal": "watch",
-                "risk": "none",
-                "lifecycle": "neutral",
-                "score": 50.0,
-            }
-        ]
-    )
-    repo.save_quality_report(
-        {
-            "datasetId": "ds_test",
-            "snapshotType": "half_hour",
-            "strategyVersion": "theme-trend-v12",
-            "configHash": "abc123",
-            "randomSeed": 20260430,
-            "passed": True,
-            "severity": "pass",
-            "researchGrade": "research_ready",
-            "issues": [],
-            "warnings": [],
-            "stats": {},
-            "themeCoverage": 0.0,
-            "frameCount": 1,
-            "stockCount": 1,
-            "themeCount": 1,
-        }
-    )
+@pytest.fixture(autouse=True)
+def _clean_ds_test_mongo_rows():
+    """mongodb 测试库跨 pytest 轮次持久：固定 datasetId（ds_test/ds_v12/ds_compress）的用例先清残留，
+    避免 theme_factor_frames/theme_stock_exposures 唯一键冲突。"""
+    from backend.core.settings import get_settings
 
-    assert len(repo.get_factor_frames("ds_test")) == 1
-    assert len(repo.get_stock_exposures("ds_test")) == 1
-    assert len(repo.get_signals("ds_test")) == 1
-    assert len(repo.get_quality_reports("ds_test")) == 1
+    if get_settings().storage_backend == "mongodb":
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
-    deleted = repo.delete_theme_research("ds_test", "half_hour")
-    assert deleted["theme_factor_frames"] == 1
-    assert deleted["theme_stock_exposures"] == 1
-    assert deleted["theme_signals"] == 1
-    assert deleted["theme_quality_reports"] == 1
-
-    assert repo.get_factor_frames("ds_test") == []
-    assert repo.get_stock_exposures("ds_test") == []
-    assert repo.get_signals("ds_test") == []
-    assert repo.get_quality_reports("ds_test") == []
-
-    repo.close()
-    engine.dispose()
+        db = get_runtime_mongodb_database()
+        for coll in (
+            "theme_factor_frames",
+            "theme_stock_exposures",
+            "theme_signals",
+            "theme_quality_reports",
+        ):
+            for ds in ("ds_test", "ds_v12", "ds_compress"):
+                db[coll].delete_many({"datasetId": ds})
+    yield
 
 
 def test_repository_filter_by_code(tmp_path: Path) -> None:

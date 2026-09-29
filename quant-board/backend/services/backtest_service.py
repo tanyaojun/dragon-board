@@ -20,7 +20,6 @@ from backend.core.backtest import (
 )
 from backend.data.models.models import BacktestRun
 from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
-from backend.data.models.database import SessionLocal
 from backend.data.repositories.repository_factory import (
     create_repository,
     get_runtime_mongodb_database,
@@ -1261,15 +1260,6 @@ class BacktestService:
         items = self.repo.get_backtest_trades(run_id, limit=limit, offset=offset)
         source = storage_source_label()
         total = self.repo.count_backtest_trades(run_id)
-        if source == "sqlite" and not items and total == 0:
-            from backend.data.archive.service import ArchiveService
-
-            archive = ArchiveService(SessionLocal())
-            archived = archive.query_archived_research_table(run_id, "trades", limit=limit, offset=offset)
-            if archived:
-                items = archived
-                total = archive.count_archived_research_table(run_id, "trades")
-                source = "parquet_archive"
         return {
             "runId": run_id,
             "items": items,
@@ -1284,13 +1274,6 @@ class BacktestService:
             return None
         items = self.repo.get_backtest_equity_curve(run_id)
         source = storage_source_label()
-        if source == "sqlite" and not items:
-            from backend.data.archive.service import ArchiveService
-
-            archived = ArchiveService(SessionLocal()).query_archived_research_table(run_id, "equity_curve")
-            if archived:
-                items = archived
-                source = "parquet_archive"
         return {"runId": run_id, "items": items, "source": source}
 
     def get_signals(
@@ -1307,22 +1290,6 @@ class BacktestService:
         items = self.repo.get_backtest_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime)
         total = self.repo.count_backtest_signals(run_id, tier=tier, regime=regime)
         source = storage_source_label()
-        if source == "sqlite" and not items and total == 0:
-            from backend.data.archive.service import ArchiveService
-
-            filters = {"candidateTier": tier, "regime": regime}
-            archive = ArchiveService(SessionLocal())
-            archived = archive.query_archived_research_table(
-                run_id,
-                "signals",
-                limit=limit,
-                offset=offset,
-                filters=filters,
-            )
-            if archived:
-                items = archived
-                total = archive.count_archived_research_table(run_id, "signals", filters=filters)
-                source = "parquet_archive"
         return {
             "runId": run_id,
             "items": items,

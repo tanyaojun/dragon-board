@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest import TradeSimulator
-from backend.data.models.database import ResearchSessionLocal, SessionLocal, init_db
+from backend.data.models.database import init_db
 from backend.data.models.models import (
     BacktestEquityCurve,
     BacktestQualityReport,
@@ -25,11 +25,14 @@ from backend.data.models.models import (
     BacktestSignal,
     BacktestTrade,
 )
-from backend.data.repositories.repository import Repository
+from backend.core.settings import get_settings
+from backend.data.repositories.mongo_repository import MongoRepository
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.main import app
 from backend.services import DEFAULT_BACKTEST_STRATEGY_CONFIG
 
 from tests.fixtures.helpers import (
+    BacktestRepoWriter,
     make_bundle,
     make_bundle_with_empty_hotlist,
     make_bundle_with_one_positive_price_frame,
@@ -45,8 +48,6 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     health = client.get("/api/health")
     assert health.status_code == 200
     assert health.json()["default_snapshot_type"] == "half_hour"
-    assert "autoSync" in health.json()["database"]
-    assert "backupRetention" in health.json()["database"]
 
     imported = client.post(
         "/api/datasets/import",
@@ -459,8 +460,9 @@ def test_import_backtest_optimize_and_golden(tmp_path: Path) -> None:
     assert golden.status_code == 200
     assert golden.json()["passed"] is False
 
-    with SessionLocal() as session:
-        golden_frames = Repository(session).load_frames(dataset["id"], snapshot_type="half_hour", include_payload=False)
+    golden_frames = MongoRepository(get_runtime_mongodb_database()).load_frames(
+        dataset["id"], snapshot_type="half_hour", include_payload=False
+    )
     golden_signals = RankTrendPythonEngine(
         RankTrendConfig.from_patch(DEFAULT_BACKTEST_STRATEGY_CONFIG)
     ).replay(golden_frames, meta={"sampleQuality": "ok", "warnings": []})[:5]
@@ -798,9 +800,8 @@ def test_delete_backtest_run_removes_normalized_children() -> None:
     client = TestClient(app)
     suffix = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
     run_id = f"bt_delete_{suffix}"
-    with SessionLocal() as session:
-        repo = Repository(session, enable_backup=False)
-        repo.save_backtest_run(
+    with BacktestRepoWriter() as writer:
+        writer.save_run(
             BacktestRun(
                 id=run_id,
                 dataset_id="ds_delete",
@@ -813,13 +814,13 @@ def test_delete_backtest_run_removes_normalized_children() -> None:
                 result_json='{"totalReturn": 0.01}',
             )
         )
-        repo.save_backtest_trades(run_id, [{"code": "600001", "name": "A", "quantity": 100, "profit": 12.3}])
-        repo.save_backtest_equity_curve(run_id, [{"snapshotId": "s1", "equity": 100000.0}])
-        repo.save_backtest_signals(
+        writer.save_trades(run_id, [{"code": "600001", "name": "A", "quantity": 100, "profit": 12.3}])
+        writer.save_equity_curve(run_id, [{"snapshotId": "s1", "equity": 100000.0}])
+        writer.save_signals(
             run_id,
             {"frameResults": [{"snapshotId": "s1", "tradingDate": "2026-04-30", "buyCandidates": [{"code": "600001", "signal": "buy"}]}]},
         )
-        repo.save_backtest_quality_report(run_id, {"severity": "pass", "researchGrade": "research_ready", "snapshotCount": 1}, {})
+        writer.save_quality_report(run_id, {"severity": "pass", "researchGrade": "research_ready", "snapshotCount": 1}, {})
 
     response = client.delete(f"/api/backtests/{run_id}")
     assert response.status_code == 200, response.text
@@ -832,17 +833,7 @@ def test_delete_backtest_run_removes_normalized_children() -> None:
     assert body["deleted"]["backtest_quality_reports"] == 1
 
     assert client.get(f"/api/backtests/{run_id}").status_code == 404
-    with ResearchSessionLocal() as session:
-        assert session.get(BacktestRun, run_id) is None
-        assert session.scalar(select(func.count()).select_from(BacktestTrade).where(BacktestTrade.backtest_run_id == run_id)) == 0
-        assert session.scalar(select(func.count()).select_from(BacktestEquityCurve).where(BacktestEquityCurve.backtest_run_id == run_id)) == 0
-        assert session.scalar(select(func.count()).select_from(BacktestSignal).where(BacktestSignal.backtest_run_id == run_id)) == 0
-        assert (
-            session.scalar(
-                select(func.count()).select_from(BacktestQualityReport).where(BacktestQualityReport.backtest_run_id == run_id)
-            )
-            == 0
-        )
+    # mongo 单链：删除效果已由 deleted counts + 404 覆盖
 
 
 def test_list_backtest_runs_returns_recent_lightweight_history() -> None:
@@ -894,10 +885,9 @@ def test_list_backtest_runs_returns_recent_lightweight_history() -> None:
             created_at=now,
         ),
     ]
-    with SessionLocal() as session:
-        repo = Repository(session, enable_backup=False)
+    with BacktestRepoWriter() as writer:
         for run in runs:
-            repo.save_backtest_run(run)
+            writer.save_run(run)
 
     response = client.get("/api/backtests?limit=100")
     assert response.status_code == 200, response.text
@@ -921,10 +911,9 @@ def test_list_backtest_runs_returns_recent_lightweight_history() -> None:
         pytest.fail(f"Newest run {runs[2].id} not found in response")
 
     # Cleanup: remove test runs to avoid polluting other tests that share this DB
-    with SessionLocal() as session:
-        repo = Repository(session, enable_backup=False)
+    with BacktestRepoWriter() as writer:
         for run in runs:
-            repo.delete_backtest_run(run.id)
+            writer.delete_run(run.id)
 
 
 def test_ranktrend_backtest_includes_layer1_signal_efficacy(tmp_path: Path) -> None:

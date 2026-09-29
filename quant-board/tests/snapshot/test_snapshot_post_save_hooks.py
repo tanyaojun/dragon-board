@@ -123,15 +123,14 @@ def test_cache_hook_calls_snapshot_cache(monkeypatch):
 
 
 def test_repositories_trigger_hooks_contract():
-    """源码契约：**两个** `save_snapshot_ingest` 实现（MongoDB / SQLite）的返回点都触发钩子。
+    """源码契约：mongo `save_snapshot_ingest` 的返回点都触发钩子。
 
-    新增/删除触发点、或新增第三种 repo 实现时，必须同步更新本断言（有意的"改动提示"，
+    2026-09-29 sqlite 退役：双实现契约收敛为 mongo 单实现。新增/删除触发点、
+    或新增第二种 repo 实现时，必须同步更新本断言（有意的"改动提示"，
     防止后处理被静默绕过 —— 2026-09-10 就因只挂 MongoDB 实现而漏掉 SQLite 路径，
     被 `test_snapshot_read_api` 的缓存失效断言抓到）。
     """
-    repositories = Path(__file__).resolve().parent.parent / "backend" / "data" / "repositories"
+    repositories = Path(__file__).resolve().parents[2] / "backend" / "data" / "repositories"
     mongo_source = (repositories / "mongo_repository.py").read_text(encoding="utf-8")
-    sqlite_source = (repositories / "snapshot_repository.py").read_text(encoding="utf-8")
 
     assert mongo_source.count("run_snapshot_post_save_hooks(") == 3
-    assert sqlite_source.count("run_snapshot_post_save_hooks(") == 3

@@ -4,7 +4,6 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from typing import Any, Callable
 
-from backend.data.models.database import SessionLocal
 from backend.data.ingest.json_codec import dumps_json_field
 from backend.data.models.models import BacktestRun, OptimizationRun
 from backend.data.repositories.repository_factory import create_repository, storage_source_label
@@ -47,7 +46,7 @@ def submit_optimization_job(
     random_seed: int,
     config_hash: str,
     payload_for_request_json: dict[str, Any],
-    session_factory: Callable[[], Any] = SessionLocal,
+    session_factory: Callable[[], Any] | None = None,
 ) -> Future[Any]:
     if _pending_job_count() >= MAX_PENDING_JOBS:
         raise OptimizationQueueFull(_pending_job_count())
@@ -157,7 +156,7 @@ def _run_job(
             )
 
 
-def _job_session(session_factory: Callable[[], Any]) -> Any:
+def _job_session(session_factory: Callable[[], Any] | None) -> Any:
     if storage_source_label() == "mongodb":
         return nullcontext(None)
     return session_factory()

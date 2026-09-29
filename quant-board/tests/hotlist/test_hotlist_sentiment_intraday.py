@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.test_hotlist_sentiment_series_api import FakeMongoDb
+from tests.hotlist.test_hotlist_sentiment_series_api import FakeMongoDb
 
 DS = "dragonboard_live"
 
@@ -142,7 +142,7 @@ def test_slot_sentiment_follows_analyze_in_collection_chain():
     from pathlib import Path
 
     service_source = (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parents[2]
         / "backend"
         / "snapshot_collector"
         / "service.py"

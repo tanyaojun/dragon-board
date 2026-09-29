@@ -17,7 +17,7 @@ import statistics
 import time
 from collections import defaultdict
 
-from pymongo import MongoClient
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
 SLOTS = ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00"]
 LIAN_BAN_PCT = 9.8
@@ -65,7 +65,7 @@ def stability_check(db, acc, token, n=20):
 
 def main(stability: bool):
     from scipy.stats import kruskal, mannwhitneyu
-    db = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=5000)["dragon_board_quant"]
+    db = get_runtime_mongodb_database()
     labels = [d for d in db["hotlist_jev_driver_labels"].find({"status": "ok"}) if d.get("label")]
     dates = sorted({d["tradingDate"] for d in labels})
     date_idx = {d: i for i, d in enumerate(dates)}

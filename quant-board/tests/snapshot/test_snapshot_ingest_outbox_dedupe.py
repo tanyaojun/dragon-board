@@ -3,11 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
 
-from backend.data.models.database import SessionLocal
-from backend.data.models.models import SnapshotStockRowModel, SyncOutboxModel
-from backend.data.repositories.repository import Repository
+from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 from backend.main import app
 
 
@@ -65,18 +62,15 @@ def test_snapshot_ingest_existing_snapshot_id_does_not_append_outbox_rows() -> N
     assert second.status_code == 200, second.text
     assert second.json()["deduped"] is True
 
-    with SessionLocal() as session:
-        outbox_count = session.scalar(
-            select(func.count())
-            .select_from(SyncOutboxModel)
-            .where(
-                SyncOutboxModel.op_type == "snapshot_ingest",
-                SyncOutboxModel.dataset_id == dataset_id,
-                SyncOutboxModel.snapshot_id == snapshot_id,
-            )
+    # mongodb 单链：不登记 sqlite sync_outbox（AI_COLLABORATION 口径）；
+    # dedupe 合同落在 Mongo：同 dataset+snapshotId 只保留一条记录
+    db = get_runtime_mongodb_database()
+    assert (
+        db["snapshot_records"].count_documents(
+            {"datasetId": dataset_id, "snapshotId": snapshot_id}
         )
-
-    assert outbox_count == 1
+        == 1
+    )
 
 
 def test_snapshot_ingest_persists_stock_row_reason() -> None:
@@ -97,22 +91,11 @@ def test_snapshot_ingest_persists_stock_row_reason() -> None:
     )
 
     assert response.status_code == 200, response.text
-    with SessionLocal() as session:
-        model = session.scalar(
-            select(SnapshotStockRowModel).where(
-                SnapshotStockRowModel.dataset_id == dataset_id,
-                SnapshotStockRowModel.snapshot_id == snapshot_id,
-                SnapshotStockRowModel.code == "600001",
-            )
-        )
-        assert model is not None
-        assert model.reason == "机器人+涨停原因"
 
-        rows = Repository(session, enable_backup=False).list_snapshot_stock_rows(
-            dataset_id,
-            snapshot_id=snapshot_id,
-        )["rows"]
-
-    assert len(rows) == 1
-    assert rows[0]["code"] == "600001"
-    assert rows[0]["reason"] == "机器人+涨停原因"
+    # mongodb 单链：reason 合同落在 Mongo snapshot_stock_rows
+    db = get_runtime_mongodb_database()
+    row = db["snapshot_stock_rows"].find_one(
+        {"datasetId": dataset_id, "snapshotId": snapshot_id, "code": "600001"}
+    )
+    assert row is not None, "stock row not persisted to mongodb"
+    assert row.get("reason") == "机器人+涨停原因"

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.test_hotlist_sentiment_backfill import FakeMongoDb, stock
+from tests.hotlist.test_hotlist_sentiment_backfill import FakeMongoDb, stock
 
 
 def _setup_db() -> FakeMongoDb:
