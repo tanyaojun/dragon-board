@@ -34,6 +34,7 @@ const QUANT_BOARD_PREFIXES = [
   '/api/research/',
   '/api/stocks/',
   '/api/hotlist-sentiment/',
+  '/api/hotlist-jev/',
   '/api/journal/',
 ]
 

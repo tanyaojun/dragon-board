@@ -42,6 +42,16 @@ test('hotlist sentiment series proxies to QuantBoard (prefix boundary safe)', ()
   assert.equal(shouldProxyToQuantBoard('/api/hotlist-sentimentx/series'), false)
 })
 
+test('hotlist jev observe-track routes proxy to QuantBoard (prefix boundary safe)', () => {
+  assert.equal(shouldProxyToQuantBoard('/api/hotlist-jev/series'), true)
+  assert.equal(
+    shouldProxyToQuantBoard('/api/hotlist-jev/series?dataset_id=dragonboard_live&date=2026-10-08'),
+    true,
+  )
+  assert.equal(shouldProxyToQuantBoard('/api/hotlist-jev/evaluate'), true)
+  assert.equal(shouldProxyToQuantBoard('/api/hotlist-jevx/series'), false)
+})
+
 
 test('QuantBoard target honors configured API base', () => {
   const previous = process.env.QUANT_BOARD_API_BASE
