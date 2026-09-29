@@ -6,7 +6,6 @@ import sys
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
 
 from backend.data.models.database import get_db
 from backend.data.repositories.repository_factory import create_repository
@@ -53,7 +52,7 @@ def _get_fusion_strategy_name() -> str:
 @router.get("/api/backtests/{run_id}/fusion-projections")
 def get_fusion_strategy_projections(
     run_id: str,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     repo = create_repository(db)
     service_class = _get_service_class()

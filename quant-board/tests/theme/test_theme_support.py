@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from sqlalchemy import create_engine, inspect, text
 
 from backend.analysis.theme.support_index import build_theme_candidate_support, build_theme_support_index
 from backend.core.backtest.strategy import RankTrendCandidateStrategy, StrategyInput

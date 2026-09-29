@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy.orm import Session
 
 from backend.data.ingest.importers import ImporterError, read_snapshot_bundle
 from backend.data.models.models import Dataset
@@ -22,7 +21,7 @@ def is_snapshot_primary_dataset(dataset: Dataset) -> bool:
 
 
 class DatasetService:
-    def __init__(self, session: Session | None):
+    def __init__(self, session: Any | None):
         self.repo = create_repository(session)
 
     def list_datasets(self) -> list[dict[str, Any]]:

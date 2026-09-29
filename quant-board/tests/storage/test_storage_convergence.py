@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from backend.cli import build_parser
 from backend.data.ingest.importers import LevelDbIndexedDbImporter
 from backend.data.ingest.json_codec import COMPRESSED_TEXT_PREFIX, dumps_json_field, loads_json_field
-from backend.data.ingest.json_compaction import compact_json_fields
-from backend.data.models.models import BacktestRun, Base, ResearchBase
-from backend.data.ingest.storage_inspector import inspect_storage
 from backend.core.settings import Settings
 
 
@@ -32,47 +25,7 @@ def test_json_codec_compresses_large_json_and_reads_plain_or_broken_text() -> No
     assert loads_json_field(broken, {"fallback": True}) == {"fallback": True}
 
 
-def test_inspect_storage_reports_table_counts_and_json_bytes(tmp_path: Path) -> None:
-    db_path = tmp_path / "sample.db"
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("create table items (id integer primary key, payload_json text, name text)")
-        conn.execute("insert into items (payload_json, name) values (?, ?)", (json.dumps({"a": 1}), "one"))
-        conn.commit()
 
-    report = inspect_storage(tmp_path)
-
-    db_report = next(item for item in report["databases"] if item["name"] == "sample.db")
-    assert db_report["tables"]["items"]["rowCount"] == 1
-    assert db_report["jsonFields"]["items.payload_json"]["count"] == 1
-    assert db_report["jsonFields"]["items.payload_json"]["totalBytes"] > 0
-
-
-def test_compact_json_fields_dry_run_and_apply(tmp_path: Path) -> None:
-    db_path = tmp_path / "compact.db"
-    large = {"items": [{"value": "x" * 200} for _ in range(80)]}
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("create table backtest_runs (id text primary key, result_json text)")
-        conn.execute("insert into backtest_runs (id, result_json) values ('bt_1', ?)", (json.dumps(large),))
-        conn.commit()
-
-    dry = compact_json_fields(f"sqlite:///{db_path}", apply=False)
-    assert dry["applied"] is False
-    assert dry["fields"][0]["candidateRows"] == 1
-    assert dry["fields"][0]["estimatedBytesAfter"] < dry["fields"][0]["bytesBefore"]
-
-    applied = compact_json_fields(f"sqlite:///{db_path}", apply=True)
-    assert applied["applied"] is True
-    assert applied["updatedRows"] == 1
-
-    with sqlite3.connect(db_path) as conn:
-        encoded = conn.execute("select result_json from backtest_runs where id='bt_1'").fetchone()[0]
-    assert encoded.startswith(COMPRESSED_TEXT_PREFIX)
-    assert loads_json_field(encoded, {}) == large
-
-
-def test_cli_exposes_storage_convergence_commands() -> None:
-    parser = build_parser()
-    assert parser.parse_args(["inspect-storage"]).func.__name__ == "cmd_inspect_storage"
 
 
 def test_leveldb_importer_parses_dfindexeddb_jsonl_projection_stores() -> None:
@@ -197,110 +150,6 @@ def _dfindexeddb_record(object_store_id: int, value: dict) -> str:
             "value": {"__type__": "ObjectStoreDataValue", "value": value},
         }
     )
-
-
-def _create_target_dbs(snapshot: Path, research: Path) -> None:
-    snapshot_engine = create_engine(f"sqlite:///{snapshot}")
-    research_engine = create_engine(f"sqlite:///{research}")
-    Base.metadata.create_all(bind=snapshot_engine)
-    ResearchBase.metadata.create_all(bind=research_engine)
-    snapshot_engine.dispose()
-    research_engine.dispose()
-
-
-def _create_legacy_db(path: Path) -> None:
-    with sqlite3.connect(path) as conn:
-        conn.executescript(
-            """
-            create table datasets (
-              id text primary key, name text, source_type text, source_path text, db_name text,
-              schema_fingerprint text, snapshot_count integer, frame_count integer, stock_row_count integer,
-              sector_row_count integer, start_date text, end_date text, snapshot_types_json text,
-              metadata_json text, created_at text
-            );
-            create table snapshot_records (
-              id integer primary key autoincrement, dataset_id text, snapshot_id text, type text,
-              trading_date text, slot_time text, timestamp integer, display_key text, capture_mode text,
-              captured_at integer, data_timestamp integer, delay_ms integer, quality_flags_json text,
-              source text, payload_json text
-            );
-            create table backtest_runs (
-              id text primary key, dataset_id text, strategy_name text, strategy_version text,
-              snapshot_type text, config_hash text, random_seed integer, status text,
-              request_json text, result_json text, created_at text
-            );
-            create table optimization_runs (
-              id text primary key, dataset_id text, strategy_name text, method text,
-              config_hash text, random_seed integer, status text, request_json text,
-              result_json text, created_at text
-            );
-            create table golden_ranktrend_cases (
-              id text primary key, name text, dataset_id text, input_json text, expected_json text, created_at text
-            );
-            create table sync_outbox (
-              id integer primary key autoincrement, op_type text, dataset_id text, snapshot_id text,
-              idempotency_key text, status text, retry_count integer, last_error text,
-              next_retry_at text, created_at text, updated_at text, payload_json text
-            );
-            """
-        )
-        payload = {
-            "type": "half_hour",
-            "tradingDate": "2026-04-30",
-            "slotTime": "10:00",
-            "timestamp": 1777524000000,
-            "hotlist": [{"code": "600001", "name": "样本A", "rank": 1, "price": 10.0}],
-            "sectors": [{"entityKey": "theme_a", "entityName": "题材A", "rank": 1}],
-        }
-        conn.execute(
-            "insert into datasets values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                "dragonboard_live",
-                "live",
-                "legacy",
-                "",
-                "DragonBoardData",
-                "fp",
-                1,
-                1,
-                1,
-                1,
-                "2026-04-30",
-                "2026-04-30",
-                '["half_hour"]',
-                "{}",
-                "2026-04-30T10:00:00",
-            ),
-        )
-        conn.execute(
-            """
-            insert into snapshot_records (
-              dataset_id, snapshot_id, type, trading_date, slot_time, timestamp, display_key,
-              capture_mode, captured_at, data_timestamp, delay_ms, quality_flags_json, source, payload_json
-            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                "dragonboard_live",
-                "half_hour:2026-04-30:10:00",
-                "half_hour",
-                "2026-04-30",
-                "10:00",
-                1777524000000,
-                "half_hour:2026-04-30:10:00",
-                "real_time",
-                1777524000000,
-                1777524000000,
-                0,
-                "[]",
-                "browser_runtime",
-                json.dumps(payload),
-            ),
-        )
-        conn.execute(
-            "insert into backtest_runs values (?,?,?,?,?,?,?,?,?,?,?)",
-            ("bt_1", "dragonboard_live", "rank_trend_candidate", "0.1.0", "half_hour", "cfg", 1, "completed", "{}", "{\"ok\":true}", "2026-04-30T10:00:00"),
-        )
-        conn.commit()
 
 
 def test_hot_theme_projection_whitelist_includes_heat_level() -> None:

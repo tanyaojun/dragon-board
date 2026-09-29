@@ -13,17 +13,12 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.core.backtest import TradeSimulator
 from backend.data.models.database import init_db
 from backend.data.models.models import (
-    BacktestEquityCurve,
-    BacktestQualityReport,
     BacktestRun,
-    BacktestSignal,
-    BacktestTrade,
 )
 from backend.core.settings import get_settings
 from backend.data.repositories.mongo_repository import MongoRepository

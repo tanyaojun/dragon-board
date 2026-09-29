@@ -3,21 +3,12 @@ from __future__ import annotations
 from collections.abc import Generator
 from typing import Any
 
-from sqlalchemy.orm import DeclarativeBase
-
-
-class Base(DeclarativeBase):
-    """快照事实库 ORM 基类（领域模型见 models.py；mongo 仓库复用同一套领域类）。"""
-
-
-class ResearchBase(DeclarativeBase):
-    """research 库 ORM 基类（保留：models.py 领域类仍在此声明）。"""
-
 
 def init_db() -> bool:
     """mongodb 单链下为空操作。
 
     历史 sqlite 建库/逐列迁移已随 2026-09-29「sqlite 链退役」删除；
+    ORM 基类（Base/ResearchBase）已随 models.py 深度解绑（dataclass 化）一并删除。
     保留本占位以免大面积改动 mongodb 模式下本就 no-op 的调用点。
     """
     return True

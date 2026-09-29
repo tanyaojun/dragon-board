@@ -1,7 +1,6 @@
 from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
-from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.jump_research import build_jump_research_request, summarize_jump_research
 from backend.analysis.theme.trend import ThemeTrendConfig, ThemeTrendPythonEngine
 from backend.core.backtest import (
@@ -45,7 +44,7 @@ def _grid_requests_daily_factors(search_space: dict[str, Any]) -> bool:
 
 
 class OptimizationService:
-    def __init__(self, session: Session | None):
+    def __init__(self, session: Any | None):
         self.repo = create_repository(session)
 
     def run_ranktrend(self, payload: dict[str, Any], wait: bool = False) -> dict[str, Any]:

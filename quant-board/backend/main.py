@@ -11,7 +11,6 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
 
 from backend.api.fusion_strategy_projection_routes import router as fusion_strategy_projection_router
 from backend.api.big_order_history_routes import router as big_order_history_router
@@ -607,7 +606,7 @@ def smoke_backup() -> dict[str, Any]:
 @app.post("/api/snapshots/ingest")
 def ingest_snapshot(
     request: SnapshotIngestRequest,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ) -> dict[str, Any]:
     try:
@@ -695,7 +694,7 @@ def get_snapshot_analysis(
     dataset_id: str = Query(...),
     snapshot_id: str = Query(...),
     codes: str | None = Query(None),
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     """G4-4（2026-08-23）：读快照的 analyze 持久化结果（observation/displayStatus/meta/resonance）。
     仅 MongoDB 生产态有效；代码列表按逗号分隔，缺省返回该快照全部。"""
@@ -839,7 +838,7 @@ def list_snapshot_frames(
     limit: int | None = 100,
     projection: str = "full",
     fields: str | None = None,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -930,7 +929,7 @@ def get_ranktrend_rank_series(
     limit: int | None = 50,
     window_bars: int | None = None,
     rank_basis: str = "composite",
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -1027,7 +1026,7 @@ def list_snapshot_records(
     exclude_restored: bool = False,
     sort: str = "desc",
     limit: int | None = 500,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -1088,7 +1087,7 @@ def get_snapshot_record(
     dataset_id: str | None = None,
     allowed_capture_modes: str | None = None,
     exclude_restored: bool = False,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -1168,7 +1167,7 @@ def list_snapshot_stock_rows(
     limit: int | None = 500,
     fields: str | None = None,
     include_analysis: bool = False,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -1255,7 +1254,7 @@ def list_snapshot_sector_rows(
     exclude_restored: bool = False,
     sort: str = "desc",
     limit: int | None = 100,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -1323,7 +1322,7 @@ def list_snapshot_sector_rows(
 @app.get("/api/snapshots/counts")
 def get_snapshot_counts(
     dataset_id: str | None = None,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     if db is None and storage_source_label() != "mongodb":
         raise HTTPException(status_code=503, detail="primary database is unavailable")
@@ -1395,7 +1394,7 @@ def pull_archive_backup(payload: dict[str, Any]) -> dict[str, Any]:
 @app.post("/api/migrations/snapshots/import-json")
 def import_snapshot_json_migration(
     request: SnapshotJsonMigrationRequest,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     raise HTTPException(status_code=410, detail="SQLite snapshot JSON migration endpoint is disabled after MongoDB migration")
 
@@ -1454,7 +1453,7 @@ def refresh_theme_mappings() -> dict[str, Any]:
 
 
 @app.get("/api/datasets")
-def list_datasets(db: Session | None = Depends(get_db)) -> list[dict[str, Any]]:
+def list_datasets(db: Any | None = Depends(get_db)) -> list[dict[str, Any]]:
     try:
         return DatasetService(db).list_datasets()
     except Exception as error:
@@ -1467,7 +1466,7 @@ def list_datasets(db: Session | None = Depends(get_db)) -> list[dict[str, Any]]:
 
 
 @app.get("/api/datasets/{dataset_id}")
-def get_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_dataset(dataset_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         dataset = DatasetService(db).get_dataset(dataset_id)
     except Exception as error:
@@ -1483,7 +1482,7 @@ def get_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dict[s
 
 
 @app.delete("/api/datasets/{dataset_id}")
-def delete_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def delete_dataset(dataset_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     if storage_source_label() != "mongodb":
         raise HTTPException(status_code=410, detail="dataset deletion is only available in MongoDB mode")
     try:
@@ -1503,7 +1502,7 @@ def delete_dataset(dataset_id: str, db: Session | None = Depends(get_db)) -> dic
 
 
 @app.post("/api/datasets/upload")
-async def upload_dataset(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+async def upload_dataset(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     content = payload.get("content")
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
@@ -1561,7 +1560,7 @@ def _write_inline_import_bundle(name: str, records: list[Any], preview: dict[str
 
 
 @app.post("/api/datasets/import")
-def import_dataset(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def import_dataset(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         request = normalize_import_payload(payload)
         dataset = DatasetService(db).import_dataset(request)
@@ -1571,7 +1570,7 @@ def import_dataset(payload: dict[str, Any], db: Session | None = Depends(get_db)
 
 
 @app.post("/api/backtests/rank-trend")
-def run_ranktrend_backtest(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_ranktrend_backtest(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return BacktestService(db).run_ranktrend(payload)
     except ValueError as error:
@@ -1581,7 +1580,7 @@ def run_ranktrend_backtest(payload: dict[str, Any], db: Session | None = Depends
 
 
 @app.post("/api/backtests/theme-trend")
-def run_theme_trend_backtest(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_theme_trend_backtest(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return BacktestService(db).run_theme_trend(payload)
     except ValueError as error:
@@ -1591,7 +1590,7 @@ def run_theme_trend_backtest(payload: dict[str, Any], db: Session | None = Depen
 
 
 @app.post("/api/backtests/theme-confluence")
-def run_theme_confluence_backtest(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_theme_confluence_backtest(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return BacktestService(db).run_theme_confluence(payload)
     except ValueError as error:
@@ -1622,7 +1621,7 @@ def _structured_backtest_error(code: str, error: Exception) -> HTTPException:
 
 
 @app.post("/api/backtests/compare")
-def compare_backtests(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def compare_backtests(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     run_ids = payload.get("run_ids") or payload.get("runIds") or []
     if not isinstance(run_ids, list) or not run_ids:
         raise HTTPException(status_code=400, detail={"code": "invalid_backtest_compare_request", "field": "run_ids"})
@@ -1642,7 +1641,7 @@ def get_backtest_trades(
     run_id: str,
     limit: int = 100,
     offset: int = 0,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     try:
         result = BacktestService(db).get_trades(run_id, limit=limit, offset=offset)
@@ -1654,7 +1653,7 @@ def get_backtest_trades(
 
 
 @app.get("/api/backtests/{run_id}/equity")
-def get_backtest_equity(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_backtest_equity(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).get_equity(run_id)
     if not result:
         raise _backtest_not_found(run_id)
@@ -1668,7 +1667,7 @@ def get_backtest_signals(
     regime: str | None = None,
     limit: int = 200,
     offset: int = 0,
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     try:
         result = BacktestService(db).get_signals(run_id, limit=limit, offset=offset, tier=tier, regime=regime)
@@ -1680,7 +1679,7 @@ def get_backtest_signals(
 
 
 @app.get("/api/backtests/{run_id}/quality")
-def get_backtest_quality(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_backtest_quality(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).get_quality(run_id)
     if not result:
         raise _backtest_not_found(run_id)
@@ -1688,7 +1687,7 @@ def get_backtest_quality(run_id: str, db: Session | None = Depends(get_db)) -> d
 
 
 @app.delete("/api/backtests/{run_id}")
-def delete_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def delete_backtest(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).delete_run(run_id)
     if not result:
         raise _backtest_not_found(run_id)
@@ -1806,12 +1805,12 @@ def get_checkpoints(limit: int = Query(20, ge=1, le=100)) -> list[dict[str, Any]
 
 
 @app.get("/api/backtests")
-def list_backtests(limit: int = Query(50, ge=1, le=200), db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def list_backtests(limit: int = Query(50, ge=1, le=200), db: Any | None = Depends(get_db)) -> dict[str, Any]:
     return BacktestService(db).list_runs(limit=limit)
 
 
 @app.get("/api/backtests/{run_id}")
-def get_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_backtest(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     result = BacktestService(db).get_run(run_id)
     if not result:
         raise _backtest_not_found(run_id)
@@ -1819,17 +1818,17 @@ def get_backtest(run_id: str, db: Session | None = Depends(get_db)) -> dict[str,
 
 
 @app.get("/api/backtests/{run_id}/report")
-def get_backtest_report(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_backtest_report(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     return get_backtest(run_id, db)
 
 
 @app.get("/api/storage/research-summary")
-def get_research_storage_summary(db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_research_storage_summary(db: Any | None = Depends(get_db)) -> dict[str, Any]:
     return BacktestService(db).research_storage_summary()
 
 
 @app.post("/api/storage/research-cleanup-preview")
-def preview_research_cleanup(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def preview_research_cleanup(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return BacktestService(db).cleanup_research(payload, apply=False)
     except ValueError as error:
@@ -1837,7 +1836,7 @@ def preview_research_cleanup(payload: dict[str, Any], db: Session | None = Depen
 
 
 @app.post("/api/storage/research-cleanup")
-def cleanup_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def cleanup_research(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return BacktestService(db).cleanup_research(payload, apply=True)
     except ValueError as error:
@@ -1845,7 +1844,7 @@ def cleanup_research(payload: dict[str, Any], db: Session | None = Depends(get_d
 
 
 @app.post("/api/optimizations/rank-trend")
-def run_ranktrend_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_ranktrend_optimization(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return OptimizationService(db).run_ranktrend(payload)
     except OptimizationQueueFull as error:
@@ -1855,7 +1854,7 @@ def run_ranktrend_optimization(payload: dict[str, Any], db: Session | None = Dep
 
 
 @app.post("/api/optimizations/theme-trend")
-def run_theme_trend_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_theme_trend_optimization(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return OptimizationService(db).run_theme_trend(payload)
     except ValueError as error:
@@ -1863,7 +1862,7 @@ def run_theme_trend_optimization(payload: dict[str, Any], db: Session | None = D
 
 
 @app.post("/api/optimizations/theme-confluence")
-def run_theme_confluence_optimization(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_theme_confluence_optimization(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return OptimizationService(db).run_theme_confluence(payload)
     except ValueError as error:
@@ -1871,7 +1870,7 @@ def run_theme_confluence_optimization(payload: dict[str, Any], db: Session | Non
 
 
 @app.post("/api/research/ranktrend-jump")
-def run_ranktrend_jump_research(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def run_ranktrend_jump_research(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return OptimizationService(db).run_ranktrend_jump_research(payload)
     except ValueError as error:
@@ -1879,7 +1878,7 @@ def run_ranktrend_jump_research(payload: dict[str, Any], db: Session | None = De
 
 
 @app.get("/api/optimizations/{run_id}")
-def get_optimization(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_optimization(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     result = OptimizationService(db).get_run(run_id)
     if not result:
         raise HTTPException(status_code=404, detail=f"optimization run not found: {run_id}")
@@ -1890,7 +1889,7 @@ def get_optimization(run_id: str, db: Session | None = Depends(get_db)) -> dict[
 def get_theme_research_summary(
     dataset_id: str = "dragonboard_live",
     snapshot_type: str = "half_hour",
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any]:
     """Dragon Board 消费的题材研究摘要。QuantBoard 后端不可用时前端显示"不可用"。
 
@@ -1928,7 +1927,7 @@ def get_theme_research_summary(
 def _compute_theme_research_summary(
     dataset_id: str,
     snapshot_type: str,
-    db: Session | None,
+    db: Any | None,
 ) -> dict[str, Any]:
     try:
         repo = create_repository(db)
@@ -1978,7 +1977,7 @@ def _compute_theme_research_summary(
 
 
 @app.get("/api/reports/theme-trend/{run_id}")
-def get_theme_trend_report(run_id: str, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def get_theme_trend_report(run_id: str, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     """主题研究报告：同时查询 optimization_runs 和 backtest_runs。
 
     bt_* 前缀的回测 ID 从 backtest_runs.result_json 提取 themeTrend 段；
@@ -2239,7 +2238,7 @@ def _build_theme_trade_report(trades: list[dict[str, Any]], execution_signals: l
 
 
 @app.post("/api/golden/import")
-def import_golden(request: GoldenImportRequest, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def import_golden(request: GoldenImportRequest, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return GoldenService(db).import_case(request.model_dump(by_alias=True))
     except ValueError as error:
@@ -2247,7 +2246,7 @@ def import_golden(request: GoldenImportRequest, db: Session | None = Depends(get
 
 
 @app.post("/api/golden/baseline")
-def create_golden_baseline(payload: dict[str, Any], db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def create_golden_baseline(payload: dict[str, Any], db: Any | None = Depends(get_db)) -> dict[str, Any]:
     try:
         return GoldenService(db).create_baseline(payload)
     except ValueError as error:
@@ -2255,7 +2254,7 @@ def create_golden_baseline(payload: dict[str, Any], db: Session | None = Depends
 
 
 @app.post("/api/golden/validate")
-def validate_golden(request: GoldenValidateRequest, db: Session | None = Depends(get_db)) -> dict[str, Any]:
+def validate_golden(request: GoldenValidateRequest, db: Any | None = Depends(get_db)) -> dict[str, Any]:
     return GoldenService(db).validate(request.model_dump(by_alias=True))
 
 

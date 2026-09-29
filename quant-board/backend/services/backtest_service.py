@@ -3,7 +3,6 @@ import gzip
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.analysis.theme.rotation.signals import (
@@ -345,7 +344,7 @@ def _sg1_close_slot_flags(
 
 
 class BacktestService:
-    def __init__(self, session: Session | None):
+    def __init__(self, session: Any | None):
         self.repo = create_repository(session)
 
     def _augment_low_hotlist_examples(

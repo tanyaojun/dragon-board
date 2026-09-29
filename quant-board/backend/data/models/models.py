@@ -1,528 +1,389 @@
+"""领域模型 —— 纯 dataclass（2026-09-29 深度解绑）。
+
+历史上这是 SQLAlchemy ORM 声明（sqlite 主链时代）；sqlite 链退役后转换为
+dataclass，仅作为 mongo 仓库与服务层的内存领域对象 + 字段 schema 文档：
+
+- 构造合同与原 ORM 完全等价：所有字段均可省略（省略 = None，或取声明默认值），
+  ``created_at`` 等时间戳字段省略时取 ``datetime.utcnow``；
+- 全部 ``kw_only=True``：构造必须用关键字参数；
+- ``*_json`` 文本字段的压缩/解压由 ``backend/data/ingest/json_codec`` 在仓库层处理；
+- mongo 集合的索引/唯一键定义见 ``mongodb_migration.py`` 与生产库实际索引，
+  不再由 ORM ``__table_args__`` 声明。
+
+禁止重新引入 SQLAlchemy/ORM 声明。
+"""
 from __future__ import annotations
 
-from datetime import datetime
-
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, event
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.orm import Session as ORMSession
-
-from backend.data.models.database import Base, ResearchBase
-from backend.data.ingest.json_codec import dumps_json_field
-
-
-class Dataset(Base):
-    __tablename__ = "datasets"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    name: Mapped[str] = mapped_column(String(160), nullable=False)
-    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    source_path: Mapped[str] = mapped_column(Text, default="")
-    db_name: Mapped[str] = mapped_column(String(80), default="DragonBoardData")
-    schema_fingerprint: Mapped[str] = mapped_column(String(96), default="")
-    snapshot_count: Mapped[int] = mapped_column(Integer, default=0)
-    frame_count: Mapped[int] = mapped_column(Integer, default=0)
-    stock_row_count: Mapped[int] = mapped_column(Integer, default=0)
-    sector_row_count: Mapped[int] = mapped_column(Integer, default=0)
-    start_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    end_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    snapshot_types_json: Mapped[str] = mapped_column(Text, default="[]")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class SnapshotRecordModel(Base):
-    __tablename__ = "snapshot_records"
-    __table_args__ = (UniqueConstraint("dataset_id", "snapshot_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    type: Mapped[str] = mapped_column(String(32), index=True)
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    timestamp: Mapped[int] = mapped_column(Integer, index=True)
-    display_key: Mapped[str] = mapped_column(String(160), default="")
-    capture_mode: Mapped[str] = mapped_column(String(32), default="real_time")
-    captured_at: Mapped[int] = mapped_column(Integer, default=0)
-    data_timestamp: Mapped[int] = mapped_column(Integer, default=0)
-    delay_ms: Mapped[int] = mapped_column(Integer, default=0)
-    quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    source: Mapped[str] = mapped_column(String(32), default="browser_runtime")
-
-
-class SnapshotFrameModel(Base):
-    __tablename__ = "snapshot_frames"
-    __table_args__ = (UniqueConstraint("dataset_id", "snapshot_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    type: Mapped[str] = mapped_column(String(32), index=True)
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    timestamp: Mapped[int] = mapped_column(Integer, index=True)
-    display_key: Mapped[str] = mapped_column(String(160), default="")
-    capture_mode: Mapped[str] = mapped_column(String(32), default="real_time")
-    quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    delay_ms: Mapped[int] = mapped_column(Integer, default=0)
-    source: Mapped[str] = mapped_column(String(32), default="browser_runtime")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-    market_stats_json: Mapped[str] = mapped_column(Text, default="{}")
-    sentiment_json: Mapped[str] = mapped_column(Text, default="{}")
-    money_flow_json: Mapped[str] = mapped_column(Text, default="{}")
-    indices_json: Mapped[str] = mapped_column(Text, default="{}")
-    limit_summary_json: Mapped[str] = mapped_column(Text, default="{}")
-    rotation_summary_json: Mapped[str] = mapped_column(Text, default="{}")
-    stock_row_count: Mapped[int] = mapped_column(Integer, default=0)
-    sector_row_count: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class SnapshotStockRowModel(Base):
-    __tablename__ = "snapshot_stock_rows"
-    __table_args__ = (UniqueConstraint("dataset_id", "row_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
-    row_id: Mapped[str] = mapped_column(String(220), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    type: Mapped[str] = mapped_column(String(32), index=True)
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    timestamp: Mapped[int] = mapped_column(Integer, index=True)
-    capture_mode: Mapped[str] = mapped_column(String(32), default="real_time")
-    source: Mapped[str] = mapped_column(String(32), default="browser_runtime")
-    code: Mapped[str] = mapped_column(String(16), index=True)
-    name: Mapped[str] = mapped_column(String(80), default="")
-    rank: Mapped[int] = mapped_column(Integer, default=0)
-    comp_rank: Mapped[int] = mapped_column(Integer, default=0)
-    platforms: Mapped[int] = mapped_column(Integer, default=0)
-    avg_rank: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    avg_rank_num: Mapped[float | None] = mapped_column(Float, nullable=True)
-    price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    change: Mapped[float | None] = mapped_column(Float, nullable=True)
-    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    turnover: Mapped[float | None] = mapped_column(Float, nullable=True)
-    turnover_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
-    total_mv: Mapped[float | None] = mapped_column(Float, nullable=True)
-    cir_mv: Mapped[float | None] = mapped_column(Float, nullable=True)
-    volume_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
-    zlje: Mapped[float | None] = mapped_column(Float, nullable=True)
-    zljzb: Mapped[float | None] = mapped_column(Float, nullable=True)
-    cddje: Mapped[float | None] = mapped_column(Float, nullable=True)
-    cddjzb: Mapped[float | None] = mapped_column(Float, nullable=True)
-    pe: Mapped[float | None] = mapped_column(Float, nullable=True)
-    pb: Mapped[float | None] = mapped_column(Float, nullable=True)
-    depth10_json: Mapped[str] = mapped_column(Text, default="{}")
-    bid1_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    bid1_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ask1_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ask1_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    spread: Mapped[float | None] = mapped_column(Float, nullable=True)
-    bid10_total: Mapped[float | None] = mapped_column(Float, nullable=True)
-    ask10_total: Mapped[float | None] = mapped_column(Float, nullable=True)
-    depth_imbalance: Mapped[float | None] = mapped_column(Float, nullable=True)
-    tick_buy_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    tick_sell_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    tick_buy_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    tick_sell_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    last_trade_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    last_trade_volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    speed: Mapped[float | None] = mapped_column(Float, nullable=True)
-    lead_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    lead_times: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    lianban_str: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    fengdan: Mapped[float | None] = mapped_column(Float, nullable=True)
-    max_fengdan: Mapped[float | None] = mapped_column(Float, nullable=True)
-    popularity: Mapped[float | None] = mapped_column(Float, nullable=True)
-    popularity_change: Mapped[float | None] = mapped_column(Float, nullable=True)
-    institution_buy: Mapped[float | None] = mapped_column(Float, nullable=True)
-    big_money300: Mapped[float | None] = mapped_column(Float, nullable=True)
-    themes_json: Mapped[str] = mapped_column(Text, default="[]")
-    theme_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
-    theme_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    theme_exposure_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
-    theme_risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    is_new: Mapped[bool] = mapped_column(Boolean, default=False)
-    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    first_zt_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    last_zt_time: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    board_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    high_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    hotness: Mapped[float | None] = mapped_column(Float, nullable=True)
-    main_theme: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    theme_heat: Mapped[float | None] = mapped_column(Float, nullable=True)
-    theme_level: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    rank_change: Mapped[float | None] = mapped_column(Float, nullable=True)
-    direction_signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    direction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    acceleration_signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    acceleration_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    cross_signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    cross_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    final_signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    final_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    jump_direction: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    jump_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    macd_cross: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    resonance_intensity: Mapped[float | None] = mapped_column(Float, nullable=True)
-
-
-class SnapshotSectorRowModel(Base):
-    __tablename__ = "snapshot_sector_rows"
-    __table_args__ = (UniqueConstraint("dataset_id", "row_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id", ondelete="CASCADE"), index=True)
-    row_id: Mapped[str] = mapped_column(String(240), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    type: Mapped[str] = mapped_column(String(32), index=True)
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    timestamp: Mapped[int] = mapped_column(Integer, index=True)
-    capture_mode: Mapped[str] = mapped_column(String(32), default="real_time")
-    source: Mapped[str] = mapped_column(String(32), default="browser_runtime")
-    entity_type: Mapped[str] = mapped_column(String(40), default="")
-    entity_key: Mapped[str] = mapped_column(String(160), default="")
-    entity_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
-    entity_name: Mapped[str] = mapped_column(String(160), default="")
-    rank: Mapped[int] = mapped_column(Integer, default=0)
-    strength: Mapped[float | None] = mapped_column(Float, nullable=True)
-    heat_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    heat_level: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    change: Mapped[float | None] = mapped_column(Float, nullable=True)
-    main_net_inflow: Mapped[float | None] = mapped_column(Float, nullable=True)
-    big_money300: Mapped[float | None] = mapped_column(Float, nullable=True)
-    institution_buy: Mapped[float | None] = mapped_column(Float, nullable=True)
-    volume_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
-    zt_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    leader_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    persistent_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    net_inflow: Mapped[float | None] = mapped_column(Float, nullable=True)
-    momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    breadth_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    fund_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    leadership_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    correlation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    crowding_risk: Mapped[float | None] = mapped_column(Float, nullable=True)
-    persistence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rotation_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    theme_quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
-
-
-class GoldenRankTrendCase(ResearchBase):
-    __tablename__ = "golden_ranktrend_cases"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    name: Mapped[str] = mapped_column(String(160), nullable=False)
-    dataset_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    input_json: Mapped[str] = mapped_column(Text, default="{}")
-    expected_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class BacktestRun(ResearchBase):
-    __tablename__ = "backtest_runs"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
-    strategy_name: Mapped[str] = mapped_column(String(80), default="rank_trend_candidate")
-    strategy_version: Mapped[str] = mapped_column(String(40), default="0.1.0")
-    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
-    config_hash: Mapped[str] = mapped_column(String(96), default="")
-    random_seed: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(32), default="completed")
-    date_start: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    date_end: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    error_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    request_json: Mapped[str] = mapped_column(Text, default="{}")
-    result_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class BacktestTrade(ResearchBase):
-    __tablename__ = "backtest_trades"
-    __table_args__ = (Index("ix_bt_trades_run_id", "backtest_run_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
-    code: Mapped[str] = mapped_column(String(16), index=True)
-    name: Mapped[str] = mapped_column(String(80), default="")
-    side: Mapped[str] = mapped_column(String(8), default="buy")
-    entry_snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    exit_snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    entry_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    exit_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    entry_trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    exit_trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
-    quantity: Mapped[int] = mapped_column(Integer, default=0)
-    gross_return: Mapped[float | None] = mapped_column(Float, nullable=True)
-    net_return: Mapped[float | None] = mapped_column(Float, nullable=True)
-    profit: Mapped[float | None] = mapped_column(Float, nullable=True)
-    holding_bars: Mapped[int] = mapped_column(Integer, default=0)
-    reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    candidate_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
-    fill_detail_json: Mapped[str] = mapped_column(Text, default="{}")
-
-
-class BacktestEquityCurve(ResearchBase):
-    __tablename__ = "backtest_equity_curve"
-    __table_args__ = (Index("ix_bt_equity_run_id", "backtest_run_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
-    snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    timestamp: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    equity: Mapped[float | None] = mapped_column(Float, nullable=True)
-    cash: Mapped[float | None] = mapped_column(Float, nullable=True)
-    market_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    position_count: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class BacktestSignal(ResearchBase):
-    __tablename__ = "backtest_signals"
-    __table_args__ = (Index("ix_bt_signals_run_id_snapshot", "backtest_run_id", "snapshot_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
-    snapshot_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    trading_date: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    code: Mapped[str] = mapped_column(String(16), index=True)
-    name: Mapped[str] = mapped_column(String(80), default="")
-    candidate_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    regime: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
-    risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    main_theme: Mapped[str | None] = mapped_column(String(160), nullable=True)
-    theme_heat: Mapped[float | None] = mapped_column(Float, nullable=True)
-    theme_contribution: Mapped[float | None] = mapped_column(Float, nullable=True)
-    theme_role: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    theme_support_score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    theme_risk_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    theme_reasons_json: Mapped[str] = mapped_column(Text, default="[]")
-
-
-class BacktestQualityReport(ResearchBase):
-    __tablename__ = "backtest_quality_reports"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backtest_run_id: Mapped[str] = mapped_column(ForeignKey("backtest_runs.id", ondelete="CASCADE"), index=True)
-    passed: Mapped[bool] = mapped_column(Boolean, default=False)
-    severity: Mapped[str] = mapped_column(String(32), default="pass")
-    research_grade: Mapped[str] = mapped_column(String(32), default="research_ready")
-    frame_count: Mapped[int] = mapped_column(Integer, default=0)
-    stock_count: Mapped[int] = mapped_column(Integer, default=0)
-    sector_count: Mapped[int] = mapped_column(Integer, default=0)
-    missing_fields_json: Mapped[str] = mapped_column(Text, default="{}")
-    nan_counts_json: Mapped[str] = mapped_column(Text, default="{}")
-    inf_counts_json: Mapped[str] = mapped_column(Text, default="{}")
-    negative_price_count: Mapped[int] = mapped_column(Integer, default=0)
-    non_positive_price_count: Mapped[int] = mapped_column(Integer, default=0)
-    negative_volume_count: Mapped[int] = mapped_column(Integer, default=0)
-    coverage_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
-    time_order_fixed: Mapped[bool] = mapped_column(Boolean, default=False)
-    time_order_fix_count: Mapped[int] = mapped_column(Integer, default=0)
-    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
-
-
-class OptimizationRun(ResearchBase):
-    __tablename__ = "optimization_runs"
-
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
-    strategy_name: Mapped[str] = mapped_column(String(80), default="rank_trend_candidate")
-    method: Mapped[str] = mapped_column(String(40), default="grid")
-    config_hash: Mapped[str] = mapped_column(String(96), default="")
-    random_seed: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(32), default="completed")
-    request_json: Mapped[str] = mapped_column(Text, default="{}")
-    result_json: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-
-class ThemeFactorFrameModel(ResearchBase):
-    __tablename__ = "theme_factor_frames"
-    __table_args__ = (Index("ix_tf_dataset_snapshot", "dataset_id", "snapshot_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
-    config_hash: Mapped[str] = mapped_column(String(96), default="")
-    random_seed: Mapped[int] = mapped_column(Integer, default=0)
-    theme_id: Mapped[str] = mapped_column(String(160))
-    theme_name: Mapped[str] = mapped_column(String(160), default="")
-    heat_score: Mapped[float] = mapped_column(Float, default=0.0)
-    momentum_score: Mapped[float] = mapped_column(Float, default=0.0)
-    breadth_score: Mapped[float] = mapped_column(Float, default=0.0)
-    fund_score: Mapped[float] = mapped_column(Float, default=0.0)
-    leadership_score: Mapped[float] = mapped_column(Float, default=0.0)
-    correlation_score: Mapped[float] = mapped_column(Float, default=0.0)
-    crowding_risk: Mapped[float] = mapped_column(Float, default=0.0)
-    persistence_score: Mapped[float] = mapped_column(Float, default=0.0)
-    rotation_state: Mapped[str] = mapped_column(String(32), default="neutral")
-    rank: Mapped[int] = mapped_column(Integer, default=0)
-    quality_flags_json: Mapped[str] = mapped_column(Text, default="[]")
-    lifecycle: Mapped[str] = mapped_column(String(32), default="neutral")
-
-
-class ThemeStockExposureModel(ResearchBase):
-    __tablename__ = "theme_stock_exposures"
-    __table_args__ = (Index("ix_tse_dataset_snapshot", "dataset_id", "snapshot_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
-    config_hash: Mapped[str] = mapped_column(String(96), default="")
-    random_seed: Mapped[int] = mapped_column(Integer, default=0)
-    code: Mapped[str] = mapped_column(String(16), index=True)
-    theme_id: Mapped[str] = mapped_column(String(160))
-    theme_name: Mapped[str] = mapped_column(String(160), default="")
-    role: Mapped[str] = mapped_column(String(32), default="unknown")
-    role_score: Mapped[float] = mapped_column(Float, default=0.0)
-    exposure_weight: Mapped[float] = mapped_column(Float, default=0.0)
-    theme_contribution: Mapped[float] = mapped_column(Float, default=0.0)
-    risk_penalty: Mapped[float] = mapped_column(Float, default=0.0)
-    reasons_json: Mapped[str] = mapped_column(Text, default="[]")
-
-
-class ThemeSignalModel(ResearchBase):
-    __tablename__ = "theme_signals"
-    __table_args__ = (Index("ix_ts_dataset_snapshot", "dataset_id", "snapshot_id"),)
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
-    snapshot_id: Mapped[str] = mapped_column(String(160), index=True)
-    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
-    trading_date: Mapped[str] = mapped_column(String(16), index=True)
-    slot_time: Mapped[str] = mapped_column(String(16), default="")
-    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
-    config_hash: Mapped[str] = mapped_column(String(96), default="")
-    random_seed: Mapped[int] = mapped_column(Integer, default=0)
-    theme_id: Mapped[str] = mapped_column(String(160))
-    theme_name: Mapped[str] = mapped_column(String(160), default="")
-    signal: Mapped[str] = mapped_column(String(32), default="watch")
-    risk: Mapped[str] = mapped_column(String(32), default="none")
-    lifecycle: Mapped[str] = mapped_column(String(32), default="neutral")
-    score: Mapped[float] = mapped_column(Float, default=0.0)
-
-
-class ThemeQualityReportModel(ResearchBase):
-    __tablename__ = "theme_quality_reports"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    dataset_id: Mapped[str] = mapped_column(String(64), index=True)
-    snapshot_type: Mapped[str] = mapped_column(String(32), default="half_hour")
-    strategy_version: Mapped[str] = mapped_column(String(40), default="theme-trend-v12")
-    config_hash: Mapped[str] = mapped_column(String(96), default="")
-    random_seed: Mapped[int] = mapped_column(Integer, default=0)
-    passed: Mapped[bool] = mapped_column(Boolean, default=False)
-    severity: Mapped[str] = mapped_column(String(32), default="pass")
-    research_grade: Mapped[str] = mapped_column(String(32), default="research_ready")
-    issues_json: Mapped[str] = mapped_column(Text, default="[]")
-    warnings_json: Mapped[str] = mapped_column(Text, default="[]")
-    stats_json: Mapped[str] = mapped_column(Text, default="{}")
-    theme_coverage: Mapped[float] = mapped_column(Float, default=0.0)
-    frame_count: Mapped[int] = mapped_column(Integer, default=0)
-    stock_count: Mapped[int] = mapped_column(Integer, default=0)
-    theme_count: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class ArchiveManifestModel(Base):
-    __tablename__ = "archive_manifests"
-    __table_args__ = (
-        UniqueConstraint("archive_id"),
-        Index("ix_archive_manifests_scope_status", "scope", "status"),
-        Index("ix_archive_manifests_dataset_type_date", "dataset_id", "snapshot_type", "trading_date"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    archive_id: Mapped[str] = mapped_column(String(240), nullable=False)
-    scope: Mapped[str] = mapped_column(String(32), index=True)
-    dataset_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
-    snapshot_type: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
-    trading_date: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
-    run_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
-    local_path: Mapped[str] = mapped_column(Text, default="")
-    object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), index=True, default="local_written")
-    row_counts_json: Mapped[str] = mapped_column(Text, default="{}")
-    file_hashes_json: Mapped[str] = mapped_column(Text, default="{}")
-    byte_size: Mapped[int] = mapped_column(Integer, default=0)
-    schema_version: Mapped[str] = mapped_column(String(32), default="archive.v1")
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
-RESEARCH_JSON_FIELD_MAP = {
-    GoldenRankTrendCase: ("input_json", "expected_json"),
-    BacktestRun: ("request_json", "result_json"),
-    BacktestTrade: ("fill_detail_json",),
-    BacktestSignal: ("reasons_json", "risk_flags_json", "theme_risk_flags_json", "theme_reasons_json"),
-    BacktestQualityReport: ("missing_fields_json", "nan_counts_json", "inf_counts_json", "warnings_json"),
-    OptimizationRun: ("request_json", "result_json"),
-    ThemeFactorFrameModel: ("quality_flags_json",),
-    ThemeStockExposureModel: ("reasons_json",),
-    ThemeSignalModel: (),  # 信号表无 JSON 列，所有字段均为标量
-    ThemeQualityReportModel: ("issues_json", "warnings_json", "stats_json"),
-}
-
-
-def _compress_research_json_fields(session: ORMSession) -> None:
-    for instance in session.new.union(session.dirty):
-        fields = RESEARCH_JSON_FIELD_MAP.get(type(instance))
-        if not fields:
-            continue
-        for field in fields:
-            setattr(instance, field, dumps_json_field(getattr(instance, field) or "{}"))
-
-
-@event.listens_for(ORMSession, "before_flush")
-def _compress_research_json_fields_before_flush(session: ORMSession, *_args: object) -> None:
-    _compress_research_json_fields(session)
-
-
-class SyncOutboxModel(Base):
-    __tablename__ = "sync_outbox"
-    __table_args__ = (
-        UniqueConstraint("idempotency_key"),
-        Index("ix_sync_outbox_status_next_retry_at", "status", "next_retry_at"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    op_type: Mapped[str] = mapped_column(String(80), index=True)
-    dataset_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True, default=None)
-    snapshot_id: Mapped[str | None] = mapped_column(String(160), index=True, nullable=True, default=None)
-    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
-    status: Mapped[str] = mapped_column(String(24), index=True, default="pending")
-    retry_count: Mapped[int] = mapped_column(Integer, default=0)
-    last_error: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
+
+
+@dataclass(kw_only=True)
+class Dataset:
+    id: str | None = None
+    name: str | None = None
+    source_type: str | None = None
+    source_path: str = ""
+    db_name: str = "DragonBoardData"
+    schema_fingerprint: str = ""
+    snapshot_count: int = 0
+    frame_count: int = 0
+    stock_row_count: int = 0
+    sector_row_count: int = 0
+    start_date: str | None = None
+    end_date: str | None = None
+    snapshot_types_json: str = "[]"
+    metadata_json: str = "{}"
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(kw_only=True)
+class SnapshotStockRowModel:
+    id: int | None = None
+    dataset_id: str | None = None
+    row_id: str | None = None
+    snapshot_id: str | None = None
+    type: str | None = None
+    trading_date: str | None = None
+    slot_time: str = ""
+    timestamp: int | None = None
+    capture_mode: str = "real_time"
+    source: str = "browser_runtime"
+    code: str | None = None
+    name: str = ""
+    rank: int = 0
+    comp_rank: int = 0
+    platforms: int = 0
+    avg_rank: str | None = None
+    avg_rank_num: float | None = None
+    price: float | None = None
+    change: float | None = None
+    volume: float | None = None
+    turnover: float | None = None
+    turnover_rate: float | None = None
+    total_mv: float | None = None
+    cir_mv: float | None = None
+    volume_ratio: float | None = None
+    zlje: float | None = None
+    zljzb: float | None = None
+    cddje: float | None = None
+    cddjzb: float | None = None
+    pe: float | None = None
+    pb: float | None = None
+    depth10_json: str = "{}"
+    bid1_price: float | None = None
+    bid1_volume: float | None = None
+    ask1_price: float | None = None
+    ask1_volume: float | None = None
+    spread: float | None = None
+    bid10_total: float | None = None
+    ask10_total: float | None = None
+    depth_imbalance: float | None = None
+    tick_buy_volume: float | None = None
+    tick_sell_volume: float | None = None
+    tick_buy_count: int | None = None
+    tick_sell_count: int | None = None
+    last_trade_price: float | None = None
+    last_trade_volume: float | None = None
+    speed: float | None = None
+    lead_status: str | None = None
+    lead_times: int | None = None
+    lianban_str: str | None = None
+    fengdan: float | None = None
+    max_fengdan: float | None = None
+    popularity: float | None = None
+    popularity_change: float | None = None
+    institution_buy: float | None = None
+    big_money300: float | None = None
+    themes_json: str = "[]"
+    theme_contribution: float | None = None
+    theme_role: str | None = None
+    theme_exposure_weight: float | None = None
+    theme_risk_flags_json: str = "[]"
+    is_new: bool = False
+    reason: str | None = None
+    first_zt_time: str | None = None
+    last_zt_time: str | None = None
+    board_height: int | None = None
+    high_days: int | None = None
+    hotness: float | None = None
+    main_theme: str | None = None
+    theme_heat: float | None = None
+    theme_level: str | None = None
+    rank_change: float | None = None
+    direction_signal: str | None = None
+    direction_confidence: float | None = None
+    acceleration_signal: str | None = None
+    acceleration_confidence: float | None = None
+    cross_signal: str | None = None
+    cross_confidence: float | None = None
+    final_signal: str | None = None
+    final_confidence: float | None = None
+    jump_direction: str | None = None
+    jump_confidence: float | None = None
+    macd_cross: str | None = None
+    resonance_intensity: float | None = None
+
+
+@dataclass(kw_only=True)
+class SnapshotSectorRowModel:
+    id: int | None = None
+    dataset_id: str | None = None
+    row_id: str | None = None
+    snapshot_id: str | None = None
+    type: str | None = None
+    trading_date: str | None = None
+    slot_time: str = ""
+    timestamp: int | None = None
+    capture_mode: str = "real_time"
+    source: str = "browser_runtime"
+    entity_type: str = ""
+    entity_key: str = ""
+    entity_code: str | None = None
+    entity_name: str = ""
+    rank: int = 0
+    strength: float | None = None
+    heat_score: float | None = None
+    heat_level: str | None = None
+    change: float | None = None
+    main_net_inflow: float | None = None
+    big_money300: float | None = None
+    institution_buy: float | None = None
+    volume_ratio: float | None = None
+    zt_count: int | None = None
+    leader_count: int | None = None
+    persistent_days: int | None = None
+    net_inflow: float | None = None
+    momentum_score: float | None = None
+    breadth_score: float | None = None
+    fund_score: float | None = None
+    leadership_score: float | None = None
+    correlation_score: float | None = None
+    crowding_risk: float | None = None
+    persistence_score: float | None = None
+    rotation_state: str | None = None
+    theme_quality_flags_json: str = "[]"
+    metadata_json: str = "{}"
+
+
+@dataclass(kw_only=True)
+class GoldenRankTrendCase:
+    id: str | None = None
+    name: str | None = None
+    dataset_id: str | None = None
+    input_json: str = "{}"
+    expected_json: str = "{}"
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(kw_only=True)
+class BacktestRun:
+    id: str | None = None
+    dataset_id: str | None = None
+    strategy_name: str = "rank_trend_candidate"
+    strategy_version: str = "0.1.0"
+    snapshot_type: str = "half_hour"
+    config_hash: str = ""
+    random_seed: int = 0
+    status: str = "completed"
+    date_start: str | None = None
+    date_end: str | None = None
+    error_reason: str | None = None
+    request_json: str = "{}"
+    result_json: str = "{}"
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    finished_at: datetime | None = None
+
+
+@dataclass(kw_only=True)
+class BacktestTrade:
+    id: int | None = None
+    backtest_run_id: str | None = None
+    code: str | None = None
+    name: str = ""
+    side: str = "buy"
+    entry_snapshot_id: str | None = None
+    exit_snapshot_id: str | None = None
+    entry_time: int | None = None
+    exit_time: int | None = None
+    entry_trading_date: str | None = None
+    exit_trading_date: str | None = None
+    entry_price: float | None = None
+    exit_price: float | None = None
+    quantity: int = 0
+    gross_return: float | None = None
+    net_return: float | None = None
+    profit: float | None = None
+    holding_bars: int = 0
+    reason: str | None = None
+    candidate_tier: str | None = None
+    stage: str | None = None
+    regime: str | None = None
+    explanation: str | None = None
+    fill_detail_json: str = "{}"
+
+
+@dataclass(kw_only=True)
+class BacktestEquityCurve:
+    id: int | None = None
+    backtest_run_id: str | None = None
+    snapshot_id: str | None = None
+    timestamp: int | None = None
+    trading_date: str | None = None
+    equity: float | None = None
+    cash: float | None = None
+    market_value: float | None = None
+    position_count: int = 0
+
+
+@dataclass(kw_only=True)
+class BacktestSignal:
+    id: int | None = None
+    backtest_run_id: str | None = None
+    snapshot_id: str | None = None
+    trading_date: str | None = None
+    code: str | None = None
+    name: str = ""
+    candidate_tier: str | None = None
+    signal: str | None = None
+    confidence: float | None = None
+    rank: int | None = None
+    stage: str | None = None
+    regime: str | None = None
+    reasons_json: str = "[]"
+    risk_flags_json: str = "[]"
+    main_theme: str | None = None
+    theme_heat: float | None = None
+    theme_contribution: float | None = None
+    theme_role: str | None = None
+    theme_support_score: float | None = None
+    theme_risk_flags_json: str = "[]"
+    theme_reasons_json: str = "[]"
+
+
+@dataclass(kw_only=True)
+class BacktestQualityReport:
+    id: int | None = None
+    backtest_run_id: str | None = None
+    passed: bool = False
+    severity: str = "pass"
+    research_grade: str = "research_ready"
+    frame_count: int = 0
+    stock_count: int = 0
+    sector_count: int = 0
+    missing_fields_json: str = "{}"
+    nan_counts_json: str = "{}"
+    inf_counts_json: str = "{}"
+    negative_price_count: int = 0
+    non_positive_price_count: int = 0
+    negative_volume_count: int = 0
+    coverage_ratio: float | None = None
+    time_order_fixed: bool = False
+    time_order_fix_count: int = 0
+    warnings_json: str = "[]"
+
+
+@dataclass(kw_only=True)
+class OptimizationRun:
+    id: str | None = None
+    dataset_id: str | None = None
+    strategy_name: str = "rank_trend_candidate"
+    method: str = "grid"
+    config_hash: str = ""
+    random_seed: int = 0
+    status: str = "completed"
+    request_json: str = "{}"
+    result_json: str = "{}"
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass(kw_only=True)
+class ThemeFactorFrameModel:
+    id: int | None = None
+    dataset_id: str | None = None
+    snapshot_id: str | None = None
+    snapshot_type: str = "half_hour"
+    trading_date: str | None = None
+    slot_time: str = ""
+    strategy_version: str = "theme-trend-v12"
+    config_hash: str = ""
+    random_seed: int = 0
+    theme_id: str | None = None
+    theme_name: str = ""
+    heat_score: float = 0.0
+    momentum_score: float = 0.0
+    breadth_score: float = 0.0
+    fund_score: float = 0.0
+    leadership_score: float = 0.0
+    correlation_score: float = 0.0
+    crowding_risk: float = 0.0
+    persistence_score: float = 0.0
+    rotation_state: str = "neutral"
+    rank: int = 0
+    quality_flags_json: str = "[]"
+    lifecycle: str = "neutral"
+
+
+@dataclass(kw_only=True)
+class ThemeStockExposureModel:
+    id: int | None = None
+    dataset_id: str | None = None
+    snapshot_id: str | None = None
+    snapshot_type: str = "half_hour"
+    trading_date: str | None = None
+    slot_time: str = ""
+    strategy_version: str = "theme-trend-v12"
+    config_hash: str = ""
+    random_seed: int = 0
+    code: str | None = None
+    theme_id: str | None = None
+    theme_name: str = ""
+    role: str = "unknown"
+    role_score: float = 0.0
+    exposure_weight: float = 0.0
+    theme_contribution: float = 0.0
+    risk_penalty: float = 0.0
+    reasons_json: str = "[]"
+
+
+@dataclass(kw_only=True)
+class ThemeSignalModel:
+    id: int | None = None
+    dataset_id: str | None = None
+    snapshot_id: str | None = None
+    snapshot_type: str = "half_hour"
+    trading_date: str | None = None
+    slot_time: str = ""
+    strategy_version: str = "theme-trend-v12"
+    config_hash: str = ""
+    random_seed: int = 0
+    theme_id: str | None = None
+    theme_name: str = ""
+    signal: str = "watch"
+    risk: str = "none"
+    lifecycle: str = "neutral"
+    score: float = 0.0
+
+
+@dataclass(kw_only=True)
+class ThemeQualityReportModel:
+    id: int | None = None
+    dataset_id: str | None = None
+    snapshot_type: str = "half_hour"
+    strategy_version: str = "theme-trend-v12"
+    config_hash: str = ""
+    random_seed: int = 0
+    passed: bool = False
+    severity: str = "pass"
+    research_grade: str = "research_ready"
+    issues_json: str = "[]"
+    warnings_json: str = "[]"
+    stats_json: str = "{}"
+    theme_coverage: float = 0.0
+    frame_count: int = 0
+    stock_count: int = 0
+    theme_count: int = 0
 
 
 @dataclass

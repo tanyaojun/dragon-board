@@ -1,7 +1,6 @@
 from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
-from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.analysis.ranktrend.live_gate_shadow_audit import (
     DEFAULT_SHADOW_VARIANTS,
@@ -20,7 +19,7 @@ from backend.data.repositories.repository_factory import create_repository
 
 
 class RankTrendLiveGateAuditService:
-    def __init__(self, session: Session | None = None):
+    def __init__(self, session: Any | None = None):
         self.repo = create_repository(session)
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:

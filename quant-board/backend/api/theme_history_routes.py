@@ -4,7 +4,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
 
 from backend.data.models.database import get_db
 from backend.data.repositories.repository_factory import create_repository, storage_source_label
@@ -23,7 +22,7 @@ def get_theme_stock_volume_series(
     start_date: str | None = None,
     end_date: str | None = None,
     limit: int | None = Query(default=2000, ge=1, le=20000),
-    db: Session | None = Depends(get_db),
+    db: Any | None = Depends(get_db),
 ) -> dict[str, Any] | JSONResponse:
     """题材成分股成交量/成交额槽位聚合序列（历史趋势页签数据源）。
 

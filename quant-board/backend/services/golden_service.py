@@ -1,6 +1,5 @@
 from __future__ import annotations
 from typing import Any
-from sqlalchemy.orm import Session
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
 from backend.data.models.models import GoldenRankTrendCase
 from backend.data.ingest.json_codec import dumps_json_field, loads_json_field
@@ -10,7 +9,7 @@ from backend.core.utils import new_id, read_json_file
 
 
 class GoldenService:
-    def __init__(self, session: Session | None):
+    def __init__(self, session: Any | None):
         self.repo = create_repository(session)
 
     def create_baseline(self, payload: dict[str, Any]) -> dict[str, Any]:

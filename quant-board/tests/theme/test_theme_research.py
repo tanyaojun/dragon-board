@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from backend.analysis.theme.trend import (
     ThemeTrendConfig,
@@ -16,21 +14,7 @@ from backend.analysis.theme.trend import (
     ThemeQualityReport,
     build_theme_quality_report,
 )
-from backend.data.models.database import ResearchBase
-from backend.data.models.models import (
-    ThemeFactorFrameModel,
-    ThemeStockExposureModel,
-    ThemeSignalModel,
-    ThemeQualityReportModel,
-)
 from backend.data.repositories.theme_research_repository import ThemeResearchRepository
-
-
-def _research_session(tmp_path: Path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'research.db'}")
-    ResearchBase.metadata.create_all(bind=engine)
-    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
-    return engine, Session()
 
 
 def _frame(
@@ -262,10 +246,8 @@ def test_config_patch_respects_explicit_values() -> None:
 
 # ── repository 测试 ───────────────────────────
 
-def test_save_and_read_factor_frames(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
+def test_save_and_read_factor_frames() -> None:
     repo = ThemeResearchRepository()
-    repo._session = session
 
     rows = [
         {
@@ -307,13 +289,10 @@ def test_save_and_read_factor_frames(tmp_path: Path) -> None:
     assert results[0]["randomSeed"] == 20260430
 
     repo.close()
-    engine.dispose()
 
 
-def test_save_and_read_stock_exposures(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
+def test_save_and_read_stock_exposures() -> None:
     repo = ThemeResearchRepository()
-    repo._session = session
 
     rows = [
         {
@@ -347,13 +326,10 @@ def test_save_and_read_stock_exposures(tmp_path: Path) -> None:
     assert results[0]["reasons"] == ["role:leader", "theme:mainline"]
 
     repo.close()
-    engine.dispose()
 
 
-def test_save_and_read_signals(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
+def test_save_and_read_signals() -> None:
     repo = ThemeResearchRepository()
-    repo._session = session
 
     rows = [
         {
@@ -383,13 +359,10 @@ def test_save_and_read_signals(tmp_path: Path) -> None:
     assert results[0]["score"] == 72.5
 
     repo.close()
-    engine.dispose()
 
 
-def test_save_and_read_quality_report(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
+def test_save_and_read_quality_report() -> None:
     repo = ThemeResearchRepository()
-    repo._session = session
 
     report = {
         "datasetId": "ds_test",
@@ -418,7 +391,6 @@ def test_save_and_read_quality_report(tmp_path: Path) -> None:
     assert results[0]["frameCount"] == 10
 
     repo.close()
-    engine.dispose()
 
 
 
@@ -443,10 +415,8 @@ def _clean_ds_test_mongo_rows():
     yield
 
 
-def test_repository_filter_by_code(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
+def test_repository_filter_by_code() -> None:
     repo = ThemeResearchRepository()
-    repo._session = session
 
     rows = [
         {
@@ -499,7 +469,6 @@ def test_repository_filter_by_code(tmp_path: Path) -> None:
     assert filtered[0]["code"] == "000001"
 
     repo.close()
-    engine.dispose()
 
 
 def test_config_hash_changes_with_parameters() -> None:
@@ -510,10 +479,8 @@ def test_config_hash_changes_with_parameters() -> None:
     assert hash1 != hash2
 
 
-def test_quality_report_metadata_fields_preserved(tmp_path: Path) -> None:
-    engine, session = _research_session(tmp_path)
+def test_quality_report_metadata_fields_preserved() -> None:
     repo = ThemeResearchRepository()
-    repo._session = session
 
     report = {
         "datasetId": "ds_v12",
@@ -543,17 +510,14 @@ def test_quality_report_metadata_fields_preserved(tmp_path: Path) -> None:
     assert results[0]["randomSeed"] == 20260430
 
     repo.close()
-    engine.dispose()
 
 
-def test_large_json_field_roundtrips_through_compression(tmp_path: Path) -> None:
+def test_large_json_field_roundtrips_through_compression() -> None:
     """验证 qualityFlags JSON 字段在压缩/解压路径下的 round-trip。
 
     json_codec 默认压缩阈值为 4096 字节，超过该长度会触发 gzip + base64 编码。
     """
-    engine, session = _research_session(tmp_path)
     repo = ThemeResearchRepository()
-    repo._session = session
 
     # 构造足够大的 qualityFlags 以触发压缩（>4KB）
     large_flags = [f"flag_{i:04d}_" + "x" * 60 for i in range(100)]
@@ -592,7 +556,6 @@ def test_large_json_field_roundtrips_through_compression(tmp_path: Path) -> None
     assert results[0]["qualityFlags"] == large_flags
 
     repo.close()
-    engine.dispose()
 
 
 def test_unmatched_theme_stock_produces_warning() -> None:

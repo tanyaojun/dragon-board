@@ -10,6 +10,12 @@
 - **测试库**：`dragon_board_test` 瘦身为「空结构+基础参照集合」（`clone_mongo_test_db.py --mode structure` 默认）；全量 pytest 2838 绿 / 0 skip（research 锚 17 处存量漂移交用户裁决）。
 - 详见 `docs/test-suite/2026-09-29-env-isolation-plan.md` 与三份调研报告。
 
+## 2026-09-29 增补 2：sqlalchemy 全仓归零（models.py 深度解绑）
+
+- Supabase 备份链物理删除（supabase_homomorphic.py/supabase_backup.py + settings 13 字段）；sqlite 诊断工具删除（json_compaction.py/storage_inspector.py，warehouse .db 文件已由用户处置）。
+- models.py 19 类 ORM → `@dataclass(kw_only=True)`（构造合同与 ORM 全等价：字段可省略/默认值/utcnow 工厂）；死类删除（SnapshotRecordModel/SnapshotFrameModel/ArchiveManifestModel/SyncOutboxModel + RESEARCH_JSON_FIELD_MAP + ORM before_flush JSON 压缩钩子）；database.py/theme_database.py 收缩为纯函数 shim；9 个生产文件 Session 类型注解改 `Any | None`。
+- **`rg sqlalchemy backend tests scripts` 零命中**；backend 内 `sqlite` 字样仅剩迁移工具读源与文案。
+
 ## 目标结论
 
 - 一次性切换运行主库到 MongoDB，不做 SQLite/MongoDB 双写，不保留 SQLite 运行时 fallback，不做灰度降级。

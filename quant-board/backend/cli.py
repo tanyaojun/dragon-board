@@ -29,7 +29,6 @@ from backend.data.migrations.mongodb_research_repair import repair_mongodb_resea
 from backend.data.migrations.jump_backfill import backfill_jump_fields
 from backend.data.repositories.repository_factory import create_repository
 from backend.data.models.schemas import ImportDatasetRequest
-from backend.data.ingest.storage_inspector import inspect_storage
 from backend.data.migrations.theme_migration import ThemeMigrationService
 from backend.services.theme.mapping_refresh import refresh_theme_stock_mappings
 from backend.analysis.ranktrend.live_gate_shadow_audit import load_hotlist_anchor_samples
@@ -150,12 +149,6 @@ def cmd_refresh_theme_mappings(_args: argparse.Namespace) -> None:
         print_json({"ok": False, "error": "theme mapping refresh requires MongoDB storage backend"})
         return
     print_json(refresh_theme_stock_mappings())
-
-
-def cmd_inspect_storage(args: argparse.Namespace) -> None:
-    settings = get_settings()
-    target = Path(args.path or settings.warehouse_dir)
-    print_json(inspect_storage(target))
 
 
 def cmd_smoke_object_backup(_: argparse.Namespace) -> None:
@@ -1353,10 +1346,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refresh MongoDB theme_stock_mappings from longhuvip theme API",
     )
     refresh_theme_mappings_cmd.set_defaults(func=cmd_refresh_theme_mappings)
-
-    inspect_cmd = sub.add_parser("inspect-storage", help="Inspect SQLite files and JSON field sizes")
-    inspect_cmd.add_argument("--path", default=None)
-    inspect_cmd.set_defaults(func=cmd_inspect_storage)
 
     smoke_object_cmd = sub.add_parser("smoke-object-backup", help="Run R2/S3 object backup smoke test")
     smoke_object_cmd.set_defaults(func=cmd_smoke_object_backup)

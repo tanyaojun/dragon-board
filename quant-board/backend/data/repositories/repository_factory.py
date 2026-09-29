@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy.orm import Session
 
 from backend.data.repositories.mongo_research_repository import MongoResearchRepository
 from backend.data.migrations.mongodb_migration import get_mongodb_database
@@ -12,7 +11,7 @@ from backend.core.settings import get_settings
 _runtime_mongodb_database: Any | None = None
 
 
-def create_repository(session: Session | None, *, enable_backup: bool = True) -> Any:
+def create_repository(session: Any | None, *, enable_backup: bool = True) -> Any:
     """mongodb 单链唯一仓库入口（sqlite Repository 已随 2026-09-29 退役删除）。"""
     settings = get_settings()
     if settings.storage_backend == "mongodb":
