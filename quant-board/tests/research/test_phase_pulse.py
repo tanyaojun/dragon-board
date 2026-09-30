@@ -29,11 +29,13 @@ def test_build_pulse_report_month_filter_and_phases():
     eod = {"2026-09-28": 55.0, "2026-10-09": 70.0, "2026-10-12": 45.0}
     report = build_pulse_report(summary, eod, "2026-10")
     assert report["tradeCount"] == 2
-    assert report["byPhase"]["offense"]["trades"] == 1
+    # 10-12 前同日 EOD 45 → defense；10-13 无 EOD → unknown
     assert report["byPhase"]["defense"]["trades"] == 1
-    assert report["equitySlices"]["offense"]["equityPoints"] == 1
-    assert report["equitySlices"]["unknownPoints"] == 0
-    assert report["northstar"]["offense"]["pass"] is False  # 1 笔 <60 线
+    assert report["byPhase"]["unknown"]["trades"] == 1
+    assert report["byPhase"]["offense"]["trades"] == 0  # 稳定键空桶
+    assert report["equitySlices"]["defense"]["equityPoints"] == 1
+    assert report["equitySlices"]["unknownPoints"] == 1
+    assert report["northstar"]["offense"]["pass"] is False  # 0 笔 <60 线
     assert report["fullWindow"]["segReturn"] == round(104.0 / 110.0 - 1, 4)
 
 
