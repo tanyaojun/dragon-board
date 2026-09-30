@@ -43,7 +43,9 @@ def test_default_values_match_documented_anchors() -> None:
     assert c.lifecycleWeights == pytest.approx([0.35, 0.25, 0.2, 0.2])
     assert c.lifecycleMomentumWeights == pytest.approx([0.3, 0.45, 0.25])
     assert c.lifecycleMomentumScales == pytest.approx([15.0, 15.0, 8.0])
-    assert c.lifecycleMidLongCommitmentMin == pytest.approx(15.0)
+    # 2026-09-30 用户决策 x30 落默认（B-202610 批次 O6 触发成立且增强 + C1/C2/C3/C4 补测/C5 全过，
+    # 长测阶段 27.4）：默认 15.0 → 45.0；回退 = 显式 patch lifecycleMidLongCommitmentMin=15.0
+    assert c.lifecycleMidLongCommitmentMin == pytest.approx(45.0)
     assert c.lifecycleAccelCommitmentMin == pytest.approx(8.0)
     assert c.lifecycleWeakPathCommitmentMax == pytest.approx(0.45)
     assert c.lifecycleVelocityMin == pytest.approx(18.0)
@@ -396,15 +398,21 @@ def test_proposal_group_combination_trials() -> None:
 
     单变量第一轮 decision rel 全部 <±2.3%（远低于 C1 +3% 线），组合是唯一可能
     达线路径；c1 双参数保守、c2 三参数扩展（MidLong 剂量上探到 ×2）。
+
+    2026-09-30 x30（MidLongCommitmentMin 45.0）落默认后，c1/c2 的 overrides 仍为
+    基于 pre-x30 默认 15 的绝对 patch（22.5/30）——组合臂冻结为历史口径（相对新默认
+    反转为放宽侧），其批次读数（OBSERVE，C1 未过）仅作历史证据；未来组合剂量扫描
+    须以新默认重新定义。
     """
     proposals = TRIAL_GROUPS["proposal"]
     assert [t["key"] for t in proposals] == ["c1_commit_tight", "c2_commit_tight_ext"]
     c = RankTrendConfig()
+    assert c.lifecycleMidLongCommitmentMin == pytest.approx(45.0)
     p1 = proposals[0]["overrides"]
-    assert p1["lifecycleMidLongCommitmentMin"] == pytest.approx(c.lifecycleMidLongCommitmentMin * 1.5)
+    assert p1["lifecycleMidLongCommitmentMin"] == pytest.approx(22.5)  # 冻结 pre-x30 口径 15×1.5
     assert p1["lifecycleVelocityMin"] == pytest.approx(c.lifecycleVelocityMin * 1.5)
     p2 = proposals[1]["overrides"]
-    assert p2["lifecycleMidLongCommitmentMin"] == pytest.approx(c.lifecycleMidLongCommitmentMin * 2.0)
+    assert p2["lifecycleMidLongCommitmentMin"] == pytest.approx(30.0)  # 冻结 pre-x30 口径 15×2.0
     assert p2["lifecycleVelocityMin"] == pytest.approx(c.lifecycleVelocityMin * 1.5)
     assert p2["lifecycleAccelMin"] == pytest.approx(c.lifecycleAccelMin * 1.5)
     # 梯度：c2 在 c1 基础上加码（MidLong 更紧 + 多一参数）

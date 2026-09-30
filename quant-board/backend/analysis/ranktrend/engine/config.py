@@ -308,7 +308,10 @@ class RankTrendConfig:
     lifecycleWeights: list[float] = field(default_factory=lambda: [0.35, 0.25, 0.2, 0.2])
     lifecycleMomentumWeights: list[float] = field(default_factory=lambda: [0.3, 0.45, 0.25])
     lifecycleMomentumScales: list[float] = field(default_factory=lambda: [15.0, 15.0, 8.0])
-    lifecycleMidLongCommitmentMin: float = 15.0
+    # 2026-09-30 用户决策 x30 落默认（B-202610 批次 O6 剂量：§23.7 两条触发成立且增强，
+    # C1 decision +3.93% ∧ C2 三 OOS 全正至 +15.92% ∧ C3 ∧ C4 补测 decision 四桶 ≥−0.01 ∧ C5
+    # 全过，长测阶段 27.4）；回退 = 显式 patch lifecycleMidLongCommitmentMin=15.0
+    lifecycleMidLongCommitmentMin: float = 45.0
     lifecycleAccelCommitmentMin: float = 8.0
     lifecycleWeakPathCommitmentMax: float = 0.45
     lifecycleVelocityMin: float = 18.0

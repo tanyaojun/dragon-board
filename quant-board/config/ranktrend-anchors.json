@@ -5,7 +5,7 @@
   "factSource": "docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（各阶段写入的锚读数）",
   "rerunPlan": "docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md",
   "windowNote": "gen-1~gen-4 的 oos2 窗口为历史口径 2026-09-01~09-12（部分阶段 14 harness 为 09-09），B-202610 起统一为 09-01~09-30（oos2）+ 09-13~09-30 未消费子窗（oos2u，判定读数以此为准），见 data_windows.py WINDOWS。",
-  "currentGeneration": "gen-2026-09-30-floor3",
+  "currentGeneration": "gen-2026-09-30-midlong-x30",
   "generations": [
     {
       "id": "gen-2026-08-22_8",
@@ -84,8 +84,20 @@
       "gitCommit": null,
       "configHash": null,
       "sourceSections": ["落默认端到端锚复现（floor3 切换后四窗实跑与第五代逐位 SAME，2026-09-30）", "data/reports/b-202610/repool-floor-*-formal.json（终判证据）", "longterm 阶段 27.5"],
-      "supersededBy": null,
+      "supersededBy": "gen-2026-09-30-midlong-x30",
       "note": "第六代：degradedSampleFloor 3 落默认后四窗 saEx 与第五代逐位相同——实证 insufficient→degraded/ok 的新增判定样本不进 saEx 统计集（S/A 档加权），与 Track 1 oos2 全月 80 笔逐位同 baseline（交易层无伤害）互相印证；本代际锚读数不变但代际推进（默认值变更为代际边界）。insufficient 占比改善（三窗 −5.4~−5.9pp）与新增判定样本质量见 repool-floor-*-formal.json。回退 = 显式 patch degradedSampleFloor=5。同日 O6 x30 落默认待第七代。"
+    },
+    {
+      "id": "gen-2026-09-30-midlong-x30",
+      "name": "midlong-x30 代际（lifecycleMidLongCommitmentMin 15→45 落默认，B-202610 批次用户决策，三参数组合代际）",
+      "anchors": { "decision": 0.1472, "oos1": 0.1016, "oos2": 0.0981, "oos2u": 0.0698 },
+      "passHard": { "decision": true, "oos1": false, "oos2": true, "oos2u": true },
+      "establishedAt": "2026-09-30",
+      "gitCommit": null,
+      "configHash": null,
+      "sourceSections": ["落默认端到端锚复现（vsB070+floor3+x30 三参组合四窗实跑，2026-09-30）", "data/reports/b-202610/lifecycle-midlong-dose-formal.json（x30 剂量证据）", "longterm 阶段 27.4"],
+      "supersededBy": null,
+      "note": "第七代：三参数同日落默认的组合代际，锚读数由四窗实跑建立（组合无逐位 trial 先例，如实记录）。vs 第四代（批次 baseline）：decision +11.3%/oos1 +17.9%/oos2 +16.6%/oos2u +30.7%——vsB070 与 x30 效应正向叠加方向自洽；oos1 passHard=False 延续第五代起读数（C3 口径只查 decision 窗）。回退 = 显式 patch lifecycleMidLongCommitmentMin=15.0（evaluate_lifecycle_dimension x05~x30 剂量臂含显式 15 基线可作回退对照）。c1/c2 组合臂冻结为 pre-x30 历史口径。"
     }
   ]
 }
