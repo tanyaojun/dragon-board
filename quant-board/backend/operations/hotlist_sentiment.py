@@ -622,6 +622,9 @@ def build_hotlist_sentiment_document(
     current_slot: str | None = None,
     stage_history: dict[str, Any] | None = None,
     stage_confirm_slots: int = 2,
+    yesterday_rows: list[dict[str, Any]] | None = None,
+    analysis_by_code: dict[str, Any] | None = None,
+    yesterday_amounts: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     # 编排纯函数唯一口径（Task 5）：EOD 入库文档 = compute_hotlist_sentiment 结果的库 schema 投影。
     # yesterday/day_before 是 {"tradingDate"?, "rows": [...]} 形态——rows 必须是扁平快照行，
@@ -644,20 +647,61 @@ def build_hotlist_sentiment_document(
         intraday_history=intraday_history,
         current_slot=current_slot,
     )
+    # ── 路线 B（emotion-score-design v3）：档位主定义切换为评分驱动 ──
+    # 评分消费 collect_slot_evidence 聚合证据（与 jev 轨道同源，零规则档位依赖）；
+    # evidence parts 缺失时对应维 skip + 权重归一化（fail-visible），不阻断档位链。
+    # signals/warnings/metrics/riskLevel 仍来自级联截面计算（证据层不动，审计 N1）。
+    from backend.analysis.hotlist.emotion_score import compute_emotion_score, map_stage
+    from backend.analysis.hotlist.jev_state import collect_slot_evidence
+
+    legacy_cascade_stage = str(result["stage"])
+    evidence_slot = str(current_slot or frame.get("slotTime") or slot)
+    evidence = collect_slot_evidence(
+        frame=frame,
+        rows=list(stocks),
+        yesterday_rows=list(yesterday_rows or []),
+        analysis_by_code=analysis_by_code if isinstance(analysis_by_code, dict) else {},
+        slot_time=evidence_slot,
+        yesterday_same_slot_total_amount=(yesterday_amounts or {}).get(evidence_slot),
+    )
+    emotion = compute_emotion_score(evidence)
+    score_value = emotion["score"]
+    # slope（审计 B2）：与当日严格早于本槽的最后一个有效 emotionScore.score 之差；
+    # prev 缺失（当日首槽/旧文档无 emotionScore）→ None → 低分判冰点。
+    score_points = list((stage_history or {}).get("scorePoints") or [])
+    prev_score = score_points[-1][1] if score_points else None
+    slope = round(score_value - prev_score, 2) if (score_value is not None and prev_score is not None) else None
+    raw_stage_value = map_stage(score_value, slope) if score_value is not None else None
+    emotion_doc = {
+        "score": score_value,
+        "dims": emotion["dims"],
+        "skippedDims": emotion["skippedDims"],
+        # 与 rawStage 同值（审计 S10：本帧映射档位含斜率修正，防两值不一致）
+        "stageCandidate": raw_stage_value,
+        "slope": slope,
+        "version": "score-v1",
+        "computedAt": int(time.time()),
+    }
     # 阶段多帧确认（2026-09-24 spec：emotion-stage-multiframe-confirm）：
-    # rawStage=本帧截面事实（resolve_stage 输出，永远保留）；stage=确认投影——当日
-    # 「严格早于当前槽」的截面序列 + 本帧一次，重放 stage_confirm.confirm_stage 滞回。
-    # summary/riskLevel/confidence/signals/warnings 仍是本帧截面证据，不按确认阶段二次计算。
+    # rawStage=本帧评分映射档位（含斜率，截面事实）；stage=确认投影——当日「严格早于当前槽」
+    # 的截面序列 + 本帧一次，重放 stage_confirm.confirm_stage 滞回（复用零改动，审计 S1）。
+    # score=None（证据全缺，方案 B）：rawStage=null、确认序列跳过本槽、不伪造档位（审计 B4）。
     from backend.analysis.hotlist.stage_confirm import confirm_stage
 
-    raw_stage_value = str(result["stage"])
     history = stage_history or {"rawStagePoints": [], "historyStatus": "empty", "diagnostics": []}
     history_status = str(history.get("historyStatus") or "empty")
     prior_points = list(history.get("rawStagePoints") or [])
     current_stage_slot = str(current_slot or frame.get("slotTime") or slot)
+    diagnostics_extra = list(history.get("diagnostics") or [])
+    if score_value is None:
+        diagnostics_extra.append(f"emotion_score_unavailable:slot={evidence_slot}")
+    elif prev_score is None and history_status not in ("empty", "unavailable"):
+        # 当日已有历史文档但取不到有效 prev score（切换日混合态/旧文档）→ 斜率不可用
+        diagnostics_extra.append("emotion_slope_unavailable:prev_score_missing")
     # historyStatus=unavailable 时历史不可信：只用本帧截面确认（fail-visible 不伪造历史）
     points = [(current_stage_slot, raw_stage_value)] if history_status == "unavailable" else [
-        *prior_points, (current_stage_slot, raw_stage_value)
+        *prior_points,
+        *([(current_stage_slot, raw_stage_value)] if raw_stage_value else []),
     ]
     confirmed_stage, confirm_state = confirm_stage(points, stage_confirm_slots)
     confirm_state["historyStatus"] = history_status
@@ -674,8 +718,10 @@ def build_hotlist_sentiment_document(
         "anchoredSlotTime": frame.get("slotTime"),
         "timestamp": frame.get("timestamp"),
         "computedAt": int(time.time()),
-        "stage": confirmed_stage or raw_stage_value,
+        "stage": confirmed_stage or None,
         "rawStage": raw_stage_value,
+        "legacyCascadeStage": legacy_cascade_stage,
+        "emotionScore": emotion_doc,
         "stageConfirmState": confirm_state,
         "riskLevel": result["riskLevel"],
         "confidence": result["confidence"],
@@ -686,8 +732,8 @@ def build_hotlist_sentiment_document(
         "warnings": result["warnings"],
         # 诊断与业务提示分离（2026-09-24）：join 失败/缺失、市场证据回退来源等数据质量
         # 标注由编排层追加进 diagnostics，不混入业务风险提示 warnings；前端分区块渲染。
-        # 初值携带历史收集层的诊断（legacy fallback / 非标准槽 / 读取失败）。
-        "diagnostics": list(history.get("diagnostics") or []),
+        # 初值携带历史收集层的诊断（legacy fallback / 非标准槽 / 读取失败 / 评分不可用）。
+        "diagnostics": diagnostics_extra,
     }
 
 

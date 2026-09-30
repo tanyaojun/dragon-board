@@ -582,10 +582,19 @@ def _fake_sentiment_result(stage: str) -> dict[str, Any]:
     }
 
 
+def _patch_emotion_score(monkeypatch, score: float) -> None:
+    """路线 B 后本帧截面档位=评分映射（级联仅 legacyCascadeStage 对照）——确认状态机
+    测试改以固定评分控制截面档位（T2 合同变更）。"""
+    monkeypatch.setattr(
+        "backend.analysis.hotlist.emotion_score.compute_emotion_score",
+        lambda evidence, slope=None: {"score": score, "dims": {}, "skippedDims": [], "stageCandidate": None})
+
+
 def test_document_persists_raw_and_pending_state(monkeypatch) -> None:
     import backend.operations.hotlist_sentiment as module
 
     monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("高潮"))
+    _patch_emotion_score(monkeypatch, 80.0)  # map_stage(80) = 高潮
     doc = module.build_hotlist_sentiment_document(
         dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
         frame={"snapshotId": "s1030", "slotTime": "10:30", "timestamp": 1}, stocks=[{"code": "000001"}],
@@ -598,12 +607,14 @@ def test_document_persists_raw_and_pending_state(monkeypatch) -> None:
     assert doc["stageConfirmState"]["pendingStage"] == "高潮"
     assert doc["stageConfirmState"]["pendingSince"] == "10:30"
     assert doc["summary"] == "高潮截面摘要"
+    assert doc["legacyCascadeStage"] == "高潮"  # 对照面（mock 同源，此处与评分档位同值）
 
 
 def test_document_switches_after_second_candidate(monkeypatch) -> None:
     import backend.operations.hotlist_sentiment as module
 
     monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("高潮"))
+    _patch_emotion_score(monkeypatch, 80.0)
     doc = module.build_hotlist_sentiment_document(
         dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
         frame={"snapshotId": "s1100", "slotTime": "11:00", "timestamp": 2}, stocks=[{"code": "000001"}],
@@ -620,6 +631,7 @@ def test_unavailable_history_keeps_raw_and_diagnostic(monkeypatch) -> None:
     import backend.operations.hotlist_sentiment as module
 
     monkeypatch.setattr(module, "compute_hotlist_sentiment", lambda *args, **kwargs: _fake_sentiment_result("发酵"))
+    _patch_emotion_score(monkeypatch, 60.0)  # map_stage(60) = 发酵
     doc = module.build_hotlist_sentiment_document(
         dataset_id="d1", snapshot_type="half_hour", trading_date="2026-06-04",
         frame={"snapshotId": "s1000", "slotTime": "10:00", "timestamp": 1}, stocks=[{"code": "000001"}],

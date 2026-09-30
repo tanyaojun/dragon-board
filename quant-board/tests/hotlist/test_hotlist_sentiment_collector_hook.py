@@ -182,6 +182,17 @@ def _sentiment_stage_payload(stage: str) -> dict[str, Any]:
     }
 
 
+def _patch_emotion_score(monkeypatch, score_by_slot: dict[str, float] | float) -> None:
+    """路线 B 后本帧截面档位=评分映射（级联仅 legacyCascadeStage 对照）——因果截断/
+    写序无关测试改以固定评分控制截面档位（T2 合同变更）。"""
+    def _fake(evidence, slope=None):
+        slot = str(evidence.get("slotTime") or "")
+        score = score_by_slot.get(slot) if isinstance(score_by_slot, dict) else score_by_slot
+        return {"score": score, "dims": {}, "skippedDims": [], "stageCandidate": None}
+
+    monkeypatch.setattr("backend.analysis.hotlist.emotion_score.compute_emotion_score", _fake)
+
+
 def test_future_slot_does_not_confirm_current_slot(monkeypatch):
     import backend.operations.hotlist_sentiment as ops_mod
 
@@ -205,6 +216,7 @@ def test_future_slot_does_not_confirm_current_slot(monkeypatch):
     ]
     monkeypatch.setattr(ops_mod, "compute_hotlist_sentiment",
                         lambda *args, **kwargs: _sentiment_stage_payload("高潮"))
+    _patch_emotion_score(monkeypatch, 80.0)  # map_stage(80) = 高潮
 
     result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live", snapshot_type="half_hour",
                                          trading_date="2026-06-05", slot_time="10:00")
@@ -239,6 +251,8 @@ def test_write_order_does_not_change_per_slot_results(monkeypatch):
         return db
 
     stages_by_slot = {"09:30": "退潮", "10:00": "高潮", "10:30": "高潮"}
+    # 评分域档位序列：25 分（首槽无斜率 → 冰点）/ 80 分（slope>0 → 高潮）/ 80 分（高潮）
+    _patch_emotion_score(monkeypatch, {"09:30": 25.0, "10:00": 80.0, "10:30": 80.0})
 
     # 顺序写入：逐槽 mock 对应截面
     ordered_db = build_db()
@@ -270,7 +284,7 @@ def test_write_order_does_not_change_per_slot_results(monkeypatch):
     assert [(d["slotTime"], d["stage"], d["rawStage"]) for d in ordered_docs if d] == [
         (d["slotTime"], d["stage"], d["rawStage"]) for d in out_of_order_docs if d
     ]
-    # 期望值写死：退潮 → pending 退潮（高潮第一槽）→ 确认高潮
+    # 期望值写死（评分域：25 分首槽无斜率=冰点）→ 确认冰点 → pending 高潮（候选第一槽）→ 确认高潮
     assert [(d["slotTime"], d["stage"], d["rawStage"]) for d in ordered_docs if d] == [
-        ("09:30", "退潮", "退潮"), ("10:00", "退潮", "高潮"), ("10:30", "高潮", "高潮"),
+        ("09:30", "冰点", "冰点"), ("10:00", "冰点", "高潮"), ("10:30", "高潮", "高潮"),
     ]

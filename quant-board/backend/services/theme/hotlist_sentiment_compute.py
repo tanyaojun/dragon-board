@@ -162,6 +162,8 @@ def _collect_intraday_state(
     - ``points``：日内边际证据轨道（slotTime + layers.all.stageShares），缺 shares 的槽跳过；
     - ``rawStagePoints``：阶段确认轨道（rawStage 优先、旧文档回退 stage），供
       ``stage_confirm.confirm_stage`` 重放；stage 缺失不影响 points 保留（独立轨道降级）；
+    - ``scorePoints``：评分斜率轨道（路线 B 审计 B2，emotionScore.score 严格早于当前槽的
+      有效序列），供当前槽 ``slope = score − prev_score``；旧文档无 emotionScore 的槽跳过；
     - ``historyStatus``：complete / empty / legacy_fallback / unavailable；
     - 非标准槽位（非 ``HH:MM``）保留在库但跳过收集，原因写入 ``diagnostics``。
 
@@ -172,6 +174,7 @@ def _collect_intraday_state(
     eod_id = f"{dataset_id}:{snapshot_type}:{trading_date}"
     points: list[dict[str, Any]] = []
     raw_stage_points: list[tuple[str, str]] = []
+    score_points: list[tuple[str, float]] = []
     diagnostics: list[str] = []
     legacy_count = 0
     try:
@@ -183,7 +186,7 @@ def _collect_intraday_state(
                 "slotTime": {"$ne": "EOD"},
             },
             {"_id": 1, "slotTime": 1, "stage": 1, "rawStage": 1,
-             "metrics.layers.all.stageShares": 1},
+             "metrics.layers.all.stageShares": 1, "emotionScore.score": 1},
         )
         for row in rows:
             if str(row.get("_id") or "") == eod_id:
@@ -204,14 +207,19 @@ def _collect_intraday_state(
                     legacy_count += 1
             if raw_stage:
                 raw_stage_points.append((slot_time, raw_stage))
+            score_value = (row.get("emotionScore") or {}).get("score")
+            if isinstance(score_value, (int, float)) and not isinstance(score_value, bool):
+                score_points.append((slot_time, float(score_value)))
         points.sort(key=lambda item: item["slotTime"])
         raw_stage_points.sort(key=lambda item: item[0])
+        score_points.sort(key=lambda item: item[0])
         if legacy_count:
             diagnostics.append(f"stage_confirm_legacy_fallback:{legacy_count}")
         status = "legacy_fallback" if legacy_count else "complete" if raw_stage_points else "empty"
         return {
             "points": points,
             "rawStagePoints": raw_stage_points,
+            "scorePoints": score_points,
             "historyStatus": status,
             "diagnostics": diagnostics,
         }
@@ -219,6 +227,7 @@ def _collect_intraday_state(
         return {
             "points": [],
             "rawStagePoints": [],
+            "scorePoints": [],
             "historyStatus": "unavailable",
             "diagnostics": [f"stage_confirm_history_unavailable:{type(exc).__name__}:{exc}"],
         }
