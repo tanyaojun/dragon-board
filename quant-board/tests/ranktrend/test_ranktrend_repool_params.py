@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """P_repool_timeline_gap 研究参数测试（2026-09-20 立项）。
 
-纪律（skills/ranktrend-signal-research 第 0 步 5）：新增测试 = 默认值断言 + 参数生效测试，
-golden 不漂移（默认值 = 原硬编码 5）。
+纪律（skills/ranktrend-signal-research 第 0 步 5）：新增测试 = 默认值断言 + 参数生效测试。
+2026-09-30 用户决策 floor3 落默认（B-202610 批次 N8 终判链闭合，长测阶段 27.5）：
+默认值 5 → 3；回退 = 显式 patch degradedSampleFloor=5。
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from backend.analysis.ranktrend.engine.runtime import RankTrendPythonEngine
 
 def test_degraded_sample_floor_defaults_to_current_behavior():
     config = RankTrendConfig()
-    assert config.degradedSampleFloor == 5
+    assert config.degradedSampleFloor == 3
 
 
 def test_degraded_sample_floor_accepts_override():

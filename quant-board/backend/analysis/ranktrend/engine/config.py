@@ -152,12 +152,15 @@ class RankTrendConfig:
     regimeStateHysteresis: bool = False    # strong 边界迟滞开关
     regimeStrongHysteresisBand: float = 5.0  # strong 退出阈值 = 进入阈值 - band
     tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
-    # ── P_repool_timeline_gap 研究参数（2026-09-20 参数化，默认值=原硬编码 5，golden 不漂移）──
+    # ── P_repool_timeline_gap 研究参数（2026-09-20 参数化，原硬编码 5）──
     # 出池回池重建期三档判定的中档线（runtime sample_status）：degradedSampleFloor
     # <= len(percentiles) < momentum_min_samples → degraded（有判定，前端显示真实 stage）；
-    # 低于该线 → insufficient（前端周期列显示「样本不足」）。中期扫描档位：3/4/5(默认)/7/10。
+    # 低于该线 → insufficient（前端周期列显示「样本不足」）。扫描档位：3/4/5/7/10。
     # 约束（validate 校验）：1 <= degradedSampleFloor < momentum_min_samples。
-    degradedSampleFloor: int = 5
+    # 2026-09-30 用户决策 floor3 落默认（B-202610 批次 N8 终判链闭合：insufficient 三窗
+    # h1/h8 复现 −5.4~−5.9pp + Track 1 oos2 全月 80 笔无伤害，长测阶段 27.5）；
+    # 回退 = 显式 patch degradedSampleFloor=5
+    degradedSampleFloor: int = 3
     tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
     # ── 维度票权重（2026-09-14 参数化 + 阶段 23.9 实证落默认）──
     # 用户决策采纳 combo_three_quarter：res/rank/cs 1.0 → 0.75（判定卡 C1 +11.2%/

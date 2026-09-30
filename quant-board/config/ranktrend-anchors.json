@@ -5,7 +5,7 @@
   "factSource": "docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（各阶段写入的锚读数）",
   "rerunPlan": "docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md",
   "windowNote": "gen-1~gen-4 的 oos2 窗口为历史口径 2026-09-01~09-12（部分阶段 14 harness 为 09-09），B-202610 起统一为 09-01~09-30（oos2）+ 09-13~09-30 未消费子窗（oos2u，判定读数以此为准），见 data_windows.py WINDOWS。",
-  "currentGeneration": "gen-2026-09-30-vsb070",
+  "currentGeneration": "gen-2026-09-30-floor3",
   "generations": [
     {
       "id": "gen-2026-08-22_8",
@@ -72,8 +72,20 @@
       "gitCommit": null,
       "configHash": null,
       "sourceSections": ["data/reports/b-202610/track2-candidates-formal.json（O3_vsb070 trial 四窗读数）", "落默认端到端锚复现（config 默认切换后四窗逐位 MATCH，2026-09-30）", "longterm 阶段 27.3"],
-      "supersededBy": null,
+      "supersededBy": "gen-2026-09-30-floor3",
       "note": "第五代：tierSynergyVoteStrengths[2] 0.7 落默认后 baseline = B-202610 批次 O3_vsb070 trial，四窗 saEx 逐位复现（0.1402/0.0999/0.0898/0.0602）+ TS tierDisplay VOTE_STRENGTH 同步。oos1 passHard=False 为该配置 OOS 档位单调性真实读数（C3 判定卡口径只查 decision 窗，OOS passHard 作披露面）。回退 = index2 还原 0.8（track2 O3_revert_vsB080 对照臂）。同日 N8 floor3 / O6 x30 落默认待后续代际推进。"
+    },
+    {
+      "id": "gen-2026-09-30-floor3",
+      "name": "floor3 代际（degradedSampleFloor 5→3 落默认，B-202610 批次用户决策）",
+      "anchors": { "decision": 0.1402, "oos1": 0.0999, "oos2": 0.0898, "oos2u": 0.0602 },
+      "passHard": { "decision": true, "oos1": false, "oos2": true, "oos2u": true },
+      "establishedAt": "2026-09-30",
+      "gitCommit": null,
+      "configHash": null,
+      "sourceSections": ["落默认端到端锚复现（floor3 切换后四窗实跑与第五代逐位 SAME，2026-09-30）", "data/reports/b-202610/repool-floor-*-formal.json（终判证据）", "longterm 阶段 27.5"],
+      "supersededBy": null,
+      "note": "第六代：degradedSampleFloor 3 落默认后四窗 saEx 与第五代逐位相同——实证 insufficient→degraded/ok 的新增判定样本不进 saEx 统计集（S/A 档加权），与 Track 1 oos2 全月 80 笔逐位同 baseline（交易层无伤害）互相印证；本代际锚读数不变但代际推进（默认值变更为代际边界）。insufficient 占比改善（三窗 −5.4~−5.9pp）与新增判定样本质量见 repool-floor-*-formal.json。回退 = 显式 patch degradedSampleFloor=5。同日 O6 x30 落默认待第七代。"
     }
   ]
 }
