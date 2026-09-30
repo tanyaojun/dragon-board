@@ -311,3 +311,51 @@ async def get_hotlist_sentiment_limit_stocks(
         market["reason"] = "no trading date resolved"
     detail["market"] = market
     return detail
+
+
+# ---------------------------------------------------------------------------
+# 相位历史读口（前端可见化，设计 ranktrend-phase-frontend-design.md §3；2026-09-30）
+# ---------------------------------------------------------------------------
+
+# 相位阈值唯一口径源：backend/operations/phase_label_run.py CANDIDATES["sentiment_2b"]
+# （M2 用户裁决立项定义：offense ≥50 / defense <50）。阈值变更 = 前端 chip 常量同改 + 标签重打。
+_PHASE_THRESHOLD = 50.0
+
+
+@router.get("/phase-history")
+def get_hotlist_sentiment_phase_history(
+    dataset_id: str = "dragonboard_live",
+    snapshot_type: str = "half_hour",
+) -> dict[str, Any]:
+    """EOD 情绪序列 → 日级相位标签（前端第 8 页签时间线数据源）。
+
+    直读 Mongo hotlist_sentiment EOD 文档（源集合，免本地文件同步）；单次 find
+    （≤数百文档、投影极窄）成本低，**不接 Redis 缓存**（与 series 的 lazy-compute
+    成本场景不同，docstring 留痕）。无 EOD 文档日不产生条目；score 缺失 → unknown
+    （fail-visible 不伪造）。
+    """
+    db = repository_factory.get_runtime_mongodb_database()
+    docs = list(
+        db["hotlist_sentiment"].find(
+            {"datasetId": dataset_id, "snapshotType": snapshot_type, "slotTime": "EOD"},
+            {"tradingDate": 1, "emotionScore.score": 1},
+        ).sort("tradingDate", 1)
+    )
+    days: list[dict[str, Any]] = []
+    for doc in docs:
+        es = doc.get("emotionScore")
+        score = float(es["score"]) if isinstance(es, dict) and isinstance(es.get("score"), (int, float)) else None
+        if score is None:
+            phase = "unknown"
+        elif score >= _PHASE_THRESHOLD:
+            phase = "offense"
+        else:
+            phase = "defense"
+        days.append({"tradingDate": str(doc.get("tradingDate") or ""), "eodScore": score, "phase": phase})
+    return {
+        "datasetId": dataset_id,
+        "snapshotType": snapshot_type,
+        "threshold": _PHASE_THRESHOLD,
+        "count": len(days),
+        "days": days,
+    }
