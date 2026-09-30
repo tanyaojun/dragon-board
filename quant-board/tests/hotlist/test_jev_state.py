@@ -37,7 +37,8 @@ def test_questions_constants_frozen_no_prediction():
 
 def _v3_frame():
     return {
-        "indices": {"sh": {"change": -12.2}, "zz500": {"change": -23.4}},
+        "indices": {"sh": {"change": -12.2}, "zz500": {"change": -23.4},
+                     "totalAmount": {"amount": 1.41e12}},
         "limitSummary": {
             "continuousBoards": {"yiban": 40, "erban": 18, "sanban": 7, "sibanPlus": 3, "maxBoard": 6},
             "zhaban": {"count": 12, "rate": 15.0, "fengbanRate": 85.0, "ztCount": 68},
@@ -89,7 +90,8 @@ def _v3_yesterday_rows():
 def test_collect_slot_evidence_shape():
     ev = collect_slot_evidence(
         frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
-        analysis_by_code=_v3_analysis(), slot_time="10:30")
+        analysis_by_code=_v3_analysis(), slot_time="10:30",
+        yesterday_same_slot_total_amount=1.0e12)
     assert ev["slotTime"] == "10:30"
     assert ev["indices"] == {"sh": -12.2, "zz500": -23.4}
     assert ev["limit"]["ztCount"] == 68 and ev["limit"]["maxBoard"] == 6
@@ -148,13 +150,15 @@ def test_collect_slot_evidence_zt_count_from_boards_when_zhaban_missing():
 def _v3_current_evidence():
     return collect_slot_evidence(
         frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
-        analysis_by_code=_v3_analysis(), slot_time="10:30")
+        analysis_by_code=_v3_analysis(), slot_time="10:30",
+        yesterday_same_slot_total_amount=1.0e12)
 
 
 def test_build_slot_jev_state_full_shape():
     prior = collect_slot_evidence(
         frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
-        analysis_by_code=_v3_analysis(), slot_time="10:00")
+        analysis_by_code=_v3_analysis(), slot_time="10:00",
+        yesterday_same_slot_total_amount=1.0e12)
     s = build_slot_jev_state(
         trading_date="2026-10-08", slot_time="10:30",
         current=_v3_current_evidence(), priors=[prior])
@@ -163,6 +167,8 @@ def test_build_slot_jev_state_full_shape():
     assert "涨停 68" in s and "最高 6 连板" in s and "炸板率 15%" in s
     assert "热榜TRIN：1.67" in s and "量价背离" in s
     assert "TRIN 1.67" in s  # 压缩行也携带
+    assert "量能同期+41%" in s  # 压缩行携带同期量能
+    assert "两市总成交额：累计 +14100.00亿" in s and "较昨日同期放量 41%" in s
     assert "新进 7" in s and "淘汰 1" in s
     assert "主力净额" in s and "+0.07亿" in s
     assert "昨涨停承接" in s

@@ -88,20 +88,23 @@ def _calc_trin(up_count: int, down_count: int, up_turnover: float, down_turnover
 
 
 def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: list,
-                          analysis_by_code: dict, slot_time: str) -> dict:
+                          analysis_by_code: dict, slot_time: str,
+                          yesterday_same_slot_total_amount: float | None = None) -> dict:
     """单帧原始证据聚合（纯函数，无 IO）。
 
-    输入仅原始数据：帧（limitSummary/indices）、行情行（pctChange/zlje/rank/reason）、
+    输入仅原始数据：帧（limitSummary/indices）、行情行（pctChange/zlje/turnover/rank/reason）、
     昨日行、个股生命周期 analysis（displayStatus.stage）。**零规则五档输出**。
+    yesterday_same_slot_total_amount = 昨日同一槽位帧的两市总成交额（同期量能对比基线）。
     fail-visible：缺源记 quality.degradedSources，保持 None/缺失，不伪造 0。
-    indices.change 为涨跌额点数（帧现口径，无百分比）。
+    indices.change 为涨跌额点数（帧现口径，无百分比）；totalAmount 为两市当日累计成交额（元）。
     """
     from backend.analysis.hotlist.sentiment import build_yesterday_hot_limit_evidence, derive_row_flags
 
     degraded: list[str] = []
 
-    # ── 帧级：指数 + 涨停/炸板/连板 ──
+    # ── 帧级：指数 + 涨停/炸板/连板 + 两市总成交额 ──
     indices: dict = {}
+    total_amount: float | None = None
     limit = {"ztCount": None, "maxBoard": None, "boards": {},
              "zhabanCount": None, "zhabanRate": None, "fengbanRate": None}
     if frame is None:
@@ -115,6 +118,11 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
                 indices[key] = entry["change"]
         if not indices:
             degraded.append("指数缺失")
+        total_entry = frame_indices.get("totalAmount")
+        if isinstance(total_entry, dict) and _finite(total_entry.get("amount")):
+            total_amount = float(total_entry["amount"])
+        else:
+            degraded.append("两市总成交额缺失（历史帧无该字段）")
         ls = frame.get("limitSummary") if isinstance(frame.get("limitSummary"), dict) else {}
         boards = ls.get("continuousBoards") if isinstance(ls.get("continuousBoards"), dict) else {}
         zhaban = ls.get("zhaban") if isinstance(ls.get("zhaban"), dict) else {}
@@ -225,6 +233,11 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     row_flags = {"strongMoney": strong_money_rows, "risk": risk_rows,
                  "judgeable": len(rows) - lifecycle_missing}
 
+    # ── 两市总成交额同期对比（当日累计 vs 昨日同一槽位累计，TDX lastcuramo 的快照等价物）──
+    amount_vs_same_pct: float | None = None
+    if total_amount is not None and _finite(yesterday_same_slot_total_amount) and yesterday_same_slot_total_amount > 0:
+        amount_vs_same_pct = round((total_amount / float(yesterday_same_slot_total_amount) - 1) * 100, 1)
+
     # ── 焦点个股（热度 top）与涨停原因分布 ──
     def _sort_key(row):
         return (-(row.get("heat") or 0), row.get("rank") or 9999)
@@ -258,6 +271,9 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         "lifecycle": lifecycle,
         "lifecycleMissing": lifecycle_missing,
         "rowFlags": row_flags,
+        "totalAmount": {"amount": total_amount, "vsSamePct": amount_vs_same_pct,
+                        "yesterdaySame": yesterday_same_slot_total_amount
+                        if _finite(yesterday_same_slot_total_amount) else None},
         "leaders": leaders,
         "reasons": reasons,
         "quality": {"degradedSources": degraded},
@@ -299,6 +315,9 @@ def format_evidence_line(ev: dict) -> str:
     trin = breadth.get("trin")
     if trin is not None:
         breadth_bit += f"｜TRIN {float(trin):.2f}"
+    amount = ev.get("totalAmount") or {}
+    if amount.get("vsSamePct") is not None:
+        breadth_bit += f"｜量能同期{amount['vsSamePct']:+.0f}%"
     parts.append(breadth_bit)
     fund = ev.get("fund") or {}
     if fund.get("zljeSum") is not None:
@@ -366,6 +385,16 @@ def _format_current_evidence_section(ev: dict) -> str:
         lines.append(f"热榜TRIN：{float(trin):.2f}（{side}；涨向成交 {_fmt_yi(up_t)} vs 跌向成交 {_fmt_yi(down_t)}）")
     else:
         lines.append("热榜TRIN：不可算（单边或成交额缺失）")
+    amount = ev.get("totalAmount") or {}
+    if amount.get("amount") is not None:
+        if amount.get("vsSamePct") is not None:
+            direction = "放量" if amount["vsSamePct"] >= 0 else "缩量"
+            lines.append(f"两市总成交额：累计 {_fmt_yi(amount['amount'])}，较昨日同期{direction} "
+                         f"{abs(amount['vsSamePct']):.0f}%（昨日同期 {_fmt_yi(amount.get('yesterdaySame'))}）")
+        else:
+            lines.append(f"两市总成交额：累计 {_fmt_yi(amount['amount'])}（昨日同期缺失，无法对比）")
+    else:
+        lines.append("两市总成交额：缺失（历史帧无该字段）")
     fund = ev.get("fund") or {}
     if fund.get("zljeSum") is not None:
         lines.append(f"主力资金：净额合计 {_fmt_yi(fund['zljeSum'])}（正 {fund.get('zljePos', 0)} 家"
@@ -440,7 +469,8 @@ def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
     return "\n".join(lines)[:4000]
 
 
-def build_day_jev_state(*, trading_date: str, evidences: list) -> str:
+def build_day_jev_state(*, trading_date: str, evidences: list,
+                        yesterday_close_total_amount: float | None = None) -> str:
     """日级叙事 state（盘后固定当日总体）。evidences = 全日各帧 evidence 升序。"""
     if not evidences:
         return f"{trading_date} 交易日全天热榜情绪证据轨迹：无帧证据。"
@@ -456,11 +486,16 @@ def build_day_jev_state(*, trading_date: str, evidences: list) -> str:
                     for ev in evidences if isinstance(ev, dict))
     new_bit = f"新进 {turnover['newCount']}" if turnover.get("newCount") is not None else "新进 缺"
     dropped_bit = f"淘汰 {turnover['droppedCount']}" if turnover.get("droppedCount") is not None else "淘汰 缺"
+    last_amount = (last.get("totalAmount") or {}).get("amount")
+    amount_bit = f"；两市总成交额 {_fmt_yi(last_amount)}"
+    if last_amount is not None and _finite(yesterday_close_total_amount) and yesterday_close_total_amount > 0:
+        pct = (float(last_amount) / float(yesterday_close_total_amount) - 1) * 100
+        amount_bit += f"（较昨日全天{'放量' if pct >= 0 else '缩量'} {abs(pct):.0f}%）"
     lines = [
         f"{trading_date} 交易日全天热榜情绪证据轨迹（A股短线情绪观察，原始市场证据）。",
         "【逐帧证据】\n" + "\n".join(format_evidence_line(ev) for ev in evidences if isinstance(ev, dict)),
         f"【当日累计】{new_bit}、{dropped_bit}（对比昨日）；主力净额合计 {_fmt_yi(fund.get('zljeSum'))}；"
-        f"最高连板峰值 {int(max_board)} 板",
+        f"最高连板峰值 {int(max_board)} 板{amount_bit}",
         "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
     ]
     return "\n".join(lines)[:6000]

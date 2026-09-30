@@ -2204,16 +2204,30 @@ _INDEX_ALIASES = {
 
 
 def build_server_indices(overview: dict[str, Any]) -> dict[str, Any]:
-    """MarketOverviewService overview → frame.indices（键位对齐原浏览器 marketData.indices）。"""
+    """MarketOverviewService overview → frame.indices（键位对齐原浏览器 marketData.indices）。
+
+    2026-09-30 增补 totalAmount：两市总成交额（当日累计，元）= 上证 sh000001 + 深市 sz399001
+    （sina 深证系列同源，399001 与 399106 同值，即深市全口径）。值形如 {"amount": N}，
+    **不带 change 键**——rotation 引擎 _market_change 遍历所有键取 change 求均值，
+    无 change 则免疫，golden 输入零漂移。
+    """
     items = overview.get("items") if isinstance(overview, dict) else []
     out: dict[str, Any] = {}
+    market_amounts: list[float] = []
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
-        alias = _INDEX_ALIASES.get(str(item.get("code") or ""))
+        code = str(item.get("code") or "")
+        alias = _INDEX_ALIASES.get(code)
         change = item.get("change")
-        if alias and isinstance(change, (int, float)):
+        if alias and isinstance(change, (int, float)) and not isinstance(change, bool):
             out[alias] = {"change": change}
+        if code in ("sh000001", "sz399001") and isinstance(item.get("amount"), (int, float)) \
+                and not isinstance(item.get("amount"), bool):
+            market_amounts.append(float(item["amount"]))
+    if len(market_amounts) == 2:
+        # 两市都可得才写（避免单市场半口径伪装全口径）
+        out["totalAmount"] = {"amount": sum(market_amounts)}
     return out
 
 
