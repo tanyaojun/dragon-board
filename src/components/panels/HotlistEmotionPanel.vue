@@ -485,9 +485,12 @@
                         </div>
                       </div>
                     </div>
-                    <div v-for="score in jevDetail.scores" :key="score.label" class="jev-detail-cell">
-                      <div class="jev-detail-cell-label">{{ score.label }}（0-100）</div>
-                      <div class="jev-detail-cell-value">{{ score.value ?? '--' }}</div>
+                    <!-- 分数合并为通栏紧凑条：与概率条格同行会被行高拉伸出大片留白（2026-09-30 修复） -->
+                    <div class="jev-detail-cell jev-detail-scores">
+                      <div v-for="score in jevDetail.scores" :key="score.label" class="jev-score-item">
+                        <span class="jev-detail-cell-label">{{ score.label }}（0-100）</span>
+                        <span class="jev-detail-cell-value">{{ score.value ?? '--' }}</span>
+                      </div>
                     </div>
                   </div>
                   <div v-if="jevDetail.qualityNotes.length" class="jev-detail-quality">
@@ -3050,13 +3053,22 @@ watch(view, (v) => {
   color: #f39c12;
   border: 1px solid rgba(243, 156, 18, 0.45);
 }
-.jev-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.jev-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .jev-detail-cell {
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 8px;
 }
+/* 分数通栏条：单行内联两组「标签+数值」，高度随内容不再被概率条格拉伸 */
+.jev-detail-scores {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 8px 12px;
+}
+.jev-score-item { display: flex; align-items: baseline; gap: 10px; }
 .jev-detail-cell-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 4px; }
 .jev-detail-cell-value { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
 .jev-prob-rows { display: flex; flex-direction: column; gap: 3px; }

@@ -348,6 +348,9 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     // fail-visible：质量注记与文档缺失透出，缺失概率显示 -- 不伪造
     expect(source).toContain('qualityNotes')
     expect(source).toContain("row.pct === null ? '--'")
+    // 分数通栏紧凑条：两列布局防与概率条格同行拉伸留白（2026-09-30 修复）
+    expect(source).toContain('jev-detail-scores')
+    expect(source).toContain('.jev-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }')
     // 旧 tooltip-only 叙事方案与抽屉语言不回流
     expect(source).not.toContain('HotlistLimitStocksPanel v-if="jevDetail"')
   })
