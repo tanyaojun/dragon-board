@@ -9,10 +9,10 @@ const panelSource = () =>
   readFileSync(join(process.cwd(), 'src', 'components', 'panels', 'HotlistEmotionPanel.vue'), 'utf8')
 
 describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
-  test('六个页签齐全（概览/分层/换手/阶段/历史/趋势）', () => {
+  test('七个页签齐全（概览/分层/换手/阶段/历史/趋势/jev）', () => {
     const source = panelSource()
 
-    for (const key of ['overview', 'layers', 'turnover', 'structure', 'compare', 'track']) {
+    for (const key of ['overview', 'layers', 'turnover', 'structure', 'compare', 'track', 'jev']) {
       expect(source).toContain(`'${key}'`)
     }
     for (const label of ['热榜概览', '分层结构', '池换手', '阶段分布', '历史对比', '情绪趋势']) {
@@ -285,9 +285,13 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('暂无 jev 评判数据')
   })
 
-  test('jev 观察轨道图表化：ECharts 承载（时间范围/指标开关/阶段铺底/统计卡），卡片网格不回流（2026-09-30）', () => {
+  test('jev 观察轨道图表化：独立页签 + ECharts 承载（时间范围/指标开关/阶段铺底/统计卡），概览子区块不回流（2026-09-30）', () => {
     const source = panelSource()
 
+    // 独立页签（与情绪趋势并列）：TABS 注册 + tab-pane 承载；概览内子区块不回流
+    expect(source).toContain("{ key: 'jev', label: 'jev 观察轨道', icon: '🤖' }")
+    expect(source).toContain(`v-show="view === 'jev'"`)
+    expect(source).not.toContain('sub-block jev-block')
     // 多日读口接入 + 1天=逐槽 / 多日=EOD 日级
     expect(source).toContain('fetchHotlistJevRange')
     expect(source).toContain('ensureJevDays')

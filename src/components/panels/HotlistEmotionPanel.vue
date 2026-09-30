@@ -63,50 +63,6 @@
               </div>
             </div>
 
-            <!-- ② jev 观察轨道（2026-10-08）：独立 AI 评判，原始市场证据，仅供盘中对照论证；
-                 2026-09-30 卡片网格改 ECharts（时间范围 + 指标开关 + 阶段铺底 + 统计卡，语言同情绪趋势页签） -->
-            <div class="sub-block jev-block">
-              <div class="block-header">
-                <span class="block-title">🤖 jev 观察轨道（AI 独立评判 · 仅供对照论证）</span>
-                <span class="section-count">{{ jevPoints.length }}</span>
-              </div>
-              <div v-if="jevDegradedReason" class="note-line">
-                jev 轨道不可用：{{ jevDegradedReason }}（独立采集轨道，可能未开启）
-              </div>
-              <template v-else>
-                <div class="time-range-selector">
-                  <button v-for="range in TIME_RANGES" :key="range.key" class="time-btn"
-                    :class="{ active: jevTimeRange === range.key }" @click="setJevTimeRange(range.key)">
-                    {{ range.label }}
-                  </button>
-                </div>
-                <div class="indicator-selector">
-                  <button v-for="ind in JEV_INDICATORS" :key="ind.key" class="indicator-btn"
-                    :class="{ active: jevIndicators.includes(ind.key) }" @click="toggleJevIndicator(ind.key)">
-                    {{ ind.icon }} {{ ind.label }}
-                  </button>
-                </div>
-                <div v-if="jevNote" class="note-line">{{ jevNote }}</div>
-                <div v-if="!jevPoints.length" class="empty-row">暂无 jev 评判数据（独立采集轨道，可能未开启）</div>
-                <template v-else>
-                  <div class="trend-chart" ref="jevChartRef"></div>
-                  <div class="trend-stats-grid">
-                    <div v-for="card in jevStats" :key="card.label" class="trend-stat-card">
-                      <div class="stat-label">{{ card.label }}</div>
-                      <div class="stat-value">{{ card.value }}</div>
-                      <div class="stat-time">{{ card.sub }}</div>
-                    </div>
-                  </div>
-                  <div v-if="jevTimeRange === '1d' && jevEodRow && jevEodRow.dayName" class="jev-eod">
-                    📌 日级总体（盘后固定）：{{ jevEodRow.dayName }}<template
-                      v-if="jevEodRow.patternName"> · {{ jevEodRow.patternName }}</template><template
-                      v-if="jevEodRow.temperature != null"> · 温度 {{ jevEodRow.temperature }}</template><template
-                      v-if="jevEodRow.crowding != null"> · 拥挤 {{ jevEodRow.crowding }}</template>
-                  </div>
-                </template>
-              </template>
-            </div>
-
             <div class="metrics-grid">
               <div v-for="card in primaryCards" :key="card.label" class="metric-card">
                 <div class="metric-icon">{{ card.icon }}</div>
@@ -467,6 +423,47 @@
             </template>
           </section>
 
+          <!-- ⑦ jev 观察轨道（2026-09-30 独立页签，与情绪趋势并列）：独立 AI 评判，仅供对照论证；
+               图表语言同情绪趋势（时间范围 + 指标开关 + 阶段铺底 + 统计卡，温度紫柱/拥挤橙柱） -->
+          <section v-show="view === 'jev'" class="tab-pane">
+            <div v-if="jevDegradedReason" class="note-line">
+              jev 轨道不可用：{{ jevDegradedReason }}（独立采集轨道，可能未开启）
+            </div>
+            <template v-else>
+              <div class="note-line">🤖 jev 观察轨道（AI 独立评判 · 仅供对照论证）· 共 {{ jevPoints.length }} 帧</div>
+              <div class="time-range-selector">
+                <button v-for="range in TIME_RANGES" :key="range.key" class="time-btn"
+                  :class="{ active: jevTimeRange === range.key }" @click="setJevTimeRange(range.key)">
+                  {{ range.label }}
+                </button>
+              </div>
+              <div class="indicator-selector">
+                <button v-for="ind in JEV_INDICATORS" :key="ind.key" class="indicator-btn"
+                  :class="{ active: jevIndicators.includes(ind.key) }" @click="toggleJevIndicator(ind.key)">
+                  {{ ind.icon }} {{ ind.label }}
+                </button>
+              </div>
+              <div v-if="jevNote" class="note-line">{{ jevNote }}</div>
+              <div v-if="!jevPoints.length" class="empty-row">暂无 jev 评判数据（独立采集轨道，可能未开启）</div>
+              <template v-else>
+                <div class="trend-chart" ref="jevChartRef"></div>
+                <div class="trend-stats-grid">
+                  <div v-for="card in jevStats" :key="card.label" class="trend-stat-card">
+                    <div class="stat-label">{{ card.label }}</div>
+                    <div class="stat-value">{{ card.value }}</div>
+                    <div class="stat-time">{{ card.sub }}</div>
+                  </div>
+                </div>
+                <div v-if="jevTimeRange === '1d' && jevEodRow && jevEodRow.dayName" class="jev-eod">
+                  📌 日级总体（盘后固定）：{{ jevEodRow.dayName }}<template
+                    v-if="jevEodRow.patternName"> · {{ jevEodRow.patternName }}</template><template
+                    v-if="jevEodRow.temperature != null"> · 温度 {{ jevEodRow.temperature }}</template><template
+                    v-if="jevEodRow.crowding != null"> · 拥挤 {{ jevEodRow.crowding }}</template>
+                </div>
+              </template>
+            </template>
+          </section>
+
         </template>
       </div>
 
@@ -513,6 +510,7 @@ const TABS = [
   { key: 'structure', label: '阶段分布', icon: '🧭' },
   { key: 'compare', label: '历史对比', icon: '🗓️' },
   { key: 'track', label: '情绪趋势', icon: '📈' },
+  { key: 'jev', label: 'jev 观察轨道', icon: '🤖' },
 ] as const
 type ViewKey = (typeof TABS)[number]['key']
 
@@ -2515,14 +2513,15 @@ function renderJevChart() {
   jevChart.resize()
 }
 
-// 页签进入或数据刷新时渲染（概览页签 v-show 默认可见；图表容器随空态 v-if 重挂需重建）
+// 页签进入或数据刷新时渲染（独立页签 v-show 切换后需等 nextTick 拿到可见容器尺寸；
+// 图表容器随空态 v-if 重挂需 dispose 重建）
 watch(jevPoints, () => {
-  if (view.value === 'overview') {
+  if (view.value === 'jev') {
     nextTick(() => renderJevChart())
   }
 })
 watch(view, (v) => {
-  if (v === 'overview' && jevPoints.value.length) {
+  if (v === 'jev' && jevPoints.value.length) {
     nextTick(() => renderJevChart())
   }
 })
