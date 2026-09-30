@@ -38,3 +38,17 @@
 ## 5. 变更规则
 
 相位定义变更 = 标签重打（`phase_label_run`）+ 地图重算（`phase_northstar`）+ 本文档升版本号（v2…）并保留旧版对照。
+
+## 6. M3 相位适配候选台账（2026-10-01 立项，实时回路替代挂账）
+
+**载体已就绪**：trade 层相位暴露控制研究开关（`trade_config.phaseExposureControl`：mode=reduce_offense/reduce_defense × factor 0~1，前日 EOD 定相 as-of，默认关 golden 逐位不变，commit 回归 132 passed）。**盘面脉拍**：`phase_pulse --month YYYY-MM` 随时跑当月至今快照（dryRun 隔离进程 → phase_monitor kind=pulse → 前端"本月至今"卡），观察即数据。
+
+| # | 候选 | 触发证据（观察登记，随脉拍更新） | 状态 |
+|---|---|---|---|
+| C1 | 进攻相位降仓（reduce_offense） | 首期地图：offense 段 sum −12.1% vs defense +33.8%（方向反直觉，54 笔薄样本）；9 月脉拍 offense 5 笔 wrxpf 0.357 仍弱 | **观察中**——10 月脉拍 2-3 次同向才升级提案 |
+| C2 | 防守相位降仓（reduce_defense） | 设计原案（差相位防守线）；当前数据相反（defense 是盈利段），暂无依据 | 冻结（数据翻转再启） |
+| C3 | 卖点按相位重审 | tp×be 市场状态依赖六次复现；与 C1/C2 同源 | 排队（C1 定向后再审） |
+| C4 | O8 双强相位收尾 | 方向翻转维持，等 n | 排队 |
+| C5 | TDX 情绪指数回填 | emotionValue 205/1071 帧（采集链代际）；M2 收口 §5 登记 | 可选观察（先零成本宽度代理验增量） |
+
+**裁决纪律**：任何候选升提案 = 脉拍证据（≥2 次同向 + 笔数 ≥30）→ 用户决策 → 一次一候选翻开关 → TDD + 锚复现。脉拍跑法：`./.venv/Scripts/python.exe -m backend.operations.phase_pulse --month 当月`（约 3-5 分钟，随时手动）。
