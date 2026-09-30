@@ -232,7 +232,7 @@ sentiment_2b 六个月 meanDiff 全部为正（offenseMean>defenseMean），但�
 ### 2.5 后续路径
 
 1. **登记 sentiment_2b（hi=lo=50 两档）为候选定义 v1-draft**：不冻结（判据未过），仅登记继续观察。理由：方向一致月数 6/6 三候选最好、翻转率最低（0.1318）、2026-09 显著性最强（p=0.00208）。
-2. **M2 前置观察期（2026-10）**：不跑结论性扫描、不立项；仅月度监控脚本天然积累 10 月新数据。**2026-10 月底复判条件**：若 sentiment_2b 在扩窗（2026-04～10）帧级上 ≥2 月份显著（p<0.05 或 |均值差| ≥2%）且方向维持 → 重开 M1 判定（轻量：只重跑 `phase_quality_report`，不重打标链）。若仍未达 → M1 以"当前证据不足"收口归档——该否定仍是正式产出，回炉重议相位体系。
+2. **M2 前置观察期（2026-10）**：不跑结论性扫描、不立项；仅月度监控脚本天然积累 10 月新数据。**2026-10 月底复判条件**：若 sentiment_2b 在扩窗（2026-04～10）帧级上 ≥2 月份显著（p<0.05 或 |均值差| ≥2%）且方向维持 → 重开 M1 判定。**复判执行序（终审 I-A 修正：必须重打标，不得只重跑检验脚本——labels 与 frames 同窗对齐，旧 labels 不含 10 月帧，扩窗帧会静默落 unknown 分母被剔除、lag 日期集仍限旧窗，结果失真且无报错）**：① 重导扩窗 frames gzip（复用批次 harness 导出脚本 `tmp-exit-frames-export.py`（git b251cf1c 恢复临时副本），dataset/snap_type/起止=end 改 2026-10-31）；② `python -m backend.operations.phase_label_run --frames <新gz> --out data/reports/phase-monitor/phase-labels-v2.json`；③ `python -m backend.operations.phase_quality_report --labels <v2 路径> --out .../phase-quality-v2.json`（新 --out 防复用旧产物）。若仍未达 → M1 以"当前证据不足"收口归档——该否定仍是正式产出，回炉重议相位体系。
 3. **期间不动默认栈、不立项 M3**（设计里程碑门纪律：M1 判定未过不启动后续里程碑）。
 
 ## 3. 诚实边界
