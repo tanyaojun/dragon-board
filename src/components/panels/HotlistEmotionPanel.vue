@@ -551,6 +551,17 @@
                 </div>
               </div>
 
+              <div class="metrics-grid">
+                <div class="metric-card">
+                  <div class="metric-icon">🫀</div>
+                  <div class="metric-content">
+                    <div class="metric-label">本月至今脉拍（默认栈 gate off）</div>
+                    <div class="metric-value">{{ phasePulseText.value }}</div>
+                    <div class="metric-label">{{ phasePulseText.detail }}</div>
+                  </div>
+                </div>
+              </div>
+
               <div class="phase-months">
                 <div class="section-title">月度监督序列</div>
                 <div v-if="!phaseMonths.length" class="state-block">暂无月度监控记录（次月起每月一条）</div>
@@ -616,6 +627,7 @@ import type {
   PhaseHistoryDay,
   PhaseMonthlyDoc,
   PhaseNorthstarDoc,
+  PhasePulseDoc,
 } from '@/types/phaseMonitor'
 import HotlistLimitStocksPanel from '@/components/panels/HotlistLimitStocksPanel.vue'
 import {
@@ -2364,6 +2376,7 @@ const phaseHistoryDays = ref<PhaseHistoryDay[]>([])
 const phaseHistoryDegraded = ref(false)
 const phaseHistoryReason = ref<string | null>(null)
 const phaseNorthstar = ref<PhaseNorthstarDoc | null>(null)
+const phasePulse = ref<PhasePulseDoc | null>(null)
 const phaseNorthstarMissingReason = ref<string | null>(null)
 const phaseMonths = ref<PhaseMonthlyDoc[]>([])
 const phaseLoading = ref(false)
@@ -2385,6 +2398,19 @@ const todayPhaseText = computed(() => {
   const score = emotionScoreValue.value
   if (score == null) return '暂不可用（情绪分缺失）'
   return `${score >= PHASE_THRESHOLD ? '进攻' : '防守'}（情绪分 ${score}）`
+})
+
+const phasePulseText = computed(() => {
+  const p = phasePulse.value?.report
+  if (!p) return { value: '未跑', detail: 'phase_pulse --month 当前月（随时手动，挂账即数据）' }
+  const off = p.byPhase?.offense ?? undefined
+  const def = p.byPhase?.defense ?? undefined
+  const fmt = (b?: { trades?: number; wrxpf?: number | null; sumNetReturn?: number | null }) =>
+    `${b?.trades ?? 0} 笔 · wrxpf ${b?.wrxpf ?? '--'} · ${(100 * (b?.sumNetReturn ?? 0)).toFixed(1)}%`
+  return {
+    value: `${p.month}｜${p.tradeCount ?? 0} 笔`,
+    detail: `进攻 ${fmt(off)}｜防守 ${fmt(def)}（gate off 基线，方向参考）`,
+  }
 })
 
 interface PhaseMonthRow {
@@ -2431,6 +2457,7 @@ async function loadPhaseData(): Promise<void> {
       phaseNorthstar.value = board.northstar
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
       phaseMonths.value = board.months
+      phasePulse.value = board.pulse ?? null
     }
   } catch (err) {
     phaseError.value = err instanceof Error ? err.message : '相位数据加载失败'

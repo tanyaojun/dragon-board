@@ -22,7 +22,7 @@ export interface PhaseHistoryResponse {
 }
 
 export type PhaseHistoryResult =
-  | { degraded: false; days: PhaseHistoryDay[]; threshold: number }
+  | { degraded: false; days: PhaseHistoryDay[]; threshold: number | null }
   | { degraded: true; days: []; threshold: null; reason: string }
 
 /** GET /api/phase-monitor/board 的 northstar 基线文档（report 为 phase_northstar 产物） */
@@ -79,8 +79,26 @@ export interface PhaseMonthlyDoc {
   updatedAt: string
 }
 
+export interface PhasePulseDoc {
+  _id: string
+  kind: 'pulse'
+  month: string
+  report: {
+    month?: string
+    tradeCount?: number
+    sampleNote?: string
+    eodDays?: number
+    byPhase?: Record<string, PhaseTradeStats>
+    fullWindow?: { maxDD: number | null; segReturn: number | null }
+    northstar?: Record<string, PhaseNorthstarEntry>
+    meta?: { gate?: string; generatedAt?: string }
+  }
+  updatedAt: string
+}
+
 export interface PhaseBoard {
   northstar: PhaseNorthstarDoc | null
+  pulse?: PhasePulseDoc | null
   northstarMissingReason?: string
   months: PhaseMonthlyDoc[]
   count: number
