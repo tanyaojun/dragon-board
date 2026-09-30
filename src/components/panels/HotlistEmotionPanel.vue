@@ -559,22 +559,6 @@
                     <div class="metric-label">{{ phaseDefenseText.detail }}</div>
                   </div>
                 </div>
-                <div class="metric-card">
-                  <div class="metric-icon">🏆</div>
-                  <div class="metric-content">
-                    <div class="metric-label">验收走廊（连续 3 期达线）</div>
-                    <div class="metric-value">{{ phaseCorridor.text }}</div>
-                    <div class="metric-label">{{ phaseCorridor.detail }}</div>
-                  </div>
-                </div>
-                <div class="metric-card">
-                  <div class="metric-icon">📡</div>
-                  <div class="metric-content">
-                    <div class="metric-label">监督线（S+A 触发率 / 样本不足占比）</div>
-                    <div class="metric-value">{{ phaseSupervisionText.value }}</div>
-                    <div class="metric-label">{{ phaseSupervisionText.detail }}</div>
-                  </div>
-                </div>
               </div>
 
               <div class="phase-chart-card">
@@ -2433,39 +2417,6 @@ const phaseDefenseText = computed(() => {
     ? `回撤 ${dl.ddBetter ? '浅于' : '未优于'}满仓 · 净损 ${dl.lossBetter ? '优于' : '未优于'}满仓（二者其一即过）`
     : '读数缺项'
   return { value: entry.pass ? '过线' : '未过线', detail, toneClass: entry.pass ? 'phase-tone-good' : 'phase-tone-bad' }
-})
-
-const phaseCorridor = computed(() => {
-  // 展示逻辑：逐相位取月度序列尾部连续达线数（正式语义源=后端 corridor_state）
-  const streakOf = (key: 'offense' | 'defense') => {
-    let s = 0
-    for (let i = phaseMonths.value.length - 1; i >= 0; i--) {
-      const v = phaseMonths.value[i]?.report?.supervision?.northstar?.pass?.[key]
-      if (v === true) s += 1
-      else break
-    }
-    return s
-  }
-  const off = streakOf('offense')
-  const def = streakOf('defense')
-  const achieved = off >= 3 || def >= 3
-  return {
-    text: achieved ? '有相位达成 ✅' : '进行中',
-    detail: `进攻连续 ${off} 期 · 防守连续 ${def} 期（历史 ${phaseMonths.value.length} 期）`,
-  }
-})
-
-const phaseSupervisionText = computed(() => {
-  const latest = phaseMonths.value[phaseMonths.value.length - 1]?.report?.supervision
-  const sa = latest?.saTriggerRate?.value
-  const ins = latest?.insufficientShare?.value
-  if (sa == null && ins == null) {
-    return { value: '人工补读', detail: '首期无自动源（S+A 触发率看面板统计；样本不足占比看周期列）' }
-  }
-  return {
-    value: `${sa != null ? (sa * 100).toFixed(1) + '%' : '--'} / ${ins != null ? (ins * 100).toFixed(1) + '%' : '--'}`,
-    detail: 'S+A<3.5% 预警 · 样本不足>15% 预警',
-  }
 })
 
 interface PhaseMonthRow {
