@@ -113,7 +113,7 @@ C1-C5（PASS_CANDIDATE）→ saEx 盲区检查 → Track 1 交易复核终判（
 队列护栏 MAX_PENDING_JOBS=2 + 429 串行提交、交易时段禁大批次、frames 本地化——harness
 侧改造不碰 golden 链、冻结处置 SOP）、
 锚代际纪律。实践记录见
-`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-26）；
+`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-27）；
 批次化复跑范例见同目录 `ranktrend-202610-rerun-plan.md`。
 
 使用要求：
@@ -130,6 +130,8 @@ C1-C5（PASS_CANDIDATE）→ saEx 盲区检查 → Track 1 交易复核终判（
   已落默认项复核用"单项还原"回退 trial，不是晋升期对照；
 - 观察池候选登记必须绑定锚代际、触发条件与对照基线；月度复验按批次方案先行
   （范例 `ranktrend-202610-rerun-plan.md`），不再单点开批。
+
+**【2026-09-30 体系切换】月度复验批次模式（阶段 0-27 + B-202610 范式）已封存**——判定卡唯一收口/观察池状态机/锚代际推进仪式/月度三件同步废止；现行章程见 quant-board/docs/ranktrend-tier-backtest/ranktrend-phase-acceptance-design.md（分相位验收 M1-M3 + 极简月度监控）。golden 锁基线/参数化不漂移/fail-visible/资源纪律/一次一候选落默认等条款**仍然有效**。
 
 ### 2.5 `a-stock-data`（外部上游 skill，领域取数参考）
 

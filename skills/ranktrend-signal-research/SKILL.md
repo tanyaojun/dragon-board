@@ -1,7 +1,7 @@
 ---
 name: ranktrend-signal-research
 description: RankTrend 信号参数长测与因子算法研发统一流程（合并原 ranktrend-tier-longterm-test 与 four-dim-algorithm-research，2026-09-16）——Track A 参数线（盘点参数化 → 5 档扫描 → 三层判定语义）/ Track B 因子算法线（设计 → 区分度 → 接线 → 边际贡献）/ 月度复验批次模式（窗口推进、已落默认栈回退复核、观察池裁决）。统一收口：Track 2 判定卡 C1-C5 → saEx 盲区检查 → Track 1 交易复核终判 → 六类判定 → 一次一候选落默认。含 harness 工程范式 13 项（公共库
-`backend/operations/harness_common.py` + 2026-09-21 审计纪律）、扫描执行资源纪律（2026-09-23 内存冻结事故：独立进程单 trial、队列护栏、frames 本地化、冻结处置 SOP）、锚代际纪律、窗口消费折扣（M3）。实践记录见 quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（阶段 0-26）；批次化复跑范例见同目录 ranktrend-202610-rerun-plan.md。
+`backend/operations/harness_common.py` + 2026-09-21 审计纪律）、扫描执行资源纪律（2026-09-23 内存冻结事故：独立进程单 trial、队列护栏、frames 本地化、冻结处置 SOP）、锚代际纪律、窗口消费折扣（M3）。实践记录见 quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（阶段 0-27）；批次化复跑范例见同目录 ranktrend-202610-rerun-plan.md；2026-09-30 起月度批次模式已封存，现行章程为分相位验收体系（ranktrend-phase-acceptance-design.md），参数化/golden/资源纪律条款仍有效。
 ---
 
 # RankTrend 信号研究统一流程（参数长测 × 因子算法 × 月度复验）
@@ -24,6 +24,8 @@ description: RankTrend 信号参数长测与因子算法研发统一流程（合
 - **Track A**：既有维度参数优化（"调参/搜索/长测"）、新维度参数首次盘点；
 - **Track B**：新增/修改 synergy 投票维度、观察因子（priceMomentum/priceRankDivergence/amountRatio 类）、投票权重结构、regime 门控（regime 禁放、Jump 确认、weak 放开）、评估口径争议；
 - **月度复验批次**：月度数据全量落库后的定期复跑——已落默认栈复核、观察池裁决、复核触发统一收批（范例：`ranktrend-202610-rerun-plan.md`）。
+
+> **【已封存 2026-09-30】**本节批次模式已被分相位验收体系取代（设计文档见 quant-board/docs/ranktrend-tier-backtest/ranktrend-phase-acceptance-design.md）。以下内容保留作历史范式参考；两轨判定语义（Track A/Track B）与全部前置纪律仍适用于新体系内的参数/因子研究。
 
 ## 第 0 步 共享前置纪律（两轨共用，每次必须确认）
 
@@ -207,5 +209,5 @@ pagefile 18GB 在用），mongod 工作集被挤到 43MB，行情列表读链整
 - 隔离执行/队列护栏：`quant-board/docs/ranktrend-tier-backtest/exit-scan-trial-runner.py`（独立进程单 trial 执行范式）、`quant-board/backend/optimization/jobs.py`（MAX_PENDING_JOBS 队列护栏，2026-09-23）
 - 冻结守卫：`quant-board/backend/optimization/data_windows.py`（assert_not_frozen）
 - 测试基准：`quant-board/tests/test_ranktrend_golden_alignment.py`（golden 不漂移）
-- 事实源/档案：`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-26 结论与锚读数）、`ranktrend-l1-param-ledger.md`、`overfitting-audit.md`
+- 事实源/档案：`quant-board/docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md`（阶段 0-27 结论与锚读数）、`ranktrend-l1-param-ledger.md`、`overfitting-audit.md`
 - 批次范例：`quant-board/docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md`（B-202610）
