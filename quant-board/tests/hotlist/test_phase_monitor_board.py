@@ -87,3 +87,16 @@ def test_board_includes_latest_pulse(monkeypatch) -> None:
     client = TestClient(app)
     body = client.get("/api/phase-monitor/board").json()
     assert body["pulse"]["month"] == "2026-10"  # 取 updatedAt 最新
+
+
+def test_board_returns_all_pulses_sorted(monkeypatch) -> None:
+    docs = [
+        {"_id": "pulse:2026-10", "kind": "pulse", "month": "2026-10", "report": {"month": "2026-10"}, "updatedAt": "t2"},
+        {"_id": "pulse:2026-09", "kind": "pulse", "month": "2026-09", "report": {"month": "2026-09"}, "updatedAt": "t1"},
+        {"_id": "pulse:2026-11", "kind": "pulse", "month": "2026-11", "report": {"month": "2026-11"}, "updatedAt": "t3"},
+    ]
+    _patch(monkeypatch, docs)
+    client = TestClient(app)
+    body = client.get("/api/phase-monitor/board").json()
+    assert [p["month"] for p in body["pulses"]] == ["2026-09", "2026-10", "2026-11"]  # 升序全量
+    assert body["pulse"]["month"] == "2026-11"  # 兼容字段=最新
