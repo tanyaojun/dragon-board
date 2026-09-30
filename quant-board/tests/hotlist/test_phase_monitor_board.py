@@ -76,3 +76,14 @@ def test_board_empty_collection_fail_visible(monkeypatch) -> None:
     assert body["northstar"] is None
     assert body["northstarMissingReason"]  # 结构化缺失原因，不伪造
     assert body["months"] == [] and body["count"] == 0
+
+
+def test_board_includes_latest_pulse(monkeypatch) -> None:
+    docs = [
+        {"_id": "pulse:2026-09", "kind": "pulse", "month": "2026-09", "report": {"month": "2026-09", "tradeCount": 5}, "updatedAt": "t1"},
+        {"_id": "pulse:2026-10", "kind": "pulse", "month": "2026-10", "report": {"month": "2026-10", "tradeCount": 2}, "updatedAt": "t2"},
+    ]
+    _patch(monkeypatch, docs)
+    client = TestClient(app)
+    body = client.get("/api/phase-monitor/board").json()
+    assert body["pulse"]["month"] == "2026-10"  # 取 updatedAt 最新

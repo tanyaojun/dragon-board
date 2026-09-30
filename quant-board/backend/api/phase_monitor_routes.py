@@ -21,17 +21,23 @@ def get_phase_monitor_board() -> dict[str, Any]:
     db = repository_factory.get_runtime_mongodb_database()
     docs = list(db["phase_monitor"].find({}))
     northstar: dict[str, Any] | None = None
+    pulse: dict[str, Any] | None = None
     months: list[dict[str, Any]] = []
     for doc in docs:
         if doc.get("kind") == "northstar":
             # 多基线取 updatedAt 最新（重跑升版本；当前单基线场景恒取唯一）
             if northstar is None or str(doc.get("updatedAt") or "") >= str(northstar.get("updatedAt") or ""):
                 northstar = doc
+        elif doc.get("kind") == "pulse":
+            # 多脉拍取 updatedAt 最新（同月重跑覆盖，跨月取最近跑的）
+            if pulse is None or str(doc.get("updatedAt") or "") >= str(pulse.get("updatedAt") or ""):
+                pulse = doc
         elif doc.get("kind") == "monthly":
             months.append(doc)
     months.sort(key=lambda m: str(m.get("month") or ""))
     body: dict[str, Any] = {
         "northstar": northstar,
+        "pulse": pulse,
         "months": months,
         "count": len(months),
     }
