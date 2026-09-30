@@ -3494,3 +3494,49 @@ saEx 盲区三案同构（效应面=交易层，saEx/synergy 口径结构性不�
 4. **P6-a ATR**：9 月全月数据重测 unknown 率后决定是否立项；
 5. §23.7 重扫触发条件维持（regime/risk 线位环境变化时重扫）；
 6. 窗口消费折扣（M3）延续：本批 decision/oos1/oos2 已消费，最终裁决窗用 09-13 后未消费帧。
+
+## 阶段 27：9 月全月复验批次 B-202610（2026-09-30 正式复跑，提前于原定 10/3）
+
+> 方案 `ranktrend-202610-rerun-plan.md`（§9.5 执行序）；批次报告 `data/reports/b-202610/batch-summary-formal.md`（本地）+ 各 `*-formal.json`；演练（09-25）产物 `*-dryrun.json` 保留作对照。用户裁决 9 月最后交易日（09-30）收盘后提前执行，数据前提（9 月全月 206 帧/21 交易日 + EOD 情绪齐）先经盘点核验。
+
+### 27.1 第四代正式四窗锚（阶段 1 收口）
+
+- **decision 0.1323 / oos1 0.0862（封闭窗，正式跑逐位复现，代际无漂移）/ oos2 全月 0.0841 / oos2u 0.0534，passHard 四窗全 True**（注册表 accedac2）。演练占位 oos2 0.0998/oos2u 0.0812（passHard False）作废——9 月窗 passHard 边缘失效随 09-28/29/30 三日补齐恢复通过；oos2u 绝对水平 0.0534 仍显著低于 decision（9 月弱市 OOS 衰减披露项）。
+- track2 BASELINE_ANCHORS 四窗填值激活 trial 级断言；jump/csA 经 baseline_anchor() 自动跟随全 match。
+
+### 27.2 已落默认栈复核（阶段 2）：R1-R6 全部保持
+
+- R1 fund10 保持（回退 C1 −6.95% + C4 strong −22.78%）；R2 保持（回退 C1 −11.11% + C4 −36.79% + C5 违反）；R3 保持（回退 C1 −0.83% + C4 −20.63%）；R4 ma_join 保持（C1 −0.23% 无红灯）；R5 跨代际对照见 27.1。
+- **R6 tp0.06×be0.02 保持（全月正式确认）**：oos2 全月默认栈 sumRet −14.27% vs 回退 −39.73%（少亏 25.5pp）、wrxpf 0.2836 vs 0.0180，oos2u 同向；decision 窗两栈 34 笔逐位相同 = 市场状态依赖第六次复现；M2 30 笔门槛 9 月窗未达（12-14 笔）维持披露；decision 绝对读数较演练移动系 09-30 情绪文档 route B 全量重算改变 trade 层 as-of 输入（合法演进，信号层不受影响）。
+
+### 27.3 Track 2 判定卡（13 trial 全月正式）
+
+- **O3_vsb070 = PASS_CANDIDATE 复现确认**（C1 +5.97% ∧ 三 OOS 全正 +15.89/+6.78/+12.73 ∧ C3 保持；C4 strong/retreat −9.6% 非否决）+ **Track 1 终判中性**（oos2 全月 80 笔过 M2，wrxpf 逐位同 baseline 0.1726）→ 进用户决策队列（落默认与否）。
+- O2 不重提（C1 +2.65% 未过 + 三 OOS 全负）；O4 OBSERVE（C1 +6.05% 过但三 OOS 全负）；O5 维持 OBSERVE；combo_p1/combo_all/persist_on OBSERVE；fund10_revert/fund10_over2 OBSERVE（对照臂职责）。
+- 披露：ma_join 与 ma_full 四窗读数完全相同（trial 定义疑历史重复，批次后核对去重）。
+
+### 27.4 观察池正式裁决（阶段 3）
+
+- **O6 MidLong：§23.7 两条触发前提正式成立且增强**（收紧侧单调 x125→x30：oos2 +2.62%→+8.80%、oos2u +2.43%→+15.92%、decision x30 +3.93% 过 C1；C3 passHard 四窗 True；C5 过）——**按 Track 2 流程重出提案（x30 主候选/x20 备选），C4 regime 桶判据缺（harness 不产）待补跑后终判**；c1/c2 组合 C1 未过维持 OBSERVE。
+- O7 csA：oos2 全月样本 542 首次过 500 线，但 A 档内 synergy −0.0353/−0.1226 推翻"稳定>0.05"→ 维持挂起。
+- O8 双强：合并 n=283+156=439 仍未达证伪线；方向翻转维持（4 窗 3 窗 csA<csC，oos2 全月 −1.89%）→ 维持挂起，"n 齐后优先重判"增强。
+- O10 断板：全窗/9 月窗 exitReason 均无断板桶（0 触发）→ fail-visible 维持挂起。
+
+### 27.5 待立项评估（阶段 4）
+
+- **N1 jumpConfirm**：27 runs 锚逐位复现；**vr 紧侧三窗全正全月复现且略强**（vr1.5 +0.53/+8.70/+6.90%）为首批最有意义剂量信号，chg 轴跨窗不干净，松侧无收益 → monitor_only 立项建议。
+- **N8 P_repool floor3 终判链闭合**：insufficient 降幅三窗 h1/h8 双口径复现（decision 14.18%→8.32%、oos1 13.61%→8.07%、oos2u 14.73%→9.36%，新增判定样本 oos2u 1157、85% D 档）；H0 反面检验 A 档 h1 弱正/h8 ≈0（优势不稳定，噪声区间）；B 档新增 13-96 条偏小；幸存者偏差标注；Track 1 oos2 全月 80 笔逐位同 baseline（无伤害）→ **floor3（degradedSampleFloor 5→3）具备落默认提案条件（一次一候选，用户决策）**；参数 α（window_size）待 β 后另批。
+- N3 ATR：立项不成立维持（unknown>50% 硬判据，沿用演练读数）；N2/N4-N7/N9-N14 未在本批队列（N2 交易层四课题与 N9 walk-forward 工作量大可拆下一批；N6/N12 条件型未触发；N7/N13 维持登记；N11 可选未跑；N14 设计评审待立项评估）；N15 jev 扩窗未执行（付费 API 先打招呼纪律，待用户确认）。
+
+### 27.6 工程与测试
+
+- 锚注册表正式化 + track2 守卫激活（accedac2，测试 10 passed）；R6 前置 payload/切窗脚本 09-30 口径；全部跑批新 --out 不 resume 旧缓存；串行单进程纪律全程执行（交易时段外）。
+- 遗留移交：diagnose_regime_saex_decomposition 本地 WINDOWS 副本（09-09 截断，不在队列）；evaluate_lifecycle_dimension 死常量锚未切注册表（本批以读数级人工对照替代，四窗逐位复现）；track2 无 --extra-trial 机制（O6 C4 补跑需先加机制或补 trial 行）。
+
+### 27.7 遗留与复核触发
+
+1. **O3 vsB_070 / N8 floor3 双双进用户决策队列**（一次一候选纪律，先 O3 后 N8 或按用户排序）；
+2. O6 提案 C4 补跑后终判；
+3. O8 双强：n≥500 且新代际 n≥200 后优先重判（方向已转向支持降级）；
+4. ma_join/ma_full trial 定义去重核对；
+5. 10 月批次（Wave 2 ThemeTrend 终判分册独立推进）数据落地检查点沿用本批日历。

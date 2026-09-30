@@ -16,7 +16,7 @@
 # 检查 → Track 1 终判 → 六类判定 → 用户决策 → 一次一候选落默认）。
 
 schema: ranktrend-observation-pool/v1
-updatedAt: '2026-09-25'
+updatedAt: '2026-09-30'
 anchorsRef: ranktrend-anchors.json
 factSource: ../docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md
 rerunPlan: ../docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md
@@ -84,6 +84,7 @@ items:
     revertNote: 还原旧 trade 默认（9.99 + breakeven 关）
     verdictRule: 9 月窗 Track 1 复核（wrxpf + 30 笔门槛，隔离 runner exit-scan-trial-runner.py）；decision 窗逐位=还原口径属预期（市场状态依赖四次复现，改善全部来自 8 月中旬后样本外），判定看 oos2/oos2u 保护效应延续性；显著负偏离才评估回退
     dryrunVerdict: 2026-09-25 演练回退不成立建议保持——decision 窗两栈 36 笔逐位相同（市场状态依赖第五次复现）；oos2 演练窗默认栈 12 笔 wrxpf 0.3473/sum -5.7%/maxDD -1.86% vs 回退栈 11 笔 0.1064/-21.6%/-2.39%，oos2u 同向 → 保护效应延续；披露：9 月窗 11-12 笔未达 M2 30 笔门槛，10/3 全月重跑复核
+    formalVerdict: 2026-09-30 正式批次保持确认——oos2 全月默认栈 sumRet -14.27% vs 回退 -39.73%（少亏 25.5pp）wrxpf 0.2836 vs 0.0180，oos2u 同向；decision 两栈 34 笔逐位同（第六次复现）；M2 仍未达（12-14 笔）披露；decision 绝对读数移动系情绪文档 route B 重算（合法演进）
     evidenceGeneration: gen-2026-09-23-exit-default（trade 层，commit b251cf1c）
     evidence: [exit-rules-scan-plan 阶段 A 终局, exit-scan-batch3-verdict, data/reports/b-202610/dryrun-progress.md T6]
 
@@ -112,6 +113,7 @@ items:
     status: pending_rerun
     trigger: 9 月全月复验同批裁决
     dryrunVerdict: 2026-09-25 演练判定卡 PASS_CANDIDATE（C1 +5.97% ∧ C2 三 OOS 全正 +15.89/+6.4/+4.71 ∧ C3 保持；C4 strong/retreat -9.6% 非否决）——进用户决策队列，先补 9 月窗 Track 1 终判（wrxpf + 30 笔门槛）
+    formalVerdict: 2026-09-30 正式批次 PASS_CANDIDATE 复现确认 + Track 1 终判中性（oos2 全月 80 笔过 M2，wrxpf 逐位同 baseline 0.1726；oos2u rel 升至 +12.73%）——**进用户决策队列（是否落默认，一次一候选）**
     evidenceGeneration: 阶段26（jump-fix 交界，批次重判时确认）
     evidence: [longterm §26.9, §26.10.1, data/reports/b-202610/batch-summary.json]
 
@@ -137,6 +139,7 @@ items:
     status: pending_rerun
     trigger: 9 月全月信号复现且 decision 窗读数抬升 → 按 Track 2 流程重出提案
     dryrunVerdict: 2026-09-25 演练两条触发前提均成立且放大——9 月全月收紧侧单调 x1.25→x3 +2.5%→+8.1%（x2 恰复现 +7.1%）、oos2u x2 +10.7%/x3 +13.3%、decision x3 +3.9% 过 C1 线 → 10/3 全月重跑后重出 Track 2 判定卡提案（含 C3/C4/C5）
+    formalVerdict: 2026-09-30 正式批次触发成立且增强——收紧侧单调 oos2 +2.62%→+8.80%、oos2u +2.43%→+15.92%、decision x30 +3.93% 过 C1；C3 passHard 四窗 True、C5 过；**C4 regime 桶缺（harness 不产）待补跑** → 提案重出（x30 主候选/x20 备选），补 C4 后终判进用户决策；c1/c2 组合 C1 未过维持 OBSERVE
     evidenceGeneration: gen-2026-09-09_23_9_1（历史）；演练=gen-2026-10-b202610（截至 09-24）
     evidence: [longterm §23.7, data/reports/b-202610/dryrun-progress.md T4, lifecycle-midlong-dose-dryrun.json]
 
@@ -146,6 +149,7 @@ items:
     status: pending_rerun
     trigger: A 档样本 >500 + 新窗口 synergy 稳定 >0.05
     dryrunVerdict: 2026-09-25 演练触发不成立维持挂起——csA 样本仅 decision 单窗 >500（1684），9 月两窗 A 档内 synergy saEx −0.030/−0.149 推翻"稳定>0.05"；附带发现 cs 维 A 档自身 excessDirAcc 四窗 ≈0（信息量在交叉项非单维）
+    formalVerdict: 2026-09-30 正式批次维持挂起——oos2 全月 csA 542 首次过 500 样本线，但 A 档内 synergy −0.0353（oos2u 272/−0.1226）推翻"稳定>0.05"维持；excessDirAcc 四窗 ≈0 维持
     evidenceGeneration: gen-2026-08-22_8 起（跨代际持续观察项）
     evidence: [longterm §10.4, §11.5, data/reports/b-202610/cs-a-tier-stats-dryrun.json]
 
@@ -156,6 +160,7 @@ items:
     trigger: 合并滚动统计口径（2026-09-16 裁决）：合并 283（233+32+18）+ 各批新增，每批重算 meanRet(csA-csC) 方向与 n；仅服务降级命题，不用于参数晋升
     falsifyRule: 转正式证伪三条件 = 合并 n≥500 ∧ jump-fix 新代际子样本 n≥200 ∧ 方向仍不支持降级
     dryrunVerdict: 2026-09-25 演练合并 n=283+149=432（①未达）∧ 新代际子样本 149（②未达）→ 维持挂起不关闭；**方向证据转向**——新代际 4 窗中 3 窗 meanRet(csA−csC)<0 开始支持降级（历史三窗一致不支持）；代际披露：新代际 decision 双强样本 233→91 缩水系 Jump 确认门真实拦截
+    formalVerdict: 2026-09-30 正式批次维持挂起——合并 n=283+156=439（①未达）∧ 新代际 156（②未达）；方向翻转维持（4 窗 3 窗 csA<csC，oos2 全月 45 样本 −1.89%）→ "n 齐后优先重判"标注增强
     evidenceGeneration: 阶段15（pre-fund10，断线代际 283 样本）+ 演练新代际 149
     evidence: [longterm §11.4f, §15.4, §21.5, data/reports/b-202610/dual-strength-syna-review-dryrun.json]
 
@@ -172,6 +177,7 @@ items:
     desc: 断板卖出 breakBoardExit 触发观察——B2 已实现+单测、默认关；阶段 A 全窗 43 笔持仓 0 触发（样本不存在≠无效，fail-visible 不下结论）
     status: pending_rerun
     trigger: 批次复跑顺带核对 9 月窗是否出现"断板" reason 桶；出现即自动进入分桶观察
+    formalVerdict: 2026-09-30 正式批次核对——全窗与 9 月窗 exitReason 分布均无"断板"桶（0 触发）→ fail-visible 维持挂起不下结论
     evidenceGeneration: gen-2026-09-23-exit-default
     evidence: [exit-scan-batch4-verdict]
 
@@ -180,6 +186,7 @@ items:
     desc: volumePriceMildRatio 1.05——L1 §14.4 OBSERVE（−2.7/+7.7/+14.7% 跨窗矛盾），原登记无复验安排，2026-09-25 补登记
     status: pending_rerun
     trigger: 批次轻量复扫或维持挂起裁决（低优先）
+    formalVerdict: 2026-09-30 正式批次未跑（低优先，预算让位于 O6/N8/Track 1）→ 维持挂起，触发条件不变
     evidenceGeneration: gen-2026-09-15-fund10
     evidence: [L1 §14.4]
 
@@ -189,6 +196,7 @@ items:
     desc: jumpConfirm 两参 5 档扫描（jumpConfirmChangeMin × jumpConfirmVolumeRatioMin；门修复后剂量才有意义）
     status: proposal_pending
     trigger: B-202610 批次评估立项（新代际首批）
+    formalVerdict: 2026-09-30 正式批次 27 runs 锚逐位复现——vr 紧侧（1.25/1.5）三窗全正全月复现且略强（oos2 +5.35/+6.90%）为首批最有意义剂量信号；chg 轴跨窗不干净；松侧无收益 → **建议立项为 monitor_only 观察因子**（不触发 Track 1）
     evidenceGeneration: gen-2026-09-15-jump-fix
     evidence: [longterm §26.10.2, param-gap-scan 方案 P6-c]
 
@@ -205,6 +213,7 @@ items:
     desc: P6-a ATR 观察因子区分度（unknown>50% 硬判据 → 数据不足不开发；根因轮动断档 gapResets 82.3 万）
     status: proposal_pending
     trigger: 9 月全月 unknown 率重测后决定（oos 两窗覆盖已修复至 98%+）
+    formalVerdict: 2026-09-30 正式批次维持立项不成立——oos2 演练窗 unknown 65.35% > 50% 硬判据（沿用演练读数，全月 +30 帧影响有限已披露）
     evidenceGeneration: gen-2026-09-15-fund10
     evidence: [longterm §26.7 P6-a, §26.10.4]
 
@@ -293,5 +302,6 @@ items:
     desc: 出池回池股票 timeline gap 容忍参数化——「中断历史降级判定」vs「insufficient 不可用」（频繁出入池股重建期过长，2026-09-20 用户立项；含 H0 反面假设正面检验：中断历史可能伪装当前结论）
     status: proposal_pending
     trigger: 中期扫描（2026-09-20，decision+oos1 双窗，M3 折扣）方向性支持参数 β：floor3 使 insufficient 14.2%→8.3%，新增判定 n=7683 的 lifecycle 档位质量不劣于基线（A +0.0584 vs +0.0534，E 负向正确；oos1 同向）；首轮「证伪」系 harness 字段路径 bug 假阴性（已修复更正）。待 oos2u 终判（10 月 B-202610）：h8 口径补齐 + B 档样本量 + 幸存者偏差标注 + A 档优势稳定性；终判通过则 floor3 落默认（一次一候选）
+    formalVerdict: 2026-09-30 正式批次终判链闭合——insufficient 三窗 h1/h8 双口径复现（decision 14.18%→8.32%、oos1 13.61%→8.07%、oos2u 14.73%→9.36%）；新增判定样本 oos2u 1157（85% D 档）；A 档 h1 弱正/h8 ≈0（优势不稳定噪声区间）+ B 档 13-96 条偏小 + 幸存者偏差标注；Track 1 oos2 全月 80 笔逐位同 baseline（无伤害，M2 达）→ **floor3（degradedSampleFloor 5→3）落默认提案条件具备，进用户决策队列（一次一候选，strategy_version 提升）**；参数 α（window_size）待 β 后另批
     evidenceGeneration: gen-2026-09-15-fund10
     evidence: [repool-research-proposal §5.1 中期扫描结果（quant-board/docs/ranktrend-tier-backtest/ranktrend-repool-timeline-gap-research-proposal.md）, data/reports/repool-midterm/repool-sample-floor-scan.json（易失运行产物）, 实测 002440 中断 19 天探针复现 2026-09-20]

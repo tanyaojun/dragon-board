@@ -439,3 +439,19 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 3. **decisionReversalPressureMin/OverheatMin/MarginMax**（§11 既有登记）；
 - 三项共用 Track 1 口径（track1_lifecycle_gate_trade --extra-arm / track1_dimension_power，M2 30 笔门槛）；
 建议同批立项一次跑完；9 月全月复验（10 月上旬）时 vsB_070 观察池结论同批裁决。
+
+## 16. B-202610 正式复跑批次（2026-09-30，阶段 27 台账面）
+
+> 第四代正式四窗锚：decision 0.1323 / oos1 0.0862 / oos2 全月 0.0841 / oos2u 0.0534，passHard 全 True（注册表 accedac2）。判定卡与裁决见长测阶段 27；本节记参数台账面结论。
+
+| 项 | 结论 |
+|---|---|
+| R1-R4 回退复核 | 四项回退 trial 判定卡全线不成立 → 已落默认全部保持（C1 负 + C4 strong 大降为共性） |
+| R6 tp0.06×be0.02 | 保持确认：oos2 全月少亏 25.5pp（−14.27% vs −39.73%），decision 两栈逐位同（市场状态依赖第六次复现）；M2 未达披露 |
+| O3 tierSynergyVoteStrengths[2]=0.7 | **PASS_CANDIDATE 进用户决策队列**：Track 2 全卡过（C1 +5.97% ∧ 三 OOS 全正）+ Track 1 oos2 全月 80 笔逐位同 baseline（中性不受伤，M2 达） |
+| O6 lifecycleMidLongCommitmentMin ×3 | 触发成立且增强，x30 提案重出（C1 +3.93%/C2 三 OOS 全正/C3/C5 过；C4 待补）；c1/c2 组合 C1 未过 OBSERVE |
+| N1 jumpConfirmVolumeRatioMin 紧侧 | monitor_only 立项建议：vr1.25/1.5 三窗全正（oos2 +5.35/+6.90%）；chg 轴不干净；松侧无收益 |
+| N8 degradedSampleFloor 5→3 | 终判链闭合：insufficient 三窗 h1/h8 复现 −5.4~−5.9pp；Track 1 80 笔无伤害；A 档 h8 优势不稳 + B 档样本偏小 + 幸存者偏差标注 → 落默认提案条件具备（用户决策，一次一候选） |
+| O7/O8/O10 | 维持挂起（触发不成立 / 合并 n=439 方向翻转增强 / 断板 0 触发） |
+| 台账落痕核对（阶段 5.4） | P1-b persist 交叉对照 trial：未在本批发现执行落痕；persist_on 判定卡 OBSERVE（C1 −11.26% + C4 strong −25.35%）——crossSectionPersistFrames 维持关闭（与 N13 一致） |
+| 新增工程注记 | track2 BASELINE_ANCHORS 四窗激活 trial 级断言；ma_join/ma_full trial 定义疑重复待去重；lifecycle_dimension 死常量锚仍待切注册表（本批读数级人工对照替代） |
