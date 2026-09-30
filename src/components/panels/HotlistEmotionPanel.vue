@@ -2524,14 +2524,26 @@ function renderPhaseChart(): void {
         markLine: {
           symbol: 'none',
           silent: true,
-          data: [{ yAxis: PHASE_THRESHOLD, lineStyle: { color: '#d97706', type: 'dashed' }, label: { formatter: '相位线 50' } }],
+          // 弱势区间 40-60（2026-10-01 用户定义；分带测算该带逐月皆亏）
+          data: [
+            { yAxis: 40, lineStyle: { color: '#d97706', type: 'dashed' }, label: { formatter: '40' } },
+            { yAxis: 60, lineStyle: { color: '#d97706', type: 'dashed' }, label: { formatter: '60' } },
+          ],
         },
         markArea: {
           silent: true,
-          data: areas.map(([a, b]) => [
-            { xAxis: a.xAxis, itemStyle: { color: 'rgba(239,68,68,0.08)' } },
-            { xAxis: b.xAxis, itemStyle: { color: 'rgba(239,68,68,0.08)' } },
-          ]),
+          data: [
+            // 弱势带横向底色（40-60）
+            [
+              { yAxis: 40, itemStyle: { color: 'rgba(217,119,6,0.07)' } },
+              { yAxis: 60, itemStyle: { color: 'rgba(217,119,6,0.07)' } },
+            ],
+            // 相位着色段（xAxis 段，研究口径）
+            ...areas.map(([a, b]) => [
+              { xAxis: a.xAxis, itemStyle: { color: 'rgba(239,68,68,0.08)' } },
+              { xAxis: b.xAxis, itemStyle: { color: 'rgba(239,68,68,0.08)' } },
+            ]),
+          ],
         },
       },
     ],
