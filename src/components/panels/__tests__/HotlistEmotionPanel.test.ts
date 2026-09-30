@@ -304,6 +304,13 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('buildStageMarkArea(points)')
     expect(source).toContain('connectNulls: false')
     expect(source).toContain('trend-stats-grid')
+    // 柱体语言（2026-09-30 用户裁决）：温度紫柱 / 拥挤橙柱，旧折线不回流
+    expect(source).toContain("name: '温度', type: 'bar'")
+    expect(source).toContain("name: '拥挤', type: 'bar'")
+    expect(source).toContain("itemStyle: { color: '#9b59b6' }")
+    expect(source).toContain("itemStyle: { color: '#ff9f43' }")
+    expect(source).not.toContain("name: '温度', type: 'line'")
+    expect(source).not.toContain("name: '拥挤', type: 'line'")
     // 日级总体（盘后固定）行保留（1天档）
     expect(source).toContain('日级总体（盘后固定）')
     // fail-visible：降级/无数据状态结构化进 tooltip 与注记，不伪造分数

@@ -2251,7 +2251,7 @@ const trackNote = computed(() => {
 // ---------- jev 观察轨道图表（2026-09-30：卡片网格改 ECharts，语言同情绪趋势页签） ----------
 // 1天=日内逐槽（序列档 sequence_stage + temperature/crowding）；
 // 3日/1周/1月=日线 EOD 日级总体（day_stage + day_temperature/day_crowding）。
-// 降级/无数据槽：分数为 null 断线（connectNulls: false），状态与错误码进 tooltip，不伪造 0。
+// 温度紫柱/拥挤橙柱；降级/无数据槽分数为 null 柱体不渲染，状态与错误码进 tooltip，不伪造 0。
 const jevChartRef = ref<HTMLElement | null>(null)
 let jevChart: echarts.ECharts | null = null
 const jevTimeRange = ref<TrendTimeRange>('1d')
@@ -2426,34 +2426,21 @@ function renderJevChart() {
 
   const points = jevPoints.value
   const series: any[] = []
+  // 柱体语言（2026-09-30 用户裁决）：温度紫柱 / 拥挤橙柱；分数 null 的槽/日柱体不渲染（不伪造 0）
   if (jevIndicators.value.includes('temperature')) {
     series.push({
-      name: '温度',
-      type: 'line',
+      name: '温度', type: 'bar',
       data: points.map((p) => p.temperature),
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: 5,
-      connectNulls: false,
-      lineStyle: { color: '#ff7f50', width: 2 },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(255, 127, 80, 0.25)' },
-          { offset: 1, color: 'rgba(255, 127, 80, 0)' },
-        ]),
-      },
+      itemStyle: { color: '#9b59b6' },
+      barWidth: 8,
     })
   }
   if (jevIndicators.value.includes('crowding')) {
     series.push({
-      name: '拥挤',
-      type: 'line',
+      name: '拥挤', type: 'bar',
       data: points.map((p) => p.crowding),
-      smooth: true,
-      symbol: 'diamond',
-      symbolSize: 5,
-      connectNulls: false,
-      lineStyle: { color: '#4a90e2', width: 1.5, type: 'dashed' },
+      itemStyle: { color: '#ff9f43' },
+      barWidth: 8,
     })
   }
   // 序列/日级档位铺底：jev 五档与规则轨道同词汇，直接复用 STAGE_TREND_META 冷热语义色
