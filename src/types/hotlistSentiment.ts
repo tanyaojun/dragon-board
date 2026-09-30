@@ -153,7 +153,8 @@ export interface HotListSentimentMetrics {
 export type HotListSentimentRiskLevel = '低' | '中' | '高'
 
 export interface HotListSentimentResult {
-  stage: EmotionCycleStage
+  /** 路线 B 起可 null：证据全缺（score=null）且当日无可确认档位时后端输出 null */
+  stage: EmotionCycleStage | null
   riskLevel: HotListSentimentRiskLevel
   confidence: number
   summary: string
@@ -214,7 +215,8 @@ export interface HotListSentimentDayDoc {
   timestamp?: number
   /** 文档计算时间（unix 秒；后端 build_hotlist_sentiment_document 写入） */
   computedAt?: number
-  stage: UnifiedEmotionStage
+  /** 路线 B 起可 null：证据全缺（score=null）且当日无可确认档位时后端输出 null */
+  stage: UnifiedEmotionStage | null
   riskLevel: HotListSentimentRiskLevel
   confidence: number
   summary: string

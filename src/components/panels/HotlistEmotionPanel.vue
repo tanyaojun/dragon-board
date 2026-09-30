@@ -771,8 +771,8 @@ const emotionScorePctText = computed(
 const emotionScoreTooltip = computed(() => {
   const emotion = doc.value?.emotionScore
   if (!emotion) return ''
-  const parts = Object.entries(emotion.dims).map(([name, detail]) => `${name} ${detail.sub}`)
-  const skipped = emotion.skippedDims.length ? `；缺失跳过：${emotion.skippedDims.join('、')}` : ''
+  const parts = Object.entries(emotion.dims ?? {}).map(([name, detail]) => `${name} ${detail.sub}`)
+  const skipped = (emotion.skippedDims ?? []).length ? `；缺失跳过：${(emotion.skippedDims ?? []).join('、')}` : ''
   const slope = emotion.slope != null ? `；较上一有效槽 ${emotion.slope > 0 ? '+' : ''}${emotion.slope}` : ''
   return `情绪分构成（可分解审计）：${parts.join('、')}${skipped}${slope}`
 })
@@ -1065,10 +1065,10 @@ function renderLayersChart() {
               return `<div>${it.marker}${it.seriesName}：${fmt ? fmt(value ?? null) : String(value)}</div>`
             })
             .join('')
-          const stageColor = STAGE_TREND_META[point.stage]?.fg || textColor
+          const stageColor = STAGE_TREND_META[point.stage ?? '']?.fg || textColor
           return [
             `<div style="font-weight:600;margin-bottom:4px;">${point.title}</div>`,
-            `<div style="color:${stageColor};margin-bottom:4px;">阶段：${point.stage} · 样本 ${formatNullableCount(point.sample)}</div>`,
+            `<div style="color:${stageColor};margin-bottom:4px;">阶段：${point.stage || '缺失'} · 样本 ${formatNullableCount(point.sample)}</div>`,
             rows,
           ].join('')
         },
@@ -1792,13 +1792,13 @@ function renderCompareChart() {
               return `<div>${it.marker}${it.seriesName}：${fmt ? fmt(value ?? null) : String(value)}</div>`
             })
             .join('')
-          const stageColor = STAGE_TREND_META[point.stage]?.fg || textColor
+          const stageColor = STAGE_TREND_META[point.stage ?? '']?.fg || textColor
           const strongLine = point.strong
             ? `<div style="margin-top:4px;color:${textColor};">强票：${formatNullableCount(point.strong.count)} 只 · 可比 ${formatNullableCount(point.strong.matched)} · 留榜 ${formatNullableCount(point.strong.retained)} · 均涨 ${point.strong.avgChange === null ? '--' : formatPercent(point.strong.avgChange)}</div>`
             : ''
           return [
             `<div style="font-weight:600;margin-bottom:4px;">${point.title}</div>`,
-            `<div style="color:${stageColor};margin-bottom:4px;">阶段：${point.stage}</div>`,
+            `<div style="color:${stageColor};margin-bottom:4px;">阶段：${point.stage || '缺失'}</div>`,
             rows,
             strongLine,
           ].join('')
@@ -1930,7 +1930,7 @@ const trendPoints = computed(() => {
     const all = item.metrics?.layers?.all
     const counts = all?.stageCounts
     const rawStage = item.rawStage || item.stage
-    const drift = rawStage !== item.stage ? stageDriftText(rawStage, item.stage) : ''
+    const drift = item.stage && rawStage && rawStage !== item.stage ? stageDriftText(rawStage, item.stage) : ''
     return {
       label: intraday
         ? item.slotTime || `slot-${index}`
@@ -2037,8 +2037,9 @@ const TREND_AXIS_FMT: Record<string, (v: number | null) => string> = {
 }
 
 // 阶段铺底：连续同阶段点合并成一段 markArea，≥2 点才显示阶段名，避免窄段文字挤压（两图表共用）
+// 路线 B：stage 可为 null（证据全缺槽），该点中断连续段、不铺底
 function buildStageMarkArea(
-  points: Array<{ label: string; stage: string }>,
+  points: Array<{ label: string; stage: string | null }>,
 ): Array<[Record<string, unknown>, Record<string, unknown>]> {
   const data: Array<[Record<string, unknown>, Record<string, unknown>]> = []
   let runStage = ''
@@ -2060,6 +2061,10 @@ function buildStageMarkArea(
     runLen = 0
   }
   for (const p of points) {
+    if (!p.stage) {
+      flushRun()
+      continue
+    }
     if (runLen > 0 && p.stage === runStage) {
       runEnd = p.label
       runLen += 1
@@ -2187,7 +2192,7 @@ function renderTrendChart() {
               return `<div>${it.marker}${it.seriesName}：${fmt ? fmt(value ?? null) : String(value)}</div>`
             })
             .join('')
-          const stageColor = STAGE_TREND_META[point.stage]?.fg || textColor
+          const stageColor = STAGE_TREND_META[point.stage ?? '']?.fg || textColor
           const driftText = point.drift ? `（${point.drift}，当帧判定 ${point.driftRaw}）` : ''
           return [
             `<div style="font-weight:600;margin-bottom:4px;">${point.title}</div>`,
@@ -2575,7 +2580,7 @@ function renderJevChart() {
               return `<div>${it.marker}${it.seriesName}：${fmt ? fmt(value ?? null) : String(value)}</div>`
             })
             .join('')
-          const stageColor = STAGE_TREND_META[point.stage]?.fg || textColor
+          const stageColor = STAGE_TREND_META[point.stage ?? '']?.fg || textColor
           const stageLine = `<div style="color:${stageColor};margin-bottom:4px;">档位：${point.stage || '缺失'}</div>`
           const patternLine = point.pattern ? `<div style="margin-bottom:4px;">路径：${point.pattern}</div>` : ''
           const statusLine = point.statusText
