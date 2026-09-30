@@ -2444,6 +2444,28 @@ const phasePulseAbLine = computed(() => {
   return `A/B 弱势带回避（factor=0）：${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
 })
 
+interface PhaseMonthRow {
+  month: string
+  docs: string
+  labelsFresh: boolean
+  offense: boolean | null
+  defense: boolean | null
+  saTriggerRate: number | null
+  insufficientShare: number | null
+}
+
+const phaseMonthRows = computed<PhaseMonthRow[]>(() =>
+  phaseMonths.value.map((m) => ({
+    month: m.month,
+    docs: `${m.report.coverage?.sentimentDocs ?? '--'} / ${m.report.coverage?.tradingDays ?? '--'} 日`,
+    labelsFresh: m.report.coverage?.labelsFresh === true,
+    offense: m.report.supervision?.northstar?.pass.offense ?? null,
+    defense: m.report.supervision?.northstar?.pass.defense ?? null,
+    saTriggerRate: m.report.supervision?.saTriggerRate?.value ?? null,
+    insufficientShare: m.report.supervision?.insufficientShare?.value ?? null,
+  })),
+)
+
 async function loadPhaseData(): Promise<void> {
   phaseLoading.value = true
   phaseError.value = null
