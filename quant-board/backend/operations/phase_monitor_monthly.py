@@ -104,6 +104,10 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    # Mongo 落库（前端可见化数据源；失败不阻断，本地 JSON 仍是即时产物）
+    from backend.operations.phase_monitor_persistence import persist_monthly
+
+    persist_monthly(report)
     print(f"[monthly] -> {out_path}", file=sys.stderr)
     return 0
 

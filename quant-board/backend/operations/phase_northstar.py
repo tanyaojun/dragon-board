@@ -125,6 +125,10 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    # Mongo 落库（前端可见化数据源；失败不阻断研究链，本地 JSON 仍是即时产物）
+    from backend.operations.phase_monitor_persistence import persist_northstar
+
+    persist_northstar(report, key=f"gen7-{args.candidate}")
     return 0
 
 
