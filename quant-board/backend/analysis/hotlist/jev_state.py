@@ -355,7 +355,16 @@ def _format_current_evidence_section(ev: dict) -> str:
     lines = ["【当前帧证据】"]
     idx = ev.get("indices") or {}
     idx_bits = [f"{_INDEX_NAMES[k]} {idx[k]:+.2f}点" for k in _INDEX_KEYS if _finite(idx.get(k))]
-    lines.append("指数：" + ("、".join(idx_bits) if idx_bits else "缺失"))
+    # 指数×量能同行（2026-09-30 用户建议）：强化「指数方向 × 总体量能」组合语义的可见性
+    amount = ev.get("totalAmount") or {}
+    amount_bit = ""
+    if amount.get("amount") is not None:
+        if amount.get("vsSamePct") is not None:
+            direction = "放量" if amount["vsSamePct"] >= 0 else "缩量"
+            amount_bit = f"；两市总成交额 {_fmt_yi(amount['amount'])}（较昨日同期{direction} {abs(amount['vsSamePct']):.0f}%）"
+        else:
+            amount_bit = f"；两市总成交额 {_fmt_yi(amount['amount'])}（昨日同期缺失）"
+    lines.append("指数与量能：" + ("、".join(idx_bits) if idx_bits else "指数缺失") + amount_bit)
     limit = ev.get("limit") or {}
     boards = limit.get("boards") or {}
     lim_bits = []
@@ -385,16 +394,6 @@ def _format_current_evidence_section(ev: dict) -> str:
         lines.append(f"热榜TRIN：{float(trin):.2f}（{side}；涨向成交 {_fmt_yi(up_t)} vs 跌向成交 {_fmt_yi(down_t)}）")
     else:
         lines.append("热榜TRIN：不可算（单边或成交额缺失）")
-    amount = ev.get("totalAmount") or {}
-    if amount.get("amount") is not None:
-        if amount.get("vsSamePct") is not None:
-            direction = "放量" if amount["vsSamePct"] >= 0 else "缩量"
-            lines.append(f"两市总成交额：累计 {_fmt_yi(amount['amount'])}，较昨日同期{direction} "
-                         f"{abs(amount['vsSamePct']):.0f}%（昨日同期 {_fmt_yi(amount.get('yesterdaySame'))}）")
-        else:
-            lines.append(f"两市总成交额：累计 {_fmt_yi(amount['amount'])}（昨日同期缺失，无法对比）")
-    else:
-        lines.append("两市总成交额：缺失（历史帧无该字段）")
     fund = ev.get("fund") or {}
     if fund.get("zljeSum") is not None:
         lines.append(f"主力资金：净额合计 {_fmt_yi(fund['zljeSum'])}（正 {fund.get('zljePos', 0)} 家"
@@ -427,8 +426,10 @@ def _format_current_evidence_section(ev: dict) -> str:
         f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}" for k in _LIFECYCLE_KEYS) + missing_bit)
     row_flags = ev.get("rowFlags") or {}
     if row_flags and row_flags.get("judgeable"):
-        lines.append(f"行级标记：资金确认 {row_flags.get('strongMoney', 0)} 只（冷却阶段强资金且量能承接，攻击强度）"
-                     f"/ 风险预警 {row_flags.get('risk', 0)} 只（反转、冷却未确认、或共振存疑且主力净占比转负，撤退压力）")
+        judgeable = row_flags["judgeable"]
+        sm, risk = row_flags.get("strongMoney", 0), row_flags.get("risk", 0)
+        lines.append(f"行级标记：资金确认 {sm} 只（冷却阶段强资金且量能承接，攻击强度，占可判定 {round(sm / judgeable * 100)}%）"
+                     f"/ 风险预警 {risk} 只（反转、冷却未确认、或共振存疑且主力净占比转负，撤退压力，占可判定 {round(risk / judgeable * 100)}%）")
     leaders = ev.get("leaders") or []
     if leaders:
         leader_bits = []

@@ -56,7 +56,8 @@
                     :class="{ 'jev-chip-clickable': !!jevHeroNarrative, 'jev-chip-open': jevHeroNarrativeOpen }"
                     :title="jevLatestTitle" @click="toggleJevHeroNarrative">
                     🤖 jev 日内序列 {{ jevLatestSequenceName }}<template
-                      v-if="jevLatestProbability != null">（P{{ Math.round(jevLatestProbability * 100) }}%）</template><template
+                      v-if="jevLatestProbability != null">（P{{ Math.round(jevLatestProbability * 100) }}%<template
+                        v-if="jevHesitant">，犹豫</template>）</template><template
                       v-if="jevLatestFrameName && jevLatestFrameName !== jevLatestSequenceName">｜当前帧 {{ jevLatestFrameName }}</template><template
                       v-if="jevLatestTemperature != null">｜温 {{ jevLatestTemperature }}·挤 {{ jevLatestCrowding ?? '--' }}</template><template
                       v-if="jevHeroNarrative">｜📜 叙事 {{ jevHeroNarrativeOpen ? '▴' : '▾' }}</template>
@@ -676,6 +677,9 @@ const jevLatestFrameName = computed(() =>
   jevLatest.value ? jevChoiceName(jevLatest.value, 'frame_stage') : null)
 const jevLatestProbability = computed(() =>
   jevLatest.value ? jevChoiceProbability(jevLatest.value, 'sequence_stage') : null)
+// jev 犹豫度：top 概率 < 0.6 视为低置信档位，显式透传给论证者（避免把低置信判定当强信号）
+const jevHesitant = computed(() =>
+  jevLatestProbability.value != null && jevLatestProbability.value < 0.6)
 const jevLatestTemperature = computed(() =>
   jevLatest.value ? jevScore(jevLatest.value, 'temperature') : null)
 const jevLatestCrowding = computed(() =>

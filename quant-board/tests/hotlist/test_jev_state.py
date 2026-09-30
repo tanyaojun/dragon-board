@@ -51,7 +51,7 @@ def _v3_rows():
     return [
         {"code": "000001", "name": "甲", "rank": 1, "heat": 99, "pctChange": 9.98, "change": 9.98,
          "price": 9.66, "limitUpPrice": 9.66, "mainTheme": "算力", "reason": "算力租赁",
-         "turnover": 1.2e8, "zlje": 5.0e6},
+         "turnover": 1.2e8, "zlje": 5.0e6, "zljzb": 9.0},
         {"code": "000002", "name": "乙", "rank": 2, "heat": 90, "pctChange": 6.0, "change": 6.0,
          "price": 5.0, "limitUpPrice": None, "mainTheme": "固态电池", "turnover": 3.0e7},
         {"code": "000003", "name": "丙", "rank": 3, "heat": 80, "pctChange": 3.0, "change": 3.0,
@@ -70,10 +70,15 @@ def _v3_rows():
 
 
 def _v3_analysis():
+    # 甲=强资确认（cooling + zlje>0 + zljzb≥8 + 量能 tierA）；丁=风险（reversal）
     return {
-        "000001": {"displayStatus": {"stage": "ignition"}},
-        "000002": {"displayStatus": {"stage": "expansion"}},
-        "000004": {"displayStatus": {"stage": "cooling"}},
+        "000001": {"displayStatus": {"stage": "cooling"},
+                    "cycle": {"stage": "cooling"},
+                    "observation": {"volumePrice": {"signalTier": "A"}}},
+        "000002": {"displayStatus": {"stage": "expansion"},
+                    "cycle": {"stage": "expansion"}},
+        "000004": {"displayStatus": {"stage": "reversal"},
+                    "cycle": {"stage": "reversal"}},
     }
 
 
@@ -109,10 +114,12 @@ def test_collect_slot_evidence_shape():
     assert ev["turnover"]["newCount"] == 7 and ev["turnover"]["droppedCount"] == 1
     assert ev["yesterdayLimit"] is not None and ev["yesterdayLimit"]["count"] >= 1
     lifecycle = ev["lifecycle"]
-    assert lifecycle["ignition"] == 1 and lifecycle["expansion"] == 1 and lifecycle["cooling"] == 1
-    assert lifecycle["unknown"] == 0 and ev["lifecycleMissing"] == 5
+    assert lifecycle["ignition"] == 0 and lifecycle["expansion"] == 1 and lifecycle["cooling"] == 1
+    assert lifecycle["reversal"] == 1 and lifecycle["unknown"] == 0 and ev["lifecycleMissing"] == 5
+    # 强资确认（甲 cooling+tierA+zlje/zljzb 达标）与风险预警（丁 reversal）各 1，可判定 3 行
+    assert ev["rowFlags"] == {"strongMoney": 1, "risk": 1, "judgeable": 3}
     leader = ev["leaders"][0]
-    assert leader["name"] == "甲" and leader["zt"] is True and leader["stage"] == "ignition"
+    assert leader["name"] == "甲" and leader["zt"] is True and leader["stage"] == "cooling"
     assert ev["reasons"][0] == ["算力租赁", 1]
     assert ev["quality"]["degradedSources"] == []
 
@@ -168,11 +175,14 @@ def test_build_slot_jev_state_full_shape():
     assert "热榜TRIN：1.67" in s and "量价背离" in s
     assert "TRIN 1.67" in s  # 压缩行也携带
     assert "量能同期+41%" in s  # 压缩行携带同期量能
-    assert "两市总成交额：累计 +14100.00亿" in s and "较昨日同期放量 41%" in s
+    assert "指数与量能：" in s and "两市总成交额 +14100.00亿（较昨日同期放量 41%）" in s  # 指数×量能同行
+    assert "资金确认 1 只" in s and "占可判定 33%" in s  # 行级标记带占比（跨日可比）
+    assert "风险预警 1 只" in s
+    assert "强资1·风险1" in s  # 压缩行携带
     assert "新进 7" in s and "淘汰 1" in s
     assert "主力净额" in s and "+0.07亿" in s
     assert "昨涨停承接" in s
-    assert "点火 1" in s and "扩散 1" in s and "冷却 1" in s
+    assert "点火 0" in s and "扩散 1" in s and "冷却 1" in s
     assert "甲" in s and "算力" in s and "涨停" in s and "点火" in s
     assert "10:00｜" in s  # 压缩行进入已走帧段
     assert "无缺失" in s
