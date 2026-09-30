@@ -3251,4 +3251,27 @@ EOD 双形态排除（日级 `_id` 与 `slotTime="EOD"`）；独立轨道降级�
 `_HOTLIST_SENTIMENT_CACHE_VERSION`）。回退：`HOTLIST_STAGE_CONFIRM_SLOTS=1` 逐槽等价
 （`stage == rawStage`），非法配置回裁决默认 2 并落诊断；不删除任何历史字段或文档。
 
+## 路线 B 连续情绪评分（2026-09-30）
+
+EOD 档位主定义已从布尔级联切换为**连续评分驱动**（设计 `docs/superpowers/specs/2026-09-30-emotion-score-design.md`
+v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-score-calibration.md`；迁移与典型日对照
+`docs/hotlist-jev/emotion-score-migration-report.md`）：
+
+- **判档来源**：`emotion_score.compute_emotion_score`（8 维等权连续分 0-100，jev 聚合口径 1068 槽实测校准，
+  缺维跳过权重归一化）→ `map_stage`（≥75 高潮 / 60-75 发酵 / 40-60 启动 / <40 按当日斜率分退潮·冰点；
+  高潮压制条款已删除）→ 分数域确认（复用 `stage_confirm.confirm_stage` 滞回，confirmSlots 语义不变）。
+- **字段合同**：`rawStage`=本帧映射档位（含斜率；证据全缺时 null——方案 B 不伪造档位）；`stage`=确认投影；
+  `stageCandidate` 与 rawStage 同值；新增 `emotionScore` 子文档（score/dims/skippedDims/stageCandidate/slope/version，
+  可分解审计）与 `legacyCascadeStage`（旧级联截面对照面，`resolve_stage` 函数保留不删）。
+- **斜率**：`_collect_intraday_state.scorePoints` 因果收集当日早槽 `emotionScore.score`，slope=上一有效槽差；
+  prev 缺失（首槽不标）落 `emotion_slope_unavailable:prev_score_missing` 诊断；score 全缺落
+  `emotion_score_unavailable` 诊断且确认序列跳过该槽。
+- **写口与缓存**：四个写口 evidence parts（yesterday_rows 复用 previous_day_stocks；analysis_by_code 与昨日同期
+  总额复用 jev 服务层取数）共用同一投影；series/slots 缓存版本 `v3`；ingest 白名单含
+  `emotionScore`/`legacyCascadeStage`（禁止静默丢弃）。
+- **历史与回退**：113 交易日 1182 文档已全量重算（新口径，幂等脚本 `backend/operations/emotion_score_recompute.py`）；
+  回退 = 调用点切回级联 + 历史 stage 从 `legacyCascadeStage` 重算恢复。策略层消费不变（`risk.py stage_adjust`
+  仍读五档枚举），regime 影响量化见 `docs/hotlist-jev/emotion-score-regime-diff-report.md`（EOD 层 meanDiff +2.44，
+  68% 天数受影响）。校准重校准触发条款见设计 v3 §9。
+
 回放验收基线（2026-09-24，14 个交易日，输入 `rawStage ?? stage`）：原始切换 39 → 确认后 15（减少 61.5%）、确认延迟 max=1 avg=1.00、吸收单槽候选 8 次、阈值 1 逐槽等价 PASS（`operations/replay_stage_confirm.py`，只读）。

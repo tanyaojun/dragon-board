@@ -30,9 +30,9 @@
 - [x] 断言：join 率≈100%（fallback 可忽略）、change/pctChange 不匹配 0.71%、zhabanRate 百分数量纲 ✓
 - [x] 测试回归全绿（217 passed）；Commit：`feat(hotlist-sentiment): T1.5 jev 口径重放校准与五档可达性验证`
 
-### Task 2: 链切换——档位来源切至评分（golden 触点）
+### Task 2: 链切换——档位来源切至评分（golden 触点）✅ 已完成（bf10480a）
 
-### Task 2: 链切换——档位来源切至评分（golden 触点）
+### Task 2: 链切换——档位来源切至评分（golden 触点）✅ 已完成（bf10480a）
 
 **Files:** Modify `backend/operations/hotlist_sentiment.py`（build_hotlist_sentiment_document）、`backend/services/theme/hotlist_sentiment_compute.py`（_collect_intraday_state 扩展）、`backend/analysis/hotlist/sentiment.py`（resolve_stage 降级 legacy 不删）
 
@@ -44,7 +44,7 @@
 - [ ] 测试：score→stage 映射、确认复用（V 型日分数谷底可见、单槽越界被吸收）、slope 接线（含 prev 缺失分支）、score=None 语义、legacyCascadeStage 对照字段、emotionScore 可分解
 - [ ] Commit：`feat(hotlist-sentiment): EOD 档位主定义切换为评分驱动（legacyCascade 对照面保留）`
 
-### Task 3: 写口接线 + API 缓存 v3
+### Task 3: 写口接线 + API 缓存 v3 ✅ 已完成（d9f3a9b1）
 
 **Files:** Modify `backend/services/theme/hotlist_sentiment_compute.py`、`backend/snapshot_collector/service.py`、`backend/api/hotlist_routes.py`
 
@@ -54,7 +54,7 @@
 - [ ] 测试：写口往返 emotionScore/legacyCascadeStage 字段保留、缓存版本断言更新、ingest 往返新字段
 - [ ] Commit：`feat(hotlist-sentiment): 评分链写口接线与缓存 v3`
 
-### Task 4: 前端情绪分展示
+### Task 4: 前端情绪分展示 ✅ 已完成（e8e654b9）
 
 **Files:** Modify `src/types/hotlistSentiment.ts`、`src/components/panels/HotlistEmotionPanel.vue`
 
@@ -63,7 +63,7 @@
 - [ ] 测试 + vue-tsc
 - [ ] Commit：`feat(frontend): 热榜情绪面板展示连续情绪分`
 
-### Task 5: 历史重算 + 新旧档位 diff 报告
+### Task 5: 历史重算 + 新旧档位 diff 报告 ✅ 已完成（0a3656ed）
 
 **Files:** Create `backend/operations/emotion_score_recompute.py`（backfill slots 模式全量重算）、Create `quant-board/docs/hotlist-jev/emotion-score-migration-report.md`
 
@@ -71,7 +71,7 @@
 - [ ] diff 报告：新旧 stage 逐槽对照（**旧链基线 = confirm_stage(legacyCascadeStage 当日序列) 重放重建，审计 S8**；一致率/分歧分布/典型分歧日深挖——09-29 修复日、09-24 退潮日必查）；报告含五档可达率（退潮 >0 为 B2 验收）
 - [ ] Commit：`feat(hotlist-sentiment): 历史重算与新旧档位对照报告`
 
-### Task 6: 回测平台新旧对照
+### Task 6: 回测平台新旧对照 ✅ 已完成（a07da87f）
 
 **Files:** 对照脚本（replay 链旧确认投影 vs `stage` 对 regime score 与候选分层的 diff）
 
@@ -80,7 +80,7 @@
 - [ ] 报告落 docs（量化切换影响，供用户最终确认）
 - [ ] Commit：`feat(hotlist-sentiment): 回测 replay 新旧档位对照报告`
 
-### Task 7: 全量验证 + 文档同步
+### Task 7: 全量验证 + 文档同步 ✅ 已完成
 
 - [ ] quant-board 全量 pytest + 前端 vitest + vue-tsc
 - [ ] 文档同步：architecture.md（情绪档位来源切换）、AI_COLLABORATION.md、api-cli.md（缓存 v3）、单一事实源登记更新
