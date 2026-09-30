@@ -542,25 +542,6 @@
               <button class="retry-btn" @click="loadPhaseData">重试</button>
             </div>
             <template v-else>
-              <div class="metrics-grid">
-                <div class="metric-card">
-                  <div class="metric-icon">🧭</div>
-                  <div class="metric-content">
-                    <div class="metric-label">历史回溯·进攻相位段（情绪 ≥50）——该段历史表现 vs 验收线，非今日</div>
-                    <div class="metric-value" :class="phaseNorthstarText.toneClass">{{ phaseNorthstarText.value }}</div>
-                    <div class="metric-label">{{ phaseNorthstarText.detail }}</div>
-                  </div>
-                </div>
-                <div class="metric-card">
-                  <div class="metric-icon">🛡️</div>
-                  <div class="metric-content">
-                    <div class="metric-label">历史回溯·防守相位段（情绪 &lt;50）——该段历史表现 vs 验收线，非今日</div>
-                    <div class="metric-value" :class="phaseDefenseText.toneClass">{{ phaseDefenseText.value }}</div>
-                    <div class="metric-label">{{ phaseDefenseText.detail }}</div>
-                  </div>
-                </div>
-              </div>
-
               <div class="phase-chart-card">
                 <div class="section-title">相位历史时间线（EOD 情绪分 × 相位着色）</div>
                 <div v-if="!phaseHistoryDegraded && phaseHistoryDays.length" ref="phaseChartEl"
@@ -2404,26 +2385,6 @@ const todayPhaseText = computed(() => {
   const score = emotionScoreValue.value
   if (score == null) return '暂不可用（情绪分缺失）'
   return `${score >= PHASE_THRESHOLD ? '进攻' : '防守'}（情绪分 ${score}）`
-})
-
-const phaseNorthstarText = computed(() => {
-  const entry = phaseNorthstar.value?.report?.northstar?.offense
-  if (!entry) return { value: '暂无', detail: '先跑 phase_northstar（幂等落库）', toneClass: '' }
-  const line = entry.line
-  const detail = line
-    ? `wrxpf ${entry.wrxpf ?? '--'}（线 0.78）· ${entry.trades ?? 0} 笔（线 60）· 段内回撤 ${(entry.maxDD! * 100).toFixed(2)}%`
-    : '读数缺项'
-  return { value: entry.pass ? '达线' : '未达线', detail, toneClass: entry.pass ? 'phase-tone-good' : 'phase-tone-bad' }
-})
-
-const phaseDefenseText = computed(() => {
-  const entry = phaseNorthstar.value?.report?.northstar?.defense
-  if (!entry) return { value: '暂无', detail: '先跑 phase_northstar（幂等落库）', toneClass: '' }
-  const dl = entry.defenseLine
-  const detail = dl
-    ? `回撤 ${dl.ddBetter ? '浅于' : '未优于'}满仓 · 净损 ${dl.lossBetter ? '优于' : '未优于'}满仓（二者其一即过）`
-    : '读数缺项'
-  return { value: entry.pass ? '过线' : '未过线', detail, toneClass: entry.pass ? 'phase-tone-good' : 'phase-tone-bad' }
 })
 
 interface PhaseMonthRow {
