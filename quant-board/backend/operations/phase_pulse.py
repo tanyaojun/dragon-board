@@ -118,7 +118,7 @@ def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
             "tradesRemoved": b["tradeCount"] - c["tradeCount"],
             "netReturnSaved": round(c["sumNetReturn"] - b["sumNetReturn"], 4),
         },
-        "arm": "reduce_band factor=0 [40,60) 前日定相（C6 假设的完整回避形态）",
+        "arm": "ladder ③：10-40 满 / 40-60 零 / 60+ 三成（前日定相，C7 用户确认）",
     }
 
 
@@ -173,15 +173,15 @@ def main() -> int:
     }
     # C6 证据：基线交易按前日分带累积
     report["bands"] = band_stats(round_trips_of(summary), eod_scores, args.month)
-    # A/B 臂：弱势带完整回避（reduce_band factor=0，仅 trade_config 不同 → 信号层缓存复用，成本低）
+    # A/B 臂：阶梯仓位（C7 用户确认③：10-40 满/40-60 零/60+ 三成；仅 trade_config 不同 → 信号缓存复用）
     try:
-        band_cfg = {
+        ladder_cfg = {
             "phaseExposureControl": {
-                "mode": "reduce_band", "factor": 0.0, "bandLow": 40.0, "bandHigh": 60.0,
+                "mode": "ladder", "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]],
                 "eodScores": {d: s for d, s in eod_scores.items() if s is not None},
             }
         }
-        controlled = BacktestService(runtime_session()).run_ranktrend({**payload, "trade_config": band_cfg})
+        controlled = BacktestService(runtime_session()).run_ranktrend({**payload, "trade_config": ladder_cfg})
         report["ab"] = ab_compare(summary, controlled, args.month)
     except Exception as exc:  # noqa: BLE001 — 基线脉拍不因 A/B 臂失败而失效
         report["ab"] = {"degraded": True, "reason": str(exc)}
