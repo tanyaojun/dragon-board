@@ -81,3 +81,17 @@ def test_persist_never_raises_on_mongo_failure(monkeypatch) -> None:
         lambda: BrokenDb(),
     )
     assert phase_monitor_persistence.persist_monthly({"meta": {"month": "2026-10"}}) is None
+
+
+def test_persist_pulse_upserts_with_month(monkeypatch) -> None:
+    fake_db = FakeDb()
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: fake_db,
+    )
+    report = {"month": "2026-10", "tradeCount": 3}
+    persisted = phase_monitor_persistence.persist_pulse(report)
+    query, doc, upsert = fake_db.phase_monitor.replace_calls[0]
+    assert query == {"_id": "pulse:2026-10"} and upsert is True
+    assert doc["kind"] == "pulse" and doc["month"] == "2026-10"
+    assert persisted == "pulse:2026-10"

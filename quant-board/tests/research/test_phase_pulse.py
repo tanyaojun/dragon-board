@@ -1,0 +1,43 @@
+# -*- coding: utf-8 -*-
+"""M3 脉拍纯函数测试：当月切片（roundTrip+equity 按 EOD 同日定相）→ 北极星读数。"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from backend.operations.phase_pulse import build_pulse_report
+
+
+def _summary(trades: list[dict], equity: list[tuple[str, float]]) -> dict:
+    return {
+        "roundTripTrades": trades,
+        "equityCurve": [{"tradingDate": d, "equity": e} for d, e in equity],
+    }
+
+
+def test_build_pulse_report_month_filter_and_phases():
+    summary = _summary(
+        [
+            {"entryTradingDate": "2026-10-12", "netReturn": 0.10},   # 10 月，前日 EOD 70 → offense
+            {"entryTradingDate": "2026-10-13", "netReturn": -0.04},  # 前日 EOD 45 → defense
+            {"entryTradingDate": "2026-09-30", "netReturn": 0.99},   # 上月：剔除
+        ],
+        [("2026-09-28", 100.0), ("2026-10-12", 110.0), ("2026-10-13", 104.0)],
+    )
+    eod = {"2026-09-28": 55.0, "2026-10-09": 70.0, "2026-10-12": 45.0}
+    report = build_pulse_report(summary, eod, "2026-10")
+    assert report["tradeCount"] == 2
+    assert report["byPhase"]["offense"]["trades"] == 1
+    assert report["byPhase"]["defense"]["trades"] == 1
+    assert report["equitySlices"]["offense"]["equityPoints"] == 1
+    assert report["equitySlices"]["unknownPoints"] == 0
+    assert report["northstar"]["offense"]["pass"] is False  # 1 笔 <60 线
+    assert report["fullWindow"]["segReturn"] == round(104.0 / 110.0 - 1, 4)
+
+
+def test_build_pulse_report_empty_month():
+    report = build_pulse_report(_summary([], []), {"2026-10-09": 60.0}, "2026-10")
+    assert report["tradeCount"] == 0
+    assert report["northstar"]["offense"]["pass"] is False
