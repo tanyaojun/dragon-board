@@ -75,8 +75,9 @@
 ## 6. 数据完整性
 
 - 重算后每份文档含：`stage`（评分确认档位）/ `rawStage`（本帧映射，score=None 时 null）/ `emotionScore`（可分解）/ `legacyCascadeStage`（级联截面对照）/ `stageConfirmState`。
-- **回退可执行**：`legacyCascadeStage` 已全量落库；回退 = 调用点切回级联 + 历史 stage 从 legacyCascadeStage 重算恢复（审计 S7）。
-- 本脚本幂等可重跑；dry-run 模式全程不写库。
+- **回退可执行**：`legacyCascadeStage` 随重算文档全量落库（论断范围 = 本报告的 1182 份重算文档）；回退 = 调用点切回级联 + 历史 stage 从 `legacyCascadeStage` 重算恢复（审计 S7）。
+- **⚠️ 运行态注记（review T5 发现）**：切换提交（bf10480a，14:05）之前启动的 live 写口进程在 14:31:42 用旧代码覆写了 09-30 EOD 与 14:30 槽文档（无 `legacyCascadeStage`/`emotionScore`）——增量文档需**重启 8000/8001 进程**后才携带新字段；已随后重算 09-30 恢复。
+- 本脚本幂等可重跑；dry-run 模式全程不写库（其 diff 恒平凡一致，summary.diffMeaningful=false 显式标注）；逐日失败累积继续（meta.dateErrors 可见）。
 - 慎重提示：重算已改写历史 stage，旧确认投影不再存在于文档中（可从 legacyCascadeStage 序列重建，S8）。
 
 ## 7. 下一步（T6）

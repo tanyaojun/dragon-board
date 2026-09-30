@@ -645,7 +645,7 @@ EOD 双形态排除（日级 `_id` 与 `slotTime="EOD"`）；独立轨道降级�
 
 ## 路线 B 连续情绪评分（2026-09-30）
 
-EOD 档位主定义已从布尔级联切换为**连续评分驱动**（设计 `docs/superpowers/specs/2026-09-30-emotion-score-design.md`
+EOD 档位主定义已从布尔级联切换为**连续评分驱动**（设计 `docs/superpowers/specs/2026-09-30-emotion-score-design.md`（仓库根路径，下同）
 v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-score-calibration.md`；迁移与典型日对照
 `docs/hotlist-jev/emotion-score-migration-report.md`）：
 
@@ -653,11 +653,14 @@ v3 + 审计 `2026-09-30-emotion-score-audit.md` + 校准 `2026-09-30-emotion-sco
   缺维跳过权重归一化）→ `map_stage`（≥75 高潮 / 60-75 发酵 / 40-60 启动 / <40 按当日斜率分退潮·冰点；
   高潮压制条款已删除）→ 分数域确认（复用 `stage_confirm.confirm_stage` 滞回，confirmSlots 语义不变）。
 - **字段合同**：`rawStage`=本帧映射档位（含斜率；证据全缺时 null——方案 B 不伪造档位）；`stage`=确认投影；
-  `stageCandidate` 与 rawStage 同值；新增 `emotionScore` 子文档（score/dims/skippedDims/stageCandidate/slope/version，
-  可分解审计）与 `legacyCascadeStage`（旧级联截面对照面，`resolve_stage` 函数保留不删）。
+  新增 `emotionScore` 子文档（score/dims/skippedDims/computedAt/slope/version，可分解审计；其中
+  `stageCandidate` 与 rawStage 同值）与 `legacyCascadeStage`（旧级联截面对照面，`resolve_stage` 函数保留不删）。
 - **斜率**：`_collect_intraday_state.scorePoints` 因果收集当日早槽 `emotionScore.score`，slope=上一有效槽差；
   prev 缺失（首槽不标）落 `emotion_slope_unavailable:prev_score_missing` 诊断；score 全缺落
-  `emotion_score_unavailable` 诊断且确认序列跳过该槽。
+  `emotion_score_unavailable:slot=<槽位>` 诊断且确认序列跳过该槽（含 historyStatus=unavailable
+  分支，禁字符串 "None"）。
+- **evidence 取数降级**：写口的 analysis_by_code/昨日同期总额读取失败降级为空 +
+  `emotion_evidence_load_failed:*` 诊断，不阻断写库（部分来源失败仍落档，fail-visible）。
 - **写口与缓存**：四个写口 evidence parts（yesterday_rows 复用 previous_day_stocks；analysis_by_code 与昨日同期
   总额复用 jev 服务层取数）共用同一投影；series/slots 缓存版本 `v3`；ingest 白名单含
   `emotionScore`/`legacyCascadeStage`（禁止静默丢弃）。
