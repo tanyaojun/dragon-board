@@ -90,3 +90,30 @@ def test_reduce_band_lower_inclusive_upper_exclusive():
     # 前日=40.0（含下沿）→ 降仓；前日=60.0（不含上沿）→ 放行
     assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-26") == 0.3
     assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-27") == 1.0
+
+
+def test_ladder_mode_three_tier_user_confirmed():
+    """C7 阶梯（用户 2026-10-01 确认 ③）：10-40 满仓 / 40-60 不开仓 / 60+ 三成。
+
+    ladder=[[上界, 因子]...] 升序，取首个 score<上界 的因子；超出全部上界用末条（catch-all）。
+    """
+    cfg = {
+        "phaseExposureControl": {
+            "mode": "ladder", "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]],
+            "eodScores": {"2026-09-25": 30.0, "2026-09-26": 45.0, "2026-09-27": 70.0, "2026-09-28": 85.0},
+        }
+    }
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-26") == 1.0   # 前日 30 <40 满仓
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-27") == 0.0   # 前日 45 ∈[40,60) 不开仓
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-28") == 0.3   # 前日 70 ≥60 三成
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-29") == 0.3   # 前日 85 ≥80 catch-all 三成
+
+
+def test_ladder_missing_score_passes_through():
+    cfg = {
+        "phaseExposureControl": {
+            "mode": "ladder", "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]],
+            "eodScores": {"2026-09-25": None},
+        }
+    }
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-26") == 1.0

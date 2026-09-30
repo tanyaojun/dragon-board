@@ -36,19 +36,23 @@ class TradeSimulator:
     def _phase_exposure_factor(config: dict[str, Any], trading_date: str) -> float:
         """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
 
-        trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band,
-            factor: 0~1, threshold: 50.0, bandLow/bandHigh: 40/60（reduce_band 用）, eodScores: {date: score}}。
+        trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band|ladder,
+            factor: 0~1, threshold: 50.0, bandLow/bandHigh: 40/60（reduce_band 用）,
+            ladder: [[上界, 因子]...] 升序（ladder 用，末条建议 catch-all 上界如 999）,
+            eodScores: {date: score}}。
         as-of 纪律：入场日 d 的相位取 eodScores 中**严格早于 d 的最近交易日** EOD 分（前日定相）；
         键缺失/模式 off/无前日/分数缺失 → 1.0 放行（默认关=golden 逐位不变，缺信号不错杀）。
         reduce_offense/reduce_defense：按 threshold 两档相位匹配降仓；
-        reduce_band：前日分 ∈ [bandLow, bandHigh) 降仓（C6 弱势带载体，下沿含上沿不含）。
+        reduce_band：前日分 ∈ [bandLow, bandHigh) 降仓（C6 弱势带载体，下沿含上沿不含）；
+        ladder：阶梯仓位表——取首个 score<上界 的因子，超出全部上界用末条
+        （C7 用户确认 ③：[[40,1.0],[60,0.0],[999,0.3]] = 10-40 满 / 40-60 零 / 60+ 三成）。
         factor=0 语义=该相位禁止新开仓（调用方跳过）。
         """
         ctrl = config.get("phaseExposureControl")
         if not isinstance(ctrl, dict):
             return 1.0
         mode = str(ctrl.get("mode") or "off")
-        if mode not in ("reduce_offense", "reduce_defense", "reduce_band"):
+        if mode not in ("reduce_offense", "reduce_defense", "reduce_band", "ladder"):
             return 1.0
         eod = ctrl.get("eodScores") or {}
         prev_dates = [d for d in eod if str(d) < str(trading_date)]
@@ -63,6 +67,16 @@ class TradeSimulator:
             in_band = low <= score < high
             if not in_band:
                 return 1.0
+        elif mode == "ladder":
+            ladder = ctrl.get("ladder") or []
+            for entry in ladder:
+                try:
+                    upper, factor = float(entry[0]), float(entry[1])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if score < upper:
+                    return max(0.0, min(1.0, factor))
+            return 1.0 if not ladder else max(0.0, min(1.0, float(ladder[-1][1])))
         else:
             threshold = float(ctrl.get("threshold") or 50.0)
             phase = "offense" if score >= threshold else "defense"
