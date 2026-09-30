@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchHotlistJevRange, fetchHotlistJevSeries } from '../hotlistJevApi'
+import {
+  fetchHotlistJevRange,
+  fetchHotlistJevSeries,
+  JEV_PATTERN_ORDER,
+  JEV_STAGE_ORDER,
+} from '../hotlistJevApi'
 import type { HotlistJevDoc } from '@/types/hotlistJev'
 
 const slotDoc = (overrides: Partial<HotlistJevDoc>): HotlistJevDoc => ({
@@ -17,6 +22,21 @@ const slotDoc = (overrides: Partial<HotlistJevDoc>): HotlistJevDoc => ({
 })
 
 afterEach(() => vi.unstubAllGlobals())
+
+describe('jev 规范展示顺序', () => {
+  it('五档冷→热、七类路径顺序锁定（概率条顺序唯一来源）', () => {
+    expect(JEV_STAGE_ORDER).toEqual(['ice', 'start', 'ferment', 'climax', 'retreat'])
+    expect(JEV_PATTERN_ORDER).toEqual([
+      'steady_strong',
+      'steady_weak',
+      'rally_fade',
+      'low_recover',
+      'wide_swing',
+      'narrow_range',
+      'unclear',
+    ])
+  })
+})
 
 describe('fetchHotlistJevSeries', () => {
   it('正常响应返回类型化 slots + eod', async () => {

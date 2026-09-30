@@ -30,6 +30,10 @@ export const JEV_PATTERN_NAMES: Record<string, string> = {
   unclear: '无法归纳',
 }
 
+/** 档位/形态的规范展示顺序（五档冷→热；七类路径），概率条顺序唯一来源 */
+export const JEV_STAGE_ORDER = Object.keys(JEV_STAGE_NAMES)
+export const JEV_PATTERN_ORDER = Object.keys(JEV_PATTERN_NAMES)
+
 /** 读 choice 答案的档位中文（缺失返回 null，不伪造默认档） */
 export function jevChoiceName(doc: HotlistJevDoc | null | undefined, key: string): string | null {
   const answer = doc?.answers?.[key]

@@ -52,12 +52,20 @@
                     :title="`盘中出现「${pendingBadge.rawStage}」迹象（自 ${pendingBadge.pendingSince} 起），连续 ${pendingBadge.confirmSlots} 槽成立后切换`">
                     情绪波动：现{{ pendingBadge.rawStage }}迹象
                   </span>
-                  <span v-if="jevLatestSequenceName" class="jev-chip" :title="jevLatestTitle">
+                  <span v-if="jevLatestSequenceName" class="jev-chip"
+                    :class="{ 'jev-chip-clickable': !!jevHeroNarrative, 'jev-chip-open': jevHeroNarrativeOpen }"
+                    :title="jevLatestTitle" @click="toggleJevHeroNarrative">
                     🤖 jev 日内序列 {{ jevLatestSequenceName }}<template
                       v-if="jevLatestProbability != null">（P{{ Math.round(jevLatestProbability * 100) }}%）</template><template
                       v-if="jevLatestFrameName && jevLatestFrameName !== jevLatestSequenceName">｜当前帧 {{ jevLatestFrameName }}</template><template
-                      v-if="jevLatestTemperature != null">｜温 {{ jevLatestTemperature }}·挤 {{ jevLatestCrowding ?? '--' }}</template>
+                      v-if="jevLatestTemperature != null">｜温 {{ jevLatestTemperature }}·挤 {{ jevLatestCrowding ?? '--' }}</template><template
+                      v-if="jevHeroNarrative">｜📜 叙事 {{ jevHeroNarrativeOpen ? '▴' : '▾' }}</template>
                   </span>
+                </div>
+                <!-- jev 叙事全文（2026-09-30 用户裁决：叙事放概览 chip 位置，点击展开） -->
+                <div v-if="jevHeroNarrativeOpen && jevHeroNarrative" class="jev-hero-narrative">
+                  <div class="jev-hero-narrative-head">📜 {{ jevLatestNarrativeMeta }}</div>
+                  <pre class="jev-narrative-text">{{ jevHeroNarrative }}</pre>
                 </div>
                 <div class="hero-summary">盘面证据：{{ doc.summary }}</div>
               </div>
@@ -447,6 +455,45 @@
               <div v-if="!jevPoints.length" class="empty-row">暂无 jev 评判数据（独立采集轨道，可能未开启）</div>
               <template v-else>
                 <div class="trend-chart" ref="jevChartRef"></div>
+                <!-- 详情卡（2026-09-30 用户裁决：常驻图表下方，默认选最新帧；图表点选联动） -->
+                <div v-if="jevDetail" class="jev-detail">
+                  <div class="jev-detail-head">
+                    <span class="jev-detail-title">🔍 {{ jevDetail.title }}</span>
+                    <span class="jev-detail-badges">
+                      <span v-if="jevDetail.status === 'degraded'" class="jev-detail-flag">降级</span>
+                      <span v-else-if="jevDetail.status === 'no_data'" class="jev-detail-flag">无数据</span>
+                      <span v-if="jevDetail.model" class="jev-detail-meta">{{ jevDetail.model }}</span>
+                      <span v-if="jevDetail.computedLabel" class="jev-detail-meta">{{ jevDetail.computedLabel }}</span>
+                      <span v-if="jevDetail.latencyMs != null" class="jev-detail-meta">{{ jevDetail.latencyMs }}ms</span>
+                      <span v-if="jevDetail.tokens" class="jev-detail-meta">{{ jevDetail.tokens }}</span>
+                    </span>
+                  </div>
+                  <div class="jev-detail-grid">
+                    <div v-for="choice in jevDetail.choices" :key="choice.key" class="jev-detail-cell">
+                      <div class="jev-detail-cell-label">
+                        {{ choice.label }}<template v-if="choice.confidence != null"> · 置信 {{ Math.round(choice.confidence * 100) }}%</template>
+                      </div>
+                      <div class="jev-detail-cell-value" :style="choice.tone ? { color: choice.tone } : undefined">
+                        {{ choice.choiceName || '缺失' }}<template v-if="choice.probability != null">（P{{ Math.round(choice.probability * 100) }}%）</template>
+                      </div>
+                      <div v-if="choice.rows.length" class="jev-prob-rows">
+                        <div v-for="row in choice.rows" :key="row.key" class="jev-prob-row">
+                          <span class="jev-prob-name">{{ row.name }}</span>
+                          <span class="jev-prob-bar-wrap"><span class="jev-prob-bar"
+                            :style="{ width: `${row.pct ?? 0}%`, background: row.color }"></span></span>
+                          <span class="jev-prob-pct">{{ row.pct === null ? '--' : `${row.pct}%` }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-for="score in jevDetail.scores" :key="score.label" class="jev-detail-cell">
+                      <div class="jev-detail-cell-label">{{ score.label }}（0-100）</div>
+                      <div class="jev-detail-cell-value">{{ score.value ?? '--' }}</div>
+                    </div>
+                  </div>
+                  <div v-if="jevDetail.qualityNotes.length" class="jev-detail-quality">
+                    ⚠️ {{ jevDetail.qualityNotes.join('；') }}
+                  </div>
+                </div>
                 <div class="trend-stats-grid">
                   <div v-for="card in jevStats" :key="card.label" class="trend-stat-card">
                     <div class="stat-label">{{ card.label }}</div>
@@ -488,6 +535,10 @@ import {
 import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
+  JEV_PATTERN_NAMES,
+  JEV_PATTERN_ORDER,
+  JEV_STAGE_NAMES,
+  JEV_STAGE_ORDER,
   jevChoiceName,
   jevChoiceProbability,
   jevScore,
@@ -634,6 +685,24 @@ const jevLatestTitle = computed(() => {
   if (slot.status === 'degraded') parts.push(`降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`)
   return parts.join(' · ')
 })
+// ---------- jev 叙事（2026-09-30 用户裁决：叙事全文放概览 chip 位置，点击展开） ----------
+const jevHeroNarrativeOpen = ref(false)
+const jevHeroNarrative = computed(() => jevLatest.value?.narrativeRaw || '')
+const jevLatestNarrativeMeta = computed(() => {
+  const slot = jevLatest.value
+  if (!slot) return ''
+  const parts = [`${slot.tradingDate || jevSeriesDate.value || ''} ${slot.slotTime || ''} 帧`.trim()]
+  if (slot.model) parts.push(`模型 ${slot.model}`)
+  const narrative = slot.narrativeRaw || ''
+  if (narrative) parts.push(`全文 ${narrative.length} 字`)
+  const degraded = slot.quality?.degradedSources ?? []
+  if (degraded.length) parts.push(`⚠️ 缺失：${degraded.join('；')}`)
+  return parts.join(' · ')
+})
+function toggleJevHeroNarrative() {
+  if (!jevHeroNarrative.value) return
+  jevHeroNarrativeOpen.value = !jevHeroNarrativeOpen.value
+}
 const jevEodRow = computed(() => {
   if (!jevEod.value) return null
   return {
@@ -2311,6 +2380,8 @@ function toggleJevIndicator(key: JevIndicatorKey) {
 }
 
 interface JevPoint {
+  /** 选中态键：1天=slotTime，多日=tradingDate（图表点选 ↔ 详情卡联动） */
+  key: string
   label: string
   title: string
   /** 序列档（1天）或日级档（多日）中文档位；缺失为 ''（铺底跳过，tooltip 显示档位缺失） */
@@ -2327,10 +2398,11 @@ interface JevPoint {
 
 const jevPoints = computed<JevPoint[]>(() => {
   if (jevTimeRange.value === '1d') {
-    return jevSlots.value.map((slot) => {
+    return jevSlots.value.map((slot, index) => {
       const degraded = slot.status === 'degraded'
       const noData = slot.status === 'no_data'
       return {
+        key: slot.slotTime || `slot-${index}`,
         label: slot.slotTime || '--',
         title: slot.slotTime || '--',
         stage: jevChoiceName(slot, 'sequence_stage') || '',
@@ -2347,9 +2419,10 @@ const jevPoints = computed<JevPoint[]>(() => {
       }
     })
   }
-  return jevDayDocs.value.map((day) => {
+  return jevDayDocs.value.map((day, index) => {
     const eod = day.eod
     return {
+      key: day.tradingDate || `d-${index}`,
       label: (day.tradingDate || '').slice(5) || '--',
       title: day.tradingDate || '--',
       stage: eod ? jevChoiceName(eod, 'day_stage') || '' : '',
@@ -2510,8 +2583,138 @@ function renderJevChart() {
     // 指标开关减少序列时必须整体替换，merge 模式下旧序列会残留
     { notMerge: true },
   )
+  // 点选联动：选中槽位/日期驱动详情卡（off 先行避免重复渲染累积 handler）
+  jevChart.off('click')
+  jevChart.on('click', (params: any) => {
+    const point = points[params.dataIndex]
+    if (point) selectedJevKey.value = point.key
+  })
   jevChart.resize()
 }
+
+// ---------- jev 详情卡（2026-09-30 用户裁决：常驻图表下方，默认选最新帧；概率条两档都展示） ----------
+const selectedJevKey = ref<string | null>(null)
+
+interface JevChoiceRow {
+  key: string
+  name: string
+  pct: number | null
+  color: string
+}
+
+interface JevChoiceDetail {
+  key: string
+  label: string
+  choiceName: string | null
+  tone: string
+  confidence: number | null
+  probability: number | null
+  rows: JevChoiceRow[]
+}
+
+// 档位色沿用阶段铺底冷热语义；路径形态无冷热语义用中性蓝
+const jevStageTone = (name: string) => STAGE_TREND_META[name]?.fg || '#9aa0a6'
+
+function buildJevChoiceDetail(
+  key: string,
+  label: string,
+  doc: HotlistJevDoc | null,
+  order: readonly string[],
+  nameMap: Record<string, string>,
+  colorOf: (name: string) => string,
+): JevChoiceDetail {
+  const answer = doc?.answers?.[key]
+  const choice = answer && answer.type === 'choice' ? answer.choice ?? null : null
+  const probabilities = answer && answer.type === 'choice' ? answer.probabilities ?? {} : {}
+  const confidence =
+    answer && answer.type === 'choice' && typeof answer.confidence === 'number' ? answer.confidence : null
+  // 概率行按规范顺序展开（五档冷→热 / 七类路径），缺失键不伪造 0（pct=null 显示 --）
+  const rows: JevChoiceRow[] = order
+    .filter((k) => k in probabilities || k === choice)
+    .map((k) => {
+      const name = nameMap[k] ?? k
+      const value = probabilities[k]
+      return {
+        key: k,
+        name,
+        pct: typeof value === 'number' ? Math.round(value * 1000) / 10 : null,
+        color: colorOf(name),
+      }
+    })
+  const top = choice != null ? probabilities[choice] : undefined
+  return {
+    key,
+    label,
+    choiceName: choice != null ? nameMap[choice] ?? choice : null,
+    tone: choice != null ? colorOf(nameMap[choice] ?? choice) : '',
+    confidence,
+    probability: typeof top === 'number' ? top : null,
+    rows,
+  }
+}
+
+const jevDetail = computed(() => {
+  const pts = jevPoints.value
+  if (!pts.length) return null
+  // 默认选最新帧；跨档位切回时选中键失配回落最新（如 1天档选 15:00 后切 3日档 → 最新日）
+  const point = pts.find((p) => p.key === selectedJevKey.value) ?? pts[pts.length - 1]
+  const isDay = jevTimeRange.value !== '1d'
+  const doc = isDay
+    ? jevDayDocs.value.find((d) => d.tradingDate === point.key)?.eod ?? null
+    : jevSlots.value.find((s) => s.slotTime === point.key) ?? null
+
+  const choices = isDay
+    ? [
+        buildJevChoiceDetail('day_stage', '日级档位', doc, JEV_STAGE_ORDER, JEV_STAGE_NAMES, jevStageTone),
+        buildJevChoiceDetail('day_pattern', '路径形态', doc, JEV_PATTERN_ORDER, JEV_PATTERN_NAMES, () => '#4a90e2'),
+      ]
+    : [
+        buildJevChoiceDetail('frame_stage', '当前帧档位', doc, JEV_STAGE_ORDER, JEV_STAGE_NAMES, jevStageTone),
+        buildJevChoiceDetail('sequence_stage', '日内序列档位', doc, JEV_STAGE_ORDER, JEV_STAGE_NAMES, jevStageTone),
+      ]
+  const scores = isDay
+    ? [
+        { label: '日级温度', value: doc ? jevScore(doc, 'day_temperature') : null },
+        { label: '日级拥挤', value: doc ? jevScore(doc, 'day_crowding') : null },
+      ]
+    : [
+        { label: '温度', value: doc ? jevScore(doc, 'temperature') : null },
+        { label: '拥挤', value: doc ? jevScore(doc, 'crowding') : null },
+      ]
+
+  // 质量注记（fail-visible）：文档缺失/降级错误码/源缺失逐条透出，不吞掉
+  const qualityNotes: string[] = []
+  if (!doc) {
+    qualityNotes.push('该帧 jev 文档缺失')
+  } else {
+    if (doc.status === 'degraded') {
+      qualityNotes.push(`降级：${doc.errorCode || ''} ${doc.errorDetail || ''}`.trim())
+    }
+    if (doc.status === 'no_data') {
+      qualityNotes.push(`无数据：${doc.errorDetail || ''}`.trim())
+    }
+    for (const item of doc.quality?.degradedSources ?? []) qualityNotes.push(item)
+  }
+  const usage = doc?.usage ?? null
+  const tokens =
+    usage && typeof usage.input_tokens === 'number' && typeof usage.output_tokens === 'number'
+      ? `tok ${usage.input_tokens}/${usage.output_tokens}`
+      : ''
+  return {
+    key: point.key,
+    title: isDay ? `${point.title} · 日级总体（EOD）` : `${point.title} · 槽位评判`,
+    status: doc?.status ?? null,
+    model: doc?.model ?? null,
+    computedLabel: doc?.computedAt
+      ? new Date(doc.computedAt * 1000).toLocaleTimeString('zh-CN', { hour12: false })
+      : '',
+    latencyMs: doc?.latencyMs ?? null,
+    tokens,
+    choices,
+    scores,
+    qualityNotes,
+  }
+})
 
 // 页签进入或数据刷新时渲染（独立页签 v-show 切换后需等 nextTick 拿到可见容器尺寸；
 // 图表容器随空态 v-if 重挂需 dispose 重建）
@@ -2806,6 +3009,63 @@ watch(view, (v) => {
   background: rgba(127, 140, 141, 0.08);
 }
 /* jev 观察轨道：2026-09-30 卡片网格改 ECharts，图表样式复用 .trend-chart，仅保留日级总体行 */
+.jev-chip-clickable { cursor: pointer; }
+.jev-chip-open { border-color: var(--color-highlight); color: var(--text-primary); }
+.jev-hero-narrative {
+  margin-top: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.jev-hero-narrative-head { font-size: 10px; color: var(--text-secondary); margin-bottom: 6px; }
+.jev-narrative-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  max-height: 240px;
+  overflow-y: auto;
+}
+.jev-detail {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.jev-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.jev-detail-title { font-weight: 600; color: var(--text-primary); font-size: 12px; }
+.jev-detail-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.jev-detail-meta { font-size: 10px; color: var(--text-secondary); }
+.jev-detail-flag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  color: #f39c12;
+  border: 1px solid rgba(243, 156, 18, 0.45);
+}
+.jev-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.jev-detail-cell {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+}
+.jev-detail-cell-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 4px; }
+.jev-detail-cell-value { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.jev-prob-rows { display: flex; flex-direction: column; gap: 3px; }
+.jev-prob-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-secondary); }
+.jev-prob-name { width: 40px; flex: none; }
+.jev-prob-bar-wrap { flex: 1; height: 6px; background: rgba(127, 140, 141, 0.15); border-radius: 3px; overflow: hidden; }
+.jev-prob-bar { display: block; height: 100%; border-radius: 3px; min-width: 0; }
+.jev-prob-pct { width: 42px; flex: none; text-align: right; }
+.jev-detail-quality { font-size: 10px; color: #f39c12; }
 .jev-eod {
   margin-top: 8px;
   font-size: 12px;

@@ -40,6 +40,8 @@ export interface HotlistJevDoc {
   computedAt?: number
   quality?: { degradedSources?: string[] }
   narrativeRaw?: string | null
+  /** 模型 tokens 用量（input_tokens/output_tokens，snake_case 透传） */
+  usage?: Record<string, number> | null
 }
 
 export interface HotlistJevSeriesResponse {

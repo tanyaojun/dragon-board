@@ -326,6 +326,32 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).not.toContain("row.sequenceName || '缺失'")
   })
 
+  test('jev 叙事与详情卡：点选联动 + 常驻详情（概率条/置信/元信息）+ 概览 chip 展开叙事（2026-09-30 用户裁决）', () => {
+    const source = panelSource()
+
+    // 概览 chip（红框位置）：叙事全文展开入口，默认收起
+    expect(source).toContain('jevHeroNarrativeOpen')
+    expect(source).toContain('toggleJevHeroNarrative')
+    expect(source).toContain('jev-hero-narrative')
+    expect(source).toContain('narrativeRaw')
+    // 详情卡：常驻图表下方 + 图表点选联动（off 先行防重复 handler，默认最新帧）
+    expect(source).toContain('selectedJevKey')
+    expect(source).toContain("jevChart.off('click')")
+    expect(source).toContain("jevChart.on('click'")
+    expect(source).toContain('jev-detail-grid')
+    // 概率条两档都展示：五档（阶段语义色）+ 七类路径，confidence 透出
+    expect(source).toContain('jev-prob-row')
+    expect(source).toContain("buildJevChoiceDetail('frame_stage'")
+    expect(source).toContain("buildJevChoiceDetail('day_pattern'")
+    expect(source).toContain('JEV_STAGE_ORDER')
+    expect(source).toContain('confidence')
+    // fail-visible：质量注记与文档缺失透出，缺失概率显示 -- 不伪造
+    expect(source).toContain('qualityNotes')
+    expect(source).toContain("row.pct === null ? '--'")
+    // 旧 tooltip-only 叙事方案与抽屉语言不回流
+    expect(source).not.toContain('HotlistLimitStocksPanel v-if="jevDetail"')
+  })
+
   test('jev 轨道零规则输出：不读规则情绪文档字段作 jev 展示源', () => {
     const source = panelSource()
 
