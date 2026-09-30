@@ -533,7 +533,7 @@
           <!-- ⑧ 相位验收（2026-09-30 分相位验收体系前端可见化，设计 ranktrend-phase-frontend-design.md） -->
           <section v-show="view === 'phase'" class="tab-pane">
             <div class="phase-note">
-              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位。
+              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位。<strong>今日相位：{{ todayPhaseText }}</strong>
             </div>
 
             <div v-if="phaseLoading" class="state-block"><span class="spinner"></span>正在加载相位数据…</div>
@@ -546,7 +546,7 @@
                 <div class="metric-card">
                   <div class="metric-icon">🧭</div>
                   <div class="metric-content">
-                    <div class="metric-label">北极星·进攻相位（情绪 ≥50）</div>
+                    <div class="metric-label">历史回溯·进攻相位段（情绪 ≥50）——该段历史表现 vs 验收线，非今日</div>
                     <div class="metric-value" :class="phaseNorthstarText.toneClass">{{ phaseNorthstarText.value }}</div>
                     <div class="metric-label">{{ phaseNorthstarText.detail }}</div>
                   </div>
@@ -554,7 +554,7 @@
                 <div class="metric-card">
                   <div class="metric-icon">🛡️</div>
                   <div class="metric-content">
-                    <div class="metric-label">北极星·防守相位（情绪 &lt;50）</div>
+                    <div class="metric-label">历史回溯·防守相位段（情绪 &lt;50）——该段历史表现 vs 验收线，非今日</div>
                     <div class="metric-value" :class="phaseDefenseText.toneClass">{{ phaseDefenseText.value }}</div>
                     <div class="metric-label">{{ phaseDefenseText.detail }}</div>
                   </div>
@@ -2397,6 +2397,13 @@ const phaseChip = computed(() => {
   return score >= PHASE_THRESHOLD
     ? { kind: 'offense', label: '🔥 进攻相位', title: `连续情绪分 ${score} ≥ ${PHASE_THRESHOLD}（sentiment_2b 进攻相位）` }
     : { kind: 'defense', label: '🛡️ 防守相位', title: `连续情绪分 ${score} < ${PHASE_THRESHOLD}（sentiment_2b 防守相位）` }
+})
+
+// 今日相位（第 8 页签页头用；与 overview chip 同源同口径=当前锁定文档情绪分）
+const todayPhaseText = computed(() => {
+  const score = emotionScoreValue.value
+  if (score == null) return '暂不可用（情绪分缺失）'
+  return `${score >= PHASE_THRESHOLD ? '进攻' : '防守'}（情绪分 ${score}）`
 })
 
 const phaseNorthstarText = computed(() => {
