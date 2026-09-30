@@ -272,7 +272,7 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
 
   // ── jev 观察轨道（2026-10-08）：独立 AI 评判对照，缺失/降级如实展示 ──
 
-  test('jev 观察轨道：读口接入 + 顶部并列 chip + 逐槽区块 + 日级总固定', () => {
+  test('jev 观察轨道：读口接入 + 顶部并列 chip + 日级总固定', () => {
     const source = panelSource()
 
     expect(source).toContain('fetchHotlistJevSeries')
@@ -281,13 +281,38 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('jev-chip')
     expect(source).toContain('jev 日内序列')
     expect(source).toContain('jev 观察轨道')
-    expect(source).toContain('jev-row-degraded')
-    expect(source).toContain('jev-row-nodata')
-    expect(source).toContain('日级总体（盘后固定）')
     // 缺失/未开启如实展示，不伪造数据
     expect(source).toContain('暂无 jev 评判数据')
-    expect(source).toContain("sequenceName: jevChoiceName(slot, 'sequence_stage')")
-    expect(source).toContain("row.sequenceName || '缺失'")
+  })
+
+  test('jev 观察轨道图表化：ECharts 承载（时间范围/指标开关/阶段铺底/统计卡），卡片网格不回流（2026-09-30）', () => {
+    const source = panelSource()
+
+    // 多日读口接入 + 1天=逐槽 / 多日=EOD 日级
+    expect(source).toContain('fetchHotlistJevRange')
+    expect(source).toContain('ensureJevDays')
+    expect(source).toContain("jevScore(slot, 'temperature')")
+    expect(source).toContain("jevScore(eod, 'day_temperature')")
+    // 时间范围与指标开关（情绪趋势同语言）
+    expect(source).toContain('setJevTimeRange')
+    expect(source).toContain('toggleJevIndicator')
+    expect(source).toContain('JEV_INDICATORS')
+    expect(source).toContain('jevTimeRange')
+    // 图表：阶段铺底复用 + 缺失断线 + 统计卡 + 注记行
+    expect(source).toContain('renderJevChart')
+    expect(source).toContain('jevPoints')
+    expect(source).toContain('buildStageMarkArea(points)')
+    expect(source).toContain('connectNulls: false')
+    expect(source).toContain('trend-stats-grid')
+    // 日级总体（盘后固定）行保留（1天档）
+    expect(source).toContain('日级总体（盘后固定）')
+    // fail-visible：降级/无数据状态结构化进 tooltip 与注记，不伪造分数
+    expect(source).toContain('statusText')
+    expect(source).toContain('窗口缺失')
+    // 旧卡片网格语言不得回流
+    expect(source).not.toContain('jev-grid')
+    expect(source).not.toContain('jev-row')
+    expect(source).not.toContain("row.sequenceName || '缺失'")
   })
 
   test('jev 轨道零规则输出：不读规则情绪文档字段作 jev 展示源', () => {

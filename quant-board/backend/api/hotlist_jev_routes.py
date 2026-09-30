@@ -4,6 +4,8 @@
 - POST /api/hotlist-jev/evaluate：手动触发槽位/日级评判。**不受 gate 限制**（显式
   用户意图），origin=manual；token 缺失时照常落 degraded 文档并返回 degraded 结果。
 - GET  /api/hotlist-jev/series：单日读口（槽位升序 + eod），v1 无缓存。
+- GET  /api/hotlist-jev/range：多日窗口读口（2026-09-30，前端 jev 观察轨道图表消费），
+  按快照交易日历逐日返回；纯读不补算（jev 结论唯一来源 = 采集链落库）。
 
 读口只返回 hotlist_jev_sentiment 原文档（独立观察轨道），不与规则情绪文档合并。
 """
@@ -113,3 +115,58 @@ def get_hotlist_jev_series(
                 "degradedCount": degraded_count}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"series_read_failed: {exc}", "slots": []}
+
+
+@router.get("/range")
+def get_hotlist_jev_range(
+    dataset_id: str = "dragonboard_live",
+    days: int = 3,
+) -> dict[str, Any]:
+    """多日 jev 观察轨道读口：快照交易日历窗口逐日返回槽位 + eod（槽位升序）。
+
+    - 窗口基准 = 快照帧交易日历（与 hotlist-sentiment series 同口径），非 jev 文档日期；
+      窗口内无 jev 文档的交易日以 ``{tradingDate, missing, reason}`` 结构化返回，
+      不吞掉不伪造（fail-visible：jev 轨道历史覆盖浅时缺口必须可见）。
+    - 纯读不 lazy 补算（jev 结论唯一来源 = 采集链落库），v1 无缓存。
+    """
+    capped_days = max(1, min(int(days), 30))
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}", "days": []}
+
+    try:
+        from backend.operations.hotlist_sentiment import HotListSentimentBackfillService
+
+        dates = HotListSentimentBackfillService(db).trading_dates(
+            dataset_id=dataset_id, snapshot_type="half_hour")
+        if not dates:
+            return {"ok": False, "degraded": True, "reason": "no_snapshot_trading_date", "days": []}
+        window = dates[-capped_days:]
+        rows = list(_slots_collection(db).find({"datasetId": dataset_id}))
+        by_date: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            date_key = str(row.get("tradingDate") or "")
+            if date_key:
+                by_date.setdefault(date_key, []).append(row)
+
+        days_out: list[dict[str, Any]] = []
+        degraded_count = 0
+        for trading_date in window:
+            day_rows = by_date.get(trading_date) or []
+            if not day_rows:
+                days_out.append(
+                    {"tradingDate": trading_date, "missing": True, "reason": "no_jev_docs"})
+                continue
+            slots = sorted(
+                (row for row in day_rows if row.get("kind") == "slot"),
+                key=lambda row: str(row.get("slotTime") or ""),
+            )
+            eod = next((row for row in day_rows if row.get("kind") == "eod"), None)
+            days_out.append({"tradingDate": trading_date, "slots": slots, "eod": eod})
+            degraded_count += sum(
+                1 for row in [*slots, eod] if row and row.get("status") in ("degraded", "no_data"))
+        return {"ok": True, "datasetId": dataset_id, "days": days_out,
+                "degradedCount": degraded_count}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"range_read_failed: {exc}", "days": []}

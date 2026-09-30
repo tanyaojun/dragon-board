@@ -63,34 +63,47 @@
               </div>
             </div>
 
-            <!-- ② jev 观察轨道（2026-10-08）：独立 AI 评判，原始市场证据，仅供盘中对照论证 -->
+            <!-- ② jev 观察轨道（2026-10-08）：独立 AI 评判，原始市场证据，仅供盘中对照论证；
+                 2026-09-30 卡片网格改 ECharts（时间范围 + 指标开关 + 阶段铺底 + 统计卡，语言同情绪趋势页签） -->
             <div class="sub-block jev-block">
               <div class="block-header">
                 <span class="block-title">🤖 jev 观察轨道（AI 独立评判 · 仅供对照论证）</span>
-                <span class="section-count">{{ jevRows.length }}</span>
+                <span class="section-count">{{ jevPoints.length }}</span>
               </div>
               <div v-if="jevDegradedReason" class="note-line">
                 jev 轨道不可用：{{ jevDegradedReason }}（独立采集轨道，可能未开启）
               </div>
-              <div v-else-if="!jevRows.length" class="note-line">暂无 jev 评判数据（独立采集轨道，可能未开启）</div>
               <template v-else>
-                <div class="jev-grid">
-                  <div v-for="row in jevRows" :key="row.slotTime" class="jev-row"
-                    :class="{ 'jev-row-degraded': row.degraded, 'jev-row-nodata': row.noData }" :title="row.title">
-                    <span class="jev-slot">{{ row.slotTime }}</span>
-                    <span class="jev-main">序列 {{ row.sequenceName || '缺失' }}</span>
-                    <span v-if="row.frameName && row.frameName !== row.sequenceName" class="jev-sub">帧 {{ row.frameName }}</span>
-                    <span class="jev-scores">温 {{ row.temperature ?? '--' }}·挤 {{ row.crowding ?? '--' }}</span>
-                    <span v-if="row.degraded" class="jev-flag">降级</span>
-                    <span v-else-if="row.noData" class="jev-flag">无数据</span>
+                <div class="time-range-selector">
+                  <button v-for="range in TIME_RANGES" :key="range.key" class="time-btn"
+                    :class="{ active: jevTimeRange === range.key }" @click="setJevTimeRange(range.key)">
+                    {{ range.label }}
+                  </button>
+                </div>
+                <div class="indicator-selector">
+                  <button v-for="ind in JEV_INDICATORS" :key="ind.key" class="indicator-btn"
+                    :class="{ active: jevIndicators.includes(ind.key) }" @click="toggleJevIndicator(ind.key)">
+                    {{ ind.icon }} {{ ind.label }}
+                  </button>
+                </div>
+                <div v-if="jevNote" class="note-line">{{ jevNote }}</div>
+                <div v-if="!jevPoints.length" class="empty-row">暂无 jev 评判数据（独立采集轨道，可能未开启）</div>
+                <template v-else>
+                  <div class="trend-chart" ref="jevChartRef"></div>
+                  <div class="trend-stats-grid">
+                    <div v-for="card in jevStats" :key="card.label" class="trend-stat-card">
+                      <div class="stat-label">{{ card.label }}</div>
+                      <div class="stat-value">{{ card.value }}</div>
+                      <div class="stat-time">{{ card.sub }}</div>
+                    </div>
                   </div>
-                </div>
-                <div v-if="jevEodRow && jevEodRow.dayName" class="jev-eod">
-                  📌 日级总体（盘后固定）：{{ jevEodRow.dayName }}<template
-                    v-if="jevEodRow.patternName"> · {{ jevEodRow.patternName }}</template><template
-                    v-if="jevEodRow.temperature != null"> · 温度 {{ jevEodRow.temperature }}</template><template
-                    v-if="jevEodRow.crowding != null"> · 拥挤 {{ jevEodRow.crowding }}</template>
-                </div>
+                  <div v-if="jevTimeRange === '1d' && jevEodRow && jevEodRow.dayName" class="jev-eod">
+                    📌 日级总体（盘后固定）：{{ jevEodRow.dayName }}<template
+                      v-if="jevEodRow.patternName"> · {{ jevEodRow.patternName }}</template><template
+                      v-if="jevEodRow.temperature != null"> · 温度 {{ jevEodRow.temperature }}</template><template
+                      v-if="jevEodRow.crowding != null"> · 拥挤 {{ jevEodRow.crowding }}</template>
+                  </div>
+                </template>
               </template>
             </div>
 
@@ -476,12 +489,13 @@ import {
   type HotlistSentimentMissingDay,
 } from '@/services/hotlist/hotlistSentimentApi'
 import {
+  fetchHotlistJevRange,
   fetchHotlistJevSeries,
   jevChoiceName,
   jevChoiceProbability,
   jevScore,
 } from '@/services/hotlist/hotlistJevApi'
-import type { HotlistJevDoc } from '@/types/hotlistJev'
+import type { HotlistJevDayEntry, HotlistJevDoc, HotlistJevMissingDay } from '@/types/hotlistJev'
 import HotlistLimitStocksPanel from '@/components/panels/HotlistLimitStocksPanel.vue'
 import {
   HOT_LIST_STAGE_LABELS,
@@ -523,6 +537,7 @@ const missingDays = ref<HotlistSentimentMissingDay[]>([])
 const jevSlots = ref<HotlistJevDoc[]>([])
 const jevEod = ref<HotlistJevDoc | null>(null)
 const jevDegradedReason = ref<string | null>(null)
+const jevSeriesDate = ref('')
 
 const version = '6.0.0'
 
@@ -583,6 +598,7 @@ async function loadAll() {
     jevSlots.value = jevResult.slots
     jevEod.value = jevResult.eod
     jevDegradedReason.value = jevResult.degraded ? jevResult.reason : null
+    jevSeriesDate.value = jevResult.date
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败'
     doc.value = null
@@ -620,20 +636,6 @@ const jevLatestTitle = computed(() => {
   if (slot.status === 'degraded') parts.push(`降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`)
   return parts.join(' · ')
 })
-const jevRows = computed(() =>
-  jevSlots.value.map((slot) => ({
-    slotTime: slot.slotTime || '--',
-    sequenceName: jevChoiceName(slot, 'sequence_stage'),
-    frameName: jevChoiceName(slot, 'frame_stage'),
-    temperature: jevScore(slot, 'temperature'),
-    crowding: jevScore(slot, 'crowding'),
-    degraded: slot.status === 'degraded',
-    noData: slot.status === 'no_data',
-    title: slot.status === 'degraded'
-      ? `降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`.trim()
-      : '',
-  })),
-)
 const jevEodRow = computed(() => {
   if (!jevEod.value) return null
   return {
@@ -2158,6 +2160,9 @@ function handleChartsResize() {
   if (stageChart) {
     stageChart.resize()
   }
+  if (jevChart) {
+    jevChart.resize()
+  }
 }
 onMounted(() => {
   window.addEventListener('resize', handleChartsResize)
@@ -2179,6 +2184,10 @@ onUnmounted(() => {
   if (stageChart) {
     stageChart.dispose()
     stageChart = null
+  }
+  if (jevChart) {
+    jevChart.dispose()
+    jevChart = null
   }
 })
 
@@ -2237,6 +2246,298 @@ const trackNote = computed(() => {
     return slotsTradingDate.value ? `${slotsTradingDate.value} · 每半小时一帧，随采集更新` : ''
   }
   return dailyRangeNote(trendPoints.value)
+})
+
+// ---------- jev 观察轨道图表（2026-09-30：卡片网格改 ECharts，语言同情绪趋势页签） ----------
+// 1天=日内逐槽（序列档 sequence_stage + temperature/crowding）；
+// 3日/1周/1月=日线 EOD 日级总体（day_stage + day_temperature/day_crowding）。
+// 降级/无数据槽：分数为 null 断线（connectNulls: false），状态与错误码进 tooltip，不伪造 0。
+const jevChartRef = ref<HTMLElement | null>(null)
+let jevChart: echarts.ECharts | null = null
+const jevTimeRange = ref<TrendTimeRange>('1d')
+const JEV_INDICATORS = [
+  { key: 'temperature', label: '温度', icon: '🌡️' },
+  { key: 'crowding', label: '拥挤', icon: '🧲' },
+] as const
+type JevIndicatorKey = (typeof JEV_INDICATORS)[number]['key']
+const jevIndicators = ref<JevIndicatorKey[]>(['temperature', 'crowding'])
+
+// 多日 jev 窗口缓存（与情绪趋势 seriesDocs 同款代际守卫；缺失日结构化收集不吞掉）
+const jevDayDocs = ref<HotlistJevDayEntry[]>([])
+const jevDaysLoaded = ref(0)
+const jevMissingDays = ref<HotlistJevMissingDay[]>([])
+const jevSeriesError = ref<string | null>(null)
+const jevSeriesLoading = ref(false)
+let jevSeriesReqId = 0
+
+async function ensureJevDays(days: number) {
+  if (days <= jevDaysLoaded.value) return
+  const reqId = ++jevSeriesReqId
+  jevSeriesLoading.value = true
+  jevSeriesError.value = null
+  try {
+    const result = await fetchHotlistJevRange(days)
+    if (reqId !== jevSeriesReqId) return
+    if (result.degraded) {
+      jevSeriesError.value = result.reason || 'jev 多日序列不可用'
+    } else {
+      jevDayDocs.value = result.days
+      jevDaysLoaded.value = days
+      jevMissingDays.value = result.missingDays
+    }
+  } catch (err) {
+    if (reqId !== jevSeriesReqId) return
+    jevSeriesError.value = err instanceof Error ? err.message : '加载 jev 多日序列失败'
+  } finally {
+    if (reqId === jevSeriesReqId) jevSeriesLoading.value = false
+  }
+}
+
+async function setJevTimeRange(range: TrendTimeRange) {
+  if (jevTimeRange.value === range) return
+  jevTimeRange.value = range
+  await ensureJevDays(RANGE_DAYS[range])
+  nextTick(() => renderJevChart())
+}
+
+function toggleJevIndicator(key: JevIndicatorKey) {
+  const current = jevIndicators.value
+  if (current.includes(key)) {
+    if (current.length === 1) return // 至少保留一个序列，避免图表空白
+    jevIndicators.value = current.filter((k) => k !== key)
+  } else {
+    // 按声明顺序重排，保持图例顺序稳定
+    jevIndicators.value = JEV_INDICATORS.map((i) => i.key).filter((k) => current.includes(k) || k === key)
+  }
+  nextTick(() => renderJevChart())
+}
+
+interface JevPoint {
+  label: string
+  title: string
+  /** 序列档（1天）或日级档（多日）中文档位；缺失为 ''（铺底跳过，tooltip 显示档位缺失） */
+  stage: string
+  /** 日线路径形态（仅多日档，day_pattern） */
+  pattern: string
+  temperature: number | null
+  crowding: number | null
+  degraded: boolean
+  noData: boolean
+  /** 降级/无数据/日级未生成的结构化状态（进 tooltip，不伪造分数） */
+  statusText: string
+}
+
+const jevPoints = computed<JevPoint[]>(() => {
+  if (jevTimeRange.value === '1d') {
+    return jevSlots.value.map((slot) => {
+      const degraded = slot.status === 'degraded'
+      const noData = slot.status === 'no_data'
+      return {
+        label: slot.slotTime || '--',
+        title: slot.slotTime || '--',
+        stage: jevChoiceName(slot, 'sequence_stage') || '',
+        pattern: '',
+        temperature: jevScore(slot, 'temperature'),
+        crowding: jevScore(slot, 'crowding'),
+        degraded,
+        noData,
+        statusText: degraded
+          ? `降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`.trim()
+          : noData
+            ? '无数据'
+            : '',
+      }
+    })
+  }
+  return jevDayDocs.value.map((day) => {
+    const eod = day.eod
+    return {
+      label: (day.tradingDate || '').slice(5) || '--',
+      title: day.tradingDate || '--',
+      stage: eod ? jevChoiceName(eod, 'day_stage') || '' : '',
+      pattern: eod ? jevChoiceName(eod, 'day_pattern') || '' : '',
+      temperature: eod ? jevScore(eod, 'day_temperature') : null,
+      crowding: eod ? jevScore(eod, 'day_crowding') : null,
+      degraded: false,
+      noData: !eod,
+      statusText: eod ? '' : '日级总体未生成',
+    }
+  })
+})
+
+// 图下统计卡（同 trendStats 语言：均值带样本数、峰值带时间，缺失 '--'）
+const jevStats = computed(() => {
+  const pts = jevPoints.value
+  const unit = jevTimeRange.value === '1d' ? '槽' : '日'
+  const card = (label: string, pick: (p: JevPoint) => number | null, stat: 'avg' | 'peak') => {
+    const nums = pts.map(pick).filter((v): v is number => v !== null)
+    if (!nums.length) return { label, value: '--', sub: '' }
+    if (stat === 'avg') {
+      const avg = nums.reduce((a, b) => a + b, 0) / nums.length
+      return { label, value: avg.toFixed(0), sub: nums.length ? `共 ${nums.length} ${unit}` : '' }
+    }
+    const peak = Math.max(...nums)
+    return { label, value: String(peak), sub: pts.find((p) => pick(p) === peak)?.label || '' }
+  }
+  return [
+    card('平均温度', (p) => p.temperature, 'avg'),
+    card('温度峰值', (p) => p.temperature, 'peak'),
+    card('平均拥挤', (p) => p.crowding, 'avg'),
+    card('拥挤峰值', (p) => p.crowding, 'peak'),
+  ]
+})
+
+const jevNote = computed(() => {
+  if (jevSeriesLoading.value) return '正在加载 jev 多日序列…'
+  // 取数失败只在所选窗口无法满足时提示，不影响已加载窗口的正常展示
+  if (jevSeriesError.value && RANGE_DAYS[jevTimeRange.value] > jevDaysLoaded.value) {
+    return `jev 多日序列不可用：${jevSeriesError.value}`
+  }
+  if (!jevPoints.value.length) return ''
+  if (jevTimeRange.value === '1d') {
+    const abnormal = jevSlots.value.filter(
+      (s) => s.status === 'degraded' || s.status === 'no_data',
+    ).length
+    const base = jevSeriesDate.value ? `${jevSeriesDate.value} · 逐槽 AI 评判` : '逐槽 AI 评判'
+    return abnormal ? `${base} · 异常 ${abnormal} 槽` : base
+  }
+  const labels = jevPoints.value.map((p) => p.label)
+  const rangeLabel = labels.length > 1 ? `${labels[0]} ~ ${labels[labels.length - 1]}` : labels[0]
+  const missingSuffix = jevMissingDays.value.length ? ` · 窗口缺失 ${jevMissingDays.value.length} 日` : ''
+  return `${rangeLabel} · 日线口径（EOD 日级总体）${missingSuffix}`
+})
+
+// tooltip 数值格式（fail-visible：null 显示 --）
+const JEV_AXIS_FMT: Record<string, (v: number | null) => string> = {
+  温度: (v) => (v === null ? '--' : String(Math.round(v))),
+  拥挤: (v) => (v === null ? '--' : String(Math.round(v))),
+}
+
+function renderJevChart() {
+  if (!jevChartRef.value || !jevPoints.value.length) return
+  // 空态 v-if 切换会卸载并重挂图表容器：旧实例绑定的 DOM 已分离，必须 dispose 后重建
+  if (jevChart && jevChart.getDom() !== jevChartRef.value) {
+    jevChart.dispose()
+    jevChart = null
+  }
+  if (!jevChart) {
+    jevChart = echarts.init(jevChartRef.value)
+  }
+
+  const points = jevPoints.value
+  const series: any[] = []
+  if (jevIndicators.value.includes('temperature')) {
+    series.push({
+      name: '温度',
+      type: 'line',
+      data: points.map((p) => p.temperature),
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 5,
+      connectNulls: false,
+      lineStyle: { color: '#ff7f50', width: 2 },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(255, 127, 80, 0.25)' },
+          { offset: 1, color: 'rgba(255, 127, 80, 0)' },
+        ]),
+      },
+    })
+  }
+  if (jevIndicators.value.includes('crowding')) {
+    series.push({
+      name: '拥挤',
+      type: 'line',
+      data: points.map((p) => p.crowding),
+      smooth: true,
+      symbol: 'diamond',
+      symbolSize: 5,
+      connectNulls: false,
+      lineStyle: { color: '#4a90e2', width: 1.5, type: 'dashed' },
+    })
+  }
+  // 序列/日级档位铺底：jev 五档与规则轨道同词汇，直接复用 STAGE_TREND_META 冷热语义色
+  if (series.length) {
+    series[0].markArea = { silent: true, data: buildStageMarkArea(points) }
+  }
+
+  const textColor = cssVar('--text-secondary', '#9aa0a6')
+  const borderColor = cssVar('--border-color', '#333333')
+
+  jevChart.setOption(
+    {
+      grid: { left: '8%', right: '8%', top: '15%', bottom: '10%', containLabel: true },
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'cross' },
+        confine: true,
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params]
+          const point = points[list[0]?.dataIndex]
+          if (!point) return ''
+          const rows = list
+            .map((it: any) => {
+              const fmt = JEV_AXIS_FMT[it.seriesName]
+              const value = typeof it.value === 'object' ? it.value?.value : it.value
+              return `<div>${it.marker}${it.seriesName}：${fmt ? fmt(value ?? null) : String(value)}</div>`
+            })
+            .join('')
+          const stageColor = STAGE_TREND_META[point.stage]?.fg || textColor
+          const stageLine = `<div style="color:${stageColor};margin-bottom:4px;">档位：${point.stage || '缺失'}</div>`
+          const patternLine = point.pattern ? `<div style="margin-bottom:4px;">路径：${point.pattern}</div>` : ''
+          const statusLine = point.statusText
+            ? `<div style="color:#f39c12;margin-bottom:4px;">${point.statusText}</div>`
+            : ''
+          return [
+            `<div style="font-weight:600;margin-bottom:4px;">${point.title}</div>`,
+            stageLine,
+            patternLine,
+            statusLine,
+            rows,
+          ].join('')
+        },
+      },
+      legend: {
+        data: series.map((s) => s.name),
+        bottom: 0,
+        itemWidth: 12,
+        itemHeight: 8,
+        textStyle: { color: textColor, fontSize: 10 },
+      },
+      xAxis: {
+        type: 'category',
+        data: points.map((p) => p.label),
+        axisLabel: { color: textColor, fontSize: 10, rotate: 30 },
+        axisLine: { lineStyle: { color: borderColor } },
+      },
+      yAxis: {
+        type: 'value',
+        min: 0,
+        max: 100,
+        name: '分值（0-100）',
+        nameTextStyle: { color: textColor, fontSize: 9 },
+        splitLine: { lineStyle: { color: borderColor, type: 'dashed' } },
+        axisLabel: { color: textColor },
+      },
+      series,
+      backgroundColor: 'transparent',
+    },
+    // 指标开关减少序列时必须整体替换，merge 模式下旧序列会残留
+    { notMerge: true },
+  )
+  jevChart.resize()
+}
+
+// 页签进入或数据刷新时渲染（概览页签 v-show 默认可见；图表容器随空态 v-if 重挂需重建）
+watch(jevPoints, () => {
+  if (view.value === 'overview') {
+    nextTick(() => renderJevChart())
+  }
+})
+watch(view, (v) => {
+  if (v === 'overview' && jevPoints.value.length) {
+    nextTick(() => renderJevChart())
+  }
 })
 </script>
 
@@ -2518,35 +2819,7 @@ const trackNote = computed(() => {
   color: var(--text-secondary);
   background: rgba(127, 140, 141, 0.08);
 }
-.jev-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 6px;
-  margin-top: 8px;
-}
-.jev-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
-  border-radius: 6px;
-  font-size: 12px;
-}
-.jev-row-degraded { border-color: rgba(243, 156, 18, 0.45); }
-.jev-row-nodata { opacity: 0.6; }
-.jev-slot { font-weight: 600; color: var(--text-primary); }
-.jev-main { color: var(--text-primary); }
-.jev-sub, .jev-scores { color: var(--text-secondary); font-size: 11px; }
-.jev-flag {
-  margin-left: auto;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  color: #f39c12;
-  border: 1px solid rgba(243, 156, 18, 0.45);
-}
+/* jev 观察轨道：2026-09-30 卡片网格改 ECharts，图表样式复用 .trend-chart，仅保留日级总体行 */
 .jev-eod {
   margin-top: 8px;
   font-size: 12px;

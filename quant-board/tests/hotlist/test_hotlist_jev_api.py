@@ -224,3 +224,52 @@ def test_series_latest_date_when_date_missing(monkeypatch, client):
     assert response.status_code == 200
     body = response.json()
     assert body["date"] == DATE and len(body["slots"]) == 1
+
+
+# ── GET /api/hotlist-jev/range（多日窗口读口，2026-09-30 前端 jev 图表消费） ──
+
+def test_range_returns_docs_and_structured_missing_days(monkeypatch, client):
+    test_client, db = client
+    # 快照帧日历两天：DATE 有 jev 文档，NEXT 无 → missing 结构化返回不吞掉
+    next_date = "2026-10-09"
+    db["snapshot_frames"].rows.append(frame(next_date, "09:30"))
+    assert test_client.post("/api/hotlist-jev/evaluate",
+                            json={"tradingDate": DATE, "scope": "slot", "slotTime": "09:30"}).status_code == 200
+
+    response = test_client.get("/api/hotlist-jev/range", params={"days": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    days = body["days"]
+    assert [day["tradingDate"] for day in days] == [DATE, next_date]
+    assert days[0]["slots"][0]["slotTime"] == "09:30" and days[0]["eod"] is None
+    assert days[1]["missing"] is True and days[1]["reason"] == "no_jev_docs"
+    assert body["degradedCount"] == 0
+
+
+def test_range_no_trading_dates_degraded(monkeypatch):
+    db = FakeMongoDb()  # 不 seed：无快照帧 → 无交易日历
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    client = TestClient(app)
+
+    response = client.get("/api/hotlist-jev/range")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False and body["degraded"] is True
+    assert body["reason"] == "no_snapshot_trading_date" and body["days"] == []
+
+
+def test_range_days_capped_to_min_one(monkeypatch, client):
+    test_client, db = client
+    assert test_client.post("/api/hotlist-jev/evaluate",
+                            json={"tradingDate": DATE, "scope": "slot", "slotTime": "09:30"}).status_code == 200
+
+    response = test_client.get("/api/hotlist-jev/range", params={"days": 0})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["days"]) == 1 and body["days"][0]["tradingDate"] == DATE
+    assert body["degradedCount"] == 0

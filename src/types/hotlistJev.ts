@@ -59,3 +59,37 @@ export interface HotlistJevSeriesResult {
   degraded: boolean
   reason: string | null
 }
+
+// ---------- 多日窗口读口（GET /api/hotlist-jev/range，2026-09-30 jev 图表消费） ----------
+
+/** 窗口内有 jev 文档的交易日（slots 槽位升序；eod 盘后才有，盘中为 null） */
+export interface HotlistJevDayEntry {
+  tradingDate: string
+  slots: HotlistJevDoc[]
+  eod: HotlistJevDoc | null
+}
+
+/** 窗口内无任何 jev 文档的交易日（结构化缺口，不吞掉不伪造） */
+export interface HotlistJevMissingDay {
+  tradingDate: string
+  reason: string | null
+}
+
+export interface HotlistJevRangeResponse {
+  ok: boolean
+  degraded?: boolean
+  reason?: string
+  datasetId?: string
+  days?: Array<
+    | { tradingDate: string; missing: true; reason: string }
+    | { tradingDate: string; slots: HotlistJevDoc[]; eod: HotlistJevDoc | null }
+  >
+  degradedCount?: number
+}
+
+export interface HotlistJevRangeResult {
+  days: HotlistJevDayEntry[]
+  missingDays: HotlistJevMissingDay[]
+  degraded: boolean
+  reason: string | null
+}

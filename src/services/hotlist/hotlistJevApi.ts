@@ -1,7 +1,14 @@
 // src/services/hotlist/hotlistJevApi.ts
 // 薄 API client：jev 热榜情绪观察轨道读口（GET /api/hotlist-jev/series）。
 // 只做 fetch + 类型化，无兜底计算（结论唯一来源 = QuantBoard 后端 jev 轨道落库）。
-import type { HotlistJevDoc, HotlistJevSeriesResult } from '@/types/hotlistJev'
+import type {
+  HotlistJevDoc,
+  HotlistJevDayEntry,
+  HotlistJevMissingDay,
+  HotlistJevRangeResponse,
+  HotlistJevRangeResult,
+  HotlistJevSeriesResult,
+} from '@/types/hotlistJev'
 
 /** jev 五档英文值 → 展示中文（与规则轨道五档同词汇，判定彼此独立） */
 export const JEV_STAGE_NAMES: Record<string, string> = {
@@ -83,6 +90,61 @@ export async function fetchHotlistJevSeries(
       date: '',
       slots: [],
       eod: null,
+      degraded: true,
+      reason: err instanceof Error ? err.message : 'fetch failed',
+    }
+  }
+}
+
+type HotlistJevRangeDay = NonNullable<HotlistJevRangeResponse['days']>[number]
+type HotlistJevRangeMissingDay = Extract<HotlistJevRangeDay, { missing: true }>
+
+function isMissingRangeDay(day: HotlistJevRangeDay): day is HotlistJevRangeMissingDay {
+  return (day as { missing?: unknown }).missing === true
+}
+
+/**
+ * 多日 jev 观察轨道读口（GET /api/hotlist-jev/range）：快照交易日历窗口逐日返回。
+ * 缺失日（窗口内无任何 jev 文档）不吞掉，收集进 missingDays 供界面标注；
+ * 无兜底计算（结论唯一来源 = QuantBoard 后端 jev 轨道落库）。
+ */
+export async function fetchHotlistJevRange(
+  days = 3,
+  datasetId = 'dragonboard_live',
+): Promise<HotlistJevRangeResult> {
+  const params = new URLSearchParams({ dataset_id: datasetId, days: String(days) })
+  try {
+    const response = await fetch(`/api/hotlist-jev/range?${params.toString()}`)
+    if (!response.ok) {
+      return { days: [], missingDays: [], degraded: true, reason: `HTTP ${response.status}` }
+    }
+    const body = (await response.json()) as HotlistJevRangeResponse
+    if (!body.ok || body.degraded) {
+      return {
+        days: [],
+        missingDays: [],
+        degraded: true,
+        reason: body.reason || 'degraded',
+      }
+    }
+    const dayEntries: HotlistJevDayEntry[] = []
+    const missingDays: HotlistJevMissingDay[] = []
+    for (const day of body.days || []) {
+      if (isMissingRangeDay(day)) {
+        missingDays.push({ tradingDate: day.tradingDate || '', reason: day.reason ?? null })
+      } else {
+        dayEntries.push({
+          tradingDate: day.tradingDate || '',
+          slots: day.slots || [],
+          eod: day.eod ?? null,
+        })
+      }
+    }
+    return { days: dayEntries, missingDays, degraded: false, reason: null }
+  } catch (err) {
+    return {
+      days: [],
+      missingDays: [],
       degraded: true,
       reason: err instanceof Error ? err.message : 'fetch failed',
     }
