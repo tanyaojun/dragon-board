@@ -108,9 +108,11 @@ items:
     evidence: [longterm §20.3, §25.3]
 
   - id: O3_vsb070
-    kind: observe
+    kind: default_review
     desc: vsB_070——VoteStrengths[2] B 档票强度 0.8→0.7（§26.9 Track 1 decision +0.9% 中性 149 笔，不否决不证实）
-    status: pending_rerun
+    status: in_default
+    revertPatch: tierSynergyVoteStrengths index2=0.8
+    revertNote: 2026-09-30 用户决策落默认（B-202610 批次，第五代锚 gen-2026-09-30-vsb070，commit eabf4b44）；track2 晋升臂已重定义为回退对照臂 O3_revert_vsB080
     trigger: 9 月全月复验同批裁决
     dryrunVerdict: 2026-09-25 演练判定卡 PASS_CANDIDATE（C1 +5.97% ∧ C2 三 OOS 全正 +15.89/+6.4/+4.71 ∧ C3 保持；C4 strong/retreat -9.6% 非否决）——进用户决策队列，先补 9 月窗 Track 1 终判（wrxpf + 30 笔门槛）
     formalVerdict: 2026-09-30 正式批次 PASS_CANDIDATE 复现确认 + Track 1 终判中性（oos2 全月 80 笔过 M2，wrxpf 逐位同 baseline 0.1726；oos2u rel 升至 +12.73%）——**进用户决策队列（是否落默认，一次一候选）**
@@ -134,9 +136,11 @@ items:
     evidence: [longterm §13.3, §16.4]
 
   - id: O6_midlong_commitment_dose
-    kind: observe
+    kind: default_review
     desc: MidLongCommitmentMin 剂量曲线（阶段 23 重扫：oos2 +3.5~+7.1% 信号待全月复现）
-    status: pending_rerun
+    status: in_default
+    revertPatch: lifecycleMidLongCommitmentMin=15.0
+    revertNote: 2026-09-30 用户决策 x30（45.0）落默认（C1/C2/C3/C5 + C4 补测全过，第七代锚 gen-2026-09-30-midlong-x30，commit 29f96c9f）；c1/c2 组合臂冻结 pre-x30 历史口径
     trigger: 9 月全月信号复现且 decision 窗读数抬升 → 按 Track 2 流程重出提案
     dryrunVerdict: 2026-09-25 演练两条触发前提均成立且放大——9 月全月收紧侧单调 x1.25→x3 +2.5%→+8.1%（x2 恰复现 +7.1%）、oos2u x2 +10.7%/x3 +13.3%、decision x3 +3.9% 过 C1 线 → 10/3 全月重跑后重出 Track 2 判定卡提案（含 C3/C4/C5）
     formalVerdict: 2026-09-30 正式批次触发成立且增强——收紧侧单调 oos2 +2.62%→+8.80%、oos2u +2.43%→+15.92%、decision x30 +3.93% 过 C1；C3 passHard 四窗 True、C5 过；**C4 regime 桶缺（harness 不产）待补跑** → 提案重出（x30 主候选/x20 备选），补 C4 后终判进用户决策；c1/c2 组合 C1 未过维持 OBSERVE
@@ -298,9 +302,11 @@ items:
     evidence: [ranktrend-param-gap-scan-plan P3 关联课题]
 
   - id: P_repool_timeline_gap
-    kind: proposal
+    kind: default_review
     desc: 出池回池股票 timeline gap 容忍参数化——「中断历史降级判定」vs「insufficient 不可用」（频繁出入池股重建期过长，2026-09-20 用户立项；含 H0 反面假设正面检验：中断历史可能伪装当前结论）
-    status: proposal_pending
+    status: in_default
+    revertPatch: degradedSampleFloor=5
+    revertNote: 2026-09-30 用户决策 floor3 落默认（N8 终判链闭合，第六代锚 gen-2026-09-30-floor3，commit dfbf849b）；参数 α（window_size 50→280）待 β 后另批评估
     trigger: 中期扫描（2026-09-20，decision+oos1 双窗，M3 折扣）方向性支持参数 β：floor3 使 insufficient 14.2%→8.3%，新增判定 n=7683 的 lifecycle 档位质量不劣于基线（A +0.0584 vs +0.0534，E 负向正确；oos1 同向）；首轮「证伪」系 harness 字段路径 bug 假阴性（已修复更正）。待 oos2u 终判（10 月 B-202610）：h8 口径补齐 + B 档样本量 + 幸存者偏差标注 + A 档优势稳定性；终判通过则 floor3 落默认（一次一候选）
     formalVerdict: 2026-09-30 正式批次终判链闭合——insufficient 三窗 h1/h8 双口径复现（decision 14.18%→8.32%、oos1 13.61%→8.07%、oos2u 14.73%→9.36%）；新增判定样本 oos2u 1157（85% D 档）；A 档 h1 弱正/h8 ≈0（优势不稳定噪声区间）+ B 档 13-96 条偏小 + 幸存者偏差标注；Track 1 oos2 全月 80 笔逐位同 baseline（无伤害，M2 达）→ **floor3（degradedSampleFloor 5→3）落默认提案条件具备，进用户决策队列（一次一候选，strategy_version 提升）**；参数 α（window_size）待 β 后另批
     evidenceGeneration: gen-2026-09-15-fund10
