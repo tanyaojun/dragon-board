@@ -76,9 +76,9 @@ class FakeRepo:
 
 def test_series_cache_key_is_versioned_and_scoped() -> None:
     key = hotlist_routes._series_cache_key("dragonboard_live", "half_hour", 10)
-    # 2026-09-24 阶段多帧确认：响应合同新增确认字段，缓存版本随共享常量升 v2
+    # 2026-09-30 路线 B：响应合同新增 emotionScore/legacyCascadeStage，缓存版本随共享常量升 v3
     assert key.endswith(f":{hotlist_routes._HOTLIST_SENTIMENT_CACHE_VERSION}")
-    assert key.endswith(":v2")
+    assert key.endswith(":v3")
     assert "hotlist:sentiment:series:dragonboard_live:half_hour:10" in key
     assert hotlist_routes._series_cache_key("dragonboard_live", "half_hour", 10) == key
     assert hotlist_routes._series_cache_key("dragonboard_live", "half_hour", 3) != key

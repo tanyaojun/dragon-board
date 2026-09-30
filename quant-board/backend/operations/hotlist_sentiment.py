@@ -210,6 +210,12 @@ class HotListSentimentBackfillService:
         confirm_slots, config_diagnostic = _stage_confirm_config()
         if config_diagnostic:
             intraday_state["diagnostics"].append(config_diagnostic)
+        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）
+        from backend.services.jev.jev_sentiment_compute import (
+            _load_analysis_by_code,
+            _yesterday_total_amounts_by_slot,
+        )
+
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -225,6 +231,12 @@ class HotListSentimentBackfillService:
             current_slot=str(anchored_slot) if anchored_slot else None,
             stage_history=intraday_state,
             stage_confirm_slots=confirm_slots,
+            # 路线 B（T3 写口接线）：昨日行复用 previous_day_stocks（已含 displayStatus join）
+            yesterday_rows=previous.get("yesterday") or [],
+            analysis_by_code=_load_analysis_by_code(
+                self._db, dataset_id, str(frame.get("snapshotId") or "")),
+            yesterday_amounts=_yesterday_total_amounts_by_slot(
+                self._db, dataset_id, snapshot_type, trading_date),
         )
         self._append_join_warning(doc, join_stats)
         self._append_previous_join_issues(doc, previous)
@@ -549,6 +561,12 @@ class HotListSentimentBackfillService:
                 confirm_slots, config_diagnostic = _stage_confirm_config()
                 if config_diagnostic:
                     intraday_state["diagnostics"].append(config_diagnostic)
+                # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径同源）
+                from backend.services.jev.jev_sentiment_compute import (
+                    _load_analysis_by_code,
+                    _yesterday_total_amounts_by_slot,
+                )
+
                 doc = build_hotlist_sentiment_document(
                     dataset_id=dataset_id,
                     snapshot_type=snapshot_type,
@@ -563,6 +581,12 @@ class HotListSentimentBackfillService:
                     current_slot=str(slot_time),
                     stage_history=intraday_state,
                     stage_confirm_slots=confirm_slots,
+                    # 路线 B（T3 写口接线）：评分 evidence parts（与 run_for_date 同口径）
+                    yesterday_rows=previous.get("yesterday") or [],
+                    analysis_by_code=_load_analysis_by_code(
+                        self._db, dataset_id, str(frame.get("snapshotId") or "")),
+                    yesterday_amounts=_yesterday_total_amounts_by_slot(
+                        self._db, dataset_id, snapshot_type, trading_date),
                 )
                 self._append_join_warning(doc, join_stats)
                 self._append_previous_join_issues(doc, previous)

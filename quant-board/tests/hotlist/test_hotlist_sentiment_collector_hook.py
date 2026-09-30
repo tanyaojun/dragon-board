@@ -232,6 +232,44 @@ def test_future_slot_does_not_confirm_current_slot(monkeypatch):
     assert doc["stageConfirmState"]["pendingSince"] == "10:00"
 
 
+def test_slot_write_roundtrip_preserves_emotion_score_and_legacy_fields(monkeypatch):
+    """T3 写口往返：compute_and_upsert_for_slot 产出的 emotionScore/legacyCascadeStage
+    必须随文档落库且读回保留（评分可分解审计与对照面合同）。"""
+    import backend.operations.hotlist_sentiment as ops_mod
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "type": "half_hour",
+         "tradingDate": "2026-06-05", "slotTime": "10:00", "timestamp": 2},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "code": "000001",
+         "rank": 1, "change": 5, "zlje": 0, "volumeRatio": 1.5},
+    ]
+    monkeypatch.setattr(ops_mod, "compute_hotlist_sentiment",
+                        lambda *args, **kwargs: _sentiment_stage_payload("高潮"))
+
+    dims = {"upRatio": {"raw": 0.9, "sub": 96.0}}
+    skipped = ["amountVsSame"]
+
+    def _fake_emotion(evidence, slope=None):
+        return {"score": 80.0, "dims": dims, "skippedDims": skipped, "stageCandidate": None}
+
+    monkeypatch.setattr("backend.analysis.hotlist.emotion_score.compute_emotion_score", _fake_emotion)
+
+    result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live", snapshot_type="half_hour",
+                                         trading_date="2026-06-05", slot_time="10:00")
+    assert result["written"] is True
+
+    doc = db["hotlist_sentiment"].find_one({"_id": "dragonboard_live:half_hour:2026-06-05:10:00"})
+    assert doc is not None
+    emotion = doc["emotionScore"]
+    assert emotion["score"] == 80.0 and emotion["dims"] == dims and emotion["skippedDims"] == skipped
+    assert emotion["stageCandidate"] == doc["rawStage"] == "高潮"  # S10 同值
+    assert emotion["slope"] is None and emotion["version"] == "score-v1"
+    assert doc["legacyCascadeStage"] == "高潮"  # 级联截面对照面随文档落库
+
+
 def test_write_order_does_not_change_per_slot_results(monkeypatch):
     """顺序写入与乱序回填：逐槽 (slotTime, stage, rawStage) 必须完全一致（spec §8.1.5）。"""
     import backend.operations.hotlist_sentiment as ops_mod

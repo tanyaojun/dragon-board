@@ -15,7 +15,8 @@ router = APIRouter(prefix="/api/hotlist-sentiment", tags=["hotlist-sentiment"])
 
 # 读口缓存版本号：响应结构变化时递增，避免旧结构响应被命中（2026-09-10 新增）。
 # v2（2026-09-24）：series/slots 响应新增 rawStage/stageConfirmState/diagnostics 确认字段。
-_HOTLIST_SENTIMENT_CACHE_VERSION = "v2"
+# v3（2026-09-30 路线 B）：响应新增 emotionScore/legacyCascadeStage 评分驱动字段。
+_HOTLIST_SENTIMENT_CACHE_VERSION = "v3"
 _SERIES_CACHE_VERSION = _HOTLIST_SENTIMENT_CACHE_VERSION
 
 
@@ -42,6 +43,11 @@ class HotListSentimentPayload(BaseModel):
     rawStage: str | None = None
     stageConfirmState: dict[str, Any] | None = None
     diagnostics: list[str] = Field(default_factory=list)
+    # 路线 B 评分驱动字段（2026-09-30，审计 S2：禁止 ingest 静默丢弃）
+    # emotionScore=评分子文档（score/dims/skippedDims/stageCandidate/slope/version）、
+    # legacyCascadeStage=旧级联截面档位（对照面）。
+    emotionScore: dict[str, Any] | None = None
+    legacyCascadeStage: str | None = None
 
 
 @router.post("/ingest")

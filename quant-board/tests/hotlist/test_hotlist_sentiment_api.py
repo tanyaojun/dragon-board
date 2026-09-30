@@ -126,6 +126,41 @@ def test_hotlist_sentiment_ingest_preserves_confirmation_fields(monkeypatch) -> 
     assert doc["diagnostics"] == ["stage_confirm_legacy_fallback:1"]
 
 
+def test_hotlist_sentiment_ingest_preserves_emotion_score_fields(monkeypatch) -> None:
+    """路线 B（T3，审计 S2）：ingest 必须透传 emotionScore/legacyCascadeStage——
+    禁止 Pydantic 白名单静默丢弃评分驱动字段。"""
+    fake_db = FakeMongoDb()
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
+        lambda: fake_db,
+    )
+    client = TestClient(app)
+
+    emotion_score = {
+        "score": 62.5,
+        "dims": {"upRatio": {"raw": 0.524, "sub": 47.2}},
+        "skippedDims": ["amountVsSame"],
+        "stageCandidate": "发酵",
+        "slope": 3.2,
+        "version": "score-v1",
+    }
+    response = client.post(
+        "/api/hotlist-sentiment/ingest",
+        json={
+            "tradingDate": "2026-06-05",
+            "stage": "发酵",
+            "rawStage": "发酵",
+            "emotionScore": emotion_score,
+            "legacyCascadeStage": "启动",
+        },
+    )
+
+    assert response.status_code == 200
+    _, doc, _ = fake_db.hotlist_sentiment.replace_calls[0]
+    assert doc["emotionScore"] == emotion_score
+    assert doc["legacyCascadeStage"] == "启动"
+
+
 def test_hotlist_sentiment_ingest_legacy_payload_does_not_invent_confirmation(monkeypatch) -> None:
     fake_db = FakeMongoDb()
     monkeypatch.setattr(

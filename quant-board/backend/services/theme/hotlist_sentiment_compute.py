@@ -391,6 +391,12 @@ class HotListSentimentComputeService:
         confirm_slots, config_diagnostic = _stage_confirm_config()
         if config_diagnostic:
             intraday_state["diagnostics"].append(config_diagnostic)
+        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）
+        from backend.services.jev.jev_sentiment_compute import (
+            _load_analysis_by_code,
+            _yesterday_total_amounts_by_slot,
+        )
+
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -406,6 +412,14 @@ class HotListSentimentComputeService:
             current_slot=str(anchored_slot) if anchored_slot else None,
             stage_history=intraday_state,
             stage_confirm_slots=confirm_slots,
+            # 路线 B（T3 写口接线）：评分 evidence parts——昨日行复用 previous_day_stocks
+            # （已含 displayStatus join，jev 聚合器只读行情字段不冲突），
+            # analysis_by_code / 昨日同期总额复用 jev 服务层取数模式（口径同源）。
+            yesterday_rows=previous.get("yesterday") or [],
+            analysis_by_code=_load_analysis_by_code(
+                self._backfill._db, dataset_id, str(frame.get("snapshotId") or "")),
+            yesterday_amounts=_yesterday_total_amounts_by_slot(
+                self._backfill._db, dataset_id, snapshot_type, trading_date),
         )
         join_note = _join_warning(join_stats)
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
@@ -499,6 +513,12 @@ def compute_and_upsert_for_slot(
         confirm_slots, config_diagnostic = _stage_confirm_config()
         if config_diagnostic:
             intraday_state["diagnostics"].append(config_diagnostic)
+        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）
+        from backend.services.jev.jev_sentiment_compute import (
+            _load_analysis_by_code,
+            _yesterday_total_amounts_by_slot,
+        )
+
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
             snapshot_type=snapshot_type,
@@ -513,6 +533,12 @@ def compute_and_upsert_for_slot(
             current_slot=str(slot_time),
             stage_history=intraday_state,
             stage_confirm_slots=confirm_slots,
+            # 路线 B（T3 写口接线）：评分 evidence parts（与 _compute_and_persist 同口径）
+            yesterday_rows=previous.get("yesterday") or [],
+            analysis_by_code=_load_analysis_by_code(
+                mongo_db, dataset_id, str(frame.get("snapshotId") or "")),
+            yesterday_amounts=_yesterday_total_amounts_by_slot(
+                mongo_db, dataset_id, snapshot_type, trading_date),
         )
         join_note = _join_warning(join_stats)
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
