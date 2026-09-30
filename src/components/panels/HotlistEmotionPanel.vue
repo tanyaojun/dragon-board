@@ -571,6 +571,26 @@
                   </div>
                 </div>
                 <div v-if="phasePulseAbLine" class="phase-pulse-ab">{{ phasePulseAbLine }}</div>
+
+                <div v-if="phasePulseAccRows.length" class="phase-pulse-acc">
+                  <div class="section-title">分带累积（C6 证据，每月末自动入档）</div>
+                  <table class="phase-months-table">
+                    <thead>
+                      <tr><th>月份</th><th>冷10-40</th><th>弱势40-60</th><th>强60-80</th><th>总笔数</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="row in phasePulseAccRows" :key="row.month">
+                        <td>{{ row.month }}</td>
+                        <td v-for="c in row.cells" :key="c.tag"
+                          :style="{ color: c.avgPct == null ? '' : c.avgPct >= 0 ? '#ff4757' : '#2ed573' }">
+                          {{ c.avgPct == null ? '--' : `${c.avgPct >= 0 ? '+' : ''}${c.avgPct}%/笔` }}
+                          <span class="phase-band-trades">（{{ c.trades }} 笔）</span>
+                        </td>
+                        <td>{{ row.tradeCount }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
 
               <div class="phase-months">
@@ -2388,6 +2408,7 @@ const phaseHistoryDegraded = ref(false)
 const phaseHistoryReason = ref<string | null>(null)
 const phaseNorthstar = ref<PhaseNorthstarDoc | null>(null)
 const phasePulse = ref<PhasePulseDoc | null>(null)
+const phasePulses = ref<PhasePulseDoc[]>([])
 const phaseNorthstarMissingReason = ref<string | null>(null)
 const phaseMonths = ref<PhaseMonthlyDoc[]>([])
 const phaseLoading = ref(false)
@@ -2466,6 +2487,28 @@ const phaseMonthRows = computed<PhaseMonthRow[]>(() =>
   })),
 )
 
+interface PulseBandAccRow {
+  month: string
+  tradeCount: number
+  cells: Array<{ tag: string; trades: number; avgPct: number | null }>
+}
+
+// C6 证据逐月累积表：每行=一个月的脉拍，列=三分带（每笔%着色，笔数附注）
+const phasePulseAccRows = computed<PulseBandAccRow[]>(() =>
+  phasePulses.value.map((doc) => {
+    const bands = doc.report?.bands ?? {}
+    return {
+      month: doc.month,
+      tradeCount: doc.report?.tradeCount ?? 0,
+      cells: ['冷10-40', '弱势40-60', '强60-80'].map((tag) => ({
+        tag,
+        trades: bands[tag]?.trades ?? 0,
+        avgPct: bands[tag]?.avgPerTrade != null ? Number((bands[tag].avgPerTrade * 100).toFixed(2)) : null,
+      })),
+    }
+  }),
+)
+
 async function loadPhaseData(): Promise<void> {
   phaseLoading.value = true
   phaseError.value = null
@@ -2490,6 +2533,7 @@ async function loadPhaseData(): Promise<void> {
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
       phaseMonths.value = board.months
       phasePulse.value = board.pulse ?? null
+      phasePulses.value = board.pulses ?? []
     }
   } catch (err) {
     phaseError.value = err instanceof Error ? err.message : '相位数据加载失败'
