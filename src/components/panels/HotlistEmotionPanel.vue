@@ -68,6 +68,18 @@
                   <div class="jev-hero-narrative-head">📜 {{ jevLatestNarrativeMeta }}</div>
                   <pre class="jev-narrative-text">{{ jevHeroNarrative }}</pre>
                 </div>
+                <!-- 路线 B 连续情绪分（2026-09-30）：stage 主定义的来源分数，可分解审计 -->
+                <div v-if="emotionScoreValue != null" class="hero-score-bar" :title="emotionScoreTooltip">
+                  <span class="hero-score-num">{{ emotionScoreValue }}</span>
+                  <div class="hero-score-track">
+                    <div class="hero-score-fill" :style="{ width: emotionScorePctText }"></div>
+                  </div>
+                  <span class="hero-score-hint">连续情绪分 0-100</span>
+                </div>
+                <div v-else-if="doc.emotionScore" class="hero-score-bar hero-score-missing"
+                  title="证据全缺，本槽评分不可用（skippedDims 全维，见数据诊断）">
+                  <span class="hero-score-hint">情绪分不可用</span>
+                </div>
                 <div class="hero-summary">盘面证据：{{ doc.summary }}</div>
               </div>
             </div>
@@ -747,6 +759,22 @@ const confirmedStageName = computed(() => doc.value?.stage ?? '--')
 const stageTone = computed(() => {
   const heat = STAGE_HEAT[doc.value?.stage ?? ''] ?? 1
   return heat >= 2 ? 'hot' : heat >= 1 ? 'warm' : 'cold'
+})
+// ---------- 路线 B 连续情绪分（emotion-score-design v3 §3.2）----------
+const emotionScoreValue = computed(() => {
+  const score = doc.value?.emotionScore?.score
+  return typeof score === 'number' && Number.isFinite(score) ? score : null
+})
+const emotionScorePctText = computed(
+  () => `${Math.max(0, Math.min(100, emotionScoreValue.value ?? 0))}%`,
+)
+const emotionScoreTooltip = computed(() => {
+  const emotion = doc.value?.emotionScore
+  if (!emotion) return ''
+  const parts = Object.entries(emotion.dims).map(([name, detail]) => `${name} ${detail.sub}`)
+  const skipped = emotion.skippedDims.length ? `；缺失跳过：${emotion.skippedDims.join('、')}` : ''
+  const slope = emotion.slope != null ? `；较上一有效槽 ${emotion.slope > 0 ? '+' : ''}${emotion.slope}` : ''
+  return `情绪分构成（可分解审计）：${parts.join('、')}${skipped}${slope}`
 })
 const riskTone = computed(() => (doc.value?.riskLevel === '高' ? 'high' : doc.value?.riskLevel === '低' ? 'low' : 'mid'))
 const pendingBadge = computed(() => {
@@ -2886,6 +2914,37 @@ watch(view, (v) => {
   color: #ffb142;
   cursor: help;
 }
+/* 路线 B 连续情绪分（hero 通栏分数条）：数值 + 0-100 进度条 + 可分解 tooltip */
+.hero-score-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  cursor: help;
+}
+.hero-score-num {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--text-title);
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.hero-score-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+.hero-score-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #7f8c8d, #ffb142 60%, #ff4757);
+}
+.hero-score-hint { font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
+.hero-score-missing .hero-score-hint { color: #7f8c8d; }
 .hero-summary { font-size: 12px; color: var(--text-secondary); }
 
 /* ========== 三级卡片体系（SectorDetail 概览结构） ========== */

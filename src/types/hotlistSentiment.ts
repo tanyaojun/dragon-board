@@ -179,6 +179,28 @@ export interface HotListSentimentResult {
     confirmSlots: number
     historyStatus: 'complete' | 'empty' | 'legacy_fallback' | 'unavailable'
   }
+  /**
+   * 路线 B 连续情绪评分（2026-09-30）：与档位同源同槽位的评分子文档；旧文档缺省。
+   * `stage`/`rawStage` 的主定义已切换为评分驱动，本字段保留每维子分供分解审计。
+   */
+  emotionScore?: HotListEmotionScore
+  /** 旧级联截面档位（对照面；评分链切换前曾为 `stage` 的来源） */
+  legacyCascadeStage?: UnifiedEmotionStage
+}
+
+/**
+ * 连续情绪评分子文档（emotion-score-design v3 §3.2）：
+ * score=8 维等权合成（缺维跳过权重归一化）；dims 保留各维原始值与子分；
+ * stageCandidate 与 rawStage 同值（本帧映射档位，含斜率修正）；slope=当日上一有效槽差。
+ */
+export interface HotListEmotionScore {
+  score: number | null
+  dims: Record<string, { raw: number | null; sub: number }>
+  skippedDims: string[]
+  stageCandidate?: UnifiedEmotionStage | null
+  slope?: number | null
+  version?: string
+  computedAt?: number
 }
 
 export interface HotListSentimentDayDoc {
@@ -224,6 +246,10 @@ export interface HotListSentimentDayDoc {
     confirmSlots: number
     historyStatus: 'complete' | 'empty' | 'legacy_fallback' | 'unavailable'
   }
+  /** 路线 B 连续情绪评分子文档（语义同 HotListSentimentResult.emotionScore）；旧文档缺省。 */
+  emotionScore?: HotListEmotionScore
+  /** 旧级联截面档位（对照面；评分链切换前曾为 `stage` 的来源） */
+  legacyCascadeStage?: UnifiedEmotionStage
   missing?: boolean
   reason?: string
 }

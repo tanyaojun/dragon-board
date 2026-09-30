@@ -20,6 +20,22 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     }
   })
 
+  test('路线 B 连续情绪分：hero 分数条 + 可分解 tooltip + 评分不可用态（2026-09-30）', () => {
+    const source = panelSource()
+
+    // 展示：hero 区情绪分条（数值 + 0-100 进度条 + hint），tooltip 携带 dims 明细
+    expect(source).toContain('hero-score-bar')
+    expect(source).toContain('emotionScoreValue')
+    expect(source).toContain('情绪分构成（可分解审计）')
+    expect(source).toContain('连续情绪分 0-100')
+    // fail-visible：score=null 时显示不可用态（不伪造 0），旧文档无字段不渲染
+    expect(source).toContain('hero-score-missing')
+    expect(source).toContain('情绪分不可用')
+    expect(source).toContain("typeof score === 'number' && Number.isFinite(score)")
+    // stage 展示逻辑零改动：评分只增展示，不改档位消费
+    expect(source).toContain('const confirmedStageName = computed(() => doc.value?.stage ?? \'--\')')
+  })
+
   test('阶段分布页签：状态条改 ECharts 饼图，六态语义配色（2026-09-25）', () => {
     const source = panelSource()
 
