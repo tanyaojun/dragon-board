@@ -63,3 +63,30 @@ def test_custom_threshold_and_factor():
 def test_missing_score_day_passes_through():
     eod = {"2026-09-25": None}  # 分数缺失（fail-visible 口径：无法定相 → 放行）
     assert TradeSimulator._phase_exposure_factor(_cfg("reduce_defense", eod=eod), "2026-09-26") == 1.0
+
+
+def test_reduce_band_hits_weak_zone_prev_score():
+    """C6 载体：reduce_band 模式——前日分落在 [bandLow, bandHigh) → factor。"""
+    cfg = {
+        "phaseExposureControl": {
+            "mode": "reduce_band", "factor": 0.5, "bandLow": 40.0, "bandHigh": 60.0, "eodScores": EOD,
+        }
+    }
+    # 09-28 前日 09-27=45 ∈ [40,60) → 降仓
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-28") == 0.5
+    # 09-26 前日 09-25=30 <40 → 放行
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-26") == 1.0
+    # 09-27 前日 09-26=70 ≥60 → 放行
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-27") == 1.0
+
+
+def test_reduce_band_lower_inclusive_upper_exclusive():
+    cfg = {
+        "phaseExposureControl": {
+            "mode": "reduce_band", "factor": 0.3, "bandLow": 40.0, "bandHigh": 60.0,
+            "eodScores": {"2026-09-25": 40.0, "2026-09-26": 60.0},
+        }
+    }
+    # 前日=40.0（含下沿）→ 降仓；前日=60.0（不含上沿）→ 放行
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-26") == 0.3
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-27") == 1.0

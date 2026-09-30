@@ -36,17 +36,19 @@ class TradeSimulator:
     def _phase_exposure_factor(config: dict[str, Any], trading_date: str) -> float:
         """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
 
-        trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense,
-            factor: 0~1, threshold: 50.0, eodScores: {date: score}}。
+        trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band,
+            factor: 0~1, threshold: 50.0, bandLow/bandHigh: 40/60（reduce_band 用）, eodScores: {date: score}}。
         as-of 纪律：入场日 d 的相位取 eodScores 中**严格早于 d 的最近交易日** EOD 分（前日定相）；
         键缺失/模式 off/无前日/分数缺失 → 1.0 放行（默认关=golden 逐位不变，缺信号不错杀）。
+        reduce_offense/reduce_defense：按 threshold 两档相位匹配降仓；
+        reduce_band：前日分 ∈ [bandLow, bandHigh) 降仓（C6 弱势带载体，下沿含上沿不含）。
         factor=0 语义=该相位禁止新开仓（调用方跳过）。
         """
         ctrl = config.get("phaseExposureControl")
         if not isinstance(ctrl, dict):
             return 1.0
         mode = str(ctrl.get("mode") or "off")
-        if mode not in ("reduce_offense", "reduce_defense"):
+        if mode not in ("reduce_offense", "reduce_defense", "reduce_band"):
             return 1.0
         eod = ctrl.get("eodScores") or {}
         prev_dates = [d for d in eod if str(d) < str(trading_date)]
@@ -55,10 +57,17 @@ class TradeSimulator:
         score = eod[max(prev_dates)]
         if not isinstance(score, (int, float)):
             return 1.0
-        threshold = float(ctrl.get("threshold") or 50.0)
-        phase = "offense" if score >= threshold else "defense"
-        if mode != f"reduce_{phase}":
-            return 1.0
+        if mode == "reduce_band":
+            low = float(ctrl.get("bandLow", 40.0))
+            high = float(ctrl.get("bandHigh", 60.0))
+            in_band = low <= score < high
+            if not in_band:
+                return 1.0
+        else:
+            threshold = float(ctrl.get("threshold") or 50.0)
+            phase = "offense" if score >= threshold else "defense"
+            if mode != f"reduce_{phase}":
+                return 1.0
         try:
             return max(0.0, min(1.0, float(ctrl.get("factor", 0.5))))
         except (TypeError, ValueError):
