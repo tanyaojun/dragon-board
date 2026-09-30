@@ -541,3 +541,38 @@ async def test_matching_source_rows_report_no_error() -> None:
     await scheduler.run_once()
 
     assert scheduler.status()["lastError"] is None
+
+
+def test_eastmoney_scheduler_uses_conservative_rate_profile(monkeypatch) -> None:
+    """东财模式单例参数：30 分钟一轮 + 60s 批间距（provider 侧）+ 1800s 长冷却。
+
+    风控论断（2026-09-30）：东财压力 ∝ 请求次数，绝不短间距频繁请求。
+    """
+    import backend.services.market.fund_scheduler as module
+
+    class _FakeEMProvider:
+        source = "eastmoney_main"
+
+    monkeypatch.setattr(module, "_build_default_provider", lambda: _FakeEMProvider())
+    monkeypatch.setattr(module.get_settings(), "theme_fund_source", "eastmoney")
+    scheduler = module._build_market_fund_scheduler()
+
+    assert scheduler.refresh_interval_seconds == 1800.0
+    assert scheduler.systemic_cooldown_seconds == 1800.0
+    assert scheduler.fetch_timeout_seconds >= 600.0
+    assert scheduler.provider_source() == "eastmoney_main"
+
+
+def test_akshare_scheduler_keeps_original_profile(monkeypatch) -> None:
+    """akshare 回退模式保持原节奏（300s 周期 / 300s 冷却），互不影响。"""
+    import backend.services.market.fund_scheduler as module
+
+    class _FakeAkshareProvider:
+        source = "akshare_ths_individual"
+
+    monkeypatch.setattr(module, "_build_default_provider", lambda: _FakeAkshareProvider())
+    monkeypatch.setattr(module.get_settings(), "theme_fund_source", "akshare")
+    scheduler = module._build_market_fund_scheduler()
+
+    assert scheduler.refresh_interval_seconds == 300.0
+    assert scheduler.systemic_cooldown_seconds == 300.0

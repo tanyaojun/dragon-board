@@ -172,17 +172,28 @@ class Settings(BaseModel):
     # 切回 akshare 不会覆盖当日已写入的东财行——切源需跨交易日生效，
     # 调度器 status 以 provider_source_stale_rows 暴露行源不一致（fail-visible）。
     theme_fund_source: str = Field(default="eastmoney")
-    # 东财批量参数（风控纪律）：每请求最多 N 只 secids + 相邻请求最小间隔。
-    # 默认 300 只/1.5s → 全市场约 18 批，300s 一轮均摊约 3.6 req/min。
-    theme_fund_em_batch_size: int = Field(default=300)
-    theme_fund_em_request_interval_seconds: float = Field(default=1.5)
+    # 题材主力资金东财批量参数（风控纪律，2026-09-30 二次论断定稿）。
+    # 核心原则：东财压力 ∝ 请求次数，绝不短间距频繁请求。
+    # - batch 800：URL≈6.9KB 贴近 nginx 8KB 上限，全市场压到约 7 批（一次
+    #   全市场 50KB 超限，分批仅过 URL 上限，减压靠批间距）；
+    # - interval 60s：批间距分钟级，任意 1 分钟窗口最多 1 个请求
+    #   （2026-09-30 盘中实透：300 只×18 批×1.5s 连发被 push2 断连封 IP）。
+    theme_fund_em_batch_size: int = Field(default=800)
+    theme_fund_em_request_interval_seconds: float = Field(default=60.0)
     theme_fund_em_request_timeout_seconds: float = Field(default=15.0)
+    # 东财模式刷新周期：30 分钟一轮（轮内约 6 分钟完成、其余静默），
+    # 独立于 akshare 模式的 theme_fund_refresh_interval_seconds（300s）
+    theme_fund_em_refresh_interval_seconds: int = Field(default=1800)
     # KPL 题材个股人气后台刷新周期（2026-09：热度口径切换为 KPL 人气总和，
     # 对齐 tck2.js 的 10 分钟全量刷新节奏；下限 60s 由 KplHotnessCache 兜底）
     theme_kpl_hotness_refresh_seconds: int = Field(default=600)
-    # 题材主力资金全市场一轮的 fetch 预算：东财批量模式 18 批 × (请求 + 1.5s 间隔)
-    # 约 40-60s，60s 预算过紧会掐断尾部批次（partial 保存 + 熔断），默认提到 90s
-    market_fund_fetch_timeout_seconds: float = Field(default=90.0)
+    # 题材主力资金 fetch 预算：
+    # - akshare 单请求模式：本默认值直接生效（默认 150s，单请求自身有 30s 上限）；
+    # - 东财批量模式：实际预算由 fund_scheduler._build_market_fund_scheduler
+    #   钳制为 max(600, 本值)——轮内 6×60~69s 批间距 + 7×15s 超时上限 ≈ 465-519s，
+    #   600s 保证最坏情况不中途抬新断（避免 to_thread 僵尸线程跑完剩余批次却结果
+    #   被丢）；调大 EM 批间距/批大小时需同步评估该下限。
+    market_fund_fetch_timeout_seconds: float = Field(default=150.0)
     market_quotes_refresh_interval_seconds: int = Field(default=300)
     hotlist_refresh_interval_seconds: int = Field(default=600)
     xueqiu_cookie: str = Field(default="")
@@ -516,10 +527,17 @@ class Settings(BaseModel):
             _env_int("QUANT_BOARD_THEME_FUND_EM_BATCH_SIZE", self.theme_fund_em_batch_size),
         )
         self.theme_fund_em_request_interval_seconds = max(
-            0.5,
+            30.0,
             _env_float(
                 "QUANT_BOARD_THEME_FUND_EM_REQUEST_INTERVAL_SECONDS",
                 self.theme_fund_em_request_interval_seconds,
+            ),
+        )
+        self.theme_fund_em_refresh_interval_seconds = max(
+            600,
+            _env_int(
+                "QUANT_BOARD_THEME_FUND_EM_REFRESH_INTERVAL_SECONDS",
+                self.theme_fund_em_refresh_interval_seconds,
             ),
         )
         self.theme_fund_em_request_timeout_seconds = max(

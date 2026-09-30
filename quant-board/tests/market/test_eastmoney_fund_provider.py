@@ -137,9 +137,9 @@ def test_fetch_all_splits_batches_and_throttles_between_requests() -> None:
     assert len(requests) == 2
     assert requests[0] == ["1.600000", "0.000001"]
     assert requests[1] == ["0.300750", "1.688981"]
-    # 批间节流生效（首批只记录时间戳，第二批等满最小间隔，实际等待略小于 1.5s）
+    # 批间节流生效：等满最小间隔 + 随机抖动（interval*0.15 内，防精确节拍指纹）
     assert len(sleeps) == 1
-    assert 1.0 <= sleeps[0] <= 1.5
+    assert 1.4 <= sleeps[0] <= 1.75
     assert batch.request_count == 2
 
 
@@ -295,8 +295,8 @@ def test_singleton_uses_settings_and_quotes_universe(monkeypatch) -> None:
     provider = module.get_eastmoney_fund_provider()
 
     assert isinstance(provider, FakeProviderInstance)
-    assert created["batch_size"] == 300
-    assert created["request_interval_seconds"] == 1.5
+    assert created["batch_size"] == 800
+    assert created["request_interval_seconds"] == 60.0
     assert callable(created["universe_provider"])
 
 

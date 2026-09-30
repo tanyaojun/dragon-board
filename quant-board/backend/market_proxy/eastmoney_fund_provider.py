@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -25,6 +26,9 @@ EM_FIELDS = "f12,f14,f2,f3,f6,f62,f66,f69,f184"
 # 供后续行情侧字段扩展零改动复用（fields 数量不额外增加限流压力）。
 EM_REFERER = "https://quote.eastmoney.com/"
 EM_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+# 社区实战铁律（a-stock-data 10.4k 星 SKILL 防封铁律第 3 条）：复用 HTTP 会话
+# （Keep-Alive），不要每次新建连接——连接重建频率本身是风控指纹之一。
+# 故 provider 全程复用同一 client，不设 Connection: close。
 
 # 系统性错误：命中即中止本轮剩余批次（东财风控信号，继续请求有封 IP 风险），
 # 由 MarketFundScheduler 打开熔断冷却。
@@ -105,21 +109,33 @@ class EastmoneyFundProvider:
     节奏（批量 + 串行 + 最小间隔 + 命中风控立即中止），akshare 封装无法提供
     这些抓手（2026-09-29 用户确认题材主力资金切换东财口径时明确）。
 
-    风控纪律（防封 IP）：
+    风控纪律（防封 IP，2026-09-30 二次论断定稿）：
+
+    核心原则：东财语境下服务器压力 ∝ 请求次数，与每批大小几乎无关——
+    绝不允许「短间距时间内频繁发起请求」。
+
     - 全程串行，无并发；
-    - 相邻两次 HTTP 请求间隔 >= ``request_interval_seconds``（默认 1.5s）；
-    - 每请求最多 ``batch_size`` 只 secids（默认 300，全市场约 18 批），
-      调度默认 300s 一轮 → 均摊约 3.6 req/min；
-    - 命中 429/403/5xx 立即中止剩余批次（truncated_by 结构化上报），
-      调度器据此熔断冷却，不会连续打 API；
+    - 大批少请求：每请求 800 只 secids（URL≈6.9KB，贴近 nginx 8KB 上限；
+      全市场约 7 批）——无法一次全市场是 URL 硬限制（5500 只≈50KB 超限），
+      分批仅为过 URL 上限，不是减压手段，减压靠批间距；
+    - 相邻两次 HTTP 请求发起间隔 >= ``request_interval_seconds``（默认 60s，
+      分钟级摊开 + 随机抖动防精确节拍指纹：任意 1 分钟窗口最多 1 个请求）；
+    - 全程复用同一 HTTP 连接（Keep-Alive，社区铁律：连接重建频率本身是
+      风控指纹，不要每次新建连接）；
+    - 调度默认 1800s（30 分钟）一轮，轮内约 6 分钟完成、其余静默
+      → 均摊约 0.23 req/min，每小时 <=14 请求；
+    - 命中 429/403/5xx/断连立即中止剩余批次（truncated_by 结构化上报），
+      调度器据此长冷却（东财默认 1800s），不反复刺激 WAF；
     - 连续 3 批失败（含超时/坏负载）同样中止；
     - 单批超时/坏负载只记批级 failure 并继续（单次抖动≠被封）。
 
     已知边界：调度器 fetch 超时（asyncio.wait_for）只取消 await，to_thread
-    内的同步抓取线程会按自身节流跑完剩余批次（有界：默认配置下最多数十秒；
-    极端 env 下如 batch_size=50 可更长），该轮结果被丢弃。下轮与僵尸线程重叠
-    时串行节流可能被破坏——调参时勿把 fetch 预算压到低于一轮实际耗时
-    （全市场 18 批 × (15s 超时上限 + 1.5s 间隔) < 300s 默认预算即安全）。
+    内的同步抓取线程会按自身节流跑完剩余批次（有界：默认 7 批、轮内约
+    6-8 分钟；极端 env 如 batch_size=50 可更长），该轮结果被丢弃。下轮与
+    僵尸线程重叠时串行节流可能被破坏——东财模式 fetch 预算由调度器保证
+    >=600s（6×60~69s 批间距 + 7×15s 超时 ≈ 465-519s）；若通过 env 调大
+    批间距/批大小时，需同步调大 QUANT_BOARD_MARKET_FUND_FETCH_TIMEOUT_SECONDS
+    （EM 模式实际预算 = max(600, 该值)）。
     """
 
     # 调度器 status() 的数据源诚实标识（与 batch.source 一致）
@@ -132,8 +148,8 @@ class EastmoneyFundProvider:
         client: httpx.Client | None = None,
         now_ms: Callable[[], int] | None = None,
         sleep: Callable[[float], None] | None = None,
-        batch_size: int = 300,
-        request_interval_seconds: float = 1.5,
+        batch_size: int = 800,
+        request_interval_seconds: float = 60.0,
         request_timeout_seconds: float = 15.0,
         url: str = EM_QUOTE_URL,
     ) -> None:
@@ -243,17 +259,19 @@ class EastmoneyFundProvider:
         return {"User-Agent": EM_UA, "Referer": EM_REFERER}
 
     def _throttle(self) -> None:
-        """相邻请求最小间隔（东财风控纪律，全程串行下即全局节奏）。
+        """相邻请求最小间隔 + 随机抖动（对齐社区 em_get 实践：固定节拍也是指纹）。
 
         首次调用基准为空不等待；时间戳在每批请求**完成后**由调用方记录
         （end-to-start 口径）：慢响应也不会背靠背连发，任意两请求发起间隔
-        >= request_interval_seconds。
+        >= request_interval_seconds，抖动幅度 interval*0.15 内随机
+        （抖动仅附加在需要等待的分支：上一批耗时已超 interval 时零抖动立即发，
+        默认 60s 间隔 + 15s 超时上限下不可达，仅极端 env 理论存在）。
         """
         if self._last_request_monotonic is not None:
             elapsed = time.monotonic() - self._last_request_monotonic
             wait = self._request_interval_seconds - elapsed
             if wait > 0:
-                self._sleep(wait)
+                self._sleep(wait + random.uniform(0.0, self._request_interval_seconds * 0.15))
         # 时间戳由调用方在请求完成后记录（end-to-start 口径），此处不预记
 
     def _fetch_batch_diff(self, batch_codes: list[str]) -> list[dict[str, Any]]:

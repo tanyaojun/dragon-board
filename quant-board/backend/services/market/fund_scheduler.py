@@ -422,10 +422,32 @@ def _build_default_provider() -> Any:
     return get_akshare_fund_provider()
 
 
-market_fund_scheduler = MarketFundScheduler(
-    cache=get_theme_fund_cache(),
-    stream=get_market_fund_stream(),
-    provider=_build_default_provider(),
-    refresh_interval_seconds=get_settings().theme_fund_refresh_interval_seconds,
-    fetch_timeout_seconds=get_settings().market_fund_fetch_timeout_seconds,
-)
+def _build_market_fund_scheduler() -> MarketFundScheduler:
+    settings = get_settings()
+    # 东财风控专用参数（2026-09-30 二次论断）:
+    # - 刷新周期 1800s（30 分钟一轮，轮内约 6 分钟完成、其余静默），
+    #   独立于 akshare 模式的 theme_fund_refresh_interval_seconds（300s）；
+    # - 断连/限流冷却 1800s：push2 断连即已被风控，半小时内不再碰
+    #   （2026-09-30 盘中实透：短冷却重试反复刺激 WAF，IP 被临时拉黑）；
+    # - fetch 预算 600s：覆盖最坏 6×60s 批间距 + 7×15s 响应超时 ≈ 465s，
+    #   避免正常慢轮被半路抬新断（to_thread 僵尸线程跑完但结果被丢）。
+    eastmoney_mode = settings.theme_fund_source == "eastmoney"
+    return MarketFundScheduler(
+        cache=get_theme_fund_cache(),
+        stream=get_market_fund_stream(),
+        provider=_build_default_provider(),
+        refresh_interval_seconds=(
+            settings.theme_fund_em_refresh_interval_seconds
+            if eastmoney_mode
+            else settings.theme_fund_refresh_interval_seconds
+        ),
+        fetch_timeout_seconds=(
+            max(600.0, settings.market_fund_fetch_timeout_seconds)
+            if eastmoney_mode
+            else settings.market_fund_fetch_timeout_seconds
+        ),
+        systemic_cooldown_seconds=1800.0 if eastmoney_mode else 300.0,
+    )
+
+
+market_fund_scheduler = _build_market_fund_scheduler()
