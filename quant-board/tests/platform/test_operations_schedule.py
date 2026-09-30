@@ -79,10 +79,11 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse"]
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
+    assert result["results"]["phasePulse"]["skipped"] is True  # dry_run 短路
     assert calls == [
         "hotlist:mongo-db:dragonboard_live:half_hour:True",
         "backup:True",
@@ -450,3 +451,115 @@ def test_run_mongodb_backup_once_no_full_history_with_object_store_forces_first_
     assert result["strategy"] == "full_dump"
     assert result["lastFullBackup"]["fullCatchUp"]["reason"] == "no_full_backup_found"
     assert calls == ["latest_full", "create_full", "verify:b-full", "prune:False", "push:b-full"]
+
+
+def test_phase_pulse_step_skipped_without_eod(monkeypatch: Any) -> None:
+    """门控：当日无 EOD 情绪文档（非交易日/数据未落）→ 跳过且不碰子进程。"""
+    from backend.operations import schedule
+
+    class FakeCollection:
+        def find_one(self, _query, _projection=None):
+            return None
+
+    class FakeDb:
+        def __getitem__(self, name):
+            assert name == "hotlist_sentiment"
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(schedule.subprocess, "run", lambda *a, **k: ran.append("subprocess"))
+
+    result = schedule._run_phase_pulse_step("2026-10-03")  # 国庆假期，无 EOD
+
+    assert result["ok"] is True and result["skipped"] is True
+    assert "no EOD doc" in result["reason"]
+    assert ran == []  # 子进程未启动
+
+
+def test_phase_pulse_step_runs_subprocess_on_trading_day(monkeypatch, tmp_path) -> None:
+    """交易日（EOD 已落）→ 子进程隔离执行；摘要从产物 JSON 读取。"""
+    from backend.operations import schedule
+
+    class FakeCollection:
+        def find_one(self, _query, _projection=None):
+            return {"_id": "x"}
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    monkeypatch.setattr(schedule, "_PULSE_OUT_DIR", tmp_path)
+    (tmp_path / "pulse-2026-10.json").write_text(
+        '{"month": "2026-10", "tradeCount": 3, "ab": {"delta": {"netReturnSaved": 0.055}}}',
+        encoding="utf-8",
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return type("Proc", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+
+    result = schedule._run_phase_pulse_step("2026-10-12")
+
+    assert result["ok"] is True and result["month"] == "2026-10"
+    assert result["summary"]["tradeCount"] == 3
+    assert result["summary"]["netReturnSaved"] == 0.055
+    assert "backend.operations.phase_pulse" in " ".join(captured["cmd"])
+    assert "--month" in captured["cmd"] and "2026-10" in captured["cmd"]
+
+
+def test_phase_pulse_failure_does_not_flip_chain(monkeypatch: Any) -> None:
+    """advisory 语义：脉拍失败只进 results，不翻转整体 ok，也不产生 stoppedAt。"""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"storage_backend": "mongodb", "archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: "mongo-db",
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: calls.append("hotlist") or {"ok": True, "written": 1},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: calls.append("backup") or {"ok": True, "skipped": True, "reason": "dry_run"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: calls.append("archiveR2") or {"ok": True, "dryRun": True, "snapshotTypes": {}},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_phase_pulse_step",
+        lambda today, dry_run=False: calls.append("pulse") or {"ok": False, "error": {"code": "phase_pulse_failed", "message": "boom"}},
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=True)
+
+    assert result["ok"] is True  # advisory 步失败不翻转
+    assert "stoppedAt" not in result  # ok 时无 stoppedAt 键
+    assert result["results"]["phasePulse"]["ok"] is False
+    assert calls == ["hotlist", "backup", "archiveR2", "pulse"]

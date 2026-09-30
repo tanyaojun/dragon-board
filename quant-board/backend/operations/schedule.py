@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -12,6 +16,76 @@ from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 
 _TZ = ZoneInfo("Asia/Shanghai")
+
+_PULSE_OUT_DIR = Path("data/reports/phase-monitor")
+_PULSE_TIMEOUT_SECONDS = 900
+
+
+def _should_run_phase_pulse(db: Any, today: str, dataset_id: str, snapshot_type: str) -> tuple[bool, str]:
+    """脉拍门控：当日有 EOD 情绪文档才跑（非交易日/数据未落 → 跳过，不烧算力不覆盖旧档）。"""
+    try:
+        doc = db["hotlist_sentiment"].find_one(
+            {"datasetId": dataset_id, "snapshotType": snapshot_type, "tradingDate": today, "slotTime": "EOD"},
+            {"_id": 1},
+        )
+    except Exception as exc:  # noqa: BLE001 — 门控查询失败按跳过处理（fail-visible 记原因）
+        return False, f"gate check failed: {exc}"
+    if not doc:
+        return False, f"no EOD doc for {today}（非交易日或数据未落）"
+    return True, ""
+
+
+def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """M3 盘面脉拍（advisory 步，2026-10-01）：子进程隔离跑当月至今相位快照。
+
+    - 门控=当日 EOD 情绪文档存在（is_trading_day 日历之外的更强校验：数据真落了才跑）；
+    - 子进程=独立 python 引擎（与备份链进程内存隔离，8.5GB 扫描事故纪律），超时 900s；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（研究证据链，非生产数据链）；
+    - 结果：data/reports/phase-monitor/pulse-<month>.json + Mongo phase_monitor（pulse:<month>），
+      前端相位页签"本月至今"卡直接读。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_pulse(db, today, dataset_id, snapshot_type)
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    month = today[:7]
+    out_path = _PULSE_OUT_DIR / f"pulse-{month}.json"
+    cmd = [
+        sys.executable, "-m", "backend.operations.phase_pulse",
+        "--month", month, "--end", today, "--out", str(out_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            timeout=_PULSE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "phase_pulse_timeout", "message": f"timeout {_PULSE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "phase_pulse_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    summary: dict[str, Any] = {}
+    try:
+        doc = json.loads(out_path.read_text(encoding="utf-8"))
+        ab = doc.get("ab") or {}
+        summary = {
+            "month": doc.get("month"),
+            "tradeCount": doc.get("tradeCount"),
+            "netReturnSaved": (ab.get("delta") or {}).get("netReturnSaved"),
+        }
+    except Exception as exc:  # noqa: BLE001 — 摘要解析失败不影响脉拍本体已落库
+        summary = {"parseError": str(exc)}
+    return {"ok": True, "month": month, "out": str(out_path), "summary": summary}
 
 
 def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any]:
@@ -109,14 +183,19 @@ def run_after_market_once(
             stopped_at = "mongodbBackup"
         elif not archive_ok:
             stopped_at = "snapshotArchiveR2"
+        # 盘面脉拍（M3 advisory 步）：EOD 刷新后数据齐，子进程隔离跑当月至今相位快照；
+        # 失败/跳过只记结果不翻转整体 ok，也不参与 stopped_at（研究证据链，非生产数据链）
+        today = datetime.now(_TZ).strftime("%Y-%m-%d")
+        pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
                 "snapshotArchiveR2": archive_result,
+                "phasePulse": pulse_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,
