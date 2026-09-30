@@ -48,6 +48,9 @@
                 <div class="hero-meta">
                   <span class="risk-chip" :class="`risk-${riskTone}`">{{ doc.riskLevel }}风险</span>
                   <span class="conf-chip">盘面置信 {{ doc.confidence }}%</span>
+                  <!-- 相位 chip（2026-09-30 分相位验收）：sentiment_2b 两档，口径源=phase_label_run CANDIDATES -->
+                  <span v-if="phaseChip" class="phase-chip" :class="`phase-chip-${phaseChip.kind}`"
+                    :title="phaseChip.title">{{ phaseChip.label }}</span>
                   <span v-if="pendingBadge" class="pending-chip"
                     :title="`盘中出现「${pendingBadge.rawStage}」迹象（自 ${pendingBadge.pendingSince} 起），连续 ${pendingBadge.confirmSlots} 槽成立后切换`">
                     情绪波动：现{{ pendingBadge.rawStage }}迹象
@@ -527,6 +530,90 @@
             </template>
           </section>
 
+          <!-- ⑧ 相位验收（2026-09-30 分相位验收体系前端可见化，设计 ranktrend-phase-frontend-design.md） -->
+          <section v-show="view === 'phase'" class="tab-pane">
+            <div class="phase-note">
+              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位（2026-09-30 用户裁决立项；
+              M1 判据为显著月不足的证据未全达状态，划分质量随月度监控持续检验）。
+            </div>
+
+            <div v-if="phaseLoading" class="state-block"><span class="spinner"></span>正在加载相位数据…</div>
+            <div v-else-if="phaseError" class="state-block error">
+              ⚠️ {{ phaseError }}
+              <button class="retry-btn" @click="loadPhaseData">重试</button>
+            </div>
+            <template v-else>
+              <div class="metrics-grid">
+                <div class="metric-card">
+                  <div class="metric-icon">🧭</div>
+                  <div class="metric-content">
+                    <div class="metric-label">北极星·进攻相位（情绪 ≥50）</div>
+                    <div class="metric-value" :class="phaseNorthstarText.toneClass">{{ phaseNorthstarText.value }}</div>
+                    <div class="metric-label">{{ phaseNorthstarText.detail }}</div>
+                  </div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-icon">🛡️</div>
+                  <div class="metric-content">
+                    <div class="metric-label">北极星·防守相位（情绪 &lt;50）</div>
+                    <div class="metric-value" :class="phaseDefenseText.toneClass">{{ phaseDefenseText.value }}</div>
+                    <div class="metric-label">{{ phaseDefenseText.detail }}</div>
+                  </div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-icon">🏆</div>
+                  <div class="metric-content">
+                    <div class="metric-label">验收走廊（连续 3 期达线）</div>
+                    <div class="metric-value">{{ phaseCorridor.text }}</div>
+                    <div class="metric-label">{{ phaseCorridor.detail }}</div>
+                  </div>
+                </div>
+                <div class="metric-card">
+                  <div class="metric-icon">📡</div>
+                  <div class="metric-content">
+                    <div class="metric-label">监督线（S+A 触发率 / 样本不足占比）</div>
+                    <div class="metric-value">{{ phaseSupervisionText.value }}</div>
+                    <div class="metric-label">{{ phaseSupervisionText.detail }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="phase-chart-card">
+                <div class="section-title">相位历史时间线（EOD 情绪分 × 相位着色）</div>
+                <div v-if="!phaseHistoryDegraded && phaseHistoryDays.length" ref="phaseChartEl"
+                  class="phase-chart"></div>
+                <div v-else class="state-block">
+                  {{ phaseHistoryDegraded ? `⚠️ 相位历史不可用：${phaseHistoryReason}` : '暂无相位历史数据' }}
+                </div>
+              </div>
+
+              <div class="phase-months">
+                <div class="section-title">月度监督序列</div>
+                <div v-if="!phaseMonths.length" class="state-block">暂无月度监控记录（次月起每月一条）</div>
+                <table v-else class="phase-months-table">
+                  <thead>
+                    <tr>
+                      <th>月份</th><th>情绪文档</th><th>标签</th><th>进攻相位</th><th>防守相位</th><th>S+A 触发率</th><th>样本不足占比</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="m in phaseMonthRows" :key="m.month">
+                      <td>{{ m.month }}</td>
+                      <td>{{ m.docs }}</td>
+                      <td>{{ m.labelsFresh ? '新鲜' : '需重打标' }}</td>
+                      <td :class="m.offense === true ? 'phase-pass' : m.offense === false ? 'phase-fail' : ''">
+                        {{ m.offense == null ? '--' : m.offense ? '达线' : '未达线' }}</td>
+                      <td :class="m.defense === true ? 'phase-pass' : m.defense === false ? 'phase-fail' : ''">
+                        {{ m.defense == null ? '--' : m.defense ? '达线' : '未达线' }}</td>
+                      <td>{{ m.saTriggerRate == null ? '人工补读' : (m.saTriggerRate * 100).toFixed(1) + '%' }}</td>
+                      <td>{{ m.insufficientShare == null ? '人工补读' : (m.insufficientShare * 100).toFixed(1) + '%' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </section>
+
         </template>
       </div>
 
@@ -560,6 +647,12 @@ import {
   jevScore,
 } from '@/services/hotlist/hotlistJevApi'
 import type { HotlistJevDayEntry, HotlistJevDoc, HotlistJevMissingDay } from '@/types/hotlistJev'
+import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
+import type {
+  PhaseHistoryDay,
+  PhaseMonthlyDoc,
+  PhaseNorthstarDoc,
+} from '@/types/phaseMonitor'
 import HotlistLimitStocksPanel from '@/components/panels/HotlistLimitStocksPanel.vue'
 import {
   HOT_LIST_STAGE_LABELS,
@@ -578,6 +671,7 @@ const TABS = [
   { key: 'compare', label: '历史对比', icon: '🗓️' },
   { key: 'track', label: '情绪趋势', icon: '📈' },
   { key: 'jev', label: 'jev 观察轨道', icon: '🤖' },
+  { key: 'phase', label: '相位验收', icon: '🎯' },
 ] as const
 type ViewKey = (typeof TABS)[number]['key']
 
@@ -2298,6 +2392,197 @@ onUnmounted(() => {
   }
 })
 
+// ── 相位验收（2026-09-30 前端可见化，设计 ranktrend-phase-frontend-design.md）──
+// 口径锚 sentiment_2b（offense ≥50 / defense <50），唯一口径源=phase_label_run CANDIDATES
+const PHASE_THRESHOLD = 50
+
+const phaseHistoryDays = ref<PhaseHistoryDay[]>([])
+const phaseHistoryDegraded = ref(false)
+const phaseHistoryReason = ref<string | null>(null)
+const phaseNorthstar = ref<PhaseNorthstarDoc | null>(null)
+const phaseNorthstarMissingReason = ref<string | null>(null)
+const phaseMonths = ref<PhaseMonthlyDoc[]>([])
+const phaseLoading = ref(false)
+const phaseLoadedOnce = ref(false)
+const phaseError = ref<string | null>(null)
+const phaseChartEl = ref<HTMLElement | null>(null)
+let phaseChartInstance: echarts.ECharts | null = null
+
+const phaseChip = computed(() => {
+  const score = emotionScoreValue.value
+  if (score == null) return { kind: 'unknown', label: '相位不可用', title: '情绪分缺失，相位无法判定（fail-visible）' }
+  return score >= PHASE_THRESHOLD
+    ? { kind: 'offense', label: '🔥 进攻相位', title: `连续情绪分 ${score} ≥ ${PHASE_THRESHOLD}（sentiment_2b 进攻相位）` }
+    : { kind: 'defense', label: '🛡️ 防守相位', title: `连续情绪分 ${score} < ${PHASE_THRESHOLD}（sentiment_2b 防守相位）` }
+})
+
+const phaseNorthstarText = computed(() => {
+  const entry = phaseNorthstar.value?.report?.northstar?.offense
+  if (!entry) return { value: '暂无', detail: '先跑 phase_northstar（幂等落库）', toneClass: '' }
+  const line = entry.line
+  const detail = line
+    ? `wrxpf ${entry.wrxpf ?? '--'}（线 0.78）· ${entry.trades ?? 0} 笔（线 60）· 段内回撤 ${(entry.maxDD! * 100).toFixed(2)}%`
+    : '读数缺项'
+  return { value: entry.pass ? '达线' : '未达线', detail, toneClass: entry.pass ? 'phase-tone-good' : 'phase-tone-bad' }
+})
+
+const phaseDefenseText = computed(() => {
+  const entry = phaseNorthstar.value?.report?.northstar?.defense
+  if (!entry) return { value: '暂无', detail: '先跑 phase_northstar（幂等落库）', toneClass: '' }
+  const dl = entry.defenseLine
+  const detail = dl
+    ? `回撤 ${dl.ddBetter ? '浅于' : '未优于'}满仓 · 净损 ${dl.lossBetter ? '优于' : '未优于'}满仓（二者其一即过）`
+    : '读数缺项'
+  return { value: entry.pass ? '过线' : '未过线', detail, toneClass: entry.pass ? 'phase-tone-good' : 'phase-tone-bad' }
+})
+
+const phaseCorridor = computed(() => {
+  // 展示逻辑：逐相位取月度序列尾部连续达线数（正式语义源=后端 corridor_state）
+  const streakOf = (key: 'offense' | 'defense') => {
+    let s = 0
+    for (let i = phaseMonths.value.length - 1; i >= 0; i--) {
+      const v = phaseMonths.value[i]?.report?.supervision?.northstar?.pass?.[key]
+      if (v === true) s += 1
+      else break
+    }
+    return s
+  }
+  const off = streakOf('offense')
+  const def = streakOf('defense')
+  const achieved = off >= 3 || def >= 3
+  return {
+    text: achieved ? '有相位达成 ✅' : '进行中',
+    detail: `进攻连续 ${off} 期 · 防守连续 ${def} 期（历史 ${phaseMonths.value.length} 期）`,
+  }
+})
+
+const phaseSupervisionText = computed(() => {
+  const latest = phaseMonths.value[phaseMonths.value.length - 1]?.report?.supervision
+  const sa = latest?.saTriggerRate?.value
+  const ins = latest?.insufficientShare?.value
+  if (sa == null && ins == null) {
+    return { value: '人工补读', detail: '首期无自动源（S+A 触发率看面板统计；样本不足占比看周期列）' }
+  }
+  return {
+    value: `${sa != null ? (sa * 100).toFixed(1) + '%' : '--'} / ${ins != null ? (ins * 100).toFixed(1) + '%' : '--'}`,
+    detail: 'S+A<3.5% 预警 · 样本不足>15% 预警',
+  }
+})
+
+interface PhaseMonthRow {
+  month: string
+  docs: string
+  labelsFresh: boolean
+  offense: boolean | null
+  defense: boolean | null
+  saTriggerRate: number | null
+  insufficientShare: number | null
+}
+
+const phaseMonthRows = computed<PhaseMonthRow[]>(() =>
+  phaseMonths.value.map((m) => ({
+    month: m.month,
+    docs: `${m.report.coverage?.sentimentDocs ?? '--'} / ${m.report.coverage?.tradingDays ?? '--'} 日`,
+    labelsFresh: m.report.coverage?.labelsFresh === true,
+    offense: m.report.supervision?.northstar?.pass.offense ?? null,
+    defense: m.report.supervision?.northstar?.pass.defense ?? null,
+    saTriggerRate: m.report.supervision?.saTriggerRate?.value ?? null,
+    insufficientShare: m.report.supervision?.insufficientShare?.value ?? null,
+  })),
+)
+
+async function loadPhaseData(): Promise<void> {
+  phaseLoading.value = true
+  phaseError.value = null
+  try {
+    const [history, board] = await Promise.all([fetchPhaseHistory(), fetchPhaseMonitorBoard()])
+    if (history.degraded) {
+      phaseHistoryDegraded.value = true
+      phaseHistoryReason.value = history.reason
+      phaseHistoryDays.value = []
+    } else {
+      phaseHistoryDegraded.value = false
+      phaseHistoryReason.value = null
+      phaseHistoryDays.value = history.days
+    }
+    if ('degraded' in board) {
+      phaseNorthstar.value = null
+      phaseNorthstarMissingReason.value = board.reason
+      phaseMonths.value = []
+    } else {
+      phaseNorthstar.value = board.northstar
+      phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
+      phaseMonths.value = board.months
+    }
+  } catch (err) {
+    phaseError.value = err instanceof Error ? err.message : '相位数据加载失败'
+  } finally {
+    phaseLoading.value = false
+  }
+}
+
+async function ensurePhaseData(): Promise<void> {
+  if (phaseLoadedOnce.value) return
+  phaseLoadedOnce.value = true
+  await loadPhaseData()
+}
+
+function renderPhaseChart(): void {
+  if (!phaseChartEl.value || phaseHistoryDegraded.value || !phaseHistoryDays.value.length) return
+  if (!phaseChartInstance) {
+    phaseChartInstance = echarts.init(phaseChartEl.value)
+  }
+  const days = phaseHistoryDays.value
+  // 相位着色段：相邻同 phase 日合并为 markArea（offense 红/defense 绿，unknown 不着色）
+  const areas: Array<[{ xAxis: string }, { xAxis: string }]> = []
+  let startIdx = -1
+  for (let i = 0; i <= days.length; i++) {
+    const d = days[i]
+    const colored = !!d && (d.phase === 'offense' || d.phase === 'defense')
+    if (startIdx >= 0 && (!colored || d!.phase !== days[startIdx]!.phase)) {
+      areas.push([{ xAxis: days[startIdx]!.tradingDate }, { xAxis: days[i - 1]!.tradingDate }])
+      startIdx = -1
+    }
+    if (colored && startIdx < 0) startIdx = i
+  }
+  phaseChartInstance.setOption({
+    grid: { left: 48, right: 16, top: 24, bottom: 56 },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: Array<{ name: string; value: number | null; axisValue: string }>) => {
+        const p = params[0]
+        const day = days.find((d) => d.tradingDate === p.axisValue)
+        const phaseName = day?.phase === 'offense' ? '进攻' : day?.phase === 'defense' ? '防守' : '不可用'
+        return `${p.axisValue}<br/>情绪分 ${p.value ?? '--'}<br/>相位：${phaseName}`
+      },
+    },
+    xAxis: { type: 'category', data: days.map((d) => d.tradingDate), axisLabel: { rotate: 45, fontSize: 9 } },
+    yAxis: { type: 'value', min: 0, max: 100, name: 'EOD 情绪分' },
+    series: [
+      {
+        name: 'EOD 情绪分',
+        type: 'line',
+        data: days.map((d) => d.eodScore),
+        connectNulls: false,
+        symbol: 'none',
+        lineStyle: { width: 1.5, color: '#8b7cf6' },
+        markLine: {
+          symbol: 'none',
+          silent: true,
+          data: [{ yAxis: PHASE_THRESHOLD, lineStyle: { color: '#d97706', type: 'dashed' }, label: { formatter: '相位线 50' } }],
+        },
+        markArea: {
+          silent: true,
+          data: areas.map(([a, b]) => [
+            { xAxis: a.xAxis, itemStyle: { color: 'rgba(239,68,68,0.08)' } },
+            { xAxis: b.xAxis, itemStyle: { color: 'rgba(239,68,68,0.08)' } },
+          ]),
+        },
+      },
+    ],
+  })
+}
+
 // 页签进入或数据刷新时渲染（v-show 切换后需等 nextTick 拿到可见容器尺寸）
 watch(view, (v) => {
   if (v === 'track' && trendPoints.value.length) {
@@ -2311,6 +2596,9 @@ watch(view, (v) => {
   }
   if (v === 'structure' && stagePieData.value.length) {
     nextTick(() => renderStageChart())
+  }
+  if (v === 'phase') {
+    void ensurePhaseData().then(() => nextTick(() => renderPhaseChart()))
   }
 })
 watch(trendPoints, () => {
@@ -3398,4 +3686,55 @@ watch(view, (v) => {
   .hotlist-emotion-panel { width: calc(100vw - 16px); }
   .turnover-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── 相位验收（第 8 页签 + overview chip，2026-09-30）── */
+.phase-chip {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: default;
+}
+.phase-chip-offense { background: rgba(239, 68, 68, 0.15); color: #ff6b6b; }
+.phase-chip-defense { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+.phase-chip-unknown { background: rgba(150, 150, 150, 0.15); color: #999; }
+
+.phase-note {
+  font-size: 12px;
+  color: #8a8f98;
+  background: rgba(139, 124, 246, 0.08);
+  border-left: 3px solid #8b7cf6;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 12px 0 8px;
+  color: #c9cdd4;
+}
+
+.phase-chart-card { margin-top: 8px; }
+.phase-chart { width: 100%; height: 320px; }
+
+.phase-months-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.phase-months-table th,
+.phase-months-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.phase-months-table th { color: #8a8f98; font-weight: 500; }
+.phase-pass { color: #ff6b6b; font-weight: 600; }
+.phase-fail { color: #8a8f98; }
+
+.phase-tone-good { color: #ff6b6b; }
+.phase-tone-bad { color: #8a8f98; }
 </style>
