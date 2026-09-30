@@ -18,7 +18,7 @@
 |---|---|
 | 帧全窗 | **1071 帧 / 113 交易日**（首帧 2026-04-15；文件名 "20260327" 为数据集窗口参数非实际首帧）。其中 **52 帧为 daily 回填合成**（captureMode=synthesized，donor 元数据在 marketContext.metadata.backfill）——合成帧的 emotionValue/price 与真实槽可比性在 M1 报告披露 |
 | 情绪连续分 | Mongo `hotlist_sentiment`，`{datasetId:'dragonboard_live', snapshotType:'half_hour'}`，字段 `emotionScore.score`（0-100，dict 内层），**1184 文档/113 日全覆盖（04-15 起，与帧日集完全重合，有帧无情绪日=∅）**；EOD 文档同带 score。注：1184 为 2026-09-30 时点数（AI_COLLABORATION 记 1182 为重算时点，引用注明时点，M8） |
-| 帧级市场情绪 | frames 自带 `marketStats.emotionValue`（小数），全窗可用；无 slotTime="EOD" 帧（实测 0） |
+| 帧级市场情绪 | frames 自带 `marketContext.marketStats.emotionValue`（小数；**嵌套两层**，顶层无 marketStats——Task 5 实跑实测 205/1071 帧有效，其余为 None→unknown，breadth_v1 弱候选如实暴露）；无 slotTime="EOD" 帧（实测 0） |
 | 交易层 join 键 | `t6-runs-formal/1-summary.json`：**roundTripTrades=54 笔（与 tradeCount 口径一致）**，带 entryTradingDate/entryTime(ms)/regime/netReturn（实测字段齐）；`trades` 数组 65/61 行为含分片记录的另一口径，不消费 |
 | 帧标识 | 帧 dict 顶层 `tradingDate` + `slotTime`（存在非标槽如 09:03/14:31——h1/h8 按 +1/+8 帧序非严格日间隔，报告披露） |
 
@@ -360,7 +360,7 @@ git commit -m "feat(ranktrend): M1 相位标签器——双候选三档+平票�
 候选定义（v1，M1 检验对象）：
   sentiment_v1 : emotionScore.score，hi=55 / lo=40（三档）
   sentiment_2b : emotionScore.score 两档，hi=50 / lo=50（offense≥50）
-  breadth_v1   : marketStats.emotionValue，hi=0.005 / lo=-0.005
+  breadth_v1   : marketContext.marketStats.emotionValue，hi=0.005 / lo=-0.005
 """
 from __future__ import annotations
 
@@ -443,7 +443,7 @@ def main() -> int:
             if source == "sentiment":
                 phase = phase_from_sentiment_score(frame_scores.get((day, slot)), **thr)
             else:
-                mv = (fr.get("marketStats") or {}).get("emotionValue")
+                mv = ((fr.get("marketContext") or {}).get("marketStats") or {}).get("emotionValue")
                 phase = phase_from_emotion_value(mv if isinstance(mv, (int, float)) else None, **thr)
             labeled.append({"tradingDate": day, "slotTime": slot, "phase": phase})
         daily = daily_phase_from_frames(labeled)
