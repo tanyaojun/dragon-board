@@ -137,6 +137,22 @@ def test_collect_slot_evidence_degrades_not_fabricates():
     assert ev["lifecycleMissing"] == 1
 
 
+def test_collect_slot_evidence_change_fallback_for_legacy_rows():
+    """2026-07-03 前导入的历史行无 pctChange 只有 change（校准重放 T1.5 实证）：
+    字段回退后涨跌分布/TRIN 可算，回退行数 fail-visible 进 degradedSources。"""
+    rows = [
+        {"code": "A", "change": 9.98, "price": 9.66, "limitUpPrice": 9.66, "turnover": 1.2e8},
+        {"code": "B", "change": -2.0, "turnover": 3.0e7},
+        {"code": "C", "change": None},  # 两字段都缺 → pctMissing，不伪造
+    ]
+    ev = collect_slot_evidence(frame=_v3_frame(), rows=rows, yesterday_rows=[],
+                               analysis_by_code={}, slot_time="10:00")
+    breadth = ev["breadth"]
+    assert breadth["limitUp"] == 1 and breadth["up0"] == 0 and breadth["down0"] == 1
+    assert breadth["pctMissing"] == 1
+    assert "pctChange 缺失 2 行（回退 change）" in " ".join(ev["quality"]["degradedSources"])
+
+
 def test_collect_slot_evidence_trin_one_sided_is_none():
     rows = [{"code": "A", "pctChange": 5.0, "change": 5.0, "turnover": 1.0e7}]
     ev = collect_slot_evidence(frame=_v3_frame(), rows=rows, yesterday_rows=[],

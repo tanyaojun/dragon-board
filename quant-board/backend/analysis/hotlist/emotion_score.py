@@ -1,49 +1,50 @@
 # -*- coding: utf-8 -*-
-"""规则情绪连续评分核心（路线 B，emotion-score-design.md v2）。
+"""规则情绪连续评分核心（路线 B，emotion-score-design.md v3）。
 
 设计原则（用户裁决 2026-09-30）：
 - 分数先行：主输出 = 连续情绪分 score（0-100），档位只是分数映射显示层——映射可调，结构不变；
-- 分段边界 = 1066 槽 half_hour 历史分布实测分位校准（2026-09-30，出处注于 _CALIB），
+- 分段边界 = 历史分布实测分位校准（jev 聚合口径 T1.5 重放 2026-09-30，出处注于 _CALIB），
   不再有无出处的 magic number；
 - 每维贡献可分解：输出附带各维子分明细，缺失维度跳过并权重归一化（fail-visible）；
 - 零规则档位依赖：消费 collect_slot_evidence 聚合证据（与 jev 轨道同源），不读 resolve_stage 输出。
 
-档位映射为 B1 设计值（透明可调）；分数域确认复用 stage_confirm.confirm_stage（档位滞回天然防抖）。
+档位映射为设计值 + score 实测分布核对（T1.5：五档历史全部可达）；分数域确认复用
+stage_confirm.confirm_stage（档位滞回天然防抖）。高潮压制条款已按审计 B3 裁决删除
+（riskRowsPct 历史 P10=84.7 系统性高位，保留则高潮档二次不可达；score 本身已含风险两维）。
 """
 from __future__ import annotations
 
-# ── 分段校准表 ──
-# 来源：1066 槽 half_hour 历史分布实测分位（2026-09-30 校准，详见
-# docs/superpowers/specs/2026-09-30-emotion-score-design.md §3.1）。
+# ── 分段校准表（T1.5 jev 口径重放，2026-09-30；详见
+# docs/superpowers/specs/2026-09-30-emotion-score-calibration.md）──
 # 形状：[(raw 边界, score), ...] 升序，线性插值；每条边界可 diff、可审计。
+# 锚定模式：主维 P10→10 / P25→25 / P50→50 / P75→75 / P95→95（反向维镜像）。
 _CALIB = {
-    # 广度：上涨行占比（P10=0.385 / P25=0.470 / P50=0.561 / P75=0.662 / P95=0.800）
-    "upRatio": [(0.0, 0), (0.385, 10), (0.470, 25), (0.561, 50), (0.662, 75), (0.800, 95), (1.0, 100)],
-    # 攻击占比（点火+扩散+强资确认）/total（P50=0.037 / P75=0.082 / P90=0.130 / P95=0.171 / P99=0.254）
-    "attackShare": [(0.0, 5), (0.037, 30), (0.082, 50), (0.130, 70), (0.171, 85), (0.254, 95), (1.0, 100)],
-    # 风险占比（反向；P10=0.826 / P50=0.925 / P90=0.978——系统性高位，高分只在显著低于常态时给）
-    "riskShare": [(0.0, 100), (0.60, 95), (0.826, 90), (0.925, 50), (0.978, 10), (1.0, 5)],
-    # 热榜 TRIN（反向；P5=0.505 / P25=0.696 / P50=0.963 / P75=1.309 / P90=1.682）
-    "trin": [(0.0, 95), (0.505, 90), (0.696, 75), (0.963, 50), (1.309, 25), (1.682, 10), (4.0, 0)],
-    # 昨日涨停承接正收益率（P10=0.438 / P50=0.643 / P90=0.848）
-    "yhPositive": [(0.0, 5), (0.438, 10), (0.643, 50), (0.848, 90), (1.0, 100)],
-    # 量能同期对比（百分点；节后积累分布后可再校准，当前为设计值）
+    # 广度：上涨行占比（pct>=0 含平盘，jev 口径；1067 槽实测，含 pctChange→change 回退）。
+    # 与 v2 规则链口径（change>0）的差异 = 平盘行归属（audit B1）。
+    "upRatio": [(0.0, 0), (0.4334, 10), (0.5062, 25), (0.5921, 50), (0.6988, 75), (0.8437, 95), (1.0, 100)],
+    # 攻击占比（点火+扩散+强资确认）/total（1067 槽实测；join 率≈100%，与规则口径收敛）
+    "attackShare": [(0.0, 0), (0.0375, 30), (0.0826, 50), (0.1302, 70), (0.1762, 85), (0.2613, 95), (1.0, 100)],
+    # 风险占比（反向；1067 槽实测；(0.60,95) 为低风险过渡设计点，历史 min=0.578）
+    "riskShare": [(0.0, 100), (0.60, 95), (0.8253, 90), (0.9254, 50), (0.9777, 10), (1.0, 0)],
+    # 热榜 TRIN（反向；1052 槽实测）
+    "trin": [(0.0, 95), (0.5056, 90), (0.6967, 75), (0.9635, 50), (1.3083, 25), (1.6815, 10), (4.0, 0)],
+    # 昨日涨停承接正收益率（1066 槽实测）
+    "yhPositive": [(0.0, 5), (0.4375, 10), (0.6429, 50), (0.8478, 90), (1.0, 100)],
+    # 量能同期对比（百分点；历史帧无 totalAmount，设计值待积累 ≥20 交易日后校准）
     "amountVsSame": [(-80, 0), (-30, 25), (0, 50), (30, 80), (80, 100)],
-    # 风险预警行占比（反向，占可判定行 %；首日分布后可再校准，当前为设计值）
-    "riskRowsPct": [(0, 95), (40, 70), (60, 50), (80, 20), (100, 5)],
-    # 涨停结构（设计值：家数/高度/炸板率归一合成）
-    "ztCount": [(0, 0), (20, 30), (45, 60), (80, 90), (150, 100)],
-    "maxBoard": [(0, 0), (2, 25), (4, 50), (6, 75), (9, 100)],
-    "zhabanRate": [(0, 100), (15, 75), (30, 45), (50, 15), (100, 0)],
+    # 风险预警行占比（反向；1067 槽实测）
+    "riskRowsPct": [(0, 100), (84.68, 90), (93.98, 50), (98.014, 10), (100, 0)],
+    # 涨停结构（198 真信号槽实测，2026-07-30~09-30 覆盖 18.6% 样本；另 349 槽 limitSummary
+    # 接口失败期假 0 已剔除——样本局限，待积累后重校准）
+    "ztCount": [(0, 0), (9.7, 10), (30, 25), (42, 50), (60, 75), (102.15, 95), (150, 100)],
+    "maxBoard": [(0, 0), (3, 10), (4, 25), (5, 50), (6, 75), (8.15, 95), (10, 100)],
+    "zhabanRate": [(0, 100), (11.49, 90), (16.75, 75), (25.39, 50), (33.89, 25), (43.2, 5), (100, 0)],
 }
 
 _WEIGHTS = {
     "upRatio": 1, "attackShare": 1, "riskShare": 1, "trin": 1,
     "yhPositive": 1, "limitStruct": 1, "amountVsSame": 1, "riskRowsPct": 1,
 }
-
-# 风险预警行占比超过该值时，压制高潮候选为发酵（score ≥75 场景）
-_RISK_ROWS_CLIMAX_SUPPRESS = 70.0
 
 
 def _interp(points: list[tuple[float, float]], value: float) -> float:
@@ -71,10 +72,11 @@ def _sub(name: str, raw, dims: dict, skipped: list) -> float | None:
     return sub
 
 
-def compute_emotion_score(evidence: dict) -> dict:
+def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
     """连续情绪评分（纯函数）。
 
-    输入 = collect_slot_evidence 聚合证据（与 jev 轨道同源，零规则档位依赖）。
+    输入 = collect_slot_evidence 聚合证据（与 jev 轨道同源，零规则档位依赖）；
+    slope = 当日上一有效槽 score 差（接线层提供，T2 起），仅影响低分段退潮/冰点区分。
     输出 {score, dims, skippedDims, stageCandidate}；缺维跳过 + 权重归一化。
     """
     dims: dict = {}
@@ -114,7 +116,7 @@ def compute_emotion_score(evidence: dict) -> dict:
     # 7. 量能同期
     amount_pct = amount.get("vsSamePct")
     # 8. 风险预警行占比（反向）
-    risk_rows_pct = (risk_rows_pct_ := row_flags.get("risk") or 0) / judgeable * 100 if judgeable else None
+    risk_rows_pct = (row_flags.get("risk") or 0) / judgeable * 100 if judgeable else None
 
     subs: dict[str, float | None] = {
         "upRatio": _sub("upRatio", up_ratio, dims, skipped),
@@ -142,27 +144,20 @@ def compute_emotion_score(evidence: dict) -> dict:
         return {"score": None, "dims": dims, "skippedDims": skipped,
                 "stageCandidate": None}
     score = sum(sub for _, sub in valid) / len(valid)
-    risk_rows_pct_for_map = (
-        risk_rows_pct if risk_rows_pct is not None
-        else (risk_share * 100 if risk_share is not None else None))
-    stage = map_stage(score, risk_rows_pct_for_map)
     return {
         "score": round(score, 1),
         "dims": dims,
         "skippedDims": skipped,
-        "stageCandidate": stage,
+        "stageCandidate": map_stage(score, slope),
     }
 
 
-def map_stage(score: float, risk_rows_pct: float | None = None,
-              slope: float | None = None) -> str:
-    """分数 → 五档映射（B1 设计值，透明可调；spec §3.3）。
+def map_stage(score: float, slope: float | None = None) -> str:
+    """分数 → 五档映射（边界设计值经 T1.5 score 实测分布核对；spec v3 §3.3）。
 
-    score 主导 + 风险压制 + 低分斜率修正（区分退潮/冰点方向语义）。
+    score 主导 + 低分斜率修正（区分退潮/冰点方向语义）；高潮压制条款已按审计 B3 删除。
     """
     if score >= 75:
-        if risk_rows_pct is not None and risk_rows_pct > _RISK_ROWS_CLIMAX_SUPPRESS:
-            return "发酵"  # 风险行占比高位压制高潮候选
         return "高潮"
     if score >= 60:
         return "发酵"

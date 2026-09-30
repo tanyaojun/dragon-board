@@ -148,8 +148,14 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     # TRIN = (涨家/跌家) / (涨向额/跌向额)，任一分母不可算（含单边）保持 None，不发明数值。
     trin_up_count = trin_down_count = 0
     trin_up_turnover = trin_down_turnover = 0.0
+    pct_fallback_rows = 0
     for row in rows:
         pct = row.get("pctChange")
+        if not _finite(pct) and _finite(row.get("change")):
+            # 2026-07-03 前导入的历史行只有 change（校准重放 T1.5 实证）：字段回退，
+            # 数值口径与 pctChange 一致（全库不匹配率 0.7%）；回退行数 fail-visible。
+            pct = row.get("change")
+            pct_fallback_rows += 1
         price, lup = row.get("price"), row.get("limitUpPrice")
         is_zt = (_finite(price) and _finite(lup) and float(price) >= float(lup) * _ZT_EPS)
         row_turnover = row.get("turnover")
@@ -186,6 +192,8 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
             fund["zljeMissing"] += 1
     if fund_seen:
         fund["zljeSum"] = fund_total
+    if pct_fallback_rows:
+        degraded.append(f"pctChange 缺失 {pct_fallback_rows} 行（回退 change）")
     breadth["trin"] = _calc_trin(trin_up_count, trin_down_count, trin_up_turnover, trin_down_turnover)
     breadth["upTurnover"] = round(trin_up_turnover, 2) if trin_up_turnover else None
     breadth["downTurnover"] = round(trin_down_turnover, 2) if trin_down_turnover else None
