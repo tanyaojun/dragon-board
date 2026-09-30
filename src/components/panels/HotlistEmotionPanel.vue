@@ -2531,7 +2531,17 @@ function renderPhaseChart(): void {
   if (!phaseChartInstance) {
     phaseChartInstance = echarts.init(phaseChartEl.value)
   }
-  const days = phaseHistoryDays.value
+  // 时间线窗口：只保留近 3 个月（2026-09-30 用户裁决；全量 113 日仍在 phase-history 读口与标签产物里）
+  const PHASE_CHART_MONTHS = 3
+  const allDays = phaseHistoryDays.value
+  const latest = allDays.length ? allDays[allDays.length - 1]!.tradingDate : ''
+  let cutoff = ''
+  if (latest) {
+    const d0 = new Date(`${latest}T00:00:00`)
+    d0.setMonth(d0.getMonth() - PHASE_CHART_MONTHS)
+    cutoff = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`
+  }
+  const days = cutoff ? allDays.filter((d) => d.tradingDate >= cutoff) : allDays
   // 相位着色段：相邻同 phase 日合并为 markArea（offense 红/defense 绿，unknown 不着色）
   const areas: Array<[{ xAxis: string }, { xAxis: string }]> = []
   let startIdx = -1
