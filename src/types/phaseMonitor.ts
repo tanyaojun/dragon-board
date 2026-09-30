@@ -92,6 +92,15 @@ export interface PhasePulseDoc {
     fullWindow?: { maxDD: number | null; segReturn: number | null }
     northstar?: Record<string, PhaseNorthstarEntry>
     meta?: { gate?: string; generatedAt?: string }
+    bands?: Record<string, { trades: number; sumNetReturn: number; avgPerTrade: number | null }>
+    ab?: {
+      baseline?: { tradeCount: number; sumNetReturn: number }
+      bandAvoided?: { tradeCount: number; sumNetReturn: number }
+      delta?: { tradesRemoved: number; netReturnSaved: number }
+      arm?: string
+      degraded?: boolean
+      reason?: string
+    }
   }
   updatedAt: string
 }

@@ -558,6 +558,7 @@
                     <div class="metric-label">本月至今脉拍（默认栈 gate off）</div>
                     <div class="metric-value">{{ phasePulseText.value }}</div>
                     <div class="metric-label">{{ phasePulseText.detail }}</div>
+                    <div class="metric-label">{{ phasePulseText.detail2 }}</div>
                   </div>
                 </div>
               </div>
@@ -2402,14 +2403,23 @@ const todayPhaseText = computed(() => {
 
 const phasePulseText = computed(() => {
   const p = phasePulse.value?.report
-  if (!p) return { value: '未跑', detail: 'phase_pulse --month 当前月（随时手动，挂账即数据）' }
+  if (!p) return { value: '未跑', detail: 'phase_pulse --month 当前月（随时手动，挂账即数据）', detail2: '' }
   const off = p.byPhase?.offense ?? undefined
   const def = p.byPhase?.defense ?? undefined
   const fmt = (b?: { trades?: number; wrxpf?: number | null; sumNetReturn?: number | null }) =>
     `${b?.trades ?? 0} 笔 · wrxpf ${b?.wrxpf ?? '--'} · ${(100 * (b?.sumNetReturn ?? 0)).toFixed(1)}%`
+  const ab = p.ab && !p.ab.degraded ? p.ab : null
+  const abLine = ab
+    ? `回避弱势带后：${ab.bandAvoided?.tradeCount ?? '--'} 笔 ${((ab.bandAvoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((ab.delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
+    : 'A/B 臂未跑或失败'
+  const bands = p.bands ?? {}
+  const bandLine = Object.entries(bands)
+    .map(([tag, b]) => `${tag} ${b.trades} 笔${b.avgPerTrade != null ? ` ${((b.avgPerTrade) * 100).toFixed(1)}%/笔` : ''}`)
+    .join('｜')
   return {
     value: `${p.month}｜${p.tradeCount ?? 0} 笔`,
-    detail: `进攻 ${fmt(off)}｜防守 ${fmt(def)}（gate off 基线，方向参考）`,
+    detail: `进攻 ${fmt(off)}｜防守 ${fmt(def)}｜${abLine}`,
+    detail2: `分带（前日分口径）：${bandLine || '无分带数据'}`,
   }
 })
 
