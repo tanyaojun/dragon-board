@@ -131,6 +131,32 @@ C1-C5（PASS_CANDIDATE）→ saEx 盲区检查 → Track 1 交易复核终判（
 - 观察池候选登记必须绑定锚代际、触发条件与对照基线；月度复验按批次方案先行
   （范例 `ranktrend-202610-rerun-plan.md`），不再单点开批。
 
+### 2.5 `a-stock-data`（外部上游 skill，领域取数参考）
+
+项目级正文：`skills/a-stock-data/SKILL.md`（V3.10.0，2026-09-25 引入；上游
+https://github.com/simonlin1212/a-stock-data ，10.4k 星，十五层 87 端点 34 来源，
+内嵌全部可运行代码，自包含零外部文件）。
+
+A 股及相关市场**写代码实际取数**时的统一入口：行情/K线/逐笔（腾讯、通达信官网
+盘后包、百度）、研报、信号（热点/北向/龙虎榜/板块资金流）、资金面（融资融券/
+大宗/股东户数/个股资金流 push2）、新闻、财务三表/F10、公告（巨潮）、打板、
+ETF 期权、舆情互动、筹码、复权因子、宏观利率、指数成分/权重/估值、期货期权、
+事件驱动、可转债等。优先腾讯/交易所官方等不封 IP 源；东财系接口全部经其
+`em_get()` 串行限流（最小间隔 + 随机抖动 + Keep-Alive 复用会话 + UA/Referer），
+主源被封查其「备用源速查 & 降级策略」章节降级。
+
+使用要求：
+
+- 仅在需要调用数据接口取数时加载；概念解释、投资观点讨论等无需取数的话题不加载；
+- **东财风控纪律以本项目的实测定稿为准**：`quant-board/docs/eastmoney-fund-source.md`
+  （社区实测阈值、封禁案例、本项目 eastmoney_fund_provider 800 只/批 x 60s 批间距 x
+  30 分钟轮间隔 x 1800s 断连冷却的定稿参数与论证）。该 skill 的 `EM_MIN_INTERVAL=1.0s`
+  是 AI agent 按需查几只票的交互场景默认；**本项目服务端批量任务（如题材全市场
+  资金刷新）必须用分钟级批间距，禁止照搬 1s 级间隔连发**；
+- 升级上游版本时先对比 CHANGELOG 与本项目已沉淀的风控结论，冲突时以本项目实测为准；
+- 它是外部上游参考，不承载本项目业务逻辑；本项目数据链路的合同、质量门禁与
+  归档边界仍以 `AGENTS.md` 与 fail-visible-data-pipelines 为准。
+
 ## 3. 设计和范围控制 Skills
 
 ### 3.1 `superpowers:brainstorming`
@@ -416,6 +442,7 @@ single-source-of-truth
 systematic-debugging（已有异常时）或 brainstorming（新设计时）
 test-driven-development
 verification-before-completion
+a-stock-data（需要写代码实际调数据接口取数时）
 ```
 
 ### 明确 bug 或测试失败
