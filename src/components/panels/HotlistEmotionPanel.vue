@@ -2445,36 +2445,44 @@ function renderPhasePulseChart(): void {
   const cats = pulseBands.value.map((b) => b.tag)
   const WEAK = '弱势40-60'
   phasePulseChart.setOption({
-    grid: { left: 48, right: 56, top: 40, bottom: 28 },
-    legend: { top: 0, textStyle: { fontSize: 11 } },
+    grid: { left: 48, right: 24, top: 32, bottom: 28 },
     tooltip: {
       trigger: 'axis',
-      formatter: (params: Array<{ axisValue: string; value: number | null; seriesName: string }>) => {
+      formatter: (params: Array<{ axisValue: string }>) => {
         const band = pulseBands.value.find((b) => b.tag === params[0]?.axisValue)
         if (!band) return params[0]?.axisValue ?? ''
         return `${band.tag}<br/>笔数 ${band.trades}｜每笔 ${band.avgPct ?? '--'}%｜累计 ${band.sumPct.toFixed(1)}%`
       },
     },
-    xAxis: { type: 'category', data: cats, axisLabel: { fontSize: 11 } },
-    yAxis: [
-      { type: 'value', name: '笔数', minInterval: 1 },
-      { type: 'value', name: '每笔 %', position: 'right' },
-    ],
+    xAxis: { type: 'category', data: cats, axisLabel: { fontSize: 12 } },
+    yAxis: {
+      type: 'value',
+      name: '每笔收益 %',
+      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
+    },
     series: [
       {
-        name: '笔数',
+        name: '每笔均收益',
         type: 'bar',
-        data: pulseBands.value.map((b) => b.trades),
-        barWidth: 26,
-        itemStyle: { color: '#8b7cf6', borderRadius: [3, 3, 0, 0] },
-      },
-      {
-        name: '每笔收益%',
-        type: 'bar',
-        yAxisIndex: 1,
         data: pulseBands.value.map((b) => b.avgPct),
-        barWidth: 26,
-        itemStyle: { color: '#f59e0b', borderRadius: [3, 3, 0, 0] },
+        barWidth: 44,
+        // 中文盘面惯例：红涨绿跌，按符号着色
+        itemStyle: {
+          borderRadius: 3,
+          color: (p: { value: number | null }) => ((p.value ?? 0) >= 0 ? '#ff4757' : '#2ed573'),
+        },
+        label: {
+          show: true,
+          position: 'top',
+          fontSize: 11,
+          color: '#c9cdd4',
+          formatter: (p: { dataIndex: number }) => `${pulseBands.value[p.dataIndex]?.trades ?? 0} 笔`,
+        },
+        markLine: {
+          symbol: 'none',
+          silent: true,
+          data: [{ yAxis: 0, lineStyle: { color: 'rgba(255,255,255,0.25)' } }],
+        },
         markArea: {
           silent: true,
           data: [[{ xAxis: WEAK, itemStyle: { color: 'rgba(217,119,6,0.10)' } }, { xAxis: WEAK }]],
