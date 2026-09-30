@@ -8,7 +8,8 @@
    parts，每槽 + 收尾 EOD；legacyCascadeStage 一并重算写入——回退可执行前提，审计 S7）；
 3. 新旧逐槽对照：一致率、5×5 迁移矩阵、分歧分布、每日一致率（典型分歧日定位）。
 
-只写 hotlist_sentiment（重算本义）；dry-run 全程不写。旧档位快照与 diff 明细随 --json 落盘。
+只写 hotlist_sentiment（重算本义）；dry-run 全程不写且 diff 无意义（summary.diffMeaningful=false）。
+--json 落盘 summary 与新旧分歧明细（differingDocs，含 newStage/legacyCascadeStage/score）。
 用法：
   cd quant-board && .venv/Scripts/python.exe -m backend.operations.emotion_score_recompute --dry-run
   cd quant-board && .venv/Scripts/python.exe -m backend.operations.emotion_score_recompute \
@@ -21,8 +22,6 @@ import json
 import sys
 from collections import Counter
 from typing import Any
-
-_STAGES = ("冰点", "启动", "发酵", "高潮", "退潮")
 
 
 def _snapshot_old_stages(db: Any, dataset_id: str, snapshot_type: str) -> dict[str, dict[str, Any]]:
@@ -65,11 +64,12 @@ def _snapshot_new_stages(db: Any, dataset_id: str, snapshot_type: str) -> dict[s
     return out
 
 
-def summarize(old: dict[str, dict], new: dict[str, dict]) -> dict[str, Any]:
+def summarize(old: dict[str, dict], new: dict[str, dict], *, diff_meaningful: bool = True) -> dict[str, Any]:
     common = [key for key in new if key in old]
+    old_only = sorted(set(old) - set(new))
+    new_only = sorted(set(new) - set(old))
     slot_keys = [key for key in common if old[key]["slotTime"] != "EOD"]
     eod_keys = [key for key in common if old[key]["slotTime"] == "EOD"]
-
     def _pair_stats(keys: list[str]) -> dict[str, Any]:
         same = sum(1 for key in keys if old[key]["stage"] == new[key]["stage"])
         raw_same = sum(
@@ -96,6 +96,11 @@ def summarize(old: dict[str, dict], new: dict[str, dict]) -> dict[str, Any]:
     new_stage_counts = Counter(new[key]["stage"] for key in slot_keys)
     old_stage_counts = Counter(old[key]["stage"] for key in slot_keys)
     return {
+        # dry-run 不写库 → new 快照即旧文档，diff 恒平凡一致；消费方须看此标记
+        "diffMeaningful": diff_meaningful,
+        # 覆盖差异计数（fail-visible）：slotTime 旧值迁移态会造成 old_only 孤儿残留
+        "oldOnlyDocs": len(old_only),
+        "newOnlyDocs": len(new_only),
         "slotDocs": _pair_stats(slot_keys),
         "eodDocs": _pair_stats(eod_keys),
         "oldStageCounts": dict(old_stage_counts.most_common()),
@@ -113,7 +118,7 @@ def main() -> int:
     parser.add_argument("--snapshot-type", default="half_hour")
     parser.add_argument("--start-date", default=None)
     parser.add_argument("--end-date", default=None)
-    parser.add_argument("--dry-run", action="store_true", help="只重算不写库（仍产出 diff）")
+    parser.add_argument("--dry-run", action="store_true", help="只重算不写库；不产出有效 diff（new 快照=旧文档）")
     parser.add_argument("--json", default=None, help="diff 明细 JSON 输出路径")
     args = parser.parse_args()
 
@@ -136,11 +141,18 @@ def main() -> int:
 
     written_total = 0
     slot_error_total = 0
+    date_errors: list[dict[str, Any]] = []
     for index, date in enumerate(dates):
-        result = service.run_for_date_slots(
-            dataset_id=args.dataset, snapshot_type=args.snapshot_type, trading_date=date,
-            dry_run=args.dry_run,
-        )
+        # 单日失败累积继续跑（fail-visible）：中止会让半库新半库旧，且原始旧基线只在本轮内存中
+        try:
+            result = service.run_for_date_slots(
+                dataset_id=args.dataset, snapshot_type=args.snapshot_type, trading_date=date,
+                dry_run=args.dry_run,
+            )
+        except Exception as exc:
+            date_errors.append({"tradingDate": date, "reason": f"{type(exc).__name__}:{exc}"})
+            print(f"[recompute] {index + 1}/{len(dates)} {date} ERROR: {exc}", file=sys.stderr)
+            continue
         written_total += int(result.get("written") or 0) + (1 if result.get("eodWritten") else 0)
         slot_error_total += len(result.get("slotErrors") or [])
         if result.get("slotErrors"):
@@ -149,12 +161,14 @@ def main() -> int:
 
     print(f"[recompute] snapshot new stages ...", file=sys.stderr)
     new = _snapshot_new_stages(db, args.dataset, args.snapshot_type)
-    summary = summarize(old, new)
+    # dry-run 不写库 → new ≡ old，diff 无意义（显式标注防误读）
+    summary = summarize(old, new, diff_meaningful=not args.dry_run)
     summary["meta"] = {
         "dryRun": args.dry_run,
         "dates": len(dates),
         "writtenTotal": written_total,
         "slotErrorTotal": slot_error_total,
+        "dateErrors": date_errors,
     }
     if args.json:
         details = [

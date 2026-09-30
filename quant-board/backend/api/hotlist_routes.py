@@ -29,7 +29,9 @@ class HotListSentimentPayload(BaseModel):
     tradingDate: str
     datasetId: str = "dragonboard_live"
     snapshotType: str = "half_hour"
-    stage: str = "启动"
+    # 路线 B：stage 为评分确认档位，证据全缺时后端产出 null——ingest 不设默认档位
+    # （"启动" 默认会掩盖缺失）；省略或 null 时 exclude_none 落库为缺字段。
+    stage: str | None = None
     riskLevel: str = "中"
     confidence: float = 0
     summary: str = ""

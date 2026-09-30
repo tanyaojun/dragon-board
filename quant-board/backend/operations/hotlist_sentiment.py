@@ -210,11 +210,22 @@ class HotListSentimentBackfillService:
         confirm_slots, config_diagnostic = _stage_confirm_config()
         if config_diagnostic:
             intraday_state["diagnostics"].append(config_diagnostic)
-        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）
+        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）；
+        # 读失败降级为空 + 结构化诊断（部分来源失败不阻断写库，fail-visible）
         from backend.services.jev.jev_sentiment_compute import (
             _load_analysis_by_code,
             _yesterday_total_amounts_by_slot,
         )
+
+        try:
+            emotion_analysis = _load_analysis_by_code(
+                self._db, dataset_id, str(frame.get("snapshotId") or ""))
+            emotion_amounts = _yesterday_total_amounts_by_slot(
+                self._db, dataset_id, snapshot_type, trading_date)
+            emotion_parts_error = None
+        except Exception as exc:
+            emotion_analysis, emotion_amounts = {}, None
+            emotion_parts_error = f"emotion_evidence_load_failed:{type(exc).__name__}:{exc}"
 
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
@@ -233,11 +244,11 @@ class HotListSentimentBackfillService:
             stage_confirm_slots=confirm_slots,
             # 路线 B（T3 写口接线）：昨日行复用 previous_day_stocks（已含 displayStatus join）
             yesterday_rows=previous.get("yesterday") or [],
-            analysis_by_code=_load_analysis_by_code(
-                self._db, dataset_id, str(frame.get("snapshotId") or "")),
-            yesterday_amounts=_yesterday_total_amounts_by_slot(
-                self._db, dataset_id, snapshot_type, trading_date),
+            analysis_by_code=emotion_analysis,
+            yesterday_amounts=emotion_amounts,
         )
+        if emotion_parts_error:
+            doc.setdefault("diagnostics", []).append(emotion_parts_error)
         self._append_join_warning(doc, join_stats)
         self._append_previous_join_issues(doc, previous)
         self._append_zhaban_input_missing(doc, stocks)
@@ -539,6 +550,16 @@ class HotListSentimentBackfillService:
         全部槽位完成后收尾补写当日 EOD 终值（stale 回退链路依赖每日 EOD 存在）。
         """
         previous = self.previous_day_stocks(dataset_id, snapshot_type, trading_date)
+        # 评分 evidence parts：昨日同期总额与当日槽无关，循环外取一次（每日 1 次，避免逐槽重复扫描）
+        from backend.services.jev.jev_sentiment_compute import _yesterday_total_amounts_by_slot
+
+        try:
+            emotion_amounts = _yesterday_total_amounts_by_slot(
+                self._db, dataset_id, snapshot_type, trading_date)
+            emotion_amounts_error = None
+        except Exception as exc:
+            emotion_amounts = None
+            emotion_amounts_error = f"emotion_evidence_load_failed:yesterday_amounts:{type(exc).__name__}:{exc}"
         written = 0
         slot_errors: list[dict[str, Any]] = []
         for slot_time in self._slot_times_of_date(dataset_id, snapshot_type, trading_date):
@@ -561,11 +582,17 @@ class HotListSentimentBackfillService:
                 confirm_slots, config_diagnostic = _stage_confirm_config()
                 if config_diagnostic:
                     intraday_state["diagnostics"].append(config_diagnostic)
-                # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径同源）
-                from backend.services.jev.jev_sentiment_compute import (
-                    _load_analysis_by_code,
-                    _yesterday_total_amounts_by_slot,
-                )
+                # 评分 analysis 取数（延迟 import：复用 jev 服务层模式，口径同源）；
+                # 读失败降级为空 + 结构化诊断（部分来源失败不阻断写库，fail-visible）
+                from backend.services.jev.jev_sentiment_compute import _load_analysis_by_code
+
+                try:
+                    emotion_analysis = _load_analysis_by_code(
+                        self._db, dataset_id, str(frame.get("snapshotId") or ""))
+                    emotion_analysis_error = None
+                except Exception as exc:
+                    emotion_analysis = {}
+                    emotion_analysis_error = f"emotion_evidence_load_failed:analysis:{type(exc).__name__}:{exc}"
 
                 doc = build_hotlist_sentiment_document(
                     dataset_id=dataset_id,
@@ -583,11 +610,12 @@ class HotListSentimentBackfillService:
                     stage_confirm_slots=confirm_slots,
                     # 路线 B（T3 写口接线）：评分 evidence parts（与 run_for_date 同口径）
                     yesterday_rows=previous.get("yesterday") or [],
-                    analysis_by_code=_load_analysis_by_code(
-                        self._db, dataset_id, str(frame.get("snapshotId") or "")),
-                    yesterday_amounts=_yesterday_total_amounts_by_slot(
-                        self._db, dataset_id, snapshot_type, trading_date),
+                    analysis_by_code=emotion_analysis,
+                    yesterday_amounts=emotion_amounts,
                 )
+                for parts_error in (emotion_amounts_error, emotion_analysis_error):
+                    if parts_error:
+                        doc.setdefault("diagnostics", []).append(parts_error)
                 self._append_join_warning(doc, join_stats)
                 self._append_previous_join_issues(doc, previous)
                 if not dry_run:
@@ -722,11 +750,11 @@ def build_hotlist_sentiment_document(
     elif prev_score is None and history_status not in ("empty", "unavailable"):
         # 当日已有历史文档但取不到有效 prev score（切换日混合态/旧文档）→ 斜率不可用
         diagnostics_extra.append("emotion_slope_unavailable:prev_score_missing")
-    # historyStatus=unavailable 时历史不可信：只用本帧截面确认（fail-visible 不伪造历史）
-    points = [(current_stage_slot, raw_stage_value)] if history_status == "unavailable" else [
-        *prior_points,
-        *([(current_stage_slot, raw_stage_value)] if raw_stage_value else []),
-    ]
+    # historyStatus=unavailable 时历史不可信：只用本帧截面确认（fail-visible 不伪造历史）；
+    # score=None 的本帧点两个分支都不得进序列（str(None)="None" 会穿透 confirm_stage
+    # 的空串过滤伪造档位，spec §3.4）。
+    current_point = [(current_stage_slot, raw_stage_value)] if raw_stage_value else []
+    points = current_point if history_status == "unavailable" else [*prior_points, *current_point]
     confirmed_stage, confirm_state = confirm_stage(points, stage_confirm_slots)
     confirm_state["historyStatus"] = history_status
     return {

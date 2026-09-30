@@ -270,6 +270,64 @@ def test_slot_write_roundtrip_preserves_emotion_score_and_legacy_fields(monkeypa
     assert doc["legacyCascadeStage"] == "高潮"  # 级联截面对照面随文档落库
 
 
+def test_slot_wiring_feeds_real_evidence_into_score(monkeypatch):
+    """T3 接线断言（review T3-S3）：analysis_by_code 与昨日同期总额真实进入评分链——
+    真评分下 amountVsSame/riskRowsPct/yhPositive 可算（不再 skip），证明 evidence parts
+    不是摆设；spy 捕获 collect_slot_evidence 的入参核对传递值。"""
+    import backend.analysis.hotlist.jev_state as jev_state
+    import backend.operations.hotlist_sentiment as ops_mod
+
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [
+        # 昨日 10:00 帧：两市总额（同期量能基线）+ 昨日涨停行（承接证据）
+        {"datasetId": "dragonboard_live", "snapshotId": "f0900", "type": "half_hour",
+         "tradingDate": "2026-06-04", "slotTime": "10:00", "timestamp": 1,
+         "indices": {"totalAmount": {"amount": 1.0e12}}},
+        # 当日 10:00 帧：两市总额
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "type": "half_hour",
+         "tradingDate": "2026-06-05", "slotTime": "10:00", "timestamp": 2,
+         "indices": {"totalAmount": {"amount": 1.2e12}}},
+    ]
+    db["snapshot_stock_rows"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "f0900", "code": "000001",
+         "rank": 1, "change": 10.0, "price": 9.0, "limitUpPrice": 9.0},
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "code": "000001",
+         "rank": 1, "change": 5, "zlje": 0, "volumeRatio": 1.5},
+    ]
+    db["snapshot_analysis"].rows = [
+        {"datasetId": "dragonboard_live", "snapshotId": "f1000", "code": "000001",
+         "analysis": {"displayStatus": {"stage": "ignition"}, "cycle": {"stage": "ignition"}}},
+    ]
+    monkeypatch.setattr(ops_mod, "compute_hotlist_sentiment",
+                        lambda *args, **kwargs: _sentiment_stage_payload("高潮"))
+
+    captured: dict[str, Any] = {}
+    real_collect = jev_state.collect_slot_evidence
+
+    def _spy_collect(**kwargs):
+        captured.update(kwargs)
+        return real_collect(**kwargs)
+
+    monkeypatch.setattr(jev_state, "collect_slot_evidence", _spy_collect)
+
+    result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live", snapshot_type="half_hour",
+                                         trading_date="2026-06-05", slot_time="10:00")
+    assert result["written"] is True
+    # spy：analysis_by_code 与昨日同期总额真实传入（接线断言核心）
+    # spy：analysis_by_code 与昨日同期总额真实传入（接线断言核心；参数=昨日同期基线，
+    # 当日累计在 frame.indices.totalAmount 内由 collect_slot_evidence 自读）
+    assert "000001" in (captured.get("analysis_by_code") or {})
+    assert captured.get("yesterday_same_slot_total_amount") == 1.0e12
+    assert captured.get("yesterday_rows")
+    # 真评分：三维不再 skip（若接线断开，amountVsSame/lifecycle/riskRowsPct 会全部缺失降级）
+    doc = db["hotlist_sentiment"].find_one({"_id": "dragonboard_live:half_hour:2026-06-05:10:00"})
+    assert doc is not None
+    skipped = doc["emotionScore"]["skippedDims"]
+    assert "amountVsSame" not in skipped
+    assert "riskRowsPct" not in skipped
+    assert doc["emotionScore"]["dims"]["amountVsSame"]["raw"] == 20.0  # (1.2e12/1.0e12-1)*100
+
+
 def test_write_order_does_not_change_per_slot_results(monkeypatch):
     """顺序写入与乱序回填：逐槽 (slotTime, stage, rawStage) 必须完全一致（spec §8.1.5）。"""
     import backend.operations.hotlist_sentiment as ops_mod

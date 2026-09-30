@@ -26,7 +26,8 @@ from typing import Any
 
 from backend.analysis.hotlist.stage_confirm import confirm_stage
 
-# 与 risk.py REGIME_STAGE_ADJUST 保持一致（默认配置路径；c.regimeStageAdjust 覆盖值另行对照）
+# 与 risk.py REGIME_STAGE_ADJUST 保持一致（默认配置路径；c.regimeStageAdjust 覆盖值另行对照，
+# 覆盖该参数的回测需按其配置重映射——报告 §4 披露）
 STAGE_ADJUST = {"高潮": 8.0, "发酵": 5.0, "启动": 0.0, "退潮": -6.0, "冰点": -8.0}
 
 
@@ -34,7 +35,7 @@ def _load_docs(db: Any, dataset_id: str, snapshot_type: str) -> list[dict]:
     rows = db["hotlist_sentiment"].find(
         {"datasetId": dataset_id, "snapshotType": snapshot_type},
         {"_id": 1, "tradingDate": 1, "slotTime": 1, "anchoredSlotTime": 1,
-         "stage": 1, "rawStage": 1, "legacyCascadeStage": 1},
+         "stage": 1, "legacyCascadeStage": 1},
     )
     return [dict(row) for row in rows if row.get("tradingDate")]
 
@@ -63,13 +64,16 @@ def _bucket(value: float) -> str:
     return f"{sign}>8"
 
 
-def summarize(diffs: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(diffs: list[dict[str, Any]], skipped: dict[str, int] | None = None) -> dict[str, Any]:
     values = [d["adjustDiff"] for d in diffs]
     buckets = Counter(_bucket(v) for v in values)
     transitions = Counter(f"{d['oldConfirmed']}→{d['newStage']}" for d in diffs if d["adjustDiff"] != 0)
     nonzero = [v for v in values if v != 0]
     return {
         "n": len(values),
+        # 不可比槽位计数（fail-visible）：legacyCascadeStage/新 stage 缺失的文档被跳过，
+        # n 与库内总体（1070 槽位）的关系由此可对账
+        "skipped": dict(skipped or {}),
         "affected": len(nonzero),
         "affectedRate": round(len(nonzero) / len(values), 4) if values else None,
         "meanDiff": round(sum(values) / len(values), 3) if values else None,
@@ -101,6 +105,7 @@ def main() -> int:
             by_date_slots[str(doc["tradingDate"])].append(doc)
 
     diffs: list[dict[str, Any]] = []
+    slot_skipped = Counter()
     for date, slot_docs in sorted(by_date_slots.items()):
         slot_docs.sort(key=lambda d: str(d.get("slotTime") or ""))
         # 旧确认投影重建：级联截面序列因果前缀重放（审计 S8；confirmSlots=2 与生产一致）
@@ -114,15 +119,23 @@ def main() -> int:
             new_stage = str(doc.get("stage") or "").strip()
             old_stage = old_confirmed.get(slot)
             if not new_stage or not old_stage:
-                continue  # score=None 槽 / 旧投影缺失（不可比，不计入）
+                # 不可比：新链 score=None 槽（stage 缺）或旧投影缺失（级联截面空）
+                slot_skipped["missingNewStage" if not new_stage else "missingOldProjection"] += 1
+                continue
+            old_adjust = STAGE_ADJUST.get(old_stage)
+            new_adjust = STAGE_ADJUST.get(new_stage)
+            if old_adjust is None or new_adjust is None:
+                slot_skipped["unknownStage"] += 1
+                continue
             diffs.append({
                 "tradingDate": date, "slotTime": slot,
                 "oldConfirmed": old_stage, "newStage": new_stage,
-                "adjustDiff": round(STAGE_ADJUST[new_stage] - STAGE_ADJUST[old_stage], 2),
+                "adjustDiff": round(new_adjust - old_adjust, 2),
             })
 
     # EOD 层：旧确认投影 = 当日级联序列 + EOD 锚定槽截面一次（因果同 09-24 spec）
     eod_diffs: list[dict[str, Any]] = []
+    eod_skipped = Counter()
     for eod in eod_docs:
         date = str(eod.get("tradingDate") or "")
         slot_docs = sorted(by_date_slots.get(date, []), key=lambda d: str(d.get("slotTime") or ""))
@@ -133,18 +146,25 @@ def main() -> int:
             if str(d.get("slotTime") or "") < anchored and str(d.get("legacyCascadeStage") or "").strip()
         ]
         anchor_stage = str(eod.get("legacyCascadeStage") or "").strip()
-        if anchor_stage:
-            legacy_points.append((anchored, anchor_stage))
+        if not anchor_stage:
+            # 锚定截面缺失（如切换前旧 schema 文档）：缺"当前点"与生产语义偏离 → 不可比，显式计数
+            eod_skipped["missingAnchorProjection"] += 1
+            continue
+        legacy_points.append((anchored, anchor_stage))
         old_confirmed, _ = confirm_stage(legacy_points, 2)
         new_stage = str(eod.get("stage") or "").strip()
-        if old_confirmed and new_stage:
-            eod_diffs.append({
-                "tradingDate": date, "oldConfirmed": old_confirmed, "newStage": new_stage,
-                "adjustDiff": round(STAGE_ADJUST[new_stage] - STAGE_ADJUST[old_confirmed], 2),
-            })
+        old_adjust = STAGE_ADJUST.get(old_confirmed) if old_confirmed else None
+        new_adjust = STAGE_ADJUST.get(new_stage) if new_stage else None
+        if old_adjust is None or new_adjust is None:
+            eod_skipped["unknownStage"] += 1
+            continue
+        eod_diffs.append({
+            "tradingDate": date, "oldConfirmed": old_confirmed, "newStage": new_stage,
+            "adjustDiff": round(new_adjust - old_adjust, 2),
+        })
 
-    slot_summary = summarize(diffs)
-    eod_summary = summarize(eod_diffs)
+    slot_summary = summarize(diffs, dict(slot_skipped))
+    eod_summary = summarize(eod_diffs, dict(eod_skipped))
     print(json.dumps({"slotDiff": slot_summary, "eodDiff": eod_summary}, ensure_ascii=False, indent=1))
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:

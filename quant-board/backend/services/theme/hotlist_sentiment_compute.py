@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
@@ -208,7 +209,8 @@ def _collect_intraday_state(
             if raw_stage:
                 raw_stage_points.append((slot_time, raw_stage))
             score_value = (row.get("emotionScore") or {}).get("score")
-            if isinstance(score_value, (int, float)) and not isinstance(score_value, bool):
+            # isfinite 防御：NaN/inf 经 ingest 白名单可入库，污染 slope 合同（slope<0 对 NaN 恒 False）
+            if isinstance(score_value, (int, float)) and not isinstance(score_value, bool) and math.isfinite(float(score_value)):
                 score_points.append((slot_time, float(score_value)))
         points.sort(key=lambda item: item["slotTime"])
         raw_stage_points.sort(key=lambda item: item[0])
@@ -391,11 +393,22 @@ class HotListSentimentComputeService:
         confirm_slots, config_diagnostic = _stage_confirm_config()
         if config_diagnostic:
             intraday_state["diagnostics"].append(config_diagnostic)
-        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）
+        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）；
+        # 读失败降级为空 + 结构化诊断（与 _join_display_status 同语义：部分来源失败不阻断写库）
         from backend.services.jev.jev_sentiment_compute import (
             _load_analysis_by_code,
             _yesterday_total_amounts_by_slot,
         )
+
+        try:
+            emotion_analysis = _load_analysis_by_code(
+                self._backfill._db, dataset_id, str(frame.get("snapshotId") or ""))
+            emotion_amounts = _yesterday_total_amounts_by_slot(
+                self._backfill._db, dataset_id, snapshot_type, trading_date)
+            emotion_parts_error = None
+        except Exception as exc:
+            emotion_analysis, emotion_amounts = {}, None
+            emotion_parts_error = f"emotion_evidence_load_failed:{type(exc).__name__}:{exc}"
 
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
@@ -416,11 +429,10 @@ class HotListSentimentComputeService:
             # （已含 displayStatus join，jev 聚合器只读行情字段不冲突），
             # analysis_by_code / 昨日同期总额复用 jev 服务层取数模式（口径同源）。
             yesterday_rows=previous.get("yesterday") or [],
-            analysis_by_code=_load_analysis_by_code(
-                self._backfill._db, dataset_id, str(frame.get("snapshotId") or "")),
-            yesterday_amounts=_yesterday_total_amounts_by_slot(
-                self._backfill._db, dataset_id, snapshot_type, trading_date),
+            analysis_by_code=emotion_analysis,
+            yesterday_amounts=emotion_amounts,
         )
+        _append_diagnostic(doc, emotion_parts_error)
         join_note = _join_warning(join_stats)
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
         for issue in previous.get("joinIssues") or []:
@@ -513,11 +525,22 @@ def compute_and_upsert_for_slot(
         confirm_slots, config_diagnostic = _stage_confirm_config()
         if config_diagnostic:
             intraday_state["diagnostics"].append(config_diagnostic)
-        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）
+        # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）；
+        # 读失败降级为空 + 结构化诊断（与 _join_display_status 同语义：部分来源失败不阻断写库）
         from backend.services.jev.jev_sentiment_compute import (
             _load_analysis_by_code,
             _yesterday_total_amounts_by_slot,
         )
+
+        try:
+            emotion_analysis = _load_analysis_by_code(
+                mongo_db, dataset_id, str(frame.get("snapshotId") or ""))
+            emotion_amounts = _yesterday_total_amounts_by_slot(
+                mongo_db, dataset_id, snapshot_type, trading_date)
+            emotion_parts_error = None
+        except Exception as exc:
+            emotion_analysis, emotion_amounts = {}, None
+            emotion_parts_error = f"emotion_evidence_load_failed:{type(exc).__name__}:{exc}"
 
         doc = build_hotlist_sentiment_document(
             dataset_id=dataset_id,
@@ -535,11 +558,10 @@ def compute_and_upsert_for_slot(
             stage_confirm_slots=confirm_slots,
             # 路线 B（T3 写口接线）：评分 evidence parts（与 _compute_and_persist 同口径）
             yesterday_rows=previous.get("yesterday") or [],
-            analysis_by_code=_load_analysis_by_code(
-                mongo_db, dataset_id, str(frame.get("snapshotId") or "")),
-            yesterday_amounts=_yesterday_total_amounts_by_slot(
-                mongo_db, dataset_id, snapshot_type, trading_date),
+            analysis_by_code=emotion_analysis,
+            yesterday_amounts=emotion_amounts,
         )
+        _append_diagnostic(doc, emotion_parts_error)
         join_note = _join_warning(join_stats)
         _append_diagnostic(doc, join_note)  # fail-visible：join 异常/缺失随文档落库
         for issue in previous.get("joinIssues") or []:

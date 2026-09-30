@@ -183,6 +183,16 @@ def test_document_score_none_semantics_plan_b():
     })
     assert doc2["stage"] == "启动" and doc2["rawStage"] is None
 
+    # review 阻塞项回归：unavailable × score=None 组合——本帧 None 点同样不得进确认序列
+    #（str(None)="None" 会穿透 confirm_stage 空串过滤，伪造字符串档位）
+    doc3 = _build("10:30", stocks=[], with_limit=False, stage_history={
+        "rawStagePoints": [], "scorePoints": [],
+        "historyStatus": "unavailable", "diagnostics": ["stage_confirm_history_unavailable:RuntimeError:boom"],
+    })
+    assert doc3["rawStage"] is None
+    assert doc3["stage"] is None  # 绝不为字符串 "None"
+    assert doc3["stageConfirmState"]["historyStatus"] == "unavailable"
+
 
 def test_document_eod_uses_anchored_slot_for_evidence():
     """EOD 文档（slot_time=None）：评分证据槽位 = 锚定帧槽位。"""
