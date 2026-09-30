@@ -72,6 +72,56 @@ def _phase_of(score: float | None) -> str:
     return "offense" if score >= PULSE_THRESHOLD else "defense"
 
 
+# C6 分带（2026-10-01 用户定义：40-60 弱势区间；前一日 EOD as-of 口径）
+PULSE_BANDS = [("冷10-40", 10.0, 40.0), ("弱势40-60", 40.0, 60.0), ("强60-80", 60.0, 80.0)]
+
+
+def band_stats(trades: list[dict], eod_scores: dict[str, float | None], month: str) -> dict:
+    """基线交易按前一日 EOD 分带（as-of 无前视）——C6 证据逐次脉拍累积。"""
+    scored = sorted((d, s) for d, s in eod_scores.items() if isinstance(s, (int, float)))
+    prev_score = {scored[i][0]: scored[i - 1][1] for i in range(1, len(scored))}
+    out: dict = {}
+    for tag, lo, hi in PULSE_BANDS:
+        rets = [
+            float(t["netReturn"])
+            for t in trades
+            if str(t.get("entryTradingDate") or "").startswith(month)
+            and isinstance(t.get("netReturn"), (int, float))
+            and isinstance(prev_score.get(str(t.get("entryTradingDate") or "")), (int, float))
+            and lo <= prev_score[str(t.get("entryTradingDate") or "")] < hi
+        ]
+        out[tag] = {
+            "trades": len(rets),
+            "sumNetReturn": round(sum(rets), 4),
+            "avgPerTrade": round(sum(rets) / len(rets), 4) if rets else None,
+        }
+    return out
+
+
+def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
+    """A/B 装配：基线 vs 弱势带回避臂（reduce_band factor=0），月内口径。"""
+
+    def stats(summary: dict) -> dict:
+        rets = [
+            float(t["netReturn"])
+            for t in round_trips_of(summary)
+            if str(t.get("entryTradingDate") or "").startswith(month)
+            and isinstance(t.get("netReturn"), (int, float))
+        ]
+        return {"tradeCount": len(rets), "sumNetReturn": round(sum(rets), 4)}
+
+    b, c = stats(baseline), stats(controlled)
+    return {
+        "baseline": b,
+        "bandAvoided": c,
+        "delta": {
+            "tradesRemoved": b["tradeCount"] - c["tradeCount"],
+            "netReturnSaved": round(c["sumNetReturn"] - b["sumNetReturn"], 4),
+        },
+        "arm": "reduce_band factor=0 [40,60) 前日定相（C6 假设的完整回避形态）",
+    }
+
+
 def load_eod_scores(end_date: str) -> dict[str, float | None]:
     from backend.data.repositories import repository_factory
 
@@ -121,6 +171,21 @@ def main() -> int:
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
         "gate": "off（基线读数；A/B 对照用 trade_config.phaseExposureControl）",
     }
+    # C6 证据：基线交易按前日分带累积
+    report["bands"] = band_stats(round_trips_of(summary), eod_scores, args.month)
+    # A/B 臂：弱势带完整回避（reduce_band factor=0，仅 trade_config 不同 → 信号层缓存复用，成本低）
+    try:
+        band_cfg = {
+            "phaseExposureControl": {
+                "mode": "reduce_band", "factor": 0.0, "bandLow": 40.0, "bandHigh": 60.0,
+                "eodScores": {d: s for d, s in eod_scores.items() if s is not None},
+            }
+        }
+        controlled = BacktestService(runtime_session()).run_ranktrend({**payload, "trade_config": band_cfg})
+        report["ab"] = ab_compare(summary, controlled, args.month)
+    except Exception as exc:  # noqa: BLE001 — 基线脉拍不因 A/B 臂失败而失效
+        report["ab"] = {"degraded": True, "reason": str(exc)}
+        print(f"[phase-pulse] A/B 臂失败（基线照常）: {exc}", file=sys.stderr)
     out = Path(args.out) if args.out else Path(f"data/reports/phase-monitor/pulse-{args.month}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

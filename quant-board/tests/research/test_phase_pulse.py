@@ -43,3 +43,38 @@ def test_build_pulse_report_empty_month():
     report = build_pulse_report(_summary([], []), {"2026-10-09": 60.0}, "2026-10")
     assert report["tradeCount"] == 0
     assert report["northstar"]["offense"]["pass"] is False
+
+
+def test_band_stats_prev_day_as_of():
+    """C6 证据累积：按前一日 EOD 分带（as-of 可实操口径），月内过滤。"""
+    from backend.operations.phase_pulse import band_stats
+
+    trades = [
+        {"entryTradingDate": "2026-10-12", "netReturn": -0.07},  # 前日 10-09=55 → 弱势
+        {"entryTradingDate": "2026-10-13", "netReturn": 0.14},   # 前日 10-12=70 → 强
+        {"entryTradingDate": "2026-09-30", "netReturn": 0.99},   # 上月：剔除
+    ]
+    eod = {"2026-10-09": 55.0, "2026-10-12": 70.0}
+    out = band_stats(trades, eod, "2026-10")
+    assert out["弱势40-60"]["trades"] == 1 and out["弱势40-60"]["sumNetReturn"] == -0.07
+    assert out["强60-80"]["trades"] == 1 and out["强60-80"]["avgPerTrade"] == 0.14
+    assert out["冷10-40"]["trades"] == 0
+
+
+def test_ab_compare_delta():
+    from backend.operations.phase_pulse import ab_compare
+
+    baseline = _summary(
+        [{"entryTradingDate": "2026-10-12", "netReturn": -0.07},
+         {"entryTradingDate": "2026-10-13", "netReturn": 0.14}],
+        [("2026-10-12", 100.0)],
+    )
+    controlled = _summary(
+        [{"entryTradingDate": "2026-10-13", "netReturn": 0.14}],
+        [("2026-10-12", 100.0)],
+    )
+    out = ab_compare(baseline, controlled, "2026-10")
+    assert out["baseline"]["tradeCount"] == 2
+    assert out["bandAvoided"]["tradeCount"] == 1
+    assert out["delta"]["tradesRemoved"] == 1
+    assert out["delta"]["netReturnSaved"] == 0.07  # 回避了 -7% 那笔
