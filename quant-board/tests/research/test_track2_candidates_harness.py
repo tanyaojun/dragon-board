@@ -60,19 +60,22 @@ def test_p1_combo_drops_fund_axis():
 
 
 def test_baseline_anchor_constant_gen_2026_10():
-    """锚代际 gen-2026-10-b202610（config/ranktrend-anchors.json，2026-09-16 预建）；oos2/oos2u 待批次填充。"""
-    assert BASELINE_ANCHORS == {"decision": 0.1323, "oos1": 0.0862, "oos2": None, "oos2u": None}
+    """锚代际 gen-2026-10-b202610（config/ranktrend-anchors.json）；oos2/oos2u 于 2026-09-30 正式复跑填充。"""
+    assert BASELINE_ANCHORS == {"decision": 0.1323, "oos1": 0.0862, "oos2": 0.0841, "oos2u": 0.0534}
 
 
 def test_baseline_anchor_drift_raises():
-    """锚 trial 级即时 raise：漂移=代际/config 污染，不许带病出判定卡；未建锚窗口不校验。"""
+    """锚 trial 级即时 raise：漂移=代际/config 污染，不许带病出判定卡；四窗均已建锚，None 读数同样拦截。"""
     _assert_baseline_anchor("decision", 0.1323)
     _assert_baseline_anchor("oos1", 0.0862)
-    _assert_baseline_anchor("oos2u", None)  # 锚为 None：跳过
+    _assert_baseline_anchor("oos2", 0.0841)
+    _assert_baseline_anchor("oos2u", 0.0534)
     with pytest.raises(AssertionError, match="锚漂移"):
         _assert_baseline_anchor("decision", 0.1300)
     with pytest.raises(AssertionError, match="锚漂移"):
         _assert_baseline_anchor("oos1", None)
+    with pytest.raises(AssertionError, match="锚漂移"):
+        _assert_baseline_anchor("oos2u", None)
 
 
 def test_assert_overrides_applied_rejects_unknown_field():

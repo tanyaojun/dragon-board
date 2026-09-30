@@ -133,9 +133,9 @@ TRIALS: list[dict[str, Any]] = [
 COMBO_PARTS: dict[str, list[str]] = {"combo_p1": ["fund10_over2", "jump25_fresh06"], "combo_all": ["fund10_over2", "jump25_fresh06", "persist_on"]}
 
 # baseline 锚（gen-2026-10-b202610，config/ranktrend-anchors.json，2026-09-16 预建；
-# 来源=本 harness baseline trial 逐位读数 decision 655 帧 / oos1 110 帧）。
-# oos2/oos2u 锚待批次阶段 1 用 9 月全月数据填充，填充前 None 不校验。
-BASELINE_ANCHORS: dict[str, float | None] = {"decision": 0.1323, "oos1": 0.0862, "oos2": None, "oos2u": None}
+# 来源=本 harness baseline trial 逐位读数：decision 655 帧 / oos1 110 帧（封闭窗）；
+# oos2 全月 206 帧 / oos2u 120 帧为 2026-09-30 正式复跑填充，与注册表同步）。
+BASELINE_ANCHORS: dict[str, float | None] = {"decision": 0.1323, "oos1": 0.0862, "oos2": 0.0841, "oos2u": 0.0534}
 
 _OVERRIDE_MISSING = object()
 

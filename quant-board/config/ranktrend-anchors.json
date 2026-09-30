@@ -1,6 +1,6 @@
 {
   "schema": "ranktrend-anchor-registry/v1",
-  "updatedAt": "2026-09-25",
+  "updatedAt": "2026-09-30",
   "purpose": "RankTrend 锚代际注册表：harness baseline 对照基准的单一事实源。锚读数 = baseline（当前默认栈全开）三窗 synergy saEx；代际变更（默认值落库/结构性修复）使历史 trial 全部过期，新代际第一动作是重建三窗锚。失配必须显式标记，不许带病继续。",
   "factSource": "docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（各阶段写入的锚读数）",
   "rerunPlan": "docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md",
@@ -53,15 +53,15 @@
     },
     {
       "id": "gen-2026-10-b202610",
-      "name": "B-202610 复跑代际（第四代正式三窗锚）",
-      "anchors": { "decision": 0.1323, "oos1": 0.0862, "oos2": 0.0998, "oos2u": 0.0812 },
-      "passHard": { "decision": true, "oos1": true, "oos2": false, "oos2u": false },
-      "establishedAt": "2026-09-16（decision/oos1 预建）；2026-09-25 演练填充 oos2/oos2u（占位）",
+      "name": "B-202610 复跑代际（第四代正式四窗锚）",
+      "anchors": { "decision": 0.1323, "oos1": 0.0862, "oos2": 0.0841, "oos2u": 0.0534 },
+      "passHard": { "decision": true, "oos1": true, "oos2": true, "oos2u": true },
+      "establishedAt": "2026-09-16（decision/oos1 预建）；2026-09-30 正式复跑（提前于原定 10/3）填充 oos2/oos2u 全月正式锚",
       "gitCommit": "83bd7d0d",
       "configHash": null,
-      "sourceSections": ["data/reports/track2-candidates.json（B-202610 baseline）", "data/reports/b-202610/batch-summary.json（演练汇总）", "longterm 阶段 27（待 10/3 正式批次收口写入）"],
+      "sourceSections": ["data/reports/b-202610/track2-candidates-formal.json（B-202610 正式 baseline，9 月全月 206 帧/21 交易日）", "longterm 阶段 27（批次收口写入）"],
       "supersededBy": null,
-      "note": "【演练口径警示】oos2=0.0998/oos2u=0.0812 为 2026-09-25 提前演练读数——9 月数据仅至 09-24（176 帧），尚缺 09-28/29/30 三个交易日，正式复跑（2026-10-03，全月约 206 帧）后 oos2/oos2u 锚必须重跑更新；decision/oos1 为封闭窗，演练读数即正式锚（decision/oos1 baseline 已于当前引擎重跑逐位复现 0.1323/0.0862，代际无漂移）。passHard：decision/oos1=True，oos2/oos2u=False（9 月窗单调性边缘失效既有口径延续，正式口径以 10/3 全月重跑为准）。oos2u warm-up 29 帧至 09-16（演练口径）。"
+      "note": "【正式口径，2026-09-30 全月重跑】oos2=0.0841/oos2u=0.0534 为 9 月全月（206 帧/21 交易日，oos2u 120 帧/有效 91）正式 baseline 读数，取代 09-25 演练占位 0.0998/0.0812；passHard 四窗全 True（演练占位 oos2/oos2u=False 的 9 月窗单调性边缘失效已随最后 3 个交易日补齐恢复通过）。decision/oos1 封闭窗于正式跑逐位复现 0.1323/0.0862，代际无漂移。注意 oos2u 绝对水平 0.0534 仍显著低于 decision 窗 0.1323（9 月弱市 OOS 衰减为代际对照章披露项）。"
     }
   ]
 }
