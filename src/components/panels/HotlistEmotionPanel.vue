@@ -551,16 +551,16 @@
                 </div>
               </div>
 
-              <div class="metrics-grid">
-                <div class="metric-card">
-                  <div class="metric-icon">🫀</div>
-                  <div class="metric-content">
-                    <div class="metric-label">本月至今脉拍（默认栈 gate off）</div>
-                    <div class="metric-value">{{ phasePulseText.value }}</div>
-                    <div class="metric-label">{{ phasePulseText.detail }}</div>
-                    <div class="metric-label">{{ phasePulseText.detail2 }}</div>
-                  </div>
+              <div class="phase-chart-card">
+                <div class="section-title">
+                  🫀 本月至今脉拍（gate off 基线，分带按前日 EOD 分）<template v-if="phasePulseText.value !== '未跑'">——{{ phasePulseText.value }}</template>
                 </div>
+                <div v-if="phasePulseText.value === '未跑'" class="state-block">
+                  phase_pulse --month 当前月（盘后链每个交易日 18:00 自动跑，也可手动）
+                </div>
+                <div v-else-if="!pulseBands.length" class="state-block">脉拍产物无分带数据（旧版产物，重跑即升级）</div>
+                <div v-else ref="phasePulseChartEl" class="phase-pulse-chart"></div>
+                <div v-if="phasePulseAbLine" class="phase-pulse-ab">{{ phasePulseAbLine }}</div>
               </div>
 
               <div class="phase-months">
@@ -2341,6 +2341,9 @@ function handleChartsResize() {
   if (jevChart) {
     jevChart.resize()
   }
+  if (phasePulseChart) {
+    phasePulseChart.resize()
+  }
 }
 onMounted(() => {
   window.addEventListener('resize', handleChartsResize)
@@ -2367,6 +2370,10 @@ onUnmounted(() => {
     jevChart.dispose()
     jevChart = null
   }
+  if (phasePulseChart) {
+    phasePulseChart.dispose()
+    phasePulseChart = null
+  }
 })
 
 // ── 相位验收（2026-09-30 前端可见化，设计 ranktrend-phase-frontend-design.md）──
@@ -2384,6 +2391,7 @@ const phaseLoading = ref(false)
 const phaseLoadedOnce = ref(false)
 const phaseError = ref<string | null>(null)
 const phaseChartEl = ref<HTMLElement | null>(null)
+const phasePulseChartEl = ref<HTMLElement | null>(null)
 let phaseChartInstance: echarts.ECharts | null = null
 
 const phaseChip = computed(() => {
@@ -2403,25 +2411,78 @@ const todayPhaseText = computed(() => {
 
 const phasePulseText = computed(() => {
   const p = phasePulse.value?.report
-  if (!p) return { value: '未跑', detail: 'phase_pulse --month 当前月（随时手动，挂账即数据）', detail2: '' }
-  const off = p.byPhase?.offense ?? undefined
-  const def = p.byPhase?.defense ?? undefined
-  const fmt = (b?: { trades?: number; wrxpf?: number | null; sumNetReturn?: number | null }) =>
-    `${b?.trades ?? 0} 笔 · wrxpf ${b?.wrxpf ?? '--'} · ${(100 * (b?.sumNetReturn ?? 0)).toFixed(1)}%`
-  const ab = p.ab && !p.ab.degraded ? p.ab : null
-  const abLine = ab
-    ? `回避弱势带后：${ab.bandAvoided?.tradeCount ?? '--'} 笔 ${((ab.bandAvoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((ab.delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
-    : 'A/B 臂未跑或失败'
-  const bands = p.bands ?? {}
-  const bandLine = Object.entries(bands)
-    .map(([tag, b]) => `${tag} ${b.trades} 笔${b.avgPerTrade != null ? ` ${((b.avgPerTrade) * 100).toFixed(1)}%/笔` : ''}`)
-    .join('｜')
-  return {
-    value: `${p.month}｜${p.tradeCount ?? 0} 笔`,
-    detail: `进攻 ${fmt(off)}｜防守 ${fmt(def)}｜${abLine}`,
-    detail2: `分带（前日分口径）：${bandLine || '无分带数据'}`,
-  }
+  if (!p) return { value: '未跑', detail: '', detail2: '' }
+  return { value: `${p.month}｜${p.tradeCount ?? 0} 笔`, detail: '', detail2: '' }
 })
+
+const pulseBands = computed(() => Object.entries(phasePulse.value?.report?.bands ?? {}).map(([tag, b]) => ({
+  tag,
+  trades: b?.trades ?? 0,
+  avgPct: b?.avgPerTrade != null ? Number((b.avgPerTrade * 100).toFixed(2)) : null,
+  sumPct: (b?.sumNetReturn ?? 0) * 100,
+})))
+
+const phasePulseAbLine = computed(() => {
+  const ab = phasePulse.value?.report?.ab
+  if (!ab || ab.degraded) return ''
+  const avoided = ab.bandAvoided
+  const delta = ab.delta
+  return `A/B 弱势带回避（factor=0）：${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
+})
+
+let phasePulseChart: echarts.ECharts | null = null
+
+function renderPhasePulseChart(): void {
+  if (!phasePulseChartEl.value || !pulseBands.value.length) return
+  // 空态 v-if 切换会卸载并重挂图表容器：旧实例绑定的 DOM 已分离，必须 dispose 后重建
+  if (phasePulseChart && phasePulseChart.getDom() !== phasePulseChartEl.value) {
+    phasePulseChart.dispose()
+    phasePulseChart = null
+  }
+  if (!phasePulseChart) {
+    phasePulseChart = echarts.init(phasePulseChartEl.value)
+  }
+  const cats = pulseBands.value.map((b) => b.tag)
+  const WEAK = '弱势40-60'
+  phasePulseChart.setOption({
+    grid: { left: 48, right: 56, top: 40, bottom: 28 },
+    legend: { top: 0, textStyle: { fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: Array<{ axisValue: string; value: number | null; seriesName: string }>) => {
+        const band = pulseBands.value.find((b) => b.tag === params[0]?.axisValue)
+        if (!band) return params[0]?.axisValue ?? ''
+        return `${band.tag}<br/>笔数 ${band.trades}｜每笔 ${band.avgPct ?? '--'}%｜累计 ${band.sumPct.toFixed(1)}%`
+      },
+    },
+    xAxis: { type: 'category', data: cats, axisLabel: { fontSize: 11 } },
+    yAxis: [
+      { type: 'value', name: '笔数', minInterval: 1 },
+      { type: 'value', name: '每笔 %', position: 'right' },
+    ],
+    series: [
+      {
+        name: '笔数',
+        type: 'bar',
+        data: pulseBands.value.map((b) => b.trades),
+        barWidth: 26,
+        itemStyle: { color: '#8b7cf6', borderRadius: [3, 3, 0, 0] },
+      },
+      {
+        name: '每笔收益%',
+        type: 'bar',
+        yAxisIndex: 1,
+        data: pulseBands.value.map((b) => b.avgPct),
+        barWidth: 26,
+        itemStyle: { color: '#f59e0b', borderRadius: [3, 3, 0, 0] },
+        markArea: {
+          silent: true,
+          data: [[{ xAxis: WEAK, itemStyle: { color: 'rgba(217,119,6,0.10)' } }, { xAxis: WEAK }]],
+        },
+      },
+    ],
+  })
+}
 
 interface PhaseMonthRow {
   month: string
@@ -2575,7 +2636,10 @@ watch(view, (v) => {
     nextTick(() => renderStageChart())
   }
   if (v === 'phase') {
-    void ensurePhaseData().then(() => nextTick(() => renderPhaseChart()))
+    void ensurePhaseData().then(() => nextTick(() => {
+      renderPhaseChart()
+      renderPhasePulseChart()
+    }))
   }
 })
 watch(trendPoints, () => {
@@ -3714,4 +3778,15 @@ watch(view, (v) => {
 
 .phase-tone-good { color: #ff6b6b; }
 .phase-tone-bad { color: #8a8f98; }
+
+.phase-pulse-chart { width: 100%; height: 260px; }
+.phase-pulse-ab {
+  font-size: 12px;
+  color: #c9cdd4;
+  background: rgba(139, 124, 246, 0.08);
+  border-left: 3px solid #8b7cf6;
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin-top: 8px;
+}
 </style>
