@@ -32,6 +32,38 @@ def _profit_factor(round_trip_trades: list[dict[str, Any]]) -> float | None:
 
 
 class TradeSimulator:
+    @staticmethod
+    def _phase_exposure_factor(config: dict[str, Any], trading_date: str) -> float:
+        """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
+
+        trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense,
+            factor: 0~1, threshold: 50.0, eodScores: {date: score}}。
+        as-of 纪律：入场日 d 的相位取 eodScores 中**严格早于 d 的最近交易日** EOD 分（前日定相）；
+        键缺失/模式 off/无前日/分数缺失 → 1.0 放行（默认关=golden 逐位不变，缺信号不错杀）。
+        factor=0 语义=该相位禁止新开仓（调用方跳过）。
+        """
+        ctrl = config.get("phaseExposureControl")
+        if not isinstance(ctrl, dict):
+            return 1.0
+        mode = str(ctrl.get("mode") or "off")
+        if mode not in ("reduce_offense", "reduce_defense"):
+            return 1.0
+        eod = ctrl.get("eodScores") or {}
+        prev_dates = [d for d in eod if str(d) < str(trading_date)]
+        if not prev_dates:
+            return 1.0
+        score = eod[max(prev_dates)]
+        if not isinstance(score, (int, float)):
+            return 1.0
+        threshold = float(ctrl.get("threshold") or 50.0)
+        phase = "offense" if score >= threshold else "defense"
+        if mode != f"reduce_{phase}":
+            return 1.0
+        try:
+            return max(0.0, min(1.0, float(ctrl.get("factor", 0.5))))
+        except (TypeError, ValueError):
+            return 1.0
+
     def run(self, frames: list[dict[str, Any]], signals: list[dict[str, Any]], config_patch: dict[str, Any] | None = None) -> dict[str, Any]:
         config = {**DEFAULT_TRADE_CONFIG, **(config_patch or {})}
         strategy_key = normalize_strategy_name(config.get("entryStrategy") or config.get("controlStrategy") or config.get("strategyName"))
@@ -288,6 +320,13 @@ class TradeSimulator:
                 if TradeSimulator._config_bool(config, "tierPositionScale"):
                     entry_tier = TradeSimulator._synergy_tier_of(signal) or ""
                     allocation *= float((config.get("tierPositionScales") or {}).get(entry_tier, 1.0))
+                # M3 相位暴露控制（研究开关，默认关=1.0；factor 0=禁止新开仓）
+                phase_factor = TradeSimulator._phase_exposure_factor(config, str(frame.get("tradingDate") or ""))
+                if phase_factor <= 0.0:
+                    matching_stats["blockedByPhase"] = matching_stats.get("blockedByPhase", 0) + 1
+                    continue
+                if phase_factor < 1.0:
+                    allocation *= phase_factor
                 estimated_price = self._quote_price_for_side(quote, "buy", raw_price, config)
                 quantity = int((allocation - allocation * config["feeRate"]) / estimated_price / 100) * 100 if estimated_price > 0 else 0
                 if quantity <= 0:
