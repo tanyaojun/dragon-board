@@ -100,14 +100,14 @@ describe('DataTable row detail interactions', () => {
     expect(source).not.toMatch(/<span class="signal-percent">\{\{ Math\.round\(getFinalConfidence\(stock\) \|\| 0\) \}\}%<\/span>/)
   })
 
-  test('shows resonance intensity column with directional color classes', () => {
+  test('shows resonance intensity column with tier letter badge', () => {
     const source = dataTableSource()
 
     expect(source).toContain("{ key: 'resonanceIntensity', label: '共振'")
     expect(source).toContain("resonanceIntensity: '60px'")
     expect(source).toContain("col.key === 'resonanceIntensity'")
+    // 2026-09-29 用户裁决：单元格显示档位字母徽章；分值/方向明细由 tooltip 消费 getResonanceCellValue
     expect(source).toContain('getResonanceCellValue')
-    expect(source).toContain('getResonanceCellClass')
     expect(source).toContain('@mouseenter="showTierTooltip($event, stock, \'resonanceIntensity\')"')
     expect(source).toContain('rankTrend?.resonance')
     expect(source).toContain('相对市场')
@@ -138,16 +138,15 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('getRankTrendStrengthValue')
     expect(source).toContain('getLifecycleOpportunityValue')
     expect(source).toContain('RankTrendObservationPanel')
-    expect(source).toContain('getRankTrendStrengthValue(stock) != null')
     expect(source).toContain('v-else-if="getLifecycleStage(stock) != null"')
     expect(source).toContain('getResonanceDirection(stock)')
     expect(source).toContain('toFiniteObservationValue')
     expect(source).toContain('<span v-else class="trend-steady">--</span>')
-    // 四列当前实现（2026-08-18）：共振/趋势/量价 = TierBadge 徽章（含方向+数值% 回退）；
+    // 四信号列当前实现（2026-09-29 用户裁决）：共振/趋势/热度/量价 = S/A/B/C/D/E 档位字母徽章；
     // 生命周期 = stage 环境门标签（无方向色徽章，veto 移入 tooltip）
-    expect(source).toContain('getDirectionArrow(getResonanceDirection(stock))')
     expect(source).toContain('getDirectionArrow(getRankTrendDirection(stock))')
-    // 徽章组件化：四列单元格经 TierBadge 渲染，不再直接调用 tierBadgeClass(getXxxTier(stock))
+    // 徽章字母化：四信号列经 getSignalTierLabel/getSignalTierClass 渲染（复用 tierBadgeClass 配色），
+    // 不直接调用 tierBadgeClass(getXxxTier(stock))
     expect(source).not.toContain('tierBadgeClass(getResonanceTier(stock))')
     expect(source).not.toContain('tierBadgeClass(getRankTrendTier(stock))')
     expect(source).not.toContain('tierBadgeClass(getVolumePriceTier(stock))')
@@ -159,7 +158,6 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain("volumePriceQuadrant: '60px'")
     expect(source).toContain('_volumePriceScore')
     expect(source).toContain('_volumePriceQuadrant')
-    expect(source).toContain('getQuadrantText')
     // 投影缺失时回退 rankTrend.observation.volumePrice（与三轨读取口径一致，缓存预热可显示）
     expect(source).toContain('getVolumePrice')
     expect(source).toContain('stock?._volumePriceScore ?? vp.score')
@@ -258,20 +256,41 @@ describe('DataTable row detail interactions', () => {
     expect(source).toContain('A 放行 → 不干预三维方向票')
   })
 
-  test('adds a 热度（crossSection）column driven by percentile (方向+数值%，非档位徽章)', () => {
+  test('adds a 热度（crossSection）column with tier letter badge (2026-09-29 用户裁决)', () => {
     const source = dataTableSource()
 
     // 热度列紧跟趋势列后（2026-08-24；技术字段 crossSection，UI 展示名「热度」），group comprehensive
     expect(source).toContain("{ key: 'crossSection', label: '热度'")
     expect(source).toContain("crossSection: '60px'")
     expect(source).toContain("col.key === 'crossSection'")
-    // 单元格：方向（percentile≥50 向上/向下）+ 数值%（percentile），不渲染档位徽章
-    expect(source).toContain('getCrossSectionDirection(stock)')
-    expect(source).toContain('getCrossSectionValue(stock)')
-    expect(source).toContain('getDirectionArrow(getCrossSectionDirection(stock))')
-    // tooltip 分支
+    // 2026-09-29 用户裁决：单元格显示 S/A/B/C/D/E 档位字母徽章（取消 2026-08-24 的方向+数值%）
+    expect(source).toContain('getSignalTierLabel(stock, col.key)')
+    expect(source).toContain('getCrossSectionTier')
+    // tooltip 分支仍按 percentile 推算方向/分值展示
     expect(source).toContain("showTierTooltip($event, stock, 'crossSection')")
     expect(source).toContain("field === 'crossSection'")
+  })
+
+  test('renders S/A/B/C/D/E letter badges in the four signal columns (2026-09-29 用户裁决)', () => {
+    const source = dataTableSource()
+
+    // 四信号列（共振/趋势/热度/量价）档位取值复用 tierDisplay（后端 signalTier，不新增档位算法）
+    expect(source).toContain('resonanceIntensity: getResonanceTier,')
+    expect(source).toContain('rankTrendStrength: getRankTrendTier,')
+    expect(source).toContain('crossSection: getCrossSectionTier,')
+    expect(source).toContain('volumePriceQuadrant: getVolumePriceTier,')
+    // 单元格：tier-badge 基础类 + tierBadgeClass 配色 + tierBadgeLabel 字母
+    expect(source).toContain('class="tier-badge"')
+    expect(source).toContain('getSignalTierClass(stock, col.key)')
+    expect(source).toContain('{{ getSignalTierLabel(stock, col.key) }}</span>')
+    // 档位缺失/unknown → null → 显示 '--'（fail-visible，不伪装）
+    expect(source).toContain("tier && tier !== 'unknown' ? tierBadgeLabel(tier) : null")
+    expect(source).toContain('<span v-else class="trend-steady">--</span>')
+    // 字母徽章与五维度列 TierBadge 图标区分：四信号列不使用 TierBadge 组件
+    expect(source).not.toContain('<TierBadge v-if="getSignalTierLabel')
+    // 趋势列 MACD 金/死叉 ▲▼ 事件徽章保留
+    expect(source).toContain("getMacdCrossBadge(stock) === 'golden'")
+    expect(source).toContain("getMacdCrossBadge(stock) === 'death'")
   })
 
   test('collapses the nine platform rank columns by default with a toggle', () => {

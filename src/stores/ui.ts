@@ -7,8 +7,13 @@ import { EventManager } from '../utils/eventManager'
 import { AppEvents } from '../types'
 import { dataLayer } from '../services/DataLayer'
 import {
+  getCrossSectionTier,
+  getRankTrendTier,
+  getResonanceTier,
   getSynergyTier,
+  getVolumePriceTier,
 } from '@/services/rankTrend/tierDisplay'
+import type { RankTrendSignalTier } from '@/services/rankTrend/types'
 
 type SortField = string
 
@@ -26,8 +31,8 @@ function getRankTrendAnalysis(stock: any) {
   return stock?.rankTrend ?? null
 }
 
-/** 档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后。五维度（synergy）与周期（lifecycle）共用 */
-const SYNERGY_TIER_LEVEL: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 }
+/** 档位等级（S 最高 → E 最低）；unknown/缺失为 null 排最后。四信号列（共振/趋势/热度/量价）与五维度（synergy）共用 */
+const SIGNAL_TIER_LEVEL: Record<string, number> = { S: 5, A: 4, B: 3, C: 2, D: 1, E: 0 }
 
 /**
  * 生命周期阶段序数（2026-09-19 修复）：周期列显示 stage（点火/扩散/拥挤/反转/冷却），
@@ -59,80 +64,50 @@ function getLifecycleStageOf(stock: any): string | null {
   return typeof stage === 'string' && stage in LIFECYCLE_STAGE_ORDER ? stage : null
 }
 
-/**
- * 方向排序组（2026-08-24）：buy/up=1、中性/未知=0、sell/down=-1。
- * 四信号（共振/趋势/热度/量价）方向组**固定**「向上恒前」，不随 order 反转（见
- * isDirectionFixedSortField）；组内数值%仍随 order 升降。
- */
-const dirRankOf = (dir: unknown): number =>
-  dir === 'buy' || dir === 'up' ? 1 : dir === 'sell' || dir === 'down' ? -1 : 0
-
-/**
- * 2026-08-24：共振/趋势/热度/量价四信号——方向组固定「向上（buy/up）恒前」，
- * 不随 order 反转（升序/降序都向上优先）；五维度/周期不走方向组
- * （周期 2026-09-19 起按显示的 stage 序数排序，见 sortedStocks 专用分支）。
- */
-function isDirectionFixedSortField(field: SortField): boolean {
-  return (
-    field === 'resonanceIntensity' ||
-    field === 'rankTrendStrength' ||
-    field === 'crossSection' ||
-    field === 'volumePriceQuadrant'
-  )
-}
-
-function getResonanceDirectionOf(stock: any): unknown {
-  const resonance = getRankTrendAnalysis(stock)?.resonance
-  return resonance?.status === 'ok' ? resonance.direction ?? 'hold' : 'hold'
-}
-
 function getRankTrendStrengthScoreOf(stock: any): number | null {
   if (stock?._rankTrendPct !== undefined) return toFiniteNumber(stock._rankTrendPct)
   return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.rankTrend?.score)
-}
-
-function getRankTrendDirectionOf(stock: any): unknown {
-  return (
-    stock?._rankTrendDirection ??
-    getRankTrendAnalysis(stock)?.observation?.rankTrend?.direction ??
-    'hold'
-  )
-}
-
-function getVolumePriceDirectionOf(stock: any): unknown {
-  return (
-    stock?._volumePriceDirection ??
-    getRankTrendAnalysis(stock)?.observation?.volumePrice?.direction ??
-    'neutral'
-  )
 }
 
 function getCrossSectionPercentileOf(stock: any): number | null {
   return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.crossSection?.percentile)
 }
 
-function getCrossSectionDirectionOf(stock: any): unknown {
-  const pct = getCrossSectionPercentileOf(stock)
-  if (pct == null) return 'neutral'
-  return pct >= 50 ? 'buy' : 'sell'
+/**
+ * 四信号列（共振/趋势/热度/量价）档位排序（2026-09-29 用户裁决）：排序与列显示同字段——
+ * 按档位等级 S=5→E=0 分组（复用 SIGNAL_TIER_LEVEL），同档位组内按现有分值（score/percentile
+ * 投影）次级排序；unknown/缺失 → null 恒排最后（fail-visible）。档位取值复用 tierDisplay
+ * （stock.rankTrend.*.signalTier），不新增档位算法；原方向组排序（2026-08-24 的「向上恒前」）
+ * 已随本次裁决移除。
+ */
+const SIGNAL_TIER_SORT_GETTERS: Record<string, (stock: unknown) => RankTrendSignalTier | null> = {
+  resonanceIntensity: getResonanceTier,
+  rankTrendStrength: getRankTrendTier,
+  crossSection: getCrossSectionTier,
+  volumePriceQuadrant: getVolumePriceTier,
 }
 
-function getDirectionalSortRank(stock: any, field: SortField): number {
-  // 2026-08-24：共振/趋势/热度/量价 → 方向组（buy/up 高在前；档位不参与，见 getStockSortValue 按数值%）
-  if (field === 'resonanceIntensity') {
-    return dirRankOf(getResonanceDirectionOf(stock))
-  }
-  if (field === 'rankTrendStrength') {
-    return dirRankOf(getRankTrendDirectionOf(stock))
-  }
-  if (field === 'crossSection') {
-    return dirRankOf(getCrossSectionDirectionOf(stock))
-  }
+function isSignalTierSortField(field: SortField): boolean {
+  return Object.prototype.hasOwnProperty.call(SIGNAL_TIER_SORT_GETTERS, field)
+}
+
+function getSignalTierSortValue(stock: Stock, field: SortField): number | null {
+  const tier = SIGNAL_TIER_SORT_GETTERS[field]?.(stock)
+  return tier && tier !== 'unknown' ? SIGNAL_TIER_LEVEL[tier] : null
+}
+
+/** 同档位组内次级排序值：现有分值/percentile 投影（与原数值%排序口径一致） */
+function getSignalScoreSortValue(stock: Stock, field: SortField): number | null {
+  if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
+  if (field === 'rankTrendStrength') return getRankTrendStrengthScoreOf(stock)
+  if (field === 'crossSection') return getCrossSectionPercentileOf(stock)
   if (field === 'volumePriceQuadrant') {
-    return dirRankOf(getVolumePriceDirectionOf(stock))
+    // 量价分（0-100）：投影优先，回退 rankTrend.observation.volumePrice.score（与三指标回退口径一致）
+    const projected = (stock as any)._volumePriceScore
+    if (projected !== undefined) return toFiniteNumber(projected)
+    return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.volumePrice?.score)
   }
-  // 五维度/周期（2026-08-26 用户需求）：纯档位排序，不走方向组（见 sortedStocks 专用分支）
-  return 0
+  return null
 }
 
 function getResonanceIntensitySortValue(stock: any): number | null {
@@ -153,27 +128,19 @@ const LIMIT_UP_MISSING_LAST_SORT_FIELDS = new Set([
 ])
 
 function getStockSortValue(stock: Stock, field: SortField): string | number | null {
-  if (field === 'resonanceIntensity') return getResonanceIntensitySortValue(stock)
-  // 2026-08-24：趋势列显示方向+数值%——排序值取排名趋势分（弃热度档位，热度独立成列）
-  if (field === 'rankTrendStrength') return getRankTrendStrengthScoreOf(stock)
-  // 2026-08-24：热度（技术字段 crossSection）排序值取 percentile
-  if (field === 'crossSection') return getCrossSectionPercentileOf(stock)
+  // 2026-09-29 用户裁决：共振/趋势/热度/量价四列按档位等级排序（与列显示的 S/A/B/C/D/E 徽章同字段）；
+  // 同档位组内按现有分值次级排序（见 sortedStocks）；档位缺失/unknown → null 恒排最后
+  if (isSignalTierSortField(field)) return getSignalTierSortValue(stock, field)
   // 2026-09-19 修复：周期列排序值取生命周期阶段序数（与列显示的 stage 同字段，点火=5 → 冷却=1）；
   // 同阶段组内按分值次级排序（见 sortedStocks）；无阶段/缺失 → null 恒排最后
   if (field === 'lifecycleOpportunity') {
     const stage = getLifecycleStageOf(stock)
     return stage ? LIFECYCLE_STAGE_ORDER[stage] ?? null : null
   }
-  if (field === 'volumePriceQuadrant') {
-    // 量价分（0-100）：投影优先，回退 rankTrend.observation.volumePrice.score（与三指标回退口径一致）
-    const projected = (stock as any)._volumePriceScore
-    if (projected !== undefined) return toFiniteNumber(projected)
-    return toFiniteNumber(getRankTrendAnalysis(stock)?.observation?.volumePrice?.score)
-  }
   if (field === 'synergyTier') {
     // synergy 合并档位等级值（S=5 → E=0）；unknown/缺失 → null 排最后
     const tier = getSynergyTier(stock)
-    return tier && tier !== 'unknown' ? SYNERGY_TIER_LEVEL[tier] : null
+    return tier && tier !== 'unknown' ? SIGNAL_TIER_LEVEL[tier] : null
   }
   if (field === 'avgRank') {
     return (
@@ -348,27 +315,20 @@ export const useUIStore = defineStore('ui', () => {
 
     result.sort((a, b) => {
       // 五维度（2026-08-26 用户需求）：纯档位排序——↓降序=高档（A/S）在前、↑升序=低档（E）在前；
+      // 四信号列（2026-09-29 用户裁决）：共振/趋势/热度/量价按档位等级分组排序（与列显示的
+      // S/A/B/C/D/E 徽章同字段），同档位组内按现有分值（score/percentile 投影）次级排序；
       // 周期（2026-09-19 修复）：按显示的 stage 序数聚簇（点火>扩散>拥挤>反转>冷却），
       // 同阶段组内按分值次级排序；档位/阶段缺失（null）恒排最后（fail-visible，不伪装）。
-      if (field === 'synergyTier' || field === 'lifecycleOpportunity') {
+      if (field === 'synergyTier' || isSignalTierSortField(field) || field === 'lifecycleOpportunity') {
         const byTier = compareSortValues(getStockSortValue(a, field), getStockSortValue(b, field), order)
         if (byTier !== 0) return byTier
         if (field === 'lifecycleOpportunity') {
           return compareSortValues(getLifecycleScoreOf(a), getLifecycleScoreOf(b), order)
         }
-        return 0
-      }
-      // 方向字段：先按方向组排序；组内再按数值 + order。
-      const directionRankA = getDirectionalSortRank(a, field)
-      const directionRankB = getDirectionalSortRank(b, field)
-      if (directionRankA !== directionRankB) {
-        // 2026-08-24：共振/趋势/热度/量价四信号——方向组固定（buy/up 恒前），
-        // 不随 order 反转（无论升序降序，「向上」都排前面）；组内数值仍随 order 升降。
-        const directionFixed = isDirectionFixedSortField(field)
-        if (directionFixed) {
-          return directionRankB - directionRankA
+        if (isSignalTierSortField(field)) {
+          return compareSortValues(getSignalScoreSortValue(a, field), getSignalScoreSortValue(b, field), order)
         }
-        return order === 'asc' ? directionRankB - directionRankA : directionRankA - directionRankB
+        return 0
       }
       return compareSortValues(getStockSortValue(a, field), getStockSortValue(b, field), order)
     })

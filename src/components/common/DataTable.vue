@@ -120,17 +120,14 @@
               <span class="stock-name-text">{{ formatCell(col.key, stock) }}</span>
             </template>
 
-            <!-- 共振强度列：方向+数值%（2026-08-24 取消档位徽章） -->
+            <!-- 共振强度列：S/A/B/C/D/E 档位字母徽章（2026-09-29 用户裁决，取消 2026-08-24 的方向+数值%；
+                 字母样式与五维度列 TierBadge 图标区分，方向/分值/原因见悬停 tooltip） -->
             <template v-else-if="col.key === 'resonanceIntensity'">
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'resonance')"
                 @mouseenter="showTierTooltip($event, stock, 'resonanceIntensity')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <template v-if="getResonanceCellValue(stock) != null">
-                  <span :class="getResonanceCellClass(stock)">
-                    {{ getDirectionArrow(getResonanceDirection(stock)) }}
-                  </span>
-                  <span :class="getResonanceCellClass(stock)">{{ getResonanceCellValue(stock) }}%</span>
-                </template>
+                <span v-if="getSignalTierLabel(stock, col.key)" class="tier-badge"
+                  :class="getSignalTierClass(stock, col.key)">{{ getSignalTierLabel(stock, col.key) }}</span>
                 <span v-else class="trend-steady">--</span>
               </div>
             </template>
@@ -139,14 +136,9 @@
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'technical')"
                 @mouseenter="showTierTooltip($event, stock, 'rankTrendStrength')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 2026-08-24：趋势改回方向+数值%（取消横截面徽章，热度独立成列） -->
-                <template v-if="getRankTrendStrengthValue(stock) != null">
-                  <span :class="getDirectionClass(getRankTrendDirection(stock))">
-                    {{ getDirectionArrow(getRankTrendDirection(stock)) }}
-                  </span>
-                  <span :class="getDirectionClass(getRankTrendDirection(stock))">{{ getRankTrendStrengthValue(stock)
-                  }}%</span>
-                </template>
+                <!-- 2026-09-29 用户裁决：趋势列显示 S/A/B/C/D/E 档位字母徽章（取消 2026-08-24 的方向+数值%） -->
+                <span v-if="getSignalTierLabel(stock, col.key)" class="tier-badge"
+                  :class="getSignalTierClass(stock, col.key)">{{ getSignalTierLabel(stock, col.key) }}</span>
                 <span v-else class="trend-steady">--</span>
                 <!-- 2026-09-21 用户裁决：趋势徽章改 MACD 金/死叉事件触发（py technical.macd.cross，
                      交叉帧才非 none 的事件语义；缺字段→无徽章） -->
@@ -155,16 +147,14 @@
               </div>
             </template>
 
-            <!-- 热度列（技术字段 crossSection，UI 展示名「热度」）：方向+数值%（2026-08-24 新增独立列，percentile 推算方向/分值） -->
+            <!-- 热度列（技术字段 crossSection，UI 展示名「热度」）：S/A/B/C/D/E 档位字母徽章
+                 （2026-09-29 用户裁决，取消 2026-08-24 的方向+数值%；percentile 方向/分值见悬停 tooltip） -->
             <template v-else-if="col.key === 'crossSection'">
               <div class="observation-cell cross-section-cell"
                 @mouseenter="showTierTooltip($event, stock, 'crossSection')" @mousemove="moveConfidenceTooltip($event)"
                 @mouseleave="hideConfidenceTooltip">
-                <template v-if="getCrossSectionValue(stock) != null">
-                  <span :class="getCrossSectionClass(stock)">{{ getDirectionArrow(getCrossSectionDirection(stock))
-                  }}</span>
-                  <span :class="getCrossSectionClass(stock)">{{ getCrossSectionValue(stock) }}%</span>
-                </template>
+                <span v-if="getSignalTierLabel(stock, col.key)" class="tier-badge"
+                  :class="getSignalTierClass(stock, col.key)">{{ getSignalTierLabel(stock, col.key) }}</span>
                 <span v-else class="trend-steady">--</span>
               </div>
             </template>
@@ -191,8 +181,10 @@
               <div class="observation-cell" @click.stop="openObservationPanel(stock, 'volumePrice')"
                 @mouseenter="showTierTooltip($event, stock, 'volumePriceQuadrant')"
                 @mousemove="moveConfidenceTooltip($event)" @mouseleave="hideConfidenceTooltip">
-                <!-- 2026-08-24：量价列改方向+数值%（取消档位徽章） -->
-                <span :class="getQuadrantClass(stock)">{{ getQuadrantText(stock) }}</span>
+                <!-- 2026-09-29 用户裁决：量价列显示 S/A/B/C/D/E 档位字母徽章（取消 2026-08-24 的方向+数值%） -->
+                <span v-if="getSignalTierLabel(stock, col.key)" class="tier-badge"
+                  :class="getSignalTierClass(stock, col.key)">{{ getSignalTierLabel(stock, col.key) }}</span>
+                <span v-else class="trend-steady">--</span>
               </div>
             </template>
 
@@ -318,6 +310,7 @@ import {
   tierBadgeClass,
   tierBadgeLabel,
 } from '@/services/rankTrend/tierDisplay'
+import type { RankTrendSignalTier } from '@/services/rankTrend/types'
 import { classifyVolumeRatio, volumeRatioStateLabel } from '@/utils/volumeRatio'
 import {
   classifyFundSignal,
@@ -810,30 +803,6 @@ const getRiskLevel = (score: number, mediumThreshold: number, highThreshold: num
 const getDirectionArrow = (direction?: string | null) =>
   direction === 'buy' ? '↑' : direction === 'sell' ? '↓' : '—'
 
-const getDirectionClass = (direction?: string | null) =>
-  direction === 'buy'
-    ? 'observation-buy'
-    : direction === 'sell'
-      ? 'observation-sell'
-      : 'observation-hold'
-
-// 热度（技术字段 crossSection）：仅 percentile，方向/分值由其推算（2026-08-24）
-const getCrossSectionPercentile = (stock: any): number | null => {
-  const cs = getRankTrendAnalysis(stock)?.observation?.crossSection ?? {}
-  const pct = typeof cs.percentile === 'number' ? Math.round(cs.percentile) : null
-  return pct
-}
-
-const getCrossSectionValue = (stock: any): number | null => getCrossSectionPercentile(stock)
-
-const getCrossSectionDirection = (stock: any): 'buy' | 'sell' | null => {
-  const pct = getCrossSectionPercentile(stock)
-  if (pct == null) return null
-  return pct >= 50 ? 'buy' : 'sell'
-}
-
-const getCrossSectionClass = (stock: any): string => getDirectionClass(getCrossSectionDirection(stock))
-
 const toFiniteObservationValue = (value: unknown): number | null => {
   const numeric = Number(value)
   return Number.isFinite(numeric) ? numeric : null
@@ -1248,8 +1217,9 @@ const getTierReasonsOf = (stock: any, field: string): string[] => {
   return []
 }
 
-// 档位悬停：四列（共振/趋势/量价/周期）tooltip 显示"档位字母，原因"（如"B，方向确认但路径持续不足"），
-// 单元格不再渲染徽章以免与【synergy】最终信号混淆；synergy 列保留徽章与完整说明
+// 档位悬停：五列（共振/趋势/热度/量价/周期）tooltip 显示"档位字母，原因"（如"B，方向确认但路径持续不足"）。
+// 2026-09-29 用户裁决：四信号列单元格已恢复档位字母徽章（字母样式与五维度 TierBadge 图标区分，
+// 不与【synergy】最终信号混淆）；悬停仍展示档位+方向+分值+原因明细
 const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
   hideRowTooltip()
   const lines: string[] = []
@@ -1619,9 +1589,29 @@ function getResonanceCellValue(stock: any): number | null {
   return value === null ? null : Math.round(value)
 }
 
-function getResonanceCellClass(stock: any): string {
-  return getDirectionClass(getResonanceDirection(stock))
+// ========== 信号列档位字母徽章（2026-09-29 用户裁决） ==========
+// 共振/趋势/热度/量价四列显示 S/A/B/C/D/E 档位字母（取消 2026-08-24 的「方向+数值%」），
+// 复用 tierDisplay 档位取值与配色；字母样式与五维度列 TierBadge 图标徽章视觉区分，
+// 避免与【synergy】最终信号混淆。档位缺失/unknown → 显示 '--'（fail-visible，不伪装）。
+const SIGNAL_TIER_GETTERS: Record<string, (stock: unknown) => RankTrendSignalTier | null> = {
+  resonanceIntensity: getResonanceTier,
+  rankTrendStrength: getRankTrendTier,
+  crossSection: getCrossSectionTier,
+  volumePriceQuadrant: getVolumePriceTier,
 }
+
+const getSignalTierOf = (stock: any, field: string): RankTrendSignalTier | null =>
+  SIGNAL_TIER_GETTERS[field]?.(stock) ?? null
+
+/** 档位字母文本（S/A/B/C/D/E）；缺失/unknown → null（模板回退 '--'） */
+const getSignalTierLabel = (stock: any, field: string): string | null => {
+  const tier = getSignalTierOf(stock, field)
+  return tier && tier !== 'unknown' ? tierBadgeLabel(tier) : null
+}
+
+/** 档位配色 class（tier-s/a/b/c/d/e） */
+const getSignalTierClass = (stock: any, field: string): string | null =>
+  tierBadgeClass(getSignalTierOf(stock, field))
 
 const getMacdCross = (stock: any) =>
   getRankTrendAnalysis(stock)?.technical?.macd?.cross ?? stock?.macdCross ?? 'none'
@@ -1833,8 +1823,8 @@ const getVolumeRatioClass = (stock: any) => {
 }
 
 // ========== 量价配合（四象限列） ==========
-// 列内文本参照三指标列「方向 + 数值」：↑/↓ 为涨跌方向，数值为量价综合评估值（0-100）；
-// 完整四象限语义（放量上涨等）由颜色（quadrant-*）与 tooltip 承载。
+// 2026-09-29 用户裁决：列内显示 S/A/B/C/D/E 档位字母徽章；方向/分值/四象限语义（放量上涨等）
+// 由悬停 tooltip 承载。
 // 读取口径与三轨一致：投影（_volumePrice*）优先，投影缺失时回退直接读
 // rankTrend.observation.volumePrice（后端 Redis 缓存/前端缓存预热提供的 rankTrend 数据），
 // 避免分析未完成时整列回退为 '--'。
@@ -1851,19 +1841,6 @@ const getVolumePrice = (stock: any) => {
         : [],
     breakdown: stock?._volumePriceBreakdown ?? vp.breakdown ?? null,
   }
-}
-
-const getQuadrantText = (stock: any) => {
-  const score = getVolumePrice(stock).score
-  if (score == null) return '--'
-  const direction = getVolumePrice(stock).direction
-  const arrow = direction === 'up' ? '↑' : direction === 'down' ? '↓' : ''
-  return `${arrow}${Math.round(Number(score))}%`
-}
-
-const getQuadrantClass = (stock: any) => {
-  const quadrant = getVolumePrice(stock).quadrant
-  return quadrant ? `quadrant-${quadrant}` : ''
 }
 
 const getVolumeRatioTitle = (stock: any) => {

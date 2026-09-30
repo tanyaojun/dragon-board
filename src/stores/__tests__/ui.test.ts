@@ -82,7 +82,8 @@ describe('UIStore table sorting', () => {
     dataLayer.reset()
   })
 
-  it('sorts rank-trend strength by the displayed observation score', () => {
+  it('sorts rank-trend strength by score when tiers are absent (all rows fall to the trailing null group)', () => {
+    // 2026-09-29 档位排序后：无 signalTier 的行归末组（null），组内按分值次级排序
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       { code: '000001', name: '低强度', _rankTrendPct: 18 },
@@ -258,99 +259,117 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001'])
   })
 
-  it('sorts resonance intensity direction-first: buy above sell regardless of score', () => {
+  it('sorts resonance intensity by tier level (S→E) with score inside each group', () => {
+    // 2026-09-29 用户裁决：四信号列按档位 S/A/B/C/D/E 分组排序（降序 S 组在前、升序 E 组在前），
+    // 同档位组内按现有分值次级排序；方向不再参与排序
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       {
         code: '000001',
-        name: '下降高分',
+        name: 'B档高分',
         _resonancePct: 90,
-        rankTrend: { resonance: { status: 'ok', direction: 'sell', score: 90 } },
+        rankTrend: { resonance: { status: 'ok', direction: 'sell', score: 90, signalTier: 'B' } },
       },
       {
         code: '000002',
-        name: '上升低分',
+        name: 'S档低分',
         _resonancePct: 20,
-        rankTrend: { resonance: { status: 'ok', direction: 'buy', score: 20 } },
+        rankTrend: { resonance: { status: 'ok', direction: 'buy', score: 20, signalTier: 'S' } },
       },
       {
         code: '000003',
-        name: '上升高分',
+        name: 'S档高分',
         _resonancePct: 88,
-        rankTrend: { resonance: { status: 'ok', direction: 'buy', score: 88 } },
+        rankTrend: { resonance: { status: 'ok', direction: 'buy', score: 88, signalTier: 'S' } },
       },
+      {
+        code: '000004',
+        name: 'E档',
+        _resonancePct: 50,
+        rankTrend: { resonance: { status: 'ok', direction: 'hold', score: 50, signalTier: 'E' } },
+      },
+      { code: '000005', name: '缺失', rankTrend: { observation: {} } },
     ])
 
+    // asc（首次点击）：E(0) → B(3) → S 组内分值升序 [20,88] → 缺失恒最后
     uiStore.toggleSort('resonanceIntensity')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000004', '000001', '000002', '000003', '000005'])
 
+    // desc：S 组内分值降序 [88,20] → B → E → 缺失仍最后
     uiStore.toggleSort('resonanceIntensity')
-    // desc：方向组固定（buy/up 恒前），组内降序 → [上升88, 上升20, 下降90]
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001', '000004', '000005'])
   })
 
-  it('sorts rank-trend strength direction-first: buy above sell regardless of score', () => {
+  it('sorts rank-trend strength by tier level (S→E) with score inside each group', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
-      { code: '000001', name: '下降30', _rankTrendPct: 30, _rankTrendDirection: 'sell' },
-      { code: '000002', name: '上升20', _rankTrendPct: 20, _rankTrendDirection: 'buy' },
-      { code: '000003', name: '上升90', _rankTrendPct: 90, _rankTrendDirection: 'buy' },
+      { code: '000001', name: 'A档低分', _rankTrendPct: 20, _rankTrendDirection: 'buy', rankTrend: { observation: { rankTrend: { score: 20, signalTier: 'A' } } } },
+      { code: '000002', name: 'S档低分', _rankTrendPct: 30, _rankTrendDirection: 'sell', rankTrend: { observation: { rankTrend: { score: 30, signalTier: 'S' } } } },
+      { code: '000003', name: 'S档高分', _rankTrendPct: 90, _rankTrendDirection: 'buy', rankTrend: { observation: { rankTrend: { score: 90, signalTier: 'S' } } } },
+      { code: '000004', name: '缺失' },
     ])
 
     uiStore.toggleSort('rankTrendStrength')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+    // asc：A(4) → S 组内分值升序 [30,90]；方向不再参与排序 → 缺失恒最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000002', '000003', '000004'])
 
     uiStore.toggleSort('rankTrendStrength')
-    // desc：方向组固定（buy/up 恒前），组内降序 → [上升90, 上升20, 下降30]
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+    // desc：S 组内分值降序 [90,30] → A → 缺失仍最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001', '000004'])
   })
 
-  it('sorts volume-price direction-first: up above down regardless of score (与三指标一致)', () => {
+  it('sorts volume-price by tier level (S→E) with score inside each group', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
       {
         code: '000001',
-        name: '下降高分',
+        name: 'B档高分',
         _volumePriceScore: 90,
         _volumePriceDirection: 'down',
+        rankTrend: { observation: { volumePrice: { score: 90, signalTier: 'B' } } },
       },
       {
         code: '000002',
-        name: '上升低分',
+        name: 'S档低分',
         _volumePriceScore: 20,
         _volumePriceDirection: 'up',
+        rankTrend: { observation: { volumePrice: { score: 20, signalTier: 'S' } } },
       },
       {
         code: '000003',
-        name: '上升高分',
+        name: 'S档高分',
         _volumePriceScore: 88,
         _volumePriceDirection: 'up',
+        rankTrend: { observation: { volumePrice: { score: 88, signalTier: 'S' } } },
       },
+      { code: '000004', name: '缺失' },
     ])
 
     uiStore.toggleSort('volumePriceQuadrant')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+    // asc：B(3) → S 组内分值升序 [20,88]；方向不再参与排序
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000002', '000003', '000004'])
 
     uiStore.toggleSort('volumePriceQuadrant')
-    // desc：方向组固定（buy/up 恒前），组内降序 → [上升88, 上升20, 下降90]
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+    // desc：S 组内分值降序 [88,20] → B → 缺失仍最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001', '000004'])
   })
 
-  it('sorts cross section by percentile direction-first (方向+数值%)', () => {
+  it('sorts cross section (热度) by tier level (S→E) with percentile inside each group', () => {
     const uiStore = useUIStore()
     dataLayer.setMergedStocks([
-      { code: '000001', name: '低位', rankTrend: { observation: { crossSection: { percentile: 20 } } } },
-      { code: '000002', name: '高位', rankTrend: { observation: { crossSection: { percentile: 88 } } } },
-      { code: '000003', name: '中位', rankTrend: { observation: { crossSection: { percentile: 55 } } } },
+      { code: '000001', name: '低位C档', rankTrend: { observation: { crossSection: { percentile: 20, signalTier: 'C' } } } },
+      { code: '000002', name: '高位C档', rankTrend: { observation: { crossSection: { percentile: 88, signalTier: 'C' } } } },
+      { code: '000003', name: '中位S档', rankTrend: { observation: { crossSection: { percentile: 55, signalTier: 'S' } } } },
+      { code: '000004', name: '缺失', rankTrend: { observation: {} } },
     ])
 
     uiStore.toggleSort('crossSection')
-    // direction-first：pct<50 归 down 组（后），pct≥50 归 up 组（前）；组内 asc 升序
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001'])
+    // asc：C(2) 组内 percentile 升序 [20,88] → S(5)；percentile 不再决定分组（C 高分不越过 S）
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000002', '000003', '000004'])
 
     uiStore.toggleSort('crossSection')
-    // desc：方向组固定（pct≥50 的 up 组恒前），组内降序 → [高位88, 中位55, 低位20]
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000003', '000001'])
+    // desc：S → C 组内 percentile 降序 [88,20] → 缺失仍最后
+    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000003', '000002', '000001', '000004'])
   })
 
   it('sorts lifecycle opportunity by stage from _lifecycleStage projection fallback', () => {
@@ -394,20 +413,44 @@ describe('UIStore table sorting', () => {
     expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000003', '000002', '000004'])
   })
 
-  it('keeps missing observation direction between up and down groups in both sort directions', () => {
-    const uiStore = useUIStore()
-    dataLayer.setMergedStocks([
-      { code: '000001', name: '无方向', _rankTrendPct: 50 },
-      { code: '000002', name: '上升', _rankTrendPct: 20, _rankTrendDirection: 'buy' },
-      { code: '000003', name: '下降', _rankTrendPct: 80, _rankTrendDirection: 'sell' },
-    ])
+  it('keeps missing/unknown signal tiers last in both directions for all four signal columns', () => {
+    // 2026-09-29 用户裁决（fail-visible）：四信号列档位缺失/unknown → null 恒排最后，不伪装成任何档位
+    const cases = [
+      {
+        field: 'resonanceIntensity',
+        mk: (tier: string) => ({ rankTrend: { resonance: { status: 'ok', score: 60, signalTier: tier } } }),
+      },
+      {
+        field: 'rankTrendStrength',
+        mk: (tier: string) => ({ rankTrend: { observation: { rankTrend: { score: 60, signalTier: tier } } } }),
+      },
+      {
+        field: 'crossSection',
+        mk: (tier: string) => ({ rankTrend: { observation: { crossSection: { percentile: 60, signalTier: tier } } } }),
+      },
+      {
+        field: 'volumePriceQuadrant',
+        mk: (tier: string) => ({ rankTrend: { observation: { volumePrice: { score: 60, signalTier: tier } } } }),
+      },
+    ] as const
 
-    uiStore.toggleSort('rankTrendStrength')
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
+    for (const { field, mk } of cases) {
+      const uiStore = useUIStore()
+      dataLayer.setMergedStocks([
+        { code: '000001', name: 'E档', ...mk('E') },
+        { code: '000002', name: 'A档', ...mk('A') },
+        { code: '000003', name: 'unknown', ...mk('unknown') },
+        { code: '000004', name: '缺失' },
+      ])
 
-    uiStore.toggleSort('rankTrendStrength')
-    // desc：方向组固定（buy 恒前），组内降序 → [上升20, 无方向50, 下降80]
-    expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003'])
+      uiStore.toggleSort(field)
+      // asc：E(0) < A(4)；unknown/缺失恒最后
+      expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000001', '000002', '000003', '000004'])
+
+      uiStore.toggleSort(field)
+      // desc：A(4) > E(0)；unknown/缺失仍最后
+      expect(uiStore.sortedStocks.map((stock) => stock.code)).toEqual(['000002', '000001', '000003', '000004'])
+    }
   })
 
   it('uses the three observation columns in the default table view', () => {
