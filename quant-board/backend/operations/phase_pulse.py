@@ -41,6 +41,12 @@ def build_pulse_report(
              if d.startswith(month)
              for phase in [_phase_of(s)]}
     by_phase = slice_trades(trades, daily, "phase")
+    # 稳定键：空桶补零读数（前端月卡固定读 offense/defense 两键；evaluate 对空桶产 pass=False）
+    for bucket in ("offense", "defense"):
+        by_phase.setdefault(bucket, {
+            "trades": 0, "missingNetReturn": 0, "winRate": None, "profitFactor": None,
+            "wrxpf": None, "sumNetReturn": None, "maxSingleLoss": None,
+        })
     slices = equity_phase_slices(equity, daily)
     full = full_window or {
         "maxDD": (lambda eq: round(worst_drawdown(eq), 4) if len(eq) >= 2 else None)(
