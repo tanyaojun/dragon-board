@@ -3540,3 +3540,21 @@ saEx 盲区三案同构（效应面=交易层，saEx/synergy 口径结构性不�
 3. O8 双强：n≥500 且新代际 n≥200 后优先重判（方向已转向支持降级）；
 4. ma_join/ma_full trial 定义去重核对；
 5. 10 月批次（Wave 2 ThemeTrend 终判分册独立推进）数据落地检查点沿用本批日历。
+
+### 27.8 三项落默认执行（2026-09-30 用户当批裁决，一次一候选三连）
+
+用户对本批三个进队/提案项当批拍板"转正"，按 §5.5 落默认流程逐项执行（各独立 commit）：
+
+| 项 | 参数 | 锚复现 | 代际 | commit |
+|---|---|---|---|---|
+| O3 vsB_070 | tierSynergyVoteStrengths[2] 0.8→0.7 | 四窗逐位 = 批次 O3 trial（0.1402/0.0999/0.0898/0.0602）| 第五代 gen-2026-09-30-vsb070 | eabf4b44 |
+| N8 floor3 | degradedSampleFloor 5→3 | 四窗与第五代逐位 SAME（新增判定样本不进 saEx 统计集实证）| 第六代 gen-2026-09-30-floor3 | dfbf849b |
+| O6 midlong x30 | lifecycleMidLongCommitmentMin 15→45 | 三参组合四窗实跑 0.1472/0.1016/0.0981/0.0698（vs 第四代 oos2u +30.7% 正向叠加自洽；组合无逐位 trial 先例，如实记录）| 第七代 gen-2026-09-30-midlong-x30 | 29f96c9f |
+
+- O6 的 C4 补测（转正前置）：decision 窗四桶 delta 全部 ≥−0.01（strong −0.0019/normal +0.003/weak +0.0146/retreat +0.008）通过；oos2/oos2u 亦过；oos1 weak −0.0251 超线仅作 OOS 披露（C4 判定卡口径只查 decision 窗）。
+- TS 合同同步：tierDisplay VOTE_STRENGTH B 0.7（vue-tsc 通过）；degradedSampleFloor/lifecycleMidLongCommitmentMin 无 TS 镜像（核实）。
+- trial 语义显式化：track2 O3_vsb070 → O3_revert_vsB080 回退对照臂（fund10_over2 先例）；lifecycle_dimension c1/c2 组合臂冻结 pre-x30 历史口径（overrides 相对新默认反转）；scan_repool FLOORS[0]=5 显式基线臂即 floor3 回退对照。
+- 附带存量漂移修复：test_synergy_tier_thresholds_harness 锚测试自 89c4fd68 切单一源后未随专项跑暴露的字面量漂移，改断言 baseline_anchor() 单一源语义（随 eabf4b44）。
+- 回退路径汇总：index2 还原 0.8 / degradedSampleFloor patch 5 / lifecycleMidLongCommitmentMin patch 15——三者均为显式 patch 即回，不动默认值。
+- 首日人工验证（用户执行）：① 前端热度/共振档位展示与后端一致（B 档强度 0.7）；② 周期列「样本不足」占比下降（floor3）；③ 中长动量承诺相关信号触发率变化（x30 收紧 3 倍）与 S+A 触发率监控（R3 verdictRule 持续 <3.5% 预警线继续有效）。
+- 后续批注意点：锚代际已推进两档（第四→第七），历史 harness 的 ANCHOR_BASELINE 经 baseline_anchor() 自动跟随；B-202610 批次报告与各 *-formal.json 的 trial 读数属第四代口径（vs 当前默认），引用时须注明代际。

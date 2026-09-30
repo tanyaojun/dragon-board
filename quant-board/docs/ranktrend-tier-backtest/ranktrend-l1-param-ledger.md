@@ -455,3 +455,16 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 | O7/O8/O10 | 维持挂起（触发不成立 / 合并 n=439 方向翻转增强 / 断板 0 触发） |
 | 台账落痕核对（阶段 5.4） | P1-b persist 交叉对照 trial：未在本批发现执行落痕；persist_on 判定卡 OBSERVE（C1 −11.26% + C4 strong −25.35%）——crossSectionPersistFrames 维持关闭（与 N13 一致） |
 | 新增工程注记 | track2 BASELINE_ANCHORS 四窗激活 trial 级断言；ma_join/ma_full trial 定义疑重复待去重；lifecycle_dimension 死常量锚仍待切注册表（本批读数级人工对照替代） |
+
+## 17. B-202610 批次落默认三连（2026-09-30 用户当批裁决）
+
+| 参数 | 变更 | 判定依据 | 回退路径 | 代际/commit |
+|---|---|---|---|---|
+| tierSynergyVoteStrengths[2]（B 档票强度） | 0.8 → **0.7** | Track 2 全卡过（C1 +5.97% ∧ 三 OOS 全正）+ Track 1 80 笔中性；用户裁决转正 | index2 patch 0.8（track2 O3_revert_vsB080 对照臂） | gen-vsb070 / eabf4b44 |
+| degradedSampleFloor | 5 → **3** | insufficient 三窗 h1/h8 复现 −5.4~−5.9pp + Track 1 80 笔无伤害 + A 档 h8/B 档样本/幸存者偏差三标注；用户裁决转正 | patch 5（repool FLOORS[0] 显式基线臂） | gen-floor3 / dfbf849b |
+| lifecycleMidLongCommitmentMin | 15 → **45**（×3） | §23.7 触发成立且增强 + C1/C2/C3/C5 过 + C4 补测过；用户裁决转正 | patch 15（lifecycle 剂量臂显式基线） | gen-midlong-x30 / 29f96c9f |
+
+- 第七代锚（三参组合实跑）：0.1472/0.1016/0.0981/0.0698，passHard T/F/T/T；此后全部 harness 自动跟随。
+- R1-R6"防反悔"复检用户确认不反悔（2026-09-30），本台账 §14/§16 各"保持"结论转正式确认。
+- TS 同步：tierDisplay VOTE_STRENGTH B=0.7；另两参数无 TS 镜像（核实）。
+- 首日人工验证待用户：B 档展示一致性 / 周期列样本不足占比 / 中长承诺信号触发率与 S+A 触发率（<3.5% 预警线）。
