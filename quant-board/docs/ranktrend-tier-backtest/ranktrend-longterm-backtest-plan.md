@@ -3558,3 +3558,7 @@ saEx 盲区三案同构（效应面=交易层，saEx/synergy 口径结构性不�
 - 回退路径汇总：index2 还原 0.8 / degradedSampleFloor patch 5 / lifecycleMidLongCommitmentMin patch 15——三者均为显式 patch 即回，不动默认值。
 - 首日人工验证（用户执行）：① 前端热度/共振档位展示与后端一致（B 档强度 0.7）；② 周期列「样本不足」占比下降（floor3）；③ 中长动量承诺相关信号触发率变化（x30 收紧 3 倍）与 S+A 触发率监控（R3 verdictRule 持续 <3.5% 预警线继续有效）。
 - 后续批注意点：锚代际已推进两档（第四→第七），历史 harness 的 ANCHOR_BASELINE 经 baseline_anchor() 自动跟随；B-202610 批次报告与各 *-formal.json 的 trial 读数属第四代口径（vs 当前默认），引用时须注明代际。
+
+### 27.9 下一阶段长测计划（批次章程第三件事，2026-09-30 制定）
+
+按 rerun-plan §1"按复跑结果制定新长测计划"，B-202610 收官同日产出 **B-202611 阶段计划**：`ranktrend-b-202611-plan.md`（同目录）。要点：窗口框架推进 oos3=2026-10 全月（判定读数以此为准，oos1/oos2 降参考窗；decision 维持冻结为推荐裁决①）；新落默认三项首轮复核 R7-R9（回退臂 R7 已备、R8/R9 待加 trial 行）；O8 双强 11 月批次预计新代际子样本首过 200 线（合并 n≈484 仍未达 500，正式证伪预计 B-202612）；N1 vr 紧侧两连月全正则升 Track 2 提案；N2 交易层四课题入批、N9 推荐拆 B-202612；工程批六项（lifecycle 锚切注册表/track2 --extra-trial/ma 臂去重/saex 副本派生/锚 gitCommit 回填/平台化评估）；Wave 2 ThemeTrend 分册 10 月下旬独立推进。待裁决五项见计划 §9。
