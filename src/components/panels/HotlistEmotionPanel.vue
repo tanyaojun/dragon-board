@@ -533,8 +533,7 @@
           <!-- ⑧ 相位验收（2026-09-30 分相位验收体系前端可见化，设计 ranktrend-phase-frontend-design.md） -->
           <section v-show="view === 'phase'" class="tab-pane">
             <div class="phase-note">
-              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位（2026-09-30 用户裁决立项；
-              M1 判据为显著月不足的证据未全达状态，划分质量随月度监控持续检验）。
+              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位。
             </div>
 
             <div v-if="phaseLoading" class="state-block"><span class="spinner"></span>正在加载相位数据…</div>
