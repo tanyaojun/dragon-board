@@ -46,3 +46,19 @@
 - **对照物**：相位-收益地图 gen7 基线（c385911d）；一切适配候选以"地图读数是否改善 + 北极星走廊"验收。
 - **候选顺序**（设计 §5）：① 差相位降仓/空仓开关（直接兑现防守线；首期 defense 已双项过线，此候选聚焦"把 defense 的防守优势固化进规则"）→ ② 好相位入场放宽/加码（**前置条件：走廊数据证实 offense 劣势方向稳定后再定方向**——首期 offense 未过线且方向反直觉，暂不具备放宽依据）→ ③ 卖点按相位重审（吸收卖点课题；tp×be 市场状态依赖六次复现）→ ④ O8 双强相位收尾。
 - **纪律**：M3 任何默认值变更走一次一候选 + 用户决策 + TDD + 锚复现；M3 立项走 writing-plans 另出计划（候选 ① 可在 10 月首期月度监控后评估立项）。
+
+## 7. 前端可见化（2026-09-30 深夜追加，设计 ranktrend-phase-frontend-design.md）
+
+用户反馈"全后端运行前端无感"后落地（方案 B + Mongo 修正，6 commit）：
+
+| 件 | 实现 | 验证 |
+|---|---|---|
+| 写侧 Mongo 落库 | `phase_monitor_persistence.py`（phase_monitor 集合，kind=northstar/monthly，幂等 upsert 失败不阻断）；两 CLI 接线 | 3 passed |
+| phase-history 读口 | `GET /api/hotlist-sentiment/phase-history`（EOD 序列 server 端映射，前缀 proxy 白名单既有） | 2 passed + 8000 实测 113 日 |
+| board 读口 | `GET /api/phase-monitor/board`（新路由 + main 注册 + **proxy 白名单加行** + 3000 重启） | 2 passed + 经 3000 实测 200 |
+| 前端 service/types | `phaseApi.ts` + `phaseMonitor.ts`（degraded 降级不抛错） | vitest 5 passed |
+| overview 相位 chip | hero 区 conf-chip 旁，≥50 进攻 /<50 防守 / 缺失"相位不可用" | vue-tsc 0 错误 |
+| 第 8 页签「相位验收」 | 走廊进度/北极星读数卡/ECharts 时间线（情绪分线+50 阈值线+相位着色段）/月度监督表；懒加载 + fail-visible 降级 | 同上 |
+
+存量迁移：重跑两 CLI → `phase_monitor` 2 文档（northstar:gen7-sentiment_2b / monthly:2026-09）。专项总表：后端 32 passed + 前端 5 passed；vue-tsc 0 错误。8000/3000 已重启生效。
+**用户验收**：浏览器打开热榜情绪面板——概览 hero 见当日相位 chip；第 8 页签看时间线/北极星/走廊/监督线（用户本人执行，首日人工验证项）。
