@@ -54,7 +54,7 @@ def test_band_stats_prev_day_as_of():
         {"entryTradingDate": "2026-10-13", "netReturn": 0.14},   # 前日 10-12=70 → 强
         {"entryTradingDate": "2026-09-30", "netReturn": 0.99},   # 上月：剔除
     ]
-    eod = {"2026-10-09": 55.0, "2026-10-12": 70.0}
+    eod = {"2026-10-09": 55.0, "2026-10-12": 70.0, "2026-10-13": 60.0}
     out = band_stats(trades, eod, "2026-10")
     assert out["弱势40-60"]["trades"] == 1 and out["弱势40-60"]["sumNetReturn"] == -0.07
     assert out["强60-80"]["trades"] == 1 and out["强60-80"]["avgPerTrade"] == 0.14
