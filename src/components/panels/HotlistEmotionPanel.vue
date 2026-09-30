@@ -533,7 +533,7 @@
           <!-- ⑧ 相位验收（2026-09-30 分相位验收体系前端可见化，设计 ranktrend-phase-frontend-design.md） -->
           <section v-show="view === 'phase'" class="tab-pane">
             <div class="phase-note">
-              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位。<strong>今日相位：{{ todayPhaseText }}</strong>
+              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位。<strong>今日相位：{{ todayPhaseText }}</strong>　<strong>建议新仓仓位：{{ todayAdvice }}</strong>
             </div>
 
             <div v-if="phaseLoading" class="state-block"><span class="spinner"></span>正在加载相位数据…</div>
@@ -2430,6 +2430,16 @@ const todayPhaseText = computed(() => {
   const score = emotionScoreValue.value
   if (score == null) return '暂不可用（情绪分缺失）'
   return `${score >= PHASE_THRESHOLD ? '进攻' : '防守'}（情绪分 ${score}）`
+})
+
+// 今日建议新仓仓位（C7 阶梯③：10-40 满/40-60 零/60+ 三成；口径源=execution.py
+// phaseExposureControl ladder 模式，阈值变更两处同改；研究假设待 10 月脉拍验证）
+const todayAdvice = computed(() => {
+  const score = emotionScoreValue.value
+  if (score == null) return '暂不可用'
+  if (score < 40) return '满仓（冷带 10-40）'
+  if (score < 60) return '不开新仓（弱势带 40-60）'
+  return '三成（60+）'
 })
 
 const phasePulseText = computed(() => {
