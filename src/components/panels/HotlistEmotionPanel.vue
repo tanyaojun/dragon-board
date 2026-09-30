@@ -558,8 +558,18 @@
                 <div v-if="phasePulseText.value === '未跑'" class="state-block">
                   phase_pulse --month 当前月（盘后链每个交易日 18:00 自动跑，也可手动）
                 </div>
-                <div v-else-if="!pulseBands.length" class="state-block">脉拍产物无分带数据（旧版产物，重跑即升级）</div>
-                <div v-else ref="phasePulseChartEl" class="phase-pulse-chart"></div>
+                <div v-else-if="!pulseBandRows.length" class="state-block">脉拍产物无分带数据（旧版产物，重跑即升级）</div>
+                <div v-else class="phase-pulse-rows">
+                  <div v-for="b in pulseBandRows" :key="b.tag" class="jev-prob-row phase-pulse-row"
+                    :title="`${b.tag}：${b.trades} 笔｜累计 ${b.sumPct.toFixed(1)}%`">
+                    <span class="jev-prob-name phase-band-name">{{ b.tag }}
+                      <span v-if="b.weak" class="phase-band-badge">弱势</span></span>
+                    <span class="jev-prob-bar-wrap phase-band-track"><span class="jev-prob-bar"
+                      :style="{ width: `${b.barPct}%`, background: b.color }"></span></span>
+                    <span class="phase-band-val" :style="{ color: b.color }">{{ b.avgText }}</span>
+                    <span class="phase-band-trades">{{ b.trades }} 笔</span>
+                  </div>
+                </div>
                 <div v-if="phasePulseAbLine" class="phase-pulse-ab">{{ phasePulseAbLine }}</div>
               </div>
 
@@ -2341,9 +2351,6 @@ function handleChartsResize() {
   if (jevChart) {
     jevChart.resize()
   }
-  if (phasePulseChart) {
-    phasePulseChart.resize()
-  }
 }
 onMounted(() => {
   window.addEventListener('resize', handleChartsResize)
@@ -2370,10 +2377,6 @@ onUnmounted(() => {
     jevChart.dispose()
     jevChart = null
   }
-  if (phasePulseChart) {
-    phasePulseChart.dispose()
-    phasePulseChart = null
-  }
 })
 
 // ── 相位验收（2026-09-30 前端可见化，设计 ranktrend-phase-frontend-design.md）──
@@ -2391,7 +2394,6 @@ const phaseLoading = ref(false)
 const phaseLoadedOnce = ref(false)
 const phaseError = ref<string | null>(null)
 const phaseChartEl = ref<HTMLElement | null>(null)
-const phasePulseChartEl = ref<HTMLElement | null>(null)
 let phaseChartInstance: echarts.ECharts | null = null
 
 const phaseChip = computed(() => {
@@ -2422,6 +2424,18 @@ const pulseBands = computed(() => Object.entries(phasePulse.value?.report?.bands
   sumPct: (b?.sumNetReturn ?? 0) * 100,
 })))
 
+// 渲染行：宽度按 |每笔收益| 归一化，红涨绿跌；弱势行挂徽标
+const pulseBandRows = computed(() => {
+  const rows = pulseBands.value.map((b) => ({
+    ...b,
+    weak: b.tag === '弱势40-60',
+    color: (b.avgPct ?? 0) >= 0 ? '#ff4757' : '#2ed573',
+    avgText: b.avgPct == null ? '--' : `${b.avgPct > 0 ? '+' : ''}${b.avgPct}%`,
+  }))
+  const maxAbs = Math.max(0.0001, ...rows.map((r) => Math.abs(r.avgPct ?? 0)))
+  return rows.map((r) => ({ ...r, barPct: Math.round((Math.abs(r.avgPct ?? 0) / maxAbs) * 100) }))
+})
+
 const phasePulseAbLine = computed(() => {
   const ab = phasePulse.value?.report?.ab
   if (!ab || ab.degraded) return ''
@@ -2429,90 +2443,6 @@ const phasePulseAbLine = computed(() => {
   const delta = ab.delta
   return `A/B 弱势带回避（factor=0）：${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
 })
-
-let phasePulseChart: echarts.ECharts | null = null
-
-function renderPhasePulseChart(): void {
-  if (!phasePulseChartEl.value || !pulseBands.value.length) return
-  // 空态 v-if 切换会卸载并重挂图表容器：旧实例绑定的 DOM 已分离，必须 dispose 后重建
-  if (phasePulseChart && phasePulseChart.getDom() !== phasePulseChartEl.value) {
-    phasePulseChart.dispose()
-    phasePulseChart = null
-  }
-  if (!phasePulseChart) {
-    phasePulseChart = echarts.init(phasePulseChartEl.value)
-  }
-  const cats = pulseBands.value.map((b) => b.tag)
-  const WEAK = '弱势40-60'
-  phasePulseChart.setOption({
-    grid: { left: 48, right: 24, top: 32, bottom: 28 },
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: Array<{ axisValue: string }>) => {
-        const band = pulseBands.value.find((b) => b.tag === params[0]?.axisValue)
-        if (!band) return params[0]?.axisValue ?? ''
-        return `${band.tag}<br/>笔数 ${band.trades}｜每笔 ${band.avgPct ?? '--'}%｜累计 ${band.sumPct.toFixed(1)}%`
-      },
-    },
-    xAxis: { type: 'category', data: cats, axisLabel: { fontSize: 12 } },
-    yAxis: {
-      type: 'value',
-      name: '每笔收益 %',
-      splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } },
-    },
-    series: [
-      {
-        name: '每笔均收益',
-        type: 'bar',
-        data: pulseBands.value.map((b) => b.avgPct),
-        barWidth: 44,
-        // 中文盘面惯例：红涨绿跌，按符号着色
-        itemStyle: {
-          borderRadius: 3,
-          color: (p: { value: number | null }) => ((p.value ?? 0) >= 0 ? '#ff4757' : '#2ed573'),
-        },
-        label: {
-          show: true,
-          position: 'top',
-          fontSize: 11,
-          color: '#c9cdd4',
-          formatter: (p: { dataIndex: number }) => `${pulseBands.value[p.dataIndex]?.trades ?? 0} 笔`,
-        },
-        markLine: {
-          symbol: 'none',
-          silent: true,
-          data: [{ yAxis: 0, lineStyle: { color: 'rgba(255,255,255,0.25)' } }],
-        },
-        markArea: {
-          silent: true,
-          data: [[{ xAxis: WEAK, itemStyle: { color: 'rgba(217,119,6,0.10)' } }, { xAxis: WEAK }]],
-        },
-      },
-    ],
-  })
-}
-
-interface PhaseMonthRow {
-  month: string
-  docs: string
-  labelsFresh: boolean
-  offense: boolean | null
-  defense: boolean | null
-  saTriggerRate: number | null
-  insufficientShare: number | null
-}
-
-const phaseMonthRows = computed<PhaseMonthRow[]>(() =>
-  phaseMonths.value.map((m) => ({
-    month: m.month,
-    docs: `${m.report.coverage?.sentimentDocs ?? '--'} / ${m.report.coverage?.tradingDays ?? '--'} 日`,
-    labelsFresh: m.report.coverage?.labelsFresh === true,
-    offense: m.report.supervision?.northstar?.pass.offense ?? null,
-    defense: m.report.supervision?.northstar?.pass.defense ?? null,
-    saTriggerRate: m.report.supervision?.saTriggerRate?.value ?? null,
-    insufficientShare: m.report.supervision?.insufficientShare?.value ?? null,
-  })),
-)
 
 async function loadPhaseData(): Promise<void> {
   phaseLoading.value = true
@@ -2532,6 +2462,7 @@ async function loadPhaseData(): Promise<void> {
       phaseNorthstar.value = null
       phaseNorthstarMissingReason.value = board.reason
       phaseMonths.value = []
+      phasePulse.value = null
     } else {
       phaseNorthstar.value = board.northstar
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
@@ -2567,7 +2498,7 @@ function renderPhaseChart(): void {
     cutoff = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`
   }
   const days = cutoff ? allDays.filter((d) => d.tradingDate >= cutoff) : allDays
-  // 相位着色段：相邻同 phase 日合并为 markArea（offense 红/defense 绿，unknown 不着色）
+  if (!days.length) return
   const areas: Array<[{ xAxis: string }, { xAxis: string }]> = []
   let startIdx = -1
   for (let i = 0; i <= days.length; i++) {
@@ -2644,10 +2575,7 @@ watch(view, (v) => {
     nextTick(() => renderStageChart())
   }
   if (v === 'phase') {
-    void ensurePhaseData().then(() => nextTick(() => {
-      renderPhaseChart()
-      renderPhasePulseChart()
-    }))
+    void ensurePhaseData().then(() => nextTick(() => renderPhaseChart()))
   }
 })
 watch(trendPoints, () => {
@@ -3787,7 +3715,6 @@ watch(view, (v) => {
 .phase-tone-good { color: #ff6b6b; }
 .phase-tone-bad { color: #8a8f98; }
 
-.phase-pulse-chart { width: 100%; height: 260px; }
 .phase-pulse-ab {
   font-size: 12px;
   color: #c9cdd4;
@@ -3797,4 +3724,18 @@ watch(view, (v) => {
   border-radius: 4px;
   margin-top: 8px;
 }
+
+.phase-pulse-rows { display: flex; flex-direction: column; gap: 7px; padding: 4px 2px; }
+.phase-pulse-row { font-size: 12px; }
+.phase-band-name { width: 96px; flex: none; display: flex; align-items: center; gap: 5px; color: var(--text-primary); }
+.phase-band-badge {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: rgba(217, 119, 6, 0.18);
+  color: #f5a623;
+}
+.phase-band-track { height: 10px; border-radius: 5px; }
+.phase-band-val { width: 64px; flex: none; text-align: right; font-weight: 600; font-size: 12px; }
+.phase-band-trades { width: 44px; flex: none; text-align: right; color: var(--text-secondary); font-size: 11px; }
 </style>
