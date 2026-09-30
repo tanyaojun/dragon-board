@@ -170,7 +170,9 @@ class RankTrendConfig:
     # ── 硬编码参数化清点（2026-09-14，六区域全面 config 化；默认值=参数化前硬编码值，
     # golden 不漂移；全部登记为结构参数未扫描，无自由度消耗）──
     # 批 1：synergy 总档档位强度（原 volume_price._VOTE_STRENGTH / _CS_STRENGTH 模块硬编码）
-    tierSynergyVoteStrengths: list[float] = field(default_factory=lambda: [1.2, 1.0, 0.8, 0.5, 1.0, 1.0])  # S/A/B/C/D/E
+    # B 档 0.8→0.7 于 2026-09-30 用户决策落默认（B-202610 批次 O3 PASS_CANDIDATE：Track 2 全卡过
+    # C1 +5.97% ∧ 三 OOS 全正 + Track 1 oos2 全月 80 笔中性，长测阶段 27.3）；回退 = 还原 index2 0.8
+    tierSynergyVoteStrengths: list[float] = field(default_factory=lambda: [1.2, 1.0, 0.7, 0.5, 1.0, 1.0])  # S/A/B/C/D/E
     tierSynergyCsStrengths: list[float] = field(default_factory=lambda: [1.0, 0.5, -0.5, -1.0])  # A/B/C/D（cs/pm/dv 三维共用映射）
     # 批 2：量价打分阶梯（原 compute_volume_price_score 内硬编码；2026-09-15 阶段 25 方案 C-b
     # 扫描判零效应冗余——全部为分值幅度面，×正缩放不改符号/阈值比较，无档位杠杆，冗余归档不删实现）

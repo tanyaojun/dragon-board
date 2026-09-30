@@ -78,10 +78,12 @@ def test_vote_strengths_axes_levels_complete():
         assert got == levels, f"VoteStrengths[{tier}] 档位缺失：期望 {levels} 实际 {got}"
 
 
-def test_base_vote_strengths_matches_engine_default():
-    """BASE_VOTE_STRENGTHS 必须与引擎默认逐位一致——漂移则单变量拆分断言全部失效。"""
+def test_base_vote_strengths_frozen_pre_vsB070():
+    """BASE_VOTE_STRENGTHS 冻结为 vsB_070 落默认（2026-09-30 用户决策）前的引擎默认——
+    落默认后本 harness 基线臂语义 = 回退对照口径（与 repool FLOORS 显式 5 同理）；
+    漂移则单变量拆分断言全部失效。"""
     assert BASE_VOTE_STRENGTHS == [1.2, 1.0, 0.8, 0.5, 1.0, 1.0]
-    assert BASE_VOTE_STRENGTHS == list(RankTrendConfig().tierSynergyVoteStrengths)
+    assert list(RankTrendConfig().tierSynergyVoteStrengths) == [1.2, 1.0, 0.7, 0.5, 1.0, 1.0]
 
 
 # ---------- ② 单变量拆分（skill L31：不是打包） ----------
@@ -141,16 +143,20 @@ def test_all_patches_construct_real_config_and_apply():
 
 
 def test_baseline_anchor_constant():
-    """post-fund10 基线锚（2026-09-15 fund10 落默认后）；
-    pre-fund10 代际锚 = 0.1044/0.0918/0.0933（23.9.1 旧口径，方案 B harness 所用）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """ANCHOR_BASELINE 单一源 = 注册表 currentGeneration（89c4fd68 切换后不再锁字面量代际；
+    9/25 演练填 gen-2026-10-b202610 后本测试未随专项跑暴露的字面量漂移已修正）。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
 
 
 def test_anchor_check_match_semantics():
-    assert anchor_check("oos2", 0.0951, ANCHOR_BASELINE)["match"] is True
-    assert anchor_check("oos2", 0.095100001, ANCHOR_BASELINE)["match"] is True  # round4 对齐
-    miss = anchor_check("oos2", 0.0933, ANCHOR_BASELINE)
-    assert miss["match"] is False and miss["expected"] == 0.0951
+    exp = ANCHOR_BASELINE["oos2"]
+    assert anchor_check("oos2", exp, ANCHOR_BASELINE)["match"] is True
+    assert anchor_check("oos2", exp + 0.0000001, ANCHOR_BASELINE)["match"] is True  # round4 对齐
+    miss = anchor_check("oos2", exp - 0.002, ANCHOR_BASELINE)
+    assert miss["match"] is False and miss["expected"] == exp
 
 
 # ---------- ⑤ override 生效性守卫（from_patch 对未知字段静默忽略） ----------

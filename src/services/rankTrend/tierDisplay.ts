@@ -149,8 +149,9 @@ export function getSynergyVoteBreakdown(stock: unknown): string[] {
   const stage = dimDirection(stock, 'rankTrend.observation.lifecycle.stage')
 
   // 档位强度 × 维度票权（展示投影，与后端 volume_price.py _VOTE_STRENGTH v4 +
-  // config.tierSynergy{Resonance,Rank,VolumePrice,CrossSection}Vote 一致；阶段 23.9）
-  const VOTE_STRENGTH: Record<string, number> = { S: 1.2, A: 1.0, B: 0.8, C: 0.5, D: 1.0, E: 1.0 }
+  // config.tierSynergy{Resonance,Rank,VolumePrice,CrossSection}Vote 一致；阶段 23.9；
+  // B 档 0.8→0.7 随后端 2026-09-30 vsB_070 落默认同步，长测阶段 27.3）
+  const VOTE_STRENGTH: Record<string, number> = { S: 1.2, A: 1.0, B: 0.7, C: 0.5, D: 1.0, E: 1.0 }
   const CS_TIER_CN: Record<string, string> = { A: '强', B: '偏强', C: '偏弱', D: '弱' }
   const CS_VOTE: Record<string, number> = { A: 1.0, B: 0.5, C: -0.5, D: -1.0 }
   const RES_VOTE_WEIGHT = 0.75

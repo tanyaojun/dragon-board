@@ -5,7 +5,7 @@
   "factSource": "docs/ranktrend-tier-backtest/ranktrend-longterm-backtest-plan.md（各阶段写入的锚读数）",
   "rerunPlan": "docs/ranktrend-tier-backtest/ranktrend-202610-rerun-plan.md",
   "windowNote": "gen-1~gen-4 的 oos2 窗口为历史口径 2026-09-01~09-12（部分阶段 14 harness 为 09-09），B-202610 起统一为 09-01~09-30（oos2）+ 09-13~09-30 未消费子窗（oos2u，判定读数以此为准），见 data_windows.py WINDOWS。",
-  "currentGeneration": "gen-2026-10-b202610",
+  "currentGeneration": "gen-2026-09-30-vsb070",
   "generations": [
     {
       "id": "gen-2026-08-22_8",
@@ -60,8 +60,20 @@
       "gitCommit": "83bd7d0d",
       "configHash": null,
       "sourceSections": ["data/reports/b-202610/track2-candidates-formal.json（B-202610 正式 baseline，9 月全月 206 帧/21 交易日）", "longterm 阶段 27（批次收口写入）"],
-      "supersededBy": null,
+      "supersededBy": "gen-2026-09-30-vsb070",
       "note": "【正式口径，2026-09-30 全月重跑】oos2=0.0841/oos2u=0.0534 为 9 月全月（206 帧/21 交易日，oos2u 120 帧/有效 91）正式 baseline 读数，取代 09-25 演练占位 0.0998/0.0812；passHard 四窗全 True（演练占位 oos2/oos2u=False 的 9 月窗单调性边缘失效已随最后 3 个交易日补齐恢复通过）。decision/oos1 封闭窗于正式跑逐位复现 0.1323/0.0862，代际无漂移。注意 oos2u 绝对水平 0.0534 仍显著低于 decision 窗 0.1323（9 月弱市 OOS 衰减为代际对照章披露项）。"
+    },
+    {
+      "id": "gen-2026-09-30-vsb070",
+      "name": "vsB_070 代际（B 档票强度 0.8→0.7 落默认，B-202610 批次用户决策）",
+      "anchors": { "decision": 0.1402, "oos1": 0.0999, "oos2": 0.0898, "oos2u": 0.0602 },
+      "passHard": { "decision": true, "oos1": false, "oos2": true, "oos2u": true },
+      "establishedAt": "2026-09-30",
+      "gitCommit": null,
+      "configHash": null,
+      "sourceSections": ["data/reports/b-202610/track2-candidates-formal.json（O3_vsb070 trial 四窗读数）", "落默认端到端锚复现（config 默认切换后四窗逐位 MATCH，2026-09-30）", "longterm 阶段 27.3"],
+      "supersededBy": null,
+      "note": "第五代：tierSynergyVoteStrengths[2] 0.7 落默认后 baseline = B-202610 批次 O3_vsb070 trial，四窗 saEx 逐位复现（0.1402/0.0999/0.0898/0.0602）+ TS tierDisplay VOTE_STRENGTH 同步。oos1 passHard=False 为该配置 OOS 档位单调性真实读数（C3 判定卡口径只查 decision 窗，OOS passHard 作披露面）。回退 = index2 还原 0.8（track2 O3_revert_vsB080 对照臂）。同日 N8 floor3 / O6 x30 落默认待后续代际推进。"
     }
   ]
 }

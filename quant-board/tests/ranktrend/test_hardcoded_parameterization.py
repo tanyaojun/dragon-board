@@ -32,7 +32,9 @@ from backend.analysis.ranktrend.trend.technical import fallback_signals
 
 EXPECTED_DEFAULTS: dict[str, object] = {
     # 批 1：synergy 总档档位强度
-    "tierSynergyVoteStrengths": [1.2, 1.0, 0.8, 0.5, 1.0, 1.0],  # S/A/B/C/D/E
+    # B 档 0.8→0.7 于 2026-09-30 用户决策落默认（B-202610 批次 O3 PASS_CANDIDATE + Track 1 中性，
+    # 长测阶段 27.3；回退 = 还原 index2 0.8）
+    "tierSynergyVoteStrengths": [1.2, 1.0, 0.7, 0.5, 1.0, 1.0],  # S/A/B/C/D/E
     "tierSynergyCsStrengths": [1.0, 0.5, -0.5, -1.0],  # A/B/C/D
     # 批 2：量价（2026-09-15 阶段 25 方案 C-b 扫描判零效应冗余：分值幅度面，无档位杠杆）
     "volumePriceDirectionThresholds": [7.0, 5.0, 3.0, 2.0, 1.0, 0.5],

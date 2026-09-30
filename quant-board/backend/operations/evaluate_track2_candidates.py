@@ -15,7 +15,8 @@ Trial 组（B-202610 前置修复后口径，2026-09-25；原 2026-09-13 用户�
   - P2 A/B：persist_on（crossSectionPersistFrames=3，阶段 18 H1成立/H2证伪后的组合面复验）
   - MA 补验：ma_join / ma_full（阶段 17 口径）
   - B-202610 阶段 2/3 增补（2026-09-25）：R2_revert（三轴票权还原 1.0）、
-    R3_revert（五因子权重还原）、O3_vsb070（B 档票强度 0.7）、O5_buyThr018
+    R3_revert（五因子权重还原）、O3_revert_vsB080（B 档票强度还原 0.8；原 O3_vsb070 晋升臂
+    于 2026-09-30 落默认后重定义为回退对照，fund10_over2 先例）、O5_buyThr018
     （buyScoreThreshold 0.18）——default_review 回退 trial 与观察池候选同卡判定
 
 Track 2 判定卡（简化流程：一次 evaluate_gate 自动产出全部口径，替代人工拼表）：
@@ -118,9 +119,11 @@ TRIALS: list[dict[str, Any]] = [
         "overrides": {"directionWeight": 0.24, "accelerationWeight": 0.20, "crossWeight": 0.16, "macdWeight": 0.20, "maWeight": 0.20},
     },
     {
-        "key": "O3_vsb070",
-        "desc": "O3 观察池：tierSynergyVoteStrengths[2] B 档票强度 0.8→0.7（§26.4 Track 1 +0.9% 中性）",
-        "overrides": {"tierSynergyVoteStrengths": [1.2, 1.0, 0.7, 0.5, 1.0, 1.0]},
+        # vsB_070 落默认（2026-09-30 用户决策）后，本 trial 按 fund10_over2 先例重定义为回退对照臂：
+        # overrides = 还原 0.8（落默认前默认值），判定卡语义从"晋升候选"变为"回退复核"。
+        "key": "O3_revert_vsB080",
+        "desc": "O3 回退对照：tierSynergyVoteStrengths[2] 还原 0.8（2026-09-30 vsB_070 已落默认，B-202610 批次 PASS_CANDIDATE + Track 1 中性 80 笔）",
+        "overrides": {"tierSynergyVoteStrengths": [1.2, 1.0, 0.8, 0.5, 1.0, 1.0]},
     },
     {
         "key": "O5_buyThr018",
