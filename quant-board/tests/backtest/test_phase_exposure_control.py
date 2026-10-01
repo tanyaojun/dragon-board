@@ -144,3 +144,22 @@ def test_exit_tp_multiplier_clamped():
     cfg = {"phaseExitCoupling": {"mode": "cold_tp_widen", "multiplier": 9.0, "bandLow": 10.0, "bandHigh": 40.0,
                                  "eodScores": {"2026-09-25": 30.0}}}
     assert TradeSimulator._exit_tp_multiplier(cfg, "2026-09-26") == 3.0  # 上限 3×
+
+
+def test_exit_prices_applies_tp_multiplier():
+    """P2-c 回归锚：_exit_prices 是全部止盈消费点（盘中触发+通用路径）的单一闸门。"""
+    from backend.core.backtest.execution import TradeSimulator
+
+    pos = {"entryPrice": 10.0}
+    cfg_off = {"stopLoss": -0.06, "takeProfit": 0.06}
+    cfg_on = {**cfg_off, "phaseExitCoupling": {"mode": "cold_tp_widen", "multiplier": 1.5,
+                                               "bandLow": 10.0, "bandHigh": 40.0,
+                                               "eodScores": {"2026-09-25": 30.0}}}
+    pos_on = {**pos, "exitTpMultiplier": 1.5}
+    _, tp_off, _ = TradeSimulator._exit_prices(pos, {}, cfg_off)
+    _, tp_on, _ = TradeSimulator._exit_prices(pos_on, {}, cfg_on)
+    assert tp_off == 10.0 * 1.06
+    assert abs(tp_on - 10.0 * 1.09) < 1e-9  # 0.06×1.5=0.09
+    # 未定档 pos 走默认 1.0
+    _, tp_default, _ = TradeSimulator._exit_prices(pos, {}, cfg_on)
+    assert tp_default == 10.0 * 1.06

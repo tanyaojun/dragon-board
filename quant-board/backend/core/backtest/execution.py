@@ -704,7 +704,9 @@ class TradeSimulator:
         """ATR/保本生效后的止损/止盈价（方向3）。返回 (stop_price, take_price, notes)。"""
         entry_price = float(pos.get("entryPrice") or 0)
         stop_price = entry_price * (1 + float(config.get("stopLoss") or -0.06))
-        take_price = entry_price * (1 + float(config.get("takeProfit") or 0.12))
+        # P2-c 退出耦合：pos.exitTpMultiplier（入场日冷带定档）放宽止盈线；盘中触发与
+        # 通用价格退出都经此函数取价——单一 hook 覆盖全部止盈消费点
+        take_price = entry_price * (1 + float(config.get("takeProfit") or 0.12) * float(pos.get("exitTpMultiplier") or 1.0))
         notes: list[str] = []
         if TradeSimulator._config_bool(config, "useAtrStops") and atr and atr > 0:
             stop_price = entry_price - float(config.get("atrStopMultiplier") or 2.0) * atr
