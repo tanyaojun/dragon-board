@@ -133,7 +133,7 @@ function dimDirection(stock: unknown, path: string): string | null {
  *  分值映射与后端一致（_VOTE_STRENGTH v4 / _CS_STRENGTH × 维度票权：阶段 23.9 采纳
  *  res/rank/cs ×0.75、vp ×1.0，2026-09-14 用户决策），仅作解释投影，不产出档位。
  *  示例：
- *    共振 强买·涨(+0.9)  趋势 买入·涨(+0.75)  量价 弱买·涨(+0.8)  热度 偏强（第5维票 +0.75）
+ *    共振 强买·涨(+0.9)  趋势 买入·涨(+0.75)  量价 弱买·涨(+0.7)  热度 偏强（第5维票 +0.38）
  *    周期 拥挤（回避）→ 若为 S/A 则降一档
  *    票数汇总 → 总档 买入（周期环境门降档后，降档前 S）       */
 export function getSynergyVoteBreakdown(stock: unknown): string[] {
