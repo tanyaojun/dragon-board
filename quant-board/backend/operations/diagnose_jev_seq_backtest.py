@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from datetime import datetime
@@ -26,7 +27,6 @@ from backend.operations.phase_pulse import load_eod_scores
 LABELS = Path("data/reports/phase-monitor/phase-labels-jev-v3.json")
 OUT = Path("data/reports/phase-monitor/jev-seq-backtest.json")
 START, END = "2026-03-27", "2026-09-30"
-
 
 def _stats(summary: dict) -> dict:
     from backend.operations.phase_trade_slice import round_trips_of
@@ -73,10 +73,17 @@ def _jev_source_stats(summary: dict) -> dict:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="SP4-T5 前置：jev_seq_v1 对照回测（in-sample，方向参考）")
+    parser.add_argument("--start", default=START, help="窗口起始（含预热；默认全窗 2026-03-27）")
+    parser.add_argument("--end", default=END, help="窗口截止（默认 2026-09-30）")
+    parser.add_argument("--out", default=str(OUT), help="产物路径（分窗口运行请换文件名）")
+    args = parser.parse_args()
+    start, end, out_path = args.start, args.end, Path(args.out)
+
     from backend.cli import runtime_session
     from backend.services.backtest_service import BacktestService
 
-    eod_scores = load_eod_scores(END)
+    eod_scores = load_eod_scores(end)
     eod_valid = {d: s for d, s in eod_scores.items() if s is not None}
     jev = json.loads(LABELS.read_text(encoding="utf-8")) if LABELS.exists() else None
     if jev is None:
@@ -86,8 +93,8 @@ def main() -> int:
     base_payload = {
         "dataset_id": "dragonboard_live",
         "snapshot_type": "half_hour",
-        "start_date": START,
-        "end_date": END,
+        "start_date": start,
+        "end_date": end,
         "strategy_name": "ranktrend_early_big_move_v3_lifecycle_fusion",
         "random_seed": 20260430,
         "dryRun": True,
@@ -107,7 +114,7 @@ def main() -> int:
     report = {
         "meta": {
             "generatedAt": datetime.now().isoformat(timespec="seconds"),
-            "window": [START, END], "randomSeed": 20260430,
+            "window": [start, end], "randomSeed": 20260430,
             "labelsVersion": (jev.get("meta") or {}).get("version"),
             "honesty": "in-sample 历史对照（jev 标签派生自同窗数据，选择偏差不可排除）；"
                        "样本外走廊（10-12 月脉拍）才是晋升门槛；首段无 jev 标签日 unknown 放行≈基线",
@@ -136,6 +143,7 @@ def main() -> int:
         "jev_vs_champion": {"netReturnDelta": round(j["sumNetReturn"] - c["sumNetReturn"], 4),
                             "ddImprovement": round(c["maxDrawdown"] - j["maxDrawdown"], 4) if c["maxDrawdown"] is not None and j["maxDrawdown"] is not None else None,
                             "tradesDelta": j["tradeCount"] - c["tradeCount"]}}
+    OUT = out_path
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     # 评审 P1-3 自检：防配置未达模拟器的静默失效报告（如 arms 双重嵌套事故）
