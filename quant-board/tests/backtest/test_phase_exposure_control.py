@@ -60,6 +60,17 @@ def test_custom_threshold_and_factor():
     assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-27") == 0.0
 
 
+def test_reduce_default_threshold_is_60():
+    """2026-10-01 章程 Q1：二档边界 50→60（sentiment_2b@60 口径一致）。未显式传 threshold 时默认 60。"""
+    base = {"mode": "reduce_offense", "factor": 0.5, "eodScores": EOD}
+    # 09-27 前一日 09-26=70 ≥60 → offense → 降仓
+    assert TradeSimulator._phase_exposure_factor({"phaseExposureControl": base}, "2026-09-27") == 0.5
+    eod55 = {"2026-09-25": 55.0}
+    # 前一日 55：旧默认 50 下属 offense（会降），新默认 60 下属 defense → 放行
+    cfg55 = {"phaseExposureControl": {**base, "eodScores": eod55}}
+    assert TradeSimulator._phase_exposure_factor(cfg55, "2026-09-26") == 1.0
+
+
 def test_missing_score_day_passes_through():
     eod = {"2026-09-25": None}  # 分数缺失（fail-visible 口径：无法定相 → 放行）
     assert TradeSimulator._phase_exposure_factor(_cfg("reduce_defense", eod=eod), "2026-09-26") == 1.0

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""phase-history 读口测试：EOD 序列按 sentiment_2b 映射相位（offense≥50/defense<50/unknown）。"""
+"""phase-history 读口测试：EOD 序列按 sentiment_2b 映射相位（offense≥60/defense<60/unknown，2026-10-01 章程 Q1 边界 50→60）。"""
 from __future__ import annotations
 
 import sys
@@ -63,7 +63,7 @@ def test_phase_history_maps_sentiment_2b(monkeypatch) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["threshold"] == 50.0
+    assert body["threshold"] == 60.0
     assert body["count"] == 3
     # 升序：09-25 → 09-26 → 09-27
     assert [d["tradingDate"] for d in body["days"]] == ["2026-09-25", "2026-09-26", "2026-09-27"]
@@ -71,6 +71,22 @@ def test_phase_history_maps_sentiment_2b(monkeypatch) -> None:
     assert body["days"][1]["eodScore"] == 65.6
     # 查询只取 EOD
     assert body["datasetId"] == "dragonboard_live"
+
+
+def test_phase_history_boundary_60(monkeypatch) -> None:
+    """Q1 边界语义：60 含下沿（≥60 → offense），59.9 → defense。"""
+    docs = [
+        {"tradingDate": "2026-09-26", "slotTime": "EOD", "emotionScore": {"score": 60.0}},
+        {"tradingDate": "2026-09-27", "slotTime": "EOD", "emotionScore": {"score": 59.9}},
+    ]
+    _patch(monkeypatch, docs)
+    client = TestClient(app)
+
+    response = client.get("/api/hotlist-sentiment/phase-history")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [d["phase"] for d in body["days"]] == ["offense", "defense"]
 
 
 def test_phase_history_empty_collection(monkeypatch) -> None:
