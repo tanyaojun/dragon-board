@@ -79,15 +79,39 @@ class TradeSimulator:
         return _tier_factor("unknown"), None, True
 
     @staticmethod
+    def _jev_temp_band_factor(ctrl: dict[str, Any], trading_date: str, slot_time: str | None = None) -> tuple[float, str | None]:
+        """SP4 排队候选 jev_band_v1 载体：jev 槽级温度带阶梯（T-jev2 证据门达标后预登记）。
+
+        解析：jevTempScores["date|slot"]（同槽 as-of，冻结标签）→ 温度 ≤ tempThreshold
+        （预登记 24.9 = 标定窗样本 p25）→ coldFactor（预登记 0.3）；否则 warmFactor（1.0）；
+        缺分数/无 slot/非法参数 → 1.0 放行（fail-visible 不错杀）。返回 (factor, band)，
+        band ∈ {"cold", "warm", None}。与 jev_seq_slot 互斥：source 即模式选择器。
+        """
+        scores = ctrl.get("jevTempScores") or {}
+        raw = scores.get(f"{trading_date}|{slot_time}") if slot_time else None
+        if not isinstance(raw, (int, float)):
+            return 1.0, None
+        try:
+            threshold = float(ctrl.get("tempThreshold", 24.9))
+            cold = max(0.0, min(1.0, float(ctrl.get("coldFactor", 0.3))))
+            warm = max(0.0, min(1.0, float(ctrl.get("warmFactor", 1.0))))
+        except (TypeError, ValueError):
+            return 1.0, None
+        if float(raw) <= threshold:
+            return cold, "cold"
+        return warm, "warm"
+
+    @staticmethod
     def _phase_exposure_factor(config: dict[str, Any], trading_date: str, slot_time: str | None = None) -> float:
         """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
 
         trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band|ladder,
             factor: 0~1, threshold: 60.0, bandLow/bandHigh: 40/60（reduce_band 用）,
             ladder: [[上界, 因子]...] 升序（ladder 用，末条建议 catch-all 上界如 999）,
-            eodScores: {date: score}, source: prev_eod(默认)|slot_then_prev_eod|jev_seq_slot, slotScores: {date: {slot: score}}}。
-        source=jev_seq_slot 时走 _jev_phase_factor 两因子制（mode/eodScores/slotScores 均不参与）；
-        jev_seq_slot 仅适用于 phaseExposureControl，phaseExitCoupling/phaseRebalance 不支持该 source。
+            eodScores: {date: score}, source: prev_eod(默认)|slot_then_prev_eod|jev_seq_slot|jev_temp_band, slotScores: {date: {slot: score}}}。
+        source=jev_seq_slot 时走 _jev_phase_factor 两因子制；source=jev_temp_band 时走 _jev_temp_band_factor
+        温度带阶梯（jevTempScores + tempThreshold/coldFactor/warmFactor）；两者 mode/eodScores/slotScores 均不参与；
+        jev 系 source 仅适用于 phaseExposureControl，phaseExitCoupling/phaseRebalance 不支持。
         as-of 纪律：入场日 d 的相位取**严格早于 d 的最近交易日** EOD 分（前日定相）；
         SP3-T3.2 source=slot_then_prev_eod 时优先同日早于入场槽的档分（证据 slot-asof-diff.json 达标）。
         键缺失/模式 off/无前日/分数缺失 → 1.0 放行（默认关=golden 逐位不变，缺信号不错杀）。
@@ -103,6 +127,9 @@ class TradeSimulator:
         # SP4-T2：jev 同槽序列档两因子制（source 即模式选择器，与分数制 source 互斥）
         if str(ctrl.get("source") or "prev_eod") == "jev_seq_slot":
             return TradeSimulator._jev_phase_factor(ctrl, trading_date, slot_time)[0]
+        # SP4 排队候选 jev_band_v1：槽级温度带阶梯（同上，source 即模式选择器）
+        if str(ctrl.get("source") or "prev_eod") == "jev_temp_band":
+            return TradeSimulator._jev_temp_band_factor(ctrl, trading_date, slot_time)[0]
         mode = str(ctrl.get("mode") or "off")
         if mode not in ("reduce_offense", "reduce_defense", "reduce_band", "ladder"):
             return 1.0
@@ -162,6 +189,12 @@ class TradeSimulator:
             factor, label, fallback_used = TradeSimulator._jev_phase_factor(ctrl, trading_date, slot_time)
             out.update({"factor": factor, "phase": label, "source": "jev_seq_slot",
                         "phaseLabel": label, "fallbackUsed": fallback_used})
+            return out
+        # SP4 排队候选 jev_band_v1：温度带归因（phaseLabel ∈ {cold, warm, None}）
+        if str(ctrl.get("source") or "prev_eod") == "jev_temp_band":
+            factor, band = TradeSimulator._jev_temp_band_factor(ctrl, trading_date, slot_time)
+            out.update({"factor": factor, "phase": band, "source": "jev_temp_band",
+                        "phaseLabel": band, "fallbackUsed": False})
             return out
         used_key, used_score = TradeSimulator._phase_score(ctrl, trading_date, slot_time)
         if used_key is not None:

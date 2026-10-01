@@ -84,12 +84,14 @@ def attribution_stats(trades: list[dict]) -> dict:
         if not isinstance(ep, dict):
             missing += 1
             continue
-        if str(ep.get("source") or "") == "jev_seq_slot":
+        if str(ep.get("source") or "").startswith("jev_"):
+            # SP4：jev 系源（jev_seq_slot 两档 / jev_temp_band 冷温带）——prevScore 按设计置空，
+            # 按 phaseLabel 计数（标签集合：offense/defense/cold/warm），不误计 missing
             available += 1
-            label = ep.get("phaseLabel") if ep.get("phaseLabel") in ("offense", "defense") else None
+            label = ep.get("phaseLabel") if ep.get("phaseLabel") in ("offense", "defense", "cold", "warm") else None
             key = label or "unknown"
             by_phase[key] = by_phase.get(key, 0) + 1
-            if label is None:
+            if key == "unknown":
                 source_attribution["unknown"] += 1
             elif ep.get("fallbackUsed"):
                 source_attribution["fallback"] += 1

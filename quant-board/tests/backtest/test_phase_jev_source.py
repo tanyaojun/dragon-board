@@ -148,3 +148,56 @@ def test_full_run_jev_blocks_and_scales():
     # 盖戳归因可达（tradeEvents 入场事件带 entryPhase）
     buy = next(e for e in res_scale["tradeEvents"] if e["action"] == "buy")
     assert buy["entryPhase"]["phaseLabel"] == "defense" and buy["entryPhase"]["fallbackUsed"] is False
+
+
+# ---- SP4 排队候选 jev_band_v1 载体：source=jev_temp_band（槽级温度带阶梯，预登记阈值 ≤24.9） ----
+
+def _temp_ctrl(**over) -> dict:
+    base = {
+        "source": "jev_temp_band",
+        "jevTempScores": {"2026-05-06|10:30": 24.9, "2026-05-06|11:00": 45.0},
+        "tempThreshold": 24.9,
+        "coldFactor": 0.3, "warmFactor": 1.0,
+    }
+    base.update(over)
+    return base
+
+
+def test_jev_temp_band_cold_warm_and_missing():
+    cfg = {"phaseExposureControl": _temp_ctrl()}
+    # 阈值边界：≤24.9 → cold 0.3（预登记含等号）
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-05-06", "10:30") == 0.3
+    # > 阈值 → warm 1.0
+    assert TradeSimulator._phase_exposure_factor({"phaseExposureControl": _temp_ctrl(jevTempScores={"2026-05-06|10:30": 25.0})}, "2026-05-06", "10:30") == 1.0
+    # 缺标签 → 放行（fail-visible 不错杀）
+    assert TradeSimulator._phase_exposure_factor({"phaseExposureControl": _temp_ctrl(jevTempScores={})}, "2026-05-06", "10:30") == 1.0
+    # 无 slot → 查不到键 → 放行
+    assert TradeSimulator._phase_exposure_factor(cfg, "2026-05-06") == 1.0
+    # 因子夹取 + 非法阈值回退默认
+    hot = {"phaseExposureControl": _temp_ctrl(coldFactor=1.7)}
+    assert TradeSimulator._phase_exposure_factor(hot, "2026-05-06", "10:30") == 1.0
+    bad = {"phaseExposureControl": _temp_ctrl(tempThreshold="abc")}
+    assert TradeSimulator._phase_exposure_factor(bad, "2026-05-06", "10:30") == 1.0
+
+
+def test_jev_temp_band_context_and_golden():
+    ctx = TradeSimulator._phase_context({"phaseExposureControl": _temp_ctrl()}, "2026-05-06", "10:30")
+    assert ctx["source"] == "jev_temp_band"
+    assert ctx["phase"] == "cold" and ctx["phaseLabel"] == "cold" and ctx["factor"] == 0.3
+    assert ctx["prevScore"] is None and ctx["band"] is None
+    ctx2 = TradeSimulator._phase_context({"phaseExposureControl": _temp_ctrl(jevTempScores={"2026-05-06|10:30": 60.0})}, "2026-05-06", "10:30")
+    assert ctx2["phase"] == "warm" and ctx2["factor"] == 1.0
+    # 其他 source 不受 jevTempScores 影响（golden 锚语义）
+    cfg3 = {"phaseExposureControl": {"mode": "ladder", "ladder": [[40, 1.0], [999, 0.3]],
+                                     "eodScores": {"2026-05-05": 20.0},
+                                     "jevTempScores": {"2026-05-06|10:30": 10.0}}}
+    assert TradeSimulator._phase_exposure_factor(cfg3, "2026-05-06", "10:30") == 1.0
+
+
+def test_full_run_jev_temp_band_scales():
+    res_cold = _run({"phaseExposureControl": _temp_ctrl()})
+    res_base = _run({})
+    assert res_cold["openPositionCount"] == 1 and res_base["openPositionCount"] == 1
+    assert abs(res_cold["openPositions"][0]["entryCost"] - res_base["openPositions"][0]["entryCost"] * 0.3) < 1.0
+    buy = next(e for e in res_cold["tradeEvents"] if e["action"] == "buy")
+    assert buy["entryPhase"]["phaseLabel"] == "cold" and buy["entryPhase"]["source"] == "jev_temp_band"
