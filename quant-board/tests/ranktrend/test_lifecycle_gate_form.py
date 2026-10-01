@@ -22,12 +22,19 @@ from backend.analysis.ranktrend.ranking.volume_price import _lc_gate_veto_path, 
 
 
 def _w1(**extra):
-    """四维票权重全 1.0 的评估配置（票值算术直读：A=1.0/S=1.2/B=0.8/C=0.5/E=1.0）。"""
+    """四维票权重全 1.0 的评估配置（票值算术直读：A=1.0/S=1.2/B=0.8/C=0.5/E=1.0）。
+
+    票强表冻结 pre-vsB070 口径（B=0.8；eabf4b44 于 2026-09-30 落默认 B→0.7，
+    与 evaluate_synergy_tier_thresholds.BASE_VOTE_STRENGTHS 同一冻结回退对照口径）：
+    本文件只测环境门干预形态语义，§3.1.3 边界映射（v=2.0→A、v=3.0→S）按 B=0.8
+    算术预登记；引擎默认票强由 tests/ranktrend/test_hardcoded_parameterization.py 单独覆盖。
+    """
     patch = {
         "tierSynergyResonanceVote": 1.0,
         "tierSynergyRankVote": 1.0,
         "tierSynergyVolumePriceVote": 1.0,
         "tierSynergyCrossSectionVote": 1.0,
+        "tierSynergyVoteStrengths": [1.2, 1.0, 0.8, 0.5, 1.0, 1.0],  # 冻结 pre-vsB070（回退对照口径）
     }
     patch.update(extra)
     return RankTrendConfig.from_patch(patch)

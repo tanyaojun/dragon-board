@@ -49,8 +49,12 @@ def test_dc_label_patches_and_expected_zero_effect():
 
 
 def test_anchor_and_floor_constants():
-    """锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一源 = 注册表 currentGeneration（gen-2026-09-30-midlong-x30 三参组合四窗锚）。
+    SA_COUNT_FLOOR 为 harness 强度样本下限常量，与引擎锚无关。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
     assert SA_COUNT_FLOOR == 30
 
 

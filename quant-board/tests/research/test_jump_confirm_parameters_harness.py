@@ -30,7 +30,7 @@ def test_baseline_anchor_constant():
     from backend.operations.harness_common import baseline_anchor
 
     gen, anchors = baseline_anchor()
-    assert gen == "gen-2026-10-b202610"
+    assert gen == "gen-2026-09-30-midlong-x30"  # 第七代三参组合（vsB070+floor3+x30）
     assert ANCHOR_BASELINE == anchors
 
 
@@ -129,9 +129,12 @@ def test_run_window_executes_extra_trial(monkeypatch, tmp_path):
         "backend.analysis.ranktrend.engine.RankTrendPythonEngine",
         lambda config=None: SimpleNamespace(replay=lambda frames, meta=None: []),
     )
+    from backend.operations.harness_common import baseline_anchor
+
+    decision_anchor = baseline_anchor()[1]["decision"]
     monkeypatch.setattr(
         "backend.operations.evaluate_jump_confirm_parameters.evaluate_gate",
-        lambda config, frames: {"synergy": {"saEx": 0.1323, "passHard": True}},  # decision 锚值（gen-2026-10-b202610），避免误触漂移守卫
+        lambda config, frames: {"synergy": {"saEx": decision_anchor, "passHard": True}},  # decision 锚随注册表单一源，避免误触漂移守卫
     )
     specs = build_specs('[{"key":"grid_chg3_vr12","desc":"交互精扫探针","overrides":{"jumpConfirmChangeMin":3.0,"jumpConfirmVolumeRatioMin":1.25}}]')
     keys = [s["key"] for s in specs]
@@ -156,7 +159,7 @@ def test_baseline_anchor_drift_stops_immediately(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         "backend.operations.evaluate_jump_confirm_parameters.evaluate_gate",
-        lambda config, frames: {"synergy": {"saEx": 0.0700, "passHard": True}},  # ≠ 锚 0.112
+        lambda config, frames: {"synergy": {"saEx": 0.0700, "passHard": True}},  # ≠ 注册表 decision 锚（漂移臂）
     )
     report = {"__out__": str(tmp_path / "r.json")}
     with pytest.raises(RuntimeError, match="baseline 锚漂移"):

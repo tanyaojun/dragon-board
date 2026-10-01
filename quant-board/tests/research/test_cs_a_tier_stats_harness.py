@@ -6,7 +6,7 @@
 - cs 维档位分布与 A 档样本数（raw 命中 + h1 有效前瞻）；
 - cs 维 h1 档位统计（A 档 excessDirectionAccuracy / saEx）；
 - cs=A 档内 synergy saEx（tier_forward_returns dimension="synergy" + signal_filter）；
-- 锚校验：baseline synergy saEx 对照锚注册表 currentGeneration（gen-2026-10-b202610）。
+- 锚校验：baseline synergy saEx 对照锚注册表 currentGeneration（gen-2026-09-30-midlong-x30）。
 """
 from __future__ import annotations
 
@@ -34,12 +34,12 @@ def test_windows_single_source_four_keys():
 
 
 def test_anchor_check_registry_generation():
-    """锚校验对照注册表 currentGeneration：decision 0.1323 匹配、漂移不匹配、未建锚窗跳过。"""
+    """锚校验对照注册表 currentGeneration：decision 0.1472 匹配、漂移不匹配、未建锚窗跳过。"""
     from backend.operations.harness_common import baseline_anchor
 
     _gen, anchors = baseline_anchor()
-    assert anchors["decision"] == 0.1323
-    assert anchor_check("decision", 0.1323, anchors)["match"] is True
+    assert anchors["decision"] == 0.1472  # gen-2026-09-30-midlong-x30 第七代 decision 锚
+    assert anchor_check("decision", 0.1472, anchors)["match"] is True
     assert anchor_check("decision", 0.13, anchors)["match"] is False
     unchecked = anchor_check("oos2u", None, anchors)
     assert unchecked["checked"] is True and unchecked["match"] is False  # None 不伪装匹配

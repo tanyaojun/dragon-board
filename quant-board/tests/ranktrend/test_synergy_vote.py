@@ -11,7 +11,12 @@ from backend.analysis.ranktrend.volume_price import _synergy_tier
 
 
 def cfg(**patch) -> RankTrendConfig:
+    # 票强表冻结 pre-vsB070 口径（B=0.8；eabf4b44 于 2026-09-30 落默认 0.7）：本文件的
+    # 票值算术注释（三票 B 0.6+0.6+0.8=2.0 恰达强买线）按 B=0.8 校准，与
+    # test_lifecycle_gate_form._w1、evaluate_synergy_tier_thresholds.BASE_VOTE_STRENGTHS
+    # 同一冻结回退对照口径；引擎默认票强由 test_hardcoded_parameterization.py 单独覆盖。
     base = dict(RankTrendConfig().__dict__)
+    base["tierSynergyVoteStrengths"] = [1.2, 1.0, 0.8, 0.5, 1.0, 1.0]
     base.update(patch)
     return RankTrendConfig(**base)
 

@@ -83,9 +83,9 @@ def test_baseline_anchor_constant():
     from backend.operations.harness_common import baseline_anchor
 
     gen, anchors = baseline_anchor()
-    assert gen == "gen-2026-10-b202610"
+    assert gen == "gen-2026-09-30-midlong-x30"  # 第七代三参组合（vsB070+floor3+x30）
     assert ANCHOR_BASELINE == anchors
-    assert ANCHOR_BASELINE["decision"] == 0.1323  # 演练锚（决策窗封闭，正式不变）
+    assert ANCHOR_BASELINE["decision"] == 0.1472  # 当前代际漂移哨兵；注册表推进时同步更新
 
 
 def test_assert_overrides_applied_rejects_unknown_field():

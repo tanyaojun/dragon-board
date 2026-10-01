@@ -160,8 +160,12 @@ def test_all_patches_construct_valid_configs():
 
 
 def test_anchor_baseline_constant():
-    """锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后；主代理已实测 oos2=0.0951）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一源 = 注册表 currentGeneration（gen-2026-09-30-midlong-x30 三参组合四窗锚），
+    不再锁 fund10 字面量代际。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
 
 
 def test_baseline_spec_carries_anchor():

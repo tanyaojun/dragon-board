@@ -87,8 +87,12 @@ def test_single_variable_split():
 
 
 def test_baseline_anchor_constant():
-    """③ 锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后实测，oos2 已复核）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """③ 锚单一源：ANCHOR_BASELINE = 注册表 currentGeneration（gen-2026-09-30-midlong-x30 三参组合四窗锚）。
+    不再锁字面量代际 dict——注册表推进后自动跟随，漂移哨兵在 test_harness_common 统一维护。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
 
 
 def test_assert_overrides_applied_rejects_unknown_field():
@@ -275,7 +279,8 @@ def test_trial_summary_insufficient_data():
 
 
 def test_anchor_check_match_semantics():
-    checked = anchor_check("oos2", 0.0951, ANCHOR_BASELINE)
-    assert checked == {"checked": True, "expected": 0.0951, "actual": 0.0951, "match": True}
-    assert anchor_check("oos2", 0.0949, ANCHOR_BASELINE)["match"] is False
+    exp = ANCHOR_BASELINE["oos2"]
+    checked = anchor_check("oos2", exp, ANCHOR_BASELINE)
+    assert checked == {"checked": True, "expected": exp, "actual": exp, "match": True}
+    assert anchor_check("oos2", round(exp - 0.002, 4), ANCHOR_BASELINE)["match"] is False
     assert anchor_check("oos2", None, None) == {"checked": False}

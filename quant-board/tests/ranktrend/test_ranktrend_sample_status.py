@@ -8,8 +8,10 @@ MACD 预热状态仍通过 _macd_diagnostics.hasStableObservationBars 单独暴�
 
 合同：
 - len(percentiles) >= 22 → ok
-- 5 <= len(percentiles) < 22 → degraded
-- len(percentiles) < 5 → insufficient
+- degradedSampleFloor <= len(percentiles) < 22 → degraded
+- len(percentiles) < degradedSampleFloor → insufficient
+  （floor 于 2026-09-30 用户决策由 5 落默认 3，B-202610 批次 N8，dfbf849b；
+  回退 = 显式 patch degradedSampleFloor=5）
 - _sample_diagnostics.requiredTechnicalBars 与判定口径一致（22），MACD 需求另列 macdMinimumBars
 """
 
@@ -71,6 +73,10 @@ def test_sample_status_degraded_below_momentum_min_samples() -> None:
     assert _signal_status(5) == "degraded"
 
 
-def test_sample_status_insufficient_below_5() -> None:
-    """<5 帧：样本严重不足 → insufficient，不应作为强交易依据。"""
-    assert _signal_status(4) == "insufficient"
+def test_sample_status_insufficient_below_floor3() -> None:
+    """<3 帧（degradedSampleFloor=3，2026-09-30 用户决策落默认，长测阶段 27.5）：
+    样本严重不足 → insufficient，不应作为强交易依据；3~4 帧改判 degraded
+    （旧 floor5 口径下 3~4 帧为 insufficient）。"""
+    assert _signal_status(2) == "insufficient"
+    assert _signal_status(3) == "degraded"
+    assert _signal_status(4) == "degraded"

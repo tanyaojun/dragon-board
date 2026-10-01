@@ -174,9 +174,11 @@ def test_baseline_anchor_reads_registry():
     from backend.operations.harness_common import baseline_anchor
 
     gen, anchors = baseline_anchor()
-    assert gen == "gen-2026-10-b202610"
-    assert anchors["decision"] == 0.1323 and anchors["oos1"] == 0.0862
-    assert anchors["oos2"] == 0.0998 and anchors["oos2u"] == 0.0812  # 演练口径，10/3 全月后注册表更新即自动跟随
+    # 第七代三参组合（vsB070+floor3+x30，eabf4b44/dfbf849b/29f96c9f）四窗锚；
+    # 注册表推进代际时本哨兵同步更新（失配必须显式标记，不许带病继续）。
+    assert gen == "gen-2026-09-30-midlong-x30"
+    assert anchors["decision"] == 0.1472 and anchors["oos1"] == 0.1016
+    assert anchors["oos2"] == 0.0981 and anchors["oos2u"] == 0.0698
     assert all(v > 0 for v in anchors.values())
 
 

@@ -88,8 +88,12 @@ def test_family_verdict_zero_effect_requires_both():
 
 
 def test_anchor_constant():
-    """锚代际：post-fund10 基线锚（2026-09-15 fund10 落默认后）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一源：ANCHOR_BASELINE = 注册表 currentGeneration（gen-2026-09-30-midlong-x30 三参组合四窗锚），
+    不再锁 fund10 字面量代际。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
 
 
 def test_cb_summary_reports_family_verdict():

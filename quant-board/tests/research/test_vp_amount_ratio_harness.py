@@ -93,15 +93,20 @@ def test_single_variable_trials_change_only_own_axis():
 
 
 def test_baseline_anchor_constant():
-    """锚代际：post-fund10 基线锚（2026-09-15 代际，主代理实测 oos2=0.0951 逐位复现）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一源：ANCHOR_BASELINE = 注册表 currentGeneration（gen-2026-09-30-midlong-x30 三参组合四窗锚），
+    不再锁 fund10 字面量代际。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
 
 
 def test_anchor_check_round4_match():
-    assert anchor_check("oos2", 0.0951, ANCHOR_BASELINE) == {
-        "checked": True, "expected": 0.0951, "actual": 0.0951, "match": True,
+    exp = ANCHOR_BASELINE["oos2"]
+    assert anchor_check("oos2", exp, ANCHOR_BASELINE) == {
+        "checked": True, "expected": exp, "actual": exp, "match": True,
     }
-    assert anchor_check("oos2", 0.095, ANCHOR_BASELINE)["match"] is False
+    assert anchor_check("oos2", round(exp - 0.0001, 4), ANCHOR_BASELINE)["match"] is False
     assert anchor_check("oos2", None, ANCHOR_BASELINE)["match"] is False
     assert anchor_check("oos2", 0.1, None) == {"checked": False}
 
@@ -179,7 +184,7 @@ def test_resume_reruns_freeze_guard(monkeypatch, tmp_path):
 
 def test_run_window_executes_extra_trial(monkeypatch, tmp_path):
     """--extra-trial 注入的 trial 必须真实进执行循环（第二轮精扫补跑）。"""
-    _patch_run_window_mocks(monkeypatch, gate_result={"synergy": {"saEx": 0.112, "passHard": True}})
+    _patch_run_window_mocks(monkeypatch, gate_result={"synergy": {"saEx": ANCHOR_BASELINE["decision"], "passHard": True}})
     specs = build_specs(json.dumps({"key": "extra_probe", "desc": "extra", "overrides": {"amountRatioPeriod": 6.0}}))
     assert specs[-1]["key"] == "extra_probe" and specs[-1]["anchor"] is None
     report = {"__out__": str(tmp_path / "r.json")}
@@ -210,14 +215,14 @@ def test_anchor_mismatch_raises_and_saves(monkeypatch, tmp_path):
         run_window("decision", report, specs=[{"key": "baseline", "desc": "b", "overrides": {}, "anchor": ANCHOR_BASELINE}])
     saved = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     check = saved["decision"]["anchorChecks"]["decision"]
-    assert check["match"] is False and check["expected"] == 0.112 and check["actual"] == 0.5
+    assert check["match"] is False and check["expected"] == ANCHOR_BASELINE["decision"] and check["actual"] == 0.5
 
 
 def test_anchor_match_passes_and_records(monkeypatch, tmp_path):
     """baseline 锚逐位复现 → 通过并写 anchorChecks 留痕；trial 表整表执行。"""
     _patch_run_window_mocks(
         monkeypatch,
-        gate_result={"synergy": {"saEx": 0.112, "passHard": True}},
+        gate_result={"synergy": {"saEx": ANCHOR_BASELINE["decision"], "passHard": True}},
     )
     report = {"__out__": str(tmp_path / "r.json")}
     run_window("decision", report)

@@ -103,10 +103,14 @@ def test_from_patch_silently_accepts_out_of_order_lines():
     assert cfg.regimeStrongScore == 45.0
 
 
-# ── ④ 锚常量（代际：post-fund10）──
+# ── ④ 锚常量（单一源 = 注册表 currentGeneration，gen-2026-09-30-midlong-x30）──
 
 def test_anchor_baseline_constant():
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
+    """锚单一源：ANCHOR_BASELINE 运行时读注册表，不再锁 fund10 字面量代际。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
 
 
 # ── ⑤ override 生效守卫 ──
@@ -208,11 +212,12 @@ def test_trial_summary_insufficient_data():
 
 
 def test_anchor_check_rounding():
-    assert anchor_check("oos2", 0.09510, ANCHOR_BASELINE) == {
-        "checked": True, "expected": 0.0951, "actual": 0.0951, "match": True,
+    exp = ANCHOR_BASELINE["oos2"]
+    assert anchor_check("oos2", exp + 0.0000001, ANCHOR_BASELINE) == {
+        "checked": True, "expected": exp, "actual": exp + 0.0000001, "match": True,  # round4 判等；actual 如实留原值
     }
     assert anchor_check("oos2", None, ANCHOR_BASELINE)["match"] is False
-    assert anchor_check("oos2", 0.0951, None) == {"checked": False}
+    assert anchor_check("oos2", exp, None) == {"checked": False}
 
 
 # ── ⑦ _save 剥离帧缓存 + windowsConsumed 标记 ──
@@ -304,8 +309,8 @@ def test_run_window_executes_extra_trial(monkeypatch, tmp_path):
 
 def test_run_window_full_table_with_anchor_match(monkeypatch, tmp_path):
     """13+1 trial 全执行 + baseline 锚 match 路径 + anchor 读数随 trial 留痕。"""
-    gate_payload = _gate_result(0.112, 100)
-    gate_payload["synergy"] = {"saEx": 0.112, "passHard": True}  # decision 窗锚值
+    gate_payload = _gate_result(ANCHOR_BASELINE["decision"], 100)
+    gate_payload["synergy"] = {"saEx": ANCHOR_BASELINE["decision"], "passHard": True}  # decision 锚随注册表单一源
     _mock_engine(monkeypatch, gate_payload)
     specs = build_specs('{"key": "p3b_probe", "desc": "x", "overrides": {"regimeStrongScore": 62.5}}')
     report = {"__out__": str(tmp_path / "r.json")}

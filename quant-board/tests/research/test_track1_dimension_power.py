@@ -51,18 +51,22 @@ def test_all_arm_patches_construct_valid_configs():
 
 
 def test_anchor_constants_generation():
-    """锚代际（2026-09-15 fund10 落默认后）：baseline=post-fund10 基线锚；
-    w1_old=24.3 a1 实测（pre-fund10 代际，重跑漂移时按代际漂移处理不阻断）。"""
-    assert ANCHOR_BASELINE == {"decision": 0.112, "oos1": 0.088, "oos2": 0.0951}
-    assert ANCHOR_W1_OLD == {"decision": 0.0939, "oos1": 0.0854, "oos2": 0.0737}  # 24.3 a1（pre-fund10）
+    """锚代际：baseline = 注册表 currentGeneration 单一源（gen-2026-09-30-midlong-x30 三参组合）；
+    w1_old = 24.3 a1 实测（gen-2026-08-22_8 历史口径冻结，重跑漂移时按代际漂移处理不阻断）。"""
+    from backend.operations.harness_common import baseline_anchor
+
+    assert ANCHOR_BASELINE == baseline_anchor()[1]
+    assert set(ANCHOR_BASELINE) >= {"decision", "oos1", "oos2"}
+    assert ANCHOR_W1_OLD == {"decision": 0.0939, "oos1": 0.0854, "oos2": 0.0737}  # 24.3 a1（22.8 代际历史冻结）
     assert next(a for a in ARMS if a["key"] == "baseline")["anchor"] is ANCHOR_BASELINE
     assert next(a for a in ARMS if a["key"] == "w1_old")["anchor"] is ANCHOR_W1_OLD
     assert all(a["anchor"] is None for a in ARMS if a["key"].startswith("no_"))
 
 
 def test_anchor_check_round4():
-    assert anchor_check("decision", 0.112, ANCHOR_BASELINE)["match"] is True
-    assert anchor_check("decision", 0.1121, ANCHOR_BASELINE)["match"] is False
+    exp = ANCHOR_BASELINE["decision"]
+    assert anchor_check("decision", exp, ANCHOR_BASELINE)["match"] is True
+    assert anchor_check("decision", exp + 0.0001, ANCHOR_BASELINE)["match"] is False  # round4 后不等
     assert anchor_check("decision", None, ANCHOR_BASELINE)["match"] is False
     assert anchor_check("decision", 0.1, None)["checked"] is False
 
