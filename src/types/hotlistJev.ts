@@ -118,12 +118,17 @@ export interface JevReviewItem {
     score?: number | null
     slope?: number | null
     nearEdge?: number | null
+    /** A 类日级：全天槽位对照（2026-10-01 用户反馈，仲裁单位=天） */
+    stageSummary?: string | null
+    slots?: Array<{ slot: string; stageCn?: string | null; score?: number | null; slope?: number | null }>
   }
   jev: {
     stage?: string | null
     confidence?: number | null
     temperature?: number | null
     dayStage?: string | null
+    stageSummary?: string | null
+    slots?: Array<{ slot: string; stage?: string | null; confidence?: number | null; temperature?: number | null }>
   }
   narrativeHead?: string | null
   dayRet?: number | null

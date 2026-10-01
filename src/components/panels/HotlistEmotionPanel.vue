@@ -557,6 +557,21 @@
                           <span class="jev-review-status" :data-status="item.ruling.status">{{ reviewStatusText[item.ruling.status] }}</span>
                         </button>
                         <div v-if="openReviewItems.has(item.id)" class="jev-review-item-body">
+                          <table v-if="item.type === 'A'" class="jev-review-slots">
+                            <thead>
+                              <tr><th>槽位</th><th>规则档位</th><th>分数</th><th>Δ斜率</th><th>jev 档位</th><th>置信</th></tr>
+                            </thead>
+                            <tbody>
+                              <tr v-for="row in reviewDaySlotRows(item)" :key="row.slot">
+                                <td>{{ row.slot }}</td>
+                                <td>{{ row.ruleCn || '--' }}</td>
+                                <td>{{ row.score ?? '--' }}</td>
+                                <td>{{ row.slope == null ? '--' : (row.slope > 0 ? '+' : '') + row.slope }}</td>
+                                <td>{{ row.jevName || '--' }}</td>
+                                <td>{{ row.conf == null ? '--' : `${Math.round(row.conf * 100)}%` }}</td>
+                              </tr>
+                            </tbody>
+                          </table>
                           <pre v-if="item.narrativeHead" class="jev-narrative-text jev-review-narrative">{{ item.narrativeHead }}</pre>
                           <div class="jev-review-actions">
                             <button v-for="opt in reviewRulingOptions" :key="opt.status" class="indicator-btn"
@@ -802,8 +817,11 @@ function toggleReviewItem(id: string): void {
   openReviewItems.value = next
 }
 
-/** 摘要行：规则侧（档位/分数/斜率 或 边界分）vs jev 侧（档位+置信） */
+/** 摘要行：A=全天档位混合（日级仲裁）；B/C=规则侧（档位/分数/斜率 或 边界分）vs jev 侧 */
 function reviewItemSummary(item: JevReviewItem): string {
+  if (item.type === 'A') {
+    return `全天：规则 ${item.rule.stageSummary || '--'} vs jev ${item.jev.stageSummary || '--'}`
+  }
   if (item.type === 'C') {
     return `规则分 ${item.rule.score ?? '--'}（贴 ${item.rule.nearEdge ?? '?'} 边界）vs jev 日级 ${
       item.jev.dayStage ? (JEV_STAGE_NAMES[item.jev.dayStage] ?? item.jev.dayStage) : '--'
@@ -815,6 +833,25 @@ function reviewItemSummary(item: JevReviewItem): string {
   return `规则 ${item.rule.stageCn || item.rule.stage || '--'} ${item.rule.score ?? '--'}${slope} vs jev ${
     item.jev.stage ? (JEV_STAGE_NAMES[item.jev.stage] ?? item.jev.stage) : '--'
   }${conf}${temp}`
+}
+
+/** A 类日级展开：全天槽位对照表（规则分数/斜率 vs jev 档位/置信） */
+function reviewDaySlotRows(item: JevReviewItem): Array<{
+  slot: string; ruleCn?: string | null; score?: number | null; slope?: number | null;
+  jevName?: string | null; conf?: number | null;
+}> {
+  const jevBySlot = new Map((item.jev.slots ?? []).map(row => [row.slot, row]))
+  return (item.rule.slots ?? []).map(row => {
+    const j = jevBySlot.get(row.slot)
+    return {
+      slot: row.slot,
+      ruleCn: row.stageCn,
+      score: row.score,
+      slope: row.slope,
+      jevName: j?.stage ? (JEV_STAGE_NAMES[j.stage] ?? j.stage) : null,
+      conf: j?.confidence ?? null,
+    }
+  })
 }
 
 async function loadReviewList(force = false): Promise<void> {
@@ -3756,6 +3793,20 @@ watch(() => props.visible, (visible) => {
 .jev-review-status[data-status='jev_right'] { color: #8e44ad; border-color: #8e44ad; }
 .jev-review-status[data-status='ambiguous'] { color: #d68910; border-color: #d68910; }
 .jev-review-status[data-status='consistent'] { color: #27ae60; border-color: #27ae60; }
+.jev-review-slots {
+  width: 100%;
+  font-size: 11px;
+  border-collapse: collapse;
+  color: var(--text-primary);
+}
+.jev-review-slots th, .jev-review-slots td {
+  border: 1px solid var(--border-color);
+  padding: 2px 6px;
+  text-align: left;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.jev-review-slots th { color: var(--text-secondary); background: var(--bg-primary); }
 .jev-review-item-body { padding: 4px 8px 8px 26px; }
 .jev-review-narrative { max-height: 120px; font-size: 11px; }
 .jev-review-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }

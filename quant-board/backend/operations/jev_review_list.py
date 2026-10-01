@@ -62,7 +62,8 @@ def build_review_items(
 ) -> list[dict]:
     """纯函数：聚合三类复核项。输入为只读快照，输出待落库文档。
 
-    规则与 jev 五档字面一致的项自动裁决 consistent（2026-10-01 用户指令），其余 pending。
+    A 类为**日级**项（2026-10-01 用户反馈：分歧仲裁单位=天，半天槽位行冗余），
+    证据带全天槽位对照明细；B/C 粒度不变。五档字面一致的项自动裁决 consistent。
     """
     now = datetime.now().isoformat(timespec="seconds")
     items: list[dict] = []
@@ -76,6 +77,7 @@ def build_review_items(
             slope_tables[date] = slopes_of_day(day_scores)
         return slope_tables[date].get(slot)
 
+    # B 类：退潮段异议（槽位粒度，每槽证据独立）
     for (date, slot), rs in sorted(rule_slots.items()):
         js = jev_slots.get((date, slot))
         if not js:
@@ -84,21 +86,48 @@ def build_review_items(
         jev_en = str(js.get("stage") or "")
         if not rule_en or not jev_en:
             continue
-        common = {
-            "kind": "review_items", "date": date, "slot": slot,
-            "rule": {"stage": rule_en, "stageCn": rs.get("stageCn"), "score": rs.get("score"),
-                     "slope": slope(date, slot)},
-            "jev": {"stage": jev_en, "confidence": js.get("confidence"),
-                    "temperature": js.get("temperature")},
-            "narrativeHead": js.get("narrativeHead"),
-            "dayRet": day_rets.get(date),
-        }
-        if date in DIVERGENCE_DAYS:
-            items.append({**common, "type": "A", "_id": item_id(date, slot, "A"),
-                          "ruling": auto_ruling(rule_en, jev_en, now)})
         if rule_en in DEFENSE and jev_en in OFFENSE:
-            items.append({**common, "type": "B", "_id": item_id(date, slot, "B"),
-                          "ruling": auto_ruling(rule_en, jev_en, now)})
+            items.append({
+                "kind": "review_items", "type": "B", "date": date, "slot": slot,
+                "_id": item_id(date, slot, "B"),
+                "rule": {"stage": rule_en, "stageCn": rs.get("stageCn"), "score": rs.get("score"),
+                         "slope": slope(date, slot)},
+                "jev": {"stage": jev_en, "confidence": js.get("confidence"),
+                        "temperature": js.get("temperature")},
+                "narrativeHead": js.get("narrativeHead"),
+                "dayRet": day_rets.get(date),
+                "ruling": auto_ruling(rule_en, jev_en, now),
+            })
+
+    # A 类：分歧仲裁（日级，一天一裁；证据=全天槽位对照）
+    for date in DIVERGENCE_DAYS:
+        day_rule = {s: v for (d, s), v in sorted(rule_slots.items()) if d == date and CN2EN.get(str(v.get("stageCn") or ""))}
+        day_jev = {s: v for (d, s), v in sorted(jev_slots.items()) if d == date and v.get("stage")}
+        if not day_rule or not day_jev:
+            continue
+        from collections import Counter
+
+        rule_mix = Counter(CN2EN[str(v["stageCn"])] for v in day_rule.values())
+        jev_mix = Counter(v["stage"] for v in day_jev.values())
+        rule_rows = [{"slot": s, "stageCn": day_rule[s]["stageCn"], "score": day_rule[s]["score"],
+                      "slope": slope(date, s)} for s in sorted(day_rule)]
+        jev_rows = [{"slot": s, "stage": day_jev[s]["stage"], "confidence": day_jev[s]["confidence"],
+                     "temperature": day_jev[s]["temperature"]} for s in sorted(day_jev)]
+        # 全天两侧各自单档且相等 → 口径一致自动裁决；分歧日通常不触发
+        consistent = (len(rule_mix) == 1 and len(jev_mix) == 1 and next(iter(rule_mix)) == next(iter(jev_mix)))
+        items.append({
+            "_id": item_id(date, "DAY", "A"), "kind": "review_items", "type": "A",
+            "date": date, "slot": "DAY",
+            "rule": {"stageSummary": "、".join(f"{stage}×{n}" for stage, n in rule_mix.most_common()),
+                     "slots": rule_rows},
+            "jev": {"stageSummary": "、".join(f"{stage}×{n}" for stage, n in jev_mix.most_common()),
+                    "slots": jev_rows},
+            "narrativeHead": next((day_jev[s].get("narrativeHead") for s in sorted(day_jev, reverse=True)
+                                   if day_jev[s].get("narrativeHead")), None),
+            "dayRet": day_rets.get(date),
+            "ruling": ({"status": "consistent", "note": "口径一致，系统自动裁决（无需人工）", "ruledAt": now}
+                       if consistent else {"status": "pending", "note": "", "ruledAt": None}),
+        })
 
     for date, score in sorted(rule_eod_scores.items()):
         if not isinstance(score, (int, float)):
@@ -216,6 +245,10 @@ def generate(db) -> dict:
     items = build_review_items(rule_slots, jev_slots, rule_eod, rule_eod_stages, jev_eod_stages, day_rets)
     existing = {str(d["_id"]): d for d in db["phase_monitor"].find({"kind": "review_items"}, {"_id": 1, "ruling": 1})}
     items = merge_preserving_rulings(items, existing)
+    # 清理本轮不再产生的旧 id（如 A 类槽位级文档已升为日级，2026-10-01 用户反馈）
+    stale_ids = [i for i in existing if i not in {item["_id"] for item in items}]
+    if stale_ids:
+        db["phase_monitor"].delete_many({"kind": "review_items", "_id": {"$in": stale_ids}})
     for item in items:
         db["phase_monitor"].replace_one({"_id": item["_id"]}, item, upsert=True)
     from collections import Counter

@@ -18,13 +18,19 @@ def _mk(rule_slots, jev_slots, eod_scores=None, eod_stages=None, jev_eod=None, d
     return build_review_items(rule_slots, jev_slots, eod_scores or {}, eod_stages or {}, jev_eod or {}, day_rets or {})
 
 
-def test_type_a_on_registered_divergence_days():
-    rule = {("2026-09-08", "10:00"): {"stageCn": "启动", "score": 55.0}}
-    jev = {("2026-09-08", "10:00"): {"stage": "retreat", "confidence": 0.8, "temperature": 30.0, "narrativeHead": "…"}}
+def test_type_a_day_level_with_slot_table():
+    """A 类为日级（2026-10-01 用户反馈）：一天一项，证据带全天槽位对照。"""
+    rule = {("2026-09-08", "09:30"): {"stageCn": "启动", "score": 55.0},
+            ("2026-09-08", "10:00"): {"stageCn": "发酵", "score": 62.0}}
+    jev = {("2026-09-08", "09:30"): {"stage": "retreat", "confidence": 0.8, "temperature": 30.0, "narrativeHead": "…"},
+           ("2026-09-08", "10:00"): {"stage": "retreat", "confidence": 0.9, "temperature": 32.0, "narrativeHead": None}}
     items = _mk(rule, jev)
     assert len(items) == 1 and items[0]["type"] == "A"
-    assert items[0]["_id"] == "review:2026-09-08:10:00:A"
-    # 同形态但非登记日 → 不产生任何项（A 限 4 日，B 需规则防守×jev 进攻）
+    assert items[0]["_id"] == "review:2026-09-08:DAY:A" and items[0]["slot"] == "DAY"
+    assert items[0]["rule"]["stageSummary"] == "start×1、ferment×1"
+    assert items[0]["jev"]["stageSummary"] == "retreat×2"
+    assert len(items[0]["rule"]["slots"]) == 2 and len(items[0]["jev"]["slots"]) == 2
+    # 同形态但非登记日 → 不产生任何项
     rule2 = {("2026-09-09", "10:00"): {"stageCn": "启动", "score": 55.0}}
     assert _mk(rule2, jev) == []
 
@@ -54,16 +60,15 @@ def test_type_c_boundary_eod_days():
 
 def test_auto_consistent_when_stages_match():
     """口径一致（五档字面相等）→ 自动裁决 consistent；不同档保持 pending（2026-10-01 用户指令）。"""
-    # A 类：分歧登记日上规则与 jev 同档 → consistent；不同档 → pending
-    rule = {("2026-09-08", "10:00"): {"stageCn": "退潮", "score": 35.0},
-            ("2026-09-08", "10:30"): {"stageCn": "启动", "score": 55.0}}
-    jev = {("2026-09-08", "10:00"): {"stage": "retreat", "confidence": 0.8, "temperature": 20.0, "narrativeHead": None},
-           ("2026-09-08", "10:30"): {"stage": "retreat", "confidence": 0.9, "temperature": 22.0, "narrativeHead": None}}
-    items = _mk(rule, jev)
-    by_slot = {i["slot"]: i for i in items}
-    assert by_slot["10:00"]["ruling"]["status"] == "consistent"  # 退潮 == retreat
-    assert by_slot["10:00"]["ruling"]["ruledAt"] is not None
-    assert by_slot["10:30"]["ruling"]["status"] == "pending"     # 启动 != retreat
+    # A 类日级：全天两侧各自单档且相等 → consistent；混档或与 jev 不同 → pending
+    rule_same = {("2026-09-08", "09:30"): {"stageCn": "退潮", "score": 35.0},
+                 ("2026-09-08", "10:00"): {"stageCn": "退潮", "score": 33.0}}
+    jev_same = {("2026-09-08", "09:30"): {"stage": "retreat", "confidence": 0.8, "temperature": 20.0, "narrativeHead": None},
+                ("2026-09-08", "10:00"): {"stage": "retreat", "confidence": 0.9, "temperature": 22.0, "narrativeHead": None}}
+    assert _mk(rule_same, jev_same)[0]["ruling"]["status"] == "consistent"
+    rule_mixed = {("2026-09-08", "09:30"): {"stageCn": "启动", "score": 55.0},
+                  ("2026-09-08", "10:00"): {"stageCn": "启动", "score": 58.0}}
+    assert _mk(rule_mixed, jev_same)[0]["ruling"]["status"] == "pending"  # 启动 vs 退潮
     # B 类构造上必不同档 → 恒 pending
     rule_b = {("2026-08-01", "10:00"): {"stageCn": "退潮", "score": 35.0}}
     jev_b = {("2026-08-01", "10:00"): {"stage": "start", "confidence": 0.6, "temperature": 20.0, "narrativeHead": None}}
