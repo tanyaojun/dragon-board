@@ -535,12 +535,16 @@
                   <span class="jev-review-legend">A 分歧仲裁 · B 退潮段异议 · C 边界日</span>
                   <span class="jev-review-progress">已裁 {{ reviewRuled }}/{{ reviewTotal }}</span>
                   <button class="time-btn" @click="loadReviewList(true)">刷新</button>
+                  <button class="time-btn jev-review-toggle" :class="{ active: hideRuled }"
+                    @click="hideRuled = !hideRuled">{{ hideRuled ? '☑ 隐藏已核' : '☐ 隐藏已核' }}</button>
                 </div>
                 <div v-if="reviewLoading" class="note-line">复核清单加载中…（首次生成需读历史帧，稍慢）</div>
                 <div v-else-if="reviewError" class="note-line">⚠️ {{ reviewError }}</div>
-                <div v-else-if="!reviewDays.length" class="empty-row">暂无复核项</div>
+                <div v-else-if="!visibleReviewDays.length" class="empty-row">
+                  {{ hideRuled && reviewDays.length ? '待复核已清零（已核项已隐藏，关掉开关可查看）' : '暂无复核项' }}
+                </div>
                 <div v-else class="jev-review-days">
-                  <div v-for="day in reviewDays" :key="day.date" class="jev-review-day">
+                  <div v-for="day in visibleReviewDays" :key="day.date" class="jev-review-day">
                     <button class="jev-review-day-head" @click="toggleReviewDay(day.date)">
                       <span>{{ openReviewDays.has(day.date) ? '▾' : '▸' }} {{ day.date }}</span>
                       <span class="jev-review-day-meta">{{ day.items.length }} 项 · 待复核 {{ day.pending }}</span>
@@ -792,6 +796,19 @@ const reviewLoadedOnce = ref(false)
 const openReviewDays = ref<Set<string>>(new Set())
 const openReviewItems = ref<Set<string>>(new Set())
 const reviewNoteDrafts = ref<Record<string, string>>({})
+// 隐藏已核（2026-10-01 用户指令）：默认开，裁完一条自动消失；关掉可回看全部
+const hideRuled = ref(true)
+
+/** 按开关过滤后的日列表：隐藏非 pending 项，清空的日整日隐藏 */
+const visibleReviewDays = computed(() => {
+  if (!hideRuled.value) return reviewDays.value
+  return reviewDays.value
+    .map(day => {
+      const items = day.items.filter(item => item.ruling.status === 'pending')
+      return { ...day, items, pending: items.length }
+    })
+    .filter(day => day.items.length > 0)
+})
 
 const reviewStatusText: Record<JevReviewRulingStatus, string> = {
   pending: '未裁', rule_right: '规则对', jev_right: 'jev 对', ambiguous: '模糊', consistent: '一致',
@@ -3743,6 +3760,7 @@ watch(() => props.visible, (visible) => {
 .jev-review-title { font-weight: 600; }
 .jev-review-legend { color: var(--text-secondary); font-size: 11px; }
 .jev-review-progress { color: var(--accent-color, #3498db); font-weight: 600; }
+.jev-review-toggle { margin-left: auto; }
 .jev-review-days { margin-top: 6px; max-height: 420px; overflow-y: auto; }
 .jev-review-day-head {
   display: flex;
