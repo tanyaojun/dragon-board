@@ -143,19 +143,18 @@ def main() -> int:
         "jev_vs_champion": {"netReturnDelta": round(j["sumNetReturn"] - c["sumNetReturn"], 4),
                             "ddImprovement": round(c["maxDrawdown"] - j["maxDrawdown"], 4) if c["maxDrawdown"] is not None and j["maxDrawdown"] is not None else None,
                             "tradesDelta": j["tradeCount"] - c["tradeCount"]}}
-    OUT = out_path
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     # 评审 P1-3 自检：防配置未达模拟器的静默失效报告（如 arms 双重嵌套事故）
     champ_src = (c.get("debug") or {}).get("firstEntryPhaseSource")
     jev_src_sum = sum((j.get("sourceAttribution") or {}).values())
     if champ_src is None or (j["tradeCount"] > 0 and jev_src_sum == 0):
         print("[jev-backtest][自检失败] champion 无归因戳或 jev 分源全零——配置疑似未达模拟器，产物无效（已存档供排查）",
               file=sys.stderr)
-        print(f"-> {OUT}（INVALID）")
+        print(f"-> {out_path}（INVALID）")
         return 3
     print(json.dumps(report["comparison"], ensure_ascii=False, indent=1))
-    print(f"-> {OUT}")
+    print(f"-> {out_path}")
     return 0
 
 
