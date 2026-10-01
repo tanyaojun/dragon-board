@@ -6,6 +6,10 @@
 - GET  /api/hotlist-jev/series：单日读口（槽位升序 + eod），v1 无缓存。
 - GET  /api/hotlist-jev/range：多日窗口读口（2026-09-30，前端 jev 观察轨道图表消费），
   按快照交易日历逐日返回；纯读不补算（jev 结论唯一来源 = 采集链落库）。
+- GET  /api/hotlist-jev/review-list：复核工作台清单（W1 辅助线，2026-10-01）——
+  分歧仲裁/退潮异议/边界日三类复核项，按日聚合；清单为空时懒生成（读 frames，首次较慢）。
+- POST /api/hotlist-jev/review-ruling：复核裁决回填（status ∈ rule_right/jev_right/
+  ambiguous/pending + 备注），幂等更新。
 
 读口只返回 hotlist_jev_sentiment 原文档（独立观察轨道），不与规则情绪文档合并。
 """
@@ -20,6 +24,8 @@ from pydantic import BaseModel, Field
 from backend.data.repositories import repository_factory
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
+
+REVIEW_RULING_STATUSES = ("rule_right", "jev_right", "ambiguous", "pending")
 
 
 class JevEvaluatePayload(BaseModel):
@@ -170,3 +176,63 @@ def get_hotlist_jev_range(
                 "degradedCount": degraded_count}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"range_read_failed: {exc}", "days": []}
+
+
+class JevReviewRulingPayload(BaseModel):
+    id: str
+    status: str = Field(..., description="rule_right | jev_right | ambiguous | pending")
+    note: str = ""
+
+
+@router.get("/review-list")
+def get_jev_review_list() -> dict[str, Any]:
+    """复核工作台清单（W1）：三类复核项按日聚合 + 进度统计；清单为空时懒生成。"""
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}", "days": []}
+    try:
+        from backend.operations.jev_review_list import ensure_review_items
+
+        stats = ensure_review_items(db)
+        docs = list(db["phase_monitor"].find({"kind": "review_items"}).sort([("date", 1), ("slot", 1)]))
+        docs = [{k: v for k, v in d.items() if k != "_id"} | {"id": str(d["_id"])} for d in docs]
+        days: list[dict[str, Any]] = []
+        by_date: dict[str, list[dict[str, Any]]] = {}
+        for d in docs:
+            by_date.setdefault(d["date"], []).append(d)
+        for date in sorted(by_date):
+            items = by_date[date]
+            days.append({"date": date, "items": items,
+                         "pending": sum(1 for i in items if i["ruling"]["status"] == "pending")})
+        return {"ok": True, "stats": stats, "days": days,
+                "progress": {"total": len(docs),
+                             "ruled": sum(1 for i in docs if i["ruling"]["status"] != "pending")}}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"review_list_failed: {exc}", "days": []}
+
+
+@router.post("/review-ruling")
+def post_jev_review_ruling(payload: JevReviewRulingPayload) -> dict[str, Any]:
+    """复核裁决回填：幂等更新 ruling（status/note/ruledAt）。"""
+    if payload.status not in REVIEW_RULING_STATUSES:
+        return {"ok": False, "errorCode": "bad_status",
+                "error": f"status must be one of {REVIEW_RULING_STATUSES}"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from datetime import datetime
+
+        result = db["phase_monitor"].update_one(
+            {"_id": payload.id, "kind": "review_items"},
+            {"$set": {"ruling.status": payload.status, "ruling.note": payload.note,
+                      "ruling.ruledAt": datetime.now().isoformat(timespec="seconds")}},
+        )
+        if result.matched_count == 0:
+            return JSONResponse(status_code=404, content={"ok": False, "errorCode": "item_not_found",
+                                                          "error": f"no review item {payload.id}"})
+        return {"ok": True, "id": payload.id, "status": payload.status}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"ruling_write_failed: {exc}"}

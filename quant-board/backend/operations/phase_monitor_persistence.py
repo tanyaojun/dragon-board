@@ -67,3 +67,22 @@ def persist_pulse(report: dict[str, Any]) -> str | None:
     except Exception as exc:  # noqa: BLE001 — 研究链不因落库失败中断
         print(f"[phase-monitor-persist] pulse 落库失败（不阻断）: {exc}", file=sys.stderr)
         return None
+
+
+def persist_divergence(report: dict[str, Any]) -> str | None:
+    """分歧哨兵落库（_id=divergence:<YYYY-MM>，report.month 必填）。失败返回 None。"""
+    month = str(report.get("month") or "")
+    if not month:
+        print("[phase-monitor-persist] divergence 落库跳过：report.month 缺失", file=sys.stderr)
+        return None
+    try:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+
+        db = get_runtime_mongodb_database()
+        doc = {"_id": f"divergence:{month}", "kind": "divergence", "month": month,
+               "report": report, "updatedAt": _now()}
+        db["phase_monitor"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return doc["_id"]
+    except Exception as exc:  # noqa: BLE001 — 研究链不因落库失败中断
+        print(f"[phase-monitor-persist] divergence 落库失败（不阻断）: {exc}", file=sys.stderr)
+        return None
