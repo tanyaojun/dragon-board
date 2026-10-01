@@ -49,12 +49,13 @@ def tier_of_stage(stage: object) -> str | None:
 def build_slot_labels(docs: list[dict]) -> tuple[dict[str, str], dict]:
     """jev 槽位文档 → {date|slot: 两档} 标签与覆盖统计（纯函数）。"""
     labels: dict[str, str] = {}
-    stats = {"jevSlotDocs": 0, "okDocs": 0, "used": 0,
+    stats = {"jevSlotDocs": 0, "okDocs": 0, "used": 0, "skippedNotSlot": 0,
              "skippedNotOk": 0, "skippedMissingStage": 0, "skippedUnknownStage": 0}
     days: set[str] = set()
     for doc in docs:
         stats["jevSlotDocs"] += 1
         if str(doc.get("kind") or "") != "slot":
+            stats["skippedNotSlot"] += 1
             continue
         if str(doc.get("status") or "") != "ok":
             stats["skippedNotOk"] += 1

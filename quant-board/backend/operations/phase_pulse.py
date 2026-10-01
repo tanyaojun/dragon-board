@@ -68,17 +68,35 @@ def build_pulse_report(
 
 def attribution_stats(trades: list[dict]) -> dict:
     """SP1 归因段（章程 T2）：roundTrip 交易的 entryPhase 汇总（fail-visible：缺失计数不静默）；
-    SP2-T3 扩展：byPhase 分相计数 + rebalanceCount（相位调仓清仓笔数，reason 前缀口径）。"""
+    SP2-T3 扩展：byPhase 分相计数 + rebalanceCount（相位调仓清仓笔数，reason 前缀口径）。
+    SP4-T4（评审 P1-1）：jev 源交易的 prevScore 按设计置空（分数轴不存在）——按 phaseLabel
+    计入 byPhase，并新增 sourceAttribution {direct, fallback, unknown} 分源计数，不再误计 missing。"""
     by_band: dict[str, dict] = {}
     by_phase: dict[str, int] = {}
     available = 0
     missing = 0
     rebalance = 0
+    source_attribution = {"direct": 0, "fallback": 0, "unknown": 0}
     for t in trades:
         if str(t.get("reason") or "").startswith("相位调仓"):
             rebalance += 1
         ep = t.get("entryPhase") if isinstance(t.get("entryPhase"), dict) else None
-        if not isinstance(ep, dict) or ep.get("prevScore") is None:
+        if not isinstance(ep, dict):
+            missing += 1
+            continue
+        if str(ep.get("source") or "") == "jev_seq_slot":
+            available += 1
+            label = ep.get("phaseLabel") if ep.get("phaseLabel") in ("offense", "defense") else None
+            key = label or "unknown"
+            by_phase[key] = by_phase.get(key, 0) + 1
+            if label is None:
+                source_attribution["unknown"] += 1
+            elif ep.get("fallbackUsed"):
+                source_attribution["fallback"] += 1
+            else:
+                source_attribution["direct"] += 1
+            continue
+        if ep.get("prevScore") is None:
             missing += 1
             continue
         available += 1
@@ -90,7 +108,7 @@ def attribution_stats(trades: list[dict]) -> dict:
     for slot in by_band.values():
         slot["factorSet"] = sorted(slot["factorSet"])
     return {"availableTrades": available, "missingEntryPhase": missing, "byBand": by_band,
-            "byPhase": by_phase, "rebalanceCount": rebalance}
+            "byPhase": by_phase, "rebalanceCount": rebalance, "sourceAttribution": source_attribution}
 
 
 def _phase_of(score: float | None) -> str:

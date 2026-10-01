@@ -19,7 +19,6 @@ _TZ = ZoneInfo("Asia/Shanghai")
 
 _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
 _PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
-_PULSE_ARMS = "baseline,champion,exit_v1,slot_v1"  # 挑战者预算 ≤2（章程 §5.6）；rebal_v1 排队（启用=改 config 文件）
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
 
@@ -121,8 +120,13 @@ def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         }
     except Exception as exc:  # noqa: BLE001 — 摘要解析失败不影响脉拍本体已落库
         summary = {"parseError": str(exc)}
+    # 评审 P1-2：记录的臂清单从脉拍参数回填（单一事实源=config 登记文件），不再维护过期常量
+    pulse_args = _pulse_arms_args()
+    arms_record = "baseline,champion"
+    if len(pulse_args) >= 2 and pulse_args[0] == "--arms":
+        arms_record = pulse_args[1]
     result = {"ok": True, "month": month, "out": str(out_path), "summary": summary,
-              "mongoFresh": mongo_fresh, "arms": _PULSE_ARMS}
+              "mongoFresh": mongo_fresh, "arms": arms_record}
     if not mongo_fresh:
         result["mongoWarning"] = "phase_monitor pulse:<month> updatedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
     return result

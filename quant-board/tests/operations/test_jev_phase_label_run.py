@@ -46,6 +46,7 @@ def test_build_slot_labels_happy_path_and_fail_visible_counts():
     labels, stats = build_slot_labels(docs)
     assert labels == {"2026-09-01|09:30": "offense", "2026-09-01|10:00": "defense"}
     assert stats["jevSlotDocs"] == 6
+    assert stats["skippedNotSlot"] == 1  # 评审 P2-4：非 slot 文档显式计数不再静默跳过
     assert stats["okDocs"] == 4
     assert stats["used"] == 2
     assert stats["skippedUnknownStage"] == 1

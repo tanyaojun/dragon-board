@@ -315,3 +315,19 @@ def test_build_arm_trade_configs_jev_labels_injection(tmp_path):
     # jev_labels=None（文件缺失）→ 保留配置内键，不崩溃（fail-visible 由调用方记录）
     spec2 = build_arm_trade_configs(["jev_seq_v1"], str(cfg), {}, None, None)
     assert spec2["arms"]["jev_seq_v1"]["phaseExposureControl"]["phaseLabels"]["2026-01-01|09:30"] == "offense"
+
+
+def test_attribution_stats_jev_source_not_missing():
+    """SP4 评审 P1-1：jev 源交易 prevScore 按设计置空——按 phaseLabel 分源计数，不误计 missing。"""
+    trades = [
+        {"entryPhase": {"source": "jev_seq_slot", "phaseLabel": "defense", "fallbackUsed": False, "factor": 0.3}},
+        {"entryPhase": {"source": "jev_seq_slot", "phaseLabel": "offense", "fallbackUsed": True, "factor": 1.0}},
+        {"entryPhase": {"source": "jev_seq_slot", "phaseLabel": None, "fallbackUsed": True, "factor": 1.0}},
+        {"entryPhase": {"source": "prev_eod", "prevScore": 65.0, "phase": "offense", "band": "强60-80", "factor": 0.3}},
+        {"entryPhase": None},
+    ]
+    stats = attribution_stats(trades)
+    assert stats["availableTrades"] == 4
+    assert stats["missingEntryPhase"] == 1  # 仅真正无盖章的一笔
+    assert stats["byPhase"] == {"defense": 1, "offense": 2, "unknown": 1}  # jev unknown 档也入 byPhase
+    assert stats["sourceAttribution"] == {"direct": 1, "fallback": 1, "unknown": 1}

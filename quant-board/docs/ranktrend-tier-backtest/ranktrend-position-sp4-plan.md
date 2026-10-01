@@ -73,9 +73,12 @@ T1 → T2 → T3 → T4 → T5（T1 是 T2 的数据前置；全程不碰 jev_cl
 ---
 
 **状态头（2026-10-01 执行记录）**：
-- **T1 完成**：`backend/operations/jev_phase_label_run.py` + 5 测试；生产产物 `phase-labels-jev-v3.json` v1（1070 标签/113 日，offense 195/defense 875，degraded 1 如实排除；fallback 112 日源=规则 v2 前日口径）；冻结纪律生效（覆写需 --force 版本自增）。
-- **T2 完成**：`execution.py` `_jev_phase_factor` 两因子制（phaseLabels 直读 → fallbackLabels[date] → unknownFactor 放行）+ `_phase_exposure_factor`/`_phase_context` source=jev_seq_slot 分支（分数轴字段置空不伪造；phaseLabel/fallbackUsed 归因仅 jev 源携带，其他 source 逐位不变）；6 测试含 golden 锚。
-- **T3 完成**：帧级分离度证据已存档（jev-phase-caliber.json）；地图台账 T-jev 行更新为 SP4 已落地；v3 角色表读数由 T5 走廊脉拍自然产出（attribution 分源）。
-- **T4 完成**：`build_arm_trade_configs` jev_labels 注入（配置内键优先、文件覆盖，同 slotScores 语义）+ `--jev-labels` 参数（缺失 fail-visible 记入 meta）+ 臂配置换血：**jev_seq_v1 上岗（offense 1.0 / defense 0.3 / unknown 1.0），slot_v1 达标收口移入排队档（与 rebal_v1 同队）**；台账预算测试同步更新。
-- **T5 走廊程序（进行中）**：① 每交易日后跑 `jev_sentiment_replay --days 1` 积累当日 jev 文档 → 月初重跑 `jev_phase_label_run --force` 版本自增；② 每月首个交易日跑 `phase_pulse --month YYYY-MM`（ Arms=baseline,champion,exit_v1,jev_seq_v1 自动从登记配置读）→ 首读 2026-10；③ 月度漂移抽检：抽 3 日用 evaluate API 重算与落库 sequence_stage 比对，漂移率 >10% 告警（人工程序，暂不建自动化）；④ 晋升门槛=章程 §6（≥2 样本外月同向 + ≥30 笔 + 回撤改善 + 用户终审），jev 臂连续 2 月劣于 champion 自动退池。
-- **移交项**：day_temperature 落库补齐（jev 观察轨道待办）；C2 前日 day_stage 反向指标课题（如需反向信号另立验证）。
+- **独立 code review 已完成**（reviewer，结论：无 Blocker，OK with notes）：引擎路径（两因子制/golden 锚/映射/冻结/注入语义）交叉验证成立；Important 1-3 已修复（①attribution_stats jev 分源分支 + sourceAttribution 计数，不再把 jev 笔误计 missing；②schedule 臂清单改为从登记配置回填，删除过期常量；③diagnose_jev_seq_backtest 修复 arms 双重嵌套 bug + 增加自检：归因全零/配置未达模拟器 → 退出码 3 产物标 INVALID）；Minors 已修 P2-4/P2-5，其余（P2-6/7/8/9/10）登记待办不阻塞。
+- **事故复盘**：全窗对照首次运行三臂全同，根因 = 诊断脚本 arms 双重嵌套（`{"phaseExposureControl": {"phaseExposureControl": ...}}`）→ 引擎读 mode=None 全部按 off 放行；debug 探针 payloadCtrlKeys=['phaseExposureControl'] 为铁证。并发运行还产生了孤儿进程（Windows 下工具超时不杀子进程），抢核加剧超时——已清理，后续长任务一律 nohup+日志轮询不依赖工具超时。
+- **既有对照数字（零重跑，来自 m3-ladder-compare.json / t6 1-summary）**：全窗 baseline 54 笔 sumNetReturn +21.67% maxDD -4.87%；champion ladder③ 34 笔 +26.71% maxDD -3.98%。唯一缺口 = jev_seq_v1 臂全窗读数（单臂 ~15-30 分钟，待用户批准后单独跑）。
+- **T1 完成**：`backend/operations/jev_phase_label_run.py` + 6 测试；生产产物 `phase-labels-jev-v3.json` v1（1070 标签/113 日，offense 195/defense 875，degraded 1 如实排除；fallback 112 日源=规则 v2 前日口径）；冻结纪律生效（覆写需 --force 版本自增）。
+- **T2 完成**：`execution.py` `_jev_phase_factor` 两因子制 + source=jev_seq_slot 分支（分数轴字段置空不伪造；phaseLabel/fallbackUsed 归因仅 jev 源携带）；6 测试含 golden 锚。
+- **T3 完成**：帧级分离度证据已存档（jev-phase-caliber.json）；地图台账 T-jev 行更新；v3 角色表读数由 T5 走廊脉拍自然产出。
+- **T4 完成**：build_arm_trade_configs jev_labels 注入 + `--jev-labels` 参数（缺失 fail-visible 记入 meta）+ 臂配置换血：jev_seq_v1 上岗（offense 1.0 / defense 0.3 / unknown 1.0），slot_v1 达标收口移入排队档；台账预算测试同步。
+- **T5 走廊程序（进行中）**：① 每交易日后 `jev_sentiment_replay --days 1` → 月初 `jev_phase_label_run --force`；② 每月首个交易日跑 `phase_pulse --month YYYY-MM`（臂自动从登记配置读）→ 首读 2026-10；③ 月度漂移抽检（人工程序）；④ 晋升门槛=章程 §6。
+- **移交项**：day_temperature 落库补齐；C2 前日 day_stage 反向指标课题；评审 P2-6/7/8/9/10（phaseExitCoupling jev 注记已有 docstring、next_version 损坏归档、逐月覆盖率、多槽同日测试、C4 标定口径注记）。

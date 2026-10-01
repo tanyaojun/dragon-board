@@ -85,7 +85,9 @@ class TradeSimulator:
         trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band|ladder,
             factor: 0~1, threshold: 60.0, bandLow/bandHigh: 40/60（reduce_band 用）,
             ladder: [[上界, 因子]...] 升序（ladder 用，末条建议 catch-all 上界如 999）,
-            eodScores: {date: score}, source: prev_eod(默认)|slot_then_prev_eod, slotScores: {date: {slot: score}}}。
+            eodScores: {date: score}, source: prev_eod(默认)|slot_then_prev_eod|jev_seq_slot, slotScores: {date: {slot: score}}}。
+        source=jev_seq_slot 时走 _jev_phase_factor 两因子制（mode/eodScores/slotScores 均不参与）；
+        jev_seq_slot 仅适用于 phaseExposureControl，phaseExitCoupling/phaseRebalance 不支持该 source。
         as-of 纪律：入场日 d 的相位取**严格早于 d 的最近交易日** EOD 分（前日定相）；
         SP3-T3.2 source=slot_then_prev_eod 时优先同日早于入场槽的档分（证据 slot-asof-diff.json 达标）。
         键缺失/模式 off/无前日/分数缺失 → 1.0 放行（默认关=golden 逐位不变，缺信号不错杀）。
