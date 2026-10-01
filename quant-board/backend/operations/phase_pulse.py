@@ -155,11 +155,13 @@ def _inject_eod_scores(cfg: dict, eod_valid: dict) -> dict:
 
 
 def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: dict,
-                            slot_scores: dict | None = None) -> dict:
+                            slot_scores: dict | None = None, jev_labels: dict | None = None) -> dict:
     """SP2-T3：臂装配（登记驱动，章程 §5.6 挑战者预算 ≤2）。
 
     内置 baseline（gate off + 归因 eodScores）/ champion（ladder③，C7）；挑战者经 --arm-config
     注入（JSON：{名: {trade_config: {...}}}）。未知名/超预算 fail-visible 截断进 skipped。
+    SP4-T4：jev_labels（labels v3 产物 {slotLabels, fallbackLabels}）注入 source=jev_seq_slot 臂
+    （配置内已有键优先、文件覆盖，与 slotScores 同语义）。
     """
     eod_valid = {d: s for d, s in eod_scores.items() if s is not None}
     builtin = {
@@ -179,6 +181,14 @@ def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: d
                     merged = dict(ec.get("slotScores") or {})
                     merged.update(slot_scores or {})
                     ec["slotScores"] = merged
+                if isinstance(ec, dict) and str(ec.get("source") or "") == "jev_seq_slot":
+                    jl = jev_labels or {}
+                    merged_labels = dict(ec.get("phaseLabels") or {})
+                    merged_labels.update(jl.get("slotLabels") or {})
+                    ec["phaseLabels"] = merged_labels
+                    merged_fb = dict(ec.get("fallbackLabels") or {})
+                    merged_fb.update(jl.get("fallbackLabels") or {})
+                    ec["fallbackLabels"] = merged_fb
                 extra[str(name)] = injected
             else:
                 malformed.append(str(name))
@@ -263,6 +273,8 @@ def main() -> int:
                         help="逗号分隔臂名：baseline,champion + --arm-config 内的挑战者名（章程 §5.6 预算挑战者≤2）")
     parser.add_argument("--arm-config", default="",
                         help="JSON：{挑战者名: {trade_config: {...}}}（预登记挑战者的配置注入）")
+    parser.add_argument("--jev-labels", default="data/reports/phase-monitor/phase-labels-jev-v3.json",
+                        help="SP4 labels v3 产物路径（jev_seq_slot 臂标签注入；缺失 fail-visible 记录）")
     args = parser.parse_args()
     end = args.end or datetime.now().strftime("%Y-%m-%d")
 
@@ -271,10 +283,17 @@ def main() -> int:
 
     eod_scores = load_eod_scores(end)
     slot_scores = load_slot_scores(end)
+    jev_labels: dict | None = None
+    jev_labels_path = Path(args.jev_labels)
+    if jev_labels_path.exists():
+        jev_labels = json.loads(jev_labels_path.read_text(encoding="utf-8"))
+    else:
+        print(f"[phase-pulse] jev 标签文件缺失（fail-visible，jev 臂走 unknown/配置内标签）：{jev_labels_path}", file=sys.stderr)
     warmup_start = (datetime.strptime(f"{args.month}-01", "%Y-%m-%d")).replace(day=1)
     warmup_start = warmup_start.fromordinal(warmup_start.toordinal() - 10)
     arm_specs = build_arm_trade_configs(
-        [a.strip() for a in args.arms.split(",") if a.strip()], args.arm_config, eod_scores, slot_scores)
+        [a.strip() for a in args.arms.split(",") if a.strip()], args.arm_config, eod_scores, slot_scores,
+        jev_labels)
     payload = {
         "dataset_id": "dragonboard_live",
         "snapshot_type": "half_hour",
@@ -292,6 +311,8 @@ def main() -> int:
         "month": args.month, "end": end,
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
         "gate": "off（基线读数；A/B 对照用 trade_config.phaseExposureControl）",
+        "jevLabelsLoaded": jev_labels is not None,
+        "jevLabelsVersion": (jev_labels or {}).get("meta", {}).get("version") if jev_labels else None,
     }
     # C6 证据：基线交易按前日分带累积
     report["bands"] = band_stats(round_trips_of(summary), eod_scores, args.month)

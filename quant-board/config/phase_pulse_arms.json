@@ -7,12 +7,13 @@
       }
     }
   },
-  "slot_v1": {
+  "jev_seq_v1": {
     "trade_config": {
       "phaseExposureControl": {
-        "mode": "ladder",
-        "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]],
-        "source": "slot_then_prev_eod"
+        "source": "jev_seq_slot",
+        "offenseFactor": 1.0,
+        "defenseFactor": 0.3,
+        "unknownFactor": 1.0
       }
     }
   }

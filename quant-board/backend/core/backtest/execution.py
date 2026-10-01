@@ -55,6 +55,30 @@ class TradeSimulator:
         return prev_key, (float(raw) if isinstance(raw, (int, float)) else None)
 
     @staticmethod
+    def _jev_phase_factor(ctrl: dict[str, Any], trading_date: str, slot_time: str | None = None) -> tuple[float, str | None, bool]:
+        """SP4-T2：jev_seq_slot 两因子制相位解析（设计 hotlist-jev-emotion-observe-design.md §13 授权）。
+
+        解析链（SP4-T1.3/T2 预登记）：phaseLabels["date|slot"] 直读 → fallbackLabels[date]
+        （规则 v2 前日口径，fallbackUsed=True）→ unknownFactor 放行（缺标签不错杀）。
+        返回 (factor, label, fallbackUsed)。与分数制 source 互斥：source 即模式选择器，mode 无关。
+        """
+
+        def _tier_factor(tier: str) -> float:
+            try:
+                return max(0.0, min(1.0, float(ctrl.get(f"{tier}Factor", 1.0))))
+            except (TypeError, ValueError):
+                return 1.0
+
+        labels = ctrl.get("phaseLabels") or {}
+        label = labels.get(f"{trading_date}|{slot_time}") if slot_time else None
+        if label in ("offense", "defense"):
+            return _tier_factor(str(label)), str(label), False
+        fallback = (ctrl.get("fallbackLabels") or {}).get(str(trading_date))
+        if fallback in ("offense", "defense"):
+            return _tier_factor(str(fallback)), str(fallback), True
+        return _tier_factor("unknown"), None, True
+
+    @staticmethod
     def _phase_exposure_factor(config: dict[str, Any], trading_date: str, slot_time: str | None = None) -> float:
         """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
 
@@ -74,6 +98,9 @@ class TradeSimulator:
         ctrl = config.get("phaseExposureControl")
         if not isinstance(ctrl, dict):
             return 1.0
+        # SP4-T2：jev 同槽序列档两因子制（source 即模式选择器，与分数制 source 互斥）
+        if str(ctrl.get("source") or "prev_eod") == "jev_seq_slot":
+            return TradeSimulator._jev_phase_factor(ctrl, trading_date, slot_time)[0]
         mode = str(ctrl.get("mode") or "off")
         if mode not in ("reduce_offense", "reduce_defense", "reduce_band", "ladder"):
             return 1.0
@@ -127,6 +154,12 @@ class TradeSimulator:
             "factor": TradeSimulator._phase_exposure_factor(config, trading_date, slot_time),
         }
         if not isinstance(ctrl, dict):
+            return out
+        # SP4-T2：jev 源归因分支——分数轴字段全部置空（fail-visible 不伪造），标签侧自带溯源
+        if str(ctrl.get("source") or "prev_eod") == "jev_seq_slot":
+            factor, label, fallback_used = TradeSimulator._jev_phase_factor(ctrl, trading_date, slot_time)
+            out.update({"factor": factor, "phase": label, "source": "jev_seq_slot",
+                        "phaseLabel": label, "fallbackUsed": fallback_used})
             return out
         used_key, used_score = TradeSimulator._phase_score(ctrl, trading_date, slot_time)
         if used_key is not None:

@@ -89,4 +89,4 @@ def test_committed_arms_config_matches_ledger_budget():
                    if isinstance(v, dict) and isinstance(v.get("trade_config"), dict)
                    and k not in ("baseline", "champion")]
     assert len(challengers) <= 2
-    assert set(challengers) == {"exit_v1", "slot_v1"}  # 台账登记的在跑臂；rebal_v1 排队
+    assert set(challengers) == {"exit_v1", "jev_seq_v1"}  # 台账登记的在跑臂；slot_v1 达标收口移入排队档（与 rebal_v1 同队）

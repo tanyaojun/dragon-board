@@ -72,4 +72,10 @@ T1 → T2 → T3 → T4 → T5（T1 是 T2 的数据前置；全程不碰 jev_cl
 
 ---
 
-**状态头**：T1-T5 全部未启动；设计文档修订已完成（hotlist-jev-emotion-observe-design.md §13）；放行后按序执行，每任务完成在本行追加记录。
+**状态头（2026-10-01 执行记录）**：
+- **T1 完成**：`backend/operations/jev_phase_label_run.py` + 5 测试；生产产物 `phase-labels-jev-v3.json` v1（1070 标签/113 日，offense 195/defense 875，degraded 1 如实排除；fallback 112 日源=规则 v2 前日口径）；冻结纪律生效（覆写需 --force 版本自增）。
+- **T2 完成**：`execution.py` `_jev_phase_factor` 两因子制（phaseLabels 直读 → fallbackLabels[date] → unknownFactor 放行）+ `_phase_exposure_factor`/`_phase_context` source=jev_seq_slot 分支（分数轴字段置空不伪造；phaseLabel/fallbackUsed 归因仅 jev 源携带，其他 source 逐位不变）；6 测试含 golden 锚。
+- **T3 完成**：帧级分离度证据已存档（jev-phase-caliber.json）；地图台账 T-jev 行更新为 SP4 已落地；v3 角色表读数由 T5 走廊脉拍自然产出（attribution 分源）。
+- **T4 完成**：`build_arm_trade_configs` jev_labels 注入（配置内键优先、文件覆盖，同 slotScores 语义）+ `--jev-labels` 参数（缺失 fail-visible 记入 meta）+ 臂配置换血：**jev_seq_v1 上岗（offense 1.0 / defense 0.3 / unknown 1.0），slot_v1 达标收口移入排队档（与 rebal_v1 同队）**；台账预算测试同步更新。
+- **T5 走廊程序（进行中）**：① 每交易日后跑 `jev_sentiment_replay --days 1` 积累当日 jev 文档 → 月初重跑 `jev_phase_label_run --force` 版本自增；② 每月首个交易日跑 `phase_pulse --month YYYY-MM`（ Arms=baseline,champion,exit_v1,jev_seq_v1 自动从登记配置读）→ 首读 2026-10；③ 月度漂移抽检：抽 3 日用 evaluate API 重算与落库 sequence_stage 比对，漂移率 >10% 告警（人工程序，暂不建自动化）；④ 晋升门槛=章程 §6（≥2 样本外月同向 + ≥30 笔 + 回撤改善 + 用户终审），jev 臂连续 2 月劣于 champion 自动退池。
+- **移交项**：day_temperature 落库补齐（jev 观察轨道待办）；C2 前日 day_stage 反向指标课题（如需反向信号另立验证）。

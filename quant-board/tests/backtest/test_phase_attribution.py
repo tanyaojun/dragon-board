@@ -7,6 +7,7 @@ trade_events/openPositions 透传、脉拍 attribution_stats 装配。
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -291,3 +292,26 @@ def test_build_arm_trade_configs_challenger_budget_and_skip(tmp_path):
     # 挑战者预算 ≤2：extra 被截断；broken 畸形 / ghost 未登记 → skipped 带原因码（评审 P2-5）
     assert set(spec["arms"]) == {"baseline", "champion", "exit_v1", "rebal_v1"}
     assert spec["skipped"] == ["budget:extra", "malformed:broken", "unregistered:ghost"]
+
+
+def test_build_arm_trade_configs_jev_labels_injection(tmp_path):
+    """SP4-T4：labels v3 注入 source=jev_seq_slot 臂（配置内已有键优先、文件覆盖）。"""
+    from backend.operations.phase_pulse import build_arm_trade_configs
+
+    cfg = tmp_path / "arms.json"
+    cfg.write_text(json.dumps({
+        "jev_seq_v1": {"trade_config": {"phaseExposureControl": {
+            "source": "jev_seq_slot", "offenseFactor": 1.0, "defenseFactor": 0.3, "unknownFactor": 1.0,
+            "phaseLabels": {"2026-01-01|09:30": "offense"},   # 配置内已有键
+        }}},
+    }, ensure_ascii=False), encoding="utf-8")
+    jev = {"slotLabels": {"2026-01-01|09:30": "defense", "2026-01-02|10:00": "offense"},
+           "fallbackLabels": {"2026-01-02": "offense"}}
+    spec = build_arm_trade_configs(["baseline", "jev_seq_v1"], str(cfg), {}, None, jev)
+    ec = spec["arms"]["jev_seq_v1"]["phaseExposureControl"]
+    assert ec["phaseLabels"]["2026-01-01|09:30"] == "defense"  # 文件覆盖配置内键
+    assert ec["phaseLabels"]["2026-01-02|10:00"] == "offense"
+    assert ec["fallbackLabels"]["2026-01-02"] == "offense"
+    # jev_labels=None（文件缺失）→ 保留配置内键，不崩溃（fail-visible 由调用方记录）
+    spec2 = build_arm_trade_configs(["jev_seq_v1"], str(cfg), {}, None, None)
+    assert spec2["arms"]["jev_seq_v1"]["phaseExposureControl"]["phaseLabels"]["2026-01-01|09:30"] == "offense"
