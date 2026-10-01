@@ -779,7 +779,7 @@ const openReviewItems = ref<Set<string>>(new Set())
 const reviewNoteDrafts = ref<Record<string, string>>({})
 
 const reviewStatusText: Record<JevReviewRulingStatus, string> = {
-  pending: '未裁', rule_right: '规则对', jev_right: 'jev 对', ambiguous: '模糊',
+  pending: '未裁', rule_right: '规则对', jev_right: 'jev 对', ambiguous: '模糊', consistent: '一致',
 }
 const reviewRulingOptions: Array<{ status: JevReviewRulingStatus; label: string }> = [
   { status: 'rule_right', label: '✅ 规则对' },
@@ -3755,6 +3755,7 @@ watch(() => props.visible, (visible) => {
 .jev-review-status[data-status='rule_right'] { color: #2980b9; border-color: #2980b9; }
 .jev-review-status[data-status='jev_right'] { color: #8e44ad; border-color: #8e44ad; }
 .jev-review-status[data-status='ambiguous'] { color: #d68910; border-color: #d68910; }
+.jev-review-status[data-status='consistent'] { color: #27ae60; border-color: #27ae60; }
 .jev-review-item-body { padding: 4px 8px 8px 26px; }
 .jev-review-narrative { max-height: 120px; font-size: 11px; }
 .jev-review-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }

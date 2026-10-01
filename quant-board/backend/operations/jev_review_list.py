@@ -34,6 +34,13 @@ def item_id(date: str, slot: str, item_type: str) -> str:
     return f"review:{date}:{slot}:{item_type}"
 
 
+def auto_ruling(rule_en: str | None, jev_en: str | None, now: str) -> dict:
+    """口径一致（五档字面相等）→ 自动裁决 consistent；否则待人工。纯函数。"""
+    if rule_en and jev_en and rule_en == jev_en:
+        return {"status": "consistent", "note": "口径一致，系统自动裁决（无需人工）", "ruledAt": now}
+    return {"status": "pending", "note": "", "ruledAt": None}
+
+
 def slopes_of_day(day_scores: dict[str, float]) -> dict[str, float | None]:
     """当日槽分序列 → 每槽斜率（与上一有效槽差；首槽 None）。纯函数。"""
     out: dict[str, float | None] = {}
@@ -49,14 +56,15 @@ def build_review_items(
     rule_slots: dict[tuple[str, str], dict],
     jev_slots: dict[tuple[str, str], dict],
     rule_eod_scores: dict[str, float],
+    rule_eod_stages: dict[str, str],
     jev_eod_stages: dict[str, str],
     day_rets: dict[str, float],
 ) -> list[dict]:
-    """纯函数：聚合三类复核项。输入为只读快照，输出待落库文档（ruling=pending）。
+    """纯函数：聚合三类复核项。输入为只读快照，输出待落库文档。
 
-    rule_slots[(date,slot)] = {stageCn, score}；jev_slots[(date,slot)] = {stage, confidence,
-    temperature, narrativeHead}；day_rets[date] = 当日全天池收益（帧首→帧末）。
+    规则与 jev 五档字面一致的项自动裁决 consistent（2026-10-01 用户指令），其余 pending。
     """
+    now = datetime.now().isoformat(timespec="seconds")
     items: list[dict] = []
     # 当日斜率表（懒构建）
     slope_tables: dict[str, dict[str, float | None]] = {}
@@ -84,27 +92,31 @@ def build_review_items(
                     "temperature": js.get("temperature")},
             "narrativeHead": js.get("narrativeHead"),
             "dayRet": day_rets.get(date),
-            "ruling": {"status": "pending", "note": "", "ruledAt": None},
         }
         if date in DIVERGENCE_DAYS:
-            items.append({**common, "type": "A", "_id": item_id(date, slot, "A")})
+            items.append({**common, "type": "A", "_id": item_id(date, slot, "A"),
+                          "ruling": auto_ruling(rule_en, jev_en, now)})
         if rule_en in DEFENSE and jev_en in OFFENSE:
-            items.append({**common, "type": "B", "_id": item_id(date, slot, "B")})
+            items.append({**common, "type": "B", "_id": item_id(date, slot, "B"),
+                          "ruling": auto_ruling(rule_en, jev_en, now)})
 
     for date, score in sorted(rule_eod_scores.items()):
         if not isinstance(score, (int, float)):
             continue
         if not any(abs(score - e) <= BOUNDARY_TOL for e in BOUNDARY_EDGES):
             continue
+        rule_stage_en = CN2EN.get(rule_eod_stages.get(date) or "")
+        jev_day = jev_eod_stages.get(date)
         items.append({
             "_id": item_id(date, "EOD", "C"), "kind": "review_items", "type": "C",
             "date": date, "slot": "EOD",
-            "rule": {"score": score,
+            "rule": {"score": score, "stage": rule_stage_en,
+                     "stageCn": rule_eod_stages.get(date),
                      "nearEdge": next(e for e in BOUNDARY_EDGES if abs(score - e) <= BOUNDARY_TOL)},
-            "jev": {"dayStage": jev_eod_stages.get(date)},
+            "jev": {"dayStage": jev_day},
             "narrativeHead": None,
             "dayRet": day_rets.get(date),
-            "ruling": {"status": "pending", "note": "", "ruledAt": None},
+            "ruling": auto_ruling(rule_stage_en, jev_day, now),
         })
     return items
 
@@ -160,6 +172,7 @@ def generate(db) -> dict:
     """读源 → 构建 → 幂等落库（保留裁决）。返回统计。"""
     rule_slots: dict[tuple[str, str], dict] = {}
     rule_eod: dict[str, float] = {}
+    rule_eod_stages: dict[str, str] = {}
     for doc in db["hotlist_sentiment"].find(
         {"datasetId": "dragonboard_live", "snapshotType": "half_hour"},
         {"tradingDate": 1, "slotTime": 1, "rawStage": 1, "emotionScore.score": 1},
@@ -171,6 +184,8 @@ def generate(db) -> dict:
         if slot == "EOD":
             if score is not None:
                 rule_eod[key[0]] = float(score)
+            if doc.get("rawStage"):
+                rule_eod_stages[key[0]] = str(doc.get("rawStage"))
         else:
             rule_slots[key] = {"stageCn": doc.get("rawStage"), "score": score}
 
@@ -198,7 +213,7 @@ def generate(db) -> dict:
                 jev_eod_stages[date] = st
 
     day_rets = load_day_rets()
-    items = build_review_items(rule_slots, jev_slots, rule_eod, jev_eod_stages, day_rets)
+    items = build_review_items(rule_slots, jev_slots, rule_eod, rule_eod_stages, jev_eod_stages, day_rets)
     existing = {str(d["_id"]): d for d in db["phase_monitor"].find({"kind": "review_items"}, {"_id": 1, "ruling": 1})}
     items = merge_preserving_rulings(items, existing)
     for item in items:

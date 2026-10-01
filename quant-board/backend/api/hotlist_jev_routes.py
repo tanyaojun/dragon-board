@@ -25,7 +25,7 @@ from backend.data.repositories import repository_factory
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
 
-REVIEW_RULING_STATUSES = ("rule_right", "jev_right", "ambiguous", "pending")
+REVIEW_RULING_STATUSES = ("rule_right", "jev_right", "ambiguous", "pending", "consistent")
 
 
 class JevEvaluatePayload(BaseModel):
@@ -195,13 +195,14 @@ def get_jev_review_list() -> dict[str, Any]:
         from backend.operations.jev_review_list import ensure_review_items
 
         stats = ensure_review_items(db)
-        docs = list(db["phase_monitor"].find({"kind": "review_items"}).sort([("date", 1), ("slot", 1)]))
+        # 日期降序（2026-10-01 用户指令）：最新待复核日在前
+        docs = list(db["phase_monitor"].find({"kind": "review_items"}).sort([("date", -1), ("slot", 1)]))
         docs = [{k: v for k, v in d.items() if k != "_id"} | {"id": str(d["_id"])} for d in docs]
         days: list[dict[str, Any]] = []
         by_date: dict[str, list[dict[str, Any]]] = {}
         for d in docs:
             by_date.setdefault(d["date"], []).append(d)
-        for date in sorted(by_date):
+        for date in sorted(by_date, reverse=True):
             items = by_date[date]
             days.append({"date": date, "items": items,
                          "pending": sum(1 for i in items if i["ruling"]["status"] == "pending")})

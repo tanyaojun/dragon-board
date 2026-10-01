@@ -98,7 +98,7 @@ export interface HotlistJevRangeResult {
 
 // ---------- 复核工作台（W1 辅助线，2026-10-01；GET review-list / POST review-ruling） ----------
 
-export type JevReviewRulingStatus = 'pending' | 'rule_right' | 'jev_right' | 'ambiguous'
+export type JevReviewRulingStatus = 'pending' | 'rule_right' | 'jev_right' | 'ambiguous' | 'consistent'
 
 export interface JevReviewRuling {
   status: JevReviewRulingStatus

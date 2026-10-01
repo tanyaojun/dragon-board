@@ -14,8 +14,8 @@ from backend.operations.jev_review_list import (
 )
 
 
-def _mk(rule_slots, jev_slots, eod_scores=None, jev_eod=None, day_rets=None):
-    return build_review_items(rule_slots, jev_slots, eod_scores or {}, jev_eod or {}, day_rets or {})
+def _mk(rule_slots, jev_slots, eod_scores=None, eod_stages=None, jev_eod=None, day_rets=None):
+    return build_review_items(rule_slots, jev_slots, eod_scores or {}, eod_stages or {}, jev_eod or {}, day_rets or {})
 
 
 def test_type_a_on_registered_divergence_days():
@@ -41,14 +41,40 @@ def test_type_b_rule_defense_vs_jev_offense():
 
 def test_type_c_boundary_eod_days():
     eod = {"2026-07-10": 42.5, "2026-07-11": 50.0, "2026-07-14": 57.2, "2026-07-15": 63.5}
+    eod_stages = {"2026-07-10": "退潮", "2026-07-14": "启动"}
     jev_eod = {"2026-07-10": "retreat", "2026-07-14": "ferment"}
-    items = _mk({}, {}, eod, jev_eod)
+    items = _mk({}, {}, eod, eod_stages, jev_eod)
     by_date = {i["date"]: i for i in items}
     assert "2026-07-10" in by_date and by_date["2026-07-10"]["type"] == "C"
     assert by_date["2026-07-10"]["jev"]["dayStage"] == "retreat"
     assert by_date["2026-07-10"]["rule"]["nearEdge"] == 40
     assert "2026-07-14" in by_date and by_date["2026-07-14"]["rule"]["nearEdge"] == 60
     assert "2026-07-11" not in by_date and "2026-07-15" not in by_date  # 50 和 63.5 不贴界
+
+
+def test_auto_consistent_when_stages_match():
+    """口径一致（五档字面相等）→ 自动裁决 consistent；不同档保持 pending（2026-10-01 用户指令）。"""
+    # A 类：分歧登记日上规则与 jev 同档 → consistent；不同档 → pending
+    rule = {("2026-09-08", "10:00"): {"stageCn": "退潮", "score": 35.0},
+            ("2026-09-08", "10:30"): {"stageCn": "启动", "score": 55.0}}
+    jev = {("2026-09-08", "10:00"): {"stage": "retreat", "confidence": 0.8, "temperature": 20.0, "narrativeHead": None},
+           ("2026-09-08", "10:30"): {"stage": "retreat", "confidence": 0.9, "temperature": 22.0, "narrativeHead": None}}
+    items = _mk(rule, jev)
+    by_slot = {i["slot"]: i for i in items}
+    assert by_slot["10:00"]["ruling"]["status"] == "consistent"  # 退潮 == retreat
+    assert by_slot["10:00"]["ruling"]["ruledAt"] is not None
+    assert by_slot["10:30"]["ruling"]["status"] == "pending"     # 启动 != retreat
+    # B 类构造上必不同档 → 恒 pending
+    rule_b = {("2026-08-01", "10:00"): {"stageCn": "退潮", "score": 35.0}}
+    jev_b = {("2026-08-01", "10:00"): {"stage": "start", "confidence": 0.6, "temperature": 20.0, "narrativeHead": None}}
+    assert _mk(rule_b, jev_b)[0]["ruling"]["status"] == "pending"
+    # C 类：EOD 档位与 jev 日级同档 → consistent（59.1 启动 vs 发酵 不同档 → pending）
+    eod = {"2026-07-10": 42.5, "2026-07-14": 59.1}
+    eod_stages = {"2026-07-10": "退潮", "2026-07-14": "启动"}
+    jev_eod = {"2026-07-10": "retreat", "2026-07-14": "ferment"}
+    by_date = {i["date"]: i for i in _mk({}, {}, eod, eod_stages, jev_eod)}
+    assert by_date["2026-07-10"]["ruling"]["status"] == "consistent"
+    assert by_date["2026-07-14"]["ruling"]["status"] == "pending"
 
 
 def test_slopes_of_day_first_slot_none():
