@@ -83,4 +83,13 @@ T1 → T2 → T3 → T4 → T5（T1 是 T2 的数据前置；全程不碰 jev_cl
 - **T3 完成**：帧级分离度证据已存档（jev-phase-caliber.json）；地图台账 T-jev 行更新；v3 角色表读数由 T5 走廊脉拍自然产出。
 - **T4 完成**：build_arm_trade_configs jev_labels 注入 + `--jev-labels` 参数（缺失 fail-visible 记入 meta）+ 臂配置换血：jev_seq_v1 上岗（offense 1.0 / defense 0.3 / unknown 1.0），slot_v1 达标收口移入排队档；台账预算测试同步。
 - **T5 走廊程序（进行中）**：① 每交易日后 `jev_sentiment_replay --days 1` → 月初 `jev_phase_label_run --force`；② 每月首个交易日跑 `phase_pulse --month YYYY-MM`（臂自动从登记配置读）→ 首读 2026-10；③ 月度漂移抽检（人工程序）；④ 晋升门槛=章程 §6。
-- **移交项**：day_temperature 落库补齐；C2 前日 day_stage 反向指标课题；评审 P2-6/7/8/9/10（phaseExitCoupling jev 注记已有 docstring、next_version 损坏归档、逐月覆盖率、多槽同日测试、C4 标定口径注记）。
+- **移交项**：~~day_temperature 落库补齐~~（**勘误关闭**：字段一直在库，eod scores.day_temperature/day_crowding 113/113 全覆盖，T-jev 误诊为读错字段名）；C2 前日 day_stage 反向指标课题；评审 P2-6/7/8/9/10（phaseExitCoupling jev 注记已有 docstring、next_version 损坏归档、逐月覆盖率、多槽同日测试、C4 标定口径注记）。
+
+## 排队候选预登记：jev_band_v1（槽级温度带阶梯，T-jev2 达标产出，2026-10-01）
+
+排序：jev_seq_v1 走廊出结果后顶替上场（挑战者预算 ≤2）。
+- **源**：jev 槽文档 `scores.temperature`（同槽 as-of，冻结标签，1070 文档 100% 覆盖）；
+- **阈值（冻结自标定窗样本分位数，禁止按月重标定）**：温度 ≤24.9（Q1）→ factor 0.3；>24.9 → 1.0；缺标签 → 1.0 放行（最小干预：只砍证据最弱的冷槽）；
+- **证据**：T-jev2 槽温 Q4 vs Q1 +0.206pp p=2e-05（全场最强帧级信号，方向热→强；与 champion 前日水平轴方向相反但共存不矛盾：champion=前日水平防透支，槽温=同槽动量确认）；
+- **已知风险**：与规则分 Spearman 0.717（大部分共享信息，增量在同槽时点）；阈值 in-sample；载体需新增 source=jev_temp_band（jev_seq_slot 分带变体，入队时设计实现）；
+- **晋升门槛**：章程 §6（≥2 样本外月同向 + ≥30 笔 + 回撤改善 + 用户终审）。
