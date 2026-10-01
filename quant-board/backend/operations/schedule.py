@@ -18,7 +18,31 @@ from backend.snapshot_collector.trading_calendar import is_trading_day
 _TZ = ZoneInfo("Asia/Shanghai")
 
 _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
-_PULSE_TIMEOUT_SECONDS = 900
+_PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
+_PULSE_ARMS = "baseline,champion,exit_v1,slot_v1"  # 挑战者预算 ≤2（章程 §5.6）；rebal_v1 排队（启用=改 config 文件）
+_ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
+
+
+def _pulse_arms_args() -> list[str]:
+    """SP2-B：排程脉拍多臂参数（挑战者臂经 config/phase_pulse_arms.json 登记；预算≤2）。
+
+    配置文件缺失/解析失败 → 回退默认两臂（baseline,champion，fail-visible 不阻断排程）。
+    """
+    try:
+        raw = json.loads(_ARMS_CONFIG_PATH.read_text(encoding="utf-8"))
+        names = [k for k, v in raw.items() if isinstance(v, dict) and isinstance(v.get("trade_config"), dict)]
+        challengers = [k for k in names if k not in ("baseline", "champion")]
+        if len(challengers) > 2:
+            challengers = challengers[:2]  # 预算截断（超出者不进排程，fail-visible 于日志）
+            print(f"[schedule] 挑战者臂超预算，仅取前 2：{challengers}", file=sys.stderr)
+        return ["--arms", ",".join(["baseline", "champion", *challengers]),
+                "--arm-config", str(_ARMS_CONFIG_PATH)]
+    except FileNotFoundError:
+        print(f"[schedule] 臂配置缺失，回退默认两臂：{_ARMS_CONFIG_PATH}", file=sys.stderr)
+        return []
+    except Exception as exc:  # noqa: BLE001 — 排程步不因臂配置畸形阻断
+        print(f"[schedule] 臂配置解析失败，回退默认两臂：{exc}", file=sys.stderr)
+        return []
 
 
 def _should_run_phase_pulse(db: Any, today: str, dataset_id: str, snapshot_type: str) -> tuple[bool, str]:
@@ -61,11 +85,13 @@ def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     cmd = [
         sys.executable, "-m", "backend.operations.phase_pulse",
         "--month", month, "--end", today, "--out", str(out_path),
+        *_pulse_arms_args(),
     ]
+    run_started_at = datetime.now(_TZ)
     try:
         proc = subprocess.run(
             cmd,
-            cwd=str(Path(__file__).resolve().parents[1]),
+            cwd=str(Path(__file__).resolve().parents[2]),  # SP2-B 修复：原 parents[1]=backend/ 导致 ModuleNotFoundError，排程脉拍从未能运行
             capture_output=True,
             text=True,
             timeout=_PULSE_TIMEOUT_SECONDS,
@@ -74,6 +100,16 @@ def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "phase_pulse_timeout", "message": f"timeout {_PULSE_TIMEOUT_SECONDS}s"}}
     if proc.returncode != 0:
         return {"ok": False, "error": {"code": "phase_pulse_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    # SP2-B：Mongo 入库为准（前端走 board API 读 Mongo；本地 JSON 仅为即时产物）。
+    # phase_pulse.main 内 persist_pulse 幂等 upsert pulse:<month>；此处校验 updatedAt 新鲜度。
+    mongo_fresh = False
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc_m = db["phase_monitor"].find_one({"_id": f"pulse:{month}"}, {"updatedAt": 1})
+        updated = str((doc_m or {}).get("updatedAt") or "")
+        mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        mongo_error = str(exc)
     summary: dict[str, Any] = {}
     try:
         doc = json.loads(out_path.read_text(encoding="utf-8"))
@@ -85,7 +121,11 @@ def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         }
     except Exception as exc:  # noqa: BLE001 — 摘要解析失败不影响脉拍本体已落库
         summary = {"parseError": str(exc)}
-    return {"ok": True, "month": month, "out": str(out_path), "summary": summary}
+    result = {"ok": True, "month": month, "out": str(out_path), "summary": summary,
+              "mongoFresh": mongo_fresh, "arms": _PULSE_ARMS}
+    if not mongo_fresh:
+        result["mongoWarning"] = "phase_monitor pulse:<month> updatedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    return result
 
 
 def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any]:

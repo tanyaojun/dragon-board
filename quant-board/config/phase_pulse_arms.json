@@ -1,0 +1,19 @@
+{
+  "exit_v1": {
+    "trade_config": {
+      "phaseExitCoupling": {
+        "mode": "per_band",
+        "bands": {"强60-80": {"tpMultiplier": 0.8, "maxHoldingBars": 30, "breakevenThreshold": 0.015}}
+      }
+    }
+  },
+  "slot_v1": {
+    "trade_config": {
+      "phaseExposureControl": {
+        "mode": "ladder",
+        "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]],
+        "source": "slot_then_prev_eod"
+      }
+    }
+  }
+}
