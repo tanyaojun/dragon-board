@@ -527,6 +527,51 @@
                     v-if="jevEodRow.crowding != null"> · 拥挤 {{ jevEodRow.crowding }}</template>
                 </div>
               </template>
+              <!-- 复核工作台（W1 辅助线 2026-10-01）：jev 对照规则分的分歧/异议/边界人工复核；
+                   裁决落库（POST review-ruling）喂 W4 五档映射方向维修订 -->
+              <div class="jev-review">
+                <div class="jev-review-head">
+                  <span class="jev-review-title">🧾 复核工作台</span>
+                  <span class="jev-review-legend">A 分歧仲裁 · B 退潮段异议 · C 边界日</span>
+                  <span class="jev-review-progress">已裁 {{ reviewRuled }}/{{ reviewTotal }}</span>
+                  <button class="time-btn" @click="loadReviewList(true)">刷新</button>
+                </div>
+                <div v-if="reviewLoading" class="note-line">复核清单加载中…（首次生成需读历史帧，稍慢）</div>
+                <div v-else-if="reviewError" class="note-line">⚠️ {{ reviewError }}</div>
+                <div v-else-if="!reviewDays.length" class="empty-row">暂无复核项</div>
+                <div v-else class="jev-review-days">
+                  <div v-for="day in reviewDays" :key="day.date" class="jev-review-day">
+                    <button class="jev-review-day-head" @click="toggleReviewDay(day.date)">
+                      <span>{{ openReviewDays.has(day.date) ? '▾' : '▸' }} {{ day.date }}</span>
+                      <span class="jev-review-day-meta">{{ day.items.length }} 项 · 待复核 {{ day.pending }}</span>
+                    </button>
+                    <div v-if="openReviewDays.has(day.date)" class="jev-review-items">
+                      <div v-for="item in day.items" :key="item.id" class="jev-review-item">
+                        <button class="jev-review-item-head" @click="toggleReviewItem(item.id)">
+                          <span class="jev-review-type" :data-type="item.type">{{ item.type }}</span>
+                          <span class="jev-review-slot">{{ item.slot }}</span>
+                          <span class="jev-review-vs">{{ reviewItemSummary(item) }}</span>
+                          <span v-if="item.dayRet != null" class="jev-review-dayret" :class="{ neg: (item.dayRet ?? 0) < 0 }">
+                            当日 {{ ((item.dayRet ?? 0) * 100).toFixed(2) }}%
+                          </span>
+                          <span class="jev-review-status" :data-status="item.ruling.status">{{ reviewStatusText[item.ruling.status] }}</span>
+                        </button>
+                        <div v-if="openReviewItems.has(item.id)" class="jev-review-item-body">
+                          <pre v-if="item.narrativeHead" class="jev-narrative-text jev-review-narrative">{{ item.narrativeHead }}</pre>
+                          <div class="jev-review-actions">
+                            <button v-for="opt in reviewRulingOptions" :key="opt.status" class="indicator-btn"
+                              :class="{ active: item.ruling.status === opt.status }" @click="ruleReviewItem(item, opt.status)">
+                              {{ opt.label }}
+                            </button>
+                          </div>
+                          <input v-model="reviewNoteDrafts[item.id]" class="jev-review-note"
+                            placeholder="备注（可选，随下一次裁决提交）" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </template>
           </section>
 
@@ -652,6 +697,7 @@ import {
 import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
+  fetchJevReviewList,
   JEV_PATTERN_NAMES,
   JEV_PATTERN_ORDER,
   JEV_STAGE_NAMES,
@@ -659,8 +705,16 @@ import {
   jevChoiceName,
   jevChoiceProbability,
   jevScore,
+  postJevReviewRuling,
 } from '@/services/hotlist/hotlistJevApi'
-import type { HotlistJevDayEntry, HotlistJevDoc, HotlistJevMissingDay } from '@/types/hotlistJev'
+import type {
+  HotlistJevDayEntry,
+  HotlistJevDoc,
+  HotlistJevMissingDay,
+  JevReviewDay,
+  JevReviewItem,
+  JevReviewRulingStatus,
+} from '@/types/hotlistJev'
 import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
 import type {
   PhaseHistoryDay,
@@ -712,6 +766,92 @@ const jevSlots = ref<HotlistJevDoc[]>([])
 const jevEod = ref<HotlistJevDoc | null>(null)
 const jevDegradedReason = ref<string | null>(null)
 const jevSeriesDate = ref('')
+
+// ---------- 复核工作台（W1 辅助线 2026-10-01）：jev 对照规则分的人工复核面，裁决落库喂 W4 ----------
+const reviewDays = ref<JevReviewDay[]>([])
+const reviewTotal = ref(0)
+const reviewRuled = ref(0)
+const reviewLoading = ref(false)
+const reviewError = ref<string | null>(null)
+const reviewLoadedOnce = ref(false)
+const openReviewDays = ref<Set<string>>(new Set())
+const openReviewItems = ref<Set<string>>(new Set())
+const reviewNoteDrafts = ref<Record<string, string>>({})
+
+const reviewStatusText: Record<JevReviewRulingStatus, string> = {
+  pending: '未裁', rule_right: '规则对', jev_right: 'jev 对', ambiguous: '模糊',
+}
+const reviewRulingOptions: Array<{ status: JevReviewRulingStatus; label: string }> = [
+  { status: 'rule_right', label: '✅ 规则对' },
+  { status: 'jev_right', label: '✅ jev 对' },
+  { status: 'ambiguous', label: '❓ 模糊' },
+  { status: 'pending', label: '↩️ 重置' },
+]
+
+function toggleReviewDay(date: string): void {
+  const next = new Set(openReviewDays.value)
+  if (next.has(date)) next.delete(date)
+  else next.add(date)
+  openReviewDays.value = next
+}
+
+function toggleReviewItem(id: string): void {
+  const next = new Set(openReviewItems.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  openReviewItems.value = next
+}
+
+/** 摘要行：规则侧（档位/分数/斜率 或 边界分）vs jev 侧（档位+置信） */
+function reviewItemSummary(item: JevReviewItem): string {
+  if (item.type === 'C') {
+    return `规则分 ${item.rule.score ?? '--'}（贴 ${item.rule.nearEdge ?? '?'} 边界）vs jev 日级 ${
+      item.jev.dayStage ? (JEV_STAGE_NAMES[item.jev.dayStage] ?? item.jev.dayStage) : '--'
+    }`
+  }
+  const slope = item.rule.slope != null ? ` Δ${item.rule.slope > 0 ? '+' : ''}${item.rule.slope}` : ''
+  const conf = item.jev.confidence != null ? ` P${Math.round(item.jev.confidence * 100)}%` : ''
+  const temp = item.jev.temperature != null ? ` 温${Math.round(item.jev.temperature)}` : ''
+  return `规则 ${item.rule.stageCn || item.rule.stage || '--'} ${item.rule.score ?? '--'}${slope} vs jev ${
+    item.jev.stage ? (JEV_STAGE_NAMES[item.jev.stage] ?? item.jev.stage) : '--'
+  }${conf}${temp}`
+}
+
+async function loadReviewList(force = false): Promise<void> {
+  if (reviewLoading.value) return
+  if (reviewLoadedOnce.value && !force) return
+  reviewLoading.value = true
+  reviewError.value = null
+  const result = await fetchJevReviewList()
+  reviewLoading.value = false
+  if (result.degraded) {
+    reviewError.value = result.reason || '复核清单不可用'
+    return
+  }
+  reviewDays.value = result.days
+  reviewTotal.value = result.total
+  reviewRuled.value = result.ruled
+  reviewLoadedOnce.value = true
+  if (openReviewDays.value.size === 0) {
+    const firstPending = result.days.find(day => day.pending > 0)
+    if (firstPending) openReviewDays.value = new Set([firstPending.date])
+  }
+}
+
+async function ruleReviewItem(item: JevReviewItem, status: JevReviewRulingStatus): Promise<void> {
+  const note = reviewNoteDrafts.value[item.id] ?? ''
+  const ok = await postJevReviewRuling(item, status, note)
+  if (!ok) {
+    reviewError.value = `裁决写入失败：${item.id}（可重试）`
+    return
+  }
+  reviewError.value = null
+  item.ruling = { status, note, ruledAt: new Date().toISOString() }
+  const day = reviewDays.value.find(d => d.date === item.date)
+  if (day) day.pending = day.items.filter(i => i.ruling.status === 'pending').length
+  reviewRuled.value = reviewDays.value.reduce(
+    (acc, d) => acc + d.items.filter(i => i.ruling.status !== 'pending').length, 0)
+}
 
 const version = '6.0.0'
 
@@ -3122,6 +3262,9 @@ watch(view, (v) => {
   if (v === 'jev' && jevPoints.value.length) {
     nextTick(() => renderJevChart())
   }
+  if (v === 'jev') {
+    void loadReviewList()
+  }
 })
 
 // 统一释放六图实例（2026-10-01）：面板关闭即随根 v-if 销毁容器 DOM，旧实例留着只会对已分离 DOM
@@ -3542,6 +3685,88 @@ watch(() => props.visible, (visible) => {
   color: var(--text-primary);
   padding: 6px 8px;
   border-left: 2px solid rgba(52, 152, 219, 0.6);
+}
+
+/* ---------- 复核工作台（W1 辅助线） ---------- */
+.jev-review {
+  margin-top: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+}
+.jev-review-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.jev-review-title { font-weight: 600; }
+.jev-review-legend { color: var(--text-secondary); font-size: 11px; }
+.jev-review-progress { color: var(--accent-color, #3498db); font-weight: 600; }
+.jev-review-days { margin-top: 6px; max-height: 420px; overflow-y: auto; }
+.jev-review-day-head {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 5px 2px;
+  cursor: pointer;
+  text-align: left;
+}
+.jev-review-day-meta { color: var(--text-secondary); font-size: 11px; }
+.jev-review-items { padding: 2px 0 6px; }
+.jev-review-item { margin-top: 4px; }
+.jev-review-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 11.5px;
+  padding: 4px 2px;
+  cursor: pointer;
+  text-align: left;
+  flex-wrap: wrap;
+}
+.jev-review-type {
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: #fff;
+}
+.jev-review-type[data-type='A'] { background: #8e44ad; }
+.jev-review-type[data-type='B'] { background: #c0392b; }
+.jev-review-type[data-type='C'] { background: #d68910; }
+.jev-review-slot { color: var(--text-secondary); min-width: 38px; }
+.jev-review-vs { flex: 1; min-width: 200px; }
+.jev-review-dayret { font-variant-numeric: tabular-nums; color: #27ae60; }
+.jev-review-dayret.neg { color: #c0392b; }
+.jev-review-status { font-size: 10px; border-radius: 8px; padding: 1px 7px; border: 1px solid var(--border-color); color: var(--text-secondary); }
+.jev-review-status[data-status='rule_right'] { color: #2980b9; border-color: #2980b9; }
+.jev-review-status[data-status='jev_right'] { color: #8e44ad; border-color: #8e44ad; }
+.jev-review-status[data-status='ambiguous'] { color: #d68910; border-color: #d68910; }
+.jev-review-item-body { padding: 4px 8px 8px 26px; }
+.jev-review-narrative { max-height: 120px; font-size: 11px; }
+.jev-review-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.jev-review-note {
+  margin-top: 6px;
+  width: 100%;
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 .chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {

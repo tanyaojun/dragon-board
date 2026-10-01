@@ -154,3 +154,68 @@ export async function fetchHotlistJevRange(
     }
   }
 }
+
+// ---------- 复核工作台（W1 辅助线，2026-10-01） ----------
+import type {
+  JevReviewDay,
+  JevReviewItem,
+  JevReviewListResult,
+  JevReviewRulingStatus,
+} from '@/types/hotlistJev'
+
+/**
+ * 复核工作台清单（GET /api/hotlist-jev/review-list）：三类复核项按日聚合。
+ * 首次调用后端会懒生成（读 frames 较慢），degraded 时如实返回不伪造。
+ */
+export async function fetchJevReviewList(): Promise<JevReviewListResult> {
+  try {
+    const response = await fetch('/api/hotlist-jev/review-list')
+    if (!response.ok) {
+      return { days: [], total: 0, ruled: 0, degraded: true, reason: `HTTP ${response.status}` }
+    }
+    const body = (await response.json()) as {
+      ok: boolean
+      degraded?: boolean
+      reason?: string
+      days?: JevReviewDay[]
+      progress?: { total: number; ruled: number }
+    }
+    if (!body.ok || body.degraded) {
+      return { days: [], total: 0, ruled: 0, degraded: true, reason: body.reason || 'degraded' }
+    }
+    return {
+      days: body.days || [],
+      total: body.progress?.total ?? 0,
+      ruled: body.progress?.ruled ?? 0,
+      degraded: false,
+      reason: null,
+    }
+  } catch (err) {
+    return {
+      days: [],
+      total: 0,
+      ruled: 0,
+      degraded: true,
+      reason: err instanceof Error ? err.message : 'fetch failed',
+    }
+  }
+}
+
+/** 复核裁决回填（POST /api/hotlist-jev/review-ruling）；失败返回 null 由调用方提示 */
+export async function postJevReviewRuling(
+  item: Pick<JevReviewItem, 'id'>,
+  status: JevReviewRulingStatus,
+  note = '',
+): Promise<boolean> {
+  try {
+    const response = await fetch('/api/hotlist-jev/review-ruling', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: item.id, status, note }),
+    })
+    const body = (await response.json()) as { ok?: boolean; error?: string }
+    return response.ok && body.ok === true
+  } catch {
+    return false
+  }
+}

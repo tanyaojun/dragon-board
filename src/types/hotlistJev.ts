@@ -95,3 +95,51 @@ export interface HotlistJevRangeResult {
   degraded: boolean
   reason: string | null
 }
+
+// ---------- 复核工作台（W1 辅助线，2026-10-01；GET review-list / POST review-ruling） ----------
+
+export type JevReviewRulingStatus = 'pending' | 'rule_right' | 'jev_right' | 'ambiguous'
+
+export interface JevReviewRuling {
+  status: JevReviewRulingStatus
+  note: string
+  ruledAt: string | null
+}
+
+/** 复核项：A=分歧仲裁（登记全槽分歧日）/ B=退潮段异议 / C=边界日（EOD 贴 40/60 ±3） */
+export interface JevReviewItem {
+  id: string
+  type: 'A' | 'B' | 'C'
+  date: string
+  slot: string
+  rule: {
+    stage?: string | null
+    stageCn?: string | null
+    score?: number | null
+    slope?: number | null
+    nearEdge?: number | null
+  }
+  jev: {
+    stage?: string | null
+    confidence?: number | null
+    temperature?: number | null
+    dayStage?: string | null
+  }
+  narrativeHead?: string | null
+  dayRet?: number | null
+  ruling: JevReviewRuling
+}
+
+export interface JevReviewDay {
+  date: string
+  items: JevReviewItem[]
+  pending: number
+}
+
+export interface JevReviewListResult {
+  days: JevReviewDay[]
+  total: number
+  ruled: number
+  degraded: boolean
+  reason: string | null
+}
