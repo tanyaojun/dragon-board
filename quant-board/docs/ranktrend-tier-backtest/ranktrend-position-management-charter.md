@@ -40,6 +40,8 @@
 
 对齐性质：边界 60 后，defense = 冷+弱、offense = 强+极热——二档是四带的严格粗化，验收读数与执行分区不再混装（旧 50 边界下 offense 桶混装 50-60 弱带亏损与 60-80 强带盈利，「offense 亏钱」结论部分是定义伪影，M4 提案 §1.2 已析）。两套版本线**同期只动一个**（避免归因混杂）。
 
+**相位源演进（2026-10-01 T-jev 裁决）**：四口径对比（产物 jev-phase-caliber.json）显示规则前日分在帧级无分离力（p=0.244），而 jev 同槽 sequence_stage 显著（p=0.0013 方向正确，8/9 两月连显著）→ 相位定义源切换候选确定为 **jev 同槽 sequence_stage**（五档映射两档；规则 emotionScore 降级 fallback；前日 day_stage 为反向指标不作源）。落地载体与流程见 `ranktrend-position-sp4-plan.md`（设计文档修订已完成：hotlist-jev-emotion-observe-design.md §13）；落地前现行口径维持不变。
+
 ### 3.2 分轴架构
 
 ```text

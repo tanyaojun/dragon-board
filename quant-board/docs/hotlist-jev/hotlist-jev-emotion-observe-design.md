@@ -62,6 +62,8 @@
 
 ## 6. 落库合同（collection `hotlist_jev_sentiment`，此前已 drop，本次新建）
 
+> 2026-10-01 修订：同槽 sequence_stage 的消费边界由 §13 相位源授权条款接管（可作仓位相位定义源，研究态）；本节落库合同本身不变。
+
 **槽位文档** `_id={datasetId}:half_hour:{tradingDate}:{slotTime}`：
 `kind="slot"`、`origin`（collector/manual/replay）、`asOf`、`evidenceRaw`（当帧聚合证据，结构化）、`narrativeRaw`、`questionsRaw`、`responseRaw`、`answers`（frame_stage/sequence_stage 概率分布）、`scores`（temperature/crowding 0-100 还原）、`usage`/`latencyMs`/`model`、`status`（ok/degraded/no_data）、`errorCode`/`errorDetail`、`quality.degradedSources`、`computedAt`。
 
@@ -108,7 +110,7 @@ operations/jev_sentiment_replay.py：最近 3 个交易日回放（D3，≈$0.00
 2. **日内轨迹**：现有确认阶段轨迹 + jev 槽位判定轨迹（第二标记层），分歧槽位肉眼可辨；
 3. **日级总体**：eod 存在时展示 day_stage/day_pattern/日级温度/拥挤；
 4. degraded/no_data 如实标注含原因，绝不显示伪值；旧文档/无数据正常渲染。
-5. 展示是**观察面**：不进信号、不进交易路径、不回写规则轨道；是否采用由用户盘中论证后另行裁决。
+5. 展示是**观察面**：不直接进信号引擎、不回写规则轨道；同槽 sequence_stage 的消费已由 §13 相位源授权条款接管（经相位定义层进研究开关，默认关）；是否晋级引擎默认由用户按章程 §6 门槛终审。
 
 ## 11. 阶段划分与验收
 
@@ -131,3 +133,20 @@ operations/jev_sentiment_replay.py：最近 3 个交易日回放（D3，≈$0.00
 | `backend/operations/jev_sentiment_replay.py` | 最近 3 交易日回放 CLI |
 | `src/types/hotlistJev.ts`、`src/services/hotlist/hotlistJevApi.ts`、`src/components/panels/DragonBreathPanel.vue` | 前端类型/客户端/双轨展示 |
 | `tests/hotlist/*`、`tests/snapshot_collector/test_snapshot_collector_post_persist.py`、面板组件测试 | 全链测试 |
+
+## 13. 相位源授权修订（2026-10-01，用户裁决；修订 §6/§10.5 边界）
+
+**裁决**：采用 jev **同槽 sequence_stage**（五档→两档映射：start/ferment/climax→offense，ice/retreat→defense）作为**仓位管理相位定义源（研究态）**——即本观察轨道的结论自此可进入相位定义层，经研究开关（默认关）参与仓位管理专项的阶梯/调仓规则与北极星叙事。
+
+**证据门**：T-jev 口径对比（`quant-board/docs/ranktrend-tier-backtest/ranktrend-phase-map-baseline.md` §7 T-jev 行，产物 jev-phase-caliber.json）——同槽 sequence_stage 帧级分离度 diff +0.095%、p=0.0013（全窗显著、方向正确、8/9 两月连显著），优于规则口径（p=0.244 无分离）；前日 day_stage 显著但方向反转（p=0.02，反向指标，**不作相位源**，反向课题如需另立）；day_temperature 字段未落库不可用（实现侧待补）。
+
+**边界修订**：
+- §6「不写任何规则档位字段」**维持**（观察轨道自身仍零规则输出、零锚定）；
+- §10.5「不进信号、不进交易路径、不回写规则轨道」修订为：**「同槽 sequence_stage 经相位定义层（冻结标签）进入仓位研究开关（默认关），不直接进信号引擎；晋级引擎默认仍走章程 §6 门槛（≥2 月样本外同向 + ≥30 笔 + 用户终审）」**；day_stage/day_pattern/温度/拥挤仅披露；
+- 观察轨道的「并列观察者、无预设权威」语义随之收敛：**在相位定义用途内 jev sequence_stage 为指定源**；其余用途（叙事、对照、复盘）维持并列观察者。
+
+**消费纪律**：
+- 标签落库即冻结（LLM 非确定性 → 同日重放档位可能漂移；重算=显式版本升级，沿相位定义代际纪律：标签重打 + 地图重算）；
+- 规则 emotionScore 口径降级为 **fallback**（jev 文档缺失/degraded/no_data 时回退规则前日 EOD 定相，fail-visible 计数）；
+- 消费载体只读冻结标签（`phaseExposureControl.source="jev_seq_slot"`，映射与因子表见仓位管理专项 SP4 计划），不改 jev_client/观察轨道任何代码；
+- D3（只回放最近 3 交易日）由用户裁决放宽：2026-10-01 已完成全窗回放（113 日，$0.45，origin=replay），后续前向积累按日进行。
