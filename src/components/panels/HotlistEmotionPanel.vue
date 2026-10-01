@@ -2377,26 +2377,8 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('resize', handleChartsResize)
-  if (trendChart) {
-    trendChart.dispose()
-    trendChart = null
-  }
-  if (compareChart) {
-    compareChart.dispose()
-    compareChart = null
-  }
-  if (layersChart) {
-    layersChart.dispose()
-    layersChart = null
-  }
-  if (stageChart) {
-    stageChart.dispose()
-    stageChart = null
-  }
-  if (jevChart) {
-    jevChart.dispose()
-    jevChart = null
-  }
+  // 统一释放六图实例（函数声明提升，定义见脚本尾 visible watcher 前）
+  disposeAllCharts()
 })
 
 // ── 相位验收（2026-09-30 前端可见化，设计 ranktrend-phase-frontend-design.md）──
@@ -3122,11 +3104,31 @@ watch(view, (v) => {
   }
 })
 
+// 统一释放六图实例（2026-10-01）：面板关闭即随根 v-if 销毁容器 DOM，旧实例留着只会对已分离 DOM
+// 响应 window resize 产生无害告警；onUnmounted 兜底（原先漏 phase 实例）
+function disposeAllCharts(): void {
+  trendChart?.dispose()
+  compareChart?.dispose()
+  layersChart?.dispose()
+  stageChart?.dispose()
+  jevChart?.dispose()
+  phaseChartInstance?.dispose()
+  trendChart = null
+  compareChart = null
+  layersChart = null
+  stageChart = null
+  jevChart = null
+  phaseChartInstance = null
+}
+
 // 面板重开补渲染（2026-10-01）：面板根 v-if 关闭时销毁全部图表容器 DOM，而页签与缓存数据不变、
 // 上方 view/数据 watcher 均不触发 → 重开停在图表页签时画布空白；打开后按当前页签补一次渲染
-//（各渲染器内部已带容器失配 dispose 重建守卫，phase 由本次补齐）
+//（关闭时实例已统一释放，重开由各渲染器重建；phase 由本次补齐守卫）
 watch(() => props.visible, (visible) => {
-  if (!visible) return
+  if (!visible) {
+    disposeAllCharts()
+    return
+  }
   nextTick(() => {
     if (view.value === 'track' && trendPoints.value.length) renderTrendChart()
     if (view.value === 'compare' && comparePoints.value.length) renderCompareChart()

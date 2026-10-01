@@ -400,5 +400,17 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(phaseRender).toContain('phaseChartInstance = null')
     // 重试成功路径：loadPhaseData 只更新 phaseHistoryDays，需数据 watcher 触发渲染
     expect(source).toContain('watch(phaseHistoryDays, () => {')
+    // 关闭/卸载统一释放六图实例：分离实例只余 resize 告警；onUnmounted 原漏 phase 实例，一并兜底
+    expect(source).toContain('function disposeAllCharts(): void {')
+    const disposeBody = source.slice(source.indexOf('function disposeAllCharts'))
+    for (const inst of ['trendChart', 'compareChart', 'layersChart', 'stageChart', 'jevChart', 'phaseChartInstance']) {
+      expect(disposeBody).toContain(`${inst}?.dispose()`)
+      expect(disposeBody).toContain(`${inst} = null`)
+    }
+    const unmountBody = source.slice(source.indexOf('onUnmounted('), source.indexOf('onUnmounted(') + 200)
+    expect(unmountBody).toContain('disposeAllCharts()')
+    const visibleWatchBody = source.slice(source.indexOf('watch(() => props.visible'), source.indexOf('watch(() => props.visible') + 600)
+    expect(visibleWatchBody).toContain('if (!visible) {')
+    expect(visibleWatchBody).toContain('disposeAllCharts()')
   })
 })
