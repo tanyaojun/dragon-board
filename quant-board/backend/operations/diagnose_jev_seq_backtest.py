@@ -8,6 +8,8 @@
   baseline     : 相位控制关（gate off + 归因 eodScores）
   champion     : ladder ③ [[40,1.0],[60,0.0],[999,0.3]]（前日 EOD 定相，现行默认）
   jev_seq_v1   : source=jev_seq_slot 两因子制（labels v3：offense 1.0 / defense 0.3 / unknown 1.0）
+  jev_block_v0 : 同 jev_seq_v1，唯一差异 defenseFactor 0.3→0.0（防守档禁入变体；预登记 2026-10-01
+                 一次性验证"jev 口径+拦截机制"，不扫其他参数；in-sample 最多排队不翻默认）
 读数：全窗 + 逐月 交易数/净收益和/胜率/PF/最大回撤，jev 臂分源归因（直读/回退/unknown）。
 诚实边界：jev 标签派生自同窗数据 → 本对照 in-sample，选择偏差不可排除；首段（03-27→04-14）
 无 jev 标签 → unknown 放行≈基线。产物 data/reports/phase-monitor/jev-seq-backtest.json。
@@ -109,6 +111,11 @@ def main() -> int:
             "phaseLabels": jev.get("slotLabels") or {},
             "fallbackLabels": jev.get("fallbackLabels") or {},
             "offenseFactor": 1.0, "defenseFactor": 0.3, "unknownFactor": 1.0}},
+        "jev_block_v0": {"phaseExposureControl": {
+            "source": "jev_seq_slot",
+            "phaseLabels": jev.get("slotLabels") or {},
+            "fallbackLabels": jev.get("fallbackLabels") or {},
+            "offenseFactor": 1.0, "defenseFactor": 0.0, "unknownFactor": 1.0}},
     }
     service = BacktestService(runtime_session())
     report = {
@@ -131,24 +138,29 @@ def main() -> int:
         entry["debug"] = {"rawRoundTripCount": len(raw_trades),
                           "firstEntryPhaseSource": (first_ep or {}).get("source") if isinstance(first_ep, dict) else None,
                           "payloadCtrlKeys": sorted(ctrl.keys())}
-        if name == "jev_seq_v1":
+        if name in ("jev_seq_v1", "jev_block_v0"):
             entry["sourceAttribution"] = _jev_source_stats(summary)
         report["arms"][name] = entry
         print(f"[jev-backtest] {name}: {json.dumps({k: entry[k] for k in ('tradeCount', 'sumNetReturn', 'maxDrawdown')}, ensure_ascii=False)}", file=sys.stderr)
 
     b, c, j = report["arms"]["baseline"], report["arms"]["champion"], report["arms"]["jev_seq_v1"]
+    blk = report["arms"]["jev_block_v0"]
     report["comparison"] = {
         "champion_vs_baseline": {"netReturnDelta": round(c["sumNetReturn"] - b["sumNetReturn"], 4),
                                  "ddImprovement": round(b["maxDrawdown"] - c["maxDrawdown"], 4) if b["maxDrawdown"] is not None and c["maxDrawdown"] is not None else None},
         "jev_vs_champion": {"netReturnDelta": round(j["sumNetReturn"] - c["sumNetReturn"], 4),
                             "ddImprovement": round(c["maxDrawdown"] - j["maxDrawdown"], 4) if c["maxDrawdown"] is not None and j["maxDrawdown"] is not None else None,
-                            "tradesDelta": j["tradeCount"] - c["tradeCount"]}}
+                            "tradesDelta": j["tradeCount"] - c["tradeCount"]},
+        "jev_block_v0_vs_champion": {"netReturnDelta": round(report["arms"]["jev_block_v0"]["sumNetReturn"] - c["sumNetReturn"], 4),
+                                     "ddImprovement": round(c["maxDrawdown"] - report["arms"]["jev_block_v0"]["maxDrawdown"], 4) if c["maxDrawdown"] is not None and report["arms"]["jev_block_v0"]["maxDrawdown"] is not None else None,
+                                     "tradesDelta": report["arms"]["jev_block_v0"]["tradeCount"] - c["tradeCount"]}}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     # 评审 P1-3 自检：防配置未达模拟器的静默失效报告（如 arms 双重嵌套事故）
     champ_src = (c.get("debug") or {}).get("firstEntryPhaseSource")
     jev_src_sum = sum((j.get("sourceAttribution") or {}).values())
-    if champ_src is None or (j["tradeCount"] > 0 and jev_src_sum == 0):
+    blk_src_sum = sum((blk.get("sourceAttribution") or {}).values())
+    if champ_src is None or (j["tradeCount"] > 0 and jev_src_sum == 0) or (blk["tradeCount"] > 0 and blk_src_sum == 0):
         print("[jev-backtest][自检失败] champion 无归因戳或 jev 分源全零——配置疑似未达模拟器，产物无效（已存档供排查）",
               file=sys.stderr)
         print(f"-> {out_path}（INVALID）")
