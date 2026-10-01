@@ -378,4 +378,27 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain("from '@/services/hotlist/hotlistJevApi'")
     expect(source).toContain("from '@/types/hotlistJev'")
   })
+
+  test('面板重开补渲染：v-if 销毁图表容器而 view/数据缓存不变，重开按当前页签重渲染（2026-10-01 BUG 修复）', () => {
+    const source = panelSource()
+
+    // 面板组件常驻 + 根节点 v-if：关闭销毁全部图表容器 DOM，重开时页签与缓存数据不变，
+    // view/数据 watcher 均不触发 → 必须有 visible→true 的补渲染入口，按当前页签派发
+    expect(source).toContain('面板重开补渲染')
+    expect(source).toContain('watch(() => props.visible, (visible) => {')
+    expect(source).toContain("if (view.value === 'track' && trendPoints.value.length) renderTrendChart()")
+    expect(source).toContain("if (view.value === 'compare' && comparePoints.value.length) renderCompareChart()")
+    expect(source).toContain("if (view.value === 'layers' && layerPoints.value.length) renderLayersChart()")
+    expect(source).toContain("if (view.value === 'structure' && stagePieData.value.length) renderStageChart()")
+    expect(source).toContain("if (view.value === 'phase') void ensurePhaseData().then(() => nextTick(() => renderPhaseChart()))")
+    expect(source).toContain("if (view.value === 'jev' && jevPoints.value.length) renderJevChart()")
+    // 相位渲染器补齐其余五个渲染器同款守卫：旧实例绑定 DOM 已分离必须 dispose 重建，
+    // 否则重开 phase 页签时 setOption 打在分离实例上仍然空白
+    const phaseRender = source.slice(source.indexOf('function renderPhaseChart'))
+    expect(phaseRender).toContain('phaseChartInstance.getDom() !== phaseChartEl.value')
+    expect(phaseRender).toContain('phaseChartInstance.dispose()')
+    expect(phaseRender).toContain('phaseChartInstance = null')
+    // 重试成功路径：loadPhaseData 只更新 phaseHistoryDays，需数据 watcher 触发渲染
+    expect(source).toContain('watch(phaseHistoryDays, () => {')
+  })
 })

@@ -2560,6 +2560,11 @@ async function ensurePhaseData(): Promise<void> {
 
 function renderPhaseChart(): void {
   if (!phaseChartEl.value || phaseHistoryDegraded.value || !phaseHistoryDays.value.length) return
+  // 空态 v-if/面板重开会卸载并重挂图表容器：旧实例绑定的 DOM 已分离，必须 dispose 后重建
+  if (phaseChartInstance && phaseChartInstance.getDom() !== phaseChartEl.value) {
+    phaseChartInstance.dispose()
+    phaseChartInstance = null
+  }
   if (!phaseChartInstance) {
     phaseChartInstance = echarts.init(phaseChartEl.value)
   }
@@ -2672,6 +2677,13 @@ watch(layerPoints, () => {
 watch(stagePieData, () => {
   if (view.value === 'structure') {
     nextTick(() => renderStageChart())
+  }
+})
+// phase 数据到达即渲染（2026-10-01 补）：重试成功路径只更新 phaseHistoryDays，
+// view/visible watcher 均不触发 → 无人渲染，容器挂载后空白（同族 BUG 一并修）
+watch(phaseHistoryDays, () => {
+  if (view.value === 'phase') {
+    nextTick(() => renderPhaseChart())
   }
 })
 
@@ -3108,6 +3120,21 @@ watch(view, (v) => {
   if (v === 'jev' && jevPoints.value.length) {
     nextTick(() => renderJevChart())
   }
+})
+
+// 面板重开补渲染（2026-10-01）：面板根 v-if 关闭时销毁全部图表容器 DOM，而页签与缓存数据不变、
+// 上方 view/数据 watcher 均不触发 → 重开停在图表页签时画布空白；打开后按当前页签补一次渲染
+//（各渲染器内部已带容器失配 dispose 重建守卫，phase 由本次补齐）
+watch(() => props.visible, (visible) => {
+  if (!visible) return
+  nextTick(() => {
+    if (view.value === 'track' && trendPoints.value.length) renderTrendChart()
+    if (view.value === 'compare' && comparePoints.value.length) renderCompareChart()
+    if (view.value === 'layers' && layerPoints.value.length) renderLayersChart()
+    if (view.value === 'structure' && stagePieData.value.length) renderStageChart()
+    if (view.value === 'phase') void ensurePhaseData().then(() => nextTick(() => renderPhaseChart()))
+    if (view.value === 'jev' && jevPoints.value.length) renderJevChart()
+  })
 })
 </script>
 
