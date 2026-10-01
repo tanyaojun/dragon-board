@@ -4,12 +4,12 @@
 用法（quant-board 目录）：
   ./.venv/Scripts/python.exe -m backend.operations.phase_label_run \
       --frames data/reports/b-202610/exit-frames-dragonboard_live-half_hour-20260327-20260930.json.gz \
-      --out data/reports/phase-monitor/phase-labels-v1.json
+      --out data/reports/phase-monitor/phase-labels-v2.json
 
 只读：Mongo hotlist_sentiment（half_hour 口径）+ 本地 frames gzip；不占 8000。
-候选定义（v1，M1 检验对象）：
+候选定义（v2，2026-10-01 章程 Q1 裁决：sentiment_2b 边界 50→60，与四带强带下沿嵌套对齐）：
   sentiment_v1 : emotionScore.score，hi=55 / lo=40（三档）
-  sentiment_2b : emotionScore.score 两档，hi=50 / lo=50（offense≥50）
+  sentiment_2b : emotionScore.score 两档，hi=60 / lo=60（offense≥60；v1 历史口径 hi=50/lo=50 见地图基线 v1 对照段）
   breadth_v1   : marketContext.marketStats.emotionValue，hi=0.005 / lo=-0.005
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ from backend.operations.phase_labeler import (
 
 CANDIDATES = {
     "sentiment_v1": ("sentiment", {"hi": 55.0, "lo": 40.0}),
-    "sentiment_2b": ("sentiment", {"hi": 50.0, "lo": 50.0}),
+    "sentiment_2b": ("sentiment", {"hi": 60.0, "lo": 60.0}),
     "breadth_v1": ("emotion_value", {"hi": 0.005, "lo": -0.005}),
 }
 

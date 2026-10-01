@@ -142,8 +142,8 @@ def daily_forward_returns(frames: list[dict], horizon: int) -> dict[str, float]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="M1 检验三关")
     parser.add_argument("--frames", default="data/reports/b-202610/exit-frames-dragonboard_live-half_hour-20260327-20260930.json.gz")
-    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v1.json")
-    parser.add_argument("--out", default="data/reports/phase-monitor/phase-quality-v1.json")
+    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v2.json")  # Q1 定义 v2 同步
+    parser.add_argument("--out", default="data/reports/phase-monitor/phase-quality-v2.json")  # Q1 v2：防默认覆写 v1 历史产物
     args = parser.parse_args()
 
     with gzip.open(args.frames, "rt", encoding="utf-8") as f:

@@ -62,8 +62,8 @@ def slice_trades(trades: list[dict], daily: dict[str, str] | None, phase_key: st
 def main() -> int:
     parser = argparse.ArgumentParser(description="M1 交易层相位切片")
     parser.add_argument("--summary", default="data/reports/b-202610/t6-runs-formal/1-summary.json")
-    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v1.json")
-    parser.add_argument("--out", default="data/reports/phase-monitor/phase-trade-slice-v1.json")
+    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v2.json")  # Q1 定义 v2 同步
+    parser.add_argument("--out", default="data/reports/phase-monitor/phase-trade-slice-v2.json")  # Q1 v2：防默认覆写 v1 历史产物
     args = parser.parse_args()
 
     summary = json.loads(Path(args.summary).read_text(encoding="utf-8"))

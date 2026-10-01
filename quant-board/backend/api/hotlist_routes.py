@@ -318,8 +318,9 @@ async def get_hotlist_sentiment_limit_stocks(
 # ---------------------------------------------------------------------------
 
 # 相位阈值唯一口径源：backend/operations/phase_label_run.py CANDIDATES["sentiment_2b"]
-# （M2 用户裁决立项定义：offense ≥50 / defense <50）。阈值变更 = 前端 chip 常量同改 + 标签重打。
-_PHASE_THRESHOLD = 50.0
+# （2026-10-01 章程 Q1 裁决：offense ≥60 / defense <60，边界 50→60；历史口径 ≥50 见地图基线 v1）。
+# 阈值变更 = 前端 chip 常量同改 + 标签重打。
+_PHASE_THRESHOLD = 60.0
 
 
 @router.get("/phase-history")

@@ -87,9 +87,9 @@ def evaluate_northstar(by_phase: dict, slices: dict, full_window: dict) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="M2 分相位北极星读数（只读）")
     parser.add_argument("--summary", default="data/reports/b-202610/t6-runs-formal/1-summary.json")
-    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v1.json")
+    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v2.json")  # Q1 定义 v2 同步
     parser.add_argument("--candidate", default="sentiment_2b")
-    parser.add_argument("--out", default="data/reports/phase-monitor/phase-northstar-v1.json")
+    parser.add_argument("--out", default="data/reports/phase-monitor/phase-northstar-v2.json")
     args = parser.parse_args()
 
     summary = json.loads(Path(args.summary).read_text(encoding="utf-8"))

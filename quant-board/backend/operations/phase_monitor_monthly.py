@@ -57,8 +57,9 @@ def _git_commit() -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="M2 月度监控（只读）")
     parser.add_argument("--month", required=True, help="监控月份 YYYY-MM（数据应已落库）")
-    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v1.json")
+    parser.add_argument("--labels", default="data/reports/phase-monitor/phase-labels-v2.json")  # 2026-10-01 Q1 定义 v2（60 边界）
     parser.add_argument("--summary", default="data/reports/b-202610/t6-runs-formal/1-summary.json")
+    parser.add_argument("--northstar", default="data/reports/phase-monitor/phase-northstar-v2.json")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
@@ -83,7 +84,7 @@ def main() -> int:
 
     # ③ 三监督线（S+A 触发率与 insufficient 占比从最近 runner summary 或大盘统计读入；
     #    首期允许 None→监控 JSON 如实记 null，人工补读）
-    northstar_file = Path("data/reports/phase-monitor/phase-northstar-v1.json")
+    northstar_file = Path(args.northstar)
     ns = json.loads(northstar_file.read_text(encoding="utf-8")) if northstar_file.exists() else {}
     ns_pass = {k: (ns.get("northstar", {}).get(k, {}).get("pass")) for k in ("offense", "defense")}
 
