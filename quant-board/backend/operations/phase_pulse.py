@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.operations.phase_northstar import equity_phase_slices, evaluate_northstar, worst_drawdown
 from backend.operations.phase_trade_slice import round_trips_of, slice_trades
 
-PULSE_THRESHOLD = 50.0  # 口径源=phase_label_run CANDIDATES sentiment_2b
+PULSE_THRESHOLD = 60.0  # 口径源=phase_label_run CANDIDATES sentiment_2b（2026-10-01 章程 Q1：边界 50→60）
 
 
 def build_pulse_report(
@@ -66,6 +66,33 @@ def build_pulse_report(
     }
 
 
+def attribution_stats(trades: list[dict]) -> dict:
+    """SP1 归因段（章程 T2）：roundTrip 交易的 entryPhase 汇总（fail-visible：缺失计数不静默）；
+    SP2-T3 扩展：byPhase 分相计数 + rebalanceCount（相位调仓清仓笔数，reason 前缀口径）。"""
+    by_band: dict[str, dict] = {}
+    by_phase: dict[str, int] = {}
+    available = 0
+    missing = 0
+    rebalance = 0
+    for t in trades:
+        if str(t.get("reason") or "").startswith("相位调仓"):
+            rebalance += 1
+        ep = t.get("entryPhase") if isinstance(t.get("entryPhase"), dict) else None
+        if not isinstance(ep, dict) or ep.get("prevScore") is None:
+            missing += 1
+            continue
+        available += 1
+        by_phase[str(ep.get("phase") or "unknown")] = by_phase.get(str(ep.get("phase") or "unknown"), 0) + 1
+        slot = by_band.setdefault(str(ep.get("band") or "unknown"), {"trades": 0, "factorSet": set()})
+        slot["trades"] += 1
+        if isinstance(ep.get("factor"), (int, float)):
+            slot["factorSet"].add(round(float(ep["factor"]), 2))
+    for slot in by_band.values():
+        slot["factorSet"] = sorted(slot["factorSet"])
+    return {"availableTrades": available, "missingEntryPhase": missing, "byBand": by_band,
+            "byPhase": by_phase, "rebalanceCount": rebalance}
+
+
 def _phase_of(score: float | None) -> str:
     if score is None:
         return "unknown"
@@ -98,19 +125,82 @@ def band_stats(trades: list[dict], eod_scores: dict[str, float | None], month: s
     return out
 
 
+def month_trades_of(summary: dict, month: str) -> list[dict]:
+    """当月入场 roundTrip（SP2-T3 从 ab_compare 内提为模块级，供挑战者臂复用）。"""
+    return [
+        t for t in round_trips_of(summary)
+        if str(t.get("entryTradingDate") or "").startswith(month)
+    ]
+
+
+def month_trade_stats(summary: dict, month: str) -> dict:
+    rets = [
+        float(t["netReturn"])
+        for t in month_trades_of(summary, month)
+        if isinstance(t.get("netReturn"), (int, float))
+    ]
+    return {"tradeCount": len(rets), "sumNetReturn": round(sum(rets), 4)}
+
+
+def _inject_eod_scores(cfg: dict, eod_valid: dict) -> dict:
+    """SP2-T3：挑战者配置注入全量 eodScores（评审 P2-6：与已有键合并且 DB 新表优先——
+    防手写陈旧分数静默压过库内新表；纯新增键保留）。"""
+    out = json.loads(json.dumps(cfg))
+    for key in ("phaseExposureControl", "phaseExitCoupling", "phaseRebalance"):
+        if isinstance(out.get(key), dict):
+            merged = dict(out[key].get("eodScores") or {})
+            merged.update(eod_valid)
+            out[key]["eodScores"] = merged
+    return out
+
+
+def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: dict) -> dict:
+    """SP2-T3：臂装配（登记驱动，章程 §5.6 挑战者预算 ≤2）。
+
+    内置 baseline（gate off + 归因 eodScores）/ champion（ladder③，C7）；挑战者经 --arm-config
+    注入（JSON：{名: {trade_config: {...}}}）。未知名/超预算 fail-visible 截断进 skipped。
+    """
+    eod_valid = {d: s for d, s in eod_scores.items() if s is not None}
+    builtin = {
+        "baseline": {"phaseExposureControl": {"mode": "off", "eodScores": eod_valid}},
+        "champion": {"phaseExposureControl": {"mode": "ladder", "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]], "eodScores": eod_valid}},
+    }
+    extra: dict[str, dict] = {}
+    malformed: list[str] = []
+    if arm_config_path:
+        raw = json.loads(Path(arm_config_path).read_text(encoding="utf-8"))
+        for name, spec in raw.items():
+            cfg = spec.get("trade_config") if isinstance(spec, dict) else None
+            if isinstance(cfg, dict):
+                extra[str(name)] = _inject_eod_scores(cfg, eod_valid)
+            else:
+                malformed.append(str(name))
+    out: dict[str, dict] = {}
+    skipped: list[str] = []
+    challenger_budget = 2
+    for name in arms:
+        if name in builtin:
+            out[name] = builtin[name]
+        elif name in extra:
+            if len([n for n in out if n not in builtin]) >= challenger_budget:
+                skipped.append(f"budget:{name}")  # 评审 P2-5：skipped 带原因码
+                continue
+            out[name] = extra[name]
+        elif name in malformed:
+            skipped.append(f"malformed:{name}")
+        else:
+            skipped.append(f"unregistered:{name}")
+    return {"arms": out, "skipped": skipped}
+
+
 def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
-    """A/B 装配：基线 vs 弱势带回避臂（reduce_band factor=0），月内口径。"""
+    """A/B 装配：基线 vs ladder③ 相位阶梯臂（C7，配置见 arm 字段），月内口径。"""
 
     def stats(summary: dict) -> dict:
-        rets = [
-            float(t["netReturn"])
-            for t in round_trips_of(summary)
-            if str(t.get("entryTradingDate") or "").startswith(month)
-            and isinstance(t.get("netReturn"), (int, float))
-        ]
-        return {"tradeCount": len(rets), "sumNetReturn": round(sum(rets), 4)}
+        return month_trade_stats(summary, month)
 
     b, c = stats(baseline), stats(controlled)
+    c_trades = month_trades_of(controlled, month)
     return {
         "baseline": b,
         "bandAvoided": c,
@@ -119,6 +209,7 @@ def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
             "netReturnSaved": round(c["sumNetReturn"] - b["sumNetReturn"], 4),
         },
         "arm": "ladder ③：10-40 满 / 40-60 零 / 60+ 三成（前日定相，C7 用户确认）",
+        "attribution": attribution_stats(c_trades),
     }
 
 
@@ -144,6 +235,10 @@ def main() -> int:
     parser.add_argument("--month", required=True, help="YYYY-MM")
     parser.add_argument("--end", default="", help="截止日 YYYY-MM-DD（默认今天）")
     parser.add_argument("--out", default="")
+    parser.add_argument("--arms", default="baseline,champion",
+                        help="逗号分隔臂名：baseline,champion + --arm-config 内的挑战者名（章程 §5.6 预算挑战者≤2）")
+    parser.add_argument("--arm-config", default="",
+                        help="JSON：{挑战者名: {trade_config: {...}}}（预登记挑战者的配置注入）")
     args = parser.parse_args()
     end = args.end or datetime.now().strftime("%Y-%m-%d")
 
@@ -153,6 +248,8 @@ def main() -> int:
     eod_scores = load_eod_scores(end)
     warmup_start = (datetime.strptime(f"{args.month}-01", "%Y-%m-%d")).replace(day=1)
     warmup_start = warmup_start.fromordinal(warmup_start.toordinal() - 10)
+    arm_specs = build_arm_trade_configs(
+        [a.strip() for a in args.arms.split(",") if a.strip()], args.arm_config, eod_scores)
     payload = {
         "dataset_id": "dragonboard_live",
         "snapshot_type": "half_hour",
@@ -160,7 +257,7 @@ def main() -> int:
         "end_date": end,
         "strategy_name": "ranktrend_early_big_move_v3_lifecycle_fusion",
         "random_seed": 20260430,
-        "trade_config": {},
+        "trade_config": arm_specs["arms"].get("baseline", {}),
         "dryRun": True,
     }
     summary = BacktestService(runtime_session()).run_ranktrend(payload)
@@ -173,19 +270,32 @@ def main() -> int:
     }
     # C6 证据：基线交易按前日分带累积
     report["bands"] = band_stats(round_trips_of(summary), eod_scores, args.month)
-    # A/B 臂：阶梯仓位（C7 用户确认③：10-40 满/40-60 零/60+ 三成；仅 trade_config 不同 → 信号缓存复用）
-    try:
-        ladder_cfg = {
-            "phaseExposureControl": {
-                "mode": "ladder", "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]],
-                "eodScores": {d: s for d, s in eod_scores.items() if s is not None},
-            }
-        }
-        controlled = BacktestService(runtime_session()).run_ranktrend({**payload, "trade_config": ladder_cfg})
-        report["ab"] = ab_compare(summary, controlled, args.month)
-    except Exception as exc:  # noqa: BLE001 — 基线脉拍不因 A/B 臂失败而失效
-        report["ab"] = {"degraded": True, "reason": str(exc)}
-        print(f"[phase-pulse] A/B 臂失败（基线照常）: {exc}", file=sys.stderr)
+    # SP1 归因段（章程 T2）：基线臂当月 entryPhase 汇总（与 A/B 同口径，不含 warmup 段）
+    report["attribution"] = attribution_stats([
+        t for t in round_trips_of(summary)
+        if str(t.get("entryTradingDate") or "").startswith(args.month)
+    ])
+    # SP2-T3 多臂：baseline=主报告；champion=ab（向后兼容）；其余=challengers（预算≤2）
+    report["armSkipped"] = arm_specs["skipped"]
+    report["challengers"] = []
+    for arm_name, arm_cfg in arm_specs["arms"].items():
+        if arm_name == "baseline":
+            continue
+        try:
+            arm_summary = BacktestService(runtime_session()).run_ranktrend({**payload, "trade_config": arm_cfg})
+        except Exception as exc:  # noqa: BLE001 — 单臂失败不阻断基线读数（fail-visible 降级）
+            report["challengers"].append({"name": arm_name, "degraded": True, "reason": str(exc)})
+            print(f"[phase-pulse] 臂 {arm_name} 失败（基线照常）: {exc}", file=sys.stderr)
+            continue
+        if arm_name == "champion":
+            report["ab"] = ab_compare(summary, arm_summary, args.month)
+        else:
+            report["challengers"].append({
+                "name": arm_name,
+                "arm": json.dumps(arm_cfg, ensure_ascii=False)[:300],
+                "stats": month_trade_stats(arm_summary, args.month),
+                "attribution": attribution_stats(month_trades_of(arm_summary, args.month)),
+            })
     out = Path(args.out) if args.out else Path(f"data/reports/phase-monitor/pulse-{args.month}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

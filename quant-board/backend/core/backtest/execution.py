@@ -37,7 +37,7 @@ class TradeSimulator:
         """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
 
         trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band|ladder,
-            factor: 0~1, threshold: 50.0, bandLow/bandHigh: 40/60（reduce_band 用）,
+            factor: 0~1, threshold: 60.0, bandLow/bandHigh: 40/60（reduce_band 用）,
             ladder: [[上界, 因子]...] 升序（ladder 用，末条建议 catch-all 上界如 999）,
             eodScores: {date: score}}。
         as-of 纪律：入场日 d 的相位取 eodScores 中**严格早于 d 的最近交易日** EOD 分（前日定相）；
@@ -78,7 +78,7 @@ class TradeSimulator:
                     return max(0.0, min(1.0, factor))
             return 1.0 if not ladder else max(0.0, min(1.0, float(ladder[-1][1])))
         else:
-            threshold = float(ctrl.get("threshold") or 50.0)
+            threshold = float(ctrl.get("threshold") or 60.0)  # 2026-10-01 章程 Q1：二档边界 50→60 口径一致
             phase = "offense" if score >= threshold else "defense"
             if mode != f"reduce_{phase}":
                 return 1.0
@@ -86,6 +86,49 @@ class TradeSimulator:
             return max(0.0, min(1.0, float(ctrl.get("factor", 0.5))))
         except (TypeError, ValueError):
             return 1.0
+
+    @staticmethod
+    def _phase_context(config: dict[str, Any], trading_date: str) -> dict[str, Any]:
+        """SP1 归因上下文（章程 ranktrend-position-management-charter.md §4 SP1-T2）。
+
+        返回 {prevDate, prevScore, prev2Score, deltaScore, phase, band, factor}，供
+        entryPhase 盖戳与 factor 判定共用：
+        - prevDate/prevScore：**严格早于 trading_date 的最近交易日键**的 EOD 分（与
+          _phase_exposure_factor 同一 as-of；该日缺分→归因字段全 None，不回跳更早有分日）；
+        - prev2Score：严格 prevDate 前一交易日分；deltaScore = prevScore − prev2Score（任一缺失→None）；
+        - phase：两档 offense ≥ threshold（默认 60，Q1 口径）/ defense；
+        - band：四带标签（冷10-40/弱势40-60/强60-80/极热≥80，与 ladder/reduce_band 同一分数轴；
+          phase_pulse PULSE_BANDS 仅前三带，本表含极热）；
+        - factor：_phase_exposure_factor 同口径（mode off/键缺失→1.0）。
+        分数缺失/无前日→对应字段 None（fail-visible 不伪造，不错杀）。
+        """
+        ctrl = config.get("phaseExposureControl") if isinstance(config, dict) else None
+        out: dict[str, Any] = {
+            "prevDate": None, "prevScore": None, "prev2Score": None, "deltaScore": None,
+            "phase": None, "band": None,
+            "factor": TradeSimulator._phase_exposure_factor(config, trading_date),
+        }
+        if not isinstance(ctrl, dict):
+            return out
+        eod = ctrl.get("eodScores") or {}
+        today = str(trading_date)
+        prev_key = max((str(d) for d in eod if str(d) < today), default=None)
+        if prev_key is None:
+            return out
+        out["prevDate"] = prev_key  # as-of 锚定日总是落盘（缺分日可追溯是哪天缺）
+        raw = eod.get(prev_key)
+        if not isinstance(raw, (int, float)):
+            return out  # 缺分日：与 factor 同一严格前日键 → 分数侧全 None（不回跳更早有分日）
+        out["prevScore"] = float(raw)
+        prev2_key = max((str(d) for d in eod if str(d) < prev_key), default=None)
+        raw2 = eod.get(prev2_key) if prev2_key else None
+        if isinstance(raw2, (int, float)):
+            out["prev2Score"] = float(raw2)
+            out["deltaScore"] = round(out["prevScore"] - float(raw2), 2)
+        threshold = float(ctrl.get("threshold") or 60.0)
+        out["phase"] = "offense" if out["prevScore"] >= threshold else "defense"
+        out["band"] = TradeSimulator._band_of_score(out["prevScore"])
+        return out
 
     @staticmethod
     def _exit_tp_multiplier(config: dict[str, Any], entry_trading_date: str) -> float:
@@ -256,7 +299,7 @@ class TradeSimulator:
                     # signalExitDelayBars>0 时，最小持有期内只抑制信号驱动退出（D_EXIT_RISK /
                     # final sell / C_CROWDED 转弱 / rank>50 / synergy 风控），
                     # 价格止损/止盈与 maxHoldingBars 仍立即生效（去噪不硬扛，区别于 minHoldingBars）。
-                    max_holding_exit = pos["holdingBars"] >= config["maxHoldingBars"]
+                    max_holding_exit = pos["holdingBars"] >= TradeSimulator._effective_max_holding_bars(pos, config)
                     price_exit = gross_return <= stop_ratio or gross_return >= take_ratio or max_holding_exit
                     # 弱势状态退出（2026-08-16 拐头向下研究立项）：weakStateExit=True 时
                     # D_EXIT_RISK 档位退出（低分位预测反弹，过早离场）替换为"持续弱势状态"退出——
@@ -286,6 +329,11 @@ class TradeSimulator:
                     if signal_exit_delay > 0 and pos["holdingBars"] < signal_exit_delay:
                         signal_exit = False
                     should_exit = price_exit or signal_exit
+                # SP2-T2 相位调仓（v1：仅前日带下移入冷→清仓；研究开关默认关；
+                # T+1 门与 minHoldingBars 门在本链路之前已过——调仓同样被两门约束）
+                if not should_exit and TradeSimulator._phase_rebalance_triggered(config, pos, str(frame.get("tradingDate") or "")):
+                    should_exit = True
+                    strategy_exit_reason = "相位调仓(入冷清仓)"
                 # 阶段 B2 断板事件卖出（全策略生效，默认关闭零行为变化）：
                 # 持仓期曾触及涨停（bar high 或现价达 limitUpPrice×0.999 容差，对齐
                 # _limit_state 口径；粘性记录，含卖出未成交 bar）且当前 bar 未封板
@@ -315,6 +363,9 @@ class TradeSimulator:
                                 strategy_exit_reason = "断板"
                 exit_trigger = None
                 trigger_price = raw_price
+                # 归因优先级声明（评审 P2-1）：同帧若同时触发盘中价格退出与相位调仓，
+                # exit_trigger（价格事实）胜出并覆盖 reason——此时 trade 行不带 rebalance 子文档、
+                # attribution.rebalanceCount 少计 1，属已知口径而非丂数；
                 intrabar = self._intrabar_exit_trigger(pos, quote, config, atr=atr, gross_return=gross_return)
                 if intrabar:
                     should_exit = True
@@ -342,9 +393,16 @@ class TradeSimulator:
                 reason = exit_trigger or strategy_exit_reason or self._exit_reason(signal, pos, gross_return, config, stop_ratio=stop_ratio, take_ratio=take_ratio, strategy_key=strategy_key)
                 net_return = profit / entry_cost_basis if entry_cost_basis else 0
                 explanation = self._signal_explanation(signal, f"卖出：{reason}", pos)
-                trade = {"code": code, "name": pos["name"], "entrySnapshotId": pos["entrySnapshotId"], "entrySignalSnapshotId": pos.get("entrySignalSnapshotId") or pos["entrySnapshotId"], "exitSnapshotId": frame["snapshotId"], "exitSignalSnapshotId": signal.get("snapshotId"), "entryTime": pos["entryTime"], "exitTime": frame["timestamp"], "entryTradingDate": pos.get("entryTradingDate"), "exitTradingDate": frame.get("tradingDate"), "entryPrice": pos["entryPrice"], "exitPrice": exit_price, "quantity": quantity, "holdingBars": pos["holdingBars"], "grossReturn": round((exit_price - pos["entryPrice"]) / pos["entryPrice"], 4) if pos["entryPrice"] else 0, "netReturn": round(net_return, 4), "entryCostBasis": round(entry_cost_basis, 2), "profit": round(profit, 2), "reason": reason, "explanation": explanation, "action": "sell", "price": exit_price, "rank": signal["rank"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "executionMode": execution_mode, "fill": self._public_fill(fill)}
+                trade = {"code": code, "name": pos["name"], "entrySnapshotId": pos["entrySnapshotId"], "entrySignalSnapshotId": pos.get("entrySignalSnapshotId") or pos["entrySnapshotId"], "exitSnapshotId": frame["snapshotId"], "exitSignalSnapshotId": signal.get("snapshotId"), "entryTime": pos["entryTime"], "exitTime": frame["timestamp"], "entryTradingDate": pos.get("entryTradingDate"), "exitTradingDate": frame.get("tradingDate"), "entryPrice": pos["entryPrice"], "exitPrice": exit_price, "quantity": quantity, "holdingBars": pos["holdingBars"], "grossReturn": round((exit_price - pos["entryPrice"]) / pos["entryPrice"], 4) if pos["entryPrice"] else 0, "netReturn": round(net_return, 4), "entryCostBasis": round(entry_cost_basis, 2), "profit": round(profit, 2), "reason": reason, "explanation": explanation, "action": "sell", "price": exit_price, "rank": signal["rank"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "entryPhase": pos.get("entryPhase"), "entryAtr": pos.get("entryAtr"), "executionMode": execution_mode, "fill": self._public_fill(fill)}
+                if str(reason).startswith("相位调仓"):
+                    _rb_from = pos.get("rebalanceFromBand") or (
+                        pos.get("entryPhase").get("band") if isinstance(pos.get("entryPhase"), dict) else None)
+                    _rb_total = int(pos.get("quantity") or 0)
+                    # factor 按实际成交比例（评审 P2-4：清仓部分成交时仓位残留，factor≠0）
+                    _rb_factor = round(1 - quantity / _rb_total, 2) if _rb_total else 0.0
+                    trade["rebalance"] = {"from": _rb_from, "to": "冷10-40", "factor": _rb_factor}
                 trades.append(trade)
-                trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal.get("snapshotId"), "code": code, "name": pos["name"], "action": "sell", "executionMode": execution_mode, "price": exit_price, "quantity": quantity, "rank": signal["rank"], "reason": reason, "explanation": explanation, "profit": round(profit, 2), "netReturn": trade["netReturn"], "holdingBars": pos["holdingBars"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
+                trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal.get("snapshotId"), "code": code, "name": pos["name"], "action": "sell", "executionMode": execution_mode, "price": exit_price, "quantity": quantity, "rank": signal["rank"], "reason": reason, "explanation": explanation, "profit": round(profit, 2), "netReturn": trade["netReturn"], "holdingBars": pos["holdingBars"], "candidateTier": signal.get("candidateTier"), "stage": signal.get("stage"), "regime": signal.get("regime"), "entryPhase": pos.get("entryPhase"), "entryAtr": pos.get("entryAtr"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
                 if quantity >= int(pos["quantity"]):
                     del positions[code]
                 else:
@@ -381,6 +439,22 @@ class TradeSimulator:
                     continue
                 if phase_factor < 1.0:
                     allocation *= phase_factor
+                # SP1 归因（章程 T2）：仅 phaseExposureControl 键存在时盖戳（生产默认无键→数值/行为逐位不变）
+                entry_phase = (
+                    TradeSimulator._phase_context(config, str(frame.get("tradingDate") or ""))
+                    if isinstance(config.get("phaseExposureControl"), dict) else None
+                )
+                entry_atr = (
+                    TradeSimulator._atr_of(atr_history_by_code.get(str(signal.get("code"))))
+                    if TradeSimulator._config_bool(config, "useAtrStops") else None
+                )
+                # SP2-T1 per_band 出场参数表：自包含（入场带从本开关 eodScores 严格前日自解，
+                # 评审 P0-1 修复：不依赖 phaseExposureControl，单独启用必须能独立工作）；
+                # 默认无键 → 空，golden 不变
+                exit_overrides = TradeSimulator._exit_coupling_overrides(config, str(frame.get("tradingDate") or ""))
+                exit_tp_multiplier = TradeSimulator._exit_tp_multiplier(config, str(frame.get("tradingDate") or ""))
+                if isinstance(exit_overrides.get("exitTpMultiplier"), (int, float)):
+                    exit_tp_multiplier = float(exit_overrides["exitTpMultiplier"])
                 estimated_price = self._quote_price_for_side(quote, "buy", raw_price, config)
                 quantity = int((allocation - allocation * config["feeRate"]) / estimated_price / 100) * 100 if estimated_price > 0 else 0
                 if quantity <= 0:
@@ -404,8 +478,8 @@ class TradeSimulator:
                 used = entry_amount + entry_fee
                 cash -= used
                 entry_reason = self._entry_reason(signal, frames, signal_idx, signal_by_snapshot_code, strategy_key)
-                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryAvgRankNum": signal.get("avgRankNum"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "exitTpMultiplier": TradeSimulator._exit_tp_multiplier(config, str(frame.get("tradingDate") or "")), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
-                trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal["snapshotId"], "code": signal["code"], "name": signal["name"], "action": "buy", "executionMode": execution_mode, "price": entry_price, "quantity": quantity, "rank": signal["rank"], "reason": entry_reason, "explanation": self._signal_explanation(signal, f"买入：{entry_reason}"), "candidateTier": signal["candidateTier"], "stage": signal.get("stage"), "regime": signal.get("regime"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
+                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryAvgRankNum": signal.get("avgRankNum"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "entryPhase": entry_phase, "entryAtr": entry_atr, "exitTpMultiplier": exit_tp_multiplier, "exitBreakevenThreshold": exit_overrides.get("exitBreakevenThreshold"), "exitMaxHoldingBars": exit_overrides.get("exitMaxHoldingBars"), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
+                trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal["snapshotId"], "code": signal["code"], "name": signal["name"], "action": "buy", "executionMode": execution_mode, "price": entry_price, "quantity": quantity, "rank": signal["rank"], "reason": entry_reason, "explanation": self._signal_explanation(signal, f"买入：{entry_reason}"), "candidateTier": signal["candidateTier"], "stage": signal.get("stage"), "regime": signal.get("regime"), "entryPhase": entry_phase, "entryAtr": entry_atr, "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
             market_value = sum(pos["quantity"] * float((signal_by_code.get(code) or {}).get("price") or pos.get("lastPrice") or pos["entryPrice"]) for code, pos in positions.items())
             equity.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "equity": round(cash + market_value, 2), "cash": round(cash, 2), "marketValue": round(market_value, 2), "positionCount": len(positions)})
         final_equity = equity[-1]["equity"] if equity else config["initialCapital"]
@@ -713,7 +787,15 @@ class TradeSimulator:
             take_price = entry_price + float(config.get("atrTakeMultiplier") or 3.0) * atr
             notes.append("atr")
         if TradeSimulator._config_bool(config, "breakevenTrailing") and (
-            pos.get("breakevenActivated") or (gross_return is not None and gross_return >= float(config.get("breakevenThreshold") or 0.02))
+            pos.get("breakevenActivated")
+            or (
+                gross_return is not None
+                and gross_return >= float(
+                    pos.get("exitBreakevenThreshold")
+                    if pos.get("exitBreakevenThreshold") is not None
+                    else (config.get("breakevenThreshold") or 0.02)
+                )
+            )
         ):
             pos["breakevenActivated"] = True  # 粘性：激活后不回退
             stop_price = max(stop_price, entry_price)
@@ -1133,7 +1215,7 @@ class TradeSimulator:
         raw_change = float((rank_trend.get("meta") or {}).get("rawChange") or 0)
         if raw_change < -80:
             return True, f"排名大幅下降({raw_change:.0f})"
-        if pos["holdingBars"] >= config["maxHoldingBars"]:
+        if pos["holdingBars"] >= TradeSimulator._effective_max_holding_bars(pos, config):
             return True, "到达最大持有快照"
         if gross_return <= config["stopLoss"]:
             return True, "止损"
@@ -1163,7 +1245,7 @@ class TradeSimulator:
         raw_change = float((rank_trend.get("meta") or {}).get("rawChange") or 0)
         if raw_change < -50 and (technical.get("macd") or {}).get("cross") == "death":
             return True, "排名大幅下降+MACD死叉"
-        if int(pos.get("holdingBars") or 0) >= int(config.get("maxHoldingBars") or 40):
+        if int(pos.get("holdingBars") or 0) >= TradeSimulator._effective_max_holding_bars(pos, config):
             return True, "到达最大持有快照"
         return False, None
 
@@ -1173,6 +1255,107 @@ class TradeSimulator:
             return False
         previous_signal = by_key.get(f"{previous_frame['snapshotId']}:{signal['code']}")
         return bool(previous_signal and previous_signal["candidateTier"] == "B_IGNITION")
+
+    @staticmethod
+    def _exit_coupling_overrides(config: dict[str, Any], entry_trading_date: str) -> dict[str, Any]:
+        """SP2-T1 per_band 出场参数表（章程 §4 SP2-T1；研究开关默认关）。
+
+        trade_config["phaseExitCoupling"] = {mode: off|cold_tp_widen|per_band,
+            bands: {四带标签: {tpMultiplier?, breakevenThreshold?, maxHoldingBars?}}, eodScores}。
+        per_band：**自包含**——入场带从本开关 eodScores 严格前日自解（评审 P0-1 修复：
+        不依赖 phaseExposureControl 的 entryPhase 盖章，单独启用必须能独立工作）；
+        入场带命中 bands 表 → 盖 exitTpMultiplier/exitBreakevenThreshold/exitMaxHoldingBars
+        （pos 级定档、持有期不漂移，同 cold_tp_widen 模式）；未命中/缺分/模式不符 → {}（golden 不变）。
+        夹界：tpMultiplier [0.5, 3.0]、breakevenThreshold [0.0, 0.5]、maxHoldingBars [1, 999]。
+        """
+        ctrl = config.get("phaseExitCoupling")
+        if not isinstance(ctrl, dict) or str(ctrl.get("mode") or "") != "per_band":
+            return {}
+        eod = ctrl.get("eodScores") or {}
+        prev_key = max((str(d) for d in eod if str(d) < str(entry_trading_date)), default=None)
+        if prev_key is None:
+            return {}
+        raw = eod.get(prev_key)
+        if not isinstance(raw, (int, float)):
+            return {}
+        entry_band = TradeSimulator._band_of_score(float(raw))
+        rule = (ctrl.get("bands") or {}).get(entry_band)
+        if not isinstance(rule, dict):
+            return {}
+        out: dict[str, Any] = {}
+        if isinstance(rule.get("tpMultiplier"), (int, float)):
+            out["exitTpMultiplier"] = max(0.5, min(3.0, float(rule["tpMultiplier"])))
+        if isinstance(rule.get("breakevenThreshold"), (int, float)):
+            out["exitBreakevenThreshold"] = max(0.0, min(0.5, float(rule["breakevenThreshold"])))
+        if isinstance(rule.get("maxHoldingBars"), (int, float)):
+            out["exitMaxHoldingBars"] = max(1, min(999, int(rule["maxHoldingBars"])))
+        return out
+
+    @staticmethod
+    def _effective_max_holding_bars(pos: dict[str, Any], config: dict[str, Any]) -> int:
+        """SP2-T1：最大持有单一解析点——pos.exitMaxHoldingBars（per_band 盖章）优先，
+        回退 config.maxHoldingBars；非法值回退 config（fail-visible 不炸回测）。
+        全部 4 处消费点（价格退出/_rank_exit_triggered/_early_big_move 退出/_exit_reason）必须走此函数。"""
+        raw = pos.get("exitMaxHoldingBars")
+        try:
+            if raw is not None and int(raw) > 0:
+                return int(raw)
+        except (TypeError, ValueError):
+            pass
+        return int(config.get("maxHoldingBars") or 40)
+
+    @staticmethod
+    def _band_of_score(score: float) -> str:
+        """四带标签（冷10-40/弱势40-60/强60-80/极热≥80；与 ladder/reduce_band 同一分数轴）。"""
+        if score < 40.0:
+            return "冷10-40"
+        if score < 60.0:
+            return "弱势40-60"
+        if score < 80.0:
+            return "强60-80"
+        return "极热≥80"
+
+    @staticmethod
+    def _phase_rebalance_triggered(config: dict[str, Any], pos: dict[str, Any], trading_date: str) -> bool:
+        """SP2-T2 相位调仓（章程 Q2+方案 α；研究开关默认关）。
+
+        trade_config["phaseRebalance"] = {enabled: bool, eodScores: {date: score},
+        actOn: "into_cold_clear", coldEntryExempt: bool}。
+        v1 规则（历史反事实验证选定，downgrade-rule-variants.json）：
+        仅当前日「前日定相带」下移入 冷10-40 → 清仓；→弱/→强/上移一律不动作
+        （强→弱 18 笔证据：不动作 +30.2% 完胜动作）；冷带入场豁免（慢牛区机制）。
+        自包含：入场带/当前带都从本开关的 eodScores 严格前日解（不依赖 phaseExposureControl
+        的 entryPhase 盖章——调仓臂单独启用时必须能独立工作）；缺分/无前日不动作（不错杀）。
+        默认关（无键/enabled 假）= False。T+1 由调用方既有门保证。
+        """
+        rb = config.get("phaseRebalance")
+        if not isinstance(rb, dict) or not rb.get("enabled"):
+            return False
+        if str(rb.get("actOn") or "into_cold_clear") != "into_cold_clear":
+            return False
+        eod = rb.get("eodScores") or {}
+
+        def strict_prev_score(anchor: str) -> float | None:
+            key = max((str(d) for d in eod if str(d) < anchor), default=None)
+            if key is None:
+                return None
+            raw = eod.get(key)
+            return float(raw) if isinstance(raw, (int, float)) else None
+
+        entry_score = strict_prev_score(str(pos.get("entryTradingDate") or ""))
+        if entry_score is None:
+            return False
+        entry_band = TradeSimulator._band_of_score(entry_score)
+        if entry_band == "冷10-40" and rb.get("coldEntryExempt", True):
+            return False
+        cur_score = strict_prev_score(str(trading_date))
+        if cur_score is None:
+            return False
+        if cur_score < 40.0:
+            # 自算入场带落盘（评审 P2-3：standalone 臂下 entryPhase 缺失，rebalance 子文档仍可溯源）
+            pos["rebalanceFromBand"] = entry_band
+            return True
+        return False
 
     @staticmethod
     def _quote(signal: dict[str, Any]) -> dict[str, Any]:
@@ -1495,7 +1678,7 @@ class TradeSimulator:
             return "D_EXIT_RISK"
         if TradeSimulator._rank_exit_triggered(signal, pos, config, strategy_key):
             return "排名恶化退出"
-        if pos["holdingBars"] >= config["maxHoldingBars"]:
+        if pos["holdingBars"] >= TradeSimulator._effective_max_holding_bars(pos, config):
             return "到达最大持有快照"
         if gross_return <= (stop_ratio if stop_ratio is not None else config["stopLoss"]):
             return "止损"
@@ -1608,6 +1791,8 @@ class TradeSimulator:
             "entryRank": pos.get("entryRank"),
             "lastRank": pos.get("lastRank"),
             "entryReason": pos.get("entryReason"),
+            "entryPhase": pos.get("entryPhase"),
+            "entryAtr": pos.get("entryAtr"),
             "marketValue": round(market_value, 2),
             "entryCost": round(float(pos.get("entryCost") or 0), 2),
             "unrealizedMarkProfit": round(unrealized_mark_profit, 2),
