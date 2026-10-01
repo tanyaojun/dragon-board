@@ -117,3 +117,30 @@ def test_ladder_missing_score_passes_through():
         }
     }
     assert TradeSimulator._phase_exposure_factor(cfg, "2026-09-26") == 1.0
+
+
+def test_exit_tp_multiplier_cold_widen():
+    """P2-c 退出耦合：cold_tp_widen——入场日的前日分 ∈ [bandLow,bandHigh)（冷带）→ TP×multiplier。"""
+    cfg = {
+        "phaseExitCoupling": {
+            "mode": "cold_tp_widen", "multiplier": 1.5, "bandLow": 10.0, "bandHigh": 40.0,
+            "eodScores": {"2026-09-25": 30.0, "2026-09-26": 55.0},
+        }
+    }
+    # 入场 09-26：前日 30 ∈ 冷带 → TP 1.5×
+    assert TradeSimulator._exit_tp_multiplier(cfg, "2026-09-26") == 1.5
+    # 入场 09-27：前日 55 弱带 → 1.0
+    assert TradeSimulator._exit_tp_multiplier(cfg, "2026-09-27") == 1.0
+
+
+def test_exit_tp_multiplier_absent_and_missing_score():
+    assert TradeSimulator._exit_tp_multiplier({}, "2026-09-26") == 1.0  # 默认关
+    cfg = {"phaseExitCoupling": {"mode": "cold_tp_widen", "multiplier": 1.5, "bandLow": 10.0, "bandHigh": 40.0,
+                                 "eodScores": {"2026-09-25": None}}}
+    assert TradeSimulator._exit_tp_multiplier(cfg, "2026-09-26") == 1.0  # 缺分数放行（不放大不确定性）
+
+
+def test_exit_tp_multiplier_clamped():
+    cfg = {"phaseExitCoupling": {"mode": "cold_tp_widen", "multiplier": 9.0, "bandLow": 10.0, "bandHigh": 40.0,
+                                 "eodScores": {"2026-09-25": 30.0}}}
+    assert TradeSimulator._exit_tp_multiplier(cfg, "2026-09-26") == 3.0  # 上限 3×

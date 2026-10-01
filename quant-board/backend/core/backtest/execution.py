@@ -87,6 +87,37 @@ class TradeSimulator:
         except (TypeError, ValueError):
             return 1.0
 
+    @staticmethod
+    def _exit_tp_multiplier(config: dict[str, Any], entry_trading_date: str) -> float:
+        """P2-c 退出端相位耦合研究开关（ranktrend-position-management-plan.md P2-c；2026-10-01）。
+
+        trade_config["phaseExitCoupling"] = {mode: off|cold_tp_widen, multiplier, bandLow/bandHigh,
+        eodScores}。冷带（前日分 ∈ [bandLow, bandHigh)，as-of 同暴露开关）入场 → 止盈线 ×multiplier
+        （冷带机制=慢牛长持，放宽止盈让利润跑；机制依据=地图文档 §2.1 分带解剖）。
+        默认关=1.0（golden 逐位不变）；缺分数放行；multiplier 夹在 [1.0, 3.0]（只放宽不收紧）。
+        消费点：pos["exitTpMultiplier"]（开仓时定档、持有期不漂移），止盈判定两处乘用。
+        """
+        ctrl = config.get("phaseExitCoupling")
+        if not isinstance(ctrl, dict):
+            return 1.0
+        if str(ctrl.get("mode") or "off") != "cold_tp_widen":
+            return 1.0
+        eod = ctrl.get("eodScores") or {}
+        prev_dates = [d for d in eod if str(d) < str(entry_trading_date)]
+        if not prev_dates:
+            return 1.0
+        score = eod[max(prev_dates)]
+        if not isinstance(score, (int, float)):
+            return 1.0
+        low = float(ctrl.get("bandLow", 10.0))
+        high = float(ctrl.get("bandHigh", 40.0))
+        if not (low <= score < high):
+            return 1.0
+        try:
+            return max(1.0, min(3.0, float(ctrl.get("multiplier", 1.5))))
+        except (TypeError, ValueError):
+            return 1.0
+
     def run(self, frames: list[dict[str, Any]], signals: list[dict[str, Any]], config_patch: dict[str, Any] | None = None) -> dict[str, Any]:
         config = {**DEFAULT_TRADE_CONFIG, **(config_patch or {})}
         strategy_key = normalize_strategy_name(config.get("entryStrategy") or config.get("controlStrategy") or config.get("strategyName"))
@@ -373,7 +404,7 @@ class TradeSimulator:
                 used = entry_amount + entry_fee
                 cash -= used
                 entry_reason = self._entry_reason(signal, frames, signal_idx, signal_by_snapshot_code, strategy_key)
-                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryAvgRankNum": signal.get("avgRankNum"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
+                positions[signal["code"]] = {"code": signal["code"], "name": signal["name"], "entrySnapshotId": frame["snapshotId"], "entrySignalSnapshotId": signal["snapshotId"], "entryTime": frame["timestamp"], "entrySignalTime": signal.get("timestamp"), "entryTradingDate": frame.get("tradingDate"), "entrySignalTradingDate": signal.get("tradingDate"), "entrySlotTime": frame.get("slotTime"), "entryPrice": entry_price, "entryAmount": entry_amount, "entryFee": entry_fee, "entryCost": used, "quantity": quantity, "holdingBars": 0, "entryReason": entry_reason, "entryRank": signal.get("rank"), "entryAvgRankNum": signal.get("avgRankNum"), "entryExecutionRank": fill_signal.get("rank"), "entryCandidateTier": signal.get("candidateTier"), "entryConfidence": signal.get("confidence"), "entrySynergyTier": TradeSimulator._synergy_tier_of(signal), "exitTpMultiplier": TradeSimulator._exit_tp_multiplier(config, str(frame.get("tradingDate") or "")), "lastPrice": raw_price, "lastSnapshotId": frame["snapshotId"], "lastTime": frame["timestamp"], "lastTradingDate": frame.get("tradingDate"), "lastRank": fill_signal.get("rank"), "lastSignal": signal, "entryFill": self._public_fill(fill)}
                 trade_events.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "signalSnapshotId": signal["snapshotId"], "code": signal["code"], "name": signal["name"], "action": "buy", "executionMode": execution_mode, "price": entry_price, "quantity": quantity, "rank": signal["rank"], "reason": entry_reason, "explanation": self._signal_explanation(signal, f"买入：{entry_reason}"), "candidateTier": signal["candidateTier"], "stage": signal.get("stage"), "regime": signal.get("regime"), "confidence": signal.get("confidence"), "fill": self._public_fill(fill)})
             market_value = sum(pos["quantity"] * float((signal_by_code.get(code) or {}).get("price") or pos.get("lastPrice") or pos["entryPrice"]) for code, pos in positions.items())
             equity.append({"snapshotId": frame["snapshotId"], "timestamp": frame["timestamp"], "tradingDate": frame.get("tradingDate"), "slotTime": frame.get("slotTime"), "equity": round(cash + market_value, 2), "cash": round(cash, 2), "marketValue": round(market_value, 2), "positionCount": len(positions)})
@@ -1104,7 +1135,7 @@ class TradeSimulator:
             return True, "到达最大持有快照"
         if gross_return <= config["stopLoss"]:
             return True, "止损"
-        if gross_return >= config["takeProfit"]:
+        if gross_return >= float(config["takeProfit"]) * float(pos.get("exitTpMultiplier") or 1.0):
             return True, "止盈"
         return False, None
 
@@ -1466,7 +1497,7 @@ class TradeSimulator:
             return "到达最大持有快照"
         if gross_return <= (stop_ratio if stop_ratio is not None else config["stopLoss"]):
             return "止损"
-        if gross_return >= (take_ratio if take_ratio is not None else config["takeProfit"]):
+        if gross_return >= (take_ratio if take_ratio is not None else float(config["takeProfit"]) * float(pos.get("exitTpMultiplier") or 1.0)):
             return "止盈"
         return "拥挤且加速度转弱"
 
