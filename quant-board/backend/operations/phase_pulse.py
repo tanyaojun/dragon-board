@@ -154,7 +154,8 @@ def _inject_eod_scores(cfg: dict, eod_valid: dict) -> dict:
     return out
 
 
-def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: dict) -> dict:
+def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: dict,
+                            slot_scores: dict | None = None) -> dict:
     """SP2-T3：臂装配（登记驱动，章程 §5.6 挑战者预算 ≤2）。
 
     内置 baseline（gate off + 归因 eodScores）/ champion（ladder③，C7）；挑战者经 --arm-config
@@ -172,7 +173,13 @@ def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: d
         for name, spec in raw.items():
             cfg = spec.get("trade_config") if isinstance(spec, dict) else None
             if isinstance(cfg, dict):
-                extra[str(name)] = _inject_eod_scores(cfg, eod_valid)
+                injected = _inject_eod_scores(cfg, eod_valid)
+                ec = injected.get("phaseExposureControl")
+                if isinstance(ec, dict) and str(ec.get("source") or "") == "slot_then_prev_eod":
+                    merged = dict(ec.get("slotScores") or {})
+                    merged.update(slot_scores or {})
+                    ec["slotScores"] = merged
+                extra[str(name)] = injected
             else:
                 malformed.append(str(name))
     out: dict[str, dict] = {}
@@ -213,6 +220,23 @@ def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
     }
 
 
+def load_slot_scores(end: str) -> dict[str, dict[str, float]]:
+    """SP3-T3.2：非 EOD 档情绪分（slot as-of 口径数据源），{date: {slot: score}}。"""
+    from backend.data.repositories import repository_factory
+
+    db = repository_factory.get_runtime_mongodb_database()
+    out: dict[str, dict[str, float]] = {}
+    for doc in db["hotlist_sentiment"].find(
+        {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+         "slotTime": {"$ne": "EOD"}, "tradingDate": {"$lte": end}},
+        {"tradingDate": 1, "slotTime": 1, "emotionScore.score": 1},
+    ):
+        es = doc.get("emotionScore")
+        if isinstance(es, dict) and isinstance(es.get("score"), (int, float)):
+            out.setdefault(str(doc.get("tradingDate") or ""), {})[str(doc.get("slotTime"))] = float(es["score"])
+    return out
+
+
 def load_eod_scores(end_date: str) -> dict[str, float | None]:
     from backend.data.repositories import repository_factory
 
@@ -246,10 +270,11 @@ def main() -> int:
     from backend.services.backtest_service import BacktestService
 
     eod_scores = load_eod_scores(end)
+    slot_scores = load_slot_scores(end)
     warmup_start = (datetime.strptime(f"{args.month}-01", "%Y-%m-%d")).replace(day=1)
     warmup_start = warmup_start.fromordinal(warmup_start.toordinal() - 10)
     arm_specs = build_arm_trade_configs(
-        [a.strip() for a in args.arms.split(",") if a.strip()], args.arm_config, eod_scores)
+        [a.strip() for a in args.arms.split(",") if a.strip()], args.arm_config, eod_scores, slot_scores)
     payload = {
         "dataset_id": "dragonboard_live",
         "snapshot_type": "half_hour",

@@ -98,4 +98,4 @@ T0（独立，可立即）→ T1（证据）→ 门 → T2 → T3.1（证据）�
 
 ---
 
-**状态头**：T0-T5 全部未启动；SP2-REBAL-ADD-OBS 与 2D 证据门是本计划两个预定收口点（否定结论同样是正式产出）；放行后按序执行，每任务完成在本行追加记录。
+**状态头**：SP3 已执行完毕（2026-10-01）——T0 上移加仓观察臂**不达标**（升级态帧 7 个无优势，提案否定，产物 band-upgrade-add.json）；T1 2D 证据门**否定收口**（四带 up/down 帧级无分离力 p 0.29–0.73，ladder2d 载体不建，产物 phase-2d-matrix.json）；T3.1 slot as-of**达标**（p=0.0247 vs prev_eod 0.244 反向，产物 slot-asof-diff.json）→ T3.2 载体已落（source=slot_then_prev_eod + slotScores，10 用例含 golden 锚）；T4 转折点披露（→冷=涨停萎缩/→弱=高位活跃，产物 phase-turning-points.json）；T5 收口：全量 **3016 passed / 0 failed**，9 月 slot_v1 臂实跑首点 5 笔 +4.45% vs 基线 −18.03%（单月样本待累计）。台账结论已入地图基线 §7。**未提交，待用户 review 后入库。**

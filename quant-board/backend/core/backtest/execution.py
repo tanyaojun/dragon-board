@@ -33,14 +33,37 @@ def _profit_factor(round_trip_trades: list[dict[str, Any]]) -> float | None:
 
 class TradeSimulator:
     @staticmethod
-    def _phase_exposure_factor(config: dict[str, Any], trading_date: str) -> float:
+    def _phase_score(ctrl: dict[str, Any], trading_date: str, slot_time: str | None = None) -> tuple[str | None, float | None]:
+        """SP3-T3.2：相位分数解析（研究开关 source，默认 prev_eod 行为不变）。
+
+        source=slot_then_prev_eod 且 ctrl.slotScores 存在：取同日严格早于 slot 的最近档分
+        （HH:MM 字典序即时序）；无档回退前日 EOD。返回 (used_key, score|None)。
+        slot_time 为空 → 直接走前日 EOD（与旧行为一致）。
+        """
+        eod = ctrl.get("eodScores") or {}
+        if str(ctrl.get("source") or "prev_eod") == "slot_then_prev_eod" and slot_time:
+            day = ctrl.get("slotScores") or {}
+            earlier = [(str(s), v) for s, v in (day.get(str(trading_date)) or {}).items()
+                       if isinstance(v, (int, float)) and str(s) < str(slot_time)]
+            if earlier:
+                s, v = max(earlier)
+                return f"{trading_date}|{s}", float(v)
+        prev_key = max((str(d) for d in eod if str(d) < str(trading_date)), default=None)
+        if prev_key is None:
+            return None, None
+        raw = eod.get(prev_key)
+        return prev_key, (float(raw) if isinstance(raw, (int, float)) else None)
+
+    @staticmethod
+    def _phase_exposure_factor(config: dict[str, Any], trading_date: str, slot_time: str | None = None) -> float:
         """M3 相位暴露控制研究开关（设计 ranktrend-phase-acceptance-design.md §5 M3 ①；2026-10-01）。
 
         trade_config["phaseExposureControl"] = {mode: off|reduce_offense|reduce_defense|reduce_band|ladder,
             factor: 0~1, threshold: 60.0, bandLow/bandHigh: 40/60（reduce_band 用）,
             ladder: [[上界, 因子]...] 升序（ladder 用，末条建议 catch-all 上界如 999）,
-            eodScores: {date: score}}。
-        as-of 纪律：入场日 d 的相位取 eodScores 中**严格早于 d 的最近交易日** EOD 分（前日定相）；
+            eodScores: {date: score}, source: prev_eod(默认)|slot_then_prev_eod, slotScores: {date: {slot: score}}}。
+        as-of 纪律：入场日 d 的相位取**严格早于 d 的最近交易日** EOD 分（前日定相）；
+        SP3-T3.2 source=slot_then_prev_eod 时优先同日早于入场槽的档分（证据 slot-asof-diff.json 达标）。
         键缺失/模式 off/无前日/分数缺失 → 1.0 放行（默认关=golden 逐位不变，缺信号不错杀）。
         reduce_offense/reduce_defense：按 threshold 两档相位匹配降仓；
         reduce_band：前日分 ∈ [bandLow, bandHigh) 降仓（C6 弱势带载体，下沿含上沿不含）；
@@ -54,18 +77,13 @@ class TradeSimulator:
         mode = str(ctrl.get("mode") or "off")
         if mode not in ("reduce_offense", "reduce_defense", "reduce_band", "ladder"):
             return 1.0
-        eod = ctrl.get("eodScores") or {}
-        prev_dates = [d for d in eod if str(d) < str(trading_date)]
-        if not prev_dates:
-            return 1.0
-        score = eod[max(prev_dates)]
-        if not isinstance(score, (int, float)):
+        used_key, score = TradeSimulator._phase_score(ctrl, trading_date, slot_time)
+        if score is None:
             return 1.0
         if mode == "reduce_band":
             low = float(ctrl.get("bandLow", 40.0))
             high = float(ctrl.get("bandHigh", 60.0))
-            in_band = low <= score < high
-            if not in_band:
+            if not (low <= score < high):
                 return 1.0
         elif mode == "ladder":
             ladder = ctrl.get("ladder") or []
@@ -88,55 +106,58 @@ class TradeSimulator:
             return 1.0
 
     @staticmethod
-    def _phase_context(config: dict[str, Any], trading_date: str) -> dict[str, Any]:
-        """SP1 归因上下文（章程 ranktrend-position-management-charter.md §4 SP1-T2）。
+    def _phase_context(config: dict[str, Any], trading_date: str, slot_time: str | None = None) -> dict[str, Any]:
+        """SP1 归因上下文（章程 ranktrend-position-management-charter.md §4 SP1-T2；SP3-T3.2 slot 扩展）。
 
-        返回 {prevDate, prevScore, prev2Score, deltaScore, phase, band, factor}，供
+        返回 {prevDate, prevScore, prev2Score, deltaScore, phase, band, factor, source, usedSlot?}，供
         entryPhase 盖戳与 factor 判定共用：
-        - prevDate/prevScore：**严格早于 trading_date 的最近交易日键**的 EOD 分（与
-          _phase_exposure_factor 同一 as-of；该日缺分→归因字段全 None，不回跳更早有分日）；
-        - prev2Score：严格 prevDate 前一交易日分；deltaScore = prevScore − prev2Score（任一缺失→None）；
+        - prevDate/prevScore：分数解析由 _phase_score 承担（source=prev_eod 默认=严格前日 EOD 键；
+          slot_then_prev_eod=同日严格早于入场槽的最近档，无档回退前日 EOD）；缺分→分数侧全 None；
+        - prev2Score/deltaScore：恒用 EOD 日链（source 无关，Δ 是日间概念）；
         - phase：两档 offense ≥ threshold（默认 60，Q1 口径）/ defense；
-        - band：四带标签（冷10-40/弱势40-60/强60-80/极热≥80，与 ladder/reduce_band 同一分数轴；
-          phase_pulse PULSE_BANDS 仅前三带，本表含极热）；
-        - factor：_phase_exposure_factor 同口径（mode off/键缺失→1.0）。
+        - band：四带标签（冷10-40/弱势40-60/强60-80/极热≥80，与 ladder/reduce_band 同一分数轴）；
+        - factor：_phase_exposure_factor 同口径（mode off/键缺失→1.0）；
+        - source/usedSlot：分数来源与实际使用的 slot（仅 slot 模式下落 usedSlot）。
         分数缺失/无前日→对应字段 None（fail-visible 不伪造，不错杀）。
         """
         ctrl = config.get("phaseExposureControl") if isinstance(config, dict) else None
         out: dict[str, Any] = {
             "prevDate": None, "prevScore": None, "prev2Score": None, "deltaScore": None,
             "phase": None, "band": None,
-            "factor": TradeSimulator._phase_exposure_factor(config, trading_date),
+            "factor": TradeSimulator._phase_exposure_factor(config, trading_date, slot_time),
         }
         if not isinstance(ctrl, dict):
             return out
+        used_key, used_score = TradeSimulator._phase_score(ctrl, trading_date, slot_time)
+        if used_key is not None:
+            out["prevDate"] = used_key  # as-of 锚定日（或 date|slot）总落盘，缺分可追溯
+        if used_score is None:
+            return out  # 缺分日：分数侧全 None（不回跳更早有分日）
+        out["prevScore"] = used_score
+        # Δ 恒用 EOD 日链（source 无关：slot 档分只替代相位分，日间差分仍走日链）
         eod = ctrl.get("eodScores") or {}
-        today = str(trading_date)
-        prev_key = max((str(d) for d in eod if str(d) < today), default=None)
-        if prev_key is None:
-            return out
-        out["prevDate"] = prev_key  # as-of 锚定日总是落盘（缺分日可追溯是哪天缺）
-        raw = eod.get(prev_key)
-        if not isinstance(raw, (int, float)):
-            return out  # 缺分日：与 factor 同一严格前日键 → 分数侧全 None（不回跳更早有分日）
-        out["prevScore"] = float(raw)
-        prev2_key = max((str(d) for d in eod if str(d) < prev_key), default=None)
-        raw2 = eod.get(prev2_key) if prev2_key else None
-        if isinstance(raw2, (int, float)):
-            out["prev2Score"] = float(raw2)
-            out["deltaScore"] = round(out["prevScore"] - float(raw2), 2)
+        prev_eod_key = max((str(d) for d in eod if str(d) < str(trading_date)), default=None)
+        prev_eod = eod.get(prev_eod_key) if prev_eod_key else None
+        p2_key = max((str(d) for d in eod if str(d) < str(prev_eod_key)), default=None) if prev_eod_key else None
+        prev2 = eod.get(p2_key) if p2_key else None
+        if isinstance(prev_eod, (int, float)) and isinstance(prev2, (int, float)):
+            out["prev2Score"] = float(prev2)
+            out["deltaScore"] = round(float(prev_eod) - float(prev2), 2)
         threshold = float(ctrl.get("threshold") or 60.0)
         out["phase"] = "offense" if out["prevScore"] >= threshold else "defense"
         out["band"] = TradeSimulator._band_of_score(out["prevScore"])
+        out["source"] = str(ctrl.get("source") or "prev_eod")
+        if out["source"] == "slot_then_prev_eod" and used_key and "|" in str(used_key):
+            out["usedSlot"] = str(used_key).split("|", 1)[1]
         return out
 
     @staticmethod
-    def _exit_tp_multiplier(config: dict[str, Any], entry_trading_date: str) -> float:
+    def _exit_tp_multiplier(config: dict[str, Any], entry_trading_date: str, slot_time: str | None = None) -> float:
         """P2-c 退出端相位耦合研究开关（ranktrend-position-management-plan.md P2-c；2026-10-01）。
 
         trade_config["phaseExitCoupling"] = {mode: off|cold_tp_widen, multiplier, bandLow/bandHigh,
-        eodScores}。冷带（前日分 ∈ [bandLow, bandHigh)，as-of 同暴露开关）入场 → 止盈线 ×multiplier
-        （冷带机制=慢牛长持，放宽止盈让利润跑；机制依据=地图文档 §2.1 分带解剖）。
+        eodScores, source?, slotScores?}。冷带（as-of 分数 ∈ [bandLow, bandHigh)）入场 → 止盈线 ×multiplier
+        （冷带机制=慢牛长持，放宽止盈让利润跑）；分数解析走 _phase_score（SP3-T3.2 slot 可选）。
         默认关=1.0（golden 逐位不变）；缺分数放行；multiplier 夹在 [1.0, 3.0]（只放宽不收紧）。
         消费点：pos["exitTpMultiplier"]（开仓时定档、持有期不漂移），止盈判定两处乘用。
         """
@@ -145,12 +166,8 @@ class TradeSimulator:
             return 1.0
         if str(ctrl.get("mode") or "off") != "cold_tp_widen":
             return 1.0
-        eod = ctrl.get("eodScores") or {}
-        prev_dates = [d for d in eod if str(d) < str(entry_trading_date)]
-        if not prev_dates:
-            return 1.0
-        score = eod[max(prev_dates)]
-        if not isinstance(score, (int, float)):
+        _, score = TradeSimulator._phase_score(ctrl, entry_trading_date, slot_time)
+        if score is None:
             return 1.0
         low = float(ctrl.get("bandLow", 10.0))
         high = float(ctrl.get("bandHigh", 40.0))
@@ -432,8 +449,9 @@ class TradeSimulator:
                 if TradeSimulator._config_bool(config, "tierPositionScale"):
                     entry_tier = TradeSimulator._synergy_tier_of(signal) or ""
                     allocation *= float((config.get("tierPositionScales") or {}).get(entry_tier, 1.0))
-                # M3 相位暴露控制（研究开关，默认关=1.0；factor 0=禁止新开仓）
-                phase_factor = TradeSimulator._phase_exposure_factor(config, str(frame.get("tradingDate") or ""))
+                # M3 相位暴露控制（研究开关，默认关=1.0；factor 0=禁止新开仓；SP3-T3.2 slot as-of 可选）
+                frame_slot = str(frame.get("slotTime") or "")
+                phase_factor = TradeSimulator._phase_exposure_factor(config, str(frame.get("tradingDate") or ""), frame_slot)
                 if phase_factor <= 0.0:
                     matching_stats["blockedByPhase"] = matching_stats.get("blockedByPhase", 0) + 1
                     continue
@@ -441,7 +459,7 @@ class TradeSimulator:
                     allocation *= phase_factor
                 # SP1 归因（章程 T2）：仅 phaseExposureControl 键存在时盖戳（生产默认无键→数值/行为逐位不变）
                 entry_phase = (
-                    TradeSimulator._phase_context(config, str(frame.get("tradingDate") or ""))
+                    TradeSimulator._phase_context(config, str(frame.get("tradingDate") or ""), frame_slot)
                     if isinstance(config.get("phaseExposureControl"), dict) else None
                 )
                 entry_atr = (
