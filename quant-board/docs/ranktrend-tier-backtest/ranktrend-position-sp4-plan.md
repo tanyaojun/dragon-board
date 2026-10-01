@@ -73,6 +73,7 @@ T1 → T2 → T3 → T4 → T5（T1 是 T2 的数据前置；全程不碰 jev_cl
 ---
 
 **状态头（2026-10-01 执行记录）**：
+- **交接**：SP5（jev 日级情绪叙事研究——温度机会轴 × 拥挤风险轴）交接文档已产出 → `ranktrend-position-sp5-plan.md`（含前序结论总账、用户四点裁决、按轴配读数方法论、T1-T5 草案），下一对话以此开启。
 - **独立 code review 已完成**（reviewer，结论：无 Blocker，OK with notes）：引擎路径（两因子制/golden 锚/映射/冻结/注入语义）交叉验证成立；Important 1-3 已修复（①attribution_stats jev 分源分支 + sourceAttribution 计数，不再把 jev 笔误计 missing；②schedule 臂清单改为从登记配置回填，删除过期常量；③diagnose_jev_seq_backtest 修复 arms 双重嵌套 bug + 增加自检：归因全零/配置未达模拟器 → 退出码 3 产物标 INVALID）；Minors 已修 P2-4/P2-5，其余（P2-6/7/8/9/10）登记待办不阻塞。
 - **事故复盘**：全窗对照首次运行三臂全同，根因 = 诊断脚本 arms 双重嵌套（`{"phaseExposureControl": {"phaseExposureControl": ...}}`）→ 引擎读 mode=None 全部按 off 放行；debug 探针 payloadCtrlKeys=['phaseExposureControl'] 为铁证。并发运行还产生了孤儿进程（Windows 下工具超时不杀子进程），抢核加剧超时——已清理，后续长任务一律 nohup+日志轮询不依赖工具超时。
 - **既有对照数字（零重跑，来自 m3-ladder-compare.json / t6 1-summary）**：全窗 baseline 54 笔 sumNetReturn +21.67% maxDD -4.87%；champion ladder③ 34 笔 +26.71% maxDD -3.98%。唯一缺口 = jev_seq_v1 臂全窗读数（单臂 ~15-30 分钟，待用户批准后单独跑）。
