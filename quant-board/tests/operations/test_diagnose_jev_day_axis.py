@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.operations.diagnose_jev_day_axis import (
     day_forward_metrics,
     gate_verdict,
+    month_stratified,
     pool_ret,
     quartile_band,
     top_codes,
@@ -98,3 +99,26 @@ def test_gate_verdict_direction_semantics():
     assert gate_verdict({}, full_rev, direction=+1)["verdictHint"] == "REVERSE"
     # 全窗不显著、月度无显著 → FAIL
     assert gate_verdict({}, {"meanDiff": 0.001, "p": 0.4}, direction=+1)["verdictHint"] == "FAIL"
+
+
+def test_month_stratified_median_split_and_sign_count():
+    """月内中位分割：hiMinusLo 符号计数 + 双侧二项 p。"""
+    rows = []
+    # 四个月，每月 8 天；构造高分日读数更高（hiMinusLo > 0）
+    for mi, m in enumerate(("2026-04", "2026-05", "2026-06", "2026-07")):
+        for i in range(8):
+            t = float(i)  # 月内排序键
+            rows.append({"month": m, "day_temperature": t, "dayRet": mi * 0.001 + t * 0.001})
+    r = month_stratified(rows, "day_temperature", "dayRet", min_days=8)
+    assert r["monthsTested"] == 4
+    assert r["hiBetterMonths"] == 4 and r["loBetterMonths"] == 0
+    for s in r["perMonth"].values():
+        assert s["hiMinusLo"] > 0  # 高温日 dayRet 更优
+    assert r["binomTwoSidedP"] is not None and abs(r["binomTwoSidedP"] - 0.125) < 1e-9  # 4/4 双侧二项
+    # 样本不足的月 → skipped 如实标注，不计入符号计数
+    rows.append({"month": "2026-06", "day_temperature": 99.0, "dayRet": 9.99})  # 同月补 1 天仍 <8 不影响
+    rows += [{"month": "2026-08", "day_temperature": 1.0, "dayRet": 0.01}]
+    r2 = month_stratified(rows, "day_temperature", "dayRet", min_days=8)
+    assert r2["perMonth"]["2026-08"]["n"] == 1
+    assert "skipped" in r2["perMonth"]["2026-08"]
+    assert r2["monthsTested"] == 4  # 跳过月不计入符号计数

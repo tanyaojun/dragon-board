@@ -185,6 +185,37 @@ def band_means(rows: list[dict], predictor: str, readout: str) -> dict:
     return out
 
 
+def month_stratified(rows: list[dict], predictor: str, readout: str, min_days: int = 8) -> dict:
+    """探索性去混杂：月内中位分割 hi vs lo（冻结带-月份混杂的直接解法；day 级无帧聚类）。
+
+    meanDiff 沿用约定 = mean(lo) − mean(hi)；hiMinusLo > 0 = 高分日该读数更优。
+    方向一致性 = 逐月 hiMinusLo 符号计数 + 双侧二项 p（不设门，仅描述）。
+    """
+    per_month: dict = {}
+    for m in sorted({r["month"] for r in rows}):
+        ms = [r for r in rows if r["month"] == m and isinstance(r.get(predictor), (int, float)) and isinstance(r.get(readout), (int, float))]
+        if len(ms) < min_days:
+            per_month[m] = {"n": len(ms), "skipped": f"insufficient days (<{min_days})"}
+            continue
+        med = sorted(r[predictor] for r in ms)[len(ms) // 2]
+        lo = [r[readout] for r in ms if r[predictor] <= med]
+        hi = [r[readout] for r in ms if r[predictor] > med]
+        s = sep(lo, hi)
+        s["n"] = len(ms)
+        s["hiMinusLo"] = round(-s["meanDiff"], 6) if isinstance(s.get("meanDiff"), (int, float)) else None
+        per_month[m] = s
+    diffs = [s["hiMinusLo"] for s in per_month.values() if isinstance(s.get("hiMinusLo"), (int, float))]
+    pos = sum(1 for v in diffs if v > 0)
+    neg = sum(1 for v in diffs if v < 0)
+    n = len(diffs)
+    binom_p = None
+    if n >= 4:
+        k = max(pos, neg)
+        binom_p = round(min(1.0, sum(math.comb(n, i) for i in range(k, n + 1)) / 2 ** n * 2), 4)
+    return {"note": "exploratory deconfound（月内中位分割，非预登记门）", "perMonth": per_month,
+            "hiBetterMonths": pos, "loBetterMonths": neg, "monthsTested": n, "binomTwoSidedP": binom_p}
+
+
 def gate_verdict(per_month: dict, full: dict, direction: float) -> dict:
     """direction = 预登记假设中 (hi − lo) 的符号；meanDiff 按约定 = mean(lo) − mean(hi)。
     支持月 = 月内 p<GATE_P 且 (−meanDiff) 与 direction 同号（hi 优于 lo）。"""
@@ -451,6 +482,14 @@ def main() -> int:
         },
     }
 
+    # 探索性去混杂：月内中位分割（day 级）——裁决"全窗反向是否纯月份混杂"（与 T-jev2 月内重标口径对齐）
+    deconfound = {
+        "temperature_dayRet": month_stratified(day_rows, "day_temperature", "dayRet"),
+        "temperature_dayWorst": month_stratified(day_rows, "day_temperature", "dayWorst"),
+        "crowding_dayWorst": month_stratified(day_rows, "day_crowding", "dayWorst"),
+        "crowding_dayRet": month_stratified(day_rows, "day_crowding", "dayRet"),
+    }
+
     # 交易层对照（次要证据）：基线 54 笔回联 frames
     trade_level: dict = {"source": str(BASELINE_TRADES), "trades": []}
     snap_idx = {str(f.get("snapshotId")): i for i, f in enumerate(frames)}
@@ -506,6 +545,7 @@ def main() -> int:
                  "exclusions": excluded},
         "temperatureAxis": temp_evidence,
         "crowdingAxis": crowd_evidence,
+        "deconfoundExploratory": deconfound,
         "tradeLevel": trade_level,
     }
     OUT_CAL.parent.mkdir(parents=True, exist_ok=True)
@@ -521,6 +561,7 @@ def main() -> int:
         "crowdingGate": crowd_gate,
         "tempQ4vsQ2": temp_evidence["sensitivity"]["q4_vs_q2_h1"],
         "crowdSlotSensitivity": crowd_evidence["sensitivity"]["slotCrowd_fwdWorst_q4_vs_q1"],
+        "deconfound": {k: {"hiBetterMonths": v["hiBetterMonths"], "loBetterMonths": v["loBetterMonths"], "binomTwoSidedP": v["binomTwoSidedP"]} for k, v in deconfound.items()},
         "tradeLevelBands": {b: {"n": v["n"], "meanMae": v["meanMae"]} for b, v in trade_level.get("byCrowdBand", {}).items()},
         "exclusions": excluded,
     }
