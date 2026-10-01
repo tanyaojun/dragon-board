@@ -108,6 +108,7 @@ export interface PhasePulseDoc {
 export interface PhaseBoard {
   northstar: PhaseNorthstarDoc | null
   pulse?: PhasePulseDoc | null
+  pulses?: PhasePulseDoc[]
   northstarMissingReason?: string
   months: PhaseMonthlyDoc[]
   count: number
