@@ -10,7 +10,7 @@ describe('fetchPhaseHistory', () => {
         JSON.stringify({
           datasetId: 'dragonboard_live',
           snapshotType: 'half_hour',
-          threshold: 50.0,
+          threshold: 60.0,
           count: 2,
           days: [
             { tradingDate: '2026-09-26', eodScore: 65.6, phase: 'offense' },
@@ -23,7 +23,7 @@ describe('fetchPhaseHistory', () => {
     const result = await fetchPhaseHistory()
     expect(result).toEqual({
       degraded: false,
-      threshold: 50.0,
+      threshold: 60.0,
       days: [
         { tradingDate: '2026-09-26', eodScore: 65.6, phase: 'offense' },
         { tradingDate: '2026-09-27', eodScore: 48.3, phase: 'defense' },

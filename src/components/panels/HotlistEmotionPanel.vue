@@ -533,7 +533,7 @@
           <!-- ⑧ 相位验收（2026-09-30 分相位验收体系前端可见化，设计 ranktrend-phase-frontend-design.md） -->
           <section v-show="view === 'phase'" class="tab-pane">
             <div class="phase-note">
-              🎯 相位定义 sentiment_2b：连续情绪分 ≥50 进攻相位 / &lt;50 防守相位。<strong>今日相位：{{ todayPhaseText }}</strong>　<strong>建议新仓仓位：{{ todayAdvice }}</strong>
+              🎯 相位定义 sentiment_2b：连续情绪分 ≥60 进攻相位 / &lt;60 防守相位。<strong>今日相位：{{ todayPhaseText }}</strong>　<strong>建议新仓仓位：{{ todayAdvice }}</strong>
             </div>
 
             <div v-if="phaseLoading" class="state-block"><span class="spinner"></span>正在加载相位数据…</div>
@@ -571,6 +571,14 @@
                   </div>
                 </div>
                 <div v-if="phasePulseAbLine" class="phase-pulse-ab">{{ phasePulseAbLine }}</div>
+                <div v-if="phasePulseChallengerRows.length" style="margin-top: 6px;">
+                  <div class="section-title">挑战者臂（预算 ≤2，章程 §5.6）</div>
+                  <div v-for="c in phasePulseChallengerRows" :key="c.name" class="phase-pulse-ab">
+                    <template v-if="c.degraded">⚠️ {{ c.name }}：{{ c.reason }}</template>
+                    <template v-else>{{ c.name }}：{{ c.tradeCount ?? '--' }} 笔 {{ c.sumPct.toFixed(1) }}%<template
+                      v-if="c.rebalance !== null">｜调仓清仓 {{ c.rebalance }} 笔</template></template>
+                  </div>
+                </div>
 
                 <div v-if="phasePulseAccRows.length" class="phase-pulse-acc">
                   <div class="section-title">分带累积（C6 证据，每月末自动入档）</div>
@@ -2382,8 +2390,8 @@ onUnmounted(() => {
 })
 
 // ── 相位验收（2026-09-30 前端可见化，设计 ranktrend-phase-frontend-design.md）──
-// 口径锚 sentiment_2b（offense ≥50 / defense <50），唯一口径源=phase_label_run CANDIDATES
-const PHASE_THRESHOLD = 50
+// 口径锚 sentiment_2b（offense ≥60 / defense <60，2026-10-01 章程 Q1 边界 50→60），唯一口径源=phase_label_run CANDIDATES
+const PHASE_THRESHOLD = 60
 
 const phaseHistoryDays = ref<PhaseHistoryDay[]>([])
 const phaseHistoryDegraded = ref(false)
@@ -2454,7 +2462,19 @@ const phasePulseAbLine = computed(() => {
   if (!ab || ab.degraded) return ''
   const avoided = ab.bandAvoided
   const delta = ab.delta
-  return `A/B 弱势带回避（factor=0）：${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
+  return `A/B 阶梯仓位③（前日定相，champion）：${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
+})
+
+const phasePulseChallengerRows = computed(() => {
+  const list = phasePulse.value?.report?.challengers ?? []
+  return list.map((c) => ({
+    name: c.name,
+    degraded: !!c.degraded,
+    reason: c.reason ?? null,
+    tradeCount: c.stats?.tradeCount ?? null,
+    sumPct: (c.stats?.sumNetReturn ?? 0) * 100,
+    rebalance: c.attribution?.rebalanceCount ?? null,
+  }))
 })
 
 interface PhaseMonthRow {

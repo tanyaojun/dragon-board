@@ -1,6 +1,6 @@
 /**
  * 分相位验收体系前端类型（设计 ranktrend-phase-frontend-design.md；2026-09-30）。
- * 口径锚：sentiment_2b（offense ≥50 / defense <50），唯一口径源 =
+ * 口径锚：sentiment_2b（offense ≥60 / defense <60，2026-10-01 章程 Q1 边界 50→60），唯一口径源 =
  * quant-board backend/operations/phase_label_run.py CANDIDATES['sentiment_2b']。
  */
 
@@ -101,6 +101,21 @@ export interface PhasePulseDoc {
       degraded?: boolean
       reason?: string
     }
+    challengers?: Array<{
+      name: string
+      arm?: string
+      degraded?: boolean
+      reason?: string
+      stats?: { tradeCount: number; sumNetReturn: number }
+      attribution?: {
+        availableTrades?: number
+        missingEntryPhase?: number
+        rebalanceCount?: number
+        byPhase?: Record<string, number>
+        byBand?: Record<string, unknown>
+      }
+    }>
+    armSkipped?: string[]
   }
   updatedAt: string
 }
