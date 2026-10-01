@@ -78,7 +78,8 @@ def _label_one(db, labels_col, acc, token, date, code, row, mappings, had_yester
     return bool(parsed["ok"])
 
 
-def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2):
+def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2,
+        skip_existing: bool = False):
     db = _db()
     labels_col = db["hotlist_jev_driver_labels"]
     mappings_col = db["theme_stock_mappings"]
@@ -87,13 +88,23 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         {"tradingDate": 1}) if d.get("tradingDate")})
     if dry_run:
         dates = dates[-2:]
-    n_ok = n_deg = 0
+    n_ok = n_deg = n_skipped = 0
     for di, date in enumerate(dates):
         pop = _day_population(db, date)
         prev_codes = {r["code"] for r in db["snapshot_stock_rows"].find(
             {"type": "half_hour", "tradingDate": dates[dates.index(date) - 1] if dates.index(date) else "",
              "reason": {"$exists": True, "$ne": None, "$ne": ""}}, {"code": 1})} if dates.index(date) else set()
         codes = list(pop.keys())
+        # 断点续跑（2026-10-01 用户指令"只跑未有的"）：跳过该日已有 ok 标签的股票；degraded 重试
+        if skip_existing:
+            done = {d["code"] for d in labels_col.find({"tradingDate": date, "status": "ok"}, {"code": 1})}
+            if done:
+                before = len(codes)
+                codes = [c for c in codes if c not in done]
+                n_skipped += before - len(codes)
+        if not codes:
+            print(f"[{di + 1}/{len(dates)}] {date} 全部已打，跳过")
+            continue
         # 字段适配：theme_stock_mappings(stockCode/themeId/stockReason/stockTags) →
         # 构建器规范形 {themeName, tags, reason}；题材名从 theme_daily_factors join
         theme_names = {d["themeId"]: d.get("themeName") or d["themeId"]
@@ -126,8 +137,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             results = list(ex.map(work, codes))
         n_ok += sum(results)
         n_deg += len(results) - sum(results)
-        print(f"[{di + 1}/{len(dates)}] {date} done n={len(codes)} (cum ok={n_ok} deg={n_deg})")
-    print("FINAL:", {"ok": n_ok, "degraded": n_deg})
+        print(f"[{di + 1}/{len(dates)}] {date} done n={len(codes)} (cum ok={n_ok} deg={n_deg} skipped={n_skipped})")
+    print("FINAL:", {"ok": n_ok, "degraded": n_deg, "skipped": n_skipped})
 
 
 if __name__ == "__main__":
@@ -136,8 +147,10 @@ if __name__ == "__main__":
     ap.add_argument("--end", required=True)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="断点续跑：跳过当日已有 ok 标签的股票（degraded 重试）")
     args = ap.parse_args()
     token = os.environ.get("JEV_CF_TOKEN") or ""
     acc = os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6")
     assert token, "需要 JEV_CF_TOKEN 环境变量"
-    run(args.start, args.end, args.dry_run, token, acc, args.workers)
+    run(args.start, args.end, args.dry_run, token, acc, args.workers, args.skip_existing)
