@@ -26,7 +26,7 @@ def test_history_anchor_percentiles():
     out = build_history_anchor(STATS)
     assert out.startswith("【近20日参照】（2026-08-11 → 2026-08-30，20 个交易日收盘统计")
     assert "涨停数：p20=" in out and "p50=" in out and "p80=" in out
-    assert "昨日 68 家" in out  # ztCount 最后一个 = 30+19*2=68
+    assert "（2026-08-30 68 家）" in out  # 最后非空样本带实际日期（防陈旧值误标"昨日"）
     assert "最高连板：p20=" in out and "炸板率：p20=" in out
 
 

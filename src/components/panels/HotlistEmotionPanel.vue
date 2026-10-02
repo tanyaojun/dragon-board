@@ -1180,6 +1180,8 @@ const emotionScorePctText = computed(
 const sentimentV2Eod = computed(() => {
   const result = sentimentV2.value
   if (!result?.ok || !result.v2 || result.v2.status !== 'ok') return null
+  // 日期一致性守卫：v2 EOD 与 hero 规则分必须同一天，错配时整条隐藏（不并排错日数据）
+  if (!doc.value?.tradingDate || result.date !== doc.value.tradingDate) return null
   return result.v2
 })
 const v2TemperaturePctText = computed(

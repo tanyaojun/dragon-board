@@ -524,12 +524,14 @@ def build_history_anchor(stats: list, window: int = 20) -> str:
         return s[min(len(s) - 1, max(0, int(p * (len(s) - 1))))]
 
     def _metric(name, key, fmt):
-        vals = [s[key] for s in stats if isinstance(s.get(key), (int, float))]
-        if len(vals) < 8:
-            return f"{name} 历史样本不足（{len(vals)} 日）"
+        entries = [(s["date"], s[key]) for s in stats if isinstance(s.get(key), (int, float))]
+        if len(entries) < 8:
+            return f"{name} 历史样本不足（{len(entries)} 日）"
+        vals = [v for _, v in entries]
         q20, q50, q80 = _q(vals, 0.2), _q(vals, 0.5), _q(vals, 0.8)
-        last = vals[-1]
-        return f"{name}：p20={fmt(q20)} / p50={fmt(q50)} / p80={fmt(q80)}（昨日 {fmt(last)}）"
+        last_date, last = entries[-1]
+        # 标注实际样本日期：最近历日缺数时 vals[-1] 可能是更早的值，写"昨日"会误标
+        return f"{name}：p20={fmt(q20)} / p50={fmt(q50)} / p80={fmt(q80)}（{last_date} {fmt(last)}）"
 
     if not stats:
         return "【近20日参照】历史参照缺失（无可用历史槽文档）——判读时如实按绝对证据处理，不得虚构对比。"

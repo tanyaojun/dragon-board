@@ -821,7 +821,8 @@ class SnapshotCollectorService:
 
                 v2_result = compute_and_upsert_for_day_v2(
                     db, dataset_id=dataset_id, trading_date=trading_date,
-                    snapshot_type="half_hour")  # 触发=daily 快照；证据口径恒为 half_hour（与 Q3 语料一致）
+                    snapshot_type="half_hour",
+                    force=False)  # 触发=daily 快照；证据口径恒为 half_hour；force=False 让 gate 真实生效
                 v2_status = str(v2_result.get("status") or "")
                 if v2_status in ("degraded", "no_data"):
                     warnings.append(

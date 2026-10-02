@@ -26,8 +26,6 @@ from backend.services.jev.jev_sentiment_compute import (
     _jev_config,
     _latest_yesterday_rows,
     _load_analysis_by_code,
-    _load_frame,
-    _load_rows,
     _slots_of_date,
     _yesterday_total_amounts_by_slot,
 )
