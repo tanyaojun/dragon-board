@@ -83,6 +83,20 @@
                   title="证据全缺，本槽评分不可用（skippedDims 全维，见数据诊断）">
                   <span class="hero-score-hint">情绪分不可用</span>
                 </div>
+                <!-- 情绪 v2 双表（2026-10-02 立项）：市场热度计与规则分并读，口径不同不做换算 -->
+                <div v-if="sentimentV2Eod" class="hero-score-bar v2-gauge" :title="v2GaugeTooltip">
+                  <span class="hero-score-num">{{ sentimentV2Eod.dayTemperature ?? '--' }}</span>
+                  <div class="hero-score-track">
+                    <div class="hero-score-fill v2-fill" :style="{ width: v2TemperaturePctText }"></div>
+                  </div>
+                  <span class="hero-score-hint">v2 市场热度计 0-100</span>
+                </div>
+                <div v-if="sentimentV2Eod" class="v2-chips">
+                  <span v-if="v2StageName" class="v2-chip">档位·{{ v2StageName }}</span>
+                  <span v-if="v2CrowdingName" class="v2-chip" :class="{ 'v2-chip-warn': v2CrowdingWarn }">拥挤·{{ v2CrowdingName }}</span>
+                  <span v-if="v2DiffText" class="v2-chip">{{ v2DiffText }}</span>
+                  <span v-if="v2AnchorHint" class="v2-chip v2-chip-muted">{{ v2AnchorHint }}</span>
+                </div>
                 <div class="hero-summary">盘面证据：{{ doc.summary }}</div>
               </div>
             </div>
@@ -757,8 +771,11 @@ import {
 import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
+  fetchHotlistSentimentV2,
   fetchJiuyanAction,
   fetchJevReviewList,
+  JEV_CROWDING_NAMES,
+  JEV_CROWDING_WARN_LAYERS,
   JEV_PATTERN_NAMES,
   JEV_PATTERN_ORDER,
   JEV_STAGE_NAMES,
@@ -776,6 +793,7 @@ import type {
   JevReviewDay,
   JevReviewItem,
   JevReviewRulingStatus,
+  HotlistSentimentV2Result,
 } from '@/types/hotlistJev'
 import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
 import type {
@@ -826,6 +844,7 @@ const missingDays = ref<HotlistSentimentMissingDay[]>([])
 // ---------- jev 观察轨道（独立 AI 评判，只读对照；缺失/降级如实展示，不进信号） ----------
 const jevSlots = ref<HotlistJevDoc[]>([])
 const jevEod = ref<HotlistJevDoc | null>(null)
+const sentimentV2 = ref<HotlistSentimentV2Result | null>(null)
 const jevDegradedReason = ref<string | null>(null)
 const jevSeriesDate = ref('')
 
@@ -1018,13 +1037,16 @@ async function loadAll() {
   loading.value = true
   loadError.value = null
   try {
-    const [series, slotResult, jevResult] = await Promise.all([
+    const [series, slotResult, jevResult, v2Result] = await Promise.all([
       fetchHotlistSentimentSeries(3),
       fetchHotlistSentimentSlots().catch((err) => ({
         items: [], tradingDate: '', degraded: true, reason: err?.message || '加载失败',
       })),
       fetchHotlistJevSeries().catch(() => ({
         date: '', slots: [], eod: null, degraded: true, reason: '加载失败',
+      })),
+      fetchHotlistSentimentV2().catch(() => ({
+        ok: false, date: null, v2: null, rule: null, degraded: true, reason: '加载失败',
       })),
     ])
     if (series.degraded || !series.items.length) {
@@ -1050,6 +1072,7 @@ async function loadAll() {
     jevEod.value = jevResult.eod
     jevDegradedReason.value = jevResult.degraded ? jevResult.reason : null
     jevSeriesDate.value = jevResult.date
+    sentimentV2.value = v2Result
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败'
     doc.value = null
@@ -1154,6 +1177,44 @@ const emotionScoreValue = computed(() => {
 const emotionScorePctText = computed(
   () => `${Math.max(0, Math.min(100, emotionScoreValue.value ?? 0))}%`,
 )
+const sentimentV2Eod = computed(() => {
+  const result = sentimentV2.value
+  if (!result?.ok || !result.v2 || result.v2.status !== 'ok') return null
+  return result.v2
+})
+const v2TemperaturePctText = computed(
+  () => `${Math.max(0, Math.min(100, sentimentV2Eod.value?.dayTemperature ?? 0))}%`,
+)
+const v2StageName = computed(() => {
+  const stage = sentimentV2Eod.value?.dayStage
+  return stage ? JEV_STAGE_NAMES[stage] ?? stage : null
+})
+const v2CrowdingName = computed(() => {
+  const layer = sentimentV2Eod.value?.dayCrowding
+  return layer ? JEV_CROWDING_NAMES[layer] ?? layer : null
+})
+const v2CrowdingWarn = computed(() =>
+  JEV_CROWDING_WARN_LAYERS.has(sentimentV2Eod.value?.dayCrowding ?? ''),
+)
+const v2DiffText = computed(() => {
+  const temp = sentimentV2Eod.value?.dayTemperature
+  const ruleScore = sentimentV2.value?.rule?.score
+  if (temp == null || ruleScore == null) return null
+  const delta = Math.round(temp - ruleScore)
+  return delta === 0 ? '与规则分持平' : `较规则分 ${delta > 0 ? '+' : ''}${delta}`
+})
+const v2AnchorHint = computed(() => {
+  const range = sentimentV2.value?.v2?.historyAnchorRange
+  return range ? `锚 ${range.split('，')[0] ?? range}` : null
+})
+const v2GaugeTooltip = computed(() => {
+  if (!sentimentV2Eod.value) return ''
+  const parts = ['v2 市场热度计：全市场涨停/连板/炸板锚定近 20 交易日分位（热读=广度高）',
+                 '与左侧连续情绪分（池内质量计，风险维度权重高）口径不同，双表并读不做换算']
+  const anchor = sentimentV2.value?.v2?.historyAnchorRange
+  if (anchor) parts.push(`锚窗口：${anchor}`)
+  return parts.join('；')
+})
 const emotionScoreTooltip = computed(() => {
   const emotion = doc.value?.emotionScore
   if (!emotion) return ''
@@ -3620,6 +3681,16 @@ watch(() => props.visible, (visible) => {
   background: linear-gradient(90deg, #7f8c8d, #ffb142 60%, #ff4757);
 }
 .hero-score-hint { font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
+.v2-gauge .hero-score-fill.v2-fill {
+  background: linear-gradient(90deg, #2e86de, #54a0ff 60%, #48dbfb);
+}
+.v2-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.v2-chip {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  border: 1px solid var(--border-color, #d0d0d0); color: var(--text-secondary);
+}
+.v2-chip-warn { color: #ff6b6b; border-color: #ff6b6b; }
+.v2-chip-muted { opacity: 0.65; }
 .hero-score-missing .hero-score-hint { color: #7f8c8d; }
 .hero-summary { font-size: 12px; color: var(--text-secondary); }
 

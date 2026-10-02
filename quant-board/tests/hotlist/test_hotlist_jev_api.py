@@ -34,10 +34,14 @@ class FakeCollection:
 
     def find_one(self, query=None, sort=None):
         best = None
+        first = None
         for row in self.find(query):
+            if first is None:
+                first = row
             if best is None or str(row.get("timestamp") or "") > str(best.get("timestamp") or ""):
                 best = row
-        return best
+        # 无 timestamp 字段的集合（如 v2 EOD）回退取首条匹配
+        return best if best is not None else first
 
     def replace_one(self, query, doc, upsert=False):
         self.rows = [row for row in self.rows if row.get("_id") != query.get("_id")]
@@ -273,3 +277,48 @@ def test_range_days_capped_to_min_one(monkeypatch, client):
     body = response.json()
     assert len(body["days"]) == 1 and body["days"][0]["tradingDate"] == DATE
     assert body["degradedCount"] == 0
+
+
+def test_sentiment_v2_dual_table(monkeypatch):
+    """v2 双表读口：v2 EOD + 规则 EOD 同包返回；缺任一表如实 degraded 注记。"""
+    db = FakeMongoDb()
+    db["hotlist_jev_sentiment_v2"].rows = [{
+        "_id": f"{DATASET}:half_hour:{DATE}:EOD", "kind": "eod", "origin": "collector_v2",
+        "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": DATE, "slotTime": "EOD",
+        "status": "ok", "historyAnchorRange": "2026-09-01 → 2026-09-29，20 个交易日收盘统计",
+        "answers": {"day_stage": {"type": "choice", "choice": "ferment",
+                                  "probabilities": {"ferment": 0.7}},
+                    "day_crowding": {"type": "choice", "choice": "no_crowding",
+                                     "probabilities": {"no_crowding": 0.6}}},
+        "scores": {"day_temperature": 64.0},
+        "computedAt": 1790000000,
+    }]
+    db["hotlist_sentiment"].rows = [{
+        "_id": f"{DATASET}:half_hour:{DATE}:EOD", "datasetId": DATASET,
+        "snapshotType": "half_hour", "slotTime": "EOD", "tradingDate": DATE,
+        "emotionScore": {"score": 59.1, "stageCandidate": "启动", "slope": -9.8, "version": "score-v1"},
+    }]
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    client = TestClient(app)
+
+    response = client.get("/api/hotlist-jev/sentiment-v2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["date"] == DATE
+    assert body["v2"]["dayTemperature"] == 64.0
+    assert body["v2"]["dayStage"] == "ferment" and body["v2"]["dayCrowding"] == "no_crowding"
+    assert body["rule"]["score"] == 59.1 and body["rule"]["stageCandidate"] == "启动"
+    assert body["degraded"] is False
+
+
+def test_sentiment_v2_missing_v2_doc_degraded(monkeypatch):
+    db = FakeMongoDb()
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    client = TestClient(app)
+    response = client.get("/api/hotlist-jev/sentiment-v2?date=2026-10-09")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
+    assert "未落库" in body["reason"]

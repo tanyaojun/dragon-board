@@ -8,7 +8,23 @@ import type {
   HotlistJevRangeResponse,
   HotlistJevRangeResult,
   HotlistJevSeriesResult,
+  HotlistSentimentV2Result,
 } from '@/types/hotlistJev'
+
+/** 拥挤归层英文值 → 展示中文（情绪 v2 离散归层，fail-visible 逃生口如实标注） */
+export const JEV_CROWDING_NAMES: Record<string, string> = {
+  top_acceleration: '高位加速',
+  late_seal_weakness: '封板弱化',
+  breadth_climax: '广度高潮',
+  no_crowding: '无拥挤',
+  insufficient_evidence: '信息不足',
+}
+
+/** 拥挤归层的风险警示层（chip 着色用） */
+export const JEV_CROWDING_WARN_LAYERS: ReadonlySet<string> = new Set([
+  'top_acceleration',
+  'late_seal_weakness',
+])
 
 /** jev 五档英文值 → 展示中文（与规则轨道五档同词汇，判定彼此独立） */
 export const JEV_STAGE_NAMES: Record<string, string> = {
@@ -245,5 +261,29 @@ export async function fetchJiuyanAction(date?: string): Promise<JiuyanActionResu
     return { dates: body.dates || [], doc: body.doc ?? null, degraded: false, reason: null }
   } catch (err) {
     return { dates: [], doc: null, degraded: true, reason: err instanceof Error ? err.message : 'fetch failed' }
+  }
+}
+
+/**
+ * 情绪 v2 双表读口（GET /api/hotlist-jev/sentiment-v2）：v2 市场热度计 + 规则分同包返回。
+ * 无兜底计算（结论唯一来源 = QuantBoard 后端 v2 轨道落库）。
+ */
+export async function fetchHotlistSentimentV2(): Promise<HotlistSentimentV2Result> {
+  try {
+    const response = await fetch('/api/hotlist-jev/sentiment-v2')
+    if (!response.ok) {
+      return { ok: false, date: null, v2: null, rule: null, degraded: true, reason: `HTTP ${response.status}` }
+    }
+    const body = (await response.json()) as HotlistSentimentV2Result
+    return body
+  } catch (err) {
+    return {
+      ok: false,
+      date: null,
+      v2: null,
+      rule: null,
+      degraded: true,
+      reason: err instanceof Error ? err.message : 'fetch failed',
+    }
   }
 }

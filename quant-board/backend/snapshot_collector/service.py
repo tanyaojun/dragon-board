@@ -810,6 +810,27 @@ class SnapshotCollectorService:
         except Exception as exc:
             warnings.append(f"hotlist_jev_failed: {exc}")
             logging.warning("post-persist jev failed for %s %s: %s", trading_date, slot_time, exc)
+        # ── 第 5 步：jev 情绪 v2 双表（2026-10-02 立项，gate=JEV_SENTIMENT_V2_ENABLED 默认开）──
+        # 双表并存的第二支表（市场热度计）：仅 daily 快照触发 EOD 计算，每日 1 调用；
+        # 失败只记 warning，绝不阻断采集与前置步骤。
+        if snapshot_type == "daily":
+            try:
+                from backend.services.jev.jev_sentiment_v2_compute import (
+                    compute_and_upsert_for_day_v2,
+                )
+
+                v2_result = compute_and_upsert_for_day_v2(
+                    db, dataset_id=dataset_id, trading_date=trading_date,
+                    snapshot_type="half_hour")  # 触发=daily 快照；证据口径恒为 half_hour（与 Q3 语料一致）
+                v2_status = str(v2_result.get("status") or "")
+                if v2_status in ("degraded", "no_data"):
+                    warnings.append(
+                        f"hotlist_jev_v2_{v2_status}: "
+                        f"{v2_result.get('errorCode') or v2_result.get('reason')}"
+                    )
+            except Exception as exc:
+                warnings.append(f"hotlist_jev_v2_failed: {exc}")
+                logging.warning("post-persist jev v2 failed for %s: %s", trading_date, exc)
         return warnings
 
     async def arun_once_multi(

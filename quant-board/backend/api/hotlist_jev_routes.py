@@ -271,3 +271,62 @@ def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str,
         return {"ok": True, "dates": dates, "doc": doc}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"jiuyan_read_failed: {exc}"}
+
+
+@router.get("/sentiment-v2")
+def get_hotlist_jev_sentiment_v2(date: str | None = None) -> dict[str, Any]:
+    """情绪 v2 双表读口（2026-10-02 立项）：v2 EOD（市场热度计）+ 规则 EOD 同包返回。
+
+    无 date → 最新可用 v2 EOD 日；rule 为当日规则分（hotlist_sentiment emotionScore），
+    任一表缺失如实标注（degraded 注记），不做兜底计算。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        v2_col = db["hotlist_jev_sentiment_v2"]
+        if date:
+            doc = v2_col.find_one({"kind": "eod", "tradingDate": date})
+        else:
+            doc = v2_col.find_one({"kind": "eod"}, sort=[("tradingDate", -1)])
+            if doc is not None and doc.get("status") not in ("ok", "degraded"):
+                doc = None
+        if doc is None:
+            return {"ok": True, "date": date, "v2": None, "rule": None,
+                    "degraded": True, "reason": f"v2_eod 未落库{f'：{date}' if date else ''}"}
+        trading_date = str(doc.get("tradingDate"))
+        rule_doc = db["hotlist_sentiment"].find_one(
+            {"datasetId": doc.get("datasetId") or "dragonboard_live",
+             "snapshotType": doc.get("snapshotType") or "half_hour",
+             "slotTime": "EOD", "tradingDate": trading_date},
+            {"emotionScore": 1})
+        rule = rule_doc.get("emotionScore") if rule_doc else None
+        answers = doc.get("answers") or {}
+        scores = doc.get("scores") or {}
+
+        def _choice(key: str) -> str | None:
+            return (answers.get(key) or {}).get("choice")
+
+        def _probs(key: str) -> dict | None:
+            return (answers.get(key) or {}).get("probabilities")
+
+        return {"ok": True, "date": trading_date,
+                "v2": {"status": doc.get("status"),
+                       "dayTemperature": scores.get("day_temperature"),
+                       "dayStage": _choice("day_stage"),
+                       "dayStageProbability": ((answers.get("day_stage") or {}).get("probabilities") or {}).get(_choice("day_stage") or ""),
+                       "dayCrowding": _choice("day_crowding"),
+                       "dayCrowdingProbabilities": _probs("day_crowding"),
+                       "historyAnchorRange": doc.get("historyAnchorRange"),
+                       "computedAt": doc.get("computedAt")},
+                "rule": None if rule is None else {
+                    "score": rule.get("score"),
+                    "stageCandidate": rule.get("stageCandidate"),
+                    "slope": rule.get("slope"),
+                    "version": rule.get("version")},
+                "degraded": bool(doc.get("status") != "ok" or rule is None),
+                "reason": None if (doc.get("status") == "ok" and rule is not None)
+                          else ("规则 EOD 未落库" if rule is None else f"v2 status={doc.get('status')}")}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"sentiment_v2_read_failed: {exc}"}
