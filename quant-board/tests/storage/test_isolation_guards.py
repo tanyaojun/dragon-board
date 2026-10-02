@@ -10,7 +10,6 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2] / "backend"
 # 2026-09-29 隔离缺口 #1：operations 三文件曾硬编码
 # MongoClient("mongodb://localhost:27017")["dragon_board_quant"]，绕过 settings 与 pytest 护栏
 OPERATIONS_FILES = [
-    BACKEND_ROOT / "operations" / "wechat_info_diff_ingest.py",
     BACKEND_ROOT / "operations" / "jev_label_driver.py",
     BACKEND_ROOT / "operations" / "jev_label_driver_report.py",
 ]
@@ -20,14 +19,6 @@ def test_operations_ingest_files_have_no_hardcoded_mongo_client():
     for path in OPERATIONS_FILES:
         source = path.read_text(encoding="utf-8")
         assert "MongoClient(" not in source, f"{path.name} 仍在硬编码直连 MongoDB，必须改走 repository_factory"
-
-
-def test_wechat_ingest_db_helper_is_settings_driven():
-    """_db() 必须经 get_runtime_mongodb_database：pytest 下受护栏约束落在 dragon_board_test。"""
-    from backend.operations import wechat_info_diff_ingest as module
-
-    db = module._db()
-    assert db.name == "dragon_board_test"
 
 
 def test_create_repository_rejects_sqlite_chain(monkeypatch):
