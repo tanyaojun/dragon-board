@@ -56,7 +56,8 @@ def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
     docs = db["hotlist_jev_sentiment"].find(
         {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot",
          "slotTime": "15:00", "tradingDate": {"$lt": trading_date},
-         "evidenceRaw.limit.ztCount": {"$ne": None}},
+         # v2.3：$gt 0 隐式排除 null 与伪 0（6-7 月 limitSummary 损坏记 0，A股无 0 涨停日）
+         "evidenceRaw.limit.ztCount": {"$gt": 0}},
         {"tradingDate": 1, "evidenceRaw": 1}).sort("tradingDate", -1).limit(ANCHOR_SLOTS)
     stats = []
     for d in docs:
