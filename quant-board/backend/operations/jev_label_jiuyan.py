@@ -4,7 +4,7 @@
 设计依据 docs/hotlist-jev/jev-driver-label-v2-design.md：
   population = 韭研当日 final 全量涨停名单（含未进热榜股票，如实标注）；
   判定语料 = 心照链命中子集（报告脚本负责 join，本脚本只打标）；
-  旧链 jev_label_driver.py / hotlist_jev_driver_labels 一字不动，落 hotlist_jev_driver_labels_v2。
+  落 hotlist_jev_driver_labels_v2（2026-10-02 单一事实源裁决：旧链 jev_label_driver.py 与 hotlist_jev_driver_labels 已删除）。
 
 用法（Git Bash）：
   export JEV_CF_TOKEN=<token>

@@ -112,7 +112,8 @@ def main() -> int:
         print(f"[jev-label] 产物已存在（冻结）：{out}；覆写需 --force（版本自增）", file=sys.stderr)
         return 2
 
-    db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    db = get_runtime_mongodb_database()
     docs = list(db["hotlist_jev_sentiment_v2"].find(
         {"datasetId": "dragonboard_live"},
         {"kind": 1, "status": 1, "tradingDate": 1, "slotTime": 1, "answers.sequence_stage.choice": 1},

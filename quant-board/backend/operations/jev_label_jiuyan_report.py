@@ -190,9 +190,38 @@ def verdict(depth: dict, cons: dict, t3_manual: bool | None, stab: dict, group: 
     return "PASS_CANDIDATE" if group.get("groupOk") else "INSUFFICIENT"
 
 
+SLOTS = ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00"]
+LIAN_BAN_PCT = 9.8
+
+
+def build_next_day_map(db, dates):
+    """批量预取：(date, code) → 当日最晚槽 pctChange（供次日语料查询）。"""
+    slot_rank = {s: i for i, s in enumerate(SLOTS)}
+    best = {}
+    for date in dates:
+        for r in db["snapshot_stock_rows"].find(
+                {"type": "half_hour", "tradingDate": date, "pctChange": {"$exists": True, "$ne": None}},
+                {"code": 1, "pctChange": 1, "slotTime": 1}):
+            key = (date, r.get("code"))
+            prev = best.get(key)
+            if prev is None or slot_rank.get(r.get("slotTime"), -1) > slot_rank.get(prev[1], -1):
+                best[key] = (r["pctChange"], r.get("slotTime"))
+    return best
+
+
+def next_day_info(next_map, dates, date_idx, date, code):
+    """次日 (pct, 再涨停)。|pct|>21 剔除（除权）。"""
+    ni = date_idx.get(date)
+    if ni is None or ni + 1 >= len(dates):
+        return None
+    hit = next_map.get((dates[ni + 1], code))
+    if not hit or abs(hit[0]) > 21:
+        return None
+    return {"pct": hit[0], "lianban": hit[0] >= LIAN_BAN_PCT}
+
+
 def main():
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-    from backend.operations.jev_label_driver_report import build_next_day_map, next_day_info
 
     db = get_runtime_mongodb_database()
     labels = [d for d in db["hotlist_jev_driver_labels_v2"].find({"status": "ok"}) if d.get("label")]

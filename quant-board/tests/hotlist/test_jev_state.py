@@ -9,7 +9,6 @@ from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS_V2,
     JEV_SLOT_QUESTIONS_V2,
     build_day_jev_state,
-    build_driver_label_narrative,
     build_slot_jev_state,
     collect_slot_evidence,
 )
@@ -238,25 +237,3 @@ def test_build_day_jev_state_full_shape():
 def test_build_day_jev_state_empty_defensive():
     s = build_day_jev_state(trading_date="2026-10-08", evidences=[])
     assert "无帧证据" in s
-
-
-def test_driver_label_narrative():
-    mappings = [{"themeName": "AI影视", "tags": ["视频数据"], "reason": "图片数据资源类国内第一"},
-                {"themeName": "上海国资", "tags": ["地方国资"], "reason": "上海国资背景"}]
-    s = build_driver_label_narrative("首部AI电影上映+《三星堆：未来往事》",
-                                     {"name": "新华传媒", "rank": 2, "mainTheme": "AI应用"},
-                                     mappings)
-    assert "新华传媒" in s and "首部AI电影上映" in s
-    assert "AI影视" in s and "图片数据资源类国内第一" in s and "上海国资" in s
-    assert "AI应用" in s
-
-
-def test_driver_label_narrative_object_tags():
-    mappings = [{"themeName": "AI影视", "tags": [{"Name": "视频数据"}], "reason": "图片数据资源类国内第一"}]
-    s = build_driver_label_narrative("首部AI电影上映", {"name": "新华传媒", "rank": 2}, mappings)
-    assert "标签:视频数据" in s
-
-
-def test_driver_label_narrative_no_mapping():
-    s = build_driver_label_narrative("算力租赁概念", {"name": "X股"}, [])
-    assert "无题材映射记录" in s and "算力租赁概念" in s

@@ -10,8 +10,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2] / "backend"
 # 2026-09-29 隔离缺口 #1：operations 三文件曾硬编码
 # MongoClient("mongodb://localhost:27017")["dragon_board_quant"]，绕过 settings 与 pytest 护栏
 OPERATIONS_FILES = [
-    BACKEND_ROOT / "operations" / "jev_label_driver.py",
-    BACKEND_ROOT / "operations" / "jev_label_driver_report.py",
+    BACKEND_ROOT / "operations" / "jev_phase_label_run.py",
 ]
 
 
