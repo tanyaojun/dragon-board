@@ -110,4 +110,5 @@ v2.2 三天重试点：门1 ✓（逃生口 1/33=3%、四实质层 97%）、门2
 **10-09 首跑观察预期（防误读）**：
 - 锚 8/20 是 9 月数据的既成结果，温度判读坐标系打折（ztCount 8 个恰踩 ≥8 判读线，maxBoard/zhabanRate/amountYi 各自有效数可能更低并在叙事中如实标注"历史样本不足"）——**不算模型退化**。
 - 拥挤轴 day_crowding 依赖最后帧炸板率：9 月水平下 10 月 EOD 判层约六成可判、四成逃生；修复后重试应显著压低逃生率，可对照 qualityFlags 中 limit_summary_missing 出现率评估重试收益。
+- **历史证据回填已执行（2026-10-02 用户提案 jiuyan_action 回填，a50d5ec7）**：探针实证后修正数据源——韭研 jiuyan_action 涨停家数与 THS 口径差 1.05~1.42 倍且逐日不稳（含 ST/北交所，如 09-30 64 vs 53），直接回填会混源污染锚坐标系（伪 0 教训重演）；**THS dataapi 历史日期查询与生产同 API 同口径且含炸板池（5 月起可用）**，定为回填源，jiuyan 降为旁证。回填目标=v1 15:00 槽文档 evidenceRaw.limit（不碰原始帧、健康日跳过、伪 0 防线、source=ths_hist_backfill 标记）。9 月 13 缺失日全量回填（0 未解决），炸板率一并补全——**10-09 锚窗口 8/20→20/20 满窗**，拥挤轴 9 月历史证据恢复。脚本=backend/operations/backfill_limit_evidence.py（默认 dry-run）。连带影响：§十一前文「10-09 锚打折/拥挤轴四成逃生」的预期注记已被本回填 supersede（首跑按满锚读）；9 月 v2 槽级重跑（≈31 万 tokens）重新成为可选项，待用户裁决。
 - 10 月中旬复检锚深度恢复曲线：复检脚本已交付 `quant-board/scripts/check_anchor_depth_recovery.py <YYYY-MM-DD>`（只读，判读锚 ≥14/20、帧健康率 ≥60%、EOD 覆盖三项；本会话属定时任务无法再挂新 cron，待周五盘后手动跑或用户在新会话挂自动化）。
