@@ -122,7 +122,7 @@ def _label_one(db, labels_col, acc, token, date, code, stock, board, rank):
 def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2,
         skip_existing: bool = False):
     db = _db()
-    labels_col = db["hotlist_jev_driver_labels_v2"]
+    labels_col = db["hotlist_jev_driver_labels"]
     dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
         {"kind": "jiuyan_action", "tradingDate": {"$gte": start, "$lte": end}},
         {"tradingDate": 1}) if d.get("tradingDate")})

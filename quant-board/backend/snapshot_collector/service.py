@@ -793,18 +793,18 @@ class SnapshotCollectorService:
         # half_hour → 槽级评判（锚定近 20 日参照叙事）；daily → 日级 EOD（市场热度计）；
         # 失败只记 warning，绝不阻断采集与前置步骤。原第 4 步 v1 LLM 链（run_jev_post_persist）已退役。
         try:
-            from backend.services.jev.jev_sentiment_v2_compute import (
-                compute_and_upsert_for_day_v2,
-                compute_and_upsert_for_slot_v2,
+            from backend.services.jev.jev_sentiment_compute import (
+                compute_and_upsert_for_day,
+                compute_and_upsert_for_slot,
             )
 
             if snapshot_type == "daily":
                 # 触发=daily 快照；证据口径恒为 half_hour；force=False 让 gate 真实生效
-                v2_result = compute_and_upsert_for_day_v2(
+                v2_result = compute_and_upsert_for_day(
                     db, dataset_id=dataset_id, trading_date=trading_date,
                     snapshot_type="half_hour", force=False)
             elif snapshot_type == "half_hour":
-                v2_result = compute_and_upsert_for_slot_v2(
+                v2_result = compute_and_upsert_for_slot(
                     db, dataset_id=dataset_id, trading_date=trading_date,
                     slot_time=slot_time, force=False)
             else:

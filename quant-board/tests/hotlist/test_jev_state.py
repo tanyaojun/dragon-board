@@ -6,11 +6,13 @@
 import json
 
 from backend.analysis.hotlist.jev_state import (
-    JEV_DAY_QUESTIONS_V2,
-    JEV_SLOT_QUESTIONS_V2,
+    JEV_DAY_QUESTIONS,
+    JEV_SLOT_QUESTIONS,
     build_day_jev_state,
+    build_history_anchor,
     build_slot_jev_state,
     collect_slot_evidence,
+    extract_history_anchor_range,
 )
 
 
@@ -19,9 +21,9 @@ from backend.analysis.hotlist.jev_state import (
 
 def test_questions_constants_frozen_no_prediction():
     # 2026-10-02 V1 退役：题目常量唯一来源=V2（单一事实源）
-    assert set(JEV_SLOT_QUESTIONS_V2) == {"frame_stage", "sequence_stage", "temperature", "crowding"}
-    assert set(JEV_DAY_QUESTIONS_V2) == {"day_stage", "day_pattern", "day_temperature", "day_crowding"}
-    for questions in (JEV_SLOT_QUESTIONS_V2, JEV_DAY_QUESTIONS_V2):
+    assert set(JEV_SLOT_QUESTIONS) == {"frame_stage", "sequence_stage", "temperature", "crowding"}
+    assert set(JEV_DAY_QUESTIONS) == {"day_stage", "day_pattern", "day_temperature", "day_crowding"}
+    for questions in (JEV_SLOT_QUESTIONS, JEV_DAY_QUESTIONS):
         assert len(questions) == 4
         assert all(q["type"] in ("choice", "score") for q in questions.values())
         assert "noul" not in json.dumps(questions, ensure_ascii=False)
@@ -237,3 +239,138 @@ def test_build_day_jev_state_full_shape():
 def test_build_day_jev_state_empty_defensive():
     s = build_day_jev_state(trading_date="2026-10-08", evidences=[])
     assert "无帧证据" in s
+
+
+# ── 近20日参照锚 + 封板质量/回撤池/09:30 注记（原 v2 判定测试，2026-10-02 归一）──
+
+
+STATS = [
+    {"date": f"2026-08-{d:02d}", "ztCount": 30 + i * 2, "maxBoard": 4 + (i % 3),
+     "amountYi": 15000.0 + i * 100, "zhabanRate": 10.0 + i}
+    for i, d in enumerate(range(11, 31))
+]
+
+
+def test_history_anchor_percentiles():
+    out = build_history_anchor(STATS)
+    assert out.startswith("【近20日参照】（2026-08-11 → 2026-08-30，20 个交易日收盘统计")
+    assert "涨停数：p20=" in out and "p50=" in out and "p80=" in out
+    assert "（2026-08-30 68 家）" in out  # 最后非空样本带实际日期（防陈旧值误标"昨日"）
+    assert "最高连板：p20=" in out and "炸板率：p20=" in out
+
+
+def test_history_anchor_insufficient_sample_fail_visible():
+    # 指标样本 <8 → 如实标注，不伪造刻度
+    out = build_history_anchor(STATS[:5])
+    assert "历史样本不足（5 日）" in out
+    assert "p20" not in out.split("\n")[1] or "涨停数 历史样本不足" in out
+
+
+def test_history_anchor_empty():
+    out = build_history_anchor([])
+    assert "历史参照缺失" in out and "不得虚构对比" in out
+
+
+def test_extract_history_anchor_range():
+    # 标准首行 → 括号内完整区间（含中文逗号段，前端 split('，')[0] 取日期段）
+    assert extract_history_anchor_range(build_history_anchor(STATS)) == \
+        "2026-08-11 → 2026-08-30，20 个交易日收盘统计，判读坐标系"
+    # 历史参照缺失首行不带（ 前缀 → None（旧定长切片在此错位产出半截句）
+    assert extract_history_anchor_range(build_history_anchor([])) is None
+
+
+def test_slot_narrative_contains_anchor():
+    state = build_slot_jev_state(trading_date="2026-09-07", slot_time="09:30",
+                                 current={"quality": {"degradedSources": []}}, priors=[],
+                                 history_anchor=build_history_anchor(STATS))
+    assert "【近20日参照】" in state
+    assert "2026-09-07 09:30 时点快照" in state
+    # 空 anchor 行被过滤不留双空行
+    state2 = build_slot_jev_state(trading_date="2026-09-07", slot_time="09:30",
+                                  current={"quality": {"degradedSources": []}}, priors=[])
+    assert "【近20日参照】" not in state2
+
+
+def test_day_narrative_contains_anchor():
+    out = build_day_jev_state(trading_date="2026-09-07", evidences=[],
+                              history_anchor="【近20日参照】X")
+    assert "无帧证据" in out  # 空证据仍是 fail-visible 短路
+
+
+def test_v2_question_sets_structure():
+    # crowding 已离散归层（五选一含逃生口）
+    assert JEV_SLOT_QUESTIONS["crowding"]["type"] == "choice"
+    assert set(JEV_SLOT_QUESTIONS["crowding"]["criteria"]) == {
+        "top_acceleration", "late_seal_weakness", "breadth_climax", "no_crowding", "insufficient_evidence"}
+    assert JEV_DAY_QUESTIONS["day_crowding"]["type"] == "choice"
+    # 温度仍 score 且题干锚定参照系
+    assert JEV_SLOT_QUESTIONS["temperature"]["type"] == "score"
+    assert "近20日参照" in JEV_SLOT_QUESTIONS["temperature"]["instructions"]
+    # 五档判据绑可数证据
+    assert "近20日参照低位" in JEV_SLOT_QUESTIONS["frame_stage"]["criteria"]["ice"]
+    assert "炸板率" in JEV_SLOT_QUESTIONS["frame_stage"]["criteria"]["retreat"]
+    # 2026-10-02 V1 退役：v1 题目常量已随链删除，V2 为唯一题目源
+
+
+# ── 封板质量/触板回撤池接线 + 09:30 伪 0 注记（2026-10-02 裁决）──────────────────
+
+from backend.analysis.hotlist.jev_state import collect_slot_evidence  # noqa: E402
+
+_SQ_FRAME = {
+    "snapshotId": "half_hour:2026-09-29:15:00", "type": "half_hour",
+    "tradingDate": "2026-09-29", "slotTime": "15:00",
+    "indices": {"sh": {"change": -1.0}},
+    "limitSummary": {
+        "continuousBoards": {"yiban": 30, "erban": 10, "sanban": 2, "sibanPlus": 1, "maxBoard": 4},
+        "zhaban": {"count": 8, "rate": 12.0, "fengbanRate": 88.0, "ztCount": 43},
+        "sealQuality": {"byzCount": 25, "hardCount": 10, "rottenCount": 8, "rottenShare": 0.186,
+                        "avgSucRate": 0.62},
+        "drawdown": {"count": 3, "avgDrawdownPct": 8.5, "deepestDrawdownPct": 12.6},
+    },
+}
+
+_ROW = {"code": "000001", "name": "甲", "rank": 1, "heat": 90, "pctChange": 9.9,
+        "change": 9.9, "price": 9.66, "limitUpPrice": 9.66, "zlje": 3.0e6}
+
+
+def _slot_narrative(frame, slot_time="15:00"):
+    ev = collect_slot_evidence(frame=frame, rows=[dict(_ROW)], yesterday_rows=[],
+                               analysis_by_code={}, slot_time=slot_time)
+    return build_slot_jev_state(trading_date="2026-09-29", slot_time=slot_time,
+                                current=ev, priors=[]), ev
+
+
+def test_seal_quality_and_drawdown_flow_to_narrative():
+    text, ev = _slot_narrative(_SQ_FRAME)
+    assert ev["limit"]["sealQuality"]["rottenShare"] == 0.186
+    assert ev["limit"]["drawdown"]["count"] == 3
+    assert "封板质量：一字/秒板 25 家、硬板 10 家、开板重封 8 家、重封率 19%" in text
+    assert "该批个股平均历史封板成功率 62%" in text
+    assert "触板回撤池：大幅回撤 3 家、平均回撤 8.5%、最深 12.6%" in text
+
+
+def test_missing_blocks_absent_not_faked():
+    # 帧无 sealQuality/drawdown（历史帧）→ 叙事无该行、evidence 键缺席（fail-visible）
+    frame = {k: v for k, v in _SQ_FRAME.items()}
+    frame = dict(frame)
+    frame["limitSummary"] = {
+        "continuousBoards": _SQ_FRAME["limitSummary"]["continuousBoards"],
+        "zhaban": _SQ_FRAME["limitSummary"]["zhaban"]}
+    text, ev = _slot_narrative(frame)
+    assert "sealQuality" not in ev["limit"] and "drawdown" not in ev["limit"]
+    assert "封板质量" not in text and "触板回撤池" not in text
+
+
+def test_0930_pseudo_zero_annotated():
+    # 09:30 帧 zt=0（开盘伪 0 形态）→ 叙事带谨慎采信注记；15:00 同值不带
+    frame = {
+        "snapshotId": "half_hour:2026-09-29:09:30", "type": "half_hour",
+        "tradingDate": "2026-09-29", "slotTime": "09:30",
+        "indices": {"sh": {"change": -1.0}},
+        "limitSummary": {"continuousBoards": {"yiban": 0, "erban": 0, "sanban": 0, "sibanPlus": 0, "maxBoard": 0},
+                         "zhaban": {"count": 0, "rate": 0.0, "fengbanRate": 0.0, "ztCount": 0}},
+    }
+    text, _ = _slot_narrative(frame, slot_time="09:30")
+    assert "09:30 开盘时点：涨停池可能未就绪" in text
+    text15, _ = _slot_narrative(_SQ_FRAME, slot_time="15:00")
+    assert "谨慎采信" not in text15

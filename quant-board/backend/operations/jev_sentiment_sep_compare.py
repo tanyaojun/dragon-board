@@ -51,10 +51,10 @@ def main():
 
     db = get_runtime_mongodb_database()
     q3 = {"$regex": "^2026-0[789]"}
-    v2_eods = list(db["hotlist_jev_sentiment_v2"].find(
+    v2_eods = list(db["hotlist_jev_sentiment"].find(
         {"status": "ok", "kind": "eod", "tradingDate": q3},
         {"tradingDate": 1, "answers": 1, "scores": 1, "narrativeRaw": 1}).sort("tradingDate", 1))
-    v2_slots = list(db["hotlist_jev_sentiment_v2"].find(
+    v2_slots = list(db["hotlist_jev_sentiment"].find(
         {"status": "ok", "kind": "slot", "tradingDate": q3},
         {"tradingDate": 1, "slotTime": 1, "answers.crowding.choice": 1, "narrativeRaw": 1,
          "evidenceRaw.limit.zhabanRate": 1}))
@@ -89,7 +89,7 @@ def main():
                       "tradingDate": q3},
                      {"tradingDate": 1, "emotionScore": 1})}
     # 锚深度：每 EOD 日锚窗口净样本（与 runner build_history_stats 同口径）
-    from backend.operations.jev_sentiment_pilot_v2 import build_history_stats
+    from backend.operations.jev_sentiment_pilot import build_history_stats
 
     anchor_depth = {}
     rows = []

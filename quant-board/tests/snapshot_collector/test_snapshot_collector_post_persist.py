@@ -241,7 +241,7 @@ def test_ingest_analyze_task_groups_frames_and_swallows_failure(monkeypatch):
 
 
 def _mock_chain_jev_v2_ok(monkeypatch):
-    import backend.services.jev.jev_sentiment_v2_compute as v2_module
+    import backend.services.jev.jev_sentiment_compute as v2_module
 
     envelope = {"result": {"state": "Completed", "result": {
         "model": "jev-1.13.0",
@@ -270,7 +270,7 @@ def test_post_persist_jev_v2_slot_written_when_enabled(monkeypatch):
     result = _run_slot(service)
 
     assert result.status == "completed"
-    docs = repo.db["hotlist_jev_sentiment_v2"].rows
+    docs = repo.db["hotlist_jev_sentiment"].rows
     assert len(docs) == 1 and docs[0]["kind"] == "slot"
     assert docs[0]["_id"] == "dragonboard_live:half_hour:2026-09-15:10:00"
     assert docs[0]["status"] == "ok" and docs[0]["origin"] == "collector_v2"
@@ -285,14 +285,14 @@ def test_post_persist_jev_v2_gate_off_skips(monkeypatch):
     result = _run_slot(service)
 
     assert result.status == "completed"
-    assert repo.db["hotlist_jev_sentiment_v2"].rows == []
+    assert repo.db["hotlist_jev_sentiment"].rows == []
     assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
 
 
 def test_post_persist_jev_v2_failure_only_warns(monkeypatch):
     monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "true")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
-    import backend.services.jev.jev_sentiment_v2_compute as v2_module
+    import backend.services.jev.jev_sentiment_compute as v2_module
 
     def broken_call(*args, **kwargs):
         raise RuntimeError("jev boom")
@@ -319,4 +319,4 @@ def test_post_persist_jev_v2_skips_five_minutes(monkeypatch):
     result = _run_slot(service, slot_time="09:35", snapshot_type="five_minutes")
 
     assert result.status == "completed"
-    assert repo.db["hotlist_jev_sentiment_v2"].rows == [], "five_minutes 不触发 jev v2"
+    assert repo.db["hotlist_jev_sentiment"].rows == [], "five_minutes 不触发 jev v2"

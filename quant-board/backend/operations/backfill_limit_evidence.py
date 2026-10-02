@@ -69,7 +69,7 @@ def plan_backfill(db, start: str, end: str, fetch_many) -> tuple[list[dict], lis
     need: list[str] = []
     doc_by_date: dict[str, dict] = {}
     for date in dates:
-        doc = db["hotlist_jev_sentiment_v2"].find_one(
+        doc = db["hotlist_jev_sentiment"].find_one(
             {"datasetId": "dragonboard_live", "snapshotType": "half_hour", "kind": "slot",
              "slotTime": "15:00", "tradingDate": date})
         if doc is None:
@@ -98,7 +98,7 @@ def plan_backfill(db, start: str, end: str, fetch_many) -> tuple[list[dict], lis
 def apply_backfill(db, actions: list[dict]) -> int:
     """执行写库：$set evidenceRaw.limit（保留同文档 totalAmount 等其他证据字段）。"""
     for a in actions:
-        db["hotlist_jev_sentiment_v2"].update_one(
+        db["hotlist_jev_sentiment"].update_one(
             {"_id": a["docId"]}, {"$set": {"evidenceRaw.limit": a["limit"]}})
     return len(actions)
 
@@ -180,7 +180,7 @@ def plan_enrich(db, start: str, end: str, fetch_many) -> tuple[list[dict], list[
         {"datasetId": "dragonboard_live", "type": "half_hour", "slotTime": "15:00",
          "tradingDate": {"$gte": start, "$lte": end}},
         {"tradingDate": 1, "limitSummary.drawdown": 1}))
-    docs = list(db["hotlist_jev_sentiment_v2"].find(
+    docs = list(db["hotlist_jev_sentiment"].find(
         {"datasetId": "dragonboard_live", "snapshotType": "half_hour", "kind": "slot",
          "slotTime": "15:00", "tradingDate": {"$gte": start, "$lte": end}},
         {"tradingDate": 1, "evidenceRaw.limit.drawdown": 1}))
@@ -229,7 +229,7 @@ def apply_enrich(db, frame_actions: list[dict], doc_actions: list[dict]) -> tupl
                 {"_id": a["frameId"]}, {"$set": {f"limitSummary.{block}": a["blocks"][block]}})
     for a in doc_actions:
         for block in ("drawdown", "sealQuality"):
-            db["hotlist_jev_sentiment_v2"].update_one(
+            db["hotlist_jev_sentiment"].update_one(
                 {"_id": a["docId"]}, {"$set": {f"evidenceRaw.limit.{block}": a["blocks"][block]}})
     return len(frame_actions), len(doc_actions)
 

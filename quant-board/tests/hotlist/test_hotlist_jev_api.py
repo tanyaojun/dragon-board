@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-import backend.services.jev.jev_sentiment_v2_compute as jev_module
-import backend.services.jev.jev_sentiment_v2_compute as jev_v2_module
+import backend.services.jev.jev_sentiment_compute as jev_module
+import backend.services.jev.jev_sentiment_compute as jev_v2_module
 from backend.main import app
 
 DATASET = "dragonboard_live"
@@ -135,7 +135,7 @@ def test_evaluate_slot_bypasses_gate(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True and body["status"] == "ok"
-    docs = db["hotlist_jev_sentiment_v2"].rows
+    docs = db["hotlist_jev_sentiment"].rows
     assert len(docs) == 1 and docs[0]["origin"] == "manual"
     assert docs[0]["_id"] == f"{DATASET}:half_hour:{DATE}:10:00"
 
@@ -165,7 +165,7 @@ def test_evaluate_day(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    docs = db["hotlist_jev_sentiment_v2"].rows
+    docs = db["hotlist_jev_sentiment"].rows
     assert len(docs) == 1 and docs[0]["kind"] == "eod"
     assert docs[0]["answers"]["day_pattern"]["choice"] == "wide_swing"
 
@@ -205,7 +205,7 @@ def test_series_returns_slots_ascending_and_eod(monkeypatch, client):
                             json={"tradingDate": DATE, "scope": "slot", "slotTime": "10:00"}).status_code == 200
     assert test_client.post("/api/hotlist-jev/evaluate",
                             json={"tradingDate": DATE, "scope": "slot", "slotTime": "09:30"}).status_code == 200
-    db["hotlist_jev_sentiment_v2"].rows.append({
+    db["hotlist_jev_sentiment"].rows.append({
         "_id": f"{DATASET}:half_hour:{DATE}:eod", "kind": "eod", "slotTime": "EOD",
         "tradingDate": DATE, "datasetId": DATASET, "status": "ok",
         "answers": {"day_stage": {"type": "choice", "choice": "start"}}, "scores": {},
@@ -285,7 +285,7 @@ def test_range_days_capped_to_min_one(monkeypatch, client):
 def test_sentiment_v2_dual_table(monkeypatch):
     """v2 双表读口：v2 EOD + 规则 EOD 同包返回；缺任一表如实 degraded 注记。"""
     db = FakeMongoDb()
-    db["hotlist_jev_sentiment_v2"].rows = [{
+    db["hotlist_jev_sentiment"].rows = [{
         "_id": f"{DATASET}:half_hour:{DATE}:EOD", "kind": "eod", "origin": "collector_v2",
         "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": DATE, "slotTime": "EOD",
         "status": "ok", "historyAnchorRange": "2026-09-01 → 2026-09-29，20 个交易日收盘统计",
@@ -328,7 +328,7 @@ def test_sentiment_v2_missing_v2_doc_degraded(monkeypatch):
 
 
 def _seed_no_data_v2(db, date):
-    db["hotlist_jev_sentiment_v2"].rows = [{
+    db["hotlist_jev_sentiment"].rows = [{
         "_id": f"{DATASET}:half_hour:{date}:EOD", "kind": "eod", "origin": "collector_v2",
         "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": date, "slotTime": "EOD",
         "status": "no_data", "errorDetail": "no half_hour frames",

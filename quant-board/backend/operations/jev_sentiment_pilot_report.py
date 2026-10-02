@@ -73,7 +73,7 @@ def main(t3_manual: bool | None = None, pilot_only: bool = True):
     corpus_q: dict = {"status": "ok"}
     if pilot_only:
         corpus_q["tradingDate"] = {"$in": PILOT_DATES}
-    v2 = list(db["hotlist_jev_sentiment_v2"].find(corpus_q))
+    v2 = list(db["hotlist_jev_sentiment"].find(corpus_q))
     v2_slots = [d for d in v2 if d.get("kind") == "slot"]
     v2_eods = [d for d in v2 if d.get("kind") == "eod"]
     if not v2_slots:
@@ -100,7 +100,7 @@ def main(t3_manual: bool | None = None, pilot_only: bool = True):
     gate1 = crowding_distribution(layers)
     # 门2：按 (date, slot) 配对取双版本温度
     v1_keys = {f"{d.get('tradingDate')}:{d.get('slotTime')}": d
-               for d in db["hotlist_jev_sentiment_v2"].find(
+               for d in db["hotlist_jev_sentiment"].find(
                    {"status": "ok", "kind": "slot", "datasetId": "dragonboard_live"},
                    {"tradingDate": 1, "slotTime": 1, "scores": 1, "answers": 1})}
     t2, t1 = [], []

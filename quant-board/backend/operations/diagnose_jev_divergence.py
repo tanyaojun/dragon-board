@@ -34,7 +34,7 @@ def main() -> int:
     # ① jev 槽位文档（status=ok）
     jev_slots: dict[tuple[str, str], dict] = {}
     jev_days: dict[str, dict] = {}
-    for doc in db["hotlist_jev_sentiment_v2"].find({"status": "ok"}):
+    for doc in db["hotlist_jev_sentiment"].find({"status": "ok"}):
         date, slot = str(doc.get("tradingDate") or ""), str(doc.get("slotTime") or "")
         if month_filter and not date.startswith(month_filter):
             continue

@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-from backend.services.jev.jev_sentiment_v2_compute import build_history_stats_calendar
+from backend.services.jev.jev_sentiment_compute import build_history_stats_calendar
 
 
 def main(trading_date: str) -> int:
@@ -62,7 +62,7 @@ def main(trading_date: str) -> int:
     print(f"（对照：9 月 15:00 帧健康率 8/21≈38%）")
 
     # 3) v2 EOD 覆盖：每月每个交易日应有 ok 文档
-    eods = list(db["hotlist_jev_sentiment_v2"].find(
+    eods = list(db["hotlist_jev_sentiment"].find(
         {"kind": "eod", "tradingDate": {"$regex": f"^{month_prefix}"}},
         {"tradingDate": 1, "status": 1}))
     from collections import Counter

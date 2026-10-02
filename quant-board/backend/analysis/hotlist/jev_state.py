@@ -67,14 +67,14 @@ def _stage_question_v2(instructions: str) -> dict:
     return {"type": "choice", "instructions": instructions, "criteria": dict(_STAGE_CRITERIA_V2)}
 
 
-JEV_SLOT_QUESTIONS_V2 = {
+JEV_SLOT_QUESTIONS = {
     "frame_stage": _stage_question_v2("仅凭【当前帧】证据，以【近20日参照】为坐标系，判断当前A股短线热榜情绪处于哪一档？"),
     "sequence_stage": _stage_question_v2("结合【当日已走帧】证据序列（含当前帧），以【近20日参照】为坐标系，判断当前情绪处于哪一档？"),
     "temperature": _score_question(_TEMP_INSTR_V2),
     "crowding": {"type": "choice", "instructions": _CROWD_INSTR_V2, "criteria": dict(_CROWDING_CRITERIA_V2)},
 }
 
-JEV_DAY_QUESTIONS_V2 = {
+JEV_DAY_QUESTIONS = {
     "day_stage": {
         "type": "choice", "instructions": "综合今日全天连续帧证据，以【近20日参照】为坐标系，今日短线热榜情绪总体处于哪一档？",
         "criteria": dict(_DAY_STAGE_CRITERIA_V2),

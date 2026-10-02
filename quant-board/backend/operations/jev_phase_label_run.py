@@ -114,7 +114,7 @@ def main() -> int:
 
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
-    docs = list(db["hotlist_jev_sentiment_v2"].find(
+    docs = list(db["hotlist_jev_sentiment"].find(
         {"datasetId": "dragonboard_live"},
         {"kind": 1, "status": 1, "tradingDate": 1, "slotTime": 1, "answers.sequence_stage.choice": 1},
     ))

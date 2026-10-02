@@ -85,7 +85,7 @@ def main() -> int:
     db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
     jev_eod: dict[str, dict] = {}
     jev_slot: dict[tuple[str, str], dict] = {}
-    for doc in db["hotlist_jev_sentiment_v2"].find({"status": "ok"}):
+    for doc in db["hotlist_jev_sentiment"].find({"status": "ok"}):
         ans = doc.get("answers") or {}
         d, s = str(doc.get("tradingDate") or ""), str(doc.get("slotTime") or "")
         sc = doc.get("scores") or {}

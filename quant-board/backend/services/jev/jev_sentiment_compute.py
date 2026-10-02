@@ -15,8 +15,8 @@ import time
 from typing import Any
 
 from backend.analysis.hotlist.jev_state import (
-    JEV_DAY_QUESTIONS_V2,
-    JEV_SLOT_QUESTIONS_V2,
+    JEV_DAY_QUESTIONS,
+    JEV_SLOT_QUESTIONS,
     build_day_jev_state,
     build_history_anchor,
     build_slot_jev_state,
@@ -140,7 +140,7 @@ def _yesterday_total_amounts_by_slot(db: Any, dataset_id: str, snapshot_type: st
 ANCHOR_WINDOW = 20
 
 
-def v2_enabled() -> bool:
+def sentiment_gate_enabled() -> bool:
     """gate：JEV_SENTIMENT_V2_ENABLED 默认开（"0"/"false" 关），可回退。"""
     return os.environ.get("JEV_SENTIMENT_V2_ENABLED", "1").lower() not in ("0", "false")
 
@@ -161,7 +161,7 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
     })[-window:]
     stats: list[dict] = []
     for date in dates:
-        doc = db["hotlist_jev_sentiment_v2"].find_one(
+        doc = db["hotlist_jev_sentiment"].find_one(
             {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot",
              "slotTime": "15:00", "tradingDate": date},
             {"evidenceRaw": 1})
@@ -184,7 +184,7 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
     return stats
 
 
-def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str,
+def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
                                   snapshot_type: str = "half_hour", origin: str = "collector_v2",
                                   dry_run: bool = False, force: bool = False) -> dict[str, Any]:
     """v2 日级 EOD 计算+落库（hotlist_jev_sentiment_v2）。异常向上抛，由链捕获为 warning。
@@ -192,7 +192,7 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
     force 默认 False：gate（JEV_SENTIMENT_V2_ENABLED）关时默认跳过，绕过 gate 须显式传
     force=True（安全默认方向，防新调用方漏传静默越过回退开关）。
     """
-    if not v2_enabled() and not force:
+    if not sentiment_gate_enabled() and not force:
         return {"written": False, "skipped": True, "reason": "v2_disabled"}
     _, token, account = _jev_config()
     slots = _slots_of_date(db, dataset_id, snapshot_type, trading_date)
@@ -200,11 +200,11 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
     base = {"_id": doc_id, "kind": "eod", "origin": origin, "datasetId": dataset_id,
             "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": "EOD",
             "asOf": f"{trading_date} EOD+08:00", "computedAt": int(time.time()),
-            "questionsRaw": JEV_DAY_QUESTIONS_V2, "anchoredSlotTime": slots[-1] if slots else None,
+            "questionsRaw": JEV_DAY_QUESTIONS, "anchoredSlotTime": slots[-1] if slots else None,
             "errorCode": None, "errorDetail": None}
     if not slots:
         if not dry_run:
-            db["hotlist_jev_sentiment_v2"].replace_one(
+            db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id}, {**base, "status": "no_data", "errorDetail": "no half_hour frames",
                                   "answers": None, "scores": None, "usage": None, "model": None,
                                   "evidenceRaw": None, "narrativeRaw": None, "responseRaw": None,
@@ -221,7 +221,7 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
             evidences.append(evidence)
     if not evidences:
         if not dry_run:
-            db["hotlist_jev_sentiment_v2"].replace_one(
+            db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id}, {**base, "status": "no_data", "errorDetail": "frames present but no rows",
                                   "answers": None, "scores": None, "usage": None, "model": None,
                                   "evidenceRaw": None, "narrativeRaw": None, "responseRaw": None,
@@ -237,7 +237,7 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
         return {"status": "dry", "narrative": narrative}
 
     if not token:
-        db["hotlist_jev_sentiment_v2"].replace_one(
+        db["hotlist_jev_sentiment"].replace_one(
             {"_id": doc_id}, {**base, "status": "degraded", "errorCode": "missing_token",
                               "errorDetail": "JEV_CF_TOKEN not configured",
                               "evidenceRaw": None, "narrativeRaw": narrative,
@@ -245,7 +245,7 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
                               "responseRaw": None, "latencyMs": None}, upsert=True)
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
 
-    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS_V2)
+    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS)
     parsed = parse_jev_response(envelope, latency_ms)
     doc = {**base, "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": None, "narrativeRaw": narrative,
@@ -254,20 +254,20 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
            "historyAnchorRange": extract_history_anchor_range(anchor)}
-    db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    db["hotlist_jev_sentiment"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"written": True, "status": doc["status"],
             "dayTemperature": (parsed.get("scores") or {}).get("day_temperature")}
 
 
-def compute_and_upsert_for_slot_v2(db: Any, *, dataset_id: str, trading_date: str, slot_time: str,
+def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, slot_time: str,
                                    snapshot_type: str = "half_hour", origin: str = "collector_v2",
                                    dry_run: bool = False, force: bool = False) -> dict[str, Any]:
     """v2 槽级计算+落库（hotlist_jev_sentiment_v2，2026-10-02 V1 退役后生产槽位唯一评判）。
 
-    与 pilot（operations/jev_sentiment_pilot_v2.compute_slot_v2）同构：锚=日历口径近 20
+    与 pilot（operations/jev_sentiment_pilot.compute_slot）同构：锚=日历口径近 20
     交易日（生产坐标系）；gate/force 语义与 day 版一致。异常向上抛，由链捕获为 warning。
     """
-    if not v2_enabled() and not force:
+    if not sentiment_gate_enabled() and not force:
         return {"written": False, "skipped": True, "reason": "v2_disabled"}
     _, token, account = _jev_config()
     frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
@@ -275,7 +275,7 @@ def compute_and_upsert_for_slot_v2(db: Any, *, dataset_id: str, trading_date: st
     doc_id = f"{dataset_id}:{snapshot_type}:{trading_date}:{slot_time}"
     if frame is None or not rows:
         if not dry_run:
-            db["hotlist_jev_sentiment_v2"].replace_one(
+            db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id},
                 {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
                  "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
@@ -313,31 +313,31 @@ def compute_and_upsert_for_slot_v2(db: Any, *, dataset_id: str, trading_date: st
         return {"status": "dry", "narrative": narrative}
 
     if not token:
-        db["hotlist_jev_sentiment_v2"].replace_one(
+        db["hotlist_jev_sentiment"].replace_one(
             {"_id": doc_id},
             {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
              "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
              "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
              "status": "degraded", "errorCode": "missing_token",
              "errorDetail": "JEV_CF_TOKEN not configured",
-             "questionsRaw": JEV_SLOT_QUESTIONS_V2, "evidenceRaw": current_evidence,
+             "questionsRaw": JEV_SLOT_QUESTIONS, "evidenceRaw": current_evidence,
              "narrativeRaw": narrative, "responseRaw": None, "answers": None, "scores": None,
              "usage": None, "model": None, "latencyMs": None, "historyAnchorRange": None},
             upsert=True)
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
 
-    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS_V2)
+    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS)
     parsed = parse_jev_response(envelope, latency_ms)
     doc = {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
-           "questionsRaw": JEV_SLOT_QUESTIONS_V2, "responseRaw": envelope,
+           "questionsRaw": JEV_SLOT_QUESTIONS, "responseRaw": envelope,
            "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
            "historyAnchorRange": extract_history_anchor_range(anchor)}
-    db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    db["hotlist_jev_sentiment"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"written": True, "status": doc["status"]}

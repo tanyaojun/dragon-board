@@ -212,7 +212,7 @@ class HotListSentimentBackfillService:
             intraday_state["diagnostics"].append(config_diagnostic)
         # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）；
         # 读失败降级为空 + 结构化诊断（部分来源失败不阻断写库，fail-visible）
-        from backend.services.jev.jev_sentiment_v2_compute import (
+        from backend.services.jev.jev_sentiment_compute import (
             _load_analysis_by_code,
             _yesterday_total_amounts_by_slot,
         )
@@ -551,7 +551,7 @@ class HotListSentimentBackfillService:
         """
         previous = self.previous_day_stocks(dataset_id, snapshot_type, trading_date)
         # 评分 evidence parts：昨日同期总额与当日槽无关，循环外取一次（每日 1 次，避免逐槽重复扫描）
-        from backend.services.jev.jev_sentiment_v2_compute import _yesterday_total_amounts_by_slot
+        from backend.services.jev.jev_sentiment_compute import _yesterday_total_amounts_by_slot
 
         try:
             emotion_amounts = _yesterday_total_amounts_by_slot(
@@ -584,7 +584,7 @@ class HotListSentimentBackfillService:
                     intraday_state["diagnostics"].append(config_diagnostic)
                 # 评分 analysis 取数（延迟 import：复用 jev 服务层模式，口径同源）；
                 # 读失败降级为空 + 结构化诊断（部分来源失败不阻断写库，fail-visible）
-                from backend.services.jev.jev_sentiment_v2_compute import _load_analysis_by_code
+                from backend.services.jev.jev_sentiment_compute import _load_analysis_by_code
 
                 try:
                     emotion_analysis = _load_analysis_by_code(

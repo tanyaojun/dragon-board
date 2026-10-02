@@ -3,12 +3,12 @@
 
 与 v1 链完全并行：v1（hotlist_jev_sentiment）封存不动，v2 落 hotlist_jev_sentiment_v2。
 改动三件：①叙事插【近20日参照】段（数据源=v1 槽文档 evidenceRaw 15:00 收盘统计，as-of 仅取 < 当日）；
-②问题集换 JEV_SLOT_QUESTIONS_V2 / JEV_DAY_QUESTIONS_V2（crowding 离散归层+温度锚定+五档绑证据）；
+②问题集换 JEV_SLOT_QUESTIONS / JEV_DAY_QUESTIONS（crowding 离散归层+温度锚定+五档绑证据）；
 ③origin=sentiment_v2_pilot。
 
 用法（Git Bash）：
   export JEV_CF_TOKEN=<token>
-  ./.venv/Scripts/python.exe -u -m backend.operations.jev_sentiment_pilot_v2 \
+  ./.venv/Scripts/python.exe -u -m backend.operations.jev_sentiment_pilot \
       --start 2026-09-07 --end 2026-09-30 --dry-run
 """
 from __future__ import annotations
@@ -17,8 +17,8 @@ import argparse
 import time
 
 from backend.analysis.hotlist.jev_state import (
-    JEV_DAY_QUESTIONS_V2,
-    JEV_SLOT_QUESTIONS_V2,
+    JEV_DAY_QUESTIONS,
+    JEV_SLOT_QUESTIONS,
     build_day_jev_state,
     build_history_anchor,
     build_slot_jev_state,
@@ -26,7 +26,7 @@ from backend.analysis.hotlist.jev_state import (
     extract_history_anchor_range,
 )
 from backend.services.jev.jev_client import call_jev, parse_jev_response
-from backend.services.jev.jev_sentiment_v2_compute import (
+from backend.services.jev.jev_sentiment_compute import (
     _collect_evidence,
     _half_hour_slots,
     _latest_yesterday_rows,
@@ -55,7 +55,7 @@ def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
     degraded 文档（如缺 token 时段）的 evidenceRaw 市场证据同样有效；锚只需要证据数字。
     2026-10-02 V1 退役裁决：锚源自 v1 切到 v2 表（与生产 build_history_stats_calendar 同源）。
     """
-    docs = db["hotlist_jev_sentiment_v2"].find(
+    docs = db["hotlist_jev_sentiment"].find(
         {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot",
          "slotTime": "15:00", "tradingDate": {"$lt": trading_date},
          # v2.3：$gt 0 隐式排除 null 与伪 0（6-7 月 limitSummary 损坏记 0，A股无 0 涨停日）
@@ -78,7 +78,7 @@ def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
     return list(reversed(stats))
 
 
-def compute_slot_v2(db, dataset_id: str, trading_date: str, slot_time: str,
+def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
                     history_anchor: str, token: str, account: str, dry_run: bool) -> dict:
     """v2 槽位评判：叙事+问题集换 v2，落 hotlist_jev_sentiment_v2。"""
     snapshot_type = "half_hour"
@@ -87,7 +87,7 @@ def compute_slot_v2(db, dataset_id: str, trading_date: str, slot_time: str,
     doc_id = f"{dataset_id}:{snapshot_type}:{trading_date}:{slot_time}"
     if frame is None or not rows:
         if not dry_run:
-            db["hotlist_jev_sentiment_v2"].replace_one(
+            db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id},
                 {"_id": doc_id, "kind": "slot", "origin": "sentiment_v2_pilot", "datasetId": dataset_id,
                  "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
@@ -118,24 +118,24 @@ def compute_slot_v2(db, dataset_id: str, trading_date: str, slot_time: str,
         history_anchor=history_anchor)
     if dry_run:
         return {"status": "dry", "narrative": narrative}
-    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS_V2)
+    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS)
     parsed = parse_jev_response(envelope, latency_ms)
     doc = {"_id": doc_id, "kind": "slot", "origin": "sentiment_v2_pilot", "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
-           "questionsRaw": JEV_SLOT_QUESTIONS_V2, "responseRaw": envelope,
+           "questionsRaw": JEV_SLOT_QUESTIONS, "responseRaw": envelope,
            "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
            "historyAnchorRange": extract_history_anchor_range(history_anchor)}
-    db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    db["hotlist_jev_sentiment"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"status": doc["status"]}
 
 
-def compute_day_v2(db, dataset_id: str, trading_date: str, history_anchor: str,
+def compute_day(db, dataset_id: str, trading_date: str, history_anchor: str,
                    token: str, account: str, dry_run: bool) -> dict:
     """v2 日级评判：同构换装。"""
     snapshot_type = "half_hour"
@@ -159,21 +159,21 @@ def compute_day_v2(db, dataset_id: str, trading_date: str, history_anchor: str,
                                     history_anchor=history_anchor)
     if dry_run:
         return {"status": "dry", "narrative": narrative}
-    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS_V2)
+    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS)
     parsed = parse_jev_response(envelope, latency_ms)
     doc = {"_id": doc_id, "kind": "eod", "origin": "sentiment_v2_pilot", "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": "EOD",
            "asOf": f"{trading_date} EOD+08:00", "computedAt": int(time.time()),
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": None, "narrativeRaw": narrative,
-           "questionsRaw": JEV_DAY_QUESTIONS_V2, "responseRaw": envelope,
+           "questionsRaw": JEV_DAY_QUESTIONS, "responseRaw": envelope,
            "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
            "anchoredSlotTime": slots[-1],
            "historyAnchorRange": extract_history_anchor_range(history_anchor)}
-    db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    db["hotlist_jev_sentiment"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"status": doc["status"]}
 
 
@@ -191,19 +191,19 @@ def run(start: str, end: str, dry_run: bool, token: str, account: str, dataset_i
         if anchor_mode == "calendar":
             # 生产口径（交易日历近 20 日、缺数日照实占位）——2026-10-02 重跑 9 月采用，
             # 与 10 月起的生产 v2 表同坐标系；pilot 默认 recent 保持历史 pilot 行为不变
-            from backend.services.jev.jev_sentiment_v2_compute import build_history_stats_calendar
+            from backend.services.jev.jev_sentiment_compute import build_history_stats_calendar
             anchor = build_history_anchor(build_history_stats_calendar(db, dataset_id, date))
         else:
             anchor = build_history_anchor(build_history_stats(db, dataset_id, date))
         if dry_run:
             print(f"===== {date} history anchor =====\n{anchor}")
-            sample = compute_slot_v2(db, dataset_id, date, "09:30", anchor, token, account, dry_run=True)
+            sample = compute_slot(db, dataset_id, date, "09:30", anchor, token, account, dry_run=True)
             print(f"----- {date} 09:30 叙事样例（前600）-----\n{(sample.get('narrative') or '')[:600]}")
             continue
         for slot in sorted(_slots_of_date(db, dataset_id, "half_hour", date)):
-            r = compute_slot_v2(db, dataset_id, date, slot, anchor, token, account, dry_run)
+            r = compute_slot(db, dataset_id, date, slot, anchor, token, account, dry_run)
             counts[r.get("status", "unknown")] = counts.get(r.get("status", "unknown"), 0) + 1
-        r = compute_day_v2(db, dataset_id, date, anchor, token, account, dry_run)
+        r = compute_day(db, dataset_id, date, anchor, token, account, dry_run)
         counts[r.get("status", "unknown")] = counts.get(r.get("status", "unknown"), 0) + 1
         print(f"[{di}/{len(dates)}] {date} done (cum {counts})")
     print("FINAL:", counts)

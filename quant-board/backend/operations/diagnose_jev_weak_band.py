@@ -97,7 +97,7 @@ def main() -> int:
     db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
 
     slot_sc: dict[tuple[str, str], dict] = {}
-    for doc in db["hotlist_jev_sentiment_v2"].find({"kind": "slot", "status": "ok"},
+    for doc in db["hotlist_jev_sentiment"].find({"kind": "slot", "status": "ok"},
                                                 {"tradingDate": 1, "slotTime": 1, "scores": 1, "answers.sequence_stage": 1}):
         sc = doc.get("scores") or {}
         stage = ((doc.get("answers") or {}).get("sequence_stage") or {}).get("choice")
@@ -107,7 +107,7 @@ def main() -> int:
             "stage": stage if isinstance(stage, str) else None,
         }
     day_sc: dict[str, dict] = {}
-    for doc in db["hotlist_jev_sentiment_v2"].find({"kind": "eod", "status": "ok"}, {"tradingDate": 1, "scores": 1}):
+    for doc in db["hotlist_jev_sentiment"].find({"kind": "eod", "status": "ok"}, {"tradingDate": 1, "scores": 1}):
         sc = doc.get("scores") or {}
         day_sc[str(doc.get("tradingDate"))] = {
             "day_temperature": float(sc["day_temperature"]) if isinstance(sc.get("day_temperature"), (int, float)) else None,
