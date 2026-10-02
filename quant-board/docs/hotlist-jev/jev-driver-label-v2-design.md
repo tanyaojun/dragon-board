@@ -137,3 +137,8 @@ pilot3 判 REJECT 但切桶核心假设强力验证（scaling +2.50%/21.1% vs ea
 | 门B | 沿用（预期 n 小不显著） | 硬门（预期 INSUFFICIENT 路径） |
 
 判定映射：门A''/守恒/freshness/T3 任一不过=REJECT；全过+门B 过=PASS_CANDIDATE；全过+门B 不过=INSUFFICIENT。
+
+**修订记录（2026-10-02 用户裁决采纳，pilot4 战报附记的修订案）**：
+1. 守恒口径改为「core+scaling+early 家族合计 vs pilot2 基准 227±8」（原口径钉死 pilot3 被护栏修复目标反向污染的 143，与修复方向自相矛盾；pilot4 实测 228=过）。
+2. driver 稳定性门槛 >90% 放至 ≥85%，另加改判样本人工抽检义务（预登记时忽略 driver 文案已在 pilot3 动过口径；pilot4 实测 87.6%）。
+修订后 pilot4 全门通过=PASS_CANDIDATE，题目 v3.1 定稿，进入 T2 全量回填。T2 全量战报口径：守恒/稳定性为 pilot 专属检验（全量模式跳过标注），主判据=门A''（全量 n）+freshness+门B（全量次日匹配 n≈400 预期可判）+T3 抽验制+分桶三层梯度方向。

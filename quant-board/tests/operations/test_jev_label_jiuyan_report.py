@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""jev 打标 v2 pilot4 判定门测试：六桶方差/守恒(±8)/T3 抽验制/freshness/稳定性分层/判定映射 §10。"""
+"""jev 打标 v2 pilot4+T2 判定门测试：六桶方差/守恒(家族口径 227±8 修订)/T3 抽验制/freshness/稳定性 85%/全量模式。"""
 from __future__ import annotations
 
 import sys
@@ -39,10 +39,10 @@ def test_depth_distribution_small_bucket_fails():
     assert depth_distribution_metrics(depths)["expanded"] is False
 
 
-def test_conservation_check_pilot3_baseline():
-    # 基准=pilot3 两新桶 143（scaling 64 + early 79），±8
-    assert conservation_check([SCAL] * 64 + [EARLY] * 79)["conserved"] is True
-    assert conservation_check([SCAL] * 30 + [EARLY] * 79)["conserved"] is False  # 109，护栏把样本推出新桶
+def test_conservation_check_family_baseline():
+    # 修订口径（用户裁决 2026-10-02）：core+新家族合计 vs pilot2 基准 227±8
+    assert conservation_check([CORE] * 112 + [SCAL] * 55 + [EARLY] * 61)["conserved"] is True  # 228
+    assert conservation_check([CORE] * 150 + [SCAL] * 20 + [EARLY] * 30)["conserved"] is False  # 200
 
 
 def test_t3_scan_is_candidate_pool_only():
@@ -73,9 +73,14 @@ def test_verdict_mapping_pre_registered_pilot4():
     group_bad = {"groupOk": False, "insufficient": False}
     stab_hi = {"driver_type": {"sameShare": 0.93}, "depth_overall": {"sameShare": 0.80}}
     stab_depth_lo = {"driver_type": {"sameShare": 0.93}, "depth_overall": {"sameShare": 0.60}}
-    stab_driver_lo = {"driver_type": {"sameShare": 0.85}, "depth_overall": {"sameShare": 0.85}}
+    stab_driver_lo = {"driver_type": {"sameShare": 0.80}, "depth_overall": {"sameShare": 0.85}}
     # 门A''/守恒/freshness 任一不过 = REJECT
     assert verdict(depth_fail, cons_ok, True, stab_hi, group_ok, True) == "REJECT"
+    # 全量模式：守恒/稳定性带 note 跳过，门B 决定 PASS/INSUFFICIENT
+    cons_note = {"note": "全量模式"}
+    stab_note = {"note": "全量模式"}
+    assert verdict(depth_ok, cons_note, True, stab_note, group_ok, True) == "PASS_CANDIDATE"
+    assert verdict(depth_ok, cons_note, True, stab_note, group_bad, True) == "INSUFFICIENT"
     assert verdict(depth_ok, cons_bad, True, stab_hi, group_ok, True) == "REJECT"
     assert verdict(depth_ok, cons_ok, True, stab_hi, group_ok, False) == "REJECT"  # freshness 未修好
     # T3 抽验：None=待抽验；False=违规 REJECT
@@ -84,7 +89,9 @@ def test_verdict_mapping_pre_registered_pilot4():
     # 全过 + 门B
     assert verdict(depth_ok, cons_ok, True, stab_hi, group_ok, True) == "PASS_CANDIDATE"
     assert verdict(depth_ok, cons_ok, True, stab_hi, group_bad, True) == "INSUFFICIENT"
-    # 稳定性分层：driver>90% 与 depth≥75% 分开判
+    # 稳定性分层：driver≥85%（修订）与 depth≥75% 分开判
+    stab_driver_86 = {"driver_type": {"sameShare": 0.86}, "depth_overall": {"sameShare": 0.85}}
+    assert verdict(depth_ok, cons_ok, True, stab_driver_86, group_ok, True) == "PASS_CANDIDATE"
     assert verdict(depth_ok, cons_ok, True, stab_depth_lo, group_ok, True) == "INSUFFICIENT"
     assert verdict(depth_ok, cons_ok, True, stab_driver_lo, group_ok, True) == "INSUFFICIENT"
 

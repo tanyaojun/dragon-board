@@ -24,7 +24,10 @@ DEPTH_ALL = DEPTH_SUBSTANTIVE + ["insufficient_evidence"]
 NEW_BUCKETS = {"new_business_scaling", "new_business_early"}
 OLD_NEW_BUCKET = "new_growing_business"
 T3_MARKERS = ("网传", "未证实", "传闻", "市场消息", "未经证实")
-PILOT3_NEW_SUM = 143  # pilot3 战报冻结值（2dc44c60）：scaling 64 + early 79
+# 守恒基准（2026-10-02 用户裁决修订）：core+新业务家族合计 vs pilot2 骨架
+# pilot2 core 110 + new 117 = 227；pilot4 实测 112+55+61=228（原"两新桶 143"口径被护栏修复方向反向污染）
+PILOT2_FAMILY_TOTAL = 227
+FAMILY_BUCKETS = {"core_main_business", "new_business_scaling", "new_business_early"}
 
 
 def depth_distribution_metrics(depths: list[str]) -> dict:
@@ -45,11 +48,11 @@ def depth_distribution_metrics(depths: list[str]) -> dict:
             "insufficient": False}
 
 
-def conservation_check(depths: list[str], pilot3_new_sum: int = PILOT3_NEW_SUM) -> dict:
-    """守恒检验：两新桶之和 vs pilot3 两新桶之和（±8，§10：桶结构未动仅判据护栏）。"""
-    new_sum = sum(1 for d in depths if d in NEW_BUCKETS)
-    return {"newSum": new_sum, "pilot3NewSum": pilot3_new_sum,
-            "conserved": bool(abs(new_sum - pilot3_new_sum) <= 8)}
+def conservation_check(depths: list[str]) -> dict:
+    """守恒检验（修订口径）：core+新业务家族合计 vs pilot2 基准 227±8。仅 pilot 对照模式有意义。"""
+    fam_sum = sum(1 for d in depths if d in FAMILY_BUCKETS)
+    return {"familySum": fam_sum, "pilot2FamilyTotal": PILOT2_FAMILY_TOTAL,
+            "conserved": bool(abs(fam_sum - PILOT2_FAMILY_TOTAL) <= 8)}
 
 
 def t3_scaling_scan(labels: list[dict]) -> dict:
@@ -167,7 +170,7 @@ def verdict(depth: dict, cons: dict, t3_manual: bool | None, stab: dict, group: 
     =False 违规=REJECT；稳定性（driver>90%/depth≥75%）不过=INSUFFICIENT；全过+门B=PASS_CANDIDATE。"""
     if depth.get("insufficient") or not depth.get("expanded"):
         return "REJECT"
-    if not cons.get("conserved"):
+    if "note" not in cons and not cons.get("conserved"):
         return "REJECT"
     if not freshness_ok:
         return "REJECT"
@@ -175,7 +178,9 @@ def verdict(depth: dict, cons: dict, t3_manual: bool | None, stab: dict, group: 
         return "PENDING_T3_REVIEW"
     if t3_manual is False:
         return "REJECT"
-    driver_ok = stab.get("driver_type", {}).get("sameShare") is None or stab["driver_type"]["sameShare"] > 0.90
+    if "note" in stab:
+        return "PASS_CANDIDATE" if group.get("groupOk") else "INSUFFICIENT"
+    driver_ok = stab.get("driver_type", {}).get("sameShare") is None or stab["driver_type"]["sameShare"] >= 0.85
     depth_ok = stab.get("depth_overall", {}).get("sameShare") is None or stab["depth_overall"]["sameShare"] >= 0.75
     if not (driver_ok and depth_ok):
         return "INSUFFICIENT"
@@ -202,7 +207,8 @@ def main():
 
     depths = [d["catalystDepth"] for d in labels if d.get("catalystDepth")]
     depth = depth_distribution_metrics(depths)
-    cons = conservation_check(depths)
+    pilot_mode = len(labels) < 400  # 全量模式（T2）跳过 pilot 专属检验
+    cons = conservation_check(depths) if pilot_mode else {"note": "全量模式，守恒为 pilot 专属检验"}
     t3 = t3_scaling_scan(labels)
     group = driver_group_metrics(rows)
     direction = (direction_consistent_with_phase3(group["lianbanRates"])
@@ -210,18 +216,25 @@ def main():
                  else {"rho": None, "consistent": False})
     conf = confidence_split(labels)
 
-    pilot3 = list(db["hotlist_jev_driver_labels_v2_pilot3"].find(
-        {"status": "ok"}, {"tradingDate": 1, "code": 1, "label": 1, "freshness": 1, "catalystDepth": 1}))
-    # 稳定性：driver 题未动+叙事仅加日期（>90%）；depth 判据加了护栏（各桶整体一致率≥75%）
-    stab = {
-        "driver_type": stability_vs_pilot2(labels, pilot3, "label"),
-        "depth_overall": stability_vs_pilot2(labels, pilot3, "catalystDepth"),
-        "freshness_for_reference": stability_vs_pilot2(labels, pilot3, "freshness"),
-    }
+    if pilot_mode:
+        pilot3 = list(db["hotlist_jev_driver_labels_v2_pilot3"].find(
+            {"status": "ok"}, {"tradingDate": 1, "code": 1, "label": 1, "freshness": 1, "catalystDepth": 1}))
+        # 稳定性：driver ≥85%（修订）；depth 各桶整体一致率≥75%
+        stab = {
+            "driver_type": stability_vs_pilot2(labels, pilot3, "label"),
+            "depth_overall": stability_vs_pilot2(labels, pilot3, "catalystDepth"),
+            "freshness_for_reference": stability_vs_pilot2(labels, pilot3, "freshness"),
+        }
+    else:
+        stab = {"note": "全量模式，稳定性为 pilot 专属检验"}
     unclear_share = (sum(1 for d in labels if d.get("freshness") == "unclear") / len(labels))
     freshness_ok = unclear_share < 0.08
     buckets = bucket_next_day(rows)
-    t3_manual = None  # 人工抽验后回填（§10 抽验制）：True/False
+    # T3 抽验制回填：--t3-manual pass|fail|pending（抽验 ≥5 只违规 ≤1 = pass；默认 pending 待人工）
+    import sys as _sys
+    _arg = "--t3-manual="
+    t3_manual = {"pass": True, "fail": False}.get(
+        next((a[len(_arg):] for a in _sys.argv[1:] if a.startswith(_arg)), "pending"))
 
     v = verdict(depth, cons, t3_manual, stab, group, freshness_ok)
 
@@ -230,7 +243,7 @@ def main():
              "## 门A' 六桶方差", "",
              f"- {depth}",
              f"- 展开={depth.get('expanded')}（五实质桶 n≥5 且 最大桶<70% 且 逃生口≤15%）", "",
-             "## 守恒检验（两新桶 vs pilot3 两新桶 143±8）", "",
+             "## 守恒检验（core+新家族 vs pilot2 基准 227±8，修订口径）", "",
              f"- {cons}", "",
              "## T3 抽验制（§10：扫描仅出候选清单，人工抽验定夺）", "",
              f"- 扫描候选池 scanHits={t3['scanHits']}（抽验制，不作硬门）",
@@ -248,11 +261,11 @@ def main():
              f"- {conf}", "",
              "## 判定依据", "",
              f"- {'✓' if depth.get('expanded') else '✗'} 门A' 六桶方差",
-             f"- {'✓' if cons.get('conserved') else '✗'} 守恒检验",
-             f"- T3 抽验制：待人工抽验（扫描候选池 {t3['scanHits']} 只）",
+             f"- {'✓' if cons.get('conserved') or 'note' in cons else '✗'} 守恒检验（{cons.get('note', '')}）",
+             f"- T3 抽验制：{'✓ 已抽验通过' if t3_manual is True else '✗ 已抽验违规' if t3_manual is False else '待人工抽验'}（扫描候选池 {t3['scanHits']} 只）",
              f"- {'✓' if freshness_ok else '✗'} freshness unclear<8%（实际 {round(unclear_share, 3)}）",
-             f"- {'✓' if stab['driver_type'].get('sameShare') is None or stab['driver_type']['sameShare'] > 0.90 else '✗'} driver 稳定性>90%",
-             f"- {'✓' if stab['depth_overall'].get('sameShare') is None or stab['depth_overall']['sameShare'] >= 0.75 else '✗'} depth 一致率≥75%",
+             f"- {'✓' if 'note' in stab or stab['driver_type'].get('sameShare') is None or stab['driver_type']['sameShare'] >= 0.85 else '✗'} driver 稳定性≥85%（修订）",
+             f"- {'✓' if 'note' in stab or stab['depth_overall'].get('sameShare') is None or stab['depth_overall']['sameShare'] >= 0.75 else '✗'} depth 一致率≥75%",
              f"- {'✓' if group.get('groupOk') else '✗'} 门B 分组（预期 n 小不显著）", "",
              f"## 判定：{v}"]
 
