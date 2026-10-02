@@ -75,6 +75,59 @@ JEV_DAY_QUESTIONS = {
     "day_crowding": _score_question("今日全天高位拥挤度（0=无人问津，100=极度拥挤危险）"),
 }
 
+# ── 问题集 v2（2026-10-02 梳理提案 P2-P4，docs/hotlist-jev/jev-sentiment-questionset-review.md）──
+# 打标链四轮试点的方法论回灌：判据绑可数证据（近20日参照坐标系）、拥挤改离散归层（score 无方差已证）、
+# 温度保连续分但题干锚定参照系。v1 问题集与集合原样封存。
+
+_STAGE_CRITERIA_V2 = {
+    "ice": "冰点：涨停数处于近20日参照低位（低于p20）、跌停或大跌股增多、赚钱效应殆尽、普遍观望",
+    "start": "启动：从弱势基线修复——涨停数回升越过参照低位、试探性连板重现、新进热榜资金转活跃",
+    "ferment": "发酵：赚钱效应扩散——涨停数升向参照中位以上、连板梯队成形、涨跌分布向涨侧倾斜",
+    "climax": "高潮：全面亢奋——涨停数/连板高度接近或超过参照p80、涨停潮普涨、拥挤形态显现",
+    "retreat": "退潮：从强势转弱——高位焦点股走弱或断板、炸板率抬升、涨停数自高位回落",
+}
+_DAY_STAGE_CRITERIA_V2 = {k: v.replace("当前", "今日全天") for k, v in _STAGE_CRITERIA_V2.items()}
+
+_CROWDING_CRITERIA_V2 = {
+    "top_acceleration": "高位集体加速：最高连板梯队今日仍在上攻/高度刷新，焦点高位股继续涨停，无明显断板",
+    "late_seal_weakness": "封板质量弱化：涨停时间较近日后移、炸板率环比抬升或尾盘板占比升高，涨停数虽多但封板不干脆",
+    "breadth_climax": "广度高潮：涨停数/连板家数处于近20日参照高位（≥p80），封板质量尚可，尚未出现明显弱化",
+    "no_crowding": "无拥挤迹象：涨停稀少或题材分散、封板干脆，高位股无明显集体行为",
+    "insufficient_evidence": "证据不足：叙事证据无法支撑上述任何一层的判定，不强行归类",
+}
+
+_TEMP_INSTR_V2 = ("当前短线情绪温度（0=彻底冰点，100=极度亢奋）。"
+                  "以【近20日参照】段的分位刻度为坐标系：当前证据相对近20日的位置决定落点，不凭绝对语感")
+_CROWD_INSTR_V2 = ("结合【当前帧】与【当日已走帧】证据及【近20日参照】，当前高位拥挤处于哪种形态？"
+                   "只判当下形态，不预测后市；各档判据须锚定叙事中的涨停数、连板梯队、炸板率、封板与涨停时间证据")
+
+
+def _stage_question_v2(instructions: str) -> dict:
+    return {"type": "choice", "instructions": instructions, "criteria": dict(_STAGE_CRITERIA_V2)}
+
+
+JEV_SLOT_QUESTIONS_V2 = {
+    "frame_stage": _stage_question_v2("仅凭【当前帧】证据，以【近20日参照】为坐标系，判断当前A股短线热榜情绪处于哪一档？"),
+    "sequence_stage": _stage_question_v2("结合【当日已走帧】证据序列（含当前帧），以【近20日参照】为坐标系，判断当前情绪处于哪一档？"),
+    "temperature": _score_question(_TEMP_INSTR_V2),
+    "crowding": {"type": "choice", "instructions": _CROWD_INSTR_V2, "criteria": dict(_CROWDING_CRITERIA_V2)},
+}
+
+JEV_DAY_QUESTIONS_V2 = {
+    "day_stage": {
+        "type": "choice", "instructions": "综合今日全天连续帧证据，以【近20日参照】为坐标系，今日短线热榜情绪总体处于哪一档？",
+        "criteria": dict(_DAY_STAGE_CRITERIA_V2),
+    },
+    "day_pattern": {
+        "type": "choice", "instructions": "今日全天情绪路径属于哪种形态？",
+        "criteria": dict(_DAY_PATTERN_CRITERIA),
+    },
+    "day_temperature": _score_question("今日全天" + _TEMP_INSTR_V2),
+    "day_crowding": {"type": "choice",
+                     "instructions": "综合今日全天连续帧证据及【近20日参照】，今日收盘时高位拥挤处于哪种形态？只判当下形态，不预测后市",
+                     "criteria": dict(_CROWDING_CRITERIA_V2)},
+}
+
 
 def _finite(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
@@ -458,8 +511,40 @@ def _format_current_evidence_section(ev: dict) -> str:
     return "\n".join(lines)
 
 
+def build_history_anchor(stats: list, window: int = 20) -> str:
+    """近 N 交易日收盘统计 → 【近20日参照】段（问题集 v2 的坐标系，P1）。
+
+    stats = [{date, ztCount, maxBoard, amountYi, zhabanRate}, ...] 升序、仅含严格早于当日的日期
+    （as-of 无前视，由调用方保证）。分位=idx 法（与 diagnose_jev_temp_crowding 同式）。
+    指标样本 <8 时该指标如实标注"历史样本不足"，不伪造刻度（fail-visible）。
+    """
+    def _q(vals, p):
+        s = sorted(vals)
+        return s[min(len(s) - 1, max(0, int(p * (len(s) - 1))))]
+
+    def _metric(name, key, fmt):
+        vals = [s[key] for s in stats if isinstance(s.get(key), (int, float))]
+        if len(vals) < 8:
+            return f"{name} 历史样本不足（{len(vals)} 日）"
+        q20, q50, q80 = _q(vals, 0.2), _q(vals, 0.5), _q(vals, 0.8)
+        last = vals[-1]
+        return f"{name}：p20={fmt(q20)} / p50={fmt(q50)} / p80={fmt(q80)}（昨日 {fmt(last)}）"
+
+    if not stats:
+        return "【近20日参照】历史参照缺失（无可用历史槽文档）——判读时如实按绝对证据处理，不得虚构对比。"
+    lines = [
+        f"【近20日参照】（{stats[0]['date']} → {stats[-1]['date']}，{len(stats)} 个交易日收盘统计，判读坐标系）",
+        _metric("涨停数", "ztCount", lambda v: f"{int(v)} 家"),
+        _metric("最高连板", "maxBoard", lambda v: f"{int(v)} 板"),
+        _metric("两市成交额", "amountYi", lambda v: f"{v:.0f} 亿"),
+        _metric("炸板率", "zhabanRate", lambda v: f"{v:.0f}%"),
+    ]
+    return "\n".join(lines)
+
+
 def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
-                         priors: list, missing_slots: list | None = None) -> str:
+                         priors: list, missing_slots: list | None = None,
+                         history_anchor: str = "") -> str:
     """槽位叙事 state（Q1 当前帧 + Q2 当日序列共用一次调用的输入）。
 
     priors = 当日早于本槽各帧的 evidence（升序）；missing_slots = 预期槽位中无帧的槽。
@@ -471,15 +556,17 @@ def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
     prior_lines = [format_evidence_line(ev) for ev in priors if isinstance(ev, dict)]
     lines = [
         f"{trading_date} {slot_time} 时点快照（A股短线热榜情绪观察，原始市场证据）。",
+        history_anchor,
         _format_current_evidence_section(current),
         "【当日已走帧证据】\n" + ("\n".join(prior_lines) if prior_lines else "（本日暂无更早已落库帧）"),
         "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
     ]
-    return "\n".join(lines)[:4000]
+    return "\n".join(line for line in lines if line)[:4000]
 
 
 def build_day_jev_state(*, trading_date: str, evidences: list,
-                        yesterday_close_total_amount: float | None = None) -> str:
+                        yesterday_close_total_amount: float | None = None,
+                        history_anchor: str = "") -> str:
     """日级叙事 state（盘后固定当日总体）。evidences = 全日各帧 evidence 升序。"""
     if not evidences:
         return f"{trading_date} 交易日全天热榜情绪证据轨迹：无帧证据。"
@@ -502,12 +589,13 @@ def build_day_jev_state(*, trading_date: str, evidences: list,
         amount_bit += f"（较昨日全天{'放量' if pct >= 0 else '缩量'} {abs(pct):.0f}%）"
     lines = [
         f"{trading_date} 交易日全天热榜情绪证据轨迹（A股短线情绪观察，原始市场证据）。",
+        history_anchor,
         "【逐帧证据】\n" + "\n".join(format_evidence_line(ev) for ev in evidences if isinstance(ev, dict)),
         f"【当日累计】{new_bit}、{dropped_bit}（对比昨日）；主力净额合计 {_fmt_yi(fund.get('zljeSum'))}；"
         f"最高连板峰值 {int(max_board)} 板{amount_bit}",
         "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
     ]
-    return "\n".join(lines)[:6000]
+    return "\n".join(line for line in lines if line)[:6000]
 
 
 def _tag_names(tags) -> list:

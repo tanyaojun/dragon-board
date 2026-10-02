@@ -49,3 +49,17 @@
 
 - T2 打标全量（在途）与本案互不阻塞；情绪链 pilot 可在打标全量战报后择机开火。
 - 若 crowding 重铸过门，SP5 拥挤轴 FAIL 的结论可在新轴上重开扩窗复验。
+
+## 六、pilot 判据预登记（2026-10-02 用户裁决"开始情绪判定集梳理"后冻结，先冻结再开火）
+
+pilot 样本：打标链同款三天（2026-09-07 / 09-18 / 09-30），33 文档（30 槽+3 EOD）≈5 万 tokens；落 `hotlist_jev_sentiment_v2`（v1 封存不动）；20 日锚数据源=v1 槽文档 evidenceRaw（15:00 槽 ztCount/maxBoard/成交额/炸板率，as-of 仅取 < 当日）。
+
+| 门 | 判据 | 性质 |
+|---|---|---|
+| 门1 crowding 归层方差（主） | 四实质层（top_acceleration/late_seal_weakness/breadth_climax/no_crowding）合计占比≥85% 且 最大层占比≤70% 且 insufficient_evidence≤10% | 硬门 |
+| 门2 temperature 方差不降 | v2 槽温 std ≥ v1 同日槽温 std×0.9（锚定提升参照系而非压缩方差） | 硬门 |
+| 门3 五档漂移登记 | 新旧 frame_stage 同股同槽一致率（观察项，预期 50-85%：修订目的=修参照系分叉，低一致率配合人工抽验判"修正"还是"漂移"） | 观察 |
+| 门4 EOD 同构 | day_crowding 归层非退化（≥2 层有样本）、day 五档与 day_temperature 落点自洽 | 硬门（宽松） |
+| 抽验 | 人工亲读 ≥5 个槽文档叙事+判例（证据-判读对齐） | 硬门 |
+
+判定映射：门1+门2+门4 过=PASS_CANDIDATE（进全量重算 1182 文档决策，另裁决）；门1 不过=REJECT（回炉）；其余=INSUFFICIENT。全量重算与 10 月增量接线均不在本 pilot 批内。
