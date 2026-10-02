@@ -22,18 +22,22 @@ def collect_and_store(date: str, kind: str = "final", db: Any = None) -> dict:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         db = get_runtime_mongodb_database()
 
-    cached = jiuyan_store.get_cached_token(db)
+    cached = jiuyan_store.get_cached_token()
     if not cached or not cached.get("token"):
         return {"ok": False, "date": date, "kind": kind, "error": "无缓存 token（需铸造）", "authFailed": True}
 
     probe = fetch_count(date, session_cookie=session, token=cached["token"], timestamp=cached["timestamp"])
     if not probe.get("ok"):
+        if probe.get("authFailed"):
+            jiuyan_store.clear_cached_token()  # token 失效显式清缓存，不滞留陈旧密钥
         return {"ok": False, "date": date, "kind": kind, "error": probe.get("error"),
                 "authFailed": probe.get("authFailed", False)}
     counts = {"all": probe.get("all"), "recommend": probe.get("recommend")}
 
     field = fetch_field(date, session_cookie=session, token=cached["token"], timestamp=cached["timestamp"])
     if not field.get("ok"):
+        if "110" in str(field.get("error")):
+            jiuyan_store.clear_cached_token()
         return {"ok": False, "date": date, "kind": kind, "error": field.get("error"),
                 "authFailed": "110" in str(field.get("error"))}
 

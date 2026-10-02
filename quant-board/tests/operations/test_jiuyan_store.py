@@ -9,13 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pytest
 
+from backend.operations import jiuyan_store
 from backend.operations.jiuyan_store import (
     action_doc_id,
     get_action_doc,
-    get_cached_token,
     list_action_dates,
     save_action_doc,
-    save_token,
 )
 
 
@@ -71,11 +70,40 @@ def test_list_action_dates_sorted():
     assert dates[1]["kinds"] == ["final", "midday"]
 
 
-def test_token_meta_roundtrip():
-    db = FakeDB()
-    assert get_cached_token(db) is None
-    save_token(db, token="T" * 80, timestamp="2026-10-02T00:51:52Z", source="manual")
-    tok = get_cached_token(db)
+class FakeRedis:
+    def __init__(self):
+        self.data = {}
+
+    def get(self, key):
+        return self.data.get(key)
+
+    def set(self, key, value, ex=None):
+        self.data[key] = value
+
+    def delete(self, key):
+        self.data.pop(key, None)
+
+
+def test_token_cache_roundtrip(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: fake)
+    assert jiuyan_store.get_cached_token() is None
+    assert jiuyan_store.save_token(token="T" * 80, timestamp="2026-10-02T00:51:52Z", source="manual") is True
+    tok = jiuyan_store.get_cached_token()
     assert tok["token"] == "T" * 80 and tok["source"] == "manual" and tok["mintedAt"]
-    save_token(db, token="NEW", timestamp="TS2", source="minted")
-    assert get_cached_token(db)["token"] == "NEW"
+    jiuyan_store.save_token(token="NEW", timestamp="TS2", source="minted")
+    assert jiuyan_store.get_cached_token()["token"] == "NEW"
+
+
+def test_token_cache_unavailable_fail_visible(monkeypatch):
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: None)
+    assert jiuyan_store.get_cached_token() is None
+    assert jiuyan_store.save_token(token="T", timestamp="TS", source="manual") is False
+
+
+def test_token_cache_cleared_on_auth_failed(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: fake)
+    jiuyan_store.save_token(token="OLD", timestamp="TS", source="manual")
+    jiuyan_store.clear_cached_token()
+    assert jiuyan_store.get_cached_token() is None

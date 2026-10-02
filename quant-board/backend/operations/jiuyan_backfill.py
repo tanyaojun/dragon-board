@@ -62,7 +62,8 @@ def main() -> int:
             print("FINAL: 全部已存在")
             return 0
 
-    jiuyan_store.save_token(db, token=args.token, timestamp=args.timestamp, source="manual-backfill")
+    if not jiuyan_store.save_token(token=args.token, timestamp=args.timestamp, source="manual-backfill"):
+        print("[backfill] 警告：Redis 不可用，token 未缓存（本批直接传参可用）")
     ok_n = fail_n = 0
     for i, date in enumerate(dates):
         result = fetch_field(date, session_cookie=session, token=args.token, timestamp=args.timestamp)

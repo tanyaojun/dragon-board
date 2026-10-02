@@ -47,7 +47,7 @@ fail-visible：缺源记 degradedSources，不伪造 0。**不写入 theme_stock
 
 ## 3. token 管理（缓存 + 失效才铸）
 
-- Mongo meta：集合 `jiuyan_meta`，`_id="jiuyan_token"`：{token, timestamp, mintedAt, source}。
+- **【2026-10-02 用户红线修订】token 缓存不再落 MongoDB**（原 `jiuyan_meta` 集合已 drop）：机密/凭据禁止入业务库，静态凭据=SESSION（`.env.local JIUYAN_SESSION=`），**动态铸造 token 缓存=Redis**（键 `<prefix>:jiuyan:minted-token`，24h TTL 兜底，authFailed 时显式删除；Redis 不可用 fail-visible 返回无缓存）。存储层 `jiuyan_store.get_cached_token/save_token/clear_cached_token`。
 - 采集流程：读缓存 token → `count-pc` 便宜探针（errCode 0 → 用；110 → 铸新）；
 - **铸造路径**：T1-T5 期=手动（AI 在 ZCode 浏览器页内生成后写入 meta）；T6 批=playwright 自动（headless + 持久 profile，首次 headful 扫码；digest 与 token 同页可得）；
 - 会话过期症状=新 token 仍"登录失效"→ 浏览器重扫码 → 更新 profile。
