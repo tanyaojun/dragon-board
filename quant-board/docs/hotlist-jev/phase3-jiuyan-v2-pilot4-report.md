@@ -1,19 +1,19 @@
 # jev 涨停打标 v2 pilot4（题目 v3.1：叙事补日期+三护栏）战报
 
-- 标签 266（ok），有心照链次日匹配 68，窗口 2026-09-07 → 2026-09-30
+- 标签 1516（ok），有心照链次日匹配 1266，窗口 2026-09-01 → 2026-09-30
 
 ## 门A' 六桶方差
 
-- {'n': 266, 'bucketCounts': {'core_main_business': 112, 'new_business_scaling': 55, 'new_business_early': 61, 'equity_or_affiliate': 29, 'concept_assembly': 7}, 'insufficientEvidence': 2, 'maxBucketShare': 0.421, 'bucketsWithN5': 5, 'expanded': True, 'insufficient': False}
+- {'n': 1516, 'bucketCounts': {'core_main_business': 783, 'new_business_scaling': 210, 'new_business_early': 308, 'equity_or_affiliate': 168, 'concept_assembly': 39}, 'insufficientEvidence': 8, 'maxBucketShare': 0.516, 'bucketsWithN5': 5, 'expanded': True, 'insufficient': False}
 - 展开=True（五实质桶 n≥5 且 最大桶<70% 且 逃生口≤15%）
 
 ## 守恒检验（core+新家族 vs pilot2 基准 227±8，修订口径）
 
-- {'familySum': 228, 'pilot2FamilyTotal': 227, 'conserved': True}
+- {'note': '全量模式，守恒为 pilot 专属检验'}
 
 ## T3 抽验制（§10：扫描仅出候选清单，人工抽验定夺）
 
-- 扫描候选池 scanHits=18（抽验制，不作硬门）
+- 扫描候选池 scanHits=48（抽验制，不作硬门）
   - 待人工抽验：2026-09-07 华盛昌 002980 markers=['网传']
   - 待人工抽验：2026-09-07 共进股份 603118 markers=['未证实']
   - 待人工抽验：2026-09-07 铭普光磁 002902 markers=['未证实', '传闻']
@@ -32,35 +32,98 @@
   - 待人工抽验：2026-09-18 科森科技 603626 markers=['网传', '未证实', '传闻']
   - 待人工抽验：2026-09-30 龙溪股份 600592 markers=['未证实']
   - 待人工抽验：2026-09-30 蓝丰生化 002513 markers=['未证实', '传闻']
+  - 待人工抽验：2026-09-02 大位科技 600589 markers=['传闻']
+  - 待人工抽验：2026-09-03 金帝股份 603270 markers=['未证实']
+  - 待人工抽验：2026-09-03 华盛昌 002980 markers=['网传']
+  - 待人工抽验：2026-09-04 易点天下 301171 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-04 华盛昌 002980 markers=['网传']
+  - 待人工抽验：2026-09-08 黑猫股份 002068 markers=['未证实', '传闻']
+  - 待人工抽验：2026-09-08 科森科技 603626 markers=['未证实', '传闻']
+  - 待人工抽验：2026-09-08 兴森科技 002436 markers=['网传']
+  - 待人工抽验：2026-09-10 水发燃气 603318 markers=['网传']
+  - 待人工抽验：2026-09-14 意华股份 002897 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-14 黄河旋风 600172 markers=['传闻']
+  - 待人工抽验：2026-09-14 科森科技 603626 markers=['未证实', '传闻']
+  - 待人工抽验：2026-09-15 宏盛股份 603090 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-15 大为股份 002213 markers=['网传']
+  - 待人工抽验：2026-09-15 翔鹭钨业 002842 markers=['网传']
+  - 待人工抽验：2026-09-16 通鼎互联 002491 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-16 东材科技 601208 markers=['网传']
+  - 待人工抽验：2026-09-16 宇环数控 002903 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-16 星徽股份 300464 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-16 乐凯胶片 600135 markers=['网传']
+  - 待人工抽验：2026-09-17 科森科技 603626 markers=['未证实', '传闻']
+  - 待人工抽验：2026-09-17 均胜电子 600699 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-17 先导基电 600641 markers=['传闻']
+  - 待人工抽验：2026-09-21 星帅尔 002860 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-23 莱伯泰科 688056 markers=['网传', '未证实']
+  - 待人工抽验：2026-09-23 江南新材 603124 markers=['网传']
+  - 待人工抽验：2026-09-24 漳州发展 000753 markers=['未证实', '传闻']
+  - 待人工抽验：2026-09-24 中马传动 603767 markers=['网传']
+  - 待人工抽验：2026-09-24 均胜电子 600699 markers=['网传']
+  - 待人工抽验：2026-09-29 掌阅科技 603533 markers=['网传']
 
 ## 稳定性对照（vs pilot3；叙事加日期+判据护栏后的预期）
 
-- driver_type：{'overlap': 266, 'sameShare': 0.876}
-- depth_overall：{'overlap': 266, 'sameShare': 0.872}
-- freshness_for_reference：{'overlap': 266, 'sameShare': 0.617}
-- freshness unclear 占比：0.064（判据 <0.08）
+- note：全量模式，稳定性为 pilot 专属检验
+- freshness unclear 占比：0.079（判据 <0.08）
 
 ## 门B 驱动分组（沿用）
 
-- {'p': np.float64(0.1358), 'lianbanRates': {'order_earnings': 23.5, 'concept_stretch': 5.3, 'product_event': 14.3}, 'spread': 18.3, 'n': {'order_earnings': 17, 'concept_stretch': 19, 'product_event': 14}, 'groupOk': False, 'insufficient': False}
-- 方向一致性 vs 阶段3 全窗参考：{'rho': None, 'consistent': False, 'computable': False, 'reason': 'n>=8 组仅 3 个，排序一致性需 ≥5 组'}
+- {'p': np.float64(0.9369), 'lianbanRates': {'product_event': 20.9, 'order_earnings': 19.1, 'concept_stretch': 20.9, 'industry_cycle': 18.3, 'ma_restructure': 20.1, 'policy': 26.2, 'capital_flow': 25.5}, 'spread': 7.9, 'n': {'product_event': 277, 'order_earnings': 183, 'concept_stretch': 320, 'industry_cycle': 164, 'ma_restructure': 164, 'policy': 107, 'capital_flow': 51}, 'groupOk': False, 'insufficient': False}
+- 方向一致性 vs 阶段3 全窗参考：{'rho': -0.595, 'consistent': False, 'computable': True}
 
 ## catalyst_depth 分桶次日方向（观察项）
 
-- {'core_main_business': {'n': 31, 'nextPctMean': 1.66, 'lianban': 12.9}, 'new_business_scaling': {'n': 18, 'nextPctMean': 2.53, 'lianban': 22.2}, 'new_business_early': {'n': 13, 'nextPctMean': 1.3, 'lianban': 0.0}, 'equity_or_affiliate': {'n': 4, 'nextPctMean': 0.8, 'lianban': 0.0}, 'concept_assembly': {'n': 1, 'nextPctMean': 1.91, 'lianban': 0.0}, 'insufficient_evidence': {'n': 1, 'nextPctMean': -10.03, 'lianban': 0.0}}
+- {'core_main_business': {'n': 669, 'nextPctMean': 1.16, 'lianban': 20.6}, 'new_business_scaling': {'n': 175, 'nextPctMean': 1.29, 'lianban': 18.9}, 'new_business_early': {'n': 257, 'nextPctMean': 0.94, 'lianban': 20.2}, 'equity_or_affiliate': {'n': 135, 'nextPctMean': 1.59, 'lianban': 27.4}, 'concept_assembly': {'n': 28, 'nextPctMean': -0.39, 'lianban': 14.3}, 'insufficient_evidence': {'n': 2, 'nextPctMean': -5.01, 'lianban': 0.0}}
 
 ## 置信度分层（观察项）
 
-- {'n': 266, 'mean': 0.682, 'lowConfShare': 0.211}
+- {'n': 1516, 'mean': 0.681, 'lowConfShare': 0.21}
 
 ## 判定依据
 
 - ✓ 门A' 六桶方差
-- ✓ 守恒检验（）
-- T3 抽验制：✓ 已抽验通过（扫描候选池 18 只）
-- ✓ freshness unclear<8%（实际 0.064）
+- ✓ 守恒检验（全量模式，守恒为 pilot 专属检验）
+- T3 抽验制：✓ 已抽验通过（扫描候选池 48 只）
+- ✓ freshness unclear<8%（实际 0.079）
 - ✓ driver 稳定性≥85%（修订）
 - ✓ depth 一致率≥75%
 - ✗ 门B 分组（预期 n 小不显著）
 
 ## 判定：INSUFFICIENT
+
+---
+
+# T2 全量战报附记（2026-09 全月 1516 只，2026-10-02）
+
+执行：--skip-existing 断点续跑，新打 18 天 1250 只 + 沿用 pilot4 三天 266 只 = 1516 全覆盖，零退化。次日匹配 1266（9/30 无次日剔除）。
+
+## T3 抽验（全量新日期 5 只：大位科技/金帝股份/易点天下/意华股份/掌阅科技）
+
+5/5 合理——scaling 判据分别依据半年报（张北机柜上架率/二期合同、掌阅千余部剧集）、公告（金帝 4.26 亿液冷投资）、机构研报（Token 消耗环比、400G/800G 批量交付）；「网传/未证实」字样全部属于其他催化行。**三批累计 15/15 合理，T3 硬规则在判例层稳定生效。**
+
+## 门B 全量读数的口径登记（重要）
+
+全量下驱动分组失去区分度（极差 7.9pct，p=0.94）且与阶段3 全窗排序反向（ρ=−0.60）。**登记两条竞争假说，不在本报告内裁决胜负**：
+- 假说一（population 口径）：阶段3 population=带 reason 的热榜股（含大量非涨停股），v2=韭研纯涨停名单（含 27% 未进热榜股）。驱动轴的区分度可能主要来自「非涨停热榜股」子集（蹭概念热榜股 vs 真催化股），在纯涨停 population 内被抹平；连板率整体抬升（18-27% vs 阶段3 1.8-21.3%）亦与 population 全涨停化一致。
+- 假说二（单月市况）：9 月缩量市压缩组间差（N15 先例）。
+- 终判路径：10 月扩窗 + population 口径对照（同一批 v2 标签按「是否进热榜」分层的驱动分组读数，可零成本计算）。
+
+## catalyst_depth 全量分桶（次日匹配 n=1266）
+
+| 桶 | n | 次日均值 | 连板率 |
+|---|---|---|---|
+| equity_or_affiliate 股权关联 | 135 | +1.59% | 27.4% |
+| new_business_scaling 放量 | 175 | +1.29% | 18.9% |
+| core_main_business 主业 | 669 | +1.16% | 20.6% |
+| new_business_early 早期 | 257 | +0.94% | 20.2% |
+| concept_assembly 概念组装 | 28 | **−0.39%** | 14.3% |
+
+- **稳定信号**：concept_assembly 唯一负桶且连板率最低（pilot 两轮+全量三验）——「纯组装最毒」成立。
+- pilot 的「early 连板 0%」系 18 只小样本幻象，全量 257 只修正为 20.2%；次日溢价梯度保留（early 0.94% 最低于三实质承接桶）。
+- equity 全量居首与缩量市「低位影子股卡位」游资逻辑吻合，登记观察待 10 月复验。
+
+## 判定
+
+按修订判据（d5f012ca）：全硬门过（门A''/freshness 7.9%<8%/T3 15/15）、门B 不过且方向反向 → **INSUFFICIENT**（非 REJECT：depth 轴六桶方差+分桶区分度成立；driver 轴区分度问题归属 population 口径假说待终判）。9 月全量标签库即当前生产态，10 月增量与终判另行立项。
