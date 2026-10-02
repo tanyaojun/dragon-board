@@ -204,3 +204,60 @@ def test_frame_apply_sets_summary_and_flag():
     apply_frame_backfill(db, actions)
     doc2 = db["snapshot_frames"].find_one({"_id": "f:2026-09-01"})
     assert doc2["qualityFlags"] == ["quote_provider_partial", "limit_summary_backfilled"]
+
+
+# ── 富集模式（drawdown/sealQuality 块回填）────────────────────────────────────
+
+from backend.operations.backfill_limit_evidence import (  # noqa: E402
+    apply_enrich,
+    build_enrich_blocks,
+    plan_enrich,
+)
+
+FULL_SUMMARY = {**SUMMARY,
+                "drawdown": {"count": 3, "avgDrawdownPct": 8.5, "deepestDrawdownPct": 12.6},
+                "sealQuality": {"byzCount": 25, "hardCount": 10, "rottenCount": 8,
+                                "rottenShare": 0.186, "avgSucRate": 0.62}}
+
+
+def test_build_enrich_blocks_shape_and_provenance():
+    blocks = build_enrich_blocks(FULL_SUMMARY)
+    assert blocks["drawdown"]["count"] == 3 and blocks["drawdown"]["source"] == "ths_hist_backfill"
+    assert blocks["drawdown"]["backfilledAt"]
+    assert blocks["sealQuality"]["rottenShare"] == 0.186 and blocks["sealQuality"]["source"] == "ths_hist_backfill"
+    assert build_enrich_blocks(None) is None
+    assert build_enrich_blocks(SUMMARY) is None  # 无新块的旧式 summary 拒绝
+
+
+def _enrich_db():
+    db = FakeMongoDb()
+    db["snapshot_frames"] = FakeCollection([
+        _frame("2026-09-01", None),           # 已被旧回填写过的帧（无新块）
+        _frame("2026-09-02", 54),             # 健康帧（同样缺新块）
+        _frame("2026-09-03", 40)])
+    db["snapshot_frames"].rows[2]["limitSummary"]["drawdown"] = {"count": 1}  # 已富集→跳过
+    db["hotlist_jev_sentiment"] = FakeCollection([v1_doc("2026-09-01", 45), v1_doc("2026-09-02", 54)])
+    return db
+
+
+def test_plan_enrich_skips_existing_blocks_and_targets_both_collections():
+    db = _enrich_db()
+    frame_actions, doc_actions, skipped, unresolved = plan_enrich(
+        db, "2026-09-01", "2026-09-03", lambda ds: {d: FULL_SUMMARY for d in ds})
+    assert sorted(a["date"] for a in frame_actions) == ["2026-09-01", "2026-09-02"]  # 9/3 已有块跳过
+    assert sorted(a["date"] for a in doc_actions) == ["2026-09-01", "2026-09-02"]
+    assert skipped == 1 and unresolved == []
+
+
+def test_apply_enrich_preserves_existing_limit_summary_content():
+    db = _enrich_db()
+    frame_actions, doc_actions, _, _ = plan_enrich(
+        db, "2026-09-01", "2026-09-03", lambda ds: {d: FULL_SUMMARY for d in ds})
+    apply_enrich(db, frame_actions, doc_actions)
+    f = db["snapshot_frames"].find_one({"_id": "f:2026-09-02"})
+    assert f["limitSummary"]["drawdown"]["count"] == 3
+    assert f["limitSummary"]["zhaban"]["ztCount"] == 54  # 既有块保留
+    assert f["limitSummary"]["sealQuality"]["source"] == "ths_hist_backfill"
+    d = db["hotlist_jev_sentiment"].find_one({"_id": "dragonboard_live:half_hour:2026-09-01:15:00"})
+    assert d["evidenceRaw"]["limit"]["drawdown"]["avgDrawdownPct"] == 8.5
+    assert d["evidenceRaw"]["totalAmount"]["amount"] == 1.5e12  # 其他字段不伤

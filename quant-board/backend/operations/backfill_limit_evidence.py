@@ -153,6 +153,87 @@ def apply_frame_backfill(db, actions: list[dict]) -> int:
     return len(actions)
 
 
+def build_enrich_blocks(summary: dict | None) -> dict | None:
+    """THS summary → {drawdown, sealQuality} 富集块（带回填 provenance）；summary 无效返回 None。"""
+    if not isinstance(summary, dict) or not summary:
+        return None
+    dd, sq = summary.get("drawdown"), summary.get("sealQuality")
+    if not isinstance(dd, dict) or not isinstance(sq, dict):
+        return None
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    return {
+        "drawdown": {**{k: dd.get(k) for k in ("count", "avgDrawdownPct", "deepestDrawdownPct")},
+                     "source": PROVENANCE_SOURCE, "backfilledAt": stamp},
+        "sealQuality": {**{k: sq.get(k) for k in
+                           ("byzCount", "hardCount", "rottenCount", "rottenShare", "avgSucRate")},
+                        "source": PROVENANCE_SOURCE, "backfilledAt": stamp},
+    }
+
+
+def plan_enrich(db, start: str, end: str, fetch_many) -> tuple[list[dict], list[dict], int, list[str]]:
+    """15:00 帧 + v1 槽文档补 drawdown/sealQuality 富集块（THS 历史源，EOD 语义）。
+
+    跳过：已带 drawdown 块的（幂等）；盘中槽不在目标内（THS 历史=EOD 态，绝不伪造盘中）。
+    返回 (帧动作, v1动作, 跳过数, 未解决)。
+    """
+    frames = list(db["snapshot_frames"].find(
+        {"datasetId": "dragonboard_live", "type": "half_hour", "slotTime": "15:00",
+         "tradingDate": {"$gte": start, "$lte": end}},
+        {"tradingDate": 1, "limitSummary.drawdown": 1}))
+    docs = list(db["hotlist_jev_sentiment"].find(
+        {"datasetId": "dragonboard_live", "snapshotType": "half_hour", "kind": "slot",
+         "slotTime": "15:00", "tradingDate": {"$gte": start, "$lte": end}},
+        {"tradingDate": 1, "evidenceRaw.limit.drawdown": 1}))
+
+    def _has_block(obj, path):
+        cur = obj
+        for p in path:
+            cur = cur.get(p) if isinstance(cur, dict) else None
+        return isinstance(cur, dict)
+
+    need: list[str] = []
+    frame_by_date: dict[str, dict] = {}
+    for f in frames:
+        if not _has_block(f.get("limitSummary") or {}, ("drawdown",)):
+            need.append(str(f["tradingDate"]))
+            frame_by_date[str(f["tradingDate"])] = f
+    doc_by_date: dict[str, dict] = {}
+    for d in docs:
+        if not _has_block((d.get("evidenceRaw") or {}).get("limit") or {}, ("drawdown",)):
+            doc_by_date[str(d["tradingDate"])] = d
+            if str(d["tradingDate"]) not in need:
+                need.append(str(d["tradingDate"]))
+
+    summaries = fetch_many([n.replace("-", "") for n in need]) if need else {}
+    frame_actions: list[dict] = []
+    doc_actions: list[dict] = []
+    unresolved: list[str] = []
+    skipped = len(frames) + len(docs) - len(frame_by_date) - len(doc_by_date)
+    for date in sorted(set(frame_by_date) | set(doc_by_date)):
+        blocks = build_enrich_blocks(summaries.get(date.replace("-", "")))
+        if blocks is None:
+            unresolved.append(f"{date}:THS历史无有效数据")
+            continue
+        if date in frame_by_date:
+            frame_actions.append({"frameId": frame_by_date[date]["_id"], "date": date, "blocks": blocks})
+        if date in doc_by_date:
+            doc_actions.append({"docId": doc_by_date[date]["_id"], "date": date, "blocks": blocks})
+    return frame_actions, doc_actions, skipped, unresolved
+
+
+def apply_enrich(db, frame_actions: list[dict], doc_actions: list[dict]) -> tuple[int, int]:
+    """写库：帧 $set limitSummary.drawdown/sealQuality（保留同帧其他块）；v1 文档同理。"""
+    for a in frame_actions:
+        for block in ("drawdown", "sealQuality"):
+            db["snapshot_frames"].update_one(
+                {"_id": a["frameId"]}, {"$set": {f"limitSummary.{block}": a["blocks"][block]}})
+    for a in doc_actions:
+        for block in ("drawdown", "sealQuality"):
+            db["hotlist_jev_sentiment"].update_one(
+                {"_id": a["docId"]}, {"$set": {f"evidenceRaw.limit.{block}": a["blocks"][block]}})
+    return len(frame_actions), len(doc_actions)
+
+
 async def _fetch_all_ths(date8_list: list[str]) -> dict:
     """单事件循环批量拉取 THS 历史池（逐条 try：单日失败不影响整批）。"""
     from backend.market_proxy.limitup import get_limitup_service
@@ -195,6 +276,8 @@ def main():
     parser.add_argument("--apply", action="store_true", help="实际写库（默认 dry-run）")
     parser.add_argument("--frames", action="store_true",
                         help="连带回填 15:00 帧 limitSummary（仅 15:00，EOD 语义匹配）")
+    parser.add_argument("--enrich", action="store_true",
+                        help="富集模式：为 15:00 帧/v1 槽文档补 drawdown/sealQuality 块（THS 历史，幂等）")
     args = parser.parse_args()
 
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
@@ -233,12 +316,25 @@ def main():
         print(f"[跳过] 15:00 帧健康日 {len(f_healthy)} 个: {f_healthy or '无'}")
         print(f"[未解决] 15:00 帧 {len(f_unresolved)} 个: {f_unresolved or '无'}")
 
+    if args.enrich:
+        e_frames, e_docs, e_skip, e_unresolved = plan_enrich(db, args.start, args.end, fetch_many)
+        for a in e_frames:
+            dd, sq = a["blocks"]["drawdown"], a["blocks"]["sealQuality"]
+            print(f"[富集-帧] {a['date']}: 回撤 {dd.get('count')} 家(均 {dd.get('avgDrawdownPct')}%) "
+                  f"烂板 {sq.get('rottenCount')}(率 {sq.get('rottenShare')}) 成功率 {sq.get('avgSucRate')}")
+        for a in e_docs:
+            print(f"[富集-v1文档] {a['date']}")
+        print(f"[跳过] 已有块 {e_skip} 个；[未解决] {len(e_unresolved)} 个: {e_unresolved or '无'}")
+
     if args.apply:
         n = apply_backfill(db, actions)
         print(f"已写库 v1 文档 {n} 个（evidenceRaw.limit，标记 source={PROVENANCE_SOURCE}）")
         if args.frames:
             nf = apply_frame_backfill(db, frame_actions)
             print(f"已写库 15:00 帧 {nf} 个（limitSummary+qualityFlags[{FRAME_FLAG}]）")
+        if args.enrich:
+            ef, ed = apply_enrich(db, e_frames, e_docs)
+            print(f"已富集 帧 {ef} + v1 文档 {ed}（drawdown/sealQuality 块，source={PROVENANCE_SOURCE}）")
     else:
         print("dry-run 未写库；确认后加 --apply 执行")
 
