@@ -112,6 +112,24 @@ def test_calendar_window_fake_zero_excluded():
     assert by_date["2026-09-21"] == 48
 
 
+def test_calendar_window_corrupted_limit_block_linked_fields():
+    # 损坏 limit 块整块不可信：ztCount 伪 0 时同源 maxBoard/zhabanRate 联动置 None，
+    # 不得以真值身份进分位（maxBoard=0 亦按伪 0 处理）
+    days = ["2026-09-20", "2026-09-21", "2026-09-22"]
+    corrupt = v1_eod_doc("2026-09-20", 0)
+    corrupt["evidenceRaw"]["limit"] = {"ztCount": 0, "maxBoard": 0, "zhabanRate": 0.0}
+    healthy = v1_eod_doc("2026-09-21", 48, zhaban=0.0)  # 健康文档炸板率 0 是合法值
+    db = FakeMongoDb({
+        "snapshot_frames": frame_rows(days + ["2026-09-30"]),
+        "hotlist_jev_sentiment": [corrupt, healthy],
+    })
+    stats = {s["date"]: s for s in build_history_stats_calendar(db, "dragonboard_live", "2026-09-30")}
+    c = stats["2026-09-20"]
+    assert c["ztCount"] is None and c["maxBoard"] is None and c["zhabanRate"] is None
+    h = stats["2026-09-21"]
+    assert h["ztCount"] == 48 and h["maxBoard"] == 5 and h["zhabanRate"] == 0.0
+
+
 def test_calendar_window_limited_to_20():
     days = [f"2026-08-{d:02d}" for d in range(1, 32) if d <= 21]
     db = FakeMongoDb({
@@ -185,3 +203,13 @@ def test_compute_day_v2_disabled_skips(monkeypatch):
     result = compute_and_upsert_for_day_v2(db, dataset_id="dragonboard_live",
                                            trading_date="2026-09-30", force=False)
     assert result.get("skipped") is True
+
+
+def test_compute_day_v2_gate_off_default_force_skips(monkeypatch):
+    # 安全默认方向：不传 force（默认 False）+ gate 关 → 必须跳过，防止新调用方漏传静默绕过
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "0")
+    db = FakeMongoDb({"snapshot_frames": frame_rows(["2026-09-29", "2026-09-30"])})
+    result = compute_and_upsert_for_day_v2(db, dataset_id="dragonboard_live",
+                                           trading_date="2026-09-30")
+    assert result == {"written": False, "skipped": True, "reason": "v2_disabled"}
+    assert db["hotlist_jev_sentiment_v2"].rows == []  # 不落库

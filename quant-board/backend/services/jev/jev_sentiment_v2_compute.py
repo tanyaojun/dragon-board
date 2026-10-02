@@ -62,22 +62,29 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
         limit = ev.get("limit") or {}
         amount = (ev.get("totalAmount") or {}).get("amount")
         zt = limit.get("ztCount")
-        # 伪 0 防线（v2.3 教训）：ztCount=0 视为缺失而非零值
+        # 伪 0 防线（v2.3 教训）：limitSummary 损坏时代 ztCount/maxBoard 记 0 视为缺失而非零值；
+        # ztCount 无效=同源 limit 块整体不可信，zhabanRate 联动置 None
+        zt_ok = isinstance(zt, (int, float)) and zt > 0
+        mb = limit.get("maxBoard")
+        zhaban = limit.get("zhabanRate")
         stats.append({
             "date": date,
-            "ztCount": zt if isinstance(zt, (int, float)) and zt > 0 else None,
-            "maxBoard": limit.get("maxBoard"),
+            "ztCount": zt if zt_ok else None,
+            "maxBoard": mb if isinstance(mb, (int, float)) and mb > 0 else None,
             "amountYi": round(amount / 1e8, 1) if isinstance(amount, (int, float)) else None,
-            "zhabanRate": round(limit["zhabanRate"], 1)
-                          if isinstance(limit.get("zhabanRate"), (int, float)) else None,
+            "zhabanRate": round(zhaban, 1) if zt_ok and isinstance(zhaban, (int, float)) else None,
         })
     return stats
 
 
 def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str,
                                   snapshot_type: str = "half_hour", origin: str = "collector_v2",
-                                  dry_run: bool = False, force: bool = True) -> dict[str, Any]:
-    """v2 日级 EOD 计算+落库（hotlist_jev_sentiment_v2）。异常向上抛，由链捕获为 warning。"""
+                                  dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+    """v2 日级 EOD 计算+落库（hotlist_jev_sentiment_v2）。异常向上抛，由链捕获为 warning。
+
+    force 默认 False：gate（JEV_SENTIMENT_V2_ENABLED）关时默认跳过，绕过 gate 须显式传
+    force=True（安全默认方向，防新调用方漏传静默越过回退开关）。
+    """
     if not v2_enabled() and not force:
         return {"written": False, "skipped": True, "reason": "v2_disabled"}
     _, token, account = _jev_config()

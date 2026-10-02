@@ -64,7 +64,9 @@ def main():
     for d in v2_slots:
         ch = ((d.get("answers") or {}).get("crowding") or {}).get("choice")
         has_rail = isinstance(((d.get("evidenceRaw") or {}).get("limit") or {}).get("zhabanRate"), (int, float))
-        anchor_ok = "历史样本不足" not in (d.get("narrativeRaw") or "").split("【当前帧证据】")[0]
+        anchor_head = (d.get("narrativeRaw") or "").split("【当前帧证据】")[0]
+        # 两种锚缺失形态都算锚缺口：指标样本不足（历史样本不足）/窗口全空（历史参照缺失）
+        anchor_ok = "历史样本不足" not in anchor_head and "历史参照缺失" not in anchor_head
         if ch == "insufficient_evidence":
             if not has_rail:
                 miss += 1
@@ -140,7 +142,7 @@ def main():
              f"- {by_month}", "",
              "## 门1 三项制全月复检", "",
              f"- {gate1}",
-             f"- 三分账语义：数据缺口（无炸板率证据）/锚缺口（证据在场但参照轨不足）/真违规（证据+轨均在仍逃生）",
+             f"- 三分账语义：数据缺口（无炸板率证据）/锚缺口（证据在场但参照轨不足或缺失）/真违规（证据+轨均在仍逃生）",
              f"- EOD day_crowding 层分布：{dict(eod_layers)}", "",
              "## 温度 vs 规则分", "",
              f"- Spearman={rho}（n={len(pairs)}）；差值：{diff_stats}",
@@ -158,10 +160,20 @@ def main():
         lines.append(f"- {r['date']}：diff={r['diff']}（规则 {r['ruleScore']} / v2 {r['v2Temp']}，规则档 {r['ruleStage']} / v2 档 {r['v2Stage']}）——归因待人工核对锚段后填写")
 
     out = "docs/hotlist-jev/sentiment-v2-q3-report.md"
+    # 重跑保留人工归因收尾段（脚本只负责其生成部分，不覆盖人工分析）
+    manual = ""
+    try:
+        with open(out, "r", encoding="utf-8") as f:
+            old = f.read()
+        marker = "# 差异完整分析"
+        if marker in old:
+            manual = old[old.index(marker):]
+    except FileNotFoundError:
+        pass
     with open(out, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        f.write("\n".join(lines) + ("\n\n---\n\n" + manual if manual else ""))
     print("\n".join(lines[:40]))
-    print(f"-> {out}")
+    print(f"-> {out}{'（保留人工归因段 ' + str(len(manual)) + ' 字符）' if manual else ''}")
 
 
 if __name__ == "__main__":

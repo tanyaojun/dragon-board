@@ -167,7 +167,8 @@ def confidence_split(labels: list[dict]) -> dict:
 def verdict(depth: dict, cons: dict, t3_manual: bool | None, stab: dict, group: dict,
             freshness_ok: bool) -> str:
     """判定映射（预登记 §10）：门A''/守恒/freshness 任一不过=REJECT；T3 人工抽验=None 待抽验、
-    =False 违规=REJECT；稳定性（driver>90%/depth≥75%）不过=INSUFFICIENT；全过+门B=PASS_CANDIDATE。"""
+    =False 违规=REJECT；稳定性（driver≥85% 修订/depth≥75%）不过或零重叠未测=INSUFFICIENT；
+    全过+门B=PASS_CANDIDATE。"""
     if depth.get("insufficient") or not depth.get("expanded"):
         return "REJECT"
     if "note" not in cons and not cons.get("conserved"):
@@ -180,9 +181,11 @@ def verdict(depth: dict, cons: dict, t3_manual: bool | None, stab: dict, group: 
         return "REJECT"
     if "note" in stab:
         return "PASS_CANDIDATE" if group.get("groupOk") else "INSUFFICIENT"
-    driver_ok = stab.get("driver_type", {}).get("sameShare") is None or stab["driver_type"]["sameShare"] >= 0.85
-    depth_ok = stab.get("depth_overall", {}).get("sameShare") is None or stab["depth_overall"]["sameShare"] >= 0.75
-    if not (driver_ok and depth_ok):
+    driver_share = stab.get("driver_type", {}).get("sameShare")
+    depth_share = stab.get("depth_overall", {}).get("sameShare")
+    if driver_share is None or depth_share is None:
+        return "INSUFFICIENT"  # 零重叠=稳定性门未测，fail-visible 不静默放行
+    if not (driver_share >= 0.85 and depth_share >= 0.75):
         return "INSUFFICIENT"
     return "PASS_CANDIDATE" if group.get("groupOk") else "INSUFFICIENT"
 
@@ -238,6 +241,13 @@ def main():
 
     v = verdict(depth, cons, t3_manual, stab, group, freshness_ok)
 
+    if "note" in stab:
+        driver_mark = depth_mark = "—（全量模式跳过）"
+    else:
+        ds, ps = stab["driver_type"].get("sameShare"), stab["depth_overall"].get("sameShare")
+        driver_mark = "门未测（零重叠）" if ds is None else ("✓" if ds >= 0.85 else "✗")
+        depth_mark = "门未测（零重叠）" if ps is None else ("✓" if ps >= 0.75 else "✗")
+
     lines = ["# jev 涨停打标 v2 pilot4（题目 v3.1：叙事补日期+三护栏）战报", "",
              f"- 标签 {len(labels)}（ok），有心照链次日匹配 {len(rows)}，窗口 {dates[0]} → {dates[-1]}", "",
              "## 门A' 六桶方差", "",
@@ -264,8 +274,8 @@ def main():
              f"- {'✓' if cons.get('conserved') or 'note' in cons else '✗'} 守恒检验（{cons.get('note', '')}）",
              f"- T3 抽验制：{'✓ 已抽验通过' if t3_manual is True else '✗ 已抽验违规' if t3_manual is False else '待人工抽验'}（扫描候选池 {t3['scanHits']} 只）",
              f"- {'✓' if freshness_ok else '✗'} freshness unclear<8%（实际 {round(unclear_share, 3)}）",
-             f"- {'✓' if 'note' in stab or stab['driver_type'].get('sameShare') is None or stab['driver_type']['sameShare'] >= 0.85 else '✗'} driver 稳定性≥85%（修订）",
-             f"- {'✓' if 'note' in stab or stab['depth_overall'].get('sameShare') is None or stab['depth_overall']['sameShare'] >= 0.75 else '✗'} depth 一致率≥75%",
+             f"- {driver_mark} driver 稳定性≥85%（修订）",
+             f"- {depth_mark} depth 一致率≥75%",
              f"- {'✓' if group.get('groupOk') else '✗'} 门B 分组（预期 n 小不显著）", "",
              f"## 判定：{v}"]
 

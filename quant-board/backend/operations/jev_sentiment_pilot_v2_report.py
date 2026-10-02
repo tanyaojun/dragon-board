@@ -85,7 +85,13 @@ def main(t3_manual: bool | None = None, pilot_only: bool = True):
                ((d.get("answers") or {}).get("day_crowding") or {}).get("choice")
 
     def _temp(d):
-        return d.get("scores", {}).get("temperature") or d.get("scores", {}).get("day_temperature")
+        # 显式判型：0.0 是 SCORE_ANCHORS_10 首档合法值，不得用 or 链吞掉
+        scores = d.get("scores") or {}
+        for key in ("temperature", "day_temperature"):
+            v = scores.get(key)
+            if isinstance(v, (int, float)):
+                return v
+        return None
 
     def _stage(d):
         return ((d.get("answers") or {}).get("frame_stage") or {}).get("choice")

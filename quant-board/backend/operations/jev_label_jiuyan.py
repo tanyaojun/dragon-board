@@ -137,7 +137,19 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         if not pop:
             print(f"[{di + 1}/{len(dates)}] {date} 无韭研 final 文档，跳过（披露）")
             continue
-        items = {entry["stock"]["code"][2:]: entry for entry in pop}
+        # 条件剥前缀（与叙事构建器同规则：仅 sh/sz/bj 前缀才剥，无前缀 code 不截残）；
+        # 同股跨板块重复时保留后者（既有覆盖语义不变），但如实披露不再静默
+        items: dict[str, dict] = {}
+        dupes: list[str] = []
+        for entry in pop:
+            raw = str(entry["stock"].get("code") or "")
+            code = raw[2:] if len(raw) > 2 and raw[:2] in ("sh", "sz", "bj") else raw
+            if code in items:
+                dupes.append(f"{code}({items[code]['board']}→{entry['board']})")
+            items[code] = entry
+        if dupes:
+            print(f"[{di + 1}/{len(dates)}] {date} 跨板块重复 code {len(dupes)} 只（后者覆盖，披露）："
+                  f"{'; '.join(dupes)}")
         codes = list(items.keys())
         if skip_existing:
             done = {d["code"] for d in labels_col.find({"tradingDate": date, "status": "ok"}, {"code": 1})}

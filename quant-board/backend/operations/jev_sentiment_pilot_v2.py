@@ -23,6 +23,7 @@ from backend.analysis.hotlist.jev_state import (
     build_history_anchor,
     build_slot_jev_state,
     collect_slot_evidence,
+    extract_history_anchor_range,
 )
 from backend.services.jev.jev_client import call_jev, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import (
@@ -128,7 +129,7 @@ def compute_slot_v2(db, dataset_id: str, trading_date: str, slot_time: str,
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
-           "historyAnchorRange": history_anchor.split("\n")[0][len("【近20日参照】（"):-1] or None}
+           "historyAnchorRange": extract_history_anchor_range(history_anchor)}
     db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"status": doc["status"]}
 
@@ -170,7 +171,7 @@ def compute_day_v2(db, dataset_id: str, trading_date: str, history_anchor: str,
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
            "anchoredSlotTime": slots[-1],
-           "historyAnchorRange": history_anchor.split("\n")[0][len("【近20日参照】（"):-1] or None}
+           "historyAnchorRange": extract_history_anchor_range(history_anchor)}
     db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"status": doc["status"]}
 

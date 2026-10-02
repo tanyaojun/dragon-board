@@ -322,3 +322,40 @@ def test_sentiment_v2_missing_v2_doc_degraded(monkeypatch):
     body = response.json()
     assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
     assert "未落库" in body["reason"]
+
+
+def _seed_no_data_v2(db, date):
+    db["hotlist_jev_sentiment_v2"].rows = [{
+        "_id": f"{DATASET}:half_hour:{date}:EOD", "kind": "eod", "origin": "collector_v2",
+        "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": date, "slotTime": "EOD",
+        "status": "no_data", "errorDetail": "no half_hour frames",
+    }]
+
+
+def test_sentiment_v2_no_data_latest_reason_distinct(monkeypatch):
+    """已落库但 no_data ≠ 未落库：reason 带 no_data + errorDetail，不误述排查方向。"""
+    db = FakeMongoDb()
+    _seed_no_data_v2(db, DATE)
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    client = TestClient(app)
+    response = client.get("/api/hotlist-jev/sentiment-v2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
+    assert body["date"] == DATE
+    assert "no_data" in body["reason"] and "no half_hour frames" in body["reason"]
+    assert "未落库" not in body["reason"]
+
+
+def test_sentiment_v2_no_data_with_date_reason_distinct(monkeypatch):
+    db = FakeMongoDb()
+    _seed_no_data_v2(db, DATE)
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    client = TestClient(app)
+    response = client.get(f"/api/hotlist-jev/sentiment-v2?date={DATE}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
+    assert "no_data" in body["reason"] and "no half_hour frames" in body["reason"]

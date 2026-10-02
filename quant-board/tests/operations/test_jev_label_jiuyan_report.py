@@ -94,6 +94,9 @@ def test_verdict_mapping_pre_registered_pilot4():
     assert verdict(depth_ok, cons_ok, True, stab_driver_86, group_ok, True) == "PASS_CANDIDATE"
     assert verdict(depth_ok, cons_ok, True, stab_depth_lo, group_ok, True) == "INSUFFICIENT"
     assert verdict(depth_ok, cons_ok, True, stab_driver_lo, group_ok, True) == "INSUFFICIENT"
+    # 零重叠（sameShare=None）=稳定性门未测，显式 INSUFFICIENT，不静默放行
+    stab_none = {"driver_type": {"sameShare": None}, "depth_overall": {"sameShare": None}}
+    assert verdict(depth_ok, cons_ok, True, stab_none, group_ok, True) == "INSUFFICIENT"
 
 
 def test_driver_group_metrics_and_direction():

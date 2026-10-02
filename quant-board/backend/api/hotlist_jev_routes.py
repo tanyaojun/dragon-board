@@ -288,8 +288,17 @@ def get_hotlist_jev_sentiment_v2(date: str | None = None) -> dict[str, Any]:
         v2_col = db["hotlist_jev_sentiment_v2"]
         if date:
             doc = v2_col.find_one({"kind": "eod", "tradingDate": date})
+            if doc is not None and doc.get("status") == "no_data":
+                # 已落库但当日无可用帧：与"确未落库"区分，errorDetail 供排查
+                return {"ok": True, "date": date, "v2": None, "rule": None, "degraded": True,
+                        "reason": f"v2_eod 该日 no_data（errorDetail={doc.get('errorDetail') or '未知'}）"}
         else:
             doc = v2_col.find_one({"kind": "eod"}, sort=[("tradingDate", -1)])
+            if doc is not None and doc.get("status") == "no_data":
+                return {"ok": True, "date": str(doc.get("tradingDate")), "v2": None, "rule": None,
+                        "degraded": True,
+                        "reason": f"最新日 {doc.get('tradingDate')} v2_eod no_data"
+                                  f"（errorDetail={doc.get('errorDetail') or '未知'}）"}
             if doc is not None and doc.get("status") not in ("ok", "degraded"):
                 doc = None
         if doc is None:
