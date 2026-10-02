@@ -538,12 +538,13 @@ def build_driver_label_narrative(ths_reason: str, row: dict, mappings: list) -> 
     return f"{head}公司业务底座（题材映射）：{base}。"[:1200]
 
 
-def build_jiuyan_label_narrative(stock: dict, board: str, rank: int | None) -> str:
+def build_jiuyan_label_narrative(stock: dict, board: str, rank: int | None, trading_date: str = "") -> str:
     """涨停驱动打标 v2 叙事：韭研异动解析全文 + 结构标注（连板高度/首封时间/热榜排名）。
 
-    设计依据 docs/hotlist-jev/jev-driver-label-v2-design.md §3：
+    设计依据 docs/hotlist-jev/jev-driver-label-v2-design.md §3/§10：
     expound 含催化事件逐条+公司主业描述，补 Noul 轴缺失的原料；
-    缺字段如实标注（day 缺→首板、time 空→未提供、未进热榜），不伪造。
+    缺字段如实标注（day 缺→首板、time 空→未提供、未进热榜），不伪造；
+    头部带交易日期（pilot4 修复——freshness 判"距今≤2 交易日"需要当日锚点）。
     """
     name = stock.get("name") or stock.get("code") or "未知"
     code = str(stock.get("code") or "")
@@ -554,7 +555,8 @@ def build_jiuyan_label_narrative(stock: dict, board: str, rank: int | None) -> s
     time_bit = f"首次涨停 {time_str}" if time_str else "涨停时间未提供"
     rank_bit = f"热榜第{rank}名" if isinstance(rank, int) and rank > 0 else "未进热榜"
     expound = str(stock.get("expound") or "").strip()
-    head = f"{name}（{plain}）：{limit_up_num}，{time_bit}，{rank_bit}，板块：{board or '未分组'}。"
+    date_bit = f"{trading_date} 交易日，" if trading_date else ""
+    head = f"{date_bit}{name}（{plain}）：{limit_up_num}，{time_bit}，{rank_bit}，板块：{board or '未分组'}。"
     if not expound:
         return f"{head}\n异动解析（韭研公社）：缺失（该缺失本身是判别信号）。"[:1400]
     return f"{head}\n异动解析（韭研公社）：\n{expound}"[:1400]

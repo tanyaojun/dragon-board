@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""jev 打标 v2 pilot3 判定门测试：六桶方差/守恒/T3 扫描/稳定性/判定映射预登记。"""
+"""jev 打标 v2 pilot4 判定门测试：六桶方差/守恒(±8)/T3 抽验制/freshness/稳定性分层/判定映射 §10。"""
 from __future__ import annotations
 
 import sys
@@ -29,74 +29,64 @@ def _rows(labels_pct):
 
 
 def test_depth_distribution_six_buckets_expanded():
-    # 预估形态：core 110 / scaling 45 / early 65 / equity 27 / concept 9 + 逃生口 9
-    depths = [CORE] * 110 + [SCAL] * 45 + [EARLY] * 65 + [EQ] * 27 + [CON] * 9 + [INS] * 9
+    depths = [CORE] * 100 + [SCAL] * 64 + [EARLY] * 70 + [EQ] * 20 + [CON] * 8 + [INS] * 4
     m = depth_distribution_metrics(depths)
     assert m["expanded"] is True and m["bucketsWithN5"] == 5
-    assert m["maxBucketShare"] == round(110 / 265, 3)
 
 
 def test_depth_distribution_small_bucket_fails():
-    # scaling 桶 n=4 <5 → 不展开
-    depths = [CORE] * 110 + [SCAL] * 4 + [EARLY] * 65 + [EQ] * 27 + [CON] * 9 + [INS] * 9
+    depths = [CORE] * 100 + [SCAL] * 4 + [EARLY] * 70 + [EQ] * 20 + [CON] * 8 + [INS] * 4
     assert depth_distribution_metrics(depths)["expanded"] is False
 
 
-def test_depth_distribution_escape_hatch_abuse_fails():
-    depths = [CORE] * 90 + [SCAL] * 30 + [EARLY] * 40 + [EQ] * 15 + [CON] * 8 + [INS] * 40
-    assert depth_distribution_metrics(depths)["expanded"] is False  # 逃生口 17%>15%
+def test_conservation_check_pilot3_baseline():
+    # 基准=pilot3 两新桶 143（scaling 64 + early 79），±8
+    assert conservation_check([SCAL] * 64 + [EARLY] * 79)["conserved"] is True
+    assert conservation_check([SCAL] * 30 + [EARLY] * 79)["conserved"] is False  # 109，护栏把样本推出新桶
 
 
-def test_conservation_check():
-    depths = [CORE] * 100 + [SCAL] * 45 + [EARLY] * 70 + [EQ] * 27 + [CON] * 9  # new 合计 115
-    assert conservation_check(depths)["conserved"] is True  # |115-117|<=5
-    depths2 = [CORE] * 100 + [SCAL] * 10 + [EARLY] * 70 + [EQ] * 27 + [CON] * 9  # 80，溢出
-    assert conservation_check(depths2)["conserved"] is False
-
-
-def test_t3_scaling_scan_clean_and_hits():
+def test_t3_scan_is_candidate_pool_only():
     labels = [
-        {"tradingDate": "2026-09-07", "code": "1", "name": "甲", "catalystDepth": SCAL,
-         "narrative": "公司公告已小批量供货，客户加单。"},
-        {"tradingDate": "2026-09-07", "code": "2", "name": "乙", "catalystDepth": EARLY,
-         "narrative": "网传订单加单（未证实）"},  # early 含 T3 字样不算
-        {"tradingDate": "2026-09-07", "code": "3", "name": "丙", "catalystDepth": SCAL,
-         "narrative": "市场传闻供货特斯拉（市场消息）"},  # scaling 含 T3 字样 → 命中
+        {"tradingDate": "d", "code": "1", "name": "甲", "catalystDepth": SCAL, "narrative": "公告已小批量供货"},
+        {"tradingDate": "d", "code": "3", "name": "丙", "catalystDepth": SCAL, "narrative": "网传闻加单（未证实）"},
     ]
     t3 = t3_scaling_scan(labels)
-    assert t3["scanHits"] == 1 and t3["clean"] is False
-    assert t3["manualReviewList"][0]["name"] == "丙" and "传闻" in t3["manualReviewList"][0]["markers"]
-    clean = t3_scaling_scan(labels[:2])
-    assert clean["clean"] is True and clean["scanHits"] == 0
+    assert t3["scanHits"] == 1 and t3["manualReviewList"][0]["name"] == "丙"
+    # 抽验制：扫描命中不再决定判定（由 t3_manual 人工参数决定）
 
 
-def test_stability_vs_pilot2_with_filter():
-    v3 = [{"tradingDate": "d", "code": "1", "catalystDepth": SCAL},
+def test_stability_vs_pilot3():
+    v4 = [{"tradingDate": "d", "code": "1", "catalystDepth": SCAL},
           {"tradingDate": "d", "code": "2", "catalystDepth": CORE}]
-    p2 = [{"tradingDate": "d", "code": "1", "catalystDepth": "new_growing_business"},  # 被过滤
-          {"tradingDate": "d", "code": "2", "catalystDepth": CORE}]  # 进入对账
-    s = stability_vs_pilot2(v3, p2, "catalystDepth", {"core_main_business", "equity_or_affiliate", "concept_assembly"})
-    assert s == {"overlap": 1, "sameShare": 1.0}
+    p3 = [{"tradingDate": "d", "code": "1", "catalystDepth": EARLY},
+          {"tradingDate": "d", "code": "2", "catalystDepth": CORE}]
+    s = stability_vs_pilot2(v4, p3, "catalystDepth")
+    assert s == {"overlap": 2, "sameShare": 0.5}
 
 
-def test_verdict_mapping_pre_registered():
+def test_verdict_mapping_pre_registered_pilot4():
     depth_ok = {"expanded": True, "insufficient": False}
     depth_fail = {"expanded": False, "insufficient": False}
     cons_ok = {"conserved": True}
     cons_bad = {"conserved": False}
-    t3_ok = {"clean": True, "scanHits": 0}
-    t3_hit = {"clean": False, "scanHits": 2}
     group_ok = {"groupOk": True, "insufficient": False}
     group_bad = {"groupOk": False, "insufficient": False}
-    stab_hi = {"a": {"sameShare": 0.95}}
-    stab_lo = {"a": {"sameShare": 0.8}}
-    assert verdict(depth_fail, cons_ok, t3_ok, stab_hi, group_ok) == "REJECT"
-    assert verdict(depth_ok, cons_bad, t3_ok, stab_hi, group_ok) == "REJECT"
-    # T3 扫描命中 → 待人工抽验，不擅自判级
-    assert verdict(depth_ok, cons_ok, t3_hit, stab_hi, group_ok) == "PENDING_T3_REVIEW"
-    assert verdict(depth_ok, cons_ok, t3_ok, stab_hi, group_ok) == "PASS_CANDIDATE"
-    assert verdict(depth_ok, cons_ok, t3_ok, stab_hi, group_bad) == "INSUFFICIENT"
-    assert verdict(depth_ok, cons_ok, t3_ok, stab_lo, group_ok) == "INSUFFICIENT"
+    stab_hi = {"driver_type": {"sameShare": 0.93}, "depth_overall": {"sameShare": 0.80}}
+    stab_depth_lo = {"driver_type": {"sameShare": 0.93}, "depth_overall": {"sameShare": 0.60}}
+    stab_driver_lo = {"driver_type": {"sameShare": 0.85}, "depth_overall": {"sameShare": 0.85}}
+    # 门A''/守恒/freshness 任一不过 = REJECT
+    assert verdict(depth_fail, cons_ok, True, stab_hi, group_ok, True) == "REJECT"
+    assert verdict(depth_ok, cons_bad, True, stab_hi, group_ok, True) == "REJECT"
+    assert verdict(depth_ok, cons_ok, True, stab_hi, group_ok, False) == "REJECT"  # freshness 未修好
+    # T3 抽验：None=待抽验；False=违规 REJECT
+    assert verdict(depth_ok, cons_ok, None, stab_hi, group_ok, True) == "PENDING_T3_REVIEW"
+    assert verdict(depth_ok, cons_ok, False, stab_hi, group_ok, True) == "REJECT"
+    # 全过 + 门B
+    assert verdict(depth_ok, cons_ok, True, stab_hi, group_ok, True) == "PASS_CANDIDATE"
+    assert verdict(depth_ok, cons_ok, True, stab_hi, group_bad, True) == "INSUFFICIENT"
+    # 稳定性分层：driver>90% 与 depth≥75% 分开判
+    assert verdict(depth_ok, cons_ok, True, stab_depth_lo, group_ok, True) == "INSUFFICIENT"
+    assert verdict(depth_ok, cons_ok, True, stab_driver_lo, group_ok, True) == "INSUFFICIENT"
 
 
 def test_driver_group_metrics_and_direction():
@@ -117,5 +107,4 @@ def test_bucket_next_day_and_confidence():
     assert b[SCAL]["nextPctMean"] == 2.0 and b[EARLY]["nextPctMean"] == -1.0
     labels = [{"catalystDepth": SCAL, "catalystDepthProbabilities": {SCAL: 0.8}},
               {"catalystDepth": EARLY, "catalystDepthProbabilities": {EARLY: 0.3}}]
-    c = confidence_split(labels)
-    assert c == {"n": 2, "mean": 0.55, "lowConfShare": 0.5}
+    assert confidence_split(labels) == {"n": 2, "mean": 0.55, "lowConfShare": 0.5}

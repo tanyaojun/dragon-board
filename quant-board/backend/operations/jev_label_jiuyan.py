@@ -37,16 +37,16 @@ QUESTIONS = {
     "catalyst_depth": {"type": "choice",
                        "instructions": "以解析中最主要的涨停催化为准，该催化所指的业务/事件，在解析所述的公司业务版图中落在哪一层？"
                                        "依据解析中给出的收入占比、订单、项目、参股关系等证据判断，不预测后市。"
-                                       "供货节奏判据（动词从早到晚）：研发→送样→验证→认证→小批量→批量量产→规模出货；"
-                                       "证据可信度：公司公告/定期报告最高，券商研报/权威媒体次之，网传/市场传闻/未证实字样的消息只能作线索——"
-                                       "此类传闻级证据最多支撑到早期承接层，不得作为放量承接层的依据。"
+                                       "注意：供货节奏动词（研发→送样→验证→认证→小批量→批量量产→规模出货）与证据可信度规则"
+                                       "（公告/定期报告最高，研报/权威媒体次之，网传/传闻/未证实仅作线索且不得支撑放量层）"
+                                       "仅用于区分新业务的两层；催化所指业务若已是公司主要收入来源，无论叙事如何描述其节奏，一律判核心主业承接。"
                                        "并购重组类催化：标的公司业务与公司现有主业同业或紧密上下游按第一层判，跨行业转型按第二/三层判，"
                                        "纯控制权变更/壳资源运作且无明确业务注入按第五层判；"
                                        "解析给出收入占比/金额证据时，以大额业务为业务版图重心。",
                        "criteria": {
-                           "core_main_business": "核心主业承接：催化所指业务是公司当前主要收入来源（解析明确的主业或占比最高的业务），且催化事件直接作用于该业务（政策/景气作用于它、订单落在它、产品属于它）",
+                           "core_main_business": "核心主业承接：催化所指业务是公司当前主要收入来源（解析明确的主业或占比最高的业务），且催化事件直接作用于该业务（政策/景气作用于它、订单落在它、产品属于它）；供货节奏描述不改变本层判定",
                            "new_business_scaling": "新业务放量承接：催化所指新业务已有越过认证线的实质证据——小批量供货、批量交付、中标、形成实质收入（周交付、订单加单、产能爬坡均属此层）；且支撑证据须为公告/定期报告/权威研报级，网传传闻级证据不得支撑本层",
-                           "new_business_early": "新业务早期承接：催化所指新业务处于研发、送样、验证、认证阶段，或仅有合作意向/框架协议/网传订单；转产传闻、应用探索、规划布局均属此层",
+                           "new_business_early": "新业务早期承接：催化所指新业务处于研发、送样、验证、认证阶段，或仅有合作意向/框架协议/网传订单；前提是催化所指业务与公司存在真实业务关系（研发/送样/认证的是公司自身或其并购/参股实体的业务）——仅靠名称/地域/概念联想的归概念组装层",
                            "equity_or_affiliate": "股权关联传导：催化主要经由参股公司、控股股东或兄弟公司、参股基金等间接传导，公司自身报表业务不直接承接",
                            "concept_assembly": "概念组装弱关联：催化与公司业务的实质联系弱——主要靠名称/地域/行业大概念联想、经营范围变更、极小规模贸易型业务等组装而成，解析所述主业与催化所指业务明显不同",
                            "insufficient_evidence": "信息不足：解析未提供足以判断催化落点的业务信息，不强行归类"}},
@@ -95,7 +95,7 @@ def hotlist_ranks(db, date: str, plain_codes: list[str]) -> dict[str, int]:
 
 
 def _label_one(db, labels_col, acc, token, date, code, stock, board, rank):
-    narrative = build_jiuyan_label_narrative(stock, board, rank)
+    narrative = build_jiuyan_label_narrative(stock, board, rank, trading_date=date)
     env, ms = call_jev(acc, token, narrative, QUESTIONS)
     parsed = parse_jev_response(env, ms)
     answers = parsed.get("answers") or {}
@@ -152,7 +152,7 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         if dry_run:
             sample = items[codes[0]]
             print(f"[dry] {date} {sample['stock'].get('name')} rank={ranks.get(codes[0])}\n"
-                  f"      narrative={build_jiuyan_label_narrative(sample['stock'], sample['board'], ranks.get(codes[0]))[:200]}")
+                  f"      narrative={build_jiuyan_label_narrative(sample['stock'], sample['board'], ranks.get(codes[0]), trading_date=date)[:200]}")
             print(f"[{di + 1}/{len(dates)}] {date} population={len(codes)} hotlistHit={len(ranks)}")
             continue
 

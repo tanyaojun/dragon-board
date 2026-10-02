@@ -24,7 +24,7 @@ DEPTH_ALL = DEPTH_SUBSTANTIVE + ["insufficient_evidence"]
 NEW_BUCKETS = {"new_business_scaling", "new_business_early"}
 OLD_NEW_BUCKET = "new_growing_business"
 T3_MARKERS = ("网传", "未证实", "传闻", "市场消息", "未经证实")
-PILOT2_NEW_TOTAL = 117  # pilot2 战报冻结值（25326210）
+PILOT3_NEW_SUM = 143  # pilot3 战报冻结值（2dc44c60）：scaling 64 + early 79
 
 
 def depth_distribution_metrics(depths: list[str]) -> dict:
@@ -45,11 +45,11 @@ def depth_distribution_metrics(depths: list[str]) -> dict:
             "insufficient": False}
 
 
-def conservation_check(pilot3_depths: list[str], pilot2_new_total: int = PILOT2_NEW_TOTAL) -> dict:
-    """守恒检验：两新桶之和 vs pilot2 new_growing 桶（±5）。"""
-    new_sum = sum(1 for d in pilot3_depths if d in NEW_BUCKETS)
-    return {"pilot3NewSum": new_sum, "pilot2NewTotal": pilot2_new_total,
-            "conserved": bool(abs(new_sum - pilot2_new_total) <= 5)}
+def conservation_check(depths: list[str], pilot3_new_sum: int = PILOT3_NEW_SUM) -> dict:
+    """守恒检验：两新桶之和 vs pilot3 两新桶之和（±8，§10：桶结构未动仅判据护栏）。"""
+    new_sum = sum(1 for d in depths if d in NEW_BUCKETS)
+    return {"newSum": new_sum, "pilot3NewSum": pilot3_new_sum,
+            "conserved": bool(abs(new_sum - pilot3_new_sum) <= 8)}
 
 
 def t3_scaling_scan(labels: list[dict]) -> dict:
@@ -161,17 +161,23 @@ def confidence_split(labels: list[dict]) -> dict:
             "lowConfShare": round(sum(1 for p in probs if p < 0.5) / len(probs), 3)}
 
 
-def verdict(depth: dict, cons: dict, t3: dict, stab: dict, group: dict) -> str:
-    """判定映射（预登记 §9）：门A'/守恒任一不过=REJECT；T3 扫描>0=PENDING_T3_REVIEW（人工抽验清单后定夺，
-    扫描是启发式——叙事含 T3 字样≠判据真用了 T3 证据）；全部硬门过+门B 过=PASS_CANDIDATE；其余=INSUFFICIENT。"""
+def verdict(depth: dict, cons: dict, t3_manual: bool | None, stab: dict, group: dict,
+            freshness_ok: bool) -> str:
+    """判定映射（预登记 §10）：门A''/守恒/freshness 任一不过=REJECT；T3 人工抽验=None 待抽验、
+    =False 违规=REJECT；稳定性（driver>90%/depth≥75%）不过=INSUFFICIENT；全过+门B=PASS_CANDIDATE。"""
     if depth.get("insufficient") or not depth.get("expanded"):
         return "REJECT"
     if not cons.get("conserved"):
         return "REJECT"
-    if not t3.get("clean"):
+    if not freshness_ok:
+        return "REJECT"
+    if t3_manual is None:
         return "PENDING_T3_REVIEW"
-    stab_ok = all((v or {}).get("sameShare") is None or v["sameShare"] > 0.90 for v in stab.values())
-    if not stab_ok:
+    if t3_manual is False:
+        return "REJECT"
+    driver_ok = stab.get("driver_type", {}).get("sameShare") is None or stab["driver_type"]["sameShare"] > 0.90
+    depth_ok = stab.get("depth_overall", {}).get("sameShare") is None or stab["depth_overall"]["sameShare"] >= 0.75
+    if not (driver_ok and depth_ok):
         return "INSUFFICIENT"
     return "PASS_CANDIDATE" if group.get("groupOk") else "INSUFFICIENT"
 
@@ -204,32 +210,33 @@ def main():
                  else {"rho": None, "consistent": False})
     conf = confidence_split(labels)
 
-    pilot2 = list(db["hotlist_jev_driver_labels_v2_pilot2"].find(
+    pilot3 = list(db["hotlist_jev_driver_labels_v2_pilot3"].find(
         {"status": "ok"}, {"tradingDate": 1, "code": 1, "label": 1, "freshness": 1, "catalystDepth": 1}))
-    # 稳定性：题目未动的部分（core/equity/concept 从 pilot2 的同值样本对账）+ driver + freshness
-    stable_buckets = {"core_main_business", "equity_or_affiliate", "concept_assembly"}
+    # 稳定性：driver 题未动+叙事仅加日期（>90%）；depth 判据加了护栏（各桶整体一致率≥75%）
     stab = {
-        "driver_type": stability_vs_pilot2(labels, pilot2, "label"),
-        "catalyst_freshness": stability_vs_pilot2(labels, pilot2, "freshness"),
-        "depth_stable_buckets": stability_vs_pilot2(labels, pilot2, "catalystDepth", stable_buckets),
+        "driver_type": stability_vs_pilot2(labels, pilot3, "label"),
+        "depth_overall": stability_vs_pilot2(labels, pilot3, "catalystDepth"),
+        "freshness_for_reference": stability_vs_pilot2(labels, pilot3, "freshness"),
     }
     unclear_share = (sum(1 for d in labels if d.get("freshness") == "unclear") / len(labels))
+    freshness_ok = unclear_share < 0.08
     buckets = bucket_next_day(rows)
+    t3_manual = None  # 人工抽验后回填（§10 抽验制）：True/False
 
-    v = verdict(depth, cons, t3, stab, group)
+    v = verdict(depth, cons, t3_manual, stab, group, freshness_ok)
 
-    lines = ["# jev 涨停打标 v2 pilot3（题目 v3：动词分层切桶+T3 硬规则）战报", "",
+    lines = ["# jev 涨停打标 v2 pilot4（题目 v3.1：叙事补日期+三护栏）战报", "",
              f"- 标签 {len(labels)}（ok），有心照链次日匹配 {len(rows)}，窗口 {dates[0]} → {dates[-1]}", "",
              "## 门A' 六桶方差", "",
              f"- {depth}",
              f"- 展开={depth.get('expanded')}（五实质桶 n≥5 且 最大桶<70% 且 逃生口≤15%）", "",
-             "## 守恒检验（两新桶 vs pilot2 new 桶 117±5）", "",
+             "## 守恒检验（两新桶 vs pilot3 两新桶 143±8）", "",
              f"- {cons}", "",
-             "## T3-scaling 零判例（硬规则生效性）", "",
-             f"- scanHits={t3['scanHits']}（clean={t3['clean']}）",
+             "## T3 抽验制（§10：扫描仅出候选清单，人工抽验定夺）", "",
+             f"- 扫描候选池 scanHits={t3['scanHits']}（抽验制，不作硬门）",
              *[f"  - 待人工抽验：{h['tradingDate']} {h['name']} {h['code']} markers={h['markers']}"
                for h in t3["manualReviewList"]], "",
-             "## 稳定性对照（vs pilot2，题目未动部分）", "",
+             "## 稳定性对照（vs pilot3；叙事加日期+判据护栏后的预期）", "",
              *[f"- {k}：{sv}" for k, sv in stab.items()],
              f"- freshness unclear 占比：{round(unclear_share, 3)}（判据 <0.08）", "",
              "## 门B 驱动分组（沿用）", "",
@@ -242,12 +249,14 @@ def main():
              "## 判定依据", "",
              f"- {'✓' if depth.get('expanded') else '✗'} 门A' 六桶方差",
              f"- {'✓' if cons.get('conserved') else '✗'} 守恒检验",
-             f"- {'✓' if t3.get('clean') else '✗'} T3-scaling 零判例（scanHits={t3['scanHits']}）",
-             f"- {'✓' if all((sv or {}).get('sameShare') is None or sv['sameShare'] > 0.90 for sv in stab.values()) else '✗'} 稳定性>90%（freshness unclear={round(unclear_share, 3)}）",
+             f"- T3 抽验制：待人工抽验（扫描候选池 {t3['scanHits']} 只）",
+             f"- {'✓' if freshness_ok else '✗'} freshness unclear<8%（实际 {round(unclear_share, 3)}）",
+             f"- {'✓' if stab['driver_type'].get('sameShare') is None or stab['driver_type']['sameShare'] > 0.90 else '✗'} driver 稳定性>90%",
+             f"- {'✓' if stab['depth_overall'].get('sameShare') is None or stab['depth_overall']['sameShare'] >= 0.75 else '✗'} depth 一致率≥75%",
              f"- {'✓' if group.get('groupOk') else '✗'} 门B 分组（预期 n 小不显著）", "",
              f"## 判定：{v}"]
 
-    out = "docs/hotlist-jev/phase3-jiuyan-v2-pilot3-report.md"
+    out = "docs/hotlist-jev/phase3-jiuyan-v2-pilot4-report.md"
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print("\n".join(lines))

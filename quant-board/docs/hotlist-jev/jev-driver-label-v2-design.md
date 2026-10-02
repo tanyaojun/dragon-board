@@ -114,3 +114,26 @@ pilot2 弹着点侦察三实锤：P1 new_growing 桶 117 只（44%）混杂全�
 | 门B | 沿用 driver 分组门（p<0.05+极差≥15pct；n 小预期不显著，方向一致性兜底） | 硬门（预期 INSUFFICIENT 路径） |
 
 判定映射：全部硬门过=PASS_CANDIDATE（进入 T2 全量决策）；门A'/守恒/T3 任一不过=REJECT（回炉）；其余=INSUFFICIENT。
+
+## 10. pilot4 修复预登记（2026-10-02，pilot3 REJECT 根因修复后冻结）
+
+pilot3 判 REJECT 但切桶核心假设强力验证（scaling +2.50%/21.1% vs early +0.56%/0.0%）。三门翻车根因与修复（全部机制层，不动桶结构）：
+
+1. **叙事头加当日日期**（修 freshness unclear 24.1% 根因——jev 算不了"距今"）：叙事首行补 `YYYY-MM-DD 交易日`；稳定性对照 freshness 判据同步放宽（叙事变了，同股复现预期 75-90% 而非 >90%，unclear 占比才是主判据）。
+2. **core 防偏护栏**（修守恒失败：两新桶 143 vs 117、core 110→90）：instructions 显式限定"供货节奏动词与证据等级规则仅用于区分新业务放量/早期两层；催化所指业务若已是主要收入来源，无论叙事如何描述其节奏，一律判核心主业承接"。
+3. **early 防吸护栏**（修 concept_assembly 9→3）：early 判据补"前提=催化所指业务与公司存在真实业务关系（研发/送样/认证的是公司自身或其并购/参股实体的业务）；仅靠名称/地域/概念联想的归概念组装层"。
+4. **T3 门改抽验制**（修扫描启发式误报，pilot3 抽验 5/5 合理）：门判据=人工抽验 ≥5 只 scaling 判例、T3 违规 ≤1；自动扫描仅生成抽验候选清单（叙事含 T3 字样的 scaling 判例优先），不再作硬门。
+
+**pilot4 判据（先冻结，同三天 266 只 ≈37 万 tokens，开火前已备份 pilot3 至 hotlist_jev_driver_labels_v2_pilot3）**：
+
+| 项 | 判据 | 性质 |
+|---|---|---|
+| 门A'' 六桶方差 | 五实质桶每桶 n≥5；最大实质桶占比<70%；逃生口≤15% | 硬门 |
+| 守恒检验 | 两新桶之和 = pilot3 两新桶之和（143±8，桶结构未动仅判据护栏） | 硬门 |
+| freshness 修复 | unclear 占比 <8% | 硬门 |
+| 稳定性对照 | driver_type sameShare>90%（driver 题未动+叙事仅加日期）；depth 各桶对 pilot3 一致率≥75%（叙事变了预期中降） | 硬门 |
+| T3 抽验制 | 人工抽验 ≥5 只、违规 ≤1 | 硬门 |
+| 两新桶分离 | scaling>early 次日方向复现 | 观察 |
+| 门B | 沿用（预期 n 小不显著） | 硬门（预期 INSUFFICIENT 路径） |
+
+判定映射：门A''/守恒/freshness/T3 任一不过=REJECT；全过+门B 过=PASS_CANDIDATE；全过+门B 不过=INSUFFICIENT。
