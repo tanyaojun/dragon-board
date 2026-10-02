@@ -26,7 +26,7 @@ from backend.analysis.hotlist.jev_state import (
     extract_history_anchor_range,
 )
 from backend.services.jev.jev_client import call_jev, parse_jev_response
-from backend.services.jev.jev_sentiment_compute import (
+from backend.services.jev.jev_sentiment_v2_compute import (
     _collect_evidence,
     _half_hour_slots,
     _latest_yesterday_rows,

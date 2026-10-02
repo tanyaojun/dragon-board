@@ -120,7 +120,7 @@ def quartiles(vals: list[float]) -> tuple[float, float, float]:
 def main() -> int:
     db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
     slot_sc: dict[tuple[str, str], dict] = {}
-    for doc in db["hotlist_jev_sentiment"].find({"kind": "slot", "status": "ok"}, {"tradingDate": 1, "slotTime": 1, "scores": 1}):
+    for doc in db["hotlist_jev_sentiment_v2"].find({"kind": "slot", "status": "ok"}, {"tradingDate": 1, "slotTime": 1, "scores": 1}):
         sc = doc.get("scores") or {}
         t, c = sc.get("temperature"), sc.get("crowding")
         if isinstance(t, (int, float)) or isinstance(c, (int, float)):
@@ -129,7 +129,7 @@ def main() -> int:
                 "slot_crowding": float(c) if isinstance(c, (int, float)) else None,
             }
     day_sc: dict[str, dict] = {}
-    for doc in db["hotlist_jev_sentiment"].find({"kind": "eod", "status": "ok"}, {"tradingDate": 1, "scores": 1}):
+    for doc in db["hotlist_jev_sentiment_v2"].find({"kind": "eod", "status": "ok"}, {"tradingDate": 1, "scores": 1}):
         sc = doc.get("scores") or {}
         t, c = sc.get("day_temperature"), sc.get("day_crowding")
         if isinstance(t, (int, float)) or isinstance(c, (int, float)):

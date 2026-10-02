@@ -81,10 +81,7 @@ def test_v2_question_sets_structure():
     # 五档判据绑可数证据
     assert "近20日参照低位" in JEV_SLOT_QUESTIONS_V2["frame_stage"]["criteria"]["ice"]
     assert "炸板率" in JEV_SLOT_QUESTIONS_V2["frame_stage"]["criteria"]["retreat"]
-    # v1 问题集不动（封存对照）
-    from backend.analysis.hotlist.jev_state import JEV_SLOT_QUESTIONS
-
-    assert JEV_SLOT_QUESTIONS["crowding"]["type"] == "score"
+    # 2026-10-02 V1 退役：v1 题目常量已随链删除，V2 为唯一题目源
 
 
 # ── 封板质量/触板回撤池接线 + 09:30 伪 0 注记（2026-10-02 裁决）──────────────────

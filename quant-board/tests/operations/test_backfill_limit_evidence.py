@@ -98,7 +98,7 @@ SUMMARY = {"continuousBoards": {"yiban": 20, "erban": 8, "sanban": 3, "sibanPlus
 def _db():
     db = FakeMongoDb()
     db["snapshot_frames"] = FakeCollection([frame("2026-09-01"), frame("2026-09-02")])
-    db["hotlist_jev_sentiment"] = FakeCollection(
+    db["hotlist_jev_sentiment_v2"] = FakeCollection(
         [v1_doc("2026-09-01", None), v1_doc("2026-09-02", 54)])
     return db
 
@@ -158,7 +158,7 @@ def test_apply_preserves_other_evidence_fields():
 
     actions, _, _ = plan_backfill(db, "2026-09-01", "2026-09-01", fetch_many)
     apply_backfill(db, actions)
-    doc = db["hotlist_jev_sentiment"].find_one({"_id": actions[0]["docId"]})
+    doc = db["hotlist_jev_sentiment_v2"].find_one({"_id": actions[0]["docId"]})
     assert doc["evidenceRaw"]["limit"]["ztCount"] == 45
     assert doc["evidenceRaw"]["totalAmount"] == {"amount": 1.5e12}  # $set 不伤同文档其他字段
 
@@ -236,7 +236,7 @@ def _enrich_db():
         _frame("2026-09-02", 54),             # 健康帧（同样缺新块）
         _frame("2026-09-03", 40)])
     db["snapshot_frames"].rows[2]["limitSummary"]["drawdown"] = {"count": 1}  # 已富集→跳过
-    db["hotlist_jev_sentiment"] = FakeCollection([v1_doc("2026-09-01", 45), v1_doc("2026-09-02", 54)])
+    db["hotlist_jev_sentiment_v2"] = FakeCollection([v1_doc("2026-09-01", 45), v1_doc("2026-09-02", 54)])
     return db
 
 
@@ -258,6 +258,6 @@ def test_apply_enrich_preserves_existing_limit_summary_content():
     assert f["limitSummary"]["drawdown"]["count"] == 3
     assert f["limitSummary"]["zhaban"]["ztCount"] == 54  # 既有块保留
     assert f["limitSummary"]["sealQuality"]["source"] == "ths_hist_backfill"
-    d = db["hotlist_jev_sentiment"].find_one({"_id": "dragonboard_live:half_hour:2026-09-01:15:00"})
+    d = db["hotlist_jev_sentiment_v2"].find_one({"_id": "dragonboard_live:half_hour:2026-09-01:15:00"})
     assert d["evidenceRaw"]["limit"]["drawdown"]["avgDrawdownPct"] == 8.5
     assert d["evidenceRaw"]["totalAmount"]["amount"] == 1.5e12  # 其他字段不伤

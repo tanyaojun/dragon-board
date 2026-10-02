@@ -24,17 +24,118 @@ from backend.analysis.hotlist.jev_state import (
     extract_history_anchor_range,
 )
 from backend.services.jev.jev_client import call_jev, parse_jev_response
-from backend.services.jev.jev_sentiment_compute import (
-    _collect_evidence,
-    _half_hour_slots,
-    _jev_config,
-    _latest_yesterday_rows,
-    _load_analysis_by_code,
-    _load_frame,
-    _load_rows,
-    _slots_of_date,
-    _yesterday_total_amounts_by_slot,
-)
+
+_DEFAULT_ACCOUNT = "921cf15176f84c90ea49865334af32c6"
+
+
+def _jev_config() -> tuple[bool, str, str]:
+    """(enabled, token, account)。每次调用读取，兼容运行时改环境变量。"""
+    enabled = os.environ.get("JEV_SENTIMENT_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+    token = os.environ.get("JEV_CF_TOKEN", "").strip()
+    account = os.environ.get("JEV_CF_ACCOUNT", _DEFAULT_ACCOUNT).strip() or _DEFAULT_ACCOUNT
+    return enabled, token, account
+
+
+# ── 快照取数（直查快照库；帧→行→analysis join 与规则链同源）──
+
+
+def _load_frame(db: Any, dataset_id: str, snapshot_type: str, trading_date: str, slot_time: str) -> dict | None:
+    return db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time},
+        sort=[("timestamp", -1), ("snapshotId", -1)],
+    )
+
+
+def _load_rows(db: Any, dataset_id: str, snapshot_id: str) -> list[dict]:
+    return list(db["snapshot_stock_rows"].find({"datasetId": dataset_id, "snapshotId": snapshot_id}))
+
+
+def _load_analysis_by_code(db: Any, dataset_id: str, snapshot_id: str) -> dict:
+    rows = db["snapshot_analysis"].find(
+        {"datasetId": dataset_id, "snapshotId": snapshot_id},
+        {"_id": 0, "code": 1, "analysis": 1},
+    )
+    return {str(row.get("code")): row.get("analysis") for row in rows if row.get("code")}
+
+
+def _half_hour_slots() -> list[str]:
+    from backend.snapshot_collector.slots import SLOT_TIMES
+
+    return [str(slot) for slot in SLOT_TIMES.get("half_hour") or []]
+
+
+def _slots_of_date(db: Any, dataset_id: str, snapshot_type: str, trading_date: str) -> list[str]:
+    slots = set()
+    for f in db["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": trading_date},
+            {"slotTime": 1}):
+        slot = str(f.get("slotTime") or "")
+        if len(slot) == 5 and slot[2] == ":":
+            slots.add(slot)
+    return sorted(slots)
+
+
+def _collect_evidence(db: Any, dataset_id: str, snapshot_type: str, trading_date: str,
+                      slot_time: str, yesterday_rows: list,
+                      yesterday_amounts: dict[str, float] | None = None) -> dict | None:
+    frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
+    if frame is None:
+        return None
+    snapshot_id = str(frame.get("snapshotId") or "")
+    rows = _load_rows(db, dataset_id, snapshot_id)
+    if not rows:
+        return None
+    return collect_slot_evidence(
+        frame=frame, rows=rows, yesterday_rows=yesterday_rows,
+        analysis_by_code=_load_analysis_by_code(db, dataset_id, snapshot_id), slot_time=slot_time,
+        yesterday_same_slot_total_amount=(yesterday_amounts or {}).get(slot_time))
+
+
+def _latest_yesterday_rows(db: Any, dataset_id: str, snapshot_type: str, trading_date: str) -> list:
+    """上一交易日最新 half_hour 帧行（昨日承接/新进淘汰的对比基线）。"""
+    latest_date = _latest_date_before(db, dataset_id, snapshot_type, trading_date)
+    if latest_date is None:
+        return []
+    frame = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": latest_date},
+        sort=[("timestamp", -1), ("snapshotId", -1)],
+    )
+    if not frame:
+        return []
+    return _load_rows(db, dataset_id, str(frame.get("snapshotId") or ""))
+
+
+def _latest_date_before(db: Any, dataset_id: str, snapshot_type: str, trading_date: str) -> str | None:
+    dates = sorted({
+        str(f.get("tradingDate"))
+        for f in db["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": snapshot_type}, {"tradingDate": 1})
+        if f.get("tradingDate") and str(f.get("tradingDate")) < trading_date
+    })
+    return dates[-1] if dates else None
+
+
+def _yesterday_slot_total_amount(db: Any, dataset_id: str, snapshot_type: str,
+                                 trading_date: str, slot_time: str) -> float | None:
+    return _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date).get(slot_time)
+
+
+def _yesterday_total_amounts_by_slot(db: Any, dataset_id: str, snapshot_type: str,
+                                     trading_date: str) -> dict[str, float]:
+    """上一交易日各槽位帧的两市总成交额（同期量能基线映射）；缺失槽位不在结果中。"""
+    latest_date = _latest_date_before(db, dataset_id, snapshot_type, trading_date)
+    if latest_date is None:
+        return {}
+    out: dict[str, float] = {}
+    for f in db["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": snapshot_type, "tradingDate": latest_date}, {"indices": 1, "slotTime": 1}):
+        slot = str(f.get("slotTime") or "")
+        entry = (f.get("indices") or {}).get("totalAmount") if isinstance(f.get("indices"), dict) else None
+        if len(slot) == 5 and slot[2] == ":" and isinstance(entry, dict):
+            amount = entry.get("amount")
+            if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+                out[slot] = float(amount)
+    return out
 
 ANCHOR_WINDOW = 20
 

@@ -6,8 +6,8 @@
 import json
 
 from backend.analysis.hotlist.jev_state import (
-    JEV_DAY_QUESTIONS,
-    JEV_SLOT_QUESTIONS,
+    JEV_DAY_QUESTIONS_V2,
+    JEV_SLOT_QUESTIONS_V2,
     build_day_jev_state,
     build_driver_label_narrative,
     build_slot_jev_state,
@@ -19,9 +19,10 @@ from backend.analysis.hotlist.jev_state import (
 
 
 def test_questions_constants_frozen_no_prediction():
-    assert set(JEV_SLOT_QUESTIONS) == {"frame_stage", "sequence_stage", "temperature", "crowding"}
-    assert set(JEV_DAY_QUESTIONS) == {"day_stage", "day_pattern", "day_temperature", "day_crowding"}
-    for questions in (JEV_SLOT_QUESTIONS, JEV_DAY_QUESTIONS):
+    # 2026-10-02 V1 退役：题目常量唯一来源=V2（单一事实源）
+    assert set(JEV_SLOT_QUESTIONS_V2) == {"frame_stage", "sequence_stage", "temperature", "crowding"}
+    assert set(JEV_DAY_QUESTIONS_V2) == {"day_stage", "day_pattern", "day_temperature", "day_crowding"}
+    for questions in (JEV_SLOT_QUESTIONS_V2, JEV_DAY_QUESTIONS_V2):
         assert len(questions) == 4
         assert all(q["type"] in ("choice", "score") for q in questions.values())
         assert "noul" not in json.dumps(questions, ensure_ascii=False)

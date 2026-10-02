@@ -266,7 +266,7 @@ def main() -> int:
 
     # jev 分数（eod 113 日 / slot 1070 槽）
     day_sc: dict[str, dict] = {}
-    for doc in db["hotlist_jev_sentiment"].find({"kind": "eod", "status": "ok"}, {"tradingDate": 1, "scores": 1}):
+    for doc in db["hotlist_jev_sentiment_v2"].find({"kind": "eod", "status": "ok"}, {"tradingDate": 1, "scores": 1}):
         sc = doc.get("scores") or {}
         t, c = sc.get("day_temperature"), sc.get("day_crowding")
         if isinstance(t, (int, float)) or isinstance(c, (int, float)):
@@ -277,7 +277,7 @@ def main() -> int:
     slot_sc: dict[tuple[str, str], dict] = {}
     slot_crowd_by_day: dict[str, list[float]] = {}
     slot_temp_by_day: dict[str, list[float]] = {}
-    for doc in db["hotlist_jev_sentiment"].find({"kind": "slot", "status": "ok"}, {"tradingDate": 1, "slotTime": 1, "scores": 1}):
+    for doc in db["hotlist_jev_sentiment_v2"].find({"kind": "slot", "status": "ok"}, {"tradingDate": 1, "slotTime": 1, "scores": 1}):
         sc = doc.get("scores") or {}
         t, c = sc.get("temperature"), sc.get("crowding")
         d, s = str(doc.get("tradingDate")), str(doc.get("slotTime"))

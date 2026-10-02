@@ -220,7 +220,7 @@ def generate(db) -> dict:
 
     jev_slots: dict[tuple[str, str], dict] = {}
     jev_eod_stages: dict[str, str] = {}
-    for doc in db["hotlist_jev_sentiment"].find(
+    for doc in db["hotlist_jev_sentiment_v2"].find(
         {"status": "ok"},
         {"kind": 1, "tradingDate": 1, "slotTime": 1, "scores.temperature": 1,
          "answers.sequence_stage": 1, "answers.day_stage": 1, "narrativeRaw": 1},

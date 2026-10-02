@@ -100,7 +100,7 @@ def main(t3_manual: bool | None = None, pilot_only: bool = True):
     gate1 = crowding_distribution(layers)
     # 门2：按 (date, slot) 配对取双版本温度
     v1_keys = {f"{d.get('tradingDate')}:{d.get('slotTime')}": d
-               for d in db["hotlist_jev_sentiment"].find(
+               for d in db["hotlist_jev_sentiment_v2"].find(
                    {"status": "ok", "kind": "slot", "datasetId": "dragonboard_live"},
                    {"tradingDate": 1, "slotTime": 1, "scores": 1, "answers": 1})}
     t2, t1 = [], []

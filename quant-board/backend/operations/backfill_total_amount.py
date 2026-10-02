@@ -66,8 +66,8 @@ def main():
     amounts = fetch_amount_map()
     print(f"TDX 综指成交额 {min(amounts)} → {max(amounts)}，{len(amounts)} 交易日")
 
-    # 目标=v1/v2 两代表内 15:00 槽文档（2026-10-02 V1 退役后锚自 v2 供数，v2 亦须回填）
-    target_collections = ["hotlist_jev_sentiment", "hotlist_jev_sentiment_v2"]
+    # 目标=v2 表 15:00 槽文档（2026-10-02 V1 退役裁决：锚自 v2 供数，v1 集合已删档）
+    target_collections = ["hotlist_jev_sentiment_v2"]
     plan: dict[str, list] = {}
     healthy: dict[str, list] = {}
     nomap: dict[str, list] = {}

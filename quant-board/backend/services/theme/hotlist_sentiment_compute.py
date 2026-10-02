@@ -395,7 +395,7 @@ class HotListSentimentComputeService:
             intraday_state["diagnostics"].append(config_diagnostic)
         # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）；
         # 读失败降级为空 + 结构化诊断（与 _join_display_status 同语义：部分来源失败不阻断写库）
-        from backend.services.jev.jev_sentiment_compute import (
+        from backend.services.jev.jev_sentiment_v2_compute import (
             _load_analysis_by_code,
             _yesterday_total_amounts_by_slot,
         )
@@ -527,7 +527,7 @@ def compute_and_upsert_for_slot(
             intraday_state["diagnostics"].append(config_diagnostic)
         # 评分 evidence parts 取数（延迟 import：复用 jev 服务层模式，口径与 jev 轨道同源）；
         # 读失败降级为空 + 结构化诊断（与 _join_display_status 同语义：部分来源失败不阻断写库）
-        from backend.services.jev.jev_sentiment_compute import (
+        from backend.services.jev.jev_sentiment_v2_compute import (
             _load_analysis_by_code,
             _yesterday_total_amounts_by_slot,
         )

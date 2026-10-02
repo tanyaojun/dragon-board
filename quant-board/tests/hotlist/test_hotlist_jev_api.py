@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-import backend.services.jev.jev_sentiment_compute as jev_module
+import backend.services.jev.jev_sentiment_v2_compute as jev_module
 import backend.services.jev.jev_sentiment_v2_compute as jev_v2_module
 from backend.main import app
 

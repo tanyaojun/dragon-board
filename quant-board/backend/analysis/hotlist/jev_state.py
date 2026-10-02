@@ -19,21 +19,7 @@ _LIFECYCLE_KEYS = ("ignition", "expansion", "crowded", "reversal", "cooling", "u
 _LEADER_LIMIT = 8
 _ZT_EPS = 0.999
 
-# 五档 criteria（边际方向语义，阶段 0 已验证表述；frame_stage/sequence_stage/day_stage 共用文案基）
-_STAGE_CRITERIA = {
-    "ice": "冰点：赚钱效应殆尽，涨停稀少跌停增多，普遍观望",
-    "start": "启动：从弱势基线开始修复，试错资金进场，局部热点出现",
-    "ferment": "发酵：赚钱效应扩散，涨停与连板增多，热点扩散",
-    "climax": "高潮：全面亢奋，涨停潮普涨，拥挤明显",
-    "retreat": "退潮：从强势转弱，高位股集体走弱，炸板增多",
-}
-_DAY_STAGE_CRITERIA = {
-    "ice": "冰点：全天赚钱效应殆尽，涨停稀少跌停增多，普遍观望",
-    "start": "启动：全天整体从弱势基线修复，试错资金进场",
-    "ferment": "发酵：全天赚钱效应扩散，涨停与连板增多",
-    "climax": "高潮：全天全面亢奋，涨停潮普涨，拥挤明显",
-    "retreat": "退潮：全天从强势转弱，高位股集体走弱，炸板增多",
-}
+# 五档/形态 criteria（v2 口径；_DAY_PATTERN_CRITERIA 为槽级/日级共用的七类路径判据基）
 _DAY_PATTERN_CRITERIA = {
     "steady_strong": "全天强势主导（多数时段发酵/高潮）",
     "steady_weak": "全天弱势主导（多数时段退潮/冰点）",
@@ -45,39 +31,13 @@ _DAY_PATTERN_CRITERIA = {
 }
 
 
-def _stage_question(instructions: str) -> dict:
-    return {"type": "choice", "instructions": instructions, "criteria": dict(_STAGE_CRITERIA)}
-
-
 def _score_question(instructions: str) -> dict:
     return {"type": "score", "instructions": instructions, "criteria": list(SCORE_ANCHORS_10)}
 
 
-# 槽位四问：Q1 当前帧截面 + Q2 当日连续帧序列（均五档）+ 描述性 score；零预测（无 noul）。
-JEV_SLOT_QUESTIONS = {
-    "frame_stage": _stage_question("仅凭【当前帧】证据，判断当前A股短线热榜情绪处于哪一档？"),
-    "sequence_stage": _stage_question("结合【当日已落库连续帧】证据序列（含当前帧），判断当前情绪处于哪一档？"),
-    "temperature": _score_question("当前短线情绪温度（0=彻底冰点，100=极度亢奋）"),
-    "crowding": _score_question("高位拥挤度（0=无人问津，100=极度拥挤危险）"),
-}
-
-# 日级四问（盘后固定当日总体）：同样零预测。
-JEV_DAY_QUESTIONS = {
-    "day_stage": {
-        "type": "choice", "instructions": "综合今日全天连续帧证据，今日短线热榜情绪总体处于哪一档？",
-        "criteria": dict(_DAY_STAGE_CRITERIA),
-    },
-    "day_pattern": {
-        "type": "choice", "instructions": "今日全天情绪路径属于哪种形态？",
-        "criteria": dict(_DAY_PATTERN_CRITERIA),
-    },
-    "day_temperature": _score_question("今日全天短线情绪温度（0=彻底冰点，100=极度亢奋）"),
-    "day_crowding": _score_question("今日全天高位拥挤度（0=无人问津，100=极度拥挤危险）"),
-}
-
 # ── 问题集 v2（2026-10-02 梳理提案 P2-P4，docs/hotlist-jev/jev-sentiment-questionset-review.md）──
 # 打标链四轮试点的方法论回灌：判据绑可数证据（近20日参照坐标系）、拥挤改离散归层（score 无方差已证）、
-# 温度保连续分但题干锚定参照系。v1 问题集与集合原样封存。
+# 温度保连续分但题干锚定参照系。2026-10-02 V1 退役裁决：v1 题目常量随 v1 链删除（git 历史留档）。
 
 _STAGE_CRITERIA_V2 = {
     "ice": "冰点：涨停数处于近20日参照低位（低于p20）、跌停或大跌股增多、赚钱效应殆尽、普遍观望",

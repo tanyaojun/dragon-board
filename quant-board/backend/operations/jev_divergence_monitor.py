@@ -42,7 +42,7 @@ def load_slots(db) -> list[dict]:
         if en:
             rule[(str(doc.get("tradingDate")), str(doc.get("slotTime")))] = en
     rows = []
-    for doc in db["hotlist_jev_sentiment"].find(
+    for doc in db["hotlist_jev_sentiment_v2"].find(
         {"kind": "slot", "status": "ok"}, {"tradingDate": 1, "slotTime": 1, "answers.sequence_stage": 1}
     ):
         j = ((doc.get("answers") or {}).get("sequence_stage") or {}).get("choice")
