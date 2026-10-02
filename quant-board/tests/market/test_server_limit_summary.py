@@ -135,6 +135,7 @@ class _FakeLimitupService:
     def __init__(self, payloads):
         self._payloads = list(payloads)
         self.calls = 0
+        self.pool_keys_requested = None
 
     async def get_limit_up_list(self, date=None):
         self.calls += 1
@@ -143,7 +144,8 @@ class _FakeLimitupService:
             raise payload
         return payload
 
-    async def get_ths_pools(self, date=None):
+    async def get_ths_pools(self, date=None, keys=None):
+        self.pool_keys_requested = keys
         return {"pools": {}}
 
 
@@ -170,9 +172,44 @@ def _run_acollect(monkeypatch, service):
         lambda: _FakeOverviewService(),
     )
     monkeypatch.setattr(providers_module.asyncio, "sleep", _no_sleep)
+    providers_module._SERVER_EVIDENCE_CACHE.clear()  # 证据级缓存按用例隔离
     provider = ServerMarketEvidenceProvider(
         trading_date="2026-09-24", gateway=InProcessMarketDataGateway())
     return asyncio.run(provider.acollect(timeout_ms=1000))
+
+
+def test_provider_reuses_evidence_within_ttl(monkeypatch):
+    # 证据级 300s 缓存（风控优化）：TTL 内第二次 acollect 复用缓存，不再打 THS
+    import asyncio
+
+    from backend.snapshot_collector.gateway import InProcessMarketDataGateway
+    from backend.snapshot_collector import providers as providers_module
+
+    async def _no_sleep(_seconds):
+        return None
+
+    service = _FakeLimitupService([_OK_PAYLOAD])
+    monkeypatch.setattr("backend.market_proxy.limitup.get_limitup_service", lambda: service)
+    monkeypatch.setattr(
+        "backend.market_proxy.indices.get_market_overview_service",
+        lambda: _FakeOverviewService(),
+    )
+    monkeypatch.setattr(providers_module.asyncio, "sleep", _no_sleep)
+    providers_module._SERVER_EVIDENCE_CACHE.clear()
+    provider = ServerMarketEvidenceProvider(
+        trading_date="2026-09-24", gateway=InProcessMarketDataGateway())
+    evidence1, _ = asyncio.run(provider.acollect(timeout_ms=1000))
+    evidence2, health2 = asyncio.run(provider.acollect(timeout_ms=1000))  # 缓存未清
+    assert service.calls == 1  # 第二次 0 次上游调用
+    assert evidence2["limitSummary"]["zhaban"]["ztCount"] == 1
+    assert health2.ok is True
+
+
+def test_provider_passes_collector_pool_subset(monkeypatch):
+    # 采集链只取 failed/rushing/drawdown 三池（连板层五池零消费）
+    service = _FakeLimitupService([_OK_PAYLOAD])
+    _run_acollect(monkeypatch, service)
+    assert service.pool_keys_requested == ("failed", "rushing", "drawdown")
 
 
 def test_ths_first_attempt_fails_retry_recovers(monkeypatch):

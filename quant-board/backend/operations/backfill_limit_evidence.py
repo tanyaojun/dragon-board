@@ -235,13 +235,18 @@ def apply_enrich(db, frame_actions: list[dict], doc_actions: list[dict]) -> tupl
 
 
 async def _fetch_all_ths(date8_list: list[str]) -> dict:
-    """单事件循环批量拉取 THS 历史池（逐条 try：单日失败不影响整批）。"""
+    """单事件循环批量拉取 THS 历史池（逐条 try：单日失败不影响整批）。
+
+    日期间隔 0.8s（2026-10-02 风控复盘：THS 限流返空 200+空 info，高频连发会被静默限流）。
+    """
     from backend.market_proxy.limitup import get_limitup_service
     from backend.snapshot_collector.providers import build_server_limit_summary
 
     svc = get_limitup_service()
     out: dict = {}
-    for date8 in date8_list:
+    for i, date8 in enumerate(date8_list):
+        if i > 0:
+            await asyncio.sleep(0.8)
         try:
             list_body = await svc.get_limit_up_list(date8)
             pools = await svc.get_ths_pools(date8)

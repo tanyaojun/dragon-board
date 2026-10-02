@@ -110,7 +110,16 @@ def _validate_10jqka_payload(payload: Any) -> None:
 
 
 class LimitUpService:
-    """THS 涨停池/细分池：httpx 直连 10jqka，进程内 TTL 缓存。"""
+    """THS 涨停池/细分池：httpx 直连 10jqka，进程内 TTL 缓存。
+
+    风控对策（2026-10-02 复盘：9 月 limitSummary 间歇缺失=THS 限流返空 200+空 info，
+    越到尾盘累计量越大失败越狠）：
+    - 请求最小间隔节流（含并行池错峰），杜绝同刻 8 连发突发；
+    - 疑似风控返空（HTTP 200 但 info 空）按连续次数指数退避负缓存，不原样重打。
+    """
+
+    # 连板层池（one/two/three/four/high）在采集链零消费、仅面板透传展示用
+    POOL_KEYS_ALL = tuple(p["key"] for p in THS_LIMIT_UP_POOLS)
 
     def __init__(
         self,
@@ -118,45 +127,94 @@ class LimitUpService:
         client: httpx.AsyncClient | None = None,
         ttl_seconds: float = 30.0,
         now_ms: Callable[[], int] | None = None,
+        sleep_fn: Callable[..., Any] | None = None,
+        min_request_gap_ms: float = 250.0,
+        empty_backoff_base_ms: float = 30_000.0,
+        empty_backoff_cap_ms: float = 300_000.0,
     ) -> None:
         self._client = client
         self._ttl_ms = max(1.0, float(ttl_seconds)) * 1000
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
+        self._sleep = sleep_fn or asyncio.sleep
+        self._min_gap_ms = max(0.0, float(min_request_gap_ms))
+        self._empty_backoff_base_ms = float(empty_backoff_base_ms)
+        self._empty_backoff_cap_ms = float(empty_backoff_cap_ms)
         self._cache: dict[str, dict[str, Any]] = {}
+        self._last_request_ms: float | None = None
+        self._empty_streak: dict[str, int] = {}
+
+    async def _throttle(self) -> None:
+        """全局最小请求间隔（跨并行任务串行放行，错峰不突发）。"""
+        if self._min_gap_ms <= 0:
+            return
+        async with asyncio.Lock():
+            now = self._now_ms()
+            if self._last_request_ms is not None:
+                wait_ms = self._min_gap_ms - (now - self._last_request_ms)
+                if wait_ms > 0:
+                    await self._sleep(wait_ms / 1000.0)
+            self._last_request_ms = self._now_ms()
+
+    def _empty_backoff_ms(self, key: str) -> float:
+        streak = self._empty_streak.get(key, 0)
+        if streak <= 0:
+            return 0.0
+        return min(self._empty_backoff_base_ms * (2 ** (streak - 1)), self._empty_backoff_cap_ms)
 
     async def get_limit_up_list(self, date: str | None = None) -> Any:
         date_str = _normalize_date(date)
         cache_key = f"limitup:{date_str}"
         cached = self._cache.get(cache_key)
         now_ms = self._now_ms()
+        backoff_ms = self._empty_backoff_ms(cache_key)
         if cached and now_ms - cached["fetched_at_ms"] < self._ttl_ms:
             return cached["payload"]
+        if cached and cached.get("empty") and now_ms - cached["fetched_at_ms"] < backoff_ms:
+            # 疑似风控返空：退避窗口内直接复用空结果，不原样重打
+            return cached["payload"]
+        await self._throttle()
         url = (
             "https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool?page=1&limit=200"
             "&field=199112,10,9001,330323,330324,330325,9002,330329,133971,133970,"
             "1968584,3475914,9003,9004,continue_day,continue_day_cnt,high_days,reason_type"
             f"&filter=HS,GEM2STAR&order_field=330324&order_type=0&date={date_str}"
         )
-        response = await (self._client or get_limitup_client()).get(
+        client = self._client or get_limitup_client()
+        response = await client.get(
             url, timeout=8.0, headers={"User-Agent": UA}
         )
         response.raise_for_status()
         payload = response.json()
         _validate_10jqka_payload(payload)
-        self._cache[cache_key] = {"payload": payload, "fetched_at_ms": now_ms}
+        data = payload.get("data") if isinstance(payload, dict) else None
+        info = data.get("info") if isinstance(data, dict) else None
+        empty = isinstance(info, list) and len(info) == 0
+        if empty:
+            self._empty_streak[cache_key] = self._empty_streak.get(cache_key, 0) + 1
+        else:
+            self._empty_streak[cache_key] = 0
+        self._cache[cache_key] = {"payload": payload, "fetched_at_ms": now_ms, "empty": empty}
         return payload
 
-    async def get_ths_pools(self, date: str | None = None) -> dict[str, Any]:
+    async def get_ths_pools(self, date: str | None = None,
+                            keys: tuple[str, ...] | None = None) -> dict[str, Any]:
+        """获取细分池；keys=None 全量（面板透传），子集=采集链按需（failed/rushing/drawdown）。
+
+        缓存键带子集（面板全量与采集子集互不污染）；每池独立请求经 _throttle 错峰。
+        """
         date_str = _normalize_date(date)
-        cache_key = f"ths-pools:{date_str}"
+        wanted = tuple(keys) if keys else self.POOL_KEYS_ALL
+        cache_key = f"ths-pools:{date_str}:{','.join(wanted)}"
         cached = self._cache.get(cache_key)
         now_ms = self._now_ms()
         if cached and now_ms - cached["fetched_at_ms"] < self._ttl_ms:
             return cached["payload"]
         client = self._client or get_limitup_client()
+        pools_to_load = [p for p in THS_LIMIT_UP_POOLS if p["key"] in wanted]
 
         async def load(pool: dict[str, str]) -> tuple[str, dict[str, Any]]:
             try:
+                await self._throttle()
                 response = await client.get(
                     _build_pool_url(pool, date_str),
                     timeout=8.0,
@@ -183,11 +241,11 @@ class LimitUpService:
                     "message": str(exc)[:200],
                 }
 
-        entries = await asyncio.gather(*(load(pool) for pool in THS_LIMIT_UP_POOLS))
+        entries = await asyncio.gather(*(load(pool) for pool in pools_to_load))
         pools = dict(entries)
         errors = [
             {"pool": pool["key"], "errorCode": info.get("errorCode"), "message": info.get("message")}
-            for pool, info in zip(THS_LIMIT_UP_POOLS, entries)
+            for pool, info in zip(pools_to_load, entries)
             if not info[1].get("ok")
         ]
         payload = {

@@ -54,6 +54,11 @@ _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
 _THS_RETRY_DELAY_S = 2.5  # THS 涨停池首试失败后的重试间隔（限流/抖动多为瞬时）
+# 采集链消费的池子集（连板层 five 池零消费，面板全量走 API 路由）
+_COLLECTOR_POOL_KEYS = ("failed", "rushing", "drawdown")
+# 证据级缓存（模块级：provider 实例每次上下文构建都新建）；风控优化详见 ths-limitup-arsenal-audit.md
+_SERVER_EVIDENCE_CACHE: dict[str, dict[str, Any]] = {}
+_SERVER_EVIDENCE_TTL_S = 300.0
 
 # 默认数据网关：CLI/手动链路走 HTTP（proxy 转发）；collector_main 独立采集进程
 # 通过 set_default_gateway() 切换为进程内直连，避免 8000 自环依赖。
@@ -2317,6 +2322,13 @@ class ServerMarketEvidenceProvider:
         start = time.monotonic()
         digits = "".join(ch for ch in str(self._trading_date or "") if ch.isdigit())
         date = digits if len(digits) == 8 else None
+        # 证据级 TTL 缓存（2026-10-02 风控优化）：provider 实例每次上下文构建都新建，
+        # 缓存挂模块级——同交易日 5 分钟内复用同一份证据（capturedAt 保留原取数时刻可追溯），
+        # THS 请求从 ~48 槽组×4 请求/日 降到 ~10 半小时边界×4（约 -90%）
+        cache_key = date or "live"
+        cached = _SERVER_EVIDENCE_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached["at"] < _SERVER_EVIDENCE_TTL_S:
+            return cached["evidence"], cached["health"]
         info_items: list[dict[str, Any]] = []
         pools_body: dict[str, Any] = {}
         indices: dict[str, Any] = {}
@@ -2328,11 +2340,16 @@ class ServerMarketEvidenceProvider:
                 from backend.market_proxy.limitup import get_limitup_service
 
                 async def _attempt_limit_evidence() -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
-                    """THS 涨停池证据单次尝试：返回 (info_items, pools_body, attempt_errors)。"""
+                    """THS 涨停池证据单次尝试：返回 (info_items, pools_body, attempt_errors)。
+
+                    只取采集链消费的三池（failed/rushing/drawdown）；连板层五池零消费，
+                    面板全量走 API 路由（独立缓存键互不污染）。
+                    """
                     attempt_errors: list[str] = []
                     service = get_limitup_service()
                     list_body = await service.get_limit_up_list(date or None)
-                    pools_body = await service.get_ths_pools(date or None)
+                    pools_body = await service.get_ths_pools(
+                        date or None, keys=_COLLECTOR_POOL_KEYS)
                     data = list_body.get("data") if isinstance(list_body, dict) else None
                     raw_info = data.get("info") if isinstance(data, dict) else None
                     items = [i for i in raw_info if isinstance(i, dict)] if isinstance(raw_info, list) else []
@@ -2341,7 +2358,8 @@ class ServerMarketEvidenceProvider:
                     return items, pools_body if isinstance(pools_body, dict) else {}, attempt_errors
 
                 # THS 收盘时点间歇失败（限流/超时）曾致 9 月 15:00 limitSummary 缺 13/21 帧；
-                # limitup service 失败无负缓存（重拉即真请求），首试失败隔短延时重试一次再定成败
+                # 首试失败隔短延时重试一次；service 侧风控返空已有指数退避负缓存，
+                # 重试若落在退避窗口内会直接复用空结果（不再打上游），不会放大突发
                 first_errors: list[str] = []
                 try:
                     info_items, pools_body, first_errors = await _attempt_limit_evidence()
@@ -2383,14 +2401,16 @@ class ServerMarketEvidenceProvider:
         evidence: dict[str, Any] = {"indices": indices}
         if limit_summary:
             evidence["limitSummary"] = limit_summary
-        return (
-            evidence,
-            SourceHealth(
-                source="server_market_evidence",
-                ok=not errors,
-                latency_ms=int((time.monotonic() - start) * 1000),
-                row_count=len(info_items),
-                error="; ".join(errors),
-                captured_at=_iso_now(),
-            ),
+        health = SourceHealth(
+            source="server_market_evidence",
+            ok=not errors,
+            latency_ms=int((time.monotonic() - start) * 1000),
+            row_count=len(info_items),
+            error="; ".join(errors),
+            captured_at=_iso_now(),
         )
+        # 只缓存成功证据：失败不缓存（下一槽组应重试新鲜数据）
+        if not errors:
+            _SERVER_EVIDENCE_CACHE[cache_key] = {"evidence": evidence, "health": health,
+                                                 "at": time.monotonic()}
+        return evidence, health
