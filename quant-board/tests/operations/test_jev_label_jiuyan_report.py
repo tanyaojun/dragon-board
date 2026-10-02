@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""jev 打标 v2 判定门测试：方向语义必须锁（gate_verdict 反转事故教训）+ 判定映射预登记。"""
+"""jev 打标 v2 重铸试点（pilot2）判定门测试：depth 方差门 + 判定映射预登记 + 稳定性对照。"""
 from __future__ import annotations
 
 import sys
@@ -9,58 +9,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.operations.jev_label_jiuyan_report import (
     PHASE3_REF_LIANBAN,
-    build_migration,
+    bucket_next_day,
+    depth_distribution_metrics,
     direction_consistent_with_phase3,
     driver_group_metrics,
-    noul_distribution_metrics,
-    noul_effect_metrics,
-    quartile,
+    stability_vs_pilot1,
     verdict,
 )
+
+CORE, NEW, EQ, CON, INS = ("core_main_business", "new_growing_business",
+                           "equity_or_affiliate", "concept_assembly", "insufficient_evidence")
 
 
 def _rows(labels_pct):
     return [{"label": lab, "nextPct": pct, "nextLianban": pct >= 9.8} for lab, pct in labels_pct]
 
 
-def test_quartile_method_matches_temp_crowding():
-    assert quartile(list(range(1, 21)), 0.25) == 5   # idx=int(0.25*19)=4
-    assert quartile(list(range(1, 21)), 0.75) == 15  # idx=14
+def test_depth_distribution_expanded():
+    # 手判预估形态：50%/36%/7%/7% + 逃生口少量 → 展开
+    depths = ([CORE] * 50 + [NEW] * 36 + [EQ] * 7 + [CON] * 7)
+    m = depth_distribution_metrics(depths)
+    assert m["expanded"] is True
+    assert m["maxBucketShare"] == 0.5 and m["substantiveBucketsWithN5"] == 4
 
 
-def test_noul_distribution_expanded_vs_old_chain_shape():
-    # 旧链形态：挤在 0.6-0.85，低组 0 → 不展开
-    old_like = [0.60, 0.63, 0.65, 0.68, 0.70, 0.72, 0.74, 0.76, 0.78, 0.80, 0.82, 0.85] * 2
-    m = noul_distribution_metrics(old_like)
-    assert m["expanded"] is False and m["lowShare"] == 0.0
-    # 修复形态：低组 ≥15% 且 p75-p25 ≥0.30 → 展开
-    fixed = ([0.05, 0.10, 0.15, 0.20] * 5  # 低组 20/40=50%
-             + [round(0.35 + i * 0.015, 3) for i in range(20)])
-    m2 = noul_distribution_metrics(fixed)
-    assert m2["expanded"] is True
-    assert m2["iqr"] >= 0.30 and m2["lowShare"] >= 0.15
+def test_depth_distribution_collapsed_like_old_noul():
+    # 旧 noul 塌缩形态：单实质桶 >70% → 不展开
+    m = depth_distribution_metrics([CORE] * 80 + [NEW] * 15 + [EQ] * 3 + [CON] * 2)
+    assert m["expanded"] is False and m["maxBucketShare"] == 0.8
 
 
-def test_noul_distribution_insufficient_sample():
-    m = noul_distribution_metrics([0.5, 0.7, 0.9])
-    assert m["insufficient"] is True and m["expanded"] is False
+def test_depth_distribution_escape_hatch_abuse_fails():
+    # 逃生口 >15% = 滥用 → 不展开（fail-visible 不得成为逃避判读的出口）
+    depths = [CORE] * 40 + [NEW] * 20 + [EQ] * 8 + [CON] * 8 + [INS] * 24
+    assert depth_distribution_metrics(depths)["expanded"] is False
 
 
-def test_noul_effect_direction_semantics_locked():
-    # diff = mean(high) − mean(low)：高组次日好 → 正差 effectOk；写反即挂（方向锁定）
-    hi = [(0.9, 4.0 + i * 0.1) for i in range(10)]
-    lo = [(0.1, -1.0 - i * 0.1) for i in range(10)]
-    m = noul_effect_metrics(hi + lo)
-    assert m["diff"] is not None and m["diff"] > 0
-    assert m["effectOk"] is True
-    # 方向反转 → 负差，effectOk 必须 False
-    m2 = noul_effect_metrics([(n, -p) for n, p in hi + lo])
-    assert m2["diff"] < 0 and m2["effectOk"] is False
-
-
-def test_noul_effect_insufficient_groups():
-    m = noul_effect_metrics([(0.9, 3.0)] * 5 + [(0.1, 0.0)] * 3)
-    assert m["insufficient"] is True and m["effectOk"] is False
+def test_depth_distribution_insufficient_sample():
+    assert depth_distribution_metrics([CORE] * 10 + [NEW] * 5)["insufficient"] is True
 
 
 def test_driver_group_metrics():
@@ -70,46 +56,51 @@ def test_driver_group_metrics():
                  + [("capital_flow", -1.0 - i * 0.1) for i in range(10)])
     m = driver_group_metrics(rows)
     assert m["groupOk"] is True and m["spread"] == 50.0
-    # 单组 → 不可检验
     m2 = driver_group_metrics(_rows([("policy", 1.0)] * 10))
     assert m2["insufficient"] is True
 
 
 def test_direction_consistent_with_phase3():
-    same = dict(PHASE3_REF_LIANBAN)
-    assert direction_consistent_with_phase3(same)["consistent"] is True
+    assert direction_consistent_with_phase3(dict(PHASE3_REF_LIANBAN))["consistent"] is True
     reversed_ = {k: -v for k, v in PHASE3_REF_LIANBAN.items()}
     assert direction_consistent_with_phase3(reversed_)["consistent"] is False
 
 
 def test_verdict_mapping_pre_registered():
-    dist_ok = {"expanded": True, "insufficient": False}
-    dist_fail = {"expanded": False, "insufficient": False}
-    effect_ok = {"effectOk": True, "insufficient": False}
-    effect_bad = {"effectOk": False, "insufficient": False}
+    depth_ok = {"expanded": True, "insufficient": False}
+    depth_fail = {"expanded": False, "insufficient": False}
     group_ok = {"groupOk": True, "insufficient": False}
     group_bad = {"groupOk": False, "insufficient": False}
     dir_ok = {"consistent": True}
     dir_bad = {"consistent": False}
-    # 分布未展开 = REJECT（修复失败），即使其余全过
-    assert verdict(dist_fail, effect_ok, group_ok, dir_ok) == "REJECT"
-    assert verdict({"insufficient": True}, effect_ok, group_ok, dir_ok) == "REJECT"
-    # 全过 = PASS_CANDIDATE
-    assert verdict(dist_ok, effect_ok, group_ok, dir_ok) == "PASS_CANDIDATE"
-    # 组不显著但方向与全窗一致 → INSUFFICIENT 扩窗，非 REJECT
-    assert verdict(dist_ok, effect_ok, group_bad, dir_ok) == "INSUFFICIENT"
-    assert verdict(dist_ok, effect_bad, group_bad, dir_ok) == "INSUFFICIENT"
-    assert verdict(dist_ok, effect_bad, group_ok, dir_bad) == "INSUFFICIENT"
+    # 门A 不过 = REJECT（重铸失败），即使门B 过
+    assert verdict(depth_fail, group_ok, dir_ok) == "REJECT"
+    assert verdict({"insufficient": True}, group_ok, dir_ok) == "REJECT"
+    # 双门全过 = PASS_CANDIDATE
+    assert verdict(depth_ok, group_ok, dir_ok) == "PASS_CANDIDATE"
+    # 门A 过门B 不过 → INSUFFICIENT（方向一致与否都非 REJECT）
+    assert verdict(depth_ok, group_bad, dir_ok) == "INSUFFICIENT"
+    assert verdict(depth_ok, group_bad, dir_bad) == "INSUFFICIENT"
 
 
-def test_build_migration_overlap_and_noul_quantiles():
-    v1 = [{"tradingDate": "2026-09-05", "code": "600825", "label": "ma_restructure", "matchNoul": 0.8},
-          {"tradingDate": "2026-09-05", "code": "000504", "label": "product_event", "matchNoul": 0.7},
-          {"tradingDate": "2026-09-04", "code": "999999", "label": "policy", "matchNoul": 0.6}]
-    v2 = [{"tradingDate": "2026-09-05", "code": "600825", "label": "ma_restructure", "matchNoul": 0.9},
-          {"tradingDate": "2026-09-05", "code": "000504", "label": "concept_stretch", "matchNoul": 0.2}]
-    m = build_migration(v1, v2)
-    assert m["overlap"] == 2 and m["sameLabel"] == 1 and m["sameShare"] == 0.5
-    assert m["cross"]["ma_restructure"]["ma_restructure"] == 1
-    assert m["cross"]["product_event"]["concept_stretch"] == 1
-    assert m["noulQuantiles"]["v1"] is None  # 重叠对 <10 不给分位，不伪造
+def test_stability_vs_pilot1():
+    v2 = [{"tradingDate": "2026-09-07", "code": "600825", "label": "ma_restructure", "freshness": "continuing"},
+          {"tradingDate": "2026-09-07", "code": "000504", "label": "product_event", "freshness": "continuing"}]
+    p1 = [{"tradingDate": "2026-09-07", "code": "600825", "label": "ma_restructure", "freshness": "fresh_catalyst"},
+          {"tradingDate": "2026-09-07", "code": "000504", "label": "concept_stretch", "freshness": "continuing"},
+          {"tradingDate": "2026-09-08", "code": "999999", "label": "policy", "freshness": "continuing"}]
+    s = stability_vs_pilot1(v2, p1, "label")
+    assert s == {"overlap": 2, "sameShare": 0.5}
+    s2 = stability_vs_pilot1(v2, p1, "freshness")
+    assert s2 == {"overlap": 2, "sameShare": 0.5}
+
+
+def test_bucket_next_day():
+    rows = [{"catalystDepth": CORE, "nextPct": 2.0, "nextLianban": True},
+            {"catalystDepth": CORE, "nextPct": 0.0, "nextLianban": False},
+            {"catalystDepth": CON, "nextPct": -1.0, "nextLianban": False},
+            {"catalystDepth": None, "nextPct": 5.0, "nextLianban": False}]
+    b = bucket_next_day(rows)
+    assert b[CORE] == {"n": 2, "nextPctMean": 1.0, "lianban": 50.0}
+    assert b[CON]["nextPctMean"] == -1.0
+    assert None not in b  # 未打深的标签不进桶

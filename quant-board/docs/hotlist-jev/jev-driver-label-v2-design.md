@@ -80,3 +80,18 @@
 
 - 不动旧链集合与脚本；不接相位/题材/交易体系（验证过关另行立项）；不做 10 月增量调度。
 - midday 采集暂不用于打标（final 为准）；jieyan 解析缺失日 fail-visible 跳过并日志披露，不伪造空跑成功。
+
+## 8. 重铸试点预登记（2026-10-02，用户裁决"重铸 Noul"后先冻结再开火）
+
+T1 试点战报（e2192bbf）：门1 REJECT——Noul 0-1 轴在韭研全量弹药下仍无方差（全量 IQR=0.20、<0.3 仅 2/266），与旧薄弹药（IQR=0.19）同形态；判定为**题目构造问题**（涨停催化几乎总与业务沾边，0-1 关联度天生无方差）。用户裁决重铸，product=`catalyst_depth`（催化落点深度五选一）替换 `business_match`（noul 0-1），driver_type 与 catalyst_freshness 原样不动（叙事不变、两轴不动 → pilot1/pilot2 同股同题可做稳定性对照）。
+
+**判据（先冻结）**：
+
+| 门 | 判据 | 说明 |
+|---|---|---|
+| 门A depth 轴方差（主） | 四个实质桶（core_main_business / new_growing_business / equity_or_affiliate / concept_assembly）每桶 n≥5，且实质桶中最大桶占比 <70%；insufficient_evidence 占比 ≤15%（逃生口不得滥用） | 手判 28 只分层样本预估分布 ≈50%/36%/7%/7% |
+| 门B 驱动分组保留 | 沿用原门2：Kruskal p<0.05（n≥8 组）且连板率极差≥15pct；单月不显著但与阶段3 全窗排序 Spearman ρ≥0.5 一致 → INSUFFICIENT-扩窗 | driver_type 题目未动 |
+| 稳定性对照 | pilot2 vs pilot1（备份集合 hotlist_jev_driver_labels_v2_pilot1，266 条）：driver_type / freshness sameShare——观察项不设硬门 | 叙事与题目均未动，同股应高复现 |
+| 分桶次日方向 | catalyst_depth 各桶次日 pct 均值/连板率——观察项无硬门，让数据说话 | 1=持续性逻辑 / 2=期权弹性 / 3=情绪溢价 / 4=纯博弈 |
+
+**判定映射**：门A+门B 全过=PASS_CANDIDATE（进入 T2 全量决策）；门A 过门B 不过=INSUFFICIENT（按方向一致性区分扩窗/存疑）；门A 不过=REJECT（重铸失败，题目回炉）。试点样本=同 pilot1 三天（09-07/09-18/09-30，266 只，≈37 万 tokens），重跑覆盖主集合前已备份 pilot1。

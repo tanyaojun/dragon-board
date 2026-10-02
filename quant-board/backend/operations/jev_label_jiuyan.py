@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""jev 涨停打标 v2 runner：韭研异动全量名单 → 驱动三轴（driver_type/Noul/catalyst_freshness）。
+"""jev 涨停打标 v2 runner：韭研异动全量名单 → 驱动三轴（driver_type/catalyst_depth/catalyst_freshness）。
 
 设计依据 docs/hotlist-jev/jev-driver-label-v2-design.md：
   population = 韭研当日 final 全量涨停名单（含未进热榜股票，如实标注）；
@@ -21,8 +21,9 @@ from concurrent.futures import ThreadPoolExecutor
 from backend.analysis.hotlist.jev_state import build_jiuyan_label_narrative
 from backend.services.jev.jev_client import call_jev, parse_jev_response
 
-# driver_type / business_match 文案原样沿用旧链（迁移矩阵可逐股对齐的前提）；
-# catalyst_freshness 为 v2 新增搭车轴，unclear=fail-visible 不逼模型强行归类。
+# driver_type / catalyst_freshness 文案原样沿用 pilot1（稳定性对照的前提）；
+# business_match(noul 0-1) 经 T1 试点判死（无方差=题目构造问题，见设计文档 §8），
+# 重铸为 catalyst_depth 催化落点深度五选一（判据锚定解析中的收入占比/订单/参股证据）。
 QUESTIONS = {
     "driver_type": {"type": "choice",
                     "instructions": "该股今日涨停的最主要驱动类型是哪一类？只依据所给信息打标，不预测后市。",
@@ -34,8 +35,18 @@ QUESTIONS = {
                         "industry_cycle": "行业周期：行业景气/价格周期驱动（涨价、供需反转、周期回暖），非单一个股事件",
                         "capital_flow": "资金接力：无明确新催化，主要由资金接力/情绪带动/板块联动上涨",
                         "concept_stretch": "蹭概念：催化与公司实际业务的实质关联弱，或明显蹭热点"}},
-    "business_match": {"type": "noul",
-                       "instructions": "本次涨停催化与公司既有主业的实质关联度（0=纯蹭概念无业务支撑，1=催化直接落在公司既有业务/产品上）"},
+    "catalyst_depth": {"type": "choice",
+                       "instructions": "以解析中最主要的涨停催化为准，该催化所指的业务/事件，在解析所述的公司业务版图中落在哪一层？"
+                                       "依据解析中给出的收入占比、订单、项目、参股关系等证据判断，不预测后市。"
+                                       "并购重组类催化：标的公司业务与公司现有主业同业或紧密上下游按第一层判，跨行业转型按第二层判，"
+                                       "纯控制权变更/壳资源运作且无明确业务注入按第四层判；"
+                                       "解析给出收入占比/金额证据时，以大额业务为业务版图重心。",
+                       "criteria": {
+                           "core_main_business": "核心主业承接：催化所指业务是公司当前主要收入来源（解析明确的主业或占比最高的业务），且催化事件直接作用于该业务（政策/景气作用于它、订单落在它、产品属于它）",
+                           "new_growing_business": "新业务承接：催化所指业务是公司新开拓/培育/在建的业务线，已有实质证据（订单、收入、小批量供货、项目中标）但尚非主要收入来源",
+                           "equity_or_affiliate": "股权关联传导：催化主要经由参股公司、控股股东或兄弟公司、参股基金等间接传导，公司自身报表业务不直接承接",
+                           "concept_assembly": "概念组装弱关联：催化与公司业务的实质联系弱——主要靠名称/地域/行业大概念联想、经营范围变更、极小规模贸易型业务等组装而成，解析所述主业与催化所指业务明显不同",
+                           "insufficient_evidence": "信息不足：解析未提供足以判断催化落点的业务信息，不强行归类"}},
     "catalyst_freshness": {"type": "choice",
                            "instructions": "该股本次涨停对应的催化事件处于什么阶段？只依据所给信息打标，不预测后市。",
                            "criteria": {
@@ -91,7 +102,8 @@ def _label_one(db, labels_col, acc, token, date, code, stock, board, rank):
            "narrative": narrative, "questionsRaw": QUESTIONS,
            "label": answers.get("driver_type", {}).get("choice"),
            "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
-           "matchNoul": answers.get("business_match", {}).get("noul"),
+           "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
+           "catalystDepthProbabilities": answers.get("catalyst_depth", {}).get("probabilities"),
            "freshness": answers.get("catalyst_freshness", {}).get("choice"),
            "freshnessProbabilities": answers.get("catalyst_freshness", {}).get("probabilities"),
            "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
