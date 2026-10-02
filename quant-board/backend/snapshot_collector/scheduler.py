@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import json
 import logging
 import time
 from typing import Any
@@ -67,6 +68,9 @@ class SnapshotCollectorScheduler:
         # timer can skip already-persisted slots without a round-trip to Mongo.
         self._completed_today: set[str] = set()
         self._completed_date: str | None = None
+        # 韭研公社异动支线（交易日 12:05 midday / 15:35 final，每日各 ≤1 次）
+        self._jiuyan_task: asyncio.Task[None] | None = None
+        self._jiuyan_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -78,6 +82,8 @@ class SnapshotCollectorScheduler:
         except RuntimeError:
             return
         self._task = loop.create_task(self._run_loop())
+        if self._jiuyan_task is None or self._jiuyan_task.done():
+            self._jiuyan_task = loop.create_task(run_jiuyan_loop(self))
 
     async def stop(self) -> None:
         task = self._task
@@ -86,6 +92,12 @@ class SnapshotCollectorScheduler:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        jiuyan_task = self._jiuyan_task
+        self._jiuyan_task = None
+        if jiuyan_task is not None:
+            jiuyan_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await jiuyan_task
 
     @property
     def running(self) -> bool:
@@ -127,6 +139,7 @@ class SnapshotCollectorScheduler:
             "collection_count": self._collection_count,
             "error_count": self._error_count,
             "in_flight_slots": sorted(self._in_flight_slots),
+            "jiuyan": self._jiuyan_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -438,3 +451,60 @@ class SnapshotCollectorScheduler:
 snapshot_collector_scheduler = SnapshotCollectorScheduler()
 
 
+
+
+# ── 韭研公社异动每日采集（交易日 12:05 midday / 15:35 final，每日各 ≤1 次） ──────────
+
+_JIUYAN_ATTEMPTS = (
+    (datetime.time(12, 5), "midday"),
+    (datetime.time(15, 35), "final"),
+)
+
+
+def jiuyan_enabled() -> bool:
+    import os
+
+    return os.environ.get("JIUYAN_ENABLED", "1") != "0"
+
+
+async def run_jiuyan_attempt(date: str, kind: str) -> dict:
+    from backend.operations.jiuyan_collect import collect_and_store
+
+    return await asyncio.to_thread(collect_and_store, date, kind)
+
+
+async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
+    """交易日 12:05 采 midday、15:35 采 final（每日各 ≤1 次）；token/会话失效如实记状态不重试。
+
+    与主采集循环互不阻塞（collect 走 asyncio.to_thread）。60s 轮询足够（时点粒度=分钟）。
+    """
+    from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+    state: dict[str, Any] = {"date": None, "done": set()}
+    while True:
+        try:
+            if not jiuyan_enabled():
+                await asyncio.sleep(300)
+                continue
+            now = datetime.datetime.now(TZ_SHANGHAI)
+            trading_date = trading_date_from_ts(int(now.timestamp() * 1000))
+            if trading_date:
+                if state["date"] != trading_date:
+                    state = {"date": trading_date, "done": set()}
+                for attempt_time, kind in _JIUYAN_ATTEMPTS:
+                    if kind in state["done"]:
+                        continue
+                    if (now.hour, now.minute) >= (attempt_time.hour, attempt_time.minute):
+                        state["done"].add(kind)
+                        result = await run_jiuyan_attempt(trading_date, kind)
+                        sched._jiuyan_last = {**result, "at": now.isoformat(timespec="seconds")}
+                        logger.info("jiuyan collect %s %s: %s", kind, trading_date,
+                                    json.dumps(result, ensure_ascii=False, default=str)[:200])
+                        break
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("jiuyan scheduler cycle failed")
+            sched._jiuyan_last = {"status": "loop_error", "at": datetime.datetime.now(TZ_SHANGHAI).isoformat()}
+            await asyncio.sleep(60)

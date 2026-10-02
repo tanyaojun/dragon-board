@@ -148,3 +148,46 @@ export interface JevReviewListResult {
   degraded: boolean
   reason: string | null
 }
+
+// ---------- 韭研公社异动（W-jiuyan，2026-10-02；GET /api/hotlist-jev/jiuyan-action） ----------
+
+export interface JiuyanStock {
+  code: string | null
+  name: string | null
+  price: number | null
+  time: string | null
+  num: string | null
+  day: number | null
+  reason: string | null
+  expound: string | null
+  articleId: string | null
+  likeCount: number | null
+}
+
+export interface JiuyanField {
+  name: string
+  count: number
+  stocks: JiuyanStock[]
+}
+
+export interface JiuyanActionDoc {
+  tradingDate: string
+  updateKind: 'midday' | 'final'
+  counts: { all?: number; recommend?: number }
+  fields: JiuyanField[]
+  totalStocks: number
+  quality: { degradedSources: string[]; tokenSource: string }
+  fetchedAt: string
+}
+
+export interface JiuyanDateEntry {
+  date: string
+  kinds: string[]
+}
+
+export interface JiuyanActionResult {
+  dates: JiuyanDateEntry[]
+  doc: JiuyanActionDoc | null
+  degraded: boolean
+  reason: string | null
+}

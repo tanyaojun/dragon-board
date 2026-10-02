@@ -591,6 +591,47 @@
                   </div>
                 </div>
               </div>
+              <!-- 韭研公社异动卡（W-jiuyan 2026-10-02）：板块/涨停时间/连板/人工解析，jev 结构证据原料 -->
+              <div class="jev-review">
+                <div class="jev-review-head">
+                  <span class="jev-review-title">📈 韭研异动</span>
+                  <span class="jev-review-legend">板块 · 涨停时间 · 连板 · 人工解析（jiuyangongshe.com）</span>
+                  <span v-if="jiuyanDoc" class="jev-review-progress">{{ jiuyanDoc.updateKind === 'final' ? '全日' : '午间' }} {{ jiuyanDoc.totalStocks }} 只</span>
+                  <button class="time-btn" @click="loadJiuyanAction(jiuyanSelectedDate || undefined)">刷新</button>
+                </div>
+                <div class="time-range-selector" v-if="jiuyanDates.length">
+                  <button v-for="entry in jiuyanDates.slice(0, 12)" :key="entry.date" class="time-btn"
+                    :class="{ active: jiuyanSelectedDate === entry.date }" @click="loadJiuyanAction(entry.date)">
+                    {{ entry.date.slice(5) }}
+                  </button>
+                </div>
+                <div v-if="jiuyanLoading" class="note-line">韭研数据加载中…</div>
+                <div v-else-if="jiuyanError" class="note-line">⚠️ {{ jiuyanError }}</div>
+                <div v-else-if="!jiuyanDoc" class="empty-row">该日无韭研异动数据</div>
+                <div v-else class="jev-review-days">
+                  <div v-for="field in jiuyanDoc.fields" :key="field.name" class="jev-review-day">
+                    <button class="jev-review-day-head" @click="toggleJiuyanField(field.name)">
+                      <span>{{ openJiuyanFields.has(field.name) ? '▾' : '▸' }} {{ field.name }}</span>
+                      <span class="jev-review-day-meta">{{ field.count }} 只</span>
+                    </button>
+                    <div v-if="openJiuyanFields.has(field.name)" class="jev-review-items">
+                      <div v-for="stock in field.stocks" :key="stock.code + (stock.articleId || '')" class="jev-review-item">
+                        <button class="jev-review-item-head" @click="toggleJiuyanStock(stock.code + (stock.articleId || ''))">
+                          <span class="jev-review-slot">{{ stock.time || '--' }}</span>
+                          <span class="jev-review-vs">
+                            {{ stock.name }}<template v-if="stock.num">（{{ stock.num }}）</template>
+                            <template v-if="stock.price != null"> {{ stock.price }}</template>
+                          </span>
+                          <span class="jev-review-dayret" v-if="stock.likeCount != null">👍 {{ stock.likeCount }}</span>
+                        </button>
+                        <div v-if="expandedJiuyanStock === stock.code + (stock.articleId || '')" class="jev-review-item-body">
+                          <pre class="jev-narrative-text jev-review-narrative">{{ stock.expound || '（无解析）' }}</pre>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </template>
           </section>
 
@@ -716,6 +757,7 @@ import {
 import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
+  fetchJiuyanAction,
   fetchJevReviewList,
   JEV_PATTERN_NAMES,
   JEV_PATTERN_ORDER,
@@ -730,6 +772,7 @@ import type {
   HotlistJevDayEntry,
   HotlistJevDoc,
   HotlistJevMissingDay,
+  JiuyanActionDoc,
   JevReviewDay,
   JevReviewItem,
   JevReviewRulingStatus,
@@ -905,6 +948,46 @@ async function ruleReviewItem(item: JevReviewItem, status: JevReviewRulingStatus
   if (day) day.pending = day.items.filter(i => i.ruling.status === 'pending').length
   reviewRuled.value = reviewDays.value.reduce(
     (acc, d) => acc + d.items.filter(i => i.ruling.status !== 'pending').length, 0)
+}
+
+// ---------- 韭研公社异动卡（W-jiuyan 2026-10-02）：板块/涨停时间/连板/人工解析，纯读 ----------
+const jiuyanDoc = ref<JiuyanActionDoc | null>(null)
+const jiuyanDates = ref<Array<{ date: string; kinds: string[] }>>([])
+const jiuyanSelectedDate = ref('')
+const jiuyanLoading = ref(false)
+const jiuyanError = ref<string | null>(null)
+const openJiuyanFields = ref<Set<string>>(new Set())
+const expandedJiuyanStock = ref<string | null>(null)
+
+function toggleJiuyanField(name: string): void {
+  const next = new Set(openJiuyanFields.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  openJiuyanFields.value = next
+}
+
+function toggleJiuyanStock(key: string): void {
+  expandedJiuyanStock.value = expandedJiuyanStock.value === key ? null : key
+}
+
+async function loadJiuyanAction(date?: string): Promise<void> {
+  if (jiuyanLoading.value) return
+  jiuyanLoading.value = true
+  jiuyanError.value = null
+  const result = await fetchJiuyanAction(date)
+  jiuyanLoading.value = false
+  if (result.degraded) {
+    jiuyanError.value = result.reason || '韭研数据不可用'
+    if (result.dates.length) jiuyanDates.value = [...result.dates].reverse()
+    return
+  }
+  jiuyanDates.value = [...result.dates].reverse()
+  jiuyanDoc.value = result.doc
+  jiuyanSelectedDate.value = result.doc?.tradingDate || date || ''
+  if (result.doc && openJiuyanFields.value.size === 0 && result.doc.fields.length) {
+    const biggest = [...result.doc.fields].sort((a, b) => b.count - a.count)[0]
+    if (biggest) openJiuyanFields.value = new Set([biggest.name])
+  }
 }
 
 const version = '6.0.0'
@@ -3318,6 +3401,7 @@ watch(view, (v) => {
   }
   if (v === 'jev') {
     void loadReviewList()
+    void loadJiuyanAction()
   }
 })
 

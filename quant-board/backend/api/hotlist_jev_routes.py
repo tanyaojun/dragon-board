@@ -10,6 +10,8 @@
   分歧仲裁/退潮异议/边界日三类复核项，按日聚合；清单为空时懒生成（读 frames，首次较慢）。
 - POST /api/hotlist-jev/review-ruling：复核裁决回填（status ∈ rule_right/jev_right/
   ambiguous/pending + 备注），幂等更新。
+- GET  /api/hotlist-jev/jiuyan-action：韭研公社异动读口（W-jiuyan，2026-10-02）——
+  无 date 返回 {dates, doc=最新 final}；带 date 返回该日文档（kind 默认 final）。纯读。
 
 读口只返回 hotlist_jev_sentiment 原文档（独立观察轨道），不与规则情绪文档合并。
 """
@@ -237,3 +239,35 @@ def post_jev_review_ruling(payload: JevReviewRulingPayload) -> dict[str, Any]:
         return {"ok": True, "id": payload.id, "status": payload.status}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"ruling_write_failed: {exc}"}
+
+
+@router.get("/jiuyan-action")
+def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str, Any]:
+    """韭研公社异动读口（纯读，不补采）：无 date → 最新 final + 全部日期索引。"""
+    if kind not in ("final", "midday"):
+        return {"ok": False, "errorCode": "bad_kind", "error": "kind must be final|midday"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.operations.jiuyan_store import get_action_doc, list_action_dates
+
+        dates = list_action_dates(db)
+        if not dates:
+            return {"ok": True, "dates": [], "doc": None}
+        target_date = date or dates[-1]["date"]
+        doc = get_action_doc(db, target_date, kind)
+        if doc is None and date is None:
+            # 最新日可能只有 midday——回落找该日任一 kind
+            for k in ("midday", "final"):
+                doc = get_action_doc(db, target_date, k)
+                if doc:
+                    break
+        if doc is None:
+            return {"ok": True, "dates": dates, "doc": None,
+                    "degraded": True, "reason": f"{target_date}:{kind} 未落库"}
+        doc = {k: v for k, v in doc.items() if k != "_id"}
+        return {"ok": True, "dates": dates, "doc": doc}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"jiuyan_read_failed: {exc}"}

@@ -219,3 +219,31 @@ export async function postJevReviewRuling(
     return false
   }
 }
+
+// ---------- 韭研公社异动（W-jiuyan，2026-10-02） ----------
+import type { JiuyanActionResult } from '@/types/hotlistJev'
+
+/** 韭研异动读口（纯读）：无 date 返回最新 final + 全部日期索引；degraded 如实返回 */
+export async function fetchJiuyanAction(date?: string): Promise<JiuyanActionResult> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
+  try {
+    const response = await fetch(`/api/hotlist-jev/jiuyan-action?${params.toString()}`)
+    if (!response.ok) {
+      return { dates: [], doc: null, degraded: true, reason: `HTTP ${response.status}` }
+    }
+    const body = (await response.json()) as {
+      ok: boolean
+      degraded?: boolean
+      reason?: string
+      dates?: Array<{ date: string; kinds: string[] }>
+      doc?: import('@/types/hotlistJev').JiuyanActionDoc | null
+    }
+    if (!body.ok || body.degraded) {
+      return { dates: body.dates || [], doc: null, degraded: true, reason: body.reason || 'degraded' }
+    }
+    return { dates: body.dates || [], doc: body.doc ?? null, degraded: false, reason: null }
+  } catch (err) {
+    return { dates: [], doc: null, degraded: true, reason: err instanceof Error ? err.message : 'fetch failed' }
+  }
+}
