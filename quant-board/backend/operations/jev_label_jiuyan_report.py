@@ -163,6 +163,9 @@ def main():
 
     nouls = [r["matchNoul"] for r in rows if isinstance(r.get("matchNoul"), (int, float))]
     dist = noul_distribution_metrics(nouls)
+    # 全量分布对照（不要求次日语料）：区分"语料子集偏斜"还是"轴本身无方差"——试点 2026-10-02 结论=后者
+    nouls_all = [d["matchNoul"] for d in labels if isinstance(d.get("matchNoul"), (int, float))]
+    dist_all = noul_distribution_metrics(nouls_all)
     effect = noul_effect_metrics([(r["matchNoul"], r["nextPct"]) for r in rows
                                   if isinstance(r.get("matchNoul"), (int, float))])
     group = driver_group_metrics(rows)
@@ -195,7 +198,8 @@ def main():
     lines = ["# jev 涨停打标 v2（韭研弹药版）战果判定报告", "",
              f"- 标签 {len(labels)}（ok），有心照链次日匹配 {len(rows)}，窗口 {dates[0]} → {dates[-1]}", "",
              "## 门1 Noul 修复（主）", "",
-             f"- 分布：{dist}",
+             f"- 分布（次日语料子集）：{dist}",
+             f"- 分布（全量标签对照）：{dist_all}",
              f"- 效果（高>0.7 vs 低<0.3，diff=mean(high)−mean(low)）：{effect}",
              f"- 展开={dist.get('expanded')} effectOk={effect.get('effectOk')}", "",
              "## 门2 驱动分组复验", "",
