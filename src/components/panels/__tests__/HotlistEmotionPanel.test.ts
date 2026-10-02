@@ -324,13 +324,29 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('buildStageMarkArea(points)')
     expect(source).toContain('connectNulls: false')
     expect(source).toContain('trend-stats-grid')
-    // 柱体语言（2026-09-30 用户裁决）：温度紫柱 / 拥挤橙柱，旧折线不回流
+    // 三维度语言（2026-10-02 用户裁决）：温度紫柱 / 拥挤度黄柱 / 置信蓝线，旧折线不回流
     expect(source).toContain("name: '温度', type: 'bar'")
-    expect(source).toContain("name: '拥挤', type: 'bar'")
+    expect(source).toContain("name: '拥挤度', type: 'bar'")
+    expect(source).toContain("name: '置信', type: 'line'")
     expect(source).toContain("itemStyle: { color: '#9b59b6' }")
-    expect(source).toContain("itemStyle: { color: '#ff9f43' }")
+    expect(source).toContain("itemStyle: { color: '#f1c40f' }")
+    expect(source).toContain("lineStyle: { color: '#4a90e2', width: 2 }")
     expect(source).not.toContain("name: '温度', type: 'line'")
     expect(source).not.toContain("name: '拥挤', type: 'line'")
+    // 拥挤度数值口径（深化文档 G2 修复）：v2 离散归层无连续分，柱高=拥挤三层概率合计（jevCrowdingProbability），
+    // 归层判定与三层分解进 tooltip 防与柱高混读；置信=序列档/日级档模型 confidence
+    expect(source).toContain('jevCrowdingProbability')
+    expect(source).toContain('jevChoiceConfidence')
+    expect(source).toContain('jevCrowdingPointInfo')
+    expect(source).toContain('crowdingBreakdown')
+    expect(source).toContain('归层：')
+    expect(source).toContain('档位 P ')
+    // 置信指标开关（默认三维度全开）
+    expect(source).toContain("{ key: 'confidence', label: '置信', icon: '🎯' }")
+    expect(source).toContain("label: '拥挤度', icon: '🧲'")
+    // 统计卡跟口径升级：概率卡带 % 后缀，置信补最低值（低置信=风险信号）
+    expect(source).toContain("card('平均拥挤度', (p) => p.crowding, 'avg', '%')")
+    expect(source).toContain("card('最低置信', (p) => p.confidence, 'min', '%')")
     // 日级总体（盘后固定）行保留（1天档）
     expect(source).toContain('日级总体（盘后固定）')
     // fail-visible：降级/无数据状态结构化进 tooltip 与注记，不伪造分数

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
+  jevChoiceConfidence,
+  jevCrowdingProbability,
   JEV_PATTERN_ORDER,
   JEV_STAGE_ORDER,
 } from '../hotlistJevApi'
@@ -68,6 +70,56 @@ describe('fetchHotlistJevSeries', () => {
     expect(result.degraded).toBe(true)
     expect(result.slots).toHaveLength(0)
     expect(result.reason).toBe('mongodb_unavailable: x')
+  })
+})
+
+describe('拥挤度/置信投影（jev 观察轨道图表数据源，2026-10-02）', () => {
+  it('jevCrowdingProbability=拥挤三层概率合计；缺分布/非 choice/缺答案为 null 不伪造 0', () => {
+    // 2026-09-30 15:00 实测分布：判定=无拥挤，但拥挤层合计 0.61——柱高与归层判定口径不同是有意设计
+    const doc = slotDoc({
+      answers: {
+        crowding: {
+          type: 'choice',
+          choice: 'no_crowding',
+          probabilities: {
+            top_acceleration: 0.21,
+            late_seal_weakness: 0.06,
+            breadth_climax: 0.34,
+            no_crowding: 0.37,
+            insufficient_evidence: 0.02,
+          },
+          confidence: 0.21,
+        },
+      },
+    })
+    expect(jevCrowdingProbability(doc, 'crowding')).toBeCloseTo(0.61, 5)
+    expect(
+      jevCrowdingProbability(
+        slotDoc({ answers: { crowding: { type: 'choice', choice: 'no_crowding' } } }),
+        'crowding',
+      ),
+    ).toBeNull()
+    expect(jevCrowdingProbability(slotDoc({ answers: {} }), 'crowding')).toBeNull()
+    expect(jevCrowdingProbability(null, 'crowding')).toBeNull()
+  })
+
+  it('jevChoiceConfidence 读模型 confidence；缺失/非 choice 为 null（score 型不在此假设）', () => {
+    expect(
+      jevChoiceConfidence(
+        slotDoc({
+          answers: {
+            sequence_stage: { type: 'choice', choice: 'start', probabilities: { start: 0.6 }, confidence: 0.51 },
+          },
+        }),
+        'sequence_stage',
+      ),
+    ).toBe(0.51)
+    expect(
+      jevChoiceConfidence(
+        slotDoc({ answers: { sequence_stage: { type: 'choice', choice: 'start' } } }),
+        'sequence_stage',
+      ),
+    ).toBeNull()
   })
 })
 

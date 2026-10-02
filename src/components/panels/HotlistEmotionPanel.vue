@@ -467,7 +467,7 @@
           </section>
 
           <!-- ⑦ jev 观察轨道（2026-09-30 独立页签，与情绪趋势并列）：独立 AI 评判，仅供对照论证；
-               图表语言同情绪趋势（时间范围 + 指标开关 + 阶段铺底 + 统计卡，温度紫柱/拥挤橙柱） -->
+               图表语言同情绪趋势（时间范围 + 指标开关 + 阶段铺底 + 统计卡，温度紫柱/拥挤度黄柱/置信蓝线） -->
           <section v-show="view === 'jev'" class="tab-pane">
             <div v-if="jevDegradedReason" class="note-line">
               jev 轨道不可用：{{ jevDegradedReason }}（独立采集轨道，可能未开启）
@@ -779,15 +779,18 @@ import {
   fetchHotlistSentimentOverview,
   fetchJiuyanAction,
   fetchJevReviewList,
+  JEV_CROWDING_LAYERS,
   JEV_CROWDING_NAMES,
   JEV_CROWDING_WARN_LAYERS,
   JEV_PATTERN_NAMES,
   JEV_PATTERN_ORDER,
   JEV_STAGE_NAMES,
   JEV_STAGE_ORDER,
+  jevChoiceConfidence,
   jevChoiceName,
   jevChoiceProbability,
   jevCrowdingName,
+  jevCrowdingProbability,
   jevScore,
   postJevReviewRuling,
 } from '@/services/hotlist/hotlistJevApi'
@@ -3075,18 +3078,21 @@ const trackNote = computed(() => {
 })
 
 // ---------- jev 观察轨道图表（2026-09-30：卡片网格改 ECharts，语言同情绪趋势页签） ----------
-// 1天=日内逐槽（序列档 sequence_stage + temperature/crowding）；
-// 3日/1周/1月=日线 EOD 日级总体（day_stage + day_temperature/day_crowding）。
-// 温度紫柱/拥挤橙柱；降级/无数据槽分数为 null 柱体不渲染，状态与错误码进 tooltip，不伪造 0。
+// 1天=日内逐槽（序列档 sequence_stage + temperature/crowding/置信）；
+// 3日/1周/1月=日线 EOD 日级总体（day_stage + day_temperature/day_crowding/day_stage 置信）。
+// 三维度（2026-10-02 用户裁决）：温度紫柱/拥挤度黄柱/置信蓝线——
+// 拥挤度=拥挤三层概率合计（v2 离散归层无连续分，旧「拥挤橙柱」按 0-100 分读 score 恒 null 是死序列，深化文档 G2）；
+// 置信=序列档/日级档模型 confidence；缺分布/降级/无数据一律 null 不渲染断线，状态与错误码进 tooltip，不伪造 0。
 const jevChartRef = ref<HTMLElement | null>(null)
 let jevChart: echarts.ECharts | null = null
 const jevTimeRange = ref<TrendTimeRange>('1d')
 const JEV_INDICATORS = [
   { key: 'temperature', label: '温度', icon: '🌡️' },
-  { key: 'crowding', label: '拥挤', icon: '🧲' },
+  { key: 'crowding', label: '拥挤度', icon: '🧲' },
+  { key: 'confidence', label: '置信', icon: '🎯' },
 ] as const
 type JevIndicatorKey = (typeof JEV_INDICATORS)[number]['key']
-const jevIndicators = ref<JevIndicatorKey[]>(['temperature', 'crowding'])
+const jevIndicators = ref<JevIndicatorKey[]>(['temperature', 'crowding', 'confidence'])
 
 // 多日 jev 窗口缓存（与情绪趋势 seriesDocs 同款代际守卫；缺失日结构化收集不吞掉）
 const jevDayDocs = ref<HotlistJevDayEntry[]>([])
@@ -3148,11 +3154,53 @@ interface JevPoint {
   /** 日线路径形态（仅多日档，day_pattern） */
   pattern: string
   temperature: number | null
+  /** 拥挤度（0-100）=拥挤三层概率合计（模型认为市场处于任一拥挤层的总概率）；缺分布为 null */
   crowding: number | null
+  /** 归层判定中文名（tooltip 透出；与柱高口径不同：柱高=三层合计，归层=argmax 单层） */
+  crowdingLayer: string | null
+  /** 归层是否毒层（top_acceleration/late_seal_weakness） */
+  crowdingWarn: boolean
+  /** 拥挤三层概率分解文本（如「高位加速 21% + 封板弱化 6%」；缺分布 ''） */
+  crowdingBreakdown: string
+  /** 模型置信（0-100，序列档/日级档 answer.confidence；缺失 null） */
+  confidence: number | null
+  /** 档位 top 概率（0-100；tooltip 附注 + 犹豫标记；缺失 null） */
+  stageProbability: number | null
   degraded: boolean
   noData: boolean
   /** 降级/无数据/日级未生成的结构化状态（进 tooltip，不伪造分数） */
   statusText: string
+}
+
+/** 0-1 概率 → 0-100 图表刻度（缺失 null 透传，不伪造 0；保留 1 位小数去浮点噪声） */
+function scale100(value: number | null): number | null {
+  return value == null ? null : Math.round(value * 1000) / 10
+}
+
+/**
+ * 拥挤度柱信息（展示投影）：probability=拥挤三层概率合计（jevCrowdingProbability），
+ * 归层判定/毒层警示/三层分解供 tooltip 透出——柱高与归层判定口径不同（合计 vs argmax 单层），两者同屏防误读。
+ */
+function jevCrowdingPointInfo(
+  doc: HotlistJevDoc | null | undefined,
+  key: string,
+): { probability: number | null; layerName: string | null; warn: boolean; breakdown: string } {
+  const answer = doc?.answers?.[key]
+  const choice = answer && answer.type === 'choice' ? answer.choice ?? null : null
+  const probabilities = answer && answer.type === 'choice' ? answer.probabilities ?? null : null
+  const breakdown = !probabilities
+    ? ''
+    : JEV_CROWDING_LAYERS
+        .map((layer) => ({ name: JEV_CROWDING_NAMES[layer] ?? layer, value: probabilities[layer] }))
+        .filter((entry): entry is { name: string; value: number } => typeof entry.value === 'number')
+        .map((entry) => `${entry.name} ${Math.round(entry.value * 100)}%`)
+        .join(' + ')
+  return {
+    probability: jevCrowdingProbability(doc, key),
+    layerName: choice ? (JEV_CROWDING_NAMES[choice] ?? choice) : null,
+    warn: choice != null && JEV_CROWDING_WARN_LAYERS.has(choice),
+    breakdown,
+  }
 }
 
 const jevPoints = computed<JevPoint[]>(() => {
@@ -3160,6 +3208,7 @@ const jevPoints = computed<JevPoint[]>(() => {
     return jevSlots.value.map((slot, index) => {
       const degraded = slot.status === 'degraded'
       const noData = slot.status === 'no_data'
+      const crowd = jevCrowdingPointInfo(slot, 'crowding')
       return {
         key: slot.slotTime || `slot-${index}`,
         label: slot.slotTime || '--',
@@ -3167,7 +3216,12 @@ const jevPoints = computed<JevPoint[]>(() => {
         stage: jevChoiceName(slot, 'sequence_stage') || '',
         pattern: '',
         temperature: jevScore(slot, 'temperature'),
-        crowding: jevScore(slot, 'crowding'),
+        crowding: scale100(crowd.probability),
+        crowdingLayer: crowd.layerName,
+        crowdingWarn: crowd.warn,
+        crowdingBreakdown: crowd.breakdown,
+        confidence: scale100(jevChoiceConfidence(slot, 'sequence_stage')),
+        stageProbability: scale100(jevChoiceProbability(slot, 'sequence_stage')),
         degraded,
         noData,
         statusText: degraded
@@ -3180,6 +3234,7 @@ const jevPoints = computed<JevPoint[]>(() => {
   }
   return jevDayDocs.value.map((day, index) => {
     const eod = day.eod
+    const crowd = jevCrowdingPointInfo(eod, 'day_crowding')
     return {
       key: day.tradingDate || `d-${index}`,
       label: (day.tradingDate || '').slice(5) || '--',
@@ -3187,7 +3242,12 @@ const jevPoints = computed<JevPoint[]>(() => {
       stage: eod ? jevChoiceName(eod, 'day_stage') || '' : '',
       pattern: eod ? jevChoiceName(eod, 'day_pattern') || '' : '',
       temperature: eod ? jevScore(eod, 'day_temperature') : null,
-      crowding: eod ? jevScore(eod, 'day_crowding') : null,
+      crowding: scale100(crowd.probability),
+      crowdingLayer: crowd.layerName,
+      crowdingWarn: crowd.warn,
+      crowdingBreakdown: crowd.breakdown,
+      confidence: scale100(jevChoiceConfidence(eod, 'day_stage')),
+      stageProbability: scale100(jevChoiceProbability(eod, 'day_stage')),
       degraded: false,
       noData: !eod,
       statusText: eod ? '' : '日级总体未生成',
@@ -3199,21 +3259,29 @@ const jevPoints = computed<JevPoint[]>(() => {
 const jevStats = computed(() => {
   const pts = jevPoints.value
   const unit = jevTimeRange.value === '1d' ? '槽' : '日'
-  const card = (label: string, pick: (p: JevPoint) => number | null, stat: 'avg' | 'peak') => {
+  const card = (
+    label: string,
+    pick: (p: JevPoint) => number | null,
+    stat: 'avg' | 'peak' | 'min',
+    suffix = '',
+  ) => {
     const nums = pts.map(pick).filter((v): v is number => v !== null)
     if (!nums.length) return { label, value: '--', sub: '' }
     if (stat === 'avg') {
       const avg = nums.reduce((a, b) => a + b, 0) / nums.length
-      return { label, value: avg.toFixed(0), sub: nums.length ? `共 ${nums.length} ${unit}` : '' }
+      return { label, value: `${avg.toFixed(0)}${suffix}`, sub: `共 ${nums.length} ${unit}` }
     }
-    const peak = Math.max(...nums)
-    return { label, value: String(peak), sub: pts.find((p) => pick(p) === peak)?.label || '' }
+    const value = stat === 'peak' ? Math.max(...nums) : Math.min(...nums)
+    return { label, value: `${value}${suffix}`, sub: pts.find((p) => pick(p) === value)?.label || '' }
   }
   return [
     card('平均温度', (p) => p.temperature, 'avg'),
     card('温度峰值', (p) => p.temperature, 'peak'),
-    card('平均拥挤', (p) => p.crowding, 'avg'),
-    card('拥挤峰值', (p) => p.crowding, 'peak'),
+    // 拥挤度/置信是概率口径（0-100%），与温度分值（0-100 分）单位不同，带 % 后缀防混读
+    card('平均拥挤度', (p) => p.crowding, 'avg', '%'),
+    card('拥挤度峰值', (p) => p.crowding, 'peak', '%'),
+    card('平均置信', (p) => p.confidence, 'avg', '%'),
+    card('最低置信', (p) => p.confidence, 'min', '%'),
   ]
 })
 
@@ -3237,10 +3305,11 @@ const jevNote = computed(() => {
   return `${rangeLabel} · 日线口径（EOD 日级总体）${missingSuffix}`
 })
 
-// tooltip 数值格式（fail-visible：null 显示 --）
+// tooltip 数值格式（fail-visible：null 显示 --；拥挤度/置信为概率口径带 %）
 const JEV_AXIS_FMT: Record<string, (v: number | null) => string> = {
   温度: (v) => (v === null ? '--' : String(Math.round(v))),
-  拥挤: (v) => (v === null ? '--' : String(Math.round(v))),
+  拥挤度: (v) => (v === null ? '--' : `${Math.round(v)}%`),
+  置信: (v) => (v === null ? '--' : `${Math.round(v)}%`),
 }
 
 function renderJevChart() {
@@ -3256,7 +3325,8 @@ function renderJevChart() {
 
   const points = jevPoints.value
   const series: any[] = []
-  // 柱体语言（2026-09-30 用户裁决）：温度紫柱 / 拥挤橙柱；分数 null 的槽/日柱体不渲染（不伪造 0）
+  // 三维度语言（2026-10-02 用户裁决）：温度紫柱 / 拥挤度黄柱 / 置信蓝线；
+  // 分数/概率 null 的槽/日柱体与点不渲染（不伪造 0），拥挤度是概率口径非旧 0-100 连续分
   if (jevIndicators.value.includes('temperature')) {
     series.push({
       name: '温度', type: 'bar',
@@ -3267,10 +3337,19 @@ function renderJevChart() {
   }
   if (jevIndicators.value.includes('crowding')) {
     series.push({
-      name: '拥挤', type: 'bar',
+      name: '拥挤度', type: 'bar',
       data: points.map((p) => p.crowding),
-      itemStyle: { color: '#ff9f43' },
+      itemStyle: { color: '#f1c40f' },
       barWidth: 8,
+    })
+  }
+  if (jevIndicators.value.includes('confidence')) {
+    series.push({
+      name: '置信', type: 'line', smooth: true, connectNulls: false,
+      data: points.map((p) => p.confidence),
+      lineStyle: { color: '#4a90e2', width: 2 },
+      itemStyle: { color: '#4a90e2' },
+      symbol: 'circle', symbolSize: 5,
     })
   }
   // 序列/日级档位铺底：jev 五档与规则轨道同词汇，直接复用 STAGE_TREND_META 冷热语义色
@@ -3302,6 +3381,13 @@ function renderJevChart() {
           const stageColor = STAGE_TREND_META[point.stage ?? '']?.fg || textColor
           const stageLine = `<div style="color:${stageColor};margin-bottom:4px;">档位：${point.stage || '缺失'}</div>`
           const patternLine = point.pattern ? `<div style="margin-bottom:4px;">路径：${point.pattern}</div>` : ''
+          // 拥挤度柱高=拥挤三层概率合计，与归层判定（argmax 单层）口径不同，两者同透出防误读
+          const crowdLine = point.crowdingLayer
+            ? `<div style="color:${textColor};">归层：${point.crowdingLayer}${point.crowdingWarn ? ' ⚠️毒层' : ''}${point.crowdingBreakdown ? `（${point.crowdingBreakdown}）` : ''}</div>`
+            : ''
+          const confLine = point.stageProbability != null
+            ? `<div style="color:${textColor};">档位 P ${Math.round(point.stageProbability)}%${point.stageProbability < 60 ? ' · ⚠️犹豫' : ''}</div>`
+            : ''
           const statusLine = point.statusText
             ? `<div style="color:#f39c12;margin-bottom:4px;">${point.statusText}</div>`
             : ''
@@ -3311,6 +3397,8 @@ function renderJevChart() {
             patternLine,
             statusLine,
             rows,
+            crowdLine,
+            confLine,
           ].join('')
         },
       },
@@ -3331,7 +3419,7 @@ function renderJevChart() {
         type: 'value',
         min: 0,
         max: 100,
-        name: '分值（0-100）',
+        name: '分值 / 概率（0-100）',
         nameTextStyle: { color: textColor, fontSize: 9 },
         splitLine: { lineStyle: { color: borderColor, type: 'dashed' } },
         axisLabel: { color: textColor },

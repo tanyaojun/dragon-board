@@ -133,6 +133,8 @@
       @close="panels.breath = false" />
     <HotlistEmotionPanel v-model:visible="panels.hotlistEmotion" :trigger-rect="panelRects.hotlistEmotion"
       @close="panels.hotlistEmotion = false" />
+    <JevNarrativePanel v-model:visible="panels.jevNarrative" :trigger-rect="panelRects.jevNarrative"
+      @close="panels.jevNarrative = false" />
     <KeyboardHelpPanel v-model:visible="panels.help" @close="panels.help = false" />
     <ExportPanel v-model:visible="panels.export" :trigger-rect="panelRects.export" @close="panels.export = false" />
     <FavoritePanel v-model:visible="panels.favorite" @close="panels.favorite = false" />
@@ -174,6 +176,7 @@ const ConfigPanel = defineAsyncComponent(() => import('./components/panels/Confi
 const SectorPanel = defineAsyncComponent(() => import('./components/panels/SectorPanel.vue'))
 const DragonBreathPanel = defineAsyncComponent(() => import('./components/panels/DragonBreathPanel.vue'))
 const HotlistEmotionPanel = defineAsyncComponent(() => import('./components/panels/HotlistEmotionPanel.vue'))
+const JevNarrativePanel = defineAsyncComponent(() => import('./components/panels/JevNarrativePanel.vue'))
 const KeyboardHelpPanel = defineAsyncComponent(() => import('./components/panels/KeyboardHelpPanel.vue'))
 const ExportPanel = defineAsyncComponent(() => import('./components/panels/ExportPanel.vue'))
 const FavoritePanel = defineAsyncComponent(() => import('./components/panels/FavoritePanel.vue'))
@@ -250,6 +253,7 @@ const navTabs = [
   { id: 'sector', label: '题材分析', icon: '🎯' },
   { id: 'events', label: '异动雷达', icon: '🔔' },
   { id: 'hotlistEmotion', label: '热榜情绪', icon: '🔥' },
+  { id: 'jevNarrative', label: 'JEV叙事', icon: '🌡️' },
 ]
 
 // 面板管理
@@ -257,6 +261,7 @@ const panels = ref({
   settings: false,
   config: false,
   hotlistEmotion: false,
+  jevNarrative: false,
   sector: false,
   breath: false,
   help: false,
@@ -417,6 +422,7 @@ const handleTabChange = (tabId: string) => {
     sector: 'sector',
     events: 'eventMonitor',
     hotlistEmotion: 'hotlistEmotion',
+    jevNarrative: 'jevNarrative',
   }
   if (panelMap[tabId]) {
     panels.value[panelMap[tabId]] = true

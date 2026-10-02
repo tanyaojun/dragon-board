@@ -86,6 +86,43 @@ export function jevCrowdingName(
   return JEV_CROWDING_NAMES[answer.choice] ?? answer.choice
 }
 
+/** 拥挤三层（即 1−无拥挤−信息不足），拥挤度柱体的唯一数值口径 */
+export const JEV_CROWDING_LAYERS = ['top_acceleration', 'late_seal_weakness', 'breadth_climax'] as const
+
+/**
+ * 拥挤度（0-1）= 拥挤三层概率合计（top_acceleration/late_seal_weakness/breadth_climax），
+ * 即模型认为市场处于任一拥挤层的总概率。v2 拥挤是离散归层 choice，无连续分可读；
+ * 只聚合落库分布里的已有数值，缺分布/非 choice 返回 null 不伪造（展示层零计算补齐的边界：仅做加总透明聚合）。
+ */
+export function jevCrowdingProbability(
+  doc: HotlistJevDoc | null | undefined,
+  key: string,
+): number | null {
+  const answer = doc?.answers?.[key]
+  if (!answer || answer.type !== 'choice' || !answer.probabilities) return null
+  const probabilities = answer.probabilities
+  let total = 0
+  let seen = false
+  for (const layer of JEV_CROWDING_LAYERS) {
+    const value = probabilities[layer]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      total += value
+      seen = true
+    }
+  }
+  return seen ? total : null
+}
+
+/** choice 答案的模型 confidence（0-1；缺失/非 choice 返回 null 不伪造） */
+export function jevChoiceConfidence(
+  doc: HotlistJevDoc | null | undefined,
+  key: string,
+): number | null {
+  const answer = doc?.answers?.[key]
+  if (!answer || answer.type !== 'choice') return null
+  return typeof answer.confidence === 'number' ? answer.confidence : null
+}
+
 export async function fetchHotlistJevSeries(
   date?: string,
   datasetId = 'dragonboard_live',
@@ -146,7 +183,7 @@ export async function fetchHotlistJevRange(
   try {
     const response = await fetch(`/api/hotlist-jev/range?${params.toString()}`)
     if (!response.ok) {
-      return { days: [], missingDays: [], degraded: true, reason: `HTTP ${response.status}` }
+      return { days: [], missingDays: [], degraded: true, reason: `HTTP ${response.status}`, degradedCount: 0 }
     }
     const body = (await response.json()) as HotlistJevRangeResponse
     if (!body.ok || body.degraded) {
@@ -155,6 +192,7 @@ export async function fetchHotlistJevRange(
         missingDays: [],
         degraded: true,
         reason: body.reason || 'degraded',
+        degradedCount: 0,
       }
     }
     const dayEntries: HotlistJevDayEntry[] = []
@@ -170,13 +208,14 @@ export async function fetchHotlistJevRange(
         })
       }
     }
-    return { days: dayEntries, missingDays, degraded: false, reason: null }
+    return { days: dayEntries, missingDays, degraded: false, reason: null, degradedCount: body.degradedCount ?? 0 }
   } catch (err) {
     return {
       days: [],
       missingDays: [],
       degraded: true,
       reason: err instanceof Error ? err.message : 'fetch failed',
+      degradedCount: 0,
     }
   }
 }

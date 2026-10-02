@@ -42,6 +42,16 @@ export interface HotlistJevDoc {
   narrativeRaw?: string | null
   /** 模型 tokens 用量（input_tokens/output_tokens，snake_case 透传） */
   usage?: Record<string, number> | null
+  /** as-of 时间戳（如 "2026-10-08 14:30+08:00"；旧文档缺失） */
+  asOf?: string | null
+  /** 【近20日参照】首行区间（extract_history_anchor_range 产出；旧文档缺失） */
+  historyAnchorRange?: string | null
+  /** 当前帧结构化证据（slot 文档；EOD/旧文档为 null） */
+  evidenceRaw?: Record<string, unknown> | null
+  /** 模型原始返回 envelope（jev_client 原样透传；旧文档缺失） */
+  responseRaw?: Record<string, unknown> | null
+  /** 实际下发题集（slot=四问 / eod=日四问；旧文档可能缺失） */
+  questionsRaw?: Record<string, unknown> | null
 }
 
 export interface HotlistJevSeriesResponse {
@@ -94,6 +104,8 @@ export interface HotlistJevRangeResult {
   missingDays: HotlistJevMissingDay[]
   degraded: boolean
   reason: string | null
+  /** 窗口内 status 为 degraded/no_data 的文档数（后端 degradedCount，缺失 0） */
+  degradedCount: number
 }
 
 // ---------- 复核工作台（W1 辅助线，2026-10-01；GET review-list / POST review-ruling） ----------
