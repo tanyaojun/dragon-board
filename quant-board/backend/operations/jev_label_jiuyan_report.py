@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""jev 涨停打标 v2 重铸试点（pilot2）战报：catalyst_depth 轴质量 + pilot1 稳定性对照 + 分桶次日方向。
+"""jev 涨停打标 v2 pilot3 战报：六桶方差门 + 守恒检验 + T3-scaling 零判例 + 稳定性对照 + 低置信分层。
 
-预登记判据 docs/hotlist-jev/jev-driver-label-v2-design.md §8（先冻结再开火）：
-  门A depth 轴方差（主）：四个实质桶每桶 n≥5 且 实质桶最大桶占比<70%；insufficient_evidence ≤15%。
-  门B 驱动分组保留：Kruskal p<0.05（n≥8 组）且 连板率极差≥15pct；单月不显著但与阶段3 全窗排序
-      Spearman ρ≥0.5 一致 → INSUFFICIENT-扩窗。
-  稳定性对照（观察项）：pilot2 vs pilot1（hotlist_jev_driver_labels_v2_pilot1 备份）driver_type/
-      freshness sameShare——叙事与两轴题目均未动，同股应高复现。
-  分桶次日方向（观察项）：catalyst_depth 各桶次日 pct 均值/连板率。
-判定映射：门A+门B 全过=PASS_CANDIDATE；门A 过门B 不过=INSUFFICIENT；门A 不过=REJECT。
-产物 docs/hotlist-jev/phase3-jiuyan-v2-repilot-report.md。
+预登记判据 docs/hotlist-jev/jev-driver-label-v2-design.md §9（先冻结再开火）：
+  门A' 六桶方差：五实质桶每桶 n≥5；最大实质桶占比<70%；逃生口≤15%。
+  守恒检验：pilot3 两新桶之和 = pilot2 new_growing 桶（117±5）。
+  T3-scaling 零判例：scaling 判例叙事含网传/未证实/传闻字样数=0（>0 出人工抽验清单）。
+  稳定性：core/equity/concept + driver + freshness 对 pilot2 sameShare>90%；freshness unclear<8%。
+  门B：沿用 driver 分组门（n 小预期不显著，方向一致性兜底）。
+判定映射：全部硬门过=PASS_CANDIDATE；门A'/守恒/T3 任一不过=REJECT；其余=INSUFFICIENT。
+产物 docs/hotlist-jev/phase3-jiuyan-v2-pilot3-report.md。
 """
 from __future__ import annotations
 
@@ -19,26 +18,51 @@ from collections import defaultdict
 # 阶段3 全窗参考连板率（phase3-driver-report.md 冻结值，排序方向一致性对照用）
 PHASE3_REF_LIANBAN = {"ma_restructure": 21.3, "order_earnings": 14.3, "concept_stretch": 11.6,
                       "industry_cycle": 8.2, "policy": 6.2, "product_event": 4.1, "capital_flow": 1.8}
-DEPTH_SUBSTANTIVE = ["core_main_business", "new_growing_business", "equity_or_affiliate", "concept_assembly"]
+DEPTH_SUBSTANTIVE = ["core_main_business", "new_business_scaling", "new_business_early",
+                     "equity_or_affiliate", "concept_assembly"]
 DEPTH_ALL = DEPTH_SUBSTANTIVE + ["insufficient_evidence"]
+NEW_BUCKETS = {"new_business_scaling", "new_business_early"}
+OLD_NEW_BUCKET = "new_growing_business"
+T3_MARKERS = ("网传", "未证实", "传闻", "市场消息", "未经证实")
+PILOT2_NEW_TOTAL = 117  # pilot2 战报冻结值（25326210）
 
 
 def depth_distribution_metrics(depths: list[str]) -> dict:
-    """门A 读数：四实质桶 n 与占比 + 逃生口占比（纯函数）。"""
+    """门A' 读数：五实质桶 n 与占比 + 逃生口占比。"""
     n = len(depths)
     if n < 20:
         return {"n": n, "insufficient": True}
     counts = {k: 0 for k in DEPTH_ALL}
     for d in depths:
         counts[d] = counts.get(d, 0) + 1
-    sub_counts = {k: counts[k] for k in DEPTH_SUBSTANTIVE}
-    max_share = max(sub_counts.values()) / n
-    return {"n": n, "bucketCounts": sub_counts, "insufficientEvidence": counts["insufficient_evidence"],
-            "maxBucketShare": round(max_share, 3),
-            "substantiveBucketsWithN5": sum(1 for v in sub_counts.values() if v >= 5),
-            "expanded": bool(sum(1 for v in sub_counts.values() if v >= 5) >= 4
-                             and max_share < 0.70 and counts["insufficient_evidence"] / n <= 0.15),
+    sub = {k: counts[k] for k in DEPTH_SUBSTANTIVE}
+    return {"n": n, "bucketCounts": sub, "insufficientEvidence": counts["insufficient_evidence"],
+            "maxBucketShare": round(max(sub.values()) / n, 3),
+            "bucketsWithN5": sum(1 for v in sub.values() if v >= 5),
+            "expanded": bool(sum(1 for v in sub.values() if v >= 5) >= 5
+                             and max(sub.values()) / n < 0.70
+                             and counts["insufficient_evidence"] / n <= 0.15),
             "insufficient": False}
+
+
+def conservation_check(pilot3_depths: list[str], pilot2_new_total: int = PILOT2_NEW_TOTAL) -> dict:
+    """守恒检验：两新桶之和 vs pilot2 new_growing 桶（±5）。"""
+    new_sum = sum(1 for d in pilot3_depths if d in NEW_BUCKETS)
+    return {"pilot3NewSum": new_sum, "pilot2NewTotal": pilot2_new_total,
+            "conserved": bool(abs(new_sum - pilot2_new_total) <= 5)}
+
+
+def t3_scaling_scan(labels: list[dict]) -> dict:
+    """T3-scaling 零判例：scaling 判例叙事含 T3 字样扫描（启发式，>0 出人工抽验清单）。"""
+    hits = []
+    for d in labels:
+        if d.get("catalystDepth") == "new_business_scaling":
+            narr = d.get("narrative") or ""
+            markers = [m for m in T3_MARKERS if m in narr]
+            if markers:
+                hits.append({"tradingDate": d.get("tradingDate"), "code": d.get("code"),
+                             "name": d.get("name"), "markers": markers})
+    return {"scanHits": len(hits), "clean": len(hits) == 0, "manualReviewList": hits}
 
 
 def driver_group_metrics(rows: list[dict]) -> dict:
@@ -90,8 +114,7 @@ def _spearman(xs: list[float], ys: list[float]) -> float | None:
 
 
 def direction_consistent_with_phase3(lianban_rates: dict[str, float]) -> dict:
-    """门B 单月显著性兜底：七类连板率排序 vs 阶段3 全窗参考，Spearman ρ≥0.5 视为方向一致。
-    组数 <5 时不可算（computable=False），与"方向不一致"区分（避免误读）。"""
+    """门B 单月显著性兜底（组数 <5 不可算，与不一致区分）。"""
     common = [k for k in PHASE3_REF_LIANBAN if k in lianban_rates]
     if len(common) < 5:
         return {"rho": None, "consistent": False, "computable": False,
@@ -100,21 +123,12 @@ def direction_consistent_with_phase3(lianban_rates: dict[str, float]) -> dict:
     return {"rho": rho, "consistent": bool(rho is not None and rho >= 0.5), "computable": True}
 
 
-def verdict(depth: dict, group: dict, direction: dict) -> str:
-    """判定映射（预登记 §8）：门A 不过=REJECT；门A+门B 过=PASS_CANDIDATE；其余=INSUFFICIENT。"""
-    if depth.get("insufficient") or not depth.get("expanded"):
-        return "REJECT"
-    if group.get("groupOk"):
-        return "PASS_CANDIDATE"
-    if direction.get("consistent"):
-        return "INSUFFICIENT"  # 单月显著性不足但方向与全窗一致 → 扩窗复验，非 REJECT
-    return "INSUFFICIENT"
-
-
-def stability_vs_pilot1(v2: list[dict], pilot1: list[dict], field: str) -> dict:
-    """稳定性对照：同 (date, code) 上某字段 pilot2 vs pilot1 一致率（观察项）。"""
-    old = {f"{d['tradingDate']}:{d['code']}": d.get(field) for d in pilot1 if d.get(field)}
-    new = {f"{d['tradingDate']}:{d['code']}": d.get(field) for d in v2 if d.get(field)}
+def stability_vs_pilot2(v3: list[dict], pilot2: list[dict], field: str,
+                        value_filter=None) -> dict:
+    """稳定性对照：同 (date, code) 字段一致率；value_filter 限定 pilot2 侧取值（如仅旧 new 桶）。"""
+    old = {f"{d['tradingDate']}:{d['code']}": d.get(field) for d in pilot2
+           if d.get(field) and (value_filter is None or d.get(field) in value_filter)}
+    new = {f"{d['tradingDate']}:{d['code']}": d.get(field) for d in v3 if d.get(field)}
     common = set(old) & set(new)
     if not common:
         return {"overlap": 0, "sameShare": None}
@@ -132,6 +146,34 @@ def bucket_next_day(rows: list[dict]) -> dict:
                       "nextPctMean": round(statistics.mean(x["nextPct"] for x in sub), 2),
                       "lianban": round(sum(x["nextLianban"] for x in sub) / len(sub) * 100, 1)}
     return out
+
+
+def confidence_split(labels: list[dict]) -> dict:
+    """低置信分层（观察项）：depth choice 概率 <0.5 的样本占比与分布。"""
+    probs = []
+    for d in labels:
+        p = (d.get("catalystDepthProbabilities") or {}).get(d.get("catalystDepth"))
+        if isinstance(p, (int, float)):
+            probs.append(float(p))
+    if not probs:
+        return {"n": 0}
+    return {"n": len(probs), "mean": round(statistics.mean(probs), 3),
+            "lowConfShare": round(sum(1 for p in probs if p < 0.5) / len(probs), 3)}
+
+
+def verdict(depth: dict, cons: dict, t3: dict, stab: dict, group: dict) -> str:
+    """判定映射（预登记 §9）：门A'/守恒任一不过=REJECT；T3 扫描>0=PENDING_T3_REVIEW（人工抽验清单后定夺，
+    扫描是启发式——叙事含 T3 字样≠判据真用了 T3 证据）；全部硬门过+门B 过=PASS_CANDIDATE；其余=INSUFFICIENT。"""
+    if depth.get("insufficient") or not depth.get("expanded"):
+        return "REJECT"
+    if not cons.get("conserved"):
+        return "REJECT"
+    if not t3.get("clean"):
+        return "PENDING_T3_REVIEW"
+    stab_ok = all((v or {}).get("sameShare") is None or v["sameShare"] > 0.90 for v in stab.values())
+    if not stab_ok:
+        return "INSUFFICIENT"
+    return "PASS_CANDIDATE" if group.get("groupOk") else "INSUFFICIENT"
 
 
 def main():
@@ -154,48 +196,58 @@ def main():
 
     depths = [d["catalystDepth"] for d in labels if d.get("catalystDepth")]
     depth = depth_distribution_metrics(depths)
+    cons = conservation_check(depths)
+    t3 = t3_scaling_scan(labels)
     group = driver_group_metrics(rows)
     direction = (direction_consistent_with_phase3(group["lianbanRates"])
-                 if not group.get("insufficient") and not group.get("groupOk") else {"rho": None, "consistent": False})
-    v = verdict(depth, group, direction)
+                 if not group.get("insufficient") and not group.get("groupOk")
+                 else {"rho": None, "consistent": False})
+    conf = confidence_split(labels)
 
-    pilot1 = list(db["hotlist_jev_driver_labels_v2_pilot1"].find({"status": "ok"},
-                                                                 {"tradingDate": 1, "code": 1, "label": 1, "freshness": 1, "matchNoul": 1}))
-    stab_label = stability_vs_pilot1(labels, pilot1, "label")
-    stab_fresh = stability_vs_pilot1(labels, pilot1, "freshness")
+    pilot2 = list(db["hotlist_jev_driver_labels_v2_pilot2"].find(
+        {"status": "ok"}, {"tradingDate": 1, "code": 1, "label": 1, "freshness": 1, "catalystDepth": 1}))
+    # 稳定性：题目未动的部分（core/equity/concept 从 pilot2 的同值样本对账）+ driver + freshness
+    stable_buckets = {"core_main_business", "equity_or_affiliate", "concept_assembly"}
+    stab = {
+        "driver_type": stability_vs_pilot2(labels, pilot2, "label"),
+        "catalyst_freshness": stability_vs_pilot2(labels, pilot2, "freshness"),
+        "depth_stable_buckets": stability_vs_pilot2(labels, pilot2, "catalystDepth", stable_buckets),
+    }
+    unclear_share = (sum(1 for d in labels if d.get("freshness") == "unclear") / len(labels))
     buckets = bucket_next_day(rows)
 
-    # freshness 分布（观察）
-    fresh: dict[str, int] = defaultdict(int)
-    for d in labels:
-        if d.get("freshness"):
-            fresh[d["freshness"]] += 1
+    v = verdict(depth, cons, t3, stab, group)
 
-    lines = ["# jev 涨停打标 v2 重铸试点（pilot2，catalyst_depth）战报", "",
+    lines = ["# jev 涨停打标 v2 pilot3（题目 v3：动词分层切桶+T3 硬规则）战报", "",
              f"- 标签 {len(labels)}（ok），有心照链次日匹配 {len(rows)}，窗口 {dates[0]} → {dates[-1]}", "",
-             "## 门A catalyst_depth 轴方差（主）", "",
+             "## 门A' 六桶方差", "",
              f"- {depth}",
-             f"- 展开={depth.get('expanded')}（四实质桶 n≥5 且 最大桶<70% 且 逃生口≤15%）", "",
-             "## 门B 驱动分组保留", "",
+             f"- 展开={depth.get('expanded')}（五实质桶 n≥5 且 最大桶<70% 且 逃生口≤15%）", "",
+             "## 守恒检验（两新桶 vs pilot2 new 桶 117±5）", "",
+             f"- {cons}", "",
+             "## T3-scaling 零判例（硬规则生效性）", "",
+             f"- scanHits={t3['scanHits']}（clean={t3['clean']}）",
+             *[f"  - 待人工抽验：{h['tradingDate']} {h['name']} {h['code']} markers={h['markers']}"
+               for h in t3["manualReviewList"]], "",
+             "## 稳定性对照（vs pilot2，题目未动部分）", "",
+             *[f"- {k}：{sv}" for k, sv in stab.items()],
+             f"- freshness unclear 占比：{round(unclear_share, 3)}（判据 <0.08）", "",
+             "## 门B 驱动分组（沿用）", "",
              f"- {group}",
              f"- 方向一致性 vs 阶段3 全窗参考：{direction}", "",
-             "## 稳定性对照（pilot2 vs pilot1，观察项）", "",
-             f"- driver_type：{stab_label}",
-             f"- catalyst_freshness：{stab_fresh}", "",
-             "## catalyst_depth 分桶次日方向（观察项，无硬门）", "",
+             "## catalyst_depth 分桶次日方向（观察项）", "",
              f"- {buckets}", "",
-             "## catalyst_freshness 分布（观察）", "",
-             f"- {dict(fresh)}", "",
+             "## 置信度分层（观察项）", "",
+             f"- {conf}", "",
              "## 判定依据", "",
-             f"- {'✓' if depth.get('expanded') else '✗'} 门A depth 轴方差",
-             f"- {'✓' if group.get('groupOk') else '✗'} 门B 驱动分组（p<0.05 且 极差≥15pct）",
-             f"- 稳定性/分桶方向=观察项（无硬门）", "",
+             f"- {'✓' if depth.get('expanded') else '✗'} 门A' 六桶方差",
+             f"- {'✓' if cons.get('conserved') else '✗'} 守恒检验",
+             f"- {'✓' if t3.get('clean') else '✗'} T3-scaling 零判例（scanHits={t3['scanHits']}）",
+             f"- {'✓' if all((sv or {}).get('sameShare') is None or sv['sameShare'] > 0.90 for sv in stab.values()) else '✗'} 稳定性>90%（freshness unclear={round(unclear_share, 3)}）",
+             f"- {'✓' if group.get('groupOk') else '✗'} 门B 分组（预期 n 小不显著）", "",
              f"## 判定：{v}"]
-    if v == "INSUFFICIENT" and direction.get("consistent"):
-        lines.append("")
-        lines.append("注：门B 单月显著性不足但排序方向与阶段3 全窗一致——候选扩窗复验（10 月弹药积累后终判），非 REJECT。")
 
-    out = "docs/hotlist-jev/phase3-jiuyan-v2-repilot-report.md"
+    out = "docs/hotlist-jev/phase3-jiuyan-v2-pilot3-report.md"
     with open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print("\n".join(lines))

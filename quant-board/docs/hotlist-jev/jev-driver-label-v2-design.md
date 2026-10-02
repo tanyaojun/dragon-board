@@ -95,3 +95,22 @@ T1 试点战报（e2192bbf）：门1 REJECT——Noul 0-1 轴在韭研全量弹�
 | 分桶次日方向 | catalyst_depth 各桶次日 pct 均值/连板率——观察项无硬门，让数据说话 | 1=持续性逻辑 / 2=期权弹性 / 3=情绪溢价 / 4=纯博弈 |
 
 **判定映射**：门A+门B 全过=PASS_CANDIDATE（进入 T2 全量决策）；门A 过门B 不过=INSUFFICIENT（按方向一致性区分扩窗/存疑）；门A 不过=REJECT（重铸失败，题目回炉）。试点样本=同 pilot1 三天（09-07/09-18/09-30，266 只，≈37 万 tokens），重跑覆盖主集合前已备份 pilot1。
+
+## 9. pilot3 题目精修预登记（2026-10-02，用户裁决"桶再优化、烧 token 要质量回馈"后冻结）
+
+pilot2 弹着点侦察三实锤：P1 new_growing 桶 117 只（44%）混杂全部证据梯度（斯菱"周交付"到超声"研究跟进+网传测算"）；P2 证据不分级（T1 公告与"未证实"网传同权）；P3 driver=concept_stretch 的 77 只中 57 只 depth=core/new（两轴口径打架，如清源股份）。理论依据：实物期权阶段化证据（Kellogg & Charnes 1999——每阶段解决不确定性触发成比例重估，中期≈认证线是最大拐点）+ 券商实务方法论（证据分级 T1>T2>T3、动词七级 研发<送样<验证<认证<小批量<量产<规模出货、"价值量≠增量≠涨价"）。
+
+**改动**：① new_growing_business 沿动词序列切 `new_business_scaling`（小批量供货/批量交付/中标/实质收入级）与 `new_business_early`（研发/送样/验证/认证/意向级），硬规则=T3 证据（网传/未证实/传闻）最多支撑 early 不得作 scaling 依据；② driver 文案对齐（concept_stretch 补"催化所指业务已是主业/已实质承接则不判"，capital_flow 补"催化无新意纯情绪带动归此"）；③ freshness 锚日期（以解析具体日期判 ≤2 交易日=fresh）；④ 报告层低置信（choice 概率<0.5）单独分层。depth 变六选一（5 实质桶+逃生口），成本持平。
+
+**pilot3 判据（先冻结，同三天 266 只 ≈37 万 tokens，开火前已备份 pilot2 至 hotlist_jev_driver_labels_v2_pilot2）**：
+
+| 项 | 判据 | 性质 |
+|---|---|---|
+| 门A' 六桶方差 | 五实质桶每桶 n≥5；最大实质桶占比<70%；逃生口≤15% | 硬门 |
+| 守恒检验 | pilot3 两新桶之和 = pilot2 new 桶（117±5） | 硬门（防改判溢出） |
+| T3-scaling 零判例 | scaling 判例中证据为网传/未证实的数量=0（战报人工抽验清单支撑） | 硬门 |
+| 稳定性对照 | core/equity/concept 桶 + driver + freshness 对 pilot2 sameShare>90%；freshness unclear <8% | 硬门 |
+| 两新桶分离 | scaling vs early 次日 pct/连板率方向读数（预期 scaling>early，不作门） | 观察 |
+| 门B | 沿用 driver 分组门（p<0.05+极差≥15pct；n 小预期不显著，方向一致性兜底） | 硬门（预期 INSUFFICIENT 路径） |
+
+判定映射：全部硬门过=PASS_CANDIDATE（进入 T2 全量决策）；门A'/守恒/T3 任一不过=REJECT（回炉）；其余=INSUFFICIENT。
