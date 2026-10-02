@@ -41,6 +41,24 @@ def test_build_server_limit_summary_buckets_boards_and_zhaban():
     assert summary["source"] == "server-limitup"
 
 
+def test_build_server_limit_summary_drawdown_block():
+    # 大幅回撤池（2026-10-02 弹药扩展）：max_drawdown API 为负数字符串 → 存正幅值；
+    # 空池 count=0、幅值 None（不伪造）；池缺失（pools 无该键且无 poolCounts）count=None
+    pools = {"pools": {"drawdown": {"ok": True, "items": [
+        {"stock_code": "603278", "max_drawdown": "-12.56"},
+        {"stock_code": "600001", "max_drawdown": -5.0},
+    ]}}}
+    summary = build_server_limit_summary([{"code": "x"}], pools)
+    assert summary["drawdown"] == {"count": 2, "avgDrawdownPct": 8.78, "deepestDrawdownPct": 12.56}
+
+    empty = build_server_limit_summary([{"code": "x"}], {"pools": {"drawdown": {"ok": True, "items": []}}})
+    assert empty["drawdown"] == {"count": 0, "avgDrawdownPct": None, "deepestDrawdownPct": None}
+
+    missing = build_server_limit_summary([{"code": "x"}], {})
+    assert missing["drawdown"]["count"] is None  # 上游没给 ≠ 0
+    assert missing["drawdown"]["avgDrawdownPct"] is None
+
+
 def test_pool_counts_missing_derived_from_pool_items_not_faked_zero():
     # 历史日期查询 poolCounts=null：炸板/回封/回撤必须按池内 items 派生，禁止伪装成 0
     pools = {

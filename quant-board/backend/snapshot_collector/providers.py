@@ -2186,9 +2186,31 @@ def build_server_limit_summary(
             if derived is not None:
                 ths_pools_out[count_key] = derived
 
+    # 大幅回撤池（THS drawdown）：曾触板后深度回撤个股——负反馈候选指标（2026-10-02 弹药扩展，
+    # 先采集+回测验证，过验前不进 jev 判层）。API max_drawdown 为负数字符串，此处存正幅值；
+    # 池上游失败时 count=None（fail-visible，不伪装 0）。逐股明细不落 limitSummary（体积），
+    # 回测/研究走回撤池接口现查。
+    dd_count = _pool_count("drawdown")
+    dd_draws: list[float] = []
+    for it in _pool_items("drawdown"):
+        v = it.get("max_drawdown")
+        if isinstance(v, str):
+            try:
+                v = float(v)
+            except ValueError:
+                v = None
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            dd_draws.append(round(-float(v), 2))
+    drawdown = {
+        "count": dd_count,
+        "avgDrawdownPct": round(sum(dd_draws) / len(dd_draws), 2) if dd_draws else None,
+        "deepestDrawdownPct": max(dd_draws) if dd_draws else None,
+    }
+
     return {
         "continuousBoards": boards,
         "zhaban": zhaban,
+        "drawdown": drawdown,
         "thsPools": ths_pools_out,
         "source": "server-limitup",
         "capturedAt": _iso_now(),
