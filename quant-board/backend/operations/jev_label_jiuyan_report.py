@@ -90,10 +90,14 @@ def _spearman(xs: list[float], ys: list[float]) -> float | None:
 
 
 def direction_consistent_with_phase3(lianban_rates: dict[str, float]) -> dict:
-    """门2 单月显著性兜底：七类连板率排序 vs 阶段3 全窗参考，Spearman ρ≥0.5 视为方向一致。"""
+    """门B 单月显著性兜底：七类连板率排序 vs 阶段3 全窗参考，Spearman ρ≥0.5 视为方向一致。
+    组数 <5 时不可算（computable=False），与"方向不一致"区分（避免误读）。"""
     common = [k for k in PHASE3_REF_LIANBAN if k in lianban_rates]
+    if len(common) < 5:
+        return {"rho": None, "consistent": False, "computable": False,
+                "reason": f"n>=8 组仅 {len(common)} 个，排序一致性需 ≥5 组"}
     rho = _spearman([PHASE3_REF_LIANBAN[k] for k in common], [lianban_rates[k] for k in common])
-    return {"rho": rho, "consistent": bool(rho is not None and rho >= 0.5)}
+    return {"rho": rho, "consistent": bool(rho is not None and rho >= 0.5), "computable": True}
 
 
 def verdict(depth: dict, group: dict, direction: dict) -> str:
