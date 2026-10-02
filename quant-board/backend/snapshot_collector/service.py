@@ -789,9 +789,9 @@ class SnapshotCollectorService:
         except Exception as exc:
             warnings.append(f"hotlist_sentiment_eod_failed: {exc}")
             logging.warning("post-persist EOD sentiment failed for %s: %s", trading_date, exc)
-        # ── 第 4 步：jev 情绪 v2（2026-10-02 用户裁决 V1 退役全线接 V2，gate=JEV_SENTIMENT_V2_ENABLED 默认开）──
+        # ── 第 4 步：jev 情绪（2026-10-02 用户裁决 V1 退役，唯一情绪链）──
         # half_hour → 槽级评判（锚定近 20 日参照叙事）；daily → 日级 EOD（市场热度计）；
-        # 失败只记 warning，绝不阻断采集与前置步骤。原第 4 步 v1 LLM 链（run_jev_post_persist）已退役。
+        # 失败只记 warning，绝不阻断采集与前置步骤。原 v1 LLM 链（run_jev_post_persist）已退役。
         try:
             from backend.services.jev.jev_sentiment_compute import (
                 compute_and_upsert_for_day,
@@ -799,25 +799,24 @@ class SnapshotCollectorService:
             )
 
             if snapshot_type == "daily":
-                # 触发=daily 快照；证据口径恒为 half_hour；force=False 让 gate 真实生效
-                v2_result = compute_and_upsert_for_day(
+                # 触发=daily 快照；证据口径恒为 half_hour
+                overview_result = compute_and_upsert_for_day(
                     db, dataset_id=dataset_id, trading_date=trading_date,
-                    snapshot_type="half_hour", force=False)
+                    snapshot_type="half_hour")
             elif snapshot_type == "half_hour":
-                v2_result = compute_and_upsert_for_slot(
-                    db, dataset_id=dataset_id, trading_date=trading_date,
-                    slot_time=slot_time, force=False)
+                overview_result = compute_and_upsert_for_slot(
+                    db, dataset_id=dataset_id, trading_date=trading_date, slot_time=slot_time)
             else:
-                v2_result = {"written": False, "skipped": True, "reason": "snapshot_type_not_applicable"}
-            v2_status = str(v2_result.get("status") or "")
-            if v2_status in ("degraded", "no_data"):
+                overview_result = {"written": False, "skipped": True, "reason": "snapshot_type_not_applicable"}
+            overview_status = str(overview_result.get("status") or "")
+            if overview_status in ("degraded", "no_data"):
                 warnings.append(
-                    f"hotlist_jev_v2_{v2_status}: "
-                    f"{v2_result.get('errorCode') or v2_result.get('reason')}"
+                    f"hotlist_jev_{overview_status}: "
+                    f"{overview_result.get('errorCode') or overview_result.get('reason')}"
                 )
         except Exception as exc:
-            warnings.append(f"hotlist_jev_v2_failed: {exc}")
-            logging.warning("post-persist jev v2 failed for %s %s: %s", trading_date, slot_time, exc)
+            warnings.append(f"hotlist_jev_failed: {exc}")
+            logging.warning("post-persist jev failed for %s %s: %s", trading_date, slot_time, exc)
         return warnings
 
     async def arun_once_multi(

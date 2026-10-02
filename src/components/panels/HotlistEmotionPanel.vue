@@ -83,24 +83,24 @@
                   title="证据全缺，本槽评分不可用（skippedDims 全维，见数据诊断）">
                   <span class="hero-score-hint">情绪分不可用</span>
                 </div>
-                <!-- 情绪 v2 双表（2026-10-02 立项）：市场热度计与规则分并读，口径不同不做换算 -->
-                <div v-if="sentimentV2Eod" class="hero-score-bar v2-gauge" :title="v2GaugeTooltip">
-                  <span class="hero-score-num">{{ sentimentV2Eod.dayTemperature ?? '--' }}</span>
+                <!-- 情绪概览双条（2026-10-02 立项）：市场热度计与规则分并读，口径不同不做换算 -->
+                <div v-if="sentimentOverviewEod" class="hero-score-bar overview-gauge" :title="overviewGaugeTooltip">
+                  <span class="hero-score-num">{{ sentimentOverviewEod.dayTemperature ?? '--' }}</span>
                   <div class="hero-score-track">
-                    <div class="hero-score-fill v2-fill" :style="{ width: v2TemperaturePctText }"></div>
+                    <div class="hero-score-fill overview-fill" :style="{ width: overviewTemperaturePctText }"></div>
                   </div>
-                  <span class="hero-score-hint">v2 市场热度计 0-100</span>
+                  <span class="hero-score-hint">市场热度计 0-100</span>
                 </div>
-                <!-- v2 被守卫隐藏时透出结构化原因（读口失败/未落库降级/日期错配），不静默消失 -->
-                <div v-else-if="v2HiddenReason" class="hero-score-bar hero-score-missing"
-                  :title="v2HiddenReason">
-                  <span class="hero-score-hint">v2 市场热度计不可用：{{ v2HiddenReason }}</span>
+                <!-- 概览条被守卫隐藏时透出结构化原因（读口失败/未落库降级/日期错配），不静默消失 -->
+                <div v-else-if="overviewHiddenReason" class="hero-score-bar hero-score-missing"
+                  :title="overviewHiddenReason">
+                  <span class="hero-score-hint">市场热度计不可用：{{ overviewHiddenReason }}</span>
                 </div>
-                <div v-if="sentimentV2Eod" class="v2-chips">
-                  <span v-if="v2StageName" class="v2-chip">档位·{{ v2StageName }}</span>
-                  <span v-if="v2CrowdingName" class="v2-chip" :class="{ 'v2-chip-warn': v2CrowdingWarn }">拥挤·{{ v2CrowdingName }}</span>
-                  <span v-if="v2DiffText" class="v2-chip">{{ v2DiffText }}</span>
-                  <span v-if="v2AnchorHint" class="v2-chip v2-chip-muted">{{ v2AnchorHint }}</span>
+                <div v-if="sentimentOverviewEod" class="overview-chips">
+                  <span v-if="overviewStageName" class="overview-chip">档位·{{ overviewStageName }}</span>
+                  <span v-if="overviewCrowdingName" class="overview-chip" :class="{ 'overview-chip-warn': overviewCrowdingWarn }">拥挤·{{ overviewCrowdingName }}</span>
+                  <span v-if="overviewDiffText" class="overview-chip">{{ overviewDiffText }}</span>
+                  <span v-if="overviewAnchorHint" class="overview-chip overview-chip-muted">{{ overviewAnchorHint }}</span>
                 </div>
                 <div class="hero-summary">盘面证据：{{ doc.summary }}</div>
               </div>
@@ -776,7 +776,7 @@ import {
 import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
-  fetchHotlistSentimentV2,
+  fetchHotlistSentimentOverview,
   fetchJiuyanAction,
   fetchJevReviewList,
   JEV_CROWDING_NAMES,
@@ -799,7 +799,7 @@ import type {
   JevReviewDay,
   JevReviewItem,
   JevReviewRulingStatus,
-  HotlistSentimentV2Result,
+  HotlistSentimentOverviewResult,
 } from '@/types/hotlistJev'
 import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
 import type {
@@ -850,7 +850,7 @@ const missingDays = ref<HotlistSentimentMissingDay[]>([])
 // ---------- jev 观察轨道（独立 AI 评判，只读对照；缺失/降级如实展示，不进信号） ----------
 const jevSlots = ref<HotlistJevDoc[]>([])
 const jevEod = ref<HotlistJevDoc | null>(null)
-const sentimentV2 = ref<HotlistSentimentV2Result | null>(null)
+const sentimentOverview = ref<HotlistSentimentOverviewResult | null>(null)
 const jevDegradedReason = ref<string | null>(null)
 const jevSeriesDate = ref('')
 
@@ -1043,7 +1043,7 @@ async function loadAll() {
   loading.value = true
   loadError.value = null
   try {
-    const [series, slotResult, jevResult, v2Result] = await Promise.all([
+    const [series, slotResult, jevResult, overviewResult] = await Promise.all([
       fetchHotlistSentimentSeries(3),
       fetchHotlistSentimentSlots().catch((err) => ({
         items: [], tradingDate: '', degraded: true, reason: err?.message || '加载失败',
@@ -1051,8 +1051,8 @@ async function loadAll() {
       fetchHotlistJevSeries().catch(() => ({
         date: '', slots: [], eod: null, degraded: true, reason: '加载失败',
       })),
-      fetchHotlistSentimentV2().catch(() => ({
-        ok: false, date: null, v2: null, rule: null, degraded: true, reason: '加载失败',
+      fetchHotlistSentimentOverview().catch(() => ({
+        ok: false, date: null, jev: null, rule: null, degraded: true, reason: '加载失败',
       })),
     ])
     if (series.degraded || !series.items.length) {
@@ -1079,13 +1079,13 @@ async function loadAll() {
     jevEod.value = jevResult.eod
     jevDegradedReason.value = jevResult.degraded ? jevResult.reason : null
     jevSeriesDate.value = jevResult.date
-    // v2 与 hero 规则分对齐同一交易日：无参取最新，日期不一致（v2 领先/当日未落库）时
+    // 概览与 hero 规则分对齐同一交易日：无参取最新，日期不一致（概览领先/当日未落库）时
     // 按 doc 交易日补拉一次；仍缺则守卫隐藏、占位条透出原因
-    let alignedV2 = v2Result
-    if (alignedV2.ok && latestDoc.tradingDate && alignedV2.date !== latestDoc.tradingDate) {
-      alignedV2 = await fetchHotlistSentimentV2(latestDoc.tradingDate)
+    let alignedOverview = overviewResult
+    if (alignedOverview.ok && latestDoc.tradingDate && alignedOverview.date !== latestDoc.tradingDate) {
+      alignedOverview = await fetchHotlistSentimentOverview(latestDoc.tradingDate)
     }
-    sentimentV2.value = alignedV2
+    sentimentOverview.value = alignedOverview
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败'
     doc.value = null
@@ -1116,7 +1116,7 @@ const jevHesitant = computed(() =>
   jevLatestProbability.value != null && jevLatestProbability.value < 0.6)
 const jevLatestTemperature = computed(() =>
   jevLatest.value ? jevScore(jevLatest.value, 'temperature') : null)
-// 情绪 v2 拥挤=离散归层 choice（V1 连续分退役），展示中文归层名
+// 拥挤=离散归层 choice（V1 连续分退役），展示中文归层名
 const jevLatestCrowding = computed(() =>
   jevLatest.value ? jevCrowdingName(jevLatest.value, 'crowding') : null)
 const jevLatestTitle = computed(() => {
@@ -1191,53 +1191,53 @@ const emotionScoreValue = computed(() => {
 const emotionScorePctText = computed(
   () => `${Math.max(0, Math.min(100, emotionScoreValue.value ?? 0))}%`,
 )
-const sentimentV2Eod = computed(() => {
-  const result = sentimentV2.value
-  if (!result?.ok || !result.v2 || result.v2.status !== 'ok') return null
-  // 日期一致性守卫：v2 EOD 与 hero 规则分必须同一天，错配时整条隐藏（不并排错日数据）
+const sentimentOverviewEod = computed(() => {
+  const result = sentimentOverview.value
+  if (!result?.ok || !result.jev || result.jev.status !== 'ok') return null
+  // 日期一致性守卫：概览 EOD 与 hero 规则分必须同一天，错配时整条隐藏（不并排错日数据）
   if (!doc.value?.tradingDate || result.date !== doc.value.tradingDate) return null
-  return result.v2
+  return result.jev
 })
-// v2 条被守卫隐藏时的原因透出（fail-visible）：各分支与 sentimentV2Eod 的隐藏条件一一对应
-const v2HiddenReason = computed(() => {
-  const result = sentimentV2.value
-  if (!result || sentimentV2Eod.value) return null
-  if (!doc.value?.tradingDate) return '规则分文档缺交易日，无法对齐 v2 日期'
+// 概览条被守卫隐藏时的原因透出（fail-visible）：各分支与 sentimentOverviewEod 的隐藏条件一一对应
+const overviewHiddenReason = computed(() => {
+  const result = sentimentOverview.value
+  if (!result || sentimentOverviewEod.value) return null
+  if (!doc.value?.tradingDate) return '规则分文档缺交易日，无法对齐概览日期'
   if (!result.ok) return result.reason || '读口不可用'
-  if (!result.v2 || result.v2.status !== 'ok') return result.reason || 'v2 EOD 缺失或降级'
-  if (result.date !== doc.value.tradingDate) return `v2 最新日期 ${result.date || '未知'} 与规则分日期不一致`
+  if (!result.jev || result.jev.status !== 'ok') return result.reason || '概览 EOD 缺失或降级'
+  if (result.date !== doc.value.tradingDate) return `概览最新日期 ${result.date || '未知'} 与规则分日期不一致`
   return null
 })
-const v2TemperaturePctText = computed(
-  () => `${Math.max(0, Math.min(100, sentimentV2Eod.value?.dayTemperature ?? 0))}%`,
+const overviewTemperaturePctText = computed(
+  () => `${Math.max(0, Math.min(100, sentimentOverviewEod.value?.dayTemperature ?? 0))}%`,
 )
-const v2StageName = computed(() => {
-  const stage = sentimentV2Eod.value?.dayStage
+const overviewStageName = computed(() => {
+  const stage = sentimentOverviewEod.value?.dayStage
   return stage ? JEV_STAGE_NAMES[stage] ?? stage : null
 })
-const v2CrowdingName = computed(() => {
-  const layer = sentimentV2Eod.value?.dayCrowding
+const overviewCrowdingName = computed(() => {
+  const layer = sentimentOverviewEod.value?.dayCrowding
   return layer ? JEV_CROWDING_NAMES[layer] ?? layer : null
 })
-const v2CrowdingWarn = computed(() =>
-  JEV_CROWDING_WARN_LAYERS.has(sentimentV2Eod.value?.dayCrowding ?? ''),
+const overviewCrowdingWarn = computed(() =>
+  JEV_CROWDING_WARN_LAYERS.has(sentimentOverviewEod.value?.dayCrowding ?? ''),
 )
-const v2DiffText = computed(() => {
-  const temp = sentimentV2Eod.value?.dayTemperature
-  const ruleScore = sentimentV2.value?.rule?.score
+const overviewDiffText = computed(() => {
+  const temp = sentimentOverviewEod.value?.dayTemperature
+  const ruleScore = sentimentOverview.value?.rule?.score
   if (temp == null || ruleScore == null) return null
   const delta = Math.round(temp - ruleScore)
   return delta === 0 ? '与规则分持平' : `较规则分 ${delta > 0 ? '+' : ''}${delta}`
 })
-const v2AnchorHint = computed(() => {
-  const range = sentimentV2.value?.v2?.historyAnchorRange
+const overviewAnchorHint = computed(() => {
+  const range = sentimentOverview.value?.jev?.historyAnchorRange
   return range ? `锚 ${range.split('，')[0] ?? range}` : null
 })
-const v2GaugeTooltip = computed(() => {
-  if (!sentimentV2Eod.value) return ''
-  const parts = ['v2 市场热度计：全市场涨停/连板/炸板锚定近 20 交易日分位（热读=广度高）',
+const overviewGaugeTooltip = computed(() => {
+  if (!sentimentOverviewEod.value) return ''
+  const parts = ['市场热度计：全市场涨停/连板/炸板锚定近 20 交易日分位（热读=广度高）',
                  '与左侧连续情绪分（池内质量计，风险维度权重高）口径不同，双表并读不做换算']
-  const anchor = sentimentV2.value?.v2?.historyAnchorRange
+  const anchor = sentimentOverview.value?.jev?.historyAnchorRange
   if (anchor) parts.push(`锚窗口：${anchor}`)
   return parts.join('；')
 })
@@ -3707,16 +3707,16 @@ watch(() => props.visible, (visible) => {
   background: linear-gradient(90deg, #7f8c8d, #ffb142 60%, #ff4757);
 }
 .hero-score-hint { font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
-.v2-gauge .hero-score-fill.v2-fill {
+.overview-gauge .hero-score-fill.overview-fill {
   background: linear-gradient(90deg, #2e86de, #54a0ff 60%, #48dbfb);
 }
-.v2-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.v2-chip {
+.overview-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.overview-chip {
   font-size: 10px; padding: 1px 6px; border-radius: 8px;
   border: 1px solid var(--border-color, #d0d0d0); color: var(--text-secondary);
 }
-.v2-chip-warn { color: #ff6b6b; border-color: #ff6b6b; }
-.v2-chip-muted { opacity: 0.65; }
+.overview-chip-warn { color: #ff6b6b; border-color: #ff6b6b; }
+.overview-chip-muted { opacity: 0.65; }
 .hero-score-missing .hero-score-hint { color: #7f8c8d; }
 .hero-summary { font-size: 12px; color: var(--text-secondary); }
 

@@ -4,7 +4,7 @@
 与 v1 链完全并行：v1（hotlist_jev_sentiment）封存不动，v2 落 hotlist_jev_sentiment_v2。
 改动三件：①叙事插【近20日参照】段（数据源=v1 槽文档 evidenceRaw 15:00 收盘统计，as-of 仅取 < 当日）；
 ②问题集换 JEV_SLOT_QUESTIONS / JEV_DAY_QUESTIONS（crowding 离散归层+温度锚定+五档绑证据）；
-③origin=sentiment_v2_pilot。
+③origin=sentiment_pilot。
 
 用法（Git Bash）：
   export JEV_CF_TOKEN=<token>
@@ -89,7 +89,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
         if not dry_run:
             db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id},
-                {"_id": doc_id, "kind": "slot", "origin": "sentiment_v2_pilot", "datasetId": dataset_id,
+                {"_id": doc_id, "kind": "slot", "origin": "sentiment_pilot", "datasetId": dataset_id,
                  "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
                  "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
                  "status": "no_data", "errorDetail": f"frame={'present' if frame else 'missing'} rows={len(rows)}"},
@@ -120,7 +120,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
         return {"status": "dry", "narrative": narrative}
     envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS)
     parsed = parse_jev_response(envelope, latency_ms)
-    doc = {"_id": doc_id, "kind": "slot", "origin": "sentiment_v2_pilot", "datasetId": dataset_id,
+    doc = {"_id": doc_id, "kind": "slot", "origin": "sentiment_pilot", "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
            "status": "ok" if parsed["ok"] else "degraded",
@@ -161,7 +161,7 @@ def compute_day(db, dataset_id: str, trading_date: str, history_anchor: str,
         return {"status": "dry", "narrative": narrative}
     envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS)
     parsed = parse_jev_response(envelope, latency_ms)
-    doc = {"_id": doc_id, "kind": "eod", "origin": "sentiment_v2_pilot", "datasetId": dataset_id,
+    doc = {"_id": doc_id, "kind": "eod", "origin": "sentiment_pilot", "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": "EOD",
            "asOf": f"{trading_date} EOD+08:00", "computedAt": int(time.time()),
            "status": "ok" if parsed["ok"] else "degraded",

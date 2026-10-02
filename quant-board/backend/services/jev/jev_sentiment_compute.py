@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """jev 情绪判定问题集 v2 生产计算服务（2026-10-02 立项：双表并存的 v2 表）。
 
-与 v1（jev_sentiment_compute）并行的第二支表：温度=锚定近 20 交易日分位的市场热度计，
-拥挤=离散归层（证据分级判据），档位=锚定分位判读。gate=JEV_SENTIMENT_V2_ENABLED（默认开，
-可回退）；token 缺失降级落库不阻断采集链。
+jev 情绪判定生产计算服务（2026-10-02 V1 退役后唯一情绪链）：温度=锚定近 20 交易日分位的市场热度计，
+拥挤=离散归层（证据分级判据），档位=锚定分位判读。token 缺失降级落库不阻断采集链。2026-10-02 单一事实源裁决：gate 环境变量删除（V1 已灭，无双轨可回退）。
 
 锚日历化（Q3 混季归因修复）：窗口按交易日历取严格早于当日的近 20 个交易日（每历日一条，
 数据缺失日照实记 None），不再用"最近 20 个有数日"跨季凑数。
@@ -140,11 +139,6 @@ def _yesterday_total_amounts_by_slot(db: Any, dataset_id: str, snapshot_type: st
 ANCHOR_WINDOW = 20
 
 
-def sentiment_gate_enabled() -> bool:
-    """gate：JEV_SENTIMENT_V2_ENABLED 默认开（"0"/"false" 关），可回退。"""
-    return os.environ.get("JEV_SENTIMENT_V2_ENABLED", "1").lower() not in ("0", "false")
-
-
 def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
                                  window: int = ANCHOR_WINDOW) -> list[dict]:
     """近 window 个交易日（日历口径，严格 < 当日）收盘统计，每历日一条。
@@ -185,15 +179,10 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
 
 
 def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
-                                  snapshot_type: str = "half_hour", origin: str = "collector_v2",
-                                  dry_run: bool = False, force: bool = False) -> dict[str, Any]:
-    """v2 日级 EOD 计算+落库（hotlist_jev_sentiment_v2）。异常向上抛，由链捕获为 warning。
-
-    force 默认 False：gate（JEV_SENTIMENT_V2_ENABLED）关时默认跳过，绕过 gate 须显式传
-    force=True（安全默认方向，防新调用方漏传静默越过回退开关）。
+                                  snapshot_type: str = "half_hour", origin: str = "collector",
+                                  dry_run: bool = False) -> dict[str, Any]:
+    """日级 EOD 计算+落库（hotlist_jev_sentiment）。异常向上抛，由链捕获为 warning。
     """
-    if not sentiment_gate_enabled() and not force:
-        return {"written": False, "skipped": True, "reason": "v2_disabled"}
     _, token, account = _jev_config()
     slots = _slots_of_date(db, dataset_id, snapshot_type, trading_date)
     doc_id = f"{dataset_id}:{snapshot_type}:{trading_date}:EOD"
@@ -260,15 +249,13 @@ def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
 
 
 def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, slot_time: str,
-                                   snapshot_type: str = "half_hour", origin: str = "collector_v2",
-                                   dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+                                   snapshot_type: str = "half_hour", origin: str = "collector",
+                                   dry_run: bool = False) -> dict[str, Any]:
     """v2 槽级计算+落库（hotlist_jev_sentiment_v2，2026-10-02 V1 退役后生产槽位唯一评判）。
 
     与 pilot（operations/jev_sentiment_pilot.compute_slot）同构：锚=日历口径近 20
-    交易日（生产坐标系）；gate/force 语义与 day 版一致。异常向上抛，由链捕获为 warning。
+    交易日（生产坐标系）。异常向上抛，由链捕获为 warning。
     """
-    if not sentiment_gate_enabled() and not force:
-        return {"written": False, "skipped": True, "reason": "v2_disabled"}
     _, token, account = _jev_config()
     frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
     rows = _load_rows(db, dataset_id, str(frame.get("snapshotId") or "")) if frame else []

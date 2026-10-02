@@ -192,8 +192,8 @@ export interface JiuyanActionResult {
   reason: string | null
 }
 
-/** 情绪 v2 EOD（市场热度计，2026-10-02 双表立项）：锚定近 20 交易日分位的第二支表 */
-export interface HotlistSentimentV2Eod {
+/** 情绪 概览 EOD（市场热度计，2026-10-02 双表立项）：锚定近 20 交易日分位的第二支表 */
+export interface HotlistSentimentOverviewEod {
   status: string | null
   dayTemperature: number | null
   dayStage: string | null
@@ -212,10 +212,10 @@ export interface HotlistSentimentRuleEod {
   version: string | null
 }
 
-export interface HotlistSentimentV2Result {
+export interface HotlistSentimentOverviewResult {
   ok: boolean
   date: string | null
-  v2: HotlistSentimentV2Eod | null
+  jev: HotlistSentimentOverviewEod | null
   rule: HotlistSentimentRuleEod | null
   degraded: boolean
   reason: string | null

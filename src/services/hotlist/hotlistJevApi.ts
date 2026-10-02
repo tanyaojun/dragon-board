@@ -8,10 +8,10 @@ import type {
   HotlistJevRangeResponse,
   HotlistJevRangeResult,
   HotlistJevSeriesResult,
-  HotlistSentimentV2Result,
+  HotlistSentimentOverviewResult,
 } from '@/types/hotlistJev'
 
-/** 拥挤归层英文值 → 展示中文（情绪 v2 离散归层，fail-visible 逃生口如实标注） */
+/** 拥挤归层英文值 → 展示中文（离散归层，fail-visible 逃生口如实标注） */
 export const JEV_CROWDING_NAMES: Record<string, string> = {
   top_acceleration: '高位加速',
   late_seal_weakness: '封板弱化',
@@ -76,7 +76,7 @@ export function jevScore(doc: HotlistJevDoc | null | undefined, key: string): nu
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null
 }
 
-/** 拥挤归层答案展示（情绪 v2 拥挤=离散归层 choice；缺失/score 型返回 null 不伪造） */
+/** 拥挤归层答案展示（拥挤=离散归层 choice；缺失/score 型返回 null 不伪造） */
 export function jevCrowdingName(
   doc: HotlistJevDoc | null | undefined,
   key: string,
@@ -275,24 +275,24 @@ export async function fetchJiuyanAction(date?: string): Promise<JiuyanActionResu
 }
 
 /**
- * 情绪 v2 双表读口（GET /api/hotlist-jev/sentiment-v2）：v2 市场热度计 + 规则分同包返回。
+ * 情绪概览读口（GET /api/hotlist-jev/sentiment-overview）：市场热度计 + 规则分同包返回。
  * 带 date 取指定交易日（与 hero 规则分对齐用），缺省取最新。
- * 后端降级/异常路径只回 {ok, degraded, reason}（缺 date/v2/rule 键），此处归一化补齐再交付；
- * 无兜底计算（结论唯一来源 = QuantBoard 后端 v2 轨道落库）。
+ * 后端降级/异常路径只回 {ok, degraded, reason}（缺 date/jev/rule 键），此处归一化补齐再交付；
+ * 无兜底计算（结论唯一来源 = QuantBoard 后端情绪轨道落库）。
  */
-export async function fetchHotlistSentimentV2(date?: string): Promise<HotlistSentimentV2Result> {
+export async function fetchHotlistSentimentOverview(date?: string): Promise<HotlistSentimentOverviewResult> {
   const params = new URLSearchParams()
   if (date) params.set('date', date)
   try {
-    const response = await fetch(`/api/hotlist-jev/sentiment-v2?${params.toString()}`)
+    const response = await fetch(`/api/hotlist-jev/sentiment-overview?${params.toString()}`)
     if (!response.ok) {
-      return { ok: false, date: date ?? null, v2: null, rule: null, degraded: true, reason: `HTTP ${response.status}` }
+      return { ok: false, date: date ?? null, jev: null, rule: null, degraded: true, reason: `HTTP ${response.status}` }
     }
-    const body = (await response.json()) as Partial<HotlistSentimentV2Result> | null
+    const body = (await response.json()) as Partial<HotlistSentimentOverviewResult> | null
     return {
       ok: body?.ok === true,
       date: body?.date ?? null,
-      v2: body?.v2 ?? null,
+      jev: body?.jev ?? null,
       rule: body?.rule ?? null,
       degraded: body?.degraded === true,
       reason: body?.reason ?? null,
@@ -301,7 +301,7 @@ export async function fetchHotlistSentimentV2(date?: string): Promise<HotlistSen
     return {
       ok: false,
       date: date ?? null,
-      v2: null,
+      jev: null,
       rule: null,
       degraded: true,
       reason: err instanceof Error ? err.message : 'fetch failed',

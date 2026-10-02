@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""情绪 v2 生产计算服务测试：锚日历化（窗口/伪 0/缺数日）+ gate + EOD/槽级计算落库。
+"""情绪 v2 生产计算服务测试：锚日历化（窗口/伪 0/缺数日）+ EOD/槽级计算落库。
 
-2026-10-02 V1 退役：锚读数源=hotlist_jev_sentiment_v2 槽文档（v2 自供锚）。"""
+2026-10-02 V1 退役：锚读数源=hotlist_jev_sentiment 槽文档（自供锚）。"""
 from __future__ import annotations
 
 import sys
@@ -17,7 +17,6 @@ from backend.services.jev.jev_sentiment_compute import (
     build_history_stats_calendar,
     compute_and_upsert_for_day,
     compute_and_upsert_for_slot,
-    sentiment_gate_enabled,
 )
 
 
@@ -143,13 +142,6 @@ def test_calendar_window_limited_to_20():
     assert len(stats) == 10 and stats[-1]["date"] == "2026-08-25"
 
 
-def test_sentiment_gate_enabled_default_on_and_reversible(monkeypatch):
-    monkeypatch.delenv("JEV_SENTIMENT_V2_ENABLED", raising=False)
-    assert sentiment_gate_enabled() is True  # 默认开
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "0")
-    assert sentiment_gate_enabled() is False  # 可回退
-
-
 def test_compute_day_happy_path(monkeypatch):
     days = ["2026-09-28", "2026-09-29", "2026-09-30"]
     db = FakeMongoDb({
@@ -178,7 +170,7 @@ def test_compute_day_happy_path(monkeypatch):
     result = compute_and_upsert_for_day(db, dataset_id="dragonboard_live", trading_date="2026-09-30")
     assert result["written"] is True and result["status"] == "ok"
     doc = next(r for r in db["hotlist_jev_sentiment"].rows if r.get("kind") == "eod")
-    assert doc["tradingDate"] == "2026-09-30" and doc["origin"] == "collector_v2"
+    assert doc["tradingDate"] == "2026-09-30" and doc["origin"] == "collector"
     assert ((doc["answers"] or {})["day_stage"]["choice"]) == "ferment"
     assert doc["narrativeRaw"].startswith("2026-09-30 交易日全天热榜情绪证据轨迹")
 
@@ -199,23 +191,6 @@ def test_compute_day_token_missing_degraded_fail_visible(monkeypatch):
     doc = next(r for r in db["hotlist_jev_sentiment"].rows if r.get("kind") == "eod")
     assert doc["status"] == "degraded" and doc["narrativeRaw"]  # 叙事留存，不吞证据
 
-
-def test_compute_day_disabled_skips(monkeypatch):
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "0")
-    db = FakeMongoDb({"snapshot_frames": frame_rows(["2026-09-29", "2026-09-30"])})
-    result = compute_and_upsert_for_day(db, dataset_id="dragonboard_live",
-                                           trading_date="2026-09-30", force=False)
-    assert result.get("skipped") is True
-
-
-def test_compute_day_gate_off_default_force_skips(monkeypatch):
-    # 安全默认方向：不传 force（默认 False）+ gate 关 → 必须跳过，防止新调用方漏传静默绕过
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "0")
-    db = FakeMongoDb({"snapshot_frames": frame_rows(["2026-09-29", "2026-09-30"])})
-    result = compute_and_upsert_for_day(db, dataset_id="dragonboard_live",
-                                           trading_date="2026-09-30")
-    assert result == {"written": False, "skipped": True, "reason": "v2_disabled"}
-    assert db["hotlist_jev_sentiment"].rows == []  # 不落库
 
 # ── 槽级计算（2026-10-02 V1 退役后生产槽位唯一评判）──
 
@@ -262,18 +237,9 @@ def test_compute_slot_happy_path(monkeypatch):
     assert result["written"] is True and result["status"] == "ok"
     doc = next(r for r in db["hotlist_jev_sentiment"].rows
                if r.get("kind") == "slot" and r.get("slotTime") == "10:00")
-    assert doc["origin"] == "collector_v2" and doc["tradingDate"] == "2026-09-30"
+    assert doc["origin"] == "collector" and doc["tradingDate"] == "2026-09-30"
     assert doc["evidenceRaw"] and doc["narrativeRaw"] and doc["historyAnchorRange"]
     assert ((doc["answers"] or {})["crowding"]["choice"]) == "no_crowding"
-
-
-def test_compute_slot_disabled_skips(monkeypatch):
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "0")
-    db = FakeMongoDb({"snapshot_frames": [slot_frame("2026-09-30", "10:00")]})
-    result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live",
-                                            trading_date="2026-09-30", slot_time="10:00")
-    assert result == {"written": False, "skipped": True, "reason": "v2_disabled"}
-    assert db["hotlist_jev_sentiment"].rows == []  # 不落库
 
 
 def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):

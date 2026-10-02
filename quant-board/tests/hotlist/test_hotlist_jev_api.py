@@ -112,7 +112,7 @@ def client(monkeypatch):
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: db,
     )
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")  # evaluate 不受 gate 限制
+    # 2026-10-02 单一事实源裁决：gate 环境变量已删，evaluate 无门控
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     _mock_jev_ok(monkeypatch)
     test_client = TestClient(app)
@@ -124,7 +124,6 @@ def test_evaluate_slot_bypasses_gate(monkeypatch):
     seed(db)
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")  # gate 关
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     _mock_jev_ok(monkeypatch)
     client = TestClient(app)
@@ -145,7 +144,6 @@ def test_evaluate_day(monkeypatch):
     seed(db)
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
 
     envelope = {"result": {"state": "Completed", "result": {
@@ -174,7 +172,6 @@ def test_evaluate_slot_no_time_and_no_frames_returns_404(monkeypatch):
     db = FakeMongoDb()
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
-    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     _mock_jev_ok(monkeypatch)
     client = TestClient(app)
@@ -282,11 +279,11 @@ def test_range_days_capped_to_min_one(monkeypatch, client):
     assert body["degradedCount"] == 0
 
 
-def test_sentiment_v2_dual_table(monkeypatch):
+def test_sentiment_overview_dual_table(monkeypatch):
     """v2 双表读口：v2 EOD + 规则 EOD 同包返回；缺任一表如实 degraded 注记。"""
     db = FakeMongoDb()
     db["hotlist_jev_sentiment"].rows = [{
-        "_id": f"{DATASET}:half_hour:{DATE}:EOD", "kind": "eod", "origin": "collector_v2",
+        "_id": f"{DATASET}:half_hour:{DATE}:EOD", "kind": "eod", "origin": "collector",
         "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": DATE, "slotTime": "EOD",
         "status": "ok", "historyAnchorRange": "2026-09-01 → 2026-09-29，20 个交易日收盘统计",
         "answers": {"day_stage": {"type": "choice", "choice": "ferment",
@@ -305,60 +302,60 @@ def test_sentiment_v2_dual_table(monkeypatch):
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
     client = TestClient(app)
 
-    response = client.get("/api/hotlist-jev/sentiment-v2")
+    response = client.get("/api/hotlist-jev/sentiment-overview")
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True and body["date"] == DATE
-    assert body["v2"]["dayTemperature"] == 64.0
-    assert body["v2"]["dayStage"] == "ferment" and body["v2"]["dayCrowding"] == "no_crowding"
+    assert body["jev"]["dayTemperature"] == 64.0
+    assert body["jev"]["dayStage"] == "ferment" and body["jev"]["dayCrowding"] == "no_crowding"
     assert body["rule"]["score"] == 59.1 and body["rule"]["stageCandidate"] == "启动"
     assert body["degraded"] is False
 
 
-def test_sentiment_v2_missing_v2_doc_degraded(monkeypatch):
+def test_sentiment_overview_missing_jev_doc_degraded(monkeypatch):
     db = FakeMongoDb()
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
     client = TestClient(app)
-    response = client.get("/api/hotlist-jev/sentiment-v2?date=2026-10-09")
+    response = client.get("/api/hotlist-jev/sentiment-overview?date=2026-10-09")
     assert response.status_code == 200
     body = response.json()
-    assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
+    assert body["ok"] is True and body["jev"] is None and body["degraded"] is True
     assert "未落库" in body["reason"]
 
 
 def _seed_no_data_v2(db, date):
     db["hotlist_jev_sentiment"].rows = [{
-        "_id": f"{DATASET}:half_hour:{date}:EOD", "kind": "eod", "origin": "collector_v2",
+        "_id": f"{DATASET}:half_hour:{date}:EOD", "kind": "eod", "origin": "collector",
         "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": date, "slotTime": "EOD",
         "status": "no_data", "errorDetail": "no half_hour frames",
     }]
 
 
-def test_sentiment_v2_no_data_latest_reason_distinct(monkeypatch):
+def test_sentiment_overview_no_data_latest_reason_distinct(monkeypatch):
     """已落库但 no_data ≠ 未落库：reason 带 no_data + errorDetail，不误述排查方向。"""
     db = FakeMongoDb()
     _seed_no_data_v2(db, DATE)
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
     client = TestClient(app)
-    response = client.get("/api/hotlist-jev/sentiment-v2")
+    response = client.get("/api/hotlist-jev/sentiment-overview")
     assert response.status_code == 200
     body = response.json()
-    assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
+    assert body["ok"] is True and body["jev"] is None and body["degraded"] is True
     assert body["date"] == DATE
     assert "no_data" in body["reason"] and "no half_hour frames" in body["reason"]
     assert "未落库" not in body["reason"]
 
 
-def test_sentiment_v2_no_data_with_date_reason_distinct(monkeypatch):
+def test_sentiment_overview_no_data_with_date_reason_distinct(monkeypatch):
     db = FakeMongoDb()
     _seed_no_data_v2(db, DATE)
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
     client = TestClient(app)
-    response = client.get(f"/api/hotlist-jev/sentiment-v2?date={DATE}")
+    response = client.get(f"/api/hotlist-jev/sentiment-overview?date={DATE}")
     assert response.status_code == 200
     body = response.json()
-    assert body["ok"] is True and body["v2"] is None and body["degraded"] is True
+    assert body["ok"] is True and body["jev"] is None and body["degraded"] is True
     assert "no_data" in body["reason"] and "no half_hour frames" in body["reason"]

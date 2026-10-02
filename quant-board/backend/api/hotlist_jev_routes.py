@@ -54,7 +54,7 @@ def _latest_date(db: Any, dataset_id: str) -> str | None:
 
 @router.post("/evaluate")
 def evaluate_hotlist_jev(payload: JevEvaluatePayload) -> dict[str, Any]:
-    # 2026-10-02 用户裁决 V1 退役：手工评判也走 v2（叙事带锚段+新证据行，落 hotlist_jev_sentiment_v2）
+    # 2026-10-02 用户裁决 V1 退役：手工评判走唯一情绪链（叙事带锚段+新证据行，落 hotlist_jev_sentiment）
     from backend.services.jev.jev_sentiment_compute import (
         compute_and_upsert_for_day,
         compute_and_upsert_for_slot,
@@ -71,8 +71,7 @@ def evaluate_hotlist_jev(payload: JevEvaluatePayload) -> dict[str, Any]:
     try:
         if payload.scope == "day":
             result = compute_and_upsert_for_day(
-                db, dataset_id=payload.datasetId, trading_date=payload.tradingDate,
-                origin="manual", force=True)
+                db, dataset_id=payload.datasetId, trading_date=payload.tradingDate, origin="manual")
             return {"ok": True, **result}
         slot_time = payload.slotTime
         if not slot_time:
@@ -92,7 +91,7 @@ def evaluate_hotlist_jev(payload: JevEvaluatePayload) -> dict[str, Any]:
             slot_time = slots[-1]
         result = compute_and_upsert_for_slot(
             db, dataset_id=payload.datasetId, trading_date=payload.tradingDate,
-            slot_time=slot_time, origin="manual", force=True)
+            slot_time=slot_time, origin="manual")
         return {"ok": True, "slotTime": slot_time, **result}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"evaluate_failed: {exc}"}
@@ -276,11 +275,11 @@ def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str,
         return {"ok": False, "degraded": True, "reason": f"jiuyan_read_failed: {exc}"}
 
 
-@router.get("/sentiment-v2")
-def get_hotlist_jev_sentiment_v2(date: str | None = None) -> dict[str, Any]:
-    """情绪 v2 双表读口（2026-10-02 立项）：v2 EOD（市场热度计）+ 规则 EOD 同包返回。
+@router.get("/sentiment-overview")
+def get_hotlist_jev_sentiment_overview(date: str | None = None) -> dict[str, Any]:
+    """情绪概览读口：jev EOD（市场热度计）+ 规则 EOD 同包返回。
 
-    无 date → 最新可用 v2 EOD 日；rule 为当日规则分（hotlist_sentiment emotionScore），
+    无 date → 最新可用 jev EOD 日；rule 为当日规则分（hotlist_sentiment emotionScore），
     任一表缺失如实标注（degraded 注记），不做兜底计算。
     """
     try:
@@ -288,25 +287,25 @@ def get_hotlist_jev_sentiment_v2(date: str | None = None) -> dict[str, Any]:
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
     try:
-        v2_col = db["hotlist_jev_sentiment"]
+        jev_col = db["hotlist_jev_sentiment"]
         if date:
-            doc = v2_col.find_one({"kind": "eod", "tradingDate": date})
+            doc = jev_col.find_one({"kind": "eod", "tradingDate": date})
             if doc is not None and doc.get("status") == "no_data":
                 # 已落库但当日无可用帧：与"确未落库"区分，errorDetail 供排查
-                return {"ok": True, "date": date, "v2": None, "rule": None, "degraded": True,
-                        "reason": f"v2_eod 该日 no_data（errorDetail={doc.get('errorDetail') or '未知'}）"}
+                return {"ok": True, "date": date, "jev": None, "rule": None, "degraded": True,
+                        "reason": f"jev_eod 该日 no_data（errorDetail={doc.get('errorDetail') or '未知'}）"}
         else:
-            doc = v2_col.find_one({"kind": "eod"}, sort=[("tradingDate", -1)])
+            doc = jev_col.find_one({"kind": "eod"}, sort=[("tradingDate", -1)])
             if doc is not None and doc.get("status") == "no_data":
-                return {"ok": True, "date": str(doc.get("tradingDate")), "v2": None, "rule": None,
+                return {"ok": True, "date": str(doc.get("tradingDate")), "jev": None, "rule": None,
                         "degraded": True,
-                        "reason": f"最新日 {doc.get('tradingDate')} v2_eod no_data"
+                        "reason": f"最新日 {doc.get('tradingDate')} jev_eod no_data"
                                   f"（errorDetail={doc.get('errorDetail') or '未知'}）"}
             if doc is not None and doc.get("status") not in ("ok", "degraded"):
                 doc = None
         if doc is None:
-            return {"ok": True, "date": date, "v2": None, "rule": None,
-                    "degraded": True, "reason": f"v2_eod 未落库{f'：{date}' if date else ''}"}
+            return {"ok": True, "date": date, "jev": None, "rule": None,
+                    "degraded": True, "reason": f"jev_eod 未落库{f'：{date}' if date else ''}"}
         trading_date = str(doc.get("tradingDate"))
         rule_doc = db["hotlist_sentiment"].find_one(
             {"datasetId": doc.get("datasetId") or "dragonboard_live",
@@ -324,7 +323,7 @@ def get_hotlist_jev_sentiment_v2(date: str | None = None) -> dict[str, Any]:
             return (answers.get(key) or {}).get("probabilities")
 
         return {"ok": True, "date": trading_date,
-                "v2": {"status": doc.get("status"),
+                "jev": {"status": doc.get("status"),
                        "dayTemperature": scores.get("day_temperature"),
                        "dayStage": _choice("day_stage"),
                        "dayStageProbability": ((answers.get("day_stage") or {}).get("probabilities") or {}).get(_choice("day_stage") or ""),
@@ -341,4 +340,4 @@ def get_hotlist_jev_sentiment_v2(date: str | None = None) -> dict[str, Any]:
                 "reason": None if (doc.get("status") == "ok" and rule is not None)
                           else ("规则 EOD 未落库" if rule is None else f"v2 status={doc.get('status')}")}
     except Exception as exc:
-        return {"ok": False, "degraded": True, "reason": f"sentiment_v2_read_failed: {exc}"}
+        return {"ok": False, "degraded": True, "reason": f"sentiment_overview_read_failed: {exc}"}
