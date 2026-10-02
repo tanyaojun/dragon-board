@@ -85,3 +85,67 @@ def test_v2_question_sets_structure():
     from backend.analysis.hotlist.jev_state import JEV_SLOT_QUESTIONS
 
     assert JEV_SLOT_QUESTIONS["crowding"]["type"] == "score"
+
+
+# ── 封板质量/触板回撤池接线 + 09:30 伪 0 注记（2026-10-02 裁决）──────────────────
+
+from backend.analysis.hotlist.jev_state import collect_slot_evidence  # noqa: E402
+
+_SQ_FRAME = {
+    "snapshotId": "half_hour:2026-09-29:15:00", "type": "half_hour",
+    "tradingDate": "2026-09-29", "slotTime": "15:00",
+    "indices": {"sh": {"change": -1.0}},
+    "limitSummary": {
+        "continuousBoards": {"yiban": 30, "erban": 10, "sanban": 2, "sibanPlus": 1, "maxBoard": 4},
+        "zhaban": {"count": 8, "rate": 12.0, "fengbanRate": 88.0, "ztCount": 43},
+        "sealQuality": {"byzCount": 25, "hardCount": 10, "rottenCount": 8, "rottenShare": 0.186,
+                        "avgSucRate": 0.62},
+        "drawdown": {"count": 3, "avgDrawdownPct": 8.5, "deepestDrawdownPct": 12.6},
+    },
+}
+
+_ROW = {"code": "000001", "name": "甲", "rank": 1, "heat": 90, "pctChange": 9.9,
+        "change": 9.9, "price": 9.66, "limitUpPrice": 9.66, "zlje": 3.0e6}
+
+
+def _slot_narrative(frame, slot_time="15:00"):
+    ev = collect_slot_evidence(frame=frame, rows=[dict(_ROW)], yesterday_rows=[],
+                               analysis_by_code={}, slot_time=slot_time)
+    return build_slot_jev_state(trading_date="2026-09-29", slot_time=slot_time,
+                                current=ev, priors=[]), ev
+
+
+def test_seal_quality_and_drawdown_flow_to_narrative():
+    text, ev = _slot_narrative(_SQ_FRAME)
+    assert ev["limit"]["sealQuality"]["rottenShare"] == 0.186
+    assert ev["limit"]["drawdown"]["count"] == 3
+    assert "封板质量：一字/秒板 25 家、硬板 10 家、开板重封 8 家、重封率 19%" in text
+    assert "该批个股平均历史封板成功率 62%" in text
+    assert "触板回撤池：大幅回撤 3 家、平均回撤 8.5%、最深 12.6%" in text
+
+
+def test_missing_blocks_absent_not_faked():
+    # 帧无 sealQuality/drawdown（历史帧）→ 叙事无该行、evidence 键缺席（fail-visible）
+    frame = {k: v for k, v in _SQ_FRAME.items()}
+    frame = dict(frame)
+    frame["limitSummary"] = {
+        "continuousBoards": _SQ_FRAME["limitSummary"]["continuousBoards"],
+        "zhaban": _SQ_FRAME["limitSummary"]["zhaban"]}
+    text, ev = _slot_narrative(frame)
+    assert "sealQuality" not in ev["limit"] and "drawdown" not in ev["limit"]
+    assert "封板质量" not in text and "触板回撤池" not in text
+
+
+def test_0930_pseudo_zero_annotated():
+    # 09:30 帧 zt=0（开盘伪 0 形态）→ 叙事带谨慎采信注记；15:00 同值不带
+    frame = {
+        "snapshotId": "half_hour:2026-09-29:09:30", "type": "half_hour",
+        "tradingDate": "2026-09-29", "slotTime": "09:30",
+        "indices": {"sh": {"change": -1.0}},
+        "limitSummary": {"continuousBoards": {"yiban": 0, "erban": 0, "sanban": 0, "sibanPlus": 0, "maxBoard": 0},
+                         "zhaban": {"count": 0, "rate": 0.0, "fengbanRate": 0.0, "ztCount": 0}},
+    }
+    text, _ = _slot_narrative(frame, slot_time="09:30")
+    assert "09:30 开盘时点：涨停池可能未就绪" in text
+    text15, _ = _slot_narrative(_SQ_FRAME, slot_time="15:00")
+    assert "谨慎采信" not in text15

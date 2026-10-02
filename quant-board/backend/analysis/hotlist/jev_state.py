@@ -191,6 +191,16 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         limit["ztCount"] = zt
         if zt is None:
             degraded.append("涨停证据缺失")
+        # 封板质量 + 触板回撤池（2026-10-02 弹药扩展接线，回测过验见 ths-limitup-arsenal-audit.md）；
+        # 帧无该块（历史帧/上游失败）则键缺席，fail-visible 不伪造
+        sq = ls.get("sealQuality") if isinstance(ls.get("sealQuality"), dict) else {}
+        if sq:
+            limit["sealQuality"] = {k: sq.get(k) for k in
+                                    ("byzCount", "hardCount", "rottenCount", "rottenShare", "avgSucRate")}
+        dd = ls.get("drawdown") if isinstance(ls.get("drawdown"), dict) else {}
+        if dd:
+            limit["drawdown"] = {k: dd.get(k) for k in
+                                 ("count", "avgDrawdownPct", "deepestDrawdownPct")}
 
     # ── 行级：涨跌分布（五桶互斥 + 缺失计数）+ 热榜 TRIN（量价确认，自算不读规则文档）──
     breadth = {"total": len(rows), "limitUp": 0, "up5": 0, "up0": 0,
@@ -444,6 +454,30 @@ def _format_current_evidence_section(ev: dict) -> str:
     if limit.get("fengbanRate") is not None:
         lim_bits.append(f"封板率 {float(limit['fengbanRate']):.0f}%")
     lines.append("涨停与炸板：" + ("、".join(lim_bits) if lim_bits else "缺失"))
+    if (ev.get("slotTime") == "09:30" and limit.get("ztCount") == 0
+            and not any(boards.get(k) for k in ("yiban", "erban", "sanban", "sibanPlus"))):
+        # 09:30 开盘伪 0（5-9 月 15/98 帧）：池未就绪的概率远大于真实 0 涨停，注记提醒谨慎采信
+        lines.append("（09:30 开盘时点：涨停池可能未就绪，上述 0 值谨慎采信）")
+    # 封板质量 + 触板回撤池（2026-10-02 接线；块缺席=历史帧/上游失败，不伪造）
+    sq = limit.get("sealQuality") or {}
+    sq_bits = []
+    if sq.get("byzCount") is not None or sq.get("rottenCount") is not None:
+        sq_bits.append(f"一字/秒板 {sq.get('byzCount') or 0} 家、硬板 {sq.get('hardCount') or 0} 家、"
+                       f"开板重封 {sq.get('rottenCount') or 0} 家")
+        if sq.get("rottenShare") is not None:
+            sq_bits.append(f"重封率 {float(sq['rottenShare']) * 100:.0f}%")
+    if sq.get("avgSucRate") is not None:
+        sq_bits.append(f"该批个股平均历史封板成功率 {float(sq['avgSucRate']) * 100:.0f}%")
+    if sq_bits:
+        lines.append("封板质量：" + "、".join(sq_bits))
+    dd = limit.get("drawdown") or {}
+    if dd.get("count") is not None:
+        dd_bits = [f"大幅回撤 {int(dd['count'])} 家"]
+        if dd.get("avgDrawdownPct") is not None:
+            dd_bits.append(f"平均回撤 {float(dd['avgDrawdownPct']):.1f}%")
+        if dd.get("deepestDrawdownPct") is not None:
+            dd_bits.append(f"最深 {float(dd['deepestDrawdownPct']):.1f}%")
+        lines.append("触板回撤池：" + "、".join(dd_bits))
     breadth = ev.get("breadth") or {}
     missing_bit = f"（涨幅缺失 {breadth['pctMissing']}）" if breadth.get("pctMissing") else ""
     lines.append(f"涨跌分布：共 {breadth.get('total', 0)} 只——涨停 {breadth.get('limitUp', 0)}、"

@@ -2207,10 +2207,40 @@ def build_server_limit_summary(
         "deepestDrawdownPct": max(dd_draws) if dd_draws else None,
     }
 
+    # 封板质量（THS info open_num 波次 + limit_up_suc_rate，2026-10-02 裁决采集）：
+    # open_num 语义=None=一字/秒板（开盘即封无波次数据，键缺失≠0）、1=一波封住（硬板）、
+    # ≥2=开板重封（烂板，回测次日溢价单调劣于硬板/一字）；limit_up_suc_rate=个股历史封板
+    # 成功率 [0,1]（此前未采集，用户裁决补上）。inf0=0 与 info 为空时全 None（fail-visible）。
+    byz = hard = rotten = 0
+    suc_vals: list[float] = []
+    for it in info_items if isinstance(info_items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        on = it.get("open_num")
+        if on is None:
+            byz += 1
+        elif isinstance(on, (int, float)) and not isinstance(on, bool):
+            if on <= 1:
+                hard += 1
+            else:
+                rotten += 1
+        suc = it.get("limit_up_suc_rate")
+        if isinstance(suc, (int, float)) and not isinstance(suc, bool) and 0 <= suc <= 1:
+            suc_vals.append(float(suc))
+    quality_n = byz + hard + rotten
+    seal_quality = {
+        "byzCount": byz,
+        "hardCount": hard,
+        "rottenCount": rotten,
+        "rottenShare": round(rotten / quality_n, 3) if quality_n else None,
+        "avgSucRate": round(sum(suc_vals) / len(suc_vals), 3) if suc_vals else None,
+    }
+
     return {
         "continuousBoards": boards,
         "zhaban": zhaban,
         "drawdown": drawdown,
+        "sealQuality": seal_quality,
         "thsPools": ths_pools_out,
         "source": "server-limitup",
         "capturedAt": _iso_now(),

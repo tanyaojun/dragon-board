@@ -200,3 +200,19 @@ def test_ths_first_attempt_success_no_extra_call(monkeypatch):
     assert evidence["limitSummary"]["zhaban"]["ztCount"] == 1
     assert health.ok is True
     assert service.calls == 1
+
+
+def test_build_server_limit_summary_seal_quality_block():
+    # 封板质量（2026-10-02 裁决采集）：open_num None=一字秒板/1=硬板/≥2=烂板（键缺失≠0）；
+    # limit_up_suc_rate 取 [0,1] 均值，越界/缺失过滤
+    info = [
+        {"code": "a"},                                        # open_num 缺失 → 一字/秒板
+        {"code": "b", "open_num": 1, "limit_up_suc_rate": 0.5},
+        {"code": "c", "open_num": 3, "limit_up_suc_rate": 0.7},
+        {"code": "d", "open_num": 2, "limit_up_suc_rate": 1.4},  # 越界过滤
+        {"code": "e", "open_num": 0},                         # 显式 0：按 ≤1 归硬板
+    ]
+    summary = build_server_limit_summary(info, {})
+    sq = summary["sealQuality"]
+    assert sq == {"byzCount": 1, "hardCount": 2, "rottenCount": 2, "rottenShare": 0.4,
+                  "avgSucRate": 0.6}
