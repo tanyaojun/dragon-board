@@ -237,83 +237,86 @@ def test_ingest_analyze_task_groups_frames_and_swallows_failure(monkeypatch):
     assert [sid for _, sid in calls] == ["s1", "s_bad"], "逐帧分析；无行的帧跳过；失败被吞掉"
 
 
-# ── 后处理链第 4 步：jev 观察轨道（2026-10-08，gate 默认关）──
+# ── 后处理链第 4 步：jev 情绪 v2（2026-10-02 用户裁决 V1 退役：half_hour→槽级 / daily→EOD）──
 
 
-def _mock_chain_jev_ok(monkeypatch):
-    import backend.services.jev.jev_sentiment_compute as jev_module
+def _mock_chain_jev_v2_ok(monkeypatch):
+    import backend.services.jev.jev_sentiment_v2_compute as v2_module
 
     envelope = {"result": {"state": "Completed", "result": {
         "model": "jev-1.13.0",
         "answers": {
             "frame_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
             "sequence_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+            "temperature": {"type": "score", "score": 5, "legend": {"0": 1, "11": 1}},
+            "crowding": {"type": "choice", "choice": "no_crowding",
+                         "probabilities": {"no_crowding": 0.5}},
         },
         "usage": {"input_tokens": 900, "output_tokens": 100}}}, "success": True}
 
     def fake_call(account_id, api_token, state, questions, model="typesafe/jev", timeout=60):
         return envelope, 900
 
-    monkeypatch.setattr(jev_module, "call_jev", fake_call)
+    monkeypatch.setattr(v2_module, "call_jev", fake_call)
 
 
-def test_post_persist_jev_disabled_by_default(monkeypatch):
-    monkeypatch.delenv("JEV_SENTIMENT_ENABLED", raising=False)
-    repo = FakeRepo()
-    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
-
-    result = _run_slot(service)
-
-    assert result.status == "completed"
-    assert repo.db["hotlist_jev_sentiment"].rows == []
-    assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
-
-
-def test_post_persist_jev_slot_written_when_enabled(monkeypatch):
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "true")
+def test_post_persist_jev_v2_slot_written_when_enabled(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "true")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
-    _mock_chain_jev_ok(monkeypatch)
+    _mock_chain_jev_v2_ok(monkeypatch)
     repo = FakeRepo()
     service = _make_service(monkeypatch, repo, _golden_analyze(repo))
 
     result = _run_slot(service)
 
     assert result.status == "completed"
-    docs = repo.db["hotlist_jev_sentiment"].rows
+    docs = repo.db["hotlist_jev_sentiment_v2"].rows
     assert len(docs) == 1 and docs[0]["kind"] == "slot"
     assert docs[0]["_id"] == "dragonboard_live:half_hour:2026-09-15:10:00"
-    assert docs[0]["status"] == "ok"
+    assert docs[0]["status"] == "ok" and docs[0]["origin"] == "collector_v2"
     assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
 
 
-def test_post_persist_jev_failure_only_warns(monkeypatch):
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "true")
+def test_post_persist_jev_v2_gate_off_skips(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "0")
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service)
+
+    assert result.status == "completed"
+    assert repo.db["hotlist_jev_sentiment_v2"].rows == []
+    assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
+
+
+def test_post_persist_jev_v2_failure_only_warns(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "true")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
-    import backend.services.jev.jev_sentiment_compute as jev_module
+    import backend.services.jev.jev_sentiment_v2_compute as v2_module
 
     def broken_call(*args, **kwargs):
         raise RuntimeError("jev boom")
 
-    monkeypatch.setattr(jev_module, "call_jev", broken_call)
+    monkeypatch.setattr(v2_module, "call_jev", broken_call)
     repo = FakeRepo()
     service = _make_service(monkeypatch, repo, _golden_analyze(repo))
 
     result = _run_slot(service)
 
-    assert result.status == "completed", "jev 失败不得阻断采集"
+    assert result.status == "completed", "jev v2 失败不得阻断采集"
     # 前三步产物完好
     assert _slot_doc(repo.db, "10:00") is not None
-    assert any("hotlist_jev_failed" in w for w in (repo.runs[-1].get("warnings") or []))
+    assert any("hotlist_jev_v2_failed" in w for w in (repo.runs[-1].get("warnings") or []))
 
 
-def test_post_persist_jev_skips_five_minutes(monkeypatch):
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "true")
+def test_post_persist_jev_v2_skips_five_minutes(monkeypatch):
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "true")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
-    _mock_chain_jev_ok(monkeypatch)
+    _mock_chain_jev_v2_ok(monkeypatch)
     repo = FakeRepo()
     service = _make_service(monkeypatch, repo, _golden_analyze(repo))
 
     result = _run_slot(service, slot_time="09:35", snapshot_type="five_minutes")
 
     assert result.status == "completed"
-    assert repo.db["hotlist_jev_sentiment"].rows == [], "five_minutes 不触发 jev"
+    assert repo.db["hotlist_jev_sentiment_v2"].rows == [], "five_minutes 不触发 jev v2"

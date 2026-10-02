@@ -787,6 +787,7 @@ import {
   JEV_STAGE_ORDER,
   jevChoiceName,
   jevChoiceProbability,
+  jevCrowdingName,
   jevScore,
   postJevReviewRuling,
 } from '@/services/hotlist/hotlistJevApi'
@@ -1115,8 +1116,9 @@ const jevHesitant = computed(() =>
   jevLatestProbability.value != null && jevLatestProbability.value < 0.6)
 const jevLatestTemperature = computed(() =>
   jevLatest.value ? jevScore(jevLatest.value, 'temperature') : null)
+// 情绪 v2 拥挤=离散归层 choice（V1 连续分退役），展示中文归层名
 const jevLatestCrowding = computed(() =>
-  jevLatest.value ? jevScore(jevLatest.value, 'crowding') : null)
+  jevLatest.value ? jevCrowdingName(jevLatest.value, 'crowding') : null)
 const jevLatestTitle = computed(() => {
   const slot = jevLatest.value
   if (!slot) return ''
@@ -1149,7 +1151,7 @@ const jevEodRow = computed(() => {
     dayName: jevChoiceName(jevEod.value, 'day_stage'),
     patternName: jevChoiceName(jevEod.value, 'day_pattern'),
     temperature: jevScore(jevEod.value, 'day_temperature'),
-    crowding: jevScore(jevEod.value, 'day_crowding'),
+    crowding: jevCrowdingName(jevEod.value, 'day_crowding'),
   }
 })
 

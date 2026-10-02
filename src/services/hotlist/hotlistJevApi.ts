@@ -76,6 +76,16 @@ export function jevScore(doc: HotlistJevDoc | null | undefined, key: string): nu
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null
 }
 
+/** 拥挤归层答案展示（情绪 v2 拥挤=离散归层 choice；缺失/score 型返回 null 不伪造） */
+export function jevCrowdingName(
+  doc: HotlistJevDoc | null | undefined,
+  key: string,
+): string | null {
+  const answer = doc?.answers?.[key]
+  if (!answer || answer.type !== 'choice' || !answer.choice) return null
+  return JEV_CROWDING_NAMES[answer.choice] ?? answer.choice
+}
+
 export async function fetchHotlistJevSeries(
   date?: string,
   datasetId = 'dragonboard_live',

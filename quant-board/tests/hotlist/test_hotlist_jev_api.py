@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.services.jev.jev_sentiment_compute as jev_module
+import backend.services.jev.jev_sentiment_v2_compute as jev_v2_module
 from backend.main import app
 
 DATASET = "dragonboard_live"
@@ -100,6 +101,7 @@ def _mock_jev_ok(monkeypatch):
         return envelope, 800
 
     monkeypatch.setattr(jev_module, "call_jev", fake_call)
+    monkeypatch.setattr(jev_v2_module, "call_jev", fake_call)
 
 
 @pytest.fixture()
@@ -110,7 +112,7 @@ def client(monkeypatch):
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database",
         lambda: db,
     )
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "false")  # evaluate 不受 gate 限制
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")  # evaluate 不受 gate 限制
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     _mock_jev_ok(monkeypatch)
     test_client = TestClient(app)
@@ -122,7 +124,7 @@ def test_evaluate_slot_bypasses_gate(monkeypatch):
     seed(db)
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "false")  # gate 关
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")  # gate 关
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     _mock_jev_ok(monkeypatch)
     client = TestClient(app)
@@ -133,7 +135,7 @@ def test_evaluate_slot_bypasses_gate(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True and body["status"] == "ok"
-    docs = db["hotlist_jev_sentiment"].rows
+    docs = db["hotlist_jev_sentiment_v2"].rows
     assert len(docs) == 1 and docs[0]["origin"] == "manual"
     assert docs[0]["_id"] == f"{DATASET}:half_hour:{DATE}:10:00"
 
@@ -143,7 +145,7 @@ def test_evaluate_day(monkeypatch):
     seed(db)
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "false")
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
 
     envelope = {"result": {"state": "Completed", "result": {
@@ -156,13 +158,14 @@ def test_evaluate_day(monkeypatch):
         return envelope, 900
 
     monkeypatch.setattr(jev_module, "call_jev", fake_call)
+    monkeypatch.setattr(jev_v2_module, "call_jev", fake_call)
     client = TestClient(app)
 
     response = client.post("/api/hotlist-jev/evaluate", json={"tradingDate": DATE, "scope": "day"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    docs = db["hotlist_jev_sentiment"].rows
+    docs = db["hotlist_jev_sentiment_v2"].rows
     assert len(docs) == 1 and docs[0]["kind"] == "eod"
     assert docs[0]["answers"]["day_pattern"]["choice"] == "wide_swing"
 
@@ -171,7 +174,7 @@ def test_evaluate_slot_no_time_and_no_frames_returns_404(monkeypatch):
     db = FakeMongoDb()
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
-    monkeypatch.setenv("JEV_SENTIMENT_ENABLED", "false")
+    monkeypatch.setenv("JEV_SENTIMENT_V2_ENABLED", "false")
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     _mock_jev_ok(monkeypatch)
     client = TestClient(app)
@@ -202,7 +205,7 @@ def test_series_returns_slots_ascending_and_eod(monkeypatch, client):
                             json={"tradingDate": DATE, "scope": "slot", "slotTime": "10:00"}).status_code == 200
     assert test_client.post("/api/hotlist-jev/evaluate",
                             json={"tradingDate": DATE, "scope": "slot", "slotTime": "09:30"}).status_code == 200
-    db["hotlist_jev_sentiment"].rows.append({
+    db["hotlist_jev_sentiment_v2"].rows.append({
         "_id": f"{DATASET}:half_hour:{DATE}:eod", "kind": "eod", "slotTime": "EOD",
         "tradingDate": DATE, "datasetId": DATASET, "status": "ok",
         "answers": {"day_stage": {"type": "choice", "choice": "start"}}, "scores": {},

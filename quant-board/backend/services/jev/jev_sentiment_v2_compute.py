@@ -16,8 +16,11 @@ from typing import Any
 
 from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS_V2,
+    JEV_SLOT_QUESTIONS_V2,
     build_day_jev_state,
     build_history_anchor,
+    build_slot_jev_state,
+    collect_slot_evidence,
     extract_history_anchor_range,
 )
 from backend.services.jev.jev_client import call_jev, parse_jev_response
@@ -27,6 +30,8 @@ from backend.services.jev.jev_sentiment_compute import (
     _jev_config,
     _latest_yesterday_rows,
     _load_analysis_by_code,
+    _load_frame,
+    _load_rows,
     _slots_of_date,
     _yesterday_total_amounts_by_slot,
 )
@@ -43,8 +48,9 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
                                  window: int = ANCHOR_WINDOW) -> list[dict]:
     """近 window 个交易日（日历口径，严格 < 当日）收盘统计，每历日一条。
 
-    数据源=v1 15:00 槽文档 evidenceRaw（与 pilot 同源）；当日文档缺失或指标缺失
-    → 该历日相应字段 None（fail-visible：锚段会标注有效样本数，不跨季凑数）。
+    数据源=v2 15:00 槽文档 evidenceRaw（2026-10-02 用户裁决 V1 退役后锚自供：
+    v2 槽文档与 v1 同为 collect_slot_evidence 产物，字段同构）；当日文档缺失或
+    指标缺失 → 该历日相应字段 None（fail-visible：锚段会标注有效样本数，不跨季凑数）。
     """
     dates = sorted({
         str(r["tradingDate"]) for r in db["snapshot_frames"].find(
@@ -54,7 +60,7 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
     })[-window:]
     stats: list[dict] = []
     for date in dates:
-        doc = db["hotlist_jev_sentiment"].find_one(
+        doc = db["hotlist_jev_sentiment_v2"].find_one(
             {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot",
              "slotTime": "15:00", "tradingDate": date},
             {"evidenceRaw": 1})
@@ -150,3 +156,87 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
     db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"written": True, "status": doc["status"],
             "dayTemperature": (parsed.get("scores") or {}).get("day_temperature")}
+
+
+def compute_and_upsert_for_slot_v2(db: Any, *, dataset_id: str, trading_date: str, slot_time: str,
+                                   snapshot_type: str = "half_hour", origin: str = "collector_v2",
+                                   dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+    """v2 槽级计算+落库（hotlist_jev_sentiment_v2，2026-10-02 V1 退役后生产槽位唯一评判）。
+
+    与 pilot（operations/jev_sentiment_pilot_v2.compute_slot_v2）同构：锚=日历口径近 20
+    交易日（生产坐标系）；gate/force 语义与 day 版一致。异常向上抛，由链捕获为 warning。
+    """
+    if not v2_enabled() and not force:
+        return {"written": False, "skipped": True, "reason": "v2_disabled"}
+    _, token, account = _jev_config()
+    frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
+    rows = _load_rows(db, dataset_id, str(frame.get("snapshotId") or "")) if frame else []
+    doc_id = f"{dataset_id}:{snapshot_type}:{trading_date}:{slot_time}"
+    if frame is None or not rows:
+        if not dry_run:
+            db["hotlist_jev_sentiment_v2"].replace_one(
+                {"_id": doc_id},
+                {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
+                 "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
+                 "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
+                 "status": "no_data", "errorCode": None,
+                 "errorDetail": f"frame={'present' if frame else 'missing'} rows={len(rows)}",
+                 "questionsRaw": None, "evidenceRaw": None, "narrativeRaw": None,
+                 "responseRaw": None, "answers": None, "scores": None, "usage": None,
+                 "model": None, "latencyMs": None, "historyAnchorRange": None},
+                upsert=True)
+        return {"written": True, "status": "no_data"}
+
+    yesterday_rows = _latest_yesterday_rows(db, dataset_id, snapshot_type, trading_date)
+    yesterday_amounts = _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date)
+    present_slots = _slots_of_date(db, dataset_id, snapshot_type, trading_date)
+    prior_slots = [slot for slot in present_slots if slot < slot_time]
+    missing_slots = [slot for slot in _half_hour_slots() if slot < slot_time and slot not in prior_slots]
+    priors = []
+    for slot in prior_slots:
+        evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot,
+                                     yesterday_rows, yesterday_amounts)
+        if evidence is not None:
+            priors.append(evidence)
+    current_evidence = collect_slot_evidence(
+        frame=frame, rows=rows, yesterday_rows=yesterday_rows,
+        analysis_by_code=_load_analysis_by_code(db, dataset_id, str(frame.get("snapshotId") or "")),
+        slot_time=slot_time,
+        yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time))
+    anchor = build_history_anchor(build_history_stats_calendar(db, dataset_id, trading_date))
+    narrative = build_slot_jev_state(
+        trading_date=trading_date, slot_time=slot_time,
+        current=current_evidence or {}, priors=priors, missing_slots=missing_slots,
+        history_anchor=anchor)
+    if dry_run:
+        return {"status": "dry", "narrative": narrative}
+
+    if not token:
+        db["hotlist_jev_sentiment_v2"].replace_one(
+            {"_id": doc_id},
+            {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
+             "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
+             "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
+             "status": "degraded", "errorCode": "missing_token",
+             "errorDetail": "JEV_CF_TOKEN not configured",
+             "questionsRaw": JEV_SLOT_QUESTIONS_V2, "evidenceRaw": current_evidence,
+             "narrativeRaw": narrative, "responseRaw": None, "answers": None, "scores": None,
+             "usage": None, "model": None, "latencyMs": None, "historyAnchorRange": None},
+            upsert=True)
+        return {"written": True, "status": "degraded", "errorCode": "missing_token"}
+
+    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS_V2)
+    parsed = parse_jev_response(envelope, latency_ms)
+    doc = {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
+           "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
+           "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
+           "status": "ok" if parsed["ok"] else "degraded",
+           "evidenceRaw": current_evidence, "narrativeRaw": narrative,
+           "questionsRaw": JEV_SLOT_QUESTIONS_V2, "responseRaw": envelope,
+           "answers": parsed.get("answers"), "scores": parsed.get("scores"),
+           "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
+           "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
+           "errorDetail": parsed.get("errorDetail"),
+           "historyAnchorRange": extract_history_anchor_range(anchor)}
+    db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    return {"written": True, "status": doc["status"]}

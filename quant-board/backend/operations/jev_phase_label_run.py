@@ -6,7 +6,7 @@
       --out data/reports/phase-monitor/phase-labels-jev-v3.json \
       --fallback data/reports/phase-monitor/phase-labels-v2.json
 
-只读 Mongo hotlist_jev_sentiment（kind=slot, status=ok）+ 可选 labels v2 JSON（fallback 段）。
+只读 Mongo hotlist_jev_sentiment_v2（kind=slot, status=ok；2026-10-02 V1 退役后 jev_seq 臂标签源=v2 槽文档，sequence_stage 键同构）+ 可选 labels v2 JSON（fallback 段）。
 映射（T-jev 预登记）：start/ferment/climax→offense；ice/retreat→defense；缺档/未知档排除并计数
 （fail-visible 不伪造）。冻结纪律：LLM 非确定性 → 产物落盘即冻结，覆写必须 --force 且版本号自增。
 fallback 语义（SP4-T1.3 预登记）：消费端对标签缺失槽回退 fallbackLabels[date]（规则 v2 前日口径，
@@ -113,7 +113,7 @@ def main() -> int:
         return 2
 
     db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
-    docs = list(db["hotlist_jev_sentiment"].find(
+    docs = list(db["hotlist_jev_sentiment_v2"].find(
         {"datasetId": "dragonboard_live"},
         {"kind": 1, "status": 1, "tradingDate": 1, "slotTime": 1, "answers.sequence_stage.choice": 1},
     ))

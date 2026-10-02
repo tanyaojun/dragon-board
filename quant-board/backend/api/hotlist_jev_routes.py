@@ -38,7 +38,9 @@ class JevEvaluatePayload(BaseModel):
 
 
 def _slots_collection(db: Any):
-    return db["hotlist_jev_sentiment"]
+    # 2026-10-02 用户裁决 V1 退役：观察轨道读口全线切 v2 表（槽位答案键与 v1 同构，
+    # 叙事含锚段+封板质量/触板回撤池证据行；v1 集合保留磁盘档案，生产零消费）
+    return db["hotlist_jev_sentiment_v2"]
 
 
 def _latest_date(db: Any, dataset_id: str) -> str | None:
@@ -52,9 +54,10 @@ def _latest_date(db: Any, dataset_id: str) -> str | None:
 
 @router.post("/evaluate")
 def evaluate_hotlist_jev(payload: JevEvaluatePayload) -> dict[str, Any]:
-    from backend.services.jev.jev_sentiment_compute import (
-        compute_and_upsert_for_day,
-        compute_and_upsert_for_slot,
+    # 2026-10-02 用户裁决 V1 退役：手工评判也走 v2（叙事带锚段+新证据行，落 hotlist_jev_sentiment_v2）
+    from backend.services.jev.jev_sentiment_v2_compute import (
+        compute_and_upsert_for_day_v2,
+        compute_and_upsert_for_slot_v2,
     )
 
     try:
@@ -67,7 +70,7 @@ def evaluate_hotlist_jev(payload: JevEvaluatePayload) -> dict[str, Any]:
 
     try:
         if payload.scope == "day":
-            result = compute_and_upsert_for_day(
+            result = compute_and_upsert_for_day_v2(
                 db, dataset_id=payload.datasetId, trading_date=payload.tradingDate,
                 origin="manual", force=True)
             return {"ok": True, **result}
@@ -87,7 +90,7 @@ def evaluate_hotlist_jev(payload: JevEvaluatePayload) -> dict[str, Any]:
                     content={"ok": False, "errorCode": "no_slot",
                              "error": f"no half_hour frames for {payload.tradingDate}"})
             slot_time = slots[-1]
-        result = compute_and_upsert_for_slot(
+        result = compute_and_upsert_for_slot_v2(
             db, dataset_id=payload.datasetId, trading_date=payload.tradingDate,
             slot_time=slot_time, origin="manual", force=True)
         return {"ok": True, "slotTime": slot_time, **result}

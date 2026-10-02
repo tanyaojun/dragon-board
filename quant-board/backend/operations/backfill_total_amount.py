@@ -66,39 +66,48 @@ def main():
     amounts = fetch_amount_map()
     print(f"TDX 综指成交额 {min(amounts)} → {max(amounts)}，{len(amounts)} 交易日")
 
-    docs = list(db["hotlist_jev_sentiment"].find(
-        {"datasetId": "dragonboard_live", "snapshotType": "half_hour", "kind": "slot",
-         "slotTime": "15:00"}, {"tradingDate": 1, "evidenceRaw.totalAmount": 1}))
-    actions, healthy, nomap = [], [], []
-    for doc in docs:
-        date = str(doc.get("tradingDate"))
-        total = ((doc.get("evidenceRaw") or {}).get("totalAmount") or {}).get("amount")
-        if isinstance(total, (int, float)) and total > 0:
-            healthy.append(date)
-            continue
-        if date not in amounts:
-            nomap.append(date)
-            continue
-        actions.append({"docId": doc["_id"], "date": date, "amount": amounts[date]})
+    # 目标=v1/v2 两代表内 15:00 槽文档（2026-10-02 V1 退役后锚自 v2 供数，v2 亦须回填）
+    target_collections = ["hotlist_jev_sentiment", "hotlist_jev_sentiment_v2"]
+    plan: dict[str, list] = {}
+    healthy: dict[str, list] = {}
+    nomap: dict[str, list] = {}
+    for coll in target_collections:
+        plan[coll], healthy[coll], nomap[coll] = [], [], []
+        docs = list(db[coll].find(
+            {"datasetId": "dragonboard_live", "snapshotType": "half_hour", "kind": "slot",
+             "slotTime": "15:00"}, {"tradingDate": 1, "evidenceRaw.totalAmount": 1}))
+        for doc in docs:
+            date = str(doc.get("tradingDate"))
+            total = ((doc.get("evidenceRaw") or {}).get("totalAmount") or {}).get("amount")
+            if isinstance(total, (int, float)) and total > 0:
+                healthy[coll].append(date)
+                continue
+            if date not in amounts:
+                nomap[coll].append(date)
+                continue
+            plan[coll].append({"docId": doc["_id"], "date": date, "amount": amounts[date]})
 
     from collections import Counter
-    by_month = Counter(a["date"][:7] for a in actions)
     print(f"== 成交额回填计划（{'APPLY' if args.apply else 'DRY-RUN'}）==")
-    for a in sorted(actions, key=lambda x: x["date"]):
-        print(f"[回填] {a['date']}: 两市 {round(a['amount'] / 1e8, 1)} 亿")
-    print(f"[跳过] 已有值 {len(healthy)} 个；[未覆盖] {len(nomap)} 个: {nomap or '无'}")
-    print(f"按月: {dict(sorted(by_month.items()))}")
+    for coll in target_collections:
+        by_month = Counter(a["date"][:7] for a in plan[coll])
+        print(f"── {coll}: 待回填 {len(plan[coll])} / 已有值 {len(healthy[coll])} / 未覆盖 {len(nomap[coll])}"
+              f" {nomap[coll] or ''} 按月 {dict(sorted(by_month.items()))}")
+        for a in sorted(plan[coll], key=lambda x: x["date"]):
+            print(f"  [回填] {a['date']}: 两市 {round(a['amount'] / 1e8, 1)} 亿")
     if args.apply:
         now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
-        n = 0
-        for a in actions:
-            db["hotlist_jev_sentiment"].update_one(
-                {"_id": a["docId"]},
-                {"$set": {"evidenceRaw.totalAmount.amount": a["amount"],
-                          "evidenceRaw.totalAmount.source": SOURCE,
-                          "evidenceRaw.totalAmount.backfilledAt": now}})
-            n += 1
-        print(f"已写库 {n} 文档（evidenceRaw.totalAmount.amount，source={SOURCE}）")
+        for coll in target_collections:
+            n = 0
+            for a in plan[coll]:
+                # 合并写：保留既有 vsSamePct/yesterdaySame（历史恒 None），整块落 amount+provenance
+                existing = db[coll].find_one({"_id": a["docId"]}, {"evidenceRaw.totalAmount": 1})
+                merged = dict(((existing or {}).get("evidenceRaw") or {}).get("totalAmount") or {})
+                merged.update({"amount": a["amount"], "source": SOURCE, "backfilledAt": now})
+                db[coll].update_one(
+                    {"_id": a["docId"]}, {"$set": {"evidenceRaw.totalAmount": merged}})
+                n += 1
+            print(f"[{coll}] 已写库 {n} 文档（evidenceRaw.totalAmount，source={SOURCE}）")
     else:
         print("dry-run 未写库；确认后加 --apply 执行")
 

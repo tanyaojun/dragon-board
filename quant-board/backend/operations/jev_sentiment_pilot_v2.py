@@ -49,12 +49,13 @@ def _db():
 
 
 def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
-    """近 N 交易日收盘统计（as-of 严格 < 当日）：v1 槽文档 15:00 evidenceRaw。
+    """近 N 交易日收盘统计（as-of 严格 < 当日）：v2 槽文档 15:00 evidenceRaw。
 
     v2.2 修复（§8）：按 evidenceRaw.limit.ztCount 存在性取数，不限定 status=ok——
     degraded 文档（如缺 token 时段）的 evidenceRaw 市场证据同样有效；锚只需要证据数字。
+    2026-10-02 V1 退役裁决：锚源自 v1 切到 v2 表（与生产 build_history_stats_calendar 同源）。
     """
-    docs = db["hotlist_jev_sentiment"].find(
+    docs = db["hotlist_jev_sentiment_v2"].find(
         {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot",
          "slotTime": "15:00", "tradingDate": {"$lt": trading_date},
          # v2.3：$gt 0 隐式排除 null 与伪 0（6-7 月 limitSummary 损坏记 0，A股无 0 涨停日）
