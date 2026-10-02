@@ -45,6 +45,8 @@ def _make_frame(**overrides: object) -> dict:
         "type": "half_hour",
         "tradingDate": "2026-06-11",
         "slotTime": "15:00",
+        # 健康帧默认带有效涨停池统计（limit_summary_missing 的"无警告"基线）
+        "limitSummary": {"zhaban": {"count": 10, "rate": 40.0, "fengbanRate": 60.0, "ztCount": 43}},
     }
     d.update(overrides)
     return d
@@ -550,6 +552,30 @@ class TestWarningDelayedCapture:
             grace_minutes=5,
         )
         assert "delayed_capture" not in result.warnings
+
+
+class TestWarningLimitSummaryMissing:
+    """帧级 limitSummary 缺失精确标记（2026-10-02）。
+
+    背景：9 月 THS 涨停池收盘时点间歇失败致 15:00 帧缺 13/21，帧上只有泛化的
+    quote_provider_partial（健康帧也带），下游（情绪 v2 锚/拥挤判层）无法区分
+    「上游没给」与「上游给了真 0」。判据与情绪 v2.3 锚伪 0 防线同式。
+    """
+
+    def test_missing_limit_summary_warns(self) -> None:
+        result = _call(frames=[{"snapshotId": "half_hour:2026-06-11:15:00"}])
+        assert "limit_summary_missing" in result.warnings
+        assert result.ok is True  # soft warning：不阻断采集
+
+    def test_pseudo_zero_zt_count_warns(self) -> None:
+        # ztCount=0（limitSummary 损坏时代记 0）按伪 0 处理：与 v2.3 锚判据一致
+        frame = _make_frame(limitSummary={"zhaban": {"count": 0, "rate": 0.0, "fengbanRate": 0.0, "ztCount": 0}})
+        result = _call(frames=[frame])
+        assert "limit_summary_missing" in result.warnings
+
+    def test_valid_zt_count_no_warning(self) -> None:
+        result = _call()  # 默认帧 ztCount=43
+        assert "limit_summary_missing" not in result.warnings
 
 
 class TestWarningRankDataIncomplete:

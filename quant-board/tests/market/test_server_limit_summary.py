@@ -106,3 +106,79 @@ def test_build_server_indices_maps_aliases_and_skips_unknown():
         "zz500": {"change": -2.15},
         "zz1000": {"change": -2.26},
     }
+
+
+# ── THS 拉取重试（2026-10-02：9 月 15:00 缺 13/21 帧的根因缓解）───────────────
+
+
+class _FakeLimitupService:
+    """get_limit_up_list 按 payload 队列逐次返回；异常对象则抛出。"""
+
+    def __init__(self, payloads):
+        self._payloads = list(payloads)
+        self.calls = 0
+
+    async def get_limit_up_list(self, date=None):
+        self.calls += 1
+        payload = self._payloads.pop(0) if len(self._payloads) > 1 else self._payloads[0]
+        if isinstance(payload, Exception):
+            raise payload
+        return payload
+
+    async def get_ths_pools(self, date=None):
+        return {"pools": {}}
+
+
+_OK_PAYLOAD = {"data": {"info": [{"code": "600825", "continue_day": 4}]}}
+
+
+class _FakeOverviewService:
+    async def get_overview(self):
+        return {"items": [{"code": "sh000001", "change": -1.0}]}
+
+
+def _run_acollect(monkeypatch, service):
+    import asyncio
+
+    from backend.snapshot_collector.gateway import InProcessMarketDataGateway
+    from backend.snapshot_collector import providers as providers_module
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("backend.market_proxy.limitup.get_limitup_service", lambda: service)
+    monkeypatch.setattr(
+        "backend.market_proxy.indices.get_market_overview_service",
+        lambda: _FakeOverviewService(),
+    )
+    monkeypatch.setattr(providers_module.asyncio, "sleep", _no_sleep)
+    provider = ServerMarketEvidenceProvider(
+        trading_date="2026-09-24", gateway=InProcessMarketDataGateway())
+    return asyncio.run(provider.acollect(timeout_ms=1000))
+
+
+def test_ths_first_attempt_fails_retry_recovers(monkeypatch):
+    # 首试空 info（THS 间歇失败），重试成功 → limitSummary 在场、health ok、恰好 2 次调用
+    service = _FakeLimitupService([{"data": {"info": []}}, _OK_PAYLOAD])
+    evidence, health = _run_acollect(monkeypatch, service)
+    assert evidence["limitSummary"]["zhaban"]["ztCount"] == 1
+    assert health.ok is True and health.error == ""
+    assert service.calls == 2
+
+
+def test_ths_retry_exhausted_reports_failure_visible(monkeypatch):
+    # 两次都空 → 不携带 limitSummary（绝不伪造全零结构）、health ok=False 带结构化错误
+    service = _FakeLimitupService([{"data": {"info": []}}])
+    evidence, health = _run_acollect(monkeypatch, service)
+    assert "limitSummary" not in evidence
+    assert health.ok is False and "重试后仍失败" in health.error
+    assert service.calls == 2
+
+
+def test_ths_first_attempt_success_no_extra_call(monkeypatch):
+    # 首试即成功 → 只调 1 次，不产生无谓重试
+    service = _FakeLimitupService([_OK_PAYLOAD])
+    evidence, health = _run_acollect(monkeypatch, service)
+    assert evidence["limitSummary"]["zhaban"]["ztCount"] == 1
+    assert health.ok is True
+    assert service.calls == 1

@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
+_THS_RETRY_DELAY_S = 2.5  # THS 涨停池首试失败后的重试间隔（限流/抖动多为瞬时）
 
 # 默认数据网关：CLI/手动链路走 HTTP（proxy 转发）；collector_main 独立采集进程
 # 通过 set_default_gateway() 切换为进程内直连，避免 8000 自环依赖。
@@ -2274,17 +2275,39 @@ class ServerMarketEvidenceProvider:
                 from backend.market_proxy.indices import get_market_overview_service
                 from backend.market_proxy.limitup import get_limitup_service
 
-                service = get_limitup_service()
-                list_body = await service.get_limit_up_list(date or None)
-                pools_body = await service.get_ths_pools(date or None)
-                data = list_body.get("data") if isinstance(list_body, dict) else None
-                raw_info = data.get("info") if isinstance(data, dict) else None
-                if isinstance(raw_info, list):
-                    info_items = [i for i in raw_info if isinstance(i, dict)]
+                async def _attempt_limit_evidence() -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+                    """THS 涨停池证据单次尝试：返回 (info_items, pools_body, attempt_errors)。"""
+                    attempt_errors: list[str] = []
+                    service = get_limitup_service()
+                    list_body = await service.get_limit_up_list(date or None)
+                    pools_body = await service.get_ths_pools(date or None)
+                    data = list_body.get("data") if isinstance(list_body, dict) else None
+                    raw_info = data.get("info") if isinstance(data, dict) else None
+                    items = [i for i in raw_info if isinstance(i, dict)] if isinstance(raw_info, list) else []
+                    if not items:
+                        attempt_errors.append("THS limit_up_pool info 为空")
+                    return items, pools_body if isinstance(pools_body, dict) else {}, attempt_errors
+
+                # THS 收盘时点间歇失败（限流/超时）曾致 9 月 15:00 limitSummary 缺 13/21 帧；
+                # limitup service 失败无负缓存（重拉即真请求），首试失败隔短延时重试一次再定成败
+                first_errors: list[str] = []
+                try:
+                    info_items, pools_body, first_errors = await _attempt_limit_evidence()
+                except Exception as exc:
+                    first_errors = [str(exc)[:200]]
+                    info_items, pools_body = [], {}
+                if not info_items:
+                    logger.warning("server_market_evidence THS 首试失败，重试一次：%s", first_errors)
+                    await asyncio.sleep(_THS_RETRY_DELAY_S)
+                    try:
+                        info_items, pools_body, retry_errors = await _attempt_limit_evidence()
+                    except Exception as exc:
+                        retry_errors = [str(exc)[:200]]
+                        info_items, pools_body = [], {}
+                    if not info_items:
+                        errors.extend(f"重试后仍失败：{e}" for e in retry_errors)
                 if info_items:
                     limit_summary = build_server_limit_summary(info_items, pools_body)
-                else:
-                    errors.append("THS limit_up_pool info 为空")
                 # 单池上游失败冒泡为可观察标记（get_ths_pools 对单池独立 try/except 不抛出）
                 pools = pools_body.get("pools") if isinstance(pools_body, dict) else None
                 if isinstance(pools, dict):

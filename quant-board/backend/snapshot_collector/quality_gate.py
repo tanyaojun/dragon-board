@@ -62,6 +62,8 @@ def evaluate_quality(
     * ``sector_rows_partial`` — sector rows present but fewer than expected
     * ``rank_provenance_missing`` — hotlist collector omitted formula inputs
     * ``rank_fields_missing`` — one or more stock rows omitted rank facts
+    * ``limit_summary_missing`` — a frame carries no valid limit-up pool stats
+      (THS upstream gap, or ztCount pseudo-zero)
     * ``delayed_capture`` — *actual_timestamp_ms* exceeds the grace window
     """
     blocking: list[str] = []
@@ -188,6 +190,15 @@ def evaluate_quality(
     grace_ms = grace_minutes * 60 * 1000
     if actual_timestamp_ms > slot_timestamp_ms + grace_ms:
         warnings.append("delayed_capture")
+
+    # limit_summary_missing: 帧无有效涨停池统计（THS 上游缺失，或 ztCount 伪 0）。
+    # 逐帧精确标记——下游（情绪 v2 锚/拥挤判层、EOD 回退诊断）可区分「上游没给」
+    # 与「上游给了真 0」，不再依赖泛化的 quote_provider_partial（健康帧也常带）。
+    # 判据与情绪 v2.3 锚的伪 0 防线同式：ztCount 非 >0 数即视为无有效证据。
+    for frame in frames:
+        zt = ((frame.get("limitSummary") or {}).get("zhaban") or {}).get("ztCount")
+        if not (isinstance(zt, (int, float)) and not isinstance(zt, bool) and zt > 0):
+            warnings.append("limit_summary_missing")
 
     return QualityResult(
         ok=len(blocking) == 0,
