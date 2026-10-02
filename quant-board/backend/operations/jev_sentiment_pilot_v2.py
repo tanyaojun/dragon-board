@@ -176,7 +176,8 @@ def compute_day_v2(db, dataset_id: str, trading_date: str, history_anchor: str,
     return {"status": doc["status"]}
 
 
-def run(start: str, end: str, dry_run: bool, token: str, account: str, dataset_id: str) -> int:
+def run(start: str, end: str, dry_run: bool, token: str, account: str, dataset_id: str,
+        anchor_mode: str = "recent") -> int:
     db = _db()
     dates = sorted({str(r["tradingDate"]) for r in db["snapshot_frames"].find(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": {"$gte": start, "$lte": end}},
@@ -186,7 +187,13 @@ def run(start: str, end: str, dry_run: bool, token: str, account: str, dataset_i
         return 1
     counts = {"ok": 0, "degraded": 0, "no_data": 0}
     for di, date in enumerate(dates, 1):
-        anchor = build_history_anchor(build_history_stats(db, dataset_id, date))
+        if anchor_mode == "calendar":
+            # 生产口径（交易日历近 20 日、缺数日照实占位）——2026-10-02 重跑 9 月采用，
+            # 与 10 月起的生产 v2 表同坐标系；pilot 默认 recent 保持历史 pilot 行为不变
+            from backend.services.jev.jev_sentiment_v2_compute import build_history_stats_calendar
+            anchor = build_history_anchor(build_history_stats_calendar(db, dataset_id, date))
+        else:
+            anchor = build_history_anchor(build_history_stats(db, dataset_id, date))
         if dry_run:
             print(f"===== {date} history anchor =====\n{anchor}")
             sample = compute_slot_v2(db, dataset_id, date, "09:30", anchor, token, account, dry_run=True)
@@ -208,6 +215,8 @@ if __name__ == "__main__":
     ap.add_argument("--end", required=True)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--dataset", default=DATASET_DEFAULT)
+    ap.add_argument("--anchor", choices=("recent", "calendar"), default="recent",
+                    help="锚口径：recent=最近 20 个有数日（pilot 历史）；calendar=交易日历近 20 日（生产）")
     args = ap.parse_args()
     tok = ""
     acc = ""
@@ -217,4 +226,5 @@ if __name__ == "__main__":
         tok = os.environ.get("JEV_CF_TOKEN") or ""
         assert tok, "需要 JEV_CF_TOKEN 环境变量"
         acc = os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6")
-    raise SystemExit(run(args.start, args.end, args.dry_run, tok, acc, args.dataset))
+    raise SystemExit(run(args.start, args.end, args.dry_run, tok, acc, args.dataset,
+                         anchor_mode=args.anchor))

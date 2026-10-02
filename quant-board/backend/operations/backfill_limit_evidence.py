@@ -103,6 +103,56 @@ def apply_backfill(db, actions: list[dict]) -> int:
     return len(actions)
 
 
+FRAME_FLAG = "limit_summary_backfilled"
+
+
+def plan_frame_backfill(db, start: str, end: str, fetch_many) -> tuple[list[dict], list[str], list[str]]:
+    """15:00 帧 limitSummary 回填计划（仅 15:00——THS 历史=EOD 语义，盘中槽不可重建绝不伪造）。
+
+    返回 (回填动作, 健康跳过日, 未解决日)；动作含完整 limitSummary（含 provenance）。
+    """
+    frames = list(db["snapshot_frames"].find(
+        {"datasetId": "dragonboard_live", "type": "half_hour", "slotTime": "15:00",
+         "tradingDate": {"$gte": start, "$lte": end}},
+        {"tradingDate": 1, "limitSummary": 1}))
+    healthy: list[str] = []
+    need: list[str] = []
+    frame_by_date: dict[str, dict] = {}
+    for f in frames:
+        date = str(f.get("tradingDate"))
+        zt = ((f.get("limitSummary") or {}).get("zhaban") or {}).get("ztCount")
+        if _is_valid_zt(zt):
+            healthy.append(date)
+            continue
+        need.append(date.replace("-", ""))
+        frame_by_date[date] = f
+    summaries = fetch_many(need) if need else {}
+    actions: list[dict] = []
+    unresolved: list[str] = []
+    for date, frame in frame_by_date.items():
+        result = summaries.get(date.replace("-", ""))
+        if isinstance(result, Exception):
+            unresolved.append(f"{date}:THS历史拉取失败:{str(result)[:80]}")
+            continue
+        if not isinstance(result, dict) or not result:
+            unresolved.append(f"{date}:THS历史无有效涨停数据")
+            continue
+        summary = {**result, "source": PROVENANCE_SOURCE,
+                   "backfilledAt": time.strftime("%Y-%m-%dT%H:%M:%S+08:00")}
+        actions.append({"date": date, "frameId": frame["_id"], "summary": summary})
+    return actions, healthy, unresolved
+
+
+def apply_frame_backfill(db, actions: list[dict]) -> int:
+    """执行写库：$set limitSummary + $addToSet qualityFlags 标记（不覆盖其他帧字段）。"""
+    for a in actions:
+        db["snapshot_frames"].update_one(
+            {"_id": a["frameId"]},
+            {"$set": {"limitSummary": a["summary"]},
+             "$addToSet": {"qualityFlags": FRAME_FLAG}})
+    return len(actions)
+
+
 async def _fetch_all_ths(date8_list: list[str]) -> dict:
     """单事件循环批量拉取 THS 历史池（逐条 try：单日失败不影响整批）。"""
     from backend.market_proxy.limitup import get_limitup_service
@@ -143,26 +193,52 @@ def main():
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--apply", action="store_true", help="实际写库（默认 dry-run）")
+    parser.add_argument("--frames", action="store_true",
+                        help="连带回填 15:00 帧 limitSummary（仅 15:00，EOD 语义匹配）")
     args = parser.parse_args()
 
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
     db = get_runtime_mongodb_database()
 
-    actions, healthy, unresolved = plan_backfill(db, args.start, args.end, fetch_many_ths)
+    memo: dict = {}
+
+    def fetch_many(date8_list):
+        todo = [d for d in date8_list if d not in memo]
+        if todo:
+            memo.update(fetch_many_ths(todo))
+        return {d: memo[d] for d in date8_list}
+
+    actions, healthy, unresolved = plan_backfill(db, args.start, args.end, fetch_many)
     jy = _jiuyan_totals(db, args.start, args.end)
 
     print(f"== 涨停池证据回填计划 {args.start} → {args.end}（{'APPLY' if args.apply else 'DRY-RUN'}）==")
     for a in actions:
         lim = a["limit"]
-        print(f"[回填] {a['date']}: zt={lim['ztCount']} maxBoard={lim['maxBoard']} "
+        print(f"[回填-v1文档] {a['date']}: zt={lim['ztCount']} maxBoard={lim['maxBoard']} "
               f"zhaban={lim['zhabanRate']}% fengban={lim['fengbanRate']}% "
               f"boards={lim['boards']} | 旁证 jiuyan={jy.get(a['date'], '无')}")
-    print(f"[跳过] 健康日 {len(healthy)} 个: {healthy or '无'}")
-    print(f"[未解决] {len(unresolved)} 个: {unresolved or '无'}")
+    print(f"[跳过] v1 文档健康日 {len(healthy)} 个: {healthy or '无'}")
+    print(f"[未解决] v1 文档 {len(unresolved)} 个: {unresolved or '无'}")
+
+    frame_actions: list[dict] = []
+    if args.frames:
+        f_actions, f_healthy, f_unresolved = plan_frame_backfill(db, args.start, args.end, fetch_many)
+        frame_actions = f_actions
+        for a in f_actions:
+            s = a["summary"]
+            z = s.get("zhaban") or {}
+            print(f"[回填-15:00帧] {a['date']}: zt={z.get('ztCount')} maxBoard="
+                  f"{(s.get('continuousBoards') or {}).get('maxBoard')} zhaban={z.get('rate')}%")
+        print(f"[跳过] 15:00 帧健康日 {len(f_healthy)} 个: {f_healthy or '无'}")
+        print(f"[未解决] 15:00 帧 {len(f_unresolved)} 个: {f_unresolved or '无'}")
+
     if args.apply:
         n = apply_backfill(db, actions)
-        print(f"已写库 {n} 文档（evidenceRaw.limit，标记 source={PROVENANCE_SOURCE}）")
+        print(f"已写库 v1 文档 {n} 个（evidenceRaw.limit，标记 source={PROVENANCE_SOURCE}）")
+        if args.frames:
+            nf = apply_frame_backfill(db, frame_actions)
+            print(f"已写库 15:00 帧 {nf} 个（limitSummary+qualityFlags[{FRAME_FLAG}]）")
     else:
         print("dry-run 未写库；确认后加 --apply 执行")
 

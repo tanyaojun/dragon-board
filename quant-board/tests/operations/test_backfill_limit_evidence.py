@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.operations.backfill_limit_evidence import (
     apply_backfill,
+    apply_frame_backfill,
     build_backfill_limit,
     plan_backfill,
+    plan_frame_backfill,
 )
 
 
@@ -45,17 +47,27 @@ class FakeCollection(dict):
     def update_one(self, query, update):
         for row in self.rows:
             if row.get("_id") == query.get("_id"):
-                _apply_set(row, update.get("$set") or {})
+                _apply_update(row, update)
                 return
 
 
-def _apply_set(row, sets: dict):
-    for path, value in sets.items():
+def _apply_update(row, update: dict):
+    for path, value in (update.get("$set") or {}).items():
         parts = path.split(".")
         cur = row
         for p in parts[:-1]:
             cur = cur.setdefault(p, {})
         cur[parts[-1]] = value
+    for path, value in (update.get("$addToSet") or {}).items():
+        parts = path.split(".")
+        cur = row
+        for p in parts[:-1]:
+            cur = cur.setdefault(p, {})
+        items = cur.setdefault(parts[-1], [])
+        if not isinstance(items, list):
+            return
+        if value not in items:
+            items.append(value)
 
 
 class FakeMongoDb(dict):
@@ -149,3 +161,46 @@ def test_apply_preserves_other_evidence_fields():
     doc = db["hotlist_jev_sentiment"].find_one({"_id": actions[0]["docId"]})
     assert doc["evidenceRaw"]["limit"]["ztCount"] == 45
     assert doc["evidenceRaw"]["totalAmount"] == {"amount": 1.5e12}  # $set 不伤同文档其他字段
+
+
+# ── 15:00 帧回填 ──────────────────────────────────────────────────────────────
+
+
+def _frame(date, zt):
+    return {"_id": f"f:{date}", "datasetId": "dragonboard_live", "type": "half_hour",
+            "tradingDate": date, "slotTime": "15:00",
+            "limitSummary": {} if zt is None else {"zhaban": {"ztCount": zt}},
+            "qualityFlags": ["quote_provider_partial"]}
+
+
+def _frame_db():
+    db = FakeMongoDb()
+    db["snapshot_frames"] = FakeCollection([
+        _frame("2026-09-01", None), _frame("2026-09-02", 54), _frame("2026-09-03", 0)])
+    return db
+
+
+def test_frame_plan_backfills_gap_and_pseudo_zero():
+    db = _frame_db()
+    actions, healthy, unresolved = plan_frame_backfill(
+        db, "2026-09-01", "2026-09-03", lambda ds: {d: SUMMARY for d in ds})
+    assert sorted(a["date"] for a in actions) == ["2026-09-01", "2026-09-03"]  # 缺失+伪 0 都回填
+    assert healthy == ["2026-09-02"] and unresolved == []
+    s = actions[0]["summary"]
+    assert s["source"] == "ths_hist_backfill" and s["backfilledAt"]
+    assert s["zhaban"]["ztCount"] == 45
+
+
+def test_frame_apply_sets_summary_and_flag():
+    db = _frame_db()
+    actions, _, _ = plan_frame_backfill(
+        db, "2026-09-01", "2026-09-03", lambda ds: {d: SUMMARY for d in ds})
+    apply_frame_backfill(db, actions)
+    doc = db["snapshot_frames"].find_one({"_id": "f:2026-09-01"})
+    assert doc["limitSummary"]["zhaban"]["ztCount"] == 45
+    assert doc["limitSummary"]["source"] == "ths_hist_backfill"
+    assert doc["qualityFlags"] == ["quote_provider_partial", "limit_summary_backfilled"]
+    # 幂等：重复 apply 不产生重复标记
+    apply_frame_backfill(db, actions)
+    doc2 = db["snapshot_frames"].find_one({"_id": "f:2026-09-01"})
+    assert doc2["qualityFlags"] == ["quote_provider_partial", "limit_summary_backfilled"]
