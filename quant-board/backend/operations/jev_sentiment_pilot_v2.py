@@ -48,10 +48,15 @@ def _db():
 
 
 def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
-    """近 N 交易日收盘统计（as-of 严格 < 当日）：v1 槽文档 15:00 evidenceRaw。"""
+    """近 N 交易日收盘统计（as-of 严格 < 当日）：v1 槽文档 15:00 evidenceRaw。
+
+    v2.2 修复（§8）：按 evidenceRaw.limit.ztCount 存在性取数，不限定 status=ok——
+    degraded 文档（如缺 token 时段）的 evidenceRaw 市场证据同样有效；锚只需要证据数字。
+    """
     docs = db["hotlist_jev_sentiment"].find(
-        {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot", "status": "ok",
-         "slotTime": "15:00", "tradingDate": {"$lt": trading_date}},
+        {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "slot",
+         "slotTime": "15:00", "tradingDate": {"$lt": trading_date},
+         "evidenceRaw.limit.ztCount": {"$ne": None}},
         {"tradingDate": 1, "evidenceRaw": 1}).sort("tradingDate", -1).limit(ANCHOR_SLOTS)
     stats = []
     for d in docs:

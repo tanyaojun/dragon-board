@@ -63,11 +63,17 @@ def verdict(gate1: dict, gate2: dict, gate4: dict) -> str:
     return "PASS_CANDIDATE"
 
 
-def main(t3_manual: bool | None = None):
+PILOT_DATES = ["2026-09-07", "2026-09-18", "2026-09-30"]  # §7 v2.1 重试点语料（显式三天）
+
+
+def main(t3_manual: bool | None = None, pilot_only: bool = True):
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
     db = get_runtime_mongodb_database()
-    v2 = list(db["hotlist_jev_sentiment_v2"].find({"status": "ok"}))
+    corpus_q: dict = {"status": "ok"}
+    if pilot_only:
+        corpus_q["tradingDate"] = {"$in": PILOT_DATES}
+    v2 = list(db["hotlist_jev_sentiment_v2"].find(corpus_q))
     v2_slots = [d for d in v2 if d.get("kind") == "slot"]
     v2_eods = [d for d in v2 if d.get("kind") == "eod"]
     if not v2_slots:
@@ -115,8 +121,8 @@ def main(t3_manual: bool | None = None):
     import collections
     temp_hist = collections.Counter(int(float(t) // 10) * 10 for t in t2)
 
-    lines = ["# 情绪判定问题集 v2 pilot 战报", "",
-             f"- v2 文档 {len(v2)}（槽 {len(v2_slots)} + EOD {len(v2_eods)}），窗口 2026-09-07 → 2026-09-30",
+    lines = ["# 情绪判定问题集 v2 pilot 战报（v2.1 重试点语料）", "",
+             f"- v2 文档 {len(v2)}（槽 {len(v2_slots)} + EOD {len(v2_eods)}），三天试点窗口 2026-09-07/18/30（§7 v2.1 判据）",
              "- **执行失误登记**：开火未按预登记收窄三天窗口，全窗 17 交易日 183 调用 ≈24 万 tokens（超支约 19 万），门判据按全窗样本计算", "",
              "## 门1 crowding 归层方差（主）", "",
              f"- {gate1}",
@@ -145,6 +151,11 @@ def main(t3_manual: bool | None = None):
 
 
 if __name__ == "__main__":
+    import argparse
     import sys
 
-    main("--t3-manual=pass" in sys.argv)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--t3-manual", choices=["pass"], default=None)
+    ap.add_argument("--all", action="store_true", help="不过滤三天试点窗口（全语料模式）")
+    a = ap.parse_args()
+    main(a.t3_manual == "pass", pilot_only=not a.all)
