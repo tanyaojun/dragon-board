@@ -96,7 +96,7 @@ def main(t3_manual: bool | None = None, pilot_only: bool = True):
     v1_keys = {f"{d.get('tradingDate')}:{d.get('slotTime')}": d
                for d in db["hotlist_jev_sentiment"].find(
                    {"status": "ok", "kind": "slot", "datasetId": "dragonboard_live"},
-                   {"tradingDate": 1, "slotTime": 1, "scores": 1})}
+                   {"tradingDate": 1, "slotTime": 1, "scores": 1, "answers": 1})}
     t2, t1 = [], []
     for d in v2_slots:
         key = f"{d.get('tradingDate')}:{d.get('slotTime')}"
