@@ -13,6 +13,7 @@ from backend.analysis.hotlist.jev_state import (
     build_day_jev_state,
     build_history_anchor,
     build_slot_jev_state,
+    extract_history_anchor_range,
 )
 
 STATS = [
@@ -40,6 +41,14 @@ def test_history_anchor_insufficient_sample_fail_visible():
 def test_history_anchor_empty():
     out = build_history_anchor([])
     assert "历史参照缺失" in out and "不得虚构对比" in out
+
+
+def test_extract_history_anchor_range():
+    # 标准首行 → 括号内完整区间（含中文逗号段，前端 split('，')[0] 取日期段）
+    assert extract_history_anchor_range(build_history_anchor(STATS)) == \
+        "2026-08-11 → 2026-08-30，20 个交易日收盘统计，判读坐标系"
+    # 历史参照缺失首行不带（ 前缀 → None（旧定长切片在此错位产出半截句）
+    assert extract_history_anchor_range(build_history_anchor([])) is None
 
 
 def test_slot_narrative_contains_anchor():

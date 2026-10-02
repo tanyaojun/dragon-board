@@ -18,6 +18,7 @@ from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS_V2,
     build_day_jev_state,
     build_history_anchor,
+    extract_history_anchor_range,
 )
 from backend.services.jev.jev_client import call_jev, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import (
@@ -138,7 +139,7 @@ def compute_and_upsert_for_day_v2(db: Any, *, dataset_id: str, trading_date: str
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
-           "historyAnchorRange": anchor.split("\n")[0][len("【近20日参照】（"):-1] or None}
+           "historyAnchorRange": extract_history_anchor_range(anchor)}
     db["hotlist_jev_sentiment_v2"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"written": True, "status": doc["status"],
             "dayTemperature": (parsed.get("scores") or {}).get("day_temperature")}

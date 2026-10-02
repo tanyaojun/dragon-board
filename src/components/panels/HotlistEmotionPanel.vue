@@ -91,6 +91,11 @@
                   </div>
                   <span class="hero-score-hint">v2 市场热度计 0-100</span>
                 </div>
+                <!-- v2 被守卫隐藏时透出结构化原因（读口失败/未落库降级/日期错配），不静默消失 -->
+                <div v-else-if="v2HiddenReason" class="hero-score-bar hero-score-missing"
+                  :title="v2HiddenReason">
+                  <span class="hero-score-hint">v2 市场热度计不可用：{{ v2HiddenReason }}</span>
+                </div>
                 <div v-if="sentimentV2Eod" class="v2-chips">
                   <span v-if="v2StageName" class="v2-chip">档位·{{ v2StageName }}</span>
                   <span v-if="v2CrowdingName" class="v2-chip" :class="{ 'v2-chip-warn': v2CrowdingWarn }">拥挤·{{ v2CrowdingName }}</span>
@@ -1057,7 +1062,8 @@ async function loadAll() {
       return
     }
     missingDays.value = series.missingDays
-    doc.value = series.items[series.items.length - 1]
+    const latestDoc = series.items[series.items.length - 1]
+    doc.value = latestDoc
     // 仅在缓存仍是最初 3 日窗口时覆盖：用户已切更长档位（loaded>3）时覆盖会让
     // 长窗口静默降级（seriesDaysLoaded 只增不减），此时保留长窗口缓存不动
     if (seriesDaysLoaded.value <= 3) {
@@ -1072,7 +1078,13 @@ async function loadAll() {
     jevEod.value = jevResult.eod
     jevDegradedReason.value = jevResult.degraded ? jevResult.reason : null
     jevSeriesDate.value = jevResult.date
-    sentimentV2.value = v2Result
+    // v2 与 hero 规则分对齐同一交易日：无参取最新，日期不一致（v2 领先/当日未落库）时
+    // 按 doc 交易日补拉一次；仍缺则守卫隐藏、占位条透出原因
+    let alignedV2 = v2Result
+    if (alignedV2.ok && latestDoc.tradingDate && alignedV2.date !== latestDoc.tradingDate) {
+      alignedV2 = await fetchHotlistSentimentV2(latestDoc.tradingDate)
+    }
+    sentimentV2.value = alignedV2
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败'
     doc.value = null
@@ -1183,6 +1195,16 @@ const sentimentV2Eod = computed(() => {
   // 日期一致性守卫：v2 EOD 与 hero 规则分必须同一天，错配时整条隐藏（不并排错日数据）
   if (!doc.value?.tradingDate || result.date !== doc.value.tradingDate) return null
   return result.v2
+})
+// v2 条被守卫隐藏时的原因透出（fail-visible）：各分支与 sentimentV2Eod 的隐藏条件一一对应
+const v2HiddenReason = computed(() => {
+  const result = sentimentV2.value
+  if (!result || sentimentV2Eod.value) return null
+  if (!doc.value?.tradingDate) return '规则分文档缺交易日，无法对齐 v2 日期'
+  if (!result.ok) return result.reason || '读口不可用'
+  if (!result.v2 || result.v2.status !== 'ok') return result.reason || 'v2 EOD 缺失或降级'
+  if (result.date !== doc.value.tradingDate) return `v2 最新日期 ${result.date || '未知'} 与规则分日期不一致`
+  return null
 })
 const v2TemperaturePctText = computed(
   () => `${Math.max(0, Math.min(100, sentimentV2Eod.value?.dayTemperature ?? 0))}%`,

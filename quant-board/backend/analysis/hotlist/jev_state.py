@@ -545,6 +545,19 @@ def build_history_anchor(stats: list, window: int = 20) -> str:
     return "\n".join(lines)
 
 
+def extract_history_anchor_range(anchor: str) -> str | None:
+    """【近20日参照】首行括号内区间（面板锚 chip 用）。
+
+    仅当首行严格以「【近20日参照】（」开头、以「）」结尾时截取；历史参照缺失等
+    非标准首行不做定长硬切（[len(prefix):-1] 在缺失行上会错位产出半截句），回退 None。
+    """
+    first_line = anchor.split("\n", 1)[0]
+    prefix = "【近20日参照】（"
+    if first_line.startswith(prefix) and first_line.endswith("）"):
+        return first_line[len(prefix):-1] or None
+    return None
+
+
 def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
                          priors: list, missing_slots: list | None = None,
                          history_anchor: str = "") -> str:

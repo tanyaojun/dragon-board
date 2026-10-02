@@ -266,20 +266,31 @@ export async function fetchJiuyanAction(date?: string): Promise<JiuyanActionResu
 
 /**
  * 情绪 v2 双表读口（GET /api/hotlist-jev/sentiment-v2）：v2 市场热度计 + 规则分同包返回。
+ * 带 date 取指定交易日（与 hero 规则分对齐用），缺省取最新。
+ * 后端降级/异常路径只回 {ok, degraded, reason}（缺 date/v2/rule 键），此处归一化补齐再交付；
  * 无兜底计算（结论唯一来源 = QuantBoard 后端 v2 轨道落库）。
  */
-export async function fetchHotlistSentimentV2(): Promise<HotlistSentimentV2Result> {
+export async function fetchHotlistSentimentV2(date?: string): Promise<HotlistSentimentV2Result> {
+  const params = new URLSearchParams()
+  if (date) params.set('date', date)
   try {
-    const response = await fetch('/api/hotlist-jev/sentiment-v2')
+    const response = await fetch(`/api/hotlist-jev/sentiment-v2?${params.toString()}`)
     if (!response.ok) {
-      return { ok: false, date: null, v2: null, rule: null, degraded: true, reason: `HTTP ${response.status}` }
+      return { ok: false, date: date ?? null, v2: null, rule: null, degraded: true, reason: `HTTP ${response.status}` }
     }
-    const body = (await response.json()) as HotlistSentimentV2Result
-    return body
+    const body = (await response.json()) as Partial<HotlistSentimentV2Result> | null
+    return {
+      ok: body?.ok === true,
+      date: body?.date ?? null,
+      v2: body?.v2 ?? null,
+      rule: body?.rule ?? null,
+      degraded: body?.degraded === true,
+      reason: body?.reason ?? null,
+    }
   } catch (err) {
     return {
       ok: false,
-      date: null,
+      date: date ?? null,
       v2: null,
       rule: null,
       degraded: true,
