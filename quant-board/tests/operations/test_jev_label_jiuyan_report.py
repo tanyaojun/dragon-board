@@ -14,6 +14,7 @@ from backend.operations.jev_label_jiuyan_report import (
     depth_distribution_metrics,
     direction_consistent_with_phase3,
     driver_group_metrics,
+    stratified_driver_group_metrics,
     t3_scaling_scan,
     verdict,
 )
@@ -69,6 +70,24 @@ def test_driver_group_metrics_and_direction():
     assert m["groupOk"] is True and m["spread"] == 50.0
     assert direction_consistent_with_phase3(dict(PHASE3_REF_LIANBAN))["consistent"] is True
     assert direction_consistent_with_phase3({"policy": 1.0, "order_earnings": 2.0})["computable"] is False
+
+
+def test_stratified_driver_group_metrics_splits_by_inhotlist():
+    hot = _rows([("ma_restructure", 3.0 + i * 0.1) for i in range(5)]
+                + [("ma_restructure", 10.0 + i * 0.1) for i in range(5)]
+                + [("capital_flow", -1.0 - i * 0.1) for i in range(10)])
+    for r in hot:
+        r["jiuyanContext"] = {"inHotlist": True}
+    cold = _rows([("ma_restructure", 1.0), ("capital_flow", 1.5)])
+    for r in cold:
+        r["jiuyanContext"] = {"inHotlist": False}
+    orphan_ctx = {**hot[0], "jiuyanContext": {}}  # 上下文存在但 inHotlist 缺失
+    no_ctx = {"label": "policy", "nextPct": 0.5, "nextLianban": False}  # 无上下文键
+    s = stratified_driver_group_metrics(hot + cold + [orphan_ctx, no_ctx])
+    assert s["n"] == {"inHotlist": 20, "notInHotlist": 2, "missingContext": 2}
+    assert s["inHotlist"]["groupOk"] is True and s["inHotlist"]["spread"] == 50.0
+    assert s["inHotlist"]["direction"]["computable"] is False  # 仅 2 个 n≥8 组，排序一致性需 ≥5 组
+    assert s["notInHotlist"] == {"n": 2, "insufficient": True}
 
 
 def test_bucket_next_day_and_confidence():

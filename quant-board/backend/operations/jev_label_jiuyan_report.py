@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""jev 涨停打标战报生成器：六桶方差门 + T3 抽验制 + freshness 门 + 门B 驱动分组 + 低置信分层。
+"""jev 涨停打标战报生成器：六桶方差门 + T3 抽验制 + freshness 门 + 门B 驱动分组
++ population 口径分层对照（inHotlist，终判路径观察项）+ 低置信分层。
 
 判据 docs/hotlist-jev/jev-driver-label-v2-design.md（先冻结再开火）：
   门A' 六桶方差：五实质桶每桶 n≥5；最大实质桶占比<70%；逃生口≤15%。
@@ -53,6 +54,30 @@ def t3_scaling_scan(labels: list[dict]) -> dict:
                 hits.append({"tradingDate": d.get("tradingDate"), "code": d.get("code"),
                              "name": d.get("name"), "markers": markers})
     return {"scanHits": len(hits), "clean": len(hits) == 0, "manualReviewList": hits}
+
+
+def stratified_driver_group_metrics(rows: list[dict]) -> dict:
+    """population 口径对照（pilot4 战报终判路径零成本段，2026-10-03 接线）：
+    同一批标签按 jiuyanContext.inHotlist 分层，各算门B 与对阶段3 排序方向。
+    inHotlist 缺失的行单列 missingContext（fail-visible，不静默并入任一层）。"""
+    strata: dict[str, list[dict]] = {"inHotlist": [], "notInHotlist": []}
+    missing = 0
+    for r in rows:
+        flag = (r.get("jiuyanContext") or {}).get("inHotlist")
+        if flag is None:
+            missing += 1
+        else:
+            strata["inHotlist" if flag else "notInHotlist"].append(r)
+    out: dict = {"n": {"inHotlist": len(strata["inHotlist"]),
+                       "notInHotlist": len(strata["notInHotlist"]),
+                       "missingContext": missing}}
+    for name, sub in strata.items():
+        m = driver_group_metrics(sub)
+        if m.get("insufficient"):
+            out[name] = {"n": len(sub), "insufficient": True}
+        else:
+            out[name] = {**m, "direction": direction_consistent_with_phase3(m["lianbanRates"])}
+    return out
 
 
 def driver_group_metrics(rows: list[dict]) -> dict:
@@ -208,6 +233,7 @@ def main():
                  if not group.get("insufficient") and not group.get("groupOk")
                  else {"rho": None, "consistent": False})
     conf = confidence_split(labels)
+    strat = stratified_driver_group_metrics(rows)
 
     unclear_share = (sum(1 for d in labels if d.get("freshness") == "unclear") / len(labels))
     freshness_ok = unclear_share < 0.08
@@ -234,6 +260,8 @@ def main():
              "## 门B 驱动分组（沿用）", "",
              f"- {group}",
              f"- 方向一致性 vs 阶段3 全窗参考：{direction}", "",
+             "## population 口径对照（按是否进热榜分层，终判路径零成本段）", "",
+             f"- {strat}", "",
              "## catalyst_depth 分桶次日方向（观察项）", "",
              f"- {buckets}", "",
              "## 置信度分层（观察项）", "",
