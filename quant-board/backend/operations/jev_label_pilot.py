@@ -281,6 +281,7 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank):
            "buySideLogic": answers.get("buy_side_logic", {}).get("choice"),
            "buySideProbabilities": answers.get("buy_side_logic", {}).get("probabilities"),
            "phaseBand": answers.get("phase_band", {}).get("choice"),
+           "phaseBandProbabilities": answers.get("phase_band", {}).get("probabilities"),
            "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
            "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
            "responseRaw": None if parsed["ok"] else env,
@@ -344,6 +345,30 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             if isinstance(u, dict) and isinstance(u.get("total_tokens"), (int, float)):
                 total_usage += int(u["total_tokens"])
         print("FINAL:", {"ok": n_ok, "degraded": n_deg, "totalTokens": total_usage})
+
+
+def run_phase_band_day(db, dates: list[str], token: str, acc: str) -> None:
+    """方案 A：Q5 拆日级独立调用——每交易日一次、只喂盘面事实行不喂个股解析（去语境污染）。
+    判定落同一 pilot 集合，_id={date}:PHASE、origin=phase_band_daily，与个股文档显式区隔。"""
+    col = db["hotlist_jev_driver_labels_v3_pilot"]
+    for date in dates:
+        narrative = f"{date} 交易日 · {market_facts_line(db, date)}"
+        env, ms = call_jev(acc, token, narrative, {"phase_band": QUESTIONS["phase_band"]})
+        parsed = parse_jev_response(env, ms)
+        answers = parsed.get("answers") or {}
+        doc = {"_id": f"{date}:PHASE", "origin": "phase_band_daily", "tradingDate": date,
+               "status": "ok" if parsed["ok"] else "degraded",
+               "narrative": narrative, "questionsRaw": {"phase_band": QUESTIONS["phase_band"]},
+               "phaseBand": answers.get("phase_band", {}).get("choice"),
+               "phaseBandProbabilities": answers.get("phase_band", {}).get("probabilities"),
+               "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
+               "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
+               "responseRaw": None if parsed["ok"] else env,
+               "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        u = parsed.get("usage") or {}
+        print(f"[phase] {date} → {doc['phaseBand']} ok={parsed['ok']} "
+              f"tokens={(u.get('input_tokens') or 0) + (u.get('output_tokens') or 0)}")
 
 
 if __name__ == "__main__":
