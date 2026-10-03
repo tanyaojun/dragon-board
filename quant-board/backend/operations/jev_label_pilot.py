@@ -75,6 +75,9 @@ QUESTIONS = {
 
 THS_KEYS = ("one", "two", "three", "four", "high")
 
+_FACTS_CACHE: dict[str, str] = {}
+_THS_CACHE: dict[str, dict] = {}
+
 
 def _strip(code) -> str:
     c = str(code or "")
@@ -82,7 +85,9 @@ def _strip(code) -> str:
 
 
 def ths_positions(db, date: str) -> dict[str, dict]:
-    """(date) → code → THS 身位（连板梯队/首封时间/板块/主力净额）。"""
+    """(date) → code → THS 身位（连板梯队/首封时间/板块/主力净额），按日缓存。"""
+    if date in _THS_CACHE:
+        return _THS_CACHE[date]
     f = db["snapshot_frames"].find_one({"tradingDate": date, "slotTime": "15:00"},
                                        {"limitSummary.thsPools.pools": 1})
     out: dict[str, dict] = {}
@@ -93,23 +98,44 @@ def ths_positions(db, date: str) -> dict[str, dict]:
                 "ladder": key, "continueDay": it.get("continue_day"),
                 "firstSeal": it.get("limit_up_time"), "industry": it.get("industry_block"),
                 "mainNet": it.get("main_net_amount")}
+    _THS_CACHE[date] = out
     return out
 
 
+def dieban_count(db, date: str) -> int | None:
+    """跌停家数（收盘口径，按板籍阈值 10/20/30cm 自算——帧内无现成字段，口径如实标注）。"""
+    bar_by = {"30": -19.8, "68": -19.8, "43": -29.8, "83": -29.8, "87": -29.8, "92": -29.8}
+    seen: set[str] = set()
+    n = 0
+    for r in db["snapshot_stock_rows"].find(
+            {"type": "half_hour", "tradingDate": date, "slotTime": "15:00",
+             "pctChange": {"$exists": True, "$ne": None}}, {"code": 1, "pctChange": 1}):
+        code = str(r.get("code") or "")
+        if code in seen:
+            continue
+        seen.add(code)
+        pc = r.get("pctChange")
+        bar = bar_by.get(code[:2], -9.8)
+        if isinstance(pc, (int, float)) and pc <= bar:
+            n += 1
+    return n if seen else None
+
+
 def market_metrics(db, date: str) -> dict | None:
-    """当日 15:00 盘面事实（涨停家数/炸板率/梯队/最高板高/涨停板块数）。"""
+    """当日 15:00 盘面事实（涨停/炸板/回撤/梯队/最高板高；跌停另行自算）。"""
     f = db["snapshot_frames"].find_one({"tradingDate": date, "slotTime": "15:00"},
                                        {"limitSummary.zhaban": 1, "limitSummary.continuousBoards": 1,
-                                        "limitSummary.thsPools.pools": 1})
+                                        "limitSummary.thsPools.pools": 1, "limitSummary.drawdown": 1})
     ls = (f or {}).get("limitSummary") or {}
     zb = ls.get("zhaban") or {}
     cb = ls.get("continuousBoards") or {}
+    dd = ls.get("drawdown") or {}
     pools = (ls.get("thsPools") or {}).get("pools") or {}
     ladder = {k: (pools.get(k) or {}).get("total") for k in THS_KEYS}
     if not zb.get("ztCount"):
         return None
-    return {"ztCount": zb.get("ztCount"), "zhabanRate": zb.get("rate"), "ladder": ladder,
-            "maxBoard": cb.get("maxBoard")}
+    return {"ztCount": zb.get("ztCount"), "zhabanCount": zb.get("count"), "zhabanRate": zb.get("rate"),
+            "drawdownCount": dd.get("count"), "ladder": ladder, "maxBoard": cb.get("maxBoard")}
 
 
 def trading_dates_before(db, date: str, n: int = 20) -> list[str]:
@@ -127,19 +153,33 @@ def percentile_rank(values: list, cur) -> str:
 
 
 def market_facts_line(db, date: str) -> str:
-    """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。"""
+    """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。按日缓存。"""
+    if date in _FACTS_CACHE:
+        return _FACTS_CACHE[date]
     cur = market_metrics(db, date)
     if not cur:
         return f"盘面事实：{date} 盘面指标缺失（fail-visible）"
     prev = trading_dates_before(db, date)
     hist = [m for m in (market_metrics(db, d) for d in prev) if m]
-    zb_hist = [h["zhabanRate"] for h in hist]
-    mb_hist = [h["maxBoard"] for h in hist]
-    zb_rate = f'{cur["zhabanRate"]:.1f}%' if isinstance(cur["zhabanRate"], (int, float)) else "缺"
+    hist_die = [v for v in (dieban_count(db, d) for d in prev) if isinstance(v, (int, float))]
+    cur_die = dieban_count(db, date)
+
+    def pct(vals, cur_v):
+        return percentile_rank(vals, cur_v)
+
+    die_txt = (f'跌停 {cur_die} 家（{pct(hist_die, cur_die)} 分位）'
+               if isinstance(cur_die, (int, float)) else "跌停 不可算")
+    rate = f'{cur["zhabanRate"]:.1f}%' if isinstance(cur["zhabanRate"], (int, float)) else "缺"
     three_plus = (cur["ladder"].get("three") or 0) + (cur["ladder"].get("four") or 0) + (cur["ladder"].get("high") or 0)
-    return (f'盘面事实：全市场涨停 {cur["ztCount"]} 家 · 炸板率 {zb_rate}（近20日 {percentile_rank(zb_hist, cur["zhabanRate"])} 分位）'
+    line = (f'盘面事实：涨停 {cur["ztCount"]} 家（{pct([h["ztCount"] for h in hist], cur["ztCount"])} 分位）'
+            f' · {die_txt}'
+            f' · 炸板率 {rate}（{pct([h["zhabanRate"] for h in hist], cur["zhabanRate"])} 分位，炸板 {cur["zhabanCount"] or 0} 家）'
+            f' · 大幅回撤 {cur["drawdownCount"] if cur["drawdownCount"] is not None else "?"} 家'
+            f'（{pct([h["drawdownCount"] for h in hist], cur["drawdownCount"])} 分位）'
             f' · 连板梯队 一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}'
-            f' · 最高 {cur["maxBoard"]} 板（近20日 {percentile_rank(mb_hist, cur["maxBoard"])} 分位）')
+            f' · 最高 {cur["maxBoard"]} 板（{pct([h["maxBoard"] for h in hist], cur["maxBoard"])} 分位）')
+    _FACTS_CACHE[date] = line
+    return line
 
 
 def board_position(jiuyan_doc, code: str) -> str:
