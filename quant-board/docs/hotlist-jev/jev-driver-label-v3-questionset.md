@@ -209,3 +209,9 @@ depth：core 782 / early 319 / scaling 206 / equity 159 / concept 35 / insuffici
 1. **v3 题目集（个股四题+日级哨兵）即当前生产态**：题目 v3.1 判据零改动+弹药结构化直供，全月零退化、门A'/freshness/稳定性全数健康（六桶方差与 v2 重合、unclear 8.0%）。
 2. **三代基线冻结**（本文件为单一事实源）：v1×v2 37.2% / v3×v2 78.8% / v3×v1 30.9%；10 月扩窗后增量对比沿用同法。
 3. **待办移交**：①pilot 集合 rename 去后缀 + v2 runner/报告退役收敛（用户已批准，下一代码收敛批执行）；②「情绪周期段位题」（近 10 日轨迹+游资六段）立项待归宿裁决（推荐情绪轨道）；③jiuyan 08-27/28/31 配额日补采；④当日 PHASE 哨兵如需挂 10 月自动链，随代码收敛批接线。
+
+## 收敛批执行（2026-10-03，用户「按顺序执行」指令①）
+
+单一事实源落定：v2 集合归档（data/backups/hotlist_jev_driver_labels_v2_archive_2026-10-03.jsonl.gz，1,516 条）→ drop → pilot 集合 rename 平移为 **hotlist_jev_driver_labels**（1,537 docs=1,516 个股+21 日级哨兵）；代码收敛：v2 runner 退役（git rm），pilot runner git mv 为 **jev_label_jiuyan.py** 生产 runner（集合名去 pilot、docstring 定版）；报告生成器陈旧字符串修正，15 测试绿。
+
+**v3 全月门B（沿用预登记判据，零成本读数）**：p=0.9648 / 极差 9.3pct / ρ=−0.107 → 与根因分析预测一致（驱动类别在已板人群无续板信号，ρ 近零印证「近全平排序的方向对照是噪声」的修正）；分层读数：notInHotlist 层 p=0.18/极差 20.2（筛选信号存于热榜外层，与根因报告 §2.3 同向）。**驱动轴统计终态=INSUFFICIENT 诚实收口，资产形态=筛选信号（非板层）+质量轴+日级哨兵。**

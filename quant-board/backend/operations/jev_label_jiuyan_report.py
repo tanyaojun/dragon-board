@@ -214,7 +214,7 @@ def main():
     db = get_runtime_mongodb_database()
     labels = [d for d in db["hotlist_jev_driver_labels"].find({"status": "ok"}) if d.get("label")]
     if not labels:
-        print("hotlist_jev_driver_labels_v2 无 ok 标签，退出")
+        print("hotlist_jev_driver_labels 无 ok 标签，退出")
         return
     dates = sorted({d["tradingDate"] for d in labels})
     date_idx = {d: i for i, d in enumerate(dates)}
