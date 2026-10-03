@@ -124,6 +124,33 @@ def dieban_count(db, date: str) -> int | None:
     return n if seen else None
 
 
+_ADVDEC_CACHE: dict[str, tuple] = {}
+
+
+def advdec_ratio(db, date: str) -> tuple | None:
+    """池内涨/跌/平家数与涨跌比（采集池口径，15:00 收盘）——区分「不交易」与「杀跌」的特征。"""
+    if date in _ADVDEC_CACHE:
+        return _ADVDEC_CACHE[date]
+    up = down = flat = 0
+    seen = 0
+    for r in db["snapshot_stock_rows"].find(
+            {"type": "half_hour", "tradingDate": date, "slotTime": "15:00",
+             "pctChange": {"$exists": True, "$ne": None}}, {"pctChange": 1}):
+        pc = r.get("pctChange")
+        if not isinstance(pc, (int, float)):
+            continue
+        seen += 1
+        if pc > 0.1:
+            up += 1
+        elif pc < -0.1:
+            down += 1
+        else:
+            flat += 1
+    result = (up, down, flat, round(up / max(down, 1), 2)) if seen else None
+    _ADVDEC_CACHE[date] = result
+    return result
+
+
 def market_metrics(db, date: str) -> dict | None:
     """当日 15:00 盘面事实（涨停/炸板/回撤/梯队/最高板高；跌停另行自算）。"""
     f = db["snapshot_frames"].find_one({"tradingDate": date, "slotTime": "15:00"},
@@ -155,6 +182,20 @@ def percentile_rank(values: list, cur) -> str:
     return f"{sum(1 for v in vals if v < cur) / len(vals) * 100:.0f}"
 
 
+def _advdec_segment(db, date: str) -> str:
+    ad = advdec_ratio(db, date)
+    if not ad:
+        return " · 池内涨跌结构 不可算（fail-visible）"
+    up, down, flat, ratio = ad
+    if 0.8 <= ratio <= 1.25:
+        tone = "均衡（没人买也没人卖）"
+    elif ratio > 1.25:
+        tone = "单边偏强"
+    else:
+        tone = "单边偏弱"
+    return f' · 池内涨跌比 {ratio}（涨{up}/跌{down}，{tone}）'
+
+
 def market_facts_line(db, date: str) -> str:
     """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。按日缓存。"""
     if date in _FACTS_CACHE:
@@ -180,7 +221,8 @@ def market_facts_line(db, date: str) -> str:
             f' · 大幅回撤 {cur["drawdownCount"] if cur["drawdownCount"] is not None else "?"} 家'
             f'（{pct([h["drawdownCount"] for h in hist], cur["drawdownCount"])} 分位）'
             f' · 连板梯队 一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}'
-            f' · 最高 {cur["maxBoard"]} 板（{pct([h["maxBoard"] for h in hist], cur["maxBoard"])} 分位）')
+            f' · 最高 {cur["maxBoard"]} 板（{pct([h["maxBoard"] for h in hist], cur["maxBoard"])} 分位）'
+            + _advdec_segment(db, date))
     _FACTS_CACHE[date] = line
     return line
 
@@ -357,10 +399,12 @@ QUESTIONS_CYCLE = {"cycle_stage": {"type": "choice",
                    "instructions": "以下是最近 10 个交易日的盘面序列与今日盘面事实。请判断：今日市场情绪处于情绪周期的哪一段？"
                                    "判段以「今日各项指标在近 10 日序列中的相对位置」为主锚（峰值区/谷值区/回升/回落），先读摆动锚：峰值距今几天决定今日处于回落段还是回升段、谷值距今几天决定是否冰点区，"
                                    "游资语境参考：退潮初期是高度刚回落、亏钱效应开始扩散；冰点是退潮末期——涨停缩到地量、"
-                                   "首板堆积、老周期高标出清，反弹在即反而是积极信号。只依据所给信息判断，不预测后市。",
+                                   "首板堆积、老周期高标出清，反弹在即反而是积极信号。"
+                                   "特别注意：冰点是稀缺事件（全月仅 1-2 次）——判冰点必须同时满足「涨停家数掉出常态带（断层）」与「池内涨跌均衡（没人买也没人卖，非单边杀跌）」；"
+                                   "跌停堆积+单边下跌+缩量大面的日子是杀跌退潮，不是冰点。只依据所给信息判断，不预测后市。",
                    "criteria": {
-                       "ebb_early": "退潮初期：涨停家数/最高板自近 10 日峰值回落的前 1-3 天，炸板率/回撤自低位抬升，亏钱效应开始扩散",
-                       "ice_end": "冰点（退潮末期）：涨停家数处于近 10 日地量档，跌停/回撤/炸板率处于高位（不必已回落），首板堆积、高标独苗或断板——反弹在即",
+                       "ebb_early": "退潮初期/杀跌：涨停家数/最高板自近 10 日峰值回落的前 1-3 天，或跌停堆积+池内涨跌单边偏弱（跌比涨多、人在卖）+缩量大面，亏钱效应扩散中",
+                       "ice_end": "冰点（退潮末期·断层日）：涨停家数掉出常态带（显著低于近 10 日日常水平）且池内涨跌均衡（涨跌比接近 1，没人买也没人卖），首板堆积、高标独苗或断板——反弹在即；此状态全月仅 1-2 次",
                        "repair": "修复启动：涨停家数自近 10 日谷值明显回升、炸板率自高位回落，但家数/高度尚未贴近窗口峰值",
                        "ferment": "发酵主升：涨停家数与梯队连日走高、贴近窗口峰值且炸板率不高",
                        "climax": "高潮：涨停家数或最高板创近 10 日新高或贴近窗口峰值，且炸板率未失控",
@@ -394,8 +438,10 @@ def trajectory_line(db, date: str, n: int = 10) -> str:
         dd_txt = r["dd"] if r["dd"] is not None else "?"
         mb_txt = r["mb"] if r["mb"] is not None else "?"
         zt_txt = r["zt"] if r["zt"] is not None else "?"
-        rows.append(f'{r["d"][5:]}|涨停{zt_txt}({delta})|跌停{die_txt}|炸板{r["rate"]}|回撤{dd_txt}|板{mb_txt}')
-    head = f'近{len(rows)}个交易日序列（日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板）：'
+        ad = advdec_ratio(db, r["d"])
+        ad_txt = f'{ad[3]}' if ad else "?"
+        rows.append(f'{r["d"][5:]}|涨停{zt_txt}({delta})|跌停{die_txt}|炸板{r["rate"]}|回撤{dd_txt}|板{mb_txt}|涨跌比{ad_txt}')
+    head = f'近{len(rows)}个交易日序列（日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板|池内涨跌比）：'
     return head + " ； ".join(rows)
 
 
