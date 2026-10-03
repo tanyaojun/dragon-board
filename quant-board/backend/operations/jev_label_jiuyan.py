@@ -355,7 +355,7 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
 # 试点期借打标 runner 的弹药层执行，落 hotlist_jev_cycle_stage_pilot 临时集合）。
 QUESTIONS_CYCLE = {"cycle_stage": {"type": "choice",
                    "instructions": "以下是最近 10 个交易日的盘面序列与今日盘面事实。请判断：今日市场情绪处于情绪周期的哪一段？"
-                                   "判段以「今日各项指标在近 10 日序列中的相对位置」为主锚（峰值区/谷值区/回升/回落），"
+                                   "判段以「今日各项指标在近 10 日序列中的相对位置」为主锚（峰值区/谷值区/回升/回落），先读摆动锚：峰值距今几天决定今日处于回落段还是回升段、谷值距今几天决定是否冰点区，"
                                    "游资语境参考：退潮初期是高度刚回落、亏钱效应开始扩散；冰点是退潮末期——涨停缩到地量、"
                                    "首板堆积、老周期高标出清，反弹在即反而是积极信号。只依据所给信息判断，不预测后市。",
                    "criteria": {
@@ -369,23 +369,67 @@ QUESTIONS_CYCLE = {"cycle_stage": {"type": "choice",
 
 
 def trajectory_line(db, date: str, n: int = 10) -> str:
-    """近 n 个交易日逐日序列：日期|涨停|跌停|炸板率%|大幅回撤|最高板。"""
-    prev = trading_dates_before(db, date, n)
-    cells = []
-    for d in prev:
+    """近 n 个交易日逐日序列：日期|涨停(较昨日Δ)|跌停|炸板率%|大幅回撤|最高板。"""
+    window = trading_dates_before(db, date, n + 1)  # 首日仅为算首格 Δ
+    series = []
+    for d in window:
         m = market_metrics(db, d) or {}
         die = dieban_count(db, d)
         rate = m.get("zhabanRate")
         rate_txt = f'{round(rate, 1)}%' if isinstance(rate, (int, float)) else "?"
-        cells.append(f'{d[5:]}|涨停{m.get("ztCount") or "?"}|跌停{die if die is not None else "?"}'
-                     f'|炸板{rate_txt}|回撤{m.get("drawdownCount") if m.get("drawdownCount") is not None else "?"}|板{m.get("maxBoard") or "?"}')
-    return f'近{len(cells)}个交易日序列（日期|涨停|跌停|炸板率|大幅回撤|最高板）：' + ' ； '.join(cells)
+        zt = m.get("ztCount") if isinstance(m.get("ztCount"), (int, float)) else None
+        dd = m.get("drawdownCount")
+        mb = m.get("maxBoard")
+        series.append({"d": d, "zt": zt, "die": die, "rate": rate_txt,
+                       "dd": dd if isinstance(dd, (int, float)) else None,
+                       "mb": mb if isinstance(mb, (int, float)) else None})
+    rows = []
+    for i, r in enumerate(series[1:]):
+        prev = series[i]
+        if r["zt"] is not None and prev["zt"] is not None:
+            delta = f'{r["zt"] - prev["zt"]:+d}'
+        else:
+            delta = "?"
+        die_txt = r["die"] if r["die"] is not None else "?"
+        dd_txt = r["dd"] if r["dd"] is not None else "?"
+        mb_txt = r["mb"] if r["mb"] is not None else "?"
+        zt_txt = r["zt"] if r["zt"] is not None else "?"
+        rows.append(f'{r["d"][5:]}|涨停{zt_txt}({delta})|跌停{die_txt}|炸板{r["rate"]}|回撤{dd_txt}|板{mb_txt}')
+    head = f'近{len(rows)}个交易日序列（日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板）：'
+    return head + " ； ".join(rows)
+
+
+
+
+def swing_summary_line(db, date: str, n: int = 10) -> str:
+    """摆动锚：窗口峰值/谷值（家数、日期、距今交易日数）+ 今日较昨日 Δ 与距峰值幅度。"""
+    prev = trading_dates_before(db, date, n)
+    vals = []
+    for d in prev:
+        m = market_metrics(db, d) or {}
+        if isinstance(m.get("ztCount"), (int, float)):
+            vals.append((d, int(m["ztCount"])))
+    m_cur = market_metrics(db, date) or {}
+    cur_zt = m_cur.get("ztCount") if isinstance(m_cur.get("ztCount"), (int, float)) else None
+    if len(vals) < 5 or cur_zt is None:
+        return "摆动锚：窗口数据不足（fail-visible）"
+    all_days = vals + [(date, cur_zt)]
+    ordered = [d for d, _ in all_days]
+    peak_d, peak = max(all_days, key=lambda x: (x[1], x[0]))
+    trough_d, trough = min(all_days, key=lambda x: (x[1], x[0]))
+    peak_ago = len(ordered) - 1 - ordered.index(peak_d)
+    trough_ago = len(ordered) - 1 - ordered.index(trough_d)
+    delta = cur_zt - vals[-1][1]
+    return (f'摆动锚：近{len(all_days)}个交易日涨停峰值 {peak} 家（{peak_d[5:]}，距今 {peak_ago} 个交易日）'
+            f'；谷值 {trough} 家（{trough_d[5:]}，距今 {trough_ago} 个交易日）'
+            f'；今日 {cur_zt} 家（较昨日 {delta:+d}，距峰值 {cur_zt - peak:+d} 家）')
 
 
 def build_cycle_narrative(db, date: str) -> str:
     lines = [
         f"{date} 交易日",
         market_facts_line(db, date),
+        swing_summary_line(db, date),
         trajectory_line(db, date),
     ]
     return chr(10).join(lines)
