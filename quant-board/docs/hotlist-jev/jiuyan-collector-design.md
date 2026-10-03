@@ -80,3 +80,10 @@ fail-visible：缺源记 degradedSources，不伪造 0。**不写入 theme_stock
 - **T4** 调度支线 + 8001 重启；
 - **T5** 读口 API + jev 页签最小卡；
 - **T6** playwright 自动铸（另批）。
+
+## 7. 登录与会话运行事实（2026-10-03 补采 5-8 月实测）
+
+- **单会话策略（实测证实）**：账号新登录会踢掉所有旧会话——.env.local SESSION「过期」的根因即此（用户在他处重新登录）。运行纪律：**账号只保持一处 canonical 登录**；凡在他处登录，必须同步更新 .env.local 并重启 8001。
+- **鉴权 cookie = 可见 SESSION**：document.cookie/devtools 里非 HttpOnly 的 SESSION（base64，48 字符）即鉴权级，python `Cookie: SESSION=<值>` 单值配方（§2 已验证配方）继续有效；此前 python 链「登录失效」全部是会话刚被踢的时序假象，非 httpOnly 缺失。`sl_session`/`admin` 等伴随 cookie 不需要。
+- **每日查阅配额（新发现）**：errCode=9「您今天的查阅次数已达到上限」——单日约 150+ 次 field/count 查阅后触发（2026-10-03 补采 98 天时实测，08-27/28/31 三天待次日配额刷新后 --skip-existing 补齐）。**实时采集（≈4-6 次/日）远低于限额**；批量回填需控节奏分日执行。
+- **T6 持久 profile 升级为根治项**：playwright 固定档案（`data/jiuyan_browser_profile/`）保持账号登录态，铸 token 与取数均在页内完成——canonical 登录收敛到档案一处，.env.local SESSION 不再是单点；在此之前以「.env.local + 单处登录纪律」运行。
