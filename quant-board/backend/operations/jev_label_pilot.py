@@ -19,8 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from backend.services.jev.jev_client import call_jev, parse_jev_response
 
-# 考题集 §二（2026-10-03 用户逐题确认：Q1-Q4 原文保留 + Q5 新增）。Q1-Q3 文案与 v2 (jev_label_jiuyan.py) 逐字一致=同题锚。
-QUESTIONS = {
+# 考题集 §二（2026-10-03 用户逐题确认 + Q5 裁决收官 26d8ddbb）：
+# 个股四题（Q1-Q3 与 v2 jev_label_jiuyan.py 逐字一致=同题锚；Q4 买盘逻辑）+ Q5 相位题拆日级独立调用（run_phase_band_day）。
+QUESTIONS_STOCK = {
     "driver_type": {"type": "choice",
                     "instructions": "该股今日涨停的最主要驱动类型是哪一类？只依据所给信息打标，不预测后市。",
                     "criteria": {
@@ -63,15 +64,17 @@ QUESTIONS = {
                            "sector_follow": "板块联动跟随：同板块多股今日集体异动，该股为跟随位（盘面/板块地位显示该板块今日涨停家数多，且该股封板时间偏晚）",
                            "high_board_relay": "高位卡位/情绪接力：无明确新催化，主要靠连板高度与情绪地位接续资金（身位显示 3 板及以上梯队，且解析中无新增具体事件行）",
                            "pure_sentiment": "纯情绪修复：无板块协同、无连板高度、无新增事件，属情绪性反弹"}},
-    "phase_band": {"type": "choice",
+}
+
+# Q5 相位题：日级独立调用专用（C 架构=日级粗哨兵，强/非强两档实测有效，冷/弱边界信任规则分）
+QUESTIONS_PHASE = {"phase_band": {"type": "choice",
                    "instructions": "仅依据所给盘面事实（涨停家数、炸板率、连板梯队、板块效应及各自近 20 日分位），"
                                    "判断当日市场情绪相位落在哪一档？只依据所给信息判断，不预测后市。",
                    "criteria": {
                        "cold_lt40": "冷带：情绪低迷，涨停家数/梯队高度/板块效应处于近 20 日低位区（对应情绪分 40 分线以下）",
                        "weak_40_60": "弱势带：情绪中性偏弱，涨停与梯队处于中位附近（对应情绪分 40-60）",
                        "strong_ge60": "强势带：情绪活跃偏强，涨停家数/梯队高度/板块效应处于近 20 日高位区（对应情绪分 60 分线以上）",
-                       "insufficient": "证据不足：所给盘面事实不足以判断，不强行归类"}},
-}
+                       "insufficient": "证据不足：所给盘面事实不足以判断，不强行归类"}}}
 
 THS_KEYS = ("one", "two", "three", "four", "high")
 
@@ -264,7 +267,7 @@ def hotlist_ranks(db, date: str, codes: list[str]) -> dict[str, int]:
 
 def _label_one(db, col, acc, token, date, code, stock, board, rank):
     narrative = build_pilot_narrative(db, date, code, stock, board, rank)
-    env, ms = call_jev(acc, token, narrative, QUESTIONS)
+    env, ms = call_jev(acc, token, narrative, QUESTIONS_STOCK)
     parsed = parse_jev_response(env, ms)
     answers = parsed.get("answers") or {}
     doc = {"_id": f"{date}:{code}", "origin": "driver_label_jiuyan_v3_pilot", "tradingDate": date,
@@ -272,7 +275,7 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank):
            "jiuyanContext": {"board": board, "day": stock.get("day"), "num": stock.get("num"),
                              "time": stock.get("time"), "inHotlist": rank is not None, "rank": rank},
            "status": "ok" if parsed["ok"] else "degraded",
-           "narrative": narrative, "questionsRaw": QUESTIONS,
+           "narrative": narrative, "questionsRaw": QUESTIONS_STOCK,
            "label": answers.get("driver_type", {}).get("choice"),
            "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
            "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
@@ -311,7 +314,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             code = _strip(entry["stock"].get("code"))
             items[code] = entry
         codes = list(items.keys())
-        done = {d["code"] for d in col.find({"tradingDate": date, "status": "ok"}, {"code": 1})}
+        done = {d["code"] for d in col.find({"tradingDate": date, "status": "ok"}, {"code": 1})
+                if d.get("code")}  # PHASE 日级文档无 code，跳过防 KeyError
         codes = [c for c in codes if c not in done]
         if not codes:
             print(f"[{di + 1}/{len(dates)}] {date} 全部已打，跳过")
@@ -352,13 +356,17 @@ def run_phase_band_day(db, dates: list[str], token: str, acc: str) -> None:
     判定落同一 pilot 集合，_id={date}:PHASE、origin=phase_band_daily，与个股文档显式区隔。"""
     col = db["hotlist_jev_driver_labels_v3_pilot"]
     for date in dates:
+        done = col.find_one({"_id": f"{date}:PHASE", "status": "ok"})
+        if done:
+            print(f"[phase] {date} 已判（{done.get('phaseBand')}），跳过")
+            continue
         narrative = f"{date} 交易日 · {market_facts_line(db, date)}"
-        env, ms = call_jev(acc, token, narrative, {"phase_band": QUESTIONS["phase_band"]})
+        env, ms = call_jev(acc, token, narrative, QUESTIONS_PHASE)
         parsed = parse_jev_response(env, ms)
         answers = parsed.get("answers") or {}
         doc = {"_id": f"{date}:PHASE", "origin": "phase_band_daily", "tradingDate": date,
                "status": "ok" if parsed["ok"] else "degraded",
-               "narrative": narrative, "questionsRaw": {"phase_band": QUESTIONS["phase_band"]},
+               "narrative": narrative, "questionsRaw": QUESTIONS_PHASE,
                "phaseBand": answers.get("phase_band", {}).get("choice"),
                "phaseBandProbabilities": answers.get("phase_band", {}).get("probabilities"),
                "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
