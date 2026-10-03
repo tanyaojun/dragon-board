@@ -221,3 +221,11 @@ depth：core 782 / early 319 / scaling 206 / equity 159 / concept 35 / insuffici
 - **② 周期段位题归宿已登记**：`jev-sentiment-questionset-review.md` §十二（情绪轨道，排在 v2.4 修正重试点之后；轨迹弹药+游资六段设计草案冻结，3 天试点 ≈2 万 tokens 待裁决开火）。
 - **③ jiuyan 08-27/28/31 补采**：探针确认每日查阅配额未刷新（自然日口径，errCode=9 仍在），挂起待次日重试（`--month 2026-08 --skip-existing`，3 天 ×2 请求）。
 - **④ PHASE 哨兵已挂 10 月盘后链**：schedule.py after-market 第 5 步 `phaseBand`（门控=当日 jiuyan final+15:00 帧双存在；子进程 `jev_label_jiuyan --phase-band-day`，幂等跳过已判日；advisory 语义不翻转整体 ok；PHASE 文档 computedAt 新鲜度回读校验）；runner 增 `--phase-band-day` CLI 入口；3 新测试+链步骤断言更新全绿。8001 重启加载。**另登记未裁决成本项**：个股打标每日自动化 ≈21 万 tokens/交易日（10 月终判弹药积累所需），挂自动链与否待用户批。
+
+## 研究↔展示同步落地（2026-10-03 深夜，§1.25 原则）
+
+**JEV 叙事面板新增第 7 页签【涨停叙事】**（用户指令）：打标轨道研究结论接入前端——
+- 后端新读口 `GET /api/hotlist-jev/limitup-labels?date=`（独立路由文件 hotlist_jev_limitup_routes.py 避开 hotlist_jev_routes 在途改动；聚合逻辑 services/jev/jev_limitup_labels.py，纯读 fail-visible：无文档日 no_data=true+原因，不伪造空成功）；8000 重启实测 9/30 返回 64 只+哨兵弱势带；
+- 前端：hotlistJevApi.ts 增 fetchHotlistJevLimitUpLabels+五组中文映射（驱动/深度/新鲜度/买盘/相位档）；JevNarrativePanel 第 7 页签=日级相位哨兵卡（档位+概率）+驱动分布 chips+个股四题表格（驱动/置信%/深度/新鲜度/买盘/板块/热榜排名，排名升序无排名沉底）；懒加载按选中交易日，加载/错误+重试/无数据三态 fail-visible；
+- 合同测试：面板源码合同（页签/读口/fail-visible/中文映射/解耦边界不破）+聚合函数单测（哨兵/个股分流、no_data），前端全量 138 文件 1160 测试绿、vue-tsc 零错。
+- 边界：周期段位试点（挂起中）**不接面板**（不稳定信号不进展示层）；9/4 的 75 只标签为五题旧代（含每股 phaseBand 残字段），消费以日级 PHASE 文档为准。

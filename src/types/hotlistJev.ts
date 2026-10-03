@@ -239,3 +239,42 @@ export interface HotlistSentimentOverviewResult {
   degraded: boolean
   reason: string | null
 }
+
+/** 涨停打标轨道（hotlist_jev_driver_labels）：个股四题标签（研究↔展示同步 2026-10-03） */
+export interface HotlistJevLimitUpStock {
+  code: string
+  name: string | null
+  label: string | null
+  labelProbabilities: Record<string, number> | null
+  catalystDepth: string | null
+  catalystDepthProbabilities: Record<string, number> | null
+  freshness: string | null
+  buySideLogic: string | null
+  buySideProbabilities: Record<string, number> | null
+  board: string | null
+  inHotlist: boolean
+  rank: number | null
+  computedAt: string | null
+}
+
+/** 日级相位哨兵（_id={date}:PHASE） */
+export interface HotlistJevLimitUpPhase {
+  band: string | null
+  probabilities: Record<string, number> | null
+  computedAt: string | null
+}
+
+export interface HotlistJevLimitUpDay {
+  ok: boolean
+  date: string
+  phase: HotlistJevLimitUpPhase | null
+  stocks: HotlistJevLimitUpStock[]
+  summary: {
+    total: number
+    label: Record<string, number>
+    catalystDepth: Record<string, number>
+    buySideLogic: Record<string, number>
+  }
+  noData: boolean
+  reason: string | null
+}

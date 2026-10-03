@@ -492,6 +492,56 @@
               </details>
             </template>
           </section>
+
+          <!-- ⑦ 涨停叙事：打标轨道研究↔展示同步（个股四题 + 日级相位哨兵，独立读口 fail-visible） -->
+          <section v-show="view === 'limitup'" class="tab-pane">
+            <div v-if="limitUpLoading" class="empty-row">涨停叙事加载中…</div>
+            <div v-else-if="limitUpError" class="state-block error">
+              ⚠️ {{ limitUpError }}
+              <button class="retry-btn" @click="selectedDate && ensureLimitUp(selectedDate)">重试</button>
+            </div>
+            <div v-else-if="!selectedDate" class="empty-row">窗口内无选中交易日</div>
+            <div v-else-if="limitUpDay?.noData" class="empty-row">{{ limitUpDay.reason ?? '该日无涨停打标文档' }}</div>
+            <template v-else-if="limitUpDay">
+              <div class="limitup-phase-card">
+                <div class="limitup-phase-title">🛡️ 日级相位哨兵 · {{ limitUpDay.date }}</div>
+                <div class="limitup-phase-band">{{ limitUpDay.phase ? (JEV_PHASE_BAND_NAMES[limitUpDay.phase.band ?? ''] ?? limitUpDay.phase.band) : '未判（哨兵未跑或缺失）' }}</div>
+                <div v-if="limitUpDay.phase?.probabilities" class="limitup-phase-probs">
+                  <span v-for="(prob, key) in limitUpDay.phase.probabilities" :key="key" class="limitup-prob-chip">
+                    {{ JEV_PHASE_BAND_NAMES[String(key)] ?? key }} {{ Math.round(Number(prob) * 100) }}%
+                  </span>
+                </div>
+              </div>
+              <div class="limitup-summary-row">
+                <span class="limitup-summary-chip">个股 {{ limitUpDay.summary.total }}</span>
+                <span v-for="(count, key) in limitUpDay.summary.label" :key="`l-${key}`" class="limitup-summary-chip">
+                  {{ JEV_DRIVER_NAMES[String(key)] ?? key }} {{ count }}
+                </span>
+              </div>
+              <table class="limitup-table">
+                <thead>
+                  <tr>
+                    <th>#</th><th>名称</th><th>代码</th><th>驱动</th><th>驱动置信</th>
+                    <th>深度</th><th>新鲜度</th><th>买盘逻辑</th><th>板块</th><th>热榜</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="stock in limitUpDay.stocks" :key="stock.code">
+                    <td>{{ stock.rank ?? '--' }}</td>
+                    <td>{{ stock.name ?? '--' }}</td>
+                    <td class="limitup-code">{{ stock.code }}</td>
+                    <td>{{ stock.label ? (JEV_DRIVER_NAMES[stock.label] ?? stock.label) : '--' }}</td>
+                    <td>{{ topProbability(stock.labelProbabilities, stock.label) }}</td>
+                    <td>{{ stock.catalystDepth ? (JEV_DEPTH_NAMES[stock.catalystDepth] ?? stock.catalystDepth) : '--' }}</td>
+                    <td>{{ stock.freshness ? (JEV_FRESHNESS_NAMES[stock.freshness] ?? stock.freshness) : '--' }}</td>
+                    <td>{{ stock.buySideLogic ? (JEV_BUYSIDE_NAMES[stock.buySideLogic] ?? stock.buySideLogic) : '--' }}</td>
+                    <td>{{ stock.board ?? '--' }}</td>
+                    <td>{{ stock.inHotlist ? `#${stock.rank ?? '--'}` : '未进' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </template>
+          </section>
         </template>
       </div>
     </div>
@@ -501,12 +551,18 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import {
+  fetchHotlistJevLimitUpLabels,
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
+  JEV_BUYSIDE_NAMES,
   JEV_CROWDING_NAMES,
   JEV_CROWDING_WARN_LAYERS,
   JEV_PATTERN_NAMES,
   JEV_PATTERN_ORDER,
+  JEV_DEPTH_NAMES,
+  JEV_DRIVER_NAMES,
+  JEV_FRESHNESS_NAMES,
+  JEV_PHASE_BAND_NAMES,
   JEV_STAGE_NAMES,
   JEV_STAGE_ORDER,
   jevChoiceName,
@@ -528,7 +584,7 @@ import {
   type JevCrowdingPoint,
   type JevNarrativeProjection,
 } from '@/services/hotlist/jevNarrativeProjection'
-import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevMissingDay } from '@/types/hotlistJev'
+import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevLimitUpDay, HotlistJevMissingDay } from '@/types/hotlistJev'
 
 const props = defineProps<{ visible: boolean; triggerRect?: DOMRect | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -540,6 +596,7 @@ const TABS = [
   { key: 'confidence', label: '置信度', icon: '🎯' },
   { key: 'narrative', label: '叙事全文', icon: '📜' },
   { key: 'raw', label: '原始返回', icon: '🧾' },
+  { key: 'limitup', label: '涨停叙事', icon: '🏷️' },
 ] as const
 type ViewKey = (typeof TABS)[number]['key']
 
@@ -656,6 +713,41 @@ async function loadAll() {
 
 function latestSlotTime(): string | null {
   return slots.value.length ? (slots.value[slots.value.length - 1]?.slotTime ?? null) : null
+}
+
+// ---------- 涨停叙事（打标轨道研究↔展示同步 2026-10-03；独立读口 fail-visible） ----------
+const limitUpDay = ref<HotlistJevLimitUpDay | null>(null)
+const limitUpLoading = ref(false)
+const limitUpError = ref<string | null>(null)
+let limitUpReqId = 0
+
+async function ensureLimitUp(date: string) {
+  if (!date || (limitUpDay.value?.date === date && !limitUpError.value)) return
+  const reqId = ++limitUpReqId
+  limitUpLoading.value = true
+  limitUpError.value = null
+  try {
+    const result = await fetchHotlistJevLimitUpLabels(date)
+    if (reqId !== limitUpReqId) return
+    if (result.degraded || !result.day) {
+      limitUpError.value = result.reason || '涨停叙事读口不可用'
+      limitUpDay.value = null
+    } else {
+      limitUpDay.value = result.day
+    }
+  } finally {
+    if (reqId === limitUpReqId) limitUpLoading.value = false
+  }
+}
+
+watch([view, selectedDate], ([tab, date]) => {
+  if (tab === 'limitup' && date) void ensureLimitUp(date)
+})
+
+function topProbability(probs: Record<string, number> | null, choice: string | null): string {
+  if (!choice) return '--'
+  const prob = probs?.[choice]
+  return typeof prob === 'number' ? `${Math.round(prob * 100)}%` : '--'
 }
 
 async function setWindow(key: WindowKey) {
@@ -2145,4 +2237,40 @@ onUnmounted(() => {
 .dist-bar { display: block; height: 100%; border-radius: 5px; }
 .dist-row-pct { font-size: 10px; color: var(--text-secondary); }
 .dist-score-note { font-size: 10px; color: var(--text-secondary); margin-top: 4px; }
+
+/* 涨停叙事（打标轨道研究↔展示同步 2026-10-03） */
+.limitup-phase-card {
+  border: 1px solid var(--panel-border, #2a2f3a);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.limitup-phase-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.limitup-phase-band { font-size: 22px; font-weight: 600; color: var(--text-primary); }
+.limitup-phase-probs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.limitup-prob-chip {
+  font-size: 11px;
+  border: 1px solid var(--panel-border, #2a2f3a);
+  border-radius: 10px;
+  padding: 2px 8px;
+  color: var(--text-secondary);
+}
+.limitup-summary-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+.limitup-summary-chip {
+  font-size: 11px;
+  border: 1px solid var(--panel-border, #2a2f3a);
+  border-radius: 10px;
+  padding: 2px 8px;
+  color: var(--text-secondary);
+}
+.limitup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.limitup-table th,
+.limitup-table td {
+  border-bottom: 1px solid var(--panel-border, #232833);
+  padding: 4px 6px;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.limitup-code { opacity: 0.6; }
 </style>

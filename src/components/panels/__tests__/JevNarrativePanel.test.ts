@@ -169,3 +169,27 @@ describe('jevNarrativeProjection 投影模块合同', () => {
     expect(source).not.toContain('new Promise')
   })
 })
+
+describe('涨停叙事页签（打标轨道研究↔展示同步 2026-10-03）', () => {
+  test('页签与读口合同：limitup 页签 + 独立读口 + fail-visible + 哨兵/个股呈现', () => {
+    const source = panelSource()
+    expect(source).toContain("'limitup'")
+    expect(source).toContain('涨停叙事')
+    expect(source).toContain('fetchHotlistJevLimitUpLabels')
+    expect(source).toContain('日级相位哨兵')
+    expect(source).toContain('该日无涨停打标文档')
+    const script = panelScriptSource()
+    // 打标轨道读口接入不破坏既有解耦边界
+    expect(script).not.toContain('fetchHotlistSentimentOverview')
+    expect(script).not.toContain('fetchJiuyanAction')
+    expect(script).not.toContain('hotlist_sentiment')
+    expect(script).not.toContain('emotionScore')
+  })
+
+  test('打标轨道中文映射合同（驱动/深度/新鲜度/买盘/相位档）', () => {
+    const source = panelSource()
+    for (const name of ['JEV_DRIVER_NAMES', 'JEV_DEPTH_NAMES', 'JEV_FRESHNESS_NAMES', 'JEV_BUYSIDE_NAMES', 'JEV_PHASE_BAND_NAMES']) {
+      expect(source).toContain(name)
+    }
+  })
+})
