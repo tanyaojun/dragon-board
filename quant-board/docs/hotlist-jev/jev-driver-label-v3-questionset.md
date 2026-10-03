@@ -215,3 +215,9 @@ depth：core 782 / early 319 / scaling 206 / equity 159 / concept 35 / insuffici
 单一事实源落定：v2 集合归档（data/backups/hotlist_jev_driver_labels_v2_archive_2026-10-03.jsonl.gz，1,516 条）→ drop → pilot 集合 rename 平移为 **hotlist_jev_driver_labels**（1,537 docs=1,516 个股+21 日级哨兵）；代码收敛：v2 runner 退役（git rm），pilot runner git mv 为 **jev_label_jiuyan.py** 生产 runner（集合名去 pilot、docstring 定版）；报告生成器陈旧字符串修正，15 测试绿。
 
 **v3 全月门B（沿用预登记判据，零成本读数）**：p=0.9648 / 极差 9.3pct / ρ=−0.107 → 与根因分析预测一致（驱动类别在已板人群无续板信号，ρ 近零印证「近全平排序的方向对照是噪声」的修正）；分层读数：notInHotlist 层 p=0.18/极差 20.2（筛选信号存于热榜外层，与根因报告 §2.3 同向）。**驱动轴统计终态=INSUFFICIENT 诚实收口，资产形态=筛选信号（非板层）+质量轴+日级哨兵。**
+
+## 收敛批后续（2026-10-03，用户「按顺序执行」指令②③④）
+
+- **② 周期段位题归宿已登记**：`jev-sentiment-questionset-review.md` §十二（情绪轨道，排在 v2.4 修正重试点之后；轨迹弹药+游资六段设计草案冻结，3 天试点 ≈2 万 tokens 待裁决开火）。
+- **③ jiuyan 08-27/28/31 补采**：探针确认每日查阅配额未刷新（自然日口径，errCode=9 仍在），挂起待次日重试（`--month 2026-08 --skip-existing`，3 天 ×2 请求）。
+- **④ PHASE 哨兵已挂 10 月盘后链**：schedule.py after-market 第 5 步 `phaseBand`（门控=当日 jiuyan final+15:00 帧双存在；子进程 `jev_label_jiuyan --phase-band-day`，幂等跳过已判日；advisory 语义不翻转整体 ok；PHASE 文档 computedAt 新鲜度回读校验）；runner 增 `--phase-band-day` CLI 入口；3 新测试+链步骤断言更新全绿。8001 重启加载。**另登记未裁决成本项**：个股打标每日自动化 ≈21 万 tokens/交易日（10 月终判弹药积累所需），挂自动链与否待用户批。

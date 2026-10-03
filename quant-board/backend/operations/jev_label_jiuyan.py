@@ -381,12 +381,19 @@ def run_phase_band_day(db, dates: list[str], token: str, acc: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--start", required=True)
-    ap.add_argument("--end", required=True)
+    ap.add_argument("--start", required=False)
+    ap.add_argument("--end", required=False)
+    ap.add_argument("--phase-band-day", dest="phase_band_day", required=False,
+                    help="日级相位哨兵：只对指定交易日跑一次盘面事实判档（盘后链步骤 5）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
     args = ap.parse_args()
     tok = os.environ.get("JEV_CF_TOKEN") or ""
     assert tok, "需要 JEV_CF_TOKEN 环境变量"
-    run(args.start, args.end, args.dry_run, tok,
-        os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6"), args.workers)
+    acc = os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6")
+    if args.phase_band_day:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+        run_phase_band_day(get_runtime_mongodb_database(), [args.phase_band_day], tok, acc)
+    else:
+        assert args.start and args.end, "个股模式需要 --start/--end"
+        run(args.start, args.end, args.dry_run, tok, acc, args.workers)

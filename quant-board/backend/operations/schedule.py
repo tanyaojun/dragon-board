@@ -132,6 +132,66 @@ def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+def _should_run_phase_band(db: Any, today: str) -> tuple[bool, str]:
+    """相位哨兵门控：当日韭研 final 名单 + 15:00 盘面帧都存在才跑（缺一→哨兵无原料，跳过）。"""
+    try:
+        jy = db["jiuyan_action"].find_one({"_id": f"{today}:final"}, {"_id": 1})
+        fr = db["snapshot_frames"].find_one(
+            {"type": "half_hour", "tradingDate": today, "slotTime": "15:00",
+             "limitSummary.zhaban.ztCount": {"$gt": 0}}, {"_id": 1})
+    except Exception as exc:  # noqa: BLE001 — 门控查询失败按跳过处理（fail-visible 记原因）
+        return False, f"gate check failed: {exc}"
+    if not jy:
+        return False, f"no jiuyan final for {today}"
+    if not fr:
+        return False, f"no 15:00 frame metrics for {today}"
+    return True, ""
+
+
+def _run_phase_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """Q5 相位哨兵（advisory 步，2026-10-03）：日级独立调用判当日盘面档位。
+
+    - 门控=当日 jiuyan final + 15:00 盘面帧（原料齐才跑，非交易日/缺料跳过）；
+    - 子进程=jev_label_jiuyan --phase-band-day（幂等：当日 PHASE 文档已 ok 自动跳过）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（哨兵证据链，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_band(db, today)
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_label_jiuyan", "--phase-band-day", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_PULSE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "phase_band_timeout", "message": f"timeout {_PULSE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "phase_band_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    mongo_fresh = False
+    phase_band = None
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc = db["hotlist_jev_driver_labels"].find_one({"_id": f"{today}:PHASE"},
+                                                       {"phaseBand": 1, "computedAt": 1})
+        phase_band = doc.get("phaseBand") if doc else None
+        updated = str((doc or {}).get("computedAt") or "")
+        mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        mongo_error = str(exc)
+    result: dict[str, Any] = {"ok": True, "date": today, "phaseBand": phase_band, "mongoFresh": mongo_fresh}
+    if not mongo_fresh:
+        result["mongoWarning"] = "PHASE 文档 computedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    return result
+
+
 def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any]:
     """盘后快照日归档到 R2（mongodb 后端，2026-09-28）。
 
@@ -231,15 +291,17 @@ def run_after_market_once(
         # 失败/跳过只记结果不翻转整体 ok，也不参与 stopped_at（研究证据链，非生产数据链）
         today = datetime.now(_TZ).strftime("%Y-%m-%d")
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
+        phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "phaseBand"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
                 "snapshotArchiveR2": archive_result,
                 "phasePulse": pulse_result,
+                "phaseBand": phase_band_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,
