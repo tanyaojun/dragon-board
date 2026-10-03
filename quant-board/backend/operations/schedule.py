@@ -229,6 +229,55 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return {"ok": True, "date": today, "labeledToday": labeled}
 
 
+def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """C9 深谷状态月度复验（advisory 步，2026-10-03 协议 §十四/M4 §8）。
+
+    - 门控=当日 EOD 情绪文档存在（复用脉拍门控：deep_valley 读同一序列）；
+    - 子进程=deep_valley_revalidate --month 当月 --apply（幂等 upsert phase_monitor c9:<month>，
+      深谷日样本 + 3 日反弹 + 池代理随交易日自愈补全）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（C9 候选证据链，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_pulse(db, today, dataset_id, snapshot_type)
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    month = today[:7]
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.deep_valley_revalidate",
+             "--month", month, "--apply"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_PULSE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "deep_valley_timeout", "message": f"timeout {_PULSE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "deep_valley_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    mongo_fresh = False
+    summary: dict[str, Any] = {}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc = db["phase_monitor"].find_one({"_id": f"c9:{month}"}, {"summary": 1, "updatedAt": 1})
+        updated = str((doc or {}).get("updatedAt") or "")
+        mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
+        summary = (doc or {}).get("summary") or {}
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        mongo_error = str(exc)
+    result: dict[str, Any] = {"ok": True, "month": month, "summary": summary, "mongoFresh": mongo_fresh}
+    if not mongo_fresh:
+        result["mongoWarning"] = "phase_monitor c9:<month> updatedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    return result
+
+
 def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any]:
     """盘后快照日归档到 R2（mongodb 后端，2026-09-28）。
 
@@ -330,10 +379,11 @@ def run_after_market_once(
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
         jiuyan_label_result = _run_jiuyan_label_step(today, dry_run=dry_run)
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
+        deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -341,6 +391,7 @@ def run_after_market_once(
                 "phasePulse": pulse_result,
                 "jiuyanLabel": jiuyan_label_result,
                 "phaseBand": phase_band_result,
+                "deepValley": deep_valley_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,

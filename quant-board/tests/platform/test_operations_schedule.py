@@ -79,7 +79,7 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley"]
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
@@ -775,3 +775,124 @@ def test_jiuyan_label_failure_does_not_flip_chain(monkeypatch: Any) -> None:
     assert result["ok"] is True
     assert result["results"]["jiuyanLabel"]["ok"] is False
     assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand"]
+
+
+def test_deep_valley_gate_skips_without_eod(monkeypatch: Any) -> None:
+    """无 EOD 文档 → C9 复验跳过，子进程不启动。"""
+    from backend.operations import schedule
+
+    class FakeCollection:
+        def find_one(self, _query, _projection=None):
+            return None
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(schedule.subprocess, "run", lambda *a, **k: ran.append("subprocess"))
+
+    result = schedule._run_deep_valley_step("2026-10-11")
+
+    assert result["ok"] is True and result["skipped"] is True
+    assert "no EOD doc" in result["reason"]
+    assert ran == []
+
+
+def test_deep_valley_step_runs_subprocess_and_reads_ledger(monkeypatch: Any) -> None:
+    """EOD 已落 → 子进程跑当月复验 --apply，回读 c9 账本摘要与新鲜度。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def __init__(self, name):
+            self.name = name
+
+        def find_one(self, _query, _projection=None):
+            if self.name == "phase_monitor":
+                return {"summary": {"deepSamples": 3}, "updatedAt": "2099-01-01T00:00:00"}
+            return {"_id": "x"}  # hotlist_sentiment EOD 存在
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol(name)
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return type("Proc", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+
+    result = schedule._run_deep_valley_step("2026-10-12")
+
+    assert result["ok"] is True and result["month"] == "2026-10"
+    assert result["summary"]["deepSamples"] == 3
+    assert result["mongoFresh"] is True
+    assert "backend.operations.deep_valley_revalidate" in " ".join(captured["cmd"])
+    assert "--apply" in captured["cmd"]
+
+
+def test_deep_valley_failure_does_not_flip_chain(monkeypatch: Any) -> None:
+    """advisory 语义：C9 复验失败只进 results，不翻转整体 ok。"""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"storage_backend": "mongodb", "archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: "mongo-db",
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: calls.append("hotlist") or {"ok": True, "written": 1},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: calls.append("backup") or {"ok": True, "skipped": True, "reason": "dry_run"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: calls.append("archiveR2") or {"ok": True, "dryRun": True, "snapshotTypes": {}},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_phase_pulse_step",
+        lambda today, dry_run=False: calls.append("pulse") or {"ok": True, "month": "2026-10"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_jiuyan_label_step",
+        lambda today, dry_run=False: calls.append("jiuyanLabel") or {"ok": True, "labeledToday": 0},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_phase_band_step",
+        lambda today, dry_run=False: calls.append("phaseBand") or {"ok": True, "phaseBand": "cold_lt40"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_deep_valley_step",
+        lambda today, dry_run=False: calls.append("deepValley") or {"ok": False, "error": {"code": "deep_valley_failed", "message": "boom"}},
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=True)
+
+    assert result["ok"] is True
+    assert result["results"]["deepValley"]["ok"] is False
+    assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand", "deepValley"]
