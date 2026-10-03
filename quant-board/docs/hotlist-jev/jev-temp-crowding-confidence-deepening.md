@@ -90,7 +90,7 @@
 **纪律：任何跨月消费 jev 输出的二改方案（复核清单/诊断脚本/阈值校准/研究口径/前端图表）必须按版本分段**；7/8 月产物只能作历史档案，不得进现行判据的对照样本。既有阈值中凡用 9 月前样本校准的（犹豫 60%、C6 弱势带、W4 映射方向等），10 月扩窗终判时须只用现行代样本或新旧分组对照。
 
 **机制（2026-10-02 已落地）**：
-- `jev_state.QUESTION_SET_VERSION = "v2.4"`，`jev_sentiment_compute` 全部落库点（ok/degraded/no_data、slot/EOD）写入 `questionSetVersion`；**题目判据/选项文字任何变更必须递增此号**。
+- `jev_state.QUESTION_SET_VERSION = "v2.4"`，`jev_sentiment_compute` 全部落库点（ok/degraded/no_data、slot/EOD）写入 `questionSetVersion`；生产集合的另一个写者 `jev_sentiment_pilot`（回填/重跑 runner，`replace_one` 整文档替换）同名落库点同戳，防重跑抹戳；**题目判据/选项文字任何变更必须递增此号**。
 - 9 月重跑批 227 份已回填 v2.4（computedAt 全部=2026-10-02T18，出处确凿）；7/8 月 406 份**不回填**（缺失=未知口径，fail-visible，不猜版本号）。
 - 复核清单（`jev_review_list`）两侧读源限 `tradingDate ≥ 2026-09-01`；窗外已裁 41 项打 `legacyCriteria` 标记留档（读口隐藏，人工裁决审计不丢），未裁决窗外项清理。
-- 情绪面板 jev 图表注记行：窗口内文档混版或含未知口径时显式标注「⚠️ 窗口跨题目判据版本，跨版本对比无效」。
+- 情绪面板 jev 图表注记行：窗口内文档混版时标注「⚠️ 窗口跨题目判据版本，跨版本对比无效」；整窗均为未知口径旧文档时标注「⚠️ 窗口文档缺题目版本号（旧代产物，判据口径未知）」。检查范围=图表实际消费的文档（多日档 EOD、1d 档槽位+EOD 日级总体）。

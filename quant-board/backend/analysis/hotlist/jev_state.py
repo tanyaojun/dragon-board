@@ -67,6 +67,12 @@ def _stage_question_v2(instructions: str) -> dict:
     return {"type": "choice", "instructions": instructions, "criteria": dict(_STAGE_CRITERIA_V2)}
 
 
+# 题目判据演进号（2026-10-02 用户裁决：所有消费 jev 返回结果的二改方案按版本分段）。
+# 判据/选项文字任何变更必须递增并同步 compute 落库；库里缺失该字段的文档=旧代产物（口径未知，fail-visible）。
+# 实测断层（2026-10-02）：7/8 月旧判据与 9 月 v2.4 重跑批拥挤三层概率合计月均值 0.088/0.207/0.416，不可跨代对比。
+QUESTION_SET_VERSION = "v2.4"
+
+
 JEV_SLOT_QUESTIONS = {
     "frame_stage": _stage_question_v2("仅凭【当前帧】证据，以【近20日参照】为坐标系，判断当前A股短线热榜情绪处于哪一档？"),
     "sequence_stage": _stage_question_v2("结合【当日已走帧】证据序列（含当前帧），以【近20日参照】为坐标系，判断当前情绪处于哪一档？"),

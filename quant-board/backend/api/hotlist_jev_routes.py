@@ -199,8 +199,10 @@ def get_jev_review_list() -> dict[str, Any]:
         from backend.operations.jev_review_list import ensure_review_items
 
         stats = ensure_review_items(db)
-        # 日期降序（2026-10-01 用户指令）：最新待复核日在前
-        docs = list(db["phase_monitor"].find({"kind": "review_items"}).sort([("date", -1), ("slot", 1)]))
+        # 日期降序（2026-10-01 用户指令）：最新待复核日在前；
+        # legacyCriteria=窗外旧判据代已裁项（2026-10-02 版本分段裁决），留档不进工作台
+        docs = list(db["phase_monitor"].find(
+            {"kind": "review_items", "legacyCriteria": {"$ne": True}}).sort([("date", -1), ("slot", 1)]))
         docs = [{k: v for k, v in d.items() if k != "_id"} | {"id": str(d["_id"])} for d in docs]
         days: list[dict[str, Any]] = []
         by_date: dict[str, list[dict[str, Any]]] = {}

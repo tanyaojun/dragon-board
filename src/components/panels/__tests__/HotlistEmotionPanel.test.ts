@@ -347,6 +347,14 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     // 统计卡跟口径升级：概率卡带 % 后缀，置信补最低值（低置信=风险信号）
     expect(source).toContain("card('平均拥挤度', (p) => p.crowding, 'avg', '%')")
     expect(source).toContain("card('最低置信', (p) => p.confidence, 'min', '%')")
+    // 版本分段守卫（2026-10-02 用户裁决）：窗口混版/含未知口径文档时注记行显式标注，跨版本对比无效
+    expect(source).toContain('jevVersionNote')
+    expect(source).toContain('窗口跨题目判据版本')
+    expect(source).toContain("doc.questionSetVersion || '未知口径'")
+    // 整窗未知口径（旧代产物）单独标注；1d 档 EOD 日级总体与槽位一并纳入版本检查
+    expect(source).toContain("versions.has('未知口径')")
+    expect(source).toContain('窗口文档缺题目版本号')
+    expect(source).toContain('[...jevSlots.value, ...(jevEod.value ? [jevEod.value] : [])]')
     // 日级总体（盘后固定）行保留（1天档）
     expect(source).toContain('日级总体（盘后固定）')
     // fail-visible：降级/无数据状态结构化进 tooltip 与注记，不伪造分数

@@ -173,6 +173,8 @@ def test_compute_day_happy_path(monkeypatch):
     assert doc["tradingDate"] == "2026-09-30" and doc["origin"] == "collector"
     assert ((doc["answers"] or {})["day_stage"]["choice"]) == "ferment"
     assert doc["narrativeRaw"].startswith("2026-09-30 交易日全天热榜情绪证据轨迹")
+    # 版本分段不变量（2026-10-02 用户裁决）：所有落库点必须盖 questionSetVersion 戳
+    assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION
 
 
 def test_compute_day_token_missing_degraded_fail_visible(monkeypatch):
@@ -190,6 +192,7 @@ def test_compute_day_token_missing_degraded_fail_visible(monkeypatch):
     assert result["status"] == "degraded" and result["errorCode"] == "missing_token"
     doc = next(r for r in db["hotlist_jev_sentiment"].rows if r.get("kind") == "eod")
     assert doc["status"] == "degraded" and doc["narrativeRaw"]  # 叙事留存，不吞证据
+    assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # 降级路径同样盖版本戳
 
 
 # ── 槽级计算（2026-10-02 V1 退役后生产槽位唯一评判）──
@@ -240,6 +243,7 @@ def test_compute_slot_happy_path(monkeypatch):
     assert doc["origin"] == "collector" and doc["tradingDate"] == "2026-09-30"
     assert doc["evidenceRaw"] and doc["narrativeRaw"] and doc["historyAnchorRange"]
     assert ((doc["answers"] or {})["crowding"]["choice"]) == "no_crowding"
+    assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # 槽位 ok 路径盖版本戳
 
 
 def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):
@@ -250,3 +254,4 @@ def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):
     assert result["status"] == "no_data"
     doc = db["hotlist_jev_sentiment"].rows[0]
     assert doc["status"] == "no_data" and "missing" in (doc.get("errorDetail") or "")
+    assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # no_data 路径盖版本戳

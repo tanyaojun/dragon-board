@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """jev 情绪判定问题集 v2 pilot runner（梳理提案 P1-P4 试点，§6 预登记判据先冻结）。
 
-与 v1 链完全并行：v1（hotlist_jev_sentiment）封存不动，v2 落 hotlist_jev_sentiment_v2。
-改动三件：①叙事插【近20日参照】段（数据源=v1 槽文档 evidenceRaw 15:00 收盘统计，as-of 仅取 < 当日）；
+pilot runner（2026-10-02 V1 退役后写生产集合 hotlist_jev_sentiment，origin=sentiment_pilot；
+回填/重跑走 --anchor calendar 与生产同坐标系）。改动三件：
+①叙事插【近20日参照】段（数据源=槽文档 evidenceRaw 15:00 收盘统计，as-of 仅取 < 当日）；
 ②问题集换 JEV_SLOT_QUESTIONS / JEV_DAY_QUESTIONS（crowding 离散归层+温度锚定+五档绑证据）；
 ③origin=sentiment_pilot。
 
@@ -19,6 +20,7 @@ import time
 from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS,
     JEV_SLOT_QUESTIONS,
+    QUESTION_SET_VERSION,
     build_day_jev_state,
     build_history_anchor,
     build_slot_jev_state,
@@ -80,7 +82,7 @@ def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
 
 def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
                     history_anchor: str, token: str, account: str, dry_run: bool) -> dict:
-    """v2 槽位评判：叙事+问题集换 v2，落 hotlist_jev_sentiment_v2。"""
+    """v2 槽位评判：叙事+问题集与生产同源，落 hotlist_jev_sentiment（盖 questionSetVersion 戳）。"""
     snapshot_type = "half_hour"
     frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
     rows = _load_rows(db, dataset_id, str(frame.get("snapshotId") or "")) if frame else []
@@ -92,6 +94,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
                 {"_id": doc_id, "kind": "slot", "origin": "sentiment_pilot", "datasetId": dataset_id,
                  "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
                  "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
+                 "questionSetVersion": QUESTION_SET_VERSION,
                  "status": "no_data", "errorDetail": f"frame={'present' if frame else 'missing'} rows={len(rows)}"},
                 upsert=True)
         return {"status": "no_data"}
@@ -123,6 +126,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
     doc = {"_id": doc_id, "kind": "slot", "origin": "sentiment_pilot", "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
+           "questionSetVersion": QUESTION_SET_VERSION,
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
            "questionsRaw": JEV_SLOT_QUESTIONS, "responseRaw": envelope,
@@ -164,6 +168,7 @@ def compute_day(db, dataset_id: str, trading_date: str, history_anchor: str,
     doc = {"_id": doc_id, "kind": "eod", "origin": "sentiment_pilot", "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": "EOD",
            "asOf": f"{trading_date} EOD+08:00", "computedAt": int(time.time()),
+           "questionSetVersion": QUESTION_SET_VERSION,
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": None, "narrativeRaw": narrative,
            "questionsRaw": JEV_DAY_QUESTIONS, "responseRaw": envelope,

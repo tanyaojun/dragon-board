@@ -3285,6 +3285,21 @@ const jevStats = computed(() => {
   ]
 })
 
+// 版本分段守卫（2026-10-02 用户裁决）：窗口内文档题目版本不一致时显式标注；含未知口径
+// 旧文档（含整窗旧代产物、1d 档 EOD 与槽位异代）同样标注。判据随版本漂移（实测 7/8/9 月
+// 拥挤三层概率合计均值 0.088/0.207/0.416），跨版本对比无效
+const jevVersionNote = computed(() => {
+  const docs: HotlistJevDoc[] = jevTimeRange.value === '1d'
+    ? [...jevSlots.value, ...(jevEod.value ? [jevEod.value] : [])]
+    : jevDayDocs.value.map((day) => day.eod).filter((eod): eod is HotlistJevDoc => !!eod)
+  if (!docs.length) return ''
+  const versions = new Set(docs.map((doc) => doc.questionSetVersion || '未知口径'))
+  if (versions.size > 1) {
+    return `⚠️ 窗口跨题目判据版本（${[...versions].join('/')}），跨版本对比无效`
+  }
+  return versions.has('未知口径') ? '⚠️ 窗口文档缺题目版本号（旧代产物，判据口径未知）' : ''
+})
+
 const jevNote = computed(() => {
   if (jevSeriesLoading.value) return '正在加载 jev 多日序列…'
   // 取数失败只在所选窗口无法满足时提示，不影响已加载窗口的正常展示
@@ -3292,17 +3307,19 @@ const jevNote = computed(() => {
     return `jev 多日序列不可用：${jevSeriesError.value}`
   }
   if (!jevPoints.value.length) return ''
+  const versionSuffix = jevVersionNote.value ? ` · ${jevVersionNote.value}` : ''
   if (jevTimeRange.value === '1d') {
     const abnormal = jevSlots.value.filter(
       (s) => s.status === 'degraded' || s.status === 'no_data',
     ).length
     const base = jevSeriesDate.value ? `${jevSeriesDate.value} · 逐槽 AI 评判` : '逐槽 AI 评判'
-    return abnormal ? `${base} · 异常 ${abnormal} 槽` : base
+    const text = abnormal ? `${base} · 异常 ${abnormal} 槽` : base
+    return `${text}${versionSuffix}`
   }
   const labels = jevPoints.value.map((p) => p.label)
   const rangeLabel = labels.length > 1 ? `${labels[0]} ~ ${labels[labels.length - 1]}` : labels[0]
   const missingSuffix = jevMissingDays.value.length ? ` · 窗口缺失 ${jevMissingDays.value.length} 日` : ''
-  return `${rangeLabel} · 日线口径（EOD 日级总体）${missingSuffix}`
+  return `${rangeLabel} · 日线口径（EOD 日级总体）${missingSuffix}${versionSuffix}`
 })
 
 // tooltip 数值格式（fail-visible：null 显示 --；拥挤度/置信为概率口径带 %）

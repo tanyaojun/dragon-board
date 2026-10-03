@@ -8,9 +8,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.operations.jev_review_list import (
+    CRITERIA_ERA_START,
     build_review_items,
     merge_preserving_rulings,
     slopes_of_day,
+    split_stale,
 )
 
 
@@ -98,3 +100,22 @@ def test_merge_preserves_ruled_and_refreshes_pending():
     assert merged[0]["ruling"]["status"] == "jev_right" and merged[0]["ruling"]["note"] == "盘感核实"
     assert merged[0]["evidence"] == 1  # 证据刷新
     assert merged[1]["ruling"]["status"] == "pending"
+
+
+def test_criteria_era_boundary_locked():
+    """判据代边界锁定（2026-10-02 用户裁决）：清单只出 2026-09 起现行判据代复核项。"""
+    assert CRITERIA_ERA_START == "2026-09-01"
+
+
+def test_split_stale_ruled_legacy_kept_unruled_deleted():
+    """窗外旧项处置：已裁决→legacyCriteria 标记保留审计；未裁决→删除；已标记项不重复处置。"""
+    existing = {
+        "review:2026-07-10:EOD:C": {"ruling": {"status": "rule_right", "note": "", "ruledAt": "x"}},
+        "review:2026-08-01:10:00:B": {"ruling": {"status": "pending", "note": "", "ruledAt": None}},
+        "review:2026-07-11:EOD:C": {"legacyCriteria": True, "ruling": {"status": "jev_right", "note": "", "ruledAt": "x"}},
+        "review:2026-09-14:DAY:A": {"ruling": {"status": "pending", "note": "", "ruledAt": None}},
+    }
+    stale, legacy = split_stale(existing, {"review:2026-09-14:DAY:A"})
+    assert stale == ["review:2026-08-01:10:00:B"]
+    assert legacy == ["review:2026-07-10:EOD:C"]  # 已标记的 07-11 项不在重复处置列表
+    assert "review:2026-09-14:DAY:A" not in stale + legacy  # 现行项不动

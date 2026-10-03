@@ -22,6 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 DIVERGENCE_DAYS = ("2026-09-08", "2026-09-14", "2026-09-17", "2026-09-23")
+# 判据代边界（2026-10-02 用户裁决：jev 返回结果按题目版本分段消费）：
+# 2026-09 起 = 现行判据代（v2.4，10-02 全量重跑）；4-8 月为旧判据产物（实测拥挤三层
+# 概率合计月均值 0.088/0.207/0.416 差 5 倍），不可与现行代混编复核项。
+CRITERIA_ERA_START = "2026-09-01"
 CN2EN = {"启动": "start", "发酵": "ferment", "高潮": "climax", "退潮": "retreat", "冰点": "ice"}
 OFFENSE = {"start", "ferment", "climax"}
 DEFENSE = {"ice", "retreat"}
@@ -161,6 +165,21 @@ def merge_preserving_rulings(new_items: list[dict], existing_docs: dict[str, dic
     return out
 
 
+def split_stale(existing_docs: dict[str, dict], current_ids: set[str]) -> tuple[list[str], list[str]]:
+    """纯函数：窗外（判据代边界外）旧项处置——未裁决→删除；已裁决→打 legacyCriteria 标记保留审计。
+    已带 legacyCriteria 标记的项永久保留（重跑幂等，不重复处置）。返回 (待删除 id, 待标记 id)。"""
+    stale: list[str] = []
+    legacy: list[str] = []
+    for item_id, old in existing_docs.items():
+        if item_id in current_ids:
+            continue
+        if old.get("legacyCriteria") is True:
+            continue
+        ruled = isinstance(old.get("ruling"), dict) and old["ruling"].get("status") not in (None, "pending")
+        (legacy if ruled else stale).append(item_id)
+    return stale, legacy
+
+
 def load_day_rets() -> dict[str, float]:
     """frames → 每日全天池收益（首帧→末帧，共享代码≥5 均值）。"""
     text = gzip.open(FRAMES, "rt", encoding="utf-8").read()
@@ -198,12 +217,17 @@ def load_day_rets() -> dict[str, float]:
 
 
 def generate(db) -> dict:
-    """读源 → 构建 → 幂等落库（保留裁决）。返回统计。"""
+    """读源 → 构建 → 幂等落库（保留裁决）。返回统计。
+
+    两侧读源均限现行判据代（tradingDate ≥ CRITERIA_ERA_START）：清单只出可与现行
+    题目版本对比的复核项；窗外已裁决项不删，打 legacyCriteria 标记留档（读口隐藏）。
+    """
     rule_slots: dict[tuple[str, str], dict] = {}
     rule_eod: dict[str, float] = {}
     rule_eod_stages: dict[str, str] = {}
     for doc in db["hotlist_sentiment"].find(
-        {"datasetId": "dragonboard_live", "snapshotType": "half_hour"},
+        {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+         "tradingDate": {"$gte": CRITERIA_ERA_START}},
         {"tradingDate": 1, "slotTime": 1, "rawStage": 1, "emotionScore.score": 1},
     ):
         es = doc.get("emotionScore")
@@ -221,7 +245,7 @@ def generate(db) -> dict:
     jev_slots: dict[tuple[str, str], dict] = {}
     jev_eod_stages: dict[str, str] = {}
     for doc in db["hotlist_jev_sentiment"].find(
-        {"status": "ok"},
+        {"status": "ok", "tradingDate": {"$gte": CRITERIA_ERA_START}},
         {"kind": 1, "tradingDate": 1, "slotTime": 1, "scores.temperature": 1,
          "answers.sequence_stage": 1, "answers.day_stage": 1, "narrativeRaw": 1},
     ):
@@ -243,27 +267,33 @@ def generate(db) -> dict:
 
     day_rets = load_day_rets()
     items = build_review_items(rule_slots, jev_slots, rule_eod, rule_eod_stages, jev_eod_stages, day_rets)
-    existing = {str(d["_id"]): d for d in db["phase_monitor"].find({"kind": "review_items"}, {"_id": 1, "ruling": 1})}
+    existing = {str(d["_id"]): d for d in db["phase_monitor"].find(
+        {"kind": "review_items"}, {"_id": 1, "ruling": 1, "legacyCriteria": 1})}
     items = merge_preserving_rulings(items, existing)
-    # 清理本轮不再产生的旧 id（如 A 类槽位级文档已升为日级，2026-10-01 用户反馈）
-    stale_ids = [i for i in existing if i not in {item["_id"] for item in items}]
+    # 窗外旧口径项处置（2026-10-02 用户裁决）：未裁决旧项清理；已裁决旧项打 legacyCriteria
+    # 标记保留人工裁决审计痕迹（读口隐藏，不进工作台统计）
+    stale_ids, legacy_ids = split_stale(existing, {item["_id"] for item in items})
     if stale_ids:
         db["phase_monitor"].delete_many({"kind": "review_items", "_id": {"$in": stale_ids}})
+    for legacy_id in legacy_ids:
+        db["phase_monitor"].update_one({"_id": legacy_id}, {"$set": {"legacyCriteria": True}})
     for item in items:
         db["phase_monitor"].replace_one({"_id": item["_id"]}, item, upsert=True)
     from collections import Counter
     by_type = Counter(i["type"] for i in items)
     ruled = sum(1 for i in items if i["ruling"]["status"] != "pending")
     return {"total": len(items), "byType": dict(by_type), "ruledPreserved": ruled,
+            "legacyArchived": len(legacy_ids),
             "generatedAt": datetime.now().isoformat(timespec="seconds")}
 
 
 def ensure_review_items(db) -> dict:
     """清单为空时才生成（GET 读口的懒触发）；已有清单直接返回统计。"""
-    n = db["phase_monitor"].count_documents({"kind": "review_items"})
+    query = {"kind": "review_items", "legacyCriteria": {"$ne": True}}
+    n = db["phase_monitor"].count_documents(query)
     if n:
         from collections import Counter
-        docs = list(db["phase_monitor"].find({"kind": "review_items"}, {"type": 1, "ruling.status": 1}))
+        docs = list(db["phase_monitor"].find(query, {"type": 1, "ruling.status": 1}))
         return {"total": len(docs), "byType": dict(Counter(d.get("type") for d in docs)),
                 "ruledPreserved": sum(1 for d in docs if (d.get("ruling") or {}).get("status") not in (None, "pending")),
                 "regenerated": False}
