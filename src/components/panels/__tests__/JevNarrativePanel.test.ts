@@ -193,3 +193,13 @@ describe('涨停叙事页签（打标轨道研究↔展示同步 2026-10-03）',
     }
   })
 })
+
+describe('涨停生态断层标注（§十三，研究↔展示同步）', () => {
+  test('温度计断层卡合同：ecosystemBreak computed + 断层卡元素 + 三特征证据', () => {
+    const source = panelSource()
+    expect(source).toContain('ecosystemBreak')
+    expect(source).toContain('涨停生态断层日')
+    expect(source).toContain('反弹在即')
+    expect(source).toContain('break-card')
+  })
+})

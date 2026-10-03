@@ -153,6 +153,12 @@
 
           <!-- ② 温度计：SVG 温度计 + 锚分位卡 + 温度曲线（ECharts）+ 研究注记 -->
           <section v-show="view === 'thermometer'" class="tab-pane">
+            <div v-if="ecosystemBreak" class="break-card" title="涨停生态断层：家数掉出常态带+涨跌均衡+量能不缩（§十三，反弹在即）">
+              ⚡ 涨停生态断层日 · {{ ecosystemBreak.ztCount }} 家（常态带 P20={{ ecosystemBreak.p20 }}）
+              · 涨跌比 {{ ecosystemBreak.advDecRatio }}（均衡）
+              · 量能 {{ Math.round(ecosystemBreak.amountYi) }} 亿（昨 {{ Math.round(ecosystemBreak.prevAmountYi) }} 亿，未缩）
+              —— 反弹在即信号（全月 1-2 次）
+            </div>
             <div class="thermo-row">
               <div class="thermo-card">
                 <div class="thermo-title">最新槽温度<template v-if="latestSlot"> · {{ latestSlot.slotTime }}</template></div>
@@ -1275,6 +1281,12 @@ const confidencePoints = computed(() => {
 const narrativeProjection = computed<JevNarrativeProjection>(() => parseNarrativeSections(focusDoc.value?.narrativeRaw))
 const narrativeText = computed(() => focusDoc.value?.narrativeRaw || '')
 const anchorMetrics = computed<JevAnchorMetric[]>(() => anchorMetricsOfDoc(focusDoc.value))
+
+/** 涨停生态断层标注（§十三；当前选中日 EOD 文档的 diagnostics.ecosystemBreak） */
+const ecosystemBreak = computed(() => {
+  const diag = eodDoc.value?.diagnostics?.ecosystemBreak
+  return diag?.isBreak ? diag : null
+})
 const anchorRange = computed(() => focusDoc.value?.historyAnchorRange ?? null)
 const usageText = computed(() => {
   const usage = focusDoc.value?.usage
@@ -2273,4 +2285,15 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 .limitup-code { opacity: 0.6; }
+
+/* 涨停生态断层标注（§十三） */
+.break-card {
+  border: 1px solid #b45309;
+  background: rgba(180, 83, 9, 0.12);
+  color: #fbbf24;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
 </style>
