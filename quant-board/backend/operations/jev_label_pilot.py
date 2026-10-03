@@ -1,0 +1,319 @@
+# -*- coding: utf-8 -*-
+"""jev 驱动打标 v3 试点 runner（用户 2026-10-03「开炮」授权，考题集 docs/hotlist-jev/jev-driver-label-v3-questionset.md）。
+
+试点件：全量裁决后与本轨道 runner 收敛（去版本化先例 49b542c8）；落 hotlist_jev_driver_labels_v3_pilot
+（试点临时集合，收官 rename 平移）。与 v2 runner 的差异：
+  1) 题目五道（v3.1 三轴原文同题锚 + Q4 买盘逻辑 + Q5 相位强弱分线）；
+  2) 弹药三新块全结构化直供（THS 身位块 / 板块地位块 / 分位盘面事实行）——不含规则情绪分（Q5 防锚定污染）。
+
+用法（Git Bash，JEV_CF_TOKEN 取自 .env.local）：
+  ./.venv/Scripts/python.exe -m backend.operations.jev_label_pilot \
+      --start 2026-09-04 --end 2026-09-29 [--dry-run] [--workers 2]
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+from backend.services.jev.jev_client import call_jev, parse_jev_response
+
+# 考题集 §二（2026-10-03 用户逐题确认：Q1-Q4 原文保留 + Q5 新增）。Q1-Q3 文案与 v2 (jev_label_jiuyan.py) 逐字一致=同题锚。
+QUESTIONS = {
+    "driver_type": {"type": "choice",
+                    "instructions": "该股今日涨停的最主要驱动类型是哪一类？只依据所给信息打标，不预测后市。",
+                    "criteria": {
+                        "policy": "政策驱动：政策/规划/监管变化直接利好（国家级或地方产业政策、行业规则变化）",
+                        "order_earnings": "订单业绩：订单中标、合同签署、业绩预告/财报超预期等经营实质利好",
+                        "product_event": "产品事件：产品发布/技术突破/项目落地等公司产品或技术层面事件",
+                        "ma_restructure": "重组并购：收购、重组、控制权变更、分拆上市等资本运作",
+                        "industry_cycle": "行业周期：行业景气/价格周期驱动（涨价、供需反转、周期回暖），非单一个股事件",
+                        "capital_flow": "资金接力：无明确新催化或催化本身无新意，主要由资金接力/情绪带动/板块联动上涨",
+                        "concept_stretch": "蹭概念：催化与公司实际业务的实质关联弱或明显蹭热点；注意：催化所指业务若已是公司主业或已有实质承接，不应判此类（那是其他驱动类型）"}},
+    "catalyst_depth": {"type": "choice",
+                       "instructions": "以解析中最主要的涨停催化为准，该催化所指的业务/事件，在解析所述的公司业务版图中落在哪一层？"
+                                       "依据解析中给出的收入占比、订单、项目、参股关系等证据判断，不预测后市。"
+                                       "注意：供货节奏动词（研发→送样→验证→认证→小批量→批量量产→规模出货）与证据可信度规则"
+                                       "（公告/定期报告最高，研报/权威媒体次之，网传/传闻/未证实仅作线索且不得支撑放量层）"
+                                       "仅用于区分新业务的两层；催化所指业务若已是公司主要收入来源，无论叙事如何描述其节奏，一律判核心主业承接。"
+                                       "并购重组类催化：标的公司业务与公司现有主业同业或紧密上下游按第一层判，跨行业转型按第二/三层判，"
+                                       "纯控制权变更/壳资源运作且无明确业务注入按第五层判；"
+                                       "解析给出收入占比/金额证据时，以大额业务为业务版图重心。",
+                       "criteria": {
+                           "core_main_business": "核心主业承接：催化所指业务是公司当前主要收入来源（解析明确的主业或占比最高的业务），且催化事件直接作用于该业务（政策/景气作用于它、订单落在它、产品属于它）；供货节奏描述不改变本层判定",
+                           "new_business_scaling": "新业务放量承接：催化所指新业务已有越过认证线的实质证据——小批量供货、批量交付、中标、形成实质收入（周交付、订单加单、产能爬坡均属此层）；且支撑证据须为公告/定期报告/权威研报级，网传传闻级证据不得支撑本层",
+                           "new_business_early": "新业务早期承接：催化所指新业务处于研发、送样、验证、认证阶段，或仅有合作意向/框架协议/网传订单；前提是催化所指业务与公司存在真实业务关系（研发/送样/认证的是公司自身或其并购/参股实体的业务）——仅靠名称/地域/概念联想的归概念组装层",
+                           "equity_or_affiliate": "股权关联传导：催化主要经由参股公司、控股股东或兄弟公司、参股基金等间接传导，公司自身报表业务不直接承接",
+                           "concept_assembly": "概念组装弱关联：催化与公司业务的实质联系弱——主要靠名称/地域/行业大概念联想、经营范围变更、极小规模贸易型业务等组装而成，解析所述主业与催化所指业务明显不同",
+                           "insufficient_evidence": "信息不足：解析未提供足以判断催化落点的业务信息，不强行归类"}},
+    "catalyst_freshness": {"type": "choice",
+                           "instructions": "该股本次涨停对应的催化事件处于什么阶段？只依据所给信息打标，不预测后市。"
+                                           "以解析中标注的具体日期为准判断：催化事件首次出现距今≤2 个交易日判今日新催化；"
+                                           "日期不可考时才依据信息模糊程度判信息不足。",
+                           "criteria": {
+                               "fresh_catalyst": "今日新催化：解析日期证据显示事件首次出现距今≤2 个交易日（今日公告、今日发布、昨日盘后新消息）",
+                               "continuing": "老催化续命：解析日期证据显示事件首次出现距今>2 个交易日（近 3-30 天已知事件/题材的延续发酵）",
+                               "none": "无明确催化：无具体事件，主要由资金接力/情绪/板块联动带动",
+                               "unclear": "信息不足：解析未提供可判断催化新旧的事件日期，不强行归类"}},
+    "buy_side_logic": {"type": "choice",
+                       "instructions": "该股今日涨停的最主要买盘逻辑是哪一类？只依据所给信息判断，不预测后市。",
+                       "criteria": {
+                           "independent_catalyst": "自身独立催化：今日涨停主要由该公司自身的公告/订单/事件驱动，解析中存在对应的具体事件行（公告、中标、业绩、产品、重组等）",
+                           "sector_follow": "板块联动跟随：同板块多股今日集体异动，该股为跟随位（盘面/板块地位显示该板块今日涨停家数多，且该股封板时间偏晚）",
+                           "high_board_relay": "高位卡位/情绪接力：无明确新催化，主要靠连板高度与情绪地位接续资金（身位显示 3 板及以上梯队，且解析中无新增具体事件行）",
+                           "pure_sentiment": "纯情绪修复：无板块协同、无连板高度、无新增事件，属情绪性反弹"}},
+    "phase_band": {"type": "choice",
+                   "instructions": "仅依据所给盘面事实（涨停家数、炸板率、连板梯队、板块效应及各自近 20 日分位），"
+                                   "判断当日市场情绪相位落在哪一档？只依据所给信息判断，不预测后市。",
+                   "criteria": {
+                       "cold_lt40": "冷带：情绪低迷，涨停家数/梯队高度/板块效应处于近 20 日低位区（对应情绪分 40 分线以下）",
+                       "weak_40_60": "弱势带：情绪中性偏弱，涨停与梯队处于中位附近（对应情绪分 40-60）",
+                       "strong_ge60": "强势带：情绪活跃偏强，涨停家数/梯队高度/板块效应处于近 20 日高位区（对应情绪分 60 分线以上）",
+                       "insufficient": "证据不足：所给盘面事实不足以判断，不强行归类"}},
+}
+
+THS_KEYS = ("one", "two", "three", "four", "high")
+
+
+def _strip(code) -> str:
+    c = str(code or "")
+    return c[2:] if len(c) > 2 and c[:2] in ("sh", "sz", "bj") else c
+
+
+def ths_positions(db, date: str) -> dict[str, dict]:
+    """(date) → code → THS 身位（连板梯队/首封时间/板块/主力净额）。"""
+    f = db["snapshot_frames"].find_one({"tradingDate": date, "slotTime": "15:00"},
+                                       {"limitSummary.thsPools.pools": 1})
+    out: dict[str, dict] = {}
+    for key in THS_KEYS:
+        pool = (((f or {}).get("limitSummary") or {}).get("thsPools") or {}).get("pools", {}).get(key) or {}
+        for it in pool.get("items") or []:
+            out[_strip(it.get("stock_code"))] = {
+                "ladder": key, "continueDay": it.get("continue_day"),
+                "firstSeal": it.get("limit_up_time"), "industry": it.get("industry_block"),
+                "mainNet": it.get("main_net_amount")}
+    return out
+
+
+def market_metrics(db, date: str) -> dict | None:
+    """当日 15:00 盘面事实（涨停家数/炸板率/梯队/最高板高/涨停板块数）。"""
+    f = db["snapshot_frames"].find_one({"tradingDate": date, "slotTime": "15:00"},
+                                       {"limitSummary.zhaban": 1, "limitSummary.continuousBoards": 1,
+                                        "limitSummary.thsPools.pools": 1})
+    ls = (f or {}).get("limitSummary") or {}
+    zb = ls.get("zhaban") or {}
+    cb = ls.get("continuousBoards") or {}
+    pools = (ls.get("thsPools") or {}).get("pools") or {}
+    ladder = {k: (pools.get(k) or {}).get("total") for k in THS_KEYS}
+    if not zb.get("ztCount"):
+        return None
+    return {"ztCount": zb.get("ztCount"), "zhabanRate": zb.get("rate"), "ladder": ladder,
+            "maxBoard": cb.get("maxBoard")}
+
+
+def trading_dates_before(db, date: str, n: int = 20) -> list[str]:
+    rows = db["snapshot_stock_rows"].find(
+        {"type": "half_hour", "tradingDate": {"$lt": date}}, {"tradingDate": 1})
+    return sorted({str(r["tradingDate"]) for r in rows if r.get("tradingDate")})[-n:]
+
+
+def percentile_rank(values: list, cur) -> str:
+    """cur 在 values（近20日历史）中的分位（0-100，不含 cur 自身）；样本 <10 不可算（fail-visible）。"""
+    vals = [v for v in values if isinstance(v, (int, float))]
+    if len(vals) < 10 or not isinstance(cur, (int, float)):
+        return "分位不可算"
+    return f"{sum(1 for v in vals if v < cur) / len(vals) * 100:.0f}"
+
+
+def market_facts_line(db, date: str) -> str:
+    """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。"""
+    cur = market_metrics(db, date)
+    if not cur:
+        return f"盘面事实：{date} 盘面指标缺失（fail-visible）"
+    prev = trading_dates_before(db, date)
+    hist = [m for m in (market_metrics(db, d) for d in prev) if m]
+    zb_hist = [h["zhabanRate"] for h in hist]
+    mb_hist = [h["maxBoard"] for h in hist]
+    zb_rate = f'{cur["zhabanRate"]:.1f}%' if isinstance(cur["zhabanRate"], (int, float)) else "缺"
+    three_plus = (cur["ladder"].get("three") or 0) + (cur["ladder"].get("four") or 0) + (cur["ladder"].get("high") or 0)
+    return (f'盘面事实：全市场涨停 {cur["ztCount"]} 家 · 炸板率 {zb_rate}（近20日 {percentile_rank(zb_hist, cur["zhabanRate"])} 分位）'
+            f' · 连板梯队 一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}'
+            f' · 最高 {cur["maxBoard"]} 板（近20日 {percentile_rank(mb_hist, cur["maxBoard"])} 分位）')
+
+
+def board_position(jiuyan_doc, code: str) -> str:
+    """弹药 5：板块地位（所属韦研板块今日涨停家数 + 该股按涨停时间的封板序）。"""
+    best = None
+    for fl in jiuyan_doc.get("fields") or []:
+        stocks = fl.get("stocks") or []
+        for i, s in enumerate(stocks):
+            if _strip(s.get("code")) == code:
+                times = sorted(str(x.get("time") or "") for x in stocks)
+                pos = times.index(str(s.get("time") or "")) + 1 if str(s.get("time") or "") in times else None
+                cand = {"board": fl.get("name"), "n": len(stocks), "pos": pos}
+                if best is None or (pos or 999) < (best["pos"] or 999):
+                    best = cand
+    if not best:
+        return "板块地位：未在韭研板块结构中定位（fail-visible）"
+    pos = f'第 {best["pos"]} 封板' if best["pos"] else "封板序不可考"
+    return f'板块地位：所属韭研板块「{best["board"]}」今日涨停 {best["n"]} 家，该股板块内 {pos}'
+
+
+def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, rank) -> str:
+    """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 板块地位块 + 热榜。"""
+    jy = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
+    ths = ths_positions(db, date).get(code)
+    if ths:
+        ladder_txt = str(ths["continueDay"]) if ths["continueDay"] is not None else "?"
+        if "连板" not in ladder_txt and "板" not in ladder_txt:
+            ladder_txt += "连板"
+        ths_line = (f'THS 封板梯队：{ladder_txt} · 首封 {ths["firstSeal"]}'
+                    f' · 所属板块 {ths["industry"] or "缺"} · 主力净额 {ths["mainNet"]}')
+    else:
+        ths_line = "未进 THS 封板池（今日触板未封/炸板口径）"
+    expound = str(stock.get("expound") or "").strip()
+    expound_line = expound if expound else "（韦研解析缺失，fail-visible）"
+    day_txt = str(stock.get("day") or "")
+    if day_txt and "天" not in day_txt:
+        day_txt += "天"
+    num_txt = str(stock.get("num") or "")
+    if num_txt and "板" not in num_txt:
+        num_txt += "板"
+    if num_txt and "天" in num_txt:  # 韦研 num 可能自带「2天2板」完整口径，与 day 拼接会重复
+        day_num = f'，{num_txt}'
+    else:
+        day_num = f'，{day_txt}{num_txt}' if (day_txt or num_txt) else ""
+    hot = f"今日热榜最高排名第 {rank} 位" if rank else "未进热榜"
+    return "\n".join([
+        f"{date} 交易日 · {market_facts_line(db, date)}",
+        f"该股：{stock.get('name')}（{code}），今日涨停价 {stock.get('price')}{day_num}，涨停时间 {stock.get('time')}；{hot}",
+        f"身位：{ths_line}",
+        board_position(jy, code),
+        "韭研解析全文：",
+        expound_line,
+    ])
+
+
+def _db():
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    return get_runtime_mongodb_database()
+
+
+def day_population(db, date: str) -> list[dict]:
+    doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"})
+    if not doc:
+        return []
+    out = []
+    for field in doc.get("fields") or []:
+        for stock in field.get("stocks") or []:
+            out.append({"stock": stock, "board": field.get("name") or ""})
+    return out
+
+
+def hotlist_ranks(db, date: str, codes: list[str]) -> dict[str, int]:
+    ranks: dict[str, int] = {}
+    for r in db["snapshot_stock_rows"].find(
+            {"type": "half_hour", "tradingDate": date, "code": {"$in": codes}, "rank": {"$exists": True}},
+            {"code": 1, "rank": 1}):
+        rank, code = r.get("rank"), r.get("code")
+        if isinstance(rank, int) and rank > 0 and (code not in ranks or rank < ranks[code]):
+            ranks[code] = rank
+    return ranks
+
+
+def _label_one(db, col, acc, token, date, code, stock, board, rank):
+    narrative = build_pilot_narrative(db, date, code, stock, board, rank)
+    env, ms = call_jev(acc, token, narrative, QUESTIONS)
+    parsed = parse_jev_response(env, ms)
+    answers = parsed.get("answers") or {}
+    doc = {"_id": f"{date}:{code}", "origin": "driver_label_jiuyan_v3_pilot", "tradingDate": date,
+           "code": code, "name": stock.get("name"),
+           "jiuyanContext": {"board": board, "day": stock.get("day"), "num": stock.get("num"),
+                             "time": stock.get("time"), "inHotlist": rank is not None, "rank": rank},
+           "status": "ok" if parsed["ok"] else "degraded",
+           "narrative": narrative, "questionsRaw": QUESTIONS,
+           "label": answers.get("driver_type", {}).get("choice"),
+           "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
+           "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
+           "catalystDepthProbabilities": answers.get("catalyst_depth", {}).get("probabilities"),
+           "freshness": answers.get("catalyst_freshness", {}).get("choice"),
+           "buySideLogic": answers.get("buy_side_logic", {}).get("choice"),
+           "buySideProbabilities": answers.get("buy_side_logic", {}).get("probabilities"),
+           "phaseBand": answers.get("phase_band", {}).get("choice"),
+           "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
+           "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
+           "responseRaw": None if parsed["ok"] else env,
+           "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    return bool(parsed["ok"])
+
+
+def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2):
+    db = _db()
+    col = db["hotlist_jev_driver_labels_v3_pilot"]
+    dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
+        {"kind": "jiuyan_action", "tradingDate": {"$gte": start, "$lte": end}},
+        {"tradingDate": 1}) if d.get("tradingDate")})
+    if not dates:
+        print(f"窗口 {start}~{end} 无 jiuyan_action final 文档，退出（fail-visible）")
+        return
+    n_ok = n_deg = 0
+    total_usage = 0
+    for di, date in enumerate(dates):
+        pop = day_population(db, date)
+        if not pop:
+            print(f"[{di + 1}/{len(dates)}] {date} 无韭研 final 文档，跳过（披露）")
+            continue
+        items: dict[str, dict] = {}
+        for entry in pop:
+            code = _strip(entry["stock"].get("code"))
+            items[code] = entry
+        codes = list(items.keys())
+        done = {d["code"] for d in col.find({"tradingDate": date, "status": "ok"}, {"code": 1})}
+        codes = [c for c in codes if c not in done]
+        if not codes:
+            print(f"[{di + 1}/{len(dates)}] {date} 全部已打，跳过")
+            continue
+        ranks = hotlist_ranks(db, date, list(items.keys()))
+        if dry_run:
+            sample = items[codes[0]]
+            print(f"[dry] {date} {sample['stock'].get('name')}\n" + build_pilot_narrative(
+                db, date, codes[0], sample["stock"], sample["board"], ranks.get(codes[0])))
+            print(f"[{di + 1}/{len(dates)}] {date} population={len(codes)} hotlistHit={len(ranks)}")
+            continue
+
+        def work(code):
+            entry = items[code]
+            for attempt in range(2):
+                result = _label_one(db, col, acc, token, date, code, entry["stock"],
+                                    entry["board"], ranks.get(code))
+                if result:
+                    return True
+                time.sleep(1.0)
+            return False
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(work, codes))
+        n_ok += sum(results)
+        n_deg += len(results) - sum(results)
+        print(f"[{di + 1}/{len(dates)}] {date} done n={len(codes)} (cum ok={n_ok} deg={n_deg})")
+    if not dry_run:
+        for d in col.find({}, {"usage": 1}):
+            u = d.get("usage") or {}
+            if isinstance(u, dict) and isinstance(u.get("total_tokens"), (int, float)):
+                total_usage += int(u["total_tokens"])
+        print("FINAL:", {"ok": n_ok, "degraded": n_deg, "totalTokens": total_usage})
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--start", required=True)
+    ap.add_argument("--end", required=True)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--workers", type=int, default=2)
+    args = ap.parse_args()
+    tok = os.environ.get("JEV_CF_TOKEN") or ""
+    assert tok, "需要 JEV_CF_TOKEN 环境变量"
+    run(args.start, args.end, args.dry_run, tok,
+        os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6"), args.workers)
