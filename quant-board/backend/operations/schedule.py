@@ -192,6 +192,43 @@ def _run_phase_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """个股驱动打标日增量（advisory 步，2026-10-03 用户裁决挂链）。
+
+    - 门控与相位哨兵同源（当日 jiuyan final + 15:00 盘面帧）；
+    - 子进程=jev_label_jiuyan --start/--end 当日（幂等：已 ok 标签自动跳过，≈21 万 tokens/交易日，用户裁决挂链）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（证据链积累，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_band(db, today)  # 同一原料门控
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
+             "--start", today, "--end", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_PULSE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "jiuyan_label_timeout", "message": f"timeout {_PULSE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "jiuyan_label_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    labeled = None
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        labeled = sum(1 for d in db["hotlist_jev_driver_labels"].find(
+            {"tradingDate": today, "status": "ok", "origin": {"$ne": "phase_band_daily"}}, {"_id": 1}))
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        mongo_error = str(exc)
+    return {"ok": True, "date": today, "labeledToday": labeled}
+
+
 def run_mongodb_snapshot_archive_once(*, dry_run: bool = False) -> dict[str, Any]:
     """盘后快照日归档到 R2（mongodb 后端，2026-09-28）。
 
@@ -291,16 +328,18 @@ def run_after_market_once(
         # 失败/跳过只记结果不翻转整体 ok，也不参与 stopped_at（研究证据链，非生产数据链）
         today = datetime.now(_TZ).strftime("%Y-%m-%d")
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
+        jiuyan_label_result = _run_jiuyan_label_step(today, dry_run=dry_run)
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "phaseBand"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
                 "snapshotArchiveR2": archive_result,
                 "phasePulse": pulse_result,
+                "jiuyanLabel": jiuyan_label_result,
                 "phaseBand": phase_band_result,
             },
             archive_limit=archive_limit,

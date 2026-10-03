@@ -351,6 +351,72 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         print("FINAL:", {"ok": n_ok, "degraded": n_deg, "totalTokens": total_usage})
 
 
+# 情绪周期段位题（questionset-review §十二，2026-10-03 用户批准 3 天试点不全量；归宿=情绪轨道，
+# 试点期借打标 runner 的弹药层执行，落 hotlist_jev_cycle_stage_pilot 临时集合）。
+QUESTIONS_CYCLE = {"cycle_stage": {"type": "choice",
+                   "instructions": "以下是最近 10 个交易日的盘面序列与今日盘面事实。请判断：今日市场情绪处于情绪周期的哪一段？"
+                                   "只依据所给信息判断，不预测后市。游资语境参考：退潮初期是高度刚回落、亏钱效应开始扩散；"
+                                   "冰点是退潮末期——涨停缩到地量、首板堆积、老周期高标出清，反弹在即反而是积极信号。",
+                   "criteria": {
+                       "ebb_early": "退潮初期：最高板自近期峰值明显回落，炸板率/回撤自低位抬升，亏钱效应开始扩散",
+                       "ice_end": "冰点（退潮末期）：涨停家数缩至近段地量、跌停/回撤处于高位后开始收敛、首板堆积而高标独苗或断板，反弹在即",
+                       "repair": "修复启动：冰点之后，首板承接改善、炸板率回落、跌停显著收敛，情绪自低位回升",
+                       "ferment": "发酵主升：梯队逐日抬升、板块效应扩散、涨停家数连日走高",
+                       "climax": "高潮：涨停家数与最高板同时处于近段峰值区",
+                       "divergence": "高潮分歧：家数/高度仍在高位但炸板率快速抬升，龙头开始烂板",
+                       "insufficient": "证据不足：所给序列不足以判断，不强行归类"}}}
+
+
+def trajectory_line(db, date: str, n: int = 10) -> str:
+    """近 n 个交易日逐日序列：日期|涨停|跌停|炸板率%|大幅回撤|最高板。"""
+    prev = trading_dates_before(db, date, n)
+    cells = []
+    for d in prev:
+        m = market_metrics(db, d) or {}
+        die = dieban_count(db, d)
+        rate = m.get("zhabanRate")
+        rate_txt = f'{round(rate, 1)}%' if isinstance(rate, (int, float)) else "?"
+        cells.append(f'{d[5:]}|涨停{m.get("ztCount") or "?"}|跌停{die if die is not None else "?"}'
+                     f'|炸板{rate_txt}|回撤{m.get("drawdownCount") if m.get("drawdownCount") is not None else "?"}|板{m.get("maxBoard") or "?"}')
+    return f'近{len(cells)}个交易日序列（日期|涨停|跌停|炸板率|大幅回撤|最高板）：' + ' ； '.join(cells)
+
+
+def build_cycle_narrative(db, date: str) -> str:
+    lines = [
+        f"{date} 交易日",
+        market_facts_line(db, date),
+        trajectory_line(db, date),
+    ]
+    return chr(10).join(lines)
+
+
+def run_cycle_stage_day(db, dates: list[str], token: str, acc: str) -> None:
+    """情绪周期段位试点：日级独立调用，落 hotlist_jev_cycle_stage_pilot（_id={date}:CYCLE）。"""
+    col = db["hotlist_jev_cycle_stage_pilot"]
+    for date in dates:
+        done = col.find_one({"_id": f"{date}:CYCLE", "status": "ok"})
+        if done:
+            print(f"[cycle] {date} 已判（{done.get('cycleStage')}），跳过")
+            continue
+        narrative = build_cycle_narrative(db, date)
+        env, ms = call_jev(acc, token, narrative, QUESTIONS_CYCLE)
+        parsed = parse_jev_response(env, ms)
+        answers = parsed.get("answers") or {}
+        doc = {"_id": f"{date}:CYCLE", "origin": "cycle_stage_daily", "tradingDate": date,
+               "status": "ok" if parsed["ok"] else "degraded",
+               "narrative": narrative, "questionsRaw": QUESTIONS_CYCLE,
+               "cycleStage": answers.get("cycle_stage", {}).get("choice"),
+               "cycleStageProbabilities": answers.get("cycle_stage", {}).get("probabilities"),
+               "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
+               "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
+               "responseRaw": None if parsed["ok"] else env,
+               "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        u = parsed.get("usage") or {}
+        print(f"[cycle] {date} → {doc['cycleStage']} ok={parsed['ok']} "
+              f"tokens={(u.get('input_tokens') or 0) + (u.get('output_tokens') or 0)}")
+
+
 def run_phase_band_day(db, dates: list[str], token: str, acc: str) -> None:
     """方案 A：Q5 拆日级独立调用——每交易日一次、只喂盘面事实行不喂个股解析（去语境污染）。
     判定落同一 pilot 集合，_id={date}:PHASE、origin=phase_band_daily，与个股文档显式区隔。"""
@@ -385,13 +451,18 @@ if __name__ == "__main__":
     ap.add_argument("--end", required=False)
     ap.add_argument("--phase-band-day", dest="phase_band_day", required=False,
                     help="日级相位哨兵：只对指定交易日跑一次盘面事实判档（盘后链步骤 5）")
+    ap.add_argument("--cycle-stage-day", dest="cycle_stage_day", action="append", default=[],
+                    help="情绪周期段位试点：指定交易日判游资周期段位（可多次传参）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
     args = ap.parse_args()
     tok = os.environ.get("JEV_CF_TOKEN") or ""
     assert tok, "需要 JEV_CF_TOKEN 环境变量"
     acc = os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6")
-    if args.phase_band_day:
+    if args.cycle_stage_day:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+        run_cycle_stage_day(get_runtime_mongodb_database(), args.cycle_stage_day, tok, acc)
+    elif args.phase_band_day:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         run_phase_band_day(get_runtime_mongodb_database(), [args.phase_band_day], tok, acc)
     else:

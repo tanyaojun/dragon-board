@@ -79,7 +79,7 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "phaseBand"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand"]
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
@@ -667,3 +667,111 @@ def test_phase_band_failure_does_not_flip_chain(monkeypatch: Any) -> None:
     assert result["ok"] is True
     assert result["results"]["phaseBand"]["ok"] is False
     assert calls == ["hotlist", "backup", "archiveR2", "pulse", "phaseBand"]
+
+
+def test_jiuyan_label_gate_skips_without_material(monkeypatch: Any) -> None:
+    """无韭研 final → 个股打标跳过，子进程不启动。"""
+    from backend.operations import schedule
+
+    class FakeCollection:
+        def find_one(self, _query, _projection=None):
+            return None
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(schedule.subprocess, "run", lambda *a, **k: ran.append("subprocess"))
+
+    result = schedule._run_jiuyan_label_step("2026-10-11")
+
+    assert result["ok"] is True and result["skipped"] is True
+    assert "no jiuyan final" in result["reason"]
+    assert ran == []
+
+
+def test_jiuyan_label_step_runs_subprocess_and_counts(monkeypatch: Any) -> None:
+    """原料齐 → 子进程跑当日个股打标，回读当日 ok 标签数。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def __init__(self, name):
+            self.name = name
+
+        def find(self, _query, _projection=None):
+            return [{"_id": "1"}, {"_id": "2"}]
+
+        def find_one(self, _query, _projection=None):
+            return {"_id": "x"}
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol(name)
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return type("Proc", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+
+    result = schedule._run_jiuyan_label_step("2026-10-12")
+
+    assert result["ok"] is True and result["labeledToday"] == 2
+    assert "backend.operations.jev_label_jiuyan" in " ".join(captured["cmd"])
+    assert "--start" in captured["cmd"] and "2026-10-12" in captured["cmd"]
+
+
+def test_jiuyan_label_failure_does_not_flip_chain(monkeypatch: Any) -> None:
+    """advisory 语义：个股打标失败只进 results，不翻转整体 ok。"""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"storage_backend": "mongodb", "archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: "mongo-db",
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: calls.append("hotlist") or {"ok": True, "written": 1},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: calls.append("backup") or {"ok": True, "skipped": True, "reason": "dry_run"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: calls.append("archiveR2") or {"ok": True, "dryRun": True, "snapshotTypes": {}},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_phase_pulse_step",
+        lambda today, dry_run=False: calls.append("pulse") or {"ok": True, "month": "2026-10"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_jiuyan_label_step",
+        lambda today, dry_run=False: calls.append("jiuyanLabel") or {"ok": False, "error": {"code": "jiuyan_label_failed", "message": "boom"}},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_phase_band_step",
+        lambda today, dry_run=False: calls.append("phaseBand") or {"ok": True, "phaseBand": "cold_lt40"},
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=True)
+
+    assert result["ok"] is True
+    assert result["results"]["jiuyanLabel"]["ok"] is False
+    assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand"]
