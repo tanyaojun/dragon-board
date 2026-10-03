@@ -59,58 +59,96 @@
             </div>
           </div>
 
-          <!-- ① 总览方格：槽位 × 维度彩色方格矩阵 + 日级方格 + 缺失日标注 -->
+          <!-- ① 叙事概览：三段式阅读动线（现在→日内演化→EOD 口径），无重复无仲裁
+               （视觉语言对齐热榜情绪面板：色用在文字/色点/细进度条上，不用大面积饱和底色） -->
           <section v-show="view === 'grid'" class="tab-pane">
             <div v-if="degradedReason" class="note-line warn-line">⚠️ jev 轨道降级：{{ degradedReason }}</div>
-            <div v-if="!slotGrid.length" class="empty-row">该日无 jev 槽位文档</div>
-            <table v-else class="grid-matrix">
-              <thead>
-                <tr>
-                  <th class="grid-head">维度</th>
-                  <th v-for="col in slotGridColumns" :key="col" class="grid-head">{{ col }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in slotGrid" :key="row.key">
-                  <td class="grid-row-label">{{ row.label }}</td>
-                  <td v-for="cell in row.cells" :key="cell.column" class="grid-cell-wrap">
-                    <div class="grid-cell" :class="{ degraded: cell.degraded, 'no-data': cell.noData }"
-                      :style="gridCellStyle(row.key, cell)" :title="gridCellTitle(cell)">
-                      {{ cell.text ?? '--' }}
+            <div v-if="!latestSlot && !eodDoc" class="empty-row">该日无 jev 文档</div>
+            <template v-else>
+              <div class="stage-hero" :style="{ borderLeftColor: stageColor(latestSlotStageName) }">
+                <div class="hero-label">JEV 市场热度计 · 最新槽 {{ latestSlot?.slotTime || seriesDate }}</div>
+                <div class="hero-stage" :style="{ color: stageColor(latestSlotStageName) }">{{ latestSlotStageName ?? '档位缺失' }}</div>
+                <div class="hero-meta">
+                  <span v-if="latestFrameName && latestFrameName !== latestSlotStageName" class="overview-chip overview-chip-warn"
+                    title="当前帧档与日内序列档分歧：瞬时冲击信号">当前帧·{{ latestFrameName }}</span>
+                  <span v-if="latestCrowding?.layerName" class="overview-chip" :class="{ 'overview-chip-warn': latestCrowding.warn }">拥挤·{{ latestCrowding.layerName }}</span>
+                  <span v-if="latestConfidence?.hesitant" class="overview-chip overview-chip-warn">⚠️置信 P{{ Math.round((latestProbability ?? 0) * 100) }}% 犹豫</span>
+                  <span v-if="anchorRange" class="overview-chip overview-chip-muted" :title="anchorRange">锚 {{ anchorRange }}</span>
+                </div>
+                <div class="hero-score-bar">
+                  <span class="hero-score-num">{{ latestTemperature ?? '--' }}</span>
+                  <div class="hero-score-track">
+                    <div class="hero-score-fill" :style="{ width: `${latestTemperature ?? 0}%`, background: tempGradient(latestTemperature) }"></div>
+                  </div>
+                  <span class="hero-score-hint">温度 0-100</span>
+                </div>
+                <div v-if="latestCrowdingProb != null" class="hero-score-bar">
+                  <span class="hero-score-num">{{ Math.round(latestCrowdingProb * 100) }}</span>
+                  <div class="hero-score-track">
+                    <div class="hero-score-fill" :style="{ width: `${latestCrowdingProb * 100}%`, background: crowdingRiskGradient() }"></div>
+                  </div>
+                  <span class="hero-score-hint">拥挤抗风险 0-100（拥挤三层概率合计）</span>
+                </div>
+                <div v-else-if="latestSlot" class="hero-score-bar hero-score-missing">
+                  <span class="hero-score-hint">拥挤不可用（归层分布缺失，归层名见 chip）</span>
+                </div>
+                <div v-if="latestProbability != null" class="hero-score-bar">
+                  <span class="hero-score-num">P{{ Math.round(latestProbability * 100) }}%</span>
+                  <div class="hero-score-track">
+                    <div class="hero-score-fill" :style="{ width: `${latestProbability * 100}%`, background: confidenceGradient(latestProbability) }"></div>
+                  </div>
+                  <span class="hero-score-hint">置信 0-100</span>
+                </div>
+                <div v-else-if="latestSlot" class="hero-score-bar hero-score-missing">
+                  <span class="hero-score-hint">置信不可用（{{ latestConfidence?.noDistribution ? 'score 型无分布' : '答案缺失' }}）</span>
+                </div>
+                <div class="hero-summary">{{ heroSummary }}</div>
+              </div>
+
+              <div class="sub-block">
+                <div class="block-header">
+                  <span class="block-title">📍 当日逐槽 · 日内演化</span>
+                  <span class="section-count">{{ slots.length }} 槽</span>
+                </div>
+                <div v-if="!slotCards.length" class="empty-row">该日无槽位文档</div>
+                <div v-else class="slot-cards">
+                  <div v-for="card in slotCards" :key="card.slotTime" class="slot-card"
+                    :class="{ degraded: card.degraded, 'no-data': card.noData }" :title="card.title">
+                    <div class="slot-card-head">
+                      <span>{{ card.slotTime }}</span>
+                      <span v-if="card.degraded" class="slot-card-flag">降级</span>
+                      <span v-else-if="card.noData" class="slot-card-flag">无数据</span>
                     </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="dayGrid.length" class="sub-block-title">🗓️ 日级方格（窗口 {{ dayDocs.length }} 日，EOD 口径）</div>
-            <table v-if="dayGrid.length" class="grid-matrix">
-              <thead>
-                <tr>
-                  <th class="grid-head">维度</th>
-                  <th v-for="col in dayGridColumns" :key="col" class="grid-head"
-                    :class="{ 'grid-col-active': col === selectedDate }">{{ col.slice(5) }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in dayGrid" :key="row.key">
-                  <td class="grid-row-label">{{ row.label }}</td>
-                  <td v-for="cell in row.cells" :key="cell.column" class="grid-cell-wrap">
-                    <div class="grid-cell" :class="{ degraded: cell.degraded, 'no-data': cell.noData }"
-                      :style="gridCellStyle(row.key, cell)" :title="gridCellTitle(cell)">
-                      {{ cell.text ?? '--' }}
+                    <div class="slot-card-stage" :style="{ color: stageColor(card.seqName) }">{{ card.seqName ?? '--' }}</div>
+                    <div class="slot-card-nums">
+                      <span :style="{ color: tempColor(card.temp) }">🌡 {{ card.temp ?? '--' }}</span>
+                      <span class="slot-card-layer"><span class="legend-dot" :style="{ background: crowdingColor(card.layer) }"></span>{{ card.layerName ?? '--' }}</span>
                     </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="missingDays.length" class="note-line warn-line">
-              ⚠️ 窗口缺失 {{ missingDays.length }} 日（无任何 jev 文档）：
-              {{ missingDays.map((d) => d.tradingDate.slice(5)).join('、') }}
-            </div>
-            <div v-if="rangeDegradedCount" class="note-line warn-line">⚠️ 窗口内降级/无数据文档 {{ rangeDegradedCount }} 份（方格内虚线框标注）</div>
-            <div class="legend-line">
-              方格色语义：档位=冷热五档（蓝→红）；温度=蓝→红渐变；拥挤=层色（橙红=毒层）；置信=阈值色+透明度梯度；--=缺失（不伪造）
-            </div>
+                    <div class="slot-card-sub">
+                      <template v-if="card.frameName && card.frameName !== card.seqName">帧分歧：{{ card.frameName }} · </template>{{ card.pText }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="dayDocs.length" class="sub-block">
+                <div class="block-header">
+                  <span class="block-title">🗓️ 日级窗口（EOD 口径）</span>
+                  <span class="section-count">{{ dayDocs.length }} 日</span>
+                </div>
+                <div class="overview-chips">
+                  <span v-if="eodDayStageName" class="overview-chip">EOD 档位·{{ eodDayStageName }}</span>
+                  <span v-if="dayPatternName" class="overview-chip">路径·{{ dayPatternName }}</span>
+                  <span v-if="eodCrowdingPoint?.layerName" class="overview-chip" :class="{ 'overview-chip-warn': eodCrowdingPoint.warn }">拥挤·{{ eodCrowdingPoint.layerName }}</span>
+                  <span v-if="dayTemperature != null" class="overview-chip">日级温度·{{ dayTemperature }}</span>
+                </div>
+                <div class="trend-chart" ref="dayChartRef"></div>
+                <div v-if="missingDays.length" class="note-line warn-line">
+                  ⚠️ 窗口缺失 {{ missingDays.length }} 日（无任何 jev 文档）：{{ missingDays.map((d) => d.tradingDate.slice(5)).join('、') }}
+                </div>
+                <div v-if="rangeDegradedCount" class="note-line warn-line">⚠️ 窗口内降级/无数据文档 {{ rangeDegradedCount }} 份</div>
+              </div>
+            </template>
           </section>
 
           <!-- ② 温度计：SVG 温度计 + 锚分位卡 + 温度曲线（ECharts）+ 研究注记 -->
@@ -329,7 +367,7 @@
                     <div class="dist-head">
                       <span class="dist-label">{{ row.label }}</span>
                       <span class="dist-choice" :style="row.tone ? { color: row.tone } : undefined">{{
-                        row.choiceName ?? (row.score != null ? `score ${row.score}` : '--') }}</span>
+                        row.choiceName ?? (row.score != null ? `锚期望 ${row.score}` : '--') }}</span>
                       <span class="dist-meta">
                         <template v-if="row.confidence != null">置信 {{ Math.round(row.confidence * 100) }}%</template>
                         <template v-if="row.probability != null"> · P{{ Math.round(row.probability * 100) }}%</template>
@@ -347,15 +385,18 @@
                         <span class="dist-row-pct">{{ opt.pct == null ? '--' : `${opt.pct}%` }}</span>
                       </div>
                     </div>
-                    <div v-if="row.isScore" class="dist-score-note">score 型无概率分布（模型协议事实）</div>
+                    <div v-if="row.isScore" class="dist-score-note">{{ row.scoreNoDist
+                      ? 'score 型未携带锚点分布（缺失如实标注，不伪造）'
+                      : 'score 型分布=10 档锚点概率（锚期望 / 9 × 100 = 还原温度分）' }}</div>
                   </div>
                 </div>
               </div>
               <div v-if="!confidencePoints.length" class="empty-row">暂无序列档概率趋势</div>
               <div v-else class="trend-chart" ref="confidenceChartRef"></div>
               <div class="note-line research-line">
-                🔎 研究注记：choice 答案携带 probabilities/confidence；score 型答案（温度）模型协议上无分布——面板显式标「无分布」，不伪造置信；
-                犹豫阈值 60%（top 概率），与热榜情绪面板口径一致。
+                🔎 研究注记：choice 答案携带 probabilities/confidence；score 型答案（温度）实测同样携带 10 档锚点分布 + 模型置信
+                （2026-10-02 生产库 100% 覆盖；锚期望 / 9 × 100 = 还原温度分），格内 C%=模型置信、锚点离散度 margin/熵进 tooltip，
+                仅确缺失时标「无分布」；犹豫阈值 60%（top 概率，choice 题），与热榜情绪面板口径一致。
               </div>
             </template>
           </section>
@@ -469,25 +510,22 @@ import {
   JEV_STAGE_NAMES,
   JEV_STAGE_ORDER,
   jevChoiceName,
+  jevCrowdingProbability,
   jevScore,
 } from '@/services/hotlist/hotlistJevApi'
 import {
   anchorMetricsOfDoc,
-  buildDayGrid,
-  buildSlotGrid,
   confidenceMetrics,
   crowdingTimeline,
   crowdingTransitions,
-  findNarrativeSection,
+  countDegradedDocs,
   JEV_HESITANT_THRESHOLD,
   layerStats,
   parseNarrativeSections,
+  trimRangeWindow,
   type JevAnchorMetric,
   type JevConfidenceMetrics,
   type JevCrowdingPoint,
-  type JevGridCell,
-  type JevGridKey,
-  type JevGridRow,
   type JevNarrativeProjection,
 } from '@/services/hotlist/jevNarrativeProjection'
 import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevMissingDay } from '@/types/hotlistJev'
@@ -496,7 +534,7 @@ const props = defineProps<{ visible: boolean; triggerRect?: DOMRect | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const TABS = [
-  { key: 'grid', label: '总览方格', icon: '🧮' },
+  { key: 'grid', label: '叙事概览', icon: '🧮' },
   { key: 'thermometer', label: '温度计', icon: '🌡️' },
   { key: 'crowding', label: '拥挤度', icon: '🧲' },
   { key: 'confidence', label: '置信度', icon: '🎯' },
@@ -542,7 +580,18 @@ const missingDaysTitle = computed(
 )
 
 async function ensureRange(days: number): Promise<boolean> {
-  if (days <= daysLoaded.value && dayDocs.value.length) return true
+  if (daysLoaded.value > 0 && dayDocs.value.length) {
+    if (days === daysLoaded.value) return true
+    if (days < daysLoaded.value) {
+      // 窗口收缩：按快照交易日历就地裁剪缓存，内容必须随窗口变化（2026-10-08 评审修复）
+      const trimmed = trimRangeWindow(days, { days: dayDocs.value, missingDays: missingDays.value })
+      dayDocs.value = trimmed.days
+      missingDays.value = trimmed.missingDays
+      daysLoaded.value = days
+      rangeDegradedCount.value = countDegradedDocs(dayDocs.value)
+      return true
+    }
+  }
   const reqId = ++rangeReqId
   try {
     const result = await fetchHotlistJevRange(days)
@@ -569,6 +618,10 @@ async function ensureSeries(date?: string): Promise<boolean> {
     const result = await fetchHotlistJevSeries(date || undefined)
     if (reqId !== seriesReqId) return false
     if (result.degraded) {
+      // fail-visible：降级时清空旧日期数据，防止残留 slots 以新选中日期高亮误读
+      slots.value = []
+      eodDoc.value = null
+      seriesDate.value = ''
       seriesError.value = result.reason || 'jev 单日序列不可用'
       return false
     }
@@ -639,6 +692,9 @@ watch(
   (visible) => {
     if (visible && !loaded.value && !loading.value) {
       loadAll().then(() => nextTick(() => renderAllCharts()))
+    } else if (visible && loaded.value) {
+      // 关闭→重开路径：容器被 v-if 重建，旧 echarts 实例已 stale，需重建图表
+      nextTick(() => renderAllCharts())
     }
   },
   { immediate: true },
@@ -717,39 +773,95 @@ function thermoTubeH(value: number | null): number {
   return TUBE_HEIGHT * (Math.max(0, Math.min(100, value)) / 100)
 }
 
-// ---------- 总览方格投影 ----------
-const slotGrid = computed<JevGridRow[]>(() => buildSlotGrid(slots.value))
-const slotGridColumns = computed(() => slotGrid.value[0]?.cells.map((cell) => cell.column) ?? [])
-const dayGrid = computed<JevGridRow[]>(() => buildDayGrid(dayDocs.value))
-const dayGridColumns = computed(() => dayGrid.value[0]?.cells.map((cell) => cell.column) ?? [])
+// ---------- 总览投影（hero 大卡 + 紧凑卡行，视觉对齐热榜情绪面板） ----------
+const latestFrameName = computed(() => jevChoiceName(latestSlot.value, 'frame_stage'))
+const latestConfidence = computed(() => confidenceMetrics(latestSlot.value?.answers?.sequence_stage))
+const latestProbability = computed(() => latestConfidence.value.probability)
+// 拥挤抗风险轴：拥挤三层概率合计（hotlistJevApi 唯一数值口径，透明聚合不伪造）
+const latestCrowdingProb = computed(() => jevCrowdingProbability(latestSlot.value, 'crowding'))
+const dayPatternName = computed(() => (eodDoc.value ? jevChoiceName(eodDoc.value, 'day_pattern') : null))
+const heroSummary = computed(() => {
+  const raw = latestSlot.value?.narrativeRaw
+  // fail-visible 判据=narrativeRaw 整体缺失才标缺失；无【】导语但段头开头的旧文档不算缺失
+  if (!raw) return '叙事缺失（降级/旧文档）'
+  return parseNarrativeSections(raw).header || raw.slice(0, 60)
+})
 
-function gridCellStyle(rowKey: JevGridKey, cell: JevGridCell): Record<string, string> {
-  if (cell.text == null && cell.numeric == null) return {}
-  if (rowKey === 'temperature' || rowKey === 'day_temperature') {
-    return cell.numeric != null ? { background: tempColor(cell.numeric), color: '#fff' } : {}
-  }
-  if (rowKey === 'confidence' || rowKey === 'day_confidence') {
-    return cell.numeric != null ? { background: confidenceBg(cell.numeric), color: '#fff' } : {}
-  }
-  const key = cell.key
-  if (key == null) return {}
-  if (rowKey === 'crowding' || rowKey === 'day_crowding') {
-    const darkText = key === 'no_crowding' || key === 'insufficient_evidence'
-    return { background: crowdingColor(key), color: darkText ? '#1e1e1e' : '#fff' }
-  }
-  // 档位行：冷热语义色 12% 透明底 + 实色文字
-  const name = JEV_STAGE_NAMES[key] ?? key
-  const color = STAGE_COLORS[name]
-  return color ? { color, background: `${color}1f` } : {}
+function tempGradient(value: number | null): string {
+  if (value == null) return 'transparent'
+  return `linear-gradient(90deg, ${tempColor(0)}, ${tempColor(value)})`
 }
 
-function gridCellTitle(cell: JevGridCell): string {
-  const parts: string[] = [cell.column]
-  if (cell.degraded) parts.push('降级')
-  if (cell.noData) parts.push('无数据')
-  parts.push(cell.text != null ? cell.text : '缺失')
-  return parts.join(' · ')
+function confidenceColor(value: number | null): string {
+  if (value == null) return '#7f8c8d'
+  if (value >= 0.8) return '#2ed573'
+  if (value >= JEV_HESITANT_THRESHOLD) return '#ffb142'
+  return '#ff4757'
 }
+
+/** 置信进度条填充：灰→阈值语义色的起点渐变 */
+function confidenceGradient(value: number | null): string {
+  if (value == null) return 'transparent'
+  return `linear-gradient(90deg, rgba(127, 140, 141, 0.35), ${confidenceColor(value)})`
+}
+
+/** 拥挤抗风险轴填充：绿（安全）→黄→红（拥挤）固定风险语义渐变，宽度=拥挤概率 */
+function crowdingRiskGradient(): string {
+  return 'linear-gradient(90deg, #2ed573, #ffb142 55%, #ff4757)'
+}
+
+function crowdingRiskColor(value: number | null): string {
+  if (value == null) return '#7f8c8d'
+  if (value >= 0.7) return '#ff4757'
+  if (value >= 0.4) return '#ffb142'
+  return '#2ed573'
+}
+
+interface SlotCard {
+  slotTime: string
+  frameName: string | null
+  seqName: string | null
+  temp: number | null
+  layer: string | null
+  layerName: string | null
+  pText: string
+  degraded: boolean
+  noData: boolean
+  title: string
+}
+
+const slotCards = computed<SlotCard[]>(() =>
+  slots.value.map((slot) => {
+    const metrics = confidenceMetrics(slot.answers?.sequence_stage)
+    const answer = slot.answers?.crowding
+    const layer = answer && answer.type === 'choice' ? answer.choice ?? null : null
+    return {
+      slotTime: slot.slotTime || '--',
+      frameName: jevChoiceName(slot, 'frame_stage'),
+      seqName: jevChoiceName(slot, 'sequence_stage'),
+      temp: jevScore(slot, 'temperature'),
+      layer,
+      layerName: layer ? (CROWDING_NAMES[layer] ?? layer) : null,
+      pText:
+        metrics.probability != null
+          ? `P${Math.round(metrics.probability * 100)}%`
+          : metrics.noDistribution
+            ? '无分布'
+            : '--',
+      degraded: slot.status === 'degraded',
+      noData: slot.status === 'no_data',
+      title: [
+        slot.slotTime,
+        slot.status === 'degraded' ? `降级：${slot.errorCode || ''} ${slot.errorDetail || ''}`.trim() : '',
+        `帧 ${jevChoiceName(slot, 'frame_stage') ?? '--'}`,
+        `序列 ${jevChoiceName(slot, 'sequence_stage') ?? '--'}`,
+        `温度 ${jevScore(slot, 'temperature') ?? '--'}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    }
+  }),
+)
 
 // ---------- 温度计投影 ----------
 const latestSlot = computed(() => (slots.value.length ? slots.value[slots.value.length - 1] : null))
@@ -888,7 +1000,23 @@ const confidenceRows = computed(() => {
           value: null,
           noDist: true,
           degraded: false,
-          title: `${slot.slotTime} ${label}：score 型答案无概率分布（模型协议事实）`,
+          title: `${slot.slotTime} ${label}：score 型未携带锚点分布（缺失如实标注）`,
+        }
+      }
+      if (metrics.kind === 'score') {
+        // score 型（温度）：无 choice 概率语义，但实测携带 10 档锚点分布+模型置信（2026-10-02 生产库 100% 覆盖）；
+        // 格内 C%=模型置信，不套用 P 犹豫阈值色（置信校准不同），锚点离散度进 tooltip
+        const bits = [slot.slotTime, 'score 型']
+        if (metrics.confidence != null) bits.push(`模型置信 ${Math.round(metrics.confidence * 100)}%`)
+        if (metrics.margin != null) bits.push(`margin ${(metrics.margin * 100).toFixed(0)}`)
+        if (metrics.entropy != null) bits.push(`熵 ${metrics.entropy.toFixed(2)}`)
+        return {
+          column: slot.slotTime || '--',
+          text: metrics.confidence != null ? `C${Math.round(metrics.confidence * 100)}%` : '--',
+          value: null,
+          noDist: false,
+          degraded: slot.status === 'degraded',
+          title: bits.join(' · '),
         }
       }
       const bits = [slot.slotTime]
@@ -916,7 +1044,7 @@ const confidenceStats = computed(() => {
   return [
     { label: '序列档平均 P', value: avg != null ? `${avg}%` : '--', sub: `${probs.length}/${slots.value.length} 槽有分布` },
     { label: '犹豫槽（P<60%）', value: String(hesitant), sub: `阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
-    { label: 'score 型槽', value: `${slots.value.length}`, sub: '温度题无分布（协议事实）' },
+    { label: 'score 型槽', value: `${slots.value.filter((slot) => slot.answers?.temperature?.type === 'score').length}`, sub: '温度题=锚点分布+模型置信口径' },
   ]
 })
 
@@ -925,6 +1053,8 @@ interface DistRow {
   key: string
   label: string
   isScore: boolean
+  /** score 型且确实未携带锚点分布（note 文案分叉） */
+  scoreNoDist: boolean
   choice: string | null
   choiceName: string | null
   tone: string
@@ -970,6 +1100,13 @@ function choiceToneOf(questionKey: string, choiceKey: string | null): string {
   return STAGE_COLORS[name] ?? '#9aa0a6'
 }
 
+/** 锚点条色（温度冷热语义：锚0=冷蓝 → 锚9=热红，与温度计色阶同语言） */
+function anchorTone(anchor: string): string {
+  const index = Number(anchor)
+  if (!Number.isFinite(index)) return '#9aa0a6'
+  return `hsl(${Math.max(0, 210 - 21 * index).toFixed(0)}, 72%, 52%)`
+}
+
 function distRowOf(doc: HotlistJevDoc, kind: 'slot' | 'eod', question: { key: string; label: string }): DistRow {
   const answer = doc.answers?.[question.key]
   const metrics = confidenceMetrics(answer)
@@ -979,21 +1116,33 @@ function distRowOf(doc: HotlistJevDoc, kind: 'slot' | 'eod', question: { key: st
       ? CROWDING_ORDER
       : JEV_STAGE_ORDER
   const names = question.key === 'day_pattern' ? JEV_PATTERN_NAMES : question.key === 'crowding' ? CROWDING_NAMES : JEV_STAGE_NAMES
-  const probabilities = answer && answer.type === 'choice' ? answer.probabilities ?? {} : {}
-  const rows = order
-    .filter((optionKey) => optionKey in probabilities || optionKey === metrics.choice)
-    .map((optionKey) => ({
-      key: optionKey,
-      name: names[optionKey] ?? optionKey,
-      pct: typeof probabilities[optionKey] === 'number' ? Math.round((probabilities[optionKey] as number) * 1000) / 10 : null,
-      color: choiceToneOf(question.key, optionKey),
-    }))
+  // score 型（温度）分布键=锚点 "0"-"9"（2026-10-02 实测生产 100% 携带）；choice 型按规范选项顺序展开
+  const isScoreRow = answer?.type === 'score'
   const scoreAnswer = answer && answer.type === 'score' ? answer : null
-  const legend = scoreAnswer?.legend ?? {}
+  const legend: Record<string, string> = scoreAnswer?.legend ?? {}
+  const probabilities = answer && (answer.type === 'choice' || answer.type === 'score') ? answer.probabilities ?? {} : {}
+  const rows = isScoreRow
+    ? Object.keys(probabilities)
+        .sort((a, b) => Number(a) - Number(b))
+        .map((anchor) => ({
+          key: anchor,
+          name: `${legend[anchor] ?? anchor}分`,
+          pct: typeof probabilities[anchor] === 'number' ? Math.round((probabilities[anchor] as number) * 1000) / 10 : null,
+          color: anchorTone(anchor),
+        }))
+    : order
+        .filter((optionKey) => optionKey in probabilities || optionKey === metrics.choice)
+        .map((optionKey) => ({
+          key: optionKey,
+          name: names[optionKey] ?? optionKey,
+          pct: typeof probabilities[optionKey] === 'number' ? Math.round((probabilities[optionKey] as number) * 1000) / 10 : null,
+          color: choiceToneOf(question.key, optionKey),
+        }))
   return {
     key: question.key,
     label: question.label,
     isScore: metrics.kind === 'score',
+    scoreNoDist: metrics.kind === 'score' && metrics.noDistribution,
     choice: metrics.choice,
     choiceName: metrics.choice != null ? (names[metrics.choice] ?? metrics.choice) : null,
     tone: choiceToneOf(question.key, metrics.choice),
@@ -1095,37 +1244,25 @@ const evidenceGroups = computed(() => {
     .map(([key, value]) => ({ key, text: prettyJson(value) ?? String(value) }))
 })
 
-// ---------- ECharts（温度曲线 / 拥挤堆叠 / 置信趋势） ----------
+// ---------- ECharts（温度曲线 / 拥挤堆叠 / 置信趋势 / 日级柱图） ----------
 const thermoChartRef = ref<HTMLElement | null>(null)
 const crowdingChartRef = ref<HTMLElement | null>(null)
 const confidenceChartRef = ref<HTMLElement | null>(null)
+const dayChartRef = ref<HTMLElement | null>(null)
 let thermoChart: echarts.ECharts | null = null
 let crowdingChart: echarts.ECharts | null = null
 let confidenceChart: echarts.ECharts | null = null
+let dayChart: echarts.ECharts | null = null
 
-function cssVar(name: string, fallback: string): string {
-  if (typeof document === 'undefined') return fallback
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  return value || fallback
+interface StageRunPoint {
+  label: string
+  stage: string
 }
 
-function initChart(container: HTMLElement | null, existing: echarts.ECharts | null): echarts.ECharts | null {
-  if (!container) return null
-  if (existing && existing.getDom() !== container) {
-    existing.dispose()
-    return null
-  }
-  return existing ?? echarts.init(container)
-}
-
-function renderThermoChart() {
-  const points = thermoPoints.value
-  const chart = initChart(thermoChartRef.value, thermoChart)
-  if (!chart || !points.length) return
-  thermoChart = chart
-  const textColor = cssVar('--text-secondary', '#9aa0a6')
-  const borderColor = cssVar('--border-color', '#333333')
-  // 档位铺底（同热榜面板 markArea 连续段语言）
+/** 档位铺底 markArea（连续同档合并；同热榜情绪面板铺底语言，温度/日级柱图共用） */
+function buildStageMarkArea(
+  points: StageRunPoint[],
+): Array<[Record<string, unknown>, Record<string, unknown>]> {
   const markAreaData: Array<[Record<string, unknown>, Record<string, unknown>]> = []
   let runStage = ''
   let runStart = ''
@@ -1155,6 +1292,34 @@ function renderThermoChart() {
     runLen += 1
   }
   flushRun()
+  return markAreaData
+}
+
+function cssVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
+
+function initChart(container: HTMLElement | null, existing: echarts.ECharts | null): echarts.ECharts | null {
+  if (!container) return null
+  // 容器被 v-if 重建后旧实例的 DOM 已分离：dispose 后必须重建并返回新实例供调用方回写引用，
+  // 否则滞留的已 dispose 实例会让后续渲染永远早退（评审修复：饼图一次 1d↔多日往返后消失）
+  if (existing && existing.getDom() !== container) {
+    existing.dispose()
+    return echarts.init(container)
+  }
+  return existing ?? echarts.init(container)
+}
+
+function renderThermoChart() {
+  const points = thermoPoints.value
+  const chart = initChart(thermoChartRef.value, thermoChart)
+  if (!chart || !points.length) return
+  thermoChart = chart
+  const textColor = cssVar('--text-secondary', '#9aa0a6')
+  const borderColor = cssVar('--border-color', '#333333')
+  const markAreaData = buildStageMarkArea(points)
 
   const series: echarts.SeriesOption[] = [
     windowKey.value === '1d'
@@ -1212,8 +1377,14 @@ function renderThermoChart() {
 function renderCrowdingChart() {
   if (windowKey.value === '1d') return
   const stats = windowLayerStats.value
+  if (!stats.total) {
+    // 无归层数据：清掉旧图不留残影，容器随 v-if 卸载
+    crowdingChart?.dispose()
+    crowdingChart = null
+    return
+  }
   const chart = initChart(crowdingChartRef.value, crowdingChart)
-  if (!chart || !stats.total) return
+  if (!chart) return
   crowdingChart = chart
   const textColor = cssVar('--text-secondary', '#9aa0a6')
   // 环形图（层占比语义，对齐热榜情绪面板阶段分布饼图语言）；逐日归层已由日级方格承担
@@ -1230,11 +1401,22 @@ function renderCrowdingChart() {
           `${params.name ?? ''}：${params.value ?? 0} 日（${params.percent ?? 0}%）`,
       },
       legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: textColor, fontSize: 10 } },
+      // 环形图中心总日数（对齐热榜情绪面板「阶段分布」中心统计语言）
+      graphic: [
+        {
+          type: 'text', left: 'center', top: '38%',
+          style: { text: String(stats.total), fill: textColor, fontSize: 26, fontWeight: 'bold', textAlign: 'center' },
+        },
+        {
+          type: 'text', left: 'center', top: '50%',
+          style: { text: 'EOD 总日数', fill: textColor, fontSize: 10, textAlign: 'center' },
+        },
+      ],
       series: [
         {
-          name: '窗口 EOD 归层分布', type: 'pie', radius: ['32%', '58%'], center: ['50%', '44%'],
+          name: '窗口 EOD 归层分布', type: 'pie', radius: ['46%', '68%'], center: ['50%', '44%'],
           data,
-          label: { color: textColor, fontSize: 10, formatter: '{b} {c}日' },
+          label: { color: textColor, fontSize: 10, formatter: '{b} {c}日（{d}%）' },
           labelLine: { lineStyle: { color: textColor } },
         },
       ],
@@ -1309,16 +1491,105 @@ function renderConfidenceChart() {
   chart.resize()
 }
 
+function renderDayChart() {
+  const days = dayDocs.value
+  const chart = initChart(dayChartRef.value, dayChart)
+  if (!chart || !days.length) return
+  dayChart = chart
+  const textColor = cssVar('--text-secondary', '#9aa0a6')
+  const borderColor = cssVar('--border-color', '#333333')
+  const points = days.map((day) => {
+    const eod = day.eod
+    const metrics = eod ? confidenceMetrics(eod.answers?.day_stage) : null
+    return {
+      label: day.tradingDate.slice(5),
+      temp: eod ? jevScore(eod, 'day_temperature') : null,
+      p: metrics && metrics.probability != null ? Math.round(metrics.probability * 100) : null,
+      crowd: eod ? jevCrowdingProbability(eod, 'day_crowding') : null,
+      stage: eod ? (jevChoiceName(eod, 'day_stage') ?? '') : '',
+      pattern: eod ? (jevChoiceName(eod, 'day_pattern') ?? '') : '',
+    }
+  })
+  chart.setOption(
+    {
+      grid: { left: '8%', right: '8%', top: '18%', bottom: '16%', containLabel: true },
+      tooltip: {
+        trigger: 'axis', confine: true,
+        formatter: (params: unknown) => {
+          const list = Array.isArray(params) ? params : [params]
+          const first = list[0] as { dataIndex: number } | undefined
+          const point = first ? points[first.dataIndex] : undefined
+          if (!point) return ''
+          return [
+            `<div style="font-weight:600;margin-bottom:4px;">${point.label}</div>`,
+            `<div style="color:${STAGE_COLORS[point.stage] ?? textColor};margin-bottom:4px;">档位：${point.stage || '缺失'}</div>`,
+            `<div>日级温度：${point.temp == null ? '--' : Math.round(point.temp)}</div>`,
+            `<div>日级拥挤：${point.crowd == null ? '--' : `P${Math.round(point.crowd * 100)}%`}</div>`,
+            `<div>序列档置信：${point.p == null ? '--' : `P${point.p}%`}</div>`,
+            point.pattern ? `<div>路径：${point.pattern}</div>` : '',
+            point.stage === '' ? '<div style="color:#f39c12;">EOD 未生成</div>' : '',
+          ].join('')
+        },
+      },
+      legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: textColor, fontSize: 10 } },
+      xAxis: {
+        type: 'category', data: points.map((point) => point.label),
+        axisLabel: { color: textColor, fontSize: 10, rotate: 30 },
+        axisLine: { lineStyle: { color: borderColor } },
+      },
+      yAxis: {
+        type: 'value', min: 0, max: 100, name: '分值（0-100）',
+        nameTextStyle: { color: textColor, fontSize: 9 },
+        splitLine: { lineStyle: { color: borderColor, type: 'dashed' } },
+        axisLabel: { color: textColor },
+      },
+      series: [
+        {
+          // 图例代表色（旧面板温度紫柱）；柱体实际色=分值语义渐变
+          name: '日级温度', type: 'bar', barWidth: 12,
+          itemStyle: { color: '#9b59b6' },
+          data: points.map((point) => ({
+            value: point.temp,
+            itemStyle: { color: tempColor(point.temp) },
+          })),
+          markArea: { silent: true, data: buildStageMarkArea(points) },
+        },
+        {
+          name: '日级档置信', type: 'bar', barWidth: 12,
+          itemStyle: { color: '#4a90e2' },
+          data: points.map((point) => ({
+            value: point.p,
+            itemStyle: { color: confidenceColor(point.p != null ? point.p / 100 : null) },
+          })),
+        },
+        {
+          name: '日级拥挤', type: 'bar', barWidth: 12,
+          itemStyle: { color: '#ff9f43' },
+          data: points.map((point) => ({
+            value: point.crowd != null ? Math.round(point.crowd * 100) : null,
+            itemStyle: { color: crowdingRiskColor(point.crowd) },
+          })),
+        },
+      ],
+      backgroundColor: 'transparent',
+    },
+    { notMerge: true },
+  )
+  chart.resize()
+}
+
 function renderAllCharts() {
   if (view.value === 'thermometer') renderThermoChart()
   if (view.value === 'crowding' && windowKey.value !== '1d') renderCrowdingChart()
   if (view.value === 'confidence') renderConfidenceChart()
+  if (view.value === 'grid') renderDayChart()
 }
 
 function handleResize() {
   thermoChart?.resize()
   crowdingChart?.resize()
   confidenceChart?.resize()
+  dayChart?.resize()
 }
 
 onMounted(() => {
@@ -1330,9 +1601,11 @@ onUnmounted(() => {
   thermoChart?.dispose()
   crowdingChart?.dispose()
   confidenceChart?.dispose()
+  dayChart?.dispose()
   thermoChart = null
   crowdingChart = null
   confidenceChart = null
+  dayChart = null
 })
 </script>
 <style scoped>
@@ -1735,6 +2008,115 @@ onUnmounted(() => {
 }
 
 .trend-chart { width: 100%; height: 240px; }
+
+/* ---------- 总览 sub-block 卡片行（对齐热榜情绪面板） ---------- */
+.sub-block {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.block-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.block-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.section-count {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1px 8px;
+}
+.slot-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.slot-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.slot-card.degraded { border-style: dashed; border-color: #f39c12; }
+.slot-card.no-data { opacity: 0.5; }
+.slot-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.slot-card-flag {
+  font-size: 9px;
+  color: #f39c12;
+  border: 1px solid rgba(243, 156, 18, 0.4);
+  border-radius: 6px;
+  padding: 0 4px;
+  font-weight: 400;
+}
+.slot-card-stage { font-size: 15px; font-weight: bold; }
+.slot-card-nums {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+.slot-card-layer { display: inline-flex; align-items: center; gap: 4px; }
+.slot-card-sub { font-size: 10px; color: var(--text-secondary); }
+
+/* ---------- 总览页（视觉对齐热榜情绪面板：hero 大卡 + 圆徽指标卡 + 紧凑卡行，色在文字/色点/细条上） ---------- */
+.stage-hero {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hero-label { font-size: 11px; color: var(--text-secondary); }
+.hero-stage { font-size: 28px; font-weight: bold; color: var(--text-title); line-height: 1.2; }
+.hero-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hero-score-bar { display: flex; align-items: center; gap: 8px; }
+.hero-score-num {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--text-title);
+  min-width: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.hero-score-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+.hero-score-fill { height: 100%; border-radius: 3px; }
+.hero-score-missing .hero-score-hint { color: #f39c12; }
+.hero-score-hint { font-size: 10px; color: var(--text-secondary); white-space: nowrap; }
+.hero-summary { font-size: 12px; color: var(--text-secondary); }
+.overview-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.overview-chip {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+}
+.overview-chip-warn { color: #ff4757; border-color: rgba(255, 71, 87, 0.45); }
+.overview-chip-muted { opacity: 0.75; }
+.slot-card-layer { display: inline-flex; align-items: center; gap: 4px; }
+.slot-card-sub { font-size: 10px; color: var(--text-secondary); }
 
 /* ---------- 答案分布明细（choice 全分布 + score 锚点） ---------- */
 .dist-block { display: flex; flex-direction: column; gap: 8px; }

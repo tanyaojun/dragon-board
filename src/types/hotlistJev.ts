@@ -16,6 +16,10 @@ export interface HotlistJevScoreAnswer {
   type: 'score'
   score?: number
   legend?: Record<string, string>
+  /** 10 档锚点概率分布（键 "0"-"9"；2026-10-02 实测生产 100% 携带，锚期望/9×100=还原分；旧文档/降级可能缺失） */
+  probabilities?: Record<string, number>
+  /** 模型置信 0-1（与 choice 同字段名，实测同携带） */
+  confidence?: number
 }
 
 export type HotlistJevAnswer = HotlistJevChoiceAnswer | HotlistJevScoreAnswer
@@ -52,6 +56,9 @@ export interface HotlistJevDoc {
   responseRaw?: Record<string, unknown> | null
   /** 实际下发题集（slot=四问 / eod=日四问；旧文档可能缺失） */
   questionsRaw?: Record<string, unknown> | null
+  /** 题目判据演进号（如 "v2.4"；compute 落库写入，2026-10-02 起生效）。
+   *  缺失=旧代产物（口径未知）：判据随版本漂移（实测拥挤读数月均差 5 倍），跨版本不可对比 */
+  questionSetVersion?: string | null
 }
 
 export interface HotlistJevSeriesResponse {

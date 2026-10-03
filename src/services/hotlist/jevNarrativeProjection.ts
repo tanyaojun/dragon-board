@@ -2,17 +2,12 @@
 // jev 叙事投影纯函数（JEV 叙事面板深加工层，2026-10-08 立项）。
 // 只做无副作用投影：叙事分段 / 锚分位解析 / 置信指标 / 拥挤时间线 / 方格矩阵 / 层统计。
 // fail-visible：任何缺失返回 null/空结构，不伪造档位、0 分或概率分布；
-// score 型答案天生无概率分布（jev 仅 choice 答案携带 probabilities/confidence），显式标注不装作有。
+// score 型（温度）答案实测携带 10 档锚点概率分布 + confidence（2026-10-02 生产库 100% 覆盖，锚期望/9×100=还原分）；
+// 仅当确实缺失时标 noDistribution（fail-visible），不把 TS 类型缺字段当协议事实（2026-10-02 纠错）。
 // 结论唯一来源 = QuantBoard 后端 jev 轨道（hotlist_jev_sentiment）落库文档，本模块零计算补齐。
 
-import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc } from '@/types/hotlistJev'
-import {
-  JEV_CROWDING_NAMES,
-  JEV_CROWDING_WARN_LAYERS,
-  JEV_PATTERN_NAMES,
-  JEV_STAGE_NAMES,
-  jevScore,
-} from './hotlistJevApi'
+import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc, HotlistJevMissingDay } from '@/types/hotlistJev'
+import { JEV_CROWDING_NAMES, JEV_CROWDING_WARN_LAYERS } from './hotlistJevApi'
 
 /** 犹豫阈值（与热榜情绪面板 jevHesitant 同一口径）：top 概率 < 60% 视为低置信 */
 export const JEV_HESITANT_THRESHOLD = 0.6
@@ -149,9 +144,9 @@ export interface JevConfidenceMetrics {
   kind: 'choice' | 'score' | 'missing'
   /** 归层/档位英文键（choice 答案的原始 choice） */
   choice: string | null
-  /** 所选选项的 top 概率（0-1；缺失 null） */
+  /** 所选选项的 top 概率（0-1；缺失 null；score 型无 choice 恒 null，锚点离散度看 margin/熵） */
   probability: number | null
-  /** 模型自带 confidence 字段（缺失 null；score 型无此字段） */
+  /** 模型自带 confidence 字段（缺失 null；score 型实测同样携带） */
   confidence: number | null
   /** top1 − top2 概率差（选项 <2 个为 null） */
   margin: number | null
@@ -159,7 +154,7 @@ export interface JevConfidenceMetrics {
   entropy: number | null
   /** top 概率低于犹豫阈值 */
   hesitant: boolean
-  /** score 型=true（无概率分布是模型协议事实，不是数据缺失事故） */
+  /** true=答案确实未携带概率分布（score 型缺锚点分布）；携带时 false——类型缺字段≠协议事实（2026-10-02 纠错） */
   noDistribution: boolean
   noDistributionReason: string | null
 }
@@ -176,15 +171,37 @@ export const EMPTY_CONFIDENCE: JevConfidenceMetrics = {
   noDistributionReason: null,
 }
 
-/** choice/score 答案的置信投影；score 型显式标注无分布（不伪造、不当作异常） */
+/** choice/score 答案的置信投影；score 型消费锚点分布+confidence，仅确缺失时标 noDistribution（fail-visible） */
 export function confidenceMetrics(answer: HotlistJevAnswer | null | undefined): JevConfidenceMetrics {
   if (!answer) return EMPTY_CONFIDENCE
   if (answer.type === 'score') {
+    // 2026-10-02 纠错：score 答案实测携带 10 档锚点分布（键 "0"-"9"，锚期望/9×100=还原分）+confidence；
+    // 旧逻辑直接标「无分布」是把 TS 类型缺字段当协议事实（把有说成没有）
+    const probabilities = answer.probabilities ?? null
+    const values = probabilities
+      ? Object.values(probabilities).filter(
+          (value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0,
+        )
+      : []
+    const sorted = [...values].sort((a, b) => b - a)
+    const sum = values.reduce((total, value) => total + value, 0)
+    let entropy: number | null = null
+    if (values.length > 1 && sum > 0) {
+      let h = 0
+      for (const value of values) {
+        if (value > 0) h -= (value / sum) * Math.log(value / sum)
+      }
+      entropy = h / Math.log(values.length)
+    }
+    const noDistribution = values.length === 0
     return {
       ...EMPTY_CONFIDENCE,
       kind: 'score',
-      noDistribution: true,
-      noDistributionReason: 'score 型答案无概率分布',
+      confidence: typeof answer.confidence === 'number' ? answer.confidence : null,
+      margin: sorted.length >= 2 && sorted[0] != null && sorted[1] != null ? sorted[0] - sorted[1] : null,
+      entropy,
+      noDistribution,
+      noDistributionReason: noDistribution ? 'score 型答案未携带锚点分布' : null,
     }
   }
   const probabilities = answer.probabilities ?? {}
@@ -298,7 +315,6 @@ export interface JevLayerStats {
   /** 逃生率（0-1；分母 0 为 null） */
   escapeRate: number | null
 }
-
 /** 拥挤层统计：slot 文档读 crowding、EOD 文档读 day_crowding（按传入集合各自取键） */
 export function layerStats(docs: HotlistJevDoc[], kind: 'slot' | 'eod'): JevLayerStats {
   const key = kind === 'eod' ? 'day_crowding' : 'crowding'
@@ -314,179 +330,41 @@ export function layerStats(docs: HotlistJevDoc[], kind: 'slot' | 'eod'): JevLaye
   return { total, counts, escapeCount, escapeRate: total > 0 ? escapeCount / total : null }
 }
 
-// ---------- 方格矩阵（总览方格投影） ----------
+// ---------- 窗口收缩裁剪（缓存更宽时就地收缩，不重拉） ----------
 
-export type JevGridKey =
-  | 'frame_stage'
-  | 'sequence_stage'
-  | 'temperature'
-  | 'crowding'
-  | 'confidence'
-  | 'day_stage'
-  | 'day_pattern'
-  | 'day_temperature'
-  | 'day_crowding'
-  | 'day_confidence'
-
-export interface JevGridCell {
-  /** 列键：槽位网格=slotTime；日级网格=tradingDate */
-  column: string
-  /** 语义键（档位/归层英文键，着色用；缺失 null） */
-  key: string | null
-  /** 展示文本（缺失 null → 界面渲染 '--'） */
-  text: string | null
-  /** 数值（温度/置信着色与 tooltip 用；缺失 null） */
-  numeric: number | null
-  degraded: boolean
-  noData: boolean
+export interface JevRangeWindow {
+  days: HotlistJevDayEntry[]
+  missingDays: HotlistJevMissingDay[]
 }
 
-export interface JevGridRow {
-  key: JevGridKey
-  label: string
-  cells: JevGridCell[]
-}
-
-function rawChoice(doc: HotlistJevDoc, key: string): string | null {
-  const answer = doc.answers?.[key]
-  return answer && answer.type === 'choice' ? answer.choice ?? null : null
-}
-
-function choiceNameOf(key: string | null, nameMap: Record<string, string>): string | null {
-  return key != null ? (nameMap[key] ?? key) : null
-}
-
-function baseCell(doc: HotlistJevDoc, column: string): JevGridCell {
+/**
+ * 按快照交易日历就地收缩到最近 days 个历日：日历 = 有文档日 ∪ 缺失日并集排序后取尾部，
+ * 再拆回文档日/缺失日（2026-10-08 评审修复：宽→窄窗口切换时内容必须随窗口变化）。
+ */
+export function trimRangeWindow(days: number, range: JevRangeWindow): JevRangeWindow {
+  const calendar = [
+    ...range.days.map((day) => day.tradingDate),
+    ...range.missingDays.map((day) => day.tradingDate),
+  ]
+    .filter((date) => !!date)
+    .sort()
+  const windowSet = new Set(calendar.slice(-Math.max(1, days)))
+  const byDate = (a: { tradingDate: string }, b: { tradingDate: string }) =>
+    a.tradingDate.localeCompare(b.tradingDate)
   return {
-    column,
-    key: null,
-    text: null,
-    numeric: null,
-    degraded: doc.status === 'degraded',
-    noData: doc.status === 'no_data',
+    days: range.days.filter((day) => windowSet.has(day.tradingDate)).sort(byDate),
+    missingDays: range.missingDays.filter((day) => windowSet.has(day.tradingDate)).sort(byDate),
   }
 }
 
-/** 槽位 × 维度方格：行=当前帧档/序列档/温度/拥挤归层/置信，列=slotTime 升序 */
-export function buildSlotGrid(slots: HotlistJevDoc[]): JevGridRow[] {
-  if (!slots.length) return SLOT_GRID_EMPTY
-  return [
-    {
-      key: 'frame_stage',
-      label: '当前帧档',
-      cells: slots.map((slot) => ({
-        ...baseCell(slot, slot.slotTime || '--'),
-        key: rawChoice(slot, 'frame_stage'),
-        text: choiceNameOf(rawChoice(slot, 'frame_stage'), JEV_STAGE_NAMES),
-      })),
-    },
-    {
-      key: 'sequence_stage',
-      label: '序列档',
-      cells: slots.map((slot) => ({
-        ...baseCell(slot, slot.slotTime || '--'),
-        key: rawChoice(slot, 'sequence_stage'),
-        text: choiceNameOf(rawChoice(slot, 'sequence_stage'), JEV_STAGE_NAMES),
-      })),
-    },
-    {
-      key: 'temperature',
-      label: '温度',
-      cells: slots.map((slot) => ({
-        ...baseCell(slot, slot.slotTime || '--'),
-        numeric: jevScore(slot, 'temperature'),
-        text: jevScore(slot, 'temperature')?.toString() ?? null,
-      })),
-    },
-    {
-      key: 'crowding',
-      label: '拥挤归层',
-      cells: slots.map((slot) => ({
-        ...baseCell(slot, slot.slotTime || '--'),
-        key: rawChoice(slot, 'crowding'),
-        text: choiceNameOf(rawChoice(slot, 'crowding'), JEV_CROWDING_NAMES),
-      })),
-    },
-    {
-      key: 'confidence',
-      label: '置信',
-      cells: slots.map((slot) => {
-        const metrics = confidenceMetrics(slot.answers?.sequence_stage)
-        return {
-          ...baseCell(slot, slot.slotTime || '--'),
-          key: metrics.choice,
-          numeric: metrics.probability,
-          text: metrics.probability != null ? `P${Math.round(metrics.probability * 100)}%` : null,
-        }
-      }),
-    },
-  ]
-}
-
-const SLOT_GRID_EMPTY: JevGridRow[] = []
-
-/** 日级 × 维度方格：行=日级档/路径形态/日温度/日拥挤/日置信，列=tradingDate */
-export function buildDayGrid(days: HotlistJevDayEntry[]): JevGridRow[] {
-  const eodRows: HotlistJevDoc[] = days.map((day) => day.eod).filter((eod): eod is HotlistJevDoc => !!eod)
-  if (!eodRows.length) return []
-  const cellOf = (day: HotlistJevDayEntry, fill: (eod: HotlistJevDoc) => Partial<JevGridCell>): JevGridCell => ({
-    ...baseCell(day.eod ?? ({ status: 'no_data' } as HotlistJevDoc), day.tradingDate || '--'),
-    ...fill(day.eod ?? ({ status: 'no_data' } as HotlistJevDoc)),
-  })
-  return [
-    {
-      key: 'day_stage',
-      label: '日级档',
-      cells: days.map((day) =>
-        cellOf(day, (eod) => ({
-          key: rawChoice(eod, 'day_stage'),
-          text: choiceNameOf(rawChoice(eod, 'day_stage'), JEV_STAGE_NAMES),
-        })),
-      ),
-    },
-    {
-      key: 'day_pattern',
-      label: '路径形态',
-      cells: days.map((day) =>
-        cellOf(day, (eod) => ({
-          key: rawChoice(eod, 'day_pattern'),
-          text: choiceNameOf(rawChoice(eod, 'day_pattern'), JEV_PATTERN_NAMES),
-        })),
-      ),
-    },
-    {
-      key: 'day_temperature',
-      label: '日温度',
-      cells: days.map((day) =>
-        cellOf(day, (eod) => ({
-          numeric: jevScore(eod, 'day_temperature'),
-          text: jevScore(eod, 'day_temperature')?.toString() ?? null,
-        })),
-      ),
-    },
-    {
-      key: 'day_crowding',
-      label: '日拥挤',
-      cells: days.map((day) =>
-        cellOf(day, (eod) => ({
-          key: rawChoice(eod, 'day_crowding'),
-          text: choiceNameOf(rawChoice(eod, 'day_crowding'), JEV_CROWDING_NAMES),
-        })),
-      ),
-    },
-    {
-      key: 'day_confidence',
-      label: '日置信',
-      cells: days.map((day) =>
-        cellOf(day, (eod) => {
-          const metrics = confidenceMetrics(eod.answers?.day_stage)
-          return {
-            key: metrics.choice,
-            numeric: metrics.probability,
-            text: metrics.probability != null ? `P${Math.round(metrics.probability * 100)}%` : null,
-          }
-        }),
-      ),
-    },
-  ]
+/** 窗口内降级/无数据文档数（slot + eod，与后端 degradedCount 同口径） */
+export function countDegradedDocs(days: HotlistJevDayEntry[]): number {
+  let count = 0
+  for (const day of days) {
+    for (const slot of day.slots) {
+      if (slot.status === 'degraded' || slot.status === 'no_data') count += 1
+    }
+    if (day.eod && (day.eod.status === 'degraded' || day.eod.status === 'no_data')) count += 1
+  }
+  return count
 }

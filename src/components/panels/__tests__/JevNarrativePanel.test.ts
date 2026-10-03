@@ -26,7 +26,7 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     for (const key of ['grid', 'thermometer', 'crowding', 'confidence', 'narrative', 'raw']) {
       expect(source).toContain(`'${key}'`)
     }
-    for (const label of ['总览方格', '温度计', '拥挤度', '置信度', '叙事全文', '原始返回']) {
+    for (const label of ['叙事概览', '温度计', '拥挤度', '置信度', '叙事全文', '原始返回']) {
       expect(source).toContain(label)
     }
   })
@@ -61,7 +61,7 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('evidenceGroups')
     expect(source).toContain('rawEnvelopeText')
     // fail-visible：缺失 '--' 占位、降级标注、score 型无分布显式标注
-    expect(source).toContain("cell.text ?? '--'")
+    expect(source).toContain("?? '--'")
     expect(source).toContain('无分布')
     expect(source).toContain('errorDetail')
     // EOD 未生成/缺失日如实标注
@@ -91,10 +91,52 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('熵')
     expect(source).toContain('distRows')
     expect(source).toContain('score 锚点')
+    // score 型（温度）纠错（2026-10-02）：实测携带锚点分布+置信，不再误标「无分布」——
+    // 矩阵格 C%=模型置信（不套 P 阈值色），明细卡渲染锚点分布条+锚期望，仅确缺失才标无分布
+    expect(source).toContain("metrics.kind === 'score'")
+    expect(source).toContain('锚期望')
+    expect(source).toContain('anchorTone')
+    expect(source).toContain('scoreNoDist')
+    expect(source).toContain('score 型分布=10 档锚点概率')
     // ECharts 三图容器
     expect(source).toContain('thermoChartRef')
     expect(source).toContain('crowdingChartRef')
     expect(source).toContain('confidenceChartRef')
+  })
+
+  test('总览页视觉对齐热榜情绪面板（2026-10-03 用户裁决弃用大色块矩阵）', () => {
+    const source = panelSource()
+    // hero 大卡 + 圆徽指标卡 + 紧凑卡行；大色块矩阵不再回流
+    expect(source).toContain('stage-hero')
+    expect(source).toContain('hero-score-bar')
+    expect(source).toContain('overview-chip')
+    expect(source).toContain('slot-cards')
+    expect(source).toContain('block-header')
+    // 三段式阅读动线：分歧才标注（当前帧 chip 仅在帧≠序列时出现），重复指标卡不回流
+    expect(source).toContain("latestFrameName !== latestSlotStageName")
+    expect(source).not.toContain('metrics-grid')
+    // 置信度/拥挤抗风险进度条（hero 三轴：热度→风险→可信度）+ 日级窗口 ECharts 三柱
+    expect(source).toContain('置信 0-100')
+    expect(source).toContain('confidenceGradient')
+    expect(source).toContain('拥挤抗风险 0-100')
+    expect(source).toContain('jevCrowdingProbability')
+    expect(source).toContain('crowdingRiskGradient')
+    expect(source).toContain('dayChartRef')
+    expect(source).toContain("name: '日级温度'")
+    expect(source).toContain("name: '日级档置信'")
+    // 回归锁：distRowOf 中 legend 必须声明于 rows 使用之前（TDZ：score 温度答案生产 100% 携带分布，
+    // 顺序颠倒会在 .map() 同步读取时 ReferenceError 使整面板渲染崩溃，源码合同无法被运行时测试捕获）
+    const legendAt = source.indexOf('const legend: Record<string, string> =')
+    const legendUseAt = source.indexOf('name: `${legend[anchor] ?? anchor}分`')
+    expect(legendAt).toBeGreaterThan(-1)
+    expect(legendUseAt).toBeGreaterThan(-1)
+    expect(legendAt).toBeLessThan(legendUseAt)
+    expect(source).toContain("name: '日级拥挤'")
+    expect(source).not.toContain('buildSlotGrid')
+    expect(source).not.toContain('buildDayGrid')
+    expect(source).not.toContain('gridCellStyle')
+    // 环形图中心总日数（阶段分布语言）
+    expect(source).toContain('EOD 总日数')
   })
 })
 
@@ -110,8 +152,8 @@ describe('jevNarrativeProjection 投影模块合同', () => {
       'crowdingTimeline',
       'crowdingTransitions',
       'layerStats',
-      'buildSlotGrid',
-      'buildDayGrid',
+      'trimRangeWindow',
+      'countDegradedDocs',
     ]) {
       expect(source).toContain(`export function ${fn}`)
     }

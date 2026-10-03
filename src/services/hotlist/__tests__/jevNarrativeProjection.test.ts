@@ -4,15 +4,15 @@ import { describe, expect, test } from 'vitest'
 import type { HotlistJevDoc } from '@/types/hotlistJev'
 import {
   anchorMetricsOfDoc,
-  buildDayGrid,
-  buildSlotGrid,
   confidenceMetrics,
+  countDegradedDocs,
   crowdingTimeline,
   crowdingTransitions,
   findNarrativeSection,
   layerStats,
   parseAnchorQuantiles,
   parseNarrativeSections,
+  trimRangeWindow,
 } from '@/services/hotlist/jevNarrativeProjection'
 
 const SLOT_NARRATIVE = [
@@ -129,13 +129,32 @@ describe('confidenceMetrics 置信指标', () => {
     expect(metrics.margin).toBeCloseTo(0.02)
   })
 
-  test('score 型：显式无分布，不是 missing 也不是异常', () => {
+  test('score 型未携带分布：显式 noDistribution，不是 missing 也不是异常', () => {
     const metrics = confidenceMetrics({ type: 'score', score: 3, legend: {} })
     expect(metrics.kind).toBe('score')
     expect(metrics.noDistribution).toBe(true)
-    expect(metrics.noDistributionReason).toContain('无概率分布')
+    expect(metrics.noDistributionReason).toContain('未携带锚点分布')
     expect(metrics.probability).toBeNull()
     expect(metrics.margin).toBeNull()
+  })
+
+  test('score 型携带锚点分布：消费 confidence/margin/熵（2026-10-02 实测生产 100% 携带，旧「无分布」判定是类型缺字段误判）', () => {
+    // 2026-09-30 15:00 生产文档实测：锚点分布期望 6.28 → 还原温度 69.8 ≈ scores.temperature 69.7
+    const metrics = confidenceMetrics({
+      type: 'score',
+      score: 6.27,
+      probabilities: { '0': 0, '1': 0.01, '2': 0.02, '3': 0.03, '4': 0.05, '5': 0.13, '6': 0.24, '7': 0.33, '8': 0.17, '9': 0.02 },
+      confidence: 0.53,
+    })
+    expect(metrics.kind).toBe('score')
+    expect(metrics.noDistribution).toBe(false)
+    expect(metrics.probability).toBeNull() // score 无 choice，无 top 概率语义
+    expect(metrics.confidence).toBe(0.53)
+    expect(metrics.margin).toBeCloseTo(0.09) // top1 0.33 − top2 0.24
+    expect(metrics.entropy).not.toBeNull()
+    expect(metrics.entropy!).toBeGreaterThan(0)
+    expect(metrics.entropy!).toBeLessThan(1)
+    expect(metrics.hesitant).toBe(false) // 犹豫阈值只作用于 choice top 概率
   })
 
   test('缺失答案返回 missing', () => {
@@ -191,63 +210,42 @@ describe('layerStats 层统计与逃生率', () => {
   })
 })
 
-describe('buildSlotGrid / buildDayGrid 方格矩阵', () => {
-  const slots = [
-    {
-      slotTime: '10:00', status: 'ok',
-      answers: {
-        frame_stage: choiceAnswer('ferment', {}),
-        sequence_stage: choiceAnswer('ferment', { ferment: 0.62 }),
-        crowding: choiceAnswer('no_crowding', {}),
-      },
-      scores: { temperature: 55.4 },
-    },
-    { slotTime: '10:30', status: 'degraded', answers: null, scores: null },
-  ] as unknown as HotlistJevDoc[]
+describe('trimRangeWindow 窗口收缩 / countDegradedDocs 降级计数', () => {
+  const mkDay = (date: string) => ({ tradingDate: date, slots: [], eod: null })
+  const wide = {
+    days: [mkDay('2026-10-08'), mkDay('2026-10-07'), mkDay('2026-10-06'), mkDay('2026-10-02')],
+    missingDays: [{ tradingDate: '2026-10-03', reason: 'no_jev_docs' }],
+  }
 
-  test('五行齐全；缺失槽 degradation 如实、文本 null', () => {
-    const grid = buildSlotGrid(slots)
-    expect(grid.map((row) => row.key)).toEqual([
-      'frame_stage', 'sequence_stage', 'temperature', 'crowding', 'confidence',
-    ])
-    expect(grid[0]?.cells[0]).toMatchObject({ column: '10:00', key: 'ferment', text: '发酵' })
-    expect(grid[0]?.cells[1]).toMatchObject({ column: '10:30', degraded: true, text: null })
-    expect(grid[2]?.cells[0]).toMatchObject({ numeric: 55, text: '55' })
-    expect(grid[3]?.cells[0]).toMatchObject({ key: 'no_crowding', text: '无拥挤' })
-    expect(grid[4]?.cells[0]).toMatchObject({ numeric: 0.62, text: 'P62%' })
-    expect(grid[4]?.cells[1]?.text).toBeNull()
+  test('宽→窄按交易日历尾部收缩，文档日与缺失日同步拆分', () => {
+    const trimmed = trimRangeWindow(3, wide)
+    expect(trimmed.days.map((d) => d.tradingDate)).toEqual(['2026-10-06', '2026-10-07', '2026-10-08'])
+    expect(trimmed.missingDays).toEqual([])
+    const trimmed5 = trimRangeWindow(5, wide)
+    expect(trimmed5.days).toHaveLength(4)
+    expect(trimmed5.missingDays.map((d) => d.tradingDate)).toEqual(['2026-10-03'])
   })
 
-  test('空集合返回空矩阵', () => {
-    expect(buildSlotGrid([])).toEqual([])
-    expect(buildDayGrid([])).toEqual([])
+  test('days=1 只留最新历日；空输入安全', () => {
+    expect(trimRangeWindow(1, wide).days.map((d) => d.tradingDate)).toEqual(['2026-10-08'])
+    expect(trimRangeWindow(3, { days: [], missingDays: [] })).toEqual({ days: [], missingDays: [] })
   })
 
-  test('日级网格：EOD 缺失日 no_data 列，字段各归位', () => {
+  test('countDegradedDocs 与后端 degradedCount 同口径（slot+eod）', () => {
     const days = [
       {
-        tradingDate: '2026-10-07',
-        slots: [],
-        eod: {
-          status: 'ok',
-          answers: {
-            day_stage: choiceAnswer('retreat', { retreat: 0.58 }),
-            day_pattern: choiceAnswer('rally_fade', {}),
-            day_crowding: choiceAnswer('late_seal_weakness', {}),
-          },
-          scores: { day_temperature: 41 },
-        } as unknown as HotlistJevDoc,
+        tradingDate: '2026-10-08',
+        slots: [
+          { status: 'ok' },
+          { status: 'degraded' },
+          { status: 'no_data' },
+        ],
+        eod: { status: 'ok' },
       },
-      { tradingDate: '2026-10-08', slots: [], eod: null },
-    ]
-    const grid = buildDayGrid(days)
-    expect(grid.map((row) => row.key)).toEqual([
-      'day_stage', 'day_pattern', 'day_temperature', 'day_crowding', 'day_confidence',
-    ])
-    expect(grid[0]?.cells[0]).toMatchObject({ column: '2026-10-07', text: '退潮' })
-    expect(grid[1]?.cells[0]).toMatchObject({ text: '冲高回落' })
-    expect(grid[2]?.cells[0]).toMatchObject({ numeric: 41 })
-    expect(grid[4]?.cells[0]).toMatchObject({ numeric: 0.58, text: 'P58%' })
-    expect(grid[0]?.cells[1]).toMatchObject({ column: '2026-10-08', noData: true, text: null })
+      { tradingDate: '2026-10-07', slots: [], eod: { status: 'degraded' } },
+      { tradingDate: '2026-10-06', slots: [], eod: null },
+    ] as unknown as Parameters<typeof countDegradedDocs>[0]
+    expect(countDegradedDocs(days)).toBe(3)
+    expect(countDegradedDocs([])).toBe(0)
   })
 })
