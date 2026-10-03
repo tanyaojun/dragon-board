@@ -126,3 +126,15 @@ v2.2 三天重试点：门1 ✓（逃生口 1/33=3%、四实质层 97%）、门2
 - **版本命名清零（2026-10-02 用户「彻底清查 V1/V2 文件名与数据集」裁决）**：①代码 8 文件 git mv 归一——`jev_sentiment_v2_compute.py`→`jev_sentiment_compute.py`、`jev_sentiment_pilot_v2(_report).py`→`jev_sentiment_pilot(_report).py`、`jev_sentiment_v2_sep_compare.py`→`jev_sentiment_sep_compare.py`、`test_jev_sentiment_v2_compute.py`→去后缀、`test_jev_state_v2.py` 并入 `test_jev_state.py`、theme momentum 两个 v2 测试改语义名（golden/caliber_compare）；②MongoDB `renameCollection` 活数据平移（不导出不重建）：`hotlist_jev_sentiment_v2`→`hotlist_jev_sentiment`、`hotlist_jev_driver_labels_v2`→`hotlist_jev_driver_labels`——**库内 jev/sentiment 集合收敛为三枚且全部无版本后缀**；③65 处标识符替换（JEV_*_QUESTIONS_V2→JEV_*_QUESTIONS、compute_and_upsert_*_v2 去后缀、v2_enabled→sentiment_gate_enabled、测试函数名）；④jiuyan 报告摘除 pilot 死分支（守恒/稳定性门随 pilot 集合清档退役，verdict 收敛全量语义，战报产物路径去版本化）。**保留不动（非版本残留）**：backup 功能模块（R2 备份链路本体）、docs 历史报告文件名（档案性质）、origin 数据值（历史写入者标识）。**登记待裁决残留**：URL 路由 `/api/hotlist-jev/sentiment-v2` 与前端 fetchHotlistSentimentV2（API 合同层）、gate 环境变量名 JEV_SENTIMENT_V2_ENABLED（用户手管配置）、origin 字段历史值。验证：1813 测试全绿、8000/8001 重启、/series 与 sentiment-v2 读口实测正常（63.2 数据无损平移）。
 
 - **四裁决执行（2026-10-02 用户逐项批复）**：①「必须改」——读口路由 `/api/hotlist-jev/sentiment-v2` → **`/sentiment-overview`**（函数/载荷键 `v2`→`jev`/前端 fetchHotlistSentimentOverview+HotlistSentimentOverviewResult/测试全链），UI 文案「v2 市场热度计」→「市场热度计」；②「单一事实源，环境变量完全可删」——gate `JEV_SENTIMENT_V2_ENABLED` 与 `sentiment_gate_enabled()`/`force` 参数全链删除（V1 已灭无回退对象），.env.local 死配置 `JEV_SENTIMENT_ENABLED` 一并清除；③④遵令不动（origin 历史值、docs 历史报告名、backup 功能模块）。代码侧 origin 默认值 `collector_v2`→`collector`（历史文档值遵令保留）。验证：1283 后端+前端全套测试绿、vue-tsc 零错、8000/8001 重启、新路由实测 jev 63.2/rule 59.1、旧路由 404。
+
+## 十二、情绪周期段位题立项登记（2026-10-03，打标轨道 Q5 裁决衍生，归宿=情绪轨道）
+
+**来源**：打标轨道 Q5 相位题三轮实测（jev-driver-label-v3-questionset.md）证明——①三档静态分档装不下游资周期语义（模型在 9/4 冰点日读到反弹种子结构却被词表锁死）；②用户裁决否 B（固定阈值读不了退潮初期 vs 冰点的路径差异）；③去个股语境后日级独立调用可判（773 tokens/次）。用户盘感关键输入：**9/4=退潮末期·冰点，「反弹在即」本身是积极信号**。
+
+**题目设计（预登记草案，开火前须用户逐题确认）**：
+- **弹药（轨迹序列，非当日快照）**：近 10 个交易日逐日——涨停家数、跌停家数、炸板率、大幅回撤家数、最高板高（来源 limitSummary，分位与绝对值并列）；当日盘面事实行沿用。
+- **选项（游资周期六段）**：`ebb_early` 退潮初期（高度自峰值回落+炸板抬升）/ `ice_end` 冰点（退潮末期：涨停缩至低位+首板堆积+高标独苗=反弹在即）/ `repair` 修复启动（冰点后首板承接改善、跌停收敛）/ `ferment` 发酵主升（梯队展开、板块效应起）/ `climax` 高潮（高度+家数双高位）/ `divergence` 高潮分歧（双高位但炸板率急升）/ `insufficient` 证据不足。
+- **与既有轨道的关系**：情绪轨道 sequence_stage=当日逐帧序列（日内节奏），本题=跨日轨迹段位（周期位置），互补不重叠；产出与 route B 规则分做逐日对照=W2 哨兵体系的周期版。
+- **成本预估**：日级 1 次/交易日，input ≈2-3k tokens → 全月 ≈6-8 万 tokens。
+- **执行顺序**：情绪轨道 v2.4 修正重试点裁决之后排期（不插队）；先 3 天试点（成本 ≈2 万 tokens）判据自洽抽验（游资周期段位与用户盘感逐日对照），再定全月。
+- **验收判据（先冻结）**：三档版做不到的「冰点 vs 退潮初期」区分度是主判据——试点窗须含至少一个冰点日与一个退潮初期日（9/4=冰点为已知锚）；用户盘感抽验 5 日 ≥4 对=判据成立。
