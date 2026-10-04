@@ -1,5 +1,7 @@
 {
   "exit_v1": {
+    "label": "高温期出场收紧",
+    "description": "高温带内收紧止盈、缩短最长持有时间",
     "trade_config": {
       "phaseExitCoupling": {
         "mode": "per_band",
@@ -8,6 +10,8 @@
     }
   },
   "jev_seq_v1": {
+    "label": "AI 情绪档位定相位",
+    "description": "用 jev 模型判定的进攻/防守档位替代连续情绪分",
     "trade_config": {
       "phaseExposureControl": {
         "source": "jev_seq_slot",

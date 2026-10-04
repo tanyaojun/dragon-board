@@ -88,22 +88,34 @@ export interface PhasePulseDoc {
     tradeCount?: number
     sampleNote?: string
     eodDays?: number
+    /** 当月入场却进不了任何分档的笔数（缺前一日分/缺平仓价；fail-visible，>0 时前端提示） */
+    unbandedTrades?: number
     byPhase?: Record<string, PhaseTradeStats>
     fullWindow?: { maxDD: number | null; segReturn: number | null }
     northstar?: Record<string, PhaseNorthstarEntry>
     meta?: { gate?: string; generatedAt?: string }
-    bands?: Record<string, { trades: number; sumNetReturn: number; avgPerTrade: number | null }>
+    /** 分档战绩（键=引擎 BAND_TAGS 四带；label/rangeText=后端携带的用户展示语义，前端纯渲染） */
+    bands?: Record<string, {
+      label?: string
+      rangeText?: string
+      trades: number
+      sumNetReturn: number
+      avgPerTrade: number | null
+    }>
     ab?: {
       baseline?: { tradeCount: number; sumNetReturn: number }
       bandAvoided?: { tradeCount: number; sumNetReturn: number }
       delta?: { tradesRemoved: number; netReturnSaved: number }
+      /** 规则描述（后端携带的用户语言，如「按情绪分档出手（低温满仓、弱势期不开新仓、高温三成）」） */
       arm?: string
       degraded?: boolean
       reason?: string
     }
     challengers?: Array<{
       name: string
-      arm?: string
+      /** 试验打法用户名与一句解释（臂数注册表登记，后端透传；null 回退显示 name） */
+      label?: string | null
+      description?: string | null
       degraded?: boolean
       reason?: string
       stats?: { tradeCount: number; sumNetReturn: number }

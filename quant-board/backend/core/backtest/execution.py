@@ -14,6 +14,22 @@ from backend.core.backtest.metrics import (
 )
 from backend.core.backtest.strategy import normalize_strategy_name
 
+# 分数轴四带（低温→极热，与 ladder/reduce_band/entryPhase 归因同一分数轴）。
+# 唯一权威定义：phase_pulse 报告、前端展示一律从这里取带序与归类，禁止再手抄副本
+# （2026-10-04 事故：脉拍 PULSE_BANDS 手抄三档漏极热，前日 ≥80 的交易被静默丢档）。
+BAND_TAGS = ("冷10-40", "弱势40-60", "强60-80", "极热≥80")
+
+
+def band_of_score(score: float) -> str:
+    """分数 → 四带标签；全轴无空洞（<40 / <60 / <80 / 其余），任何分值都有归属。"""
+    if score < 40.0:
+        return "冷10-40"
+    if score < 60.0:
+        return "弱势40-60"
+    if score < 80.0:
+        return "强60-80"
+    return "极热≥80"
+
 
 def _profit_factor(round_trip_trades: list[dict[str, Any]]) -> float | None:
     """盈亏比 = 盈利交易 profit 总额 / 亏损交易 profit 总额绝对值（阶段 4.1 盈亏比约束）。
@@ -1392,14 +1408,8 @@ class TradeSimulator:
 
     @staticmethod
     def _band_of_score(score: float) -> str:
-        """四带标签（冷10-40/弱势40-60/强60-80/极热≥80；与 ladder/reduce_band 同一分数轴）。"""
-        if score < 40.0:
-            return "冷10-40"
-        if score < 60.0:
-            return "弱势40-60"
-        if score < 80.0:
-            return "强60-80"
-        return "极热≥80"
+        """四带标签——委托模块级 band_of_score（唯一定义见文件头 BAND_TAGS 处）。"""
+        return band_of_score(score)
 
     @staticmethod
     def _phase_rebalance_triggered(config: dict[str, Any], pos: dict[str, Any], trading_date: str) -> bool:

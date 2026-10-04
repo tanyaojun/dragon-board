@@ -55,10 +55,44 @@ def test_band_stats_prev_day_as_of():
         {"entryTradingDate": "2026-09-30", "netReturn": 0.99},   # 上月：剔除
     ]
     eod = {"2026-10-09": 55.0, "2026-10-12": 70.0, "2026-10-13": 60.0}
-    out = band_stats(trades, eod, "2026-10")
+    out, unbanded = band_stats(trades, eod, "2026-10")
     assert out["弱势40-60"]["trades"] == 1 and out["弱势40-60"]["sumNetReturn"] == -0.07
     assert out["强60-80"]["trades"] == 1 and out["强60-80"]["avgPerTrade"] == 0.14
     assert out["冷10-40"]["trades"] == 0
+    assert unbanded == 0
+    # 展示语义随档携带（前端纯渲染不自建映射）
+    assert out["弱势40-60"]["label"] == "弱势期" and out["弱势40-60"]["rangeText"] == "40-60"
+
+
+def test_band_stats_extreme_hot_band_no_silent_drop():
+    """2026-10-04 事故回归：前日 EOD ≥80 的交易必须进极热档，不得静默丢档（11 笔≠10 笔）。"""
+    from backend.operations.phase_pulse import band_stats
+
+    trades = [
+        {"entryTradingDate": "2026-10-12", "netReturn": -0.07},  # 前日 10-09=55 → 弱势
+        {"entryTradingDate": "2026-10-13", "netReturn": 0.14},   # 前日 10-12=85 → 极热≥80
+    ]
+    eod = {"2026-10-09": 55.0, "2026-10-12": 85.0, "2026-10-13": 60.0}
+    out, unbanded = band_stats(trades, eod, "2026-10")
+    assert out["极热≥80"]["trades"] == 1 and out["极热≥80"]["sumNetReturn"] == 0.14
+    assert out["极热≥80"]["label"] == "极热期"
+    assert sum(b["trades"] for b in out.values()) == 2
+    assert unbanded == 0
+
+
+def test_band_stats_unbanded_visible():
+    """缺前一日分/缺平仓价的当月入场笔 → unbanded 计数显式暴露（fail-visible 不静默）。"""
+    from backend.operations.phase_pulse import band_stats
+
+    trades = [
+        {"entryTradingDate": "2026-10-12", "netReturn": -0.07},  # 前日 10-09=55 → 弱势
+        {"entryTradingDate": "2026-10-13", "netReturn": 0.14},   # 自身无 EOD 文档 → unbanded
+        {"entryTradingDate": "2026-10-14", "netReturn": None},   # 无平仓价 → unbanded
+    ]
+    eod = {"2026-10-09": 55.0, "2026-10-12": 55.0}
+    out, unbanded = band_stats(trades, eod, "2026-10")
+    assert out["弱势40-60"]["trades"] == 1
+    assert unbanded == 2
 
 
 def test_ab_compare_delta():

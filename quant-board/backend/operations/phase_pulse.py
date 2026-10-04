@@ -19,10 +19,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from backend.core.backtest.execution import BAND_TAGS, band_of_score
 from backend.operations.phase_northstar import equity_phase_slices, evaluate_northstar, worst_drawdown
 from backend.operations.phase_trade_slice import round_trips_of, slice_trades
 
 PULSE_THRESHOLD = 60.0  # 口径源=phase_label_run CANDIDATES sentiment_2b（2026-10-01 章程 Q1：边界 50→60）
+
+# 分带用户展示名（键=引擎 BAND_TAGS，只管展示名不管归类——归类一律走 band_of_score 单一事实源）
+PULSE_BAND_LABELS = {
+    "冷10-40": ("低温期", "10-40"),
+    "弱势40-60": ("弱势期", "40-60"),
+    "强60-80": ("高温期", "60-80"),
+    "极热≥80": ("极热期", "≥80"),
+}
 
 
 def build_pulse_report(
@@ -119,30 +128,43 @@ def _phase_of(score: float | None) -> str:
     return "offense" if score >= PULSE_THRESHOLD else "defense"
 
 
-# C6 分带（2026-10-01 用户定义：40-60 弱势区间；前一日 EOD as-of 口径）
-PULSE_BANDS = [("冷10-40", 10.0, 40.0), ("弱势40-60", 40.0, 60.0), ("强60-80", 60.0, 80.0)]
+# C6 分带（前一日 EOD as-of 口径）——带序与归类唯一来源=引擎 BAND_TAGS/band_of_score（execution.py）
+# 2026-10-04 事故注记：此处曾手抄三档副本漏极热≥80，前日 ≥80 的交易被静默丢档（11 笔只显示 10 笔）。
 
 
-def band_stats(trades: list[dict], eod_scores: dict[str, float | None], month: str) -> dict:
-    """基线交易按前一日 EOD 分带（as-of 无前视）——C6 证据逐次脉拍累积。"""
+def band_stats(trades: list[dict], eod_scores: dict[str, float | None], month: str) -> tuple[dict, int]:
+    """基线交易按前一日 EOD 分带（as-of 无前视）——C6 证据逐次脉拍累积。
+
+    归类复用引擎 band_of_score 四带全轴覆盖；返回 (bands, unbanded)：
+    unbanded=当月入场却进不了任何档的笔数（缺前一日分或缺平仓价），fail-visible 显式暴露不静默。
+    bands 每档携带用户展示名 label / 区间文案 rangeText，前端纯渲染不再自建映射。
+    """
     scored = sorted((d, s) for d, s in eod_scores.items() if isinstance(s, (int, float)))
     prev_score = {scored[i][0]: scored[i - 1][1] for i in range(1, len(scored))}
+    buckets: dict[str, list[float]] = {tag: [] for tag in BAND_TAGS}
+    unbanded = 0
+    for t in trades:
+        entry = str(t.get("entryTradingDate") or "")
+        if not entry.startswith(month):
+            continue
+        ret = t.get("netReturn")
+        ps = prev_score.get(entry)
+        if not isinstance(ret, (int, float)) or not isinstance(ps, (int, float)):
+            unbanded += 1
+            continue
+        buckets[band_of_score(float(ps))].append(float(ret))
     out: dict = {}
-    for tag, lo, hi in PULSE_BANDS:
-        rets = [
-            float(t["netReturn"])
-            for t in trades
-            if str(t.get("entryTradingDate") or "").startswith(month)
-            and isinstance(t.get("netReturn"), (int, float))
-            and isinstance(prev_score.get(str(t.get("entryTradingDate") or "")), (int, float))
-            and lo <= prev_score[str(t.get("entryTradingDate") or "")] < hi
-        ]
+    for tag in BAND_TAGS:
+        rets = buckets[tag]
+        label, range_text = PULSE_BAND_LABELS[tag]
         out[tag] = {
+            "label": label,
+            "rangeText": range_text,
             "trades": len(rets),
             "sumNetReturn": round(sum(rets), 4),
             "avgPerTrade": round(sum(rets) / len(rets), 4) if rets else None,
         }
-    return out
+    return out, unbanded
 
 
 def month_trades_of(summary: dict, month: str) -> list[dict]:
@@ -189,6 +211,7 @@ def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: d
         "champion": {"phaseExposureControl": {"mode": "ladder", "ladder": [[40, 1.0], [60, 0.0], [999, 0.3]], "eodScores": eod_valid}},
     }
     extra: dict[str, dict] = {}
+    extra_meta: dict[str, dict] = {}
     malformed: list[str] = []
     if arm_config_path:
         raw = json.loads(Path(arm_config_path).read_text(encoding="utf-8"))
@@ -210,6 +233,11 @@ def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: d
                     merged_fb.update(jl.get("fallbackLabels") or {})
                     ec["fallbackLabels"] = merged_fb
                 extra[str(name)] = injected
+                # 用户展示语义随臂数登记（单一事实源=本配置；前端纯渲染不自建臂数词典）
+                extra_meta[str(name)] = {
+                    "label": spec.get("label") if isinstance(spec.get("label"), str) else None,
+                    "description": spec.get("description") if isinstance(spec.get("description"), str) else None,
+                }
             else:
                 malformed.append(str(name))
     out: dict[str, dict] = {}
@@ -227,7 +255,7 @@ def build_arm_trade_configs(arms: list[str], arm_config_path: str, eod_scores: d
             skipped.append(f"malformed:{name}")
         else:
             skipped.append(f"unregistered:{name}")
-    return {"arms": out, "skipped": skipped}
+    return {"arms": out, "skipped": skipped, "armMeta": extra_meta}
 
 
 def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
@@ -245,7 +273,7 @@ def ab_compare(baseline: dict, controlled: dict, month: str) -> dict:
             "tradesRemoved": b["tradeCount"] - c["tradeCount"],
             "netReturnSaved": round(c["sumNetReturn"] - b["sumNetReturn"], 4),
         },
-        "arm": "ladder ③：10-40 满 / 40-60 零 / 60+ 三成（前日定相，C7 用户确认）",
+        "arm": "按情绪分档出手（低温满仓、弱势期不开新仓、高温三成）",
         "attribution": attribution_stats(c_trades),
     }
 
@@ -334,8 +362,8 @@ def main() -> int:
         "jevLabelsLoaded": jev_labels is not None,
         "jevLabelsVersion": (jev_labels or {}).get("meta", {}).get("version") if jev_labels else None,
     }
-    # C6 证据：基线交易按前日分带累积
-    report["bands"] = band_stats(round_trips_of(summary), eod_scores, args.month)
+    # C6 证据：基线交易按前日分带累积（四带全轴；unbanded=进不了任何档的笔数，fail-visible）
+    report["bands"], report["unbandedTrades"] = band_stats(round_trips_of(summary), eod_scores, args.month)
     # SP1 归因段（章程 T2）：基线臂当月 entryPhase 汇总（与 A/B 同口径，不含 warmup 段）
     report["attribution"] = attribution_stats([
         t for t in round_trips_of(summary)
@@ -343,14 +371,18 @@ def main() -> int:
     ])
     # SP2-T3 多臂：baseline=主报告；champion=ab（向后兼容）；其余=challengers（预算≤2）
     report["armSkipped"] = arm_specs["skipped"]
+    arm_meta = arm_specs.get("armMeta") or {}
     report["challengers"] = []
     for arm_name, arm_cfg in arm_specs["arms"].items():
         if arm_name == "baseline":
             continue
+        meta = arm_meta.get(arm_name) or {}
         try:
             arm_summary = BacktestService(runtime_session()).run_ranktrend({**payload, "trade_config": arm_cfg})
         except Exception as exc:  # noqa: BLE001 — 单臂失败不阻断基线读数（fail-visible 降级）
-            report["challengers"].append({"name": arm_name, "degraded": True, "reason": str(exc)})
+            report["challengers"].append({"name": arm_name, "label": meta.get("label"),
+                                          "description": meta.get("description"),
+                                          "degraded": True, "reason": str(exc)})
             print(f"[phase-pulse] 臂 {arm_name} 失败（基线照常）: {exc}", file=sys.stderr)
             continue
         if arm_name == "champion":
@@ -358,6 +390,8 @@ def main() -> int:
         else:
             report["challengers"].append({
                 "name": arm_name,
+                "label": meta.get("label"),
+                "description": meta.get("description"),
                 "arm": json.dumps(arm_cfg, ensure_ascii=False)[:300],
                 "stats": month_trade_stats(arm_summary, args.month),
                 "attribution": attribution_stats(month_trades_of(arm_summary, args.month)),
