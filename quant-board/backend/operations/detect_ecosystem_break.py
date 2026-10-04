@@ -120,8 +120,9 @@ def main():
         print(f"  {r['date']} 涨停{r['ztCount']:>3}（P20={r['p20']}）涨跌比{r['advDecRatio']}"
               f" 量能{r['amountYi']}亿（昨{r['prevAmountYi']}亿） {mark} {r['reason']}")
     print(f"断层日: {[r['date'] for r in breaks] or '无'}")
-    if args.apply and breaks:
+    if args.apply:
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # ① 断层日：写 ecosystemBreak 标记（琥珀卡消费，仅断层日）
         n = 0
         for r in breaks:
             res = db["hotlist_jev_sentiment"].update_one(
@@ -133,7 +134,21 @@ def main():
                     "prevAmountYi": r["prevAmountYi"], "detectedAt": now,
                     "source": "detect_ecosystem_break"}}})
             n += res.modified_count
-        print(f"[apply] 已写 {n} 个 jev EOD 文档 diagnostics.ecosystemBreak")
+        # ② 全部有料日：写 ecoBreadth 宽度参照（U 形三段分区展示消费，2026-10-04 裁决 10；
+        #    幂等重跑覆盖；仅 ztCount/p20 齐全的日写，缺料日不伪造）
+        m = 0
+        for r in rows:
+            if r["p20"] is None:
+                continue
+            res = db["hotlist_jev_sentiment"].update_one(
+                {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+                 "tradingDate": r["date"], "kind": "eod"},
+                {"$set": {"diagnostics.ecoBreadth": {
+                    "ztCount": r["ztCount"], "p20": r["p20"], "advDecRatio": r["advDecRatio"],
+                    "isBreak": r["ecosystemBreak"], "detectedAt": now,
+                    "source": "detect_ecosystem_break"}}})
+            m += res.modified_count
+        print(f"[apply] 断层标记 {n} 份；宽度参照 {m} 份")
 
 
 if __name__ == "__main__":

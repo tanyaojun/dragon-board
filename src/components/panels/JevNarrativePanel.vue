@@ -213,6 +213,17 @@
                 </div>
                 <div class="anchor-footnote">score 还原口径：10 档锚点期望值 / 9 × 100（jev score 协议）</div>
               </div>
+              <div v-if="ecoBreadthZone" class="anchor-panel"
+                title="生态宽度 U 形（§十三，8/9 月复现）：低宽度积极/中宽度回避/高宽度顺势——展示侧读数，交易条款未裁决">
+                <div class="anchor-title">📶 生态宽度 U 形分区（展示侧读数）</div>
+                <div class="eco-breadth-row">
+                  <span class="eco-zone-badge" :data-zone="ecoBreadthZone.zone">{{ ecoBreadthZone.zoneText.split('：')[0] }}</span>
+                  <span class="eco-breadth-text">今日涨停 <b>{{ ecoBreadthZone.count }}</b> 家（{{ ecoBreadthZone.source }}<template
+                    v-if="ecoBreadthZone.anchorText">，锚末值 {{ ecoBreadthZone.anchorText }}</template>）</span>
+                </div>
+                <div class="eco-breadth-zone">{{ ecoBreadthZone.zoneText.split('：')[1] }}</div>
+                <div class="anchor-footnote">U 形后验=§十三生态宽度三档（8/9 月复现）；交易条款未裁决，不构成操作指令</div>
+              </div>
             </div>
             <div class="note-line research-line">
               🔎 研究注记：槽级温度带 REVERSE 信号（高读数含反向含义，勿当顺势信号）；温度与规则分水平差≈口径差（市场热度计 vs
@@ -1401,6 +1412,37 @@ const ecosystemBreak = computed(() => {
   const diag = eodDoc.value?.diagnostics?.ecosystemBreak
   return diag?.isBreak ? diag : null
 })
+
+/** 生态宽度 U 形三段分区（2026-10-04 裁决 10，展示侧读数）：
+ *  自变量=当日涨停家数（规则算 ecoBreadth，缺则降级用锚 lastValue），切点=叙事锚涨停数 p20/p80。
+ *  U 形后验（§十三，8/9 月复现）：低宽度=反弹在即多发区观察积极 / 中宽度=历史读数最差观望回避 / 高宽度=顺势但警惕拥挤。 */
+const ecoBreadthZone = computed(() => {
+  const breadth = eodDoc.value?.diagnostics?.ecoBreadth
+  const limitAnchor = anchorMetrics.value.find(
+    (m) => m.metric.includes('涨停') && m.p20 != null && m.p80 != null,
+  )
+  const count = breadth?.ztCount ?? null
+  const anchorText = limitAnchor ? `${limitAnchor.lastDate?.slice(5) ?? ''} ${limitAnchor.lastValue} 家` : null
+  const value = count ?? (limitAnchor?.lastValue != null ? Number(limitAnchor.lastValue) : null)
+  if (value == null || !Number.isFinite(value)) return null
+  const p20 = limitAnchor?.p20 != null ? Number(limitAnchor.p20) : breadth?.p20 ?? null
+  const p80 = limitAnchor?.p80 != null ? Number(limitAnchor.p80) : null
+  if (p20 == null || p80 == null) return null
+  const zone = value < p20 ? 'low' : value > p80 ? 'high' : 'mid'
+  const zoneText = zone === 'low'
+    ? `低位带（<p20=${p20}）：反弹在即多发区，观察积极`
+    : zone === 'high'
+      ? `高位带（>p80=${p80}）：顺势区间，警惕拥挤`
+      : `中位带（p20=${p20}~p80=${p80}）：历史读数最差，观望回避`
+  return {
+    count: value,
+    source: breadth ? '规则算（detect_ecosystem_break）' : '叙事锚末值（降级）',
+    zone,
+    zoneText,
+    anchorText,
+    isBreak: breadth?.isBreak === true,
+  }
+})
 const anchorRange = computed(() => focusDoc.value?.historyAnchorRange ?? null)
 const usageText = computed(() => {
   const usage = focusDoc.value?.usage
@@ -2063,6 +2105,16 @@ onUnmounted(() => {
 .anchor-last { font-size: 10px; color: var(--color-highlight); margin-top: 2px; }
 .anchor-note { font-size: 10px; color: #f39c12; margin-top: 3px; }
 .anchor-footnote { font-size: 10px; color: var(--text-secondary); margin-top: 6px; }
+.eco-breadth-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text-primary); }
+.eco-zone-badge {
+  flex: none; font-size: 11px; padding: 2px 8px; border-radius: 8px; font-weight: 600;
+  background: rgba(138, 143, 152, 0.15); color: var(--text-secondary);
+}
+.eco-zone-badge[data-zone='low'] { background: rgba(46, 213, 115, 0.15); color: #2ed573; }
+.eco-zone-badge[data-zone='mid'] { background: rgba(217, 119, 6, 0.15); color: #f5a623; }
+.eco-zone-badge[data-zone='high'] { background: rgba(139, 124, 246, 0.15); color: #8b7cf6; }
+.eco-breadth-text b { color: var(--text-primary); }
+.eco-breadth-zone { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
 
 /* ---------- 拥挤度 ---------- */
 .crowding-hero { display: flex; gap: 12px; flex-wrap: wrap; }

@@ -50,8 +50,11 @@ export interface HotlistJevDoc {
   asOf?: string | null
   /** 【近20日参照】首行区间（extract_history_anchor_range 产出；旧文档缺失） */
   historyAnchorRange?: string | null
-  /** 涨停生态断层标注（§十三 detect_ecosystem_break 产出；仅断层日 EOD 有） */
-  diagnostics?: { ecosystemBreak?: { isBreak: boolean; ztCount: number; p20: number; advDecRatio: number; amountYi: number; prevAmountYi: number; detectedAt: string; source: string } | null } | null
+  /** 涨停生态标注（§十三 detect_ecosystem_break 产出）：ecosystemBreak=断层日才有；ecoBreadth=宽度参照每日落盘（U 形三段分区展示消费，2026-10-04 裁决 10） */
+  diagnostics?: {
+    ecosystemBreak?: { isBreak: boolean; ztCount: number; p20: number; advDecRatio: number; amountYi: number; prevAmountYi: number; detectedAt: string; source: string } | null
+    ecoBreadth?: { ztCount: number; p20: number; advDecRatio: number | null; isBreak: boolean; detectedAt: string; source: string } | null
+  } | null
   /** 当前帧结构化证据（slot 文档；EOD/旧文档为 null） */
   evidenceRaw?: Record<string, unknown> | null
   /** 模型原始返回 envelope（jev_client 原样透传；旧文档缺失） */
