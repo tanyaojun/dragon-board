@@ -159,6 +159,37 @@ export interface C9DeepValleyDoc {
   updatedAt: string
 }
 
+/** GET /api/phase-monitor/board 的高峰兑现账本文档（peak_revalidate 产物，缺口三分组口径，方案 §4） */
+export interface C10PeakDoc {
+  _id: string
+  kind?: 'c10'
+  ok?: boolean
+  month: string
+  summary: {
+    month: string
+    peakDays: number
+    samples: number
+    gapLt1: { n: number; mean: number | null; win: number }
+    gap1to3: { n: number; mean: number | null; win: number }
+    gapGe3: { n: number; mean: number | null; win: number }
+    baselineMean: number | null
+    edgeGe3VsBaseline: number | null
+    noData?: boolean
+    reason?: string | null
+  }
+  samples: Array<{
+    date: string
+    eodScore: number
+    n: number
+    gapLt1: number[]
+    gap1to3: number[]
+    gapGe3: number[]
+  }>
+  noData?: boolean
+  reason?: string | null
+  updatedAt: string
+}
+
 /** 哨兵分歧单日（融合总纲合流点一：规则分主定义 × jev 日级哨兵，只告警不改判） */
 export interface SentinelDivergenceDay {
   date: string
@@ -185,6 +216,8 @@ export interface PhaseBoard {
   count: number
   /** 深谷节点账本（C9 事件轴，按月升序；可能为空=尚无深谷状态日） */
   c9?: C9DeepValleyDoc[]
+  /** 高峰兑现账本（C10 逃顶侧事件轴，按月升序；可能为空=尚无高峰状态日） */
+  c10?: C10PeakDoc[]
   /** 哨兵分歧（合流点一：逐日三档带比较 + 汇总计数） */
   sentinelDivergence?: SentinelDivergence
   /** 四带刻度（边界+用户展示名，后端单一事实源携带；前端按分数落区间，禁止手抄阈值） */

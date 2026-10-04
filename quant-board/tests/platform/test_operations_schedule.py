@@ -79,7 +79,7 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate"]
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
@@ -954,6 +954,10 @@ def test_deep_valley_failure_does_not_flip_chain(monkeypatch: Any) -> None:
         "backend.operations.schedule._run_deep_valley_step",
         lambda today, dry_run=False: calls.append("deepValley") or {"ok": False, "error": {"code": "deep_valley_failed", "message": "boom"}},
     )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_peak_revalidate_step",
+        lambda today, dry_run=False: calls.append("peakRevalidate") or {"ok": True, "month": "2026-10"},
+    )
 
     from backend.operations.schedule import run_after_market_once
 
@@ -961,4 +965,5 @@ def test_deep_valley_failure_does_not_flip_chain(monkeypatch: Any) -> None:
 
     assert result["ok"] is True
     assert result["results"]["deepValley"]["ok"] is False
-    assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand", "deepValley"]
+    assert result["results"]["peakRevalidate"]["ok"] is True  # advisory：deepValley 失败不翻转 C10 步
+    assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate"]

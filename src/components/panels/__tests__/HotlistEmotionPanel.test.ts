@@ -500,4 +500,18 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('v-if="c.tradeCount != null"')
     expect(source).toContain('分母=有代理收益的')
   })
+
+  test('C10 高峰兑现账本卡（2026-10-04 立项，方案 ranktrend-c10-peak-exit-plan.md）', () => {
+    const source = panelSource()
+
+    // 装载（degraded 分支清空）+ 聚合（缺口三分组口径）+ 卡片
+    expect(source).toContain('phaseC10Docs.value = board.c10 ?? []')
+    expect(source).toContain('phaseC10Docs.value = []')
+    expect(source).toContain('const c10Ledger = computed(')
+    expect(source).toContain('const flat = (key:')
+    expect(source).toContain('edgeGe3VsBaseline')
+    expect(source).toContain('高峰兑现账本（C10 逃顶侧 · EOD≥75 · 盘后链每日自动积累）')
+    // 观察态注记（不构成操作指令）
+    expect(source).toContain('观察态不构成操作指令')
+  })
 })

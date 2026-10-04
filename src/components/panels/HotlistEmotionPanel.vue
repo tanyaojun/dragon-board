@@ -787,6 +787,38 @@
               </div>
 
               <div class="phase-chart-card">
+                <div class="section-title">🏔 高峰兑现账本（C10 逃顶侧 · EOD≥75 · 盘后链每日自动积累）</div>
+                <div v-if="!phaseC10Docs.length" class="state-block">暂无高峰账本（出现高峰状态日后自动生成）</div>
+                <template v-else>
+                  <div class="phase-pulse-ab">
+                    累计 {{ c10Ledger.peakDays }} 个高峰日（{{ c10Ledger.months }} 个月）· 涨停池样本 {{ c10Ledger.samples }} 只 · 基线 {{ c10Ledger.baselineMean }}%
+                  </div>
+                  <table class="phase-months-table">
+                    <thead>
+                      <tr><th>月份</th><th>高峰日</th><th>缺口&lt;1%</th><th>缺口 1~3%</th><th>缺口≥3%</th><th>兑现 edge</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="d in phaseC10Docs" :key="d._id">
+                        <td>{{ d.month }}</td>
+                        <td>{{ d.summary?.peakDays ?? 0 }}</td>
+                        <td v-for="(key, gi) in ['gapLt1', 'gap1to3', 'gapGe3']" :key="gi"
+                          :style="{ color: d.summary?.[key]?.mean == null ? '' : d.summary[key].mean >= 0 ? '#ff4757' : '#2ed573' }">
+                          {{ d.summary?.[key]?.mean == null ? '--' : `${d.summary[key].mean}%/只（${d.summary[key].n}）` }}
+                        </td>
+                        <td :style="{ color: d.summary?.edgeGe3VsBaseline == null ? '' : d.summary.edgeGe3VsBaseline >= 0 ? '#ff4757' : '#2ed573' }">
+                          {{ d.summary?.edgeGe3VsBaseline == null ? '--' : `+${d.summary.edgeGe3VsBaseline}pp` }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div class="phase-pulse-ab"
+                    title="C10 方案冻结协议（ranktrend-c10-peak-exit-plan.md §4）：兑现事件 ≥10 且相对基线 ≥+1pp 且连续 3 失效降级；兑现 edge=基线-大高开组均值（兑现换入基线资产避免的回撤）；观察态不构成操作指令">
+                    观察读数：缺口 &lt;1% {{ c10Ledger.gapLt1.mean == null ? '--' : `${c10Ledger.gapLt1.mean}%/只（胜 ${c10Ledger.gapLt1.win}/${c10Ledger.gapLt1.n}）` }} · ≥3% {{ c10Ledger.gapGe3.mean == null ? '--' : `${c10Ledger.gapGe3.mean}%/只（胜 ${c10Ledger.gapGe3.win}/${c10Ledger.gapGe3.n}）` }} · 兑现 edge {{ c10Ledger.edgeGe3VsBaseline == null ? '--' : `+${c10Ledger.edgeGe3VsBaseline}pp` }}
+                  </div>
+                </template>
+              </div>
+
+              <div class="phase-chart-card">
                 <div class="section-title">📡 哨兵分歧（jev 日级哨兵 × 规则分 · 只告警不改判）</div>
                 <div v-if="!sentinelDivergence?.summary.comparable" class="state-block">暂无可比数据（哨兵与规则分需同日各有读数）<template
                   v-if="sentinelDivergence?.summary.skipped">· 另有 {{ sentinelDivergence.summary.skipped }} 天哨兵证据不足或缺情绪分</template></div>
@@ -883,6 +915,7 @@ import type {
 } from '@/types/hotlistJev'
 import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
 import type {
+  C10PeakDoc,
   C9DeepValleyDoc,
   PhaseHistoryDay,
   PhaseNorthstarDoc,
@@ -2845,6 +2878,7 @@ const phaseNorthstar = ref<PhaseNorthstarDoc | null>(null)
 const phasePulse = ref<PhasePulseDoc | null>(null)
 const phasePulses = ref<PhasePulseDoc[]>([])
 const phaseC9Docs = ref<C9DeepValleyDoc[]>([])
+const phaseC10Docs = ref<C10PeakDoc[]>([])
 const sentinelDivergence = ref<SentinelDivergence | null>(null)
 const bandScale = ref<Array<{ tag: string; label: string; rangeText: string; lower: number; upper: number | null }>>([])
 const phaseNorthstarMissingReason = ref<string | null>(null)
@@ -3055,6 +3089,30 @@ const c9Ledger = computed(() => {
 // 哨兵分歧日（只列不一致日，一致计数在汇总行）
 const sentinelDivergentDays = computed(() => (sentinelDivergence.value?.days ?? []).filter((d) => d.relation !== 'agree'))
 
+// C10 高峰兑现账本聚合（缺口三分组口径；晋升判定以冻结协议为准，方案 §4）
+const c10Ledger = computed(() => {
+  const months = phaseC10Docs.value
+  const days = months.flatMap((m) => (m.samples ?? []).map((s) => ({ ...s, month: m.month })))
+  const flat = (key: 'gapLt1' | 'gap1to3' | 'gapGe3') => days.flatMap((s) => s[key] ?? [])
+  const agg = (vals: number[]) => ({
+    n: vals.length,
+    mean: vals.length ? Number((vals.reduce((a, v) => a + v, 0) / vals.length).toFixed(2)) : null,
+    win: vals.filter((v) => v > 0).length,
+  })
+  const baselineVals = months.map((m) => m.summary?.baselineMean).filter((v): v is number => v != null)
+  const baselineMean = baselineVals.length ? Number((baselineVals.reduce((a, v) => a + v, 0) / baselineVals.length).toFixed(2)) : null
+  const ge3 = agg(flat('gapGe3'))
+  return {
+    months: months.length,
+    peakDays: days.length,
+    samples: days.reduce((a, s) => a + (s.n ?? 0), 0),
+    gapLt1: agg(flat('gapLt1')),
+    gap1to3: agg(flat('gap1to3')),
+    gapGe3: ge3,
+    baselineMean,
+    edgeGe3VsBaseline: baselineMean != null && ge3.mean != null ? Number((baselineMean - ge3.mean).toFixed(2)) : null,
+  }
+})
 // C6 晋升进度（门=地图 §6 冻结口径：10 月起 ≥2 次脉拍同向且弱势带累计 ≥30 笔；键=引擎 BAND_TAGS 稳定标签）
 const C6_GATE_MIN_TRADES = 30
 const c6Progress = computed(() => {
@@ -3089,6 +3147,7 @@ async function loadPhaseData(): Promise<void> {
       phasePulse.value = null
       phasePulses.value = []
       phaseC9Docs.value = []
+      phaseC10Docs.value = []
       sentinelDivergence.value = null
       bandScale.value = []
     } else {
@@ -3097,6 +3156,7 @@ async function loadPhaseData(): Promise<void> {
       phasePulse.value = board.pulse ?? null
       phasePulses.value = board.pulses ?? []
       phaseC9Docs.value = board.c9 ?? []
+      phaseC10Docs.value = board.c10 ?? []
       sentinelDivergence.value = board.sentinelDivergence ?? null
       bandScale.value = board.bandScale ?? []
     }

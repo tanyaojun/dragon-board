@@ -50,6 +50,7 @@ def get_phase_monitor_board() -> dict[str, Any]:
     pulses: list[dict[str, Any]] = []
     months: list[dict[str, Any]] = []
     c9_docs: list[dict[str, Any]] = []
+    c10_docs: list[dict[str, Any]] = []
     for doc in docs:
         if doc.get("kind") == "northstar":
             # 多基线取 updatedAt 最新（重跑升版本；当前单基线场景恒取唯一）
@@ -61,9 +62,12 @@ def get_phase_monitor_board() -> dict[str, Any]:
             months.append(doc)
         elif doc.get("kind") == "c9":
             c9_docs.append(doc)  # 深谷节点账本（C9 事件轴，融合总纲 §5 合流点二数据源）
+        elif doc.get("kind") == "c10":
+            c10_docs.append(doc)  # 高峰兑现账本（C10 逃顶侧事件轴，ranktrend-c10-peak-exit-plan.md）
     pulses.sort(key=lambda m: str(m.get("month") or ""))
     months.sort(key=lambda m: str(m.get("month") or ""))
     c9_docs.sort(key=lambda m: str(m.get("month") or ""))
+    c10_docs.sort(key=lambda m: str(m.get("month") or ""))
     body: dict[str, Any] = {
         "northstar": northstar,
         "pulse": pulses[-1] if pulses else None,  # 兼容字段=最新月
@@ -71,6 +75,7 @@ def get_phase_monitor_board() -> dict[str, Any]:
         "months": months,
         "count": len(months),
         "c9": c9_docs,
+        "c10": c10_docs,
         "sentinelDivergence": sentinel_divergence(db),
         "bandScale": _band_scale(),
     }
