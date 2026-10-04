@@ -15,17 +15,24 @@ from backend.operations.jev_label_jiuyan import QUESTIONS_STOCK_PHASE, run_stock
 
 
 def test_question_structure_frozen_design():
-    # 设计稿 v0.1 冻结合同（jev-driver-label-v3-questionset.md）：key 与五档选项逐字对齐；
-    # v0.1（2026-10-04 用户令）：价格位置轴主锚——首板贴近 20 日高点属高位（龙版传媒教训）
+    # 设计稿 v0.3 冻结合同（jev-driver-label-v3-questionset.md）：key 与五档选项逐字对齐；
+    # v0.3（2026-10-04 用户裁决方案甲）：位置/结构/质量三轴矩阵+优先级
     assert list(QUESTIONS_STOCK_PHASE.keys()) == ["stock_phase_position"]
     q = QUESTIONS_STOCK_PHASE["stock_phase_position"]
     assert q["type"] == "choice"
-    assert list(q["criteria"].keys()) == ["start", "ferment", "climax", "divergence", "insufficient"]
+    # 五档齐全；键序=优先级排列（示警分歧位在首）
+    assert sorted(q["criteria"].keys()) == ["climax", "divergence", "ferment", "insufficient", "start"]
+    assert list(q["criteria"].keys())[0] == "divergence"
     assert "不预测后市" in q["instructions"]
-    assert "距 20 日最高价" in q["instructions"] and "不看单日连板数" in q["instructions"]
-    assert "≤10%" in q["criteria"]["climax"] and "≥50%" in q["criteria"]["climax"]
-    assert ">20%" in q["criteria"]["start"] and "<30%" in q["criteria"]["start"]
-    assert "优先于价格位置" in q["criteria"]["divergence"]
+    # 三轴点名 + 优先级声明 + 距高点退化防线
+    for axis in ["价格位置轴", "结构轴", "质量轴"]:
+        assert axis in q["instructions"]
+    assert "优先级" in q["instructions"] and "距高点≈0 不能单独当高位证据" in q["instructions"]
+    # 阈值硬锚（Q5 门控教训：数字→档位须硬锚）
+    assert "≥50%" in q["criteria"]["climax"] and "一字板" in q["criteria"]["climax"]
+    assert "≥50%" in q["criteria"]["divergence"] and "炸板≥2 次回封" in q["criteria"]["divergence"]
+    assert "30-50%" in q["criteria"]["ferment"]
+    assert "<30%" in q["criteria"]["start"] and "断板反包" in q["criteria"]["start"]
 
 
 def test_position_line_counts_from_daily_bars(monkeypatch):
