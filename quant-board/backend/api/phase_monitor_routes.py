@@ -65,6 +65,8 @@ def sentinel_divergence(db: Any) -> dict[str, Any]:
             "sentinelBand": _SENTINEL_BAND_NAMES[raw],
             "sentinelRaw": raw,
             "relation": "agree" if sent_rank == rule_rank else ("lower" if sent_rank < rule_rank else "higher"),
+            # 档位差（负=哨兵更冷）：可差两档（如强势带读成低温带），前端按差值表述不写死「一档」
+            "notches": sent_rank - rule_rank,
         })
     summary = {
         "comparable": len(days),

@@ -167,6 +167,8 @@ export interface SentinelDivergenceDay {
   sentinelBand: string
   sentinelRaw: string
   relation: 'agree' | 'lower' | 'higher'
+  /** 档位差（负=哨兵更冷，可 ±2；前端按差值表述） */
+  notches: number
 }
 
 export interface SentinelDivergence {

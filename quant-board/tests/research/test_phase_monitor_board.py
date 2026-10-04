@@ -54,6 +54,8 @@ def test_sentinel_divergence_relations_and_skips():
     assert days[0]["relation"] == "agree" and days[0]["ruleBand"] == "弱势带"
     assert days[1]["relation"] == "lower" and days[1]["sentinelBand"] == "弱势带"
     assert days[2]["relation"] == "lower" and days[2]["sentinelRaw"] == "cold_lt40"
+    # 档位差随行携带（前端按差值表述，不写死「一档」）
+    assert days[0]["notches"] == 0 and days[1]["notches"] == -1 and days[2]["notches"] == -1
 
 
 def test_sentinel_divergence_higher_and_empty():

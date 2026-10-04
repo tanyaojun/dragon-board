@@ -796,7 +796,7 @@
                     <div v-for="d in sentinelDivergentDays" :key="d.date" class="jev-prob-row phase-pulse-row"
                       :title="`${d.date}：规则分 ${d.ruleScore} → ${d.ruleBand}；哨兵读 ${d.sentinelBand}`">
                       <span class="axis-name">{{ d.date.slice(5) }}</span>
-                      <span class="axis-value">规则 {{ d.ruleBand }} → 哨兵读 {{ d.sentinelBand }}（{{ d.relation === 'lower' ? '判低一档' : '判高一档' }}）</span>
+                      <span class="axis-value">规则 {{ d.ruleBand }} → 哨兵读 {{ d.sentinelBand }}（{{ d.notches < 0 ? `判低${-d.notches}档` : `判高${d.notches}档` }}）</span>
                     </div>
                   </div>
                 </template>
