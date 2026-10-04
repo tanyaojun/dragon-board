@@ -543,6 +543,13 @@
                     <option value="rank">热榜排名</option>
                     <option value="labelConf">驱动置信</option>
                     <option value="phaseConf">相位置信</option>
+                    <option value="name">名称</option>
+                    <option value="code">代码</option>
+                    <option value="label">驱动</option>
+                    <option value="depth">深度</option>
+                    <option value="freshness">新鲜度</option>
+                    <option value="buySide">买盘逻辑</option>
+                    <option value="board">板块</option>
                   </select>
                   <button class="sort-btn" @click="limitUpSortDesc = !limitUpSortDesc">
                     {{ limitUpSortDesc ? '↓ 降序' : '↑ 升序' }}
@@ -553,8 +560,17 @@
                 <table class="limitup-table">
                   <thead>
                     <tr>
-                      <th>#</th><th>名称</th><th>代码</th><th>驱动</th><th>驱动置信</th>
-                      <th>深度</th><th>新鲜度</th><th>买盘逻辑</th><th>板块</th><th>热榜</th><th>相位分线</th>
+                      <th>#</th>
+                      <th class="sortable" @click="setLimitUpSort('name')">名称{{ limitUpSortMark('name') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('code')">代码{{ limitUpSortMark('code') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('label')">驱动{{ limitUpSortMark('label') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('labelConf')">驱动置信{{ limitUpSortMark('labelConf') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('depth')">深度{{ limitUpSortMark('depth') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('freshness')">新鲜度{{ limitUpSortMark('freshness') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('buySide')">买盘逻辑{{ limitUpSortMark('buySide') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('board')">板块{{ limitUpSortMark('board') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('rank')">热榜{{ limitUpSortMark('rank') }}</th>
+                      <th class="sortable" @click="setLimitUpSort('phase')">相位分线{{ limitUpSortMark('phase') }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -613,6 +629,7 @@ import {
   countDegradedDocs,
   JEV_HESITANT_THRESHOLD,
   layerStats,
+  LIMITUP_SORT_DEFAULT_DESC,
   parseNarrativeSections,
   sortLimitUpStocks,
   trimRangeWindow,
@@ -804,6 +821,21 @@ const filteredLimitUpStocks = computed(() => {
   }
   return sortLimitUpStocks(stocks, limitUpSortKey.value, limitUpSortDesc.value)
 })
+
+// 表头点击排序：同列再点反转方向，换列按该维度默认方向（置信类降序在前）
+function setLimitUpSort(key: LimitUpSortKey) {
+  if (limitUpSortKey.value === key) {
+    limitUpSortDesc.value = !limitUpSortDesc.value
+  } else {
+    limitUpSortKey.value = key
+    limitUpSortDesc.value = LIMITUP_SORT_DEFAULT_DESC[key]
+  }
+}
+
+function limitUpSortMark(key: LimitUpSortKey): string {
+  if (limitUpSortKey.value !== key) return ''
+  return limitUpSortDesc.value ? ' ↓' : ' ↑'
+}
 
 // 相位分线=日级哨兵带（相位是市场级判定，当日个股同值；哨兵缺失如实 '--'）
 const limitUpPhaseName = computed(() => {
@@ -2466,6 +2498,8 @@ onUnmounted(() => {
   white-space: nowrap;
   z-index: 1;
 }
+.limitup-table th.sortable { cursor: pointer; user-select: none; }
+.limitup-table th.sortable:hover { color: var(--color-highlight); }
 .limitup-table td {
   padding: 8px 6px;
   border-bottom: 1px solid var(--border-color);

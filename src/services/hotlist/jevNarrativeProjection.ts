@@ -7,7 +7,7 @@
 // 结论唯一来源 = QuantBoard 后端 jev 轨道（hotlist_jev_sentiment）落库文档，本模块零计算补齐。
 
 import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
-import { JEV_CROWDING_NAMES, JEV_CROWDING_WARN_LAYERS } from './hotlistJevApi'
+import { JEV_CROWDING_NAMES, JEV_CROWDING_WARN_LAYERS, JEV_DRIVER_NAMES } from './hotlistJevApi'
 
 /** 犹豫阈值（与热榜情绪面板 jevHesitant 同一口径）：top 概率 < 60% 视为低置信 */
 export const JEV_HESITANT_THRESHOLD = 0.6
@@ -381,7 +381,55 @@ export const LIMITUP_PHASE_ORDER: Record<string, number> = {
   insufficient: 9,
 }
 
-export type LimitUpSortKey = 'phase' | 'rank' | 'labelConf' | 'phaseConf'
+/** 深度/新鲜度/买盘档位序（按题目判据分层顺序，信息不足沉底） */
+export const LIMITUP_DEPTH_ORDER: Record<string, number> = {
+  core_main_business: 0,
+  new_business_scaling: 1,
+  new_business_early: 2,
+  equity_or_affiliate: 3,
+  concept_assembly: 4,
+  insufficient_evidence: 9,
+}
+export const LIMITUP_FRESHNESS_ORDER: Record<string, number> = {
+  fresh_catalyst: 0,
+  continuing: 1,
+  none: 2,
+  unclear: 9,
+}
+export const LIMITUP_BUYSIDE_ORDER: Record<string, number> = {
+  independent_catalyst: 0,
+  sector_follow: 1,
+  high_board_relay: 2,
+  pure_sentiment: 3,
+}
+
+export type LimitUpSortKey =
+  | 'phase'
+  | 'rank'
+  | 'labelConf'
+  | 'phaseConf'
+  | 'name'
+  | 'code'
+  | 'label'
+  | 'depth'
+  | 'freshness'
+  | 'buySide'
+  | 'board'
+
+/** 各维度首次点击的默认方向：置信类降序在前，其余自然序在前 */
+export const LIMITUP_SORT_DEFAULT_DESC: Record<LimitUpSortKey, boolean> = {
+  phase: false,
+  rank: false,
+  labelConf: true,
+  phaseConf: true,
+  depth: false,
+  freshness: false,
+  buySide: false,
+  name: false,
+  code: false,
+  board: false,
+  label: false,
+}
 
 function limitUpLabelConf(stock: HotlistJevLimitUpStock): number {
   return stock.label ? (stock.labelProbabilities?.[stock.label] ?? 0) : 0
@@ -393,6 +441,10 @@ function limitUpPhaseConf(stock: HotlistJevLimitUpStock): number {
     : 0
 }
 
+function categoryOrder(map: Record<string, number>, value: string | null | undefined): number {
+  return value != null && map[value] !== undefined ? map[value] : 9
+}
+
 /** 驱动过滤/搜索之后的排序入口：全部比较器自然升序，desc 统一取反。不突变入参数组。 */
 export function sortLimitUpStocks(
   stocks: HotlistJevLimitUpStock[],
@@ -402,11 +454,20 @@ export function sortLimitUpStocks(
   const dir = desc ? -1 : 1
   const phaseOrder = (stock: HotlistJevLimitUpStock) =>
     LIMITUP_PHASE_ORDER[stock.stockPhasePosition ?? 'insufficient'] ?? 9
+  const labelName = (stock: HotlistJevLimitUpStock) =>
+    (stock.label && JEV_DRIVER_NAMES[stock.label]) || stock.label || ''
   const comparators: Record<LimitUpSortKey, (a: HotlistJevLimitUpStock, b: HotlistJevLimitUpStock) => number> = {
     phase: (a, b) => phaseOrder(a) - phaseOrder(b),
     rank: (a, b) => (a.rank ?? 9999) - (b.rank ?? 9999),
     labelConf: (a, b) => limitUpLabelConf(a) - limitUpLabelConf(b),
     phaseConf: (a, b) => limitUpPhaseConf(a) - limitUpPhaseConf(b),
+    name: (a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'zh'),
+    code: (a, b) => a.code.localeCompare(b.code),
+    label: (a, b) => labelName(a).localeCompare(labelName(b), 'zh'),
+    depth: (a, b) => categoryOrder(LIMITUP_DEPTH_ORDER, a.catalystDepth) - categoryOrder(LIMITUP_DEPTH_ORDER, b.catalystDepth),
+    freshness: (a, b) => categoryOrder(LIMITUP_FRESHNESS_ORDER, a.freshness) - categoryOrder(LIMITUP_FRESHNESS_ORDER, b.freshness),
+    buySide: (a, b) => categoryOrder(LIMITUP_BUYSIDE_ORDER, a.buySideLogic) - categoryOrder(LIMITUP_BUYSIDE_ORDER, b.buySideLogic),
+    board: (a, b) => (a.board ?? '').localeCompare(b.board ?? '', 'zh'),
   }
   const compare = comparators[key] ?? comparators.phase
   return [...stocks].sort((a, b) => compare(a, b) * dir)

@@ -191,6 +191,29 @@ describe('jevNarrativeProjection 投影模块合同', () => {
     // 不突变入参数组
     expect(stocks.map((s) => s.code)).toEqual(['A', 'B', 'C'])
   })
+
+  test('sortLimitUpStocks 分类列档位序与文本列（表头点击排序 2026-10-04）', () => {
+    const stocks = [
+      { code: 'A', name: '中兵', catalystDepth: 'concept_assembly', freshness: 'continuing', buySideLogic: 'sector_follow', board: '电池产业链' },
+      { code: 'B', name: '新华', catalystDepth: 'core_main_business', freshness: 'fresh_catalyst', buySideLogic: 'independent_catalyst', board: '公告' },
+      { code: 'C', name: '长春', catalystDepth: 'insufficient_evidence', freshness: 'unclear', buySideLogic: 'pure_sentiment', board: '医药' },
+    ] as unknown as HotlistJevLimitUpStock[]
+    // 深度档位序（核心主业→…→概念组装→信息不足）：B→A→C
+    expect(sortLimitUpStocks(stocks, 'depth', false).map((s) => s.code)).toEqual(['B', 'A', 'C'])
+    // 新鲜度档位序（今日新催化→老催化→无催化→信息不足）：B→A→C
+    expect(sortLimitUpStocks(stocks, 'freshness', false).map((s) => s.code)).toEqual(['B', 'A', 'C'])
+    // 买盘档位序（独立催化→板块跟随→高位卡位→纯情绪）：B→A→C
+    expect(sortLimitUpStocks(stocks, 'buySide', false).map((s) => s.code)).toEqual(['B', 'A', 'C'])
+    // 名称/板块中文排序：环境 ICU 相关，断言方向一致性（升序=降序严格反转）而非具体拼序
+    const nameAsc = sortLimitUpStocks(stocks, 'name', false).map((s) => s.code)
+    const nameDesc = sortLimitUpStocks(stocks, 'name', true).map((s) => s.code)
+    expect([...nameAsc].reverse()).toEqual(nameDesc)
+    const boardAsc = sortLimitUpStocks(stocks, 'board', false).map((s) => s.code)
+    const boardDesc = sortLimitUpStocks(stocks, 'board', true).map((s) => s.code)
+    expect([...boardAsc].reverse()).toEqual(boardDesc)
+    // 代码序
+    expect(sortLimitUpStocks(stocks, 'code', false).map((s) => s.code)).toEqual(['A', 'B', 'C'])
+  })
 })
 
 describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；风格对齐池换手 2026-10-04）', () => {
@@ -216,7 +239,7 @@ describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；�
     expect(source).toContain('{{ i + 1 }}')
     expect(source).toContain('v-for="(stock, i) in filteredLimitUpStocks"')
     // 相位分线列=日级哨兵带（市场级判定，个股行同值），缺失如实 '--'
-    expect(source).toContain('<th>相位分线</th>')
+    expect(source).toContain('相位分线{{ limitUpSortMark(\'phase\') }}</th>')
     expect(source).toContain('limitUpPhaseName')
     // 池换手同款过滤行（全部+各驱动按钮+右侧统计）与明细表容器
     expect(source).toContain('limitup-filter-btn')
@@ -233,6 +256,13 @@ describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；�
     expect(projectionSource()).toContain('LIMITUP_PHASE_ORDER')
     expect(source).toContain('<option value="phase">相位档</option>')
     expect(source).toContain('↓ 降序')
+    // 表头点击排序：可排序 th+同列反转/换列默认方向
+    expect(source).toContain('setLimitUpSort')
+    expect(source).toContain('th.sortable')
+    expect(projectionSource()).toContain('LIMITUP_SORT_DEFAULT_DESC')
+    expect(projectionSource()).toContain('LIMITUP_DEPTH_ORDER')
+    expect(projectionSource()).toContain('LIMITUP_FRESHNESS_ORDER')
+    expect(projectionSource()).toContain('LIMITUP_BUYSIDE_ORDER')
   })
 
   test('打标轨道中文映射合同（驱动/深度/新鲜度/买盘/相位档/个股相位分线）', () => {
