@@ -24,18 +24,19 @@ def test_question_structure_frozen_design():
     assert sorted(q["criteria"].keys()) == ["climax", "divergence", "ferment", "insufficient", "start"]
     assert list(q["criteria"].keys())[0] == "divergence"
     assert "不预测后市" in q["instructions"]
-    # 三轴点名 + 优先级 + 三条注意（距高点退化防线/形态分界/回封不示警）
+    # 三轴点名 + 优先级 + 四条注意（距高点退化/形态分界/回封不示警/量能语义分化）
     for axis in ["价格位置轴", "结构轴", "质量轴"]:
         assert axis in q["instructions"]
     assert "优先级" in q["instructions"] and "距高点≈0 不能单独当高位证据" in q["instructions"]
     assert "≤8 日=低位新鲜" in q["instructions"] and "≥15 日=趋势已久" in q["instructions"]
     assert "单次炸板回封" in q["instructions"] and "不是分歧示警" in q["instructions"]
-    # 阈值/判例硬锚
+    assert "④量能语义看封板质量" in q["instructions"] and "缩量板=一致锁定惜售" in q["instructions"]
+    # 阈值/判例硬锚（v0.5：量能对比前 3 日均量+缩量反包判例）
     assert "炸板≥2 次回封" in q["criteria"]["divergence"] and "炸板收盘" in q["criteria"]["divergence"]
-    assert "≥15 日" in q["criteria"]["divergence"] and "判例" in q["criteria"]["divergence"]
-    assert "放量（≥1.5 倍）" in q["criteria"]["climax"] and "判例" in q["criteria"]["climax"]
+    assert "量比 ≥1.5 倍但封不住" in q["criteria"]["divergence"]
+    assert "缩量加速或缩量反包" in q["criteria"]["climax"] and "判例②" in q["criteria"]["climax"]
     assert "低点距今 9-14 日" in q["criteria"]["ferment"]
-    assert "≤8 个交易日" in q["criteria"]["start"] and "判例" in q["criteria"]["start"]
+    assert "≤8 个交易日" in q["criteria"]["start"] and "低位放量换手板" in q["criteria"]["start"]
 
 
 def test_position_line_counts_from_daily_bars(monkeypatch):
@@ -49,7 +50,7 @@ def test_position_line_counts_from_daily_bars(monkeypatch):
     assert "距 20 日最高 17.66 差 7.8%" in line
     assert "20 日窗口涨幅" in line and "最低收盘" in line
     assert "距今" in line and "近 5 日贡献" in line  # v0.4 形态锚
-    assert "0.95 倍（平量）" in line
+    assert "前 3 日均量" in line and "0.95 倍（平量）" in line  # v0.5 量能锚
     # 阈值语义自检：龙版传媒形态（距高点 7.8%/窗口涨幅 62.5%）应同时满足 climax 两锚
 
 
@@ -65,11 +66,11 @@ def test_position_line_fail_visible(monkeypatch):
     bars1 = [{"date": "2026-09-30", "high": 12.0, "close": 11.5, "vol": 500.0}]
     monkeypatch.setattr(runner, "_daily_bars", lambda code: bars1)
     assert "不足 2 根" in runner.stock_position_line("2026-09-30", "605577")
-    # 昨量 0（数据缺口不伪造倍数）
+    # 前 3 日量能全缺（数据缺口不伪造倍数）
     bars2 = [{"date": "2026-09-29", "high": 17.0, "close": 15.0, "vol": 0.0},
              {"date": "2026-09-30", "high": 17.66, "close": 16.28, "vol": 950.0}]
     monkeypatch.setattr(runner, "_daily_bars", lambda code: bars2)
-    assert "昨量缺失" in runner.stock_position_line("2026-09-30", "605577")
+    assert "前 3 日量能缺失" in runner.stock_position_line("2026-09-30", "605577")
 
 
 # ---- 弹药 7 板序（涨停序列）/弹药 8 板型（5 分钟机械判定）----
