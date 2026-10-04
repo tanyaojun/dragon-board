@@ -677,52 +677,62 @@
 
               <div class="phase-chart-card">
                 <div class="section-title">
-                  🫀 本月至今脉拍（gate off 基线，分带按前日 EOD 分）<template v-if="phasePulseText.value !== '未跑'">——{{ phasePulseText.value }}</template>
+                  🫀 本月出手环境体检：不同情绪环境下做交易的结果<template v-if="phasePulseText.value !== '未跑'">——{{ phasePulseText.value }}</template>
                 </div>
                 <div v-if="phasePulseText.value === '未跑'" class="state-block">
-                  phase_pulse --month 当前月（盘后链每个交易日 18:00 自动跑，也可手动）
+                  本月还没跑：每个交易日 18:00 盘后自动生成，也可手动触发
                 </div>
-                <div v-else-if="!pulseBandRows.length" class="state-block">脉拍产物无分带数据（旧版产物，重跑即升级）</div>
-                <div v-else class="phase-pulse-rows">
-                  <div v-for="b in pulseBandRows" :key="b.tag" class="jev-prob-row phase-pulse-row"
-                    :title="`${b.tag}：${b.trades} 笔｜累计 ${b.sumPct.toFixed(1)}%`">
-                    <span class="jev-prob-name phase-band-name">{{ b.tag }}
-                      <span v-if="b.weak" class="phase-band-badge">弱势</span></span>
-                    <span class="jev-prob-bar-wrap phase-band-track"><span class="jev-prob-bar"
-                      :style="{ width: `${b.barPct}%`, background: b.color }"></span></span>
-                    <span class="phase-band-val" :style="{ color: b.color }">{{ b.avgText }}</span>
-                    <span class="phase-band-trades">{{ b.trades }} 笔</span>
+                <div v-else-if="!pulseBandRows.length" class="state-block">本月数据缺分环境统计（旧版格式），重新生成后即显示</div>
+                <template v-else>
+                  <div class="phase-pulse-note">
+                    把本月每笔已成交的交易，按「开仓前一天收盘情绪分」归入三档，统计每档的平均每笔盈亏——回答「什么情绪环境下该出手、什么环境下该休息」。
+                    以下是原样记录（没套用任何规避规则），作为下方对照试验的共同基线。
                   </div>
-                </div>
-                <div v-if="phasePulseAbLine" class="phase-pulse-ab">{{ phasePulseAbLine }}</div>
-                <div v-if="phasePulseChallengerRows.length" style="margin-top: 6px;">
-                  <div class="section-title">挑战者臂（预算 ≤2，章程 §5.6）</div>
-                  <div v-for="c in phasePulseChallengerRows" :key="c.name" class="phase-pulse-ab">
-                    <template v-if="c.degraded">⚠️ {{ c.name }}：{{ c.reason }}</template>
-                    <template v-else>{{ c.name }}：{{ c.tradeCount ?? '--' }} 笔 {{ c.sumPct.toFixed(1) }}%<template
-                      v-if="c.rebalance !== null">｜调仓清仓 {{ c.rebalance }} 笔</template></template>
+                  <div class="phase-pulse-rows">
+                    <div v-for="b in pulseBandRows" :key="b.tag" class="jev-prob-row phase-pulse-row"
+                      :title="`开仓前一天收盘情绪分 ${b.range}：本月 ${b.trades} 笔，合计 ${b.sumPct.toFixed(1)}%`">
+                      <span class="jev-prob-name phase-band-name">{{ b.label }}
+                        <span v-if="b.weak" class="phase-band-badge">观察带</span></span>
+                      <span class="jev-prob-bar-wrap phase-band-track"><span class="jev-prob-bar"
+                        :style="{ width: `${b.barPct}%`, background: b.color }"></span></span>
+                      <span class="phase-band-val" :style="{ color: b.color }">{{ b.avgText }}</span>
+                      <span class="phase-band-trades">{{ b.trades }} 笔</span>
+                    </div>
                   </div>
-                </div>
+                  <div v-if="phasePulseAbLine" class="phase-pulse-ab">{{ phasePulseAbLine }}</div>
+                  <div v-if="phasePulseChallengerRows.length" style="margin-top: 6px;">
+                    <div class="section-title">新方案对照试验（与上方原样记录同期对比，长期更优才会转正；同时最多试 2 个）</div>
+                    <div v-for="c in phasePulseChallengerRows" :key="c.name" class="phase-pulse-ab"
+                      :title="c.detail ?? ''">
+                      <template v-if="c.degraded">⚠️ {{ c.name }}：本月没跑成（{{ c.reason }}）</template>
+                      <template v-else>{{ c.name }}<template v-if="c.title"> · {{ c.title }}</template>：{{ c.tradeCount ?? '--' }} 笔，合计 {{ c.sumPct >= 0 ? '+' : '' }}{{ c.sumPct.toFixed(1) }}%<template
+                        v-if="c.rebalance !== null">｜期间调仓/清仓 {{ c.rebalance }} 次</template></template>
+                    </div>
+                  </div>
 
-                <div v-if="phasePulseAccRows.length" class="phase-pulse-acc">
-                  <div class="section-title">分带累积（C6 证据，每月末自动入档）</div>
-                  <table class="phase-months-table">
-                    <thead>
-                      <tr><th>月份</th><th>冷10-40</th><th>弱势40-60</th><th>强60-80</th><th>总笔数</th></tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="row in phasePulseAccRows" :key="row.month">
-                        <td>{{ row.month }}</td>
-                        <td v-for="c in row.cells" :key="c.tag"
-                          :style="{ color: c.avgPct == null ? '' : c.avgPct >= 0 ? '#ff4757' : '#2ed573' }">
-                          {{ c.avgPct == null ? '--' : `${c.avgPct >= 0 ? '+' : ''}${c.avgPct}%/笔` }}
-                          <span class="phase-band-trades">（{{ c.trades }} 笔）</span>
-                        </td>
-                        <td>{{ row.tradeCount }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
+                  <div v-if="phasePulseAccRows.length" class="phase-pulse-acc">
+                    <div class="section-title">逐月累积台账（每月末自动存档）</div>
+                    <div class="phase-pulse-note">
+                      按月累积上面的分环境战绩，用来长期检验「按情绪分档出手」类规则是否成立（如弱势期回避）——样本攒够、多月同向才会提请转正。
+                    </div>
+                    <table class="phase-months-table">
+                      <thead>
+                        <tr><th>月份</th><th>低温 10-40</th><th>弱势 40-60</th><th>高温 60-80</th><th>总笔数</th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="row in phasePulseAccRows" :key="row.month">
+                          <td>{{ row.month }}</td>
+                          <td v-for="c in row.cells" :key="c.tag"
+                            :style="{ color: c.avgPct == null ? '' : c.avgPct >= 0 ? '#ff4757' : '#2ed573' }">
+                            {{ c.avgPct == null ? '--' : `${c.avgPct >= 0 ? '+' : ''}${c.avgPct}%/笔` }}
+                            <span class="phase-band-trades">（{{ c.trades }} 笔）</span>
+                          </td>
+                          <td>{{ row.tradeCount }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
               </div>
             </template>
           </section>
@@ -2785,10 +2795,18 @@ const pulseBands = computed(() => Object.entries(phasePulse.value?.report?.bands
   sumPct: (b?.sumNetReturn ?? 0) * 100,
 })))
 
-// 渲染行：宽度按 |每笔收益| 归一化，红涨绿跌；弱势行挂徽标
+// 分带用户语义：后端 bands 键 → 展示名 + 分组口径（分带=开仓前一天收盘情绪分）
+const PHASE_BAND_LABELS: Record<string, { label: string; range: string }> = {
+  '冷10-40': { label: '低温期', range: '10-40' },
+  '弱势40-60': { label: '弱势期', range: '40-60' },
+  '强60-80': { label: '高温期', range: '60-80' },
+}
+
+// 渲染行：宽度按 |每笔收益| 归一化，红涨绿跌；弱势行挂「观察带」徽标（弱势带回避是当前最高优先候选规则）
 const pulseBandRows = computed(() => {
   const rows = pulseBands.value.map((b) => ({
     ...b,
+    ...(PHASE_BAND_LABELS[b.tag] ?? { label: b.tag, range: '' }),
     weak: b.tag === '弱势40-60',
     color: (b.avgPct ?? 0) >= 0 ? '#ff4757' : '#2ed573',
     avgText: b.avgPct == null ? '--' : `${b.avgPct > 0 ? '+' : ''}${b.avgPct}%`,
@@ -2802,13 +2820,23 @@ const phasePulseAbLine = computed(() => {
   if (!ab || ab.degraded) return ''
   const avoided = ab.bandAvoided
   const delta = ab.delta
-  return `A/B 阶梯仓位③（前日定相，champion）：${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%（少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%）`
+  return `对照试验「按情绪分档控仓」（低温满仓｜弱势不开新仓｜高温三成）：原样 ${ab.baseline?.tradeCount ?? '--'} 笔 ${((ab.baseline?.sumNetReturn ?? 0) * 100).toFixed(1)}% → 分档控仓后 ${avoided?.tradeCount ?? '--'} 笔 ${((avoided?.sumNetReturn ?? 0) * 100).toFixed(1)}%，少亏 ${((delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%`
 })
+
+// 挑战者用户语义（臂名由 config/phase_pulse_arms.json 轮换，未登记臂回退只显示原名）
+const PHASE_ARM_NOTES: Record<string, { title: string; detail: string }> = {
+  slot_v1: { title: '盘中实时定相位', detail: '用交易时段当时的情绪分替代「前一日收盘分」来分档，避免隔夜信息陈旧' },
+  jev_seq_v1: { title: 'AI 情绪档位定相位', detail: '用 jev 模型判定的进攻/防守档位替代连续情绪分' },
+  rebal_v1: { title: '持仓带下移调仓', detail: '持仓期间情绪档跌到低温带即清仓离场' },
+  exit_v1: { title: '高温期出场收紧', detail: '高温带内收紧止盈、缩短最长持有时间' },
+}
 
 const phasePulseChallengerRows = computed(() => {
   const list = phasePulse.value?.report?.challengers ?? []
   return list.map((c) => ({
     name: c.name,
+    title: PHASE_ARM_NOTES[c.name]?.title ?? null,
+    detail: PHASE_ARM_NOTES[c.name]?.detail ?? null,
     degraded: !!c.degraded,
     reason: c.reason ?? null,
     tradeCount: c.stats?.tradeCount ?? null,
@@ -4378,6 +4406,13 @@ watch(() => props.visible, (visible) => {
   padding: 6px 10px;
   border-radius: 4px;
   margin-top: 8px;
+}
+
+.phase-pulse-note {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  padding: 2px 2px 6px;
 }
 
 .phase-pulse-rows { display: flex; flex-direction: column; gap: 7px; padding: 4px 2px; }
