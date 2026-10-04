@@ -724,31 +724,6 @@
                   </table>
                 </div>
               </div>
-
-              <div class="phase-months">
-                <div class="section-title">月度监督序列</div>
-                <div v-if="!phaseMonths.length" class="state-block">暂无月度监控记录（次月起每月一条）</div>
-                <table v-else class="phase-months-table">
-                  <thead>
-                    <tr>
-                      <th>月份</th><th>情绪文档</th><th>标签</th><th>进攻相位</th><th>防守相位</th><th>S+A 触发率</th><th>样本不足占比</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="m in phaseMonthRows" :key="m.month">
-                      <td>{{ m.month }}</td>
-                      <td>{{ m.docs }}</td>
-                      <td>{{ m.labelsFresh ? '新鲜' : '需重打标' }}</td>
-                      <td :class="m.offense === true ? 'phase-pass' : m.offense === false ? 'phase-fail' : ''">
-                        {{ m.offense == null ? '--' : m.offense ? '达线' : '未达线' }}</td>
-                      <td :class="m.defense === true ? 'phase-pass' : m.defense === false ? 'phase-fail' : ''">
-                        {{ m.defense == null ? '--' : m.defense ? '达线' : '未达线' }}</td>
-                      <td>{{ m.saTriggerRate == null ? '人工补读' : (m.saTriggerRate * 100).toFixed(1) + '%' }}</td>
-                      <td>{{ m.insufficientShare == null ? '人工补读' : (m.insufficientShare * 100).toFixed(1) + '%' }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
             </template>
           </section>
 
@@ -807,7 +782,6 @@ import type {
 import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
 import type {
   PhaseHistoryDay,
-  PhaseMonthlyDoc,
   PhaseNorthstarDoc,
   PhasePulseDoc,
 } from '@/types/phaseMonitor'
@@ -2767,7 +2741,6 @@ const phaseNorthstar = ref<PhaseNorthstarDoc | null>(null)
 const phasePulse = ref<PhasePulseDoc | null>(null)
 const phasePulses = ref<PhasePulseDoc[]>([])
 const phaseNorthstarMissingReason = ref<string | null>(null)
-const phaseMonths = ref<PhaseMonthlyDoc[]>([])
 const phaseLoading = ref(false)
 const phaseLoadedOnce = ref(false)
 const phaseError = ref<string | null>(null)
@@ -2844,28 +2817,6 @@ const phasePulseChallengerRows = computed(() => {
   }))
 })
 
-interface PhaseMonthRow {
-  month: string
-  docs: string
-  labelsFresh: boolean
-  offense: boolean | null
-  defense: boolean | null
-  saTriggerRate: number | null
-  insufficientShare: number | null
-}
-
-const phaseMonthRows = computed<PhaseMonthRow[]>(() =>
-  phaseMonths.value.map((m) => ({
-    month: m.month,
-    docs: `${m.report.coverage?.sentimentDocs ?? '--'} / ${m.report.coverage?.tradingDays ?? '--'} 日`,
-    labelsFresh: m.report.coverage?.labelsFresh === true,
-    offense: m.report.supervision?.northstar?.pass.offense ?? null,
-    defense: m.report.supervision?.northstar?.pass.defense ?? null,
-    saTriggerRate: m.report.supervision?.saTriggerRate?.value ?? null,
-    insufficientShare: m.report.supervision?.insufficientShare?.value ?? null,
-  })),
-)
-
 interface PulseBandAccRow {
   month: string
   tradeCount: number
@@ -2905,12 +2856,10 @@ async function loadPhaseData(): Promise<void> {
     if ('degraded' in board) {
       phaseNorthstar.value = null
       phaseNorthstarMissingReason.value = board.reason
-      phaseMonths.value = []
       phasePulse.value = null
     } else {
       phaseNorthstar.value = board.northstar
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
-      phaseMonths.value = board.months
       phasePulse.value = board.pulse ?? null
       phasePulses.value = board.pulses ?? []
     }
