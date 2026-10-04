@@ -102,9 +102,10 @@ def main():
         print(f"  无深谷状态日（{out['reason']}）")
     if args.apply and out["samples"]:
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        # kind=c9 与 northstar/monthly/pulse 同款集合判别键（board 读口按 kind 分流；缺失会被读口静默漏掉）
         db["phase_monitor"].update_one(
             {"_id": f"c9:{args.month}"},
-            {"$set": {**out, "updatedAt": now}}, upsert=True)
+            {"$set": {**out, "kind": "c9", "updatedAt": now}}, upsert=True)
         print(f"[apply] 已写 phase_monitor c9:{args.month}")
 
 

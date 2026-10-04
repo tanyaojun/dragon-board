@@ -132,6 +132,48 @@ export interface PhasePulseDoc {
   updatedAt: string
 }
 
+/** GET /api/phase-monitor/board 的深谷节点账本文档（盘后链 deepValley 步 / deep_valley_revalidate 产物，池等权代理口径） */
+export interface C9DeepValleyDoc {
+  _id: string
+  kind?: 'c9'
+  ok?: boolean
+  month: string
+  summary: {
+    month: string
+    deepSamples: number
+    reboundHit: string
+    poolMean: number | null
+    baselineMean: number | null
+    edge: number | null
+  }
+  samples: Array<{
+    date: string
+    eodScore: number
+    rebound3d: number
+    rebound3dHit: boolean
+    poolRetPct: number | null
+    poolN: number
+  }>
+  noData?: boolean
+  reason?: string | null
+  updatedAt: string
+}
+
+/** 哨兵分歧单日（融合总纲合流点一：规则分主定义 × jev 日级哨兵，只告警不改判） */
+export interface SentinelDivergenceDay {
+  date: string
+  ruleScore: number
+  ruleBand: string
+  sentinelBand: string
+  sentinelRaw: string
+  relation: 'agree' | 'lower' | 'higher'
+}
+
+export interface SentinelDivergence {
+  summary: { comparable: number; agree: number; lower: number; higher: number; skipped: number }
+  days: SentinelDivergenceDay[]
+}
+
 export interface PhaseBoard {
   northstar: PhaseNorthstarDoc | null
   pulse?: PhasePulseDoc | null
@@ -139,4 +181,8 @@ export interface PhaseBoard {
   northstarMissingReason?: string
   months: PhaseMonthlyDoc[]
   count: number
+  /** 深谷节点账本（C9 事件轴，按月升序；可能为空=尚无深谷状态日） */
+  c9?: C9DeepValleyDoc[]
+  /** 哨兵分歧（合流点一：逐日三档带比较 + 汇总计数） */
+  sentinelDivergence?: SentinelDivergence
 }

@@ -734,6 +734,95 @@
                   </div>
                 </template>
               </div>
+
+              <div class="phase-chart-card">
+                <div class="section-title">🧭 三轴决策栈（水平 × 动量 × 事件）</div>
+                <div class="phase-pulse-rows">
+                  <div class="jev-prob-row phase-pulse-row"
+                    title="水平=当前情绪分四带定仓位档（阶梯③：低温满仓/弱势不开新仓/高温三成）">
+                    <span class="axis-name">水平</span><span class="axis-value">{{ axisLevel }}</span>
+                  </div>
+                  <div class="jev-prob-row phase-pulse-row"
+                    title="动量=情绪分日间变化 Δ；确认节点为 M4 提案观察口径（热端=上穿 60 且 Δ>+15，冷端=深谷后首根 Δ>+15），只展示不决策">
+                    <span class="axis-name">动量</span><span class="axis-value">{{ axisMomentum }}</span>
+                  </div>
+                  <div class="jev-prob-row phase-pulse-row"
+                    title="事件=深谷状态节点（EOD<30），出手窗 T+1 早盘进 T+3 收盘出，明细见下方深谷账本">
+                    <span class="axis-name">事件</span><span class="axis-value">{{ axisEvent }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="phase-chart-card">
+                <div class="section-title">🌑 深谷节点账本（C9 事件轴 · 盘后链每日自动积累）</div>
+                <div v-if="!phaseC9Docs.length" class="state-block">暂无深谷账本（出现深谷状态日后自动生成）</div>
+                <template v-else>
+                  <div class="phase-pulse-ab">
+                    累计 {{ c9Ledger.total }} 个深谷样本（{{ c9Ledger.months }} 个月）· 3 日反弹命中 {{ c9Ledger.reboundHit }}/{{ c9Ledger.total }}<template
+                      v-if="c9Ledger.poolMean != null">· 池代理月均 {{ c9Ledger.poolMean }}% vs 基线 {{ c9Ledger.baselineMean }}%（edge {{ c9Ledger.edge != null && c9Ledger.edge >= 0 ? '+' : '' }}{{ c9Ledger.edge }}pp）</template>
+                  </div>
+                  <table class="phase-months-table">
+                    <thead>
+                      <tr><th>月份</th><th>深谷日</th><th>反弹命中</th><th>池代理</th><th>基线</th><th>edge</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="d in phaseC9Docs" :key="d._id">
+                        <td>{{ d.month }}</td>
+                        <td>{{ d.summary?.deepSamples ?? 0 }}</td>
+                        <td>{{ d.summary?.reboundHit ?? '--' }}</td>
+                        <td>{{ d.summary?.poolMean == null ? '--' : `${d.summary.poolMean}%` }}</td>
+                        <td>{{ d.summary?.baselineMean == null ? '--' : `${d.summary.baselineMean}%` }}</td>
+                        <td :style="{ color: d.summary?.edge == null ? '' : d.summary.edge >= 0 ? '#ff4757' : '#2ed573' }">
+                          {{ d.summary?.edge == null ? '--' : `${d.summary.edge >= 0 ? '+' : ''}${d.summary.edge}pp` }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div class="phase-pulse-ab"
+                    title="晋升门=2026-10-03 冻结协议（≥10 交易样本/胜率 ≥2/3/相对基线 ≥+1pp，连续 3 失效降级）；本账本为池等权代理口径，晋升判定以交易账本为准">
+                    晋升门进度（代理口径）：样本 {{ c9Ledger.total }}/10 · 胜率 {{ c9Ledger.winRate == null ? '--' : (c9Ledger.winRate * 100).toFixed(0) + '%' }}（门 ≥67%）· 相对基线 {{ c9Ledger.edge == null ? '--' : `${c9Ledger.edge}pp` }}（门 ≥+1pp）
+                  </div>
+                </template>
+              </div>
+
+              <div class="phase-chart-card">
+                <div class="section-title">📡 哨兵分歧（jev 日级哨兵 × 规则分 · 只告警不改判）</div>
+                <div v-if="!sentinelDivergence?.summary.comparable" class="state-block">暂无可比数据（哨兵与规则分需同日各有读数）</div>
+                <template v-else>
+                  <div class="phase-pulse-ab">
+                    可比 {{ sentinelDivergence.summary.comparable }} 天 · 一致 {{ sentinelDivergence.summary.agree }} · 判低 {{ sentinelDivergence.summary.lower }} · 判高 {{ sentinelDivergence.summary.higher }}<template
+                      v-if="sentinelDivergence.summary.skipped">（另有 {{ sentinelDivergence.summary.skipped }} 天哨兵证据不足或缺情绪分）</template>
+                  </div>
+                  <div v-if="sentinelDivergentDays.length" class="phase-pulse-rows">
+                    <div v-for="d in sentinelDivergentDays" :key="d.date" class="jev-prob-row phase-pulse-row"
+                      :title="`${d.date}：规则分 ${d.ruleScore} → ${d.ruleBand}；哨兵读 ${d.sentinelBand}`">
+                      <span class="axis-name">{{ d.date.slice(5) }}</span>
+                      <span class="axis-value">规则 {{ d.ruleBand }} → 哨兵读 {{ d.sentinelBand }}（{{ d.relation === 'lower' ? '判低一档' : '判高一档' }}）</span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+
+              <div class="phase-chart-card">
+                <div class="section-title">🎯 候选晋升进度（样本外证据积累 · 纪律=章程 §5）</div>
+                <div class="phase-pulse-rows">
+                  <div class="jev-prob-row phase-pulse-row"
+                    title="C6 弱势带回避：晋升门=10 月起 ≥2 次脉拍同向且弱势带累计 ≥30 笔（地图 §6 冻结口径）">
+                    <span class="axis-name">C6</span>
+                    <span class="axis-value">弱势带回避 · 累计 {{ c6Progress.trades }}/{{ C6_GATE_MIN_TRADES }} 笔<template
+                      v-if="c6Progress.monthCount">（{{ c6Progress.monthCount }} 个脉拍月{{ c6Progress.allNegative ? '，逐月同向为负' : '' }}）</template></span>
+                  </div>
+                  <div class="jev-prob-row phase-pulse-row"
+                    title="C9 深谷节点：晋升门=≥10 交易样本/胜率 ≥2/3/相对基线 ≥+1pp，连续 3 失效降级；代理账本进度见上方深谷卡">
+                    <span class="axis-name">C9</span>
+                    <span class="axis-value">深谷节点 · 代理账本 {{ c9Ledger.total }} 样本（交易账本另行记账）</span>
+                  </div>
+                  <div class="jev-prob-row phase-pulse-row"
+                    title="champion=阶梯仓位③；挑战者与对照读数见上方出手环境体检卡；晋升判定=≥2 样本外脉拍同向+≥30 笔+用户终审">
+                    <span class="axis-name">臂</span>
+                    <span class="axis-value">champion=阶梯仓位③；挑战者读数见上方体检卡</span>
+                  </div>
+                </div>
+              </div>
             </template>
           </section>
 
@@ -791,9 +880,11 @@ import type {
 } from '@/types/hotlistJev'
 import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/phaseApi'
 import type {
+  C9DeepValleyDoc,
   PhaseHistoryDay,
   PhaseNorthstarDoc,
   PhasePulseDoc,
+  SentinelDivergence,
 } from '@/types/phaseMonitor'
 import HotlistLimitStocksPanel from '@/components/panels/HotlistLimitStocksPanel.vue'
 import {
@@ -2750,6 +2841,8 @@ const phaseHistoryReason = ref<string | null>(null)
 const phaseNorthstar = ref<PhaseNorthstarDoc | null>(null)
 const phasePulse = ref<PhasePulseDoc | null>(null)
 const phasePulses = ref<PhasePulseDoc[]>([])
+const phaseC9Docs = ref<C9DeepValleyDoc[]>([])
+const sentinelDivergence = ref<SentinelDivergence | null>(null)
 const phaseNorthstarMissingReason = ref<string | null>(null)
 const phaseLoading = ref(false)
 const phaseLoadedOnce = ref(false)
@@ -2879,6 +2972,82 @@ const phasePulseAccRows = computed<PulseBandAccRow[]>(() =>
   }),
 )
 
+// ── 融合总纲面板（ranktrend-phase-fusion-master-plan.md §5：三轴决策栈/深谷账本/哨兵分歧/晋升进度）──
+
+// 三轴·水平：与 hero chip 同源（当前锁定文档情绪分）；档名=引擎四带语义
+const axisLevel = computed(() => {
+  const score = emotionScoreValue.value
+  if (score == null) return '暂不可用（情绪分缺失）'
+  const band = score < 40 ? '低温期' : score < 60 ? '弱势期' : score < 80 ? '高温期' : '极热期'
+  return `${band}（情绪分 ${score}）· 建议新仓：${todayAdvice.value}`
+})
+
+// 三轴·动量：日间 Δ + 确认节点口径（P2-b 热端上穿 / P2-b2 冷端修复=M4 提案观察态，只展示不决策）
+const axisMomentum = computed(() => {
+  const days = phaseHistoryDays.value.filter((d) => d.eodScore != null)
+  if (days.length < 2) return '样本不足（少于 2 个 EOD 日）'
+  const last = days[days.length - 1]!
+  const prev = days[days.length - 2]!
+  const delta = Math.round(((last.eodScore ?? 0) - (prev.eodScore ?? 0)) * 10) / 10
+  const deltaText = `Δ${delta >= 0 ? '+' : ''}${delta}（${prev.tradingDate.slice(5)}→${last.tradingDate.slice(5)}）`
+  const recentDeep = days.slice(-6, -1).some((d) => (d.eodScore ?? 99) < 30)
+  if (prev.eodScore != null && prev.eodScore < 60 && (last.eodScore ?? 0) >= 60 && delta > 15)
+    return `${deltaText}｜热端确认节点触发（上穿 60 且 Δ>+15，观察口径）`
+  if (recentDeep && delta > 15)
+    return `${deltaText}｜冷端确认节点触发（深谷后首根 Δ>+15，观察口径）`
+  return `${deltaText}｜确认节点未触发`
+})
+
+// 三轴·事件：C9 深谷节点（账本明细见深谷卡）
+const axisEvent = computed(() => {
+  const samples = phaseC9Docs.value.flatMap((d) => (d.samples ?? []).map((s) => ({ ...s, month: d.month })))
+  if (!samples.length) return '暂无深谷样本（出现 EOD<30 深谷状态日后自动积累）'
+  const last = samples[samples.length - 1]!
+  return `最近深谷 ${last.date}（EOD ${last.eodScore}）· 3 日反弹 ${last.rebound3d >= 0 ? '+' : ''}${last.rebound3d}`
+})
+
+// C9 账本聚合（池等权代理口径；晋升判定以交易账本为准，runbook 冻结）
+const c9Ledger = computed(() => {
+  const months = phaseC9Docs.value
+  const samples = months.flatMap((d) => (d.samples ?? []).map((s) => ({ ...s, month: d.month })))
+  const rets = samples.filter((s) => s.poolRetPct != null)
+  const wins = rets.filter((s) => (s.poolRetPct ?? 0) > 0).length
+  const mean = (pick: (m: C9DeepValleyDoc) => number | null | undefined) => {
+    const vals = months.map(pick).filter((v): v is number => v != null)
+    return vals.length ? Number((vals.reduce((a, v) => a + v, 0) / vals.length).toFixed(2)) : null
+  }
+  const poolMean = mean((m) => m.summary?.poolMean)
+  const baselineMean = mean((m) => m.summary?.baselineMean)
+  return {
+    months: months.length,
+    total: samples.length,
+    reboundHit: samples.filter((s) => s.rebound3dHit).length,
+    wins,
+    retCount: rets.length,
+    winRate: rets.length ? Number((wins / rets.length).toFixed(2)) : null,
+    poolMean,
+    baselineMean,
+    edge: poolMean != null && baselineMean != null ? Number((poolMean - baselineMean).toFixed(2)) : null,
+  }
+})
+
+// 哨兵分歧日（只列不一致日，一致计数在汇总行）
+const sentinelDivergentDays = computed(() => (sentinelDivergence.value?.days ?? []).filter((d) => d.relation !== 'agree'))
+
+// C6 晋升进度（门=地图 §6 冻结口径：10 月起 ≥2 次脉拍同向且弱势带累计 ≥30 笔；键=引擎 BAND_TAGS 稳定标签）
+const C6_GATE_MIN_TRADES = 30
+const c6Progress = computed(() => {
+  let trades = 0
+  const signs: string[] = []
+  for (const doc of phasePulses.value) {
+    const b = doc.report?.bands?.['弱势40-60']
+    if (!b) continue
+    trades += b.trades ?? 0
+    if (b.avgPerTrade != null) signs.push(b.avgPerTrade >= 0 ? '+' : '-')
+  }
+  return { trades, monthCount: signs.length, allNegative: signs.length > 0 && signs.every((s) => s === '-') }
+})
+
 async function loadPhaseData(): Promise<void> {
   phaseLoading.value = true
   phaseError.value = null
@@ -2897,11 +3066,15 @@ async function loadPhaseData(): Promise<void> {
       phaseNorthstar.value = null
       phaseNorthstarMissingReason.value = board.reason
       phasePulse.value = null
+      phaseC9Docs.value = []
+      sentinelDivergence.value = null
     } else {
       phaseNorthstar.value = board.northstar
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
       phasePulse.value = board.pulse ?? null
       phasePulses.value = board.pulses ?? []
+      phaseC9Docs.value = board.c9 ?? []
+      sentinelDivergence.value = board.sentinelDivergence ?? null
     }
   } catch (err) {
     phaseError.value = err instanceof Error ? err.message : '相位数据加载失败'
@@ -4426,4 +4599,6 @@ watch(() => props.visible, (visible) => {
 .phase-band-track { height: 10px; border-radius: 5px; }
 .phase-band-val { width: 64px; flex: none; text-align: right; font-weight: 600; font-size: 12px; }
 .phase-band-trades { width: 44px; flex: none; text-align: right; color: var(--text-secondary); font-size: 11px; }
+.axis-name { width: 44px; flex: none; color: var(--text-secondary); font-size: 11px; padding-top: 1px; }
+.axis-value { color: var(--text-primary); font-size: 12px; line-height: 1.5; }
 </style>

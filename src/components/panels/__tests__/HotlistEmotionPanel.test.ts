@@ -437,4 +437,31 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(visibleWatchBody).toContain('if (!visible) {')
     expect(visibleWatchBody).toContain('disposeAllCharts()')
   })
+
+  test('融合总纲面板：三轴决策栈/深谷账本/哨兵分歧/晋升进度（2026-10-04 总纲 §5 同步）', () => {
+    const source = panelSource()
+
+    // 四块卡片齐全，口径注记随卡片走（研究-展示同步：ranktrend-phase-fusion-master-plan.md）
+    expect(source).toContain('三轴决策栈（水平 × 动量 × 事件）')
+    expect(source).toContain('深谷节点账本（C9 事件轴 · 盘后链每日自动积累）')
+    expect(source).toContain('哨兵分歧（jev 日级哨兵 × 规则分 · 只告警不改判）')
+    expect(source).toContain('候选晋升进度（样本外证据积累 · 纪律=章程 §5）')
+    // 数据链：board 新字段装载（degraded 分支也要清空，不残留上一轮读数）
+    expect(source).toContain('phaseC9Docs.value = board.c9 ?? []')
+    expect(source).toContain('sentinelDivergence.value = board.sentinelDivergence ?? null')
+    expect(source).toContain('phaseC9Docs.value = []')
+    expect(source).toContain('sentinelDivergence.value = null')
+    // 三轴 computed 与确认节点观察口径标注（M4 提案只展示不决策）
+    expect(source).toContain('const axisLevel = computed(')
+    expect(source).toContain('const axisMomentum = computed(')
+    expect(source).toContain('const axisEvent = computed(')
+    expect(source).toContain('观察口径）')
+    // C9 账本聚合与晋升门进度（代理口径注记防混读）
+    expect(source).toContain('const c9Ledger = computed(')
+    expect(source).toContain('晋升门进度（代理口径）')
+    expect(source).toContain('晋升判定以交易账本为准')
+    // 哨兵分歧只列不一致日 + C6 晋升门常数
+    expect(source).toContain('const sentinelDivergentDays = computed(')
+    expect(source).toContain('const C6_GATE_MIN_TRADES = 30')
+  })
 })
