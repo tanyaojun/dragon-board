@@ -5,6 +5,9 @@ import { join } from 'node:path'
 
 import { describe, expect, test } from 'vitest'
 
+import { sortLimitUpStocks } from '@/services/hotlist/jevNarrativeProjection'
+import type { HotlistJevLimitUpStock } from '@/types/hotlistJev'
+
 const panelSource = () =>
   readFileSync(join(process.cwd(), 'src', 'components', 'panels', 'JevNarrativePanel.vue'), 'utf8')
 
@@ -168,6 +171,26 @@ describe('jevNarrativeProjection 投影模块合同', () => {
     expect(source).not.toContain('await ')
     expect(source).not.toContain('new Promise')
   })
+
+  test('sortLimitUpStocks 排序方向（回归：置信比较器内建降序曾被方向系数二次取反）', () => {
+    const stocks = [
+      { code: 'A', stockPhasePosition: 'start', stockPhaseProbabilities: { start: 0.6 }, rank: 3, label: 'x', labelProbabilities: { x: 0.5 } },
+      { code: 'B', stockPhasePosition: 'climax', stockPhaseProbabilities: { climax: 0.9 }, rank: 1, label: 'y', labelProbabilities: { y: 0.8 } },
+      { code: 'C', stockPhasePosition: 'ferment', stockPhaseProbabilities: { ferment: 0.75 }, rank: 2, label: 'z', labelProbabilities: { z: 0.65 } },
+    ] as unknown as HotlistJevLimitUpStock[]
+    // 相位置信：降序 B(0.9)→C(0.75)→A(0.6)，升序反之
+    expect(sortLimitUpStocks(stocks, 'phaseConf', true).map((s) => s.code)).toEqual(['B', 'C', 'A'])
+    expect(sortLimitUpStocks(stocks, 'phaseConf', false).map((s) => s.code)).toEqual(['A', 'C', 'B'])
+    // 驱动置信同方向规则
+    expect(sortLimitUpStocks(stocks, 'labelConf', true).map((s) => s.code)).toEqual(['B', 'C', 'A'])
+    // 相位档生命周期升序：start→ferment→climax；降序反转
+    expect(sortLimitUpStocks(stocks, 'phase', false).map((s) => s.code)).toEqual(['A', 'C', 'B'])
+    expect(sortLimitUpStocks(stocks, 'phase', true).map((s) => s.code)).toEqual(['B', 'C', 'A'])
+    // 热榜排名升序：1→2→3
+    expect(sortLimitUpStocks(stocks, 'rank', false).map((s) => s.code)).toEqual(['B', 'C', 'A'])
+    // 不突变入参数组
+    expect(stocks.map((s) => s.code)).toEqual(['A', 'B', 'C'])
+  })
 })
 
 describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；风格对齐池换手 2026-10-04）', () => {
@@ -201,12 +224,13 @@ describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；�
     expect(source).toContain('limitup-table-container')
     expect(source).toContain('position: sticky')
     expect(source).toContain('tr:hover')
-    // 搜索+排序（SectorDetail 成分股表同款控件，2026-10-04 用户令）
+    // 搜索+排序（SectorDetail 成分股表同款控件，2026-10-04 用户令；排序逻辑委托投影模块纯函数）
     expect(source).toContain('limitUpSearch')
     expect(source).toContain('placeholder="搜索股票代码或名称..."')
     expect(source).toContain('limitUpSortKey')
     expect(source).toContain('limitUpSortDesc')
-    expect(source).toContain('LIMITUP_PHASE_ORDER')
+    expect(source).toContain('sortLimitUpStocks(stocks, limitUpSortKey.value, limitUpSortDesc.value)')
+    expect(projectionSource()).toContain('LIMITUP_PHASE_ORDER')
     expect(source).toContain('<option value="phase">相位档</option>')
     expect(source).toContain('↓ 降序')
   })

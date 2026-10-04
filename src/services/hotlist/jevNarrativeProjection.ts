@@ -6,7 +6,7 @@
 // 仅当确实缺失时标 noDistribution（fail-visible），不把 TS 类型缺字段当协议事实（2026-10-02 纠错）。
 // 结论唯一来源 = QuantBoard 后端 jev 轨道（hotlist_jev_sentiment）落库文档，本模块零计算补齐。
 
-import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc, HotlistJevMissingDay } from '@/types/hotlistJev'
+import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
 import { JEV_CROWDING_NAMES, JEV_CROWDING_WARN_LAYERS } from './hotlistJevApi'
 
 /** 犹豫阈值（与热榜情绪面板 jevHesitant 同一口径）：top 概率 < 60% 视为低置信 */
@@ -367,4 +367,47 @@ export function countDegradedDocs(days: HotlistJevDayEntry[]): number {
     if (day.eod && (day.eod.status === 'degraded' || day.eod.status === 'no_data')) count += 1
   }
   return count
+}
+
+// ── 涨停复盘个股排序（2026-10-04；纯函数，方向统一由 desc 系数控制——
+//    回归教训：置信比较器内建降序再乘方向系数会被二次取反）──
+
+/** 相位档生命周期序：启动→发酵→加速→分歧，信息不足沉底 */
+export const LIMITUP_PHASE_ORDER: Record<string, number> = {
+  start: 0,
+  ferment: 1,
+  climax: 2,
+  divergence: 3,
+  insufficient: 9,
+}
+
+export type LimitUpSortKey = 'phase' | 'rank' | 'labelConf' | 'phaseConf'
+
+function limitUpLabelConf(stock: HotlistJevLimitUpStock): number {
+  return stock.label ? (stock.labelProbabilities?.[stock.label] ?? 0) : 0
+}
+
+function limitUpPhaseConf(stock: HotlistJevLimitUpStock): number {
+  return stock.stockPhasePosition
+    ? (stock.stockPhaseProbabilities?.[stock.stockPhasePosition] ?? 0)
+    : 0
+}
+
+/** 驱动过滤/搜索之后的排序入口：全部比较器自然升序，desc 统一取反。不突变入参数组。 */
+export function sortLimitUpStocks(
+  stocks: HotlistJevLimitUpStock[],
+  key: LimitUpSortKey,
+  desc: boolean,
+): HotlistJevLimitUpStock[] {
+  const dir = desc ? -1 : 1
+  const phaseOrder = (stock: HotlistJevLimitUpStock) =>
+    LIMITUP_PHASE_ORDER[stock.stockPhasePosition ?? 'insufficient'] ?? 9
+  const comparators: Record<LimitUpSortKey, (a: HotlistJevLimitUpStock, b: HotlistJevLimitUpStock) => number> = {
+    phase: (a, b) => phaseOrder(a) - phaseOrder(b),
+    rank: (a, b) => (a.rank ?? 9999) - (b.rank ?? 9999),
+    labelConf: (a, b) => limitUpLabelConf(a) - limitUpLabelConf(b),
+    phaseConf: (a, b) => limitUpPhaseConf(a) - limitUpPhaseConf(b),
+  }
+  const compare = comparators[key] ?? comparators.phase
+  return [...stocks].sort((a, b) => compare(a, b) * dir)
 }

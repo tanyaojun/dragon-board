@@ -614,11 +614,13 @@ import {
   JEV_HESITANT_THRESHOLD,
   layerStats,
   parseNarrativeSections,
+  sortLimitUpStocks,
   trimRangeWindow,
   type JevAnchorMetric,
   type JevConfidenceMetrics,
   type JevCrowdingPoint,
   type JevNarrativeProjection,
+  type LimitUpSortKey,
 } from '@/services/hotlist/jevNarrativeProjection'
 import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevLimitUpDay, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
 
@@ -757,7 +759,6 @@ const limitUpLoading = ref(false)
 const limitUpError = ref<string | null>(null)
 const limitUpDriverFilter = ref('')
 const limitUpSearch = ref('')
-type LimitUpSortKey = 'phase' | 'rank' | 'labelConf' | 'phaseConf'
 const limitUpSortKey = ref<LimitUpSortKey>('phase')
 const limitUpSortDesc = ref(false)
 let limitUpReqId = 0
@@ -791,19 +792,6 @@ watch(selectedDate, () => {
   limitUpSearch.value = ''
 })
 
-// 相位档排序序（生命周期序：启动→发酵→加速→分歧，信息不足沉底）
-const LIMITUP_PHASE_ORDER: Record<string, number> = {
-  start: 0, ferment: 1, climax: 2, divergence: 3, insufficient: 9,
-}
-
-function limitUpLabelConf(stock: HotlistJevLimitUpStock): number {
-  return stock.label ? (stock.labelProbabilities?.[stock.label] ?? 0) : 0
-}
-
-function limitUpPhaseConf(stock: HotlistJevLimitUpStock): number {
-  return stock.stockPhasePosition ? (stock.stockPhaseProbabilities?.[stock.stockPhasePosition] ?? 0) : 0
-}
-
 const filteredLimitUpStocks = computed(() => {
   let stocks = limitUpDay.value?.stocks ?? []
   if (limitUpDriverFilter.value) {
@@ -814,16 +802,7 @@ const filteredLimitUpStocks = computed(() => {
     stocks = stocks.filter((stock) =>
       (stock.name ?? '').toLowerCase().includes(kw) || stock.code.includes(kw))
   }
-  const dir = limitUpSortDesc.value ? -1 : 1
-  const comparators: Record<LimitUpSortKey, (a: HotlistJevLimitUpStock, b: HotlistJevLimitUpStock) => number> = {
-    phase: (a, b) => (LIMITUP_PHASE_ORDER[a.stockPhasePosition ?? 'insufficient'] ?? 9)
-      - (LIMITUP_PHASE_ORDER[b.stockPhasePosition ?? 'insufficient'] ?? 9),
-    rank: (a, b) => (a.rank ?? 9999) - (b.rank ?? 9999),
-    labelConf: (a, b) => limitUpLabelConf(b) - limitUpLabelConf(a),
-    phaseConf: (a, b) => limitUpPhaseConf(b) - limitUpPhaseConf(a),
-  }
-  const compare = comparators[limitUpSortKey.value] ?? comparators.phase
-  return [...stocks].sort((a, b) => compare(a, b) * dir)
+  return sortLimitUpStocks(stocks, limitUpSortKey.value, limitUpSortDesc.value)
 })
 
 // 相位分线=日级哨兵带（相位是市场级判定，当日个股同值；哨兵缺失如实 '--'）
