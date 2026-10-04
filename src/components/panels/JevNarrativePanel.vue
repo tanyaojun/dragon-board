@@ -499,9 +499,9 @@
             </template>
           </section>
 
-          <!-- ⑦ 涨停叙事：打标轨道研究↔展示同步（个股四题 + 日级相位哨兵，独立读口 fail-visible） -->
+          <!-- ⑦ 涨停复盘：打标轨道研究↔展示同步（个股四题 + 日级相位哨兵，独立读口 fail-visible；表格语言对齐池换手 2026-10-04） -->
           <section v-show="view === 'limitup'" class="tab-pane">
-            <div v-if="limitUpLoading" class="empty-row">涨停叙事加载中…</div>
+            <div v-if="limitUpLoading" class="empty-row">涨停复盘加载中…</div>
             <div v-else-if="limitUpError" class="state-block error">
               ⚠️ {{ limitUpError }}
               <button class="retry-btn" @click="selectedDate && ensureLimitUp(selectedDate)">重试</button>
@@ -518,34 +518,43 @@
                   </span>
                 </div>
               </div>
-              <div class="limitup-summary-row">
-                <span class="limitup-summary-chip">个股 {{ limitUpDay.summary.total }}</span>
-                <span v-for="(count, key) in limitUpDay.summary.label" :key="`l-${key}`" class="limitup-summary-chip">
-                  {{ JEV_DRIVER_NAMES[String(key)] ?? key }} {{ count }}
-                </span>
+              <div class="limitup-header">
+                <div class="limitup-filters">
+                  <button class="limitup-filter-btn" :class="{ active: limitUpDriverFilter === '' }"
+                    @click="limitUpDriverFilter = ''">全部 {{ limitUpDay.summary.total }}</button>
+                  <button v-for="(count, key) in limitUpDay.summary.label" :key="`l-${key}`" class="limitup-filter-btn"
+                    :class="{ active: limitUpDriverFilter === String(key) }" @click="limitUpDriverFilter = String(key)">
+                    {{ JEV_DRIVER_NAMES[String(key)] ?? key }} {{ count }}
+                  </button>
+                </div>
+                <span class="limitup-stats">显示 {{ filteredLimitUpStocks.length }} / {{ limitUpDay.summary.total }} 只</span>
               </div>
-              <table class="limitup-table">
-                <thead>
-                  <tr>
-                    <th>#</th><th>名称</th><th>代码</th><th>驱动</th><th>驱动置信</th>
-                    <th>深度</th><th>新鲜度</th><th>买盘逻辑</th><th>板块</th><th>热榜</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="stock in limitUpDay.stocks" :key="stock.code">
-                    <td>{{ stock.rank ?? '--' }}</td>
-                    <td>{{ stock.name ?? '--' }}</td>
-                    <td class="limitup-code">{{ stock.code }}</td>
-                    <td>{{ stock.label ? (JEV_DRIVER_NAMES[stock.label] ?? stock.label) : '--' }}</td>
-                    <td>{{ topProbability(stock.labelProbabilities, stock.label) }}</td>
-                    <td>{{ stock.catalystDepth ? (JEV_DEPTH_NAMES[stock.catalystDepth] ?? stock.catalystDepth) : '--' }}</td>
-                    <td>{{ stock.freshness ? (JEV_FRESHNESS_NAMES[stock.freshness] ?? stock.freshness) : '--' }}</td>
-                    <td>{{ stock.buySideLogic ? (JEV_BUYSIDE_NAMES[stock.buySideLogic] ?? stock.buySideLogic) : '--' }}</td>
-                    <td>{{ stock.board ?? '--' }}</td>
-                    <td>{{ stock.inHotlist ? `#${stock.rank ?? '--'}` : '未进' }}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <div class="limitup-table-container" v-if="filteredLimitUpStocks.length">
+                <table class="limitup-table">
+                  <thead>
+                    <tr>
+                      <th>#</th><th>名称</th><th>代码</th><th>驱动</th><th>驱动置信</th>
+                      <th>深度</th><th>新鲜度</th><th>买盘逻辑</th><th>板块</th><th>热榜</th><th>相位分线</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(stock, i) in filteredLimitUpStocks" :key="stock.code">
+                      <td class="num">{{ i + 1 }}</td>
+                      <td>{{ stock.name ?? '--' }}</td>
+                      <td><span class="limitup-code">{{ stock.code }}</span></td>
+                      <td>{{ stock.label ? (JEV_DRIVER_NAMES[stock.label] ?? stock.label) : '--' }}</td>
+                      <td class="num">{{ topProbability(stock.labelProbabilities, stock.label) }}</td>
+                      <td>{{ stock.catalystDepth ? (JEV_DEPTH_NAMES[stock.catalystDepth] ?? stock.catalystDepth) : '--' }}</td>
+                      <td>{{ stock.freshness ? (JEV_FRESHNESS_NAMES[stock.freshness] ?? stock.freshness) : '--' }}</td>
+                      <td>{{ stock.buySideLogic ? (JEV_BUYSIDE_NAMES[stock.buySideLogic] ?? stock.buySideLogic) : '--' }}</td>
+                      <td>{{ stock.board ?? '--' }}</td>
+                      <td class="num">{{ stock.inHotlist ? `#${stock.rank ?? '--'}` : '未进' }}</td>
+                      <td>{{ limitUpPhaseName }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else class="empty-row">该驱动类型下暂无个股</div>
             </template>
           </section>
         </template>
@@ -602,7 +611,7 @@ const TABS = [
   { key: 'confidence', label: '置信度', icon: '🎯' },
   { key: 'narrative', label: '叙事全文', icon: '📜' },
   { key: 'raw', label: '原始返回', icon: '🧾' },
-  { key: 'limitup', label: '涨停叙事', icon: '🏷️' },
+  { key: 'limitup', label: '涨停复盘', icon: '🏷️' },
 ] as const
 type ViewKey = (typeof TABS)[number]['key']
 
@@ -721,10 +730,11 @@ function latestSlotTime(): string | null {
   return slots.value.length ? (slots.value[slots.value.length - 1]?.slotTime ?? null) : null
 }
 
-// ---------- 涨停叙事（打标轨道研究↔展示同步 2026-10-03；独立读口 fail-visible） ----------
+// ---------- 涨停复盘（打标轨道研究↔展示同步 2026-10-03；独立读口 fail-visible；表格语言对齐池换手 2026-10-04） ----------
 const limitUpDay = ref<HotlistJevLimitUpDay | null>(null)
 const limitUpLoading = ref(false)
 const limitUpError = ref<string | null>(null)
+const limitUpDriverFilter = ref('')
 let limitUpReqId = 0
 
 async function ensureLimitUp(date: string) {
@@ -736,7 +746,7 @@ async function ensureLimitUp(date: string) {
     const result = await fetchHotlistJevLimitUpLabels(date)
     if (reqId !== limitUpReqId) return
     if (result.degraded || !result.day) {
-      limitUpError.value = result.reason || '涨停叙事读口不可用'
+      limitUpError.value = result.reason || '涨停复盘读口不可用'
       limitUpDay.value = null
     } else {
       limitUpDay.value = result.day
@@ -748,6 +758,23 @@ async function ensureLimitUp(date: string) {
 
 watch([view, selectedDate], ([tab, date]) => {
   if (tab === 'limitup' && date) void ensureLimitUp(date)
+})
+
+// 换日重置驱动过滤：不同日驱动类型集合可能不同，残留过滤会让列表假性为空
+watch(selectedDate, () => {
+  limitUpDriverFilter.value = ''
+})
+
+const filteredLimitUpStocks = computed(() => {
+  const stocks = limitUpDay.value?.stocks ?? []
+  if (!limitUpDriverFilter.value) return stocks
+  return stocks.filter((stock) => stock.label === limitUpDriverFilter.value)
+})
+
+// 相位分线=日级哨兵带（相位是市场级判定，当日个股同值；哨兵缺失如实 '--'）
+const limitUpPhaseName = computed(() => {
+  const band = limitUpDay.value?.phase?.band
+  return band ? (JEV_PHASE_BAND_NAMES[band] ?? band) : '--'
 })
 
 function topProbability(probs: Record<string, number> | null, choice: string | null): string {
@@ -2250,7 +2277,7 @@ onUnmounted(() => {
 .dist-row-pct { font-size: 10px; color: var(--text-secondary); }
 .dist-score-note { font-size: 10px; color: var(--text-secondary); margin-top: 4px; }
 
-/* 涨停叙事（打标轨道研究↔展示同步 2026-10-03） */
+/* 涨停复盘（打标轨道研究↔展示同步 2026-10-03；表格/过滤行语言对齐池换手 2026-10-04） */
 .limitup-phase-card {
   border: 1px solid var(--panel-border, #2a2f3a);
   border-radius: 8px;
@@ -2267,24 +2294,83 @@ onUnmounted(() => {
   padding: 2px 8px;
   color: var(--text-secondary);
 }
-.limitup-summary-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
-.limitup-summary-chip {
-  font-size: 11px;
-  border: 1px solid var(--panel-border, #2a2f3a);
-  border-radius: 10px;
-  padding: 2px 8px;
-  color: var(--text-secondary);
+/* 过滤行（池换手 to-header/to-filter-btn/to-stats 同款） */
+.limitup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0;
 }
-.limitup-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.limitup-table th,
-.limitup-table td {
-  border-bottom: 1px solid var(--panel-border, #232833);
-  padding: 4px 6px;
+.limitup-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.limitup-filter-btn {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.limitup-filter-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.limitup-filter-btn.active { background: var(--color-highlight); border-color: var(--color-highlight); color: #000; }
+.limitup-stats {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-weight: 500;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+/* 明细表（池换手 to-table 同款：容器边框圆角+sticky 表头+固定列宽+行 hover） */
+.limitup-table-container {
+  max-height: 500px;
+  overflow-y: auto;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+.limitup-table { border-collapse: collapse; font-size: 12px; width: auto; table-layout: auto; }
+.limitup-table th:nth-child(1) { width: 44px; }    /* 序号 */
+.limitup-table th:nth-child(2) { width: 104px; }   /* 名称 */
+.limitup-table th:nth-child(3) { width: 84px; }    /* 代码 */
+.limitup-table th:nth-child(4) { width: 92px; }    /* 驱动 */
+.limitup-table th:nth-child(5) { width: 80px; }    /* 驱动置信 */
+.limitup-table th:nth-child(6) { width: 88px; }    /* 深度 */
+.limitup-table th:nth-child(7) { width: 92px; }    /* 新鲜度 */
+.limitup-table th:nth-child(8) { width: 92px; }    /* 买盘逻辑 */
+.limitup-table th:nth-child(9) { width: 96px; }    /* 板块 */
+.limitup-table th:nth-child(10) { width: 64px; }   /* 热榜 */
+.limitup-table th:nth-child(11) { width: 116px; }  /* 相位分线 */
+.limitup-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-header);
+  padding: 10px 6px;
   text-align: left;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--border-color);
+  white-space: nowrap;
+  z-index: 1;
+}
+.limitup-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
   color: var(--text-primary);
 }
-.limitup-code { opacity: 0.6; }
+.limitup-table tbody tr:hover { background: var(--bg-hover); }
+.limitup-code {
+  color: var(--color-highlight);
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 127, 80, 0.5);
+  font-weight: 500;
+}
+.limitup-table .num { font-variant-numeric: tabular-nums; }
 
 /* 涨停生态断层标注（§十三） */
 .break-card {

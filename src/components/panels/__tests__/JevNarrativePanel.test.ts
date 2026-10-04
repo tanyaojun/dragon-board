@@ -170,11 +170,12 @@ describe('jevNarrativeProjection 投影模块合同', () => {
   })
 })
 
-describe('涨停叙事页签（打标轨道研究↔展示同步 2026-10-03）', () => {
+describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；风格对齐池换手 2026-10-04）', () => {
   test('页签与读口合同：limitup 页签 + 独立读口 + fail-visible + 哨兵/个股呈现', () => {
     const source = panelSource()
     expect(source).toContain("'limitup'")
-    expect(source).toContain('涨停叙事')
+    expect(source).toContain('涨停复盘')
+    expect(source).not.toContain('涨停叙事')
     expect(source).toContain('fetchHotlistJevLimitUpLabels')
     expect(source).toContain('日级相位哨兵')
     expect(source).toContain('该日无涨停打标文档')
@@ -184,6 +185,22 @@ describe('涨停叙事页签（打标轨道研究↔展示同步 2026-10-03）',
     expect(script).not.toContain('fetchJiuyanAction')
     expect(script).not.toContain('hotlist_sentiment')
     expect(script).not.toContain('emotionScore')
+  })
+
+  test('池换手风格对齐合同（2026-10-04 用户裁决）：整数序号 + 相位分线列 + 过滤行 + to-table 语言', () => {
+    const source = panelSource()
+    // 序号=过滤后列表整数序列（1..N），热榜排名只在热榜列展示
+    expect(source).toContain('{{ i + 1 }}')
+    expect(source).toContain('v-for="(stock, i) in filteredLimitUpStocks"')
+    // 相位分线列=日级哨兵带（市场级判定，个股行同值），缺失如实 '--'
+    expect(source).toContain('<th>相位分线</th>')
+    expect(source).toContain('limitUpPhaseName')
+    // 池换手同款过滤行（全部+各驱动按钮+右侧统计）与明细表容器
+    expect(source).toContain('limitup-filter-btn')
+    expect(source).toContain('limitup-stats')
+    expect(source).toContain('limitup-table-container')
+    expect(source).toContain('position: sticky')
+    expect(source).toContain('tr:hover')
   })
 
   test('打标轨道中文映射合同（驱动/深度/新鲜度/买盘/相位档）', () => {
