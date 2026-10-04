@@ -13,9 +13,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
 
 from backend.services.jev.jev_client import call_jev, parse_jev_response
 
@@ -77,17 +81,20 @@ QUESTIONS_PHASE = {"phase_band": {"type": "choice",
                        "insufficient": "证据不足：所给盘面事实不足以判断，不强行归类"}}}
 
 # 个股相位分线题（2026-10-04 用户澄清题意后裁决试点：问该股自身本轮行情位置，非市场相位；
-# 设计稿+成本预登记见 docs/hotlist-jev/jev-driver-label-v3-questionset.md 尾部「个股相位分线题设计稿」。
-# 判据冻结稿——任何改动=改门须用户点头；试点经 --stock-phase-date 单题补跑，不进 QUESTIONS_STOCK 主四题）
+# 设计稿见 docs/hotlist-jev/jev-driver-label-v3-questionset.md 尾部。
+# v0.1（同日用户令）：价格位置轴为主锚——首板但贴近 20 日高点属高位（龙版传媒教训），判据改动经用户裁决冻结）
 QUESTIONS_STOCK_PHASE = {"stock_phase_position": {"type": "choice",
-                          "instructions": "仅依据该股自身证据（连板高度、封板时间与质量、板块地位、解析中描述的本轮行情轨迹），"
-                                          "判断该股当前处在自身本轮行情相位分线的哪个位置？只判位置，不预测后市。",
+                          "instructions": "仅依据该股自身证据（价格位置轴：距 20 日最高价、20 日窗口涨幅、今日量/昨量；"
+                                          "辅锚：连板高度、封板时间与质量、板块地位、解析中描述的本轮行情轨迹），"
+                                          "判断该股当前处在自身本轮行情相位分线的哪个位置？"
+                                          "注意：位置看价格离 20 日高点的距离与自低位累计涨幅，不看单日连板数——"
+                                          "首板但价格已贴近 20 日高点属高位，不是低位启动。只判位置，不预测后市。",
                           "criteria": {
-                              "start": "低位启动区：本轮 1 板（首板或断板后反包首板）；解析显示刚启动、无高位滞涨痕迹",
-                              "ferment": "中位发酵区：本轮 2-3 连板，封板质量正常（早封/硬板），解析显示主升延续",
-                              "climax": "高位高潮区：本轮 4 板及以上，或板籍身位处市场最高板梯队；缩量一字/加速形态",
-                              "divergence": "分歧位：当日炸板回封、烂板（开板≥2 次/尾盘回封）、天量换手滞涨——高度不限，质量修正优先于高度归层",
-                              "insufficient": "信息不足：解析未提供连板数/封板质量等可数证据，不强行归类"}}}
+                              "start": "低位启动区：价格处低位——距 20 日最高价 >20% 且 20 日窗口涨幅 <30%；典型=首板/断板后反包首板刚启动",
+                              "ferment": "中位发酵区：价格处中位——距 20 日最高价 10-20% 或 20 日窗口涨幅 30-50%；典型=2-3 连板主升延续、封板质量正常（早封/硬板）",
+                              "climax": "高位高潮区：价格贴近高点——距 20 日最高价 ≤10% 或 20 日窗口涨幅 ≥50%；含 4 板以上高度板/缩量加速板",
+                              "divergence": "分歧位：封板质量与量能示警优先于价格位置——当日炸板回封、烂板（开板≥2 次/尾盘回封）、放量滞涨（明显放量但封板勉强）；高位放巨量滞涨必判本层",
+                              "insufficient": "信息不足：价格位置轴与连板/质量证据均缺失，不强行归类"}}}
 
 THS_KEYS = ("one", "two", "three", "four", "high")
 
@@ -240,6 +247,95 @@ def market_facts_line(db, date: str) -> str:
     return line
 
 
+# ---- 弹药 6：个股价格位置轴（2026-10-04 用户令接入：距 20 日最高/窗口涨幅/量能缩放——
+#      首板单锚判不出高位，龙版传媒 605577 首板但距 20 日高点仅 7.8%/窗口涨幅 62.5% 实锤） ----
+_POSITION_LOCK = threading.Lock()
+_DAILY_CLIENT: Any = None
+_DAILY_BARS_CACHE: dict[str, list[dict]] = {}
+TDX_HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
+
+
+def _tdx_daily_client():
+    """TDX 日线客户端单例（节点池探测同 backfill_slot_pctchange 模式）；全节点不可用返回 None。"""
+    global _DAILY_CLIENT
+    with _POSITION_LOCK:
+        if _DAILY_CLIENT is not None:
+            return _DAILY_CLIENT
+        try:
+            hosts = json.loads(TDX_HOSTS_PATH.read_text(encoding="utf-8"))["candidates"]
+            from mootdx.quotes import Quotes
+            for h in hosts[:8]:
+                try:
+                    client = Quotes.factory(market="std", server=(h["ip"], int(h["port"])),
+                                            timeout=6, bestip=False)
+                    if len(client.index_bars(symbol="999999", frequency=9, start=0, offset=5)) > 0:
+                        _DAILY_CLIENT = client
+                        return client
+                except Exception:
+                    continue
+        except Exception:
+            return None
+    return None
+
+
+def _daily_bars(code: str) -> list[dict]:
+    """日线棒升序（date/high/close/vol），取最近 60 根覆盖 20 日窗口；失败返回 []（调用方 fail-visible）。"""
+    cached = _DAILY_BARS_CACHE.get(code)
+    if cached is not None:
+        return cached
+    bars: list[dict] = []
+    client = _tdx_daily_client()
+    if client is not None:
+        try:
+            with _POSITION_LOCK:
+                df = client.bars(symbol=code, frequency=9, start=0, offset=60)
+            if df is not None and len(df) > 0:
+                for _, r in df.iterrows():
+                    bars.append({
+                        "date": f"{int(r['year']):04d}-{int(r['month']):02d}-{int(r['day']):02d}",
+                        "high": float(r["high"]), "close": float(r["close"]),
+                        "vol": float(r.get("vol") or 0),
+                    })
+                bars.sort(key=lambda b: b["date"])
+        except Exception:
+            bars = []
+    _DAILY_BARS_CACHE[code] = bars
+    return bars
+
+
+def stock_position_line(date: str, code: str) -> str:
+    """弹药 6 行：价格位置轴原始可数锚（不给档位标签防预判，阈值锚在判据里）。
+    fail-visible：TDX 不可用/缺今日棒/数据不足如实标注，不伪造数字。"""
+    try:
+        bars = _daily_bars(code)
+        if not bars:
+            return "个股位置：TDX 日线不可用（fail-visible，价格位置轴缺失）"
+        window = [b for b in bars if b["date"] <= date]
+        today = next((b for b in window if b["date"] == date), None)
+        if today is None:
+            return f"个股位置：{date} 无当日日线棒（停牌或数据缺口，fail-visible）"
+        if len(window) < 2:
+            return "个股位置：上市数据不足 2 根日线（fail-visible）"
+        last20 = window[-20:]
+        high20 = max(b["high"] for b in last20)
+        low_close = min(b["close"] for b in last20)
+        gap_pct = (high20 - today["close"]) / high20 * 100
+        chg_pct = (today["close"] - low_close) / low_close * 100
+        prev = window[-2]
+        if prev["vol"] > 0:
+            ratio = today["vol"] / prev["vol"]
+            tag = "放量" if ratio >= 1.5 else ("缩量" if ratio <= 0.7 else "平量")
+            vol_txt = f"{ratio:.2f} 倍（{tag}）"
+        else:
+            vol_txt = "昨量缺失（fail-visible）"
+        note = "" if len(last20) >= 20 else f"（上市窗口仅 {len(last20)} 根）"
+        return (f"个股位置：现价 {today['close']:.2f} · 距 20 日最高 {high20:.2f} 差 {gap_pct:.1f}%"
+                f" · 20 日窗口涨幅 {chg_pct:+.1f}%（最低收盘 {low_close:.2f}）{note}"
+                f" · 今日量/昨量 {vol_txt}")
+    except Exception as e:
+        return f"个股位置：计算失败 {e}（fail-visible）"
+
+
 def board_position(jiuyan_doc, code: str) -> str:
     """弹药 5：板块地位（所属韦研板块今日涨停家数 + 该股按涨停时间的封板序）。"""
     best = None
@@ -259,7 +355,7 @@ def board_position(jiuyan_doc, code: str) -> str:
 
 
 def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, rank) -> str:
-    """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 板块地位块 + 热榜。"""
+    """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 个股位置行（价格轴）+ 板块地位块 + 热榜。"""
     jy = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
     ths = ths_positions(db, date).get(code)
     if ths:
@@ -287,6 +383,7 @@ def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, ran
         f"{date} 交易日 · {market_facts_line(db, date)}",
         f"该股：{stock.get('name')}（{code}），今日涨停价 {stock.get('price')}{day_num}，涨停时间 {stock.get('time')}；{hot}",
         f"身位：{ths_line}",
+        stock_position_line(date, code),
         board_position(jy, code),
         "韭研解析全文：",
         expound_line,

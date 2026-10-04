@@ -15,13 +15,50 @@ from backend.operations.jev_label_jiuyan import QUESTIONS_STOCK_PHASE, run_stock
 
 
 def test_question_structure_frozen_design():
-    # 设计稿冻结合同（jev-driver-label-v3-questionset.md 尾部）：key 与五档选项逐字对齐
+    # 设计稿 v0.1 冻结合同（jev-driver-label-v3-questionset.md）：key 与五档选项逐字对齐；
+    # v0.1（2026-10-04 用户令）：价格位置轴主锚——首板贴近 20 日高点属高位（龙版传媒教训）
     assert list(QUESTIONS_STOCK_PHASE.keys()) == ["stock_phase_position"]
     q = QUESTIONS_STOCK_PHASE["stock_phase_position"]
     assert q["type"] == "choice"
     assert list(q["criteria"].keys()) == ["start", "ferment", "climax", "divergence", "insufficient"]
     assert "不预测后市" in q["instructions"]
-    assert "质量修正优先于高度归层" in q["criteria"]["divergence"]
+    assert "距 20 日最高价" in q["instructions"] and "不看单日连板数" in q["instructions"]
+    assert "≤10%" in q["criteria"]["climax"] and "≥50%" in q["criteria"]["climax"]
+    assert ">20%" in q["criteria"]["start"] and "<30%" in q["criteria"]["start"]
+    assert "优先于价格位置" in q["criteria"]["divergence"]
+
+
+def test_position_line_counts_from_daily_bars(monkeypatch):
+    # 21 根日线：20 日前收盘 10 → 现价 16.28；20 日最高 17.66；昨量 1000 今量 950
+    bars = [{"date": f"2026-09-{d:02d}", "high": 10.0 + i * 0.1, "close": 10.0 + i * 0.3,
+             "vol": 1000.0} for i, d in enumerate(range(1, 19))]
+    bars += [{"date": "2026-09-29", "high": 17.0, "close": 15.0, "vol": 1000.0},
+             {"date": "2026-09-30", "high": 17.66, "close": 16.28, "vol": 950.0}]
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
+    line = runner.stock_position_line("2026-09-30", "605577")
+    assert "距 20 日最高 17.66 差 7.8%" in line
+    assert "20 日窗口涨幅" in line and "最低收盘" in line
+    assert "0.95 倍（平量）" in line
+    # 阈值语义自检：龙版传媒形态（距高点 7.8%/窗口涨幅 62.5%）应同时满足 climax 两锚
+
+
+def test_position_line_fail_visible(monkeypatch):
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: [])
+    assert "fail-visible" in runner.stock_position_line("2026-09-30", "605577")
+    # 缺今日棒（停牌/数据缺口）
+    bars = [{"date": "2026-09-29", "high": 17.0, "close": 15.0, "vol": 1000.0},
+            {"date": "2026-09-28", "high": 16.0, "close": 14.0, "vol": 900.0}]
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
+    assert "无当日日线棒" in runner.stock_position_line("2026-09-30", "605577")
+    # 新股窗口不足
+    bars1 = [{"date": "2026-09-30", "high": 12.0, "close": 11.5, "vol": 500.0}]
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars1)
+    assert "不足 2 根" in runner.stock_position_line("2026-09-30", "605577")
+    # 昨量 0（数据缺口不伪造倍数）
+    bars2 = [{"date": "2026-09-29", "high": 17.0, "close": 15.0, "vol": 0.0},
+             {"date": "2026-09-30", "high": 17.66, "close": 16.28, "vol": 950.0}]
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars2)
+    assert "昨量缺失" in runner.stock_position_line("2026-09-30", "605577")
 
 
 class _FakeCol:
