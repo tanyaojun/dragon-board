@@ -518,6 +518,9 @@
                   </span>
                 </div>
               </div>
+              <div class="limitup-phase-note">
+                相位分线列口径：{{ limitUpHasStockPhase ? '个股自身相位位（市场哨兵带见上方卡片）' : '日级哨兵带（市场级，当日未跑个股相位）' }}
+              </div>
               <div class="limitup-header">
                 <div class="limitup-filters">
                   <button class="limitup-filter-btn" :class="{ active: limitUpDriverFilter === '' }"
@@ -549,7 +552,7 @@
                       <td>{{ stock.buySideLogic ? (JEV_BUYSIDE_NAMES[stock.buySideLogic] ?? stock.buySideLogic) : '--' }}</td>
                       <td>{{ stock.board ?? '--' }}</td>
                       <td class="num">{{ stock.inHotlist ? `#${stock.rank ?? '--'}` : '未进' }}</td>
-                      <td>{{ limitUpPhaseName }}</td>
+                      <td class="num" :title="stockPhaseCellTitle(stock)">{{ stockPhaseCell(stock) }}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -578,6 +581,7 @@ import {
   JEV_DRIVER_NAMES,
   JEV_FRESHNESS_NAMES,
   JEV_PHASE_BAND_NAMES,
+  JEV_STOCK_PHASE_NAMES,
   JEV_STAGE_NAMES,
   JEV_STAGE_ORDER,
   jevChoiceName,
@@ -599,7 +603,7 @@ import {
   type JevCrowdingPoint,
   type JevNarrativeProjection,
 } from '@/services/hotlist/jevNarrativeProjection'
-import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevLimitUpDay, HotlistJevMissingDay } from '@/types/hotlistJev'
+import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevLimitUpDay, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
 
 const props = defineProps<{ visible: boolean; triggerRect?: DOMRect | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -776,6 +780,27 @@ const limitUpPhaseName = computed(() => {
   const band = limitUpDay.value?.phase?.band
   return band ? (JEV_PHASE_BAND_NAMES[band] ?? band) : '--'
 })
+
+// 个股相位分线（2026-10-04 试点）：该股自身本轮行情位置；试点日已跑但个别降级如实「未判」，
+// 未跑日整列回落日级哨兵带（市场级 fallback），口径注记随动防混读
+const limitUpHasStockPhase = computed(() =>
+  (limitUpDay.value?.stocks ?? []).some((stock) => !!stock.stockPhasePosition))
+
+function stockPhaseCell(stock: HotlistJevLimitUpStock): string {
+  if (stock.stockPhasePosition) {
+    return JEV_STOCK_PHASE_NAMES[stock.stockPhasePosition] ?? stock.stockPhasePosition
+  }
+  return limitUpHasStockPhase.value ? '未判' : limitUpPhaseName.value
+}
+
+function stockPhaseCellTitle(stock: HotlistJevLimitUpStock): string {
+  if (stock.stockPhasePosition) {
+    const prob = stock.stockPhaseProbabilities?.[stock.stockPhasePosition]
+    const pct = typeof prob === 'number' ? ` ${Math.round(prob * 100)}%` : ''
+    return `个股自身相位位${pct}（判据：连板高度主锚+封板质量分歧修正）`
+  }
+  return limitUpHasStockPhase.value ? '个股相位当日判读失败（fail-visible）' : '日级哨兵带（市场级 fallback）'
+}
 
 function topProbability(probs: Record<string, number> | null, choice: string | null): string {
   if (!choice) return '--'
@@ -2285,6 +2310,7 @@ onUnmounted(() => {
   margin-bottom: 10px;
 }
 .limitup-phase-title { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.limitup-phase-note { font-size: 11px; color: var(--text-secondary); margin-bottom: 8px; }
 .limitup-phase-band { font-size: 22px; font-weight: 600; color: var(--text-primary); }
 .limitup-phase-probs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .limitup-prob-chip {

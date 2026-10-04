@@ -256,6 +256,9 @@ export interface HotlistJevLimitUpStock {
   board: string | null
   inHotlist: boolean
   rank: number | null
+  /** 个股相位分线（2026-10-04 试点字段：该股自身本轮行情位置；未跑日为 null） */
+  stockPhasePosition: string | null
+  stockPhaseProbabilities: Record<string, number> | null
   computedAt: string | null
 }
 

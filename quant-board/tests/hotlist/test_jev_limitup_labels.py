@@ -59,6 +59,19 @@ def test_collect_splits_phase_and_stocks():
     assert out["stocks"][0]["rank"] == 5
 
 
+def test_collect_passthrough_stock_phase_fields():
+    # 个股相位分线试点字段透传（2026-10-04）；未跑日字段缺失=None=fail-visible 不伪造
+    a = _stock("600000", 5)
+    a["stockPhasePosition"] = "climax"
+    a["stockPhaseProbabilities"] = {"climax": 0.6}
+    out = collect_limitup_labels(FakeDb([a, _stock("000001")]), "2026-09-30")
+    by_code = {s["code"]: s for s in out["stocks"]}
+    assert by_code["600000"]["stockPhasePosition"] == "climax"
+    assert by_code["600000"]["stockPhaseProbabilities"] == {"climax": 0.6}
+    assert by_code["000001"]["stockPhasePosition"] is None
+    assert by_code["000001"]["stockPhaseProbabilities"] is None
+
+
 def test_collect_no_data_fail_visible():
     out = collect_limitup_labels(FakeDb([]), "2026-10-11")
     assert out["ok"] is True and out["noData"] is True

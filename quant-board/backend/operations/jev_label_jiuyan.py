@@ -76,6 +76,19 @@ QUESTIONS_PHASE = {"phase_band": {"type": "choice",
                        "strong_ge60": "强势带：情绪活跃偏强，涨停家数/梯队高度/板块效应处于近 20 日高位区（对应情绪分 60 分线以上）",
                        "insufficient": "证据不足：所给盘面事实不足以判断，不强行归类"}}}
 
+# 个股相位分线题（2026-10-04 用户澄清题意后裁决试点：问该股自身本轮行情位置，非市场相位；
+# 设计稿+成本预登记见 docs/hotlist-jev/jev-driver-label-v3-questionset.md 尾部「个股相位分线题设计稿」。
+# 判据冻结稿——任何改动=改门须用户点头；试点经 --stock-phase-date 单题补跑，不进 QUESTIONS_STOCK 主四题）
+QUESTIONS_STOCK_PHASE = {"stock_phase_position": {"type": "choice",
+                          "instructions": "仅依据该股自身证据（连板高度、封板时间与质量、板块地位、解析中描述的本轮行情轨迹），"
+                                          "判断该股当前处在自身本轮行情相位分线的哪个位置？只判位置，不预测后市。",
+                          "criteria": {
+                              "start": "低位启动区：本轮 1 板（首板或断板后反包首板）；解析显示刚启动、无高位滞涨痕迹",
+                              "ferment": "中位发酵区：本轮 2-3 连板，封板质量正常（早封/硬板），解析显示主升延续",
+                              "climax": "高位高潮区：本轮 4 板及以上，或板籍身位处市场最高板梯队；缩量一字/加速形态",
+                              "divergence": "分歧位：当日炸板回封、烂板（开板≥2 次/尾盘回封）、天量换手滞涨——高度不限，质量修正优先于高度归层",
+                              "insufficient": "信息不足：解析未提供连板数/封板质量等可数证据，不强行归类"}}}
+
 THS_KEYS = ("one", "two", "three", "four", "high")
 
 _FACTS_CACHE: dict[str, str] = {}
@@ -536,6 +549,83 @@ def run_phase_band_day(db, dates: list[str], token: str, acc: str) -> None:
               f"tokens={(u.get('input_tokens') or 0) + (u.get('output_tokens') or 0)}")
 
 
+def run_stock_phase_pilot(db, dates: list[str], token: str, acc: str,
+                          dry_run: bool = False, workers: int = 2) -> None:
+    """个股相位分线试点（2026-10-04 用户裁决「先跑 9/30 看效果」）：单题补跑路径。
+
+    与 run() 的 replace_one 整文档替换不同：对已有个股文档只 $set stockPhase* 字段
+    （upsert=False），已定版四题标签与文档其余部分不动（全月代际一致不破）；
+    缺个股文档的股票跳过并披露（不建平行集合）。判据冻结稿=QUESTIONS_STOCK_PHASE，
+    同判据已判个股幂等跳过（防重复烧 token），判据变更（改门须点头）后自然重跑。
+    """
+    col = db["hotlist_jev_driver_labels"]
+    n_ok = n_deg = n_skip = n_nodoc = 0
+    tokens_used = 0
+    for date in dates:
+        pop = day_population(db, date)
+        if not pop:
+            print(f"[stock-phase] {date} 无韭研 final 文档，跳过（fail-visible）")
+            continue
+        items: dict[str, dict] = {}
+        for entry in pop:
+            code = _strip(entry["stock"].get("code"))
+            items[code] = entry
+        codes = list(items.keys())
+        ranks = hotlist_ranks(db, date, codes)
+        if dry_run:
+            sample = items[codes[0]]
+            narrative = build_pilot_narrative(db, date, codes[0], sample["stock"],
+                                              sample["board"], ranks.get(codes[0]))
+            print(f"[dry][stock-phase] {date} population={len(codes)} hotlistHit={len(ranks)} "
+                  f"narrativeChars={len(narrative)}")
+            print(narrative)
+            continue
+
+        def work(code):
+            entry = items[code]
+            done = col.find_one({"_id": f"{date}:{code}"},
+                                {"stockPhasePosition": 1, "stockPhaseQuestionsRaw": 1})
+            if done and done.get("stockPhasePosition") and \
+                    done.get("stockPhaseQuestionsRaw") == QUESTIONS_STOCK_PHASE:
+                return ("skip", 0)
+            narrative = build_pilot_narrative(db, date, code, entry["stock"],
+                                              entry["board"], ranks.get(code))
+            env, ms = call_jev(acc, token, narrative, QUESTIONS_STOCK_PHASE)
+            parsed = parse_jev_response(env, ms)
+            answers = parsed.get("answers") or {}
+            ans = answers.get("stock_phase_position") or {}
+            u = parsed.get("usage") or {}
+            used = int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)
+            payload = {
+                "stockPhasePosition": ans.get("choice"),
+                "stockPhaseProbabilities": ans.get("probabilities"),
+                "stockPhaseQuestionsRaw": QUESTIONS_STOCK_PHASE,
+                "stockPhaseModel": parsed.get("model"),
+                "stockPhaseUsage": parsed.get("usage"),
+                "stockPhaseLatencyMs": ms,
+                "stockPhaseErrorCode": parsed.get("errorCode"),
+                "stockPhaseErrorDetail": parsed.get("errorDetail"),
+                "stockPhaseComputedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            result = col.update_one({"_id": f"{date}:{code}", "status": "ok"},
+                                    {"$set": payload}, upsert=False)
+            if result.matched_count == 0:
+                return ("nodoc", used)
+            return ("ok" if parsed["ok"] else "degraded", used)
+
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            results = list(ex.map(work, codes))
+        n_ok += sum(1 for s, _ in results if s == "ok")
+        n_deg += sum(1 for s, _ in results if s == "degraded")
+        n_skip += sum(1 for s, _ in results if s == "skip")
+        n_nodoc += sum(1 for s, _ in results if s == "nodoc")
+        tokens_used += sum(t for _, t in results)
+        print(f"[stock-phase] {date} n={len(codes)} (cum ok={n_ok} degraded={n_deg} "
+              f"skip={n_skip} noDoc={n_nodoc})")
+    print("FINAL:", {"ok": n_ok, "degraded": n_deg, "skipped": n_skip,
+                     "noDoc": n_nodoc, "tokens": tokens_used})
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", required=False)
@@ -544,13 +634,19 @@ if __name__ == "__main__":
                     help="日级相位哨兵：只对指定交易日跑一次盘面事实判档（盘后链步骤 5）")
     ap.add_argument("--cycle-stage-day", dest="cycle_stage_day", action="append", default=[],
                     help="情绪周期段位试点：指定交易日判游资周期段位（可多次传参）")
+    ap.add_argument("--stock-phase-date", dest="stock_phase_date", required=False,
+                    help="个股相位分线试点：对指定交易日已有个股文档单题补跑 stockPhase*（只 $set 不碰四题标签）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
     args = ap.parse_args()
     tok = os.environ.get("JEV_CF_TOKEN") or ""
     assert tok, "需要 JEV_CF_TOKEN 环境变量"
     acc = os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6")
-    if args.cycle_stage_day:
+    if args.stock_phase_date:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+        run_stock_phase_pilot(get_runtime_mongodb_database(), [args.stock_phase_date], tok, acc,
+                              dry_run=args.dry_run, workers=args.workers)
+    elif args.cycle_stage_day:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         run_cycle_stage_day(get_runtime_mongodb_database(), args.cycle_stage_day, tok, acc)
     elif args.phase_band_day:

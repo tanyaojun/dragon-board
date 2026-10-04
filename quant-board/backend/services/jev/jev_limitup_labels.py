@@ -52,6 +52,9 @@ def collect_limitup_labels(db: Any, date: str) -> dict[str, Any]:
             "board": ctx.get("board"),
             "inHotlist": bool(ctx.get("inHotlist")),
             "rank": rank,
+            # 个股相位分线（2026-10-04 试点字段，--stock-phase-date 单题补跑写入；未跑日为 None=fail-visible）
+            "stockPhasePosition": d.get("stockPhasePosition"),
+            "stockPhaseProbabilities": d.get("stockPhaseProbabilities"),
             "computedAt": d.get("computedAt"),
         })
     stocks.sort(key=lambda x: (x["rank"] is None, x["rank"] if x["rank"] is not None else 9999,

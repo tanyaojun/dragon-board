@@ -203,11 +203,21 @@ describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；�
     expect(source).toContain('tr:hover')
   })
 
-  test('打标轨道中文映射合同（驱动/深度/新鲜度/买盘/相位档）', () => {
+  test('打标轨道中文映射合同（驱动/深度/新鲜度/买盘/相位档/个股相位分线）', () => {
     const source = panelSource()
-    for (const name of ['JEV_DRIVER_NAMES', 'JEV_DEPTH_NAMES', 'JEV_FRESHNESS_NAMES', 'JEV_BUYSIDE_NAMES', 'JEV_PHASE_BAND_NAMES']) {
+    for (const name of ['JEV_DRIVER_NAMES', 'JEV_DEPTH_NAMES', 'JEV_FRESHNESS_NAMES', 'JEV_BUYSIDE_NAMES', 'JEV_PHASE_BAND_NAMES', 'JEV_STOCK_PHASE_NAMES']) {
       expect(source).toContain(name)
     }
+  })
+
+  test('个股相位分线列合同（2026-10-04 试点接线）：个股位+降级未判+未跑日 fallback 双文案', () => {
+    const source = panelSource()
+    expect(source).toContain('stockPhaseCell')
+    expect(source).toContain('limitUpHasStockPhase')
+    expect(source).toContain('个股自身相位位')
+    // fail-visible：试点日降级如实「未判」（不混日级带），未跑日整列回落哨兵带且口径注记随动
+    expect(source).toContain("'未判'")
+    expect(source).toContain('当日未跑个股相位')
   })
 })
 

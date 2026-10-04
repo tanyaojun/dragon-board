@@ -390,6 +390,15 @@ export const JEV_PHASE_BAND_NAMES: Record<string, string> = {
   insufficient: '信息不足',
 }
 
+/** 个股相位分线（stock_phase_position 五档，2026-10-04 试点冻结稿；个股自身生命周期位，与市场三带不同层不混词） */
+export const JEV_STOCK_PHASE_NAMES: Record<string, string> = {
+  start: '低位启动',
+  ferment: '中位发酵',
+  climax: '高位高潮',
+  divergence: '分歧',
+  insufficient: '信息不足',
+}
+
 /** 涨停打标单日读口（GET /api/hotlist-jev/limitup-labels，纯读 fail-visible） */
 export async function fetchHotlistJevLimitUpLabels(
   date: string,
