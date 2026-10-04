@@ -524,4 +524,15 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).not.toContain('`+${d.summary.edgeGe3VsBaseline}pp`')
     expect(source).not.toContain('`+${c10Ledger.edgeGe3VsBaseline}pp`')
   })
+
+  test('时间线高峰图钉（2026-10-04 展示裁决，C10 冻结口径 EOD≥75 纯展示）', () => {
+    const source = panelSource()
+
+    // 高峰 🏔 标记：EOD≥75 散点系列 + 图例提示 + tooltip 附注（方案 §2.3「另走展示裁决」的用户裁决落地）
+    expect(source).toContain('const peakMarks: Array<[string, number | null]> = []')
+    expect(source).toContain('d.eodScore >= 75')
+    expect(source).toContain("name: '高峰',")
+    expect(source).toContain('🏔 图钉=高峰日（EOD ≥ 75）')
+    expect(source).toContain('🏔 高峰日（EOD≥75）')
+  })
 })

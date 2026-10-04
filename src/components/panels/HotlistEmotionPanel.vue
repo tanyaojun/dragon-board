@@ -671,7 +671,7 @@
               </div>
               <div class="phase-chart-card">
                 <div class="section-title">相位历史时间线（EOD 情绪分 × 相位着色）<span
-                  class="chart-hint">⚡ 图钉=深谷状态日（滚动 10 日最低且 &lt;40）</span></div>
+                  class="chart-hint">⚡ 图钉=深谷状态日（滚动 10 日最低且 &lt;40）　🏔 图钉=高峰日（EOD ≥ 75）</span></div>
                 <div v-if="!phaseHistoryDegraded && phaseHistoryDays.length" ref="phaseChartEl"
                   class="phase-chart"></div>
                 <div v-else class="state-block">
@@ -3218,6 +3218,13 @@ function renderPhaseChart(): void {
     }
     if (isMin && (!cutoff || d.tradingDate >= cutoff)) valleyMarks.push([d.tradingDate, d.eodScore])
   }
+  // 高峰状态日（C10 冻结主锚 EOD≥75 纯展示标记：ranktrend-c10-peak-exit-plan.md §2，2026-10-04 展示裁决落地）
+  const peakMarks: Array<[string, number | null]> = []
+  for (const d of allDays) {
+    if (d.eodScore != null && d.eodScore >= 75 && (!cutoff || d.tradingDate >= cutoff)) {
+      peakMarks.push([d.tradingDate, d.eodScore])
+    }
+  }
   const areas: Array<[{ xAxis: string }, { xAxis: string }]> = []
   let startIdx = -1
   for (let i = 0; i <= days.length; i++) {
@@ -3238,7 +3245,8 @@ function renderPhaseChart(): void {
         const day = days.find((d) => d.tradingDate === p.axisValue)
         const phaseName = day?.phase === 'offense' ? '进攻' : day?.phase === 'defense' ? '防守' : '不可用'
         const valley = params.some((q) => q.seriesName === '深谷')
-        return `${p.axisValue}<br/>情绪分 ${p.value ?? '--'}<br/>相位：${phaseName}${valley ? '<br/>⚡ 深谷状态日（滚动10日最低且<40）' : ''}`
+        const peak = params.some((q) => q.seriesName === '高峰')
+        return `${p.axisValue}<br/>情绪分 ${p.value ?? '--'}<br/>相位：${phaseName}${valley ? '<br/>⚡ 深谷状态日（滚动10日最低且<40）' : ''}${peak ? '<br/>🏔 高峰日（EOD≥75）' : ''}`
       },
     },
     xAxis: { type: 'category', data: days.map((d) => d.tradingDate), axisLabel: { rotate: 45, fontSize: 9 } },
@@ -3284,6 +3292,16 @@ function renderPhaseChart(): void {
         symbol: 'pin',
         symbolSize: 13,
         itemStyle: { color: '#f5a623' },
+        z: 5,
+      },
+      {
+        // 高峰状态日散点（红图钉，C10 冻结口径 EOD≥75 纯展示；tooltip 由 axis formatter 附 🏔 行）
+        name: '高峰',
+        type: 'scatter',
+        data: peakMarks,
+        symbol: 'pin',
+        symbolSize: 13,
+        itemStyle: { color: '#ef4444' },
         z: 5,
       },
     ],
