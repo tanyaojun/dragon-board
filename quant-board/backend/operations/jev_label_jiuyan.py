@@ -336,6 +336,125 @@ def stock_position_line(date: str, code: str) -> str:
         return f"个股位置：计算失败 {e}（fail-visible）"
 
 
+def _limit_pct_of(code: str, name: str | None) -> float:
+    """板籍涨停幅度档（近似判定容差 0.2pp 由调用方取整涨停价吸收）：北交所 30/创业科创 20/ST 5/其余 10。"""
+    c = str(code or "")
+    if c.startswith(("83", "87", "88", "43", "92")):
+        return 0.298
+    if c.startswith(("300", "301", "302", "688", "689")):
+        return 0.198
+    if "ST" in str(name or "").upper():
+        return 0.048
+    return 0.098
+
+
+def limitup_sequence_line(date: str, code: str, name: str | None, n: int = 10) -> str:
+    """弹药 7：近 n 日涨停序列（收盘口径，板籍阈值判定）——几天几板/断板反包（隔日弱转强）机械锚。
+    fail-visible：日线缺当日棒/窗口不足如实标注；除权日 prev_close 失真属已知边缘（登记）。"""
+    try:
+        bars = _daily_bars(code)
+        window = [b for b in bars if b["date"] <= date]
+        if not window or window[-1]["date"] != date:
+            return "板序：当日日线棒缺失（fail-visible）"
+        seq: list[int] = []
+        i = len(window) - 1
+        while i >= 1 and len(seq) < n:
+            up = window[i]["close"] >= round(window[i - 1]["close"] * (1 + _limit_pct_of(code, name)), 2) - 1e-6
+            seq.append(1 if up else 0)
+            i -= 1
+        if not seq:
+            return "板序：窗口不足无法判定（fail-visible）"
+        seq.reverse()
+        marks = "".join("●" if v else "○" for v in seq)
+        streak = 0
+        for v in reversed(seq):
+            if not v:
+                break
+            streak += 1
+        rewrap = seq[-1] == 1 and (len(seq) < 2 or seq[-2] == 0) and any(seq[:-1])
+        tag = " · 今日=断板反包（隔日弱转强）" if rewrap else ""
+        return (f"板序：近 {len(seq)} 日 {marks}（●=涨停，末位今日） · 当前连板 {streak}"
+                f" · 窗口内 {sum(seq)} 板{tag}")
+    except Exception as e:
+        return f"板序：计算失败 {e}（fail-visible）"
+
+
+_INTRA_CACHE: dict[str, list[dict]] = {}
+
+
+def _intraday_bars(code: str) -> list[dict]:
+    """5 分钟棒（date/hm/open/high/close），最近 800 根 ≈16 个交易日；失败返回 []（调用方 fail-visible）。"""
+    cached = _INTRA_CACHE.get(code)
+    if cached is not None:
+        return cached
+    out: list[dict] = []
+    client = _tdx_daily_client()
+    if client is not None:
+        try:
+            with _POSITION_LOCK:
+                df = client.bars(symbol=code, frequency=0, start=0, offset=800)
+            if df is not None and len(df) > 0:
+                for _, r in df.iterrows():
+                    out.append({
+                        "date": f"{int(r['year']):04d}-{int(r['month']):02d}-{int(r['day']):02d}",
+                        "hm": f"{int(r['hour']):02d}:{int(r['minute']):02d}",
+                        "open": float(r["open"]), "high": float(r["high"]),
+                        "close": float(r["close"]),
+                    })
+        except Exception:
+            out = []
+    _INTRA_CACHE[code] = out
+    return out
+
+
+def _prev_close_of_date(date: str, code: str) -> float | None:
+    bars = [b for b in _daily_bars(code) if b["date"] <= date]
+    if len(bars) >= 2 and bars[-1]["date"] == date:
+        return bars[-2]["close"]
+    return None
+
+
+def stock_board_shape_line(date: str, code: str, name: str | None,
+                           prev_close: float | None) -> str:
+    """弹药 8：当日板型（TDX 5 分钟线机械判定）——首触/炸板波次/末封/一字，烂板回封=当日弱转强。
+    fail-visible：昨收缺失/5 分钟棒缺失/未触板（与涨停人口矛盾=数据缺口）如实标注。"""
+    try:
+        if not prev_close or prev_close <= 0:
+            return "板型：昨收缺失无法判定涨停价（fail-visible）"
+        bars = [b for b in _intraday_bars(code) if b["date"] == date]
+        if not bars:
+            return "板型：当日 5 分钟棒缺失（fail-visible）"
+        lp = round(prev_close * (1 + _limit_pct_of(code, name)), 2)
+        tol = 1e-6
+        touches = [b for b in bars if b["high"] >= lp - tol]
+        if not touches:
+            return "板型：当日未触板（与涨停人口矛盾，数据缺口 fail-visible）"
+        first_touch = touches[0]["hm"]
+        sealed_flags = [b["close"] >= lp - tol for b in bars]
+        waves = 0
+        for k in range(1, len(sealed_flags)):
+            if sealed_flags[k - 1] and not sealed_flags[k]:
+                waves += 1
+        sealed_to_close = bool(sealed_flags[-1])
+        last_seal = next((bars[k]["hm"] for k in range(len(bars) - 1, -1, -1)
+                          if sealed_flags[k]), "--")
+        one_word = bars[0]["open"] >= lp - tol and all(sealed_flags)
+        if one_word:
+            shape = "一字板"
+        elif not sealed_to_close:
+            shape = "触板未封/炸板收盘"
+        elif waves == 0:
+            shape = "秒板/硬板（一波封住）" if first_touch <= "10:30" else "一波封住（首触偏晚）"
+        elif waves == 1:
+            shape = "炸板回封（当日弱转强）"
+        else:
+            shape = "烂板（炸板≥2 次回封）"
+        return (f"当日板型：首触 {first_touch} · 炸板 {waves} 次 · 末封 {last_seal}"
+                f" · {'封板至收盘' if sealed_to_close else '收盘未封'} · 板型={shape}")
+    except Exception as e:
+        return f"板型：计算失败 {e}（fail-visible）"
+
+
 def board_position(jiuyan_doc, code: str) -> str:
     """弹药 5：板块地位（所属韦研板块今日涨停家数 + 该股按涨停时间的封板序）。"""
     best = None
@@ -355,7 +474,7 @@ def board_position(jiuyan_doc, code: str) -> str:
 
 
 def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, rank) -> str:
-    """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 个股位置行（价格轴）+ 板块地位块 + 热榜。"""
+    """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 个股位置行（价格轴）+ 板序行（几天几板/断板反包）+ 当日板型行（炸板波次/回封）+ 板块地位块 + 热榜。"""
     jy = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
     ths = ths_positions(db, date).get(code)
     if ths:
@@ -384,6 +503,8 @@ def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, ran
         f"该股：{stock.get('name')}（{code}），今日涨停价 {stock.get('price')}{day_num}，涨停时间 {stock.get('time')}；{hot}",
         f"身位：{ths_line}",
         stock_position_line(date, code),
+        limitup_sequence_line(date, code, stock.get("name")),
+        stock_board_shape_line(date, code, stock.get("name"), _prev_close_of_date(date, code)),
         board_position(jy, code),
         "韭研解析全文：",
         expound_line,

@@ -61,6 +61,70 @@ def test_position_line_fail_visible(monkeypatch):
     assert "昨量缺失" in runner.stock_position_line("2026-09-30", "605577")
 
 
+# ---- 弹药 7 板序（涨停序列）/弹药 8 板型（5 分钟机械判定）----
+
+def _bars_with_closes(closes_by_date):
+    # 由 close 序列反推 high=close（板序只依赖收盘口径；首日无涨停判定基准）
+    return [{"date": d, "high": c, "close": c, "vol": 1000.0}
+            for d, c in closes_by_date]
+
+
+def test_limitup_sequence_streak_and_rewrap(monkeypatch):
+    # 10 日序列：3 连板 → 断 2 日 → 今日涨停=断板反包（隔日弱转强）
+    dates = ["2026-09-17", "2026-09-18", "2026-09-21", "2026-09-22", "2026-09-23",
+             "2026-09-24", "2026-09-25", "2026-09-28", "2026-09-29", "2026-09-30"]
+    closes = [10.0, 11.0, 12.1, 13.31, 13.2, 13.0, 13.1, 13.2, 13.0, 14.3]
+    bars = _bars_with_closes(list(zip(dates, closes)))
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
+    line = runner.limitup_sequence_line("2026-09-30", "605577", None)
+    assert "●" in line and "○" in line and "末位今日" in line
+    assert "当前连板 1" in line
+    assert "断板反包" in line  # 昨日 13.0 未板、今日 14.3=+10%、前 5 日内有板
+
+
+def test_limitup_sequence_fail_visible(monkeypatch):
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: [])
+    assert "fail-visible" in runner.limitup_sequence_line("2026-09-30", "605577", None)
+    bars = [{"date": "2026-09-29", "high": 15.0, "close": 15.0, "vol": 1.0}]
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
+    assert "当日日线棒缺失" in runner.limitup_sequence_line("2026-09-30", "605577", None)
+
+
+def test_board_shape_rotten_reseal_and_one_word(monkeypatch):
+    lp = 11.0  # 昨收 10 × 1.1
+    # 烂板回封：封→炸（1）→回封→炸（2）→回封封至收盘
+    intraday = [
+        {"date": "2026-09-30", "hm": "09:35", "open": 10.5, "high": 11.0, "close": 11.0},
+        {"date": "2026-09-30", "hm": "09:40", "open": 11.0, "high": 11.02, "close": 10.6},
+        {"date": "2026-09-30", "hm": "09:45", "open": 10.6, "high": 11.0, "close": 11.0},
+        {"date": "2026-09-30", "hm": "09:50", "open": 11.0, "high": 11.0, "close": 10.7},
+        {"date": "2026-09-30", "hm": "09:55", "open": 10.7, "high": 11.0, "close": 11.0},
+        {"date": "2026-09-30", "hm": "10:00", "open": 11.0, "high": 11.0, "close": 11.0},
+        {"date": "2026-09-30", "hm": "10:05", "open": 11.0, "high": 11.0, "close": 11.0},
+    ]
+    monkeypatch.setattr(runner, "_intraday_bars", lambda code: intraday)
+    line = runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0)
+    assert "炸板 2 次" in line and "烂板（炸板≥2 次回封）" in line and "封板至收盘" in line
+    # 一字板：开盘即涨停且全天封死
+    one_word = [{"date": "2026-09-30", "hm": "09:35", "open": 11.0, "high": 11.0, "close": 11.0},
+                {"date": "2026-09-30", "hm": "09:40", "open": 11.0, "high": 11.0, "close": 11.0}]
+    monkeypatch.setattr(runner, "_intraday_bars", lambda code: one_word)
+    assert "一字板" in runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0)
+    # 炸板回封（当日弱转强）：一波炸板后回封
+    reseal = [{"date": "2026-09-30", "hm": "09:35", "open": 10.6, "high": 11.0, "close": 11.0},
+              {"date": "2026-09-30", "hm": "09:40", "open": 11.0, "high": 11.0, "close": 10.8},
+              {"date": "2026-09-30", "hm": "09:45", "open": 10.8, "high": 11.0, "close": 11.0},
+              {"date": "2026-09-30", "hm": "09:50", "open": 11.0, "high": 11.0, "close": 11.0}]
+    monkeypatch.setattr(runner, "_intraday_bars", lambda code: reseal)
+    assert "炸板回封（当日弱转强）" in runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0)
+
+
+def test_board_shape_fail_visible(monkeypatch):
+    monkeypatch.setattr(runner, "_intraday_bars", lambda code: [])
+    assert "fail-visible" in runner.stock_board_shape_line("2026-09-30", "605577", None, 10.0)
+    assert "昨收缺失" in runner.stock_board_shape_line("2026-09-30", "605577", None, None)
+
+
 class _FakeCol:
     def __init__(self, docs):
         self.docs = docs  # _id → doc
