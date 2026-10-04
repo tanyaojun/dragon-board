@@ -55,8 +55,9 @@ def test_sentinel_divergence_relations_and_skips():
     assert days[0]["relation"] == "agree" and days[0]["ruleBand"] == "弱势带"
     assert days[1]["relation"] == "lower" and days[1]["sentinelBand"] == "弱势带"
     assert days[2]["relation"] == "lower" and days[2]["sentinelRaw"] == "cold_lt40"
-    # 档位差随行携带（前端按差值表述，不写死「一档」）
+    # 档位差随行携带（前端按差值表述，不写死「一档」）；±2 两档分歧也必须可表达（review P2-6 动机案例）
     assert days[0]["notches"] == 0 and days[1]["notches"] == -1 and days[2]["notches"] == -1
+    assert out["summary"]["lower"] == 2  # 两日判低含跨两档
 
 
 def test_sentinel_divergence_higher_and_empty():
@@ -70,6 +71,16 @@ def test_sentinel_divergence_higher_and_empty():
 
     empty = sentinel_divergence(_Db({"hotlist_sentiment": [], "hotlist_jev_driver_labels": []}))
     assert empty["summary"]["comparable"] == 0 and empty["days"] == []
+
+
+def test_sentinel_divergence_two_notches():
+    """跨两档分歧（强势带读成低温带 = -2）：590a6d2e 动机案例（09-14）回归锁定。"""
+    db = _Db({
+        "hotlist_sentiment": [{"tradingDate": "2026-09-14", "emotionScore": {"score": 68.9}}],
+        "hotlist_jev_driver_labels": [{"tradingDate": "2026-09-14", "phaseBand": "cold_lt40"}],
+    })
+    out = sentinel_divergence(db)
+    assert out["days"][0]["relation"] == "lower" and out["days"][0]["notches"] == -2
 
 
 def test_sentinel_divergence_month_filter():

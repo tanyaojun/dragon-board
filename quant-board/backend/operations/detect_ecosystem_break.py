@@ -30,7 +30,8 @@ def _zt_count(db: Any, date: str) -> int | None:
         {"type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
         {"limitSummary.zhaban.ztCount": 1})
     zt = ((f or {}).get("limitSummary") or {}).get("zhaban", {}).get("ztCount")
-    return zt if isinstance(zt, (int, float)) and zt > 0 else None
+    # zt=0 是真实极端日（全市场无涨停），不算缺料；仅非数值/负值按缺料（review P2 修正 zt>0）
+    return zt if isinstance(zt, (int, float)) and zt >= 0 else None
 
 
 def _advdec_ratio(db: Any, date: str) -> float | None:
@@ -64,13 +65,20 @@ def _amount_yi(db: Any, date: str) -> float | None:
     return round(a / 1e8, 1) if isinstance(a, (int, float)) and a > 0 else None
 
 
-def detect_month(db: Any, month: str) -> list[dict[str, Any]]:
-    """月内逐日三特征判定；返回明细（含证据与未触发原因），fail-visible 缺料日如实标注。"""
+def detect_month(db: Any, month: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """月内逐日三特征判定；返回 (明细, 缺涨停原料日清单)。
+
+    fail-visible：缺 ztCount 的交易日不参与判定但也必须显式登记（review P1-D：此前被静默
+    剔除，与「全月无断层」不可区分——违反 §4.0）。upsert 侧对缺料日一律跳过维持「如实不写」。
+    """
     dates = _trading_dates(db, month)
     zt_series: list[tuple[str, int]] = []
+    material_missing: list[str] = []
     for d in dates:
         zt = _zt_count(db, d)
-        if zt is not None:
+        if zt is None:
+            material_missing.append(d)
+        else:
             zt_series.append((d, zt))
     idx = {d: i for i, (d, _) in enumerate(zt_series)}
     out: list[dict[str, Any]] = []
@@ -100,7 +108,7 @@ def detect_month(db: Any, month: str) -> list[dict[str, Any]]:
                     "breakout": breakout, "balanced": balanced, "amountUp": amount_up,
                     "ecosystemBreak": is_break,
                     "reason": "断层日（反弹在即）" if is_break else "；".join(why) or ""})
-    return out
+    return out, material_missing
 
 
 def main():
@@ -112,7 +120,7 @@ def main():
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
     db = get_runtime_mongodb_database()
-    rows = detect_month(db, args.month)
+    rows, material_missing = detect_month(db, args.month)
     breaks = [r for r in rows if r["ecosystemBreak"]]
     print(f"== {args.month} 涨停生态断层检测（{'APPLY' if args.apply else 'DRY-RUN'}）==")
     for r in rows:
@@ -120,6 +128,9 @@ def main():
         print(f"  {r['date']} 涨停{r['ztCount']:>3}（P20={r['p20']}）涨跌比{r['advDecRatio']}"
               f" 量能{r['amountYi']}亿（昨{r['prevAmountYi']}亿） {mark} {r['reason']}")
     print(f"断层日: {[r['date'] for r in breaks] or '无'}")
+    if material_missing:
+        # fail-visible：缺涨停原料的交易日显式登记（不参与判定，与「无断层」区分）
+        print(f"⚠️ 缺涨停原料（limitSummary.zhaban.ztCount）{len(material_missing)} 日（不参与判定）: {material_missing}")
     if args.apply:
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         # ① 断层日：写 ecosystemBreak 标记（琥珀卡消费，仅断层日）

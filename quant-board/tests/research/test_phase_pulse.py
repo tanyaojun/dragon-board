@@ -95,6 +95,19 @@ def test_band_stats_unbanded_visible():
     assert unbanded == 2
 
 
+def test_band_stats_stale_anchor_not_used():
+    """前日解算与引擎同口径：EOD 文档存在但分数缺失 → 当缺处理，不跳锚更早日（review P2）。"""
+    from backend.operations.phase_pulse import band_stats
+
+    trades = [
+        {"entryTradingDate": "2026-10-13", "netReturn": 0.14},   # 前日 10-12 文档在但分 None → unbanded（不锚 10-09 的 55）
+    ]
+    eod = {"2026-10-09": 55.0, "2026-10-12": None, "2026-10-13": 60.0}
+    out, unbanded = band_stats(trades, eod, "2026-10")
+    assert sum(b["trades"] for b in out.values()) == 0
+    assert unbanded == 1
+
+
 def test_ab_compare_delta():
     from backend.operations.phase_pulse import ab_compare
 

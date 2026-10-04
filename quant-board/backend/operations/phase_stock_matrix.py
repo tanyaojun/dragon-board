@@ -82,6 +82,20 @@ def gather(db, start: str = "", end: str = "") -> tuple[list[dict], int, int]:
             out.setdefault(str(r["code"]), float(r["pctChange"]))
         return out
 
+    def entry_snap(date: str) -> dict[str, float]:
+        """入场价=T+1 早盘首槽（ENTRY_SLOTS 序=优先序；同 code 多槽取序首，review P2 消除游标序依赖）。"""
+        by_code: dict[str, dict[str, float]] = {}
+        for slot in ENTRY_SLOTS:
+            for code, pct in snap(date, (slot,)).items():
+                by_code.setdefault(code, {})[slot] = pct
+        out: dict[str, float] = {}
+        for code, by_slot in by_code.items():
+            for slot in ENTRY_SLOTS:
+                if slot in by_slot:
+                    out[code] = by_slot[slot]
+                    break
+        return out
+
     cells: list[dict] = []
     missing = 0
     for doc in labels:
@@ -97,7 +111,7 @@ def gather(db, start: str = "", end: str = "") -> tuple[list[dict], int, int]:
             missing += 1  # 无前日或 T+3 出窗
             continue
         entry_date, exit_date = dates[i + 1], dates[i + 3]
-        sin, sout = snap(entry_date, ENTRY_SLOTS), snap(exit_date, (EXIT_SLOT,))
+        sin, sout = entry_snap(entry_date), snap(exit_date, (EXIT_SLOT,))
         if code not in sin or code not in sout:
             missing += 1
             continue

@@ -187,4 +187,6 @@ export interface PhaseBoard {
   c9?: C9DeepValleyDoc[]
   /** 哨兵分歧（合流点一：逐日三档带比较 + 汇总计数） */
   sentinelDivergence?: SentinelDivergence
+  /** 四带刻度（边界+用户展示名，后端单一事实源携带；前端按分数落区间，禁止手抄阈值） */
+  bandScale?: Array<{ tag: string; label: string; rangeText: string; lower: number; upper: number | null }>
 }

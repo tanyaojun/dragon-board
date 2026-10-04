@@ -732,6 +732,72 @@ def test_jiuyan_label_step_runs_subprocess_and_counts(monkeypatch: Any) -> None:
     assert "--start" in captured["cmd"] and "2026-10-12" in captured["cmd"]
 
 
+def test_jiuyan_stock_phase_gate_default_off(monkeypatch: Any) -> None:
+    """F2 成本防火墙（review P1-E）：JIUYAN_STOCK_PHASE_ENABLED 未设 → 命令不含 --with-stock-phase（零额外 token）。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def find(self, _query, _projection=None):
+            return [{"_id": "1"}]
+
+        def find_one(self, _query, _projection=None):
+            return {"_id": "x"}
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return type("Proc", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+    monkeypatch.delenv("JIUYAN_STOCK_PHASE_ENABLED", raising=False)
+
+    result = schedule._run_jiuyan_label_step("2026-10-12")
+    assert result["ok"] is True
+    assert "--with-stock-phase" not in captured["cmd"]
+
+
+def test_jiuyan_stock_phase_gate_enabled_adds_flag(monkeypatch: Any) -> None:
+    """JIUYAN_STOCK_PHASE_ENABLED=1（用户批准成本后）→ 命令带 --with-stock-phase。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def find(self, _query, _projection=None):
+            return [{"_id": "1"}]
+
+        def find_one(self, _query, _projection=None):
+            return {"_id": "x"}
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return type("Proc", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+    monkeypatch.setenv("JIUYAN_STOCK_PHASE_ENABLED", "1")
+
+    result = schedule._run_jiuyan_label_step("2026-10-12")
+    assert result["ok"] is True
+    assert "--with-stock-phase" in captured["cmd"]
+
+
 def test_jiuyan_label_failure_does_not_flip_chain(monkeypatch: Any) -> None:
     """advisory 语义：个股打标失败只进 results，不翻转整体 ok。"""
     calls: list[str] = []

@@ -21,6 +21,27 @@ from backend.operations.sentinel_divergence import sentinel_divergence
 router = APIRouter(prefix="/api/phase-monitor", tags=["phase-monitor"])
 
 
+def _band_scale() -> list[dict[str, Any]]:
+    """四带刻度（边界+用户展示名）——前端三轴「水平」轴按分数落区间用。
+
+    单一事实源纪律（章程 §7.1-4）：带定义=引擎 BAND_TAGS/band_of_score，展示名=phase_pulse
+    PULSE_BAND_LABELS；前端禁止再手抄阈值或档名（review P1-B：axisLevel 曾手抄四带副本）。
+    """
+    from backend.core.backtest.execution import BAND_TAGS
+    from backend.operations.phase_pulse import PULSE_BAND_LABELS
+
+    upper_by_tag = {"冷10-40": 40.0, "弱势40-60": 60.0, "强60-80": 80.0, "极热≥80": None}
+    lower = 0.0
+    out: list[dict[str, Any]] = []
+    for tag in BAND_TAGS:
+        label, range_text = PULSE_BAND_LABELS[tag]
+        upper = upper_by_tag[tag]
+        out.append({"tag": tag, "label": label, "rangeText": range_text,
+                    "lower": lower, "upper": upper})
+        lower = upper
+    return out
+
+
 @router.get("/board")
 def get_phase_monitor_board() -> dict[str, Any]:
     db = repository_factory.get_runtime_mongodb_database()
@@ -51,6 +72,7 @@ def get_phase_monitor_board() -> dict[str, Any]:
         "count": len(months),
         "c9": c9_docs,
         "sentinelDivergence": sentinel_divergence(db),
+        "bandScale": _band_scale(),
     }
     if northstar is None:
         body["northstarMissingReason"] = (

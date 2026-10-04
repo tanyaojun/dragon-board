@@ -478,4 +478,26 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('d.notches < 0')
     expect(source).not.toContain("relation === 'lower' ? '判低一档'")
   })
+
+  test('review 修复合同：门控不吞数据/带刻度后端携带/动量首根语义（2026-10-04 四路 review）', () => {
+    const source = panelSource()
+
+    // P1-A：bands 缺失只挡分档条，对照/试验/累积数据存在即展示（fail-visible）
+    expect(source).toContain('本月缺少分环境数据（旧版格式，重新生成后补全）')
+    const pulseCard = source.slice(source.indexOf('情绪环境与出手战绩'), source.indexOf('三轴决策栈'))
+    expect(pulseCard).toContain('v-if="phasePulseAbLine"')
+    expect(pulseCard).toContain('v-if="phasePulseChallengerRows.length"')
+    expect(pulseCard).toContain('v-if="phasePulseAccRows.length"')
+    // P1-B：axisLevel 档名来自 board bandScale（后端携带），前端不手抄阈值
+    expect(source).toContain('bandScale.value = board.bandScale ?? []')
+    expect(source).toContain('hit?.label ?? \'未知档（刻度缺失）\'')
+    expect(source).not.toContain("score < 40 ? '低温期'")
+    // P1-C：冷端确认=深谷后首根 Δ>+15，确认只发生一次（对齐 M4 登记口径）
+    expect(source).toContain('冷端确认节点触发（深谷')
+    expect(source).toContain('冷端确认已于')
+    expect(source).not.toContain('const recentDeep = days.slice(-6, -1)')
+    // P2：挑战者 stats 缺失不渲染假 0；晋升行披露胜率分母
+    expect(source).toContain('v-if="c.tradeCount != null"')
+    expect(source).toContain('分母=有代理收益的')
+  })
 })

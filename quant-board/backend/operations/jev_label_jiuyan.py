@@ -902,10 +902,12 @@ if __name__ == "__main__":
     elif args.stock_phase_month:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         db = get_runtime_mongodb_database()
-        dates = sorted(db["hotlist_sentiment"].distinct(
-            "tradingDate", {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
-                            "slotTime": "EOD", "tradingDate": {"$regex": f"^{args.stock_phase_month}"}}))
-        print(f"[stock-phase-month] {args.stock_phase_month} 共 {len(dates)} 个交易日待补跑")
+        # 日期轴=已有个股四题文档（与回填对象同源，review P2：此前用 sentiment EOD 轴会静默漏
+        # 「final 有而 EOD 缺」的打标日）
+        dates = sorted({str(d.get("tradingDate")) for d in db["hotlist_jev_driver_labels"].find(
+            {"origin": {"$ne": "phase_band_daily"}, "status": "ok",
+             "tradingDate": {"$regex": f"^{args.stock_phase_month}"}}, {"tradingDate": 1})})
+        print(f"[stock-phase-month] {args.stock_phase_month} 共 {len(dates)} 个已打标交易日待补跑")
         run_stock_phase_pilot(db, dates, tok, acc, dry_run=args.dry_run, workers=args.workers)
     elif args.cycle_stage_day:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database

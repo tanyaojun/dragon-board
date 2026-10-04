@@ -139,8 +139,10 @@ def band_stats(trades: list[dict], eod_scores: dict[str, float | None], month: s
     unbanded=当月入场却进不了任何档的笔数（缺前一日分或缺平仓价），fail-visible 显式暴露不静默。
     bands 每档携带用户展示名 label / 区间文案 rangeText，前端纯渲染不再自建映射。
     """
-    scored = sorted((d, s) for d, s in eod_scores.items() if isinstance(s, (int, float)))
-    prev_score = {scored[i][0]: scored[i - 1][1] for i in range(1, len(scored))}
+    # 前日解算与引擎 _phase_context 同口径（execution.py：严格取字典序前一日，None/缺即缺，
+    # 不跳过缺分日锚更早——review P2：跳锚会让 band 归档用陈旧分且与 byBand 归因分歧）
+    ordered = sorted(eod_scores.items())
+    prev_score = {ordered[i][0]: ordered[i - 1][1] for i in range(1, len(ordered))}
     buckets: dict[str, list[float]] = {tag: [] for tag in BAND_TAGS}
     unbanded = 0
     for t in trades:

@@ -683,9 +683,9 @@
                 <div v-if="phasePulseText.value === '未跑'" class="state-block">
                   本月数据每个交易日 18:00 盘后自动生成
                 </div>
-                <div v-else-if="!pulseBandRows.length" class="state-block">本月缺少分环境数据</div>
                 <template v-else>
-                  <div class="phase-pulse-rows">
+                  <!-- fail-visible：bands 缺失只影响分档条本身，对照/试验/累积数据存在即展示（review P1-A） -->
+                  <div v-if="pulseBandRows.length" class="phase-pulse-rows">
                     <div v-for="b in pulseBandRows" :key="b.tag" class="jev-prob-row phase-pulse-row"
                       :title="`出手前一天收盘情绪分 ${b.rangeText || b.tag}：本月 ${b.trades} 笔，合计 ${b.sumPct.toFixed(1)}%`">
                       <span class="jev-prob-name phase-band-name">{{ b.label }}</span>
@@ -695,6 +695,7 @@
                       <span class="phase-band-trades">{{ b.trades }} 笔</span>
                     </div>
                   </div>
+                  <div v-else class="state-block">本月缺少分环境数据（旧版格式，重新生成后补全）</div>
                   <div v-if="phaseUnbanded > 0" class="phase-pulse-ab">
                     另有 {{ phaseUnbanded }} 笔无法分档（缺前一日分或无平仓价），未计入上行
                   </div>
@@ -704,7 +705,7 @@
                     <div v-for="c in phasePulseChallengerRows" :key="c.name" class="phase-pulse-ab"
                       :title="c.detail ? `${c.name}：${c.detail}` : c.name">
                       <template v-if="c.degraded">⚠️ {{ c.label }}：本月没跑成<template v-if="c.reason">（{{ c.reason }}）</template></template>
-                      <template v-else>{{ c.label }}：本月 {{ c.tradeCount ?? '--' }} 笔，合计 {{ c.sumPct >= 0 ? '+' : '' }}{{ c.sumPct.toFixed(1) }}%<template
+                      <template v-else>{{ c.label }}：本月 {{ c.tradeCount ?? '--' }} 笔<template v-if="c.tradeCount != null">，合计 {{ c.sumPct >= 0 ? '+' : '' }}{{ c.sumPct.toFixed(1) }}%</template><template
                         v-if="c.baselineText">（同期原样 {{ c.baselineText }}）</template></template>
                     </div>
                   </template>
@@ -780,14 +781,15 @@
                   </table>
                   <div class="phase-pulse-ab"
                     title="晋升门=2026-10-03 冻结协议（≥10 交易样本/胜率 ≥2/3/相对基线 ≥+1pp，连续 3 失效降级）；本账本为池等权代理口径，晋升判定以交易账本为准">
-                    晋升门进度（代理口径）：样本 {{ c9Ledger.total }}/10 · 胜率 {{ c9Ledger.winRate == null ? '--' : (c9Ledger.winRate * 100).toFixed(0) + '%' }}（门 ≥67%）· 相对基线 {{ c9Ledger.edge == null ? '--' : `${c9Ledger.edge}pp` }}（门 ≥+1pp）
+                    晋升门进度（代理口径）：样本 {{ c9Ledger.total }}/10 · 胜率 {{ c9Ledger.winRate == null ? '--' : (c9Ledger.winRate * 100).toFixed(0) + '%' }}（门 ≥67%，分母=有代理收益的 {{ c9Ledger.retCount }} 样本）· 相对基线 {{ c9Ledger.edge == null ? '--' : `${c9Ledger.edge}pp` }}（门 ≥+1pp）
                   </div>
                 </template>
               </div>
 
               <div class="phase-chart-card">
                 <div class="section-title">📡 哨兵分歧（jev 日级哨兵 × 规则分 · 只告警不改判）</div>
-                <div v-if="!sentinelDivergence?.summary.comparable" class="state-block">暂无可比数据（哨兵与规则分需同日各有读数）</div>
+                <div v-if="!sentinelDivergence?.summary.comparable" class="state-block">暂无可比数据（哨兵与规则分需同日各有读数）<template
+                  v-if="sentinelDivergence?.summary.skipped">· 另有 {{ sentinelDivergence.summary.skipped }} 天哨兵证据不足或缺情绪分</template></div>
                 <template v-else>
                   <div class="phase-pulse-ab">
                     可比 {{ sentinelDivergence.summary.comparable }} 天 · 一致 {{ sentinelDivergence.summary.agree }} · 判低 {{ sentinelDivergence.summary.lower }} · 判高 {{ sentinelDivergence.summary.higher }}<template
@@ -2844,6 +2846,7 @@ const phasePulse = ref<PhasePulseDoc | null>(null)
 const phasePulses = ref<PhasePulseDoc[]>([])
 const phaseC9Docs = ref<C9DeepValleyDoc[]>([])
 const sentinelDivergence = ref<SentinelDivergence | null>(null)
+const bandScale = ref<Array<{ tag: string; label: string; rangeText: string; lower: number; upper: number | null }>>([])
 const phaseNorthstarMissingReason = ref<string | null>(null)
 const phaseLoading = ref(false)
 const phaseLoadedOnce = ref(false)
@@ -2908,8 +2911,8 @@ const phaseUnbanded = computed(() => phasePulse.value?.report?.unbandedTrades ??
 const phasePulseAbLine = computed(() => {
   const ab = phasePulse.value?.report?.ab
   if (!ab || ab.degraded) return ''
-  const rule = ab.arm || '按情绪分档出手'
-  return `${rule}：本月 ${ab.baseline?.tradeCount ?? '--'} 笔 → ${ab.bandAvoided?.tradeCount ?? '--'} 笔，少亏 ${((ab.delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%`
+  const rule = ab.arm || '' // 规则描述=后端携带；缺失不伪造文案（review P2）
+  return `${rule ? `${rule}：` : ''}本月 ${ab.baseline?.tradeCount ?? '--'} 笔 → ${ab.bandAvoided?.tradeCount ?? '--'} 笔，少亏 ${((ab.delta?.netReturnSaved ?? 0) * 100).toFixed(1)}%`
 })
 
 // 试验打法：名字与解释由臂数注册表经后端透传（前端不自建臂数词典），未登记回退显示代号
@@ -2975,15 +2978,18 @@ const phasePulseAccRows = computed<PulseBandAccRow[]>(() =>
 
 // ── 融合总纲面板（ranktrend-phase-fusion-master-plan.md §5：三轴决策栈/深谷账本/哨兵分歧/晋升进度）──
 
-// 三轴·水平：与 hero chip 同源（当前锁定文档情绪分）；档名=引擎四带语义
+// 三轴·水平：与 hero chip 同源（当前锁定文档情绪分）；档名/边界=board bandScale 后端携带
+// （单一事实源，前端不手抄阈值——review P1-B 收编）
 const axisLevel = computed(() => {
   const score = emotionScoreValue.value
   if (score == null) return '暂不可用（情绪分缺失）'
-  const band = score < 40 ? '低温期' : score < 60 ? '弱势期' : score < 80 ? '高温期' : '极热期'
+  const hit = bandScale.value.find((b) => score >= b.lower && (b.upper == null || score < b.upper))
+  const band = hit?.label ?? '未知档（刻度缺失）'
   return `${band}（情绪分 ${score}）· 建议新仓：${todayAdvice.value}`
 })
 
-// 三轴·动量：日间 Δ + 确认节点口径（P2-b 热端上穿 / P2-b2 冷端修复=M4 提案观察态，只展示不决策）
+// 三轴·动量：日间 Δ + 确认节点口径（P2-b 热端上穿 / P2-b2 冷端=M4 提案「深谷后首根 Δ>+15」，
+// 确认只发生一次不重复触发，观察口径只展示不决策——review P1-C 口径对齐）
 const axisMomentum = computed(() => {
   const days = phaseHistoryDays.value.filter((d) => d.eodScore != null)
   if (days.length < 2) return '样本不足（少于 2 个 EOD 日）'
@@ -2991,11 +2997,25 @@ const axisMomentum = computed(() => {
   const prev = days[days.length - 2]!
   const delta = Math.round(((last.eodScore ?? 0) - (prev.eodScore ?? 0)) * 10) / 10
   const deltaText = `Δ${delta >= 0 ? '+' : ''}${delta}（${prev.tradingDate.slice(5)}→${last.tradingDate.slice(5)}）`
-  const recentDeep = days.slice(-6, -1).some((d) => (d.eodScore ?? 99) < 30)
   if (prev.eodScore != null && prev.eodScore < 60 && (last.eodScore ?? 0) >= 60 && delta > 15)
     return `${deltaText}｜热端确认节点触发（上穿 60 且 Δ>+15，观察口径）`
-  if (recentDeep && delta > 15)
-    return `${deltaText}｜冷端确认节点触发（深谷后首根 Δ>+15，观察口径）`
+  let deepIdx = -1
+  for (let i = days.length - 1; i >= 0; i--) {
+    if ((days[i]!.eodScore ?? 99) < 30) { deepIdx = i; break }
+  }
+  if (deepIdx >= 0) {
+    const deepDate = days[deepIdx]!.tradingDate
+    let confirmedAt = ''
+    for (let i = deepIdx + 1; i < days.length; i++) {
+      const d = days[i]!
+      const dPrev = days[i - 1]!
+      if ((d.eodScore ?? 0) - (dPrev.eodScore ?? 0) > 15) { confirmedAt = d.tradingDate; break }
+    }
+    if (confirmedAt === last.tradingDate)
+      return `${deltaText}｜冷端确认节点触发（深谷 ${deepDate.slice(5)} 后首根 Δ>+15，观察口径）`
+    if (confirmedAt)
+      return `${deltaText}｜冷端确认已于 ${confirmedAt.slice(5)} 发生（深谷 ${deepDate.slice(5)} 后，观察口径）`
+  }
   return `${deltaText}｜确认节点未触发`
 })
 
@@ -3067,8 +3087,10 @@ async function loadPhaseData(): Promise<void> {
       phaseNorthstar.value = null
       phaseNorthstarMissingReason.value = board.reason
       phasePulse.value = null
+      phasePulses.value = []
       phaseC9Docs.value = []
       sentinelDivergence.value = null
+      bandScale.value = []
     } else {
       phaseNorthstar.value = board.northstar
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
@@ -3076,6 +3098,7 @@ async function loadPhaseData(): Promise<void> {
       phasePulses.value = board.pulses ?? []
       phaseC9Docs.value = board.c9 ?? []
       sentinelDivergence.value = board.sentinelDivergence ?? null
+      bandScale.value = board.bandScale ?? []
     }
   } catch (err) {
     phaseError.value = err instanceof Error ? err.message : '相位数据加载失败'

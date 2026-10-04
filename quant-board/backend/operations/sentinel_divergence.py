@@ -10,17 +10,21 @@ from __future__ import annotations
 
 from typing import Any
 
-# 三档带秩（冷=0/弱势=1/强势=2）：与引擎 band_of_score 四带的 40/60 切点一致（极热并入强势档，
-# 哨兵题仅三档）；_SENTINEL_BAND_* 键=哨兵题 choice 值（jev_label_jiuyan.py QUESTIONS_PHASE）。
+from backend.core.backtest.execution import band_of_score
+
+# 三档带秩（冷=0/弱势=1/强势=2）：归类经引擎 band_of_score 四带映射（极热并入强势档，哨兵题
+# 仅三档）——切点不在此重抄，引擎改边界自动跟随（章程 §7.1-4 单一事实源；review P2 收编）。
+# _SENTINEL_BAND_* 键=哨兵题 choice 值（jev_label_jiuyan.py QUESTIONS_PHASE）。
 BAND_NAMES = ("低温带", "弱势带", "强势带")
 _SENTINEL_BAND_RANK = {"cold_lt40": 0, "weak_40_60": 1, "strong_ge60": 2}
 _SENTINEL_BAND_NAMES = {"cold_lt40": "低温带", "weak_40_60": "弱势带", "strong_ge60": "强势带"}
 
 
 def rule_band_rank(score: float) -> int:
-    if score < 40.0:
+    tag = band_of_score(score)
+    if tag == "冷10-40":
         return 0
-    if score < 60.0:
+    if tag == "弱势40-60":
         return 1
     return 2
 

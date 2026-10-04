@@ -51,6 +51,8 @@ def revalidate_month(db: Any, month: str) -> dict[str, Any]:
     eod = _eod_scores(db)
     dates = sorted(d for d in eod if d.startswith(month))
     deep_days = [d for d in dates if eod[d] < DEEP_WIDE and dates.index(d) + 3 < len(dates)]
+    # fail-visible：月末深谷 T+3 跨月不进本账（反弹窗被截断），显式登记不静默丢弃（review P2）
+    truncated = [d for d in dates if eod[d] < DEEP_WIDE and dates.index(d) + 3 >= len(dates)]
     samples = []
     for d in deep_days:
         i = dates.index(d)
@@ -78,6 +80,7 @@ def revalidate_month(db: Any, month: str) -> dict[str, Any]:
         "poolMean": round(st.mean(rets), 2) if rets else None,
         "baselineMean": round(st.mean(base), 2) if base else None,
         "edge": round(st.mean(rets) - st.mean(base), 2) if rets and base else None,
+        "truncatedMonthEnd": truncated,
     }
     return {"ok": True, "month": month, "summary": summary, "samples": samples,
             "noData": not samples, "reason": None if samples else f"{month} 无深谷状态日（<30）"}
