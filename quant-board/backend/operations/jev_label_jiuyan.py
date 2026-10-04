@@ -883,6 +883,12 @@ if __name__ == "__main__":
                     help="情绪周期段位试点：指定交易日判游资周期段位（可多次传参）")
     ap.add_argument("--stock-phase-date", dest="stock_phase_date", required=False,
                     help="个股相位分线试点：对指定交易日已有个股文档单题补跑 stockPhase*（只 $set 不碰四题标签）")
+    ap.add_argument("--stock-phase-month", dest="stock_phase_month", required=False,
+                    help="个股相位分线月度回填（融合总纲 F2）：对月内全部交易日已有个股文档补跑——"
+                         "烧 token（≈3-5 万/日合并口径），须经用户批准后手动执行，不挂自动链")
+    ap.add_argument("--with-stock-phase", dest="with_stock_phase", action="store_true",
+                    help="四题主 run 后附带当日个股相位分线（合并会话省边际成本）——默认关；"
+                         "排程经 JIUYAN_STOCK_PHASE_ENABLED=1 门控（融合总纲 F2，用户批准前不得开启）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
     args = ap.parse_args()
@@ -893,6 +899,14 @@ if __name__ == "__main__":
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         run_stock_phase_pilot(get_runtime_mongodb_database(), [args.stock_phase_date], tok, acc,
                               dry_run=args.dry_run, workers=args.workers)
+    elif args.stock_phase_month:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+        db = get_runtime_mongodb_database()
+        dates = sorted(db["hotlist_sentiment"].distinct(
+            "tradingDate", {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+                            "slotTime": "EOD", "tradingDate": {"$regex": f"^{args.stock_phase_month}"}}))
+        print(f"[stock-phase-month] {args.stock_phase_month} 共 {len(dates)} 个交易日待补跑")
+        run_stock_phase_pilot(db, dates, tok, acc, dry_run=args.dry_run, workers=args.workers)
     elif args.cycle_stage_day:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         run_cycle_stage_day(get_runtime_mongodb_database(), args.cycle_stage_day, tok, acc)
@@ -902,3 +916,16 @@ if __name__ == "__main__":
     else:
         assert args.start and args.end, "个股模式需要 --start/--end"
         run(args.start, args.end, args.dry_run, tok, acc, args.workers)
+        if args.with_stock_phase:
+            # F2 合并口径：四题跑完同会话附带个股相位（幂等，已判且判据未变的文档自动跳过）
+            from datetime import date as _date, timedelta as _td
+
+            from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+            d0 = _date.fromisoformat(args.start)
+            d1 = _date.fromisoformat(args.end)
+            dates = []
+            while d0 <= d1:
+                dates.append(d0.isoformat())
+                d0 += _td(days=1)
+            run_stock_phase_pilot(get_runtime_mongodb_database(), dates, tok, acc,
+                                  dry_run=args.dry_run, workers=args.workers)

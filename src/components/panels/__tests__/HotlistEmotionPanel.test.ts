@@ -464,4 +464,18 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('const sentinelDivergentDays = computed(')
     expect(source).toContain('const C6_GATE_MIN_TRADES = 30')
   })
+
+  test('融合总纲落地件：时间线深谷图钉 + 哨兵档位差（2026-10-04 §7-9 与实测修正）', () => {
+    const source = panelSource()
+
+    // 深谷 ⚡ 标记：滚动 10 日最低且 <40 的散点系列 + 图例提示 + tooltip 附注
+    expect(source).toContain('const valleyMarks: Array<[string, number | null]> = []')
+    expect(source).toContain('滚动 10 日最低且 <40')
+    expect(source).toContain("name: '深谷',")
+    expect(source).toContain('chart-hint')
+    expect(source).toContain('⚡ 深谷状态日（滚动10日最低且<40）')
+    // 哨兵分歧按档位差表述（可差两档），不写死「一档」
+    expect(source).toContain('d.notches < 0')
+    expect(source).not.toContain("relation === 'lower' ? '判低一档'")
+  })
 })

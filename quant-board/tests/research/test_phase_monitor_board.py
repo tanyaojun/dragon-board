@@ -7,7 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.api.phase_monitor_routes import sentinel_divergence
+from backend.api.phase_monitor_routes import sentinel_divergence  # noqa: F401  路由再导出（读口消费）
+from backend.operations.sentinel_divergence import sentinel_divergence as div_month
 
 
 class _Cursor(list):
@@ -69,3 +70,20 @@ def test_sentinel_divergence_higher_and_empty():
 
     empty = sentinel_divergence(_Db({"hotlist_sentiment": [], "hotlist_jev_driver_labels": []}))
     assert empty["summary"]["comparable"] == 0 and empty["days"] == []
+
+
+def test_sentinel_divergence_month_filter():
+    """month 参数=月度监控取当月告警线（跨月哨兵不串档）。"""
+    db = _Db({
+        "hotlist_sentiment": [
+            {"tradingDate": "2026-09-01", "emotionScore": {"score": 55.0}},
+            {"tradingDate": "2026-10-08", "emotionScore": {"score": 55.0}},
+        ],
+        "hotlist_jev_driver_labels": [
+            {"tradingDate": "2026-09-01", "phaseBand": "weak_40_60"},
+            {"tradingDate": "2026-10-08", "phaseBand": "cold_lt40"},   # 10 月判低，不应进 9 月账
+        ],
+    })
+    sep = div_month(db, month="2026-09")
+    assert sep["summary"] == {"comparable": 1, "agree": 1, "lower": 0, "higher": 0, "skipped": 0}
+    assert sep["days"][0]["date"] == "2026-09-01" and sep["days"][0]["notches"] == 0

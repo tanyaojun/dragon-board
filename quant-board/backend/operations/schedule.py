@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -209,9 +210,14 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     if not should:
         return {"ok": True, "skipped": True, "reason": reason}
     try:
+        cmd = [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
+               "--start", today, "--end", today]
+        # F2 门控（融合总纲）：个股相位分线附带打标默认关，环境变量 JIUYAN_STOCK_PHASE_ENABLED=1
+        # 且用户明确批准 token 成本后才可开启（≈3-5 万 tokens/日合并口径；开启前零额外调用）
+        if os.environ.get("JIUYAN_STOCK_PHASE_ENABLED") == "1":
+            cmd += ["--with-stock-phase"]
         proc = subprocess.run(
-            [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
-             "--start", today, "--end", today],
+            cmd,
             cwd=str(Path(__file__).resolve().parents[2]),
             capture_output=True, text=True, timeout=_PULSE_TIMEOUT_SECONDS,
         )

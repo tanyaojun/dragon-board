@@ -667,7 +667,8 @@
             </div>
             <template v-else>
               <div class="phase-chart-card">
-                <div class="section-title">相位历史时间线（EOD 情绪分 × 相位着色）</div>
+                <div class="section-title">相位历史时间线（EOD 情绪分 × 相位着色）<span
+                  class="chart-hint">⚡ 图钉=深谷状态日（滚动 10 日最低且 &lt;40）</span></div>
                 <div v-if="!phaseHistoryDegraded && phaseHistoryDays.length" ref="phaseChartEl"
                   class="phase-chart"></div>
                 <div v-else class="state-block">
@@ -3111,6 +3112,18 @@ function renderPhaseChart(): void {
   }
   const days = cutoff ? allDays.filter((d) => d.tradingDate >= cutoff) : allDays
   if (!days.length) return
+  // 深谷状态日（融合总纲 §7-9 纯展示标记：滚动 10 日最低且 <40，2026-10-03 用户满意终态提案落地）
+  const valleyMarks: Array<[string, number | null]> = []
+  for (let i = 0; i < allDays.length; i++) {
+    const d = allDays[i]!
+    if (d.eodScore == null || d.eodScore >= 40) continue
+    let isMin = true
+    for (let j = Math.max(0, i - 9); j <= i; j++) {
+      const s = allDays[j]!.eodScore
+      if (s != null && s < d.eodScore) { isMin = false; break }
+    }
+    if (isMin && (!cutoff || d.tradingDate >= cutoff)) valleyMarks.push([d.tradingDate, d.eodScore])
+  }
   const areas: Array<[{ xAxis: string }, { xAxis: string }]> = []
   let startIdx = -1
   for (let i = 0; i <= days.length; i++) {
@@ -3126,11 +3139,12 @@ function renderPhaseChart(): void {
     grid: { left: 48, right: 16, top: 24, bottom: 56 },
     tooltip: {
       trigger: 'axis',
-      formatter: (params: Array<{ name: string; value: number | null; axisValue: string }>) => {
+      formatter: (params: Array<{ name: string; value: number | null; axisValue: string; seriesName?: string }>) => {
         const p = params[0]
         const day = days.find((d) => d.tradingDate === p.axisValue)
         const phaseName = day?.phase === 'offense' ? '进攻' : day?.phase === 'defense' ? '防守' : '不可用'
-        return `${p.axisValue}<br/>情绪分 ${p.value ?? '--'}<br/>相位：${phaseName}`
+        const valley = params.some((q) => q.seriesName === '深谷')
+        return `${p.axisValue}<br/>情绪分 ${p.value ?? '--'}<br/>相位：${phaseName}${valley ? '<br/>⚡ 深谷状态日（滚动10日最低且<40）' : ''}`
       },
     },
     xAxis: { type: 'category', data: days.map((d) => d.tradingDate), axisLabel: { rotate: 45, fontSize: 9 } },
@@ -3167,6 +3181,16 @@ function renderPhaseChart(): void {
             ]),
           ],
         },
+      },
+      {
+        // 深谷状态日散点（琥珀图钉，融合总纲 §7-9；tooltip 由 axis formatter 附 ⚡ 行）
+        name: '深谷',
+        type: 'scatter',
+        data: valleyMarks,
+        symbol: 'pin',
+        symbolSize: 13,
+        itemStyle: { color: '#f5a623' },
+        z: 5,
       },
     ],
   })
@@ -4601,4 +4625,5 @@ watch(() => props.visible, (visible) => {
 .phase-band-trades { width: 44px; flex: none; text-align: right; color: var(--text-secondary); font-size: 11px; }
 .axis-name { width: 44px; flex: none; color: var(--text-secondary); font-size: 11px; padding-top: 1px; }
 .axis-value { color: var(--text-primary); font-size: 12px; line-height: 1.5; }
+.chart-hint { margin-left: 8px; font-size: 10px; color: var(--text-secondary); font-weight: 400; }
 </style>

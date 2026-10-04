@@ -94,6 +94,14 @@ def main() -> int:
         northstar_pass=ns_pass,
     )
 
+    # ④ 哨兵分歧告警线（融合总纲 §5 合流点一，唯一实现=sentinel_divergence.py；只告警不改判）
+    from backend.operations.sentinel_divergence import sentinel_divergence
+
+    div = sentinel_divergence(db, month=args.month)
+    div_sum = div["summary"]
+    disagree_share = (div_sum["lower"] + div_sum["higher"]) / div_sum["comparable"] if div_sum["comparable"] else None
+    div_alert = disagree_share is not None and div_sum["comparable"] >= 10 and disagree_share >= 0.5
+
     report = {
         "meta": {"month": args.month, "generatedAt": datetime.now().isoformat(timespec="seconds"),
                  "gitCommit": _git_commit()},
@@ -101,6 +109,14 @@ def main() -> int:
                      "labelsFresh": fresh,
                      "labelsNote": "labels 未覆盖本月→先跑 phase_label_run 扩窗重打标（命令见 M1 报告 §2.5）" if not fresh else None},
         "supervision": sup,
+        "sentinelDivergence": {
+            "summary": div_sum,
+            "disagreeShare": disagree_share,
+            "alert": div_alert,
+            "alertNote": None if not div_alert else
+            "哨兵过半可比日与规则分不一致（系统性判读分叉）→ 建议人工复核相位判定（只告警不改判，规则分仍是主定义）",
+            "days": div["days"],
+        },
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
