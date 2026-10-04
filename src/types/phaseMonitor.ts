@@ -174,6 +174,10 @@ export interface C10PeakDoc {
     gapGe3: { n: number; mean: number | null; win: number }
     baselineMean: number | null
     edgeGe3VsBaseline: number | null
+    /** 月末跨月高峰日（T+3 出窗，不进样本；fail-visible 留痕） */
+    truncatedPeakDays?: string[]
+    /** jiuyan final 缺失的高峰日（人口缺失，与真涨停池空可区分） */
+    populationMissing?: string[]
     noData?: boolean
     reason?: string | null
   }

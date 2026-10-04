@@ -666,6 +666,9 @@
               <button class="retry-btn" @click="loadPhaseData">重试</button>
             </div>
             <template v-else>
+              <div v-if="phaseBoardError" class="state-block error">
+                ⚠️ 看板读口降级：{{ phaseBoardError }}——以下各卡显示的是上一次成功读数的残留或空态，不代表「无数据」
+              </div>
               <div class="phase-chart-card">
                 <div class="section-title">相位历史时间线（EOD 情绪分 × 相位着色）<span
                   class="chart-hint">⚡ 图钉=深谷状态日（滚动 10 日最低且 &lt;40）</span></div>
@@ -790,6 +793,10 @@
                 <div class="section-title">🏔 高峰兑现账本（C10 逃顶侧 · EOD≥75 · 盘后链每日自动积累）</div>
                 <div v-if="!phaseC10Docs.length" class="state-block">暂无高峰账本（出现高峰状态日后自动生成）</div>
                 <template v-else>
+                  <div v-if="phaseC10Docs.some((d) => d.summary?.noData)" class="phase-pulse-note">
+                    无高峰日月份：{{ phaseC10Docs.filter((d) => d.summary?.noData).map((d) => d.month).join('、') }}<template
+                      v-if="phaseC10Docs.some((d) => d.summary?.populationMissing?.length)">（人口缺失：{{ phaseC10Docs.flatMap((d) => d.summary?.populationMissing ?? []).join('、') }}）</template>
+                  </div>
                   <div class="phase-pulse-ab">
                     累计 {{ c10Ledger.peakDays }} 个高峰日（{{ c10Ledger.months }} 个月）· 涨停池样本 {{ c10Ledger.samples }} 只 · 基线 {{ c10Ledger.baselineMean }}%
                   </div>
@@ -800,20 +807,20 @@
                     <tbody>
                       <tr v-for="d in phaseC10Docs" :key="d._id">
                         <td>{{ d.month }}</td>
-                        <td>{{ d.summary?.peakDays ?? 0 }}</td>
+                        <td>{{ d.summary ? (d.summary.peakDays ?? '--') : '--' }}</td>
                         <td v-for="(key, gi) in ['gapLt1', 'gap1to3', 'gapGe3']" :key="gi"
                           :style="{ color: d.summary?.[key]?.mean == null ? '' : d.summary[key].mean >= 0 ? '#ff4757' : '#2ed573' }">
                           {{ d.summary?.[key]?.mean == null ? '--' : `${d.summary[key].mean}%/只（${d.summary[key].n}）` }}
                         </td>
                         <td :style="{ color: d.summary?.edgeGe3VsBaseline == null ? '' : d.summary.edgeGe3VsBaseline >= 0 ? '#ff4757' : '#2ed573' }">
-                          {{ d.summary?.edgeGe3VsBaseline == null ? '--' : `+${d.summary.edgeGe3VsBaseline}pp` }}
+                          {{ d.summary?.edgeGe3VsBaseline == null ? '--' : `${d.summary.edgeGe3VsBaseline >= 0 ? '+' : ''}${d.summary.edgeGe3VsBaseline}pp` }}
                         </td>
                       </tr>
                     </tbody>
                   </table>
                   <div class="phase-pulse-ab"
                     title="C10 方案冻结协议（ranktrend-c10-peak-exit-plan.md §4）：兑现事件 ≥10 且相对基线 ≥+1pp 且连续 3 失效降级；兑现 edge=基线-大高开组均值（兑现换入基线资产避免的回撤）；观察态不构成操作指令">
-                    观察读数：缺口 &lt;1% {{ c10Ledger.gapLt1.mean == null ? '--' : `${c10Ledger.gapLt1.mean}%/只（胜 ${c10Ledger.gapLt1.win}/${c10Ledger.gapLt1.n}）` }} · ≥3% {{ c10Ledger.gapGe3.mean == null ? '--' : `${c10Ledger.gapGe3.mean}%/只（胜 ${c10Ledger.gapGe3.win}/${c10Ledger.gapGe3.n}）` }} · 兑现 edge {{ c10Ledger.edgeGe3VsBaseline == null ? '--' : `+${c10Ledger.edgeGe3VsBaseline}pp` }}
+                    观察读数（跨月逐股平摊，基线取各月均值）：缺口 &lt;1% {{ c10Ledger.gapLt1.mean == null ? '--' : `${c10Ledger.gapLt1.mean}%/只（胜 ${c10Ledger.gapLt1.win}/${c10Ledger.gapLt1.n}）` }} · ≥3% {{ c10Ledger.gapGe3.mean == null ? '--' : `${c10Ledger.gapGe3.mean}%/只（胜 ${c10Ledger.gapGe3.win}/${c10Ledger.gapGe3.n}）` }} · 兑现 edge {{ c10Ledger.edgeGe3VsBaseline == null ? '--' : `${c10Ledger.edgeGe3VsBaseline >= 0 ? '+' : ''}${c10Ledger.edgeGe3VsBaseline}pp` }}
                   </div>
                 </template>
               </div>
@@ -2881,6 +2888,8 @@ const phaseC9Docs = ref<C9DeepValleyDoc[]>([])
 const phaseC10Docs = ref<C10PeakDoc[]>([])
 const sentinelDivergence = ref<SentinelDivergence | null>(null)
 const bandScale = ref<Array<{ tag: string; label: string; rangeText: string; lower: number; upper: number | null }>>([])
+// board 读口降级原因（review P1-F3：降级时各卡空态会伪装成「尚无数据」，顶部横幅统一披露）
+const phaseBoardError = ref<string | null>(null)
 const phaseNorthstarMissingReason = ref<string | null>(null)
 const phaseLoading = ref(false)
 const phaseLoadedOnce = ref(false)
@@ -3150,6 +3159,7 @@ async function loadPhaseData(): Promise<void> {
       phaseC10Docs.value = []
       sentinelDivergence.value = null
       bandScale.value = []
+      phaseBoardError.value = board.reason
     } else {
       phaseNorthstar.value = board.northstar
       phaseNorthstarMissingReason.value = board.northstarMissingReason ?? null
@@ -3159,6 +3169,7 @@ async function loadPhaseData(): Promise<void> {
       phaseC10Docs.value = board.c10 ?? []
       sentinelDivergence.value = board.sentinelDivergence ?? null
       bandScale.value = board.bandScale ?? []
+      phaseBoardError.value = null
     }
   } catch (err) {
     phaseError.value = err instanceof Error ? err.message : '相位数据加载失败'
@@ -4709,4 +4720,5 @@ watch(() => props.visible, (visible) => {
 .axis-name { width: 44px; flex: none; color: var(--text-secondary); font-size: 11px; padding-top: 1px; }
 .axis-value { color: var(--text-primary); font-size: 12px; line-height: 1.5; }
 .chart-hint { margin-left: 8px; font-size: 10px; color: var(--text-secondary); font-weight: 400; }
+.phase-pulse-note { font-size: 11px; color: var(--text-secondary); line-height: 1.6; padding: 2px 2px 6px; }
 </style>

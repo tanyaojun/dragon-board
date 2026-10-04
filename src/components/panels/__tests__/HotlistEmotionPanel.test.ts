@@ -513,5 +513,15 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('高峰兑现账本（C10 逃顶侧 · EOD≥75 · 盘后链每日自动积累）')
     // 观察态注记（不构成操作指令）
     expect(source).toContain('观察态不构成操作指令')
+    // review 修复钉：edge 条件符号（负值不得渲染 +-x）、公式方向、口径量纲词、降级横幅、noData 消费、summary 缺失不伪装 0
+    expect(source).toContain("d.summary.edgeGe3VsBaseline >= 0 ? '+' : ''")
+    expect(source).toContain("c10Ledger.edgeGe3VsBaseline >= 0 ? '+' : ''")
+    expect(source).toContain('跨月逐股平摊，基线取各月均值')
+    expect(source).toContain('phaseBoardError')
+    expect(source).toContain('看板读口降级')
+    expect(source).toContain('无高峰日月份')
+    expect(source).toContain("d.summary ? (d.summary.peakDays ?? '--') : '--'")
+    expect(source).not.toContain('`+${d.summary.edgeGe3VsBaseline}pp`')
+    expect(source).not.toContain('`+${c10Ledger.edgeGe3VsBaseline}pp`')
   })
 })

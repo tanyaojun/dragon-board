@@ -48,6 +48,23 @@ def _snap(db: Any, d: str, slots: list[str]) -> dict[str, float]:
     return out
 
 
+def _entry_prices(db: Any, d: str) -> dict[str, float]:
+    """T+1 入场价：09:35 可成交口径优先（与 C9 冻结协议统一），缺失回退 09:30。
+
+    确定性槽解析（review P1-1）：逐槽独立查询按显式优先序取值，不依赖 $in 游标序
+    （phase_stock_matrix.entry_snap 同款模式）；C9 工具 deep_valley_revalidate 仍为游标序，
+    口径统一登记于方案 §7 A6，待用户点头后另改（一次一变量）。
+    """
+    by_slot = {s: _snap(db, d, [s]) for s in ("09:35", "09:30")}
+    out: dict[str, float] = {}
+    for code in set(by_slot["09:35"]) | set(by_slot["09:30"]):
+        for s in ("09:35", "09:30"):
+            if code in by_slot[s]:
+                out[code] = by_slot[s][code]
+                break
+    return out
+
+
 def _peak_population(db: Any, date: str) -> set[str]:
     """高峰日涨停池（jiuyan_action final 人口，与打标轨道同源）。"""
     pop = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields.stocks.code": 1})
@@ -80,19 +97,26 @@ def compute_peak_summary(month: str, samples: list[dict], baseline_mean: float |
 def revalidate_month(db: Any, month: str) -> dict[str, Any]:
     eod = _eod_scores(db)
     dates = sorted(eod)
-    # 月度账本=当月高峰日（与 C9 同款月过滤；基线仍用全期对照）；月末 T+3 出窗截断不计入
+    # 月度账本=当月高峰日（与 C9 同款月过滤；基线仍用全期对照）；月末 T+3 出窗截断显式登记
     deep_dates = [d for d in dates if d.startswith(month) and eod[d] >= PEAK]
+    truncated = [d for d in deep_dates
+                 if dates.index(d) + 3 >= len(dates)]  # review P1-2：月末截断留痕（C9 同款字段）
     samples = []
+    population_missing: list[str] = []
     for d in deep_dates:
         i = dates.index(d)  # 全期轴下标（T+1/T+3 跨月取窗）；deep_dates 是月内过滤列表，勿用其枚举下标
         if i + 3 >= len(dates):
-            continue  # 月末 T+3 出窗截断：与 C9 同口径不计入（如实披露于 reason 外，工具注记）
+            continue  # 截断日不进样本，truncated 登记如上（fail-visible）
         t1, t3 = dates[i + 1], dates[i + 3]
         codes = _peak_population(db, d)
-        sin, sout = _snap(db, t1, ["09:30", "09:35"]), _snap(db, t3, ["15:00"])
+        if not codes:
+            population_missing.append(d)  # review P2-2：人口缺失与「真涨停池空」可区分
+        sin = _entry_prices(db, t1)
+        sout = _snap(db, t3, ["15:00"])
         gap_all = _snap(db, t1, ["09:30"])
         groups: dict[str, list[float]] = {"gapLt1": [], "gap1to3": [], "gapGe3": []}
         n = 0
+        gap_missing = 0
         for c in sorted(codes):
             if c not in sin or c not in sout:
                 continue
@@ -100,10 +124,11 @@ def revalidate_month(db: Any, month: str) -> dict[str, Any]:
             ret = round(sout[c] - sin[c], 2)
             gap = gap_all.get(c)
             if gap is None:
+                gap_missing += 1  # review P2-1：缺开盘缺口的股计入 n 不入组，显式计数
                 continue
             key = "gapLt1" if gap < 1 else ("gap1to3" if gap < 3 else "gapGe3")
             groups[key].append(ret)
-        samples.append({"date": d, "eodScore": eod[d], "n": n, **groups})
+        samples.append({"date": d, "eodScore": eod[d], "n": n, "gapMissing": gap_missing, **groups})
     # 基线：全期 T+1→T+3 池等权日均值（与 C9 同法）
     base = []
     for i in range(len(dates) - 3):
@@ -113,6 +138,8 @@ def revalidate_month(db: Any, month: str) -> dict[str, Any]:
             base.append(round(st.mean(b[c] - a[c] for c in common), 2))
     baseline_mean = round(st.mean(base), 2) if base else None
     summary = compute_peak_summary(month, samples, baseline_mean)
+    summary["truncatedPeakDays"] = truncated  # 月末跨月高峰日（T+3 出窗），fail-visible 留痕
+    summary["populationMissing"] = population_missing
     return {"ok": True, "month": month, "summary": summary, "samples": samples,
             "noData": not samples, "reason": None if samples else f"{month} 无高峰状态日（≥{PEAK}）"}
 
