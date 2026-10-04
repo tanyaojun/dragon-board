@@ -19,12 +19,15 @@ class FakeCursor:
     def __iter__(self):
         return iter(self._docs)
 
+    def sort(self, *args: object, **kwargs: object) -> "FakeCursor":
+        return self
+
 
 class FakeCollection:
     def __init__(self, docs: list[dict]) -> None:
         self._docs = docs
 
-    def find(self, _query: dict) -> FakeCursor:
+    def find(self, _query: dict, _projection: dict | None = None) -> FakeCursor:
         return FakeCursor(self._docs)
 
 
@@ -33,8 +36,10 @@ class FakeDb:
         self.phase_monitor = FakeCollection(docs)
 
     def __getitem__(self, name: str) -> FakeCollection:
-        assert name == "phase_monitor"
-        return self.phase_monitor
+        if name == "phase_monitor":
+            return self.phase_monitor
+        # board 读口还联表哨兵分歧（hotlist_sentiment/hotlist_jev_driver_labels）——测试默认空集合
+        return FakeCollection([])
 
 
 def _patch(monkeypatch, docs: list[dict]) -> None:

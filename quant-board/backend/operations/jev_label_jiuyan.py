@@ -113,6 +113,11 @@ QUESTIONS_STOCK_PHASE = {"stock_phase_position": {"type": "choice",
                                        "判例：长期平台后 4 天 2 板突破（低点距今 ≤8 日）=启动确认",
                               "insufficient": "信息不足：位置/结构/质量三轴证据均缺失（如上市窗口过短），不强行归类"}}}
 
+# 合并同 call 题集（2026-10-04 用户裁决「真合并后再跑」）：四题原样 + 相位题原文，判据逐字不变
+# （题目语义零变更仅打包方式变化——同 call 共享 narrative 输入，相位边际成本从 ≈2,420 tokens/只
+# 独立调用降至题干+答案数百 tokens）。存量老文档补齐仍走单题 CLI（run_stock_phase_pilot 保留）。
+QUESTIONS_STOCK_WITH_PHASE = {**QUESTIONS_STOCK, "stock_phase_position": QUESTIONS_STOCK_PHASE["stock_phase_position"]}
+
 THS_KEYS = ("one", "two", "three", "four", "high")
 
 _FACTS_CACHE: dict[str, str] = {}
@@ -567,9 +572,14 @@ def hotlist_ranks(db, date: str, codes: list[str]) -> dict[str, int]:
     return ranks
 
 
-def _label_one(db, col, acc, token, date, code, stock, board, rank):
+def _label_one(db, col, acc, token, date, code, stock, board, rank,
+               include_stock_phase: bool = False):
+    """单只个股打标一次 jev 调用；include_stock_phase=True 时题目集升级为五题合并同 call
+    （QUESTIONS_STOCK_WITH_PHASE，2026-10-04 用户裁决），相位答案随主 doc 同落——共享 narrative
+    输入，相位边际成本≈题干+答案。usage/latency 为五题整 call 实付口径（stockPhaseUsage 同值）。"""
+    questions = QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK
     narrative = build_pilot_narrative(db, date, code, stock, board, rank)
-    env, ms = call_jev(acc, token, narrative, QUESTIONS_STOCK)
+    env, ms = call_jev(acc, token, narrative, questions)
     parsed = parse_jev_response(env, ms)
     answers = parsed.get("answers") or {}
     doc = {"_id": f"{date}:{code}", "origin": "driver_label_jiuyan_v3_pilot", "tradingDate": date,
@@ -577,7 +587,7 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank):
            "jiuyanContext": {"board": board, "day": stock.get("day"), "num": stock.get("num"),
                              "time": stock.get("time"), "inHotlist": rank is not None, "rank": rank},
            "status": "ok" if parsed["ok"] else "degraded",
-           "narrative": narrative, "questionsRaw": QUESTIONS_STOCK,
+           "narrative": narrative, "questionsRaw": questions,
            "label": answers.get("driver_type", {}).get("choice"),
            "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
            "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
@@ -591,11 +601,27 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank):
            "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
            "responseRaw": None if parsed["ok"] else env,
            "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if include_stock_phase:
+        # 相位答案随主 call 落档（字段与单题版 run_stock_phase_pilot 逐字段对齐，聚合层无感）；
+        # 相位答案缺失时 Position=None（聚合层 no_data fail-visible 已处理，不整 call 降级）
+        ans_p = answers.get("stock_phase_position") or {}
+        doc.update({
+            "stockPhasePosition": ans_p.get("choice"),
+            "stockPhaseProbabilities": ans_p.get("probabilities"),
+            "stockPhaseQuestionsRaw": QUESTIONS_STOCK_PHASE,
+            "stockPhaseModel": parsed.get("model"),
+            "stockPhaseUsage": parsed.get("usage"),
+            "stockPhaseLatencyMs": ms,
+            "stockPhaseErrorCode": parsed.get("errorCode"),
+            "stockPhaseErrorDetail": parsed.get("errorDetail"),
+            "stockPhaseComputedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        })
     col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return bool(parsed["ok"])
 
 
-def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2):
+def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2,
+        with_stock_phase: bool = False):
     db = _db()
     col = db["hotlist_jev_driver_labels"]
     dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
@@ -634,7 +660,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             entry = items[code]
             for attempt in range(2):
                 result = _label_one(db, col, acc, token, date, code, entry["stock"],
-                                    entry["board"], ranks.get(code))
+                                    entry["board"], ranks.get(code),
+                                    include_stock_phase=with_stock_phase)
                 if result:
                     return True
                 time.sleep(1.0)
@@ -887,8 +914,9 @@ if __name__ == "__main__":
                     help="个股相位分线月度回填（融合总纲 F2）：对月内全部交易日已有个股文档补跑——"
                          "烧 token（≈3-5 万/日合并口径），须经用户批准后手动执行，不挂自动链")
     ap.add_argument("--with-stock-phase", dest="with_stock_phase", action="store_true",
-                    help="四题主 run 后附带当日个股相位分线（合并会话省边际成本）——默认关；"
-                         "排程经 JIUYAN_STOCK_PHASE_ENABLED=1 门控（融合总纲 F2，用户批准前不得开启）")
+                    help="合并同 call（真合并）：相位题并入主 call 题目集，同一 narrative 五题一次调用"
+                         "（增量边际≈题干+答案数百 tokens/只）——默认关；"
+                         "排程经 JIUYAN_STOCK_PHASE_ENABLED=1 门控（用户批准成本后开启）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--workers", type=int, default=2)
     args = ap.parse_args()
@@ -917,17 +945,7 @@ if __name__ == "__main__":
         run_phase_band_day(get_runtime_mongodb_database(), [args.phase_band_day], tok, acc)
     else:
         assert args.start and args.end, "个股模式需要 --start/--end"
-        run(args.start, args.end, args.dry_run, tok, acc, args.workers)
-        if args.with_stock_phase:
-            # F2 合并口径：四题跑完同会话附带个股相位（幂等，已判且判据未变的文档自动跳过）
-            from datetime import date as _date, timedelta as _td
-
-            from backend.data.repositories.repository_factory import get_runtime_mongodb_database
-            d0 = _date.fromisoformat(args.start)
-            d1 = _date.fromisoformat(args.end)
-            dates = []
-            while d0 <= d1:
-                dates.append(d0.isoformat())
-                d0 += _td(days=1)
-            run_stock_phase_pilot(get_runtime_mongodb_database(), dates, tok, acc,
-                                  dry_run=args.dry_run, workers=args.workers)
+        # --with-stock-phase=真合并同 call（2026-10-04 用户裁决）：相位题并入主 call 题目集，
+        # 同一 narrative 五题一次调用（边际成本≈题干+答案）；排程经 JIUYAN_STOCK_PHASE_ENABLED=1 门控
+        run(args.start, args.end, args.dry_run, tok, acc, args.workers,
+            with_stock_phase=args.with_stock_phase)

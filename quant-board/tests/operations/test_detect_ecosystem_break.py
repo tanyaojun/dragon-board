@@ -59,7 +59,9 @@ class FakeDb:
 
 
 def test_break_day_hit_and_selloff_excluded():
-    rows = {r["date"]: r for r in detect_month(FakeDb(), "2026-09")}
+    rows_d, material_missing = detect_month(FakeDb(), "2026-09")
+    rows = {r["date"]: r for r in rows_d}
+    assert material_missing == []  # 夹具全有料
     # 9/4：断层+均衡(0.93)+放量 → 命中
     r4 = rows["2026-09-04"]
     assert r4["ecosystemBreak"] is True and r4["breakout"] and r4["balanced"] and r4["amountUp"]
