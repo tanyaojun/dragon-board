@@ -201,6 +201,14 @@ describe('涨停复盘页签（打标轨道研究↔展示同步 2026-10-03；�
     expect(source).toContain('limitup-table-container')
     expect(source).toContain('position: sticky')
     expect(source).toContain('tr:hover')
+    // 搜索+排序（SectorDetail 成分股表同款控件，2026-10-04 用户令）
+    expect(source).toContain('limitUpSearch')
+    expect(source).toContain('placeholder="搜索股票代码或名称..."')
+    expect(source).toContain('limitUpSortKey')
+    expect(source).toContain('limitUpSortDesc')
+    expect(source).toContain('LIMITUP_PHASE_ORDER')
+    expect(source).toContain('<option value="phase">相位档</option>')
+    expect(source).toContain('↓ 降序')
   })
 
   test('打标轨道中文映射合同（驱动/深度/新鲜度/买盘/相位档/个股相位分线）', () => {

@@ -532,6 +532,23 @@
                 </div>
                 <span class="limitup-stats">显示 {{ filteredLimitUpStocks.length }} / {{ limitUpDay.summary.total }} 只</span>
               </div>
+              <div class="limitup-controls">
+                <div class="search-box">
+                  <input type="text" v-model="limitUpSearch" placeholder="搜索股票代码或名称..." class="search-input" />
+                  <span v-if="limitUpSearch" class="search-clear" @click="limitUpSearch = ''">✕</span>
+                </div>
+                <div class="sort-controls">
+                  <select v-model="limitUpSortKey" class="sort-select">
+                    <option value="phase">相位档</option>
+                    <option value="rank">热榜排名</option>
+                    <option value="labelConf">驱动置信</option>
+                    <option value="phaseConf">相位置信</option>
+                  </select>
+                  <button class="sort-btn" @click="limitUpSortDesc = !limitUpSortDesc">
+                    {{ limitUpSortDesc ? '↓ 降序' : '↑ 升序' }}
+                  </button>
+                </div>
+              </div>
               <div class="limitup-table-container" v-if="filteredLimitUpStocks.length">
                 <table class="limitup-table">
                   <thead>
@@ -739,6 +756,10 @@ const limitUpDay = ref<HotlistJevLimitUpDay | null>(null)
 const limitUpLoading = ref(false)
 const limitUpError = ref<string | null>(null)
 const limitUpDriverFilter = ref('')
+const limitUpSearch = ref('')
+type LimitUpSortKey = 'phase' | 'rank' | 'labelConf' | 'phaseConf'
+const limitUpSortKey = ref<LimitUpSortKey>('phase')
+const limitUpSortDesc = ref(false)
 let limitUpReqId = 0
 
 async function ensureLimitUp(date: string) {
@@ -764,15 +785,45 @@ watch([view, selectedDate], ([tab, date]) => {
   if (tab === 'limitup' && date) void ensureLimitUp(date)
 })
 
-// 换日重置驱动过滤：不同日驱动类型集合可能不同，残留过滤会让列表假性为空
+// 换日重置驱动过滤与搜索：不同日驱动类型集合可能不同，残留过滤会让列表假性为空
 watch(selectedDate, () => {
   limitUpDriverFilter.value = ''
+  limitUpSearch.value = ''
 })
 
+// 相位档排序序（生命周期序：启动→发酵→加速→分歧，信息不足沉底）
+const LIMITUP_PHASE_ORDER: Record<string, number> = {
+  start: 0, ferment: 1, climax: 2, divergence: 3, insufficient: 9,
+}
+
+function limitUpLabelConf(stock: HotlistJevLimitUpStock): number {
+  return stock.label ? (stock.labelProbabilities?.[stock.label] ?? 0) : 0
+}
+
+function limitUpPhaseConf(stock: HotlistJevLimitUpStock): number {
+  return stock.stockPhasePosition ? (stock.stockPhaseProbabilities?.[stock.stockPhasePosition] ?? 0) : 0
+}
+
 const filteredLimitUpStocks = computed(() => {
-  const stocks = limitUpDay.value?.stocks ?? []
-  if (!limitUpDriverFilter.value) return stocks
-  return stocks.filter((stock) => stock.label === limitUpDriverFilter.value)
+  let stocks = limitUpDay.value?.stocks ?? []
+  if (limitUpDriverFilter.value) {
+    stocks = stocks.filter((stock) => stock.label === limitUpDriverFilter.value)
+  }
+  const kw = limitUpSearch.value.trim().toLowerCase()
+  if (kw) {
+    stocks = stocks.filter((stock) =>
+      (stock.name ?? '').toLowerCase().includes(kw) || stock.code.includes(kw))
+  }
+  const dir = limitUpSortDesc.value ? -1 : 1
+  const comparators: Record<LimitUpSortKey, (a: HotlistJevLimitUpStock, b: HotlistJevLimitUpStock) => number> = {
+    phase: (a, b) => (LIMITUP_PHASE_ORDER[a.stockPhasePosition ?? 'insufficient'] ?? 9)
+      - (LIMITUP_PHASE_ORDER[b.stockPhasePosition ?? 'insufficient'] ?? 9),
+    rank: (a, b) => (a.rank ?? 9999) - (b.rank ?? 9999),
+    labelConf: (a, b) => limitUpLabelConf(b) - limitUpLabelConf(a),
+    phaseConf: (a, b) => limitUpPhaseConf(b) - limitUpPhaseConf(a),
+  }
+  const compare = comparators[limitUpSortKey.value] ?? comparators.phase
+  return [...stocks].sort((a, b) => compare(a, b) * dir)
 })
 
 // 相位分线=日级哨兵带（相位是市场级判定，当日个股同值；哨兵缺失如实 '--'）
@@ -2329,6 +2380,59 @@ onUnmounted(() => {
   flex-wrap: wrap;
   margin: 10px 0;
 }
+/* 搜索/排序控件（SectorDetail 成分股表同款语言，2026-10-04 用户令） */
+.limitup-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.limitup-controls .search-box { position: relative; flex: 1; min-width: 200px; }
+.limitup-controls .search-input {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.limitup-controls .search-input:focus { outline: none; border-color: var(--color-highlight); }
+.limitup-controls .search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 0 4px;
+}
+.limitup-controls .search-clear:hover { color: var(--text-primary); }
+.limitup-controls .sort-controls { display: flex; gap: 4px; }
+.limitup-controls .sort-select {
+  padding: 6px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+}
+.limitup-controls .sort-select:hover { border-color: var(--color-highlight); }
+.limitup-controls .sort-btn {
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.limitup-controls .sort-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .limitup-filters { display: flex; gap: 4px; flex-wrap: wrap; }
 .limitup-filter-btn {
   padding: 6px 12px;
