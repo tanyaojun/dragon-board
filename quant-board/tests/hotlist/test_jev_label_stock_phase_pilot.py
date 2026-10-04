@@ -15,8 +15,8 @@ from backend.operations.jev_label_jiuyan import QUESTIONS_STOCK_PHASE, run_stock
 
 
 def test_question_structure_frozen_design():
-    # 设计稿 v0.3 冻结合同（jev-driver-label-v3-questionset.md）：key 与五档选项逐字对齐；
-    # v0.3（2026-10-04 用户裁决方案甲）：位置/结构/质量三轴矩阵+优先级
+    # 设计稿 v0.4 冻结合同（jev-driver-label-v3-questionset.md）：key 与五档选项逐字对齐；
+    # v0.4（2026-10-04 用户盘感三判例校准）：示警收窄（单次回封不示警）+形态分界（低点新鲜度）+判例锚定
     assert list(QUESTIONS_STOCK_PHASE.keys()) == ["stock_phase_position"]
     q = QUESTIONS_STOCK_PHASE["stock_phase_position"]
     assert q["type"] == "choice"
@@ -24,15 +24,18 @@ def test_question_structure_frozen_design():
     assert sorted(q["criteria"].keys()) == ["climax", "divergence", "ferment", "insufficient", "start"]
     assert list(q["criteria"].keys())[0] == "divergence"
     assert "不预测后市" in q["instructions"]
-    # 三轴点名 + 优先级声明 + 距高点退化防线
+    # 三轴点名 + 优先级 + 三条注意（距高点退化防线/形态分界/回封不示警）
     for axis in ["价格位置轴", "结构轴", "质量轴"]:
         assert axis in q["instructions"]
     assert "优先级" in q["instructions"] and "距高点≈0 不能单独当高位证据" in q["instructions"]
-    # 阈值硬锚（Q5 门控教训：数字→档位须硬锚）
-    assert "≥50%" in q["criteria"]["climax"] and "一字板" in q["criteria"]["climax"]
-    assert "≥50%" in q["criteria"]["divergence"] and "炸板≥2 次回封" in q["criteria"]["divergence"]
-    assert "30-50%" in q["criteria"]["ferment"]
-    assert "<30%" in q["criteria"]["start"] and "断板反包" in q["criteria"]["start"]
+    assert "≤8 日=低位新鲜" in q["instructions"] and "≥15 日=趋势已久" in q["instructions"]
+    assert "单次炸板回封" in q["instructions"] and "不是分歧示警" in q["instructions"]
+    # 阈值/判例硬锚
+    assert "炸板≥2 次回封" in q["criteria"]["divergence"] and "炸板收盘" in q["criteria"]["divergence"]
+    assert "≥15 日" in q["criteria"]["divergence"] and "判例" in q["criteria"]["divergence"]
+    assert "放量（≥1.5 倍）" in q["criteria"]["climax"] and "判例" in q["criteria"]["climax"]
+    assert "低点距今 9-14 日" in q["criteria"]["ferment"]
+    assert "≤8 个交易日" in q["criteria"]["start"] and "判例" in q["criteria"]["start"]
 
 
 def test_position_line_counts_from_daily_bars(monkeypatch):
@@ -45,6 +48,7 @@ def test_position_line_counts_from_daily_bars(monkeypatch):
     line = runner.stock_position_line("2026-09-30", "605577")
     assert "距 20 日最高 17.66 差 7.8%" in line
     assert "20 日窗口涨幅" in line and "最低收盘" in line
+    assert "距今" in line and "近 5 日贡献" in line  # v0.4 形态锚
     assert "0.95 倍（平量）" in line
     # 阈值语义自检：龙版传媒形态（距高点 7.8%/窗口涨幅 62.5%）应同时满足 climax 两锚
 
