@@ -1,12 +1,12 @@
 # jev 叙事问题集 · 推理语料包（2026-10-05 组装）
 
 **用途**：投喂强推理模型（GPT-OSS-120B `@cf/openai/gpt-oss-120b`，reasoning=high），对 **jev 叙事题目集（questions）与判据设计**做优化研讨。
-**使用方式**：pi 内 `/model` 选 `workers-ai: @cf/openai/gpt-oss-120b` + `/thinking high`，粘贴 §6 模板；单次成本 ≈ **$0.005**（语料 ≈7-9k input + 2-3k output）。
+**使用方式**：脚本通道（推荐，§5.4）`python scripts/gptoss_questionset_review.py --prompt <提示词.txt> --out <输出.md>`（reasoning=high，无工具无历史重放）；pi 通道仅限**新会话首问**——pi 的 agent 链对 gpt-oss 有结构性不兼容（历史 thinking 块重放为 content 数组、工具调用后 assistant content=null，均被 CF schema 拒 code 5006，多轮/工具/中断重试必炸，2026-10-05 实证）；单次成本 ≈ **$0.005**（语料 ≈7-12k input + 2-5k output）。
 **红线（投喂前必读）**：任何题目改动 = **先 pilot 预登记冻结门判据，再开火**；自动化测试**禁止触发真实 jev 调用**；真实调用只走预登记 + 预算确认的开火路径（2026-10-03 冒烟误烧 4 次调用教训）。
 
 ---
 
-## §1 现行生产题目集（权威正本 = `backend/analysis/hotlist/jev_state.py`，版本 v2.4，落库带 `questionSetVersion`）
+## §1 现行生产题目集（权威正本 = `backend/analysis/hotlist/jev_state.py`，版本 v2.5（2026-10-05 起），落库带 `questionSetVersion`）
 
 **槽位四问**（每 half_hour 槽一次，10 槽/日）：
 
@@ -41,6 +41,7 @@
 - **周期段位题四轮挂起**（§十二）：单调段日全对、**拐点日 100% 出错且不随判据迭代收敛**；冰点 vs 杀跌区分需要未存数据（量能方向/全市场涨跌家数）；冰点判定必须锚涨停生态断层，不能用市场综合强度（KPL 强度当冰点标尺从根上就是错的）。
 - **温度 T1 拆双问已撤回**：score 答案实测 100% 携带 10 档锚点分布+confidence（三代全覆盖），主收益被存量覆盖，不值得 pilot。
 - **jev 与规则轨道 = 并列观察者**（2026-10-08 方向重置）：规则五档不是 golden（情绪周期未进回测链路）；同槽 sequence_stage 在相位定义用途内是指定源，其余用途维持并列。day_stage 前日判相是反向指标（p=0.02）不作相位源。
+- **v2.5 九月全窗重跑（2026-10-05，227/227 ok ≈91 万 tokens）**：crowding 六层首月 slot 分布=封板弱化 45/无拥挤 33/广度高潮 12/高位加速 12/拥挤解除 2/逃生 102（逃生逐槽位分布与 v2.4 逐位相同=盘中帧缺炸板证据的历史已知状态，非回归）；拥挤解除 2 判例亲读证据成立，其中 9/16 10:30 为「家数或高度」口径边界判例（家数 30≪p80 72，仅连板 6=p80 触顶后梯队回落，置信 0.86）；day_pattern 八类首月 21 EOD=low_recover 9/steady_strong 6/rally_fade 3/尾盘偷袭 2（置信 0.26-0.30 边缘形态如实低置信）/steady_weak 1；day_stage 翻转 7/21 全为相邻档 churn 且方向与 15:00 证据一致（温和上移非乱跳）；温度 slot 均值 47.3→49.7。
 
 ## §4 开放问题（推理主目标）
 
@@ -50,6 +51,8 @@
 4. **F2 置信校准**：margin/熵派生指标与人工裁决的校准曲线（≥100 条裁决门槛）——校准失败时"要求 jev 输出 justification"的题目层改法是否值得预登记？
 5. **叙事长度与判读质量的 token 权衡**：9 月 v2 重跑叙事变饱满致 input 31 万→87 万 tokens，判读改善（逃生 53.4%→47.1%、温度 ρ 0.572→0.61）——边际在哪里？
 6. **题目间口径对齐**的例行自查方法（crowding 曾混合"拥挤测量"+"危险判断"两个概念——如何在预登记阶段系统性检出此类缺陷？）
+7. **crowd_clearing 口径边界（v2.5 新生）**：「家数或高度触及 p80」在"广度从未拥挤、仅高位梯队出清"的日子（9/16 判例）是否应判解除——收紧为"至少一轴显著超 p80"或"两轴联合"的权衡，以及与 no_crowding 的分流清晰度。
+8. **day_pattern 八类区分度（P5 移交）**：与 day_stage 的独立信息量从未实证；v2.5 八类首月 21 样本头重脚轻（low_recover 9/21），最小样本量与区分度统计量设计。
 
 ## §5 投喂模板（复制即用）
 
@@ -119,6 +122,19 @@ pilot 样本与窗口、预登记门判据（可量化）、人工抽验方案�
 2. **要判读框架不要结论**：问「S1 FAIL/S2 PASS 组合下怎么决策」而不是「该不该恢复 score」——前者产出可复用判据，后者是赌一次模型口味。
 3. **防迎合两句不能删**：「显式列出证据不足的点」「论证不成立就判不值得立项」。
 4. **产出处理**：模型的判据文案与门判据必须经人工审定、落成 pilot 预登记文档、冻结后再开火；模型输出本身不构成生产改动授权。
+
+## §5.4 脚本通道（2026-10-05 起推荐）
+
+pi agent 链对 gpt-oss 不可用后的替代：`scripts/gptoss_questionset_review.py` 直连 CF OpenAI 兼容端点（`/ai/v1/chat/completions`），只发 `[system, user]` 两条字符串消息 + `reasoning_effort`（默认 **high**），零工具、零历史重放——schema 全过，effort=high 保留（pi 通道做不到）。
+
+```bash
+export CLOUDFLARE_API_KEY=<key>
+python scripts/gptoss_questionset_review.py --prompt <提示词.txt> --out <输出.md>
+```
+
+- 提示词存 txt（§5 主模板 / §5.1 场景 A / §5.2 场景 B），输出落 markdown 后**人工审定**；
+- 追问：把上一轮输出全文贴进新提示词文件再跑一次（同 §5.3 多轮设计，追问轮语料 = 本轮提示词 + 上轮输出）；
+- 默认走同一 AI Gateway（pi-geteway）用量集中可见，`--no-gateway` 直连；`--effort low|medium|high` 可调。
 
 ---
 **组装来源**：hotlist-jev-emotion-observe-design.md（现行设计）/ hotlist-jev-sentiment-design.md（通道事实档案）/ jev-sentiment-questionset-review.md（v1→v2.4 全程 + §十二-§十四）/ jev-crowding-score-reevaluation.md / jev-temp-crowding-confidence-deepening.md / jev-driver-label-v2-design.md / jev-driver-label-v3-questionset.md / hotlist-jev-auxiliary-plan.md

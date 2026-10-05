@@ -1,7 +1,7 @@
 # EOD 情绪规则分 · 推理语料包（2026-10-05 组装）
 
-**用途**：投喂强推理模型（GPT-OSS-120B `@cf/openai/gpt-oss-120b`，reasoning=high），对 **EOD 情绪分计算逻辑**做归因分析与优化方向研讨。
-**使用方式**：pi 内 `/model` 选 `workers-ai: @cf/openai/gpt-oss-120b` + `/thinking high`，粘贴 §6 模板；或 Cloudflare Playground。单次成本估算：语料 ≈6-8k input + 2-3k output ≈ **$0.005/次**。
+**用途**：投喂强推理模型（主=pi+zai glm-5.3 thinking=high 接地通道；备=CF GPT-OSS-120B 脚本通道），对 **EOD 情绪分计算逻辑**做归因分析与优化方向研讨。
+**使用方式（2026-10-05 A/B 后更新）**：①**主通道=pi + zai glm-5.3（含工具自读文件）**——接地假设实证：读权威正本+审定记录后连续三轮零幻觉，工具/多轮/thinking 历史重放全可用（`/new` → `/model glm-5.3` → `/thinking high`；glm-5.3 条目已配 reasoning:true + maxTokens:65535，默认 16384 会被 high 思考流烧满截断）；②备选=脚本通道 `python scripts/gptoss_questionset_review.py`（CF gpt-oss-120b 一问一答；**贴语料不接地时两个模型同病**——数字串号/定义漂移/决策树倒置，2026-10-05 A/B 实证；pi+CF gpt-oss 组合结构性不可用：thinking 重放数组+工具桩 null 被 CF schema 拒）。单次成本 ≈**$0.005-0.03**。
 **边界**：本包只做语料预处理，**不改任何生产代码与判据**；任何采纳的改动走正常流程（配置 diff → 用户裁决 → 测试）。
 
 ---
@@ -10,7 +10,7 @@
 
 | 项 | 事实 | 位置 |
 |---|---|---|
-| 评分函数 | `compute_emotion_score(evidence, slope)` 五维可分解评分 | `backend/analysis/hotlist/emotion_score.py:75` |
+| 评分函数 | `compute_emotion_score(evidence, slope)` **八维等权合成**（upRatio/attackShare/riskShare/trin/yhPositive/limitStruct/amountVsSame/riskRowsPct，缺维跳过+权重归一；~~五维~~ 2026-10-05 GLM 读码勘误，与 design v3 早期口径的漂移） | `backend/analysis/hotlist/emotion_score.py:75` |
 | 档位映射 | `map_stage(score, slope)` 五档 | 同文件 `:155` |
 | 确认机制 | rawStage→stage 需连续 2 槽确认（confirmSlots=2），单槽冲高不确认 | `backend/analysis/hotlist/stage_confirm.py` |
 | regime 分量 | `REGIME_STAGE_ADJUST = {高潮:8, 发酵:5, 启动:0, 退潮:-6, 冰点:-8}`，基准 50，跨度 16 分；线性查表加法 | `backend/analysis/ranktrend/trend/risk.py:71` |
@@ -48,7 +48,7 @@
 
 ## §4 已知分歧与未决问题（推理主目标）
 
-1. **09-24 分歧日（未裁决）**：旧级联判全天退潮；新评分判中段 42-60 启动为主（13:30 单槽 24.6 被 2 槽确认正确吸收）——新评分认为"热榜攻击结构仍在"。与用户"09-24 退潮日"盘感存在分歧，**待用户裁决是否调整映射边界**（透明可调，改边界=配置 diff）。
+1. **09-24 分歧日（未裁决）**：旧级联判全天退潮；新评分判中段 42-60 启动为主（13:30 单槽 24.6 被 2 槽确认正确吸收）——新评分认为"热榜攻击结构仍在"。与用户"09-24 退潮日"盘感存在分歧，**待用户裁决是否调整映射边界**（透明可调，改边界=**代码 diff**（map_stage 75/60/40 为函数内硬编码常量，无配置入口——GLM 读码勘误 2026-10-05））。
 2. **+2.44 系统性上移**：EOD 层整体上移后，regime 基准 50 是否需要 re-anchor？注意 `regimeStageAdjust` 在优化搜索空间内，覆盖值回测需按其配置重映射。
 3. **门控不对称风险面**：放松 293 槽 vs 收紧 144 槽——净放松环境下 D_EXIT_RISK/allow_* 门的行为变化是否需要 replay 量化（T6 已列为后续）。
 4. **40/60 边界与 U 形**：40-60 禁入带与"生态宽度中档最差"U 形互证，但 40/60 两个数值边界的原始依据与当前评分分布的匹配度未复检。
@@ -62,6 +62,43 @@
 - `REGIME_STAGE_ADJUST` 五档数值的历史标定依据（T6 只说明其为基线，未说明出处）
 
 如推理时需要，先让 pi 读这三个文件再投喂，或在 prompt 中显式声明"以下缺口按未知处理"。
+
+### §5.1 代码缺口核实（2026-10-05 读码补齐，投喂前 §5 三项全部有解）
+
+1. **EOD 聚合公式**：EOD 文档的 `emotionScore` **不是 10 槽平均/加权**，而是**锚定帧单槽截面分**——
+   锚定帧=当日最新帧（正常 15:00 收盘），`collect_slot_evidence(锚定帧) → compute_emotion_score`；
+   EOD 的 slope = 15:00 score − 14:30 score（当日日内差）。EOD `stage` = 当日「严格早于锚定帧」的
+   rawStage 序列 + 本帧一次 → `confirm_stage` 滞回重放（confirmSlots=2：首帧直接确认、候选连续 2 槽才切换、
+   候选变回确认档即清空=吸收单槽抖动）。坐标：`operations/hotlist_sentiment.py:707-758`（score/slope/确认组装）、
+   `services/theme/hotlist_sentiment_compute.py:_collect_intraday_state`（双轨道收集）。
+2. **slope 定义**：本槽 score − 当日**严格早于本槽**的最后一个有效 `emotionScore.score`（当日日内差，非跨日）；
+   prev 缺失（当日首槽/旧文档）→ None → 低分(<40)判冰点（`map_stage` 尾分支）。
+   另：map_stage 边界 75/60/40 为 T1.5 实测分布校准（`_CALIB` 出处 1067 槽），高潮压制条款已删（审计 B3）；
+   score<40 时 slope<0→退潮、slope≥0 或 None→冰点。
+3. **REGIME_STAGE_ADJUST 标定**：代码内**无出处注释**（`risk.py:71-75` 裸常量），同族注释口径=
+   「基线 v1，样本验证后冻结」；消费点 `market_regime` 2026-08-18 起读 `frame.hotlistSentiment.stage`
+   （**确认档**非 rawStage）——调整作用于确认后档位。
+
+**09-24 实测逐槽序列**（hotlist_sentiment 库实拉，2026-10-05）：
+
+| 槽 | score | slope | raw | 确认 | legacy |
+|---|---|---|---|---|---|
+| 09:30 | 59.7 | — | 启动 | 启动 | 退潮 |
+| 10:00 | 58.5 | −1.2 | 启动 | 启动 | 退潮 |
+| 10:30 | 47.3 | −11.2 | 启动 | 启动 | 退潮 |
+| 11:00 | 42.7 | −4.6 | 启动 | 启动 | 退潮 |
+| 11:30 | 53.5 | +10.8 | 启动 | 启动 | 退潮 |
+| 13:00 | 50.0 | −3.5 | 启动 | 启动 | 退潮 |
+| 13:30 | **24.6** | **−25.4** | **退潮** | 启动 | 退潮 |
+| 14:00 | 52.9 | +28.3 | 启动 | 启动 | 退潮 |
+| 14:30 | 51.6 | −1.3 | 启动 | 启动 | 退潮 |
+| 15:00 | 50.6 | −1.0 | 启动 | 启动 | 退潮 |
+| EOD | 50.6 | −1.0 | 启动 | 启动 | 退潮 |
+
+读法要点：新评分全天判**启动**（非「中段启动」——§4.1 原文措辞据此修正）；13:30 单槽崩 24.6 被
+confirmSlots=2 吸收（pending=退潮 未确认即被 14:00 反转清空）；EOD 50.6 落 40-60 带（与 C7 弱势带
+/U 形中档最差同域）被判「启动」，regime 调整取 0——用户盘感「退潮日」的分歧点在于：日内自 59.7 单向
+回落至 24.6 再反抽 50 区，方向语义（回落中 vs 修复后）在 40-60 带内被档位标签吞掉。
 
 ## §6 投喂模板（复制即用）
 
@@ -139,3 +176,30 @@
 
 ---
 **组装来源**：emotion-score-migration-report.md / emotion-score-regime-diff-report.md / hotlist-jev-emotion-observe-design.md / c9-deep-valley-runbook.md / jev-sentiment-questionset-review.md §十二-§十四 / hotlist-jev-auxiliary-plan.md / jev-temp-crowding-confidence-deepening.md
+
+---
+
+## §7 研讨战报与审定（2026-10-05，GLM-5.3 主模板 §6 首跑）
+
+**执行事实**：glm-5.3 thinking=high，pi 含工具自读六份材料（语料包全文/emotion_score.py/stage_confirm.py/hotlist_sentiment.py:700-800/risk.py:55-165/T5、T6 战报）+ 只读核对 engine/config.py:244-252 与 engine/runtime.py:474-475 两个消费点。存档 `glm53-eodrule-a1-20261005.md`。
+
+**审定（通过）——承重墙抽验 4/4 逐字通过**：①allow 门 fail-open（runtime.py `hotlist_missing or ...` 短路）✓；②config.py:244 默认 `[8.0,5.0,0.0,-6.0,-8.0]` ✓；③门控迁移分解 293（153+88+34+18）/144（123+15+6）与 regime-diff 报告 line 46 逐字一致 ✓；④覆写注记（+2.37/76 天剔除口径、旧进程覆写 09-30 EOD/14:30 槽）与两报告一致 ✓。接地通道连续第四轮零幻觉。
+
+**两处语料-代码漂移（模型抓出，主会话确认并已修，红线⑤）**：①§1「五维可分解评分」→ 现码 8 维等权合成（已在 §1 行内勘误标注）；②§4.1「改边界=配置 diff」→ map_stage 75/60/40 为函数内硬编码，实际是代码 diff（已勘误标注）。
+
+**审定要点（六问归因分层与三方向）**：
+- Q1 的四层归因决策树（语义对齐先于对错→原料→判据→协议→方案）是纪律的标准形态；「调 40/60 边界让 09-24 判退潮=无数据支撑的方案重设计，禁止」——正面拒绝了朝盘感分歧日拟合，防拟合纪律成立；
+- Q5 的读码反转是本轮最有价值的单项：语料问「评分无量能信息是否值得引入市况维度」，读码实证 amountVsSame 维**已存在**（设计值待积累）——问题从「加维」降级为「量化 skipped 率+校准激活」；
+- Q6 结论「不修齐两轨」（并列观察者设计意图）与 2026-10-08 方向重置裁决一致；
+- 三方向全部带 replay 验证设计与数值化门，方向三自我标注红线级（改确认档传导进引擎类别门控，stage 迁移槽占比上限须用户显式裁决——参照系 T5 全量切换=67.5%）。
+
+**执行建议（主会话推荐顺序，待用户裁决）**：
+1. **方向二先跑**（门控传播 replay，零生产改动、纯只读）——产出 Q2 缺的 regime state 迁移矩阵与 Q3 的日级×门级矩阵，是两个裁决的原料；对账门=293/144 必须精确复现、锚定门=09-24/09-29 单日核对；
+2. **方向一随其后**（EOD 路径诊断字段，非红线）——但需用户盘感标注分歧行 ≥8-10 例（当前仅 09-24/09-29 两例），标注靠日常复核积累；
+3. **方向三 gated**（75/60/40+REGIME_STAGE_ADJUST 标定补课，红线级）——须等方向二 replay 产出+amountVsSame 积累达标（设计值待 ≥20 交易日），且 stage 迁移占比、config_hash 分版本由用户显式裁决。
+
+**遗留勘误池（模型 13 项证据不足清单的廉价比对，主会话可即时补的）**：#1 09-24 各槽 dims/skippedDims（库有未拉）、#9 jev 轨道对 09-24 的判读（v2.5 重跑语料在库）、#8 amountVsSame skipped 率（库统计）——三项均零成本，与方向二可合并执行。
+
+### §7.1 方向二执行记录（2026-10-05，用户"确认请执行"）
+
+报告=`eod-rule-gate-replay-report.md`；脚本=`backend/operations/emotion_score_gate_replay.py`（只读常驻）。结果：①对账门 PASS 带两笔登记——收紧 144 精确、放松实为 304（T6 枚举漏计退潮→高潮 9 + population drift +2）；②锚定门 PASS（09-24/09-29 逐槽一致）；③**结构性发现**：riskLevel 恒"高"（1071/1071）→ allow_a_main 死门、allow_b≡¬D_EXIT 镜像——三道门实际一道独立闸；④**10-09 维度基数跳变预警**：amountVsSame 100% skipped（1071/1071），totalAmount 10-09 起激活后有效维 7→8，规则分前后不可直接比；⑤Q1 裁决被阻塞：09-24 EOD 50.6 是 6 维产物（limitStruct 在锚定帧缺失，4/10 槽缺）——节点 1b 出口命中；⑥jev 对照 09-24 判 ferment/59.9——两轨均不支持"退潮"标签，强化语义错配假设。regime state 矩阵需装配链另批。待裁决：方向一启动、10-09 跳变标注、limitStruct 缺失处理、riskLevel 恒高归因。

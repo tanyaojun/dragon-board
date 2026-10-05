@@ -31,16 +31,18 @@
 | Q1 | `frame_stage` | 仅凭**当前帧**证据，当前情绪处于五档哪一档？ | 当帧证据叙事（不含前序帧、不含任何规则算法输出） | choice 五档 |
 | Q2 | `sequence_stage` | 结合**当日已落库连续帧**证据序列（含当前帧），当前情绪处于哪一档？ | 当日早于本槽各帧的压缩证据行 + 当帧证据叙事 | choice 五档 |
 
-附两个描述性 score：`temperature`（短线情绪温度 0-100）、`crowding`（高位拥挤度 0-100）。
+附一个描述性 score：`temperature`（短线情绪温度 0-100，v2 起锚定近 20 日参照系）。`crowding` 已于 v2（2026-10-02）由 score 重铸为**离散归层 choice**（score 无方差判死，见 jev-sentiment-questionset-review.md），v2.5（2026-10-05）起六层：高位加速 / 封板弱化 / 广度高潮 / **拥挤解除（日内出清，不再与无拥挤混装）** / 无拥挤 / 证据不足。
 
-**盘后日级固定**（daily 15:30 快照触发，四问）：`day_stage`（今日总体情绪五档）、`day_pattern`（路径形态七类）、`day_temperature`、`day_crowding`。
+**盘后日级固定**（daily 15:30 快照触发，四问）：`day_stage`（今日总体情绪五档）、`day_pattern`（路径形态八类）、`day_temperature`、`day_crowding`。
 
 **零预测性问题**：全部问题为描述性，无任何 noul 前瞻问；questionsRaw 落库可审计。
 
 五档 criteria（边际方向语义，沿用阶段 0 已验证表述）：
 `ice` 冰点：赚钱效应殆尽，涨停稀少跌停增多，普遍观望 / `start` 启动：从弱势基线开始修复，试错资金进场，局部热点出现 / `ferment` 发酵：赚钱效应扩散，涨停与连板增多，热点扩散 / `climax` 高潮：全面亢奋，涨停潮普涨，拥挤明显 / `retreat` 退潮：从强势转弱，高位股集体走弱，炸板增多。
 
-`day_pattern` 七类：`steady_strong` 全天强势主导（多数时段发酵/高潮）、`steady_weak` 全天弱势主导（多数时段退潮/冰点）、`rally_fade` 冲高回落、`low_recover` 低开修复、`wide_swing` 强弱多次交替、`narrow_range` 窄幅平淡、`unclear` 证据不足无法归纳。
+（注：五档与拥挤判据现行权威文本以 `backend/analysis/hotlist/jev_state.py` 为准——v2 起判据绑近 20 日参照分位可数证据，上段为 v1 时代语义速览。）
+
+`day_pattern` 八类（v2.5 起尾盘偷袭自低开修复分流单列）：`steady_strong` 全天强势主导（多数时段发酵/高潮）、`steady_weak` 全天弱势主导（多数时段退潮/冰点）、`rally_fade` 冲高回落、`low_recover` 低开修复（早盘弱、盘中修复转强）、`late_rescue` 尾盘偷袭（全天弱势、收盘前最后一至两帧才转强）、`wide_swing` 强弱多次交替、`narrow_range` 窄幅平淡、`unclear` 证据不足无法归纳。
 
 ## 4. 证据原料（全部已落库核实，全部为原始证据/计数聚合，零规则五档输出）
 
