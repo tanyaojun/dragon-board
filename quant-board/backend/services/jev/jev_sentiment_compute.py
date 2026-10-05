@@ -23,9 +23,9 @@ from backend.analysis.hotlist.jev_state import (
     collect_slot_evidence,
     extract_history_anchor_range,
 )
-from backend.services.jev.jev_client import call_jev, parse_jev_response
+from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
 
-_DEFAULT_ACCOUNT = "921cf15176f84c90ea49865334af32c6"
+_DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID
 
 
 def _jev_config() -> tuple[bool, str, str]:
@@ -237,7 +237,8 @@ def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
 
     envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS)
-    parsed = parse_jev_response(envelope, latency_ms)
+    # 缺题=partial_answers（degraded）：缺哪题结构化留档，幂等重跑可补（2026-10-05 批次A C2）
+    parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(JEV_DAY_QUESTIONS))
     doc = {**base, "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": None, "narrativeRaw": narrative,
            "responseRaw": envelope, "answers": parsed.get("answers"), "scores": parsed.get("scores"),
@@ -318,7 +319,8 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
 
     envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS)
-    parsed = parse_jev_response(envelope, latency_ms)
+    # 缺题=partial_answers（degraded）：缺哪题结构化留档，幂等重跑可补（2026-10-05 批次A C2）
+    parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(JEV_SLOT_QUESTIONS))
     doc = {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),

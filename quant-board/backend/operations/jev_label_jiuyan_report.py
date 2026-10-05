@@ -16,6 +16,8 @@ from __future__ import annotations
 import statistics
 from collections import defaultdict
 
+from backend.core.limit_rules import limit_threshold_pct
+
 # 阶段3 全窗参考连板率（phase3-driver-report.md 冻结值，排序方向一致性对照用）
 PHASE3_REF_LIANBAN = {"ma_restructure": 21.3, "order_earnings": 14.3, "concept_stretch": 11.6,
                       "industry_cycle": 8.2, "policy": 6.2, "product_event": 4.1, "capital_flow": 1.8}
@@ -179,7 +181,6 @@ def verdict(depth: dict, t3_manual: bool | None, group: dict, freshness_ok: bool
 
 
 SLOTS = ["09:30", "10:00", "10:30", "11:00", "11:30", "13:00", "13:30", "14:00", "14:30", "15:00"]
-LIAN_BAN_PCT = 9.8
 
 
 def build_next_day_map(db, dates):
@@ -205,7 +206,9 @@ def next_day_info(next_map, dates, date_idx, date, code):
     hit = next_map.get((dates[ni + 1], code))
     if not hit or abs(hit[0]) > 21:
         return None
-    return {"pct": hit[0], "lianban": hit[0] >= LIAN_BAN_PCT}
+    # 2026-10-05 reviewer Important 2：按板籍判定线（单源 core/limit_rules），
+    # 旧全板块单线 9.8 会把创业/科创 +9.8%~19.7% 的非涨停涨幅误计为连板
+    return {"pct": hit[0], "lianban": hit[0] >= limit_threshold_pct(code)}
 
 
 def main():

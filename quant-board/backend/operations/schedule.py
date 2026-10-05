@@ -103,6 +103,7 @@ def _run_phase_pulse_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     # SP2-B：Mongo 入库为准（前端走 board API 读 Mongo；本地 JSON 仅为即时产物）。
     # phase_pulse.main 内 persist_pulse 幂等 upsert pulse:<month>；此处校验 updatedAt 新鲜度。
     mongo_fresh = False
+    mongo_error: str | None = None
     try:
         db = repository_factory.get_runtime_mongodb_database()
         doc_m = db["phase_monitor"].find_one({"_id": f"pulse:{month}"}, {"updatedAt": 1})
@@ -178,6 +179,7 @@ def _run_phase_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "phase_band_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
     mongo_fresh = False
     phase_band = None
+    mongo_error: str | None = None
     try:
         db = repository_factory.get_runtime_mongodb_database()
         doc = db["hotlist_jev_driver_labels"].find_one({"_id": f"{today}:PHASE"},
@@ -190,6 +192,8 @@ def _run_phase_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": True, "date": today, "phaseBand": phase_band, "mongoFresh": mongo_fresh}
     if not mongo_fresh:
         result["mongoWarning"] = "PHASE 文档 computedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    if mongo_error:
+        result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
     return result
 
 
@@ -211,7 +215,9 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         return {"ok": True, "skipped": True, "reason": reason}
     try:
         cmd = [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
-               "--start", today, "--end", today]
+               "--start", today, "--end", today,
+               # 批次C I13：预算护栏常态确认——本步挂链本身经 2026-10-03 用户裁决批准（≈21万 tokens/日）
+               "--confirm-budget"]
         # F2 门控（融合总纲）：个股相位分线附带打标默认关，环境变量 JIUYAN_STOCK_PHASE_ENABLED=1
         # 且用户明确批准 token 成本后才可开启（≈3-5 万 tokens/日合并口径；开启前零额外调用）
         if os.environ.get("JIUYAN_STOCK_PHASE_ENABLED") == "1":
@@ -226,13 +232,22 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     if proc.returncode != 0:
         return {"ok": False, "error": {"code": "jiuyan_label_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
     labeled = None
+    degraded = None
+    verify_error: str | None = None
     try:
         db = repository_factory.get_runtime_mongodb_database()
-        labeled = sum(1 for d in db["hotlist_jev_driver_labels"].find(
-            {"tradingDate": today, "status": "ok", "origin": {"$ne": "phase_band_daily"}}, {"_id": 1}))
+        docs = list(db["hotlist_jev_driver_labels"].find(
+            {"tradingDate": today, "origin": {"$ne": "phase_band_daily"}}, {"status": 1}))
+        labeled = sum(1 for d in docs if d.get("status") == "ok")
+        # 2026-10-05 批次A I5：降级面结构化回传，不再只留在子进程 stdout（fail-visible）
+        degraded = len(docs) - labeled
     except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
-        mongo_error = str(exc)
-    return {"ok": True, "date": today, "labeledToday": labeled}
+        verify_error = f"verify_failed: {exc}"
+    result: dict[str, Any] = {"ok": True, "date": today,
+                              "labeledToday": labeled, "degradedToday": degraded}
+    if verify_error:
+        result["verifyError"] = verify_error
+    return result
 
 
 def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
@@ -270,6 +285,7 @@ def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "deep_valley_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
     mongo_fresh = False
     summary: dict[str, Any] = {}
+    mongo_error: str | None = None
     try:
         db = repository_factory.get_runtime_mongodb_database()
         doc = db["phase_monitor"].find_one({"_id": f"c9:{month}"}, {"summary": 1, "updatedAt": 1})
@@ -281,6 +297,8 @@ def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": True, "month": month, "summary": summary, "mongoFresh": mongo_fresh}
     if not mongo_fresh:
         result["mongoWarning"] = "phase_monitor c9:<month> updatedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    if mongo_error:
+        result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
     return result
 
 
@@ -319,6 +337,7 @@ def _run_peak_revalidate_step(today: str, dry_run: bool = False) -> dict[str, An
         return {"ok": False, "error": {"code": "peak_revalidate_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
     mongo_fresh = False
     summary: dict[str, Any] = {}
+    mongo_error: str | None = None
     try:
         db = repository_factory.get_runtime_mongodb_database()
         doc = db["phase_monitor"].find_one({"_id": f"c10:{month}"}, {"summary": 1, "updatedAt": 1})
@@ -330,6 +349,8 @@ def _run_peak_revalidate_step(today: str, dry_run: bool = False) -> dict[str, An
     result: dict[str, Any] = {"ok": True, "month": month, "summary": summary, "mongoFresh": mongo_fresh}
     if not mongo_fresh:
         result["mongoWarning"] = "phase_monitor c10:<month> updatedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    if mongo_error:
+        result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
     return result
 
 

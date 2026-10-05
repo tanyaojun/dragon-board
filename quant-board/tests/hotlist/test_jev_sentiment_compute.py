@@ -161,6 +161,8 @@ def test_compute_day_happy_path(monkeypatch):
             "day_crowding": {"type": "choice", "choice": "no_crowding",
                              "probabilities": {"no_crowding": 0.6}},
             "day_temperature": {"type": "score", "score": 5, "legend": {"0": 1, "11": 1}},
+            "day_pattern": {"type": "choice", "choice": "rally_fade",
+                            "probabilities": {"rally_fade": 0.5}},
         }
         return {"result": {"state": "Completed",
                            "result": {"model": "jev-1.13.0", "answers": answers,

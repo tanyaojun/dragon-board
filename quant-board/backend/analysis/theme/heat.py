@@ -4,18 +4,16 @@ import math
 from typing import Any
 
 from backend.analysis.theme.heat_level import attach_heat_levels
+from backend.core.limit_rules import limit_threshold_pct
 
 
 # 2026-09 热度口径切换：heatScore 从 0-100 归一加权分改为 KPL 题材库人气总和
 # （对齐 tck2.js fetchThemeData：成分股 Hot/HotNum 按 StockID 去重求和，绝对值口径）。
 FACTOR_VERSION = "theme-market-v2"
 
-# 分板块涨停阈值（与前端 src/utils/common.ts StockUtils 口径一致：板块阈值 - 0.5 容差）。
-# 2026-09 起主板 ST 涨跌幅已改为 ±10%，全市场均按所属板块阈值判定，无 ST 特判。
-_LIMIT_UP_MAIN = 9.3  # 主板（沪 60x / 深 000-003，±10%，含主板 ST）
-_LIMIT_UP_GEM = 19.3  # 创业板（300-302，±20%）
-_LIMIT_UP_STAR = 19.3  # 科创板（688/689，±20%）
-_LIMIT_UP_BSE = 29.3  # 北交所（43xxxx / 82-88xxxx / 920xxx，±30%）
+# 分板块涨停判定线：唯一权威 = core/limit_rules（ratio×100 − 链路容差 0.7pp
+# → 9.3/19.3/19.3/29.3，与历史常量逐位等价）。2026-09 起主板 ST ±10%，
+# 全市场按所属板块阈值判定，无 ST 特判。2026-10-05 单源化（M：公共函数，禁硬编码副本）。
 
 # persistenceScore 热门桶阈值：上一帧 heatLevel（0-100 rank 百分位相对分）≥ 该值
 # 计为热门桶，连续性计数 +1；与日级持续性算子 factor_series.level_streak 默认阈值同源。
@@ -23,16 +21,7 @@ HOT_LEVEL_THRESHOLD = 70.0
 
 
 def _limit_up_threshold(code: object) -> float:
-    value = str(code or "").strip()
-    if value.isdigit():
-        value = value.zfill(6)
-    if value.startswith(("688", "689")):
-        return _LIMIT_UP_STAR
-    if value.startswith("30"):
-        return _LIMIT_UP_GEM
-    if value.startswith(("43", "8", "92")):
-        return _LIMIT_UP_BSE
-    return _LIMIT_UP_MAIN
+    return limit_threshold_pct(code, tolerance_pct=0.7)
 
 
 def _number(value: object, default: float = 0.0) -> float:

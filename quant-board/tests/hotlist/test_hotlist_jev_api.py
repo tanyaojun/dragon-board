@@ -94,6 +94,11 @@ def _mock_jev_ok(monkeypatch):
         "answers": {
             "frame_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.7}},
             "sequence_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+            "temperature": {"type": "score", "score": 5, "legend": {"0": "0", "11": "11", "22": "22",
+                                                                    "33": "33", "44": "44", "56": "56",
+                                                                    "67": "67", "78": "78", "89": "89",
+                                                                    "100": "100"}},
+            "crowding": {"type": "choice", "choice": "no_crowding", "probabilities": {"no_crowding": 0.6}},
         },
         "usage": {"input_tokens": 900, "output_tokens": 90}}}, "success": True}
 
@@ -149,7 +154,12 @@ def test_evaluate_day(monkeypatch):
     envelope = {"result": {"state": "Completed", "result": {
         "model": "jev-1.13.0",
         "answers": {"day_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
-                     "day_pattern": {"type": "choice", "choice": "wide_swing", "probabilities": {"wide_swing": 0.4}}},
+                     "day_pattern": {"type": "choice", "choice": "wide_swing", "probabilities": {"wide_swing": 0.4}},
+                     "day_temperature": {"type": "score", "score": 5, "legend": {"0": "0", "11": "11", "22": "22",
+                                                                                 "33": "33", "44": "44", "56": "56",
+                                                                                 "67": "67", "78": "78", "89": "89",
+                                                                                 "100": "100"}},
+                     "day_crowding": {"type": "choice", "choice": "no_crowding", "probabilities": {"no_crowding": 0.5}}},
         "usage": {"input_tokens": 1500, "output_tokens": 120}}}, "success": True}
 
     def fake_call(*args, **kwargs):

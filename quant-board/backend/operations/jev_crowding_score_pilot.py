@@ -40,7 +40,7 @@ from backend.analysis.hotlist.jev_state import (
     extract_history_anchor_range,
 )
 from backend.operations.jev_sentiment_pilot import build_history_stats
-from backend.services.jev.jev_client import call_jev, parse_jev_response
+from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import (
     _collect_evidence,
     _half_hour_slots,
@@ -259,6 +259,6 @@ if __name__ == "__main__":
     if args.smoke is not None or args.yes:
         tok = os.environ.get("JEV_CF_TOKEN") or ""
         assert tok, "需要 JEV_CF_TOKEN 环境变量"
-        acc = os.environ.get("JEV_CF_ACCOUNT", "921cf15176f84c90ea49865334af32c6")
+        acc = os.environ.get("JEV_CF_ACCOUNT", DEFAULT_ACCOUNT_ID)
     dates = [d.strip() for d in args.dates.split(",") if d.strip()]
     raise SystemExit(run(dates, args.dry_run, args.smoke, args.yes, tok, acc, args.dataset))

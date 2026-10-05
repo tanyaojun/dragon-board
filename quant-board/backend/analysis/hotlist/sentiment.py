@@ -33,9 +33,9 @@ import re
 from typing import Any
 
 from backend.analysis.ranktrend.display_status import STAGE_ENUM, STAGE_LABELS, STAGE_UNKNOWN_LABEL
+from backend.core.limit_rules import limit_threshold_pct as _core_limit_threshold_pct
 
 # TS: src/config/constants.ts LIMIT_UP_CONFIG
-_LIMIT_THRESHOLDS = {"MAIN": 9.8, "GEM": 19.8, "STAR": 19.8, "NORTH": 29.8}
 _CHANGE_TOLERANCE = 0.5
 
 # 对外分布键：5 态 + unknown（stage 缺失/非法）。词表单一来源在 display_status。
@@ -88,15 +88,8 @@ def get_trusted_volume_ratio(stock: dict) -> float:
 
 def limit_threshold(code: str) -> float:
     # TS: StockUtils.getLimitThreshold —— 688/689→STAR，30→GEM，43/8/92→NORTH，其余 MAIN；无 ST 特判
-    normalized = str(code or "").strip()
-    padded = normalized.zfill(6)
-    if padded.startswith("688") or padded.startswith("689"):
-        return _LIMIT_THRESHOLDS["STAR"]
-    if padded.startswith("30"):
-        return _LIMIT_THRESHOLDS["GEM"]
-    if padded.startswith("43") or padded.startswith("8") or padded.startswith("92"):
-        return _LIMIT_THRESHOLDS["NORTH"]
-    return _LIMIT_THRESHOLDS["MAIN"]
+    # 2026-10-05 单源化：阈值唯一权威 = core/limit_rules（前缀/容差口径逐位等价，历史副本退役）
+    return _core_limit_threshold_pct(code)
 
 
 def check_limit_status(change: float, code: str) -> dict:

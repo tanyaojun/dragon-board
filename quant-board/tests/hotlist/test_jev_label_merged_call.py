@@ -32,7 +32,8 @@ class _FakeCol:
         # 忽略查询过滤（fake 不实现查询语义）；过滤条件由消费方在 docs 构造时保证
         return list(self.docs.values())
 
-    def find_one(self, query, _projection=None):
+    def find_one(self, query, _projection=None, sort=None):
+        # 批次B I8：runner 帧查询带 sort 取最新帧；fake 无时间语义直接命中 _id/首条
         return self.docs.get(query.get("_id"))
 
     def replace_one(self, query, doc, upsert=False):
@@ -81,7 +82,7 @@ def test_label_one_merged_writes_stock_phase_fields(monkeypatch):
         return ("env", 88)
 
     monkeypatch.setattr(runner, "call_jev", fake_call)
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok())
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     col = _FakeCol()
     _label_one(_FakeDb(col), col, "acc", "tok", "2026-10-09", "600825",
                {"name": "X"}, "板块", 3, include_stock_phase=True)
@@ -107,7 +108,7 @@ def test_label_one_default_keeps_four_questions(monkeypatch):
         return ("env", 10)
 
     monkeypatch.setattr(runner, "call_jev", fake_call)
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok())
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     col = _FakeCol()
     _label_one(_FakeDb(col), col, "acc", "tok", "2026-10-09", "600825", {"name": "X"}, "b", None)
     assert captured["questions"] == QUESTIONS_STOCK
@@ -121,7 +122,7 @@ def test_run_flag_reaches_label_call(monkeypatch):
     monkeypatch.setattr(runner, "day_population", lambda db_, date: [
         {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
-    monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes: {})
+    monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
     captured: dict = {}
 
     def fake_call(acc, tok, narrative, qs):
@@ -129,9 +130,9 @@ def test_run_flag_reaches_label_call(monkeypatch):
         return ("env", 1)
 
     monkeypatch.setattr(runner, "call_jev", fake_call)
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok())
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
-        with_stock_phase=True)
+        with_stock_phase=True, confirm_budget=True)
     assert captured["questions"] == QUESTIONS_STOCK_WITH_PHASE
 
 
@@ -142,7 +143,7 @@ def test_run_default_no_phase_questions(monkeypatch):
     monkeypatch.setattr(runner, "day_population", lambda db_, date: [
         {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
-    monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes: {})
+    monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
     captured: dict = {}
 
     def fake_call(acc, tok, narrative, qs):
@@ -150,6 +151,25 @@ def test_run_default_no_phase_questions(monkeypatch):
         return ("env", 1)
 
     monkeypatch.setattr(runner, "call_jev", fake_call)
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok())
-    run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1)
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
+    run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
+        confirm_budget=True)
     assert captured["questions"] == QUESTIONS_STOCK
+
+
+def test_run_budget_guard_aborts_without_confirm(monkeypatch, capsys):
+    """批次C I13：未确认预算拒绝开火（零真实调用，fail-visible）。"""
+    import pytest
+
+    db = _FakeDb(_FakeCol())
+    monkeypatch.setattr(runner, "_db", lambda: db)
+    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+        {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
+    monkeypatch.setattr(runner, "_strip", lambda c: c)
+    fired: list = []
+    monkeypatch.setattr(runner, "call_jev", lambda *a, **k: fired.append(1) or ("env", 1))
+
+    with pytest.raises(SystemExit, match="预算护栏") as excinfo:
+        run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1)
+    assert fired == []  # 拒绝开火 = 零调用
+    assert "预算护栏" in str(excinfo.value)  # SystemExit 消息在异常对象，不进 stdout

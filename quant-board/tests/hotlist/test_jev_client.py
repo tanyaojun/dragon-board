@@ -32,3 +32,64 @@ def test_http_error_is_degraded():
 def test_score_rescale_by_legend_size():
     p = parse_jev_response(ENVELOPE, latency_ms=1)
     assert p["scores"]["temperature"] == round(7.02 / 9 * 100, 1)  # 10 档锚点 → /9*100
+
+
+# ---- 2026-10-05 批次A（C2/I1）：缺题 partial + score 解析层加固 ----
+
+def test_partial_answers_marked_degraded_with_expected_keys():
+    """Completed 但缺题 → degraded/partial_answers；已答部分保留，缺失题结构化留档。"""
+    p = parse_jev_response(ENVELOPE, latency_ms=7,
+                           expected_keys={"stage", "temperature", "crowding"})
+    assert p["ok"] is False and p["errorCode"] == "partial_answers"
+    assert "crowding" in p["errorDetail"]
+    assert p["answers"]["stage"]["choice"] == "retreat"  # 已答部分不丢（fail-visible）
+
+
+def test_all_expected_answers_ok():
+    p = parse_jev_response(ENVELOPE, latency_ms=1, expected_keys={"stage", "temperature"})
+    assert p["ok"] is True and p["errorCode"] is None
+
+
+def test_score_missing_legend_not_negative():
+    """legend 缺失：分数如实缺席，不再产出负数（旧实现 5/(-1)=-500）。"""
+    env = {"result": {"state": "Completed",
+                      "result": {"answers": {"t": {"type": "score", "score": 5}}}}}
+    p = parse_jev_response(env, latency_ms=1)
+    assert p["ok"] is True and p["scores"] == {}  # 缺失 ≠ 伪值
+
+
+def test_score_missing_score_key_no_crash():
+    env = {"result": {"state": "Completed",
+                      "result": {"answers": {"t": {"type": "score", "legend": {"a": 1, "b": 2}}}}}}
+    p = parse_jev_response(env, latency_ms=1)  # 旧实现 KeyError 穿透
+    assert p["ok"] is True and p["scores"] == {}
+
+
+def test_score_bool_score_rejected():
+    env = {"result": {"state": "Completed",
+                      "result": {"answers": {"t": {"type": "score", "score": True,
+                                                    "legend": {"a": 1, "b": 2}}}}}}
+    p = parse_jev_response(env, latency_ms=1)
+    assert p["scores"] == {}  # bool 是 int 子类，显式拒绝
+
+
+def test_call_jev_malformed_body_degraded_not_raise(monkeypatch):
+    """I2：HTML 错误页/截断流 → degraded envelope，不炸调用方（旧实现 JSONDecodeError 穿透）。"""
+    import json as _json
+    from backend.services.jev import jev_client
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"<html>502 Bad Gateway</html>"
+
+    monkeypatch.setattr(jev_client.urllib.request, "urlopen", lambda req, timeout=None: _Resp())
+    envelope, ms = jev_client.call_jev("acc", "tok", "state", {"q": 1})
+    assert envelope["success"] is False
+    assert "JSONDecodeError" in envelope["errors"][0]["message"]
+    assert isinstance(ms, int)

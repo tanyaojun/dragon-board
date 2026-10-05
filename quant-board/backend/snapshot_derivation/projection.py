@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from backend.core.limit_rules import limit_ratio
 from backend.analysis.theme.heat_level import resolve_heat_level
 from backend.snapshot_collector.models import MarketDataContext, SnapshotSlot
 
@@ -101,21 +102,14 @@ def _derive_pre_close_from_price_change(row: dict[str, Any]) -> None:
 
 
 def _limit_ratio_for(code: Any, name: Any = "") -> float:
-    """A股涨跌停幅度：创业板/科创板 20%、北交所 30%、其余主板 10%（含主板 ST）。
+    """A股涨跌停幅度：创业板/科创板 20%、北交所 30%、其余主板 10%。
 
     2026-09 起主板 ST 涨跌幅已改为 ±10%，全市场按所属板块阈值，无 ST 特判
     （与前端 src/utils/common.ts StockUtils 口径一致）。
+    2026-10-05 单源化：唯一权威 = core/limit_rules.limit_ratio（逐位等价，历史副本退役）；
+    name 形参保留兼容调用方（新规下板块阈值不依赖 ST 标记）。
     """
-    value = str(code or "").strip()
-    if value.isdigit():
-        value = value.zfill(6)
-    if value.startswith(("688", "689")):
-        return 0.20
-    if value.startswith("30"):
-        return 0.20
-    if value.startswith(("43", "8", "92")):
-        return 0.30
-    return 0.10
+    return limit_ratio(code)
 
 
 def _derive_limit_prices(

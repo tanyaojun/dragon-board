@@ -46,7 +46,9 @@ _STAGE_CRITERIA_V2 = {
     "climax": "高潮：全面亢奋——涨停数/连板高度接近或超过参照p80、涨停潮普涨、拥挤形态显现",
     "retreat": "退潮：从强势转弱——高位焦点股走弱或断板、炸板率抬升、涨停数自高位回落",
 }
-_DAY_STAGE_CRITERIA_V2 = {k: v.replace("当前", "今日全天") for k, v in _STAGE_CRITERIA_V2.items()}
+# 日级判据与槽级同文（历史 replace("当前","今日全天") 实证为空操作——判据文本不含"当前"，
+# 日级语义由题干「综合今日全天」承载）；2026-10-05 M3 改直拷贝，行为逐字不变。
+_DAY_STAGE_CRITERIA_V2 = dict(_STAGE_CRITERIA_V2)
 
 _CROWDING_CRITERIA_V2 = {
     "top_acceleration": "高位集体加速：最高连板梯队今日仍在上攻/高度处于参照高位（≥p80）刷新，焦点高位股继续涨停，无明显断板",
@@ -612,27 +614,3 @@ def build_day_jev_state(*, trading_date: str, evidences: list,
         "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
     ]
     return "\n".join(line for line in lines if line)[:6000]
-
-
-def build_jiuyan_label_narrative(stock: dict, board: str, rank: int | None, trading_date: str = "") -> str:
-    """涨停驱动打标 v2 叙事：韭研异动解析全文 + 结构标注（连板高度/首封时间/热榜排名）。
-
-    设计依据 docs/hotlist-jev/jev-driver-label-v2-design.md §3/§10：
-    expound 含催化事件逐条+公司主业描述，补 Noul 轴缺失的原料；
-    缺字段如实标注（day 缺→首板、time 空→未提供、未进热榜），不伪造；
-    头部带交易日期（pilot4 修复——freshness 判"距今≤2 交易日"需要当日锚点）。
-    """
-    name = stock.get("name") or stock.get("code") or "未知"
-    code = str(stock.get("code") or "")
-    plain = code[2:] if len(code) > 2 and code[:2] in ("sh", "sz", "bj") else code
-    day = stock.get("day")
-    limit_up_num = f"{int(day)}天{int(day)}板" if isinstance(day, int) and day >= 2 else "首板"
-    time_str = str(stock.get("time") or "").strip()[:8]
-    time_bit = f"首次涨停 {time_str}" if time_str else "涨停时间未提供"
-    rank_bit = f"热榜第{rank}名" if isinstance(rank, int) and rank > 0 else "未进热榜"
-    expound = str(stock.get("expound") or "").strip()
-    date_bit = f"{trading_date} 交易日，" if trading_date else ""
-    head = f"{date_bit}{name}（{plain}）：{limit_up_num}，{time_bit}，{rank_bit}，板块：{board or '未分组'}。"
-    if not expound:
-        return f"{head}\n异动解析（韭研公社）：缺失（该缺失本身是判别信号）。"[:1400]
-    return f"{head}\n异动解析（韭研公社）：\n{expound}"[:1400]

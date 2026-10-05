@@ -704,7 +704,8 @@ def test_jiuyan_label_step_runs_subprocess_and_counts(monkeypatch: Any) -> None:
             self.name = name
 
         def find(self, _query, _projection=None):
-            return [{"_id": "1"}, {"_id": "2"}]
+            # 批次A：验证查询改拉 status 字段统计 ok/降级面（degradedToday）
+            return [{"_id": "1", "status": "ok"}, {"_id": "2", "status": "ok"}]
 
         def find_one(self, _query, _projection=None):
             return {"_id": "x"}
@@ -728,6 +729,7 @@ def test_jiuyan_label_step_runs_subprocess_and_counts(monkeypatch: Any) -> None:
     result = schedule._run_jiuyan_label_step("2026-10-12")
 
     assert result["ok"] is True and result["labeledToday"] == 2
+    assert result["degradedToday"] == 0  # 批次A I5：降级面结构化回传
     assert "backend.operations.jev_label_jiuyan" in " ".join(captured["cmd"])
     assert "--start" in captured["cmd"] and "2026-10-12" in captured["cmd"]
 

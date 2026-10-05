@@ -79,6 +79,25 @@ def pytest_collection_modifyitems(config, items):
         item.add_marker("integration" if _uses_testclient(tests_root / rel) else "unit")
 
 
+@pytest.fixture(autouse=True)
+def _forbid_real_jev_calls(monkeypatch):
+    """硬护栏（AGENTS §1.2-7）：任何测试触发真实 jev 端点立即显式失败，
+    而不是默默烧 token。漏 mock 的测试在此拦下（fail-visible）。"""
+    import urllib.request as _urllib_request
+
+    real_urlopen = _urllib_request.urlopen
+
+    def _guarded_urlopen(req, *args, **kwargs):
+        url = req.full_url if isinstance(req, _urllib_request.Request) else str(req)
+        if any(host in url for host in ("api.cloudflare.com", "gateway.ai.cloudflare.com")):
+            raise AssertionError(
+                f"测试禁止真实 jev 调用（AGENTS §1.2-7）：必须 monkeypatch call_jev。url={url[:120]}")
+        return real_urlopen(req, *args, **kwargs)
+
+    monkeypatch.setattr(_urllib_request, "urlopen", _guarded_urlopen)
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_mongodb_test_database():
     """硬护栏：pytest 会话内配置必须指向 dragon_board_test 的 mongodb 后端，

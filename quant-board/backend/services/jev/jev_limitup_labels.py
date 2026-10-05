@@ -5,12 +5,22 @@
 - 个股文档 origin=driver_label_jiuyan_v3_pilot（历史写入者标识遵令保留）；
 - 日级相位哨兵 origin=phase_band_daily（_id={date}:PHASE）。
 纯读聚合，fail-visible：该日无任何文档时 no_data=true + reason，不伪造空成功。
+
+2026-10-05 批次A（C1，审查 .tmp/jev-limitup-audit.md）：读口不再按 status=ok 过滤——
+- degraded/no_data 个股文档进 summary.degraded（code/name/status/errorCode/errorDetail）；
+- PHASE 非 ok 时 phaseStatus/phaseError 结构化暴露，phase 仍为 None（不伪造档位）；
+- noData 仅在「该日一篇文档都没有」时为 True；stocks 保持 ok-only（前端合同不变）。
+同时个股查询改排除式 projection，不拉 narrative/questionsRaw/responseRaw 大字段。
 """
 from __future__ import annotations
 
 from typing import Any
 
 PHASE_ORIGIN = "phase_band_daily"
+
+# 排除式 projection：剔除整份叙事/题集/原始响应大字段，其余字段照常透传
+_STOCK_EXCLUDED = {"narrative": 0, "questionsRaw": 0, "responseRaw": 0,
+                   "stockPhaseQuestionsRaw": 0}
 
 
 def _counts(values: list[Any]) -> dict[str, int]:
@@ -21,55 +31,87 @@ def _counts(values: list[Any]) -> dict[str, int]:
     return out
 
 
+def _clip(value: Any, limit: int = 200) -> str | None:
+    text = str(value or "").strip()
+    return text[:limit] or None
+
+
 def collect_limitup_labels(db: Any, date: str) -> dict[str, Any]:
     """单日涨停叙事聚合：日级哨兵 + 个股标签（热榜排名升序、无排名沉底）+ 分布小结。"""
     phase_doc = db["hotlist_jev_driver_labels"].find_one(
-        {"_id": f"{date}:PHASE", "status": "ok"},
-        {"phaseBand": 1, "phaseBandProbabilities": 1, "computedAt": 1},
+        {"_id": f"{date}:PHASE"},
+        {"status": 1, "phaseBand": 1, "phaseBandProbabilities": 1,
+         "errorCode": 1, "errorDetail": 1, "computedAt": 1},
     )
     phase = None
+    phase_status: str | None = None
+    phase_error: dict[str, str | None] | None = None
     if phase_doc:
-        phase = {
-            "band": phase_doc.get("phaseBand"),
-            "probabilities": phase_doc.get("phaseBandProbabilities"),
-            "computedAt": phase_doc.get("computedAt"),
-        }
+        phase_status = str(phase_doc.get("status") or "unknown")
+        if phase_status == "ok":
+            phase = {
+                "band": phase_doc.get("phaseBand"),
+                "probabilities": phase_doc.get("phaseBandProbabilities"),
+                "computedAt": phase_doc.get("computedAt"),
+            }
+        else:
+            phase_error = {"errorCode": phase_doc.get("errorCode"),
+                           "errorDetail": _clip(phase_doc.get("errorDetail"))}
+
     stocks: list[dict[str, Any]] = []
+    degraded: list[dict[str, Any]] = []
     for d in db["hotlist_jev_driver_labels"].find(
-            {"tradingDate": date, "status": "ok", "origin": {"$ne": PHASE_ORIGIN}}):
+            {"tradingDate": date, "origin": {"$ne": PHASE_ORIGIN}}, _STOCK_EXCLUDED):
+        status = str(d.get("status") or "unknown")
         ctx = d.get("jiuyanContext") or {}
-        rank = ctx.get("rank") if isinstance(ctx.get("rank"), int) else None
-        stocks.append({
-            "code": d.get("code"),
-            "name": d.get("name"),
-            "label": d.get("label"),
-            "labelProbabilities": d.get("driverProbabilities"),
-            "catalystDepth": d.get("catalystDepth"),
-            "catalystDepthProbabilities": d.get("catalystDepthProbabilities"),
-            "freshness": d.get("freshness"),
-            "buySideLogic": d.get("buySideLogic"),
-            "buySideProbabilities": d.get("buySideProbabilities"),
-            "board": ctx.get("board"),
-            "inHotlist": bool(ctx.get("inHotlist")),
-            "rank": rank,
-            # 个股相位分线（2026-10-04 试点字段，--stock-phase-date 单题补跑写入；未跑日为 None=fail-visible）
-            "stockPhasePosition": d.get("stockPhasePosition"),
-            "stockPhaseProbabilities": d.get("stockPhaseProbabilities"),
-            "computedAt": d.get("computedAt"),
-        })
+        rank = ctx.get("rank")
+        rank = rank if isinstance(rank, int) and not isinstance(rank, bool) else None
+        if status == "ok":
+            stocks.append({
+                "code": d.get("code"),
+                "name": d.get("name"),
+                "label": d.get("label"),
+                "labelProbabilities": d.get("driverProbabilities"),
+                "catalystDepth": d.get("catalystDepth"),
+                "catalystDepthProbabilities": d.get("catalystDepthProbabilities"),
+                "freshness": d.get("freshness"),
+                "buySideLogic": d.get("buySideLogic"),
+                "buySideProbabilities": d.get("buySideProbabilities"),
+                "board": ctx.get("board"),
+                "inHotlist": bool(ctx.get("inHotlist")),
+                "rank": rank,
+                # 个股相位分线（2026-10-04 试点字段，--stock-phase-date 单题补跑写入；未跑日为 None=fail-visible）
+                "stockPhasePosition": d.get("stockPhasePosition"),
+                "stockPhaseProbabilities": d.get("stockPhaseProbabilities"),
+                "computedAt": d.get("computedAt"),
+            })
+        else:
+            # degraded/no_data 文档：结构化暴露失败面（不混入 stocks，前端合同不变）
+            degraded.append({
+                "code": d.get("code"),
+                "name": d.get("name"),
+                "status": status,
+                "errorCode": d.get("errorCode"),
+                "errorDetail": _clip(d.get("errorDetail")),
+                "computedAt": d.get("computedAt"),
+            })
     stocks.sort(key=lambda x: (x["rank"] is None, x["rank"] if x["rank"] is not None else 9999,
                                str(x["code"])))
-    no_data = phase is None and not stocks
+    no_data = phase_doc is None and not stocks and not degraded
     return {
         "ok": True,
         "date": date,
         "phase": phase,
+        "phaseStatus": phase_status,
+        "phaseError": phase_error,
         "stocks": stocks,
         "summary": {
             "total": len(stocks),
             "label": _counts([x["label"] for x in stocks]),
             "catalystDepth": _counts([x["catalystDepth"] for x in stocks]),
             "buySideLogic": _counts([x["buySideLogic"] for x in stocks]),
+            "degradedCount": len(degraded),
+            "degraded": degraded,
         },
         "noData": no_data,
         "reason": None if not no_data else f"{date} 无涨停打标文档（非交易日或当日未跑）",

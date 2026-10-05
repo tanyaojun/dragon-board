@@ -157,13 +157,19 @@ class _FakeDb(dict):
         super().__init__()
         self["hotlist_jev_driver_labels"] = col
 
+    def __getitem__(self, name):
+        # 批次C I10：runner 现会读一次整日韭研文档（jiuyan_doc 直传叙事），测试桩缺集合 → 空文档
+        if name not in self:
+            self[name] = _FakeCol({})
+        return super().__getitem__(name)
+
 
 def _patch_population(monkeypatch, codes):
     monkeypatch.setattr(runner, "day_population", lambda db, date: [
         {"stock": {"code": f"sh{c}", "name": c}, "board": "公告"} for c in codes])
-    monkeypatch.setattr(runner, "hotlist_ranks", lambda db, date, cs: {c: 3 for c in cs})
+    monkeypatch.setattr(runner, "hotlist_ranks", lambda db, date, cs, *a, **k: {c: 3 for c in cs})
     monkeypatch.setattr(runner, "build_pilot_narrative",
-                        lambda db, date, code, stock, board, rank: f"叙事:{code}")
+                        lambda db, date, code, stock, board, rank, *a, **k: f"叙事:{code}")
 
 
 def _parse_ok(choice):
@@ -179,7 +185,7 @@ def test_ok_path_updates_fields_without_touching_labels(monkeypatch):
     _patch_population(monkeypatch, ["600825"])
     monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs:
                         ("env", 123))
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok("ferment"))
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok("ferment"))
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
     assert len(col.updates) == 1
     query, update = col.updates[0]
@@ -197,7 +203,7 @@ def test_degraded_fail_visible(monkeypatch):
     col = _FakeCol({"2026-09-30:600825": {"_id": "2026-09-30:600825"}})
     _patch_population(monkeypatch, ["600825"])
     monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs: ("env", 5))
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: {
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: {
         "ok": False, "answers": {}, "model": None, "usage": None,
         "errorCode": "E1", "errorDetail": "boom"})
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
@@ -210,7 +216,7 @@ def test_missing_doc_skipped_no_upsert(monkeypatch):
     col = _FakeCol({})  # 生产集合无该股文档
     _patch_population(monkeypatch, ["600825"])
     monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs: ("env", 5))
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok("start"))
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok("start"))
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
     assert col.updates and col.updates[0][0]["_id"] == "2026-09-30:600825"
     # 无 upsert：缺文档不补造（跳过披露由 FINAL 计数体现）
@@ -239,7 +245,7 @@ def test_criteria_change_triggers_rerun(monkeypatch):
         "stockPhaseQuestionsRaw": {"stock_phase_position": {"criteria": {"旧判据": "x"}}}}})
     _patch_population(monkeypatch, ["600825"])
     monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs: ("env", 7))
-    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms: _parse_ok("divergence"))
+    monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok("divergence"))
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
     assert col.updates  # 判据变更（改门）后允许重跑
     assert col.updates[0][1]["$set"]["stockPhasePosition"] == "divergence"
