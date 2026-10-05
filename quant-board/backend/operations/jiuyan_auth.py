@@ -80,6 +80,8 @@ def login_session(*, phone: str, password: str, token: str, timestamp: str) -> d
                          headers=headers, timeout=20)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"登录请求异常: {exc}", "authFailed": False}
+    finally:
+        sess.close()  # 连接池即用即还（评审 M-7）
     if resp.status_code != 200:
         return {"ok": False, "error": f"登录 HTTP {resp.status_code}", "authFailed": False}
     try:
