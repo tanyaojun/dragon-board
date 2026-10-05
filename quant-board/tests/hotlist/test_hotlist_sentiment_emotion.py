@@ -205,3 +205,70 @@ def test_document_eod_uses_anchored_slot_for_evidence():
     assert doc["slotTime"] == "EOD"
     assert doc["emotionScore"]["score"] is not None
     assert "amountVsSame" not in doc["emotionScore"]["skippedDims"]  # 锚定槽 15:00 命中昨日映射
+
+
+# ── 方向一+①（2026-10-05 用户裁决）：activeDims 维度基数戳 + pathDiag 路径诊断 + limitStruct 诊断行 ──
+
+def test_document_emotion_score_active_dims_baseline():
+    """activeDims = 8 − len(skippedDims)：10-09 amountVsSame 激活前后跨日可比性的维度基数戳。
+    fixture 边界：_yesterday_rows 无涨停证据行 → yhPositive 恒 skip（full=7 维）。"""
+    full = _build("10:30", stocks=_bull_stocks(), yesterday_rows=_yesterday_rows(),
+                  analysis_by_code=_bull_analysis(), yesterday_amounts={"10:30": 1.0e12})
+    assert full["emotionScore"]["skippedDims"] == ["yhPositive"]
+    assert full["emotionScore"]["activeDims"] == 7
+
+    partial = _build("10:30", stocks=_bull_stocks(), yesterday_rows=_yesterday_rows(),
+                     analysis_by_code=_bull_analysis())  # 无 yesterday_amounts → amountVsSame 亦 skip
+    assert set(partial["emotionScore"]["skippedDims"]) == {"yhPositive", "amountVsSame"}
+    assert partial["emotionScore"]["activeDims"] == 6
+
+    empty = _build("10:30", stocks=[], with_limit=False)
+    assert empty["emotionScore"]["score"] is None
+    assert empty["emotionScore"]["activeDims"] == 0  # 全 skip
+
+
+def test_document_emotion_score_path_diag_directional_semantics():
+    """pathDiag 路径诊断（方向一，纯诊断不进档位链）：日内极值+自高点回撤+自低点反弹，
+    序列=严格早于当前槽的 scorePoints + 当前槽。回落中（drawdown<0）与修复后（bounce>0）可判。"""
+    rising = _build("10:30", stocks=_bull_stocks(), yesterday_rows=_yesterday_rows(),
+                    analysis_by_code=_bull_analysis(), stage_history={
+        "rawStagePoints": [("09:30", "启动"), ("10:00", "启动")],
+        "scorePoints": [("09:30", 45.0), ("10:00", 46.0)],
+        "historyStatus": "complete", "diagnostics": [],
+    })
+    diag = rising["emotionScore"]["pathDiag"]
+    current = rising["emotionScore"]["score"]
+    assert diag["dayHigh"]["score"] == current  # 当前即日内高点（爬升中）
+    assert diag["dayLow"]["score"] == 45.0 and diag["dayLow"]["slotTime"] == "09:30"
+    assert diag["drawdownFromHigh"] == 0
+    assert diag["bounceFromLow"] == round(current - 45.0, 1)
+    assert diag["points"] == 3
+
+    falling = _build("10:30", stocks=_bear_stocks(), with_limit=False,
+                     yesterday_rows=_weak_yesterday_rows(), analysis_by_code=_bear_analysis(),
+                     stage_history={
+        "rawStagePoints": [("09:30", "启动")],
+        "scorePoints": [("09:30", 55.0)],
+        "historyStatus": "complete", "diagnostics": [],
+    })
+    fdiag = falling["emotionScore"]["pathDiag"]
+    assert fdiag["dayHigh"]["score"] == 55.0 and fdiag["dayHigh"]["slotTime"] == "09:30"
+    assert fdiag["drawdownFromHigh"] < 0  # 回落中：当前低于日内高点
+    assert fdiag["dayLow"]["score"] == falling["emotionScore"]["score"]  # 当前即低点
+
+    # score=None（方案 B）→ pathDiag=None 不伪造
+    none_doc = _build("10:30", stocks=[], with_limit=False)
+    assert none_doc["emotionScore"]["pathDiag"] is None
+
+
+def test_document_limitstruct_skip_diagnostic_line():
+    """limitStruct skip 且 score 有效 → 结构化诊断行（fail-visible，与炸板缺失行同风格）。"""
+    doc = _build("10:30", stocks=_bull_stocks(), yesterday_rows=_yesterday_rows(),
+                 analysis_by_code=_bull_analysis())  # 无 with_limit=False 之外的手段——用 with_limit=False
+    # 上例 limit 在场；构造缺失：with_limit=False
+    missing = _build("10:30", stocks=_bull_stocks(), with_limit=False,
+                     yesterday_rows=_yesterday_rows(), analysis_by_code=_bull_analysis())
+    assert "limitStruct" in missing["emotionScore"]["skippedDims"]
+    assert any(d.startswith("emotion_limitstruct_unavailable") for d in missing["diagnostics"])
+    # limit 在场 → 无该诊断行
+    assert not any(d.startswith("emotion_limitstruct_unavailable") for d in doc["diagnostics"])

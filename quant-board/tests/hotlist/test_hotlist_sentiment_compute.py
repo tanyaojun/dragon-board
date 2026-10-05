@@ -566,7 +566,10 @@ def test_document_has_diagnostics_field():
     """文档构造输出 diagnostics 字段（默认空数组，编排层填充）。"""
     from backend.operations.hotlist_sentiment import build_hotlist_sentiment_document
 
-    frame = {"snapshotId": "s1", "slotTime": "10:00", "timestamp": 100}
+    # limitSummary 在场（2026-10-05 起 limitStruct 缺失会产诊断行）——本测试锁"无异常时默认空"
+    frame = {"snapshotId": "s1", "slotTime": "10:00", "timestamp": 100,
+             "limitSummary": {"zhaban": {"ztCount": 30, "rate": 15.0},
+                              "continuousBoards": {"maxBoard": 4}}}
     doc = build_hotlist_sentiment_document(
         dataset_id="dragonboard_live", snapshot_type="half_hour", trading_date="2026-06-04",
         frame=frame, stocks=[{"code": "000001", "rank": 1, "change": 5, "zlje": 0, "volumeRatio": 1.5}],

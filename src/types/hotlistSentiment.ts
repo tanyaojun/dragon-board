@@ -198,6 +198,16 @@ export interface HotListEmotionScore {
   score: number | null
   dims: Record<string, { raw: number | null; sub: number }>
   skippedDims: string[]
+  /** 有效维基数（8−skipped）：10-09 amountVsSame 激活使 7→8，跨日可比性按此分段；历史文档缺省 */
+  activeDims?: number
+  /** 日内路径诊断（纯诊断，不进档位链）：极值+自高点回撤+自低点反弹；score=null 时为 null；历史文档缺省 */
+  pathDiag?: {
+    dayHigh: { slotTime: string; score: number }
+    dayLow: { slotTime: string; score: number }
+    drawdownFromHigh: number
+    bounceFromLow: number
+    points: number
+  } | null
   stageCandidate?: UnifiedEmotionStage | null
   slope?: number | null
   version?: string

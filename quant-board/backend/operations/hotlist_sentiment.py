@@ -724,10 +724,31 @@ def build_hotlist_sentiment_document(
     prev_score = score_points[-1][1] if score_points else None
     slope = round(score_value - prev_score, 2) if (score_value is not None and prev_score is not None) else None
     raw_stage_value = map_stage(score_value, slope) if score_value is not None else None
+    # activeDims（2026-10-05 方向二报告 §六#8）：有效维基数戳——10-09 amountVsSame 激活使
+    # 有效维 7→8，跨日可比性按此字段分段（历史文档缺该键=旧代，fail-visible）。
+    active_dims = 8 - len(emotion.get("skippedDims") or [])
+    # pathDiag（2026-10-05 方向一，GLM 研讨）：日内路径诊断——极值+自高点回撤+自低点反弹。
+    # 纯诊断字段：不进 map_stage、不进档位/regime/门控链；回落中（drawdownFromHigh<0）
+    # 与修复后（bounceFromLow>0）的方向语义可判（09-24 类分歧的裁决原料）。
+    path_diag = None
+    if score_value is not None:
+        series = [(str(t), float(v)) for t, v in score_points if isinstance(v, (int, float))]
+        series.append((evidence_slot, float(score_value)))
+        hi_t, hi_v = max(series, key=lambda x: x[1])
+        lo_t, lo_v = min(series, key=lambda x: x[1])
+        path_diag = {
+            "dayHigh": {"slotTime": hi_t, "score": round(hi_v, 1)},
+            "dayLow": {"slotTime": lo_t, "score": round(lo_v, 1)},
+            "drawdownFromHigh": round(float(score_value) - hi_v, 1),
+            "bounceFromLow": round(float(score_value) - lo_v, 1),
+            "points": len(series),
+        }
     emotion_doc = {
         "score": score_value,
         "dims": emotion["dims"],
         "skippedDims": emotion["skippedDims"],
+        "activeDims": active_dims,
+        "pathDiag": path_diag,
         # 与 rawStage 同值（审计 S10：本帧映射档位含斜率修正，防两值不一致）
         "stageCandidate": raw_stage_value,
         "slope": slope,
@@ -750,6 +771,10 @@ def build_hotlist_sentiment_document(
     elif prev_score is None and history_status not in ("empty", "unavailable"):
         # 当日已有历史文档但取不到有效 prev score（切换日混合态/旧文档）→ 斜率不可用
         diagnostics_extra.append("emotion_slope_unavailable:prev_score_missing")
+    if score_value is not None and "limitStruct" in (emotion.get("skippedDims") or []):
+        # 与炸板缺失行同风格（fail-visible）：涨停结构证据缺失使合成维跳过、维度基数降级
+        # （独立 if：不并入上方 if/elif 链，两诊断可并存）
+        diagnostics_extra.append("emotion_limitstruct_unavailable:limitSummary 缺失（涨停结构维跳过）")
     # historyStatus=unavailable 时历史不可信：只用本帧截面确认（fail-visible 不伪造历史）；
     # score=None 的本帧点两个分支都不得进序列（str(None)="None" 会穿透 confirm_stage
     # 的空串过滤伪造档位，spec §3.4）。
