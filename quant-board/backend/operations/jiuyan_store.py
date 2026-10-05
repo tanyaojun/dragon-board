@@ -2,8 +2,9 @@
 """韭研异动存储层（集合 jiuyan_action，设计 jiuyan-collector-design.md §2/§3）。
 
 jiuyan_action：_id="<date>:<kind>"（kind=midday/final），幂等 upsert，重采覆盖同键。
-铸造 token 动态缓存=Redis（24h TTL 兜底，authFailed 显式删除）；静态凭据=JIUYAN_SESSION
-（.env.local）。**密钥/凭据禁止落 MongoDB**（2026-10-02 用户红线：单一事实源，DB 不存机密）。
+动态凭据缓存=Redis（24h TTL 兜底，authFailed 显式删除）：铸造 token（jiuyan:minted-token）+
+登录会话（jiuyan:session，2026-10-05 认证链自动化）；静态凭据=JIUYAN_SESSION（.env.local）。
+**密钥/凭据禁止落 MongoDB**（2026-10-02 用户红线：单一事实源，DB 不存机密）。
 fail-visible：写入失败抛给调用方记录，不在本层吞错。
 """
 from __future__ import annotations
@@ -17,12 +18,20 @@ from backend.market_proxy.redis_client import get_hotlist_redis_client
 COLLECTION_ACTION = "jiuyan_action"
 TOKEN_REDIS_KEY = "jiuyan:minted-token"
 TOKEN_TTL_SECONDS = 24 * 3600
+SESSION_REDIS_KEY = "jiuyan:session"
+SESSION_TTL_SECONDS = 24 * 3600
 
 
 def _token_cache_key() -> str:
     from backend.core.settings import get_settings
 
     return f"{get_settings().redis_key_prefix}:{TOKEN_REDIS_KEY}"
+
+
+def _session_cache_key() -> str:
+    from backend.core.settings import get_settings
+
+    return f"{get_settings().redis_key_prefix}:{SESSION_REDIS_KEY}"
 
 
 def action_doc_id(date: str, kind: str) -> str:
@@ -91,3 +100,37 @@ def clear_cached_token() -> None:
     client = get_hotlist_redis_client()
     if client is not None:
         client.delete(_token_cache_key())
+
+
+def get_cached_session() -> dict | None:
+    """读取动态登录会话缓存（Redis）。不可用/无缓存 → None（调用方走登录/静态回退）。"""
+    client = get_hotlist_redis_client()
+    if client is None:
+        return None
+    raw = client.get(_session_cache_key())
+    if not raw:
+        return None
+    parsed = json.loads(raw)
+    return {"session": parsed.get("session"), "source": parsed.get("source"),
+            "savedAt": parsed.get("savedAt")}
+
+
+def save_session(*, session: str, source: str) -> bool:
+    """缓存动态登录会话（Redis，24h TTL 兜底）。空会话/Redis 不可用 → False（不缓存空值）。"""
+    if not session:
+        return False
+    client = get_hotlist_redis_client()
+    if client is None:
+        return False
+    client.set(_session_cache_key(), json.dumps({
+        "session": session, "source": source,
+        "savedAt": datetime.now().isoformat(timespec="seconds")}),
+        ex=SESSION_TTL_SECONDS)
+    return True
+
+
+def clear_cached_session() -> None:
+    """authFailed 时显式删除缓存会话（下次采集触发重登）。"""
+    client = get_hotlist_redis_client()
+    if client is not None:
+        client.delete(_session_cache_key())

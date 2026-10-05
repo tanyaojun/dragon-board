@@ -107,3 +107,31 @@ def test_token_cache_cleared_on_auth_failed(monkeypatch):
     jiuyan_store.save_token(token="OLD", timestamp="TS", source="manual")
     jiuyan_store.clear_cached_token()
     assert jiuyan_store.get_cached_token() is None
+
+
+# ── 动态 SESSION 缓存（2026-10-05 认证链自动化：与铸造 token 缓存对称） ──────────
+
+def test_session_cache_roundtrip(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: fake)
+    assert jiuyan_store.get_cached_session() is None
+    assert jiuyan_store.save_session(session="S" * 48, source="login") is True
+    got = jiuyan_store.get_cached_session()
+    assert got["session"] == "S" * 48 and got["source"] == "login" and got["savedAt"]
+    jiuyan_store.save_session(session="NEW", source="login")
+    assert jiuyan_store.get_cached_session()["session"] == "NEW"
+    jiuyan_store.clear_cached_session()
+    assert jiuyan_store.get_cached_session() is None
+
+
+def test_session_cache_fail_visible(monkeypatch):
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: None)
+    assert jiuyan_store.get_cached_session() is None
+    assert jiuyan_store.save_session(session="S", source="login") is False
+
+
+def test_session_cache_rejects_empty(monkeypatch):
+    fake = FakeRedis()
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: fake)
+    assert jiuyan_store.save_session(session="", source="login") is False
+    assert jiuyan_store.get_cached_session() is None

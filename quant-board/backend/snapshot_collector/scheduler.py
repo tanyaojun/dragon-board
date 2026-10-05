@@ -474,7 +474,8 @@ async def run_jiuyan_attempt(date: str, kind: str) -> dict:
 
 
 async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
-    """交易日 12:05 采 midday、15:35 采 final（每日各 ≤1 次）；token/会话失效如实记状态不重试。
+    """交易日 12:05 采 midday、15:35 采 final（每日各 ≤1 次）；authFailed 自愈重试一次
+    （清缓存重新解析，可触发浏览器铸造/登录，见 jiuyan_auth），仍失败如实记状态。
 
     与主采集循环互不阻塞（collect 走 asyncio.to_thread）。60s 轮询足够（时点粒度=分钟）。
     """
