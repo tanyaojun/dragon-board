@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -43,11 +44,13 @@ def fake_redis(monkeypatch):
     return fake
 
 
-def _seed_caches(fake, session="S" * 48, token="T" * 80):
+def _seed_caches(fake, session="S" * 48, token="T" * 80, token_age_seconds=0):
     if session is not None:
         fake.data[SESSION_KEY] = f'{{"session": "{session}", "source": "login", "savedAt": "t0"}}'
     if token is not None:
-        fake.data[TOKEN_KEY] = f'{{"token": "{token}", "timestamp": "TS0", "mintedAt": "t0", "source": "minted"}}'
+        minted_at = (datetime.now() - timedelta(seconds=token_age_seconds)).isoformat(timespec="seconds")
+        fake.data[TOKEN_KEY] = (f'{{"token": "{token}", "timestamp": "TS0", '
+                                f'"mintedAt": "{minted_at}", "source": "minted"}}')
 
 
 # ── mint_token_via_browser（playwright 合同；浏览器全程 mock） ────────────────
@@ -311,3 +314,64 @@ def test_resolve_auth_force_refresh_env_fallback_still_works(monkeypatch, fake_r
     out = jiuyan_auth.resolve_auth(force_refresh=True)
     assert out["ok"] is True and out["session"] == "STATIC" and out["token"] == "F" * 80
     assert out["source"] == "env+minted"
+
+
+# ── token 新鲜度（2026-10-05 真机实测：旧 token 登录 110，登录必须现铸） ────────
+
+def test_resolve_auth_stale_cache_token_reminted(monkeypatch, fake_redis):
+    """缓存 token 超过新鲜窗口：数据路径重铸，不拿陈旧 token 出门。"""
+    _seed_caches(fake_redis, session=None, token="OLD" * 16, token_age_seconds=jiuyan_auth.TOKEN_FRESH_SECONDS + 30)
+    monkeypatch.delenv("JIUYAN_PHONE", raising=False)
+    monkeypatch.delenv("JIUYAN_PASSWORD", raising=False)
+    monkeypatch.setenv("JIUYAN_SESSION", "STATIC")
+    monkeypatch.setattr(jiuyan_auth, "mint_token_via_browser",
+                        lambda date: {"ok": True, "token": "M" * 80, "timestamp": "TS1", "source": "playwright"})
+    out = jiuyan_auth.resolve_auth()
+    assert out["ok"] is True and out["token"] == "M" * 80 and out["source"] == "env+minted"
+
+
+def test_resolve_auth_fresh_cache_token_reused(monkeypatch, fake_redis):
+    _seed_caches(fake_redis, session="S" * 48, token="T" * 80)
+    monkeypatch.setattr(jiuyan_auth, "mint_token_via_browser",
+                        lambda date: (_ for _ in ()).throw(AssertionError("新鲜 token 不应重铸")))
+    out = jiuyan_auth.resolve_auth()
+    assert out["ok"] is True and out["token"] == "T" * 80 and out["source"] == "cache+cache"
+
+
+def test_resolve_auth_login_always_mints_fresh(monkeypatch, fake_redis):
+    """有凭据且无缓存会话：即使缓存 token 很新，登录也必须现场重铸（真机 110 教训）。"""
+    _seed_caches(fake_redis, session=None, token="T" * 80)  # 新鲜缓存 token
+    monkeypatch.setenv("JIUYAN_PHONE", "13800000000")
+    monkeypatch.setenv("JIUYAN_PASSWORD", "pw")
+    minted_tokens = []
+
+    def fake_mint(date):
+        minted_tokens.append(date)
+        return {"ok": True, "token": "FRESH" * 16, "timestamp": "TS1", "source": "playwright"}
+
+    monkeypatch.setattr(jiuyan_auth, "mint_token_via_browser", fake_mint)
+    used = {}
+
+    def fake_login(phone, password, token, timestamp):
+        used["token"] = token
+        return {"ok": True, "session": "DYN"}
+
+    monkeypatch.setattr(jiuyan_auth, "login_session", fake_login)
+    out = jiuyan_auth.resolve_auth()
+    assert out["ok"] is True and out["source"] == "login+minted"
+    assert used["token"] == "FRESH" * 16  # 登录用的是现铸 token，不是缓存里的
+    assert len(minted_tokens) == 1  # 且只铸一次（登录用的就是它）
+
+
+def test_resolve_auth_login_rejects_stale_mint_before_login(monkeypatch, fake_redis):
+    """现铸失败时登录路径不得降级用缓存 token 硬闯。"""
+    _seed_caches(fake_redis, session=None, token="T" * 80)
+    monkeypatch.setenv("JIUYAN_PHONE", "13800000000")
+    monkeypatch.setenv("JIUYAN_PASSWORD", "pw")
+    monkeypatch.setattr(jiuyan_auth, "mint_token_via_browser",
+                        lambda date: {"ok": False, "error": "浏览器铸造失败"})
+    monkeypatch.setattr(jiuyan_auth, "login_session",
+                        lambda phone, password, token, timestamp: (_ for _ in ()).throw(
+                            AssertionError("铸造失败不得发起登录")))
+    out = jiuyan_auth.resolve_auth()
+    assert out["ok"] is False and "浏览器铸造失败" in out["error"]

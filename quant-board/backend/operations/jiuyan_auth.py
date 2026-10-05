@@ -34,6 +34,31 @@ MINT_WAIT_MS = 15_000
 NAV_TIMEOUT_MS = 20_000
 BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120"
 MINT_EXPR = "globalThis.nR4xKp7mQa($nuxt.$store.state.mQ7vL2xR9a, Date.now())"
+# token 新鲜度（2026-10-05 真机实测）：旧 token（≈20 分钟）登录必 110，数据调用实测 ≥8 分钟
+# 仍可用——数据路径复用窗口保守取 5 分钟，登录一律现场新铸不读缓存。
+TOKEN_FRESH_SECONDS = 300
+
+
+def _token_fresh(cached: dict | None) -> bool:
+    """缓存 token 是否仍在新鲜窗口内（mintedAt 缺失/不可解析一律视为陈旧）。"""
+    if not cached or not cached.get("mintedAt"):
+        return False
+    try:
+        minted_at = datetime.fromisoformat(str(cached["mintedAt"]))
+    except ValueError:
+        return False
+    age = (datetime.now() - minted_at).total_seconds()
+    return 0 <= age <= TOKEN_FRESH_SECONDS
+
+
+def _mint_and_cache(date: str) -> tuple[tuple[str, str] | None, str | None]:
+    """铸造新 token 并写入缓存。返回 ((token, timestamp), None) 或 (None, error)。"""
+    minted = mint_token_via_browser(date)
+    if not minted.get("ok"):
+        return None, minted.get("error")
+    pair = (minted["token"], minted["timestamp"])
+    jiuyan_store.save_token(token=pair[0], timestamp=pair[1], source="playwright")
+    return pair, None
 
 
 def _requests_session():
@@ -114,6 +139,8 @@ def resolve_auth(*, date: str | None = None, force_refresh: bool = False) -> dic
 
     source = "<会话源>+<token源>"：cache|login|env + cache|minted。force_refresh 跳过两缓存
     （会话强制重登/静态回退，token 强制重铸）——仅供 authFailed 自愈路径使用。
+    token 新鲜度：数据路径只复用 TOKEN_FRESH_SECONDS 内的缓存 token，否则现场重铸；
+    登录是低频动作（≈1 次/日），一律现场新铸（真机实测缓存旧 token 登录 110）。
     """
     date = date or datetime.now().strftime("%Y-%m-%d")
     phone = os.environ.get("JIUYAN_PHONE") or ""
@@ -133,24 +160,15 @@ def resolve_auth(*, date: str | None = None, force_refresh: bool = False) -> dic
                 "error": "无可用凭据：Redis 无缓存会话、JIUYAN_PHONE/JIUYAN_PASSWORD 未配置、"
                          "JIUYAN_SESSION 未配置（.env.local 任填其一）"}
 
-    token_pair = None
-    token_src = None
-    if not force_refresh:
-        cached_token = jiuyan_store.get_cached_token()
-        if cached_token and cached_token.get("token"):
-            token_pair = (str(cached_token["token"]), str(cached_token["timestamp"]))
-            token_src = "cache"
-    if token_pair is None:
-        minted = mint_token_via_browser(date)
-        if not minted.get("ok"):
-            return {"ok": False, "authFailed": True,
-                    "error": f"token 铸造失败: {minted.get('error')}"}
-        token_pair = (minted["token"], minted["timestamp"])
-        token_src = "minted"
-        jiuyan_store.save_token(token=minted["token"], timestamp=minted["timestamp"],
-                                source="playwright")
+    token_pair: tuple[str, str] | None = None
+    token_src: str | None = None
 
     if session is None and phone and password:
+        pair, mint_error = _mint_and_cache(date)
+        if pair is None:
+            return {"ok": False, "authFailed": True,
+                    "error": f"token 铸造失败: {mint_error}"}
+        token_pair, token_src = pair, "minted"
         login = login_session(phone=phone, password=password, token=token_pair[0],
                               timestamp=token_pair[1])
         if not login.get("ok"):
@@ -159,6 +177,19 @@ def resolve_auth(*, date: str | None = None, force_refresh: bool = False) -> dic
         session = login["session"]
         session_src = "login"
         jiuyan_store.save_session(session=session, source="login")
+
+    if token_pair is None:
+        if not force_refresh:
+            cached_token = jiuyan_store.get_cached_token()
+            if _token_fresh(cached_token):
+                token_pair = (str(cached_token["token"]), str(cached_token["timestamp"]))
+                token_src = "cache"
+        if token_pair is None:
+            pair, mint_error = _mint_and_cache(date)
+            if pair is None:
+                return {"ok": False, "authFailed": True,
+                        "error": f"token 铸造失败: {mint_error}"}
+            token_pair, token_src = pair, "minted"
 
     if session is None:
         session = static_session
