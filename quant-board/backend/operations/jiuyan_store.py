@@ -71,27 +71,33 @@ def list_action_dates(db: Any) -> list[dict]:
 
 
 def get_cached_token() -> dict | None:
-    """读取铸造 token 缓存（Redis）。不可用/无缓存 → None（fail-visible，调用方提示需铸造）。"""
+    """读取铸造 token 缓存（Redis）。不可用/无缓存/连接故障 → None（缓存层容错，调用方走铸造）。"""
     client = get_hotlist_redis_client()
     if client is None:
         return None
-    raw = client.get(_token_cache_key())
-    if not raw:
+    try:
+        raw = client.get(_token_cache_key())
+        if not raw:
+            return None
+        parsed = json.loads(raw)
+    except Exception:  # noqa: BLE001 redis-py 懒连接：配好但宕机在首个 get 才抛（评审 M-1）
         return None
-    parsed = json.loads(raw)
     return {"token": parsed.get("token"), "timestamp": parsed.get("timestamp"),
             "mintedAt": parsed.get("mintedAt"), "source": parsed.get("source")}
 
 
 def save_token(*, token: str, timestamp: str, source: str) -> bool:
-    """缓存铸造 token（Redis，24h TTL 兜底）。Redis 不可用返回 False（调用方如实提示）。"""
+    """缓存铸造 token（Redis，24h TTL 兜底）。Redis 不可用/连接故障返回 False（调用方如实提示）。"""
     client = get_hotlist_redis_client()
     if client is None:
         return False
-    client.set(_token_cache_key(), json.dumps({
-        "token": token, "timestamp": timestamp,
-        "mintedAt": datetime.now().isoformat(timespec="seconds"), "source": source}),
-        ex=TOKEN_TTL_SECONDS)
+    try:
+        client.set(_token_cache_key(), json.dumps({
+            "token": token, "timestamp": timestamp,
+            "mintedAt": datetime.now().isoformat(timespec="seconds"), "source": source}),
+            ex=TOKEN_TTL_SECONDS)
+    except Exception:  # noqa: BLE001 缓存写失败不炸采集链（评审 M-1）
+        return False
     return True
 
 
@@ -99,33 +105,42 @@ def clear_cached_token() -> None:
     """authFailed 时显式删除缓存 token（避免陈旧密钥滞留）。"""
     client = get_hotlist_redis_client()
     if client is not None:
-        client.delete(_token_cache_key())
+        try:
+            client.delete(_token_cache_key())
+        except Exception:  # noqa: BLE001 缓存层无谓失败不炸链（评审 M-1）
+            pass
 
 
 def get_cached_session() -> dict | None:
-    """读取动态登录会话缓存（Redis）。不可用/无缓存 → None（调用方走登录/静态回退）。"""
+    """读取动态登录会话缓存（Redis）。不可用/无缓存/连接故障 → None（调用方走登录/静态回退）。"""
     client = get_hotlist_redis_client()
     if client is None:
         return None
-    raw = client.get(_session_cache_key())
-    if not raw:
+    try:
+        raw = client.get(_session_cache_key())
+        if not raw:
+            return None
+        parsed = json.loads(raw)
+    except Exception:  # noqa: BLE001 缓存层容错（评审 M-1）
         return None
-    parsed = json.loads(raw)
     return {"session": parsed.get("session"), "source": parsed.get("source"),
             "savedAt": parsed.get("savedAt")}
 
 
 def save_session(*, session: str, source: str) -> bool:
-    """缓存动态登录会话（Redis，24h TTL 兜底）。空会话/Redis 不可用 → False（不缓存空值）。"""
+    """缓存动态登录会话（Redis，24h TTL 兜底）。空会话/Redis 不可用/连接故障 → False（不缓存空值）。"""
     if not session:
         return False
     client = get_hotlist_redis_client()
     if client is None:
         return False
-    client.set(_session_cache_key(), json.dumps({
-        "session": session, "source": source,
-        "savedAt": datetime.now().isoformat(timespec="seconds")}),
-        ex=SESSION_TTL_SECONDS)
+    try:
+        client.set(_session_cache_key(), json.dumps({
+            "session": session, "source": source,
+            "savedAt": datetime.now().isoformat(timespec="seconds")}),
+            ex=SESSION_TTL_SECONDS)
+    except Exception:  # noqa: BLE001 缓存写失败不炸采集链（评审 M-1）
+        return False
     return True
 
 
@@ -133,4 +148,7 @@ def clear_cached_session() -> None:
     """authFailed 时显式删除缓存会话（下次采集触发重登）。"""
     client = get_hotlist_redis_client()
     if client is not None:
-        client.delete(_session_cache_key())
+        try:
+            client.delete(_session_cache_key())
+        except Exception:  # noqa: BLE001 缓存层无谓失败不炸链（评审 M-1）
+            pass

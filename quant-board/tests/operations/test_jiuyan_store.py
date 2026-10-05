@@ -135,3 +135,32 @@ def test_session_cache_rejects_empty(monkeypatch):
     monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: fake)
     assert jiuyan_store.save_session(session="", source="login") is False
     assert jiuyan_store.get_cached_session() is None
+
+
+# ── 评审 M-1：Redis 懒连接故障时缓存层容错（返回缺失而非异常炸穿调度链） ────────
+
+class ExplodingRedis(FakeRedis):
+    def get(self, key):
+        raise ConnectionError("redis down")
+
+    def set(self, key, value, ex=None):
+        raise ConnectionError("redis down")
+
+    def delete(self, key):
+        raise ConnectionError("redis down")
+
+
+def test_token_cache_redis_down_fail_visible(monkeypatch):
+    exploding = ExplodingRedis()
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: exploding)
+    assert jiuyan_store.get_cached_token() is None  # 视为无缓存，调用方走铸造路径
+    assert jiuyan_store.save_token(token="T", timestamp="TS", source="manual") is False
+    jiuyan_store.clear_cached_token()  # 清缓存静默容忍（缓存层无谓失败不该炸链）
+
+
+def test_session_cache_redis_down_fail_visible(monkeypatch):
+    exploding = ExplodingRedis()
+    monkeypatch.setattr(jiuyan_store, "get_hotlist_redis_client", lambda: exploding)
+    assert jiuyan_store.get_cached_session() is None
+    assert jiuyan_store.save_session(session="S", source="login") is False
+    jiuyan_store.clear_cached_session()

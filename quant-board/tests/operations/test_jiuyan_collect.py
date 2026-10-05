@@ -143,10 +143,31 @@ def test_collect_field_110_self_heals(monkeypatch, fake_db, fake_redis):
     _patch_fetch(monkeypatch,
                  count_results=[{"ok": True, "all": 5, "recommend": 0},
                                 {"ok": True, "all": 5, "recommend": 0}],
-                 field_results=[{"ok": False, "date": "2026-10-05", "error": "errCode=110 msg=token无效"},
+                 field_results=[{"ok": False, "date": "2026-10-05",
+                                 "error": "errCode=110 msg=token无效", "authFailed": True},
                                 {"ok": True, "date": "2026-10-05", "parsed": parsed}])
     out = jiuyan_collect.collect_and_store("2026-10-05", "final", db=fake_db)
     assert out["ok"] is True and out["stocks"] == 2
+
+
+def test_collect_field_quota_no_self_heal(monkeypatch, fake_db, fake_redis):
+    """配额(errCode 9)非会话失效：一次尝试即返回，不得白耗一次重登（评审 I-1）。"""
+    resolve_calls = []
+
+    def fake_resolve(**kw):
+        resolve_calls.append(kw)
+        return {"ok": True, "session": "SESS", "token": "T" * 80, "timestamp": "TS0",
+                "source": "cache+cache"}
+
+    monkeypatch.setattr(jiuyan_auth, "resolve_auth", fake_resolve)
+    _patch_fetch(monkeypatch,
+                 count_results=[{"ok": True, "all": 5, "recommend": 0}],
+                 field_results=[{"ok": False, "date": "2026-10-05",
+                                 "error": "errCode=9 查阅配额耗尽(您今天的查阅次数已达到上限)",
+                                 "authFailed": False, "quota": True}])
+    out = jiuyan_collect.collect_and_store("2026-10-05", "final", db=fake_db)
+    assert out["ok"] is False and out["authFailed"] is False and out["quota"] is True
+    assert len(resolve_calls) == 1  # 只解析一次，无 force_refresh 自愈
 
 
 def test_collect_self_heal_failure_reports_original(monkeypatch, fake_db, fake_redis):
@@ -158,3 +179,18 @@ def test_collect_self_heal_failure_reports_original(monkeypatch, fake_db, fake_r
     out = jiuyan_collect.collect_and_store("2026-10-05", "final", db=fake_db)
     assert out["ok"] is False and out["error"] == "登录失效"
     assert out["selfHeal"]["error"] == "浏览器铸造失败"  # 自愈失败原因留痕
+    assert out["selfHeal"]["firstError"] == "登录失效"  # 首次失败也留痕（评审 I-2）
+
+
+def test_collect_self_heal_retry_fail_still_marked(monkeypatch, fake_db, fake_redis):
+    """重解析成功但重试仍失败：结果附 selfHeal 留痕，两个错误都可追（评审 I-2/M-5）。"""
+    monkeypatch.setattr(jiuyan_auth, "resolve_auth",
+                        lambda **kw: {"ok": True, "session": "FRESH", "token": "N" * 80,
+                                      "timestamp": "TS1", "source": "login+minted"})
+    _patch_fetch(monkeypatch,
+                 count_results=[{"ok": False, "authFailed": True, "error": "登录失效"},
+                                {"ok": False, "authFailed": True, "error": "登录失效"}],
+                 field_results=[])
+    out = jiuyan_collect.collect_and_store("2026-10-05", "final", db=fake_db)
+    assert out["ok"] is False and out["error"] == "登录失效"
+    assert out["selfHeal"] == {"ok": False, "firstError": "登录失效", "error": "登录失效"}

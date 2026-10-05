@@ -19,25 +19,31 @@ def _attempt(date: str, kind: str, db: Any, auth: dict) -> dict:
                         timestamp=auth["timestamp"])
     if not probe.get("ok"):
         return {"ok": False, "date": date, "kind": kind, "error": probe.get("error"),
-                "authFailed": probe.get("authFailed", False)}
+                "authFailed": bool(probe.get("authFailed")), "quota": bool(probe.get("quota"))}
     counts = {"all": probe.get("all"), "recommend": probe.get("recommend")}
 
     field = fetch_field(date, session_cookie=auth["session"], token=auth["token"],
                         timestamp=auth["timestamp"])
     if not field.get("ok"):
+        # authFailed/quota 由 fetch_field 结构化返回（errCode 110/9），不再做子串猜测
         return {"ok": False, "date": date, "kind": kind, "error": field.get("error"),
-                "authFailed": "110" in str(field.get("error"))}
+                "authFailed": bool(field.get("authFailed")), "quota": bool(field.get("quota"))}
 
     parsed = field["parsed"]
     doc_id = jiuyan_store.save_action_doc(db, date=date, kind=kind, parsed=parsed, counts=counts,
-                                          token_source=str(auth.get("source") or "cache"))
+                                          token_source=str(auth.get("source") or "unknown"))
     return {"ok": True, "date": date, "kind": kind, "docId": doc_id,
             "fields": len(parsed.get("fields") or []), "stocks": parsed.get("totalStocks"),
             "degraded": len(parsed.get("degradedSources") or [])}
 
 
 def collect_and_store(date: str, kind: str = "final", db: Any = None) -> dict:
-    """采集某交易日并落库。返回 {ok, date, kind, ...}；失败 {ok: False, error, authFailed?}。"""
+    """采集某交易日并落库。返回 {ok, date, kind, ...}；失败 {ok: False, error, authFailed?}。
+
+    authFailed（会话/token 失效）→ 清两缓存强制重新解析（可触发浏览器铸造/登录）自愈重试一次；
+    重试结果一律附 selfHeal={ok, firstError[, error]} 留痕。quota（每日配额耗尽）不是鉴权
+    失败，不进入自愈（白耗一次登录还会踢掉用户会话）。
+    """
     if db is None:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database
         db = get_runtime_mongodb_database()
@@ -56,5 +62,10 @@ def collect_and_store(date: str, kind: str = "final", db: Any = None) -> dict:
     jiuyan_store.clear_cached_session()
     auth2 = jiuyan_auth.resolve_auth(date=date, force_refresh=True)
     if not auth2.get("ok"):
-        return {**result, "selfHeal": {"ok": False, "error": auth2.get("error")}}
-    return _attempt(date, kind, db, auth2)
+        return {**result, "selfHeal": {"ok": False, "firstError": result.get("error"),
+                                       "error": auth2.get("error")}}
+    result2 = _attempt(date, kind, db, auth2)
+    self_heal = {"ok": bool(result2.get("ok")), "firstError": result.get("error")}
+    if not result2.get("ok"):
+        self_heal["error"] = result2.get("error")
+    return {**result2, "selfHeal": self_heal}

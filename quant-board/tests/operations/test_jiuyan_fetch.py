@@ -117,3 +117,44 @@ def test_fetch_field_and_count_auth_signals(monkeypatch):
     monkeypatch.setattr(mod, "api_post", lambda *a, **k: (200, '{"errCode":"1","msg":"登录失效","data":{}}'))
     cnt2 = fetch_count("2026-09-30", session_cookie="S", token="T", timestamp="TS")
     assert cnt2["ok"] is False and cnt2["authFailed"] is True
+
+
+# ── 评审 I-1/M-4：配额(errCode 9)≠会话失效；field 路径结构化 authFailed ─────────
+
+def test_fetch_count_quota_is_not_auth_failed(monkeypatch):
+    """errCode 9=每日查阅配额，与登录态无关：authFailed=False 不得触发自愈重登。"""
+    import json
+
+    import backend.operations.jiuyan_fetch as mod
+
+    monkeypatch.setattr(mod, "api_post", lambda *a, **k: (
+        200, json.dumps({"errCode": "9", "msg": "您今天的查阅次数已达到上限", "data": {}})))
+    out = fetch_count("2026-09-30", session_cookie="S", token="T", timestamp="TS")
+    assert out["ok"] is False
+    assert out["authFailed"] is False  # 配额耗尽不该清缓存/重登
+    assert out["quota"] is True
+    assert "配额" in out["error"] and "9" in out["error"]
+
+
+def test_fetch_field_structured_auth_and_quota_signals(monkeypatch):
+    """field 路径结构化 authFailed/quota，替代 '110' 子串匹配（评审 M-4）。"""
+    import json
+
+    import backend.operations.jiuyan_fetch as mod
+
+    monkeypatch.setattr(mod, "api_post", lambda *a, **k: (
+        200, json.dumps({"errCode": "9", "msg": "您今天的查阅次数已达到上限", "data": {}})))
+    quota = mod.fetch_field("2026-09-30", session_cookie="S", token="T", timestamp="TS")
+    assert quota["ok"] is False and quota["authFailed"] is False and quota["quota"] is True
+
+    monkeypatch.setattr(mod, "api_post", lambda *a, **k: (
+        200, json.dumps({"errCode": "110", "msg": "token无效"})))
+    bad = mod.fetch_field("2026-09-30", session_cookie="S", token="T", timestamp="TS")
+    assert bad["ok"] is False and bad["authFailed"] is True and "quota" not in bad
+
+    monkeypatch.setattr(mod, "api_post", lambda *a, **k: (
+        200, json.dumps({"errCode": "1", "msg": "登录失效", "data": {}})))
+    dead = mod.fetch_field("2026-09-30", session_cookie="S", token="T", timestamp="TS")
+    # 泛型非 0 非 110：authFailed=False（保守，不自愈）——「登录失效」场景由先行探针
+    # fetch_count 的同码分支触发自愈；field 不重复扩权（与旧子串行为对齐）
+    assert dead["ok"] is False and dead["authFailed"] is False

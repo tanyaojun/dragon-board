@@ -5,7 +5,7 @@
 - 主数据 `POST {API_BASE}/action/field` body {"date","pc":1} → data[] 板块（name/count/list[]），
   个股 article.action_info{涨停时间 time/连板 num/price(×100 整数)/day/reason/expound 人工解析}；
 - 请求头 platform:3 + timestamp(ISO Z 秒级) + token（页内 globalThis.nR4xKp7mQa 铸，铸造在
-  jiuyan_mint.py/手动，本模块只消费）+ Cookie SESSION=...；缺一 → errCode 110/登录失效；
+  jiuyan_auth.mint_token_via_browser，本模块只消费）+ Cookie SESSION=...；缺一 → errCode 110/登录失效；
 - token 与 body 无关、新鲜度 ≥2 分钟；digest 在异动页 SSR HTML 公开（mQ7vL2xR9a:{digest:"…"}）。
 
 fail-visible：解析异常/缺源进 degradedSources，不伪造空数据。
@@ -125,8 +125,14 @@ def fetch_field(date: str, *, session_cookie: str, token: str, timestamp: str) -
     except json.JSONDecodeError as exc:
         return {"ok": False, "date": date, "error": f"json: {exc}"}
     err = payload.get("errCode")
+    if err == "9":
+        # 每日查阅配额（errCode 9）与登录态无关：authFailed=False 不得触发自愈重登（评审 I-1）
+        return {"ok": False, "date": date, "quota": True, "authFailed": False,
+                "error": f"errCode=9 查阅配额耗尽({payload.get('msg')})"}
     if err not in (0, "0"):
-        return {"ok": False, "date": date, "error": f"errCode={err} msg={payload.get('msg')}"}
+        # 结构化 authFailed（err=110）替代 '110' 子串匹配（评审 M-4）
+        return {"ok": False, "date": date, "authFailed": err == "110",
+                "error": f"errCode={err} msg={payload.get('msg')}"}
     parsed = parse_field_response(payload)
     return {"ok": True, "date": date, "parsed": parsed}
 
@@ -143,6 +149,10 @@ def fetch_count(date: str, *, session_cookie: str, token: str, timestamp: str) -
         return {"ok": False, "authFailed": False, "error": f"json: {exc}"}
     if payload.get("errCode") == "110":
         return {"ok": False, "authFailed": True, "error": "token无效"}
+    if payload.get("errCode") == "9":
+        # 每日查阅配额（errCode 9）与登录态无关：authFailed=False 不得触发自愈重登（评审 I-1）
+        return {"ok": False, "authFailed": False, "quota": True,
+                "error": f"errCode=9 查阅配额耗尽({payload.get('msg')})"}
     parsed = parse_count_response(payload)
     if payload.get("errCode") not in (0, "0"):
         return {"ok": False, "authFailed": True, "error": f"登录失效({payload.get('msg')})"}

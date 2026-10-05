@@ -57,16 +57,6 @@ def main() -> int:
     parser.add_argument("--skip-existing", action="store_true", help="跳过该 kind 已落库的日期")
     args = parser.parse_args()
 
-    auth = resolve_backfill_auth(args.token, args.timestamp)
-    if not auth.get("ok"):
-        print(f"[err] {auth.get('error')}", file=sys.stderr)
-        return 2
-    session, token, timestamp = auth["session"], auth["token"], auth["timestamp"]
-    print(f"[auth] source={auth['source']}")
-    if auth["source"] == "manual-backfill" and not jiuyan_store.save_token(
-            token=token, timestamp=timestamp, source="manual-backfill"):
-        print("[backfill] 警告：Redis 不可用，token 未缓存（本批直接传参可用）")
-
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
     dates = month_trading_dates(db, args.month)
@@ -82,6 +72,17 @@ def main() -> int:
             print("FINAL: 全部已存在")
             return 0
 
+    # 认证解析放在短路判定之后：重跑已完成的月份不再触发浏览器铸造/登录（评审 M-2）
+    auth = resolve_backfill_auth(args.token, args.timestamp)
+    if not auth.get("ok"):
+        print(f"[err] {auth.get('error')}", file=sys.stderr)
+        return 2
+    session, token, timestamp = auth["session"], auth["token"], auth["timestamp"]
+    print(f"[auth] source={auth['source']}")
+    if auth["source"] == "manual-backfill" and not jiuyan_store.save_token(
+            token=token, timestamp=timestamp, source="manual-backfill"):
+        print("[backfill] 警告：Redis 不可用，token 未缓存（本批直接传参可用）")
+
     ok_n = fail_n = 0
     for i, date in enumerate(dates):
         result = fetch_field(date, session_cookie=session, token=token, timestamp=timestamp)
@@ -96,8 +97,12 @@ def main() -> int:
         else:
             fail_n += 1
             print(f"[{i + 1}/{len(dates)}] {date} FAIL: {result.get('error')}")
-            if "110" in str(result.get("error")) or "登录失效" in str(result.get("error")):
-                print("[abort] token/会话失效——请重铸 token 后用 --skip-existing 续跑", file=sys.stderr)
+            if result.get("quota"):
+                print("[abort] 每日查阅配额已用尽——次日配额刷新后 --skip-existing 续跑", file=sys.stderr)
+                break
+            if result.get("authFailed") or "登录失效" in str(result.get("error")) \
+                    or "110" in str(result.get("error")):
+                print("[abort] token/会话失效——自动链直接重跑即可（手动路径需重铸 token）", file=sys.stderr)
                 break
         if i < len(dates) - 1:
             time.sleep(args.interval)

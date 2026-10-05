@@ -157,6 +157,9 @@ def test_login_session_success_extracts_cookie(monkeypatch):
     captured = {}
 
     class FakeSession:
+        def close(self):
+            pass
+
         def post(self, url, json=None, headers=None, timeout=None):
             captured["url"] = url
             captured["body"] = json
@@ -176,6 +179,9 @@ def test_login_session_success_extracts_cookie(monkeypatch):
 
 def test_login_session_set_cookie_header_fallback(monkeypatch):
     class FakeSession:
+        def close(self):
+            pass
+
         def post(self, url, json=None, headers=None, timeout=None):
             return FakeResponse({"errCode": 0}, set_cookie="SESSION=HDRSESS; Path=/; HttpOnly")
 
@@ -186,6 +192,9 @@ def test_login_session_set_cookie_header_fallback(monkeypatch):
 
 def test_login_session_wrong_password_fail_visible(monkeypatch):
     class FakeSession:
+        def close(self):
+            pass
+
         def post(self, url, json=None, headers=None, timeout=None):
             return FakeResponse({"errCode": "1", "msg": "账号或密码错误", "data": {}})
 
@@ -198,6 +207,9 @@ def test_login_session_wrong_password_fail_visible(monkeypatch):
 
 def test_login_session_success_without_cookie_fail_visible(monkeypatch):
     class FakeSession:
+        def close(self):
+            pass
+
         def post(self, url, json=None, headers=None, timeout=None):
             return FakeResponse({"errCode": "0", "msg": "ok", "data": {}})
 
