@@ -945,11 +945,12 @@ const STAGE_COLORS: Record<string, string> = {
 }
 const CROWDING_NAMES = JEV_CROWDING_NAMES
 const WARN_LAYERS = JEV_CROWDING_WARN_LAYERS
-const CROWDING_ORDER = ['top_acceleration', 'late_seal_weakness', 'breadth_climax', 'no_crowding', 'insufficient_evidence']
+const CROWDING_ORDER = ['top_acceleration', 'late_seal_weakness', 'breadth_climax', 'crowd_clearing', 'no_crowding', 'insufficient_evidence']
 const CROWDING_COLORS: Record<string, string> = {
   top_acceleration: '#ff4757',
   late_seal_weakness: '#ff9f43',
   breadth_climax: '#f39c12',
+  crowd_clearing: '#4a90e2',
   no_crowding: '#2ed573',
   insufficient_evidence: '#7f8c8d',
 }

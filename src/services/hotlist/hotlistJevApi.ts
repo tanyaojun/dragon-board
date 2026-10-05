@@ -12,11 +12,12 @@ import type {
   HotlistSentimentOverviewResult,
 } from '@/types/hotlistJev'
 
-/** 拥挤归层英文值 → 展示中文（离散归层，fail-visible 逃生口如实标注） */
+/** 拥挤归层英文值 → 展示中文（离散归层 v2.5 起六层含「拥挤解除」；fail-visible 逃生口如实标注） */
 export const JEV_CROWDING_NAMES: Record<string, string> = {
   top_acceleration: '高位加速',
   late_seal_weakness: '封板弱化',
   breadth_climax: '广度高潮',
+  crowd_clearing: '拥挤解除',
   no_crowding: '无拥挤',
   insufficient_evidence: '信息不足',
 }
@@ -36,12 +37,13 @@ export const JEV_STAGE_NAMES: Record<string, string> = {
   retreat: '退潮',
 }
 
-/** 日级路径形态七类 → 展示中文 */
+/** 日级路径形态八类 → 展示中文（v2.5 起尾盘偷袭自低开修复分流单列） */
 export const JEV_PATTERN_NAMES: Record<string, string> = {
   steady_strong: '全天强势主导',
   steady_weak: '全天弱势主导',
   rally_fade: '冲高回落',
   low_recover: '低开修复',
+  late_rescue: '尾盘偷袭',
   wide_swing: '剧烈反复',
   narrow_range: '窄幅平淡',
   unclear: '无法归纳',
@@ -87,7 +89,7 @@ export function jevCrowdingName(
   return JEV_CROWDING_NAMES[answer.choice] ?? answer.choice
 }
 
-/** 拥挤三层（即 1−无拥挤−信息不足），拥挤度柱体的唯一数值口径 */
+/** 拥挤三层（即 1−无拥挤−信息不足−拥挤解除），拥挤度柱体的唯一数值口径（拥挤解除=出清态，不计入拥挤合计） */
 export const JEV_CROWDING_LAYERS = ['top_acceleration', 'late_seal_weakness', 'breadth_climax'] as const
 
 /**

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import statistics
 
-CROWD_SUBSTANTIVE = ["top_acceleration", "late_seal_weakness", "breadth_climax", "no_crowding"]
+CROWD_SUBSTANTIVE = ["top_acceleration", "late_seal_weakness", "breadth_climax", "crowd_clearing", "no_crowding"]  # v2.5 增拥挤解除；旧代文档无此键计 0，分布读数不变
 CROWD_ALL = CROWD_SUBSTANTIVE + ["insufficient_evidence"]
 
 

@@ -3,7 +3,10 @@ import {
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
   jevChoiceConfidence,
+  jevCrowdingName,
   jevCrowdingProbability,
+  JEV_CROWDING_NAMES,
+  JEV_PATTERN_NAMES,
   JEV_PATTERN_ORDER,
   JEV_STAGE_ORDER,
 } from '../hotlistJevApi'
@@ -26,17 +29,43 @@ const slotDoc = (overrides: Partial<HotlistJevDoc>): HotlistJevDoc => ({
 afterEach(() => vi.unstubAllGlobals())
 
 describe('jev 规范展示顺序', () => {
-  it('五档冷→热、七类路径顺序锁定（概率条顺序唯一来源）', () => {
+  it('五档冷→热、八类路径顺序锁定（概率条顺序唯一来源）', () => {
     expect(JEV_STAGE_ORDER).toEqual(['ice', 'start', 'ferment', 'climax', 'retreat'])
     expect(JEV_PATTERN_ORDER).toEqual([
       'steady_strong',
       'steady_weak',
       'rally_fade',
       'low_recover',
+      'late_rescue',
       'wide_swing',
       'narrow_range',
       'unclear',
     ])
+  })
+
+  it('v2.5 新档中文映射：拥挤解除（六层）+ 尾盘偷袭（八类）', () => {
+    expect(JEV_CROWDING_NAMES.crowd_clearing).toBe('拥挤解除')
+    expect(JEV_PATTERN_NAMES.late_rescue).toBe('尾盘偷袭')
+    // 新档答案照常读中文（缺失映射才回退英文键）
+    const doc = slotDoc({
+      answers: {
+        crowding: { type: 'choice', choice: 'crowd_clearing', probabilities: { crowd_clearing: 0.7 } },
+      },
+    })
+    expect(jevCrowdingName(doc, 'crowding')).toBe('拥挤解除')
+  })
+
+  it('拥挤解除是出清态：不计入拥挤三层概率合计', () => {
+    const doc = slotDoc({
+      answers: {
+        crowding: {
+          type: 'choice',
+          choice: 'crowd_clearing',
+          probabilities: { top_acceleration: 0.1, crowd_clearing: 0.7, no_crowding: 0.2 },
+        },
+      },
+    })
+    expect(jevCrowdingProbability(doc, 'crowding')).toBeCloseTo(0.1, 5)
   })
 })
 

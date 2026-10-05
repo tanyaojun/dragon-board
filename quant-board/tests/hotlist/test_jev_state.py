@@ -298,11 +298,22 @@ def test_day_narrative_contains_anchor():
 
 
 def test_v2_question_sets_structure():
-    # crowding 已离散归层（五选一含逃生口）
+    # crowding 已离散归层（v2.5 起六选一：拥挤解除单列，不再与 no_crowding 混装；含逃生口）
     assert JEV_SLOT_QUESTIONS["crowding"]["type"] == "choice"
     assert set(JEV_SLOT_QUESTIONS["crowding"]["criteria"]) == {
-        "top_acceleration", "late_seal_weakness", "breadth_climax", "no_crowding", "insufficient_evidence"}
-    assert JEV_DAY_QUESTIONS["day_crowding"]["type"] == "choice"
+        "top_acceleration", "late_seal_weakness", "breadth_climax", "crowd_clearing",
+        "no_crowding", "insufficient_evidence"}
+    assert set(JEV_DAY_QUESTIONS["day_crowding"]["criteria"]) == \
+        set(JEV_SLOT_QUESTIONS["crowding"]["criteria"])
+    # 拥挤解除判据须锚叙事已给证据（当日早些帧/参照高位），no_crowding 判据带分流指针
+    assert "参照高位" in JEV_SLOT_QUESTIONS["crowding"]["criteria"]["crowd_clearing"]
+    assert "crowd_clearing" in JEV_SLOT_QUESTIONS["crowding"]["criteria"]["no_crowding"]
+    # day_pattern v2.5 起八类：尾盘偷袭单列，low_recover 收窄为盘中修复
+    assert set(JEV_DAY_QUESTIONS["day_pattern"]["criteria"]) == {
+        "steady_strong", "steady_weak", "rally_fade", "low_recover", "late_rescue",
+        "wide_swing", "narrow_range", "unclear"}
+    assert "尾盘偷袭" in JEV_DAY_QUESTIONS["day_pattern"]["criteria"]["low_recover"]
+    assert "最后一至两帧" in JEV_DAY_QUESTIONS["day_pattern"]["criteria"]["late_rescue"]
     # 温度仍 score 且题干锚定参照系
     assert JEV_SLOT_QUESTIONS["temperature"]["type"] == "score"
     assert "近20日参照" in JEV_SLOT_QUESTIONS["temperature"]["instructions"]

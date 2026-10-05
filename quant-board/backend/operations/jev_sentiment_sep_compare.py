@@ -15,7 +15,7 @@ from __future__ import annotations
 import statistics
 from collections import Counter
 
-CROWD_SUBSTANTIVE = ["top_acceleration", "late_seal_weakness", "breadth_climax", "no_crowding"]
+CROWD_SUBSTANTIVE = ["top_acceleration", "late_seal_weakness", "breadth_climax", "crowd_clearing", "no_crowding"]  # v2.5 增拥挤解除；旧代文档无此键计 0，分布读数不变
 STAGE_MAP = {"冰点": "ice", "启动": "start", "发酵": "ferment", "高潮": "climax", "退潮": "retreat"}
 
 
