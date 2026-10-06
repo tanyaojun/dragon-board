@@ -43,3 +43,14 @@
 ## 三、整合复跑（本档案结论指向）
 
 修订 3 复跑（扩窗+修复+重定标）结果见报告 v2：**EOD 保持现任被加强（Y4 +0.32→+0.36），「C9b 缩量→高开砸 +0.40」被扩窗推翻（全窗 +0.08，Q2 −0.04/Q3 +0.20，窗口伪象）**，H1 修正口径后仍样本不足（1/105 触发）。用户保留意见的三个疑点两个坐实（窗口伪象、H1 阈值失义），一个（池缺口可补性）确认为不可补并给出边界。
+
+## 四、7 月前行字段缺口回填处置（2026-10-06 用户令「可回填的都回填」）
+
+**盘点**（half_hour 行，≤06-30，116,549 行）：`open/preClose/high/low/limitUpPrice/amount/moneyFlow` 全 0%，`pctChange` ~31%，`turnover/price/volume` ~97-98%。
+
+**消费方风险扫描后分两类**：
+- **已回填（本轮执行，snapshot_row_daily_prices_v1）**：`open`←TDX 日线开盘（无任何计算链消费方）；`preClose`←行内派生（price+change，与投影层生产规则逐字一致，覆盖 ~97%）+ TDX 前收回退（19 行）。写 113,206 行，来源标记 backfillMeta（fail-visible），不建备份集合（只填 NULL 可平凡复原），migration_audit 留痕。交叉核对：派生 vs TDX 前收 93.7% 一致，6.3% 不一致呈标准除权谱（分红送转季，派生=交易所口径更优）。回填后 preClose 回算抽检 3,000 行 0 超差；7 月及以后零误触。
+- **有意不补（引擎/评分输入，回填即打漂 golden 与已落库口径，待用户单独裁决）**：`amount`（ranktrend 引擎量价因子直接输入，2 个 golden 用例覆盖 6 月窗口）、`high/low`（ATR 输入，pre-July TR 从降级变完整→回测漂）、`limitUpPrice/limitDownPrice`+`pctChange`（规则链 zhaban/breadth 评分输入，113 日 EOD 分重算会漂）、帧 `indices.totalAmount`（jev vsSamePct 基线→叙事漂）。若裁决补齐，须同批重生成 golden 与受影响研究基线。
+- **不可补**：`moneyFlow`/盘口（bid1/depth10）/firstZtTime 早段（无历史证据源）。
+
+工具：`backend/operations/backfill_row_daily_prices.py`（dry-run→apply 幂等，TDX 断点缓存 data/backups/row-price-backfill/，156 个北交所/无 K 线代码失败清单已落盘）。
