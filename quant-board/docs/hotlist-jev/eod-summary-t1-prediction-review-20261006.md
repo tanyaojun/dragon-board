@@ -50,7 +50,16 @@
 
 **消费方风险扫描后分两类**：
 - **已回填（本轮执行，snapshot_row_daily_prices_v1）**：`open`←TDX 日线开盘（无任何计算链消费方）；`preClose`←行内派生（price+change，与投影层生产规则逐字一致，覆盖 ~97%）+ TDX 前收回退（19 行）。写 113,206 行，来源标记 backfillMeta（fail-visible），不建备份集合（只填 NULL 可平凡复原），migration_audit 留痕。交叉核对：派生 vs TDX 前收 93.7% 一致，6.3% 不一致呈标准除权谱（分红送转季，派生=交易所口径更优）。回填后 preClose 回算抽检 3,000 行 0 超差；7 月及以后零误触。
-- **有意不补（引擎/评分输入，回填即打漂 golden 与已落库口径，待用户单独裁决）**：`amount`（ranktrend 引擎量价因子直接输入，2 个 golden 用例覆盖 6 月窗口）、`high/low`（ATR 输入，pre-July TR 从降级变完整→回测漂）、`limitUpPrice/limitDownPrice`+`pctChange`（规则链 zhaban/breadth 评分输入，113 日 EOD 分重算会漂）、帧 `indices.totalAmount`（jev vsSamePct 基线→叙事漂）。若裁决补齐，须同批重生成 golden 与受影响研究基线。
+- **~~有意不补~~ → 已补齐并同批重生成（2026-10-06 用户裁决「补，情绪分/时间线重算，深谷/高位点重算」，见 §五）**：~~amount/high/low/limitUpPrice/pctChange~~；唯 `indices.totalAmount`（帧级）仍不补——回填它会给 4-6 月激活 amountVsSame 第八维而 7-9 月帧依旧缺失，评分维度跨月分裂；除非 7-9 月同批回填并重校准全部阈值（C6/C9/C10 均按现口径锚定），否则维持不补。
 - **不可补**：`moneyFlow`/盘口（bid1/depth10）/firstZtTime 早段（无历史证据源）。
 
 工具：`backend/operations/backfill_row_daily_prices.py`（dry-run→apply 幂等，TDX 断点缓存 data/backups/row-price-backfill/，156 个北交所/无 K 线代码失败清单已落盘）。
+
+## 五、计算输入补齐+研究基线同批重生成（2026-10-06 用户裁决执行记录）
+
+1. **回填 v2**（`backfill_row_daily_prices.py`，version=snapshot_row_daily_prices_v2）：`high/low`←TDX as-traded 日线 112,944 行、`amount`←turnover（12 万行逐行全等实证）113,018 行、`pctChange`←price+preClose 派生 426 行（**勘误：pctChange 实际仅缺 3.2%（3,769 行），§四「~31%」系盘点把 0.0 平盘行误计为缺失+一次探针查错 snapshotType 帧，两处口径已修正**）。六字段终态覆盖 96.9-97.1%（天花板=price 覆盖）。审计两条补登（apply 进程 stdout 截断+工具撞 (opType,idempotencyKey) 唯一索引，写库完整性由覆盖率核对确认）。
+2. **级联派生**：既有 `snapshot_field_backfill`（backup=False 遵红线）→ `limitUp/DownPrice` 97.1%、`amplitude` 96.9%、`lastTradePrice` 99.6%、`zljzb` 100%。
+3. **情绪分/时间线重算**：4-6 月 51 个 EOD 文档全部重算（`_compute_and_persist` 生产路径）+500 个槽位文档重建。旧值归档 `data/backups/sentiment-prejuly-recompute/`（NDJSON，mongoexport 不在 PATH，python NDJSON 等价归档）。**变化幅度：分数均值 +4.8（-2.4~+9.5），无 ≥15 分跳变，档位翻转 3 天**（05-21/06-05 退潮→启动、06-17 发酵→启动）。7-9 月分数未触碰（口径连续）。
+4. **深谷/高位点重验**：c9/c10 各 6 个月台账全部重建。**新发现 4-6 月深谷两处**：05-14 EOD=29.1（3 日反弹 +26.3 ✓）、06-23 EOD=26.0（+51.4 ✓）——重算前 4-6 月从未低于 30；高峰台账 04-09 全部重建（04/07 无高峰为真实判定）。**研究注记：深谷状态信号（EOD<25/30 阈值族）的 4-6 月历史账本已按新分数重建，既有 runbook 中引用 4-6 月具体分数/谷位的段落为重算前快照**。
+5. **golden 重生成**：主用例 `rank_trend_default` 已按回填后全量数据重录（create_baseline，source=python_current_output，100/100），validate **passed（0 issues）**。`rank_trend_default_tmp_no_macd_gate` 为 ts_golden_import 来源的临时用例，**未重生成、当前 validate 失败（预期内）**——处置（删除/重导出）留用户。旧用例已归档 `data/backups/golden-cases-archive-20261006/`。
+6. **测试**：hotlist 专项 292 绿（本轮数据/工具变更不触测试路径，测试走 dragon_board_test 隔离库）。

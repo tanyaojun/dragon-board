@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
-"""7 月前快照行 open/preClose 历史回填（TDX 日线 + 行内派生，2026-10-06 用户令）。
+"""7 月前快照行 open/preClose/high/low/amount/pctChange 历史回填（TDX 日线+行内派生）。
 
-范围：snapshot_stock_rows type=half_hour、tradingDate ≤ end-date，仅填缺失值（不覆盖非空）。
+v1（2026-10-06，799bee9b）：open/preClose。
+v2（2026-10-06 用户裁决「补计算输入」）：增加 high/low（TDX as-traded，引擎 ATR 回退链输入）、
+amount←turnover（双字段 12 万行逐行全等实证）、pctChange←price+preClose 派生（全精度）。
+写库后由 snapshot_field_backfill 级联派生 limitUp/DownPrice+amplitude（既有工具）。
 
-字段与来源（优先级）：
-- preClose：① 行内派生（price+change→pctChange，round(price/(1+chg/100),4)——与
-  snapshot_derivation/projection._derive_pre_close_from_price_change 生产规则逐字一致）；
-  ② TDX 日线前收（上一根日线 close，不复权口径，除权日与交易所昨收有差，回退来源标记可辨）。
-- open：TDX 日线当日 open（集合竞价开盘价，精确）。
-
-红线遵守：open/preClose 无任何计算链消费方（ranktrend 引擎/回测/golden 不读），
-回填不触 golden；amount/high/low/limitUpPrice/pctChange 等引擎/评分输入字段**有意不补**
-（会打漂 golden 与已落库评分口径，待用户单独裁决）。备份不建集合（红线：备份只走
-mongodump 归档；本工具只填 NULL，原值=null 可平凡复原），写 migration_audit 审计。
+红线遵守：写库前已完成消费方扫描并经用户裁决（amount=引擎量价因子、high/low=ATR 回退链、
+pctChange=breadth 评分输入——golden 与 113 日情绪分同批重生成，见同日提交）。只填缺失值
+（分字段 null 守卫，幂等），backfillMeta 来源标记 fail-visible，不建备份集合（只填 NULL 可平凡
+复原），migration_audit 留痕。
 
 用法（Git Bash）：
   cd quant-board
@@ -30,7 +27,7 @@ from uuid import uuid4
 
 from pymongo import UpdateOne
 
-BACKFILL_VERSION = "snapshot_row_daily_prices_v1"
+BACKFILL_VERSION = "snapshot_row_daily_prices_v2"
 HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
 CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "backups" / "row-price-backfill"
 SOURCE_DERIVE = "row_derive_change_v1"
@@ -38,7 +35,7 @@ SOURCE_TDX = "tdx_daily_v1"
 SLEEP = 0.22
 
 
-def _finite(value) -> float | None:
+def _finite(value):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
@@ -76,15 +73,21 @@ def get_client():
 
 
 def fetch_daily_map(client, codes: list[str], end_date: str) -> dict[str, dict]:
-    """{code: {"by_date": {date: {"open","close"}}, "prev_close": {date: 昨收}}}，带断点缓存。"""
+    """{code: {"by_date": {date: {"open","close","high","low"}}, "prev_close": {date: 昨收}}}，带断点缓存。
+
+    缓存键 _daily_ckpt_<end>_v2（含 high/low；v1 缓存无此两列）。
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    ckpt_path = CACHE_DIR / f"_daily_ckpt_{end_date}.json"
+    ckpt_path = CACHE_DIR / f"_daily_ckpt_{end_date}_v2.json"
     ckpt: dict[str, dict] = {}
     if ckpt_path.exists():
         ckpt = json.loads(ckpt_path.read_text(encoding="utf-8"))
         print(f"[cache] 断点续跑：已有 {len(ckpt)}/{len(codes)} 代码")
+    failed_path = CACHE_DIR / f"_daily_failed_{end_date}_v2.json"
     failed: dict[str, str] = {}
-    todo = [c for c in codes if c not in ckpt]
+    if failed_path.exists():
+        failed = json.loads(failed_path.read_text(encoding="utf-8"))
+    todo = [c for c in codes if c not in ckpt and c not in failed]
     err_streak = 0
     t0 = time.time()
     for i, code in enumerate(todo, 1):
@@ -106,26 +109,25 @@ def fetch_daily_map(client, codes: list[str], end_date: str) -> dict[str, dict]:
         rows = []
         for _, r in df.iterrows():
             date = f"{int(r['year']):04d}-{int(r['month']):02d}-{int(r['day']):02d}"
-            rows.append((date, _finite(r.get("open")), _finite(r.get("close"))))
+            rows.append((date, _finite(r.get("open")), _finite(r.get("close")),
+                         _finite(r.get("high")), _finite(r.get("low"))))
         rows = [x for x in rows if x[1] and x[2]]
         rows.sort()
-        by_date = {d: {"open": o, "close": c} for d, o, c in rows}
+        by_date = {d: {"open": o, "close": c, "high": h, "low": l} for d, o, c, h, l in rows}
         prev_close = {rows[k][0]: rows[k - 1][2] for k in range(1, len(rows))}
         ckpt[code] = {"by_date": by_date, "prev_close": prev_close}
         if i % 100 == 0:
             ckpt_path.write_text(json.dumps(ckpt, ensure_ascii=False), encoding="utf-8")
-            el = time.time() - t0
-            print(f"[prog] {i}/{len(todo)} elapsed={el:.0f}s failed={len(failed)}")
+            print(f"[prog] {i}/{len(todo)} elapsed={time.time() - t0:.0f}s failed={len(failed)}", flush=True)
     ckpt_path.write_text(json.dumps(ckpt, ensure_ascii=False), encoding="utf-8")
+    failed_path.write_text(json.dumps(failed, ensure_ascii=False, indent=1), encoding="utf-8")
     if failed:
-        (CACHE_DIR / f"_daily_failed_{end_date}.json").write_text(
-            json.dumps(failed, ensure_ascii=False, indent=1), encoding="utf-8")
-        print(f"[披露] TDX 拉取失败 {len(failed)} 代码（清单已落缓存目录，对应行保持缺失 fail-visible）")
+        print(f"[披露] TDX 拉取失败 {len(failed)} 代码（清单 {failed_path}，对应行保持缺失 fail-visible）")
     return ckpt
 
 
 def main():
-    parser = argparse.ArgumentParser(description="7 月前快照行 open/preClose 回填")
+    parser = argparse.ArgumentParser(description="7 月前快照行 open/preClose/high/low/amount/pctChange 回填")
     parser.add_argument("--apply", action="store_true", help="实际写库（默认 dry-run）")
     parser.add_argument("--end-date", default="2026-06-30")
     parser.add_argument("--start-date", default="2026-01-01")
@@ -137,8 +139,9 @@ def main():
     coll = db["snapshot_stock_rows"]
     scope = {"datasetId": "dragonboard_live", "type": "half_hour",
              "tradingDate": {"$gte": args.start_date, "$lte": args.end_date}}
-    rows = list(coll.find(scope, {"code": 1, "name": 1, "tradingDate": 1, "price": 1,
-                                  "change": 1, "pctChange": 1, "open": 1, "preClose": 1}))
+    rows = list(coll.find(scope, {"code": 1, "tradingDate": 1, "price": 1, "change": 1, "pctChange": 1,
+                                  "open": 1, "preClose": 1, "high": 1, "low": 1,
+                                  "amount": 1, "turnover": 1}))
     print(f"范围行数：{len(rows)}（{args.start_date} → {args.end_date}，type=half_hour）")
 
     codes = sorted({str(r.get("code")) for r in rows if r.get("code")})
@@ -147,7 +150,8 @@ def main():
     daily = fetch_daily_map(client, codes, args.end_date)
 
     plan: list[dict] = []
-    stats = {"open_tdx": 0, "pre_derive": 0, "pre_tdx": 0, "skip_no_tdx": 0}
+    stats = {"open_tdx": 0, "pre_derive": 0, "pre_tdx": 0, "highlow_tdx": 0,
+             "amount_turnover": 0, "pct_derive": 0}
     mism = [0, 0]  # [一致, 不一致]（行内派生 vs TDX 前收 交叉核对）
     for r in rows:
         code = str(r.get("code") or "")
@@ -162,30 +166,46 @@ def main():
             if o:
                 fills["open"] = o
                 sources["open"] = SOURCE_TDX
-            else:
-                stats["skip_no_tdx"] += 1
         if _finite(r.get("preClose")) is None:
             pre, src = derive_pre_close(r)
             tdx_pre = prev_close_map.get(date)
             if pre is not None and tdx_pre:
-                ok = abs(pre - tdx_pre) / tdx_pre < 0.005
-                mism[0 if ok else 1] += 1
+                mism[0 if abs(pre - tdx_pre) / tdx_pre < 0.005 else 1] += 1
             if pre is None and tdx_pre:
                 pre, src = tdx_pre, SOURCE_TDX
             if pre:
                 fills["preClose"] = pre
                 sources["preClose"] = src or ""
                 stats["pre_derive" if src == SOURCE_DERIVE else "pre_tdx"] += 1
+        if _finite(r.get("high")) is None or _finite(r.get("low")) is None:
+            bar = by_date.get(date) or {}
+            h, l = bar.get("high"), bar.get("low")
+            if h and l and h >= l:
+                fills["high"], fills["low"] = h, l
+                sources["high"] = sources["low"] = SOURCE_TDX
+                stats["highlow_tdx"] += 1
+        if _finite(r.get("amount")) is None:
+            tov = _finite(r.get("turnover"))
+            if tov and tov > 0:
+                fills["amount"] = tov
+                sources["amount"] = "row_turnover_equal_v1"
+                stats["amount_turnover"] += 1
+        if _finite(r.get("pctChange")) is None:
+            price = _finite(r.get("price"))
+            pre = _finite(r.get("preClose")) or fills.get("preClose")
+            if price and price > 0 and pre and pre > 0:
+                fills["pctChange"] = round((price / pre - 1) * 100, 6)
+                sources["pctChange"] = "row_derive_pre_close_v1"
+                stats["pct_derive"] += 1
         if not fills:
             continue
-        if fills:
-            plan.append({"_id": r["_id"], "fills": fills, "sources": sources})
-    stats["open_tdx"] = sum(1 for p in plan if "open" in p["fills"])
-    total_mism = sum(mism)
+        plan.append({"_id": r["_id"], "fills": fills, "sources": sources})
+
     print(f"交叉核对（行内派生 vs TDX 前收，±0.5% 内视为一致）：一致 {mism[0]} / 不一致 {mism[1]}"
-          f"（不一致=除权日或取整差，行内派生优先，符合交易所口径）")
+          f"（不一致=除权日，行内派生=交易所口径优先）")
     print(f"回填计划：{len(plan)} 行 ｜ open←TDX {stats['open_tdx']} ｜ "
-          f"preClose←行内派生 {stats['pre_derive']} / ←TDX {stats['pre_tdx']} ｜ 无 TDX 证据跳过 {stats['skip_no_tdx']}")
+          f"preClose←派生 {stats['pre_derive']}/←TDX {stats['pre_tdx']} ｜ high/low←TDX {stats['highlow_tdx']} ｜ "
+          f"amount←turnover {stats['amount_turnover']} ｜ pctChange←派生 {stats['pct_derive']}")
 
     if not args.apply:
         print("dry-run 未写库；确认后加 --apply 执行")
@@ -194,7 +214,8 @@ def main():
     updated = 0
     for start in range(0, len(plan), 1000):
         batch = plan[start:start + 1000]
-        ops = [UpdateOne({"_id": p["_id"], "open": None, "preClose": None},
+        ops = [UpdateOne({"_id": p["_id"],
+                          "$and": [{f: None} for f in p["fills"]]},
                          {"$set": {**p["fills"],
                                    "backfillMeta": {"version": BACKFILL_VERSION, "repairedAt": now,
                                                     "fields": sorted(p["fills"]),
@@ -207,7 +228,8 @@ def main():
         "auditId": audit_id, "opType": "snapshot_row_daily_prices_backfill",
         "datasetId": "dragonboard_live", "version": BACKFILL_VERSION, "createdAt": now,
         "startDate": args.start_date, "endDate": args.end_date,
-        "plannedRows": len(plan), "updatedRows": updated, "stats": stats, "crossCheck": {"match": mism[0], "mismatch": mism[1]},
+        "plannedRows": len(plan), "updatedRows": updated, "stats": stats,
+        "crossCheck": {"match": mism[0], "mismatch": mism[1]},
     })
     print(f"已写库 {updated} 行（backfillMeta.version={BACKFILL_VERSION}）；审计 {audit_id}")
 
