@@ -70,5 +70,5 @@
 ## 五、登记与同步
 
 - 本研究不触碰既有前端展示与既有文档结论（确认 EOD 口径），硬红线 §1.2.5 不触发。
-- 遗留登记：①jev 9 月 totalAmount 回填被重算冲掉（回填机制脆弱性，宜加 after-save 保护，另案）②hotlist_jev_sentiment 市场级 amount 仅 07-01 起（4-6 月依赖 TDX 缓存）。
+- 遗留登记：①~~jev 9 月 totalAmount 回填被重算冲掉~~ **已根治（2026-10-06）**：market_daily_amount 参考集合 + collect_slot_evidence 15:00 回退，重算重建自动带 amount（source 标记可辨），被冲掉的 20 文档已恢复 ②hotlist_jev_sentiment 市场级 amount 仅 07-01 起（4-6 月依赖 TDX 缓存）。
 - 留用户裁决：①「EOD 分+市况门→次日热池开盘结构提示」与 C10 条款合并呈现 ②「缩量→高开砸」若要继续，须按市况（Q3 型）分窗预登记积累样本 ③H1 已两轮样本不足，建议封存或改形态定义后再立项。

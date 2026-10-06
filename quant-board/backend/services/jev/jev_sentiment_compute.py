@@ -75,9 +75,22 @@ def _slots_of_date(db: Any, dataset_id: str, snapshot_type: str, trading_date: s
     return sorted(slots)
 
 
+def load_market_daily_amount_map(db: Any) -> dict[str, float]:
+    """market_daily_amount 参考集合 → {tradingDate: 两市合计额}（TDX 综指口径，backfill 工具维护）。
+
+    15:00 槽 evidenceRaw.totalAmount 的重算保护源（2026-10-06 根治：此前回填值被
+    replace_one 全量重建冲掉，v2.5 九月重跑实测冲掉 20 文档）。集合缺失/为空 → 空映射，
+    计算链行为回退为历史原样（amount=None，fail-visible 不伪造）。
+    """
+    rows = db["market_daily_amount"].find({}, {"_id": 1, "totalAmount": 1})
+    return {str(row["_id"]): float(row["totalAmount"]) for row in rows
+            if isinstance(row.get("totalAmount"), (int, float)) and not isinstance(row["totalAmount"], bool)}
+
+
 def _collect_evidence(db: Any, dataset_id: str, snapshot_type: str, trading_date: str,
                       slot_time: str, yesterday_rows: list,
-                      yesterday_amounts: dict[str, float] | None = None) -> dict | None:
+                      yesterday_amounts: dict[str, float] | None = None,
+                      daily_total_amount_fallback: float | None = None) -> dict | None:
     frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
     if frame is None:
         return None
@@ -88,7 +101,8 @@ def _collect_evidence(db: Any, dataset_id: str, snapshot_type: str, trading_date
     return collect_slot_evidence(
         frame=frame, rows=rows, yesterday_rows=yesterday_rows,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, snapshot_id), slot_time=slot_time,
-        yesterday_same_slot_total_amount=(yesterday_amounts or {}).get(slot_time))
+        yesterday_same_slot_total_amount=(yesterday_amounts or {}).get(slot_time),
+        daily_total_amount_fallback=daily_total_amount_fallback)
 
 
 def _latest_yesterday_rows(db: Any, dataset_id: str, snapshot_type: str, trading_date: str) -> list:
@@ -204,10 +218,12 @@ def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
 
     yesterday_rows = _latest_yesterday_rows(db, dataset_id, snapshot_type, trading_date)
     yesterday_amounts = _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date)
+    market_amounts = load_market_daily_amount_map(db)
     evidences = []
     for slot in slots:
         evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot,
-                                     yesterday_rows, yesterday_amounts)
+                                     yesterday_rows, yesterday_amounts,
+                                     daily_total_amount_fallback=market_amounts.get(trading_date))
         if evidence is not None:
             evidences.append(evidence)
     if not evidences:
@@ -281,20 +297,23 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
 
     yesterday_rows = _latest_yesterday_rows(db, dataset_id, snapshot_type, trading_date)
     yesterday_amounts = _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date)
+    market_amounts = load_market_daily_amount_map(db)
     present_slots = _slots_of_date(db, dataset_id, snapshot_type, trading_date)
     prior_slots = [slot for slot in present_slots if slot < slot_time]
     missing_slots = [slot for slot in _half_hour_slots() if slot < slot_time and slot not in prior_slots]
     priors = []
     for slot in prior_slots:
         evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot,
-                                     yesterday_rows, yesterday_amounts)
+                                     yesterday_rows, yesterday_amounts,
+                                     daily_total_amount_fallback=market_amounts.get(trading_date))
         if evidence is not None:
             priors.append(evidence)
     current_evidence = collect_slot_evidence(
         frame=frame, rows=rows, yesterday_rows=yesterday_rows,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, str(frame.get("snapshotId") or "")),
         slot_time=slot_time,
-        yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time))
+        yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time),
+        daily_total_amount_fallback=market_amounts.get(trading_date))
     anchor = build_history_anchor(build_history_stats_calendar(db, dataset_id, trading_date))
     narrative = build_slot_jev_state(
         trading_date=trading_date, slot_time=slot_time,

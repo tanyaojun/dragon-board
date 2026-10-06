@@ -31,7 +31,7 @@
 ### 盘点
 - **槽位缺口**：59/1130 槽无文档（有文档无分 0 例），10 个缺口日；其中 49 槽**原料帧也不在**——池级情绪分 mootdx 无法补（情绪引擎链路产物，非数据回填范畴）；04-15 的 9 槽与 07-06 15:00 帧行在（10 帧已由 sid 兜底找回用于价格靶）。
 - **字段矩阵（15:00 帧 ≥80% 行覆盖）**：price 110/113 全窗；amount 仅 07-13→09-30（56 日）；**turnover 110/113 全窗且与 amount 逐行全等**（复跑实测 120676/120676）——等价前推成立；pctChange 真缺口仅 07-01/02/03。
-- **现成市场级源**：hotlist_jev_sentiment totalAmount 仅 07-01 起且 9 月已被重算冲掉（回填漂移，登记未修）；marketStats.totalAmo 4-6 月全旬有值但 23/71 日低估 3-36%（只配粗参照）。
+- **现成市场级源**：hotlist_jev_sentiment totalAmount 仅 07-01 起且 9 月曾被重算冲掉（**2026-10-06 已根治**：market_daily_amount 参考集合=单一事实源 + collect_slot_evidence 15:00 槽回退，replace_one 重算不再丢锚量能坐标，9 月 20 文档已恢复 59/59 有效）；marketStats.totalAmo 4-6 月全旬有值但 23/71 日低估 3-36%（只配粗参照）。
 - **帧级 indices.totalAmount**：仅 09-30 接线日，其余全缺。
 
 ### 补齐产物（`quant-board/data/backups/eod-t1-backfill/`，gitignored）

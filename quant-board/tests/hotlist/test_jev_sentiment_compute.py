@@ -257,3 +257,46 @@ def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):
     doc = db["hotlist_jev_sentiment"].rows[0]
     assert doc["status"] == "no_data" and "missing" in (doc.get("errorDetail") or "")
     assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # no_data 路径盖版本戳
+
+
+def test_compute_slot_1500_amount_fallback_survives_recompute(monkeypatch):
+    """重算冲掉根治（2026-10-06）：历史帧无 indices.totalAmount（09-30 前接线），15:00 槽重算
+    经 market_daily_amount 参考集合回填 amount——replace_one 全量重建不再丢锚量能坐标
+    （10-05 v2.5 九月重跑冲掉 10-02 回填 20 文档的教训）。"""
+    monkeypatch.setattr(v2_module, "_jev_config", lambda: (True, "tok", "acc"))
+    db = FakeMongoDb({
+        "snapshot_frames": [slot_frame("2026-09-15", "15:00")],
+        "snapshot_stock_rows": [{"datasetId": "dragonboard_live",
+                                 "snapshotId": "half_hour:2026-09-15:15:00",
+                                 "code": "000001", "name": "甲", "rank": 1, "heat": 90,
+                                 "pctChange": 9.9, "change": 9.9, "price": 9.66,
+                                 "limitUpPrice": 9.66, "zlje": 3.0e6}],
+        "hotlist_jev_sentiment": [],
+        "market_daily_amount": [{"_id": "2026-09-15", "totalAmount": 1.9e12,
+                                 "source": "tdx_index_kline_backfill"}],
+    })
+
+    def fake_call(account, token, state, questions):
+        answers = {
+            "frame_stage": {"type": "choice", "choice": "ferment",
+                            "probabilities": {"ferment": 0.6}},
+            "sequence_stage": {"type": "choice", "choice": "ferment",
+                               "probabilities": {"ferment": 0.55}},
+            "temperature": {"type": "score", "score": 5, "legend": {"0": 1, "11": 1}},
+            "crowding": {"type": "choice", "choice": "no_crowding",
+                         "probabilities": {"no_crowding": 0.5}},
+        }
+        return {"result": {"state": "Completed",
+                           "result": {"model": "jev-1.13.0", "answers": answers,
+                                      "usage": {"input_tokens": 800, "output_tokens": 80}}}}, 100
+
+    monkeypatch.setattr(v2_module, "call_jev", fake_call)
+    result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live",
+                                         trading_date="2026-09-15", slot_time="15:00")
+    assert result["written"] is True and result["status"] == "ok"
+    doc = next(r for r in db["hotlist_jev_sentiment"].rows
+               if r.get("kind") == "slot" and r.get("slotTime") == "15:00")
+    ta = (doc["evidenceRaw"] or {}).get("totalAmount") or {}
+    assert ta["amount"] == 1.9e12, "重算后锚量能坐标必须存活（回退 market_daily_amount）"
+    assert ta["source"] == "market_daily_amount_reference"
+    assert ta["vsSamePct"] is None  # 与 10-02 回填裁决同口径：派生字段历史保持 None

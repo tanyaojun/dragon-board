@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
-"""两市成交额历史回填（TDX 综指 K 线，2026-10-02 用户裁决）。
+"""两市成交额历史回填（TDX 综指 K 线，2026-10-02 用户裁决；2026-10-06 根治重算冲掉问题）。
 
-背景：5-9 月历史帧 indices 无 totalAmount（09-30 才接线），v1 槽文档 evidenceRaw.totalAmount.amount
+背景：5-9 月历史帧 indices 无 totalAmount（09-30 才接线），15:00 槽文档 evidenceRaw.totalAmount.amount
 全 None → 锚的量能坐标（amountYi）死线。数据源=TDX 指数 K 线（上证综指 999999 + 深证综指 399106，
 amount=全市场股票成交额元；9/30 沪 6794 亿 vs 上交所官方 6800.23 亿差 0.09%，口径对齐生产
 sina realtime 指数口径）。服务器=python-bridge/tdx_hosts.json 81 节点池逐个探测。
 
-写库目标=v1 15:00 槽文档 evidenceRaw.totalAmount.amount（+provenance），不动 vsSamePct/yesterdaySame
-（派生字段保持 None，fail-visible），不动 snapshot_frames。幂等：amount 已有效即跳过。
+写库两层（2026-10-06 起）：
+1. 参考集合 market_daily_amount（单一事实源，{_id: date, totalAmount, source, fetchedAt}）——
+   计算链 load_market_daily_amount_map 消费，jev 重算经 collect_slot_evidence 的 15:00 回退
+   自动带上 amount，**任何 replace_one 重建不再冲掉**（10-05 v2.5 九月重跑冲掉 20 文档的教训）。
+2. 业务文档修复：hotlist_jev_sentiment 15:00 槽文档 evidenceRaw.totalAmount.amount（+provenance），
+   不动 vsSamePct/yesterdaySame（派生字段保持 None，fail-visible），不动 snapshot_frames。
+   幂等：amount 已有效即跳过。
 
 用法（Git Bash）：
   cd quant-board
@@ -97,6 +102,15 @@ def main():
             print(f"  [回填] {a['date']}: 两市 {round(a['amount'] / 1e8, 1)} 亿")
     if args.apply:
         now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        # 第一层：参考集合 market_daily_amount（单一事实源，计算链 15:00 回退消费）
+        ref = db["market_daily_amount"]
+        for date, amount in sorted(amounts.items()):
+            ref.update_one(
+                {"_id": date},
+                {"$set": {"totalAmount": float(amount), "source": SOURCE, "fetchedAt": now}},
+                upsert=True)
+        print(f"[market_daily_amount] 参考集合已同步 {len(amounts)} 日（{min(amounts)} → {max(amounts)}）")
+        # 第二层：业务文档修复（幂等，只补无效值）
         for coll in target_collections:
             n = 0
             for a in plan[coll]:

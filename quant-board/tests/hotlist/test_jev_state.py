@@ -139,6 +139,46 @@ def test_collect_slot_evidence_degrades_not_fabricates():
     assert ev["lifecycleMissing"] == 1
 
 
+def _v3_frame_without_total_amount():
+    """历史帧形态：indices 无 totalAmount（该字段 09-30 才接线）。"""
+    frame = _v3_frame()
+    frame["indices"] = {k: v for k, v in frame["indices"].items() if k != "totalAmount"}
+    return frame
+
+
+def test_collect_slot_evidence_total_amount_fallback_for_1500():
+    """15:00 槽=全日累计：历史帧缺 totalAmount 时回退 market_daily_amount 参考（重算冲掉根治），
+    amount 生效 + source 标记来源 + degraded 记录回退事实（fail-visible）。"""
+    ev = collect_slot_evidence(
+        frame=_v3_frame_without_total_amount(), rows=_v3_rows(), yesterday_rows=[],
+        analysis_by_code={}, slot_time="15:00", daily_total_amount_fallback=1.9e12)
+    ta = ev["totalAmount"]
+    assert ta["amount"] == 1.9e12
+    assert ta["source"] == "market_daily_amount_reference"
+    assert ta["vsSamePct"] is None and ta["yesterdaySame"] is None
+    assert any("回退" in s for s in ev["quality"]["degradedSources"])
+
+
+def test_collect_slot_evidence_total_amount_fallback_not_for_intraday_slots():
+    """非 15:00 槽的盘中累计无法用日额近似 → 回退不生效，保持 None（不伪造）。"""
+    ev = collect_slot_evidence(
+        frame=_v3_frame_without_total_amount(), rows=_v3_rows(), yesterday_rows=[],
+        analysis_by_code={}, slot_time="10:30", daily_total_amount_fallback=1.9e12)
+    assert ev["totalAmount"]["amount"] is None
+    assert ev["totalAmount"]["source"] is None
+    assert any("两市总成交额缺失" in s for s in ev["quality"]["degradedSources"])
+
+
+def test_collect_slot_evidence_live_total_amount_wins_over_fallback():
+    """帧自带 totalAmount（09-30+ 活帧）→ 活数据优先，source=None，无回退记录。"""
+    ev = collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=[],
+        analysis_by_code={}, slot_time="15:00", daily_total_amount_fallback=9.9e12)
+    assert ev["totalAmount"]["amount"] == 1.41e12
+    assert ev["totalAmount"]["source"] is None
+    assert not any("回退" in s for s in ev["quality"]["degradedSources"])
+
+
 def test_collect_slot_evidence_change_fallback_for_legacy_rows():
     """2026-07-03 前导入的历史行无 pctChange 只有 change（校准重放 T1.5 实证）：
     字段回退后涨跌分布/TRIN 可算，回退行数 fail-visible 进 degradedSources。"""

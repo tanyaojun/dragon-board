@@ -37,6 +37,7 @@ from backend.services.jev.jev_sentiment_compute import (
     _load_rows,
     _slots_of_date,
     _yesterday_total_amounts_by_slot,
+    load_market_daily_amount_map,
 )
 
 DATASET_DEFAULT = "dragonboard_live"
@@ -101,20 +102,23 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
 
     yesterday_rows = _latest_yesterday_rows(db, dataset_id, snapshot_type, trading_date)
     yesterday_amounts = _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date)
+    market_amounts = load_market_daily_amount_map(db)
     present_slots = _slots_of_date(db, dataset_id, snapshot_type, trading_date)
     prior_slots = [slot for slot in present_slots if slot < slot_time]
     missing_slots = [slot for slot in _half_hour_slots() if slot < slot_time and slot not in prior_slots]
     priors = []
     for slot in prior_slots:
         evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot,
-                                     yesterday_rows, yesterday_amounts)
+                                     yesterday_rows, yesterday_amounts,
+                                     daily_total_amount_fallback=market_amounts.get(trading_date))
         if evidence is not None:
             priors.append(evidence)
     current_evidence = collect_slot_evidence(
         frame=frame, rows=rows, yesterday_rows=yesterday_rows,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, str(frame.get("snapshotId") or "")),
         slot_time=slot_time,
-        yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time))
+        yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time),
+        daily_total_amount_fallback=market_amounts.get(trading_date))
     narrative = build_slot_jev_state(
         trading_date=trading_date, slot_time=slot_time,
         current=current_evidence or {}, priors=priors, missing_slots=missing_slots,
@@ -149,10 +153,12 @@ def compute_day(db, dataset_id: str, trading_date: str, history_anchor: str,
         return {"status": "no_data"}
     yesterday_rows = _latest_yesterday_rows(db, dataset_id, snapshot_type, trading_date)
     yesterday_amounts = _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date)
+    market_amounts = load_market_daily_amount_map(db)
     evidences = []
     for slot in slots:
         evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot,
-                                     yesterday_rows, yesterday_amounts)
+                                     yesterday_rows, yesterday_amounts,
+                                     daily_total_amount_fallback=market_amounts.get(trading_date))
         if evidence is not None:
             evidences.append(evidence)
     if not evidences:

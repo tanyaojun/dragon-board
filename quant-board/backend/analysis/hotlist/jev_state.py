@@ -122,12 +122,16 @@ def _calc_trin(up_count: int, down_count: int, up_turnover: float, down_turnover
 
 def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: list,
                           analysis_by_code: dict, slot_time: str,
-                          yesterday_same_slot_total_amount: float | None = None) -> dict:
+                          yesterday_same_slot_total_amount: float | None = None,
+                          daily_total_amount_fallback: float | None = None) -> dict:
     """单帧原始证据聚合（纯函数，无 IO）。
 
     输入仅原始数据：帧（limitSummary/indices）、行情行（pctChange/zlje/turnover/rank/reason）、
     昨日行、个股生命周期 analysis（displayStatus.stage）。**零规则五档输出**。
     yesterday_same_slot_total_amount = 昨日同一槽位帧的两市总成交额（同期量能对比基线）。
+    daily_total_amount_fallback = market_daily_amount 参考集合的当日两市额（TDX 综指口径）；
+    仅 15:00 槽且帧缺 indices.totalAmount 时回填 amount（09-30 前历史帧无该字段，重算保护），
+    totalAmount.source=market_daily_amount_reference 标记来源（fail-visible，与帧活数据可分辨）。
     fail-visible：缺源记 quality.degradedSources，保持 None/缺失，不伪造 0。
     indices.change 为涨跌额点数（帧现口径，无百分比）；totalAmount 为两市当日累计成交额（元）。
     """
@@ -138,6 +142,7 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     # ── 帧级：指数 + 涨停/炸板/连板 + 两市总成交额 ──
     indices: dict = {}
     total_amount: float | None = None
+    total_amount_source: str | None = None
     limit = {"ztCount": None, "maxBoard": None, "boards": {},
              "zhabanCount": None, "zhabanRate": None, "fengbanRate": None}
     if frame is None:
@@ -156,6 +161,13 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
             total_amount = float(total_entry["amount"])
         else:
             degraded.append("两市总成交额缺失（历史帧无该字段）")
+        # 15:00 槽=全日累计，历史帧缺 indices.totalAmount（09-30 才接线）时可用 market_daily_amount
+        # 参考集合（TDX 综指口径）回填，重算不再冲掉锚量能坐标（2026-10-06 根治，源标记 fail-visible）；
+        # 非 15:00 槽的盘中累计无法用日额近似，保持 None。
+        if total_amount is None and slot_time == "15:00" and _finite(daily_total_amount_fallback):
+            total_amount = float(daily_total_amount_fallback)
+            total_amount_source = "market_daily_amount_reference"
+            degraded.append("两市总成交额回退 market_daily_amount 参考（15:00=全日累计）")
         ls = frame.get("limitSummary") if isinstance(frame.get("limitSummary"), dict) else {}
         boards = ls.get("continuousBoards") if isinstance(ls.get("continuousBoards"), dict) else {}
         zhaban = ls.get("zhaban") if isinstance(ls.get("zhaban"), dict) else {}
@@ -324,7 +336,8 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         "rowFlags": row_flags,
         "totalAmount": {"amount": total_amount, "vsSamePct": amount_vs_same_pct,
                         "yesterdaySame": yesterday_same_slot_total_amount
-                        if _finite(yesterday_same_slot_total_amount) else None},
+                        if _finite(yesterday_same_slot_total_amount) else None,
+                        "source": total_amount_source},
         "leaders": leaders,
         "reasons": reasons,
         "quality": {"degradedSources": degraded},
