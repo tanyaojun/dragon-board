@@ -6,6 +6,44 @@ from ..engine.config import RankTrendConfig
 from ..engine.primitives import clamp, average, signal_confidence
 from .technical import cycle_rank_shock, rank_path_commitment
 
+# Q1 机制一注入人群阈值（合同 C-c1 冻结）：跨日步 ∧ |ΔrankPct|≥10 = D3 效度证据人群（≈2.1 万步）。
+# 冻结为常量非 config——人群定义属判定合同，剂量臂只动 P/vrGate，防误调。
+GAP_PV_POPULATION_DELTA_MIN = 10.0
+
+
+def _finite_num(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def gap_velocity_proxy(
+    change: Any, volume_ratio: Any, config: "RankTrendConfig | None" = None
+) -> float | None:
+    """Q1 机制一（合同 C-c1 表格）：跨日 gap 步的价格方向虚拟速度。
+
+    价跌一律 −P（D4：价跌组量比中位 0.77 且 25% 步 ≤0.02，方向本身已是退潮证据，
+    无需量确认）；价升须 volumeRatio ≥ vrGate 放量确认（排除无量假升）；
+    价平/任一输入缺失或非有限 → None（证据缺，维持 G1 置缺+沿袭）。
+    """
+    c = config or RankTrendConfig()
+    ch = _finite_num(change)
+    vr = _finite_num(volume_ratio)
+    if ch is None or vr is None:
+        return None
+    p = float(getattr(c, "lifecycleGapPriceVolumeProxyP", 5.0) or 5.0)
+    vr_gate = float(getattr(c, "lifecycleGapPriceVolumeVrGate", 1.0) or 1.0)
+    if ch > 0.0 and vr >= vr_gate:
+        return p
+    if ch < 0.0:
+        return -p
+    return None
+
+
 def analyze_cycle(
     ranks: list[float],
     percentiles: list[float],
@@ -13,6 +51,8 @@ def analyze_cycle(
     *,
     time_keys: list[Any] | None = None,
     frame_indices: list[int] | None = None,
+    price_changes: list[Any] | None = None,
+    volume_ratios: list[Any] | None = None,
 ) -> dict[str, Any]:
     """5 态生命周期主流程。
 
@@ -25,6 +65,13 @@ def analyze_cycle(
     strictness≠off 但时间键缺失/长度不匹配/空键步时降级不判 gap，decision reasons 显式
     标注（fail-visible，不静默）。G1/G2 不动 hot_streak/best/drawdown 的跨缺口累积
     （那是 G3 剂量，未预登记不实施）。
+
+    Q1 价量证据喂入（2026-10-07 预登记合同 v1.1 机制一；lifecycleGapPriceVolumeMode，默认 off=零行为）：
+    direction_gate 下 gap 步若落入注入人群（跨日步 ∧ |ΔrankPct|≥10，与 D3 效度证据人群对齐）
+    且价量证据可用（price_changes/volume_ratios 与 percentiles 等长、当日 change 与 volumeRatio
+    均有限），该步 rankVelocity 由价量方向虚拟速度 proxy 驱动（raw/stage 吃 proxy 值，不沿袭前帧；
+    acceleration/shock 仍置缺），metrics 增 gapPriceVolumeProxy=True（fail-visible 来源标记）。
+    证据缺步（人群外/价平/量缺失/vr 低于门）维持 G1 置缺+沿袭。
     """
     previous_stage = None
     current_stage = None
@@ -40,6 +87,16 @@ def analyze_cycle(
     # fail-visible 记账：strictness≠off 但键整体不可用 / 个别步键为空 → decision reasons 标注
     time_keys_unavailable = strictness != "off" and not use_dates
     missing_time_keys = 0
+    # Q1 机制一（合同 C-c1）：direction_gate 需要价量序列与 percentiles 等长；不等长 → 降级标注
+    pv_mode = str(getattr(c, "lifecycleGapPriceVolumeMode", "off") or "off")
+    pv_len_ok = (
+        price_changes is not None
+        and volume_ratios is not None
+        and len(price_changes) == len(percentiles)
+        and len(volume_ratios) == len(percentiles)
+    )
+    use_pv = pv_mode == "direction_gate" and pv_len_ok
+    pv_unavailable = pv_mode == "direction_gate" and not pv_len_ok
     for index in range(len(percentiles)):
         window_start = index - 7 if index >= 7 else 0
         metrics = cycle_metrics_window(ranks[window_start : index + 1], percentiles[window_start : index + 1], config=config)
@@ -55,15 +112,33 @@ def analyze_cycle(
                 if not is_gap and use_frames:
                     is_gap = int(frame_indices[index]) - int(frame_indices[index - 1]) >= 2
         if is_gap:
-            metrics = {
-                **metrics,
-                "rankVelocity": float("nan"),
-                "rankAcceleration": float("nan"),
-                "rankShock": float("nan"),
-                "temporalGap": True,
-            }
-            # raw 沿袭前帧（NaN 比较全 False → raw_stage 恒 cooling 的静默路径被显式封死）
-            raw = current_raw if current_raw is not None else "cooling"
+            proxy = None
+            if use_pv and index >= 1:
+                # 注入人群选择器：|ΔrankPct|≥10（D3 效度证据人群；差分在此只作人群标识，
+                # 不作动量证据——动量证据由当日价量方向承载）
+                if abs(percentiles[index] - percentiles[index - 1]) >= GAP_PV_POPULATION_DELTA_MIN:
+                    proxy = gap_velocity_proxy(price_changes[index], volume_ratios[index], c)
+            if proxy is not None:
+                # 证据可用步：proxy 驱动（不沿袭前帧 raw）；accel/shock 单帧构造不出，维持置缺
+                metrics = {
+                    **metrics,
+                    "rankVelocity": proxy,
+                    "rankAcceleration": float("nan"),
+                    "rankShock": float("nan"),
+                    "temporalGap": True,
+                    "gapPriceVolumeProxy": True,
+                }
+                raw = raw_stage(index + 1, percentiles[index], metrics, config=c)
+            else:
+                metrics = {
+                    **metrics,
+                    "rankVelocity": float("nan"),
+                    "rankAcceleration": float("nan"),
+                    "rankShock": float("nan"),
+                    "temporalGap": True,
+                }
+                # raw 沿袭前帧（NaN 比较全 False → raw_stage 恒 cooling 的静默路径被显式封死）
+                raw = current_raw if current_raw is not None else "cooling"
         else:
             raw = raw_stage(index + 1, percentiles[index], metrics, config=config)
         normalized = normalize_stage(current_stage, raw, percentiles[index], metrics, config=config)
@@ -84,15 +159,17 @@ def analyze_cycle(
     # 输出层 NaN→None（与 evidence 同一护栏；G1 gap 帧动量分量缺证据序列化为 null，
     # 不得以 0 伪装；下游 lifecycle_decision 均按 `or 0` 消费、risk 输入经 neutralize_gap_metrics）
     metric_values = {key: _evidence_num(value) for key, value in metrics.items()}
-    decision = lifecycle_decision(raw, stage, transition, confidence, metric_values, config=config)
-    if time_keys_unavailable:
-        decision["reasons"].append(
-            "时间键缺失或长度不匹配，跨日差分未做时间正规化（temporalGap 检测未启用）。"
-        )
-    elif missing_time_keys:
-        decision["reasons"].append(
-            f"{missing_time_keys} 步时间键缺失，对应步无法判定跨日（差分保留，temporalGap 可能低估）。"
-        )
+    # fail-visible 过程标注走独立 annotations 通道（不进 metrics——「带键/不带键 metrics
+    # 逐位一致」是既有合同断言；_build_signal 链上 analyze_cycle_with_risk 会用
+    # lifecycle_decision 重建 decision，标注经 annotations 参数透传重建不丢失）
+    annotations = {
+        "timeKeysUnavailable": time_keys_unavailable,
+        "timeKeysMissingSteps": missing_time_keys,
+        "pvSeriesUnavailable": pv_unavailable,
+    }
+    decision = lifecycle_decision(
+        raw, stage, transition, confidence, metric_values, config=config, annotations=annotations
+    )
     return {
         "rawStage": raw,
         "stage": stage,
@@ -100,6 +177,7 @@ def analyze_cycle(
         "transition": transition,
         "confidence": confidence,
         "metrics": metric_values,
+        "annotations": annotations,
         "entryAdvice": entry_advice(stage, transition),
         "decision": decision,
     }
@@ -346,7 +424,12 @@ def lifecycle_decision(
     risk: dict[str, Any] | None = None,
     momentum: dict[str, Any] | None = None,
     config: RankTrendConfig | None = None,
+    annotations: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """annotations（Q1 合同 C-6，2026-10-07）：analyze_cycle 过程标注通道
+    （timeKeysUnavailable/timeKeysMissingSteps/pvSeriesUnavailable）——
+    decision reasons 的 fail-visible 文案从这里生成；analyze_cycle_with_risk 重建
+    decision 时透传，防标注在 _build_signal 链上丢失。None=旧调用方（无标注，零影响）。"""
     c = config or RankTrendConfig()
     reasons: list[str] = []
     action = "caution"
@@ -406,7 +489,22 @@ def lifecycle_decision(
     if "->" in transition:
         reasons.append(f"阶段路径：{transition}。")
     if metrics.get("temporalGap"):
-        reasons.append("序列跨时间缺口，本帧动量证据不可判定（temporalGap），动量类判据按缺失处理。")
+        if metrics.get("gapPriceVolumeProxy"):
+            reasons.append("序列跨时间缺口，本帧动量证据由价量方向代理补位（gapPriceVolumeProxy）。")
+        else:
+            reasons.append("序列跨时间缺口，本帧动量证据不可判定（temporalGap），动量类判据按缺失处理。")
+    # fail-visible 过程标注（来自 annotations 通道；analyze_cycle 直接调用与 _build_signal
+    # 链（经 analyze_cycle_with_risk 重建）两条路径文案一致）
+    annotations = annotations if isinstance(annotations, dict) else {}
+    if annotations.get("timeKeysUnavailable"):
+        reasons.append("时间键缺失或长度不匹配，跨日差分未做时间正规化（temporalGap 检测未启用）。")
+    missing_tk = annotations.get("timeKeysMissingSteps")
+    if missing_tk:
+        reasons.append(
+            f"{missing_tk} 步时间键缺失，对应步无法判定跨日（差分保留，temporalGap 可能低估）。"
+        )
+    if annotations.get("pvSeriesUnavailable"):
+        reasons.append("价量证据序列缺失或长度不匹配，gap 帧价量方向代理未启用（direction_gate 降级）。")
     if stage in ("ignition", "expansion") and float(metrics.get("rankVelocity") or 0) > 0:
         discovery_reasons.append("生命周期存在漏选研究价值：点火/扩散路径仍在改善，但不得绕过 RankTrend 主结构直接制造买入。")
     return {

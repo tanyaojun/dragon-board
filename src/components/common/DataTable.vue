@@ -1302,9 +1302,15 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
       ? observation.lifecycle.tierReasons
       : []
     if (lcReasons.length) lines.push(`  依据：${lcReasons.join('；')}`)
-    // G1 时间正规化（2026-10-07 落默认）：跨日缺口帧动量证据缺失，fail-visible 标注
+    // G1 时间正规化（2026-10-07 落默认）：跨日缺口帧 fail-visible 标注；
+    // Q1 机制一（2026-10-07 合同 v1.1）：proxy 补位步不再标「证据缺失」而标「价量代理」防混读
     const gapFlag = rankTrend?.cycle?.metrics?.temporalGap
-    if (gapFlag) lines.push('  跨日缺口帧：动量证据缺失（temporalGap），本帧动量类判据按缺失处理')
+    const pvProxyFlag = rankTrend?.cycle?.metrics?.gapPriceVolumeProxy
+    if (gapFlag && pvProxyFlag) {
+      lines.push('  跨日缺口帧：动量证据由价量方向代理补位（gapPriceVolumeProxy，非真差分）')
+    } else if (gapFlag) {
+      lines.push('  跨日缺口帧：动量证据缺失（temporalGap），本帧动量类判据按缺失处理')
+    }
     lines.push(`  操作建议：${lifecycleActionAdvice(lcTier, stage)}`)
   } else if (field === 'resonanceIntensity') {
     const res = (rankTrend && rankTrend.resonance) || {}

@@ -533,3 +533,20 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 
 - **判定线操作口径注记**：W1-2「差一票」以 count 空间（buy_count==1）为主读数、score 空间（距阈<0.02）同列披露；主 population=ln≥2（ln=0 幻影不入列、ln=1 单列），C 档分母含 res insufficient 层（fallback 分层单列）。
 - **回退**：零行为零参数改动；自证修正为比对面修复（git 回退唯一路径）。
+
+## 22. 生命周期 Q1 价量证据喂入 trial（2026-10-07 深夜：全臂 FAIL 阴性登记，零默认改动）
+
+> 合同 `lifecycle-q1-preregistration.md` v1.1（Opus 审定 R1-R9 落实，判定线冻结于跑数前）；用户令「按审定回执修正后开跑」。产物 `data/reports/lifecycle-q1-trials.json`（98MB 本地不入库，4674s，15 臂×4 窗 replay+Track1；逐臂 checkpoint 机制=首轮算完在最终序列化一步崩掉 Track1 全失的教训）。接线：`lifecycleGapPriceVolumeMode`（off/direction_gate，默认 off）+ `lifecycleGapPriceVolumeProxyP/VrGate` + dv `gap_step` temporalGap 防御 + `analyze_cycle` 价量等长入参 + annotations 独立标注通道 + live/replay 双链接线；全部默认零行为（golden 重录 diff 审查：configRepr 6+annotations 691+priceRankDivergence 528 全部「任意态→unknown」零反向，决策链零漂移；后端 3285/前端 1175 全绿）。
+
+| 机制 | 臂 | 判定 | 关键读数（decision/oos1/oos2 saEx 相对基线） |
+|---|---|---|---|
+| C-a dv 权重 | 0.25/0.5/0.75 | **全 FAIL**（C-4.1 无害线+提交线、C-4.2 双 FAIL） | −0.0095/−0.0202/−0.0301（oos1 +0.0228/+0.0271/+0.0124 虚高）；Track1 wrxpf −0.10~−0.12、maxDD 恶化 4.9~8.0pp、笔数 172→123-140 |
+| C-c direction_gate | vrGate{1.0,1.5,2.0}×P{3,5,8} | **无害线 PASS、提交线 FAIL=零效应**（C-4.5 阴性登记） | vr15 最优 mean +0.00136 < +0.002；Track1 wrxpf −0.0028 容差内+maxDD 22.31%→21.73% 微改善+笔数不变 |
+
+- **结构性发现一（P 剂量轴退化）**：P∈{3,5,8} 九臂塌缩三有效臂，同 vrGate 三档读数逐位相同——现阈值结构下 ±P 只经符号起作用：recovery/ignition 需 accel≥−1.2 而 proxy 步 accel 恒 NaN（合同红线②不伪造多帧证据的结构性代价），+P 永远点不着点火路径；velocity>18 高阈值 P 全够不着（合同 P-vs-18 注记兑现）。**若未来重开剂量面，须先解 accel 置缺与点火判据的相容问题**。
+- **结构性发现二（C-a 扩档拉动）**：dv 权重臂 S/A 帧数 1229→2079/2812/3683（+68%/+129%/+200%）单调膨胀而 excess 反向——扩档非判别改善，C-4.1 档位计数披露义务正中要害；dv 效度（D3 单帧分辨力显著）≠投票增益（进 synergy 后稀释+扩容负效应）。**dv 维保持观察位（权重 0.0），「效度验证→给权重」路径证伪**。
+- **C-4.3 侵蚀监控**：C-c veto 相对回升 +0.46%~+0.49%（<< 3.4% 交裁线）；翻转分列（修正 flip 键反解后）：added 352-380 步主落 drop 桶（242-261=68%，价跌步 −P 判 reversal=机制设计方向）、released 305-332 步 85% 在人群外=normalize 状态机传导效应（proxy 改 raw 后后续帧级联，合同预期内）；C-a 臂 veto/翻转零变化（dv 不触 veto，读数自洽）。
+- **C-4.4 分离度**：注入人群（跨日步∧|Δpct|≥10，19,645 步）价升/价跌 fwd 分离 +0.5378（数据层常量，对全部臂同值；与 D3 桶内读数 +2.31/+2.04 不可直比=混合人群）。
+- **runner 两 verdict 计算 bug 跑后修正**（读数零影响）：maxDD 负数域直比（把回撤改善判成恶化）+flip 分列键反解缺失（全落 unclassified）；判定表以修正版为准。
+- **回退**：`lifecycleGapPriceVolumeMode="off"` + `tierSynergyDivergenceVote=0.0`（=现默认）双开关即回基线；无数据删除面；基线锚 decision 0.14503 与 G1 §18 新锚 0.1450 一致（a0 自证）。
+- **落默认裁决**：按 C-4.5 全 FAIL=不提交、零默认改动；**Q1 主线至此闭环**（原料→诊断→预登记→审定→trial→阴性登记）。后续可选：P5 双轴重设计（在「+P 点不着火」结构事实上重开）、W0-1 dv/pm 死票位摘除（现在无 trial 冲突，但 dv 摘除与本轮「保持观察位」结论一致须用户裁决）。

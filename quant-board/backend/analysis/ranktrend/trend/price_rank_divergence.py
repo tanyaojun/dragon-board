@@ -41,6 +41,8 @@ def compute_price_rank_divergence(
     price_changes: list[Any],
     percentiles: list[float],
     config: Any,
+    *,
+    gap_step: bool = False,
 ) -> dict[str, Any]:
     """计算个股价格-排名背离观察。
 
@@ -48,6 +50,9 @@ def compute_price_rank_divergence(
         price_changes: 个股 change（涨跌幅，%）历史序列（[-1] 为当前帧）。
         percentiles: 个股排名百分位序列（[-1] 当前帧、[-2] 上一帧；同 engine histories item[2]）。
         config: RankTrendConfig（priceRankChangeMin/priceRankDeltaMin）。
+        gap_step: 相邻序列元素跨交易日（temporalGap；Q1 合同 C-a1 前置修复）——
+            跨日步 rankDir 即隔夜排名跳变（非当日背离证据），归 unknown 不判定（fail-visible）。
+            调用方在 lifecycleTimeGapStrictness≠off 且时间键可用时传入；默认 False=旧行为。
 
     Returns:
         observation.priceRankDivergence：state / signalTier（A/B/C/D/unknown）/
@@ -72,6 +77,14 @@ def compute_price_rank_divergence(
     # 严格比较（2026-08-19 审计修复）：默认阈值 0.0 时 change=0/delta=0 必须归 flat，
     # 否则 0 变化被标 confirm_up/A 污染档位统计（flat 分支成死代码）。
     price_dir = "up" if cur_change > change_min else "down" if cur_change < -change_min else "flat"
+    if gap_step:
+        return {
+            "state": "unknown",
+            "signalTier": "unknown",
+            "priceDir": price_dir,
+            "rankDir": None,
+            "tierReasons": ["跨日缺口步，背离不可判定（temporalGap）"],
+        }
     if prev_pct is None:
         return {
             "state": "unknown",

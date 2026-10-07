@@ -814,6 +814,9 @@ def analyze_cycle_with_risk(
         risk,
         momentum,
         config=config,
+        # Q1 合同 C-6：过程标注（时间键缺失/pv 序列降级）经 annotations 透传重建，
+        # 防 fail-visible 标注在 _build_signal 链上被重建丢弃
+        annotations=cycle.get("annotations") if isinstance(cycle.get("annotations"), dict) else None,
     )
     return updated_cycle
 
@@ -964,6 +967,7 @@ class RankTrendPythonEngine:
         histories = defaultdict(deque)
         change_histories: dict[str, deque] = defaultdict(deque)
         amount_histories: dict[str, deque] = defaultdict(deque)
+        volume_ratio_histories: dict[str, deque] = defaultdict(deque)
         prev_candidate_by_code: dict[str, str] = {}
         signals: list[dict[str, Any]] = []
         for index, frame in enumerate(frames):
@@ -977,6 +981,9 @@ class RankTrendPythonEngine:
             for amt_history in amount_histories.values():
                 while amt_history and amt_history[0][0] < history_start:
                     amt_history.popleft()
+            for vr_history in volume_ratio_histories.values():
+                while vr_history and vr_history[0][0] < history_start:
+                    vr_history.popleft()
 
             stocks = frame.get("stocks", [])
             # 池子大小 = 全池股票数（综合排名口径，用于 regime/展示）
@@ -996,6 +1003,8 @@ class RankTrendPythonEngine:
                 change_histories[code].append((index, chg if chg is not None else None))
                 amt = stock.get("amount")
                 amount_histories[code].append((index, amt if amt is not None else None))
+                vr = stock.get("volumeRatio")
+                volume_ratio_histories[code].append((index, vr if vr is not None else None))
 
             if index < start:
                 continue
@@ -1027,6 +1036,9 @@ class RankTrendPythonEngine:
                     market_ctx=market_ctx,
                     price_changes=[item[1] for item in change_histories.get(code, [])],
                     amount_history=[item[1] for item in amount_histories.get(code, [])],
+                    # Q1 机制一（合同 C-6）：价量序列与 ranks/percentiles 严格等长（同步收集）
+                    lifecycle_price_changes=[item[1] for item in change_histories.get(code, [])],
+                    lifecycle_volume_ratios=[item[1] for item in volume_ratio_histories.get(code, [])],
                     rank_time_keys=[str(frames[item[0]].get("tradingDate") or "") for item in series],
                     rank_frame_indices=[item[0] for item in series],
                 )
@@ -1128,6 +1140,7 @@ class RankTrendPythonEngine:
         percentiles: list[float] = []
         price_changes: list[Any] = []
         amount_history: list[Any] = []
+        volume_ratios: list[Any] = []
         rank_time_keys: list[Any] = []
         rank_frame_indices: list[int] = []
         code = str(stock.get("code") or "")
@@ -1147,6 +1160,8 @@ class RankTrendPythonEngine:
             rank_frame_indices.append(lookup_index)
             price_changes.append(row.get("change"))
             amount_history.append(row.get("amount"))
+            # Q1 机制一原料（lifecycleGapPriceVolumeMode=direction_gate 时消费）
+            volume_ratios.append(row.get("volumeRatio"))
         return self._build_signal(
             stock,
             frame,
@@ -1156,6 +1171,9 @@ class RankTrendPythonEngine:
             meta,
             price_changes=price_changes,
             amount_history=amount_history,
+            # Q1 机制一（合同 C-6）：replay 链价量序列与 ranks/percentiles 同步收集严格等长
+            lifecycle_price_changes=price_changes,
+            lifecycle_volume_ratios=volume_ratios,
             rank_time_keys=rank_time_keys,
             rank_frame_indices=rank_frame_indices,
         )
@@ -1176,13 +1194,21 @@ class RankTrendPythonEngine:
         cross_section_percentiles: list[float] | None = None,
         rank_time_keys: list[Any] | None = None,
         rank_frame_indices: list[int] | None = None,
+        lifecycle_price_changes: list[Any] | None = None,
+        lifecycle_volume_ratios: list[Any] | None = None,
     ) -> dict[str, Any] | None:
         """cross_section_percentiles（2026-09-13 delta 复活）：crossSection 因子的独立输入。
 
         live 链路 current 帧的 percentiles 末项是权威 pct 复制尾（防漂移，见
         ranktrend_routes._load_frames_for_analysis），保留它 delta 恒 0、A/D 档不可达。
         调用方传去复制尾序列（level 不变、delta=权威帧差），None 回退 percentiles
-        （replay/backtest/research 现行为，golden 不漂移）。"""
+        （replay/backtest/research 现行为，golden 不漂移）。
+
+        lifecycle_price_changes/lifecycle_volume_ratios（Q1 合同 C-6，2026-10-07）：
+        analyze_cycle 专供价量序列，必须与 ranks/percentiles 严格等长（replay 双链同步
+        收集天然等长；live 链独立对齐收集）。与 price_changes 分开传——live 链后者按
+        row 存在性收集、与 ranks 不等长（历史债），不能混用（防 dv/priceMomentum 输入漂移）。
+        None → analyze_cycle 证据缺（direction_gate 降级标注，fail-visible）。"""
         if not ranks:
             return None
         code = str(stock.get("code") or "")
@@ -1208,6 +1234,11 @@ class RankTrendPythonEngine:
         _gap_kwargs: dict[str, Any] = (
             {"time_keys": rank_time_keys, "frame_indices": rank_frame_indices} if _gap_strictness != "off" else {}
         )
+        # Q1 机制一（合同 C-6）：mode=off 时不传价量序列（零行为）；direction_gate 时传，
+        # 长度不匹配由 analyze_cycle 降级标注（fail-visible）
+        if str(getattr(self.config, "lifecycleGapPriceVolumeMode", "off") or "off") == "direction_gate":
+            _gap_kwargs["price_changes"] = lifecycle_price_changes
+            _gap_kwargs["volume_ratios"] = lifecycle_volume_ratios
         cycle = _compat_callable("analyze_cycle")(ranks, percentiles, self.config, **_gap_kwargs)
         risk = _compat_callable("analyze_risk")(
             current_percentile,
@@ -1428,12 +1459,23 @@ class RankTrendPythonEngine:
             rank_trend["technical"]["amountRatio"] = rank_trend["observation"]["amountRatio"]
             # 价格-排名背离观察因子（2026-08-18 G1 相位差方案）：价升排名跌（出货预警）/
             # 排名升价跌（关注度先行）——价格与排名 Jump 的背离信号。不进 synergy 投票，先验证区分度。
+            # Q1 合同 C-a1 前置修复（2026-10-07）：相邻序列元素跨日时 rankDir 即隔夜排名跳变
+            # （非当日背离证据）→ gap_step=True 归 unknown（消除 D6 缺陷；off 模式不启用=零漂移）。
             from backend.analysis.ranktrend.trend.price_rank_divergence import compute_price_rank_divergence
 
+            _dv_gap_step = False
+            if _gap_strictness != "off" and rank_time_keys is not None and len(percentiles) >= 2:
+                if (
+                    len(rank_time_keys) == len(percentiles)
+                    and str(rank_time_keys[-1] or "")
+                    and str(rank_time_keys[-2] or "")
+                ):
+                    _dv_gap_step = str(rank_time_keys[-1]) != str(rank_time_keys[-2])
             rank_trend["observation"]["priceRankDivergence"] = compute_price_rank_divergence(
                 price_changes or [],
                 percentiles,
                 self.config,
+                gap_step=_dv_gap_step,
             )
             rank_trend["technical"]["priceRankDivergence"] = rank_trend["observation"]["priceRankDivergence"]
 

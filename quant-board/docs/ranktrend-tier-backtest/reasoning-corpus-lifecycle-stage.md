@@ -841,3 +841,53 @@ python scripts/gptoss_questionset_review.py \
 6. 小注（非否决）：A2 的 replay 确定性论证更准引用=b2/b3/c3/d1/d2「逐位=baseline」（d1/d2 单独不足）；B5 momentum 项在 NaN 比较语义下自然 False，无需额外代码路径。
 
 **主会话增量裁定（执行编排）**：①P1/P3 诊断步共享「1 次默认 replay 导出」——两薄脚本共用 loader，合并执行省 1 次 replay（合同 A7/B7 的 3-5+4-6 次 → 合计约 7-10 次）；②建议 P3 诊断先行：ER 检验最便宜，且「18/12 跨缺口假设」若成立会反向约束 P2 交互量设计（交互量也须时间正规化），先出数再定 P2 预登记。**开跑等用户裁决**（判定线已按合同冻结，跑后不得回看调线）。
+
+### §13 Q1 诊断战报 + 预登记合同（2026-10-07，用户令「进入 Q1」；步骤 0+1 纯本地零调用）
+
+**Q1 命题**（§6 主线）：price_changes/amount_history 已逐帧采集并传入 `_build_signal`，但 `analyze_cycle`
+不消费——原料在窗未喂。G1 落默认后跨日步动量证据置缺，价量是独立来源的合法补位证据。
+
+**诊断产出**（`backend/operations/diagnose_lifecycle_q1_price_volume.py`，全窗 2026-04-15~10-07，
+21.5 万序列步/33,743 跨日步；JSON `data/reports/lifecycle-q1-price-volume-diagnosis{,-vr}.json`）：
+
+- **D1 靶子规模**：跨日步占 15.7%（33,743），排名大跳（|Δpct|≥10）≈2.1 万步（可复算：drop 靶 11,334
+  + spike 有价格方向 9,075 + spike 价平 ≈443 ≈ 20,852）——非边角料。
+- **D2 可填充率**：跨日步价格证据 100% 可用、volumeRatio 口径 77.3% 可用。
+- **D3 价格方向分辨力（核心效度）**：跨日排名大跌步价升组后续回升 +5.36 分位点 vs 价跌组 +3.55，
+  差 **+2.31 [CI 1.86~2.76]**（code 聚块 bootstrap 10k，seed 20261007）；大升方向 +2.04 显著；
+  同日对照 +2.48 同量级=**普适的价×排名时序背离证据**（非跨日特异）。注记：绝对回升含均值回归基线，
+  分辨力看差值；fwd 含日内恢复效应。
+- **D4 量口径裁定**：amount 粗算量比有日内时点污染（当日累计 vs 昨日尾盘累计基准），**禁用**；
+  volumeRatio 干净口径：价升组 1.18 vs 价跌组 0.77，价跌组 p25=0.02 极端缩量左尾（一字板形态）。
+- **D5 dv 重叠率（步骤 0）**：Q1 靶子步几乎全部落入 dv 枚举档（A/B/C/D 四态+unknown 档；drop 靶内
+  5,459 price_lead_warn + 5,320 confirm_down + 555 unknown）——**Q1 不新造价×排名因子**；
+  dv 三缺口=Q1 全部增量（效度未验证→D3 补上 / 权重 0.0 纯观察 / 无量输入）。
+- **D6 dv 现状缺陷**：dv 无 temporalGap 防御，跨日步 rankDir=隔夜跳变（18,253 步 rank_down）；
+  接线时必须一并修（诊断脚本 dv 复刻自证 430 抽样零 mismatch）。
+
+**预登记合同**：`lifecycle-q1-preregistration.md`（2026-10-07 起草，判定线冻结于跑数前）。
+设计要点收窄为三件：**机制一**=gap 帧价量虚拟动量证据（`lifecycleGapPriceVolumeMode` off/direction_gate，
+价跌一律 −P、价升须 volumeRatio≥vrGate 放量确认的非对称门——D4 数据形态直接映射；P 分位当量
+{3,5,8}×vrGate{1.0,1.5,2.0} 九臂；hot_streak/best/drawdown 不动、acceleration/shock 不伪造、
+metrics 增 gapPriceVolumeProxy 来源标记 fail-visible）；**机制二**=dv 效度化接线（前置修 temporalGap
+防御 + 权重 {0.25,0.5,0.75} 臂，cs 同量级封顶）。判定=同代际相对线（沿用 G1 容差）+Track1 中性线
++G1 收益侵蚀监控（veto 回升 >3.4pp 相对须显式交裁）+分辨力不反转检验；13 剂量臂冻结，全 FAIL=
+阴性结果登记不硬上。流程：合同 → 用户过目 → Opus 审定 → 用户裁决开跑。
+
+**Opus 审定（2026-10-07，有条件通过）→ 合同 v1.1（R1-R9 全落实）→ 用户令「修正后开跑」**：
+硬事实逐位核过（D2/D3/D4/D6/D7 全对、算术抽验通过）。必改九项：**R1 注入人群冻结**=跨日步∧
+|Δpct|≥10（与 D3 证据人群严格对齐，不做全跨日外推）；**R2 信号面补提交线**=三窗均值 ≥+0.002 且
+≥1 窗 ≥+0.003（全臂未达=零效应阴性登记不提交）+负效应线（均值 <−0.003 止损）；**R3** D1 靶数改
+可复算口径 ≈2.1 万；**R4** 分辨力不反转线按机制重定义（C-c 臂在注入人群内复算 / C-a 臂不适用）；
+**R5** Track1 补 oos2/g1era 披露窗（oos2 <−0.005 须交裁）+maxDD ≤ 基线；**R6** 补考题/成本（14 次
+replay ≈1.5h 本地零调用）/harness 清单（evaluate_lifecycle_scale_gap_trials / track1_lifecycle_gate_trade
+/ diagnose_lifecycle_q1_price_volume）/市况分桶（market_regime state 仅报告列）/依赖声明（C-11）；
+**R7** frozen=midgap∪oos1=全 8 月口径（对账 0.1376/0.0834，语料 §6-I）；**R8** C-c1 字面矛盾修复
+（证据可用步 proxy 驱动不沿袭 / 证据缺步维持 G1 沿袭）；**R9** 臂数=13 剂量臂+1 基线臂=14 次 replay。
+建议级采纳 6 项（3.4% rel 单位统一/机械化选臂规则/S·A 档计数变化披露/proxy 按 drop·spike 分列/
+P 与 lifecycleVelocityMin=18 关系注记——P∈{3,5,8} 均 <18，proxy 不制造高阈值触发、效应走低阈值
+路径/golden 措辞对齐）+D5 措辞修正。R2/R4/R5 判定线增补随 v1.1 冻结（当前未跑数，不构成跑后调线）。
+**开跑授权（用户 2026-10-07「请按审定回执意见修正，然后开跑」）覆盖=接线→专项测试→trial→判定
+→登记→提交；落默认仍须用户裁决（C-4.5）。**
+
+**Q1 trial 收官（2026-10-07 深夜，全臂 FAIL=阴性登记零默认改动；台账 §22）**：合同 v1.1 判定线跑满 15 臂（14 冻结臂+机械化选臂组合臂因 ca_best=None 不触发）。**C-a（dv 权重 0.25/0.5/0.75）三臂全灭**：decision 窗 saEx 相对基线 −0.0095/−0.0202/−0.0301 破无害线、S/A 帧 1229→2079/2812/3683 单调膨胀（+68%~+200%）=「扩档拉动」非判别改善、Track1 wrxpf −0.10~−0.12+maxDD 恶化 4.9-8.0pp——**D3 单帧效度显著 ≠ 进 synergy 投票有增益（稀释+扩容负效应），dv 保持观察位，「效度验证→给权重」路径证伪**。**C-c（direction_gate 九臂）无害线全过、提交线全 FAIL=零效应**：mean 相对改善最高 +0.00136（vr15）< +0.002；Track1 全过（wrxpf −0.0028 容差内、maxDD 22.31%→21.73% 微改善、笔数 172 不变）；veto 侵蚀 +0.46~0.49% << 3.4% 交裁线，翻转分列 added 主落 drop 桶（68%=价跌步 −P 判 reversal 方向正确）、released 85% 人群外=normalize 状态机传导。**两大结构事实**：①P 剂量轴退化（P∈{3,5,8} 读数逐位同——±P 只经符号起作用，recovery 需 accel≥−1.2 而 proxy 步 accel 恒 NaN=红线②结构性代价，+P 点不着点火路径）——未来重开剂量面须先解 accel 置缺与点火判据相容；②gap 补位证据「无害但无效」——价量方向代理能精准挡掉一部分假信号（Track1 亏损微改善）但不足以把判据变准。**Q1 主线闭环**：原料→诊断→预登记→Opus 审定→trial→阴性登记，全程零默认改动、双开关即回基线。runner 跑后修正两 verdict bug（maxDD 负数域直比/flip 分列键反解，读数零影响）；首轮跑完在最终序列化崩掉（flip 记录 tuple 键）Track1 全失重跑一轮=checkpoint 逐臂落盘机制立项理由。

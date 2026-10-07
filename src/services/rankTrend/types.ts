@@ -302,6 +302,8 @@ export interface RankTrendAnalysisResult {
       rankPathCommitment: number
       /** P3 时间正规化（2026-10-07 G1 落默认）：跨日缺口帧动量证据缺失标记 */
       temporalGap?: boolean
+      /** Q1 机制一（2026-10-07 合同 v1.1）：该跨日缺口步动量位由价量方向代理补位（非真差分） */
+      gapPriceVolumeProxy?: boolean
     }
     entryAdvice: {
       bias: CycleEntryBias

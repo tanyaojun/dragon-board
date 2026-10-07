@@ -533,4 +533,17 @@ describe('DataTable lifecycle temporalGap tooltip（G1 落默认 code review 修
     expect(fnEnd).toBeGreaterThan(fnStart)
     expect(source.slice(fnStart, fnEnd)).not.toContain('temporalGap')
   })
+
+  test('Q1 价量代理补位帧用独立文案（不与「证据缺失」混读），同在显式分支内', () => {
+    const source = dataTableSource()
+    const branchStart = source.indexOf("} else if (field === 'lifecycleOpportunity') {")
+    const branchEnd = source.indexOf("} else if (field === 'resonanceIntensity') {")
+    const branch = source.slice(branchStart, branchEnd)
+    // Q1 机制一（合同 v1.1）：proxy 步仍带 temporalGap 但动量位已被价量代理驱动——
+    // 必须优先走「代理补位」文案，防止被误读成证据缺失
+    expect(branch).toContain('gapPriceVolumeProxy')
+    expect(branch).toContain('动量证据由价量方向代理补位（gapPriceVolumeProxy，非真差分）')
+    // 分支次序守卫：proxy 判定在「证据缺失」文案之前（gapFlag && pvProxyFlag 先判）
+    expect(branch.indexOf('gapPriceVolumeProxy')).toBeLessThan(branch.indexOf('跨日缺口帧：动量证据缺失'))
+  })
 })

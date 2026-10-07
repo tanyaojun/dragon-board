@@ -350,6 +350,15 @@ class RankTrendConfig:
     #   oos1 贴线 FAIL 未落默认，待 G1 新基线上重新预登记）；off=旧行为（仅诊断对照用）。
     #   无效帧 velocity/acceleration/shock 置 NaN + temporalGap 标记，raw 沿袭前帧（fail-visible 不插值）。
     lifecycleTimeGapStrictness: str = "cross_day"
+    # ── Q1 价量证据喂入（2026-10-07 预登记合同 v1.1 机制一；默认 off=现行为，golden 不漂移）──
+    # direction_gate：G1 gap 步上若价量证据可用（注入人群=跨日步∧|Δpct|≥10，与 D3 效度证据人群
+    #   严格对齐），由价格方向虚拟速度补位 rankVelocity——价跌一律 −P；价升须 volumeRatio≥vrGate
+    #   放量确认（D4：价跌组量比中位 0.77 含极端缩量左尾，方向本身已是退潮证据；价升须排除无量假升）。
+    #   证据可用步 raw/stage 由 proxy 驱动（不沿袭前帧）；证据缺步维持 G1 置缺+沿袭。
+    #   P 剂量 {3,5,8} 分位当量均低于 lifecycleVelocityMin=18，proxy 不制造高阈值触发。
+    lifecycleGapPriceVolumeMode: str = "off"
+    lifecycleGapPriceVolumeProxyP: float = 5.0   # 价升放量确认步注入 +P / 价跌步注入 −P（分位点当量）
+    lifecycleGapPriceVolumeVrGate: float = 1.0   # 价升步量比门（≥ 才确认）
     # ── risk（analyze_risk）：压力合成与严重度归一 ──
     riskPressureWeights: list[float] = field(default_factory=lambda: [0.58, 0.42])
     riskOverheatOffset: float = 45.0
@@ -576,6 +585,7 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
         ("volumePriceGateMode", ("hard", "soft", "off")),
         ("lifecycleRankScaleMode", ("mixed", "pct_full", "hotzone_pct_only")),
         ("lifecycleTimeGapStrictness", ("off", "cross_day", "non_adjacent")),
+        ("lifecycleGapPriceVolumeMode", ("off", "direction_gate")),
         ("resonanceWarmingTierCap", ("none", "C", "B")),
     ):
         _mode_value = str(getattr(config, _mode_field))

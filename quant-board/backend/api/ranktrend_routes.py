@@ -415,6 +415,10 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     # 旧调用方不传时为 None → analyze_cycle use_dates=False，诊断对照臂语义）
     rank_time_keys = history_args[5] if len(history_args) > 5 else None
     rank_frame_indices = history_args[6] if len(history_args) > 6 else None
+    # Q1 机制一（合同 C-6）：lifecycle 专供价量序列（与 trend_ranks/percentiles 等长对齐）；
+    # 旧调用方不传时为 None → direction_gate 降级标注（fail-visible），off 模式无影响
+    pv_changes = history_args[7] if len(history_args) > 7 else None
+    pv_ratios = history_args[8] if len(history_args) > 8 else None
     engine = RankTrendPythonEngine(config=config)
     if gate_confirm_state is not None:
         # WP2a：live frames 链路（_analyze_frames 串行）传入请求级确认状态；单股链路
@@ -442,6 +446,8 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
         cross_section_percentiles=cross_section_percentiles,
         rank_time_keys=rank_time_keys,
         rank_frame_indices=rank_frame_indices,
+        lifecycle_price_changes=pv_changes,
+        lifecycle_volume_ratios=pv_ratios,
     )
     if not signal:
         return None
@@ -661,6 +667,23 @@ def _analyze_frames(
                     amount_history.append(row.get("amount"))
                     parsed_bar = bar_of(row)
                     atr_history.append(parsed_bar)
+            # Q1 机制一（合同 C-6，2026-10-07）：lifecycle 价量序列与 trend_ranks/percentiles
+            # 严格等长对齐——prefix 只含有 rank 帧（bars 口径），上面的 row 循环按 row 存在性
+            # 收集、与 ranks 不等长（历史债），不能混用（防 dv/priceMomentum 输入漂移）。
+            # row 缺/字段缺 → None（该步证据缺，direction_gate 维持 G1 置缺，fail-visible）。
+            pv_changes: list[Any] = []
+            pv_ratios: list[Any] = []
+            for prefix_item in prefix:
+                fi = frame_key_indices.get(prefix_item[0], -1)
+                p_row = None
+                if 0 <= fi <= index:
+                    p_row = next(
+                        (st for st in frames[fi].get("stocks", [])
+                         if isinstance(st, dict) and str(st.get("code") or "") == code),
+                        None,
+                    )
+                pv_changes.append(p_row.get("change") if p_row else None)
+                pv_ratios.append(p_row.get("volumeRatio") if p_row else None)
             full_tasks.append((
                 engine.config, stock, frame, trend_ranks, trend_percentiles, regime, hot_themes,
                 momentum_v2_ctx, market_median, market_sample_count, market_median_percentile,
@@ -669,6 +692,7 @@ def _analyze_frames(
                 gate_confirm_state,
                 cross_section_percentiles,
                 rank_time_keys, rank_frame_indices,
+                pv_changes, pv_ratios,
             ))
 
         # 完整四信号计算：单股逐股纯 Python 计算仅 ~1ms/股，全市场 224 股串行 ~0.2s。
