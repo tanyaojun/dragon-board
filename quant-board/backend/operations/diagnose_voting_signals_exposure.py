@@ -20,12 +20,24 @@ D1 部分（§12.2 合同，2026-10-07 用户裁决开跑）：
   would-be synergy S）；
 - jump 事件表加列（trigger_type / pass @vr 1.25/1.5 / chg·vr bucket × h8）。
 
+W0-2 增补（2026-10-07，ranktrend-vote-structure-redesign-plan.md；判定线跑数前冻结）：
+- amount 杠杆重估列：amount_ratio 可算率（分窗分月）/ 可算帧 ar 分布 / amount_score≠0 帧占比 /
+  可算帧 h8 分层（ar≥amountRatioHigh / ≤amountRatioLow / 中间带，含 strong/retreat 对照列）。
+- **预声明判定线（冻结，跑后不得调）**：可算率 <20% → 维持归档；≥20% 且 h8 分层差 ≥0.02 →
+  立项「amount 进档位判定」L2 预登记（喂 tier 方向，非调 score——§4.2 量价①根因）。
+  分层差操作口径 = decision 窗三对分层差（high−mid / low−mid / high−low）取 |max|，
+  判据量 = excess_mean（分位桶基线校正，本脚本 D1 框架标准读数；raw mean_ret 同列披露）。
+  判定 population=decision 窗（脚本冻结惯例），分窗分月全披露供严格口径复核。
+- 实施：主 vp 调用保持不传 amount_ratio（存量读数零漂移）；amount 列走第二次
+  compute_volume_price_score 调用（amount_ratio=ar），逐帧自证 tier 零漂移（vp_tier_drift 计数，
+  期望 0——tier 由 quadrant/fund/reasons 决定不消费 score）。
+
 窗口对齐：与 optimization.data_windows.WINDOWS 标准窗一致（decision 04-15~07-31 /
 oos1 08-15~08-31 / oos2 09-01~09-30 全月）+ midgap 08-01~08-14 报告列；
 主判定 population=decision 窗（§12.0 冻结）。
 
 口径简化（自证线覆盖）：sampleQuality 恒过时间线检查（可能高估 res 参与率，对照 D-a 登记）；
-amount_ratio 不传（vp 档位不消费 score，tier 分布不受影响）；h8 population=全部股帧
+主 vp 调用不传 amount_ratio（W0-2 amount 列走独立二次调用，存量读数零漂移）；h8 population=全部股帧
 （与 harness 的 replay 信号 population≈等价，len=1 有信号）。
 
 用法：
@@ -56,7 +68,7 @@ from backend.analysis.ranktrend.engine.runtime import (
     frame_market_median,
     frame_market_median_percentile,
 )
-from backend.analysis.ranktrend.ranking.volume_price import _synergy_tier, compute_volume_price_score
+from backend.analysis.ranktrend.ranking.volume_price import _synergy_tier, compute_amount_ratio, compute_volume_price_score
 from backend.analysis.ranktrend.trend.cross_section import compute_cross_section
 from backend.analysis.ranktrend.trend.lifecycle import analyze_cycle, lifecycle_decision
 from backend.analysis.ranktrend.trend.risk import analyze_risk, market_regime
@@ -143,6 +155,10 @@ def main() -> None:
     frame_dates = [str(f.get("tradingDate") or "") for f in frames]
     labels = [window_label(d) for d in frame_dates]
     attention_maps = [attention_rank_lookup(f.get("stocks") or []) for f in frames]
+    # W0-2：逐帧 code→row 映射（同引擎 _stock_lookup 语义）——amount 历史按 rank 序列元素对齐收集
+    stock_row_maps: list[dict[str, dict]] = [
+        {str(s.get("code") or ""): s for s in (f.get("stocks") or []) if s.get("code")} for f in frames
+    ]
     # D1 前置：regime 四态 + raw rank 前视表（h8 逐字镜像 tier_forward_returns：raw rank/帧内行数）
     regime_states: list[str] = []
     raw_rank_maps: list[dict[str, float]] = []
@@ -175,6 +191,10 @@ def main() -> None:
     fund_ctx: dict[str, Counter] = defaultdict(Counter)    # window -> {rise_volume_n, fund_pos_n}
     persist_elig: dict[str, Counter] = defaultdict(Counter)  # window -> {N: count, frames: n}
     macd_ctx: dict[str, Counter] = defaultdict(Counter)    # window -> {multi_day_series, n_ge22}
+    # W0-2 容器
+    amount_ctx: dict[str, Counter] = defaultdict(Counter)          # window -> {total, computable, score_ne0, vp_tier_drift}
+    amount_ctx_month: dict[str, Counter] = defaultdict(Counter)    # "YYYY-MM" -> 同上
+    ar_vals: dict[str, list] = defaultdict(list)                   # window -> 可算帧 ar 值（分布/占比）
 
     # ── D1 容器（regime_states/raw_rank_maps/raw_totals 已在前置块构建）──
     h8_base: dict[str, list] = defaultdict(lambda: [[0, 0] for _ in range(10)])   # window -> bucket -> [n, pos]
@@ -265,6 +285,7 @@ def main() -> None:
             pcts: list[float] = []
             elem_dates: list[str] = []
             elem_fi: list[int] = []
+            amounts: list[Any] = []  # W0-2：与 ranks/pcts 元素严格对齐（同生产 _replay_stock 语义）
             for hj in range(history_start, fi + 1):
                 r = attention_maps[hj][0].get(code)
                 if r is None:
@@ -273,6 +294,7 @@ def main() -> None:
                 pcts.append(percentile_rank(float(r), attention_maps[hj][1]))
                 elem_dates.append(frame_dates[hj])
                 elem_fi.append(hj)
+                amounts.append((stock_row_maps[hj].get(code) or {}).get("amount"))
             stock_frames_total += 1
             ln = len(pcts)
             regime = regime_states[fi]
@@ -355,12 +377,34 @@ def main() -> None:
                 h8_add(label, f"t1|res_mid|{span_trigger(elem_dates, elem_fi, ln - config.resonanceMidWindowBars)}|{regime}|{dm}", h8s)
                 h8_add(label, f"t1|res_path|{span_trigger(elem_dates, elem_fi, ln - config.resonancePathWindowBars)}|{regime}|{dm}", h8s)
 
-            # vp（amount 不传：档位不消费 score）
+            # vp（主调用不传 amount_ratio：档位不消费 score，存量读数零漂移）
             vp = compute_volume_price_score(
                 code, stock.get("change"), stock.get("volumeRatio"),
                 stock.get("zlje"), stock.get("zljzb"), config,
             )
             tier_dist[label]["vp"][vp.get("signalTier") or "unknown"] += 1
+
+            # ── W0-2：amount 杠杆重估列（判定线冻结见文件头）──
+            ar = compute_amount_ratio(amounts, config)
+            _ac = amount_ctx[label]
+            _acm = amount_ctx_month[(frame_dates[fi] or "unknown")[:7]]
+            _ac["total"] += 1
+            _acm["total"] += 1
+            if ar is not None:
+                _ac["computable"] += 1
+                _acm["computable"] += 1
+                ar_vals[label].append(ar)
+                # 独立二次调用仅供 amount 列；tier 漂移自证（期望 0）
+                vp_ar = compute_volume_price_score(
+                    code, stock.get("change"), stock.get("volumeRatio"),
+                    stock.get("zlje"), stock.get("zljzb"), config, amount_ratio=ar,
+                )
+                _ac["vp_tier_drift"] += int(vp_ar.get("signalTier") != vp.get("signalTier"))
+                amt_score = _finite((vp_ar.get("breakdown") or {}).get("amount"))
+                _ac["score_ne0"] += int(amt_score is not None and abs(amt_score) > 0)
+                band = "high" if ar >= config.amountRatioHigh else "low" if ar <= config.amountRatioLow else "mid"
+                h8_add(label, f"amount|{band}|{regime}", h8s)
+                h8_add(label, f"amount|{band}|all", h8s)
             if vp.get("quadrant") == "rise_volume":
                 fund_ctx[label]["rise_volume_n"] += 1
                 fund_v = _finite((vp.get("breakdown") or {}).get("fund"))
@@ -735,6 +779,56 @@ def main() -> None:
                                 if k[0] == w and k[1].startswith("persist|")})
         }
 
+    # ── W0-2：amount 杠杆重估读出（判定线冻结见文件头）──
+    def _ar_quantiles(vals: list) -> dict | None:
+        if not vals:
+            return None
+        arr = np.array(vals, dtype=float)
+        return {f"p{p}": round(float(np.percentile(arr, p)), 3) for p in (10, 25, 50, 75, 90)}
+
+    amount_out = {}
+    for win, c in sorted(amount_ctx.items()):
+        n, k = int(c["total"]), int(c["computable"])
+        vals = ar_vals.get(win) or []
+        arr = np.array(vals, dtype=float) if vals else None
+        amount_out[win] = {
+            "total": n,
+            "computable": k,
+            "computable_rate": round(k / n, 4) if n else None,
+            "amount_score_ne0_share": round(int(c["score_ne0"]) / k, 4) if k else None,
+            "vp_tier_drift": int(c["vp_tier_drift"]),
+            "share_ge_high": round(float((arr >= config.amountRatioHigh).mean()), 4) if arr is not None and arr.size else None,
+            "share_le_low": round(float((arr <= config.amountRatioLow).mean()), 4) if arr is not None and arr.size else None,
+            "ar_quantiles": _ar_quantiles(vals),
+        }
+    amount_month_out = {
+        m: {
+            "total": int(c["total"]),
+            "computable": int(c["computable"]),
+            "computable_rate": round(int(c["computable"]) / c["total"], 4) if c["total"] else None,
+        }
+        for m, c in sorted(amount_ctx_month.items())
+    }
+    amount_h8_out = {}
+    for w in sorted(amount_ctx.keys()):
+        amount_h8_out[w] = {band: h8_excess(w, f"amount|{band}|all") for band in ("high", "mid", "low")}
+
+    def _amount_strata_diffs(strata: dict) -> dict:
+        def _pick(band: str, key: str):
+            v = strata.get(band) or {}
+            return v.get(key) if v.get("n") else None
+        out = {}
+        for a, b in (("high", "mid"), ("low", "mid"), ("high", "low")):
+            ea, eb = _pick(a, "excess_mean"), _pick(b, "excess_mean")
+            ra, rb = _pick(a, "mean_ret"), _pick(b, "mean_ret")
+            out[f"{a}_vs_{b}"] = {
+                "excess_mean_diff": round(ea - eb, 4) if (ea is not None and eb is not None) else None,
+                "mean_ret_diff": round(ra - rb, 6) if (ra is not None and rb is not None) else None,
+            }
+        return out
+
+    amount_diffs_by_window = {w: _amount_strata_diffs(s) for w, s in amount_h8_out.items()}
+
     # ── 冻结判定线评估（§12.0 冻结 + §12.2 修正，只对照不调线）──
     dec_exp = exposure_out.get("decision", {})
     q1_metrics = {k: v.get("cross_day_share") for k, v in dec_exp.items()
@@ -775,6 +869,31 @@ def main() -> None:
         else "读数不足"
     )
 
+    # W0-2 冻结判定线评估（判定 population=decision 窗；分窗分月全披露）
+    dec_amount_rate = (amount_out.get("decision") or {}).get("computable_rate")
+    dec_amount_diffs = amount_diffs_by_window.get("decision", {})
+    _diff_vals = [v["excess_mean_diff"] for v in dec_amount_diffs.values() if v["excess_mean_diff"] is not None]
+    _max_abs_diff = max((abs(v) for v in _diff_vals), default=None)
+    _total_all = sum(int(c["total"]) for c in amount_ctx.values())
+    _comp_all = sum(int(c["computable"]) for c in amount_ctx.values())
+    if dec_amount_rate is None or dec_amount_rate < 0.20:
+        amount_verdict = "维持归档（可算率<20%）"
+    elif _max_abs_diff is not None and _max_abs_diff >= 0.02:
+        amount_verdict = "达立项线→L2 预登记候选（amount 喂 tier）"
+    else:
+        amount_verdict = "维持归档（分层差<0.02）"
+    amount_gate = {
+        "thresholds": {"high": config.amountRatioHigh, "low": config.amountRatioLow, "period": config.amountRatioPeriod},
+        "line_rate": 0.20, "line_strata_diff": 0.02,
+        "computable_rate_decision": dec_amount_rate,
+        "computable_rate_total": round(_comp_all / _total_all, 4) if _total_all else None,
+        "computable_rate_by_month": {m: v["computable_rate"] for m, v in amount_month_out.items()},
+        "decision_strata_diffs": dec_amount_diffs,
+        "strata_diffs_by_window": amount_diffs_by_window,
+        "max_abs_excess_mean_diff_decision": _max_abs_diff,
+        "verdict": amount_verdict,
+    }
+
     gates = {
         "q1_open_case": {"hits_ge15": q1_hits, "all_below_5": q1_all_below5,
                          "verdict": "立项L2" if q1_hits else ("归档" if q1_all_below5 else "观察带5-15%")},
@@ -790,6 +909,7 @@ def main() -> None:
                          "p_pass_v10": round(dec_ne.get("pass_v10", 0) / ne_n, 4) if ne_n else None,
                          "would_S_b2": dec_ne.get("would_S_b2", 0),
                          "would_syn_S_b2": dec_ne.get("would_syn_S_b2", 0)},
+        "amount_leverage": amount_gate,
         "s_gate_selfcheck": {"s_cs_notpos_decision": s_gate_violation,
                              "verdict": "PASS" if s_gate_violation == 0 else "FAIL(接线bug，读数作废)"},
     }
@@ -830,6 +950,13 @@ def main() -> None:
                       "h8": ne_h8_out},
         "jump_h8": jump_h8_out,
         "persist_h8": persist_h8_out,
+        "w02_amount": {
+            "by_window": amount_out,
+            "by_month": amount_month_out,
+            "h8_strata_by_window": amount_h8_out,
+            "strata_diffs_by_window": amount_diffs_by_window,
+            "gate": amount_gate,
+        },
         "gates": gates,
     }
     out_path = Path(args.out)
@@ -843,6 +970,7 @@ def main() -> None:
         "gates": gates,
         "t4_stage1": gates.get("t4_stage1"),
         "t5_new_entry": gates.get("t5_new_entry"),
+        "amount_leverage": gates.get("amount_leverage"),
     }, ensure_ascii=False, indent=1))
 
 

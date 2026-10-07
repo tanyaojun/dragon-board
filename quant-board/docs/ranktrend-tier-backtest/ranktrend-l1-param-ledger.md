@@ -507,3 +507,16 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **结构读数沉淀**（D1，`data/reports/voting-signals-d1.json` 本地）：synergy S 仅 127 帧（0.08%）且 127/127 由 cs 正票撑进（「cs 守门维」实证）；vp E 档 19.9%（远超预估）；res D∧buy 6.6%（strength 倒挂实体）；双动量一致率 91.8%/82.4%；fallback 覆盖 36.5%；新入榜 P(确认门)=19.3%。
 - **golden**：快照重录一次（configRepr 新增 4 字段文本，场景输出零漂移）；全量 644 绿。
 - **回退**：全部新参数默认即现行为；T5a 为代码删除（git 回退唯一路径）。
+
+## 20. 四信号结构重设计 W0（2026-10-07，计划 ranktrend-vote-structure-redesign-plan.md 两案：一阻一达线）
+
+> 执行线报告：W0-1 被 Q1 并行线活进程阻断（计划前提「与 Q1 唯一交叠=无」有误，见下）；W0-2 判定线达标。产物 `data/reports/voting-signals-amount-leverage-w02.json`（本地不入库，全窗 04-15~10-07，1071 帧/24.57 万股帧，255s）。
+
+| 案 | 状态 | 判定依据 |
+|---|---|---|
+| W0-1 删 pm/dv 死票位 | **推迟（Q1 收官后补做）** | 实测发现 Q1 合同机制二 C-a 正是 dv 投票权重接线（`tierSynergyDivergenceVote` 0.25/0.5/0.75 三臂，`evaluate_lifecycle_q1_trials.py`），trial 活进程中（checkpoint partial，19:25 起跑）且后续 C-a×C-c 组合臂仍需消费该字段；合同 C-8 明文要求该配置面保留作回退。dv 摘除=毁三预登记臂；pm 摘除虽零行为但 trial 中途不动引擎文件（config.py/volume_price.py 均在 trial 导入图）。计划文档「唯一交叠=无」前提已在该文档协调表勘误。 |
+| W0-2 amount 杠杆重估 | **达立项线→L2 预登记候选（待用户裁决）** | 预声明线（冻结于跑数前）：可算率<20% 归档 / ≥20% 且分层差≥0.02 立项。实测：可算率 decision 72.4%（全窗 81.4%；7 月仅 23.8%=补采月数据缺口，4 月 64.4%=序列起点无基准，5/6/8/9 月 93-96%）——旧归档前提 6.12% 已被回填推翻；h8 分层（excess_mean，decision 窗）：放量(≥1.5) −0.0127 / 中间带 +0.0043 / 缩量(≤0.5) +0.0146，三对差 |max|=0.0273（high−low）≥0.02；**四窗方向全部一致单调（放量最差、缩量最好）**，oos1/oos2 端-中差达 0.036-0.0385 更强。方向语义=放量资金帧排名 8 帧后验走弱（退潮保护向），与 vp E 短路 −32% wrxpf 保护同族。 |
+
+- **读数细节**：ar 分布 decision p10-p90 = 0.353/0.853/1.179/1.372/1.627（中位 1.18≈量纲健康）；amount_score≠0 帧占比（可算帧内）21.7-28.3%；`vp_tier_drift`=0（二次调用逐帧自证 tier 不消费 score，喂 tier 立项方向的前提成立）；s_gate PASS；引擎自证 rank/synergy 622/70（rate 0.899）与归档 D1 报告**逐位相同**=既有口径差非本次引入（vp/cs/res 692/0 满分）——**遗留观察项：D1 框架 rank 复刻在 9 月下旬帧 10.1% mismatch 根因未查，W1-2 若扩展 D1 框架须先补此洞**。分层差严格口径注记：decision 窗端-中差（high−mid −0.0169 / low−mid +0.0103）单看均 <0.02，过线靠 high−low 0.0273；oos1/oos2 端-中差独立过线；判定按预声明操作口径（三对取 |max|）执行。
+- **立项方向预注**（L2 合同起草时展开）：amount 进档位判定=喂 tier（gate/分层形态），非调 score（amount_score 只进 score 的根因 §4.2 量价①）；与 W2-2 价格确认门、W1-1 D∧buy 修复无原料冲突，语料包 v2 组装时并入本读数。
+- **回退**：零行为零参数改动，无需回退；`diagnose_voting_signals_exposure.py` 扩展为纯增列（主 vp 调用不传 amount_ratio，存量读数零漂移）。
