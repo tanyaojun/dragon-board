@@ -45,6 +45,7 @@
 - **不撞证伪论证**：票权/强度表轴已扫（§15.2）的是「档位强度值」，本case改的是「D∧buy 组合语义」（该组合从未被单独测量）；res 归零臂受损 23-55% 证明维度在票，动一个子组合≠归零。
 - **验证**：判定卡+Track 1+per-dim res 迁移矩阵（预期 D∧buy 帧 6.6% 中部分降 B/C，saEx 盲区面大→Track 1 权重高）+市况分桶。
 - **成本**：3 候选 ×（replay+Track 1）≈ 6 当量。
+- **执行记录（2026-10-07 晚）**：**合同备料完成** `vote-w11-res-dbuy-preregistration.md`（待用户过目→外部模型审定→用户裁决开跑）。机制勘误=候选 c 与 b **数学等价**（D∧buy⟺reversal_penalty≥0.6 驱动，D∧sell 独立路径不动），并案后按两臂执行（cap_b/abstain，单参三态 `tierSynergyResonanceDbuyMode` 默认 off 零行为）；票值算术核实 +0.75 > B +0.525。**接线须待 Q1 线收官**（config.py 缠绕+trial 活进程），台账 §21。
 
 ### W1-2 rank 稀疏票诊断（零行为，与 W1-1 同批顺路）
 
@@ -52,6 +53,7 @@
 - **改法**：D1 框架加列：C 档帧的 combined 值分布（距 buyScoreThreshold 0.12 的距离谱）、buy_count=1 差一票帧占比、五分量信号分歧矩阵；fallback 帧（36.5%）单独分层。
 - **读出**：若「差一票」帧占比高（>10%）→ 立项阈值面 L2（注意 §2b buyScoreThreshold 0.18 曾 OOS 反向的旧账，须新代际重验）；若分布远离阈值 → C 档弃权=正确设计，归档。
 - **成本**：0 增量（D1 顺路）。
+- **执行记录（2026-10-07 晚）**：**达立项线 → rank 阈值面 L2 预登记候选（待用户裁决）**。decision 窗 buy_count=1 占 C 档 **31.9%**（四窗 32-33% 稳定）；分值空间近阈值(<0.02)仅 0.5%=**缺共识票不缺分数**；缺位分量 direction 55%/acceleration 38%；buy_count=2（共识够分数不够）15.3%；ln=1 新入榜 100% C 档；res insufficient 层 24.3%。读数 `data/reports/voting-signals-w12-rank-sparse.json`，台账 §21。前置依赖已完成：D1 框架 rank 自证 70 假 mismatch 根因修复（attention 口径 ln=0 幻影比对，修复后五维 622/0，台账 §21）。
 
 ---
 

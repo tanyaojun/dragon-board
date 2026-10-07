@@ -32,6 +32,20 @@ W0-2 增补（2026-10-07，ranktrend-vote-structure-redesign-plan.md；判定线
   compute_volume_price_score 调用（amount_ratio=ar），逐帧自证 tier 零漂移（vp_tier_drift 计数，
   期望 0——tier 由 quadrant/fund/reasons 决定不消费 score）。
 
+W1-2 增补（2026-10-07，ranktrend-vote-structure-redesign-plan.md；判定读出规则跑数前冻结）：
+- rank 稀疏票诊断列（population：ln≥2 为主，ln==1 新入榜单列，ln==0 幻影不入列）：
+  C 档占比 / buy_count 分布（buy_count=1=「差一票」）/ combined 距 buyScoreThreshold(0.12) 距离谱
+  （<0.02 / 0.02-0.05 / 0.05-0.10 / 0.10-0.20 / ≥0.20 / combined≥阈值但被共识挡下）/ 五分量信号
+  模式矩阵（buy_count==1 帧记录缺位分量）/ fallback（res status）分层。
+- **预声明读出（冻结）**：decision 窗 buy_count==1 占 C 档 >10% 或 combined 距阈值 <0.02 占 C 档
+  >10% → 立项「rank 阈值面」L2（注意 §2b buyScoreThreshold 0.18 曾 OOS 反向旧账，须新代际重验）；
+  两项均 ≤10% → C 档弃权=正确设计，归档。
+- **自证口径修正（2026-10-07 根因修复，零读数漂移）**：当帧无 attention rank（avgRankNum 缺失/≤0
+  被 attention_rank_lookup 过滤）的股票引擎不产信号；此前逐股幻影链（ln=0 fallback 驱动出 rank C）
+  与 unknown 比对产生 70 假 mismatch（07-07 补采两帧各 35 只 rank 有值但 avgRankNum 缺失；R1 检查帧
+  恰无此类股票故显示满分）。修复=自证比对跳过无引擎信号股票（rank-less 预期跳过计数器+有 rank 却缺
+  引擎信号警报计数器分列）；冻结 population 不变（幻影仍进存量列，新增 rank_less 计数 fail-visible）。
+
 窗口对齐：与 optimization.data_windows.WINDOWS 标准窗一致（decision 04-15~07-31 /
 oos1 08-15~08-31 / oos2 09-01~09-30 全月）+ midgap 08-01~08-14 报告列；
 主判定 population=decision 窗（§12.0 冻结）。
@@ -105,8 +119,11 @@ def _finite(value) -> float | None:
     return num if math.isfinite(num) else None
 
 
-def compose_base_signal(technical: dict, config: RankTrendConfig) -> tuple[str, float]:
-    """compose_decision 的 base 复刻（risk/reversal 只影响 final/confidence，不影响 base/tier）。"""
+def compose_base_signal(technical: dict, config: RankTrendConfig) -> tuple[str, float, int, int]:
+    """compose_decision 的 base 复刻（risk/reversal 只影响 final/confidence，不影响 base/tier）。
+
+    W1-2 起额外返回 (buy_count, sell_count) 供「差一票」诊断（引擎 compose_decision 同式）。
+    """
 
     def cross_signal(cross: str) -> str:
         return "buy" if cross == "golden" else "sell" if cross == "death" else "hold"
@@ -132,7 +149,7 @@ def compose_base_signal(technical: dict, config: RankTrendConfig) -> tuple[str, 
         base = "hold" if config.requireMacdGoldenCross else "buy"
     elif sell_count >= config.decisionMinAgreement and buy_count <= config.decisionMaxOpposition and combined <= config.sellScoreThreshold:
         base = "sell"
-    return base, clamp(combined, -1, 1)
+    return base, clamp(combined, -1, 1), buy_count, sell_count
 
 
 def main() -> None:
@@ -195,6 +212,10 @@ def main() -> None:
     amount_ctx: dict[str, Counter] = defaultdict(Counter)          # window -> {total, computable, score_ne0, vp_tier_drift}
     amount_ctx_month: dict[str, Counter] = defaultdict(Counter)    # "YYYY-MM" -> 同上
     ar_vals: dict[str, list] = defaultdict(list)                   # window -> 可算帧 ar 值（分布/占比）
+    # W1-2 容器
+    rank_sparse: dict[str, Counter] = defaultdict(Counter)         # window -> C 档/差票/距离谱计数
+    rank_c_patterns: dict[str, Counter] = defaultdict(Counter)     # window -> buy_count==1 帧五分量信号模式
+    rank_c_comb: dict[str, list] = defaultdict(list)               # window -> C 帧 combined 值（分布）
 
     # ── D1 容器（regime_states/raw_rank_maps/raw_totals 已在前置块构建）──
     h8_base: dict[str, list] = defaultdict(lambda: [[0, 0] for _ in range(10)])   # window -> bucket -> [n, pos]
@@ -300,6 +321,7 @@ def main() -> None:
             regime = regime_states[fi]
             len_buckets[label]["total"] += 1
             len_buckets[label]["len_1"] += int(ln == 1)
+            len_buckets[label]["rank_less"] += int(ln == 0)  # W1-2 根因修复配套：当帧无 attention rank（avgRankNum 过滤）计数 fail-visible
             len_buckets[label]["len_2_3"] += int(2 <= ln <= 3)
             len_buckets[label]["len_4_8"] += int(4 <= ln <= 8)
             len_buckets[label]["len_9_21"] += int(9 <= ln <= 21)
@@ -351,9 +373,13 @@ def main() -> None:
             technical = analyze_technical(pcts, config, fallback)
 
             # rank
-            base_signal, combined = compose_base_signal(technical, config)
+            base_signal, combined, buy_count, sell_count = compose_base_signal(technical, config)
             rank_tier, _ = _rank_trend_tier(base_signal, combined, config)
             tier_dist[label]["rank"][rank_tier] += 1
+            if ln == 1:
+                # W1-2：新入榜单列（主 population=ln≥2）
+                rank_sparse[label]["ln1_total"] += 1
+                rank_sparse[label]["ln1_c"] += int(rank_tier == "C")
 
             # ── D1/T1：三态 trigger × h8（dual_mom_disagree 混淆分层；dm 仅 ln≥22 有定义）──
             comp_v = _finite(technical["momentumProfile"].get("composite")) or 0.0
@@ -466,6 +492,35 @@ def main() -> None:
             rs["total"] += 1
             rs["ok"] += int(res.get("status") == "ok")
             rs["d_and_buy"] += int(res_tier == "D" and res_dir == "buy")
+
+            # ── W1-2：rank 稀疏票诊断（预声明读出见文件头；主 population=ln≥2）──
+            if ln >= 2:
+                rsp = rank_sparse[label]
+                rsp["n"] += 1
+                if rank_tier == "C":
+                    rsp["c_total"] += 1
+                    rsp[f"c_buycnt_{buy_count}"] += 1
+                    if combined >= config.buyScoreThreshold:
+                        rsp["c_blocked_by_agreement"] += 1
+                    else:
+                        d_thr = config.buyScoreThreshold - combined
+                        rsp["c_below_d002"] += int(d_thr < 0.02)
+                        rsp["c_below_d002_005"] += int(0.02 <= d_thr < 0.05)
+                        rsp["c_below_d005_010"] += int(0.05 <= d_thr < 0.10)
+                        rsp["c_below_d010_020"] += int(0.10 <= d_thr < 0.20)
+                        rsp["c_below_dge020"] += int(d_thr >= 0.20)
+                    if buy_count == 1:
+                        rsp["c_buy_count_1"] += 1
+                        _sigs = [
+                            str(technical["signals"][k]["signal"]) for k in ("direction", "acceleration", "zeroCross")
+                        ] + [
+                            "buy" if str((technical["macd"] or {}).get("cross")) == "golden" else "sell" if str((technical["macd"] or {}).get("cross")) == "death" else "hold",
+                            "buy" if str(((technical.get("maCross") or {}).get("cross")) or "none") == "golden" else "sell" if str(((technical.get("maCross") or {}).get("cross")) or "none") == "death" else "hold",
+                        ]
+                        rank_c_patterns[label]["|".join(_sigs)] += 1
+                        rsp["c_one_missing_" + "_".join(nm for nm, sg in zip(("dir", "acc", "zero", "macd", "ma"), _sigs) if sg == "buy")] += 1
+                    rsp[f"c_res_{str(res.get('status') or 'unknown')}"] += 1
+                    rank_c_comb[label].append(float(combined))
 
             # lifecycle（G1 时间键接线，同生产默认 cross_day）
             cyc = analyze_cycle(ranks, pcts, config, time_keys=elem_dates)
@@ -593,6 +648,15 @@ def main() -> None:
             # 引擎自证（检查帧逐股比对四维+synergy）
             if not args.skip_engine_check and fi in engine_check_indices:
                 eng = engine_signals.get(code) or {}
+                if not eng:
+                    # 2026-10-07 根因修复（见文件头）：当帧无 attention rank 的股票引擎不产信号，
+                    # 幻影链与 unknown 比对曾产生 70 假 mismatch。rank-less=预期跳过；
+                    # 有 rank 却缺引擎信号=真异常，警报计数 fail-visible。
+                    if attention_maps[fi][0].get(code) is None:
+                        exposure["_engine"]["skipped_rank_less"] += 1
+                    else:
+                        exposure["_engine"]["alarm_ranked_stock_missing_engine_signal"] += 1
+                    continue
                 obs = eng.get("observation") or {}
                 for dim, my_tier, eng_tier in (
                     ("rank", rank_tier, (obs.get("rankTrend") or {}).get("signalTier")),
@@ -678,6 +742,11 @@ def main() -> None:
         mm = int(engine_compare.get(f"{dim}|mismatch", 0))
         engine_stats[dim] = {"match": m, "mismatch": mm,
                              "rate": round(m / (m + mm), 4) if (m + mm) else None}
+    # fail-visible：自证 population 修正配套计数（2026-10-07 根因修复；alarm>0=引擎/诊断 population 真分歧）
+    engine_stats["_population"] = {
+        "skipped_rank_less": int(engine_compare.get("skipped_rank_less", 0)),
+        "alarm_ranked_stock_missing_engine_signal": int(engine_compare.get("alarm_ranked_stock_missing_engine_signal", 0)),
+    }
 
     # ── D1 h8 聚合 ──
     def h8_excess(window: str, cell: str) -> dict:
@@ -829,6 +898,36 @@ def main() -> None:
 
     amount_diffs_by_window = {w: _amount_strata_diffs(s) for w, s in amount_h8_out.items()}
 
+    # ── W1-2：rank 稀疏票诊断读出（预声明规则见文件头）──
+    rank_sparse_out = {}
+    for win, c in sorted(rank_sparse.items()):
+        n, ct = int(c.get("n", 0)), int(c.get("c_total", 0))
+        comb = rank_c_comb.get(win) or []
+        rank_sparse_out[win] = {
+            "n_ln_ge2": n,
+            "c_total": ct,
+            "c_share": round(ct / n, 4) if n else None,
+            "ln1_total": int(c.get("ln1_total", 0)),
+            "ln1_c": int(c.get("ln1_c", 0)),
+            "ln1_c_share": round(int(c.get("ln1_c", 0)) / c.get("ln1_total", 0), 4) if c.get("ln1_total") else None,
+            "c_buy_count_1_share_of_c": round(int(c.get("c_buy_count_1", 0)) / ct, 4) if ct else None,
+            "c_below_thr_within_002_share_of_c": round(int(c.get("c_below_d002", 0)) / ct, 4) if ct else None,
+            "c_blocked_by_agreement_share_of_c": round(int(c.get("c_blocked_by_agreement", 0)) / ct, 4) if ct else None,
+            "c_distance_spectrum_share_of_c": (
+                {k.replace("c_below_", ""): round(int(c.get(k, 0)) / ct, 4) for k in (
+                    "c_below_d002", "c_below_d002_005", "c_below_d005_010", "c_below_d010_020", "c_below_dge020") if ct}
+                if ct else None
+            ),
+            "c_buy_count_dist": {k.replace("c_buycnt_", ""): int(v) for k, v in sorted(c.items()) if k.startswith("c_buycnt_")},
+            "c_one_missing_component": {k.replace("c_one_missing_", ""): int(v) for k, v in sorted(c.items(), key=lambda kv: -kv[1]) if k.startswith("c_one_missing_")},
+            "c_res_status": {k.replace("c_res_", ""): int(v) for k, v in sorted(c.items()) if k.startswith("c_res_")},
+            "combined_quantiles": _ar_quantiles(comb),
+        }
+    rank_c_patterns_out = {
+        win: {k: int(v) for k, v in sorted(c.items(), key=lambda kv: -kv[1])[:12]}
+        for win, c in sorted(rank_c_patterns.items())
+    }
+
     # ── 冻结判定线评估（§12.0 冻结 + §12.2 修正，只对照不调线）──
     dec_exp = exposure_out.get("decision", {})
     q1_metrics = {k: v.get("cross_day_share") for k, v in dec_exp.items()
@@ -894,6 +993,28 @@ def main() -> None:
         "verdict": amount_verdict,
     }
 
+    # W1-2 冻结读出评估（decision 窗主判定；分窗全披露）
+    dec_rs = rank_sparse_out.get("decision", {})
+    _one_vote = dec_rs.get("c_buy_count_1_share_of_c")
+    _near_thr = dec_rs.get("c_below_thr_within_002_share_of_c")
+    w12_verdict = (
+        "达立项线→rank 阈值面 L2 预登记候选（buyScoreThreshold 0.18 曾 OOS 反向，须新代际重验）"
+        if ((_one_vote is not None and _one_vote > 0.10) or (_near_thr is not None and _near_thr > 0.10))
+        else "归档（C 档弃权=正确设计：差票/近阈值占比≤10%）"
+    )
+    w12_gate = {
+        "line_one_vote_or_near_thr": 0.10,
+        "decision_buy_count_1_share_of_c": _one_vote,
+        "decision_below_thr_002_share_of_c": _near_thr,
+        "decision_c_share": dec_rs.get("c_share"),
+        "by_window": {
+            w: {"c_share": v.get("c_share"), "buy1_share_of_c": v.get("c_buy_count_1_share_of_c"),
+                "near002_share_of_c": v.get("c_below_thr_within_002_share_of_c")}
+            for w, v in rank_sparse_out.items()
+        },
+        "verdict": w12_verdict,
+    }
+
     gates = {
         "q1_open_case": {"hits_ge15": q1_hits, "all_below_5": q1_all_below5,
                          "verdict": "立项L2" if q1_hits else ("归档" if q1_all_below5 else "观察带5-15%")},
@@ -910,6 +1031,7 @@ def main() -> None:
                          "would_S_b2": dec_ne.get("would_S_b2", 0),
                          "would_syn_S_b2": dec_ne.get("would_syn_S_b2", 0)},
         "amount_leverage": amount_gate,
+        "w12_rank_sparse": w12_gate,
         "s_gate_selfcheck": {"s_cs_notpos_decision": s_gate_violation,
                              "verdict": "PASS" if s_gate_violation == 0 else "FAIL(接线bug，读数作废)"},
     }
@@ -957,6 +1079,7 @@ def main() -> None:
             "strata_diffs_by_window": amount_diffs_by_window,
             "gate": amount_gate,
         },
+        "w12_rank_sparse": {"by_window": rank_sparse_out, "c_patterns_top12": rank_c_patterns_out, "gate": w12_gate},
         "gates": gates,
     }
     out_path = Path(args.out)
@@ -971,6 +1094,7 @@ def main() -> None:
         "t4_stage1": gates.get("t4_stage1"),
         "t5_new_entry": gates.get("t5_new_entry"),
         "amount_leverage": gates.get("amount_leverage"),
+        "w12_rank_sparse": gates.get("w12_rank_sparse"),
     }, ensure_ascii=False, indent=1))
 
 

@@ -520,3 +520,16 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **读数细节**：ar 分布 decision p10-p90 = 0.353/0.853/1.179/1.372/1.627（中位 1.18≈量纲健康）；amount_score≠0 帧占比（可算帧内）21.7-28.3%；`vp_tier_drift`=0（二次调用逐帧自证 tier 不消费 score，喂 tier 立项方向的前提成立）；s_gate PASS；引擎自证 rank/synergy 622/70（rate 0.899）与归档 D1 报告**逐位相同**=既有口径差非本次引入（vp/cs/res 692/0 满分）——**遗留观察项：D1 框架 rank 复刻在 9 月下旬帧 10.1% mismatch 根因未查，W1-2 若扩展 D1 框架须先补此洞**。分层差严格口径注记：decision 窗端-中差（high−mid −0.0169 / low−mid +0.0103）单看均 <0.02，过线靠 high−low 0.0273；oos1/oos2 端-中差独立过线；判定按预声明操作口径（三对取 |max|）执行。
 - **立项方向预注**（L2 合同起草时展开）：amount 进档位判定=喂 tier（gate/分层形态），非调 score（amount_score 只进 score 的根因 §4.2 量价①）；与 W2-2 价格确认门、W1-1 D∧buy 修复无原料冲突，语料包 v2 组装时并入本读数。
 - **回退**：零行为零参数改动，无需回退；`diagnose_voting_signals_exposure.py` 扩展为纯增列（主 vp 调用不传 amount_ratio，存量读数零漂移）。
+
+## 21. W1 批（2026-10-07 晚：W1-2 rank 稀疏诊断达立项线；W1-1 合同备料待审定；rank 自证根因修复）
+
+> 承 §20（W0）。产物 `data/reports/voting-signals-w12-rank-sparse.json`（本地，951→1071 帧全窗口径同 D1）。
+
+| 项 | 状态 | 读数/依据 |
+|---|---|---|
+| rank 自证 70 假 mismatch | **根因修复（零读数漂移）** | 根因=`attention_rank_lookup` 过滤 avgRankNum≤0，07-07 补采两帧各 35 只股票 rank 有值但 avgRankNum 缺失→引擎正确不产信号，诊断逐股幻影链（ln=0 fallback 驱动）出假 C 档与之比对；R1 检查帧恰无此类股票故曾显示满分。修复=自证比对跳过无引擎信号股票（skipped_rank_less/alarm 双计数器 fail-visible）+len_buckets 增 rank_less 计数；冻结 population 不变（幻影仍进存量列，幅度 <1% 稀释）。修复后五维自证 622/0 全 1.0 |
+| W1-2 rank 稀疏票诊断 | **达立项线→rank 阈值面 L2 预登记候选（待用户裁决）** | 预声明线（冻结于跑数前）：差一票或近阈值占 C 档 >10% 立项。实测（decision 窗）：**buy_count=1「差一票」占 C 档 31.9%**（midgap/oos1/oos2=33.0/32.8/32.4% 四窗稳定）；分值空间近阈值(<0.02)仅 0.5%——**缺的是共识票不是分数**（buy_count 分布 0/1/2=52.9/31.9/14.8%，agreement 挡下 vs 分数挡下）；缺位分量=direction 55%/acceleration 38%（动量族），macd/ma 极少；C 档内 buy_count=2（共识够分数不够）15.3%；ln=1 新入榜 100% C 档（结构性无 rank 信号）；C 档 res insufficient 层 24.3%。方向=立项「共识面/阈值面」L2（buyScoreThreshold 0.18 曾 OOS 反向旧账，须新代际重验） |
+| W1-1 res D∧buy 倒挂票 | **合同备料完成待审定** | `vote-w11-res-dbuy-preregistration.md`（判定线冻结于跑数前）：单参三态 `tierSynergyResonanceDbuyMode` off/cap_b/abstain，两剂量臂+baseline=3 replay+2 Track 1；机制勘误=**候选 c 与 b 数学等价**（D∧buy⟺reversal_penalty≥0.6 驱动，D∧sell 为独立路径不动）并案；票值算术核实 +0.75>B +0.525（强度表 [1.2,1.0,0.7,0.5,1.0,1.0]×res 权重 0.75）；**接线须待 Q1 线收官**（config.py 缠绕+trial 活进程） |
+
+- **判定线操作口径注记**：W1-2「差一票」以 count 空间（buy_count==1）为主读数、score 空间（距阈<0.02）同列披露；主 population=ln≥2（ln=0 幻影不入列、ln=1 单列），C 档分母含 res insufficient 层（fallback 分层单列）。
+- **回退**：零行为零参数改动；自证修正为比对面修复（git 回退唯一路径）。
