@@ -522,7 +522,7 @@ def _lifecycle_tier(stage: str, action: str) -> tuple[str, list[str]]:
 
 七维投票合成（resonance/rankTrend/volumePrice/crossSection/priceMomentum/**divergence**…），生命周期以 `lc_tier` 参与（**门控修正，无加性正票**，见 §1 勘误注记），**两处结构短路**（默认 hard）：
 
-> **divergence 维语义补记（Opus 审定轮 2026-10-07，源 `volume_price.py:348` docstring）**：dv=`priceRankDivergence` 第 7 维（2026-08-18 量名背离——confirm_up 一致强 / **rank_lead 关注度先行** / confirm_down / **price_lead_warn 出货预警**），**加性投票**（`v += strength × tierSynergyDivergenceVote`）。即「注意力×价格背离」已有专门加性维——任何「把价格/资金信息引入生命周期」的提案必须先与该维做冗余面测定（原文语料漏展其语义，Opus P2 提案踩此坑，见 §11）。
+> **divergence 维语义补记（Opus 审定轮 2026-10-07，源 `volume_price.py:348` docstring + `config.py:154`）**：dv=`priceRankDivergence` 第 7 维（2026-08-18 量名背离——confirm_up 一致强 / **rank_lead 关注度先行** / confirm_down / **price_lead_warn 出货预警**），已接线为加性投票（`v += strength × tierSynergyDivergenceVote`）但**默认权重 0.0=纯观察维、当前不进票**（config:154 原文「0=观察；数据验证后定默认」；对照 cs=0.75 在票、pm=0.0 实证负贡献关闭）。即「注意力×价格背离」已有专门观察维——任何「把价格/资金信息引入生命周期」的提案必须先与该维做冗余面测定（原文语料漏展其语义，Opus P2 提案踩此坑，见 §11/§11.1）。
 
 - `lc_tier=="E"` → 直接返回 `"E"`（「周期一票否决」，票值无关短路，位阶最高）；
 - `lc_tier∈{B,D}` → 已达 S/A 的帧**降一档**（S→A、A→B）。
@@ -772,3 +772,16 @@ python scripts/gptoss_questionset_review.py \
 | P5 双轴重设计 | ✅ 论证级合规 | 前置四项设计完整；「与 U 形证据一致的非单调离散门」论证成立 |
 
 建议顺序：P4-阶段1（考古 §24.3 为主，近零成本）→ P1 诊断步 → P3 → P2 读码冗余面 → P5 前置四项（stage×分位列联/互信息可直接从 replay 导出）。
+
+### §11.1 主会话考古补记（2026-10-07，"先2后1"第①批执行完毕）
+
+**P4-阶段1 两腿分解（长测计划 §24.3 存档直读，零计算）**：
+
+- **降档腿边际** = c1（降档关闭、其余 hard）：decision −39.4% / oos1 −34.4% / oos2 −5.8%（rel）——**降档正价值确认**，原档已裁决「cooling 降档非负价值」，§4.2-K 张力就此关闭；
+- **veto 腿无独立关断臂存档**（a3=新基线 gate_off 全计划 grep 零命中）；总门=旧票权 a1−a2 = −61.0%/−48.8%/−49.4%；跨基线粗估 veto 腿≈总门−降档腿（a1/a0 水平差 ~10% 注意），精确分解补一次 a3 replay（harness `evaluate_lifecycle_gate_form.py` 现成）；
+- **P4-阶段2 门槛在信号面 FAIL**——其前提「降档腿≈0 或为负」被 c1 直接否定；残余=「低位 cooling 定向豁免」（c1 是全关、定向子集未被测）弱先验未测，优先级降为最低。
+
+**P2 的 dv 维读码（Opus A1 读码义务代做）**：`trend/price_rank_divergence.py` = priceDir×rankDir **单帧**交叉四态（confirm_up=A / rank_lead=B 关注度先行 / confirm_down=C / price_lead_warn=D 出货预警）；消费权重 `tierSynergyDivergenceVote` **默认 0.0=纯观察维不进票**（config:154「0=观察」；对照 cs=0.75 在票、pm=0.0 负贡献关闭）。P2 同族残差四处：①位置条件（pct≥88；dv 无位置语义）②amount 腿（dv 无成交额）③多帧窗（8 帧符号一致 vs 单帧）④消费位置（lifecycle 决策层谓词 vs 观察维）。旁证：§24.4 Track 1 实测 vp E→D 短路真保护（放开新增 20 笔 wr/pf 更差、主窗 wrxpf −32%）。
+**P2 后续路径**：预登记须含「与 dv 触发集重叠率/增量检验」步骤；若 P2 触发集 ⊆ dv 高分位 rank_lead/price_lead_warn 且无增量 → 并入 dv 语义扩展（位置条件化+amount 腿）而非新机制。
+
+**Opus 第二轮提示词已组装**：`lifecycle-stage-opus-round2-prompt.md`（范围收窄为 P1/P3 预登记合同；本节两块考古事实作为「已核实事实」写入提示词，附审定回执 B1-B5）。
