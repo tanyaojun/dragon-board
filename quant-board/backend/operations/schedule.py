@@ -302,6 +302,44 @@ def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """两市额同期比 vsSamePct 只记录不评分（advisory 步，2026-10-06 评估报告建议 2 落地）。
+
+    - 门控=当日 EOD 情绪文档存在（与 deepValley 同门控：非交易日/无 EOD 则跳过）；
+    - 子进程=record_amount_vs_same --apply（TDX 增量同步 market_daily_amount + 全量幂等重算
+      vsSamePct/设计曲线 sub——**只存不评分**，供第八评分维 ≥20 交易日分布校准）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（校准数据积累，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_pulse(db, today, dataset_id, snapshot_type)
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.record_amount_vs_same", "--apply"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_PULSE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "amount_vs_same_timeout", "message": f"timeout {_PULSE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "amount_vs_same_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    tail = (proc.stdout or "").strip().splitlines()[-1:] or [""]
+    try:
+        record = json.loads(tail[0].removeprefix("[record] "))
+    except Exception:  # noqa: BLE001 — 摘要解析失败不回滚已写数据
+        record = {"raw": tail[0][:200]}
+    return {"ok": True, "record": record}
+
+
 def _run_peak_revalidate_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """C10 高峰兑现月度复验（advisory 步，2026-10-04 立项，镜像 deepValley 步）。
 
@@ -457,10 +495,11 @@ def run_after_market_once(
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
+        amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "amountVsSameRecord"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -470,6 +509,7 @@ def run_after_market_once(
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,
+                "amountVsSameRecord": amount_vs_same_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,

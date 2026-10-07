@@ -79,7 +79,8 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "amountVsSameRecord"]
+    assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
