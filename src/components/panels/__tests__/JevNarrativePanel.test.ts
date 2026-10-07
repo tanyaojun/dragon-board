@@ -72,7 +72,7 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('窗口缺失')
   })
 
-  test('三大焦点可视化合同：温度计 SVG+锚分位 / 拥挤 waffle+层带+饼图 / 置信柱图+多日趋势+分布明细', () => {
+  test('三大焦点可视化合同：温度计 SVG+锚分位 / 拥挤 waffle+层带+饼图 / 置信柱图+历史维度切换+分布明细', () => {
     const source = panelSource()
     // 温度计：SVG 几何 + 近20日参照分位卡 + REVERSE 注记
     expect(source).toContain('thermo-svg')
@@ -88,10 +88,14 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain("type: 'pie'")
     expect(source).not.toContain("stack: 'layers'")
     // 置信度：ECharts 柱状图（2026-10-07 用户令，热榜情绪·历史对比页签同语言：指标开关+柱=P+线=温度C）
-    //   + 多日趋势线（犹豫阈值 markLine）+ margin/熵派生指标 + 答案分布明细（choice 全分布 + score 锚点）
+    //   历史维度随顶部窗口自动切换（1天=槽位级四题 / 3日·1周·10日·30日=EOD 日级三题）+ margin/熵派生指标 + 答案分布明细
     expect(source).toContain('confidenceBarsPoints')
     expect(source).toContain('CONF_BARS_INDICATORS')
+    expect(source).toContain('CONF_BARS_DAILY_INDICATORS')
     expect(source).toContain('indicator-btn')
+    // 历史维度五档（2026-10-07 用户令）：1天/3日/1周/10日/30日——30日为新增档（后端 range days 上限 30 对齐）
+    expect(source).toContain("key: '30d'")
+    expect(source).toContain('30日')
     expect(source).toContain('connectNulls: false')
     expect(source).toContain('犹豫阈值')
     expect(source).toContain('margin')
@@ -105,11 +109,11 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('anchorTone')
     expect(source).toContain('scoreNoDist')
     expect(source).toContain('score 型分布=10 档锚点概率')
-    // ECharts 四图容器（置信柱图 + 温度/拥挤/多日趋势）
+    // ECharts 三图容器（置信柱图 + 温度/拥挤/日级窗口；底部序列档趋势图已退役——多日维度由主柱状图接管）
     expect(source).toContain('thermoChartRef')
     expect(source).toContain('crowdingChartRef')
     expect(source).toContain('confidenceBarsChartRef')
-    expect(source).toContain('confidenceChartRef')
+    expect(source).not.toContain('confidenceChartRef')
   })
 
   test('总览页视觉对齐热榜情绪面板（2026-10-03 用户裁决弃用大色块矩阵）', () => {

@@ -341,7 +341,7 @@
             <div v-if="!confidenceBarsPoints.length" class="empty-row">该日无置信数据</div>
             <template v-else>
               <div class="indicator-selector">
-                <button v-for="ind in CONF_BARS_INDICATORS" :key="ind.key" class="indicator-btn"
+                <button v-for="ind in confBarsActiveQuestions" :key="ind.key" class="indicator-btn"
                   :class="{ active: confidenceBarIndicators.includes(ind.key) }"
                   @click="toggleConfidenceBar(ind.key)">
                   {{ ind.icon }} {{ ind.label }}
@@ -397,15 +397,15 @@
                   </div>
                 </div>
               </div>
-              <!-- 序列档概率趋势：多日窗口专供（EOD 日级视角）；1 天窗口下柱状图已覆盖序列档 P，不重复铺图 -->
-              <template v-if="windowKey !== '1d'">
-                <div v-if="!confidencePoints.length" class="empty-row">暂无序列档概率趋势</div>
-                <div v-else class="trend-chart" ref="confidenceChartRef"></div>
-              </template>
+              <!-- 多日窗口缺失日标注（fail-visible：X 轴只含有文档的交易日，缺失日另行披露，同叙事概览语言） -->
+              <div v-if="windowKey !== '1d' && missingDays.length" class="note-line warn-line">
+                ⚠️ 窗口缺失 {{ missingDays.length }} 日（无任何 jev 文档，图中无此柱）：{{ missingDays.map((d) => d.tradingDate.slice(5)).join('、') }}
+              </div>
               <div class="note-line research-line">
                 🔎 研究注记：choice 答案携带 probabilities/confidence；score 型答案（温度）实测同样携带 10 档锚点分布 + 模型置信
                 （2026-10-02 生产库 100% 覆盖；锚期望 / 9 × 100 = 还原温度分），柱=P（top 概率）、温度线=C（模型置信，不套 P 犹豫阈值色），
-                margin/熵/逐题模型置信进 tooltip，缺失与「无分布」如实标注不补 0；犹豫阈值 60%（top 概率，choice 题），与热榜情绪面板口径一致。
+                margin/熵/逐题模型置信进 tooltip，缺失与「无分布」如实标注不补 0；犹豫阈值 60%（top 概率，choice 题），与热榜情绪面板口径一致；
+                多日窗口取每日 EOD 日级答案（日级档/日温度/日拥挤，路径形态进 tooltip），随顶部窗口切换历史维度。
               </div>
             </template>
           </section>
@@ -669,6 +669,7 @@ const TIME_WINDOWS = [
   { key: '3d', label: '3日', days: 3 },
   { key: '1w', label: '1周', days: 5 },
   { key: '1m', label: '10日', days: 10 },
+  { key: '30d', label: '30日', days: 30 },
 ] as const
 type WindowKey = (typeof TIME_WINDOWS)[number]['key']
 const windowKey = ref<WindowKey>('1d')
@@ -1168,6 +1169,7 @@ function waffleLegend(
 }
 
 // ---------- 置信度投影（ECharts 柱状图，展现形式对齐热榜情绪·历史对比页签） ----------
+// 1天窗口=槽位级四题（X=槽位）；多日窗口=EOD 日级三题（X=交易日）——随顶部窗口选择器自动切换历史维度
 // 柱=choice 题 P（top 概率）；线=score 题 C（模型置信，不套 P 概率语义）——同历史对比「柱+线双语言」的口径区分
 const CONF_BARS_INDICATORS = [
   { key: 'frame_stage', label: '当前帧档', icon: '📊', type: 'bar', color: '#ffd700' },
@@ -1175,7 +1177,23 @@ const CONF_BARS_INDICATORS = [
   { key: 'temperature', label: '温度(score)', icon: '🌡️', type: 'line', color: '#4a90e2' },
   { key: 'crowding', label: '拥挤归层', icon: '⭕', type: 'bar', color: '#2ed573' },
 ] as const
-type ConfidenceBarKey = (typeof CONF_BARS_INDICATORS)[number]['key']
+// 日级题目（多日窗口）：EOD 文档三题，与叙事概览日级柱图同数据源；day_pattern 名进 tooltip 不上图
+const CONF_BARS_DAILY_INDICATORS = [
+  { key: 'day_stage', label: '日级档', icon: '📈', type: 'bar', color: '#ff7f50' },
+  { key: 'day_temperature', label: '日温度', icon: '🌡️', type: 'line', color: '#4a90e2' },
+  { key: 'day_crowding', label: '日拥挤', icon: '⭕', type: 'bar', color: '#2ed573' },
+] as const
+
+type ConfidenceBarKey = (typeof CONF_BARS_INDICATORS)[number]['key'] | (typeof CONF_BARS_DAILY_INDICATORS)[number]['key']
+type ConfidenceBarType = 'bar' | 'line'
+
+interface ConfidenceBarQuestion {
+  key: ConfidenceBarKey
+  label: string
+  icon: string
+  type: ConfidenceBarType
+  color: string
+}
 
 interface ConfidenceBarCell {
   kind: 'choice' | 'score' | 'missing'
@@ -1192,8 +1210,16 @@ interface ConfidenceBarCell {
 interface ConfidenceBarPoint {
   label: string
   degraded: boolean
-  cells: Record<ConfidenceBarKey, ConfidenceBarCell>
+  cells: Partial<Record<ConfidenceBarKey, ConfidenceBarCell>>
+  /** 多日窗口：EOD 文档未生成（日级答案整体缺失，与单题答案缺失可区分） */
+  eodMissing?: boolean
+  /** 多日窗口：路径形态名（day_pattern，只进 tooltip） */
+  patternName?: string | null
 }
+
+const confBarsActiveQuestions = computed<readonly ConfidenceBarQuestion[]>(() =>
+  windowKey.value === '1d' ? CONF_BARS_INDICATORS : CONF_BARS_DAILY_INDICATORS,
+)
 
 function confidenceChoiceName(questionKey: string, choice: string | null): string | null {
   if (!choice) return null
@@ -1201,45 +1227,72 @@ function confidenceChoiceName(questionKey: string, choice: string | null): strin
   return names[choice] ?? choice
 }
 
-const confidenceBarsPoints = computed<ConfidenceBarPoint[]>(() => {
-  if (!slots.value.length) return []
-  return slots.value.map((slot) => {
-    const cells = {} as Record<ConfidenceBarKey, ConfidenceBarCell>
-    for (const question of CONF_BARS_INDICATORS) {
-      const metrics: JevConfidenceMetrics = confidenceMetrics(slot.answers?.[question.key])
-      if (metrics.kind === 'missing') {
-        cells[question.key] = {
-          kind: 'missing', value: null, choiceName: null,
-          confidence: null, margin: null, entropy: null, hesitant: false, noDist: false,
-        }
-        continue
-      }
-      cells[question.key] = {
-        kind: metrics.kind,
-        value:
-          metrics.kind === 'score'
-            ? metrics.confidence != null
-              ? Math.round(metrics.confidence * 100)
-              : null
-            : metrics.probability != null
-              ? Math.round(metrics.probability * 100)
-              : null,
-        choiceName: confidenceChoiceName(question.key, metrics.choice),
-        confidence: metrics.confidence,
-        margin: metrics.margin,
-        entropy: metrics.entropy,
-        hesitant: metrics.hesitant,
-        noDist: metrics.noDistribution,
-      }
+function confidenceCellOf(
+  questionKey: string,
+  answer: Parameters<typeof confidenceMetrics>[0],
+): ConfidenceBarCell {
+  const metrics: JevConfidenceMetrics = confidenceMetrics(answer)
+  if (metrics.kind === 'missing') {
+    return {
+      kind: 'missing', value: null, choiceName: null,
+      confidence: null, margin: null, entropy: null, hesitant: false, noDist: false,
     }
-    return { label: slot.slotTime || '--', degraded: slot.status === 'degraded', cells }
+  }
+  return {
+    kind: metrics.kind,
+    value:
+      metrics.kind === 'score'
+        ? metrics.confidence != null
+          ? Math.round(metrics.confidence * 100)
+          : null
+        : metrics.probability != null
+          ? Math.round(metrics.probability * 100)
+          : null,
+    choiceName: confidenceChoiceName(questionKey, metrics.choice),
+    confidence: metrics.confidence,
+    margin: metrics.margin,
+    entropy: metrics.entropy,
+    hesitant: metrics.hesitant,
+    noDist: metrics.noDistribution,
+  }
+}
+
+const confidenceBarsPoints = computed<ConfidenceBarPoint[]>(() => {
+  if (windowKey.value === '1d') {
+    return slots.value.map((slot) => {
+      const cells: Partial<Record<ConfidenceBarKey, ConfidenceBarCell>> = {}
+      for (const question of CONF_BARS_INDICATORS) {
+        cells[question.key] = confidenceCellOf(question.key, slot.answers?.[question.key])
+      }
+      return { label: slot.slotTime || '--', degraded: slot.status === 'degraded', cells }
+    })
+  }
+  // 多日窗口：EOD 日级答案（与叙事概览日级柱图同数据源；EOD 未生成日整列断线如实标注）
+  return dayDocs.value.map((day) => {
+    const eod = day.eod
+    const cells: Partial<Record<ConfidenceBarKey, ConfidenceBarCell>> = {}
+    for (const question of CONF_BARS_DAILY_INDICATORS) {
+      cells[question.key] = confidenceCellOf(question.key, eod?.answers?.[question.key])
+    }
+    return {
+      label: day.tradingDate.slice(5),
+      degraded: eod?.status === 'degraded',
+      cells,
+      eodMissing: !eod,
+      patternName: eod ? (jevChoiceName(eod, 'day_pattern') ?? null) : null,
+    }
   })
 })
 
 const confidenceBarIndicators = ref<ConfidenceBarKey[]>(CONF_BARS_INDICATORS.map((question) => question.key))
 
+// 窗口 1天↔多日 切换时题目集合整体换代：重置为当前模式全选（图表重渲染由 setWindow 的 renderAllCharts 负责）
+watch(windowKey, () => {
+  confidenceBarIndicators.value = confBarsActiveQuestions.value.map((question) => question.key)
+})
+
 const confidenceBarsSeries = computed(() =>
-  CONF_BARS_INDICATORS.filter((question) => confidenceBarIndicators.value.includes(question.key)),
+  confBarsActiveQuestions.value.filter((question) => confidenceBarIndicators.value.includes(question.key)),
 )
 
 function toggleConfidenceBar(key: ConfidenceBarKey) {
@@ -1249,25 +1302,45 @@ function toggleConfidenceBar(key: ConfidenceBarKey) {
     confidenceBarIndicators.value = current.filter((k) => k !== key)
   } else {
     // 按声明顺序重排，保持图例顺序稳定
-    confidenceBarIndicators.value = CONF_BARS_INDICATORS.map((question) => question.key).filter(
-      (k) => current.includes(k) || k === key,
-    )
+    confidenceBarIndicators.value = confBarsActiveQuestions.value
+      .map((question) => question.key)
+      .filter((k) => current.includes(k) || k === key)
   }
   nextTick(() => renderConfidenceBarsChart())
 }
 
 const confidenceStats = computed(() => {
-  const probs: number[] = []
-  for (const point of confidenceBarsPoints.value) {
-    const cell = point.cells.sequence_stage
-    if (cell.kind === 'choice' && !cell.noDist && cell.value != null) probs.push(cell.value)
+  if (windowKey.value === '1d') {
+    const probs: number[] = []
+    for (const point of confidenceBarsPoints.value) {
+      const cell = point.cells.sequence_stage
+      if (cell && cell.kind === 'choice' && !cell.noDist && cell.value != null) probs.push(cell.value)
+    }
+    const avg = probs.length ? Math.round(probs.reduce((a, b) => a + b, 0) / probs.length) : null
+    const hesitant = probs.filter((value) => value < Math.round(JEV_HESITANT_THRESHOLD * 100)).length
+    return [
+      { label: '序列档平均 P', value: avg != null ? `${avg}%` : '--', sub: `${probs.length}/${slots.value.length} 槽有分布` },
+      { label: '犹豫槽（P<60%）', value: String(hesitant), sub: `阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
+      { label: 'score 型槽', value: `${slots.value.filter((slot) => slot.answers?.temperature?.type === 'score').length}`, sub: '温度题=锚点分布+模型置信口径' },
+    ]
   }
-  const avg = probs.length ? Math.round(probs.reduce((a, b) => a + b, 0) / probs.length) : null
-  const hesitant = probs.filter((value) => value < Math.round(JEV_HESITANT_THRESHOLD * 100)).length
+  // 多日窗口：EOD 日级均值口径（热榜情绪·历史对比页签统计卡同语言）
+  const stageProbs: number[] = []
+  const crowdProbs: number[] = []
+  for (const point of confidenceBarsPoints.value) {
+    const stage = point.cells.day_stage
+    if (stage && stage.kind === 'choice' && !stage.noDist && stage.value != null) stageProbs.push(stage.value)
+    const crowd = point.cells.day_crowding
+    if (crowd && crowd.kind === 'choice' && !crowd.noDist && crowd.value != null) crowdProbs.push(crowd.value)
+  }
+  const avgOf = (values: number[]) => (values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null)
+  const avgStage = avgOf(stageProbs)
+  const avgCrowd = avgOf(crowdProbs)
+  const total = dayDocs.value.length
   return [
-    { label: '序列档平均 P', value: avg != null ? `${avg}%` : '--', sub: `${probs.length}/${slots.value.length} 槽有分布` },
-    { label: '犹豫槽（P<60%）', value: String(hesitant), sub: `阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
-    { label: 'score 型槽', value: `${slots.value.filter((slot) => slot.answers?.temperature?.type === 'score').length}`, sub: '温度题=锚点分布+模型置信口径' },
+    { label: '日级档平均 P', value: avgStage != null ? `${avgStage}%` : '--', sub: `${stageProbs.length}/${total} 日有分布` },
+    { label: '犹豫日（P<60%）', value: String(stageProbs.filter((value) => value < Math.round(JEV_HESITANT_THRESHOLD * 100)).length), sub: `阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
+    { label: '日拥挤平均 P', value: avgCrowd != null ? `${avgCrowd}%` : '--', sub: `${crowdProbs.length}/${total} 日有分布` },
   ]
 })
 
@@ -1389,19 +1462,6 @@ const distRows = computed<DistRow[]>(() => {
   return DIST_QUESTIONS[kind].map((question) => distRowOf(doc, kind, question))
 })
 
-const confidencePoints = computed(() => {
-  if (windowKey.value === '1d') {
-    return slots.value.map((slot) => {
-      const metrics = confidenceMetrics(slot.answers?.sequence_stage)
-      return { label: slot.slotTime || '--', probability: metrics.probability, confidence: metrics.confidence, noDist: metrics.noDistribution }
-    })
-  }
-  return dayDocs.value.map((day) => {
-    const metrics = confidenceMetrics(day.eod?.answers?.day_stage)
-    return { label: day.tradingDate.slice(5), probability: metrics.probability, confidence: metrics.confidence, noDist: metrics.noDistribution }
-  })
-})
-
 // ---------- 叙事全文投影 ----------
 const narrativeProjection = computed<JevNarrativeProjection>(() => parseNarrativeSections(focusDoc.value?.narrativeRaw))
 const narrativeText = computed(() => focusDoc.value?.narrativeRaw || '')
@@ -1508,12 +1568,10 @@ const evidenceGroups = computed(() => {
 const thermoChartRef = ref<HTMLElement | null>(null)
 const crowdingChartRef = ref<HTMLElement | null>(null)
 const confidenceBarsChartRef = ref<HTMLElement | null>(null)
-const confidenceChartRef = ref<HTMLElement | null>(null)
 const dayChartRef = ref<HTMLElement | null>(null)
 let thermoChart: echarts.ECharts | null = null
 let crowdingChart: echarts.ECharts | null = null
 let confidenceBarsChart: echarts.ECharts | null = null
-let confidenceChart: echarts.ECharts | null = null
 let dayChart: echarts.ECharts | null = null
 
 interface StageRunPoint {
@@ -1697,8 +1755,10 @@ function renderConfidenceBarsChart() {
   const textColor = cssVar('--text-secondary', '#9aa0a6')
   const borderColor = cssVar('--border-color', '#333333')
   const indicators = confidenceBarIndicators.value
+  const questions = confBarsActiveQuestions.value
+  const isDaily = windowKey.value !== '1d'
   const series: echarts.SeriesOption[] = []
-  for (const question of CONF_BARS_INDICATORS) {
+  for (const question of questions) {
     if (!indicators.includes(question.key)) continue
     // null（答案缺失/无分布）直传图表断线断柱，不补 0（fail-visible，同历史对比页签）
     const data = points.map((point) => point.cells[question.key]?.value ?? null)
@@ -1732,7 +1792,7 @@ function renderConfidenceBarsChart() {
           if (!point) return ''
           return [
             `<div style="font-weight:600;margin-bottom:4px;">${point.label}${point.degraded ? ' · ⚠️降级' : ''}</div>`,
-            ...CONF_BARS_INDICATORS.filter((question) => indicators.includes(question.key)).map((question) => {
+            ...questions.filter((question) => indicators.includes(question.key)).map((question) => {
               const cell = point.cells[question.key]
               if (!cell) return ''
               if (cell.kind === 'missing') return `<div>${question.label}：答案缺失</div>`
@@ -1745,6 +1805,9 @@ function renderConfidenceBarsChart() {
               if (cell.hesitant) bits.push('⚠️犹豫')
               return `<div>${bits.join(' · ')}</div>`
             }),
+            // 多日窗口附注：路径形态名 + EOD 未生成显式标注（同叙事概览日级柱图语言）
+            ...(isDaily && point.patternName ? [`<div>路径：${point.patternName}</div>`] : []),
+            ...(isDaily && point.eodMissing ? ['<div style="color:#f39c12;">EOD 未生成</div>'] : []),
           ].join('')
         },
       },
@@ -1764,70 +1827,6 @@ function renderConfidenceBarsChart() {
       backgroundColor: 'transparent',
     },
     // 指标开关减少序列时必须整体替换，merge 模式下旧序列会残留（同历史对比页签）
-    { notMerge: true },
-  )
-  chart.resize()
-}
-
-function renderConfidenceChart() {
-  const points = confidencePoints.value
-  const chart = initChart(confidenceChartRef.value, confidenceChart)
-  if (!chart || !points.length) return
-  confidenceChart = chart
-  const textColor = cssVar('--text-secondary', '#9aa0a6')
-  const borderColor = cssVar('--border-color', '#333333')
-  const series: echarts.SeriesOption[] = [
-    {
-      name: 'top 概率 P', type: 'line', smooth: true, connectNulls: false,
-      data: points.map((point) => (point.noDist ? null : point.probability)),
-      lineStyle: { color: '#4a90e2', width: 2 },
-      itemStyle: { color: '#4a90e2' },
-      markLine: {
-        silent: true, symbol: 'none',
-        data: [{ yAxis: JEV_HESITANT_THRESHOLD }],
-        lineStyle: { color: '#ff4757', type: 'dashed', width: 1 },
-        label: { color: '#ff4757', fontSize: 9, formatter: `犹豫阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
-      },
-    },
-    {
-      name: '模型置信', type: 'line', smooth: true, connectNulls: false,
-      data: points.map((point) => (point.noDist ? null : point.confidence)),
-      lineStyle: { color: '#2ed573', width: 1.5, type: 'dashed' },
-      itemStyle: { color: '#2ed573' },
-    },
-  ]
-  chart.setOption(
-    {
-      grid: { left: '8%', right: '8%', top: '12%', bottom: '12%', containLabel: true },
-      tooltip: {
-        trigger: 'axis', confine: true,
-        formatter: (params: unknown) => {
-          const list = Array.isArray(params) ? params : [params]
-          const first = list[0] as { dataIndex: number } | undefined
-          const point = first ? points[first.dataIndex] : undefined
-          if (!point) return ''
-          return [
-            `<div style="font-weight:600;margin-bottom:4px;">${point.label}</div>`,
-            `<div>P：${point.noDist || point.probability == null ? (point.noDist ? '无分布' : '--') : `${Math.round(point.probability * 100)}%`}</div>`,
-            `<div>模型置信：${point.noDist || point.confidence == null ? (point.noDist ? '无分布' : '--') : `${Math.round(point.confidence * 100)}%`}</div>`,
-          ].join('')
-        },
-      },
-      legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: textColor, fontSize: 10 } },
-      xAxis: {
-        type: 'category', data: points.map((point) => point.label),
-        axisLabel: { color: textColor, fontSize: 10, rotate: 30 },
-        axisLine: { lineStyle: { color: borderColor } },
-      },
-      yAxis: {
-        type: 'value', min: 0, max: 1, name: '概率（0-1）',
-        nameTextStyle: { color: textColor, fontSize: 9 },
-        splitLine: { lineStyle: { color: borderColor, type: 'dashed' } },
-        axisLabel: { color: textColor },
-      },
-      series,
-      backgroundColor: 'transparent',
-    },
     { notMerge: true },
   )
   chart.resize()
@@ -1923,10 +1922,7 @@ function renderDayChart() {
 function renderAllCharts() {
   if (view.value === 'thermometer') renderThermoChart()
   if (view.value === 'crowding' && windowKey.value !== '1d') renderCrowdingChart()
-  if (view.value === 'confidence') {
-    renderConfidenceBarsChart()
-    if (windowKey.value !== '1d') renderConfidenceChart()
-  }
+  if (view.value === 'confidence') renderConfidenceBarsChart()
   if (view.value === 'grid') renderDayChart()
 }
 
@@ -1934,7 +1930,6 @@ function handleResize() {
   thermoChart?.resize()
   crowdingChart?.resize()
   confidenceBarsChart?.resize()
-  confidenceChart?.resize()
   dayChart?.resize()
 }
 
@@ -1947,12 +1942,10 @@ onUnmounted(() => {
   thermoChart?.dispose()
   crowdingChart?.dispose()
   confidenceBarsChart?.dispose()
-  confidenceChart?.dispose()
   dayChart?.dispose()
   thermoChart = null
   crowdingChart = null
   confidenceBarsChart = null
-  confidenceChart = null
   dayChart = null
 })
 </script>
