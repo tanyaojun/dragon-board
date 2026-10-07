@@ -6,7 +6,23 @@ from ..engine.config import RankTrendConfig
 from ..engine.primitives import clamp, average, signal_confidence
 from .technical import cycle_rank_shock, rank_path_commitment
 
-def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTrendConfig | None = None) -> dict[str, Any]:
+def analyze_cycle(
+    ranks: list[float],
+    percentiles: list[float],
+    config: RankTrendConfig | None = None,
+    *,
+    time_keys: list[Any] | None = None,
+    frame_indices: list[int] | None = None,
+) -> dict[str, Any]:
+    """5 态生命周期主流程。
+
+    P3 时间正规化（2026-10-07 预登记合同 B5，默认 off=现行为零漂移）：
+    strictness=cross_day/non_adjacent 且提供 time_keys（每元素 tradingDate 等日期键）/
+    frame_indices（全局帧索引）时，相邻序列元素跨交易日（或同日帧距 ≥2）判 temporalGap——
+    该步 velocity/acceleration/shock 置 NaN + metrics["temporalGap"]=True（不插值，fail-visible），
+    raw 沿袭前帧 raw（NaN 布尔比较全 False 会静默滑 cooling，显式禁止），normalize 照常运行。
+    G1/G2 不动 hot_streak/best/drawdown 的跨缺口累积（那是 G3 剂量，未预登记不实施）。
+    """
     previous_stage = None
     current_stage = None
     current_raw = None
@@ -14,10 +30,30 @@ def analyze_cycle(ranks: list[float], percentiles: list[float], config: RankTren
     metrics = {}
     # 性能契约（2026-09-23 引擎提速）：cycle_metrics 输出只依赖末 ≤8 档窗口，
     # 逐步传尾窗而非重建整个前缀切片（原 O(L²) 切片/逐差 → O(L)），逐位一致。
+    c = config or RankTrendConfig()
+    strictness = str(getattr(c, "lifecycleTimeGapStrictness", "off") or "off")
+    use_dates = strictness != "off" and time_keys is not None and len(time_keys) == len(percentiles)
+    use_frames = strictness == "non_adjacent" and frame_indices is not None and len(frame_indices) == len(percentiles)
     for index in range(len(percentiles)):
         window_start = index - 7 if index >= 7 else 0
-        metrics = cycle_metrics_window(ranks[window_start : index + 1], percentiles[window_start : index + 1])
-        raw = raw_stage(index + 1, percentiles[index], metrics, config=config)
+        metrics = cycle_metrics_window(ranks[window_start : index + 1], percentiles[window_start : index + 1], config=config)
+        is_gap = False
+        if use_dates and index >= 1:
+            is_gap = str(time_keys[index]) != str(time_keys[index - 1])
+            if not is_gap and use_frames:
+                is_gap = int(frame_indices[index]) - int(frame_indices[index - 1]) >= 2
+        if is_gap:
+            metrics = {
+                **metrics,
+                "rankVelocity": float("nan"),
+                "rankAcceleration": float("nan"),
+                "rankShock": float("nan"),
+                "temporalGap": True,
+            }
+            # raw 沿袭前帧（NaN 比较全 False → raw_stage 恒 cooling 的静默路径被显式封死）
+            raw = current_raw if current_raw is not None else "cooling"
+        else:
+            raw = raw_stage(index + 1, percentiles[index], metrics, config=config)
         normalized = normalize_stage(current_stage, raw, percentiles[index], metrics, config=config)
         previous_stage = current_raw
         previous_normalized = current_stage
@@ -44,32 +80,51 @@ def cycle_metrics(ranks: list[float], percentiles: list[float]) -> dict[str, Any
     return cycle_metrics_window(ranks[-8:], percentiles[-8:])
 
 
-def cycle_metrics_window(rank_window: list[float], percentile_window: list[float]) -> dict[str, Any]:
+def cycle_metrics_window(
+    rank_window: list[float], percentile_window: list[float], config: "RankTrendConfig | None" = None
+) -> dict[str, Any]:
     """尾窗（≤8 档）版 cycle_metrics：与全量前缀输入逐位一致的前提是窗口取自同一序列尾部。
 
     前置条件：rank_window 与 percentile_window 必须是同一序列的**等长**尾切片（调用方保证；
     不等长输入下 hotZoneStreak 的配对语义与旧实现不可比）。语义等价依据：hot_streak/best/
     rankPathCommitment 本来就只用末 8 档；velocity 门槛 len>=2/3 与 rankShock 门槛 len>=6 在
     「窗口=min(长度,8)」下与全量门槛同真同假（长度 >=8 时两者恒真，<8 时窗口即全量）。
+
+    P1 尺度模式（2026-10-07 预登记合同 A5，config.lifecycleRankScaleMode，默认 mixed=现行为）：
+    - pct_full：名次类谓词整体换算 T=200 锚等价分位线——bestRecentRank=201−2·max(pct窗)、
+      drawdownFromPeak=2·max(0, max−cur)（1 格=0.5 pct 点）、热区仅 pct≥88 臂（删 rank≤10 臂）；
+      阈值常量不变（等价于阈值整体换算）。
+    - hotzone_pct_only：仅热区删名次臂，best/drawdown 保持名次单位。
+    velocity/acceleration/shock/pathCommitment 本就是分位单位，各模式相同。
     """
+    c = config or RankTrendConfig()
+    scale_mode = str(getattr(c, "lifecycleRankScaleMode", "mixed") or "mixed")
     current_rank = rank_window[-1] if rank_window else 999
     hot_streak = 0
     for rank, percentile in zip(reversed(rank_window), reversed(percentile_window)):
-        if rank <= 10 or percentile >= 88:
+        hot = (rank <= 10 or percentile >= 88) if scale_mode == "mixed" else percentile >= 88
+        if hot:
             hot_streak += 1
         else:
             break
-    best = min(rank_window) if rank_window else current_rank
     count = len(percentile_window)
     velocity = percentile_window[-1] - percentile_window[-2] if count >= 2 else 0
     previous_velocity = percentile_window[-2] - percentile_window[-3] if count >= 3 else 0
+    if scale_mode == "pct_full":
+        max_pct = max(percentile_window) if percentile_window else 0.0
+        cur_pct = percentile_window[-1] if percentile_window else 0.0
+        best = 201.0 - 2.0 * max_pct
+        drawdown = 2.0 * max(0.0, max_pct - cur_pct)
+    else:
+        best = min(rank_window) if rank_window else current_rank
+        drawdown = max(0, current_rank - best)
     return {
         "rankVelocity": velocity,
         "rankAcceleration": velocity - previous_velocity,
         "rankShock": cycle_rank_shock(percentile_window),
         "hotZoneStreak": hot_streak,
         "bestRecentRank": best,
-        "drawdownFromPeak": max(0, current_rank - best),
+        "drawdownFromPeak": drawdown,
         "rankPathCommitment": rank_path_commitment(percentile_window),
     }
 
@@ -223,6 +278,30 @@ def entry_advice(stage: str, transition: str) -> dict[str, Any]:
     return {"bias": bias, "allowed": bias == "preferred", "reason": reasons[bias]}
 
 
+def neutralize_gap_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    """P3 gap 帧 risk 输入中性化：NaN 动量分量→0（无加无减=证据缺失不加分），temporalGap 标记保留。
+
+    仅 lifecycleTimeGapStrictness≠off 的 trial 路径会命中（默认 mixed/off 恒原样返回）。
+    NaN 原样进 analyze_risk 会让 overheat/pressure 变 NaN 且比较行为不确定——risk 的动量
+    分量缺证据按中性处理，缺口事实由 metrics.temporalGap 与 decision reasons 承载（fail-visible）。
+    """
+    if not isinstance(metrics, dict) or not metrics.get("temporalGap"):
+        return metrics
+    out = dict(metrics)
+    for key in ("rankVelocity", "rankAcceleration", "rankShock"):
+        value = out.get(key)
+        if isinstance(value, float) and not math.isfinite(value):
+            out[key] = 0.0
+    return out
+
+
+def _evidence_num(value: Any) -> Any:
+    """evidence 序列化护栏：NaN→None（合同 B5：不得以 0 伪装，JSON 无 NaN）。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
 def lifecycle_decision(
     raw: str,
     stage: str,
@@ -291,6 +370,8 @@ def lifecycle_decision(
         reasons.append("生命周期仍在冷却路径，辅助决策保持谨慎。")
     if "->" in transition:
         reasons.append(f"阶段路径：{transition}。")
+    if metrics.get("temporalGap"):
+        reasons.append("序列跨时间缺口，本帧动量证据不可判定（temporalGap），动量类判据按缺失处理。")
     if stage in ("ignition", "expansion") and float(metrics.get("rankVelocity") or 0) > 0:
         discovery_reasons.append("生命周期存在漏选研究价值：点火/扩散路径仍在改善，但不得绕过 RankTrend 主结构直接制造买入。")
     return {
@@ -305,17 +386,17 @@ def lifecycle_decision(
             "rawStage": raw,
             "stage": stage,
             "transition": transition,
-            "rankVelocity": metrics.get("rankVelocity", 0),
-            "rankAcceleration": metrics.get("rankAcceleration", 0),
-            "drawdownFromPeak": metrics.get("drawdownFromPeak", 0),
-            "hotZoneStreak": metrics.get("hotZoneStreak", 0),
-            "rankPathCommitment": rank_path,
+            "rankVelocity": _evidence_num(metrics.get("rankVelocity", 0)),
+            "rankAcceleration": _evidence_num(metrics.get("rankAcceleration", 0)),
+            "drawdownFromPeak": _evidence_num(metrics.get("drawdownFromPeak", 0)),
+            "hotZoneStreak": _evidence_num(metrics.get("hotZoneStreak", 0)),
+            "rankPathCommitment": _evidence_num(rank_path),
             "momentumShort": momentum_short,
             "momentumMid": momentum_mid,
             "momentumLong": momentum_long,
             "momentumAcceleration": momentum_acceleration,
-            "riskPressure": risk_pressure,
-            "divergenceSeverity": divergence_severity,
-            "overheatSeverity": overheat_severity,
+            "riskPressure": _evidence_num(risk_pressure),
+            "divergenceSeverity": _evidence_num(divergence_severity),
+            "overheatSeverity": _evidence_num(overheat_severity),
         },
     }

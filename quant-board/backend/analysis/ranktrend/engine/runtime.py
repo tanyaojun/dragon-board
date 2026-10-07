@@ -258,7 +258,7 @@ def _confirm_jump(
     return jump
 
 
-from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision
+from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision, neutralize_gap_metrics
 
 from ..trend.risk import REGIME_STRONG_SCORE, analyze_risk, market_regime
 from ..trend.gate_confirm import GateConfirmState, gate_reason
@@ -977,6 +977,8 @@ class RankTrendPythonEngine:
                     market_ctx=market_ctx,
                     price_changes=[item[1] for item in change_histories.get(code, [])],
                     amount_history=[item[1] for item in amount_histories.get(code, [])],
+                    rank_time_keys=[str(frames[item[0]].get("tradingDate") or "") for item in series],
+                    rank_frame_indices=[item[0] for item in series],
                 )
                 if signal:
                     # 阶段6 趋势反转层（RankTrend 分析方法本体，观察信号）：
@@ -1076,6 +1078,8 @@ class RankTrendPythonEngine:
         percentiles: list[float] = []
         price_changes: list[Any] = []
         amount_history: list[Any] = []
+        rank_time_keys: list[Any] = []
+        rank_frame_indices: list[int] = []
         code = str(stock.get("code") or "")
         for offset, historical in enumerate(history):
             lookup_index = history_start + offset
@@ -1088,6 +1092,9 @@ class RankTrendPythonEngine:
                 continue
             ranks.append(rank)
             percentiles.append(percentile_rank(rank, attention_total))
+            # P3 时间正规化原料（lifecycleTimeGapStrictness≠off 时消费；off 时不进 cycle）
+            rank_time_keys.append(str(historical.get("tradingDate") or ""))
+            rank_frame_indices.append(lookup_index)
             price_changes.append(row.get("change"))
             amount_history.append(row.get("amount"))
         return self._build_signal(
@@ -1099,6 +1106,8 @@ class RankTrendPythonEngine:
             meta,
             price_changes=price_changes,
             amount_history=amount_history,
+            rank_time_keys=rank_time_keys,
+            rank_frame_indices=rank_frame_indices,
         )
 
     def _build_signal(
@@ -1115,6 +1124,8 @@ class RankTrendPythonEngine:
         amount_history: list[Any] | None = None,
         atr_history: list[Any] | None = None,
         cross_section_percentiles: list[float] | None = None,
+        rank_time_keys: list[Any] | None = None,
+        rank_frame_indices: list[int] | None = None,
     ) -> dict[str, Any] | None:
         """cross_section_percentiles（2026-09-13 delta 复活）：crossSection 因子的独立输入。
 
@@ -1142,11 +1153,18 @@ class RankTrendPythonEngine:
             "zljzb": stock.get("zljzb"),
         }
         technical = _compat_callable("analyze_technical")(percentiles, self.config, fallback)
-        cycle = _compat_callable("analyze_cycle")(ranks, percentiles, self.config)
+        # P3 时间正规化（lifecycleTimeGapStrictness≠off 时传时间键；off 不传=现行为零漂移）
+        _gap_strictness = str(getattr(self.config, "lifecycleTimeGapStrictness", "off") or "off")
+        _gap_kwargs: dict[str, Any] = (
+            {"time_keys": rank_time_keys, "frame_indices": rank_frame_indices} if _gap_strictness != "off" else {}
+        )
+        cycle = _compat_callable("analyze_cycle")(ranks, percentiles, self.config, **_gap_kwargs)
+        # gap 帧 risk 输入中性化（NaN 动量分量→0，temporalGap 标记保留；默认模式恒原样）
+        risk_cycle = {**cycle, "metrics": neutralize_gap_metrics(cycle.get("metrics") or {})}
         risk = _compat_callable("analyze_risk")(
             current_percentile,
             technical,
-            cycle,
+            risk_cycle,
             fallback["zlje"],
             fallback["zljzb"],
             fallback["volumeRatio"],

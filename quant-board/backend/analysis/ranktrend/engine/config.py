@@ -330,6 +330,15 @@ class RankTrendConfig:
     lifecycleDowngradeGateMode: str = "hard"   # lc B/D 对已达 S/A 的干预：hard=降一档（现行为）| soft=惩罚 | off=不干预
     lifecycleDowngradePenalty: float = 0.5     # soft：首评 ∈ {S,A} 时 v −= penalty 后重走阶梯
     volumePriceGateMode: str = "hard"          # vp E→D 出货短路（同构位）：hard=现行为 | soft=强制负票 | off=静默
+    # ── lifecycle 尺度/时间正规化（2026-10-07 P1/P3 预登记合同行为步；默认=现行为，golden 不漂移）──
+    # P1：绝对名次阈值池规自适应。mixed=现行为（名次/分位双口径）；
+    #   pct_full=名次类谓词整体换算 T=200 锚等价分位线（rank R ⇔ pct=(201−R)/2，drawdown 1 格=0.5 pct 点，热区仅 pct≥88 臂）；
+    #   hotzone_pct_only=仅热区删名次臂（小池日影响隔离档）。
+    lifecycleRankScaleMode: str = "mixed"
+    # P3：序列时间正规化。off=现行为（缺帧跳过不插值，跨缺口差分照算）；
+    #   cross_day=跨交易日相邻差分无效；non_adjacent=跨日∨同日非相邻（全局帧距 ≥2）差分无效。
+    #   无效帧 velocity/acceleration/shock 置 NaN + temporalGap 标记，raw 沿袭前帧（fail-visible 不插值）。
+    lifecycleTimeGapStrictness: str = "off"
     # ── risk（analyze_risk）：压力合成与严重度归一 ──
     riskPressureWeights: list[float] = field(default_factory=lambda: [0.58, 0.42])
     riskOverheatOffset: float = 45.0
@@ -541,12 +550,14 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
             f"degradedSampleFloor 必须在 [1, momentum_min_samples={_momentum_floor}) 内，"
             f"实际 {config.degradedSampleFloor}"
         )
-    # 环境门干预形态枚举与强度校验（2026-09-14 阶段 24 方案 A）
+    # 环境门干预形态枚举与强度校验（2026-09-14 阶段 24 方案 A；2026-10-07 增 P1/P3 尺度/时间开关）
     for _mode_field, _legal in (
         ("lifecycleVetoGateMode", ("hard", "soft", "off")),
         ("lifecycleVetoPathMode", ("all_soft", "reversal_hard", "highrisk_hard")),
         ("lifecycleDowngradeGateMode", ("hard", "soft", "off")),
         ("volumePriceGateMode", ("hard", "soft", "off")),
+        ("lifecycleRankScaleMode", ("mixed", "pct_full", "hotzone_pct_only")),
+        ("lifecycleTimeGapStrictness", ("off", "cross_day", "non_adjacent")),
     ):
         _mode_value = str(getattr(config, _mode_field))
         if _mode_value not in _legal:

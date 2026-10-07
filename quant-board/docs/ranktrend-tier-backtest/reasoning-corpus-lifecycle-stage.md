@@ -786,6 +786,36 @@ python scripts/gptoss_questionset_review.py \
 
 **Opus 第二轮提示词已组装**：`lifecycle-stage-opus-round2-prompt.md`（范围收窄为 P1/P3 预登记合同；本节两块考古事实作为「已核实事实」写入提示词，附审定回执 B1-B5）。
 
+### §12 行为步执行报告（2026-10-07，用户令「开跑」；判定线按合同冻结）
+
+**执行链**：诊断脚本 `backend/operations/diagnose_lifecycle_scale_gap.py`（P1+P3 双 schema 一次 pass，951 帧 04-15~09-11；自证 inline vs analyze_cycle 2000 抽样零 mismatch、vs 引擎真 replay 653/653 全中）→ config plumbing（`lifecycleRankScaleMode`/`lifecycleTimeGapStrictness`，默认零行为，TDD 16 用例+回归 54 过）→ trial runner `evaluate_lifecycle_scale_gap_trials.py`（5 trial × 3 窗）→ Track 1（`track1_lifecycle_gate_trade.py --extra-arm` G1 臂）。产物：`data/reports/lifecycle-scale-gap-diagnosis.json` / `lifecycle-scale-gap-trials.json` / `track1-g1-*.json`（本地不入库）。
+
+**诊断步读数（跑数前预声明：主判定 population=decision 窗、序列≥2 股帧）**：
+
+- **P3 诊断门 PASS**：ER=P(gap_origin|velocity>18)/P(gap_origin)=**3.33**（聚块 bootstrap 95%CI [3.18,3.49]）；P(gap|vel>18)=41.8% vs 基础 P(gap)=12.5%；四窗全部 3.18~3.58 同向（OOS 复现）；下行尾更富集（4.10）；G2（同日非相邻）同量级 3.27。**gap 差分集中驱动状态跃迁**：crowded→reversal 帧 gap 占比 25.9%（2.1× 基础率）、cooling→expansion 17.2%，hold 帧 12.5%=基础率。veto/bd 帧 gap 占比 10.4%/13.1%≈基础率（门控触发本身不偏 gap）。
+- **P1 诊断门 PASS（谓词线）**：drawdown 谓词跨 T 三分位分歧 7.2~9.0%（大池桶最高）、best_le_30 3.1%；但被状态机+决策层吸收，末态分歧仅 stage 1.38% / veto 0.60% / bd 0.99%（低于其线）。**结构发现：decision 窗 18.2% 帧 T<75（p5=0），5-9 月无小池日**——4 月与后期名次阈值语义系统性不同。
+- **P2 路径关闭（证据级）**：诊断证实 price/amount 原料在窗；dv 维（单帧价×排名四态）默认 0 权重=纯观察。P2 的 dv 重叠率检验仍欠，维持另批。
+
+**行为步 trial（三窗 synergy saEx；veto/bd=触发率 rel）**：
+
+| trial | decision | oos1 | oos2 | veto_rel(dec) | bd_rel(dec) | 判定 |
+|---|---|---|---|---|---|---|
+| a0 今日基线 | 0.1472 | 0.1016 | 0.1071 | — | — | 锚漂移登记↓ |
+| L1 hotzone_pct_only | 0.1472 | 0.1016 | 0.1071 | 0.000 | 0.000 | **零效应**（热区名次臂在当前代际冗余：池≥75 时 pct≥88 臂恒覆盖 rank≤10，小池帧又不产信号） |
+| L2 pct_full | 0.1427 | 0.1049 | 0.1071 | −0.9% | −0.1% | 带内 PASS 但 decision −3.1% 贴容差、无收益信号→**推荐不晋升** |
+| G1 cross_day | 0.1450 | 0.0983 | **0.1172** | **−6.8%** | +1.0% | **PASS**（相对线全过；oos2 +9.4% 线索单窗不作定据） |
+| G2 non_adjacent | 0.1457 | 0.0965 | 0.1172 | −6.9% | +1.1% | **FAIL**（oos1 贴线差 0.0001）→ 按合同 G3 不试 |
+
+**Track 1 交易复核（G1）**：decision 主窗 166→172 笔，wrxpf 0.4104→**0.4140**（+0.9%）、winRate 0.4759→0.4884、maxDD −22.8%→−22.3%、totalReturn −0.84pp；oos2 80→76 笔 wrxpf −3.8%。两窗小样本噪声量级=**交易层中性，不劣于基线**（合同④过线）。顺带：e1a/p2 臂今日读数仍差（0.2541），阶段 24 OBSERVE 维持。
+
+**基线漂移登记（重要）**：冻结绝对锚 0.1044/0.0918/0.0933 不可复现（今日 0.1472/0.1016/0.1071）——10 月初帧字段大回填（open/amount/zlje 等补齐 96.9-97.1%，e77907bb/cacf4ab8 代际）改变 fallback 输入 → saEx 基线整体上移；baseline wrxpf 亦然（0.4104 vs 存档 0.4702）。**判定改同代际相对线（容差不变 −0.005/−0.003），冻结绝对线双列披露**；此为跑后登记的口径修订，原因数据代际非调线。
+
+**结论与待用户裁决**：
+1. **G1（lifecycleTimeGapStrictness="cross_day"）达到提交门槛**：信号层 saEx 容差内、veto 误伤 −6.8%（三窗一致、可归因=跨日跳变驱动的 reversal 误判被消除）、交易层中性。收益是**质性**的（动量证据纯度：velocity>18 帧里 42% 的跨日假动量不再进判据），不是盈利提升——是否落默认由用户裁决（落默认需另补：数据回填代际复验 + 前端 temporalGap 展示消费 + golden 用例重录）。
+2. L2 存档不晋升；L1 零效应（热区名次臂冗余=可登记结构事实，未来清理须用户裁决）；G2/G3 终止。
+3. P1 的「换算后跨池一致性收敛」未在本轮测量（行为步只验了 no-regression），若用户要 L2 的收益证据需补一致性复测——但 L2 的 saEx 成本已见，预期不晋升。
+4. 默认配置零漂移已验（专项 16 用例 + 回归 54 + 全量 pytest 见提交记录）。
+
 ### §11.2 第二轮审定（2026-10-07，P1/P3 预登记合同；输出归档 `lifecycle-stage-opus-round2-output.md`）
 
 **审定结论：通过，零硬幻觉**。
