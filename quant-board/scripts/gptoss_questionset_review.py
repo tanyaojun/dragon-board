@@ -7,8 +7,8 @@
 本脚本只发 [system, user] 两条字符串消息 + reasoning_effort，不提供工具、零历史重放，
 规避全部 schema 雷；reasoning=high 得以保留（pi 通道做不到）。
 
-用法（Git Bash，quant-board 目录）：
-  export CLOUDFLARE_API_KEY=<key>
+用法（Git Bash，任意目录）：
+  令牌来源二选一：环境变量 CLOUDFLARE_API_KEY，或 quant-board/.env.local 的 CLOUDFLARE_API_KEY 键
   python scripts/gptoss_questionset_review.py --prompt <提示词.txt> --out <输出.md>
   cat <提示词.txt> | python scripts/gptoss_questionset_review.py --out <输出.md>
 
@@ -25,10 +25,25 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 ACCOUNT_ID = "921cf15176f84c90ea49865334af32c6"  # pi models.json workers-ai baseUrl 同源（非机密标识）
 MODEL = "@cf/openai/gpt-oss-120b"
 GATEWAY_ID = "pi-geteway"  # 与 pi 配置同一 AI Gateway，日志/缓存集中可见
+
+
+def _resolve_api_key() -> str:
+    """CLOUDFLARE_API_KEY：先读环境变量，缺省回落 quant-board/.env.local（机密只进 env/.env.local）。"""
+    key = os.environ.get("CLOUDFLARE_API_KEY", "").strip()
+    if key:
+        return key
+    env_local = Path(__file__).resolve().parents[1] / ".env.local"
+    if env_local.exists():
+        for line in env_local.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("CLOUDFLARE_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
 
 DEFAULT_SYSTEM = (
     "你是 LLM 评估系统（结构化决策模型）的题目集（question set）设计专家。\n"
@@ -63,13 +78,17 @@ def main() -> int:
     ap.add_argument("--system", default=None, help="自定义 system 文本文件；缺省用语料包 §5 system；--no-system 关闭")
     ap.add_argument("--no-system", action="store_true")
     ap.add_argument("--effort", choices=("low", "medium", "high"), default="high")
+    # 2026-10-07：不设 max_tokens 时走服务端默认上限，effort=high 的 reasoning 先吃光预算
+    # （finish_reason=length 且 content=null，本轮 voting-signals 语料复现）；沿用 day_pattern
+    # 轮教训默认 65535（docs/hotlist-jev 语料 §十六续二），需要旧行为可显式调低。
+    ap.add_argument("--max-tokens", type=int, default=65535, help="completion 上限（含 reasoning tokens；effort=high 必须 ≥32k）")
     ap.add_argument("--timeout", type=int, default=600, help="单次请求超时秒（high 推理 12k input 建议 ≥300）")
     ap.add_argument("--no-gateway", action="store_true", help="不走 AI Gateway 直连")
     args = ap.parse_args()
 
-    api_key = os.environ.get("CLOUDFLARE_API_KEY", "").strip()
+    api_key = _resolve_api_key()
     if not api_key:
-        print("缺 CLOUDFLARE_API_KEY 环境变量", file=sys.stderr)
+        print("缺 CLOUDFLARE_API_KEY（环境变量或 quant-board/.env.local）", file=sys.stderr)
         return 1
 
     if args.prompt:
@@ -93,6 +112,8 @@ def main() -> int:
 
     url = (f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1/chat/completions")
     payload = {"model": MODEL, "messages": messages, "reasoning_effort": args.effort, "stream": False}
+    if args.max_tokens > 0:
+        payload["max_tokens"] = args.max_tokens
 
     t0 = time.time()
     try:

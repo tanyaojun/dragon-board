@@ -418,8 +418,13 @@ def _synergy_tier(
         + (_vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0) if vp_e_forced_vote is None else vp_e_forced_vote)
     )
     cs_weight = float(getattr(c, "tierSynergyCrossSectionVote", 0.0) or 0.0)
-    if cs_weight and cs_tier and cs_tier in _CS_STRENGTH:
-        v += _CS_STRENGTH[cs_tier] * cs_weight
+    if cs_weight and cs_tier:
+        if cs_tier == "A_PERSIST":
+            # T4 独立档票值（§12.2 审定修正 3：不扩 _CS_STRENGTH dict、在消费处显式分支，
+            # 防"映射不命中静默零票"陷阱——与 §15 list-shape 守卫同族教训）。
+            v += float(getattr(c, "tierSynergyCsPersistStrength", 0.5) or 0.0) * cs_weight
+        elif cs_tier in _CS_STRENGTH:
+            v += _CS_STRENGTH[cs_tier] * cs_weight
     pm_weight = float(getattr(c, "tierSynergyPriceMomentumVote", 0.0) or 0.0)
     if pm_weight and pm_tier and pm_tier in _CS_STRENGTH:
         v += _CS_STRENGTH[pm_tier] * pm_weight

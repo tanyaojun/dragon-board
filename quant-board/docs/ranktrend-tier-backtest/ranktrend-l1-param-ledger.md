@@ -491,3 +491,19 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **防御修正**：`neutralize_gap_metrics` 改按值判据（键存在且 None/NaN → 0），不依赖 temporalGap 标记（旧快照无标记 None 不再 TypeError），缺键不悄悄补 0。
 - **测试修复**：raw 沿袭同义反复断言改独立前帧对照；TestEngineWiring 虚假覆盖改 live 链真接线；analyze_api 判别锚夹具三帧改同日多槽（G1 下跨日差分不再充当动量证据，锚失效根因修复）。
 - 后端全量 3261 过（ranktrend 620）+ 前端 vue-tsc/vitest 专项过。
+
+## 19. 四投票信号研讨轮（2026-10-07，五案行为步全部不晋升；新参数全默认零行为）
+
+> 语料 `reasoning-corpus-voting-signals.md`（§11 双模型 A/B 审定+§12.0 预登记+§12.1 R1+§12.2 合同+§12.3 执行报告）；双模型（用户执行投喂）审定后用户三裁决开跑。B0 锚=G1 代际 0.1450/0.0983/0.1172（T2 runner 逐位自证 PASS；population=09-12 帧截止口径与锚同源）。
+
+| 参数/结构 | 状态 | 判定依据 |
+|---|---|---|
+| resonanceWarmingEnabled / resonanceWarmingTierCap | **新增，默认 off/none**（T3 warming 补票开关） | D1 假设线过（warming buy h8 +0.0142）但判定卡 FAIL_C1：W1 −1.0%/+5.2%/0.0%、W2 −2.0%/+3.2%/0.0%（cap 越深 decision 越伤）；存档不晋升 |
+| crossSectionPersistIndependentTier / tierSynergyCsPersistStrength | **新增，默认 False/0.5**（T4 A_PERSIST 独立档+三态票值） | D1 阶段1 过线（diff +0.0218 strong/retreat 同向）但三态判定卡全 FAIL：正态 decision **−11.7%** 重伤（D1 h8 分层好≠加权后 saEx 好，saEx 教训镜像案例）、零态逐位一致 PASS_IDENTICAL（纯标签保留待裁）、负态 oos2 −13.3% |
+| 新入榜 S 死分支（runtime analyze_rank_resonance） | **已删除（T5a 零行为）** | len==1 < detect_rank_jumps len≥3 ⇒ freshness 恒 0 恒不可达（模型A 发现，主会话代码核实）；G4 断线先例=静默激活风险；逐位验证三窗 saEx 逐位一致+644 绿；两测试锚更新（函数级直注 events 亦不判 S）；T5b「入榜即事件」归档（would_syn_S=0，len1 cs≤B 封顶 2.8<3.0 结构性） |
+| jumpConfirmVolumeRatioMin 1.25/1.5 | **维持 1.0，观察池** | T2 判定卡 FAIL_C1（+1.4%/−0.4% decision）但 oos2 连续两代双位数正（+9.8%/+10.3%）+护栏全过（resS/synS 半数线）+Track 1 −2.0%（未触终止）——N1 同款命运，待下代际复验 |
+| 四维时间正规化（T1 五臂） | **立项关闭，monitor_only 归档** | D1 前置步裁决：跨日分量 h8 后验优于日内（cs_delta CD +0.0350 vs SD −0.0005、res_short +0.0169 vs −0.0064、rank_p3 +0.0175 vs −0.0037）——「隔夜=噪声」被反杀，热榜语境隔夜跳空=注意力延续信号；与 lifecycle 跨日假动量（G1 依据）方向相反=同原料不同维消费分化，本轮最重要结构发现 |
+
+- **结构读数沉淀**（D1，`data/reports/voting-signals-d1.json` 本地）：synergy S 仅 127 帧（0.08%）且 127/127 由 cs 正票撑进（「cs 守门维」实证）；vp E 档 19.9%（远超预估）；res D∧buy 6.6%（strength 倒挂实体）；双动量一致率 91.8%/82.4%；fallback 覆盖 36.5%；新入榜 P(确认门)=19.3%。
+- **golden**：快照重录一次（configRepr 新增 4 字段文本，场景输出零漂移）；全量 644 绿。
+- **回退**：全部新参数默认即现行为；T5a 为代码删除（git 回退唯一路径）。

@@ -65,11 +65,15 @@ def _tier_from(
     delta: float | None,
     persist: tuple[int, float] | None,
     c: Any,
+    persist_independent: bool = False,
 ) -> tuple[str, list[str]]:
     """档位判定。delta=None（首帧/缺历史）时降级绝对档，A/D 需要 delta 确认。
 
     persist=(窗口N, 近N帧均值)：持续高位 A 档替代路径（方案2）。放在 A-delta 之后：
     开启后原 A/B/C/D 输出与文案零漂移，变更面 = 纯增量（部分 B 升 A）。
+    persist_independent（T4，2026-10-07 预登记合同）：独立档 A_PERSIST——eligible 人群
+    （pct≥90 ∧ 近5帧均值≥85）不并入 A（H2 合并稀释前例），delta-A 之后、原 B 之前返回
+    "A_PERSIST"，票值由 tierSynergyCsPersistStrength 三态定（默认 0.5=同 B 票零行为）。
     """
     if delta is not None:
         if percentile >= c.crossSectionStrongMin and delta >= c.crossSectionStrongDeltaUp:
@@ -80,6 +84,8 @@ def _tier_from(
             and persist[1] >= c.crossSectionPersistMeanMin
         ):
             return "A", [f"持续高位（近{persist[0]}帧均值 {persist[1]:.1f}）"]
+        if persist_independent:
+            return "A_PERSIST", ["持续高位独立档（未达 delta-A 确认，独立计票）"]
         if percentile >= c.crossSectionMidMin and delta >= c.crossSectionMidDeltaUp:
             return "B", ["中位之上 + 热度显著上升"]
         if percentile <= c.crossSectionWeakMax and delta <= c.crossSectionWeakDeltaDown:
@@ -149,9 +155,15 @@ def compute_cross_section(
         values = [v for v in window if v is not None]
         if len(values) == persist_frames:
             persist = (persist_frames, sum(values) / persist_frames)
+    # T4 独立档 eligible 判定（固定 N=5，不消费 crossSectionPersistFrames）：pct≥90 ∧ 近5均值≥85。
+    persist_independent = False
+    if getattr(config, "crossSectionPersistIndependentTier", False) and len(percentiles) >= 5 and delta is not None:
+        vals5 = [_finite(v) for v in percentiles[-5:]]
+        if all(v is not None for v in vals5):
+            persist_independent = percentile >= 90.0 and sum(vals5) / 5 >= 85.0
     market = _finite(market_median)
     relative = percentile - market if market is not None else None
-    tier, reasons = _tier_from(percentile, delta, persist, config)
+    tier, reasons = _tier_from(percentile, delta, persist, config, persist_independent=persist_independent)
     if market is None:
         reasons = reasons + ["市场 median 缺失（relativeToMarket 不可算）"]
     return {

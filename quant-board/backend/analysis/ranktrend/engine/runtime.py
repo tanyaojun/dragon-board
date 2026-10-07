@@ -633,9 +633,11 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
         jump_freshness = 1.0 if jump_events else 0.0
         entry_strength = clamp((current_attention_percentile - 50) / c.resonanceEntryStrengthScale, 0, 1)
         score = round(100 * clamp(c.resonanceNewEntryWeights[0] * entry_strength + c.resonanceNewEntryWeights[1] * jump_freshness, 0, 1))
-        if jump_freshness >= c.tierResonanceJumpFreshnessMin and entry_strength > 0:
-            _tier, _tier_reasons = "S", ["Jump 事件驱动，排名跳跃式上升"]
-        elif entry_strength >= c.tierResonanceEntryStrengthMin:
+        # T5a（2026-10-07 预登记合同，零行为删除）：原首分支「jump_freshness ≥ 0.5 → S」为
+        # 死代码——新入榜 len==1 < detect_rank_jumps 的 len≥3 门槛 ⇒ events 恒空 ⇒
+        # freshness 恒 0，条件永假。删除以对齐代码与语义、封死未来静默激活面
+        # （G4 断线先例）；「新入榜得 S」如需启用必须走显式 trial（合同 T5b，已归档）。
+        if entry_strength >= c.tierResonanceEntryStrengthMin:
             _tier, _tier_reasons = "A", ["新入榜关注度较强"]
         elif entry_strength > 0:
             _tier, _tier_reasons = "B", ["新入榜关注度较弱"]
@@ -660,6 +662,54 @@ def analyze_rank_resonance(input: dict[str, Any], config: RankTrendConfig | None
             "tierReasons": _tier_reasons,
         }
     if len(percentiles) < c.resonanceMidWindowBars + 1 or any(not math.isfinite(p) for p in percentiles):
+        # T3 warming 补票（2026-10-07 四投票信号预登记合同；默认 off=现行为）：len∈[4,8] 缺票帧
+        # 以同日子窗差分+市场基准化给方向票——档位上限 cap（C/B），只投 buy 非负票（sell/hold
+        # 方向降 hold 投 C 档票 0），不给 S/A；无同日锚/键缺失/横截面不足 → 落原 insufficient。
+        # D1 假设验证线已过（warming buy 帧 h8 excess +0.0142>0，strong/retreat 同向正）。
+        warming_cap = str(getattr(c, "resonanceWarmingTierCap", "none") or "none")
+        warming_keys = input.get("timeKeys")
+        if (
+            bool(getattr(c, "resonanceWarmingEnabled", False))
+            and warming_cap in ("C", "B")
+            and 4 <= len(percentiles) <= 8
+            and isinstance(warming_keys, list) and len(warming_keys) == len(percentiles)
+            and all(math.isfinite(p) for p in percentiles)
+            and sample_quality.get("status") != "insufficient"
+            and math.isfinite(market_median_short_change)
+            and market_sample_count >= c.resonanceMinMarketSampleCount
+        ):
+            anchor_index = None
+            start_k = max(0, len(percentiles) - 1 - c.resonanceShortWindowBars)
+            for k in range(len(percentiles) - 2, start_k - 1, -1):
+                if str(warming_keys[k] or "") and str(warming_keys[k] or "") == str(warming_keys[-1] or ""):
+                    anchor_index = k
+                    break
+            if anchor_index is not None:
+                short_change_w = percentiles[-1] - percentiles[anchor_index]
+                rel_mom_w = clamp((short_change_w - market_median_short_change) / c.resonanceMomentumScale, -1, 1)
+                raw_dir_w = "buy" if rel_mom_w > c.resonanceDirectionThreshold else "sell" if rel_mom_w < -c.resonanceDirectionThreshold else "hold"
+                if raw_dir_w == "buy":
+                    _tier, _tier_reasons = warming_cap, [f"warming 同日重基方向确认（cap {warming_cap}）"]
+                else:
+                    _tier, _tier_reasons = "C", ["warming 方向证据不足弃权（短窗不投负票）"]
+                return {
+                    "status": "ok",
+                    "direction": "buy" if raw_dir_w == "buy" else "hold",
+                    "score": round(100 * clamp(max(rel_mom_w, 0.0), 0, 1)),
+                    "label": _resonance_label(round(100 * clamp(max(rel_mom_w, 0.0), 0, 1)), c),
+                    "relativeMomentum": round(rel_mom_w, 6),
+                    "acceleration": 0,
+                    "persistence": 0,
+                    "jumpFreshness": 0,
+                    "reversalPenalty": 0,
+                    "historyState": "warming",
+                    "marketMedianShortChange": _short_change_json,
+                    "marketSampleCount": market_sample_count,
+                    "marketMedianPercentile": market_median_percentile,
+                    "reasons": [f"warming 短序列同日基准动量 {round(rel_mom_w * 100)}"],
+                    "signalTier": _tier,
+                    "tierReasons": _tier_reasons,
+                }
         return _resonance_insufficient(
             "排名序列不足或无效", market_median_short_change, market_sample_count, market_median_percentile
         )
@@ -1411,6 +1461,8 @@ class RankTrendPythonEngine:
                             "isNew": len(percentiles) == 1,
                             "currentAttentionPercentile": percentiles[-1] if percentiles else 0,
                         },
+                        # T3 warming 同日锚（resonanceWarmingEnabled 才消费；默认 off 零行为）
+                        "timeKeys": list(rank_time_keys or []),
                     },
                     self.config,
                 )

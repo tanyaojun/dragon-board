@@ -131,6 +131,14 @@ class RankTrendConfig:
     crossSectionPersistFrames: int = 0  # 持续高位窗口 N（近 N 帧 percentile 均值）；0=关闭（默认）
     crossSectionPersistMin: float = 90.0  # 当前 pct 门槛（路径开启时生效）
     crossSectionPersistMeanMin: float = 85.0  # 近 N 帧均值门槛
+    # ── T4 cs 持续高位独立档 A_PERSIST（2026-10-07 四投票信号预登记合同；默认 off=零行为）──
+    # D1 实证（§12.3）：persist_eligible(N=5，pct≥90∧近5均值≥85) 占 8.2%，其 h8 excess
+    # +0.0367 vs 非 eligible 的 B 档 +0.0149（diff +0.0218 过 +0.02 线，strong/retreat 同向）
+    # → 正态优先。独立档不并入 A（H2 合并稀释前例）：delta-A 之后、原 B 之前插 A_PERSIST，
+    # 票值 = tierSynergyCsPersistStrength（三态候选 1.0/0.5/−0.5；0.5=同 B 票纯标签零行为）。
+    # 消费边界（预注册）：A_PERSIST 不进 compute_synergy_state 的 cs_strong(A)/cs_weak(D) 叙事判定。
+    crossSectionPersistIndependentTier: bool = False
+    tierSynergyCsPersistStrength: float = 0.5  # A_PERSIST 票值（cs 票 = strength × tierSynergyCrossSectionVote）
     jumpConfirmChangeMin: float = 3.0  # Jump 价格确认：涨跌幅 ≥3%（up）/ ≤-3%（down），2026-08-17 G4 默认生效
     jumpConfirmVolumeRatioMin: float = 1.0  # Jump 量确认：量比 ≥1（放量配合）
     # ── amount 成交额量比（2026-08-18 G3：跨帧成交额量比进量价，"价量资金"落地）──
@@ -353,6 +361,13 @@ class RankTrendConfig:
     tierResonanceJumpFreshnessMin: float = 0.5  # _resonance_tier 第二条（Jump 事件）+ 新入榜 S
     tierResonancePersistenceMin: float = 0.6  # _resonance_tier 第三条（buy+persistence）
     tierResonanceEntryStrengthMin: float = 0.3  # 新入榜 A 判定
+    # ── T3 共振 warming 补票（2026-10-07 四投票信号预登记合同；默认 off=现行为，golden 不漂移）──
+    # len∈[4,8] 共振缺票帧（D1 实测占股帧 10.0%）：同日子窗差分+市场基准化给方向票，
+    # 档位上限 cap（C=票 0.375 / B=票 0.525）、只投 buy 非负票（hold/sell→C+hold 票 0）、
+    # 不给 S/A。D1 假设验证线已过（warming buy 帧 h8 excess +0.0142>0，strong/retreat 同向）。
+    # W1=cap C → W2=cap B（W2 仅 W1 过线后跑）；回退=enabled 置 False。
+    resonanceWarmingEnabled: bool = False
+    resonanceWarmingTierCap: str = "none"  # none | C | B（cap 档位；enabled 才消费）
     tierRankTrendStrongMin: float = 0.5  # _rank_trend_tier S
     tierRankTrendConfirmMin: float = 0.25  # _rank_trend_tier A
     tierSynergyVoteStrong: float = 2.0  # _synergy_tier vote_sum≥strong（S/A 分界，档位加权后 float）
@@ -561,6 +576,7 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
         ("volumePriceGateMode", ("hard", "soft", "off")),
         ("lifecycleRankScaleMode", ("mixed", "pct_full", "hotzone_pct_only")),
         ("lifecycleTimeGapStrictness", ("off", "cross_day", "non_adjacent")),
+        ("resonanceWarmingTierCap", ("none", "C", "B")),
     ):
         _mode_value = str(getattr(config, _mode_field))
         if _mode_value not in _legal:

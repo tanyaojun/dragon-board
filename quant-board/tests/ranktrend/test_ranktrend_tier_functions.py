@@ -77,10 +77,12 @@ def test_new_entry_default_matches_hardcoded() -> None:
     assert analyze_rank_resonance(_new_entry_input(60))["signalTier"] == "A"
     # percentile=45 → entry_strength=0 → C
     assert analyze_rank_resonance(_new_entry_input(45))["signalTier"] == "C"
-    # jump 事件 → S
+    # T5a（2026-10-07 预登记合同）：新入榜 S 死分支已删除——生产链路 len==1 恒无 jump
+    # 事件（detect_rank_jumps len≥3 门槛），即便直注 events（测试超集输入）也不再判 S，
+    # 档位只由 entry_strength 决定（A/B/C）；「新入榜得 S」如启用须走显式 trial（T5b，已归档）。
     assert (
         analyze_rank_resonance(_new_entry_input(60, [{"index": 0, "direction": "surge", "magnitude": 1}]))["signalTier"]
-        == "S"
+        == "A"
     )
 
 
@@ -91,11 +93,14 @@ def test_new_entry_uses_config_entry_strength() -> None:
 
 
 def test_new_entry_jump_freshness_config_boundary() -> None:
-    """新入榜 jump_freshness 恒 1.0（有 events）；阈值上调到合法上限 1.0 仍 S（边界回归）。"""
+    """T5a 后新入榜档位与 jumpFreshness 阈值解耦（S 分支已删）：阈值任意取值均不产生 S。
+
+    fresh 仍进展示分（resonanceNewEntryWeights），但档位阶梯收敛为 A/B/C。
+    """
     inp = _new_entry_input(60, [{"index": 0, "direction": "surge", "magnitude": 1}])
     c = RankTrendConfig.from_patch({"tierResonanceJumpFreshnessMin": 1.0})
-    assert analyze_rank_resonance(inp, c)["signalTier"] == "S"
-    # 无 events → freshness=0 → 阈值 0.1 下不满足 jump S，落 A
+    assert analyze_rank_resonance(inp, c)["signalTier"] == "A"
+    # 无 events → freshness=0 → 同样落 A（与有 events 一致：档位只看 entry_strength）
     c2 = RankTrendConfig.from_patch({"tierResonanceJumpFreshnessMin": 0.1})
     assert analyze_rank_resonance(_new_entry_input(60), c2)["signalTier"] == "A"
 
