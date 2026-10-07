@@ -253,14 +253,17 @@
                 <div class="sub-block-title">窗口层统计</div>
                 <div class="stats-grid">
                   <div class="stat-card">
-                    <div class="stat-label">当日槽位层统计</div>
+                    <div class="stat-label">{{ crowdingDetail?.layerStatsLabel ?? '当日槽位层统计' }}</div>
                     <div class="stat-body">
-                      <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="stat-item"
-                        :style="{ color: crowdingColor(layerKey) }">
-                        {{ CROWDING_NAMES[layerKey] }} {{ daySlotLayerStats.counts[layerKey] ?? 0 }}
-                      </span>
-                      <span class="stat-item muted">逃生 {{ daySlotLayerStats.escapeCount }}/{{ daySlotLayerStats.total }}<template
-                          v-if="daySlotLayerStats.escapeRate != null">（{{ Math.round(daySlotLayerStats.escapeRate * 100) }}%）</template></span>
+                      <template v-if="crowdingDetail?.layerStatsData">
+                        <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="stat-item"
+                          :style="{ color: crowdingColor(layerKey) }">
+                          {{ CROWDING_NAMES[layerKey] }} {{ crowdingDetail.layerStatsData.counts[layerKey] ?? 0 }}
+                        </span>
+                        <span class="stat-item muted">逃生 {{ crowdingDetail.layerStatsData.escapeCount }}/{{ crowdingDetail.layerStatsData.total }}<template
+                            v-if="crowdingDetail.layerStatsData.escapeRate != null">（{{ Math.round(crowdingDetail.layerStatsData.escapeRate * 100) }}%）</template></span>
+                      </template>
+                      <span v-else class="stat-item muted">该日无槽位文档（层统计不可算）</span>
                     </div>
                   </div>
                   <div class="stat-card">
@@ -278,39 +281,40 @@
               </div>
               <div class="crowding-hero">
                 <div class="crowding-latest">
-                  <div class="sub-block-title">最新槽归层<template v-if="latestCrowding?.slotTime"> · {{ latestCrowding.slotTime }}</template></div>
-                  <div v-if="latestCrowding?.layerName" class="crowding-layer-name"
-                    :style="{ color: crowdingColor(latestCrowding.layer) }">
-                    {{ latestCrowding.layerName }}
-                    <span v-if="latestCrowding.warn" class="warn-badge">毒层警示</span>
-                  </div>
+                  <div class="sub-block-title">{{ crowdingDetail?.waffleTitle ?? '最新槽归层' }}</div>
+                  <template v-if="crowdingDetail?.point">
+                    <div class="crowding-layer-name" :style="{ color: crowdingColor(crowdingDetail.point.layer) }">
+                      {{ crowdingDetail.point.layerName ?? '归层缺失' }}
+                      <span v-if="crowdingDetail.point.warn" class="warn-badge">毒层警示</span>
+                    </div>
+                    <div v-if="crowdingDetail.point.probabilities" class="waffle-block">
+                      <div class="waffle-grid">
+                        <span v-for="(sq, index) in waffleSquares(crowdingDetail.point.probabilities)" :key="index"
+                          class="waffle-square" :style="{ background: sq }"></span>
+                      </div>
+                      <div class="waffle-legend">
+                        <span v-for="entry in waffleLegend(crowdingDetail.point.probabilities)" :key="entry.name"
+                          class="waffle-legend-item">
+                          <span class="legend-dot" :style="{ background: entry.color }"></span>{{ entry.name }} {{ entry.pctText }}
+                        </span>
+                      </div>
+                    </div>
+                    <div v-if="crowdingDetail.point.confidence != null || crowdingDetail.point.probability != null"
+                      class="crowding-meta">
+                      <template v-if="crowdingDetail.point.probability != null">P{{ Math.round(crowdingDetail.point.probability * 100) }}%</template>
+                      <template v-if="crowdingDetail.point.confidence != null"> · 模型置信 {{ Math.round(crowdingDetail.point.confidence * 100) }}%</template>
+                      <template v-if="crowdingDetail.point.probability != null && crowdingDetail.point.probability < JEV_HESITANT_THRESHOLD">
+                        · ⚠️ 低置信（&lt;{{ Math.round(JEV_HESITANT_THRESHOLD * 100) }}% 犹豫阈值）
+                      </template>
+                    </div>
+                  </template>
                   <div v-else class="empty-row">归层缺失（降级/无数据，不伪造）</div>
-                  <div v-if="latestCrowding?.probabilities" class="waffle-block">
-                    <div class="waffle-grid">
-                      <span v-for="(sq, index) in waffleSquares(latestCrowding.probabilities)" :key="index"
-                        class="waffle-square" :style="{ background: sq }"></span>
-                    </div>
-                    <div class="waffle-legend">
-                      <span v-for="entry in waffleLegend(latestCrowding.probabilities)" :key="entry.name"
-                        class="waffle-legend-item">
-                        <span class="legend-dot" :style="{ background: entry.color }"></span>{{ entry.name }} {{ entry.pctText }}
-                      </span>
-                    </div>
-                  </div>
-                  <div v-if="latestCrowding && (latestCrowding.confidence != null || latestCrowding.probability != null)"
-                    class="crowding-meta">
-                    <template v-if="latestCrowding.probability != null">P{{ Math.round(latestCrowding.probability * 100) }}%</template>
-                    <template v-if="latestCrowding.confidence != null"> · 模型置信 {{ Math.round(latestCrowding.confidence * 100) }}%</template>
-                    <template v-if="latestCrowding.probability != null && latestCrowding.probability < JEV_HESITANT_THRESHOLD">
-                      · ⚠️ 低置信（&lt;{{ Math.round(JEV_HESITANT_THRESHOLD * 100) }}% 犹豫阈值）
-                    </template>
-                  </div>
                 </div>
                 <div class="crowding-strip-block">
                   <div class="sub-block-title">层迁移（相邻槽变化）</div>
-                  <div v-if="!crowdingTransitionList.length" class="empty-row">暂无层迁移（当日全程同层或数据不足）</div>
+                  <div v-if="!crowdingDetail?.transitions.length" class="empty-row">暂无层迁移（当日全程同层或数据不足）</div>
                   <div v-else class="transition-list">
-                    <div v-for="(t, index) in crowdingTransitionList" :key="index" class="transition-item">
+                    <div v-for="(t, index) in crowdingDetail.transitions" :key="index" class="transition-item">
                       <span class="time-badge">{{ t.atSlot }}</span>
                       <span :style="{ color: crowdingColor(t.from) }">{{ t.fromName ?? '缺失' }}</span>
                       →
@@ -328,7 +332,8 @@
                 🔎 研究注记：拥挤=v2 离散归层（连续分已实证无方差退役）；top_acceleration / late_seal_weakness 为 fwdWorst
                 实证毒层；insufficient_evidence 逃生应趋近 0（判据已锚定近20日参照），持续偏高属异常需排查锚供给；
                 柱=所选层概率（top1，柱色=归层色）、拥挤抗风险线=三层概率合计（概览 hero 同口径），
-                多日窗口取每日 EOD 日级归层（day_crowding），随顶部窗口切换历史维度；缺失与「无数据」如实标注不补 0。
+                多日窗口取每日 EOD 日级归层（day_crowding），随顶部窗口切换历史维度；缺失与「无数据」如实标注不补 0；
+                点击柱体切换下方详情卡口径（槽位层统计/归层分布/层迁移跟随选中点，白描边=选中柱，默认最新，同热榜情绪 jev 观察轨道交互）。
               </div>
             </template>
           </section>
@@ -636,6 +641,7 @@ import {
   type JevAnchorMetric,
   type JevConfidenceMetrics,
   type JevCrowdingPoint,
+  type JevCrowdingTransition,
   type JevNarrativeProjection,
   type LimitUpSortKey,
 } from '@/services/hotlist/jevNarrativeProjection'
@@ -1113,9 +1119,9 @@ const thermoPoints = computed<ThermoPoint[]>(() => {
 const crowdingPoints = computed(() => crowdingTimeline(slots.value))
 const latestCrowding = computed(() =>
   crowdingPoints.value.length ? crowdingPoints.value[crowdingPoints.value.length - 1] : null)
-const eodCrowdingPoint = computed<JevCrowdingPoint | null>(() => {
-  if (!eodDoc.value) return null
-  const answer = eodDoc.value.answers?.day_crowding
+/** EOD 日级归层点（day_crowding；点击联动详情与选中日概览 chip 共用） */
+function crowdingPointOfEodDoc(doc: HotlistJevDoc): JevCrowdingPoint {
+  const answer = doc.answers?.day_crowding
   const choice = answer && answer.type === 'choice' ? answer.choice ?? null : null
   const probabilities = answer && answer.type === 'choice' ? answer.probabilities ?? null : null
   const probability =
@@ -1124,7 +1130,7 @@ const eodCrowdingPoint = computed<JevCrowdingPoint | null>(() => {
       : null
   return {
     slotTime: 'EOD',
-    status: eodDoc.value.status || 'ok',
+    status: doc.status || 'ok',
     layer: choice,
     layerName: choice ? (CROWDING_NAMES[choice] ?? choice) : null,
     warn: choice != null && WARN_LAYERS.has(choice),
@@ -1133,7 +1139,11 @@ const eodCrowdingPoint = computed<JevCrowdingPoint | null>(() => {
       answer && answer.type === 'choice' && typeof answer.confidence === 'number' ? answer.confidence : null,
     probabilities,
   }
-})
+}
+
+const eodCrowdingPoint = computed<JevCrowdingPoint | null>(() =>
+  eodDoc.value ? crowdingPointOfEodDoc(eodDoc.value) : null,
+)
 const crowdingTransitionList = computed(() => crowdingTransitions(crowdingPoints.value))
 const daySlotLayerStats = computed(() => layerStats(slots.value, 'slot'))
 const windowLayerStats = computed(() =>
@@ -1148,6 +1158,8 @@ const CROWDING_BARS_INDICATORS = [
 type CrowdingBarKey = (typeof CROWDING_BARS_INDICATORS)[number]['key']
 
 interface CrowdingBarPoint {
+  /** 点击联动唯一键：1天=slotTime（EOD 列='EOD'）；多日=完整 tradingDate */
+  key: string
   label: string
   degraded: boolean
   noData: boolean
@@ -1169,7 +1181,7 @@ interface CrowdingBarPoint {
 }
 
 const crowdingBarPoints = computed<CrowdingBarPoint[]>(() => {
-  const ofDoc = (doc: HotlistJevDoc, label: string, isEod: boolean): CrowdingBarPoint => {
+  const ofDoc = (doc: HotlistJevDoc, key: string, label: string, isEod: boolean): CrowdingBarPoint => {
     const answerKey = isEod ? 'day_crowding' : 'crowding'
     const answer = doc.answers?.[answerKey]
     const metrics: JevConfidenceMetrics = confidenceMetrics(answer)
@@ -1179,6 +1191,7 @@ const crowdingBarPoints = computed<CrowdingBarPoint[]>(() => {
       choice != null && probabilities && typeof probabilities[choice] === 'number' ? probabilities[choice] : null
     const riskRaw = jevCrowdingProbability(doc, answerKey)
     return {
+      key,
       label,
       degraded: doc.status === 'degraded',
       noData: doc.status === 'no_data',
@@ -1194,15 +1207,16 @@ const crowdingBarPoints = computed<CrowdingBarPoint[]>(() => {
     }
   }
   if (windowKey.value === '1d') {
-    const out = slots.value.map((slot) => ofDoc(slot, slot.slotTime || '--', false))
-    if (eodDoc.value) out.push(ofDoc(eodDoc.value, 'EOD', true))
+    const out = slots.value.map((slot) => ofDoc(slot, slot.slotTime || '--', slot.slotTime || '--', false))
+    if (eodDoc.value) out.push(ofDoc(eodDoc.value, 'EOD', 'EOD', true))
     return out
   }
   // 多日窗口：每日 EOD 日级归层（与叙事概览日级柱图同数据源；EOD 未生成日整列断线如实标注）
   return dayDocs.value.map((day) =>
     day.eod
-      ? ofDoc(day.eod, day.tradingDate.slice(5), true)
+      ? ofDoc(day.eod, day.tradingDate, day.tradingDate.slice(5), true)
       : {
+          key: day.tradingDate,
           label: day.tradingDate.slice(5),
           degraded: false,
           noData: false,
@@ -1235,6 +1249,75 @@ function toggleCrowdingBar(key: CrowdingBarKey) {
   }
   nextTick(() => renderCrowdingBarChart())
 }
+
+// ---------- 点击联动详情（jev 观察轨道页签同语言：点柱选点，详情卡默认最新、选中键失配回落最新） ----------
+const selectedCrowdingKey = ref<string | null>(null)
+
+/** 解析后的实际选中键：1天默认=最新槽（非 EOD 列）；多日默认=最新日；点击键失效（跨窗口换代）回落默认 */
+const crowdingSelectedKey = computed<string | null>(() => {
+  const points = crowdingBarPoints.value
+  if (!points.length) return null
+  const hit = selectedCrowdingKey.value ? points.find((p) => p.key === selectedCrowdingKey.value) : null
+  if (hit) return hit.key
+  if (windowKey.value === '1d') {
+    const slotPoints = points.filter((p) => p.key !== 'EOD')
+    return (slotPoints.length ? slotPoints[slotPoints.length - 1] : points[points.length - 1]).key
+  }
+  return points[points.length - 1].key
+})
+
+interface CrowdingDetailState {
+  /** waffle 卡标题：默认「最新槽归层 · 15:00」；点击后「{slotTime|EOD} 归层」「{MM-DD} 归层 · …」 */
+  waffleTitle: string
+  /** waffle 归层点（JevCrowdingPoint 同构；null=选中点无任何归层文档，如实占位） */
+  point: JevCrowdingPoint | null
+  /** 槽位层统计卡标题：1天=「当日槽位层统计」；多日=「{MM-DD} 槽位层统计」 */
+  layerStatsLabel: string
+  /** 选中点日粒度槽位层统计；null=该日无槽位文档（统计不可算，如实标注） */
+  layerStatsData: ReturnType<typeof layerStats> | null
+  transitions: JevCrowdingTransition[]
+}
+
+const crowdingDetail = computed<CrowdingDetailState | null>(() => {
+  if (!crowdingBarPoints.value.length) return null
+  const selectedKey = crowdingSelectedKey.value
+  if (windowKey.value === '1d') {
+    // 1天窗口：waffle 跟随选中槽/EOD；层统计与层迁移固定当日 slots 口径（换日由顶部日期按钮承担）
+    const slotPoints = crowdingPoints.value
+    const point =
+      selectedKey === 'EOD'
+        ? eodCrowdingPoint.value
+        : slotPoints.find((p) => p.slotTime === selectedKey) ??
+          (slotPoints.length ? slotPoints[slotPoints.length - 1] : eodCrowdingPoint.value)
+    const isLatestSlot = point != null && slotPoints.length > 0 && point === slotPoints[slotPoints.length - 1]
+    return {
+      waffleTitle: point == null
+        ? '归层缺失'
+        : point.slotTime === 'EOD' || (isLatestSlot && !slotPoints.length)
+          ? 'EOD 归层'
+          : isLatestSlot
+            ? `最新槽归层 · ${point.slotTime}`
+            : `${point.slotTime} 归层`,
+      point,
+      layerStatsLabel: '当日槽位层统计',
+      layerStatsData: daySlotLayerStats.value,
+      transitions: crowdingTransitionList.value,
+    }
+  }
+  // 多日窗口：点击某日柱 → 该日 slots 驱动槽位层统计/最新槽 waffle/层迁移（dayDocs 每日含完整槽位文档）
+  const day = dayDocs.value.find((d) => d.tradingDate === selectedKey) ?? dayDocs.value[dayDocs.value.length - 1] ?? null
+  if (!day) return null
+  const daySlotPoints = crowdingTimeline(day.slots)
+  const dayLatest = daySlotPoints.length ? daySlotPoints[daySlotPoints.length - 1] : null
+  const dayEodPoint = day.eod ? crowdingPointOfEodDoc(day.eod) : null
+  return {
+    waffleTitle: `${day.tradingDate.slice(5)} 归层 · ${dayLatest ? dayLatest.slotTime : 'EOD'}`,
+    point: dayLatest ?? dayEodPoint,
+    layerStatsLabel: `${day.tradingDate.slice(5)} 槽位层统计`,
+    layerStatsData: day.slots.length ? layerStats(day.slots, 'slot') : null,
+    transitions: crowdingTransitions(daySlotPoints),
+  }
+})
 
 /** waffle 方格：每层概率 × 100 格按层色填充；概率合计不足 1 时剩余格留空（如实呈现未归一分布） */
 function waffleSquares(probabilities: Record<string, number>): string[] {
@@ -1800,15 +1883,19 @@ function renderCrowdingBarChart() {
   const textColor = cssVar('--text-secondary', '#9aa0a6')
   const borderColor = cssVar('--border-color', '#333333')
   const indicators = crowdingBarIndicators.value
+  const selectedKey = crowdingSelectedKey.value
   const series: echarts.SeriesOption[] = []
   if (indicators.includes('probability')) {
-    // 柱色=归层色（六层图例参照）；归层缺失/无数据灰柱或断柱，不伪造
+    // 柱色=归层色（六层图例参照）；归层缺失/无数据灰柱或断柱，不伪造；选中柱白描边（点击联动详情反馈）
     series.push({
       name: '所选层概率', type: 'bar', barWidth: 12,
       itemStyle: { color: '#9aa0a6' },
       data: points.map((point) => ({
         value: point.noData ? null : point.probability,
-        itemStyle: { color: point.layer ? (CROWDING_COLORS[point.layer] ?? '#9aa0a6') : '#9aa0a6' },
+        itemStyle: {
+          color: point.layer ? (CROWDING_COLORS[point.layer] ?? '#9aa0a6') : '#9aa0a6',
+          ...(point.key === selectedKey ? { borderColor: '#ffffff', borderWidth: 2 } : {}),
+        },
       })),
     })
   }
@@ -1881,6 +1968,19 @@ function renderCrowdingBarChart() {
     // 指标开关减少序列时必须整体替换，merge 模式下旧序列会残留（同历史对比页签）
     { notMerge: true },
   )
+  // 点选联动（jev 观察轨道页签同交互，命中面更宽）：zrender 层 click + x 像素最近列 snap——
+  // 窄柱（barWidth 12）点在柱间空隙也按最近列响应，避免「看着点了柱却没反应」；off 先行防重复渲染累积 handler
+  chart.getZr().off('click')
+  chart.getZr().on('click', (event: { offsetX?: number }) => {
+    if (typeof event.offsetX !== 'number') return
+    const index = chart.convertFromPixel({ xAxisIndex: 0 }, event.offsetX)
+    if (typeof index !== 'number' || !Number.isFinite(index)) return
+    const nearest = points[Math.round(index)]
+    if (nearest) {
+      selectedCrowdingKey.value = nearest.key
+      nextTick(() => renderCrowdingBarChart()) // 重渲染以刷新选中柱白描边高亮
+    }
+  })
   chart.resize()
 }
 

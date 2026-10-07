@@ -90,6 +90,14 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('crowdingTransitions')
     expect(source).toContain('escapeRate')
     expect(source).toContain('毒层')
+    // 点击联动详情（jev 观察轨道页签同语言）：点柱选点 → 层统计/归层分布/层迁移跟随选中点，默认最新、失配回落；
+    // zrender 层 click + 最近列 snap（窄柱点柱间空隙也响应，比 bar 命中面更宽）
+    expect(source).toContain('selectedCrowdingKey')
+    expect(source).toContain('crowdingSelectedKey')
+    expect(source).toContain("getZr().off('click')")
+    expect(source).toContain("getZr().on('click'")
+    expect(source).toContain('convertFromPixel')
+    expect(source).toContain('crowdingDetail')
     expect(source).not.toContain("type: 'pie'")
     expect(source).not.toContain('crowdingChartRef')
     // 置信度：ECharts 柱状图（2026-10-07 用户令，热榜情绪·历史对比页签同语言：指标开关+柱=P+线=温度C）
