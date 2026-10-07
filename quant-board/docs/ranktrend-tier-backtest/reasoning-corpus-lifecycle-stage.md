@@ -816,6 +816,19 @@ python scripts/gptoss_questionset_review.py \
 3. P1 的「换算后跨池一致性收敛」未在本轮测量（行为步只验了 no-regression），若用户要 L2 的收益证据需补一致性复测——但 L2 的 saEx 成本已见，预期不晋升。
 4. 默认配置零漂移已验（专项 16 用例 + 回归 54 + 全量 pytest 见提交记录）。
 
+### §12.1 落默认执行（2026-10-07，用户裁决「必须落，先 G1 再看 G2」）
+
+用户裁决理由：热榜环境门否决太多，早有错判误杀嫌疑。执行清单（全部完成）：
+
+1. **config 默认值**：`lifecycleTimeGapStrictness` off→**cross_day**（注释登记判定依据）；`lifecycleRankScaleMode` 保持 mixed（未落默认）。
+2. **测试**：默认断言更新 + 新增「默认配置+跨日键自动生效」「off 诊断臂保留」用例（18/18 过）。
+3. **golden 重录**：真行为变化版 diff 逐字段审查——gap 帧输出 metrics 动量分量 null+temporalGap 标记、假降温修复（cooling→expansion 沿袭真实路径）、risk overheat 中性化（35→15）、backtestSimulation 交易记录 stage 标注传导；全部在 G1 语义预期内，无开关重跑 11/11 逐位过。
+4. **途中修复两处**：①`json.dump(allow_nan=False)` 遇 gap 帧 NaN 截断快照 → `analyze_cycle` 输出层统一 `_evidence_num`（NaN→null，不伪装 0）；②`analyze_risk` 直吃 metrics 算术炸 None → 防御下沉 risk 入口统一 `neutralize_gap_metrics`（None/NaN 双态→0），撤 runtime 单点中性化；③golden 测试 monkeypatch lambda 签名补 `**kwargs`。
+5. **前端消费**（展示同步义务）：`types.ts` cycle.metrics 增 temporalGap + 动量字段 number|null；DataTable 周期列 tooltip 增「跨日缺口帧：动量证据缺失」标注（fail-visible）；vue-tsc 干净 + vitest 1172 全过。
+6. **台账**：L1 ledger §18 登记（参数/判定依据/回退路径/新基线锚 0.1450/0.0983/0.1172/G2 重开条件）。
+7. **G2 待办**：oos1 贴线差 0.0001 FAIL 不自动翻案；「再看 G2」= 待 G1 新代际复扫，须重新预登记（G1 改变基线后 G2 的剂量语义也要重估：G1 已消跨日差分，G2 剩余增量=同日非相邻对）。
+8. Redis analyze 缓存清理 + 8000/8001 重启生效（见提交记录）。
+
 ### §11.2 第二轮审定（2026-10-07，P1/P3 预登记合同；输出归档 `lifecycle-stage-opus-round2-output.md`）
 
 **审定结论：通过，零硬幻觉**。

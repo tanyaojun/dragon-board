@@ -293,13 +293,15 @@ export interface RankTrendAnalysisResult {
     transition: string
     confidence: number
     metrics: {
-      rankVelocity: number
-      rankAcceleration: number
-      rankShock: number
+      rankVelocity: number | null
+      rankAcceleration: number | null
+      rankShock: number | null
       hotZoneStreak: number
       bestRecentRank: number
       drawdownFromPeak: number
       rankPathCommitment: number
+      /** P3 时间正规化（2026-10-07 G1 落默认）：跨日缺口帧动量证据缺失标记 */
+      temporalGap?: boolean
     }
     entryAdvice: {
       bias: CycleEntryBias
@@ -318,8 +320,8 @@ export interface RankTrendAnalysisResult {
         rawStage: AttentionStage
         stage: AttentionStage
         transition: string
-        rankVelocity: number
-        rankAcceleration: number
+        rankVelocity: number | null
+        rankAcceleration: number | null
         drawdownFromPeak: number
         hotZoneStreak: number
         rankPathCommitment: number

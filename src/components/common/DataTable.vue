@@ -1212,7 +1212,11 @@ const getTierReasonsOf = (stock: any, field: string): string[] => {
     return Array.isArray(observation.volumePrice?.tierReasons) ? observation.volumePrice.tierReasons : []
   }
   if (field === 'lifecycleOpportunity') {
-    return Array.isArray(observation.lifecycle?.tierReasons) ? observation.lifecycle.tierReasons : []
+    const reasons = Array.isArray(observation.lifecycle?.tierReasons) ? [...observation.lifecycle.tierReasons] : []
+    // P3 时间正规化（2026-10-07 G1 落默认）：跨日缺口帧动量证据缺失，fail-visible 标注
+    const gapFlag = (rankTrend as { cycle?: { metrics?: { temporalGap?: boolean } } } | undefined)?.cycle?.metrics?.temporalGap
+    if (gapFlag) reasons.push('跨日缺口帧：动量证据缺失（temporalGap），本帧动量类判据按缺失处理')
+    return reasons
   }
   return []
 }

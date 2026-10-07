@@ -1159,12 +1159,10 @@ class RankTrendPythonEngine:
             {"time_keys": rank_time_keys, "frame_indices": rank_frame_indices} if _gap_strictness != "off" else {}
         )
         cycle = _compat_callable("analyze_cycle")(ranks, percentiles, self.config, **_gap_kwargs)
-        # gap 帧 risk 输入中性化（NaN 动量分量→0，temporalGap 标记保留；默认模式恒原样）
-        risk_cycle = {**cycle, "metrics": neutralize_gap_metrics(cycle.get("metrics") or {})}
         risk = _compat_callable("analyze_risk")(
             current_percentile,
             technical,
-            risk_cycle,
+            cycle,
             fallback["zlje"],
             fallback["zljzb"],
             fallback["volumeRatio"],

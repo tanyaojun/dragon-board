@@ -163,7 +163,7 @@ def test_build_signal_runs_risk_aware_analysis_order(monkeypatch) -> None:
     monkeypatch.setattr(
         ranktrend_engine,
         "analyze_cycle",
-        lambda ranks, percentiles, config: order.append("cycle")
+        lambda ranks, percentiles, config, **kwargs: order.append("cycle")
         or {
             "rawStage": "expansion",
             "stage": "expansion",

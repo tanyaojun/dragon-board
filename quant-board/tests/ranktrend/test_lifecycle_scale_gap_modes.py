@@ -26,9 +26,25 @@ def _series() -> tuple[list[float], list[float]]:
 
 class TestDefaultZeroBehavior:
     def test_default_config_modes(self):
+        # 2026-10-07 用户裁决：G1（cross_day）落默认；L1 尺度保持 mixed（未落默认）
         c = RankTrendConfig()
         assert c.lifecycleRankScaleMode == "mixed"
+        assert c.lifecycleTimeGapStrictness == "cross_day"
+
+    def test_off_mode_still_available_as_diagnostic_arm(self):
+        # off=旧行为保留为诊断对照臂（配置面存在性）
+        c = RankTrendConfig.from_patch({"lifecycleTimeGapStrictness": "off"})
         assert c.lifecycleTimeGapStrictness == "off"
+
+    def test_default_gap_semantics_active_without_patch(self):
+        # 落默认后：默认配置 + 跨日时间键 → gap 语义自动生效（无需 from_patch）
+        ranks, pcts = _series()
+        days = ["2026-06-01"] * 7 + ["2026-06-02"]
+        out = analyze_cycle(ranks, pcts, time_keys=days, frame_indices=list(range(8)))
+        assert out["metrics"].get("temporalGap") is True
+        assert out["metrics"]["rankVelocity"] is None  # 输出层 NaN→null（缺证据不伪装成 0）
+        assert out["metrics"]["rankShock"] is None
+        assert any("temporalGap" in r for r in out["decision"]["reasons"])
 
     def test_invalid_enum_rejected(self):
         with pytest.raises(ValueError, match="lifecycleRankScaleMode"):
@@ -37,9 +53,10 @@ class TestDefaultZeroBehavior:
             RankTrendConfig.from_patch({"lifecycleTimeGapStrictness": "daily"})
 
     def test_analyze_cycle_default_identical_with_and_without_kwargs(self):
+        # 同日相邻键不触发 gap → 传键与不传（无键=strictness 无输入不启用）行为一致
         ranks, pcts = _series()
         a = analyze_cycle(ranks, pcts)
-        b = analyze_cycle(ranks, pcts, None, time_keys=[f"d{i}" for i in range(len(ranks))], frame_indices=list(range(len(ranks))))
+        b = analyze_cycle(ranks, pcts, None, time_keys=["2026-06-01"] * len(ranks), frame_indices=list(range(len(ranks))))
         assert (a["stage"], a["rawStage"], a["transition"], a["confidence"]) == (
             b["stage"], b["rawStage"], b["transition"], b["confidence"]
         )
@@ -109,15 +126,15 @@ class TestP3TimeGap:
         out_gap = analyze_cycle(ranks, pcts, cfg, **self._gap_kwargs(days, list(range(len(ranks)))))
         m = out_gap["metrics"]
         assert m.get("temporalGap") is True
-        assert isinstance(m["rankVelocity"], float) and math.isnan(m["rankVelocity"])
-        assert isinstance(m["rankShock"], float) and math.isnan(m["rankShock"])
+        assert m["rankVelocity"] is None
+        assert m["rankShock"] is None
         # hot/best/drawdown（G1 剂量不动）
         assert m["hotZoneStreak"] == out["metrics"]["hotZoneStreak"]
         assert m["bestRecentRank"] == out["metrics"]["bestRecentRank"]
         # raw 沿袭：off 模式末步 raw vs gap 模式 = 前一步 raw（非恒 cooling）
         assert out_gap["rawStage"] == "cooling" or out_gap["rawStage"] == out_gap["decision"]["evidence"]["rawStage"]
-        # 默认配置即使传了时间键也不启用（零行为）
-        assert "temporalGap" not in out["metrics"]
+        # 落默认后：默认配置（不 patch）+ 跨日键同样触发 gap（G1 已是生产行为）
+        assert out["metrics"].get("temporalGap") is True
 
     def test_non_adjacent_same_day_gap(self):
         ranks, pcts = _series()

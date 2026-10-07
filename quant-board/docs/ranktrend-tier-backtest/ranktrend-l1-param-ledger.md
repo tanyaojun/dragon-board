@@ -470,3 +470,15 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - R1-R6"防反悔"复检用户确认不反悔（2026-09-30），本台账 §14/§16 各"保持"结论转正式确认。
 - TS 同步：tierDisplay VOTE_STRENGTH B=0.7；另两参数无 TS 镜像（核实）。
 - 首日人工验证待用户：B 档展示一致性 / 周期列样本不足占比 / 中长承诺信号触发率与 S+A 触发率（<3.5% 预警线）。
+
+## 18. 生命周期时间正规化 G1 落默认（2026-10-07 用户裁决）
+
+| 参数 | 变更 | 判定依据 | 回退路径 | 代际/commit |
+|---|---|---|---|---|
+| lifecycleTimeGapStrictness | off → **cross_day** | P1/P3 预登记合同（Opus 4.8 两轮审定，语料 §11/§11.2）全链：诊断 ER=3.33[CI 3.18-3.49]（velocity>18 帧 42% 为跨日假动量，集中驱动状态跃迁）；trial G1 三窗 saEx 相对线全过 + veto 误伤 −6.8% 三窗一致（可归因=跨日跳变驱动的 reversal 误判消除）+ bd +1.0% 带内；Track 1 交易层中性（decision wrxpf +0.9%、166→172 笔、maxDD 改善）。用户裁决理由：热榜环境门否决过多、早有错判误杀嫌疑 | patch `lifecycleTimeGapStrictness="off"`（诊断对照臂，配置面保留） | gen-g1-gap / cd26347b 后续落默认 commit |
+
+- **基线锚换代登记**：10 月帧字段回填（e77907bb/cacf4ab8 代际）致绝对锚 0.1044/0.0918/0.0933 不可复现（今日 a0=0.1472/0.1016/0.1071，wrxpf 基线 0.4702→0.4104 同源漂移）——本参数判定全程改用**同代际相对线**（容差不变 −0.005/−0.003）；**G1 新基线锚（今日代际）= 0.1450/0.0983/0.1172**，后续 harness/月度复验自动跟随。
+- **行为语义**：相邻序列元素跨交易日 → 该步 velocity/acceleration/shock 缺证据（输出 null + temporalGap 标记，不插值），raw 沿袭前帧（封死 NaN 比较全 False 静默滑 cooling 路径）；risk 动量分量中性化（`analyze_risk` 入口统一防）；normalize 照常（状态自然沿袭）。
+- **G2（non_adjacent）未落默认**：oos1 贴线差 0.0001 FAIL，按合同 G3 不试；如需重开须在 G1 新基线上重新预登记（用户「再看 G2」= 待新代际复扫，非自动翻案）。
+- **TS 同步**：types.ts cycle.metrics 增 temporalGap?: boolean + 动量字段 number|null；DataTable 周期列 tooltip 增缺口标注（fail-visible）；无镜像阈值。
+- **golden**：快照重录（configRepr + 场景输出真变化：gap 帧 metrics null/标记、假降温修复、risk overheat 中性化；diff 逐字段审查全在 G1 语义预期内）。

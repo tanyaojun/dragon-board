@@ -335,10 +335,13 @@ class RankTrendConfig:
     #   pct_full=名次类谓词整体换算 T=200 锚等价分位线（rank R ⇔ pct=(201−R)/2，drawdown 1 格=0.5 pct 点，热区仅 pct≥88 臂）；
     #   hotzone_pct_only=仅热区删名次臂（小池日影响隔离档）。
     lifecycleRankScaleMode: str = "mixed"
-    # P3：序列时间正规化。off=现行为（缺帧跳过不插值，跨缺口差分照算）；
-    #   cross_day=跨交易日相邻差分无效；non_adjacent=跨日∨同日非相邻（全局帧距 ≥2）差分无效。
+    # P3：序列时间正规化。cross_day=跨交易日相邻差分无效（**2026-10-07 用户裁决落默认**，
+    #   依据=P1/P3 预登记合同 trial G1：诊断 ER=3.33（velocity>18 帧 42% 为跨日假动量）、
+    #   veto 误伤 −6.8% 三窗一致、Track 1 交易层中性 wrxpf +0.9%——用户裁定热榜环境门
+    #   否决过多存在错判误杀，采纳证据纯度收益）；non_adjacent=跨日∨同日非相邻（G2，
+    #   oos1 贴线 FAIL 未落默认，待 G1 新基线上重新预登记）；off=旧行为（仅诊断对照用）。
     #   无效帧 velocity/acceleration/shock 置 NaN + temporalGap 标记，raw 沿袭前帧（fail-visible 不插值）。
-    lifecycleTimeGapStrictness: str = "off"
+    lifecycleTimeGapStrictness: str = "cross_day"
     # ── risk（analyze_risk）：压力合成与严重度归一 ──
     riskPressureWeights: list[float] = field(default_factory=lambda: [0.58, 0.42])
     riskOverheatOffset: float = 45.0

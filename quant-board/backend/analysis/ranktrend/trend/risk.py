@@ -4,10 +4,13 @@ import math
 from typing import Any
 from ..engine.config import RankTrendConfig
 from ..engine.primitives import clamp, _is_finite_number
+from .lifecycle import neutralize_gap_metrics
 
 def analyze_risk(current_percentile: float, technical: dict[str, Any], cycle: dict[str, Any], zlje: float | None, zljzb: float | None, volume_ratio: float | None, config: RankTrendConfig | None = None) -> dict[str, Any]:
     c = config or RankTrendConfig()
-    metrics = cycle["metrics"]
+    # P3 gap 帧防御（2026-10-07 G1 落默认）：metrics 动量分量 NaN/None（缺证据）→ 中性 0，
+    # 所有调用点统一在此防，缺口事实由 metrics.temporalGap 与 decision reasons 承载。
+    metrics = neutralize_gap_metrics(cycle["metrics"])
     # 加减分阶梯 2026-09-14 参数化（默认值=原硬编码，golden 不漂移）
     overheat = 0.0
     overheat += max(0, current_percentile - c.riskOverheatPercentileMin) * c.riskOverheatPercentileSlope

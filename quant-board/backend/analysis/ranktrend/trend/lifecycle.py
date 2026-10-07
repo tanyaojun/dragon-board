@@ -63,7 +63,15 @@ def analyze_cycle(
     raw = current_raw or "cooling"
     transition = stage if not previous_normalized or previous_normalized == stage else f"{previous_normalized}->{stage}"
     confidence = cycle_confidence(stage, percentiles[-1] if percentiles else 0, metrics, config=config)
-    metric_values = metrics or {"rankVelocity": 0, "rankAcceleration": 0, "rankShock": 0, "hotZoneStreak": 0, "bestRecentRank": ranks[-1] if ranks else 999, "drawdownFromPeak": 0, "rankPathCommitment": 0.5}
+    if not metrics:
+        metrics = {
+            "rankVelocity": 0, "rankAcceleration": 0, "rankShock": 0, "hotZoneStreak": 0,
+            "bestRecentRank": ranks[-1] if ranks else 999, "drawdownFromPeak": 0,
+            "rankPathCommitment": 0.5,
+        }
+    # 输出层 NaN→None（与 evidence 同一护栏；G1 gap 帧动量分量缺证据序列化为 null，
+    # 不得以 0 伪装；下游 lifecycle_decision 均按 `or 0` 消费、risk 输入经 neutralize_gap_metrics）
+    metric_values = {key: _evidence_num(value) for key, value in metrics.items()}
     return {
         "rawStage": raw,
         "stage": stage,
@@ -279,18 +287,18 @@ def entry_advice(stage: str, transition: str) -> dict[str, Any]:
 
 
 def neutralize_gap_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    """P3 gap 帧 risk 输入中性化：NaN 动量分量→0（无加无减=证据缺失不加分），temporalGap 标记保留。
+    """P3 gap 帧 risk 输入中性化：动量分量 NaN/None（缺证据）→ 0（无加无减），temporalGap 标记保留。
 
-    仅 lifecycleTimeGapStrictness≠off 的 trial 路径会命中（默认 mixed/off 恒原样返回）。
-    NaN 原样进 analyze_risk 会让 overheat/pressure 变 NaN 且比较行为不确定——risk 的动量
-    分量缺证据按中性处理，缺口事实由 metrics.temporalGap 与 decision reasons 承载（fail-visible）。
+    analyze_risk 入口统一调用（所有调用点自动防）；analyze_cycle 输出层 None、
+    内部逐步 NaN 两态都处理。非 gap 帧恒原样返回（零开销）。缺口事实由
+    metrics.temporalGap 与 decision reasons 承载（fail-visible），不得以 0 伪装进 evidence。
     """
     if not isinstance(metrics, dict) or not metrics.get("temporalGap"):
         return metrics
     out = dict(metrics)
     for key in ("rankVelocity", "rankAcceleration", "rankShock"):
         value = out.get(key)
-        if isinstance(value, float) and not math.isfinite(value):
+        if value is None or (isinstance(value, float) and not math.isfinite(value)):
             out[key] = 0.0
     return out
 
