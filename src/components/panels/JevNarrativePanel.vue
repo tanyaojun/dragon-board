@@ -233,107 +233,104 @@
             <div v-else class="trend-chart" ref="thermoChartRef"></div>
           </section>
 
-          <!-- ③ 拥挤度：归层 waffle 方格 + 当日层带 + 层迁移 + 窗口层统计 -->
+          <!-- ③ 拥挤度：ECharts 柱状图（置信度页签同语言：窗口自适应历史维度+指标开关）+ waffle 最新槽归层 + 层迁移 + 窗口层统计 -->
           <section v-show="view === 'crowding'" class="tab-pane">
-            <div class="crowding-hero">
-              <div class="crowding-latest">
-                <div class="sub-block-title">最新槽归层<template v-if="latestCrowding?.slotTime"> · {{ latestCrowding.slotTime }}</template></div>
-                <div v-if="latestCrowding?.layerName" class="crowding-layer-name"
-                  :style="{ color: crowdingColor(latestCrowding.layer) }">
-                  {{ latestCrowding.layerName }}
-                  <span v-if="latestCrowding.warn" class="warn-badge">毒层警示</span>
-                </div>
-                <div v-else class="empty-row">归层缺失（降级/无数据，不伪造）</div>
-                <div v-if="latestCrowding?.probabilities" class="waffle-block">
-                  <div class="waffle-grid">
-                    <span v-for="(sq, index) in waffleSquares(latestCrowding.probabilities)" :key="index"
-                      class="waffle-square" :style="{ background: sq }"></span>
-                  </div>
-                  <div class="waffle-legend">
-                    <span v-for="entry in waffleLegend(latestCrowding.probabilities)" :key="entry.name"
-                      class="waffle-legend-item">
-                      <span class="legend-dot" :style="{ background: entry.color }"></span>{{ entry.name }} {{ entry.pctText }}
-                    </span>
-                  </div>
-                </div>
-                <div v-if="latestCrowding && (latestCrowding.confidence != null || latestCrowding.probability != null)"
-                  class="crowding-meta">
-                  <template v-if="latestCrowding.probability != null">P{{ Math.round(latestCrowding.probability * 100) }}%</template>
-                  <template v-if="latestCrowding.confidence != null"> · 模型置信 {{ Math.round(latestCrowding.confidence * 100) }}%</template>
-                  <template v-if="latestCrowding.probability != null && latestCrowding.probability < JEV_HESITANT_THRESHOLD">
-                    · ⚠️ 低置信（&lt;{{ Math.round(JEV_HESITANT_THRESHOLD * 100) }}% 犹豫阈值）
-                  </template>
-                </div>
-              </div>
-              <div class="crowding-strip-block">
-                <div class="sub-block-title">当日层带（逐槽归层方格{{ eodDoc ? ' + EOD' : '' }}）</div>
-                <div v-if="!crowdingPoints.length" class="empty-row">当日无槽位归层数据</div>
-                <div v-else class="crowding-strip">
-                  <div v-for="point in crowdingPoints" :key="point.slotTime" class="strip-cell-wrap">
-                    <div class="strip-cell"
-                      :class="{ degraded: point.status === 'degraded', 'no-data': point.status === 'no_data' }"
-                      :style="{ background: crowdingColor(point.layer) }"
-                      :title="`${point.slotTime} ${point.layerName ?? '归层缺失'}`">
-                      {{ point.layerName ? point.layerName.slice(0, 2) : '--' }}
-                    </div>
-                    <div class="strip-label">{{ point.slotTime }}</div>
-                  </div>
-                  <div v-if="eodCrowdingPoint" class="strip-cell-wrap">
-                    <div class="strip-cell eod-cell" :style="{ background: crowdingColor(eodCrowdingPoint.layer) }"
-                      :title="`EOD ${eodCrowdingPoint.layerName ?? '归层缺失'}`">
-                      {{ eodCrowdingPoint.layerName ? eodCrowdingPoint.layerName.slice(0, 2) : '--' }}
-                    </div>
-                    <div class="strip-label">EOD</div>
-                  </div>
-                </div>
-                <div class="crowding-legend">
-                  <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="waffle-legend-item">
-                    <span class="legend-dot" :style="{ background: crowdingColor(layerKey) }"></span>{{ CROWDING_NAMES[layerKey] ?? layerKey }}<template v-if="WARN_LAYERS.has(layerKey)"> ⚠️</template>
-                  </span>
-                </div>
-                <div v-if="crowdingTransitionList.length" class="transition-list">
-                  <div class="sub-block-title">层迁移（相邻槽变化）</div>
-                  <div v-for="(t, index) in crowdingTransitionList" :key="index" class="transition-item">
-                    <span class="time-badge">{{ t.atSlot }}</span>
-                    <span :style="{ color: crowdingColor(t.from) }">{{ t.fromName ?? '缺失' }}</span>
-                    →
-                    <span :style="{ color: crowdingColor(t.to) }">{{ t.toName }}</span>
-                  </div>
-                </div>
-              </div>
+            <!-- 缺失日披露放在数据分支之外：整窗全缺时也必须可见（fail-visible，同置信度页签语言） -->
+            <div v-if="windowKey !== '1d' && missingDays.length" class="note-line warn-line">
+              ⚠️ 窗口缺失 {{ missingDays.length }} 日（无任何 jev 文档，图中无此柱）：{{ missingDays.map((d) => d.tradingDate.slice(5)).join('、') }}
             </div>
-            <div class="crowding-stats">
-              <div class="sub-block-title">窗口层统计</div>
-              <div class="stats-grid">
-                <div class="stat-card">
-                  <div class="stat-label">当日槽位层统计</div>
-                  <div class="stat-body">
-                    <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="stat-item"
-                      :style="{ color: crowdingColor(layerKey) }">
-                      {{ CROWDING_NAMES[layerKey] }} {{ daySlotLayerStats.counts[layerKey] ?? 0 }}
-                    </span>
-                    <span class="stat-item muted">逃生 {{ daySlotLayerStats.escapeCount }}/{{ daySlotLayerStats.total }}<template
-                        v-if="daySlotLayerStats.escapeRate != null">（{{ Math.round(daySlotLayerStats.escapeRate * 100) }}%）</template></span>
+            <div v-if="!crowdingBarPoints.length" class="empty-row">该日无拥挤数据</div>
+            <template v-else>
+              <div class="indicator-selector">
+                <button v-for="ind in CROWDING_BARS_INDICATORS" :key="ind.key" class="indicator-btn"
+                  :class="{ active: crowdingBarIndicators.includes(ind.key) }"
+                  @click="toggleCrowdingBar(ind.key)">
+                  {{ ind.icon }} {{ ind.label }}
+                </button>
+              </div>
+              <div class="trend-chart" ref="crowdingBarChartRef"></div>
+              <div class="crowding-stats">
+                <div class="sub-block-title">窗口层统计</div>
+                <div class="stats-grid">
+                  <div class="stat-card">
+                    <div class="stat-label">当日槽位层统计</div>
+                    <div class="stat-body">
+                      <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="stat-item"
+                        :style="{ color: crowdingColor(layerKey) }">
+                        {{ CROWDING_NAMES[layerKey] }} {{ daySlotLayerStats.counts[layerKey] ?? 0 }}
+                      </span>
+                      <span class="stat-item muted">逃生 {{ daySlotLayerStats.escapeCount }}/{{ daySlotLayerStats.total }}<template
+                          v-if="daySlotLayerStats.escapeRate != null">（{{ Math.round(daySlotLayerStats.escapeRate * 100) }}%）</template></span>
+                    </div>
+                  </div>
+                  <div class="stat-card">
+                    <div class="stat-label">窗口 EOD 层统计（{{ dayDocs.length }} 日）</div>
+                    <div class="stat-body">
+                      <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="stat-item"
+                        :style="{ color: crowdingColor(layerKey) }">
+                        {{ CROWDING_NAMES[layerKey] }} {{ windowLayerStats.counts[layerKey] ?? 0 }}
+                      </span>
+                      <span class="stat-item muted">逃生 {{ windowLayerStats.escapeCount }}/{{ windowLayerStats.total }}<template
+                          v-if="windowLayerStats.escapeRate != null">（{{ Math.round(windowLayerStats.escapeRate * 100) }}%）</template></span>
+                    </div>
                   </div>
                 </div>
-                <div class="stat-card">
-                  <div class="stat-label">窗口 EOD 层统计（{{ dayDocs.length }} 日）</div>
-                  <div class="stat-body">
-                    <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="stat-item"
-                      :style="{ color: crowdingColor(layerKey) }">
-                      {{ CROWDING_NAMES[layerKey] }} {{ windowLayerStats.counts[layerKey] ?? 0 }}
+              </div>
+              <div class="crowding-hero">
+                <div class="crowding-latest">
+                  <div class="sub-block-title">最新槽归层<template v-if="latestCrowding?.slotTime"> · {{ latestCrowding.slotTime }}</template></div>
+                  <div v-if="latestCrowding?.layerName" class="crowding-layer-name"
+                    :style="{ color: crowdingColor(latestCrowding.layer) }">
+                    {{ latestCrowding.layerName }}
+                    <span v-if="latestCrowding.warn" class="warn-badge">毒层警示</span>
+                  </div>
+                  <div v-else class="empty-row">归层缺失（降级/无数据，不伪造）</div>
+                  <div v-if="latestCrowding?.probabilities" class="waffle-block">
+                    <div class="waffle-grid">
+                      <span v-for="(sq, index) in waffleSquares(latestCrowding.probabilities)" :key="index"
+                        class="waffle-square" :style="{ background: sq }"></span>
+                    </div>
+                    <div class="waffle-legend">
+                      <span v-for="entry in waffleLegend(latestCrowding.probabilities)" :key="entry.name"
+                        class="waffle-legend-item">
+                        <span class="legend-dot" :style="{ background: entry.color }"></span>{{ entry.name }} {{ entry.pctText }}
+                      </span>
+                    </div>
+                  </div>
+                  <div v-if="latestCrowding && (latestCrowding.confidence != null || latestCrowding.probability != null)"
+                    class="crowding-meta">
+                    <template v-if="latestCrowding.probability != null">P{{ Math.round(latestCrowding.probability * 100) }}%</template>
+                    <template v-if="latestCrowding.confidence != null"> · 模型置信 {{ Math.round(latestCrowding.confidence * 100) }}%</template>
+                    <template v-if="latestCrowding.probability != null && latestCrowding.probability < JEV_HESITANT_THRESHOLD">
+                      · ⚠️ 低置信（&lt;{{ Math.round(JEV_HESITANT_THRESHOLD * 100) }}% 犹豫阈值）
+                    </template>
+                  </div>
+                </div>
+                <div class="crowding-strip-block">
+                  <div class="sub-block-title">层迁移（相邻槽变化）</div>
+                  <div v-if="!crowdingTransitionList.length" class="empty-row">暂无层迁移（当日全程同层或数据不足）</div>
+                  <div v-else class="transition-list">
+                    <div v-for="(t, index) in crowdingTransitionList" :key="index" class="transition-item">
+                      <span class="time-badge">{{ t.atSlot }}</span>
+                      <span :style="{ color: crowdingColor(t.from) }">{{ t.fromName ?? '缺失' }}</span>
+                      →
+                      <span :style="{ color: crowdingColor(t.to) }">{{ t.toName }}</span>
+                    </div>
+                  </div>
+                  <div class="crowding-legend">
+                    <span v-for="layerKey in CROWDING_ORDER" :key="layerKey" class="waffle-legend-item">
+                      <span class="legend-dot" :style="{ background: crowdingColor(layerKey) }"></span>{{ CROWDING_NAMES[layerKey] ?? layerKey }}<template v-if="WARN_LAYERS.has(layerKey)"> ⚠️</template>
                     </span>
-                    <span class="stat-item muted">逃生 {{ windowLayerStats.escapeCount }}/{{ windowLayerStats.total }}<template
-                        v-if="windowLayerStats.escapeRate != null">（{{ Math.round(windowLayerStats.escapeRate * 100) }}%）</template></span>
                   </div>
                 </div>
               </div>
               <div class="note-line research-line">
                 🔎 研究注记：拥挤=v2 离散归层（连续分已实证无方差退役）；top_acceleration / late_seal_weakness 为 fwdWorst
-                实证毒层；insufficient_evidence 逃生应趋近 0（判据已锚定近20日参照），持续偏高属异常需排查锚供给。
+                实证毒层；insufficient_evidence 逃生应趋近 0（判据已锚定近20日参照），持续偏高属异常需排查锚供给；
+                柱=所选层概率（top1，柱色=归层色）、拥挤抗风险线=三层概率合计（概览 hero 同口径），
+                多日窗口取每日 EOD 日级归层（day_crowding），随顶部窗口切换历史维度；缺失与「无数据」如实标注不补 0。
               </div>
-            </div>
-            <div v-if="windowKey !== '1d' && crowdingChartDays" class="trend-chart" ref="crowdingChartRef"></div>
+            </template>
           </section>
 
           <!-- ④ 置信度：槽位 × 问题置信 ECharts 柱状图（热榜情绪·历史对比页签同语言：指标开关+柱+线）+ 派生指标 -->
@@ -1141,7 +1138,103 @@ const crowdingTransitionList = computed(() => crowdingTransitions(crowdingPoints
 const daySlotLayerStats = computed(() => layerStats(slots.value, 'slot'))
 const windowLayerStats = computed(() =>
   layerStats(dayDocs.value.map((day) => day.eod).filter((eod): eod is HotlistJevDoc => !!eod), 'eod'))
-const crowdingChartDays = computed(() => (windowKey.value === '1d' ? 0 : dayDocs.value.length))
+
+// ---------- 拥挤度柱状图投影（置信度页签同语言：窗口自适应历史维度） ----------
+// 柱=所选层概率（top1，柱色=归层色）；线=拥挤抗风险（三层概率合计，概览 hero 同口径）
+const CROWDING_BARS_INDICATORS = [
+  { key: 'probability', label: '所选层概率', icon: '📊', type: 'bar' },
+  { key: 'risk', label: '拥挤抗风险', icon: '🛡️', type: 'line', color: '#ff9f43' },
+] as const
+type CrowdingBarKey = (typeof CROWDING_BARS_INDICATORS)[number]['key']
+
+interface CrowdingBarPoint {
+  label: string
+  degraded: boolean
+  noData: boolean
+  /** 多日窗口：EOD 文档未生成（与单题答案缺失可区分） */
+  eodMissing?: boolean
+  layer: string | null
+  layerName: string | null
+  warn: boolean
+  /** 所选层概率（top1，百分数 0-100；缺失 null 断柱不补 0） */
+  probability: number | null
+  /** 拥挤抗风险=三层概率合计（百分数 0-100，hero 同口径） */
+  risk: number | null
+  /** 模型置信（百分数） */
+  confidence: number | null
+  margin: number | null
+  entropy: number | null
+  /** 全层概率分布（tooltip 摘要用） */
+  probabilities: Record<string, number> | null
+}
+
+const crowdingBarPoints = computed<CrowdingBarPoint[]>(() => {
+  const ofDoc = (doc: HotlistJevDoc, label: string, isEod: boolean): CrowdingBarPoint => {
+    const answerKey = isEod ? 'day_crowding' : 'crowding'
+    const answer = doc.answers?.[answerKey]
+    const metrics: JevConfidenceMetrics = confidenceMetrics(answer)
+    const choice = answer && answer.type === 'choice' ? answer.choice ?? null : null
+    const probabilities = answer && answer.type === 'choice' ? answer.probabilities ?? null : null
+    const topProb =
+      choice != null && probabilities && typeof probabilities[choice] === 'number' ? probabilities[choice] : null
+    const riskRaw = jevCrowdingProbability(doc, answerKey)
+    return {
+      label,
+      degraded: doc.status === 'degraded',
+      noData: doc.status === 'no_data',
+      layer: choice,
+      layerName: choice ? (CROWDING_NAMES[choice] ?? choice) : null,
+      warn: choice != null && WARN_LAYERS.has(choice),
+      probability: topProb != null ? Math.round(topProb * 100) : null,
+      risk: riskRaw != null ? Math.round(riskRaw * 100) : null,
+      confidence: metrics.confidence != null ? Math.round(metrics.confidence * 100) : null,
+      margin: metrics.margin,
+      entropy: metrics.entropy,
+      probabilities,
+    }
+  }
+  if (windowKey.value === '1d') {
+    const out = slots.value.map((slot) => ofDoc(slot, slot.slotTime || '--', false))
+    if (eodDoc.value) out.push(ofDoc(eodDoc.value, 'EOD', true))
+    return out
+  }
+  // 多日窗口：每日 EOD 日级归层（与叙事概览日级柱图同数据源；EOD 未生成日整列断线如实标注）
+  return dayDocs.value.map((day) =>
+    day.eod
+      ? ofDoc(day.eod, day.tradingDate.slice(5), true)
+      : {
+          label: day.tradingDate.slice(5),
+          degraded: false,
+          noData: false,
+          eodMissing: true,
+          layer: null,
+          layerName: null,
+          warn: false,
+          probability: null,
+          risk: null,
+          confidence: null,
+          margin: null,
+          entropy: null,
+          probabilities: null,
+        },
+  )
+})
+
+const crowdingBarIndicators = ref<CrowdingBarKey[]>(CROWDING_BARS_INDICATORS.map((indicator) => indicator.key))
+
+function toggleCrowdingBar(key: CrowdingBarKey) {
+  const current = crowdingBarIndicators.value
+  if (current.includes(key)) {
+    if (current.length === 1) return // 至少保留一个序列，避免图表空白（同历史对比页签）
+    crowdingBarIndicators.value = current.filter((k) => k !== key)
+  } else {
+    // 按声明顺序重排，保持图例顺序稳定
+    crowdingBarIndicators.value = CROWDING_BARS_INDICATORS.map((indicator) => indicator.key).filter(
+      (k) => current.includes(k) || k === key,
+    )
+  }
+  nextTick(() => renderCrowdingBarChart())
+}
 
 /** waffle 方格：每层概率 × 100 格按层色填充；概率合计不足 1 时剩余格留空（如实呈现未归一分布） */
 function waffleSquares(probabilities: Record<string, number>): string[] {
@@ -1571,11 +1664,11 @@ const evidenceGroups = computed(() => {
 
 // ---------- ECharts（温度曲线 / 拥挤堆叠 / 置信趋势 / 日级柱图） ----------
 const thermoChartRef = ref<HTMLElement | null>(null)
-const crowdingChartRef = ref<HTMLElement | null>(null)
+const crowdingBarChartRef = ref<HTMLElement | null>(null)
 const confidenceBarsChartRef = ref<HTMLElement | null>(null)
 const dayChartRef = ref<HTMLElement | null>(null)
 let thermoChart: echarts.ECharts | null = null
-let crowdingChart: echarts.ECharts | null = null
+let crowdingBarChart: echarts.ECharts | null = null
 let confidenceBarsChart: echarts.ECharts | null = null
 let dayChart: echarts.ECharts | null = null
 
@@ -1699,54 +1792,93 @@ function renderThermoChart() {
   chart.resize()
 }
 
-function renderCrowdingChart() {
-  if (windowKey.value === '1d') return
-  const stats = windowLayerStats.value
-  if (!stats.total) {
-    // 无归层数据：清掉旧图不留残影，容器随 v-if 卸载
-    crowdingChart?.dispose()
-    crowdingChart = null
-    return
-  }
-  const chart = initChart(crowdingChartRef.value, crowdingChart)
-  if (!chart) return
-  crowdingChart = chart
+function renderCrowdingBarChart() {
+  const points = crowdingBarPoints.value
+  const chart = initChart(crowdingBarChartRef.value, crowdingBarChart)
+  if (!chart || !points.length) return
+  crowdingBarChart = chart
   const textColor = cssVar('--text-secondary', '#9aa0a6')
-  // 环形图（层占比语义，对齐热榜情绪面板阶段分布饼图语言）；逐日归层已由日级方格承担
-  const data = CROWDING_ORDER.map((key) => ({
-    name: CROWDING_NAMES[key] ?? key,
-    value: stats.counts[key] ?? 0,
-    itemStyle: { color: CROWDING_COLORS[key] },
-  })).filter((entry) => entry.value > 0)
+  const borderColor = cssVar('--border-color', '#333333')
+  const indicators = crowdingBarIndicators.value
+  const series: echarts.SeriesOption[] = []
+  if (indicators.includes('probability')) {
+    // 柱色=归层色（六层图例参照）；归层缺失/无数据灰柱或断柱，不伪造
+    series.push({
+      name: '所选层概率', type: 'bar', barWidth: 12,
+      itemStyle: { color: '#9aa0a6' },
+      data: points.map((point) => ({
+        value: point.noData ? null : point.probability,
+        itemStyle: { color: point.layer ? (CROWDING_COLORS[point.layer] ?? '#9aa0a6') : '#9aa0a6' },
+      })),
+    })
+  }
+  if (indicators.includes('risk')) {
+    series.push({
+      name: '拥挤抗风险', type: 'line', smooth: true, connectNulls: false,
+      symbol: 'circle', symbolSize: 5,
+      data: points.map((point) => (point.noData ? null : point.risk)),
+      lineStyle: { color: '#ff9f43', width: 2 }, itemStyle: { color: '#ff9f43' },
+    })
+  }
+  if (series.length) {
+    series[0].markLine = {
+      silent: true, symbol: 'none',
+      data: [{ yAxis: Math.round(JEV_HESITANT_THRESHOLD * 100) }],
+      lineStyle: { color: '#ff4757', type: 'dashed', width: 1 },
+      label: { color: '#ff4757', fontSize: 9, formatter: `犹豫阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
+    }
+  }
   chart.setOption(
     {
+      grid: { left: '8%', right: '8%', top: '12%', bottom: '12%', containLabel: true },
       tooltip: {
-        trigger: 'item', confine: true,
-        formatter: (params: { name?: string; value?: number; percent?: number }) =>
-          `${params.name ?? ''}：${params.value ?? 0} 日（${params.percent ?? 0}%）`,
+        trigger: 'axis', confine: true,
+        formatter: (params: unknown) => {
+          const list = Array.isArray(params) ? params : [params]
+          const first = list[0] as { dataIndex: number } | undefined
+          const point = first ? points[first.dataIndex] : undefined
+          if (!point) return ''
+          const layerColor = point.layer ? (CROWDING_COLORS[point.layer] ?? textColor) : textColor
+          const head = [
+            `<div style="font-weight:600;margin-bottom:4px;">${point.label}${point.degraded ? ' · ⚠️降级' : ''}</div>`,
+            point.eodMissing ? '<div style="color:#f39c12;">EOD 未生成</div>' : '',
+            point.noData ? '<div style="color:#f39c12;">无数据</div>' : '',
+            `<div style="color:${layerColor};margin-bottom:4px;">归层：${point.layerName ?? '缺失'}${point.warn ? ' ⚠️毒层' : ''}</div>`,
+          ].join('')
+          const rows = CROWDING_BARS_INDICATORS.filter((indicator) => indicators.includes(indicator.key)).map((indicator) => {
+            const value = indicator.key === 'probability' ? point.probability : point.risk
+            return `<div>${indicator.label}：${value == null ? '--' : `P${value}%`}</div>`
+          })
+          const bits = [
+            point.confidence != null ? `置信 ${point.confidence}%` : '',
+            point.margin != null ? `margin ${(point.margin * 100).toFixed(0)}` : '',
+            point.entropy != null ? `熵 ${point.entropy.toFixed(2)}` : '',
+          ].filter(Boolean)
+          const distribution = point.probabilities
+            ? `<div style="color:${textColor};">${CROWDING_ORDER.map((key) => {
+                const value = point.probabilities?.[key]
+                return `${CROWDING_NAMES[key] ?? key} ${typeof value === 'number' ? `${Math.round(value * 100)}%` : '--'}`
+              }).join(' · ')}</div>`
+            : ''
+          return [head, ...rows, bits.length ? `<div>${bits.join(' · ')}</div>` : '', distribution].join('')
+        },
       },
       legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: textColor, fontSize: 10 } },
-      // 环形图中心总日数（对齐热榜情绪面板「阶段分布」中心统计语言）
-      graphic: [
-        {
-          type: 'text', left: 'center', top: '38%',
-          style: { text: String(stats.total), fill: textColor, fontSize: 26, fontWeight: 'bold', textAlign: 'center' },
-        },
-        {
-          type: 'text', left: 'center', top: '50%',
-          style: { text: 'EOD 总日数', fill: textColor, fontSize: 10, textAlign: 'center' },
-        },
-      ],
-      series: [
-        {
-          name: '窗口 EOD 归层分布', type: 'pie', radius: ['46%', '68%'], center: ['50%', '44%'],
-          data,
-          label: { color: textColor, fontSize: 10, formatter: '{b} {c}日（{d}%）' },
-          labelLine: { lineStyle: { color: textColor } },
-        },
-      ],
+      xAxis: {
+        type: 'category', data: points.map((point) => point.label),
+        axisLabel: { color: textColor, fontSize: 10, rotate: 30 },
+        axisLine: { lineStyle: { color: borderColor } },
+      },
+      yAxis: {
+        type: 'value', min: 0, max: 100, name: 'P / 合计（%）',
+        nameTextStyle: { color: textColor, fontSize: 9 },
+        splitLine: { lineStyle: { color: borderColor, type: 'dashed' } },
+        axisLabel: { color: textColor },
+      },
+      series,
       backgroundColor: 'transparent',
     },
+    // 指标开关减少序列时必须整体替换，merge 模式下旧序列会残留（同历史对比页签）
     { notMerge: true },
   )
   chart.resize()
@@ -1926,14 +2058,14 @@ function renderDayChart() {
 
 function renderAllCharts() {
   if (view.value === 'thermometer') renderThermoChart()
-  if (view.value === 'crowding' && windowKey.value !== '1d') renderCrowdingChart()
+  if (view.value === 'crowding') renderCrowdingBarChart()
   if (view.value === 'confidence') renderConfidenceBarsChart()
   if (view.value === 'grid') renderDayChart()
 }
 
 function handleResize() {
   thermoChart?.resize()
-  crowdingChart?.resize()
+  crowdingBarChart?.resize()
   confidenceBarsChart?.resize()
   dayChart?.resize()
 }
@@ -1945,11 +2077,11 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   thermoChart?.dispose()
-  crowdingChart?.dispose()
+  crowdingBarChart?.dispose()
   confidenceBarsChart?.dispose()
   dayChart?.dispose()
   thermoChart = null
-  crowdingChart = null
+  crowdingBarChart = null
   confidenceBarsChart = null
   dayChart = null
 })
@@ -2217,24 +2349,6 @@ onUnmounted(() => {
 .waffle-legend { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
 .waffle-legend-item { font-size: 10px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 4px; }
 .legend-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
-.crowding-strip { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
-.strip-cell-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.strip-cell {
-  width: 40px;
-  height: 34px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 600;
-  color: #fff;
-}
-.strip-cell.degraded { border-style: dashed; border-color: #f39c12; }
-.strip-cell.no-data { opacity: 0.45; }
-.strip-cell.eod-cell { border-style: double; border-width: 3px; }
-.strip-label { font-size: 9px; color: var(--text-secondary); }
 .crowding-legend { display: flex; gap: 10px; flex-wrap: wrap; }
 .transition-list { margin-top: 8px; }
 .transition-item { font-size: 11px; display: flex; align-items: center; gap: 6px; margin-top: 3px; }

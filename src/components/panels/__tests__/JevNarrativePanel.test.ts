@@ -72,21 +72,26 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('窗口缺失')
   })
 
-  test('三大焦点可视化合同：温度计 SVG+锚分位 / 拥挤 waffle+层带+饼图 / 置信柱图+历史维度切换+分布明细', () => {
+  test('三大焦点可视化合同：温度计 SVG+锚分位 / 拥挤柱图+waffle+层迁移 / 置信柱图+历史维度切换+分布明细', () => {
     const source = panelSource()
     // 温度计：SVG 几何 + 近20日参照分位卡 + REVERSE 注记
     expect(source).toContain('thermo-svg')
     expect(source).toContain('anchorMetrics')
     expect(source).toContain('REVERSE')
     expect(source).toContain('近20日参照')
-    // 拥挤度：waffle 方格 + 当日层带 + 层迁移 + 逃生率 + 毒层注记；窗口层分布用饼图（占比语义，评审修正）
+    // 拥挤度：ECharts 柱状图（2026-10-07 用户令，置信度页签同语言：窗口自适应历史维度+指标开关）——
+    // 柱=所选层概率（柱色=归层色）+拥挤抗风险线（三层概率合计，hero 同口径）；waffle+层迁移+窗口层统计保留；
+    // 当日层带色块行与多日饼图退役（时序由柱状图承接、占比由统计卡层计数承接，语义不丢）
+    expect(source).toContain('crowdingBarPoints')
+    expect(source).toContain('CROWDING_BARS_INDICATORS')
+    expect(source).toContain('indicator-btn')
+    expect(source).toContain('crowding-strip-block')
     expect(source).toContain('waffleSquares')
-    expect(source).toContain('crowding-strip')
     expect(source).toContain('crowdingTransitions')
     expect(source).toContain('escapeRate')
     expect(source).toContain('毒层')
-    expect(source).toContain("type: 'pie'")
-    expect(source).not.toContain("stack: 'layers'")
+    expect(source).not.toContain("type: 'pie'")
+    expect(source).not.toContain('crowdingChartRef')
     // 置信度：ECharts 柱状图（2026-10-07 用户令，热榜情绪·历史对比页签同语言：指标开关+柱=P+线=温度C）
     //   历史维度随顶部窗口自动切换（1天=槽位级四题 / 3日·1周·10日·30日=EOD 日级三题）+ margin/熵派生指标 + 答案分布明细
     expect(source).toContain('confidenceBarsPoints')
@@ -113,9 +118,9 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('anchorTone')
     expect(source).toContain('scoreNoDist')
     expect(source).toContain('score 型分布=10 档锚点概率')
-    // ECharts 三图容器（置信柱图 + 温度/拥挤/日级窗口；底部序列档趋势图已退役——多日维度由主柱状图接管）
+    // ECharts 四图容器（温度/拥挤柱图/置信柱图/日级窗口；拥挤旧饼图与置信底部趋势图均已退役）
     expect(source).toContain('thermoChartRef')
-    expect(source).toContain('crowdingChartRef')
+    expect(source).toContain('crowdingBarChartRef')
     expect(source).toContain('confidenceBarsChartRef')
     expect(source).not.toContain('confidenceChartRef')
   })
@@ -151,8 +156,8 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).not.toContain('buildSlotGrid')
     expect(source).not.toContain('buildDayGrid')
     expect(source).not.toContain('gridCellStyle')
-    // 环形图中心总日数（阶段分布语言）
-    expect(source).toContain('EOD 总日数')
+    // 环形图中心总日数（阶段分布语言）——2026-10-07 拥挤页签改柱状图后饼图退役，中心文案随删，层计数由统计卡承接
+    expect(source).not.toContain('EOD 总日数')
   })
 })
 
