@@ -30,6 +30,7 @@
 - **判定读出**（预声明）：可算率 <20% → 维持归档；≥20% 且 ar 两端与中间带 h8 分层差 ≥0.02 → 立项「amount 进档位判定」L2 预登记（注意 §4.2 量价①根因：amount_score 现只进 score 不进 tier——立项方向是**喂 tier**，不是调 score）；否则归档维持。
 - **成本**：单次 pass ≈3 分钟。**收益**：最低成本的证真/证伪，旧归档的时效性校准。
 - **执行记录（2026-10-07 晚）**：**判定线达标 → L2 预登记候选（待用户裁决）**。可算率 decision 72.4%（全窗 81.4%，7 月 23.8%=补采缺口月、4 月 64.4%=序列起点）；旧前提 6.12% 已被回填推翻。h8 分层（excess_mean）四窗方向一致单调：放量(≥1.5)最差（decision −0.0127）、缩量(≤0.5)最好（+0.0146），decision 三对差 |max|=0.0273≥0.02，oos1/oos2 端-中差 0.036-0.0385 更强；`vp_tier_drift`=0 自证「tier 不消费 score」前提成立（立项=喂 tier 方向可行）。读数 `data/reports/voting-signals-amount-leverage-w02.json`，台账 §20 登记。
+- **执行记录二（2026-10-07 深夜，用户三裁决后）**：**L2 预登记合同备料完成** `vote-l2-vp-amount-tier-preregistration.md`——单参三态 `volumePriceAmountTierMode` off/high_demote/both，主臂=放量奖励撤回（收缩面保护向）、对照臂=双向门（缩量升档，扩张面先验不利），门限复用 amountRatioHigh/Low 零新阈值；并入语料包 v2 待用户投喂审定。台账 §23。
 
 ---
 
@@ -54,6 +55,7 @@
 - **读出**：若「差一票」帧占比高（>10%）→ 立项阈值面 L2（注意 §2b buyScoreThreshold 0.18 曾 OOS 反向的旧账，须新代际重验）；若分布远离阈值 → C 档弃权=正确设计，归档。
 - **成本**：0 增量（D1 顺路）。
 - **执行记录（2026-10-07 晚）**：**达立项线 → rank 阈值面 L2 预登记候选（待用户裁决）**。decision 窗 buy_count=1 占 C 档 **31.9%**（四窗 32-33% 稳定）；分值空间近阈值(<0.02)仅 0.5%=**缺共识票不缺分数**；缺位分量 direction 55%/acceleration 38%；buy_count=2（共识够分数不够）15.3%；ln=1 新入榜 100% C 档；res insufficient 层 24.3%。读数 `data/reports/voting-signals-w12-rank-sparse.json`，台账 §21。前置依赖已完成：D1 框架 rank 自证 70 假 mismatch 根因修复（attention 口径 ln=0 幻影比对，修复后五维 622/0，台账 §21）。
+- **执行记录二（2026-10-07 深夜，用户三裁决后）**：**前置诊断阴性 → L2 立项否决归档**。零成本补测「差一票帧 h8 后验」（W1-2.1 增补，`data/reports/voting-signals-w12r-consensus-h8.json`）：dbuy1−c_rest 四窗 **4/4 反向**（decision −0.0219，预声明线 ≥+0.01）——差一票帧是后验更差人群，共识门槛挡下=正确设计；行为步合同不起草（省 3 replay+2 Track1 与审定成本），登记 `vote-l2-rank-consensus-preregistration.md`（含不覆盖姿势：反向命题「差一票作负向信号」留语料观察线索）。与 §10 五权重实证互证。台账 §23。
 
 ---
 

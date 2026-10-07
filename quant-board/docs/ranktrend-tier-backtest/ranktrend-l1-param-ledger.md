@@ -550,3 +550,17 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **runner 两 verdict 计算 bug 跑后修正**（读数零影响）：maxDD 负数域直比（把回撤改善判成恶化）+flip 分列键反解缺失（全落 unclassified）；判定表以修正版为准。
 - **回退**：`lifecycleGapPriceVolumeMode="off"` + `tierSynergyDivergenceVote=0.0`（=现默认）双开关即回基线；无数据删除面；基线锚 decision 0.14503 与 G1 §18 新锚 0.1450 一致（a0 自证）。
 - **落默认裁决**：按 C-4.5 全 FAIL=不提交、零默认改动；**Q1 主线至此闭环**（原料→诊断→预登记→审定→trial→阴性登记）。后续可选：P5 双轴重设计（在「+P 点不着火」结构事实上重开）、W0-1 dv/pm 死票位摘除（现在无 trial 冲突，但 dv 摘除与本轮「保持观察位」结论一致须用户裁决）。
+
+## 23. 三裁决执行批（2026-10-07 深夜：Q1 闭环后用户三立项的 L2 执行——amount 合同备料完成、rank 前置诊断阴性否决）
+
+> 承 §20-§22。用户裁决原文「Q1已闭环，请执行以上3项」=①amount 喂 tier L2 立项 ②rank 阈值面 L2 立项 ③W1-1 开跑。开跑授权覆盖「接线→专项测试→trial→判定→登记→提交」，落默认仍须用户裁决。③W1-1 接线因 P5 并行线活进程（`lifecycle-p5-preregistration.md`，同晚用户授权，接线+golden 已完成、trial 跑完 baseline 臂后进程中断悬置中）暂缓——config.py 为 P5 未提交改动文件，Q1/W0-1 先例同款处置（trial/半成品期不动引擎文件），P5 收官后开跑。
+
+| 项 | 状态 | 读数/依据 |
+|---|---|---|
+| ① amount 喂 tier L2 | **预登记合同备料完成（并入语料包 v2 待审定）** | `vote-l2-vp-amount-tier-preregistration.md`（判定线冻结于跑数前）：单参三态 `volumePriceAmountTierMode` off/high_demote/both，两剂量臂+baseline=3 replay+2 Track 1；门限复用现有 `amountRatioHigh(1.5)/amountRatioLow(0.5)`（W0-2 分层读数即按此两档测得，零新阈值参数）；主臂=放量奖励撤回（ar≥1.5 ∧ rise_volume → A→B/B→C，收缩面保护向），对照臂=双向门（+缩量升档，扩张面先验不利=Q1 C-a 扩档拉动教训，阴性也归档）；E 短路/缩量涨停 reasons 优先级不动；市况分桶列高危项（强情绪期放量降档可能错杀）。接线面核实：`_volume_price_tier` 唯一调用点（volume_price.py:243）、amount_ratio 生产链已通（runtime:1462→observation.amountRatio→assemble_observation），零新序列传递 |
+| ② rank 共识面/阈值面 L2 | **前置诊断阴性 → 立项否决归档（行为步不起草）** | 按 W0-2 先例先跑零成本前置诊断补剂量面证据洞（「差一票占比高≠放进来有增益」）。预声明线（冻结于跑数前）：dbuy1−c_rest excess_mean ≥ +0.01 且 ≥3 窗同向 → 立项；否则归档。实测（`data/reports/voting-signals-w12r-consensus-h8.json`，1071 帧，h8 分位桶校正）：**四窗 4/4 反向**——decision −0.0219 / midgap −0.0152 / oos1 −0.0214 / oos2 −0.0044，excess_acc 同向（dbuy1 −0.0159 vs c_rest +0.0120）——差一票帧是 h8 后验更差人群，共识门槛 ≥2 票挡下=正确设计；dbuy2p（共识够分数不够）同样负向。判定=坚决不过线且方向反转，登记 `vote-l2-rank-consensus-preregistration.md`（含覆盖面：阴性覆盖「放行差一票帧」前提的全部形态+分数轴松动；不覆盖反向命题「差一票作负向信号」（新票位，登记语料观察线索待独立预登记）+原料面重设计+新代际复验）。结构解释与 §10 五权重实证互证：0.90 权重压交叉事件/动量族 0.10 的贬权设计与 h8 后验一致 |
+| ③ W1-1 res D∧buy | **暂缓（P5 并行线半成品期，非取消）** | 接线面/合同不变（`vote-w11-res-dbuy-preregistration.md`）；用户已给开跑授权（含「外部模型审定跳过=用户明示简化」已在合同 §五 登记）；P5 收官（提交）后立即开跑：接线→专项测试→golden 重录→harness（`evaluate_vote_w11_res_dbuy.py`）→trial→判定→登记→提交，W1-1 提交后顺路补做 W0-1（删 pm/dv 死票位；C-a 三臂全灭后 dv 维持观察位，Q1 §22 已证无回退价值） |
+
+- **诊断脚本扩展**：`diagnose_voting_signals_exposure.py` W1-2.1 增补（三 h8 cell：w12r|dbuy1/dbuy2p/c_rest+文件头预声明线）——operations 纯增列，存量读数零漂移，与引擎/试线零接触。
+- **并行线状态**：P5（lifecycle allow 分位带门，6 replay+1 baseline）21:26 起 trial 进程中断（baseline 臂已完成：saEx=0.14503 与 G1 锚一致+track1 完成；A3-B2 五剂量臂未跑）——其会话恢复续跑或用户处置前，本线不动 config.py/runtime.py/lifecycle.py/golden 快照四共享面。
+- **回退**：零行为零参数改动（诊断增列+文档），无需回退。

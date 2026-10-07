@@ -40,6 +40,15 @@ W1-2 增补（2026-10-07，ranktrend-vote-structure-redesign-plan.md；判定读
 - **预声明读出（冻结）**：decision 窗 buy_count==1 占 C 档 >10% 或 combined 距阈值 <0.02 占 C 档
   >10% → 立项「rank 阈值面」L2（注意 §2b buyScoreThreshold 0.18 曾 OOS 反向旧账，须新代际重验）；
   两项均 ≤10% → C 档弃权=正确设计，归档。
+
+W1-2.1 增补（2026-10-07 深夜，rank 共识面 L2 合同前置诊断；判定线跑数前冻结）：
+- 达线后的剂量面补洞：buy_count==1「差一票」帧的 h8 后验未测——直接冻结行为臂剂量缺乏实证锚。
+- 新增 h8 cell（population 同 W1-2：ln≥2 ∧ rank_tier==C）：w12r|dbuy1（差一票）/ w12r|dbuy2p
+  （buy_count≥2 共识够分数不够）/ w12r|c_rest（C 档其余=buy_count==0 与 sell 主导未过线帧）。
+- **预声明判定线（冻结）**：decision 窗 w12r|dbuy1 的 excess_mean − w12r|c_rest 的 excess_mean
+  ≥ +0.01 且四窗中 ≥3 窗差值同向 → 「差一票帧含真信息，共识门槛挡下即损失」，立级行为臂
+  （共识面 L2，剂量按缺位分量结构定）；否则差一票帧无增量信息，C 档弃权=正确设计，归档不立项。
+  披露义务：dbuy2p 与 c_rest 同列、excess_acc 同列、C 档 combined 分位谱沿用 W1-2。
 - **自证口径修正（2026-10-07 根因修复，零读数漂移）**：当帧无 attention rank（avgRankNum 缺失/≤0
   被 attention_rank_lookup 过滤）的股票引擎不产信号；此前逐股幻影链（ln=0 fallback 驱动出 rank C）
   与 unknown 比对产生 70 假 mismatch（07-07 补采两帧各 35 只 rank 有值但 avgRankNum 缺失；R1 检查帧
@@ -519,6 +528,13 @@ def main() -> None:
                         ]
                         rank_c_patterns[label]["|".join(_sigs)] += 1
                         rsp["c_one_missing_" + "_".join(nm for nm, sg in zip(("dir", "acc", "zero", "macd", "ma"), _sigs) if sg == "buy")] += 1
+                    # W1-2.1 共识面前置诊断（h8 后验分层，判定线见文件头）：差一票 vs buy_count≥2 vs C 档其余
+                    if buy_count == 1:
+                        h8_add(label, "w12r|dbuy1", h8s)
+                    elif buy_count >= 2:
+                        h8_add(label, "w12r|dbuy2p", h8s)
+                    else:
+                        h8_add(label, "w12r|c_rest", h8s)
                     rsp[f"c_res_{str(res.get('status') or 'unknown')}"] += 1
                     rank_c_comb[label].append(float(combined))
 
