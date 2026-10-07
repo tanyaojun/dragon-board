@@ -16,12 +16,15 @@ def analyze_cycle(
 ) -> dict[str, Any]:
     """5 态生命周期主流程。
 
-    P3 时间正规化（2026-10-07 预登记合同 B5，默认 off=现行为零漂移）：
+    P3 时间正规化（2026-10-07 预登记合同 B5；同日 G1=cross_day 已落生产默认，off 保留为诊断对照臂）：
     strictness=cross_day/non_adjacent 且提供 time_keys（每元素 tradingDate 等日期键）/
     frame_indices（全局帧索引）时，相邻序列元素跨交易日（或同日帧距 ≥2）判 temporalGap——
-    该步 velocity/acceleration/shock 置 NaN + metrics["temporalGap"]=True（不插值，fail-visible），
-    raw 沿袭前帧 raw（NaN 布尔比较全 False 会静默滑 cooling，显式禁止），normalize 照常运行。
-    G1/G2 不动 hot_streak/best/drawdown 的跨缺口累积（那是 G3 剂量，未预登记不实施）。
+    该步 velocity/acceleration/shock 内部置 NaN + metrics["temporalGap"]=True（不插值，
+    fail-visible），raw 沿袭前帧 raw（NaN 布尔比较全 False 会静默滑 cooling，显式禁止），
+    normalize 照常运行；输出层经 _evidence_num 把 NaN 序列化为 null（不伪装 0）。
+    strictness≠off 但时间键缺失/长度不匹配/空键步时降级不判 gap，decision reasons 显式
+    标注（fail-visible，不静默）。G1/G2 不动 hot_streak/best/drawdown 的跨缺口累积
+    （那是 G3 剂量，未预登记不实施）。
     """
     previous_stage = None
     current_stage = None
@@ -34,14 +37,23 @@ def analyze_cycle(
     strictness = str(getattr(c, "lifecycleTimeGapStrictness", "off") or "off")
     use_dates = strictness != "off" and time_keys is not None and len(time_keys) == len(percentiles)
     use_frames = strictness == "non_adjacent" and frame_indices is not None and len(frame_indices) == len(percentiles)
+    # fail-visible 记账：strictness≠off 但键整体不可用 / 个别步键为空 → decision reasons 标注
+    time_keys_unavailable = strictness != "off" and not use_dates
+    missing_time_keys = 0
     for index in range(len(percentiles)):
         window_start = index - 7 if index >= 7 else 0
         metrics = cycle_metrics_window(ranks[window_start : index + 1], percentiles[window_start : index + 1], config=config)
         is_gap = False
         if use_dates and index >= 1:
-            is_gap = str(time_keys[index]) != str(time_keys[index - 1])
-            if not is_gap and use_frames:
-                is_gap = int(frame_indices[index]) - int(frame_indices[index - 1]) >= 2
+            key_cur = str(time_keys[index] or "")
+            key_prev = str(time_keys[index - 1] or "")
+            if not key_cur or not key_prev:
+                # 空键步无法判定跨日：保留差分（不判 gap 不误报），显式计数标注
+                missing_time_keys += 1
+            else:
+                is_gap = key_cur != key_prev
+                if not is_gap and use_frames:
+                    is_gap = int(frame_indices[index]) - int(frame_indices[index - 1]) >= 2
         if is_gap:
             metrics = {
                 **metrics,
@@ -72,6 +84,15 @@ def analyze_cycle(
     # 输出层 NaN→None（与 evidence 同一护栏；G1 gap 帧动量分量缺证据序列化为 null，
     # 不得以 0 伪装；下游 lifecycle_decision 均按 `or 0` 消费、risk 输入经 neutralize_gap_metrics）
     metric_values = {key: _evidence_num(value) for key, value in metrics.items()}
+    decision = lifecycle_decision(raw, stage, transition, confidence, metric_values, config=config)
+    if time_keys_unavailable:
+        decision["reasons"].append(
+            "时间键缺失或长度不匹配，跨日差分未做时间正规化（temporalGap 检测未启用）。"
+        )
+    elif missing_time_keys:
+        decision["reasons"].append(
+            f"{missing_time_keys} 步时间键缺失，对应步无法判定跨日（差分保留，temporalGap 可能低估）。"
+        )
     return {
         "rawStage": raw,
         "stage": stage,
@@ -80,7 +101,7 @@ def analyze_cycle(
         "confidence": confidence,
         "metrics": metric_values,
         "entryAdvice": entry_advice(stage, transition),
-        "decision": lifecycle_decision(raw, stage, transition, confidence, metric_values, config=config),
+        "decision": decision,
     }
 
 
@@ -287,18 +308,24 @@ def entry_advice(stage: str, transition: str) -> dict[str, Any]:
 
 
 def neutralize_gap_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    """P3 gap 帧 risk 输入中性化：动量分量 NaN/None（缺证据）→ 0（无加无减），temporalGap 标记保留。
+    """risk 输入防御（analyze_risk 入口统一调用）：动量分量 None/NaN（缺证据）→ 0（无加无减）。
 
-    analyze_risk 入口统一调用（所有调用点自动防）；analyze_cycle 输出层 None、
-    内部逐步 NaN 两态都处理。非 gap 帧恒原样返回（零开销）。缺口事实由
-    metrics.temporalGap 与 decision reasons 承载（fail-visible），不得以 0 伪装进 evidence。
+    覆盖三态：analyze_cycle 内部逐步 NaN、输出层 None、旧快照/外部构造的无标记 None——
+    判据按值（None 或非有限 float → 0.0），不依赖 temporalGap 标记（标记只表达「该帧判过
+    gap」，防御不能挂在它上面，2026-10-07 code review）。合法值（含 0.0/负值/int）恒原样
+    返回同一对象（零开销）。缺口事实由 metrics.temporalGap 与 decision reasons 承载
+    （fail-visible），不得以 0 伪装进 evidence。
     """
-    if not isinstance(metrics, dict) or not metrics.get("temporalGap"):
+    if not isinstance(metrics, dict):
         return metrics
-    out = dict(metrics)
+    out = metrics
     for key in ("rankVelocity", "rankAcceleration", "rankShock"):
-        value = out.get(key)
+        if key not in out:
+            continue  # 缺键=缺证据，不悄悄补 0（fail-visible；键存在但 None/NaN 才中性化）
+        value = out[key]
         if value is None or (isinstance(value, float) and not math.isfinite(value)):
+            if out is metrics:
+                out = dict(metrics)
             out[key] = 0.0
     return out
 

@@ -1212,11 +1212,9 @@ const getTierReasonsOf = (stock: any, field: string): string[] => {
     return Array.isArray(observation.volumePrice?.tierReasons) ? observation.volumePrice.tierReasons : []
   }
   if (field === 'lifecycleOpportunity') {
-    const reasons = Array.isArray(observation.lifecycle?.tierReasons) ? [...observation.lifecycle.tierReasons] : []
-    // P3 时间正规化（2026-10-07 G1 落默认）：跨日缺口帧动量证据缺失，fail-visible 标注
-    const gapFlag = (rankTrend as { cycle?: { metrics?: { temporalGap?: boolean } } } | undefined)?.cycle?.metrics?.temporalGap
-    if (gapFlag) reasons.push('跨日缺口帧：动量证据缺失（temporalGap），本帧动量类判据按缺失处理')
-    return reasons
+    // 周期列的 tooltip 由 showTierTooltip 显式分支渲染（含 G1 跨日缺口标注），
+    // 本函数仅作兜底数据源；勿在此追加文案——不会被消费（2026-10-07 code review P0 教训）
+    return Array.isArray(observation.lifecycle?.tierReasons) ? [...observation.lifecycle.tierReasons] : []
   }
   return []
 }
@@ -1304,6 +1302,9 @@ const showTierTooltip = (event: MouseEvent, stock: any, field: string) => {
       ? observation.lifecycle.tierReasons
       : []
     if (lcReasons.length) lines.push(`  依据：${lcReasons.join('；')}`)
+    // G1 时间正规化（2026-10-07 落默认）：跨日缺口帧动量证据缺失，fail-visible 标注
+    const gapFlag = rankTrend?.cycle?.metrics?.temporalGap
+    if (gapFlag) lines.push('  跨日缺口帧：动量证据缺失（temporalGap），本帧动量类判据按缺失处理')
     lines.push(`  操作建议：${lifecycleActionAdvice(lcTier, stage)}`)
   } else if (field === 'resonanceIntensity') {
     const res = (rankTrend && rankTrend.resonance) || {}

@@ -511,3 +511,26 @@ describe('DataTable row detail interactions', () => {
   })
 
 })
+
+describe('DataTable lifecycle temporalGap tooltip（G1 落默认 code review 修复）', () => {
+  test('缺口标注渲染在 showTierTooltip 显式 lifecycleOpportunity 分支内（周期列唯一可达路径）', () => {
+    const source = dataTableSource()
+    const branchStart = source.indexOf("} else if (field === 'lifecycleOpportunity') {")
+    const branchEnd = source.indexOf("} else if (field === 'resonanceIntensity') {")
+    expect(branchStart).toBeGreaterThan(-1)
+    expect(branchEnd).toBeGreaterThan(branchStart)
+    const branch = source.slice(branchStart, branchEnd)
+    // fail-visible：gap 帧动量证据缺失必须在周期列 tooltip 可见
+    expect(branch).toContain('temporalGap')
+    expect(branch).toContain('跨日缺口帧：动量证据缺失（temporalGap），本帧动量类判据按缺失处理')
+  })
+
+  test('getTierReasonsOf 兜底数据源不携带缺口标注（防回归进不可达死分支）', () => {
+    const source = dataTableSource()
+    const fnStart = source.indexOf('const getTierReasonsOf = ')
+    const fnEnd = source.indexOf('const showTierTooltip = ')
+    expect(fnStart).toBeGreaterThan(-1)
+    expect(fnEnd).toBeGreaterThan(fnStart)
+    expect(source.slice(fnStart, fnEnd)).not.toContain('temporalGap')
+  })
+})

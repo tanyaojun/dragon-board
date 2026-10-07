@@ -565,7 +565,11 @@ def test_analyze_current_frame_market_median_uses_last_snapshot_frame(monkeypatc
 
 def _cycle_divergence_frames():
     """C00 位次序列 [2,1,3]（30 只截面）：权威口径 cycle.stage=reversal（引擎实证），
-    复制尾口径判 cooling——两条口径可判别。"""
+    复制尾口径判 cooling——两条口径可判别。
+
+    2026-10-07 G1 落默认（code review 发现夹具失效根因）：三帧原为三个交易日，
+    每步差分都是跨日跳变，G1 下不再充当动量证据（temporalGap 置缺），reversal
+    判别锚失效。判别锚必须来自同日槽间差分——三帧改同一交易日不同槽位。"""
 
     def make_rows(c00_rank):
         rows = []
@@ -592,15 +596,15 @@ def _cycle_divergence_frames():
 
     return [
         {
-            "tradingDate": f"2026-07-{day:02d}",
-            "slotTime": "14:00",
+            "tradingDate": "2026-07-01",
+            "slotTime": slot_time,
             "type": "half_hour",
-            "timestamp": day,
+            "timestamp": index + 1,
             "rows": make_rows(c00_rank),
             "sentiment": {"phaseName": "启动"},
             "marketStats": {},
         }
-        for day, c00_rank in zip((1, 2, 3), (2, 1, 3))
+        for index, (slot_time, c00_rank) in enumerate((("13:00", 2), ("14:00", 1), ("15:00", 3)))
     ]
 
 

@@ -2,10 +2,9 @@
 """P1 尺度模式 / P3 时间正规化行为步测试（2026-10-07 预登记合同 A5/B5）。
 
 合同：docs/ranktrend-tier-backtest/reasoning-corpus-lifecycle-stage.md §11.1/§11.2；
-默认值零行为（golden 不漂移）是第一断言。
+默认值零行为（golden 不漂移）是第一断言。2026-10-07 code review 修复补强：
+fail-visible 键缺失标注、neutralize 按值判据直测、live 链时间键接线守卫。
 """
-import math
-
 import pytest
 
 from backend.analysis.ranktrend.engine import RankTrendConfig, RankTrendPythonEngine
@@ -131,8 +130,10 @@ class TestP3TimeGap:
         # hot/best/drawdown（G1 剂量不动）
         assert m["hotZoneStreak"] == out["metrics"]["hotZoneStreak"]
         assert m["bestRecentRank"] == out["metrics"]["bestRecentRank"]
-        # raw 沿袭：off 模式末步 raw vs gap 模式 = 前一步 raw（非恒 cooling）
-        assert out_gap["rawStage"] == "cooling" or out_gap["rawStage"] == out_gap["decision"]["evidence"]["rawStage"]
+        # raw 沿袭前帧（真锁语义）：gap 帧输出 raw == 前帧（7 元素前缀、不判 gap）独立计算的 raw
+        cfg_off = RankTrendConfig.from_patch({"lifecycleTimeGapStrictness": "off"})
+        out_prev = analyze_cycle(ranks[:7], pcts[:7], cfg_off, time_keys=days[:7], frame_indices=list(range(7)))
+        assert out_gap["rawStage"] == out_prev["rawStage"]
         # 落默认后：默认配置（不 patch）+ 跨日键同样触发 gap（G1 已是生产行为）
         assert out["metrics"].get("temporalGap") is True
 
@@ -167,7 +168,44 @@ class TestP3TimeGap:
         assert out["rankVelocity"] == 0.0 and out["rankShock"] == 0.0
         assert out["hotZoneStreak"] == 3 and out["temporalGap"] is True
         plain = {"rankVelocity": 5.0}
-        assert neutralize_gap_metrics(plain) is plain  # 无标记恒原样（零开销）
+        assert neutralize_gap_metrics(plain) is plain  # 合法值恒原样返回（零开销）
+
+    def test_neutralize_by_value_not_by_flag(self):
+        # 按值判据（code review P2）：无 temporalGap 标记的 None/NaN 同样中性化，
+        # analyze_risk 遇旧快照/外部构造的无标记 None 不再 TypeError
+        no_flag = {"rankVelocity": None, "rankAcceleration": 2.0, "hotZoneStreak": 1}
+        out = neutralize_gap_metrics(no_flag)
+        assert out["rankVelocity"] == 0.0 and out["rankAcceleration"] == 2.0
+        out_nan = neutralize_gap_metrics({"rankVelocity": float("nan"), "rankShock": float("nan")})
+        assert out_nan["rankVelocity"] == 0.0 and out_nan["rankShock"] == 0.0
+
+    def test_gap_frame_dual_channel_null_evidence_zero_risk(self):
+        # 同帧双口径断言：evidence（展示层）null，risk 输入（计算层）中性 0
+        ranks, pcts = _series()
+        days = ["2026-06-01"] * 7 + ["2026-06-02"]
+        out = analyze_cycle(ranks, pcts, time_keys=days, frame_indices=list(range(8)))
+        assert out["decision"]["evidence"]["rankVelocity"] is None
+        neutralized = neutralize_gap_metrics(out["metrics"])
+        assert neutralized["rankVelocity"] == 0.0
+
+    def test_missing_time_keys_flagged_not_silent(self):
+        # fail-visible（code review P2）：strictness≠off 且键缺失/长度不匹配 → reasons 显式标注
+        ranks, pcts = _series()
+        out_no_keys = analyze_cycle(ranks, pcts)  # 默认 cross_day，不传键
+        assert any("时间键缺失或长度不匹配" in r for r in out_no_keys["decision"]["reasons"])
+        out_bad_len = analyze_cycle(ranks, pcts, time_keys=["2026-06-01"] * (len(ranks) - 1))
+        assert any("时间键缺失或长度不匹配" in r for r in out_bad_len["decision"]["reasons"])
+        # off 诊断臂无键合法，不标注
+        out_off = analyze_cycle(ranks, pcts, RankTrendConfig.from_patch({"lifecycleTimeGapStrictness": "off"}))
+        assert not any("时间键缺失" in r for r in out_off["decision"]["reasons"])
+
+    def test_empty_time_key_steps_not_misjudged(self):
+        # 空键步：无法判定跨日 → 不判 gap（不误报），但 reasons 计数标注（fail-visible）
+        ranks, pcts = _series()
+        days = ["2026-06-01"] * 4 + ["", "2026-06-01", "2026-06-01", "2026-06-01"]
+        out = analyze_cycle(ranks, pcts, time_keys=days, frame_indices=list(range(8)))
+        assert "temporalGap" not in out["metrics"]
+        assert any("时间键缺失" in r for r in out["decision"]["reasons"])
 
     def test_decision_evidence_nan_to_none_and_reason(self):
         ranks = [4, 4, 4, 4]
@@ -186,13 +224,35 @@ class TestP3TimeGap:
 
 
 class TestEngineWiring:
-    def test_engine_replay_off_matches_baseline_semantics(self):
-        """引擎 replay 全链：off 模式 + 时间键传参后输出与默认逐位一致。"""
-        cfg = RankTrendConfig.from_patch({"lifecycleTimeGapStrictness": "cross_day"})
-        assert cfg.lifecycleTimeGapStrictness == "cross_day"
-        # 引擎装配冒烟：off 与默认同配置路径（不抛错即接线存在）
+    def test_engine_assembly_smoke(self):
+        """引擎装配冒烟：replay 入口存在（完整回放对比由 golden 快照测试承担）。"""
         engine = RankTrendPythonEngine(config=RankTrendConfig())
         assert callable(getattr(engine, "replay_frame_at", None))
+
+    def test_live_analyze_chain_wires_time_keys(self):
+        """live/快照落库链接线守卫（code review P1）：_analyze_frames→_analyze_one_stock
+        必须把时间键/帧索引传进 _build_signal——跨日序列上 G1 gap 语义生效
+        （temporalGap 透出、动量分量 null）。接线回退（键丢失）时本测试红，
+        防 live 链静默退回旧行为造成两代际口径分裂。"""
+        from backend.api.ranktrend_routes import _analyze_one_stock
+
+        ranks, pcts = _series()
+        stock = {"code": "600000", "name": "接线守卫股"}
+        frame = {"tradingDate": "2026-06-02", "slotTime": "15:00", "type": "half_hour", "stocks": [stock]}
+        days = ["2026-06-01"] * 7 + ["2026-06-02"]
+        args = (
+            RankTrendConfig(), stock, frame,
+            ranks, pcts,
+            {"state": "neutral"}, [], {}, 50.0, 100, 50.0,
+            [None] * 8, [None] * 8,
+            None, None, None,
+            days, list(range(8)),
+        )
+        result = _analyze_one_stock(args)
+        assert result is not None
+        cycle = (result["analysis"] or {}).get("cycle") or {}
+        assert cycle.get("metrics", {}).get("temporalGap") is True
+        assert cycle["metrics"]["rankVelocity"] is None
 
     def test_runtime_analyze_cycle_passthrough(self):
         ranks, pcts = _series()

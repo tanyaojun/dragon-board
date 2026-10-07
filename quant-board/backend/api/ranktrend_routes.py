@@ -411,6 +411,10 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
     atr_history = history_args[2] if len(history_args) > 2 else None
     gate_confirm_state = history_args[3] if len(history_args) > 3 else None
     cross_section_percentiles = history_args[4] if len(history_args) > 4 else None
+    # G1 时间正规化（2026-10-07 落默认后 live/快照落库链同 replay 链同口径；
+    # 旧调用方不传时为 None → analyze_cycle use_dates=False，诊断对照臂语义）
+    rank_time_keys = history_args[5] if len(history_args) > 5 else None
+    rank_frame_indices = history_args[6] if len(history_args) > 6 else None
     engine = RankTrendPythonEngine(config=config)
     if gate_confirm_state is not None:
         # WP2a：live frames 链路（_analyze_frames 串行）传入请求级确认状态；单股链路
@@ -436,6 +440,8 @@ def _analyze_one_stock(args: tuple[Any, ...]) -> dict[str, Any] | None:
         amount_history=amount_history,
         atr_history=atr_history,
         cross_section_percentiles=cross_section_percentiles,
+        rank_time_keys=rank_time_keys,
+        rank_frame_indices=rank_frame_indices,
     )
     if not signal:
         return None
@@ -534,6 +540,14 @@ def _analyze_frames(
     series_index: dict[str, dict[str, int]] = {}
     for code, bars in series_by_code.items():
         series_index[code] = {key: idx for idx, (key, _rank, _pct) in enumerate(bars)}
+    # G1 时间正规化原料（lifecycleTimeGapStrictness≠off 时 _build_signal 消费）：
+    # bars 元素只带 frameKey，跨日判定需要 tradingDate / 全局帧索引，按 key 反查一次。
+    frame_key_dates: dict[str, str] = {}
+    frame_key_indices: dict[str, int] = {}
+    for frame_idx, frame in enumerate(frames):
+        frame_key = f"{frame.get('tradingDate')} {frame.get('slotTime')}".strip()
+        frame_key_dates[frame_key] = str(frame.get("tradingDate") or "")
+        frame_key_indices[frame_key] = frame_idx
     output: list[dict[str, Any]] = []
     last_hot_themes: list[dict[str, Any]] = []
     last_frame_index = len(frames) - 1
@@ -605,10 +619,15 @@ def _analyze_frames(
             # 仍用完整 prefix（输入不变）"是错的——序列多一个点就是输入变了。
             trend_ranks, trend_percentiles = ranks, percentiles
             cross_section_percentiles: list[float] | None = None
+            # 时间键与帧索引与 ranks/percentiles 同源同长（prefix 逐项），trim 时同步去尾
+            rank_time_keys = [frame_key_dates.get(item[0], "") for item in prefix]
+            rank_frame_indices = [frame_key_indices.get(item[0], -1) for item in prefix]
             if _is_current_frame(frame) and len(percentiles) >= 2:
                 cross_section_percentiles = percentiles[:-1]
                 trend_ranks = ranks[:-1]
                 trend_percentiles = percentiles[:-1]
+                rank_time_keys = rank_time_keys[:-1]
+                rank_frame_indices = rank_frame_indices[:-1]
             if not full_history and index != last_frame_index:
                 # 首屏全市场场景（无 frame_keys）：历史帧仅输出轻量 meta，
                 # 前端 updateLatestAnalysisSeries 只消费 currentRank/currentPercentile；
@@ -649,6 +668,7 @@ def _analyze_frames(
                 atr_history,
                 gate_confirm_state,
                 cross_section_percentiles,
+                rank_time_keys, rank_frame_indices,
             ))
 
         # 完整四信号计算：单股逐股纯 Python 计算仅 ~1ms/股，全市场 224 股串行 ~0.2s。

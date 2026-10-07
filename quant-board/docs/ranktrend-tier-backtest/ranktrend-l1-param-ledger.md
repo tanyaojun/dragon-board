@@ -475,10 +475,19 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 
 | 参数 | 变更 | 判定依据 | 回退路径 | 代际/commit |
 |---|---|---|---|---|
-| lifecycleTimeGapStrictness | off → **cross_day** | P1/P3 预登记合同（Opus 4.8 两轮审定，语料 §11/§11.2）全链：诊断 ER=3.33[CI 3.18-3.49]（velocity>18 帧 42% 为跨日假动量，集中驱动状态跃迁）；trial G1 三窗 saEx 相对线全过 + veto 误伤 −6.8% 三窗一致（可归因=跨日跳变驱动的 reversal 误判消除）+ bd +1.0% 带内；Track 1 交易层中性（decision wrxpf +0.9%、166→172 笔、maxDD 改善）。用户裁决理由：热榜环境门否决过多、早有错判误杀嫌疑 | patch `lifecycleTimeGapStrictness="off"`（诊断对照臂，配置面保留） | gen-g1-gap / cd26347b 后续落默认 commit |
+| lifecycleTimeGapStrictness | off → **cross_day** | P1/P3 预登记合同（Opus 4.8 两轮审定，语料 §11/§11.2）全链：诊断 ER=3.33[CI 3.18-3.49]（velocity>18 帧 42% 为跨日假动量，集中驱动状态跃迁）；trial G1 三窗 saEx 相对线全过 + veto 误伤 −6.8% 三窗一致（可归因=跨日跳变驱动的 reversal 误判消除）+ bd +1.0% 带内；Track 1 交易层中性（decision 窗 wrxpf +0.9%、166→172 笔、maxDD 改善；oos2 80→76 笔 wrxpf −3.8% 带内，两窗合并读法=中性，见语料 §11——两窗均小样本噪声量级）。用户裁决理由：热榜环境门否决过多、早有错判误杀嫌疑 | patch `lifecycleTimeGapStrictness="off"`（诊断对照臂，配置面保留） | gen-g1-gap / cd26347b 后续落默认 commit |
 
-- **基线锚换代登记**：10 月帧字段回填（e77907bb/cacf4ab8 代际）致绝对锚 0.1044/0.0918/0.0933 不可复现（今日 a0=0.1472/0.1016/0.1071，wrxpf 基线 0.4702→0.4104 同源漂移）——本参数判定全程改用**同代际相对线**（容差不变 −0.005/−0.003）；**G1 新基线锚（今日代际）= 0.1450/0.0983/0.1172**，后续 harness/月度复验自动跟随。
+- **基线锚换代登记**：10 月帧字段回填（e77907bb/cacf4ab8 代际）致绝对锚 0.1044/0.0918/0.0933 不可复现（今日 a0=0.1472/0.1016/0.1071，wrxpf 基线 0.4702→0.4104 同源漂移）——本参数判定全程改用**同代际相对线**（容差不变 −0.005/−0.003）；**G1 新基线锚（今日代际）= 0.1450/0.0983/0.1172**，后续 harness/月度复验自动跟随。**锚取代关系：§17 第七代锚 0.1472/0.1016/0.0981/0.0698 属 G1 前默认配置（off）的绝对锚，自本节起仅用于 G1 前代际对照，月度复验以本节 G1 新锚为准。**
 - **行为语义**：相邻序列元素跨交易日 → 该步 velocity/acceleration/shock 缺证据（输出 null + temporalGap 标记，不插值），raw 沿袭前帧（封死 NaN 比较全 False 静默滑 cooling 路径）；risk 动量分量中性化（`analyze_risk` 入口统一防）；normalize 照常（状态自然沿袭）。
 - **G2（non_adjacent）未落默认**：oos1 贴线差 0.0001 FAIL，按合同 G3 不试；如需重开须在 G1 新基线上重新预登记（用户「再看 G2」= 待新代际复扫，非自动翻案）。
 - **TS 同步**：types.ts cycle.metrics 增 temporalGap?: boolean + 动量字段 number|null；DataTable 周期列 tooltip 增缺口标注（fail-visible）；无镜像阈值。
 - **golden**：快照重录（configRepr + 场景输出真变化：gap 帧 metrics null/标记、假降温修复、risk overheat 中性化；diff 逐字段审查全在 G1 语义预期内）。
+
+### 18.1 code review 修复（2026-10-07 当日，双 subagent 审定 a44d965f）
+
+- **P1 live/快照落库链接线补齐**：`_analyze_frames→_analyze_one_stock` 此前未传时间键，G1 默认在 live API 与快照 analyze 链静默失效（golden/backtest 新口径 vs live 旧口径两代际分裂）——补时间键/帧索引接线（frameKey→tradingDate/帧索引反查映射，复制尾 trim 同步），新增 `test_live_analyze_chain_wires_time_keys` 守卫。
+- **P0 前端标注可达性**：temporalGap 缺口标注原写在 `getTierReasonsOf` 兜底分支（周期列 tooltip 走 `showTierTooltip` 显式分支，永不消费）——移入显式分支并删死代码，补防回归断言两则；文档「已生效」表述随修复成立。
+- **fail-visible 两处**：strictness≠off 但时间键缺失/长度不匹配 → decision reasons 显式标注（不静默降级）；空键步不判 gap（不误报）且计数标注。
+- **防御修正**：`neutralize_gap_metrics` 改按值判据（键存在且 None/NaN → 0），不依赖 temporalGap 标记（旧快照无标记 None 不再 TypeError），缺键不悄悄补 0。
+- **测试修复**：raw 沿袭同义反复断言改独立前帧对照；TestEngineWiring 虚假覆盖改 live 链真接线；analyze_api 判别锚夹具三帧改同日多槽（G1 下跨日差分不再充当动量证据，锚失效根因修复）。
+- 后端全量 3261 过（ranktrend 620）+ 前端 vue-tsc/vitest 专项过。

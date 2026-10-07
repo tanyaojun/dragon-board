@@ -258,7 +258,7 @@ def _confirm_jump(
     return jump
 
 
-from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision, neutralize_gap_metrics
+from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision
 
 from ..trend.risk import REGIME_STRONG_SCORE, analyze_risk, market_regime
 from ..trend.gate_confirm import GateConfirmState, gate_reason
