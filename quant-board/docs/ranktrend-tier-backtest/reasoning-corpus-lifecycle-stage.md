@@ -785,3 +785,16 @@ python scripts/gptoss_questionset_review.py \
 **P2 后续路径**：预登记须含「与 dv 触发集重叠率/增量检验」步骤；若 P2 触发集 ⊆ dv 高分位 rank_lead/price_lead_warn 且无增量 → 并入 dv 语义扩展（位置条件化+amount 腿）而非新机制。
 
 **Opus 第二轮提示词已组装**：`lifecycle-stage-opus-round2-prompt.md`（范围收窄为 P1/P3 预登记合同；本节两块考古事实作为「已核实事实」写入提示词，附审定回执 B1-B5）。
+
+### §11.2 第二轮审定（2026-10-07，P1/P3 预登记合同；输出归档 `lifecycle-stage-opus-round2-output.md`）
+
+**审定结论：通过，零硬幻觉**。
+
+1. **算术抽验 12/12**：no-regression 三线（锚−0.005 → 0.0994/0.0868/0.0883）与均值线（(0.1044+0.0918+0.0933)/3=0.0965，−0.003=0.0935）；c1 oos2 −5.8% rel≈−0.0054 绝对；T=200 换算六值（(201−R)/2 与 `percentile_rank` 公式逐位一致）；drawdown 1 格=0.5 pct 点；0.12T+1≥10（T≥75）/0.15T+1≥10（T≥60）覆盖方向论证正确；stage 2% 线=bd 足印 4.3% 之半；veto 1%≈8.4% 的 12% rel；「10 个 BestRankMax 字段」计数精确（§2.7 实数恰 10）；best_le 键集 {5,10,12,20,25,30} 与 config 默认值集一致；best 谓词 pct 形态（帧内 rank↔pct 严格单调 ⇒ min(rank) 帧=max(pct) 帧）成立。
+2. **事实引用 8/8**：c1 三窗/e1a −32%/§4.3-D 签名 0.127→0.023（−82%）/D→B 0.5198/P_repool 14.2%→8.3%/8.4%·4.3%·0.1376·0.0834/oos2 22 笔教训全部与语料一致。
+3. **B9 依赖①预解（主会话代码核实，合同可解除阻断）**：frames 逐帧带 `tradingDate`/`slotTime`——`runtime.py:1024-1025`（WP1c as-of 注入自身在逐帧读）+ `execution.py:350/360/497` 消费同一 frames 列表；`runtime.py:1294` 注释另证引擎已有跨日边界意识（「跨 tradingDate **不**恒重置——half_hour 每天仅 10-11 帧」）。写 loader 时终确认即可，不得再以帧序猜跨日边界（合同原文防线保留）。
+4. **A4 回退必要性精确化**：stage/rawStage 纯函数可离线复算（`analyze_cycle` 不吃 risk/momentum）；veto/bd 末态吃 decision（risk/momentum 注入）→「flag=on +1 replay」对 outcomes 的 veto/bd 字段必要——合同按最保守路径预登记成本，正确非冗余。
+5. **harness 盘点核实**：`diagnose_gate_flip_rate.py` 无 config 参数（只跑默认）——A8/B8「缺什么」栏判断准确。
+6. 小注（非否决）：A2 的 replay 确定性论证更准引用=b2/b3/c3/d1/d2「逐位=baseline」（d1/d2 单独不足）；B5 momentum 项在 NaN 比较语义下自然 False，无需额外代码路径。
+
+**主会话增量裁定（执行编排）**：①P1/P3 诊断步共享「1 次默认 replay 导出」——两薄脚本共用 loader，合并执行省 1 次 replay（合同 A7/B7 的 3-5+4-6 次 → 合计约 7-10 次）；②建议 P3 诊断先行：ER 检验最便宜，且「18/12 跨缺口假设」若成立会反向约束 P2 交互量设计（交互量也须时间正规化），先出数再定 P2 预登记。**开跑等用户裁决**（判定线已按合同冻结，跑后不得回看调线）。
