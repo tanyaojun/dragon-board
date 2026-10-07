@@ -51,7 +51,7 @@
 | 数据 | 盘中快照帧，`snapshot_type=half_hour`（每交易日约 10 帧，09:30–15:00 每半小时）；回测数据集 `dragonboard_live` |
 | 池规模 | 热榜池每帧 ≈200 只（769 帧 / 156,647 信号 ≈ 204 只/帧） |
 | 证据窗口 | decision 2026-04-15~07-31 / oos1 08-15~08-31 / oos2 09-01~09-12（三窗是本系统既有锚体系） |
-| 生命周期角色 | **环境门 + 投票输入**（用户已裁决：不恢复硬买卖标签）；另有一个**市场级**环境门（`market_regime` 读热榜情绪 stage 高潮/发酵/启动/退潮/冰点）与本个股级门正交，勿混 |
+| 生命周期角色 | **环境门**（+设计文档称「投票输入」，但**代码事实：`_synergy_tier` 票和=res+rank+vp+cs+pm+dv，无 lifecycle 加性正票项**——lifecycle 以门控修正参与：E 否决/B·D 降档，均负向语义。用户已裁决：不恢复硬买卖标签）；另有一个**市场级**环境门（`market_regime` 读热榜情绪 stage 高潮/发酵/启动/退潮/冰点）与本个股级门正交，勿混 |
 | 词表 | 路径 5 态：`ignition`(点火)/`expansion`(扩散)/`crowded`(拥挤)/`reversal`(反转)/`cooling`(冷却)；候选分层：A_MAIN/B_IGNITION/C_CROWDED/D_EXIT_RISK/N_NEUTRAL；lifecycle signalTier：A/B/C/D/E（无 S） |
 
 ### §1.1 输入序列构造（生命周期唯一的原料）
@@ -520,7 +520,9 @@ def _lifecycle_tier(stage: str, action: str) -> tuple[str, list[str]]:
 
 ### #1 总档合成 `_synergy_tier`（`ranking/volume_price.py`）——环境门主体
 
-七维投票合成（resonance/rankTrend/volumePrice/crossSection/priceMomentum/divergence…），生命周期以 `lc_tier` 参与，**两处结构短路**（默认 hard）：
+七维投票合成（resonance/rankTrend/volumePrice/crossSection/priceMomentum/**divergence**…），生命周期以 `lc_tier` 参与（**门控修正，无加性正票**，见 §1 勘误注记），**两处结构短路**（默认 hard）：
+
+> **divergence 维语义补记（Opus 审定轮 2026-10-07，源 `volume_price.py:348` docstring）**：dv=`priceRankDivergence` 第 7 维（2026-08-18 量名背离——confirm_up 一致强 / **rank_lead 关注度先行** / confirm_down / **price_lead_warn 出货预警**），**加性投票**（`v += strength × tierSynergyDivergenceVote`）。即「注意力×价格背离」已有专门加性维——任何「把价格/资金信息引入生命周期」的提案必须先与该维做冗余面测定（原文语料漏展其语义，Opus P2 提案踩此坑，见 §11）。
 
 - `lc_tier=="E"` → 直接返回 `"E"`（「周期一票否决」，票值无关短路，位阶最高）；
 - `lc_tier∈{B,D}` → 已达 S/A 的帧**降一档**（S→A、A→B）。
@@ -594,7 +596,7 @@ veto/B/D 降档可配 K 帧确认，默认 `lifecycleConfirmFrames=1`（直通�
 
 | # | 证据 | 读数 | 来源 |
 |---|---|---|---|
-| A | 阶段 3 语义校准（769 帧 / 156,647 信号，h8 excess；h8=8 帧后视） | lifecycle 维度**无 S 档**；A +0.055 < B +0.097（**反转**）；对照 rankTrend 维 +0.064/+0.037/−0.013 达标；synergy 合并 +0.088/+0.039/−0.006 达标（靠其他三维）——**lifecycle 是四维中最弱投票输入** | 主计划 §5.4（commit `40ddc7f`） |
+| A | 阶段 3 语义校准（769 帧 / 156,647 信号，h8 excess；h8=8 帧后视） | lifecycle 维度**无 S 档**；A +0.055 < B +0.097（**反转**）；对照 rankTrend 维 S/A/B=+0.064/+0.037/−0.013 达标；synergy 合并 S/A/B=+0.088/+0.039/−0.006 达标（靠其他三维）——**lifecycle 是四维中最弱投票输入**。**勘误注记（Opus 审定轮 2026-10-07）：三数均为 S/A/B 档位 excess（原档表列头「S/A/B excess」），非三窗读数；B 档负值=弱趋势档单调梯度末端，与「达标」不矛盾** | 主计划 §5.4（commit `40ddc7f`） |
 | B | 生命周期分层 vs RankTrend 匹配度（阶段 6 s7，h8 口径） | A_MAIN h8 0.514 < S/A 基线 0.5272；D 状态 h8 0.5264（**预测反弹**，均值回归）；stage=reversal 0.4973（**无预测力**）；唯一有效状态机信号 D→B 跃迁 0.5198 | rearchitecture 文档 §2.1 |
 | C | **6-07 实现审计** | 「生命周期分层实现不能继续被当成可靠买卖标签……不适合作为硬入场、硬过滤或独立买卖系统」；V3 4+5 月 27 笔：A_MAIN 17 笔 76.5%/+3.83%、B_IGNITION 10 笔 70.0%/+2.50%，但 entryAdvice=preferred **不强于** watch；rawStage≠stage 的 3 笔全部盈利 | `docs/optimization-long-task/2026-06-07-lifecycle-implementation-audit.md` |
 | D | 层 1 事件级区分度（阶段 23.2） | A 档 +0.036 / +0.030 / **−0.0006**（逐窗衰减，oos2 转负）；D/E/B 档 saEx=None（统计退化） | 长测计划 §23.2 |
@@ -607,7 +609,7 @@ veto/B/D 降档可配 K 帧确认，默认 `lifecycleConfirmFrames=1`（直通�
 |---|---|---|
 | G | **整维归零对照**（阶段 23.8 no_lc_gate，门控干预全拆） | synergy saEx 三窗 **−61.0% / −48.8% / −49.4%**——环境门是当前 saEx 第一支柱（实测于落默认前 1.0 票权基线，锚 22.8） |
 | H | 触发结构（阶段 23.2，rawHits 口径） | veto 触发 8.4%（其中 stage=reversal 驱动 **8816/11003**，HighRisk 压力路径占其余）；B/D 降档实际改判 4.3%；合计 ~12.7% 帧被环境门改判。lc 档位分布：D 76.4%（cooling 主导）/ A 13.9% / E 8.4% / B 1.2%，**无 S 档** |
-| I | 门控翻转率基线（2026-08 冻结段：202 帧 / 45,686 信号 / 43,873 可比对） | veto 翻转率 0.1376（6037 次）、bd_downgrade 0.0834（3661 次）；per-code top 翻转 ~80-91 次/月（603986 等） |
+| I | 门控翻转率基线（2026-08 冻结段：202 帧 / 45,686 信号 / 43,873 可比对） | veto 翻转率 0.1376（6037 次）、bd_downgrade 0.0834（3661 次）；per-code top 翻转 ~80-91 次/月（603986 等）。**口径注记（Opus 审定轮 2026-10-07）：本行是相邻帧「翻转率」（comparable-pair 分母），H 行 8.4% 是「触发率」（decision 窗 rawHits）——两口径两窗不可直除对账，Q8 误伤估计前先对账** |
 | J | 新基线锚（阶段 24 锚 1 = 当前默认配置三窗 saEx） | decision 0.1044 / oos1 0.0918 / oos2 0.0933 |
 | K | 「环境门有价值」与「分层无方向贡献」**同时成立、互不矛盾**；且干预价值可能集中在负向过滤（veto 否决+降档），但两者相对贡献**从未分离**（23.8 是一起拆的）。存在真实张力：D 档帧预测反弹（§4.1-B）→ cooling 降档对入场排序可能是负价值——c 组裁决读数见 §4.3-C | gate-redesign-proposal §2.3 |
 
@@ -615,7 +617,7 @@ veto/B/D 降档可配 K 帧确认，默认 `lifecycleConfirmFrames=1`（直通�
 
 | # | 已证伪 | 证据 |
 |---|---|---|
-| A | **单纯调 raw_stage/normalize 阈值** | §4.1-E 坐标下降 best=baseline + 分位结构性根因 |
+| A | **单纯调 raw_stage/normalize 阈值** | §4.1-E 坐标下降 best=baseline + 分位结构性根因。**命题域注记（Opus 审定轮 2026-10-07）：扫描实测覆盖 10 参数（threshold-optimization-design §8.2 原文「10 参数 × 2-3 候选」）**——残留硬编码（§2.7 表末）与未扫参数上的「不可调」是构成性根因（tier 构成由分位带决定）的外推论证，非全空间实测；动这些字面量的提案仍须按 §0 任务卡论证为何绕开根因 |
 | B | **用 lifecycle.score 连续分替代标签做门控** | 方案 B 前置验证：score 五分位桶 saEx = +0.037/+0.000/−0.011/+0.007/+0.037（U 形，spearman −0.1，首末桶差 −0.0004）——连续分没有标签没有的方向内容，FAIL |
 | C | **软化门控形态**（veto 转负票/降档转惩罚） | 阶段 24：veto 剂量轴 b0-b3 软化使 decision 单调受损，b2/b3 零效应；降档 penalty U 型峰=1.0（数学等价 hard），c1 关降档非甜点；路径分流 d1/d2 三窗逐位零效应；唯一 saEx 假阳组合 p2/e1a 在 Track 1 交易复核被否决：主窗 wrxpf 0.470→0.319（**−32%**）、maxDD −18%→−32%（oos2 +64% 仅 22 笔小样本）。**三处 0/1 干预均为数据验证后的局部最优，维持 hard** |
 | D | **多帧确认链**（K=2/3） | 阶段 12：veto 翻转率 0.127→0.023→0.010，decision saEx 0.0811→0.0539→0.0454 单调恶化、OOS 两窗一致受损——被滤掉的「单帧噪声 veto」里含真实信息 |
@@ -736,3 +738,37 @@ python scripts/gptoss_questionset_review.py \
 | 证据文档 | `quant-board/docs/ranktrend-tier-backtest/ranktrend-lifecycle-gate-redesign-proposal.md`（§2 证据链+§8 阶段24结论）、`ranktrend-lifecycle-threshold-optimization-design.md`（§8 参数化+否定性搜索）、`gate-flip-baseline-2026-08.md`、`ranktrend-longterm-backtest-plan.md`（§12/23/24）、`ranktrend-l1-param-ledger.md`（saEx 方法论） |
 | 审计 | `docs/optimization-long-task/2026-06-07-lifecycle-implementation-audit.md` |
 | 语料范式 | `quant-board/docs/hotlist-jev/reasoning-corpus-eod-emotion.md`（§7 审定流程与反幻觉纪律） |
+
+---
+
+## §11 审定战报（2026-10-07，Opus 4.8 首轮，用户直投全文）
+
+**执行事实**：用户跳过 GPT-OSS 脚本通道，将本包全文直接投喂 Opus 4.8，一轮出齐 §8 合同全部四件（复述/归因/提案/反面检查）；输出全文由用户贴回主会话，本节为审定归档。
+
+**审定结论：通过**——复述承重墙 10/10 逐字对上（含 rank≤10⇔pct≥95.5@池200 等算术复算），归因与提案层零硬幻觉；反面检查 9 项证据不足清单与 §7 一一对应属实。首轮质量即达 EOD 轮 GLM 接地通道水平。
+
+**语料勘误 4 处（模型反面检查抓出→主会话对照源码/原档核实→当轮修正，正文已带标注）**：
+
+1. **B3→§4.1-A（真勘误）**：rankTrend「+0.064/+0.037/−0.013」三数是 **S/A/B 档位 excess**（threshold-optimization-design §2 表列头原文），非三窗读数——B 档负值是弱趋势档单调梯度末端、与「达标」不矛盾。原表述歧义。
+2. **B2→§1/§3#1（真勘误，价值最高）**：「环境门+投票输入」的「投票」系设计文档措辞；**代码事实无 lifecycle 加性正票项**（票和=res+rank+vp+cs+pm+dv）——模型归因 ③「方向通道被构造锁定为 {0、−1 档、veto}，连续/分级方向贡献机制根本不存在」获代码级实锤。
+3. **B1→§4.3-A（精度收窄）**：坐标下降实测覆盖 **10 参数**（原档 §8.2），「阈值不可调」在残留硬编码与未扫参数上是构成性根因外推——§4.3-A 命题域已收窄并保留防线。
+4. **B5→§4.2-I（口径注记）**：8.4% 触发率（decision 窗 rawHits）vs 13.76% 相邻帧翻转率（2026-08 冻结段 comparable-pair）两口径两窗，不可直除；Q8 误伤估计前须对账。
+
+（B4 滞回证据反向：语料本就两面呈现的已知张力（§4.1-C），不修。）
+
+**主会话补刀（模型没接上的两处）**：
+
+1. **P2 主断言与既有维度相抵**：P2 称「注意力×价格交互是现有七维都没有的角度」——但第七维 **dv=priceRankDivergence**（量名背离：rank_lead 关注度先行 / price_lead_warn 出货预警，加性投票）正是该角度，语料原文漏展其语义（模型在 A1 诚实标注需读码，不算幻觉）。P2 的真实残差收窄为「交互证据从加性投票位移到 lifecycle 决策层作风险证据」的接线位置差异，**立项前置=读 divergence 实现做冗余面测定**。
+2. **P4-阶段 2 前提被 c 组先验压低**：阶段 24 降档轴 U 型峰=1.0（≡hard），端点（含 c1 关降档）劣于 hard——降档腿在 saEx/decision 面正贡献已有强先验；P4 的真实增量在出场腿（saEx 盲区）。且阶段 1 分解的 c1/a0/a2 读数在长测计划 §24.3 存档，**先考古再决定是否重跑**。
+
+**提案裁定与建议顺序（全部=假设，进验证须预登记+用户点头）**：
+
+| 提案 | 裁定 | 要点 |
+|---|---|---|
+| P1 双口径统一 | ✅ 可预登记 | 诊断步先行（total 分布未知）；不承诺修复 A/B excess，攻击的是扫描未触碰的尺度混杂变量 |
+| P2 交互证据进决策层 | ⚠️ 先读 dv 维 | 冗余面测定是硬前置；原料排序①price_changes 合理 |
+| P3 时间正规化 | ✅ 可预登记 | NaN 比较全 False→静默滑 cooling 的语义坑核实为真；自带 §4.3-D 防线（veto 保留率监控） |
+| P4 分解+低位豁免 | ✅ 阶段1 先考古存档；阶段2 前提偏负 | 出场腿是真实增量面 |
+| P5 双轴重设计 | ✅ 论证级合规 | 前置四项设计完整；「与 U 形证据一致的非单调离散门」论证成立 |
+
+建议顺序：P4-阶段1（考古 §24.3 为主，近零成本）→ P1 诊断步 → P3 → P2 读码冗余面 → P5 前置四项（stage×分位列联/互信息可直接从 replay 导出）。
