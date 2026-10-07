@@ -336,30 +336,19 @@
             <div v-if="windowKey !== '1d' && crowdingChartDays" class="trend-chart" ref="crowdingChartRef"></div>
           </section>
 
-          <!-- ④ 置信度：槽位 × 问题置信方格矩阵 + 趋势线 + 派生指标 -->
+          <!-- ④ 置信度：槽位 × 问题置信 ECharts 柱状图（热榜情绪·历史对比页签同语言：指标开关+柱+线）+ 派生指标 -->
           <section v-show="view === 'confidence'" class="tab-pane">
-            <div v-if="!confidenceRows.length" class="empty-row">该日无置信数据</div>
+            <div v-if="!confidenceBarsPoints.length" class="empty-row">该日无置信数据</div>
             <template v-else>
-              <table class="grid-matrix conf-matrix">
-                <thead>
-                  <tr>
-                    <th class="grid-head">问题</th>
-                    <th v-for="slot in slots" :key="slot.slotTime || ''" class="grid-head">{{ slot.slotTime }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in confidenceRows" :key="row.key">
-                    <td class="grid-row-label">{{ row.label }}</td>
-                    <td v-for="cell in row.cells" :key="cell.column" class="grid-cell-wrap">
-                      <div class="grid-cell conf-cell" :class="{ 'no-dist': cell.noDist, degraded: cell.degraded }"
-                        :style="cell.noDist ? undefined : { background: confidenceBg(cell.value), color: '#fff' }"
-                        :title="cell.title">
-                        {{ cell.text }}
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+              <div class="indicator-selector">
+                <button v-for="ind in CONF_BARS_INDICATORS" :key="ind.key" class="indicator-btn"
+                  :class="{ active: confidenceBarIndicators.includes(ind.key) }"
+                  @click="toggleConfidenceBar(ind.key)">
+                  {{ ind.icon }} {{ ind.label }}
+                </button>
+              </div>
+              <div v-if="!confidenceBarsSeries.length" class="empty-row">暂无置信序列（至少保留一个指标）</div>
+              <div v-else class="trend-chart" ref="confidenceBarsChartRef"></div>
               <div class="stats-grid">
                 <div v-for="stat in confidenceStats" :key="stat.label" class="stat-card">
                   <div class="stat-label">{{ stat.label }}</div>
@@ -408,12 +397,15 @@
                   </div>
                 </div>
               </div>
-              <div v-if="!confidencePoints.length" class="empty-row">暂无序列档概率趋势</div>
-              <div v-else class="trend-chart" ref="confidenceChartRef"></div>
+              <!-- 序列档概率趋势：多日窗口专供（EOD 日级视角）；1 天窗口下柱状图已覆盖序列档 P，不重复铺图 -->
+              <template v-if="windowKey !== '1d'">
+                <div v-if="!confidencePoints.length" class="empty-row">暂无序列档概率趋势</div>
+                <div v-else class="trend-chart" ref="confidenceChartRef"></div>
+              </template>
               <div class="note-line research-line">
                 🔎 研究注记：choice 答案携带 probabilities/confidence；score 型答案（温度）实测同样携带 10 档锚点分布 + 模型置信
-                （2026-10-02 生产库 100% 覆盖；锚期望 / 9 × 100 = 还原温度分），格内 C%=模型置信、锚点离散度 margin/熵进 tooltip，
-                仅确缺失时标「无分布」；犹豫阈值 60%（top 概率，choice 题），与热榜情绪面板口径一致。
+                （2026-10-02 生产库 100% 覆盖；锚期望 / 9 × 100 = 还原温度分），柱=P（top 概率）、温度线=C（模型置信，不套 P 犹豫阈值色），
+                margin/熵/逐题模型置信进 tooltip，缺失与「无分布」如实标注不补 0；犹豫阈值 60%（top 概率，choice 题），与热榜情绪面板口径一致。
               </div>
             </template>
           </section>
@@ -971,14 +963,6 @@ function tempColor(value: number | null): string {
   return `hsl(${hue.toFixed(0)}, 72%, 52%)`
 }
 
-function confidenceBg(value: number | null): string {
-  if (value == null) return 'transparent'
-  const alpha = 0.35 + value * 0.6
-  if (value >= 0.8) return `rgba(46, 213, 115, ${alpha.toFixed(2)})`
-  if (value >= JEV_HESITANT_THRESHOLD) return `rgba(255, 177, 66, ${alpha.toFixed(2)})`
-  return `rgba(255, 71, 87, ${alpha.toFixed(2)})`
-}
-
 // ---------- 温度计 SVG 几何 ----------
 const TUBE_TOP = 12
 const TUBE_HEIGHT = 176
@@ -1183,88 +1167,103 @@ function waffleLegend(
   })
 }
 
-// ---------- 置信度投影 ----------
-const CONFIDENCE_QUESTIONS: Array<{ key: string; label: string }> = [
-  { key: 'frame_stage', label: '当前帧档' },
-  { key: 'sequence_stage', label: '序列档' },
-  { key: 'temperature', label: '温度(score)' },
-  { key: 'crowding', label: '拥挤归层' },
-]
+// ---------- 置信度投影（ECharts 柱状图，展现形式对齐热榜情绪·历史对比页签） ----------
+// 柱=choice 题 P（top 概率）；线=score 题 C（模型置信，不套 P 概率语义）——同历史对比「柱+线双语言」的口径区分
+const CONF_BARS_INDICATORS = [
+  { key: 'frame_stage', label: '当前帧档', icon: '📊', type: 'bar', color: '#ffd700' },
+  { key: 'sequence_stage', label: '序列档', icon: '📈', type: 'bar', color: '#ff7f50' },
+  { key: 'temperature', label: '温度(score)', icon: '🌡️', type: 'line', color: '#4a90e2' },
+  { key: 'crowding', label: '拥挤归层', icon: '⭕', type: 'bar', color: '#2ed573' },
+] as const
+type ConfidenceBarKey = (typeof CONF_BARS_INDICATORS)[number]['key']
 
-interface ConfidenceCell {
-  column: string
-  text: string
+interface ConfidenceBarCell {
+  kind: 'choice' | 'score' | 'missing'
+  /** 柱/线取值：choice=P top 概率、score=C 模型置信（百分数 0-100）；缺失/无分布 null，断线不补 0 */
   value: number | null
+  choiceName: string | null
+  confidence: number | null
+  margin: number | null
+  entropy: number | null
+  hesitant: boolean
   noDist: boolean
-  degraded: boolean
-  title: string
 }
 
-const confidenceRows = computed(() => {
+interface ConfidenceBarPoint {
+  label: string
+  degraded: boolean
+  cells: Record<ConfidenceBarKey, ConfidenceBarCell>
+}
+
+function confidenceChoiceName(questionKey: string, choice: string | null): string | null {
+  if (!choice) return null
+  const names = questionKey.includes('crowding') ? CROWDING_NAMES : JEV_STAGE_NAMES
+  return names[choice] ?? choice
+}
+
+const confidenceBarsPoints = computed<ConfidenceBarPoint[]>(() => {
   if (!slots.value.length) return []
-  return CONFIDENCE_QUESTIONS.map(({ key, label }) => ({
-    key,
-    label,
-    cells: slots.value.map<ConfidenceCell>((slot) => {
-      const metrics: JevConfidenceMetrics = confidenceMetrics(slot.answers?.[key])
+  return slots.value.map((slot) => {
+    const cells = {} as Record<ConfidenceBarKey, ConfidenceBarCell>
+    for (const question of CONF_BARS_INDICATORS) {
+      const metrics: JevConfidenceMetrics = confidenceMetrics(slot.answers?.[question.key])
       if (metrics.kind === 'missing') {
-        return {
-          column: slot.slotTime || '--',
-          text: '--',
-          value: null,
-          noDist: false,
-          degraded: slot.status === 'degraded',
-          title: `${slot.slotTime} ${label}：答案缺失`,
+        cells[question.key] = {
+          kind: 'missing', value: null, choiceName: null,
+          confidence: null, margin: null, entropy: null, hesitant: false, noDist: false,
         }
+        continue
       }
-      if (metrics.noDistribution) {
-        return {
-          column: slot.slotTime || '--',
-          text: '无分布',
-          value: null,
-          noDist: true,
-          degraded: false,
-          title: `${slot.slotTime} ${label}：score 型未携带锚点分布（缺失如实标注）`,
-        }
+      cells[question.key] = {
+        kind: metrics.kind,
+        value:
+          metrics.kind === 'score'
+            ? metrics.confidence != null
+              ? Math.round(metrics.confidence * 100)
+              : null
+            : metrics.probability != null
+              ? Math.round(metrics.probability * 100)
+              : null,
+        choiceName: confidenceChoiceName(question.key, metrics.choice),
+        confidence: metrics.confidence,
+        margin: metrics.margin,
+        entropy: metrics.entropy,
+        hesitant: metrics.hesitant,
+        noDist: metrics.noDistribution,
       }
-      if (metrics.kind === 'score') {
-        // score 型（温度）：无 choice 概率语义，但实测携带 10 档锚点分布+模型置信（2026-10-02 生产库 100% 覆盖）；
-        // 格内 C%=模型置信，不套用 P 犹豫阈值色（置信校准不同），锚点离散度进 tooltip
-        const bits = [slot.slotTime, 'score 型']
-        if (metrics.confidence != null) bits.push(`模型置信 ${Math.round(metrics.confidence * 100)}%`)
-        if (metrics.margin != null) bits.push(`margin ${(metrics.margin * 100).toFixed(0)}`)
-        if (metrics.entropy != null) bits.push(`熵 ${metrics.entropy.toFixed(2)}`)
-        return {
-          column: slot.slotTime || '--',
-          text: metrics.confidence != null ? `C${Math.round(metrics.confidence * 100)}%` : '--',
-          value: null,
-          noDist: false,
-          degraded: slot.status === 'degraded',
-          title: bits.join(' · '),
-        }
-      }
-      const bits = [slot.slotTime]
-      if (metrics.probability != null) bits.push(`P${Math.round(metrics.probability * 100)}%`)
-      if (metrics.margin != null) bits.push(`margin ${(metrics.margin * 100).toFixed(0)}`)
-      if (metrics.entropy != null) bits.push(`熵 ${metrics.entropy.toFixed(2)}`)
-      if (metrics.hesitant) bits.push('犹豫')
-      return {
-        column: slot.slotTime || '--',
-        text: metrics.probability != null ? `P${Math.round(metrics.probability * 100)}%` : '--',
-        value: metrics.probability,
-        noDist: false,
-        degraded: slot.status === 'degraded',
-        title: bits.join(' · '),
-      }
-    }),
-  }))
+    }
+    return { label: slot.slotTime || '--', degraded: slot.status === 'degraded', cells }
+  })
 })
 
+const confidenceBarIndicators = ref<ConfidenceBarKey[]>(CONF_BARS_INDICATORS.map((question) => question.key))
+
+const confidenceBarsSeries = computed(() =>
+  CONF_BARS_INDICATORS.filter((question) => confidenceBarIndicators.value.includes(question.key)),
+)
+
+function toggleConfidenceBar(key: ConfidenceBarKey) {
+  const current = confidenceBarIndicators.value
+  if (current.includes(key)) {
+    if (current.length === 1) return // 至少保留一个序列，避免图表空白（同历史对比页签）
+    confidenceBarIndicators.value = current.filter((k) => k !== key)
+  } else {
+    // 按声明顺序重排，保持图例顺序稳定
+    confidenceBarIndicators.value = CONF_BARS_INDICATORS.map((question) => question.key).filter(
+      (k) => current.includes(k) || k === key,
+    )
+  }
+  nextTick(() => renderConfidenceBarsChart())
+}
+
 const confidenceStats = computed(() => {
-  const sequenceRow = confidenceRows.value.find((row) => row.key === 'sequence_stage')
-  const probs = (sequenceRow?.cells ?? []).map((cell) => cell.value).filter((v): v is number => v != null)
-  const avg = probs.length ? Math.round((probs.reduce((a, b) => a + b, 0) / probs.length) * 100) : null
-  const hesitant = probs.filter((value) => value < JEV_HESITANT_THRESHOLD).length
+  const probs: number[] = []
+  for (const point of confidenceBarsPoints.value) {
+    const cell = point.cells.sequence_stage
+    if (cell.kind === 'choice' && !cell.noDist && cell.value != null) probs.push(cell.value)
+  }
+  const avg = probs.length ? Math.round(probs.reduce((a, b) => a + b, 0) / probs.length) : null
+  const hesitant = probs.filter((value) => value < Math.round(JEV_HESITANT_THRESHOLD * 100)).length
   return [
     { label: '序列档平均 P', value: avg != null ? `${avg}%` : '--', sub: `${probs.length}/${slots.value.length} 槽有分布` },
     { label: '犹豫槽（P<60%）', value: String(hesitant), sub: `阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
@@ -1508,10 +1507,12 @@ const evidenceGroups = computed(() => {
 // ---------- ECharts（温度曲线 / 拥挤堆叠 / 置信趋势 / 日级柱图） ----------
 const thermoChartRef = ref<HTMLElement | null>(null)
 const crowdingChartRef = ref<HTMLElement | null>(null)
+const confidenceBarsChartRef = ref<HTMLElement | null>(null)
 const confidenceChartRef = ref<HTMLElement | null>(null)
 const dayChartRef = ref<HTMLElement | null>(null)
 let thermoChart: echarts.ECharts | null = null
 let crowdingChart: echarts.ECharts | null = null
+let confidenceBarsChart: echarts.ECharts | null = null
 let confidenceChart: echarts.ECharts | null = null
 let dayChart: echarts.ECharts | null = null
 
@@ -1688,6 +1689,86 @@ function renderCrowdingChart() {
   chart.resize()
 }
 
+function renderConfidenceBarsChart() {
+  const points = confidenceBarsPoints.value
+  const chart = initChart(confidenceBarsChartRef.value, confidenceBarsChart)
+  if (!chart || !points.length) return
+  confidenceBarsChart = chart
+  const textColor = cssVar('--text-secondary', '#9aa0a6')
+  const borderColor = cssVar('--border-color', '#333333')
+  const indicators = confidenceBarIndicators.value
+  const series: echarts.SeriesOption[] = []
+  for (const question of CONF_BARS_INDICATORS) {
+    if (!indicators.includes(question.key)) continue
+    // null（答案缺失/无分布）直传图表断线断柱，不补 0（fail-visible，同历史对比页签）
+    const data = points.map((point) => point.cells[question.key]?.value ?? null)
+    series.push(
+      question.type === 'line'
+        ? {
+            name: question.label, type: 'line', smooth: true, connectNulls: false,
+            symbol: 'circle', symbolSize: 5, data,
+            lineStyle: { color: question.color, width: 2 }, itemStyle: { color: question.color },
+          }
+        : { name: question.label, type: 'bar', barWidth: 12, data, itemStyle: { color: question.color } },
+    )
+  }
+  if (series.length) {
+    series[0].markLine = {
+      silent: true, symbol: 'none',
+      data: [{ yAxis: Math.round(JEV_HESITANT_THRESHOLD * 100) }],
+      lineStyle: { color: '#ff4757', type: 'dashed', width: 1 },
+      label: { color: '#ff4757', fontSize: 9, formatter: `犹豫阈值 ${Math.round(JEV_HESITANT_THRESHOLD * 100)}%` },
+    }
+  }
+  chart.setOption(
+    {
+      grid: { left: '8%', right: '8%', top: '12%', bottom: '12%', containLabel: true },
+      tooltip: {
+        trigger: 'axis', confine: true,
+        formatter: (params: unknown) => {
+          const list = Array.isArray(params) ? params : [params]
+          const first = list[0] as { dataIndex: number } | undefined
+          const point = first ? points[first.dataIndex] : undefined
+          if (!point) return ''
+          return [
+            `<div style="font-weight:600;margin-bottom:4px;">${point.label}${point.degraded ? ' · ⚠️降级' : ''}</div>`,
+            ...CONF_BARS_INDICATORS.filter((question) => indicators.includes(question.key)).map((question) => {
+              const cell = point.cells[question.key]
+              if (!cell) return ''
+              if (cell.kind === 'missing') return `<div>${question.label}：答案缺失</div>`
+              if (cell.noDist) return `<div>${question.label}：无分布（score 型未携带锚点分布）</div>`
+              const bits = [`${question.label}：${question.type === 'line' ? 'C' : 'P'}${cell.value == null ? '--' : `${cell.value}%`}`]
+              if (cell.choiceName) bits.push(cell.choiceName)
+              if (question.type !== 'line' && cell.confidence != null) bits.push(`置信 ${Math.round(cell.confidence * 100)}%`)
+              if (cell.margin != null) bits.push(`margin ${(cell.margin * 100).toFixed(0)}`)
+              if (cell.entropy != null) bits.push(`熵 ${cell.entropy.toFixed(2)}`)
+              if (cell.hesitant) bits.push('⚠️犹豫')
+              return `<div>${bits.join(' · ')}</div>`
+            }),
+          ].join('')
+        },
+      },
+      legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: textColor, fontSize: 10 } },
+      xAxis: {
+        type: 'category', data: points.map((point) => point.label),
+        axisLabel: { color: textColor, fontSize: 10, rotate: 30 },
+        axisLine: { lineStyle: { color: borderColor } },
+      },
+      yAxis: {
+        type: 'value', min: 0, max: 100, name: 'P / C（%）',
+        nameTextStyle: { color: textColor, fontSize: 9 },
+        splitLine: { lineStyle: { color: borderColor, type: 'dashed' } },
+        axisLabel: { color: textColor },
+      },
+      series,
+      backgroundColor: 'transparent',
+    },
+    // 指标开关减少序列时必须整体替换，merge 模式下旧序列会残留（同历史对比页签）
+    { notMerge: true },
+  )
+  chart.resize()
+}
+
 function renderConfidenceChart() {
   const points = confidencePoints.value
   const chart = initChart(confidenceChartRef.value, confidenceChart)
@@ -1842,13 +1923,17 @@ function renderDayChart() {
 function renderAllCharts() {
   if (view.value === 'thermometer') renderThermoChart()
   if (view.value === 'crowding' && windowKey.value !== '1d') renderCrowdingChart()
-  if (view.value === 'confidence') renderConfidenceChart()
+  if (view.value === 'confidence') {
+    renderConfidenceBarsChart()
+    if (windowKey.value !== '1d') renderConfidenceChart()
+  }
   if (view.value === 'grid') renderDayChart()
 }
 
 function handleResize() {
   thermoChart?.resize()
   crowdingChart?.resize()
+  confidenceBarsChart?.resize()
   confidenceChart?.resize()
   dayChart?.resize()
 }
@@ -1861,10 +1946,12 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   thermoChart?.dispose()
   crowdingChart?.dispose()
+  confidenceBarsChart?.dispose()
   confidenceChart?.dispose()
   dayChart?.dispose()
   thermoChart = null
   crowdingChart = null
+  confidenceBarsChart = null
   confidenceChart = null
   dayChart = null
 })
@@ -1998,6 +2085,20 @@ onUnmounted(() => {
 .time-btn.active { color: var(--text-primary); border-color: var(--color-highlight); background: var(--bg-primary); }
 .time-btn:disabled { opacity: 0.4; cursor: default; }
 .date-btn.active { color: var(--color-highlight); }
+/* 指标开关（置信度页签，热榜情绪·历史对比页签同语言） */
+.indicator-selector { display: flex; gap: 8px; flex-wrap: wrap; }
+.indicator-btn {
+  padding: 4px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.indicator-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.indicator-btn.active { background: var(--color-highlight); border-color: var(--color-highlight); color: #000; }
 
 .note-line { font-size: 11px; color: var(--text-secondary); }
 .note-line.warn-line { color: #f39c12; }
@@ -2016,50 +2117,6 @@ onUnmounted(() => {
 }
 .sub-block-title { font-size: 12px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
 .legend-line { font-size: 10px; color: var(--text-secondary); }
-
-/* ---------- 总览方格 ---------- */
-.grid-matrix {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 3px;
-}
-.grid-head {
-  font-size: 10px;
-  font-weight: 400;
-  color: var(--text-secondary);
-  padding: 2px 4px;
-  text-align: center;
-}
-.grid-col-active { color: var(--color-highlight); font-weight: 600; }
-.grid-row-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  text-align: right;
-  padding-right: 6px;
-}
-.grid-cell-wrap { min-width: 56px; }
-.grid-cell {
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  min-height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  padding: 3px 4px;
-  color: var(--text-primary);
-  background: var(--bg-secondary);
-}
-.grid-cell.degraded { border-style: dashed; border-color: #f39c12; }
-.grid-cell.no-data { opacity: 0.45; }
-.conf-cell { font-weight: 600; }
-.conf-matrix .grid-cell { min-height: 22px; font-size: 10px; }
-.conf-cell.no-dist {
-  font-size: 10px;
-  color: var(--text-secondary);
-  border-style: dotted;
-}
 
 /* ---------- 温度计 ---------- */
 .thermo-row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }

@@ -72,7 +72,7 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('窗口缺失')
   })
 
-  test('三大焦点可视化合同：温度计 SVG+锚分位 / 拥挤 waffle+层带+饼图 / 置信矩阵+趋势+分布明细', () => {
+  test('三大焦点可视化合同：温度计 SVG+锚分位 / 拥挤 waffle+层带+饼图 / 置信柱图+多日趋势+分布明细', () => {
     const source = panelSource()
     // 温度计：SVG 几何 + 近20日参照分位卡 + REVERSE 注记
     expect(source).toContain('thermo-svg')
@@ -87,23 +87,28 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     expect(source).toContain('毒层')
     expect(source).toContain("type: 'pie'")
     expect(source).not.toContain("stack: 'layers'")
-    // 置信度：矩阵 + 趋势线（犹豫阈值 markLine）+ margin/熵派生指标 + 答案分布明细（choice 全分布 + score 锚点）
-    expect(source).toContain('confidenceRows')
+    // 置信度：ECharts 柱状图（2026-10-07 用户令，热榜情绪·历史对比页签同语言：指标开关+柱=P+线=温度C）
+    //   + 多日趋势线（犹豫阈值 markLine）+ margin/熵派生指标 + 答案分布明细（choice 全分布 + score 锚点）
+    expect(source).toContain('confidenceBarsPoints')
+    expect(source).toContain('CONF_BARS_INDICATORS')
+    expect(source).toContain('indicator-btn')
+    expect(source).toContain('connectNulls: false')
     expect(source).toContain('犹豫阈值')
     expect(source).toContain('margin')
     expect(source).toContain('熵')
     expect(source).toContain('distRows')
     expect(source).toContain('score 锚点')
     // score 型（温度）纠错（2026-10-02）：实测携带锚点分布+置信，不再误标「无分布」——
-    // 矩阵格 C%=模型置信（不套 P 阈值色），明细卡渲染锚点分布条+锚期望，仅确缺失才标无分布
+    // 温度线 C%=模型置信（不套 P 阈值色），明细卡渲染锚点分布条+锚期望，仅确缺失才标无分布
     expect(source).toContain("metrics.kind === 'score'")
     expect(source).toContain('锚期望')
     expect(source).toContain('anchorTone')
     expect(source).toContain('scoreNoDist')
     expect(source).toContain('score 型分布=10 档锚点概率')
-    // ECharts 三图容器
+    // ECharts 四图容器（置信柱图 + 温度/拥挤/多日趋势）
     expect(source).toContain('thermoChartRef')
     expect(source).toContain('crowdingChartRef')
+    expect(source).toContain('confidenceBarsChartRef')
     expect(source).toContain('confidenceChartRef')
   })
 
