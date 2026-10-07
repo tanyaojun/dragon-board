@@ -338,6 +338,10 @@
 
           <!-- ④ 置信度：槽位 × 问题置信 ECharts 柱状图（热榜情绪·历史对比页签同语言：指标开关+柱+线）+ 派生指标 -->
           <section v-show="view === 'confidence'" class="tab-pane">
+            <!-- 缺失日披露放在数据分支之外：整窗全缺时也必须可见（fail-visible，同叙事概览语言） -->
+            <div v-if="windowKey !== '1d' && missingDays.length" class="note-line warn-line">
+              ⚠️ 窗口缺失 {{ missingDays.length }} 日（无任何 jev 文档，图中无此柱）：{{ missingDays.map((d) => d.tradingDate.slice(5)).join('、') }}
+            </div>
             <div v-if="!confidenceBarsPoints.length" class="empty-row">该日无置信数据</div>
             <template v-else>
               <div class="indicator-selector">
@@ -396,10 +400,6 @@
                       : 'score 型分布=10 档锚点概率（锚期望 / 9 × 100 = 还原温度分）' }}</div>
                   </div>
                 </div>
-              </div>
-              <!-- 多日窗口缺失日标注（fail-visible：X 轴只含有文档的交易日，缺失日另行披露，同叙事概览语言） -->
-              <div v-if="windowKey !== '1d' && missingDays.length" class="note-line warn-line">
-                ⚠️ 窗口缺失 {{ missingDays.length }} 日（无任何 jev 文档，图中无此柱）：{{ missingDays.map((d) => d.tradingDate.slice(5)).join('、') }}
               </div>
               <div class="note-line research-line">
                 🔎 研究注记：choice 答案携带 probabilities/confidence；score 型答案（温度）实测同样携带 10 档锚点分布 + 模型置信
@@ -1286,9 +1286,14 @@ const confidenceBarsPoints = computed<ConfidenceBarPoint[]>(() => {
 
 const confidenceBarIndicators = ref<ConfidenceBarKey[]>(CONF_BARS_INDICATORS.map((question) => question.key))
 
-// 窗口 1天↔多日 切换时题目集合整体换代：重置为当前模式全选（图表重渲染由 setWindow 的 renderAllCharts 负责）
+// 窗口 1天↔多日 切换时题目集合整体换代：当前选择含已换代旧题时重置为全选；
+// 同为多日档（3日↔1周↔30日）题目集合相同，保留用户开关状态（图表重渲染由 setWindow 的 renderAllCharts 负责）
 watch(windowKey, () => {
-  confidenceBarIndicators.value = confBarsActiveQuestions.value.map((question) => question.key)
+  const activeKeys = confBarsActiveQuestions.value.map((question) => question.key)
+  const current = confidenceBarIndicators.value
+  if (!current.every((key) => activeKeys.includes(key))) {
+    confidenceBarIndicators.value = [...activeKeys]
+  }
 })
 
 const confidenceBarsSeries = computed(() =>

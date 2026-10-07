@@ -96,6 +96,10 @@ describe('JevNarrativePanel 独立 JEV 叙事面板', () => {
     // 历史维度五档（2026-10-07 用户令）：1天/3日/1周/10日/30日——30日为新增档（后端 range days 上限 30 对齐）
     expect(source).toContain("key: '30d'")
     expect(source).toContain('30日')
+    // 窗口切换指标选择守卫：题目集合换代（1天↔多日）才重置全选，同模式档位间保留用户开关状态
+    expect(source).toContain('activeKeys.includes(key)')
+    // 缺失日披露在数据分支之外：整窗全缺走空态时也必须可见（fail-visible）
+    expect(source).toContain('缺失日披露放在数据分支之外')
     expect(source).toContain('connectNulls: false')
     expect(source).toContain('犹豫阈值')
     expect(source).toContain('margin')
