@@ -181,7 +181,6 @@ def main() -> None:
         config = RankTrendConfig.from_patch(trial["overrides"])
         _assert_overrides_applied(config, trial["overrides"])
         results[key] = {"desc": trial["desc"], "overrides": trial["overrides"], "windows": {}, "track1": {}}
-        temp_per: dict[str, dict[str, list[str]]] = {}
         for name, (start, end) in WINDOWS.items():
             wf = window_frames(frames, start, end)
             if not wf:
@@ -193,12 +192,11 @@ def main() -> None:
             )
             results[key]["windows"][name] = reading
             if name == "decision":
-                temp_per[key] = per_signal  # 只进内存，迁移矩阵算完即弃（产物体积控制）
+                per_signal_store[key] = per_signal  # 只进内存，迁移矩阵算完即弃（产物体积控制）
                 results[key]["track1"]["decision"] = _track1(config, wf)
                 m = results[key]["track1"]["decision"]
                 print(f"[{key}] track1 decision: trades={m.get('tradeCount')} wrxpf={m.get('winRateXpf')} "
                       f"dd={m.get('maxDD')}", file=sys.stderr)
-        per_signal_store[key] = temp_per.get("decision", {})
         # 逐臂 checkpoint（Q1 教训：最终序列化崩=全失）
         _flush(out_path, results, keys, t0, note=f"checkpoint after {key}")
 

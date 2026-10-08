@@ -580,7 +580,7 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **通用判定卡条款沉淀**：触发率披露（<2%/=0 → 零效应不提交）+retreat 桶 n<50 股帧降级只披露（帧数≠股帧样本数口径澄清）——后续门类合同全款继承。
 - **回退**：零行为零参数改动，无需回退；`voting-signals-w2x-gates.json` 本地不入库。
 
-## 23. 生命周期 P5 双轴重设计·allow 腿分位带门 trial（2026-10-08：全臂 FAIL 阴性登记，零默认改动）
+## 25. 生命周期 P5 双轴重设计·allow 腿分位带门 trial（2026-10-08：全臂 FAIL 阴性登记，零默认改动；原编 §23 与三裁决执行批撞号，2026-10-08 勘误为 §25）
 
 > 合同 `lifecycle-p5-preregistration.md`（判定线冻结于跑数前；用户令「请执行 P5 双轴重设计」）。前置诊断
 > `diagnose_lifecycle_p5_dual_axis.py`（D1 stage×pct MI=0.2894 vs shuffle 0.0002=「stage≈分位带函数」定量实锤；
@@ -612,3 +612,20 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
   MI 用 shuffle 基线（seed 20261007）；2D 门读数塌缩暴露 saEx 对 A 档样本量的敏感性（<2000 帧→None），
   后续剂量设计须预先核对最小样本量。
 - **回退**：零行为零默认改动；golden 重录仅 configRepr 文本。基线锚自证（0.1450/0.0983/0.1057）与 G1 §18/Q1 §22 一致。
+
+## 26. W1-1 共振 D∧buy 倒挂票 trial 收官（2026-10-08：全臂 FAIL_C1 阴性登记，零默认改动；Track1 双正对照发现）
+
+> 合同 `vote-w11-res-dbuy-preregistration.md`（判定线冻结于跑数前；外部审定=用户明示简化已登记 §五）。产物 `data/reports/vote-w11-res-dbuy-trials.json`（本地不入库；3 臂×3 窗+2 Track1，逐臂 checkpoint）+迁移矩阵补丁 `vote-w11-migration-patch.json`（harness 取键 bug 修复后补跑披露面）。
+
+| 臂 | rel（decision/oos1/oos2） | 判定 | Track1（decision 窗） |
+|---|---|---|---|
+| cap_b（D∧buy 封顶 B +0.525） | −0.58% / +1.98% / +0.49% | **FAIL_C1**（C2/C3 过） | wrxpf 0.4358 vs 0.4140=**+5.27%**；maxDD −0.2202 vs −0.2231 改善；174 vs 172 笔 |
+| abstain（D∧buy 弃权票 0） | −0.10% / +0.15% / +1.05% | **FAIL_C1**（C2/C3 过） | wrxpf +4.28%；maxDD −0.2213 改善；174 笔 |
+
+- **B0 自证三窗逐位 PASS**（0.14503/0.09825/0.11716）；护栏满值：resS 14,370（=基线）、synS 127、**res tier 分布逐位一致**（res 维不动实现守卫兑现）；retreat 桶 saEx 逐位相同 0.2197（改判不触 retreat 桶 S/A 面），strong 桶信号面降（0.1189/0.1167 vs 0.1234）——两臂同向非反号，不触挂起。
+- **S 档守门结构完好（披露义务核心项）**：两臂 S→S 全保 127/127；改判面 cap_b 606 帧（6.1%：B→C 554/A→B 15/C→D 37）、abstain 4,369 帧（44%：C→D 2,973/B→C 1,373 等）——剂量递增符合机制预期。
+- **判定（合同 W1-1.3 冻结）**：全臂 C1 不过 → 阴性登记不提交，零默认改动（`tierSynergyResonanceDbuyMode="off"` 单开关即现默认，本来未动）。倒挂票语义资产保留在展示层（_resonance_tier 不变）。
+- **对照发现（如实登记非准入）**：信号面 C1 不过而 **Track1 双臂正**（wrxpf +5.27%/+4.28%+maxDD 双改善）——D∧buy 倒挂票修正的收益在**交易面（入场质量/回撤）不在信号面（excess 判别）**，与 P5 a3 对照发现（Track1 +0.0111 与信号面恶化并存）跨线互证=「修正票值类机制的价值主要在负向过滤成交面」的第二个独立证据。**重开唯一合法路径=新合同以 Track1 为主判定面重新预登记**（P5 台账同款处置）。
+- **接线与测试**：`tierSynergyResonanceDbuyMode`（off/cap_b/abstain，默认 off 零行为）+ `_synergy_tier` res 投票点分支（cap_b 读强度表 min(D,B)、长度≠6 断言报错不走 fallback；abstain 票 0；D∧sell 真反向/非 D 档/其他维零触碰）；专项 11 过（行为等价断言法：cap_b≡B∧buy 原路径、abstain≡res 不计票）；golden 重录 diff 干净（configRepr 6 处 +1 字段文本，场景输出零漂移）；ranktrend 667 全绿；Redis analyze 键清+8000 已重启。
+- **harness 教训（登记防再犯）**：per_signal 存取键错位（`temp_per.get("decision")` 应按臂名取）——判定面数据完好，披露面（迁移矩阵）首轮为空；修复后 3×decision 窗 replay 补跑补全。harness 首跑前只验证了编译+import，数据流键位未经验证——**披露义务类代码路径应在 smoke 臂上先验一遍**。
+- **回退**：单开关 off 即基线（未落默认，无回退需求）。

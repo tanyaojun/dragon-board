@@ -412,11 +412,28 @@ def _synergy_tier(
 
     # 维度票权重参数化（2026-09-14）：res/rank/vp 默认 1.0=原硬编码行为（golden 不漂移）；
     # cs 既有 config 权重。vp E→D 硬降为结构规则（上方早退分支），不随权重归零。
-    v = (
-        _vote(res_tier, res_dir) * float(getattr(c, "tierSynergyResonanceVote", 1.0) or 0.0)
-        + _vote(rank_tier, rank_dir) * float(getattr(c, "tierSynergyRankVote", 1.0) or 0.0)
-        + (_vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0) if vp_e_forced_vote is None else vp_e_forced_vote)
-    )
+    # W1-1 res D∧buy 倒挂票（合同 vote-w11-res-dbuy-preregistration.md，默认 off 恒走原路径=零行为）：
+    # D∧buy（⟺reversal_penalty≥0.6 驱动路径 1；D∧sell 真反向 D 两案都不动、rank/vp/cs 不触及）
+    # cap_b=票值封顶 B（min(强度D,强度B)，读 tierSynergyVoteStrengths 表、长度≠6 断言报错不走
+    # fallback——防静默回退旧硬编码，§15 list-shape 守卫同族）；abstain=弃权票 0。
+    res_dbuy_mode = str(getattr(c, "tierSynergyResonanceDbuyMode", "off") or "off")
+    if res_dbuy_mode != "off" and res_tier == "D" and res_dir in ("buy", "up"):
+        if res_dbuy_mode == "cap_b":
+            _w11_strengths = getattr(c, "tierSynergyVoteStrengths") or []
+            if len(_w11_strengths) != 6:
+                raise ValueError(
+                    f"tierSynergyVoteStrengths 长度必须为 6（cap_b 取 min(D,B) 强度），实际 {len(_w11_strengths)}"
+                )
+            res_vote_w11 = min(float(_w11_strengths[_VOTE_STRENGTH_ORDER.index("D")]), float(_w11_strengths[_VOTE_STRENGTH_ORDER.index("B")]))
+        else:  # abstain
+            res_vote_w11 = 0.0
+        v = res_vote_w11 * float(getattr(c, "tierSynergyResonanceVote", 1.0) or 0.0) + _vote(rank_tier, rank_dir) * float(getattr(c, "tierSynergyRankVote", 1.0) or 0.0) + (_vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0) if vp_e_forced_vote is None else vp_e_forced_vote)
+    else:
+        v = (
+            _vote(res_tier, res_dir) * float(getattr(c, "tierSynergyResonanceVote", 1.0) or 0.0)
+            + _vote(rank_tier, rank_dir) * float(getattr(c, "tierSynergyRankVote", 1.0) or 0.0)
+            + (_vote(vp_tier, vp_dir) * float(getattr(c, "tierSynergyVolumePriceVote", 1.0) or 0.0) if vp_e_forced_vote is None else vp_e_forced_vote)
+        )
     cs_weight = float(getattr(c, "tierSynergyCrossSectionVote", 0.0) or 0.0)
     if cs_weight and cs_tier:
         if cs_tier == "A_PERSIST":

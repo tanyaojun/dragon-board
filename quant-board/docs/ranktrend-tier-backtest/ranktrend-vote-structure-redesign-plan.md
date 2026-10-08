@@ -47,6 +47,7 @@
 - **验证**：判定卡+Track 1+per-dim res 迁移矩阵（预期 D∧buy 帧 6.6% 中部分降 B/C，saEx 盲区面大→Track 1 权重高）+市况分桶。
 - **成本**：3 候选 ×（replay+Track 1）≈ 6 当量。
 - **执行记录（2026-10-07 晚）**：**合同备料完成** `vote-w11-res-dbuy-preregistration.md`（待用户过目→外部模型审定→用户裁决开跑）。机制勘误=候选 c 与 b **数学等价**（D∧buy⟺reversal_penalty≥0.6 驱动，D∧sell 独立路径不动），并案后按两臂执行（cap_b/abstain，单参三态 `tierSynergyResonanceDbuyMode` 默认 off 零行为）；票值算术核实 +0.75 > B +0.525。**接线须待 Q1 线收官**（config.py 缠绕+trial 活进程），台账 §21。
+- **执行记录二（2026-10-08，trial 收官）**：**全臂 FAIL_C1 阴性登记，零默认改动**（P5 收官解锁后接线→专项 11 测试→golden 重录→trial）。B0 逐位自证 PASS；护栏满值+res 分布逐位一致+S 档守门 127/127 两臂全保；C1 双臂不过（cap_b −0.58%/abstain −0.10%）但 **Track1 双正（wrxpf +5.27%/+4.28%+maxDD 改善）**=「倒挂票修正收益在交易面不在信号面」，与 P5 a3 跨线互证；重开唯一合法路径=新合同以 Track1 为主判定面重新预登记。台账 §26、语料 §13.3 补位。
 
 ### W1-2 rank 稀疏票诊断（零行为，与 W1-1 同批顺路）
 

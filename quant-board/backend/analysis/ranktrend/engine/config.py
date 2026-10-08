@@ -175,6 +175,10 @@ class RankTrendConfig:
     # oos +7.5%/+26.6%，C1-C5 全过），vp 两轮证据维持 1.0（窄峰，两侧受损）。
     # 回退 = 三字段还原 1.0。结构下限：三轴同减 ≤0.5 时 S/A 档塌缩（长测计划 §23.9）。
     tierSynergyResonanceVote: float = 0.75  # resonance 票权重（共振维自阶段 3 修复方向 1 起在 replay 投票）
+    # W1-1 res D∧buy 倒挂票（2026-10-08 合同 vote-w11-res-dbuy-preregistration.md；默认 off=零行为）：
+    # D∧buy（reversal_penalty≥0.6 驱动，D∧sell 真反向不动）cap_b=票值封顶 B（min(强度D,强度B)×res 权重）
+    # /abstain=弃权票 0
+    tierSynergyResonanceDbuyMode: str = "off"  # 枚举 off/cap_b/abstain（_validate_tier_constraints 校验）
     tierSynergyRankVote: float = 0.75  # rankTrend 票权重
     tierSynergyVolumePriceVote: float = 1.0  # volumePrice 票权重（注意：vp E→D 出货硬降为结构规则，不随权重归零）
     tierSynergyCrossSectionVote: float = 0.75  # crossSection 第 5 维投票权重（1.0=启用，2026-08-17 用户决策默认打开；2026-09-14 阶段 23.9 降权 0.75）
@@ -596,6 +600,7 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
         ("lifecycleTimeGapStrictness", ("off", "cross_day", "non_adjacent")),
         ("lifecycleGapPriceVolumeMode", ("off", "direction_gate")),
         ("lifecycleAllowBandGateMode", ("off", "pct_band", "pct_velocity")),
+        ("tierSynergyResonanceDbuyMode", ("off", "cap_b", "abstain")),
         ("resonanceWarmingTierCap", ("none", "C", "B")),
     ):
         _mode_value = str(getattr(config, _mode_field))
