@@ -94,6 +94,28 @@ def persist_daily_line(report: dict[str, Any]) -> str | None:
         return None
 
 
+def persist_calib_drift(report: dict[str, Any]) -> str | None:
+    """校准漂移监控落库（_id=calib_drift:<YYYY-MM>，report.month 必填，月度幂等 upsert）。失败返回 None。
+
+    消费方：月度重校准例检/告警排查（emotion-score-calib-monitor-design.md）；advisory 证据链。
+    """
+    month = str(report.get("month") or "")
+    if not month:
+        print("[phase-monitor-persist] calib_drift 落库跳过：report.month 缺失", file=sys.stderr)
+        return None
+    try:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+
+        db = get_runtime_mongodb_database()
+        doc = {"_id": f"calib_drift:{month}", "kind": "calib_drift", "month": month,
+               "report": report, "updatedAt": _now()}
+        db["phase_monitor"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return doc["_id"]
+    except Exception as exc:  # noqa: BLE001 — 证据链不因落库失败中断
+        print(f"[phase-monitor-persist] calib_drift 落库失败（不阻断）: {exc}", file=sys.stderr)
+        return None
+
+
 def persist_divergence(report: dict[str, Any]) -> str | None:
     """分歧哨兵落库（_id=divergence:<YYYY-MM>，report.month 必填）。失败返回 None。"""
     month = str(report.get("month") or "")

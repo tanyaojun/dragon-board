@@ -303,6 +303,57 @@ def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+def _run_calib_drift_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """校准漂移监控（advisory 步，2026-10-08 D 项，emotion-score-calib-monitor-design.md）。
+
+    - 门控=当日 EOD 情绪文档存在（与脉拍同门控）；
+    - 子进程=emotion_score_calib_monitor --date --apply（滚动窗口分位漂移 vs _CALIB 锚，
+      |漂移|>10 告警落库 phase_monitor calib_drift:<month>；只探测不重写评分口径）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（校准健康监控，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_pulse(db, today, dataset_id, snapshot_type)
+    except Exception as exc:  # noqa: BLE001 — 门控查询失败按跳过处理（fail-visible 记原因）
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.emotion_score_calib_monitor",
+             "--date", today, "--apply"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "calib_drift_timeout", "message": "timeout 300s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "calib_drift_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    mongo_fresh = False
+    alert_count = None
+    month = today[:7]
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc = db["phase_monitor"].find_one({"_id": f"calib_drift:{month}"},
+                                            {"updatedAt": 1, "report.alerts": 1})
+        updated = str((doc or {}).get("updatedAt") or "")
+        mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
+        alert_count = len((((doc or {}).get("report") or {}).get("alerts")) or [])
+    except Exception:  # noqa: BLE001 — advisory 步不翻转整体状态
+        pass
+    result: dict[str, Any] = {"ok": True, "date": today, "month": month,
+                              "alertCount": alert_count, "mongoFresh": mongo_fresh}
+    if not mongo_fresh:
+        result["mongoWarning"] = "phase_monitor calib_drift:<month> updatedAt 未刷新（advisory 不翻转）"
+    return result
+
+
 def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """两市额同期比 vsSamePct 只记录不评分（advisory 步，2026-10-06 评估报告建议 2 落地）。
 
@@ -547,11 +598,12 @@ def run_after_market_once(
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
         jev_daily_line_result = _run_jev_daily_line_step(today, dry_run=dry_run)
+        calib_drift_result = _run_calib_drift_step(today, dry_run=dry_run)
         amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -562,6 +614,7 @@ def run_after_market_once(
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,
                 "jevDailyLine": jev_daily_line_result,
+                "calibDriftMonitor": calib_drift_result,
                 "amountVsSameRecord": amount_vs_same_result,
             },
             archive_limit=archive_limit,

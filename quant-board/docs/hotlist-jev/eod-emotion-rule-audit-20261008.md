@@ -87,4 +87,7 @@ bounce 不入映射〔锄案例 09-24 裁决 dd 优先〕）；回放 114 日：
 
 1. ~~今天先裁 A~~（✅ 已执行，见执行记录）
 2. ~~B+C 合并预登记~~（✅ 已执行，见执行记录）
-3. D/E/F/G 排入常态节奏。
+3. ~~D/E/F/G 排入常态节奏~~（D ✅ 已执行 2026-10-08：emotion_score_calib_monitor 挂链
+   advisory 步 calibDriftMonitor，首跑抓到真实漂移 9 条告警〔riskRowsPct/riskShare 全分位
+   正向 +24~+32、attackShare P75 +11.6〕——月度重校准有了立项依据，按设计文档 §2 流程
+   预登记裁决后动曲线；反向维锚定网格发现并登记（P90 代 P95）；E/F/G 仍排常态节奏）
