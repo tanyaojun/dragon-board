@@ -161,20 +161,38 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
     }
 
 
-def map_stage(score: float, slope: float | None = None) -> str:
+# EOD 方向判别冻结阈值（B+C 预登记 2026-10-08，emotion-score-map-stage-bc-preregistration.md；
+# 回放验证落在稳定平台：变体 −6/−8 同结果、−10/−15 腰斩，非刀锋边界）
+_DD_RETREAT_THRESHOLD = -8.0     # EOD 自日内峰回撤≤此值 → 退潮（修尾盘反抽日）
+_UPPER_BAND_STRONG_SLOPE = -10.0  # ≥60 段强负 slope → 退潮（修高位急跌日，浅回落不接管）
+
+
+def map_stage(score: float, slope: float | None = None, path: dict | None = None) -> str:
     """分数 → 五档映射（边界设计值经 T1.5 score 实测分布核对；spec v3 §3.3）。
 
-    score 主导 + slope 方向修正（区分退潮/冰点/启动的方向语义）；高潮压制条款已按审计 B3 删除。
-    2026-10-08 预登记（emotion-score-map-stage-direction-preregistration.md，用户裁决选 A）：
-    [40,60) 中段接 slope<0 → 退潮（修复高位回落日被判启动的方向性错误，回放：候选层单向迁移
-    150/1195 槽、EOD 17 天，其它档位零触碰；slope=None 缺失不发明退潮）。
+    score 主导 + slope/dd 方向修正；高潮压制条款已按审计 B3 删除。
+    - A 预登记（2026-10-08）：[40,60) slope<0 → 退潮（修高位回落日误判启动）；
+    - B+C 预登记（2026-10-08）：path 仅 EOD 传入（盘中槽恒 None 零行为变化）——
+      ≥60 段接强方向（dd≤−8 或 slope<−10 → 退潮，消除 60 边界跳变）；中段 dd≤−8
+      补充 slope（修尾盘反抽日：全天跌末步 +1 的日 子）；dd 缺失退化现行规则
+      （fail-visible 不发明方向）；bounce 不入映射（锚案例 09-24 裁决 dd 优先）。
+      回放：114 日迁移 8 天（启动→退潮 5 + 发酵→退潮 3），其它档位零触碰。
     """
+    dd: float | None = None
+    if isinstance(path, dict):
+        raw_dd = path.get("dd")
+        if isinstance(raw_dd, (int, float)) and not isinstance(raw_dd, bool):
+            dd = float(raw_dd)
     if score >= 75:
         return "高潮"
     if score >= 60:
+        if (dd is not None and dd <= _DD_RETREAT_THRESHOLD) or (slope is not None and slope < _UPPER_BAND_STRONG_SLOPE):
+            return "退潮"
         return "发酵"
     if score >= 40:
-        return "退潮" if (slope is not None and slope < 0) else "启动"
+        if (dd is not None and dd <= _DD_RETREAT_THRESHOLD) or (slope is not None and slope < 0):
+            return "退潮"
+        return "启动"
     if slope is not None and slope < 0:
         return "退潮"
     return "冰点"

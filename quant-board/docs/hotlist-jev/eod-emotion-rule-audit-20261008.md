@@ -78,6 +78,13 @@
 `data/backups/hotlist_sentiment_8dim_20261008.json`；接线守卫测试 monkeypatch 开门验证不回归。
 日度一句话/带/相位合同验证不变。B+C 已裁决接续执行。
 
+**B+C 执行记录（2026-10-08）**：预登记 emotion-score-map-stage-bc-preregistration.md（判定线冻结
+于回放前：EOD path={dd}，≥60 段 dd≤−8 或 slope<−10 →退潮，中段 dd≤−8 补充 slope<0，
+bounce 不入映射〔锄案例 09-24 裁决 dd 优先〕）；回放 114 日：迁移 8 天（启动→退潮 5 +
+发酵→退潮 3，其它零触碰），阈值平台稳定（−6/−8 同结果、−10/−15 腰斩），V 型披露面 16 天；
+实现 map_stage path 参数 + EOD 接线（pathDiag 前移，盘中槽零行为变化）；今日重算验证
+41.6/slope−14.1/dd−23.4 → 退潮不漂移；tests/hotlist 296 过 + 后端全量 3356 过。
+
 1. ~~今天先裁 A~~（✅ 已执行，见执行记录）
-2. B+C 合并一份预登记（同为方向语义家族，回放可共用）。
+2. ~~B+C 合并预登记~~（✅ 已执行，见执行记录）
 3. D/E/F/G 排入常态节奏。

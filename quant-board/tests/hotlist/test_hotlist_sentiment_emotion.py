@@ -276,3 +276,35 @@ def test_document_limitstruct_skip_diagnostic_line():
     assert any(d.startswith("emotion_limitstruct_unavailable") for d in missing["diagnostics"])
     # limit 在场 → 无该诊断行
     assert not any(d.startswith("emotion_limitstruct_unavailable") for d in doc["diagnostics"])
+
+
+def test_document_eod_path_direction_vs_slot(monkeypatch):
+    """B+C 预登记（2026-10-08）wiring：EOD 档方向判别消费 pathDiag.dd，盘中槽不消费。
+
+    场景=尾盘反抽日：日内 75→50，EOD 50/末步 slope 0（构造 history 末点=50）——
+    EOD dd=−25 命中退潮（旧规则 slope=0 判启动=误判）；同数据 10:30 槽位保持末步差分语义。
+    """
+    import backend.analysis.hotlist.emotion_score as es_mod
+    monkeypatch.setattr(es_mod, "compute_emotion_score",
+                        lambda ev, slope=None: {"score": 50.0, "dims": {}, "skippedDims": [],
+                                                "stageCandidate": None})
+    history = {"rawStagePoints": [("09:30", "发酵"), ("10:00", "发酵")],
+               "scorePoints": [("09:30", 75.0), ("10:00", 50.0)],
+               "historyStatus": "complete", "diagnostics": []}
+    eod = build_hotlist_sentiment_document(
+        dataset_id="d1", snapshot_type="half_hour", trading_date="2026-10-08",
+        frame=_frame("15:00"), stocks=_bull_stocks(), stage_history=history)
+    assert eod["slotTime"] == "EOD"
+    assert eod["emotionScore"]["pathDiag"]["drawdownFromHigh"] == -25.0
+    assert eod["rawStage"] == "退潮"  # dd≤−8 接管（B 目标场景）
+    slot = build_hotlist_sentiment_document(
+        dataset_id="d1", snapshot_type="half_hour", trading_date="2026-10-08",
+        frame=_frame("10:30"), stocks=_bull_stocks(), slot_time="10:30",
+        current_slot="10:30", stage_history=history)
+    assert slot["rawStage"] == "启动"  # 盘中槽 path=None：末步差分语义零变化
+    # wiring 自洽：档位 ≡ 自身 emotionScore 字段重放（EOD 带 dd，槽位不带）
+    es = eod["emotionScore"]
+    assert eod["rawStage"] == es_mod.map_stage(es["score"], es["slope"],
+                                               {"dd": es["pathDiag"]["drawdownFromHigh"]})
+    ss = slot["emotionScore"]
+    assert slot["rawStage"] == es_mod.map_stage(ss["score"], ss["slope"], None)

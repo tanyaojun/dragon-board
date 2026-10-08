@@ -151,3 +151,33 @@ def test_map_stage_boundaries():
     assert map_stage(59.9, slope=-0.1) == "退潮"   # 中段下边界：slope<0 即退潮
     assert map_stage(40, slope=-0.1) == "退潮"
     assert map_stage(40) == "启动"
+
+
+def test_map_stage_path_direction_eod():
+    """B+C 预登记（2026-10-08）：path 仅 EOD 消费——dd 修尾盘反抽日，强 slope 修高位急跌日。"""
+    # B 场景：中段尾盘反抽日（全天跌但末步 slope≥0，旧规则误判启动）
+    assert map_stage(50, slope=2, path={"dd": -20}) == "退潮"
+    assert map_stage(50, slope=2, path={"dd": -8}) == "退潮"     # 边界含等号（冻结线 ≤−8）
+    assert map_stage(50, slope=2, path={"dd": -7.9}) == "启动"   # 浅路径不接管，交 slope
+    # C 场景：≥60 段急跌日
+    assert map_stage(62, slope=-13, path={"dd": -11}) == "退潮"  # dd 命中
+    assert map_stage(62, slope=-13, path={"dd": -4}) == "退潮"   # 强 slope（<−10）接管
+    assert map_stage(62, slope=-5, path={"dd": -4}) == "发酵"    # 浅回落不接管
+    assert map_stage(62, slope=0, path={"dd": -8}) == "退潮"     # dd 边界命中
+    # 锚案例 09-24（dd−9.1/slope−2.3/bounce+26 → 退潮，用户盘感裁决 dd 优先）
+    assert map_stage(50.6, slope=-2.3, path={"dd": -9.1}) == "退潮"
+    # 60 边界两侧一致（C 消除跳变：59.9/−20 与 60/−20 同判退潮）
+    assert map_stage(59.9, slope=-20, path={"dd": -5}) == "退潮"
+    assert map_stage(60.0, slope=-20, path={"dd": -5}) == "退潮"
+    # 低分段不接 path（变更面最小）
+    assert map_stage(35, slope=2, path={"dd": -20}) == "冰点"
+
+
+def test_map_stage_path_missing_degrades_to_slope_rules():
+    """path 缺失/畸形 → 现行 slope 规则（fail-visible：不发明方向）。"""
+    assert map_stage(50, slope=2) == "启动"
+    assert map_stage(50, slope=2, path={}) == "启动"
+    assert map_stage(50, slope=2, path={"dd": None}) == "启动"
+    assert map_stage(50, slope=2, path={"dd": "bad"}) == "启动"
+    assert map_stage(50, slope=-1, path={"dd": "bad"}) == "退潮"  # slope 仍生效
+    assert map_stage(62, slope=-5, path=None) == "发酵"

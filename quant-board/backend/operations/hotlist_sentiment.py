@@ -723,15 +723,9 @@ def build_hotlist_sentiment_document(
     score_points = list((stage_history or {}).get("scorePoints") or [])
     prev_score = score_points[-1][1] if score_points else None
     slope = round(score_value - prev_score, 2) if (score_value is not None and prev_score is not None) else None
-    raw_stage_value = map_stage(score_value, slope) if score_value is not None else None
-    # activeDims（2026-10-05 方向二报告 §六#8）：有效维基数戳，跨日可比性按此字段分段
-    # （历史文档缺该键=旧代，fail-visible）。2026-10-08 勘误：原注预期「10-09 amountVsSame
-    # 激活 7→8」与 10-06 评估「暂不启用」矛盾，且 10-08 已被实证自动激活（audit P1-1）——
-    # 现裁决 A-① 冻结该维（emotion_score._AMOUNT_VS_SAME_ENABLED=False），有效维回到 7。
-    active_dims = 8 - len(emotion.get("skippedDims") or [])
-    # pathDiag（2026-10-05 方向一，GLM 研讨）：日内路径诊断——极值+自高点回撤+自低点反弹。
-    # 纯诊断字段：不进 map_stage、不进档位/regime/门控链；回落中（drawdownFromHigh<0）
-    # 与修复后（bounceFromLow>0）的方向语义可判（09-24 类分歧的裁决原料）。
+    # pathDiag（2026-10-05 方向一；B+C 预登记 2026-10-08 前移至档位映射前）：日内路径诊断
+    # ——极值+自高点回撤+自低点反弹。B+C 后 drawdownFromHigh 在 EOD 档进入 map_stage 方向判别
+    # （仅 EOD；盘中槽 pathDiag 仍为纯诊断字段，不进档位/regime/门控链）。
     path_diag = None
     if score_value is not None:
         series = [(str(t), float(v)) for t, v in score_points if isinstance(v, (int, float))]
@@ -745,13 +739,23 @@ def build_hotlist_sentiment_document(
             "bounceFromLow": round(float(score_value) - lo_v, 1),
             "points": len(series),
         }
+    # B+C：仅 EOD（slot_time 哨兵为空 → 日级终值）传 path；盘中槽 path=None 保持末步差分
+    # （响应性 + 变更面零）；dd 缺失时 map_stage 内部退化现行规则（fail-visible）。
+    stage_path = ({"dd": path_diag["drawdownFromHigh"]}
+                  if (not slot_time and path_diag is not None) else None)
+    raw_stage_value = map_stage(score_value, slope, path=stage_path) if score_value is not None else None
+    # activeDims（2026-10-05 方向二报告 §六#8）：有效维基数戳，跨日可比性按此字段分段
+    # （历史文档缺该键=旧代，fail-visible）。2026-10-08 勘误：原注预期「10-09 amountVsSame
+    # 激活 7→8」与 10-06 评估「暂不启用」矛盾，且 10-08 已被实证自动激活（audit P1-1）——
+    # 现裁决 A-① 冻结该维（emotion_score._AMOUNT_VS_SAME_ENABLED=False），有效维回到 7。
+    active_dims = 8 - len(emotion.get("skippedDims") or [])
     emotion_doc = {
         "score": score_value,
         "dims": emotion["dims"],
         "skippedDims": emotion["skippedDims"],
         "activeDims": active_dims,
         "pathDiag": path_diag,
-        # 与 rawStage 同值（审计 S10：本帧映射档位含斜率修正，防两值不一致）
+        # 与 rawStage 同值（审计 S10：本帧映射档位含方向修正，防两值不一致）
         "stageCandidate": raw_stage_value,
         "slope": slope,
         "version": "score-v1",
