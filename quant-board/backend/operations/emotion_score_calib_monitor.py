@@ -41,7 +41,7 @@ MIN_SAMPLE = 30
 SUSTAINED_MONTHS = 3
 # 有 stored raw 的检测维（limitStruct raw 恒 null=复合维，结构性排除）
 MONITORED_DIMS = ("upRatio", "attackShare", "riskShare", "trin", "yhPositive", "riskRowsPct")
-EXCLUDED_DIMS = {"limitStruct": "composite_dim_raw_null", "amountVsSame": "frozen_gate_a1"}
+EXCLUDED_DIMS = {"limitStruct": "composite_dim_raw_null", "amountVsSame": "retired_study_b_20261008"}
 READY_DAYS_THRESHOLD = 20
 
 

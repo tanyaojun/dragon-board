@@ -35,8 +35,9 @@ _CALIB = {
     "trin": [(0.0, 95), (0.5176, 90), (0.699, 75), (0.959, 50), (1.301, 25), (1.674, 10), (4.0, 0)],
     # 昨日涨停承接正收益率（1080 槽实测）
     "yhPositive": [(0.0, 5), (0.4375, 10), (0.6407, 50), (0.8478, 90), (1.0, 100)],
-    # 量能同期对比（百分点；历史帧无 totalAmount，设计值待积累 ≥20 交易日后校准）
-    "amountVsSame": [(-80, 0), (-30, 25), (0, 50), (30, 80), (80, 100)],
+    # 量能同期对比：评分维已永久退役（2026-10-08 研究轮出口 b，不参与评分），条目仅存档：
+    # record_amount_vs_same 自带同款曲线副本用于 amountVsSameSubDesign 对照字段
+
     # 风险预警行占比（反向；1081 槽实测）
     "riskRowsPct": [(0, 100), (84.0164, 90), (93.8596, 50), (98.01, 10), (100, 0)],
     # 涨停结构（198 真信号槽实测，2026-07-30~09-30 覆盖 18.6% 样本；另 349 槽 limitSummary
@@ -49,17 +50,14 @@ _CALIB = {
 
 _WEIGHTS = {
     "upRatio": 1, "attackShare": 1, "riskShare": 1, "trin": 1,
-    "yhPositive": 1, "limitStruct": 1, "amountVsSame": 1, "riskRowsPct": 1,
+    "yhPositive": 1, "limitStruct": 1, "riskRowsPct": 1,
 }
 
-# 第八维冻结门（2026-10-08 裁决 A-①，eod-emotion-rule-audit-20261008.md P1-1）：
-# amountVsSame 评分维冻结，原料照常采集（record_amount_vs_same 每日只记不评）。
-# 否决依据（amountvs-same-dimension-assessment 2026-10-06）：①尾部信号单向稀释器
-# （20 次阈值穿越全部指向中位：深谷 +3.2/高峰 −3.0）②校准曲线系设计值（±30pp 才到
-# 25/80 分，实测 p90 仅 +13.7pp）③T+1 预测力增量为零。10-05 方向二报告预期「10-09 激活」
-# 与该评估矛盾且无门控，10-08 已被实证自动激活（EOD 分 44.8→7 维口径 41.6）——现冻结。
-# 重启条件：≥20 交易日样本积累后重校准 _CALIB["amountVsSame"]，随预登记重放一并裁决。
-_AMOUNT_VS_SAME_ENABLED = False
+# 第八维 amountVsSame 永久退役（2026-10-08 用户裁决，研究轮出口 b；
+# amountvs-same-recalibration-study-20261008.md：150 日实测校准后仍单向稀释 +2.62/−2.19
+# ——根因量能环比与情绪水平近正交 corr+0.141，结构性非曲线伪影；偏相关 −0.024 零增量预测力。
+# 前史：10-08 裁决 A-① 临时冻结（eod-emotion-rule-audit-20261008.md P1-1），
+# 同日研究轮升级为永久退役。原料照采：record_amount_vs_same 每日只记不评。
 
 
 def _interp(points: list[tuple[float, float]], value: float) -> float:
@@ -101,7 +99,6 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
     lifecycle = evidence.get("lifecycle") or {}
     limit = evidence.get("limit") or {}
     yh = evidence.get("yesterdayLimit") or {}
-    amount = evidence.get("totalAmount") or {}
 
     total = breadth.get("total") or 0
     judgeable = row_flags.get("judgeable") or 0
@@ -128,8 +125,9 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
     zb_sub = _interp(_CALIB["zhabanRate"], float(zb)) if _finite(zb) else None
     struct_parts = [s for s in (zt_sub, mb_sub, zb_sub) if s is not None]
     limit_struct = round(sum(struct_parts) / len(struct_parts), 1) if struct_parts else None
-    # 7. 量能同期
-    amount_pct = amount.get("vsSamePct")
+    # 量能同期对比：评分维已永久退役（2026-10-08 研究轮出口 b，
+    # amountvs-same-recalibration-study-20261008.md：近正交 corr+0.141/稀释结构性/偏相关 −0.024），
+    # 原料照采走 record_amount_vs_same（vsSamePct 入 market_daily_amount，不入分）
     # 8. 风险预警行占比（反向）
     risk_rows_pct = (row_flags.get("risk") or 0) / judgeable * 100 if judgeable else None
 
@@ -140,8 +138,6 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
         "trin": _sub("trin", trin, dims, skipped),
         "yhPositive": _sub("yhPositive", yh_positive, dims, skipped),
         "limitStruct": limit_struct,
-        "amountVsSame": (_sub("amountVsSame", amount_pct, dims, skipped)
-                          if (_AMOUNT_VS_SAME_ENABLED and amount_pct is not None) else None),
         "riskRowsPct": (_sub("riskRowsPct", risk_rows_pct, dims, skipped)
                          if risk_rows_pct is not None else None),
     }
@@ -149,8 +145,6 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
         skipped.append("limitStruct")
     else:
         dims["limitStruct"] = {"raw": None, "sub": limit_struct}
-    if (not _AMOUNT_VS_SAME_ENABLED) or amount_pct is None:
-        skipped.append("amountVsSame")
     if risk_rows_pct is None:
         skipped.append("riskRowsPct")
 

@@ -50,25 +50,25 @@ def test_score_full_dims_and_decomposable():
     result = compute_emotion_score(_evidence())
     score = result["score"]
     assert 0 <= score <= 100
-    # 可分解：等权合成可从 dims 还原——第八维 amountVsSame 冻结（A-①，2026-10-08），
-    # 即使原料齐全（vsSamePct=25.0 在场）也 skipped，有效维 = 7
-    assert result["skippedDims"] == ["amountVsSame"]
+    # 可分解：等权合成可从 dims 还原——第八维 amountVsSame 已永久退役（2026-10-08 研究轮出口 b），
+    # 评分恒为 7 维，退役维不再出现在 dims/skippedDims
+    assert result["skippedDims"] == []
     subs = [v["sub"] for v in result["dims"].values()]
     assert len(subs) == 7
     assert abs(score - sum(subs) / len(subs)) < 0.1
     assert result["stageCandidate"]
 
 
-def test_amount_vs_same_dim_frozen_by_gate():
-    """第八维冻结门（audit P1-1）：原料在场也不入分，防尾部稀释与代际混用。"""
+def test_amount_vs_same_dim_retired():
+    """第八维永久退役（2026-10-08 研究轮出口 b）：原料在场也不入分不入 skipped。"""
     result = compute_emotion_score(_evidence())  # base 夹具 vsSamePct=25.0 在场
     assert "amountVsSame" not in result["dims"]
-    assert result["skippedDims"] == ["amountVsSame"]
-    frozen_score = result["score"]
-    # 反证：同一证据若去掉量能原料，分数不变（冻结维零贡献）
+    assert "amountVsSame" not in result["skippedDims"]
+    retired_score = result["score"]
+    # 反证：同一证据若去掉量能原料，分数不变（退役维零贡献，原料纯走 record 步）
     ev = _evidence()
     ev["totalAmount"] = {"amount": None, "vsSamePct": None, "yesterdaySame": None}
-    assert compute_emotion_score(ev)["score"] == frozen_score
+    assert compute_emotion_score(ev)["score"] == retired_score
 
 
 def test_score_missing_dims_degrade_and_renormalize():
@@ -76,7 +76,7 @@ def test_score_missing_dims_degrade_and_renormalize():
     ev["totalAmount"] = {"amount": None, "vsSamePct": None, "yesterdaySame": None}  # 量能同期缺失
     ev["breadth"]["trin"] = None  # TRIN 缺失
     partial = compute_emotion_score(ev)
-    assert set(partial["skippedDims"]) == {"trin", "amountVsSame"}
+    assert set(partial["skippedDims"]) == {"trin"}
     # 归一化：缺失维跳过，score 仍由其余 6 维合成
     subs = [v["sub"] for v in partial["dims"].values()]
     assert len(subs) == 6
@@ -93,7 +93,7 @@ def test_score_all_dims_missing_returns_none():
     assert result["stageCandidate"] is None
     assert set(result["skippedDims"]) == set(
         ["upRatio", "attackShare", "riskShare", "trin", "yhPositive",
-         "limitStruct", "amountVsSame", "riskRowsPct"])
+         "limitStruct", "riskRowsPct"])
 
 
 def test_score_strong_bullish_evidence_scores_high():

@@ -198,7 +198,7 @@ export interface HotListEmotionScore {
   score: number | null
   dims: Record<string, { raw: number | null; sub: number }>
   skippedDims: string[]
-  /** 有效维基数（8−skipped）：10-09 amountVsSame 激活使 7→8，跨日可比性按此分段；历史文档缺省 */
+  /** 有效维基数（7−skipped）：2026-10-08 第八维 amountVsSame 永久退役后总维数=7，跨日可比性按此分段；历史文档缺省 */
   activeDims?: number
   /** 日内路径诊断（纯诊断，不进档位链）：极值+自高点回撤+自低点反弹；score=null 时为 null；历史文档缺省 */
   pathDiag?: {

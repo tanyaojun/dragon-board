@@ -105,7 +105,7 @@ def test_document_stage_is_score_driven_with_embedded_emotion_score():
     # 可分解：等权合成可从 dims 还原
     subs = [v["sub"] for v in emotion["dims"].values()]
     assert abs(emotion["score"] - sum(subs) / len(subs)) < 0.15
-    assert "amountVsSame" in emotion["skippedDims"]  # 第八维冻结门（A-①，audit P1-1）：原料在场也不入分；接线守卫见 collector_hook 开门测试
+    assert "amountVsSame" not in emotion["skippedDims"]  # 第八维永久退役（2026-10-08 研究轮出口 b）：不入分不入 skipped；原料照采走 record 步
     # 档位主定义 = 评分映射（强多证据 ≥ 发酵）
     assert emotion["score"] >= 60
     assert doc["rawStage"] == emotion["stageCandidate"]  # S10 同值
@@ -174,7 +174,7 @@ def test_document_score_none_semantics_plan_b():
     assert any(d.startswith("emotion_score_unavailable") for d in doc["diagnostics"])
     assert set(doc["emotionScore"]["skippedDims"]) == {
         "upRatio", "attackShare", "riskShare", "trin", "yhPositive",
-        "limitStruct", "amountVsSame", "riskRowsPct"}
+        "limitStruct", "riskRowsPct"}
     # 有确认历史时 score=None 槽不破坏已确认档位（重放跳过）
     doc2 = _build("10:30", stocks=[], with_limit=False, stage_history={
         "rawStagePoints": [("09:30", "启动"), ("10:00", "启动")],
@@ -204,31 +204,31 @@ def test_document_eod_uses_anchored_slot_for_evidence():
     )
     assert doc["slotTime"] == "EOD"
     assert doc["emotionScore"]["score"] is not None
-    # 第八维冻结门（A-①）：EOD 锚定槽 wiring 正确性由 collector_hook 开门测试守卫；
-    # 冻结期生产语义=该维恒 skip（dims 不含该键）
-    assert "amountVsSame" in doc["emotionScore"]["skippedDims"]
+    # 第八维永久退役（2026-10-08 研究轮出口 b）：EOD 锚定槽 wiring 不变；
+    # 退役维不入 dims/skippedDims，原料照采走 record 步
+    assert "amountVsSame" not in doc["emotionScore"]["skippedDims"]
     assert "amountVsSame" not in doc["emotionScore"]["dims"]
 
 
 # ── 方向一+①（2026-10-05 用户裁决）：activeDims 维度基数戳 + pathDiag 路径诊断 + limitStruct 诊断行 ──
 
 def test_document_emotion_score_active_dims_baseline():
-    """activeDims = 8 − len(skippedDims)：跨日可比性的维度基数戳。
-    fixture 边界：_yesterday_rows 无涨停证据行 → yhPositive 恒 skip；第八维冻结门（A-①
-    2026-10-08）下 amountVsSame 恒 skip（与 yesterday_amounts 是否提供无关）→ 基线 6 维。"""
+    """activeDims = 7 − len(skippedDims)：跨日可比性的维度基数戳。
+    fixture 边界：_yesterday_rows 无涨停证据行 → yhPositive 恒 skip；第八维已永久退役
+    （2026-10-08 研究轮出口 b）→ 总维数 7、基线 6 维。"""
     full = _build("10:30", stocks=_bull_stocks(), yesterday_rows=_yesterday_rows(),
                   analysis_by_code=_bull_analysis(), yesterday_amounts={"10:30": 1.0e12})
-    assert full["emotionScore"]["skippedDims"] == ["yhPositive", "amountVsSame"]
+    assert full["emotionScore"]["skippedDims"] == ["yhPositive"]
     assert full["emotionScore"]["activeDims"] == 6
 
     partial = _build("10:30", stocks=_bull_stocks(), yesterday_rows=_yesterday_rows(),
-                     analysis_by_code=_bull_analysis())  # 无 yesterday_amounts：冻结门下与 full 同基线
-    assert set(partial["emotionScore"]["skippedDims"]) == {"yhPositive", "amountVsSame"}
+                     analysis_by_code=_bull_analysis())  # 无 yesterday_amounts：退役后与 full 同基线
+    assert set(partial["emotionScore"]["skippedDims"]) == {"yhPositive"}
     assert partial["emotionScore"]["activeDims"] == 6
 
     empty = _build("10:30", stocks=[], with_limit=False)
     assert empty["emotionScore"]["score"] is None
-    assert empty["emotionScore"]["activeDims"] == 0  # 全 skip
+    assert empty["emotionScore"]["activeDims"] == 0  # 全 skip（7−7）
 
 
 def test_document_emotion_score_path_diag_directional_semantics():

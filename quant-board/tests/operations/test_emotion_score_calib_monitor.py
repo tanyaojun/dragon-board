@@ -123,7 +123,7 @@ def test_build_report_alert_and_skip_and_exclusion():
     assert "upRatio" in report["dims"]
     # 排除维登记（非静默）
     assert report["excluded"]["limitStruct"] == "composite_dim_raw_null"
-    assert report["excluded"]["amountVsSame"] == "frozen_gate_a1"
+    assert report["excluded"]["amountVsSame"] == "retired_study_b_20261008"
     # 就绪通知
     assert report["amountVsSame"]["recordedDays"] == 25 and report["amountVsSame"]["ready"] is True
     # 单值窗口（全同 raw）分位=该值：attackShare 0.08 恰在锚上（0.0826→50）drift≈0

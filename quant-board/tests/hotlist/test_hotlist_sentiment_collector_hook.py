@@ -272,11 +272,8 @@ def test_slot_write_roundtrip_preserves_emotion_score_and_legacy_fields(monkeypa
 
 def test_slot_wiring_feeds_real_evidence_into_score(monkeypatch):
     """T3 接线断言（review T3-S3）：analysis_by_code 与昨日同期总额真实进入评分链。
-    第八维冻结门（A-① 2026-10-08，audit P1-1）下生产恒 skip，本测试 monkeypatch 临时开门
-    验证接线不回归（若 evidence wiring 断开，开门后 amountVsSame 会缺失降级）；
+    第八维已永久退役（2026-10-08 研究轮出口 b，原料走 record 步），量能接线由 spy 断言守护；
     spy 捕获 collect_slot_evidence 的入参核对传递值。"""
-    import backend.analysis.hotlist.emotion_score as emotion_score_module
-    monkeypatch.setattr(emotion_score_module, "_AMOUNT_VS_SAME_ENABLED", True)
     import backend.analysis.hotlist.jev_state as jev_state
     import backend.operations.hotlist_sentiment as ops_mod
 
@@ -322,13 +319,14 @@ def test_slot_wiring_feeds_real_evidence_into_score(monkeypatch):
     assert "000001" in (captured.get("analysis_by_code") or {})
     assert captured.get("yesterday_same_slot_total_amount") == 1.0e12
     assert captured.get("yesterday_rows")
-    # 真评分：三维不再 skip（若接线断开，amountVsSame/lifecycle/riskRowsPct 会全部缺失降级）
+    # 真评分：接线完好下 riskRowsPct 不 skip；退役维 amountVsSame 不出现在 dims/skipped（原料走 record 步）
     doc = db["hotlist_sentiment"].find_one({"_id": "dragonboard_live:half_hour:2026-06-05:10:00"})
     assert doc is not None
     skipped = doc["emotionScore"]["skippedDims"]
     assert "amountVsSame" not in skipped
+    assert "amountVsSame" not in doc["emotionScore"]["dims"]
     assert "riskRowsPct" not in skipped
-    assert doc["emotionScore"]["dims"]["amountVsSame"]["raw"] == 20.0  # (1.2e12/1.0e12-1)*100
+    # 退役维的量能换算验证责任移至 record_amount_vs_same 自身测试（vsSamePct=(今/昨−1)×100）
 
 
 def test_write_order_does_not_change_per_slot_results(monkeypatch):

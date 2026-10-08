@@ -56,6 +56,17 @@
 
 ## 4. 建议：永久退役（待用户裁决）
 
+**✅ 已裁决退役（2026-10-08 用户「裁」）**，执行记录：
+- `emotion_score.py`：`_CALIB["amountVsSame"]`、`_AMOUNT_VS_SAME_ENABLED` 冻结门、`_WEIGHTS`
+  条目、`subs` 构建全部移除（评分恒 7 维，与冻结期分数零差异、零回放）；退役记录注释指向本文件；
+- `hotlist_sentiment.py`：activeDims 基数 8−skipped → **7−skipped**；
+- 监控 excluded 注记：frozen_gate_a1 → **retired_study_b_20261008**；
+- 前端同步（研究结论与展示同轮规则）：HotlistEmotionPanel 有效维 X/7 + 注释、hotlistSentiment.ts
+  activeDims 注释；
+- 原料照采不变：`record_amount_vs_same` 每日只记不评（自带曲线副本供 amountVsSameSubDesign 对照）。
+
+（以下为裁决前的原始建议，存档）
+
 退役内容（落地零分数影响——冻结期间评分已是 7 维，**无需回放**，纯代码/文档清理）：
 1. `emotion_score.py`：`_WEIGHTS` 移除 amountVsSame（或显式 retired 标记 + 注记本研究结论）；
 2. `record_amount_vs_same` 照采不删（原料保留，口径已 150 日验证稳定）；

@@ -745,10 +745,10 @@ def build_hotlist_sentiment_document(
                   if (not slot_time and path_diag is not None) else None)
     raw_stage_value = map_stage(score_value, slope, path=stage_path) if score_value is not None else None
     # activeDims（2026-10-05 方向二报告 §六#8）：有效维基数戳，跨日可比性按此字段分段
-    # （历史文档缺该键=旧代，fail-visible）。2026-10-08 勘误：原注预期「10-09 amountVsSame
-    # 激活 7→8」与 10-06 评估「暂不启用」矛盾，且 10-08 已被实证自动激活（audit P1-1）——
-    # 现裁决 A-① 冻结该维（emotion_score._AMOUNT_VS_SAME_ENABLED=False），有效维回到 7。
-    active_dims = 8 - len(emotion.get("skippedDims") or [])
+    # （历史文档缺该键=旧代，fail-visible）。2026-10-08 永久退役第八维（研究轮出口 b，
+    # amountvs-same-recalibration-study-20261008.md）后总维数=7：前史=10-08 裁决 A-① 临时冻结
+    # （audit P1-1，当日曾实证自动激活 44.8→41.6），同日研究轮确认稀释结构性后裁决退役。
+    active_dims = 7 - len(emotion.get("skippedDims") or [])
     emotion_doc = {
         "score": score_value,
         "dims": emotion["dims"],

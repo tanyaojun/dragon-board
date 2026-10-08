@@ -1390,8 +1390,8 @@ const emotionScoreTooltip = computed(() => {
   const parts = Object.entries(emotion.dims ?? {}).map(([name, detail]) => `${name} ${detail.sub}`)
   const skipped = (emotion.skippedDims ?? []).length ? `；缺失跳过：${(emotion.skippedDims ?? []).join('、')}` : ''
   const slope = emotion.slope != null ? `；较上一有效槽 ${emotion.slope > 0 ? '+' : ''}${emotion.slope}` : ''
-  // 维度基数戳（10-09 amountVsSame 激活 7→8，跨日可比性分段）+ 路径诊断（方向一：回落中/修复后可判）
-  const activeDims = emotion.activeDims != null ? `；有效维 ${emotion.activeDims}/8` : ''
+  // 维度基数戳（2026-10-08 第八维永久退役后总维数=7，跨日可比性分段）+ 路径诊断（方向一：回落中/修复后可判）
+  const activeDims = emotion.activeDims != null ? `；有效维 ${emotion.activeDims}/7` : ''
   const pd = emotion.pathDiag
   const path = pd
     ? `；日内高点 ${pd.dayHigh.score}@${pd.dayHigh.slotTime} 低点 ${pd.dayLow.score}@${pd.dayLow.slotTime}` +
