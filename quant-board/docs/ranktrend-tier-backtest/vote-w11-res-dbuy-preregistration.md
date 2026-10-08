@@ -66,6 +66,8 @@
 - **C3**：passHard 不降；
 - **Track 1 终判**：decision wrxpf 相对基线 ≥ 0（涉入场面必带；maxDD 容差 ≤ 基线）；
 - **市况分桶**：strong vs retreat 预注册对比对（market_regime state 仅报告列），两桶反号 → 挂起；
+  **【v1.1 澄清 2026-10-08，语料包 v2 审定回执 A5 同款通用条款，非调线】retreat 桶 n<50 股帧时
+  降级为只披露不挂起**（小样本反号判据会随机触发；harness 已实现 market_regime 披露列，判定时按此执行）；
 - **护栏（继承 T2）**：res S 档计数 ≥ 7185（14,370×50%）、synergy S 档计数 ≥ 64（127×50%）
   —— res 修正直接动 res 档位分布，半数线为结构护栏；
 - **披露义务**：S/A 档帧计数变化表 + per-dim res 迁移矩阵（D∧buy 帧在 a/b 臂下的

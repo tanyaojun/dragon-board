@@ -49,6 +49,24 @@ W1-2.1 增补（2026-10-07 深夜，rank 共识面 L2 合同前置诊断；判�
   ≥ +0.01 且四窗中 ≥3 窗差值同向 → 「差一票帧含真信息，共识门槛挡下即损失」，立级行为臂
   （共识面 L2，剂量按缺位分量结构定）；否则差一票帧无增量信息，C 档弃权=正确设计，归档不立项。
   披露义务：dbuy2p 与 c_rest 同列、excess_acc 同列、C 档 combined 分位谱沿用 W1-2。
+
+W2-2 增补（2026-10-08，语料包 v2 审定回执前置②④；判定线跑数前冻结）：
+- 靶人群=ln≥2 ∧ 维 buy ∧ 维 S/A（门只动 S/A 保档——审定的降档确认门形态）；分层=当帧
+  change（stock.change）low(<0)/high(≥0) 两桶（涨跌自然分界零回看）：w22|sa|low/high、
+  w22|res|low/high 四 cell；change 缺失计数 fail-visible（w22_change_missing）。
+- 预声明判定线（冻结）：decision 窗 w22|sa|low − w22|sa|high ≤ −0.01 且四窗 ≥3 窗同向
+  （low 更差）→ 「排名说涨但价格不认账的帧后验差」，门有靶，W2-2 立项合同备料；否则无靶归档。
+  res 侧同口径披露（同构门）。rank S/A 帧 change 分位谱（rank_sa_chg）披露列。
+- 冗余面（审定前置②：与 dv 四态/pm 信号共线率）非本脚本数据面，列合同前置补跑。
+
+W2-1 增补（2026-10-08，同批；市况分桶先验已直读 w12r JSON 过线〔四桶 CD−SDa 全正，
+strong +0.0355/retreat +0.0083，挂起条款不触发〕，本列为形态③靶人群补洞；判定线跑数前冻结）：
+- 靶人群=ln≥2 ∧ 跨日首帧（trig==cross_day）∧ 维 buy 方向帧；分解=隔夜注意力延续 vs 断裂：
+  cs_delta=pcts[-1]−pcts[-2]（cs 维单帧差分），延续=cs_delta>0（跨日步热度仍升）、
+  断裂=cs_delta≤0（排名动量在、热度断）；w21|cd_rank|cont/brk、w21|cd_res|cont/brk 四 cell。
+- 预声明判定线（冻结）：decision 窗 w21|cd_rank|brk − w21|cd_rank|cont ≤ −0.01 且四窗 ≥3 窗
+  同向（断裂更差）→ 「排名说涨但隔夜热度断的帧后验差」，降档门有靶，W2-1 形态③立项合同备料；
+  否则无靶，W2-1 挂起归档。res 侧同口径披露（同构门）。
 - **自证口径修正（2026-10-07 根因修复，零读数漂移）**：当帧无 attention rank（avgRankNum 缺失/≤0
   被 attention_rank_lookup 过滤）的股票引擎不产信号；此前逐股幻影链（ln=0 fallback 驱动出 rank C）
   与 unknown 比对产生 70 假 mismatch（07-07 补采两帧各 35 只 rank 有值但 avgRankNum 缺失；R1 检查帧
@@ -224,6 +242,8 @@ def main() -> None:
     # W1-2 容器
     rank_sparse: dict[str, Counter] = defaultdict(Counter)         # window -> C 档/差票/距离谱计数
     rank_c_patterns: dict[str, Counter] = defaultdict(Counter)     # window -> buy_count==1 帧五分量信号模式
+    w22_change_missing: Counter = Counter()                        # window -> change 缺失计数（fail-visible）
+    rank_sa_chg: dict[str, list] = defaultdict(list)               # window -> rank S/A 帧当帧 change（分位谱）
     rank_c_comb: dict[str, list] = defaultdict(list)               # window -> C 帧 combined 值（分布）
 
     # ── D1 容器（regime_states/raw_rank_maps/raw_totals 已在前置块构建）──
@@ -391,6 +411,8 @@ def main() -> None:
                 rank_sparse[label]["ln1_c"] += int(rank_tier == "C")
 
             # ── D1/T1：三态 trigger × h8（dual_mom_disagree 混淆分层；dm 仅 ln≥22 有定义）──
+            # 注意：W2-2/W2-1 rank 侧分层必须在本块之后（h8s/trig 就位，防跨帧残留值错位——
+            # 2026-10-08 首跑 W2-2 块置于 h8s 赋值前，靠上一帧残留值静默错位一格，已修废跑重计）。
             comp_v = _finite(technical["momentumProfile"].get("composite")) or 0.0
             score_v = _finite(technical.get("momentumScore")) or 0.0
             dm = "na" if ln < 22 else ("1" if (comp_v != 0 and score_v != 0 and (comp_v > 0) != (score_v > 0)) else "0")
@@ -399,6 +421,19 @@ def main() -> None:
             if ln >= 2:
                 trig = span_trigger(elem_dates, elem_fi, ln - 1)
                 h8_add(label, f"t1|cs_delta_last|{trig}|{regime}|{dm}", h8s)
+
+                # ── W2-2 前置 rank 侧（判定线见文件头）：价格确认门靶人群 low/high 分层 ──
+                chg_w22 = _finite(stock.get("change"))
+                if chg_w22 is None:
+                    w22_change_missing[label] += 1
+                elif base_signal == "buy" and rank_tier in ("S", "A"):
+                    h8_add(label, f"w22|sa|{'low' if chg_w22 < 0 else 'high'}", h8s)
+                    rank_sa_chg[label].append(chg_w22)
+
+                # ── W2-1 前置 rank 侧（判定线见文件头）：跨日帧 隔夜延续/断裂 分解 ──
+                if trig == "cross_day" and base_signal == "buy":
+                    cd_delta = (pcts[-1] - pcts[-2]) if len(pcts) >= 2 else 0.0
+                    h8_add(label, f"w21|cd_rank|{'cont' if cd_delta > 0 else 'brk'}", h8s)
             for n in RANK_PERIODS:
                 if ln >= n + 1:
                     trig = span_trigger(elem_dates, elem_fi, ln - n)
@@ -496,6 +531,15 @@ def main() -> None:
             )
             res_tier = str(res.get("signalTier") or "unknown")
             res_dir = str(res.get("direction") or "")
+            # W2-2/W2-1 前置 res 侧（同 rank 侧判定线；res/h8s 此处均已就位，无错位风险）
+            if ln >= 2:
+                chg_w22r = _finite(stock.get("change"))
+                if res_dir == "buy":
+                    if chg_w22r is not None and res_tier in ("S", "A"):
+                        h8_add(label, f"w22|res|{'low' if chg_w22r < 0 else 'high'}", h8s)
+                    if trig == "cross_day":
+                        cd_delta_r = (pcts[-1] - pcts[-2]) if len(pcts) >= 2 else 0.0
+                        h8_add(label, f"w21|cd_res|{'cont' if cd_delta_r > 0 else 'brk'}", h8s)
             tier_dist[label]["res"][res_tier] += 1
             rs = res_struct[label]
             rs["total"] += 1
@@ -1096,6 +1140,29 @@ def main() -> None:
             "gate": amount_gate,
         },
         "w12_rank_sparse": {"by_window": rank_sparse_out, "c_patterns_top12": rank_c_patterns_out, "gate": w12_gate},
+        "w22_price_gate": {
+            "h8_strata_by_window": {
+                w: {cell: h8_excess(w, cell) for cell in ("w22|sa|low", "w22|sa|high", "w22|res|low", "w22|res|high")}
+                for w in ("decision", "midgap", "oos1", "oos2")
+            },
+            "sa_change_quantiles_by_window": {
+                w: (lambda vals: (
+                    {"n": len(vals),
+                     **{f"p{q}": round(sorted(vals)[int(len(vals) * q / 100)], 4) for q in (10, 25, 50, 75, 90)}}
+                    if vals else {"n": 0}
+                ))(rank_sa_chg.get(w, []))
+                for w in ("decision", "midgap", "oos1", "oos2")
+            },
+            "change_missing": dict(w22_change_missing),
+            "gate_note": "判定线见文件头（w22|sa|low−high ≤ −0.01 且 ≥3 窗同向 → 立项合同备料）；冗余面（dv/pm）列合同前置补跑",
+        },
+        "w21_overnight_gate": {
+            "h8_strata_by_window": {
+                w: {cell: h8_excess(w, cell) for cell in ("w21|cd_rank|cont", "w21|cd_rank|brk", "w21|cd_res|cont", "w21|cd_res|brk")}
+                for w in ("decision", "midgap", "oos1", "oos2")
+            },
+            "gate_note": "判定线见文件头（w21|cd_rank|brk−cont ≤ −0.01 且 ≥3 窗同向 → 形态③门有靶）；市况分桶先验已另录（w12r t1 cell 四桶 CD−SDa 全正）",
+        },
         "gates": gates,
     }
     out_path = Path(args.out)

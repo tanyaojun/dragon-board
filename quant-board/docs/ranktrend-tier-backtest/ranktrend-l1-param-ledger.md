@@ -564,3 +564,18 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **诊断脚本扩展**：`diagnose_voting_signals_exposure.py` W1-2.1 增补（三 h8 cell：w12r|dbuy1/dbuy2p/c_rest+文件头预声明线）——operations 纯增列，存量读数零漂移，与引擎/试线零接触。
 - **并行线状态**：P5（lifecycle allow 分位带门，6 replay+1 baseline）21:26 起 trial 进程中断（baseline 臂已完成：saEx=0.14503 与 G1 锚一致+track1 完成；A3-B2 五剂量臂未跑）——其会话恢复续跑或用户处置前，本线不动 config.py/runtime.py/lifecycle.py/golden 快照四共享面。
 - **回退**：零行为零参数改动（诊断增列+文档），无需回退。
+
+## 24. 语料包 v2 审定轮 + W2 前置判定批（2026-10-08：amount 合同 v1.1、W2-2 立项备料、W2-1 挂起、rank 否决维持）
+
+> 审定输出归档 `voting-signals-corpus-v2-review.md`（用户亲自投喂执行，档案静态比对零硬幻觉）；语料 §14 战报。本批全零行为零默认改动（前置诊断+合同+登记），开跑类动作均待用户裁决。
+
+| 项 | 状态 | 读数/依据 |
+|---|---|---|
+| amount L2 合同 | **v1.1（审定有条件通过，五项全落实）** | A1 接线依赖声明（待 P5 收官解锁）/A2 oos2 Track1 披露（基线 76 笔 0.1660 在档）/A5 retreat 桶 n<50 降级三项必改+A3 oos1 −5% 止损带+A4 配对披露/按月可算率/b 臂方向标注两项建议；待用户裁决开跑 |
+| rank 共识面否决 | **审定维持**；反向命题保持观察线索（不可双重消费+三重冗余面未测+oos2 衰减 5 倍） | 未来立项补强条件已登记入否决登记文档 |
+| W2-2 价格确认门 | **前置四窗 4/4 强同向过线 → 合同备料完成** | rank buy∧S/A 帧 change<0 组 h8 −0.0665 vs ≥0 组 +0.0006（差 −0.0671，线值 6-10 倍；midgap/oos1/oos2=−0.110/−0.075/−0.098）；res 侧同构全负；触发面 20.8%；合同 `vote-w22-price-gate-preregistration.md`（tierConfirmPriceGateMode off/rank/rank_res，θ=0 单帧降档门，审定判定卡骨架全款）；冗余面（dv/pm 共线）=trial 前置补跑条款 |
+| W2-1 隔夜延续门 | **挂起（市况先验过、靶人群分解无靶）** | 市况先验：四桶 CD−SDa 全正（strong +0.0355/retreat +0.0083，retreat 股帧 n=356-1459>50）挂起条款不触发；靶分解：res 侧断裂 16,050 帧 brk−cont≈0（四窗零散）+rank 侧断裂四窗合计仅 43 帧微样本反向——「跨日 cs_delta 有信息」（T1）≠「跨日帧内断裂符号有判别力」（实测零），前置省掉注定零效应的 trial；不覆盖姿势登记（幅度分位定义/交互/反向形态/新代际） |
+
+- **执行教训**：诊断扩展的 h8 cell 代码必须置于 `h8s=h8_of(fi,code)` 赋值之后——首跑 W2-2 列曾置于赋值前，Python 跨帧残留值静默错位一格（非崩溃），发现后废跑重计（废数据已删）；多案前置尽量同脚本一次 replay 出数。
+- **通用判定卡条款沉淀**：触发率披露（<2%/=0 → 零效应不提交）+retreat 桶 n<50 股帧降级只披露（帧数≠股帧样本数口径澄清）——后续门类合同全款继承。
+- **回退**：零行为零参数改动，无需回退；`voting-signals-w2x-gates.json` 本地不入库。

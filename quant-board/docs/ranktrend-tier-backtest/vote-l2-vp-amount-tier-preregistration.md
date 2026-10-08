@@ -1,9 +1,13 @@
-# L2 预登记合同：成交额量比喂量价档位判定（2026-10-07 深夜起草，判定线冻结于跑数前）
+# L2 预登记合同：成交额量比喂量价档位判定（v1.1，2026-10-07 起草 / 2026-10-08 按审定回执修订，判定线冻结于跑数前）
 
 > 合同地位：结构重设计计划（`ranktrend-vote-structure-redesign-plan.md`）W0-2 达线后的 L2 行为步预登记
-> （用户 2026-10-07 深夜裁决三立项之一「amount 喂 tier L2 立项」）。AI 备料，**并入语料包 v2 一起走
-> 双模型审定（用户亲自投喂）→ 用户裁决开跑**，才动生产判据。审定纪律同 Q1（算术与事实引用逐条可核，
-> 硬幻觉=驳回）。立项依据读数 `data/reports/voting-signals-amount-leverage-w02.json`（台账 §20）。
+> （用户 2026-10-07 深夜裁决三立项之一「amount 喂 tier L2 立项」）。AI 备料，**并入语料包 v2 走双模型
+> 审定（用户亲自投喂，已完成 2026-10-08）→ 用户裁决开跑**，才动生产判据。审定结论=有条件通过
+> （3 必改+2 建议，v1.1 全部落实，归档 `voting-signals-corpus-v2-review.md`）。
+> 审定纪律同 Q1（算术与事实引用逐条可核，硬幻觉=驳回）。立项依据读数
+> `data/reports/voting-signals-amount-leverage-w02.json`（台账 §20）。
+> **v1.1 修订映射（跑前补全，非调线）**：A1 接线依赖声明 / A2 Track1 补 oos2 披露 / A3 oos1 止损带
+> （建议采纳）/ A5 市况分桶 retreat 桶样本量下限 / A4 a-b 腿配对披露+按月可算率+b 臂方向标注（建议采纳）。
 
 ## 〇、机制事实（代码级，全部可复核）
 
@@ -73,18 +77,27 @@
 - 立项读数（W0-2）为 1071 帧全窗口径（end=10-07），仅作立项依据不作判定口径——两口径差异如实披露。
 - 信号面：各窗序列长度 ≥2 股帧（harness 现口径）；交易面：Track 1 decision 窗成交笔。
 
-### L2-2 判定卡（继承计划判定线，跑后不调）
+### L2-2 判定卡（继承计划判定线，跑后不调；v1.1 补 A2/A3/A5）
 
 - **C1**：decision saEx 相对基线 ≥ +3%；
 - **C2**：oos2 同向正（oos1 照登不设线）；
 - **C3**：passHard 不降；
-- **Track 1 终判**：decision wrxpf 相对基线 ≥ 0（涉 tier 面必带；maxDD 容差 ≤ 基线）；
-- **市况分桶**：strong vs retreat 预注册对比对（market_regime state 仅报告列），两桶反号 → 挂起
-  ——**本case高危项**：强情绪期热榜动量有效（用户实盘经验），放量降档可能在强情绪期错杀
-  （P5 合同 C-10④ 同款风险声明）；
+- **A3 止损带（v1.1 采纳）**：oos1 saEx 相对基线 < −5% → 该臂终止（gross-damage floor，T2 先例），
+  不再进入提交候选；
+- **Track 1 终判（v1.1 按 A2 扩）**：decision wrxpf 相对基线 ≥ 0（涉 tier 面必带；maxDD 容差 ≤ 基线）
+  + **oos2 Track 1 披露义务**（基线在档：76 笔 / wrxpf 0.1660 / maxDD −0.1817；小样本只披露不设线，
+  wrxpf 相对基线 < −5% 须显式解释交用户裁决，不得静默合并——Q1 v1.1 R5 判例同款）；
+- **触发率披露（审定判定卡骨架通用条款）**：门改判帧数占比 =0 → 判零效应阴性不提交；<2% →
+  如实标注「触面过小，效应量解释受限」（Q1 C-c 零效应教训）；
+- **市况分桶（v1.1 按 A5 修）**：strong vs retreat 预注册对比对（market_regime state 仅报告列）——
+  **retreat 桶 n<50 股帧时降级为只披露不挂起**（全窗 retreat 仅 29 帧，小样本反号判据会随机触发；
+  强市期放量降档可能错杀=本case高危项的判读以 strong 桶与 decision 全人群为主）；
 - **护栏（继承 T2 半数线）**：res S 档计数 ≥ 7185（14,370×50%）、synergy S 档计数 ≥ 64（127×50%）；
-- **披露义务（本case特有）**：vp tier 分布迁移表（A/B/C/D/E 档计数，a 臂预期 A+B 面↓、
-  若反升=实现有误须查）；`vp_tier_drift` 自证列（off 臂恒 0）；可算率分窗分月表沿用 W0-2。
+- **披露义务（本case特有，v1.1 按 A4 扩）**：vp tier 分布迁移表（A/B/C/D/E 档计数，a 臂预期
+  A+B 面↓、若反升=实现有误须查；**b 臂另预期 C 档面↓B 档面↑**，与 a 臂对称披露）；b−a 臂
+  **同帧改判集差异配对披露**（两臂共享 a 腿，仅配对差可分离升档腿贡献）；`vp_tier_drift` 自证列
+  （off 臂恒 0）；可算率分窗分月表沿用 W0-2（**decision 窗按月列必附**——7 月 23.8% 贫料月
+  的效应稀释面）。
 
 ### L2-3 准入与止损
 
@@ -94,10 +107,13 @@
 
 ## 四、实施与验证纪律
 
-- **接线面**：`config.py` 新增 `volumePriceAmountTierMode`（含枚举校验入 `_validate_tier_constraints`
-  同环）+ `volume_price.py` `_volume_price_tier` 分支（off 恒走原路径=零行为）；
-  `assemble_observation` → `compute_volume_price_score` 的 amount_ratio 入参已在生产链
+- **接线面（v1.1 按 A1 补依赖声明）**：`config.py` 新增 `volumePriceAmountTierMode`（含枚举校验入
+  `_validate_tier_constraints` 同环）+ `volume_price.py` `_volume_price_tier` 分支（off 恒走原路径=
+  零行为）；`assemble_observation` → `compute_volume_price_score` 的 amount_ratio 入参已在生产链
   （runtime:1462 → observation.amountRatio），零新序列传递。
+  **接线前置依赖（A1）**：config.py / volume_price.py 当前为 P5 并行线未提交改动共享面
+  （`lifecycle-p5-preregistration.md` 活进程先例）——**本case接线待 P5 线收官解锁，W1-1 同款处置**；
+  golden 快照为二进制 gz 无法与 P5 改动手术分离，解锁前不重录。
 - **测试纪律**：新开关默认 off 零行为=第一断言（三窗 saEx 逐位一致）；三态谓词单测（边界含等号：
   ar≥1.5 含 1.5/ar≤0.5 含 0.5；None 不可算帧不参与；E/缩量涨停优先级不被 amount 门改写；
   b 臂升档只触 rise_shrink/normal 的 C）；专项测试不触发真实模型调用；golden 快照预期零漂移
@@ -112,10 +128,12 @@
 
 ## 五、流程
 
-1. 本合同（AI 备料完成）→ 并入语料包 v2 → 用户投喂双模型审定（A/B 对比制；输出归档
-   `vote-l2-vp-amount-tier-review.md`）
-2. → 用户裁决开跑（授权覆盖=接线→专项测试→trial→判定→登记→提交；落默认仍须用户裁决）
-3. 任何判定线修改=新合同版本重新走审定（跑后调线=违规）。
+1. 本合同（AI 备料完成）→ 并入语料包 v2 → 用户投喂双模型审定（输出已归档
+   `voting-signals-corpus-v2-review.md`，2026-10-08：**有条件通过，A1/A2/A5 必改+A3/A4 建议，
+   v1.1 已全部落实**）
+2. → **v1.1 修订登记完毕，待用户裁决开跑**（授权覆盖=接线→专项测试→trial→判定→登记→提交；
+   落默认仍须用户裁决；接线另受 P5 收官解锁约束，见 §四 A1）
+3. 任何判定线修改=新合同版本重新走审定（跑后调线=违规；v1.1 属审定者要求的跑前补全，非调线）。
 
 ## 六、起草者自报风险（供审定攻击）
 
