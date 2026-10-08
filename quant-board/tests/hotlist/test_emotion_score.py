@@ -117,7 +117,12 @@ def test_stage_candidate_uses_slope_for_low_scores():
 def test_map_stage_by_score():
     assert map_stage(85) == "高潮"   # 压制条款已删除（审计 B3：riskRowsPct 系统性高位）
     assert map_stage(65) == "发酵"
-    assert map_stage(50) == "启动"
+    assert map_stage(50) == "启动"   # slope=None：缺失不发明退潮（预登记 §2）
+    # 中段 [40,60) 接 slope 方向（2026-10-08 预登记：高位回落日不再误判启动）
+    assert map_stage(50, slope=-12.7) == "退潮"   # 2026-10-08 实证日（44.8/−12.7）
+    assert map_stage(50, slope=-0.1) == "退潮"
+    assert map_stage(50, slope=0) == "启动"
+    assert map_stage(50, slope=3) == "启动"
     # 低分按斜率分退潮/冰点
     assert map_stage(25, slope=-8) == "退潮"
     assert map_stage(25, slope=3) == "冰点"
@@ -129,4 +134,6 @@ def test_map_stage_boundaries():
     assert map_stage(74.9) == "发酵"
     assert map_stage(60) == "发酵"
     assert map_stage(59.9) == "启动"
+    assert map_stage(59.9, slope=-0.1) == "退潮"   # 中段下边界：slope<0 即退潮
+    assert map_stage(40, slope=-0.1) == "退潮"
     assert map_stage(40) == "启动"

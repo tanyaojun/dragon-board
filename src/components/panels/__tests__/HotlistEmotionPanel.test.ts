@@ -32,8 +32,11 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     expect(source).toContain('hero-score-missing')
     expect(source).toContain('情绪分不可用')
     expect(source).toContain("typeof score === 'number' && Number.isFinite(score)")
-    // stage 展示逻辑零改动：评分只增展示，不改档位消费
-    expect(source).toContain('const confirmedStageName = computed(() => doc.value?.stage ?? \'--\')')
+    // stage 展示：2026-10-08 用户裁决改 jev 优先——day_stage（EOD）→ 盘中序列档 → 规则档位兑底，
+    // 来源角标 fail-visible；评分只增展示，仍不改规则档位计算
+    expect(source).toContain("if (jevChoiceName(jevEod.value, 'day_stage')) return 'jev_day'")
+    expect(source).toContain("if (jevLatestSequenceName.value) return 'jev_seq'")
+    expect(source).toContain("return doc.value?.stage ?? '--'")
   })
 
   test('阶段分布页签：状态条改 ECharts 饼图，六态语义配色（2026-09-25）', () => {

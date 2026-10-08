@@ -155,14 +155,17 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
 def map_stage(score: float, slope: float | None = None) -> str:
     """分数 → 五档映射（边界设计值经 T1.5 score 实测分布核对；spec v3 §3.3）。
 
-    score 主导 + 低分斜率修正（区分退潮/冰点方向语义）；高潮压制条款已按审计 B3 删除。
+    score 主导 + slope 方向修正（区分退潮/冰点/启动的方向语义）；高潮压制条款已按审计 B3 删除。
+    2026-10-08 预登记（emotion-score-map-stage-direction-preregistration.md，用户裁决选 A）：
+    [40,60) 中段接 slope<0 → 退潮（修复高位回落日被判启动的方向性错误，回放：候选层单向迁移
+    150/1195 槽、EOD 17 天，其它档位零触碰；slope=None 缺失不发明退潮）。
     """
     if score >= 75:
         return "高潮"
     if score >= 60:
         return "发酵"
     if score >= 40:
-        return "启动"
+        return "退潮" if (slope is not None and slope < 0) else "启动"
     if slope is not None and slope < 0:
         return "退潮"
     return "冰点"

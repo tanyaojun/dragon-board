@@ -44,7 +44,8 @@
             <div class="stage-hero" :class="`stage-tone-${stageTone}`">
               <div class="hero-main">
                 <div class="hero-label">市场情绪阶段</div>
-                <div class="hero-stage">{{ confirmedStageName }}<span v-if="phaseDailyLine?.report?.sentence"
+                <div class="hero-stage">{{ confirmedStageName }}<span v-if="heroStageSourceLabel"
+                    class="hero-stage-source">{{ heroStageSourceLabel }}</span><span v-if="phaseDailyLine?.report?.sentence"
                     class="hero-daily-line"
                     :title="`日度一句话 ${phaseDailyLine.date}（形态来源：${phaseDailyLine.report.shapeSource === 'jev' ? 'jev 归层' : '规则'}；模板 v${phaseDailyLine.report.meta?.templateVersion ?? '?'}）`">📈 {{ phaseDailyLine.report.sentence }}<template
                       v-if="phaseDailyLine.report.shapeSource !== 'jev'">（规则）</template></span></div>
@@ -1303,9 +1304,26 @@ function formatMoney(value?: number | null): string {
 }
 
 // ---------- 顶层口径 ----------
-const confirmedStageName = computed(() => doc.value?.stage ?? '--')
+// hero 大字档位：2026-10-08 用户裁决改 jev 优先——jev 日级（day_stage，EOD 后可得）→
+// 盘中最新槽序列档（sequence_stage）→ 规则档位兑底；来源角标 fail-visible 不伪造来源
+const jevStageSource = computed<'jev_day' | 'jev_seq' | 'rule' | null>(() => {
+  if (jevChoiceName(jevEod.value, 'day_stage')) return 'jev_day'
+  if (jevLatestSequenceName.value) return 'jev_seq'
+  return doc.value?.stage ? 'rule' : null
+})
+const confirmedStageName = computed(() => {
+  const source = jevStageSource.value
+  if (source === 'jev_day') return jevChoiceName(jevEod.value, 'day_stage') ?? '--'
+  if (source === 'jev_seq') return jevLatestSequenceName.value ?? '--'
+  return doc.value?.stage ?? '--'
+})
+const heroStageSourceLabel = computed(() => {
+  const map: Record<string, string> = { jev_day: 'jev·日级', jev_seq: 'jev·盘中', rule: '规则' }
+  return map[jevStageSource.value ?? ''] ?? ''
+})
 const stageTone = computed(() => {
-  const heat = STAGE_HEAT[doc.value?.stage ?? ''] ?? 1
+  // 色调跟随实际展示档位（jev 优先后不再锚规则档位）
+  const heat = STAGE_HEAT[confirmedStageName.value] ?? 1
   return heat >= 2 ? 'hot' : heat >= 1 ? 'warm' : 'cold'
 })
 // ---------- 路线 B 连续情绪分（emotion-score-design v3 §3.2）----------
@@ -4698,6 +4716,15 @@ watch(() => props.visible, (visible) => {
   font-size: 13px;
   font-weight: normal;
   color: var(--text-secondary);
+  cursor: default;
+}
+
+.hero-stage-source {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: normal;
+  color: var(--text-secondary);
+  vertical-align: middle;
   cursor: default;
 }
 .phase-chip-offense { background: rgba(239, 68, 68, 0.15); color: #ff6b6b; }
