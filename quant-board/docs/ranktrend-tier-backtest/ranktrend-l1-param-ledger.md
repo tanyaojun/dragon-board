@@ -579,3 +579,36 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **执行教训**：诊断扩展的 h8 cell 代码必须置于 `h8s=h8_of(fi,code)` 赋值之后——首跑 W2-2 列曾置于赋值前，Python 跨帧残留值静默错位一格（非崩溃），发现后废跑重计（废数据已删）；多案前置尽量同脚本一次 replay 出数。
 - **通用判定卡条款沉淀**：触发率披露（<2%/=0 → 零效应不提交）+retreat 桶 n<50 股帧降级只披露（帧数≠股帧样本数口径澄清）——后续门类合同全款继承。
 - **回退**：零行为零参数改动，无需回退；`voting-signals-w2x-gates.json` 本地不入库。
+
+## 23. 生命周期 P5 双轴重设计·allow 腿分位带门 trial（2026-10-08：全臂 FAIL 阴性登记，零默认改动）
+
+> 合同 `lifecycle-p5-preregistration.md`（判定线冻结于跑数前；用户令「请执行 P5 双轴重设计」）。前置诊断
+> `diagnose_lifecycle_p5_dual_axis.py`（D1 stage×pct MI=0.2894 vs shuffle 0.0002=「stage≈分位带函数」定量实锤；
+> D4 allow 帧 fwd1=−1.47 比 caution +0.40 差=机制立项依据）。产物 `data/reports/lifecycle-p5-trials.json`
+> （6 臂 1950s+Track1；checkpoint 逐臂落盘）。接线：`lifecycleAllowBandGateMode`（off/pct_band/pct_velocity）+
+> 两门限字段 + `apply_allow_band_gate`（`_build_signal` 内 analyze_cycle_with_risk 之后单点改写，replay/live
+> 两链天然同口径）——全部默认 off 零行为（golden 重录仅 configRepr 6 处文本，场景输出零漂移；后端 3297 绿）。
+
+| 臂 | 结构守卫 | 信号面判定 | Track1（decision 窗） |
+|---|---|---|---|
+| a3_pct70（保守 1D） | PASS（veto/exit_watch 逐位不变、改写 9687=allow 降幅） | **FAIL**：saEx rel −0.0167/+0.0053/−0.0169（两窗负且一窗<−0.005） | wrxpf **+0.0111**、dd 22.31%→21.36%、笔数 172→149 |
+| a1_pct60（中间 1D） | PASS（改写 13537） | FAIL：−0.0015/+0.0162/−0.0154 混合 | wrxpf −0.0204 FAIL、dd 微善、笔数 143 |
+| a2_pct50（激进 1D） | PASS（改写 17123） | FAIL：三窗 saEx=None（A 档 17732→609 塌缩样本不足） | wrxpf −0.0823 FAIL、笔数 132 |
+| b1_f5_s7 / b2_f5_s6（2D 门） | PASS | FAIL：同上 None | wrxpf −0.090/−0.082 FAIL；两臂成交集逐指标相同=差异帧（低动量中分位）execution 零入选（对账非串臂） |
+
+- **判定**：C-3.5 全 FAIL=阴性登记，零默认改动（单开关 `lifecycleAllowBandGateMode="off"` 即现默认，本来也没动）。
+- **核心结构发现（比结论值钱）**：D4 诊断的「allow 帧比 caution 差」在 saEx（分位桶 excess 校正）口径下
+  **反向**——高分位 allow 帧是正 excess 贡献者，其 fwd1 负值几乎全由均值回归基线贡献（合同 C-10② 预警
+  兑现：fwd 原始读数≠excess 校正后读数，raw fwd 诊断不能单独作降档立项依据）。**P5 的「非单调离散门」
+  论证在 excess 口径被证伪：门的作用轴（分位带）上，放行帧的相对表现并不差。**
+- **对照发现（如实登记非准入）**：a3 保守门交易面改善（wrxpf +0.0111/dd −0.95pp）与信号面恶化并存——
+  与「环境门价值主体在负向过滤与出场、saEx 部分测不到」已知结构互为镜像（降档价值在 Track1 不在标签
+  纯度）。**不构成落默认依据**（C-3.5 要求双线同过）；若未来重开，唯一合法路径=新合同以 Track1 为主
+  判定面重新预登记（跑后调线=违规）。
+- **双轴拆分本体否证**：D4 action×stage 交叉近完全映射（action×pct MI 0.2465≈stage×pct 0.2894）——
+  gate-redesign-proposal §4 的「path×action 拆轴」在现实现下无信息增量，action 轴独立发布（gateAction
+  字段）永久搁置有据。
+- **runner 工程**：checkpoint 逐臂落盘沿用 Q1 机制（首启被环境中断后重启零状态损失降为可接受）；诊断
+  MI 用 shuffle 基线（seed 20261007）；2D 门读数塌缩暴露 saEx 对 A 档样本量的敏感性（<2000 帧→None），
+  后续剂量设计须预先核对最小样本量。
+- **回退**：零行为零默认改动；golden 重录仅 configRepr 文本。基线锚自证（0.1450/0.0983/0.1057）与 G1 §18/Q1 §22 一致。

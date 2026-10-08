@@ -359,6 +359,15 @@ class RankTrendConfig:
     lifecycleGapPriceVolumeMode: str = "off"
     lifecycleGapPriceVolumeProxyP: float = 5.0   # 价升放量确认步注入 +P / 价跌步注入 −P（分位点当量）
     lifecycleGapPriceVolumeVrGate: float = 1.0   # 价升步量比门（≥ 才确认）
+    # ── P5 双轴重设计·allow 腿分位带门（2026-10-07 预登记合同；默认 off=现行为，golden 不漂移）──
+    # 诊断依据（lifecycle-p5-dual-axis-diagnosis.json）：action 轴与 stage 近完全映射（拆轴无增量），
+    # 真正的干预点=allow 腿（ignition/expansion 放行帧聚集高分位，D4 fwd1=−1.47 比 caution 差）——
+    # 高分位 allow 帧 → caution（下游 B 路径降档自动跟随），顺着 c1 已证实的降档腿正价值扩容。
+    # pct_velocity：fast 档（rankVelocity>5，D3 up_fast 自 pct5 带全面恶化）用更低门限；
+    # velocity=None（gap 步）按宽松侧（证据缺，gap 标注已 fail-visible）。veto/exit_watch/caution 不触碰。
+    lifecycleAllowBandGateMode: str = "off"
+    lifecycleAllowBandGatePctMin: float = 65.0     # 1D 门限：allow ∧ pct ≥ 此值 → caution（trial 剂量冻结 50/60/70）
+    lifecycleAllowBandGatePctMinFast: float = 50.0  # 2D 门限：fast 档（velocity>5）用此值
     # ── risk（analyze_risk）：压力合成与严重度归一 ──
     riskPressureWeights: list[float] = field(default_factory=lambda: [0.58, 0.42])
     riskOverheatOffset: float = 45.0
@@ -586,6 +595,7 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
         ("lifecycleRankScaleMode", ("mixed", "pct_full", "hotzone_pct_only")),
         ("lifecycleTimeGapStrictness", ("off", "cross_day", "non_adjacent")),
         ("lifecycleGapPriceVolumeMode", ("off", "direction_gate")),
+        ("lifecycleAllowBandGateMode", ("off", "pct_band", "pct_velocity")),
         ("resonanceWarmingTierCap", ("none", "C", "B")),
     ):
         _mode_value = str(getattr(config, _mode_field))

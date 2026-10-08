@@ -385,6 +385,52 @@ def entry_advice(stage: str, transition: str) -> dict[str, Any]:
     return {"bias": bias, "allowed": bias == "preferred", "reason": reasons[bias]}
 
 
+def apply_allow_band_gate(
+    cycle: dict[str, Any], current_percentile: float, config: "RankTrendConfig | None" = None
+) -> dict[str, Any]:
+    """P5 双轴重设计·allow 腿分位带门（2026-10-07 预登记合同；默认 off 原样返回零行为）。
+
+    诊断依据（lifecycle-p5-dual-axis-diagnosis.json）：action 轴与 stage 近完全映射（拆轴无增量），
+    真正的干预点=allow 腿——ignition/expansion 放行帧聚集高分位（D1 列联），fwd1=−1.47 比 caution
+    （+0.40）差（D4）=实际在放行追高帧。本门在 stage 判定后把高分位 allow 帧改写 caution（下游
+    B 路径降档自动跟随），不改 raw_stage/normalize 阈值（§4.1-E「阈值不可调」的绕开路径）。
+
+    红线：veto/exit_watch/caution 一律不触碰（veto 腿保护价值实锤：D4 fwd1=−1.73 方向正确）；
+    pct_velocity 模式下 velocity=None（G1 gap 步）按宽松侧门限（证据缺，temporalGap 标注已 fail-visible）。
+    命中改写时 decision reasons 增标注（fail-visible）。
+
+    调用点合同（C-5）：必须在 analyze_cycle_with_risk 之后、gate_confirm 状态机与
+    compose_decision/compose_analysis_candidate_tier 之前——改写后的 action 进入全部下游。
+    """
+    c = config or RankTrendConfig()
+    mode = str(getattr(c, "lifecycleAllowBandGateMode", "off") or "off")
+    if mode == "off":
+        return cycle
+    decision = cycle.get("decision")
+    if not isinstance(decision, dict) or decision.get("action") != "allow":
+        return cycle
+    metrics = cycle.get("metrics") if isinstance(cycle.get("metrics"), dict) else {}
+    velocity = metrics.get("rankVelocity")
+    if mode == "pct_velocity":
+        is_fast = isinstance(velocity, (int, float)) and math.isfinite(float(velocity)) and float(velocity) > 5.0
+        threshold = float(getattr(c, "lifecycleAllowBandGatePctMinFast", 50.0)) if is_fast else float(
+            getattr(c, "lifecycleAllowBandGatePctMin", 65.0)
+        )
+    else:  # pct_band
+        threshold = float(getattr(c, "lifecycleAllowBandGatePctMin", 65.0))
+    if current_percentile < threshold:
+        return cycle
+    out = dict(cycle)
+    out_decision = dict(decision)
+    out_decision["action"] = "caution"
+    reasons = list(out_decision.get("reasons") or [])
+    label = f"pct={current_percentile:.1f}" + (f", velocity={velocity:.1f}" if isinstance(velocity, (int, float)) else "")
+    reasons.append(f"高分位放行帧降档（P5 allow 分位带门：{label} ≥ 门限 {threshold:.0f}）。")
+    out_decision["reasons"] = reasons
+    out["decision"] = out_decision
+    return out
+
+
 def neutralize_gap_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     """risk 输入防御（analyze_risk 入口统一调用）：动量分量 None/NaN（缺证据）→ 0（无加无减）。
 

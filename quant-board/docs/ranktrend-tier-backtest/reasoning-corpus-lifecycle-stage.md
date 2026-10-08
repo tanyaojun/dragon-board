@@ -891,3 +891,30 @@ P 与 lifecycleVelocityMin=18 关系注记——P∈{3,5,8} 均 <18，proxy 不�
 →登记→提交；落默认仍须用户裁决（C-4.5）。**
 
 **Q1 trial 收官（2026-10-07 深夜，全臂 FAIL=阴性登记零默认改动；台账 §22）**：合同 v1.1 判定线跑满 15 臂（14 冻结臂+机械化选臂组合臂因 ca_best=None 不触发）。**C-a（dv 权重 0.25/0.5/0.75）三臂全灭**：decision 窗 saEx 相对基线 −0.0095/−0.0202/−0.0301 破无害线、S/A 帧 1229→2079/2812/3683 单调膨胀（+68%~+200%）=「扩档拉动」非判别改善、Track1 wrxpf −0.10~−0.12+maxDD 恶化 4.9-8.0pp——**D3 单帧效度显著 ≠ 进 synergy 投票有增益（稀释+扩容负效应），dv 保持观察位，「效度验证→给权重」路径证伪**。**C-c（direction_gate 九臂）无害线全过、提交线全 FAIL=零效应**：mean 相对改善最高 +0.00136（vr15）< +0.002；Track1 全过（wrxpf −0.0028 容差内、maxDD 22.31%→21.73% 微改善、笔数 172 不变）；veto 侵蚀 +0.46~0.49% << 3.4% 交裁线，翻转分列 added 主落 drop 桶（68%=价跌步 −P 判 reversal 方向正确）、released 85% 人群外=normalize 状态机传导。**两大结构事实**：①P 剂量轴退化（P∈{3,5,8} 读数逐位同——±P 只经符号起作用，recovery 需 accel≥−1.2 而 proxy 步 accel 恒 NaN=红线②结构性代价，+P 点不着点火路径）——未来重开剂量面须先解 accel 置缺与点火判据相容；②gap 补位证据「无害但无效」——价量方向代理能精准挡掉一部分假信号（Track1 亏损微改善）但不足以把判据变准。**Q1 主线闭环**：原料→诊断→预登记→Opus 审定→trial→阴性登记，全程零默认改动、双开关即回基线。runner 跑后修正两 verdict bug（maxDD 负数域直比/flip 分列键反解，读数零影响）；首轮跑完在最终序列化崩掉（flip 记录 tuple 键）Track1 全失重跑一轮=checkpoint 逐臂落盘机制立项理由。
+
+## §14 P5 双轴重设计战报（2026-10-08，全臂 FAIL 阴性登记；台账 §23）
+
+**执行链**：用户令「请执行 P5 双轴重设计」→ 前置四项诊断（§11 建议顺序收官）→ 预登记合同
+（lifecycle-p5-preregistration.md，判定线冻结）→ 接线（lifecycleAllowBandGateMode 三态默认 off）→
+trial 6 臂 → 全臂 FAIL 阴性登记。
+
+**诊断四件**（lifecycle-p5-dual-axis-diagnosis.json，decision 窗 124,026 帧）：
+- D0 双轴语义修正：action 轴与 stage 近完全映射（veto←reversal/cooling、caution←cooling、
+  allow←ignition+expansion 全部；action×pct MI 0.2465≈stage×pct 0.2894）——**「拆轴」无信息增量，
+  非单调门的真落点=allow 腿分位带门**（gate-redesign-proposal §4 拆轴方案据此搁置）。
+- D1 stage×pct 列联：MI=0.2894（shuffle 0.0002）；crowded 93% 落最高带、ignition 在 pct0-4 带仅 3%
+  （低位点火帧结构性地不存在）——§4.1-E「tier 构成由分位带决定」定量实锤。
+- D2 velocity 单轴不可分（cooling 跨全带），D3 2D 单元格：低位带 fwd8 全正、up_fast 自 pct5 带恶化；
+  D4 allow 帧 fwd1=−1.47 < caution +0.40（=原立项依据，后被 trial 证伪其 excess 语义）。
+
+**trial 判定**（6 臂 1950s+Track1）：五剂量臂结构守卫全过（veto/exit_watch 逐位不变=红线②兑现），
+**信号面全灭**：a3 保守门 −0.0167/+0.0053/−0.0169、a1 混合、a2/b1/b2 三窗 saEx=None（A 档塌缩样本
+不足）。**核心结构发现：D4「allow 比 caution 差」是 fwd 原始读数的均值回归假象，excess 校正后高分位
+allow 帧是正贡献者**——合同 C-10② 预警兑现，**fwd 原始读数不能单独作降档立项依据（须 excess 校正
+口径先行）**。对照发现（如实登记非准入）：a3 Track1 wrxpf +0.0111/dd 改善与信号面恶化并存=降档价值
+在交易面不在标签纯度（「环境门价值在负向过滤」的镜像）；重开唯一合法路径=新合同以 Track1 为主判定面。
+a2/b2 成交集逐指标相同（差异帧 execution 零入选）对账非串臂。
+
+**P5 线闭环**：诊断→合同→接线→trial→阴性登记，零默认改动。方法论文沉淀：①诊断读数与判定指标
+必须同口径（fwd raw vs excess 校正的教训与 W1-2「分值空间 vs count 空间」同族）；②saEx 对 A 档样本
+量敏感（<2000→None），剂量设计预核最小样本量；③长跑 runner checkpoint 机制两次兑现价值。

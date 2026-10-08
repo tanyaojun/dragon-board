@@ -258,7 +258,7 @@ def _confirm_jump(
     return jump
 
 
-from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision
+from ..trend.lifecycle import analyze_cycle, cycle_metrics, raw_stage, normalize_stage, cycle_confidence, entry_advice, lifecycle_decision, apply_allow_band_gate
 
 from ..trend.risk import REGIME_STRONG_SCORE, analyze_risk, market_regime
 from ..trend.gate_confirm import GateConfirmState, gate_reason
@@ -1252,6 +1252,10 @@ class RankTrendPythonEngine:
         cycle = _compat_callable("analyze_cycle_with_risk")(
             cycle, risk, technical.get("momentumProfile"), self.config
         )
+        # P5 双轴重设计·allow 腿分位带门（2026-10-07 预登记合同；off 原样返回=零行为）。
+        # 调用点合同：在 gate_confirm 状态机与 compose_decision/tier 之前——改写后的 action
+        # 进入全部下游（含确认状态机与两 tier 合成）；veto/exit_watch/caution 不触碰。
+        cycle = _compat_callable("apply_allow_band_gate")(cycle, current_percentile, self.config)
         # WP2a：lifecycle veto（action）多帧确认（K>1 且帧序列上下文才生效；K=1 直通 = 现行为）。
         # 后端 decision 无 veto 布尔键，veto 恒以 action=="veto" 表达；抑制时改写 action，
         # 下游 _lifecycle_tier（不产 E）/E 连锁/compose_analysis_candidate_tier/compose_observation_scores/
