@@ -6,7 +6,9 @@
 - 单一事实源：直接 import emotion_score._CALIB/_interp，零曲线副本；
 - 只探测不重写：月度重校准/第八维重启均走预登记裁决（设计文档 §2），本模块不改评分口径；
 - fail-visible：raw 恒 null 的复合维（limitStruct）结构性排除登记；窗口样本 <30 该维 skip；
-- 落库：phase_monitor kind=calib_drift _id=calib_drift:<YYYY-MM> 月度幂等 upsert。
+- 落库：phase_monitor kind=calib_drift _id=calib_drift:<YYYY-MM> 月度幂等 upsert；
+- 持续漂移判据：同维同分位连续 ≥SUSTAINED_MONTHS 个月同向 |漂移|>阈值 → sustained=True
+  （市况结构变化候选，仅立项依据——触发后走一次性重定基预登记，本模块不改锚）。
 
 用法（quant-board 目录）：
   ./.venv/Scripts/python.exe -m backend.operations.emotion_score_calib_monitor --date 2026-10-08 [--apply]
@@ -34,6 +36,9 @@ REVERSED_ANCHORS: tuple[tuple[str, float, float], ...] = (
     ("P10", 10.0, 90.0), ("P25", 25.0, 75.0), ("P50", 50.0, 50.0), ("P75", 75.0, 25.0), ("P90", 90.0, 10.0))
 ALERT_THRESHOLD = 10.0
 MIN_SAMPLE = 30
+# 持续漂移判据（月度快照逐月回看）：同维同分位连续 ≥3 个月同向 |漂移|>阈值 → 市况结构变化候选
+# （仅立项依据：触发后走一次性重定基预登记，本模块仍不改锚）
+SUSTAINED_MONTHS = 3
 # 有 stored raw 的检测维（limitStruct raw 恒 null=复合维，结构性排除）
 MONITORED_DIMS = ("upRatio", "attackShare", "riskShare", "trin", "yhPositive", "riskRowsPct")
 EXCLUDED_DIMS = {"limitStruct": "composite_dim_raw_null", "amountVsSame": "frozen_gate_a1"}
@@ -137,6 +142,40 @@ def build_calib_drift_report(
     }
 
 
+def _prev_months(month: str, count: int) -> list[str]:
+    """YYYY-MM → 往前 count 个月（新→旧）。"""
+    y, m = int(month[:4]), int(month[5:7])
+    out: list[str] = []
+    for _ in range(count):
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+        out.append(f"{y:04d}-{m:02d}")
+    return out
+
+
+def compute_sustained_drift(current_report: dict[str, Any], prev_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """持续漂移判据（纯函数）：当前月告警（|drift|>阈值）的同维同分位，沿 prev_reports（新→旧）
+    逐月查同号超阈即连击；streak ≥ SUSTAINED_MONTHS → sustained=True（市况结构变化候选）。
+    只登记 streak ≥2 的组合（单月告警已在 alerts 里，不重复）；零写库零改锚。"""
+    out: dict[str, Any] = {}
+    for dim, entry in (current_report.get("dims") or {}).items():
+        for pname, drift in (entry.get("drifts") or {}).items():
+            if not isinstance(drift, (int, float)) or abs(drift) <= ALERT_THRESHOLD:
+                continue
+            streak = 1
+            for prev in prev_reports:
+                pv = ((((prev or {}).get("dims") or {}).get(dim) or {}).get("drifts") or {}).get(pname)
+                if isinstance(pv, (int, float)) and abs(pv) > ALERT_THRESHOLD and (pv > 0) == (drift > 0):
+                    streak += 1
+                else:
+                    break
+            if streak >= 2:
+                out[f"{dim}:{pname}"] = {"streak": streak, "currentDrift": drift,
+                                         "sustained": streak >= SUSTAINED_MONTHS}
+    return out
+
+
 # ---------------------------------------------------------------- IO（可 monkeypatch 边界）
 
 def _get_db() -> Any:
@@ -177,6 +216,17 @@ def run_calib_drift_monitor(today: str, *, apply: bool = False) -> dict[str, Any
                 "message": f"{today} 前 {WINDOW_TRADING_DAYS} 交易日内无槽位情绪文档"}
     report = build_calib_drift_report(docs, trading_dates=dates,
                                       amount_recorded_days=load_amount_recorded_days(db))
+    # 持续漂移：沿月度快照逐月回看（缺失月 fail-visible 登记，不算失败）
+    prev_reports: list[dict[str, Any]] = []
+    prev_found: list[str] = []
+    for ym in _prev_months(str(report["month"]), SUSTAINED_MONTHS - 1):
+        doc = db["phase_monitor"].find_one({"_id": f"calib_drift:{ym}"})
+        if isinstance(doc, dict) and isinstance(doc.get("report"), dict):
+            prev_reports.append(doc["report"])
+            prev_found.append(ym)
+    report["sustainedDrift"] = compute_sustained_drift(report, prev_reports)
+    report["meta"]["sustainedMonths"] = SUSTAINED_MONTHS
+    report["meta"]["prevMonthsFound"] = prev_found
     persisted = None
     if apply:
         from backend.operations.phase_monitor_persistence import persist_calib_drift

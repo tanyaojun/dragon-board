@@ -19,6 +19,9 @@
            公式致反向维虚高告警，已修正并登记）
 漂移     = _interp(_CALIB[dim], 窗口该维锚分位 raw 值) − 锚定期望分
 告警     = 任一维任一锚分位 |漂移| > 10 分（冻结线）
+持续漂移 = 同维同分位沿月度快照逐月回看，连续 ≥3 个月同向超阈 → sustained=true
+           （市况结构变化候选，仅立项依据——触发后走一次性重定基预登记，监控仍不改锚；
+           streak ≥2 即登记供早期观察；缺上月快照 fail-visible 登记 prevMonthsFound）
 最小样本 = 窗口内该维有效 raw < 30 → 该维 skip（fail-visible 登记，不算告警）
 就绪通知 = market_daily_amount 有 vsSamePct 的文档数 ≥20 → amountVsSame 重校准就绪
            （口径注：该 vsSamePct=相邻交易日对日级，槽级口径是否需另采由重校准预登记裁决）
