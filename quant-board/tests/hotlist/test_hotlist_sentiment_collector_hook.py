@@ -271,9 +271,12 @@ def test_slot_write_roundtrip_preserves_emotion_score_and_legacy_fields(monkeypa
 
 
 def test_slot_wiring_feeds_real_evidence_into_score(monkeypatch):
-    """T3 接线断言（review T3-S3）：analysis_by_code 与昨日同期总额真实进入评分链——
-    真评分下 amountVsSame/riskRowsPct/yhPositive 可算（不再 skip），证明 evidence parts
-    不是摆设；spy 捕获 collect_slot_evidence 的入参核对传递值。"""
+    """T3 接线断言（review T3-S3）：analysis_by_code 与昨日同期总额真实进入评分链。
+    第八维冻结门（A-① 2026-10-08，audit P1-1）下生产恒 skip，本测试 monkeypatch 临时开门
+    验证接线不回归（若 evidence wiring 断开，开门后 amountVsSame 会缺失降级）；
+    spy 捕获 collect_slot_evidence 的入参核对传递值。"""
+    import backend.analysis.hotlist.emotion_score as emotion_score_module
+    monkeypatch.setattr(emotion_score_module, "_AMOUNT_VS_SAME_ENABLED", True)
     import backend.analysis.hotlist.jev_state as jev_state
     import backend.operations.hotlist_sentiment as ops_mod
 

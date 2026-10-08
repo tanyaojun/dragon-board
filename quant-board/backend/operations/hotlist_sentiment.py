@@ -724,8 +724,10 @@ def build_hotlist_sentiment_document(
     prev_score = score_points[-1][1] if score_points else None
     slope = round(score_value - prev_score, 2) if (score_value is not None and prev_score is not None) else None
     raw_stage_value = map_stage(score_value, slope) if score_value is not None else None
-    # activeDims（2026-10-05 方向二报告 §六#8）：有效维基数戳——10-09 amountVsSame 激活使
-    # 有效维 7→8，跨日可比性按此字段分段（历史文档缺该键=旧代，fail-visible）。
+    # activeDims（2026-10-05 方向二报告 §六#8）：有效维基数戳，跨日可比性按此字段分段
+    # （历史文档缺该键=旧代，fail-visible）。2026-10-08 勘误：原注预期「10-09 amountVsSame
+    # 激活 7→8」与 10-06 评估「暂不启用」矛盾，且 10-08 已被实证自动激活（audit P1-1）——
+    # 现裁决 A-① 冻结该维（emotion_score._AMOUNT_VS_SAME_ENABLED=False），有效维回到 7。
     active_dims = 8 - len(emotion.get("skippedDims") or [])
     # pathDiag（2026-10-05 方向一，GLM 研讨）：日内路径诊断——极值+自高点回撤+自低点反弹。
     # 纯诊断字段：不进 map_stage、不进档位/regime/门控链；回落中（drawdownFromHigh<0）

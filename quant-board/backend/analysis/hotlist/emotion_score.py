@@ -46,6 +46,15 @@ _WEIGHTS = {
     "yhPositive": 1, "limitStruct": 1, "amountVsSame": 1, "riskRowsPct": 1,
 }
 
+# 第八维冻结门（2026-10-08 裁决 A-①，eod-emotion-rule-audit-20261008.md P1-1）：
+# amountVsSame 评分维冻结，原料照常采集（record_amount_vs_same 每日只记不评）。
+# 否决依据（amountvs-same-dimension-assessment 2026-10-06）：①尾部信号单向稀释器
+# （20 次阈值穿越全部指向中位：深谷 +3.2/高峰 −3.0）②校准曲线系设计值（±30pp 才到
+# 25/80 分，实测 p90 仅 +13.7pp）③T+1 预测力增量为零。10-05 方向二报告预期「10-09 激活」
+# 与该评估矛盾且无门控，10-08 已被实证自动激活（EOD 分 44.8→7 维口径 41.6）——现冻结。
+# 重启条件：≥20 交易日样本积累后重校准 _CALIB["amountVsSame"]，随预登记重放一并裁决。
+_AMOUNT_VS_SAME_ENABLED = False
+
 
 def _interp(points: list[tuple[float, float]], value: float) -> float:
     """分段线性插值；value 低于首边界取首分、高于末边界取末分。"""
@@ -126,7 +135,7 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
         "yhPositive": _sub("yhPositive", yh_positive, dims, skipped),
         "limitStruct": limit_struct,
         "amountVsSame": (_sub("amountVsSame", amount_pct, dims, skipped)
-                          if amount_pct is not None else None),
+                          if (_AMOUNT_VS_SAME_ENABLED and amount_pct is not None) else None),
         "riskRowsPct": (_sub("riskRowsPct", risk_rows_pct, dims, skipped)
                          if risk_rows_pct is not None else None),
     }
@@ -134,7 +143,7 @@ def compute_emotion_score(evidence: dict, slope: float | None = None) -> dict:
         skipped.append("limitStruct")
     else:
         dims["limitStruct"] = {"raw": None, "sub": limit_struct}
-    if amount_pct is None:
+    if (not _AMOUNT_VS_SAME_ENABLED) or amount_pct is None:
         skipped.append("amountVsSame")
     if risk_rows_pct is None:
         skipped.append("riskRowsPct")

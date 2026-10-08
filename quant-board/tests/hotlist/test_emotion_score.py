@@ -31,11 +31,25 @@ def test_score_full_dims_and_decomposable():
     result = compute_emotion_score(_evidence())
     score = result["score"]
     assert 0 <= score <= 100
-    # 可分解：等权合成可从 dims 还原（8 维全在 → 简单平均）
+    # 可分解：等权合成可从 dims 还原——第八维 amountVsSame 冻结（A-①，2026-10-08），
+    # 即使原料齐全（vsSamePct=25.0 在场）也 skipped，有效维 = 7
+    assert result["skippedDims"] == ["amountVsSame"]
     subs = [v["sub"] for v in result["dims"].values()]
+    assert len(subs) == 7
     assert abs(score - sum(subs) / len(subs)) < 0.1
-    assert not result["skippedDims"]
     assert result["stageCandidate"]
+
+
+def test_amount_vs_same_dim_frozen_by_gate():
+    """第八维冻结门（audit P1-1）：原料在场也不入分，防尾部稀释与代际混用。"""
+    result = compute_emotion_score(_evidence())  # base 夹具 vsSamePct=25.0 在场
+    assert "amountVsSame" not in result["dims"]
+    assert result["skippedDims"] == ["amountVsSame"]
+    frozen_score = result["score"]
+    # 反证：同一证据若去掉量能原料，分数不变（冻结维零贡献）
+    ev = _evidence()
+    ev["totalAmount"] = {"amount": None, "vsSamePct": None, "yesterdaySame": None}
+    assert compute_emotion_score(ev)["score"] == frozen_score
 
 
 def test_score_missing_dims_degrade_and_renormalize():
