@@ -343,6 +343,12 @@ class RankTrendConfig:
     lifecycleDowngradeGateMode: str = "hard"   # lc B/D 对已达 S/A 的干预：hard=降一档（现行为）| soft=惩罚 | off=不干预
     lifecycleDowngradePenalty: float = 0.5     # soft：首评 ∈ {S,A} 时 v −= penalty 后重走阶梯
     volumePriceGateMode: str = "hard"          # vp E→D 出货短路（同构位）：hard=现行为 | soft=强制负票 | off=静默
+    # ── L2 amount 喂量价档位（2026-10-08 预登记合同 v1.1；默认 off=现行为，golden 不漂移）──
+    # 依据 W0-2 四窗一致单调（放量帧 h8 后验走弱/缩量走强，excess 校正口径）+ 可算率 72.4%；
+    # 门限复用 amountRatioHigh/Low（W0-2 分层读数即按此两档测得，零新阈值）。
+    # high_demote=放量奖励撤回（ar≥1.5 ∧ rise_volume → A/B 降一档）；both=a + 缩量惜售升档
+    # （ar≤0.5 ∧ rise_shrink/normal 的 C → B；缩量涨停/对倒出货 E 优先级不动）。
+    volumePriceAmountTierMode: str = "off"
     # ── lifecycle 尺度/时间正规化（2026-10-07 P1/P3 预登记合同行为步；默认=现行为，golden 不漂移）──
     # P1：绝对名次阈值池规自适应。mixed=现行为（名次/分位双口径）；
     #   pct_full=名次类谓词整体换算 T=200 锚等价分位线（rank R ⇔ pct=(201−R)/2，drawdown 1 格=0.5 pct 点，热区仅 pct≥88 臂）；
@@ -595,6 +601,7 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
         ("lifecycleVetoPathMode", ("all_soft", "reversal_hard", "highrisk_hard")),
         ("lifecycleDowngradeGateMode", ("hard", "soft", "off")),
         ("volumePriceGateMode", ("hard", "soft", "off")),
+        ("volumePriceAmountTierMode", ("off", "high_demote", "both")),
         ("lifecycleRankScaleMode", ("mixed", "pct_full", "hotzone_pct_only")),
         ("lifecycleTimeGapStrictness", ("off", "cross_day", "non_adjacent")),
         ("lifecycleGapPriceVolumeMode", ("off", "direction_gate")),

@@ -102,22 +102,55 @@ def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return min(high, max(low, value))
 
 
-def _volume_price_tier(quadrant: str | None, fund_score: float, reasons: list[str]) -> tuple[str, list[str]]:
-    """量价离散档位（signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §6.3。"""
+def _volume_price_tier(
+    quadrant: str | None,
+    fund_score: float,
+    reasons: list[str],
+    amount_ratio: Any = None,
+    tier_mode: str = "off",
+    amount_ratio_high: float | None = None,
+    amount_ratio_low: float | None = None,
+) -> tuple[str, list[str]]:
+    """量价离散档位（signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §6.3。
+
+    L2 amount tier 门（2026-10-08 预登记合同 v1.1；tier_mode 默认 off 恒走原路径=零行为）：
+    - high_demote：放量奖励撤回——A/B（rise_volume 路径独占档）∧ ar ≥ amount_ratio_high
+      → 降一档（A→B、B→C）；C/D/E/unknown 零改动。
+    - both：a 臂语义 + 缩量惜售升档——C ∧ ar ≤ amount_ratio_low ∧ 非缩量涨停 → B
+      （缩量涨停/对倒出货 E 硬风险优先级不动，特殊语义帧不参与升档）。
+    门只改 tier 值并追加 fail-visible 标注，score 链零改动。"""
     if quadrant is None:
         return "unknown", ["量价数据不足"]
     joined = " ".join(reasons)
     if "对倒出货" in joined or "过度放量" in joined:
-        return "E", ["硬风险：对倒出货/过度放量"]
-    if "缩量涨停" in joined:
-        return "C", ["缩量涨停封板，买不进，不可交易"]  # 信号真但执行不可交易，降出强档
-    if quadrant == "rise_volume" and fund_score > 0:
-        return "A", ["放量上涨 + 资金流入"]
-    if quadrant == "rise_volume":
-        return "B", ["放量上涨，量价配合"]
-    if quadrant in ("rise_shrink", "normal"):
-        return "C", ["缩量上涨/常态"]
-    return "D", ["放量下跌/缩量下跌"]
+        tier, tier_reasons = "E", ["硬风险：对倒出货/过度放量"]
+    elif "缩量涨停" in joined:
+        tier, tier_reasons = "C", ["缩量涨停封板，买不进，不可交易"]  # 信号真但执行不可交易，降出强档
+    elif quadrant == "rise_volume" and fund_score > 0:
+        tier, tier_reasons = "A", ["放量上涨 + 资金流入"]
+    elif quadrant == "rise_volume":
+        tier, tier_reasons = "B", ["放量上涨，量价配合"]
+    elif quadrant in ("rise_shrink", "normal"):
+        tier, tier_reasons = "C", ["缩量上涨/常态"]
+    else:
+        tier, tier_reasons = "D", ["放量下跌/缩量下跌"]
+    # L2 amount tier 门（合同 v1.1）：基准档定完后过门；E/缩量涨停短路优先级已在上（硬风险语义
+    # 高于 amount 门，缩量涨停帧不参与升档）。off/None 入参恒走原路径（零行为）。
+    if tier_mode in ("high_demote", "both"):
+        ar_gate = _finite(amount_ratio)
+        if ar_gate is not None and amount_ratio_high is not None and amount_ratio_low is not None:
+            if tier in ("A", "B") and ar_gate >= amount_ratio_high:
+                demoted = "B" if tier == "A" else "C"
+                tier = demoted
+                tier_reasons = tier_reasons + [
+                    f"放量奖励撤回（L2 amount tier 门：ar {ar_gate:.2f} ≥ {amount_ratio_high}，降一档）"
+                ]
+            elif tier_mode == "both" and tier == "C" and ar_gate <= amount_ratio_low and "缩量涨停" not in joined:
+                tier = "B"
+                tier_reasons = tier_reasons + [
+                    f"缩量惜售升档（L2 amount tier 门：ar {ar_gate:.2f} ≤ {amount_ratio_low}）"
+                ]
+    return tier, tier_reasons
 
 
 def compute_volume_price_score(
@@ -240,7 +273,14 @@ def compute_volume_price_score(
     elif ar is not None and ar <= 0:
         reasons.append("成交额数据缺失（amount=0，不参与量价资金判定）")
 
-    _tier, _tier_reasons = _volume_price_tier(quadrant, fund_score, reasons)
+    # L2 amount tier 门（合同 v1.1）：tier_mode=off 时门参数无效恒走原路径（零行为）
+    _tier, _tier_reasons = _volume_price_tier(
+        quadrant, fund_score, reasons,
+        amount_ratio=ar,
+        tier_mode=str(getattr(c, "volumePriceAmountTierMode", "off") or "off"),
+        amount_ratio_high=float(c.amountRatioHigh),
+        amount_ratio_low=float(c.amountRatioLow),
+    )
     return {
         "score": score,
         "direction": direction,

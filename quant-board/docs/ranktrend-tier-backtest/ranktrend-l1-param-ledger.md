@@ -638,3 +638,29 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **归档 runner 守卫（fail-visible）**：`evaluate_lifecycle_q1_trials.py` 模块级断言——ca_* 三臂消费的 `tierSynergyDivergenceVote` 已摘除，`from_patch` 对未知键静默跳过=臂会静默塌缩成 baseline 假读数（G4 断线先例同族风险），字段若重现即 raise（重开 dv 面唯一路径=新合同重新预登记，不得复用归档 runner）。
 - **零行为验收（全过）**：三窗 saEx **逐位一致**（0.14502883031301483/0.09825280898876404/0.11716262626262626）+resS/synS 逐位（14370/2018/1608、127/29/24）+Track 1 逐位（172 笔/wrxpf 0.414/dd −0.2231）=票权本就 0 的架构诚实化；golden 重录 diff 干净（configRepr 6 处 −2 字段文本、其余逐位一致，场景输出零漂移）；ranktrend 667 全绿（test_synergy_vote 断言更新：字段不存在性+签名收窄 co_varnames 断言）；Redis 清键+8000 已重启。
 - **收益**：架构诚实（消除「价格信息已参与投票」误读）；**回退=git revert 唯一路径**（字段删除非开关）。
+
+## 28. L2 amount 喂量价档位 trial 收官（2026-10-08：双臂 FAIL 阴性登记，零默认改动；C1 首过但 oos 崩盘）
+
+> 合同 `vote-l2-vp-amount-tier-preregistration.md` v1.1（双模型审定有条件通过，用户开跑令）。接线：
+> `volumePriceAmountTierMode`（off/high_demote/both 默认 off）+ `_volume_price_tier` 门分支（E/缩量涨停
+> 优先级不动、fail-visible 标注、score 链零改动）；专项 15 过+golden 重录仅 configRepr 6 处文本+后端
+> 3323 过。trial（951 帧口径，B0 锚三窗逐位自证 PASS；runner `evaluate_vote_l2_vp_amount.py` checkpoint
+> 逐臂落盘）。
+
+| 臂 | decision | oos1 | oos2 | Track1（decision） | 判定 |
+|---|---|---|---|---|---|
+| a_high_demote（改判 2932 帧/2.24%） | **+3.52% C1 首过** | **−23.7% 触 A3 止损带** | −4.4% C2 反向 | wrxpf −8.2%+dd 恶化 | FAIL |
+| b_both（改判 6663 帧/5.08%；升档腿独占 3731） | +4.16% | **−25.7% 触 A3 止损带** | −4.8% | wrxpf −9.6%+dd 恶化 | FAIL |
+
+- **判定（L2-3）**：全 FAIL=阴性登记不提交，零默认改动（off=现默认，开关保留诊断对照面）。
+- **核心发现**：①**C1 首次过线**（全研究轮第一个 decision saEx ≥+3% 臂——W0-2 立项读数在判定口径
+  decision 面复现），但 oos 全面崩（oos1 −23.7%/−25.7%、oos2 −4.4%/−4.8%）=决策窗改善零外推；
+  ②A3 止损带（v1.1 审定增补）精确履职——没有它 C1 单线误判过线，**判定卡多窗结构（C1+C2+A3）是
+  in-sample 改善与可部署之间的唯一防线，后续合同默认保留**；③vp 迁移符合预期方向（A+B 面↓C 面↑
+  双级联、b 臂 B +3731 升档腿独立）但方向对不等于外推成立；④护栏过线但 synS 127→98/103（S 档
+  −20% 如实登记）；⑤市况分桶 retreat 桶逐位相同（改判不触 retreat）、strong 微降——oos1 崩盘机制
+  未定位（分桶未覆盖 oos 窗），与 C10①「强情绪期错杀」相容非证实，留观察线索。
+- **runner 教训**：signal 顶层 regime 是字符串（runtime:1559）非 dict，市况 filter 首跑崩（baseline
+  轮白跑 ~4 分钟）——披露类取数先 smoke 臂验证（W1-1 教训第二例）。
+- **回退**：`volumePriceAmountTierMode="off"` 单开关即现默认；基线锚自证与 §18/§22/§26 一致
+  （0.14503/0.09825/0.11716）。
