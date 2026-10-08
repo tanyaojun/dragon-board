@@ -133,24 +133,32 @@ def test_build_report_alert_and_skip_and_exclusion():
 # ---------------------------------------------------------------- 持续漂移
 
 def test_compute_sustained_drift_streak_signflip_and_gap():
-    current = {"dims": {"trin": {"drifts": {"P50": -11.0}}, "upRatio": {"drifts": {"P50": 12.0}}}}
+    current = {"month": "2026-10", "dims": {"trin": {"drifts": {"P50": -11.0}}, "upRatio": {"drifts": {"P50": 12.0}}}}
     # trin：连续两月同向超阈 → streak 3 sustained；upRatio：上月变号 → streak 1 不登记
     prevs = [
-        {"dims": {"trin": {"drifts": {"P50": -12.0}}, "upRatio": {"drifts": {"P50": -9.0}}}},
-        {"dims": {"trin": {"drifts": {"P50": -10.5}}, "upRatio": {"drifts": {"P50": 8.0}}}},
+        {"month": "2026-09", "dims": {"trin": {"drifts": {"P50": -12.0}}, "upRatio": {"drifts": {"P50": -9.0}}}},
+        {"month": "2026-08", "dims": {"trin": {"drifts": {"P50": -10.5}}, "upRatio": {"drifts": {"P50": 8.0}}}},
     ]
     out = cm.compute_sustained_drift(current, prevs)
     assert out["trin:P50"] == {"streak": 3, "currentDrift": -11.0, "sustained": True}
     assert out == {"trin:P50": {"streak": 3, "currentDrift": -11.0, "sustained": True}}
 
 
+def test_compute_sustained_drift_missing_month_breaks_chain():
+    """review P3：缺档月=断链不桥接——08 月缺档时 09 月报告不得被计成相邻连击。"""
+    current = {"month": "2026-10", "dims": {"riskRowsPct": {"drifts": {"P50": 32.4}}}}
+    # 只找到 2026-08（2026-09 缺档）→ 首个期望月 09 不匹配 → 断链 streak 1 → 不登记
+    prevs = [{"month": "2026-08", "dims": {"riskRowsPct": {"drifts": {"P50": 30.0}}}}]
+    assert cm.compute_sustained_drift(current, prevs) == {}
+
+
 def test_compute_sustained_drift_two_months_and_gap_break():
-    current = {"dims": {"riskRowsPct": {"drifts": {"P50": 32.4}}}}
+    current = {"month": "2026-10", "dims": {"riskRowsPct": {"drifts": {"P50": 32.4}}}}
     # 仅 1 个月同向 → streak 2，登记但不 sustained
-    out = cm.compute_sustained_drift(current, [{"dims": {"riskRowsPct": {"drifts": {"P50": 20.0}}}}])
+    out = cm.compute_sustained_drift(current, [{"month": "2026-09", "dims": {"riskRowsPct": {"drifts": {"P50": 20.0}}}}])
     assert out["riskRowsPct:P50"] == {"streak": 2, "currentDrift": 32.4, "sustained": False}
-    # 中间月缺失（漂移低于阈）→ 断链
-    out2 = cm.compute_sustained_drift(current, [{"dims": {"riskRowsPct": {"drifts": {"P50": 3.0}}}}])
+    # 中间月漂移低于阈 → 断链
+    out2 = cm.compute_sustained_drift(current, [{"month": "2026-09", "dims": {"riskRowsPct": {"drifts": {"P50": 3.0}}}}])
     assert out2 == {}
 
 
@@ -169,7 +177,7 @@ def test_run_monitor_sustained_reads_prev_months(monkeypatch):
     fake._colls["market_daily_amount"] = _FakeCollection()
     fake["phase_monitor"].docs["calib_drift:2026-08"] = {
         "_id": "calib_drift:2026-08",
-        "report": {"dims": {"riskRowsPct": {"drifts": {"P50": 30.0}}, "trin": {"drifts": {"P50": 1.0}}}}}
+        "report": {"month": "2026-08", "dims": {"riskRowsPct": {"drifts": {"P50": 30.0}}, "trin": {"drifts": {"P50": 1.0}}}}}
     monkeypatch.setattr(cm, "_get_db", lambda: fake)
     result = cm.run_calib_drift_monitor("2026-10-08", apply=False)
     assert result["ok"] is True

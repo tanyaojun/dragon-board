@@ -337,6 +337,7 @@ def _run_calib_drift_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "calib_drift_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
     mongo_fresh = False
     alert_count = None
+    mongo_warning: str | None = None
     month = today[:7]
     try:
         db = repository_factory.get_runtime_mongodb_database()
@@ -345,11 +346,13 @@ def _run_calib_drift_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         updated = str((doc or {}).get("updatedAt") or "")
         mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
         alert_count = len((((doc or {}).get("report") or {}).get("alerts")) or [])
-    except Exception:  # noqa: BLE001 — advisory 步不翻转整体状态
-        pass
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态，异常串入 mongoWarning（对齐兄弟步）
+        mongo_warning = f"phase_monitor calib_drift:{month} updatedAt 校验失败: {exc}"
     result: dict[str, Any] = {"ok": True, "date": today, "month": month,
                               "alertCount": alert_count, "mongoFresh": mongo_fresh}
-    if not mongo_fresh:
+    if mongo_warning:
+        result["mongoWarning"] = mongo_warning
+    elif not mongo_fresh:
         result["mongoWarning"] = "phase_monitor calib_drift:<month> updatedAt 未刷新（advisory 不翻转）"
     return result
 

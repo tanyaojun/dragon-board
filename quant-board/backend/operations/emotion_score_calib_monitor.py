@@ -64,7 +64,8 @@ def _is_reversed(curve: list[tuple[float, float]]) -> bool:
 
 
 def _expected_sub(curve: list[tuple[float, float]], p: float) -> float:
-    """锚定期望分：按曲线方向取锚定网格（主维 P_p→p；反向维镜像 P10→90/P25→75/P50→50/P75→25/P90→10）。"""
+    """锚定期望分（生产入口=drifts_of；按曲线方向取锚定网格：主维 P_p→p；
+    反向维镜像 P10→90/P25→75/P50→50/P75→25/P90→10）。"""
     anchors = REVERSED_ANCHORS if _is_reversed(curve) else MAIN_ANCHORS
     for _name, ap, expected in anchors:
         if ap == p:
@@ -79,11 +80,11 @@ def drifts_of(raws: list[float], calib_curve: list[tuple[float, float]]) -> dict
     vals = sorted(float(v) for v in raws)
     anchors = REVERSED_ANCHORS if _is_reversed(calib_curve) else MAIN_ANCHORS
     out: dict[str, float] = {}
-    for name, p, expected in anchors:
+    for name, p, _expected in anchors:
         v = percentile(vals, p)
         if v is None:
             continue
-        out[name] = round(_interp(calib_curve, v) - expected, 1)
+        out[name] = round(_interp(calib_curve, v) - _expected_sub(calib_curve, p), 1)
     return out or None
 
 
@@ -155,21 +156,39 @@ def _prev_months(month: str, count: int) -> list[str]:
 
 
 def compute_sustained_drift(current_report: dict[str, Any], prev_reports: list[dict[str, Any]]) -> dict[str, Any]:
-    """持续漂移判据（纯函数）：当前月告警（|drift|>阈值）的同维同分位，沿 prev_reports（新→旧）
-    逐月查同号超阈即连击；streak ≥ SUSTAINED_MONTHS → sustained=True（市况结构变化候选）。
+    """持续漂移判据（纯函数）：当前月告警（|drift|>阈值）的同维同分位，沿 prev_reports（新→旧，
+    须含 month 字段）逐月回看；**缺失月=断链不桥接**（review P3：避免缺档月被计成相邻连击）；
+    同号超阈连击 streak ≥ SUSTAINED_MONTHS → sustained=True（市况结构变化候选）。
     只登记 streak ≥2 的组合（单月告警已在 alerts 里，不重复）；零写库零改锚。"""
+    month = str(current_report.get("month") or "")
+    queue = [r for r in prev_reports if isinstance(r, dict) and r.get("month")]
+    if not month or not queue:
+        return {}
+    expected_months = _prev_months(month, len(queue))
+
+    def _streak(dim: str, pname: str, drift: float) -> int:
+        streak = 1
+        qi = 0
+        for m in expected_months:
+            if qi >= len(queue):
+                break
+            rep = queue[qi]
+            if str(rep.get("month")) != m:
+                break  # 缺失月=断链（不桥接）
+            qi += 1
+            pv = ((((rep.get("dims") or {}).get(dim) or {}).get("drifts") or {}).get(pname))
+            if isinstance(pv, (int, float)) and abs(pv) > ALERT_THRESHOLD and (pv > 0) == (drift > 0):
+                streak += 1
+            else:
+                break
+        return streak
+
     out: dict[str, Any] = {}
     for dim, entry in (current_report.get("dims") or {}).items():
         for pname, drift in (entry.get("drifts") or {}).items():
             if not isinstance(drift, (int, float)) or abs(drift) <= ALERT_THRESHOLD:
                 continue
-            streak = 1
-            for prev in prev_reports:
-                pv = ((((prev or {}).get("dims") or {}).get(dim) or {}).get("drifts") or {}).get(pname)
-                if isinstance(pv, (int, float)) and abs(pv) > ALERT_THRESHOLD and (pv > 0) == (drift > 0):
-                    streak += 1
-                else:
-                    break
+            streak = _streak(dim, pname, drift)
             if streak >= 2:
                 out[f"{dim}:{pname}"] = {"streak": streak, "currentDrift": drift,
                                          "sustained": streak >= SUSTAINED_MONTHS}
