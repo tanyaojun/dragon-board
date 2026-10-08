@@ -78,7 +78,21 @@ backend/operations/emotion_score_recalib_replay.py，产物 .tmp/emotion-score-r
 
 ## 5. 待裁决事项（曲线落地=独立提交）
 
-1. 按本预登记落地 6 维新曲线（过门数字如上）+ `emotion_score_recompute` 全量重算 +
-   下游合同复核（相位历史/脉拍分带/C9/C10 账本随重算自愈）；
-2. 尾窗口径备选（快速适配）是否另立预登记；
-3. 附录 A（amountVsSame 启用+曲线校准）是否同批裁决。
+1. ✅ **已落地（用户裁决 2026-10-08「1、落地」）**，执行记录：
+   - 曲线：6 维锚位 raw 刷新写入 `_CALIB`（sub/设计点不动），落地钉测试
+     `test_calib_curves_match_landed_recalibration_20261008`；对照产物归档
+     `data/backups/emotion-score-recalib-20261008.json`；
+   - 全量重算：`emotion_score_full_recompute` 驱动（按日×槽位时序：先槽位
+     compute_and_upsert_for_slot 后 EOD recompute，乱序会代际混用），114 天 / 1081 槽 /
+     6.3 分钟，旧文档备份于 hotlist_sentiment_recompute_backup；
+   - **实际迁移 24 天（21%）** vs 回放预测 6 天：预期叠加效应——回放隔离的仅纯曲线效应，
+     实际=新曲线 + B+C 档位语义首次落历史（预登记已批 8 天）+ 槽位轨迹刷新，
+     方向高度一致（启动 43→27，退潮 17→28，冰点 21→25——中带方向语义消化历史虚高）；
+   - 五档可达保持（高潮9→8/发酵24→26/启动43→27/退潮17→28/冰点21→25，无档消失）；
+   - 相位翻转 1 天：2026-08-17 58.3→62.8 启动→发酵（跨 60 向上，源真重算差）；
+   - 2026-10-08 终态：41.2 / 退潮 / rawStage 退潮 / slope −14.4 / 7 维 / skipped=[amountVsSame]
+     （三方一致，日级句「弱势带」仍成立）；
+   - 脉拍与日级句为重建即自愈的快照（明日 16:00 链读新 EOD 分），今日旧快照 0.4 分展示
+     漂移披露不回填；
+2. 尾窗口径备选（快速适配）是否另立预登记——待定；
+3. 附录 A（amountVsSame 启用+曲线校准）是否同批——待定。

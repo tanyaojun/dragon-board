@@ -53,31 +53,39 @@ def test_percentile_linear_interpolation():
     assert cm.percentile([0.0, 1.0, 2.0, 3.0, 4.0], 50) == 2.0
 
 
+def _raw_at(curve: list[tuple[float, float]], sub_target: float) -> float:
+    """从曲线反推目标 sub 对应的 raw（零漂夹具不钉死字面量，重校准后自适）。"""
+    for (x0, y0), (x1, y1) in zip(curve, curve[1:]):
+        if min(y0, y1) <= sub_target <= max(y0, y1) and y0 != y1:
+            t = (sub_target - y0) / (y1 - y0)
+            return x0 + t * (x1 - x0)
+    raise AssertionError(f"sub={sub_target} 不在曲线分值域内")
+
+
 def test_drifts_zero_when_window_matches_anchor():
-    # 主维（upRatio）：各分位 raw 恰落在锚上 → 漂移≈0
-    anchors = [(0.4334, "P10"), (0.5062, "P25"), (0.5921, "P50"), (0.6988, "P75"), (0.8437, "P95")]
+    # 主维（upRatio）：各分位 raw 恰落在锚上（从曲线反推，不钉字面量）→ 漂移≈0
     raws = []
     for _ in range(10):
-        for v, _p in anchors:
-            raws.append(v)
+        for sub in (10, 25, 50, 75, 95):
+            raws.append(_raw_at(_CALIB["upRatio"], sub))
     drifts = cm.drifts_of(raws, _CALIB["upRatio"])
     assert drifts is not None
     assert all(abs(v) <= 1.0 for v in drifts.values())
 
 
 def test_drifts_reversed_dim_mirrored_expectation():
-    # 反向维（riskShare）锚定网格（权威源=.tmp/emotion-score-calibration.json 对照确认）：
-    # P10→90（0.8253=P10 实测）/P25→75/P50→50（0.9254）/P75→25/P90→10（0.9777=P90 实测，非 P95）
+    # 反向维（riskShare）锚定网格（考古确认，见 calib-monitor 设计文档 §1）：
+    # P10→90 / P50→50 / P90→10（曲线实锚）；P25/P75 期望 75/25 由镜像网格给出（监控近似）
     curve = _CALIB["riskShare"]
     assert cm._expected_sub(curve, 10.0) == 90.0
     assert cm._expected_sub(curve, 50.0) == 50.0
     assert cm._expected_sub(curve, 90.0) == 10.0
     assert cm._expected_sub(curve, 95.0) == 95.0  # 未锚定分位退化镜像外推（不应到达）
-    # 窗口分位恰落锚（五锚：P10/P25/P50/P75/P90 → 0.8253/0.8628/0.9254/0.9581/0.9777）→ 漂移≈0
+    # 窗口分位恰落锚（五分位从曲线反推 90/75/50/25/10 对应 raw）→ 漂移≈0
     raws = []
     for _ in range(14):
-        for v in (0.8253, 0.8628, 0.9254, 0.9581, 0.9777):
-            raws.append(v)
+        for sub in (90, 75, 50, 25, 10):
+            raws.append(_raw_at(curve, sub))
     drifts = cm.drifts_of(raws, curve)
     assert drifts is not None
     assert set(drifts) == {"P10", "P25", "P50", "P75", "P90"}  # 反向维用 P90 锚，无 P95
@@ -85,8 +93,9 @@ def test_drifts_reversed_dim_mirrored_expectation():
 
 
 def test_drifts_alert_when_window_shifted():
-    # 窗口整体上移：raws 0.65~0.689 → P50≈0.67 → sub≈68 → drift≈+18（锚 P50=0.5921→50）
-    raws = [0.65 + i * 0.001 for i in range(40)]
+    # 窗口整体上移：raws 落在锚之上 → 各分位 sub 高于锚定期望 → 正向大漂移
+    p50_raw = _raw_at(_CALIB["upRatio"], 50)
+    raws = [p50_raw + 0.04 + i * 0.001 for i in range(40)]
     drifts = cm.drifts_of(raws, _CALIB["upRatio"])
     assert drifts is not None
     assert drifts["P50"] > 10  # 分布整体上移 → 各分位 raw 均落在锚之上 → 正向大漂移

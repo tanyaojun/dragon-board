@@ -5,6 +5,7 @@
 每维可分解、缺维降级。高潮压制条款已删除（审计 B3）。
 """
 from backend.analysis.hotlist.emotion_score import (
+    _CALIB,
     compute_emotion_score,
     map_stage,
 )
@@ -25,6 +26,24 @@ def _evidence(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def test_calib_curves_match_landed_recalibration_20261008():
+    """重校准 2026-10-08 落地钉（六门全过后用户裁决；防意外回退）。
+
+    更新本钉 = 月度重校准流程的一部分（预登记→回放→裁决→更新钉），
+    出处：docs/hotlist-jev/emotion-score-recalib-preregistration-20261008.md +
+    data/backups/emotion-score-recalib-20261008.json。
+    """
+    assert _CALIB["upRatio"][3] == (0.5894, 50)        # P50 锚
+    assert _CALIB["riskShare"][2] == (0.8206, 90)      # P10 锚
+    assert _CALIB["riskShare"][3] == (0.9249, 50)      # P50 锚
+    assert _CALIB["riskRowsPct"][1] == (84.0164, 90)   # P10 锚（告警同向下移）
+    assert _CALIB["riskRowsPct"][2] == (93.8596, 50)   # P50 锚
+    assert _CALIB["trin"][1] == (0.5176, 90)          # P5 锚
+    # 设计点与 sub 网格不动
+    assert _CALIB["riskShare"][1] == (0.60, 95)
+    assert _CALIB["attackShare"][1] == (0.0385, 30)    # P50→30 设计偏移保留
 
 
 def test_score_full_dims_and_decomposable():
