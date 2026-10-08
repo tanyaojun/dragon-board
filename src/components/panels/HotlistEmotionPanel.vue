@@ -44,7 +44,10 @@
             <div class="stage-hero" :class="`stage-tone-${stageTone}`">
               <div class="hero-main">
                 <div class="hero-label">市场情绪阶段</div>
-                <div class="hero-stage">{{ confirmedStageName }}</div>
+                <div class="hero-stage">{{ confirmedStageName }}<span v-if="phaseDailyLine?.report?.sentence"
+                    class="hero-daily-line"
+                    :title="`日度一句话 ${phaseDailyLine.date}（形态来源：${phaseDailyLine.report.shapeSource === 'jev' ? 'jev 归层' : '规则'}；模板 v${phaseDailyLine.report.meta?.templateVersion ?? '?'}）`">📈 {{ phaseDailyLine.report.sentence }}<template
+                      v-if="phaseDailyLine.report.shapeSource !== 'jev'">（规则）</template></span></div>
                 <div class="hero-meta">
                   <span class="risk-chip" :class="`risk-${riskTone}`">{{ doc.riskLevel }}风险</span>
                   <span class="conf-chip">盘面置信 {{ doc.confidence }}%</span>
@@ -924,6 +927,7 @@ import { fetchPhaseHistory, fetchPhaseMonitorBoard } from '@/services/hotlist/ph
 import type {
   C10PeakDoc,
   C9DeepValleyDoc,
+  PhaseDailyLineDoc,
   PhaseHistoryDay,
   PhaseNorthstarDoc,
   PhasePulseDoc,
@@ -2893,6 +2897,7 @@ const phasePulse = ref<PhasePulseDoc | null>(null)
 const phasePulses = ref<PhasePulseDoc[]>([])
 const phaseC9Docs = ref<C9DeepValleyDoc[]>([])
 const phaseC10Docs = ref<C10PeakDoc[]>([])
+const phaseDailyLine = ref<PhaseDailyLineDoc | null>(null)
 const sentinelDivergence = ref<SentinelDivergence | null>(null)
 const bandScale = ref<Array<{ tag: string; label: string; rangeText: string; lower: number; upper: number | null }>>([])
 // board 读口降级原因（review P1-F3：降级时各卡空态会伪装成「尚无数据」，顶部横幅统一披露）
@@ -3164,6 +3169,7 @@ async function loadPhaseData(): Promise<void> {
       phasePulses.value = []
       phaseC9Docs.value = []
       phaseC10Docs.value = []
+      phaseDailyLine.value = null
       sentinelDivergence.value = null
       bandScale.value = []
       phaseBoardError.value = board.reason
@@ -3174,6 +3180,7 @@ async function loadPhaseData(): Promise<void> {
       phasePulses.value = board.pulses ?? []
       phaseC9Docs.value = board.c9 ?? []
       phaseC10Docs.value = board.c10 ?? []
+      phaseDailyLine.value = board.dailyLine ?? null
       sentinelDivergence.value = board.sentinelDivergence ?? null
       bandScale.value = board.bandScale ?? []
       phaseBoardError.value = null
@@ -3329,10 +3336,12 @@ watch(view, (v) => {
   if (v === 'structure' && stagePieData.value.length) {
     nextTick(() => renderStageChart())
   }
-  if (v === 'phase') {
+  if (v === 'phase' || v === 'overview') {
+    // overview hero 也消费日度一句话（phase-monitor board）：面板挂载（immediate）或切页签即拉，
+    // ensurePhaseData 内 phaseLoadedOnce 防重入；renderPhaseChart 对容器不存在自守卫
     void ensurePhaseData().then(() => nextTick(() => renderPhaseChart()))
   }
-})
+}, { immediate: true })
 watch(trendPoints, () => {
   if (view.value === 'track') {
     nextTick(() => renderTrendChart())
@@ -4681,6 +4690,14 @@ watch(() => props.visible, (visible) => {
   border-radius: 10px;
   font-size: 12px;
   font-weight: 600;
+  cursor: default;
+}
+
+.hero-daily-line {
+  margin-left: 10px;
+  font-size: 13px;
+  font-weight: normal;
+  color: var(--text-secondary);
   cursor: default;
 }
 .phase-chip-offense { background: rgba(239, 68, 68, 0.15); color: #ff6b6b; }

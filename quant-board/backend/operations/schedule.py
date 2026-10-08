@@ -20,6 +20,7 @@ _TZ = ZoneInfo("Asia/Shanghai")
 
 _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
 _PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
+_JEV_DAILY_LINE_TIMEOUT_SECONDS = 600  # 日度一句话：单次 jev 调用（client 内部 60s）+ 规则/落库，600s 冗余
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
 
@@ -340,6 +341,56 @@ def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any
     return {"ok": True, "record": record}
 
 
+def _run_jev_daily_line_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """日度情绪一句话（advisory 步，2026-10-08 预登记 jev-daily-line-design.md）。
+
+    - 门控=当日 EOD 情绪文档存在（与脉拍同门控：非交易日/无 EOD 则跳过）；
+    - 子进程=jev_daily_line --date --apply（单次 jev choice 调用；失败/缺 token → 规则兑底不阻断，
+      句子仍落库；设计见文档，模板措辞由版本化模板控制，jev 只归层不写句）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（前端展示增强链，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    snapshot_type = _first_snapshot_type(settings.archive_auto_snapshot_types)
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_pulse(db, today, dataset_id, snapshot_type)
+    except Exception as exc:  # noqa: BLE001 — 门控查询失败按跳过处理（fail-visible 记原因）
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_daily_line", "--date", today, "--apply"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_JEV_DAILY_LINE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "jev_daily_line_timeout", "message": f"timeout {_JEV_DAILY_LINE_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "jev_daily_line_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    mongo_fresh = False
+    sentence: str | None = None
+    mongo_error: str | None = None
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc = db["phase_monitor"].find_one({"_id": f"line:{today}"}, {"updatedAt": 1, "report.sentence": 1})
+        updated = str((doc or {}).get("updatedAt") or "")
+        mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
+        sentence = ((doc or {}).get("report") or {}).get("sentence")
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        mongo_error = str(exc)
+    result: dict[str, Any] = {"ok": True, "date": today, "sentence": sentence, "mongoFresh": mongo_fresh}
+    if not mongo_fresh:
+        result["mongoWarning"] = "phase_monitor line:<date> updatedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    if mongo_error:
+        result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
+    return result
+
+
 def _run_peak_revalidate_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """C10 高峰兑现月度复验（advisory 步，2026-10-04 立项，镜像 deepValley 步）。
 
@@ -495,11 +546,12 @@ def run_after_market_once(
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
+        jev_daily_line_result = _run_jev_daily_line_step(today, dry_run=dry_run)
         amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "amountVsSameRecord"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -509,6 +561,7 @@ def run_after_market_once(
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,
+                "jevDailyLine": jev_daily_line_result,
                 "amountVsSameRecord": amount_vs_same_result,
             },
             archive_limit=archive_limit,

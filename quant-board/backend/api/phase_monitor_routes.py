@@ -2,7 +2,8 @@
 """phase-monitor 读口（前端可见化看板数据源，设计 ranktrend-phase-frontend-design.md §3）。
 
 GET /api/phase-monitor/board：Mongo phase_monitor 集合（phase_monitor_persistence 落库）
-→ {northstar 基线文档, months 逐月监督按月升序, c9 深谷账本按月升序, sentinelDivergence 哨兵分歧}。
+→ {northstar 基线文档, months 逐月监督按月升序, c9 深谷账本按月升序, sentinelDivergence 哨兵分歧,
+   dailyLine 日度情绪一句话（最新一条，jev-daily-line-design.md；无文档时 dailyLineMissingReason 结构化说明）}。
 集合空/未迁移时结构化缺失原因（fail-visible 不伪造）。低频读口不接 Redis 缓存。
 
 哨兵分歧=融合总纲（ranktrend-phase-fusion-master-plan.md §5）合流点一，唯一实现在
@@ -51,6 +52,7 @@ def get_phase_monitor_board() -> dict[str, Any]:
     months: list[dict[str, Any]] = []
     c9_docs: list[dict[str, Any]] = []
     c10_docs: list[dict[str, Any]] = []
+    daily_lines: list[dict[str, Any]] = []
     for doc in docs:
         if doc.get("kind") == "northstar":
             # 多基线取 updatedAt 最新（重跑升版本；当前单基线场景恒取唯一）
@@ -64,10 +66,13 @@ def get_phase_monitor_board() -> dict[str, Any]:
             c9_docs.append(doc)  # 深谷节点账本（C9 事件轴，融合总纲 §5 合流点二数据源）
         elif doc.get("kind") == "c10":
             c10_docs.append(doc)  # 高峰兑现账本（C10 逃顶侧事件轴，ranktrend-c10-peak-exit-plan.md）
+        elif doc.get("kind") == "daily_line":
+            daily_lines.append(doc)  # 日度情绪一句话（jev-daily-line-design.md，逐日累积）
     pulses.sort(key=lambda m: str(m.get("month") or ""))
     months.sort(key=lambda m: str(m.get("month") or ""))
     c9_docs.sort(key=lambda m: str(m.get("month") or ""))
     c10_docs.sort(key=lambda m: str(m.get("month") or ""))
+    daily_lines.sort(key=lambda d: str(d.get("date") or ""))
     body: dict[str, Any] = {
         "northstar": northstar,
         "pulse": pulses[-1] if pulses else None,  # 兼容字段=最新月
@@ -76,11 +81,16 @@ def get_phase_monitor_board() -> dict[str, Any]:
         "count": len(months),
         "c9": c9_docs,
         "c10": c10_docs,
+        "dailyLine": daily_lines[-1] if daily_lines else None,  # 最新一天的一句话（前端 hero 区）
         "sentinelDivergence": sentinel_divergence(db),
         "bandScale": _band_scale(),
     }
     if northstar is None:
         body["northstarMissingReason"] = (
             "phase_monitor 集合无 northstar 文档——先跑 backend.operations.phase_northstar（幂等落库）"
+        )
+    if not daily_lines:
+        body["dailyLineMissingReason"] = (
+            "phase_monitor 集合无 daily_line 文档——盘后链 jevDailyLine 步尚未产出（交易日 16:00 后生成，或当日无 EOD 被门控跳过）"
         )
     return body

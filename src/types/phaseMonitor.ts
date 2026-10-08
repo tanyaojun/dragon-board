@@ -211,6 +211,33 @@ export interface SentinelDivergence {
   days: SentinelDivergenceDay[]
 }
 
+/** GET /api/phase-monitor/board 的日度情绪一句话文档（jev-daily-line-design.md，kind=daily_line） */
+export interface PhaseDailyLineDoc {
+  _id: string
+  kind: 'daily_line'
+  date: string
+  report: {
+    date: string
+    sentence: string
+    parts: {
+      calendarFlag: string | null
+      shape: string
+      bandTag: string
+      bandLabel: string
+      bandWord: string
+      action: string
+    }
+    /** 形态来源：jev=jev 归层；rule_fallback=jev 失败规则兑底；rule=未调用（dry/原料不足） */
+    shapeSource: 'jev' | 'rule_fallback' | 'rule'
+    ruleShape: string | null
+    jev?: { latencyMs?: number; model?: string } | null
+    skippedJev?: boolean
+    degraded?: Array<{ source: string; reason: string; action?: string }>
+    meta?: { templateVersion?: number; generatedAt?: string }
+  }
+  updatedAt: string
+}
+
 export interface PhaseBoard {
   northstar: PhaseNorthstarDoc | null
   pulse?: PhasePulseDoc | null
@@ -224,6 +251,9 @@ export interface PhaseBoard {
   c10?: C10PeakDoc[]
   /** 哨兵分歧（合流点一：逐日三档带比较 + 汇总计数） */
   sentinelDivergence?: SentinelDivergence
+  /** 日度情绪一句话（最新一天；null=尚未产出，另见 dailyLineMissingReason） */
+  dailyLine?: PhaseDailyLineDoc | null
+  dailyLineMissingReason?: string
   /** 四带刻度（边界+用户展示名，后端单一事实源携带；前端按分数落区间，禁止手抄阈值） */
   bandScale?: Array<{ tag: string; label: string; rangeText: string; lower: number; upper: number | null }>
 }

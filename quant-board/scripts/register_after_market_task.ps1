@@ -10,6 +10,13 @@
 # 2026-09-28 触发时间 15:30 -> 18:00：15:30 是 daily 快照采集窗口，18:00 保证
 # 备份与归档拿到全天完整数据（含 daily 与 15:30 半小时槽）。
 #
+# 2026-10-08 触发时间 18:00 -> 16:00（用户裁决，盘后读数/脉拍句子提前可用）：
+#   half_hour 最后槽 15:00/EOD ≈15:05 落库，daily 型唯一槽 15:30 ≈15:40 落库，
+#   16:00 触发留 ≈20 分钟缓冲；R2 归档为 T-1 口径无当日竞态；脉拍门控所需的
+#   当日 EOD 情绪文档由本链 hotlistSentiment 步自行产出，链内自洽。
+#   残余风险：15:30 daily 槽采集若超时溢出到 16:00 之后，当日 dump 可能晚见该帧，
+#   由次日 T-1 归档与 8 天全量补跑（_maybe_force_full_catch_up）自愈，不需人工介入。
+#
 # 2026-09-16 起备份并入本任务；旧的 QuantBoard-LightBackup / QuantBoard-FullBackup
 # 独立任务由本脚本幂等清理。
 #
@@ -29,7 +36,7 @@ if (-not (Test-Path $pythonExe)) {
 $action = New-ScheduledTaskAction -Execute $pythonExe `
     -Argument '-m backend.cli after-market-once' `
     -WorkingDirectory $quantBoardRoot
-$trigger = New-ScheduledTaskTrigger -Daily -At 18:00
+$trigger = New-ScheduledTaskTrigger -Daily -At 16:00
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
@@ -54,10 +61,10 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Description 'QuantBoard 盘后链（18:00）：热榜情绪计算 + MongoDB 备份（交易日 light / 周五 full，含 verify/prune/周五 R2 push）+ 四类型快照 R2 日归档' `
+    -Description 'QuantBoard 盘后链（16:00）：热榜情绪计算 + MongoDB 备份（交易日 light / 周五 full，含 verify/prune/周五 R2 push）+ 四类型快照 R2 日归档 + 脉拍等 advisory 步' `
     | Out-Null
 
 Write-Host "registered task '$taskName'"
 Write-Host "  action : $pythonExe -m backend.cli after-market-once"
 Write-Host "  workdir: $quantBoardRoot"
-Write-Host "  trigger: daily 18:00 (StartWhenAvailable, 电池/错过窗口补跑)"
+Write-Host "  trigger: daily 16:00 (StartWhenAvailable, 电池/错过窗口补跑)"

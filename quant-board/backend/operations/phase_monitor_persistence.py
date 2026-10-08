@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """phase_monitor Mongo 落库（前端可见化数据源，设计 ranktrend-phase-frontend-design.md §3）。
 
-单一集合 phase_monitor 两类文档：kind=northstar（基线读数，_id=northstar:<key>）/
-kind=monthly（逐月监督，_id=monthly:<YYYY-MM>）。幂等 upsert——重跑 CLI 即迁移/刷新。
-落库失败不中断研究链（本地 JSON 仍是即时产物，fail-visible 打印警告）。
+单一集合 phase_monitor 多类文档（各 persist_* 函数负责，幂等 upsert）：
+kind=northstar（基线读数，_id=northstar:<key>）/ kind=monthly（逐月监督，_id=monthly:<YYYY-MM>）/
+kind=pulse（盘面脉拍，_id=pulse:<YYYY-MM>）/ kind=divergence（哨兵分歧，_id=divergence:<YYYY-MM>）/
+kind=daily_line（日度情绪一句话，_id=line:<YYYY-MM-DD>，jev-daily-line-design.md）。
+落库失败不中断研究链（调用方自身产物仍是即时交付，fail-visible 打印警告）。
 """
 from __future__ import annotations
 
@@ -66,6 +68,29 @@ def persist_pulse(report: dict[str, Any]) -> str | None:
         return doc["_id"]
     except Exception as exc:  # noqa: BLE001 — 研究链不因落库失败中断
         print(f"[phase-monitor-persist] pulse 落库失败（不阻断）: {exc}", file=sys.stderr)
+        return None
+
+
+def persist_daily_line(report: dict[str, Any]) -> str | None:
+    """日度情绪一句话落库（_id=line:<YYYY-MM-DD>，report.date 必填，重跑覆盖=当日最新）。失败返回 None。
+
+    消费方：GET /api/phase-monitor/board → dailyLine；前端热榜情绪 hero 区。
+    设计/预登记：jev-daily-line-design.md（2026-10-08）。
+    """
+    date = str(report.get("date") or "")
+    if not date:
+        print("[phase-monitor-persist] daily_line 落库跳过：report.date 缺失", file=sys.stderr)
+        return None
+    try:
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+
+        db = get_runtime_mongodb_database()
+        doc = {"_id": f"line:{date}", "kind": "daily_line", "date": date,
+               "report": report, "updatedAt": _now()}
+        db["phase_monitor"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return doc["_id"]
+    except Exception as exc:  # noqa: BLE001 — 证据链不因落库失败中断
+        print(f"[phase-monitor-persist] daily_line 落库失败（不阻断）: {exc}", file=sys.stderr)
         return None
 
 
