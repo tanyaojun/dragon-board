@@ -336,20 +336,17 @@ def _synergy_tier(
     lc_tier: str | None,
     config: RankTrendConfig | None = None,
     cs_tier: str | None = None,
-    pm_tier: str | None = None,
-    dv_tier: str | None = None,
     *,
     lc_veto_path: str | None = None,
 ) -> tuple[str, list[str]]:
     """四维合并档位（synergy.signalTier）。规则见 docs/ranktrend-observation-discrete-tiers-design.md §7。
 
     阈值读 config.tierSynergyVote*（vote 求和为整数，strong/weak/reverse 均为 int）。
-    cs_tier：crossSection 第 5 维（2026-08-17 G2）；pm_tier：priceMomentum 第 6 维
-    （2026-08-17 G1，价格动量/均线）；dv_tier：priceRankDivergence 第 7 维
-    （2026-08-18 量名背离——confirm_up 一致强 / rank_lead 关注度先行 / confirm_down /
-    price_lead_warn 出货预警）——权重 tierSynergyCrossSectionVote/
-    tierSynergyPriceMomentumVote/tierSynergyDivergenceVote。无 direction 字段的维度
-    档位自带方向（A/B 强势、C/D 弱势），投票 = 档位符号 × 强度 × 权重。
+    cs_tier：crossSection 第 5 维（2026-08-17 G2）。pm/dv 两死票位已随 W0-1 摘除
+    （2026-10-08：实证 −32%/−25% 权重恒 0，票位账面七维→五维实态；观察因子本体
+    price_momentum/price_rank_divergence 照常算、照常进 observation 展示与研究消费，
+    dv 四态语义资产保留在观察层）。无 direction 字段的维度档位自带方向（A/B 强势、
+    C/D 弱势），投票 = 档位符号 × 强度 × 权重。
     """
     c = config or RankTrendConfig()
     # 阶段 24 方案 A：环境门干预形态（默认 hard/hard/hard = 现行为，golden 不漂移）。
@@ -442,12 +439,6 @@ def _synergy_tier(
             v += float(getattr(c, "tierSynergyCsPersistStrength", 0.5) or 0.0) * cs_weight
         elif cs_tier in _CS_STRENGTH:
             v += _CS_STRENGTH[cs_tier] * cs_weight
-    pm_weight = float(getattr(c, "tierSynergyPriceMomentumVote", 0.0) or 0.0)
-    if pm_weight and pm_tier and pm_tier in _CS_STRENGTH:
-        v += _CS_STRENGTH[pm_tier] * pm_weight
-    dv_weight = float(getattr(c, "tierSynergyDivergenceVote", 0.0) or 0.0)
-    if dv_weight and dv_tier and dv_tier in _CS_STRENGTH:
-        v += _CS_STRENGTH[dv_tier] * dv_weight
     # 阶段 3 修复方向 3：档位分级按票数（strong/strong+1），A 档可达。
     # 旧规则 v>=strong 且 lc==A → S 独占 S 判定，而周期档位只有 A/B/D/E（无 C），
     # v>=strong 且 lc∉{A,B,D} 的 A 分支永远不可达 → synergy A 档 n=0（阶段 3 诊断实证）。
@@ -537,8 +528,8 @@ def assemble_observation(
         str(lc_tier_override) if lc_tier_override else (observation.get("lifecycle") or {}).get("signalTier"),
         c,
         cs_tier=((observation.get("crossSection") or {}).get("signalTier")),
-        pm_tier=((observation.get("priceMomentum") or {}).get("signalTier")),
-        dv_tier=((observation.get("priceRankDivergence") or {}).get("signalTier")),
+        # W0-1：pm/dv 死票位摘除（权重恒 0，票位账面七维→五维实态）；观察因子本体照常进
+        # observation 展示与研究消费（priceMomentum/priceRankDivergence 上游不动）。
         # 阶段 24 方案 A：veto 路径派生（仅生效档位为 E 时需要；soft + *_hard 分流消费）
         lc_veto_path=_lc_gate_veto_path(_lc_obs) if _lc_effective_tier == "E" else None,
     )

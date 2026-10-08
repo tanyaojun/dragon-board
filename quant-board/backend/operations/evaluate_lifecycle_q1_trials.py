@@ -55,6 +55,17 @@ NEGATIVE_MEAN = -0.003               # C-4.1 负效应线
 WRXPF_FLOOR = -0.003                 # C-4.2 wrxpf 相对基线下限（绝对差）
 OOS2_COURT = -0.005                  # C-4.2 oos2 披露交裁线
 
+# W0-1 fail-visible 守卫（2026-10-08）：ca_* 臂消费的 tierSynergyDivergenceVote 配置面已被
+# W0-1 死票位摘除（from_patch 对未知键静默跳过=臂会静默塌缩成 baseline 假读数）。本 runner
+# 为 Q1 历史归档（2026-10-07 已收官全 FAIL，台账 §22），误用必须显式失败而非静默假绿。
+from backend.analysis.ranktrend.engine import RankTrendConfig as _W11GuardConfig
+
+if hasattr(_W11GuardConfig(), "tierSynergyDivergenceVote"):
+    raise RuntimeError(
+        "Q1 runner 归档守卫：tierSynergyDivergenceVote 字段已由 W0-1 摘除后不应重新出现；"
+        "若确需重开 dv 权重面，按纪律走新合同重新预登记，不得复用本归档 runner"
+    )
+
 ARMS: list[dict] = [
     {"key": "baseline", "desc": "G1 on（cross_day）+ Q1 全 off = 当前生产默认", "overrides": {}},
     # C-a 单独（3 剂量臂）：dv 权重（机制一 off）

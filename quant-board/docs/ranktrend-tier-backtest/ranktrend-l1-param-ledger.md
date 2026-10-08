@@ -629,3 +629,12 @@ volumePriceAmountScoreStep/AmountScoreWeight 等 amount 族：**zero_effect**（
 - **接线与测试**：`tierSynergyResonanceDbuyMode`（off/cap_b/abstain，默认 off 零行为）+ `_synergy_tier` res 投票点分支（cap_b 读强度表 min(D,B)、长度≠6 断言报错不走 fallback；abstain 票 0；D∧sell 真反向/非 D 档/其他维零触碰）；专项 11 过（行为等价断言法：cap_b≡B∧buy 原路径、abstain≡res 不计票）；golden 重录 diff 干净（configRepr 6 处 +1 字段文本，场景输出零漂移）；ranktrend 667 全绿；Redis analyze 键清+8000 已重启。
 - **harness 教训（登记防再犯）**：per_signal 存取键错位（`temp_per.get("decision")` 应按臂名取）——判定面数据完好，披露面（迁移矩阵）首轮为空；修复后 3×decision 窗 replay 补跑补全。harness 首跑前只验证了编译+import，数据流键位未经验证——**披露义务类代码路径应在 smoke 臂上先验一遍**。
 - **回退**：单开关 off 即基线（未落默认，无回退需求）。
+
+## 27. W0-1 删 pm/dv 死票位（2026-10-08 顺路补做：架构诚实七维账面→五维实态，零行为验证逐位一致）
+
+> 计划 W0-1 案（两度被并行线阻断后解锁：Q1 收官解 dv 半边合理性〔C-a 三臂全 FAIL=「效度验证→给权重」路径证伪，dv 维持观察位无回退价值〕→P5 收官解引擎文件锁→W1-1 提交后顺路执行，handoff 授权链完整）。Q1 合同 C-8「配置面保留作回退」已随 Q1 收官失效。
+
+- **摘除面**：`_synergy_tier` 签名收窄（pm_tier/dv_tier 两参）+pm/dv 两加性块+`assemble_observation` 传参链；config 删 `tierSynergyPriceMomentumVote`/`tierSynergyDivergenceVote` 两字段+_validate 负值校验环两项。**观察因子本体不动**（price_momentum/price_rank_divergence 照常算、照常进 observation 展示与研究消费；dv 四态语义资产 rank_lead/price_lead_warn 保留在观察层）。
+- **归档 runner 守卫（fail-visible）**：`evaluate_lifecycle_q1_trials.py` 模块级断言——ca_* 三臂消费的 `tierSynergyDivergenceVote` 已摘除，`from_patch` 对未知键静默跳过=臂会静默塌缩成 baseline 假读数（G4 断线先例同族风险），字段若重现即 raise（重开 dv 面唯一路径=新合同重新预登记，不得复用归档 runner）。
+- **零行为验收（全过）**：三窗 saEx **逐位一致**（0.14502883031301483/0.09825280898876404/0.11716262626262626）+resS/synS 逐位（14370/2018/1608、127/29/24）+Track 1 逐位（172 笔/wrxpf 0.414/dd −0.2231）=票权本就 0 的架构诚实化；golden 重录 diff 干净（configRepr 6 处 −2 字段文本、其余逐位一致，场景输出零漂移）；ranktrend 667 全绿（test_synergy_vote 断言更新：字段不存在性+签名收窄 co_varnames 断言）；Redis 清键+8000 已重启。
+- **收益**：架构诚实（消除「价格信息已参与投票」误读）；**回退=git revert 唯一路径**（字段删除非开关）。

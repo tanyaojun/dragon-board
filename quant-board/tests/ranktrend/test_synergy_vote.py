@@ -32,7 +32,7 @@ def syn(res_tier="B", rank_tier="B", vp_tier="B", lc_tier="A", cs_tier=None, **c
 def test_default_vote_includes_cross_section() -> None:
     c = RankTrendConfig()
     assert c.tierSynergyCrossSectionVote == 0.75  # 阶段 23.9 采纳 combo_three_quarter（2026-09-14 用户决策）
-    assert c.tierSynergyPriceMomentumVote == 0.0  # G1 实证负贡献，观察不进投票
+    assert not hasattr(c, "tierSynergyPriceMomentumVote")  # W0-1 死票位摘除（实证 −32%，观察因子本体不动）
 
 
 def test_cross_section_a_tier_upgrades_synergy() -> None:
@@ -68,10 +68,13 @@ def test_hard_risk_overrides_cross_section() -> None:
     assert syn(cs_tier="A", lc_tier="E") == "E"  # 周期一票否决
 
 
-# ---------- G1 priceMomentum 投票默认关闭 ----------
+# ---------- W0-1：pm/dv 死票位摘除（2026-10-08）----------
 
-def test_price_momentum_vote_disabled_by_default() -> None:
+def test_price_momentum_vote_removed_by_w01() -> None:
+    """W0-1：pm/dv 票位字段与传参链已摘除（账面七维→五维实态）；观察因子本体不动。"""
     c = RankTrendConfig()
-    assert c.tierSynergyPriceMomentumVote == 0.0
-    # 即使传 pm_tier，权重 0 不影响
-    assert syn(cs_tier=None, tierSynergyPriceMomentumVote=0.0) == "A"
+    assert not hasattr(c, "tierSynergyPriceMomentumVote")
+    assert not hasattr(c, "tierSynergyDivergenceVote")
+    # pm/dv 观察因子照常进 observation（runtime 侧不动）——此处只断言投票面签名收窄
+    assert "pm_tier" not in _synergy_tier.__code__.co_varnames
+    assert "dv_tier" not in _synergy_tier.__code__.co_varnames

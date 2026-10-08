@@ -159,7 +159,9 @@ class RankTrendConfig:
     regimeScoreEmaAlpha: float = 1.0       # regime score EMA 系数（1=直通）
     regimeStateHysteresis: bool = False    # strong 边界迟滞开关
     regimeStrongHysteresisBand: float = 5.0  # strong 退出阈值 = 进入阈值 - band
-    tierSynergyDivergenceVote: float = 0.0  # priceRankDivergence 第 6 维投票权重（0=观察；数据验证后定默认）
+    # W0-1（2026-10-08）：tierSynergyPriceMomentumVote/tierSynergyDivergenceVote 两死票位字段已删除
+    # （实证 −32%/−25% 权重恒 0；观察因子本体不动照常进 observation；Q1 合同 C-8 的回退面要求
+    # 已随 Q1 收官 C-a 全 FAIL 失效，重开唯一路径=新合同重新预登记）。
     # ── P_repool_timeline_gap 研究参数（2026-09-20 参数化，原硬编码 5）──
     # 出池回池重建期三档判定的中档线（runtime sample_status）：degradedSampleFloor
     # <= len(percentiles) < momentum_min_samples → degraded（有判定，前端显示真实 stage）；
@@ -169,7 +171,6 @@ class RankTrendConfig:
     # h1/h8 复现 −5.4~−5.9pp + Track 1 oos2 全月 80 笔无伤害，长测阶段 27.5）；
     # 回退 = 显式 patch degradedSampleFloor=5
     degradedSampleFloor: int = 3
-    tierSynergyPriceMomentumVote: float = 0.0  # priceMomentum 第 6 维投票权重（0=关闭：实证负贡献 all −32%/8月 −，保留观察不进投票）
     # ── 维度票权重（2026-09-14 参数化 + 阶段 23.9 实证落默认）──
     # 用户决策采纳 combo_three_quarter：res/rank/cs 1.0 → 0.75（判定卡 C1 +11.2%/
     # oos +7.5%/+26.6%，C1-C5 全过），vp 两轮证据维持 1.0（窄峰，两侧受损）。
@@ -577,8 +578,6 @@ def _validate_tier_constraints(config: "RankTrendConfig") -> None:
         "tierSynergyRankVote",
         "tierSynergyVolumePriceVote",
         "tierSynergyCrossSectionVote",
-        "tierSynergyPriceMomentumVote",
-        "tierSynergyDivergenceVote",
     ):
         if getattr(config, _field) < 0:
             raise ValueError(f"synergy 投票权重 {_field} 不能为负（负值翻转票向），实际 {getattr(config, _field)}")
