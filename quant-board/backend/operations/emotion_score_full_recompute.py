@@ -52,7 +52,6 @@ def main() -> int:
                       "range": [targets[0], targets[-1]] if targets else []},
                      ensure_ascii=False))
 
-    stage_before: dict[str, str] = {}
     rows: list[dict] = []
     t0 = time.time()
     for i, dt in enumerate(targets):
@@ -61,8 +60,6 @@ def main() -> int:
         es = ((eod_doc or {}).get("emotionScore") or {})
         old_score = es.get("score")
         old_stage = (eod_doc or {}).get("stage")
-        if old_stage:
-            stage_before[dt] = str(old_stage)
         slots = sorted(
             (str(r["slotTime"]) for r in db["hotlist_sentiment"].find(
                 {"datasetId": args.dataset_id, "snapshotType": args.snapshot_type,
@@ -82,10 +79,11 @@ def main() -> int:
         rows.append({"date": dt, "slots": len(slots), "oldScore": old_score,
                      "newScore": new_score, "oldStage": old_stage, "newStage": new_stage,
                      "recomputed": result is not None})
-        if (i + 1) % 10 == 0 or i + 1 == len(targets):
-            print(json.dumps({"progress": f"{i + 1}/{len(targets)}",
-                              "elapsed": round(time.time() - t0, 1),
-                              "last": rows[-1]}, ensure_ascii=False), flush=True)
+        # 逐日一行进度（review P3：断点可核对——中断后已重算到哪天一眼可见）
+        print(json.dumps({"day": f"{i + 1}/{len(targets)}", "date": dt,
+                          "slots": len(slots), "score": [old_score, new_score],
+                          "stage": [old_stage, new_stage],
+                          "elapsed": round(time.time() - t0, 1)}, ensure_ascii=False), flush=True)
 
     if args.apply:
         migration = [{"date": r["date"], "old": r["oldStage"], "new": r["newStage"]}

@@ -107,10 +107,17 @@ def main() -> int:
         key=lambda x: x["date"])
     joined = [e for e in eods if e["date"] in amounts]
     coverage = len(joined) / len(eods) if eods else 0.0
+    if not amounts:
+        print(json.dumps({"ok": False, "errorCode": "no_amount_records",
+                          "message": "market_daily_amount 无 vsSamePct 记录，研究轮无法进行（fail-visible 结构化退出）"},
+                         ensure_ascii=False))
+        return 1
 
     values = sorted(amounts.values())
     curve = build_candidate_curve(values)
     stats = {"n": len(values), "min": round(values[0], 2), "max": round(values[-1], 2),
+             "minDate": min(amounts), "maxDate": max(amounts),
+             "caliber": "day-level adjacent-trading-day pct（market_daily_amount 全量，非显式窗口）",
              **{f"p{int(p)}": round(percentile(values, p), 2) for p, _s in ANCHOR_GRID}}
 
     rows: list[dict[str, Any]] = []

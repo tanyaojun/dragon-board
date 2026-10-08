@@ -4,7 +4,8 @@
 
 职责：①TDX 综指日线（999999+399106）同步 market_daily_amount 参考集合（增量补新交易日）；
 ②对全部相邻交易日对计算 vsSamePct=（今额/昨额−1）×100 与设计曲线 sub（**只存不评分**——
-第八评分维暂不启用，本字段供 ≥20 交易日分布积累后校准 `_CALIB["amountVsSame"]` 曲线）。
+第八评分维已于 2026-10-08 永久退役（研究轮出口 b，amountvs-same-recalibration-study-20261008.md），
+本字段仅作量能原料存档对照）。
 
 写库目标=market_daily_amount 文档新增字段：`vsSamePct`（百分点）、`amountVsSameSubDesign`
 （**设计曲线未校准**，命名自证）、`vsSamePctComputedAt`。幂等全量重算，fail-visible。
@@ -24,8 +25,8 @@ from pathlib import Path
 
 HOSTS_PATH = Path(r"D:\dragon-board\python-bridge\tdx_hosts.json")
 SOURCE = "tdx_index_kline_backfill"
-# 设计校准曲线（与 backend/analysis/hotlist/emotion_score.py _CALIB["amountVsSame"] 一致；
-# 若该曲线日后校准，此处必须同改——单一事实源为 emotion_score，本处仅记录用）
+# 设计校准曲线（源曲线 emotion_score._CALIB["amountVsSame"] 已随 2026-10-08 永久退役删除；
+# 本副本仅服务 amountVsSameSubDesign 对照字段，不再有单一事实源约束——曲线失准恰是退役理由之一）
 CURVE_DESIGN = [(-80, 0), (-30, 25), (0, 50), (30, 80), (80, 100)]
 INDEX_SYMBOLS = ("999999", "399106")
 SLEEP = 0.22

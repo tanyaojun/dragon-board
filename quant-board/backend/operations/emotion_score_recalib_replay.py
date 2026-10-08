@@ -104,6 +104,16 @@ def main() -> int:
 
     new_curves, anchor_diff = build_new_curves(slot_docs)
 
+    # 代际标记（review P3）：本 runner 的「旧侧=stored 分」隔离方法学只在退役前成立；
+    # 若存量文档已无 amountVsSame skip（=已重算新代），old 侧已是现行口径，纯曲线对照失效
+    pre_retirement = any(
+        "amountVsSame" in ((d.get("emotionScore") or {}).get("skippedDims") or [])
+        for d in slot_docs[:200])
+    generation_note = (
+        "pre_retirement: stored 分含退役维 skip=旧代，纯曲线隔离方法学有效"
+        if pre_retirement else
+        "post_retirement: stored 分已是现行口径——纯曲线隔离失效，本次对照仅结构参考，勿作裁决依据")
+
     # 槽位分双侧：新曲线新分 + stored 分作 old 侧（现行规则+旧曲线——隔离纯曲线效应；
     # 存量 stage 混杂 A/B+C 之前旧规则，不可作对照基线）
     slot_new: dict[tuple[str, str], float] = {}
@@ -192,6 +202,7 @@ def main() -> int:
     }
     summary = {
         "slots": len(slot_docs), "eodDays": n,
+        "oldSideGeneration": generation_note,
         "candidateMigration": {f"{a}→{b}": c for (a, b), c in cand_mig.items()},
         "confirmMigration": {f"{a}→{b}": c for (a, b), c in confirm_mig.items()},
         "phaseFlipDays": phase_flip,
