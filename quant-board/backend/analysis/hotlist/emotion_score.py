@@ -48,10 +48,9 @@ _CALIB = {
     "zhabanRate": [(0, 100), (11.49, 90), (16.75, 75), (25.39, 50), (33.89, 25), (43.2, 5), (100, 0)],
 }
 
-_WEIGHTS = {
-    "upRatio": 1, "attackShare": 1, "riskShare": 1, "trin": 1,
-    "yhPositive": 1, "limitStruct": 1, "riskRowsPct": 1,
-}
+# 权重口径：等权 = sum(有效维 sub)/len(有效维)（compute_emotion_score 内联实现）。
+# 无独立权重表——历史 _WEIGHTS 已随第八维退役删除（review P3：保留无消费方的表会诱使
+# 「改表无效」的反向单一事实源漂移）。
 
 # 第八维 amountVsSame 永久退役（2026-10-08 用户裁决，研究轮出口 b；
 # amountvs-same-recalibration-study-20261008.md：150 日实测校准后仍单向稀释 +2.62/−2.19

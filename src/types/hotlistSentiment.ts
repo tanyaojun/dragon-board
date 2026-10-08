@@ -191,7 +191,7 @@ export interface HotListSentimentResult {
 
 /**
  * 连续情绪评分子文档（emotion-score-design v3 §3.2）：
- * score=8 维等权合成（缺维跳过权重归一化）；dims 保留各维原始值与子分；
+ * score=7 维等权合成（2026-10-08 第八维 amountVsSame 退役后；缺维跳过权重归一化）；dims 保留各维原始值与子分；
  * stageCandidate 与 rawStage 同值（本帧映射档位，含斜率修正）；slope=当日上一有效槽差。
  */
 export interface HotListEmotionScore {
