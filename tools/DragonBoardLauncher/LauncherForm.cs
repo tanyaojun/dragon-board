@@ -46,6 +46,16 @@ internal sealed class LauncherForm : Form
     // 重启被冷却拦截时，仅当原因变化才记日志，避免每 3 秒刷一条。
     private string _lastRestartBlockedReason = "";
 
+    // 基础设施存活守护（P0-A，2026-10-09 审计）：mongo/redis 盘中静默死亡曾导致
+    // 最长 45 分钟无库。离线即自动拉起（不杀进程）；冷却/上限由 _restartPolicy 管。
+    private static readonly string[] InfraGuardKeys = { "mongo", "redis" };
+    private readonly InfraHealthGuard _infraGuard = new();
+    private readonly Dictionary<string, string> _lastInfraBlockedReason = new(StringComparer.Ordinal);
+
+    // 交易时段推迟停启式修复（P0-B）的日志去重：轮询间隔 3 秒，避免刷屏。
+    private static readonly TimeSpan DeferredRepairLogInterval = TimeSpan.FromMinutes(5);
+    private DateTime? _lastCollectorDeferredUtc;
+
     // 用户显式停止过的服务 key：手动停止后不自动拉起（尊重用户意图），
     // 直到用户再次手动启动该服务才清除标记。
     // 写可能发生在 RunManagerActionAsync 的后台线程，读在 UI 线程的刷新循环，
@@ -588,12 +598,34 @@ internal sealed class LauncherForm : Form
         }
         else if (decision.ShouldRestart && !UserStoppedContains("collector"))
         {
-            // 用户手动停止过 collector：尊重意图不自动拉起，直到用户再次手动启动。
-            if (_restartPolicy.TryRequestRestart("collector", out var blocked))
+            // P0-B（2026-10-09 审计，P1-C 细化）：交易时段（09:15-15:10）内只允许
+            // “拉起已死服务”与“基于可靠证据的修复性重启”，推迟的只有“健康证据
+            // 不可靠”一种情形（fingerprint=probe:*：探针超时/不可达，09-15 10:00
+            // 误杀教训）。服务自报的契约异常（如调度器锁丢失自停后的“调度器未
+            // 运行”，restartable=true）是可靠证据，随时允许修复——否则会复刻
+            // 09-11 锁丢失自停后两小时无采集的空窗。不计入失败次数。
+            var unreliableEvidence = collectorHealth is not null &&
+                SnapshotCollectorProbe.IsUnreliableHealthEvidence(collectorHealth.Fingerprint);
+            if (statuses.GetValueOrDefault("collector") &&
+                unreliableEvidence &&
+                TradingWindow.IsInsideNow())
+            {
+                var nowUtc = DateTime.UtcNow;
+                if (!_lastCollectorDeferredUtc.HasValue ||
+                    nowUtc - _lastCollectorDeferredUtc.Value >= DeferredRepairLogInterval)
+                {
+                    _lastCollectorDeferredUtc = nowUtc;
+                    Log(
+                        "快照采集健康证据不可靠（探针超时/不可达）：交易时段（09:15-15:10）内" +
+                        "不做停启式重启，已推迟到收盘后自动重试。");
+                }
+            }
+            else if (_restartPolicy.TryRequestRestart("collector", out var blocked))
             {
                 _restartPolicy.RecordRestart("collector");
                 _lastRestartBlockedReason = "";
-                _processManager.EnsureHealthy("collector");
+                // 修复动作含 taskkill/Sleep/CIM 枚举（秒级），后台执行防 UI 卡顿（评审 P1）。
+                _ = Task.Run(() => _processManager.EnsureHealthy("collector"));
             }
             else if (blocked is not null &&
                      !string.Equals(_lastRestartBlockedReason, blocked, StringComparison.Ordinal))
@@ -601,6 +633,79 @@ internal sealed class LauncherForm : Form
                 _lastRestartBlockedReason = blocked;
                 var detail = _restartPolicy.DescribeBlock("collector");
                 Log($"快照采集错误: {blocked}" + (detail.Length > 0 ? $"（{detail}）" : ""));
+            }
+        }
+        else if (collectorHealth is not null &&
+                 !collectorHealth.IsHealthy &&
+                 SnapshotCollectorProbe.IsLockWaitStartupFailureMarker(collectorHealth.Fingerprint))
+        {
+            // P1-C：锁冲突“wait 标记”只应保护正在等锁的活进程。等待实例 50 秒重试
+            // 耗尽后 RuntimeError 自行退出，标记仍新鲜（10 分钟窗口），此前会继续
+            // 压制自动拉起——旧锁 TTL ≤120s 早已过期，造成最长 10 分钟无谓停采。
+            // 是否还有活着的等锁实例用命令行签名探测判定（评审 P1：launcher 晚于
+            // 等待实例启动时 Process 为 null、等锁孤儿也可能存在，不能只看 tracked）。
+            // 进程已退出 → 标记失效 → 立即重拉（StartService 不杀任何进程；
+            // 新实例按 TTL 等待/清理旧锁，不会双采）。
+            if (!UserStoppedContains("collector"))
+            {
+                string? lockWaitBlocked = null;
+                if (_restartPolicy.TryRequestRestart("collector", out lockWaitBlocked))
+                {
+                    _restartPolicy.RecordRestart("collector");
+                    // CIM 存活探测（秒级）后台执行：仍有活着的等锁实例（tracked 或孤儿）
+                    // 时不重拉，等它拿到锁；全部退出才拉起。
+                    _ = Task.Run(() =>
+                    {
+                        if (_processManager.HasLiveProcessByCommandLine("collector"))
+                            return;
+                        Log("快照采集等锁实例已全部退出，锁冲突标记失效，自动重新拉起。");
+                        _processManager.StartService(_services["collector"]);
+                    });
+                }
+                else if (lockWaitBlocked is not null)
+                {
+                    // 冷却中：静默跳过（避免 3 秒轮询刷屏）
+                }
+            }
+        }
+
+        // 基础设施存活守护（P0-A）：mongo/redis 离线即自动拉起。直接 StartService
+        // （不杀进程，交易时段内也允许）；外部实例占端口时可达，不会进入此分支。
+        // 冷却/上限由 _restartPolicy 管控；用户手动停止过则尊重意图。
+        foreach (var infraKey in InfraGuardKeys)
+        {
+            var infraReachable = statuses.GetValueOrDefault(infraKey);
+            var infraDecision = _infraGuard.Evaluate(infraKey, _services[infraKey].Name, infraReachable);
+            if (infraDecision.LogMessage is not null)
+                Log(infraDecision.LogMessage);
+
+            if (infraReachable)
+            {
+                _restartPolicy.Reset(infraKey);
+                _lastInfraBlockedReason.Remove(infraKey);
+                continue;
+            }
+
+            if (UserStoppedContains(infraKey)) continue;
+
+            if (_restartPolicy.TryRequestRestart(infraKey, out var infraBlocked))
+            {
+                _restartPolicy.RecordRestart(infraKey);
+                var infraService = _services[infraKey];
+                // StartService 含 netstat/TCP 探测（秒级）：后台执行防 UI 卡顿（评审 P1）。
+                _ = Task.Run(() => _processManager.StartService(infraService));
+            }
+            else if (infraBlocked is not null &&
+                     !string.Equals(
+                         _lastInfraBlockedReason.GetValueOrDefault(infraKey),
+                         infraBlocked,
+                         StringComparison.Ordinal))
+            {
+                _lastInfraBlockedReason[infraKey] = infraBlocked;
+                var infraDetail = _restartPolicy.DescribeBlock(infraKey);
+                Log(
+                    $"{_services[infraKey].Name}: {infraBlocked}" +
+                    (infraDetail.Length > 0 ? $"（{infraDetail}）" : ""));
             }
         }
 

@@ -306,6 +306,8 @@ internal sealed class LauncherProcessManager
                         break;
                 }
                 var pids = LauncherPorts.GetPidsByPort(service.Port);
+                if (pids.Count == 0)
+                    pids = FindServicePidsByCommandLine(service, "孤儿清理");
                 foreach (var pid in pids)
                     KillProcessTree(pid, $"端口 {service.Port} (孤儿清理)");
                 Thread.Sleep(800);
@@ -318,6 +320,10 @@ internal sealed class LauncherProcessManager
                         : true;
                     if (usable)
                     {
+                        // TCP 表损坏时按命令行签名接管孤儿进程（2026-10-09 复盘）：
+                        // 不接管则“停止/重启”按钮对该实例永远无效，后续全部重启会
+                        // 边复用边重拉，复现端口 10048 风暴。
+                        AdoptOrphanByCommandLine(service);
                         _log($"{service.Name} 已在端口 {service.Port} 运行，直接复用现有实例（跳过重复启动）。");
                         return;
                     }
@@ -459,12 +465,207 @@ internal sealed class LauncherProcessManager
                 Thread.Sleep(500);
             }
 
-            _log($"{service.Name} 启动后 20 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
+            // 回退跟踪（2026-10-09）：Windows 更新后系统 TCP 表可能损坏
+            // （LISTENING 行缺失或 PID=0），netstat 20 秒都找不到监听 PID，
+            // 但服务实际活着。改用进程树识别：引导进程的直接子进程中，
+            // 命令行含本服务端口的唯一 python/node 进程即真 server（uvicorn spawn 型
+            // 服务的子进程 cmdline 保留 --port 参数）。父子关系仍是停止时的主安闸。
+            var adopted = AdoptPortOwnerByProcessTree(service);
+            if (!adopted)
+            {
+                _log($"{service.Name} 启动后 20 秒内未检测到端口 {service.Port} 监听进程，无法跟踪实际监听进程。");
+            }
         }
         catch (Exception ex)
         {
             _log($"跟踪 {service.Name} 端口监听进程失败: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// TCP 表损坏时的回退跟踪：在引导进程的直接子进程中，找命令行含本服务端口的
+    /// 唯一进程，记为实际监听进程。返回是否成功接管。
+    /// 不强求连接探测通过：锁等待等场景下 server 子进程已存在但端口尚未监听，
+    /// 它仍是正确的停止目标；误采风险由 StopStartedProcess 的父子关系复核控制。
+    /// </summary>
+    private bool AdoptPortOwnerByProcessTree(ManagedService service)
+    {
+        var guidedPid = service.Process is { HasExited: false } ? service.Process.Id : 0;
+        if (guidedPid <= 0) return false;
+
+        var portToken = $"--port {service.Port}";
+        var matches = new List<int>();
+        foreach (var (pid, commandLine) in ChildProcessesOf(guidedPid))
+        {
+            if (commandLine.Contains(portToken, StringComparison.Ordinal))
+                matches.Add(pid);
+        }
+
+        if (matches.Count != 1)
+        {
+            if (matches.Count > 1)
+                _log(
+                    $"{service.Name} 引导进程 PID={guidedPid} 下有 {matches.Count} 个含端口 " +
+                    $"{service.Port} 的子进程，无法唯一确定实际监听进程，不回退接管。"
+                    + $"（候选 PID: {string.Join(", ", matches)}）");
+            return false;
+        }
+
+        try
+        {
+            service.PortOwnerProcess = Process.GetProcessById(matches[0]);
+            _log(
+                $"{service.Name} TCP 表未列出端口 {service.Port}，已回退按进程树跟踪实际监听进程 " +
+                $"PID={matches[0]}（引导进程 PID={guidedPid}）。");
+            return true;
+        }
+        catch
+        {
+            return false; // 进程瞬间退出
+        }
+    }
+
+    /// <summary>枚举指定进程的直接子进程 (ProcessId, CommandLine)（PowerShell CIM）。</summary>
+    private static IReadOnlyList<(int Pid, string CommandLine)> ChildProcessesOf(int pid)
+    {
+        var result = new List<(int, string)>();
+        if (pid <= 0) return result;
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                // 用 [string]::Join 拼接，避免内层双引号截断外层 -Command 引号区
+                Arguments =
+                    "-NoProfile -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId=" +
+                    pid + "' | ForEach-Object { [string]::Join('|', $_.ProcessId, $_.CommandLine) }\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                StandardOutputEncoding = Encoding.UTF8
+            };
+            using var process = Process.Start(info);
+            if (process == null) return result;
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(5000);
+            foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var separator = line.IndexOf('|');
+                if (separator <= 0) continue;
+                if (int.TryParse(line[..separator], out var childPid) && childPid > 0)
+                    result.Add((childPid, line[(separator + 1)..]));
+            }
+        }
+        catch
+        {
+            // 查询失败按无子进程处理，调用方回退到不接管
+        }
+        return result;
+    }
+
+    /// <summary>TCP 表损坏时的孤儿识别回退：按命令行签名 + 进程名匹配占用本服务
+    /// 端口的进程（netstat 查不到端口 PID 时）。返回匹配的 PID 列表。</summary>
+    private IReadOnlyList<int> FindServicePidsByCommandLine(ManagedService service, string purpose)
+    {
+        var signature = service.ProcessSignature ?? $"--port {service.Port}";
+        var expectedProcess = Path.GetFileNameWithoutExtension(service.FileName);
+        var result = new List<int>();
+        try
+        {
+            var info = new ProcessStartInfo
+            {
+                // 用 [string]::Join 拼接，避免内层双引号截断外层 -Command 引号区
+                FileName = "powershell.exe",
+                Arguments =
+                    "-NoProfile -Command \"Get-CimInstance Win32_Process | ForEach-Object { [string]::Join('|', $_.ProcessId, $_.Name, $_.CommandLine) }\"",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                StandardOutputEncoding = Encoding.UTF8
+            };
+            using var process = Process.Start(info);
+            if (process == null) return result;
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(5000);
+            foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split(new[] { '|' }, 3);
+                if (parts.Length < 3) continue;
+                if (!int.TryParse(parts[0], out var pid) || pid <= 0 || pid == Environment.ProcessId)
+                    continue;
+                if (!MatchesServiceSignature(parts[1], parts[2], expectedProcess, signature))
+                    continue;
+                result.Add(pid);
+            }
+
+            if (result.Count > 0)
+            {
+                result.Sort(); // 先父后子：优先返回引导进程（父），树杀时连带子进程
+                _log(
+                    $"{service.Name} netstat 未列出端口 {service.Port} 的 PID，已回退按命令行签名识别：" +
+                    $"PID {string.Join(", ", result)}（{purpose}）。");
+            }
+        }
+        catch
+        {
+            // 查询失败按无匹配处理，不影响主流程
+        }
+        return result;
+    }
+
+    /// <summary>签名匹配：进程名一致（忽略大小写/扩展名）且命令行包含签名。</summary>
+    internal static bool MatchesServiceSignature(
+        string processName,
+        string commandLine,
+        string expectedProcessName,
+        string signature)
+    {
+        if (string.IsNullOrWhiteSpace(commandLine) || string.IsNullOrWhiteSpace(signature))
+            return false;
+        var actual = Path.GetFileNameWithoutExtension(processName ?? "");
+        if (!string.Equals(actual, expectedProcessName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return commandLine.Contains(signature, StringComparison.Ordinal);
+    }
+
+    /// <summary>复用现有实例前按命令行签名接管孤儿进程（使停止/重启按钮生效）。</summary>
+    private void AdoptOrphanByCommandLine(ManagedService service)
+    {
+        if (service.Process is { HasExited: false }) return; // 已有托管进程，无需接管
+        try
+        {
+            var candidates = FindServicePidsByCommandLine(service, "复用接管").ToList();
+            if (candidates.Count == 0) return;
+
+            // 候选 >1（uvicorn 引导+server 同签名）时做父子判定选 wrapper：
+            // 子进程的 ParentProcessId 指向另一候选。PID 升序≠父先（回绕），
+            // 误接管 server 子进程会让停止只杀子不杀引导（评审 P2）。
+            var pid = candidates[0];
+            if (candidates.Count > 1)
+            {
+                var wrapper = candidates.FirstOrDefault(candidate =>
+                {
+                    var parent = ParentPidOf(candidate);
+                    return parent <= 0 || candidates.Where(o => o != candidate).All(o => parent != o);
+                });
+                if (wrapper > 0) pid = wrapper;
+            }
+
+            service.Process = Process.GetProcessById(pid);
+            _log($"{service.Name} 已接管现有进程 PID={pid}（此后可正常停止/重启）。");
+        }
+        catch
+        {
+            // 接管失败不影响复用
+        }
+    }
+
+    /// <summary>TCP 表损坏时判断某服务是否仍有活着的进程（命令行签名探测）。
+    /// 供锁冲突标记失效分支使用：有活着的等锁实例则不重复拉起（P1-C）。</summary>
+    public bool HasLiveProcessByCommandLine(string key)
+    {
+        if (!_services.TryGetValue(key, out var service)) return false;
+        return FindServicePidsByCommandLine(service, "存活检查").Count > 0;
     }
 
     /// <summary>判断 candidatePid 是否是指定引导进程（或其后代）的子进程。</summary>
@@ -545,6 +746,8 @@ internal sealed class LauncherProcessManager
                 return;
 
             var pids = LauncherPorts.GetPidsByPort(service.Port);
+            if (pids.Count == 0)
+                pids = FindServicePidsByCommandLine(service, "端口清理");
             foreach (var pid in pids)
             {
                 KillProcessTree(pid, $"端口 {service.Port}");
@@ -1028,9 +1231,13 @@ internal sealed class LauncherProcessManager
             var owner = service.PortOwnerProcess;
             service.PortOwnerProcess = null;
             var guidedPid = service.Process is { HasExited: false } ? service.Process.Id : 0;
+            // 端口复核双证据：netstat PID（正常路径）或连接探测（TCP 表损坏时
+            // GetPidsByPort 为空，连接探测证明端口仍被占用）；父子关系校验保留，
+            // 防 PID 复用误杀（复用进程不会是引导进程后代）。
             if (owner is { HasExited: false } &&
                 IsDescendantOf(owner.Id, guidedPid) &&
-                LauncherPorts.GetPidsByPort(service.Port).Contains(owner.Id))
+                (LauncherPorts.GetPidsByPort(service.Port).Contains(owner.Id) ||
+                 LauncherPorts.IsPortOpen(service.Port)))
             {
                 try
                 {

@@ -14,7 +14,7 @@
       "port": 27017,
       "workingDirectory": "D:\\APP_SOFT\\MongoDB\\bin",
       "fileName": "D:\\APP_SOFT\\MongoDB\\bin\\mongod.exe",
-      "arguments": "--dbpath D:\\APP_SOFT\\MongoDB\\data --logpath D:\\APP_SOFT\\MongoDB\\log\\mongod.log --port 27017",
+      "arguments": "--dbpath D:\\APP_SOFT\\MongoDB\\data --logpath D:\\APP_SOFT\\MongoDB\\log\\mongod.log --logappend --port 27017",
       "externalPolicy": "refuse",
       "logOnlyErrors": false,
       "comment": "refuse：端口被外部进程占用时只显示 PID 不清理（Safety 原则）；副作用是启动器拉起的 mongod 崩溃残留孤儿时不会自动清理，需人工处理。"
@@ -38,6 +38,7 @@
       "workingDirectory": "${repoRoot}\\proxy-server",
       "fileName": "node",
       "arguments": "server.js",
+      "processSignature": "server.js",
       "externalPolicy": "managed",
       "logOnlyErrors": false,
       "logPolicy": { "level": "filter-access", "suppressHealth": true }
@@ -73,6 +74,7 @@
       "workingDirectory": "${repoRoot}",
       "fileName": "python",
       "arguments": "python-bridge/main.py",
+      "processSignature": "python-bridge/main.py",
       "externalPolicy": "managed",
       "logOnlyErrors": true,
       "logPolicy": { "level": "errors-only" }
@@ -84,6 +86,7 @@
       "workingDirectory": "${repoRoot}\\quant-board",
       "fileName": "${repoRoot}\\quant-board\\.venv\\Scripts\\python.exe",
       "arguments": "-m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --no-access-log",
+      "processSignature": "-m uvicorn backend.main:app",
       "fallbackFileName": "python",
       "externalPolicy": "managed",
       "logOnlyErrors": false,
@@ -96,6 +99,7 @@
       "workingDirectory": "${repoRoot}\\quant-board",
       "fileName": "${repoRoot}\\quant-board\\.venv\\Scripts\\python.exe",
       "arguments": "-m uvicorn backend.collector_main:app --host 127.0.0.1 --port 8001 --no-access-log",
+      "processSignature": "-m uvicorn backend.collector_main:app",
       "fallbackFileName": "python",
       "externalPolicy": "managed",
       "logOnlyErrors": false,

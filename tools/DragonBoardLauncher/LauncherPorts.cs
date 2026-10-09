@@ -8,10 +8,19 @@ internal static class LauncherPorts
     public static bool IsPortOpen(int port)
     {
         var properties = IPGlobalProperties.GetIPGlobalProperties();
-        return properties.GetActiveTcpListeners().Any(endpoint => endpoint.Port == port)
-            || properties.GetActiveTcpConnections().Any(connection =>
-                connection.LocalEndPoint.Port == port &&
-                connection.State is TcpState.Listen or TcpState.Established);
+        if (properties.GetActiveTcpListeners().Any(endpoint => endpoint.Port == port))
+            return true;
+        if (properties.GetActiveTcpConnections().Any(connection =>
+            connection.LocalEndPoint.Port == port &&
+            connection.State is TcpState.Listen or TcpState.Established))
+            return true;
+
+        // Windows 更新后系统 TCP 表可能损坏（netstat / Get-NetTCPConnection 的
+        // LISTENING 行缺失或 PID=0，2026-10-09 复盘 KB5127773/KB5127757）：
+        // 表里查不到时回退真实 TCP 连接探测——连接成功即端口可用，这是权威信号，
+        // 不依赖系统表；避免把「活着的服务」误判为未运行而重复拉起（端口 10048 风暴）。
+        // 同时探测 IPv6 回环（评审 P2）：仅绑 [::1] 的服务在表损坏时不至于误判死。
+        return IsTcpListeningOn("127.0.0.1", port) || IsTcpListeningOn("::1", port);
     }
 
     public static bool IsTcpListeningOn(string host, int port)

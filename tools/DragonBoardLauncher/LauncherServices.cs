@@ -165,6 +165,7 @@ internal static class LauncherServices
             var logPolicy = ParseLogPolicy(item, logOnlyErrors);
             var dumpRdbPath = ExpandNullable(GetString(item, "dumpRdbPath"), root);
             var dumpRdbOwner = GetString(item, "dumpRdbOwner");
+            var processSignature = GetString(item, "processSignature");
 
             Dictionary<string, string>? envVars = null;
             if (item.TryGetProperty("envVars", out var envElement) &&
@@ -189,7 +190,8 @@ internal static class LauncherServices
                 externalPolicy,
                 logPolicy,
                 dumpRdbPath,
-                dumpRdbOwner);
+                dumpRdbOwner,
+                processSignature);
             return (key, service);
         }
         catch

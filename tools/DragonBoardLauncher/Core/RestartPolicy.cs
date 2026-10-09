@@ -80,11 +80,12 @@ internal sealed class RestartPolicy
         _failures[key] = _failures.GetValueOrDefault(key) + 1;
     }
 
-    /// <summary>服务恢复健康：清零失败计数并清除冷却时间（恢复后允许立即重启）。</summary>
+    /// <summary>服务恢复健康：清零失败计数；保留冷却时间戳（2026-10-09 评审 P2：
+    /// 抖动型服务若可达即全清，会每 ~61s 无限重拉且 maxConsecutive 永不触发；
+    /// 保留冷却后快速抖动仍被限流，长时间健康后冷却自然过期不受影响）。</summary>
     public void Reset(string key)
     {
         _failures[key] = 0;
-        _lastRestartUtc.Remove(key);
     }
 
     private TimeSpan ComputeBackoff(string key)

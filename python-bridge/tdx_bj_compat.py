@@ -63,10 +63,27 @@ def uninstall_bj_compat() -> None:
             ("mootdx.utils.get_stock_market", mootdx.utils, "get_stock_market"),
             ("mootdx.quotes.get_stock_market", mootdx.quotes, "get_stock_market"),
             ("tdxpy.helper.get_security_type", tdxpy.helper, "get_security_type"),
+            ("tdxpy.helper.get_security_coefficient", tdxpy.helper, "get_security_coefficient"),
             ("tdxpy.hq.get_security_quotes", tdxpy.hq.TdxHq_API, "get_security_quotes"),
         ):
             if key in _ORIGINALS:
                 setattr(module, attr, _ORIGINALS[key])
+
+        # parser 绑定还原独立于上方 import（评审 Finding-2）：tdxpy 升级导致该
+        # 模块 import 失败时，不应阻断其余还原项（否则补丁残留而卸载宣称完成）。
+        parser_binding = _ORIGINALS.get(
+            "tdxpy.parser.std.get_security_quotes.get_security_coefficient"
+        )
+        if parser_binding is not None:
+            try:
+                import tdxpy.parser.std.get_security_quotes as _parser_quotes
+
+                _parser_quotes.get_security_coefficient = parser_binding
+            except Exception as error:
+                logger.warning(
+                    "tdx_bj_compat: restore parser coefficient binding failed: %s",
+                    error,
+                )
         if _ORIGINALS.get("coefficient_has_bj"):
             tdxpy.constants.SECURITY_COEFFICIENT.pop("BJ_A_STOCK", None)
     finally:
@@ -113,15 +130,68 @@ def _patch_tdxpy_security_type() -> None:
 
 
 def _patch_tdxpy_coefficient() -> None:
-    """tdxpy: 北交所 A 股价格系数（0.01 元，与沪深 A 股一致）。
+    """tdxpy: 北交所 A 股价格系数（0.01 元，与沪深 A 股一致）+ 未知代码类型静音。
 
     dict 就地修改：helper 绑定的是同一 SECURITY_COEFFICIENT 对象，无需替换引用。
+
+    静音（2026-10-09）：tdxpy 原实现对未知代码类型每行情周期裸打
+    logger.error('NotImplementedError')（无 market/code 上下文；2026-10-08
+    订阅池含未知类型代码时单日 10.5 万行，淹没能用的错误日志）。改为按
+    (market, code前缀) 去重的一次性 WARNING，携带上下文；回退值与上游一致
+    （0.01），解析行为不变，问题代码仍可见。
     """
     import tdxpy.constants as constants
+    import tdxpy.helper as helper
 
     if "BJ_A_STOCK" not in constants.SECURITY_COEFFICIENT:
         constants.SECURITY_COEFFICIENT["BJ_A_STOCK"] = [0.01, 0.01]
         _ORIGINALS["coefficient_has_bj"] = True
+
+    orig_coefficient = helper.get_security_coefficient
+    _ORIGINALS["tdxpy.helper.get_security_coefficient"] = orig_coefficient
+    unknown_warned: set[tuple[str, str]] = set()
+
+    def quiet_coefficient(market=None, code=None):
+        try:
+            security_type = helper.get_security_type(market=market, code=code)
+        except NotImplementedError:
+            key = (str(market), str(code)[:2])
+            if key not in unknown_warned:
+                unknown_warned.add(key)
+                logger.warning(
+                    "tdxpy: unknown security type (market=%s, code=%s…), "
+                    "fallback coefficient 0.01（同类型代码不再重复告警）",
+                    market,
+                    code,
+                )
+            return 0.01
+        # 与上游一致：未知类型表项时 KeyError 照常抛出，不吞
+        return constants.SECURITY_COEFFICIENT[security_type][0]
+
+    helper.get_security_coefficient = quiet_coefficient
+
+    # parser 模块是 from-import 绑定（parser/std/get_security_quotes.py 顶部
+    # from tdxpy.helper import get_security_coefficient），需同步替换已绑定引用，
+    # 否则行情解析仍走裸报错原实现。替换失败可观测（评审 Finding-1）：
+    # 功能不损（bj_type + BJ_A_STOCK 系数仍生效），但静音失效回退上游刷屏，
+    # 必须留痕。
+    try:
+        from tdxpy.parser.std import get_security_quotes as quotes_parser
+
+        if getattr(quotes_parser, "get_security_coefficient", None) is orig_coefficient:
+            quotes_parser.get_security_coefficient = quiet_coefficient
+            _ORIGINALS[
+                "tdxpy.parser.std.get_security_quotes.get_security_coefficient"
+            ] = orig_coefficient
+        else:
+            logger.warning(
+                "tdx_bj_compat: parser coefficient binding shape changed "
+                "(not the helper original); skip parser binding patch"
+            )
+    except Exception as error:  # 兼容层失败不影响行情主链路
+        logger.warning(
+            "tdx_bj_compat: parser coefficient binding patch failed: %s", error
+        )
 
 
 def _patch_tdxpy_quotes() -> None:

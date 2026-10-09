@@ -60,7 +60,7 @@ public class RestartPolicyTests
     }
 
     [Fact]
-    public void Reset_ClearsFailureCount()
+    public void Reset_ClearsFailureCountAndBackoff()
     {
         var policy = new RestartPolicy(
             cooldown: TimeSpan.FromMilliseconds(1),
@@ -73,7 +73,21 @@ public class RestartPolicyTests
         Assert.False(policy.TryRequestRestart("collector", out _));
 
         policy.Reset("collector");
+        // 失败计数与指数退避清零；冷却仍保留（见下一个测试），等待 1s 退避下限后放行。
+        Thread.Sleep(1100);
         Assert.True(policy.TryRequestRestart("collector", out _));
+    }
+
+    [Fact]
+    public void Reset_KeepsCooldownToThrottleFlapping()
+    {
+        // 2026-10-09 评审 P2：可达即全清会让抖动型服务每 ~61s 无限重拉。
+        // 恢复只清失败计数；冷却时间戳保留，快速抖动仍被限流。
+        var policy = new RestartPolicy(cooldown: TimeSpan.FromMilliseconds(500));
+        policy.RecordRestart("collector");
+        policy.Reset("collector");
+
+        Assert.False(policy.TryRequestRestart("collector", out _));
     }
 
     [Fact]

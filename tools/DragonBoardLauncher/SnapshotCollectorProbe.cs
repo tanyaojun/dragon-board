@@ -35,6 +35,28 @@ internal static class SnapshotCollectorProbe
     /// <summary>启动失败标记新鲜度窗口：超过该时长视为过期，不再据此抑制重启。</summary>
     private static readonly TimeSpan StartupFailureFreshWindow = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// 健康证据是否不可靠（P0-B 细化 + P1-C，2026-10-09 审计）：探针根本没读到
+    /// 服务自报状态（超时/连接失败，fingerprint 前缀 probe:）。这类证据在交易
+    /// 时段内推迟停启式重启（09-15 10:00 探针超时误杀健康实例的教训）。
+    /// 服务自报的契约异常（fingerprint 为 hard:/http:/startup-failure:/等）是
+    /// 可靠证据，随时允许修复性重启——调度器锁丢失自停（调度器未运行，
+    /// restartable=true）依赖它盘中恢复，不能被交易窗推迟。
+    /// </summary>
+    public static bool IsUnreliableHealthEvidence(string fingerprint) =>
+        !string.IsNullOrWhiteSpace(fingerprint) &&
+        fingerprint.StartsWith("probe:", StringComparison.Ordinal);
+
+    /// <summary>
+    /// 是否为锁冲突启动失败标记（collector_main 写入的 wait 标记，fingerprint
+    /// 前缀 startup-failure:）。P1-C 补充：该标记只应保护“正在等锁的活进程”；
+    /// 调用方在 tracked 进程已退出后读到它时，应视为标记失效并立即重新拉起
+    /// （旧锁 TTL ≤120s 早已过期，新实例等锁/清理不会双采）。
+    /// </summary>
+    public static bool IsLockWaitStartupFailureMarker(string fingerprint) =>
+        !string.IsNullOrWhiteSpace(fingerprint) &&
+        fingerprint.StartsWith("startup-failure:", StringComparison.Ordinal);
+
     public static async Task<SnapshotCollectorHealth> GetHealthAsync()
     {
         try

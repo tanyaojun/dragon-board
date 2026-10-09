@@ -54,6 +54,16 @@ class BjCompatTest(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             tdxpy.helper.get_security_type(2, "920299")
         self.assertNotIn("BJ_A_STOCK", SECURITY_COEFFICIENT)
+        # coefficient 包装也还原为 tdxpy.helper 内的原函数
+        self.assertEqual(
+            tdxpy.helper.get_security_coefficient.__module__, "tdxpy.helper"
+        )
+        # parser 绑定还原（评审 Finding-4）：from-import 的绑定也回到上游原函数
+        from tdxpy.parser.std import get_security_quotes as quotes_parser
+
+        self.assertEqual(
+            quotes_parser.get_security_coefficient.__module__, "tdxpy.helper"
+        )
 
     def test_mootdx_market_mapping_920(self):
         self.assertEqual(mootdx.utils.get_stock_market("920299"), 2)  # 北交所
@@ -83,6 +93,33 @@ class BjCompatTest(unittest.TestCase):
 
     def test_tdxpy_coefficient_has_bj(self):
         self.assertEqual(SECURITY_COEFFICIENT["BJ_A_STOCK"], [0.01, 0.01])
+
+    def test_coefficient_bj_and_known_types_unchanged(self):
+        # 北交所与沪深已知类型：返回值与上游一致（股票/指数系数首项均为 0.01）
+        self.assertEqual(tdxpy.helper.get_security_coefficient(market=2, code="920299"), 0.01)
+        self.assertEqual(tdxpy.helper.get_security_coefficient(market=0, code="000001"), 0.01)
+        self.assertEqual(tdxpy.helper.get_security_coefficient(market=1, code="600000"), 0.01)
+
+    def test_coefficient_quiets_unknown_type_with_context(self):
+        # 未知代码类型：返回与上游一致的回退值 0.01；告警去重且携带 market/code 上下文
+        # （沪市 77 开头无类型映射，必然 NotImplementedError）
+        with self.assertLogs("tdx_bj_compat", level="WARNING") as captured:
+            first = tdxpy.helper.get_security_coefficient(market=1, code="777777")
+            second = tdxpy.helper.get_security_coefficient(market=1, code="777778")  # 同前缀不重复告警
+        self.assertEqual(first, 0.01)
+        self.assertEqual(second, 0.01)
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("market=1", captured.output[0])
+        self.assertIn("777777", captured.output[0])
+
+    def test_coefficient_parser_binding_replaced(self):
+        # parser 模块的 from-import 绑定也同步替换，否则行情解析仍走裸报错原实现
+        from tdxpy.parser.std import get_security_quotes as quotes_parser
+
+        self.assertIs(
+            quotes_parser.get_security_coefficient,
+            tdxpy.helper.get_security_coefficient,
+        )
 
     def test_get_security_quotes_bj_list_not_rejected(self):
         # list 形式含北交所：走底层 cmd 同路径（不返回 None）

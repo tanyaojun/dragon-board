@@ -53,7 +53,8 @@ internal sealed class ManagedService
         ServiceExternalPolicy externalPolicy = ServiceExternalPolicy.Managed,
         ServiceLogPolicy? logPolicy = null,
         string? dumpRdbPath = null,
-        string? dumpRdbOwner = null)
+        string? dumpRdbOwner = null,
+        string? processSignature = null)
     {
         Name = name;
         Port = port;
@@ -71,6 +72,7 @@ internal sealed class ManagedService
             logOnlyErrors ? ServiceLogLevel.ErrorsOnly : ServiceLogLevel.All);
         DumpRdbPath = dumpRdbPath;
         DumpRdbOwner = dumpRdbOwner;
+        ProcessSignature = processSignature;
     }
 
     public string Name { get; }
@@ -99,4 +101,7 @@ internal sealed class ManagedService
     public string? DumpRdbPath { get; }
     /// <summary>RDB 文件的期望所有者（如 "TANNY-PC\\Think"）；实际所有者不符时自动修复权限。</summary>
     public string? DumpRdbOwner { get; }
+    /// <summary>TCP 表损坏时按命令行识别孤儿进程的签名（2026-10-09）；null 时默认
+    /// 用 "--port {Port}"。仅对 Managed 服务、且 netstat 表查不到端口 PID 时作为回退证据。</summary>
+    public string? ProcessSignature { get; }
 }

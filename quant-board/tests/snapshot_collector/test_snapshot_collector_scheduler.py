@@ -862,3 +862,84 @@ class TestMissedSlotVisibility:
 
         assert repo.inserted_runs == []
         assert scheduler._last_error is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Failed-Slot Run Record Tests（2026-10-09 审计 P2-D）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class _FakeSlot:
+    snapshot_id: str = "dragonboard_live:half_hour:2026-09-21:10:30"
+    snapshot_type: str = "half_hour"
+    trading_date: str = "2026-09-21"
+    slot_time: str = "2026-09-21 10:30"
+
+
+class TestFailedSlotRunRecord:
+    """超时/异常槽位必须落持久化 failed 运行记录（fail-visible 补强）。
+
+    背景：09-21 10:30 槽超时后 MongoDB runs 集查无记录（错误只在内存
+    last_error，进程重启即消失），违背持久可追溯要求。
+    """
+
+    def test_mark_slot_error_writes_failed_run_record(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        inserted: list[dict[str, Any]] = []
+
+        class FakeRepo:
+            def insert_run(self, run: dict[str, Any]) -> None:
+                inserted.append(run)
+
+        monkeypatch.setattr(
+            "backend.snapshot_collector.service_factory."
+            "create_snapshot_collector_repository",
+            lambda: FakeRepo(),
+        )
+        scheduler = _scheduler(monkeypatch)
+
+        scheduler._mark_slot_error(
+            _FakeSlot(),
+            RuntimeError("collector group of 1 slots timed out after 240.0s"),
+        )
+
+        assert len(inserted) == 1
+        doc = inserted[0]
+        assert doc["status"] == "failed"
+        assert doc["snapshotId"] == _FakeSlot.snapshot_id
+        assert doc["snapshotType"] == "half_hour"
+        assert doc["tradingDate"] == "2026-09-21"
+        assert doc["slotTime"] == "2026-09-21 10:30"
+        assert doc["datasetId"] == scheduler.dataset_id
+        assert doc["runId"].startswith("failed-")
+        assert doc["dryRun"] is False
+        assert "timed out" in doc["error"]
+        # 内存态 last_error 仍然保留（/api/health 契约依赖）
+        assert "timed out" in (scheduler._last_error or "")
+        assert scheduler._error_count == 1
+
+    def test_mark_slot_error_repo_failure_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MongoDB 不可用时记录失败只留日志，不阻断调度循环。"""
+        from backend.snapshot_collector.scheduler import SnapshotCollectorScheduler
+
+        def boom() -> Any:
+            raise RuntimeError("mongo down")
+
+        monkeypatch.setattr(
+            "backend.snapshot_collector.service_factory."
+            "create_snapshot_collector_repository",
+            boom,
+        )
+        scheduler = _scheduler(monkeypatch)
+
+        # 不应抛出
+        scheduler._mark_slot_error(_FakeSlot(), RuntimeError("slot timeout"))
+
+        assert scheduler._error_count == 1
+        assert "slot timeout" in (scheduler._last_error or "")

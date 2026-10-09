@@ -445,6 +445,42 @@ class SnapshotCollectorScheduler:
         self._last_error_slot = slot.snapshot_id
         self._error_count += 1
         logger.exception("snapshot collector slot failed: %s", slot.snapshot_id)
+        self._record_failed_slot(slot, exc)
+
+    def _record_failed_slot(self, slot: Any, exc: Exception) -> None:
+        """超时/异常槽位落一条 failed 运行记录（2026-10-09 审计 P2-D）。
+
+        此前超时只更新内存 last_error（进程重启即消失），MongoDB runs 集合无痕——
+        09-21 10:30 槽超时后查不到任何记录，违背 fail-visible 的持久可追溯要求。
+        写失败不阻断调度循环（MongoDB 不可用时只留日志；此时 run 记录本就无处可写）。
+        """
+        from backend.snapshot_collector.state import record_run as _record_run
+
+        try:
+            from backend.snapshot_collector.service_factory import (
+                create_snapshot_collector_repository,
+            )
+
+            _record_run(
+                create_snapshot_collector_repository(),
+                {
+                    "runId": f"failed-{slot.snapshot_id}-{int(time.time() * 1000)}",
+                    "datasetId": self.dataset_id,
+                    "snapshotId": slot.snapshot_id,
+                    "snapshotType": slot.snapshot_type,
+                    "tradingDate": slot.trading_date,
+                    "slotTime": slot.slot_time,
+                    "status": "failed",
+                    "deduped": False,
+                    "dryRun": False,
+                    "blockingIssues": ["slot_error"],
+                    "error": str(exc)[:500],
+                },
+            )
+        except Exception:
+            logger.exception(
+                "failed to record failed-slot run record %s", slot.snapshot_id
+            )
 
 
 # Module-level singleton — start/stop via the FastAPI lifespan or CLI.
