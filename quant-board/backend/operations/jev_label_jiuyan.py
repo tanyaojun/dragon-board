@@ -198,31 +198,68 @@ def _jiuyan_ladder(db, date: str) -> dict | None:
     return buckets
 
 
-def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
-    """韭研个股高度/封板时间/板块 join 表（2026-10-10，与 _jiuyan_ladder 漏标口径同源）。
+def _ths_failed_codes(db, date: str) -> tuple[set[str], bool]:
+    """THS 15:00 帧炸板池（limit_up_fail）代码集（2026-10-11 触板二分用，方案A）。
 
-    返回 (info, meta)：
-    - info = {code(-6位): {boards, limitUpTime, boardName, boardUnmarked?}}，同 code 多板块取首现；
-      boards = _jiuyan_board_count(num「N天M板」的 M)，None=无法解析（宁缺毋猜）；
-    - boardUnmarked=True：num 为空且在昨日涨停池 = 真连板被韭研漏标，不猜高度不归首板（fail-visible）；
-    - meta = {jiuyanFinalFound, prevPoolFound}：韭研 final 缺失或昨日池轴缺失时判定不可用，
-      调用方必须结构化降级（boardUnmarked 缺席会落回首板口径，不得静默）。
+    返回 (codes, found)：found=False = 帧缺失/池降级，调用方必须 fail-visible 结构化降级，
+    不得把触板名单静默当涨停名单；failed 池为空且 ok=True 是合法状态（当日无炸板）。
+    """
+    f = db["snapshot_frames"].find_one(
+        {"datasetId": DEFAULT_DATASET_ID, "type": "half_hour", "tradingDate": date,
+         "slotTime": "15:00"},
+        {"limitSummary.thsPools": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
+    tp = ((f or {}).get("limitSummary") or {}).get("thsPools") or {}
+    if not tp or not tp.get("ok") or tp.get("degraded"):
+        return set(), False
+    items = (tp.get("pools") or {}).get("failed", {}).get("items") or []
+    return {str(i.get("code") or "")[-6:] for i in items}, True
+
+
+_BSE_CODE_PREFIXES = ("92", "43", "83", "87")
+
+
+def _official_exclude(stock_name: Any, code: str) -> str | None:
+    """官方简图剔除口径（footer：不含 st 和未开板新股）：ST 或北交所 → 排除原因，否则 None。"""
+    if "ST" in str(stock_name or "").upper():
+        return "st"
+    if code[:2] in _BSE_CODE_PREFIXES:
+        return "bse"
+    return None
+
+
+def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
+    """韭研个股高度/封板时间/板块 join + 触板二分（2026-10-11 方案A，用户裁决）。
+
+    韭研 final fields.stocks = 盘中曾触板名单（封板+炸板，10-09 实测 82=69涨停+13炸板），
+    与官方简图「涨停家数」差炸板股；doc 内无可靠封板标记（time 空≠炸板），必须借
+    THS 15:00 炸板池二分：
+    - zhaban=True：在今日炸板池 → 非涨停股（断板/触板未封），不进涨停口径；
+    - excluded：'st'|'bse'（官方简图不计入涨停家数的 5 只差额，10-09 实测 3 ST + 2 北交所）；
+    - boardUnmarked=True：num 空且昨日在「昨日涨停池」（昨日触板-昨日炸板）→ 真漏标连板；
+      昨日炸板股今日涨停=首板，不得误标（10-09 金健米业/东亚药业教训）；
+    - 同 code 多板块取首现；boards=_jiuyan_board_count(num「N天M板」的 M)，None=宁缺毋猜。
+    meta = {jiuyanFinalFound, prevPoolFound, thsPoolFound, prevThsPoolFound}：
+    任一池缺失时二分不可用（boardUnmarked/zhaban 缺席），调用方必须结构化降级。
     """
     doc = db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"},
-        {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1, "fields.name": 1})
+        {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1,
+         "fields.stocks.name": 1, "fields.name": 1})
     fields = (doc or {}).get("fields") or []
     final_found = any(field.get("stocks") for field in fields)
+    failed_today, ths_found = _ths_failed_codes(db, date)
     prev_dates = trading_dates_before(db, date, 1)
-    prev_codes: set[str] = set()
+    prev_sealed: set[str] = set()
+    prev_ths_found: bool | None = None
     if prev_dates:
         prev_doc = db["jiuyan_action"].find_one(
             {"_id": f"{prev_dates[-1]}:final"}, {"fields.stocks.code": 1})
-        for field in (prev_doc or {}).get("fields") or []:
-            for stock in field.get("stocks") or []:
-                code = str(stock.get("code") or "")[-6:]
-                if code:
-                    prev_codes.add(code)
+        prev_touch = {str(s.get("code") or "")[-6:]
+                      for field in (prev_doc or {}).get("fields") or []
+                      for s in field.get("stocks") or [] if s.get("code")}
+        prev_failed, prev_ths_found = _ths_failed_codes(db, prev_dates[-1])
+        # 昨日炸板池缺失 → prev_sealed 不可信，置空（宁漏标不误标，meta 显式降级）
+        prev_sealed = (prev_touch - prev_failed) if prev_ths_found else set()
     out: dict[str, dict] = {}
     for field in fields:
         for stock in field.get("stocks") or []:
@@ -231,10 +268,16 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
                 boards = _jiuyan_board_count(stock)
                 info = {"boards": boards, "limitUpTime": stock.get("time"),
                         "boardName": field.get("name")}
-                if boards is None and code in prev_codes:
+                if ths_found and code in failed_today:
+                    info["zhaban"] = True
+                excl = _official_exclude(stock.get("name"), code)
+                if excl:
+                    info["excluded"] = excl
+                if boards is None and prev_ths_found and code in prev_sealed:
                     info["boardUnmarked"] = True
                 out[code] = info
-    meta = {"jiuyanFinalFound": final_found, "prevPoolFound": bool(prev_dates)}
+    meta = {"jiuyanFinalFound": final_found, "prevPoolFound": bool(prev_dates),
+            "thsPoolFound": ths_found, "prevThsPoolFound": prev_ths_found}
     return out, meta
 
 

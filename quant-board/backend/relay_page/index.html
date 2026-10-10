@@ -199,7 +199,7 @@ const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null,
   archEntries: [], archUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
-  labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '' } };
+  labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' } };
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
@@ -340,14 +340,18 @@ function renderRelayTab(){
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
-// 高度桶与筛选共用 stocks[].boards 口径（首板=!boards / 2 / 3 / ≥4），KPI 点卡=筛选，数必一致
+// 范围二分（方案A，2026-10-11 用户裁决）：韭研触板名单经 THS 炸板池二分——
+// 涨停=触板-炸板（官方简图口径）再剔 ST/北交所；漏标连板判定已按「昨日涨停池」修正
+const SCOPE_CN = { zt: '涨停', zhaban: '炸板', excluded: 'ST·北交所', all: '触板全部' };
+const SCOPE_PRED = { zt: s => !s.zhaban && !s.excluded, zhaban: s => s.zhaban,
+  excluded: s => s.excluded, all: () => true };
 function labelBoardOf(s){ return s.boardName || s.board || '未分板块'; }
 function labelMatches(s, f, skipHeight){
   if (f.q){ const q = f.q.toLowerCase();
     if (!String(s.code || '').toLowerCase().includes(q) && !String(s.name || '').toLowerCase().includes(q)) return false; }
   if (f.board && labelBoardOf(s) !== f.board) return false;
   if (!skipHeight && f.height){
-    // 漏标连板（boardUnmarked，韭研 num=null 且在昨日池）单列：不归首板不猜高度（fail-visible）
+    // 漏标连板（boardUnmarked，num 空且昨日在「昨日涨停池」）单列：不归首板不猜高度（fail-visible）
     // 首板桶含 boards===1（韭研 one 桶=≤1 板）；2/3 精确匹配；4p=≥4 板
     if (f.height === 'um'){ if (!s.boardUnmarked) return false; }
     else if (f.height === '4p'){ if ((s.boards || 0) < 4) return false; }
@@ -367,55 +371,61 @@ function lfSel(label, key, opts){
     + list.map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('') + '</select>';
 }
 function lfRenderKpi(stocks, f){
-  const n = stocks.length;
-  // 高度四卡基数=应用非高度筛选后的集合（点卡命中数=卡面数恒一致）；家数/漏标/最高板保持日级事实
-  const base = (f.q || f.board || f.driver || f.depth || f.fresh || f.buy)
-    ? stocks.filter(s => labelMatches(s, f, true)) : stocks;
+  // 触板二分（后端经 THS 炸板池打 zhaban/excluded 标）：涨停家数=官方简图口径（触板-炸板-剔ST/北交所）
+  const zhaban = stocks.filter(s => s.zhaban);
+  const excluded = stocks.filter(s => s.excluded);
+  const zt = stocks.filter(s => !s.zhaban && !s.excluded);
+  const canHeight = f.scope === 'zt';
+  // 高度卡基数=涨停集合中应用非高度筛选后的集合（组合筛选下点卡命中数=卡面数仍恒一致）
+  const otherFilter = f.q || f.board || f.driver || f.depth || f.fresh || f.buy;
+  const base = otherFilter ? zt.filter(s => labelMatches(s, f, true)) : zt;
   const pct = v => base.length ? Math.round(v / base.length * 100) : 0;
-  // 首板桶=无板数或 1 板（韭研 one 桶=≤1 板）且非漏标；漏标连板（boardUnmarked）单列注记，不进任何高度桶
-  const bum = stocks.filter(s => s.boardUnmarked).length;
+  const bum = zt.filter(s => s.boardUnmarked).length;
+  // 首板桶=无板数或 1 板（韭研 one 桶=≤1 板）且非漏标；漏标连板单列注记，不进任何高度桶
   const b1 = base.filter(s => !s.boardUnmarked && (!s.boards || s.boards === 1)).length;
   const b2 = base.filter(s => s.boards === 2).length;
   const b3 = base.filter(s => s.boards === 3).length;
   const b4p = base.filter(s => (s.boards || 0) >= 4).length;
-  // 最高板只看有板数标注的个股（漏标不猜高度；全漏标日如实显示漏标口径）
-  const labeled = stocks.filter(s => !s.boardUnmarked);
-  const maxBoard = labeled.reduce((m, s) => Math.max(m, s.boards || 1), 0);
-  const leaders = labeled.filter(s => (s.boards || 1) === maxBoard);
-  const leaderTxt = !labeled.length ? '（漏标口径）'
-    : maxBoard > 1 ? esc((leaders[0].name || leaders[0].code || '-')) + (leaders.length > 1 ? ` 等${leaders.length}只` : '')
+  const maxBoard = zt.reduce((m, s) => Math.max(m, s.boards || 1), 0);
+  const leaders = zt.filter(s => (s.boards || 1) === maxBoard);
+  const leaderTxt = maxBoard > 1
+    ? esc((leaders[0].name || leaders[0].code || '-')) + (leaders.length > 1 ? ` 等${leaders.length}只` : '')
     : '全为首板';
   const L = STATE.labels || {}, deg = (L.summary || {}).degradedCount || 0;
-  const JOIN_CN = {jiuyan_final_missing: '韭研final缺失', prev_pool_missing: '昨日池缺失'};
+  const JOIN_CN = {jiuyan_final_missing: '韭研final缺失', prev_pool_missing: '昨日池缺失',
+    ths_pool_missing: '今日炸板池缺失', prev_ths_pool_missing: '昨日炸板池缺失'};
   const joinNote = L.boardJoinError ? ' · 高度join失败'
     : (L.boardJoinDegraded ? ' · 高度降级:' + (JOIN_CN[L.boardJoinDegraded] || L.boardJoinDegraded) : '');
   const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
-  const hCard = (k, v, key) => `<div class="kpi click${f.height === key ? ' on' : ''}" title="点击筛选：${k}" onclick="lfHeight('${key}')"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${pct(v)}% · 点击筛选</div></div>`;
+  const hCard = (k, v, key) => canHeight
+    ? `<div class="kpi click${f.height === key ? ' on' : ''}" title="点击筛选：${k}" onclick="lfHeight('${key}')"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${pct(v)}% · 点击筛选</div></div>`
+    : `<div class="kpi" title="板数分桶仅涨停范围有意义"><div class="k">${k}</div><div class="v">—</div><div class="s">范围：${SCOPE_CN[f.scope] || f.scope}</div></div>`;
   $('labelKpi').innerHTML =
-    card('涨停家数', n, `韭研口径 ${L.ladderPoolTotal ?? n} 只`
+    card('涨停家数', zt.length, `触板 ${stocks.length} · 炸板 ${zhaban.length} · 剔ST/北交所 ${excluded.length}`
       + (bum ? ` · 漏标连板 ${bum}` : '') + joinNote + (deg ? ` · degraded ${deg}` : ''))
     + hCard('首板', b1, '1') + hCard('二板', b2, '2') + hCard('三板', b3, '3') + hCard('四板以上', b4p, '4p')
     + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt);
 }
-function lfRenderBoards(stocks, f){
+function lfRenderBoards(pool, f){
   const dist = {};
-  for (const s of stocks){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
+  for (const s of pool){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
   const arr = Object.entries(dist).sort((a, b) => b[1] - a[1]);
   const top = arr.slice(0, 10), rest = arr.length - top.length;
   $('labelBoardRow').innerHTML = '<span class="k">板块分布</span>'
     + top.map(([name, c]) => `<span class="chip${f.board === name ? ' on' : ''}" title="点击筛选该板块" onclick="lfBoard('${js(name)}')">${esc(name)} ${c}</span>`).join('')
     + (rest > 0 ? `<span class="chip plain">其他 ${rest} 类</span>` : '');
 }
-function lfRenderBar(stocks){
+function lfRenderBar(pool){
   const bar = $('labelFilterBar');
   const ae = document.activeElement;
   // 输入/下拉聚焦时跳过重建（60s 轮询不夺焦点；状态由 STATE 持有，值同步靠下次重建）
   if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
   const dist = {};
-  for (const s of stocks){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
+  for (const s of pool){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
   const boards = Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([v]) => [v, v]);
   $('labelFilterBar').innerHTML =
-    `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.labelFilter.q)}" oninput="lfQ(this.value)">`
+    lfSel('范围', 'scope', Object.entries(SCOPE_CN))
+    + `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.labelFilter.q)}" oninput="lfQ(this.value)">`
     + lfSel('板块', 'board', boards)
     + lfSel('高度', 'height', [['1', '首板'], ['2', '二板'], ['3', '三板'], ['4p', '四板以上'], ['um', '漏标连板']])
     + lfSel('驱动', 'driver', Object.entries(DRIVER_CN))
@@ -425,20 +435,27 @@ function lfRenderBar(stocks){
     + `<button onclick="lfClear()">清除筛选</button>`
     + `<span class="cnt" id="labelCnt"></span>`;
 }
+function scopePool(stocks, f){ return stocks.filter(SCOPE_PRED[f.scope] || SCOPE_PRED.zt); }
 function lfRenderRows(){
   const L = STATE.labels || {};
   const stocks = L.stocks || [], f = STATE.labelFilter, ui = STATE.labelUi;
-  const filtered = stocks.filter(s => labelMatches(s, f));
+  // 范围二分：涨停（官方口径，默认）/ 炸板 / ST·北交所 / 触板全部；高度分桶仅涨停范围有意义
+  const pool = scopePool(stocks, f);
+  const filtered = pool.filter(s => labelMatches(s, f, f.scope !== 'zt'));
   STATE.labelEntries = filtered.map(labelEntryOf);
-  const hasFilter = f.q || f.board || f.height || f.driver || f.depth || f.fresh || f.buy;
-  $('labelHint').textContent = `${L.date || ''} · ${hasFilter ? filtered.length + '/' + stocks.length : stocks.length + ' 只'} · 点击行查看调用日志`;
+  const hasFilter = f.q || f.board || f.height || f.driver || f.depth || f.fresh || f.buy || f.scope !== 'zt';
+  $('labelHint').textContent = `${L.date || ''} · ${SCOPE_CN[f.scope] || f.scope} ${hasFilter ? filtered.length + '/' + pool.length : pool.length + ' 只'} · 点击行查看调用日志`;
   const cnt = $('labelCnt'); if (cnt) cnt.textContent = `${filtered.length} / ${stocks.length} 只`;
   const rows = filtered.map((s, i) => {
     const entry = STATE.labelEntries[i];
     const open = ui.openKey === entry.key;
+    const hCell = s.zhaban ? badge('炸板', 'b-red')
+      : s.excluded ? badge(s.excluded === 'st' ? 'ST剔除' : '北交所', 'b-amber')
+      : s.boardUnmarked ? badge('漏标连板', 'b-amber')
+      : `<span class="num">${s.boards && s.boards > 1 ? s.boards + '板' : '首板'}</span>`;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
     <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
-    <td>${s.boardUnmarked ? badge('漏标连板', 'b-amber') : `<span class="num">${s.boards && s.boards > 1 ? s.boards + '板' : '首板'}</span>`}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>
+    <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>
     <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
     <td>${badge(CAT_DEPTH_CN[s.catalystDepth] || s.catalystDepth || '-', 'b-gray')}</td>
     <td>${badge(FRESH_CN[s.freshness] || s.freshness || '-', s.freshness === 'fresh_catalyst' ? 'b-green' : 'b-gray')}</td>
@@ -458,9 +475,10 @@ function renderLabels(){
     $('labelTable').innerHTML = '<tr><td class="empty">当日无打标存档</td></tr>';
     return;
   }
+  const pool = scopePool(stocks, STATE.labelFilter);
   lfRenderKpi(stocks, STATE.labelFilter);
-  lfRenderBoards(stocks, STATE.labelFilter);
-  lfRenderBar(stocks);
+  lfRenderBoards(pool, STATE.labelFilter);
+  lfRenderBar(pool);
   lfRenderRows();
 }
 // 文本搜索只重渲染表体（筛选条不动，输入焦点不丢）
@@ -468,15 +486,19 @@ function lfQ(v){ STATE.labelFilter.q = v; lfRenderRows(); }
 function lfSet(k, v){
   STATE.labelFilter[k] = v;
   const stocks = (STATE.labels || {}).stocks || [];
+  const pool = scopePool(stocks, STATE.labelFilter);
   lfRenderKpi(stocks, STATE.labelFilter);
-  lfRenderBoards(stocks, STATE.labelFilter);
-  lfRenderBar(stocks);
+  lfRenderBoards(pool, STATE.labelFilter);
+  lfRenderBar(pool);
   lfRenderRows();
 }
-function lfHeight(v){ const f = STATE.labelFilter; f.height = f.height === v ? '' : v; lfSet('height', f.height); }
+function lfHeight(v){
+  if (STATE.labelFilter.scope !== 'zt') return;  // 板数分桶仅涨停范围有意义
+  const f = STATE.labelFilter; f.height = f.height === v ? '' : v; lfSet('height', f.height);
+}
 function lfBoard(v){ const f = STATE.labelFilter; f.board = f.board === v ? '' : v; lfSet('board', f.board); }
 function lfClear(){
-  STATE.labelFilter = { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '' };
+  STATE.labelFilter = { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' };
   renderLabels();
 }
 

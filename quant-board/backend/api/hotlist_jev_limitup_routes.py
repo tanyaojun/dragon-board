@@ -49,9 +49,15 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
             board_info, meta = jiuyan_board_info(db, date)
             if not meta.get("jiuyanFinalFound"):
                 result["boardJoinDegraded"] = "jiuyan_final_missing"
+            elif not meta.get("thsPoolFound"):
+                # 今日炸板池缺失 → 触板名单无法二分，涨停口径退化为触板口径（最严重，优先暴露）
+                result["boardJoinDegraded"] = "ths_pool_missing"
             elif not meta.get("prevPoolFound"):
                 # 昨日池轴缺失 → 漏标判定不可用，漏标股会落回首板口径（必须可见）
                 result["boardJoinDegraded"] = "prev_pool_missing"
+            elif meta.get("prevThsPoolFound") is False:
+                # 昨日炸板池缺失 → 漏标判定不可信（宁漏标不误标，已置空 prev_sealed）
+                result["boardJoinDegraded"] = "prev_ths_pool_missing"
             for stock in result.get("stocks") or []:
                 info = board_info.get(str(stock.get("code") or "")[-6:])
                 if info:
@@ -60,6 +66,10 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                     stock["boardName"] = info["boardName"]
                     if info.get("boardUnmarked"):
                         stock["boardUnmarked"] = True
+                    if info.get("zhaban"):
+                        stock["zhaban"] = True
+                    if info.get("excluded"):
+                        stock["excluded"] = info["excluded"]
         except Exception as exc:  # noqa: BLE001 — 辅助 join 失败不阻断主读口（fail-visible 结构化旗标）
             result["boardJoinError"] = f"board_join_failed: {exc}"
         return result

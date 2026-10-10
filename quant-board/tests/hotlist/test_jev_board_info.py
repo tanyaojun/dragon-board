@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""jiuyan_board_info 单测：漏标连板标记口径（与 _jiuyan_ladder 同源）+ meta 降级旗标。
+"""jiuyan_board_info 单测：触板二分（方案A）+ 漏标连板口径 + meta 降级旗标。
 
-2026-10-10 涨停复盘 KPI 口径修复的核心判定：
-- num=null 且在昨日涨停池 → boardUnmarked=True（真连板漏标，不猜高度不归首板）；
-- num=null 且不在昨日池 → 韭研首板口径（无标记）；
-- 韭研 final 缺失 / 昨日池轴缺失 → meta 旗标结构化降级（调用方必须可见）。
+2026-10-11 用户裁决方案A：韭研触板名单经 THS 15:00 炸板池二分——
+- zhaban=True：在今日炸板池 → 非涨停股（断板/触板未封）；
+- excluded：'st'|'bse'（官方简图不计涨停家数）；
+- boardUnmarked：num 空 且 昨日在「昨日涨停池」（昨日触板-昨日炸板）——
+  昨日炸板股今日涨停=首板不得误标（10-09 金健米业/东亚药业误标教训）；
+- 任一池缺失 → meta 旗标降级，宁漏标不误标。
 """
 from __future__ import annotations
 
@@ -28,12 +30,23 @@ class FinalCol:
 
 
 class FramesCol:
+    """snapshot_frames 替身：find=trading_dates_before 交易日轴；find_one=15:00 池帧。"""
+
     def __init__(self, rows):
         self.rows = rows
 
     def find(self, query, projection=None):
         lt = (query.get("tradingDate") or {}).get("$lt")
         return [dict(r) for r in self.rows if lt is None or str(r.get("tradingDate")) < lt]
+
+    def find_one(self, query, projection=None, sort=None):
+        want_date = query.get("tradingDate")
+        want_slot = query.get("slotTime")
+        for r in self.rows:
+            if (want_date is None or r.get("tradingDate") == want_date) and \
+               (want_slot is None or r.get("slotTime") == want_slot):
+                return dict(r)
+        return None
 
 
 class MultiFakeDb:
@@ -44,49 +57,94 @@ class MultiFakeDb:
         return self._cols[name]
 
 
-def _cols(prev_codes, today_stocks, frames=("2026-10-08",)):
-    return {
+def _pool_frame(date, failed_codes, ok=True, degraded=False):
+    return {"tradingDate": date, "slotTime": "15:00", "type": "half_hour", "datasetId": "dragonboard_live",
+            "limitSummary": {"thsPools": {"ok": ok, "degraded": degraded, "date": date.replace("-", ""),
+                                          "pools": {"failed": {"key": "failed", "total": len(failed_codes),
+                                                               "items": [{"code": c} for c in failed_codes]}}}}}
+
+
+def _final(date, stocks_by_field):
+    """stocks_by_field: [(板块名, [stock dict])]"""
+    return {"_id": f"{date}:final",
+            "fields": [{"name": name, "stocks": sts} for name, sts in stocks_by_field]}
+
+
+def _std_cols(today_stocks, prev_codes, today_failed=(), prev_failed=(), frames=True):
+    cols = {
         "jiuyan_action": FinalCol([
-            {"_id": "2026-10-09:final",
-             "fields": [{"name": "大农业", "stocks": list(today_stocks)}]},
-            {"_id": "2026-10-08:final",
-             "fields": [{"name": "X", "stocks": [{"code": c} for c in prev_codes]}]},
+            _final("2026-10-09", [("大农业", today_stocks)]),
+            _final("2026-10-08", [("X", [{"code": c, "num": None} for c in prev_codes])]),
         ]),
-        "snapshot_frames": FramesCol([{"tradingDate": d} for d in frames]),
     }
-
-
-def test_board_info_marks_unmarked_prev_pool():
-    """num=null 且在昨日池 → boardUnmarked；不在昨日池 → 韭研首板口径无标记。"""
-    cols = _cols(
-        prev_codes=["600127", "605303"],
-        today_stocks=[
-            {"code": "600127", "num": None, "time": "10:05"},
-            {"code": "002709", "num": None, "time": ""},
-            {"code": "600825", "num": "9天9板", "time": "09:25"},
+    if frames:
+        cols["snapshot_frames"] = FramesCol([
+            _pool_frame("2026-10-09", list(today_failed)),
+            _pool_frame("2026-10-08", list(prev_failed)),
         ])
-    info, meta = jiuyan_board_info(MultiFakeDb(cols), "2026-10-09")
-    assert meta == {"jiuyanFinalFound": True, "prevPoolFound": True}
-    assert info["600127"]["boardUnmarked"] is True
-    assert info["600127"]["boards"] is None  # 宁缺毋猜
-    assert "boardUnmarked" not in info["002709"]
-    assert info["600825"]["boards"] == 9
-    assert info["600825"]["boardName"] == "大农业"  # 投影含 fields.name
-    assert info["600825"]["limitUpTime"] == "09:25"
+    else:
+        cols["snapshot_frames"] = FramesCol([])
+    return MultiFakeDb(cols)
 
 
-def test_board_info_prev_pool_missing_degrades():
-    """昨日池轴缺失 → prevPoolFound=False 且不误标（漏标股落回首板口径必须对调用方可见）。"""
-    cols = _cols(prev_codes=[], today_stocks=[{"code": "600127", "num": None}], frames=())
-    info, meta = jiuyan_board_info(MultiFakeDb(cols), "2026-10-09")
-    assert meta["prevPoolFound"] is False
-    assert "boardUnmarked" not in info["600127"]
+def test_board_info_bisect_and_unmarked():
+    """二分主路径：昨日炸板股今日涨停=首板不标；昨日涨停今日num空=漏标；炸板/ST/北交所标记。"""
+    today = [
+        {"code": "600001", "name": "昨炸今停", "num": None, "time": "10:00:00"},   # 昨日在池+昨日炸板 → 首板
+        {"code": "600002", "name": "真漏标", "num": None, "time": "10:05:00"},     # 昨日在池+昨日封板 → 漏标
+        {"code": "600003", "name": "正常连板", "num": "2天2板", "time": "09:31:00"},
+        {"code": "600004", "name": "今日炸板", "num": None, "time": "13:00:00"},   # 今日炸板池 → zhaban
+        {"code": "600005", "name": "ST某某", "num": None, "time": "14:00:00"},     # excluded=st
+        {"code": "920001", "name": "北交某", "num": None, "time": "14:30:00"},     # excluded=bse
+    ]
+    info, meta = jiuyan_board_info(
+        _std_cols(today, prev_codes=["600001", "600002", "600003"],
+                  today_failed=["600004"], prev_failed=["600001"]), "2026-10-09")
+    assert meta == {"jiuyanFinalFound": True, "prevPoolFound": True,
+                    "thsPoolFound": True, "prevThsPoolFound": True}
+    assert "boardUnmarked" not in info["600001"]  # 昨日炸板股今日涨停=首板，不误标
+    assert info["600002"]["boardUnmarked"] is True  # 昨日封板今日 num 空 → 真漏标
+    assert info["600003"]["boards"] == 2 and "boardUnmarked" not in info["600003"]
+    assert info["600004"]["zhaban"] is True
+    assert info["600005"]["excluded"] == "st"
+    assert info["920001"]["excluded"] == "bse"
+    assert "zhaban" not in info["600002"]  # 漏标股是真涨停股，非炸板
+
+
+def test_board_info_ths_pool_missing_degrades():
+    """今日+昨日帧全缺失 → 二分不可用：不标 zhaban/boardUnmarked，meta 显式降级。"""
+    today = [{"code": "600001", "name": "X", "num": None, "time": "10:00:00"}]
+    info, meta = jiuyan_board_info(_std_cols(today, prev_codes=["600001"], frames=False), "2026-10-09")
+    assert meta["thsPoolFound"] is False and meta["prevPoolFound"] is False
+    assert meta["prevThsPoolFound"] is None  # 无昨日轴=不适用
+    assert "zhaban" not in info["600001"] and "boardUnmarked" not in info["600001"]
+
+
+def test_board_info_prev_ths_missing_keeps_today_bisect():
+    """仅昨日炸板池缺失（昨日轴无 15:00 帧）：今日二分可用（zhaban 照标），漏标判定降级（宁漏标不误标）。"""
+    today = [
+        {"code": "600001", "name": "X", "num": None, "time": "10:00:00"},
+        {"code": "600004", "name": "Y", "num": None, "time": "13:00:00"},
+    ]
+    cols = {
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("大农业", today)]),
+            _final("2026-10-08", [("X", [{"code": "600001", "num": None}])]),
+        ]),
+        "snapshot_frames": FramesCol([_pool_frame("2026-10-09", ["600004"]),
+                                      {"tradingDate": "2026-10-08", "slotTime": "09:30",
+                                       "type": "half_hour", "datasetId": "dragonboard_live"}]),
+    }
+    info, meta = jiuyan_board_info(cols, "2026-10-09")
+    assert meta["thsPoolFound"] is True and meta["prevThsPoolFound"] is False
+    assert info["600004"]["zhaban"] is True
+    assert "boardUnmarked" not in info["600001"]  # prev_sealed 不可信 → 不标
 
 
 def test_board_info_final_missing():
     cols = {"jiuyan_action": FinalCol([]),
-            "snapshot_frames": FramesCol([{"tradingDate": "2026-10-08"}])}
-    info, meta = jiuyan_board_info(MultiFakeDb(cols), "2026-10-09")
+            "snapshot_frames": FramesCol([_pool_frame("2026-10-08", [])])}
+    info, meta = jiuyan_board_info(cols, "2026-10-09")
     assert info == {} and meta["jiuyanFinalFound"] is False
 
 
@@ -94,12 +152,13 @@ def test_board_info_dedup_first_field_wins():
     """同 code 出现在多个板块取首现（与 join 展示口径一致）。"""
     cols = {
         "jiuyan_action": FinalCol([
-            {"_id": "2026-10-09:final", "fields": [
-                {"name": "首现板块", "stocks": [{"code": "600825", "num": "2天2板"}]},
-                {"name": "后续板块", "stocks": [{"code": "600825", "num": "3天3板"}]},
-            ]},
+            _final("2026-10-09", [
+                ("首现板块", [{"code": "600825", "num": "2天2板"}]),
+                ("后续板块", [{"code": "600825", "num": "3天3板"}]),
+            ]),
+            _final("2026-10-08", [("X", [{"code": "600825"}])]),
         ]),
-        "snapshot_frames": FramesCol([{"tradingDate": "2026-10-08"}]),
+        "snapshot_frames": FramesCol([_pool_frame("2026-10-09", []), _pool_frame("2026-10-08", [])]),
     }
-    info, meta = jiuyan_board_info(MultiFakeDb(cols), "2026-10-09")
+    info, meta = jiuyan_board_info(cols, "2026-10-09")
     assert info["600825"]["boards"] == 2 and info["600825"]["boardName"] == "首现板块"
