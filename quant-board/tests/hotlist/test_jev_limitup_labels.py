@@ -125,3 +125,28 @@ def test_all_degraded_day_still_not_no_data():
     assert out["summary"]["degradedCount"] == 1
     assert out["noData"] is False
     assert out["reason"] is None
+
+
+def test_with_raw_includes_call_material_default_unchanged():
+    """with_raw=True（relay_page 调用日志展开用）附带调用原始字段；默认合同不变（根前端零影响）。"""
+    d = _stock("600000", 5)
+    d.update({"narrative": "叙事全文…", "questionsRaw": {"driver_type": {}},
+              "responseRaw": None, "model": "jev-1.13.0",
+              "usage": {"input_tokens": 100, "output_tokens": 10},
+              "latencyMs": 528, "errorCode": None, "questionSetVersion": "v3.1"})
+    out_default = collect_limitup_labels(FakeDb([d]), "2026-09-30")
+    s_def = out_default["stocks"][0]
+    assert "narrative" not in s_def and "_id" not in s_def and "usage" not in s_def
+    assert "status" not in s_def  # 既有合同：个股条目不带 status
+
+    out_raw = collect_limitup_labels(FakeDb([d]), "2026-09-30", with_raw=True)
+    s_raw = out_raw["stocks"][0]
+    assert s_raw["narrative"] == "叙事全文…"
+    assert s_raw["_id"] == "2026-09-30:600000"
+    assert s_raw["questionsRaw"] == {"driver_type": {}}
+    assert s_raw["responseRaw"] is None  # 成功路径如实透传 None（不伪造 envelope）
+    assert s_raw["model"] == "jev-1.13.0" and s_raw["latencyMs"] == 528
+    assert s_raw["status"] == "ok"
+    # 共有字段两态一致（不因 with_raw 漂移）
+    for k in ("code", "name", "label", "catalystDepth", "rank"):
+        assert s_raw[k] == s_def[k]

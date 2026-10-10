@@ -127,8 +127,121 @@ def advdec_ratio(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple |
     return result
 
 
+def _jiuyan_board_count(stock: dict) -> int | None:
+    """韭研 num 字段「N天M板」解析出真实板数 M（2026-10-10 口径修正）。
+
+    实测：day 字段存的是 N（跨度天数）而非板数——「9天9板」两者巧合相等，
+    「16天8板」day=16 但真实 8 板；与 THS maxBoard 对齐验证。num 无法解析
+    返回 None（宁缺毋猜）。"""
+    num = str(stock.get("num") or "").strip()
+    if not num:
+        return None
+    import re
+    m = re.match(r"^(\d+)天(\d+)板", num)
+    if not m:
+        return None
+    boards = int(m.group(2))
+    return boards if boards > 0 else None
+
+
+def _jiuyan_ladder(db, date: str) -> dict | None:
+    """韭研主源连板梯队（2026-10-10 双源改造）：final 的 fields[].stocks num 板数分布聚合。
+
+    口径（2026-10-10 实测验证）：
+    - 板数 = num「N天M板」的 M（day 字段是跨度天数，不可用作板数）；
+    - num=null 且不在昨日涨停池 → 韭研首板口径（首板不标），入 one 桶；
+    - num=null 且在昨日池 → 真连板被漏标，计入 _dayUnmarkedPrev，不猜高度（fail-visible）；
+    - final 缺失/无个股 → None（回退 THS，不伪造零梯队）；
+    - 桶口径与 THS_KEYS 对齐：one(≤1)/two/three/four/high(≥5)。
+    """
+    doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields.stocks": 1})
+    fields = (doc or {}).get("fields") or []
+    if not any(field.get("stocks") for field in fields):
+        return None
+    prev_dates = trading_dates_before(db, date, 1)
+    prev_codes: set[str] = set()
+    if prev_dates:
+        prev_doc = db["jiuyan_action"].find_one(
+            {"_id": f"{prev_dates[-1]}:final"}, {"fields.stocks.code": 1})
+        for field in (prev_doc or {}).get("fields") or []:
+            for stock in field.get("stocks") or []:
+                code = stock.get("code")
+                if code:
+                    prev_codes.add(str(code)[-6:])
+    buckets = {k: 0 for k in THS_KEYS}
+    total = unmarked = unmarked_prev = 0
+    for field in fields:
+        for stock in field.get("stocks") or []:
+            total += 1
+            boards = _jiuyan_board_count(stock)
+            if boards is not None:
+                if boards <= 1:
+                    buckets["one"] += 1
+                elif boards == 2:
+                    buckets["two"] += 1
+                elif boards == 3:
+                    buckets["three"] += 1
+                elif boards == 4:
+                    buckets["four"] += 1
+                else:
+                    buckets["high"] += 1
+            else:
+                unmarked += 1
+                code = str(stock.get("code") or "")[-6:]
+                if code and code in prev_codes:
+                    unmarked_prev += 1  # 昨日涨停今日在池但未标 num：真连板，高度未知
+                else:
+                    buckets["one"] += 1  # 韭研口径：首板不标 num
+    buckets["_poolTotal"] = total
+    buckets["_dayUnmarked"] = unmarked
+    buckets["_dayUnmarkedPrev"] = unmarked_prev
+    return buckets
+
+
+def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
+    """韭研个股高度/封板时间/板块 join 表（2026-10-10，与 _jiuyan_ladder 漏标口径同源）。
+
+    返回 (info, meta)：
+    - info = {code(-6位): {boards, limitUpTime, boardName, boardUnmarked?}}，同 code 多板块取首现；
+      boards = _jiuyan_board_count(num「N天M板」的 M)，None=无法解析（宁缺毋猜）；
+    - boardUnmarked=True：num 为空且在昨日涨停池 = 真连板被韭研漏标，不猜高度不归首板（fail-visible）；
+    - meta = {jiuyanFinalFound, prevPoolFound}：韭研 final 缺失或昨日池轴缺失时判定不可用，
+      调用方必须结构化降级（boardUnmarked 缺席会落回首板口径，不得静默）。
+    """
+    doc = db["jiuyan_action"].find_one(
+        {"_id": f"{date}:final"},
+        {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1, "fields.name": 1})
+    fields = (doc or {}).get("fields") or []
+    final_found = any(field.get("stocks") for field in fields)
+    prev_dates = trading_dates_before(db, date, 1)
+    prev_codes: set[str] = set()
+    if prev_dates:
+        prev_doc = db["jiuyan_action"].find_one(
+            {"_id": f"{prev_dates[-1]}:final"}, {"fields.stocks.code": 1})
+        for field in (prev_doc or {}).get("fields") or []:
+            for stock in field.get("stocks") or []:
+                code = str(stock.get("code") or "")[-6:]
+                if code:
+                    prev_codes.add(code)
+    out: dict[str, dict] = {}
+    for field in fields:
+        for stock in field.get("stocks") or []:
+            code = str(stock.get("code") or "")[-6:]
+            if code and code not in out:
+                boards = _jiuyan_board_count(stock)
+                info = {"boards": boards, "limitUpTime": stock.get("time"),
+                        "boardName": field.get("name")}
+                if boards is None and code in prev_codes:
+                    info["boardUnmarked"] = True
+                out[code] = info
+    meta = {"jiuyanFinalFound": final_found, "prevPoolFound": bool(prev_dates)}
+    return out, meta
+
+
 def market_metrics(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict | None:
-    """当日 15:00 盘面事实（涨停/炸板/回撤/梯队/最高板高；跌停另行自算）。批次B I8：带 datasetId/type 并取最新帧。"""
+    """当日 15:00 盘面事实（涨停/炸板/回撤/梯队/最高板高；跌停另行自算）。批次B I8：带 datasetId/type 并取最新帧。
+    2026-10-10 梯队双源：jiuyan final day 分布为主源（103 天池史稳定），THS thsPools
+    交叉验证兼回退；ladderSource 标注实际来源（jiuyan/ths/missing），供叙事透明披露。"""
     f = db["snapshot_frames"].find_one(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
         {"limitSummary.zhaban": 1, "limitSummary.continuousBoards": 1,

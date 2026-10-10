@@ -36,8 +36,13 @@ def _clip(value: Any, limit: int = 200) -> str | None:
     return text[:limit] or None
 
 
-def collect_limitup_labels(db: Any, date: str) -> dict[str, Any]:
-    """单日涨停叙事聚合：日级哨兵 + 个股标签（热榜排名升序、无排名沉底）+ 分布小结。"""
+def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[str, Any]:
+    """单日涨停叙事聚合：日级哨兵 + 个股标签（热榜排名升序、无排名沉底）+ 分布小结。
+
+    with_raw=True（relay_page 调用日志用）：个股条目附带 narrative/questionsRaw/responseRaw/
+    model/usage/latencyMs 等原始调用字段（成功路径 responseRaw 本就为 None=fail-visible）；
+    默认 False 保持既有合同（不拉大字段，根前端消费方零变化）。
+    """
     phase_doc = db["hotlist_jev_driver_labels"].find_one(
         {"_id": f"{date}:PHASE"},
         {"status": 1, "phaseBand": 1, "phaseBandProbabilities": 1,
@@ -61,13 +66,14 @@ def collect_limitup_labels(db: Any, date: str) -> dict[str, Any]:
     stocks: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
     for d in db["hotlist_jev_driver_labels"].find(
-            {"tradingDate": date, "origin": {"$ne": PHASE_ORIGIN}}, _STOCK_EXCLUDED):
+            {"tradingDate": date, "origin": {"$ne": PHASE_ORIGIN}},
+            None if with_raw else _STOCK_EXCLUDED):
         status = str(d.get("status") or "unknown")
         ctx = d.get("jiuyanContext") or {}
         rank = ctx.get("rank")
         rank = rank if isinstance(rank, int) and not isinstance(rank, bool) else None
         if status == "ok":
-            stocks.append({
+            item = {
                 "code": d.get("code"),
                 "name": d.get("name"),
                 "label": d.get("label"),
@@ -84,7 +90,14 @@ def collect_limitup_labels(db: Any, date: str) -> dict[str, Any]:
                 "stockPhasePosition": d.get("stockPhasePosition"),
                 "stockPhaseProbabilities": d.get("stockPhaseProbabilities"),
                 "computedAt": d.get("computedAt"),
-            })
+            }
+            if with_raw:
+                # 调用日志展开用原始字段（含 _id；成功路径 responseRaw=None 如实透传）
+                item.update({k: d.get(k) for k in (
+                    "_id", "narrative", "questionsRaw", "responseRaw", "model",
+                    "usage", "latencyMs", "errorCode", "questionSetVersion", "origin")})
+                item["status"] = status
+            stocks.append(item)
         else:
             # degraded/no_data 文档：结构化暴露失败面（不混入 stocks，前端合同不变）
             degraded.append({

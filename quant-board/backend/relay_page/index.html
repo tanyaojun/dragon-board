@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JEV 叙事工作台 · QuantBoard</title>
+<style>
+  :root{
+    --bg:#f8fafc; --card:#ffffff; --border:#e2e8f0; --border2:#cbd5e1;
+    --text:#0f172a; --muted:#64748b; --muted2:#94a3b8;
+    --blue:#2563eb; --blue-bg:#eff6ff;
+    --green:#16a34a; --green-bg:#dcfce7;
+    --amber:#a16207; --amber-bg:#fef9c3;
+    --red:#dc2626; --red-bg:#fee2e2;
+    --purple:#7c3aed; --purple-bg:#ede9fe;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  header{background:#fff;border-bottom:1px solid var(--border);padding:14px 28px;display:flex;align-items:center;gap:16px}
+  header h1{font-size:20px;font-weight:700}
+  header .sub{font-size:12px;color:var(--muted)}
+  header .spacer{flex:1}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:12px;border:1px solid var(--border)}
+  .pill.ok{background:var(--green-bg);color:var(--green);border-color:#bbf7d0}
+  .pill.bad{background:var(--red-bg);color:var(--red);border-color:#fecaca}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+  input[type=date]{border:1px solid var(--border2);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}
+  button{border:1px solid var(--border2);background:#fff;border-radius:8px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}
+  button:hover{border-color:var(--blue);color:var(--blue)}
+  button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  button.primary:hover{background:#1d4ed8;color:#fff}
+  nav{display:flex;gap:4px;background:#fff;border-bottom:1px solid var(--border);padding:0 28px}
+  nav .tab{padding:12px 20px;font-size:14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+  nav .tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+  main{padding:20px 28px;max-width:1560px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
+  .card h3{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .card h3 .hint{font-size:11px;color:var(--muted2);font-weight:400;margin-left:auto}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:2fr 1fr}
+  .kpi-row{display:grid;grid-template-columns:repeat(8,1fr);gap:12px}
+  .kpi{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+  .kpi .k{font-size:12px;color:var(--muted);margin-bottom:4px}
+  .kpi .v{font-size:20px;font-weight:700;line-height:1.2}
+  .kpi .v small{font-size:12px;font-weight:500;color:var(--muted)}
+  .kpi .s{font-size:11px;color:var(--muted2);margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:12px;color:var(--muted);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+  td{padding:8px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap}
+  tr:hover td{background:#f8fafc}
+  .num{font-variant-numeric:tabular-nums;font-weight:600}
+  .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500}
+  .b-green{background:var(--green-bg);color:var(--green)}
+  .b-amber{background:var(--amber-bg);color:var(--amber)}
+  .b-red{background:var(--red-bg);color:var(--red)}
+  .b-gray{background:#f1f5f9;color:var(--muted)}
+  .b-blue{background:var(--blue-bg);color:var(--blue)}
+  .b-purple{background:var(--purple-bg);color:var(--purple)}
+  .bar{height:6px;border-radius:3px;background:#e2e8f0;overflow:hidden;min-width:80px}
+  .bar i{display:block;height:100%;border-radius:3px}
+  .empty{color:var(--muted2);font-size:13px;padding:24px;text-align:center}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:14px;font-size:12px;overflow:auto;max-height:420px;white-space:pre-wrap;margin-top:10px}
+  .flex{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .phase-big{font-size:26px;font-weight:800;letter-spacing:1px}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--muted)}
+  .legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:4px}
+  /* ---------- 调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ---------- */
+  .lg-table{border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-top:4px}
+  .lg-table table{margin:0}
+  .lg-table th{background:#f8fafc}
+  .lg-row{cursor:pointer}
+  .lg-row:hover td{background:#f8fafc}
+  .lg-row.open td{background:var(--blue-bg)}
+  .lg-caret{display:inline-block;width:16px;color:var(--muted2);font-size:11px;transition:transform .12s}
+  .lg-row.open .lg-caret{transform:rotate(90deg)}
+  .lg-detail>td{background:#fbfcfe;padding:14px 16px 18px;white-space:normal}
+  .lg-card{border:1px solid var(--border);border-radius:10px;background:#fff;padding:14px 16px}
+  .lg-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .lg-title{font-size:14px;font-weight:700}
+  .lg-asof{color:var(--muted2);font-weight:400;font-size:12px;margin-left:6px}
+  .lg-toggle{margin-left:auto;display:flex;gap:8px}
+  .lg-toggle button{padding:4px 12px;border-radius:8px;font-size:12px}
+  .lg-toggle button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .lg-meta{display:flex;gap:40px;margin:12px 0 2px;flex-wrap:wrap}
+  .lg-meta .k{font-size:12px;color:var(--muted)}
+  .lg-meta .v{font-size:15px;font-weight:600;margin-top:2px}
+  .lg-panels{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px}
+  @media (max-width:1100px){.lg-panels{grid-template-columns:1fr}}
+  .lg-panel{border:1px solid var(--border);border-radius:10px;background:#fff;display:flex;flex-direction:column;min-width:0}
+  .lg-phead{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600}
+  .lg-phead .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .lg-phead .st{color:var(--muted);font-weight:500;font-size:12px}
+  .lg-copy{margin-left:auto;border:none;background:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 8px;border-radius:6px}
+  .lg-copy:hover{color:var(--blue);background:var(--blue-bg)}
+  .lg-filter{margin:8px 10px 4px;border:1px solid var(--border);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;color:var(--text);background:#f8fafc;width:calc(100% - 20px)}
+  .lg-filter:focus{outline:none;border-color:var(--blue);background:#fff}
+  .lg-tree{overflow:auto;max-height:480px;padding:10px 12px;font:12px/1.6 ui-monospace,Consolas,"Courier New",monospace;min-height:120px}
+  .lg-raw pre{background:#0f172a;color:#e2e8f0;border-radius:8px;padding:14px;font-size:12px;overflow:auto;max-height:480px;margin-top:8px}
+  .lg-foot{display:flex;gap:26px;row-gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
+  .lg-foot code{background:#f1f5f9;border-radius:5px;padding:1px 6px;color:var(--text)}
+  .lg-foot .k{color:var(--muted2)}
+  .lg-empty{color:var(--muted2);font-size:12px;padding:16px;text-align:center;font-family:inherit}
+  /* ---------- JSON 树（键紫/串橙/数蓝/布红/空灰，对齐 CF 配色） ---------- */
+  .jt-line{white-space:pre-wrap;word-break:break-all}
+  .jt-head{cursor:pointer;border-radius:4px}
+  .jt-head:hover{background:#f1f5f9}
+  .jt-arrow{display:inline-block;width:15px;color:var(--muted2)}
+  .jt-kids{padding-left:16px;border-left:1px solid #eef2f7;margin-left:6px}
+  .jt-fold>.jt-kids,.jt-fold>.jt-close{display:none}
+  .jt-ellipsis{display:none;color:var(--muted2)}
+  .jt-fold>.jt-head .jt-ellipsis{display:inline}
+  .jt-count{color:var(--muted2);font-size:10px;margin:0 6px}
+  .jt-k{color:#7048c8}
+  .jt-s{color:#b45309}
+  .jt-n{color:#1d4ed8}
+  .jt-b{color:#dc2626}
+  .jt-null{color:#94a3b8}
+  .jt-br{color:var(--text)}
+  .jt-more{border:none;background:none;color:var(--blue);cursor:pointer;font-size:11px;padding:0 4px}
+  .jt-more:hover{text-decoration:underline}
+  mark{background:#fef08a;border-radius:3px;padding:0 1px}
+  /* ---------- 涨停复盘：总览卡 + 板块 chips + 筛选条 ---------- */
+  .kpi.click{cursor:pointer}
+  .kpi.click:hover{border-color:var(--blue)}
+  .kpi.on{border-color:var(--blue);background:var(--blue-bg)}
+  .chip{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:999px;border:1px solid var(--border);background:#fff;font-size:12px;cursor:pointer;color:var(--muted);white-space:nowrap}
+  .chip:hover{border-color:var(--blue);color:var(--blue)}
+  .chip.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .chip.plain{cursor:default;color:var(--muted2)}
+  .lf-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:2px 0 12px}
+  .lf-q{border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;width:180px;background:#fff;color:var(--text)}
+  .lf-q:focus{outline:none;border-color:var(--blue)}
+  .lf-bar select{border:1px solid var(--border2);border-radius:8px;padding:5px 6px;font:inherit;font-size:12px;background:#fff;color:var(--text);max-width:150px}
+  .lf-bar .cnt{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .board-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:2px 0 12px}
+  .board-row .k{font-size:12px;color:var(--muted2);flex:none}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>🧭 JEV 叙事工作台</h1><div class="sub">连板情绪指数 · 热榜叙事 · 涨停复盘 —— 数据实时透传 :8000</div></div>
+  <div class="spacer"></div>
+  <input type="date" id="date">
+  <span class="pill" id="srcPill"><span class="dot"></span>数据源 :8000</span>
+  <span class="pill" id="refreshPill"><span class="dot"></span><span id="refreshAt">未刷新</span></span>
+  <button onclick="loadAll()">刷新</button>
+  <button class="primary" onclick="loadAll()">实时</button>
+</header>
+<nav>
+  <div class="tab active" data-tab="overview">📊 总览</div>
+  <div class="tab" data-tab="relay">🧮 连板指数</div>
+  <div class="tab" data-tab="labels">🏷️ 涨停复盘</div>
+  <div class="tab" data-tab="archive">🗂️ 明细存档</div>
+</nav>
+<main>
+  <section id="tab-overview">
+    <div class="kpi-row" id="kpiRow"></div>
+    <div class="grid g3" style="margin-top:14px">
+      <div class="card"><h3>📈 当日逐槽 · 日内演化 <span class="hint" id="slotHint"></span></h3>
+        <table id="slotTable"></table></div>
+      <div>
+        <div class="card"><h3>📅 EOD 日级窗口</h3><table id="eodTable"></table></div>
+        <div class="card" style="margin-top:14px"><h3>🧮 今日连板情绪</h3><div id="relayMini" class="empty">加载中…</div></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>📉 近15日 · 连板指数 vs 热度温度
+      <span class="hint"><span class="legend"><span><i style="background:#2563eb"></i>连板指数</span><span><i style="background:#f59e0b"></i>温度分</span></span></span></h3>
+      <div id="relayChart"></div></div>
+  </section>
+
+  <section id="tab-relay" style="display:none">
+    <div class="kpi-row" id="relayKpi" style="grid-template-columns:repeat(7,1fr)"></div>
+    <div class="card" style="margin-top:14px"><h3>🗓️ 近15日判定明细 <span class="hint">判定口径 v2 · docs/hotlist-jev/jev-relay-index-phase2-report.md</span></h3>
+      <table id="relayTable"></table></div>
+    <div class="card" style="margin-top:14px"><h3>📈 连板指数全序列</h3><div id="relayChart2"></div></div>
+  </section>
+
+  <section id="tab-labels" style="display:none">
+    <div class="card">
+      <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
+      <div class="kpi-row" id="labelKpi" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px"></div>
+      <div class="board-row" id="labelBoardRow"></div>
+      <div class="lf-bar" id="labelFilterBar"></div>
+      <table id="labelTable"></table>
+    </div>
+  </section>
+
+  <section id="tab-archive" style="display:none">
+    <div class="card">
+      <h3>调用日志 · 请求 / 返回 / 原始 JSON <span class="hint" id="archiveHint"></span></h3>
+      <div class="lg-table"><table id="logTable"></table></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null,
+  archEntries: [], archUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
+  labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
+  labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '' } };
+
+const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
+const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
+const LADDER_CN = {pyramid:'金字塔', fracture:'中位断层', inverted:'高位倒挂', sparse:'稀疏', insufficient_evidence:'证据不足'};
+const MONEY_CN = {strong:'赚钱', neutral:'中性', losing:'亏钱', insufficient_evidence:'证据不足'};
+const THEME_CN = {mainline_continue:'主线延续', rotation:'轮动', scattered:'散乱', insufficient_evidence:'证据不足'};
+const STAGE_CN = {ice:'冰点', start:'启动', ferment:'发酵', climax:'高潮', retreat:'退潮'};
+const CROWD_CN = {no_crowding:'无拥挤', top_acceleration:'高位加速', late_seal_weakness:'封板弱化', breadth_climax:'广度高潮', crowd_clearing:'拥挤解除', insufficient_evidence:'证据不足'};
+const PATTERN_CN = {low_recover:'低开修复', high_fade:'冲高回落', steady_strong:'全天强势', steady_weak:'全天弱势', rally_fade:'冲高回落', late_rescue:'尾盘偷袭', one_way_down:'单边走弱', wide_swing:'剧烈反复', narrow_range:'窄幅平淡', unclear:'证据不足'};
+const DRIVER_CN = {product_event:'产品事件', capital_flow:'资金接力', concept_stretch:'蹭概念', industry_cycle:'行业周期', ma_restructure:'并购重组', order_earnings:'订单业绩', policy:'政策'};
+const CAT_DEPTH_CN = {core_main_business:'核心主业承接', new_business_scaling:'新业务放量承接', new_business_early:'新业务早期承接', equity_or_affiliate:'股权关联传导', concept_assembly:'概念组装弱关联', insufficient_evidence:'信息不足'};
+const BUY_SIDE_CN = {independent_catalyst:'自身独立催化', sector_follow:'板块联动跟随', high_board_relay:'高位卡位/情绪接力', pure_sentiment:'纯情绪修复'};
+const FRESH_CN = {fresh_catalyst:'新鲜', continuing:'延续', none:'无明确催化', unclear:'信息不足'};
+
+const badge = (txt, cls) => txt ? `<span class="badge ${cls}">${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
+const phaseB = v => badge(PHASE_CN[v]||v, v==='relay_heat'?'b-green':v==='divergence'?'b-amber':v==='collapse'?'b-red':v==='launch'?'b-blue':'b-gray');
+const momB = v => badge(MOM_CN[v]||v, v==='accelerating'?'b-green':v==='holding'?'b-gray':v==='weakening'?'b-amber':'b-purple');
+const ladderB = v => badge(LADDER_CN[v]||v, v==='pyramid'?'b-green':v==='fracture'?'b-amber':v==='inverted'?'b-red':'b-gray');
+const moneyB = v => badge(MONEY_CN[v]||v, v==='strong'?'b-green':v==='neutral'?'b-gray':'b-red');
+const themeB = v => badge(THEME_CN[v]||v, v==='mainline_continue'?'b-purple':v==='rotation'?'b-blue':'b-gray');
+const stageColor = s => ({ice:'#38bdf8',start:'#34d399',ferment:'#f59e0b',climax:'#ef4444',retreat:'#94a3b8'}[s] || '#94a3b8');
+const tempColor = v => v>=80?'#dc2626':v>=65?'#f59e0b':v>=45?'#2563eb':'#38bdf8';
+
+async function jget(path){ const r = await fetch(path); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+
+let _loadSeq = 0;
+async function loadAll(){
+  const seq = ++_loadSeq;
+  const date = $('date').value;
+  let series, slots, labels;
+  try {
+    [series, slots, labels] = await Promise.all([
+      jget('/api/hotlist-jev/relay-index?days=15' + (date ? '&date=' + date : '')),
+      jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
+      jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
+    ]);
+  } catch (err) {
+    if (seq !== _loadSeq) return;
+    // fail-visible：读口失败亮红不静默滞留（保留上次数据，刷新时间标注失败）
+    $('srcPill').className = 'pill bad';
+    $('srcPill').innerHTML = '<span class="dot"></span>数据源异常';
+    $('refreshAt').textContent = '失败 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
+    return;
+  }
+  if (seq !== _loadSeq) return; // 过期响应不覆盖（快速切日期竞态守卫）
+  $('srcPill').className = 'pill';
+  $('srcPill').innerHTML = '<span class="dot"></span>数据源 :8000';
+  STATE.series = series.series || [];
+  STATE.day = series.day || null;
+  STATE.rawSlots = slots.slots || [];
+  STATE.slots = STATE.rawSlots.filter(s => s.status === 'ok');
+  STATE.eod = slots.eod;
+  STATE.labels = labels;
+  renderKpis(); renderSlots(); renderEod(); renderRelayMini();
+  renderRelayTab(); renderLabels(); renderArchive(); renderCharts();
+  $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
+}
+
+function renderKpis(){
+  const e = STATE.eod || {}, a = e.answers || {}, sc = e.scores || {};
+  const d = STATE.day || {};
+  const stage = (a.day_stage||{}).choice;
+  const temp = sc.day_temperature != null ? Math.round(sc.day_temperature) : null;
+  const crowd = (a.day_crowding||{}).choice;
+  const conf = (a.day_stage||{}).confidence;
+  const stageTxt = STAGE_CN[stage] || stage || '-';
+  const stageCls = stage==='climax'?'b-red':stage==='ferment'?'b-amber':stage==='ice'?'b-blue':stage==='retreat'?'b-gray':'b-green';
+  $('kpiRow').innerHTML = `
+    <div class="kpi"><div class="k">市场阶段 (EOD)</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${PATTERN_CN[(a.day_pattern||{}).choice]||''}</div></div>
+    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}</div><div class="s">0-100 · 参照20日</div></div>
+    <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}</div><div class="s">收盘口径</div></div>
+    <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">day_stage</div></div>
+    <div class="kpi"><div class="k">连板情绪指数</div><div class="v" style="color:${tempColor(d.relayIndex)}">${d.relayIndex ?? '-'}</div><div class="s">${esc(d.tradingDate||'')}</div></div>
+    <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:15px">${phaseB(d.relayPhase)}</div><div class="s">relay_phase</div></div>
+    <div class="kpi"><div class="k">接力边际</div><div class="v" style="font-size:15px">${momB(d.relayMomentum)}</div><div class="s">较昨日</div></div>
+    <div class="kpi"><div class="k">梯队 / 钱效</div><div class="v" style="font-size:15px">${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}</div><div class="s">结构 / 效应</div></div>`;
+}
+
+function renderSlots(){
+  const rows = STATE.slots.map(s => {
+    const a = s.answers || {};
+    const stage = (a.frame_stage||{}).choice;
+    const seq = (a.sequence_stage||{}).choice;
+    const temp = (a.temperature||{}).score;
+    const crowd = (a.crowding||{}).choice;
+    const pct = (a.temperature||{}).percentile;
+    const t = temp != null ? Math.round(temp*10) : null;
+    return `<tr><td class="num">${esc(s.slotTime||'')}</td>
+      <td style="color:${stageColor(stage)};font-weight:700">${STAGE_CN[stage]||stage||'-'}</td>
+      <td>${seq && seq!==stage ? `<span style="color:${stageColor(seq)}">${STAGE_CN[seq]||seq}</span>` : ''}</td>
+      <td><div class="flex"><span class="num" style="color:${tempColor(t)}">${t??'-'}</span><div class="bar"><i style="width:${t??0}%;background:${tempColor(t)}"></i></div></div></td>
+      <td>${badge(CROWD_CN[crowd]||'-', crowd==='breadth_climax'?'b-red':crowd==='top_acceleration'?'b-amber':crowd==='late_seal_weakness'?'b-purple':'b-gray')}</td>
+      <td class="num">${pct!=null?'P'+Math.round(pct*100):'-'}</td></tr>`;
+  }).join('');
+  $('slotTable').innerHTML = `<tr><th>槽位</th><th>框架阶段</th><th>序列</th><th>温度 0-100</th><th>拥挤形态</th><th>分位</th></tr>${rows || '<tr><td colspan=6 class=empty>当日无 ok 槽位文档</td></tr>'}`;
+  $('slotHint').textContent = `${STATE.slots.length} 槽 · ${STATE.slots[0]?.slotTime||''} ~ ${STATE.slots.at(-1)?.slotTime||''}`;
+}
+
+function renderEod(){
+  const e = STATE.eod || {}, a = e.answers || {}, sc = e.scores || {};
+  const rows = [
+    ['日级档位', STAGE_CN[(a.day_stage||{}).choice] || '-', (a.day_stage||{}).confidence],
+    ['路径形态', PATTERN_CN[(a.day_pattern||{}).choice] || '-', (a.day_pattern||{}).confidence],
+    ['拥挤形态', CROWD_CN[(a.day_crowding||{}).choice] || '-', (a.day_crowding||{}).confidence],
+    ['日级温度', sc.day_temperature != null ? Math.round(sc.day_temperature) : '-', null],
+  ].map(([k,v,c]) => `<tr><td style="color:var(--muted)">${k}</td><td class="num">${v}</td>
+     <td>${c!=null?`<div class="bar"><i style="width:${Math.round(c*100)}%;background:#2563eb"></i></div>`:''}</td>
+     <td class="num">${c!=null?'P'+Math.round(c*100):''}</td></tr>`).join('');
+  $('eodTable').innerHTML = `<tr><th>维度</th><th>结论</th><th colspan=2>置信</th></tr>${rows}`;
+}
+
+function renderRelayMini(){
+  const d = STATE.day;
+  if (!d || d.relayIndex == null) { $('relayMini').innerHTML = '<div class="empty">当日无连板指数存档</div>'; return; }
+  $('relayMini').innerHTML = `<div class="phase-big" style="color:${tempColor(d.relayIndex)}">${d.relayIndex}</div>
+    <div class="flex" style="margin-top:8px">${phaseB(d.relayPhase)}${momB(d.relayMomentum)}${ladderB(d.ladderHealth)}${moneyB(d.moneyEffect)}${themeB(d.themePulse)}</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">龙头强度 ${d.leaderStrength ?? '-'} · ${esc(d.model||'')}</div>`;
+}
+
+function renderRelayTab(){
+  const d = STATE.day || {};
+  $('relayKpi').innerHTML = `
+    <div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${tempColor(d.relayIndex)}">${d.relayIndex ?? '-'}</div><div class="s">0-100</div></div>
+    <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:16px">${phaseB(d.relayPhase)}</div><div class="s">主锚三日链</div></div>
+    <div class="kpi"><div class="k">边际方向</div><div class="v" style="font-size:16px">${momB(d.relayMomentum)}</div><div class="s">今日 vs 昨日</div></div>
+    <div class="kpi"><div class="k">梯队结构</div><div class="v" style="font-size:16px">${ladderB(d.ladderHealth)}</div><div class="s">量化比率口径</div></div>
+    <div class="kpi"><div class="k">接力钱效</div><div class="v" style="font-size:16px">${moneyB(d.moneyEffect)}</div><div class="s">晋级/断板/溢价</div></div>
+    <div class="kpi"><div class="k">题材脉络</div><div class="v" style="font-size:16px">${themeB(d.themePulse)}</div><div class="s">近5日榜</div></div>
+    <div class="kpi"><div class="k">龙头强度</div><div class="v" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}</div><div class="s">最高板地位</div></div>`;
+  const rows = STATE.series.map(r => `<tr>
+    <td class="num">${(r.tradingDate||'').slice(5)}</td>
+    <td class="num" style="color:${tempColor(r.relayIndex)};font-size:14px">${r.relayIndex ?? '-'}</td>
+    <td>${phaseB(r.relayPhase)}</td><td>${momB(r.relayMomentum)}</td>
+    <td>${ladderB(r.ladderHealth)}</td><td>${moneyB(r.moneyEffect)}</td><td>${themeB(r.themePulse)}</td>
+    <td class="num" style="color:var(--muted)">${((r.usage||{}).input_tokens||0) + ((r.usage||{}).output_tokens||0)}</td>
+    <td style="color:var(--muted2)">${(r.computedAt||'').slice(5,16)}</td></tr>`).join('');
+  $('relayTable').innerHTML = `<tr><th>日期</th><th>指数</th><th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th><th>tokens</th><th>判定时间</th></tr>${rows}`;
+}
+
+// ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
+// 高度桶与筛选共用 stocks[].boards 口径（首板=!boards / 2 / 3 / ≥4），KPI 点卡=筛选，数必一致
+function labelBoardOf(s){ return s.boardName || s.board || '未分板块'; }
+function labelMatches(s, f, skipHeight){
+  if (f.q){ const q = f.q.toLowerCase();
+    if (!String(s.code || '').toLowerCase().includes(q) && !String(s.name || '').toLowerCase().includes(q)) return false; }
+  if (f.board && labelBoardOf(s) !== f.board) return false;
+  if (!skipHeight && f.height){
+    // 漏标连板（boardUnmarked，韭研 num=null 且在昨日池）单列：不归首板不猜高度（fail-visible）
+    // 首板桶含 boards===1（韭研 one 桶=≤1 板）；2/3 精确匹配；4p=≥4 板
+    if (f.height === 'um'){ if (!s.boardUnmarked) return false; }
+    else if (f.height === '4p'){ if ((s.boards || 0) < 4) return false; }
+    else if (f.height === '1'){ if (s.boardUnmarked || (s.boards && s.boards !== 1)) return false; }
+    else if (String(s.boards || 0) !== f.height) return false;
+  }
+  if (f.driver && (s.label || '') !== f.driver) return false;
+  if (f.depth && (s.catalystDepth || '') !== f.depth) return false;
+  if (f.fresh && (s.freshness || '') !== f.fresh) return false;
+  if (f.buy && (s.buySideLogic || '') !== f.buy) return false;
+  return true;
+}
+function lfSel(label, key, opts){
+  const cur = STATE.labelFilter[key];
+  const list = [['', label + ' · 全部']].concat(opts);
+  return `<select title="${esc(label)}筛选" onchange="lfSet('${key}', this.value)">`
+    + list.map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('') + '</select>';
+}
+function lfRenderKpi(stocks, f){
+  const n = stocks.length;
+  // 高度四卡基数=应用非高度筛选后的集合（点卡命中数=卡面数恒一致）；家数/漏标/最高板保持日级事实
+  const base = (f.q || f.board || f.driver || f.depth || f.fresh || f.buy)
+    ? stocks.filter(s => labelMatches(s, f, true)) : stocks;
+  const pct = v => base.length ? Math.round(v / base.length * 100) : 0;
+  // 首板桶=无板数或 1 板（韭研 one 桶=≤1 板）且非漏标；漏标连板（boardUnmarked）单列注记，不进任何高度桶
+  const bum = stocks.filter(s => s.boardUnmarked).length;
+  const b1 = base.filter(s => !s.boardUnmarked && (!s.boards || s.boards === 1)).length;
+  const b2 = base.filter(s => s.boards === 2).length;
+  const b3 = base.filter(s => s.boards === 3).length;
+  const b4p = base.filter(s => (s.boards || 0) >= 4).length;
+  // 最高板只看有板数标注的个股（漏标不猜高度；全漏标日如实显示漏标口径）
+  const labeled = stocks.filter(s => !s.boardUnmarked);
+  const maxBoard = labeled.reduce((m, s) => Math.max(m, s.boards || 1), 0);
+  const leaders = labeled.filter(s => (s.boards || 1) === maxBoard);
+  const leaderTxt = !labeled.length ? '（漏标口径）'
+    : maxBoard > 1 ? esc((leaders[0].name || leaders[0].code || '-')) + (leaders.length > 1 ? ` 等${leaders.length}只` : '')
+    : '全为首板';
+  const L = STATE.labels || {}, deg = (L.summary || {}).degradedCount || 0;
+  const JOIN_CN = {jiuyan_final_missing: '韭研final缺失', prev_pool_missing: '昨日池缺失'};
+  const joinNote = L.boardJoinError ? ' · 高度join失败'
+    : (L.boardJoinDegraded ? ' · 高度降级:' + (JOIN_CN[L.boardJoinDegraded] || L.boardJoinDegraded) : '');
+  const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const hCard = (k, v, key) => `<div class="kpi click${f.height === key ? ' on' : ''}" title="点击筛选：${k}" onclick="lfHeight('${key}')"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${pct(v)}% · 点击筛选</div></div>`;
+  $('labelKpi').innerHTML =
+    card('涨停家数', n, `韭研口径 ${L.ladderPoolTotal ?? n} 只`
+      + (bum ? ` · 漏标连板 ${bum}` : '') + joinNote + (deg ? ` · degraded ${deg}` : ''))
+    + hCard('首板', b1, '1') + hCard('二板', b2, '2') + hCard('三板', b3, '3') + hCard('四板以上', b4p, '4p')
+    + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt);
+}
+function lfRenderBoards(stocks, f){
+  const dist = {};
+  for (const s of stocks){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
+  const arr = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+  const top = arr.slice(0, 10), rest = arr.length - top.length;
+  $('labelBoardRow').innerHTML = '<span class="k">板块分布</span>'
+    + top.map(([name, c]) => `<span class="chip${f.board === name ? ' on' : ''}" title="点击筛选该板块" onclick="lfBoard('${js(name)}')">${esc(name)} ${c}</span>`).join('')
+    + (rest > 0 ? `<span class="chip plain">其他 ${rest} 类</span>` : '');
+}
+function lfRenderBar(stocks){
+  const bar = $('labelFilterBar');
+  const ae = document.activeElement;
+  // 输入/下拉聚焦时跳过重建（60s 轮询不夺焦点；状态由 STATE 持有，值同步靠下次重建）
+  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
+  const dist = {};
+  for (const s of stocks){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
+  const boards = Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([v]) => [v, v]);
+  $('labelFilterBar').innerHTML =
+    `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.labelFilter.q)}" oninput="lfQ(this.value)">`
+    + lfSel('板块', 'board', boards)
+    + lfSel('高度', 'height', [['1', '首板'], ['2', '二板'], ['3', '三板'], ['4p', '四板以上'], ['um', '漏标连板']])
+    + lfSel('驱动', 'driver', Object.entries(DRIVER_CN))
+    + lfSel('催化深度', 'depth', Object.entries(CAT_DEPTH_CN))
+    + lfSel('新鲜度', 'fresh', Object.entries(FRESH_CN))
+    + lfSel('买方逻辑', 'buy', Object.entries(BUY_SIDE_CN))
+    + `<button onclick="lfClear()">清除筛选</button>`
+    + `<span class="cnt" id="labelCnt"></span>`;
+}
+function lfRenderRows(){
+  const L = STATE.labels || {};
+  const stocks = L.stocks || [], f = STATE.labelFilter, ui = STATE.labelUi;
+  const filtered = stocks.filter(s => labelMatches(s, f));
+  STATE.labelEntries = filtered.map(labelEntryOf);
+  const hasFilter = f.q || f.board || f.height || f.driver || f.depth || f.fresh || f.buy;
+  $('labelHint').textContent = `${L.date || ''} · ${hasFilter ? filtered.length + '/' + stocks.length : stocks.length + ' 只'} · 点击行查看调用日志`;
+  const cnt = $('labelCnt'); if (cnt) cnt.textContent = `${filtered.length} / ${stocks.length} 只`;
+  const rows = filtered.map((s, i) => {
+    const entry = STATE.labelEntries[i];
+    const open = ui.openKey === entry.key;
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
+    <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
+    <td>${s.boardUnmarked ? badge('漏标连板', 'b-amber') : `<span class="num">${s.boards && s.boards > 1 ? s.boards + '板' : '首板'}</span>`}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>
+    <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
+    <td>${badge(CAT_DEPTH_CN[s.catalystDepth] || s.catalystDepth || '-', 'b-gray')}</td>
+    <td>${badge(FRESH_CN[s.freshness] || s.freshness || '-', s.freshness === 'fresh_catalyst' ? 'b-green' : 'b-gray')}</td>
+    <td>${badge(BUY_SIDE_CN[s.buySideLogic] || s.buySideLogic || '-', 'b-gray')}</td>${s.rank ? `<td class="num">#${s.rank}</td>` : '<td></td>'}</tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="10">${detailHtml(entry, 'lab')}</td></tr>` : '');
+  }).join('');
+  $('labelTable').innerHTML = `<tr><th>代码</th><th>名称</th><th>板块</th><th>高度</th><th>封板</th><th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th><th>热榜</th></tr>`
+    + (rows || '<tr><td colspan="10" class="empty">无匹配个股（调整筛选条件）</td></tr>');
+}
+function renderLabels(){
+  const L = STATE.labels || {};
+  const stocks = (L && L.ok !== false && !L.noData) ? (L.stocks || []) : [];
+  if (!stocks.length){
+    $('labelKpi').innerHTML = ''; $('labelBoardRow').innerHTML = ''; $('labelFilterBar').innerHTML = '';
+    STATE.labelEntries = [];
+    $('labelHint').textContent = (L && L.reason) || '';
+    $('labelTable').innerHTML = '<tr><td class="empty">当日无打标存档</td></tr>';
+    return;
+  }
+  lfRenderKpi(stocks, STATE.labelFilter);
+  lfRenderBoards(stocks, STATE.labelFilter);
+  lfRenderBar(stocks);
+  lfRenderRows();
+}
+// 文本搜索只重渲染表体（筛选条不动，输入焦点不丢）
+function lfQ(v){ STATE.labelFilter.q = v; lfRenderRows(); }
+function lfSet(k, v){
+  STATE.labelFilter[k] = v;
+  const stocks = (STATE.labels || {}).stocks || [];
+  lfRenderKpi(stocks, STATE.labelFilter);
+  lfRenderBoards(stocks, STATE.labelFilter);
+  lfRenderBar(stocks);
+  lfRenderRows();
+}
+function lfHeight(v){ const f = STATE.labelFilter; f.height = f.height === v ? '' : v; lfSet('height', f.height); }
+function lfBoard(v){ const f = STATE.labelFilter; f.board = f.board === v ? '' : v; lfSet('board', f.board); }
+function lfClear(){
+  STATE.labelFilter = { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '' };
+  renderLabels();
+}
+
+// ---------- 明细存档：调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ----------
+// 数据事实：series/relay-index 读口整文档返回；slot/eod 存 questionsRaw+responseRaw(envelope)，
+// state 线上载荷=narrative 文本（jev_client POST body：{state, model, questions}）；
+// relay 成功路径只存解析结果不存 envelope（jev_relay_index），响应侧结构化注明，不伪造。
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// JS 字符串字面量上下文（onclick 属性内 '...'）：先转义 \ 和 '，再过 esc 做 HTML 属性转义
+const js = s => esc(String(s).replace(/[\\']/g, '\\$&'));
+function hi(s, q){
+  // 在原始串上定位命中、分段各自 esc：mark 永不切进 HTML 实体中间
+  const raw = String(s);
+  if (!q) return esc(raw);
+  const lr = raw.toLowerCase(), lq = q.toLowerCase();
+  let out = '', i = 0;
+  for(;;){ const j = lr.indexOf(lq, i);
+    if (j < 0){ return out + esc(raw.slice(i)); }
+    out += esc(raw.slice(i, j)) + '<mark>' + esc(raw.slice(j, j + q.length)) + '</mark>'; i = j + q.length; }
+}
+// JSON 树：depth<2 默认展开；有筛选时全展开并高亮命中
+function jtRender(key, val, depth, q){
+  const pad = key === null ? '' : `<span class="jt-k">${hi('"'+key+'"', q)}</span>: `;
+  if (val !== null && typeof val === 'object'){
+    const isArr = Array.isArray(val);
+    const entries = isArr ? val.map((v, i) => [String(i), v]) : Object.entries(val);
+    if (!entries.length) return `<div class="jt-line">${pad}<span class="jt-br">${isArr ? '[]' : '{}'}</span></div>`;
+    const open = q ? true : depth < 2;
+    const brace = isArr ? '[' : '{', close = isArr ? ']' : '}';
+    return `<div class="jt-node${open ? '' : ' jt-fold'}">`
+      + `<div class="jt-line jt-head" onclick="jtFold(this)"><span class="jt-arrow">${open ? '▾' : '▸'}</span>${pad}<span class="jt-br">${brace}</span><span class="jt-count">${entries.length}</span><span class="jt-ellipsis">…${close}</span></div>`
+      + `<div class="jt-kids">${entries.map(([k, v]) => jtRender(k, v, depth + 1, q)).join('')}</div>`
+      + `<div class="jt-line jt-close"><span class="jt-br">${close}</span></div></div>`;
+  }
+  if (typeof val === 'string'){
+    if (val.length > 200){
+      return `<div class="jt-line">${pad}<span class="jt-short"><span class="jt-s">"${hi(val.slice(0, 200), q)}…"</span><button class="jt-more" onclick="jtStr(event,this)">展开 ${val.length} 字符</button></span><span class="jt-full" hidden><span class="jt-s">"${hi(val, q)}"</span></span></div>`;
+    }
+    return `<div class="jt-line">${pad}<span class="jt-s">"${hi(val, q)}"</span></div>`;
+  }
+  if (typeof val === 'number') return `<div class="jt-line">${pad}<span class="jt-n">${hi(String(val), q)}</span></div>`;
+  if (typeof val === 'boolean') return `<div class="jt-line">${pad}<span class="jt-b">${val}</span></div>`;
+  return `<div class="jt-line">${pad}<span class="jt-null">null</span></div>`;
+}
+function jtFold(head){ head.parentElement.classList.toggle('jt-fold'); }
+function jtStr(ev, btn){
+  ev.stopPropagation();
+  const line = btn.closest('.jt-line');
+  line.querySelector('.jt-short').style.display = 'none';
+  line.querySelector('.jt-full').hidden = false;
+}
+// 筛选：保留命中 key/标量子串的节点（容器仅保留命中子树，key 命中保留整子树）；无命中返回 null
+function jtPrune(val, q){
+  const ql = q.toLowerCase();
+  function walk(v, k, isItem){
+    if (v === null || typeof v !== 'object'){
+      const kh = !isItem && k != null && String(k).toLowerCase().includes(ql);
+      return (kh || String(v).toLowerCase().includes(ql)) ? { v } : null;
+    }
+    const isArr = Array.isArray(v), out = isArr ? [] : {};
+    let hit = false;
+    for (const [kk, vv] of isArr ? v.map((x, i) => [i, x]) : Object.entries(v)){
+      if (isArr){ const r = walk(vv, null, true); if (r){ hit = true; out.push(r.v); } continue; }
+      if (String(kk).toLowerCase().includes(ql)){ hit = true; out[kk] = vv; continue; }
+      const r = walk(vv, kk, false);
+      if (r){ hit = true; out[kk] = r.v; }
+    }
+    return hit ? { v: out } : null;
+  }
+  return walk(val, null, false);
+}
+function treeHtml(val, q){
+  if (q){ const p = jtPrune(val, q);
+    if (p === null || (typeof p.v === 'object' && p.v !== null && !Object.keys(p.v).length && !Array.isArray(p.v)))
+      return '<div class="lg-empty">无匹配节点</div>';
+    val = p.v; }
+  return jtRender(null, val, 0, q);
+}
+function fmtTime(v){
+  if (v == null || v === '') return '-';
+  if (typeof v === 'number'){
+    const d = new Date(v * 1000);
+    return isNaN(d) ? String(v) : d.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+  return String(v).replace('T', ' ').slice(0, 19);
+}
+function copyText(txt, btn){
+  const done = () => { const o = btn.textContent; btn.textContent = '✓ 已复制'; setTimeout(() => btn.textContent = o, 1200); };
+  const fail = () => { btn.textContent = '✕ 复制失败'; setTimeout(() => btn.textContent = '⧉ 复制', 1200); };
+  const fallback = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); ok ? done() : fail(); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, fallback); else fallback();
+}
+// 条目构造：槽位升序 → EOD → 连板指数（relay）
+function archEntries(){
+  const list = [];
+  for (const s of STATE.rawSlots) list.push({ key: String(s._id || ('slot:' + s.slotTime)), kind: 'slot', label: String(s.slotTime || '?'), doc: s });
+  if (STATE.eod) list.push({ key: String(STATE.eod._id || 'eod'), kind: 'eod', label: 'EOD 情绪', doc: STATE.eod });
+  if (STATE.day && (STATE.day._id || STATE.day.narrative != null)) list.push({ key: String(STATE.day._id || 'relay'), kind: 'relay', label: '连板指数', doc: STATE.day });
+  return list;
+}
+// 涨停复盘条目：个股文档（with_raw=1 附带调用原始字段）
+function labelEntryOf(d, i){
+  return { key: String(d._id || ('lb:' + d.code + ':' + i)), kind: 'labels',
+    label: (d.name || d.code || '?') + ' ' + (d.code || ''), doc: d };
+}
+// 请求侧 = 当次下发线上的载荷（{state, model, questions}，与 jev_client POST body 同形）
+function entryReq(e){
+  const d = e.doc;
+  const narrative = d.narrativeRaw != null ? d.narrativeRaw : (d.narrative != null ? d.narrative : null);
+  return { state: narrative, model: d.model != null ? d.model : null,
+    questions: d.questionsRaw != null ? d.questionsRaw : { _note: '该存档未落 questionsRaw（旧文档）' } };
+}
+// 响应侧 = 存档的 envelope 原文；缺 envelope 时如实注明并给已存解析结果（不伪造）
+function entryResp(e){
+  const d = e.doc;
+  if (d.responseRaw) return d.responseRaw;
+  if (e.kind === 'relay') return { _note: 'responseRaw 未存档（成功路径仅存解析结果；envelope 原文见 CF AI Gateway 日志）',
+    relayIndex: d.relayIndex, relayPhase: d.relayPhase, relayPhaseProbabilities: d.relayPhaseProbabilities,
+    relayMomentum: d.relayMomentum, ladderHealth: d.ladderHealth, leaderStrength: d.leaderStrength,
+    moneyEffect: d.moneyEffect, themePulse: d.themePulse, model: d.model, usage: d.usage };
+  if (e.kind === 'labels') return { _note: 'responseRaw 未存档（成功路径仅存解析结果；envelope 原文见 CF AI Gateway 日志）',
+    label: d.label, labelProbabilities: d.labelProbabilities,
+    catalystDepth: d.catalystDepth, catalystDepthProbabilities: d.catalystDepthProbabilities,
+    freshness: d.freshness, buySideLogic: d.buySideLogic, buySideProbabilities: d.buySideProbabilities,
+    stockPhasePosition: d.stockPhasePosition, stockPhaseProbabilities: d.stockPhaseProbabilities,
+    model: d.model, usage: d.usage };
+  if (d.answers || d.scores) return { _note: 'responseRaw 未存档（旧文档）', answers: d.answers, scores: d.scores };
+  return { _note: 'responseRaw 未存档' };
+}
+function lgUi(view){ return view === 'lab' ? STATE.labelUi : STATE.archUi; }
+function lgEntries(view){ return view === 'lab' ? STATE.labelEntries : STATE.archEntries; }
+function lgOpenEntry(view){ return (lgEntries(view) || []).find(x => x.key === lgUi(view).openKey) || null; }
+function detailHtml(e, view){
+  const d = e.doc, u = d.usage || {}, ui = lgUi(view);
+  const st = d.status || '-';
+  const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
+  const head = `<div class="lg-head"><div class="lg-title">🕐 jev · ${esc(e.label)}<span class="lg-asof">${esc(d.asOf || fmtTime(d.computedAt))}</span></div>
+    <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="lgMode('${view}', 'detail', event)">详细信息</button>
+    <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="lgMode('${view}', 'raw', event)">原始 JSON</button></div></div>`;
+  const meta = `<div class="lg-meta">
+    <div><div class="k">持续时间</div><div class="v">${d.latencyMs != null ? d.latencyMs + ' ms' : '-'}</div></div>
+    <div><div class="k">输入 tokens</div><div class="v">${u.input_tokens != null ? u.input_tokens.toLocaleString() : '-'}</div></div>
+    <div><div class="k">输出 tokens</div><div class="v">${u.output_tokens != null ? u.output_tokens.toLocaleString() : '-'}</div></div>
+    <div><div class="k">状态</div><div class="v" style="color:${stColor}">${esc(st)}</div></div>
+    ${d.errorCode ? `<div><div class="k">错误码</div><div class="v" style="color:#dc2626">${esc(d.errorCode)}</div></div>` : ''}</div>`;
+  let body;
+  if (ui.mode === 'raw'){
+    body = `<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0"><b>存档文档 JSON（原始）</b><button class="lg-copy" onclick="lgCopy('${view}', 'doc', event)">⧉ 复制</button></div><pre>${esc(JSON.stringify(d, null, 2))}</pre></div>`;
+  } else {
+    body = `<div class="lg-panels">
+      <div class="lg-panel"><div class="lg-phead"><b>请求</b><span class="st">state+model+questions</span><button class="lg-copy" onclick="lgCopy('${view}', 'req', event)">⧉ 复制</button></div>
+        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q1)}" oninput="lgFilter('${view}', 'req', this.value)">
+        <div class="lg-tree" id="${view}ReqTree">${treeHtml(entryReq(e), ui.q1)}</div></div>
+      <div class="lg-panel"><div class="lg-phead"><b>响应</b><span class="dot" style="background:${stColor}"></span><span class="st">${esc(st)}</span><button class="lg-copy" onclick="lgCopy('${view}', 'resp', event)">⧉ 复制</button></div>
+        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q2)}" oninput="lgFilter('${view}', 'resp', this.value)">
+        <div class="lg-tree" id="${view}RespTree">${treeHtml(entryResp(e), ui.q2)}</div></div>
+    </div>`;
+  }
+  const foot = `<div class="lg-foot"><span><span class="k">终端点</span> <code>POST /ai/run</code></span>
+    <span><span class="k">用户代理</span> <code>Python-urllib</code></span>
+    <span><span class="k">来源</span> <code>${esc(d.origin || '-')}</code></span>
+    <span><span class="k">题集版本</span> <code>${esc(d.questionSetVersion || '未知（旧文档）')}</code></span>
+    <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
+  return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${body}${foot}</div>`;
+}
+function renderArchive(){
+  const entries = archEntries();
+  STATE.archEntries = entries;
+  const degraded = entries.filter(e => (e.doc.status || '-') !== 'ok').length;
+  $('archiveHint').textContent = `slots ${STATE.rawSlots.length} + eod ${STATE.eod ? 1 : 0} + relay ${STATE.day ? 1 : 0} · degraded ${degraded}`;
+  if (!entries.length){ $('logTable').innerHTML = '<tr><td class="empty">当日无存档（无任何 jev 调用记录）</td></tr>'; return; }
+  const ui = STATE.archUi;
+  const head = '<tr><th>调用</th><th>状态</th><th>模型</th><th>输入 tokens</th><th>输出 tokens</th><th>持续时间</th><th>判定时间</th></tr>';
+  $('logTable').innerHTML = head + entries.map((e, i) => {
+    const d = e.doc, u = d.usage || {};
+    const stCls = d.status === 'ok' ? 'b-green' : d.status === 'degraded' ? 'b-amber' : 'b-red';
+    const open = ui.openKey === e.key;
+    let html = `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('arch', '${js(e.key)}')"><td><span class="lg-caret">▶</span>${esc(e.label)}</td>
+      <td>${badge(d.status || '-', stCls)}</td><td>${esc(d.model || '-')}</td>
+      <td class="num">${u.input_tokens != null ? u.input_tokens.toLocaleString() : '-'}</td>
+      <td class="num">${u.output_tokens != null ? u.output_tokens.toLocaleString() : '-'}</td>
+      <td class="num">${d.latencyMs != null ? d.latencyMs + ' ms' : '-'}</td>
+      <td style="color:var(--muted)">${fmtTime(d.computedAt)}</td></tr>`;
+    if (open) html += `<tr class="lg-detail"><td colspan="7">${detailHtml(e, 'arch')}</td></tr>`;
+    return html;
+  }).join('');
+}
+function lgRow(view, key){
+  const e = (lgEntries(view) || []).find(x => x.key === key);
+  if (!e) return;
+  const ui = lgUi(view);
+  ui.openKey = ui.openKey === e.key ? null : e.key;
+  ui.q1 = ''; ui.q2 = '';
+  if (view === 'lab') renderLabels(); else renderArchive();
+}
+function lgMode(view, m, ev){
+  ev.stopPropagation();
+  lgUi(view).mode = m;
+  if (view === 'lab') renderLabels(); else renderArchive();
+}
+function lgFilter(view, side, v){
+  const ui = lgUi(view);
+  if (side === 'req') ui.q1 = v; else ui.q2 = v;
+  const e = lgOpenEntry(view);
+  if (!e) return;
+  $(view + (side === 'req' ? 'ReqTree' : 'RespTree')).innerHTML = treeHtml(side === 'req' ? entryReq(e) : entryResp(e), v);
+}
+function lgCopy(view, what, ev){
+  ev.stopPropagation();
+  const e = lgOpenEntry(view);
+  if (!e) return;
+  const txt = JSON.stringify(what === 'doc' ? e.doc : what === 'req' ? entryReq(e) : entryResp(e), null, 2);
+  copyText(txt, ev.currentTarget);
+}
+
+function renderCharts(){
+  const seq = _loadSeq;
+  const pts = STATE.series.filter(r => r.relayIndex != null);
+  for (const id of ['relayChart', 'relayChart2']) {
+    if (pts.length < 2) { $(id).innerHTML = '<div class="empty">序列不足</div>'; }
+  }
+  if (pts.length < 2) return;
+  // 单次 /range 双图共享温度轴；seq 守卫防过期响应回写覆盖新图（快速切日期竞态）
+  fetch('/api/hotlist-jev/range?days=20').then(r => r.json()).then(rng => {
+    if (seq !== _loadSeq) return;
+    const temps = {};
+    for (const day of (rng.days || [])) {
+      const t = day.eod && day.eod.scores ? day.eod.scores.day_temperature : null;
+      if (t != null) temps[day.tradingDate] = t;
+    }
+    for (const id of ['relayChart', 'relayChart2']) drawChart(id, pts, temps);
+  }).catch(() => { if (seq === _loadSeq) for (const id of ['relayChart', 'relayChart2']) drawChart(id, pts, {}); });
+}
+
+function drawChart(id, pts, temps){
+  const W = 1460, H = 220, PL = 46, PR = 16, PT = 14, PB = 26;
+  const n = pts.length, minV = 0, maxV = 100;
+  const x = i => PL + i * (W - PL - PR) / (n - 1);
+  const y = v => PT + (1 - (v - minV) / (maxV - minV)) * (H - PT - PB);
+  let grid = '', labels = '', pathR = '', pathT = '', dotsR = '';
+  for (let g = 0; g <= 4; g++) {
+    const v = g * 25, yy = y(v);
+    grid += `<line x1="${PL}" y1="${yy}" x2="${W-PR}" y2="${yy}" stroke="#eef2f7"/>`;
+    labels += `<text x="${PL-8}" y="${yy+4}" text-anchor="end" font-size="10" fill="#94a3b8">${v}</text>`;
+  }
+  pts.forEach((r, i) => {
+    labels += `<text x="${x(i)}" y="${H-8}" text-anchor="middle" font-size="10" fill="#94a3b8">${(r.tradingDate||'').slice(5)}</text>`;
+    pathR += `${i ? 'L' : 'M'}${x(i)},${y(r.relayIndex)}`;
+    dotsR += `<circle cx="${x(i)}" cy="${y(r.relayIndex)}" r="3.2" fill="#2563eb"><title>${esc(r.tradingDate)} 指数${r.relayIndex} ${esc(PHASE_CN[r.relayPhase]||'')}</title></circle>`;
+    const t = temps[r.tradingDate];
+    if (t != null) pathT += `${i ? 'L' : 'M'}${x(i)},${y(t)}`;
+  });
+  $(id).innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${grid}${labels}
+    ${pathT ? `<path d="${pathT}" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 4"/>` : ''}
+    <path d="${pathR}" fill="none" stroke="#2563eb" stroke-width="2.4"/>${dotsR}</svg>`;
+}
+
+document.querySelectorAll('nav .tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('nav .tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  for (const s of document.querySelectorAll('main section')) s.style.display = 'none';
+  $('tab-' + t.dataset.tab).style.display = '';
+});
+const _d = new Date();
+$('date').value = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
+// 只监听 change：input 事件会在 fill/清空中间态触发空 date 请求（422 竞态覆盖）
+$('date').addEventListener('change', loadAll);
+loadAll();
+setInterval(loadAll, 60000); // 实时：60s 轮询
+</script>
+</body>
+</html>
