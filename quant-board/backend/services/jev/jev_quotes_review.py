@@ -163,6 +163,13 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             vote_reviewed += 1
         if lc_doc:
             lc_reviewed += 1
+        # 连板语义（用户口径 2026-10-13）：仅 N==M（如 8天8板）算连板；N>M（如 10天8板，
+        # 中间断板）是空间高度不是连板 → None 显 '--'（宁缺毋猜，不推断断板后真实连板高度）。
+        # 涨停复盘「高度」消费方仍用原始 M 口径，互不影响。
+        b_info = board_info.get(code) or {}
+        b_boards, b_days = b_info.get("boards"), b_info.get("days")
+        boards_val = b_boards if (b_boards is not None and b_days is not None
+                                  and b_days == b_boards) else None
         jev: dict[str, Any] | None = None
         if vote_doc or lc_doc:
             jev = {"vote": _vote_brief(vote_doc), "lc": _lc_brief(lc_doc),
@@ -197,7 +204,7 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             "name": row.get("name"),
             "price": _num(row.get("price")),
             "change": _num(row.get("change")),
-            "boards": (board_info.get(code) or {}).get("boards"),
+            "boards": boards_val,
             "rank": row.get("rank") if isinstance(row.get("rank"), int)
                     and not isinstance(row.get("rank"), bool) else None,
             "compRank": row.get("compRank") if isinstance(row.get("compRank"), int)

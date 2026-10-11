@@ -545,7 +545,10 @@ def test_quotes_review_insufficient_doc_exposed(monkeypatch):
 
 
 def test_quotes_review_boards_join_passthrough(monkeypatch):
-    """连板高度与涨停复盘同源（jiuyan_board_info）：逐股透传；非触板股如实 None → 前端 '--'。"""
+    """连板高度与涨停复盘同源但口径更严：仅 N==M（纯连板）计板；N>M 断板不算（用户口径）。
+
+    韭研 num「N天M板」：8天8板=连板 8；10天8板=区间 8 板中间有断板 → 连板 None（'--'）。
+    """
     db = FakeMongoDb()
     _seed_quotes_review(db)
     import backend.operations.jev_label_jiuyan as jiuyan_mod
@@ -553,7 +556,8 @@ def test_quotes_review_boards_join_passthrough(monkeypatch):
 
     def fake_board_info(db_, date_):
         captured["date"] = date_
-        return ({"000001": {"boards": 3, "limitUpTime": "09:31"}},
+        return ({"000001": {"boards": 3, "days": 3, "limitUpTime": "09:31"},
+                 "000002": {"boards": 8, "days": 10}},
                 {"jiuyanFinalFound": True, "prevPoolFound": True, "thsPoolFound": True,
                  "prevThsPoolFound": True, "thsZhabanTotal": 5})
 
@@ -565,8 +569,8 @@ def test_quotes_review_boards_join_passthrough(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert captured["date"] == DATE
-    assert body["rows"][0]["boards"] == 3
-    assert body["rows"][1]["boards"] is None
+    assert body["rows"][0]["boards"] == 3        # 3天3板 = 纯连板
+    assert body["rows"][1]["boards"] is None     # 10天8板 = 断板，不算 8 连板
     assert body["boardJoinDegraded"] is None
 
 

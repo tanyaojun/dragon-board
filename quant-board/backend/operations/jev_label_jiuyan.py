@@ -129,21 +129,31 @@ def advdec_ratio(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple |
     return result
 
 
+def _jiuyan_days_boards(stock: dict) -> tuple[int | None, int | None]:
+    """韭研 num「N天M板」解析（跨度天数 N，区间板数 M）；无法解析 (None, None) 宁缺毋猜。
+
+    N==M = 纯连板（8天8板）；N>M = 中间有断板（10天8板），仅供连板语义消费方
+    （热榜行情 quotes-review）区分口径；高度语义消费方（涨停复盘/梯队）仍只用 M。
+    """
+    num = str(stock.get("num") or "").strip()
+    if not num:
+        return None, None
+    import re
+    m = re.match(r"^(\d+)天(\d+)板", num)
+    if not m:
+        return None, None
+    days = int(m.group(1))
+    boards = int(m.group(2))
+    return (days if days > 0 else None), (boards if boards > 0 else None)
+
+
 def _jiuyan_board_count(stock: dict) -> int | None:
     """韭研 num 字段「N天M板」解析出真实板数 M（2026-10-10 口径修正）。
 
     实测：day 字段存的是 N（跨度天数）而非板数——「9天9板」两者巧合相等，
     「16天8板」day=16 但真实 8 板；与 THS maxBoard 对齐验证。num 无法解析
     返回 None（宁缺毋猜）。"""
-    num = str(stock.get("num") or "").strip()
-    if not num:
-        return None
-    import re
-    m = re.match(r"^(\d+)天(\d+)板", num)
-    if not m:
-        return None
-    boards = int(m.group(2))
-    return boards if boards > 0 else None
+    return _jiuyan_days_boards(stock)[1]
 
 
 def _jiuyan_ladder(db, date: str) -> dict | None:
@@ -274,8 +284,8 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
         for stock in field.get("stocks") or []:
             code = str(stock.get("code") or "")[-6:]
             if code and code not in out:
-                boards = _jiuyan_board_count(stock)
-                info = {"boards": boards, "limitUpTime": stock.get("time"),
+                days, boards = _jiuyan_days_boards(stock)
+                info = {"boards": boards, "days": days, "limitUpTime": stock.get("time"),
                         "boardName": field.get("name")}
                 if ths_found and code in failed_today:
                     info["zhaban"] = True
