@@ -203,7 +203,8 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
 
 
 def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
-                             slot: str = PILOT_SLOT) -> dict:
+                             slot: str = PILOT_SLOT,
+                             include_cooling: bool = False) -> dict:
     """题集 B 人口（非 cooling）。候选含叙事原料；data_insufficient 萡 insufficient。"""
     frame = _slot_frame(db, date, dataset_id, slot)
     if not frame:
@@ -221,8 +222,10 @@ def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_
         obs = a.get("observation") or {}
         lc = obs.get("lifecycle") or {}
         stage = lc.get("stage")
-        if not stage or stage == "cooling":
-            continue  # 默认态低信息量不进 pilot（预登记 §三·一）
+        if not stage:
+            continue
+        if stage == "cooling" and not include_cooling:
+            continue  # pilot 口径：默认态低信息量不进（§三·一）；生产全量覆盖传 include_cooling=True
         cyc = a.get("cycle") or {}
         metrics = cyc.get("metrics") or {}
         evidence = (cyc.get("decision") or {}).get("evidence") or {}
@@ -374,7 +377,7 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
 def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                       fire: bool = False, cap_igex: int = 5, cap_total: int = 8,
                       workers: int = 1, token_fuse: int | None = None,
-                      slot: str = PILOT_SLOT) -> dict:
+                      slot: str = PILOT_SLOT, include_cooling: bool = False) -> dict:
     """题集 B：环境门阶段诊断复核。落 hotlist_jev_lifecycle_recheck_pilot。
     cap_igex/cap_total 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。
     workers>1=并发（生产回填 §六·产）；token_fuse 缺省=TOKEN_FUSE(150k)，回填显式放宽。"""
@@ -385,7 +388,8 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
     tokens = 0
     stats = {"ok": 0, "degraded": 0, "skip": 0, "data_insufficient": 0, "no_frame": 0}
     for date in dates:
-        pop = build_lifecycle_population(db, date, dataset_id, slot)
+        pop = build_lifecycle_population(db, date, dataset_id, slot,
+                                         include_cooling=include_cooling)
         if pop["meta"].get("error"):
             stats["no_frame"] += 1
             print(f"[lifecycle] {date} 无 half_hour {slot} 帧，跳过")
@@ -510,7 +514,8 @@ def _write_frame_mark(db, col_name: str, date: str, slot: str, kind: str,
 
 
 def watch(db, dataset_id: str = DEFAULT_DATASET_ID, interval: int = 60,
-          workers: int = 1, token_fuse: int | None = None) -> None:
+          workers: int = 1, token_fuse: int | None = None,
+          include_cooling: bool = False) -> None:
     """常驻轮询：每 interval 秒检查最近已落库 half_hour 槽，未跑过则全量判读该帧（A+B）。
 
     - 幂等：帧级标记防重；进程重启无损（状态全在库内）；
@@ -534,7 +539,8 @@ def watch(db, dataset_id: str = DEFAULT_DATASET_ID, interval: int = 60,
                     print(f"[watch] {date} {slot} 帧 → 题{'A' if kind == 'VOTE' else 'B'} 判读...")
                     stats = runner_fn(db, [date], dataset_id, fire=True,
                                       workers=workers, token_fuse=token_fuse,
-                                      slot=slot, **kwargs)
+                                      slot=slot, include_cooling=include_cooling,
+                                      **kwargs)
                     _write_frame_mark(db, col_name, date, slot, kind, stats)
                 except Exception as e:  # fail-visible：单帧失败不炸常驻，下轮重试（幂等）
                     print(f"[watch] {date} {slot} {kind} 异常：{type(e).__name__}: {str(e)[:150]}（下轮重试）")
@@ -565,6 +571,9 @@ def __main__():
                          "不碰采集进程，帧未落库则 no_frame 零成本跳过）")
     ap.add_argument("--watch-interval", dest="watch_interval", type=int, default=60,
                     help="watch 轮询间隔秒（默认 60）")
+    ap.add_argument("--include-cooling", dest="include_cooling", action="store_true",
+                    help="B 题集人口含 cooling 股（生产全量覆盖，用户裁决 2026-10-12："
+                         "行情列表每只股都要有周期判读；缺省=非 cooling pilot 口径）")
     args = ap.parse_args()
     if not args.vote_day and not args.lifecycle_day:
         raise SystemExit("需要 --vote-day 或 --lifecycle-day（可多次传参）")
@@ -575,7 +584,8 @@ def __main__():
     db = get_runtime_mongodb_database()
     if args.watch:
         watch(db, dataset_id=args.dataset_id, interval=args.watch_interval,
-              workers=args.workers, token_fuse=args.token_fuse)
+              workers=args.workers, token_fuse=args.token_fuse,
+              include_cooling=args.include_cooling)
         return
     if args.vote_day:
         run_vote_day(db, args.vote_day, args.dataset_id, fire=args.fire,
@@ -584,7 +594,8 @@ def __main__():
     if args.lifecycle_day:
         run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire,
                           cap_igex=args.lc_cap_igex, cap_total=args.lc_cap_total,
-                          workers=args.workers, token_fuse=args.token_fuse, slot=args.slot)
+                          workers=args.workers, token_fuse=args.token_fuse, slot=args.slot,
+                          include_cooling=args.include_cooling)
 
 
 if __name__ == "__main__":

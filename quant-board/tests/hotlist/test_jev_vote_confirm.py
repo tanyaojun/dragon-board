@@ -342,6 +342,8 @@ def _vote_db():
         "600001": _row("600001", 8, 4.1, volumeRatio=1.5, zlje=1.2e8, turnoverRate=10.0),
         "600002": _row("600002", 20, -2.0, volumeRatio=0.8, zlje=-5e7, turnoverRate=6.0),
         "600003": _row("600003", 50, 0.5, volumeRatio=None, zlje=None, turnoverRate=None),
+        "600004": _row("600004", 70, -1.0, volumeRatio=0.9, zlje=-1e6, turnoverRate=2.0),
+        "600005": _row("600005", 110, 0.8, volumeRatio=1.1, zlje=5e6, turnoverRate=3.0),
     }
     frames, rows = _day_frames_and_rows(base_rows)
     anas = [_ana("600001", "B"),
@@ -670,3 +672,34 @@ def test_population_carries_multi_day(db_factory=None):
 
 def test_ammo_version_bumped_for_cross_day():
     assert VOTE_AMMO_VERSION == "2026-10-12b"  # b 代=原料跨日化
+
+
+# ── B 人口全量覆盖（用户裁决 2026-10-12：cooling 股也要有周期判读）──
+
+
+def test_lifecycle_population_include_cooling():
+    """缺省=非 cooling pilot 口径；include_cooling=True 全量覆盖（含 cooling）。"""
+    db = _vote_db()  # 600001 expansion / 600002 reversal / 600003-5 cooling
+    pop_pilot = runner.build_lifecycle_population(db, DATE)
+    assert {c["code"] for c in pop_pilot["candidates"]} == {"600001", "600002"}
+    pop_full = runner.build_lifecycle_population(db, DATE, include_cooling=True)
+    codes = {c["code"] for c in pop_full["candidates"]}
+    assert codes == {"600001", "600002", "600003", "600004", "600005"}
+    # cooling 候选原料齐备（跨日轨迹/度量/前日阶段），判据 cooling 段可判
+    c3 = next(c for c in pop_full["candidates"] if c["code"] == "600003")
+    assert c3["stage"] == "cooling" and c3["metrics"] and c3["multiDayTrajectory"]
+
+
+def test_run_lifecycle_include_cooling_fire(monkeypatch):
+    def fake_dispatch(state, questions):
+        return {"success": True, "result": {"state": "Completed", "result": {
+            "model": "typesafe/jev",
+            "answers": {"lifecycle_stage_recheck": {"type": "choice", "choice": "cooling",
+                                                    "confidence": 0.7,
+                                                    "probabilities": {"cooling": 0.7}}},
+            "usage": {"input_tokens": 100, "output_tokens": 20}}}}, 1
+
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
+    stats = runner.run_lifecycle_day(_vote_db(), [DATE], fire=True,
+                                     cap_igex=100, cap_total=200, include_cooling=True)
+    assert stats["ok"] == 5  # 全量人口 5 例（2 非 cooling + 3 cooling）
