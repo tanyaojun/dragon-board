@@ -116,6 +116,24 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         if code:
             lc_by_code[code] = doc
 
+    # 连板高度：与涨停复盘页同源（jev_label_jiuyan.jiuyan_board_info，韭研+THS 池 join，
+    # 单一事实源）；源缺失/异常结构化降级旗标，不阻断主读口（fail-visible）
+    board_info: dict[str, dict[str, Any]] = {}
+    board_join_error: str | None = None
+    try:
+        from backend.operations.jev_label_jiuyan import jiuyan_board_info
+        board_info, bmeta = jiuyan_board_info(db, date)
+        if not bmeta.get("jiuyanFinalFound"):
+            board_join_error = "jiuyan_final_missing"
+        elif not bmeta.get("thsPoolFound"):
+            board_join_error = "ths_pool_missing"
+        elif not bmeta.get("prevPoolFound"):
+            board_join_error = "prev_pool_missing"
+        elif bmeta.get("prevThsPoolFound") is False:
+            board_join_error = "prev_ths_pool_missing"
+    except Exception as exc:  # noqa: BLE001 — 辅助 join 失败不阻断主读口（boards 全缺如实 '--'）
+        board_join_error = f"board_join_failed: {exc}"
+
     rows: list[dict[str, Any]] = []
     vote_dirs: list[str | None] = []
     lc_stages: list[str | None] = []
@@ -175,6 +193,7 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             "name": row.get("name"),
             "price": _num(row.get("price")),
             "change": _num(row.get("change")),
+            "boards": (board_info.get(code) or {}).get("boards"),
             "rank": row.get("rank") if isinstance(row.get("rank"), int)
                     and not isinstance(row.get("rank"), bool) else None,
             "compRank": row.get("compRank") if isinstance(row.get("compRank"), int)
@@ -230,7 +249,7 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
     }
     return {"ok": True, "date": date, "slotTime": PILOT_SLOT, "datasetId": dataset_id,
             "snapshotId": sid, "rows": rows, "summary": summary, "noData": False,
-            "reason": None}
+            "reason": None, "boardJoinDegraded": board_join_error}
 
 
 def _lc_stage_counts(stages: list[str | None]) -> dict[str, int]:

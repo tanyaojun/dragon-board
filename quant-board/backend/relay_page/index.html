@@ -246,6 +246,8 @@ const dirB = v => v==='buy' ? badge('buy','b-green') : v==='sell' ? badge('sell'
 const agreeB = v => v==='agree' ? badge('一致','b-green') : v==='diverge' ? badge('分歧','b-amber') : '';
 const numOr = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
 const fmtYi = v => { const n = numOr(v, null); return n == null ? '--' : (n / 1e8).toFixed(2); };
+const fmtYiCell = v => { const n = numOr(v, null); return n == null ? '--' : (n / 1e8).toFixed(2) + ' 亿'; };
+const boardsCell = v => v == null ? '--' : (v > 1 ? v + '板' : '首板');
 const fmtPctChg = v => { const n = numOr(v, null); return n == null ? '--' : (n > 0 ? '+' : '') + n.toFixed(2) + '%'; };
 
 const badge = (txt, cls) => txt ? `<span class="badge ${cls}">${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
@@ -754,6 +756,7 @@ function qRenderRows(){
     res: r => tierKey(qTier(r, 'resonance')), trend: r => tierKey(qTier(r, 'trend')),
     heat: r => tierKey(qTier(r, 'heat')), vp: r => tierKey(qTier(r, 'volumePrice')),
     cycle: r => LC_STAGE_ORDER[qLcStage(r)] ?? -1, synergy: r => tierKey(qTier(r, 'synergy')),
+    boards: r => r.boards == null ? -1 : r.boards,
     amount: r => numOr(r.amount, -1), cir: r => numOr(r.cirMV, -1),
     vote: r => qVoteDir(r) || '', conf: r => numOr(((r.jev || {}).vote || {}).confidence, -1),
     agree: r => { const a = (r.jev || {}).agree; return a === 'agree' ? 0 : a === 'diverge' ? 1 : 2; } };
@@ -763,7 +766,8 @@ function qRenderRows(){
     row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null }));
   const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
   const hasFilter = f.q || f.synergy || f.vote || f.lc || f.agree;
-  $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '15:00'} 收盘槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`;
+  $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '15:00'} 收盘槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
+    + (Q.boardJoinDegraded ? ` · 连板降级:${Q.boardJoinDegraded}` : '');
   const th = (label, key) => `<th class="sortable" onclick="setQuotesSort('${key}')">${label}${sortMark(s, key)}</th>`;
   const rows = shown.map(r => {
     const e = STATE.quotesEntries.find(x => x.row === r);
@@ -777,18 +781,19 @@ function qRenderRows(){
     <td class="num">${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'}</td>
     <td class="num" style="color:${chgColor}">${fmtPctChg(r.change)}</td>
     <td class="num">${r.rank != null ? '#' + r.rank : '--'}</td>
+    <td class="num">${boardsCell(r.boards)}</td>
     <td>${tierB(qTier(r, 'resonance'))}</td><td>${tierB(qTier(r, 'trend'))}</td>
     <td>${tierB(qTier(r, 'heat'))}</td><td>${tierB(qTier(r, 'volumePrice'))}</td>
     <td style="color:${cyc ? (LC_STAGE_COLOR[cyc] || 'var(--muted2)') : 'var(--muted2)'}">${cyc ? esc(LC_STAGE_CN[cyc] || cyc) : '--'}</td>
     <td>${tierB(qTier(r, 'synergy'))}</td>
-    <td class="num">${fmtYi(r.amount)}</td><td class="num">${fmtYi(r.cirMV)}</td>
+    <td class="num">${fmtYiCell(r.amount)}</td><td class="num">${fmtYiCell(r.cirMV)}</td>
     <td>${dirB(qVoteDir(r)) || '<span style="color:var(--muted2)">--</span>'}</td>
     <td class="num">${conf != null ? 'P' + Math.round(conf * 100) + '%' : '--'}</td>
     <td>${agreeB((r.jev || {}).agree)}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="16">${quotesDetailHtml(e)}</td></tr>` : '');
+    + (open ? `<tr class="lg-detail"><td colspan="17">${quotesDetailHtml(e)}</td></tr>` : '');
   }).join('');
-  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('共振', 'res')}${th('趋势', 'trend')}${th('热度', 'heat')}${th('量价', 'vp')}${th('周期', 'cycle')}${th('五维', 'synergy')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
-    + (rows || '<tr><td colspan="16" class="empty">无匹配个股（调整筛选条件）</td></tr>');
+  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('连板', 'boards')}${th('共振', 'res')}${th('趋势', 'trend')}${th('热度', 'heat')}${th('量价', 'vp')}${th('周期', 'cycle')}${th('五维', 'synergy')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
+    + (rows || '<tr><td colspan="17" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function qRenderAll(){ qRenderKpi(); qRenderBar(); qRenderRows(); }
 // 行展开：VOTE/LC 双题集各一块 lg-card（各自 详细信息/原始 JSON 切换 + 筛选 + 复制）
@@ -876,7 +881,7 @@ function quotesDetailHtml(e){
   const t = r.tiers || {};
   const tierTxt = v => v || '--';
   const summary = `<div class="lg-card"><div class="lg-head"><div class="lg-title">${esc(e.label)}</div>
-    <span class="lg-asof"># ${r.rank != null ? r.rank : '--'} · 最新价 ${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'} · 成交额 ${fmtYi(r.amount)} 亿 · 流通值 ${fmtYi(r.cirMV)} 亿</span></div>
+    <span class="lg-asof"># ${r.rank != null ? r.rank : '--'} · 连板 ${boardsCell(r.boards)} · 最新价 ${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'} · 成交额 ${fmtYi(r.amount)} 亿 · 流通值 ${fmtYi(r.cirMV)} 亿</span></div>
     <div class="flex" style="margin-top:10px">
       <span class="chip plain">共振 ${tierTxt(t.resonance)}</span><span class="chip plain">趋势 ${tierTxt(t.trend)}</span>
       <span class="chip plain">热度 ${tierTxt(t.heat)}</span><span class="chip plain">量价 ${tierTxt(t.volumePrice)}</span>

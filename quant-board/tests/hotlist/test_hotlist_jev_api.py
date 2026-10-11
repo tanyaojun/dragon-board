@@ -33,7 +33,7 @@ class FakeCollection:
 
         return iter([row for row in self.rows if matches(row)])
 
-    def find_one(self, query=None, sort=None):
+    def find_one(self, query=None, projection=None, sort=None):
         best = None
         first = None
         for row in self.find(query):
@@ -542,6 +542,47 @@ def test_quotes_review_insufficient_doc_exposed(monkeypatch):
     assert s["risk"] == {"data_insufficient": 1, "ok": 1}  # 乙留痕 + 甲 LC ok
     row = body["rows"][1]
     assert row["jev"]["vote"]["direction"] is None and row["jev"]["agree"] is None
+
+
+def test_quotes_review_boards_join_passthrough(monkeypatch):
+    """连板高度与涨停复盘同源（jiuyan_board_info）：逐股透传；非触板股如实 None → 前端 '--'。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+    captured = {}
+
+    def fake_board_info(db_, date_):
+        captured["date"] = date_
+        return ({"000001": {"boards": 3, "limitUpTime": "09:31"}},
+                {"jiuyanFinalFound": True, "prevPoolFound": True, "thsPoolFound": True,
+                 "prevThsPoolFound": True, "thsZhabanTotal": 5})
+
+    monkeypatch.setattr(jiuyan_mod, "jiuyan_board_info", fake_board_info)
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert captured["date"] == DATE
+    assert body["rows"][0]["boards"] == 3
+    assert body["rows"][1]["boards"] is None
+    assert body["boardJoinDegraded"] is None
+
+
+def test_quotes_review_boards_source_missing_degraded(monkeypatch):
+    """韭研 final 缺失：连板全缺 + boardJoinDegraded 结构化旗标，不阻断主读口（fail-visible）。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)  # 无 jiuyan_action 集合 → jiuyanFinalFound=False
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["boardJoinDegraded"] == "jiuyan_final_missing"
+    assert all(r["boards"] is None for r in body["rows"])
+    assert body["ok"] is True and len(body["rows"]) == 2  # 主读口不阻断
 
 
 def test_quotes_review_missing_date_422(monkeypatch):
