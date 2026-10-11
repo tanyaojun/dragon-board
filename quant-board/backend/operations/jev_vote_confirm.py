@@ -169,8 +169,10 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         obs = a.get("observation") or {}
         syn_tier = (obs.get("synergy") or {}).get("signalTier")
         if syn_tier not in ("S", "A", "B", "D"):
-            if not (include_neutral and syn_tier == "C"):
-                continue  # 人口外（E 归 B 语境；C 无方向——生产全量覆盖传 include_neutral）
+            if not (include_neutral and syn_tier in ("C", "E")):
+                continue  # 人口外（C 无方向/E 环境门否决——生产全量覆盖传 include_neutral；
+                # E 档五修纳入：jev 判据环境门只注记不投票，方向读数独立成立，
+                # 「周期否决 × 方向偏多」= 观察否决是否误杀的样本（用户裁决 2026-10-12））
         res = a.get("resonance") or {}
         rt = obs.get("rankTrend") or {}
         cs = obs.get("crossSection") or {}

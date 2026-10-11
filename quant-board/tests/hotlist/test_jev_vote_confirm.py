@@ -728,4 +728,17 @@ def test_run_vote_include_neutral_fire(monkeypatch):
     monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
     stats = runner.run_vote_day(_vote_db(), [DATE], fire=True,
                                 cap_buy=200, cap_sell=200, include_neutral=True)
-    assert stats["ok"] == 3  # 600001 buy + 600002 sell + 600003 neutral（全量无帽）
+    assert stats["ok"] == 4  # 600001 buy + 600002 sell + 600003 C 档 + 600004 E 档（全量无帽）
+
+
+def test_vote_population_include_e_tier():
+    """五修（用户裁决 2026-10-12）：E 档（环境门否决）纳入 VOTE 全量人口——
+    jev 判据环境门只注记不投票，方向读数独立成立。"""
+    db = _vote_db()  # 600004 syn E
+    pop_pilot = runner.build_vote_population(db, DATE)
+    assert "600004" not in {c["code"] for c in pop_pilot.get("neutral", [])}
+    pop_full = runner.build_vote_population(db, DATE, include_neutral=True)
+    c4 = next((c for c in pop_full["neutral"] if c["code"] == "600004"), None)
+    assert c4 is not None
+    assert c4["synergyTier"] == "E" and c4["synergyDirection"] == "sell"  # E→sell 对照锚
+    assert c4["gate"] == {"stage": "cooling", "veto": False}
