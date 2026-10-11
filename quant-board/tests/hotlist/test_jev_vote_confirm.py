@@ -94,7 +94,7 @@ def test_lifecycle_risk_flag_levels():
     assert lifecycle_risk_flag(10, True, ["prev_stage_missing"])["level"] == "partial"
     # 六修：预检线 5→2（上榜晚的股跨日度量可算即判，缺槽如实标注）
     partial = lifecycle_risk_flag(3, True, [])
-    assert partial["level"] == "partial" and any("仅3槽" in r for r in partial["reasons"])
+    assert partial["level"] == "partial" and any("仅3/10槽" in r for r in partial["reasons"])
     assert lifecycle_risk_flag(2, True, [])["level"] == "ok" or lifecycle_risk_flag(2, True, [])["level"] == "partial"
     ins1 = lifecycle_risk_flag(1, True, [])
     ins2 = lifecycle_risk_flag(10, False, [])
@@ -353,7 +353,7 @@ def _vote_db():
     anas = [_ana("600001", "B"),
             _ana("600002", "D", res="D", vp="E", stage="reversal"),
             _ana("600003", "C", stage="cooling"),   # C 档：A 人口外；cooling：B 人口外
-            _ana("600004", "E", stage="cooling"),   # E 档：归 B 语境
+            _ana("600004", "E", stage="cooling"),   # E 档：五修纳入 neutral（全量口径）
             _ana("600005", "B", vp="unknown", res="unknown", rt="unknown", cs="unknown",
                  stage="cooling")]                   # 四维全 unknown → data_insufficient
     # 前一交易日（2026-09-29）15:00 帧的 600001 analysis（prevStage 供 B 题集叙事与 riskFlag）
@@ -414,7 +414,7 @@ def test_build_lifecycle_population_and_prev_stage():
     assert c1["prevDate"] == "2026-09-29" and c1["prevStage"] == "expansion"
     # 六修后 5/10 槽=partial（当日轨迹不足全日，如实标注）
     assert c1["riskFlag"]["level"] == "partial"
-    assert any("仅5槽" in r for r in c1["riskFlag"]["reasons"])
+    assert any("仅5/10槽" in r for r in c1["riskFlag"]["reasons"])
     assert c1["metrics"]["rankVelocity"] == 0.3
 
 

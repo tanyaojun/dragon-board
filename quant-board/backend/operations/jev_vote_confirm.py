@@ -585,7 +585,7 @@ def __main__():
                     help="B 题集人口含 cooling 股（生产全量覆盖，用户裁决 2026-10-12："
                          "行情列表每只股都要有周期判读；缺省=非 cooling pilot 口径）")
     ap.add_argument("--include-neutral", dest="include_neutral", action="store_true",
-                    help="A 题集人口含 synergy C 档（无方向票也全量判读，生产全量覆盖；"
+                    help="A 题集人口含 synergy C/E 档（C→hold、E→sell 对照锚，生产全量覆盖；"
                          "缺省=pilot 口径）")
     args = ap.parse_args()
     if not args.vote_day and not args.lifecycle_day:

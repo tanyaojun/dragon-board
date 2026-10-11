@@ -140,11 +140,16 @@ def lifecycle_risk_flag(trajectory_slots: int, metrics_present: bool,
     当日轨迹槽缺（午后上榜）如实标注即可判——可计算部分照算（fail-visible）。
     """
     if trajectory_slots < 2 or not metrics_present:
-        return {"level": "data_insufficient",
-                "reasons": [f"当日轨迹槽={trajectory_slots}(<2)" if trajectory_slots < 2 else "度量块不可算"]}
+        reasons = []
+        if trajectory_slots < 2:
+            reasons.append(f"当日轨迹槽={trajectory_slots}(<2)")
+        if not metrics_present:
+            reasons.append("度量块不可算")
+        return {"level": "data_insufficient", "reasons": reasons}
     reasons = list(missing or [])
     if trajectory_slots < 10:
-        reasons.append(f"当日轨迹仅{trajectory_slots}槽（午后上榜，缺槽如实标注）")
+        # 归因中性化（review 2026-10-12）：缺槽原因代码不可证，不写死「午后上榜」
+        reasons.append(f"当日轨迹仅{trajectory_slots}/10槽（缺槽在轨迹行如实标注）")
     return {"level": "ok" if not reasons else "partial", "reasons": reasons}
 
 
