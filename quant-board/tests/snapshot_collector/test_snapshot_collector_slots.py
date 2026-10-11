@@ -194,9 +194,12 @@ class TestGenerateSlots:
     def test_generates_five_minutes_slots(self):
         slots = generate_slots("2026-06-11", ["five_minutes"])
         assert len(slots) == 50
-        assert slots[0].slot_time == "09:30"
+        # 2026-10-10 开盘槽延迟：09:30 到期时刻 +10min，按时间戳排序首槽变为 09:35；
+        # 09:30 槽仍在表内且标识不变（延迟只影响到期时刻，见 test_slots_opening_delay.py）
+        assert slots[0].slot_time == "09:35"
         assert slots[-1].slot_time == "15:00"
         assert slots[0].snapshot_type == "five_minutes"
+        assert any(s.slot_time == "09:30" for s in slots)
 
     def test_generates_multiple_types(self):
         slots = generate_slots("2026-06-11", ["half_hour", "daily"])

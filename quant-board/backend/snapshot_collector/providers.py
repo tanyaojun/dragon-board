@@ -54,8 +54,19 @@ _DEFAULT_PROXY_BASE_URL = "http://127.0.0.1:3000"
 _DEFAULT_BRIDGE_BASE_URL = "http://127.0.0.1:8765"
 _DEFAULT_TIMEOUT_MS = 5000
 _THS_RETRY_DELAY_S = 2.5  # THS 涨停池首试失败后的重试间隔（限流/抖动多为瞬时）
-# 采集链消费的池子集（连板层 five 池零消费，面板全量走 API 路由）
+# 采集链消费的池子集；连板层五池 2026-10-10 起重新入采（仅 EOD 时段拉取一次）：
+# jev 叙事/连板指数成为新消费者后「零消费」前提失效（b5d4ac36 当时的砍除依据）。
+# 日增仅 EOD 后若个证据构建 ×5 发，服务层 250ms 节流+退避负缓存仍在，风控成本可控。
 _COLLECTOR_POOL_KEYS = ("failed", "rushing", "drawdown")
+_LADDER_POOL_KEYS = ("one", "two", "three", "four", "high")
+_EOD_LADDER_CUTOFF_MIN = 15 * 60  # 上海时间 ≥15:00 起连板层并入采集（EOD 帧口径）
+
+
+def _evidence_pool_keys(now_sh: Any) -> tuple[tuple[str, ...], str]:
+    """盘中三池；EOD 时段（上海 ≥15:00）连板层五池并入。返回 (pool_keys, cache_key 后缀)。"""
+    include = now_sh.hour * 60 + now_sh.minute >= _EOD_LADDER_CUTOFF_MIN
+    return ((_COLLECTOR_POOL_KEYS + _LADDER_POOL_KEYS) if include else _COLLECTOR_POOL_KEYS,
+            ":ladder" if include else "")
 # 证据级缓存（模块级：provider 实例每次上下文构建都新建）；风控优化详见 ths-limitup-arsenal-audit.md
 _SERVER_EVIDENCE_CACHE: dict[str, dict[str, Any]] = {}
 _SERVER_EVIDENCE_TTL_S = 300.0
@@ -2324,8 +2335,12 @@ class ServerMarketEvidenceProvider:
         date = digits if len(digits) == 8 else None
         # 证据级 TTL 缓存（2026-10-02 风控优化）：provider 实例每次上下文构建都新建，
         # 缓存挂模块级——同交易日 5 分钟内复用同一份证据（capturedAt 保留原取数时刻可追溯），
-        # THS 请求从 ~48 槽组×4 请求/日 降到 ~10 半小时边界×4（约 -90%）
-        cache_key = date or "live"
+        # THS 请求从 ~48 槽组×4 请求/日 降到 ~10 半小时边界×4（约 -90%）。
+        # 2026-10-10：EOD 时段（≥15:00）连板层五池并入，缓存键加 :ladder 后缀隔离，
+        # 盘中缓存的三池证据不会被 EOD 构建复用（反之亦然）。
+        now_sh = datetime.now(_TZ_SHANGHAI)
+        pool_keys, cache_suffix = _evidence_pool_keys(now_sh)
+        cache_key = (date or "live") + cache_suffix
         cached = _SERVER_EVIDENCE_CACHE.get(cache_key)
         if cached and time.monotonic() - cached["at"] < _SERVER_EVIDENCE_TTL_S:
             return cached["evidence"], cached["health"]
@@ -2342,14 +2357,15 @@ class ServerMarketEvidenceProvider:
                 async def _attempt_limit_evidence() -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
                     """THS 涨停池证据单次尝试：返回 (info_items, pools_body, attempt_errors)。
 
-                    只取采集链消费的三池（failed/rushing/drawdown）；连板层五池零消费，
-                    面板全量走 API 路由（独立缓存键互不污染）。
+                    盘中只取采集链消费的三池（failed/rushing/drawdown）；EOD 时段连板层
+                    五池并入（pool_keys 由外层按上海时钟决定）；面板全量走 API 路由
+                    （独立缓存键互不污染）。
                     """
                     attempt_errors: list[str] = []
                     service = get_limitup_service()
                     list_body = await service.get_limit_up_list(date or None)
                     pools_body = await service.get_ths_pools(
-                        date or None, keys=_COLLECTOR_POOL_KEYS)
+                        date or None, keys=pool_keys)
                     data = list_body.get("data") if isinstance(list_body, dict) else None
                     raw_info = data.get("info") if isinstance(data, dict) else None
                     items = [i for i in raw_info if isinstance(i, dict)] if isinstance(raw_info, list) else []

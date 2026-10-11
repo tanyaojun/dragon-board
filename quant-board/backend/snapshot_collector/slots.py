@@ -66,6 +66,14 @@ SLOT_TIMES: dict[str, list[str]] = {
 # 纯高频槽位唤醒的 theme heat 计算（上游开销不随 5 分钟频率放大）。
 SECTOR_SNAPSHOT_TYPES: frozenset[str] = frozenset({"half_hour", "hourly", "daily"})
 
+# ── 开盘槽采集延迟 ─────────────────────────────────────────────────────────────
+# 2026-10-10 用户裁决：开盘时点主力资金等数据源需 5-10 分钟轮询才完整
+#（2026-10-09 实测 09:30 帧 197/200 行 zlje 缺失，jev 冰点误判）。
+# 09:30 槽的「到期时刻」延后 10 分钟：采集/情绪/jev 全链改用 09:40 时点数据，
+# 槽位标识仍为 09:30（帧 timestamp 口径不变；实际晚采由既有 late-capture 质量链路如实标注）。
+# 单一事实源：scheduler 到期/缺失/grace 判定与 is_slot_eligible 均消费 generate_slots 的时间戳。
+SLOT_COLLECTION_DELAY_MS: dict[str, int] = {"09:30": 10 * 60 * 1000}
+
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -100,7 +108,7 @@ def generate_slots(
         if times is None:
             continue
         for t in times:
-            ts = _make_timestamp_ms(trading_date, t)
+            ts = _make_timestamp_ms(trading_date, t) + SLOT_COLLECTION_DELAY_MS.get(t, 0)
             slots.append(SnapshotSlot(st, trading_date, t, ts))
     slots.sort(key=lambda s: s.timestamp_ms)
     return slots
