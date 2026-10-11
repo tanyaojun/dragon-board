@@ -38,7 +38,7 @@ from backend.analysis.hotlist.jev_driver_ammo import (
     percentile_rank,
 )
 from backend.analysis.hotlist import jev_driver_ammo as ammo
-from backend.core.limit_rules import is_limit_down_pct
+from backend.core.limit_rules import is_limit_down_pct, limit_ratio
 from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
@@ -415,6 +415,8 @@ _POSITION_LOCK = threading.Lock()
 
 _DIV_LOCK = threading.Lock()
 _DIV_LIST_CACHE: dict[str, dict[str, tuple[float, float]]] = {}
+_DIV_FAIL_UNTIL: dict[str, float] = {}  # 失败负缓存（5 分钟退避，防重试风暴 review P1-2）
+_DIV_FAIL_TTL = 300.0
 _DAILY_CLIENT: Any = None
 _DAILY_BARS_CACHE: dict[str, list[dict]] = {}
 _TDX_DOWN_UNTIL = 0.0
@@ -510,11 +512,16 @@ def _div_event_list(date: str) -> dict[str, tuple[float, float]]:
     with _DIV_LOCK:
         if date in _DIV_LIST_CACHE:
             return _DIV_LIST_CACHE[date]
+        if time.time() < _DIV_FAIL_UNTIL.get(date, 0.0):
+            return {}  # 失败退避窗内：静默回退原口径（I-3 语义不变，防每链接重试风暴）
     out: dict[str, tuple[float, float]] = {}
     try:
         import akshare as ak
 
         df = ak.news_trade_notify_dividend_baidu(date=date.replace("-", ""))
+        if df is not None and len(df) > 0 and not {"股票代码", "交易所", "分红", "送股", "转增"} <= set(df.columns):
+            # review P2-2：百度改版列漂移 → 按失败处理（负缓存重试），不得静默当「无事件」
+            raise ValueError(f"除权日程列漂移: {list(df.columns)[:8]}")
         for _, r in (df.iterrows() if df is not None and len(df) > 0 else []):
             if str(r.get("交易所") or "") not in ("SH", "SZ"):
                 continue
@@ -527,7 +534,10 @@ def _div_event_list(date: str) -> dict[str, tuple[float, float]]:
         # 网络抖动等失败 → 直接返回不缓存（下次调用重试）、留痕；缓存空 {} 只允许出现在
         # 拉取成功但当日确无事件（原实现把失败永久缓存为 {}，当日若真有除权事件，
         # 板序/位置轴会用错参考价且无任何标记）。
-        print(f"[div-events] {date} 除权日程拉取失败（不缓存，将重试）：{type(exc).__name__}: {str(exc)[:150]}")
+        print(f"[div-events] {date} 除权日程拉取失败（负缓存 {_DIV_FAIL_TTL:.0f}s 后重试）："
+              f"{type(exc).__name__}: {str(exc)[:150]}")
+        with _DIV_LOCK:
+            _DIV_FAIL_UNTIL[date] = time.time() + _DIV_FAIL_TTL
         return {}
     with _DIV_LOCK:
         _DIV_LIST_CACHE[date] = out
@@ -541,13 +551,20 @@ def _adj_prev_series(date: str, code: str, bars: list[dict]) -> dict[str, float]
     """
     window = [b for b in bars if b["date"] <= date]
     out: dict[str, float] = {}
+    band = limit_ratio(code) + 0.05
     for i in range(1, len(window)):
         ev = _div_event_list(window[i]["date"]).get(code)
         prev_close = window[i - 1]["close"]
+        cur_close = window[i].get("close")
         if (ev and isinstance(prev_close, (int, float)) and not isinstance(prev_close, bool)
                 and prev_close > 0):
             div, bonus = ev
-            out[window[i]["date"]] = round((prev_close - div) / (1 + bonus), 2)
+            ref = round((prev_close - div) / (1 + bonus), 2)
+            # review P1-3 可信带（预登记 §一防线的逐链接实现）：当日真实涨跌幅（close/参考价）
+            # 不得超涨跌幅板+5pp——配股混合事件（百度表无配股价）会算出越界参考价，回退原口径
+            if (ref > 0 and isinstance(cur_close, (int, float)) and not isinstance(cur_close, bool)
+                    and cur_close > 0 and abs(cur_close / ref - 1) <= band):
+                out[window[i]["date"]] = ref
     return out
 
 

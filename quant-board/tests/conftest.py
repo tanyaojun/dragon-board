@@ -21,6 +21,14 @@ os.environ["QUANT_BOARD_MONGODB_SOCKET_TIMEOUT_MS"] = "30000"
 os.environ["QUANT_BOARD_REDIS_KEY_PREFIX"] = "hellobiga:dragon-board:pytest"
 # 2026-09-29 sqlite 链退役：不再注入任何 sqlite URL（pytest 全量不创建/触碰 sqlite 文件）
 
+# 2026-10-10 jev 真实通道隔离（红线 §1.2.7）：pytest 进程禁带任何真实 jev 凭据。
+# settings._load_env_file 只补缺不覆盖，此处先写死空值即可压过 .env.local 的生产 key；
+# 否则 _dispatch_jev 检测到 JEV_TYPESAFE_KEY 会绕过测试 monkeypatch 直连真实模型。
+os.environ["JEV_TYPESAFE_KEY"] = ""
+os.environ["JEV_CF_TOKEN"] = ""
+os.environ.pop("JEV_TYPESAFE_PROXY", None)
+os.environ.pop("JEV_CF_ACCOUNT", None)
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -121,3 +129,24 @@ def _guard_mongodb_test_database():
             pytrace=False,
         )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _akshare_offline_stub(monkeypatch):
+    """P1-1 review（2026-10-11）：任何测试路径触到 akshare 一律改为离线失败。
+
+    除权日程取数（_div_event_list）捕获异常后回退原口径——把「测试意外触网」从静默外呼
+    变为干净的离线回退，根绝 AGENTS §1.2-7 延伸违规；需要模拟百度日程的测试在用例内
+    自行 monkeypatch.setitem(sys.modules, "akshare", fake) 覆盖本 stub（LIFO 还原）。
+    """
+    import types
+
+    fake = types.ModuleType("akshare")
+
+    def _offline(*_a, **_k):
+        raise RuntimeError("akshare offline stub（测试禁网）")
+
+    for name in ("news_trade_notify_dividend_baidu", "stock_zh_a_hist",
+                 "stock_zh_a_hist_tx", "stock_zh_a_daily"):
+        setattr(fake, name, _offline)
+    monkeypatch.setitem(sys.modules, "akshare", fake)

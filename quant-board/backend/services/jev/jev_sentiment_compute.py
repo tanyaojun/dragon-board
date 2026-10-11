@@ -220,6 +220,7 @@ def evaluate_anchor_escape_alert(db: Any, *, dataset_id: str, trading_date: str)
         n_ok = n_escape = 0
         for doc in db["hotlist_jev_sentiment"].find(
                 {"kind": "slot", "status": "ok", "datasetId": dataset_id,
+                 "snapshotType": "half_hour",
                  "tradingDate": date, "questionSetVersion": QUESTION_SET_VERSION},
                 {"answers.crowding.choice": 1}):
             n_ok += 1
@@ -229,7 +230,8 @@ def evaluate_anchor_escape_alert(db: Any, *, dataset_id: str, trading_date: str)
 
     today_rate = _day_rate(trading_date)
     prev_docs = db["hotlist_jev_sentiment"].find(
-        {"kind": "slot", "datasetId": dataset_id, "tradingDate": {"$lt": trading_date}},
+        {"kind": "slot", "datasetId": dataset_id, "snapshotType": "half_hour",
+         "tradingDate": {"$lt": trading_date}},
         {"tradingDate": 1})
     prev_date = max((d.get("tradingDate") for d in prev_docs if d.get("tradingDate")),
                     default=None)

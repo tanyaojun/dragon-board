@@ -20,7 +20,9 @@ THS_KEYS = ("one", "two", "three", "four", "high")
 # 旧 ×1.098 少算 1–6 分钱）、跌停家数补 ST ±5%、快照取数带 datasetId 隔离。
 # 新落库文档盖 ammoVersion 戳；缺该字段的旧文档 = 旧代原料（口径未知，fail-visible），
 # 用户裁决不整月重跑（旧文档留档不回写）。
-AMMO_VERSION = "2026-10-05a"
+# 2026-10-11 P1-1（预登记 jev-ammo-p1-preregistration.md §一）：除权修正因子入叙事
+# （板序假阴根治），原料代际顺延。
+AMMO_VERSION = "2026-10-11a"
 DEFAULT_DATASET_ID = "dragonboard_live"
 
 # ── 题目集（原文平移，判据改动须走改门） ──
@@ -185,7 +187,28 @@ def _limit_pct_of(code: str, name: str | None = None) -> float:
     return limit_ratio(code)
 
 
-def position_line_from_bars(date: str, code: str, bars: list[dict]) -> str:
+def _div_scale_map(window: list[dict], adj_prev: dict[str, float] | None) -> dict[str, float]:
+    """P1-1 位置轴辅助（纯函数）：由逐日除权参考价 adj_prev 推每棒归一至今日基准的乘数。
+
+    scale(t) = Π_{s=t+1..T} 参考价(s)/raw(s-1)（无事件链接比值=1 恒等）；adj_prev 为空
+    或缺链接时该链接按 1 处理。反向递推：scale(T)=1；scale(t-1)=scale(t)×参考价(t)/raw(t-1)。
+    """
+    if not adj_prev or not window:
+        return {}
+    scale = {window[-1]["date"]: 1.0}
+    for i in range(len(window) - 1, 0, -1):
+        cur, prior = window[i], window[i - 1]
+        ref = adj_prev.get(cur["date"])
+        if (ref is None or not (isinstance(prior.get("close"), (int, float)) and prior["close"] > 0)
+                or cur["date"] not in scale):
+            scale[prior["date"]] = scale.get(cur["date"], 1.0)
+            continue
+        scale[prior["date"]] = scale[cur["date"]] * ref / prior["close"]
+    return scale
+
+
+def position_line_from_bars(date: str, code: str, bars: list[dict],
+                            adj_prev: dict[str, float] | None = None) -> str:
     """弹药 6 行：价格位置轴原始可数锚（不给档位标签防预判，阈值锚在判据里）。
     fail-visible：TDX 不可用/缺今日棒/数据不足如实标注，不伪造数字。"""
     if not bars:
@@ -196,17 +219,28 @@ def position_line_from_bars(date: str, code: str, bars: list[dict]) -> str:
         return f"个股位置：{date} 无当日日线棒（停牌或数据缺口，fail-visible）"
     if len(window) < 2:
         return "个股位置：上市数据不足 2 根日线（fail-visible）"
-    last20 = window[-20:]
-    high20 = max(b["high"] for b in last20)
-    closes20 = [b["close"] for b in last20]
+    # P1-1 除权修正：窗口价格归一至今日基准（逐日除权参考价递推），未提供=原口径（字节不变）
+    if adj_prev:
+        scale = _div_scale_map(window, adj_prev)
+        last20 = window[-20:]
+        high20 = max(b["high"] * scale.get(b["date"], 1.0) for b in last20)
+        closes20 = [b["close"] * scale.get(b["date"], 1.0) for b in last20]
+        today_close = today["close"] * scale.get(date, 1.0)
+        adj_note = " · 除权修正已应用"
+    else:
+        last20 = window[-20:]
+        high20 = max(b["high"] for b in last20)
+        closes20 = [b["close"] for b in last20]
+        today_close = today["close"]
+        adj_note = ""
     low_close = min(closes20)
     low_ago = len(closes20) - 1 - closes20.index(low_close)
-    gap_pct = (high20 - today["close"]) / high20 * 100
-    chg_pct = (today["close"] - low_close) / low_close * 100
+    gap_pct = (high20 - today_close) / high20 * 100
+    chg_pct = (today_close - low_close) / low_close * 100
     # 形态锚（v0.4 用户判例校准：位置分界看低点新鲜度不只看涨幅）
     prev5_close = closes20[-6] if len(closes20) >= 6 else closes20[0]
-    contrib_pct = (today["close"] - prev5_close) / (today["close"] - low_close) * 100 \
-        if today["close"] > low_close else None
+    contrib_pct = (today_close - prev5_close) / (today_close - low_close) * 100 \
+        if today_close > low_close else None
     contrib_txt = f"{contrib_pct:.0f}%" if contrib_pct is not None else "不可算"
     # 量能锚（v0.5 用户令：对比前三日均量——缩量涨停/放量涨停语义不同）
     prev3_vols = [b["vol"] for b in last20[-4:-1]]
@@ -220,23 +254,27 @@ def position_line_from_bars(date: str, code: str, bars: list[dict]) -> str:
     else:
         vol_txt = "前 3 日量能缺失（fail-visible）"
     note = "" if len(last20) >= 20 else f"（上市窗口仅 {len(last20)} 根）"
-    return (f"个股位置：现价 {today['close']:.2f} · 距 20 日最高 {high20:.2f} 差 {gap_pct:.1f}%"
+    return (f"个股位置：现价 {today_close:.2f} · 距 20 日最高 {high20:.2f} 差 {gap_pct:.1f}%"
             f" · 20 日窗口涨幅 {chg_pct:+.1f}%（最低收盘 {low_close:.2f}，距今 {low_ago} 个交易日）"
             f" · 近 5 日贡献 {contrib_txt}{note}"
-            f" · 量能：{vol_txt}")
+            f" · 量能：{vol_txt}{adj_note}")
 
 
 def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
-                            bars: list[dict]) -> str:
+                            bars: list[dict],
+                            adj_prev: dict[str, float] | None = None) -> str:
     """弹药 7：近 n 日涨停序列（收盘口径，板籍阈值判定）——几天几板/断板反包（隔日弱转强）机械锚。
-    fail-visible：日线缺当日棒/窗口不足如实标注；除权日 prev_close 失真属已知边缘（登记）。"""
+    fail-visible：日线缺当日棒/窗口不足如实标注。P1-1：adj_prev 提供时逐链用除权参考价
+    （交易所公式精确昨收，原「除权日 prev_close 失真」已知边缘根治），None=原口径。"""
     window = [b for b in bars if b["date"] <= date]
     if not window or window[-1]["date"] != date:
         return "板序：当日日线棒缺失（fail-visible）"
+    adj_note = " · 除权修正已应用" if adj_prev else ""
     seq: list[int] = []
     i = len(window) - 1
     while i >= 1 and len(seq) < n:
-        up = window[i]["close"] >= round(window[i - 1]["close"] * (1 + _limit_pct_of(code, name)), 2) - 1e-6
+        prev_close = (adj_prev or {}).get(window[i]["date"]) or window[i - 1]["close"]
+        up = window[i]["close"] >= round(prev_close * (1 + _limit_pct_of(code, name)), 2) - 1e-6
         seq.append(1 if up else 0)
         i -= 1
     if not seq:
@@ -251,7 +289,7 @@ def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
     rewrap = seq[-1] == 1 and (len(seq) < 2 or seq[-2] == 0) and any(seq[:-1])
     tag = " · 今日=断板反包（隔日弱转强）" if rewrap else ""
     return (f"板序：近 {len(seq)} 日 {marks}（●=涨停，末位今日） · 当前连板 {streak}"
-            f" · 窗口内 {sum(seq)} 板{tag}")
+            f" · 窗口内 {sum(seq)} 板{tag}{adj_note}")
 
 
 def board_shape_line_from_bars(date: str, code: str, name: str | None,

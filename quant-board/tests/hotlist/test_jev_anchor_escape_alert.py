@@ -50,7 +50,8 @@ class _FakeDb:
 
 def _slot(date, escape: bool, stamped=True):
     doc = {"_id": f"d:{date}:{escape}", "kind": "slot", "status": "ok",
-           "datasetId": "dragonboard_live", "tradingDate": date,
+           "datasetId": "dragonboard_live", "snapshotType": "half_hour",
+           "tradingDate": date,
            "evidenceRaw": {"limit": {"ztCount": 50}}}
     if stamped:
         doc["questionSetVersion"] = V
@@ -111,6 +112,39 @@ def test_baseline_counts_only_current_generation_docs():
     res = evaluate_anchor_escape_alert(db, dataset_id="dragonboard_live",
                                        trading_date="2026-10-10")
     assert res["todayRate"] == 1.0 and res["alert"] is True
+
+
+def test_alert_eval_failure_does_not_block_main_flow(monkeypatch):
+    """review P2：评估自身抛异常 → EOD 主链路照常 ok 落库，锚字段如实 None（守护 try/except）。"""
+    days = ["2026-09-29", "2026-09-30"]
+    from tests.hotlist.test_jev_sentiment_compute import FakeMongoDb, frame_rows
+    db = FakeMongoDb({
+        "snapshot_frames": frame_rows(days),
+        "snapshot_stock_rows": [{"datasetId": "dragonboard_live", "snapshotId": f"half_hour:{d}:15:00",
+                                 "code": "000001", "name": "甲", "rank": 1, "heat": 90,
+                                 "pctChange": 9.9, "change": 9.9, "price": 9.66,
+                                 "limitUpPrice": 9.66, "zlje": 3.0e6} for d in days],
+        "hotlist_jev_sentiment": [],
+    })
+    monkeypatch.setattr(v2_module, "_jev_config", lambda: (True, "tok", "acc"))
+    monkeypatch.setattr(v2_module, "call_jev", lambda *a, **k: (
+        {"result": {"state": "Completed",
+                    "result": {"model": "m", "answers": {
+                        "day_stage": {"type": "choice", "choice": "ferment", "probabilities": {}},
+                        "day_crowding": {"type": "choice", "choice": "no_crowding", "probabilities": {}},
+                        "day_temperature": {"type": "score", "score": 5, "legend": {"0": 1, "11": 1}},
+                        "day_pattern": {"type": "choice", "choice": "rally_fade", "probabilities": {}}}}},
+         }, 100))
+
+    def _boom(*a, **k):
+        raise RuntimeError("评估炸了")
+
+    monkeypatch.setattr(v2_module, "evaluate_anchor_escape_alert", _boom)
+    result = compute_and_upsert_for_day(db, dataset_id="dragonboard_live",
+                                        trading_date="2026-09-30")
+    assert result["written"] is True and result["status"] == "ok"
+    doc = next(r for r in db["hotlist_jev_sentiment"].rows if r.get("kind") == "eod")
+    assert doc["anchorEscapeRate"] is None and doc["anchorEscapeAlert"] is None
 
 
 # ── 集成：EOD 计算落库嵌入告警字段（只上报：主链路照常 ok） ──

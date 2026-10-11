@@ -112,9 +112,12 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
     # 首板也收录（one 桶），补「韭研 num 首板不标→高位不可判」的洞；判据零改动。
     ths_prev = ths_positions(db, prev_dates[-1], dataset_id).get(code) if prev_dates else None
     if ths_prev and ths_prev.get("continueDay"):
-        # THS continue_day 实为「2连板」字符串（603337/002584 实证），剥后缀统一口径
-        cd = str(ths_prev["continueDay"]).replace("连板", "") or "?"
-        ths_txt = (f"昨日身位（THS 连板梯队）：昨日{cd}连板"
+        # THS continue_day 实为「2连板」字符串（603337/002584 实证），剥后缀统一口径；
+        # 剥后非纯数字（「首板」「2天2板」等异形）→ 如实原样展示不套模板（review P2-4）
+        cd = str(ths_prev["continueDay"]).replace("连板", "").strip()
+        core = (f"昨日{cd}连板" if cd.isdigit()
+                else f"THS 原值「{str(ths_prev['continueDay']).strip()}」")
+        ths_txt = (f"昨日身位（THS 连板梯队）：{core}"
                    f"（梯队 {ths_prev.get('ladder') or '?'} · 首封 {ths_prev.get('firstSeal') or '?'}）")
     elif prev_dates:
         ths_txt = "昨日身位（THS 连板梯队）：未收录（昨日未涨停或 THS 池缺口，fail-visible）"
