@@ -98,17 +98,17 @@ def _trajectory(slot_rows: list[tuple[str, dict[str, dict]]], code: str) -> list
     return out
 
 
-def _prev_day_stage(db, date: str, dataset_id: str, code: str) -> tuple[str | None, Any]:
+def _prev_day_stage(db, date: str, dataset_id: str, code: str, slot: str = PILOT_SLOT) -> tuple[str | None, Any]:
     """前一交易日（有 15:00 帧的最大 tradingDate < date）该股 lifecycle stage。缺 → (None, None)。"""
     frames = db["snapshot_frames"].find(
-        {"datasetId": dataset_id, "type": "half_hour", "slotTime": PILOT_SLOT},
+        {"datasetId": dataset_id, "type": "half_hour", "slotTime": slot},
         {"tradingDate": 1})
     dates = sorted({str(f.get("tradingDate")) for f in frames
                     if str(f.get("tradingDate") or "") and str(f.get("tradingDate")) < date})
     if not dates:
         return None, None
     prev = dates[-1]
-    frame = _slot_frame(db, prev, dataset_id)
+    frame = _slot_frame(db, prev, dataset_id, slot)
     if not frame:
         return prev, None
     doc = db["snapshot_analysis"].find_one(
@@ -120,10 +120,11 @@ def _prev_day_stage(db, date: str, dataset_id: str, code: str) -> tuple[str | No
 
 # ── 人口构建（纯取数+预检；无调用）──
 
-def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict:
+def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                      slot: str = PILOT_SLOT) -> dict:
     """题集 A 人口。返回 {"buy","sell","insufficient","meta"}；
     候选={code,name,synergyTier,synergyDirection,dims,resonanceScore,riskFlag,row,trajectory}。"""
-    frame = _slot_frame(db, date, dataset_id)
+    frame = _slot_frame(db, date, dataset_id, slot)
     if not frame:
         return {"buy": [], "sell": [], "insufficient": [], "meta": {"error": "no_frame", "tradingDate": date}}
     sid = str(frame.get("snapshotId") or "")
@@ -173,9 +174,10 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     return {"buy": buy, "sell": sell, "insufficient": insufficient, "meta": meta}
 
 
-def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict:
+def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                             slot: str = PILOT_SLOT) -> dict:
     """题集 B 人口（非 cooling）。候选含叙事原料；data_insufficient 萡 insufficient。"""
-    frame = _slot_frame(db, date, dataset_id)
+    frame = _slot_frame(db, date, dataset_id, slot)
     if not frame:
         return {"candidates": [], "insufficient": [], "meta": {"error": "no_frame", "tradingDate": date}}
     sid = str(frame.get("snapshotId") or "")
@@ -198,7 +200,7 @@ def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_
         traj = _trajectory(slot_rows, code)
         computable = sum(1 for t in traj if t.get("rank") is not None or t.get("change") is not None)
         missing: list[str] = []
-        prev_date, prev_stage = _prev_day_stage(db, date, dataset_id, code)
+        prev_date, prev_stage = _prev_day_stage(db, date, dataset_id, code, slot)
         if prev_stage is None:
             missing.append("prev_stage_missing")
         if not metrics:
@@ -222,9 +224,9 @@ def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_
 # ── 留痕文档（data_insufficient：不调用，落 riskFlag 留痕，预登记 §二·四/§三·四）──
 
 def _insufficient_doc(kind: str, date: str, code: str, name: Any, rf: dict,
-                      question_set_version: str, qhash: str) -> dict:
-    return {"_id": f"{date}:{PILOT_SLOT}:{code}:{kind}", "origin": f"{kind}_pilot",
-            "tradingDate": date, "slotTime": PILOT_SLOT, "code": code, "name": name,
+                      question_set_version: str, qhash: str, slot: str = PILOT_SLOT) -> dict:
+    return {"_id": f"{date}:{slot}:{code}:{kind}", "origin": f"{kind}_pilot",
+            "tradingDate": date, "slotTime": slot, "code": code, "name": name,
             "ammoVersion": VOTE_AMMO_VERSION, "questionSetVersion": question_set_version,
             "questionSetHash": qhash, "riskFlag": rf, "status": "data_insufficient",
             "answers": None, "responseRaw": None, "usage": None, "latencyMs": None,
@@ -235,7 +237,8 @@ def _insufficient_doc(kind: str, date: str, code: str, name: Any, rf: dict,
 
 def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                  fire: bool = False, cap_buy: int = 8, cap_sell: int = 4,
-                 workers: int = 1, token_fuse: int | None = None) -> dict:
+                 workers: int = 1, token_fuse: int | None = None,
+                 slot: str = PILOT_SLOT) -> dict:
     """题集 A：方向投票二次确认。落 hotlist_jev_vote_confirm_pilot（_id={date}:15:00:{code}:VOTE）。
     cap_buy/cap_sell 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。
     workers>1=并发（生产回填 §六·产）；token_fuse 缺省=TOKEN_FUSE(150k)，回填显式放宽。"""
@@ -246,31 +249,31 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
     tokens = 0
     stats = {"ok": 0, "degraded": 0, "skip": 0, "data_insufficient": 0, "no_frame": 0}
     for date in dates:
-        pop = build_vote_population(db, date, dataset_id)
+        pop = build_vote_population(db, date, dataset_id, slot)
         if pop["meta"].get("error"):
             stats["no_frame"] += 1
-            print(f"[vote] {date} 无 half_hour {PILOT_SLOT} 帧，跳过")
+            print(f"[vote] {date} 无 half_hour {slot} 帧，跳过")
             continue
         sparse = pop["meta"]["sparse_fields"]
         print(f"[vote] {date} 人口 buy={len(pop['buy'])} sell={len(pop['sell'])} "
               f"预检不足={len(pop['insufficient'])} 帧级稀疏字段={sparse or '无'}")
         if fire:
             for c in pop["insufficient"]:
-                col.replace_one({"_id": f"{date}:{PILOT_SLOT}:{c['code']}:VOTE"},
+                col.replace_one({"_id": f"{date}:{slot}:{c['code']}:VOTE"},
                                 _insufficient_doc("VOTE", date, c["code"], c["name"],
-                                                  c["riskFlag"], QUESTION_SET_VERSION_VOTE_CONFIRM, qhash),
+                                                  c["riskFlag"], QUESTION_SET_VERSION_VOTE_CONFIRM, qhash, slot),
                                 upsert=True)
                 stats["data_insufficient"] += 1
         sample = sample_vote(pop["buy"], pop["sell"], cap_buy=cap_buy, cap_sell=cap_sell)
 
         def _work_vote(c: dict) -> tuple[str, dict, int]:
             """单股一次 jev 调用+落库（pymongo replace_one 线程安全）；返回 (code, doc, tokens)。"""
-            _id = f"{date}:{PILOT_SLOT}:{c['code']}:VOTE"
+            _id = f"{date}:{slot}:{c['code']}:VOTE"
             row = c["row"]
             # EOD 补齐读法挂载点（pilot 主口径 15:00 单帧：sparse 通常为空，函数为 EOD 视角预留）
             row, _, _ = backfill_quote_fields(row, None, sparse)
             narrative = build_vote_narrative(
-                trading_date=date, slot=PILOT_SLOT, code=c["code"], name=c["name"],
+                trading_date=date, slot=slot, code=c["code"], name=c["name"],
                 resonance=c["resonance"], trend=c["trend"], cross_section=c["crossSection"],
                 volume_price=c["volumePrice"], trend_events=c["trendEvents"], row=row,
                 sparse_fields=sparse, trajectory=c["trajectory"],
@@ -280,7 +283,7 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
             used = _usage_tokens(parsed.get("usage"))
             ans = (parsed.get("answers") or {}).get("vote_direction") or {}
             doc = {"_id": _id, "origin": "vote_confirm_pilot", "tradingDate": date,
-                   "slotTime": PILOT_SLOT, "code": c["code"], "name": c["name"],
+                   "slotTime": slot, "code": c["code"], "name": c["name"],
                    "ammoVersion": VOTE_AMMO_VERSION,
                    "questionSetVersion": QUESTION_SET_VERSION_VOTE_CONFIRM,
                    "questionSetHash": qhash, "riskFlag": c["riskFlag"],
@@ -299,14 +302,14 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
 
         todo = []
         for c in sample:
-            _id = f"{date}:{PILOT_SLOT}:{c['code']}:VOTE"
+            _id = f"{date}:{slot}:{c['code']}:VOTE"
             if col.find_one({"_id": _id, "status": "ok"}):
                 stats["skip"] += 1
                 continue
             todo.append(c)
         if not fire:
             for c in todo:
-                print(f"[vote] dry-run {date}:{c['code']}:{PILOT_SLOT}:VOTE "
+                print(f"[vote] dry-run {date}:{c['code']}:{slot}:VOTE "
                       f"riskFlag={c['riskFlag']['level']}")
             continue
         if workers > 1:
@@ -338,7 +341,8 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
 
 def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                       fire: bool = False, cap_igex: int = 5, cap_total: int = 8,
-                      workers: int = 1, token_fuse: int | None = None) -> dict:
+                      workers: int = 1, token_fuse: int | None = None,
+                      slot: str = PILOT_SLOT) -> dict:
     """题集 B：环境门阶段诊断复核。落 hotlist_jev_lifecycle_recheck_pilot。
     cap_igex/cap_total 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。
     workers>1=并发（生产回填 §六·产）；token_fuse 缺省=TOKEN_FUSE(150k)，回填显式放宽。"""
@@ -349,29 +353,29 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
     tokens = 0
     stats = {"ok": 0, "degraded": 0, "skip": 0, "data_insufficient": 0, "no_frame": 0}
     for date in dates:
-        pop = build_lifecycle_population(db, date, dataset_id)
+        pop = build_lifecycle_population(db, date, dataset_id, slot)
         if pop["meta"].get("error"):
             stats["no_frame"] += 1
-            print(f"[lifecycle] {date} 无 half_hour {PILOT_SLOT} 帧，跳过")
+            print(f"[lifecycle] {date} 无 half_hour {slot} 帧，跳过")
             continue
         print(f"[lifecycle] {date} 人口={len(pop['candidates'])} 预检不足={len(pop['insufficient'])}")
         if fire:
             for c in pop["insufficient"]:
-                col.replace_one({"_id": f"{date}:{PILOT_SLOT}:{c['code']}:LC"},
+                col.replace_one({"_id": f"{date}:{slot}:{c['code']}:LC"},
                                 _insufficient_doc("LC", date, c["code"], c["name"],
-                                                  c["riskFlag"], QUESTION_SET_VERSION_LIFECYCLE_RECHECK, qhash),
+                                                  c["riskFlag"], QUESTION_SET_VERSION_LIFECYCLE_RECHECK, qhash, slot),
                                 upsert=True)
                 stats["data_insufficient"] += 1
         sample = sample_lifecycle(pop["candidates"], cap_igex=cap_igex, cap_total=cap_total)
 
         def _work_lc(c: dict) -> tuple[str, dict, int]:
             """单股一次 jev 调用+落库；返回 (code, doc, tokens)。"""
-            _id = f"{date}:{PILOT_SLOT}:{c['code']}:LC"
+            _id = f"{date}:{slot}:{c['code']}:LC"
             prev_line = (f"{c['prevDate']} 阶段={STAGE_ZH.get(str(c['prevStage']), c['prevStage'])}"
                          if c["prevStage"] else
                          f"{c['prevDate'] or '无更早帧'} 前一交易日阶段：数据缺口（fail-visible）")
             narrative = build_lifecycle_narrative(
-                trading_date=date, slot=PILOT_SLOT, code=c["code"], name=c["name"],
+                trading_date=date, slot=slot, code=c["code"], name=c["name"],
                 trajectory=c["trajectory"], metrics=c["metrics"], evidence=c["evidence"],
                 prev_stage_line=prev_line, stage=c["stage"], action=c["action"],
                 confidence=c["confidence"], reasons=c["reasons"])
@@ -380,7 +384,7 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
             used = _usage_tokens(parsed.get("usage"))
             ans = (parsed.get("answers") or {}).get("lifecycle_stage_recheck") or {}
             doc = {"_id": _id, "origin": "lifecycle_recheck_pilot", "tradingDate": date,
-                   "slotTime": PILOT_SLOT, "code": c["code"], "name": c["name"],
+                   "slotTime": slot, "code": c["code"], "name": c["name"],
                    "ammoVersion": VOTE_AMMO_VERSION,
                    "questionSetVersion": QUESTION_SET_VERSION_LIFECYCLE_RECHECK,
                    "questionSetHash": qhash, "riskFlag": c["riskFlag"],
@@ -400,14 +404,14 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
 
         todo = []
         for c in sample:
-            _id = f"{date}:{PILOT_SLOT}:{c['code']}:LC"
+            _id = f"{date}:{slot}:{c['code']}:LC"
             if col.find_one({"_id": _id, "status": "ok"}):
                 stats["skip"] += 1
                 continue
             todo.append(c)
         if not fire:
             for c in todo:
-                print(f"[lifecycle] dry-run {date}:{c['code']}:{PILOT_SLOT}:LC "
+                print(f"[lifecycle] dry-run {date}:{c['code']}:{slot}:LC "
                       f"riskFlag={c['riskFlag']['level']}")
             continue
         if workers > 1:
@@ -436,6 +440,73 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
     return stats
 
 
+# ── watch 常驻轮询（用户裁决 2026-10-12：每帧落库后即跑，不等收盘）──
+
+HALF_HOUR_SLOTS = ("09:30", "10:00", "10:30", "11:00", "11:30",
+                   "13:00", "13:30", "14:00", "14:30", "15:00")
+
+
+def _due_slot(now: "time.struct_time|None" = None, grace: int = 120) -> str | None:
+    """最近一个「已结束满 grace 秒」的 half_hour 槽（给落库留缓冲）；非交易时段 → None。"""
+    import datetime as _dt
+    now = now or _dt.datetime.now()
+    cur = now.hour * 60 + now.minute
+    due = None
+    for s in HALF_HOUR_SLOTS:
+        h, m = int(s[:2]), int(s[3:])
+        if cur * 60 + now.second >= h * 3600 + m * 60 + grace:
+            due = s
+    return due
+
+
+def _frame_mark_done(db, col_name: str, date: str, slot: str, kind: str) -> bool:
+    """帧级运行标记：已跑过（ok 标记在）→ True，跳过；零成本幂等防重。"""
+    return db[col_name].find_one({"_id": f"{date}:{slot}:MARK:{kind}"}) is not None
+
+
+def _write_frame_mark(db, col_name: str, date: str, slot: str, kind: str,
+                      stats: dict) -> None:
+    db[col_name].replace_one(
+        {"_id": f"{date}:{slot}:MARK:{kind}"},
+        {"_id": f"{date}:{slot}:MARK:{kind}", "origin": "frame_run_marker",
+         "status": "run_marker", "tradingDate": date, "slotTime": slot,
+         "stats": {k: v for k, v in stats.items() if k != "tokens"},
+         "tokens": stats.get("tokens"),
+         "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}, upsert=True)
+
+
+def watch(db, dataset_id: str = DEFAULT_DATASET_ID, interval: int = 60,
+          workers: int = 1, token_fuse: int | None = None) -> None:
+    """常驻轮询：每 interval 秒检查最近已落库 half_hour 槽，未跑过则全量判读该帧（A+B）。
+
+    - 幂等：帧级标记防重；进程重启无损（状态全在库内）；
+    - fail-visible：帧未落库（采集延迟/非交易日）→ no_frame 零成本跳过，下轮再试；
+    - 不碰 snapshot_collector 采集进程（jev 外呼不进采集链，失败绝不阻断采集）。
+    """
+    print(f"[watch] 启动：interval={interval}s workers={workers} "
+          f"fuse={token_fuse or TOKEN_FUSE}（Ctrl+C 停止，重启无损）")
+    while True:
+        slot = _due_slot()
+        if slot:
+            date = time.strftime("%Y-%m-%d")
+            for col_name, kind, runner_fn, kwargs in (
+                    ("hotlist_jev_vote_confirm_pilot", "VOTE", run_vote_day,
+                     {"cap_buy": 200, "cap_sell": 200}),
+                    ("hotlist_jev_lifecycle_recheck_pilot", "LC", run_lifecycle_day,
+                     {"cap_igex": 100, "cap_total": 200})):
+                try:
+                    if _frame_mark_done(db, col_name, date, slot, kind):
+                        continue
+                    print(f"[watch] {date} {slot} 帧 → 题{'A' if kind == 'VOTE' else 'B'} 判读...")
+                    stats = runner_fn(db, [date], dataset_id, fire=True,
+                                      workers=workers, token_fuse=token_fuse,
+                                      slot=slot, **kwargs)
+                    _write_frame_mark(db, col_name, date, slot, kind, stats)
+                except Exception as e:  # fail-visible：单帧失败不炸常驻，下轮重试（幂等）
+                    print(f"[watch] {date} {slot} {kind} 异常：{type(e).__name__}: {str(e)[:150]}（下轮重试）")
+        time.sleep(interval)
+
+
 def __main__():
     ap = argparse.ArgumentParser()
     ap.add_argument("--vote-day", dest="vote_day", action="append", default=[],
@@ -453,6 +524,13 @@ def __main__():
                     help="并发数（默认 1 串行；生产回填建议 4，jiuyan 先例默认 2）")
     ap.add_argument("--token-fuse", dest="token_fuse", type=int, default=None,
                     help="本次运行熔断线（缺省=150k；全量回填显式放宽，预登记 §六·产）")
+    ap.add_argument("--slot", dest="slot", default=PILOT_SLOT,
+                    help="帧级口径（用户裁决 2026-10-12：每帧落库后即跑；默认 15:00 保持回填兼容）")
+    ap.add_argument("--watch", action="store_true",
+                    help="常驻轮询模式：每个 half_hour 槽落库后自动全量判读该帧（幂等标记防重；"
+                         "不碰采集进程，帧未落库则 no_frame 零成本跳过）")
+    ap.add_argument("--watch-interval", dest="watch_interval", type=int, default=60,
+                    help="watch 轮询间隔秒（默认 60）")
     args = ap.parse_args()
     if not args.vote_day and not args.lifecycle_day:
         raise SystemExit("需要 --vote-day 或 --lifecycle-day（可多次传参）")
@@ -461,14 +539,18 @@ def __main__():
         raise SystemExit("--fire 需要环境变量 JEV_CF_TOKEN 或 JEV_TYPESAFE_KEY")
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
+    if args.watch:
+        watch(db, dataset_id=args.dataset_id, interval=args.watch_interval,
+              workers=args.workers, token_fuse=args.token_fuse)
+        return
     if args.vote_day:
         run_vote_day(db, args.vote_day, args.dataset_id, fire=args.fire,
                      cap_buy=args.vote_cap_buy, cap_sell=args.vote_cap_sell,
-                     workers=args.workers, token_fuse=args.token_fuse)
+                     workers=args.workers, token_fuse=args.token_fuse, slot=args.slot)
     if args.lifecycle_day:
         run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire,
                           cap_igex=args.lc_cap_igex, cap_total=args.lc_cap_total,
-                          workers=args.workers, token_fuse=args.token_fuse)
+                          workers=args.workers, token_fuse=args.token_fuse, slot=args.slot)
 
 
 if __name__ == "__main__":

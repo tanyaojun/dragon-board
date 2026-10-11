@@ -573,3 +573,49 @@ def test_run_vote_serial_fuse_default(monkeypatch):
     monkeypatch.setattr(runner, "_dispatch_jev", lambda s, q: (dict(ENV_OK), 1))
     stats = runner.run_vote_day(_vote_db(), [DATE], fire=True)
     assert stats["ok"] == 2 and stats["tokens"] == 2160
+
+
+# ── 帧级口径（用户裁决 2026-10-12：每帧落库后即跑）──
+
+
+def test_slot_parameterized_ids_and_narrative(monkeypatch):
+    """--slot 帧级口径：_id 含槽位、叙事槽位行、与 15:00 存量互不干扰，数据真来自该帧。"""
+    def fake_dispatch(state, questions):
+        return dict(ENV_OK), 1
+
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
+    db = _vote_db()
+    sid10 = "half_hour:2026-09-30:10:00"
+    db["snapshot_analysis"].docs.append(
+        {**_ana("600001", "B"), "snapshotId": sid10})
+    db["snapshot_analysis"].docs.append(
+        {**_ana("600002", "D", res="D", vp="E", stage="reversal"), "snapshotId": sid10})
+    runner.run_vote_day(db, [DATE], fire=True, slot="10:00")
+    docs = db["hotlist_jev_vote_confirm_pilot"].docs
+    assert docs and all(d["_id"].startswith(f"{DATE}:10:00:") for d in docs)
+    assert all("10:00 槽" in d["narrative"] for d in docs if "narrative" in d)
+    assert all("15:00 槽" not in d.get("narrative", "") for d in docs)
+    # 数据真来自 10:00 帧：600002（D/vpE）在该帧人口内被采
+    assert any(d.get("code") == "600002" for d in docs)
+
+
+def test_due_slot_logic():
+    import datetime as dt
+    # 盘中 10:31:30 → 最近已满 120s 缓冲的槽 = 10:00（10:30 未满缓冲）
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 10, 31, 30)) == "10:00"
+    # 盘中 10:33 → 10:30
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 10, 33, 0)) == "10:30"
+    # 盘前 09:00 → None
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 9, 0, 0)) is None
+    # 收盘后 15:06 → 15:00
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 15, 6, 0)) == "15:00"
+
+
+def test_frame_mark_roundtrip():
+    db = _Db({"hotlist_jev_vote_confirm_pilot": _Col([])})
+    assert not runner._frame_mark_done(db, "hotlist_jev_vote_confirm_pilot", DATE, "10:00", "VOTE")
+    runner._write_frame_mark(db, "hotlist_jev_vote_confirm_pilot", DATE, "10:00", "VOTE",
+                             {"ok": 5, "tokens": 123})
+    assert runner._frame_mark_done(db, "hotlist_jev_vote_confirm_pilot", DATE, "10:00", "VOTE")
+    mark = db["hotlist_jev_vote_confirm_pilot"].find_one({"_id": f"{DATE}:10:00:MARK:VOTE"})
+    assert mark["status"] == "run_marker" and mark["tokens"] == 123
