@@ -703,3 +703,29 @@ def test_run_lifecycle_include_cooling_fire(monkeypatch):
     stats = runner.run_lifecycle_day(_vote_db(), [DATE], fire=True,
                                      cap_igex=100, cap_total=200, include_cooling=True)
     assert stats["ok"] == 5  # 全量人口 5 例（2 非 cooling + 3 cooling）
+
+
+# ── A 人口全量覆盖（用户裁决 2026-10-12：250 只池 VOTE 也要全覆盖，C 档无方向票也判）──
+
+
+def test_vote_population_include_neutral():
+    """缺省=pilot 口径（C 不进）；include_neutral=True C 档进 neutral 桶全量判读。"""
+    db = _vote_db()  # 600003 syn C
+    pop_pilot = runner.build_vote_population(db, DATE)
+    assert all("600003" not in {c["code"] for c in pop_pilot[k]} for k in ("buy", "sell", "neutral"))
+    pop_full = runner.build_vote_population(db, DATE, include_neutral=True)
+    codes = {c["code"] for c in pop_full["neutral"]}
+    assert "600003" in codes
+    c3 = next(c for c in pop_full["neutral"] if c["code"] == "600003")
+    assert c3["synergyDirection"] == "hold"  # C→hold 对照锚
+    assert c3["riskFlag"]["level"] == "partial"  # 600003 证据行缺失（fixture 设定）→ partial 仍判读
+
+
+def test_run_vote_include_neutral_fire(monkeypatch):
+    def fake_dispatch(state, questions):
+        return dict(ENV_OK), 1
+
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
+    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True,
+                                cap_buy=200, cap_sell=200, include_neutral=True)
+    assert stats["ok"] == 3  # 600001 buy + 600002 sell + 600003 neutral（全量无帽）

@@ -147,7 +147,7 @@ def _prev_day_stage(db, date: str, dataset_id: str, code: str, slot: str = PILOT
 # ── 人口构建（纯取数+预检；无调用）──
 
 def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
-                      slot: str = PILOT_SLOT) -> dict:
+                      slot: str = PILOT_SLOT, include_neutral: bool = False) -> dict:
     """题集 A 人口。返回 {"buy","sell","insufficient","meta"}；
     候选={code,name,synergyTier,synergyDirection,dims,resonanceScore,riskFlag,row,trajectory}。"""
     frame = _slot_frame(db, date, dataset_id, slot)
@@ -161,6 +161,7 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     multi_day = _multi_day_rows_by_day(db, date, dataset_id, slot)
     buy: list[dict] = []
     sell: list[dict] = []
+    neutral: list[dict] = []
     insufficient: list[dict] = []
     for doc in db["snapshot_analysis"].find({"datasetId": dataset_id, "snapshotId": sid}):
         code = str(doc.get("code") or "")
@@ -168,7 +169,8 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         obs = a.get("observation") or {}
         syn_tier = (obs.get("synergy") or {}).get("signalTier")
         if syn_tier not in ("S", "A", "B", "D"):
-            continue  # 人口外（C 无方向 / E 归 B 语境）
+            if not (include_neutral and syn_tier == "C"):
+                continue  # 人口外（E 归 B 语境；C 无方向——生产全量覆盖传 include_neutral）
         res = a.get("resonance") or {}
         rt = obs.get("rankTrend") or {}
         cs = obs.get("crossSection") or {}
@@ -195,11 +197,14 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             insufficient.append(cand)
         elif syn_tier in ("S", "A", "B"):
             buy.append(cand)
-        else:
+        elif syn_tier == "D":
             sell.append(cand)
+        else:
+            neutral.append(cand)  # C 档（include_neutral 生产全量口径；无方向也全量判读）
     meta = {"tradingDate": date, "snapshotId": sid, "sparse_fields": sparse,
-            "population_n": len(buy) + len(sell) + len(insufficient)}
-    return {"buy": buy, "sell": sell, "insufficient": insufficient, "meta": meta}
+            "population_n": len(buy) + len(sell) + len(neutral) + len(insufficient)}
+    return {"buy": buy, "sell": sell, "neutral": neutral,
+            "insufficient": insufficient, "meta": meta}
 
 
 def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
@@ -272,7 +277,7 @@ def _insufficient_doc(kind: str, date: str, code: str, name: Any, rf: dict,
 def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                  fire: bool = False, cap_buy: int = 8, cap_sell: int = 4,
                  workers: int = 1, token_fuse: int | None = None,
-                 slot: str = PILOT_SLOT) -> dict:
+                 slot: str = PILOT_SLOT, include_neutral: bool = False) -> dict:
     """题集 A：方向投票二次确认。落 hotlist_jev_vote_confirm_pilot（_id={date}:15:00:{code}:VOTE）。
     cap_buy/cap_sell 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。
     workers>1=并发（生产回填 §六·产）；token_fuse 缺省=TOKEN_FUSE(150k)，回填显式放宽。"""
@@ -283,7 +288,8 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
     tokens = 0
     stats = {"ok": 0, "degraded": 0, "skip": 0, "data_insufficient": 0, "no_frame": 0}
     for date in dates:
-        pop = build_vote_population(db, date, dataset_id, slot)
+        pop = build_vote_population(db, date, dataset_id, slot,
+                                    include_neutral=include_neutral)
         if pop["meta"].get("error"):
             stats["no_frame"] += 1
             print(f"[vote] {date} 无 half_hour {slot} 帧，跳过")
@@ -299,6 +305,8 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                                 upsert=True)
                 stats["data_insufficient"] += 1
         sample = sample_vote(pop["buy"], pop["sell"], cap_buy=cap_buy, cap_sell=cap_sell)
+        if pop.get("neutral"):
+            sample = sample + pop["neutral"]  # C 档全量判读（无帽，生产覆盖口径）
 
         def _work_vote(c: dict) -> tuple[str, dict, int]:
             """单股一次 jev 调用+落库（pymongo replace_one 线程安全）；返回 (code, doc, tokens)。"""
@@ -515,7 +523,7 @@ def _write_frame_mark(db, col_name: str, date: str, slot: str, kind: str,
 
 def watch(db, dataset_id: str = DEFAULT_DATASET_ID, interval: int = 60,
           workers: int = 1, token_fuse: int | None = None,
-          include_cooling: bool = False) -> None:
+          include_cooling: bool = False, include_neutral: bool = False) -> None:
     """常驻轮询：每 interval 秒检查最近已落库 half_hour 槽，未跑过则全量判读该帧（A+B）。
 
     - 幂等：帧级标记防重；进程重启无损（状态全在库内）；
@@ -530,7 +538,7 @@ def watch(db, dataset_id: str = DEFAULT_DATASET_ID, interval: int = 60,
             date = time.strftime("%Y-%m-%d")
             for col_name, kind, runner_fn, kwargs in (
                     ("hotlist_jev_vote_confirm_pilot", "VOTE", run_vote_day,
-                     {"cap_buy": 200, "cap_sell": 200}),
+                     {"cap_buy": 200, "cap_sell": 200, "include_neutral": include_neutral}),
                     ("hotlist_jev_lifecycle_recheck_pilot", "LC", run_lifecycle_day,
                      {"cap_igex": 100, "cap_total": 200})):
                 try:
@@ -574,6 +582,9 @@ def __main__():
     ap.add_argument("--include-cooling", dest="include_cooling", action="store_true",
                     help="B 题集人口含 cooling 股（生产全量覆盖，用户裁决 2026-10-12："
                          "行情列表每只股都要有周期判读；缺省=非 cooling pilot 口径）")
+    ap.add_argument("--include-neutral", dest="include_neutral", action="store_true",
+                    help="A 题集人口含 synergy C 档（无方向票也全量判读，生产全量覆盖；"
+                         "缺省=pilot 口径）")
     args = ap.parse_args()
     if not args.vote_day and not args.lifecycle_day:
         raise SystemExit("需要 --vote-day 或 --lifecycle-day（可多次传参）")
@@ -585,12 +596,13 @@ def __main__():
     if args.watch:
         watch(db, dataset_id=args.dataset_id, interval=args.watch_interval,
               workers=args.workers, token_fuse=args.token_fuse,
-              include_cooling=args.include_cooling)
+              include_cooling=args.include_cooling, include_neutral=args.include_neutral)
         return
     if args.vote_day:
         run_vote_day(db, args.vote_day, args.dataset_id, fire=args.fire,
                      cap_buy=args.vote_cap_buy, cap_sell=args.vote_cap_sell,
-                     workers=args.workers, token_fuse=args.token_fuse, slot=args.slot)
+                     workers=args.workers, token_fuse=args.token_fuse, slot=args.slot,
+                     include_neutral=args.include_neutral)
     if args.lifecycle_day:
         run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire,
                           cap_igex=args.lc_cap_igex, cap_total=args.lc_cap_total,
