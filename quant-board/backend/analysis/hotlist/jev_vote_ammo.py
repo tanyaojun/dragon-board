@@ -168,13 +168,18 @@ def sample_vote(buy: list[dict], sell: list[dict],
 
 
 def sample_lifecycle(cands: list[dict], cap_igex: int = 5, cap_total: int = 8) -> list[dict]:
-    """点火/扩散优先全量至 ≤cap_igex（代码升序），剩余名额给拥挤/反转（stage+代码升序）。"""
+    """点火/扩散优先全量至 ≤cap_igex（代码升序），剩余名额给拥挤/反转（stage+代码升序），
+    再剩余给 cooling（include_cooling 全量覆盖时；代码升序）。"""
     igex = sorted((c for c in cands if c.get("stage") in ("ignition", "expansion")),
                   key=lambda c: str(c.get("code") or ""))
     late = sorted((c for c in cands if c.get("stage") in ("crowded", "reversal")),
                   key=lambda c: (str(c.get("stage") or ""), str(c.get("code") or "")))
+    cooling = sorted((c for c in cands if c.get("stage") == "cooling"),
+                     key=lambda c: str(c.get("code") or ""))
     n_igex = min(len(igex), cap_igex)
-    return igex[:n_igex] + late[: max(0, cap_total - n_igex)]
+    n_late = min(len(late), max(0, cap_total - n_igex))
+    return (igex[:n_igex] + late[:n_late]
+            + cooling[: max(0, cap_total - n_igex - n_late)])
 
 
 # ── EOD 补齐读法（裁决 3：daily 15:30 帧基准，行情字段缺失处从同日 half_hour 15:00 帧补）──
