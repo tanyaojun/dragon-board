@@ -552,3 +552,24 @@ def test_run_vote_cap_override(monkeypatch):
     stats = runner.run_vote_day(db, [DATE], fire=True, cap_buy=1, cap_sell=1)
     assert stats["ok"] == 2 and stats["tokens"] == 2160  # 帽收紧后只采 1+1（默认帽则 2+1=3 call）
     assert not any(d["code"] == "600007" for d in db["hotlist_jev_vote_confirm_pilot"].docs)
+
+
+def test_run_vote_workers_and_fuse_override(monkeypatch):
+    """生产回填路径（§六·产）：workers>1 并发 + token_fuse 显式放宽。"""
+    n = {"k": 0}
+
+    def fake_dispatch(state, questions):
+        n["k"] += 1
+        return dict(ENV_OK), 1
+
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
+    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True, workers=4, token_fuse=10_000_000)
+    assert stats["ok"] == 2 and stats["tokens"] == 2160  # 并发路径全采
+    assert n["k"] == 2
+
+
+def test_run_vote_serial_fuse_default(monkeypatch):
+    """缺省 token_fuse=None → 用模块 TOKEN_FUSE（150k），抽样例不触发。"""
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda s, q: (dict(ENV_OK), 1))
+    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True)
+    assert stats["ok"] == 2 and stats["tokens"] == 2160
