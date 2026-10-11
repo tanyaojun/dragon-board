@@ -24,6 +24,7 @@ from typing import Any
 from backend.analysis.hotlist.jev_driver_ammo import (
     AMMO_VERSION,
     DEFAULT_DATASET_ID,
+    QUESTION_SET_VERSION_CYCLE,
     QUESTION_SET_VERSION_DRIVER,
     QUESTIONS_CYCLE,
     QUESTIONS_PHASE,
@@ -39,7 +40,7 @@ from backend.analysis.hotlist.jev_driver_ammo import (
 )
 from backend.analysis.hotlist import jev_driver_ammo as ammo
 from backend.core.limit_rules import is_limit_down_pct, limit_ratio
-from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
+from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
 
@@ -943,11 +944,66 @@ def swing_summary_line(db, date: str, n: int = 10,
             f'；今日 {cur_zt} 家（较昨日 {delta:+d}，距峰值 {cur_zt - peak:+d} 家）')
 
 
+def _cycle_energy_line(db, date: str) -> str:
+    """cycle v5 行①：量能方向（market_daily_amount 存量，今日 vs 上一交易日 + 近 20 日分位）。
+
+    fail-visible：当日/前日缺失 → 数据缺口（预登记 jev-cycle-v5 §二）。"""
+    series = sorted((d["_id"], d.get("totalAmount")) for d in db["market_daily_amount"].find({}, {"totalAmount": 1})
+                    if isinstance(d.get("_id"), str) and len(d["_id"]) == 10)
+    by_date = dict(series)
+    cur = by_date.get(date)
+    prior = [(i, v) for i, v in series if i < date and isinstance(v, (int, float))
+             and not isinstance(v, bool) and v > 0]
+    if not (isinstance(cur, (int, float)) and not isinstance(cur, bool) and cur > 0) or not prior:
+        return "量能方向：数据缺口（fail-visible）"
+    prev_date, prev = prior[-1]
+    pct = (cur - prev) / prev * 100
+    pctl = ammo.percentile_rank([v for _, v in prior[-20:]], cur)
+    direction = "放量" if pct > 0 else ("缩量" if pct < 0 else "持平")
+    return (f"量能方向：两市成交额 {cur / 1e8:.0f} 亿，较上一交易日（{prev_date}）{pct:+.1f}%"
+            f"（{direction}），近 20 日量能分位 {pctl}")
+
+
+def _cycle_breadth_line(db, date: str, dataset_id: str) -> str:
+    """cycle v5 行②：全市场涨跌（帧 marketStats；7-9 月历史碎裂如实 fail-visible）。"""
+    f = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
+        {"marketStats": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
+    ms = (f or {}).get("marketStats") or {}
+    up, dn, dt = ms.get("upCount"), ms.get("downCount"), ms.get("dtCount")
+    if not (isinstance(up, (int, float)) and not isinstance(up, bool)
+            and isinstance(dn, (int, float)) and not isinstance(dn, bool)):
+        return "全市场涨跌：marketStats 缺口（fail-visible）"
+    if up <= 0 or dn <= 0:
+        # 7-9 月历史碎裂帧存的是 0 而非缺字段（review A-P3）：0 不可信读数如实区分注记
+        return "全市场涨跌：读数为 0（历史碎裂，fail-visible）"
+    dt_txt = f"，跌停 {dt:.0f} 家" if isinstance(dt, (int, float)) and not isinstance(dt, bool) else ""
+    return f"全市场涨跌：上涨 {up:.0f} 家／下跌 {dn:.0f} 家{dt_txt}"
+
+
+def _cycle_drawdown_line(db, date: str, dataset_id: str) -> str:
+    """cycle v5 行③：大面规模（limitSummary.drawdown，111/112 覆盖）。"""
+    f = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
+        {"limitSummary.drawdown": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
+    dd = ((f or {}).get("limitSummary") or {}).get("drawdown") or {}
+    n, avg, deep = dd.get("count"), dd.get("avgDrawdownPct"), dd.get("deepestDrawdownPct")
+    if not (isinstance(n, (int, float)) and not isinstance(n, bool)):
+        return "大面规模：drawdown 缺口（fail-visible）"
+    avg_txt = f"，平均回撤 {avg:.1f}%" if isinstance(avg, (int, float)) and not isinstance(avg, bool) else ""
+    deep_txt = f"，最深 {deep:.1f}%" if isinstance(deep, (int, float)) and not isinstance(deep, bool) else ""
+    return f"大面规模：回撤池 {n:.0f} 家{avg_txt}{deep_txt}"
+
+
 def build_cycle_narrative(db, date: str,
                           dataset_id: str = DEFAULT_DATASET_ID) -> str:
     lines = [
         f"{date} 交易日",
         market_facts_line(db, date, dataset_id),
+        # cycle v5 三件套接线（预登记 jev-cycle-v5 §二）：判据引用的证据必须在叙事里（铁律 3/4）
+        _cycle_energy_line(db, date),
+        _cycle_breadth_line(db, date, dataset_id),
+        _cycle_drawdown_line(db, date, dataset_id),
         swing_summary_line(db, date, dataset_id=dataset_id),
         trajectory_line(db, date, dataset_id=dataset_id),
     ]
@@ -969,7 +1025,8 @@ def run_cycle_stage_day(db, dates: list[str], token: str, acc: str,
         answers = parsed.get("answers") or {}
         doc = {"_id": f"{date}:CYCLE", "origin": "cycle_stage_daily", "tradingDate": date,
                "ammoVersion": AMMO_VERSION,
-               "questionSetVersion": QUESTION_SET_VERSION_DRIVER,
+               # cycle v5 独立版本戳（预登记 §四修旧债：v1-v4 共用 driver 戳，换代不动戳违规）
+               "questionSetVersion": QUESTION_SET_VERSION_CYCLE,
                "questionSetHash": _questions_hash(QUESTIONS_CYCLE),
                "status": "ok" if parsed["ok"] else "degraded",
                "narrative": narrative, "questionsRaw": QUESTIONS_CYCLE,

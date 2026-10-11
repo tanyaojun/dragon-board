@@ -72,16 +72,16 @@ def test_merged_question_set_is_four_plus_phase_verbatim():
 
 
 def test_label_one_merged_writes_stock_phase_fields(monkeypatch):
-    """合并模式：call_jev 收五题集；doc 四题字段照常 + stockPhase* 全部落档。"""
+    """合并模式：_dispatch_jev 收五题集；doc 四题字段照常 + stockPhase* 全部落档。"""
     monkeypatch.setattr(runner, "build_pilot_narrative", lambda *a, **k: "NARRATIVE")
     captured: dict = {}
 
-    def fake_call(acc, tok, narrative, qs):
-        captured["narrative"] = narrative
+    def fake_call(state, qs):
+        captured["narrative"] = state
         captured["questions"] = qs
         return ("env", 88)
 
-    monkeypatch.setattr(runner, "call_jev", fake_call)
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_call)
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     col = _FakeCol()
     _label_one(_FakeDb(col), col, "acc", "tok", "2026-10-09", "600825",
@@ -103,11 +103,11 @@ def test_label_one_default_keeps_four_questions(monkeypatch):
     monkeypatch.setattr(runner, "build_pilot_narrative", lambda *a, **k: "N")
     captured: dict = {}
 
-    def fake_call(acc, tok, narrative, qs):
+    def fake_call(state, qs):
         captured["questions"] = qs
         return ("env", 10)
 
-    monkeypatch.setattr(runner, "call_jev", fake_call)
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_call)
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     col = _FakeCol()
     _label_one(_FakeDb(col), col, "acc", "tok", "2026-10-09", "600825", {"name": "X"}, "b", None)
@@ -125,11 +125,11 @@ def test_run_flag_reaches_label_call(monkeypatch):
     monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
     captured: dict = {}
 
-    def fake_call(acc, tok, narrative, qs):
+    def fake_call(state, qs):
         captured["questions"] = qs
         return ("env", 1)
 
-    monkeypatch.setattr(runner, "call_jev", fake_call)
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_call)
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
         with_stock_phase=True, confirm_budget=True)
@@ -146,11 +146,11 @@ def test_run_default_no_phase_questions(monkeypatch):
     monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
     captured: dict = {}
 
-    def fake_call(acc, tok, narrative, qs):
+    def fake_call(state, qs):
         captured["questions"] = qs
         return ("env", 1)
 
-    monkeypatch.setattr(runner, "call_jev", fake_call)
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_call)
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok())
     run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
         confirm_budget=True)
@@ -167,7 +167,7 @@ def test_run_budget_guard_aborts_without_confirm(monkeypatch, capsys):
         {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
     fired: list = []
-    monkeypatch.setattr(runner, "call_jev", lambda *a, **k: fired.append(1) or ("env", 1))
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda *a, **k: fired.append(1) or ("env", 1))
 
     with pytest.raises(SystemExit, match="预算护栏") as excinfo:
         run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1)

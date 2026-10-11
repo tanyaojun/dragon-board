@@ -183,7 +183,7 @@ def test_ok_path_updates_fields_without_touching_labels(monkeypatch):
     col = _FakeCol({"2026-09-30:600825": {"_id": "2026-09-30:600825", "label": "ma_restructure",
                                           "catalystDepth": "equity_or_affiliate"}})
     _patch_population(monkeypatch, ["600825"])
-    monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs:
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda state, qs:
                         ("env", 123))
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok("ferment"))
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
@@ -202,7 +202,7 @@ def test_ok_path_updates_fields_without_touching_labels(monkeypatch):
 def test_degraded_fail_visible(monkeypatch):
     col = _FakeCol({"2026-09-30:600825": {"_id": "2026-09-30:600825"}})
     _patch_population(monkeypatch, ["600825"])
-    monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs: ("env", 5))
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda state, qs: ("env", 5))
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: {
         "ok": False, "answers": {}, "model": None, "usage": None,
         "errorCode": "E1", "errorDetail": "boom"})
@@ -215,7 +215,7 @@ def test_degraded_fail_visible(monkeypatch):
 def test_missing_doc_skipped_no_upsert(monkeypatch):
     col = _FakeCol({})  # 生产集合无该股文档
     _patch_population(monkeypatch, ["600825"])
-    monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs: ("env", 5))
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda state, qs: ("env", 5))
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok("start"))
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
     assert col.updates and col.updates[0][0]["_id"] == "2026-09-30:600825"
@@ -229,11 +229,11 @@ def test_idempotent_skip_same_criteria(monkeypatch):
     _patch_population(monkeypatch, ["600825"])
     called = []
 
-    def _no_call(acc, tok, narrative, qs):
+    def _no_call(state, qs):
         called.append(1)
         return ("env", 0)
 
-    monkeypatch.setattr(runner, "call_jev", _no_call)
+    monkeypatch.setattr(runner, "_dispatch_jev", _no_call)
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
     assert not called  # 同判据已判，幂等跳过零调用
     assert not col.updates
@@ -244,7 +244,7 @@ def test_criteria_change_triggers_rerun(monkeypatch):
         "_id": "2026-09-30:600825", "stockPhasePosition": "climax",
         "stockPhaseQuestionsRaw": {"stock_phase_position": {"criteria": {"旧判据": "x"}}}}})
     _patch_population(monkeypatch, ["600825"])
-    monkeypatch.setattr(runner, "call_jev", lambda acc, tok, narrative, qs: ("env", 7))
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda state, qs: ("env", 7))
     monkeypatch.setattr(runner, "parse_jev_response", lambda env, ms, **_kw: _parse_ok("divergence"))
     run_stock_phase_pilot(_FakeDb(col), ["2026-09-30"], "tok", "acc")
     assert col.updates  # 判据变更（改门）后允许重跑
@@ -253,7 +253,7 @@ def test_criteria_change_triggers_rerun(monkeypatch):
 
 def test_dry_run_zero_call(monkeypatch, capsys):
     _patch_population(monkeypatch, ["600825", "000504"])
-    monkeypatch.setattr(runner, "call_jev", lambda *a, **k: (_ for _ in ()).throw(
+    monkeypatch.setattr(runner, "_dispatch_jev", lambda *a, **k: (_ for _ in ()).throw(
         AssertionError("dry-run 禁止真实调用")))
     run_stock_phase_pilot(_FakeDb(_FakeCol({})), ["2026-09-30"], "tok", "acc", dry_run=True)
     out = capsys.readouterr().out

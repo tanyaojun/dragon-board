@@ -142,10 +142,10 @@ def test_tdx_hosts_path_env_override(monkeypatch, tmp_path):
 def test_label_one_stamps_question_generation(monkeypatch):
     monkeypatch.setattr(runner, "build_pilot_narrative", lambda *a, **k: "N")
 
-    def fake_call(acc, tok, narrative, qs):
+    def fake_call(state, qs):
         return ("env", 5)
 
-    monkeypatch.setattr(runner, "call_jev", fake_call)
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_call)
     monkeypatch.setattr(runner, "parse_jev_response",
                         lambda env, ms, **_kw: {"ok": True,
                                                 "answers": {q: {"choice": "x"} for q in QUESTIONS_STOCK},

@@ -259,6 +259,40 @@ def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):
     assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # no_data 路径盖版本戳
 
 
+def test_compute_slot_model_failure_error_code_visible(monkeypatch):
+    """槽级模型失败 degraded 返回必须带 errorCode（2026-10-09 实障回归）：
+    CF code 2002 模型执行失败，返回漏 errorCode 时采集 warning 与 /evaluate 补评
+    响应都显示 `hotlist_jev_degraded: None`，排障被迫查库才知道真实原因。
+    文档侧 fail-visible 不变：失败不伪造 answers/scores。"""
+    monkeypatch.setattr(v2_module, "_jev_config", lambda: (True, "tok", "acc"))
+    db = FakeMongoDb({
+        "snapshot_frames": frame_rows(["2026-09-30"]),
+        "snapshot_stock_rows": [{"datasetId": "dragonboard_live",
+                                 "snapshotId": "half_hour:2026-09-30:15:00",
+                                 "code": "000001", "name": "甲", "rank": 1, "heat": 90,
+                                 "pctChange": 9.9, "change": 9.9, "price": 9.66,
+                                 "limitUpPrice": 9.66, "zlje": 3.0e6}],
+        "hotlist_jev_sentiment": [anchor_slot_doc("2026-09-29", 50)],
+    })
+
+    def failing_call(account, token, state, questions):
+        return {"success": False,
+                "errors": [{"message": '{"errors":[{"message":"Model execution failed (Error)",'
+                                       '"code":2002}],"success":false,"result":{},"messages":[]}'}]}, 120
+
+    monkeypatch.setattr(v2_module, "call_jev", failing_call)
+    result = compute_and_upsert_for_slot(db, dataset_id="dragonboard_live",
+                                         trading_date="2026-09-30", slot_time="15:00")
+    assert result["status"] == "degraded"
+    assert result["errorCode"] == "http_error", (
+        "degraded 返回必须带 errorCode（采集 warning 与补评响应排障依赖）")
+    doc = next(r for r in db["hotlist_jev_sentiment"].rows
+               if r.get("_id") == "dragonboard_live:half_hour:2026-09-30:15:00")
+    assert doc["status"] == "degraded" and doc["errorCode"] == "http_error"
+    assert "2002" in str(doc.get("errorDetail"))
+    assert doc["answers"] is None and doc["scores"] is None  # 失败不伪造答案
+
+
 def test_compute_slot_1500_amount_fallback_survives_recompute(monkeypatch):
     """重算冲掉根治（2026-10-06）：历史帧无 indices.totalAmount（09-30 前接线），15:00 槽重算
     经 market_daily_amount 参考集合回填 amount——replace_one 全量重建不再丢锚量能坐标
