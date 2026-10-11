@@ -601,10 +601,15 @@ def test_slot_parameterized_ids_and_narrative(monkeypatch):
 
 def test_due_slot_logic():
     import datetime as dt
-    # 盘中 10:31:30 → 最近已满 120s 缓冲的槽 = 10:00（10:30 未满缓冲）
-    assert runner._due_slot(dt.datetime(2026, 10, 12, 10, 31, 30)) == "10:00"
-    # 盘中 10:33 → 10:30
-    assert runner._due_slot(dt.datetime(2026, 10, 12, 10, 33, 0)) == "10:30"
+    # watch 槽表 = 11:30 + 15:00（用户裁决 2026-10-12 二修：每日两帧）
+    # 上午盘中 10:33 → 11:30 未到 → None
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 10, 33, 0)) is None
+    # 11:32（满 120s 缓冲）→ 11:30
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 11, 32, 0)) == "11:30"
+    # 午休 13:00 → 仍 11:30（已跑则标记跳过，零成本）
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 13, 0, 0)) == "11:30"
+    # 下午盘中 14:00 → 仍 11:30
+    assert runner._due_slot(dt.datetime(2026, 10, 12, 14, 0, 0)) == "11:30"
     # 盘前 09:00 → None
     assert runner._due_slot(dt.datetime(2026, 10, 12, 9, 0, 0)) is None
     # 收盘后 15:06 → 15:00

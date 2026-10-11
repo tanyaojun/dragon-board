@@ -440,19 +440,19 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
     return stats
 
 
-# ── watch 常驻轮询（用户裁决 2026-10-12：每帧落库后即跑，不等收盘）──
+# ── watch 常驻轮询（用户裁决 2026-10-12 二修：每日两帧=上午收盘 11:30 + 下午收盘 15:00，
+# 不做每帧跑；只跑 15:00 一帧也不对——上午收盘定格判读同样留档）──
 
-HALF_HOUR_SLOTS = ("09:30", "10:00", "10:30", "11:00", "11:30",
-                   "13:00", "13:30", "14:00", "14:30", "15:00")
+WATCH_SLOTS = ("11:30", "15:00")
 
 
 def _due_slot(now: "time.struct_time|None" = None, grace: int = 120) -> str | None:
-    """最近一个「已结束满 grace 秒」的 half_hour 槽（给落库留缓冲）；非交易时段 → None。"""
+    """最近一个「已结束满 grace 秒」的 watch 槽（仅 11:30/15:00）；非交易时段 → None。"""
     import datetime as _dt
     now = now or _dt.datetime.now()
     cur = now.hour * 60 + now.minute
     due = None
-    for s in HALF_HOUR_SLOTS:
+    for s in WATCH_SLOTS:
         h, m = int(s[:2]), int(s[3:])
         if cur * 60 + now.second >= h * 3600 + m * 60 + grace:
             due = s
