@@ -9,6 +9,7 @@ jev 情绪判定生产计算服务（2026-10-02 V1 退役后唯一情绪链）�
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from typing import Any
@@ -23,9 +24,21 @@ from backend.analysis.hotlist.jev_state import (
     collect_slot_evidence,
     extract_history_anchor_range,
 )
-from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
+from backend.services.jev.jev_client import (DEFAULT_ACCOUNT_ID, call_jev, call_jev_typesafe,
+                                             parse_jev_response)
 
 _DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID
+
+
+def _dispatch_jev(state, questions: dict) -> tuple[dict, int]:
+    """传输选择：JEV_TYPESAFE_KEY 存在 → 官方直连（可经代理）；否则 CF 网关。
+    两条通道返回同形状 envelope，parse_jev_response 下游零改动。"""
+    ts_key = os.environ.get("JEV_TYPESAFE_KEY", "").strip()
+    if ts_key:
+        proxy = os.environ.get("JEV_TYPESAFE_PROXY", "").strip() or None
+        return call_jev_typesafe(ts_key, state=state, questions=questions, proxy=proxy)
+    _enabled, token, account = _jev_config()
+    return call_jev(account, token, state=state, questions=questions)
 
 
 def _jev_config() -> tuple[bool, str, str]:
@@ -193,6 +206,41 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
     return stats
 
 
+# ── C2 锚供给逃生率告警（jev-temp-crowding-confidence-deepening.md 提案C2，2026-10-02 重评版）──
+# 单日槽位逃生率（crowding=insufficient_evidence 的 ok 槽占比）>25% 连续 2 日 → 排查锚供给
+# （v2.2/v2.3 教训：逃生率飙升几乎总是锚数据源问题而非题目问题：status=ok 限定、伪 0、
+# limitSummary 损坏三类历史事故）。告警只上报、不得阻断采集/写入/读取链路（数据链路硬门禁禁令）；
+# 基线只以现行代（QUESTION_SET_VERSION）文档计，跨代口径不可比。
+ANCHOR_ALERT_ESCAPE_RATE = 0.25
+
+
+def evaluate_anchor_escape_alert(db: Any, *, dataset_id: str, trading_date: str) -> dict:
+    """当日+上一交易日槽位逃生率与连续告警判定（纯读，不写库不阻断）。"""
+    def _day_rate(date: str) -> float | None:
+        n_ok = n_escape = 0
+        for doc in db["hotlist_jev_sentiment"].find(
+                {"kind": "slot", "status": "ok", "datasetId": dataset_id,
+                 "tradingDate": date, "questionSetVersion": QUESTION_SET_VERSION},
+                {"answers.crowding.choice": 1}):
+            n_ok += 1
+            if ((doc.get("answers") or {}).get("crowding") or {}).get("choice") == "insufficient_evidence":
+                n_escape += 1
+        return round(n_escape / n_ok, 3) if n_ok else None
+
+    today_rate = _day_rate(trading_date)
+    prev_docs = db["hotlist_jev_sentiment"].find(
+        {"kind": "slot", "datasetId": dataset_id, "tradingDate": {"$lt": trading_date}},
+        {"tradingDate": 1})
+    prev_date = max((d.get("tradingDate") for d in prev_docs if d.get("tradingDate")),
+                    default=None)
+    prev_rate = _day_rate(prev_date) if prev_date else None
+    alert = (today_rate is not None and today_rate > ANCHOR_ALERT_ESCAPE_RATE
+             and prev_rate is not None and prev_rate > ANCHOR_ALERT_ESCAPE_RATE)
+    return {"alert": alert, "tradingDate": trading_date, "todayRate": today_rate,
+            "prevDate": prev_date, "prevRate": prev_rate,
+            "threshold": ANCHOR_ALERT_ESCAPE_RATE}
+
+
 def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
                                   snapshot_type: str = "half_hour", origin: str = "collector",
                                   dry_run: bool = False) -> dict[str, Any]:
@@ -243,25 +291,45 @@ def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
     if dry_run:
         return {"status": "dry", "narrative": narrative}
 
-    if not token:
+    if not token and not os.environ.get("JEV_TYPESAFE_KEY", "").strip():
+        # review M8：无 token 重跑的降级 replace 不得抹掉既往 ok 链路写入的锚告警字段
+        prior = db["hotlist_jev_sentiment"].find_one(
+            {"_id": doc_id}, {"anchorEscapeRate": 1, "anchorEscapeAlert": 1}) or {}
+        carry = {k: prior[k] for k in ("anchorEscapeRate", "anchorEscapeAlert")
+                 if prior.get(k) is not None}
         db["hotlist_jev_sentiment"].replace_one(
             {"_id": doc_id}, {**base, "status": "degraded", "errorCode": "missing_token",
-                              "errorDetail": "JEV_CF_TOKEN not configured",
+                              "errorDetail": "JEV_CF_TOKEN / JEV_TYPESAFE_KEY not configured",
                               "evidenceRaw": None, "narrativeRaw": narrative,
                               "answers": None, "scores": None, "usage": None, "model": None,
-                              "responseRaw": None, "latencyMs": None}, upsert=True)
+                              "responseRaw": None, "latencyMs": None, **carry}, upsert=True)
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
 
-    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_DAY_QUESTIONS)
+    envelope, latency_ms = _dispatch_jev(narrative, JEV_DAY_QUESTIONS)
     # 缺题=partial_answers（degraded）：缺哪题结构化留档，幂等重跑可补（2026-10-05 批次A C2）
     parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(JEV_DAY_QUESTIONS))
+    # C2 锚供给告警（只上报不阻断）：评估自身异常也不得影响 EOD 主链路
+    try:
+        escape_alert = evaluate_anchor_escape_alert(db, dataset_id=dataset_id,
+                                                    trading_date=trading_date)
+    except Exception as exc:  # noqa: BLE001 — 告警机制故障不得阻断链路
+        logging.warning("anchor escape alert eval failed for %s: %s", trading_date, exc)
+        escape_alert = None
+    else:
+        if escape_alert.get("alert"):
+            logging.warning(
+                "anchor escape alert %s: today=%.2f prev(%s)=%.2f threshold=%.2f —— 排查锚供给",
+                trading_date, escape_alert["todayRate"], escape_alert["prevDate"],
+                escape_alert["prevRate"], escape_alert["threshold"])
     doc = {**base, "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": None, "narrativeRaw": narrative,
            "responseRaw": envelope, "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),
-           "historyAnchorRange": extract_history_anchor_range(anchor)}
+           "historyAnchorRange": extract_history_anchor_range(anchor),
+           "anchorEscapeRate": escape_alert.get("todayRate") if escape_alert else None,
+           "anchorEscapeAlert": escape_alert if escape_alert and escape_alert.get("alert") else None}
     db["hotlist_jev_sentiment"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return {"written": True, "status": doc["status"],
             "dayTemperature": (parsed.get("scores") or {}).get("day_temperature")}
@@ -322,7 +390,7 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
     if dry_run:
         return {"status": "dry", "narrative": narrative}
 
-    if not token:
+    if not token and not os.environ.get("JEV_TYPESAFE_KEY", "").strip():
         db["hotlist_jev_sentiment"].replace_one(
             {"_id": doc_id},
             {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
@@ -330,14 +398,14 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
              "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
              "questionSetVersion": QUESTION_SET_VERSION,
              "status": "degraded", "errorCode": "missing_token",
-             "errorDetail": "JEV_CF_TOKEN not configured",
+             "errorDetail": "JEV_CF_TOKEN / JEV_TYPESAFE_KEY not configured",
              "questionsRaw": JEV_SLOT_QUESTIONS, "evidenceRaw": current_evidence,
              "narrativeRaw": narrative, "responseRaw": None, "answers": None, "scores": None,
              "usage": None, "model": None, "latencyMs": None, "historyAnchorRange": None},
             upsert=True)
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
 
-    envelope, latency_ms = call_jev(account, token, state=narrative, questions=JEV_SLOT_QUESTIONS)
+    envelope, latency_ms = _dispatch_jev(narrative, JEV_SLOT_QUESTIONS)
     # 缺题=partial_answers（degraded）：缺哪题结构化留档，幂等重跑可补（2026-10-05 批次A C2）
     parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(JEV_SLOT_QUESTIONS))
     doc = {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
@@ -353,4 +421,6 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
            "errorDetail": parsed.get("errorDetail"),
            "historyAnchorRange": extract_history_anchor_range(anchor)}
     db["hotlist_jev_sentiment"].replace_one({"_id": doc["_id"]}, doc, upsert=True)
-    return {"written": True, "status": doc["status"]}
+    # errorCode 必须随返回透出（2026-10-09 实障）：采集 warning 与 /evaluate 补评响应
+    # 都消费本返回，漏带时只显示 `hotlist_jev_degraded: None`，排障被迫查库
+    return {"written": True, "status": doc["status"], "errorCode": parsed.get("errorCode")}

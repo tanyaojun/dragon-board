@@ -24,9 +24,21 @@ import urllib.request
 # CF 账户 ID 单一来源（2026-10-05 M2：此前字面量散落 4 处；仍可用 JEV_CF_ACCOUNT 覆盖）
 DEFAULT_ACCOUNT_ID = "921cf15176f84c90ea49865334af32c6"
 
+# 瞬时失败重试退避（秒）：2026-10-09 实测上游间歇性执行故障（500/2002）存在亚分钟级
+# 抖动（同载荷 9 秒内 ✅→❌→✅），秒级重试可接住翻转窗口；重试仅消耗失败请求（0 token，零计费）
+JEV_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0)
 
-def call_jev(account_id: str, api_token: str, state: dict, questions: dict,
-             model: str = "typesafe/jev", timeout: int = 60) -> tuple[dict, int]:
+
+def _envelope_completed(envelope: dict) -> bool:
+    """envelope 是否已拿到 Completed 结果（决定是否继续重试）。"""
+    return bool(envelope.get("success")) and (
+        (envelope.get("result") or {}).get("state") == "Completed"
+    )
+
+
+def _call_primary(account_id: str, api_token: str, state: dict, questions: dict,
+                  model: str = "typesafe/jev", timeout: int = 60) -> tuple[dict, int]:
+    """单次 CF ai/run 调用；网络层/非法响应体不拋异常，返回 failure envelope（fail-visible）。"""
     url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run"
     body = json.dumps({"model": model, "input": {"state": state, "questions": questions}}).encode()
     req = urllib.request.Request(url, data=body, method="POST")
@@ -47,6 +59,71 @@ def call_jev(account_id: str, api_token: str, state: dict, questions: dict,
         # 网络层（读超时/连接重置等）与非法响应体（HTML 错误页/截断流）：degraded 返回，不炸 run（fail-visible）
         return {"success": False,
                 "errors": [{"message": f"network: {type(e).__name__}: {str(e)[:200]}"}]}, int((time.time() - t0) * 1000)
+
+
+def _with_retry(attempt) -> tuple[dict, int]:
+    """共享重试：未拿到 Completed 时按 JEV_RETRY_DELAYS 退避重试（默认首试+2 次）。"""
+    envelope, latency_ms = attempt()
+    for delay in JEV_RETRY_DELAYS:
+        if _envelope_completed(envelope):
+            return envelope, latency_ms
+        time.sleep(delay)
+        envelope, latency_ms = attempt()
+    return envelope, latency_ms
+
+
+def call_jev(account_id: str, api_token: str, state: dict, questions: dict,
+             model: str = "typesafe/jev", timeout: int = 60) -> tuple[dict, int]:
+    """CF 网关通道 ai/run；未拿到 Completed 时按 JEV_RETRY_DELAYS 退避重试。"""
+    return _with_retry(lambda: _call_primary(account_id, api_token, state, questions, model, timeout))
+
+
+# ── 官方直连通道（api.typesafe.ai；2026-10-09 CF 上游故障期间接入）──
+# 请求体扁平（state/model/questions 顶层），响应亦扁平；统一适配成 CF envelope，
+# parse_jev_response 下游零改动。451 地区封锁需经代理（JEV_TYPESAFE_PROXY）。
+TYPESAFE_API_URL = "https://api.typesafe.ai/v1/systemone"
+
+
+def _typesafe_to_envelope(resp: dict) -> dict:
+    """官方扁平响应 → CF envelope（result.state=Completed + result.result）。"""
+    return {"success": True,
+            "result": {"state": "Completed",
+                       "result": {"model": resp.get("model"), "answers": resp.get("answers"),
+                                  "usage": resp.get("usage")}}}
+
+
+def _call_typesafe_primary(api_token: str, state, questions: dict,
+                           model: str = "jev-latest", timeout: int = 60,
+                           proxy: str | None = None) -> tuple[dict, int]:
+    """单次官方直连；网络层/HTTP 错误不抛异常，返回 failure envelope（fail-visible）。"""
+    body = json.dumps({"state": state, "model": model, "questions": questions}).encode()
+    req = urllib.request.Request(TYPESAFE_API_URL, data=body, method="POST")
+    req.add_header("Authorization", f"Bearer {api_token}")
+    req.add_header("Content-Type", "application/json")
+    opener = (urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+              if proxy else urllib.request.build_opener())
+    t0 = time.time()
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return _typesafe_to_envelope(json.loads(r.read())), int((time.time() - t0) * 1000)
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode()[:300]
+        except Exception:
+            detail = f"HTTP {e.code}"
+        return {"success": False,
+                "errors": [{"message": detail, "code": e.code}]}, int((time.time() - t0) * 1000)
+    except (urllib.error.URLError, TimeoutError, OSError,
+            http.client.HTTPException, json.JSONDecodeError) as e:
+        return {"success": False,
+                "errors": [{"message": f"network: {type(e).__name__}: {str(e)[:200]}"}]}, int((time.time() - t0) * 1000)
+
+
+def call_jev_typesafe(api_token: str, state, questions: dict,
+                      model: str = "jev-latest", timeout: int = 60,
+                      proxy: str | None = None) -> tuple[dict, int]:
+    """官方直连通道；同套退避重试。"""
+    return _with_retry(lambda: _call_typesafe_primary(api_token, state, questions, model, timeout, proxy))
 
 
 def parse_jev_response(envelope: dict, latency_ms: int,

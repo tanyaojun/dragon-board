@@ -40,6 +40,7 @@ from backend.analysis.hotlist.jev_driver_ammo import (
 from backend.analysis.hotlist import jev_driver_ammo as ammo
 from backend.core.limit_rules import is_limit_down_pct
 from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
+from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
 
 
@@ -198,10 +199,11 @@ def _jiuyan_ladder(db, date: str) -> dict | None:
     return buckets
 
 
-def _ths_failed_codes(db, date: str) -> tuple[set[str], bool]:
-    """THS 15:00 帧炸板池（limit_up_fail）代码集（2026-10-11 触板二分用，方案A）。
+def _ths_failed_items(db, date: str) -> tuple[dict[str, dict], bool]:
+    """THS 15:00 帧炸板池 code→item（2026-10-11 触板二分用，方案A）。
 
-    返回 (codes, found)：found=False = 帧缺失/池降级，调用方必须 fail-visible 结构化降级，
+    item 含 open_num（开板次数）/change_rate 等，炸板卡「反复开板」消费；
+    返回 (items, found)：found=False = 帧缺失/池降级，调用方必须 fail-visible 结构化降级，
     不得把触板名单静默当涨停名单；failed 池为空且 ok=True 是合法状态（当日无炸板）。
     """
     f = db["snapshot_frames"].find_one(
@@ -210,9 +212,14 @@ def _ths_failed_codes(db, date: str) -> tuple[set[str], bool]:
         {"limitSummary.thsPools": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
     tp = ((f or {}).get("limitSummary") or {}).get("thsPools") or {}
     if not tp or not tp.get("ok") or tp.get("degraded"):
-        return set(), False
+        return {}, False
     items = (tp.get("pools") or {}).get("failed", {}).get("items") or []
-    return {str(i.get("code") or "")[-6:] for i in items}, True
+    return {str(i.get("code") or "")[-6:]: i for i in items if i.get("code")}, True
+
+
+def _ths_failed_codes(db, date: str) -> tuple[set[str], bool]:
+    items, found = _ths_failed_items(db, date)
+    return set(items), found
 
 
 _BSE_CODE_PREFIXES = ("92", "43", "83", "87")
@@ -234,6 +241,7 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
     与官方简图「涨停家数」差炸板股；doc 内无可靠封板标记（time 空≠炸板），必须借
     THS 15:00 炸板池二分：
     - zhaban=True：在今日炸板池 → 非涨停股（断板/触板未封），不进涨停口径；
+      openNum=THS 开板次数（open_num，None 不透传）随 zhaban 附带；
     - excluded：'st'|'bse'（官方简图不计入涨停家数的 5 只差额，10-09 实测 3 ST + 2 北交所）；
     - boardUnmarked=True：num 空且昨日在「昨日涨停池」（昨日触板-昨日炸板）→ 真漏标连板；
       昨日炸板股今日涨停=首板，不得误标（10-09 金健米业/东亚药业教训）；
@@ -247,7 +255,7 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
          "fields.stocks.name": 1, "fields.name": 1})
     fields = (doc or {}).get("fields") or []
     final_found = any(field.get("stocks") for field in fields)
-    failed_today, ths_found = _ths_failed_codes(db, date)
+    failed_today, ths_found = _ths_failed_items(db, date)
     prev_dates = trading_dates_before(db, date, 1)
     prev_sealed: set[str] = set()
     prev_ths_found: bool | None = None
@@ -270,6 +278,8 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
                         "boardName": field.get("name")}
                 if ths_found and code in failed_today:
                     info["zhaban"] = True
+                    if failed_today[code].get("open_num") is not None:
+                        info["openNum"] = failed_today[code]["open_num"]
                 excl = _official_exclude(stock.get("name"), code)
                 if excl:
                     info["excluded"] = excl
@@ -277,7 +287,9 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
                     info["boardUnmarked"] = True
                 out[code] = info
     meta = {"jiuyanFinalFound": final_found, "prevPoolFound": bool(prev_dates),
-            "thsPoolFound": ths_found, "prevThsPoolFound": prev_ths_found}
+            "thsPoolFound": ths_found, "prevThsPoolFound": prev_ths_found,
+            # THS 炸板池总数（含韭研未收录股）：前端炸板卡注记「榜外」差额，fail-visible
+            "thsZhabanTotal": len(failed_today) if ths_found else None}
     return out, meta
 
 
@@ -295,11 +307,34 @@ def market_metrics(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict 
     cb = ls.get("continuousBoards") or {}
     dd = ls.get("drawdown") or {}
     pools = (ls.get("thsPools") or {}).get("pools") or {}
-    ladder = {k: (pools.get(k) or {}).get("total") for k in THS_KEYS}
+    ths_ladder = {k: (pools.get(k) or {}).get("total") for k in THS_KEYS}
+    jiuyan_ladder = _jiuyan_ladder(db, date)
+    if jiuyan_ladder is not None:
+        ladder = {k: jiuyan_ladder[k] for k in THS_KEYS}
+        ladder_source = "jiuyan"
+        ladder_pool_total = jiuyan_ladder["_poolTotal"]
+        ladder_day_unmarked = jiuyan_ladder["_dayUnmarked"]
+        ladder_day_unmarked_prev = jiuyan_ladder["_dayUnmarkedPrev"]
+    elif any(isinstance(v, (int, float)) for v in ths_ladder.values()):
+        ladder = ths_ladder
+        ladder_source = "ths"
+        ladder_pool_total = sum(v for v in ths_ladder.values() if isinstance(v, (int, float)))
+        ladder_day_unmarked = None
+        ladder_day_unmarked_prev = None
+    else:
+        ladder = ths_ladder  # 全 None（fail-visible：双源皆缺不伪造零梯队）
+        ladder_source = "missing"
+        ladder_pool_total = None
+        ladder_day_unmarked = None
+        ladder_day_unmarked_prev = None
     if not zb.get("ztCount"):
         return None
     return {"ztCount": zb.get("ztCount"), "zhabanCount": zb.get("count"), "zhabanRate": zb.get("rate"),
-            "drawdownCount": dd.get("count"), "ladder": ladder, "maxBoard": cb.get("maxBoard")}
+            "drawdownCount": dd.get("count"), "ladder": ladder, "maxBoard": cb.get("maxBoard"),
+            "ladderSource": ladder_source, "ladderPoolTotal": ladder_pool_total,
+            "ladderDayUnmarked": ladder_day_unmarked,
+            "ladderDayUnmarkedPrev": ladder_day_unmarked_prev,
+            "thsLadder": ths_ladder if any(isinstance(v, (int, float)) for v in ths_ladder.values()) else None}
 
 
 def trading_dates_before(db, date: str, n: int = 20,
@@ -348,12 +383,26 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
                if isinstance(cur_die, (int, float)) else "跌停 不可算")
     rate = f'{cur["zhabanRate"]:.1f}%' if isinstance(cur["zhabanRate"], (int, float)) else "缺"
     three_plus = (cur["ladder"].get("three") or 0) + (cur["ladder"].get("four") or 0) + (cur["ladder"].get("high") or 0)
+    ladder_txt = (f'一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}')
+    src = cur.get("ladderSource")
+    if src == "jiuyan":
+        un_prev = cur.get("ladderDayUnmarkedPrev") or 0
+        un_note = f'，{un_prev}只连板未标高度未计入' if un_prev else ''
+        ladder_seg = f'连板梯队（韭研{cur.get("ladderPoolTotal")}只，首板不标板数按首板计{un_note}）{ladder_txt}'
+        ths = cur.get("thsLadder")
+        if ths:
+            ladder_seg += (f'（THS交叉 {ths.get("one")}/{ths.get("two")}/{ths.get("three")}'
+                           f'/{ths.get("four")}/{ths.get("high")}）')
+    elif src == "ths":
+        ladder_seg = f'连板梯队（THS回退）{ladder_txt}'
+    else:
+        ladder_seg = '连板梯队 不可算（韭研 final 与 THS 双源皆缺）'
     line = (f'盘面事实：涨停 {cur["ztCount"]} 家（{pct([h["ztCount"] for h in hist], cur["ztCount"])} 分位）'
             f' · {die_txt}'
             f' · 炸板率 {rate}（{pct([h["zhabanRate"] for h in hist], cur["zhabanRate"])} 分位，炸板 {cur["zhabanCount"] or 0} 家）'
             f' · 大幅回撤 {cur["drawdownCount"] if cur["drawdownCount"] is not None else "?"} 家'
             f'（{pct([h["drawdownCount"] for h in hist], cur["drawdownCount"])} 分位）'
-            f' · 连板梯队 一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}'
+            f' · {ladder_seg}'
             f' · 最高 {cur["maxBoard"]} 板（{pct([h["maxBoard"] for h in hist], cur["maxBoard"])} 分位）'
             + _advdec_segment(db, date, dataset_id))
     _FACTS_CACHE[cache_key] = line
@@ -363,6 +412,9 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
 # ---- 弹药 6：个股价格位置轴（2026-10-04 用户令接入：距 20 日最高/窗口涨幅/量能缩放——
 #      首板单锚判不出高位，龙版传媒 605577 首板但距 20 日高点仅 7.8%/窗口涨幅 62.5% 实锤） ----
 _POSITION_LOCK = threading.Lock()
+
+_DIV_LOCK = threading.Lock()
+_DIV_LIST_CACHE: dict[str, dict[str, tuple[float, float]]] = {}
 _DAILY_CLIENT: Any = None
 _DAILY_BARS_CACHE: dict[str, list[dict]] = {}
 _TDX_DOWN_UNTIL = 0.0
@@ -434,19 +486,90 @@ def _daily_bars(code: str) -> list[dict]:
     return bars
 
 
-def stock_position_line(date: str, code: str) -> str:
-    """弹药 6 壳：TDX 取数 → ammo.position_line_from_bars（纯计算，批次D I14）。"""
+def _div_num(v: Any) -> float:
+    """'3.00元'/'5股'/'-' → float（百度日程每10股口径原值）；不可解析 → 0.0。"""
+    import re
+
+    if v is None:
+        return 0.0
+    s = re.sub(r"[^0-9.]", "", str(v))
     try:
-        return ammo.position_line_from_bars(date, code, _daily_bars(code))
+        return float(s) if s else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _div_event_list(date: str) -> dict[str, tuple[float, float]]:
+    """date 当日 A 股除权除息事件 {code: (每股分红, 每股送转合计)}——P1-1 因子源
+    （预登记 jev-ammo-p1-preregistration.md §一；百度除权除息日程 × 交易所公式）。
+
+    百度口径=每10股（603337 XD杰克科 实证：分红 3.00 元 → 参考价按 /10 扣，35.00→34.70）；
+    此处归一为每股口径。仅收 SH/SZ；配股（无配股价字段）不进公式→该股回退原口径。
+    失败/空日/解析失败 → {}（fail-visible，调用方原口径）；空 {}=拉取成功确证无事件才进缓存，失败不缓存下次重试（review I-3）。
+    """
+    with _DIV_LOCK:
+        if date in _DIV_LIST_CACHE:
+            return _DIV_LIST_CACHE[date]
+    out: dict[str, tuple[float, float]] = {}
+    try:
+        import akshare as ak
+
+        df = ak.news_trade_notify_dividend_baidu(date=date.replace("-", ""))
+        for _, r in (df.iterrows() if df is not None and len(df) > 0 else []):
+            if str(r.get("交易所") or "") not in ("SH", "SZ"):
+                continue
+            code = str(r.get("股票代码") or "")
+            div, bonus = _div_num(r.get("分红")) / 10.0, _div_num(r.get("送股")) / 10.0 \
+                + _div_num(r.get("转增")) / 10.0
+            if code and (div or bonus):
+                out[code] = (div, bonus)
+    except Exception as exc:  # noqa: BLE001 — review I-3：失败与「当日真无事件」必须区分
+        # 网络抖动等失败 → 直接返回不缓存（下次调用重试）、留痕；缓存空 {} 只允许出现在
+        # 拉取成功但当日确无事件（原实现把失败永久缓存为 {}，当日若真有除权事件，
+        # 板序/位置轴会用错参考价且无任何标记）。
+        print(f"[div-events] {date} 除权日程拉取失败（不缓存，将重试）：{type(exc).__name__}: {str(exc)[:150]}")
+        return {}
+    with _DIV_LOCK:
+        _DIV_LIST_CACHE[date] = out
+    return out
+
+
+def _adj_prev_series(date: str, code: str, bars: list[dict]) -> dict[str, float]:
+    """窗口内逐链接的除权参考价 {链接日 t: 交易所参考价}——仅 t 为该股除权日才有键（P1-1）。
+
+    参考价 = round((原始前收 − 每股分红) / (1 + 每股送转), 2)（交易所除权除息公式）。
+    """
+    window = [b for b in bars if b["date"] <= date]
+    out: dict[str, float] = {}
+    for i in range(1, len(window)):
+        ev = _div_event_list(window[i]["date"]).get(code)
+        prev_close = window[i - 1]["close"]
+        if (ev and isinstance(prev_close, (int, float)) and not isinstance(prev_close, bool)
+                and prev_close > 0):
+            div, bonus = ev
+            out[window[i]["date"]] = round((prev_close - div) / (1 + bonus), 2)
+    return out
+
+
+def stock_position_line(date: str, code: str) -> str:
+    """弹药 6 壳：TDX 取数 → ammo.position_line_from_bars（纯计算，批次D I14）。
+    P1-1：附除权参考价递推（窗口价格归一至今日基准），无事件/取数失败=原口径。"""
+    try:
+        bars = _daily_bars(code)
+        adj = _adj_prev_series(date, code, bars) if bars else None
+        return ammo.position_line_from_bars(date, code, bars, adj or None)
     except Exception as e:
         return f"个股位置：计算失败 {e}（fail-visible）"
 
 
 def limitup_sequence_line(date: str, code: str, name: str | None, n: int = 10) -> str:
     """弹药 7 壳：TDX 取数 → ammo.sequence_line_from_bars（纯计算，批次D I14）。
-    fail-visible：日线缺当日棒/窗口不足如实标注；除权日 prev_close 失真属已知边缘（登记）。"""
+    P1-1：逐链接用除权参考价（交易所公式精确昨收，板序假阴根治），
+    无事件/取数失败回退原口径（原已知边缘语义）。"""
     try:
-        return ammo.sequence_line_from_bars(date, code, name, n, _daily_bars(code))
+        bars = _daily_bars(code)
+        adj = _adj_prev_series(date, code, bars) if bars else None
+        return ammo.sequence_line_from_bars(date, code, name, n, bars, adj or None)
     except Exception as e:
         return f"板序：计算失败 {e}（fail-visible）"
 
@@ -484,6 +607,10 @@ def _intraday_bars(code: str) -> list[dict]:
 def _prev_close_of_date(date: str, code: str) -> float | None:
     bars = [b for b in _daily_bars(code) if b["date"] <= date]
     if len(bars) >= 2 and bars[-1]["date"] == date:
+        # P1-1：优先除权参考价（交易所公式），非除权日/取数失败回退原始前收
+        adj = _adj_prev_series(date, code, bars)
+        if date in adj:
+            return adj[date]
         return bars[-2]["close"]
     return None
 
@@ -602,7 +729,9 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
     questions = QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK
     narrative = build_pilot_narrative(db, date, code, stock, board, rank,
                                       dataset_id=dataset_id, jiuyan_doc=jiuyan_doc)
-    env, ms = call_jev(acc, token, narrative, questions)
+    # 2026-10-10 起走 _dispatch_jev 分流（JEV_TYPESAFE_KEY 优先官方直连，否则 CF）；
+    # acc/token 参数仅为调用方签名兼容，通道配置统一由 dispatch 自取 env。
+    env, ms = _dispatch_jev(narrative, questions)
     # 缺题=partial_answers（degraded）：done 集合不视为已完成，下轮重跑补齐（2026-10-05 批次A C2）
     parsed = parse_jev_response(env, ms, expected_keys=set(questions))
     used = _usage_tokens(parsed.get("usage"))
@@ -615,6 +744,10 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
                              "time": stock.get("time"), "inHotlist": rank is not None, "rank": rank},
            "status": "ok" if parsed["ok"] else "degraded",
            "narrative": narrative, "questionsRaw": questions,
+           # answers 原样落库（P0-2/P0-3，jev-questionset-ammo-confidence-review.md §五）：
+           # 对齐情绪链先例，保全模型自报 confidence/缺失 probabilities/未来新字段，
+           # 只向前生效，历史文档不可回补
+           "answers": parsed.get("answers"),
            "label": answers.get("driver_type", {}).get("choice"),
            "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
            "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
@@ -635,6 +768,7 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
         doc.update({
             "stockPhasePosition": ans_p.get("choice"),
             "stockPhaseProbabilities": ans_p.get("probabilities"),
+            "stockPhaseConfidence": ans_p.get("confidence"),
             "stockPhaseQuestionsRaw": QUESTIONS_STOCK_PHASE,
             "stockPhaseQuestionSetHash": _questions_hash(QUESTIONS_STOCK_PHASE),
             "stockPhaseAmmoVersion": AMMO_VERSION,
@@ -813,7 +947,7 @@ def run_cycle_stage_day(db, dates: list[str], token: str, acc: str,
             print(f"[cycle] {date} 已判（{done.get('cycleStage')}），跳过")
             continue
         narrative = build_cycle_narrative(db, date, dataset_id)
-        env, ms = call_jev(acc, token, narrative, QUESTIONS_CYCLE)
+        env, ms = _dispatch_jev(narrative, QUESTIONS_CYCLE)
         parsed = parse_jev_response(env, ms, expected_keys=set(QUESTIONS_CYCLE))
         answers = parsed.get("answers") or {}
         doc = {"_id": f"{date}:CYCLE", "origin": "cycle_stage_daily", "tradingDate": date,
@@ -822,6 +956,7 @@ def run_cycle_stage_day(db, dates: list[str], token: str, acc: str,
                "questionSetHash": _questions_hash(QUESTIONS_CYCLE),
                "status": "ok" if parsed["ok"] else "degraded",
                "narrative": narrative, "questionsRaw": QUESTIONS_CYCLE,
+               "answers": parsed.get("answers"),
                "cycleStage": answers.get("cycle_stage", {}).get("choice"),
                "cycleStageProbabilities": answers.get("cycle_stage", {}).get("probabilities"),
                "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
@@ -845,7 +980,7 @@ def run_phase_band_day(db, dates: list[str], token: str, acc: str,
             print(f"[phase] {date} 已判（{done.get('phaseBand')}），跳过")
             continue
         narrative = f"{date} 交易日 · {market_facts_line(db, date, dataset_id)}"
-        env, ms = call_jev(acc, token, narrative, QUESTIONS_PHASE)
+        env, ms = _dispatch_jev(narrative, QUESTIONS_PHASE)
         parsed = parse_jev_response(env, ms, expected_keys=set(QUESTIONS_PHASE))
         answers = parsed.get("answers") or {}
         doc = {"_id": f"{date}:PHASE", "origin": "phase_band_daily", "tradingDate": date,
@@ -854,6 +989,7 @@ def run_phase_band_day(db, dates: list[str], token: str, acc: str,
                "questionSetHash": _questions_hash(QUESTIONS_PHASE),
                "status": "ok" if parsed["ok"] else "degraded",
                "narrative": narrative, "questionsRaw": QUESTIONS_PHASE,
+               "answers": parsed.get("answers"),
                "phaseBand": answers.get("phase_band", {}).get("choice"),
                "phaseBandProbabilities": answers.get("phase_band", {}).get("probabilities"),
                "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
@@ -917,7 +1053,7 @@ def run_stock_phase_pilot(db, dates: list[str], token: str, acc: str,
                 narrative = build_pilot_narrative(db, date, code, entry["stock"],
                                                   entry["board"], ranks.get(code),
                                                   dataset_id=dataset_id, jiuyan_doc=jy_doc)
-                env, ms = call_jev(acc, token, narrative, QUESTIONS_STOCK_PHASE)
+                env, ms = _dispatch_jev(narrative, QUESTIONS_STOCK_PHASE)
                 parsed = parse_jev_response(env, ms, expected_keys=set(QUESTIONS_STOCK_PHASE))
             except Exception as exc:  # noqa: BLE001 — 批次C I3：单股隔离
                 print(f"[stock-phase] {date} {code} error（{type(exc).__name__}: {exc}）")
@@ -928,6 +1064,8 @@ def run_stock_phase_pilot(db, dates: list[str], token: str, acc: str,
             payload = {
                 "stockPhasePosition": ans.get("choice"),
                 "stockPhaseProbabilities": ans.get("probabilities"),
+                # 单题 $set 路径不写 answers 整包（防覆盖主 call 的五题 answers），只补置信字段
+                "stockPhaseConfidence": ans.get("confidence"),
                 "stockPhaseQuestionsRaw": QUESTIONS_STOCK_PHASE,
                 "stockPhaseQuestionSetHash": _questions_hash(QUESTIONS_STOCK_PHASE),
                 "stockPhaseAmmoVersion": AMMO_VERSION,
@@ -986,8 +1124,9 @@ if __name__ == "__main__":
                     help="批次C I13：单日打标上限（超出部分截断并披露），不给=不限")
     args = ap.parse_args()
     tok = os.environ.get("JEV_CF_TOKEN") or ""
-    if not tok:
-        raise SystemExit("需要 JEV_CF_TOKEN 环境变量（批次B M5：不再用 assert，-O 下不可跳过）")
+    # 2026-10-10：官方直连（JEV_TYPESAFE_KEY）为合法替代通道，护栏二选一即可
+    if not tok and not (os.environ.get("JEV_TYPESAFE_KEY") or "").strip():
+        raise SystemExit("需要 JEV_CF_TOKEN 或 JEV_TYPESAFE_KEY 环境变量")
     acc = os.environ.get("JEV_CF_ACCOUNT", DEFAULT_ACCOUNT_ID)
     if args.stock_phase_date:
         from backend.data.repositories.repository_factory import get_runtime_mongodb_database

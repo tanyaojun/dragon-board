@@ -57,11 +57,12 @@ class MultiFakeDb:
         return self._cols[name]
 
 
-def _pool_frame(date, failed_codes, ok=True, degraded=False):
+def _pool_frame(date, failed_codes, ok=True, degraded=False, failed_items=None):
+    items = failed_items if failed_items is not None else [{"code": c} for c in failed_codes]
     return {"tradingDate": date, "slotTime": "15:00", "type": "half_hour", "datasetId": "dragonboard_live",
             "limitSummary": {"thsPools": {"ok": ok, "degraded": degraded, "date": date.replace("-", ""),
-                                          "pools": {"failed": {"key": "failed", "total": len(failed_codes),
-                                                               "items": [{"code": c} for c in failed_codes]}}}}}
+                                          "pools": {"failed": {"key": "failed", "total": len(items),
+                                                               "items": items}}}}}
 
 
 def _final(date, stocks_by_field):
@@ -101,7 +102,7 @@ def test_board_info_bisect_and_unmarked():
         _std_cols(today, prev_codes=["600001", "600002", "600003"],
                   today_failed=["600004"], prev_failed=["600001"]), "2026-10-09")
     assert meta == {"jiuyanFinalFound": True, "prevPoolFound": True,
-                    "thsPoolFound": True, "prevThsPoolFound": True}
+                    "thsPoolFound": True, "prevThsPoolFound": True, "thsZhabanTotal": 1}
     assert "boardUnmarked" not in info["600001"]  # 昨日炸板股今日涨停=首板，不误标
     assert info["600002"]["boardUnmarked"] is True  # 昨日封板今日 num 空 → 真漏标
     assert info["600003"]["boards"] == 2 and "boardUnmarked" not in info["600003"]
@@ -109,6 +110,28 @@ def test_board_info_bisect_and_unmarked():
     assert info["600005"]["excluded"] == "st"
     assert info["920001"]["excluded"] == "bse"
     assert "zhaban" not in info["600002"]  # 漏标股是真涨停股，非炸板
+
+
+def test_board_info_opennum_passthrough():
+    """炸板卡数据：open_num→openNum 透传（炸板卡「反复开板」消费），None/缺失不透传；meta 带池总数。"""
+    today = [
+        {"code": "600004", "name": "多次开板", "num": None, "time": "13:00:00"},
+        {"code": "600006", "name": "无开板次数字段", "num": None, "time": "13:30:00"},
+    ]
+    cols = {
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("大农业", today)]),
+            _final("2026-10-08", [("X", [{"code": "600004", "num": None}])]),
+        ]),
+        "snapshot_frames": FramesCol([
+            _pool_frame("2026-10-09", [], failed_items=[{"code": "600004", "open_num": 3}, {"code": "600006"}]),
+            _pool_frame("2026-10-08", ["600004"]),
+        ]),
+    }
+    info, meta = jiuyan_board_info(cols, "2026-10-09")
+    assert info["600004"]["zhaban"] is True and info["600004"]["openNum"] == 3
+    assert info["600006"]["zhaban"] is True and "openNum" not in info["600006"]
+    assert meta["thsZhabanTotal"] == 2  # 含韭研未收录股（榜外差额注记用）
 
 
 def test_board_info_ths_pool_missing_degrades():

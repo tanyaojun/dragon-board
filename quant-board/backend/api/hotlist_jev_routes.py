@@ -139,7 +139,7 @@ def get_hotlist_jev_range(
       不吞掉不伪造（fail-visible：jev 轨道历史覆盖浅时缺口必须可见）。
     - 纯读不 lazy 补算（jev 结论唯一来源 = 采集链落库），v1 无缓存。
     """
-    capped_days = max(1, min(int(days), 30))
+    capped_days = max(1, min(int(days), 60))  # 2026-10-10 30→60：relay_page 区间图表温度轴跟随（仍只取标量温度消费）
     try:
         db = repository_factory.get_runtime_mongodb_database()
     except Exception as exc:
@@ -180,6 +180,42 @@ def get_hotlist_jev_range(
                 "degradedCount": degraded_count}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"range_read_failed: {exc}", "days": []}
+
+
+@router.get("/relay-index")
+def get_relay_index(
+    dataset_id: str = "dragonboard_live",  # 预留：hotlist_jev_relay_index 单库不落 datasetId，暂不过滤（review M1）
+    date: str | None = None,
+    days: int = 15,
+) -> dict[str, Any]:
+    """连板情绪指数读口：单日（date 给定）+ 近 N 日序列；fail-visible 不伪造。"""
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        col = db["hotlist_jev_relay_index"]
+        # 2026-10-10 上限 60→400：relay_page 判定明细日期区间筛选需全量序列（客户端过滤，
+        # 文档 ~1KB/日；400 天≈一年+，超长区间未来再议服务端分页）
+        capped_days = max(1, min(int(days), 400))
+        latest = date
+        if not latest:
+            newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
+            latest = str(newest.get("tradingDate")) if newest else None
+        day_doc = col.find_one({"tradingDate": latest}) if latest else None
+        series = list(col.find(
+            {"tradingDate": {"$ne": None}},
+            {"narrative": 0, "responseRaw": 0, "questionsRaw": 0},
+        ).sort("tradingDate", -1).limit(capped_days))
+        series.reverse()
+        return {
+            "ok": True, "datasetId": dataset_id, "date": latest,
+            "day": day_doc,
+            "series": series,
+            "degradedCount": sum(1 for r in [*series, day_doc] if r and r.get("status") != "ok"),
+        }
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"relay_index_read_failed: {exc}"}
 
 
 class JevReviewRulingPayload(BaseModel):

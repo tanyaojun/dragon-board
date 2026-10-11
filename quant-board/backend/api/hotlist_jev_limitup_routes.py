@@ -68,8 +68,13 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                         stock["boardUnmarked"] = True
                     if info.get("zhaban"):
                         stock["zhaban"] = True
+                        if info.get("openNum") is not None:
+                            stock["openNum"] = info["openNum"]
                     if info.get("excluded"):
                         stock["excluded"] = info["excluded"]
+            # THS 炸板池总数（含韭研未收录股，炸板卡「榜外」差额注记用）
+            if meta.get("thsZhabanTotal") is not None:
+                result["thsZhabanTotal"] = meta["thsZhabanTotal"]
         except Exception as exc:  # noqa: BLE001 — 辅助 join 失败不阻断主读口（fail-visible 结构化旗标）
             result["boardJoinError"] = f"board_join_failed: {exc}"
         return result
