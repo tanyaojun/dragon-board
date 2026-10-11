@@ -92,7 +92,11 @@ def test_vote_risk_flag_levels():
 def test_lifecycle_risk_flag_levels():
     assert lifecycle_risk_flag(10, True, []) == {"level": "ok", "reasons": []}
     assert lifecycle_risk_flag(10, True, ["prev_stage_missing"])["level"] == "partial"
-    ins1 = lifecycle_risk_flag(3, True, [])
+    # 六修：预检线 5→2（上榜晚的股跨日度量可算即判，缺槽如实标注）
+    partial = lifecycle_risk_flag(3, True, [])
+    assert partial["level"] == "partial" and any("仅3槽" in r for r in partial["reasons"])
+    assert lifecycle_risk_flag(2, True, [])["level"] == "ok" or lifecycle_risk_flag(2, True, [])["level"] == "partial"
+    ins1 = lifecycle_risk_flag(1, True, [])
     ins2 = lifecycle_risk_flag(10, False, [])
     assert ins1["level"] == "data_insufficient" and ins2["level"] == "data_insufficient"
 
@@ -408,7 +412,9 @@ def test_build_lifecycle_population_and_prev_stage():
     assert codes == {"600001", "600002"}  # 600003/600004/600005 cooling 不进 B 人口
     c1 = next(c for c in pop["candidates"] if c["code"] == "600001")
     assert c1["prevDate"] == "2026-09-29" and c1["prevStage"] == "expansion"
-    assert c1["riskFlag"]["level"] == "ok"
+    # 六修后 5/10 槽=partial（当日轨迹不足全日，如实标注）
+    assert c1["riskFlag"]["level"] == "partial"
+    assert any("仅5槽" in r for r in c1["riskFlag"]["reasons"])
     assert c1["metrics"]["rankVelocity"] == 0.3
 
 
@@ -420,8 +426,8 @@ def test_build_lifecycle_population_prev_missing_is_partial():
               "snapshot_stock_rows": _Col(rows),
               "snapshot_analysis": _Col(anas)})
     pop = runner.build_lifecycle_population(db, DATE)
-    assert pop["candidates"][0]["riskFlag"] == {"level": "partial",
-                                                "reasons": ["prev_stage_missing"]}
+    rf = pop["candidates"][0]["riskFlag"]
+    assert rf["level"] == "partial" and "prev_stage_missing" in rf["reasons"]
 
 
 def test_build_population_no_frame():

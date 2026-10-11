@@ -132,12 +132,20 @@ def vote_risk_flag(dims: dict[str, Any], missing_evidence: list[str]) -> dict:
 
 def lifecycle_risk_flag(trajectory_slots: int, metrics_present: bool,
                         missing: list[str]) -> dict:
-    """题集 B 预检。data_insufficient（不调用）：当日轨迹槽 <5 或度量块不可算；
-    partial：前日阶段/个别度量缺失（missing 列明）；ok：轨迹+度量+前日阶段齐。"""
-    if trajectory_slots < 5 or not metrics_present:
+    """题集 B 预检（六修，2026-10-12 用户裁决：上榜晚的股也要有周期判读）。
+
+    data_insufficient（不调用）：当日轨迹槽 <2（无走向变化点可读）或度量块不可算；
+    partial：轨迹不足全日/缺前日阶段/个别度量缺失（missing 列明，缺槽在轨迹行如实标缺）；
+    ok：轨迹+度量+前日阶段齐。跨日度量（热区停留/距峰回撤）与引擎 stage 是判段主锚，
+    当日轨迹槽缺（午后上榜）如实标注即可判——可计算部分照算（fail-visible）。
+    """
+    if trajectory_slots < 2 or not metrics_present:
         return {"level": "data_insufficient",
-                "reasons": [f"轨迹槽={trajectory_slots}(<5)" if trajectory_slots < 5 else "度量块不可算"]}
-    return {"level": "ok" if not missing else "partial", "reasons": list(missing or [])}
+                "reasons": [f"当日轨迹槽={trajectory_slots}(<2)" if trajectory_slots < 2 else "度量块不可算"]}
+    reasons = list(missing or [])
+    if trajectory_slots < 10:
+        reasons.append(f"当日轨迹仅{trajectory_slots}槽（午后上榜，缺槽如实标注）")
+    return {"level": "ok" if not reasons else "partial", "reasons": reasons}
 
 
 # ── 对照锚映射 ──
