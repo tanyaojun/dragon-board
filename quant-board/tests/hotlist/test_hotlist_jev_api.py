@@ -585,6 +585,42 @@ def test_quotes_review_boards_source_missing_degraded(monkeypatch):
     assert body["ok"] is True and len(body["rows"]) == 2  # 主读口不阻断
 
 
+def test_quotes_review_unknown_values_shown_as_missing(monkeypatch):
+    """引擎 unknown 字面值（档位/阶段/方向）：读口归一 None（前端统一 '--'），不进排序与台账。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    db["snapshot_stock_rows"].rows.append(
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00",
+         "code": "000009", "name": "丁", "rank": 9})
+    db["snapshot_analysis"].rows.append(
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000009",
+         "analysis": {"resonance": {"signalTier": "unknown"},
+                      "observation": {"rankTrend": {"signalTier": "unknown"},
+                                       "crossSection": {"signalTier": "unknown"},
+                                       "volumePrice": {"signalTier": "unknown"},
+                                       "lifecycle": {"stage": "unknown"},
+                                       "synergy": {"signalTier": "unknown"}}}})
+    db["hotlist_jev_vote_confirm_pilot"].rows.append(
+        {"_id": f"{DATE}:15:00:000009:VOTE", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000009", "name": "丁", "status": "ok", "origin": "vote_confirm_pilot",
+         "synergyTier": "unknown", "voteDirection": "unknown", "voteConfidence": 0.4,
+         "riskFlag": {"level": "partial", "reasons": []},
+         "questionSetVersion": "v1", "questionSetHash": "abc123"})
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    row = next(r for r in body["rows"] if r["code"] == "000009")
+    assert all(v is None for v in row["tiers"].values())
+    assert row["jev"]["vote"]["direction"] is None and row["jev"]["agree"] is None
+    s = body["summary"]
+    assert s["vote"]["buy"] == 2 and s["vote"]["hold"] == 0  # unknown 不计方向
+    assert s["lc"]["stages"] == {"ignition": 1}              # unknown 不进阶段分布
+    assert s["total"] == 3 and s["tiered"] == 2              # unknown 五维不算可算
+
+
 def test_quotes_review_missing_date_422(monkeypatch):
     db = FakeMongoDb()
     client = _quotes_client(monkeypatch, db)

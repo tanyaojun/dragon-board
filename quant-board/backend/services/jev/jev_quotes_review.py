@@ -39,9 +39,14 @@ def _num(value: Any) -> float | None:
     return float(value) if math.isfinite(float(value)) else None
 
 
+def _clean(value: Any) -> str | None:
+    """枚举归一：引擎 unknown 字面值与缺失同价（展示层统一 '--'，排序/台账不计票）。"""
+    text = str(value) if value else None
+    return None if text in (None, "unknown") else text
+
+
 def _tier(payload: Any) -> str | None:
-    value = (payload or {}).get("signalTier")
-    return str(value) if value else None
+    return _clean((payload or {}).get("signalTier"))
 
 
 def _risk_level(doc: dict[str, Any] | None) -> str | None:
@@ -59,7 +64,7 @@ def _vote_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
     if not doc:
         return None
     return {"status": doc.get("status"),
-            "direction": doc.get("voteDirection"),
+            "direction": _clean(doc.get("voteDirection")),
             "confidence": _num(doc.get("voteConfidence")),
             "riskLevel": _risk_level(doc)}
 
@@ -68,7 +73,7 @@ def _lc_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
     if not doc:
         return None
     return {"status": doc.get("status"),
-            "stage": doc.get("lcStage"),
+            "stage": _clean(doc.get("lcStage")),
             "confidence": _num(doc.get("lcConfidence")),
             "riskLevel": _risk_level(doc)}
 
@@ -145,12 +150,12 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         a = analysis_by_code.get(code) or {}
         obs = a.get("observation") or {}
         res = a.get("resonance") or {}
-        rule_stage = (obs.get("lifecycle") or {}).get("stage")
+        rule_stage = _clean((obs.get("lifecycle") or {}).get("stage"))
         tiers = {"resonance": _tier(res),
                  "trend": _tier(obs.get("rankTrend")),
                  "heat": _tier(obs.get("crossSection")),
                  "volumePrice": _tier(obs.get("volumePrice")),
-                 "cycle": str(rule_stage) if rule_stage else None,
+                 "cycle": rule_stage,
                  "synergy": _tier(obs.get("synergy"))}
         vote_doc = vote_by_code.get(code)
         lc_doc = lc_by_code.get(code)
@@ -163,28 +168,27 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             jev = {"vote": _vote_brief(vote_doc), "lc": _lc_brief(lc_doc),
                    "agree": None, "lcAgree": None}
             if vote_doc:
-                direction = vote_doc.get("voteDirection")
+                direction = _clean(vote_doc.get("voteDirection"))
                 anchor = synergy_direction(tiers["synergy"])
                 if anchor and direction:
-                    jev["agree"] = "agree" if anchor == str(direction) else "diverge"
+                    jev["agree"] = "agree" if anchor == direction else "diverge"
                     if jev["agree"] == "agree":
                         agree_count += 1
                     else:
                         diverge_count += 1
-                vote_dirs.append(str(direction) if direction else None)
+                vote_dirs.append(direction)
                 for rf in (_risk_level(vote_doc),):
                     if rf:
                         risk_levels[rf] = risk_levels.get(rf, 0) + 1
             if lc_doc:
-                lc_stage = lc_doc.get("lcStage")
+                lc_stage = _clean(lc_doc.get("lcStage"))
                 if lc_stage and rule_stage:
-                    jev["lcAgree"] = ("agree" if str(lc_stage) == str(rule_stage)
-                                      else "diverge")
+                    jev["lcAgree"] = "agree" if lc_stage == str(rule_stage) else "diverge"
                     if jev["lcAgree"] == "agree":
                         lc_agree_count += 1
                     else:
                         lc_diverge_count += 1
-                lc_stages.append(str(lc_stage) if lc_stage else None)
+                lc_stages.append(lc_stage)
                 rf = _risk_level(lc_doc)
                 if rf:
                     risk_levels[rf] = risk_levels.get(rf, 0) + 1

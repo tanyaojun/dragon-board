@@ -241,7 +241,7 @@ const LC_STAGE_CN = {ignition:'点火', expansion:'扩散', crowded:'拥挤', re
 const LC_STAGE_ORDER = {ignition:0, expansion:1, crowded:2, reversal:3, cooling:4};
 const LC_STAGE_COLOR = {ignition:'#16a34a', expansion:'#2563eb', crowded:'#a16207', reversal:'#dc2626', cooling:'#94a3b8'};
 const TIER_RANK = {S:6, A:5, B:4, C:3, D:2, E:1};
-const tierB = v => badge(v||'-', (v==='S'||v==='A')?'b-green':v==='B'?'b-blue':(v==='D'||v==='E')?'b-red':'b-gray');
+const tierB = v => badge(v||'--', (v==='S'||v==='A')?'b-green':v==='B'?'b-blue':(v==='D'||v==='E')?'b-red':'b-gray');
 const dirB = v => v==='buy' ? badge('buy','b-green') : v==='sell' ? badge('sell','b-red') : v==='hold' ? badge('hold','b-gray') : '';
 const agreeB = v => v==='agree' ? badge('一致','b-green') : v==='diverge' ? badge('分歧','b-amber') : '';
 const numOr = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
