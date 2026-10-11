@@ -87,14 +87,40 @@ def _frame_sparse_fields(rows: list[dict], ratio: float = 0.9) -> list[str]:
     return out
 
 
-def _trajectory(slot_rows: list[tuple[str, dict[str, dict]]], code: str) -> list[dict]:
-    """逐槽 {slot, rank, change}；该股缺槽行 → None（fail-visible，叙事标「缺」）。"""
+def _trajectory(points: list[tuple[str, dict[str, dict]]], code: str,
+                label: str = "slot") -> list[dict]:
+    """逐时点 {label, rank, change}；该股缺行 → None（fail-visible，叙事标「缺」）。
+    label=slot（日内槽位）| date（跨日日期，原料跨日化 b 代）。"""
     out = []
-    for slot, by_code in slot_rows:
+    for t, by_code in points:
         r = by_code.get(code)
-        out.append({"slot": slot,
+        out.append({label: t,
                     "rank": r.get("rank") if r else None,
                     "change": r.get("change") if r else None})
+    return out
+
+
+def _prev_trading_dates(db, date: str, dataset_id: str, slot: str, n: int = 10) -> list[str]:
+    """date 之前最近 n 个有 slot 帧的交易日（升序）。跨日原料取数用（与判读帧同槽位定格）。"""
+    frames = db["snapshot_frames"].find(
+        {"datasetId": dataset_id, "type": "half_hour", "slotTime": slot},
+        {"tradingDate": 1})
+    dates = sorted({str(f.get("tradingDate")) for f in frames
+                    if str(f.get("tradingDate") or "") and str(f.get("tradingDate")) < date})
+    return dates[-n:]
+
+
+def _multi_day_rows_by_day(db, date: str, dataset_id: str, slot: str, n: int = 10):
+    """近 n 交易日同 slot 帧 → [(tradingDate, {code: row})]（升序，不含当日）。跨日原料：让
+    叙事可数锚（「多日」「峰值」）与引擎跨日窗口度量同源——铁律 3/4 补原料方向修复。"""
+    out = []
+    for d in _prev_trading_dates(db, date, dataset_id, slot, n):
+        f = _slot_frame(db, d, dataset_id, slot)
+        if not f:
+            continue
+        rows = db["snapshot_stock_rows"].find(
+            {"datasetId": dataset_id, "snapshotId": str(f.get("snapshotId") or "")})
+        out.append((d, {str(r.get("code")): r for r in rows}))
     return out
 
 
@@ -132,6 +158,7 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     row_by_code = {str(r.get("code")): r for r in rows}
     sparse = _frame_sparse_fields(rows)
     slot_rows = _day_rows_by_slot(db, date, dataset_id)
+    multi_day = _multi_day_rows_by_day(db, date, dataset_id, slot)
     buy: list[dict] = []
     sell: list[dict] = []
     insufficient: list[dict] = []
@@ -162,7 +189,8 @@ def build_vote_population(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                                 "maCross": (tech.get("maCross") or {}).get("cross")},
                 "gate": {"stage": (obs.get("lifecycle") or {}).get("stage"),
                          "veto": (obs.get("lifecycle") or {}).get("veto")},
-                "trajectory": _trajectory(slot_rows, code)}
+                "trajectory": _trajectory(slot_rows, code),
+                "multiDayTrajectory": _trajectory(multi_day, code, label="date")}
         if rf["level"] == "data_insufficient":
             insufficient.append(cand)
         elif syn_tier in ("S", "A", "B"):
@@ -184,6 +212,7 @@ def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_
     row_by_code = {str(r.get("code")): r
                    for r in db["snapshot_stock_rows"].find({"datasetId": dataset_id, "snapshotId": sid})}
     slot_rows = _day_rows_by_slot(db, date, dataset_id)
+    multi_day = _multi_day_rows_by_day(db, date, dataset_id, slot)
     candidates: list[dict] = []
     insufficient: list[dict] = []
     for doc in db["snapshot_analysis"].find({"datasetId": dataset_id, "snapshotId": sid}):
@@ -207,7 +236,9 @@ def build_lifecycle_population(db, date: str, dataset_id: str = DEFAULT_DATASET_
             missing.append("cycle_metrics_missing")
         rf = lifecycle_risk_flag(computable, bool(metrics), missing)
         cand = {"code": code, "name": (row_by_code.get(code) or {}).get("name"), "stage": stage,
-                "riskFlag": rf, "trajectory": traj, "metrics": metrics, "evidence": evidence,
+                "riskFlag": rf, "trajectory": traj,
+                "multiDayTrajectory": _trajectory(multi_day, code, label="date"),
+                "metrics": metrics, "evidence": evidence,
                 "prevDate": prev_date, "prevStage": prev_stage,
                 "action": (cyc.get("decision") or {}).get("action"),
                 "confidence": cyc.get("confidence"),
@@ -277,6 +308,7 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                 resonance=c["resonance"], trend=c["trend"], cross_section=c["crossSection"],
                 volume_price=c["volumePrice"], trend_events=c["trendEvents"], row=row,
                 sparse_fields=sparse, trajectory=c["trajectory"],
+                multi_day_trajectory=c.get("multiDayTrajectory"),
                 gate=c["gate"], synergy_tier=c["synergyTier"])
             env, ms = _dispatch_jev(narrative, questions)
             parsed = parse_jev_response(env, ms, expected_keys=set(questions))
@@ -376,7 +408,9 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
                          f"{c['prevDate'] or '无更早帧'} 前一交易日阶段：数据缺口（fail-visible）")
             narrative = build_lifecycle_narrative(
                 trading_date=date, slot=slot, code=c["code"], name=c["name"],
-                trajectory=c["trajectory"], metrics=c["metrics"], evidence=c["evidence"],
+                trajectory=c["trajectory"],
+                multi_day_trajectory=c.get("multiDayTrajectory"),
+                metrics=c["metrics"], evidence=c["evidence"],
                 prev_stage_line=prev_line, stage=c["stage"], action=c["action"],
                 confidence=c["confidence"], reasons=c["reasons"])
             env, ms = _dispatch_jev(narrative, questions)

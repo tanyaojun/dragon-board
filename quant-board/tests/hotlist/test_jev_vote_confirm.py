@@ -20,6 +20,7 @@ from backend.analysis.hotlist.jev_driver_ammo import (
 from backend.analysis.hotlist.jev_vote_ammo import (
     QUESTION_SET_VERSION_LIFECYCLE_RECHECK,
     QUESTION_SET_VERSION_VOTE_CONFIRM,
+    VOTE_AMMO_VERSION,
     QUESTIONS_LIFECYCLE_RECHECK,
     QUESTIONS_VOTE_CONFIRM,
     backfill_quote_fields,
@@ -69,7 +70,7 @@ def test_version_stamps_independent_v1():
     assert QUESTION_SET_VERSION_LIFECYCLE_RECHECK == "v1"
     assert QUESTION_SET_VERSION_VOTE_CONFIRM != QUESTION_SET_VERSION_DRIVER
     assert QUESTION_SET_VERSION_LIFECYCLE_RECHECK != QUESTION_SET_VERSION_CYCLE
-    assert runner.VOTE_AMMO_VERSION == "2026-10-12a"
+    assert runner.VOTE_AMMO_VERSION == "2026-10-12b"  # b 代=原料跨日化（近10日轨迹行）
 
 
 # ── riskFlag 预检（裁决 1 落地）──
@@ -624,3 +625,48 @@ def test_frame_mark_roundtrip():
     assert runner._frame_mark_done(db, "hotlist_jev_vote_confirm_pilot", DATE, "10:00", "VOTE")
     mark = db["hotlist_jev_vote_confirm_pilot"].find_one({"_id": f"{DATE}:10:00:MARK:VOTE"})
     assert mark["status"] == "run_marker" and mark["tokens"] == 123
+
+
+# ── 原料跨日化（b 代：近10日排名轨迹行，判据「多日/峰值」引用获得可数锚）──
+
+
+def test_multi_day_trajectory_line_rendered():
+    text = build_lifecycle_narrative(
+        trading_date="2026-09-30", slot="15:00", code="603259", name="测试股",
+        trajectory=_traj(),
+        multi_day_trajectory=[{"date": "2026-09-25", "rank": 55, "change": 2.1},
+                              {"date": "2026-09-28", "rank": 44, "change": -1.3},
+                              {"date": "2026-09-29", "rank": None, "change": None}],
+        metrics={"rankVelocity": 0.3, "rankAcceleration": 1.0, "hotZoneStreak": 2,
+                 "bestRecentRank": 29, "drawdownFromPeak": 0, "rankPathCommitment": 0.95},
+        evidence={"momentumShort": 1, "momentumMid": 2, "momentumLong": 3,
+                  "momentumAcceleration": 0, "riskPressure": 0.1},
+        prev_stage_line="2026-09-29 阶段=扩散", stage="expansion", action="allow",
+        confidence=80, reasons=["r"])
+    # 跨日可数锚呈现（判据「多日/峰值」引用的原料）+ 缺日 fail-visible
+    assert "【近10日排名轨迹】（日:名次,涨幅）2026-09-25:55,+2.10% → 2026-09-28:44,-1.30% → 2026-09-29:缺,缺" in text
+    assert "【当日排名轨迹】" in text
+
+
+def test_multi_day_missing_fail_visible():
+    text = build_lifecycle_narrative(
+        trading_date="2026-09-30", slot="15:00", code="X", name="",
+        trajectory=_traj(), multi_day_trajectory=None,
+        metrics={"rankVelocity": 0.1, "rankAcceleration": 0.1, "hotZoneStreak": 0,
+                 "bestRecentRank": 50, "drawdownFromPeak": 0, "rankPathCommitment": 0.5},
+        evidence={}, prev_stage_line="缺", stage="cooling", action="caution",
+        confidence=50, reasons=[])
+    assert "【近10日排名轨迹】数据缺口（fail-visible）" in text
+
+
+def test_population_carries_multi_day(db_factory=None):
+    import backend.operations.jev_vote_confirm as runner2
+    pop = runner2.build_vote_population(_vote_db(), DATE)
+    c1 = pop["buy"][0]
+    assert c1["multiDayTrajectory"] == [{"date": "2026-09-29", "rank": None, "change": None}]
+    pop_b = runner2.build_lifecycle_population(_vote_db(), DATE)
+    assert pop_b["candidates"][0]["multiDayTrajectory"][0]["date"] == "2026-09-29"
+
+
+def test_ammo_version_bumped_for_cross_day():
+    assert VOTE_AMMO_VERSION == "2026-10-12b"  # b 代=原料跨日化

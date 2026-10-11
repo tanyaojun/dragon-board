@@ -22,8 +22,11 @@ from typing import Any
 # ── 版本戳（预登记 §五：独立戳，cycle v5 旧债不重犯）──
 QUESTION_SET_VERSION_VOTE_CONFIRM = "v1"
 QUESTION_SET_VERSION_LIFECYCLE_RECHECK = "v1"
-# 原料代际戳（本链自有：snapshot_analysis 五维载荷 + EOD 补齐读法口径；与打标链 AMMO_VERSION 无关）
-VOTE_AMMO_VERSION = "2026-10-12a"
+# 原料代际戳（本链自有：snapshot_analysis 五维载荷 + EOD 补齐读法口径；与打标链 AMMO_VERSION 无关）。
+# b 代（2026-10-12）：原料跨日化——叙事增「近10日排名轨迹」行（同 slot 历史帧定格），
+# 判据「多日/峰值」引用获得可数锚（铁律 3/4 补原料方向修复，判据文本零改动 hash 不变）；
+# a 代（2026-10-12a）= 无跨日行旧料（9-10 月全量 4145 例留档不回写，跨代对照按戳分段）。
+VOTE_AMMO_VERSION = "2026-10-12b"
 
 # ── 题集 A：vote_direction（方向投票 jev 二次确认，三态纯净，无逃生口——裁决 1）──
 QUESTIONS_VOTE_CONFIRM: dict[str, dict] = {
@@ -201,15 +204,17 @@ def backfill_quote_fields(base_row: dict, donor_row: dict | None,
 
 # ── 叙事组装（纯函数；fail-visible 缺口如实注记，禁伪装）──
 
-def _traj_line(trajectory: list[dict]) -> str:
-    """trajectory=[{slot, rank, change}]（按槽升序）→ 单行；缺槽如实标「缺」。"""
+def _traj_line(points: list[dict]) -> str:
+    """轨迹行：points=[{slot|date, rank, change}]（按时间升序）→ 单行；缺如实标「缺」。
+    slot=日内槽位；date=跨日日期（跨日原料，铁律 3/4 补原料方向）。"""
     parts = []
-    for t in trajectory:
+    for t in points:
+        label = t.get("slot") or t.get("date") or "?"
         rank = _finite_num(t.get("rank"))
         chg = _finite_num(t.get("change"))
         rank_s = "缺" if rank is None else str(int(rank)) if float(rank).is_integer() else f"{rank:.1f}"
         chg_s = "缺" if chg is None else f"{chg:+.2f}%"
-        parts.append(f"{t.get('slot')}:{rank_s},{chg_s}")
+        parts.append(f"{label}:{rank_s},{chg_s}")
     return " → ".join(parts)
 
 
@@ -238,7 +243,8 @@ def _tier_reasons(reasons: Any) -> str:
 def build_vote_narrative(*, trading_date: str, slot: str, code: str, name: Any,
                          resonance: dict, trend: dict, cross_section: dict,
                          volume_price: dict, trend_events: dict, row: dict,
-                         sparse_fields: list[str], trajectory: list[dict], gate: dict,
+                         sparse_fields: list[str], trajectory: list[dict],
+                         multi_day_trajectory: list[dict] | None = None, gate: dict,
                          synergy_tier: Any) -> str:
     """题集 A 叙事（预登记 §二·二五块）。全部行 fail-visible；引擎块明标「仅供复核」。
     量价方向按引擎投票语义归一（up→buy/down→sell/neutral→hold）；zlje 原始单位=元，叙事除 1e8 折亿。"""
@@ -267,6 +273,8 @@ def build_vote_narrative(*, trading_date: str, slot: str, code: str, name: Any,
          f" · 主力净额 {zl_s}亿 · 换手 {_fmt_num(row.get('turnoverRate'))}%"
          + (f"（帧级行情字段缺失，取自 half_hour 15:00 补齐：{','.join(sparse_fields)}）" if sparse_fields else "")),
         f"当日排名轨迹（槽:名次,涨幅）：{_traj_line(trajectory)}",
+        (f"近10日排名轨迹（日:名次,涨幅）：{_traj_line(multi_day_trajectory or [])}"
+         if multi_day_trajectory else "近10日排名轨迹：数据缺口（fail-visible）"),
         (f"【环境门注记】生命周期 {STAGE_ZH.get(str(gate.get('stage')), gate.get('stage') or '缺')}"
          f" · 一票否决={'是' if gate.get('veto') else '否'}（环境门只注记不参与投票）"),
         (f"【待复核判读】规则投票（仅供复核）：四维方向见上 → 综合档位 {synergy_tier or 'unknown'}"),
@@ -275,13 +283,16 @@ def build_vote_narrative(*, trading_date: str, slot: str, code: str, name: Any,
 
 
 def build_lifecycle_narrative(*, trading_date: str, slot: str, code: str, name: Any,
-                              trajectory: list[dict], metrics: dict, evidence: dict,
+                              trajectory: list[dict], multi_day_trajectory: list[dict] | None = None,
+                              metrics: dict, evidence: dict,
                               prev_stage_line: str, stage: Any, action: Any,
                               confidence: Any, reasons: Any) -> str:
-    """题集 B 叙事（预登记 §三·二五块；不含四维投票档位——题目间口径隔离）。"""
+    """题集 B 叙事（预登记 §三·二；跨日原料化后判据「多日/峰值」引用有可数锚）。"""
     lines = [
         f"{trading_date} 交易日 {slot} 槽 · {code} {name or ''}".rstrip(),
         f"【当日排名轨迹】（槽:名次,涨幅）{_traj_line(trajectory)}",
+        (f"【近10日排名轨迹】（日:名次,涨幅）{_traj_line(multi_day_trajectory or [])}"
+         if multi_day_trajectory else "【近10日排名轨迹】数据缺口（fail-visible）"),
         "【生命周期度量】（规则计算读数）",
         (f"排名速度 {_fmt_num(metrics.get('rankVelocity'), 3)} · 排名加速度 {_fmt_num(metrics.get('rankAcceleration'), 3)}"
          f" · 热区停留 {_fmt_num(metrics.get('hotZoneStreak'), 0)} 天 · 近期最佳名次 {_fmt_num(metrics.get('bestRecentRank'), 0)}"
