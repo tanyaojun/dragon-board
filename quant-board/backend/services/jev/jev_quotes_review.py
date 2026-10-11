@@ -17,6 +17,7 @@ import math
 from typing import Any
 
 from backend.analysis.hotlist.jev_vote_ammo import synergy_direction
+from backend.operations.jev_label_jiuyan import jiuyan_consecutive_streaks
 
 PILOT_SLOT = "15:00"  # 预登记 §四 冻结口径（与 operations/jev_vote_confirm.py 一致）
 
@@ -124,20 +125,39 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
     # 连板高度：与涨停复盘页同源（jev_label_jiuyan.jiuyan_board_info，韭研+THS 池 join，
     # 单一事实源）；源缺失/异常结构化降级旗标，不阻断主读口（fail-visible）
     board_info: dict[str, dict[str, Any]] = {}
+    board_meta: dict[str, Any] = {}
     board_join_error: str | None = None
     try:
         from backend.operations.jev_label_jiuyan import jiuyan_board_info
-        board_info, bmeta = jiuyan_board_info(db, date)
-        if not bmeta.get("jiuyanFinalFound"):
+        board_info, board_meta = jiuyan_board_info(db, date)
+        if not board_meta.get("jiuyanFinalFound"):
             board_join_error = "jiuyan_final_missing"
-        elif not bmeta.get("thsPoolFound"):
+        elif not board_meta.get("thsPoolFound"):
             board_join_error = "ths_pool_missing"
-        elif not bmeta.get("prevPoolFound"):
+        elif not board_meta.get("prevPoolFound"):
             board_join_error = "prev_pool_missing"
-        elif bmeta.get("prevThsPoolFound") is False:
+        elif board_meta.get("prevThsPoolFound") is False:
             board_join_error = "prev_ths_pool_missing"
     except Exception as exc:  # noqa: BLE001 — 辅助 join 失败不阻断主读口（boards 全缺如实 '--'）
         board_join_error = f"board_join_failed: {exc}"
+
+    # 断板股（N>M）真实连续高度：逐日回溯封板链（韭研触板−THS炸板二分，与涨停复盘同源）；
+    # 今日不可二分或历史日不可验 → None（宁缺毋猜），streakUnverified 计数 fail-visible
+    today_sealed: set[str] | None = None
+    if board_meta.get("jiuyanFinalFound") and board_meta.get("thsPoolFound"):
+        today_sealed = {code for code, info in board_info.items() if not info.get("zhaban")}
+    broken = {code: info["boards"] for code, info in board_info.items()
+              if info.get("boards") is not None and info.get("days") is not None
+              and info["days"] > info["boards"]}
+    streaks: dict[str, int | None] = {}
+    streak_unverified = 0
+    if broken:
+        try:
+            streaks = jiuyan_consecutive_streaks(db, date, broken, today_sealed)
+            streak_unverified = sum(1 for v in streaks.values() if v is None)
+        except Exception:  # noqa: BLE001 — 回溯失败不阻断主读口，断板股连板如实 '--'
+            streaks = {code: None for code in broken}
+            streak_unverified = len(broken)
 
     rows: list[dict[str, Any]] = []
     vote_dirs: list[str | None] = []
@@ -163,13 +183,16 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             vote_reviewed += 1
         if lc_doc:
             lc_reviewed += 1
-        # 连板语义（用户口径 2026-10-13）：仅 N==M（如 8天8板）算连板；N>M（如 10天8板，
-        # 中间断板）是空间高度不是连板 → None 显 '--'（宁缺毋猜，不推断断板后真实连板高度）。
-        # 涨停复盘「高度」消费方仍用原始 M 口径，互不影响。
+        # 连板语义（用户口径）：仅 N==M（如 8天8板）直接计板；N>M（断板）用回溯真实连续高度
+        # （不可验 → None 显 '--'）。涨停复盘「高度」消费方仍用原始 M 口径，互不影响。
         b_info = board_info.get(code) or {}
         b_boards, b_days = b_info.get("boards"), b_info.get("days")
-        boards_val = b_boards if (b_boards is not None and b_days is not None
-                                  and b_days == b_boards) else None
+        if b_boards is None or b_days is None:
+            boards_val = None
+        elif b_days == b_boards:
+            boards_val = b_boards
+        else:
+            boards_val = streaks.get(code)
         jev: dict[str, Any] | None = None
         if vote_doc or lc_doc:
             jev = {"vote": _vote_brief(vote_doc), "lc": _lc_brief(lc_doc),
@@ -257,6 +280,7 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         "lcAgree": lc_agree_count,
         "lcDiverge": lc_diverge_count,
         "risk": risk_levels,
+        "streakUnverified": streak_unverified,
     }
     return {"ok": True, "date": date, "slotTime": PILOT_SLOT, "datasetId": dataset_id,
             "snapshotId": sid, "rows": rows, "summary": summary, "noData": False,
@@ -277,4 +301,5 @@ def _empty_summary() -> dict[str, Any]:
                      "buy": 0, "sell": 0, "hold": 0, "unreviewed": 0},
             "lc": {"ok": 0, "degraded": 0, "insufficient": 0, "stages": {},
                    "unreviewed": 0},
-            "agree": 0, "diverge": 0, "lcAgree": 0, "lcDiverge": 0, "risk": {}}
+            "agree": 0, "diverge": 0, "lcAgree": 0, "lcDiverge": 0, "risk": {},
+            "streakUnverified": 0}

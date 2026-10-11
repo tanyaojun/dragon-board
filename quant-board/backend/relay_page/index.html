@@ -767,7 +767,8 @@ function qRenderRows(){
   const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
   const hasFilter = f.q || f.synergy || f.vote || f.lc || f.agree;
   $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '15:00'} 收盘槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
-    + (Q.boardJoinDegraded ? ` · 连板降级:${Q.boardJoinDegraded}` : '');
+    + (Q.boardJoinDegraded ? ` · 连板降级:${Q.boardJoinDegraded}` : '')
+    + (Q.summary && Q.summary.streakUnverified ? ` · 断板连板不可验 ${Q.summary.streakUnverified} 例` : '');
   const th = (label, key) => `<th class="sortable" onclick="setQuotesSort('${key}')">${label}${sortMark(s, key)}</th>`;
   const rows = shown.map(r => {
     const e = STATE.quotesEntries.find(x => x.row === r);

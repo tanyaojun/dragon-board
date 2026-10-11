@@ -304,6 +304,63 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
     return out, meta
 
 
+def _sealed_codes(db, date: str) -> set[str] | None:
+    """date 当日真实封板集合（韭研触板 − THS 炸板池二分，与 jiuyan_board_info 同口径）。
+
+    韱研 final 缺失或 THS 池缺失 → None（不可验证，调用方宁缺毋猜，不得把炸板当封板）。"""
+    doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields.stocks.code": 1})
+    fields = (doc or {}).get("fields") or []
+    if not any(field.get("stocks") for field in fields):
+        return None
+    touch = {str(s.get("code") or "")[-6:]
+             for field in fields for s in field.get("stocks") or [] if s.get("code")}
+    failed, found = _ths_failed_codes(db, date)
+    if not found:
+        return None
+    return touch - failed
+
+
+def jiuyan_consecutive_streaks(db, date: str, targets: dict[str, int],
+                               today_sealed: set[str] | None) -> dict[str, int | None]:
+    """断板股真实连续高度（连板口径，2026-10-13 用户需求）：逐交易日回溯封板链。
+
+    targets={code: 区间板数 M}；today_sealed=今日封板集合（None=今日不可二分，全返 None）。
+    连续高度=今日起往前连续封板的交易日数，封顶 M（连续高度不可能超区间总板数）；
+    今日未封板（炸板/未触）或任一历史日不可验证（final/THS 池缺失）→ None（宁缺毋猜）。
+    消费方：热榜行情 quotes-review；涨停复盘「高度」口径不消费本函数。
+    """
+    if today_sealed is None:
+        return {code: None for code in targets}
+    max_span = max(targets.values(), default=0)
+    prev_dates = list(reversed(trading_dates_before(db, date, max_span)))  # 最近在前
+    sealed_cache: dict[str, set[str] | None] = {}
+
+    def sealed_set(d: str) -> set[str] | None:
+        if d not in sealed_cache:
+            sealed_cache[d] = _sealed_codes(db, d)
+        return sealed_cache[d]
+
+    out: dict[str, int | None] = {}
+    for code, m in targets.items():
+        if code not in today_sealed:
+            out[code] = None  # 今日未封板 → 无「至今日」连续高度
+            continue
+        streak = 1  # 今日已封
+        verifiable = True
+        for d in prev_dates:
+            if streak >= m:
+                break  # 封顶：连续高度不可能超区间总板数
+            s = sealed_set(d)
+            if s is None:
+                verifiable = False
+                break
+            if code not in s:
+                break  # 断板日 → 链终点，streak 即真实连续高度
+            streak += 1
+        out[code] = min(streak, m) if verifiable else None
+    return out
+
+
 def market_metrics(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict | None:
     """当日 15:00 盘面事实（涨停/炸板/回撤/梯队/最高板高；跌停另行自算）。批次B I8：带 datasetId/type 并取最新帧。
     2026-10-10 梯队双源：jiuyan final day 分布为主源（103 天池史稳定），THS thsPools

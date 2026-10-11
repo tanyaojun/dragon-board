@@ -545,10 +545,11 @@ def test_quotes_review_insufficient_doc_exposed(monkeypatch):
 
 
 def test_quotes_review_boards_join_passthrough(monkeypatch):
-    """连板高度与涨停复盘同源但口径更严：仅 N==M（纯连板）计板；N>M 断板不算（用户口径）。
+    '''连板口径：N==M 直接计板；N>M 断板股回溯逐日封板链取真实连续高度（用户口径）。
 
-    韭研 num「N天M板」：8天8板=连板 8；10天8板=区间 8 板中间有断板 → 连板 None（'--'）。
-    """
+    韭研 num「N天M板」：3天3板=纯连板 3；10天8板=断板股——今日+昨日封、前日未封
+    → 真实连续高度 2（min(2,8)），非 8。
+    '''
     db = FakeMongoDb()
     _seed_quotes_review(db)
     import backend.operations.jev_label_jiuyan as jiuyan_mod
@@ -562,6 +563,15 @@ def test_quotes_review_boards_join_passthrough(monkeypatch):
                  "prevThsPoolFound": True, "thsZhabanTotal": 5})
 
     monkeypatch.setattr(jiuyan_mod, "jiuyan_board_info", fake_board_info)
+    # 回溯链：2026-09-29 封 000002、2026-09-28 未封（断板日）→ 今日起连 2 板
+    monkeypatch.setattr(jiuyan_mod, "trading_dates_before",
+                        lambda db_, date_, n=20, dataset_id="dragonboard_live":
+                        ["2026-09-28", "2026-09-29"])
+    monkeypatch.setattr(jiuyan_mod, "_ths_failed_codes", lambda db_, d: (set(), True))
+    db["jiuyan_action"].rows = [
+        {"_id": "2026-09-29:final", "fields": [{"stocks": [{"code": "000002"}]}]},
+        {"_id": "2026-09-28:final", "fields": [{"stocks": [{"code": "000001"}]}]},
+    ]
     client = _quotes_client(monkeypatch, db)
 
     response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
@@ -570,8 +580,62 @@ def test_quotes_review_boards_join_passthrough(monkeypatch):
     body = response.json()
     assert captured["date"] == DATE
     assert body["rows"][0]["boards"] == 3        # 3天3板 = 纯连板
-    assert body["rows"][1]["boards"] is None     # 10天8板 = 断板，不算 8 连板
+    assert body["rows"][1]["boards"] == 2        # 10天8板 → 真实连续高度 2（非 8）
+    assert body["summary"]["streakUnverified"] == 0
     assert body["boardJoinDegraded"] is None
+
+
+def test_quotes_review_broken_streak_today_zhaban_none(monkeypatch):
+    '''断板股今日炸板：无「至今日」连续高度 → None，计 streakUnverified。'''
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+
+    def fake_board_info(db_, date_):
+        return ({"000002": {"boards": 8, "days": 10, "zhaban": True}},
+                {"jiuyanFinalFound": True, "prevPoolFound": True, "thsPoolFound": True,
+                 "prevThsPoolFound": True})
+
+    monkeypatch.setattr(jiuyan_mod, "jiuyan_board_info", fake_board_info)
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rows"][1]["boards"] is None
+    assert body["summary"]["streakUnverified"] == 1
+
+
+def test_quotes_review_broken_streak_history_unverifiable_none(monkeypatch):
+    '''回溯历史日韭研 final 缺失：不可验证 → None（宁缺毋猜），不把可疑日当封板。'''
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+
+    def fake_board_info(db_, date_):
+        return ({"000002": {"boards": 8, "days": 10}},
+                {"jiuyanFinalFound": True, "prevPoolFound": True, "thsPoolFound": True,
+                 "prevThsPoolFound": True})
+
+    monkeypatch.setattr(jiuyan_mod, "jiuyan_board_info", fake_board_info)
+    monkeypatch.setattr(jiuyan_mod, "trading_dates_before",
+                        lambda db_, date_, n=20, dataset_id="dragonboard_live":
+                        ["2026-09-28", "2026-09-29"])
+    monkeypatch.setattr(jiuyan_mod, "_ths_failed_codes", lambda db_, d: (set(), True))
+    # 只种 09-28 的 final（09-29 缺失 → 不可验）
+    db["jiuyan_action"].rows = [
+        {"_id": "2026-09-28:final", "fields": [{"stocks": [{"code": "000002"}]}]},
+    ]
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rows"][1]["boards"] is None
+    assert body["summary"]["streakUnverified"] == 1
+    assert body["ok"] is True  # 主读口不阻断
 
 
 def test_quotes_review_boards_source_missing_degraded(monkeypatch):
