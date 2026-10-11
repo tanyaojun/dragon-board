@@ -787,7 +787,7 @@ function qRenderRows(){
     <td>${agreeB((r.jev || {}).agree)}</td></tr>`
     + (open ? `<tr class="lg-detail"><td colspan="16">${quotesDetailHtml(e)}</td></tr>` : '');
   }).join('');
-  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}<th>共振</th><th>趋势</th><th>热度</th><th>量价</th>${th('周期', 'cycle')}<th>五维</th>${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
+  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('共振', 'res')}${th('趋势', 'trend')}${th('热度', 'heat')}${th('量价', 'vp')}${th('周期', 'cycle')}${th('五维', 'synergy')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
     + (rows || '<tr><td colspan="16" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function qRenderAll(){ qRenderKpi(); qRenderBar(); qRenderRows(); }
