@@ -17,6 +17,7 @@ internal static class LauncherServices
         "proxy",
         "bridge",
         "collector",
+        "relay-page",
         "quant-api",
         "frontend",
         "quant-ui",
@@ -27,7 +28,7 @@ internal static class LauncherServices
     [
         ["mongo", "redis"],
         ["proxy", "bridge"],
-        ["quant-api"],
+        ["quant-api", "relay-page"],
         ["collector"]
     ];
 
@@ -166,6 +167,8 @@ internal static class LauncherServices
             var dumpRdbPath = ExpandNullable(GetString(item, "dumpRdbPath"), root);
             var dumpRdbOwner = GetString(item, "dumpRdbOwner");
             var processSignature = GetString(item, "processSignature");
+            // 「打开」按钮目标 URL（2026-10-12 外置化：端口白名单/switch 硬编码退役）
+            var openUrl = ExpandNullable(GetString(item, "openUrl"), root);
 
             Dictionary<string, string>? envVars = null;
             if (item.TryGetProperty("envVars", out var envElement) &&
@@ -191,7 +194,8 @@ internal static class LauncherServices
                 logPolicy,
                 dumpRdbPath,
                 dumpRdbOwner,
-                processSignature);
+                processSignature,
+                openUrl);
             return (key, service);
         }
         catch

@@ -54,7 +54,8 @@ internal sealed class ManagedService
         ServiceLogPolicy? logPolicy = null,
         string? dumpRdbPath = null,
         string? dumpRdbOwner = null,
-        string? processSignature = null)
+        string? processSignature = null,
+        string? openUrl = null)
     {
         Name = name;
         Port = port;
@@ -73,6 +74,7 @@ internal sealed class ManagedService
         DumpRdbPath = dumpRdbPath;
         DumpRdbOwner = dumpRdbOwner;
         ProcessSignature = processSignature;
+        OpenUrl = openUrl;
     }
 
     public string Name { get; }
@@ -104,4 +106,8 @@ internal sealed class ManagedService
     /// <summary>TCP 表损坏时按命令行识别孤儿进程的签名（2026-10-09）；null 时默认
     /// 用 "--port {Port}"。仅对 Managed 服务、且 netstat 表查不到端口 PID 时作为回退证据。</summary>
     public string? ProcessSignature { get; }
+    /// <summary>「打开」按钮的目标 URL（services.json openUrl，2026-10-12 外置化）。
+    /// null = 不显示打开按钮（无 Web UI 的基础设施类服务）；
+    /// mongo/redis 的本地管理工具拉起仍由 Form 特判，不走此字段。</summary>
+    public string? OpenUrl { get; }
 }

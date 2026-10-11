@@ -4,7 +4,7 @@
   "stages": [
     { "name": "基础设施", "keys": ["mongo", "redis"] },
     { "name": "实时数据源", "keys": ["proxy", "bridge"] },
-    { "name": "量化后端", "keys": ["quant-api"] },
+    { "name": "量化后端", "keys": ["quant-api", "relay-page"] },
     { "name": "快照采集", "keys": ["collector"] }
   ],
   "services": [
@@ -41,7 +41,8 @@
       "processSignature": "server.js",
       "externalPolicy": "managed",
       "logOnlyErrors": false,
-      "logPolicy": { "level": "filter-access", "suppressHealth": true }
+      "logPolicy": { "level": "filter-access", "suppressHealth": true },
+      "openUrl": "http://127.0.0.1:3000/docs"
     },
     {
       "key": "voice",
@@ -65,7 +66,8 @@
       "arguments": "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5173",
       "envVars": { "NO_COLOR": "1", "FORCE_COLOR": "0" },
       "externalPolicy": "managed",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "openUrl": "http://127.0.0.1:5173"
     },
     {
       "key": "bridge",
@@ -90,7 +92,8 @@
       "fallbackFileName": "python",
       "externalPolicy": "managed",
       "logOnlyErrors": false,
-      "logPolicy": { "level": "filter-access", "suppressHealth": true }
+      "logPolicy": { "level": "filter-access", "suppressHealth": true },
+      "openUrl": "http://127.0.0.1:8000/docs"
     },
     {
       "key": "collector",
@@ -103,7 +106,23 @@
       "fallbackFileName": "python",
       "externalPolicy": "managed",
       "logOnlyErrors": false,
-      "logPolicy": { "level": "filter-access", "suppressHealth": true }
+      "logPolicy": { "level": "filter-access", "suppressHealth": true },
+      "openUrl": "http://127.0.0.1:8001/docs"
+    },
+    {
+      "key": "relay-page",
+      "name": "JEV 叙事工作台",
+      "port": 8008,
+      "workingDirectory": "${repoRoot}\\quant-board",
+      "fileName": "${repoRoot}\\quant-board\\.venv\\Scripts\\python.exe",
+      "arguments": "-m uvicorn backend.serve_relay_page:app --host 127.0.0.1 --port 8008 --no-access-log",
+      "processSignature": "-m uvicorn backend.serve_relay_page:app",
+      "fallbackFileName": "python",
+      "externalPolicy": "managed",
+      "logOnlyErrors": false,
+      "logPolicy": { "level": "filter-access", "suppressHealth": true },
+      "openUrl": "http://127.0.0.1:8008",
+      "comment": "2026-10-12 增补：JEV 叙事工作台静态页 + :8000 读口透传（不经 :3000）"
     },
     {
       "key": "quant-ui",
@@ -114,7 +133,8 @@
       "arguments": "\"node_modules/vite/bin/vite.js\" --host 127.0.0.1 --port 5174",
       "envVars": { "NO_COLOR": "1", "FORCE_COLOR": "0" },
       "externalPolicy": "managed",
-      "logOnlyErrors": false
+      "logOnlyErrors": false,
+      "openUrl": "http://127.0.0.1:5174"
     }
-  ]
+    ]
 }

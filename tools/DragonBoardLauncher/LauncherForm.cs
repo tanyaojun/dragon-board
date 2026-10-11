@@ -165,7 +165,7 @@ internal sealed class LauncherForm : Form
         Controls.Add(titlePanel);
 
         int y = titlePanel.Bottom + 8;
-        var iconKeys = new[] { "DB", "RD", "PX", "BR", "SC", "QA", "FE", "QU", "VO" };
+        var iconKeys = new[] { "DB", "RD", "PX", "BR", "SC", "RP", "QA", "FE", "QU", "VO" };
         var keys = LauncherServices.OrderedKeys;
         for (int i = 0; i < keys.Length; i++)
         {
@@ -387,7 +387,9 @@ internal sealed class LauncherForm : Form
         p.Controls.Add(stopBtn);
         _stopButtons[key] = stopBtn;
 
-        if (svc.Port is 5173 or 5174 or 3000 or 8000 or 8001 or 8765 or 27017 or 6379)
+        // 「打开」按钮（2026-10-12 外置化）：openUrl 配置驱动，无白名单无 switch；
+        // mongo/redis 的本地管理工具（MongoExpress/RedisCommander）非 URL 语义，保留特判。
+        if (!string.IsNullOrWhiteSpace(svc.OpenUrl) || svc.Port is 27017 or 6379)
         {
             var openBtn = new Button
             {
@@ -401,24 +403,14 @@ internal sealed class LauncherForm : Form
                 Cursor = Cursors.Hand,
             };
             openBtn.FlatAppearance.BorderSize = 0;
-            var url = svc.Port switch
-            {
-                5173 => "http://127.0.0.1:5173",
-                5174 => "http://127.0.0.1:5174",
-                8000 => "http://127.0.0.1:8000/docs",
-                8001 => "http://127.0.0.1:8001/docs",
-                8765 => "http://127.0.0.1:8765/docs",
-                27017 => "http://127.0.0.1:8081",
-                6379 => "http://127.0.0.1:8082",
-                _ => "http://127.0.0.1:3000/docs"
-            };
             openBtn.Click += (_, _) =>
             {
                 if (svc.Port == 27017)
                     _processManager.StartMongoExpress();
-                if (svc.Port == 6379)
+                else if (svc.Port == 6379)
                     _processManager.StartRedisCommander();
-                OpenUrl(url);
+                else
+                    OpenUrl(svc.OpenUrl!);
             };
             p.Controls.Add(openBtn);
         }
