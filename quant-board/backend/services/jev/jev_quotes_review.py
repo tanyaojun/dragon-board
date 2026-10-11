@@ -1,0 +1,250 @@
+# -*- coding: utf-8 -*-
+"""热榜行情读口聚合（行情列表五维信号 jev 复核台账，2026-10-12 预登记批次的展示侧）。
+
+预登记唯一来源：docs/hotlist-jev/jev-vote-confirm-lifecycle-recheck-preregistration.md。
+数据源（全部只读，零 jev 调用零写入）：
+- snapshot_frames：half_hour 15:00 收盘槽（口径同 pilot PILOT_SLOT，不回退其它槽位）；
+- snapshot_stock_rows / snapshot_analysis：帧内行情行 + 逐股五维 analysis（与规则链同源）；
+- hotlist_jev_vote_confirm_pilot / hotlist_jev_lifecycle_recheck_pilot：双题集复核文档。
+
+fail-visible：15:00 帧缺失 → noData=true + 结构化 reason；行情/档位/复核文档逐字段缺失
+如实 None，不伪造 0 值。jev 与规则投票引擎=并列观察者：agree/diverge 台账仅对照展示
+（jev_vote_ammo.synergy_direction 对照锚），不回写引擎、不进候选池、不进交易路径。
+"""
+from __future__ import annotations
+
+import math
+from typing import Any
+
+from backend.analysis.hotlist.jev_vote_ammo import synergy_direction
+
+PILOT_SLOT = "15:00"  # 预登记 §四 冻结口径（与 operations/jev_vote_confirm.py 一致）
+
+# with_docs=True 时原文档保留字段（含大字段；watch 模式每日两槽近全人口，体量可观，
+# 前端固定 with_docs=1 的载荷成本由产品侧验收；字段面遵预登记 §八「全保留」）
+_DOC_FIELDS = ("_id", "origin", "tradingDate", "slotTime", "code", "name",
+               "status", "riskFlag", "synergyTier", "synergyDirection",
+               "voteDirection", "voteConfidence", "voteProbabilities",
+               "lcStage", "lcConfidence", "lcProbabilities",
+               "ammoVersion", "ruleStage", "ruleAction", "prevTradingDate", "prevStage",
+               "narrative", "questionsRaw", "answers", "responseRaw",
+               "model", "usage", "latencyMs", "errorCode", "errorDetail",
+               "questionSetVersion", "questionSetHash", "computedAt")
+
+
+def _num(value: Any) -> float | None:
+    """有限数值透传（bool/NaN/inf→None），缺失如实 None 不伪造 0。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def _tier(payload: Any) -> str | None:
+    value = (payload or {}).get("signalTier")
+    return str(value) if value else None
+
+
+def _risk_level(doc: dict[str, Any] | None) -> str | None:
+    level = ((doc or {}).get("riskFlag") or {}).get("level")
+    return str(level) if level else None
+
+
+def _doc_public(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    return {k: doc.get(k) for k in _DOC_FIELDS}
+
+
+def _vote_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    return {"status": doc.get("status"),
+            "direction": doc.get("voteDirection"),
+            "confidence": _num(doc.get("voteConfidence")),
+            "riskLevel": _risk_level(doc)}
+
+
+def _lc_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    return {"status": doc.get("status"),
+            "stage": doc.get("lcStage"),
+            "confidence": _num(doc.get("lcConfidence")),
+            "riskLevel": _risk_level(doc)}
+
+
+def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_live",
+                          with_docs: bool = False) -> dict[str, Any]:
+    """单日 15:00 收盘槽全量热榜股 + 五维档位 + 双题集复核台账。
+
+    with_docs=True（工作台行展开用）：有复核文档的股嵌入完整存档文档
+    （narrative/questionsRaw/answers/responseRaw 原样，预登记 §八「全保留」）。
+    """
+    frame = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date,
+         "slotTime": PILOT_SLOT})
+    base = {"ok": True, "date": date, "slotTime": PILOT_SLOT, "datasetId": dataset_id,
+            "snapshotId": None, "rows": [], "summary": _empty_summary(), "noData": True,
+            "reason": f"{date} 无 half_hour {PILOT_SLOT} 收盘槽帧（非交易日或未采集）"}
+    if not frame:
+        return base
+    sid = str(frame.get("snapshotId") or "")
+    stock_rows = list(db["snapshot_stock_rows"].find(
+        {"datasetId": dataset_id, "snapshotId": sid}))
+    if not stock_rows:
+        base["snapshotId"] = sid
+        base["reason"] = f"{date} {PILOT_SLOT} 帧存在但行集为空（snapshotId={sid}）"
+        return base
+
+    analysis_by_code: dict[str, dict[str, Any]] = {}
+    for doc in db["snapshot_analysis"].find({"datasetId": dataset_id, "snapshotId": sid}):
+        code = str(doc.get("code") or "")
+        if code:
+            analysis_by_code[code] = doc.get("analysis") or {}
+    # 台账文档锁 15:00 槽（watch 模式 11:30/15:00 同集合按槽写入）：跨槽拼接违预登记 §四
+    # 「引擎档位不可跨帧拼接」，且 11:30 判读冒充 15:00 台账（review blocker 修复）
+    vote_by_code: dict[str, dict[str, Any]] = {}
+    for doc in db["hotlist_jev_vote_confirm_pilot"].find(
+            {"tradingDate": date, "slotTime": PILOT_SLOT}):
+        code = str(doc.get("code") or "")
+        if code:
+            vote_by_code[code] = doc
+    lc_by_code: dict[str, dict[str, Any]] = {}
+    for doc in db["hotlist_jev_lifecycle_recheck_pilot"].find(
+            {"tradingDate": date, "slotTime": PILOT_SLOT}):
+        code = str(doc.get("code") or "")
+        if code:
+            lc_by_code[code] = doc
+
+    rows: list[dict[str, Any]] = []
+    vote_dirs: list[str | None] = []
+    lc_stages: list[str | None] = []
+    agree_count = diverge_count = lc_agree_count = lc_diverge_count = 0
+    vote_reviewed = lc_reviewed = 0  # unreviewed 按行统计：文档 code 不在行集内时不误减
+    risk_levels: dict[str, int] = {}
+    for row in stock_rows:
+        code = str(row.get("code") or "")
+        a = analysis_by_code.get(code) or {}
+        obs = a.get("observation") or {}
+        res = a.get("resonance") or {}
+        rule_stage = (obs.get("lifecycle") or {}).get("stage")
+        tiers = {"resonance": _tier(res),
+                 "trend": _tier(obs.get("rankTrend")),
+                 "heat": _tier(obs.get("crossSection")),
+                 "volumePrice": _tier(obs.get("volumePrice")),
+                 "cycle": str(rule_stage) if rule_stage else None,
+                 "synergy": _tier(obs.get("synergy"))}
+        vote_doc = vote_by_code.get(code)
+        lc_doc = lc_by_code.get(code)
+        if vote_doc:
+            vote_reviewed += 1
+        if lc_doc:
+            lc_reviewed += 1
+        jev: dict[str, Any] | None = None
+        if vote_doc or lc_doc:
+            jev = {"vote": _vote_brief(vote_doc), "lc": _lc_brief(lc_doc),
+                   "agree": None, "lcAgree": None}
+            if vote_doc:
+                direction = vote_doc.get("voteDirection")
+                anchor = synergy_direction(tiers["synergy"])
+                if anchor and direction:
+                    jev["agree"] = "agree" if anchor == str(direction) else "diverge"
+                    if jev["agree"] == "agree":
+                        agree_count += 1
+                    else:
+                        diverge_count += 1
+                vote_dirs.append(str(direction) if direction else None)
+                for rf in (_risk_level(vote_doc),):
+                    if rf:
+                        risk_levels[rf] = risk_levels.get(rf, 0) + 1
+            if lc_doc:
+                lc_stage = lc_doc.get("lcStage")
+                if lc_stage and rule_stage:
+                    jev["lcAgree"] = ("agree" if str(lc_stage) == str(rule_stage)
+                                      else "diverge")
+                    if jev["lcAgree"] == "agree":
+                        lc_agree_count += 1
+                    else:
+                        lc_diverge_count += 1
+                lc_stages.append(str(lc_stage) if lc_stage else None)
+                rf = _risk_level(lc_doc)
+                if rf:
+                    risk_levels[rf] = risk_levels.get(rf, 0) + 1
+        item: dict[str, Any] = {
+            "code": code,
+            "name": row.get("name"),
+            "price": _num(row.get("price")),
+            "change": _num(row.get("change")),
+            "rank": row.get("rank") if isinstance(row.get("rank"), int)
+                    and not isinstance(row.get("rank"), bool) else None,
+            "compRank": row.get("compRank") if isinstance(row.get("compRank"), int)
+                        and not isinstance(row.get("compRank"), bool) else None,
+            "compScore": _num(row.get("compScore")),
+            "amount": _num(row.get("amount")),
+            "cirMV": _num(row.get("cirMV")),
+            "turnoverRate": _num(row.get("turnoverRate")),
+            "volumeRatio": _num(row.get("volumeRatio")),
+            "resonanceScore": _num(res.get("score")),
+            "tiers": tiers,
+            "jev": jev,
+        }
+        if with_docs:
+            item["docs"] = {"vote": _doc_public(vote_doc), "lc": _doc_public(lc_doc)}
+        rows.append(item)
+
+    rows.sort(key=lambda r: (r["rank"] is None,
+                             r["rank"] if r["rank"] is not None else 99999,
+                             r["code"]))
+
+    def _status_counts(docs: list[dict[str, Any]]) -> dict[str, int]:
+        out = {"ok": 0, "degraded": 0, "insufficient": 0}
+        for d in docs:
+            status = str(d.get("status") or "unknown")
+            if status == "ok":
+                out["ok"] += 1
+            elif status == "degraded":
+                out["degraded"] += 1
+            elif status == "data_insufficient":
+                out["insufficient"] += 1
+        return out
+
+    vote_status = _status_counts(list(vote_by_code.values()))
+    lc_status = _status_counts(list(lc_by_code.values()))
+    total = len(rows)
+    summary = {
+        "total": total,
+        "tiered": sum(1 for r in rows if r["tiers"]["synergy"]),
+        "vote": {**vote_status,
+                 "buy": sum(1 for d in vote_dirs if d == "buy"),
+                 "sell": sum(1 for d in vote_dirs if d == "sell"),
+                 "hold": sum(1 for d in vote_dirs if d == "hold"),
+                 "unreviewed": total - vote_reviewed},
+        "lc": {**lc_status,
+               "stages": _lc_stage_counts(lc_stages),
+               "unreviewed": total - lc_reviewed},
+        "agree": agree_count,
+        "diverge": diverge_count,
+        "lcAgree": lc_agree_count,
+        "lcDiverge": lc_diverge_count,
+        "risk": risk_levels,
+    }
+    return {"ok": True, "date": date, "slotTime": PILOT_SLOT, "datasetId": dataset_id,
+            "snapshotId": sid, "rows": rows, "summary": summary, "noData": False,
+            "reason": None}
+
+
+def _lc_stage_counts(stages: list[str | None]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for s in stages:
+        if s:
+            out[s] = out.get(s, 0) + 1
+    return out
+
+
+def _empty_summary() -> dict[str, Any]:
+    return {"total": 0, "tiered": 0,
+            "vote": {"ok": 0, "degraded": 0, "insufficient": 0,
+                     "buy": 0, "sell": 0, "hold": 0, "unreviewed": 0},
+            "lc": {"ok": 0, "degraded": 0, "insufficient": 0, "stages": {},
+                   "unreviewed": 0},
+            "agree": 0, "diverge": 0, "lcAgree": 0, "lcDiverge": 0, "risk": {}}

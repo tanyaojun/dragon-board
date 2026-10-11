@@ -369,3 +369,228 @@ def test_sentiment_overview_no_data_with_date_reason_distinct(monkeypatch):
     body = response.json()
     assert body["ok"] is True and body["jev"] is None and body["degraded"] is True
     assert "no_data" in body["reason"] and "no half_hour frames" in body["reason"]
+
+
+# ── GET /api/hotlist-jev/quotes-review（热榜行情：15:00 帧全量 + 五维 + 双题集台账，纯读零调用）──
+
+def _seed_quotes_review(db: FakeMongoDb) -> None:
+    """两股样本：甲(S/buy→agree，带 LC 一致)、乙(D/buy→diverge，LC diverge，带留痕文档)。"""
+    db["snapshot_frames"].rows = [frame(DATE, "15:00")]
+    db["snapshot_stock_rows"].rows = [
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000001",
+         "name": "甲", "rank": 1, "price": 9.66, "change": 9.9, "amount": 1.2e9,
+         "cirMV": 5.0e9, "turnoverRate": 12.5, "volumeRatio": 2.3, "compRank": 2,
+         "compScore": 88.1},
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000002",
+         "name": "乙", "rank": 2, "price": 4.44, "change": -2.1, "amount": 8.0e8,
+         "cirMV": 3.0e9},
+    ]
+    db["snapshot_analysis"].rows = [
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000001",
+         "analysis": {"resonance": {"signalTier": "S", "direction": "buy", "score": 91.0},
+                      "observation": {"rankTrend": {"signalTier": "A"},
+                                       "crossSection": {"signalTier": "B"},
+                                       "volumePrice": {"signalTier": "C"},
+                                       "lifecycle": {"stage": "ignition", "veto": False},
+                                       "synergy": {"signalTier": "S"}}}},
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000002",
+         "analysis": {"resonance": {"signalTier": "B", "score": 55.0},
+                      "observation": {"lifecycle": {"stage": "ignition"},
+                                       "synergy": {"signalTier": "D"}}}},
+    ]
+    db["hotlist_jev_vote_confirm_pilot"].rows = [
+        {"_id": f"{DATE}:15:00:000001:VOTE", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000001", "name": "甲", "status": "ok", "origin": "vote_confirm_pilot",
+         "ammoVersion": "vote_ammo_v3", "synergyTier": "S", "voteDirection": "buy", "voteConfidence": 0.72,
+         "voteProbabilities": {"buy": 0.72}, "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v1", "questionSetHash": "abc123",
+         "narrative": "【头行】叙事原料", "questionsRaw": {"vote_direction": {}},
+         "responseRaw": {"result": "envelope"}, "model": "jev", "usage": {}, "latencyMs": 800},
+        {"_id": f"{DATE}:15:00:000002:VOTE", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000002", "name": "乙", "status": "ok", "origin": "vote_confirm_pilot",
+         "synergyTier": "D", "voteDirection": "buy", "voteConfidence": 0.5,
+         "riskFlag": {"level": "partial", "reasons": ["evidence_missing:zlje"]},
+         "questionSetVersion": "v1", "questionSetHash": "abc123",
+         "narrative": "叙事乙", "questionsRaw": {}, "responseRaw": None},
+    ]
+    db["hotlist_jev_lifecycle_recheck_pilot"].rows = [
+        {"_id": f"{DATE}:15:00:000001:LC", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000001", "name": "甲", "status": "ok", "origin": "lifecycle_recheck_pilot",
+         "ammoVersion": "vote_ammo_v3", "ruleStage": "ignition", "ruleAction": "allow",
+         "prevTradingDate": "2026-09-29", "prevStage": "ignition",
+         "lcStage": "ignition", "lcConfidence": 0.66,
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v1", "questionSetHash": "def456",
+         "narrative": "LC 叙事", "questionsRaw": {}, "responseRaw": {"ok": 1}},
+    ]
+
+
+def _quotes_client(monkeypatch, db):
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    return TestClient(app)
+
+
+def test_quotes_review_join_summary_and_agree(monkeypatch):
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["noData"] is False
+    assert body["slotTime"] == "15:00"
+    rows = body["rows"]
+    assert [r["code"] for r in rows] == ["000001", "000002"]  # rank 升序
+    first = rows[0]
+    assert first["price"] == 9.66 and first["amount"] == 1.2e9 and first["cirMV"] == 5.0e9
+    assert first["tiers"] == {"resonance": "S", "trend": "A", "heat": "B",
+                               "volumePrice": "C", "cycle": "ignition", "synergy": "S"}
+    assert first["jev"]["vote"]["direction"] == "buy"
+    assert first["jev"]["agree"] == "agree"      # S→buy ↔ jev buy
+    assert first["jev"]["lcAgree"] == "agree"    # 规则 ignition ↔ jev ignition
+    assert "docs" not in first                    # 缺省不嵌大字段
+    second = rows[1]
+    assert second["jev"]["agree"] == "diverge"   # D→sell ↔ jev buy
+    assert second["jev"]["lc"] is None
+    assert second["turnoverRate"] is None          # 缺失如实 None 不伪造
+    s = body["summary"]
+    assert s["total"] == 2 and s["tiered"] == 2
+    assert s["vote"]["buy"] == 2 and s["vote"]["unreviewed"] == 0
+    assert s["lc"]["stages"] == {"ignition": 1} and s["lc"]["unreviewed"] == 1
+    assert s["agree"] == 1 and s["diverge"] == 1
+    assert s["risk"] == {"ok": 2, "partial": 1}  # 甲 VOTE+LC 双 ok 留痕 + 乙 partial
+
+
+def test_quotes_review_with_docs_embeds_raw(monkeypatch):
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review",
+                          params={"date": DATE, "with_docs": 1})
+
+    assert response.status_code == 200
+    rows = response.json()["rows"]
+    assert rows[0]["docs"]["vote"]["narrative"] == "【头行】叙事原料"
+    assert rows[0]["docs"]["vote"]["questionsRaw"] == {"vote_direction": {}}
+    assert rows[0]["docs"]["vote"]["responseRaw"] == {"result": "envelope"}
+    assert rows[0]["docs"]["lc"]["responseRaw"] == {"ok": 1}
+    # 预登记 §八「全保留」：原料代际戳与 LC 对照原料不裁剪（review #4）
+    assert rows[0]["docs"]["vote"]["ammoVersion"] == "vote_ammo_v3"
+    assert rows[0]["docs"]["lc"]["ruleStage"] == "ignition"
+    assert rows[0]["docs"]["lc"]["ruleAction"] == "allow"
+    assert rows[0]["docs"]["lc"]["prevTradingDate"] == "2026-09-29"
+    assert rows[0]["docs"]["lc"]["prevStage"] == "ignition"
+    assert rows[1]["docs"]["lc"] is None           # 无 LC 文档股如实 null
+
+
+def test_quotes_review_no_frame_no_data(monkeypatch):
+    db = FakeMongoDb()  # 无任何帧
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True and body["noData"] is True and body["rows"] == []
+    assert "15:00" in body["reason"]
+
+
+def test_quotes_review_missing_analysis_and_quotes_fail_visible(monkeypatch):
+    """帧存在但无 analysis / 行情字段缺：行照常返回，档位/价格如实 None，不伪造空成功。"""
+    db = FakeMongoDb()
+    db["snapshot_frames"].rows = [frame(DATE, "15:00")]
+    db["snapshot_stock_rows"].rows = [
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00",
+         "code": "000003", "name": "丙", "rank": 3}]
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    row = body["rows"][0]
+    assert row["tiers"] == {"resonance": None, "trend": None, "heat": None,
+                             "volumePrice": None, "cycle": None, "synergy": None}
+    assert row["price"] is None and row["jev"] is None
+    assert body["summary"]["tiered"] == 0
+    assert body["summary"]["vote"]["unreviewed"] == 1
+
+
+def test_quotes_review_insufficient_doc_exposed(monkeypatch):
+    """留痕文档（data_insufficient 不调用）：状态/风险如实进 summary，方向缺失不进台账。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    db["hotlist_jev_vote_confirm_pilot"].rows = [
+        {"_id": f"{DATE}:15:00:000002:VOTE", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000002", "name": "乙", "status": "data_insufficient",
+         "origin": "vote_confirm_pilot", "synergyTier": "D", "voteDirection": None,
+         "riskFlag": {"level": "data_insufficient", "reasons": ["tiers<2"]},
+         "questionSetVersion": "v1", "questionSetHash": "abc123"}]
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    s = body["summary"]
+    assert s["vote"]["insufficient"] == 1 and s["vote"]["ok"] == 0
+    assert s["vote"]["buy"] == 0
+    assert s["risk"] == {"data_insufficient": 1, "ok": 1}  # 乙留痕 + 甲 LC ok
+    row = body["rows"][1]
+    assert row["jev"]["vote"]["direction"] is None and row["jev"]["agree"] is None
+
+
+def test_quotes_review_missing_date_422(monkeypatch):
+    db = FakeMongoDb()
+    client = _quotes_client(monkeypatch, db)
+    response = client.get("/api/hotlist-jev/quotes-review")
+    assert response.status_code == 422  # FastAPI 必填参数校验
+
+
+def test_quotes_review_other_slot_doc_not_merged(monkeypatch):
+    """watch 模式同集合按槽写（11:30/15:00）：台账只认 15:00 槽，11:30 判读不冒充不拼接（review blocker）。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    db["hotlist_jev_vote_confirm_pilot"].rows.append({
+        "_id": f"{DATE}:11:30:000002:VOTE", "tradingDate": DATE, "slotTime": "11:30",
+        "code": "000002", "name": "乙", "status": "ok", "origin": "vote_confirm_pilot",
+        "synergyTier": "S", "voteDirection": "sell", "voteConfidence": 0.9,
+        "riskFlag": {"level": "ok", "reasons": []},
+        "questionSetVersion": "v1", "questionSetHash": "abc123"})
+    db["hotlist_jev_lifecycle_recheck_pilot"].rows.append({
+        "_id": f"{DATE}:11:30:000002:LC", "tradingDate": DATE, "slotTime": "11:30",
+        "code": "000002", "name": "乙", "status": "ok", "origin": "lifecycle_recheck_pilot",
+        "lcStage": "reversal", "riskFlag": {"level": "ok", "reasons": []},
+        "questionSetVersion": "v1", "questionSetHash": "def456"})
+    client = _quotes_client(monkeypatch, db)
+
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+
+    assert response.status_code == 200
+    body = response.json()
+    s = body["summary"]
+    # 11:30 文档不计入覆盖与台账：乙仍按 15:00 口径（vote buy→diverge），方向分布不变
+    assert s["vote"]["buy"] == 2 and s["vote"]["sell"] == 0
+    assert s["agree"] == 1 and s["diverge"] == 1
+    assert s["lc"]["stages"] == {"ignition": 1}
+    # unreviewed 按行统计：乙 15:00 无 LC 文档 → 仍 1；其余全覆盖
+    assert s["vote"]["unreviewed"] == 0 and s["lc"]["unreviewed"] == 1
+    row2 = body["rows"][1]
+    assert row2["jev"]["vote"]["direction"] == "buy" and row2["jev"]["agree"] == "diverge"
+    assert row2["jev"]["lc"] is None
+
+
+def test_quotes_review_db_unavailable_degraded(monkeypatch):
+    def _raise():
+        raise RuntimeError("mongodb down")
+
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", _raise)
+    client = TestClient(app)
+    response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
+    assert response.status_code == 502
+    assert response.json()["ok"] is False and "mongodb down" in response.json()["reason"]

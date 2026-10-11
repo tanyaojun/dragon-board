@@ -153,6 +153,7 @@
 </header>
 <nav>
   <div class="tab active" data-tab="overview">📊 总览</div>
+  <div class="tab" data-tab="quotes">📈 热榜行情</div>
   <div class="tab" data-tab="relay">🧮 连板指数</div>
   <div class="tab" data-tab="labels">🏷️ 涨停复盘</div>
   <div class="tab" data-tab="archive">🗂️ 明细存档</div>
@@ -171,6 +172,15 @@
     <div class="card" style="margin-top:14px"><h3>📉 近15日 · 连板指数 vs 热度温度
       <span class="hint"><span class="legend"><span><i style="background:#2563eb"></i>连板指数</span><span><i style="background:#f59e0b"></i>温度分</span></span></span></h3>
       <div id="relayChart"></div></div>
+  </section>
+
+  <section id="tab-quotes" style="display:none">
+    <div class="card">
+      <h3>热榜行情 · 15:00 收盘槽 <span class="hint" id="quotesHint"></span></h3>
+      <div class="kpi-row" id="quotesKpi" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px"></div>
+      <div class="lf-bar" id="quotesFilterBar"></div>
+      <table id="quotesTable"></table>
+    </div>
   </section>
 
   <section id="tab-relay" style="display:none">
@@ -201,9 +211,12 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null,
+const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, quotes: null,
   archEntries: [], archUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
+  quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' } },
+  quotesFilter: { q: '', synergy: '', vote: '', lc: '', agree: '' },
+  quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '' },
   relayRange: null,  // 判定明细日期区间 {start,end}；null=未初始化（首次渲染按近1月兜）；end=null=跟随最新
@@ -223,6 +236,17 @@ const DRIVER_CN = {product_event:'产品事件', capital_flow:'资金接力', co
 const CAT_DEPTH_CN = {core_main_business:'核心主业承接', new_business_scaling:'新业务放量承接', new_business_early:'新业务早期承接', equity_or_affiliate:'股权关联传导', concept_assembly:'概念组装弱关联', insufficient_evidence:'信息不足'};
 const BUY_SIDE_CN = {independent_catalyst:'自身独立催化', sector_follow:'板块联动跟随', high_board_relay:'高位卡位/情绪接力', pure_sentiment:'纯情绪修复'};
 const FRESH_CN = {fresh_catalyst:'新鲜', continuing:'延续', none:'无明确催化', unclear:'信息不足'};
+// 热榜行情页（quotes-review 读口）：LC 五段中文名 + 档位序/色（S/A 绿、B 蓝、C 灰、D/E 红；缺 '--'）
+const LC_STAGE_CN = {ignition:'点火', expansion:'扩散', crowded:'拥挤', reversal:'反转', cooling:'降温'};
+const LC_STAGE_ORDER = {ignition:0, expansion:1, crowded:2, reversal:3, cooling:4};
+const LC_STAGE_COLOR = {ignition:'#16a34a', expansion:'#2563eb', crowded:'#a16207', reversal:'#dc2626', cooling:'#94a3b8'};
+const TIER_RANK = {S:6, A:5, B:4, C:3, D:2, E:1};
+const tierB = v => badge(v||'-', (v==='S'||v==='A')?'b-green':v==='B'?'b-blue':(v==='D'||v==='E')?'b-red':'b-gray');
+const dirB = v => v==='buy' ? badge('buy','b-green') : v==='sell' ? badge('sell','b-red') : v==='hold' ? badge('hold','b-gray') : '';
+const agreeB = v => v==='agree' ? badge('一致','b-green') : v==='diverge' ? badge('分歧','b-amber') : '';
+const numOr = (v, d) => (typeof v === 'number' && isFinite(v)) ? v : d;
+const fmtYi = v => { const n = numOr(v, null); return n == null ? '--' : (n / 1e8).toFixed(2); };
+const fmtPctChg = v => { const n = numOr(v, null); return n == null ? '--' : (n > 0 ? '+' : '') + n.toFixed(2) + '%'; };
 
 const badge = (txt, cls) => txt ? `<span class="badge ${cls}">${esc(txt)}</span>` : '<span class="badge b-gray">-</span>';
 const phaseB = v => badge(PHASE_CN[v]||v, v==='relay_heat'?'b-green':v==='divergence'?'b-amber':v==='collapse'?'b-red':v==='launch'?'b-blue':'b-gray');
@@ -249,12 +273,13 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels;
+  let series, slots, labels, quotes;
   try {
-    [series, slots, labels] = await Promise.all([
+    [series, slots, labels, quotes] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
+      jget('/api/hotlist-jev/quotes-review?with_docs=1' + (date ? '&date=' + date : '')),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -273,8 +298,9 @@ async function loadAll(){
   STATE.slots = STATE.rawSlots.filter(s => s.status === 'ok');
   STATE.eod = slots.eod;
   STATE.labels = labels;
+  STATE.quotes = quotes;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderArchive(); renderCharts();
+  renderRelayTab(); renderLabels(); renderQuotes(); renderArchive(); renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
 }
 
@@ -632,6 +658,234 @@ function setLabelSort(key){
   const s = STATE.labelSort;
   if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'rank' ? 1 : 1; }
   renderLabels();
+}
+
+// ---------- 热榜行情：15:00 收盘槽全量 + 五维档位 + 双题集复核台账（quotes-review 读口） ----------
+// 展示语言对齐涨停复盘页：KPI 卡（一致/分歧卡可点击筛选）+ 筛选条 + 可排序表 + 行展开
+// jev 请求/返回/原始 JSON（复用 JSON 树/复制/元信息组件）；缺失一律 '--'（fail-visible）。
+const qTier = (r, k) => ((r.tiers || {})[k]) || '';
+const qVoteDir = r => (((r.jev || {}).vote || {}).direction) || '';
+const qLcStage = r => (((r.jev || {}).lc || {}).stage) || '';
+const tierKey = t => TIER_RANK[t] || 0;
+function quotesMatches(r, f){
+  if (f.q){ const q = f.q.toLowerCase();
+    if (!String(r.code || '').toLowerCase().includes(q) && !String(r.name || '').toLowerCase().includes(q)) return false; }
+  if (f.synergy){ if (f.synergy === 'none'){ if (qTier(r, 'synergy')) return false; }
+    else if (qTier(r, 'synergy') !== f.synergy) return false; }
+  if (f.vote){ const d = qVoteDir(r);
+    if (f.vote === 'none'){ if (d) return false; } else if (d !== f.vote) return false; }
+  if (f.lc){ const st = qLcStage(r);
+    if (f.lc === 'none'){ if (st) return false; } else if (st !== f.lc) return false; }
+  if (f.agree && ((r.jev || {}).agree) !== f.agree) return false;
+  return true;
+}
+function qSel(label, key, opts){
+  const cur = STATE.quotesFilter[key];
+  const list = [['', label + ' · 全部']].concat(opts);
+  return `<select title="${esc(label)}筛选" onchange="qSet('${key}', this.value)">`
+    + list.map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('') + '</select>';
+}
+function qSet(k, v){ STATE.quotesFilter[k] = v; qRenderAll(); }
+function qQ(v){ STATE.quotesFilter.q = v; qRenderRows(); }  // 搜索只重渲染表体，输入焦点不丢
+function qClear(){ STATE.quotesFilter = { q: '', synergy: '', vote: '', lc: '', agree: '' }; renderQuotes(); }
+function setQuotesSort(key){
+  const s = STATE.quotesSort;
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = (key === 'rank' || key === 'code') ? 1 : -1; }
+  qRenderRows();
+}
+function renderQuotes(){
+  const Q = STATE.quotes;
+  if (!Q || Q.ok === false){
+    STATE.quotesEntries = [];
+    $('quotesKpi').innerHTML = ''; $('quotesFilterBar').innerHTML = '';
+    $('quotesHint').textContent = (Q && Q.reason) || '读口失败';
+    $('quotesTable').innerHTML = `<tr><td class="empty">${esc((Q && Q.reason) || '读口失败')}</td></tr>`;
+    return;
+  }
+  if (Q.noData || !(Q.rows || []).length){
+    STATE.quotesEntries = [];
+    $('quotesKpi').innerHTML = ''; $('quotesFilterBar').innerHTML = '';
+    $('quotesHint').textContent = Q.reason || '';
+    // 两种 noData（无 15:00 帧 / 帧在但行集空）表体都显后端结构化 reason，不硬编码误导文案
+    $('quotesTable').innerHTML = `<tr><td class="empty">${esc(Q.reason || '该日无 15:00 收盘槽行情帧（非交易日或未采集）')}</td></tr>`;
+    return;
+  }
+  qRenderKpi(); qRenderBar(); qRenderRows();
+}
+function qRenderKpi(){
+  const s = (STATE.quotes || {}).summary || {}, f = STATE.quotesFilter;
+  const v = s.vote || {}, l = s.lc || {}, rk = s.risk || {};
+  const stages = l.stages || {};
+  const stageTxt = Object.keys(LC_STAGE_CN).map(k => `${LC_STAGE_CN[k]} ${stages[k] || 0}`).join(' · ');
+  const card = (k, v2, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
+  const aCard = (k, v2, sub, key) => `<div class="kpi click${f.agree === key ? ' on' : ''}" title="点击筛选：${k}" onclick="qSet('agree', '${f.agree === key ? '' : key}')"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
+  const riskTotal = (rk.data_insufficient || 0) + (rk.partial || 0);
+  $('quotesKpi').innerHTML =
+    card('热榜股总数', s.total ?? '-', `五维可算 ${s.tiered ?? 0} · 15:00 收盘槽`)
+    + card('VOTE 方向复核', v.ok ?? '-', `buy ${v.buy || 0} / sell ${v.sell || 0} / hold ${v.hold || 0} · 未复核 ${v.unreviewed ?? '-'}`)
+    + card('LC 生命周期复核', l.ok ?? '-', `${stageTxt || '无复核'} · 未复核 ${l.unreviewed ?? '-'}`)
+    + aCard('方向一致', s.agree ?? '-', 'jev ↔ 五维对照锚（点击筛选）', 'agree')
+    + aCard('方向分歧', s.diverge ?? '-', '并列观察者 · 台账披露（点击筛选）', 'diverge')
+    + card('风险留痕', riskTotal ? `${rk.data_insufficient || 0} / ${rk.partial || 0}` : '0',
+      `data_insufficient / partial（不足不调用不猜）`);
+}
+function qRenderBar(){
+  const bar = $('quotesFilterBar');
+  const ae = document.activeElement;
+  // 输入/下拉聚焦时跳过重建（60s 轮询不夺焦点；状态由 STATE 持有，值同步靠下次重建）
+  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
+  bar.innerHTML =
+    `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.quotesFilter.q)}" oninput="qQ(this.value)">`
+    + qSel('五维档', 'synergy', [['S', 'S'], ['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D'], ['E', 'E'], ['none', '缺失']])
+    + qSel('jev方向', 'vote', [['buy', 'buy'], ['sell', 'sell'], ['hold', 'hold'], ['none', '未复核']])
+    + qSel('LC阶段', 'lc', Object.entries(LC_STAGE_CN).concat([['none', '未复核']]))
+    + qSel('一致性', 'agree', [['agree', '一致'], ['diverge', '分歧']])
+    + `<button onclick="qClear()">清除筛选</button>`
+    + `<span class="cnt" id="quotesCnt"></span>`;
+}
+function qRenderRows(){
+  const Q = STATE.quotes || {}, f = STATE.quotesFilter, ui = STATE.quotesUi;
+  const all = Q.rows || [];
+  let shown = all.filter(r => quotesMatches(r, f));
+  const s = STATE.quotesSort;
+  const kv = { code: r => r.code || '', name: r => r.name || '',
+    price: r => numOr(r.price, -1), change: r => numOr(r.change, -999),
+    rank: r => r.rank == null ? 99999 : r.rank,
+    res: r => tierKey(qTier(r, 'resonance')), trend: r => tierKey(qTier(r, 'trend')),
+    heat: r => tierKey(qTier(r, 'heat')), vp: r => tierKey(qTier(r, 'volumePrice')),
+    cycle: r => LC_STAGE_ORDER[qLcStage(r)] ?? -1, synergy: r => tierKey(qTier(r, 'synergy')),
+    amount: r => numOr(r.amount, -1), cir: r => numOr(r.cirMV, -1),
+    vote: r => qVoteDir(r) || '', conf: r => numOr(((r.jev || {}).vote || {}).confidence, -1),
+    agree: r => { const a = (r.jev || {}).agree; return a === 'agree' ? 0 : a === 'diverge' ? 1 : 2; } };
+  shown = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
+  STATE.quotesEntries = shown.map(r => ({ key: String(r.code || ''), label: (r.name || r.code || '?') + ' ' + (r.code || ''),
+    row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null }));
+  const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
+  const hasFilter = f.q || f.synergy || f.vote || f.lc || f.agree;
+  $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '15:00'} 收盘槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`;
+  const th = (label, key) => `<th class="sortable" onclick="setQuotesSort('${key}')">${label}${sortMark(s, key)}</th>`;
+  const rows = shown.map(r => {
+    const e = STATE.quotesEntries.find(x => x.row === r);
+    const open = ui.openKey === e.key;
+    const chg = numOr(r.change, null);
+    const chgColor = chg == null ? '' : chg > 0 ? 'var(--red)' : chg < 0 ? 'var(--green)' : '';
+    const cyc = qLcStage(r);
+    const conf = numOr(((r.jev || {}).vote || {}).confidence, null);
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="qRow('${js(e.key)}')">
+    <td><span class="lg-caret">▶</span>${esc(r.code || '')}</td><td>${esc(r.name || '')}</td>
+    <td class="num">${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'}</td>
+    <td class="num" style="color:${chgColor}">${fmtPctChg(r.change)}</td>
+    <td class="num">${r.rank != null ? '#' + r.rank : '--'}</td>
+    <td>${tierB(qTier(r, 'resonance'))}</td><td>${tierB(qTier(r, 'trend'))}</td>
+    <td>${tierB(qTier(r, 'heat'))}</td><td>${tierB(qTier(r, 'volumePrice'))}</td>
+    <td style="color:${cyc ? (LC_STAGE_COLOR[cyc] || 'var(--muted2)') : 'var(--muted2)'}">${cyc ? esc(LC_STAGE_CN[cyc] || cyc) : '--'}</td>
+    <td>${tierB(qTier(r, 'synergy'))}</td>
+    <td class="num">${fmtYi(r.amount)}</td><td class="num">${fmtYi(r.cirMV)}</td>
+    <td>${dirB(qVoteDir(r)) || '<span style="color:var(--muted2)">--</span>'}</td>
+    <td class="num">${conf != null ? 'P' + Math.round(conf * 100) + '%' : '--'}</td>
+    <td>${agreeB((r.jev || {}).agree)}</td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="16">${quotesDetailHtml(e)}</td></tr>` : '');
+  }).join('');
+  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}<th>共振</th><th>趋势</th><th>热度</th><th>量价</th>${th('周期', 'cycle')}<th>五维</th>${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
+    + (rows || '<tr><td colspan="16" class="empty">无匹配个股（调整筛选条件）</td></tr>');
+}
+function qRenderAll(){ qRenderKpi(); qRenderBar(); qRenderRows(); }
+// 行展开：VOTE/LC 双题集各一块 lg-card（各自 详细信息/原始 JSON 切换 + 筛选 + 复制）
+function qOpenEntry(){ return (STATE.quotesEntries || []).find(x => x.key === STATE.quotesUi.openKey) || null; }
+function qKindUi(kind){ return kind === 'vote' ? STATE.quotesUi.vote : STATE.quotesUi.lc; }
+function qDocOf(e, kind){ return kind === 'vote' ? e.voteDoc : e.lcDoc; }
+function qRow(key){
+  const e = (STATE.quotesEntries || []).find(x => x.key === key);
+  if (!e) return;
+  const ui = STATE.quotesUi;
+  ui.openKey = ui.openKey === key ? null : key;
+  ui.vote = { mode: 'detail', q1: '', q2: '' }; ui.lc = { mode: 'detail', q1: '', q2: '' };
+  qRenderRows();
+}
+function qMode(kind, m, ev){ ev.stopPropagation(); qKindUi(kind).mode = m; qRenderRows(); }
+function qFilter(kind, side, v){
+  const ui = qKindUi(kind);
+  if (side === 'req') ui.q1 = v; else ui.q2 = v;
+  const e = qOpenEntry(); if (!e) return;
+  $('q' + kind + (side === 'req' ? 'ReqTree' : 'RespTree')).innerHTML
+    = treeHtml(side === 'req' ? qReqOf(e, kind) : qRespOf(e, kind), v);
+}
+function qCopy(kind, what, ev){
+  ev.stopPropagation();
+  const e = qOpenEntry(); if (!e) return;
+  const txt = JSON.stringify(what === 'doc' ? qDocOf(e, kind) : what === 'req' ? qReqOf(e, kind) : qRespOf(e, kind), null, 2);
+  copyText(txt, ev.currentTarget);
+}
+// 请求侧 = 当次下发线上的载荷（{state, model, questions}，与 jev_client POST body 同形）
+function qReqOf(e, kind){
+  const d = qDocOf(e, kind); if (!d) return null;
+  const narrative = d.narrativeRaw != null ? d.narrativeRaw : (d.narrative != null ? d.narrative : null);
+  return { state: narrative, model: d.model != null ? d.model : null,
+    questions: d.questionsRaw != null ? d.questionsRaw : { _note: '该存档未落 questionsRaw（旧文档）' } };
+}
+// 响应侧 = 存档 envelope 原文；缺 envelope 时如实注明并给已落库解析结果（不伪造）
+function qRespOf(e, kind){
+  const d = qDocOf(e, kind); if (!d) return null;
+  if (d.responseRaw) return d.responseRaw;
+  const base = { _note: 'responseRaw 未存档（envelope 原文见 CF AI Gateway 日志）',
+    answers: d.answers || undefined, model: d.model, usage: d.usage };
+  if (kind === 'vote') return { ...base, voteDirection: d.voteDirection,
+    voteConfidence: d.voteConfidence, voteProbabilities: d.voteProbabilities };
+  return { ...base, lcStage: d.lcStage, lcConfidence: d.lcConfidence, lcProbabilities: d.lcProbabilities };
+}
+function qDocCard(e, kind){
+  const d = qDocOf(e, kind), ui = qKindUi(kind);
+  const title = kind === 'vote' ? '🎯 VOTE · 方向投票复核' : '🔄 LC · 生命周期复核';
+  if (!d) return `<div class="lg-card"><div class="lg-head"><div class="lg-title">${title}</div></div>`
+    + `<div class="lg-empty">该股未进 jev 复核抽样（预登记抽样帽口径）</div></div>`;
+  const u = d.usage || {}, st = d.status || '-';
+  const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
+  const rf = d.riskFlag || {};
+  const head = `<div class="lg-head"><div class="lg-title">${title}</div><span class="lg-asof">${esc(fmtTime(d.computedAt))}</span>
+    <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="qMode('${kind}', 'detail', event)">详细信息</button>
+    <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="qMode('${kind}', 'raw', event)">原始 JSON</button></div></div>`;
+  const meta = `<div class="lg-meta">
+    <div><div class="k">持续时间</div><div class="v">${d.latencyMs != null ? d.latencyMs + ' ms' : '-'}</div></div>
+    <div><div class="k">输入 tokens</div><div class="v">${u.input_tokens != null ? u.input_tokens.toLocaleString() : '-'}</div></div>
+    <div><div class="k">输出 tokens</div><div class="v">${u.output_tokens != null ? u.output_tokens.toLocaleString() : '-'}</div></div>
+    <div><div class="k">状态</div><div class="v" style="color:${stColor}">${esc(st)}</div></div>
+    <div><div class="k">riskFlag</div><div class="v">${esc(rf.level || '-')}</div></div>
+    ${d.errorCode ? `<div><div class="k">错误码</div><div class="v" style="color:#dc2626">${esc(d.errorCode)}</div></div>` : ''}</div>`;
+  let body;
+  if (ui.mode === 'raw'){
+    body = `<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0"><b>存档文档 JSON（原始）</b><button class="lg-copy" onclick="qCopy('${kind}', 'doc', event)">⧉ 复制</button></div><pre>${esc(JSON.stringify(d, null, 2))}</pre></div>`;
+  } else {
+    body = `<div class="lg-panels">
+      <div class="lg-panel"><div class="lg-phead"><b>请求</b><span class="st">state+model+questions</span><button class="lg-copy" onclick="qCopy('${kind}', 'req', event)">⧉ 复制</button></div>
+        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q1)}" oninput="qFilter('${kind}', 'req', this.value)">
+        <div class="lg-tree" id="q${kind}ReqTree">${treeHtml(qReqOf(e, kind), ui.q1)}</div></div>
+      <div class="lg-panel"><div class="lg-phead"><b>响应</b><span class="dot" style="background:${stColor}"></span><span class="st">${esc(st)}</span><button class="lg-copy" onclick="qCopy('${kind}', 'resp', event)">⧉ 复制</button></div>
+        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q2)}" oninput="qFilter('${kind}', 'resp', this.value)">
+        <div class="lg-tree" id="q${kind}RespTree">${treeHtml(qRespOf(e, kind), ui.q2)}</div></div>
+    </div>`;
+  }
+  const foot = `<div class="lg-foot"><span><span class="k">来源</span> <code>${esc(d.origin || '-')}</code></span>
+    <span><span class="k">题集版本</span> <code>${esc(d.questionSetVersion || '未知')}</code></span>
+    <span><span class="k">题集 hash</span> <code>${esc(String(d.questionSetHash || '-').slice(0, 12))}</code></span>
+    <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
+  return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${body}${foot}</div>`;
+}
+function quotesDetailHtml(e){
+  const r = e.row, j = r.jev || {};
+  const t = r.tiers || {};
+  const tierTxt = v => v || '--';
+  const summary = `<div class="lg-card"><div class="lg-head"><div class="lg-title">${esc(e.label)}</div>
+    <span class="lg-asof"># ${r.rank != null ? r.rank : '--'} · 最新价 ${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'} · 成交额 ${fmtYi(r.amount)} 亿 · 流通值 ${fmtYi(r.cirMV)} 亿</span></div>
+    <div class="flex" style="margin-top:10px">
+      <span class="chip plain">共振 ${tierTxt(t.resonance)}</span><span class="chip plain">趋势 ${tierTxt(t.trend)}</span>
+      <span class="chip plain">热度 ${tierTxt(t.heat)}</span><span class="chip plain">量价 ${tierTxt(t.volumePrice)}</span>
+      <span class="chip plain">周期 ${t.cycle ? (LC_STAGE_CN[t.cycle] || t.cycle) : '--'}</span><span class="chip plain">五维 ${tierTxt(t.synergy)}</span>
+      ${j.vote ? `<span class="chip plain">jev方向 ${j.vote.direction ? esc(j.vote.direction) : '--'}${j.vote.confidence != null ? ' P' + Math.round(j.vote.confidence * 100) + '%' : ''}</span>` : ''}
+      ${j.lc ? `<span class="chip plain">jev阶段 ${j.lc.stage ? esc(LC_STAGE_CN[j.lc.stage] || j.lc.stage) : '--'}</span>` : ''}
+      ${agreeB(j.agree)}
+    </div></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:12px">${summary}${qDocCard(e, 'vote')}${qDocCard(e, 'lc')}</div>`;
 }
 
 // ---------- 明细存档：调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ----------
