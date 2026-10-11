@@ -233,8 +233,9 @@ def _insufficient_doc(kind: str, date: str, code: str, name: Any, rf: dict,
 # ── 双题集运行 ──
 
 def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
-                 fire: bool = False) -> dict:
-    """题集 A：方向投票二次确认。落 hotlist_jev_vote_confirm_pilot（_id={date}:15:00:{code}:VOTE）。"""
+                 fire: bool = False, cap_buy: int = 8, cap_sell: int = 4) -> dict:
+    """题集 A：方向投票二次确认。落 hotlist_jev_vote_confirm_pilot（_id={date}:15:00:{code}:VOTE）。
+    cap_buy/cap_sell 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。"""
     col = db["hotlist_jev_vote_confirm_pilot"]
     questions = QUESTIONS_VOTE_CONFIRM
     qhash = _questions_hash(questions)
@@ -256,7 +257,7 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                                                   c["riskFlag"], QUESTION_SET_VERSION_VOTE_CONFIRM, qhash),
                                 upsert=True)
                 stats["data_insufficient"] += 1
-        sample = sample_vote(pop["buy"], pop["sell"])
+        sample = sample_vote(pop["buy"], pop["sell"], cap_buy=cap_buy, cap_sell=cap_sell)
         for c in sample:
             _id = f"{date}:{PILOT_SLOT}:{c['code']}:VOTE"
             if col.find_one({"_id": _id, "status": "ok"}):
@@ -307,8 +308,9 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
 
 
 def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
-                      fire: bool = False) -> dict:
-    """题集 B：环境门阶段诊断复核。落 hotlist_jev_lifecycle_recheck_pilot。"""
+                      fire: bool = False, cap_igex: int = 5, cap_total: int = 8) -> dict:
+    """题集 B：环境门阶段诊断复核。落 hotlist_jev_lifecycle_recheck_pilot。
+    cap_igex/cap_total 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。"""
     col = db["hotlist_jev_lifecycle_recheck_pilot"]
     questions = QUESTIONS_LIFECYCLE_RECHECK
     qhash = _questions_hash(questions)
@@ -328,7 +330,7 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
                                                   c["riskFlag"], QUESTION_SET_VERSION_LIFECYCLE_RECHECK, qhash),
                                 upsert=True)
                 stats["data_insufficient"] += 1
-        sample = sample_lifecycle(pop["candidates"])
+        sample = sample_lifecycle(pop["candidates"], cap_igex=cap_igex, cap_total=cap_total)
         for c in sample:
             _id = f"{date}:{PILOT_SLOT}:{c['code']}:LC"
             if col.find_one({"_id": _id, "status": "ok"}):
@@ -387,6 +389,10 @@ def __main__():
     ap.add_argument("--dataset-id", dest="dataset_id", default=DEFAULT_DATASET_ID)
     ap.add_argument("--fire", action="store_true",
                     help="真实调用 jev（只走预登记+用户批准开火路径；默认 dry-run 零调用）")
+    ap.add_argument("--vote-cap-buy", dest="vote_cap_buy", type=int, default=8)
+    ap.add_argument("--vote-cap-sell", dest="vote_cap_sell", type=int, default=4)
+    ap.add_argument("--lc-cap-igex", dest="lc_cap_igex", type=int, default=5)
+    ap.add_argument("--lc-cap-total", dest="lc_cap_total", type=int, default=8)
     args = ap.parse_args()
     if not args.vote_day and not args.lifecycle_day:
         raise SystemExit("需要 --vote-day 或 --lifecycle-day（可多次传参）")
@@ -396,9 +402,11 @@ def __main__():
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
     if args.vote_day:
-        run_vote_day(db, args.vote_day, args.dataset_id, fire=args.fire)
+        run_vote_day(db, args.vote_day, args.dataset_id, fire=args.fire,
+                     cap_buy=args.vote_cap_buy, cap_sell=args.vote_cap_sell)
     if args.lifecycle_day:
-        run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire)
+        run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire,
+                          cap_igex=args.lc_cap_igex, cap_total=args.lc_cap_total)
 
 
 if __name__ == "__main__":

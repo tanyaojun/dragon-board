@@ -525,3 +525,30 @@ def test_run_lifecycle_fire_persist_contract(monkeypatch):
     assert d1["questionSetVersion"] == "v1"
     # 对照锚机械可算：ruleStage=expansion vs jev crowded → diverge（台账在复盘侧做，落库带双方读数）
     assert d1["ruleStage"] != d1["lcStage"]
+
+
+# ── 扩窗修正案（§十一）：帽位参数透传 ──
+
+
+def test_sample_caps_passthrough():
+    buy = [_vc(f"B{i:02d}", {"resonance": "B", "rankTrend": "B", "crossSection": "B",
+                             "volumePrice": "B"}, 50.0) for i in range(10)]
+    sell = [_vc(f"S{i:02d}", {"resonance": "D", "rankTrend": "D", "crossSection": "C",
+                              "volumePrice": "E"}) for i in range(6)]
+    got = sample_vote(buy, sell, cap_buy=3, cap_sell=2)
+    assert len(got) == 5  # §十一 扩窗帽：buy 3 + sell 2
+    assert [c["code"] for c in got[3:]] == ["S00", "S01"]  # vp-E 优先序不变
+
+
+def test_run_vote_cap_override(monkeypatch):
+    def fake_dispatch(state, questions):
+        return dict(ENV_OK), 1
+
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
+    db = _vote_db()
+    db["snapshot_analysis"].docs.append(_ana("600007", "B"))
+    db["snapshot_stock_rows"].docs.append(
+        _row("600007", 15, 2.0, volumeRatio=1.2, zlje=2e7, turnoverRate=7.0))
+    stats = runner.run_vote_day(db, [DATE], fire=True, cap_buy=1, cap_sell=1)
+    assert stats["ok"] == 2 and stats["tokens"] == 2160  # 帽收紧后只采 1+1（默认帽则 2+1=3 call）
+    assert not any(d["code"] == "600007" for d in db["hotlist_jev_vote_confirm_pilot"].docs)
