@@ -47,6 +47,8 @@
   .kpi .s{font-size:11px;color:var(--muted2);margin-top:2px}
   table{width:100%;border-collapse:collapse;font-size:13px}
   th{text-align:left;font-size:12px;color:var(--muted);font-weight:500;padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--blue)}
   td{padding:8px 10px;border-bottom:1px solid #f1f5f9;white-space:nowrap}
   tr:hover td{background:#f8fafc}
   .num{font-variant-numeric:tabular-nums;font-weight:600}
@@ -132,6 +134,8 @@
   .lf-q{border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;width:180px;background:#fff;color:var(--text)}
   .lf-q:focus{outline:none;border-color:var(--blue)}
   .lf-bar select{border:1px solid var(--border2);border-radius:8px;padding:5px 6px;font:inherit;font-size:12px;background:#fff;color:var(--text);max-width:150px}
+  .lf-bar input[type=date]{width:116px;padding:6px 8px;font-size:12px}  /* 区间日期控件收窄：原生默认宽右侧留白（2026-10-10 用户指出瑕疵） */
+  .lf-bar .sep{font-size:12px;color:var(--muted2)}  /* 区间分隔符：勿用 .cnt（其 margin-left:auto 会吞空白） */
   .lf-bar .cnt{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
   .board-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:2px 0 12px}
   .board-row .k{font-size:12px;color:var(--muted2);flex:none}
@@ -171,15 +175,16 @@
 
   <section id="tab-relay" style="display:none">
     <div class="kpi-row" id="relayKpi" style="grid-template-columns:repeat(7,1fr)"></div>
-    <div class="card" style="margin-top:14px"><h3>🗓️ 近15日判定明细 <span class="hint">判定口径 v2 · docs/hotlist-jev/jev-relay-index-phase2-report.md</span></h3>
+    <div class="card" style="margin-top:14px"><h3>🗓️ 判定明细 <span class="hint" id="relayHint">加载中…</span></h3>
+      <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
       <table id="relayTable"></table></div>
-    <div class="card" style="margin-top:14px"><h3>📈 连板指数全序列</h3><div id="relayChart2"></div></div>
+    <div class="card" style="margin-top:14px"><h3>📈 连板指数序列 <span class="hint">跟随判定明细区间筛选</span></h3><div id="relayChart2"></div></div>
   </section>
 
   <section id="tab-labels" style="display:none">
     <div class="card">
       <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
-      <div class="kpi-row" id="labelKpi" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px"></div>
+      <div class="kpi-row" id="labelKpi" style="grid-template-columns:repeat(7,1fr);margin-bottom:12px"></div>
       <div class="board-row" id="labelBoardRow"></div>
       <div class="lf-bar" id="labelFilterBar"></div>
       <table id="labelTable"></table>
@@ -199,7 +204,12 @@ const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null,
   archEntries: [], archUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
-  labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' } };
+  labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
+  relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '' },
+  relayRange: null,  // 判定明细日期区间 {start,end}；null=未初始化（首次渲染按近1月兜）；end=null=跟随最新
+  relaySort: { key: 'date', dir: -1 },
+  labelSort: { key: 'rank', dir: 1 },
+  archSort: { key: null, dir: 1 } };
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
@@ -232,7 +242,7 @@ async function loadAll(){
   let series, slots, labels;
   try {
     [series, slots, labels] = await Promise.all([
-      jget('/api/hotlist-jev/relay-index?days=15' + (date ? '&date=' + date : '')),
+      jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
     ]);
@@ -319,8 +329,72 @@ function renderRelayMini(){
     <div style="font-size:12px;color:var(--muted);margin-top:8px">龙头强度 ${d.leaderStrength ?? '-'} · ${esc(d.model||'')}</div>`;
 }
 
+const RELAY_ENUM = { phase: Object.entries(PHASE_CN), momentum: Object.entries(MOM_CN),
+  ladder: Object.entries(LADDER_CN), money: Object.entries(MONEY_CN), theme: Object.entries(THEME_CN) };
+function rSel(label, key){
+  const cur = STATE.relayFilter[key];
+  const list = [['', label + ' · 全部']].concat(RELAY_ENUM[key]);
+  return `<select title="${esc(label)}筛选" onchange="rSet('${key}', this.value)">`
+    + list.map(([v, t2]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t2)}</option>`).join('') + '</select>';
+}
+function rSet(k, v){ STATE.relayFilter[k] = v; renderRelayTab(); }
+function rClear(){ STATE.relayFilter = { phase: '', momentum: '', ladder: '', money: '', theme: '' }; renderRelayTab(); }
+// ── 判定明细日期区间（2026-10-10 用户需求：默认近1月，图表联动）─────────────
+// 全量 series 客户端过滤（relay-index 文档 ~1KB/日，交互零延迟）；end=null=跟随最新（新交易日自动进窗）
+function ymdLocal(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+function rangedSeries(){
+  const s = STATE.series;
+  if (!STATE.relayRange){
+    const last = (s[s.length-1] || {}).tradingDate;
+    if (last){
+      const d = new Date(last + 'T00:00:00');
+      d.setMonth(d.getMonth() - 1); d.setDate(d.getDate() + 1);
+      STATE.relayRange = { start: ymdLocal(d), end: null };
+    } else STATE.relayRange = { start: null, end: null };
+  }
+  const {start, end} = STATE.relayRange;
+  return s.filter(r => { const dt = r.tradingDate || '';
+    return (!start || dt >= start) && (!end || dt <= end); });
+}
+function rRange(k, v){
+  if (!STATE.relayRange) STATE.relayRange = {};
+  STATE.relayRange[k] = v || null;
+  renderRelayTab(); renderCharts();
+}
+function rPreset(kind){
+  const last = (STATE.series[STATE.series.length-1] || {}).tradingDate;
+  if (kind === 'all') STATE.relayRange = { start: null, end: null };
+  else if (last){
+    const d = new Date(last + 'T00:00:00');
+    d.setMonth(d.getMonth() - (kind === 'm1' ? 1 : 3)); d.setDate(d.getDate() + 1);
+    STATE.relayRange = { start: ymdLocal(d), end: null };
+  }
+  renderRelayTab(); renderCharts();
+}
+function rRangeBar(){
+  const rg = STATE.relayRange || { start: null, end: null };
+  const last = (STATE.series[STATE.series.length-1] || {}).tradingDate || '';
+  return `<input type="date" title="开始日期（留空=最早）" value="${esc(rg.start || '')}" onchange="rRange('start', this.value)">`
+    + `<span class="sep">→</span>`
+    + `<input type="date" title="结束日期（留空=跟随最新）" value="${esc(rg.end || last)}" onchange="rRange('end', this.value)">`
+    + `<button onclick="rPreset('m1')">近1月</button><button onclick="rPreset('m3')">近3月</button><button onclick="rPreset('all')">全部</button>`
+    + `<span class="sep">｜</span>`;
+}
+function setRelaySort(key){
+  const s = STATE.relaySort;
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'date' || key === 'time' ? -1 : 1; }
+  renderRelayTab();
+}
+function sortMark(sortState, key){ return sortState.key === key ? (sortState.dir === 1 ? ' ▲' : ' ▼') : ''; }
 function renderRelayTab(){
   const d = STATE.day || {};
+  // 判据代际混版守卫（fail-visible，2026-10-10 用户裁决落 v3）：series 带 questionSetVersion，
+  // 混版时 hint 注记 + 逐行徽章（非最新代琥珀色），单版序列保持干净
+  const vers = [...new Set(STATE.series.map(r => r.questionSetVersion || '?'))];
+  const mixed = vers.length > 1;
+  const curVer = (STATE.series[STATE.series.length - 1] || {}).questionSetVersion;
+  const verBadge = r => (mixed && r.questionSetVersion)
+    ? badge(r.questionSetVersion, r.questionSetVersion === curVer ? 'b-gray' : 'b-amber') : '';
   $('relayKpi').innerHTML = `
     <div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${tempColor(d.relayIndex)}">${d.relayIndex ?? '-'}</div><div class="s">0-100</div></div>
     <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:16px">${phaseB(d.relayPhase)}</div><div class="s">主锚三日链</div></div>
@@ -329,14 +403,41 @@ function renderRelayTab(){
     <div class="kpi"><div class="k">接力钱效</div><div class="v" style="font-size:16px">${moneyB(d.moneyEffect)}</div><div class="s">晋级/断板/溢价</div></div>
     <div class="kpi"><div class="k">题材脉络</div><div class="v" style="font-size:16px">${themeB(d.themePulse)}</div><div class="s">近5日榜</div></div>
     <div class="kpi"><div class="k">龙头强度</div><div class="v" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}</div><div class="s">最高板地位</div></div>`;
-  const rows = STATE.series.map(r => `<tr>
-    <td class="num">${(r.tradingDate||'').slice(5)}</td>
+  const f = STATE.relayFilter;
+  // 区间过滤为底，五下拉在区间内叠加（AND）；计数/hint/图表均用区间集
+  const all = rangedSeries();
+  const shown = all.filter(r =>
+    (!f.phase || (r.relayPhase || '') === f.phase)
+    && (!f.momentum || (r.relayMomentum || '') === f.momentum)
+    && (!f.ladder || (r.ladderHealth || '') === f.ladder)
+    && (!f.money || (r.moneyEffect || '') === f.money)
+    && (!f.theme || (r.themePulse || '') === f.theme));
+  const s = STATE.relaySort;
+  const kv = { date: r => r.tradingDate || '', idx: r => r.relayIndex == null ? -1 : r.relayIndex,
+    tokens: r => ((r.usage || {}).input_tokens || 0) + ((r.usage || {}).output_tokens || 0),
+    time: r => r.computedAt || '' };
+  const rows = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
+  const th = (label, key) => `<th class="sortable" onclick="setRelaySort('${key}')">${label}${sortMark(s, key)}</th>`;
+  const body = rows.map(r => `<tr>
+    <td class="num">${(r.tradingDate||'').slice(5)}${verBadge(r)}</td>
     <td class="num" style="color:${tempColor(r.relayIndex)};font-size:14px">${r.relayIndex ?? '-'}</td>
     <td>${phaseB(r.relayPhase)}</td><td>${momB(r.relayMomentum)}</td>
     <td>${ladderB(r.ladderHealth)}</td><td>${moneyB(r.moneyEffect)}</td><td>${themeB(r.themePulse)}</td>
     <td class="num" style="color:var(--muted)">${((r.usage||{}).input_tokens||0) + ((r.usage||{}).output_tokens||0)}</td>
     <td style="color:var(--muted2)">${(r.computedAt||'').slice(5,16)}</td></tr>`).join('');
-  $('relayTable').innerHTML = `<tr><th>日期</th><th>指数</th><th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th><th>tokens</th><th>判定时间</th></tr>${rows}`;
+  const bar = $('relayFilterBar');
+  const ae = document.activeElement;
+  // 守卫只拦筛选条重建（60s 轮询不夺焦点/不关日期选择器）；表格与 hint 必须始终渲染——
+  // 否则 onchange 触发时控件仍持焦，rSet/rRange 的重渲染会被吞掉（review I-1 实证）
+  if (!(ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')))
+    bar.innerHTML = rRangeBar() + rSel('相位', 'phase') + rSel('边际', 'momentum') + rSel('梯队', 'ladder')
+      + rSel('钱效', 'money') + rSel('题材', 'theme')
+      + `<button onclick="rClear()">清除筛选</button><span class="cnt">${shown.length} / ${all.length} 日（全库 ${STATE.series.length}）</span>`;
+  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
+    + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  const hintEl = $('relayHint');
+  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'}`;
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
@@ -400,9 +501,17 @@ function lfRenderKpi(stocks, f){
   const hCard = (k, v, key) => canHeight
     ? `<div class="kpi click${f.height === key ? ' on' : ''}" title="点击筛选：${k}" onclick="lfHeight('${key}')"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${pct(v)}% · 点击筛选</div></div>`
     : `<div class="kpi" title="板数分桶仅涨停范围有意义"><div class="k">${k}</div><div class="v">—</div><div class="s">范围：${SCOPE_CN[f.scope] || f.scope}</div></div>`;
+  const zbOpen = zhaban.filter(s => (s.openNum || 0) >= 2).length;
+  const zbRate = stocks.length ? Math.round(zhaban.length / stocks.length * 100) : 0;
+  // THS 池总数含韭研未收录炸板股（榜外差额，fail-visible 透传自 limitup-labels）
+  const zbTotal = (STATE.labels || {}).thsZhabanTotal;
+  const zbSub = `炸板率 ${zbRate}% · 反复开板≥2 ${zbOpen} 家`
+    + (zbTotal != null && zbTotal !== zhaban.length ? ` · THS池 ${zbTotal}（榜外 ${zbTotal - zhaban.length}）` : '');
+  const zbCard = `<div class="kpi click${f.scope === 'zhaban' ? ' on' : ''}" title="炸板率=名单内炸板/触板总数；反复开板=THS 开板次数≥2。点击筛选炸板范围" onclick="lfScope('zhaban')"><div class="k">炸板</div><div class="v">${zhaban.length}</div><div class="s">${zbSub}</div></div>`;
   $('labelKpi').innerHTML =
     card('涨停家数', zt.length, `触板 ${stocks.length} · 炸板 ${zhaban.length} · 剔ST/北交所 ${excluded.length}`
       + (bum ? ` · 漏标连板 ${bum}` : '') + joinNote + (deg ? ` · degraded ${deg}` : ''))
+    + zbCard
     + hCard('首板', b1, '1') + hCard('二板', b2, '2') + hCard('三板', b3, '3') + hCard('四板以上', b4p, '4p')
     + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt);
 }
@@ -441,7 +550,12 @@ function lfRenderRows(){
   const stocks = L.stocks || [], f = STATE.labelFilter, ui = STATE.labelUi;
   // 范围二分：涨停（官方口径，默认）/ 炸板 / ST·北交所 / 触板全部；高度分桶仅涨停范围有意义
   const pool = scopePool(stocks, f);
-  const filtered = pool.filter(s => labelMatches(s, f, f.scope !== 'zt'));
+  let filtered = pool.filter(s => labelMatches(s, f, f.scope !== 'zt'));
+  const ls = STATE.labelSort;
+  const lkv = { code: x => x.code || '', boards: x => x.boards || 0,
+    time: x => x.limitUpTime || '', rank: x => x.rank == null ? 9999 : x.rank };
+  filtered = filtered.slice().sort((a, b) => { const va = lkv[ls.key](a), vb = lkv[ls.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * ls.dir; });
   STATE.labelEntries = filtered.map(labelEntryOf);
   const hasFilter = f.q || f.board || f.height || f.driver || f.depth || f.fresh || f.buy || f.scope !== 'zt';
   $('labelHint').textContent = `${L.date || ''} · ${SCOPE_CN[f.scope] || f.scope} ${hasFilter ? filtered.length + '/' + pool.length : pool.length + ' 只'} · 点击行查看调用日志`;
@@ -449,7 +563,7 @@ function lfRenderRows(){
   const rows = filtered.map((s, i) => {
     const entry = STATE.labelEntries[i];
     const open = ui.openKey === entry.key;
-    const hCell = s.zhaban ? badge('炸板', 'b-red')
+    const hCell = s.zhaban ? badge(`炸板${s.openNum ? '·' + s.openNum + '开' : ''}`, 'b-red')
       : s.excluded ? badge(s.excluded === 'st' ? 'ST剔除' : '北交所', 'b-amber')
       : s.boardUnmarked ? badge('漏标连板', 'b-amber')
       : `<span class="num">${s.boards && s.boards > 1 ? s.boards + '板' : '首板'}</span>`;
@@ -462,7 +576,8 @@ function lfRenderRows(){
     <td>${badge(BUY_SIDE_CN[s.buySideLogic] || s.buySideLogic || '-', 'b-gray')}</td>${s.rank ? `<td class="num">#${s.rank}</td>` : '<td></td>'}</tr>`
     + (open ? `<tr class="lg-detail"><td colspan="10">${detailHtml(entry, 'lab')}</td></tr>` : '');
   }).join('');
-  $('labelTable').innerHTML = `<tr><th>代码</th><th>名称</th><th>板块</th><th>高度</th><th>封板</th><th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th><th>热榜</th></tr>`
+  const lth = (label, key) => `<th class="sortable" onclick="setLabelSort('${key}')">${label}${sortMark(ls, key)}</th>`;
+  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th>${lth('高度', 'boards')}${lth('封板', 'time')}<th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
     + (rows || '<tr><td colspan="10" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function renderLabels(){
@@ -496,9 +611,16 @@ function lfHeight(v){
   if (STATE.labelFilter.scope !== 'zt') return;  // 板数分桶仅涨停范围有意义
   const f = STATE.labelFilter; f.height = f.height === v ? '' : v; lfSet('height', f.height);
 }
+// KPI 卡点击切换范围（炸板卡用）；再点一次回涨停默认范围
+function lfScope(v){ const f = STATE.labelFilter; f.scope = f.scope === v ? 'zt' : v; lfSet('scope', f.scope); }
 function lfBoard(v){ const f = STATE.labelFilter; f.board = f.board === v ? '' : v; lfSet('board', f.board); }
 function lfClear(){
   STATE.labelFilter = { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' };
+  renderLabels();
+}
+function setLabelSort(key){
+  const s = STATE.labelSort;
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'rank' ? 1 : 1; }
   renderLabels();
 }
 
@@ -664,14 +786,29 @@ function detailHtml(e, view){
     <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
   return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${body}${foot}</div>`;
 }
+function setArchSort(key){
+  const s = STATE.archSort;
+  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'time' ? -1 : 1; }
+  renderArchive();
+}
 function renderArchive(){
-  const entries = archEntries();
+  let entries = archEntries();
+  const as = STATE.archSort;
+  if (as.key){
+    const akv = { in: e => (e.doc.usage || {}).input_tokens ?? -1,
+      out: e => (e.doc.usage || {}).output_tokens ?? -1,
+      dur: e => e.doc.latencyMs ?? -1,
+      time: e => { const v = e.doc.computedAt; return typeof v === 'number' ? v * 1000 : (Date.parse(v) || 0); } };
+    entries = entries.slice().sort((a, b) => { const va = akv[as.key](a), vb = akv[as.key](b);
+      return (va < vb ? -1 : va > vb ? 1 : 0) * as.dir; });
+  }
   STATE.archEntries = entries;
   const degraded = entries.filter(e => (e.doc.status || '-') !== 'ok').length;
   $('archiveHint').textContent = `slots ${STATE.rawSlots.length} + eod ${STATE.eod ? 1 : 0} + relay ${STATE.day ? 1 : 0} · degraded ${degraded}`;
   if (!entries.length){ $('logTable').innerHTML = '<tr><td class="empty">当日无存档（无任何 jev 调用记录）</td></tr>'; return; }
   const ui = STATE.archUi;
-  const head = '<tr><th>调用</th><th>状态</th><th>模型</th><th>输入 tokens</th><th>输出 tokens</th><th>持续时间</th><th>判定时间</th></tr>';
+  const ath = (label, key) => `<th class="sortable" onclick="setArchSort('${key}')">${label}${sortMark(as, key)}</th>`;
+  const head = `<tr><th>调用</th><th>状态</th><th>模型</th>${ath('输入 tokens', 'in')}${ath('输出 tokens', 'out')}${ath('持续时间', 'dur')}${ath('判定时间', 'time')}</tr>`;
   $('logTable').innerHTML = head + entries.map((e, i) => {
     const d = e.doc, u = d.usage || {};
     const stCls = d.status === 'ok' ? 'b-green' : d.status === 'degraded' ? 'b-amber' : 'b-red';
@@ -716,21 +853,27 @@ function lgCopy(view, what, ev){
 
 function renderCharts(){
   const seq = _loadSeq;
-  const pts = STATE.series.filter(r => r.relayIndex != null);
-  for (const id of ['relayChart', 'relayChart2']) {
-    if (pts.length < 2) { $(id).innerHTML = '<div class="empty">序列不足</div>'; }
-  }
-  if (pts.length < 2) return;
+  // 总览卡固定近15日；连板指数页卡跟随判定明细区间（rangedSeries）
+  const pts15 = STATE.series.slice(-15).filter(r => r.relayIndex != null);
+  const ptsR = rangedSeries().filter(r => r.relayIndex != null);
+  if (pts15.length < 2) $('relayChart').innerHTML = '<div class="empty">序列不足</div>';
+  if (ptsR.length < 2) $('relayChart2').innerHTML = '<div class="empty">区间内序列不足</div>';
+  if (pts15.length < 2 && ptsR.length < 2) return;
   // 单次 /range 双图共享温度轴；seq 守卫防过期响应回写覆盖新图（快速切日期竞态）
-  fetch('/api/hotlist-jev/range?days=20').then(r => r.json()).then(rng => {
+  const need = Math.min(60, Math.max(20, pts15.length + ptsR.length + 10));
+  fetch('/api/hotlist-jev/range?days=' + need).then(r => r.json()).then(rng => {
     if (seq !== _loadSeq) return;
     const temps = {};
     for (const day of (rng.days || [])) {
       const t = day.eod && day.eod.scores ? day.eod.scores.day_temperature : null;
       if (t != null) temps[day.tradingDate] = t;
     }
-    for (const id of ['relayChart', 'relayChart2']) drawChart(id, pts, temps);
-  }).catch(() => { if (seq === _loadSeq) for (const id of ['relayChart', 'relayChart2']) drawChart(id, pts, {}); });
+    if (pts15.length >= 2) drawChart('relayChart', pts15, temps);
+    if (ptsR.length >= 2) drawChart('relayChart2', ptsR, temps);
+  }).catch(() => { if (seq === _loadSeq) {
+    if (pts15.length >= 2) drawChart('relayChart', pts15, {});
+    if (ptsR.length >= 2) drawChart('relayChart2', ptsR, {});
+  } });
 }
 
 function drawChart(id, pts, temps){
