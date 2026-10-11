@@ -156,7 +156,6 @@
   <div class="tab" data-tab="quotes">📈 热榜行情</div>
   <div class="tab" data-tab="relay">🧮 连板指数</div>
   <div class="tab" data-tab="labels">🏷️ 涨停复盘</div>
-  <div class="tab" data-tab="archive">🗂️ 明细存档</div>
 </nav>
 <main>
   <section id="tab-overview">
@@ -200,20 +199,16 @@
       <table id="labelTable"></table>
     </div>
   </section>
-
-  <section id="tab-archive" style="display:none">
-    <div class="card">
-      <h3>调用日志 · 请求 / 返回 / 原始 JSON <span class="hint" id="archiveHint"></span></h3>
-      <div class="lg-table"><table id="logTable"></table></div>
-    </div>
-  </section>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, quotes: null,
-  archEntries: [], archUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
+  slotEntries: [], relayEntries: [],
+  // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
+  detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
+  relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉；undefined=未拉，null=已拉无档）
   quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' } },
   quotesFilter: { q: '', synergy: '', vote: '', lc: '', agree: '' },
   quotesSort: { key: 'rank', dir: 1 },
@@ -221,8 +216,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '' },
   relayRange: null,  // 判定明细日期区间 {start,end}；null=未初始化（首次渲染按近1月兜）；end=null=跟随最新
   relaySort: { key: 'date', dir: -1 },
-  labelSort: { key: 'rank', dir: 1 },
-  archSort: { key: null, dir: 1 } };
+  labelSort: { key: 'rank', dir: 1 } };
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
@@ -301,8 +295,10 @@ async function loadAll(){
   STATE.eod = slots.eod;
   STATE.labels = labels;
   STATE.quotes = quotes;
+  // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
+  if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderQuotes(); renderArchive(); renderCharts();
+  renderRelayTab(); renderLabels(); renderQuotes(); renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
 }
 
@@ -327,7 +323,13 @@ function renderKpis(){
 }
 
 function renderSlots(){
-  const rows = STATE.slots.map(s => {
+  // 明细存档已并入：全部 rawSlots（含降级，fail-visible）行内展开请求/返回/原始 JSON；末行 EOD
+  const ui = STATE.detailUi.slot;
+  STATE.slotEntries = STATE.rawSlots.map(s => ({ key: String(s._id || ('slot:' + s.slotTime)),
+    kind: 'slot', label: String(s.slotTime || '?'), doc: s }));
+  if (STATE.eod) STATE.slotEntries.push({ key: String(STATE.eod._id || 'eod'), kind: 'eod',
+    label: 'EOD 情绪', doc: STATE.eod });
+  const rows = STATE.rawSlots.map(s => {
     const a = s.answers || {};
     const stage = (a.frame_stage||{}).choice;
     const seq = (a.sequence_stage||{}).choice;
@@ -335,15 +337,36 @@ function renderSlots(){
     const crowd = (a.crowding||{}).choice;
     const pct = (a.temperature||{}).percentile;
     const t = temp != null ? Math.round(temp*10) : null;
-    return `<tr><td class="num">${esc(s.slotTime||'')}</td>
-      <td style="color:${stageColor(stage)};font-weight:700">${STAGE_CN[stage]||stage||'-'}</td>
-      <td>${seq && seq!==stage ? `<span style="color:${stageColor(seq)}">${STAGE_CN[seq]||seq}</span>` : ''}</td>
-      <td><div class="flex"><span class="num" style="color:${tempColor(t)}">${t??'-'}</span><div class="bar"><i style="width:${t??0}%;background:${tempColor(t)}"></i></div></div></td>
-      <td>${badge(CROWD_CN[crowd]||'-', crowd==='breadth_climax'?'b-red':crowd==='top_acceleration'?'b-amber':crowd==='late_seal_weakness'?'b-purple':'b-gray')}</td>
-      <td class="num">${pct!=null?'P'+Math.round(pct*100):'-'}</td></tr>`;
+    const entry = STATE.slotEntries.find(x => x.doc === s);
+    const open = ui.openKey === entry.key;
+    const stBadge = s.status !== 'ok'
+      ? ` ${badge(s.status || '-', 'b-amber')}` : '';
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('slot', '${js(entry.key)}')">
+    <td><span class="lg-caret">▶</span><span class="num">${esc(s.slotTime||'')}</span>${stBadge}</td>
+    <td style="color:${stageColor(stage)};font-weight:700">${STAGE_CN[stage]||stage||'-'}</td>
+    <td>${seq && seq!==stage ? `<span style="color:${stageColor(seq)}">${STAGE_CN[seq]||seq}</span>` : ''}</td>
+    <td><div class="flex"><span class="num" style="color:${tempColor(t)}">${t??'-'}</span><div class="bar"><i style="width:${t??0}%;background:${tempColor(t)}"></i></div></div></td>
+    <td>${badge(CROWD_CN[crowd]||'-', crowd==='breadth_climax'?'b-red':crowd==='top_acceleration'?'b-amber':crowd==='late_seal_weakness'?'b-purple':'b-gray')}</td>
+    <td class="num">${pct!=null?'P'+Math.round(pct*100):'-'}</td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="6">${detailHtml(entry, 'slot')}</td></tr>` : '');
   }).join('');
-  $('slotTable').innerHTML = `<tr><th>槽位</th><th>框架阶段</th><th>序列</th><th>温度 0-100</th><th>拥挤形态</th><th>分位</th></tr>${rows || '<tr><td colspan=6 class=empty>当日无 ok 槽位文档</td></tr>'}`;
-  $('slotHint').textContent = `${STATE.slots.length} 槽 · ${STATE.slots[0]?.slotTime||''} ~ ${STATE.slots.at(-1)?.slotTime||''}`;
+  const e = STATE.eod;
+  let eodRow = '';
+  if (e){
+    const entry = STATE.slotEntries.find(x => x.kind === 'eod');
+    const open = ui.openKey === entry.key;
+    const u = e.usage || {};
+    eodRow = `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('slot', '${js(entry.key)}')">
+    <td><span class="lg-caret">▶</span><span class="num">EOD</span>${badge(e.status || '-', e.status === 'ok' ? 'b-green' : 'b-amber')}</td>
+    <td style="color:${stageColor(((e.answers||{}).day_stage||{}).choice)};font-weight:700">${STAGE_CN[((e.answers||{}).day_stage||{}).choice] || '-'}</td>
+    <td>日级</td>
+    <td><div class="flex"><span class="num" style="color:${tempColor(e.scores ? Math.round(e.scores.day_temperature ?? NaN) : null)}">${e.scores && e.scores.day_temperature != null ? Math.round(e.scores.day_temperature) : '-'}</span></div></td>
+    <td>${badge(CROWD_CN[((e.answers||{}).day_crowding||{}).choice] || '-', 'b-gray')}</td>
+    <td class="num" style="color:var(--muted)">${fmtTime(e.computedAt)}</td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="6">${detailHtml(entry, 'slot')}</td></tr>` : '');
+  }
+  $('slotTable').innerHTML = `<tr><th>槽位</th><th>框架阶段</th><th>序列</th><th>温度 0-100</th><th>拥挤形态</th><th>分位</th></tr>${rows || '<tr><td colspan="6" class="empty">当日无 ok 槽位文档</td></tr>'}${eodRow}`;
+  $('slotHint').textContent = `${STATE.slots.length} 槽 · ${STATE.slots[0]?.slotTime||''} ~ ${STATE.slots.at(-1)?.slotTime||''} · 点击行查看调用日志`;
 }
 
 function renderEod(){
@@ -457,13 +480,18 @@ function renderRelayTab(){
   const rows = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
   const th = (label, key) => `<th class="sortable" onclick="setRelaySort('${key}')">${label}${sortMark(s, key)}</th>`;
-  const body = rows.map(r => `<tr>
-    <td class="num">${(r.tradingDate||'').slice(5)}${verBadge(r)}</td>
+  const body = rows.map(r => {
+    const open = STATE.detailUi.relay.openKey === (r.tradingDate || '');
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="relayRow('${js(r.tradingDate || '')}')">
+    <td class="num"><span class="lg-caret">▶</span>${(r.tradingDate||'').slice(5)}${verBadge(r)}</td>
     <td class="num" style="color:${zoneIdxColor(r)};font-size:14px">${r.relayIndex ?? '-'}</td>
     <td>${phaseB(r.relayPhase)}</td><td>${momB(r.relayMomentum)}</td>
     <td>${ladderB(r.ladderHealth)}</td><td>${moneyB(r.moneyEffect)}</td><td>${themeB(r.themePulse)}</td>
     <td class="num" style="color:var(--muted)">${((r.usage||{}).input_tokens||0) + ((r.usage||{}).output_tokens||0)}</td>
-    <td style="color:var(--muted2)">${(r.computedAt||'').slice(5,16)}</td></tr>`).join('');
+    <td style="color:var(--muted2)">${(r.computedAt||'').slice(5,16)}</td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="9">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
+  }).join('');
+  STATE.relayEntries = shown.map(r => relayEntryOf(r));
   const bar = $('relayFilterBar');
   const ae = document.activeElement;
   // 守卫只拦筛选条重建（60s 轮询不夺焦点/不关日期选择器）；表格与 hint 必须始终渲染——
@@ -475,7 +503,25 @@ function renderRelayTab(){
   $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
     + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   const hintEl = $('relayHint');
-  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点警戒<25 · 毒带观察=40-60且温度≥56（观察线索非规则）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'}`;
+  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点警戒<25 · 毒带观察=40-60且温度≥56（观察线索非规则）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'} · 点击行查看调用日志`;
+}
+// 判定明细行展开：series 行不含 raw 大字段，按日懒拉完整存档（relayDocs 缓存；当日已在 loadAll 预入）
+function relayEntryOf(r){
+  const date = String(r.tradingDate || '');
+  const doc = STATE.relayDocs[date] !== undefined ? STATE.relayDocs[date] : r;
+  return { key: date, kind: 'relay', label: date + ' 连板指数', doc: doc || r };
+}
+function relayRow(key){
+  const ui = STATE.detailUi.relay;
+  if (ui.openKey === key){ ui.openKey = null; ui.q1 = ''; ui.q2 = ''; renderRelayTab(); return; }
+  ui.openKey = key; ui.q1 = ''; ui.q2 = '';
+  if (STATE.relayDocs[key] === undefined){
+    STATE.relayDocs[key] = null;  // 占位防并发重复拉
+    jget('/api/hotlist-jev/relay-index?days=1&date=' + encodeURIComponent(key))
+      .then(r => { STATE.relayDocs[key] = r.day || null; renderRelayTab(); })
+      .catch(() => { STATE.relayDocs[key] = null; renderRelayTab(); });
+  }
+  renderRelayTab();
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
@@ -983,14 +1029,6 @@ function copyText(txt, btn){
   const fallback = () => { const ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); ok ? done() : fail(); };
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, fallback); else fallback();
 }
-// 条目构造：槽位升序 → EOD → 连板指数（relay）
-function archEntries(){
-  const list = [];
-  for (const s of STATE.rawSlots) list.push({ key: String(s._id || ('slot:' + s.slotTime)), kind: 'slot', label: String(s.slotTime || '?'), doc: s });
-  if (STATE.eod) list.push({ key: String(STATE.eod._id || 'eod'), kind: 'eod', label: 'EOD 情绪', doc: STATE.eod });
-  if (STATE.day && (STATE.day._id || STATE.day.narrative != null)) list.push({ key: String(STATE.day._id || 'relay'), kind: 'relay', label: '连板指数', doc: STATE.day });
-  return list;
-}
 // 涨停复盘条目：个股文档（with_raw=1 附带调用原始字段）
 function labelEntryOf(d, i){
   return { key: String(d._id || ('lb:' + d.code + ':' + i)), kind: 'labels',
@@ -1020,8 +1058,10 @@ function entryResp(e){
   if (d.answers || d.scores) return { _note: 'responseRaw 未存档（旧文档）', answers: d.answers, scores: d.scores };
   return { _note: 'responseRaw 未存档' };
 }
-function lgUi(view){ return view === 'lab' ? STATE.labelUi : STATE.archUi; }
-function lgEntries(view){ return view === 'lab' ? STATE.labelEntries : STATE.archEntries; }
+function lgUi(view){ return view === 'lab' ? STATE.labelUi : STATE.detailUi[view]; }
+function lgEntries(view){ return view === 'lab' ? STATE.labelEntries
+  : view === 'slot' ? STATE.slotEntries : STATE.relayEntries; }
+function lgAfter(view){ if (view === 'lab') renderLabels(); else if (view === 'slot') renderSlots(); else renderRelayTab(); }
 function lgOpenEntry(view){ return (lgEntries(view) || []).find(x => x.key === lgUi(view).openKey) || null; }
 function detailHtml(e, view){
   const d = e.doc, u = d.usage || {}, ui = lgUi(view);
@@ -1056,55 +1096,18 @@ function detailHtml(e, view){
     <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
   return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${body}${foot}</div>`;
 }
-function setArchSort(key){
-  const s = STATE.archSort;
-  if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'time' ? -1 : 1; }
-  renderArchive();
-}
-function renderArchive(){
-  let entries = archEntries();
-  const as = STATE.archSort;
-  if (as.key){
-    const akv = { in: e => (e.doc.usage || {}).input_tokens ?? -1,
-      out: e => (e.doc.usage || {}).output_tokens ?? -1,
-      dur: e => e.doc.latencyMs ?? -1,
-      time: e => { const v = e.doc.computedAt; return typeof v === 'number' ? v * 1000 : (Date.parse(v) || 0); } };
-    entries = entries.slice().sort((a, b) => { const va = akv[as.key](a), vb = akv[as.key](b);
-      return (va < vb ? -1 : va > vb ? 1 : 0) * as.dir; });
-  }
-  STATE.archEntries = entries;
-  const degraded = entries.filter(e => (e.doc.status || '-') !== 'ok').length;
-  $('archiveHint').textContent = `slots ${STATE.rawSlots.length} + eod ${STATE.eod ? 1 : 0} + relay ${STATE.day ? 1 : 0} · degraded ${degraded}`;
-  if (!entries.length){ $('logTable').innerHTML = '<tr><td class="empty">当日无存档（无任何 jev 调用记录）</td></tr>'; return; }
-  const ui = STATE.archUi;
-  const ath = (label, key) => `<th class="sortable" onclick="setArchSort('${key}')">${label}${sortMark(as, key)}</th>`;
-  const head = `<tr><th>调用</th><th>状态</th><th>模型</th>${ath('输入 tokens', 'in')}${ath('输出 tokens', 'out')}${ath('持续时间', 'dur')}${ath('判定时间', 'time')}</tr>`;
-  $('logTable').innerHTML = head + entries.map((e, i) => {
-    const d = e.doc, u = d.usage || {};
-    const stCls = d.status === 'ok' ? 'b-green' : d.status === 'degraded' ? 'b-amber' : 'b-red';
-    const open = ui.openKey === e.key;
-    let html = `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('arch', '${js(e.key)}')"><td><span class="lg-caret">▶</span>${esc(e.label)}</td>
-      <td>${badge(d.status || '-', stCls)}</td><td>${esc(d.model || '-')}</td>
-      <td class="num">${u.input_tokens != null ? u.input_tokens.toLocaleString() : '-'}</td>
-      <td class="num">${u.output_tokens != null ? u.output_tokens.toLocaleString() : '-'}</td>
-      <td class="num">${d.latencyMs != null ? d.latencyMs + ' ms' : '-'}</td>
-      <td style="color:var(--muted)">${fmtTime(d.computedAt)}</td></tr>`;
-    if (open) html += `<tr class="lg-detail"><td colspan="7">${detailHtml(e, 'arch')}</td></tr>`;
-    return html;
-  }).join('');
-}
 function lgRow(view, key){
   const e = (lgEntries(view) || []).find(x => x.key === key);
   if (!e) return;
   const ui = lgUi(view);
   ui.openKey = ui.openKey === e.key ? null : e.key;
   ui.q1 = ''; ui.q2 = '';
-  if (view === 'lab') renderLabels(); else renderArchive();
+  lgAfter(view);
 }
 function lgMode(view, m, ev){
   ev.stopPropagation();
   lgUi(view).mode = m;
-  if (view === 'lab') renderLabels(); else renderArchive();
+  lgAfter(view);
 }
 function lgFilter(view, side, v){
   const ui = lgUi(view);
