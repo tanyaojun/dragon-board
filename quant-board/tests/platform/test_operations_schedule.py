@@ -79,9 +79,10 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
+    assert result["results"]["jevVoteRecheck"]["skipped"] is True  # dry_run 短路
     assert result["results"]["calibDriftMonitor"]["skipped"] is True  # dry_run 短路
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
@@ -972,3 +973,55 @@ def test_deep_valley_failure_does_not_flip_chain(monkeypatch: Any) -> None:
     assert result["results"]["deepValley"]["ok"] is False
     assert result["results"]["peakRevalidate"]["ok"] is True  # advisory：deepValley 失败不翻转 C10 步
     assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate"]
+
+
+# ── jevVoteRecheck 步（双题集收盘复核，观察轨道 advisory 语义）──
+
+
+def test_jev_vote_recheck_step_skipped_when_frame_missing(monkeypatch):
+    from backend.operations import schedule
+    class _Col:
+        def find_one(self, query, projection=None):
+            return None
+
+    class _Db:
+        def __getitem__(self, name):
+            return _Col()
+
+    monkeypatch.setattr(schedule.repository_factory, "get_runtime_mongodb_database", lambda: _Db())
+    result = schedule._run_jev_vote_recheck_step("2026-10-03")  # 非交易日无帧
+    assert result["ok"] is True and result["skipped"] is True
+
+
+def test_jev_vote_recheck_step_dry_run():
+    from backend.operations import schedule
+    assert schedule._run_jev_vote_recheck_step("2026-10-09", dry_run=True) == {
+        "ok": True, "skipped": True, "reason": "dry_run"}
+
+
+def test_jev_vote_recheck_step_runs_full_population(monkeypatch):
+    from backend.operations import schedule
+    captured = {}
+
+    class _Col:
+        def find_one(self, query, projection=None):
+            return {"snapshotId": "half_hour:2026-10-09:15:00"}
+
+    class _Db:
+        def __getitem__(self, name):
+            return _Col()
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return type("P", (), {"returncode": 0, "stdout": "FINAL", "stderr": ""})()
+
+    monkeypatch.setattr(schedule.repository_factory, "get_runtime_mongodb_database", lambda: _Db())
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+    result = schedule._run_jev_vote_recheck_step("2026-10-09")
+    assert result["ok"] is True
+    cmd = " ".join(captured["cmd"])
+    assert "backend.operations.jev_vote_confirm" in cmd
+    # 全量人口口径（用户裁决：250 只池全覆盖）+ 收盘帧 + 幂等 fire
+    for flag in ("--include-neutral", "--include-cooling", "--slot", "15:00", "--fire",
+                 "--vote-cap-buy", "200", "--lc-cap-total", "200"):
+        assert flag in cmd, flag

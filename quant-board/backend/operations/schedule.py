@@ -395,6 +395,51 @@ def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any
     return {"ok": True, "record": record}
 
 
+_JEV_VOTE_RECHECK_TIMEOUT_SECONDS = 1800  # 双题集收盘复核：全量一帧 ≈500 call ÷ 4 workers，1800s 冗余
+
+
+def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """双题集收盘复核（观察轨道步，2026-10-12 用户裁决挂链：每日 15:00 帧一次，不等午盘）。
+
+    - 门控=当日 half_hour 15:00 帧已落库（帧未落库/非交易日 → skipped，零成本）；
+    - 子进程=jev_vote_confirm 全量人口（A 含 C 档 --include-neutral、B 含 cooling
+      --include-cooling、15:00 收盘帧）——runner 自身 done-skip 幂等，链重跑零重复计费；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok、不参与 stopped_at
+      （jev=并列观察者，观察证据链非生产数据链，不回写引擎不进交易路径）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        frame = db["snapshot_frames"].find_one(
+            {"datasetId": dataset_id, "type": "half_hour",
+             "tradingDate": today, "slotTime": "15:00"}, {"snapshotId": 1})
+    except Exception as exc:  # noqa: BLE001 — 门控查询失败按跳过处理（fail-visible 记原因）
+        return {"ok": True, "skipped": True, "reason": f"gate error: {exc}"}
+    if not frame:
+        return {"ok": True, "skipped": True, "reason": "15:00 frame missing (非交易日/采集延迟)"}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_vote_confirm",
+             "--vote-day", today, "--lifecycle-day", today, "--slot", "15:00",
+             "--vote-cap-buy", "200", "--vote-cap-sell", "200",
+             "--lc-cap-igex", "100", "--lc-cap-total", "200",
+             "--include-neutral", "--include-cooling",
+             "--workers", "4", "--token-fuse", "6000000", "--fire"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_JEV_VOTE_RECHECK_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "jev_vote_recheck_timeout", "message": f"timeout {_JEV_VOTE_RECHECK_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "jev_vote_recheck_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    return {"ok": True, "runStartedAt": run_started_at.isoformat(),
+            "stdoutTail": (proc.stdout or "")[-300:]}
+
+
 def _run_jev_daily_line_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """日度情绪一句话（advisory 步，2026-10-08 预登记 jev-daily-line-design.md）。
 
@@ -603,10 +648,11 @@ def run_after_market_once(
         jev_daily_line_result = _run_jev_daily_line_step(today, dry_run=dry_run)
         calib_drift_result = _run_calib_drift_step(today, dry_run=dry_run)
         amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
+        jev_vote_recheck_result = _run_jev_vote_recheck_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -619,6 +665,7 @@ def run_after_market_once(
                 "jevDailyLine": jev_daily_line_result,
                 "calibDriftMonitor": calib_drift_result,
                 "amountVsSameRecord": amount_vs_same_result,
+                "jevVoteRecheck": jev_vote_recheck_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,
