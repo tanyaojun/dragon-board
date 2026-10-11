@@ -208,12 +208,35 @@ def get_relay_index(
             {"narrative": 0, "responseRaw": 0, "questionsRaw": 0},
         ).sort("tradingDate", -1).limit(capped_days))
         series.reverse()
-        return {
+        # 2026-10-11 指数分区三色原料：join EOD day_temperature（唯一来源 hotlist_jev_sentiment），
+        # 缺温度日 dayTemperature=None 原样透传（fail-visible，前端无温度不判黄）；
+        # 温度原始值不取整（55.96 就是 55.96，前端 ≥56 判黄与研究脚本口径一致）。
+        # join 失败只降级温度字段，不连坐 relay 序列读口（§4.0 部分失败不阻断）
+        relay_dates = [str(r.get("tradingDate")) for r in [*series, day_doc] if r and r.get("tradingDate")]
+        temps: dict[str, float] = {}
+        join_error: str | None = None
+        if relay_dates:
+            try:
+                for e in db["hotlist_jev_sentiment"].find(
+                        {"kind": "eod", "status": "ok", "tradingDate": {"$in": relay_dates}},
+                        {"tradingDate": 1, "scores.day_temperature": 1}):
+                    t = (e.get("scores") or {}).get("day_temperature")
+                    if isinstance(t, (int, float)) and not isinstance(t, bool):
+                        temps[str(e["tradingDate"])] = float(t)
+            except Exception as exc:
+                temps, join_error = {}, f"day_temperature_join_failed: {exc}"
+        for r in [*series, day_doc]:
+            if r:
+                r["dayTemperature"] = temps.get(str(r.get("tradingDate")))
+        payload = {
             "ok": True, "datasetId": dataset_id, "date": latest,
             "day": day_doc,
             "series": series,
             "degradedCount": sum(1 for r in [*series, day_doc] if r and r.get("status") != "ok"),
         }
+        if join_error:
+            payload["dayTemperatureDegraded"] = join_error
+        return payload
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"relay_index_read_failed: {exc}"}
 

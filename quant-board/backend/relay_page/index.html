@@ -232,6 +232,16 @@ const moneyB = v => badge(MONEY_CN[v]||v, v==='strong'?'b-green':v==='neutral'?'
 const themeB = v => badge(THEME_CN[v]||v, v==='mainline_continue'?'b-purple':v==='rotation'?'b-blue':'b-gray');
 const stageColor = s => ({ice:'#38bdf8',start:'#34d399',ferment:'#f59e0b',climax:'#ef4444',retreat:'#94a3b8'}[s] || '#94a3b8');
 const tempColor = v => v>=80?'#dc2626':v>=65?'#f59e0b':v>=45?'#2563eb':'#38bdf8';
+// 指数分区三色（2026-10-11 分带诊断 103 天读数，详见 docs/hotlist-jev/jev-relay-band-toxic-diagnostic.md §4.5）：
+// 绿=idx≥60（次日溢价赢:输=3.4:1）/ 红=idx<25（1:2.2 不利）/ 黄=40-60且温度≥56（两轮同向弱负）；
+// 其余中性区灰 var(--muted)；缺温度日不判黄（fail-visible）。观察线索非交易规则。
+const zoneIdxColor = r => {
+  if (r == null || r.relayIndex == null) return 'var(--muted)';
+  if (r.relayIndex >= 60) return 'var(--green)';
+  if (r.relayIndex < 25) return 'var(--red)';
+  if (r.relayIndex >= 40 && r.dayTemperature != null && r.dayTemperature >= 56) return 'var(--amber)';
+  return 'var(--muted)';
+};
 
 async function jget(path){ const r = await fetch(path); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
 
@@ -282,7 +292,7 @@ function renderKpis(){
     <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}</div><div class="s">0-100 · 参照20日</div></div>
     <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}</div><div class="s">收盘口径</div></div>
     <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">day_stage</div></div>
-    <div class="kpi"><div class="k">连板情绪指数</div><div class="v" style="color:${tempColor(d.relayIndex)}">${d.relayIndex ?? '-'}</div><div class="s">${esc(d.tradingDate||'')}</div></div>
+    <div class="kpi"><div class="k">连板情绪指数</div><div class="v" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</div><div class="s">${esc(d.tradingDate||'')}</div></div>
     <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:15px">${phaseB(d.relayPhase)}</div><div class="s">relay_phase</div></div>
     <div class="kpi"><div class="k">接力边际</div><div class="v" style="font-size:15px">${momB(d.relayMomentum)}</div><div class="s">较昨日</div></div>
     <div class="kpi"><div class="k">梯队 / 钱效</div><div class="v" style="font-size:15px">${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}</div><div class="s">结构 / 效应</div></div>`;
@@ -324,7 +334,7 @@ function renderEod(){
 function renderRelayMini(){
   const d = STATE.day;
   if (!d || d.relayIndex == null) { $('relayMini').innerHTML = '<div class="empty">当日无连板指数存档</div>'; return; }
-  $('relayMini').innerHTML = `<div class="phase-big" style="color:${tempColor(d.relayIndex)}">${d.relayIndex}</div>
+  $('relayMini').innerHTML = `<div class="phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex}</div>
     <div class="flex" style="margin-top:8px">${phaseB(d.relayPhase)}${momB(d.relayMomentum)}${ladderB(d.ladderHealth)}${moneyB(d.moneyEffect)}${themeB(d.themePulse)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:8px">龙头强度 ${d.leaderStrength ?? '-'} · ${esc(d.model||'')}</div>`;
 }
@@ -396,7 +406,7 @@ function renderRelayTab(){
   const verBadge = r => (mixed && r.questionSetVersion)
     ? badge(r.questionSetVersion, r.questionSetVersion === curVer ? 'b-gray' : 'b-amber') : '';
   $('relayKpi').innerHTML = `
-    <div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${tempColor(d.relayIndex)}">${d.relayIndex ?? '-'}</div><div class="s">0-100</div></div>
+    <div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</div><div class="s">0-100</div></div>
     <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:16px">${phaseB(d.relayPhase)}</div><div class="s">主锚三日链</div></div>
     <div class="kpi"><div class="k">边际方向</div><div class="v" style="font-size:16px">${momB(d.relayMomentum)}</div><div class="s">今日 vs 昨日</div></div>
     <div class="kpi"><div class="k">梯队结构</div><div class="v" style="font-size:16px">${ladderB(d.ladderHealth)}</div><div class="s">量化比率口径</div></div>
@@ -421,7 +431,7 @@ function renderRelayTab(){
   const th = (label, key) => `<th class="sortable" onclick="setRelaySort('${key}')">${label}${sortMark(s, key)}</th>`;
   const body = rows.map(r => `<tr>
     <td class="num">${(r.tradingDate||'').slice(5)}${verBadge(r)}</td>
-    <td class="num" style="color:${tempColor(r.relayIndex)};font-size:14px">${r.relayIndex ?? '-'}</td>
+    <td class="num" style="color:${zoneIdxColor(r)};font-size:14px">${r.relayIndex ?? '-'}</td>
     <td>${phaseB(r.relayPhase)}</td><td>${momB(r.relayMomentum)}</td>
     <td>${ladderB(r.ladderHealth)}</td><td>${moneyB(r.moneyEffect)}</td><td>${themeB(r.themePulse)}</td>
     <td class="num" style="color:var(--muted)">${((r.usage||{}).input_tokens||0) + ((r.usage||{}).output_tokens||0)}</td>
@@ -437,7 +447,7 @@ function renderRelayTab(){
   $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
     + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   const hintEl = $('relayHint');
-  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'}`;
+  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点警戒<25 · 毒带观察=40-60且温度≥56（观察线索非规则）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'}`;
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
