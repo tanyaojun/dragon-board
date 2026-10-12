@@ -79,11 +79,12 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevVoteRecheck"]["skipped"] is True  # dry_run 短路
     assert result["results"]["calibDriftMonitor"]["skipped"] is True  # dry_run 短路
+    assert result["results"]["relayIndex"]["skipped"] is True  # dry_run 短路
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
@@ -1025,3 +1026,106 @@ def test_jev_vote_recheck_step_runs_full_population(monkeypatch):
     for flag in ("--include-neutral", "--include-cooling", "--slot", "15:00", "--fire",
                  "--vote-cap-buy", "200", "--lc-cap-total", "200"):
         assert flag in cmd, flag
+
+
+def test_relay_index_gate_skips_without_material(monkeypatch: Any) -> None:
+    """无韭研 final（非交易日/缺料）→ 连板指数跳过，子进程不启动。"""
+    from backend.operations import schedule
+
+    class FakeCollection:
+        def find_one(self, _query, _projection=None):
+            return None
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCollection()
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    ran: list[str] = []
+    monkeypatch.setattr(schedule.subprocess, "run", lambda *a, **k: ran.append("subprocess"))
+
+    result = schedule._run_relay_index_step("2026-10-11")  # 周六，无 final
+
+    assert result["ok"] is True and result["skipped"] is True
+    assert "no jiuyan final" in result["reason"]
+    assert ran == []  # 子进程未启动
+
+
+def test_relay_index_step_runs_subprocess_and_reads_back(monkeypatch: Any) -> None:
+    """原料齐（final+15:00 帧）→ 子进程调 --relay-day，RELAY 文档回读指数/相位。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def __init__(self, name):
+            self.name = name
+
+        def find_one(self, _query, _projection=None):
+            if self.name == "hotlist_jev_relay_index":
+                return {"relayIndex": 41.0, "relayPhase": "divergence",
+                        "computedAt": "2099-01-01T00:00:00"}
+            return {"_id": "x"}  # jiuyan final / 15:00 帧均存在
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol(name)
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return type("Proc", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
+
+    result = schedule._run_relay_index_step("2026-10-12")
+
+    assert result["ok"] is True
+    assert result["relay"] == {"index": 41.0, "phase": "divergence"}
+    assert result["mongoFresh"] is True
+    cmd = " ".join(captured["cmd"])
+    assert "backend.operations.jev_relay_index" in cmd
+    assert "--relay-day" in cmd and "2026-10-12" in cmd
+
+
+def test_relay_index_idempotent_skip_no_warning(monkeypatch: Any) -> None:
+    """手动先跑后挂链重跑：子进程幂等跳过 → 不报「未刷新」告警（防日常误报）。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def __init__(self, name):
+            self.name = name
+
+        def find_one(self, _query, _projection=None):
+            if self.name == "hotlist_jev_relay_index":
+                return {"relayIndex": 60.7, "relayPhase": "relay_heat",
+                        "computedAt": "2026-10-11T09:43:00"}  # 陈旧 computedAt
+            return {"_id": "x"}
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol(name)
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    monkeypatch.setattr(
+        schedule.subprocess, "run",
+        lambda cmd, **k: type("Proc", (), {
+            "returncode": 0, "stderr": "",
+            "stdout": "[relay] 2026-10-12 已判（index=60.7 phase=relay_heat），跳过"})(),
+    )
+
+    result = schedule._run_relay_index_step("2026-10-12")
+
+    assert result["ok"] is True
+    assert result["idempotentSkip"] is True
+    assert result["relay"] == {"index": 60.7, "phase": "relay_heat"}
+    assert "mongoWarning" not in result

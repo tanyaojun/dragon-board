@@ -116,6 +116,11 @@ relay_phase 判**接力生态相位**（晋级率/断板效应主锚）——高
   字段对齐 hotlist_jev_sentiment 惯例（answers/scores/usage/model/questionsRaw/
   errorCode/narrative/computedAt）
 - 触发：盘后链（jev_label_jiuyan 之后），`--relay-index-day` CLI 手动试点入口先行
+  - **2026-10-12 挂链落地（用户裁决）**：schedule.py `_run_relay_index_step` 进 16:00
+    盘后链（steps 序列 jiuyanLabel 之后），门控与 jiuyanLabel 同源（当日 final+15:00 帧），
+    幂等 + advisory 语义；CLI 参数定名 `--relay-day`。落地前无自动调度、手动逐日跑，
+    因 VPN 断连致 final 缺失漏跑 10-12 一次（手动补打后裁决挂链），登记见
+    scripts/register_after_market_task.ps1 头注
 - 成本：1 call/日 ≈ 7-8K tokens（叙事六段全含）≈ **$0.0003/日**，可忽略
 - 读口：`GET /api/hotlist-jev/relay-index?date=`；前端情绪面板并列第三条分线
   （相位分线、温度分线、连板指数线），涨停面板展示梯队表+龙头档案

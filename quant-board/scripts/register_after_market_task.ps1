@@ -17,6 +17,12 @@
 #   残余风险：15:30 daily 槽采集若超时溢出到 16:00 之后，当日 dump 可能晚见该帧，
 #   由次日 T-1 归档与 8 天全量补跑（_maybe_force_full_catch_up）自愈，不需人工介入。
 #
+# 2026-10-12 新增 relayIndex 步（用户裁决，紧跟 jiuyanLabel）：连板情绪指数日判定
+#   （jev_relay_index --relay-day 当日，七题一 call ≈5.5k tokens/日）；门控与 jiuyanLabel
+#   同源（当日 jiuyan final + 15:00 盘面帧，缺料跳过）；幂等（RELAY 文档已 ok 自动跳过）；
+#   advisory 语义（失败/跳过不翻转整体 ok）。此前该判定无自动调度、靠手动逐日跑，
+#   2026-10-12 因 VPN 断连致 final 缺失漏跑一次（手动补打后裁决挂链）。
+#
 # 2026-09-16 起备份并入本任务；旧的 QuantBoard-LightBackup / QuantBoard-FullBackup
 # 独立任务由本脚本幂等清理。
 #

@@ -21,6 +21,7 @@ _TZ = ZoneInfo("Asia/Shanghai")
 _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
 _PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
 _JEV_DAILY_LINE_TIMEOUT_SECONDS = 600  # 日度一句话：单次 jev 调用（client 内部 60s）+ 规则/落库，600s 冗余
+_RELAY_INDEX_TIMEOUT_SECONDS = 600  # 连板指数：单次 jev 调用（七题一 call，实测 <1s）+ 原料拼装/落库，600s 冗余
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
 
@@ -248,6 +249,58 @@ def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
                               "labeledToday": labeled, "degradedToday": degraded}
     if verify_error:
         result["verifyError"] = verify_error
+    return result
+
+
+def _run_relay_index_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """连板情绪指数日判定（advisory 步，2026-10-12 用户裁决挂链）。
+
+    - 门控与 jiuyanLabel 同源（当日 jiuyan final + 15:00 盘面帧）；
+    - 子进程=jev_relay_index --relay-day 当日（幂等：当日 RELAY 文档已 ok 自动跳过，七题一 call ≈5.5k tokens/日）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（叙事证据链，非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_band(db, today)  # 同一原料门控
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_relay_index", "--relay-day", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_RELAY_INDEX_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "relay_index_timeout", "message": f"timeout {_RELAY_INDEX_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "relay_index_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    # 手动先跑/重复触发的日常场景：子进程幂等跳过（stdout「已判…跳过」）不重写文档，
+    # computedAt 不刷新是预期行为，不报 mongoWarning（防天天误报）
+    idempotent_skip = "跳过" in (proc.stdout or "")
+    mongo_fresh = False
+    relay = None
+    mongo_error: str | None = None
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        doc = db["hotlist_jev_relay_index"].find_one(
+            {"_id": f"{today}:RELAY"}, {"relayIndex": 1, "relayPhase": 1, "computedAt": 1})
+        relay = {"index": doc.get("relayIndex"), "phase": doc.get("relayPhase")} if doc else None
+        updated = str((doc or {}).get("computedAt") or "")
+        mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        mongo_error = str(exc)
+    result: dict[str, Any] = {"ok": True, "date": today, "relay": relay, "mongoFresh": mongo_fresh}
+    if idempotent_skip:
+        result["idempotentSkip"] = True
+    if not mongo_fresh and not idempotent_skip:
+        result["mongoWarning"] = "RELAY 文档 computedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    if mongo_error:
+        result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
     return result
 
 
@@ -642,6 +695,7 @@ def run_after_market_once(
         today = datetime.now(_TZ).strftime("%Y-%m-%d")
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
         jiuyan_label_result = _run_jiuyan_label_step(today, dry_run=dry_run)
+        relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
@@ -652,13 +706,14 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
                 "snapshotArchiveR2": archive_result,
                 "phasePulse": pulse_result,
                 "jiuyanLabel": jiuyan_label_result,
+                "relayIndex": relay_index_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,
