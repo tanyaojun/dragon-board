@@ -258,16 +258,30 @@ def build_direction_population(db: Any, d: str, ctx: dict,
                 "code", {"datasetId": dataset_id, "snapshotId": sid}):
             today_seen.setdefault(code, set()).add(s)
     picked = []
+    excluded: dict[str, int] = {}
     for code, r in ctx["cur"].items():
         chg = r.get("change")
         if not isinstance(chg, (int, float)) or r.get("zlje") is None or r.get("zljzb") is None:
+            excluded["mainforce_missing"] = excluded.get("mainforce_missing", 0) + 1
             continue
         if len(today_seen.get(code, set())) < 4:
+            excluded["slots_lt4"] = excluded.get("slots_lt4", 0) + 1
             continue
         # prev3 日期若不在 series_days 键集（missed-slot 等），按「无法验证连续在榜」排除该股
         if not all(code in by_day_cache.get(dd, set()) for dd in ctx["prev3"]):
+            excluded["streak_unverifiable"] = excluded.get("streak_unverifiable", 0) + 1
             continue
         picked.append(code)
+    # 排除留痕（AGENTS 4.0）：每日一页汇总文档，不做个股级排除文档（避免爆量）
+    try:
+        db["hotlist_jev_direction"].replace_one(
+            {"_id": f"{d}:{DIRECTION_SLOT}:__population__"},
+            {"origin": "direction_gate", "tradingDate": d, "slotTime": DIRECTION_SLOT,
+             "code": "__population__", "pool": ctx["pool"], "population": len(picked),
+             "excluded": excluded,
+             "computedAt": _now_iso()}, upsert=True)
+    except Exception:
+        pass  # 落档失败不影响人口本身（advisory），但 print 保底可见
     return sorted(picked)
 
 
@@ -356,9 +370,11 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
                           "errorDetail": str(exc)[:300],
                           "computedAt": _now_iso()}, 0, 0
 
+    fuse_tripped = False
     for code in todo:
         if used >= fuse:
-            print(f"[direction] 熔断：{used} >= {fuse}")
+            print(f"[direction] 熔断：{used} >= {fuse}，剩余 {len(todo) - todo.index(code)} 例未判读")
+            fuse_tripped = True
             break
         c, rec, calls, tok = _safe_work(code)
         rec["questionSetHash"] = qhash
@@ -368,6 +384,8 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
         print(f"[direction] {d} {c} → {rec.get('direction')} conf={rec.get('confidence')} "
               f"tok={tok}(cum={used})")
     stats["tokens"] = used
+    if fuse_tripped:
+        stats["fuse_tripped"] = True
     print("FINAL[direction]:", stats)
     return stats
 
@@ -434,8 +452,11 @@ def _main() -> None:
         return
     if fire and not fire_token_guard():
         raise SystemExit("--fire 需环境变量 JEV_CF_TOKEN 或 JEV_TYPESAFE_KEY")
-    run_direction_day(db, args.day, fire=fire,
-                      cap=args.cap, token_fuse=args.token_fuse)
+    out = run_direction_day(db, args.day, fire=fire,
+                            cap=args.cap, token_fuse=args.token_fuse)
+    if out.get("error"):
+        # 整日失败（如 11:00 帧缺失）必须非零退出，否则 scheduler 把失败记成 ok（review R4）
+        raise SystemExit(f"direction day failed: {out['error']}")
 
 
 if __name__ == "__main__":

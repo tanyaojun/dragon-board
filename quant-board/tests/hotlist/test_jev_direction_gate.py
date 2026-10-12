@@ -35,9 +35,10 @@ def test_questions_verbatim_from_preregistration():
     # §五 的 instructions 都在 ``` 围栏块里；至少 4 个代码块且含判据关键词
     blocks = [b for b in text.split("```")[1::2]]
     assert len(blocks) >= 4
-    joined = "\n".join(blocks)
+    # 严格相等锁（review R4）：containment 只拦增改不拦删句——必须存在与 ammo 逐字相等的围栏块
     for qd in ammo.QUESTIONS_A.values():
-            assert qd["instructions"] in joined, f"instructions 未锁进预登记: {qd['instructions'][:50]}"
+        assert qd["instructions"].strip() in (b.strip() for b in blocks), \
+            f"instructions 未与预登记围栏块逐字相等: {qd['instructions'][:50]}"
 
 
 def test_questions_structure():
@@ -47,11 +48,50 @@ def test_questions_structure():
     assert set(qd["criteria"]) == {"buy", "sell", "hold", "insufficient"}
 
 
+def test_recent_trading_dates_query_uses_type_field(monkeypatch):
+    """防回归（review R0）：_recent_trading_dates_str 查 snapshot_frames 必须用 type 键。
+
+    snapshot_frames 文档键控是 type；hotlist_sentiment 才是 snapshotType。用错查空 →
+    directionVerify 每天静默 backfilled:0，验证列永远不落（线上实测 type=1101/snapshotType=0）。
+    """
+    captured = {}
+
+    class FakeFrames:
+        def find(self, q, projection=None):
+            captured["q"] = q
+            return []
+
+    class FakeDB5:
+        def __getitem__(self, name):
+            assert name == "snapshot_frames"
+            return FakeFrames()
+
+    import backend.data.repositories.repository_factory as factory
+    monkeypatch.setattr(factory, "get_runtime_mongodb_database", lambda: FakeDB5())
+    import backend.operations.schedule as sched
+    assert sched._recent_trading_dates_str("2026-10-13", 5) == []
+    assert captured["q"]["type"] == "half_hour"
+    assert "snapshotType" not in captured["q"]
+
+
 def test_criteria_verbatim_from_preregistration():
     """§九「题目文本逐字比对」涵盖 criteria：四条 criteria 文本必须原样在预登记文档中。"""
     text = PREREQ.read_text(encoding="utf-8")
     for c, txt in ammo.QUESTIONS_A["direction"]["criteria"].items():
-        assert txt in text, f"criteria `{c}` 未锁进预登记: {txt[:40]}"
+        # 键到文本映射锁（review R4）：整份包含不校验映射，buy/sell 对调也能过——必须匹配列表行
+        assert f"- `{c}`：{txt}" in text, f"criteria `{c}` 未锁进预登记: {txt[:40]}"
+
+
+def test_runner_constants_frozen():
+    """runner 冻结常量锁（review R4）：分线/窗口/热区阈值漂移=改门级变更。"""
+    assert gate.SERIES_MIN_POINTS == 10
+    assert gate.SERIES_WINDOW_DAYS == 10
+    assert gate.HOT_ZONE == 80
+    assert gate.TOKEN_FUSE == 1_500_000
+    assert gate.DIRECTION_SNAPSHOT_TYPE == "half_hour"
+    assert ammo.band_of(39.9) == "cold" and ammo.band_of(40.0) == "weak"
+    assert ammo.band_of(59.9) == "weak" and ammo.band_of(60.0) == "strong"
+    assert ammo.band_of(74.9) == "strong" and ammo.band_of(75.0) == "peak"
 
 
 def test_b_variants_retired():

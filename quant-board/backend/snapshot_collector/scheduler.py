@@ -572,7 +572,11 @@ async def run_direction_attempt(date: str) -> dict:
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         cwd=str(Path(__file__).resolve().parents[2]),
         env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])})
-    out, _ = await asyncio.wait_for(proc.communicate(), timeout=3600)
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=3600)
+    except asyncio.TimeoutError:
+        proc.kill()  # 超时不杀子进程会拖住 direction loop 整夜（review R4）
+        raise
     tail = (out or b"").decode("utf-8", "replace")[-500:]
     return {"status": "ok" if proc.returncode == 0 else "failed",
             "returncode": proc.returncode, "tail": tail}

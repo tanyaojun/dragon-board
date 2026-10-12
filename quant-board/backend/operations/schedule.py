@@ -502,7 +502,7 @@ def _recent_trading_dates_str(today: str, n: int) -> list[str]:
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
     ds = sorted({f["tradingDate"] for f in db["snapshot_frames"].find(
-        {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+        {"datasetId": "dragonboard_live", "type": "half_hour",
          "tradingDate": {"$lte": today}},
         {"tradingDate": 1}) if f.get("tradingDate")})
     return ds[-n:]
