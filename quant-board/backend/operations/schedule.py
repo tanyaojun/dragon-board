@@ -279,17 +279,20 @@ def _run_relay_index_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         return {"ok": False, "error": {"code": "relay_index_timeout", "message": f"timeout {_RELAY_INDEX_TIMEOUT_SECONDS}s"}}
     if proc.returncode != 0:
         return {"ok": False, "error": {"code": "relay_index_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
-    # 手动先跑/重复触发的日常场景：子进程幂等跳过（stdout「已判…跳过」）不重写文档，
-    # computedAt 不刷新是预期行为，不报 mongoWarning（防天天误报）
-    idempotent_skip = "跳过" in (proc.stdout or "")
+    # 手动先跑/重复触发的日常场景：子进程幂等跳过（stdout「已判（…），跳过」）不重写文档，
+    # computedAt 不刷新是预期行为，不报 mongoWarning（防天天误报）。
+    # 匹配收窄到「已判」：缺料路径 stdout 也是「…跳过」（jev_relay_index「韭研 final 缺失，跳过」
+    # 且 returncode 同为 0），宽匹配会把没判出伪装成良性跳过（review P1）
+    idempotent_skip = "已判" in (proc.stdout or "")
     mongo_fresh = False
     relay = None
     mongo_error: str | None = None
     try:
         db = repository_factory.get_runtime_mongodb_database()
         doc = db["hotlist_jev_relay_index"].find_one(
-            {"_id": f"{today}:RELAY"}, {"relayIndex": 1, "relayPhase": 1, "computedAt": 1})
-        relay = {"index": doc.get("relayIndex"), "phase": doc.get("relayPhase")} if doc else None
+            {"_id": f"{today}:RELAY"}, {"relayIndex": 1, "relayPhase": 1, "status": 1, "computedAt": 1})
+        relay = {"index": doc.get("relayIndex"), "phase": doc.get("relayPhase"),
+                 "status": doc.get("status")} if doc else None
         updated = str((doc or {}).get("computedAt") or "")
         mongo_fresh = bool(updated) and updated >= run_started_at.strftime("%Y-%m-%dT%H:%M:%S")
     except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
@@ -299,6 +302,8 @@ def _run_relay_index_step(today: str, dry_run: bool = False) -> dict[str, Any]:
         result["idempotentSkip"] = True
     if not mongo_fresh and not idempotent_skip:
         result["mongoWarning"] = "RELAY 文档 computedAt 未刷新（mongo 入库校验失败，advisory 不翻转）"
+    if relay is not None and relay.get("status") not in ("ok", None):
+        result["relayStatusWarning"] = f"RELAY 文档 status={relay.get('status')}（degraded 落库，advisory 不翻转）"
     if mongo_error:
         result["mongoWarning"] = f"mongo 校验异常（advisory 不翻转）：{mongo_error}"
     return result

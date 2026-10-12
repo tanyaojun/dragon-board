@@ -589,7 +589,7 @@ def test_phase_band_gate_skips_without_material(monkeypatch: Any) -> None:
     ran: list[str] = []
     monkeypatch.setattr(schedule.subprocess, "run", lambda *a, **k: ran.append("subprocess"))
 
-    result = schedule._run_phase_band_step("2026-10-11")  # 周六，无 final
+    result = schedule._run_phase_band_step("2026-10-11")  # 周日，无 final
 
     assert result["ok"] is True and result["skipped"] is True
     assert "no jiuyan final" in result["reason"]
@@ -1047,7 +1047,7 @@ def test_relay_index_gate_skips_without_material(monkeypatch: Any) -> None:
     ran: list[str] = []
     monkeypatch.setattr(schedule.subprocess, "run", lambda *a, **k: ran.append("subprocess"))
 
-    result = schedule._run_relay_index_step("2026-10-11")  # 周六，无 final
+    result = schedule._run_relay_index_step("2026-10-11")  # 周日，无 final
 
     assert result["ok"] is True and result["skipped"] is True
     assert "no jiuyan final" in result["reason"]
@@ -1064,7 +1064,7 @@ def test_relay_index_step_runs_subprocess_and_reads_back(monkeypatch: Any) -> No
 
         def find_one(self, _query, _projection=None):
             if self.name == "hotlist_jev_relay_index":
-                return {"relayIndex": 41.0, "relayPhase": "divergence",
+                return {"relayIndex": 41.0, "relayPhase": "divergence", "status": "ok",
                         "computedAt": "2099-01-01T00:00:00"}
             return {"_id": "x"}  # jiuyan final / 15:00 帧均存在
 
@@ -1087,11 +1087,48 @@ def test_relay_index_step_runs_subprocess_and_reads_back(monkeypatch: Any) -> No
     result = schedule._run_relay_index_step("2026-10-12")
 
     assert result["ok"] is True
-    assert result["relay"] == {"index": 41.0, "phase": "divergence"}
+    assert result["relay"] == {"index": 41.0, "phase": "divergence", "status": "ok"}
     assert result["mongoFresh"] is True
+    assert "relayStatusWarning" not in result
     cmd = " ".join(captured["cmd"])
     assert "backend.operations.jev_relay_index" in cmd
     assert "--relay-day" in cmd and "2026-10-12" in cmd
+
+
+def test_relay_index_missing_material_skip_not_masked(monkeypatch: Any) -> None:
+    """门控放行但子进程报「final 缺失，跳过」（returncode 仍 0）→ 不得误标幂等、必须带告警（review P1）。"""
+    from backend.operations import schedule
+
+    class FakeCol:
+        def __init__(self, name):
+            self.name = name
+
+        def find_one(self, _query, _projection=None):
+            if self.name == "hotlist_jev_relay_index":
+                return None  # RELAY 文档不存在（没判出来）
+            return {"_id": "x"}  # 门控放行：jiuyan final / 15:00 帧存在
+
+    class FakeDb:
+        def __getitem__(self, name):
+            return FakeCol(name)
+
+    monkeypatch.setattr(
+        "backend.operations.schedule.repository_factory.get_runtime_mongodb_database",
+        lambda: FakeDb(),
+    )
+    monkeypatch.setattr(
+        schedule.subprocess, "run",
+        lambda cmd, **k: type("Proc", (), {
+            "returncode": 0, "stderr": "",
+            "stdout": "[relay] 2026-10-12 韭研 final 缺失，跳过（fail-visible）"})(),
+    )
+
+    result = schedule._run_relay_index_step("2026-10-12")
+
+    assert result["ok"] is True
+    assert "idempotentSkip" not in result  # 缺料跳过不得伪装成幂等跳过
+    assert result["relay"] is None
+    assert "mongoWarning" in result  # 无告警即掩蔽（§4.0）
 
 
 def test_relay_index_idempotent_skip_no_warning(monkeypatch: Any) -> None:
@@ -1104,7 +1141,7 @@ def test_relay_index_idempotent_skip_no_warning(monkeypatch: Any) -> None:
 
         def find_one(self, _query, _projection=None):
             if self.name == "hotlist_jev_relay_index":
-                return {"relayIndex": 60.7, "relayPhase": "relay_heat",
+                return {"relayIndex": 60.7, "relayPhase": "relay_heat", "status": "ok",
                         "computedAt": "2026-10-11T09:43:00"}  # 陈旧 computedAt
             return {"_id": "x"}
 
@@ -1127,5 +1164,39 @@ def test_relay_index_idempotent_skip_no_warning(monkeypatch: Any) -> None:
 
     assert result["ok"] is True
     assert result["idempotentSkip"] is True
-    assert result["relay"] == {"index": 60.7, "phase": "relay_heat"}
+    assert result["relay"] == {"index": 60.7, "phase": "relay_heat", "status": "ok"}
     assert "mongoWarning" not in result
+
+
+def test_relay_index_failure_does_not_flip_chain(monkeypatch: Any) -> None:
+    """advisory 语义：relayIndex 失败只进 results，不翻转整体 ok。"""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "backend.operations.schedule.get_settings",
+        lambda: type("Settings", (), {"storage_backend": "mongodb", "archive_auto_dataset_id": "dragonboard_live", "archive_auto_snapshot_types": "half_hour"})(),
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_hotlist_sentiment_for_latest_day",
+        lambda db, dataset_id, snapshot_type, dry_run=False: calls.append("hotlist") or {"ok": True, "written": 1},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_backup_once",
+        lambda *, dry_run=False, now=None: calls.append("backup") or {"ok": True, "skipped": True, "reason": "dry_run"},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule.run_mongodb_snapshot_archive_once",
+        lambda *, dry_run=False: calls.append("archiveR2") or {"ok": True, "dryRun": True, "snapshotTypes": {}},
+    )
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_relay_index_step",
+        lambda today, dry_run=False: calls.append("relayIndex")
+        or {"ok": False, "error": {"code": "relay_index_failed", "message": "boom"}},
+    )
+
+    from backend.operations.schedule import run_after_market_once
+
+    result = run_after_market_once(dry_run=True)
+
+    assert result["ok"] is True  # advisory 失败不翻转
+    assert result["results"]["relayIndex"]["ok"] is False
+    assert calls == ["hotlist", "backup", "archiveR2", "relayIndex"]
