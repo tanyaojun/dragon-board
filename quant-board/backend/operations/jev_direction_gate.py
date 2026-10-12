@@ -276,7 +276,8 @@ def build_direction_population(db: Any, d: str, ctx: dict,
     try:
         db["hotlist_jev_direction"].replace_one(
             {"_id": f"{d}:{DIRECTION_SLOT}:__population__"},
-            {"origin": "direction_gate", "tradingDate": d, "slotTime": DIRECTION_SLOT,
+            {"origin": "direction_gate", "datasetId": dataset_id,
+             "tradingDate": d, "slotTime": DIRECTION_SLOT,
              "code": "__population__", "pool": ctx["pool"], "population": len(picked),
              "excluded": excluded,
              "computedAt": _now_iso()}, upsert=True)
@@ -326,7 +327,8 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
 
     def _work(code: str) -> tuple[str, dict, int, int]:
         head, blocks, meta = build_state(db, code, d, ctx, dataset_id)
-        rec = {"origin": "direction_gate", "tradingDate": d, "slotTime": DIRECTION_SLOT,
+        rec = {"origin": "direction_gate", "datasetId": dataset_id,
+               "tradingDate": d, "slotTime": DIRECTION_SLOT,
                "code": code, "name": ctx["cur"][code].get("name"),
                "ammoVersion": AMMO_VERSION, "questionSetVersion": QUESTION_SET_VERSION,
                "questionSetHash": qhash, "meta": meta,
@@ -361,7 +363,8 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
         try:
             return _work(code)
         except Exception as exc:  # 单股失败不炸批次（fail-visible 落档）
-            return code, {"origin": "direction_gate", "tradingDate": d,
+            return code, {"origin": "direction_gate", "datasetId": dataset_id,
+                          "tradingDate": d,
                           "slotTime": DIRECTION_SLOT, "code": code,
                           "ammoVersion": AMMO_VERSION,
                           "questionSetVersion": QUESTION_SET_VERSION,

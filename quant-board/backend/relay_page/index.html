@@ -156,8 +156,17 @@
   <div class="tab" data-tab="quotes">📈 热榜行情</div>
   <div class="tab" data-tab="relay">🧮 连板指数</div>
   <div class="tab" data-tab="labels">🏷️ 涨停复盘</div>
+  <div class="tab" data-tab="direction">🎯 方向线</div>
 </nav>
 <main>
+  <section id="tab-direction" style="display:none">
+    <div class="card">
+      <h3>🎯 方向独立裁决线 <span class="hint" id="dirHint">切入时加载（11:00 槽判读）</span></h3>
+      <div id="dirSummary" class="empty">未加载</div>
+      <table id="dirTable" style="margin-top:10px"></table>
+    </div>
+  </section>
+
   <section id="tab-overview">
     <div class="kpi-row" id="kpiRow"></div>
     <div class="grid g3" style="margin-top:14px">
@@ -1191,7 +1200,61 @@ document.querySelectorAll('nav .tab').forEach(t => t.onclick = () => {
   t.classList.add('active');
   for (const s of document.querySelectorAll('main section')) s.style.display = 'none';
   $('tab-' + t.dataset.tab).style.display = '';
+  if (t.dataset.tab === 'direction') loadDirection();
 });
+
+// ── 方向独立裁决线（v3-gate）：稳定语义合同，题集升版零改动（版本仅徽章披露）──
+const DIR_NAMES = { buy: '买入', sell: '卖出', hold: '观望', insufficient: '证据不足' };
+const DIR_COLORS = { buy: '#c0392b', sell: '#27ae60', hold: '#7f8c8d', insufficient: '#b8860b' };
+let _dirSeq = 0;
+async function loadDirection(){
+  const seq = ++_dirSeq;
+  const date = $('date').value;
+  $('dirHint').textContent = '加载中…';
+  try {
+    const r = await jget('/api/hotlist-jev/direction-daily' + (date ? '?date=' + date : ''));
+    if (seq !== _dirSeq) return;
+    renderDirection(r);
+    $('dirHint').textContent = r.date ? (r.date + ' · 11:00 判读') : '尚无判读数据';
+  } catch (err) {
+    if (seq !== _dirSeq) return;
+    $('dirSummary').className = 'empty';
+    $('dirSummary').textContent = '读口失败: ' + (err && err.message || err);
+  }
+}
+function renderDirection(r){
+  const sm = r.summary;
+  if (!r.ok || !sm) { $('dirSummary').className = 'empty'; $('dirSummary').textContent = r.reason || '无数据'; $('dirTable').innerHTML = ''; return; }
+  const d = sm.distribution || {};
+  const sent = sm.sentiment || {};
+  const badge = (t, c) => `<span style="display:inline-block;padding:2px 10px;border-radius:10px;color:#fff;background:${c};margin-right:6px;font-size:13px">${t}</span>`;
+  const pct = n => sm.scored ? (n / sm.scored * 100).toFixed(1) + '%' : '—';
+  $('dirSummary').className = '';
+  $('dirSummary').innerHTML =
+    badge('买入 ' + (d.buy || 0), DIR_COLORS.buy) +
+    badge('卖出 ' + (d.sell || 0), DIR_COLORS.sell) +
+    badge('观望 ' + (d.hold || 0), DIR_COLORS.hold) +
+    (d.insufficient ? badge('证据不足 ' + d.insufficient, DIR_COLORS.insufficient) : '') +
+    `<span style="margin:0 10px;color:var(--muted)">池 ${sm.pool ?? '--'} → 人口 ${sm.population ?? '--'}` +
+    ` · 已计分 ${sm.scored ?? 0} 对 ${sm.correct ?? 0}（${pct(sm.correct)}）` +
+    ` · 情绪 ${sent.score ?? '--'} ${sent.band ? '(' + sent.band + ')' : ''} ${sent.stage || ''}</span>` +
+    `<span class="hint">题集 ${sm.questionSetVersion || '--'} · 弹药 ${sm.ammoVersion || '--'}</span>`;
+  const rows = r.rows || [];
+  $('dirTable').innerHTML = '<tr><th>代码</th><th>名称</th><th>方向</th><th>置信</th><th>隔日涨幅%</th><th>判读起收益%</th><th>判定</th></tr>' +
+    rows.map(x => {
+      const v = x.verify || {};
+      const c = v.correct;
+      const verdict = c === null || c === undefined
+        ? '<span style="color:var(--muted)">—</span>'
+        : (c ? '<span style="color:#27ae60;font-weight:700">✓ 对</span>'
+             : '<span style="color:#c0392b;font-weight:700">✗ 错</span>');
+      const dir = x.direction
+        ? `<span style="display:inline-block;padding:1px 8px;border-radius:8px;color:#fff;background:${DIR_COLORS[x.direction] || '#999'}">${DIR_NAMES[x.direction] || x.direction}</span>`
+        : `<span style="color:var(--muted)" title="${x.status || ''}">${x.status === 'ok' ? '--' : (x.status || '--')}</span>`;
+      const f = n => (typeof n === 'number' ? n.toFixed(2) : '--');
+      return `<tr><td>${x.code || ''}</td><td>${x.name || ''}</td><td>${dir}</td><td>${f(x.confidence)}</td><td>${f(v.nextDayChange)}</td><td>${f(v.retSinceSignal)}</td><td>${verdict}</td></tr>`;
+    }).join('');
+}
 const _d = new Date();
 $('date').value = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
 // 只监听 change：input 事件会在 fill/清空中间态触发空 date 请求（422 竞态覆盖）

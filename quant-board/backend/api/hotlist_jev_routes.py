@@ -336,6 +336,83 @@ def get_jiuyan_action(date: str | None = None, kind: str = "final") -> dict[str,
         return {"ok": False, "degraded": True, "reason": f"jiuyan_read_failed: {exc}"}
 
 
+@router.get("/direction-daily")
+def get_jev_direction_daily(date: str | None = None,
+                            dataset_id: str = "dragonboard_live") -> dict[str, Any]:
+    """方向独立裁决线（v3-gate）单日读口——题集版本解耦的稳定语义合同。
+
+    合同字段固定：direction/confidence/verify（correct 按预登记 §四口径计算：
+    buy 对=隔日涨、sell 对=隔日跌、hold 对=|隔日|<5%、掉榜/insufficient 不计分=None）。
+    questionSetVersion/ammoVersion 仅作元数据披露，升版不改本合同。
+    narrative/questionsRaw 大字段不进读口（工作台无需；降 token）。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return JSONResponse(status_code=503, content={
+            "ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"})
+    try:
+        col = db["hotlist_jev_direction"]
+        dates = sorted({str(r.get("tradingDate")) for r in col.find(
+            {"datasetId": dataset_id}, {"tradingDate": 1}) if r.get("tradingDate")})
+        if not dates:
+            return {"ok": True, "date": None, "rows": [], "summary": None}
+        trading_date = date if date in dates else dates[-1]
+        docs = list(col.find({"datasetId": dataset_id, "tradingDate": trading_date,
+                              "code": {"$ne": "__population__"}}))
+        pop = col.find_one({"datasetId": dataset_id, "tradingDate": trading_date,
+                            "code": "__population__"}) or {}
+
+        def _correct(direction: str | None, chg: Any) -> bool | None:
+            if direction in (None, "insufficient") or not isinstance(chg, (int, float)):
+                return None  # 掉榜/insufficient 不计分（§四）
+            if direction == "buy":
+                return chg > 0
+            if direction == "sell":
+                return chg < 0
+            return abs(chg) < 5  # hold 遇 |隔日|>=5% 算错
+
+        rows = []
+        for d in docs:
+            verify = d.get("verify") or {}
+            rows.append({
+                "code": d.get("code"), "name": d.get("name"),
+                "status": d.get("status"),
+                "direction": d.get("direction"), "confidence": d.get("confidence"),
+                "verify": {
+                    "nextDayChange": verify.get("next_day_change"),
+                    "retSinceSignal": verify.get("ret_since_signal"),
+                    "correct": _correct(d.get("direction"), verify.get("next_day_change")),
+                },
+                "questionSetVersion": d.get("questionSetVersion"),
+                "ammoVersion": d.get("ammoVersion"),
+            })
+        rows.sort(key=lambda r: (-(r["confidence"] or 0)))
+        ok_rows = [r for r in rows if r["status"] == "ok"]
+        dist = {"buy": 0, "sell": 0, "hold": 0, "insufficient": 0}
+        for r in ok_rows:
+            if r["direction"] in dist:
+                dist[r["direction"]] += 1
+        scored = [r for r in ok_rows if r["verify"]["correct"] is not None]
+        summary = {
+            "pool": pop.get("pool"), "population": pop.get("population"),
+            "excluded": pop.get("excluded"),
+            "distribution": dist,
+            "scored": len(scored),
+            "correct": sum(1 for r in scored if r["verify"]["correct"]),
+            "sentiment": next((r_s.get("meta", {}).get("sentiment") for r_s in docs
+                               if r_s.get("status") == "ok"), None),
+            "questionSetVersion": next((r["questionSetVersion"] for r in rows
+                                        if r["questionSetVersion"]), None),
+            "ammoVersion": next((r["ammoVersion"] for r in rows if r["ammoVersion"]), None),
+        }
+        return {"ok": True, "date": trading_date, "slotTime": "11:00",
+                "summary": summary, "rows": rows}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"direction_daily_read_failed: {exc}",
+                "rows": []}
+
+
 @router.get("/sentiment-overview")
 def get_hotlist_jev_sentiment_overview(date: str | None = None) -> dict[str, Any]:
     """情绪概览读口：jev EOD（市场热度计）+ 规则 EOD 同包返回。
