@@ -75,6 +75,14 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
             # THS 炸板池总数（含韭研未收录股，炸板卡「榜外」差额注记用）
             if meta.get("thsZhabanTotal") is not None:
                 result["thsZhabanTotal"] = meta["thsZhabanTotal"]
+            # 2026-10-12 增补：板块领涨（龙一/二/三，与 relay 题材梯队表同规 dragon_rows 单源）。
+            # 板块键=board_info 的 boardName（同出自韭研 final fields.name，缺失回退打标 ctx board）；
+            # final 缺失 → 空 map → 行内空数组，前端显示 '-'（降级面由 boardJoinDegraded 注记）
+            from backend.operations.jev_label_jiuyan import jiuyan_board_dragons
+            dragons = jiuyan_board_dragons(db, date)
+            for stock in result.get("stocks") or []:
+                stock["boardDragons"] = dragons.get(
+                    stock.get("boardName") or stock.get("board") or "") or []
         except Exception as exc:  # noqa: BLE001 — 辅助 join 失败不阻断主读口（fail-visible 结构化旗标）
             result["boardJoinError"] = f"board_join_failed: {exc}"
         return result

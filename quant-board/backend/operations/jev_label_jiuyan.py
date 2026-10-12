@@ -147,6 +147,38 @@ def _jiuyan_days_boards(stock: dict) -> tuple[int | None, int | None]:
     return (days if days > 0 else None), (boards if boards > 0 else None)
 
 
+def dragon_rows(stocks: list[dict], top: int = 3) -> list[dict]:
+    """板块龙一/二/三排序，单一事实源（relay 题材梯队表与 limitup 读口「领涨」共用）。
+
+    龙序=高度优先/封板时间次之：板数（num「N天M板」的 M）降序，同板数按封板时间
+    升序；num 缺失=韭研首板口径（不标 num）视作无板数垫在同板数之后；
+    time 缺失排序垫底、输出 None（前端显示 ?）。跨板块重复归属按原样各排各的
+    （与 relay 题材梯队表 _boards_of 分组口径一致，不做跨板块去重）。
+    """
+    ranked = sorted(stocks,
+                    key=lambda s: (-(_jiuyan_board_count(s) or 0), str(s.get("time") or "99:99")))
+    return [{"role": f"龙{'一二三'[i]}", "name": s.get("name"),
+             "boards": _jiuyan_board_count(s),
+             "time": str(s["time"])[:5] if s.get("time") else None}
+            for i, s in enumerate(ranked[:top])]
+
+
+def jiuyan_board_dragons(db, date: str, top: int = 3) -> dict[str, list[dict]]:
+    """韭研 final 各板块龙一/二/三：{板块名: [dragon_rows]}；final 缺失/无个股 → {}。
+
+    调用方 fail-visible：空 map 时「领涨」列缺省，降级原因由既有
+    boardJoinDegraded=jiuyan_final_missing 旗标注记，不在此重复。
+    """
+    doc = db["jiuyan_action"].find_one(
+        {"_id": f"{date}:final"}, {"fields.name": 1, "fields.stocks": 1})
+    out: dict[str, list[dict]] = {}
+    for field in (doc or {}).get("fields") or []:
+        name = field.get("name")
+        if name and field.get("stocks"):
+            out[str(name)] = dragon_rows(field["stocks"], top)
+    return out
+
+
 def _jiuyan_board_count(stock: dict) -> int | None:
     """韭研 num 字段「N天M板」解析出真实板数 M（2026-10-10 口径修正）。
 

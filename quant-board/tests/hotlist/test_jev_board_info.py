@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.operations.jev_label_jiuyan import jiuyan_board_info
+from backend.operations.jev_label_jiuyan import dragon_rows, jiuyan_board_dragons, jiuyan_board_info
 
 
 class FinalCol:
@@ -185,3 +185,107 @@ def test_board_info_dedup_first_field_wins():
     }
     info, meta = jiuyan_board_info(cols, "2026-10-09")
     assert info["600825"]["boards"] == 2 and info["600825"]["boardName"] == "首现板块"
+
+
+# ── 板块领涨（2026-10-12 用户需求）：dragon_rows 龙序 + jiuyan_board_dragons 分组 + 路由挂载 ──
+
+
+def test_dragon_rows_ordering():
+    """龙序=板数降序→封板时间升序；「N天M板」取 M；num 缺失=首板垫底；time 缺失垫底且输出 None。"""
+    stocks = [
+        {"code": "A", "name": "三板", "num": "3天3板", "time": "10:00:00"},
+        {"code": "B", "name": "二板晚", "num": "2天2板", "time": "11:00:00"},
+        {"code": "C", "name": "二板早", "num": "5天2板", "time": "09:35:00"},  # 跨度天数≠板数：5天2板=2板
+    ]
+    rows = dragon_rows(stocks)
+    assert [r["name"] for r in rows] == ["三板", "二板早", "二板晚"]
+    assert rows[1]["boards"] == 2 and rows[1]["time"] == "09:35"  # time 截 HH:MM
+    assert [r["role"] for r in rows] == ["龙一", "龙二", "龙三"]
+    tail = dragon_rows([
+        {"code": "D", "name": "首板无time", "num": None, "time": None},
+        {"code": "E", "name": "首板晚", "num": None, "time": "14:00:00"},
+        {"code": "F", "name": "首板早", "num": None, "time": "09:30:00"},
+    ])
+    assert [r["name"] for r in tail] == ["首板早", "首板晚", "首板无time"]
+    assert tail[2]["boards"] is None and tail[2]["time"] is None
+
+
+def test_dragon_rows_top_truncation():
+    stocks = [{"code": str(i), "name": f"股{i}", "num": None, "time": f"09:{i:02d}"} for i in range(5)]
+    assert len(dragon_rows(stocks)) == 3
+    assert len(dragon_rows(stocks, top=1)) == 1
+
+
+def test_board_dragons_grouped_and_final_missing():
+    cols = {"jiuyan_action": FinalCol([
+        _final("2026-10-09", [
+            ("AI影视", [{"code": "A", "name": "龙一甲", "num": "3天3板", "time": "09:25:00"},
+                        {"code": "B", "name": "龙二乙", "num": "3天3板", "time": "09:30:00"}]),
+            ("其他", [{"code": "C", "name": "独苗", "num": None, "time": "09:47:00"}]),
+        ]),
+        _final("2026-10-08", [("X", [])]),
+    ])}
+    got = jiuyan_board_dragons(MultiFakeDb(cols), "2026-10-09")
+    assert [d["name"] for d in got["AI影视"]] == ["龙一甲", "龙二乙"]
+    assert [d["name"] for d in got["其他"]] == ["独苗"]
+    cols2 = {"jiuyan_action": FinalCol([_final("2026-10-08", [("X", [])])])}
+    assert jiuyan_board_dragons(MultiFakeDb(cols2), "2026-10-09") == {}  # final 缺失 → {}（fail-visible）
+
+
+class _LabelsCol:
+    """hotlist_jev_driver_labels 替身：find_one 按 _id（PHASE 哨兵）、find 按 tradingDate+origin 排除。"""
+
+    def __init__(self, docs):
+        self.docs = docs
+
+    def find_one(self, query, projection=None):
+        for d in self.docs:
+            if d.get("_id") == query.get("_id"):
+                return dict(d)
+        return None
+
+    def find(self, query, projection=None):
+        excluded = (query.get("origin") or {}).get("$ne")
+        return [dict(d) for d in self.docs
+                if d.get("tradingDate") == query.get("tradingDate")
+                and d.get("origin") != excluded]
+
+
+def test_limitup_route_attaches_board_dragons(monkeypatch):
+    """路由把 boardDragons 按板块挂到每行；韭研 final 外的板块 → 空数组（前端显示 '-'）。"""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.api import hotlist_jev_limitup_routes as limitup_module
+    from backend.data.repositories import repository_factory
+
+    labels = [
+        {"_id": "2026-10-09:600001", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "600001", "name": "龙一甲",
+         "label": "ma_restructure", "jiuyanContext": {"board": "AI影视"}},
+        {"_id": "2026-10-09:600009", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "600009", "name": "域外股",
+         "label": "ma_restructure", "jiuyanContext": {"board": "不存在板块"}},
+    ]
+    db = MultiFakeDb({
+        "hotlist_jev_driver_labels": _LabelsCol(labels),
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("AI影视", [
+                {"code": "600001", "name": "龙一甲", "num": "3天3板", "time": "09:25:00"},
+                {"code": "600002", "name": "龙二乙", "num": "3天3板", "time": "09:30:00"}])]),
+            _final("2026-10-08", [("X", [{"code": "600001", "num": "2天2板"}])]),
+        ]),
+        "snapshot_frames": FramesCol([_pool_frame("2026-10-09", []), _pool_frame("2026-10-08", [])]),
+    })
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    app = FastAPI()
+    app.include_router(limitup_module.router)
+    resp = TestClient(app).get("/api/hotlist-jev/limitup-labels", params={"date": "2026-10-09"})
+    assert resp.status_code == 200
+    body = resp.json()
+    by_code = {s["code"]: s for s in body["stocks"]}
+    dragons = by_code["600001"]["boardDragons"]
+    assert [d["name"] for d in dragons] == ["龙一甲", "龙二乙"]
+    assert dragons[0]["role"] == "龙一" and dragons[0]["boards"] == 3
+    assert by_code["600009"]["boardDragons"] == []

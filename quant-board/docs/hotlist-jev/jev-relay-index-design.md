@@ -193,3 +193,20 @@ climax/retreat）无「高位分歧」档，分歧日只能 ferment/climax 平�
    - 涨停复盘/热榜行情页签（个股标签链）未铺，待后续。
 3. 验证：node --check 语法过；8000 series/relay-index 两读口 answers.confidence
    字段实测齐备（relay_phase 0.94 等）；改 html 免重启。
+
+### 8.4 板块领涨字段（2026-10-12 用户需求，§8.1 龙序讲解的落地）
+
+涨停复盘列表新增【领涨】列：内容=个股所在板块的龙一/龙二/龙三。龙序规则抽为
+单源函数 `dragon_rows`（jev_label_jiuyan.py，板数 num「N天M板」取 M 降序 → 封板
+时间升序，num 缺失=韭研首板口径，time 缺失排序垫底输出 None）：
+
+- `jiuyan_board_dragons`：韭研 final 按板块分组取各家 top3（final 缺失 → 空 map，
+  行内空数组前端显示 '-'，降级面由既有 boardJoinDegraded 旗标注记）；
+- relay `theme_ladder_lines` 同步改用 `dragon_rows`（龙序规则单一事实源）；
+- limitup-labels 路由在 board join 段给每行挂 `boardDragons`（板块键=boardName，
+  同出自韭研 final fields.name；韭研 final 之外的板块 → 空数组）；
+- relay_page 涨停复盘表在板块列后插入领涨列（角色+名+板数，colspan 10→11）。
+
+对拍验证（2026-10-12 实测）：62/62 行带 boardDragons，其他/AI影视/公告三板块与
+relay 题材梯队表逐名一致；领涨覆盖面大于梯队表 top5（大农业/医药医疗等同样有）。
+测试 +4（dragon_rows 排序/截断、jiuyan_board_dragons 分组与 final 缺失、路由挂载）。

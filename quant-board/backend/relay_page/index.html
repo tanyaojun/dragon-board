@@ -664,18 +664,22 @@ function lfRenderRows(){
       : s.excluded ? badge(s.excluded === 'st' ? 'ST剔除' : '北交所', 'b-amber')
       : s.boardUnmarked ? badge('漏标连板', 'b-amber')
       : `<span class="num">${s.boards && s.boards > 1 ? s.boards + '板' : '首板'}</span>`;
+    // 领涨=所在板块龙一/二/三（后端 dragon_rows 单源，与 relay 题材梯队表同规；空=韭研 final 缺失或板块无数据）
+    const dragons = (s.boardDragons || []).map(d =>
+      `<span style="color:var(--muted2)">${esc(d.role || '')}</span> ${esc(d.name || '?')}${d.boards ? `<span class="num" style="color:var(--muted2)">·${d.boards}板</span>` : '<span style="color:var(--muted2)">·首板</span>'}`).join('<span style="color:var(--muted2)"> / </span>');
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
     <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
+    <td style="font-size:12px">${dragons || '-'}</td>
     <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>
     <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
     <td>${badge(CAT_DEPTH_CN[s.catalystDepth] || s.catalystDepth || '-', 'b-gray')}</td>
     <td>${badge(FRESH_CN[s.freshness] || s.freshness || '-', s.freshness === 'fresh_catalyst' ? 'b-green' : 'b-gray')}</td>
     <td>${badge(BUY_SIDE_CN[s.buySideLogic] || s.buySideLogic || '-', 'b-gray')}</td>${s.rank ? `<td class="num">#${s.rank}</td>` : '<td></td>'}</tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="10">${detailHtml(entry, 'lab')}</td></tr>` : '');
+    + (open ? `<tr class="lg-detail"><td colspan="11">${detailHtml(entry, 'lab')}</td></tr>` : '');
   }).join('');
   const lth = (label, key) => `<th class="sortable" onclick="setLabelSort('${key}')">${label}${sortMark(ls, key)}</th>`;
-  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th>${lth('高度', 'boards')}${lth('封板', 'time')}<th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
-    + (rows || '<tr><td colspan="10" class="empty">无匹配个股（调整筛选条件）</td></tr>');
+  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th><th>领涨</th>${lth('高度', 'boards')}${lth('封板', 'time')}<th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
+    + (rows || '<tr><td colspan="11" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function renderLabels(){
   const L = STATE.labels || {};

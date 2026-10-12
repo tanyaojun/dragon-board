@@ -23,6 +23,7 @@ from backend.operations.jev_label_jiuyan import (
     _dispatch_jev,
     _jiuyan_board_count,
     _prev_close_of_date,
+    dragon_rows,
     hotlist_ranks,
     limitup_sequence_line,
     market_facts_line,
@@ -257,14 +258,11 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5) -> list[str]:
         {"tradingDate": date, "status": "ok"}, {"code": 1, "label": 1, "freshness": 1})}
     lines = ["题材梯队表（top5，龙序=高度优先/封板时间次之）："]
     for name in sorted(cur_b, key=lambda k: -len(cur_b[k]))[:top]:
-        stocks = sorted(cur_b[name], key=lambda s: (
-            -(_jiuyan_board_count(s) or 0),
-            str(s.get("time") or "99:99")))
+        # 龙序规则单源 dragon_rows（jev_label_jiuyan，与 limitup 读口「领涨」列同规）
         dragons = []
-        for i, s in enumerate(stocks[:3], 1):
-            boards = _jiuyan_board_count(s)
-            day_txt = f"{boards}板" if boards else "首板"
-            dragons.append(f"龙{'一二三'[i-1]} {s.get('name')}({day_txt} {str(s.get('time') or '?')[:5]})")
+        for i, d in enumerate(dragon_rows(cur_b[name]), 1):
+            day_txt = f"{d['boards']}板" if d["boards"] else "首板"
+            dragons.append(f"龙{'一二三'[i-1]} {d['name']}({day_txt} {d['time'] or '?'})")
         inner = [str(s.get("code") or "")[-6:] for s in cur_b[name]]
         fresh = [label_docs[c].get("freshness") for c in inner if c in label_docs]
         drivers = [label_docs[c].get("label") for c in inner if c in label_docs]
