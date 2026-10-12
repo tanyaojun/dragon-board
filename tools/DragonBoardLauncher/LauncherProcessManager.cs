@@ -18,6 +18,9 @@ internal sealed class LauncherProcessManager
     private readonly IReadOnlyDictionary<string, ManagedService> _services;
     private readonly Action<string> _log;
     private readonly HashSet<string> _starting = new(StringComparer.Ordinal);
+    // 同一服务最小拉起间隔（Core.StartThrottle）：挡用户连点/多触发器叠加的
+    // 秒级连发，防止拉起多个等锁实例互相踩（2026-10-12 复盘）。
+    private readonly Core.StartThrottle _startThrottle = new();
     private Process? _mongoExpressProcess;
     private Process? _redisCommanderProcess;
 
@@ -340,6 +343,15 @@ internal sealed class LauncherProcessManager
                 return;
             }
 
+            // 最小拉起间隔：_starting 只挡并发，挡不住秒级连发（用户连点启动、
+            // 修复循环与锁等待重拉叠加），多实例各自等锁空转后 RuntimeError，
+            // 喂大连续失败计数直至熔断（2026-10-12 复盘 11:32 三连发）。
+            if (!_startThrottle.TryAcquire(service.Name))
+            {
+                _log($"{service.Name} 距上次启动不足 15s，忽略本次重复启动请求。");
+                return;
+            }
+
             var fileName = service.FileName;
             var arguments = service.Arguments;
             if (Path.IsPathRooted(fileName) &&
@@ -376,10 +388,17 @@ internal sealed class LauncherProcessManager
                 if (ShouldSuppressChildOutput(e.Data, logPolicy)) return;
                 EnqueueChildLog(service.Name, e.Data);
             };
-            process.Exited += (_, _) => _log($"{service.Name} 已退出。");
+            process.Exited += (_, _) =>
+            {
+                // 进程已不在：节流立即解除，"死→再拉"的修复路径不受影响。
+                _startThrottle.Reset(service.Name);
+                _log($"{service.Name} 已退出。");
+            };
 
             if (!process.Start())
             {
+                // 拉起失败＝没有活进程占用节流窗，立即解除。
+                _startThrottle.Reset(service.Name);
                 _log($"启动 {service.Name} 失败。");
                 return;
             }
@@ -721,6 +740,9 @@ internal sealed class LauncherProcessManager
     {
         try
         {
+            // 显式停止解除拉起节流：用户"停止→再启动"永远放行。
+            _startThrottle.Reset(service.Name);
+
             if (service.Port == 27017)
                 StopMongoExpress();
 

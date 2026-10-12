@@ -79,13 +79,30 @@ def _build_redis_client(redis_url: str) -> Any | None:
         return None
 
 
+def _lock_wait_tries(ttl_seconds: int, interval_seconds: float) -> int:
+    """等锁预算次数：总等待必须覆盖残留锁的最长寿命（TTL）。
+
+    launcher 停止服务是 taskkill 强杀，collector 来不及走 lifespan finally 的
+    lock.release()，锁必然残留 0~TTL 秒；acquire() 的死持有者清锁依赖 PID
+    存活检测，launcher 每 3 秒轮询 spawn 的 netstat/taskkill 加速 Windows PID
+    复用，使其不可靠（2026-10-12 复盘：11:34:52 杀掉持有者后新实例仍干等到
+    11:36:53 TTL 自然过期）。旧预算 10×5s=50s < TTL 120s，等锁实例必然
+    RuntimeError 自杀，喂大 launcher 连续失败计数直至熔断，形成重启风暴。
+    预算 = TTL/interval + 8 次余量。
+    """
+    return int(ttl_seconds / interval_seconds) + 8
+
+
 async def _acquire_lock_with_retry(
     lock: Any,
     *,
-    tries: int = 10,
+    tries: int | None = None,
     interval_seconds: float = 5.0,
 ) -> bool:
     """锁冲突退避重试：上一进程残留锁会随 TTL 过期或 PID 存活检测回收。"""
+    if tries is None:
+        ttl_seconds = int(getattr(lock, "ttl_seconds", 0) or 120)
+        tries = _lock_wait_tries(ttl_seconds, interval_seconds)
     for attempt in range(tries):
         if await asyncio.to_thread(lock.acquire):
             return True
