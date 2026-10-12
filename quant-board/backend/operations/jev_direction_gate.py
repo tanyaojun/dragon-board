@@ -15,12 +15,11 @@ backend/analysis/hotlist/jev_direction_ammo.py，VERBATIM 锁定测试 tests/hot
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import random
 import time
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from backend.analysis.hotlist.jev_direction_ammo import (
     AMMO_VERSION,
@@ -32,11 +31,16 @@ from backend.analysis.hotlist.jev_direction_ammo import (
 )
 
 DEFAULT_DATASET_ID = "dragonboard_live"
+DIRECTION_SNAPSHOT_TYPE = "half_hour"
 HOT_ZONE = 80
 SERIES_MIN_POINTS = 10
-SERIES_WINDOW_DAYS = 10
-COLLECT_SLOTS_DELAY_MIN = 8  # 判读前当日已落盘槽（09:30 起含延迟），11:00 判读时点天然满足
+SERIES_WINDOW_DAYS = 10  # 10 交易日全槽窗口 ≈ ≥30 次出现（§二「最近 ~30 次」按次数截断的更严格等价）
 TOKEN_FUSE = 1_500_000
+_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _now_iso() -> str:
+    return datetime.now(_TZ).isoformat(timespec="seconds")
 
 
 # ── 帧基础设施 ──────────────────────────────────────────────
@@ -94,7 +98,8 @@ def _limit_flag(code: str, chg: Any) -> tuple[str, str]:
 
 def _sentiment_asof(db: Any, d: str, slot: str) -> dict | None:
     doc = db["hotlist_sentiment"].find_one(
-        {"datasetId": DEFAULT_DATASET_ID, "tradingDate": d, "slotTime": {"$lte": slot}},
+        {"datasetId": DEFAULT_DATASET_ID, "snapshotType": DIRECTION_SNAPSHOT_TYPE,
+         "tradingDate": d, "slotTime": {"$lte": slot}},
         sort=[("slotTime", -1)])
     if not doc:
         return None
@@ -259,7 +264,8 @@ def build_direction_population(db: Any, d: str, ctx: dict,
             continue
         if len(today_seen.get(code, set())) < 4:
             continue
-        if not all(code in by_day_cache[dd] for dd in ctx["prev3"]):
+        # prev3 日期若不在 series_days 键集（missed-slot 等），按「无法验证连续在榜」排除该股
+        if not all(code in by_day_cache.get(dd, set()) for dd in ctx["prev3"]):
             continue
         picked.append(code)
     return sorted(picked)
@@ -286,13 +292,13 @@ def _ask(state: str, questions: dict) -> tuple[dict, dict, int]:
 
 def run_direction_day(db: Any, d: str, *, fire: bool = False,
                       cap: int | None = None, token_fuse: int | None = None,
-                      dataset_id: str = DEFAULT_DATASET_ID, workers: int = 1) -> dict:
+                      dataset_id: str = DEFAULT_DATASET_ID) -> dict:
     """判读一个判读日（单题集 A：1 调用/股）。"""
     col = db["hotlist_jev_direction"]
     qhash = questions_hash(QUESTIONS_A)
     fuse = TOKEN_FUSE if token_fuse is None else token_fuse
     used = 0
-    stats = {"ok": 0, "degraded": 0, "skip": 0, "skip_short_series": 0, "no_frame": 0}
+    stats = {"ok": 0, "degraded": 0, "error": 0, "skip": 0}
     try:
         ctx = setup_day(db, d, dataset_id)
     except LookupError as e:
@@ -304,13 +310,13 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
     print(f"[direction] {d} 池 {ctx['pool']} 人口 {len(codes)} | sentiment "
           f"{ctx['sent'].get('band') if ctx['sent'] else None}")
 
-    def _work(code: str) -> tuple[str, dict, int]:
+    def _work(code: str) -> tuple[str, dict, int, int]:
         head, blocks, meta = build_state(db, code, d, ctx, dataset_id)
         rec = {"origin": "direction_gate", "tradingDate": d, "slotTime": DIRECTION_SLOT,
                "code": code, "name": ctx["cur"][code].get("name"),
                "ammoVersion": AMMO_VERSION, "questionSetVersion": QUESTION_SET_VERSION,
                "questionSetHash": qhash, "meta": meta,
-               "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+               "computedAt": _now_iso()}
         state_a = "\n".join([head, *blocks["series"], *blocks["pos"], *blocks["vp"],
                              *blocks["gate"], *blocks["mkt"]])
         a, env_a, _ = _ask(state_a, QUESTIONS_A)
@@ -348,7 +354,7 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
                           "questionSetHash": qhash,
                           "status": "error", "errorCode": "build_state_failed",
                           "errorDetail": str(exc)[:300],
-                          "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}, 0, 0
+                          "computedAt": _now_iso()}, 0, 0
 
     for code in todo:
         if used >= fuse:
@@ -358,7 +364,7 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False,
         rec["questionSetHash"] = qhash
         col.replace_one({"_id": f"{d}:{DIRECTION_SLOT}:{c}:DIR"}, rec, upsert=True)
         used += tok
-        stats["ok" if rec["status"] == "ok" else "degraded"] += 1
+        stats[rec["status"] if rec["status"] in ("ok", "degraded", "error") else "degraded"] += 1
         print(f"[direction] {d} {c} → {rec.get('direction')} conf={rec.get('confidence')} "
               f"tok={tok}(cum={used})")
     stats["tokens"] = used
@@ -400,27 +406,36 @@ def backfill_direction_verify(db: Any, dates: list[str],
     return {"backfilled": n}
 
 
-def _main() -> None:
+def fire_token_guard() -> bool:
+    """--fire 的 token 预检（纯函数可测）：有 JEV_CF_TOKEN 或 JEV_TYPESAFE_KEY 才允许真实调用。"""
+    return bool((os.environ.get("JEV_CF_TOKEN") or "").strip()
+                or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip())
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    """CLI 参数定义（scheduler 子进程命令的兼容性回归测试锚点）。"""
     ap = argparse.ArgumentParser(description="jev direction gate runner (v3-gate)")
     ap.add_argument("--day", required=True)
     ap.add_argument("--fire", action="store_true")
     ap.add_argument("--dry", action="store_true", help="等价 fire=False（零调用）")
     ap.add_argument("--cap", type=int, default=None)
-    ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--token-fuse", type=int, default=None)
     ap.add_argument("--verify", action="store_true", help="回填隔日验证列后退出")
-    args = ap.parse_args()
-    from pymongo import MongoClient
-    db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
+    return ap
+
+
+def _main() -> None:
+    args = build_arg_parser().parse_args()
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    db = get_runtime_mongodb_database()
     fire = args.fire and not args.dry
     if args.verify:
         backfill_direction_verify(db, [args.day])
         return
-    if fire and not ((os.environ.get("JEV_CF_TOKEN") or "").strip()
-                     or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip()):
+    if fire and not fire_token_guard():
         raise SystemExit("--fire 需环境变量 JEV_CF_TOKEN 或 JEV_TYPESAFE_KEY")
     run_direction_day(db, args.day, fire=fire,
-                      cap=args.cap, token_fuse=args.token_fuse, workers=args.workers)
+                      cap=args.cap, token_fuse=args.token_fuse)
 
 
 if __name__ == "__main__":

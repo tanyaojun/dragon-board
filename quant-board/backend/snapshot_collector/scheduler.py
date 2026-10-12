@@ -104,6 +104,11 @@ class SnapshotCollectorScheduler:
             jiuyan_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await jiuyan_task
+        direction_task = getattr(self, "_direction_task", None)
+        if direction_task is not None:
+            direction_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await direction_task
 
     @property
     def running(self) -> bool:
@@ -553,13 +558,16 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
             sched._jiuyan_last = {"status": "loop_error", "at": datetime.datetime.now(TZ_SHANGHAI).isoformat()}
             await asyncio.sleep(60)
 
-async def run_direction_attempt(date: str) -> dict:
-    """11:00 判读（advisory）：子进程隔离跑 runner，variant=a（A 综合题全池）。"""
-    import subprocess
-
+def direction_command(date: str) -> list[str]:
+    """direction runner 子进程命令（runner 参数部分须 ⊆ jev_direction_gate.build_arg_parser）。"""
     venv_py = Path(__file__).resolve().parents[2] / ".venv" / "Scripts" / "python.exe"
-    cmd = [str(venv_py), "-X", "utf8", "-m", "backend.operations.jev_direction_gate",
-           "--day", date, "--fire", "--variant", "a"]
+    return [str(venv_py), "-X", "utf8", "-m", "backend.operations.jev_direction_gate",
+            "--day", date, "--fire"]
+
+
+async def run_direction_attempt(date: str) -> dict:
+    """11:00 判读（advisory）：子进程隔离跑 runner（单题集 A 全池，1 调用/股）。"""
+    cmd = direction_command(date)
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
         cwd=str(Path(__file__).resolve().parents[2]),
@@ -588,11 +596,9 @@ async def run_direction_loop(sched: "SnapshotCollectorScheduler") -> None:
                     state = {"date": trading_date, "done": False}
                 if not state["done"] and (now.hour, now.minute) >= (11, 8):
                     state["done"] = True
-                    import os
                     if not ((os.environ.get("JEV_CF_TOKEN") or "").strip()
                             or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip()):
-                        sched._direction_last = {"status": "no_token", "date": trading_date,
-                                                 "at": now.isoformat(timespec="seconds")}
+                        result = {"status": "no_token"}
                     else:
                         result = await run_direction_attempt(trading_date)
                     sched._direction_last = {**result, "date": trading_date,

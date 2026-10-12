@@ -47,6 +47,13 @@ def test_questions_structure():
     assert set(qd["criteria"]) == {"buy", "sell", "hold", "insufficient"}
 
 
+def test_criteria_verbatim_from_preregistration():
+    """§九「题目文本逐字比对」涵盖 criteria：四条 criteria 文本必须原样在预登记文档中。"""
+    text = PREREQ.read_text(encoding="utf-8")
+    for c, txt in ammo.QUESTIONS_A["direction"]["criteria"].items():
+        assert txt in text, f"criteria `{c}` 未锁进预登记: {txt[:40]}"
+
+
 def test_b_variants_retired():
     """2026-10-13 用户裁决 variant 收敛：B1/B2/B3 退役（判据留档 git 734492a6）。"""
     assert not hasattr(ammo, "QUESTIONS_B1")
@@ -170,16 +177,28 @@ class FakeDB:
         return []
 
 
-def test_fire_guard_requires_token(monkeypatch):
+def test_fire_token_guard(monkeypatch):
+    """--fire token 预检纯函数：无 token/空白 token 拒绝，任一非空放行。"""
     monkeypatch.delenv("JEV_CF_TOKEN", raising=False)
     monkeypatch.delenv("JEV_TYPESAFE_KEY", raising=False)
-    from backend.operations import jev_direction_gate as g
-    with pytest.raises(SystemExit):
-        # 直接走 _main 的守卫逻辑：无 token + fire → SystemExit
-        import os
-        if not ((os.environ.get("JEV_CF_TOKEN") or "").strip()
-                or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip()):
-            raise SystemExit("--fire 需环境变量")
+    assert gate.fire_token_guard() is False
+    monkeypatch.setenv("JEV_CF_TOKEN", "   ")
+    assert gate.fire_token_guard() is False  # 空白不算
+    monkeypatch.setenv("JEV_CF_TOKEN", " tok ")
+    assert gate.fire_token_guard() is True  # strip 后非空
+    monkeypatch.delenv("JEV_CF_TOKEN")
+    monkeypatch.setenv("JEV_TYPESAFE_KEY", "k")
+    assert gate.fire_token_guard() is True
+
+
+def test_scheduler_cmd_compatible_with_runner_cli():
+    """回归锁：scheduler direction_command 的 runner 参数 ⊆ runner argparse。"""
+    from backend.snapshot_collector.scheduler import direction_command
+    cmd = direction_command("2026-10-13")
+    runner_args = cmd[cmd.index("--day"):]
+    args, unknown = gate.build_arg_parser().parse_known_args(runner_args)
+    assert unknown == [], f"scheduler cmd 携带 runner 不认识的参数: {unknown}"
+    assert args.day == "2026-10-13" and args.fire is True
 
 
 def test_population_requires_four_slots_and_mainforce(monkeypatch):
@@ -191,16 +210,20 @@ def test_population_requires_four_slots_and_mainforce(monkeypatch):
 
         def distinct(self, field, q):
             sid = q.get("snapshotId", "")
-            # 判读日 4 个槽（09:30/10:00/10:30/11:00）各返回两只票；历史日同样
-            return ["600206", "000001"] if sid else []
+            codes = ["600206", "000001"]
+            if sid.endswith("10:30") or sid.endswith("11:00"):
+                codes.append("300999")  # 只在 2 个槽出现（<4 槽分支）
+            return codes
 
     ctx = {"series_days": ["2026-09-18", "2026-09-21", "2026-09-22"],
            "prev3": ["2026-09-18", "2026-09-21", "2026-09-22"],
            "cur": {"600206": {"code": "600206", "change": 3.0, "zlje": 1e7, "zljzb": 2.0,
                               "rank": 10, "name": "x"},
                    "000001": {"code": "000001", "change": 1.0, "zlje": None, "zljzb": 1.0,
-                              "rank": 20, "name": "y"}},
-           "pool": 2}
+                              "rank": 20, "name": "y"},
+                   "300999": {"code": "300999", "change": 2.0, "zlje": 5e6, "zljzb": 1.0,
+                              "rank": 30, "name": "z"}},
+           "pool": 3}
     def fake_day_slot_frames(db, d, dataset_id=gate.DEFAULT_DATASET_ID):
         if d == "2026-09-23":
             return [(s, f"2026-09-23_{s}") for s in ("09:30", "10:00", "10:30", "11:00")]
@@ -208,7 +231,11 @@ def test_population_requires_four_slots_and_mainforce(monkeypatch):
 
     monkeypatch.setattr(gate, "_day_slot_frames", fake_day_slot_frames)
     codes = gate.build_direction_population(FakeDB2(), "2026-09-23", ctx)
-    assert codes == ["600206"]  # 000001 缺主力被排除
+    assert codes == ["600206"]  # 000001 缺主力被排除；300999 仅 2 槽被排除
+
+    # 防回归：prev3 含 series_days 键集外的日期（missed-slot）→ 不 KeyError，按无法验证排除
+    ctx2 = {**ctx, "prev3": ctx["prev3"] + ["2026-09-15"]}
+    assert gate.build_direction_population(FakeDB2(), "2026-09-23", ctx2) == []
 
 
 def test_short_series_rejected():
@@ -285,6 +312,6 @@ def test_state_blocks_shape(monkeypatch):
     head, blocks, meta = gate.build_state(FakeDB4(), "600206", "2026-09-18", ctx)
     assert set(blocks) == {"series", "pos", "vp", "gate", "mkt"}
     assert blocks["series"][-1].startswith("2026-09-18 11:00")
-    assert "missing" not in blocks["vp"] or "missing" in blocks["vp"]  # vp 行有值
+    assert isinstance(blocks["vp"], list) and all(isinstance(x, str) for x in blocks["vp"])
     assert "strong" in "\n".join(blocks["gate"])
     assert meta["pos"]["current"] == 98.0  # (200-5+1)/200*100

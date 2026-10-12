@@ -499,10 +499,11 @@ def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, A
 
 
 def _recent_trading_dates_str(today: str, n: int) -> list[str]:
-    from pymongo import MongoClient
-    db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    db = get_runtime_mongodb_database()
     ds = sorted({f["tradingDate"] for f in db["snapshot_frames"].find(
-        {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": {"$lte": today}},
+        {"datasetId": "dragonboard_live", "snapshotType": "half_hour",
+         "tradingDate": {"$lte": today}},
         {"tradingDate": 1}) if f.get("tradingDate")})
     return ds[-n:]
 
@@ -513,13 +514,13 @@ def _run_direction_verify_step(today: str, dry_run: bool = False) -> dict[str, A
     - 预登记：docs/hotlist-jev/jev-direction-standalone-preregistration.md §四；
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（证据链积累，非生产数据链）。
     """
-    started = datetime.datetime.now(TZ_SHANGHAI).isoformat(timespec="seconds")
+    started = datetime.now(_TZ).isoformat(timespec="seconds")
     if dry_run:
         return {"ok": True, "skipped": True, "reason": "dry_run", "at": started}
     try:
         from backend.operations.jev_direction_gate import backfill_direction_verify
-        from pymongo import MongoClient
-        db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
+        from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+        db = get_runtime_mongodb_database()
         dates = [t for t in _recent_trading_dates_str(today, 5)]
         result = backfill_direction_verify(db, dates)
         return {"ok": True, "at": started, **result}
