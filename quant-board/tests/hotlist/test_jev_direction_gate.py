@@ -36,23 +36,27 @@ def test_questions_verbatim_from_preregistration():
     blocks = [b for b in text.split("```")[1::2]]
     assert len(blocks) >= 4
     joined = "\n".join(blocks)
-    for q in (ammo.QUESTIONS_A, ammo.QUESTIONS_B1, ammo.QUESTIONS_B2, ammo.QUESTIONS_B3):
-        for qd in q.values():
+    for qd in ammo.QUESTIONS_A.values():
             assert qd["instructions"] in joined, f"instructions 未锁进预登记: {qd['instructions'][:50]}"
 
 
 def test_questions_structure():
-    for q in (ammo.QUESTIONS_A, ammo.QUESTIONS_B3):
-        key = list(q)[0]
-        assert q[key]["type"] == "choice"
-        assert set(q[key]["criteria"]) == {"buy", "sell", "hold", "insufficient"}
-    assert set(ammo.QUESTIONS_B1["trend_direction"]["criteria"]) == {"buy", "sell", "hold"}
-    assert set(ammo.QUESTIONS_B2["vp_direction"]["criteria"]) == {"buy", "sell", "hold"}
+    assert set(ammo.QUESTIONS_A) == {"direction"}  # 单题集（B 拆分层退役）
+    qd = ammo.QUESTIONS_A["direction"]
+    assert qd["type"] == "choice"
+    assert set(qd["criteria"]) == {"buy", "sell", "hold", "insufficient"}
+
+
+def test_b_variants_retired():
+    """2026-10-13 用户裁决 variant 收敛：B1/B2/B3 退役（判据留档 git 734492a6）。"""
+    assert not hasattr(ammo, "QUESTIONS_B1")
+    assert not hasattr(ammo, "QUESTIONS_B2")
+    assert not hasattr(ammo, "QUESTIONS_B3")
 
 
 def test_version_frozen():
     assert ammo.QUESTION_SET_VERSION == "v3-gate"
-    assert ammo.AMMO_VERSION == "2026-10-13a"
+    assert ammo.AMMO_VERSION == "2026-10-13b"
     assert ammo.DIRECTION_SLOT == "11:00"
 
 

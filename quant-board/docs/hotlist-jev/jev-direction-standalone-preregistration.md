@@ -63,12 +63,14 @@ as-of 语义：判读时点取当日 ≤11:00 最新情绪槽文档，无未来�
 
 ## 五、判据冻结件（EN 主版 VERBATIM；改动=改门须用户点头）
 
-#### 题 A · 综合方向（variant A 主判读）（key=`direction`，type=choice）
+#### 题 A · 综合方向（生产主判读，单题集）（key=`direction`，type=choice）
+
+AMMO_VERSION=2026-10-13b（variant 收敛：吸收 B3 合成语义「量价无方向不否决轨迹方向，只降置信」）。
 
 **instructions（VERBATIM）**：
 
 ```
-You are given descriptive raw data for one stock from a hot-list attention ranking system — NO pre-computed tiers, signals, or conclusions. Data: [Attention Series] the stock's last appearances across days and intraday slots (percentile 0-100, higher = hotter; last line = current intraday reading); [Position Stats] day-level anchors; [Volume-Price] today's intraday price-volume-capital row; [Market Gate] the market environment for buy decisions (hot-list sentiment score, market stage, pool breadth); [Market Context] pool median 3-trading-day percentile change (the stock only counts as strong if it OUTPACES this baseline). Task: judge the stock's short-term directional state AS OF THIS INTRADAY MOMENT: buy / sell / hold / insufficient, with a confidence between 0 and 1. Reading guide: (1) A trend requires a multi-day same-direction movement across the series — a single-bar spike is not a trend; judge the swing across days, not the noise between consecutive appearances; a jump AGAINST the prevailing multi-day direction vetoes that direction; a choppy back-and-forth path reduces confidence. (2) Volume-price confirmation: price up on expanding volume (ratio above 1 but not above 2.5) confirms; volume ratio above 2.5 on an up day is distribution suspicion; an abnormally HIGH net ratio (above +20%) is blow-off/wash-trading suspicion, NOT bullish; a strongly negative net ratio (about -10% or worse) suggests distribution; price down on expanding volume is the strongest sell evidence; a limit-up flag is a real but untradeable signal (never buy evidence); a limit-down flag means panic selling. (3) insufficient is ONLY for unavailable data (a too-short series or missing market context); conflicting evidence means hold. Lower confidence when evidence conflicts or fields are missing. (5) ENVIRONMENT GATE for buy (applies to the FINAL call): buy is allowed ONLY when BOTH gates pass. Gate 1 — lifecycle position: the stock must sit in an ignition/expansion position (appearing consistently, percentile rising from a low or mid base, shallow drawdown); a crowded position (long hot-zone stay with decaying velocity) or a reversal/retreat phase (3-trading-day net change clearly negative with a deep 15+ point drawdown, or 5+ consecutive falling percentile days) FAILS the gate — never buy, at most hold, or sell with collapse evidence. Gate 2 — market sentiment PHASE BAND, by the fixed phase lines given in [Market Gate] (cold <40 / weak 40-60 / strong 60-75 / peak >=75): buy is allowed ONLY in the strong band; in the peak band (>=75, crowded blow-off top), the cold band (<40) and the weak band (40-60, materially a retreat phase) buy is BLOCKED — a bullish reading in a blocked band must be downgraded to hold, or sell with collapse evidence.
+You are given descriptive raw data for one stock from a hot-list attention ranking system — NO pre-computed tiers, signals, or conclusions. Data: [Attention Series] the stock's last appearances across days and intraday slots (percentile 0-100, higher = hotter; last line = current intraday reading); [Position Stats] day-level anchors; [Volume-Price] today's intraday price-volume-capital row; [Market Gate] the market environment for buy decisions (hot-list sentiment score, market stage, pool breadth); [Market Context] pool median 3-trading-day percentile change (the stock only counts as strong if it OUTPACES this baseline). Task: judge the stock's short-term directional state AS OF THIS INTRADAY MOMENT: buy / sell / hold / insufficient, with a confidence between 0 and 1. Reading guide: (1) A trend requires a multi-day same-direction movement across the series — a single-bar spike is not a trend; judge the swing across days, not the noise between consecutive appearances; a jump AGAINST the prevailing multi-day direction vetoes that direction; a choppy back-and-forth path reduces confidence. (2) Volume-price confirmation: price up on expanding volume (ratio above 1 but not above 2.5) confirms; volume ratio above 2.5 on an up day is distribution suspicion; an abnormally HIGH net ratio (above +20%) is blow-off/wash-trading suspicion, NOT bullish; a strongly negative net ratio (about -10% or worse) suggests distribution; price down on expanding volume is the strongest sell evidence; a limit-up flag is a real but untradeable signal (never buy evidence); a limit-down flag means panic selling; price-volume evidence showing no clear direction does NOT block a trajectory-based direction — it only lowers the confidence. (3) insufficient is ONLY for unavailable data (a too-short series or missing market context); conflicting evidence means hold. Lower confidence when evidence conflicts or fields are missing. (5) ENVIRONMENT GATE for buy (applies to the FINAL call): buy is allowed ONLY when BOTH gates pass. Gate 1 — lifecycle position: the stock must sit in an ignition/expansion position (appearing consistently, percentile rising from a low or mid base, shallow drawdown); a crowded position (long hot-zone stay with decaying velocity) or a reversal/retreat phase (3-trading-day net change clearly negative with a deep 15+ point drawdown, or 5+ consecutive falling percentile days) FAILS the gate — never buy, at most hold, or sell with collapse evidence. Gate 2 — market sentiment PHASE BAND, by the fixed phase lines given in [Market Gate] (cold <40 / weak 40-60 / strong 60-75 / peak >=75): buy is allowed ONLY in the strong band; in the peak band (>=75, crowded blow-off top), the cold band (<40) and the weak band (40-60, materially a retreat phase) buy is BLOCKED — a bullish reading in a blocked band must be downgraded to hold, or sell with collapse evidence.
 ```
 
 **criteria（VERBATIM）**：
@@ -78,7 +80,7 @@ You are given descriptive raw data for one stock from a hot-list attention ranki
 - `hold`：Evidence mixed or conflicting, magnitudes too weak, OR a failed buy gate without sell evidence.
 - `insufficient`：ONLY data unavailability. Never for conflicting evidence.
 
-#### 题 B1 · 轨迹方向（variant B 拆分层）（key=`trend_direction`，type=choice）
+#### 【退役 2026-10-13】题 B1 · 轨迹方向（variant B 拆分层）（key=`trend_direction`，type=choice）
 
 **instructions（VERBATIM）**：
 
@@ -92,7 +94,7 @@ You are given a stock's cross-day attention rank percentile series (last appeara
 - `sell`：Sustained multi-day fall/collapse or market-relative weakness.
 - `hold`：Mixed, weak, or conflicting evidence.
 
-#### 题 B2 · 量价方向（variant B 拆分层）（key=`vp_direction`，type=choice）
+#### 【退役 2026-10-13】题 B2 · 量价方向（variant B 拆分层）（key=`vp_direction`，type=choice）
 
 **instructions（VERBATIM）**：
 
@@ -106,7 +108,7 @@ You are given ONLY price-volume-capital data for one stock at this intraday mome
 - `sell`：Down on expanding volume, strong outflow, or limit-down.
 - `hold`：Mild or contradictory price-volume signals.
 
-#### 题 B3 · 合成裁决（variant B 终裁；synthesis rules 按序）（key=`final_direction`，type=choice）
+#### 【退役 2026-10-13】题 B3 · 合成裁决（synthesis rules 语义已吸收进题 A）（key=`final_direction`，type=choice）
 
 **instructions（VERBATIM）**：
 
@@ -159,6 +161,10 @@ Two independent judgments were made on the same stock at this intraday moment: J
 - **variant A（综合题）与 B（拆分+合成）并列保留**：A 在无单边退潮市况更稳（批 2 77%），B 在退潮日更稳（批 1 64% vs 59%）且分层置信可审计；两者方向一致率 70-82%；
 - 实验脚本（判据冻结件载体）：`quant-board/.tmp_pilot_gate.py`（原料组装 build_state + QUESTIONS_A/B1/B2/B3）；执行入口 `python .tmp_pilot_gate.py [--day=YYYY-MM-DD] [--dry]`；逐例落盘 `.tmp/pilot_gate_v2/`；
 - 生产化（正式 runner/题集入库/盘后链挂载/前端读口）为下一代码批次，另行提交；本预登记冻结的是判据文本与实验合同。
+
+### variant 收敛裁决（2026-10-13，用户「执行」）
+
+**单题集 = A 主判读，B 拆分层退役留档**。理由：三批实验 A/B 方向一致率 70-82% 高度重叠；B 成本 4×；B 增量仅退潮日 sell 覆盖更广（84% vs 80%，正确率相近非更准）。A 的 instructions 已吸收 B3 合成实验的唯一增量语义——「量价无方向不否决轨迹方向，只降置信」。B1/B2/B3 判据全文留档于本文件 §五（退役标注）与 git 734492a6。落库收敛为单文档 `_id={date}:11:00:{code}:DIR`，成本 1 调用/股。
 
 ## 九、验证与红线
 

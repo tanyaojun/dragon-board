@@ -7,7 +7,8 @@ backend/analysis/hotlist/jev_direction_ammo.py，VERBATIM 锁定测试 tests/hot
 判读时点：盘中 11:00 槽帧落盘即判读（scheduler run_direction_loop 11:08 触发，advisory 语义）。
 原料：跨日出现序列（引擎同源）+ Position Stats 日级锚现算 + 量价行 + Market Gate 相位带 as-of。
 人口：当日 ≥4 槽出现、前三交易日连续在榜、主力字段非空、序列 ≥10 点。
-落库：hotlist_jev_direction，_id={date}:11:00:{code}:DIR:{A|B3}（variant 各一条）；
+落库：hotlist_jev_direction，_id={date}:11:00:{code}:DIR（单题集，2026-10-13 用户裁决
+      variant 收敛：A/B 一致率 70-82% 高度重叠+B 成本 4×，B 拆分层退役留档）；
       隔日验证列由 backfill_direction_verify 回填（T+1 最后一槽 change）。
 红线：--fire 需 JEV_CF_TOKEN/JEV_TYPESAFE_KEY；测试零真实调用零网络。
 """
@@ -26,9 +27,6 @@ from backend.analysis.hotlist.jev_direction_ammo import (
     DIRECTION_SLOT,
     QUESTION_SET_VERSION,
     QUESTIONS_A,
-    QUESTIONS_B1,
-    QUESTIONS_B2,
-    QUESTIONS_B3,
     band_of,
     questions_hash,
 )
@@ -286,10 +284,10 @@ def _ask(state: str, questions: dict) -> tuple[dict, dict, int]:
     return out, env, ms
 
 
-def run_direction_day(db: Any, d: str, *, fire: bool = False, variant: str = "a",
+def run_direction_day(db: Any, d: str, *, fire: bool = False,
                       cap: int | None = None, token_fuse: int | None = None,
                       dataset_id: str = DEFAULT_DATASET_ID, workers: int = 1) -> dict:
-    """判读一个判读日。variant: a=A 综合题；ab=A+B 拆分层（4 调用/股）。"""
+    """判读一个判读日（单题集 A：1 调用/股）。"""
     col = db["hotlist_jev_direction"]
     qhash = questions_hash(QUESTIONS_A)
     fuse = TOKEN_FUSE if token_fuse is None else token_fuse
@@ -304,55 +302,31 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False, variant: str = "a"
     if cap:
         codes = codes[:cap]
     print(f"[direction] {d} 池 {ctx['pool']} 人口 {len(codes)} | sentiment "
-          f"{ctx['sent'].get('band') if ctx['sent'] else None} | variant {variant}")
+          f"{ctx['sent'].get('band') if ctx['sent'] else None}")
 
     def _work(code: str) -> tuple[str, dict, int]:
         head, blocks, meta = build_state(db, code, d, ctx, dataset_id)
         rec = {"origin": "direction_gate", "tradingDate": d, "slotTime": DIRECTION_SLOT,
                "code": code, "name": ctx["cur"][code].get("name"),
                "ammoVersion": AMMO_VERSION, "questionSetVersion": QUESTION_SET_VERSION,
-               "questionSetHash": qhash, "variant": variant, "meta": meta,
+               "questionSetHash": qhash, "meta": meta,
                "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
-        calls = 0
         state_a = "\n".join([head, *blocks["series"], *blocks["pos"], *blocks["vp"],
                              *blocks["gate"], *blocks["mkt"]])
         a, env_a, _ = _ask(state_a, QUESTIONS_A)
-        rec["A"] = a
-        rec["questionsRawA"] = QUESTIONS_A
-        rec["narrativeA"] = state_a
-        rec["responseRawA"] = env_a
-        calls += 1
-        if variant == "ab":
-            state_b1 = "\n".join([head, *blocks["series"], *blocks["pos"], *blocks["mkt"]])
-            b1, env_b1, _ = _ask(state_b1, QUESTIONS_B1)
-            rec["B1"] = b1
-            rec["questionsRawB1"] = QUESTIONS_B1
-            state_b2 = "\n".join([head, *blocks["vp"]])
-            b2, env_b2, _ = _ask(state_b2, QUESTIONS_B2)
-            rec["B2"] = b2
-            rec["questionsRawB2"] = QUESTIONS_B2
-            state_b3 = "\n".join([head, *blocks["pos"], *blocks["vp"], *blocks["gate"],
-                                  *blocks["mkt"],
-                                  "[Judgment 1 · attention trajectory]",
-                                  f"choice: {b1['choice']} · confidence: {b1['confidence']}",
-                                  "[Judgment 2 · volume-price]",
-                                  f"choice: {b2['choice']} · confidence: {b2['confidence']}"])
-            b3, env_b3, _ = _ask(state_b3, QUESTIONS_B3)
-            rec["B3"] = b3
-            rec["questionsRawB3"] = QUESTIONS_B3
-            rec["responseRawB3"] = env_b3
-            calls += 3
-        tok = sum(sum((rec[k].get("usage") or {}).values())
-                  for k in ("A", "B1", "B2", "B3") if rec.get(k))
-        return code, rec, calls, tok
+        rec.update({"status": "ok" if a.get("ok") else "degraded",
+                    "direction": a.get("choice"), "confidence": a.get("confidence"),
+                    "probabilities": a.get("probabilities"),
+                    "questionsRaw": QUESTIONS_A, "narrative": state_a,
+                    "responseRaw": env_a, "usage": a.get("usage"),
+                    "errorCode": a.get("errorCode"), "latencyMs": a.get("latencyMs")})
+        tok = sum((a.get("usage") or {}).values())
+        return code, rec, 1, tok
 
     todo = []
     for code in codes:
-        base_id = f"{d}:{DIRECTION_SLOT}:{code}:DIR"
-        if variant == "a" and col.find_one({"_id": f"{base_id}:A", "status": "ok"}):
-            stats["skip"] += 1
-            continue
-        if variant == "ab" and col.find_one({"_id": f"{base_id}:B3", "status": "ok"}):
+        _id = f"{d}:{DIRECTION_SLOT}:{code}:DIR"
+        if col.find_one({"_id": _id, "status": "ok"}):
             stats["skip"] += 1
             continue
         todo.append(code)
@@ -371,28 +345,21 @@ def run_direction_day(db: Any, d: str, *, fire: bool = False, variant: str = "a"
                           "slotTime": DIRECTION_SLOT, "code": code,
                           "ammoVersion": AMMO_VERSION,
                           "questionSetVersion": QUESTION_SET_VERSION,
-                          "questionSetHash": qhash, "variant": variant,
+                          "questionSetHash": qhash,
                           "status": "error", "errorCode": "build_state_failed",
                           "errorDetail": str(exc)[:300],
                           "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}, 0, 0
 
-    it = todo if workers <= 1 else todo
-    for code in it:
+    for code in todo:
         if used >= fuse:
             print(f"[direction] 熔断：{used} >= {fuse}")
             break
         c, rec, calls, tok = _safe_work(code)
-        base_id = f"{d}:{DIRECTION_SLOT}:{c}:DIR"
-        final = rec["B3"] if variant == "ab" and rec.get("B3") else rec.get("A") or {}
-        rec["status"] = "ok" if final.get("ok") else "degraded"
-        rec["direction"] = final.get("choice")
-        rec["confidence"] = final.get("confidence")
-        for v in ("A", "B1", "B2", "B3"):
-            if rec.get(v):
-                col.replace_one({"_id": f"{base_id}:{v}"}, rec | {"variantTag": v}, upsert=True)
+        rec["questionSetHash"] = qhash
+        col.replace_one({"_id": f"{d}:{DIRECTION_SLOT}:{c}:DIR"}, rec, upsert=True)
         used += tok
         stats["ok" if rec["status"] == "ok" else "degraded"] += 1
-        print(f"[direction] {d} {c} → {rec['direction']} conf={rec['confidence']} "
+        print(f"[direction] {d} {c} → {rec.get('direction')} conf={rec.get('confidence')} "
               f"tok={tok}(cum={used})")
     stats["tokens"] = used
     print("FINAL[direction]:", stats)
@@ -438,7 +405,6 @@ def _main() -> None:
     ap.add_argument("--day", required=True)
     ap.add_argument("--fire", action="store_true")
     ap.add_argument("--dry", action="store_true", help="等价 fire=False（零调用）")
-    ap.add_argument("--variant", choices=["a", "ab"], default="a")
     ap.add_argument("--cap", type=int, default=None)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--token-fuse", type=int, default=None)
@@ -450,10 +416,10 @@ def _main() -> None:
     if args.verify:
         backfill_direction_verify(db, [args.day])
         return
-    if args.fire and not ((os.environ.get("JEV_CF_TOKEN") or "").strip()
-                          or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip()):
+    if fire and not ((os.environ.get("JEV_CF_TOKEN") or "").strip()
+                     or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip()):
         raise SystemExit("--fire 需环境变量 JEV_CF_TOKEN 或 JEV_TYPESAFE_KEY")
-    run_direction_day(db, args.day, fire=fire, variant=args.variant,
+    run_direction_day(db, args.day, fire=fire,
                       cap=args.cap, token_fuse=args.token_fuse, workers=args.workers)
 
 
