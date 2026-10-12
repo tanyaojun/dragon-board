@@ -13,7 +13,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+from pathlib import Path
 import json
+import os
 import logging
 import time
 from typing import Any
@@ -71,6 +73,8 @@ class SnapshotCollectorScheduler:
         # 韭研公社异动支线（交易日 12:05 midday / 15:35 final，每日各 ≤1 次）
         self._jiuyan_task: asyncio.Task[None] | None = None
         self._jiuyan_last: dict[str, Any] | None = None
+        self._direction_last: dict[str, Any] | None = None
+        self._direction_task: asyncio.Task | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -84,6 +88,8 @@ class SnapshotCollectorScheduler:
         self._task = loop.create_task(self._run_loop())
         if self._jiuyan_task is None or self._jiuyan_task.done():
             self._jiuyan_task = loop.create_task(run_jiuyan_loop(self))
+        if self._direction_task is None or self._direction_task.done():
+            self._direction_task = loop.create_task(run_direction_loop(self))
 
     async def stop(self) -> None:
         task = self._task
@@ -140,6 +146,7 @@ class SnapshotCollectorScheduler:
             "error_count": self._error_count,
             "in_flight_slots": sorted(self._in_flight_slots),
             "jiuyan": self._jiuyan_last,
+            "direction": self._direction_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -544,4 +551,61 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
         except Exception:
             logger.exception("jiuyan scheduler cycle failed")
             sched._jiuyan_last = {"status": "loop_error", "at": datetime.datetime.now(TZ_SHANGHAI).isoformat()}
+            await asyncio.sleep(60)
+
+def direction_enabled() -> bool:
+    import os
+
+    return os.environ.get("JEV_DIRECTION_ENABLED", "0") == "1"
+
+
+async def run_direction_attempt(date: str) -> dict:
+    """11:00 判读（advisory）：子进程隔离跑 runner，variant=a（A 综合题全池）。"""
+    import subprocess
+
+    venv_py = Path(__file__).resolve().parents[2] / ".venv" / "Scripts" / "python.exe"
+    cmd = [str(venv_py), "-X", "utf8", "-m", "backend.operations.jev_direction_gate",
+           "--day", date, "--fire", "--variant", "a"]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        cwd=str(Path(__file__).resolve().parents[2]),
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])})
+    out, _ = await asyncio.wait_for(proc.communicate(), timeout=3600)
+    tail = (out or b"").decode("utf-8", "replace")[-500:]
+    return {"status": "ok" if proc.returncode == 0 else "failed",
+            "returncode": proc.returncode, "tail": tail}
+
+
+async def run_direction_loop(sched: "SnapshotCollectorScheduler") -> None:
+    """交易日 11:08 触发 v3-gate 方向判读（每日一次；11:00 帧已落盘，advisory 语义）。
+
+    预登记：docs/hotlist-jev/jev-direction-standalone-preregistration.md；
+    开关 JEV_DIRECTION_ENABLED（默认 0=不跑，预算由用户裁决）；失败不翻主采集链。
+    """
+    from backend.snapshot_collector.trading_calendar import trading_date_from_ts
+
+    state: dict[str, Any] = {"date": None, "done": False}
+    while True:
+        try:
+            if not direction_enabled():
+                await asyncio.sleep(300)
+                continue
+            now = datetime.datetime.now(TZ_SHANGHAI)
+            trading_date = trading_date_from_ts(int(now.timestamp() * 1000))
+            if trading_date:
+                if state["date"] != trading_date:
+                    state = {"date": trading_date, "done": False}
+                if not state["done"] and (now.hour, now.minute) >= (11, 8):
+                    state["done"] = True
+                    result = await run_direction_attempt(trading_date)
+                    sched._direction_last = {**result, "date": trading_date,
+                                             "at": now.isoformat(timespec="seconds")}
+                    logger.info("direction gate %s: %s", trading_date,
+                                json.dumps(result, ensure_ascii=False, default=str)[:200])
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("direction scheduler cycle failed")
+            sched._direction_last = {"status": "loop_error", "at": datetime.datetime.now(TZ_SHANGHAI).isoformat()}
             await asyncio.sleep(60)

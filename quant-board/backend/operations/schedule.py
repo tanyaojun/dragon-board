@@ -498,6 +498,39 @@ def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, A
             "stdoutTail": (proc.stdout or "")[-300:]}
 
 
+def _recent_trading_dates_str(today: str, n: int) -> list[str]:
+    from pymongo import MongoClient
+    db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
+    ds = sorted({f["tradingDate"] for f in db["snapshot_frames"].find(
+        {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": {"$lte": today}},
+        {"tradingDate": 1}) if f.get("tradingDate")})
+    return ds[-n:]
+
+
+def _run_direction_verify_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """jev 方向线隔日验证回填（advisory）：T-1（及更早未回填日）判读的隔日涨幅列。
+
+    - 预登记：docs/hotlist-jev/jev-direction-standalone-preregistration.md §四；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（证据链积累，非生产数据链）。
+    """
+    started = datetime.datetime.now(TZ_SHANGHAI).isoformat(timespec="seconds")
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run", "at": started}
+    if os.environ.get("JEV_DIRECTION_ENABLED", "0") != "1":
+        return {"ok": True, "skipped": True, "reason": "direction_disabled", "at": started}
+    try:
+        from backend.operations.jev_direction_gate import backfill_direction_verify
+        from pymongo import MongoClient
+        db = MongoClient("mongodb://127.0.0.1:27017")["dragon_board_quant"]
+        dates = [t for t in _recent_trading_dates_str(today, 5)]
+        result = backfill_direction_verify(db, dates)
+        return {"ok": True, "at": started, **result}
+    except Exception as exc:
+        return {"ok": False, "error": {"code": "direction_verify_failed", "message": str(exc)[:300]},
+                "at": started}
+
+
+
 def _run_jev_daily_line_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """日度情绪一句话（advisory 步，2026-10-08 预登记 jev-daily-line-design.md）。
 
@@ -708,10 +741,11 @@ def run_after_market_once(
         calib_drift_result = _run_calib_drift_step(today, dry_run=dry_run)
         amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
         jev_vote_recheck_result = _run_jev_vote_recheck_step(today, dry_run=dry_run)
+        direction_verify_result = _run_direction_verify_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck", "directionVerify"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -726,6 +760,7 @@ def run_after_market_once(
                 "calibDriftMonitor": calib_drift_result,
                 "amountVsSameRecord": amount_vs_same_result,
                 "jevVoteRecheck": jev_vote_recheck_result,
+                "directionVerify": direction_verify_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,
