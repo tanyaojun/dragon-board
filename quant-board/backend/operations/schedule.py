@@ -516,8 +516,6 @@ def _run_direction_verify_step(today: str, dry_run: bool = False) -> dict[str, A
     started = datetime.datetime.now(TZ_SHANGHAI).isoformat(timespec="seconds")
     if dry_run:
         return {"ok": True, "skipped": True, "reason": "dry_run", "at": started}
-    if os.environ.get("JEV_DIRECTION_ENABLED", "0") != "1":
-        return {"ok": True, "skipped": True, "reason": "direction_disabled", "at": started}
     try:
         from backend.operations.jev_direction_gate import backfill_direction_verify
         from pymongo import MongoClient

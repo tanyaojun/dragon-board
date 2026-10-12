@@ -553,12 +553,6 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
             sched._jiuyan_last = {"status": "loop_error", "at": datetime.datetime.now(TZ_SHANGHAI).isoformat()}
             await asyncio.sleep(60)
 
-def direction_enabled() -> bool:
-    import os
-
-    return os.environ.get("JEV_DIRECTION_ENABLED", "0") == "1"
-
-
 async def run_direction_attempt(date: str) -> dict:
     """11:00 判读（advisory）：子进程隔离跑 runner，variant=a（A 综合题全池）。"""
     import subprocess
@@ -580,16 +574,13 @@ async def run_direction_loop(sched: "SnapshotCollectorScheduler") -> None:
     """交易日 11:08 触发 v3-gate 方向判读（每日一次；11:00 帧已落盘，advisory 语义）。
 
     预登记：docs/hotlist-jev/jev-direction-standalone-preregistration.md；
-    开关 JEV_DIRECTION_ENABLED（默认 0=不跑，预算由用户裁决）；失败不翻主采集链。
+    快照 11:00 帧落盘后直挂 jev 调用链（无 token 安静跳过）；失败不翻主采集链。
     """
     from backend.snapshot_collector.trading_calendar import trading_date_from_ts
 
     state: dict[str, Any] = {"date": None, "done": False}
     while True:
         try:
-            if not direction_enabled():
-                await asyncio.sleep(300)
-                continue
             now = datetime.datetime.now(TZ_SHANGHAI)
             trading_date = trading_date_from_ts(int(now.timestamp() * 1000))
             if trading_date:
@@ -597,7 +588,13 @@ async def run_direction_loop(sched: "SnapshotCollectorScheduler") -> None:
                     state = {"date": trading_date, "done": False}
                 if not state["done"] and (now.hour, now.minute) >= (11, 8):
                     state["done"] = True
-                    result = await run_direction_attempt(trading_date)
+                    import os
+                    if not ((os.environ.get("JEV_CF_TOKEN") or "").strip()
+                            or (os.environ.get("JEV_TYPESAFE_KEY") or "").strip()):
+                        sched._direction_last = {"status": "no_token", "date": trading_date,
+                                                 "at": now.isoformat(timespec="seconds")}
+                    else:
+                        result = await run_direction_attempt(trading_date)
                     sched._direction_last = {**result, "date": trading_date,
                                              "at": now.isoformat(timespec="seconds")}
                     logger.info("direction gate %s: %s", trading_date,
