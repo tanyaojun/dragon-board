@@ -228,6 +228,8 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             "price": _num(row.get("price")),
             "change": _num(row.get("change")),
             "boards": boards_val,
+            # 板块=韭研 final 的 field.name（与涨停复盘 boardName 同源同键；final 缺失 → None 前端 '--'）
+            "board": b_info.get("boardName"),
             "rank": row.get("rank") if isinstance(row.get("rank"), int)
                     and not isinstance(row.get("rank"), bool) else None,
             "compRank": row.get("compRank") if isinstance(row.get("compRank"), int)

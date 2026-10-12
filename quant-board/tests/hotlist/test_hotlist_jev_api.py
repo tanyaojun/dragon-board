@@ -374,8 +374,18 @@ def test_sentiment_overview_no_data_with_date_reason_distinct(monkeypatch):
 # ── GET /api/hotlist-jev/quotes-review（热榜行情：15:00 帧全量 + 五维 + 双题集台账，纯读零调用）──
 
 def _seed_quotes_review(db: FakeMongoDb) -> None:
-    """两股样本：甲(S/buy→agree，带 LC 一致)、乙(D/buy→diverge，LC diverge，带留痕文档)。"""
+    """两股样本：甲(S/buy→agree，带 LC 一致)、乙(D/buy→diverge，LC diverge，带留痕文档)；
+    韭研 final 供 board/连板 join（THS 池缺失 → board 仍挂、二分口径降级旗标）。"""
     db["snapshot_frames"].rows = [frame(DATE, "15:00")]
+    db["jiuyan_action"].rows = [
+        {"_id": f"{DATE}:final",
+         "fields": [
+             {"name": "AI影视", "stocks": [
+                 {"code": "000001", "name": "甲", "num": None, "time": "09:25:00"}]},
+             {"name": "大消费", "stocks": [
+                 {"code": "000002", "name": "乙", "num": None, "time": None}]},
+         ]}]
+
     db["snapshot_stock_rows"].rows = [
         {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000001",
          "name": "甲", "rank": 1, "price": 9.66, "change": 9.9, "amount": 1.2e9,
@@ -446,6 +456,8 @@ def test_quotes_review_join_summary_and_agree(monkeypatch):
     assert [r["code"] for r in rows] == ["000001", "000002"]  # rank 升序
     first = rows[0]
     assert first["price"] == 9.66 and first["amount"] == 1.2e9 and first["cirMV"] == 5.0e9
+    assert first["board"] == "AI影视"          # 板块=韭研 final field.name
+    assert rows[1]["board"] == "大消费"
     assert first["tiers"] == {"resonance": "S", "trend": "A", "heat": "B",
                                "volumePrice": "C", "cycle": "ignition", "synergy": "S"}
     assert first["jev"]["vote"]["direction"] == "buy"
@@ -641,7 +653,8 @@ def test_quotes_review_broken_streak_history_unverifiable_none(monkeypatch):
 def test_quotes_review_boards_source_missing_degraded(monkeypatch):
     """韭研 final 缺失：连板全缺 + boardJoinDegraded 结构化旗标，不阻断主读口（fail-visible）。"""
     db = FakeMongoDb()
-    _seed_quotes_review(db)  # 无 jiuyan_action 集合 → jiuyanFinalFound=False
+    _seed_quotes_review(db)
+    db["jiuyan_action"].rows = []  # 本测试专测 final 缺失：清掉共享种子的韭研 final（jiuyanFinalFound=False）
     client = _quotes_client(monkeypatch, db)
 
     response = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE})
