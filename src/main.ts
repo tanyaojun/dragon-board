@@ -18,6 +18,7 @@ import './services/snapshot/facade'
 
 // 竞价弱转强实时检测（功能性链路，启动即开）
 import { openingRealtimeEventBridge } from './services/hotlist/OpeningRealtimeEventBridge'
+import { l1EventRealtimeBridge } from './services/hotlist/L1EventRealtimeBridge'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -27,6 +28,7 @@ app.use(pinia)
 ;(window as any).pinia = pinia
 
 openingRealtimeEventBridge.start()
+l1EventRealtimeBridge.start()
 
 console.log('[Main] 🐲 龙头看板启动')
 

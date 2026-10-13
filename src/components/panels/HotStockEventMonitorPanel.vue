@@ -75,6 +75,26 @@
         </label>
       </div>
 
+      <div v-if="activePage === 'hot' && visibleSectorEvents.length" class="sector-wave-panel">
+        <div class="sector-wave-head">
+          <span class="card-kicker">板块异动</span>
+          <span class="count-badge">{{ state.sectorEvents.length }}</span>
+        </div>
+        <div class="sector-wave-list">
+          <div
+            v-for="event in visibleSectorEvents.slice(0, 8)"
+            :key="event.id"
+            class="sector-wave-row"
+            :class="event.direction"
+          >
+            <span class="sector-wave-time">{{ formatEventTime(event.timestamp) }}</span>
+            <span class="sector-wave-name">{{ event.sectorName || event.name }}</span>
+            <span class="event-badge" :class="event.direction">{{ event.typeName }}</span>
+            <span class="sector-wave-detail">{{ sectorWaveDetail(event) }}</span>
+          </div>
+        </div>
+      </div>
+
       <div v-if="activePage !== 'sector'" class="event-list">
         <div v-if="state.loading && !state.events.length" class="empty-state">正在加载实时行情与异动事件...</div>
         <div v-else-if="state.error && !state.events.length" class="empty-state error">
@@ -187,6 +207,27 @@
           </span>
           <input v-model.number="speechVolume" type="range" min="0" max="100" step="5" />
         </label>
+        <label class="select-row">
+          <span>语音模式</span>
+          <select v-model="voiceMode">
+            <option value="all">播报全部</option>
+            <option value="strongOnly">只播强信号</option>
+            <option value="muted">静音</option>
+          </select>
+        </label>
+        <div class="voice-whitelist-row">
+          <label class="speech-toggle">
+            <input v-model="voiceWhitelistOn" type="checkbox" />
+            <span>自定义语音事件</span>
+          </label>
+          <span v-if="!voiceWhitelistOn" class="voice-whitelist-hint">留空=跟随语音模式</span>
+        </div>
+        <div v-if="voiceWhitelistOn" class="type-grid voice-grid">
+          <label v-for="item in eventTypeOptions" :key="`voice-${item.type}`" class="filter-chip">
+            <input v-model="voiceEnabledTypes" type="checkbox" :value="item.type" />
+            <span>{{ item.name }}</span>
+          </label>
+        </div>
         <label v-if="showSpeechVoiceSelect" class="select-row">
           <span>本地语音</span>
           <select v-model="speechVoice" :disabled="!speechVoices.length">
@@ -258,9 +299,20 @@ import {
 } from '../../services/hotlist/HotStockEventMonitorService'
 import {
   hotStockEventSpeechService,
+  isSpeechEligibleHotStockEvent,
   resolveSpeechVoiceSelection,
-  selectSpeechEvents,
 } from '../../services/hotlist/HotStockEventSpeechService'
+import {
+  L1_EVENT_TYPE_CODES,
+  persistEnabledEvents,
+  persistVoiceEvents,
+  persistVoiceMode,
+  resolveEnabledEvents,
+  resolveVoiceEvents,
+  resolveVoiceMode,
+} from '../../services/hotlist/L1EventRealtimeBridge'
+import { L1_EVENT_CATALOG } from '../../services/hotlist/l1EventCatalog'
+import { l1EventRealtimeBridge } from '../../services/hotlist/L1EventRealtimeBridge'
 import {
   eventRadarFeishuNotifier,
   type EventRadarFeishuStatus,
@@ -304,7 +356,8 @@ const EVENT_TYPE_NAMES: Record<HotStockAbnormalEventType, string> = {
   12001: '竞价弱转强',
   11000: '板块拉升',
   11001: '板块跳水',
-}
+  ...Object.fromEntries(L1_EVENT_CATALOG.map((entry) => [L1_EVENT_TYPE_CODES[entry.type], entry.label])),
+} as Record<HotStockAbnormalEventType, string>
 
 const pages = [
   { id: 'hot', label: '热榜个股', icon: '☷' },
@@ -316,6 +369,7 @@ const ALL_EVENT_TYPES: HotStockAbnormalEventType[] = [
   OPENING_WEAK_TO_STRONG_EVENT_TYPE,
   ...XUANGUBAO_STOCK_ABNORMAL_EVENT_TYPES,
   ...XUANGUBAO_SECTOR_ABNORMAL_EVENT_TYPES,
+  ...(Object.values(L1_EVENT_TYPE_CODES) as HotStockAbnormalEventType[]),
 ] as HotStockAbnormalEventType[]
 const OPEN_CANDIDATE_STATUSES = new Set<CandidateStatus>([
   'observe',
@@ -344,7 +398,24 @@ const blankState: HotStockEventMonitorState = {
 const activePage = ref<(typeof pages)[number]['id']>('hot')
 const keyword = ref('')
 const state = ref<HotStockEventMonitorState>(blankState)
-const enabledTypes = ref<HotStockAbnormalEventType[]>([...ALL_EVENT_TYPES])
+
+// 产生层事件开关（EnabledEvents）：勾选即生效于本地引擎产出（关=三端全无），并持久化
+const storedEnabled = resolveEnabledEvents()
+const enabledTypes = ref<HotStockAbnormalEventType[]>(
+  storedEnabled.size
+    ? ALL_EVENT_TYPES.filter((type) => storedEnabled.get(String(type)) !== false)
+    : [...ALL_EVENT_TYPES],
+)
+
+// 语音层两层设置（VoiceMode + VoiceEvents 白名单）：空白名单=未固化，跟随模式行为
+const voiceMode = ref<'all' | 'strongOnly' | 'muted'>(resolveVoiceMode())
+const storedVoiceEvents = resolveVoiceEvents()
+const voiceWhitelistOn = ref(storedVoiceEvents.size > 0)
+const voiceEnabledTypes = ref<HotStockAbnormalEventType[]>(
+  storedVoiceEvents.size
+    ? ALL_EVENT_TYPES.filter((type) => storedVoiceEvents.get(String(type)) !== false)
+    : [...ALL_EVENT_TYPES],
+)
 const speechSupported = ref(hotStockEventSpeechService.isSupported())
 const speechEnabled = ref(speechSupported.value)
 const speechMode = ref(hotStockEventSpeechService.getStatus().mode)
@@ -407,6 +478,19 @@ const emptyText = computed(() => {
   return '暂无热榜个股异动'
 })
 const selectedTdxBlockFiles = computed(() => state.value.selectedTdxBlockFiles)
+
+// 板块异动区：本地概念聚合（13xxx）+ 选股宝板块事件（11000/11001），按展示开关过滤
+const visibleSectorEvents = computed(() => {
+  const enabled = new Set(enabledTypes.value)
+  return state.value.sectorEvents.filter(event => enabled.has(event.type))
+})
+
+function sectorWaveDetail(event: HotStockAbnormalEvent): string {
+  const raw = event.raw as { l1?: { reason?: string; memberCodes?: string[] } } | null
+  if (!raw?.l1?.reason) return ''
+  const members = raw.l1.memberCodes?.length ? `（${raw.l1.memberCodes.slice(0, 6).join('、')}）` : ''
+  return `${raw.l1.reason}${members}`
+}
 
 const speechModeLabel = computed(() => {
   if (speechMode.value === 'local' && speechEngine.value === 'volcengine') return '火山语音'
@@ -641,7 +725,7 @@ watch(
           state.value = nextState
           if (speechEnabled.value) {
             void hotStockEventSpeechService.handleLatestAdded(
-              selectSpeechEvents(nextState.latestAdded, nextState.latestHotStockAdded),
+              nextState.latestHotStockAdded.filter(isSpeechEligibleHotStockEvent),
             )
           }
         })
@@ -667,6 +751,32 @@ watch(speechEnabled, (enabled) => {
 watch([speechRate, speechVolume, speechVoice], ([rate, volume, voice]) => {
   hotStockEventSpeechService.setVoiceOptions({ rate, volume, voice })
 })
+
+// 产生层：EnabledEvents 同步到 L1 桥（关=三端全无）并持久化
+watch(enabledTypes, (types) => {
+  const selected = new Set<HotStockAbnormalEventType>(types)
+  persistEnabledEvents(new Map(
+    ALL_EVENT_TYPES.map(type => [String(type), selected.has(type)]),
+  ))
+  l1EventRealtimeBridge.setEnabledEvents(
+    new Map(ALL_EVENT_TYPES.map(type => [String(type), selected.has(type)])),
+  )
+}, { deep: true })
+
+// 语音层：VoiceMode + VoiceEvents 白名单（空=未固化，跟随模式）
+watch(voiceMode, (mode) => {
+  persistVoiceMode(mode)
+})
+watch([voiceWhitelistOn, voiceEnabledTypes], ([on, types]) => {
+  if (!on) {
+    persistVoiceEvents(new Map())
+    return
+  }
+  const selected = new Set<HotStockAbnormalEventType>(types)
+  persistVoiceEvents(new Map(
+    ALL_EVENT_TYPES.map(type => [String(type), selected.has(type)]),
+  ))
+}, { deep: true })
 
 onUnmounted(() => {
   unsubscribe?.()
@@ -1526,5 +1636,82 @@ onUnmounted(() => {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
   }
+}
+.sector-wave-panel {
+  margin: 0 14px 8px;
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.sector-wave-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.sector-wave-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sector-wave-row {
+  display: grid;
+  grid-template-columns: 64px minmax(72px, 110px) 88px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sector-wave-row.up .sector-wave-name {
+  color: var(--up-color, #ff5d5d);
+}
+
+.sector-wave-row.down .sector-wave-name {
+  color: var(--down-color, #3dd68c);
+}
+
+.sector-wave-time {
+  color: var(--text-secondary, #8a93a6);
+  font-variant-numeric: tabular-nums;
+}
+
+.sector-wave-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sector-wave-detail {
+  color: var(--text-secondary, #8a93a6);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-whitelist-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.voice-whitelist-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #8a93a6);
+}
+
+.voice-grid {
+  max-height: 180px;
+  overflow: auto;
 }
 </style>

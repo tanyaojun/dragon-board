@@ -2,11 +2,31 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   HotStockEventSpeechService,
+  buildRemoteSpeechText,
   isSpeechEligibleHotStockEvent,
   resolveSpeechVoiceSelection,
-  selectSpeechEvents,
 } from '../HotStockEventSpeechService'
+import { EventDeduper, buildSpeechItems, buildSpeechTextForEvent } from '../EventDeduper'
+import { filterForVoice, isStrongSignal, voiceModeDisplayName } from '../EventVoicePolicy'
+import { buildL1EventRecord, type L1EventRecord } from '../l1EventCatalog'
 import type { HotStockAbnormalEvent } from '../hotStockEventTypes'
+
+function makeL1Event(overrides: Partial<L1EventRecord> = {}): L1EventRecord {
+  return buildL1EventRecord({
+    type: 'LimitUpSealed',
+    typeName: '封涨停板',
+    code: '600001',
+    name: '测试股',
+    price: 10,
+    changePct: 9.95,
+    volume: 100,
+    amount: 1_000_000,
+    timestamp: Date.parse('2026-10-13T10:00:00+08:00'),
+    severity: 'critical',
+    reason: '买一封单 1200万',
+    ...overrides,
+  })
+}
 
 function makeEvent(overrides: Partial<HotStockAbnormalEvent>): HotStockAbnormalEvent {
   return {
@@ -34,256 +54,189 @@ function createLocalVoiceMock(response: Partial<Response> = { ok: true }) {
   return vi.fn(async () => response as Response)
 }
 
-describe('HotStockEventSpeechService', () => {
-  it('skips initial events and sends new event to local voice first', async () => {
+function spokenTexts(fetcher: ReturnType<typeof createLocalVoiceMock>): string[] {
+  return fetcher.mock.calls
+    .filter(([url]) => url === '/api/local-voice/speak')
+    .map(([, init]) => (JSON.parse(String((init as RequestInit).body)) as { text: string }).text)
+}
+
+describe('HotStockEventSpeechService（零丢失语义，对齐 SpeechAnnouncer.cs）', () => {
+  it('首批只记录不播报，其后每条事件独立成句（不合并、不同股压缩）', async () => {
     const fetcher = createLocalVoiceMock()
-    const service = new HotStockEventSpeechService({ fetcher, flushDelayMs: 0 })
+    const service = new HotStockEventSpeechService({ fetcher })
 
     await service.handleLatestAdded([makeEvent({ id: 'a', name: '首批股' })])
     await service.handleLatestAdded([
-      makeEvent({ id: 'b', name: '中南文化', code: '002445', typeName: '即将打开涨停' }),
+      makeEvent({ id: 'b', name: '中南文化', code: '002445', typeName: '即将打开涨停', changePct: 0.0954 }),
+      makeEvent({ id: 'c', name: '中南文化', code: '002445', typeName: '封涨停板', changePct: 0.1001 }),
     ])
+    await service.whenIdle()
 
-    expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/speak', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        text: '热榜异动，中南文化即将打开涨停，涨幅9.54%',
-        rate: 1,
-        volume: 100,
-        voice: undefined,
-      }),
-    })
+    const texts = spokenTexts(fetcher)
+    expect(texts).toHaveLength(2)
+    expect(texts[0]).toBe('中南文化，即将打开涨停，涨幅9.54%')
+    expect(texts[1]).toBe('中南文化，封涨停板，涨幅10.01%')
   })
 
-  it('does not fall back to browser speech when local voice request fails', async () => {
-    const speak = vi.fn()
-    const fetcher = vi.fn(async () => {
-      throw new Error('local voice offline')
-    })
-    const service = new HotStockEventSpeechService({
-      fetcher,
-      flushDelayMs: 0,
-    })
-
-    await service.speakTest()
-
-    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate: 1, volume: 100, voice: undefined }),
-    })
-    expect(speak).not.toHaveBeenCalled()
-    expect(service.getStatus()).toEqual({ mode: 'offline', supported: false, queueLength: 0 })
-  })
-
-  it('keeps only the highest priority event for the same stock inside one batch', async () => {
-    const fetcher = createLocalVoiceMock()
-    const service = new HotStockEventSpeechService({ fetcher, flushDelayMs: 0 })
-
-    await service.handleLatestAdded([makeEvent({ id: 'seed' })])
-    await service.handleLatestAdded([
-      makeEvent({ id: 'weak', code: '002445', name: '中南文化', type: 10009, eventType: 10009, typeName: '大幅拉升' }),
-      makeEvent({
-        id: 'strong',
-        code: '002445',
-        name: '中南文化',
-        type: 10007,
-        eventType: 10007,
-        typeName: '即将打开涨停',
-      }),
-      makeEvent({ id: 'other', code: '300001', name: '特锐德', type: 10005, eventType: 10005, typeName: '逼近涨停' }),
-    ])
-
-    const body = JSON.parse(String(fetcher.mock.calls[0][1]?.body))
-    expect(body.text).toBe('新增2条热榜异动，中南文化即将打开涨停，特锐德逼近涨停')
-  })
-
-  it('reports local voice support status', async () => {
-    const fetcher = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ ok: true, supported: true, engine: 'volcengine', queueLength: 0 }),
-    }) as Response)
-    const service = new HotStockEventSpeechService({ fetcher })
-
-    const status = await service.refreshStatus()
-
-    expect(status).toEqual({
-      mode: 'local',
-      supported: true,
-      engine: 'volcengine',
-      queueLength: 0,
-      voice: undefined,
-      voices: [],
-    })
-  })
-
-  it('merges at most three new events into one announcement', async () => {
-    const fetcher = createLocalVoiceMock()
-    const service = new HotStockEventSpeechService({
-      fetcher,
-      flushDelayMs: 0,
-    })
-
-    await service.handleLatestAdded([makeEvent({ id: 'seed' })])
-    await service.handleLatestAdded([
-      makeEvent({ id: 'a', code: '600001', name: '一号', typeName: '大幅拉升' }),
-      makeEvent({ id: 'b', code: '600002', name: '二号', typeName: '逼近涨停' }),
-      makeEvent({ id: 'c', code: '600003', name: '三号', typeName: '打开涨停板' }),
-      makeEvent({ id: 'd', code: '600004', name: '四号', typeName: '封涨停板' }),
-    ])
-
-    expect(fetcher).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).text).toBe(
-      '新增4条热榜异动，一号大幅拉升，二号逼近涨停，三号打开涨停板',
-    )
-  })
-
-  it('test speak uses local voice endpoint only', async () => {
+  it('L1 事件：Critical 抢占先清队列再播报，其余按时间序零丢失', async () => {
     const fetcher = createLocalVoiceMock()
     const service = new HotStockEventSpeechService({ fetcher })
+    // 越过首批静默
+    service.announceL1Events([makeL1Event({ timestamp: 1 })])
+    fetcher.mock.calls.length = 0
 
-    service.setVoiceOptions({ rate: 0.8, volume: 55 })
-    await service.speakTest()
-
-    expect(fetcher).toHaveBeenCalledWith('/api/local-voice/test', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rate: 0.8, volume: 55, voice: undefined }),
-    })
-  })
-
-  it('passes configured rate and volume to local voice', async () => {
-    const fetcher = createLocalVoiceMock()
-    const service = new HotStockEventSpeechService({ fetcher, flushDelayMs: 0 })
-
-    service.setVoiceOptions({ rate: 0.8, volume: 55 })
-    await service.handleLatestAdded([makeEvent({ id: 'seed' })])
-    await service.handleLatestAdded([makeEvent({ id: 'next', name: '中南文化' })])
-
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
-      text: '热榜异动，中南文化封涨停板，涨幅9.54%',
-      rate: 0.8,
-      volume: 55,
-      voice: undefined,
-    })
-  })
-
-  it('passes selected SAPI voice to local voice', async () => {
-    const fetcher = createLocalVoiceMock()
-    const service = new HotStockEventSpeechService({ fetcher, flushDelayMs: 0 })
-
-    service.setVoiceOptions({ voice: 'Microsoft Kangkang' })
-    await service.handleLatestAdded([makeEvent({ id: 'seed' })])
-    await service.handleLatestAdded([makeEvent({ id: 'next', name: '中南文化' })])
-
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
-      text: '热榜异动，中南文化封涨停板，涨幅9.54%',
-      rate: 1,
-      volume: 100,
-      voice: 'Microsoft Kangkang',
-    })
-  })
-
-  it('resets selected voice when status no longer reports that voice', () => {
-    expect(
-      resolveSpeechVoiceSelection('Microsoft Kangkang', 'Microsoft Huihui Desktop', [
-        { name: 'Microsoft Huihui Desktop', culture: 'zh-CN', gender: 'Female' },
-        { name: 'Microsoft Zira Desktop', culture: 'en-US', gender: 'Female' },
-      ]),
-    ).toBe('Microsoft Huihui Desktop')
-  })
-
-  it('does not use proxy voice owner as opening signal speech gate', () => {
-    expect(
-      isSpeechEligibleHotStockEvent(makeEvent({
-        type: 12001,
-        eventType: 12001,
-        typeName: '竞价弱转强',
-        raw: {
-          voiceOwner: 'desktop',
-          signal: {
-            stage: 'gapAlert',
-            voiceEligible: true,
-          },
-        },
-      })),
-    ).toBe(true)
-
-    expect(
-      isSpeechEligibleHotStockEvent(makeEvent({
-        type: 12001,
-        eventType: 12001,
-        typeName: '竞价弱转强候选',
-        raw: {
-          voiceOwner: 'web',
-          signal: {
-            stage: 'auctionConditionPassed',
-            voiceEligible: false,
-          },
-        },
-      })),
-    ).toBe(false)
-
-    expect(
-      isSpeechEligibleHotStockEvent(makeEvent({
-        type: 12001,
-        eventType: 12001,
-        typeName: '竞价弱转强',
-        raw: {
-          openingSignalPost: { voiceOwner: 'web' },
-          signal: {
-            stage: 'trendWeak',
-            voiceEligible: false,
-          },
-        },
-      })),
-    ).toBe(false)
-  })
-
-  it('only voices 09:30 gap alerts and 09:35 trend confirmations for opening signals', () => {
-    const stageEvent = (stage: string, voiceEligible: boolean) => makeEvent({
-      type: 12001,
-      eventType: 12001,
-      typeName: '竞价弱转强',
-      raw: { signal: { stage, voiceEligible } },
-    })
-
-    expect(isSpeechEligibleHotStockEvent(stageEvent('gapAlert', true))).toBe(true)
-    expect(isSpeechEligibleHotStockEvent(stageEvent('trendConfirm', true))).toBe(true)
-    expect(isSpeechEligibleHotStockEvent(stageEvent('auctionConditionPassed', false))).toBe(false)
-    expect(isSpeechEligibleHotStockEvent(stageEvent('noGap', false))).toBe(false)
-    expect(isSpeechEligibleHotStockEvent(stageEvent('trendWeak', false))).toBe(false)
-    expect(isSpeechEligibleHotStockEvent(stageEvent('optionalFinalStatus', false))).toBe(false)
-  })
-
-  it('includes opening weak-to-strong hits outside the hot-stock page for speech', () => {
-    const hot = makeEvent({ id: 'hot', code: '600001', typeName: '逼近涨停' })
-    const tdxOpening = makeEvent({
-      id: 'opening_weak_to_strong:2026-05-22:002552:pending',
-      code: '002552',
-      type: 12001,
-      eventType: 12001,
-      typeName: '竞价弱转强',
-      matchedHotStock: false,
-      raw: {
-        signal: {
-          stage: 'gapAlert',
-          voiceEligible: true,
-        },
-      },
-    })
-    const tdxOrdinary = makeEvent({
-      id: 'tdx-ordinary',
-      code: '300001',
-      typeName: '大幅拉升',
-      matchedHotStock: false,
-    })
-
-    expect(selectSpeechEvents([tdxOrdinary, tdxOpening, hot], [hot]).map(event => event.id)).toEqual([
-      'hot',
-      'opening_weak_to_strong:2026-05-22:002552:pending',
+    const base = Date.parse('2026-10-13T10:00:00+08:00')
+    service.announceL1Events([
+      makeL1Event({ type: 'FastRise', typeName: '快速拉升', severity: 'important', changePct: 5.2, timestamp: base, code: '000002', name: 'A股' }),
+      makeL1Event({ type: 'SectorLimitUpWave', typeName: '板块涨停潮', severity: 'critical', timestamp: base + 1000, code: '', name: '算力', sector: '算力' }),
+      makeL1Event({ type: 'LimitUpSealed', typeName: '2连板', severity: 'critical', timestamp: base + 2000, code: '600001', name: '测试股' }),
     ])
+    await service.whenIdle()
+
+    const urls = fetcher.mock.calls.map(([url]) => url)
+    expect(urls[0]).toBe('/api/local-voice/stop')
+    const texts = spokenTexts(fetcher)
+    expect(texts).toEqual([
+      '算力，板块涨停潮',
+      '测试股，2连板，买一封单 1200万',
+      'A股，快速拉升，涨幅5.2%',
+    ])
+  })
+
+  it('同一事件（类型+主体+时间戳）不重复播报', async () => {
+    const fetcher = createLocalVoiceMock()
+    const service = new HotStockEventSpeechService({ fetcher })
+    service.announceL1Events([makeL1Event({ timestamp: 1 })])
+    fetcher.mock.calls.length = 0
+
+    // 同类型+同主体+同时间戳 → 同一事件，不重复播报
+    service.announceL1Events([makeL1Event({ timestamp: 1 })])
+    await service.whenIdle()
+    expect(spokenTexts(fetcher)).toHaveLength(0)
+  })
+
+  it('setDisabled 后不播报', async () => {
+    const fetcher = createLocalVoiceMock()
+    const service = new HotStockEventSpeechService({ fetcher })
+    service.announceL1Events([makeL1Event({ timestamp: 1 })])
+    service.setEnabled(false)
+    fetcher.mock.calls.length = 0
+    service.announceL1Events([makeL1Event({ timestamp: 2 })])
+    await service.handleLatestAdded([makeEvent({ id: 'a' })])
+    await service.whenIdle()
+    expect(fetcher.mock.calls.filter(([url]) => url === '/api/local-voice/speak')).toHaveLength(0)
+  })
+
+  it('远端事件文本：比率口径换算百分数', () => {
+    expect(buildRemoteSpeechText(makeEvent({ changePct: 0.0954 }))).toBe('测试股，封涨停板，涨幅9.54%')
+    expect(buildRemoteSpeechText(makeEvent({ changePct: -0.031 }))).toBe('测试股，封涨停板，涨幅-3.1%')
+    const noPct = makeEvent({})
+    noPct.changePct = null
+    expect(buildRemoteSpeechText(noPct)).toBe('测试股，封涨停板')
+  })
+})
+
+describe('EventDeduper（对齐 EventDeduper.cs）', () => {
+  it('语音文本：封板类带原因、快拉快跳带涨幅、其余仅名称+类型', () => {
+    expect(buildSpeechTextForEvent(makeL1Event({ type: 'LimitUpSealed', typeName: '2连板' })))
+      .toBe('测试股，2连板，买一封单 1200万')
+    expect(buildSpeechTextForEvent(makeL1Event({ type: 'LimitUpResealed', typeName: '涨停回封' })))
+      .toBe('测试股，涨停回封，买一封单 1200万')
+    expect(buildSpeechTextForEvent(makeL1Event({ type: 'FastRise', typeName: '快速拉升', severity: 'important', changePct: 5.2 })))
+      .toBe('测试股，快速拉升，涨幅5.2%')
+    expect(buildSpeechTextForEvent(makeL1Event({ type: 'BigRiseTier', typeName: '大幅拉升', severity: 'important' })))
+      .toBe('测试股，大幅拉升')
+  })
+
+  it('buildSpeechItems 按时间升序逐条成句', () => {
+    const items = buildSpeechItems([
+      makeL1Event({ timestamp: 2, type: 'FastDrop', typeName: '快速跳水', severity: 'important', changePct: -3 }),
+      makeL1Event({ timestamp: 1 }),
+    ])
+    expect(items).toEqual([
+      '测试股，封涨停板，买一封单 1200万',
+      '测试股，快速跳水，涨幅-3%',
+    ])
+  })
+
+  it('状态变化类 30s 冷却、噪声类 180s 冷却', () => {
+    const deduper = new EventDeduper()
+    const t0 = Date.parse('2026-10-13T10:00:00+08:00')
+    expect(deduper.filter([makeL1Event({ timestamp: t0 })])).toHaveLength(1)
+    expect(deduper.filter([makeL1Event({ timestamp: t0 + 29_000 })])).toHaveLength(0)
+    expect(deduper.filter([makeL1Event({ timestamp: t0 + 30_000 })])).toHaveLength(1)
+
+    expect(deduper.filter([makeL1Event({ type: 'BigRiseTier', severity: 'important', timestamp: t0 })])).toHaveLength(1)
+    expect(deduper.filter([makeL1Event({ type: 'BigRiseTier', severity: 'important', timestamp: t0 + 179_000 })])).toHaveLength(0)
+    expect(deduper.filter([makeL1Event({ type: 'BigRiseTier', severity: 'important', timestamp: t0 + 180_000 })])).toHaveLength(1)
+  })
+
+  it('板块事件 DedupeKey 与个股互不影响，输出按评分降序', () => {
+    const deduper = new EventDeduper()
+    const t0 = Date.parse('2026-10-13T10:00:00+08:00')
+    const sectorWave = makeL1Event({ type: 'SectorLimitUpWave', typeName: '板块涨停潮', code: '', name: '算力', sector: '算力', timestamp: t0 })
+    const stockSeal = makeL1Event({ timestamp: t0 })
+    const sorted = deduper.filter([stockSeal, sectorWave])
+    // 评分：封板 300+50=350 > 板块涨停潮 300+46=346
+    expect(sorted[0].type).toBe('LimitUpSealed')
+    expect(sorted[1].type).toBe('SectorLimitUpWave')
+  })
+})
+
+describe('EventVoicePolicy（两层模型，对齐 EventVoicePolicy.cs）', () => {
+  const events = [
+    makeL1Event({ type: 'LimitUpSealed', severity: 'critical' }),
+    makeL1Event({ type: 'BigRiseTier', severity: 'important', timestamp: 2 }),
+    makeL1Event({ type: 'BidPressure', severity: 'normal', timestamp: 3 }),
+  ]
+
+  it('muted 全静音；all 全播；strongOnly 滤掉 normal 与盘口噪声', () => {
+    expect(filterForVoice(events, 'muted')).toHaveLength(0)
+    expect(filterForVoice(events, 'all')).toHaveLength(3)
+    const strong = filterForVoice(events, 'strongOnly')
+    expect(strong.map(item => item.type)).toEqual(['LimitUpSealed', 'BigRiseTier'])
+  })
+
+  it('VoiceEvents 白名单优先（只影响语音层）；空名单跟随模式', () => {
+    const whitelist = new Map<string, boolean>([
+      ['LimitUpSealed', true],
+      ['BigRiseTier', false],
+      ['BidPressure', false],
+    ])
+    expect(filterForVoice(events, 'all', { voiceEvents: whitelist }).map(item => item.type))
+      .toEqual(['LimitUpSealed'])
+    expect(filterForVoice(events, 'strongOnly', { voiceEvents: new Map() })).toHaveLength(2)
+  })
+
+  it('IsStrongSignal 排除盘口噪声五类', () => {
+    expect(isStrongSignal(makeL1Event({ type: 'LargeAskOrder', severity: 'normal' }))).toBe(false)
+    expect(isStrongSignal(makeL1Event({ type: 'SealOrderIncreased', severity: 'important' }))).toBe(true)
+    expect(voiceModeDisplayName('all')).toBe('播报全部')
+    expect(voiceModeDisplayName('muted')).toBe('静音')
+    expect(voiceModeDisplayName('strongOnly')).toBe('只播强信号')
+  })
+})
+
+describe('竞价弱转强语音门禁（保留既有语义）', () => {
+  it('voiceEligible + gapAlert/trendConfirm 才可播', () => {
+    expect(isSpeechEligibleHotStockEvent(makeEvent({
+      type: 12001,
+      raw: { signal: { voiceEligible: true, stage: 'gapAlert' } },
+    }))).toBe(true)
+    expect(isSpeechEligibleHotStockEvent(makeEvent({
+      type: 12001,
+      raw: { signal: { voiceEligible: true, stage: 'auctionConditionPassed' } },
+    }))).toBe(false)
+    expect(isSpeechEligibleHotStockEvent(makeEvent({ type: 10001 }))).toBe(true)
+  })
+})
+
+describe('语音选项解析', () => {
+  it('resolveSpeechVoiceSelection 保持既有行为', () => {
+    const voices = [{ name: 'Huihui' }, { name: 'Kangkang' }]
+    expect(resolveSpeechVoiceSelection('Huihui', undefined, voices)).toBe('Huihui')
+    expect(resolveSpeechVoiceSelection(undefined, 'Kangkang', voices)).toBe('Kangkang')
+    expect(resolveSpeechVoiceSelection('Ghost', 'Kangkang', voices)).toBe('Kangkang')
+    expect(resolveSpeechVoiceSelection(undefined, undefined, voices)).toBeUndefined()
   })
 })

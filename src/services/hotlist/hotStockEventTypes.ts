@@ -14,6 +14,43 @@ export interface TdxBlockFileSummary {
   selected?: boolean
 }
 
+/**
+ * L1 本地事件码段（13xxx）：由 L1EventRealtimeBridge 产出，语义见 l1EventCatalog.ts。
+ * 与选股宝 10xxx/11xxx、竞价弱转强 12001 不冲突。
+ */
+export type L1NumericEventType =
+  | 13001
+  | 13002
+  | 13003
+  | 13004
+  | 13005
+  | 13006
+  | 13007
+  | 13008
+  | 13009
+  | 13010
+  | 13011
+  | 13012
+  | 13013
+  | 13014
+  | 13015
+  | 13016
+  | 13017
+  | 13018
+  | 13019
+  | 13020
+  | 13021
+  | 13022
+  | 13023
+  | 13024
+  | 13025
+  | 13026
+  | 13027
+  | 13028
+  | 13029
+  | 13030
+  | 13031
+
 export type HotStockAbnormalEventType =
   | 10001
   | 10005
@@ -30,6 +67,7 @@ export type HotStockAbnormalEventType =
   | 12001
   | 11000
   | 11001
+  | L1NumericEventType
 
 export interface HotStockAbnormalEvent {
   category: HotStockEventCategory

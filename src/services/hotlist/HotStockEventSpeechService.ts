@@ -1,13 +1,20 @@
-import type { HotStockAbnormalEvent } from './hotStockEventTypes'
+/**
+ * 异动语音服务：与 tools/YiDongJingLing/Speech/SpeechAnnouncer.cs 语义一致（语音零丢失原则）。
+ * - 每条事件独立成句（含完整细节），不合并播报、不同股压缩——用户裁决：丢龙头涨停信息不可接受；
+ * - Critical 事件抢占：POST /stop 清空 VoiceWorker 队列后立即播报；
+ * - 播报与停止经 gate 串行化，防止 /stop 清队后播报循环继续填队；
+ * - 语音文本由 EventDeduper.buildSpeechItems 生成（与 C# BuildSpeechItems 逐字一致）。
+ */
+import { buildSpeechItems } from './EventDeduper'
 import { OPENING_WEAK_TO_STRONG_EVENT_TYPE } from './hotStockEventTypes'
+import type { HotStockAbnormalEvent } from './hotStockEventTypes'
+import type { L1EventRecord } from './l1EventCatalog'
 
 type SpeechFetcher = typeof fetch
 type SpeechMode = 'local' | 'offline'
 
 export interface HotStockEventSpeechServiceOptions {
   fetcher?: SpeechFetcher | null
-  maxEventsPerSpeech?: number
-  flushDelayMs?: number
   rate?: number
   volume?: number
   voice?: string
@@ -31,35 +38,19 @@ export interface SapiVoiceOption {
 const LOCAL_SPEAK_ENDPOINT = '/api/local-voice/speak'
 const LOCAL_TEST_ENDPOINT = '/api/local-voice/test'
 const LOCAL_STATUS_ENDPOINT = '/api/local-voice/status'
-
-const EVENT_PRIORITIES: Partial<Record<HotStockAbnormalEvent['type'], number>> = {
-  10001: 100,
-  10003: 95,
-  10007: 90,
-  10005: 80,
-  10014: 75,
-  10012: 70,
-  10002: 65,
-  10004: 60,
-  10008: 55,
-  10006: 50,
-  12001: 88,
-  10009: 40,
-  10010: 35,
-}
+const LOCAL_STOP_ENDPOINT = '/api/local-voice/stop'
 
 export class HotStockEventSpeechService {
   private readonly fetcher: SpeechFetcher | null
-  private readonly maxEventsPerSpeech: number
-  private readonly flushDelayMs: number
   private initialized = false
   private enabled = true
   private rate: number
   private volume: number
   private voice?: string
-  private spokenIds = new Set<string>()
-  private pendingEvents: HotStockAbnormalEvent[] = []
-  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private spokenKeys = new Set<string>()
+  /** gate：串行化播报批次与停止/抢占，镜像 C# SemaphoreSlim(1,1)。 */
+  private gate: Promise<unknown> = Promise.resolve()
+  private pendingL1Events: L1EventRecord[] = []
   private status: HotStockEventSpeechStatus = {
     mode: 'offline',
     supported: false,
@@ -68,8 +59,6 @@ export class HotStockEventSpeechService {
 
   constructor(options: HotStockEventSpeechServiceOptions = {}) {
     this.fetcher = options.fetcher === undefined ? getBrowserFetcher() : options.fetcher
-    this.maxEventsPerSpeech = options.maxEventsPerSpeech ?? 3
-    this.flushDelayMs = options.flushDelayMs ?? 3_000
     this.rate = normalizeRate(options.rate)
     this.volume = normalizeVolume(options.volume)
     this.voice = normalizeVoice(options.voice)
@@ -120,7 +109,7 @@ export class HotStockEventSpeechService {
 
   setEnabled(enabled: boolean) {
     this.enabled = enabled
-    if (!enabled) this.stop()
+    if (!enabled) void this.stop()
   }
 
   setVoiceOptions(options: { rate?: number; volume?: number; voice?: string }) {
@@ -141,33 +130,49 @@ export class HotStockEventSpeechService {
     return this.enabled
   }
 
-  async handleLatestAdded(events: HotStockAbnormalEvent[]) {
-    if (!events.length) return
+  /**
+   * L1 事件语音入口（新）：接收已过 VoiceEvents/VoiceMode 过滤的本地事件，
+   * Critical 抢占（stop→播报），普通批次按时间序逐条播报。
+   */
+  announceL1Events(events: readonly L1EventRecord[]) {
+    if (!this.enabled || !events.length) return
 
+    const freshEvents = events.filter(event => {
+      const key = l1SpokenKey(event)
+      if (this.spokenKeys.has(key)) return false
+      this.spokenKeys.add(key)
+      return true
+    })
+    if (!freshEvents.length) return
     if (!this.initialized) {
-      events.forEach((event) => this.spokenIds.add(event.id))
+      // 首批只记录不播报（对齐 C# 面板启动后冷启动语义与旧行为）
       this.initialized = true
       return
     }
 
-    const freshEvents = events.filter((event) => {
-      if (this.spokenIds.has(event.id)) return false
-      this.spokenIds.add(event.id)
+    this.enqueue(() => this.announceBatch(freshEvents))
+  }
+
+  /**
+   * 旧入口兼容：接收 remote feed 事件（选股宝/同花顺）。同样零丢失逐条播报。
+   * 事件需带 raw.l1（本地引擎事件走 announceL1Events）；远端事件按 名称+类型+涨幅 逐条成句。
+   */
+  async handleLatestAdded(events: HotStockAbnormalEvent[]) {
+    if (!events.length) return
+
+    const freshEvents = events.filter(event => {
+      const key = `remote:${event.id}`
+      if (this.spokenKeys.has(key)) return false
+      this.spokenKeys.add(key)
       return true
     })
     if (!freshEvents.length) return
-
-    this.pendingEvents.push(...freshEvents)
-    if (this.flushDelayMs <= 0) {
-      await this.flushPendingEvents()
+    if (!this.initialized) {
+      this.initialized = true
       return
     }
 
-    if (this.flushTimer) return
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null
-      void this.flushPendingEvents()
-    }, this.flushDelayMs)
+    this.enqueue(() => this.announceRemoteBatch(freshEvents))
   }
 
   async speakTest() {
@@ -175,24 +180,62 @@ export class HotStockEventSpeechService {
     await this.tryLocalTest()
   }
 
-  stop() {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
+  async stop() {
+    this.pendingL1Events = []
+    this.enqueue(async () => {
+      await this.stopCore()
+    })
+  }
+
+  /** 供测试/调用方等待在途批次播完。 */
+  whenIdle(): Promise<unknown> {
+    return this.gate
+  }
+
+  private enqueue(job: () => Promise<void>) {
+    const run = this.gate.then(() => job()).catch((error) => {
+      console.warn('[HotStockEventSpeechService] 播报批次失败:', error)
+    })
+    this.gate = run
+    return run
+  }
+
+  private async announceBatch(events: readonly L1EventRecord[]) {
+    const critical = events.filter(event => event.severity === 'critical')
+    const rest = events
+      .filter(event => event.severity !== 'critical')
+      .sort((a, b) => a.timestamp - b.timestamp)
+
+    if (critical.length) {
+      // Critical 抢占：清空 VoiceWorker 队列后立即播报（gate 已持锁，串行化保证跨批次语义）
+      await this.stopCore()
+      for (const text of buildSpeechItems(critical)) {
+        await this.speak(text)
+      }
     }
-    this.pendingEvents = []
+    for (const text of buildSpeechItems(rest)) {
+      await this.speak(text)
+    }
   }
 
-  private async flushPendingEvents() {
-    const events = compactByStockPriority(this.pendingEvents)
-    this.pendingEvents = []
-    if (!events.length) return
-    await this.speakText(buildSpeechText(events, this.maxEventsPerSpeech))
+  private async announceRemoteBatch(events: readonly HotStockAbnormalEvent[]) {
+    for (const event of [...events].sort((a, b) => a.timestamp - b.timestamp)) {
+      await this.speak(buildRemoteSpeechText(event))
+    }
   }
 
-  private async speakText(text: string) {
-    if (!this.enabled || !text) return false
-    return this.tryLocalSpeak(text)
+  private async speak(text: string) {
+    if (!this.enabled || !text) return
+    await this.tryLocalSpeak(text)
+  }
+
+  private async stopCore() {
+    if (!this.fetcher) return
+    try {
+      await this.fetcher(LOCAL_STOP_ENDPOINT, { method: 'POST' })
+    } catch {
+      // worker 不可达时静默：下一次 speak 会走 EnsureWorker 路径
+    }
   }
 
   private async tryLocalSpeak(text: string): Promise<boolean> {
@@ -230,40 +273,46 @@ export class HotStockEventSpeechService {
   }
 }
 
+function l1SpokenKey(event: L1EventRecord): string {
+  return `l1:${event.type}:${event.sector || event.code}:${event.timestamp}`
+}
+
+/**
+ * 竞价弱转强语音门禁（保留既有语义）：只有 voiceEligible 且处于 gapAlert/trendConfirm
+ * 阶段的事件可播；其余事件直接放行。
+ */
+export function isSpeechEligibleHotStockEvent(event: HotStockAbnormalEvent): boolean {
+  if (event.type !== OPENING_WEAK_TO_STRONG_EVENT_TYPE) return true
+  const raw = event.raw as {
+    signal?: {
+      stage?: string
+      voiceEligible?: boolean
+    }
+  } | null
+  const signal = raw?.signal
+  return signal?.voiceEligible === true && (signal.stage === 'gapAlert' || signal.stage === 'trendConfirm')
+}
+
+/** 远端事件语音文本：与零丢失原则一致——每条独立成句，含涨幅细节。 */
+export function buildRemoteSpeechText(event: HotStockAbnormalEvent): string {
+  const displayName = event.name || event.code
+  const pct = formatRemotePct(event.changePct)
+  return pct ? `${displayName}，${event.typeName}，涨幅${pct}` : `${displayName}，${event.typeName}`
+}
+
+function formatRemotePct(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return ''
+  const percent = Math.abs(value) <= 1 && value !== 0 ? value * 100 : value
+  return `${trimZeros(percent.toFixed(2))}%`
+}
+
+function trimZeros(text: string): string {
+  return text.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+}
+
 function getBrowserFetcher(): SpeechFetcher | null {
   if (typeof globalThis.fetch !== 'function') return null
   return globalThis.fetch.bind(globalThis)
-}
-
-function buildSpeechText(events: HotStockAbnormalEvent[], maxEvents: number): string {
-  const selected = events.slice(0, maxEvents)
-  const phrases = selected.map((event) => `${event.name || event.code}${event.typeName}`)
-  if (events.length === 1) {
-    const event = events[0]
-    return `热榜异动，${event.name || event.code}${event.typeName}，涨幅${formatPct(event.changePct)}`
-  }
-  return `新增${events.length}条热榜异动，${phrases.join('，')}`
-}
-
-function compactByStockPriority(events: HotStockAbnormalEvent[]): HotStockAbnormalEvent[] {
-  const byCode = new Map<string, HotStockAbnormalEvent>()
-  for (const event of events) {
-    const key = event.code || event.id
-    const previous = byCode.get(key)
-    if (!previous || getEventPriority(event) > getEventPriority(previous)) {
-      byCode.set(key, event)
-    }
-  }
-  return [...byCode.values()].sort((a, b) => getEventPriority(b) - getEventPriority(a))
-}
-
-function getEventPriority(event: HotStockAbnormalEvent): number {
-  return EVENT_PRIORITIES[event.type] ?? 0
-}
-
-function formatPct(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '未知'
-  return `${value >= 0 ? '' : '负'}${Math.abs(value * 100).toFixed(2)}%`
 }
 
 function buildOfflineStatus(): HotStockEventSpeechStatus {
@@ -317,35 +366,6 @@ export function resolveSpeechVoiceSelection(
   if (active && voices.some((voice) => voice.name === active)) return active
 
   return undefined
-}
-
-export function isSpeechEligibleHotStockEvent(event: HotStockAbnormalEvent): boolean {
-  if (event.type !== OPENING_WEAK_TO_STRONG_EVENT_TYPE) return true
-
-  const raw = event.raw as {
-    signal?: {
-      stage?: string
-      voiceEligible?: boolean
-    }
-  } | null
-  const signal = raw?.signal
-  return signal?.voiceEligible === true && (signal.stage === 'gapAlert' || signal.stage === 'trendConfirm')
-}
-
-export function selectSpeechEvents(
-  latestAdded: HotStockAbnormalEvent[],
-  latestHotStockAdded: HotStockAbnormalEvent[],
-): HotStockAbnormalEvent[] {
-  const byId = new Map<string, HotStockAbnormalEvent>()
-  for (const event of latestHotStockAdded) {
-    if (isSpeechEligibleHotStockEvent(event)) byId.set(event.id, event)
-  }
-  for (const event of latestAdded) {
-    if (event.type === OPENING_WEAK_TO_STRONG_EVENT_TYPE && isSpeechEligibleHotStockEvent(event)) {
-      byId.set(event.id, event)
-    }
-  }
-  return [...byId.values()]
 }
 
 export const hotStockEventSpeechService = new HotStockEventSpeechService()
