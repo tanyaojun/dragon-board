@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""方向线 v4 原料层测试（2026-10-13 审计落地批）——全 mock，零网络零 jev 调用。
+"""方向线 v4 原料层测试（runner=jev_direction_gate.py）（2026-10-13 审计落地批）——全 mock，零网络零 jev 调用。
 
 覆盖：时点口径无未来函数 / 0 伪装缺失清洗 / 摆动锚算法（与 relay 落库叙事对齐值）/
 日终折叠衍生列 / 八块组装形状与黑名单零出现 / 人口过滤统计。
@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.analysis.hotlist import market_facts as mf  # noqa: E402
-from backend.operations import jev_direction_v4 as v4  # noqa: E402
+from backend.operations import jev_direction_gate as v4  # noqa: E402
 
 
 # ── 共享事实服务 ────────────────────────────────────────

@@ -283,14 +283,95 @@ def run_material_day(db: Any, d: str, dataset_id: str = DEFAULT_DATASET_ID,
             "market": ctx["market"], "swing": ctx["swing"], "sent": ctx["sent"]}
 
 
+# ── 开火层（预登记批后才允许真实调用；--fire 无 token 拒绝） ──
+
+def build_question_doc(code: str, narrative: str) -> dict:
+    """单例完整请求文档（=发给 jev 的原始 json）：题集判据+原料叙事。
+
+    原始 json 就是这个 dict 的 json.dumps —— 开火前送用户确认的对象。
+    """
+    from backend.analysis.hotlist.jev_direction_ammo import (
+        AMMO_VERSION, QUESTION_SET_VERSION, QUESTIONS, questions_hash)
+    return {"questionSetVersion": QUESTION_SET_VERSION,
+            "ammoVersion": AMMO_VERSION,
+            "questionsHash": questions_hash(QUESTIONS),
+            "questions": QUESTIONS,
+            "narrative": narrative}
+
+
+def fire_day(db: Any, d: str, dataset_id: str = DEFAULT_DATASET_ID,
+             cap: int | None = None) -> dict:
+    """开火：逐例调用 jev → 解析 → upsert hotlist_jev_direction。
+
+    幂等 _id={date}:11:00:{code}:DIR；请求/响应原文都落库（前端审计可见性要求）；
+    token 预检无 token 直接拒绝（不烧钱不静默跳过——开火是显式动作）。
+    """
+    import os
+    from datetime import datetime, timezone
+    from backend.analysis.hotlist.jev_direction_ammo import (
+        QUESTION_SET_VERSION, QUESTIONS)
+    from backend.services.jev.jev_sentiment_compute import _dispatch_jev
+    if not (os.environ.get("JEV_TYPESAFE_KEY") or os.environ.get("JEV_CF_TOKEN")):
+        raise RuntimeError("fire 拒绝：无 JEV token（开火须显式 token 预检通过，预登记批后执行）")
+    mat = run_material_day(db, d, dataset_id, cap=cap)
+    coll = db["hotlist_jev_direction"]
+    ok = err = 0
+    for case in mat["cases"]:
+        doc = build_question_doc(case["code"], case["narrative"])
+        try:
+            resp_text, _ms = _dispatch_jev(case["narrative"], QUESTIONS)
+            parsed = _parse_direction(resp_text)
+            now = datetime.now(timezone.utc).isoformat()
+            coll.update_one(
+                {"_id": f"{d}:{DIRECTION_SLOT}:{case['code']}:DIR"},
+                {"$set": {"date": d, "slot": DIRECTION_SLOT,
+                          "code": case["code"], "name": case["name"],
+                          "direction": parsed["direction"],
+                          "confidence": parsed["confidence"],
+                          "questionSetVersion": QUESTION_SET_VERSION,
+                          "requestJson": doc, "responseRaw": resp_text,
+                          "verify": {"status": "pending"}, "createdAt": now}},
+                upsert=True)
+            ok += 1
+        except Exception as exc:  # 单股失败不炸批次（fail-visible 计数）
+            err += 1
+            print(f"[v4-fire] {case['code']} 失败: {type(exc).__name__}: {exc}")
+    return {"date": d, "ok": ok, "err": err, "population": mat["population"]}
+
+
+def _parse_direction(resp_text: str) -> dict:
+    """jev 返回 → {direction, confidence}；解析失败抛异常（不伪造成 hold）。"""
+    import json as _json
+    import re
+    m = re.search(r"\{[\s\S]*\}", resp_text)
+    if not m:
+        raise ValueError(f"响应无 json: {resp_text[:120]!r}")
+    data = _json.loads(m.group(0))
+    d = data.get("direction")
+    c = data.get("confidence")
+    if d not in ("buy", "sell", "hold", "insufficient"):
+        raise ValueError(f"direction 非法: {d!r}")
+    if not isinstance(c, (int, float)) or not (0 <= c <= 1):
+        raise ValueError(f"confidence 非法: {c!r}")
+    return {"direction": d, "confidence": round(float(c), 3)}
+
+
 def _main() -> None:
-    ap = argparse.ArgumentParser(description="jev direction v4 material runner (no-fire)")
+    ap = argparse.ArgumentParser(description="jev direction v4 runner (dry=组装; fire=调用需预登记批)")
     ap.add_argument("--day", required=True)
     ap.add_argument("--cap", type=int, default=None)
-    ap.add_argument("--out", default=None, help=".tmp 落档路径（缺省只打印统计）")
+    ap.add_argument("--out", default=None, help="dry: .tmp 落档路径")
+    ap.add_argument("--sample-json", action="store_true",
+                    help="dry: 额外导出 1 例完整请求原始 json（开火前送用户确认）")
+    ap.add_argument("--fire", action="store_true",
+                    help="开火：真实调用 jev 并落库（无 token 拒绝；须预登记批+用户开火令）")
     args = ap.parse_args()
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
+    if args.fire:
+        r = fire_day(db, args.day, cap=args.cap)
+        print(f"[v4-fire] {args.day} ok={r['ok']} err={r['err']} / 人口 {r['population']}")
+        return
     r = run_material_day(db, args.day, cap=args.cap)
     print(f"[v4-material] {args.day} 池 {r['pool']} 人口(全池) {r['population']} "
           f"主力缺失计数 {r['populationStats']['mainforce_missing_counted']}")
@@ -302,6 +383,13 @@ def _main() -> None:
               f"折叠 {c0['meta']['folded_days']} 日 / 序列点 {c0['meta']['series_points']}")
         bad = [w for w in BLACKLIST_FIELDS if w in c0["narrative"]]
         print(f"[v4-material] 黑名单字段机验: {'FAIL ' + str(bad) if bad else 'PASS（零出现）'}")
+    if args.sample_json and r["cases"]:
+        doc = build_question_doc(r["cases"][0]["code"], r["cases"][0]["narrative"])
+        path = args.out.replace(".json", "") + "_request_sample.json" if args.out \
+            else f".tmp/v4_request_sample_{args.day}.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+        print(f"[v4-material] 原始请求样例落档 {path}")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(r, f, ensure_ascii=False, default=str)
