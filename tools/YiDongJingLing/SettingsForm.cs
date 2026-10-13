@@ -9,7 +9,7 @@ internal sealed class SettingsForm : Form
     private readonly AppSettings _settings;
     private readonly IReadOnlyList<VoiceInfo> _voices;
     private readonly SpeechAnnouncer _speech;
-    private readonly CheckedListBox _eventTypeList = new();
+    private readonly DataGridView _eventGrid = new();
     private readonly CheckBox _voiceEnabledBox = new();
     private readonly CheckBox _filterStBox = new();
     private readonly CheckBox _syncMessageBox = new();
@@ -88,15 +88,24 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
 
         var typeLabel = SectionLabel("异动类型");
         left.Controls.Add(typeLabel, 0, 0);
-        _eventTypeList.Dock = DockStyle.Fill;
-        _eventTypeList.CheckOnClick = true;
-        _eventTypeList.BorderStyle = BorderStyle.FixedSingle;
-        _eventTypeList.BackColor = Color.White;
-        foreach (var item in EventTypeOptions())
+        _eventGrid.Dock = DockStyle.Fill;
+        _eventGrid.BorderStyle = BorderStyle.FixedSingle;
+        _eventGrid.BackgroundColor = Color.White;
+        _eventGrid.AllowUserToAddRows = false;
+        _eventGrid.AllowUserToDeleteRows = false;
+        _eventGrid.AllowUserToResizeRows = false;
+        _eventGrid.ReadOnly = false;
+        _eventGrid.RowHeadersVisible = false;
+        _eventGrid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+        _eventGrid.Columns.Add("Event", "事件");
+        _eventGrid.Columns["Event"]!.ReadOnly = true;
+        _eventGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enable", HeaderText = "启用" });
+        _eventGrid.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Voice", HeaderText = "语音" });
+        foreach (var entry in EventCatalog.Entries)
         {
-            _eventTypeList.Items.Add(item, true);
+            _eventGrid.Rows.Add($"{entry.Label} - {entry.Note}", true, entry.DefaultVoice);
         }
-        left.Controls.Add(_eventTypeList, 0, 1);
+        left.Controls.Add(_eventGrid, 0, 1);
 
         var typeButtons = new FlowLayoutPanel
         {
@@ -105,13 +114,17 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
             WrapContents = false,
             Padding = new Padding(0, 8, 0, 0),
         };
-        var allBtn = SecondaryButton("全选", 72);
+        var allBtn = SecondaryButton("全选", 62);
         allBtn.Click += (_, _) => SetAllEventTypes(true);
-        var noneBtn = SecondaryButton("清空", 72);
+        var noneBtn = SecondaryButton("清空", 62);
         noneBtn.Click += (_, _) => SetAllEventTypes(false);
-        var invertBtn = SecondaryButton("反选", 72);
+        var invertBtn = SecondaryButton("反选", 62);
         invertBtn.Click += (_, _) => InvertEventTypes();
-        typeButtons.Controls.AddRange([allBtn, noneBtn, invertBtn]);
+        var voiceAllBtn = SecondaryButton("语音全选", 86);
+        voiceAllBtn.Click += (_, _) => SetAllEventVoice(true);
+        var voiceNoneBtn = SecondaryButton("语音清空", 86);
+        voiceNoneBtn.Click += (_, _) => SetAllEventVoice(false);
+        typeButtons.Controls.AddRange([allBtn, noneBtn, invertBtn, voiceAllBtn, voiceNoneBtn]);
         left.Controls.Add(typeButtons, 0, 2);
 
         var right = new TableLayoutPanel
@@ -166,7 +179,6 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         _voiceModeBox.DropDownStyle = ComboBoxStyle.DropDownList;
         _voiceModeBox.Margin = new Padding(0, 3, 8, 0);
         _voiceModeBox.Items.AddRange([
-            VoiceModeOption.StrongOnly,
             VoiceModeOption.All,
             VoiceModeOption.Muted,
         ]);
@@ -393,12 +405,12 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         _voiceBox.SelectedItem = _voiceBox.Items.Contains(_settings.VoiceName) ? _settings.VoiceName : "";
         _voiceModeBox.SelectedItem = VoiceModeOption.FromMode(_settings.VoiceMode);
 
-        for (var i = 0; i < _eventTypeList.Items.Count; i++)
+        var voicePreset = ResolveVoicePreset();
+        for (var i = 0; i < _eventGrid.Rows.Count; i++)
         {
-            if (_eventTypeList.Items[i] is EventTypeOption option)
-            {
-                _eventTypeList.SetItemChecked(i, _settings.IsEventEnabled(option.Type.ToString()));
-            }
+            var typeName = EventCatalog.Entries[i].Type.ToString();
+            _eventGrid.Rows[i].Cells["Enable"]!.Value = _settings.IsEventEnabled(typeName);
+            _eventGrid.Rows[i].Cells["Voice"]!.Value = voicePreset.Contains(typeName);
         }
 
         UpdateValueLabels();
@@ -413,7 +425,7 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         _settings.VoiceName = _voiceBox.SelectedItem?.ToString() ?? "";
         _settings.VoiceMode = _voiceModeBox.SelectedItem is VoiceModeOption selectedVoiceMode
             ? selectedVoiceMode.Mode
-            : VoiceMode.StrongOnly;
+            : VoiceMode.All;
         _settings.StockPoolSource = _stockPoolSourceBox.SelectedItem is StockPoolSourceOption selectedPool
             ? selectedPool.Source
             : StockPoolSource.TdxBlock;
@@ -437,28 +449,54 @@ private readonly NumericUpDown _openingThresholdBox = new() { Minimum = 0, Maxim
         _settings.OpeningSupportAmountMinRatio = _openingSupportAmountBox.Value;
         _settings.HotlistTopVoiceCount = (int)_hotlistTopVoiceBox.Value;
         _settings.EnabledEvents.Clear();
-        for (var i = 0; i < _eventTypeList.Items.Count; i++)
+        _settings.VoiceEvents.Clear();
+        for (var i = 0; i < _eventGrid.Rows.Count; i++)
         {
-            if (_eventTypeList.Items[i] is EventTypeOption option)
-            {
-                _settings.EnabledEvents[option.Type.ToString()] = _eventTypeList.GetItemChecked(i);
-            }
+            var typeName = EventCatalog.Entries[i].Type.ToString();
+            _settings.EnabledEvents[typeName] = _eventGrid.Rows[i].Cells["Enable"]!.Value is true;
+            _settings.VoiceEvents[typeName] = _eventGrid.Rows[i].Cells["Voice"]!.Value is true;
         }
+    }
+
+    private HashSet<string> ResolveVoicePreset()
+    {
+        // 未固化过语音勾选时，按当前模式预填，保证升级后保存前所见与实际播报一致
+        if (_settings.VoiceEvents.Count > 0)
+        {
+            return new HashSet<string>(
+                _settings.VoiceEvents.Where(pair => pair.Value).Select(pair => pair.Key),
+                StringComparer.OrdinalIgnoreCase);
+        }
+        if (_settings.VoiceMode == VoiceMode.All)
+        {
+            return new HashSet<string>(
+                EventCatalog.Entries.Select(entry => entry.Type.ToString()),
+                StringComparer.OrdinalIgnoreCase);
+        }
+        return EventCatalog.DefaultVoiceSet();
     }
 
     private void SetAllEventTypes(bool enabled)
     {
-        for (var i = 0; i < _eventTypeList.Items.Count; i++)
+        foreach (DataGridViewRow row in _eventGrid.Rows)
         {
-            _eventTypeList.SetItemChecked(i, enabled);
+            row.Cells["Enable"]!.Value = enabled;
         }
     }
 
     private void InvertEventTypes()
     {
-        for (var i = 0; i < _eventTypeList.Items.Count; i++)
+        foreach (DataGridViewRow row in _eventGrid.Rows)
         {
-            _eventTypeList.SetItemChecked(i, !_eventTypeList.GetItemChecked(i));
+            row.Cells["Enable"]!.Value = row.Cells["Enable"]!.Value is not true;
+        }
+    }
+
+    private void SetAllEventVoice(bool enabled)
+    {
+        foreach (DataGridViewRow row in _eventGrid.Rows)
+        {
+            row.Cells["Voice"]!.Value = enabled;
         }
     }
 
@@ -589,59 +627,18 @@ private static GroupBox SectionBox(string text)
         return button;
     }
 
-    private static IReadOnlyList<EventTypeOption> EventTypeOptions()
+private sealed record VoiceModeOption(VoiceMode Mode, string Label)
     {
-        return
-        [
-            new EventTypeOption(L1EventType.LimitUpSealed, "封涨停板", "涨停价+买一封单"),
-            new EventTypeOption(L1EventType.LimitUpOpened, "打开涨停板", "跌离涨停封单"),
-            new EventTypeOption(L1EventType.UpcomingLimitUpOpen, "即将打开涨停", "买一封单骤降"),
-            new EventTypeOption(L1EventType.NearLimitUp, "逼近涨停", "距涨停1%内"),
-            new EventTypeOption(L1EventType.LimitDownSealed, "封跌停板", "跌停价+卖一封单"),
-            new EventTypeOption(L1EventType.LimitDownOpened, "打开跌停板", "脱离跌停封单"),
-            new EventTypeOption(L1EventType.UpcomingLimitDownOpen, "即将打开跌停", "卖一封单骤降"),
-            new EventTypeOption(L1EventType.NearLimitDown, "逼近跌停", "距跌停1%内"),
-            new EventTypeOption(L1EventType.SealOrderIncreased, "封单增强", "封单较前帧增50%"),
-            new EventTypeOption(L1EventType.SealOrderWeakened, "封单变弱", "封单较前帧减半"),
-            new EventTypeOption(L1EventType.BigRiseTier, "大幅拉升", "当日涨幅破阈值"),
-            new EventTypeOption(L1EventType.BigDropTier, "大幅跳水", "当日跌幅破阈值"),
-            new EventTypeOption(L1EventType.FastRise, "快速拉升", "30/60秒或5分钟急涨"),
-            new EventTypeOption(L1EventType.FastDrop, "快速跳水", "30/60秒或5分钟急跌"),
-            new EventTypeOption(L1EventType.OpeningWeakToStrong, "竞价弱转强", "09:25弱到09:30转强"),
-            new EventTypeOption(L1EventType.LowOpenLongYang, "低开长阳", "低开后大幅拉起"),
-            new EventTypeOption(L1EventType.HighOpenLongYin, "高开长阴", "高开后大幅回落"),
-            new EventTypeOption(L1EventType.TurnRed, "翻红", "涨跌幅由负转正"),
-            new EventTypeOption(L1EventType.TurnGreen, "翻绿", "涨跌幅由正转负"),
-            new EventTypeOption(L1EventType.IntradayHigh, "创日内新高", "刷新启动后高点"),
-            new EventTypeOption(L1EventType.IntradayLow, "创日内新低", "刷新启动后低点"),
-            new EventTypeOption(L1EventType.AmountTier, "成交额跨档", "累计成交额破门槛"),
-            new EventTypeOption(L1EventType.VolumeAcceleration, "成交增量加速", "近30秒成交量放大"),
-            new EventTypeOption(L1EventType.LargeBidOrder, "出现大买挂盘", "买一挂单额过大"),
-            new EventTypeOption(L1EventType.LargeAskOrder, "出现大卖挂盘", "卖一挂单额过大"),
-            new EventTypeOption(L1EventType.BidPressure, "盘口买压增强", "五档买量压卖量"),
-            new EventTypeOption(L1EventType.AskPressure, "盘口卖压增强", "五档卖量压买量"),
-            new EventTypeOption(L1EventType.SpreadWidened, "买卖价差异常", "买卖一价差过大"),
-        ];
-    }
-
-    private sealed record EventTypeOption(L1EventType Type, string Label, string Note)
-    {
-        public override string ToString() => $"{Label} - {Note}";
-    }
-
-    private sealed record VoiceModeOption(VoiceMode Mode, string Label)
-    {
-        public static VoiceModeOption StrongOnly { get; } = new(VoiceMode.StrongOnly, "只播强信号");
-        public static VoiceModeOption All { get; } = new(VoiceMode.All, "播报全部");
+        public static VoiceModeOption All { get; } = new(VoiceMode.All, "按语音勾选拼报");
         public static VoiceModeOption Muted { get; } = new(VoiceMode.Muted, "静音");
 
         public static VoiceModeOption FromMode(VoiceMode mode)
         {
+            // 旧 StrongOnly 值迁移为按勾选拼报（勾选已按强信号默认集预填）
             return mode switch
             {
-                VoiceMode.All => All,
                 VoiceMode.Muted => Muted,
-                _ => StrongOnly,
+                _ => All,
             };
         }
 

@@ -7,6 +7,7 @@ public sealed class L1EventEngine
     private const decimal SharesPerLot = 100m;
     private readonly L1EventRules _rules;
     private readonly Dictionary<string, StockState> _states = new(StringComparer.Ordinal);
+    private IReadOnlyDictionary<string, int> _limitUpStreaks = new Dictionary<string, int>(StringComparer.Ordinal);
     private readonly OpeningAuctionStateStore _openingStore;
     private readonly OpeningWeakToStrongDetector _openingDetector;
     private readonly Action<OpeningWeakToStrongTelemetryRecord>? _openingTelemetry;
@@ -43,6 +44,12 @@ public sealed class L1EventEngine
             30);
     }
 
+    public void SetLimitUpStreaks(IReadOnlyDictionary<string, int> streaks)
+    {
+        // 语义：截至上一交易日的连续涨停天数（0 = 昨日未涨停）；由涨停池加载器盘前注入。
+        _limitUpStreaks = streaks ?? new Dictionary<string, int>(StringComparer.Ordinal);
+    }
+
     public void UpdateOpeningRules(OpeningWeakToStrongRules rules)
     {
         _openingStore.Clear();
@@ -60,14 +67,15 @@ public sealed class L1EventEngine
     {
         _openingStore.Capture(ToOpeningQuote(quote, ResolveLimitPct(quote)));
         var state = GetState(quote.Code);
-        var limitPct = ResolveLimitPct(quote);
-        var limitUpPrice = RoundPrice(quote.PreClose * (1m + limitPct / 100m));
-        var limitDownPrice = RoundPrice(quote.PreClose * (1m - limitPct / 100m));
+        var isNewStock = IsNewStockWithoutLimit(quote.Name);
+        var limitPct = isNewStock ? 0m : ResolveLimitPct(quote);
+        var limitUpPrice = isNewStock ? 0m : RoundPrice(quote.PreClose * (1m + limitPct / 100m));
+        var limitDownPrice = isNewStock ? 0m : RoundPrice(quote.PreClose * (1m - limitPct / 100m));
         UpdateStateFromQuote(
             state,
             quote,
-            IsLimitUpSealed(quote, limitUpPrice),
-            IsLimitDownSealed(quote, limitDownPrice));
+            !isNewStock && IsLimitUpSealed(quote, limitUpPrice),
+            !isNewStock && IsLimitDownSealed(quote, limitDownPrice));
     }
 
     public IReadOnlyList<EventRecord> Evaluate(
@@ -76,35 +84,73 @@ public sealed class L1EventEngine
         IReadOnlyList<QuoteSnapshot> history)
     {
         var state = GetState(quote.Code);
-        var events = new List<EventRecord>();
-        var limitPct = ResolveLimitPct(quote);
-        var limitUpPrice = RoundPrice(quote.PreClose * (1m + limitPct / 100m));
-        var limitDownPrice = RoundPrice(quote.PreClose * (1m - limitPct / 100m));
-        var sealedUp = IsLimitUpSealed(quote, limitUpPrice);
-        var sealedDown = IsLimitDownSealed(quote, limitDownPrice);
-
-        if (sealedUp && !state.WasLimitUpSealed)
+        // 跨日复位：程序跨日连续运行时，昨日收盘帧的封板状态不应让今日首帧误报"打开涨停板"
+        // （副作用：跨日一字板会在次日正常报一次封板，符合预期）
+        var evalDate = quote.SourceTime.ToLocalTime().ToString("yyyy-MM-dd");
+        if (state.SealStateDate != evalDate)
         {
-            Add(events, quote, L1EventType.LimitUpSealed, "封涨停板", L1EventSeverity.Critical, $"买一封单 {FormatMoney(SealAmount(quote, up: true))}");
+            state.SealStateDate = evalDate;
+            state.SealedToday = false;
+            state.WasLimitUpSealed = false;
+            state.WasLimitDownSealed = false;
         }
-        if (!sealedUp && state.WasLimitUpSealed)
+        var events = new List<EventRecord>();
+        var isNewStock = IsNewStockWithoutLimit(quote.Name);
+        var limitPct = isNewStock ? 0m : ResolveLimitPct(quote);
+        var limitUpPrice = isNewStock ? 0m : RoundPrice(quote.PreClose * (1m + limitPct / 100m));
+        var limitDownPrice = isNewStock ? 0m : RoundPrice(quote.PreClose * (1m - limitPct / 100m));
+        var sealedUp = !isNewStock && IsLimitUpSealed(quote, limitUpPrice);
+        var sealedDown = !isNewStock && IsLimitDownSealed(quote, limitDownPrice);
+
+        if (isNewStock)
+        {
+            EvaluateNewStock(events, quote, state);
+        }
+        else if (sealedUp && !state.WasLimitUpSealed)
+        {
+            var tradingDate = quote.SourceTime.ToLocalTime().ToString("yyyy-MM-dd");
+            if (state.SealStateDate != tradingDate)
+            {
+                state.SealStateDate = tradingDate;
+                state.SealedToday = false;
+            }
+
+            var streak = _limitUpStreaks.TryGetValue(quote.Code, out var yesterdayBoards) ? yesterdayBoards : 0;
+            var board = streak + 1;
+            var boardLabel = board >= 2 ? $"{board}连板" : "首板";
+            var sealAmount = FormatMoney(SealAmount(quote, up: true));
+            if (state.SealedToday)
+            {
+                Add(events, quote, L1EventType.LimitUpResealed, "涨停回封", L1EventSeverity.Critical,
+                    $"{boardLabel}，回封封单 {sealAmount}");
+            }
+            else
+            {
+                var typeName = board >= 2 ? $"{board}连板" : "封涨停板";
+                // 连板身份已由 TypeName 表达，Reason 不再重复板数
+                Add(events, quote, L1EventType.LimitUpSealed, typeName, L1EventSeverity.Critical,
+                    $"买一封单 {sealAmount}");
+            }
+            state.SealStateDate = tradingDate;
+            state.SealedToday = true;
+        }
+        if (!isNewStock && !sealedUp && state.WasLimitUpSealed)
         {
             Add(events, quote, L1EventType.LimitUpOpened, "打开涨停板", L1EventSeverity.Critical, "最新价低于涨停价或买一不再为涨停价");
         }
-        if (!sealedUp && quote.ChangePct >= limitPct - _rules.NearLimitDistancePct && quote.ChangePct < limitPct)
+        if (!isNewStock && !sealedUp && quote.ChangePct >= limitPct - _rules.NearLimitDistancePct && quote.ChangePct < limitPct)
         {
             Add(events, quote, L1EventType.NearLimitUp, "逼近涨停", L1EventSeverity.Important, $"距涨停约 {Math.Max(0, limitPct - quote.ChangePct):0.00}%");
         }
-
-        if (sealedDown && !state.WasLimitDownSealed)
+        if (!isNewStock && sealedDown && !state.WasLimitDownSealed)
         {
             Add(events, quote, L1EventType.LimitDownSealed, "封跌停板", L1EventSeverity.Critical, $"卖一封单 {FormatMoney(SealAmount(quote, up: false))}");
         }
-        if (!sealedDown && state.WasLimitDownSealed)
+        if (!isNewStock && !sealedDown && state.WasLimitDownSealed)
         {
             Add(events, quote, L1EventType.LimitDownOpened, "打开跌停板", L1EventSeverity.Critical, "最新价高于跌停价或卖一不再为跌停价");
         }
-        if (!sealedDown && quote.ChangePct <= -limitPct + _rules.NearLimitDistancePct && quote.ChangePct > -limitPct)
+        if (!isNewStock && !sealedDown && quote.ChangePct <= -limitPct + _rules.NearLimitDistancePct && quote.ChangePct > -limitPct)
         {
             Add(events, quote, L1EventType.NearLimitDown, "逼近跌停", L1EventSeverity.Important, $"距跌停约 {Math.Max(0, limitPct + quote.ChangePct):0.00}%");
         }
@@ -186,6 +232,49 @@ public sealed class L1EventEngine
                 Add(events, quote, L1EventType.SealOrderIncreased, "封单增强", L1EventSeverity.Important, $"跌停封单增至 {FormatMoney(current)}");
             else if (current <= state.LastLimitDownSealAmount * _rules.SealWeakRatio)
                 Add(events, quote, L1EventType.SealOrderWeakened, "封单变弱", L1EventSeverity.Important, $"跌停封单降至 {FormatMoney(current)}");
+        }
+    }
+
+    // 新股（N=首日，C=第2-5日，注册制）无涨跌幅限制：跳过全部涨跌停类事件，改报开板/回封
+    private static bool IsNewStockWithoutLimit(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        return name.StartsWith("N", StringComparison.Ordinal) ||
+               name.StartsWith("C", StringComparison.Ordinal);
+    }
+
+    private void EvaluateNewStock(List<EventRecord> events, QuoteSnapshot quote, StockState state)
+    {
+        if (quote.PreClose <= 0m || quote.High <= 0m || quote.LastPrice <= 0m) return;
+
+        var tradingDate = quote.SourceTime.ToLocalTime().ToString("yyyy-MM-dd");
+        if (state.NewStockEventDate != tradingDate)
+        {
+            state.NewStockEventDate = tradingDate;
+            state.NewStockOpened = false;
+            state.NewStockResealAnnounced = false;
+        }
+
+        var surgePct = (quote.High - quote.PreClose) / quote.PreClose * 100m;
+        if (surgePct < _rules.NewStockMinSurgePct) return;
+
+        var drawdownPct = (quote.High - quote.LastPrice) / quote.High * 100m;
+        if (!state.NewStockOpened)
+        {
+            if (drawdownPct >= _rules.NewStockOpenDropPct)
+            {
+                state.NewStockOpened = true;
+                Add(events, quote, L1EventType.NewStockOpened, "新股开板", L1EventSeverity.Critical,
+                    $"冲高 {surgePct:0.##}% 后自高点回落 {drawdownPct:0.##}%");
+            }
+            return;
+        }
+
+        if (!state.NewStockResealAnnounced && drawdownPct <= _rules.NewStockResealDrawdownPct)
+        {
+            state.NewStockResealAnnounced = true;
+            Add(events, quote, L1EventType.NewStockReseal, "新股开板回封", L1EventSeverity.Critical,
+                $"回升至高点 {quote.High:0.##} 附近，回撤收窄至 {drawdownPct:0.##}%");
         }
     }
 
@@ -391,13 +480,15 @@ public sealed class L1EventEngine
         }
     }
 
-    private static decimal ChangeFromWindow(QuoteSnapshot quote, IReadOnlyList<QuoteSnapshot> history, TimeSpan window)
+    private decimal ChangeFromWindow(QuoteSnapshot quote, IReadOnlyList<QuoteSnapshot> history, TimeSpan window)
     {
         var baseline = history
             .Where(item => item.SourceTime <= quote.SourceTime - window && item.LastPrice > 0m)
             .OrderByDescending(item => item.SourceTime)
             .FirstOrDefault();
         if (baseline is null || baseline.LastPrice <= 0m) return 0m;
+        // 快照断档时基线已过期（超窗口+容忍度），按旧基线算涨速会把断档涨幅误报成瞬时暴涨/暴跌
+        if (quote.SourceTime - baseline.SourceTime > window + _rules.SpeedBaselineTolerance) return 0m;
         return (quote.LastPrice - baseline.LastPrice) / baseline.LastPrice * 100m;
     }
 
@@ -542,6 +633,16 @@ public sealed class L1EventEngine
     {
         state.WasLimitUpSealed = sealedUp;
         state.WasLimitDownSealed = sealedDown;
+        var sealDate = quote.SourceTime.ToLocalTime().ToString("yyyy-MM-dd");
+        if (state.SealStateDate != sealDate)
+        {
+            state.SealStateDate = sealDate;
+            state.SealedToday = false;
+        }
+        if (sealedUp)
+        {
+            state.SealedToday = true;
+        }
         state.LastLimitUpSealAmount = sealedUp ? SealAmount(quote, up: true) : 0m;
         state.LastLimitDownSealAmount = sealedDown ? SealAmount(quote, up: false) : 0m;
         state.MaxRiseTierTriggered = Math.Max(
@@ -628,6 +729,11 @@ public sealed class L1EventEngine
         public bool OpenShapeTriggered { get; set; }
         public string OpeningWeakToStrongTriggeredDate { get; set; } = "";
         public int OpeningWeakToStrongIntradayPriority { get; set; }
+        public string NewStockEventDate { get; set; } = "";
+        public string SealStateDate { get; set; } = "";
+        public bool SealedToday { get; set; }
+        public bool NewStockOpened { get; set; }
+        public bool NewStockResealAnnounced { get; set; }
         public HashSet<string> OpeningTelemetryKeys { get; } = new(StringComparer.Ordinal);
     }
 }

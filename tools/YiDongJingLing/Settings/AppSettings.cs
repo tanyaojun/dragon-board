@@ -42,14 +42,33 @@ public sealed class AppSettings
     public double VoiceRate { get; set; } = 1;
     public int VoiceVolume { get; set; } = 100;
     public string VoiceName { get; set; } = "";
-    public VoiceMode VoiceMode { get; set; } = VoiceMode.StrongOnly;
+    public VoiceMode VoiceMode { get; set; } = VoiceMode.All;
+    public int StateChangeCooldownSeconds { get; set; } = 30;
+    public int NoiseCooldownSeconds { get; set; } = 180;
     public int HotlistTopVoiceCount { get; set; }
     public double Opacity { get; set; } = 1;
     public Dictionary<string, bool> EnabledEvents { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>语音层白名单：键存在以键为准（只影响语音，表格/飞书不受影响）；
+    /// 空集合 = 未固化勾选，沿用历史行为（All 全播 / StrongOnly 默认强信号集）。</summary>
+    public Dictionary<string, bool> VoiceEvents { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public bool SectorEventsEnabled { get; set; } = true;
+    public bool ConceptMapEnabled { get; set; } = true;
+    public int ConceptMapRefreshMinutes { get; set; } = 30;
+    public int SectorMinMoveCount { get; set; } = 3;
+    public decimal SectorMoveRatio { get; set; } = 0.6m;
+    public decimal SectorMoveMinAvgPct { get; set; } = 1.0m;
+    public int SectorWaveThreshold { get; set; } = 2;
+    public int SectorWaveWindowSeconds { get; set; } = 600;
+    public int SectorCooldownSeconds { get; set; } = 600;
 
     public bool IsEventEnabled(string eventName)
     {
         return !EnabledEvents.TryGetValue(eventName, out var enabled) || enabled;
+    }
+
+    public bool IsVoiceEventEnabled(string eventName)
+    {
+        return !VoiceEvents.TryGetValue(eventName, out var enabled) || enabled;
     }
 
     public AppSettings Clone()
@@ -82,9 +101,21 @@ public sealed class AppSettings
             VoiceVolume = VoiceVolume,
             VoiceName = VoiceName,
             VoiceMode = VoiceMode,
+            StateChangeCooldownSeconds = StateChangeCooldownSeconds,
+            NoiseCooldownSeconds = NoiseCooldownSeconds,
             HotlistTopVoiceCount = HotlistTopVoiceCount,
             Opacity = Opacity,
             EnabledEvents = new Dictionary<string, bool>(EnabledEvents, StringComparer.OrdinalIgnoreCase),
+            VoiceEvents = new Dictionary<string, bool>(VoiceEvents, StringComparer.OrdinalIgnoreCase),
+            SectorEventsEnabled = SectorEventsEnabled,
+            ConceptMapEnabled = ConceptMapEnabled,
+            ConceptMapRefreshMinutes = ConceptMapRefreshMinutes,
+            SectorMinMoveCount = SectorMinMoveCount,
+            SectorMoveRatio = SectorMoveRatio,
+            SectorMoveMinAvgPct = SectorMoveMinAvgPct,
+            SectorWaveThreshold = SectorWaveThreshold,
+            SectorWaveWindowSeconds = SectorWaveWindowSeconds,
+            SectorCooldownSeconds = SectorCooldownSeconds,
         };
     }
 }

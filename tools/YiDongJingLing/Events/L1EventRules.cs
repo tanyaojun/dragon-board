@@ -24,4 +24,8 @@ public sealed class L1EventRules
     public decimal UpcomingOpenMinSealVolume { get; set; } = 10_000m;
     public TimeSpan UpcomingOpenWindow { get; set; } = TimeSpan.FromSeconds(10);
     public decimal VolumeAccelerationRatio { get; set; } = 2.0m;
+    public decimal NewStockMinSurgePct { get; set; } = 10m;
+    public decimal NewStockOpenDropPct { get; set; } = 5m;
+    public decimal NewStockResealDrawdownPct { get; set; } = 1m;
+    public TimeSpan SpeedBaselineTolerance { get; set; } = TimeSpan.FromSeconds(10);
 }

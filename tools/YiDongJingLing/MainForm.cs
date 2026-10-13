@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using YiDongJingLing.Blocks;
+using YiDongJingLing.Concepts;
 using YiDongJingLing.Diagnostics;
 using YiDongJingLing.Events;
 using YiDongJingLing.MarketData;
@@ -12,6 +13,7 @@ namespace YiDongJingLing;
 public sealed class MainForm : Form
 {
     private const int MaxEventRecords = 100;
+    private const int MaxSectorRecords = 30;
     private const decimal MinOpeningCoverageRatio = 0.95m;
     private static readonly Color TerminalBack = Color.FromArgb(12, 16, 22);
     private static readonly Color TerminalPanel = Color.FromArgb(18, 24, 32);
@@ -31,7 +33,7 @@ public sealed class MainForm : Form
     private readonly QuoteStateStore _quoteStore = new();
     private readonly L1EventRules _eventRules = new();
     private readonly L1EventEngine _eventEngine;
-    private readonly EventDeduper _deduper = new();
+    private readonly EventDeduper _deduper;
     private readonly SpeechAnnouncer _speech;
     private readonly StockNameResolver _nameResolver = new();
     private readonly HotlistPoolLoader _hotlistLoader = new();
@@ -41,6 +43,13 @@ public sealed class MainForm : Form
     private readonly OpeningAuctionSampleTelemetryFileSink _openingSampleTelemetry;
     private readonly OpeningRawQuoteFileSink _openingRawQuoteSink;
     private readonly List<EventRecord> _eventRecords = [];
+    private readonly List<EventRecord> _sectorRecords = [];
+    private readonly SectorEventEngine _sectorEngine;
+    private readonly ConceptMapLoader _conceptLoader;
+    private readonly DataGridView _sectorGrid = new();
+    private ConceptMapResult _conceptMap = ConceptMapResult.Empty;
+    private bool _conceptLoading;
+    private readonly System.Windows.Forms.Timer _conceptTimer = new();
     private readonly string _root;
     private readonly BridgeProcessManager _bridgeManager;
     private readonly ProxyProcessManager _proxyManager;
@@ -64,6 +73,10 @@ public sealed class MainForm : Form
     private IReadOnlyList<string> _orderedHotlistCodes = Array.Empty<string>();
 
     private readonly System.Windows.Forms.Timer _healthTimer = new();
+    private readonly System.Windows.Forms.Timer _reconcileTimer = new();
+    private readonly LimitUpStreakLoader _limitUpStreakLoader;
+    private readonly XuangubaoReconciler _reconciler = new();
+    private bool _reconcileRunning;
     private readonly NotifyIcon _trayIcon = new();
     private readonly ContextMenuStrip _trayMenu = new();
     private readonly TextBox _blockDirBox = new();
@@ -109,6 +122,9 @@ public sealed class MainForm : Form
             Path.Combine(_root, "logs", "yidong-jingling", "opening-raw-quotes"),
             Log);
         _settings = _settingsStore.Load();
+        _deduper = new EventDeduper(
+            TimeSpan.FromSeconds(Math.Clamp(_settings.StateChangeCooldownSeconds, 5, 600)),
+            TimeSpan.FromSeconds(Math.Clamp(_settings.NoiseCooldownSeconds, 30, 3600)));
         var openingRules = new OpeningWeakToStrongRules(
             "09:20:00", "09:20:00", "09:20:30", "09:24:00",
             "09:24:50", "09:25:10", "09:30:00", "09:35:00",
@@ -123,6 +139,9 @@ public sealed class MainForm : Form
         _bridgeManager = new BridgeProcessManager(_root);
         _proxyManager = new ProxyProcessManager(_root);
         _speech = new SpeechAnnouncer(_root, Log);
+        _sectorEngine = new SectorEventEngine(BuildSectorRules());
+        _conceptLoader = new ConceptMapLoader(log: Log);
+        _limitUpStreakLoader = new LimitUpStreakLoader(log: Log);
 
         Text = "异动精灵 V2";
         Width = 1220;
@@ -147,6 +166,12 @@ public sealed class MainForm : Form
         _healthTimer.Interval = 5000;
         _healthTimer.Tick += async (_, _) => await HealthTickAsync();
         _healthTimer.Start();
+        _conceptTimer.Interval = Math.Clamp(_settings.ConceptMapRefreshMinutes, 5, 720) * 60 * 1000;
+        _conceptTimer.Tick += async (_, _) => await LoadConceptMapAsync(manual: false);
+        _conceptTimer.Start();
+        _reconcileTimer.Interval = 60_000;
+        _reconcileTimer.Tick += async (_, _) => await ReconcileTickAsync();
+        _reconcileTimer.Start();
 
         Shown += (_, _) =>
         {
@@ -154,6 +179,8 @@ public sealed class MainForm : Form
             Log($"项目目录: {_root}");
             UpdateRuntimeStatus();
             _ = AutoConnectOnStartupAsync();
+            _ = LoadConceptMapAsync(manual: false);
+            _ = LoadLimitUpStreaksAsync();
         };
     }
 
@@ -292,9 +319,10 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
         };
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 132));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         page.Controls.Add(layout);
@@ -325,6 +353,7 @@ public sealed class MainForm : Form
         _eventsGrid.Columns.Add("Type", "异动类型");
         _eventsGrid.Columns.Add("Code", "股票代码");
         _eventsGrid.Columns.Add("Name", "股票名称");
+        _eventsGrid.Columns.Add("Sector", "所属板块");
         _eventsGrid.Columns.Add("Change", "涨跌幅");
         _eventsGrid.Columns.Add("Price", "最新价");
         _eventsGrid.Columns.Add("Volume", "成交量");
@@ -334,6 +363,7 @@ public sealed class MainForm : Form
         _eventsGrid.Columns["Type"]!.FillWeight = 90;
         _eventsGrid.Columns["Code"]!.FillWeight = 72;
         _eventsGrid.Columns["Name"]!.FillWeight = 90;
+        _eventsGrid.Columns["Sector"]!.FillWeight = 90;
         _eventsGrid.Columns["Change"]!.FillWeight = 58;
         _eventsGrid.Columns["Price"]!.FillWeight = 58;
         _eventsGrid.Columns["Volume"]!.FillWeight = 76;
@@ -344,7 +374,25 @@ public sealed class MainForm : Form
         _eventsGrid.Columns["Volume"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
         _eventsGrid.Columns["Amount"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
         _eventsGrid.DoubleClick += (_, _) => CopySelectedEventCode();
-        layout.Controls.Add(_eventsGrid, 0, 1);
+
+        ConfigureGrid(_sectorGrid);
+        _sectorGrid.Columns.Add("STime", "时间");
+        _sectorGrid.Columns.Add("SSector", "板块");
+        _sectorGrid.Columns.Add("SType", "类型");
+        _sectorGrid.Columns.Add("SAvg", "均涨");
+        _sectorGrid.Columns.Add("SReason", "详情");
+        _sectorGrid.Columns["STime"]!.FillWeight = 62;
+        _sectorGrid.Columns["SSector"]!.FillWeight = 110;
+        _sectorGrid.Columns["SType"]!.FillWeight = 100;
+        _sectorGrid.Columns["SAvg"]!.FillWeight = 60;
+        _sectorGrid.Columns["SReason"]!.FillWeight = 300;
+        _sectorGrid.Columns["SAvg"]!.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        _sectorGrid.ColumnHeadersDefaultCellStyle.BackColor = TerminalHeader;
+        _sectorGrid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.EnableResizing;
+        _sectorGrid.ColumnHeadersHeight = 26;
+        layout.Controls.Add(_sectorGrid, 0, 1);
+
+        layout.Controls.Add(_eventsGrid, 0, 2);
 
         var footer = new TableLayoutPanel
         {
@@ -411,7 +459,7 @@ public sealed class MainForm : Form
         };
         actions.Controls.Add(clearBtn);
         footer.Controls.Add(actions, 1, 0);
-        layout.Controls.Add(footer, 0, 2);
+        layout.Controls.Add(footer, 0, 3);
 
         return page;
     }
@@ -906,6 +954,7 @@ public sealed class MainForm : Form
                 LoadBlockFiles();
             }
             await LoadSelectedBlocksAndSubscribeAsync(resetRuntimeState: true);
+            await LoadConceptMapAsync(manual: false);
             Log(manual ? "已手动刷新股票池和监控订阅。" : "股票池变化，已自动刷新监控订阅。");
         }
         catch (Exception ex)
@@ -1071,6 +1120,7 @@ public sealed class MainForm : Form
     {
         _quoteStore.Clear();
         _eventEngine.Clear();
+        _sectorEngine.Clear();
         _deduper.Clear();
         _lastOpeningCoverage = null;
         _lastOpeningSignal = null;
@@ -1081,6 +1131,8 @@ public sealed class MainForm : Form
     {
         _eventRecords.Clear();
         _eventsGrid.Rows.Clear();
+        _sectorRecords.Clear();
+        _sectorGrid.Rows.Clear();
         _lastOpeningCoverage = null;
         _lastOpeningSignal = null;
         ResetTodayCounterIfNeeded();
@@ -1215,6 +1267,7 @@ public sealed class MainForm : Form
         ResetTodayCounterIfNeeded();
 
         var allEvents = new List<EventRecord>();
+        var batchQuotes = new List<QuoteSnapshot>();
         var skippedOutsideSession = 0;
         var primed = 0;
         var acceptedQuotes = 0;
@@ -1228,6 +1281,7 @@ public sealed class MainForm : Form
                 continue;
             }
             acceptedQuotes++;
+            batchQuotes.Add(normalizedQuote);
             _lastQuoteTime = normalizedQuote.SourceTime;
             UpdateOpeningCoverageFromQuote(normalizedQuote);
             RecordOpeningRawQuote(normalizedQuote);
@@ -1291,8 +1345,13 @@ public sealed class MainForm : Form
             .Where(item => _settings.IsEventEnabled(item.Type.ToString()))
             .ToArray();
         var emitted = _deduper.Filter(enabled);
-        if (emitted.Count == 0) return;
+        var sectorEmitted = EvaluateSectorEvents(batchQuotes, emitted);
+        if (emitted.Count == 0 && sectorEmitted.Count == 0) return;
 
+        foreach (var item in sectorEmitted)
+        {
+            AddSectorRow(item);
+        }
         foreach (var item in emitted)
         {
             AddEventRow(item);
@@ -1301,11 +1360,12 @@ public sealed class MainForm : Form
             .Where(item => item.Type == L1EventType.OpeningWeakToStrong)
             .ToArray();
         var openingVoiceEvents = EventVoicePolicy
-            .FilterForVoice(openingEvents, _settings.VoiceMode)
+            .FilterForVoice(openingEvents, _settings.VoiceMode, _settings)
             .ToList();
         var voiceEvents = EventVoicePolicy
-            .FilterForVoice(emitted.Where(item => item.Type != L1EventType.OpeningWeakToStrong), _settings.VoiceMode)
+            .FilterForVoice(emitted.Where(item => item.Type != L1EventType.OpeningWeakToStrong), _settings.VoiceMode, _settings)
             .ToList();
+        voiceEvents.AddRange(EventVoicePolicy.FilterForVoice(sectorEmitted, _settings.VoiceMode, _settings));
         ApplyHotlistTopVoiceFilter(openingVoiceEvents);
         ApplyHotlistTopVoiceFilter(voiceEvents);
         if (openingEvents.Length > 0)
@@ -1314,11 +1374,15 @@ public sealed class MainForm : Form
         }
         if (voiceEvents.Count > 0)
         {
-            _speech.Announce(voiceEvents);
+            // Critical 抢占：清空播报队列立即播报；其余按队列 + 限流播报
+            var criticalVoice = voiceEvents.Where(item => item.Severity == L1EventSeverity.Critical).ToList();
+            var restVoice = voiceEvents.Where(item => item.Severity != L1EventSeverity.Critical).ToList();
+            if (criticalVoice.Count > 0) _ = _speech.AnnounceCriticalAsync(criticalVoice);
+            if (restVoice.Count > 0) _speech.Announce(restVoice);
         }
         if (_settings.SyncMessages)
         {
-            var pushEvents = EventVoicePolicy.FilterForPush(emitted);
+            var pushEvents = EventVoicePolicy.FilterForPush(emitted.Concat(sectorEmitted).ToArray());
             _ = SyncMessagesAsync(pushEvents);
         }
     }
@@ -1424,6 +1488,177 @@ public sealed class MainForm : Form
             : quote with { Name = name };
     }
 
+    private void AddSectorRow(EventRecord item)
+    {
+        _sectorRecords.Insert(0, item);
+        _sectorGrid.Rows.Insert(
+            0,
+            item.Timestamp.ToLocalTime().ToString("HH:mm:ss"),
+            item.Sector,
+            item.TypeName,
+            $"{item.ChangePct:0.##}%",
+            item.Reason);
+        while (_sectorRecords.Count > MaxSectorRecords)
+        {
+            _sectorRecords.RemoveAt(_sectorRecords.Count - 1);
+        }
+        while (_sectorGrid.Rows.Count > MaxSectorRecords)
+        {
+            _sectorGrid.Rows.RemoveAt(_sectorGrid.Rows.Count - 1);
+        }
+    }
+
+    private IReadOnlyList<EventRecord> EvaluateSectorEvents(
+        IReadOnlyList<QuoteSnapshot> batchQuotes,
+        IReadOnlyList<EventRecord> stockEvents)
+    {
+        if (!_settings.SectorEventsEnabled || batchQuotes.Count == 0) return Array.Empty<EventRecord>();
+        if (!TradingSession.IsContinuousAuction(DateTimeOffset.Now)) return Array.Empty<EventRecord>();
+
+        var now = batchQuotes.Max(item => item.SourceTime);
+        var sectorAll = _sectorEngine.Evaluate(batchQuotes, stockEvents, _conceptMap, now);
+        var enabled = sectorAll
+            .Where(item => _settings.IsEventEnabled(item.Type.ToString()))
+            .ToArray();
+        return _deduper.Filter(enabled);
+    }
+
+    private SectorEventRules BuildSectorRules()
+    {
+        return new SectorEventRules
+        {
+            MinRiseCount = Math.Max(1, _settings.SectorMinMoveCount),
+            RiseRatio = Math.Clamp(_settings.SectorMoveRatio, 0.1m, 1m),
+            RushMinAvgPct = _settings.SectorMoveMinAvgPct,
+            MinFallCount = Math.Max(1, _settings.SectorMinMoveCount),
+            FallRatio = Math.Clamp(_settings.SectorMoveRatio, 0.1m, 1m),
+            DiveMaxAvgPct = -_settings.SectorMoveMinAvgPct,
+            WaveThreshold = Math.Max(1, _settings.SectorWaveThreshold),
+            WaveWindow = TimeSpan.FromSeconds(Math.Clamp(_settings.SectorWaveWindowSeconds, 30, 7200)),
+            Cooldown = TimeSpan.FromSeconds(Math.Clamp(_settings.SectorCooldownSeconds, 30, 7200)),
+        };
+    }
+
+    private async Task LoadLimitUpStreaksAsync()
+    {
+        try
+        {
+            if (!BridgeProcessManager.IsPortOpen(3000))
+            {
+                _proxyManager.StartProxy(Log);
+                await WaitForProxyPortAsync(3000, "涨停池可能加载失败");
+            }
+
+            var result = await _limitUpStreakLoader.LoadAsync(new Uri("http://127.0.0.1:3000"));
+            _eventEngine.SetLimitUpStreaks(result.Streaks);
+            var message = $"涨停池已加载: {result.CoveredDates.Count} 个交易日，{result.Streaks.Count} 只昨日涨停";
+            if (result.CoveredDates.Count > 0)
+            {
+                message += $"（基准 {result.CoveredDates[0]}）";
+            }
+            if (result.Errors.Count > 0) message += $"，{result.Errors.Count} 条告警";
+            Log(message + "。");
+            foreach (var error in result.Errors.Take(3))
+            {
+                Log($"  涨停池告警: {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"涨停池加载失败: {ex.Message}");
+        }
+    }
+
+    private async Task ReconcileTickAsync()
+    {
+        if (_closing || _reconcileRunning) return;
+        if (_watchedCodes.Count == 0 || _eventRecords.Count == 0) return;
+        if (!TradingSession.IsContinuousAuction(DateTimeOffset.Now)) return;
+        _reconcileRunning = true;
+        try
+        {
+            if (!BridgeProcessManager.IsPortOpen(3000)) return;
+            var localCodes = _eventRecords.Select(item => item.Code).ToArray();
+            var result = await _reconciler.ReconcileAsync(new Uri("http://127.0.0.1:3000"), localCodes);
+            if (result.Errors.Count > 0)
+            {
+                Log($"选股宝对账异常: {result.Errors[0]}");
+                return;
+            }
+            if (result.Gaps.Count == 0)
+            {
+                Log($"选股宝对账: 上游 {result.UpstreamCount} 条，本地全覆盖。");
+                return;
+            }
+            Log($"选股宝对账: 上游 {result.UpstreamCount} 条，本地未覆盖 {result.Gaps.Count} 条（检测鸿隙遥测）：");
+            foreach (var gap in result.Gaps.Take(3))
+            {
+                Log($"  漏报候选 {gap.Code} {gap.Name} 类型{gap.EventType} @ {gap.EventTime.ToLocalTime():HH:mm:ss}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"选股宝对账失败: {ex.Message}");
+        }
+        finally
+        {
+            _reconcileRunning = false;
+        }
+    }
+
+    private async Task LoadConceptMapAsync(bool manual)
+    {
+        if (!_settings.ConceptMapEnabled || _conceptLoading) return;
+        _conceptLoading = true;
+        try
+        {
+            if (!BridgeProcessManager.IsPortOpen(3000))
+            {
+                _proxyManager.StartProxy(Log);
+                await WaitForProxyPortAsync(3000, "概念映射可能加载失败");
+            }
+
+            var result = await _conceptLoader.LoadAsync(new Uri("http://127.0.0.1:3000"), CollectBlkSectors());
+            _conceptMap = result;
+            var message = $"概念映射已加载: {result.SectorToStocks.Count} 个板块";
+            if (result.Stale) message += "（陈旧缓存）";
+            if (result.Errors.Count > 0) message += $"，{result.Errors.Count} 条告警";
+            Log(message + (manual ? "（手动）" : "。"));
+            foreach (var error in result.Errors.Take(3))
+            {
+                Log($"  概念映射告警: {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"概念映射加载失败: {ex.Message}");
+        }
+        finally
+        {
+            _conceptLoading = false;
+        }
+    }
+
+    private IReadOnlyList<KeyValuePair<string, IReadOnlyList<string>>> CollectBlkSectors()
+    {
+        var list = new List<KeyValuePair<string, IReadOnlyList<string>>>();
+        foreach (var path in CheckedBlockPaths())
+        {
+            var parsed = _parser.ParseFile(path);
+            if (parsed.Codes.Count == 0) continue;
+            list.Add(new KeyValuePair<string, IReadOnlyList<string>>(
+                Path.GetFileNameWithoutExtension(path),
+                parsed.Codes.Select(item => item.Code).ToArray()));
+        }
+        return list;
+    }
+
+    private string SectorsText(string code)
+    {
+        var sectors = _conceptMap.SectorsOf(code);
+        return sectors.Count == 0 ? "" : string.Join("、", sectors.Take(2));
+    }
+
     private void AddEventRow(EventRecord item)
     {
         ResetTodayCounterIfNeeded();
@@ -1436,6 +1671,7 @@ public sealed class MainForm : Form
             item.TypeName,
             item.Code,
             displayName,
+            SectorsText(item.Code),
             $"{item.ChangePct:0.##}%",
             $"{item.Price:0.00}",
             FormatVolume(item.Volume),
@@ -1645,7 +1881,7 @@ public sealed class MainForm : Form
             StringComparer.Ordinal);
         for (var i = voiceEvents.Count - 1; i >= 0; i--)
         {
-            if (!topCodes.Contains(voiceEvents[i].Code))
+            if (!voiceEvents[i].IsSectorEvent && !topCodes.Contains(voiceEvents[i].Code))
             {
                 voiceEvents.RemoveAt(i);
             }
@@ -1792,6 +2028,8 @@ public sealed class MainForm : Form
     {
         _closing = true;
         _healthTimer.Stop();
+        _conceptTimer.Stop();
+        _reconcileTimer.Stop();
         _trayIcon.Visible = false;
         SaveSettingsFromUi();
         _bridgeClient?.Disconnect();

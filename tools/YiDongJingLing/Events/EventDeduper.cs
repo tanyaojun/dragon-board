@@ -2,13 +2,18 @@ namespace YiDongJingLing.Events;
 
 public sealed class EventDeduper
 {
+    private static readonly TimeSpan DefaultStateChangeCooldown = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan DefaultNoiseCooldown = TimeSpan.FromSeconds(180);
+
     private readonly Dictionary<string, DateTimeOffset> _lastEmittedAt = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _lastOpeningIntradayPriority = new(StringComparer.Ordinal);
-    private readonly TimeSpan _defaultCooldown;
+    private readonly TimeSpan _stateChangeCooldown;
+    private readonly TimeSpan _noiseCooldown;
 
-    public EventDeduper(TimeSpan? defaultCooldown = null)
+    public EventDeduper(TimeSpan? stateChangeCooldown = null, TimeSpan? noiseCooldown = null)
     {
-        _defaultCooldown = defaultCooldown ?? TimeSpan.FromSeconds(180);
+        _stateChangeCooldown = stateChangeCooldown ?? DefaultStateChangeCooldown;
+        _noiseCooldown = noiseCooldown ?? DefaultNoiseCooldown;
     }
 
     public void Clear()
@@ -20,16 +25,12 @@ public sealed class EventDeduper
     public IReadOnlyList<EventRecord> Filter(IReadOnlyList<EventRecord> events)
     {
         var result = new List<EventRecord>();
-        foreach (var group in events.GroupBy(BatchGroupKey))
+        foreach (var item in events)
         {
-            foreach (var item in group.OrderByDescending(Score).ThenByDescending(item => item.Timestamp))
-            {
-                if (!CanEmit(item)) continue;
-                _lastEmittedAt[item.DedupeKey] = item.Timestamp;
-                RememberOpeningIntradayPriority(item);
-                result.Add(item);
-                break;
-            }
+            if (!CanEmit(item)) continue;
+            _lastEmittedAt[item.DedupeKey] = item.Timestamp;
+            RememberOpeningIntradayPriority(item);
+            result.Add(item);
         }
 
         return result
@@ -75,28 +76,62 @@ public sealed class EventDeduper
 
     private TimeSpan CooldownFor(L1EventType type)
     {
-        return type is L1EventType.LimitUpOpened or L1EventType.LimitDownOpened
-                or L1EventType.UpcomingLimitUpOpen or L1EventType.UpcomingLimitDownOpen
-                or L1EventType.OpeningWeakToStrong
-            ? TimeSpan.FromSeconds(30)
-            : _defaultCooldown;
+        return IsStateChangeType(type) ? _stateChangeCooldown : _noiseCooldown;
     }
 
-    private static string BatchGroupKey(EventRecord item)
+    private static bool IsStateChangeType(L1EventType type)
     {
-        return item.Type == L1EventType.OpeningWeakToStrong
-            ? $"{item.Code}:{item.Type}"
-            : item.Code;
+        return type is L1EventType.LimitUpSealed
+            or L1EventType.LimitUpOpened
+            or L1EventType.UpcomingLimitUpOpen
+            or L1EventType.LimitDownSealed
+            or L1EventType.LimitDownOpened
+            or L1EventType.UpcomingLimitDownOpen
+            or L1EventType.NearLimitUp
+            or L1EventType.NearLimitDown
+            or L1EventType.FastRise
+            or L1EventType.FastDrop
+            or L1EventType.TurnRed
+            or L1EventType.TurnGreen
+            or L1EventType.IntradayHigh
+            or L1EventType.IntradayLow
+            or L1EventType.OpeningWeakToStrong
+            or L1EventType.LowOpenLongYang
+            or L1EventType.HighOpenLongYin
+            or L1EventType.NewStockOpened
+            or L1EventType.NewStockReseal
+            or L1EventType.LimitUpResealed;
     }
 
-    public static string BuildSpeechText(IReadOnlyList<EventRecord> events, int maxItems = 3)
+    public static string BuildSpeechText(IReadOnlyList<EventRecord> events)
     {
-        if (events.Count == 0) return "";
+        return events.Count == 0
+            ? ""
+            : $"新增{events.Count}条异动，" + string.Join("，", events.Select(item => $"{item.DisplayName}{item.TypeName}"));
+    }
 
-        var items = events.Take(maxItems).Select(item => $"{item.DisplayName}{item.TypeName}").ToArray();
-        return events.Count == 1
-            ? $"{items[0]}，涨幅{events[0].ChangePct:0.##}%"
-            : $"新增{events.Count}条异动，{string.Join("，", items)}";
+    public static IReadOnlyList<string> BuildSpeechItems(IReadOnlyList<EventRecord> events)
+    {
+        return events
+            .OrderBy(item => item.Timestamp)
+            .Select(BuildSpeechTextForEvent)
+            .ToArray();
+    }
+
+    public static string BuildSpeechTextForEvent(EventRecord item)
+    {
+        if (item.Type is L1EventType.LimitUpSealed or L1EventType.LimitDownSealed or L1EventType.LimitUpResealed)
+        {
+            return $"{item.DisplayName}，{item.TypeName}，{item.Reason}";
+        }
+        return ShouldSpeakChangePct(item.Type)
+            ? $"{item.DisplayName}，{item.TypeName}，涨幅{item.ChangePct:0.##}%"
+            : $"{item.DisplayName}，{item.TypeName}";
+    }
+
+    private static bool ShouldSpeakChangePct(L1EventType type)
+    {
+        return type is L1EventType.FastRise or L1EventType.FastDrop;
     }
 
     private static int Score(EventRecord item)
@@ -112,6 +147,9 @@ public sealed class EventDeduper
         {
             L1EventType.LimitUpSealed => 50,
             L1EventType.LimitUpOpened => 45,
+            L1EventType.NewStockOpened => 44,
+            L1EventType.NewStockReseal => 43,
+            L1EventType.LimitUpResealed => 47,
             L1EventType.UpcomingLimitUpOpen => 43,
             L1EventType.LimitDownSealed => 44,
             L1EventType.LimitDownOpened => 42,
@@ -125,6 +163,10 @@ public sealed class EventDeduper
             L1EventType.NearLimitDown => 28,
             L1EventType.BigRiseTier => 25,
             L1EventType.BigDropTier => 24,
+            L1EventType.SectorLimitUpWave => 46,
+            L1EventType.SectorLimitUpOpenWave => 42,
+            L1EventType.SectorRush => 26,
+            L1EventType.SectorDive => 25,
             _ => 0,
         };
 

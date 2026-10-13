@@ -15,6 +15,7 @@ public sealed class SpeechAnnouncer : IDisposable
     private readonly HttpClient _client;
     private readonly string _root;
     private readonly Action<string>? _log;
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private Process? _workerProcess;
     private bool _startedWorker;
     private volatile bool _enabled = true;
@@ -58,15 +59,51 @@ public sealed class SpeechAnnouncer : IDisposable
         _ = AnnounceAsync(events);
     }
 
+    /// <summary>
+    /// Critical 抢占：清空 VoiceWorker 队列后立即播报。经 _gate 串行化——
+    /// 若普通批次正在持锁播报，需等其播完才抢占（跨批次抢占语义；同批次内与普通播报的先后由锁竞争决定）。
+    /// </summary>
+    public void AnnounceCritical(IReadOnlyList<EventRecord> events)
+    {
+        _ = AnnounceCriticalAsync(events);
+    }
+
+    public async Task AnnounceCriticalAsync(IReadOnlyList<EventRecord> events)
+    {
+        if (!Enabled || events.Count == 0) return;
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+            foreach (var text in EventDeduper.BuildSpeechItems(events))
+            {
+                await SpeakAsync(text, Rate, Volume, Voice).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task AnnounceAsync(IReadOnlyList<EventRecord> events)
     {
         if (!Enabled) return;
-        var text = EventDeduper.BuildSpeechText(events);
-        if (!string.IsNullOrWhiteSpace(text))
+        if (events.Count == 0) return;
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            await SpeakAsync(text, Rate, Volume, Voice).ConfigureAwait(false);
+            foreach (var text in EventDeduper.BuildSpeechItems(events))
+            {
+                await SpeakAsync(text, Rate, Volume, Voice).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _gate.Release();
         }
     }
+
 
     public void Test()
     {
@@ -86,6 +123,21 @@ public sealed class SpeechAnnouncer : IDisposable
     }
 
     public async Task StopAsync()
+    {
+        // 停止与播报共用 _gate：防止 /stop 清队后持锁的播报循环继续把队列填满
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>持锁内部停止：仅供已持有 _gate 的路径调用，避免信号量重入死锁。</summary>
+    private async Task StopCoreAsync()
     {
         await PostAsync("stop", new { }, ensureWorker: false).ConfigureAwait(false);
     }

@@ -30,6 +30,13 @@ public enum L1EventType
     BidPressure,
     AskPressure,
     SpreadWidened,
+    NewStockOpened,
+    NewStockReseal,
+    LimitUpResealed,
+    SectorRush,
+    SectorDive,
+    SectorLimitUpWave,
+    SectorLimitUpOpenWave,
 }
 
 public enum L1EventSeverity
@@ -51,8 +58,11 @@ public sealed record EventRecord(
     DateTimeOffset Timestamp,
     L1EventSeverity Severity,
     string Reason,
-    OpeningWeakToStrongSignal? OpeningSignal = null)
+    OpeningWeakToStrongSignal? OpeningSignal = null,
+    string Sector = "",
+    string MemberCodes = "")
 {
-    public string DedupeKey => $"{Code}:{Type}";
+    public string DedupeKey => Sector.Length > 0 ? $"S:{Sector}:{Type}" : $"{Code}:{Type}";
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? Code : Name;
+    public bool IsSectorEvent => Sector.Length > 0;
 }

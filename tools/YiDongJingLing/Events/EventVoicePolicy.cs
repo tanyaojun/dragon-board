@@ -16,6 +16,22 @@ public static class EventVoicePolicy
         };
     }
 
+    /// <summary>语音层过滤：VoiceEvents 勾选优先（只影响语音）；未固化勾选时沿用历史行为。</summary>
+    public static IReadOnlyList<EventRecord> FilterForVoice(
+        IEnumerable<EventRecord> events,
+        VoiceMode mode,
+        AppSettings settings)
+    {
+        if (mode == VoiceMode.Muted) return [];
+        if (settings.VoiceEvents.Count > 0)
+        {
+            return events
+                .Where(item => settings.IsVoiceEventEnabled(item.Type.ToString()) && IsVoiceEligible(item))
+                .ToArray();
+        }
+        return FilterForVoice(events, mode);
+    }
+
     public static IReadOnlyList<EventRecord> FilterForPush(IEnumerable<EventRecord> events)
     {
         return events.Where(item => IsVoiceEligible(item) && IsStrongSignal(item)).ToArray();
