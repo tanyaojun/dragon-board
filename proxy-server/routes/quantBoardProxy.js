@@ -22,6 +22,7 @@ const QUANT_BOARD_PREFIXES = [
   '/api/surge-stock/',
   '/api/sentiment/',
   '/api/big-order/',
+  '/api/concepts/',
   '/api/xuangubao/',
   '/api/themes/mapping',
   '/api/themes/heat',
