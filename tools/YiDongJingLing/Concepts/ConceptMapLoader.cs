@@ -33,8 +33,11 @@ public sealed class ConceptMapLoader
     private readonly HttpClient _client;
     private readonly string _cachePath;
     private readonly Action<string>? _log;
+    private readonly int _maxAttempts;
+    private readonly TimeSpan _retryDelay;
 
-    public ConceptMapLoader(HttpClient? client = null, string? cachePath = null, Action<string>? log = null)
+    public ConceptMapLoader(HttpClient? client = null, string? cachePath = null, Action<string>? log = null,
+        int maxAttempts = 13, double retryDelaySeconds = 15)
     {
         _client = client ?? new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         var dir = Path.Combine(
@@ -44,6 +47,8 @@ public sealed class ConceptMapLoader
         Directory.CreateDirectory(dir);
         _cachePath = cachePath ?? Path.Combine(dir, "concept-map-cache.json");
         _log = log;
+        _maxAttempts = Math.Max(1, maxAttempts);
+        _retryDelay = TimeSpan.FromSeconds(Math.Max(0, retryDelaySeconds));
     }
 
     /// <summary>
@@ -56,44 +61,59 @@ public sealed class ConceptMapLoader
         CancellationToken cancellationToken = default)
     {
         var errors = new List<string>();
-        IReadOnlyList<ConceptSector> sectors;
+        IReadOnlyList<ConceptSector> sectors = Array.Empty<ConceptSector>();
         DateTimeOffset? fetchedAt = null;
         var stale = false;
 
-        try
+        // 服务端首刷需 1-2 分钟（506 板块成分），以 refreshing 标记后台进行中：
+        // 这里轮询等待（15s×12≈3 分钟上限），等待期间 .blk 板块维度已可独立工作
+        for (var attempt = 1; attempt <= _maxAttempts; attempt++)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(proxyBaseUri, "/api/concepts/map"));
-            using var response = await _client.SendAsync(request, cancellationToken);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-            (sectors, var serverErrors, fetchedAt, stale) = ParseResponse(document.RootElement);
-            errors.AddRange(serverErrors);
-            SaveCache(document.RootElement);
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(proxyBaseUri, "/api/concepts/map"));
+                using var response = await _client.SendAsync(request, cancellationToken);
+                response.EnsureSuccessStatusCode();
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+                (sectors, var serverErrors, fetchedAt, stale, var refreshing) = ParseResponse(document.RootElement);
+                errors.Clear();
+                errors.AddRange(serverErrors);
+                var retryable = refreshing || errors.Any(item => item.StartsWith("invalid_payload", StringComparison.Ordinal));
+                if (!retryable)
+                {
+                    SaveCache(document.RootElement);
+                    break;
+                }
+                _log?.Invoke($"概念映射后台刷新中（查询 {attempt}/{_maxAttempts}）…");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                errors.Clear();
+                errors.Add($"server_unavailable: {ex.Message}");
+                _log?.Invoke($"概念映射请求失败（{attempt}/{_maxAttempts}）: {ex.Message}");
+            }
+            if (attempt < _maxAttempts)
+            {
+                await Task.Delay(_retryDelay, cancellationToken);
+            }
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
+
+        if (sectors.Count == 0)
         {
             var cached = LoadCache();
-            if (cached is null)
+            if (cached is not null)
             {
-                errors.Add($"server_unavailable_no_cache: {ex.Message}");
-                return new ConceptMapResult(
-                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal),
-                    new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal),
-                    null,
-                    false,
-                    errors);
+                (sectors, var cacheErrors, fetchedAt, _, _) = cached.Value;
+                stale = true;
+                errors.Add("serving_local_cache");
+                errors.AddRange(cacheErrors);
+                _log?.Invoke("概念映射服务不可用，已回退本地缓存。");
             }
-
-            (sectors, var cacheErrors, fetchedAt, _) = cached.Value;
-            stale = true;
-            errors.Add($"server_unavailable_serving_cache: {ex.Message}");
-            errors.AddRange(cacheErrors);
-            _log?.Invoke("概念映射服务不可用，已回退本地缓存。");
         }
 
         return BuildResult(sectors, blkSectors, fetchedAt, stale, errors);
@@ -153,7 +173,7 @@ public sealed class ConceptMapLoader
     }
 
     /// <summary>解析 /api/concepts/map 响应。无有效成员的板块计入 errors，不静默丢弃。</summary>
-    public static (IReadOnlyList<ConceptSector> Sectors, IReadOnlyList<string> Errors, DateTimeOffset? FetchedAt, bool Stale)
+    public static (IReadOnlyList<ConceptSector> Sectors, IReadOnlyList<string> Errors, DateTimeOffset? FetchedAt, bool Stale, bool Refreshing)
         ParseResponse(JsonElement root)
     {
         var errors = new List<string>();
@@ -161,7 +181,7 @@ public sealed class ConceptMapLoader
             data.ValueKind != JsonValueKind.Array)
         {
             errors.Add("invalid_payload: data missing");
-            return (Array.Empty<ConceptSector>(), errors, null, false);
+            return (Array.Empty<ConceptSector>(), errors, null, false, false);
         }
 
         DateTimeOffset? fetchedAt = null;
@@ -172,6 +192,7 @@ public sealed class ConceptMapLoader
             fetchedAt = parsed;
         }
         var stale = root.TryGetProperty("stale", out var staleEl) && staleEl.ValueKind == JsonValueKind.True;
+        var refreshing = root.TryGetProperty("refreshing", out var refreshingEl) && refreshingEl.ValueKind == JsonValueKind.True;
 
         if (root.TryGetProperty("errors", out var serverErrorsEl) && serverErrorsEl.ValueKind == JsonValueKind.Array)
         {
@@ -234,7 +255,7 @@ public sealed class ConceptMapLoader
             sectors.Add(new ConceptSector(code, name, null, stocks));
         }
 
-        return (sectors, errors, fetchedAt, stale);
+        return (sectors, errors, fetchedAt, stale, refreshing);
     }
 
     private void SaveCache(JsonElement root)
@@ -249,7 +270,7 @@ public sealed class ConceptMapLoader
         }
     }
 
-    private (IReadOnlyList<ConceptSector> Sectors, IReadOnlyList<string> Errors, DateTimeOffset? FetchedAt, bool Stale)? LoadCache()
+    private (IReadOnlyList<ConceptSector> Sectors, IReadOnlyList<string> Errors, DateTimeOffset? FetchedAt, bool Stale, bool Refreshing)? LoadCache()
     {
         try
         {

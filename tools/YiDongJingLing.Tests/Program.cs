@@ -1177,7 +1177,8 @@ Run("Sector open wave triggers on two limit-up opened", () =>
 Run("Concept map parse filters invalid stocks and reports empty sectors", () =>
 {
     using var document = JsonDocument.Parse(ConceptFixtures.Payload);
-    var (sectors, errors, fetchedAt, stale) = ConceptMapLoader.ParseResponse(document.RootElement);
+    var (sectors, errors, fetchedAt, stale, refreshing) = ConceptMapLoader.ParseResponse(document.RootElement);
+    AssertTrue(!refreshing, "server payload not refreshing");
 
     AssertTrue(!stale, "payload not stale");
     AssertTrue(fetchedAt is not null, "fetchedAt parsed");
@@ -1190,7 +1191,7 @@ Run("Concept map parse filters invalid stocks and reports empty sectors", () =>
 Run("Concept map build merges server and blk with reverse index", () =>
 {
     using var document = JsonDocument.Parse(ConceptFixtures.Payload);
-    var (sectors, errors, _, _) = ConceptMapLoader.ParseResponse(document.RootElement);
+    var (sectors, errors, _, _, _) = ConceptMapLoader.ParseResponse(document.RootElement);
     var blk = new List<KeyValuePair<string, IReadOnlyList<string>>>
     {
         new("SB", ["600000", "000001", "999888"]),
@@ -1216,13 +1217,13 @@ Run("Concept map load falls back to disk cache when server down", () =>
             File.WriteAllText(cachePath, document.RootElement.GetRawText());
         }
         using var httpClient = new HttpClient(new StubConceptHandler());
-        var loader = new ConceptMapLoader(httpClient, cachePath);
+        var loader = new ConceptMapLoader(httpClient, cachePath, maxAttempts: 2, retryDelaySeconds: 0);
 
         var result = loader.LoadAsync(new Uri("http://127.0.0.1:3000/"), []).GetAwaiter().GetResult();
 
         AssertTrue(result.Stale, "stale flagged on cache fallback");
         AssertTrue(result.SectorToStocks.Count > 0, "cache sectors present");
-        AssertTrue(result.Errors.Any(item => item.StartsWith("server_unavailable_serving_cache")), "degradation surfaced");
+        AssertTrue(result.Errors.Any(item => item.StartsWith("serving_local_cache")), "degradation surfaced");
     }
     finally
     {
@@ -1240,7 +1241,7 @@ Run("Concept map load degrades visibly without cache", () =>
     var result = loader.LoadAsync(new Uri("http://127.0.0.1:3000/"), []).GetAwaiter().GetResult();
 
     AssertEqual(0, result.SectorToStocks.Count, "no sectors without data");
-    AssertTrue(result.Errors.Any(item => item.StartsWith("server_unavailable_no_cache")), "no-cache error surfaced");
+    AssertTrue(result.Errors.Any(item => item.StartsWith("server_unavailable")), "no-cache error surfaced");
 });
 
 Run("L1 engine detects limit-up reseal as distinct event", () =>
