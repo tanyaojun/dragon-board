@@ -27,7 +27,7 @@ EXPECTED_AMMO = "2026-10-13b"
 
 def _trading_dates(db: Any, dataset_id: str) -> list[str]:
     return sorted({str(f["tradingDate"]) for f in db["snapshot_frames"].find(
-        {"datasetId": dataset_id, "type": "half_hour", "slotTime": "15:00"},
+        {"datasetId": dataset_id, "tradingDate": {"$exists": True}},
         {"tradingDate": 1}) if f.get("tradingDate")})
 
 
@@ -61,8 +61,7 @@ def _score(direction: str, t1: float | None) -> bool | None:
     return abs(t1) < 5.0
 
 
-def build_ledger(db: Any, dataset_id: str = "dragonboard_live",
-                 start: str = VERIFY_START) -> dict[str, Any]:
+def build_ledger(db: Any, dataset_id: str, start: str = VERIFY_START) -> dict[str, Any]:
     col = db["hotlist_jev_vote_confirm_pilot"]
     out: dict[str, Any] = {"v4": {"n": 0, "win": 0}, "rule": {"n": 0, "win": 0}, "days": []}
     for doc in col.find({"slotTime": "11:00", "questionSetVersion": "v4-material",

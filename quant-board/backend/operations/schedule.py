@@ -507,7 +507,8 @@ def _run_vote_winrate_ledger_step(today: str, dry_run: bool = False) -> dict[str
         return {"ok": True, "skipped": True, "reason": "dry_run"}
     try:
         db = repository_factory.get_runtime_mongodb_database()
-        ledger = build_ledger(db)
+        dataset_id = getattr(settings, "archive_auto_dataset_id", "dragonboard_live")
+        ledger = build_ledger(db, dataset_id=dataset_id)
         persist_winrate_ledger(db, ledger)
         s = ledger["summary"]
         return {"ok": True, "v4Rate": s["v4Rate"], "ruleRate": s["ruleRate"],
