@@ -107,13 +107,17 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         code = str(doc.get("code") or "")
         if code:
             analysis_by_code[code] = doc.get("analysis") or {}
-    # 台账文档锁 15:00 槽（watch 模式 11:30/15:00 同集合按槽写入）：跨槽拼接违预登记 §四
-    # 「引擎档位不可跨帧拼接」，且 11:30 判读冒充 15:00 台账（review blocker 修复）
+    # vote 台账：v4-material 代（2026-10-13 题集代际覆盖）判读时点=11:00（slotTime="11:00"），
+    # v1 代（退役）=15:00——join 双槽兼容，同 code 两代并存时代际新（11:00）覆盖旧；
+    # 读口返回 shape 零变化（前端合同不变）。LC 仍锁 15:00 槽（跨槽拼接禁令不变）。
     vote_by_code: dict[str, dict[str, Any]] = {}
     for doc in db["hotlist_jev_vote_confirm_pilot"].find(
-            {"tradingDate": date, "slotTime": PILOT_SLOT}):
+            {"tradingDate": date, "slotTime": {"$in": (PILOT_SLOT, "11:00")}}):
         code = str(doc.get("code") or "")
-        if code:
+        if not code:
+            continue
+        prev = vote_by_code.get(code)
+        if prev is None or (doc.get("slotTime") == "11:00" and prev.get("slotTime") != "11:00"):
             vote_by_code[code] = doc
     lc_by_code: dict[str, dict[str, Any]] = {}
     for doc in db["hotlist_jev_lifecycle_recheck_pilot"].find(

@@ -215,239 +215,6 @@ def _insufficient_doc(kind: str, date: str, code: str, name: Any, rf: dict,
 
 # ── 双题集运行 ──
 
-def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
-                 fire: bool = False, workers: int = 1,
-                 token_fuse: int | None = None) -> dict:
-    """方向判读（题集 v4-material 代际，2026-10-13 用户裁决覆盖 v1 复核内核）。
-
-    - 原料=八块叙事（market_facts 单一源：序列折叠/位置+板序/量价+板型/市场 as-of 11:00/
-      摆动锚/题材/质量自标/门）；人口=全热榜池（判读帧全部在榜股）；
-    - 判读时点=11:00 槽帧（计分口径冻结：判读=11:00、验证=隔日涨幅、hold |≥5%| 算错）；
-      as-of 组装无未来函数，调度在 15:30 after_market 步跑判读的仍是 11:00 时点原料；
-    - 存档 hotlist_jev_vote_confirm_pilot（_id={date}:11:00:{code}:VOTE），字段 VOTE 兼容
-      （voteDirection/voteConfidence/narrative/questionsRaw/responseRaw），前端零改动；
-    - workers>1=并发；token_fuse 逐 call 累计熔断；done-skip 幂等（status=ok 跳过）。
-    """
-    col = db["hotlist_jev_vote_confirm_pilot"]
-    questions = QUESTIONS_VOTE_CONFIRM
-    qhash = _questions_hash(questions)
-    fuse = TOKEN_FUSE if token_fuse is None else token_fuse
-    tokens = 0
-    stats = {"ok": 0, "degraded": 0, "skip": 0, "data_insufficient": 0, "no_frame": 0}
-    for date in dates:
-        try:
-            ctx = setup_day(db, date, dataset_id)
-        except LookupError as exc:
-            stats["no_frame"] += 1
-            print(f"[vote] {date} {exc}")
-            continue
-        codes, pop_stats = build_population(db, date, ctx, dataset_id)
-        rule_map = _rule_direction_map(db, date, dataset_id)
-        print(f"[vote] {date} 全池人口={len(codes)} 主力缺失计数="
-              f"{pop_stats['mainforce_missing_counted']} 规则线档位覆盖={len(rule_map)}")
-
-        def _work_vote(code: str) -> tuple[str, dict, int]:
-            """单股：v4 八块叙事 → jev 调用 → VOTE 兼容存档（pymongo replace_one 线程安全）。"""
-            name = (ctx["cur"].get(code) or {}).get("name")
-            head, blocks, meta = build_state_v4(db, code, date, ctx, dataset_id)
-            narrative = "\n".join([head, *[ln for b in blocks.values() for ln in b]])
-            _id = f"{date}:{DIRECTION_SLOT}:{code}:VOTE"
-            env, ms = _dispatch_jev(narrative, questions)
-            parsed = parse_jev_response(env, ms, expected_keys=set(questions))
-            used = _usage_tokens(parsed.get("usage"))
-            ans = (parsed.get("answers") or {}).get("direction") or {}
-            tier, rule_dir = rule_map.get(str(code), (None, ""))
-            doc = {"_id": _id, "origin": "vote_confirm_pilot", "tradingDate": date,
-                   "slotTime": DIRECTION_SLOT, "code": code, "name": name,
-                   "ammoVersion": VOTE_AMMO_VERSION,
-                   "questionSetVersion": QUESTION_SET_VERSION_VOTE_CONFIRM,
-                   "questionSetHash": qhash,
-                   "riskFlag": None,  # v4 质量自标（meta.seenDays/missingFields）替代预检 riskFlag
-                   "synergyTier": tier, "synergyDirection": rule_dir,
-                   "status": "ok" if parsed["ok"] else "degraded",
-                   "narrative": narrative, "questionsRaw": questions,
-                   "answers": parsed.get("answers"),
-                   "voteDirection": ans.get("choice"), "voteConfidence": ans.get("confidence"),
-                   "voteProbabilities": ans.get("probabilities"),
-                   "seenDays": meta.get("seenDays"), "firstSeen": meta.get("firstSeen"),
-                   "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
-                   "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
-                   "responseRaw": env,  # §八：ok/degraded 一律存完整 envelope
-                   "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
-            col.replace_one({"_id": _id}, doc, upsert=True)
-            return code, doc, used
-
-        todo = []
-        for code in codes:
-            _id = f"{date}:{DIRECTION_SLOT}:{code}:VOTE"
-            if col.find_one({"_id": _id, "status": "ok"}):
-                stats["skip"] += 1
-                continue
-            todo.append(code)
-        if not fire:
-            for code in todo[:20]:
-                print(f"[vote] dry-run {date}:{code}:{DIRECTION_SLOT}:VOTE")
-            print(f"[vote] dry-run 待判 {len(todo)} 例（全池口径）")
-            continue
-        if todo and tokens >= fuse:
-            print(f"[vote] 熔断：累计 {tokens} ≥ fuse={fuse}，停止后续调用")
-            continue
-        if workers > 1:
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(_work_vote, todo))
-            for code, doc, used in results:
-                tokens += used
-                stats["ok" if doc["status"] == "ok" else "degraded"] += 1
-                print(f"[vote] {date} {code} → {doc['voteDirection']} "
-                      f"conf={doc['voteConfidence']} tokens={used}(cum={tokens})")
-        else:
-            for code in todo:
-                if tokens >= fuse:
-                    print(f"[vote] 熔断：累计 {tokens} ≥ fuse={fuse}，停止后续调用")
-                    break
-                code, doc, used = _work_vote(code)
-                tokens += used
-                stats["ok" if doc["status"] == "ok" else "degraded"] += 1
-                print(f"[vote] {date} {code} → {doc['voteDirection']} "
-                      f"conf={doc['voteConfidence']} tokens={used}(cum={tokens})")
-    stats["tokens"] = tokens
-    print("FINAL[vote]:", stats)
-    return stats
-
-
-def _rule_direction_map(db: Any, date: str, dataset_id: str) -> dict[str, tuple]:
-    """规则线对照 map（同股同场）：当日 15:00 快照引擎 synergy 档 → (tier, direction)。
-
-    仅作对照列（synergyTier/synergyDirection 字段 + 前端 agree 对照），非判读依赖；
-    15:00 分析产物未落库时返回空 map（对照缺失如实降级，不阻断判读）。
-    """
-    frame15 = db["snapshot_frames"].find_one(
-        {"datasetId": dataset_id, "type": "half_hour",
-         "tradingDate": date, "slotTime": "15:00"}, {"snapshotId": 1})
-    out: dict[str, tuple] = {}
-    if not frame15:
-        return out
-    for a in db["snapshot_analysis"].find(
-            {"datasetId": dataset_id, "snapshotId": str(frame15["snapshotId"])},
-            {"code": 1, "analysis.observation.synergy.signalTier": 1}):
-        syn = ((a.get("analysis") or {}).get("observation") or {}).get("synergy") or {}
-        tier = syn.get("signalTier")
-        d8 = synergy_direction(tier)
-        if d8:
-            out[str(a.get("code"))] = (tier, d8)
-    return out
-
-
-def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
-                      fire: bool = False, cap_igex: int = 5, cap_total: int = 8,
-                      workers: int = 1, token_fuse: int | None = None,
-                      slot: str = PILOT_SLOT, include_cooling: bool = False) -> dict:
-    """题集 B：环境门阶段诊断复核。落 hotlist_jev_lifecycle_recheck_pilot。
-    cap_igex/cap_total 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。
-    workers>1=并发（生产回填 §六·产）；token_fuse 缺省=TOKEN_FUSE(150k)，回填显式放宽。"""
-    col = db["hotlist_jev_lifecycle_recheck_pilot"]
-    questions = QUESTIONS_LIFECYCLE_RECHECK
-    qhash = _questions_hash(questions)
-    fuse = TOKEN_FUSE if token_fuse is None else token_fuse
-    tokens = 0
-    stats = {"ok": 0, "degraded": 0, "skip": 0, "data_insufficient": 0, "no_frame": 0}
-    for date in dates:
-        pop = build_lifecycle_population(db, date, dataset_id, slot,
-                                         include_cooling=include_cooling)
-        if pop["meta"].get("error"):
-            stats["no_frame"] += 1
-            print(f"[lifecycle] {date} 无 half_hour {slot} 帧，跳过")
-            continue
-        print(f"[lifecycle] {date} 人口={len(pop['candidates'])} 预检不足={len(pop['insufficient'])}")
-        if fire:
-            for c in pop["insufficient"]:
-                col.replace_one({"_id": f"{date}:{slot}:{c['code']}:LC"},
-                                _insufficient_doc("LC", date, c["code"], c["name"],
-                                                  c["riskFlag"], QUESTION_SET_VERSION_LIFECYCLE_RECHECK, qhash, slot),
-                                upsert=True)
-                stats["data_insufficient"] += 1
-        sample = sample_lifecycle(pop["candidates"], cap_igex=cap_igex, cap_total=cap_total)
-
-        def _work_lc(c: dict) -> tuple[str, dict, int]:
-            """单股一次 jev 调用+落库；返回 (code, doc, tokens)。"""
-            _id = f"{date}:{slot}:{c['code']}:LC"
-            prev_line = (f"{c['prevDate']} 阶段={STAGE_ZH.get(str(c['prevStage']), c['prevStage'])}"
-                         if c["prevStage"] else
-                         f"{c['prevDate'] or '无更早帧'} 前一交易日阶段：数据缺口（fail-visible）")
-            narrative = build_lifecycle_narrative(
-                trading_date=date, slot=slot, code=c["code"], name=c["name"],
-                trajectory=c["trajectory"],
-                multi_day_trajectory=c.get("multiDayTrajectory"),
-                metrics=c["metrics"], evidence=c["evidence"],
-                prev_stage_line=prev_line, stage=c["stage"], action=c["action"],
-                confidence=c["confidence"], reasons=c["reasons"])
-            env, ms = _dispatch_jev(narrative, questions)
-            parsed = parse_jev_response(env, ms, expected_keys=set(questions))
-            used = _usage_tokens(parsed.get("usage"))
-            ans = (parsed.get("answers") or {}).get("lifecycle_stage_recheck") or {}
-            doc = {"_id": _id, "origin": "lifecycle_recheck_pilot", "tradingDate": date,
-                   "slotTime": slot, "code": c["code"], "name": c["name"],
-                   "ammoVersion": VOTE_AMMO_VERSION,
-                   "questionSetVersion": QUESTION_SET_VERSION_LIFECYCLE_RECHECK,
-                   "questionSetHash": qhash, "riskFlag": c["riskFlag"],
-                   "ruleStage": c["stage"], "ruleAction": c["action"],
-                   "prevTradingDate": c["prevDate"], "prevStage": c["prevStage"],
-                   "status": "ok" if parsed["ok"] else "degraded",
-                   "narrative": narrative, "questionsRaw": questions,
-                   "answers": parsed.get("answers"),
-                   "lcStage": ans.get("choice"), "lcConfidence": ans.get("confidence"),
-                   "lcProbabilities": ans.get("probabilities"),
-                   "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
-                   "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
-                   "responseRaw": env,  # §八：ok/degraded 一律存完整 envelope
-                   "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
-            col.replace_one({"_id": _id}, doc, upsert=True)
-            return c["code"], doc, used
-
-        todo = []
-        for c in sample:
-            _id = f"{date}:{slot}:{c['code']}:LC"
-            if col.find_one({"_id": _id, "status": "ok"}):
-                stats["skip"] += 1
-                continue
-            todo.append(c)
-        if not fire:
-            for c in todo:
-                print(f"[lifecycle] dry-run {date}:{c['code']}:{slot}:LC "
-                      f"riskFlag={c['riskFlag']['level']}")
-            continue
-        if workers > 1:
-            if todo and tokens >= fuse:
-                print(f"[lifecycle] 熔断：累计 {tokens} ≥ fuse={fuse}，停止后续调用")
-                break
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(_work_lc, todo))
-            for code, doc, used in results:
-                tokens += used
-                stats["ok" if doc["status"] == "ok" else "degraded"] += 1
-                print(f"[lifecycle] {date} {code} → {doc['lcStage']} "
-                      f"conf={doc['lcConfidence']} tokens={used}(cum={tokens})")
-        else:
-            for c in todo:
-                if tokens >= fuse:
-                    print(f"[lifecycle] 熔断：累计 {tokens} ≥ fuse={fuse}，停止后续调用")
-                    break
-                code, doc, used = _work_lc(c)
-                tokens += used
-                stats["ok" if doc["status"] == "ok" else "degraded"] += 1
-                print(f"[lifecycle] {date} {code} → {doc['lcStage']} "
-                      f"conf={doc['lcConfidence']} tokens={used}(cum={tokens})")
-    stats["tokens"] = tokens
-    print("FINAL[lifecycle]:", stats)
-    return stats
-
-
-# ── watch 常驻轮询（用户裁决 2026-10-12 二修：每日两帧=上午收盘 11:30 + 下午收盘 15:00，
-# 不做每帧跑；只跑 15:00 一帧也不对——上午收盘定格判读同样留档）──
-
-WATCH_SLOTS = ("11:30", "15:00")
-
-
 def _due_slot(now: "time.struct_time|None" = None, grace: int = 120) -> str | None:
     """最近一个「已结束满 grace 秒」的 watch 槽（仅 11:30/15:00）；非交易时段 → None。"""
     import datetime as _dt
@@ -482,7 +249,8 @@ BLACKLIST_FIELDS = (
 
 def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
                  fire: bool = False, workers: int = 1,
-                 token_fuse: int | None = None) -> dict:
+                 token_fuse: int | None = None,
+                 only_codes: list[str] | None = None) -> dict:
     """方向判读（题集 v4-material 代际，2026-10-13 用户裁决覆盖 v1 复核内核）。
 
     - 原料=八块叙事（market_facts 单一源：序列折叠/位置+板序/量价+板型/市场 as-of 11:00/
@@ -542,8 +310,11 @@ def run_vote_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
             col.replace_one({"_id": _id}, doc, upsert=True)
             return code, doc, used
 
+        allowed = set(only_codes) if only_codes else None
         todo = []
         for code in codes:
+            if allowed is not None and code not in allowed:
+                continue
             _id = f"{date}:{DIRECTION_SLOT}:{code}:VOTE"
             if col.find_one({"_id": _id, "status": "ok"}):
                 stats["skip"] += 1
@@ -711,24 +482,6 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
 # 不做每帧跑；只跑 15:00 一帧也不对——上午收盘定格判读同样留档）──
 
 WATCH_SLOTS = ("11:30", "15:00")
-
-
-def _due_slot(now: "time.struct_time|None" = None, grace: int = 120) -> str | None:
-    """最近一个「已结束满 grace 秒」的 watch 槽（仅 11:30/15:00）；非交易时段 → None。"""
-    import datetime as _dt
-    now = now or _dt.datetime.now()
-    cur = now.hour * 60 + now.minute
-    due = None
-    for s in WATCH_SLOTS:
-        h, m = int(s[:2]), int(s[3:])
-        if cur * 60 + now.second >= h * 3600 + m * 60 + grace:
-            due = s
-    return due
-
-
-def _frame_mark_done(db, col_name: str, date: str, slot: str, kind: str) -> bool:
-    """帧级运行标记：已跑过（ok 标记在）→ True，跳过；零成本幂等防重。"""
-    return db[col_name].find_one({"_id": f"{date}:{slot}:MARK:{kind}"}) is not None
 
 
 # ── 方向题集 v4-material：八块原料组装编排（题集代际 2026-10-13，原 v1 复核内核退役） ──
@@ -1027,6 +780,8 @@ def __main__():
                     help="真实调用 jev（只走预登记+用户批准开火路径；默认 dry-run 零调用）")
     ap.add_argument("--lc-cap-igex", dest="lc_cap_igex", type=int, default=5)
     ap.add_argument("--lc-cap-total", dest="lc_cap_total", type=int, default=8)
+    ap.add_argument("--codes", dest="codes", default="",
+                    help="逗号分隔 code 子集（单股判读；缺省=全池）")
     ap.add_argument("--workers", type=int, default=1,
                     help="并发数（默认 1 串行；生产回填建议 4，jiuyan 先例默认 2）")
     ap.add_argument("--token-fuse", dest="token_fuse", type=int, default=None,
@@ -1055,8 +810,9 @@ def __main__():
               include_cooling=args.include_cooling)
         return
     if args.vote_day:
+        only = [c.strip() for c in args.codes.split(",") if c.strip()] or None
         run_vote_day(db, args.vote_day, args.dataset_id, fire=args.fire,
-                     workers=args.workers, token_fuse=args.token_fuse)
+                     workers=args.workers, token_fuse=args.token_fuse, only_codes=only)
     if args.lifecycle_day:
         run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire,
                           cap_igex=args.lc_cap_igex, cap_total=args.lc_cap_total,

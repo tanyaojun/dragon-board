@@ -27,7 +27,10 @@ class FakeCollection:
 
         def matches(row):
             for key, expected in query.items():
-                if row.get(key) != expected:
+                if isinstance(expected, dict) and "$in" in expected:
+                    if row.get(key) not in expected["$in"]:
+                        return False
+                elif row.get(key) != expected:
                     return False
             return True
 
