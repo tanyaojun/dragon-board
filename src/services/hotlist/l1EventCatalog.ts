@@ -101,12 +101,59 @@ export const L1_EVENT_CATALOG: readonly L1EventCatalogEntry[] = [
   { type: 'SpreadWidened', label: '买卖价差异常', note: '买卖一价差过大', defaultVoice: false },
 ] as const
 
+/** L1 本地事件数值码段（13xxx），与 bridge/面板共用；与选股宝 10xxx/11xxx、竞价 12001 不冲突。 */
+export const L1_EVENT_TYPE_CODES: Record<L1EventTypeName, number> = {
+  LimitUpSealed: 13001,
+  LimitUpOpened: 13002,
+  UpcomingLimitUpOpen: 13003,
+  NearLimitUp: 13004,
+  LimitDownSealed: 13005,
+  LimitDownOpened: 13006,
+  UpcomingLimitDownOpen: 13007,
+  NearLimitDown: 13008,
+  SealOrderIncreased: 13009,
+  SealOrderWeakened: 13010,
+  BigRiseTier: 13011,
+  BigDropTier: 13012,
+  FastRise: 13013,
+  FastDrop: 13014,
+  TurnRed: 13015,
+  TurnGreen: 13016,
+  IntradayHigh: 13017,
+  IntradayLow: 13018,
+  AmountTier: 13019,
+  VolumeAcceleration: 13020,
+  LargeBidOrder: 13021,
+  LargeAskOrder: 13022,
+  LowOpenLongYang: 13023,
+  HighOpenLongYin: 13024,
+  NewStockOpened: 13025,
+  NewStockReseal: 13026,
+  LimitUpResealed: 13027,
+  SectorRush: 13028,
+  SectorDive: 13029,
+  SectorLimitUpWave: 13030,
+  SectorLimitUpOpenWave: 13031,
+  BidPressure: 13032,
+  AskPressure: 13033,
+  SpreadWidened: 13034,
+}
+
 const CATALOG_BY_TYPE = new Map<string, L1EventCatalogEntry>(
   L1_EVENT_CATALOG.map(entry => [entry.type as string, entry]),
 )
 
 export function getL1EventCatalogEntry(type: L1EventTypeName): L1EventCatalogEntry | undefined {
   return CATALOG_BY_TYPE.get(type)
+}
+
+const NAME_BY_NUMERIC_CODE = new Map<string, L1EventTypeName>(
+  Object.entries(L1_EVENT_TYPE_CODES).map(([name, code]) => [String(code), name as L1EventTypeName]),
+)
+
+/** 13xxx 数值码 → 事件类型名（未匹配返回 undefined）。 */
+export function l1TypeNameByNumericCode(code: string): L1EventTypeName | undefined {
+  return NAME_BY_NUMERIC_CODE.get(code)
 }
 
 export function defaultVoiceEventSet(): Set<string> {
@@ -164,6 +211,8 @@ export function eventScore(record: L1EventRecord): number {
     SectorLimitUpOpenWave: 42,
     SectorRush: 26,
     SectorDive: 25,
+    LowOpenLongYang: 33,
+    HighOpenLongYin: 32,
   }
 
   return severityScore + (typeScore[record.type] ?? 0)

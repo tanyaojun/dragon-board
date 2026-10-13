@@ -15,9 +15,11 @@ import { filterForVoice, type VoiceLayerSettings, type VoiceMode } from './Event
 import { ConceptMapLoader, sectorsOf, type ConceptMapResult } from './ConceptMapLoader'
 import {
   L1_EVENT_CATALOG,
+  L1_EVENT_TYPE_CODES,
   type L1EventRecord,
   type L1EventTypeName,
 } from './l1EventCatalog'
+import { isContinuousAuction } from './TradingSession'
 import { L1EventEngine } from './L1EventEngine'
 import { buildL1QuoteSnapshot, type L1QuoteSnapshot } from './L1QuoteSnapshot'
 import { LimitUpStreakLoader } from './LimitUpStreakLoader'
@@ -27,43 +29,7 @@ import { hotStockEventSpeechService } from './HotStockEventSpeechService'
 import type { HotStockAbnormalEvent, HotStockAbnormalEventType } from './hotStockEventTypes'
 import type { HotStockEventMonitorServiceLike } from './l1EventBridgeTypes'
 
-/** L1 本地事件数值码段：13xxx 与选股宝 10xxx/11xxx、竞价弱转强 12001 不冲突。 */
-export const L1_EVENT_TYPE_CODES: Record<L1EventTypeName, number> = {
-  LimitUpSealed: 13001,
-  LimitUpOpened: 13002,
-  UpcomingLimitUpOpen: 13003,
-  NearLimitUp: 13004,
-  LimitDownSealed: 13005,
-  LimitDownOpened: 13006,
-  UpcomingLimitDownOpen: 13007,
-  NearLimitDown: 13008,
-  SealOrderIncreased: 13009,
-  SealOrderWeakened: 13010,
-  BigRiseTier: 13011,
-  BigDropTier: 13012,
-  FastRise: 13013,
-  FastDrop: 13014,
-  TurnRed: 13015,
-  TurnGreen: 13016,
-  IntradayHigh: 13017,
-  IntradayLow: 13018,
-  AmountTier: 13019,
-  VolumeAcceleration: 13020,
-  LargeBidOrder: 13021,
-  LargeAskOrder: 13022,
-  LowOpenLongYang: 13023,
-  HighOpenLongYin: 13024,
-  NewStockOpened: 13025,
-  NewStockReseal: 13026,
-  LimitUpResealed: 13027,
-  SectorRush: 13028,
-  SectorDive: 13029,
-  SectorLimitUpWave: 13030,
-  SectorLimitUpOpenWave: 13031,
-  BidPressure: 13032,
-  AskPressure: 13033,
-  SpreadWidened: 13034,
-}
+export { L1_EVENT_TYPE_CODES }
 
 const CODE_BY_L1_TYPE = new Map(Object.entries(L1_EVENT_TYPE_CODES).map(([name, code]) => [code, name as L1EventTypeName]))
 
@@ -239,6 +205,8 @@ export class L1EventRealtimeBridge {
 
   acceptQuotes(quotes: readonly QuotePatch[]) {
     const nowMs = this.now()
+    // 连续竞价时段门禁（对齐 C# MainForm/TradingSession）：盘外帧只建状态不产事件
+    const inSession = isContinuousAuction(nowMs)
     const batchSnapshots: L1QuoteSnapshot[] = []
     const stockEvents: L1EventRecord[] = []
 
@@ -266,17 +234,30 @@ export class L1EventRealtimeBridge {
 
       const history = this.historyByCode.get(snapshot.code) || []
       const previous = this.previousByCode.get(snapshot.code) || null
-      const emitted = this.engine.evaluate(snapshot, previous, history)
+      // 首帧 Prime（对齐 C# MainForm.cs previous is null → Prime）：消除启动快照的
+      // 大幅拉升/成交额跨档/封涨停板等首帧伪事件；盘外帧同样只建状态
+      if (!inSession || !previous) {
+        this.engine.prime(snapshot)
+      } else {
+        for (const event of this.engine.evaluate(snapshot, previous, history)) {
+          stockEvents.push(event)
+        }
+      }
       history.push(snapshot)
       this.pruneHistory(history, snapshot.sourceTime)
       this.historyByCode.set(snapshot.code, history)
       this.previousByCode.set(snapshot.code, snapshot)
       batchSnapshots.push(snapshot)
-      for (const event of emitted) stockEvents.push(event)
     }
 
-    if (!stockEvents.length && !batchSnapshots.length) return
-    void this.publish(batchSnapshots, stockEvents, nowMs)
+    if (!batchSnapshots.length) return
+    if (!inSession || !stockEvents.length) {
+      // 盘外/本轮无事件：快照已入历史供板块窗口与状态使用，不进入产出链
+      return
+    }
+    void this.publish(batchSnapshots, stockEvents, nowMs).catch((error) => {
+      console.warn('[L1EventRealtimeBridge] 事件发布失败:', error)
+    })
   }
 
   private async publish(
@@ -284,9 +265,9 @@ export class L1EventRealtimeBridge {
     stockEvents: readonly L1EventRecord[],
     nowMs: number,
   ) {
-    // 冷却去重 → 产生层过滤（EnabledEvents 关=三端全无）
-    const deduped = this.deduper.filter(stockEvents)
-    const enabled = deduped.filter(item => this.isTypeEnabled(item.type))
+    // 产生层过滤（EnabledEvents 关=三端全无）→ 冷却去重（顺序对齐 MainForm.cs：禁用事件不写冷却戳）
+    const enabledRaw = stockEvents.filter(item => this.isTypeEnabled(item.type))
+    const enabled = this.deduper.filter(enabledRaw)
 
     // 板块聚合吃"已产出"的个股封板/开板事件（开关关闭的封板不进潮，与 C# 一致）
     const sectorAll = this.sectorEngine.evaluate(batchSnapshots, enabled, this.conceptMap, nowMs)
@@ -325,15 +306,16 @@ export class L1EventRealtimeBridge {
 
   private async loadStreaksOnce() {
     if (this.streaksLoaded) return
-    this.streaksLoaded = true
     try {
       const result = await this.streakLoader.load()
+      this.streaksLoaded = true
       this.engine.setLimitUpStreaks(result.streaks)
       console.info(
         `[L1EventRealtimeBridge] 涨停池已加载: ${result.coveredDates.length} 个交易日，${result.streaks.size} 只昨日涨停` +
         (result.errors.length ? `，${result.errors.length} 条告警` : ''),
       )
     } catch (error) {
+      // 失败不固化：下次定时/重载可重试（连板基准缺失只影响 N连板命名，不阻塞）
       console.warn('[L1EventRealtimeBridge] 涨停池加载失败:', error)
     }
   }
@@ -460,5 +442,8 @@ export { sectorsOf }
 
 export const l1EventRealtimeBridge = new L1EventRealtimeBridge({
   monitorService: hotStockEventMonitorService,
+  // 启动即装载持久化的产生层开关（对齐 C# MainForm 启动读 settings.json）：
+  // 否则刷新后 watch 未触发前持久化的 EnabledEvents 不生效
+  enabledEvents: resolveEnabledEvents(),
   voiceSink: events => hotStockEventSpeechService.announceL1Events(events),
 })

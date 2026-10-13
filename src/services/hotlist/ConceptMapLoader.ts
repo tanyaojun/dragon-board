@@ -86,9 +86,6 @@ export class ConceptMapLoader {
   async load(forceRefresh = false): Promise<ConceptMapLoadOutcome> {
     if (!forceRefresh && this.loading) return this.loading
     const promise = this.loadInternal()
-    if (!forceRefresh && !this.lastResult.stale) {
-      // 常规路径：记住在途任务供并发调用复用
-    }
     this.loading = promise.finally(() => {
       if (this.loading === promise) this.loading = null
     })

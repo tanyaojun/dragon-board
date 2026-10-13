@@ -4,7 +4,7 @@
  * - 产生层（EnabledEvents）：事件根本不产生/不展示，由设置层在引擎输出后过滤；
  * - 语音层（VoiceEvents 白名单）：只静音语音，表格/推送不受影响；空集合 = 未固化，沿用历史行为。
  */
-import type { L1EventRecord } from './l1EventCatalog'
+import { L1_EVENT_TYPE_CODES, l1TypeNameByNumericCode, type L1EventRecord, type L1EventTypeName } from './l1EventCatalog'
 
 export type VoiceMode = 'strongOnly' | 'all' | 'muted'
 
@@ -42,13 +42,35 @@ export function filterForVoice(
   return events.filter(item => isStrongSignal(item))
 }
 
+const NUMERIC_KEY_PATTERN = /^\d+$/
+
+/**
+ * 键归一化：类型名直查；13xxx 数值码键反查类型名后等价查询。
+ * C# 两侧均名称键（EventVoicePolicy.cs / AppSettings.IsVoiceEventEnabled），
+ * TS 面板持久化用数值码键——此处双向兼容，避免键空间断裂。
+ */
+function lookup(map: Map<string, boolean>, typeName: L1EventTypeName): boolean | undefined {
+  const direct = map.get(typeName)
+  if (direct !== undefined) return direct
+  const numeric = String(L1_EVENT_TYPE_CODES[typeName])
+  const byCode = map.get(numeric)
+  if (byCode !== undefined) return byCode
+  return undefined
+}
+
 export function isVoiceEventEnabled(eventName: string, settings: VoiceLayerSettings): boolean {
-  const enabled = settings.voiceEvents.get(eventName)
+  const typeName = NUMERIC_KEY_PATTERN.test(eventName)
+    ? l1TypeNameByNumericCode(eventName) ?? eventName
+    : eventName
+  const enabled = lookup(settings.voiceEvents, typeName as L1EventTypeName)
   return enabled === undefined ? true : enabled
 }
 
 export function isEventEnabled(eventName: string, enabledEvents: Map<string, boolean>): boolean {
-  const enabled = enabledEvents.get(eventName)
+  const typeName = NUMERIC_KEY_PATTERN.test(eventName)
+    ? l1TypeNameByNumericCode(eventName) ?? eventName
+    : eventName
+  const enabled = lookup(enabledEvents, typeName as L1EventTypeName)
   return enabled === undefined ? true : enabled
 }
 

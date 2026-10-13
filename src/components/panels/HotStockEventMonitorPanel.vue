@@ -78,7 +78,7 @@
       <div v-if="activePage === 'hot' && visibleSectorEvents.length" class="sector-wave-panel">
         <div class="sector-wave-head">
           <span class="card-kicker">板块异动</span>
-          <span class="count-badge">{{ state.sectorEvents.length }}</span>
+          <span class="count-badge">{{ visibleSectorEvents.length }}</span>
         </div>
         <div class="sector-wave-list">
           <div
@@ -485,6 +485,29 @@ const visibleSectorEvents = computed(() => {
   return state.value.sectorEvents.filter(event => enabled.has(event.type))
 })
 
+/**
+ * 远端语音批次（对齐 C# 语音单通道语义）：
+ * - 剔除 raw.l1 本地引擎事件——它们已由桥的 voiceSink→announceL1Events 通道播报（C# 文案），
+ *   两套 spokenKeys 命名空间互不拦截，不过滤会同一条事件播两句；
+ * - 竞价弱转强（12001）不要求热榜股身份：从 latestAdded 收录可播事件（零丢失）。
+ */
+function buildRemoteSpeechBatch(nextState: HotStockEventMonitorState): HotStockAbnormalEvent[] {
+  const batch: HotStockAbnormalEvent[] = []
+  const seen = new Set<string>()
+  const push = (event: HotStockAbnormalEvent) => {
+    if ((event.raw as { l1?: unknown } | null)?.l1) return
+    if (!isSpeechEligibleHotStockEvent(event)) return
+    if (seen.has(event.id)) return
+    seen.add(event.id)
+    batch.push(event)
+  }
+  nextState.latestHotStockAdded.forEach(push)
+  nextState.latestAdded.forEach((event) => {
+    if (event.type === OPENING_WEAK_TO_STRONG_EVENT_TYPE) push(event)
+  })
+  return batch
+}
+
 function sectorWaveDetail(event: HotStockAbnormalEvent): string {
   const raw = event.raw as { l1?: { reason?: string; memberCodes?: string[] } } | null
   if (!raw?.l1?.reason) return ''
@@ -725,7 +748,7 @@ watch(
           state.value = nextState
           if (speechEnabled.value) {
             void hotStockEventSpeechService.handleLatestAdded(
-              nextState.latestHotStockAdded.filter(isSpeechEligibleHotStockEvent),
+              buildRemoteSpeechBatch(nextState),
             )
           }
         })
@@ -761,7 +784,7 @@ watch(enabledTypes, (types) => {
   l1EventRealtimeBridge.setEnabledEvents(
     new Map(ALL_EVENT_TYPES.map(type => [String(type), selected.has(type)])),
   )
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 // 语音层：VoiceMode + VoiceEvents 白名单（空=未固化，跟随模式）
 watch(voiceMode, (mode) => {

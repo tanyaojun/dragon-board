@@ -64,6 +64,24 @@ export class L1EventEngine {
     this.states.clear()
   }
 
+  /**
+   * 首帧/盘外帧只建状态不产事件（对齐 C# MainForm Prime 语义）：
+   * 消除"启动快照被误报为大幅拉升/成交额跨档/封涨停板"的首帧伪事件。
+   */
+  prime(quote: L1QuoteSnapshot) {
+    const state = this.getState(quote.code)
+    const isNewStock = isNewStockWithoutLimit(quote.name)
+    const limitPct = isNewStock ? 0 : resolveLimitPct(quote)
+    const limitUpPrice = isNewStock ? 0 : roundPrice(quote.preClose * (1 + limitPct / 100))
+    const limitDownPrice = isNewStock ? 0 : roundPrice(quote.preClose * (1 - limitPct / 100))
+    this.updateStateFromQuote(
+      state,
+      quote,
+      !isNewStock && isLimitUpSealed(quote, limitUpPrice),
+      !isNewStock && isLimitDownSealed(quote, limitDownPrice),
+    )
+  }
+
   /** 逐股评估：history 为该股本日内早于当前帧的快照（时间升序），由桥接层维护。 */
   evaluate(
     quote: L1QuoteSnapshot,
@@ -402,7 +420,7 @@ function isNewStockWithoutLimit(name: string): boolean {
 
 function resolveLimitPct(quote: L1QuoteSnapshot): number {
   const code = quote.code
-  if (quote.name.includes('ST')) return 5
+  if (/st/i.test(quote.name)) return 5
   if (code.startsWith('30') || code.startsWith('68')) return 20
   if (code.startsWith('8') || code.startsWith('4')) return 30
   return 10

@@ -50,7 +50,6 @@ export class HotStockEventSpeechService {
   private spokenKeys = new Set<string>()
   /** gate：串行化播报批次与停止/抢占，镜像 C# SemaphoreSlim(1,1)。 */
   private gate: Promise<unknown> = Promise.resolve()
-  private pendingL1Events: L1EventRecord[] = []
   private status: HotStockEventSpeechStatus = {
     mode: 'offline',
     supported: false,
@@ -181,7 +180,6 @@ export class HotStockEventSpeechService {
   }
 
   async stop() {
-    this.pendingL1Events = []
     this.enqueue(async () => {
       await this.stopCore()
     })
@@ -301,9 +299,10 @@ export function buildRemoteSpeechText(event: HotStockAbnormalEvent): string {
 }
 
 function formatRemotePct(value: number | null): string {
+  // HotStockAbnormalEvent.changePct 全链路约定为比率（feed toRatio / 桥 toAbnormalEvent /100）
+  // 恒 ×100，不做量纲启发式（≥100% 涨幅比率 1.2 会被误当百分数）
   if (value === null || !Number.isFinite(value)) return ''
-  const percent = Math.abs(value) <= 1 && value !== 0 ? value * 100 : value
-  return `${trimZeros(percent.toFixed(2))}%`
+  return `${trimZeros((value * 100).toFixed(2))}%`
 }
 
 function trimZeros(text: string): string {

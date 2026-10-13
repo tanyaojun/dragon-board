@@ -180,6 +180,13 @@ describe('EventDeduper（对齐 EventDeduper.cs）', () => {
     // 评分：封板 300+50=350 > 板块涨停潮 300+46=346
     expect(sorted[0].type).toBe('LimitUpSealed')
     expect(sorted[1].type).toBe('SectorLimitUpWave')
+
+    // LowOpenLongYang 233 / HighOpenLongYin 232（C# EventDeduper.Score 齐全）
+    const lowYang = makeL1Event({ type: 'LowOpenLongYang', severity: 'important', timestamp: t0 + 1 })
+    const highYin = makeL1Event({ type: 'HighOpenLongYin', severity: 'important', timestamp: t0 + 2 })
+    const nearUp = makeL1Event({ type: 'NearLimitUp', severity: 'important', timestamp: t0 + 3 })
+    const ranked = deduper.filter([lowYang, highYin, nearUp])
+    expect(ranked.map(item => item.type)).toEqual(['LowOpenLongYang', 'HighOpenLongYin', 'NearLimitUp'])
   })
 })
 
@@ -195,6 +202,17 @@ describe('EventVoicePolicy（两层模型，对齐 EventVoicePolicy.cs）', () =
     expect(filterForVoice(events, 'all')).toHaveLength(3)
     const strong = filterForVoice(events, 'strongOnly')
     expect(strong.map(item => item.type)).toEqual(['LimitUpSealed', 'BigRiseTier'])
+  })
+
+  it('VoiceEvents 数值码键与类型名键双向兼容（面板持久化键空间）', () => {
+    const byCode = new Map<string, boolean>([
+      ['13013', true], // FastRise
+      ['13011', false], // BigRiseTier
+    ])
+    const fastRise = makeL1Event({ type: 'FastRise', typeName: '快速拉升', severity: 'important' })
+    const riseTier = makeL1Event({ type: 'BigRiseTier', typeName: '大幅拉升', severity: 'important', timestamp: 2 })
+    const filtered = filterForVoice([fastRise, riseTier], 'all', { voiceEvents: byCode })
+    expect(filtered.map(item => item.type)).toEqual(['FastRise'])
   })
 
   it('VoiceEvents 白名单优先（只影响语音层）；空名单跟随模式', () => {

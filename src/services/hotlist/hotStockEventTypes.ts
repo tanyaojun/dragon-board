@@ -50,6 +50,9 @@ export type L1NumericEventType =
   | 13029
   | 13030
   | 13031
+  | 13032
+  | 13033
+  | 13034
 
 export type HotStockAbnormalEventType =
   | 10001
