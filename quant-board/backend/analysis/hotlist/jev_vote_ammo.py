@@ -20,35 +20,64 @@ from __future__ import annotations
 from typing import Any
 
 # ── 版本戳（预登记 §五：独立戳，cycle v5 旧债不重犯）──
-QUESTION_SET_VERSION_VOTE_CONFIRM = "v1"
+# vote 题集 v4-material 代（2026-10-13 用户裁决：v1 复核内核退役，题集代际覆盖）——
+# 原料重写为八块（market_facts 单一源：序列折叠/位置+板序/量价+板型/市场 as-of 11:00/
+# 摆动锚/题材/质量自标/门，组装编排见 operations/jev_vote_confirm.py），人口=全热榜池，
+# 判读时点=11:00 槽帧（计分口径冻结）；v1 代（引擎四维档位复核，15:00 收盘槽，候选人口）
+# 留档 git 历史（f79e3a70..ee609aa1 窗口）。
+QUESTION_SET_VERSION_VOTE_CONFIRM = "v4-material"
 QUESTION_SET_VERSION_LIFECYCLE_RECHECK = "v1"
-# 原料代际戳（本链自有：snapshot_analysis 五维载荷 + EOD 补齐读法口径；与打标链 AMMO_VERSION 无关）。
-# b 代（2026-10-12）：原料跨日化——叙事增「近10日排名轨迹」行（同 slot 历史帧定格），
-# 判据「多日/峰值」引用获得可数锚（铁律 3/4 补原料方向修复，判据文本零改动 hash 不变）；
-# a 代（2026-10-12a）= 无跨日行旧料（9-10 月全量 4145 例留档不回写，跨代对照按戳分段）。
-VOTE_AMMO_VERSION = "2026-10-12b"
+# 原料代际戳（本链自有：v4 起原料=八块叙事（market_facts 单一源），与打标链 AMMO_VERSION 无关）。
+VOTE_AMMO_VERSION = "2026-10-13a"
 
-# ── 题集 A：vote_direction（方向投票 jev 二次确认，三态纯净，无逃生口——裁决 1）──
+# ── 题集 A：direction（方向判读，v4-material 代际 2026-10-13 用户裁决，四态，八块锚）──
+# 判据与预登记 docs/hotlist-jev/jev-direction-v4-preregistration.md §五逐字一致（改门须用户点头）。
 QUESTIONS_VOTE_CONFIRM: dict[str, dict] = {
-    "vote_direction": {
+    "direction": {
         "type": "choice",
-        "instructions": ("以下是行情列表某股票当日收盘槽的方向投票读数：四维信号（共振/趋势/热度/量价）"
-                         "各自的档位、方向、分数与理由，以及原始行情证据行（涨幅/量比/主力净额/换手/"
-                         "当日排名轨迹）与环境门注记。请判断：该股当日方向投票整体应读作 buy、sell 还是 hold？"
-                         "判定以「给出明确方向的维数与档位强度对比」为主锚（buy 维与 sell 维各几票、"
-                         "最高档位在哪侧），并用原始证据行校验方向一致性。特别注意："
-                         "①档位 unknown 或数据不足的维不计票（叙事中已如实标注）；"
-                         "②环境门只注记不参与投票；"
-                         "③原始证据与投票读数明显矛盾时（如读数偏多但当日放量下跌、排名大幅回落，"
-                         "或读数偏空但缩量上涨、排名大幅走高），以原始证据为准。"
-                         "只依据所给信息判断，不预测后市。"),
+        "instructions": ("以下是行情列表某股票的描述性原料——无任何预算好的档位、信号或结论。"
+                         "原料八块：[序列折叠] 跨日在榜的每日最后槽注意力分位（0-100，越高越热）及日间"
+                         "方向符号列、反向跳变标记、连续下跌计数，头部标注历史深度 seenDays——不足 5 个"
+                         "交易日（FIRST-SEEN）时序列不作主证据；[位置] TDX 日线位置轴（距 20 日最高、"
+                         "20 日窗口涨幅、窗口低点距今交易日数、近 5 日贡献、量能倍数）与板序"
+                         "（近 10 日逐日涨停收盘模式，●=涨停收盘○=未收盘，末位为今日）及当前连板数；"
+                         "[量价+板型] 当日盘中小涨幅、量比、主力净额与净占比、换手，若在涨停还有首封时间/"
+                         "末封时间/封单量/板高；[市场 as-of 11:00] 涨停家数、炸板家数与率、大面家数、"
+                         "最高板、THS 盘中三池（炸板/大面/回撤）、帧层封板质量（一字板/硬板/烂板家数、"
+                         "烂板占比、平均成功率）、池涨跌家数；[摆动锚] 近 11 个交易日涨停家数峰值/谷值"
+                         "（日期+距今）与今日盘中值、较昨日 Δ、距峰值；[题材] 板块归类（采集事实）；"
+                         "[质量自标] 缺失字段如实列出；[门] 热榜情绪相位带（固定分线：冷 <40 / 弱 40-60 /"
+                         "强 60-75 / 高峰 ≥75）、池中位 3 日分位变化、池广度。"
+                         "请判断：该股在当前盘中 11:00 时点的短期方向状态读作 buy、sell、hold 还是"
+                         " insufficient，附 0-1 置信度。读法锚："
+                         "①序列：历史深度 ≥5 个交易日才可作主证据；FIRST-SEEN/短历史改用位置+板序+板型"
+                         "路径并降置信，绝不引用未展示的历史（铁律 3）。多日同向才成趋势（看方向符号列，"
+                         "不看相邻槽噪声）；逆多日方向的跳变否决该方向；连续下跌 ≥3 日是退潮证据；"
+                         "往复震荡降置信。"
+                         "②位置+板序：连板轨迹上升且位置低（距 20 日最高 >20% 或窗口低点距今 ≤8 日）"
+                         "= 启动/扩散位；连板高度停滞或下降且高位（距最高 <10% 或低点距今 ≥15 日）= 拥挤位；"
+                         "板序断板（末位由 ● 转 ○）加深回撤 = 反转位。"
+                         "③量价+板型：价涨+量比 1-2.5 = 确认；量比 >2.5 的上涨 = 派发嫌疑；净占比 >+20% ="
+                         " 对倒/洗盘嫌疑不是看多；净占比 ≤-10% = 派发；价跌+放量 = 最强 sell 证据；"
+                         "一字板（首封=末封=09:25 且封单大）是真实但不可交易信号，永不作为 buy 证据；"
+                         "烂板/反复开板/放巨量滞涨 = 分歧示警。"
+                         "④市场 as-of+摆动锚：市场处于摆动锚峰值附近且炸板率/大面走高 = 退潮基调（"
+                         "buy 门槛抬高、sell 证据放大）；处于谷值附近且炸板收敛 = 出清末段（不追 sell）；"
+                         "市场事实缺失按缺失处理，不用情绪分替代。"
+                         "⑤buy 环境门（对最终判定生效，双门 AND）：门 1 位置=启动/扩散位（连板轨迹上升"
+                         "且非高位；拥挤/反转位禁 buy）；门 2 情绪相位带按固定分线查表，仅 strong 带"
+                         "放行（高峰 ≥75/冷 <40/弱 40-60 拦截，被拦带的看多读数降为 hold 或携崩坏证据"
+                         "降为 sell）。"
+                         "⑥insufficient 仅限数据不可用（质量自标块列出的关键块缺失）；证据冲突=hold。"
+                         "证据冲突或字段缺失时降置信。只依据所给信息判断，不预测后市。"),
         "criteria": {
-            "buy": ("多方：≥2 个有向维（共振/趋势/量价）方向为 buy，且无 A/S 档 sell 反票；"
-                    "热度档 A/B 正票可作佐证；原始证据行同向（涨幅为正、排名走高、主力未大幅流出）"),
-            "hold": ("观望：有向维方向互相冲突（buy 与 sell 各 ≥1）且无更高档位一侧主导；"
-                     "或全部有向维方向为 hold/unknown；原始证据行无方向（涨跌互现、排名横走）"),
-            "sell": ("空方：≥2 个有向维方向为 sell；或任一维 A/S 档 sell 反票未被足够档位的 buy 票覆盖；"
-                     "或量价档 E（出货硬风险）；原始证据行同向（放量下跌、排名大幅回落、主力净流出）"),
+            "buy": ("序列多日上行（历史深度 ≥5 日）且跑赢池中位；位置=启动/扩散（连板轨迹上升+非高位）；"
+                    "量价确认且净占比正常；双门全过（位置门+情绪 strong 带）。"),
+            "sell": ("多日下行/连跌 ≥3 日或逆势跳变否决；或高位+板型分歧（烂板/反复开板/放巨量滞涨）；"
+                     "或价跌+放量/净占比 ≤-10%；或板序断板+深回撤的反转位；市场处于摆动锚峰值附近且"
+                     "炸板/大面走高时放大。"),
+            "hold": ("证据混合或幅度太弱；或 buy 门失败但无 sell 证据；或被拦情绪带内的看多读数降级。"),
+            "insufficient": "仅数据不可用（质量自标块列出的关键块缺失）；永不因证据冲突。",
         },
     },
 }
@@ -112,24 +141,6 @@ def _fmt_num(v: Any, nd: int = 2) -> str:
 
 # ── 预检 riskFlag（裁决 1 落地：runner 侧，开火前冻结于预登记 §二·四/§三·四）──
 
-def vote_risk_flag(dims: dict[str, Any], missing_evidence: list[str]) -> dict:
-    """题集 A 预检。dims={维: signalTier}；有效档位维=非 unknown/None。
-
-    data_insufficient（不调用）：有效维 <2；partial（仍调用）：有效维 2-3 或证据行有缺；
-    ok：四维全可算且证据行齐。
-    """
-    valid = [d for d in VOTE_DIMS if dims.get(d) not in (None, "", "unknown")]
-    unknown = [d for d in VOTE_DIMS if dims.get(d) in (None, "", "unknown")]
-    if len(valid) < 2:
-        return {"level": "data_insufficient",
-                "reasons": [f"有效档位维={len(valid)}(<2)"] + [f"unknown维:{d}" for d in unknown]}
-    reasons: list[str] = []
-    if unknown:
-        reasons.append("unknown维:" + ",".join(unknown))
-    reasons.extend(missing_evidence or [])
-    return {"level": "ok" if not reasons else "partial", "reasons": reasons}
-
-
 def lifecycle_risk_flag(trajectory_slots: int, metrics_present: bool,
                         missing: list[str]) -> dict:
     """题集 B 预检（六修，2026-10-12 用户裁决：上榜晚的股也要有周期判读）。
@@ -174,12 +185,6 @@ def vote_sell_sort_key(c: dict) -> tuple:
     return (vp_e, str(c.get("code") or ""))
 
 
-def sample_vote(buy: list[dict], sell: list[dict],
-                cap_buy: int = 8, cap_sell: int = 4) -> list[dict]:
-    return (sorted(buy, key=vote_buy_sort_key)[:cap_buy]
-            + sorted(sell, key=vote_sell_sort_key)[:cap_sell])
-
-
 def sample_lifecycle(cands: list[dict], cap_igex: int = 5, cap_total: int = 8) -> list[dict]:
     """点火/扩散优先全量至 ≤cap_igex（代码升序），剩余名额给拥挤/反转（stage+代码升序），
     再剩余给 cooling（include_cooling 全量覆盖时；代码升序）。"""
@@ -196,29 +201,6 @@ def sample_lifecycle(cands: list[dict], cap_igex: int = 5, cap_total: int = 8) -
 
 
 # ── EOD 补齐读法（裁决 3：daily 15:30 帧基准，行情字段缺失处从同日 half_hour 15:00 帧补）──
-
-def backfill_quote_fields(base_row: dict, donor_row: dict | None,
-                          sparse_fields: list[str],
-                          fields: tuple[str, ...] = BACKFILL_FIELDS) -> tuple[dict, list[str], list[str]]:
-    """返回 (补齐后新 dict, 已补字段, 两源皆缺字段)。
-
-    sparse_fields=基准帧级稀疏字段（runner 按帧内 zero/None 占比 ≥0.9 判定，帧级事实而非逐行猜）；
-    只补 fields 内行情原始字段，永不触碰引擎档位；两源皆缺保持缺失（fail-visible 不伪造）。
-    """
-    merged = dict(base_row or {})
-    filled: list[str] = []
-    still_missing: list[str] = []
-    for f in fields:
-        if f not in sparse_fields:
-            continue
-        donor_v = (donor_row or {}).get(f)
-        if donor_v is None:
-            still_missing.append(f)
-            continue
-        merged[f] = donor_v
-        filled.append(f)
-    return merged, filled, still_missing
-
 
 # ── 叙事组装（纯函数；fail-visible 缺口如实注记，禁伪装）──
 
@@ -256,48 +238,6 @@ def _dir_std(v: Any) -> str:
 
 def _tier_reasons(reasons: Any) -> str:
     return "；".join(str(r) for r in reasons) if isinstance(reasons, list) and reasons else "无"
-
-
-def build_vote_narrative(*, trading_date: str, slot: str, code: str, name: Any,
-                         resonance: dict, trend: dict, cross_section: dict,
-                         volume_price: dict, trend_events: dict, row: dict,
-                         sparse_fields: list[str], trajectory: list[dict],
-                         multi_day_trajectory: list[dict] | None = None, gate: dict,
-                         synergy_tier: Any) -> str:
-    """题集 A 叙事（预登记 §二·二五块）。全部行 fail-visible；引擎块明标「仅供复核」。
-    量价方向按引擎投票语义归一（up→buy/down→sell/neutral→hold）；zlje 原始单位=元，叙事除 1e8 折亿。"""
-    res_status = str(resonance.get("status") or "unknown")
-    zl = _finite_num(row.get("zlje"))
-    zl_s = "缺" if zl is None else f"{zl / 1e8:.3f}"
-    lines = [
-        f"{trading_date} 交易日 {slot} 槽 · {code} {name or ''}".rstrip(),
-        "【四维方向投票读数】（规则产出，供复核）",
-        (f"共振：档位 {resonance.get('signalTier') or 'unknown'} · 方向 {_dir_std(resonance.get('direction'))}"
-         f" · 强度 {_fmt_num(resonance.get('score'), 0)} · 依据 {_tier_reasons(resonance.get('tierReasons'))}"
-         + (f"（status={res_status}，证据不足如实标注）" if res_status != "ok" else "")),
-        (f"趋势：档位 {trend.get('signalTier') or 'unknown'} · 方向 {_dir_std(trend.get('direction'))}"
-         f" · 强度 {_fmt_num(trend.get('score'), 0)} · 依据 {_tier_reasons(trend.get('tierReasons'))}"
-         f" · 技术面事件：MACD={_event_std(trend_events.get('macdCross'))}、MA={_event_std(trend_events.get('maCross'))}"),
-        (f"热度：档位 {cross_section.get('signalTier') or 'unknown'}"
-         f" · 横截面分位 {_fmt_num(cross_section.get('percentile'), 1)}"
-         f"（较前槽 {_fmt_num(cross_section.get('percentileDelta'), 1)}）"
-         f" · 依据 {_tier_reasons(cross_section.get('tierReasons'))}"),
-        (f"量价：档位 {volume_price.get('signalTier') or 'unknown'}"
-         f" · 方向 {_dir_std(volume_price.get('direction'))}"
-         f" · 象限 {volume_price.get('quadrant') or '数据不足'}"
-         f" · 依据 {_tier_reasons(volume_price.get('tierReasons'))}"),
-        "【原始行情证据】",
-        (f"涨幅 {_fmt_num(row.get('change'))}% · 量比 {_fmt_num(row.get('volumeRatio'))}"
-         f" · 主力净额 {zl_s}亿 · 换手 {_fmt_num(row.get('turnoverRate'))}%"
-         + (f"（帧级行情字段缺失，取自 half_hour 15:00 补齐：{','.join(sparse_fields)}）" if sparse_fields else "")),
-        f"当日排名轨迹（槽:名次,涨幅）：{_traj_line(trajectory)}",
-        (f"近10日排名轨迹（日:名次,涨幅）：{_traj_line(multi_day_trajectory or [])}"
-         if multi_day_trajectory else "近10日排名轨迹：数据缺口（fail-visible）"),
-        (f"【环境门注记】生命周期 {STAGE_ZH.get(str(gate.get('stage')), gate.get('stage') or '缺')}"
-         f" · 一票否决={'是' if gate.get('veto') else '否'}（环境门只注记不参与投票）"),
-        (f"【待复核判读】规则投票（仅供复核）：四维方向见上 → 综合档位 {synergy_tier or 'unknown'}"),
-    ]
-    return "\n".join(lines)
 
 
 def build_lifecycle_narrative(*, trading_date: str, slot: str, code: str, name: Any,

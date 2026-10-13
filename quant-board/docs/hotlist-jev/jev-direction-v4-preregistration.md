@@ -1,8 +1,16 @@
-# jev 方向线 v4 预登记（原料补齐版）——2026-10-13
+# jev 方向题集 v4-material 预登记（原料补齐版）——2026-10-13
 
-> 状态：**待用户裁决后开火**。本预登记冻结：原料合同（八块+共享事实服务）、判据草案、计分口径、四条止损线、pilot 门判据。
-> 上游文件：原料审计 `jev-direction-material-audit.md`（2026-10-13，结论=原料不是不够是只吃了渣）；原料层实现 `backend/analysis/hotlist/market_facts.py` + `backend/operations/jev_direction_v4.py`（提交 f79e3a70，零调用零挂链已验证）。
-> 历史坐标：v3-gate（fd3baed5 系）已止损回退（89a0bbf7）——门代际 9 个交易日 A 对永远 hold 平局或略负，且判据要求模型从 5 个分位现算量自判生命周期（周期判段四轮挂起同款病根）。
+> 状态：**已落地（题集代际覆盖形态）**。2026-10-13 用户裁决：不立新线，v4-material 直接作为
+> jevVoteRecheck（V1）vote 题集的代际升级落地——runner=`jev_vote_confirm.run_vote_day`、
+> 集合=`hotlist_jev_vote_confirm_pilot`（_id={date}:11:00:{code}:VOTE）、前端「jev方向」列零改动；
+> v1 复核内核随代际退役（git 历史留档）。v1 判据（引擎四维档位复核，15:00 收盘槽，候选人口）
+> → v4-material（八块原料，全热榜池，11:00 时点判读）。
+> 本预登记冻结：原料合同（八块+共享事实服务）、判据、计分口径、四条止损线、pilot 门判据。
+> 上游文件：原料审计 `jev-direction-material-audit.md`（2026-10-13，结论=原料不是不够是只吃了渣）；
+> 事实单一源 `backend/analysis/hotlist/market_facts.py`（与 relay/cycle/phase 同算法）。
+> 历史坐标：方向判读 v3-gate 独立线（fd3baed5 系）已止损回退（89a0bbf7）——门代际 9 个交易日
+> A 对永远 hold 平局或略负，且判据要求模型从 5 个分位现算量自判生命周期（周期判段四轮挂起同款病根）；
+> 该教训的结论并入本代际（判据锚具体字段），独立线形态不再采用。
 
 ## 一、定位（不变）
 
@@ -34,7 +42,7 @@
 - 判读时点=盘中 11:00 槽帧落盘即判读；验证=**隔日涨幅**（T+1 最后一槽 change；掉榜股不计分）；
 - buy 对=隔日涨 / sell 对=隔日跌 / **hold 遇 \|隔日\|≥5% 算错**；insufficient 不计分；
 - 置信校准：高置信组正确率应显著高于低置信组，否则置信视为无效；
-- **裁决对比表（每日自动产出，先于任何判据迭代）**：jev 线 vs 规则线（synergy 档位查表 S/A/B→buy、C→hold、D/E→sell，确定性可复现）同股同场（join 键=code+tradingDate），同一把尺子算两线正确率、混淆矩阵、一致率；分带（冷/弱/强/高峰）分层披露。v3 教训：自比「永远 hold」七轮空转——本线只与规则线比。
+- **裁决对照（每日存档自带，先于任何判据迭代）**：v4 判读落档时同股同场写入规则线对照（当日 15:00 快照引擎 synergy 档→synergy_direction 查表，确定性可复现；`synergyTier`/`synergyDirection` 字段），同一把尺子算两线正确率与一致率；对照缺失如实降级不阻断。v3 教训：自比「永远 hold」七轮空转——只与规则线比。
 
 ## 五、判据草案（v4，单题集 A 形态不变；**改门须用户点头**）
 

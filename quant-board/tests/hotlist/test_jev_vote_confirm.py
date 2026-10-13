@@ -23,32 +23,19 @@ from backend.analysis.hotlist.jev_vote_ammo import (
     VOTE_AMMO_VERSION,
     QUESTIONS_LIFECYCLE_RECHECK,
     QUESTIONS_VOTE_CONFIRM,
-    backfill_quote_fields,
     build_lifecycle_narrative,
-    build_vote_narrative,
     lifecycle_risk_flag,
     sample_lifecycle,
-    sample_vote,
     synergy_direction,
-    vote_risk_flag,
 )
 
+def _traj():
+    return [{"slot": "09:30", "rank": 81, "change": -0.72},
+            {"slot": "10:00", "rank": None, "change": 1.62},
+            {"slot": "10:30", "rank": 92.5, "change": None}]
+
+
 # ── 判据冻结件（预登记 §二·三/§三·三，逐字=代码文本；改动=改门须重走预登记）──
-
-
-def test_vote_criteria_frozen_text():
-    q = QUESTIONS_VOTE_CONFIRM["vote_direction"]
-    # 三态纯净（2026-10-12 用户裁决 1：insufficient 逃生口删除，risk_flag 由 runner 侧预检承担）
-    assert set(q["criteria"]) == {"buy", "hold", "sell"}
-    assert "insufficient" not in q["instructions"]
-    # 逐字锚（判据全文见预登记，漂移即违规）
-    assert "buy、sell 还是 hold" in q["instructions"]
-    assert "只依据所给信息判断，不预测后市" in q["instructions"]
-    assert "②环境门只注记不参与投票" in q["instructions"]
-    assert "以原始证据为准" in q["instructions"]
-    assert q["criteria"]["buy"].startswith("多方：≥2 个有向维（共振/趋势/量价）方向为 buy")
-    assert "量价档 E（出货硬风险）" in q["criteria"]["sell"]
-    assert "或全部有向维方向为 hold/unknown" in q["criteria"]["hold"]
 
 
 def test_lifecycle_criteria_frozen_text():
@@ -62,31 +49,6 @@ def test_lifecycle_criteria_frozen_text():
     assert "高位滞留" in q["criteria"]["crowded"]
     assert "高位回落" in q["criteria"]["reversal"]
     assert q["criteria"]["cooling"].startswith("降温：排名处于中低位且无起升证据")
-
-
-def test_version_stamps_independent_v1():
-    # 预登记 §五：独立戳（cycle v5 旧债不重犯——判据换代不动戳=跨代不可比违规）
-    assert QUESTION_SET_VERSION_VOTE_CONFIRM == "v1"
-    assert QUESTION_SET_VERSION_LIFECYCLE_RECHECK == "v1"
-    assert QUESTION_SET_VERSION_VOTE_CONFIRM != QUESTION_SET_VERSION_DRIVER
-    assert QUESTION_SET_VERSION_LIFECYCLE_RECHECK != QUESTION_SET_VERSION_CYCLE
-    assert runner.VOTE_AMMO_VERSION == "2026-10-12b"  # b 代=原料跨日化（近10日轨迹行）
-
-
-# ── riskFlag 预检（裁决 1 落地）──
-
-
-def test_vote_risk_flag_levels():
-    dims_all = {"resonance": "S", "rankTrend": "C", "crossSection": "B", "volumePrice": "A"}
-    assert vote_risk_flag(dims_all, []) == {"level": "ok", "reasons": []}
-    partial = vote_risk_flag({**dims_all, "volumePrice": "unknown"}, ["evidence_missing:zlje"])
-    assert partial["level"] == "partial"
-    assert any("volumePrice" in r for r in partial["reasons"])
-    assert any("zlje" in r for r in partial["reasons"])
-    ins = vote_risk_flag({"resonance": "S", "rankTrend": "unknown",
-                          "crossSection": "unknown", "volumePrice": "unknown"}, [])
-    assert ins["level"] == "data_insufficient"
-    assert ins["reasons"][0].startswith("有效档位维=1")
 
 
 def test_lifecycle_risk_flag_levels():
@@ -115,19 +77,6 @@ def _vc(code, dims, res_score=50.0):
     return {"code": code, "dims": dims, "resonanceScore": res_score}
 
 
-def test_sample_vote_deterministic():
-    buy = [_vc("B01", {"resonance": "S", "rankTrend": "A", "crossSection": "A", "volumePrice": "A"}, 80),
-           _vc("B02", {"resonance": "B", "rankTrend": "B", "crossSection": "B", "volumePrice": "B"}, 60),
-           _vc("B03", {"resonance": "A", "rankTrend": "C", "crossSection": "C", "volumePrice": "C"}, 90)]
-    sell = [_vc("S01", {"resonance": "D", "rankTrend": "D", "crossSection": "D", "volumePrice": "E"}),
-            _vc("S02", {"resonance": "D", "rankTrend": "D", "crossSection": "D", "volumePrice": "D"})]
-    got = sample_vote(buy, sell, cap_buy=2, cap_sell=2)
-    # buy：最高档位数 B01=4 > B03=1 > B02=0（共振分数只在同档位数时比较）
-    assert [c["code"] for c in got[:2]] == ["B01", "B03"]
-    # sell：量价 E 短路优先
-    assert [c["code"] for c in got[2:]] == ["S01", "S02"]
-
-
 def test_sample_lifecycle_caps():
     igex = [{"code": f"I{i:02d}", "stage": "ignition"} for i in range(7)]
     late = [{"code": f"C{i:02d}", "stage": "crowded"} for i in range(5)]
@@ -138,83 +87,6 @@ def test_sample_lifecycle_caps():
 
 
 # ── EOD 补齐读法（裁决 3：只补行情字段，永不触碰引擎档位）──
-
-
-def test_backfill_quote_fields():
-    base = {"code": "600000", "change": None, "volumeRatio": None, "zlje": None,
-            "resonance": {"signalTier": "A"}}
-    donor = {"change": 3.2, "volumeRatio": 1.8, "zlje": 1.17e8, "turnoverRate": None}
-    merged, filled, missing = backfill_quote_fields(
-        base, donor, sparse_fields=["change", "volumeRatio", "zlje", "turnoverRate"])
-    assert filled == ["change", "volumeRatio", "zlje"]
-    assert missing == ["turnoverRate"]  # 两源皆缺保持缺失（fail-visible 不伪造）
-    assert merged["change"] == 3.2 and merged["zlje"] == 1.17e8
-    assert merged["resonance"] == {"signalTier": "A"}  # 引擎档位不触碰
-
-
-def test_backfill_ignores_non_sparse_fields():
-    base = {"change": 5.0, "volumeRatio": None}
-    donor = {"change": 9.9, "volumeRatio": 2.0}
-    merged, filled, _ = backfill_quote_fields(base, donor, sparse_fields=["volumeRatio"])
-    assert filled == ["volumeRatio"]  # 基准帧非稀疏字段不覆盖
-    assert merged["change"] == 5.0
-
-
-# ── 叙事组装（fail-visible / 口径隔离 / 引擎块标注）──
-
-
-def _traj():
-    return [{"slot": "09:30", "rank": 81, "change": -0.72},
-            {"slot": "10:00", "rank": None, "change": 1.62},
-            {"slot": "10:30", "rank": 92.5, "change": None}]
-
-
-def test_vote_narrative_fail_visible_and_gate_note():
-    text = build_vote_narrative(
-        trading_date="2026-09-30", slot="15:00", code="002487", name="测试股",
-        resonance={"signalTier": "S", "direction": "buy", "score": 80.0,
-                   "tierReasons": ["Jump 事件触发共振跃迁"], "status": "ok"},
-        trend={"signalTier": "C", "direction": "hold", "score": 4, "tierReasons": ["中性"]},
-        cross_section={"signalTier": "A", "percentile": 97.3, "percentileDelta": 5.2,
-                       "tierReasons": ["分位强势"]},
-        volume_price={"signalTier": "unknown", "direction": None, "quadrant": None,
-                      "tierReasons": ["量价数据不足"]},
-        trend_events={"macdCross": "golden", "maCross": None},
-        row={"change": 4.13, "volumeRatio": None, "zlje": None, "turnoverRate": 12.5},
-        sparse_fields=[], trajectory=_traj(),
-        gate={"stage": "expansion", "veto": False}, synergy_tier="B")
-    assert "002487 测试股" in text and "2026-09-30 交易日 15:00 槽" in text
-    # fail-visible：量价 unknown/量比缺/主力净额缺/轨迹缺槽如实标注，不伪造 0
-    assert "档位 unknown" in text and "量比 缺" in text and "主力净额 缺" in text
-    assert "10:00:缺" in text and "10:30:92.5,缺" in text
-    # 技术面事件（中文映射）+ 环境门只注记 + 引擎块标注
-    assert "MACD=金叉、MA=无" in text
-    assert "只注记不参与投票" in text
-    assert "（环境门只注记不参与投票）" in text
-    assert "【待复核判读】规则投票（仅供复核）" in text and "综合档位 B" in text
-    # 共振 status=ok 时不加注记
-    assert "证据不足如实标注" not in text
-
-
-def test_vote_narrative_resonance_insufficient_note():
-    text = build_vote_narrative(
-        trading_date="2026-09-30", slot="15:00", code="X", name="",
-        resonance={"signalTier": "unknown", "direction": None, "score": None,
-                   "tierReasons": [], "status": "insufficient"},
-        trend={"signalTier": "D", "direction": "sell", "score": 60, "tierReasons": ["趋势转弱"]},
-        cross_section={"signalTier": "C", "percentile": 40.0, "percentileDelta": -2.0,
-                       "tierReasons": []},
-        volume_price={"signalTier": "E", "direction": "down", "quadrant": "fall_volume",
-                      "tierReasons": ["出货"]},
-        trend_events={}, row={"change": -5.1, "volumeRatio": 2.2, "zlje": -3.3e7,
-                              "turnoverRate": 8.0},
-        sparse_fields=[], trajectory=_traj(),
-        gate={"stage": "reversal", "veto": True}, synergy_tier="D")
-    assert "status=insufficient，证据不足如实标注" in text
-    assert "一票否决=是" in text
-    # 量价方向引擎投票语义归一（down→sell）+ zlje 原始元折亿
-    assert "量价：档位 E · 方向 sell" in text
-    assert "主力净额 -0.330亿" in text
 
 
 def test_lifecycle_narrative_scope_and_fail_visible():
@@ -367,45 +239,6 @@ def _vote_db():
 # ── 人口构建（fake db）──
 
 
-def test_build_vote_population_classification():
-    pop = runner.build_vote_population(_vote_db(), DATE)
-    assert "error" not in pop["meta"]
-    codes_buy = {c["code"] for c in pop["buy"]}
-    codes_sell = {c["code"] for c in pop["sell"]}
-    codes_ins = {c["code"] for c in pop["insufficient"]}
-    assert codes_buy == {"600001"}          # B 档
-    assert codes_sell == {"600002"}         # D 档（含量价 E 短路）
-    assert codes_ins == {"600005"}          # 四维全 unknown → data_insufficient
-    # C/E 档人口外
-    assert "600003" not in codes_buy | codes_sell and "600004" not in codes_buy | codes_sell
-    # 600001 原料完整性
-    c1 = pop["buy"][0]
-    assert c1["riskFlag"]["level"] == "ok"
-    assert c1["synergyDirection"] == "buy"
-    assert c1["trendEvents"]["macdCross"] == "golden"
-    assert c1["gate"] == {"stage": "expansion", "veto": False}
-    assert len(c1["trajectory"]) == 5  # 当日 5 个 half_hour 槽
-    # 600002 的 sell 侧：风险标记与对照锚
-    s1 = pop["sell"][0]
-    assert s1["riskFlag"]["level"] == "ok" and s1["synergyDirection"] == "sell"
-
-
-def test_build_vote_population_sparse_frame_detection():
-    # 帧级行情字段全 0/None（daily 15:30 形态）→ 判帧级稀疏，不算个股缺口
-    db = _Db({"snapshot_frames": _Col([FRAME]),
-              "snapshot_stock_rows": _Col([
-                  _row("700001", 5, None, volumeRatio=None, zlje=None, turnoverRate=None),
-                  _row("700002", 6, None, volumeRatio=None, zlje=None, turnoverRate=None)]),
-              "snapshot_analysis": _Col([
-                  _ana("700001", "B"),
-                  _ana("700002", "B", res="unknown", vp="unknown", rt="unknown", cs="unknown")])})
-    pop = runner.build_vote_population(db, DATE)
-    assert pop["meta"]["sparse_fields"] == ["change", "volumeRatio", "zlje", "turnoverRate", "amount"]
-    c1 = pop["buy"][0]
-    assert c1["riskFlag"]["level"] == "ok"  # 帧级稀疏不计个股证据缺口
-    assert pop["insufficient"][0]["code"] == "700002"
-
-
 def test_build_lifecycle_population_and_prev_stage():
     pop = runner.build_lifecycle_population(_vote_db(), DATE)
     codes = {c["code"] for c in pop["candidates"]}
@@ -428,81 +261,6 @@ def test_build_lifecycle_population_prev_missing_is_partial():
     pop = runner.build_lifecycle_population(db, DATE)
     rf = pop["candidates"][0]["riskFlag"]
     assert rf["level"] == "partial" and "prev_stage_missing" in rf["reasons"]
-
-
-def test_build_population_no_frame():
-    db = _Db({"snapshot_frames": _Col([]), "snapshot_stock_rows": _Col([]),
-              "snapshot_analysis": _Col([])})
-    assert runner.build_vote_population(db, DATE)["meta"]["error"] == "no_frame"
-    assert runner.build_lifecycle_population(db, DATE)["meta"]["error"] == "no_frame"
-
-
-# ── 落库合同（裁决 5 全保留）+ 熔断 + dry-run 零调用 ─--
-
-ENV_OK = {"success": True, "result": {"state": "Completed", "result": {
-    "model": "typesafe/jev",
-    "answers": {"vote_direction": {"type": "choice", "choice": "buy", "confidence": 0.42,
-                                   "probabilities": {"buy": 0.55, "hold": 0.30, "sell": 0.15}}},
-    "usage": {"input_tokens": 1000, "output_tokens": 80}}}}
-
-
-def test_run_vote_fire_persist_contract(monkeypatch):
-    calls = []
-
-    def fake_dispatch(state, questions):
-        calls.append((state, questions))
-        return dict(ENV_OK), 123
-
-    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    db = _vote_db()
-    stats = runner.run_vote_day(db, [DATE], fire=True)
-    assert calls and calls[0][1] == QUESTIONS_VOTE_CONFIRM
-    col = db["hotlist_jev_vote_confirm_pilot"]
-    docs = {d["_id"]: d for d in col.docs}
-    assert stats["ok"] == 2 and stats["tokens"] == 2160  # 1080×2（600001 buy + 600002 sell）
-    d1 = docs[f"{DATE}:15:00:600001:VOTE"]
-    # 全保留合同：answers 原样包 + confidence 升顶层 + responseRaw 一律存完整 envelope
-    assert d1["answers"]["vote_direction"]["confidence"] == 0.42
-    assert d1["voteDirection"] == "buy" and d1["voteConfidence"] == 0.42
-    assert d1["voteProbabilities"]["buy"] == 0.55
-    assert d1["responseRaw"] == ENV_OK
-    # 盖戳与预检留痕
-    assert d1["questionSetVersion"] == "v1" and d1["questionSetHash"]
-    assert d1["riskFlag"] == {"level": "ok", "reasons": []}
-    assert d1["synergyTier"] == "B" and d1["synergyDirection"] == "buy"
-    assert d1["status"] == "ok" and d1["origin"] == "vote_confirm_pilot"
-    # data_insufficient 留痕文档（不调用）
-    ins = docs[f"{DATE}:15:00:600005:VOTE"]
-    assert ins["status"] == "data_insufficient" and ins["answers"] is None
-    assert stats["data_insufficient"] == 1
-    # 幂等：重跑 ok 文档跳过
-    stats2 = runner.run_vote_day(db, [DATE], fire=True)
-    assert stats2["skip"] == 2
-
-
-def test_run_vote_token_fuse(monkeypatch):
-    monkeypatch.setattr(runner, "TOKEN_FUSE", 100)
-    n = {"k": 0}
-
-    def fake_dispatch(state, questions):
-        n["k"] += 1
-        return dict(ENV_OK), 1
-
-    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True)
-    assert n["k"] == 1  # 首 call 后 1080 ≥ 100 → 熔断停止
-    assert stats["ok"] == 1
-
-
-def test_run_vote_dry_run_zero_call(monkeypatch):
-    def boom(state, questions):
-        raise AssertionError("dry-run 不得触发 jev 调用")
-
-    monkeypatch.setattr(runner, "_dispatch_jev", boom)
-    db = _vote_db()
-    stats = runner.run_vote_day(db, [DATE], fire=False)
-    assert stats["ok"] == 0 and stats["tokens"] == 0
-    assert db["hotlist_jev_vote_confirm_pilot"].docs == []  # dry-run 零写库
 
 
 def test_run_lifecycle_fire_persist_contract(monkeypatch):
@@ -537,75 +295,6 @@ def test_run_lifecycle_fire_persist_contract(monkeypatch):
 
 
 # ── 扩窗修正案（§十一）：帽位参数透传 ──
-
-
-def test_sample_caps_passthrough():
-    buy = [_vc(f"B{i:02d}", {"resonance": "B", "rankTrend": "B", "crossSection": "B",
-                             "volumePrice": "B"}, 50.0) for i in range(10)]
-    sell = [_vc(f"S{i:02d}", {"resonance": "D", "rankTrend": "D", "crossSection": "C",
-                              "volumePrice": "E"}) for i in range(6)]
-    got = sample_vote(buy, sell, cap_buy=3, cap_sell=2)
-    assert len(got) == 5  # §十一 扩窗帽：buy 3 + sell 2
-    assert [c["code"] for c in got[3:]] == ["S00", "S01"]  # vp-E 优先序不变
-
-
-def test_run_vote_cap_override(monkeypatch):
-    def fake_dispatch(state, questions):
-        return dict(ENV_OK), 1
-
-    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    db = _vote_db()
-    db["snapshot_analysis"].docs.append(_ana("600007", "B"))
-    db["snapshot_stock_rows"].docs.append(
-        _row("600007", 15, 2.0, volumeRatio=1.2, zlje=2e7, turnoverRate=7.0))
-    stats = runner.run_vote_day(db, [DATE], fire=True, cap_buy=1, cap_sell=1)
-    assert stats["ok"] == 2 and stats["tokens"] == 2160  # 帽收紧后只采 1+1（默认帽则 2+1=3 call）
-    assert not any(d["code"] == "600007" for d in db["hotlist_jev_vote_confirm_pilot"].docs)
-
-
-def test_run_vote_workers_and_fuse_override(monkeypatch):
-    """生产回填路径（§六·产）：workers>1 并发 + token_fuse 显式放宽。"""
-    n = {"k": 0}
-
-    def fake_dispatch(state, questions):
-        n["k"] += 1
-        return dict(ENV_OK), 1
-
-    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True, workers=4, token_fuse=10_000_000)
-    assert stats["ok"] == 2 and stats["tokens"] == 2160  # 并发路径全采
-    assert n["k"] == 2
-
-
-def test_run_vote_serial_fuse_default(monkeypatch):
-    """缺省 token_fuse=None → 用模块 TOKEN_FUSE（150k），抽样例不触发。"""
-    monkeypatch.setattr(runner, "_dispatch_jev", lambda s, q: (dict(ENV_OK), 1))
-    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True)
-    assert stats["ok"] == 2 and stats["tokens"] == 2160
-
-
-# ── 帧级口径（用户裁决 2026-10-12：每帧落库后即跑）──
-
-
-def test_slot_parameterized_ids_and_narrative(monkeypatch):
-    """--slot 帧级口径：_id 含槽位、叙事槽位行、与 15:00 存量互不干扰，数据真来自该帧。"""
-    def fake_dispatch(state, questions):
-        return dict(ENV_OK), 1
-
-    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    db = _vote_db()
-    sid10 = "half_hour:2026-09-30:10:00"
-    db["snapshot_analysis"].docs.append(
-        {**_ana("600001", "B"), "snapshotId": sid10})
-    db["snapshot_analysis"].docs.append(
-        {**_ana("600002", "D", res="D", vp="E", stage="reversal"), "snapshotId": sid10})
-    runner.run_vote_day(db, [DATE], fire=True, slot="10:00")
-    docs = db["hotlist_jev_vote_confirm_pilot"].docs
-    assert docs and all(d["_id"].startswith(f"{DATE}:10:00:") for d in docs)
-    assert all("10:00 槽" in d["narrative"] for d in docs if "narrative" in d)
-    assert all("15:00 槽" not in d.get("narrative", "") for d in docs)
-    # 数据真来自 10:00 帧：600002（D/vpE）在该帧人口内被采
-    assert any(d.get("code") == "600002" for d in docs)
 
 
 def test_due_slot_logic():
@@ -667,22 +356,6 @@ def test_multi_day_missing_fail_visible():
     assert "【近10日排名轨迹】数据缺口（fail-visible）" in text
 
 
-def test_population_carries_multi_day(db_factory=None):
-    import backend.operations.jev_vote_confirm as runner2
-    pop = runner2.build_vote_population(_vote_db(), DATE)
-    c1 = pop["buy"][0]
-    assert c1["multiDayTrajectory"] == [{"date": "2026-09-29", "rank": None, "change": None}]
-    pop_b = runner2.build_lifecycle_population(_vote_db(), DATE)
-    assert pop_b["candidates"][0]["multiDayTrajectory"][0]["date"] == "2026-09-29"
-
-
-def test_ammo_version_bumped_for_cross_day():
-    assert VOTE_AMMO_VERSION == "2026-10-12b"  # b 代=原料跨日化
-
-
-# ── B 人口全量覆盖（用户裁决 2026-10-12：cooling 股也要有周期判读）──
-
-
 def test_lifecycle_population_include_cooling():
     """缺省=非 cooling pilot 口径；include_cooling=True 全量覆盖（含 cooling）。"""
     db = _vote_db()  # 600001 expansion / 600002 reversal / 600003-5 cooling
@@ -713,38 +386,3 @@ def test_run_lifecycle_include_cooling_fire(monkeypatch):
 
 # ── A 人口全量覆盖（用户裁决 2026-10-12：250 只池 VOTE 也要全覆盖，C 档无方向票也判）──
 
-
-def test_vote_population_include_neutral():
-    """缺省=pilot 口径（C 不进）；include_neutral=True C 档进 neutral 桶全量判读。"""
-    db = _vote_db()  # 600003 syn C
-    pop_pilot = runner.build_vote_population(db, DATE)
-    assert all("600003" not in {c["code"] for c in pop_pilot[k]} for k in ("buy", "sell", "neutral"))
-    pop_full = runner.build_vote_population(db, DATE, include_neutral=True)
-    codes = {c["code"] for c in pop_full["neutral"]}
-    assert "600003" in codes
-    c3 = next(c for c in pop_full["neutral"] if c["code"] == "600003")
-    assert c3["synergyDirection"] == "hold"  # C→hold 对照锚
-    assert c3["riskFlag"]["level"] == "partial"  # 600003 证据行缺失（fixture 设定）→ partial 仍判读
-
-
-def test_run_vote_include_neutral_fire(monkeypatch):
-    def fake_dispatch(state, questions):
-        return dict(ENV_OK), 1
-
-    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    stats = runner.run_vote_day(_vote_db(), [DATE], fire=True,
-                                cap_buy=200, cap_sell=200, include_neutral=True)
-    assert stats["ok"] == 4  # 600001 buy + 600002 sell + 600003 C 档 + 600004 E 档（全量无帽）
-
-
-def test_vote_population_include_e_tier():
-    """五修（用户裁决 2026-10-12）：E 档（环境门否决）纳入 VOTE 全量人口——
-    jev 判据环境门只注记不投票，方向读数独立成立。"""
-    db = _vote_db()  # 600004 syn E
-    pop_pilot = runner.build_vote_population(db, DATE)
-    assert "600004" not in {c["code"] for c in pop_pilot.get("neutral", [])}
-    pop_full = runner.build_vote_population(db, DATE, include_neutral=True)
-    c4 = next((c for c in pop_full["neutral"] if c["code"] == "600004"), None)
-    assert c4 is not None
-    assert c4["synergyTier"] == "E" and c4["synergyDirection"] == "sell"  # E→sell 对照锚
-    assert c4["gate"] == {"stage": "cooling", "veto": False}

@@ -209,8 +209,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
   relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉；undefined=未拉，null=已拉无档）
-  quotesEntries: [], dirDaily: null,
-  quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' }, dir: { mode: 'detail', q1: '', q2: '' } },
+  quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' } },
   quotesFilter: { q: '', vote: '', lc: '', agree: '' },
   quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
@@ -278,17 +277,14 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels, quotes, dirDaily;
+  let series, slots, labels, quotes;
   try {
-    const dirP = jget('/api/hotlist-jev/direction-daily?includeRaw=1' + (date ? '&date=' + date : ''))
-      .catch(e => ({ ok: false, reason: String((e && e.message) || e) }));
     [series, slots, labels, quotes] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
       jget('/api/hotlist-jev/quotes-review?with_docs=1' + (date ? '&date=' + date : '')),
     ]);
-    dirDaily = await dirP;
   } catch (err) {
     if (seq !== _loadSeq) return;
     // fail-visible：读口失败亮红不静默滞留（保留上次数据，刷新时间标注失败）
@@ -307,7 +303,6 @@ async function loadAll(){
   STATE.eod = slots.eod;
   STATE.labels = labels;
   STATE.quotes = quotes;
-  STATE.dirDaily = dirDaily || { ok: false, reason: '未加载' };
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
@@ -795,20 +790,7 @@ function qRenderKpi(){
     + aCard('方向一致', s.agree ?? '-', 'jev ↔ 五维对照锚（点击筛选）', 'agree')
     + aCard('方向分歧', s.diverge ?? '-', '并列观察者 · 台账披露（点击筛选）', 'diverge')
     + card('风险留痕', riskTotal ? `${rk.data_insufficient || 0} / ${rk.partial || 0}` : '0',
-      `data_insufficient / partial（不足不调用不猜）`)
-    + (() => { const dd = STATE.dirDaily, s2 = dd && dd.summary;
-      if (!dd || dd.ok === false || !s2 || !s2.count)
-        return card('🧭 方向线 v4 (11:00)', '—', dd && dd.reason ? dd.reason.slice(0, 40) : '无判读（未开火）');
-      const bd = s2.byDirection || {};
-      const ag = s2.ruleKnown ? `${s2.agreeWithRule}/${s2.ruleKnown}` : '规则线无档位';
-      return card('🧭 方向线 v4 (11:00)', s2.count ?? 0,
-        `buy ${bd.buy || 0} / sell ${bd.sell || 0} / hold ${bd.hold || 0} / insuff ${bd.insufficient || 0} · 与规则一致 ${ag}`); })();
-}
-
-function dirVB(d, conf){
-  if (!d) return '<span style="color:var(--muted2)">--</span>';
-  const c = { buy: 'var(--red)', sell: 'var(--green)', hold: 'var(--muted2)', insufficient: '#a16207' }[d] || 'var(--muted2)';
-  return `<span style="color:${c};font-weight:700">${esc(String(d).toUpperCase())}${conf != null ? ' P' + Math.round(conf * 100) + '%' : ''}</span>`;
+      `data_insufficient / partial（不足不调用不猜）`);
 }
 function qRenderBar(){
   const bar = $('quotesFilterBar');
@@ -840,11 +822,8 @@ function qRenderRows(){
     agree: r => { const a = (r.jev || {}).agree; return a === 'agree' ? 0 : a === 'diverge' ? 1 : 2; } };
   shown = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
-  const dirRows = (STATE.dirDaily && STATE.dirDaily.rows) || [];
-  const dirByCode = {}; dirRows.forEach(x => { dirByCode[String(x.code)] = x; });
   STATE.quotesEntries = shown.map(r => ({ key: String(r.code || ''), label: (r.name || r.code || '?') + ' ' + (r.code || ''),
-    row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null,
-    dirDoc: dirByCode[String(r.code)] || null }));
+    row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null }));
   const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
   const hasFilter = f.q || f.vote || f.lc || f.agree;
   $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '15:00'} 收盘槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
@@ -858,11 +837,6 @@ function qRenderRows(){
     const chgColor = chg == null ? '' : chg > 0 ? 'var(--red)' : chg < 0 ? 'var(--green)' : '';
     const cyc = qLcStage(r);
     const conf = numOr(((r.jev || {}).vote || {}).confidence, null);
-    const dv = e.dirDoc || null;
-    const cmp = dv && dv.ruleDirection
-      ? (dv.ruleDirection === dv.direction ? '<span style="color:var(--green)">一致</span>'
-                                           : '<span style="color:var(--red)">分歧</span>')
-      : '<span style="color:var(--muted2)">--</span>';
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="qRow('${js(e.key)}')">
     <td><span class="lg-caret">▶</span>${esc(r.code || '')}</td><td>${esc(r.name || '')}</td>
     <td>${esc(r.board || '--')}</td>
@@ -876,13 +850,11 @@ function qRenderRows(){
     <td class="num">${fmtYiCell(r.amount)}</td><td class="num">${fmtYiCell(r.cirMV)}</td>
     <td>${dirB(qVoteDir(r)) || '<span style="color:var(--muted2)">--</span>'}</td>
     <td class="num">${conf != null ? 'P' + Math.round(conf * 100) + '%' : '--'}</td>
-    <td>${agreeB((r.jev || {}).agree)}</td>
-    <td>${dv ? dirVB(dv.direction, dv.confidence) : '<span style="color:var(--muted2)">--</span>'}</td>
-    <td>${cmp}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="19">${quotesDetailHtml(e)}</td></tr>` : '');
+    <td>${agreeB((r.jev || {}).agree)}</td></tr>`
+    + (open ? `<tr class="lg-detail"><td colspan="17">${quotesDetailHtml(e)}</td></tr>` : '');
   }).join('');
-  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('板块', 'board')}${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('连板', 'boards')}${th('共振', 'res')}${th('趋势', 'trend')}${th('热度', 'heat')}${th('量价', 'vp')}${th('周期', 'cycle')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}<th>v4方向(11:00)</th><th>v4vs规则</th></tr>`
-    + (rows || '<tr><td colspan="19" class="empty">无匹配个股（调整筛选条件）</td></tr>');
+  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('板块', 'board')}${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('连板', 'boards')}${th('共振', 'res')}${th('趋势', 'trend')}${th('热度', 'heat')}${th('量价', 'vp')}${th('周期', 'cycle')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
+    + (rows || '<tr><td colspan="17" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function qRenderAll(){ qRenderKpi(); qRenderBar(); qRenderRows(); }
 // 行展开：VOTE/LC 双题集各一块 lg-card（各自 详细信息/原始 JSON 切换 + 筛选 + 复制）
@@ -895,7 +867,6 @@ function qRow(key){
   const ui = STATE.quotesUi;
   ui.openKey = ui.openKey === key ? null : key;
   ui.vote = { mode: 'detail', q1: '', q2: '' }; ui.lc = { mode: 'detail', q1: '', q2: '' };
-  ui.dir = { mode: 'detail', q1: '', q2: '' };
   qRenderRows();
 }
 function qMode(kind, m, ev){ ev.stopPropagation(); qKindUi(kind).mode = m; qRenderRows(); }
@@ -979,65 +950,8 @@ function quotesDetailHtml(e){
       ${j.vote ? `<span class="chip plain">jev方向 ${j.vote.direction ? esc(j.vote.direction) : '--'}${j.vote.confidence != null ? ' P' + Math.round(j.vote.confidence * 100) + '%' : ''}</span>` : ''}
       ${j.lc ? `<span class="chip plain">jev阶段 ${j.lc.stage ? esc(LC_STAGE_CN[j.lc.stage] || j.lc.stage) : '--'}</span>` : ''}
       ${agreeB(j.agree)}
-      ${e.dirDoc ? `<span class="chip plain">v4方向 ${esc(String(e.dirDoc.direction || '--').toUpperCase())}${e.dirDoc.confidence != null ? ' P' + Math.round(e.dirDoc.confidence * 100) + '%' : ''}${e.dirDoc.ruleDirection ? ' · 规则线 ' + esc(String(e.dirDoc.ruleDirection).toUpperCase()) : ''}</span>` : '<span class="chip plain">v4方向 无判读</span>'}
     </div></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:12px">${summary}${qDocCard(e, 'vote')}${qDocCard(e, 'lc')}${dirDocCard(e)}</div>`;
-}
-
-function dirUiOf(){ return STATE.quotesUi.dir; }
-function dirMode(m, ev){ ev.stopPropagation(); dirUiOf().mode = m; qRenderRows(); }
-function dirFilter(side, v){
-  const ui = dirUiOf();
-  if (side === 'req') ui.q1 = v; else ui.q2 = v;
-  const e = qOpenEntry(); if (!e) return;
-  $(side === 'req' ? 'dirReqTree' : 'dirRespTree').innerHTML
-    = treeHtml(side === 'req' ? dirReqOf(e) : dirRespOf(e), v);
-}
-// 请求侧 = 当次下发载荷（questions 判据 + narrative 原料，与 jev POST body 同形）
-function dirReqOf(e){
-  const d = e.dirDoc; if (!d) return null;
-  const rj = d.requestJson || {};
-  return { questionSetVersion: rj.questionSetVersion, ammoVersion: rj.ammoVersion,
-    questionsHash: rj.questionsHash, questions: rj.questions, narrative: rj.narrative };
-}
-// 响应侧 = 模型返回原文（responseRaw 逐字落库）
-function dirRespOf(e){
-  const d = e.dirDoc; if (!d) return null;
-  return d.responseRaw != null ? { responseRaw: d.responseRaw } : { _note: 'responseRaw 未存档' };
-}
-function dirCopy(what, ev){
-  ev.stopPropagation();
-  const e = qOpenEntry(); if (!e || !e.dirDoc) return;
-  const txt = what === 'doc' ? JSON.stringify(e.dirDoc, null, 2)
-    : what === 'req' ? JSON.stringify(dirReqOf(e), null, 2)
-    : JSON.stringify(dirRespOf(e), null, 2);
-  copyText(txt, ev.currentTarget);
-}
-function dirDocCard(e){
-  const d = e.dirDoc, ui = dirUiOf();
-  const title = '🧭 DIR · 方向线 v4 (11:00 盘中)';
-  if (!d) return `<div class="lg-card"><div class="lg-head"><div class="lg-title">${title}</div></div>`
-    + `<div class="lg-empty">该股无 v4 判读（未开火或人口外）</div></div>`;
-  const head = `<div class="lg-head"><div class="lg-title">${title}</div><span class="lg-asof">${esc(String(d.createdAt || '').slice(0, 19))}</span>
-    <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="dirMode('detail', event)">详细信息</button>
-    <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="dirMode('raw', event)">原始 JSON</button></div></div>`;
-  let body;
-  if (ui.mode === 'raw'){
-    body = `<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0"><b>判读文档 JSON（原始）</b><button class="lg-copy" onclick="dirCopy('doc', event)">⧉ 复制</button></div><pre>${esc(JSON.stringify(d, null, 2))}</pre></div>`;
-  } else {
-    body = `<div class="lg-panels">
-      <div class="lg-panel"><div class="lg-phead"><b>请求</b><span class="st">questions+narrative（与 jev POST body 同形）</span><button class="lg-copy" onclick="dirCopy('req', event)">⧉ 复制</button></div>
-        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q1)}" oninput="dirFilter('req', this.value)">
-        <div class="lg-tree" id="dirReqTree">${treeHtml(dirReqOf(e), ui.q1)}</div></div>
-      <div class="lg-panel"><div class="lg-phead"><b>响应</b><span class="st">模型返回原文</span><button class="lg-copy" onclick="dirCopy('resp', event)">⧉ 复制</button></div>
-        <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q2)}" oninput="dirFilter('resp', this.value)">
-        <div class="lg-tree" id="dirRespTree">${treeHtml(dirRespOf(e), ui.q2)}</div></div>
-    </div>`;
-  }
-  const foot = `<div class="lg-foot"><span><span class="k">题集版本</span> <code>${esc(String((d.requestJson || {}).questionSetVersion || d.questionSetVersion || '-'))}</code></span>
-    <span><span class="k">verify</span> <code>${esc(JSON.stringify(d.verify || {}))}</code></span>
-    <span><span class="k">规则线</span> <code>${esc(String(d.ruleDirection || '-').toUpperCase())}</code></span></div>`;
-  return `<div class="lg-card" onclick="event.stopPropagation()">${head}${body}${foot}</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:12px">${summary}${qDocCard(e, 'vote')}${qDocCard(e, 'lc')}</div>`;
 }
 
 // ---------- 明细存档：调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ----------

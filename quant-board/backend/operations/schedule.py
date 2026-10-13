@@ -460,8 +460,9 @@ def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, A
     """双题集收盘复核（观察轨道步，2026-10-12 用户裁决挂链：每日 15:00 帧一次，不等午盘）。
 
     - 门控=当日 half_hour 15:00 帧已落库（帧未落库/非交易日 → skipped，零成本）；
-    - 子进程=jev_vote_confirm 全量人口（A 含 C 档 --include-neutral、B 含 cooling
-      --include-cooling、15:00 收盘帧）——runner 自身 done-skip 幂等，链重跑零重复计费；
+    - 子进程=jev_vote_confirm（vote=题集 v4-material 全池 11:00 时点判读（2026-10-13 用户裁决
+      代际覆盖 v1 复核内核，as-of 无未来函数）；LC 含 cooling --include-cooling、15:00 收盘帧）
+      ——runner 自身 done-skip 幂等，链重跑零重复计费；
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok、不参与 stopped_at
       （jev=并列观察者，观察证据链非生产数据链，不回写引擎不进交易路径）。
     """
@@ -483,9 +484,8 @@ def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, A
         proc = subprocess.run(
             [sys.executable, "-m", "backend.operations.jev_vote_confirm",
              "--vote-day", today, "--lifecycle-day", today, "--slot", "15:00",
-             "--vote-cap-buy", "200", "--vote-cap-sell", "200",
              "--lc-cap-igex", "100", "--lc-cap-total", "200",
-             "--include-neutral", "--include-cooling",
+             "--include-cooling",
              "--workers", "4", "--token-fuse", "6000000", "--fire"],
             cwd=str(Path(__file__).resolve().parents[2]),
             capture_output=True, text=True, timeout=_JEV_VOTE_RECHECK_TIMEOUT_SECONDS,
