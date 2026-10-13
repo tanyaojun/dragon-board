@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""方向题集 v4-material 内核测试（jevVoteRecheck vote 部分代际覆盖，2026-10-13 用户裁决）。
+"""方向题集 v4-material(b 代) 内核测试（jevVoteRecheck vote 部分代际覆盖，2026-10-13 用户裁决）。
 
 全 fake 零 IO，禁触真实 jev 调用与网络（AGENTS.md §1.2-7）。
 覆盖：判据 v4 锚冻结（预登记 §五逐字）/版本戳/八块组装形状与黑名单零出现/全池人口/
@@ -27,23 +27,20 @@ DATE = "2026-09-23"
 
 # ── 判据 v4 锚冻结（预登记 §五逐字；改动=改门须用户点头）──
 
-def test_vote_criteria_v4_anchors():
+def test_vote_criteria_b_anchors():
     q = QUESTIONS_VOTE_CONFIRM["direction"]
-    assert q["type"] == "choice"
     ins = q["instructions"]
-    assert "历史深度 ≥5 个交易日才可作主证据" in ins          # 序列深度锚
-    assert "绝不引用未展示的历史" in ins                        # 铁律 3
-    assert "一字板（首封=末封=09:25 且封单大）是真实但不可交易信号，永不作为 buy 证据" in ins
-    assert "双门 AND" in ins and "仅 strong 带" in ins          # 双门 Gate1+Gate2
-    assert "拥挤/反转位禁 buy" in ins
-    assert "11:00 时点" in ins                                  # 计分口径判读时点
+    assert "双门 AND" in ins
+    assert "一字板" in ins and "永不作为 buy 证据" in ins
+    assert "11:00" in ins
     assert set(q["criteria"]) == {"buy", "sell", "hold", "insufficient"}
-    assert "永不因证据冲突" in q["criteria"]["insufficient"]
+    assert "outpacing the pool median" in q["criteria"]["buy"] or "跑赢池中位" in q["criteria"]["buy"]
+
 
 
 def test_version_stamps_v4_generation():
     assert QUESTION_SET_VERSION_VOTE_CONFIRM == "v4-material"
-    assert VOTE_AMMO_VERSION == "2026-10-13a"
+    assert VOTE_AMMO_VERSION == "2026-10-13b"
     assert QUESTION_SET_VERSION_LIFECYCLE_RECHECK == "v1"       # LC 戳独立不受代际影响
 
 

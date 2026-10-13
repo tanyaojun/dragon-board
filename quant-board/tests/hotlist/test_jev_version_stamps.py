@@ -27,6 +27,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     assert relay.QUESTION_SET_VERSION_RELAY == "v3"                    # 连板指数
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
     assert vote.QUESTION_SET_VERSION_VOTE_CONFIRM == "v4-material"     # 方向判读（代际覆盖）
+    assert vote.VOTE_AMMO_VERSION == "2026-10-13b"                     # b 代：四条款修订（同日复验）
     assert vote.QUESTION_SET_VERSION_LIFECYCLE_RECHECK == "v1"         # 生命周期复核
     assert daily.QUESTION_SET_VERSION_DAILY_LINE == "v1"               # 日线一句话（复盘修复起戳）
 

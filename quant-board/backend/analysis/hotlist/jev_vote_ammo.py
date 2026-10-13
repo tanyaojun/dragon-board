@@ -28,7 +28,7 @@ from typing import Any
 QUESTION_SET_VERSION_VOTE_CONFIRM = "v4-material"
 QUESTION_SET_VERSION_LIFECYCLE_RECHECK = "v1"
 # 原料代际戳（本链自有：v4 起原料=八块叙事（market_facts 单一源），与打标链 AMMO_VERSION 无关）。
-VOTE_AMMO_VERSION = "2026-10-13a"
+VOTE_AMMO_VERSION = "2026-10-13b"
 
 # ── 题集 A：direction（方向判读，v4-material 代际 2026-10-13 用户裁决，四态，八块锚）──
 # 判据与预登记 docs/hotlist-jev/jev-direction-v4-preregistration.md §五逐字一致（改门须用户点头）。

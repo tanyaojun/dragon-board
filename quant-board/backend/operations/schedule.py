@@ -13,6 +13,7 @@ from backend.data.repositories import repository_factory
 from backend.data.archive.service import ArchiveService
 from backend.data.backup.mongodb_backup import get_mongodb_backup_service
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
+from backend.operations.jev_vote_winrate_ledger import build_ledger, persist as persist_winrate_ledger
 from backend.core.settings import get_settings
 from backend.snapshot_collector.trading_calendar import is_trading_day
 
@@ -495,6 +496,26 @@ def _run_zhaban_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
             "stdoutTail": (proc.stdout or "")[-300:]}
 
 
+def _run_vote_winrate_ledger_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """方向判读 v4-material(b) 两周验证台账（2026-10-13 用户裁决：挂半月，无增量撤）。
+
+    - 纯读+小写（判读档/帧/TDX），零 jev 调用零成本；jevVoteRecheck 之后跑（判读已落档）；
+    - advisory 语义：失败不翻转整体 ok、不参与 stopped_at；
+    - 裁决 2026-10-27：V4 累计胜率 > 规则线 → 保留；否则撤 vote 判读。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        ledger = build_ledger(db)
+        persist_winrate_ledger(db, ledger)
+        s = ledger["summary"]
+        return {"ok": True, "v4Rate": s["v4Rate"], "ruleRate": s["ruleRate"],
+                "delta": s["delta"], "verdict": s["verdict"]}
+    except Exception as exc:  # noqa: BLE001 — advisory fail-visible
+        return {"ok": False, "error": {"code": "vote_winrate_ledger_failed", "message": str(exc)[:300]}}
+
+
 def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """双题集收盘复核（观察轨道步，2026-10-12 用户裁决挂链：每日 15:00 帧一次，不等午盘）。
 
@@ -748,10 +769,11 @@ def run_after_market_once(
         calib_drift_result = _run_calib_drift_step(today, dry_run=dry_run)
         amount_vs_same_result = _run_amount_vs_same_step(today, dry_run=dry_run)
         jev_vote_recheck_result = _run_jev_vote_recheck_step(today, dry_run=dry_run)
+        vote_winrate_result = _run_vote_winrate_ledger_step(today, dry_run=dry_run)
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck", "voteWinrateLedger"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -767,6 +789,7 @@ def run_after_market_once(
                 "calibDriftMonitor": calib_drift_result,
                 "amountVsSameRecord": amount_vs_same_result,
                 "jevVoteRecheck": jev_vote_recheck_result,
+                "voteWinrateLedger": vote_winrate_result,
             },
             archive_limit=archive_limit,
             backup_limit=backup_limit,
