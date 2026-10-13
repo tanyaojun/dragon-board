@@ -25,8 +25,8 @@ BOARD_LIST_FS = "m:90+t:3"
 BOARD_FIELDS = "f12,f14,f3"
 CONSTITUENT_FIELDS = "f12,f14"
 PAGE_SIZE = 100
-MAX_BOARD_PAGES = 3
-MAX_CONSTITUENT_PAGES = 6
+MAX_BOARD_PAGES = 6
+MAX_CONSTITUENT_PAGES = 8
 
 DEFAULT_TTL_SECONDS = 6 * 3600
 DEFAULT_STALE_TTL_SECONDS = 72 * 3600
@@ -50,12 +50,16 @@ class ConceptMapService:
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         stale_ttl_seconds: float = DEFAULT_STALE_TTL_SECONDS,
         concurrency: int = DEFAULT_CONCURRENCY,
+        max_board_pages: int = MAX_BOARD_PAGES,
+        max_constituent_pages: int = MAX_CONSTITUENT_PAGES,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         self._client = client
         self._ttl_ms = max(1.0, float(ttl_seconds)) * 1000
         self._stale_ttl_ms = max(1.0, float(stale_ttl_seconds)) * 1000
         self._semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+        self._max_board_pages = max(1, int(max_board_pages))
+        self._max_constituent_pages = max(1, int(max_constituent_pages))
         self._now_ms = now_ms or (lambda: int(time.time() * 1000))
         cache_root = Path(cache_dir) if cache_dir else Path(__file__).resolve().parents[2] / "data" / "cache"
         self._cache_path = cache_root / "concept-map-em.json"
@@ -64,8 +68,12 @@ class ConceptMapService:
         self._cached_at_ms = 0
         self._refresh_cooldown_ms = 60_000.0
         self._last_fail_at_ms = 0
+        self._refresh_task: asyncio.Task | None = None
+        self._last_refresh_errors: list[str] = []
 
-    async def get_map(self, force_refresh: bool = False) -> dict[str, Any]:
+    async def get_map(self, force_refresh: bool = False, wait: bool = False) -> dict[str, Any]:
+        """wait=False（默认）：需要刷新时后台起任务，立即返回 refreshing 快照（首刷不再阻塞请求-响应）；
+        wait=True：同步刷新，供测试与诊断使用。"""
         now_ms = self._now_ms()
         if not force_refresh and self._fresh(now_ms):
             return self._payload  # type: ignore[return-value]
@@ -82,41 +90,81 @@ class ConceptMapService:
                 self._payload = disk["payload"]
                 self._cached_at_ms = disk["fetched_at_ms"]
                 return self._payload  # type: ignore[return-value]
-            if (
-                not force_refresh
-                and self._last_fail_at_ms
-                and now_ms - self._last_fail_at_ms < self._refresh_cooldown_ms
-            ):
-                # 刷新失败冷却期：不再整轮重试上游，直接走缓存或抛错，避免重试放大
-                if disk is not None and now_ms - disk["fetched_at_ms"] < self._stale_ttl_ms:
-                    payload = dict(disk["payload"])
-                    payload["stale"] = True
-                    payload["errors"] = list(payload.get("errors") or []) + [
-                        "refresh_in_cooldown_serving_disk_cache"
-                    ]
+
+            task_running = self._refresh_task is not None and not self._refresh_task.done()
+            if not task_running:
+                if (
+                    not force_refresh
+                    and self._last_fail_at_ms
+                    and now_ms - self._last_fail_at_ms < self._refresh_cooldown_ms
+                ):
+                    # 刷新失败冷却期：不再整轮重试上游，直接走缓存或抛错，避免重试放大
+                    if disk is not None and now_ms - disk["fetched_at_ms"] < self._stale_ttl_ms:
+                        payload = dict(disk["payload"])
+                        payload["stale"] = True
+                        payload["errors"] = list(payload.get("errors") or []) + [
+                            "refresh_in_cooldown_serving_disk_cache"
+                        ]
+                        self._payload = payload
+                        self._cached_at_ms = disk["fetched_at_ms"]
+                        return payload
+                    raise RuntimeError("upstream in refresh cooldown and no usable disk cache")
+                if wait:
+                    try:
+                        payload = await self._refresh()
+                    except Exception as exc:
+                        self._last_fail_at_ms = self._now_ms()
+                        if disk is not None and now_ms - disk["fetched_at_ms"] < self._stale_ttl_ms:
+                            payload = dict(disk["payload"])
+                            payload["stale"] = True
+                            payload["errors"] = list(payload.get("errors") or []) + [
+                                f"refresh_failed_serving_disk_cache: {str(exc)[:160]}"
+                            ]
+                            self._payload = payload
+                            self._cached_at_ms = disk["fetched_at_ms"]
+                            return payload
+                        raise
+                    fetched_at_ms = self._now_ms()
+                    self._save_disk_cache(payload, fetched_at_ms)
                     self._payload = payload
-                    self._cached_at_ms = disk["fetched_at_ms"]
+                    self._cached_at_ms = fetched_at_ms
                     return payload
-                raise RuntimeError("upstream in refresh cooldown and no usable disk cache")
+                self._refresh_task = asyncio.create_task(self._background_refresh())
+
+            return self._snapshot_refreshing(disk)
+
+    async def _background_refresh(self) -> None:
+        async with self._lock:
             try:
                 payload = await self._refresh()
             except Exception as exc:
                 self._last_fail_at_ms = self._now_ms()
-                if disk is not None and now_ms - disk["fetched_at_ms"] < self._stale_ttl_ms:
-                    payload = dict(disk["payload"])
-                    payload["stale"] = True
-                    payload["errors"] = list(payload.get("errors") or []) + [
-                        f"refresh_failed_serving_disk_cache: {str(exc)[:160]}"
-                    ]
-                    self._payload = payload
-                    self._cached_at_ms = disk["fetched_at_ms"]
-                    return payload
-                raise
+                self._last_refresh_errors = [f"background_refresh_failed: {str(exc)[:160]}"]
+                logger.warning("concept-map background refresh failed: %s", exc)
+                return
             fetched_at_ms = self._now_ms()
             self._save_disk_cache(payload, fetched_at_ms)
             self._payload = payload
             self._cached_at_ms = fetched_at_ms
+            self._last_refresh_errors = []
+
+    def _snapshot_refreshing(self, disk: dict[str, Any] | None) -> dict[str, Any]:
+        """刷新进行中的立即快照：优先回 stale 磁盘缓存，否则空表并标 refreshing。"""
+        if disk is not None:
+            payload = dict(disk["payload"])
+            payload["stale"] = True
+            payload["refreshing"] = True
             return payload
+        return {
+            "ok": True,
+            "source": "concept-map-em",
+            "stale": False,
+            "refreshing": True,
+            "conceptCount": 0,
+            "stockCount": 0,
+            "data": [],
+            "errors": ["initial_refresh_in_progress"],
+        }
 
     def _fresh(self, now_ms: int) -> bool:
         return self._payload is not None and now_ms - self._cached_at_ms < self._ttl_ms
@@ -172,7 +220,7 @@ class ConceptMapService:
         """返回 (板块列表, 截断告警)。告警非空表示分页封顶导致未拉满 total（fail-visible）。"""
         boards: list[dict[str, Any]] = []
         total: int | None = None
-        for page in range(1, MAX_BOARD_PAGES + 1):
+        for page in range(1, self._max_board_pages + 1):
             payload = await self._clist(
                 client,
                 fs=BOARD_LIST_FS,
@@ -208,7 +256,7 @@ class ConceptMapService:
         stocks: list[tuple[str, str]] = []
         seen: set[str] = set()
         total: int | None = None
-        for page in range(1, MAX_CONSTITUENT_PAGES + 1):
+        for page in range(1, self._max_constituent_pages + 1):
             payload = await self._clist(
                 client,
                 fs=f"b:{board_code}",
@@ -255,7 +303,7 @@ class ConceptMapService:
         response = await client.get(
             EM_CLIST_URL,
             params=params,
-            headers={"User-Agent": UA},
+            headers={"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"},
             timeout=8.0,
         )
         response.raise_for_status()
