@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -48,7 +49,11 @@ class ConceptMapService:
         self._cached_at_ms = 0
 
     async def get_map(self, force_refresh: bool = False) -> dict[str, Any]:
-        """返回概念映射快照；``refreshing`` 恒 False，首刷即全量（不再有 1-2 分钟后台窗口）。"""
+        """返回概念映射快照；``refreshing`` 恒 False，首刷即全量（不再有 1-2 分钟后台窗口）。
+
+        同步 pymongo 与磁盘读写一律走 to_thread（与 hotlist_routes 同一约定），
+        不阻塞事件循环；Mongo 故障期最坏阻塞收敛在 to_thread 工作线程内。
+        """
         now_ms = self._now_ms()
         if (
             not force_refresh
@@ -59,19 +64,20 @@ class ConceptMapService:
 
         errors: list[str] = []
         try:
-            payload = self._load_from_database(now_ms, errors)
+            payload, private = await asyncio.to_thread(self._load_from_database, now_ms, errors)
         except Exception as exc:
             logger.warning("题材映射读取失败: %s", exc)
             errors.append(f"database_unavailable: {exc}")
-            cached = self._load_disk_cache()
+            cached = await asyncio.to_thread(self._load_disk_cache)
             if cached is not None and now_ms - int(cached.get("_cachedAtMs") or 0) <= self._stale_ttl_ms:
-                payload = self._with_stale(cached, errors)
-            else:
-                raise
+                # 降级响应不回写磁盘：72h stale 窗口以首次成功时刻锚定，
+                # errors 不随失败轮询累积（每次响应临时合并，落盘内容不变）
+                return self._with_stale(cached, errors)
+            raise
 
         self._payload = payload
         self._cached_at_ms = now_ms
-        self._save_disk_cache(payload, now_ms)
+        await asyncio.to_thread(self._save_disk_cache, {**payload, **private}, now_ms)
         return payload
 
     # ------------------------------------------------------------------ 数据源
@@ -93,6 +99,7 @@ class ConceptMapService:
                     errors.append(f"{theme_id or '?'}: invalid_stock_code:{code}")
                 continue
             by_theme.setdefault(theme_id, []).append(code)
+        consumed_theme_ids: set[str] = set()
 
         version = ""
         last_update = ""
@@ -110,11 +117,11 @@ class ConceptMapService:
         for theme in themes:
             theme_id = str(theme.get("id") or "")
             name = str(theme.get("name") or "").strip()
-            key = name or theme_id
             stocks = by_theme.get(theme_id, [])
             if not stocks:
                 errors.append(f"{theme_id}: no_valid_members")
                 continue
+            consumed_theme_ids.add(theme_id)
             data.append(
                 {
                     "code": theme_id,
@@ -129,6 +136,10 @@ class ConceptMapService:
         if not data:
             raise RuntimeError("theme mapping empty: themes=%d mappings=%d" % (len(themes), len(mappings)))
 
+        # 孤儿映射行（themeId 无对应 themes 文档）不得静默丢弃——失败可见红线
+        for orphan_id in sorted(set(by_theme) - consumed_theme_ids):
+            errors.append(f"{orphan_id}: mapping_theme_missing")
+
         return {
             "ok": True,
             "refreshing": False,
@@ -140,9 +151,9 @@ class ConceptMapService:
             "conceptCount": len(data),
             "stockCount": len({code for row in data for code in row["stocks"]}),
             "data": data,
+            # 剥离 _ 前缀私有键后再暴露（合同卫生，与 _with_stale/_save_disk_cache 同规）
             "errors": errors,
-            "_cachedAtMs": now_ms,
-        }
+        }, {"_cachedAtMs": now_ms}
 
     def _resolve_database(self) -> Any:
         # 函数内导入避免模块环（main → market_data_routes → concepts）

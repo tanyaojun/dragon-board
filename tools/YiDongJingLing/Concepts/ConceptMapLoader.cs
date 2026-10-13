@@ -53,7 +53,8 @@ public sealed class ConceptMapLoader
 
     /// <summary>
     /// 拉取 /api/concepts/map 并与 .blk 自定义板块合并（同名板块以 blk 覆盖服务器概念）。
-    /// 服务器失败时回退本地缓存（标记 stale）；缓存也没有则抛出，由调用方记录并沿用旧映射。
+    /// 数据源为自家题材库（theme_stock_mappings，2026-10-13 起弃用东财），refreshing 恒 false
+    /// 即返回全量；保留轮询协议仅为兼容。服务器失败时回退本地缓存（标记 stale）。
     /// </summary>
     public async Task<ConceptMapResult> LoadAsync(
         Uri proxyBaseUri,

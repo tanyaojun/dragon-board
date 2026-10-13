@@ -13,7 +13,8 @@ from typing import Any
 
 import pytest
 
-from backend.market_proxy.concepts import ConceptMapService
+import backend.api.market_data_routes as market_data_routes
+from backend.market_proxy.concepts import ConceptMapService, get_concept_map_service
 
 
 class FakeCursor:
@@ -22,7 +23,11 @@ class FakeCursor:
     def __init__(self, docs: list[dict[str, Any]]) -> None:
         self._docs = list(docs)
 
-    def sort(self, *_args: Any, **_kwargs: Any) -> "FakeCursor":
+    def sort(self, key: Any = None, **_kwargs: Any) -> "FakeCursor":
+        # 生产 pymongo sort 传 [("field", 1), ...]；单键时按字段升序模拟
+        if key and isinstance(key, list) and key and isinstance(key[0], (list, tuple)):
+            field = str(key[0][0])
+            self._docs = sorted(self._docs, key=lambda doc: str(doc.get(field) or ""))
         return self
 
     def __iter__(self):
@@ -203,3 +208,55 @@ async def test_disk_cache_atomic_write(tmp_path: Path) -> None:
     assert not (tmp_path / "concept-map-theme.json.tmp").exists()
     disk = json.loads((tmp_path / "concept-map-theme.json").read_text(encoding="utf-8"))
     assert disk["source"] == "concept-map-theme"
+
+
+# ---------------------------------------------------------------- 路由级合同
+
+
+def _route_client(monkeypatch: pytest.MonkeyPatch, service: Any):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(market_data_routes.router)
+    monkeypatch.setattr(market_data_routes, "get_concept_map_service", lambda: service)
+    return TestClient(app)
+
+
+def test_route_ok_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class _StubService:
+        async def get_map(self, force_refresh: bool = False):
+            return {
+                "ok": True,
+                "refreshing": False,
+                "stale": False,
+                "source": "concept-map-theme",
+                "conceptCount": 1,
+                "data": [{"code": "117", "name": "固态电池", "changePct": None, "stocks": ["300001"]}],
+                "errors": [],
+            }
+
+    client = _route_client(monkeypatch, _StubService())
+    resp = client.get("/api/concepts/map")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert payload["source"] == "concept-map-theme"
+    assert payload["data"][0]["stocks"] == ["300001"]
+    assert "_cachedAtMs" not in payload  # 私有键不得漏出
+
+
+def test_route_degraded_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    class _BrokenService:
+        async def get_map(self, force_refresh: bool = False):
+            raise RuntimeError("mongo down and no cache")
+
+    client = _route_client(monkeypatch, _BrokenService())
+    resp = client.get("/api/concepts/map")
+    assert resp.status_code == 200  # 失败可见：200 + degraded 结构，不抛 5xx
+    payload = resp.json()
+    assert payload["ok"] is False
+    assert payload["degraded"] is True
+    assert payload["errorCode"] == "upstream_unavailable"
+    assert payload["source"] == "concept-map-theme"
+    assert payload["data"] == []
