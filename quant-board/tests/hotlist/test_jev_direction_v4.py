@@ -170,24 +170,18 @@ def _pop_ctx():
             "market": {"ztCount": 37}, "swing": {"ok": False}}
 
 
-def test_population_exclusions_counted():
-    codes, excluded = v4.build_population(FakePopDB(), "2026-09-23", _pop_ctx())
-    assert codes == ["A", "C"]            # B 缺主力、D 前三日断榜
-    assert excluded["mainforce_missing"] == 1
-    assert excluded["streak_unverifiable"] == 1
+def test_population_full_pool_no_exclusions():
+    """v4 口径（2026-10-13 用户裁决）：人口=全热榜池，v3 三条件排除全部取消；
+    主力缺失只计数不排除（case 级质量自标）。"""
+    codes, stats = v4.build_population(FakePopDB(), "2026-09-23", _pop_ctx())
+    assert codes == ["A", "B", "C", "D"]          # B 缺主力、D 断榜都保留判读
+    assert stats["full_pool"] == 4
+    assert stats["mainforce_missing_counted"] == 1
 
-
-def test_population_missing_series_day_no_crash():
-    ctx = _pop_ctx()
-    ctx["prev3"] = ctx["prev3"] + ["2026-09-15"]  # 键集外日期（missed-slot）
-    codes, excluded = v4.build_population(FakePopDB(), "2026-09-23", ctx)
-    assert codes == []                     # 无法验证连续在榜→全排除，不 KeyError
-    assert excluded["streak_unverifiable"] == 3  # A/C/D 走 streak；B 先被主力排除
-
-
-# ── 八块组装（mock db + TDX 壳） ────────────────────────
 
 class FakeStateDB:
+    """八块组装 mock：帧/行/情绪最小 fake。"""
+
     def __init__(self, ctx_codes):
         self.ctx_codes = ctx_codes
 
@@ -222,18 +216,23 @@ def test_build_state_v4_blocks_and_blacklist(monkeypatch):
     narrative = "\n".join([head, *[ln for b in blocks.values() for ln in b]])
     bad = [w for w in v4.BLACKLIST_FIELDS if w in narrative]
     assert bad == [], f"黑名单字段泄漏: {bad}"
-    assert meta["folded_days"] >= 1
+    assert meta["seenDays"] == 5 and meta["firstSeen"] is False   # 4 历史日+判读日
+    assert "history depth: 5 trading days" in narrative
+    assert "FIRST-SEEN" not in narrative                          # ≥5 日为主证据，无降级标注
     assert "consecutive falling days" in narrative
     assert "swing anchor" in narrative or "insufficient window" in narrative
     assert "TDX 不可用" in narrative or "个股位置" in narrative  # bars=[] → fail-visible 位置行
 
 
-def test_short_series_rejected_v4(monkeypatch):
+def test_short_series_flags_first_seen(monkeypatch):
+    """新股/短历史不再拒判：全池口径下降级为 FIRST-SEEN 自标（判据不引用序列主证据）。"""
     monkeypatch.setattr("backend.operations.jev_label_jiuyan._daily_bars", lambda code: [])
     ctx = _pop_ctx()
-    ctx["series_days"] = []  # 无历史日 → 仅判读点 1 点
-    with pytest.raises(LookupError):
-        v4.build_state_v4(FakeStateDB(["A"]), "A", "2026-09-23", ctx)
+    ctx["series_days"] = []  # 无历史日 → 仅判读点
+    head, blocks, meta = v4.build_state_v4(FakeStateDB(["A"]), "A", "2026-09-23", ctx)
+    assert meta["seenDays"] == 1 and meta["firstSeen"] is True
+    assert "FIRST-SEEN" in "\n".join(blocks["series"])
+    assert "history depth: 1 trading days" in "\n".join(blocks["series"])
 
 
 def test_blacklist_constant_covers_engine_and_jev_answers():

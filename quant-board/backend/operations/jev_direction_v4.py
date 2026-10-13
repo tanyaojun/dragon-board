@@ -26,7 +26,7 @@ from backend.analysis.hotlist.market_facts import (
 DEFAULT_DATASET_ID = "dragonboard_live"
 DIRECTION_SLOT = "11:00"
 HOT_ZONE = 80
-SERIES_MIN_POINTS = 10
+SERIES_MAIN_MIN_DAYS = 5  # 序列证据作为主证据的最小历史深度（用户裁决 2026-10-13）
 SERIES_WINDOW_DAYS = 10
 QUESTION_SET_VERSION = "v4-material"
 
@@ -156,9 +156,9 @@ def build_state_v4(db: Any, code: str, d: str, ctx: dict,
     cur_pct = _pct_rank(row.get("rank"), ctx["pool"])
     series.append({"d": d, "slot": DIRECTION_SLOT, "rank": row.get("rank"),
                    "pct": cur_pct, "chg": _r2(row.get("change"))})
-    if len(series) < SERIES_MIN_POINTS:
-        raise LookupError(f"{code} 出现序列仅 {len(series)} 点，不足判读")
-    folded = fold_attention_series(series, ctx["prev10"], d, cur_pct)
+    folded = fold_attention_series(series, ctx["series_days"], d, cur_pct)  # 范围与查询窗口同源，防边缘日静默丢弃
+    seen_days = len(folded["days"])
+    first_seen = seen_days <= 1
 
     # 位置块：TDX 日线位置轴+板序（driver ammo 纯函数，共享算法）
     pos_lines, seq_lines = [], []
@@ -190,11 +190,15 @@ def build_state_v4(db: Any, code: str, d: str, ctx: dict,
     head = f"{d} {DIRECTION_SLOT} (intraday) · {code} {row.get('name') or ''}".rstrip()
     blocks = {
         "series": ["[Attention Series · daily-folded from cross-day appearances; percentile 0-100 "
-                   "= attention rank; LAST = current intraday reading; direction +/- = day-over-day]"]
-                   + [f"{x['d']}: percentile {_f(x['pct'])} change {_f(x['chg'])}%" for x in folded["folded"]]
-                   + [f"day-over-day directions (oldest→newest): {folded['directions']}",
-                      f"against-trend jump day indexes (|flip|>=8pt): {folded['jumpIdxs'] or 'none'}",
-                      f"consecutive falling days (incl. today): {folded['consecutiveFalling']}"],
+                   "= attention rank; LAST = current intraday reading; direction +/- = day-over-day",
+                   f"history depth: {seen_days} trading days"
+                   + (" · FIRST-SEEN / SHORT HISTORY: attention series is NOT usable as primary "
+                      "evidence; rely on position / board sequence / board type; lower confidence"
+                      if seen_days < SERIES_MAIN_MIN_DAYS else ""),
+                   *[f"{x['d']}: percentile {_f(x['pct'])} change {_f(x['chg'])}%" for x in folded["folded"]],
+                   f"day-over-day directions (oldest→newest): {folded['directions']}",
+                   f"against-trend jump day indexes (|flip|>=8pt): {folded['jumpIdxs'] or 'none'}",
+                   f"consecutive falling days (incl. today): {folded['consecutiveFalling']}"],
         "position": ["[Position · price axis (TDX daily) + board sequence]"] + pos_lines + seq_lines,
         "vp": ["[Volume-Price + Board Type]",
                f"change: {_f(chg)}% · volume ratio: {_f(vr)} (5-day base status: "
@@ -238,6 +242,7 @@ def build_state_v4(db: Any, code: str, d: str, ctx: dict,
                  f" · pool breadth (rising 3-day percentile): {_f(ctx['up_share'], '%')}"],
     }
     meta = {"folded": {k: v for k, v in folded.items() if k != "folded"},
+            "seenDays": seen_days, "firstSeen": first_seen,
             "series_points": len(series), "folded_days": len(folded["folded"]),
             "market": mkt, "swing": sw if sw.get("ok") else {"ok": False},
             "sentiment": sent, "factsVersion": FACTS_VERSION}
@@ -247,40 +252,24 @@ def build_state_v4(db: Any, code: str, d: str, ctx: dict,
 # ── 人口（v3 口径：≥4 槽+前三日连续+主力非空；streak 冗余门禁评审后待裁决） ──
 
 def build_population(db: Any, d: str, ctx: dict, dataset_id: str = DEFAULT_DATASET_ID) -> tuple[list[str], dict]:
-    by_day: dict[str, set] = {dd: set() for dd in ctx["series_days"]}
-    for dd in ctx["series_days"]:
-        for slot, sid in _day_slot_frames(db, dd, dataset_id):
-            for code in db["snapshot_stock_rows"].distinct(
-                    "code", {"datasetId": dataset_id, "snapshotId": sid}):
-                by_day[dd].add(code)
-    today_slots = [(s, sid) for s, sid in _day_slot_frames(db, d, dataset_id) if s <= DIRECTION_SLOT]
-    today_seen: dict[str, set] = {}
-    for s, sid in today_slots:
-        for code in db["snapshot_stock_rows"].distinct(
-                "code", {"datasetId": dataset_id, "snapshotId": sid}):
-            today_seen.setdefault(code, set()).add(s)
-    picked, excluded = [], {"mainforce_missing": 0, "slots_lt4": 0, "streak_unverifiable": 0}
-    for code, r in ctx["cur"].items():
-        chg = r.get("change")
-        zlje, zljzb = r.get("zlje"), r.get("zljzb")
-        if not isinstance(chg, (int, float)) or zlje is None or zljzb is None:
-            excluded["mainforce_missing"] += 1
-            continue
-        if len(today_seen.get(code, set())) < 4:
-            excluded["slots_lt4"] += 1
-            continue
-        if not all(code in by_day.get(dd, set()) for dd in ctx["prev3"]):
-            excluded["streak_unverifiable"] += 1
-            continue
-        picked.append(code)
-    return sorted(picked), excluded
+    """v4 口径（2026-10-13 用户裁决）：人口=全热榜池（判读帧全部在榜股）。
+
+    v3 三条件排除（主力非空/当日>=4槽/前三日连续）取消：那是「序列为主证据」判据的
+    影子，把新面孔（最强 ignition 候选）系统性挡在 buy 判读外。v4 证据结构以位置
+    （TDX）+板序+板型为主，不依赖在榜历史；序列不足降级为 case 级质量自标
+    （seenDays/FIRST-SEEN），不挡判读。
+    """
+    codes = sorted(ctx["cur"].keys())
+    mf_missing = len([c for c, r in ctx["cur"].items()
+                      if r.get("zlje") is None or r.get("zljzb") is None])
+    return codes, {"full_pool": len(codes), "mainforce_missing_counted": mf_missing}
 
 
 def run_material_day(db: Any, d: str, dataset_id: str = DEFAULT_DATASET_ID,
                      cap: int | None = None) -> dict:
     """组装一个判读日的全部原料叙事（不开火）：返回统计+逐例 narrative 摘要。"""
     ctx = setup_day(db, d, dataset_id)
-    codes, excluded = build_population(db, d, ctx, dataset_id)
+    codes, pop_stats = build_population(db, d, ctx, dataset_id)
     if cap:
         codes = codes[:cap]
     out = []
@@ -290,7 +279,7 @@ def run_material_day(db: Any, d: str, dataset_id: str = DEFAULT_DATASET_ID,
         out.append({"code": code, "name": ctx["cur"][code].get("name"),
                     "narrative": narrative, "meta": meta})
     return {"date": d, "pool": ctx["pool"], "population": len(codes),
-            "excluded": excluded, "cases": out,
+            "populationStats": pop_stats, "cases": out,
             "market": ctx["market"], "swing": ctx["swing"], "sent": ctx["sent"]}
 
 
@@ -303,7 +292,8 @@ def _main() -> None:
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
     db = get_runtime_mongodb_database()
     r = run_material_day(db, args.day, cap=args.cap)
-    print(f"[v4-material] {args.day} 池 {r['pool']} 人口 {r['population']} 排除 {r['excluded']}")
+    print(f"[v4-material] {args.day} 池 {r['pool']} 人口(全池) {r['population']} "
+          f"主力缺失计数 {r['populationStats']['mainforce_missing_counted']}")
     print(f"[v4-material] 市场 as-of 11:00: 涨停 {r['market']['ztCount']} 涨/跌 "
           f"{r['market']['upCount']}/{r['market']['downCount']} 情绪带 {r['sent']['band']}")
     if r["cases"]:
