@@ -422,6 +422,7 @@ async def on_shutdown() -> None:
     from backend.market_proxy.sentiment import close_sentiment_client
     from backend.market_proxy.surge import close_surge_client
     from backend.market_proxy.xuangubao import close_xuangubao_client
+    from backend.market_proxy.concepts import close_concept_map_client
 
     await stop_hotlist_refresh()
     await close_hotlist_client()
@@ -430,6 +431,7 @@ async def on_shutdown() -> None:
     await close_sentiment_client()
     await close_surge_client()
     await close_xuangubao_client()
+    await close_concept_map_client()
     from backend.snapshot_collector.providers import close_collector_http
 
     close_collector_http()

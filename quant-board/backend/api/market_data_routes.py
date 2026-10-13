@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from backend.market_proxy.concepts import get_concept_map_service
 from backend.market_proxy.hotlists import (
     GET_PLATFORMS,
     POST_PLATFORMS,
@@ -292,6 +293,31 @@ async def big_order_all_day(stockCode: str = "", money: str = "0"):
                 "errorCode": "upstream_unavailable",
                 "message": str(exc)[:200],
                 "data": {"List": []},
+            },
+        )
+    return JSONResponse(content=payload)
+
+
+@router.get("/api/concepts/map", response_model=None)
+async def concepts_map(refresh: str = ""):
+    """东财全市场概念板块映射（板块→成分股），供异动监控板块聚合消费。
+
+    失败可见：上游全部不可用时返回 degraded 结构；单板块成分失败计入
+    errors 不阻断整体；陈旧磁盘缓存回退时 payload.stale=true。
+    """
+    try:
+        payload = await get_concept_map_service().get_map(force_refresh=(refresh == "1"))
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "degraded": True,
+                "source": "concept-map-em",
+                "errorCode": "upstream_unavailable",
+                "message": str(exc)[:200],
+                "data": [],
+                "errors": [],
             },
         )
     return JSONResponse(content=payload)
