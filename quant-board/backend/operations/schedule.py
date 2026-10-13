@@ -453,7 +453,45 @@ def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any
     return {"ok": True, "record": record}
 
 
-_JEV_VOTE_RECHECK_TIMEOUT_SECONDS = 1800  # 双题集收盘复核：全量一帧 ≈500 call ÷ 4 workers，1800s 冗余
+_ZHABAN_LABEL_TIMEOUT_SECONDS = 1200  # 炸板归因：当日炸板池逐股一 call（串行），池峰值 ~40 只冗余
+
+
+def _run_zhaban_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """炸板股归因打标（2026-10-13 用户裁决挂链：relay 叙事炸板归因缺口补全，对连板情绪判定关键）。
+
+    - 门控=当日 half_hour 15:00 帧已落库（THS 炸板池来源；帧未落库/非交易日 → skipped，零成本；
+      THS 池缺失日 runner 自身 fail-visible 整日跳过，双保险）；
+    - 子进程=jev_zhaban_label --zhaban-day 当日（炸板池逐股单题；幂等 status=ok 跳过，重跑零重复计费）；
+    - **advisory 语义**：失败/跳过不翻转 after_market 整体 ok、不参与 stopped_at
+      （jev=并列观察者，观察证据链非生产数据链）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    settings = get_settings()
+    dataset_id = settings.archive_auto_dataset_id
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        frame = db["snapshot_frames"].find_one(
+            {"datasetId": dataset_id, "type": "half_hour",
+             "tradingDate": today, "slotTime": "15:00"}, {"snapshotId": 1})
+    except Exception as exc:  # noqa: BLE001 — 门控查询失败按跳过处理（fail-visible 记原因）
+        return {"ok": True, "skipped": True, "reason": f"gate error: {exc}"}
+    if not frame:
+        return {"ok": True, "skipped": True, "reason": "15:00 frame missing (非交易日/采集延迟)"}
+    run_started_at = datetime.now(_TZ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_zhaban_label",
+             "--zhaban-day", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_ZHABAN_LABEL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "zhaban_label_timeout", "message": f"timeout {_ZHABAN_LABEL_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "zhaban_label_failed", "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    return {"ok": True, "runStartedAt": run_started_at.isoformat(),
+            "stdoutTail": (proc.stdout or "")[-300:]}
 
 
 def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, Any]:
@@ -701,6 +739,7 @@ def run_after_market_once(
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
         jiuyan_label_result = _run_jiuyan_label_step(today, dry_run=dry_run)
         relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
+        zhaban_label_result = _run_zhaban_label_step(today, dry_run=dry_run)
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
@@ -711,7 +750,7 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -719,6 +758,7 @@ def run_after_market_once(
                 "phasePulse": pulse_result,
                 "jiuyanLabel": jiuyan_label_result,
                 "relayIndex": relay_index_result,
+                "zhabanLabel": zhaban_label_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,

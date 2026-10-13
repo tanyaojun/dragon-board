@@ -34,6 +34,8 @@ RANGE_FLAT_THRESHOLD = 8.0  # 日内振幅低于此分值 → 窄幅震荡（与
 
 # 句子模板（单一事实源；改措辞必须升版本并登记 jev-daily-line-design.md §3）
 SENTENCE_TEMPLATE_VERSION = 1
+# 题集代际戳（I15 对齐：DAILY_SHAPE_QUESTION 判据/口径换代必须动戳，跨代不可比）。
+QUESTION_SET_VERSION_DAILY_LINE = "v1"
 
 SHAPE_CHOICES = ("高开低走", "低开高走", "冲高回落", "探底回升", "单边走强", "窄幅震荡", "insufficient_evidence")
 SHAPE_UNKNOWN = "unknown"
@@ -343,6 +345,7 @@ def run_daily_line_for_date(date: str, *, apply: bool = False) -> dict[str, Any]
         "curve": {k: facts[k] for k in facts if k != "degradedSources"},
         "reference": reference,
         "meta": {"templateVersion": SENTENCE_TEMPLATE_VERSION,
+                 "questionSetVersion": QUESTION_SET_VERSION_DAILY_LINE,
                  "generatedAt": datetime.now().isoformat(timespec="seconds")},
     }
     if apply:

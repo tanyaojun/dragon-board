@@ -74,6 +74,9 @@ QUESTIONS_STOCK = {
 }
 
 # Q5 相位题：日级独立调用专用（C 架构=日级粗哨兵，强/非强两档实测有效，冷/弱边界信任规则分）
+# 市场相位带题（jiuyanLabel 链 phase_band_daily；独立戳——v1 起戳，跨代不可比违规防范
+# 对齐 I15 题集代际裁决；此前无戳=缺陷修复 2026-10-13）。
+QUESTION_SET_VERSION_PHASE_BAND = "v1"
 QUESTIONS_PHASE = {"phase_band": {"type": "choice",
                    "instructions": "仅依据所给盘面事实（涨停家数、炸板率、连板梯队、板块效应及各自近 20 日分位），"
                                    "判断当日市场情绪相位落在哪一档？只依据所给信息判断，不预测后市。",
