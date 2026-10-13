@@ -206,7 +206,20 @@ def test_provider_reuses_evidence_within_ttl(monkeypatch):
 
 
 def test_provider_passes_collector_pool_subset(monkeypatch):
-    # 采集链只取 failed/rushing/drawdown 三池（连板层五池零消费）
+    # 盘中采集链只取 failed/rushing/drawdown 三池。
+    # 7af28e2e 起 EOD（上海 ≥15:00）连板层五池并入采集——本用例冻结盘中时刻，
+    # 避免真实时钟导致的昼/夜结果漂移（EOD 八池语义由 pool-key 选择专项用例覆盖）。
+    from datetime import datetime
+    from backend.snapshot_collector import providers as providers_module
+
+    frozen = datetime(2026, 9, 24, 14, 30)
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: N805
+            return frozen if tz is None else frozen.replace(tzinfo=tz)
+
+    monkeypatch.setattr(providers_module, "datetime", _FrozenDatetime)
     service = _FakeLimitupService([_OK_PAYLOAD])
     _run_acollect(monkeypatch, service)
     assert service.pool_keys_requested == ("failed", "rushing", "drawdown")
