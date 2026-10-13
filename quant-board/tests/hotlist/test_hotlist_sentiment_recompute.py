@@ -97,11 +97,9 @@ def test_recompute_dry_run_backs_up_and_does_not_overwrite(monkeypatch):
     assert result["before"]["statusSourceCounts"] == {"displayStatus": 0, "fallback": 235}
     assert result["after"]["statusSourceCounts"] == {"displayStatus": 200, "fallback": 35}
     assert result["after"]["stageCounts"] == {"ignition": 40, "unknown": 195}
-    # 备份写入新集合，不动原文档
-    backups = db["hotlist_sentiment_recompute_backup"].inserted
-    assert len(backups) == 1
-    assert backups[0]["sourceId"] == "ds:half_hour:2026-09-10"
-    assert backups[0]["metrics"]["statusSourceCounts"]["fallback"] == 235
+    # 红线 4（2026-10-13）：业务库不留 backup 集合——recompute 不再写库备份，
+    # 回滚安全网=git 历史与 data/backups 文件归档
+    assert "hotlist_sentiment_recompute_backup" not in db._colls
     assert db["hotlist_sentiment"].replaced == []  # dry-run 不覆盖
     assert db["hotlist_sentiment"]._docs[0]["computedAt"] == 1789025414
 

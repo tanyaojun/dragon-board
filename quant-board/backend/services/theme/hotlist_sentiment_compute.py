@@ -465,18 +465,12 @@ class HotListSentimentComputeService:
 
         用途（2026-09-10 displayStatus 补跑）：`ensure_series` 只在“无库行”时计算，
         已持久化文档不会重算 → 新 join 到的 golden displayStatus 与 stageMissing
-        永远不会生效。本方法显式重算 + 覆盖，并先把旧文档写入
-        `hotlist_sentiment_recompute_backup`（新集合，不动原文档）作回滚安全网；
-        重算本身可复现（纯函数 + 库内帧），备份只是安全网。
+        永远不会生效。本方法显式重算 + 覆盖；重算本身可复现（纯函数 + 库内帧）。
+        回滚安全网=git 历史与 data/backups 文件归档（2026-10-13 红线 4 执行：
+        业务库不留 backup 集合，原 hotlist_sentiment_recompute_backup 已归档 drop）。
         """
         service = HotListSentimentService(self._backfill._db)
         before = service.get_eod_document(dataset_id, snapshot_type, trading_date)
-        if isinstance(before, dict):
-            backup = {key: value for key, value in before.items() if key != "_id"}
-            backup["sourceId"] = before.get("_id")
-            backup["backedUpAt"] = int(time.time())
-            backup["_id"] = f"{before.get('_id')}:recompute:{int(time.time())}"
-            self._db["hotlist_sentiment_recompute_backup"].insert_one(backup)
         after = self._compute_and_persist(dataset_id, snapshot_type, trading_date, persist=persist)
         return {
             "ok": True,

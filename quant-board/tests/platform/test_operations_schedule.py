@@ -79,7 +79,7 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevVoteRecheck"]["skipped"] is True  # dry_run 短路
@@ -1022,10 +1022,13 @@ def test_jev_vote_recheck_step_runs_full_population(monkeypatch):
     assert result["ok"] is True
     cmd = " ".join(captured["cmd"])
     assert "backend.operations.jev_vote_confirm" in cmd
-    # 全量人口口径（用户裁决：250 只池全覆盖）+ 收盘帧 + 幂等 fire
-    for flag in ("--include-neutral", "--include-cooling", "--slot", "15:00", "--fire",
-                 "--vote-cap-buy", "200", "--lc-cap-total", "200"):
+    # vote=题集 v4-material 全池（2026-10-13 代际覆盖：无 cap/neutral 参数，判读 11:00 时点原料）；
+    # LC=cooling 全量+15:00 收盘帧；幂等 fire
+    for flag in ("--vote-day", "--lifecycle-day", "--slot", "15:00", "--fire",
+                 "--include-cooling", "--lc-cap-igex", "100", "--lc-cap-total", "200",
+                 "--workers", "4", "--token-fuse", "6000000"):
         assert flag in cmd, flag
+    assert "--vote-cap-buy" not in cmd and "--include-neutral" not in cmd
 
 
 def test_relay_index_gate_skips_without_material(monkeypatch: Any) -> None:

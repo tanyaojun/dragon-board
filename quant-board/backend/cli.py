@@ -1838,8 +1838,8 @@ def cmd_hotlist_sentiment_recompute(args: argparse.Namespace) -> None:
     """强制重算指定交易日（默认最新一天）的 hotlist_sentiment EOD 文档；默认 dry-run。
 
     ``--days 0`` = 该 dataset/snapshot_type 的**全部**交易日（全量历史重算，
-    用于消除历史 fallback 兜底口径）。重算会先备份旧文档到
-    ``hotlist_sentiment_recompute_backup``，且落库后立即失效读口缓存。
+    用于消除历史 fallback 兜底口径）。重算可复现（纯函数+库内帧），落库后立即失效读口缓存；
+    回滚安全网=git 历史与 data/backups 文件归档（2026-10-13 红线 4，业务库不留 backup 集合）。
     """
     from backend.data.repositories import repository_factory
     from backend.operations.hotlist_sentiment import HotListSentimentBackfillService

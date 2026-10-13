@@ -454,6 +454,7 @@ def _run_amount_vs_same_step(today: str, dry_run: bool = False) -> dict[str, Any
 
 
 _ZHABAN_LABEL_TIMEOUT_SECONDS = 1200  # 炸板归因：当日炸板池逐股一 call（串行），池峰值 ~40 只冗余
+_JEV_VOTE_RECHECK_TIMEOUT_SECONDS = 1800  # 双题集收盘复核：全量一帧 ≈500 call ÷ 4 workers，1800s 冗余
 
 
 def _run_zhaban_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
