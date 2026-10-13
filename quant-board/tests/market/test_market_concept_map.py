@@ -1,242 +1,205 @@
+"""概念映射（theme_stock_mappings 单一事实源）服务层测试。
+
+2026-10-13 裁决：东财概念含指数成分/人气榜等非题材噪音，弃用东财爬虫；
+数据源换自家 Mongo 题材库。测试用内存 fake database，不真实连库（pytest 只入
+dragon_board_test 护栏不受影响，本文件根本不触库）。
+"""
+
 from __future__ import annotations
 
 import json
-import time
+from pathlib import Path
+from typing import Any
 
-import httpx
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-import backend.api.market_data_routes as market_data_routes
 from backend.market_proxy.concepts import ConceptMapService
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
+class FakeCursor:
+    """链式 find().sort() 形态的最小模拟。"""
+
+    def __init__(self, docs: list[dict[str, Any]]) -> None:
+        self._docs = list(docs)
+
+    def sort(self, *_args: Any, **_kwargs: Any) -> "FakeCursor":
+        return self
+
+    def __iter__(self):
+        return iter(self._docs)
+
+    def __len__(self) -> int:
+        return len(self._docs)
 
 
-def _mock_client(handler) -> httpx.AsyncClient:
-    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+class FakeCollection:
+    def __init__(self, docs: list[dict[str, Any]]) -> None:
+        self.docs = docs
+
+    def find(self, _filter: Any = None, projection: Any = None) -> FakeCursor:
+        return FakeCursor(self.docs)
 
 
-def _clist_response(total: int, rows: list[dict]) -> httpx.Response:
-    return httpx.Response(200, json={"data": {"total": total, "diff": rows}})
+class FakeDatabase:
+    def __init__(
+        self,
+        themes: list[dict[str, Any]],
+        mappings: list[dict[str, Any]],
+        metadata: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._collections = {
+            "themes": FakeCollection(themes),
+            "theme_stock_mappings": FakeCollection(mappings),
+            "theme_metadata": FakeCollection(metadata or []),
+        }
+
+    def __getitem__(self, name: str) -> FakeCollection:
+        return self._collections[name]
 
 
-def _board_row(code: str, name: str, pct: str | float) -> dict:
-    return {"f12": code, "f14": name, "f3": pct}
+def make_service(
+    database: FakeDatabase | None,
+    cache_dir: Path,
+    **kwargs: Any,
+) -> ConceptMapService:
+    return ConceptMapService(database=database, cache_dir=cache_dir, **kwargs)
 
 
-def _cons_row(code: str, name: str) -> dict:
-    return {"f12": code, "f14": name}
-
-
-def _happy_handler(request: httpx.Request) -> httpx.Response:
-    fs = request.url.params.get("fs", "")
-    if fs == "m:90+t:3":
-        return _clist_response(
-            2,
-            [
-                _board_row("BK0655", "算力", 2.35),
-                _board_row("BK9999", "测试板块", "-"),
-            ],
-        )
-    if fs == "b:BK0655":
-        return _clist_response(
-            3,
-            [
-                _cons_row("600000", "浦发银行"),
-                _cons_row("sh600519", "贵州茅台"),
-                _cons_row("AAPL", "非A股"),
-            ],
-        )
-    if fs == "b:BK9999":
-        raise httpx.ConnectError("blocked")
-    return _clist_response(0, [])
+def sample_database() -> FakeDatabase:
+    return FakeDatabase(
+        themes=[
+            {"id": "117", "name": "固态电池", "zsCode": ""},
+            {"id": "118", "name": "AI PC", "zsCode": "BK0001"},
+            {"id": "119", "name": "空题材", "zsCode": ""},
+        ],
+        mappings=[
+            {"themeId": "117", "stockCode": "300001"},
+            {"themeId": "117", "stockCode": "300002"},
+            {"themeId": "118", "stockCode": "600001"},
+            {"themeId": "119", "stockCode": ""},  # 空 code：不计 errors
+            {"themeId": "118", "stockCode": "abc123"},  # 非 6 位：errors
+        ],
+        metadata=[
+            {"key": "version", "value": "v2026.10.13"},
+            {"key": "lastUpdate", "value": "2026-10-13"},
+        ],
+    )
 
 
 @pytest.mark.asyncio
-async def test_concept_map_filters_and_partial_errors(tmp_path) -> None:
-    client = _mock_client(_happy_handler)
-    service = ConceptMapService(client=client, cache_dir=tmp_path / "cache")
-    payload = await service.get_map(wait=True)
+async def test_builds_theme_mapping_from_mongo(tmp_path: Path) -> None:
+    service = make_service(sample_database(), tmp_path)
+    payload = await service.get_map()
 
     assert payload["ok"] is True
-    assert payload["source"] == "concept-map-em"
-    assert payload["stale"] is False
-    assert payload["conceptCount"] == 1  # BK9999 成分失败 → 不产出板块，计入 errors
-    assert payload["stockCount"] == 2  # sh 前缀归一 + 非 A 股剔除
-    board = payload["data"][0]
-    assert board["code"] == "BK0655"
-    assert board["name"] == "算力"
-    assert board["changePct"] == 2.35
-    assert board["stocks"] == [("600000", "浦发银行"), ("600519", "贵州茅台")]
-    assert any("BK9999" in item for item in payload["errors"])
+    assert payload["refreshing"] is False
+    assert payload["source"] == "concept-map-theme"
+    assert payload["version"] == "v2026.10.13"
+    assert payload["lastUpdate"] == "2026-10-13"
+    # 空题材不进 data（no_valid_members 计入 errors）
+    names = {row["name"] for row in payload["data"]}
+    assert names == {"固态电池", "AI PC"}
+    assert payload["conceptCount"] == 2
+    assert payload["stockCount"] == 3
+    battery = next(row for row in payload["data"] if row["name"] == "固态电池")
+    assert battery["code"] == "117"
+    assert battery["stocks"] == ["300001", "300002"]
+    # 板块实时涨幅由客户端按成员行情现算，题材库不提供
+    assert battery["changePct"] is None
+    assert any("invalid_stock_code:abc123" in item for item in payload["errors"])
+    assert any("no_valid_members" in item for item in payload["errors"])
 
 
 @pytest.mark.asyncio
-async def test_concept_map_background_refresh_returns_snapshot_then_fills(tmp_path) -> None:
-    """首刷走后台任务：首次调用立即返回 refreshing 快照，任务完成后数据可用。"""
-    service = ConceptMapService(
-        client=_mock_client(_happy_handler),
-        cache_dir=tmp_path / "cache",
-    )
+async def test_memory_ttl_cache(tmp_path: Path) -> None:
+    ticks = {"now": 1_000_000}
+    database = sample_database()
+    service = make_service(database, tmp_path, now_ms=lambda: ticks["now"])
 
     first = await service.get_map()
-    assert first.get("refreshing") is True
-    assert first["data"] == []
-    assert "initial_refresh_in_progress" in first["errors"]
-
-    # 后台任务真实完成（不受快照返回影响，服务级 task 存活于请求之外）
-    task = service._refresh_task
-    assert task is not None
-    await task
-
+    database._collections["themes"].docs.append({"id": "999", "name": "新题材", "zsCode": ""})
+    database._collections["theme_stock_mappings"].docs.append({"themeId": "999", "stockCode": "000006"})
     second = await service.get_map()
-    assert second.get("refreshing", False) is False
-    assert second["conceptCount"] == 1
-    assert second["data"][0]["name"] == "算力"
+    assert second["conceptCount"] == first["conceptCount"]  # TTL 内不回源
+
+    ticks["now"] += 31 * 60 * 1000  # 越过 30 分钟 TTL
+    third = await service.get_map()
+    assert third["conceptCount"] == 3
 
 
 @pytest.mark.asyncio
-async def test_concept_map_serves_stale_disk_cache_on_refresh_failure(tmp_path) -> None:
-    cache_dir = tmp_path / "cache"
+async def test_force_refresh_bypasses_cache(tmp_path: Path) -> None:
+    database = sample_database()
+    service = make_service(database, tmp_path)
+    await service.get_map()
+    database._collections["themes"].docs.append({"id": "999", "name": "新题材", "zsCode": ""})
+    database._collections["theme_stock_mappings"].docs.append({"themeId": "999", "stockCode": "000006"})
 
-    calls = {"n": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls["n"] += 1
-        return _happy_handler(request)
-
-    client = _mock_client(handler)
-    service = ConceptMapService(client=client, cache_dir=cache_dir, ttl_seconds=0)
-    first = await service.get_map(wait=True)
-    assert first["ok"] is True
-    cache_file = cache_dir / "concept-map-em.json"
-    assert cache_file.exists()
-
-    def broken_handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("network down")
-
-    service2 = ConceptMapService(
-        client=_mock_client(broken_handler),
-        cache_dir=cache_dir,
-        ttl_seconds=0,
-        stale_ttl_seconds=72 * 3600,
-        now_ms=lambda: _now_ms() + 10_000,  # 推进时钟越过 TTL，逼出刷新路径
-    )
-    stale = await service2.get_map(wait=True)
-    assert stale["stale"] is True
-    assert stale["conceptCount"] == 1
-    assert any("refresh_failed_serving_disk_cache" in item for item in stale["errors"])
+    payload = await service.get_map(force_refresh=True)
+    assert payload["conceptCount"] == 3
 
 
 @pytest.mark.asyncio
-async def test_concept_map_raises_without_any_data(tmp_path) -> None:
-    def broken_handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("network down")
+async def test_database_failure_falls_back_to_disk_cache(tmp_path: Path) -> None:
+    service = make_service(sample_database(), tmp_path)
+    await service.get_map()
+    disk = json.loads((tmp_path / "concept-map-theme.json").read_text(encoding="utf-8"))
+    assert disk["ok"] is True
 
-    service = ConceptMapService(
-        client=_mock_client(broken_handler),
-        cache_dir=tmp_path / "empty",
-    )
-    with pytest.raises(Exception):
-        await service.get_map(wait=True)
+    class BrokenDatabase:
+        def __getitem__(self, _name: str) -> Any:
+            raise RuntimeError("mongo down")
 
+    ticks = {"now": 1_000_000 + 31 * 60 * 1000}
+    broken = make_service(BrokenDatabase(), tmp_path, now_ms=lambda: ticks["now"])
+    payload = await broken.get_map()
 
-@pytest.mark.asyncio
-async def test_concept_map_corrupt_disk_cache_does_not_crash(tmp_path) -> None:
-    """损坏的磁盘缓存按无缓存处理：上游可用时正常重建并覆写。"""
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "concept-map-em.json").write_text("{corrupt!!", encoding="utf-8")
-
-    service = ConceptMapService(client=_mock_client(_happy_handler), cache_dir=cache_dir)
-    payload = await service.get_map(wait=True)
-
+    assert payload["stale"] is True
     assert payload["ok"] is True
-    assert payload["conceptCount"] == 1
+    assert any(item.startswith("database_unavailable") for item in payload["errors"])
+    assert {row["name"] for row in payload["data"]} == {"固态电池", "AI PC"}
 
 
 @pytest.mark.asyncio
-async def test_concept_map_truncation_flagged_when_pages_capped(tmp_path) -> None:
-    """页数封顶导致未拉满 total 时必须产出 truncated 告警（fail-visible）。"""
+async def test_database_failure_without_cache_raises(tmp_path: Path) -> None:
+    class BrokenDatabase:
+        def __getitem__(self, _name: str) -> Any:
+            raise RuntimeError("mongo down")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        fs = request.url.params.get("fs", "")
-        pn = int(request.url.params.get("pn", "1"))
-        if fs == "m:90+t:3":
-            # total=250 需要 3 页，但服务被封顶为 1 页 → 必然截断
-            if pn == 1:
-                return _clist_response(
-                    250,
-                    [_board_row(f"BK00{i}", f"板块{i}", 1.0) for i in range(100)],
-                )
-            return _clist_response(
-                250,
-                [_board_row(f"BK90{i}", f"尾板块{i}", 1.0) for i in range(50)],
-            )
-        if fs.startswith("b:BK"):
-            return _clist_response(1, [_cons_row("600000", "浦发银行")])
-        return _clist_response(0, [])
-
-    service = ConceptMapService(
-        client=_mock_client(handler),
-        cache_dir=tmp_path / "cache",
-        max_board_pages=1,
-        max_constituent_pages=1,
-    )
-    payload = await service.get_map(wait=True)
-
-    assert payload["ok"] is True
-    assert any("board_list_truncated: 100/250" in item for item in payload["errors"])
+    service = make_service(BrokenDatabase(), tmp_path)
+    with pytest.raises(RuntimeError):
+        await service.get_map()
 
 
-def _build_app(monkeypatch: pytest.MonkeyPatch, payload: dict | Exception) -> FastAPI:
-    app = FastAPI()
-    app.include_router(market_data_routes.router)
+@pytest.mark.asyncio
+async def test_stale_disk_cache_expired_raises(tmp_path: Path) -> None:
+    ticks = {"now": 1_000_000}
+    service = make_service(sample_database(), tmp_path, stale_ttl_seconds=1000, now_ms=lambda: ticks["now"])
+    await service.get_map()
 
-    class FakeService:
-        async def get_map(self, force_refresh: bool = False, wait: bool = False) -> dict:
-            if isinstance(payload, Exception):
-                raise payload
-            return payload
+    class BrokenDatabase:
+        def __getitem__(self, _name: str) -> Any:
+            raise RuntimeError("mongo down")
 
-    monkeypatch.setattr(
-        market_data_routes,
-        "get_concept_map_service",
-        lambda: FakeService(),
-    )
-    return app
-
-
-def test_concepts_map_route_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = _build_app(
-        monkeypatch,
-        {
-            "ok": True,
-            "source": "concept-map-em",
-            "stale": False,
-            "data": [{"code": "BK0655", "name": "算力", "stocks": []}],
-            "errors": [],
-        },
-    )
-    client = TestClient(app)
-    response = client.get("/api/concepts/map")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is True
-    assert body["data"][0]["name"] == "算力"
+    # 与首个 service 同一时钟，推进到超 stale 窗口（1000s）
+    ticks["now"] = 1_000_000 + 2000 * 1000
+    broken = make_service(BrokenDatabase(), tmp_path, stale_ttl_seconds=1000, now_ms=lambda: ticks["now"])
+    with pytest.raises(RuntimeError):
+        await broken.get_map()
 
 
-def test_concepts_map_route_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
-    app = _build_app(monkeypatch, RuntimeError("all hosts failed"))
-    client = TestClient(app)
-    response = client.get("/api/concepts/map")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["ok"] is False
-    assert body["degraded"] is True
-    assert body["errorCode"] == "upstream_unavailable"
-    assert body["data"] == []
+@pytest.mark.asyncio
+async def test_empty_mapping_raises(tmp_path: Path) -> None:
+    service = make_service(FakeDatabase(themes=[], mappings=[]), tmp_path)
+    with pytest.raises(RuntimeError, match="theme mapping empty"):
+        await service.get_map()
+
+
+@pytest.mark.asyncio
+async def test_disk_cache_atomic_write(tmp_path: Path) -> None:
+    service = make_service(sample_database(), tmp_path)
+    await service.get_map()
+    # 原子写：不留 .tmp 残留
+    assert not (tmp_path / "concept-map-theme.json.tmp").exists()
+    disk = json.loads((tmp_path / "concept-map-theme.json").read_text(encoding="utf-8"))
+    assert disk["source"] == "concept-map-theme"

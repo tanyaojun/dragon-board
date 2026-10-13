@@ -300,10 +300,11 @@ async def big_order_all_day(stockCode: str = "", money: str = "0"):
 
 @router.get("/api/concepts/map", response_model=None)
 async def concepts_map(refresh: str = ""):
-    """东财全市场概念板块映射（板块→成分股），供异动监控板块聚合消费。
+    """全市场题材映射（theme_stock_mappings 集合，单一事实源），供异动监控板块聚合消费。
 
-    失败可见：上游全部不可用时返回 degraded 结构；单板块成分失败计入
-    errors 不阻断整体；陈旧磁盘缓存回退时 payload.stale=true。
+    2026-10-13 裁决：东财概念含指数成分/人气榜等非题材噪音，弃用；改读自家题材库。
+    失败可见：Mongo 不可用且无有效磁盘缓存时返回 degraded 结构；
+    陈旧磁盘缓存回退时 payload.stale=true。
     """
     try:
         payload = await get_concept_map_service().get_map(force_refresh=(refresh == "1"))
@@ -313,7 +314,7 @@ async def concepts_map(refresh: str = ""):
             content={
                 "ok": False,
                 "degraded": True,
-                "source": "concept-map-em",
+                "source": "concept-map-theme",
                 "errorCode": "upstream_unavailable",
                 "message": str(exc)[:200],
                 "data": [],
