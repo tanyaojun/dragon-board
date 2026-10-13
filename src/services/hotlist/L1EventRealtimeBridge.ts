@@ -142,6 +142,7 @@ export class L1EventRealtimeBridge {
   private unsubscribers: Array<() => void> = []
   private started = false
   private streaksLoaded = false
+  private conceptRefreshTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(options: L1EventRealtimeBridgeOptions) {
     this.monitorService = options.monitorService
@@ -173,9 +174,19 @@ export class L1EventRealtimeBridge {
     ]
     void this.loadStreaksOnce()
     void this.refreshConceptMap()
+    // 概念映射定时刷新（对齐 C# ConceptMapRefreshMinutes=30）：题材库每日更新后自愈
+    if (!this.conceptRefreshTimer) {
+      this.conceptRefreshTimer = setInterval(() => {
+        void this.refreshConceptMap(true)
+      }, 30 * 60_000)
+    }
   }
 
   stop() {
+    if (this.conceptRefreshTimer) {
+      clearInterval(this.conceptRefreshTimer)
+      this.conceptRefreshTimer = null
+    }
     this.unsubscribers.forEach(unsubscribe => unsubscribe())
     this.unsubscribers = []
     this.started = false
@@ -297,9 +308,9 @@ export class L1EventRealtimeBridge {
     }
   }
 
-  private async refreshConceptMap() {
+  private async refreshConceptMap(forceRefresh = false) {
     try {
-      const outcome = await this.conceptLoader.load()
+      const outcome = await this.conceptLoader.load(forceRefresh)
       this.conceptMap = outcome
       if (outcome.sectorToStocks.size > 0) {
         console.info(
