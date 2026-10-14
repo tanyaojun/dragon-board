@@ -31,6 +31,7 @@ coverage
 
 # 本地 AI 工具文件（pi 会话/配置、zcode 忽略清单）
 .pi/
+.zcode/
 .zcodeignore
 *.suo
 *.ntvs*
@@ -82,5 +83,12 @@ quant-board/backend/services/data/
 # BigOrder 大单全天快照本地归档（运行产物不提交）
 proxy-server/data/
 
+# Mongo 导出归档 / 本地备份（AGENTS §1.2.4 的 data/backups 归档位，gitignore）
+/data/
+
 # 本地研究工作区（不入库）
 .tmp_research/
+
+# 本地临时过程产物：review 草稿/诊断脚本/回放中间文件（.	mp_ 前缀约定，含目录与单文件）
+.tmp_*
+**/.tmp_*
