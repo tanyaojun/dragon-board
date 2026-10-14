@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """热榜行情读口路由（行情列表五维信号 jev 复核台账展示侧，2026-10-12）。
 
-- GET /api/hotlist-jev/quotes-review?date=YYYY-MM-DD[&dataset_id=][&with_docs=1]：
-  当日 half_hour 15:00 收盘槽全量热榜股 + 五维观察档位 + vote_confirm/lifecycle_recheck
-  双题集复核台账；with_docs=1 时有文档股嵌入完整存档（工作台行展开用）。
+- GET /api/hotlist-jev/quotes-review?date=YYYY-MM-DD[&dataset_id=][&with_docs=1][&slotTime=HH:MM]：
+  当日热榜股 + 五维观察档位 + vote_confirm/lifecycle_recheck 双题集复核台账；
+  with_docs=1 时有文档股嵌入完整存档（工作台行展开用）。slotTime 缺省按
+  「15:00 → 有 vote 判读的最新帧 → 当天最新帧」选帧，传值则固定该帧（帧不存在
+  → noData=true + 结构化 reason）；响应另带 voteSlots 供前端重建帧选择器。
 
 纯读（零 jev 调用零写入）；聚合逻辑见 services/jev/jev_quotes_review。
 独立路由文件，沿 hotlist_jev_limitup_routes 归档模式（不动 hotlist_jev_routes）。
@@ -23,7 +25,7 @@ router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
 
 @router.get("/quotes-review")
 def get_hotlist_jev_quotes_review(date: str, dataset_id: str = "dragonboard_live",
-                                  with_docs: int = 0) -> Any:
+                                  with_docs: int = 0, slotTime: str | None = None) -> Any:
     if not date:
         return JSONResponse(status_code=422, content={"ok": False, "reason": "missing date"})
     try:
@@ -31,6 +33,7 @@ def get_hotlist_jev_quotes_review(date: str, dataset_id: str = "dragonboard_live
     except Exception as exc:  # noqa: BLE001 — 数据库不可用显式降级（fail-visible）
         return JSONResponse(status_code=502, content={"ok": False, "reason": f"db error: {exc}"})
     try:
-        return collect_quotes_review(db, date, dataset_id=dataset_id, with_docs=bool(with_docs))
+        return collect_quotes_review(db, date, dataset_id=dataset_id, with_docs=bool(with_docs),
+                                     slot_time=slotTime or None)
     except Exception as exc:  # noqa: BLE001 — 读口错误显式返回（fail-visible）
         return JSONResponse(status_code=502, content={"ok": False, "reason": f"quotes_review_read_failed: {exc}"})

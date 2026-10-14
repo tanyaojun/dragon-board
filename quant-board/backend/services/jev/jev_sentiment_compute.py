@@ -14,6 +14,7 @@ import os
 import time
 from typing import Any
 
+from backend.analysis.hotlist.jev_driver_ammo import percentile_fraction
 from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS,
     JEV_SLOT_QUESTIONS,
@@ -165,6 +166,45 @@ def _yesterday_total_amounts_by_slot(db: Any, dataset_id: str, snapshot_type: st
     return out
 
 ANCHOR_WINDOW = 20
+
+
+def temperature_percentile(db: Any, *, dataset_id: str, trading_date: str,
+                           current: Any) -> tuple[float | None, int]:
+    """当前温度在近 ANCHOR_WINDOW 个交易日 EOD 日级温度中的分位。
+
+    口径（2026-10-14 用户裁决「近20日 EOD 日级温度」）：参照系=近 20 个交易日的
+    EOD ``scores.day_temperature``，与 relay-index 的 dayTemperature join、页面
+    「近20日参照」锚段同源。三条硬约束：
+
+    - **窗口严格早于当日**（``tradingDate < trading_date``）：当日文档不参与，
+      零未来函数——回填历史槽位时不会用到之后才产生的 EOD 结论；
+    - **样本 <10 不产出**：返回 ``(None, n)``，调用方不写该字段（fail-visible：
+      字段缺席由前端按「-」呈现，不补 0 不伪造分位）；
+    - **参照值只取 EOD**：盘中槽位温度与收盘日级温度比是既定混合口径（用户裁决），
+      此处只负责取数，不比同日同时刻槽温（那套样本不足 10 的比例更高）。
+
+    Returns:
+        ``(分位 0-1 小数或 None, 有效样本数)``——样本数随返回值透出，供回填脚本
+        与排障判断「不可算」是窗口薄还是字段缺。
+    """
+    dates = sorted({
+        str(r["tradingDate"]) for r in db["snapshot_frames"].find(
+            {"datasetId": dataset_id, "type": "half_hour",
+             "tradingDate": {"$lt": trading_date, "$gt": "2020-01-01"}},
+            {"tradingDate": 1}) if r.get("tradingDate")
+    })[-ANCHOR_WINDOW:]
+    if not dates:
+        return None, 0
+    refs: list[float] = []
+    for date in dates:
+        eod = db["hotlist_jev_sentiment"].find_one(
+            {"datasetId": dataset_id, "snapshotType": "half_hour", "kind": "eod",
+             "status": "ok", "tradingDate": date},
+            {"scores.day_temperature": 1})
+        temp = (eod or {}).get("scores", {}).get("day_temperature") if eod else None
+        if isinstance(temp, (int, float)) and not isinstance(temp, bool):
+            refs.append(float(temp))
+    return percentile_fraction(refs, current), len(refs)
 
 
 def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
@@ -410,6 +450,20 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
     envelope, latency_ms = _dispatch_jev(narrative, JEV_SLOT_QUESTIONS)
     # 缺题=partial_answers（degraded）：缺哪题结构化留档，幂等重跑可补（2026-10-05 批次A C2）
     parsed = parse_jev_response(envelope, latency_ms, expected_keys=set(JEV_SLOT_QUESTIONS))
+    # 温度分位（2026-10-14）：answers.temperature.percentile=当前温度在近20日 EOD 日级
+    # 温度中的分位（口径见 temperature_percentile）。该值派生自库内历史而非模型返回，
+    # 故浅拷贝 answers 顶层与 temperature 子 dict 后再注入——responseRaw 持有的是同一
+    # envelope 对象，原地改写会把模型没返回过的字段混进「信封元信息」（原始返回保真）。
+    # 样本不足/温度缺失时 percentile=None，字段整体缺席（fail-visible，不补 0）。
+    stored_answers = parsed.get("answers")
+    percentile, _samples = temperature_percentile(
+        db, dataset_id=dataset_id, trading_date=trading_date,
+        current=(parsed.get("scores") or {}).get("temperature"))
+    if (percentile is not None and isinstance(stored_answers, dict)
+            and isinstance(stored_answers.get("temperature"), dict)):
+        stored_answers = {**stored_answers,
+                          "temperature": {**stored_answers["temperature"],
+                                          "percentile": percentile}}
     doc = {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
@@ -417,7 +471,7 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
            "questionsRaw": JEV_SLOT_QUESTIONS, "responseRaw": envelope,
-           "answers": parsed.get("answers"), "scores": parsed.get("scores"),
+           "answers": stored_answers, "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
            "errorDetail": parsed.get("errorDetail"),

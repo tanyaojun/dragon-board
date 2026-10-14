@@ -210,3 +210,96 @@ climax/retreat）无「高位分歧」档，分歧日只能 ferment/climax 平�
 对拍验证（2026-10-12 实测）：62/62 行带 boardDragons，其他/AI影视/公告三板块与
 relay 题材梯队表逐名一致；领涨覆盖面大于梯队表 top5（大农业/医药医疗等同样有）。
 测试 +4（dragon_rows 排序/截断、jiuyan_board_dragons 分组与 final 缺失、路由挂载）。
+
+### 8.5 KPI 行盘中降级 + 分位列口径落地（2026-10-14 用户裁决）
+
+**根因（用户报「午休 5 帧已落库但 KPI 卡全白」）**：`renderKpis()` 只读
+`STATE.eod`（EOD 文档）与 `STATE.day`（relay-index），没有任何盘中降级路径。
+EOD 文档由 `daily:15:30` 收盘快照触发（`snapshot_collector/service.py` 第 4 步，
+`snapshot_type=="daily"` 才调 `compute_and_upsert_for_day`；daily 类型全天只有
+15:30 一个槽），relay-index 由盘后调度步产出、门控要求 15:00 盘面帧
+（`operations/schedule.py::_should_run_phase_band`）。于是 09:30–15:00（约占交易日
+69%，也是工作台唯一有实时决策价值的窗口）8 张卡全空，而同一响应里的 `STATE.slots`
+已带同题目盘中完整读数——**属「有数据不展示」，不是「数据未生成」**。
+
+库况实证（2026-10-14 午休）：`hotlist_jev_sentiment` 当日 6 个 slot 全 ok、
+`kind:"eod"` 0 篇；5 个过去交易日全部 `eod=True ⟺ daily:15:30 帧=True`，链路无断。
+`hotlist_jev_relay_index` 最新一条 10-13（computedAt 16:23）。**EOD/relay 今日无可补采
+数据， midday 强补等于用半天数据冒充全日收盘结论，明确不做。**
+
+**修复（relay_page/index.html）**：
+
+1. KPI 前四张卡（市场阶段/日级温度/拥挤形态/档位置信）改为 **EOD 优先，未生成时降级到
+   最新 ok 槽的同题目读数**，口径标签明示「盘中口径 · 最新槽 HH:MM」与「收盘口径」区分；
+   帧档与序列档分歧时副标附「当前帧 X」（瞬时冲击信号，同 JEV 叙事面板 hero chip）。
+   题目映射：`day_stage↔sequence_stage`、`day_temperature↔temperature`（同式
+   锚期望 ÷9×100）、`day_crowding↔crowding`。
+2. 接力四张卡（连板情绪指数/接力相位/接力边际/梯队钱效）是收盘池口径（涨停/晋级/炸板），
+   **无盘中源**：主值留 `-`，副标给「收盘口径 · 15:30 后出数（参照日 MM-DD = 指数）」，
+   参照值明确不是当日值（不拿非当日值冒充当日，§4.0）。参照日取**严格早于选中日期**的
+   最近一条序列，选中日期取自日期输入框（`selectedDate()`）而非 `STATE.day`——无
+   relay-index 存档的日子 `STATE.day` 为 null，那时更需要知道「用户在看哪天」；
+   relay 序列是「最近 N 日」全量、与选中日期无关，直接取末条会在回看过去日期时把更晚的
+   日期称作「上一交易日」（选中日早于全序列时才改称「最近可得」）。
+3. 降级原因通栏 `.kpi-note`（`grid-column:1/-1`，琥珀底）说明两个独立条件。
+4. 「EOD 日级窗口」卡同步降级为盘中口径表；`day_pattern` 无槽级对应题 → 该行显
+   「EOD 后判」。「今日连板情绪」卡补出数时点 + 参照日指数。EOD 可用性判定抽成
+   `isEodUsable()` 由 `renderKpis` / `renderEod` 共用：degraded/missing_token 的 EOD
+   （answers/scores 全 null）与「没有 EOD」等价，两处必须同走盘中降级，否则会出现
+   「KPI 四卡有值、EOD 表四行空白」的口径分裂（review 拦下的第二处）。
+5. 热榜行情页新增帧选择器（`quoteSlotSel`）：`voteSlots` 驱动，`qSlotChange()` 带
+   `slotTime` 重拉该帧；切帧失败走页内提示并保留原帧数据，不用阻断式 `alert`。
+   KPI 副标与表头 hint 的槽位从硬编码「15:00 收盘槽」改为跟随 `Q.slotTime`
+   （帧选择器上线后硬编码即失真，review 拦下的第三处）。
+
+浏览器侧验收（playwright + fixture 回放，零真实服务调用，22 项断言全过、无 JS 错误）：
+盘中路径 KPI 四卡有值 + 降级通栏；EOD degraded 路径 KPI 与 EOD 表同走盘中口径；
+回看过去日期参照日不错位；帧选择器三槽位可切、切帧失败有页内提示且保留原帧。
+
+**分位列（`answers.temperature.percentile`）口径落地**：该列自上线起没有生产者——
+后端从未写过、前端按 0-1 小数读，历史 0% 覆盖，列子结构性恒空。
+用户裁决参照系 = **近 20 个交易日的 EOD `scores.day_temperature`**（与 relay-index 的
+dayTemperature join、页面「近20日参照」锚段同源）。
+
+- 算法单一事实源：`analysis/hotlist/jev_driver_ammo.percentile_fraction(values, cur)`
+  返回 0-1 小数或 None（样本 <10 / cur 非数；布尔显式排除）；原 `percentile_rank()`
+  改为它的展示形状委托，禁另写一套比较逻辑。注意 `percentile_rank()` **并非死代码**：
+  `operations/jev_label_jiuyan.py` 的跌停家数分位与量能分位两处仍在调用（布尔排除
+  对它们是净增益，两者喂入的值本就已滤布尔）；真正死的只是 `market_facts.py` 的 import。
+- 取数：`services/jev/jev_sentiment_compute.temperature_percentile()`，窗口=帧交易日历
+  严格早于当日的近 20 日（**零未来函数**，回填历史槽位不会用到之后才产生的 EOD），
+  只取 `kind:"eod" status:"ok"` 的日级温度；返回 `(分位, 有效样本数)`。
+- 落库：`compute_and_upsert_for_slot` 在 parse 之后注入。**派生值不得污染 responseRaw**——
+  `answers` 与 envelope 是同一嵌套对象，故浅拷贝 answers 顶层与 temperature 子 dict 后
+  再写入 `percentile`（信封元信息=模型原始返回，保真）。
+- 回填：`operations/jev_temperature_percentile_backfill.py`（默认 dry-run，`--apply` 落地），
+  **零 jev 模型调用**，嵌套路径 `$set` 不全量 replace_one（避免冲掉锚告警等旁路字段）。
+  因写入面只有 `answers.temperature.percentile` 这一个派生键、可由
+  `temperature_percentile()` 随时重算还原，未另建 Mongo 归档（§1.2.4 的 drop 前导出
+  不适用于非破坏性窄写）。实测 618 篇槽位文档补 545 篇；余 73 篇为轨道早期
+  「近20日有效样本 <10」的不可算日（fail-visible 留空，不补 0）。
+
+**遗留操作项**：采集器进程（:8001）需重启才会让**新**槽位自动带出 percentile；
+重启前可用上述回填脚本补（幂等）。EOD/relay 两链今日 15:30 后自动出数，无需人工干预。
+
+浏览器验收（playwright-cli 打 :8008，2026-10-14 14:2x）：盘中路径 KPI 四卡有值
+（退潮 / 51 / 拥挤解除 P50 / P74，副标「盘中口径 · 最新槽 14:00」）+ 降级通栏；
+切 10-13 回归 EOD 路径无通栏、八卡全有值（高潮 / 70 / 拥挤解除 P35 / P35 / 55.8 /
+高位分歧 P47 / 惯性 P26 / 金字塔 亏钱）；分位列盘中 9 槽与 10-13 全出值；控制台仅
+favicon 404（既有，无害）。pytest：全量 `3542 passed`（`-m hotlist` 438 passed，
+其中 quotes-review 读口 31 passed）。
+
+> 注（2026-10-14 提交前 review 修复记录）：`jev_quotes_review.py` 引入 `.sort()` /
+> `.distinct()` 之初，`tests/hotlist/test_hotlist_jev_api.py` 的 `FakeCollection` 不支持
+> 这两个方法，11 个 `test_quotes_review_*` 全红；同一份改动还曾把 relay_page 的两个新
+> 函数插进 `renderQuotes()` 函数体内导致整页 JS 解析失败。均已修好：fake 补 `_FakeCursor`
+> （可迭代 + 链式 `.sort()`）与 `distinct()`，并新增 5 个回归测试（选帧回退顺序、
+> `slotTime` 固定帧、pilot 集合无 `datasetId` 不得按之过滤、vote 归并确定性、
+> 私有排序键不泄进 `docs`）。
+>
+> 同一轮 review 还拦下一个**会静默清空整列复核台账**的改法：给 vote/LC 两个 pilot 集合的
+> 查询补 `datasetId` 条件。这两个集合的文档（见 `operations/jev_vote_confirm.py` 的 doc
+> 组装：`_id={date}:{slot}:{code}:{VOTE|LC}`）**不带 `datasetId` 字段**，与
+> `hotlist_jev_relay_index` 同属单数据集集合；补上条件后生产文档一条都匹配不上，
+> 台账整列变空——正是 §4.0 禁止的「有数据不展示」。现按 `tradingDate` 过滤并在代码里
+> 注明原因，`test_quotes_review_vote_join_ignores_dataset_id_field` 做回归护栏。

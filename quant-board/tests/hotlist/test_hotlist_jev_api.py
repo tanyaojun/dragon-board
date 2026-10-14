@@ -18,6 +18,21 @@ DATASET = "dragonboard_live"
 DATE = "2026-10-08"
 
 
+class _FakeCursor:
+    """最小 pymongo 游标替身：可迭代 + .sort()（链式返回新游标）。"""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def sort(self, key, direction=1):
+        ordered = sorted(self._rows,
+                         key=lambda row: (row.get(key) is None, str(row.get(key) or "")))
+        return _FakeCursor(ordered if direction >= 0 else list(reversed(ordered)))
+
+
 class FakeCollection:
     def __init__(self, rows=None):
         self.rows = list(rows or [])
@@ -34,7 +49,12 @@ class FakeCollection:
                     return False
             return True
 
-        return iter([row for row in self.rows if matches(row)])
+        return _FakeCursor([row for row in self.rows if matches(row)])
+
+    def distinct(self, key, query=None):
+        """pymongo distinct 替身：quotes_review 的 voteSlots / 选帧回退用。"""
+        return sorted({row.get(key) for row in self.find(query) if row.get(key) is not None},
+                     key=lambda value: (value is None, str(value)))
 
     def find_one(self, query=None, projection=None, sort=None):
         best = None
@@ -503,6 +523,7 @@ def test_quotes_review_with_docs_embeds_raw(monkeypatch):
 
 
 def test_quotes_review_no_frame_no_data(monkeypatch):
+    """全日无 half_hour 帧：noData + 结构化 reason（帧口径已从「只认 15:00」扩为当日任一帧）。"""
     db = FakeMongoDb()  # 无任何帧
     client = _quotes_client(monkeypatch, db)
 
@@ -511,7 +532,113 @@ def test_quotes_review_no_frame_no_data(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True and body["noData"] is True and body["rows"] == []
-    assert "15:00" in body["reason"]
+    assert body["slotTime"] is None and body["snapshotId"] is None
+    assert "half_hour" in body["reason"]
+
+
+def test_quotes_review_frame_fallback_order(monkeypatch):
+    """选帧顺序：15:00 > 有 vote 判读的最新帧 > 当天最新帧（帧选择器上线后仍保收盘优先）。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    # 只有 10:00 / 14:00 两个帧（无 15:00），vote 判读落在 10:00 → 回退取 10:00
+    db["snapshot_frames"].rows = [frame(DATE, "14:00"), frame(DATE, "10:00")]
+    db["snapshot_stock_rows"].rows = [
+        {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:10:00", "code": "000001",
+         "name": "甲", "rank": 1}]
+    db["hotlist_jev_vote_confirm_pilot"].rows = [
+        {"_id": f"{DATE}:10:00:000001:VOTE", "tradingDate": DATE, "slotTime": "10:00",
+         "code": "000001", "name": "甲", "status": "ok", "origin": "vote_confirm_pilot",
+         "synergyTier": "S", "voteDirection": "buy", "voteConfidence": 0.72,
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v1", "questionSetHash": "abc123"}]
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE}).json()
+
+    assert body["noData"] is False and body["slotTime"] == "10:00"
+    assert body["voteSlots"] == ["10:00"]  # 前端帧选择器数据源
+
+
+def test_quotes_review_explicit_slot_time_pins_frame(monkeypatch):
+    """传 slotTime 固定帧：帧不存在 → noData + 点名该槽位的 reason，不静默回退。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    client = _quotes_client(monkeypatch, db)
+
+    ok = client.get("/api/hotlist-jev/quotes-review",
+                    params={"date": DATE, "slotTime": "15:00"}).json()
+    assert ok["noData"] is False and ok["slotTime"] == "15:00"
+
+    missing = client.get("/api/hotlist-jev/quotes-review",
+                         params={"date": DATE, "slotTime": "11:30"}).json()
+    assert missing["noData"] is True and missing["rows"] == []
+    assert "11:30" in missing["reason"]
+
+
+def test_quotes_review_vote_join_ignores_dataset_id_field(monkeypatch):
+    """两个 pilot 集合文档不带 datasetId：读口不得按 datasetId 过滤（否则整列台账静默清空）。
+
+    回归护栏：若给 vote/LC 查询补 datasetId 条件，生产文档（无该字段）会一条都匹配不上，
+    复核台账整列变空——正是「有数据不展示」。
+    """
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    # 给 vote 文档打一个与请求 dataset_id 无关的 datasetId：仍必须 join 上
+    db["hotlist_jev_vote_confirm_pilot"].rows = [
+        {**doc, "datasetId": "unrelated_dataset"}
+        for doc in db["hotlist_jev_vote_confirm_pilot"].rows]
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE}).json()
+
+    assert body["noData"] is False and body["voteSlots"] == ["15:00"]
+    assert body["summary"]["vote"]["ok"] == 2
+    assert all(r["jev"] is not None for r in body["rows"])
+
+
+def test_quotes_review_vote_priority_is_deterministic(monkeypatch):
+    """同 code 多 slot 并存：11:00 > 15:00 > 其他；同优先级取 computedAt 新者（与游标顺序无关）。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    base = dict(db["hotlist_jev_vote_confirm_pilot"].rows[1])  # 乙 15:00 buy
+    # 插入顺序刻意让「旧者」在前：若按先到先得/游标顺序，结果会漂
+    db["hotlist_jev_vote_confirm_pilot"].rows = [
+        {**base, "_id": f"{DATE}:14:00:000002:VOTE", "slotTime": "14:00",
+         "voteDirection": "sell", "voteConfidence": 0.9,
+         "computedAt": "2026-10-08T14:05:00"},
+        {**base, "_id": f"{DATE}:11:00:000002:VOTE", "slotTime": "11:00",
+         "voteDirection": "sell", "voteConfidence": 0.9,
+         "computedAt": "2026-10-08T11:05:00"},
+        {**base, "computedAt": "2026-10-08T15:05:00"},
+    ]
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review",
+                      params={"date": DATE, "with_docs": 1}).json()
+
+    row2 = next(r for r in body["rows"] if r["code"] == "000002")
+    # 11:00（代际新）压过 15:00 与 14:00，尽管它在 rows 里排中间
+    assert row2["jev"]["vote"]["direction"] == "sell"
+    assert row2["docs"]["vote"]["slotTime"] == "11:00"
+
+
+def test_quotes_review_same_priority_prefers_newer_computed_at(monkeypatch):
+    """同为 15:00 槽（重跑覆盖场景）：取 computedAt 更新者，且不把私有排序键泄进 docs。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    stale = dict(db["hotlist_jev_vote_confirm_pilot"].rows[0])   # 甲 15:00 buy
+    fresh = {**stale, "_id": f"{DATE}:15:00:000001:VOTE", "voteDirection": "hold",
+             "voteConfidence": 0.4, "computedAt": "2026-10-09T09:00:00"}
+    stale = {**stale, "computedAt": "2026-10-08T15:05:00"}
+    db["hotlist_jev_vote_confirm_pilot"].rows = [fresh, stale]
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review",
+                      params={"date": DATE, "with_docs": 1}).json()
+
+    row1 = next(r for r in body["rows"] if r["code"] == "000001")
+    assert row1["jev"]["vote"]["direction"] == "hold"
+    assert "_priority" not in row1["docs"]["vote"] and "_rank" not in row1["docs"]["vote"]
 
 
 def test_quotes_review_missing_analysis_and_quotes_fail_visible(monkeypatch):

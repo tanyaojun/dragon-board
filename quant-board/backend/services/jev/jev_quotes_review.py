@@ -3,11 +3,11 @@
 
 预登记唯一来源：docs/hotlist-jev/jev-vote-confirm-lifecycle-recheck-preregistration.md。
 数据源（全部只读，零 jev 调用零写入）：
-- snapshot_frames：half_hour 15:00 收盘槽（口径同 pilot PILOT_SLOT，不回退其它槽位）；
+- snapshot_frames：当日 half_hour 帧（默认选帧顺序见 collect_quotes_review，可传 slot_time 固定）；
 - snapshot_stock_rows / snapshot_analysis：帧内行情行 + 逐股五维 analysis（与规则链同源）；
 - hotlist_jev_vote_confirm_pilot / hotlist_jev_lifecycle_recheck_pilot：双题集复核文档。
 
-fail-visible：15:00 帧缺失 → noData=true + 结构化 reason；行情/档位/复核文档逐字段缺失
+fail-visible：目标帧缺失 → noData=true + 结构化 reason；行情/档位/复核文档逐字段缺失
 如实 None，不伪造 0 值。jev 与规则投票引擎=并列观察者：agree/diverge 台账仅对照展示
 （jev_vote_ammo.synergy_direction 对照锚），不回写引擎、不进候选池、不进交易路径。
 """
@@ -80,27 +80,61 @@ def _lc_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_live",
-                          with_docs: bool = False) -> dict[str, Any]:
-    """单日 15:00 收盘槽全量热榜股 + 五维档位 + 双题集复核台账。
+                          with_docs: bool = False, slot_time: str | None = None) -> dict[str, Any]:
+    """单日热榜行情 + 五维档位 + 双题集复核台账。
+
+    选帧（slot_time 为空时）：15:00 收盘槽（PILOT_SLOT，冻结口径）→ 有 vote 判读的
+    最新帧 → 当天最新帧；传 slot_time 时固定用该帧（帧不存在 → noData + 结构化
+    reason），支撑前端按槽位切换查看。返回值另带 voteSlots（当日有 vote 判读的
+    槽位升序）供前端重建帧选择器。
+
+    vote 台账按 code 归并时用「决策时点优先级」：11:00（v4-material 代）> 15:00
+    （v1 退役代）> 其他槽位；同优先级取 computedAt 最新、再取 _id 最小——不依赖
+    游标顺序，重跑结果可复现。LC 台账仍锁 15:00 槽（跨槽拼接禁令不变）。
 
     with_docs=True（工作台行展开用）：有复核文档的股嵌入完整存档文档
     （narrative/questionsRaw/answers/responseRaw 原样，预登记 §八「全保留」）。
     """
-    frame = db["snapshot_frames"].find_one(
-        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date,
-         "slotTime": PILOT_SLOT})
-    base = {"ok": True, "date": date, "slotTime": PILOT_SLOT, "datasetId": dataset_id,
-            "snapshotId": None, "rows": [], "summary": _empty_summary(), "noData": True,
-            "reason": f"{date} 无 half_hour {PILOT_SLOT} 收盘槽帧（非交易日或未采集）"}
-    if not frame:
-        return base
+    day_frames = list(db["snapshot_frames"].find(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date}
+    ).sort("slotTime", 1))
+    if not day_frames:
+        return {"ok": True, "date": date, "slotTime": None, "datasetId": dataset_id,
+                "snapshotId": None, "rows": [], "summary": _empty_summary(), "noData": True,
+                "reason": f"{date} 无 half_hour 帧（非交易日或未采集）"}
+
+    # 注意：这两个 pilot 集合的文档**不带 datasetId**（见 operations/jev_vote_confirm.py
+    # 的 doc 组装：_id={date}:{slot}:{code}:{VOTE|LC}，无 datasetId 字段），与
+    # hotlist_jev_relay_index 同属单数据集集合。故此处只能按 tradingDate 过滤——
+    # 若按 snapshot_* 的习惯补一个 datasetId 条件，生产读口会一条都匹配不上，
+    # 直接把整列复核台账静默变成空（有数据不展示，§4.0 明令禁止）。
+    vote_slots = [s for s in db["hotlist_jev_vote_confirm_pilot"].distinct(
+        "slotTime", {"tradingDate": date}) if s]
+    vote_slot_set = set(vote_slots)
+    if slot_time:
+        frame = next((f for f in day_frames if f.get("slotTime") == slot_time), None)
+        if not frame:
+            return {"ok": True, "date": date, "slotTime": slot_time, "datasetId": dataset_id,
+                    "snapshotId": None, "rows": [], "summary": _empty_summary(), "noData": True,
+                    "reason": f"{date} 无 half_hour {slot_time} 帧"}
+    else:
+        frame = next((f for f in day_frames if f.get("slotTime") == PILOT_SLOT), None)
+        if frame is None and vote_slots:
+            for slot in sorted(vote_slots, reverse=True):
+                frame = next((f for f in day_frames if f.get("slotTime") == slot), None)
+                if frame:
+                    break
+        if frame is None:
+            frame = day_frames[-1]
+
+    slot_time = frame.get("slotTime")
     sid = str(frame.get("snapshotId") or "")
     stock_rows = list(db["snapshot_stock_rows"].find(
         {"datasetId": dataset_id, "snapshotId": sid}))
     if not stock_rows:
-        base["snapshotId"] = sid
-        base["reason"] = f"{date} {PILOT_SLOT} 帧存在但行集为空（snapshotId={sid}）"
-        return base
+        return {"ok": True, "date": date, "slotTime": slot_time, "datasetId": dataset_id,
+                "snapshotId": sid, "rows": [], "summary": _empty_summary(), "noData": True,
+                "reason": f"{date} {slot_time} 帧存在但行集为空（snapshotId={sid}）"}
 
     analysis_by_code: dict[str, dict[str, Any]] = {}
     for doc in db["snapshot_analysis"].find({"datasetId": dataset_id, "snapshotId": sid}):
@@ -110,14 +144,30 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
     # vote 台账：v4-material 代（2026-10-13 题集代际覆盖）判读时点=11:00（slotTime="11:00"），
     # v1 代（退役）=15:00——join 双槽兼容，同 code 两代并存时代际新（11:00）覆盖旧；
     # 读口返回 shape 零变化（前端合同不变）。LC 仍锁 15:00 槽（跨槽拼接禁令不变）。
+    # 选取键只进本地 dict，不回写 doc（doc 会被 with_docs 原样透出，混入私有键有泄漏风险）；
+    # 同优先级按 computedAt 降序（该集合存 ISO 串，可字典序比）再 _id 升序，
+    # 彻底消除对游标顺序的依赖，重跑结果可复现。
     vote_by_code: dict[str, dict[str, Any]] = {}
-    for doc in db["hotlist_jev_vote_confirm_pilot"].find(
-            {"tradingDate": date, "slotTime": {"$in": (PILOT_SLOT, "11:00")}}):
+    vote_rank: dict[str, tuple[str, str, str]] = {}
+
+    def _vote_wins(candidate: tuple[str, str, str], current: tuple[str, str, str]) -> bool:
+        if candidate[0] != current[0]:
+            return candidate[0] < current[0]   # 决策时点优先级：11:00 > 15:00 > 其他
+        if candidate[1] != current[1]:
+            return candidate[1] > current[1]   # 同优先级取判读时间更新者
+        return candidate[2] < current[2]       # 仍同则 _id 升序（确定性收尾）
+
+    for doc in db["hotlist_jev_vote_confirm_pilot"].find({"tradingDate": date}):
         code = str(doc.get("code") or "")
         if not code:
             continue
-        prev = vote_by_code.get(code)
-        if prev is None or (doc.get("slotTime") == "11:00" and prev.get("slotTime") != "11:00"):
+        slot = doc.get("slotTime", "")
+        # 不限定只取 11:00/15:00；同 code 多 slot 并存时，用较早决策时点覆盖收盘复核（11:00 > 15:00 > 其他）。
+        rank = ("0" if slot == "11:00" else ("1" if slot == PILOT_SLOT else "2"),
+                str(doc.get("computedAt") or ""), str(doc.get("_id") or ""))
+        prev_rank = vote_rank.get(code)
+        if prev_rank is None or _vote_wins(rank, prev_rank):
+            vote_rank[code] = rank
             vote_by_code[code] = doc
     lc_by_code: dict[str, dict[str, Any]] = {}
     for doc in db["hotlist_jev_lifecycle_recheck_pilot"].find(
@@ -288,9 +338,9 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         "risk": risk_levels,
         "streakUnverified": streak_unverified,
     }
-    return {"ok": True, "date": date, "slotTime": PILOT_SLOT, "datasetId": dataset_id,
+    return {"ok": True, "date": date, "slotTime": slot_time, "datasetId": dataset_id,
             "snapshotId": sid, "rows": rows, "summary": summary, "noData": False,
-            "reason": None, "boardJoinDegraded": board_join_error}
+            "reason": None, "boardJoinDegraded": board_join_error, "voteSlots": sorted(vote_slot_set)}
 
 
 def _lc_stage_counts(stages: list[str | None]) -> dict[str, int]:

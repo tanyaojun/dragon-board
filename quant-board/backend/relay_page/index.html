@@ -40,6 +40,8 @@
   .g2{grid-template-columns:1fr 1fr}
   .g3{grid-template-columns:2fr 1fr}
   .kpi-row{display:grid;grid-template-columns:repeat(8,1fr);gap:12px}
+  /* 盘中降级原因通栏（2026-10-14）：grid-column:1/-1 占满一行，不挤占卡片位 */
+  .kpi-note{grid-column:1/-1;background:var(--amber-bg);color:var(--amber);border:1px solid var(--border2);border-radius:8px;padding:7px 12px;font-size:12px;line-height:1.5}
   .kpi{background:#fff;border:1px solid var(--border);border-radius:10px;padding:12px 14px}
   .kpi .k{font-size:12px;color:var(--muted);margin-bottom:4px}
   .kpi .v{font-size:20px;font-weight:700;line-height:1.2}
@@ -175,7 +177,8 @@
 
   <section id="tab-quotes" style="display:none">
     <div class="card">
-      <h3>热榜行情 · 15:00 收盘槽 <span class="hint" id="quotesHint"></span></h3>
+      <h3>热榜行情 <span class="hint" id="quotesHint"></span></h3>
+      <div class="lf-bar" style="margin-bottom:8px">帧选择：<select id="quoteSlotSel" onchange="qSlotChange(this.value)"><option value="">加载中…</option></select><span id="quoteSlotHint" style="color:var(--muted2);margin-left:8px"></span></div>
       <div class="kpi-row" id="quotesKpi" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px"></div>
       <div class="lf-bar" id="quotesFilterBar"></div>
       <table id="quotesTable"></table>
@@ -210,6 +213,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
   relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉；undefined=未拉，null=已拉无档）
   quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' } },
+  quotesSlots: [],  // 当日有 jev 判读的槽位（quotes-review 响应 voteSlots，帧选择器数据源）
   quotesFilter: { q: '', vote: '', lc: '', agree: '' },
   quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
@@ -273,6 +277,30 @@ const zoneIdxColor = r => {
 
 async function jget(path){ const r = await fetch(path); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
 
+// EOD 文档可用性（2026-10-14）：degraded / missing_token 的 EOD 文档 answers 与 scores
+// 都是 null，给不出任何读数——此时它和「没有 EOD」等价，必须走盘中降级，
+// 而不能挂着「收盘口径」标签展示一片空白。renderKpis / renderEod 共用这一把尺子。
+const isEodUsable = e => !!(e && (e.answers || e.scores));
+
+// 上一交易日参照（2026-10-14）：relay 序列是「最近 N 日」全量，与当前选中日期无关，
+// 直接取末条会在回看过去日期时把更晚的日期称作「上一交易日」。故只认严格早于
+// 选中日的条目；选中的是最新日或过去无参照时退回末条并改称「最近可得」。
+// 选中日期取自日期输入框而非 STATE.day——无 relay-index 存档的日子 STATE.day 为 null，
+// 那时更需要知道「用户在看哪天」才能给出正确参照。
+function selectedDate(){ const el = $('date'); return el ? el.value : ''; }
+function prevTradingDayRef(date){
+  const ref = date || selectedDate();
+  const before = STATE.series.filter(s => s && s.tradingDate && (!ref || s.tradingDate < ref));
+  if (before.length) return { row: before[before.length - 1], label: '上一交易日' };
+  const last = STATE.series.length ? STATE.series[STATE.series.length - 1] : null;
+  return last ? { row: last, label: '最近可得' } : { row: null, label: '' };
+}
+
+// 分位列口径（2026-10-14）：当前槽温度在近 20 个交易日 EOD 日级温度中的分位（0-1）。
+// 后端 compute_and_upsert_for_slot 自动带出；存量 618 篇已回填 545 篇，其余为轨道
+// 早期「近20日有效样本 <10」的不可算日（fail-visible 留空，不补 0）。
+const PCT_TITLE = '温度分位 = 当前槽温度在近 20 个交易日 EOD 日级温度中的分位；有效样本 <10 或未回填的早期文档为空';
+
 let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
@@ -283,7 +311,7 @@ async function loadAll(){
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
-      jget('/api/hotlist-jev/quotes-review?with_docs=1' + (date ? '&date=' + date : '')),
+      jget('/api/hotlist-jev/quotes-review?with_docs=1' + (date ? '&date=' + date : '')).then(r => { STATE.quotesSlots = r.voteSlots || []; return r; }),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -311,23 +339,60 @@ async function loadAll(){
 }
 
 function renderKpis(){
-  const e = STATE.eod || {}, a = e.answers || {}, sc = e.scores || {};
-  const d = STATE.day || {};
-  const stage = (a.day_stage||{}).choice;
-  const temp = sc.day_temperature != null ? Math.round(sc.day_temperature) : null;
-  const crowd = (a.day_crowding||{}).choice;
-  const conf = (a.day_stage||{}).confidence;
+  // ── KPI 口径（2026-10-14 根因修复）────────────────────────────────────────
+  // 原实现只读 EOD 文档 + relay-index：收盘前（09:30-15:00，占交易日约 69%）8 张卡
+  // 全空，而同一响应里的 STATE.slots 已带同题目盘中完整读数——有数据不展示。
+  // 现改为 EOD 优先；EOD 未生成时降级到最新 ok 槽的**同题目**读数（档位/温度/拥挤
+  // 三项一一对应），口径标签明示「盘中口径 · 最新槽 HH:MM」，与「收盘口径」可区分。
+  // relay-index 四卡是收盘池口径（涨停/晋级/炸板池），无盘中源：留 '-' 但给结构化
+  // 原因 + 参照日指数，不拿非当日值冒充当日（§4.0：缺失可见，不伪造）。
+  // EOD 存在但 degraded/missing_token 时 answers/scores 全 null：此时它给不出任何读数，
+  // 不能拿「收盘口径」标签配一片空白（那正是本次修的病灶），按不可用处理走盘中降级。
+  // 该判定与 renderEod() 共用 isEodUsable，否则两处会对同一文档给出相反口径。
+  const eod = isEodUsable(STATE.eod) ? STATE.eod : null;
+  const slot = STATE.slots.length ? STATE.slots[STATE.slots.length - 1] : null;
+  const intraday = !eod && !!slot;
+  const ea = eod ? (eod.answers || {}) : {};
+  const sa = slot ? (slot.answers || {}) : {};
+  // 日级题（EOD）↔ 槽级题（盘中）同题目映射：day_stage↔sequence_stage、
+  // day_temperature↔temperature、day_crowding↔crowding
+  const stageAns = intraday ? (sa.sequence_stage || {}) : (ea.day_stage || {});
+  const crowdAns = intraday ? (sa.crowding || {}) : (ea.day_crowding || {});
+  const tempRaw = intraday
+    ? (slot.scores ? slot.scores.temperature : null)
+    : (eod && eod.scores ? eod.scores.day_temperature : null);
+  const temp = tempRaw != null ? Math.round(tempRaw) : null;
+  const stage = stageAns.choice;
+  const crowd = crowdAns.choice;
+  const conf = stageAns.confidence;
+  const frame = intraday ? (sa.frame_stage || {}).choice : null;
   const stageTxt = STAGE_CN[stage] || stage || '-';
-  const stageCls = stage==='climax'?'b-red':stage==='ferment'?'b-amber':stage==='ice'?'b-blue':stage==='retreat'?'b-gray':'b-green';
-  $('kpiRow').innerHTML = `
-    <div class="kpi"><div class="k">市场阶段 (EOD)</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${PATTERN_CN[(a.day_pattern||{}).choice]||''}</div></div>
-    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}</div><div class="s">0-100 · 参照20日</div></div>
-    <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}${confChip((a.day_crowding||{}).confidence)}</div><div class="s">收盘口径</div></div>
-    <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">day_stage</div></div>
-    <div class="kpi"><div class="k">连板情绪指数</div><div class="v" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</div><div class="s">${esc(d.tradingDate||'')}</div></div>
-    <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:15px">${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}</div><div class="s">relay_phase</div></div>
-    <div class="kpi"><div class="k">接力边际</div><div class="v" style="font-size:15px">${momB(d.relayMomentum)}</div><div class="s">较昨日</div></div>
-    <div class="kpi"><div class="k">梯队 / 钱效</div><div class="v" style="font-size:15px">${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}</div><div class="s">结构 / 效应</div></div>`;
+  const stamp = intraday ? `盘中口径 · 最新槽 ${esc(slot.slotTime || '?')}` : '收盘口径';
+  // 帧档与序列档分歧=瞬时冲击信号（同 JEV 叙事面板 hero chip 语义）
+  const stageSub = frame && frame !== stage ? `${stamp} · 当前帧 ${STAGE_CN[frame] || frame}` : stamp;
+  const d = STATE.day || {};
+  const relayReady = d.relayIndex != null;
+  // 上一交易日参照只进副标，主值仍为 '-'（明确不是当日值）
+  const prevRef = relayReady ? { row: null, label: '' } : prevTradingDayRef();
+  const prev = prevRef.row;
+  const relaySub = relayReady
+    ? esc(d.tradingDate || '')
+    : `收盘口径 · 15:30 后出数${prev ? `（${prevRef.label} ${esc(String(prev.tradingDate || '').slice(5))} = ${prev.relayIndex ?? '-'}）` : ''}`;
+  const relayCard = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  // 降级原因通栏：grid-column:1/-1，不占卡片位；两条件独立，可同时成立
+  const why = [];
+  if (intraday) why.push('EOD 日级文档未生成（daily:15:30 收盘快照后出数），前四张卡取最新 ok 槽的同题目实时读数');
+  if (!relayReady) why.push('连板指数为收盘池口径（涨停/晋级/炸板，15:30 后出数），接力四卡留空并附参照日指数');
+  const note = why.length ? `<div class="kpi-note">⏳ 盘中降级：${why.join('；')}。</div>` : '';
+  $('kpiRow').innerHTML = note + `
+    <div class="kpi"><div class="k">市场阶段${intraday ? '（盘中）' : ' (EOD)'}</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${intraday ? stageSub : (PATTERN_CN[(ea.day_pattern||{}).choice] || '收盘口径')}</div></div>
+    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}</div><div class="s">${stamp === '收盘口径' ? '0-100 · 参照20日' : stamp}</div></div>
+    <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}${confChip(crowdAns.confidence)}</div><div class="s">${stamp}</div></div>
+    <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">${intraday ? 'sequence_stage' : 'day_stage'}</div></div>
+    ${relayCard('连板情绪指数', `<span style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</span>`, relaySub)}
+    ${relayCard('接力相位', `${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}`, relaySub)}
+    ${relayCard('接力边际', `${momB(d.relayMomentum)}${confChip(((d.answers||{}).relay_momentum||{}).confidence)}`, relaySub)}
+    ${relayCard('梯队 / 钱效', `${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}`, relaySub)}`;
 }
 
 function renderSlots(){
@@ -357,7 +422,7 @@ function renderSlots(){
     <td>${seq && seq!==stage ? `<span style="color:${stageColor(seq)}">${STAGE_CN[seq]||seq}</span>${confChip((a.sequence_stage||{}).confidence)}` : ''}</td>
     <td><div class="flex"><span class="num" style="color:${tempColor(t)}">${t??'-'}</span><div class="bar"><i style="width:${t??0}%;background:${tempColor(t)}"></i></div></div></td>
     <td>${badge(CROWD_CN[crowd]||'-', crowd==='breadth_climax'?'b-red':crowd==='top_acceleration'?'b-amber':crowd==='late_seal_weakness'?'b-purple':'b-gray')}${confChip((a.crowding||{}).confidence)}</td>
-    <td class="num">${pct!=null?'P'+Math.round(pct*100):'-'}</td></tr>`
+    <td class="num" title="${PCT_TITLE}">${pct!=null?'P'+Math.round(pct*100):'-'}</td></tr>`
     + (open ? `<tr class="lg-detail"><td colspan="6">${detailHtml(entry, 'slot')}</td></tr>` : '');
   }).join('');
   const e = STATE.eod;
@@ -375,26 +440,51 @@ function renderSlots(){
     <td class="num" style="color:var(--muted)">${fmtTime(e.computedAt)}</td></tr>`
     + (open ? `<tr class="lg-detail"><td colspan="6">${detailHtml(entry, 'slot')}</td></tr>` : '');
   }
-  $('slotTable').innerHTML = `<tr><th>槽位</th><th>框架阶段</th><th>序列</th><th>温度 0-100</th><th>拥挤形态</th><th>分位</th></tr>${rows || '<tr><td colspan="6" class="empty">当日无 ok 槽位文档</td></tr>'}${eodRow}`;
+  $('slotTable').innerHTML = `<tr><th>槽位</th><th>框架阶段</th><th>序列</th><th>温度 0-100</th><th>拥挤形态</th><th title="${PCT_TITLE}">分位</th></tr>${rows || '<tr><td colspan="6" class="empty">当日无 ok 槽位文档</td></tr>'}${eodRow}`;
   $('slotHint').textContent = `${STATE.slots.length} 槽 · ${STATE.slots[0]?.slotTime||''} ~ ${STATE.slots.at(-1)?.slotTime||''} · 点击行查看调用日志 · P=模型置信度（红<35 两可勿当结论）`;
 }
 
 function renderEod(){
-  const e = STATE.eod || {}, a = e.answers || {}, sc = e.scores || {};
+  // EOD 未生成（收盘前）不摆四行「-」了事：同步降级到最新 ok 槽的同题目读数，
+  // 表头明示「盘中口径（EOD 待生成）」。day_pattern 无槽级对应题 → 该行留 '-' 并注明。
+  // 可用性判定与 renderKpis() 共用 isEodUsable：EOD degraded（answers/scores 全空）时
+  // 两处都走盘中降级，不会出现「KPI 有值、EOD 表四行空白」的口径分裂。
+  const e = isEodUsable(STATE.eod) ? STATE.eod : null;
+  const slot = STATE.slots.length ? STATE.slots[STATE.slots.length - 1] : null;
+  const intraday = !e && !!slot;
+  const a = e ? (e.answers || {}) : (slot ? (slot.answers || {}) : {});
+  const sc = e ? (e.scores || {}) : (slot ? (slot.scores || {}) : {});
+  const stageKey = intraday ? 'sequence_stage' : 'day_stage';
+  const crowdKey = intraday ? 'crowding' : 'day_crowding';
+  const tempKey = intraday ? 'temperature' : 'day_temperature';
+  const head = intraday
+    ? `<tr><th>维度</th><th>结论（盘中口径 · ${esc(slot.slotTime || '?')}）</th><th colspan=2>置信</th></tr>`
+    : `<tr><th>维度</th><th>结论</th><th colspan=2>置信</th></tr>`;
   const rows = [
-    ['日级档位', STAGE_CN[(a.day_stage||{}).choice] || '-', (a.day_stage||{}).confidence],
-    ['路径形态', PATTERN_CN[(a.day_pattern||{}).choice] || '-', (a.day_pattern||{}).confidence],
-    ['拥挤形态', CROWD_CN[(a.day_crowding||{}).choice] || '-', (a.day_crowding||{}).confidence],
-    ['日级温度', sc.day_temperature != null ? Math.round(sc.day_temperature) : '-', null],
+    ['日级档位', STAGE_CN[(a[stageKey]||{}).choice] || '-', (a[stageKey]||{}).confidence],
+    // day_pattern 是全日路径形态，槽级无对应题：盘中时如实标注不可算
+    ['路径形态', intraday ? 'EOD 后判' : (PATTERN_CN[(a.day_pattern||{}).choice] || '-'),
+     intraday ? null : (a.day_pattern||{}).confidence],
+    ['拥挤形态', CROWD_CN[(a[crowdKey]||{}).choice] || '-', (a[crowdKey]||{}).confidence],
+    ['日级温度', sc[tempKey] != null ? Math.round(sc[tempKey]) : '-', null],
   ].map(([k,v,c]) => `<tr><td style="color:var(--muted)">${k}</td><td class="num">${v}</td>
      <td>${c!=null?`<div class="bar"><i style="width:${Math.round(c*100)}%;background:#2563eb"></i></div>`:''}</td>
      <td class="num">${c!=null?'P'+Math.round(c*100):''}</td></tr>`).join('');
-  $('eodTable').innerHTML = `<tr><th>维度</th><th>结论</th><th colspan=2>置信</th></tr>${rows}`;
+  $('eodTable').innerHTML = head + rows;
 }
 
 function renderRelayMini(){
   const d = STATE.day;
-  if (!d || d.relayIndex == null) { $('relayMini').innerHTML = '<div class="empty">当日无连板指数存档</div>'; return; }
+  if (!d || d.relayIndex == null) {
+    // 收盘池口径，盘中无源：说清出数时点 + 参照日（不当当日值用）
+    const ref = prevTradingDayRef();
+    const prev = ref.row;
+    const refTxt = prev ? `；${ref.label} ${esc(String(prev.tradingDate||'').slice(5))} 指数 ${prev.relayIndex ?? '-'}` : '';
+    $('relayMini').innerHTML =
+      `<div class="empty">当日无连板指数存档</div>
+       <div style="font-size:12px;color:var(--muted2);margin-top:6px">收盘池口径（涨停/晋级/炸板），盘后 15:30 出数${refTxt}</div>`;
+    return;
+  }
   $('relayMini').innerHTML = `<div class="phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex}</div>
     <div class="flex" style="margin-top:8px">${phaseB(d.relayPhase)}${momB(d.relayMomentum)}${ladderB(d.ladderHealth)}${moneyB(d.moneyEffect)}${themeB(d.themePulse)}</div>
     <div style="font-size:12px;color:var(--muted);margin-top:8px">龙头强度 ${d.leaderStrength ?? '-'} · ${esc(d.model||'')}</div>`;
@@ -757,6 +847,7 @@ function setQuotesSort(key){
   qRenderRows();
 }
 function renderQuotes(){
+  renderQuoteSlotSel();
   const Q = STATE.quotes;
   if (!Q || Q.ok === false){
     STATE.quotesEntries = [];
@@ -770,10 +861,40 @@ function renderQuotes(){
     $('quotesKpi').innerHTML = ''; $('quotesFilterBar').innerHTML = '';
     $('quotesHint').textContent = Q.reason || '';
     // 两种 noData（无 15:00 帧 / 帧在但行集空）表体都显后端结构化 reason，不硬编码误导文案
-    $('quotesTable').innerHTML = `<tr><td class="empty">${esc(Q.reason || '该日无 15:00 收盘槽行情帧（非交易日或未采集）')}</td></tr>`;
+    $('quotesTable').innerHTML = `<tr><td class="empty">${esc(Q.reason || '该日无行情帧（非交易日或未采集）')}</td></tr>`;
     return;
   }
   qRenderKpi(); qRenderBar(); qRenderRows();
+}
+
+function renderQuoteSlotSel(){
+  const sel = $('quoteSlotSel');
+  if (!sel) return;
+  const slots = STATE.quotesSlots || [];
+  const cur = (STATE.quotes && STATE.quotes.slotTime) || '';
+  const hint = $('quoteSlotHint');
+  if (!slots.length){
+    sel.innerHTML = '<option value="">无 jev 判读帧</option>';
+    if (hint) hint.textContent = '';
+    return;
+  }
+  sel.innerHTML = slots.map(s => '<option value="' + esc(s) + '"' + (s === cur ? ' selected' : '') + '>' + esc(s) + ' 帧</option>').join('');
+  if (hint) hint.textContent = '共 ' + slots.length + ' 个有 jev 结果的槽位';
+}
+async function qSlotChange(slot){
+  const date = $('date').value;
+  if (!date) return;
+  const path = '/api/hotlist-jev/quotes-review?with_docs=1&date=' + encodeURIComponent(date) + (slot ? '&slotTime=' + encodeURIComponent(slot) : '');
+  try {
+    STATE.quotes = await jget(path);
+    renderQuotes();
+  } catch (err) {
+    // fail-visible：切帧失败不弹阻断式 alert，留在页面内说明，且保留上一帧数据。
+    // 先重建选择器（复位选中项）再写提示，否则提示会被 renderQuoteSlotSel 覆盖掉。
+    renderQuoteSlotSel();
+    const hint = $('quoteSlotHint');
+    if (hint) hint.textContent = '切帧失败：' + err.message + '（仍显示原帧）';
+  }
 }
 function qRenderKpi(){
   const s = (STATE.quotes || {}).summary || {}, f = STATE.quotesFilter;
@@ -784,7 +905,7 @@ function qRenderKpi(){
   const aCard = (k, v2, sub, key) => `<div class="kpi click${f.agree === key ? ' on' : ''}" title="点击筛选：${k}" onclick="qSet('agree', '${f.agree === key ? '' : key}')"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
   const riskTotal = (rk.data_insufficient || 0) + (rk.partial || 0);
   $('quotesKpi').innerHTML =
-    card('热榜股总数', s.total ?? '-', `五维可算 ${s.tiered ?? 0} · 15:00 收盘槽`)
+    card('热榜股总数', s.total ?? '-', `五维可算 ${s.tiered ?? 0} · ${STATE.quotes.slotTime || '--'} 槽`)
     + card('VOTE 方向复核', v.ok ?? '-', `buy ${v.buy || 0} / sell ${v.sell || 0} / hold ${v.hold || 0} · 未复核 ${v.unreviewed ?? '-'}`)
     + card('LC 生命周期复核', l.ok ?? '-', `${stageTxt || '无复核'} · 未复核 ${l.unreviewed ?? '-'}`)
     + aCard('方向一致', s.agree ?? '-', 'jev ↔ 五维对照锚（点击筛选）', 'agree')
@@ -826,7 +947,7 @@ function qRenderRows(){
     row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null }));
   const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
   const hasFilter = f.q || f.vote || f.lc || f.agree;
-  $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '15:00'} 收盘槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
+  $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '--'} 槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
     + (Q.boardJoinDegraded ? ` · 连板降级:${Q.boardJoinDegraded}` : '')
     + (Q.summary && Q.summary.streakUnverified ? ` · 断板连板不可验 ${Q.summary.streakUnverified} 例` : '');
   const th = (label, key) => `<th class="sortable" onclick="setQuotesSort('${key}')">${label}${sortMark(s, key)}</th>`;

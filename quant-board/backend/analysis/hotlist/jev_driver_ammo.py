@@ -176,12 +176,25 @@ def _strip(code) -> str:
     return c[2:] if len(c) > 2 and c[:2] in ("sh", "sz", "bj") else c
 
 
+def percentile_fraction(values: list, cur) -> float | None:
+    """cur 在 values（近20日历史）中的分位（0-1 小数，不含 cur 自身）。
+
+    样本 <10 或 cur 非数返回 None（fail-visible：字段缺席由调用方按缺失呈现，
+    不补 0 不伪造）。布尔显式排除（Python 里 bool 是 int 子类，True 会混进均值）。
+    """
+    vals = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if len(vals) < 10 or not isinstance(cur, (int, float)) or isinstance(cur, bool):
+        return None
+    return sum(1 for v in vals if v < cur) / len(vals)
+
+
 def percentile_rank(values: list, cur) -> str:
-    """cur 在 values（近20日历史）中的分位（0-100，不含 cur 自身）；样本 <10 不可算（fail-visible）。"""
-    vals = [v for v in values if isinstance(v, (int, float))]
-    if len(vals) < 10 or not isinstance(cur, (int, float)):
-        return "分位不可算"
-    return f"{sum(1 for v in vals if v < cur) / len(vals) * 100:.0f}"
+    """percentile_fraction 的 0-100 整数文本形状（驱动打标事实行沿用）。
+
+    算法唯一实现在 percentile_fraction，本函数只做展示形状换算，禁另写一套比较逻辑。
+    """
+    frac = percentile_fraction(values, cur)
+    return "分位不可算" if frac is None else f"{frac * 100:.0f}"
 
 
 def _limit_pct_of(code: str, name: str | None = None) -> float:
