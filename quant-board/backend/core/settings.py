@@ -144,6 +144,12 @@ class Settings(BaseModel):
     # bundle_first = 旧行为（bundle 为主池，merged 仅 fallback）。改后重启采集进程生效。
     snapshot_collector_pool_source_mode: str = Field(default="autonomous")
     snapshot_collector_allow_live_dataset: bool = Field(default=False)
+    # 韭研 final 入库后自动同步板块名到通达信 mark.dat：由采集进程内 after-collect 钩子
+    # 触发（无独立定时脚本）；默认开，mark 文件缺失则跳过（fail-visible，不影响采集主链）。
+    jiuyan_mark_sync_enabled: bool = Field(default=True)
+    jiuyan_mark_path: str = Field(default=r"D:\APP_SOFT\TDX\T0002\mark.dat")
+    jiuyan_mark_mark_color: str = Field(default="7")
+    jiuyan_mark_tip_color: str = Field(default="65535")
     theme_heat_batch_size: int = Field(default=50)
     theme_heat_max_concurrency: int = Field(default=3)
     theme_heat_cache_ttl_seconds: int = Field(default=300)
@@ -357,6 +363,16 @@ class Settings(BaseModel):
             "QUANT_BOARD_SNAPSHOT_CACHE_ENABLED",
             self.snapshot_cache_enabled,
         )
+        self.jiuyan_mark_sync_enabled = _env_bool(
+            "QUANT_BOARD_JIUYAN_MARK_SYNC",
+            self.jiuyan_mark_sync_enabled,
+        )
+        self.jiuyan_mark_path = os.environ.get(
+            "QUANT_BOARD_JIUYAN_MARK_PATH", self.jiuyan_mark_path)
+        self.jiuyan_mark_mark_color = os.environ.get(
+            "QUANT_BOARD_JIUYAN_MARK_MARK_COLOR", self.jiuyan_mark_mark_color)
+        self.jiuyan_mark_tip_color = os.environ.get(
+            "QUANT_BOARD_JIUYAN_MARK_TIP_COLOR", self.jiuyan_mark_tip_color)
         self.snapshot_cache_ttl_seconds = max(
             1,
             _env_int("QUANT_BOARD_SNAPSHOT_CACHE_TTL_SECONDS", self.snapshot_cache_ttl_seconds),

@@ -8,10 +8,13 @@ authFailed 时清两缓存并强制重新解析（可触发浏览器铸造/登�
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from backend.operations import jiuyan_auth, jiuyan_store
+from backend.operations import jiuyan_auth, jiuyan_mark_sync, jiuyan_store
 from backend.operations.jiuyan_fetch import fetch_count, fetch_field
+
+logger = logging.getLogger(__name__)
 
 
 def _attempt(date: str, kind: str, db: Any, auth: dict) -> dict:
@@ -37,7 +40,7 @@ def _attempt(date: str, kind: str, db: Any, auth: dict) -> dict:
             "degraded": len(parsed.get("degradedSources") or [])}
 
 
-def collect_and_store(date: str, kind: str = "final", db: Any = None) -> dict:
+def _collect_and_store_impl(date: str, kind: str = "final", db: Any = None) -> dict:
     """采集某交易日并落库。返回 {ok, date, kind, ...}；失败 {ok: False, error, authFailed?}。
 
     authFailed（会话/token 失效）→ 清两缓存强制重新解析（可触发浏览器铸造/登录）自愈重试一次；
@@ -69,3 +72,23 @@ def collect_and_store(date: str, kind: str = "final", db: Any = None) -> dict:
     if not result2.get("ok"):
         self_heal["error"] = result2.get("error")
     return {**result2, "selfHeal": self_heal}
+
+
+def collect_and_store(date: str, kind: str = "final", db: Any = None) -> dict:
+    """采集并落库；final 成功入库后自动同步板块名到 mark.dat（after-collect 钩子）。
+
+    钩子由 jiuyan_mark_sync.maybe_sync_after_collect 单点触发（无独立定时脚本）：仅 final、
+    启用且 mark 文件存在时才写；pytest 跳过；任何异常只记录不外抛，绝不影响采集主链。
+    结果附 markSync 子字典留痕。
+    """
+    result = _collect_and_store_impl(date, kind, db)
+    if result.get("ok") and kind == "final":
+        try:
+            if db is None:
+                from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+                db = get_runtime_mongodb_database()
+            result["markSync"] = jiuyan_mark_sync.maybe_sync_after_collect(db, date, kind)
+        except Exception as exc:  # 双保险：钩子异常绝不波及采集主链
+            logger.exception("jiuyan mark sync hook failed")
+            result["markSync"] = {"ok": False, "error": str(exc)}
+    return result
