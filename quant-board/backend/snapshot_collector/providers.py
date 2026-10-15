@@ -2279,6 +2279,10 @@ def build_server_indices(overview: dict[str, Any]) -> dict[str, Any]:
     （sina 深证系列同源，399001 与 399106 同值，即深市全口径）。值形如 {"amount": N}，
     **不带 change 键**——rotation 引擎 _market_change 遍历所有键取 change 求均值，
     无 change 则免疫，golden 输入零漂移。
+    2026-10-16 增补 changePct：与 change（涨跌额=点位）伴生落 changePct（涨跌幅=百分比）——
+    此前只落点位，消费端按 % 呈现即伪造暴跌（实证：帧值 -60.75 点被渲染成「上证 -60.75%」，
+    10-12 两只 zhaban label 因此误判 broad_market）。rotation 引擎只取 change 键，
+    新增键对其免疫；changePct 缺失（上游未给）时只落点位，由消费端诚实降级。
     """
     items = overview.get("items") if isinstance(overview, dict) else []
     out: dict[str, Any] = {}
@@ -2289,8 +2293,12 @@ def build_server_indices(overview: dict[str, Any]) -> dict[str, Any]:
         code = str(item.get("code") or "")
         alias = _INDEX_ALIASES.get(code)
         change = item.get("change")
+        pct = item.get("changePct")
         if alias and isinstance(change, (int, float)) and not isinstance(change, bool):
-            out[alias] = {"change": change}
+            entry: dict[str, Any] = {"change": change}
+            if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+                entry["changePct"] = pct
+            out[alias] = entry
         if code in ("sh000001", "sz399001") and isinstance(item.get("amount"), (int, float)) \
                 and not isinstance(item.get("amount"), bool):
             market_amounts.append(float(item["amount"]))

@@ -720,8 +720,12 @@ def run_after_market_once(
         today = datetime.now(_TZ).strftime("%Y-%m-%d")
         pulse_result = _run_phase_pulse_step(today, dry_run=dry_run)
         jiuyan_label_result = _run_jiuyan_label_step(today, dry_run=dry_run)
-        relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
+        # 链序硬约束：zhabanLabel 必须先于 relayIndex——relay 叙事「今日炸板面」段消费
+        # 当日炸板归因打标（hotlist_jev_zhaban_labels status=ok），反序则当日归因永远赶不上
+        # 叙事组装（2026-10-14/10-15 实证：relay 16:18-16:27 出数、归因 16:20-16:36 才落库，
+        # 叙事恒写「未覆盖（0/N，归因证据缺失）」，zhabanLabel 步的补全目的被顺序抵消）。
         zhaban_label_result = _run_zhaban_label_step(today, dry_run=dry_run)
+        relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
@@ -732,15 +736,15 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
                 "snapshotArchiveR2": archive_result,
                 "phasePulse": pulse_result,
                 "jiuyanLabel": jiuyan_label_result,
-                "relayIndex": relay_index_result,
                 "zhabanLabel": zhaban_label_result,
+                "relayIndex": relay_index_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,

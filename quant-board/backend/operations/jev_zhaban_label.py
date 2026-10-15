@@ -145,9 +145,15 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
         {"indices.sh": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
     sh = ((fr or {}).get("indices") or {}).get("sh") or {}
-    ch = sh.get("change")
-    if isinstance(ch, (int, float)):
-        idx_txt = f"大盘：上证今日 {ch:+.2f}%"
+    pct = sh.get("changePct")
+    if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+        idx_txt = f"大盘：上证今日 {pct:+.2f}%"
+    elif isinstance(sh.get("change"), (int, float)) and not isinstance(sh.get("change"), bool):
+        # 存量帧只落 change=涨跌额（点位）：按 % 呈现即伪造暴跌（2026-10-16 单位错位排查，
+        # 10-12 两只 label 因「上证 -19.19%」假暴跌误判 broad_market，真实约 -0.5%）。
+        # fail-visible：点位是真实可观测数据不丢弃，带单位呈现（对齐情绪链证据行「点」口径），
+        # 缺的涨跌幅明示缺失，由模型按 conditional 判据自行裁量
+        idx_txt = f"大盘：上证今日 {sh['change']:+.2f} 点（涨跌幅缺失，点位口径）"
     return (f"{date} 交易日 · 炸板股归因（个股单题）\n"
             f"个股：{name}({code})\n{traj_txt}\n{pos_txt_full}\n{ths_txt}\n{seq_txt}\n{sec_txt}\n{idx_txt}")
 

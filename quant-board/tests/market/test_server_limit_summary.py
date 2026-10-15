@@ -110,17 +110,19 @@ def test_provider_without_in_process_gateway_returns_no_limit_summary():
 def test_build_server_indices_maps_aliases_and_skips_unknown():
     overview = {
         "items": [
-            {"code": "sh000001", "change": -1.22},
-            {"code": "sh000300", "change": -1.73},
-            {"code": "sh000905", "change": -2.15},
-            {"code": "sh000852", "change": -2.26},
+            {"code": "sh000001", "change": -1.22, "changePct": -0.03},
+            {"code": "sh000300", "change": -1.73, "changePct": -0.04},
+            {"code": "sh000905", "change": -2.15},                # 无 changePct → 只落点位
+            {"code": "sh000852", "change": -2.26, "changePct": None},  # None → 不落
             {"code": "sz399001", "change": -1.5},  # 未登记别名 → 跳过
             {"code": "sh000002", "change": None},  # 非数值 → 跳过
         ]
     }
+    # change=涨跌额（点位）必落；changePct=涨跌幅（百分比）伴生落（2026-10-16 单位错位修复：
+    # 消费端曾把点位当 % 呈现，伪造「上证 -60.75%」类暴跌，污染 zhaban broad_market 判据）
     assert build_server_indices(overview) == {
-        "sh": {"change": -1.22},
-        "hs300": {"change": -1.73},
+        "sh": {"change": -1.22, "changePct": -0.03},
+        "hs300": {"change": -1.73, "changePct": -0.04},
         "zz500": {"change": -2.15},
         "zz1000": {"change": -2.26},
     }

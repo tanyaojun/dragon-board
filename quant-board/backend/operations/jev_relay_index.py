@@ -83,8 +83,18 @@ def _median(vals: list[float]) -> float | None:
     return round((s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2), 2)
 
 
+def _broken_stats(codes: set[str], from_date: str, to_date: str) -> dict[str, Any] | None:
+    """断板股在 [from_date, to_date] 的收盘亏钱统计（中位/大面家数/TDX 覆盖）。
+    无任何日线 → None（fail-visible，调用方写不可算，不得伪 0）。"""
+    pcts = [p for p in (_close_pct(c, from_date, to_date) for c in sorted(codes)) if p is not None]
+    if not pcts:
+        return None
+    return {"median": _median(pcts), "big": sum(1 for p in pcts if p <= -5), "covered": len(pcts)}
+
+
 def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    """晋级率 + 断板亏钱 + 隔日溢价（D-1 池 × D0 池/TDX 日线；涨停/晋级按方案A 二分口径）。"""
+    """晋级率 + 断板亏钱 + 隔日溢价（D-1 池 × D0 池/TDX 日线；涨停/晋级按方案A 二分口径）。
+    断板亏钱带较昨日对比（2026-10-16 二级审计补供 relay_phase.divergence 判据）。"""
     prev_dates = trading_dates_before(db, date, 1)
     if not prev_dates:
         return "晋级与断板：无昨日交易日（fail-visible）"
@@ -106,22 +116,49 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
         f"{k}板→{'%.0f%%' % (sum(v) / len(v) * 100)}({sum(v)}/{len(v)})"
         for k, v in sorted(layers.items()))
     # 断板亏钱（TDX）
-    broken_pcts = [p for p in (_close_pct(c, prev_date, date) for c in broken) if p is not None]
+    cur_stats = _broken_stats(set(broken), prev_date, date)
     if broken:
-        if broken_pcts:
-            big_face = sum(1 for p in broken_pcts if p <= -5)
-            broken_txt = (f"断板 {len(broken)} 只：今日收盘中位 {_median(broken_pcts):+}%，"
-                          f"大面(≤-5%) {big_face} 只（TDX 覆盖 {len(broken_pcts)}/{len(broken)}）")
+        if cur_stats:
+            broken_txt = (f"断板 {len(broken)} 只：今日收盘中位 {cur_stats['median']:+}%，"
+                          f"大面(≤-5%) {cur_stats['big']} 只"
+                          f"（TDX 覆盖 {cur_stats['covered']}/{len(broken)}）")
         else:
             broken_txt = f"断板 {len(broken)} 只：今日表现不可算（TDX 日线缺失）"
     else:
         broken_txt = "断板 0 只"
+    # 较昨日断板：昨日断板=前日涨停池−昨日涨停池，亏钱取其 D-2→D-1 收盘。判据「断板亏钱
+    # 扩散（中位转负或大面增多）」需要昨日可比数，此前只给今日绝对值（2026-10-16 补供）。
+    window2 = trading_dates_before(db, date, 2)
+    if len(window2) < 2:
+        prev_broken_txt = "较昨日断板：不可算（无前日交易日）"
+    else:
+        d2 = window2[-2]
+        p2 = _pool_of(db, d2)
+        if not p2:
+            prev_broken_txt = f"较昨日断板：不可算（{d2} 韭研 final 缺失）"
+        else:
+            p2z, f2 = _sealed_codes(db, d2, set(p2), dataset_id)
+            pb = p2z - prev_zt
+            ps = _broken_stats(pb, d2, prev_date)
+            calib2 = "" if f2 else "（前日触板口径）"
+            if not pb:
+                prev_broken_txt = "较昨日断板：昨日 0 只"
+            elif ps is None:
+                prev_broken_txt = "较昨日断板：不可算（昨日 TDX 日线缺失）"
+            elif not broken:
+                prev_broken_txt = (f"较昨日断板：昨日中位 {ps['median']:+}%、"
+                                   f"大面 {ps['big']} 只 → 今日断板 0 只{calib2}")
+            elif cur_stats is None:
+                prev_broken_txt = "较昨日断板：不可算（今日 TDX 日线缺失）"
+            else:
+                prev_broken_txt = (f"较昨日断板：中位 {ps['median']:+}%→{cur_stats['median']:+}%、"
+                                   f"大面 {ps['big']}→{cur_stats['big']} 只{calib2}")
     # 隔日溢价（昨日全部涨停股今日收盘中位）
     prem = [p for p in (_close_pct(c, prev_date, date) for c in prev_zt) if p is not None]
     prem_txt = f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(prev_zt)}）" if prem \
         else "隔日溢价不可算（TDX 日线缺失）"
     return (f"晋级与断板：昨日 {len(prev_zt)} 只涨停 → 今日仍涨停 {len(promoted)} 只"
-            f"（晋级率 {rate}%）{calib}[{layer_txt}] · {broken_txt} · {prem_txt}")
+            f"（晋级率 {rate}%）{calib}[{layer_txt}] · {broken_txt} · {prev_broken_txt} · {prem_txt}")
 
 
 # ── 段 2a：三日晋级链 ───────────────────────────────────────────────────────
@@ -144,9 +181,15 @@ def ladder_structure_line(db: Any, date: str) -> str:
     prev_ratio = round(prev_two / prev_tp, 2) if prev_tp else None
     ratio_txt = (f"二板/三板+比率 {ratio}" + (f"（昨日 {prev_ratio}）" if prev_ratio is not None else "")) \
         if ratio is not None else "二板/三板+比率 不可算"
+    # 首板占比较昨日（2026-10-16 二级审计补供 relay_phase.launch 判据「首板占比明显升高」；
+    # 原只有比率挂昨日值，首板占比无可比数）。昨日梯队缺失 → 不挂后缀，不伪 0%。
+    prev_one = prev_lad.get("one") or 0
+    prev_total = prev_one + prev_two + prev_tp
+    first_txt = f"首板占比 {round(one/total*100)}%（{one}/{total}）" + \
+        (f"（昨日 {round(prev_one/prev_total*100)}%）" if prev_total else "")
     src = cur.get("ladderSource")
     src_txt = f"（梯队来源 {src}）" if src and src != "jiuyan" else ""  # THS 回退日叙事披露来源（review M4）
-    return (f"梯队结构量化：首板占比 {round(one/total*100)}%（{one}/{total}）· 二板 {two} 只 · "
+    return (f"梯队结构量化：{first_txt} · 二板 {two} 只 · "
             f"三板+ {three_plus} 只 · {ratio_txt}{src_txt}")
 
 
@@ -182,8 +225,18 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
         else:
             fate.append(f"{name} {_day_eff(entry)}板→次日即断")
     step_txt = f"→ D0 再存活 {len(s0)} 只（链率 {r0}%，段率 {r_step}%）" if r_step is not None else ""
+    # 昨日池今日晋级率 vs 前日池昨日晋级率（relay_momentum 主锚直供对比，2026-10-15 诊断补供：
+    # 此前两率分居段1「晋级与断板」与段2 本行、同日家数口径不一（market_metrics vs 二分池），
+    # 模型须跨段心算；此处与 relay_flow_line 同源同式（p1z∩p0z / p1z），两行数字必然一致）
+    if p1z:
+        d1_promo = len(p1z & p0z)
+        d1_rate = round(d1_promo / len(p1z) * 100, 1)
+        cmp_txt = (f"边际对比：昨日池今日晋级率 {d1_rate}%（{len(p1z)}→{d1_promo}）"
+                   f" vs 前日池昨日 {r1}%（{len(p2z)}→{len(s1)}），{round(d1_rate - r1, 1):+.1f}pct")
+    else:
+        cmp_txt = "边际对比：不可算（昨日涨停池为空）"
     return (f"三日晋级链：{d2} 涨停 {len(p2z)} 只 → {d1} 仍涨停 {len(s1)} 只（{r1}%）"
-            f"{step_txt} · 高位股轨迹：{'；'.join(fate) if fate else '无'}{calib}")
+            f"{step_txt} · 高位股轨迹：{'；'.join(fate) if fate else '无'}{calib} · {cmp_txt}")
 
 
 # ── 段 2b：题材演化 ─────────────────────────────────────────────────────────
@@ -360,7 +413,8 @@ def _sealed_codes(db: Any, date: str, touch: set[str], dataset_id: str) -> tuple
 
 
 def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    """今日炸板面：THS 15:00 炸板池结构化证据（家数分位/反复开板/昨日池股炸板/大面/代表股）。
+    """今日炸板面：THS 15:00 炸板池结构化证据（家数分位/反复开板/昨日池股炸板/大面/代表股/
+    较昨日增减——2026-10-15 诊断补供 relay_momentum 主锚的昨日可比数）。
 
     预登记：docs/hotlist-jev/jev-relay-zhaban-preregistration.md（StepB，用户 2026-10-11 裁决）。
     炸板 0 家是合法强信号（正常呈现）；帧缺失/降级才写「不可算」。
@@ -370,19 +424,27 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
         return "今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）"
     by_code = {str(i.get("code") or "")[-6:]: i for i in items if i.get("code")}
     n = len(by_code)
-    # 近 20 日炸板家数分位（无帧历史日跳过，只取有数据的日）
-    hist = []
+    # 近 20 日炸板家数分位（无帧历史日跳过，只取有数据的日）；同回溯顺带算反复开板家数分位
+    # （2026-10-16 二级审计补供：relay_phase 判据「反复开板处参照高位/低位」原只有绝对值）
+    hist = []  # (炸板家数, 反复开板家数) 逐日
     for d in trading_dates_before(db, date, 20):
         its2, f2 = _ths_failed_snapshot(db, d, dataset_id)
         if f2:
-            hist.append(len({str(i.get("code") or "")[-6:] for i in its2 if i.get("code")}))
+            by2 = {str(i.get("code") or "")[-6:]: i for i in its2 if i.get("code")}
+            hi2 = sum(1 for i in by2.values()
+                      if isinstance(i.get("open_num"), (int, float)) and i.get("open_num") >= 2)
+            hist.append((len(by2), hi2))
     pct_txt = "（历史炸板数据不足 5 日，无分位参照）"
     if len(hist) >= 5:
-        pct = round(sum(1 for x in hist if x < n) / len(hist) * 100)
-        pct_txt = f"（近{len(hist)}日分位 P{pct}，均值 {_median(hist) or 0:.0f} 家）"
+        pct = round(sum(1 for x in hist if x[0] < n) / len(hist) * 100)
+        pct_txt = f"（近{len(hist)}日分位 P{pct}，均值 {_median([x[0] for x in hist]) or 0:.0f} 家）"
     # 反复开板
     hi = [i for i in by_code.values() if isinstance(i.get("open_num"), (int, float)) and i.get("open_num") >= 2]
-    hi_txt = f"反复开板(≥2次) {len(hi)} 家（占 {round(len(hi) / n * 100) if n else 0}%）"
+    hi_pct_txt = "（历史反复开板数据不足 5 日，无分位参照）"
+    if len(hist) >= 5:
+        hpct = round(sum(1 for x in hist if x[1] < len(hi)) / len(hist) * 100)
+        hi_pct_txt = f"（近{len(hist)}日分位 P{hpct}）"
+    hi_txt = f"反复开板(≥2次) {len(hi)} 家（占 {round(len(hi) / n * 100) if n else 0}%）{hi_pct_txt}"
     # 昨日池分层：昨日池股今日炸 = 连板断层前导
     prev_dates = trading_dates_before(db, date, 1)
     layer_txt = "昨日池股炸板：不可算（昨日韭研池缺失）"
@@ -410,6 +472,23 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
         f"{i.get('name')}({i.get('open_num')}次,{i.get('change_rate'):+.1f}%)"
         if isinstance(i.get("change_rate"), (int, float)) else f"{i.get('name')}({i.get('open_num')}次)"
         for i in reps if i.get("name"))
+    # 较昨日增减（relay_momentum 主锚之二，2026-10-15 诊断补供）：criteria 判「炸板面收敛/
+    # 恶化（炸板与反复开板较昨日减少/增多）」需昨日可比数，而分位/均值只给绝对位置——
+    # 全库叙事此前从未组装昨日炸板家数，模型无从判方向，是 insufficient_evidence 逃生的
+    # 结构性口子（10-15 P0/09-21 P62 两日均缺此锚）。昨日帧数据现成（分位回溯同源）。
+    if not prev_dates:
+        cmp_txt = "较昨日：不可算（无昨日交易日）"
+    else:
+        prev_items, prev_found = _ths_failed_snapshot(db, prev_dates[-1], dataset_id)
+        if not prev_found:
+            cmp_txt = "较昨日：不可算（昨日 THS 炸板池缺失/降级）"
+        else:
+            prev_by = {str(i.get("code") or "")[-6:]: i for i in prev_items if i.get("code")}
+            p_n = len(prev_by)
+            p_hi = sum(1 for i in prev_by.values()
+                       if isinstance(i.get("open_num"), (int, float)) and i.get("open_num") >= 2)
+            cmp_txt = (f"较昨日：炸板 {p_n}→{n} 家（{n - p_n:+d}）· "
+                       f"反复开板 {p_hi}→{len(hi)} 家（{len(hi) - p_hi:+d}）")
     # 炸板归因打标分布（StepA：hotlist_jev_zhaban_labels 当日聚合；覆盖不足如实注记）
     labeled = list(db["hotlist_jev_zhaban_labels"].find(
         {"tradingDate": date, "status": "ok"}, {"zhabanCause": 1, "name": 1, "openNum": 1}))
@@ -425,7 +504,7 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     else:
         dist_txt = f"炸板归因打标：未覆盖（0/{n}，归因证据缺失）"
     return (f"今日炸板面：炸板 {n} 家{pct_txt}；{hi_txt}；{layer_txt}；{rate_txt}；"
-            f"反复开板代表：{rep_txt or '无'}；{dist_txt}")
+            f"反复开板代表：{rep_txt or '无'}；{dist_txt}；{cmp_txt}")
 
 
 # ── 段 6：热榜叙事参照段 ────────────────────────────────────────────────────

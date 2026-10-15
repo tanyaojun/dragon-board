@@ -11,6 +11,7 @@ import backend.operations.jev_relay_index as relay
 from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY
 from backend.operations.jev_relay_index import (
     _pool_of,
+    ladder_structure_line,
     relay_flow_line,
     run_relay_index_day,
     theme_ladder_lines,
@@ -81,6 +82,17 @@ def _final(date, stocks):
             "fields": [{"name": s.get("board") or "板块A", "stocks": [s]} for s in stocks]}
 
 
+def _frame_failed(date, items):
+    """15:00 帧 + THS 炸板池（items 自带 open_num，供「较昨日」对比夹具控制反复开板数）。"""
+    return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
+            "slotTime": "15:00", "snapshotId": f"h:{date}", "timestamp": 2,
+            "limitSummary": {"zhaban": {"ztCount": 50, "count": 8, "rate": 12.0},
+                             "drawdown": {"count": 3}, "continuousBoards": {"maxBoard": 5},
+                             "thsPools": {"ok": True, "degraded": False, "date": date.replace("-", ""),
+                                          "pools": {"failed": {"key": "failed", "total": len(items),
+                                                               "items": items}}}}}
+
+
 # 三日：09-28（D-2）/ 09-29（D-1）/ 09-30（D0）
 _D2, _D1, _D0 = "2026-09-28", "2026-09-29", "2026-09-30"
 _STOCKS = {
@@ -117,6 +129,27 @@ def test_three_day_chain_line():
     assert "A 2板→4板连板中" in line
 
 
+def test_three_day_chain_line_promo_comparison():
+    """relay_momentum 锚1 补供（2026-10-15 诊断）：昨日池今日 vs 前日池昨日晋级率直给对比，
+    消除模型跨段心算（段1 晋级率 / 段2 前日池率 / 段5 轨迹率口径不一）。"""
+    line = three_day_chain_line(_db(), _D0)
+    # D-1 池 {600001,600004} → D0 {600001} = 50.0%；D-2 池 3 只 → D-1 1 只 = 33.3%
+    assert "边际对比：昨日池今日晋级率 50.0%（2→1） vs 前日池昨日 33.3%（3→1），+16.7pct" in line
+
+
+def test_three_day_chain_line_promo_comparison_no_fake_zero():
+    """昨日涨停池被炸板池清空 → 对比写不可算，不得伪 0%（fail-visible 红线）。"""
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0], failed_by_date={_D1: ["600004"]}),
+        "jiuyan_action": FakeCol([_final(_D2, _STOCKS[_D2]),
+                                  _final(_D1, [{"code": "600004", "name": "D"}]),
+                                  _final(_D0, _STOCKS[_D0])]),
+    })
+    line = three_day_chain_line(db, _D0)
+    assert "边际对比：不可算（昨日涨停池为空）" in line
+    assert "昨日池今日晋级率 0.0%" not in line  # 伪 0 红线
+
+
 def test_relay_flow_line_with_tdx(monkeypatch):
     """晋级/断板：晋级率 + 分层 + 断板中位/大面（TDX mock）。
     D-1 池（600001 晋级在池，600004 断板）；600004 断板 -10% 大面。"""
@@ -129,6 +162,36 @@ def test_relay_flow_line_with_tdx(monkeypatch):
     assert "晋级率 50.0%" in line          # 昨日 2 只（600001/600004）→ 今日 1 只在池
     assert "断板 1 只" in line and "大面(≤-5%) 1 只" in line
     assert "隔日收盘溢价中位 -4.0%" in line  # [+2%, -10%] 中位
+    # 昨日断板（600002/600003）无 TDX 日线 → 对比写不可算，不得伪 0（fail-visible）
+    assert "较昨日断板：不可算（昨日 TDX 日线缺失）" in line
+
+
+def test_relay_flow_line_broken_yesterday_comparison(monkeypatch):
+    """relay_phase.divergence「断板亏钱扩散（中位转负或大面增多）」需昨日可比数
+    （2026-10-16 二级审计补供）：昨日断板=前日涨停池−昨日涨停池，亏钱=D-2→D-1 收盘。"""
+    bars = {
+        "600004": [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}],    # 今日断板 -10% 大面
+        "600002": [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}],    # 昨日断板 -5% 大面
+        "600003": [{"date": _D2, "close": 20.0}, {"date": _D1, "close": 20.2}],   # 昨日断板 +1%
+        "600001": [{"date": _D1, "close": 20.0}, {"date": _D0, "close": 20.4}],   # 晋级 +2%
+    }
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    line = relay_flow_line(_db(), _D0)
+    # 昨日断板中位 [-5.0, +1.0] → -2.0%、大面 1 只；今日 -10.0%、大面 1 只
+    assert "断板 1 只：今日收盘中位 -10.0%" in line
+    assert "较昨日断板：中位 -2.0%→-10.0%、大面 1→1 只" in line
+
+
+def test_relay_flow_line_broken_yesterday_no_prev_day(monkeypatch):
+    """只有 1 个前交易日 → 较昨日断板写不可算，不伪造对比（fail-visible）。"""
+    bars = {"600001": [{"date": _D1, "close": 20.0}, {"date": _D0, "close": 20.4}]}
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    db = FakeDb({
+        "snapshot_frames": _frames([_D1, _D0]),   # D-2 帧缺 → window<2
+        "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
+    })
+    line = relay_flow_line(db, _D0)
+    assert "较昨日断板：不可算（无前日交易日）" in line
 
 
 def test_zhaban_face_prev_pool_missing_no_fake_zero():
@@ -141,6 +204,53 @@ def test_zhaban_face_prev_pool_missing_no_fake_zero():
     assert "今日炸板面：炸板 1 家" in line
     assert "昨日池股炸板：不可算（昨日韭研池缺失）" in line
     assert "昨日池股今日炸 0 家" not in line  # 伪 0 红线
+
+
+def test_zhaban_face_line_yesterday_comparison():
+    """relay_momentum 锚2 补供（2026-10-15 诊断）：炸板/反复开板较昨日增减直给——
+    分位/均值只给绝对位置，模型无从判 criteria 的「较昨日收敛/恶化」方向。"""
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_frame_failed(_D1, [{"code": "600002", "name": "B", "open_num": 3},
+                                                        {"code": "600003", "name": "C", "open_num": 1}]),
+                                    _frame_failed(_D0, [{"code": "600001", "name": "A", "open_num": 1}])]),
+        "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "今日炸板面：炸板 1 家" in line
+    assert "较昨日：炸板 2→1 家（-1）" in line
+    assert "反复开板 1→0 家（-1）" in line
+
+
+def test_zhaban_face_line_yesterday_frame_missing_no_fake():
+    """昨日 THS 炸板池帧缺失/降级 → 对比写不可算，不得以 0 家伪算增减（fail-visible）。"""
+    db = FakeDb({
+        "snapshot_frames": _frames([_D1, _D0], failed_by_date={_D0: ["600001"]}),  # D1 帧无 thsPools
+        "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "较昨日：不可算（昨日 THS 炸板池缺失/降级）" in line
+    assert "较昨日：炸板 0→" not in line  # 伪 0 红线
+    # 历史不足 5 日 → 反复开板分位同写不可算，不伪 P0
+    assert "（历史反复开板数据不足 5 日，无分位参照）" in line
+
+
+def test_zhaban_face_reopen_percentile():
+    """反复开板分位（2026-10-16 二级审计补供 relay_phase「反复开板处参照高位/低位」）：
+    炸板家数分位原已给，反复开板只有绝对值；同一 20 日回溯顺带算其分位。"""
+    hist = [("2026-09-21", [("600101", 2)]), ("2026-09-22", [("600102", 3)]),
+            ("2026-09-23", [("600103", 2), ("600104", 1)]), ("2026-09-24", [("600105", 5)]),
+            ("2026-09-25", [("600106", 2), ("600107", 2)])]   # 反复开板逐日 1/1/1/1/2
+    frames = [_frame_failed(d, [{"code": c, "name": c, "open_num": on} for c, on in items])
+              for d, items in hist]
+    frames.append(_frame_failed(_D0, [{"code": "600001", "name": "A", "open_num": 1}]))
+    db = FakeDb({
+        "snapshot_frames": FakeCol(frames),
+        "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    # 今日炸板 1 家 / 反复开板 0 家，均低于全部 5 个历史日 → 双 P0；炸板均值=[1,1,1,2,2] 中位 1
+    assert "炸板 1 家（近5日分位 P0，均值 1 家）" in line
+    assert "反复开板(≥2次) 0 家（占 0%）（近5日分位 P0）" in line
 
 
 def test_relay_flow_line_sealed_bisect(monkeypatch):
@@ -160,6 +270,39 @@ def test_relay_flow_line_sealed_bisect(monkeypatch):
     assert "昨日 2 只涨停 → 今日仍涨停 1 只（晋级率 50.0%）" in line
     assert "断板 1 只" in line and "大面(≤-5%) 1 只" in line
     assert "触板口径降级" not in line  # 两日 THS 池齐备，无降级注记
+
+
+def test_ladder_structure_first_board_pct_yesterday():
+    """relay_phase.launch「首板占梯队比例明显升高」需昨日可比数（2026-10-16 二级审计补供）：
+    梯队行原只有二板/三板+ 比率挂（昨日 X），首板占比无昨日值。"""
+    d0 = [{"code": "600011", "name": "F"}, {"code": "600012", "name": "G"},        # 首板 ×2（不在昨日池）
+          {"code": "600003", "name": "C", "num": "2天2板"},                          # 二板
+          {"code": "600004", "name": "D", "num": "3天3板"},                          # 三板
+          {"code": "600005", "name": "E", "num": "5天5板"}]                          # high(≥5)
+    d1 = [{"code": "600021", "name": "H"},                                           # 首板 ×1（不在前日池）
+          {"code": "600003", "name": "C", "num": "3天3板"},
+          {"code": "600004", "name": "D", "num": "4天4板"}]
+    db = FakeDb({
+        "snapshot_frames": _frames([_D1, _D0]),
+        "jiuyan_action": FakeCol([_final(_D1, d1), _final(_D0, d0)]),
+    })
+    line = ladder_structure_line(db, _D0)
+    # D0：首板 2/5=40%；D1：首板 1/3=33%
+    assert "首板占比 40%（2/5）（昨日 33%）" in line
+    assert "二板/三板+比率 0.5（昨日 0.0）" in line
+
+
+def test_ladder_structure_first_board_pct_no_prev_no_fake():
+    """无昨日梯队 → 首板占比不挂（昨日 X），不得伪 0%（fail-visible）。"""
+    d0 = [{"code": "600011", "name": "F"}, {"code": "600012", "name": "G"},
+          {"code": "600003", "name": "C", "num": "2天2板"}]
+    db = FakeDb({
+        "snapshot_frames": _frames([_D0]),   # 无前日帧
+        "jiuyan_action": FakeCol([_final(_D0, d0)]),
+    })
+    line = ladder_structure_line(db, _D0)
+    assert "首板占比 67%（2/3） ·" in line
+    assert "（昨日 0%）" not in line and "（昨日 33%）" not in line  # 伪 0 红线
 
 
 def test_theme_ladder_lines_dragon_order():

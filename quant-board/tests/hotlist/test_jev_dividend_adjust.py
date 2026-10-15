@@ -238,6 +238,36 @@ def test_zhaban_narrative_ths_prev_miss_fail_visible(monkeypatch):
     assert "未收录（昨日未涨停或 THS 池缺口，fail-visible）" in line
 
 
+def test_zhaban_narrative_index_pct_preferred(monkeypatch):
+    """2026-10-16 单位错位修复：帧带 changePct（涨跌幅，百分比）时按 % 呈现；
+    change（涨跌额，点位）不得再伪装成百分比（曾致「上证 -60.75%」伪造暴跌）。"""
+    from backend.operations import jev_zhaban_label as zb
+    runner._THS_CACHE.clear()
+    monkeypatch.setattr(zb, "_limitup_sequence_line",
+                        lambda date, code, name, n=10: "板序：近 10 日 ○（测试桩）")
+    frames = [_ths_frame("2026-09-18", [])]
+    frames[0]["indices"] = {"sh": {"change": -32.8, "changePct": -0.86}}
+    db = _ZhabanDb(frames)
+    line = zb.build_zhaban_narrative(db, "2026-09-18", _zhaban_item(), {}, [])
+    assert "大盘：上证今日 -0.86%" in line
+    assert "-32.80%" not in line  # 点位伪装百分比红线
+
+
+def test_zhaban_narrative_index_points_only_not_fake_pct(monkeypatch):
+    """存量帧只落 change（点位，无 changePct）→ 带单位诚实呈现点位，不得伪装成百分比。
+    实证：10-12 两只 label 因叙事「上证 -19.19%」假暴跌误判 broad_market（真实约 -0.5%）。"""
+    from backend.operations import jev_zhaban_label as zb
+    runner._THS_CACHE.clear()
+    monkeypatch.setattr(zb, "_limitup_sequence_line",
+                        lambda date, code, name, n=10: "板序：近 10 日 ○（测试桩）")
+    frames = [_ths_frame("2026-09-18", [])]
+    frames[0]["indices"] = {"sh": {"change": -19.19}}   # 存量帧口径：纯点位
+    db = _ZhabanDb(frames)
+    line = zb.build_zhaban_narrative(db, "2026-09-18", _zhaban_item(), {}, [])
+    assert "大盘：上证今日 -19.19 点（涨跌幅缺失，点位口径）" in line
+    assert "-19.19%" not in line  # 伪造暴跌红线
+
+
 def test_zhaban_doc_stamps_ammo_version(monkeypatch):
     """新文档盖 ZHABAN_AMMO_VERSION 戳 + answers 原样包（P0-2/P1-2 落库合同）。"""
     from backend.operations import jev_zhaban_label as zb
