@@ -62,6 +62,9 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                 info = board_info.get(str(stock.get("code") or "")[-6:])
                 if info:
                     stock["boards"] = info["boards"]
+                    # 2026-10-15 增补：days=num「N天M板」的 N（跨度天数），与 boards 一并透传，
+                    # 前端「高度」列拼「N天M板」（5天5板）；None=num 不可解析，前端回落「M板」不猜天数
+                    stock["days"] = info.get("days")
                     stock["limitUpTime"] = info["limitUpTime"]
                     stock["boardName"] = info["boardName"]
                     if info.get("boardUnmarked"):
@@ -78,6 +81,8 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
             # 2026-10-12 增补：板块领涨（龙一/二/三，与 relay 题材梯队表同规 dragon_rows 单源）。
             # 板块键=board_info 的 boardName（同出自韭研 final fields.name，缺失回退打标 ctx board）；
             # final 缺失 → 空 map → 行内空数组，前端显示 '-'（降级面由 boardJoinDegraded 注记）
+            # 2026-10-15：dragon_rows 增带 code，前端据此只渲染与本行 code 相同的那条龙序
+            # （「领涨」列从「板块龙一二三全列」改为「本股身位」，非领涨股显示 '-'）
             from backend.operations.jev_label_jiuyan import jiuyan_board_dragons
             dragons = jiuyan_board_dragons(db, date)
             for stock in result.get("stocks") or []:

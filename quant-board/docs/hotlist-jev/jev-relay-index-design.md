@@ -207,6 +207,9 @@ climax/retreat）无「高位分歧」档，分歧日只能 ferment/climax 平�
   同出自韭研 final fields.name；韭研 final 之外的板块 → 空数组）；
 - relay_page 涨停复盘表在板块列后插入领涨列（角色+名+板数，colspan 10→11）。
 
+> **2026-10-15 更新（见 §8.6）**：领涨列已改为只显示**本股**龙序（「龙一/龙二/龙三」），
+> 不再展示板块三个龙* 的名字与板数；同轮高度列补跨度天数显示「N天M板」。
+
 对拍验证（2026-10-12 实测）：62/62 行带 boardDragons，其他/AI影视/公告三板块与
 relay 题材梯队表逐名一致；领涨覆盖面大于梯队表 top5（大农业/医药医疗等同样有）。
 测试 +4（dragon_rows 排序/截断、jiuyan_board_dragons 分组与 final 缺失、路由挂载）。
@@ -303,3 +306,39 @@ favicon 404（既有，无害）。pytest：全量 `3542 passed`（`-m hotlist` 
 > `hotlist_jev_relay_index` 同属单数据集集合；补上条件后生产文档一条都匹配不上，
 > 台账整列变空——正是 §4.0 禁止的「有数据不展示」。现按 `tradingDate` 过滤并在代码里
 > 注明原因，`test_quotes_review_vote_join_ignores_dataset_id_field` 做回归护栏。
+
+### 8.6 领涨列改「本股身位」+ 高度列补跨度天数（2026-10-15 用户需求）
+
+**用户原始反馈（截图 :8000 涨停复盘页，大消费板块）**：
+
+1. 【领涨】一格把板块龙一/二/三连同股票名和板数全列出来
+   （「龙一 百洋股份·5板 / 龙二 阳光乳业·4板 / 龙三 皇台酒业·2板」），同板块每一行
+   都是同一串——**该列不携带任何行级信息**；要求只显示「龙一」/「龙二」等字。
+2. 【高度】只显示「5板」，不完整；百洋股份 002696 应显示「5天5板」。
+
+**根因**：§8.4 把 `boardDragons` 设计成「行所属板块的 top3 全量」，前端 `.map()` 全列；
+韭研 `num` 字段本身就是「N天M板」（N=跨度天数、M=板数），`jiuyan_board_info` 早已解析出
+`days`，但 limitup-labels 路由只透传了 `boards`，`days` 停在 `info` 里没出去。
+
+**改法（三处，fail-visible 不变）**：
+
+- `dragon_rows`（jev_label_jiuyan.py）输出增 `code` 字段，与 `jiuyan_board_info` /
+  `_jiuyan_ladder` 同规取末 6 位（韭研 code 可能带交易所前缀，如 `SZ002696`）；
+  relay `theme_ladder_lines` 只消费 name/boards/time，新增字段对其无影响。
+- limitup-labels 路由在 board join 段补 `stock["days"] = info.get("days")`（None=num
+  不可解析，宁缺毋猜）。
+- relay_page 涨停复盘表：领涨列改为按本行 code 末 6 位在 `boardDragons` 里 `.find()`
+  命中**唯一一条**龙序，只渲染角色字；非领涨股（板块有龙一二三但本股不在其中）与
+  韭研 final 缺失 → '-'，不伪造身位。高度列改为 `${days}天${boards}板`；`days` 缺失
+  回落 `${boards}板`；`boards≤1`/缺失仍为「首板」（韭研首板不标 num，不伪造天数）。
+
+**测试**：`tests/hotlist/test_jev_board_info.py` +2——
+`test_dragon_rows_carries_code_for_own_role_match`（code 透出/末 6 位归一化/None 兜底/
+relay 消费字段不变）、`test_limitup_route_own_dragon_role_and_days`（days 透传含断板股
+N>M、本股龙序唯一命中、非领涨股无匹配项、域外板块空数组）。
+pytest：相关 5 文件 `65 passed`；全库 `--collect-only` `3631 collected`（无 import 破坏）。
+
+**遗留（结构性，非本次引入）**：`relay_page/index.html` 是纯静态单文件，`frontend/` Vue
+测试体系不覆盖它，`heightText` / `ownDragon` 的渲染边界（days=0、boards=0、code 带前缀）
+只经 playwright-cli 真实浏览器人工验过，无自动化护栏。若要补需先决定是否给 relay_page
+引入前端测试链路。

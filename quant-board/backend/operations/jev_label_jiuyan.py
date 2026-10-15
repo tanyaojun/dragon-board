@@ -155,10 +155,17 @@ def dragon_rows(stocks: list[dict], top: int = 3) -> list[dict]:
     升序；num 缺失=韭研首板口径（不标 num）视作无板数垫在同板数之后；
     time 缺失排序垫底、输出 None（前端显示 ?）。跨板块重复归属按原样各排各的
     （与 relay 题材梯队表 _boards_of 分组口径一致，不做跨板块去重）。
+
+    code 随行输出（2026-10-15 增补）：涨停复盘「领涨」列据此把个股匹配到**自己**的
+    龙序，只显示「龙一/龙二/龙三」，不再把板块三个龙* 全塞进一格； relay 梯队表
+    只消费 name/boards/time，新增字段对其无影响。code 与 jiuyan_board_info /
+    _jiuyan_ladder 同规取末 6 位（韭研 code 可能带交易所前缀），前端才能与行 code 对上。
     """
     ranked = sorted(stocks,
                     key=lambda s: (-(_jiuyan_board_count(s) or 0), str(s.get("time") or "99:99")))
-    return [{"role": f"龙{'一二三'[i]}", "name": s.get("name"),
+    return [{"role": f"龙{'一二三'[i]}",
+             "code": (str(c)[-6:] if (c := s.get("code")) else None),
+             "name": s.get("name"),
              "boards": _jiuyan_board_count(s),
              "time": str(s["time"])[:5] if s.get("time") else None}
             for i, s in enumerate(ranked[:top])]

@@ -801,13 +801,19 @@ function lfRenderRows(){
   const rows = filtered.map((s, i) => {
     const entry = STATE.labelEntries[i];
     const open = ui.openKey === entry.key;
+    // 高度=韭研 num「N天M板」：M=板数、N=跨度天数。M>1 且 N 可得 →「N天M板」（5天5板）；
+    // N 缺失（num 不可解析）宁缺毋猜，回落「M板」；M≤1/缺失 → 首板（韭研首板不标 num，不伪造天数）
+    const heightText = (s.boards && s.boards > 1)
+      ? (s.days ? `${s.days}天${s.boards}板` : `${s.boards}板`) : '首板';
     const hCell = s.zhaban ? badge(`炸板${s.openNum ? '·' + s.openNum + '开' : ''}`, 'b-red')
       : s.excluded ? badge(s.excluded === 'st' ? 'ST剔除' : '北交所', 'b-amber')
       : s.boardUnmarked ? badge('漏标连板', 'b-amber')
-      : `<span class="num">${s.boards && s.boards > 1 ? s.boards + '板' : '首板'}</span>`;
-    // 领涨=所在板块龙一/二/三（后端 dragon_rows 单源，与 relay 题材梯队表同规；空=韭研 final 缺失或板块无数据）
-    const dragons = (s.boardDragons || []).map(d =>
-      `<span style="color:var(--muted2)">${esc(d.role || '')}</span> ${esc(d.name || '?')}${d.boards ? `<span class="num" style="color:var(--muted2)">·${d.boards}板</span>` : '<span style="color:var(--muted2)">·首板</span>'}`).join('<span style="color:var(--muted2)"> / </span>');
+      : `<span class="num">${heightText}</span>`;
+    // 领涨=本股在所属板块的龙序（龙一/二/三，后端 dragon_rows 单源，按 code 末 6 位命中本行）；
+    // 只显示本股身位，不再把板块三个龙* 全塞一格；非领涨股 / 韭研 final 缺失 → '-'（不伪造身位）
+    const ownDragon = (s.boardDragons || []).find(d =>
+      d.code && String(d.code).slice(-6) === String(s.code || '').slice(-6));
+    const dragons = ownDragon ? `<span style="color:var(--muted2)">${esc(ownDragon.role || '')}</span>` : '';
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
     <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
     <td style="font-size:12px">${dragons || '-'}</td>

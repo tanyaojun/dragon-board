@@ -289,3 +289,92 @@ def test_limitup_route_attaches_board_dragons(monkeypatch):
     assert [d["name"] for d in dragons] == ["龙一甲", "龙二乙"]
     assert dragons[0]["role"] == "龙一" and dragons[0]["boards"] == 3
     assert by_code["600009"]["boardDragons"] == []
+
+
+def test_dragon_rows_carries_code_for_own_role_match():
+    """dragon_rows 输出带 code（2026-10-15 用户需求）：涨停复盘「领涨」列据此把个股
+    匹配到**自己**的龙序，只显示「龙一/龙二/龙三」，不再把板块三个龙* 全塞进一格；
+    relay 题材梯队表既有消费字段（name/boards/time）不变。"""
+    stocks = [
+        {"code": "002696", "name": "百洋股份", "num": "5天5板", "time": "09:58:00"},
+        {"code": "001318", "name": "阳光乳业", "num": "4天4板", "time": "09:30:00"},
+        {"code": "000995", "name": "皇台酒业", "num": "2天2板", "time": "09:38:00"},
+    ]
+    rows = dragon_rows(stocks)
+    assert [r["code"] for r in rows] == ["002696", "001318", "000995"]
+    assert [r["role"] for r in rows] == ["龙一", "龙二", "龙三"]
+    # relay 梯队表消费字段不受影响（theme_ladder_lines 只取 name/boards/time）
+    assert rows[0]["name"] == "百洋股份" and rows[0]["boards"] == 5 and rows[0]["time"] == "09:58"
+    # num 缺失（韭研首板口径）仍带 code，不因缺板数丢身份
+    assert dragon_rows([{"code": "603237", "name": "五芳斋", "num": None}])[0]["code"] == "603237"
+    # code 与 jiuyan_board_info 同规取末 6 位（韭研 code 可能带交易所前缀）→ 前端才匹配得上行 code
+    assert dragon_rows([{"code": "SZ002696", "name": "百洋股份", "num": "5天5板"}])[0]["code"] == "002696"
+    assert dragon_rows([{"code": None, "name": "无code", "num": None}])[0]["code"] is None
+
+
+def test_limitup_route_own_dragon_role_and_days(monkeypatch):
+    """「领涨」+「高度」两列契约（2026-10-15 用户需求）：
+
+    - 领涨：boardDragons 每行带 code → 前端只渲染与本行 code 相同的那一条龙序；
+      本股不是龙一/二/三 → 数组非空但无匹配项 → 显示 '-'（不伪造身位）；
+    - 高度：days 与 boards 一并透传 → 前端拼「N天M板」（5天5板），
+      days 缺失（num 不可解析）时前端回落「M板」，不猜天数。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.api import hotlist_jev_limitup_routes as limitup_module
+
+    labels = [
+        {"_id": "2026-10-09:002696", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "002696", "name": "百洋股份",
+         "label": "ma_restructure", "jiuyanContext": {"board": "大消费"}},
+        {"_id": "2026-10-09:001318", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "001318", "name": "阳光乳业",
+         "label": "ma_restructure", "jiuyanContext": {"board": "大消费"}},
+        {"_id": "2026-10-09:603237", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "603237", "name": "五芳斋",
+         "label": "ma_restructure", "jiuyanContext": {"board": "大消费"}},
+        {"_id": "2026-10-09:605003", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "605003", "name": "众望布艺",
+         "label": "ma_restructure", "jiuyanContext": {"board": "域外板块"}},
+    ]
+    db = MultiFakeDb({
+        "hotlist_jev_driver_labels": _LabelsCol(labels),
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("大消费", [
+                {"code": "002696", "name": "百洋股份", "num": "5天5板", "time": "09:58:00"},
+                # 韭研 code 带交易所前缀：dragon_rows 同规取末 6 位，仍能与行 code「001318」对上
+                # num=7天4板 是真实断板股形态（N>M）：height 须显示「7天4板」而非截断成「4板」
+                {"code": "SZ001318", "name": "阳光乳业", "num": "7天4板", "time": "09:30:00"},
+                {"code": "000995", "name": "皇台酒业", "num": "2天2板", "time": "09:38:00"},
+                {"code": "603237", "name": "五芳斋", "num": None, "time": "13:36:00"}])]),
+            _final("2026-10-08", [("X", [{"code": "002696", "num": "4天4板"}])]),
+        ]),
+        "snapshot_frames": FramesCol([_pool_frame("2026-10-09", []), _pool_frame("2026-10-08", [])]),
+    })
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    app = FastAPI()
+    app.include_router(limitup_module.router)
+    resp = TestClient(app).get("/api/hotlist-jev/limitup-labels", params={"date": "2026-10-09"})
+    assert resp.status_code == 200
+    by_code = {s["code"]: s for s in resp.json()["stocks"]}
+
+    # ── 高度：days 透传 ──
+    assert by_code["002696"]["boards"] == 5 and by_code["002696"]["days"] == 5   # 5天5板 = 纯连板
+    # 断板股 N>M：days 必须原样透传，前端才能显示「7天4板」而非截断成「4板」
+    assert by_code["001318"]["boards"] == 4 and by_code["001318"]["days"] == 7
+    assert by_code["603237"]["boards"] is None and by_code["603237"]["days"] is None  # 首板不标 num
+
+    # ── 领涨：每行可按自身 code 命中唯一龙序 ──
+    def own_role(stock):
+        return [d["role"] for d in stock["boardDragons"] if d.get("code") == stock["code"]]
+
+    assert own_role(by_code["002696"]) == ["龙一"]
+    assert own_role(by_code["001318"]) == ["龙二"]
+    # 五芳斋：板块有龙一二三但本股不在其中 → 无匹配项 → 前端 '-'（不伪造身位）
+    assert len(by_code["603237"]["boardDragons"]) == 3
+    assert own_role(by_code["603237"]) == []
+    # 韭研 final 无该板块 → 空数组 → '-'
+    assert by_code["605003"]["boardDragons"] == []
