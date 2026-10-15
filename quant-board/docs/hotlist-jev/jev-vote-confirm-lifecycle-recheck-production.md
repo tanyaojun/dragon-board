@@ -24,7 +24,7 @@
   失败/degraded 文档不视为已完成，重跑自动补齐；落库 replace_one 幂等，重复执行零副作用；
 - **帽位**：全量口径显式放大至人口上限（`--vote-cap-buy/sell 200`、`--lc-cap-igex 100/
   --lc-cap-total 200`，实测最大单日人口 buy 58/sell 140/B 86）；默认帽（8/4/8）仅 pilot
-  抽样用，生产回填不适用。
+  抽样用，生产回填不适用。**（LC 帽位已被 §六·产·七修「取消抽样帽」取代，2026-10-14）**
 
 ## §二 预算与执行参数（冻结）
 
@@ -141,3 +141,50 @@
   跨代对照 A 131/133、B 44/49 判读不变（b 代跨日行未带偏判读）；两帧低一致率判例
   （cooling→reversal 万科A/泸州老窖有据、格力电器存疑；A 卖侧量价 A/B/C 档逆判）已交用户
   盘感验收，裁决「收盘帧远好于午盘」；
+
+### §六·产·七修 取消抽样帽（2026-10-14 用户裁决「帽子盖的是自己的眼睛，毫无实际意义」）
+
+> 触发事实：10-14 面板「热榜股总数 244 / VOTE 方向复核 235 / LC 生命周期复核 200」差异归因
+> 复查时发现——LC 的 200 不是覆盖上限而是**抽样帽**（`--lc-cap-total 200`，pilot 期按当时
+> 人口上限 B≤86/日 定值、三修纳入 cooling 后人口涨到 244/日却未同步放大），
+> `sample_lifecycle` 分组把 cooling 排末位 → 每日被砍的 44 只全是 cooling 大盘蓝筹
+> （601188/601288/601318/601398/601566/601899…），10-09 当天已撞过一次（首跑帽 200
+> 截断 44 例，手工放大帽补齐到 247/250），但固化值没改，于是 10-13 起每天都在重复截断。
+> 用户裁决：取消帽子设计。
+
+- **改动（判据/对照锚/落库合同零改动，同 hash 同代际可累计）**：
+  - `backend/analysis/hotlist/jev_vote_ammo.py`：删 `sample_lifecycle` 及 v4 代起已死的
+    `vote_buy_sort_key`/`vote_sell_sort_key`/`VOTE_DIMS`/`TIER_RANK`（抽样专用件随帽一并退役）；
+  - `backend/operations/jev_vote_confirm.py`：`run_lifecycle_day` 去 `cap_igex/cap_total`
+    参数，人口=候选全量；删 `--lc-cap-igex/--lc-cap-total` CLI；watch kwargs 清帽；
+  - `backend/operations/schedule.py`：盘后链子进程去帽参数（原 `--lc-cap-igex 100
+    --lc-cap-total 200` 弃用）；
+  - 测试：抽样帽测试退役，新增 `test_run_lifecycle_no_cap_full_population`
+    （12 候选 > 旧帽 8 仍全采，回归钉死无帽）；schedule 命令断言加"帽参数不在 cmd"。
+- **10-14 补跑（用户指令即开火批准）**：`--lifecycle-day 2026-10-14 --slot 15:00
+  --include-cooling --workers 4 --token-fuse 6000000 --fire` → **新采 40 例全 ok、零 degraded、
+  64,781 tokens**（200 例已跑幂等跳过 + 4 例 data_insufficient 留痕零调用）；
+  LC 覆盖 244/244 = 100%（240 ok + 4 留痕），面板「LC 生命周期复核」200 → **240**、
+  未复核 40 → **0**；紫金矿业 601899 补齐 LC=cooling（conf 0.69，与规则 stage 一致）。
+- **遗留（本次不改，另行登记）**：VOTE 判读时点仍硬编码 11:00（`DIRECTION_SLOT`），
+  与面板默认 15:00 帧不同池——10-14 的 61 只「VOTE 未复核」= 11:00 后进榜股
+  （000063 中兴通讯 13:00 才进榜即此因）；KPI 的 `vote.ok` 是文档级计数（含 52 份
+  已跌出 15:00 榜的文档）而行级 `unreviewed` 是行级计数，两者不可加。是否把 VOTE
+  判读时点对齐 15:00 需走预登记（11:00 as-of 是 v4 冻结计分口径）。
+
+### §六·产·八修 共振维独立判读试点落地（2026-10-14，前端就地改造【共振】列）
+
+- **读口合同扩展（`backend/services/jev/jev_quotes_review.py`，只读零写入）**：新增第三题集
+  `hotlist_jev_resonance_recheck_pilot` 的 join——行级 `jev.res`（direction/confidence/score/
+  riskLevel）+ `jev.resAgree`（对照锚=同帧引擎共振 direction）、`summary.resonance`
+  （ok/degraded/insufficient/buy/sell/hold/modelInsufficient/unreviewed）+ `summary.resAgree`/
+  `resDiverge`、`resonanceSlots`、`resonanceSlotNote`（所选帧无判读时的结构化说明）、
+  `docs.res`（with_docs=1 全保留，含 bars/engine* 对照锚快照）。**帧锁定与 LC 同规**
+  （跨槽拼接禁令）：判读帧=序列末项，换帧读数即换原料；所选帧无判读→读数缺失如实 null。
+- **前端（`backend/relay_page/index.html`，不新增列）**：【共振】列有判读→jev 读数
+  （走强/同步/走弱徽标 + 强度分带色数值），无判读→回落引擎档位徽标（试点未开火期间不退化成
+  全 '--'）；表头 title 说明双源、tooltip 给全量（引擎档位 + jev 读数 + 对照锚一致/分歧/锚缺失）；
+  新增「RES 共振复核」KPI 卡与 `jev共振` 筛选、`res` 排序键；行展开增第三张 lg-card
+  （读数摘要：方向/强度/置信/出现次数/引擎对照锚 + 请求/响应/原始 JSON）。列数仍 17，colspan 不变。
+- **判据/开火状态未变**：题集与预登记见 `docs/hotlist-jev/jev-resonance-recheck-preregistration.md`，
+  **判据待用户逐字确认，未确认前零开火**（当前库里 RES 集合为空，面板读数全走回落分支）。

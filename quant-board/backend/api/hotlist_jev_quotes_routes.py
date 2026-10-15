@@ -2,7 +2,7 @@
 """热榜行情读口路由（行情列表五维信号 jev 复核台账展示侧，2026-10-12）。
 
 - GET /api/hotlist-jev/quotes-review?date=YYYY-MM-DD[&dataset_id=][&with_docs=1][&slotTime=HH:MM]：
-  当日热榜股 + 五维观察档位 + vote_confirm/lifecycle_recheck 双题集复核台账；
+  当日热榜股 + 五维观察档位 + vote_confirm/lifecycle_recheck/resonance_recheck 三题集复核台账；
   with_docs=1 时有文档股嵌入完整存档（工作台行展开用）。slotTime 缺省按
   「15:00 → 有 vote 判读的最新帧 → 当天最新帧」选帧，传值则固定该帧（帧不存在
   → noData=true + 结构化 reason）；响应另带 voteSlots 供前端重建帧选择器。

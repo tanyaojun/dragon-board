@@ -522,7 +522,8 @@ def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, A
 
     - 门控=当日 half_hour 15:00 帧已落库（帧未落库/非交易日 → skipped，零成本）；
     - 子进程=jev_vote_confirm（vote=题集 v4-material 全池 11:00 时点判读（2026-10-13 用户裁决
-      代际覆盖 v1 复核内核，as-of 无未来函数）；LC 含 cooling --include-cooling、15:00 收盘帧）
+      代际覆盖 v1 复核内核，as-of 无未来函数）；LC 含 cooling --include-cooling、15:00 收盘帧、
+      **无抽样帽全量判读**（2026-10-14 用户裁决取消 cap，原 --lc-cap-igex/--lc-cap-total 弃用））
       ——runner 自身 done-skip 幂等，链重跑零重复计费；
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok、不参与 stopped_at
       （jev=并列观察者，观察证据链非生产数据链，不回写引擎不进交易路径）。
@@ -545,7 +546,6 @@ def _run_jev_vote_recheck_step(today: str, dry_run: bool = False) -> dict[str, A
         proc = subprocess.run(
             [sys.executable, "-m", "backend.operations.jev_vote_confirm",
              "--vote-day", today, "--lifecycle-day", today, "--slot", "15:00",
-             "--lc-cap-igex", "100", "--lc-cap-total", "200",
              "--include-cooling",
              "--workers", "4", "--token-fuse", "6000000", "--fire"],
             cwd=str(Path(__file__).resolve().parents[2]),

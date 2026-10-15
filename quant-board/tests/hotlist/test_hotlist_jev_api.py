@@ -423,12 +423,18 @@ def _seed_quotes_review(db: FakeMongoDb) -> None:
          "analysis": {"resonance": {"signalTier": "S", "direction": "buy", "score": 91.0},
                       "observation": {"rankTrend": {"signalTier": "A"},
                                        "crossSection": {"signalTier": "B"},
-                                       "volumePrice": {"signalTier": "C"},
+                                       "volumePrice": {"signalTier": "A",
+                                                       "quadrant": "rise_volume",
+                                                       "score": 62, "direction": "up"},
                                        "lifecycle": {"stage": "ignition", "veto": False},
                                        "synergy": {"signalTier": "S"}}}},
         {"datasetId": DATASET, "snapshotId": f"half_hour:{DATE}:15:00", "code": "000002",
-         "analysis": {"resonance": {"signalTier": "B", "score": 55.0},
+         "analysis": {"resonance": {"signalTier": "B", "direction": "hold", "score": 55.0},
                       "observation": {"lifecycle": {"stage": "ignition"},
+                                       "crossSection": {"signalTier": "B"},
+                                       "volumePrice": {"signalTier": "D",
+                                                       "quadrant": "fall_shrink",
+                                                       "score": 30, "direction": "down"},
                                        "synergy": {"signalTier": "D"}}}},
     ]
     db["hotlist_jev_vote_confirm_pilot"].rows = [
@@ -456,6 +462,87 @@ def _seed_quotes_review(db: FakeMongoDb) -> None:
          "questionSetVersion": "v1", "questionSetHash": "def456",
          "narrative": "LC 叙事", "questionsRaw": {}, "responseRaw": {"ok": 1}},
     ]
+    # 共振维独立判读（RES 试点题集）：甲走强↔引擎 buy 一致；乙走弱↔引擎 hold 分歧
+    db["hotlist_jev_resonance_recheck_pilot"].rows = [
+        {"_id": f"{DATE}:15:00:000001:RES", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000001", "name": "甲", "status": "ok", "origin": "resonance_recheck_pilot",
+         "ammoVersion": "2026-10-14a", "bars": 50,
+         "resonanceDirection": "buy", "resonanceConfidence": 0.7, "resonanceScore": 62.0,
+         "resonanceProbabilities": {"buy": 0.7},
+         "engineDirection": "buy", "engineScore": 91.0, "engineTier": "S",
+         "engineLabel": "非常强", "engineStatus": "ok",
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v1", "questionSetHash": "res789",
+         "narrative": "RES 叙事", "questionsRaw": {}, "responseRaw": {"ok": 1}},
+        {"_id": f"{DATE}:15:00:000002:RES", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000002", "name": "乙", "status": "ok", "origin": "resonance_recheck_pilot",
+         "ammoVersion": "2026-10-14a", "bars": 4,
+         "resonanceDirection": "sell", "resonanceConfidence": 0.55, "resonanceScore": 30.0,
+         "engineDirection": "hold", "engineScore": 55.0, "engineTier": "B",
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v1", "questionSetHash": "res789"},
+    ]
+    # 热度维独立判读（HEA 试点题集）：甲复现 A↔引擎 B 分歧；乙复现 C↔引擎 B 分歧
+    db["hotlist_jev_heat_recheck_pilot"].rows = [
+        {"_id": f"{DATE}:15:00:000001:HEA", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000001", "name": "甲", "status": "ok", "origin": "heat_recheck_pilot",
+         "ammoVersion": "2026-10-15b", "bars": 50,
+         "heatAttribution": "individual_strong", "heatAttributionConfidence": 0.8,
+         "attributionAnchor": "individual_strong",
+         "heatEvolution": "igniting", "heatEvolutionConfidence": 0.7,
+         "evolutionAnchor": "igniting",
+         "heatTier": "A", "heatTierConfidence": 0.8, "heatDirection": "buy",
+         "heatConfidence": 0.7, "heatProbabilities": {"buy": 0.7},
+         "enginePercentile": 72.0, "enginePercentileDelta": 6.0,
+         "engineRelativeToMarket": 22.0, "engineTier": "B",
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v2", "questionSetHash": "hea789",
+         "narrative": "HEA 叙事", "questionsRaw": {}, "responseRaw": {"ok": 1}},
+        {"_id": f"{DATE}:15:00:000002:HEA", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000002", "name": "乙", "status": "ok", "origin": "heat_recheck_pilot",
+         "ammoVersion": "2026-10-15b", "bars": 4,
+         "heatAttribution": "market_wide_rise", "heatAttributionConfidence": 0.5,
+         "attributionAnchor": "follow_market",
+         "heatEvolution": "dormant", "heatEvolutionConfidence": 0.5,
+         "evolutionAnchor": "dormant",
+         "heatTier": "C", "heatTierConfidence": 0.5, "heatDirection": "hold",
+         "heatConfidence": 0.5,
+         "enginePercentile": 30.0, "enginePercentileDelta": None,
+         "engineRelativeToMarket": -20.0, "engineTier": "B",
+         "riskFlag": {"level": "partial", "reasons": ["delta 缺失（首帧/单点）"]},
+         "questionSetVersion": "v2", "questionSetHash": "hea789"},
+    ]
+    # 量价维独立判读（VPQ 试点题集）：甲复现 A↔引擎 A 一致；乙复现 D↔引擎 D 一致
+    db["hotlist_jev_volume_recheck_pilot"].rows = [
+        {"_id": f"{DATE}:15:00:000001:VPQ", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000001", "name": "甲", "status": "ok", "origin": "volume_recheck_pilot",
+         "ammoVersion": "2026-10-15b",
+         "volumeCause": "volume_expansion_up", "volumeCauseConfidence": 0.9,
+         "causeAnchor": "volume_expansion_up",
+         "volumeTradability": "tradable", "volumeTradabilityConfidence": 0.9,
+         "tradabilityAnchor": "tradable",
+         "volumeTier": "A", "volumeTierConfidence": 0.9, "volumeQuadrant": "rise_volume",
+         "volumeDirection": "buy", "volumeConfidence": 0.8,
+         "volumeProbabilities": {"buy": 0.8},
+         "engineScore": 62, "engineDirection": "up", "engineQuadrant": "rise_volume",
+         "engineTier": "A", "engineAmountRatio": None,
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v2", "questionSetHash": "vpq789",
+         "narrative": "VPQ 叙事", "questionsRaw": {}, "responseRaw": {"ok": 1}},
+        {"_id": f"{DATE}:15:00:000002:VPQ", "tradingDate": DATE, "slotTime": "15:00",
+         "code": "000002", "name": "乙", "status": "ok", "origin": "volume_recheck_pilot",
+         "ammoVersion": "2026-10-15b",
+         "volumeCause": "fund_outflow", "volumeCauseConfidence": 0.8,
+         "causeAnchor": "fund_outflow",
+         "volumeTradability": "limit_up_blocked", "volumeTradabilityConfidence": 0.9,
+         "tradabilityAnchor": "tradable",
+         "volumeTier": "D", "volumeTierConfidence": 0.9, "volumeQuadrant": "fall_shrink",
+         "volumeDirection": "sell", "volumeConfidence": 0.8,
+         "engineScore": 30, "engineDirection": "down", "engineQuadrant": "fall_shrink",
+         "engineTier": "D", "engineAmountRatio": None,
+         "riskFlag": {"level": "ok", "reasons": []},
+         "questionSetVersion": "v2", "questionSetHash": "vpq789"},
+    ]
 
 
 def _quotes_client(monkeypatch, db):
@@ -482,21 +569,30 @@ def test_quotes_review_join_summary_and_agree(monkeypatch):
     assert first["board"] == "AI影视"          # 板块=韭研 final field.name
     assert rows[1]["board"] == "大消费"
     assert first["tiers"] == {"resonance": "S", "trend": "A", "heat": "B",
-                               "volumePrice": "C", "cycle": "ignition", "synergy": "S"}
+                               "volumePrice": "A", "cycle": "ignition", "synergy": "S"}
     assert first["jev"]["vote"]["direction"] == "buy"
     assert first["jev"]["agree"] == "agree"      # S→buy ↔ jev buy
     assert first["jev"]["lcAgree"] == "agree"    # 规则 ignition ↔ jev ignition
+    # 共振维（RES）：读数 + 同帧引擎对照锚（就地改【共振】列的数据源）
+    assert first["jev"]["res"] == {"status": "ok", "direction": "buy",
+                                    "confidence": 0.7, "score": 62.0, "riskLevel": "ok"}
+    assert first["jev"]["resAgree"] == "agree"    # 引擎 buy ↔ jev buy
     assert "docs" not in first                    # 缺省不嵌大字段
     second = rows[1]
     assert second["jev"]["agree"] == "diverge"   # D→sell ↔ jev buy
+    assert second["jev"]["resAgree"] == "diverge"  # 引擎 hold ↔ jev sell
     assert second["jev"]["lc"] is None
     assert second["turnoverRate"] is None          # 缺失如实 None 不伪造
     s = body["summary"]
     assert s["total"] == 2 and s["tiered"] == 2
     assert s["vote"]["buy"] == 2 and s["vote"]["unreviewed"] == 0
     assert s["lc"]["stages"] == {"ignition": 1} and s["lc"]["unreviewed"] == 1
+    assert s["resonance"]["buy"] == 1 and s["resonance"]["sell"] == 1
+    assert s["resonance"]["unreviewed"] == 0 and s["resonance"]["ok"] == 2
+    assert s["resAgree"] == 1 and s["resDiverge"] == 1
     assert s["agree"] == 1 and s["diverge"] == 1
-    assert s["risk"] == {"ok": 2, "partial": 1}  # 甲 VOTE+LC 双 ok 留痕 + 乙 partial
+    # 甲 VOTE+LC+RES+HEA+VPQ 五 ok + TRD 无 → 乙 VOTE partial + HEA partial
+    assert s["risk"] == {"ok": 7, "partial": 2}
 
 
 def test_quotes_review_with_docs_embeds_raw(monkeypatch):
@@ -520,6 +616,12 @@ def test_quotes_review_with_docs_embeds_raw(monkeypatch):
     assert rows[0]["docs"]["lc"]["prevTradingDate"] == "2026-09-29"
     assert rows[0]["docs"]["lc"]["prevStage"] == "ignition"
     assert rows[1]["docs"]["lc"] is None           # 无 LC 文档股如实 null
+    # RES 存档全保留（原料代际戳/出现次数/引擎对照锚快照）
+    assert rows[0]["docs"]["res"]["resonanceScore"] == 62.0
+    assert rows[0]["docs"]["res"]["bars"] == 50
+    assert rows[0]["docs"]["res"]["engineDirection"] == "buy"
+    assert rows[0]["docs"]["res"]["ammoVersion"] == "2026-10-14a"
+    assert rows[1]["docs"]["res"]["resonanceDirection"] == "sell"
 
 
 def test_quotes_review_no_frame_no_data(monkeypatch):
@@ -573,6 +675,103 @@ def test_quotes_review_explicit_slot_time_pins_frame(monkeypatch):
                          params={"date": DATE, "slotTime": "11:30"}).json()
     assert missing["noData"] is True and missing["rows"] == []
     assert "11:30" in missing["reason"]
+
+
+def test_quotes_review_resonance_locks_judgment_frame(monkeypatch):
+    """共振判读锁判读帧（与 LC 同规，跨槽拼接禁令）：所选帧无判读 → 全 '--' + 结构化说明，
+    不用别帧判读填充；判读帧=序列末项，换帧读数即换原料。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    # 把 RES 判读全部改到 11:00 帧（引擎共振对照锚同帧），15:00 帧则无判读
+    db["hotlist_jev_resonance_recheck_pilot"].rows = [
+        {**doc, "_id": f"{DATE}:11:00:{doc['code']}:RES", "slotTime": "11:00"}
+        for doc in db["hotlist_jev_resonance_recheck_pilot"].rows]
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE}).json()
+
+    assert body["slotTime"] == "15:00"
+    assert body["resonanceSlots"] == ["11:00"]
+    assert body["resonanceSlotNote"] and "11:00" in body["resonanceSlotNote"]
+    # 该帧无共振判读：读数缺失如实 '--'（前端列位回落引擎档位），一致率不计票
+    assert all(r["jev"]["res"] is None for r in body["rows"])
+    assert all(r["jev"]["resAgree"] is None for r in body["rows"])
+    assert body["summary"]["resonance"]["unreviewed"] == body["summary"]["total"]
+    assert body["summary"]["resAgree"] == 0 and body["summary"]["resDiverge"] == 0
+
+
+def test_quotes_review_heat_volume_join_and_reproduction(monkeypatch):
+    """热度/量价维独立判读 join 合同：行级 jev.hea/jvv.vpq + heaAgree/vpqAgree（档位复现），
+    summary.heat/volumePrice 块（tiers/quadrants/direction 分布 + unreviewed），
+    帧锁定的 heatSlots/volumeSlots + slotNote；语义 direction 无锚只落分布。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE}).json()
+
+    rows = body["rows"]
+    a, b = rows[0], rows[1]
+    # 行级 V2 逻辑主问：热度归因（甲 individual_strong 对锚一致；乙 market_wide_rise 对锚分歧）
+    assert a["jev"]["hea"]["attribution"] == "individual_strong"
+    assert a["jev"]["hea"]["attributionAnchor"] == "individual_strong"
+    assert a["jev"]["hea"]["evolution"] == "igniting"
+    assert a["jev"]["heaAgree"] == "agree" and b["jev"]["heaAgree"] == "diverge"
+    # 行级 V2 逻辑主问：量价主因（甲/乙均对锚一致）+ 可交易性（乙涨停封板 vs 锚 tradable 分歧）
+    assert a["jev"]["vpq"]["cause"] == "volume_expansion_up"
+    assert a["jev"]["vpq"]["tradability"] == "tradable"
+    assert b["jev"]["vpq"]["tradability"] == "limit_up_blocked"
+    assert b["jev"]["vpq"]["tradabilityAnchor"] == "tradable"
+    assert a["jev"]["vpqAgree"] == "agree" and b["jev"]["vpqAgree"] == "agree"
+    # summary V2：归因/演化分布 + 主问一致分歧 + 基线 tier 一致分歧 + 语义方向分布
+    heat, vp = body["summary"]["heat"], body["summary"]["volumePrice"]
+    assert heat["attributions"] == {"individual_strong": 1, "market_wide_rise": 1}
+    assert heat["evolutions"] == {"igniting": 1, "dormant": 1}
+    assert heat["attrAgree"] == 1 and heat["attrDiverge"] == 1
+    assert heat["evolAgree"] == 2 and heat["evolDiverge"] == 0   # 甲 igniting、乙 dormant 均对锚一致
+    assert heat["tiers"] == {"A": 1, "C": 1}
+    assert heat["tierAgree"] == 0 and heat["tierDiverge"] == 2   # A vs B、C vs B
+    assert heat["direction"] == {"buy": 1, "hold": 1}
+    assert heat["ok"] == 2 and heat["unreviewed"] == 0
+    assert vp["causes"] == {"volume_expansion_up": 1, "fund_outflow": 1}
+    assert vp["tradability"] == {"tradable": 1, "limit_up_blocked": 1}
+    assert vp["causeAgree"] == 2 and vp["causeDiverge"] == 0
+    assert vp["tradAgree"] == 1 and vp["tradDiverge"] == 1
+    assert vp["tiers"] == {"A": 1, "D": 1} and vp["tierAgree"] == 2
+    assert vp["quadrants"] == {"rise_volume": 1, "fall_shrink": 1}
+    assert vp["direction"] == {"buy": 1, "sell": 1} and vp["ok"] == 2 and vp["unreviewed"] == 0
+    # 顶层 Agree/Diverge = V2 逻辑主问（归因/主因）对复算锚
+    assert body["summary"]["heaAgree"] == 1 and body["summary"]["heaDiverge"] == 1
+    assert body["summary"]["vpqAgree"] == 2 and body["summary"]["vpqDiverge"] == 0
+    assert body["heatSlots"] == ["15:00"] and body["volumeSlots"] == ["15:00"]
+    assert body["heatSlotNote"] is None and body["volumeSlotNote"] is None
+
+
+def test_quotes_review_heat_volume_locks_judgment_frame(monkeypatch):
+    """热度/量价判读锁判读帧（与 LC/RES/TRD 同规）：所选帧无判读 → 全 '--' + 结构化说明，
+    不用别帧判读填充；复现率不计票。"""
+    db = FakeMongoDb()
+    _seed_quotes_review(db)
+    for col, suffix in (("hotlist_jev_heat_recheck_pilot", "HEA"),
+                        ("hotlist_jev_volume_recheck_pilot", "VPQ")):
+        db[col].rows = [{**doc, "_id": f"{DATE}:11:00:{doc['code']}:{suffix}",
+                         "slotTime": "11:00"} for doc in db[col].rows]
+    client = _quotes_client(monkeypatch, db)
+
+    body = client.get("/api/hotlist-jev/quotes-review", params={"date": DATE}).json()
+
+    assert body["slotTime"] == "15:00"
+    assert body["heatSlots"] == ["11:00"] and body["volumeSlots"] == ["11:00"]
+    assert body["heatSlotNote"] and "11:00" in body["heatSlotNote"]
+    assert body["volumeSlotNote"] and "11:00" in body["volumeSlotNote"]
+    assert all(r["jev"]["hea"] is None for r in body["rows"])
+    assert all(r["jev"]["vpq"] is None for r in body["rows"])
+    assert all(r["jev"]["heaAgree"] is None and r["jev"]["vpqAgree"] is None
+               for r in body["rows"])
+    assert body["summary"]["heat"]["unreviewed"] == body["summary"]["total"]
+    assert body["summary"]["volumePrice"]["unreviewed"] == body["summary"]["total"]
+    assert body["summary"]["heaAgree"] == 0 and body["summary"]["heaDiverge"] == 0
+    assert body["summary"]["vpqAgree"] == 0 and body["summary"]["vpqDiverge"] == 0
 
 
 def test_quotes_review_vote_join_ignores_dataset_id_field(monkeypatch):
@@ -681,7 +880,8 @@ def test_quotes_review_insufficient_doc_exposed(monkeypatch):
     s = body["summary"]
     assert s["vote"]["insufficient"] == 1 and s["vote"]["ok"] == 0
     assert s["vote"]["buy"] == 0
-    assert s["risk"] == {"data_insufficient": 1, "ok": 1}  # 乙留痕 + 甲 LC ok
+    # 乙 VOTE 留痕(data_insufficient)；甲 LC/RES/HEA/VPQ + 乙 RES/VPQ 共 6 ok；乙 HEA partial
+    assert s["risk"] == {"data_insufficient": 1, "ok": 6, "partial": 1}
     row = body["rows"][1]
     assert row["jev"]["vote"]["direction"] is None and row["jev"]["agree"] is None
 

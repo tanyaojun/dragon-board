@@ -6,6 +6,11 @@
 - snapshot_frames：当日 half_hour 帧（默认选帧顺序见 collect_quotes_review，可传 slot_time 固定）；
 - snapshot_stock_rows / snapshot_analysis：帧内行情行 + 逐股五维 analysis（与规则链同源）；
 - hotlist_jev_vote_confirm_pilot / hotlist_jev_lifecycle_recheck_pilot：双题集复核文档。
+- hotlist_jev_resonance_recheck_pilot：共振维独立判读文档（2026-10-14 试点题集，
+  锁判读帧，与 LC 同规；前端就地改【共振】列展示 jev 读数，不新增列）。
+- hotlist_jev_trend_recheck_pilot：趋势维独立判读文档（2026-10-15 试点题集，同规；
+  前端就地改【趋势】列）。趋势维锚点取 compose_decision 的 base.signal（纯技术面五分量
+  加权和，不含 cycle/risk 对 final 的改写），两种模式（series ≥22 次出现 / fallback）与引擎同口径。
 
 fail-visible：目标帧缺失 → noData=true + 结构化 reason；行情/档位/复核文档逐字段缺失
 如实 None，不伪造 0 值。jev 与规则投票引擎=并列观察者：agree/diverge 台账仅对照展示
@@ -27,6 +32,12 @@ _DOC_FIELDS = ("_id", "origin", "tradingDate", "slotTime", "code", "name",
                "status", "riskFlag", "synergyTier", "synergyDirection",
                "voteDirection", "voteConfidence", "voteProbabilities",
                "lcStage", "lcConfidence", "lcProbabilities",
+               "resonanceDirection", "resonanceConfidence", "resonanceProbabilities",
+               "resonanceScore", "resonanceScoreConfidence", "shortExcess",
+               "trendDirection", "trendConfidence", "trendProbabilities",
+               "trendScore", "trendScoreConfidence", "mode",
+               "engineDirection", "engineScore", "engineTier", "engineLabel",
+               "engineStatus", "engineSignedScore", "bars",
                "ammoVersion", "ruleStage", "ruleAction", "prevTradingDate", "prevStage",
                "narrative", "questionsRaw", "answers", "responseRaw",
                "model", "usage", "latencyMs", "errorCode", "errorDetail",
@@ -76,6 +87,68 @@ def _lc_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
     return {"status": doc.get("status"),
             "stage": _clean(doc.get("lcStage")),
             "confidence": _num(doc.get("lcConfidence")),
+            "riskLevel": _risk_level(doc)}
+
+
+def _res_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    return {"status": doc.get("status"),
+            "direction": _clean(doc.get("resonanceDirection")),
+            "confidence": _num(doc.get("resonanceConfidence")),
+            "score": _num(doc.get("resonanceScore")),
+            "riskLevel": _risk_level(doc)}
+
+
+def _trd_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not doc:
+        return None
+    return {"status": doc.get("status"),
+            "direction": _clean(doc.get("trendDirection")),
+            "confidence": _num(doc.get("trendConfidence")),
+            "score": _num(doc.get("trendScore")),
+            "mode": doc.get("mode"),
+            "riskLevel": _risk_level(doc)}
+
+
+def _hea_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    """热度维读数（V2 题集；CR 2026-10-15 自证定位，读数不用于结论）：
+    主问=归因/演化（锚=同输入复算锚，与判据文本共用阈值→一致率=规则执行保真度），
+    基线=tier 复现（锚=引擎 crossSection.signalTier），语义问=direction（无锚）。"""
+    if not doc:
+        return None
+    return {"status": doc.get("status"),
+            "attribution": _clean(doc.get("heatAttribution")),
+            "attributionConfidence": _num(doc.get("heatAttributionConfidence")),
+            "evolution": _clean(doc.get("heatEvolution")),
+            "evolutionConfidence": _num(doc.get("heatEvolutionConfidence")),
+            "attributionAnchor": _clean(doc.get("attributionAnchor")),
+            "evolutionAnchor": _clean(doc.get("evolutionAnchor")),
+            "tier": _clean(doc.get("heatTier")),
+            "tierConfidence": _num(doc.get("heatTierConfidence")),
+            "direction": _clean(doc.get("heatDirection")),
+            "confidence": _num(doc.get("heatConfidence")),
+            "riskLevel": _risk_level(doc)}
+
+
+def _vpq_brief(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    """量价维读数（V2 题集；CR 2026-10-15 自证定位，读数不用于结论）：
+    主问=主因归因/可交易性（锚=同输入复算锚，与判据文本共用阈值→一致率=规则执行保真度），
+    基线=tier/quadrant 复现（锚=引擎 volumePrice），语义问=direction（无锚）。"""
+    if not doc:
+        return None
+    return {"status": doc.get("status"),
+            "cause": _clean(doc.get("volumeCause")),
+            "causeConfidence": _num(doc.get("volumeCauseConfidence")),
+            "causeAnchor": _clean(doc.get("causeAnchor")),
+            "tradability": _clean(doc.get("volumeTradability")),
+            "tradabilityConfidence": _num(doc.get("volumeTradabilityConfidence")),
+            "tradabilityAnchor": _clean(doc.get("tradabilityAnchor")),
+            "tier": _clean(doc.get("volumeTier")),
+            "tierConfidence": _num(doc.get("volumeTierConfidence")),
+            "quadrant": _clean(doc.get("volumeQuadrant")),
+            "direction": _clean(doc.get("volumeDirection")),
+            "confidence": _num(doc.get("volumeConfidence")),
             "riskLevel": _risk_level(doc)}
 
 
@@ -175,6 +248,57 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         code = str(doc.get("code") or "")
         if code:
             lc_by_code[code] = doc
+    # 共振维独立判读（2026-10-14 试点题集，hotlist_jev_resonance_recheck_pilot）：
+    # 与 LC 同样**锁判读帧**（跨槽拼接禁令）——判读帧即序列末项，换帧读数即换原料，
+    # 不能用 15:00 的判读去配 11:00 的引擎对照锚。所选帧无判读 → 该帧列位全 '--'（fail-visible，
+    # 不用别帧数据填充）；resonanceSlots 供前端说明「判读锁在哪些帧」。
+    res_docs_all = list(db["hotlist_jev_resonance_recheck_pilot"].find({"tradingDate": date}))
+    resonance_slot_set = {str(d.get("slotTime") or "") for d in res_docs_all
+                          if d.get("slotTime")}
+    res_by_code: dict[str, dict[str, Any]] = {}
+    for doc in res_docs_all:
+        if str(doc.get("slotTime") or "") != slot_time:
+            continue
+        code = str(doc.get("code") or "")
+        if code:
+            res_by_code[code] = doc
+    # 趋势维独立判读（2026-10-15 试点题集）：帧锁定同规；锚=同帧引擎 observation.rankTrend
+    # （compose_decision 的 base.signal=纯技术面五分量加权和）。两种模式 series/fallback
+    # 与引擎同口径（≥22 次出现=序列模式，否则帧行字段模式）。
+    trd_docs_all = list(db["hotlist_jev_trend_recheck_pilot"].find({"tradingDate": date}))
+    trend_slot_set = {str(d.get("slotTime") or "") for d in trd_docs_all
+                      if d.get("slotTime")}
+    trd_by_code: dict[str, dict[str, Any]] = {}
+    for doc in trd_docs_all:
+        if str(doc.get("slotTime") or "") != slot_time:
+            continue
+        code = str(doc.get("code") or "")
+        if code:
+            trd_by_code[code] = doc
+    # 热度维独立判读（V2 题集·自证，hotlist_jev_heat_recheck_pilot）：帧锁定同规；
+    # 主问锚=runner 现算的复算锚（个体强 vs 全池普涨/序列形态），基线锚=引擎 crossSection.signalTier。
+    hea_docs_all = list(db["hotlist_jev_heat_recheck_pilot"].find({"tradingDate": date}))
+    heat_slot_set = {str(d.get("slotTime") or "") for d in hea_docs_all
+                     if d.get("slotTime")}
+    hea_by_code: dict[str, dict[str, Any]] = {}
+    for doc in hea_docs_all:
+        if str(doc.get("slotTime") or "") != slot_time:
+            continue
+        code = str(doc.get("code") or "")
+        if code:
+            hea_by_code[code] = doc
+    # 量价维独立判读（V2 题集·自证，hotlist_jev_volume_recheck_pilot）：帧锁定同规；
+    # 主问锚=runner 现算的复算锚（量价主因归因/可交易性），基线锚=引擎 volumePrice.signalTier。
+    vpq_docs_all = list(db["hotlist_jev_volume_recheck_pilot"].find({"tradingDate": date}))
+    volume_slot_set = {str(d.get("slotTime") or "") for d in vpq_docs_all
+                       if d.get("slotTime")}
+    vpq_by_code: dict[str, dict[str, Any]] = {}
+    for doc in vpq_docs_all:
+        if str(doc.get("slotTime") or "") != slot_time:
+            continue
+        code = str(doc.get("code") or "")
+        if code:
+            vpq_by_code[code] = doc
 
     # 连板高度：与涨停复盘页同源（jev_label_jiuyan.jiuyan_board_info，韭研+THS 池 join，
     # 单一事实源）；源缺失/异常结构化降级旗标，不阻断主读口（fail-visible）
@@ -216,8 +340,25 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
     rows: list[dict[str, Any]] = []
     vote_dirs: list[str | None] = []
     lc_stages: list[str | None] = []
+    res_dirs: list[str | None] = []
+    trd_dirs: list[str | None] = []
+    hea_tiers: list[str | None] = []
+    vpq_tiers: list[str | None] = []
+    vpq_quads: list[str | None] = []
+    hea_attrs: list[str | None] = []
+    hea_evols: list[str | None] = []
+    vpq_causes: list[str | None] = []
+    vpq_trads: list[str | None] = []
     agree_count = diverge_count = lc_agree_count = lc_diverge_count = 0
-    vote_reviewed = lc_reviewed = 0  # unreviewed 按行统计：文档 code 不在行集内时不误减
+    res_agree_count = res_diverge_count = trd_agree_count = trd_diverge_count = 0
+    hea_agree_count = hea_diverge_count = vpq_agree_count = vpq_diverge_count = 0
+    # V2 逻辑题次问 + 复现基线计数（主问计数沿用 hea/vpq_agree_count）
+    hea_evol_agree_count = hea_evol_diverge_count = 0
+    vpq_trad_agree_count = vpq_trad_diverge_count = 0
+    hea_tier_agree_count = hea_tier_diverge_count = 0
+    vpq_tier_agree_count = vpq_tier_diverge_count = 0
+    vote_reviewed = lc_reviewed = res_reviewed = trd_reviewed = 0  # unreviewed 按行统计
+    hea_reviewed = vpq_reviewed = 0
     risk_levels: dict[str, int] = {}
     for row in stock_rows:
         code = str(row.get("code") or "")
@@ -233,10 +374,22 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
                  "synergy": _tier(obs.get("synergy"))}
         vote_doc = vote_by_code.get(code)
         lc_doc = lc_by_code.get(code)
+        res_doc = res_by_code.get(code)
+        trd_doc = trd_by_code.get(code)
+        hea_doc = hea_by_code.get(code)
+        vpq_doc = vpq_by_code.get(code)
         if vote_doc:
             vote_reviewed += 1
         if lc_doc:
             lc_reviewed += 1
+        if res_doc:
+            res_reviewed += 1
+        if trd_doc:
+            trd_reviewed += 1
+        if hea_doc:
+            hea_reviewed += 1
+        if vpq_doc:
+            vpq_reviewed += 1
         # 连板语义（用户口径）：仅 N==M（如 8天8板）直接计板；N>M（断板）用回溯真实连续高度
         # （不可验 → None 显 '--'）。涨停复盘「高度」消费方仍用原始 M 口径，互不影响。
         b_info = board_info.get(code) or {}
@@ -248,9 +401,12 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         else:
             boards_val = streaks.get(code)
         jev: dict[str, Any] | None = None
-        if vote_doc or lc_doc:
+        if vote_doc or lc_doc or res_doc or trd_doc or hea_doc or vpq_doc:
             jev = {"vote": _vote_brief(vote_doc), "lc": _lc_brief(lc_doc),
-                   "agree": None, "lcAgree": None}
+                   "res": _res_brief(res_doc), "trd": _trd_brief(trd_doc),
+                   "hea": _hea_brief(hea_doc), "vpq": _vpq_brief(vpq_doc),
+                   "agree": None, "lcAgree": None, "resAgree": None, "trdAgree": None,
+                   "heaAgree": None, "vpqAgree": None}
             if vote_doc:
                 direction = _clean(vote_doc.get("voteDirection"))
                 anchor = synergy_direction(tiers["synergy"])
@@ -276,6 +432,102 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
                 rf = _risk_level(lc_doc)
                 if rf:
                     risk_levels[rf] = risk_levels.get(rf, 0) + 1
+        if res_doc:
+            # 共振对照锚 = 同帧引擎共振 direction（snapshot_analysis，帧锁定故同帧同源）；
+            # 引擎侧 insufficient/缺 direction → 锚缺失，单列不计一致率（fail-visible）
+            res_dir = _clean(res_doc.get("resonanceDirection"))
+            anchor = _clean(res.get("direction"))
+            if anchor and res_dir:
+                jev["resAgree"] = "agree" if anchor == res_dir else "diverge"
+                if jev["resAgree"] == "agree":
+                    res_agree_count += 1
+                else:
+                    res_diverge_count += 1
+            res_dirs.append(res_dir)
+            rf = _risk_level(res_doc)
+            if rf:
+                risk_levels[rf] = risk_levels.get(rf, 0) + 1
+        if trd_doc:
+            # 趋势对照锚 = 同帧引擎 observation.rankTrend.direction（纯技术面五分量加权和）
+            trd_dir = _clean(trd_doc.get("trendDirection"))
+            anchor = _clean((obs.get("rankTrend") or {}).get("direction"))
+            if anchor and trd_dir:
+                jev["trdAgree"] = "agree" if anchor == trd_dir else "diverge"
+                if jev["trdAgree"] == "agree":
+                    trd_agree_count += 1
+                else:
+                    trd_diverge_count += 1
+            trd_dirs.append(trd_dir)
+            rf = _risk_level(trd_doc)
+            if rf:
+                risk_levels[rf] = risk_levels.get(rf, 0) + 1
+        if hea_doc:
+            # V2 主问对**复算锚**（同输入机械复算；判据与锚同源=自证，不测推理）：分母效应归因 + 序列演化
+            got = _clean(hea_doc.get("heatAttribution"))
+            anchor = _clean(hea_doc.get("attributionAnchor"))
+            if got and anchor and got != "insufficient" and anchor != "insufficient":
+                jev["heaAgree"] = "agree" if got == anchor else "diverge"
+                if jev["heaAgree"] == "agree":
+                    hea_agree_count += 1
+                else:
+                    hea_diverge_count += 1
+            hea_attrs.append(got)
+            got_e = _clean(hea_doc.get("heatEvolution"))
+            if got_e:
+                hea_evols.append(got_e)
+            anchor_e = _clean(hea_doc.get("evolutionAnchor"))
+            if got_e and anchor_e and got_e != "insufficient" and anchor_e != "insufficient":
+                if got_e == anchor_e:
+                    hea_evol_agree_count += 1
+                else:
+                    hea_evol_diverge_count += 1
+            # 复现基线对引擎档位（协议层阴性对照）
+            hea_tier = _clean(hea_doc.get("heatTier"))
+            eng_tier = _clean((obs.get("crossSection") or {}).get("signalTier"))
+            if hea_tier and eng_tier and hea_tier not in ("insufficient", "unknown") \
+                    and eng_tier not in ("insufficient", "unknown"):
+                if hea_tier == eng_tier:
+                    hea_tier_agree_count += 1
+                else:
+                    hea_tier_diverge_count += 1
+            hea_tiers.append(hea_tier)
+            rf = _risk_level(hea_doc)
+            if rf:
+                risk_levels[rf] = risk_levels.get(rf, 0) + 1
+        if vpq_doc:
+            # V2 主问对**复算锚**（判据与锚同源=自证，不测推理）：量价主因归因 + 可交易性
+            got = _clean(vpq_doc.get("volumeCause"))
+            anchor = _clean(vpq_doc.get("causeAnchor"))
+            if got and anchor and got != "insufficient" and anchor != "insufficient":
+                jev["vpqAgree"] = "agree" if got == anchor else "diverge"
+                if jev["vpqAgree"] == "agree":
+                    vpq_agree_count += 1
+                else:
+                    vpq_diverge_count += 1
+            vpq_causes.append(got)
+            got_t = _clean(vpq_doc.get("volumeTradability"))
+            if got_t:
+                vpq_trads.append(got_t)
+            anchor_t = _clean(vpq_doc.get("tradabilityAnchor"))
+            if got_t and anchor_t and got_t != "insufficient" and anchor_t != "insufficient":
+                if got_t == anchor_t:
+                    vpq_trad_agree_count += 1
+                else:
+                    vpq_trad_diverge_count += 1
+            # 复现基线对引擎读数（协议层阴性对照）
+            vpq_tier = _clean(vpq_doc.get("volumeTier"))
+            eng_tier = _clean((obs.get("volumePrice") or {}).get("signalTier"))
+            if vpq_tier and eng_tier and vpq_tier not in ("insufficient", "unknown") \
+                    and eng_tier not in ("insufficient", "unknown"):
+                if vpq_tier == eng_tier:
+                    vpq_tier_agree_count += 1
+                else:
+                    vpq_tier_diverge_count += 1
+            vpq_tiers.append(vpq_tier)
+            vpq_quads.append(_clean(vpq_doc.get("volumeQuadrant")))
+            rf = _risk_level(vpq_doc)
+            if rf:
+                risk_levels[rf] = risk_levels.get(rf, 0) + 1
         item: dict[str, Any] = {
             "code": code,
             "name": row.get("name"),
@@ -298,7 +550,9 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
             "jev": jev,
         }
         if with_docs:
-            item["docs"] = {"vote": _doc_public(vote_doc), "lc": _doc_public(lc_doc)}
+            item["docs"] = {"vote": _doc_public(vote_doc), "lc": _doc_public(lc_doc),
+                            "res": _doc_public(res_doc), "trd": _doc_public(trd_doc),
+                            "hea": _doc_public(hea_doc), "vpq": _doc_public(vpq_doc)}
         rows.append(item)
 
     rows.sort(key=lambda r: (r["rank"] is None,
@@ -319,6 +573,10 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
 
     vote_status = _status_counts(list(vote_by_code.values()))
     lc_status = _status_counts(list(lc_by_code.values()))
+    res_status = _status_counts(list(res_by_code.values()))
+    trd_status = _status_counts(list(trd_by_code.values()))
+    hea_status = _status_counts(list(hea_by_code.values()))
+    vpq_status = _status_counts(list(vpq_by_code.values()))
     total = len(rows)
     summary = {
         "total": total,
@@ -331,16 +589,79 @@ def collect_quotes_review(db: Any, date: str, dataset_id: str = "dragonboard_liv
         "lc": {**lc_status,
                "stages": _lc_stage_counts(lc_stages),
                "unreviewed": total - lc_reviewed},
+        "resonance": {**res_status,
+                      "buy": sum(1 for d in res_dirs if d == "buy"),
+                      "sell": sum(1 for d in res_dirs if d == "sell"),
+                      "hold": sum(1 for d in res_dirs if d == "hold"),
+                      "modelInsufficient": sum(1 for d in res_dirs if d == "insufficient"),
+                      "unreviewed": total - res_reviewed},
+        "trend": {**trd_status,
+                  "buy": sum(1 for d in trd_dirs if d == "buy"),
+                  "sell": sum(1 for d in trd_dirs if d == "sell"),
+                  "hold": sum(1 for d in trd_dirs if d == "hold"),
+                  "modelInsufficient": sum(1 for d in trd_dirs if d == "insufficient"),
+                  "unreviewed": total - trd_reviewed},
+        "heat": {**hea_status,
+                 "attributions": _tier_counts(hea_attrs),
+                 "evolutions": _tier_counts(hea_evols),
+                 "attrAgree": hea_agree_count, "attrDiverge": hea_diverge_count,
+                 "evolAgree": hea_evol_agree_count, "evolDiverge": hea_evol_diverge_count,
+                 "tiers": _tier_counts(hea_tiers),
+                 "tierAgree": hea_tier_agree_count, "tierDiverge": hea_tier_diverge_count,
+                 "direction": _dir_counts(
+                     [_clean((hea_by_code.get(r["code"]) or {}).get("heatDirection"))
+                      for r in rows if hea_by_code.get(r["code"])]),
+                 "unreviewed": total - hea_reviewed},
+        "volumePrice": {**vpq_status,
+                        "causes": _tier_counts(vpq_causes),
+                        "tradability": _tier_counts(vpq_trads),
+                        "causeAgree": vpq_agree_count, "causeDiverge": vpq_diverge_count,
+                        "tradAgree": vpq_trad_agree_count, "tradDiverge": vpq_trad_diverge_count,
+                        "tiers": _tier_counts(vpq_tiers),
+                        "quadrants": _tier_counts(vpq_quads),
+                        "tierAgree": vpq_tier_agree_count, "tierDiverge": vpq_tier_diverge_count,
+                        "direction": _dir_counts(
+                            [_clean((vpq_by_code.get(r["code"]) or {}).get("volumeDirection"))
+                             for r in rows if vpq_by_code.get(r["code"])]),
+                        "unreviewed": total - vpq_reviewed},
         "agree": agree_count,
         "diverge": diverge_count,
         "lcAgree": lc_agree_count,
         "lcDiverge": lc_diverge_count,
+        "resAgree": res_agree_count,
+        "resDiverge": res_diverge_count,
+        "trdAgree": trd_agree_count,
+        "trdDiverge": trd_diverge_count,
+        # hea/vpq 的 Agree/Diverge = V2 主问（归因/主因）对复算锚；同源自证，仅协议层参考，不得作结论
+        # 次问（演化/可交易性）与复现基线（tier/quadrant）计数在 summary.heat/volumePrice 内
+        "heaAgree": hea_agree_count,
+        "heaDiverge": hea_diverge_count,
+        "vpqAgree": vpq_agree_count,
+        "vpqDiverge": vpq_diverge_count,
         "risk": risk_levels,
         "streakUnverified": streak_unverified,
     }
     return {"ok": True, "date": date, "slotTime": slot_time, "datasetId": dataset_id,
             "snapshotId": sid, "rows": rows, "summary": summary, "noData": False,
-            "reason": None, "boardJoinDegraded": board_join_error, "voteSlots": sorted(vote_slot_set)}
+            "reason": None, "boardJoinDegraded": board_join_error,
+            "voteSlots": sorted(vote_slot_set),
+            "resonanceSlots": sorted(resonance_slot_set),
+            "trendSlots": sorted(trend_slot_set),
+            "trendSlotNote": (f"趋势判读锁 {', '.join(sorted(trend_slot_set))} 帧"
+                              if trend_slot_set and slot_time not in trend_slot_set
+                              else None),
+            "heatSlots": sorted(heat_slot_set),
+            "volumeSlots": sorted(volume_slot_set),
+            "heatSlotNote": (f"热度判读锁 {', '.join(sorted(heat_slot_set))} 帧"
+                             if heat_slot_set and slot_time not in heat_slot_set
+                             else None),
+            "volumeSlotNote": (f"量价判读锁 {', '.join(sorted(volume_slot_set))} 帧"
+                               if volume_slot_set and slot_time not in volume_slot_set
+                               else None),
+            # 当日有共振判读但不在所选帧（判读帧锁定）→ 结构化说明，前端提示不猜不填
+            "resonanceSlotNote": (f"共振判读锁 {', '.join(sorted(resonance_slot_set))} 帧"
+                                  if resonance_slot_set and slot_time not in resonance_slot_set
+                                  else None)}
 
 
 def _lc_stage_counts(stages: list[str | None]) -> dict[str, int]:
@@ -351,11 +672,47 @@ def _lc_stage_counts(stages: list[str | None]) -> dict[str, int]:
     return out
 
 
+def _tier_counts(values: list[str | None]) -> dict[str, int]:
+    """档位/象限分布（热度 A/B/C/D/unknown、量价 A-E/unknown/象限名）。"""
+    out: dict[str, int] = {}
+    for v in values:
+        if v:
+            out[v] = out.get(v, 0) + 1
+    return out
+
+
+def _dir_counts(values: list[str | None]) -> dict[str, int]:
+    """语义方向分布（buy/sell/hold/insufficient；无引擎锚，只统计分布）。"""
+    out: dict[str, int] = {}
+    for v in values:
+        if v:
+            out[v] = out.get(v, 0) + 1
+    return out
+
+
 def _empty_summary() -> dict[str, Any]:
     return {"total": 0, "tiered": 0,
             "vote": {"ok": 0, "degraded": 0, "insufficient": 0,
                      "buy": 0, "sell": 0, "hold": 0, "unreviewed": 0},
             "lc": {"ok": 0, "degraded": 0, "insufficient": 0, "stages": {},
                    "unreviewed": 0},
-            "agree": 0, "diverge": 0, "lcAgree": 0, "lcDiverge": 0, "risk": {},
-            "streakUnverified": 0}
+            "resonance": {"ok": 0, "degraded": 0, "insufficient": 0,
+                          "buy": 0, "sell": 0, "hold": 0, "modelInsufficient": 0,
+                          "unreviewed": 0},
+            "trend": {"ok": 0, "degraded": 0, "insufficient": 0,
+                      "buy": 0, "sell": 0, "hold": 0, "modelInsufficient": 0,
+                      "unreviewed": 0},
+            "heat": {"ok": 0, "degraded": 0, "insufficient": 0, "attributions": {},
+                     "evolutions": {}, "attrAgree": 0, "attrDiverge": 0,
+                     "evolAgree": 0, "evolDiverge": 0, "tiers": {},
+                     "tierAgree": 0, "tierDiverge": 0,
+                     "direction": {}, "unreviewed": 0},
+            "volumePrice": {"ok": 0, "degraded": 0, "insufficient": 0, "causes": {},
+                            "tradability": {}, "causeAgree": 0, "causeDiverge": 0,
+                            "tradAgree": 0, "tradDiverge": 0, "tiers": {},
+                            "quadrants": {}, "tierAgree": 0, "tierDiverge": 0,
+                            "direction": {}, "unreviewed": 0},
+            "agree": 0, "diverge": 0, "lcAgree": 0, "lcDiverge": 0,
+            "resAgree": 0, "resDiverge": 0, "trdAgree": 0, "trdDiverge": 0,
+            "heaAgree": 0, "heaDiverge": 0, "vpqAgree": 0, "vpqDiverge": 0,
+            "risk": {}, "streakUnverified": 0}

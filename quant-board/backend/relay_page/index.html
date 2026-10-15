@@ -212,9 +212,10 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
   relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉；undefined=未拉，null=已拉无档）
-  quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' } },
+  quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' }, res: { mode: 'detail', q1: '', q2: '' }, trd: { mode: 'detail', q1: '', q2: '' },
+    hea: { mode: 'detail', q1: '', q2: '' }, vpq: { mode: 'detail', q1: '', q2: '' } },
   quotesSlots: [],  // 当日有 jev 判读的槽位（quotes-review 响应 voteSlots，帧选择器数据源）
-  quotesFilter: { q: '', vote: '', lc: '', agree: '' },
+  quotesFilter: { q: '', vote: '', lc: '', res: '', trd: '', hea: '', vpq: '', agree: '' },
   quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '' },
@@ -238,6 +239,56 @@ const FRESH_CN = {fresh_catalyst:'新鲜', continuing:'延续', none:'无明确�
 const LC_STAGE_CN = {ignition:'点火', expansion:'扩散', crowded:'拥挤', reversal:'反转', cooling:'降温'};
 const LC_STAGE_ORDER = {ignition:0, expansion:1, crowded:2, reversal:3, cooling:4};
 const LC_STAGE_COLOR = {ignition:'#16a34a', expansion:'#2563eb', crowded:'#a16207', reversal:'#dc2626', cooling:'#94a3b8'};
+// 共振维独立判读（RES 试点题集）：jevv 方向序 + 中文名 + 强度分带色（与 ammo STRENGTH_BANDS 同口径）
+const RES_DIR_CN = {buy:'走强', sell:'走弱', hold:'同步', insufficient:'判据不足'};
+const RES_DIR_ORDER = {buy:0, hold:1, sell:2, insufficient:3};
+const RES_BANDS = [[85,'#16a34a'],[67,'#2563eb'],[50,'#a16207'],[27,'#94a3b8'],[-1,'#dc2626']];
+const resBandColor = s => { for (const [floor, c] of RES_BANDS) if (s >= floor) return c; return 'var(--muted2)'; };
+// 趋势维独立判读（TRD 试点题集，2026-10-15）：方向中文名 + 模式（series=序列模式 / fallback=帧行字段模式）
+const TRD_DIR_CN = {buy:'多头', sell:'空头', hold:'震荡', insufficient:'判据不足'};
+const TRD_DIR_ORDER = {buy:0, hold:1, sell:2, insufficient:3};
+const TRD_MODE_CN = {series:'序列模式', fallback:'帧行模式'};
+// 热度维（HEA）/量价维（VPQ）独立判读（2026-10-15 试点第四/五维）
+const HEA_TIER_CN = {A:'A 强势', B:'B 中上', C:'C 兜底', D:'D 弱势', unknown:'锚缺失'};
+const VPQ_TIER_CN = {A:'A 放量流入', B:'B 放量', C:'C 封板/缩量', D:'D 下跌', E:'E 硬风险', unknown:'锚缺失'};
+const VPQ_QUAD_CN = {rise_volume:'放量上涨', rise_shrink:'缩量上涨', normal:'中态',
+                     fall_volume:'放量下跌', fall_shrink:'缩量下跌'};
+const HEA_DIR_CN = {buy:'关注升', sell:'关注降', hold:'同步', insufficient:'判据不足'};
+const VPQ_DIR_CN = {buy:'偏多', sell:'偏空', hold:'中性', insufficient:'判据不足'};
+const TIER_ORDER = {A:0, B:1, C:2, D:3, E:4, unknown:5};
+// V2 逻辑推理题读数（2026-10-15 升版）：主问=归因/演化（热度）、主因/可交易性（量价）；
+// 锚=runner 同输入机械复算，不是引擎读数——徽标色按「对锚一致/分歧」上色
+const HEA_ATTR_CN = {individual_strong:'个体强', market_wide_rise:'全池普涨',
+                     individual_weak:'个体弱', market_wide_fall:'跑输普涨',
+                     follow_market:'跟随市场', insufficient:'判据不足'};
+const HEA_ATTR_ORDER = {individual_strong:0, market_wide_rise:1, follow_market:2,
+                          market_wide_fall:3, individual_weak:4, insufficient:5};
+const HEA_EVOL_ORDER = {igniting:0, volatile:1, sustaining:2, fading:3, dormant:4, insufficient:5};
+const VPQ_CAUSE_ORDER = {volume_expansion_up:0, shrink_up:1, neutral:2, volume_expansion_down:3,
+                         shrink_down:4, fund_outflow:5, over_volume_exhaustion:6, insufficient:7};
+const VPQ_TRAD_ORDER = {tradable:0, abnormal_fund_flow:1, limit_up_blocked:2,
+                        limit_down_blocked:3, insufficient:4};
+const HEA_ATTR_TONE = {individual_strong:'#16a34a', market_wide_rise:'#a16207',
+                       individual_weak:'#dc2626', market_wide_fall:'#a16207',
+                       follow_market:'#6b7280', insufficient:'#9ca3af'};
+const HEA_EVOL_CN = {igniting:'刚发酵', sustaining:'高位平稳', fading:'退潮',
+                     dormant:'低位平稳', volatile:'反复', insufficient:'判据不足'};
+const HEA_EVOL_TONE = {igniting:'#16a34a', sustaining:'#0891b2', fading:'#dc2626',
+                       dormant:'#6b7280', volatile:'#a16207', insufficient:'#9ca3af'};
+const VPQ_CAUSE_CN = {over_volume_exhaustion:'疑似出货', fund_outflow:'资金流出',
+                      volume_expansion_up:'放量上涨', volume_expansion_down:'放量下跌',
+                      shrink_up:'缩量上涨', shrink_down:'缩量下跌',
+                      neutral:'中态', insufficient:'判据不足'};
+const VPQ_CAUSE_TONE = {over_volume_exhaustion:'#dc2626', fund_outflow:'#dc2626',
+                        volume_expansion_up:'#16a34a', volume_expansion_down:'#a16207',
+                        shrink_up:'#0891b2', shrink_down:'#6b7280',
+                        neutral:'#6b7280', insufficient:'#9ca3af'};
+const VPQ_TRAD_CN = {tradable:'可交易', limit_up_blocked:'涨停封死',
+                     limit_down_blocked:'跌停封死', abnormal_fund_flow:'资金异常',
+                     insufficient:'判据不足'};
+const VPQ_TRAD_TONE = {tradable:'#16a34a', limit_up_blocked:'#dc2626',
+                       limit_down_blocked:'#dc2626', abnormal_fund_flow:'#a16207',
+                       insufficient:'#9ca3af'};
 const TIER_RANK = {S:6, A:5, B:4, C:3, D:2, E:1};
 const tierB = v => badge(v||'--', (v==='S'||v==='A')?'b-green':v==='B'?'b-blue':(v==='D'||v==='E')?'b-red':'b-gray');
 const dirB = v => v==='buy' ? badge('buy','b-green') : v==='sell' ? badge('sell','b-red') : v==='hold' ? badge('hold','b-gray') : '';
@@ -821,6 +872,22 @@ function setLabelSort(key){
 const qTier = (r, k) => ((r.tiers || {})[k]) || '';
 const qVoteDir = r => (((r.jev || {}).vote || {}).direction) || '';
 const qLcStage = r => (((r.jev || {}).lc || {}).stage) || '';
+// 共振列（就地改造，2026-10-14）：有 jev 共振判读 → 以 jev 读数为准（等同【周期】列待遇）；
+// 无判读 → 回落引擎档位徽标（试点未开火期间列位不退化成全 '--'，不丢既有信息）。
+const qRes = r => ((r.jev || {}).res) || null;
+const qResDir = r => (qRes(r) || {}).direction || '';
+// 趋势列（就地改造，2026-10-15）：有 jev 趋势判读 → 以 jev 读数为准（等同【周期】列待遇）；
+// 无判读 → 回落引擎档位徽标（试点未开火期间列位不退化成全 '--'，不丢既有信息）。
+const qTrd = r => ((r.jev || {}).trd) || null;
+const qTrdDir = r => (qTrd(r) || {}).direction || '';
+const qHea = r => ((r.jev || {}).hea) || null;
+const qHeaAttr = r => (qHea(r) || {}).attribution || '';
+const qHeaEvol = r => (qHea(r) || {}).evolution || '';
+const qHeaTier = r => (qHea(r) || {}).tier || '';
+const qVpq = r => ((r.jev || {}).vpq) || null;
+const qVpqCause = r => (qVpq(r) || {}).cause || '';
+const qVpqTrad = r => (qVpq(r) || {}).tradability || '';
+const qVpqTier = r => (qVpq(r) || {}).tier || '';
 const tierKey = t => TIER_RANK[t] || 0;
 function quotesMatches(r, f){
   if (f.q){ const q = f.q.toLowerCase();
@@ -829,6 +896,14 @@ function quotesMatches(r, f){
     if (f.vote === 'none'){ if (d) return false; } else if (d !== f.vote) return false; }
   if (f.lc){ const st = qLcStage(r);
     if (f.lc === 'none'){ if (st) return false; } else if (st !== f.lc) return false; }
+  if (f.res){ const d = qResDir(r);
+    if (f.res === 'none'){ if (d) return false; } else if (d !== f.res) return false; }
+  if (f.trd){ const d = qTrdDir(r);
+    if (f.trd === 'none'){ if (d) return false; } else if (d !== f.trd) return false; }
+  if (f.hea){ const t = qHeaAttr(r);
+    if (f.hea === 'none'){ if (t) return false; } else if (t !== f.hea) return false; }
+  if (f.vpq){ const t = qVpqCause(r);
+    if (f.vpq === 'none'){ if (t) return false; } else if (t !== f.vpq) return false; }
   if (f.agree && ((r.jev || {}).agree) !== f.agree) return false;
   return true;
 }
@@ -840,7 +915,7 @@ function qSel(label, key, opts){
 }
 function qSet(k, v){ STATE.quotesFilter[k] = v; qRenderAll(); }
 function qQ(v){ STATE.quotesFilter.q = v; qRenderRows(); }  // 搜索只重渲染表体，输入焦点不丢
-function qClear(){ STATE.quotesFilter = { q: '', vote: '', lc: '', agree: '' }; renderQuotes(); }
+function qClear(){ STATE.quotesFilter = { q: '', vote: '', lc: '', res: '', trd: '', hea: '', vpq: '', agree: '' }; renderQuotes(); }
 function setQuotesSort(key){
   const s = STATE.quotesSort;
   if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = (key === 'rank' || key === 'code') ? 1 : -1; }
@@ -898,9 +973,16 @@ async function qSlotChange(slot){
 }
 function qRenderKpi(){
   const s = (STATE.quotes || {}).summary || {}, f = STATE.quotesFilter;
-  const v = s.vote || {}, l = s.lc || {}, rk = s.risk || {};
+  const v = s.vote || {}, l = s.lc || {}, rs = s.resonance || {}, td = s.trend || {}, rk = s.risk || {};
   const stages = l.stages || {};
   const stageTxt = Object.keys(LC_STAGE_CN).map(k => `${LC_STAGE_CN[k]} ${stages[k] || 0}`).join(' · ');
+  const resTxt = `走强 ${rs.buy || 0} / 走弱 ${rs.sell || 0} / 同步 ${rs.hold || 0}`
+    + (rs.modelInsufficient ? ` / 判据不足 ${rs.modelInsufficient}` : '');
+  const trdTxt = `多头 ${td.buy || 0} / 空头 ${td.sell || 0} / 震荡 ${td.hold || 0}`
+    + (td.modelInsufficient ? ` / 判据不足 ${td.modelInsufficient}` : '');
+  const ht = s.heat || {}, vp = s.volumePrice || {};
+  const heatTxt = Object.entries(ht.attributions || {}).map(([k, v]) => `${HEA_ATTR_CN[k] || k} ${v}`).join(' / ');
+  const volTxt = Object.entries(vp.causes || {}).map(([k, v]) => `${VPQ_CAUSE_CN[k] || k} ${v}`).join(' / ');
   const card = (k, v2, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
   const aCard = (k, v2, sub, key) => `<div class="kpi click${f.agree === key ? ' on' : ''}" title="点击筛选：${k}" onclick="qSet('agree', '${f.agree === key ? '' : key}')"><div class="k">${k}</div><div class="v">${v2}</div><div class="s">${sub}</div></div>`;
   const riskTotal = (rk.data_insufficient || 0) + (rk.partial || 0);
@@ -908,6 +990,10 @@ function qRenderKpi(){
     card('热榜股总数', s.total ?? '-', `五维可算 ${s.tiered ?? 0} · ${STATE.quotes.slotTime || '--'} 槽`)
     + card('VOTE 方向复核', v.ok ?? '-', `buy ${v.buy || 0} / sell ${v.sell || 0} / hold ${v.hold || 0} · 未复核 ${v.unreviewed ?? '-'}`)
     + card('LC 生命周期复核', l.ok ?? '-', `${stageTxt || '无复核'} · 未复核 ${l.unreviewed ?? '-'}`)
+    + card('RES 共振复核', rs.ok ?? '-', `${resTxt || '无复核'} · 一致 ${s.resAgree ?? 0} 分歧 ${s.resDiverge ?? 0} · 未复核 ${rs.unreviewed ?? '-'}`)
+    + card('TRD 趋势复核', td.ok ?? '-', `${trdTxt || '无复核'} · 一致 ${s.trdAgree ?? 0} 分歧 ${s.trdDiverge ?? 0} · 未复核 ${td.unreviewed ?? '-'}`)
+    + card('HEA 热度复核', ht.ok ?? '-', `${heatTxt || '无复核'} · 归因对锚 ${s.heaAgree ?? 0} 一致 / ${s.heaDiverge ?? 0} 分歧 · 未复核 ${ht.unreviewed ?? '-'}`)
+    + card('VPQ 量价复核', vp.ok ?? '-', `${volTxt || '无复核'} · 主因对锚 ${s.vpqAgree ?? 0} 一致 / ${s.vpqDiverge ?? 0} 分歧 · 未复核 ${vp.unreviewed ?? '-'}`)
     + aCard('方向一致', s.agree ?? '-', 'jev ↔ 五维对照锚（点击筛选）', 'agree')
     + aCard('方向分歧', s.diverge ?? '-', '并列观察者 · 台账披露（点击筛选）', 'diverge')
     + card('风险留痕', riskTotal ? `${rk.data_insufficient || 0} / ${rk.partial || 0}` : '0',
@@ -922,6 +1008,10 @@ function qRenderBar(){
     `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.quotesFilter.q)}" oninput="qQ(this.value)">`
     + qSel('jev方向', 'vote', [['buy', 'buy'], ['sell', 'sell'], ['hold', 'hold'], ['none', '未复核']])
     + qSel('LC阶段', 'lc', Object.entries(LC_STAGE_CN).concat([['none', '未复核']]))
+    + qSel('jev共振', 'res', [['buy', '走强'], ['hold', '同步'], ['sell', '走弱'], ['insufficient', '判据不足'], ['none', '未复核']])
+    + qSel('jev趋势', 'trd', [['buy', '多头'], ['hold', '震荡'], ['sell', '空头'], ['insufficient', '判据不足'], ['none', '未复核']])
+    + qSel('jev热度归因', 'hea', [['individual_strong', '个体强'], ['market_wide_rise', '全池普涨'], ['individual_weak', '个体弱'], ['market_wide_fall', '跑输普涨'], ['follow_market', '跟随市场'], ['insufficient', '判据不足'], ['none', '未复核']])
+    + qSel('jev量价主因', 'vpq', [['volume_expansion_up', '放量上涨'], ['volume_expansion_down', '放量下跌'], ['shrink_up', '缩量上涨'], ['shrink_down', '缩量下跌'], ['fund_outflow', '资金流出'], ['over_volume_exhaustion', '疑似出货'], ['neutral', '中态'], ['insufficient', '判据不足'], ['none', '未复核']])
     + qSel('一致性', 'agree', [['agree', '一致'], ['diverge', '分歧']])
     + `<button onclick="qClear()">清除筛选</button>`
     + `<span class="cnt" id="quotesCnt"></span>`;
@@ -937,6 +1027,14 @@ function qRenderRows(){
     res: r => tierKey(qTier(r, 'resonance')), trend: r => tierKey(qTier(r, 'trend')),
     heat: r => tierKey(qTier(r, 'heat')), vp: r => tierKey(qTier(r, 'volumePrice')),
     cycle: r => LC_STAGE_ORDER[qLcStage(r)] ?? -1,
+    res: r => { const d = qResDir(r);
+      return d ? 100 + (RES_DIR_ORDER[d] ?? 9) : tierKey(qTier(r, 'resonance')); },
+    trd: r => { const d = qTrdDir(r);
+      return d ? 100 + (TRD_DIR_ORDER[d] ?? 9) : tierKey(qTier(r, 'trend')); },
+    hea: r => { const a = qHeaAttr(r);
+      return a ? 100 + (HEA_ATTR_ORDER[a] ?? 9) : tierKey(qTier(r, 'heat')); },
+    vpq: r => { const c = qVpqCause(r);
+      return c ? 100 + (VPQ_CAUSE_ORDER[c] ?? 9) : tierKey(qTier(r, 'vp')); },
     boards: r => r.boards == null ? -1 : r.boards,
     amount: r => numOr(r.amount, -1), cir: r => numOr(r.cirMV, -1),
     vote: r => qVoteDir(r) || '', conf: r => numOr(((r.jev || {}).vote || {}).confidence, -1),
@@ -944,11 +1042,17 @@ function qRenderRows(){
   shown = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
   STATE.quotesEntries = shown.map(r => ({ key: String(r.code || ''), label: (r.name || r.code || '?') + ' ' + (r.code || ''),
-    row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null }));
+    row: r, voteDoc: (r.docs || {}).vote || null, lcDoc: (r.docs || {}).lc || null,
+    resDoc: (r.docs || {}).res || null, trdDoc: (r.docs || {}).trd || null,
+      heaDoc: (r.docs || {}).hea || null, vpqDoc: (r.docs || {}).vpq || null }));
   const cnt = $('quotesCnt'); if (cnt) cnt.textContent = `${shown.length} / ${all.length} 只`;
-  const hasFilter = f.q || f.vote || f.lc || f.agree;
+  const hasFilter = f.q || f.vote || f.lc || f.res || f.trd || f.hea || f.vpq || f.agree;
   $('quotesHint').textContent = `${Q.date || ''} · ${Q.slotTime || '--'} 槽 · ${hasFilter ? shown.length + '/' + all.length : all.length + ' 只'} · 点击行查看 jev 调用日志`
     + (Q.boardJoinDegraded ? ` · 连板降级:${Q.boardJoinDegraded}` : '')
+    + (Q.resonanceSlotNote ? ` · ${Q.resonanceSlotNote}（当前帧无共振判读，列位回落引擎档位）` : '')
+    + (Q.trendSlotNote ? ` · ${Q.trendSlotNote}（当前帧无趋势判读，列位回落引擎档位）` : '')
+    + (Q.heatSlotNote ? ` · ${Q.heatSlotNote}（当前帧无热度判读，列位回落引擎档位）` : '')
+    + (Q.volumeSlotNote ? ` · ${Q.volumeSlotNote}（当前帧无量价判读，列位回落引擎档位）` : '')
     + (Q.summary && Q.summary.streakUnverified ? ` · 断板连板不可验 ${Q.summary.streakUnverified} 例` : '');
   const th = (label, key) => `<th class="sortable" onclick="setQuotesSort('${key}')">${label}${sortMark(s, key)}</th>`;
   const rows = shown.map(r => {
@@ -958,6 +1062,37 @@ function qRenderRows(){
     const chgColor = chg == null ? '' : chg > 0 ? 'var(--red)' : chg < 0 ? 'var(--green)' : '';
     const cyc = qLcStage(r);
     const conf = numOr(((r.jev || {}).vote || {}).confidence, null);
+    const rs = qRes(r), rsDir = rs ? rs.direction : '', rsScore = rs ? numOr(rs.score, null) : null;
+    // 共振列（就地改造）：有 jev 判读 → 方向徽标 + 强度分带数；无判读 → 引擎档位徽标（回落不丢信息）
+    const resCell = rsDir
+      ? `${dirB(rsDir)}<span class="num" style="margin-left:6px;color:${resBandColor(rsScore == null ? -1 : rsScore)}">${rsScore == null ? '--' : Math.round(rsScore)}</span>`
+      : tierB(qTier(r, 'resonance'));
+    const td = qTrd(r), tdDir = td ? td.direction : '', tdScore = td ? numOr(td.score, null) : null;
+    const trdCell = tdDir
+      ? `${dirB(tdDir)}<span class="num" style="margin-left:6px;color:${resBandColor(tdScore == null ? -1 : tdScore)}">${tdScore == null ? '--' : Math.round(tdScore)}</span>`
+      : tierB(qTier(r, 'trend'));
+    const trdTip = tdDir
+      ? `jev 趋势独立判读：${TRD_DIR_CN[tdDir] || tdDir}（强度 ${tdScore == null ? '缺' : Math.round(tdScore)} · 置信 P${Math.round((td.confidence == null ? 0 : td.confidence) * 100)}% · 模式 ${TRD_MODE_CN[td.mode] || td.mode || '缺'}） · 引擎对照锚 ${qTier(r, 'trend') || '--'} ${((r.jev || {}).trdAgree) === 'agree' ? '一致' : ((r.jev || {}).trdAgree) === 'diverge' ? '分歧' : '锚缺失'}`
+      : `引擎趋势档位 ${qTier(r, 'trend') || '--'}（无 jev 趋势判读：试点题集未开火 / 该帧无判读 / 出现次数 <2 留痕）`;
+    // 热度列（就地改造）：有 jev 档位判读 → 档位徽标 + 语义方向 chip；无判读 → 引擎档位回落
+    const ha = qHea(r), haAttr = ha ? ha.attribution : '', haEvol = ha ? ha.evolution : '';
+    const heaCell = haAttr
+      ? `<span class="chip" style="color:${HEA_ATTR_TONE[haAttr] || 'inherit'}">${HEA_ATTR_CN[haAttr] || haAttr}</span>${haEvol ? `<span class="chip plain" style="margin-left:6px;color:${HEA_EVOL_TONE[haEvol] || 'inherit'}">${HEA_EVOL_CN[haEvol] || haEvol}</span>` : ''}`
+      : tierB(qTier(r, 'heat'));
+    const heaTip = haAttr
+      ? `jev 热度复核（V2·自证题集）：归因 ${HEA_ATTR_CN[haAttr] || haAttr}（P${Math.round((ha.attributionConfidence == null ? 0 : ha.attributionConfidence) * 100)}%）· 形态 ${HEA_EVOL_CN[haEvol] || haEvol || '缺'} · 复算锚 ${HEA_ATTR_CN[ha.attributionAnchor] || ha.attributionAnchor || '--'} ${((r.jev || {}).heaAgree) === 'agree' ? '一致' : ((r.jev || {}).heaAgree) === 'diverge' ? '分歧' : '锚缺失'} · 档位基线 ${HEA_TIER_CN[ha.tier] || ha.tier || '--'}（引擎 ${qTier(r, 'heat') || '--'}）`
+      : `引擎热度档位 ${qTier(r, 'heat') || '--'}（无 jev 热度判读：试点题集未开火 / 该帧无判读）`;
+    // 量价列（就地改造）：有 jev 档位判读 → 档位徽标 + 象限 chip；无判读 → 引擎档位回落
+    const vp2 = qVpq(r), vpCause = vp2 ? vp2.cause : '', vpTrad = vp2 ? vp2.tradability : '';
+    const vpqCell = vpCause
+      ? `<span class="chip" style="color:${VPQ_CAUSE_TONE[vpCause] || 'inherit'}">${VPQ_CAUSE_CN[vpCause] || vpCause}</span>${vpTrad ? `<span class="chip plain" style="margin-left:6px;color:${VPQ_TRAD_TONE[vpTrad] || 'inherit'}">${VPQ_TRAD_CN[vpTrad] || vpTrad}</span>` : ''}`
+      : tierB(qTier(r, 'volumePrice'));
+    const vpqTip = vpCause
+      ? `jev 量价复核（V2·自证题集）：主因 ${VPQ_CAUSE_CN[vpCause] || vpCause}（P${Math.round((vp2.causeConfidence == null ? 0 : vp2.causeConfidence) * 100)}%）· 可交易性 ${VPQ_TRAD_CN[vpTrad] || vpTrad || '缺'} · 复算锚 ${VPQ_CAUSE_CN[vp2.causeAnchor] || vp2.causeAnchor || '--'} ${((r.jev || {}).vpqAgree) === 'agree' ? '一致' : ((r.jev || {}).vpqAgree) === 'diverge' ? '分歧' : '锚缺失'} · 档位基线 ${VPQ_TIER_CN[vp2.tier] || vp2.tier || '--'}（引擎 ${qTier(r, 'volumePrice') || '--'}）`
+      : `引擎量价档位 ${qTier(r, 'volumePrice') || '--'}（无 jev 量价判读：试点题集未开火 / 该帧无判读）`;
+    const resTip = rsDir
+      ? `jev 共振独立判读：${RES_DIR_CN[rsDir] || rsDir}（强度 ${rsScore == null ? '缺' : Math.round(rsScore)} · 置信 P${Math.round((rs.confidence == null ? 0 : rs.confidence) * 100)}%） · 引擎对照锚 ${qTier(r, 'resonance') || '--'} ${((r.jev || {}).resAgree) === 'agree' ? '一致' : ((r.jev || {}).resAgree) === 'diverge' ? '分歧' : '锚缺失'}`
+      : `引擎共振档位 ${qTier(r, 'resonance') || '--'}（无 jev 共振判读：试点题集未开火 / 该帧无判读 / 原料不足留痕）`;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="qRow('${js(e.key)}')">
     <td><span class="lg-caret">▶</span>${esc(r.code || '')}</td><td>${esc(r.name || '')}</td>
     <td>${esc(r.board || '--')}</td>
@@ -965,8 +1100,9 @@ function qRenderRows(){
     <td class="num" style="color:${chgColor}">${fmtPctChg(r.change)}</td>
     <td class="num">${r.rank != null ? '#' + r.rank : '--'}</td>
     <td class="num">${boardsCell(r.boards)}</td>
-    <td>${tierB(qTier(r, 'resonance'))}</td><td>${tierB(qTier(r, 'trend'))}</td>
-    <td>${tierB(qTier(r, 'heat'))}</td><td>${tierB(qTier(r, 'volumePrice'))}</td>
+    <td title="${esc(resTip)}">${resCell}</td>
+    <td title="${esc(trdTip)}">${trdCell}</td>
+    <td title="${esc(heaTip)}">${heaCell}</td><td title="${esc(vpqTip)}">${vpqCell}</td>
     <td style="color:${cyc ? (LC_STAGE_COLOR[cyc] || 'var(--muted2)') : 'var(--muted2)'}">${cyc ? esc(LC_STAGE_CN[cyc] || cyc) : '--'}</td>
     <td class="num">${fmtYiCell(r.amount)}</td><td class="num">${fmtYiCell(r.cirMV)}</td>
     <td>${dirB(qVoteDir(r)) || '<span style="color:var(--muted2)">--</span>'}</td>
@@ -974,20 +1110,30 @@ function qRenderRows(){
     <td>${agreeB((r.jev || {}).agree)}</td></tr>`
     + (open ? `<tr class="lg-detail"><td colspan="17">${quotesDetailHtml(e)}</td></tr>` : '');
   }).join('');
-  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('板块', 'board')}${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('连板', 'boards')}${th('共振', 'res')}${th('趋势', 'trend')}${th('热度', 'heat')}${th('量价', 'vp')}${th('周期', 'cycle')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
+  $('quotesTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th>${th('板块', 'board')}${th('最新价', 'price')}${th('涨跌幅', 'change')}${th('排名', 'rank')}${th('连板', 'boards')}<th class="sortable" title="有 jev 共振判读时显示 jev 读数（走强/同步/走弱 + 强度），否则回落引擎档位徽标" onclick="setQuotesSort('res')">共振${sortMark(s, 'res')}</th><th class="sortable" title="有 jev 趋势判读时显示 jev 读数（多头/震荡/空头 + 强度），否则回落引擎档位徽标" onclick="setQuotesSort('trd')">趋势${sortMark(s, 'trd')}</th><th class="sortable" title="有 jev 热度逻辑判读时显示 jev 读数（个体强/全池普涨等归因 + 形态），否则回落引擎档位徽标" onclick="setQuotesSort('hea')">热度${sortMark(s, 'hea')}</th><th class="sortable" title="有 jev 量价逻辑判读时显示 jev 读数（放量上涨/资金流出等主因 + 可交易性），否则回落引擎档位徽标" onclick="setQuotesSort('vpq')">量价${sortMark(s, 'vpq')}</th>${th('周期', 'cycle')}${th('成交额', 'amount')}${th('流通值', 'cir')}${th('jev方向', 'vote')}${th('置信', 'conf')}${th('一致性', 'agree')}</tr>`
     + (rows || '<tr><td colspan="17" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function qRenderAll(){ qRenderKpi(); qRenderBar(); qRenderRows(); }
-// 行展开：VOTE/LC 双题集各一块 lg-card（各自 详细信息/原始 JSON 切换 + 筛选 + 复制）
+// 行展开：VOTE/LC/RES/TRD/HEA/VPQ 六题集各一块 lg-card（各自 详细信息/原始 JSON 切换 + 筛选 + 复制）
 function qOpenEntry(){ return (STATE.quotesEntries || []).find(x => x.key === STATE.quotesUi.openKey) || null; }
-function qKindUi(kind){ return kind === 'vote' ? STATE.quotesUi.vote : STATE.quotesUi.lc; }
-function qDocOf(e, kind){ return kind === 'vote' ? e.voteDoc : e.lcDoc; }
+function qKindUi(kind){ return kind === 'vote' ? STATE.quotesUi.vote : kind === 'lc' ? STATE.quotesUi.lc : kind === 'res' ? STATE.quotesUi.res : kind === 'trd' ? STATE.quotesUi.trd : kind === 'hea' ? STATE.quotesUi.hea : STATE.quotesUi.vpq; }
+function qDocOf(e, kind){ return kind === 'vote' ? e.voteDoc : kind === 'lc' ? e.lcDoc : kind === 'res' ? e.resDoc : kind === 'trd' ? e.trdDoc : kind === 'hea' ? e.heaDoc : e.vpqDoc; }
+const QKIND_TITLE = { vote: '🎯 VOTE · 方向投票复核', lc: '🔄 LC · 生命周期复核', res: '🌀 RES · 共振独立复核', trd: '📈 TRD · 趋势独立复核', hea: '🔥 HEA · 热度独立复核', vpq: '💰 VPQ · 量价独立复核' };
+const QKIND_EMPTY = {
+  vote: '该股无 jev 复核存档（原料不足留痕 / 未进判读人口；抽样帽已于 2026-10-14 取消）',
+  lc: '该股无 jev 复核存档（原料不足留痕 / 未进判读人口；抽样帽已于 2026-10-14 取消）',
+  res: '该股无共振判读存档（试点题集未开火 / 该帧无判读 / 出现次数 <9 等原料不足留痕）',
+  trd: '该股无趋势判读存档（试点题集未开火 / 该帧无判读 / 出现次数 <2 等原料不足留痕）',
+  hea: '该股无热度判读存档（试点题集未开火 / 该帧无判读 / 横截面 percentile 缺失留痕）',
+  vpq: '该股无量价判读存档（试点题集未开火 / 该帧无判读 / 涨幅或量比缺失留痕）' };
 function qRow(key){
   const e = (STATE.quotesEntries || []).find(x => x.key === key);
   if (!e) return;
   const ui = STATE.quotesUi;
   ui.openKey = ui.openKey === key ? null : key;
   ui.vote = { mode: 'detail', q1: '', q2: '' }; ui.lc = { mode: 'detail', q1: '', q2: '' };
+  ui.res = { mode: 'detail', q1: '', q2: '' }; ui.trd = { mode: 'detail', q1: '', q2: '' };
+  ui.hea = { mode: 'detail', q1: '', q2: '' }; ui.vpq = { mode: 'detail', q1: '', q2: '' };
   qRenderRows();
 }
 function qMode(kind, m, ev){ ev.stopPropagation(); qKindUi(kind).mode = m; qRenderRows(); }
@@ -1019,13 +1165,41 @@ function qRespOf(e, kind){
     answers: d.answers || undefined, model: d.model, usage: d.usage };
   if (kind === 'vote') return { ...base, voteDirection: d.voteDirection,
     voteConfidence: d.voteConfidence, voteProbabilities: d.voteProbabilities };
-  return { ...base, lcStage: d.lcStage, lcConfidence: d.lcConfidence, lcProbabilities: d.lcProbabilities };
+  if (kind === 'lc') return { ...base, lcStage: d.lcStage, lcConfidence: d.lcConfidence, lcProbabilities: d.lcProbabilities };
+  if (kind === 'res') return { ...base, resonanceDirection: d.resonanceDirection,
+    resonanceConfidence: d.resonanceConfidence, resonanceProbabilities: d.resonanceProbabilities,
+    resonanceScore: d.resonanceScore, shortExcess: d.shortExcess, engineDirection: d.engineDirection,
+    engineScore: d.engineScore, engineTier: d.engineTier, bars: d.bars };
+  if (kind === 'trd') return { ...base, trendDirection: d.trendDirection,
+    trendConfidence: d.trendConfidence, trendProbabilities: d.trendProbabilities,
+    trendScore: d.trendScore, mode: d.mode, bars: d.bars,
+    engineDirection: d.engineDirection, engineScore: d.engineScore,
+    engineSignedScore: d.engineSignedScore, engineTier: d.engineTier };
+  if (kind === 'hea') return { ...base, heatAttribution: d.heatAttribution,
+    heatAttributionConfidence: d.heatAttributionConfidence,
+    attributionAnchor: d.attributionAnchor,
+    heatEvolution: d.heatEvolution, heatEvolutionConfidence: d.heatEvolutionConfidence,
+    evolutionAnchor: d.evolutionAnchor,
+    heatTier: d.heatTier, heatTierConfidence: d.heatTierConfidence,
+    heatDirection: d.heatDirection, heatConfidence: d.heatConfidence,
+    enginePercentile: d.enginePercentile, enginePercentileDelta: d.enginePercentileDelta,
+    engineRelativeToMarket: d.engineRelativeToMarket, engineTier: d.engineTier };
+  return { ...base, volumeCause: d.volumeCause, volumeCauseConfidence: d.volumeCauseConfidence,
+    causeAnchor: d.causeAnchor,
+    volumeTradability: d.volumeTradability,
+    volumeTradabilityConfidence: d.volumeTradabilityConfidence,
+    tradabilityAnchor: d.tradabilityAnchor,
+    volumeTier: d.volumeTier, volumeTierConfidence: d.volumeTierConfidence,
+    volumeQuadrant: d.volumeQuadrant, volumeDirection: d.volumeDirection,
+    volumeConfidence: d.volumeConfidence,
+    engineScore: d.engineScore, engineDirection: d.engineDirection,
+    engineQuadrant: d.engineQuadrant, engineTier: d.engineTier };
 }
 function qDocCard(e, kind){
   const d = qDocOf(e, kind), ui = qKindUi(kind);
-  const title = kind === 'vote' ? '🎯 VOTE · 方向投票复核' : '🔄 LC · 生命周期复核';
+  const title = QKIND_TITLE[kind];
   if (!d) return `<div class="lg-card"><div class="lg-head"><div class="lg-title">${title}</div></div>`
-    + `<div class="lg-empty">该股未进 jev 复核抽样（预登记抽样帽口径）</div></div>`;
+    + `<div class="lg-empty">${QKIND_EMPTY[kind]}</div></div>`;
   const u = d.usage || {}, st = d.status || '-';
   const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
   const rf = d.riskFlag || {};
@@ -1043,7 +1217,18 @@ function qDocCard(e, kind){
   if (ui.mode === 'raw'){
     body = `<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0"><b>存档文档 JSON（原始）</b><button class="lg-copy" onclick="qCopy('${kind}', 'doc', event)">⧉ 复制</button></div><pre>${esc(JSON.stringify(d, null, 2))}</pre></div>`;
   } else {
-    body = `<div class="lg-panels">
+    // RES/TRD 卡多一行「读数摘要」（方向/强度/置信/出现次数/引擎对照锚）——原料与锚同屏，判读可复核
+    const resSum = (kind === 'res' || kind === 'trd' || kind === 'hea' || kind === 'vpq') ? `<div class="lg-meta">
+      <div><div class="k">jev 读数</div><div class="v">${dirB(kind === 'res' ? d.resonanceDirection : d.trendDirection) || '--'} ${kind === 'res' ? (d.resonanceDirection ? (RES_DIR_CN[d.resonanceDirection] || '') : '') : (d.trendDirection ? (TRD_DIR_CN[d.trendDirection] || '') : '')}${kind === 'hea' ? ('<span style="color:' + (HEA_ATTR_TONE[d.heatAttribution] || 'inherit') + '">' + (HEA_ATTR_CN[d.heatAttribution] || d.heatAttribution || '') + '</span> ' + (HEA_EVOL_CN[d.heatEvolution] || d.heatEvolution || '')) : ''}${kind === 'vpq' ? ('<span style="color:' + (VPQ_CAUSE_TONE[d.volumeCause] || 'inherit') + '">' + (VPQ_CAUSE_CN[d.volumeCause] || d.volumeCause || '') + '</span> ' + (VPQ_TRAD_CN[d.volumeTradability] || d.volumeTradability || '')) : ''}</div></div>
+      <div><div class="k">强度 score</div><div class="v" style="color:${(kind === 'res' ? d.resonanceScore : d.trendScore) == null ? 'var(--muted2)' : resBandColor(kind === 'res' ? d.resonanceScore : d.trendScore)}">${(kind === 'res' ? d.resonanceScore : d.trendScore) == null ? '--' : Math.round(kind === 'res' ? d.resonanceScore : d.trendScore)}</div></div>
+      <div><div class="k">置信</div><div class="v">${(kind === 'res' ? d.resonanceConfidence : d.trendConfidence) == null ? '--' : 'P' + Math.round((kind === 'res' ? d.resonanceConfidence : d.trendConfidence) * 100) + '%'}</div></div>
+      <div><div class="k">出现次数</div><div class="v">${d.bars == null ? '--' : d.bars}</div></div>
+      <div><div class="k">引擎对照锚</div><div class="v">${esc(d.engineDirection || '--')} / ${esc(d.engineTier || '--')}${d.engineScore == null ? '' : ' · score ' + Math.round(d.engineScore)}</div></div>
+      ${kind === 'trd' ? `<div><div class="k">判读模式</div><div class="v">${esc(TRD_MODE_CN[d.mode] || d.mode || '--')}</div></div>` : ''}
+      ${kind === 'hea' ? `<div><div class="k">归因复算</div><div class="v">${esc(HEA_ATTR_CN[d.heatAttribution] || d.heatAttribution || '--')} · 形态 ${esc(HEA_EVOL_CN[d.heatEvolution] || d.heatEvolution || '缺')} · 复算锚 ${esc(HEA_ATTR_CN[d.attributionAnchor] || d.attributionAnchor || '--')} · 档位基线 ${esc(HEA_TIER_CN[d.heatTier] || d.heatTier || '--')}（引擎 ${esc(d.engineTier || '--')}）</div></div>` : ''}
+      ${kind === 'vpq' ? `<div><div class="k">主因复算</div><div class="v">${esc(VPQ_CAUSE_CN[d.volumeCause] || d.volumeCause || '--')} · 可交易性 ${esc(VPQ_TRAD_CN[d.volumeTradability] || d.volumeTradability || '缺')} · 复算锚 ${esc(VPQ_CAUSE_CN[d.causeAnchor] || d.causeAnchor || '--')} · 档位基线 ${esc(VPQ_TIER_CN[d.volumeTier] || d.volumeTier || '--')}（引擎 ${esc(d.engineTier || '--')}）</div></div>` : ''}
+      </div>` : '';
+    body = resSum + `<div class="lg-panels">
       <div class="lg-panel"><div class="lg-phead"><b>请求</b><span class="st">state+model+questions</span><button class="lg-copy" onclick="qCopy('${kind}', 'req', event)">⧉ 复制</button></div>
         <input class="lg-filter" placeholder="筛选 JSON..." value="${esc(ui.q1)}" oninput="qFilter('${kind}', 'req', this.value)">
         <div class="lg-tree" id="q${kind}ReqTree">${treeHtml(qReqOf(e, kind), ui.q1)}</div></div>
@@ -1062,6 +1247,32 @@ function quotesDetailHtml(e){
   const r = e.row, j = r.jev || {};
   const t = r.tiers || {};
   const tierTxt = v => v || '--';
+  const rs = j.res || {};
+  const resChip = rs.direction ? `<span class="chip plain">jev共振 ${esc(RES_DIR_CN[rs.direction] || rs.direction)}${rs.score != null ? ' 强度' + Math.round(rs.score) : ''}${rs.confidence != null ? ' P' + Math.round(rs.confidence * 100) + '%' : ''}</span>`
+    : `<span class="chip plain">jev共振 --（无判读，列位回落引擎档位）</span>`;
+  const trd = j.trd || {};
+  const trdChip = trd.direction ? `<span class="chip plain">jev趋势 ${esc(TRD_DIR_CN[trd.direction] || trd.direction)}${trd.score != null ? ' 强度' + Math.round(trd.score) : ''}${trd.confidence != null ? ' P' + Math.round(trd.confidence * 100) + '%' : ''}${trd.mode ? ' · ' + (TRD_MODE_CN[trd.mode] || trd.mode) : ''}</span>`
+    : `<span class="chip plain">jev趋势 --（无判读，列位回落引擎档位）</span>`;
+  const hea = j.hea || {};
+  const heaChip = hea.attribution
+    ? `<span class="chip plain">jev热度归因 ${esc(HEA_ATTR_CN[hea.attribution] || hea.attribution)}${hea.attributionConfidence != null ? ' P' + Math.round(hea.attributionConfidence * 100) + '%' : ''} · 形态 ${esc(HEA_EVOL_CN[hea.evolution] || hea.evolution || '缺')} · 复算锚 ${esc(HEA_ATTR_CN[hea.attributionAnchor] || hea.attributionAnchor || '--')}</span>`
+    : `<span class="chip plain">jev热度 --（无判读，列位回落引擎档位）</span>`;
+  const heaAgreeChip = j.heaAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">归因对锚 一致</span>'
+    : j.heaAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">归因对锚 分歧</span>'
+    : (hea.attribution && hea.attribution !== 'insufficient' ? '<span class="chip plain">归因对锚 锚缺失</span>' : '');
+  const vpq = j.vpq || {};
+  const vpqChip = vpq.cause
+    ? `<span class="chip plain">jev量价主因 ${esc(VPQ_CAUSE_CN[vpq.cause] || vpq.cause)}${vpq.causeConfidence != null ? ' P' + Math.round(vpq.causeConfidence * 100) + '%' : ''} · 可交易性 ${esc(VPQ_TRAD_CN[vpq.tradability] || vpq.tradability || '缺')} · 复算锚 ${esc(VPQ_CAUSE_CN[vpq.causeAnchor] || vpq.causeAnchor || '--')}</span>`
+    : `<span class="chip plain">jev量价 --（无判读，列位回落引擎档位）</span>`;
+  const vpqAgreeChip = j.vpqAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">主因对锚 一致</span>'
+    : j.vpqAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">主因对锚 分歧</span>'
+    : (vpq.cause && vpq.cause !== 'insufficient' ? '<span class="chip plain">主因对锚 锚缺失</span>' : '');
+  const trdAgreeChip = j.trdAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">趋势对照 一致</span>'
+    : j.trdAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">趋势对照 分歧</span>'
+    : (trd.direction ? '<span class="chip plain">趋势对照 锚缺失</span>' : '');
+  const resAgreeChip = j.resAgree === 'agree' ? '<span class="chip plain" style="color:#16a34a">共振对照 一致</span>'
+    : j.resAgree === 'diverge' ? '<span class="chip plain" style="color:#a16207">共振对照 分歧</span>'
+    : (rs.direction ? '<span class="chip plain">共振对照 锚缺失</span>' : '');
   const summary = `<div class="lg-card"><div class="lg-head"><div class="lg-title">${esc(e.label)}</div>
     <span class="lg-asof"># ${r.rank != null ? r.rank : '--'} · 连板 ${boardsCell(r.boards)} · 最新价 ${numOr(r.price, null) != null ? r.price.toFixed(2) : '--'} · 成交额 ${fmtYi(r.amount)} 亿 · 流通值 ${fmtYi(r.cirMV)} 亿</span></div>
     <div class="flex" style="margin-top:10px">
@@ -1070,9 +1281,12 @@ function quotesDetailHtml(e){
       <span class="chip plain">周期 ${t.cycle ? (LC_STAGE_CN[t.cycle] || t.cycle) : '--'}</span><span class="chip plain">五维 ${tierTxt(t.synergy)}</span>
       ${j.vote ? `<span class="chip plain">jev方向 ${j.vote.direction ? esc(j.vote.direction) : '--'}${j.vote.confidence != null ? ' P' + Math.round(j.vote.confidence * 100) + '%' : ''}</span>` : ''}
       ${j.lc ? `<span class="chip plain">jev阶段 ${j.lc.stage ? esc(LC_STAGE_CN[j.lc.stage] || j.lc.stage) : '--'}</span>` : ''}
+      ${resChip}${resAgreeChip}
+      ${trdChip}${trdAgreeChip}
+      ${heaChip}${heaAgreeChip}${vpqChip}${vpqAgreeChip}
       ${agreeB(j.agree)}
     </div></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:12px">${summary}${qDocCard(e, 'vote')}${qDocCard(e, 'lc')}</div>`;
+  return `<div style="display:flex;flex-direction:column;gap:12px">${summary}${qDocCard(e, 'vote')}${qDocCard(e, 'lc')}${qDocCard(e, 'res')}${qDocCard(e, 'trd')}${qDocCard(e, 'hea')}${qDocCard(e, 'vpq')}</div>`;
 }
 
 // ---------- 明细存档：调用日志（对齐 CF AI Gateway Logs 行内展开样式，2026-10-10） ----------

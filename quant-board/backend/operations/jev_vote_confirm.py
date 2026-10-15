@@ -7,14 +7,17 @@
 
 口径（预登记冻结）：
 - 槽位 = half_hour 15:00（当日收盘槽；daily 15:30 帧行情字段实测稀疏不可用）；
-- 人口：A=synergy 档 ∈ {S,A,B,D}（E 归 B 语境、C 无方向不进）；B=非 cooling；
-- 预检 riskFlag（runner 侧）：data_insufficient 不调用落留痕文档；partial/ok 进抽样；
-- 抽样（确定性排序防挑样）：A 每日 ≤8(buy)+≤4(sell)，B 每日 ≤8（点火/扩散优先 ≤5）；
+- 人口：A=全热榜池（v4-material 代，判读时点=11:00 槽帧）；B=全量（生产挂链传
+  --include-cooling；缺省=非 cooling pilot 口径，历史对照台账不混代）；
+- 预检 riskFlag（runner 侧）：data_insufficient 不调用落留痕文档；partial/ok 进判读；
+- **无抽样帽**（2026-10-14 用户裁决「帽子盖的是自己的眼睛，毫无实际意义」：A/B 抽样上限
+  全部取消，判读人口=候选全量；v4 代起 A 本就无帽，本次把 B 的 cap_igex/cap_total 一并拆除，
+  pilot/扩窗期的抽样语义随预登记 §六/§十一 留档 git 历史，不再进生产链）；
 - 熔断：TOKEN_FUSE=150_000 tokens/次运行，逐 call 累计，达限即停（预登记 §六）；
 - 落库（预登记 §八）：answers 原样包 + confidence 升顶层 + responseRaw ok/degraded 一律
   存完整 envelope（修 cycle pilot「ok 存 None」口子）。
 
-默认 dry-run（零 jev 调用：打印人口/预检/抽样/叙事字数）；--fire 且有 token 才真实调用
+默认 dry-run（零 jev 调用：打印人口/预检/叙事字数）；--fire 且有 token 才真实调用
 （开火只走预登记 + 用户批准路径，AGENTS §1.2-7）。
 """
 from __future__ import annotations
@@ -42,7 +45,6 @@ from backend.analysis.hotlist.jev_vote_ammo import (
     VOTE_AMMO_VERSION,
     build_lifecycle_narrative,
     lifecycle_risk_flag,
-    sample_lifecycle,
     synergy_direction,
 )
 from backend.services.jev.jev_client import parse_jev_response
@@ -375,12 +377,11 @@ def _rule_direction_map(db: Any, date: str, dataset_id: str) -> dict[str, tuple]
 
 
 def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID,
-                      fire: bool = False, cap_igex: int = 5, cap_total: int = 8,
-                      workers: int = 1, token_fuse: int | None = None,
+                      fire: bool = False, workers: int = 1, token_fuse: int | None = None,
                       slot: str = PILOT_SLOT, include_cooling: bool = False) -> dict:
     """题集 B：环境门阶段诊断复核。落 hotlist_jev_lifecycle_recheck_pilot。
-    cap_igex/cap_total 默认=预登记 §六 冻结帽；扩窗修正案（§十一）经 CLI 传参覆盖。
-    workers>1=并发（生产回填 §六·产）；token_fuse 缺省=TOKEN_FUSE(150k)，回填显式放宽。"""
+    无抽样帽（2026-10-14 用户裁决取消）：人口=候选全量，逐股判读；done-skip 幂等。
+    workers>1=并发；token_fuse 缺省=TOKEN_FUSE(150k)，全量回填显式放宽。"""
     col = db["hotlist_jev_lifecycle_recheck_pilot"]
     questions = QUESTIONS_LIFECYCLE_RECHECK
     qhash = _questions_hash(questions)
@@ -402,7 +403,7 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
                                                   c["riskFlag"], QUESTION_SET_VERSION_LIFECYCLE_RECHECK, qhash, slot),
                                 upsert=True)
                 stats["data_insufficient"] += 1
-        sample = sample_lifecycle(pop["candidates"], cap_igex=cap_igex, cap_total=cap_total)
+        candidates = pop["candidates"]  # 无抽样帽：候选全量进判读（2026-10-14 用户裁决）
 
         def _work_lc(c: dict) -> tuple[str, dict, int]:
             """单股一次 jev 调用+落库；返回 (code, doc, tokens)。"""
@@ -441,7 +442,7 @@ def run_lifecycle_day(db, dates: list[str], dataset_id: str = DEFAULT_DATASET_ID
             return c["code"], doc, used
 
         todo = []
-        for c in sample:
+        for c in candidates:
             _id = f"{date}:{slot}:{c['code']}:LC"
             if col.find_one({"_id": _id, "status": "ok"}):
                 stats["skip"] += 1
@@ -754,7 +755,7 @@ def watch(db, dataset_id: str = DEFAULT_DATASET_ID, interval: int = 60,
             for col_name, kind, runner_fn, kwargs in (
                     ("hotlist_jev_vote_confirm_pilot", "VOTE", run_vote_day, {}),
                     ("hotlist_jev_lifecycle_recheck_pilot", "LC", run_lifecycle_day,
-                     {"cap_igex": 100, "cap_total": 200})):
+                     {})):
                 try:
                     if _frame_mark_done(db, col_name, date, slot, kind):
                         continue
@@ -778,8 +779,6 @@ def __main__():
     ap.add_argument("--dataset-id", dest="dataset_id", default=DEFAULT_DATASET_ID)
     ap.add_argument("--fire", action="store_true",
                     help="真实调用 jev（只走预登记+用户批准开火路径；默认 dry-run 零调用）")
-    ap.add_argument("--lc-cap-igex", dest="lc_cap_igex", type=int, default=5)
-    ap.add_argument("--lc-cap-total", dest="lc_cap_total", type=int, default=8)
     ap.add_argument("--codes", dest="codes", default="",
                     help="逗号分隔 code 子集（单股判读；缺省=全池）")
     ap.add_argument("--workers", type=int, default=1,
@@ -815,7 +814,6 @@ def __main__():
                      workers=args.workers, token_fuse=args.token_fuse, only_codes=only)
     if args.lifecycle_day:
         run_lifecycle_day(db, args.lifecycle_day, args.dataset_id, fire=args.fire,
-                          cap_igex=args.lc_cap_igex, cap_total=args.lc_cap_total,
                           workers=args.workers, token_fuse=args.token_fuse, slot=args.slot,
                           include_cooling=args.include_cooling)
 

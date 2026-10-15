@@ -5,7 +5,7 @@
 （2026-10-12 用户五裁决后落方案，判据文本经用户逐字确认）。
 
 归档边界（对齐 jev_driver_ammo/jev_relay_ammo 模式）：题目常量、叙事组装、预检 riskFlag、
-对照锚映射、确定性抽样、EOD 补齐读法全部纯函数（零 IO、可单测）；Mongo 取数与 jev 调用
+对照锚映射、EOD 补齐读法全部纯函数（零 IO、可单测）；Mongo 取数与 jev 调用
 编排留 operations/jev_vote_confirm.py runner。本文件不得新增任何 IO。
 
 红线：
@@ -117,13 +117,8 @@ ACTION_ZH = {"allow": "放行", "caution": "谨慎", "veto": "一票否决", "ex
 SYNERGY_DIRECTION_MAP = {"S": "buy", "A": "buy", "B": "buy",
                          "C": "hold", "D": "sell", "E": "sell"}
 
-VOTE_DIMS = ("resonance", "rankTrend", "crossSection", "volumePrice")
-
 # EOD 补齐读法只补行情原始字段（预登记 §四：引擎档位不可跨帧拼接）
 BACKFILL_FIELDS = ("change", "volumeRatio", "zlje", "turnoverRate", "amount")
-
-# 档位序（抽样排序用）
-TIER_RANK = {"S": 6, "A": 5, "B": 4, "C": 3, "D": 2, "E": 1}
 
 
 def _finite_num(value: Any) -> float | None:
@@ -169,35 +164,6 @@ def lifecycle_risk_flag(trajectory_slots: int, metrics_present: bool,
 def synergy_direction(synergy_tier: Any) -> str:
     """synergy 档位 → 引擎投票方向（S/A/B→buy、C→hold、D/E→sell）；档位缺失返回空串不计台账。"""
     return SYNERGY_DIRECTION_MAP.get(str(synergy_tier or ""), "")
-
-
-# ── 确定性抽样（预登记 §六：排序规则冻结，防挑样）──
-
-def vote_buy_sort_key(c: dict) -> tuple:
-    """buy 侧（S/A/B）：最高档位数降序 → 共振分数降序 → 代码升序。"""
-    high = sum(1 for d in VOTE_DIMS if (c.get("dims") or {}).get(d) in ("S", "A"))
-    return (-high, -(_finite_num(c.get("resonanceScore")) or 0.0), str(c.get("code") or ""))
-
-
-def vote_sell_sort_key(c: dict) -> tuple:
-    """sell 侧（D）：量价 E 短路优先 → 代码升序。"""
-    vp_e = 0 if (c.get("dims") or {}).get("volumePrice") == "E" else 1
-    return (vp_e, str(c.get("code") or ""))
-
-
-def sample_lifecycle(cands: list[dict], cap_igex: int = 5, cap_total: int = 8) -> list[dict]:
-    """点火/扩散优先全量至 ≤cap_igex（代码升序），剩余名额给拥挤/反转（stage+代码升序），
-    再剩余给 cooling（include_cooling 全量覆盖时；代码升序）。"""
-    igex = sorted((c for c in cands if c.get("stage") in ("ignition", "expansion")),
-                  key=lambda c: str(c.get("code") or ""))
-    late = sorted((c for c in cands if c.get("stage") in ("crowded", "reversal")),
-                  key=lambda c: (str(c.get("stage") or ""), str(c.get("code") or "")))
-    cooling = sorted((c for c in cands if c.get("stage") == "cooling"),
-                     key=lambda c: str(c.get("code") or ""))
-    n_igex = min(len(igex), cap_igex)
-    n_late = min(len(late), max(0, cap_total - n_igex))
-    return (igex[:n_igex] + late[:n_late]
-            + cooling[: max(0, cap_total - n_igex - n_late)])
 
 
 # ── EOD 补齐读法（裁决 3：daily 15:30 帧基准，行情字段缺失处从同日 half_hour 15:00 帧补）──

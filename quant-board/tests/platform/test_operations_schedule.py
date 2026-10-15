@@ -1023,12 +1023,13 @@ def test_jev_vote_recheck_step_runs_full_population(monkeypatch):
     cmd = " ".join(captured["cmd"])
     assert "backend.operations.jev_vote_confirm" in cmd
     # vote=题集 v4-material 全池（2026-10-13 代际覆盖：无 cap/neutral 参数，判读 11:00 时点原料）；
-    # LC=cooling 全量+15:00 收盘帧；幂等 fire
+    # LC=cooling 全量+15:00 收盘帧+无抽样帽（2026-10-14 用户裁决取消 cap，原
+    # --lc-cap-igex/--lc-cap-total 已拆除）；幂等 fire
     for flag in ("--vote-day", "--lifecycle-day", "--slot", "15:00", "--fire",
-                 "--include-cooling", "--lc-cap-igex", "100", "--lc-cap-total", "200",
-                 "--workers", "4", "--token-fuse", "6000000"):
+                 "--include-cooling", "--workers", "4", "--token-fuse", "6000000"):
         assert flag in cmd, flag
     assert "--vote-cap-buy" not in cmd and "--include-neutral" not in cmd
+    assert "--lc-cap-igex" not in cmd and "--lc-cap-total" not in cmd
 
 
 def test_relay_index_gate_skips_without_material(monkeypatch: Any) -> None:

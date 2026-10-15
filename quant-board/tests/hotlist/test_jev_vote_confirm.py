@@ -2,8 +2,9 @@
 """行情列表五维信号 jev 复核双题集测试（预登记 jev-vote-confirm-lifecycle-recheck-preregistration.md）。
 
 全 fake 零 IO，禁触真实 jev 调用与网络（AGENTS.md §1.2-7）。
-覆盖：判据冻结件/独立戳、riskFlag 预检、对照锚映射、确定性抽样、EOD 补齐读法、
+覆盖：判据冻结件/独立戳、riskFlag 预检、对照锚映射、EOD 补齐读法、
 叙事组装（fail-visible/口径隔离）、人口构建（fake db）、落库合同（全保留裁决 5）、熔断。
+2026-10-14 用户裁决取消抽样帽：A/B 均全量判读（原 §六/§十一 抽样测试随帽一并退役）。
 """
 from __future__ import annotations
 
@@ -25,7 +26,6 @@ from backend.analysis.hotlist.jev_vote_ammo import (
     QUESTIONS_VOTE_CONFIRM,
     build_lifecycle_narrative,
     lifecycle_risk_flag,
-    sample_lifecycle,
     synergy_direction,
 )
 
@@ -68,22 +68,6 @@ def test_synergy_direction_map():
     assert synergy_direction("C") == "hold"
     assert [synergy_direction(t) for t in ("D", "E")] == ["sell"] * 2
     assert synergy_direction("unknown") == ""  # 不计台账
-
-
-# ── 确定性抽样（预登记 §六：排序冻结防挑样）──
-
-
-def _vc(code, dims, res_score=50.0):
-    return {"code": code, "dims": dims, "resonanceScore": res_score}
-
-
-def test_sample_lifecycle_caps():
-    igex = [{"code": f"I{i:02d}", "stage": "ignition"} for i in range(7)]
-    late = [{"code": f"C{i:02d}", "stage": "crowded"} for i in range(5)]
-    got = sample_lifecycle(igex + late, cap_igex=5, cap_total=8)
-    assert len(got) == 8
-    assert sum(1 for c in got if c["stage"] == "ignition") == 5  # 点火/扩散优先全量至 ≤5
-    assert sum(1 for c in got if c["stage"] == "crowded") == 3
 
 
 # ── EOD 补齐读法（裁决 3：只补行情字段，永不触碰引擎档位）──
@@ -282,7 +266,7 @@ def test_run_lifecycle_fire_persist_contract(monkeypatch):
     assert calls and calls[0][1] == QUESTIONS_LIFECYCLE_RECHECK
     col = db["hotlist_jev_lifecycle_recheck_pilot"]
     docs = {d["_id"]: d for d in col.docs}
-    # 抽样：ignition(600001) + crowded/reversal(600002) → 2 call
+    # 全量无帽：非 cooling 2 例（600001 expansion + 600002 reversal）→ 2 call
     assert stats["ok"] == 2 and stats["tokens"] == 1940
     d1 = docs[f"{DATE}:15:00:600001:LC"]
     assert d1["lcStage"] == "crowded" and d1["lcConfidence"] == 0.51
@@ -294,7 +278,7 @@ def test_run_lifecycle_fire_persist_contract(monkeypatch):
     assert d1["ruleStage"] != d1["lcStage"]
 
 
-# ── 扩窗修正案（§十一）：帽位参数透传 ──
+# ── watch 槽表与帧级运行标记（二修：每日两帧=11:30+15:00，帧标记幂等防重）──
 
 
 def test_due_slot_logic():
@@ -379,10 +363,35 @@ def test_run_lifecycle_include_cooling_fire(monkeypatch):
             "usage": {"input_tokens": 100, "output_tokens": 20}}}}, 1
 
     monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
-    stats = runner.run_lifecycle_day(_vote_db(), [DATE], fire=True,
-                                     cap_igex=100, cap_total=200, include_cooling=True)
+    stats = runner.run_lifecycle_day(_vote_db(), [DATE], fire=True, include_cooling=True)
     assert stats["ok"] == 5  # 全量人口 5 例（2 非 cooling + 3 cooling）
 
 
-# ── A 人口全量覆盖（用户裁决 2026-10-12：250 只池 VOTE 也要全覆盖，C 档无方向票也判）──
+def test_run_lifecycle_no_cap_full_population(monkeypatch):
+    """无抽样帽（2026-10-14 用户裁决）：人口 > 旧 pilot 帽（igex 5/total 8）时仍全量判读。
+
+    回归钉死：旧口径下 7 ignition + 5 crowded 只会采 5+3=8 例；取消帽后必须 12 例全采。
+    """
+    codes = {f"9{i:04d}": _row(f"9{i:04d}", 10 + i, 1.0 * i, volumeRatio=1.0,
+                              zlje=1e7, turnoverRate=5.0) for i in range(12)}
+    frames, rows = _day_frames_and_rows(codes)
+    anas = [_ana(f"9{i:04d}", "B", stage="ignition" if i < 7 else "crowded")
+            for i in range(12)]
+    db = _Db({"snapshot_frames": _Col(frames), "snapshot_stock_rows": _Col(rows),
+              "snapshot_analysis": _Col(anas)})
+
+    def fake_dispatch(state, questions):
+        return {"success": True, "result": {"state": "Completed", "result": {
+            "model": "typesafe/jev",
+            "answers": {"lifecycle_stage_recheck": {"type": "choice", "choice": "cooling",
+                                                    "confidence": 0.7,
+                                                    "probabilities": {"cooling": 0.7}}},
+            "usage": {"input_tokens": 100, "output_tokens": 20}}}}, 1
+
+    monkeypatch.setattr(runner, "_dispatch_jev", fake_dispatch)
+    stats = runner.run_lifecycle_day(db, [DATE], fire=True, include_cooling=True)
+    assert stats["ok"] == 12  # 12 候选全量，无帽截断
+    col = db["hotlist_jev_lifecycle_recheck_pilot"]
+    assert len(col.docs) == 12
+    assert {d["_id"] for d in col.docs} == {f"{DATE}:15:00:9{i:04d}:LC" for i in range(12)}
 
