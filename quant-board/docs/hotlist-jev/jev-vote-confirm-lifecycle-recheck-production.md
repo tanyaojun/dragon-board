@@ -188,3 +188,29 @@
   （读数摘要：方向/强度/置信/出现次数/引擎对照锚 + 请求/响应/原始 JSON）。列数仍 17，colspan 不变。
 - **判据/开火状态未变**：题集与预登记见 `docs/hotlist-jev/jev-resonance-recheck-preregistration.md`，
   **判据待用户逐字确认，未确认前零开火**（当前库里 RES 集合为空，面板读数全走回落分支）。
+
+### §六·产·十修 摘除 jevVoteRecheck 自动调度步（2026-10-15 用户裁决「v4 挂自动调度可以删掉了，浪费 token」）
+
+**裁决**：自动链每日 15:00 跑 VOTE（v4-material 全池 11:00 时点）+ LC（全量冷却含）
+≈500 call/日、熔断线 600 万 tok/日，属链上最贵一步；用户判定浪费，摘除。
+
+**改动（判据/锚/落库合同零改动，runner 全部保留）**：
+- `backend/operations/schedule.py`：删 `_run_jev_vote_recheck_step` 函数、
+  `_JEV_VOTE_RECHECK_TIMEOUT_SECONDS` 常量、`run_after_market_once` 的调用点与
+  `steps`/`results` 两处 `jevVoteRecheck` 键；`_run_vote_winrate_ledger_step`
+  docstring 去掉「jevVoteRecheck 之后跑」引用（本步零 jev 调用零成本，保留作裁决门）；
+- `tests/platform/test_operations_schedule.py`：删 3 个专测（skipped_when_frame_missing /
+  dry_run / runs_full_population），新增 `test_after_market_chain_has_no_jev_vote_recheck_step`
+  摘除回归（`not hasattr(schedule, "_run_jev_vote_recheck_step")`），steps 断言去键，
+  新增 `"jevVoteRecheck" not in result["results"]` 断言；35 → 33 passed。
+
+**保留不变**：
+- 判读能力全在 `backend/operations/jev_vote_confirm.py`，手动 `--fire` 路径照旧
+  （需要时显式开火，仍走 AGENTS §1.2-7 预登记+用户批准）；
+- `voteWinrateLedger` 步（纯读+小写，零 jev 调用）保留，裁决门 2026-10-27 不变
+  （「V4 累计胜率 > 规则线 → 保留，否则撤 vote 判读」）——它只对**已落档**判读生效，
+  摘除自动判读后不再有链上新数据驱动，等手动跑或恢复采集链再结算；
+- `--watch` 常驻模式此前已弃用（轮询方案被定时链取代，代码保留不删），本次不动。
+
+**影响面**：盘后链少一步，每日链上 jev 调用从 ≈500 call 降到 0（jevDailyLine 一句话
+仍为零成本小调用，不在此列）。面板读数、读口、台账全部只读存量，无回写无迁移。

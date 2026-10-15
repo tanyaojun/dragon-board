@@ -79,10 +79,10 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     result = run_after_market_once(dry_run=True)
 
     assert result["ok"] is True
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "jevVoteRecheck", "voteWinrateLedger"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "relayIndex", "zhabanLabel", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
-    assert result["results"]["jevVoteRecheck"]["skipped"] is True  # dry_run 短路
+    assert "jevVoteRecheck" not in result["results"]  # 2026-10-15 用户裁决摘除（浪费 token）
     assert result["results"]["calibDriftMonitor"]["skipped"] is True  # dry_run 短路
     assert result["results"]["relayIndex"]["skipped"] is True  # dry_run 短路
     assert result["results"]["hotlistSentiment"]["written"] == 1
@@ -976,60 +976,15 @@ def test_deep_valley_failure_does_not_flip_chain(monkeypatch: Any) -> None:
     assert calls == ["hotlist", "backup", "archiveR2", "pulse", "jiuyanLabel", "phaseBand", "deepValley", "peakRevalidate"]
 
 
-# ── jevVoteRecheck 步（双题集收盘复核，观察轨道 advisory 语义）──
+# ── jevVoteRecheck 自动步已摘除（2026-10-15 用户裁决「v4 挂自动调度可以删掉了，浪费 token」）──
+# 判读能力保留在 runner（backend/operations/jev_vote_confirm.py）手动 --fire 路径；
+# 摘除后链上零 jev 调用，winrate 台账只对已落档判读生效。
 
 
-def test_jev_vote_recheck_step_skipped_when_frame_missing(monkeypatch):
+def test_after_market_chain_has_no_jev_vote_recheck_step():
+    """摘除回归：after_market 链不得再出现 jevVoteRecheck 步（零 token 浪费）。"""
     from backend.operations import schedule
-    class _Col:
-        def find_one(self, query, projection=None):
-            return None
-
-    class _Db:
-        def __getitem__(self, name):
-            return _Col()
-
-    monkeypatch.setattr(schedule.repository_factory, "get_runtime_mongodb_database", lambda: _Db())
-    result = schedule._run_jev_vote_recheck_step("2026-10-03")  # 非交易日无帧
-    assert result["ok"] is True and result["skipped"] is True
-
-
-def test_jev_vote_recheck_step_dry_run():
-    from backend.operations import schedule
-    assert schedule._run_jev_vote_recheck_step("2026-10-09", dry_run=True) == {
-        "ok": True, "skipped": True, "reason": "dry_run"}
-
-
-def test_jev_vote_recheck_step_runs_full_population(monkeypatch):
-    from backend.operations import schedule
-    captured = {}
-
-    class _Col:
-        def find_one(self, query, projection=None):
-            return {"snapshotId": "half_hour:2026-10-09:15:00"}
-
-    class _Db:
-        def __getitem__(self, name):
-            return _Col()
-
-    def fake_run(cmd, **kwargs):
-        captured["cmd"] = cmd
-        return type("P", (), {"returncode": 0, "stdout": "FINAL", "stderr": ""})()
-
-    monkeypatch.setattr(schedule.repository_factory, "get_runtime_mongodb_database", lambda: _Db())
-    monkeypatch.setattr(schedule.subprocess, "run", fake_run)
-    result = schedule._run_jev_vote_recheck_step("2026-10-09")
-    assert result["ok"] is True
-    cmd = " ".join(captured["cmd"])
-    assert "backend.operations.jev_vote_confirm" in cmd
-    # vote=题集 v4-material 全池（2026-10-13 代际覆盖：无 cap/neutral 参数，判读 11:00 时点原料）；
-    # LC=cooling 全量+15:00 收盘帧+无抽样帽（2026-10-14 用户裁决取消 cap，原
-    # --lc-cap-igex/--lc-cap-total 已拆除）；幂等 fire
-    for flag in ("--vote-day", "--lifecycle-day", "--slot", "15:00", "--fire",
-                 "--include-cooling", "--workers", "4", "--token-fuse", "6000000"):
-        assert flag in cmd, flag
-    assert "--vote-cap-buy" not in cmd and "--include-neutral" not in cmd
-    assert "--lc-cap-igex" not in cmd and "--lc-cap-total" not in cmd
+    assert not hasattr(schedule, "_run_jev_vote_recheck_step")
 
 
 def test_relay_index_gate_skips_without_material(monkeypatch: Any) -> None:
