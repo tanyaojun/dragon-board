@@ -41,6 +41,13 @@ from backend.analysis.hotlist.jev_driver_ammo import (
 )
 from backend.analysis.hotlist import jev_driver_ammo as ammo
 from backend.core.limit_rules import is_limit_down_pct, limit_ratio
+from backend.operations.market_dieban_pool import (
+    SOURCE_EM,
+    SOURCE_POOL,
+    SOURCE_SNAPSHOT,
+    limit_down_count,
+    reference_counts,
+)
 from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
@@ -133,8 +140,11 @@ def advdec_ratio(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple |
 def _jiuyan_days_boards(stock: dict) -> tuple[int | None, int | None]:
     """韭研 num「N天M板」解析（跨度天数 N，区间板数 M）；无法解析 (None, None) 宁缺毋猜。
 
-    N==M = 纯连板（8天8板）；N>M = 中间有断板（10天8板），仅供连板语义消费方
-    （热榜行情 quotes-review）区分口径；高度语义消费方（涨停复盘/梯队）仍只用 M。
+    N==M = 纯连板（8天8板）；N>M = 中间有断板（10天8板）。
+    2026-10-16 口径修正（预登记 jev-relay-caliber-fix-preregistration.md §2.2）：M/N 是
+    **区间高度**（区间标注用，龙序/龙头选择仍按 M），**连板语义**（最高板/梯队/连板中）
+    一律取 jiuyan_streak_map 真连板，不再拿 M 冒充——澳弘电子 19天11板（10-14 已炸板）
+    真连板=1，旧口径写成最高 11 板并进三板+ 桶。
     """
     num = str(stock.get("num") or "").strip()
     if not num:
@@ -148,7 +158,18 @@ def _jiuyan_days_boards(stock: dict) -> tuple[int | None, int | None]:
     return (days if days > 0 else None), (boards if boards > 0 else None)
 
 
-def dragon_rows(stocks: list[dict], top: int = 3) -> list[dict]:
+def _range_height_text(entry: dict) -> str:
+    """区间高度文案「名 N天M板」（与 relay_page heightText 同规：days 缺失回落 M板，
+    boards≤1/缺失=首板，不伪造天数）。entry 需带 name/boards/days。"""
+    name = entry.get("name") or entry.get("code") or "?"
+    boards, days = entry.get("boards"), entry.get("days")
+    if not boards or boards <= 1:
+        return f"{name} 首板"
+    return f"{name} {days}天{boards}板" if days else f"{name} {boards}板"
+
+
+def dragon_rows(stocks: list[dict], top: int = 3,
+                streaks: dict[str, int | None] | None = None) -> list[dict]:
     """板块龙一/二/三排序，单一事实源（relay 题材梯队表与 limitup 读口「领涨」共用）。
 
     龙序=高度优先/封板时间次之：板数（num「N天M板」的 M）降序，同板数按封板时间
@@ -160,15 +181,25 @@ def dragon_rows(stocks: list[dict], top: int = 3) -> list[dict]:
     龙序，只显示「龙一/龙二/龙三」，不再把板块三个龙* 全塞进一格； relay 梯队表
     只消费 name/boards/time，新增字段对其无影响。code 与 jiuyan_board_info /
     _jiuyan_ladder 同规取末 6 位（韭研 code 可能带交易所前缀），前端才能与行 code 对上。
+
+    2026-10-16 口径修正：输出补 days（跨度 N）与 streak（真连板；streaks={code: streak}
+    传入时按 code 挂载，未传=None）。龙序仍按区间高度 M（14天10板 本就是该板块最显
+    高位股），但「连板」语义由消费方随行展示 streak，不再拿 M 冒充。
     """
     ranked = sorted(stocks,
                     key=lambda s: (-(_jiuyan_board_count(s) or 0), str(s.get("time") or "99:99")))
-    return [{"role": f"龙{'一二三'[i]}",
-             "code": (str(c)[-6:] if (c := s.get("code")) else None),
-             "name": s.get("name"),
-             "boards": _jiuyan_board_count(s),
-             "time": str(s["time"])[:5] if s.get("time") else None}
-            for i, s in enumerate(ranked[:top])]
+    out: list[dict] = []
+    for i, s in enumerate(ranked[:top]):
+        code = (str(c)[-6:] if (c := s.get("code")) else None)
+        days, boards = _jiuyan_days_boards(s)
+        out.append({"role": f"龙{'一二三'[i]}",
+                    "code": code,
+                    "name": s.get("name"),
+                    "boards": boards,
+                    "days": days,
+                    "streak": (streaks or {}).get(code) if code else None,
+                    "time": str(s["time"])[:5] if s.get("time") else None})
+    return out
 
 
 def jiuyan_board_dragons(db, date: str, top: int = 3) -> dict[str, list[dict]]:
@@ -196,69 +227,90 @@ def _jiuyan_board_count(stock: dict) -> int | None:
     return _jiuyan_days_boards(stock)[1]
 
 
-def _jiuyan_ladder(db, date: str) -> dict | None:
-    """韭研主源连板梯队（2026-10-10 双源改造）：final 的 fields[].stocks num 板数分布聚合。
+def _ladder_bucket(boards: int | None) -> str:
+    """连板高度 → 梯队桶（与 THS_KEYS 对齐：one(≤1)/two/three/four/high(≥5)）。"""
+    if boards is None or boards <= 1:
+        return "one"
+    if boards == 2:
+        return "two"
+    if boards == 3:
+        return "three"
+    if boards == 4:
+        return "four"
+    return "high"
 
-    口径（2026-10-10 实测验证）：
-    - 板数 = num「N天M板」的 M（day 字段是跨度天数，不可用作板数）；
-    - num=null 且不在昨日涨停池 → 韭研首板口径（首板不标），入 one 桶；
-    - num=null 且在昨日池 → 真连板被漏标，计入 _dayUnmarkedPrev，不猜高度（fail-visible）；
-    - final 缺失/无个股 → None（回退 THS，不伪造零梯队）；
-    - 桶口径与 THS_KEYS 对齐：one(≤1)/two/three/four/high(≥5)。
+
+def _jiuyan_ladder(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict | None:
+    """韭研主源连板梯队（2026-10-16 口径修正：**真连板**分桶，只桶封板股）。
+
+    口径（预登记 docs/hotlist-jev/jev-relay-caliber-fix-preregistration.md §2.1）：
+    - 板数 = jiuyan_streak_map 真连板（N==M 直取 M；N>M 回溯；不可算 → 不入桶只披露）；
+    - 只桶今日真实封板股（韭研触板 − THS 炸板池二分）；炸板/触板未封不进涨停梯队
+      （2026-10-10 旧口径桶的是触板池，炸板股被计成首板——10-15 审计 6 只，问题 #4/#7）；
+    - THS 炸板池缺失日 → 回退触板池按 M 分桶，_caliber="touch_range"（旧口径，叙事披露）；
+    - final 缺失/无个股 → None（回退 THS，不伪造零梯队）。
     """
     doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields.stocks": 1})
     fields = (doc or {}).get("fields") or []
     if not any(field.get("stocks") for field in fields):
         return None
+    buckets = {k: 0 for k in THS_KEYS}
+    info, meta = jiuyan_board_info(db, date)
+    if not meta.get("thsPoolFound"):
+        # 旧口径回退：触板池按 M 分桶（炸板股会混入），显式标注供叙事披露
+        unmarked = 0
+        for i in info.values():
+            if i.get("boards") is None:
+                unmarked += 1
+            buckets[_ladder_bucket(i.get("boards"))] += 1
+        buckets.update({"_poolTotal": len(info), "_caliber": "touch_range",
+                        "_dayUnmarked": unmarked, "_dayUnmarkedPrev": None,
+                        "_heightUnknown": None})
+        return buckets
+    streaks = jiuyan_streak_map(db, date, dataset_id)
     prev_dates = trading_dates_before(db, date, 1)
-    prev_codes: set[str] = set()
+    prev_sealed: set[str] | None = None
+    prev_touch: set[str] = set()
     if prev_dates:
+        prev_sealed = _sealed_codes(db, prev_dates[-1], dataset_id)
         prev_doc = db["jiuyan_action"].find_one(
             {"_id": f"{prev_dates[-1]}:final"}, {"fields.stocks.code": 1})
         for field in (prev_doc or {}).get("fields") or []:
             for stock in field.get("stocks") or []:
-                code = stock.get("code")
-                if code:
-                    prev_codes.add(str(code)[-6:])
-    buckets = {k: 0 for k in THS_KEYS}
-    total = unmarked = unmarked_prev = 0
-    for field in fields:
-        for stock in field.get("stocks") or []:
-            total += 1
-            boards = _jiuyan_board_count(stock)
-            if boards is not None:
-                if boards <= 1:
-                    buckets["one"] += 1
-                elif boards == 2:
-                    buckets["two"] += 1
-                elif boards == 3:
-                    buckets["three"] += 1
-                elif boards == 4:
-                    buckets["four"] += 1
-                else:
-                    buckets["high"] += 1
-            else:
-                unmarked += 1
-                code = str(stock.get("code") or "")[-6:]
-                if code and code in prev_codes:
-                    unmarked_prev += 1  # 昨日涨停今日在池但未标 num：真连板，高度未知
-                else:
-                    buckets["one"] += 1  # 韭研口径：首板不标 num
-    buckets["_poolTotal"] = total
-    buckets["_dayUnmarked"] = unmarked
-    buckets["_dayUnmarkedPrev"] = unmarked_prev
+                if stock.get("code"):
+                    prev_touch.add(str(stock["code"])[-6:])
+    # 昨日封板集合不可得（THS 池缺失）时回退触板集合，保持旧口径的保守披露
+    prev_limit = prev_sealed if prev_sealed is not None else prev_touch
+    total = unmarked = unmarked_prev = unknown = 0
+    for code, i in info.items():
+        if i.get("zhaban"):
+            continue  # 今日炸板 → 非涨停，不进梯队
+        s = streaks.get(code)
+        if s is None:
+            unknown += 1  # 高度不可算（回溯撞 THS 池缺日）：不按 M 伪算，只披露
+            continue
+        if i.get("boards") is None:
+            unmarked += 1
+            if code in prev_limit:
+                unmarked_prev += 1  # 真连板被漏标（num 空且昨日封板）：高度未知，不入桶
+                continue
+        buckets[_ladder_bucket(s)] += 1
+        total += 1
+    buckets.update({"_poolTotal": total, "_caliber": "streak", "_dayUnmarked": unmarked,
+                    "_dayUnmarkedPrev": unmarked_prev, "_heightUnknown": unknown})
     return buckets
 
 
-def _ths_failed_items(db, date: str) -> tuple[dict[str, dict], bool]:
+def _ths_failed_items(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple[dict[str, dict], bool]:
     """THS 15:00 帧炸板池 code→item（2026-10-11 触板二分用，方案A）。
 
     item 含 open_num（开板次数）/change_rate 等，炸板卡「反复开板」消费；
     返回 (items, found)：found=False = 帧缺失/池降级，调用方必须 fail-visible 结构化降级，
     不得把触板名单静默当涨停名单；failed 池为空且 ok=True 是合法状态（当日无炸板）。
+    2026-10-16：补 dataset_id 参数（默认不变），供 relay 侧同口径委托，消双实现。
     """
     f = db["snapshot_frames"].find_one(
-        {"datasetId": DEFAULT_DATASET_ID, "type": "half_hour", "tradingDate": date,
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date,
          "slotTime": "15:00"},
         {"limitSummary.thsPools": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
     tp = ((f or {}).get("limitSummary") or {}).get("thsPools") or {}
@@ -268,8 +320,8 @@ def _ths_failed_items(db, date: str) -> tuple[dict[str, dict], bool]:
     return {str(i.get("code") or "")[-6:]: i for i in items if i.get("code")}, True
 
 
-def _ths_failed_codes(db, date: str) -> tuple[set[str], bool]:
-    items, found = _ths_failed_items(db, date)
+def _ths_failed_codes(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple[set[str], bool]:
+    items, found = _ths_failed_items(db, date, dataset_id)
     return set(items), found
 
 
@@ -344,20 +396,59 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
     return out, meta
 
 
-def _sealed_codes(db, date: str) -> set[str] | None:
-    """date 当日真实封板集合（韭研触板 − THS 炸板池二分，与 jiuyan_board_info 同口径）。
+def _touch_codes(db, date: str) -> set[str] | None:
+    """date 当日韭研触板名单原样（封板+炸板，不减 THS 炸板池）；final 缺失 → None。
 
-    韱研 final 缺失或 THS 池缺失 → None（不可验证，调用方宁缺毋猜，不得把炸板当封板）。"""
+    与 `_sealed_codes` 同源不同口径，存在的唯一理由是回答一个关键问题：**该股当日
+    到底有没有交易**。停牌日不可能出现在触板名单里，所以「TDX 日线缺棒 + 名字在
+    名单内」= TDX 数据洞而非停牌（002860 09-22~10-13 十日无棒同款）——按停牌跳过
+    续算会把断板日算成连板日、虚报高度，正是本次要修的病族反向。
+    """
     doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields.stocks.code": 1})
     fields = (doc or {}).get("fields") or []
     if not any(field.get("stocks") for field in fields):
         return None
-    touch = {str(s.get("code") or "")[-6:]
-             for field in fields for s in field.get("stocks") or [] if s.get("code")}
+    return {str(s.get("code") or "")[-6:]
+            for field in fields for s in field.get("stocks") or [] if s.get("code")}
+
+
+def _sealed_codes(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> set[str] | None:
+    """date 当日真实封板集合（韭研触板 − THS 炸板池二分，与 jiuyan_board_info 同口径）。
+
+    韱研 final 缺失或 THS 池缺失 → None（不可验证，调用方宁缺毋猜，不得把炸板当封板）。
+    2026-10-16：补 dataset_id 参数（默认不变），relay 侧同口径函数改委托本函数。"""
+    touch = _touch_codes(db, date)
+    if touch is None:
+        return None
     failed, found = _ths_failed_codes(db, date)
     if not found:
         return None
     return touch - failed
+
+
+def _bar_verdict(code: str, date: str, bars: list[dict],
+                 adj: dict[str, float]) -> str:
+    """该股 date 日的 TDX 日线独立判定，返回值 ∈ {sealed, broken, suspended, unknown}。
+
+    封板链回溯的兜底信号（池二分覆盖不到的两个歧义场景）：
+    - sealed：收盘落在涨停价 → 封板到收盘（与 ammo.closed_at_limit 同一板籍阈值）；
+    - broken：有交易但未收在涨停价 → 断板（炸板/触板未封对连板同义）；
+    - suspended：已覆段内无棒 → 停牌，**该日不是交易日、不构成断板**（2026-10-16 用户裁决）；
+    - unknown：无前棒可判 / 日期早于最早可用棒 → 不可验（调用方宁缺毋猜）。
+
+    bars/adj 由调用方按股预计算（_daily_bars + _adj_prev_series），避免逐日重取。
+    """
+    idx = next((i for i, b in enumerate(bars) if b["date"] == date), None)
+    if idx is None:
+        # 落在已覆段内却无棒 = 停牌；早于最早可用棒 = 回溯越界，不可验
+        # （不假设 bars 有序：取 min/max，_daily_bars 升序但调用方不该被隐性契约咬）
+        if bars and min(b["date"] for b in bars) < date <= max(b["date"] for b in bars):
+            return "suspended"
+        return "unknown"
+    if idx == 0:
+        return "unknown"          # 无前棒，判不出涨停
+    prev = adj.get(date) or bars[idx - 1]["close"]
+    return "sealed" if ammo.closed_at_limit(code, bars[idx]["close"], prev) else "broken"
 
 
 def jiuyan_consecutive_streaks(db, date: str, targets: dict[str, int],
@@ -366,82 +457,238 @@ def jiuyan_consecutive_streaks(db, date: str, targets: dict[str, int],
 
     targets={code: 区间板数 M}；today_sealed=今日封板集合（None=今日不可二分，全返 None）。
     连续高度=今日起往前连续封板的交易日数，封顶 M（连续高度不可能超区间总板数）；
-    今日未封板（炸板/未触）或任一历史日不可验证（final/THS 池缺失）→ None（宁缺毋猜）。
+    任一历史日既不能由池证实也不能由日线证实 → None（宁缺毋猜）。
     消费方：热榜行情 quotes-review；涨停复盘「高度」口径不消费本函数。
+
+    2026-10-16 停牌分辨（用户裁决「不算断板，跳过续算」）：**停牌日不是交易日、
+    不构成断板**。600825 新华传媒 14天11板，10-13/14/15 上交所停牌（TDX 日线该三日
+    无棒），韭研/THS 池回溯里「昨日不在池」与「昨日炸板」完全同形，旧口径据此把真连板
+    11 误判成 1，连带最高板/梯队/首板占比/ladder_health 全错。
+
+    池权威、日线补洞的分工（逐日决策表）：
+    | 池（_sealed_codes）        | TDX 日线            | 判定                       |
+    | 封板                      | —                  | 连板 +1（池为既定权威）      |
+    | 未封                      | 已覆段内无棒        | 停牌 → 跳过（不算断板）      |
+    | 未封                      | 有棒/无日线可用     | 断板 → 链终止               |
+    | 缺失（炸板池缺失日）       | 已覆段内无棒        | 停牌 → 跳过                 |
+    | 缺失                      | 有棒且收在涨停价    | 封板 → +1（日线补证）        |
+    | 缺失                      | 有棒未收在涨停价    | 断板 → 链终止               |
+    | 缺失                      | 无日线可用          | 不可验 → None（不按 M 伪算） |
+    600825 链上的 2026-09-23 正是炸板池缺失日，只靠池会在那里整链不可验、最高板退回 4 板。
+    TDX 日线不可用（客户端挂/北交所 920xxx 不覆盖）时不让步到「当停牌」——那正是要修的 bug。
+
+    两条边界（2026-10-16 code review 补，均有测试锁定）：
+    - **无棒 ≠ 一律停牌**：该日韭研触板名单里**有**这只股 = 当日确实交易过，TDX 缺棒
+      是数据洞。按停牌跳过会把断板日算成连板日、虚报高度 → 不可验返 None。
+    - **回溯窗耗尽 ≠ 连板数**：所需步数 = M + 窗内停牌日数，可能超过窗口上限；此时
+      streak 是被截断的偏小值，返回它会与板序行（无帽实测）自相矛盾 → 不可验返 None。
     """
     if today_sealed is None:
         return {code: None for code in targets}
-    max_span = max(targets.values(), default=0)
-    prev_dates = list(reversed(trading_dates_before(db, date, max_span)))  # 最近在前
+    # 回溯窗取固定上限而非 max(M)：停牌日不推进连板数，所需步数 = M + 窗内停牌日数
+    # （600825 M=11 实需回溯 14 个交易日），按 M 定窗会把链起点截在窗外、把 11 板误判
+    # 成 1 板。上限与 _daily_bars 的 60 棒窗口对齐——再往前 TDX 已无棒，停牌不可验。
+    prev_dates = list(reversed(trading_dates_before(db, date, _STREAK_WALK_MAX_DATES)))
     sealed_cache: dict[str, set[str] | None] = {}
+    touch_cache: dict[str, set[str] | None] = {}
 
     def sealed_set(d: str) -> set[str] | None:
         if d not in sealed_cache:
             sealed_cache[d] = _sealed_codes(db, d)
         return sealed_cache[d]
 
+    def touch_set(d: str) -> set[str] | None:
+        if d not in touch_cache:
+            touch_cache[d] = _touch_codes(db, d)
+        return touch_cache[d]
+
     out: dict[str, int | None] = {}
     for code, m in targets.items():
         if code not in today_sealed:
             out[code] = None  # 今日未封板 → 无「至今日」连续高度
             continue
+        bars = _daily_bars(code)
+        adj = _adj_prev_series(date, code, bars) if bars else {}
         streak = 1  # 今日已封
         verifiable = True
         for d in prev_dates:
             if streak >= m:
                 break  # 封顶：连续高度不可能超区间总板数
             s = sealed_set(d)
+            if s is not None and code in s:
+                streak += 1          # 池证实封板（池可用时以池为既定权威）
+                continue
+            # 池说「未封」或「不可验」→ 借该股自己的 TDX 日线分辨停牌/断板/池缺失
+            verdict = _bar_verdict(code, d, bars, adj) if bars else "no_bars"
+            if verdict == "suspended":
+                # 停牌日不是交易日，不构成断板，跳过续算。但「当日确实交易过」（名字在
+                # 韭研触板名单）而 TDX 无棒 = 数据洞，不是停牌——按停牌跳过会把断板日
+                # 算成连板日、虚报高度（600825 10-08 实证：当日炸板且 TDX 恰好无棒）。
+                t = touch_set(d)
+                if t is not None and code in t:
+                    verifiable = False
+                    break
+                continue
             if s is None:
+                # 池缺失日：日线补证；判不出（无日线可用）→ 不可验，不按 M 伪算
+                if verdict == "sealed":
+                    streak += 1
+                    continue
+                if verdict == "broken":
+                    break
                 verifiable = False
                 break
-            if code not in s:
-                break  # 断板日 → 链终点，streak 即真实连续高度
-            streak += 1
+            break                    # 池说未封且日线无停牌佐证 → 断板，链终点
+        else:
+            # 回溯窗耗尽。streak == m 时链已在窗口内走完（今日 + m-1 个已证封板日），
+            # 是合法完整链；只有 streak < m 才是被窗口截断的偏小值——返回它会与同段板序行
+            # （无帽实测）给出两个连板数，也违背本函数「宁缺毋猜」的契约 → 不可算。
+            if streak < m:
+                verifiable = False
         out[code] = min(streak, m) if verifiable else None
     return out
 
 
+# 真连板缓存（IO 侧，键=(dataset, date)；盘后批量语义与 _FACTS_CACHE 同款）
+_STREAK_CACHE: dict[tuple[str, str], dict[str, int | None]] = {}
+
+# 封板链回溯窗上限（交易日数）。停牌日不推进连板数，回溯步数 = M + 窗内停牌日数，
+# 按 max(M) 定窗会截断链起点（600825 M=11 实需 14 步）；取固定上限并与 _daily_bars
+# 的 60 棒窗口对齐——再往前 TDX 已无棒，停牌不可验（宁缺毋猜返 None）。
+_STREAK_WALK_MAX_DATES = 60
+
+
+def jiuyan_streak_map(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, int | None]:
+    """当日触板池每股真实连板高度（连板口径单一事实源，2026-10-16 口径修正）。
+
+    审计背景（docs/hotlist-jev/jev-relay-caliber-fix-preregistration.md §1）：区间板数 M
+    （韭研 num「N天M板」的 M）被当连板数用——澳弘电子 19天11板（10-14 已炸板）真连板=1，
+    却写成最高 11 板并进三板+ 桶；同花顺 limit_up_pool 的 continue_day 同病（其 hotspot_focus
+    连板层才是真连板，两接口互相矛盾）。本函数把「连板高度」与「区间高度」分离：
+    M/N 只作区间标注（N天M板），连板语义一律取本函数。
+
+    取数规则（省回溯 + 宁缺毋猜）：
+    - num N==M → 韭研自证纯连板（N 天 M 板=窗口内每日封板），streak=M，不回溯；
+    - num N>M → 中间有断板**或停牌**，走封板链回溯（jiuyan_consecutive_streaks）得真连板；
+     回溯内借 TDX 日线分辨二者：无棒=停牌→跳过续算，有棒未封=断板→链终止；
+    - num=None → 韭研首板口径（不标 num），streak=1；
+    - 回溯撞上 THS 炸板池缺失日 → None（不可算，不按 M 伪算）；
+    - 今日未封板（炸板/触板未封）→ None；今日 THS 池缺失（封板不可二分）→ 全股 None。
+
+    返回 {code: streak|None}；韭研 final 缺失 → {}。按 (dataset, date) 缓存。
+    消费方：market_metrics 连板梯队、relay 三日链/龙头档案/题材梯队表。
+    """
+    cache_key = (dataset_id, date)
+    if cache_key in _STREAK_CACHE:
+        return _STREAK_CACHE[cache_key]
+    info, meta = jiuyan_board_info(db, date)
+    if not info:
+        _STREAK_CACHE[cache_key] = {}
+        return _STREAK_CACHE[cache_key]
+    if not meta.get("thsPoolFound"):
+        # 今日 THS 炸板池缺失 → 封板不可二分，全部不可算（不把触板当封板，fail-visible）
+        out = {code: None for code in info}
+        _STREAK_CACHE[cache_key] = out
+        return out
+    today_sealed = {c for c, i in info.items() if not i.get("zhaban")}
+    walk_targets: dict[str, int] = {}
+    out = {}
+    for code, i in info.items():
+        boards, days = i.get("boards"), i.get("days")
+        if boards is not None and days is not None and days > boards:
+            walk_targets[code] = boards  # 断板股：回溯求真连板
+        else:
+            out[code] = boards if boards else 1  # N==M 直取 M；num=None 首板口径
+    if walk_targets:
+        out.update(jiuyan_consecutive_streaks(db, date, walk_targets, today_sealed))
+    for code in list(out):
+        if code not in today_sealed:
+            out[code] = None  # 今日炸板/触板未封 → 无「至今日」连续高度
+    _STREAK_CACHE[cache_key] = out
+    return out
+
+
+def _range_top_stock(db, date: str) -> dict | None:
+    """区间高度最高股（num「N天M板」M 最大、同板数封板最早）——区间标注用，非连板口径。
+
+    排序键与 dragon_rows 单一事实源（M 降序 → 封板时间升序），避免两处龙序规则漂移。
+    """
+    doc = db["jiuyan_action"].find_one(
+        {"_id": f"{date}:final"}, {"fields.stocks.code": 1, "fields.stocks.name": 1,
+                                   "fields.stocks.num": 1, "fields.stocks.time": 1})
+    stocks = [s for f in (doc or {}).get("fields") or [] for s in (f.get("stocks") or [])]
+    rows = dragon_rows(stocks, top=1)
+    return rows[0] if rows else None
+
+
 def market_metrics(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict | None:
     """当日 15:00 盘面事实（涨停/炸板/回撤/梯队/最高板高；跌停另行自算）。批次B I8：带 datasetId/type 并取最新帧。
-    2026-10-10 梯队双源：jiuyan final day 分布为主源（103 天池史稳定），THS thsPools
-    交叉验证兼回退；ladderSource 标注实际来源（jiuyan/ths/missing），供叙事透明披露。"""
+    2026-10-10 梯队双源：jiuyan final 聚合为主源（103 天池史稳定），THS thsPools
+    交叉验证兼回退；ladderSource 标注实际来源（jiuyan/jiuyan_touch/ths/missing），供叙事透明披露。
+    2026-10-16 口径修正（预登记 jev-relay-caliber-fix-preregistration.md §2）：maxBoard 与
+    ladder 改**真连板**口径（jiuyan_streak_map），区间板数 M 移至 maxBoardRange/maxBoardStock
+    作区间标注——10-15 审计：澳弘电子 19天11板（10-14 已炸板）真连板=1，旧口径写成最高 11 板。"""
     f = db["snapshot_frames"].find_one(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
         {"limitSummary.zhaban": 1, "limitSummary.continuousBoards": 1,
-         "limitSummary.thsPools.pools": 1, "limitSummary.drawdown": 1},
+         "limitSummary.thsPools": 1, "limitSummary.drawdown": 1,
+         "limitSummary.sealQuality": 1},
         sort=[("timestamp", -1), ("snapshotId", -1)])
     ls = (f or {}).get("limitSummary") or {}
     zb = ls.get("zhaban") or {}
     cb = ls.get("continuousBoards") or {}
     dd = ls.get("drawdown") or {}
-    pools = (ls.get("thsPools") or {}).get("pools") or {}
+    tp = ls.get("thsPools") or {}
+    pools = tp.get("pools") or {}
+    ths_ok = bool(tp.get("ok")) and not tp.get("degraded")
     ths_ladder = {k: (pools.get(k) or {}).get("total") for k in THS_KEYS}
-    jiuyan_ladder = _jiuyan_ladder(db, date)
+    jiuyan_ladder = _jiuyan_ladder(db, date, dataset_id)
     if jiuyan_ladder is not None:
         ladder = {k: jiuyan_ladder[k] for k in THS_KEYS}
-        ladder_source = "jiuyan"
+        ladder_source = "jiuyan" if jiuyan_ladder.get("_caliber") == "streak" else "jiuyan_touch"
         ladder_pool_total = jiuyan_ladder["_poolTotal"]
         ladder_day_unmarked = jiuyan_ladder["_dayUnmarked"]
         ladder_day_unmarked_prev = jiuyan_ladder["_dayUnmarkedPrev"]
+        ladder_height_unknown = jiuyan_ladder.get("_heightUnknown")
+        range_top = _range_top_stock(db, date)
     elif any(isinstance(v, (int, float)) for v in ths_ladder.values()):
         ladder = ths_ladder
         ladder_source = "ths"
         ladder_pool_total = sum(v for v in ths_ladder.values() if isinstance(v, (int, float)))
         ladder_day_unmarked = None
         ladder_day_unmarked_prev = None
+        ladder_height_unknown = None
+        range_top = None
     else:
         ladder = ths_ladder  # 全 None（fail-visible：双源皆缺不伪造零梯队）
         ladder_source = "missing"
         ladder_pool_total = None
         ladder_day_unmarked = None
         ladder_day_unmarked_prev = None
+        ladder_height_unknown = None
+        range_top = None
     if not zb.get("ztCount"):
         return None
+    # 真连板最高板：只认可验证链（N==M 直取 / N>M 回溯），不可算 → None（不拿区间 M 冒充）
+    streaks = jiuyan_streak_map(db, date, dataset_id)
+    max_streak = max((v for v in streaks.values() if isinstance(v, int)), default=None)
+    # 冲刺池（盘中冲板未封，与炸板池并列第三池）+ 封板质量（烂板等）——2026-10-16 补投影，
+    # relay 炸板面双口径与烂板段消费。池级 ok 且 items 空 = 当日无冲刺股，合法 0；
+    # 池未拉取（非 EOD 槽）/自身上游失败 → None（「取不到」≠「真的 0」，AGENTS §4.0）
+    rush_pool = pools.get("rushing") or {}
+    rush_count = (len(rush_pool.get("items") or [])
+                  if ths_ok and rush_pool.get("ok") else None)
+    sq = ls.get("sealQuality") or {}
+    seal_quality = ({k: sq.get(k) for k in ("byzCount", "hardCount", "rottenCount",
+                                            "rottenShare", "avgSucRate")} if sq else None)
     return {"ztCount": zb.get("ztCount"), "zhabanCount": zb.get("count"), "zhabanRate": zb.get("rate"),
-            "drawdownCount": dd.get("count"), "ladder": ladder, "maxBoard": cb.get("maxBoard"),
+            "drawdownCount": dd.get("count"), "ladder": ladder, "maxBoard": max_streak,
+            "maxBoardRange": cb.get("maxBoard"), "maxBoardStock": range_top,
+            "rushingCount": rush_count, "sealQuality": seal_quality,
             "ladderSource": ladder_source, "ladderPoolTotal": ladder_pool_total,
             "ladderDayUnmarked": ladder_day_unmarked,
             "ladderDayUnmarkedPrev": ladder_day_unmarked_prev,
+            "ladderHeightUnknown": ladder_height_unknown,
             "thsLadder": ths_ladder if any(isinstance(v, (int, float)) for v in ths_ladder.values()) else None}
 
 
@@ -462,12 +709,14 @@ def _advdec_segment(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
     if not ad:
         return " · 池内涨跌结构 不可算（fail-visible）"
     up, down, flat, ratio = ad
-    if 0.8 <= ratio <= 1.25:
-        tone = "均衡（没人买也没人卖）"
-    elif ratio > 1.25:
+    # 2026-10-16 语气词修正（审计问题 #9）：0.82 的跌多涨少日旧口径显示「没人买也没人买」，
+    # 26 家全市场跌停的日子这句语气词会把退潮读成僵持。band 语义按 ratio<1 即偏弱重划。
+    if ratio > 1.25:
         tone = "单边偏强"
+    elif ratio >= 1.0:
+        tone = "均衡"
     else:
-        tone = "单边偏弱"
+        tone = "跌多涨少（偏弱）"
     return f' · 池内涨跌比 {ratio}（涨{up}/跌{down}，{tone}）'
 
 
@@ -481,40 +730,91 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
         return f"盘面事实：{date} 盘面指标缺失（fail-visible）"
     prev = trading_dates_before(db, date, dataset_id=dataset_id)
     hist = [m for m in (market_metrics(db, d, dataset_id) for d in prev) if m]
-    hist_die = [v for v in (dieban_count(db, d, dataset_id) for d in prev) if isinstance(v, (int, float))]
-    cur_die = dieban_count(db, date, dataset_id)
 
-    def pct(vals, cur_v):
-        return percentile_rank(vals, cur_v)
-
-    die_txt = (f'跌停 {cur_die} 家（{pct(hist_die, cur_die)} 分位）'
-               if isinstance(cur_die, (int, float)) else "跌停 不可算")
+    # 跌停=全市场口径（2026-10-16 口径修正，审计问题 #1）：东财跌停池为主源、全市场行情
+    # 快照兜底，当日允许懒加载；历史样本只读参考集合（一次 find 批量同源，防逐日 20 连发
+    # 外呼）。参考集合缺失 → 回退 250 只采集池口径并显式标注——池口径会漏掉池外跌停
+    # （10-15 实证：池内 6 vs 全市场 26）。
+    cur_die, die_src = limit_down_count(db, date, dataset_id)
+    if die_src in (SOURCE_EM, SOURCE_SNAPSHOT):
+        # 同源采样：跨口径（EM 池 / 快照阈值 / 采集池）混采会污染分位数
+        die_hist = reference_counts(db, prev, die_src)
+        hist_die = [die_hist[d] for d in prev if d in die_hist]
+        die_scope = "全市场·东财跌停池" if die_src == SOURCE_EM else "全市场·行情快照"
+    else:
+        hist_die = [v for v in (dieban_count(db, d, dataset_id) for d in prev)
+                    if isinstance(v, int) and not isinstance(v, bool)]
+        die_scope = "采集池口径，全市场源缺失" if die_src == SOURCE_POOL else None
+    if isinstance(cur_die, int) and not isinstance(cur_die, bool) and die_scope:
+        die_txt = f'跌停 {cur_die} 家（{die_scope}，{_pct_txt(hist_die, cur_die)}）'
+    else:
+        die_txt = "跌停 不可算"
     rate = f'{cur["zhabanRate"]:.1f}%' if isinstance(cur["zhabanRate"], (int, float)) else "缺"
+    # 炸板率双口径（2026-10-16 补供，审计问题 #6）：曾封后开板（THS 炸板池）｜触板未封
+    # （炸板池+冲刺池）。旧语料只给前者，「炸板面健康」判据看不到触板未封那一半
+    zb_n = cur.get("zhabanCount") if isinstance(cur.get("zhabanCount"), int) else None
+    zt_n = cur.get("ztCount") if isinstance(cur.get("ztCount"), int) else None
+    rush_n = cur.get("rushingCount") if isinstance(cur.get("rushingCount"), int) else None
+    unsealed_txt = ""
+    if None not in (zb_n, zt_n, rush_n):
+        unsealed = zb_n + rush_n
+        touch_total = zt_n + unsealed
+        rate2 = round(unsealed / touch_total * 100, 1) if touch_total else 0.0
+        unsealed_txt = (f" · 触板未封 {unsealed} 家（含冲刺 {rush_n} 家），"
+                        f"未封率 {rate2}%（{unsealed}/{touch_total}）")
     three_plus = (cur["ladder"].get("three") or 0) + (cur["ladder"].get("four") or 0) + (cur["ladder"].get("high") or 0)
     ladder_txt = (f'一板{cur["ladder"].get("one") or 0}/二板{cur["ladder"].get("two") or 0}/三板+{three_plus}')
     src = cur.get("ladderSource")
     if src == "jiuyan":
+        # 真连板口径（2026-10-16）：只桶封板股；漏标/不可算分别披露，不按 M 伪算
         un_prev = cur.get("ladderDayUnmarkedPrev") or 0
         un_note = f'，{un_prev}只连板未标高度未计入' if un_prev else ''
-        ladder_seg = f'连板梯队（韭研{cur.get("ladderPoolTotal")}只，首板不标板数按首板计{un_note}）{ladder_txt}'
+        hu = cur.get("ladderHeightUnknown")
+        hu_note = f'，{hu}只高度不可算未入桶' if isinstance(hu, int) and hu else ''
+        ladder_seg = f'连板梯队（韭研{cur.get("ladderPoolTotal")}只封板，真连板口径{un_note}{hu_note}）{ladder_txt}'
         ths = cur.get("thsLadder")
         if ths:
             ladder_seg += (f'（THS交叉 {ths.get("one")}/{ths.get("two")}/{ths.get("three")}'
                            f'/{ths.get("four")}/{ths.get("high")}）')
+    elif src == "jiuyan_touch":
+        # THS 炸板池缺失日：回退触板池按 M 分桶（旧口径，炸板股会混入），显式披露
+        ladder_seg = f'连板梯队（THS炸板池缺失，按触板口径，炸板股混入）{ladder_txt}'
     elif src == "ths":
         ladder_seg = f'连板梯队（THS回退）{ladder_txt}'
     else:
         ladder_seg = '连板梯队 不可算（韭研 final 与 THS 双源皆缺）'
-    line = (f'盘面事实：涨停 {cur["ztCount"]} 家（{pct([h["ztCount"] for h in hist], cur["ztCount"])} 分位）'
+    # 最高板=真连板；区间最高（N天M板 的 M 最大股）作标注，两者不同才附（10-15：5 板 vs 澳弘 19天11板）
+    mb, mb_range, mb_stock = cur.get("maxBoard"), cur.get("maxBoardRange"), cur.get("maxBoardStock")
+    if isinstance(mb, int):
+        board_txt = f'最高 {mb} 板（{_pct_txt([h["maxBoard"] for h in hist], mb)}）'
+        if mb_stock and isinstance(mb_stock.get("boards"), int) and mb_stock["boards"] != mb:
+            board_txt += f'（区间最高 {_range_height_text(mb_stock)}）'
+    elif isinstance(mb_range, int):
+        board_txt = f'最高 不可算（THS炸板池缺失，真连板不可验证；区间最高 {mb_range} 板）'
+    else:
+        board_txt = '最高 不可算（THS炸板池缺失，真连板不可验证）'
+    line = (f'盘面事实：涨停 {cur["ztCount"]} 家（{_pct_txt([h["ztCount"] for h in hist], cur["ztCount"])}）'
             f' · {die_txt}'
-            f' · 炸板率 {rate}（{pct([h["zhabanRate"] for h in hist], cur["zhabanRate"])} 分位，炸板 {cur["zhabanCount"] or 0} 家）'
+            f' · 炸板率 {rate}（{_pct_txt([h["zhabanRate"] for h in hist], cur["zhabanRate"])}，'
+            f'炸板 {zb_n if zb_n is not None else cur["zhabanCount"] or 0} 家）{unsealed_txt}'
             f' · 大幅回撤 {cur["drawdownCount"] if cur["drawdownCount"] is not None else "?"} 家'
-            f'（{pct([h["drawdownCount"] for h in hist], cur["drawdownCount"])} 分位）'
+            f'（{_pct_txt([h["drawdownCount"] for h in hist], cur["drawdownCount"])}）'
             f' · {ladder_seg}'
-            f' · 最高 {cur["maxBoard"]} 板（{pct([h["maxBoard"] for h in hist], cur["maxBoard"])} 分位）'
+            f' · {board_txt}'
             + _advdec_segment(db, date, dataset_id))
     _FACTS_CACHE[cache_key] = line
     return line
+
+
+def _pct_txt(vals, cur_v) -> str:
+    """分位文本：样本空（percentile_fraction 返 None）→「分位不可算」，不拼成「分位不可算 分位」。
+
+    2026-10-16：跌停改同源采样后，EM 窗口（30 自然日）之前的历史日没有同源样本，
+    「分位不可算」从罕见过渡到常态，原来 f-string 里手写「 分位」的拼法会产出
+    「（全市场·东财跌停池，分位不可算 分位）」这种病句。
+    """
+    rank = percentile_rank(vals, cur_v)
+    return rank if rank == "分位不可算" else f"{rank} 分位"
 
 
 # ---- 弹药 6：个股价格位置轴（2026-10-04 用户令接入：距 20 日最高/窗口涨幅/量能缩放——
@@ -572,7 +872,12 @@ def _tdx_daily_client():
 
 
 def _daily_bars(code: str) -> list[dict]:
-    """日线棒升序（date/high/close/vol），取最近 60 根覆盖 20 日窗口；失败返回 []（调用方 fail-visible）。"""
+    """日线棒升序（date/high/close/vol），取最近 60 根覆盖 20 日窗口；失败返回 []（调用方 fail-visible）。
+
+    瞬时失败**不落空缓存**：一次客户端抖动若把 [] 缓存住，而 `_DAILY_CLIENT` 已缓存使
+    `_TDX_DOWN_UNTIL` 负缓存不会介入，整轮回溯就永久降级成池口径、进程内再无恢复路径
+    （2026-10-16 code review 实测）。合法空（新上市/当日无棒）仍缓存，避免逐股重取。
+    """
     cached = _DAILY_BARS_CACHE.get(code)
     if cached is not None:
         return cached
@@ -591,7 +896,7 @@ def _daily_bars(code: str) -> list[dict]:
                     })
                 bars.sort(key=lambda b: b["date"])
         except Exception:
-            bars = []
+            return []   # 不缓存：下次调用重试，不把一次抖动变成整轮回调
     _DAILY_BARS_CACHE[code] = bars
     return bars
 
@@ -910,7 +1215,8 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
 
 def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2,
         with_stock_phase: bool = False, dataset_id: str = DEFAULT_DATASET_ID,
-        confirm_budget: bool = False, max_stocks: int | None = None):
+        confirm_budget: bool = False, max_stocks: int | None = None,
+        force: bool = False, only_codes: set[str] | None = None):
     db = _db()
     col = db["hotlist_jev_driver_labels"]
     dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
@@ -933,9 +1239,22 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         codes = list(items.keys())
         done = {d["code"] for d in col.find({"tradingDate": date, "status": "ok"}, {"code": 1})
                 if d.get("code")}  # PHASE 日级文档无 code，跳过防 KeyError
-        codes = [c for c in codes if c not in done]
+        # force=口径代际升级重放（2026-10-16 连板口径修正回填）：已 ok 也重判，
+        # replace_one 幂等覆盖；不带 force 维持增量补跑语义（已 ok 跳过）
+        codes = [c for c in codes if force or c not in done]
+        if only_codes:
+            missing = [c for c in only_codes if c not in items]
+            # 已 ok 且未带 force：codes 已被上面的 done 过滤清空，若不再披露一层，
+            # 用户 `--codes X` 会只看到「无需打的股票」而不知道 X 被跳过的原因
+            already = [c for c in only_codes if c in items and c in done and not force]
+            codes = [c for c in codes if c in only_codes]
+            for c in missing:
+                print(f"[{di + 1}/{len(dates)}] {date} --codes {c} 不在当日韭研池，跳过（披露）")
+            for c in already:
+                print(f"[{di + 1}/{len(dates)}] {date} --codes {c} 当日已 status=ok，"
+                      f"跳过（披露）；口径代际回放请加 --force")
         if not codes:
-            print(f"[{di + 1}/{len(dates)}] {date} 全部已打，跳过")
+            print(f"[{di + 1}/{len(dates)}] {date} 无需打的股票，跳过")
             continue
         if max_stocks is not None and len(codes) > max_stocks:
             print(f"[{di + 1}/{len(dates)}] {date} {len(codes)} 只超上限 {max_stocks}，"
@@ -994,18 +1313,37 @@ def trajectory_line(db, date: str, n: int = 10,
                     dataset_id: str = DEFAULT_DATASET_ID) -> str:
     """近 n 个交易日逐日序列：日期|涨停(较昨日Δ)|跌停|炸板率%|大幅回撤|最高板。"""
     window = trading_dates_before(db, date, n + 1, dataset_id=dataset_id)  # 首日仅为算首格 Δ
+    # 跌停=全市场口径（2026-10-16）：历史窗口一次 find 批量读参考集合（禁逐日连发），
+    # 当日允许懒加载。**分位/序列必须与当日同源采样**——em_pool / quotes_snapshot /
+    # pool_rows 三家口径不同，混采会让「跌停翻六倍」这种观感其实只是换了个源
+    # （10-15=26 全市场 vs 09-10=6 采集池并排在同一列，模型无从分辨）。
+    # 参考集合 miss 的历史日回落采集池口径，逐格打 * 并在行尾注明，不静默混用。
+    die, src = limit_down_count(db, date, dataset_id)
+    die_ref = reference_counts(db, window, src if src in (SOURCE_EM, SOURCE_SNAPSHOT) else None)
+    die_scope = ("全市场·东财跌停池" if src == SOURCE_EM
+                 else "全市场·行情快照" if src == SOURCE_SNAPSHOT else "采集池口径")
+    pool_fallback = {d: dieban_count(db, d, dataset_id) for d in window
+                     if d not in die_ref and d != date}
+    degraded = False
     series = []
     for d in window:
         m = market_metrics(db, d, dataset_id) or {}
-        die = dieban_count(db, d, dataset_id)
+        if d == date:
+            cur_die = die
+        elif d in die_ref:
+            cur_die = die_ref[d]
+        else:
+            cur_die = pool_fallback.get(d)
+            degraded = degraded or cur_die is not None
         rate = m.get("zhabanRate")
         rate_txt = f'{round(rate, 1)}%' if isinstance(rate, (int, float)) else "?"
         zt = m.get("ztCount") if isinstance(m.get("ztCount"), (int, float)) else None
         dd = m.get("drawdownCount")
         mb = m.get("maxBoard")
-        series.append({"d": d, "zt": zt, "die": die, "rate": rate_txt,
+        series.append({"d": d, "zt": zt, "die": cur_die, "rate": rate_txt,
                        "dd": dd if isinstance(dd, (int, float)) else None,
-                       "mb": mb if isinstance(mb, (int, float)) else None})
+                       "mb": mb if isinstance(mb, (int, float)) else None,
+                       "degraded": d != date and d not in die_ref})
     rows = []
     for i, r in enumerate(series[1:]):
         prev = series[i]
@@ -1013,7 +1351,8 @@ def trajectory_line(db, date: str, n: int = 10,
             delta = f'{r["zt"] - prev["zt"]:+d}'
         else:
             delta = "?"
-        die_txt = r["die"] if r["die"] is not None else "?"
+        die_txt = f'{r["die"]}*' if r["degraded"] and r["die"] is not None else (
+            r["die"] if r["die"] is not None else "?")
         dd_txt = r["dd"] if r["dd"] is not None else "?"
         mb_txt = r["mb"] if r["mb"] is not None else "?"
         zt_txt = r["zt"] if r["zt"] is not None else "?"
@@ -1021,7 +1360,10 @@ def trajectory_line(db, date: str, n: int = 10,
         ad_txt = f'{ad[3]}' if ad else "?"
         rows.append(f'{r["d"][5:]}|涨停{zt_txt}({delta})|跌停{die_txt}|炸板{r["rate"]}|回撤{dd_txt}|板{mb_txt}|涨跌比{ad_txt}')
     head = f'近{len(rows)}个交易日序列（日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板|池内涨跌比）：'
-    return head + " ； ".join(rows)
+    # 口径头注（2026-10-16 review 补）：跌停列的源 + 降级格标记。没有这行，跨源混采的
+    # 序列会被读成真实情绪摆动。
+    note = f"（跌停列={die_scope}" + ("；* 为采集池降级格，全市场源缺失）" if degraded else "）")
+    return head + " ； ".join(rows) + note
 
 
 
@@ -1301,8 +1643,13 @@ if __name__ == "__main__":
     ap.add_argument("--confirm-budget", dest="confirm_budget", action="store_true",
                     help="批次C I13：确认本次真实调用的 token 预算（排程链常态携带=挂链裁决；"
                          "手动多日回填必须显式确认，否则拒绝开火）")
+    ap.add_argument("--force", action="store_true",
+                    help="口径代际升级重放：已 status=ok 的个股也重新判定（replace_one 幂等覆盖）")
     ap.add_argument("--max-stocks", dest="max_stocks", type=int, default=None,
                     help="批次C I13：单日打标上限（超出部分截断并披露），不给=不限")
+    ap.add_argument("--codes", dest="codes", default=None,
+                    help="只打指定股票（逗号分隔，如 600825,002343）。口径修正只影响个别股时"
+                         "用——避免为改一行共享语料把整日 100+ 只全部重烧一遍")
     args = ap.parse_args()
     tok = os.environ.get("JEV_CF_TOKEN") or ""
     # 2026-10-10：官方直连（JEV_TYPESAFE_KEY）为合法替代通道，护栏二选一即可
@@ -1340,4 +1687,7 @@ if __name__ == "__main__":
         # 同一 narrative 五题一次调用（边际成本≈题干+答案）；排程经 JIUYAN_STOCK_PHASE_ENABLED=1 门控
         run(args.start, args.end, args.dry_run, tok, acc, args.workers,
             with_stock_phase=args.with_stock_phase, dataset_id=args.dataset_id,
-            confirm_budget=args.confirm_budget, max_stocks=args.max_stocks)
+            confirm_budget=args.confirm_budget, max_stocks=args.max_stocks,
+            force=args.force,
+            only_codes={c.strip()[-6:] for c in args.codes.split(",") if c.strip()}
+            if args.codes else None)

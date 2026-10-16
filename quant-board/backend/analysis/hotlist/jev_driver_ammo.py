@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from backend.core.limit_rules import limit_ratio
@@ -22,7 +23,10 @@ THS_KEYS = ("one", "two", "three", "four", "high")
 # 用户裁决不整月重跑（旧文档留档不回写）。
 # 2026-10-11 P1-1（预登记 jev-ammo-p1-preregistration.md §一）：除权修正因子入叙事
 # （板序假阴根治），原料代际顺延。
-AMMO_VERSION = "2026-10-11a"
+# 2026-10-16（预注册 jev-relay-caliber-fix-preregistration.md §5b）：涨停价取整由内置
+# round 改十进制 ROUND_HALF_UP（内置 round 在分位为 5 时低取一分，差一分未封的棒会被
+# 判成封板，虚报连板高度），板序/封板判定输出可能变 → 原料代际顺延。
+AMMO_VERSION = "2026-10-16a"
 DEFAULT_DATASET_ID = "dragonboard_live"
 
 # ── 题目集（原文平移，判据改动须走改门） ──
@@ -210,6 +214,35 @@ def _limit_pct_of(code: str, name: str | None = None) -> float:
     return limit_ratio(code)
 
 
+def _limit_price(code: str, prev_close: float, name: str | None = None) -> float:
+    """交易所涨停价 = 前收盘 × (1 + 板籍比例)，**四舍五入到分**。
+
+    不能用 Python 内置 round：它是银行家舍入且作用于二进制浮点。前收盘分位为 5 时
+    （实测 0.10–300.00 区间约 1.4% 的前收盘价）乘积的十进制真值恰是 .xx5，而浮点表示
+    常 slightly below，round 会往下取一分，得到比交易所低 1 分的「涨停价」——于是
+    差一分未封的棒被判成封板，连板高度被虚报（本函数服务的一切数值的上游）。
+    用 Decimal 十进制上下文做真正的 ROUND_HALF_UP，与交易所同规。
+    """
+    raw = Decimal(str(prev_close)) * (Decimal("1") + Decimal(str(_limit_pct_of(code, name))))
+    return float(raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def closed_at_limit(code: str, close: float, prev_close: float,
+                    name: str | None = None) -> bool:
+    """收盘是否落在涨停价（板籍阈值判定）。
+
+    唯一权威 core/limit_rules.limit_ratio（经 _limit_pct_of），禁硬编码副本；
+    涨停价取整走 `_limit_price`（十进制四舍五入，勿用内置 round——见其 docstring）。
+    容差 -1e-6 只吸收 tick 浮点噪声，不承担取整方向。
+    封板链回溯（jev_label_jiuyan._bar_verdict）与板序行共用同一判定，避免两处漂移。
+    """
+    if not isinstance(prev_close, (int, float)) or isinstance(prev_close, bool) or prev_close <= 0:
+        return False
+    if not isinstance(close, (int, float)) or isinstance(close, bool):
+        return False
+    return close >= _limit_price(code, prev_close, name) - 1e-6
+
+
 def _div_scale_map(window: list[dict], adj_prev: dict[str, float] | None) -> dict[str, float]:
     """P1-1 位置轴辅助（纯函数）：由逐日除权参考价 adj_prev 推每棒归一至今日基准的乘数。
 
@@ -288,17 +321,26 @@ def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
                             adj_prev: dict[str, float] | None = None) -> str:
     """弹药 7：近 n 日涨停序列（收盘口径，板籍阈值判定）——几天几板/断板反包（隔日弱转强）机械锚。
     fail-visible：日线缺当日棒/窗口不足如实标注。P1-1：adj_prev 提供时逐链用除权参考价
-    （交易所公式精确昨收，原「除权日 prev_close 失真」已知边缘根治），None=原口径。"""
+    （交易所公式精确昨收，原「除权日 prev_close 失真」已知边缘根治），None=原口径。
+
+    2026-10-16：**连板数不被展示窗口截断**。停牌日 TDX 无棒会让「末 n 根可用棒」的前沿
+    提前（600825 停牌 3 日 → 末 10 根棒全是涨停），旧口径据此写「当前连板 10」而真值 11，
+    与同段龙头档案头行「当前连板11板」自相矛盾（10-16 语料实证，审计问题 #8 同族）。
+    窗口内全 ● 时继续往前数，并在文案披露「延伸至窗口外 N 板」。
+    """
     window = [b for b in bars if b["date"] <= date]
     if not window or window[-1]["date"] != date:
         return "板序：当日日线棒缺失（fail-visible）"
     adj_note = " · 除权修正已应用" if adj_prev else ""
+
+    def _up(idx: int) -> bool:
+        prev_close = (adj_prev or {}).get(window[idx]["date"]) or window[idx - 1]["close"]
+        return closed_at_limit(code, window[idx]["close"], prev_close, name)
+
     seq: list[int] = []
     i = len(window) - 1
     while i >= 1 and len(seq) < n:
-        prev_close = (adj_prev or {}).get(window[i]["date"]) or window[i - 1]["close"]
-        up = window[i]["close"] >= round(prev_close * (1 + _limit_pct_of(code, name)), 2) - 1e-6
-        seq.append(1 if up else 0)
+        seq.append(1 if _up(i) else 0)
         i -= 1
     if not seq:
         return "板序：窗口不足无法判定（fail-visible）"
@@ -309,10 +351,19 @@ def sequence_line_from_bars(date: str, code: str, name: str | None, n: int,
         if not v:
             break
         streak += 1
+    # 窗口内全 ● → 连板可能延伸到窗口之前（停牌缺口/窗口截断都会让展示窗口前沿提前），
+    # 继续往前数；i 停在窗口左沿之外第一个待判棒（不足 2 根棒时 i<1，自然不扩展）
+    overflow = 0
+    if streak == len(seq):
+        while i >= 1 and _up(i):
+            streak += 1
+            overflow += 1
+            i -= 1
+    extra = f" · 连板延伸至窗口外 {overflow} 板" if overflow else ""
     rewrap = seq[-1] == 1 and (len(seq) < 2 or seq[-2] == 0) and any(seq[:-1])
     tag = " · 今日=断板反包（隔日弱转强）" if rewrap else ""
     return (f"板序：近 {len(seq)} 日 {marks}（●=涨停，末位今日） · 当前连板 {streak}"
-            f" · 窗口内 {sum(seq)} 板{tag}{adj_note}")
+            f" · 窗口内 {sum(seq)} 板{tag}{adj_note}{extra}")
 
 
 def board_shape_line_from_bars(date: str, code: str, name: str | None,

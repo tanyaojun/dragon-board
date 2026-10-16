@@ -12,6 +12,22 @@ from typing import Any, Callable, Iterator
 logger = logging.getLogger(__name__)
 
 EMPTY_QUOTES: dict[str, Any] = {"rc": 0, "data": {"diff": []}}
+_QUOTES_REDIS_SUFFIX = "market:quotes:tencent:v1"
+
+
+def market_quotes_redis_key(prefix: str | None = None) -> str:
+    """全市场行情 Redis hash key（MarketQuotesCache 写入方与跨进程读方共用单源）。
+
+    prefix 缺省读 settings（跨进程读方只有这一条路）；写入方传实例前缀
+    （测试可注入自定义前缀，行为不变）。读方例：operations/market_dieban_pool
+    按 f3（涨跌幅%）统计全市场跌停家数——行情快照是实时口径，只服务「当日」叙事。
+    """
+    if prefix is None:
+        from backend.core.settings import get_settings
+
+        prefix = get_settings().redis_key_prefix
+    prefix = str(prefix or "").strip(":")
+    return f"{prefix}:{_QUOTES_REDIS_SUFFIX}" if prefix else _QUOTES_REDIS_SUFFIX
 _CODE_RE = re.compile(r"^\d{6}$")
 _PREFIXES = ("sh", "sz", "bj")
 
@@ -248,8 +264,9 @@ class MarketQuotesCache:
         return {"rc": 0, "data": {"diff": ordered}}
 
     def _redis_key(self) -> str:
-        suffix = "market:quotes:tencent:v1"
-        return f"{self._redis_prefix}:{suffix}" if self._redis_prefix else suffix
+        # 委托模块级单源（禁两处拼接漂移）：写入方传实例前缀（测试可注入），
+        # 跨进程读方（market_dieban_pool）缺省走 settings 前缀
+        return market_quotes_redis_key(self._redis_prefix)
 
     def _redis_set_all(self, rows: dict[str, dict[str, Any]]) -> None:
         client = self._redis

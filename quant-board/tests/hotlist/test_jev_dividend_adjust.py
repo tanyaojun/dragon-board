@@ -51,6 +51,50 @@ def test_position_line_exdiv_no_fake_crash():
     assert "除权修正" not in raw  # 无参考价=原口径不注记
 
 
+# ── 连板数不被展示窗口截断（2026-10-16 盘后复核，600825 停牌复牌实证） ──
+
+# 600825 真实交易日历：09-21 起 11 个连续封板日，10-13/14/15 上交所停牌（TDX 无棒）
+_SUSP_SEQ_DATES = ["2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-28",
+                   "2026-09-29", "2026-09-30", "2026-10-08", "2026-10-09", "2026-10-12",
+                   "2026-10-16"]
+
+
+def _suspension_bars():
+    """11 个连续 +10% 收盘（停牌日无棒）+ 链起点前一棒，末 10 根可用棒覆盖 09-22..10-16。
+
+    前置 09-18 那根非涨停棒是必需的：判 09-21 是否涨停需要它的昨收，缺了它连板数就
+    数不到 11（旧口径「i>=1」守卫的语义）。
+    """
+    bars, prev = [{"date": "2026-09-18", "high": 10.0, "close": 10.0, "vol": 1.0}], 10.0
+    for d in _SUSP_SEQ_DATES:
+        close = round(prev * 1.1, 2)
+        bars.append({"date": d, "high": close, "close": close, "vol": 1.0})
+        prev = close
+    return bars
+
+
+def test_sequence_line_streak_not_truncated_by_window():
+    """窗口内全 ● 时连板数必须继续往前数，不被「近 N 日」截断。
+
+    600825 因停牌少 3 根棒，末 10 根可用棒全是涨停，旧口径据此写「当前连板 10」，
+    真实连板 11（09-21 那一板被挤出窗口）——与同段龙头档案头行「当前连板11板」
+    自相矛盾（10-16 语料实证）。修复后须给 11 并披露「延伸至窗口外」。
+    """
+    line = sequence_line_from_bars("2026-10-16", "600825", None, 10, _suspension_bars(), None)
+    assert "近 10 日 ●●●●●●●●●●" in line
+    assert "当前连板 11" in line
+    assert "连板延伸至窗口外 1 板" in line
+
+
+def test_sequence_line_no_overflow_note_when_window_suffices():
+    """窗口内出现 ○（链在窗口内终止）时不加「延伸至窗口外」注记——不虚增。"""
+    bars = _suspension_bars()
+    bars[4] = {**bars[4], "close": round(bars[3]["close"] * 0.95, 2)}   # 09-24 断板
+    line = sequence_line_from_bars("2026-10-16", "600825", None, 10, bars, None)
+    assert "当前连板 7" in line          # 09-28..10-16 共 7 板
+    assert "连板延伸至窗口外" not in line
+
+
 def test_div_scale_map_recurrence():
     """两连除权事件反向递推：scale(t)=scale(t+1)×参考价(t+1)/raw(t)。"""
     window = [{"date": "2026-06-01", "high": 10.0, "close": 10.0, "vol": 1.0},
@@ -276,7 +320,8 @@ def test_zhaban_doc_stamps_ammo_version(monkeypatch):
     db = _ZhabanDb([_ths_frame("2026-09-17", [{"stock_code": "600000", "continue_day": 2,
                                                "limit_up_time": "09:42:00"}]),
                     _ths_frame("2026-09-18", [])], zhaban_col=col)
-    monkeypatch.setattr(zb, "_ths_failed_snapshot", lambda db_, date, ds: ([_zhaban_item()], True))
+    monkeypatch.setattr(zb, "_ths_failed_items",
+                        lambda db_, date, ds: ({"603533": _zhaban_item()}, True))
     monkeypatch.setattr(zb, "_pool_of", lambda db_, date: {"600000": {"board": "机器人", "boards": 2}})
     monkeypatch.setattr(zb, "_limitup_sequence_line",
                         lambda date, code, name, n=10: "板序：近 10 日 ○（测试桩）")
@@ -297,3 +342,38 @@ def test_zhaban_doc_stamps_ammo_version(monkeypatch):
     assert doc["answers"]["zhaban_cause"]["confidence"] == 0.7
     assert doc["zhabanCause"] == "chase_fail"
     assert "昨日身位（THS 连板梯队）" in doc["narrative"]
+
+
+# ── 涨停价取整：十进制四舍五入（2026-10-16 review 修复，共用阈值零覆盖→补）─────────
+
+def test_limit_price_uses_decimal_half_up():
+    """交易所涨停价必须十进制四舍五入到分；内置 round 在分位为 5 时低取一分。
+
+    实测 0.10–300.00 区间 399/30000 个前收盘价命中此差异（约 1.3%），且**全部单向偏低**：
+    前收 0.95 → 真涨停价 1.05，内置 round 给 1.04。差一分未封的棒（+9.47%）会被判成封板，
+    连板高度被虚报——本函数是封板链回溯与板序行共用的唯一阈值，偏一寸全线偏一寸。
+    """
+    # 主板 ±10%
+    assert ammo.closed_at_limit("600000", 1.05, 0.95) is True
+    assert ammo.closed_at_limit("600000", 1.04, 0.95) is False   # 差一分未封，旧口径误判封板
+    assert ammo.closed_at_limit("600000", 3.36, 3.05) is True
+    assert ammo.closed_at_limit("600000", 3.35, 3.05) is False
+    assert ammo.closed_at_limit("600000", 5.01, 4.55) is True
+    assert ammo.closed_at_limit("600000", 5.00, 4.55) is False
+    # 无差异的前收价不受影响（回归保护：不得把取整改严到漏判真封板）
+    assert ammo.closed_at_limit("600000", 11.00, 10.00) is True
+    assert ammo.closed_at_limit("600000", 10.99, 10.00) is False
+    # 板籍差异同规：创业板/科创 20%、北交所 30%
+    assert ammo.closed_at_limit("300001", 1.26, 1.05) is True
+    assert ammo.closed_at_limit("300001", 1.25, 1.05) is False
+    assert ammo.closed_at_limit("920819", 1.30, 1.00) is True
+    assert ammo.closed_at_limit("920819", 1.29, 1.00) is False
+
+
+def test_closed_at_limit_rejects_bad_inputs():
+    """脏输入一律 False（不得把「判不出」当成「封板」）。"""
+    assert ammo.closed_at_limit("600000", 11.0, 0) is False
+    assert ammo.closed_at_limit("600000", 11.0, -1.0) is False
+    assert ammo.closed_at_limit("600000", 11.0, None) is False
+    assert ammo.closed_at_limit("600000", None, 10.0) is False
+    assert ammo.closed_at_limit("600000", True, 10.0) is False   # bool 是 int 子类，须显式排除

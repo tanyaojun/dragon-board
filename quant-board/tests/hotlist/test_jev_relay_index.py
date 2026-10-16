@@ -59,18 +59,24 @@ class FakeDb:
         return self.cols.setdefault(k, FakeCol())
 
 
-def _frames(dates, failed_by_date=None):
-    """15:00 帧夹具；failed_by_date={date: [codes]} 注入 THS 炸板池（二分口径用）。"""
+def _frames(dates, failed_by_date=None, ths_missing=()):
+    """15:00 帧夹具；failed_by_date={date: [codes]} 注入 THS 炸板池（二分口径用）。
+
+    2026-10-16：默认带 ok 炸板池（空池=当日无炸板，合法状态），与生产 EOD 帧同形——
+    streak 口径二分与真连板回溯都依赖该池存在；ths_missing={dates} 的帧不带 thsPools
+    （THS 炸板池缺失日降级路径专用）。
+    """
     failed_by_date = failed_by_date or {}
     rows = []
     for d in dates:
-        ls = {"zhaban": {"ztCount": 50, "count": 8, "rate": 12.0},
+        failed = failed_by_date.get(d, [])
+        ls = {"zhaban": {"ztCount": 50, "count": len(failed), "rate": 12.0},
               "drawdown": {"count": 3}, "continuousBoards": {"maxBoard": 5}}
-        if d in failed_by_date:
+        if d not in ths_missing:
             ls["thsPools"] = {"ok": True, "degraded": False, "date": d.replace("-", ""),
-                              "pools": {"failed": {"key": "failed", "total": len(failed_by_date[d]),
+                              "pools": {"failed": {"key": "failed", "total": len(failed),
                                                    "items": [{"code": c, "name": f"股{c}", "open_num": 1}
-                                                             for c in failed_by_date[d]]}}}
+                                                             for c in failed]}}}
         rows.append({"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": d,
                      "slotTime": "15:00", "snapshotId": f"h:{d}", "timestamp": 2,
                      "limitSummary": ls})
@@ -121,12 +127,54 @@ def test_pool_of_uses_num_board_count():
     assert pool["600001"]["boards"] == 4
 
 
+def test_narrative_context_anchor_includes_today():
+    """近20日锚必须含今日：今日创新高时锚显示旧峰值会与事实行自相矛盾。
+
+    2026-10-16 实证：600825 停牌复牌真连板 11 板（前峰值 10 板在 10-12），
+    旧口径 trading_dates_before(20) 严格早于当日 → 锚写「最高板峰值 10 板」，
+    而同篇事实行写「最高 11 板（100 分位）」。现在 hist = 前 19 日 + 当日。
+    """
+    dates = [f"2026-09-{d:02d}" for d in range(11, 21)] + ["2026-09-30"]
+    today = dates[-1]
+    finals = [_final(d, [{"code": "600001", "name": "A",
+                          "num": "11天11板" if d == today else "10天10板"}]) for d in dates]
+    db = FakeDb({"snapshot_frames": _frames(dates),
+                 "jiuyan_action": FakeCol(finals)})
+    lines = relay.narrative_context_lines(db, today)
+    anchor = next(l for l in lines if l.startswith("近20日锚"))
+    # 今日 11 板必须是锚内峰值（旧口径会报前一日 10 板）
+    assert f"最高板峰值 11 板（{today[5:]}）" in anchor
+    # 涨停家数锚同样含今日（本例五日皆 50 家，峰谷同日，仅锁不抛错）
+    assert "涨停峰值 50 家" in anchor
+
+
 def test_three_day_chain_line():
-    """三日链：D-2 3只 → D-1 1只（33.3%）→ D0 1只；高位股轨迹点名。"""
+    """三日链：D-2 3只 → D-1 1只（33.3%）→ D0 1只；高位股轨迹点名（区间 N天M板 + 真连板）。"""
     line = three_day_chain_line(_db(), _D0)
     assert "3 只" in line and "33.3%" in line
-    assert "B 3板" in line and "次日即断" in line   # D-2 最高板 B 今日不在池
-    assert "A 2板→4板连板中" in line
+    assert "B 3天3板" in line and "次日即断" in line   # D-2 最高板 B 今日不在池
+    # A：D-2 2天2板 → 昨日封、今日封 → 连板中（今日 4天4板·真连板 4 板，2026-10-16 口径）
+    assert "A 2天2板→连板中（今日4天4板·连板4板）" in line
+
+
+def test_three_day_chain_line_fate_reversal_not_streak():
+    """2026-10-16 修（审计问题 #4）：昨日炸板、今日回封 ≠ 连板中。
+
+    澳弘电子式路径：D-2 高位 → D-1 触板但炸板（在昨日炸板池）→ D0 回封。
+    旧逻辑只看今日封板就写「连板中」；新逻辑要求昨日也封板，否则写「昨日断板今日回封」。
+    """
+    stocks = {
+        _D2: [{"code": "600001", "name": "A", "num": "17天10板"}],
+        _D1: [{"code": "600001", "name": "A"}],                 # 触板但炸板（进 D-1 炸板池）
+        _D0: [{"code": "600001", "name": "A", "num": "19天11板"}],  # 今日回封
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0], failed_by_date={_D1: ["600001"]}),
+        "jiuyan_action": FakeCol([_final(d, stocks[d]) for d in (_D2, _D1, _D0)]),
+    })
+    line = three_day_chain_line(db, _D0)
+    assert "A 17天10板→昨日断板今日回封（连板1板）" in line
+    assert "连板中" not in line            # 昨日炸板 → 不得判连板中（伪连板红线）
 
 
 def test_three_day_chain_line_promo_comparison():
@@ -224,7 +272,8 @@ def test_zhaban_face_line_yesterday_comparison():
 def test_zhaban_face_line_yesterday_frame_missing_no_fake():
     """昨日 THS 炸板池帧缺失/降级 → 对比写不可算，不得以 0 家伪算增减（fail-visible）。"""
     db = FakeDb({
-        "snapshot_frames": _frames([_D1, _D0], failed_by_date={_D0: ["600001"]}),  # D1 帧无 thsPools
+        "snapshot_frames": _frames([_D1, _D0], failed_by_date={_D0: ["600001"]},
+                                   ths_missing={_D1}),  # D1 帧无 thsPools
         "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, _STOCKS[_D0])]),
     })
     line = zhaban_face_line(db, _D0)
@@ -234,9 +283,71 @@ def test_zhaban_face_line_yesterday_frame_missing_no_fake():
     assert "（历史反复开板数据不足 5 日，无分位参照）" in line
 
 
+def _frame_full(date, failed=None, rushing=None, seal_quality=None):
+    """带炸板池+冲刺池+封板质量的 15:00 帧（P3 炸板面补证夹具）。"""
+    failed = failed or []
+    rushing = rushing or []
+    return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
+            "slotTime": "15:00", "snapshotId": f"h:{date}", "timestamp": 2,
+            "limitSummary": {"zhaban": {"ztCount": 36, "count": len(failed), "rate": 16.3},
+                             "drawdown": {"count": 5}, "continuousBoards": {"maxBoard": 5},
+                             "sealQuality": (seal_quality if seal_quality is not None else
+                                             {"byzCount": 13, "hardCount": 8, "rottenCount": 15,
+                                              "rottenShare": 0.417, "avgSucRate": 0.752}),
+                             "thsPools": {"ok": True, "degraded": False,
+                                          "pools": {
+                                              "failed": {"key": "failed", "ok": True,
+                                                         "total": len(failed),
+                                                         "items": [{"code": c, "name": f"股{c}",
+                                                                    "open_num": 1,
+                                                                    "change_rate": 5.0} for c in failed]},
+                                              "rushing": {"key": "rushing", "ok": True,
+                                                          "total": len(rushing),
+                                                          "items": [{"code": c, "name": f"冲{c}",
+                                                                     "change_rate": r} for c, r in rushing]}}}}}
+
+
+def test_zhaban_face_rushing_and_rotten_segments():
+    """2026-10-16 补供（审计问题 #6）：冲刺池 6 家、烂板 15 家进语料。
+
+    旧语料「炸板面」只覆盖曾封后开板（failed 池），冲刺池与帧 sealQuality 采集了从不消费。
+    """
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_frame_full(_D0,
+                                                failed=["600001"],
+                                                rushing=[("688265", 15.7), ("000973", 7.4),
+                                                         ("600199", 6.9), ("600869", 6.7),
+                                                         ("002058", 6.2), ("600241", 6.0)])]),
+        "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "冲刺未封 6 家（南模生物(15.7%)" not in line  # 夹具名是「冲688265」非真实名
+    assert "冲刺未封 6 家（冲688265(+15.7%)、冲000973(+7.4%)、冲600199(+6.9%)）" in line
+    assert "涨停池烂板（开板≥2次回封）15 家（占 42%）" in line
+
+
+def test_zhaban_face_rushing_pool_missing_no_fake_zero():
+    """THS 冲刺池缺失/降级 → 该段写不可算，不伪 0 家（fail-visible）。"""
+    db = FakeDb({
+        "snapshot_frames": _frames([_D0], failed_by_date={_D0: ["600001"]}),  # 无 rushing 池
+        "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "冲刺未封 不可算（THS 冲刺池缺失/降级）" in line
+    assert "冲刺未封 0 家" not in line  # 伪 0 红线
+
+
+def test_zhaban_face_rotten_missing_no_fake_zero():
+    """帧无 sealQuality → 烂板段写不可算，不伪 0 家。"""
+    frame = _frame_full(_D0, failed=["600001"], seal_quality={})
+    db = FakeDb({"snapshot_frames": FakeCol([frame]),
+                 "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])])})
+    line = zhaban_face_line(db, _D0)
+    assert "涨停池烂板 不可算（sealQuality 缺失）" in line
+    assert "烂板（开板≥2次回封）0 家" not in line
+
+
 def test_zhaban_face_reopen_percentile():
-    """反复开板分位（2026-10-16 二级审计补供 relay_phase「反复开板处参照高位/低位」）：
-    炸板家数分位原已给，反复开板只有绝对值；同一 20 日回溯顺带算其分位。"""
     hist = [("2026-09-21", [("600101", 2)]), ("2026-09-22", [("600102", 3)]),
             ("2026-09-23", [("600103", 2), ("600104", 1)]), ("2026-09-24", [("600105", 5)]),
             ("2026-09-25", [("600106", 2), ("600107", 2)])]   # 反复开板逐日 1/1/1/1/2
@@ -267,7 +378,7 @@ def test_relay_flow_line_sealed_bisect(monkeypatch):
         "jiuyan_action": FakeCol([_final(_D1, _STOCKS[_D1]), _final(_D0, d0_touch)]),
     })
     line = relay_flow_line(db, _D0)
-    assert "昨日 2 只涨停 → 今日仍涨停 1 只（晋级率 50.0%）" in line
+    assert "昨日 2 只涨停（触板二分口径） → 今日仍涨停 1 只（晋级率 50.0%）" in line
     assert "断板 1 只" in line and "大面(≤-5%) 1 只" in line
     assert "触板口径降级" not in line  # 两日 THS 池齐备，无降级注记
 
@@ -306,15 +417,19 @@ def test_ladder_structure_first_board_pct_no_prev_no_fake():
 
 
 def test_theme_ladder_lines_dragon_order():
-    """题材梯队：高度优先、封板时间次之；num 缺失显示首板。"""
+    """题材梯队：高度优先、封板时间次之；区间文案「N天M板」+ 真连板（2026-10-16 口径）。"""
     db = _db()
     db.cols["hotlist_jev_driver_labels"] = FakeCol([
         {"tradingDate": _D0, "status": "ok", "code": "600001", "label": "product_event",
          "freshness": "continuing"}])
     lines = theme_ladder_lines(db, _D0)
-    assert any("龙一 E(8板" in x for x in lines)   # 妖股 16天8板 → 8板为龙一
-    assert any("龙二 A(4板" in x for x in lines)
-    assert any("首板" in x for x in lines) or True  # D0 无首板时不断言
+    # 妖股 16天8板：龙序仍按区间 M 居首，但文案补跨度与真连板（昨日不在池 → 连板1板）
+    assert any("龙一 E(16天8板" in x for x in lines)
+    assert any("连板1板" in x for x in lines)
+    assert any("龙二 A(4天4板" in x for x in lines)
+    # D0 五只全部有板数（600005 16天8板 / 600001 4天4板），无首板股——不断言首板，
+    # 但也不能留 `or True` 这种永真式占位（2026-10-16 review：那是噪声不是检查）
+    assert not any("首板" in x for x in lines)
 
 
 def test_run_relay_index_day_writes_doc(monkeypatch):
@@ -366,3 +481,147 @@ def test_questions_schema():
             assert "insufficient_evidence" in q["criteria"], qid
         else:
             assert q["type"] == "score" and qid in ("relay_index", "leader_strength")
+
+
+# ── 2026-10-16 code review 修复（口径自相矛盾 / fail-visible 崩溃）────────────
+
+
+def _frame_ths_sealed(date, codes_by_pool, pool_ok=None):
+    """带 THS 连板层五池的 15:00 帧（_ths_sealed_codes/_zt_caliber_note 专用）。
+
+    pool_ok=None = 五池全 ok；否则只有集合内的池 ok（模拟单池被限流返空）。
+    """
+    pools = {k: {"key": k, "ok": pool_ok is None or k in pool_ok,
+                 "items": [{"stock_code": c, "name": f"股{c}"} for c in codes_by_pool.get(k, [])]}
+             for k in relay.THS_KEYS}
+    return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
+            "slotTime": "15:00", "snapshotId": f"h:{date}", "timestamp": 2,
+            "limitSummary": {"zhaban": {"ztCount": 36, "count": 3, "rate": 16.3},
+                             "drawdown": {"count": 5}, "continuousBoards": {"maxBoard": 5},
+                             "thsPools": {"ok": True, "degraded": False, "pools": pools}}}
+
+
+def test_ths_sealed_codes_requires_every_pool_ok():
+    """单池自身上游失败（THS 风控返 200+空 info）→ 整套对账 None，不静默丢一池的股。
+
+    只读顶层 ok 时，「首板池被限流返空」会被当成当日真无首板——30 只封板股一夜变成
+    「触板未封」，整个涨停家数对账反向（2026-10-16 review 实测推演）。
+    """
+    good = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(
+        _D0, {"one": ["600001"], "two": ["600002"]})])})
+    assert relay._ths_sealed_codes(good, _D0, "dragonboard_live") == {"600001", "600002"}
+    bad = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(
+        _D0, {"one": [], "two": ["600002"]}, pool_ok={"two", "three", "four", "high"})])})
+    assert relay._ths_sealed_codes(bad, _D0, "dragonboard_live") is None
+
+
+def test_zt_caliber_note_names_both_directions():
+    """「两口径一致」只在双向差集皆空时成立；反向差集（THS 有、二分无）也要点名。
+
+    旧实现只查 `bisect - ths`：韭研 final 漏收日会输出「同花顺涨停池 40 只，两口径一致」
+    紧跟一个 36 的家数——同一句里自相矛盾。
+    """
+    pool = {"600001": {"name": "A"}, "600003": {"name": "C"}}
+    db = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(_D0, {"one": ["600001"]})])})
+    # 二分多出 600003：点名 + 不代断成因（实证那批是 THS 剔除 ST/北交所，非触板未封）
+    note = relay._zt_caliber_note(db, _D0, "dragonboard_live", {"600001", "600003"}, pool)
+    assert "二分多出 1 只（C，触板未封/新股/THS池剔除需个股核）" in note
+    assert "触板未封/新股：" not in note      # 不写死单一成因
+    assert "两口径一致" not in note
+    # THS 多出 600002：韭研 final 漏收，必须披露而不是宣称一致
+    db2 = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(
+        _D0, {"one": ["600001"], "two": ["600002"]})])})
+    note2 = relay._zt_caliber_note(db2, _D0, "dragonboard_live", {"600001"}, pool)
+    assert "THS 多出 1 只（韭研 final 漏收，二分口径漏计）" in note2
+    assert "两口径一致" not in note2
+    # 双向皆空才叫一致
+    db3 = FakeDb({"snapshot_frames": FakeCol([_frame_ths_sealed(_D0, {"one": ["600001"]})])})
+    assert "两口径一致" in relay._zt_caliber_note(db3, _D0, "dragonboard_live",
+                                                  {"600001"}, pool)
+
+
+def test_theme_evolution_line_carries_true_streak():
+    """题材演化行必须同时给真连板数——否则同篇段1「最高 5 板」与段2b「最高11板」打架。
+
+    旧实现只渲染区间高度 M（龙序仍按 M，保留），模型在同一份语料里读到两个「最高板」，
+    正是本次口径修正要除的污染（审计问题 #2/#3 同族）。
+    """
+    d1 = [{"code": "600001", "name": "A", "num": "3天3板"}]
+    d0 = [{"code": "600001", "name": "A", "num": "5天5板"},
+          {"code": "600002", "name": "B"}]
+    db = FakeDb({"snapshot_frames": _frames([_D1, _D0]),
+                 "jiuyan_action": FakeCol([_final(_D1, d1), _final(_D0, d0)])})
+    line = relay.theme_evolution_line(db, _D0)
+    assert "最高5天5板（连板5板）" in line
+    assert "最高5天5板）" not in line.replace("最高5天5板（连板5板）", "")
+
+
+def test_three_day_chain_yesterday_break_uses_range_text():
+    """高位股轨迹的「昨日断板」分支必须写「N天M板」，不能写裸 M。
+
+    裸「昨日10板」读起来是昨日 10 连板，而同篇段1 说最高 5 板（真连板）——同族自相矛盾。
+    """
+    d2 = [{"code": "605058", "name": "澳弘电子", "num": "16天9板"}]
+    d1 = [{"code": "605058", "name": "澳弘电子", "num": "17天10板"},
+          {"code": "600001", "name": "A", "num": "3天3板"}]
+    d0 = [{"code": "600001", "name": "A", "num": "4天4板"}]     # 605058 今日不在池 → 断板
+    db = FakeDb({"snapshot_frames": _frames([_D2, _D1, _D0]),
+                 "jiuyan_action": FakeCol([_final(_D2, d2), _final(_D1, d1), _final(_D0, d0)])})
+    line = three_day_chain_line(db, _D0)
+    assert "澳弘电子 16天9板→昨日17天10板今日断板" in line
+    assert "→昨日10板今日断板" not in line
+
+
+def test_zhaban_face_prev_layer_uses_range_text():
+    """炸板面「昨日2板以上」代表股同样写「N天M板」——裸「(10板)」会被读成昨日 10 连板。"""
+    d1 = [{"code": "605058", "name": "澳弘电子", "num": "17天10板"}]
+    db = FakeDb({"snapshot_frames": FakeCol([_frame_full(_D1, failed=[]),
+                                             _frame_full(_D0, failed=["605058"])]),
+                 "jiuyan_action": FakeCol([_final(_D1, d1), _final(_D0, _STOCKS[_D0])])})
+    line = zhaban_face_line(db, _D0)
+    assert "昨日2板以上 1 家：澳弘电子(17天10板)" in line
+    assert "澳弘电子(10板)" not in line
+
+
+def test_zhaban_face_rotten_share_none_does_not_crash():
+    """rottenShare=None（上游样本为空）而 rottenCount=0 → 写「占比不可算」，不得 TypeError。
+
+    build_server_limit_summary 在 quality_n==0 时就是这样输出；旧代码 round(None*100)
+    会炸掉整个 relay 日，把 fail-visible 变成崩溃。
+    """
+    sq = {"byzCount": 0, "hardCount": 0, "rottenCount": 0, "rottenShare": None}
+    db = FakeDb({"snapshot_frames": FakeCol([_frame_full(_D0, failed=["600001"], seal_quality=sq)]),
+                 "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])])})
+    line = zhaban_face_line(db, _D0)
+    assert "涨停池烂板（开板≥2次回封）0 家（占比不可算：sealQuality 样本为空，fail-visible）" in line
+
+
+def test_relay_flow_unlayered_streaks_disclosed():
+    """板层不可算的股单独披露只数，不静默回退区间 M 分层。
+
+    旧代码 `layer_key = s if isinstance(s, int) else _day_eff(...)`：19天11板真连板=1
+    又被算进 5 板层，晋级率判据被重新污染——正是本次修正要除的东西。
+    """
+    d1 = [{"code": "600001", "name": "A", "num": "3天3板"},
+          {"code": "600005", "name": "E", "num": "16天8板"}]
+    d0 = [{"code": "600001", "name": "A", "num": "4天4板"}]
+    db = FakeDb({"snapshot_frames": _frames([_D1, _D0], ths_missing={_D1}),
+                 "jiuyan_action": FakeCol([_final(_D1, d1), _final(_D0, d0)])})
+    line = relay_flow_line(db, _D0)
+    assert "2只连板高度不可算未分层" in line
+    assert "5板→" not in line      # 不得把 16天8板 按区间高度塞进 5 板层
+
+
+def test_narrative_context_anchor_maxboard_uncomputable():
+    """窗口内最高板全不可算 → 写「不可算」，不得 max([]) 崩掉整个 relay 日。
+
+    真连板口径下 maxBoard=None 远比帧字段时代常见（THS 炸板池缺失/韭研 final 缺失），
+    旧代码在此会 ValueError。
+    """
+    dates = [f"2026-09-{d:02d}" for d in range(11, 21)] + [f"2026-09-{d:02d}" for d in range(22, 31)]
+    dates = dates[:20]
+    db = FakeDb({"snapshot_frames": _frames(dates, ths_missing=set(dates)),
+                 "jiuyan_action": FakeCol([_final(dates[-1], _STOCKS[_D0])])})
+    lines = relay.narrative_context_lines(db, dates[-1])
+    assert any("最高板峰值 不可算（窗口内无真连板高度，fail-visible）" in x for x in lines)
+    assert any("涨停峰值" in x for x in lines)

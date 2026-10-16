@@ -28,7 +28,8 @@ from backend.operations.jev_label_jiuyan import (
     parse_jev_response,
     ths_positions,
 )
-from backend.operations.jev_relay_index import _pool_of, _ths_failed_snapshot
+from backend.operations.jev_label_jiuyan import _ths_failed_items
+from backend.operations.jev_relay_index import _pool_of, _range_num_txt
 
 COLLECTION = "hotlist_jev_zhaban_labels"
 
@@ -80,14 +81,17 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
     sec = _sector_context(db, date, code, pool)
     # 昨日板数 + 板块昨日触板对照（②）
     prev_dates = _prev_dates(db, date, 1)
-    prev_boards = None
+    prev_entry = {}
     board_prev_touch = None
     if prev_dates:
         prev_pool = _pool_of(db, prev_dates[-1])
-        prev_boards = (prev_pool.get(code) or {}).get("boards")
+        prev_entry = prev_pool.get(code) or {}
         if prev_pool:
             board_prev_touch = sum(1 for e in prev_pool.values() if e.get("board") == sec["board"])
-    pos_txt = (f"昨日 {prev_boards} 板" if prev_boards else "昨日未涨停/首板")
+    # 昨日身位文案补跨度（2026-10-16 口径一致化）：「昨日 4 板」→「昨日 7天4板」，
+    # 与涨停复盘高度列/relay 梯队表同规；M 缺失（韭研首板口径）→ 首板，不伪造天数
+    pos_txt = (f"昨日 {_range_num_txt(prev_entry)}" if prev_entry.get("boards")
+               else "昨日未涨停/首板")
     traj = prof
 
     def _num(v, fmt):
@@ -171,7 +175,8 @@ def run_zhaban_label_day(db: Any, dates: list[str], *, dry_run: bool = False,
                          dataset_id: str = DEFAULT_DATASET_ID, force: bool = False) -> None:
     col = db[COLLECTION]
     for date in dates:
-        items, found = _ths_failed_snapshot(db, date, dataset_id)
+        items_map, found = _ths_failed_items(db, date, dataset_id)
+        items = list(items_map.values())
         if not found:
             print(f"[zhaban] {date} THS 炸板池缺失/降级，整日跳过（fail-visible）")
             continue

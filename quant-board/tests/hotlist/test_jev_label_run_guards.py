@@ -166,3 +166,71 @@ def test_questions_hash_changes_with_criteria():
     tweaked = {**QUESTIONS_STOCK, "driver_type": {**QUESTIONS_STOCK["driver_type"],
                                                   "instructions": "改动一个字"}}
     assert runner._questions_hash(tweaked) != base
+
+
+# ---- force 口径代际重放（2026-10-16 连板口径修正回填前置）----
+
+def test_run_force_rejudges_ok_docs(monkeypatch):
+    """force=True：已 status=ok 的个股也重判（口径代际升级重放，replace_one 幂等覆盖）。
+
+    背景：连板高度改真连板口径后，历史打标文档的弹药（盘面事实行最高板/梯队/跌停）
+    全带旧口径，需 --force 回放；不带 force 维持增量补跑语义。
+    """
+    db = _FakeDb(_FakeCol({"2026-10-09:600001": {"_id": "2026-10-09:600001", "code": "600001",
+                                                 "tradingDate": "2026-10-09", "status": "ok"}}))
+    monkeypatch.setattr(runner, "_db", lambda: db)
+    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+        {"stock": {"code": "600001", "name": "甲"}, "board": "b"}])
+    monkeypatch.setattr(runner, "_strip", lambda c: c)
+    monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
+    called: list[str] = []
+
+    def _fake(db_, col, acc, token, date, code, *a, **k):
+        called.append(code)
+        return True, 10
+
+    monkeypatch.setattr(runner, "_label_one", _fake)
+
+    run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
+        confirm_budget=True, force=True)
+    assert called == ["600001"]            # 已 ok 也被重判
+    # 不带 force：已 ok 跳过，不重打
+    called.clear()
+    run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
+        confirm_budget=True)
+    assert called == []
+
+
+def test_run_codes_filter_rejudges_only_named_stocks(monkeypatch, capsys):
+    """--codes：只重打指定股票，不当日全量重烧。
+
+    2026-10-16 停牌分辨只改「最高板/梯队」等共享语料里的一行，但受影响的往往只是个别股
+    （600825 自身证据变了，其余 100 只只是共享行变了一个数）——全量 --force 会白烧
+    ≈35 万 tokens/日，故给单股重跑入口。
+    """
+    db = _FakeDb(_FakeCol({f"2026-10-09:{c}": {"_id": f"2026-10-09:{c}", "code": c,
+                                               "tradingDate": "2026-10-09", "status": "ok"}
+                           for c in ("600001", "600002", "600003")}))
+    monkeypatch.setattr(runner, "_db", lambda: db)
+    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+        {"stock": {"code": c, "name": f"股{c}"}, "board": "b"}
+        for c in ("600001", "600002", "600003")])
+    monkeypatch.setattr(runner, "_strip", lambda c: c)
+    monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
+    called: list[str] = []
+
+    def _fake(db_, col, acc, token, date, code, *a, **k):
+        called.append(code)
+        return True, 10
+
+    monkeypatch.setattr(runner, "_label_one", _fake)
+
+    run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
+        confirm_budget=True, force=True, only_codes={"600002"})
+    assert called == ["600002"]            # 只重打指定的那只
+    # 不在当日池的 code：披露跳过，不外呼不伪造
+    called.clear()
+    run("2026-10-09", "2026-10-09", dry_run=False, token="tok", acc="acc", workers=1,
+        confirm_budget=True, force=True, only_codes={"999999"})
+    assert called == []
+    assert "999999" in capsys.readouterr().out

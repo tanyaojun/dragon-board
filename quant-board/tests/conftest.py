@@ -106,6 +106,78 @@ def _forbid_real_jev_calls(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _tdx_daily_bars_offline_guard(monkeypatch):
+    """硬护栏（AGENTS §1.2-7 延伸）：默认把 TDX 日线/日内棒取数打成空。
+
+    2026-10-16 停牌分辨起，封板链回溯（jiuyan_consecutive_streaks）开始读 TDX 日线
+    （区分停牌/断板、补证炸板池缺失日）——不设护栏的话，任何走 N>M 回溯路径的用例都会
+    静默连真实通达信节点，单测变慢且结论随上游数据漂移。需要日线的用例在自己的 body 里
+    monkeypatch 覆盖（后应用的补丁胜出，见 test_jev_streak_map._suspension_db）。
+
+    **两个模块都要打**：jev_relay_index 是 `from ... import _daily_bars`，在自己模块命名
+    空间里持有独立绑定，只补 runner 的那个对它无效（2026-10-16 review 实测：
+    test_run_relay_index_day_writes_doc 仍在探真实节点池，5 次外呼）。
+    `_intraday_bars` 同族（stock_board_shape_line 的板型行读 5 分钟棒），打 runner 那个。
+    """
+    from backend.operations import jev_label_jiuyan as _runner
+    from backend.operations import jev_relay_index as _relay
+
+    # 真实现在此存档：护栏把模块属性打成空棒，需要测「_daily_bars 自身缓存语义」的用例
+    # 从这两个名字取回（见 test_jev_streak_map.test_daily_bars_transient_failure_not_cached）
+    _runner._REAL_DAILY_BARS = _runner._daily_bars
+    _runner._REAL_INTRADAY_BARS = _runner._intraday_bars
+    monkeypatch.setattr(_runner, "_daily_bars", lambda code: [])
+    monkeypatch.setattr(_runner, "_intraday_bars", lambda code: [])
+    monkeypatch.setattr(_relay, "_daily_bars", lambda code: [])
+    _runner._DAILY_BARS_CACHE.clear()
+    _runner._INTRA_CACHE.clear()
+    yield
+    _runner._DAILY_BARS_CACHE.clear()
+    _runner._INTRA_CACHE.clear()
+    del _runner._REAL_DAILY_BARS
+    del _runner._REAL_INTRADAY_BARS
+
+
+@pytest.fixture(autouse=True)
+def _clear_io_caches():
+    """清 operations/jev_label_jiuyan 的模块级 IO 缓存（_STREAK_CACHE/_FACTS_CACHE/
+    _ADVDEC_CACHE/_THS_CACHE/_DAILY_BARS_CACHE/_INTRA_CACHE）——这些缓存按 (dataset, date)
+    或 code 键服务于盘后批量，但 pytest 会话内多测试文件共用同一进程，同日期不同夹具会互相污染
+    （2026-10-16 streak_map 落地时实测复现：test_jev_streak_map 与
+    test_jev_label_raw_material 同用 2026-09-30 夹具串读）。
+
+    _DAILY_BARS_CACHE/_INTRA_CACHE 同批清：2026-10-16 停牌分辨（_traded_dates）开始读
+    TDX 日线，漏清会让停牌判定跨用例残留。
+
+    同批清 market_dieban_pool 的东财节流/冷却状态（_em_state）：跨用例残留会让
+    后续用例撞上「冷却期内不外呼」而假失败。
+    """
+    from backend.operations import jev_label_jiuyan as _runner
+    from backend.operations import market_dieban_pool as _dieban
+
+    for cache in (_runner._STREAK_CACHE, _runner._FACTS_CACHE, _runner._ADVDEC_CACHE):
+        cache.clear()
+    _runner._THS_CACHE.clear()
+    _runner._DAILY_BARS_CACHE.clear()
+    _runner._INTRA_CACHE.clear()
+    # 除权因子源（百度）的缓存/失败退避也是模块级 IO 状态：残留会让后续用例静默拿到
+    # 空事件表而假失败（2026-10-16 实测：test_jev_streak_map 跑完后
+    # test_jev_dividend_adjust 的除权解析用例 KeyError）
+    _runner._DIV_LIST_CACHE.clear()
+    _runner._DIV_FAIL_UNTIL.clear()
+    _dieban.reset_em_throttle_state()
+    yield
+    for cache in (_runner._STREAK_CACHE, _runner._FACTS_CACHE, _runner._ADVDEC_CACHE):
+        cache.clear()
+    _runner._THS_CACHE.clear()
+    _runner._DAILY_BARS_CACHE.clear()
+    _runner._INTRA_CACHE.clear()
+    _runner._DIV_LIST_CACHE.clear()
+    _runner._DIV_FAIL_UNTIL.clear()
+    _dieban.reset_em_throttle_state()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _guard_mongodb_test_database():
     """硬护栏：pytest 会话内配置必须指向 dragon_board_test 的 mongodb 后端，
@@ -128,6 +200,24 @@ def _guard_mongodb_test_database():
             + f"（必须 mongodb/{TEST_MONGODB_DATABASE}/pytest 前缀/本机 URI）",
             pytrace=False,
         )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _em_offline_guard(monkeypatch):
+    """硬护栏（AGENTS §1.2-7 延伸）：任何测试路径触到真实东财一律离线失败。
+
+    market_dieban_pool.fetch_limit_down_em 走项目直连的 push2ex 客户端（有节流/冷却），
+    但测试忘注入假客户端时会静默打真实上游（2026-10-16 实测复现：backfill 健康检查
+    用例真连了 push2ex 并拿到 11 家）。此处把客户端单例换成必失败函数，漏 mock 的
+    用例在此显式炸掉；需要模拟东财的用例自行 monkeypatch `_em_http_client` 覆盖。
+    """
+    from backend.operations import market_dieban_pool as _dieban
+
+    def _boom():
+        raise AssertionError("测试禁止真实东财请求：必须 monkeypatch mdp._em_http_client")
+
+    monkeypatch.setattr(_dieban, "_em_http_client", _boom)
     yield
 
 
