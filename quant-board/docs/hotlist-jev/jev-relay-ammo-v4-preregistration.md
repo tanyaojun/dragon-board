@@ -235,3 +235,30 @@ tops 消失）——那是 omission 不是 correction，见 §1.3。
 - 已生成 v4 文档保留在库（`questionSetVersion="v4"` 标注），读取侧按版本区分；
   回退后调用点回到 v3 叙事，不重跑、不删文档。
 - 如需把 v4 文档回退为 v3 口径：属历史回改，另立预注册 + 预算确认。
+
+---
+
+## 14. 执行与验收记录（2026-10-17 完成）
+
+- **备份**：`data/backups/hotlist_jev_relay_index_pre-v4-20261017-215934.jsonl`（108 篇 v3/v1，1.3MB）。
+  `mongodump`/`mongoexport` 不在 PATH → 按 §1.2.4「归档位」语义用 pymongo 导出 JSONL 到 `data/backups/`
+  （gitignore 位，不在业务库建任何集合）。
+- **开火**：15 个交易日（2026-09-18..10-16）`--force` 重放。首轮 11/15 ok；09-18/21/22/23 为
+  `WinError 10061`（网络级、tokens=0）→ 按 §5 同批补跑一次，4/4 ok。**实耗 ≈95.5K tokens（≈$0.01，
+  预算 ~100K）**。
+- **验收（§7 对照）**：
+  | # | 标准 | 结果 |
+  |---|---|---|
+  | 1 | 停牌零误判 | ✓ 10-13/10-14 存档叙事含「停牌跳过」、无「新华传媒…今日断板」假文本 |
+  | 2 | 数字自洽 | ✓ 10-13/14/16 抽检「最高 X 板」与「当前连板 Y」一致（无审计 #2/#3 族矛盾） |
+  | 3 | `insufficient_evidence` 不升 | ⚠ 不可比：v3 备份同窗仅 5 日带 `answers` 字段；v4 = 1/75（1.3%），未见异常 |
+  | 4 | ρ 不升 | ✓ 同窗 v3 0.850 → v4 **0.832**（<0.90） |
+  | 5 | 分布不塌陷 | ✓ 4 档（relay_heat 4 / divergence 9 / collapse 1 / launch 1；v3 同窗 3 档） |
+  | 6 | 全窗 ok | ✓ 15/15 |
+- **代际漂移**（v3→v4，供序列对比注记）：Δidx 多为 ±0.5~4；09-18 +6.8（launch→relay_heat）、
+  09-24 +7.5（launch→divergence）、10-09 +11.3（均 relay_heat）、10-13 −7.0（均 launch，
+  ladder pyramid→fracture）；10-16 29.3/divergence（v3 30.0/divergence）。**序列跨代对比必须按
+  `questionSetVersion` 分层**（前端 relay_page 已有多版本 badge）。
+- **遗留**：①本次只重放 15 日，库内序列为 v4(15) + v3/v1(93) 混合；全量 v4 重放属另立预算。
+  ②`_daily_bars` 取「现在」非叙事日（§9.1.1）不变：早于 ~60 棒窗的历史日停牌分辨退化为 `unknown`，
+  已在文案披露，不静默当停牌。
