@@ -451,6 +451,41 @@ def _bar_verdict(code: str, date: str, bars: list[dict],
     return "sealed" if ammo.closed_at_limit(code, bars[idx]["close"], prev) else "broken"
 
 
+def day_status_of(code: str, date: str, *, sealed: set[str] | None,
+                  touch: set[str] | None, bars: list[dict] | None,
+                  adj: dict[str, float] | None = None) -> str:
+    """该股 date 日接力状态（连板口径单一事实源，2026-10-16 v4 抽取）。
+
+    返回值 ∈ {sealed, broken, suspended, unknown}。池权威 + 日线补洞（用户裁决
+    「停牌不算断板、跳过续算」），决策表：
+
+    | 池 sealed（None=池缺失） | TDX 日线 | 触板名单 touch | 判定 |
+    |---|---|---|---|
+    | 含 code | — | — | sealed（池为既定权威） |
+    | 不含 code | 无棒 | 不含 code | suspended（停牌跳过） |
+    | 不含 code | 无棒 | 含 code | unknown（TDX 数据洞，非停牌） |
+    | 不含 code | 有棒 | — | broken（断板） |
+    | None | 无棒 | 不含 code | suspended |
+    | None | 无棒 | 含 code | unknown |
+    | None | 收涨停 | — | sealed（日线补证） |
+    | None | 有棒未封 | — | broken |
+    | None | 日线整体不可用 | — | unknown（宁缺毋猜，不让步为停牌） |
+
+    消费方（禁双实现）：`jiuyan_consecutive_streaks` 真连板回溯、
+    `jev_relay_index` 三日晋级链 / 晋级断板 / 高位股多日轨迹（停牌股既不进晋级
+    也不进断板集合）。
+    """
+    if sealed is not None and code in sealed:
+        return "sealed"
+    verdict = _bar_verdict(code, date, bars, adj or {}) if bars else "unknown"
+    if verdict == "suspended":
+        # 无棒：停牌？还是 TDX 数据洞（当日确实交易过）？触板名单在册=数据洞，不可验
+        return "unknown" if (touch is not None and code in touch) else "suspended"
+    if sealed is None:
+        return verdict            # 池缺失日走日线补证：sealed / broken / unknown
+    return "broken"              # 池权威说未封且日线无停牌佐证 → 断板
+
+
 def jiuyan_consecutive_streaks(db, date: str, targets: dict[str, int],
                                today_sealed: set[str] | None) -> dict[str, int | None]:
     """断板股真实连续高度（连板口径，2026-10-13 用户需求）：逐交易日回溯封板链。
@@ -514,31 +549,18 @@ def jiuyan_consecutive_streaks(db, date: str, targets: dict[str, int],
         for d in prev_dates:
             if streak >= m:
                 break  # 封顶：连续高度不可能超区间总板数
-            s = sealed_set(d)
-            if s is not None and code in s:
-                streak += 1          # 池证实封板（池可用时以池为既定权威）
+            # 池权威 + 日线补洞的唯一判定入口（day_status_of，禁双实现；行为与旧内联逻辑等价）
+            st = day_status_of(code, d, sealed=sealed_set(d), touch=touch_set(d),
+                               bars=bars, adj=adj)
+            if st == "sealed":
+                streak += 1          # 池证实封板（池可用时以池为既定权威）/ 池缺失日线补证
                 continue
-            # 池说「未封」或「不可验」→ 借该股自己的 TDX 日线分辨停牌/断板/池缺失
-            verdict = _bar_verdict(code, d, bars, adj) if bars else "no_bars"
-            if verdict == "suspended":
-                # 停牌日不是交易日，不构成断板，跳过续算。但「当日确实交易过」（名字在
-                # 韭研触板名单）而 TDX 无棒 = 数据洞，不是停牌——按停牌跳过会把断板日
-                # 算成连板日、虚报高度（600825 10-08 实证：当日炸板且 TDX 恰好无棒）。
-                t = touch_set(d)
-                if t is not None and code in t:
-                    verifiable = False
-                    break
-                continue
-            if s is None:
-                # 池缺失日：日线补证；判不出（无日线可用）→ 不可验，不按 M 伪算
-                if verdict == "sealed":
-                    streak += 1
-                    continue
-                if verdict == "broken":
-                    break
-                verifiable = False
-                break
-            break                    # 池说未封且日线无停牌佐证 → 断板，链终点
+            if st == "suspended":
+                continue             # 停牌日不是交易日，不构成断板，跳过续算
+            if st == "broken":
+                break                # 断板，链终点
+            verifiable = False       # unknown（TDX 数据洞/无日线可用）：不可验，宁缺毋猜
+            break
         else:
             # 回溯窗耗尽。streak == m 时链已在窗口内走完（今日 + m-1 个已证封板日），
             # 是合法完整链；只有 streak < m 才是被窗口截断的偏小值——返回它会与同段板序行

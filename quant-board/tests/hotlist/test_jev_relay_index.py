@@ -7,10 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import pytest
+
 import backend.operations.jev_relay_index as relay
 from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY
 from backend.operations.jev_relay_index import (
     _pool_of,
+    high_position_trajectory_lines,
     ladder_structure_line,
     relay_flow_line,
     run_relay_index_day,
@@ -18,6 +21,18 @@ from backend.operations.jev_relay_index import (
     three_day_chain_line,
     zhaban_face_line,
 )
+from backend.operations.jev_label_jiuyan import day_status_of
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_tdx(monkeypatch):
+    """默认屏蔽 TDX 取数（日线/除权）——用例内可用 monkeypatch 覆盖 `relay._daily_bars`。
+
+    v4 起 relay_flow/three_day_chain/high_position_trajectory 会逐股调 _daily_bars +
+    _adj_prev_series（停牌分辨），必须与真连板回溯测试同规全 mock（AGENTS §1.2.7）。
+    """
+    monkeypatch.setattr(relay, "_adj_prev_series", lambda *a, **k: {})
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: [])
 
 
 class FakeCol:
@@ -625,3 +640,141 @@ def test_narrative_context_anchor_maxboard_uncomputable():
     lines = relay.narrative_context_lines(db, dates[-1])
     assert any("最高板峰值 不可算（窗口内无真连板高度，fail-visible）" in x for x in lines)
     assert any("涨停峰值" in x for x in lines)
+
+
+# ── v4（2026-10-16 预注册 jev-relay-ammo-v4-preregistration.md）───────────────
+
+
+def _bars(seq):
+    return [{"date": d, "high": c, "close": c, "vol": 1.0} for d, c in seq]
+
+
+def test_day_status_of_decision_table():
+    """停牌分辨决策表（v4 单一事实源）：池权威 + 日线补洞 + 触板名单排除数据洞。"""
+    up = _bars([(_D2, 10.0), (_D1, 11.0)])     # +10% 封板
+    dn = _bars([(_D2, 10.0), (_D1, 9.5)])      # -5% 未封
+    gap = _bars([(_D2, 10.0), (_D0, 12.1)])    # D-1 无棒（落在已覆段内）
+    # 池含 → sealed（池为既定权威，即便日线矛盾）
+    assert day_status_of("600001", _D1, sealed={"600001"}, touch={"600001"}, bars=dn) == "sealed"
+    # 池不含 + 无棒 + 不在触板名单 → suspended（停牌跳过）
+    assert day_status_of("600001", _D1, sealed={"600002"}, touch={"600002"}, bars=gap) == "suspended"
+    # 池不含 + 无棒 + 触板名单在册 → unknown（TDX 数据洞，不是停牌）
+    assert day_status_of("600001", _D1, sealed={"600002"}, touch={"600001"}, bars=gap) == "unknown"
+    # 池不含 + 有棒未封 → broken
+    assert day_status_of("600001", _D1, sealed={"600002"}, touch={"600002"}, bars=dn) == "broken"
+    # 池缺失 + 日线补证：收涨停 → sealed；未封 → broken
+    assert day_status_of("600001", _D1, sealed=None, touch=None, bars=up) == "sealed"
+    assert day_status_of("600001", _D1, sealed=None, touch=None, bars=dn) == "broken"
+    # 池缺失 + 无棒（已覆段内）→ suspended
+    assert day_status_of("600001", _D1, sealed=None, touch=None, bars=gap) == "suspended"
+    # 日线整体不可用：池权威仍可判（未封→broken）；池缺失 → unknown（不让步为停牌）
+    assert day_status_of("600001", _D1, sealed={"600002"}, touch={"600002"}, bars=[]) == "broken"
+    assert day_status_of("600001", _D1, sealed=None, touch=None, bars=[]) == "unknown"
+
+
+def test_three_day_chain_suspension_skip_not_break(monkeypatch):
+    """v4 停牌跳过续算（600825 式）：D-2 封板 → D-1 停牌 → D0 回封。
+
+    旧口径写「昨日9天9板今日断板」（假断板，污染 relay_momentum/phase）；v4 必须写
+    「昨日停牌今日回封」且不得出现假断板文本。
+    """
+    bars = {
+        # 600001 日线跨过 D-1（D-2 与 D0 有棒，D-1 无棒 = 停牌）
+        "600001": _bars([(_D2, 10.0), (_D0, 12.1)]),
+        "600002": _bars([(_D2, 10.0), (_D1, 11.0), (_D0, 12.1)]),
+    }
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([
+            _final(_D2, [{"code": "600001", "name": "新华传媒", "num": "9天9板"},
+                         {"code": "600002", "name": "B", "num": "2天2板"}]),
+            _final(_D1, [{"code": "600002", "name": "B", "num": "3天3板"}]),   # 600001 停牌不在池
+            _final(_D0, [{"code": "600001", "name": "新华传媒", "num": "11天11板"},
+                         {"code": "600002", "name": "B", "num": "4天4板"}]),
+        ]),
+    })
+    line = three_day_chain_line(db, _D0)
+    assert "新华传媒 9天9板→昨日停牌今日回封（连板11板）" in line
+    assert "今日断板" not in line          # 假断板红线（停牌不得当断板）
+    assert "今日停牌跳过" not in line
+
+
+def test_relay_flow_line_suspension_skips_denominator(monkeypatch):
+    """v4：停牌股既不进晋级也不进断板，分母同剔并披露。"""
+    bars = {
+        # 600001 在 D0 停牌：停牌日前后都有棒（D-1 与 10-01），缺 D0 → suspended
+        "600001": _bars([(_D1, 10.0), ("2026-10-01", 11.0)]),
+        "600002": _bars([(_D1, 10.0), (_D0, 9.5)]),   # 断板 -5%
+    }
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([
+            _final(_D2, _STOCKS[_D2]),
+            _final(_D1, [{"code": "600001", "name": "A", "num": "3天3板"},
+                         {"code": "600002", "name": "B", "num": "2天2板"}]),
+            _final(_D0, [{"code": "600003", "name": "C"}]),   # 600001 停牌、600002 断板（均不在池）
+        ]),
+    })
+    line = relay_flow_line(db, _D0)
+    assert "停牌跳过 1 只" in line and "不计入晋级率" in line
+    assert "断板 1 只" in line
+    # 分母 = 2 − 1（停牌）= 1；晋级 0 → 0.0%（真实 0，非伪 0）
+    assert "（晋级率 0.0%）（停牌跳过 1 只，不计入晋级率）" in line
+
+
+def test_relay_flow_line_layer_cap_splits_high(monkeypatch):
+    """v4 分层 cap=6：5 板与 6板+ 分离（旧 min(s,5) 把 6/10/11 板混进「5板」层）。"""
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([
+            _final(_D2, _STOCKS[_D2]),
+            _final(_D1, [{"code": "600001", "name": "A", "num": "5天5板"},
+                         {"code": "600002", "name": "B", "num": "6天6板"}]),
+            _final(_D0, [{"code": "600001", "name": "A", "num": "6天6板"}]),   # 600001 晋级；600002 断板
+        ]),
+    })
+    line = relay_flow_line(db, _D0)
+    assert "5板→100%(1/1)" in line
+    assert "6板+→0%(0/1)" in line
+    assert "5板→0%(0/2)" not in line   # 旧合并层红线
+
+
+def test_high_position_trajectory_lines_selects_and_renders(monkeypatch):
+    """段 2c：真连板≥4 的 top5、逐日 ●、汇总行；<4 不入段。"""
+    bars = {"600001": _bars([(_D2, 10.0), (_D1, 11.0), (_D0, 12.1)])}   # 逐日封板
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([
+            _final(_D2, [{"code": "600001", "name": "高标", "num": "3天3板"}]),
+            _final(_D1, [{"code": "600001", "name": "高标", "num": "4天4板"}]),
+            _final(_D0, [{"code": "600001", "name": "高标", "num": "5天5板"},
+                         {"code": "600003", "name": "低标", "num": "2天2板"}]),
+        ]),
+    })
+    joined = "\n".join(high_position_trajectory_lines(db, _D0))
+    assert "高位股多日轨迹" in joined
+    assert "600001" in joined and "当前连板5" in joined and "区间 5天5板" in joined
+    assert "600003" not in joined                       # 真连板 2 < 4，不入段
+    assert "高位股今日状态：连板中 1 只" in joined
+    assert "●●●" in joined
+
+
+def test_high_position_trajectory_lines_no_high_stock(monkeypatch):
+    """无真连板≥4 样本 → 单行如实披露，不伪造路径。"""
+    db = FakeDb({"snapshot_frames": _frames([_D2, _D1, _D0]),
+                 "jiuyan_action": FakeCol([_final(_D0, [{"code": "600003", "name": "低标"}])])})
+    lines = high_position_trajectory_lines(db, _D0)
+    assert len(lines) == 1 and "无真连板≥4" in lines[0]
+
+
+def test_high_position_trajectory_lines_tdx_unavailable(monkeypatch):
+    """TDX 日线整体不可用 → 单行 fail-visible，不得伪造路径。"""
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: [])
+    db = FakeDb({"snapshot_frames": _frames([_D2, _D1, _D0]),
+                 "jiuyan_action": FakeCol([_final(_D0, [{"code": "600001", "name": "高标",
+                                                          "num": "5天5板"}])])})
+    lines = high_position_trajectory_lines(db, _D0)
+    assert lines == ["高位股多日轨迹：TDX 日线不可用（fail-visible）"]

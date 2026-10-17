@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 """连板情绪指数轨道（relay sentiment index，2026-10-10 Phase 1）。
 
-- 叙事七段（§3 设计 + 2026-10-11 StepB 炸板面段，预登记 docs/hotlist-jev/jev-relay-zhaban-preregistration.md）：
-  总账+今日炸板面/晋级断板 → 三日链与题材演化 → 题材梯队表 → 龙头档案 → 近10日轨迹 → 热榜叙事参照段
-- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v3 已落生产）
+- 叙事结构（§3 设计 + 2026-10-11 StepB 炸板面段 + 2026-10-16 v4 高位股多日轨迹段）：
+  总账 → 今日炸板面 → 晋级断板 → 梯队量化 → 三日链 → 题材演化 → **高位股多日轨迹**
+  → 题材梯队表 → 龙头档案 → 近10日轨迹 → 热榜叙事参照段
+- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v4）
 - 存储：hotlist_jev_relay_index，_id={date}:RELAY；幂等跳过 status=ok
 - 通道：_dispatch_jev 分流（官方直连优先，CF 回退）
 - 口径：涨停/晋级 = 触板 − THS 炸板池（方案A 二分，_sealed_codes）；THS 缺失日回退触板口径并注记
+- **停牌跳过续算（v4，预注册 jev-relay-ammo-v4-preregistration.md）**：三日链/晋级断板/
+  高位轨迹均走 day_status_of 单一事实源，停牌股既不计晋级也不计断板（分母同剔）；
+  分层顶层 cap=_LAYER_CAP（6板+）
 - fail-visible：任一段原料缺失写「不可算」，不伪造不阻断
 """
 from __future__ import annotations
@@ -21,6 +25,7 @@ from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY, QUESTION_SE
 from backend.core.limit_rules import is_limit_down_pct
 from backend.operations.jev_label_jiuyan import (
     DEFAULT_DATASET_ID,
+    _adj_prev_series,
     _daily_bars,
     _dispatch_jev,
     _jiuyan_board_count,
@@ -28,6 +33,7 @@ from backend.operations.jev_label_jiuyan import (
     _prev_close_of_date,
     _range_height_text,
     _ths_failed_items,
+    day_status_of,
     dragon_rows,
     hotlist_ranks,
     jiuyan_streak_map,
@@ -42,6 +48,11 @@ from backend.operations.jev_label_jiuyan import (
 )
 
 COLLECTION = "hotlist_jev_relay_index"
+
+# 分层晋级顶层 cap（v4，2026-10-16 口径）：1..5 板精确、第 6 层语义=「6板+」。
+# 旧 min(s,5) 把 5/6/10/11 板混成一层，11 连板时代高位层分化（divergence 判据核心
+# 证据）不可见；分层样本小，只做一次切分避免过度切层。
+_LAYER_CAP = 6
 
 
 # ── 池工具 ─────────────────────────────────────────────────────────────────
@@ -124,41 +135,103 @@ def _broken_stats(codes: set[str], from_date: str, to_date: str) -> dict[str, An
             "covered": len(pcts)}
 
 
+def _status_map(db: Any, date: str, pool: dict[str, Any], codes: set[str],
+                dataset_id: str) -> tuple[dict[str, str], bool]:
+    """codes 在 date 日的接力状态映射（池权威 + 日线补洞，唯一入口 day_status_of）。
+
+    返回 ({code: sealed|broken|suspended|unknown}, ths_found)：ths_found=False =
+    该日 THS 炸板池缺失 → 二分不可用，sealed 传 None 交由日线补证（不把触板当封板，
+    与真连板回溯同规）。停牌/数据洞分辨即「停牌不算断板」的实现层（v4）。
+    """
+    sealed, found = _sealed_codes(db, date, set(pool), dataset_id)
+    sealed_bin = sealed if found else None
+    touch = set(pool) if pool else None
+    bars_cache: dict[str, list[dict]] = {}
+    out: dict[str, str] = {}
+    for c in codes:
+        if c not in bars_cache:
+            bars_cache[c] = _daily_bars(c)
+        bars = bars_cache[c]
+        adj = _adj_prev_series(date, c, bars) if bars else {}
+        out[c] = day_status_of(c, date, sealed=sealed_bin, touch=touch, bars=bars, adj=adj)
+    return out, found
+
+
+def _promotion_stats(db: Any, prev_date: str, date: str,
+                     dataset_id: str) -> dict[str, Any]:
+    """昨日封板池 → 今日状态分区（v4 停牌跳过续算；relay_flow 与三日链边际对比唯一算式）。
+
+    - base = 昨日二分封板集合（THS 炸板池缺失日回退触板口径，calib 披露）；
+    - 逐股 day_status_of → promoted / broken / suspended / unknown；
+    - 晋级率分母 = |base| − suspended − unknown（停牌/不可验既不进分子也不进分母，
+      与用户裁决「停牌不算断板、跳过续算」同源）；分母为 0 → rate=None（不伪 0）。
+    """
+    prev_pool, cur_pool = _pool_of(db, prev_date), _pool_of(db, date)
+    if not prev_pool:
+        return {"ok": False, "reason": f"{prev_date} 韭研 final 缺失"}
+    base, prev_found = _sealed_codes(db, prev_date, set(prev_pool), dataset_id)
+    status, cur_found = _status_map(db, date, cur_pool, set(base), dataset_id)
+    promoted = sorted(c for c in base if status.get(c) == "sealed")
+    broken = sorted(c for c in base if status.get(c) == "broken")
+    suspended = sorted(c for c in base if status.get(c) == "suspended")
+    unknown = sorted(c for c in base if status.get(c) == "unknown")
+    denom = len(base) - len(suspended) - len(unknown)
+    rate = round(len(promoted) / denom * 100, 1) if denom else None
+    return {"ok": True, "prev_date": prev_date, "base": sorted(base),
+            "promoted": promoted, "broken": broken, "suspended": suspended,
+            "unknown": unknown, "denom": denom, "rate": rate, "status": status,
+            "prev_found": prev_found, "cur_found": cur_found,
+            "prev_pool": prev_pool, "cur_pool": cur_pool}
+
+
 def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    """晋级率 + 断板亏钱 + 隔日溢价（D-1 池 × D0 池/TDX 日线；涨停/晋级按方案A 二分口径）。
-    断板亏钱带较昨日对比（2026-10-16 二级审计补供 relay_phase.divergence 判据）。"""
+    """晋级率 + 断板亏钱 + 隔日溢价（D-1 池 × D0；v4 停牌跳过续算）。
+
+    停牌/不可验股既不进晋级也不进断板（分母同剔，文案披露）；断板亏钱带较昨日对比
+    （2026-10-16 二级审计补供 relay_phase.divergence 判据）；分层顶层 cap=_LAYER_CAP。
+    """
     prev_dates = trading_dates_before(db, date, 1)
     if not prev_dates:
         return "晋级与断板：无昨日交易日（fail-visible）"
     prev_date = prev_dates[-1]
-    prev_pool, cur_pool = _pool_of(db, prev_date), _pool_of(db, date)
-    if not prev_pool:
-        return f"晋级与断板：{prev_date} 韭研 final 缺失（fail-visible）"
-    prev_zt, prev_found = _sealed_codes(db, prev_date, set(prev_pool), dataset_id)
-    cur_zt, cur_found = _sealed_codes(db, date, set(cur_pool), dataset_id)
-    calib = "" if (prev_found and cur_found) else "（THS炸板池缺失，触板口径降级）"
-    promoted = [c for c in prev_zt if c in cur_zt]
-    broken = sorted(prev_zt - cur_zt)
-    rate = round(len(promoted) / len(prev_zt) * 100, 1) if prev_zt else 0.0
-    # 分层晋级：昨日各板层今日连板成功率。板层=**昨日真连板**（2026-10-16 口径修正：
-    # 旧口径拿区间 M 分层，19天11板真连板1板会被算进 5 板层，晋级率判据被污染）
+    stats = _promotion_stats(db, prev_date, date, dataset_id)
+    if not stats.get("ok"):
+        return f"晋级与断板：{stats['reason']}（fail-visible）"
+    base, rate = stats["base"], stats["rate"]
+    promoted, broken = stats["promoted"], stats["broken"]
+    suspended, unknown = stats["suspended"], stats["unknown"]
+    prev_pool = stats["prev_pool"]
+    promoted_set, broken_set = set(promoted), set(broken)
+    # 停牌跳过披露（v4）：停牌与不可验均不入分子/分母，必须显式可见（fail-visible）
+    skip_parts = []
+    if suspended:
+        skip_parts.append(f"停牌跳过 {len(suspended)} 只")
+    if unknown:
+        skip_parts.append(f"状态不可验 {len(unknown)} 只")
+    skip_txt = f"（{'、'.join(skip_parts)}，不计入晋级率）" if skip_parts else ""
+    calib = "" if (stats["prev_found"] and stats["cur_found"]) else "（THS炸板池缺失日按日线补证/触板口径）"
+    rate_txt = f"{rate}%" if rate is not None else "不可算（分母为空）"
+    # 分层晋级：昨日各板层今日连板成功率。板层=昨日真连板；顶层 cap=_LAYER_CAP（6板+）。
     prev_streaks = jiuyan_streak_map(db, prev_date, dataset_id)
     layers: dict[int, list[bool]] = {}
     unlayered = 0
-    for c in prev_zt:
+    for c in base:
+        if c not in promoted_set and c not in broken_set:
+            continue  # 停牌/不可验 → 不入层（已在上方披露，不伪 0）
         s = prev_streaks.get(c)
         if not isinstance(s, int):
             # 不可算 → 不入层。旧代码此处回退区间 M，19天11板真连板1板又被算进 5 板层，
-            # 正是本次口径修正要除的污染；宁缺毋猜，单独披露只数
+            # 正是口径修正要除的污染；宁缺毋猜，单独披露只数
             unlayered += 1
             continue
-        layers.setdefault(min(s, 5), []).append(c in cur_zt)
+        layers.setdefault(min(s, _LAYER_CAP), []).append(c in promoted_set)
     layer_txt = "；".join(
-        f"{k}板→{'%.0f%%' % (sum(v) / len(v) * 100)}({sum(v)}/{len(v)})"
+        f"{k}板+→{'%.0f%%' % (sum(v) / len(v) * 100)}({sum(v)}/{len(v)})" if k == _LAYER_CAP
+        else f"{k}板→{'%.0f%%' % (sum(v) / len(v) * 100)}({sum(v)}/{len(v)})"
         for k, v in sorted(layers.items()))
     if unlayered:
         layer_txt += f"；{unlayered}只连板高度不可算未分层"
-    # 断板亏钱（TDX）
+    # 断板亏钱（TDX）：broken 已剔除停牌/不可验
     cur_stats = _broken_stats(set(broken), prev_date, date)
     if broken:
         if cur_stats:
@@ -170,21 +243,20 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
             broken_txt = f"断板 {len(broken)} 只：今日表现不可算（TDX 日线缺失）"
     else:
         broken_txt = "断板 0 只"
-    # 较昨日断板：昨日断板=前日涨停池−昨日涨停池，亏钱取其 D-2→D-1 收盘。判据「断板亏钱
-    # 扩散（中位转负或大面增多）」需要昨日可比数，此前只给今日绝对值（2026-10-16 补供）。
+    # 较昨日断板：前日池昨日断板（同 _promotion_stats 停牌口径，剔停牌/不可验）。判据「断板
+    # 亏钱扩散（中位转负或大面增多）」需要昨日可比数，此前只给今日绝对值（2026-10-16 补供）。
     window2 = trading_dates_before(db, date, 2)
     if len(window2) < 2:
         prev_broken_txt = "较昨日断板：不可算（无前日交易日）"
     else:
         d2 = window2[-2]
-        p2 = _pool_of(db, d2)
-        if not p2:
-            prev_broken_txt = f"较昨日断板：不可算（{d2} 韭研 final 缺失）"
+        stats2 = _promotion_stats(db, d2, prev_date, dataset_id)
+        if not stats2.get("ok"):
+            prev_broken_txt = f"较昨日断板：不可算（{stats2.get('reason', d2 + ' 数据缺失')}）"
         else:
-            p2z, f2 = _sealed_codes(db, d2, set(p2), dataset_id)
-            pb = p2z - prev_zt
+            pb = set(stats2["broken"])
             ps = _broken_stats(pb, d2, prev_date)
-            calib2 = "" if f2 else "（前日触板口径）"
+            calib2 = "" if stats2["prev_found"] else "（前日触板口径）"
             if not pb:
                 prev_broken_txt = "较昨日断板：昨日 0 只"
             elif ps is None:
@@ -197,15 +269,16 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
             else:
                 prev_broken_txt = (f"较昨日断板：中位 {ps['median']:+}%→{cur_stats['median']:+}%、"
                                    f"大面 {ps['big']}→{cur_stats['big']} 只{calib2}")
-    # 隔日溢价（昨日全部涨停股今日收盘中位）
-    prem = [p for p in (_close_pct(c, prev_date, date) for c in prev_zt) if p is not None]
-    prem_txt = f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(prev_zt)}）" if prem \
-        else "隔日溢价不可算（TDX 日线缺失）"
+    # 隔日溢价（昨日可交易涨停股今日收盘中位；停牌/不可验不入基数）
+    elig = sorted(promoted_set | broken_set)
+    prem = [p for p in (_close_pct(c, prev_date, date) for c in elig) if p is not None]
+    prem_txt = (f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(elig)}）" if prem
+                else "隔日溢价不可算（TDX 日线缺失）")
     # 涨停家数口径对账（2026-10-16）：同花顺涨停池参照，差集=触板未封/新股，防两口径数字打架
-    caliber = _zt_caliber_note(db, prev_date, dataset_id, prev_zt, prev_pool)
-    return (f"晋级与断板：昨日 {len(prev_zt)} 只涨停（触板二分口径）{calib}{caliber} → "
+    caliber = _zt_caliber_note(db, prev_date, dataset_id, set(base), prev_pool)
+    return (f"晋级与断板：昨日 {len(base)} 只涨停（触板二分口径）{calib}{caliber} → "
             f"今日仍涨停 {len(promoted)} 只"
-            f"（晋级率 {rate}%）{calib}[{layer_txt}] · {broken_txt} · {prev_broken_txt} · {prem_txt}")
+            f"（晋级率 {rate_txt}）{skip_txt}[{layer_txt}] · {broken_txt} · {prev_broken_txt} · {prem_txt}")
 
 
 # ── 段 2a：三日晋级链 ───────────────────────────────────────────────────────
@@ -250,7 +323,12 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
 
 
 def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    """D-2 池 → D-1 → D0 存活链 + 高位股逐日点名（relay_momentum 主锚；二分涨停口径）。"""
+    """D-2 池 → D-1 → D0 存活链 + 高位股逐日点名（relay_momentum/relay_phase 主锚；二分口径）。
+
+    v4（2026-10-16）：停牌分辨——停牌股既不计晋级也不计断板（跳过续算），fate 增
+    「今日停牌跳过/昨日停牌今日回封」档；边际对比与 relay_flow_line 共用 _promotion_stats，
+    两处晋级率数字必然一致（禁漂移）。
+    """
     window = trading_dates_before(db, date, 2)
     if len(window) < 2:
         return "三日晋级链：历史不足（fail-visible）"
@@ -258,53 +336,76 @@ def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_I
     p2, p1, p0 = _pool_of(db, d2), _pool_of(db, d1), _pool_of(db, date)
     if not p2 or not p1:
         return f"三日晋级链：{d2}/{d1} 韭研 final 缺失（fail-visible）"
-    p2z, f2 = _sealed_codes(db, d2, set(p2), dataset_id)
-    p1z, f1 = _sealed_codes(db, d1, set(p1), dataset_id)
-    p0z, f0 = _sealed_codes(db, date, set(p0), dataset_id)
-    calib = "" if (f2 and f1 and f0) else "（THS炸板池缺失日按触板口径）"
-    s1 = p2z & p1z
-    s0 = s1 & p0z
-    r1 = round(len(s1) / len(p2z) * 100, 1) if p2z else 0.0
-    r0 = round(len(s0) / len(p2z) * 100, 1) if p2z else 0.0
+    # 逐日状态（覆盖 p2 全体：既供存活链也供高位股 fate）；池权威 + 日线补洞（唯一入口）
+    st1, f1 = _status_map(db, d1, p1, set(p2), dataset_id)
+    st0, f0 = _status_map(db, date, p0, set(p2), dataset_id)
+    stats_a = _promotion_stats(db, d2, d1, dataset_id)     # D-2 封板池 → D-1（r1）
+    stats_b = _promotion_stats(db, d1, date, dataset_id)   # D-1 封板池 → D0（边际对比）
+    base2 = set(stats_a["base"]) if stats_a.get("ok") else set()
+    den_a = stats_a["denom"] if stats_a.get("ok") else 0
+    r1 = stats_a["rate"] if stats_a.get("ok") else None
+    # 存活链：D-2 封板 → D-1 封板 → D0 封板；停牌跳过但不计入存活（预注册 §2.1）
+    s1 = {c for c in base2 if st1.get(c) == "sealed"}
+    s0 = {c for c in s1 if st0.get(c) == "sealed"}
+    r0 = round(len(s0) / den_a * 100, 1) if den_a else None
     r_step = round(len(s0) / len(s1) * 100, 1) if s1 else None
-    # 高位股逐日点名：D-2 按区间高度降序 top3（连板/断板按二分涨停池判定——今日炸板 ≠ 连板）
+    calib = "" if (stats_a.get("prev_found") and f1 and f0) else "（THS炸板池缺失日按日线补证/触板口径）"
+    # 高位股逐日点名：D-2 按区间高度降序 top3（连板/断板/停牌按 day_status_of 判定）
     tops = sorted(p2.items(), key=lambda kv: (-_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[:3]
     streaks0 = jiuyan_streak_map(db, date, dataset_id)
     fate = []
     for code, entry in tops:
-        day1 = _day_eff(p1[code]) if code in p1z else None
-        day0 = _day_eff(p0[code]) if code in p0z else None
         name = entry.get("name") or code
         rng = _range_num_txt(entry)          # D-2 日区间高度「N天M板」
-        st0 = streaks0.get(code)
-        s0_txt = f"连板{st0}板" if isinstance(st0, int) else "连板不可算"
-        if day0 is not None and code in p1z:
-            # 今日封板且昨日也封板 → 真连板中（2026-10-16 修：旧逻辑只看今日封板，
-            # 把「昨日炸板今日回封」误判成连板中——澳弘电子 10-14 炸板、10-15 回封）
-            fate.append(f"{name} {rng}→连板中（今日{_range_num_txt(p0[code])}·{s0_txt}）")
-        elif day0 is not None:
-            fate.append(f"{name} {rng}→昨日断板今日回封（{s0_txt}）")
-        elif day1 is not None:
-            # 区间高度 M 必须带跨度写成「N天M板」：裸「昨日10板」会被读成昨日 10 连板，
-            # 而同篇段1 说最高 5 板（真连板）——同族自相矛盾（审计问题 #2/#3）
-            fate.append(f"{name} {rng}→昨日{_range_num_txt(p1[code])}今日断板")
-        else:
-            fate.append(f"{name} {rng}→次日即断")
-    step_txt = f"→ D0 再存活 {len(s0)} 只（链率 {r0}%，段率 {r_step}%）" if r_step is not None else ""
-    # 昨日池今日晋级率 vs 前日池昨日晋级率（relay_momentum 主锚直供对比，2026-10-15 诊断补供：
-    # 此前两率分居段1「晋级与断板」与段2 本行、同日家数口径不一（market_metrics vs 二分池），
-    # 模型须跨段心算；此处与 relay_flow_line 同源同式（p1z∩p0z / p1z），两行数字必然一致）
-    if p1z:
-        d1_promo = len(p1z & p0z)
-        d1_rate = round(d1_promo / len(p1z) * 100, 1)
-        cmp_txt = (f"边际对比：昨日池今日晋级率 {d1_rate}%（{len(p1z)}→{d1_promo}）"
-                   f" vs 前日池昨日 {r1}%（{len(p2z)}→{len(s1)}），{round(d1_rate - r1, 1):+.1f}pct")
-    else:
+        y, t = st1.get(code), st0.get(code)
+        st0c = streaks0.get(code)
+        s0_txt = f"连板{st0c}板" if isinstance(st0c, int) else "连板不可算"
+        today_rng = _range_num_txt(p0[code]) if code in p0 else "封板"
+        if t == "sealed":
+            if y == "sealed":
+                # 今日封板且昨日也封板 → 真连板中（2026-10-16 修：旧逻辑只看今日封板，
+                # 把「昨日炸板今日回封」误判成连板中——澳弘电子 10-14 炸板、10-15 回封）
+                fate.append(f"{name} {rng}→连板中（今日{today_rng}·{s0_txt}）")
+            elif y == "suspended":
+                fate.append(f"{name} {rng}→昨日停牌今日回封（{s0_txt}）")
+            elif y == "unknown":
+                fate.append(f"{name} {rng}→今日回封（昨日不可验，{s0_txt}）")
+            else:
+                fate.append(f"{name} {rng}→昨日断板今日回封（{s0_txt}）")
+        elif t == "suspended":
+            fate.append(f"{name} {rng}→今日停牌跳过")
+        elif t == "unknown":
+            fate.append(f"{name} {rng}→今日状态不可验（TDX 数据洞）")
+        else:  # 今日断板
+            if y == "sealed":
+                # 区间高度 M 必须带跨度写成「N天M板」：裸「昨日10板」会被读成昨日 10 连板，
+                # 而同篇段1 说最高 5 板（真连板）——同族自相矛盾（审计问题 #2/#3）
+                ybase = _range_num_txt(p1[code]) if code in p1 else "涨停"
+                fate.append(f"{name} {rng}→昨日{ybase}今日断板")
+            elif y == "suspended":
+                fate.append(f"{name} {rng}→昨日停牌今日断板")
+            elif y == "unknown":
+                fate.append(f"{name} {rng}→今日断板（昨日不可验）")
+            else:
+                fate.append(f"{name} {rng}→次日即断")
+    step_txt = (f"→ D0 再存活 {len(s0)} 只（链率 {r0}%，段率 {r_step}%）"
+                if r_step is not None else "")
+    r1_txt = f"{r1}%" if r1 is not None else "不可算"
+    # 昨日池今日晋级率 vs 前日池昨日晋级率（relay_momentum 主锚直供对比；与 relay_flow_line
+    # 同源同式 _promotion_stats，两行数字必然一致，消除模型跨段心算）
+    d1_rate = stats_b["rate"] if stats_b.get("ok") else None
+    if stats_b.get("ok") and not stats_b["base"]:
         cmp_txt = "边际对比：不可算（昨日涨停池为空）"
+    elif d1_rate is None or r1 is None:
+        cmp_txt = "边际对比：不可算（分母为空）"
+    else:
+        cmp_txt = (f"边际对比：昨日池今日晋级率 {d1_rate}%"
+                   f"（{stats_b['denom']}→{len(stats_b['promoted'])}）"
+                   f" vs 前日池昨日 {r1}%（{den_a}→{len(s1)}），{round(d1_rate - r1, 1):+.1f}pct")
     # 涨停家数口径对账（2026-10-16，同 relay_flow_line）：D-2 家数给同花顺池参照+差集
-    d2_caliber = _zt_caliber_note(db, d2, dataset_id, p2z, p2)
-    return (f"三日晋级链：{d2} 涨停 {len(p2z)} 只（触板二分口径）{d2_caliber} → "
-            f"{d1} 仍涨停 {len(s1)} 只（{r1}%）"
+    d2_caliber = _zt_caliber_note(db, d2, dataset_id, base2, p2)
+    return (f"三日晋级链：{d2} 涨停 {len(base2)} 只（触板二分口径）{d2_caliber} → "
+            f"{d1} 仍涨停 {len(s1)} 只（{r1_txt}）"
             f"{step_txt} · 高位股轨迹：{'；'.join(fate) if fate else '无'}{calib} · {cmp_txt}")
 
 
@@ -375,6 +476,74 @@ def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
     hist_txt = f"\n近5日题材榜：{' ； '.join(history)}" if history else ""
     return (f"题材演化：今日 top3 [{' / '.join(rows)}]；与昨日 top3 重合 {overlap}/3；连续性：{streak_txt}"
             f"（{'主线延续' if overlap >= 2 else '轮动换线' if overlap == 1 else '全面换血'}）{hist_txt}")
+
+
+# ── 段 2c：高位股多日轨迹（v4，2026-10-16 预注册 §2.3）───────────────────────
+
+
+def high_position_trajectory_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                                   top: int = 5, n: int = 10) -> list[str]:
+    """今日真连板 ≥4 的个股 top5 × 近 n 个交易日的逐日接力状态（有帽新段）。
+
+    逐日状态取 day_status_of（池权威 + 日线补洞，与三日链/真连板回溯同一事实源）：
+    ● 封板 / ○ 断板 / · 停牌跳过 / ? 不可验；停牌日与不可验日按区间合写（省 token）。
+    定位：给 relay_phase/relay_index 一个**梯队健康度的多日坐标**，与三日晋级链、
+    近10日聚合轨迹并列参照，**不得单独据其打分**（判据纪律）。
+    fail-visible：韭研 final 缺失 / TDX 日线整体不可用 / 无真连板≥4 样本 均如实披露。
+    """
+    pool = _pool_of(db, date)
+    if not pool:
+        return ["高位股多日轨迹：韭研 final 缺失（fail-visible）"]
+    streaks = jiuyan_streak_map(db, date, dataset_id)
+    high = [(c, e) for c, e in pool.items()
+            if isinstance(streaks.get(c), int) and streaks[c] >= 4]
+    m = market_metrics(db, date, dataset_id) or {}
+    mb = m.get("maxBoard")
+    if not high:
+        mb_txt = mb if isinstance(mb, int) and not isinstance(mb, bool) else "不可算"
+        return [f"高位股多日轨迹：无真连板≥4 的个股（今日最高 {mb_txt} 板）"]
+    high.sort(key=lambda kv: (-streaks[kv[0]], str(kv[1].get("time") or "99:99")))
+    high = high[:top]
+    axis = (trading_dates_before(db, date, n - 1, dataset_id=dataset_id) + [date]
+            if n > 1 else [date])
+    pools = {d: _pool_of(db, d) for d in axis}
+    sealed_found = {d: _sealed_codes(db, d, set(pools[d]), dataset_id) for d in axis}
+    bars_map = {c: _daily_bars(c) for c, _ in high}
+    if all(not b for b in bars_map.values()):
+        return ["高位股多日轨迹：TDX 日线不可用（fail-visible）"]
+    marks_of = {"sealed": "●", "broken": "○", "suspended": "·", "unknown": "?"}
+    lines = [f"高位股多日轨迹（真连板≥4 top{top}，近 {len(axis)} 个交易日逐日；"
+             f"●封板/○断板/·停牌跳过/?不可验；有帽，非打分依据）："]
+    today_cnt = {"sealed": 0, "broken": 0, "suspended": 0, "unknown": 0}
+    for code, entry in high:
+        bars = bars_map[code]
+        adj = _adj_prev_series(date, code, bars) if bars else {}
+        marks, susp_days, unk_days = [], [], []
+        last = None
+        for d in axis:
+            sealed, found = sealed_found[d]
+            st = day_status_of(code, d, sealed=(sealed if found else None),
+                               touch=set(pools[d]) if pools[d] else None,
+                               bars=bars, adj=adj)
+            marks.append(marks_of[st])
+            last = st
+            if st == "suspended":
+                susp_days.append(d[5:])
+            elif st == "unknown":
+                unk_days.append(d[5:])
+        today_cnt[last] += 1
+        tags = []
+        if susp_days:
+            tags.append(f"停牌跳过 {len(susp_days)} 日（{'/'.join(susp_days)}）")
+        if unk_days:
+            tags.append(f"不可验 {len(unk_days)} 日（{'/'.join(unk_days)}）")
+        tag_txt = " · " + "；".join(tags) if tags else ""
+        lines.append(f"· {entry.get('name') or code}({code}) 当前连板{streaks[code]}："
+                     f"{''.join(marks)}{tag_txt} · 区间 {_range_num_txt(entry)}")
+    lines.append(f"高位股今日状态：连板中 {today_cnt['sealed']} 只 / 停牌跳过 "
+                 f"{today_cnt['suspended']} 只 / 断板 {today_cnt['broken']} 只 / "
+                 f"不可验 {today_cnt['unknown']} 只")
+    return lines
 
 
 # ── 段 3：题材梯队表 top5 ───────────────────────────────────────────────────
@@ -775,7 +944,7 @@ def narrative_context_lines(db: Any, date: str) -> list[str]:
 
 
 def build_relay_narrative(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    lines: list[str] = [f"{date} 交易日 · 连板情绪指数判定（叙事七段）"]
+    lines: list[str] = [f"{date} 交易日 · 连板情绪指数判定（叙事）"]
     # 段1 总账（market_facts_line 已含双源梯队/分位）+ 今日炸板面（2026-10-11 StepB）
     lines.append(market_facts_line(db, date, dataset_id))
     lines.append(zhaban_face_line(db, date, dataset_id))
@@ -784,6 +953,8 @@ def build_relay_narrative(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
     # 段2 记忆
     lines.append(three_day_chain_line(db, date, dataset_id))
     lines.append(theme_evolution_line(db, date))
+    # 段2c 高位股多日轨迹（v4，2026-10-16 预注册 §2.3；有帽，非打分依据）
+    lines.extend(high_position_trajectory_lines(db, date, dataset_id))
     # 段3 题材梯队
     lines.extend(theme_ladder_lines(db, date))
     # 段4 龙头

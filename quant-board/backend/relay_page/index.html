@@ -609,7 +609,7 @@ function renderRelayTab(){
     ? badge(r.questionSetVersion, r.questionSetVersion === curVer ? 'b-gray' : 'b-amber') : '';
   $('relayKpi').innerHTML = `
     <div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}${confChip(((d.answers||{}).relay_index||{}).confidence)}</div><div class="s">0-100</div></div>
-    <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:16px">${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}</div><div class="s">主锚三日链</div></div>
+    <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:16px">${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}</div><div class="s">主锚三日链·高位轨迹</div></div>
     <div class="kpi"><div class="k">边际方向</div><div class="v" style="font-size:16px">${momB(d.relayMomentum)}${confChip(((d.answers||{}).relay_momentum||{}).confidence)}</div><div class="s">今日 vs 昨日</div></div>
     <div class="kpi"><div class="k">梯队结构</div><div class="v" style="font-size:16px">${ladderB(d.ladderHealth)}${confChip(((d.answers||{}).ladder_health||{}).confidence)}</div><div class="s">量化比率口径</div></div>
     <div class="kpi"><div class="k">接力钱效</div><div class="v" style="font-size:16px">${moneyB(d.moneyEffect)}${confChip(((d.answers||{}).money_effect||{}).confidence)}</div><div class="s">晋级/断板/溢价</div></div>
