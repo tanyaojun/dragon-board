@@ -657,7 +657,7 @@ function renderRelayTab(){
   $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
     + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   const hintEl = $('relayHint');
-  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点警戒<25 · 毒带观察=40-60且温度≥56（观察线索非规则）· P=模型置信度（灰≥60 正常 / 琥珀 35-60 存疑 / 红<35 两可勿当结论；旧版判定无置信不显示）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'} · 点击行查看调用日志`;
+  if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点观察<25（v4 代际未复现亏损） · 毒带观察=40-60且温度≥56（观察线索非规则）· P=模型置信度（灰≥60 正常 / 琥珀 35-60 存疑 / 红<35 两可勿当结论；旧版判定无置信不显示）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'} · 点击行查看调用日志`;
 }
 // 判定明细行展开：series 行不含 raw 大字段，按日懒拉完整存档（relayDocs 缓存；当日已在 loadAll 预入）
 function relayEntryOf(r){
