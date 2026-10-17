@@ -482,3 +482,7 @@ TDX 60 棒窗口，需先给 `_daily_bars` 加按叙事日取数（或显式标�
    （实耗 650,617 tokens ≈ $0.065；93 篇轮 0 失败）。全量验收与代际漂移（Δidx 均值 +0.65、
    31% 日相位重判、relay_heat 8→18）见 `jev-relay-ammo-v4-preregistration.md` §14/§15；
    毒带诊断的代际注记见 `jev-relay-band-toxic-diagnostic.md` §6.6。
+9. **IE（证据不足）归因诊断**（2026-10-17，零调用）：相位 IE 14 天 / 边际 IE 8 天同一根因——
+   THS 15:00 炸板池个股 items 19 天不可用（16 天帧存旧 schema 只有家数 + 3 天帧未采）。
+   见 `jev-relay-insufficient-evidence-attribution.md`（含四组归因、覆盖检验、可补性矩阵；
+   修复方案未立预注册，待裁决）。
