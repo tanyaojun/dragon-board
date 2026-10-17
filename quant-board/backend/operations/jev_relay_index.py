@@ -30,9 +30,11 @@ from backend.operations.jev_label_jiuyan import (
     _dispatch_jev,
     _jiuyan_board_count,
     _jiuyan_days_boards,
+    _jiuyan_ladder,
     _prev_close_of_date,
     _range_height_text,
     _ths_failed_items,
+    _ths_pool_counts,
     day_status_of,
     dragon_rows,
     hotlist_ranks,
@@ -115,6 +117,51 @@ def _median(vals: list[float]) -> float | None:
     s = sorted(vals)
     mid = len(s) // 2
     return round((s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2), 2)
+
+
+_ANCHOR_GAP_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("炸板面", ("今日炸板面：不可算",)),
+    ("炸板面个股级", ("个股级子项不可算", "反复开板/昨日池股炸板/炸板股收盘涨幅 不可算")),
+    ("炸板面对比", ("较昨日：不可算",)),
+    ("韭研池", ("韭研 final 缺失",)),
+    ("梯队", ("梯队结构量化：梯队数据缺失",)),
+    ("断板钱效", ("TDX 日线缺失", "样本不足（TDX 覆盖")),
+    ("盘面事实", ("盘面指标缺失",)),
+)
+
+
+def anchor_gaps(narrative: str) -> list[str]:
+    """叙事中「主锚缺位」标记（F2，2026-10-17 预注册 §2.4）：纯函数，**不改打分**。
+
+    落库为 relay 文档 `anchorGaps` 字段，供前端显式呈现「本日哪根主锚缺位」——
+    避免把 IE 读成模型能力问题（诊断文档四批 IE 全在原料/读口径层，非模型/判据）。
+    """
+    gaps: list[str] = []
+    for name, markers in _ANCHOR_GAP_MARKERS:
+        if any(m in narrative for m in markers):
+            gaps.append(name)
+    return gaps
+
+
+# 断板/溢价 TDX 统计的最小样本门槛（2026-10-17 IE 修复 F4，预注册 §2.3）。
+# 动因（诊断 §7）：回放窗界附近有 8 天覆盖仅 1–2 只却未 IE，模型拿 n=1 中位判 strong/losing
+# （07-16 唯一依据 = 000016 一只票 +3.46%；而该样本恒为「已停止交易（停牌/退市）」股，
+# 方向偏差不可假定）——属伪精度，比 IE 更危险。绝对门槛不可省：07-06 的 1/1=100% 会漏过纯比例规则。
+_MIN_TDX_COVER = 5
+_MIN_TDX_RATIO = 0.2
+
+
+def _tdx_sample_ok(covered: int, total: int) -> bool:
+    """覆盖是否足以支撑中位/大面类结论（F4 门槛）。total<=0 → False（无可算基数）。"""
+    if total <= 0:
+        return False
+    return covered >= _MIN_TDX_COVER and covered / total >= _MIN_TDX_RATIO
+
+
+def _sample_short_txt(noun: str, total: int, covered: int) -> str:
+    """样本不足话术（不输出伪精度中位；缺失位置与门槛均结构化披露，AGENTS §4.0）。"""
+    return (f"{noun} {total} 只：样本不足（TDX 覆盖 {covered}/{total}，"
+            f"门槛 ≥{_MIN_TDX_COVER} 只且 ≥{int(_MIN_TDX_RATIO * 100)}%），不可作钱效依据")
 
 
 def _broken_stats(codes: set[str], from_date: str, to_date: str) -> dict[str, Any] | None:
@@ -231,14 +278,17 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
         for k, v in sorted(layers.items()))
     if unlayered:
         layer_txt += f"；{unlayered}只连板高度不可算未分层"
-    # 断板亏钱（TDX）：broken 已剔除停牌/不可验
+    # 断板亏钱（TDX）：broken 已剔除停牌/不可验；覆盖不足 → 不输出中位（F4 门槛）
     cur_stats = _broken_stats(set(broken), prev_date, date)
+    cur_stats_ok = bool(cur_stats) and _tdx_sample_ok(cur_stats["covered"], len(broken))
     if broken:
-        if cur_stats:
+        if cur_stats_ok:
             dt_txt = f"、收盘跌停 {cur_stats['dt']} 只" if cur_stats.get("dt") else ""
             broken_txt = (f"断板 {len(broken)} 只：今日收盘中位 {cur_stats['median']:+}%，"
                           f"大面(≤-5%) {cur_stats['big']} 只{dt_txt}"
                           f"（TDX 覆盖 {cur_stats['covered']}/{len(broken)}）")
+        elif cur_stats:
+            broken_txt = _sample_short_txt("断板", len(broken), cur_stats["covered"])
         else:
             broken_txt = f"断板 {len(broken)} 只：今日表现不可算（TDX 日线缺失）"
     else:
@@ -261,19 +311,26 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
                 prev_broken_txt = "较昨日断板：昨日 0 只"
             elif ps is None:
                 prev_broken_txt = "较昨日断板：不可算（昨日 TDX 日线缺失）"
+            elif not _tdx_sample_ok(ps["covered"], len(pb)):
+                prev_broken_txt = ("较昨日断板：" + _sample_short_txt("昨日断板", len(pb), ps["covered"]))
             elif not broken:
                 prev_broken_txt = (f"较昨日断板：昨日中位 {ps['median']:+}%、"
                                    f"大面 {ps['big']} 只 → 今日断板 0 只{calib2}")
-            elif cur_stats is None:
-                prev_broken_txt = "较昨日断板：不可算（今日 TDX 日线缺失）"
+            elif not cur_stats_ok:
+                prev_broken_txt = ("较昨日断板：今日断板样本不足"
+                                   f"（TDX 覆盖 {cur_stats['covered'] if cur_stats else 0}/{len(broken)}），不可比")
             else:
                 prev_broken_txt = (f"较昨日断板：中位 {ps['median']:+}%→{cur_stats['median']:+}%、"
                                    f"大面 {ps['big']}→{cur_stats['big']} 只{calib2}")
     # 隔日溢价（昨日可交易涨停股今日收盘中位；停牌/不可验不入基数）
     elig = sorted(promoted_set | broken_set)
     prem = [p for p in (_close_pct(c, prev_date, date) for c in elig) if p is not None]
-    prem_txt = (f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(elig)}）" if prem
-                else "隔日溢价不可算（TDX 日线缺失）")
+    if not prem:
+        prem_txt = "隔日溢价不可算（TDX 日线缺失）"
+    elif _tdx_sample_ok(len(prem), len(elig)):
+        prem_txt = f"隔日收盘溢价中位 {_median(prem):+}%（覆盖 {len(prem)}/{len(elig)}）"
+    else:
+        prem_txt = _sample_short_txt("隔日溢价样本", len(elig), len(prem))
     # 涨停家数口径对账（2026-10-16）：同花顺涨停池参照，差集=触板未封/新股，防两口径数字打架
     caliber = _zt_caliber_note(db, prev_date, dataset_id, set(base), prev_pool)
     return (f"晋级与断板：昨日 {len(base)} 只涨停（触板二分口径）{calib}{caliber} → "
@@ -290,8 +347,23 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
     2026-10-16 口径修正：消费的 ladder 已改真连板分桶（market_metrics/_jiuyan_ladder），
     首板占比/二板/三板+/比率全部是真连板语义；THS 炸板池缺失日按触板口径并显式披露。
     """
-    cur = market_metrics(db, date, dataset_id) or {}
-    lad = cur.get("ladder") or {}
+    def _ladder_of(d: str) -> tuple[dict[str, int], str | None]:
+        """梯队桶 + 来源；帧缺失日回退韭研主源（F3：梯队不依赖 15:00 帧）。
+
+        2026-10-17 IE 修复：3 天（07-06/07/07/07-09）无 15:00 帧使 `market_metrics` 整段 None，
+        旧代码把已可算的韭研梯队（韭研 final 96/48/88 只）一并丢弃 → 梯队 IE；
+        这里同源回退并沿用既有来源披露（AGENTS §4.0）。
+        """
+        m = market_metrics(db, d, dataset_id) or {}
+        buckets, source = m.get("ladder") or {}, m.get("ladderSource")
+        if not any(buckets.get(k) for k in THS_KEYS):
+            jl = _jiuyan_ladder(db, d, dataset_id) or {}
+            if any(jl.get(k) for k in THS_KEYS):
+                return ({k: jl.get(k) or 0 for k in THS_KEYS},
+                        "jiuyan_touch" if jl.get("_caliber") == "touch_range" else "jiuyan")
+        return buckets, source
+
+    lad, src = _ladder_of(date)
     one, two = lad.get("one") or 0, lad.get("two") or 0
     three_plus = (lad.get("three") or 0) + (lad.get("four") or 0) + (lad.get("high") or 0)
     total = one + two + three_plus
@@ -299,7 +371,7 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
         return "梯队结构量化：梯队数据缺失（fail-visible）"
     ratio = round(two / three_plus, 2) if three_plus else None
     prev_dates = trading_dates_before(db, date, 1)
-    prev_lad = (market_metrics(db, prev_dates[-1], dataset_id) or {}).get("ladder") or {} if prev_dates else {}
+    prev_lad = _ladder_of(prev_dates[-1])[0] if prev_dates else {}
     prev_two = prev_lad.get("two") or 0
     prev_tp = (prev_lad.get("three") or 0) + (prev_lad.get("four") or 0) + (prev_lad.get("high") or 0)
     prev_ratio = round(prev_two / prev_tp, 2) if prev_tp else None
@@ -311,7 +383,7 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
     prev_total = prev_one + prev_two + prev_tp
     first_txt = f"首板占比 {round(one/total*100)}%（{one}/{total}）" + \
         (f"（昨日 {round(prev_one/prev_total*100)}%）" if prev_total else "")
-    src = cur.get("ladderSource")
+    src_txt = ""
     if src == "jiuyan_touch":
         src_txt = "（THS炸板池缺失，梯队按触板口径）"  # 旧口径回退日显式披露
     elif src and src != "jiuyan":
@@ -588,7 +660,10 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5) -> list[str]:
         drivers = [label_docs[c].get("label") for c in inner if c in label_docs]
         fresh_txt = (f"新鲜{sum(1 for f in fresh if f == 'fresh_catalyst')}/延续"
                      f"{sum(1 for f in fresh if f == 'continuing')}/{len(fresh)}标") if fresh else "无标签"
-        drv_main = max(set(drivers), key=drivers.count) if drivers else None
+        # 驱动主类：计数降序 + **同数按名称升序**（禁 `max(set(...), key=count)`——set 迭代序
+        # 受 PYTHONHASHSEED 影响，并列时跨进程结果漂移：2026-10-17 实测同数据两次
+        # 独立构建 09-07 叙事 hash 不同（383b870a vs 46367a66），使回放/重判输入不可复现）
+        drv_main = sorted(set(drivers), key=lambda x: (-drivers.count(x), x))[0] if drivers else None
         drv_txt = f"驱动主类 {drv_main}" if drv_main else ""
         prev_n = len(prev_b.get(name) or [])
         lines.append(f"· {name}：{' / '.join(dragons)}｜{fresh_txt}{('·' + drv_txt) if drv_txt else ''}"
@@ -756,6 +831,52 @@ def _seal_quality(db: Any, date: str, dataset_id: str) -> dict:
     return ((f or {}).get("limitSummary") or {}).get("sealQuality") or {}
 
 
+def _zhaban_face_count_fallback(db: Any, date: str, dataset_id: str) -> str:
+    """旧采集 schema（仅家数）日的炸板面降级行（F1，2026-10-17 预注册 §2.1）。
+
+    2026-07-30..09-23 共 16 天的 15:00 帧只有 `poolCounts`（failed/rushing/drawdown 家数）
+    + `maxDrawdown/avgDrawdown`，没有 `pools.*.items`（个股）。旧实现整段写「不可算」把同帧
+    已有家数一并丢弃（AGENTS §4.0）。本函数只输出**同源可算部分**，个股级子项与分位
+    均标不可算（分位历史序列含旧 schema 日，混算属口径混用）。
+
+    对比口径（预注册 D1）：新旧 schema 的炸板**家数**同义（`poolCounts.failed` ≙
+    `len(pools.failed.items)`），允许家数级对比但必须带标注；个股级子项绝不跨 schema 编造。
+    禁用 `snapshot_records.payload.limitSummary.zhaban.count`（前端口径）冒充 THS failed。
+    """
+    counts, found = _ths_pool_counts(db, date, dataset_id)
+    if not found or not isinstance(counts, dict):
+        return "今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）"
+    n = counts.get("failed")
+    r = counts.get("rushing")
+    d = counts.get("drawdown")
+    mx, av = counts.get("maxDrawdown"), counts.get("avgDrawdown")
+    zb_txt = f"炸板 {n} 家" if isinstance(n, (int, float)) else "炸板家数不可算"
+    rush_txt = f"冲刺未封 {r} 家" if isinstance(r, (int, float)) else "冲刺未封不可算"
+    if isinstance(d, (int, float)):
+        dd = (f"（最大回撤 {mx:+.2f}%、均值 {av:+.2f}%）"
+              if isinstance(mx, (int, float)) and isinstance(av, (int, float)) else "")
+        dd_txt = f"涨停股回撤榜 {d} 家{dd}"
+    else:
+        dd_txt = "涨停股回撤榜不可算"
+    prev_dates = trading_dates_before(db, date, 1)
+    cmp_txt = "不可算（无昨日交易日）"
+    if prev_dates:
+        p_items, p_found = _ths_failed_items(db, prev_dates[-1], dataset_id)
+        if p_found:
+            p_n: int | None = len(p_items)
+        else:
+            p_counts, p_cfound = _ths_pool_counts(db, prev_dates[-1], dataset_id)
+            p_n = (p_counts or {}).get("failed") if p_cfound else None
+        if isinstance(p_n, int) and isinstance(n, int):
+            cmp_txt = (f"炸板 {p_n}→{n} 家（{n - p_n:+d}）· 反复开板 不可算（个股级缺）")
+        else:
+            cmp_txt = "不可算（昨日 THS 炸板池家数缺失）"
+    return (f"今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）："
+            f"{zb_txt}；{rush_txt}；{dd_txt}；较昨日：{cmp_txt}；"
+            f"反复开板/昨日池股炸板/炸板股收盘涨幅/代表股/归因打标 不可算（个股级缺失）；"
+            f"分位不可算（历史序列含旧 schema 日）")
+
+
 def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
     """今日炸板面：THS 15:00 炸板池结构化证据（家数分位/反复开板/昨日池股炸板/大面/代表股/
     较昨日增减——2026-10-15 诊断补供 relay_momentum 主锚的昨日可比数）。
@@ -770,7 +891,8 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
     items, found = _ths_failed_items(db, date, dataset_id)
     items = list(items.values())
     if not found:
-        return "今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）"
+        # F1：旧 schema 只有家数（AGENTS §4.0 有可用数据就必须展示可算部分，禁止整段丢弃）
+        return _zhaban_face_count_fallback(db, date, dataset_id)
     by_code = {str(i.get("code") or "")[-6:]: i for i in items if i.get("code")}
     n = len(by_code)
     # 近 20 日炸板家数分位（无帧历史日跳过，只取有数据的日）；同回溯顺带算反复开板家数分位
@@ -833,7 +955,12 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
         prev_items, prev_found = _ths_failed_items(db, prev_dates[-1], dataset_id)
         prev_items = list(prev_items.values())
         if not prev_found:
-            cmp_txt = "较昨日：不可算（昨日 THS 炸板池缺失/降级）"
+            # F1 兼容：昨日是旧 schema 日（只有家数）→ 家数级对比（同源同义字段，带标注；预注册 D1）
+            prev_counts, prev_cfound = _ths_pool_counts(db, prev_dates[-1], dataset_id)
+            prev_n2 = (prev_counts or {}).get("failed") if prev_cfound else None
+            cmp_txt = (f"较昨日：炸板 {prev_n2}→{n} 家（{n - prev_n2:+d}）· 反复开板 不可算（个股级缺）"
+                       if isinstance(prev_n2, int) and isinstance(n, int) else
+                       "较昨日：不可算（昨日 THS 炸板池缺失/降级）")
         else:
             prev_by = {str(i.get("code") or "")[-6:]: i for i in prev_items if i.get("code")}
             p_n = len(prev_by)
@@ -993,6 +1120,8 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "status": "ok" if parsed["ok"] else "degraded",
                "questionSetVersion": QUESTION_SET_VERSION_RELAY,
                "narrative": narrative, "questionsRaw": QUESTIONS_RELAY,
+               # 主锚缺位标记（F2）：数据质量事实，不改打分（前端徽标/README 说明消费）
+               "anchorGaps": anchor_gaps(narrative),
                # answers 原样落库（P0-2/P0-3）：七题 confidence/momentum 等四题 probabilities/
                # 两个 score 题直方图此前未落库，自此保全（历史文档不可回补）
                "answers": parsed.get("answers"),

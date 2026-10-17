@@ -13,6 +13,8 @@ import backend.operations.jev_relay_index as relay
 from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY
 from backend.operations.jev_relay_index import (
     _pool_of,
+    _tdx_sample_ok,
+    anchor_gaps,
     high_position_trajectory_lines,
     ladder_structure_line,
     relay_flow_line,
@@ -215,7 +217,11 @@ def test_three_day_chain_line_promo_comparison_no_fake_zero():
 
 def test_relay_flow_line_with_tdx(monkeypatch):
     """晋级/断板：晋级率 + 分层 + 断板中位/大面（TDX mock）。
-    D-1 池（600001 晋级在池，600004 断板）；600004 断板 -10% 大面。"""
+    D-1 池（600001 晋级在池，600004 断板）；600004 断板 -10% 大面。
+
+    v5（F4 样本门槛）：覆盖 1/1 < 5 只 → 只写「样本不足」，**不**输出 n=1 的伪精度中位
+    （07-16 实证：断板 66 只仅 1 只可验却输出中位 +3.46% 并被当钱效依据）。
+    """
     bars = {
         "600004": [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}],   # 断板 -10% 大面
         "600001": [{"date": _D1, "close": 20.0}, {"date": _D0, "close": 20.4}],  # 晋级 +2%
@@ -223,26 +229,43 @@ def test_relay_flow_line_with_tdx(monkeypatch):
     monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
     line = relay_flow_line(_db(), _D0)
     assert "晋级率 50.0%" in line          # 昨日 2 只（600001/600004）→ 今日 1 只在池
-    assert "断板 1 只" in line and "大面(≤-5%) 1 只" in line
-    assert "隔日收盘溢价中位 -4.0%" in line  # [+2%, -10%] 中位
+    assert "断板 1 只：样本不足（TDX 覆盖 1/1，门槛 ≥5 只且 ≥20%），不可作钱效依据" in line
+    assert "大面(≤-5%) 1 只" not in line and "-10.0%" not in line
+    assert "隔日溢价样本 2 只：样本不足" in line
     # 昨日断板（600002/600003）无 TDX 日线 → 对比写不可算，不得伪 0（fail-visible）
     assert "较昨日断板：不可算（昨日 TDX 日线缺失）" in line
 
 
 def test_relay_flow_line_broken_yesterday_comparison(monkeypatch):
     """relay_phase.divergence「断板亏钱扩散（中位转负或大面增多）」需昨日可比数
-    （2026-10-16 二级审计补供）：昨日断板=前日涨停池−昨日涨停池，亏钱=D-2→D-1 收盘。"""
+    （2026-10-16 二级审计补供）：昨日断板=前日涨停池−昨日涨停池，亏钱=D-2→D-1 收盘。
+
+    v5（F4 门槛）：两侧覆盖都须 ≥5 只才输出中位——夹具补足今日/昨日断板各 5 只。
+    """
     bars = {
-        "600004": [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}],    # 今日断板 -10% 大面
-        "600002": [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}],    # 昨日断板 -5% 大面
-        "600003": [{"date": _D2, "close": 20.0}, {"date": _D1, "close": 20.2}],   # 昨日断板 +1%
+        "600004": [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}],    # 今日断板 -10%
         "600001": [{"date": _D1, "close": 20.0}, {"date": _D0, "close": 20.4}],   # 晋级 +2%
+        "600002": [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}],    # 昨日断板 -5%
+        "600003": [{"date": _D2, "close": 20.0}, {"date": _D1, "close": 20.2}],   # 昨日断板 +1%
     }
+    today_fillers = [{"code": f"6010{i}", "name": f"TF{i}", "num": "2天2板"} for i in range(1, 5)]
+    yest_fillers = [{"code": f"6011{i}", "name": f"YF{i}", "num": "2天2板"} for i in range(1, 4)]
+    for s in today_fillers:
+        bars[s["code"]] = [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}]
+    for s in yest_fillers:
+        bars[s["code"]] = [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}]
     monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
-    line = relay_flow_line(_db(), _D0)
-    # 昨日断板中位 [-5.0, +1.0] → -2.0%、大面 1 只；今日 -10.0%、大面 1 只
-    assert "断板 1 只：今日收盘中位 -10.0%" in line
-    assert "较昨日断板：中位 -2.0%→-10.0%、大面 1→1 只" in line
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0], failed_by_date={_D1: [], _D0: []}),
+        "jiuyan_action": FakeCol([_final(_D2, _STOCKS[_D2] + yest_fillers),
+                                  _final(_D1, _STOCKS[_D1] + today_fillers),
+                                  _final(_D0, _STOCKS[_D0])]),
+    })
+    line = relay_flow_line(db, _D0)
+    # 今日断板 = 600004 + 4 填充（均 -10%）→ 中位 -10.0%、大面 5
+    assert "断板 5 只：今日收盘中位 -10.0%，大面(≤-5%) 5 只" in line
+    # 昨日断板 = 600002 + 600003 + 3 填充 → 中位 -5.0%、大面 4
+    assert "较昨日断板：中位 -5.0%→-10.0%、大面 4→5 只" in line
 
 
 def test_relay_flow_line_broken_yesterday_no_prev_day(monkeypatch):
@@ -394,7 +417,8 @@ def test_relay_flow_line_sealed_bisect(monkeypatch):
     })
     line = relay_flow_line(db, _D0)
     assert "昨日 2 只涨停（触板二分口径） → 今日仍涨停 1 只（晋级率 50.0%）" in line
-    assert "断板 1 只" in line and "大面(≤-5%) 1 只" in line
+    # v5（F4 门槛）：断板覆盖 1/1 < 5 只 → 写样本不足，不输出 -10.0% 伪精度中位
+    assert "断板 1 只：样本不足（TDX 覆盖 1/1，门槛 ≥5 只且 ≥20%），不可作钱效依据" in line
     assert "触板口径降级" not in line  # 两日 THS 池齐备，无降级注记
 
 
@@ -475,6 +499,10 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert doc["_id"] == f"{_D0}:RELAY" and doc["status"] == "ok"
     assert doc["relayIndex"] == 65 and doc["leaderStrength"] == 80  # score 归一化 ×10
     assert doc["relayPhase"] == "relay_heat" and doc["relayMomentum"] == "holding"
+    # F2：主锚缺位标记随叙事落库（前端徽标读口；v5 起）
+    assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
+    assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
+    assert doc["questionSetVersion"] == "v5"
     # 幂等：status=ok 已存在 → 跳过
     col.rows.append(doc)
     run_relay_index_day(db, [_D0])
@@ -778,3 +806,137 @@ def test_high_position_trajectory_lines_tdx_unavailable(monkeypatch):
                                                           "num": "5天5板"}])])})
     lines = high_position_trajectory_lines(db, _D0)
     assert lines == ["高位股多日轨迹：TDX 日线不可用（fail-visible）"]
+
+
+# ── v5 IE 读口径修复（预注册 jev-relay-ie-fix-preregistration.md）────────────────
+
+
+def _old_schema_frame(date, failed=17, rushing=14, drawdown=9):
+    """旧采集 schema 的 15:00 帧（只有 poolCounts 家数，无 pools.*.items）。
+
+    2026-07-30..09-23 共 16 天的真实形态（08-24 实样）。
+    """
+    return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
+            "slotTime": "15:00", "snapshotId": f"h:{date}", "timestamp": 2,
+            "limitSummary": {
+                "zhaban": {"ztCount": 50, "count": 22, "rate": 12.0},
+                "continuousBoards": {"maxBoard": 5},
+                "thsPools": {"source": "ths-limitup-pools", "date": date.replace("-", ""),
+                             "degraded": False, "errors": [],
+                             "poolCounts": {"one": 36, "two": 5, "three": 3, "four": 1, "high": 0,
+                                            "failed": failed, "rushing": rushing,
+                                            "drawdown": drawdown},
+                             "failedCount": failed, "rushingCount": rushing,
+                             "drawdownCount": drawdown,
+                             "drawdownRiskLabel": "涨停股回撤榜",
+                             "maxDrawdown": -15.59, "avgDrawdown": -11.41}}}
+
+
+def test_zhaban_face_old_schema_count_fallback():
+    """F1：旧 schema 日只出同源可算部分（家数/冲刺/回撤），个股级子项标不可算。
+
+    旧实现整段写「不可算」，把同帧已有的 failed/rushing/drawdown 一并丢弃（AGENTS §4.0）。
+    """
+    db = FakeDb({"snapshot_frames": FakeCol([_old_schema_frame(_D0)])})
+    line = zhaban_face_line(db, _D0)
+    assert "家数口径·旧采集 schema" in line
+    assert "炸板 17 家" in line and "冲刺未封 14 家" in line and "涨停股回撤榜 9 家" in line
+    assert "最大回撤 -15.59%" in line and "均值 -11.41%" in line
+    assert "个股级子项不可算" in line and "不可算（无昨日交易日）" in line
+    assert "分位不可算" in line
+
+
+def test_zhaban_face_old_schema_prev_new_schema_count_delta():
+    """F1/D1：今日旧 schema + 昨日新 schema → 家数级对比（带标注），反复开板 不可算。"""
+    db = FakeDb({"snapshot_frames": FakeCol([
+        _old_schema_frame(_D0, failed=17),
+        _frame_failed(_D1, [{"code": f"60000{i}", "name": f"股{i}", "open_num": 1} for i in range(22)]),
+    ])})
+    line = zhaban_face_line(db, _D0)
+    assert "较昨日：炸板 22→17 家（-5）" in line
+    assert "反复开板 不可算（个股级缺）" in line
+
+
+def test_zhaban_face_old_schema_prev_old_schema_count_delta():
+    """F1/D1：两日同为旧 schema → 家数级对比仍可做（同源同义字段）。"""
+    db = FakeDb({"snapshot_frames": FakeCol([
+        _old_schema_frame(_D0, failed=17),
+        _old_schema_frame(_D1, failed=20),
+    ])})
+    line = zhaban_face_line(db, _D0)
+    assert "较昨日：炸板 20→17 家（-3）" in line
+
+
+def test_zhaban_face_no_frame_still_fail_visible():
+    """无 15:00 帧（连家数都没有）→ 仍如实写不可算，不得伪造家数。"""
+    db = FakeDb({"snapshot_frames": FakeCol([])})
+    assert zhaban_face_line(db, _D0) == "今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）"
+
+
+def test_ladder_line_falls_back_to_jiuyan_without_frame():
+    """F3：无 15:00 帧（market_metrics 整段 None）时，梯队仍出韭研桶并披露触板口径。
+
+    07-06/07/07/07-09 实证：韭研 final 96/48/88 只本可出桶，旧读口径整段丢弃 → 梯队 IE。
+    """
+    db = FakeDb({
+        # 当日无 15:00 帧；前一日有帧（供 trading_dates_before 与昨日对比）
+        "snapshot_frames": _frames([_D1]),
+        "jiuyan_action": FakeCol([_final(_D0, [
+            {"code": "600001", "name": "A", "num": "2天2板"},
+            {"code": "600002", "name": "B", "num": "4天4板"},
+            {"code": "600003", "name": "C"},
+        ])]),
+    })
+    line = ladder_structure_line(db, _D0)
+    assert "梯队数据缺失" not in line
+    assert "首板占比" in line and "二板 1 只" in line and "三板+ 1 只" in line
+    assert "THS炸板池缺失，梯队按触板口径" in line
+
+
+def test_tdx_sample_gate_thresholds():
+    """F4 门槛：绝对门槛 + 比例门槛都要过（1/1=100% 必须被绝对门槛拦住）。"""
+    assert _tdx_sample_ok(5, 20) is True
+    assert _tdx_sample_ok(1, 1) is False        # 07-06 实证：1/1 不得当钱效依据
+    assert _tdx_sample_ok(2, 2) is False
+    assert _tdx_sample_ok(4, 20) is False       # 绝对不足
+    assert _tdx_sample_ok(20, 200) is False     # 10% < 20%
+    assert _tdx_sample_ok(0, 0) is False
+
+
+def test_relay_flow_drops_pseudo_precision_median(monkeypatch):
+    """F4：覆盖不足时断板行改「样本不足」，全文不得出现 n=1 的中位句。"""
+    db = _db()
+    monkeypatch.setattr(relay, "_close_pct", lambda c, a, b: 3.46 if c == "600001" else None)
+    line = relay_flow_line(db, _D0)
+    assert "样本不足" in line and "不可作钱效依据" in line
+    assert "+3.46" not in line
+    assert "隔日溢价不可算" in line or "样本不足" in line
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("", []),
+    ("今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）", ["炸板面"]),
+    ("今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）：炸板 17 家；较昨日：不可算（无昨日交易日）",
+     ["炸板面个股级", "炸板面对比"]),
+    ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", ["断板钱效"]),
+    ("断板 24 只：今日表现不可算（TDX 日线缺失）", ["断板钱效"]),
+    ("梯队结构量化：梯队数据缺失（fail-visible）", ["梯队"]),
+    ("三日晋级链：2026-04-29/2026-04-30 韭研 final 缺失（fail-visible）", ["韭研池"]),
+    ("盘面事实：2026-07-06 盘面指标缺失（fail-visible）", ["盘面事实"]),
+])
+def test_anchor_gaps_markers(text, expected):
+    """F2：主锚缺位标记为纯函数扫描，不改打分；供落库 + 前端徽标。"""
+    assert anchor_gaps(text) == expected
+
+
+def test_bars_offset_env(monkeypatch):
+    """F5：回放长窗开关（默认 60 = 生产口径不变）。"""
+    from backend.operations.jev_label_jiuyan import _bars_offset
+    monkeypatch.delenv("JEV_BARS_OFFSET", raising=False)
+    assert _bars_offset() == 60
+    monkeypatch.setenv("JEV_BARS_OFFSET", "250")
+    assert _bars_offset() == 250
+    monkeypatch.setenv("JEV_BARS_OFFSET", "abc")
+    assert _bars_offset() == 60
+    monkeypatch.setenv("JEV_BARS_OFFSET", "5")
+    assert _bars_offset() == 20          # 下限保护

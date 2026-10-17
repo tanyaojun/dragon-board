@@ -320,6 +320,30 @@ def _ths_failed_items(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tu
     return {str(i.get("code") or "")[-6:]: i for i in items if i.get("code")}, True
 
 
+def _ths_pool_counts(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple[dict | None, bool]:
+    """THS 池**家数级**回退（旧采集 schema，2026-10-17 IE 修复 F1）。
+
+    2026-07-30..09-23 共 16 天的 15:00 帧存旧形态：只有 `limitSummary.thsPools.poolCounts`
+    （failed/rushing/drawdown 家数）+ `maxDrawdown/avgDrawdown`，**没有** `pools.*.items`（个股）。
+    读口原实现只认 items → 这些天整段写「不可算」，把同帧已有的家数一并丢弃
+    （AGENTS §4.0「有可用数据就必须展示可计算部分」）。本函数供调用方做同源家数级降级。
+
+    返回 (counts, found)：found=False = 连家数都没有（帧缺失/池未拉取）。
+    口径：`poolCounts.failed` 与 `len(pools.failed.items)` 同为 THS 炸板池家数（同源字段）。
+    """
+    f = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date,
+         "slotTime": "15:00"},
+        {"limitSummary.thsPools": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
+    tp = ((f or {}).get("limitSummary") or {}).get("thsPools") or {}
+    counts = tp.get("poolCounts")
+    if not isinstance(counts, dict) or not counts:
+        return None, False
+    return {"failed": counts.get("failed"), "rushing": counts.get("rushing"),
+            "drawdown": counts.get("drawdown"), "maxDrawdown": tp.get("maxDrawdown"),
+            "avgDrawdown": tp.get("avgDrawdown"), "source": tp.get("source")}, True
+
+
 def _ths_failed_codes(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tuple[set[str], bool]:
     items, found = _ths_failed_items(db, date, dataset_id)
     return set(items), found
@@ -848,9 +872,25 @@ _DIV_LIST_CACHE: dict[str, dict[str, tuple[float, float]]] = {}
 _DIV_FAIL_UNTIL: dict[str, float] = {}  # 失败负缓存（5 分钟退避，防重试风暴 review P1-2）
 _DIV_FAIL_TTL = 300.0
 _DAILY_CLIENT: Any = None
-_DAILY_BARS_CACHE: dict[str, list[dict]] = {}
+_DAILY_BARS_CACHE: dict[tuple[int, str], list[dict]] = {}
 _TDX_DOWN_UNTIL = 0.0
 _TDX_RETRY_SECONDS = 300
+_BARS_OFFSET_DEFAULT = 60
+
+
+def _bars_offset() -> int:
+    """日线棒根数（默认 60 = 生产口径不变）。
+
+    2026-10-17 IE 修复 F5：`JEV_BARS_OFFSET` 允许回放取长窗（如 250）——「取现在往前 60 根」
+    使早于窗起的历史日 TDX 指标（断板亏钱/隔日溢价/连板高度）全不可算（诊断文档 §7）。
+    **仅回放再用**：生产当日数据必在 60 根内，长窗只增开销，故默认 60 不启用；
+    早期历史日的长窗重放属另立裁决（会改早期断板口径与毒带读数）。
+    """
+    raw = os.environ.get("JEV_BARS_OFFSET")
+    try:
+        return max(20, int(raw)) if raw else _BARS_OFFSET_DEFAULT
+    except (TypeError, ValueError):
+        return _BARS_OFFSET_DEFAULT
 
 
 def _tdx_hosts_path() -> Path:
@@ -899,8 +939,11 @@ def _daily_bars(code: str) -> list[dict]:
     瞬时失败**不落空缓存**：一次客户端抖动若把 [] 缓存住，而 `_DAILY_CLIENT` 已缓存使
     `_TDX_DOWN_UNTIL` 负缓存不会介入，整轮回溯就永久降级成池口径、进程内再无恢复路径
     （2026-10-16 code review 实测）。合法空（新上市/当日无棒）仍缓存，避免逐股重取。
+
+    2026-10-17：根数改由 `_bars_offset()`（`JEV_BARS_OFFSET`，默认 60）——缓存键含 offset。
     """
-    cached = _DAILY_BARS_CACHE.get(code)
+    offset = _bars_offset()
+    cached = _DAILY_BARS_CACHE.get((offset, code))
     if cached is not None:
         return cached
     bars: list[dict] = []
@@ -908,7 +951,7 @@ def _daily_bars(code: str) -> list[dict]:
     if client is not None:
         try:
             with _POSITION_LOCK:
-                df = client.bars(symbol=code, frequency=9, start=0, offset=60)
+                df = client.bars(symbol=code, frequency=9, start=0, offset=offset)
             if df is not None and len(df) > 0:
                 for _, r in df.iterrows():
                     bars.append({
@@ -919,7 +962,7 @@ def _daily_bars(code: str) -> list[dict]:
                 bars.sort(key=lambda b: b["date"])
         except Exception:
             return []   # 不缓存：下次调用重试，不把一次抖动变成整轮回调
-    _DAILY_BARS_CACHE[code] = bars
+    _DAILY_BARS_CACHE[(offset, code)] = bars
     return bars
 
 

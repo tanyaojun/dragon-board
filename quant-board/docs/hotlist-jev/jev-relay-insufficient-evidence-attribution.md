@@ -223,3 +223,13 @@ if not zb.get("ztCount"):                                # ← 帧缺失 → 整
    若给叙事路径加「回放专用长窗」（如 `--bars-offset 250`），早期 42 天的钱效即可真正可算，
    并**顺带恢复 30 天的连板高度分层**。仅改回放，生产当日行为不变。
 3. 若做 2 → 需重判早期 42 天（≈270K tokens ≈ $0.03）+ 预注册 + 升版。
+
+## 8. 附：叙事跨进程非确定性（2026-10-17 发现并修复）
+
+排查 §7 影响面时发现：**同一数据、同一代码，两次独立进程构建的叙事不一致**——实测 2026-09-07
+两次 hash 不同（`383b870a` vs `46367a66`）。根因：`theme_ladder_lines` 用
+`max(set(drivers), key=drivers.count)` 取「驱动主类」，`set` 迭代序受 `PYTHONHASHSEED` 影响，
+**计数并列时**取值随机 → v4 存量叙事中 16 天与现行代码不可复现。
+已修为 `sorted(set(drivers), key=lambda x: (-drivers.count(x), x))[0]`（同数按名称升序），
+两个独立进程 triple-hash 一致；该 16 天列入 v5 重判候选（`jev-relay-ie-fix-preregistration.md` §3/§6）。
+**教训**：任何「取众数/取最值」都不得以 set/dict 迭代序作隐性 tie-break——回放与重判的前提是输入可复现。

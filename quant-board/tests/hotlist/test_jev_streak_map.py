@@ -461,10 +461,11 @@ def test_daily_bars_transient_failure_not_cached(monkeypatch):
     try:
         monkeypatch.setattr(runner, "_tdx_daily_client", lambda: _Client())
         real = runner._REAL_DAILY_BARS      # 离线护栏把模块属性打空了，这里取回真实实现
+        key = (runner._bars_offset(), "600825")   # v5：缓存键含 bars offset（JEV_BARS_OFFSET）
         assert real("600825") == []                      # 首次失败：降级但不写缓存
-        assert runner._DAILY_BARS_CACHE.get("600825") is None
+        assert runner._DAILY_BARS_CACHE.get(key) is None
         assert len(real("600825")) == 1                   # 重试即恢复
-        assert runner._DAILY_BARS_CACHE.get("600825")       # 成功后照常缓存
+        assert runner._DAILY_BARS_CACHE.get(key)          # 成功后照常缓存
     finally:
         runner._TDX_DOWN_UNTIL, runner._DAILY_CLIENT = saved
         runner._DAILY_BARS_CACHE.clear()

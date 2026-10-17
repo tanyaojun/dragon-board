@@ -19,8 +19,11 @@ from backend.analysis.hotlist.jev_state import SCORE_ANCHORS_10
 # v4 = 2026-10-16 弹药修正（预注册 docs/hotlist-jev/jev-relay-ammo-v4-preregistration.md）：
 # 三日链停牌跳过续算（停牌不算断板）+ 分层顶层改 6板+ + 新增段「高位股多日轨迹」；
 # relay_phase/relay_index 判据增列【高位股多日轨迹】参照句（不得单独据其打分）。
+# v5 = 2026-10-17 IE 读口径修复（预注册 docs/hotlist-jev/jev-relay-ie-fix-preregistration.md）：
+# 旧采集 schema 炸板面家数级降级（F1）+ 梯队帧缺失日韭研回退（F3）+ 断板/溢价最小样本
+# 门槛（F4，样本不足不得作钱效依据）+ anchorGaps 落库（F2）；判据枚举与评分锚未动。
 # 旧代已判 relay_index 不回改；新旧代序列对比与判定卡须注记代际（questionSetVersion 落库）。
-QUESTION_SET_VERSION_RELAY = "v4"
+QUESTION_SET_VERSION_RELAY = "v5"
 
 _RELAY_INSTR = ("连板情绪指数（0=接力生态彻底冰点，100=接力极度亢奋）。"
                 "以【近10日连板轨迹】与【近20日参照】为坐标系：接力意愿（晋级率位置）、"
@@ -84,7 +87,9 @@ QUESTIONS_RELAY: dict[str, dict] = {
     "money_effect": {
         "type": "choice",
         "instructions": ("今日接力赚钱效应？主锚=【晋级与断板】证据：昨日涨停股今日表现"
-                         "（晋级家数、断板股中位涨跌、大面家数、隔日溢价中位数）"),
+                         "（晋级家数、断板股中位涨跌、大面家数、隔日溢价中位数）；"
+                         "叙事标注「样本不足（TDX 覆盖 k/n）」的断板/溢价数字**不得**作为钱效依据"
+                         "（样本门槛见预注册 §2.3；缺主锚证据时选 insufficient_evidence）"),
         "criteria": {
             "strong": "接力赚钱：晋级顺畅且断板股/昨日涨停股整体中位数为正，大面少",
             "neutral": "中性：晋级与断板大致平衡，中位数在零附近，无明显亏钱扩散",
