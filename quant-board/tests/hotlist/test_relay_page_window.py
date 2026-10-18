@@ -852,7 +852,8 @@ def test_leaders_render_executes_uncomputable_chain(tmp_path, js: str):
         "      totalLeader: { code: '600101', name: '\u7532A', rangeText: '4\u59294\u677f', streak: 4,",
         "        sector: '\u7532\u677f\u5757', time: '09:30', pull: 2, rank: null },",
         "      sentimentLeader: null, sameStock: null, leaderIsMainlineDragon: null,",
-        "      genesis: { firstBoardDate: '2026-09-28', tradingDaysAgo: 1, breaks: 0, streak: 4, degraded: null },",
+        "      genesis: { firstBoardDate: '2026-09-28', tradingDaysAgo: 1, breaks: 0, streak: 4,"
+        " degraded: '韭研区间 4天4板 的首板日 09-28 早于韭研池史起点（2026-05-06 起），无法校验' },",
         "      succession: null, degraded: [] } } },",
         "};",
         "globalThis.rangedSeries = () => [];",
@@ -866,6 +867,8 @@ def test_leaders_render_executes_uncomputable_chain(tmp_path, js: str):
         "if (!h.includes('\u4e09\u65e5\u94fe\u4e0d\u53ef\u7b97')) throw new Error('\u4f9d\u636e\u672a\u62ab\u9732: ' + h);",
         "if (!b.includes('\u4e0d\u53ef\u5224')) throw new Error('sameStock=null \u672a\u515c\u4f4f: ' + b);",
         "if (!b.includes('\u9996\u677f 09-28\uff081 \u4e2a\u4ea4\u6613\u65e5\u524d\uff09')) throw new Error('\u8bde\u751f\u8f68\u8ff9\u6587\u6848: ' + b);",
+        # §14.6：首板日可算但不可核 → 理由必须同排展示（旧实现只在「不可算」分支显示，静默丢因）
+        "if (!b.includes('早于韭研池史起点')) throw new Error('不可核理由未展示: ' + b);",
         "console.log('OK');",
     ])
     script = tmp_path / "leaders_render_probe.js"

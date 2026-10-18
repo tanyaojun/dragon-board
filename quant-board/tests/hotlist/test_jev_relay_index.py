@@ -1279,6 +1279,68 @@ def test_leader_genesis_window_short_is_fail_visible(monkeypatch):
     assert "诞生轨迹：不可算" in "\n".join(relay.leader_structure_lines(struct))
 
 
+def test_leader_genesis_before_pool_history_blames_raw_material(monkeypatch):
+    """§14.6 修复：首板日早于韭研池史起点 → 归因原料边界，不得写成「口径不一致」。
+
+    2026-10-19 全量验收实测 10 天属于此类（首板日在韭研池史 2026-05-06 之前）。
+    """
+    d4, d3, d2, d1 = "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-28"
+    db = FakeDb({
+        "snapshot_frames": _frames([d4, d3, d2, d1, _D0]),
+        # 池史只有 d1/_D0（起点=d1）；龙头 N=5 → 首板日=d4，**早于池史起点**
+        "jiuyan_action": FakeCol([
+            _final(d1, [{"code": "600901", "name": "甲", "num": "5天5板", "time": "09:30"}]),
+            _final(_D0, [{"code": "600901", "name": "甲", "num": "5天5板", "time": "09:30"}]),
+        ]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    gen = relay.relay_structure(db, _D0)["genesis"]
+    assert gen["firstBoardDate"] == d4 and gen["tradingDaysAgo"] == 4
+    assert "早于韭研池史起点" in gen["degraded"] and d1 in gen["degraded"]
+    assert "口径不一致" not in gen["degraded"]
+    assert "不在韭研池" not in gen["degraded"]
+
+
+def test_leader_genesis_absent_within_pool_history(monkeypatch):
+    """池史覆盖首板日、但该股当日不在涨停池 → 归因「推算/停牌」，不得赖池史边界。"""
+    d4, d3, d2, d1 = "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-28"
+    db = FakeDb({
+        "snapshot_frames": _frames([d4, d3, d2, d1, _D0]),
+        "jiuyan_action": FakeCol([
+            # 首板日 d4 当天池存在，但只有另一只股（该股不在池）
+            _final(d4, [{"code": "600902", "name": "乙", "num": "1天1板", "time": "09:30"}]),
+            _final(_D0, [{"code": "600901", "name": "甲", "num": "5天5板", "time": "09:30"}]),
+        ]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    gen = relay.relay_structure(db, _D0)["genesis"]
+    assert gen["firstBoardDate"] == d4
+    assert "不在韭研池" in gen["degraded"] and "停牌" in gen["degraded"]
+    assert "早于韭研池史起点" not in gen["degraded"]
+    assert "口径不一致" not in gen["degraded"]
+
+
+def test_leader_genesis_first_board_day_pool_missing(monkeypatch):
+    """首板日在池史范围内、但该日韭研 final 缺档 → 明写「韭研池缺失」，不伪造。"""
+    d4, d3, d2, d1 = "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-28"
+    db = FakeDb({
+        "snapshot_frames": _frames([d4, d3, d2, d1, _D0]),
+        # 池史起点=d4（< 首板日 d3），但 d3 当天无 final → 不可校验
+        "jiuyan_action": FakeCol([
+            _final(d4, [{"code": "600902", "name": "乙", "num": "1天1板", "time": "09:30"}]),
+            _final(_D0, [{"code": "600901", "name": "甲", "num": "4天4板", "time": "09:30"}]),
+        ]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    gen = relay.relay_structure(db, _D0)["genesis"]
+    assert gen["firstBoardDate"] == d3
+    assert "韭研池缺失" in gen["degraded"]
+    assert "早于韭研池史起点" not in gen["degraded"] and "不在韭研池" not in gen["degraded"]
+
+
 def test_leader_succession_reports_prev_leader_status(monkeypatch):
     """更替：昨日总龙头今日不在池（池权威未封、无日线佐证）→ 断板退位。"""
     boards = {

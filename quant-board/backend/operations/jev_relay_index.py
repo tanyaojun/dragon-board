@@ -845,13 +845,28 @@ def _sector_day_stat(stocks: list[dict[str, Any]],
             "top": t}
 
 
+def _pool_history_first_date(db: Any) -> str | None:
+    """韭研 final 池史最早交易日（原料边界；`_pool_of` 同源，按 `_id` 尾「:final」取）。
+
+    2026-10-19 §14.6：原实现把「首板日早于韭研池史起点」也写成「口径不一致」，
+    违反 §1.2.6 归因顺序（先查原料再查题目/口径）。仅在降级路径调用（≤1 次/日）。
+    """
+    dates = []
+    for r in db["jiuyan_action"].find({"_id": {"$regex": ":final"}}, {"tradingDate": 1, "_id": 1}):
+        d = r.get("tradingDate") or str(r.get("_id") or "").split(":")[0]
+        if d:
+            dates.append(str(d))
+    return min(dates) if dates else None
+
+
 def _leader_genesis(db: Any, date: str, code: str, entry: dict[str, Any],
                     streak: int | None) -> dict[str, Any]:
     """总龙头诞生轨迹：首板日 / 距今交易日数 / 区间内断板次数 / 当前真连板。
 
     首板日推算 = 韭研「N天M板」的 N（N 天窗口的首日）；随后**单点校验**该日是否真在
-    韭研池（不一致则标口径偏差，不静默）。N 缺失时才回退 60 日池史回溯（需 60 次查库，
-    仅罕见路径）。全程只用韭研池史，不读 TDX（回放历史日不受「日线取现在」缺陷影响）。
+    韭研池，不可核时按原料→口径的顺序给原因（三种，见下，均 fail-visible、不静默）。
+    N 缺失时才回退 60 日池史回溯（需 60 次查库，仅罕见路径）。全程只用韭研池史，
+    不读 TDX（回放历史日不受「日线取现在」缺陷影响）。
     """
     boards, days = entry.get("boards"), entry.get("days")
     out: dict[str, Any] = {"firstBoardDate": None, "tradingDaysAgo": None,
@@ -881,9 +896,19 @@ def _leader_genesis(db: Any, date: str, code: str, entry: dict[str, Any],
         return out
     first = hist[0]
     out["firstBoardDate"] = first
-    if code not in _pool_of(db, first):
+    pool = _pool_of(db, first)
+    if code in pool:
+        return out
+    # 归因顺序（§1.2.6）：①原料边界（早于韭研池史起点 / 该日池缺失）→ ②题目/口径（首板日推算）。
+    edge = _pool_history_first_date(db)
+    if edge and first < edge:
+        out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 早于韭研池史起点"
+                           f"（{edge} 起），无法校验")
+    elif not pool:
+        out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 韭研池缺失，无法校验")
+    else:
         out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 不在韭研池"
-                           f"（首板日仅为推算，口径不一致）")
+                           f"（首板日仅为推算；或该股当日停牌）")
     return out
 
 

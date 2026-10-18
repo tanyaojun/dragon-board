@@ -1406,6 +1406,8 @@ function renderLeaders(){
   const genTxt = gen.firstBoardDate
     ? `首板 ${esc(gen.firstBoardDate.slice(5))}（${gen.tradingDaysAgo === 0 ? '当日' : gen.tradingDaysAgo + ' 个交易日前'}）→ 区间 ${esc(tl.rangeText)}`
       + `（${gen.breaks == null ? '断板次数不可算' : '区间内断板 ' + gen.breaks + ' 次'}）→ 当前真连板 ${esc(String(streakText(gen.streak)))}`
+      // 首板日可算但不可核（早于韭研池史起点 / 池缺档 / 不在池）：理由必须随值一并展示（§4.0 fail-visible）
+      + (gen.degraded ? ` <span style="color:var(--muted)">· ${esc(gen.degraded)}</span>` : '')
     : `<span style="color:var(--muted)">不可算（${esc(gen.degraded || '首板日不可得')}）</span>`;
   const succTxt = pl
     ? (succ.changed
