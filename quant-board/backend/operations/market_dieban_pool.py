@@ -63,7 +63,25 @@ COLLECTION = "market_daily_limit_down"
 # source 取值（参考集合每行带 source；分位采样必须同源，跨口径混采会污染分位）
 SOURCE_EM = "em_pool"                       # 东财跌停池（主源，有历史）
 SOURCE_SNAPSHOT = "market_quotes_snapshot"  # 全市场行情快照（兜底，仅当日）
+SOURCE_TDX = "tdx_local_bars"               # 本地通达信日线重算（离线，窗口外回填；F7 2026-10-17）
 SOURCE_POOL = "pool_rows"                   # 采集池口径（末位降级，叙事内标注）
+
+# 「全市场口径」家族（三家都算全市场，可用在同一列；源内优先级 = 下列顺序，EM 最权威）。
+# 采集池口径（仅 250 只）**不在**此列——它系统性低估（10-15 实证池内 6 vs 全市场 26），
+# 与全市场口径混采会把「换源」读成真实情绪摆动（2026-10-16 审计问题 #1）。
+FULL_MARKET_SOURCES = (SOURCE_EM, SOURCE_SNAPSHOT, SOURCE_TDX)
+
+SOURCE_LABELS = {
+    SOURCE_EM: "全市场·东财跌停池",
+    SOURCE_SNAPSHOT: "全市场·行情快照",
+    SOURCE_TDX: "全市场·本地日线重算",
+    SOURCE_POOL: "采集池口径",
+}
+
+
+def source_label(source: object) -> str:
+    """source → 叙事口径文案（单一事实源，禁各处再写一份映射）。"""
+    return SOURCE_LABELS.get(str(source or ""), "采集池口径")
 
 _TZ = ZoneInfo("Asia/Shanghai")
 

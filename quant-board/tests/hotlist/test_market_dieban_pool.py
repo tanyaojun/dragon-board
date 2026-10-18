@@ -553,3 +553,60 @@ def test_backfill_failure_counter_resets_on_success(monkeypatch, capsys):
     assert len(http.calls) == calls_before + 3   # 第 4 日被熔断，未尝试
     assert "熔断" in capsys.readouterr().out
     assert [r["_id"] for r in col2.rows] == []
+
+
+def test_market_facts_line_dieban_tdx_scope_label_and_same_source_history(monkeypatch):
+    """F7（2026-10-17）：本地日线重算源口径标「全市场·本地日线重算」，历史分位只采同源。
+
+    东财池窗口外（09-16 之前）曾回退采集池口径（池内 6 vs 全市场 26，08-19 池内 53
+    vs 全市场 128）；回填本地日线读数后，口径仍是「全市场」，但与 EM 不同源 → 分位
+    样本必须只取同源行，禁把 EM 数值混入 TDX 分位（1.65 家量级源差会污染分位）。
+    """
+    from backend.operations.jev_label_jiuyan import market_facts_line
+
+    monkeypatch.setattr(mdp, "today_str", lambda: "2026-10-16")
+    monkeypatch.setattr(mdp, "_snapshot_is_closing", lambda: True)
+    tdx_days = ["2026-08-13", "2026-08-14", "2026-08-17", "2026-08-18", "2026-08-19",
+                "2026-08-20", "2026-08-21", "2026-08-24", "2026-08-25", "2026-08-26",
+                "2026-08-27"]
+    refs = [{"_id": d, "count": c, "source": mdp.SOURCE_TDX}
+            for d, c in zip(tdx_days, [4, 12, 1, 6, 128, 11, 13, 13, 4, 1, 3])]
+    refs.append({"_id": "2026-10-16", "count": 11, "source": mdp.SOURCE_TDX})
+    refs.append({"_id": "2026-09-23", "count": 13, "source": mdp.SOURCE_EM})   # 异源，不参与分位
+    db = _facts_db(refs, hist_dates=tdx_days + ["2026-09-23"])
+    line = market_facts_line(db, "2026-10-16")
+    assert "跌停 11 家（全市场·本地日线重算，" in line
+    assert "采集池口径" not in line and "东财跌停池" not in line
+    assert "分位不可算" not in line.split(" · ")[1]      # 11 个同源样本 → 分位可算
+
+
+def test_trajectory_line_labels_mixed_full_market_sources(monkeypatch):
+    """F7：序列列跨 09-15/09-16（本地日线重算 ↔ 东财池）切换时，行尾必须列明两个源。
+
+    旧实现按「当日源」写单一口径，且异源格回落采集池并打 *——09-16 之后的窗口里
+    09-15 及更早全是 TDX 读数，会被误标成「采集池降级」，把全市场列整段读成降级列。
+    """
+    from backend.operations import jev_label_jiuyan as jj
+
+    hist = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07", "2026-09-08",
+            "2026-09-09", "2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"]
+    cols = {"snapshot_frames": FakeCol(
+        [{"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": d,
+          "slotTime": "15:00"} for d in hist + ["2026-09-17"]])}
+    refs = [{"_id": d, "count": 10 + i, "source": mdp.SOURCE_TDX}
+            for i, d in enumerate(hist[:-1])]
+    refs += [{"_id": "2026-09-15", "count": 32, "source": mdp.SOURCE_TDX},
+             {"_id": "2026-09-16", "count": 4, "source": mdp.SOURCE_EM},
+             {"_id": "2026-09-17", "count": 2, "source": mdp.SOURCE_EM}]
+    cols[mdp.COLLECTION] = FakeCol(refs)
+
+    class _Db:
+        def __getitem__(self, name):
+            return cols.setdefault(name, FakeCol())
+
+    monkeypatch.setattr(jj, "market_metrics", lambda db, d, dataset_id=None: {})
+    monkeypatch.setattr(jj, "advdec_ratio", lambda db, d, dataset_id=None: None)
+    line = jj.trajectory_line(_Db(), "2026-09-17")
+    assert "全市场·东财跌停池＋全市场·本地日线重算" in line
+    assert "|跌停32|" in line                 # TDX 读数照出，不回退采集池
+    assert "采集池降级格" not in line

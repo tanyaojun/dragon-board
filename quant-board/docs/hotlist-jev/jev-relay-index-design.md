@@ -486,3 +486,16 @@ TDX 60 棒窗口，需先给 `_daily_bars` 加按叙事日取数（或显式标�
    THS 15:00 炸板池个股 items 19 天不可用（16 天帧存旧 schema 只有家数 + 3 天帧未采）。
    见 `jev-relay-insufficient-evidence-attribution.md`（含四组归因、覆盖检验、可补性矩阵；
    修复方案未立预注册，待裁决）。
+10. **IE 读口径修复 v5**（2026-10-17，预注册 `jev-relay-ie-fix-preregistration.md`）：
+    F1 旧采集 schema 炸板面家数级降级 · F3 梯队韭研回退 · F4 断板/溢价最小样本门槛
+    （covered≥5 且 ≥20%）· F2 `anchorGaps` 落库 + 前端锚缺位 chip · F5 回放长窗机制
+    （`JEV_BARS_OFFSET`，默认 60 不启用）· F6 叙事可复现性修复（`max(set(...), key=count)`
+    在计数并列时受 `PYTHONHASHSEED` 影响而跨进程漂移）· **F7 全市场跌停口径回填**（见下）。
+    全库 108 天零调用 diff：全部变化 100 天（修复类 93）。
+11. **F7 跌停口径：全市场家族 + 本地日线重算**（2026-10-17）。参考集合
+    `market_daily_limit_down` 每行带 `source`，`market_dieban_pool.FULL_MARKET_SOURCES`
+    = 东财池 / 行情快照 / **本地日线重算**（`tdx_local_bars`，离线，`market_dieban_tdx.py`
+    + `backfill_limit_down_tdx.py`）；`SOURCE_LABELS`/`source_label()` 是叙事口径文案单一源。
+    判定两道闸（跌幅达线 + `close == limit_down_price`），17 个 EM 双源日实测偏差 **+1.65
+    （+0..+4）**。**分位严格同源采样**（源差不得混入）；序列列按家族逐日回退、行尾列明
+    实际用到的源。0 家跌停是真读数（照写）；无棒 / 覆盖 < 峰值×90% 才不出数。

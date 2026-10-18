@@ -42,11 +42,13 @@ from backend.analysis.hotlist.jev_driver_ammo import (
 from backend.analysis.hotlist import jev_driver_ammo as ammo
 from backend.core.limit_rules import is_limit_down_pct, limit_ratio
 from backend.operations.market_dieban_pool import (
+    FULL_MARKET_SOURCES,
     SOURCE_EM,
     SOURCE_POOL,
     SOURCE_SNAPSHOT,
     limit_down_count,
     reference_counts,
+    source_label,
 )
 from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
@@ -782,15 +784,17 @@ def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> st
     # 外呼）。参考集合缺失 → 回退 250 只采集池口径并显式标注——池口径会漏掉池外跌停
     # （10-15 实证：池内 6 vs 全市场 26）。
     cur_die, die_src = limit_down_count(db, date, dataset_id)
-    if die_src in (SOURCE_EM, SOURCE_SNAPSHOT):
-        # 同源采样：跨口径（EM 池 / 快照阈值 / 采集池）混采会污染分位数
+    if die_src in FULL_MARKET_SOURCES:
+        # 同源采样：同一列内不得混口径（采集池 vs 全市场差 4 倍量级）；全市场家族内部
+        # （东财池/快照/本地日线重算）也只采当日同源，避免把源差读成情绪摆动
         die_hist = reference_counts(db, prev, die_src)
         hist_die = [die_hist[d] for d in prev if d in die_hist]
-        die_scope = "全市场·东财跌停池" if die_src == SOURCE_EM else "全市场·行情快照"
+        die_scope = source_label(die_src)
     else:
         hist_die = [v for v in (dieban_count(db, d, dataset_id) for d in prev)
                     if isinstance(v, int) and not isinstance(v, bool)]
-        die_scope = "采集池口径，全市场源缺失" if die_src == SOURCE_POOL else None
+        die_scope = (source_label(SOURCE_POOL) + "，全市场源缺失"
+                     if die_src == SOURCE_POOL else None)
     if isinstance(cur_die, int) and not isinstance(cur_die, bool) and die_scope:
         die_txt = f'跌停 {cur_die} 家（{die_scope}，{_pct_txt(hist_die, cur_die)}）'
     else:
@@ -1378,15 +1382,22 @@ def trajectory_line(db, date: str, n: int = 10,
                     dataset_id: str = DEFAULT_DATASET_ID) -> str:
     """近 n 个交易日逐日序列：日期|涨停(较昨日Δ)|跌停|炸板率%|大幅回撤|最高板。"""
     window = trading_dates_before(db, date, n + 1, dataset_id=dataset_id)  # 首日仅为算首格 Δ
-    # 跌停=全市场口径（2026-10-16）：历史窗口一次 find 批量读参考集合（禁逐日连发），
-    # 当日允许懒加载。**分位/序列必须与当日同源采样**——em_pool / quotes_snapshot /
-    # pool_rows 三家口径不同，混采会让「跌停翻六倍」这种观感其实只是换了个源
-    # （10-15=26 全市场 vs 09-10=6 采集池并排在同一列，模型无从分辨）。
-    # 参考集合 miss 的历史日回落采集池口径，逐格打 * 并在行尾注明，不静默混用。
+    # 跌停=全市场口径（2026-10-16 口径修正；2026-10-17 F7 补本地日线重算源）：历史窗口一次
+    # find 批量读参考集合（禁逐日连发），当日允许懒加载。**同一列内不得混口径**——
+    # pool_rows（250 只采集池）与全市场差 4 倍量级，混采会让「跌停翻六倍」这种观感其实
+    # 只是换了个源（10-15=26 全市场 vs 09-10=6 采集池并排，模型无从分辨）。
+    # 全市场家族内部（东财池/快照/本地日线重算）逐日回退，并在行尾列明本列实际用到的源
+    # （跨 09-15/09-16 切换的窗口会同时用到「本地日线重算＋东财池」，不许默默并排）。
+    # 参考集合 miss 且无全市场源的历史日才回落采集池口径，逐格打 * 并在行尾注明。
     die, src = limit_down_count(db, date, dataset_id)
-    die_ref = reference_counts(db, window, src if src in (SOURCE_EM, SOURCE_SNAPSHOT) else None)
-    die_scope = ("全市场·东财跌停池" if src == SOURCE_EM
-                 else "全市场·行情快照" if src == SOURCE_SNAPSHOT else "采集池口径")
+    by_src = {s: reference_counts(db, window, s) for s in FULL_MARKET_SOURCES}
+    used_srcs = [s for s in FULL_MARKET_SOURCES
+                 if s == src or any(d in by_src[s] for d in window)]
+    die_ref: dict[str, int] = {}
+    for s in FULL_MARKET_SOURCES:            # 源内优先级 = FULL_MARKET_SOURCES 顺序（EM 最权威）
+        for d, v in by_src[s].items():
+            die_ref.setdefault(d, v)
+    die_scope = "＋".join(source_label(s) for s in used_srcs) if used_srcs else source_label(SOURCE_POOL)
     pool_fallback = {d: dieban_count(db, d, dataset_id) for d in window
                      if d not in die_ref and d != date}
     degraded = False
