@@ -71,8 +71,10 @@ class FakeDb:
 
 def _relay(date, idx):
     return {"_id": f"{date}:RELAY", "tradingDate": date, "status": "ok",
-            "questionSetVersion": "v3", "relayIndex": idx, "relayPhase": "divergence",
+            "questionSetVersion": "v6", "relayIndex": idx, "relayPhase": "divergence",
             "narrative": "SECRET", "usage": {"input_tokens": 1, "output_tokens": 2},
+            "relayStructure": {"mainline": {"name": "半导体"},
+                               "totalLeader": {"code": "600001", "name": "甲"}},
             "computedAt": f"{date}T18:00:00"}
 
 
@@ -114,6 +116,22 @@ def test_relay_index_joins_day_temperature(client):
     assert body["day"]["dayTemperature"] is None
     # 投影边界：narrative 不出读口
     assert "narrative" not in series[_D1]
+
+
+def test_relay_index_projection_boundary_of_relay_structure(client):
+    """v6 投影边界：`relayStructure` 只随单日 `day` 下发，序列行必须剔除（防 400 日载荷膨胀）。
+
+    前端「板块与龙头」子视图读 `day.relayStructure`（或判定明细按日懒拉的完整存档）；
+    序列仅服务列表/图表/space 扫描，不得携带结构体。
+    """
+    r = client.get("/api/hotlist-jev/relay-index")
+    assert r.status_code == 200
+    body = r.json()
+    assert all("relayStructure" not in s for s in body["series"]), \
+        "序列行不得携带 relayStructure（投影必须排除）"
+    # 单日 day 必须保留（子视图唯一数据源）
+    assert body["day"]["relayStructure"]["mainline"]["name"] == "半导体"
+    assert body["day"]["relayStructure"]["totalLeader"]["code"] == "600001"
 
 
 def test_relay_index_without_any_eod(monkeypatch):

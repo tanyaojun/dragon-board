@@ -765,3 +765,133 @@ def test_band_panel_labels_sample_scope_as_within_range(js: str):
     # 2) 必须声明与离线产物（全窗口）不可直接比较
     assert "不可直接比较" in rdp or "不可比" in rdp, "应声明与离线产物 n 不可比"
     assert "全窗口" in rdp, "应点明产物是全窗口口径"
+
+
+# ── v6（2026-10-19）：板块与龙头子视图（预注册 jev-relay-sector-leader-preregistration.md）─
+def test_leaders_view_wired_as_own_subview(html: str, js: str):
+    """新增「板块与龙头」为独立子视图（≤ 2 卡），且在 renderRelayTab 周期内渲染。"""
+    assert "['leaders', '板块与龙头'" in _const(js, "RELAY_VIEWS"), "RELAY_VIEWS 缺 leaders 子视图"
+    seg = html[html.index('id="rv-leaders"'):]
+    seg = seg[: seg.index('id="rv-detail"')]
+    assert seg.count('<div class="card"') == 2, "该子页应守「每页 ≤2 卡」规则"
+    assert 'id="sectorChain"' in seg and 'id="leaderStruct"' in seg, "两卡挂载点缺失"
+    assert "renderLeaders()" in _fn(js, "renderRelayTab"), "子视图须在 renderRelayTab 周期内渲染"
+
+
+def test_leaders_single_source_and_old_gen_fail_visible(js: str):
+    """龙头/板块卡只读存档 relayStructure（与叙事同源）；旧代无字段必须显式可见。"""
+    rl = _fn(js, "renderLeaders")
+    assert "relayStructure" in rl, "必须读存档 relayStructure，禁止前端重算"
+    assert "旧代" in rl and "字段缺失" in rl, "旧代文档无 relayStructure 应显式标注"
+    # 不得用 '-' / 空串佯装缺失（AGENTS §4.0）
+    assert "未采集" in rl, "应写明未采集而非静默置空"
+    assert "relayDocFetch" in rl, "选中行未预入缓存时应懒拉且可重试"
+    assert "relayDocIsErr" in rl, "拉取失败与确实无档必须可区分"
+
+
+def test_leaders_constants_are_single_source_with_backend(js: str):
+    """前端泛板块/依据文案/状态文案必须与后端同源（防口径漂移）。
+
+    2026-10-19 review P2：原守卫只比「键集」，文案值改了仍会绿；且 STATUS_CN 完全未守卫。
+    """
+    from backend.operations.jev_relay_index import (_PSEUDO_BOARDS, _SECTOR_BASIS_CN,
+                                                   _STATUS_CN)
+
+    decl = _const(js, "PSEUDO_BOARDS")
+    names = set(re.findall(r"'([^']+)'", decl[decl.index("["): decl.index("]")]))
+    assert names == set(_PSEUDO_BOARDS), f"泛板块集合与后端不同源：{names} vs {set(_PSEUDO_BOARDS)}"
+
+    block = _const_block(js, "SECTOR_BASIS_CN")
+    keys = set(re.findall(r"^\s*(\w+):", block, re.M))
+    assert keys == set(_SECTOR_BASIS_CN), \
+        f"主线依据键集不同源：{keys} vs {set(_SECTOR_BASIS_CN)}"
+    for k, v in _SECTOR_BASIS_CN.items():
+        assert f"{k}: '{v}'" in block, f"主线依据文案不同源：{k} → {v}"
+
+    sblock = _const_block(js, "STATUS_CN")
+    for k, v in _STATUS_CN.items():
+        assert f"{k}: '{v}'" in sblock, f"更替状态文案不同源：{k} → {v}"
+
+
+def test_leaders_chain_uncomputable_not_rendered_as_zero(js: str):
+    """段A 链不可算时必须渲染「不可算」而非 0（§4.0 伪 0，前端口径与后端同规）。"""
+    rl = _fn(js, "renderLeaders")
+    assert "chain.ok" in rl and "chainReason" in rl, "前端必须读 chain.ok/reason"
+    assert "不可算" in rl, "不可算路径必须显式可见"
+    assert "历史不足" in rl, "d2/d1 缺失时列头不得回落裸键 d2/d1"
+
+
+def test_leaders_render_executes_uncomputable_chain(tmp_path, js: str):
+    """真执行 renderLeaders（node 探针）：链不可算不得渲染 0、sameStock=null 不得误判。
+
+    2026-10-19 review P1 前端侧锁：静态字符串断言看不出「0 只 vs 0只」这类差异，此处真跑一次。
+    """
+    src = "\n".join([
+        _const_block(js, "SECTOR_BASIS_CN"),
+        _const(js, "PSEUDO_BOARDS"),
+        _const_block(js, "STATUS_CN"),
+        _const(js, "rangeTextOf"),
+        _const(js, "streakText"),
+        "const esc = v => v == null ? '' : String(v);",
+        _fn(js, "relayDocIsErr"),
+        _fn(js, "leadersKey"),
+        _fn(js, "renderLeaders"),
+        "const host = {};",
+        "const $ = id => (host[id] = host[id] || { innerHTML: '', textContent: '' });",
+        "globalThis.STATE = { relayFocus: null, series: [],",
+        "  day: { tradingDate: '2026-09-30', relayIndex: 50 },",
+        "  relayDocs: { '2026-09-30': { tradingDate: '2026-09-30', questionSetVersion: 'v6',",
+        "    relayStructure: { dates: { d2: '2026-09-28', d1: '2026-09-29', d0: '2026-09-30' },",
+        "      chain: { ok: false, reason: '2026-09-28/2026-09-29 \u97ed\u7814 final \u7f3a\u5931' },",
+        "      sectors: [{ name: '\u7532\u677f\u5757', d2: null, d1: null,",
+        "        d0: { count: 2, maxBoardText: '4\u59294\u677f' }, survivors: null, survivorNames: [],",
+        "        promoted: null, top3Streak: 0,",
+        "        dragon: { role: '\u9f99\u4e00', code: '600101', name: '\u7532A', boards: 4, days: 4, streak: 4, time: '09:30' } }],",
+        "      mainline: { name: '\u7532\u677f\u5757', basis: 'chain_na', survivors: null, holdings: [],",
+        "        d0Count: 2, d0MaxBoardText: '4\u59294\u677f', pseudoExcluded: null },",
+        "      totalLeader: { code: '600101', name: '\u7532A', rangeText: '4\u59294\u677f', streak: 4,",
+        "        sector: '\u7532\u677f\u5757', time: '09:30', pull: 2, rank: null },",
+        "      sentimentLeader: null, sameStock: null, leaderIsMainlineDragon: null,",
+        "      genesis: { firstBoardDate: '2026-09-28', tradingDaysAgo: 1, breaks: 0, streak: 4, degraded: null },",
+        "      succession: null, degraded: [] } } },",
+        "};",
+        "globalThis.rangedSeries = () => [];",
+        "globalThis.relayDocFetch = () => {};",
+        "renderLeaders();",
+        "const a = $('sectorChain').innerHTML, b = $('leaderStruct').innerHTML;",
+        "const h = $('sectorChainHint').textContent;",
+        "if (/0\u53ea/.test(a)) throw new Error('\u4f2a 0 \u6cc4\u9732: ' + a);",
+        "if (!a.includes('\u4e0d\u53ef\u7b97\uff08')) throw new Error('\u5b58\u6d3b/\u664b\u7ea7 \u672a\u4e0d\u53ef\u7b97: ' + a);",
+        "if (!a.includes('\u97ed\u7814 final \u7f3a\u5931')) throw new Error('\u4e0d\u53ef\u7b97\u672a\u5e26\u539f\u56e0: ' + a);",
+        "if (!h.includes('\u4e09\u65e5\u94fe\u4e0d\u53ef\u7b97')) throw new Error('\u4f9d\u636e\u672a\u62ab\u9732: ' + h);",
+        "if (!b.includes('\u4e0d\u53ef\u5224')) throw new Error('sameStock=null \u672a\u515c\u4f4f: ' + b);",
+        "if (!b.includes('\u9996\u677f 09-28\uff081 \u4e2a\u4ea4\u6613\u65e5\u524d\uff09')) throw new Error('\u8bde\u751f\u8f68\u8ff9\u6587\u6848: ' + b);",
+        "console.log('OK');",
+    ])
+    script = tmp_path / "leaders_render_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"渲染探针失败：{cp.stderr}\n{cp.stdout}"
+    assert cp.stdout.strip() == "OK"
+
+
+def test_leaders_helper_behaviour(tmp_path, js: str):
+    """区间文案/真连板文案纯函数：不可验不得回落区间板数。"""
+    src = "\n".join([
+        _const(js, "rangeTextOf"),
+        _const(js, "streakText"),
+        "console.log(JSON.stringify([",
+        "  rangeTextOf(null, null), rangeTextOf(1, 1), rangeTextOf(4, 4),",
+        "  rangeTextOf(8, 16), rangeTextOf(3, null),",
+        "  streakText(4), streakText(null), streakText(undefined),",
+        "]));",
+    ])
+    script = tmp_path / "leaders_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert got == ["首板", "首板", "4天4板", "16天8板", "3板", 4, "不可算", "不可算"], \
+        f"文案派生不符：{got}"

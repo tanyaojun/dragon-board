@@ -214,7 +214,9 @@ def get_relay_index(
         day_doc = col.find_one({"tradingDate": latest}) if latest else None
         series = list(col.find(
             {"tradingDate": {"$ne": None}},
-            {"narrative": 0, "responseRaw": 0, "questionsRaw": 0},
+            # v6（2026-10-19）：relayStructure 只供选中日卡片，序列（≤400 天）不返——
+            # 避免载荷膨胀；缺字段的 v5 旧档由前端显「旧代未采集」（fail-visible）
+            {"narrative": 0, "responseRaw": 0, "questionsRaw": 0, "relayStructure": 0},
         ).sort("tradingDate", -1).limit(capped_days))
         series.reverse()
         # 2026-10-11 指数分区三色原料：join EOD day_temperature（唯一来源 hotlist_jev_sentiment），

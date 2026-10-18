@@ -106,6 +106,13 @@ def _final(date, stocks):
             "fields": [{"name": s.get("board") or "板块A", "stocks": [s]} for s in stocks]}
 
 
+def _final_multi(date, boards):
+    """多股同板块夹具（v6 板块接力链）：{板块名: [stock, ...]}。"""
+    return {"_id": f"{date}:final",
+            "fields": [{"name": name, "stocks": list(stocks)}
+                       for name, stocks in boards.items()]}
+
+
 def _frame_failed(date, items):
     """15:00 帧 + THS 炸板池（items 自带 open_num，供「较昨日」对比夹具控制反复开板数）。"""
     return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
@@ -504,7 +511,10 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v5"
+    assert doc["questionSetVersion"] == "v6"
+    # v6：板块/龙头结构随文档落库（前端同源读取，无需二次计算）
+    assert isinstance(doc.get("relayStructure"), dict)
+    assert doc["relayStructure"]["mainline"] is not None
     # 幂等：status=ok 已存在 → 跳过
     col.rows.append(doc)
     run_relay_index_day(db, [_D0])
@@ -1055,3 +1065,410 @@ def test_zhaban_face_legacy_partial_pool_kept():
     })
     line = zhaban_face_line(db, _D0)
     assert "炸板 7 家" in line, f"有可用家数应照常展示：{line}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v6（2026-10-19）板块接力链 + 龙头结构
+# 预注册：docs/hotlist-jev/jev-relay-sector-leader-preregistration.md
+# ══════════════════════════════════════════════════════════════════════════════
+
+# 三日板块结构：主线甲板块两只存活；乙板块家数更多但无高位股
+_SECTOR_BOARDS = {
+    _D2: {
+        "甲板块": [{"code": "600101", "name": "甲A", "num": "2天2板", "time": "09:40"},
+                   {"code": "600102", "name": "甲B", "num": "2天2板", "time": "10:10"}],
+        "乙板块": [{"code": "600201", "name": "乙A", "num": "2天2板", "time": "11:00"},
+                   {"code": "600202", "name": "乙B", "num": "2天2板", "time": "13:00"},
+                   {"code": "600203", "name": "乙C", "num": "2天2板", "time": "14:00"}],
+    },
+    _D1: {
+        "甲板块": [{"code": "600101", "name": "甲A", "num": "3天3板", "time": "09:35"},
+                   {"code": "600102", "name": "甲B", "num": "3天3板", "time": "10:00"}],
+        "乙板块": [{"code": "600201", "name": "乙A", "num": "3天3板", "time": "11:00"},
+                   {"code": "600301", "name": "丙N", "num": "1天1板", "time": "09:31"}],
+    },
+    _D0: {
+        "甲板块": [{"code": "600101", "name": "甲A", "num": "4天4板", "time": "09:30"},
+                   {"code": "600102", "name": "甲B", "num": "4天4板", "time": "10:05"}],
+        "乙板块": [{"code": "600201", "name": "乙A", "num": "4天4板", "time": "13:30"},
+                   {"code": "600202", "name": "乙B", "num": "1天1板", "time": "09:45"},
+                   {"code": "600203", "name": "乙C", "num": "1天1板", "time": "14:10"}],
+        "丙板块": [{"code": "600301", "name": "丙N", "num": "2天2板", "time": "09:31"}],
+    },
+}
+
+
+def _sector_db():
+    return FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, _SECTOR_BOARDS[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+        "hotlist_jev_sentiment": FakeCol([]),
+    })
+
+
+def test_relay_structure_mainline_by_three_day_survivors():
+    """主线=三日链存活股归属最多；家数更多但无存活的板块不得夺主线（v6 口径）。"""
+    struct = relay.relay_structure(_sector_db(), _D0)
+    main = struct["mainline"]
+    assert main["name"] == "甲板块"
+    assert main["basis"] == "three_day_survivors"
+    assert main["survivors"] == 2
+    assert main["holdings"] == ["甲A", "甲B"]
+    counts = {s["name"]: s["d0"]["count"] for s in struct["sectors"]}
+    assert counts["乙板块"] > counts["甲板块"]
+    assert struct["sectors"][0]["name"] == "甲板块"
+    line = relay.sector_relay_lines(struct)[-1]
+    assert line.startswith("主线板块：甲板块") and "总龙头在本板块：是" in line
+
+
+def test_relay_structure_mainline_degrades_when_no_survivor():
+    """存活为零 → 逐级降级到今日晋级/家数，并在文本暴露依据（不伪 0）。"""
+    boards = {
+        _D2: {"甲板块": [{"code": "600401", "name": "X", "num": "2天2板", "time": "09:40"}]},
+        _D1: {"甲板块": [{"code": "600402", "name": "Y", "num": "2天2板", "time": "09:40"}]},
+        _D0: {"乙板块": [{"code": "600403", "name": "Z", "num": "2天2板", "time": "09:40"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    assert struct["mainline"]["name"] == "乙板块"
+    assert struct["mainline"]["basis"] == "d0_count"
+    assert "今日板块涨停家数" in relay.sector_relay_lines(struct)[-1]
+
+
+def test_relay_structure_missing_history_is_fail_visible():
+    """D-1/D-2 韭研 final 缺失 → 历史列写「缺失」、存活/晋级写「不可算」，禁落「0 只」（§4.0）。
+
+    2026-10-19 review P1 回归：旧断言只查 `"0只"`（无空格），而存活列写作 `0 只`（有空格），
+    假绿放过了伪 0；新断言同时禁两种空格形态并锁「不可算 + 原因」。
+    """
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(_D0, _SECTOR_BOARDS[_D0])]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    lines = relay.sector_relay_lines(struct)
+    row = next(x for x in lines if x.startswith("· 甲板块"))
+    assert struct["chain"]["ok"] is False
+    assert "韭研 final 缺失" in struct["chain"]["reason"]
+    assert "三日存活 不可算" in row and "今日晋级 不可算" in row
+    assert "0只" not in row and "0 只" not in row
+    # 依据文案不得声称「均为零」（那是把缺料读成事实）
+    assert "chain_na" == struct["mainline"]["basis"]
+    assert "三日链不可算" in lines[-1] and "均为真零" not in lines[-1]
+    assert struct["mainline"]["survivors"] is None
+    assert anchor_gaps_derived("\n".join(lines)) == ["板块接力链"]
+
+
+def test_relay_structure_mainline_degrades_when_chain_ok_and_truly_zero():
+    """三日链可算但存活/晋级真零 → 依据文案必须写「真零」而与「不可算」区分。"""
+    boards = {
+        _D2: {"甲板块": [{"code": "600711", "name": "A", "num": "2天2板", "time": "09:30"}]},
+        _D1: {"甲板块": [{"code": "600712", "name": "B", "num": "2天2板", "time": "09:30"}]},
+        _D0: {"甲板块": [{"code": "600713", "name": "C", "num": "1天1板", "time": "09:30"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    assert struct["chain"]["ok"] is True
+    assert struct["mainline"]["basis"] == "d0_count"
+    row = next(x for x in relay.sector_relay_lines(struct) if x.startswith("· 甲板块"))
+    assert "三日存活 0 只" in row and "今日晋级 0 只" in row
+    assert "均为真零" in relay.sector_relay_lines(struct)[-1]
+
+
+def test_relay_structure_leader_same_stock():
+    """总龙头=区间高度 M 最高；情绪龙头=真连板最高；同日两者可重合。"""
+    struct = relay.relay_structure(_sector_db(), _D0)
+    assert struct["totalLeader"]["code"] == "600101"       # 甲A 4天4板 + 最早封板
+    assert struct["sentimentLeader"]["code"] == "600101"   # 真连板 4 同为最高
+    assert struct["sameStock"] is True
+    assert "为同一只" in "\n".join(relay.leader_structure_lines(struct))
+
+
+def test_relay_structure_leader_diverges():
+    """妖股口径：区间高度高但真连板低 → 总龙头与情绪龙头必须分离并显式标注。
+
+    注：本用例与上一个共用同一日期，必须拆成两个 test——_STREAK_CACHE 按
+    (dataset, date) 键且在单个 test 内不重置，两个夹具同日期会在同一用例内串读。
+    """
+    boards = {
+        _D2: {"甲板块": [{"code": "600501", "name": "妖", "num": "19天11板", "time": "09:30"}]},
+        _D1: {"甲板块": [{"code": "600511", "name": "连", "num": "2天2板", "time": "09:30"}]},
+        _D0: {"甲板块": [{"code": "600501", "name": "妖", "num": "19天11板", "time": "09:30"},
+                         {"code": "600511", "name": "连", "num": "3天3板", "time": "09:31"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    s2 = relay.relay_structure(db, _D0)
+    assert s2["totalLeader"]["code"] == "600501"
+    assert s2["sentimentLeader"]["code"] == "600511"
+    assert s2["sameStock"] is False
+    assert "总龙头与情绪龙头不同" in "\n".join(relay.leader_structure_lines(s2))
+
+
+def test_leader_genesis_from_jiuyan_span_not_tdx(monkeypatch):
+    """诞生轨迹：首板日按韭研「N天M板」的 N 推算；TDX 全空也必须可算。"""
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: [])
+    boards = {
+        _D2: {"甲板块": [{"code": "600901", "name": "甲", "num": "1天1板", "time": "09:30"}]},
+        _D1: {"甲板块": [{"code": "600901", "name": "甲", "num": "2天2板", "time": "09:30"}]},
+        _D0: {"甲板块": [{"code": "600901", "name": "甲", "num": "3天3板", "time": "09:30"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    gen = struct["genesis"]
+    # 韭研 N=3 → 首板日 = 3-1 = 2 个交易日前（日期与天数必须互证，2026-10-19 review P1）
+    assert gen["tradingDaysAgo"] == 2 and gen["breaks"] == 0
+    assert gen["firstBoardDate"] == _D2
+    assert gen["degraded"] is None
+    assert "诞生轨迹：首板 09-28（2 个交易日前）" in "\n".join(
+        relay.leader_structure_lines(struct))
+
+
+def test_leader_genesis_first_board_is_today(monkeypatch):
+    """首板股（韭研不标 num）→ 首板日=当日、天数 0，渲染「当日」。"""
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: [])
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(_D0, {"甲板块": [
+            {"code": "600921", "name": "新", "time": "09:30"}]})]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    gen = struct["genesis"]
+    assert gen["tradingDaysAgo"] == 0 and gen["firstBoardDate"] == _D0
+    assert "首板 09-30（当日）" in "\n".join(relay.leader_structure_lines(struct))
+
+
+def test_leader_genesis_window_short_is_fail_visible(monkeypatch):
+    """推算所需交易日史不足 → 明示不可算，不得伪造首板日。"""
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: [])
+    db = FakeDb({
+        "snapshot_frames": _frames([_D0]),
+        "jiuyan_action": FakeCol([_final(_D0, [{"code": "600005", "name": "E",
+                                                "num": "16天8板", "time": "09:30"}])]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    assert struct["genesis"]["firstBoardDate"] is None
+    assert "超出可取交易日史" in struct["genesis"]["degraded"]
+    assert "诞生轨迹：不可算" in "\n".join(relay.leader_structure_lines(struct))
+
+
+def test_leader_succession_reports_prev_leader_status(monkeypatch):
+    """更替：昨日总龙头今日不在池（池权威未封、无日线佐证）→ 断板退位。"""
+    boards = {
+        _D2: {"甲板块": [{"code": "600601", "name": "旧", "num": "2天2板", "time": "09:30"}]},
+        _D1: {"甲板块": [{"code": "600601", "name": "旧", "num": "3天3板", "time": "09:30"}]},
+        _D0: {"甲板块": [{"code": "600602", "name": "新", "num": "5天5板", "time": "09:30"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    succ = struct["succession"]
+    assert succ["changed"] is True and succ["prevLeader"]["code"] == "600601"
+    # 池权威：今日未被封且无停牌佐证（TDX 不可用不让步为停牌）→ broken
+    assert succ["prevStatus"] == "broken"
+    text = "\n".join(relay.leader_structure_lines(struct))
+    assert "今日换龙头" in text and "旧龙头今日断板" in text
+
+
+def test_relay_structure_pseudo_board_never_becomes_mainline():
+    """韭研泛板块（其他/公告/新股）不得当主线：真题材优先且必披露剔除。"""
+    boards = {
+        _D2: {"其他": [{"code": "600701", "name": "杂A", "num": "2天2板", "time": "09:30"}],
+               "半导体": [{"code": "600702", "name": "芯B", "num": "2天2板", "time": "09:31"}]},
+        _D1: {"其他": [{"code": "600701", "name": "杂A", "num": "3天3板", "time": "09:30"}],
+               "半导体": [{"code": "600702", "name": "芯B", "num": "3天3板", "time": "09:31"}]},
+        _D0: {"其他": [{"code": "600701", "name": "杂A", "num": "4天4板", "time": "09:30"},
+                        {"code": "600703", "name": "杂C", "num": "1天1板", "time": "09:40"}],
+               "半导体": [{"code": "600702", "name": "芯B", "num": "4天4板", "time": "09:31"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    assert struct["mainline"]["name"] == "半导体"
+    assert struct["mainline"]["pseudoExcluded"] == "其他"
+    text = "\n".join(relay.sector_relay_lines(struct))
+    assert "泛板块「其他」" in text and "已排除" in text
+    assert "（泛板块）" in text
+
+
+def test_relay_structure_sentiment_leader_uncomputable_not_fallback_m():
+    """全池落 THS 炸板池 → 真连板全不可验 → 情绪龙头=None，且不得回落区间 M 冒充。"""
+    boards = {_D0: {"甲板块": [{"code": "600931", "name": "甲", "num": "4天4板", "time": "09:30"}]}}
+    db = FakeDb({
+        "snapshot_frames": _frames([_D0], failed_by_date={_D0: ["600931"]}),
+        "jiuyan_action": FakeCol([_final_multi(_D0, boards[_D0])]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    assert struct["totalLeader"]["code"] == "600931"        # 总龙头仍有（区间高度口径）
+    assert struct["sentimentLeader"] is None                # 情绪龙头不可验 → None
+    assert struct["sameStock"] is None                      # 布尔语义未知，不得落 False
+    text = "\n".join(relay.leader_structure_lines(struct))
+    assert "情绪龙头 不可算" in text and "不可判" in text
+    assert any("情绪龙头不可算" in x for x in struct["degraded"])
+
+
+def test_leader_succession_continued_and_sealed_displaced(monkeypatch):
+    """更替三态补锁：同一只延续；旧龙头仍封板但被更高板超越。"""
+    # 延续：D1 与 D0 的总龙头都是 甲A
+    struct = relay.relay_structure(_sector_db(), _D0)
+    assert struct["succession"]["changed"] is False
+    assert "今日延续" in "\n".join(relay.leader_structure_lines(struct))
+
+    # 旧龙头仍封板但被超越（sealed 支）——与上例同日期，需独立用例（_STREAK_CACHE 串读）
+    boards = {
+        _D2: {"甲板块": [{"code": "600941", "name": "旧", "num": "3天3板", "time": "09:30"}]},
+        _D1: {"甲板块": [{"code": "600941", "name": "旧", "num": "3天3板", "time": "09:30"},
+                         {"code": "600942", "name": "新", "num": "2天2板", "time": "09:40"}]},
+        _D0: {"甲板块": [{"code": "600942", "name": "新", "num": "5天5板", "time": "09:31"},
+                         {"code": "600941", "name": "旧", "num": "3天3板", "time": "09:30"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    s = relay.relay_structure(db, _D0)
+    assert s["succession"]["changed"] is True
+    assert s["succession"]["prevLeader"]["code"] == "600941"
+    assert s["succession"]["prevStatus"] == "sealed"
+    assert "位次被超越" in "\n".join(relay.leader_structure_lines(s))
+
+
+def test_leader_succession_suspended(monkeypatch):
+    """旧龙头今日无棒且在已覆段内 → 停牌跳过（不得写成断板）。"""
+    monkeypatch.setattr(
+        relay, "_daily_bars",
+        lambda code: ([{"date": _D2, "high": 10.0, "close": 10.0},
+                       {"date": "2026-10-05", "high": 10.0, "close": 10.0}]
+                      if code == "600951" else []))
+    boards = {
+        _D2: {"甲板块": [{"code": "600951", "name": "停", "num": "3天3板", "time": "09:30"}]},
+        _D1: {"甲板块": [{"code": "600951", "name": "停", "num": "3天3板", "time": "09:30"}]},
+        _D0: {"甲板块": [{"code": "600952", "name": "新", "num": "5天5板", "time": "09:30"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    s = relay.relay_structure(db, _D0)
+    assert s["succession"]["changed"] is True
+    assert s["succession"]["prevStatus"] == "suspended"
+    assert "旧龙头今日停牌跳过" in "\n".join(relay.leader_structure_lines(s))
+
+
+def test_theme_ladder_includes_mainline_outside_top5():
+    """主线板块不在家数 top5 时被强制纳入且置顶（家数多≠主线）。"""
+    boards = {f"板块{i}": [{"code": f"6007{i:02d}", "name": f"S{i}", "num": "1天1板",
+                           "time": "09:30"}] for i in range(6)}
+    boards["主线甲"] = [{"code": "600801", "name": "M", "num": "2天2板", "time": "09:30"}]
+    db = FakeDb({
+        "snapshot_frames": _frames([_D0]),
+        "jiuyan_action": FakeCol([_final_multi(_D0, boards)]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+    })
+    rows = [x for x in theme_ladder_lines(db, _D0, mainline="主线甲") if x.startswith("· ")]
+    assert rows[0].startswith("· 主线甲（主线）")
+    assert sum(1 for x in rows if x.startswith("· 主线甲")) == 1
+    assert len(rows) == 5
+
+
+def test_anchor_gaps_derived_marks_sector_and_leader_sections():
+    """新段缺位归子项层（灰），不得抬主锚徽标（108 天噪声教训）。"""
+    text = "\n".join(["板块接力链（三日）：不可算（韭研 final 缺失，fail-visible）",
+                      "龙头结构：不可算（韭研 final 缺失，fail-visible）"])
+    assert anchor_gaps(text) == []
+    assert anchor_gaps_derived(text) == ["板块接力链", "龙头结构"]
+
+
+def test_question_set_v6_instructions_lock():
+    """v6 判据快照锁定：四题含新段关键词、三题未动、枚举与打分锚零变动（预注册 §3）。
+
+    2026-10-19 review P2：原先只锁版本串——instructions 被误改而版本不变会静默破坏快照。
+    """
+    from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY
+    from backend.analysis.hotlist.jev_state import SCORE_ANCHORS_10
+
+    for q, needles in (("relay_index", ("板块接力链", "龙头结构")),
+                       ("relay_phase", ("板块接力链", "龙头结构")),
+                       ("leader_strength", ("龙头结构",)),
+                       ("theme_pulse", ("板块接力链",))):
+        txt = QUESTIONS_RELAY[q]["instructions"]
+        for needle in needles:
+            assert needle in txt, (q, needle)
+    for q, needle in (("relay_momentum", "三日晋级链"), ("ladder_health", "梯队分布"),
+                      ("money_effect", "晋级与断板")):
+        txt = QUESTIONS_RELAY[q]["instructions"]
+        assert needle in txt, q
+        assert "龙头结构" not in txt and "板块接力链" not in txt, f"{q} 不应引用新段"
+    for q in ("relay_index", "leader_strength"):
+        assert QUESTIONS_RELAY[q]["criteria"] == list(SCORE_ANCHORS_10)
+
+
+def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
+    """叙事段与落库 relayStructure 同一事实源：总龙头/主线两处必须一致。"""
+    def fake_dispatch(state, questions):
+        return ({"result": {"state": "Completed", "result": {
+            "model": "jev-test", "usage": {"input_tokens": 10},
+            "answers": {
+                "relay_phase": {"type": "choice", "choice": "relay_heat", "probabilities": {}},
+                "relay_momentum": {"type": "choice", "choice": "holding", "probabilities": {}},
+                "ladder_health": {"type": "choice", "choice": "pyramid", "probabilities": {}},
+                "money_effect": {"type": "choice", "choice": "strong", "probabilities": {}},
+                "theme_pulse": {"type": "choice", "choice": "mainline_continue", "probabilities": {}},
+                "relay_index": {"type": "score", "score": 6.5, "legend": list(range(11))},
+                "leader_strength": {"type": "score", "score": 8.0, "legend": list(range(11))},
+            }}}}, 100)
+
+    monkeypatch.setattr(relay, "_dispatch_jev", fake_dispatch)
+    db = _sector_db()
+    run_relay_index_day(db, [_D0])
+    _, doc = db.cols[relay.COLLECTION].updates[0]
+    struct = doc["relayStructure"]
+    assert struct["mainline"]["name"] == "甲板块"
+    narrative = doc["narrative"]
+    assert "板块接力链（三日" in narrative and "龙头结构（" in narrative
+    assert f"主线板块：{struct['mainline']['name']}" in narrative
+    assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
+    assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
+    assert doc["questionSetVersion"] == "v6"
+

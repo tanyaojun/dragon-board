@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """连板情绪指数轨道（relay sentiment index，2026-10-10 Phase 1）。
 
-- 叙事结构（§3 设计 + 2026-10-11 StepB 炸板面段 + 2026-10-16 v4 高位股多日轨迹段）：
-  总账 → 今日炸板面 → 晋级断板 → 梯队量化 → 三日链 → 题材演化 → **高位股多日轨迹**
-  → 题材梯队表 → 龙头档案 → 近10日轨迹 → 热榜叙事参照段
-- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v4）
+- 叙事结构（§3 设计 + 2026-10-11 StepB 炸板面段 + 2026-10-16 v4 高位股多日轨迹段
+  + 2026-10-19 v6 板块接力链/龙头结构段）：
+  总账 → 今日炸板面 → 晋级断板 → 梯队量化 → 三日链 → 题材演化 → **板块接力链（三日）**
+  → 高位股多日轨迹 → 题材梯队表 → **龙头结构** → 龙头档案 → 近10日轨迹 → 热榜叙事参照段
+- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v6）
 - 存储：hotlist_jev_relay_index，_id={date}:RELAY；幂等跳过 status=ok
 - 通道：_dispatch_jev 分流（官方直连优先，CF 回退）
 - 口径：涨停/晋级 = 触板 − THS 炸板池（方案A 二分，_sealed_codes）；THS 缺失日回退触板口径并注记
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from collections import Counter
 from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import THS_KEYS
@@ -140,6 +142,12 @@ _DERIVED_ANCHOR_GAPS: tuple[_MARKER, ...] = (
     ("炸板面对比", "今日炸板面", ("较昨日：不可算",)),
     ("断板钱效", None, ("TDX 日线缺失", "样本不足（TDX 覆盖")),
     ("晋级链前池", "三日晋级链", ("韭研 final 缺失",)),
+    # v6（2026-10-19）：板块接力链/龙头结构是主锚（梯队/题材/晋级链）的同源派生段，
+    # 缺位归子项层——不得再抬主锚徽标（108 天噪声教训，预注册 §五）。
+    (
+        "板块接力链", None, ("板块接力链（三日）：不可算", "主线板块：不可算",
+                            "三日存活 不可算")),
+    ("龙头结构", "龙头结构", ("龙头结构：不可算",)),
 )
 
 
@@ -533,6 +541,33 @@ def _boards_of(db: Any, date: str) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+def _sector_top3_streaks(db: Any, date: str, names: list[str], limit: int = 10
+                         ) -> dict[str, int]:
+    """各板块「连续位居题材家数 top3」天数（自今日向回，中断即止；0=今日不在 top3）。
+
+    2026-10-19 v6 单源抽取（原为 `theme_evolution_line` 内联闭包）：题材演化段与
+    板块接力链段共用同一算法，一次取数供多板块共用（原实现每板块重复 10 次查库）。
+    """
+    if not names:
+        return {}
+    prev = trading_dates_before(db, date, limit - 1) if limit > 1 else []
+    dates = prev + [date]
+    tops: dict[str, list[str]] = {}
+    for d in dates:
+        b = _boards_of(db, d)
+        tops[d] = sorted(b, key=lambda k: -len(b[k]))[:3] if b else []
+    out: dict[str, int] = {}
+    for name in names:
+        n = 0
+        for d in reversed(dates):
+            if name in tops[d]:
+                n += 1
+            else:
+                break
+        out[name] = n
+    return out
+
+
 def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
     """昨日 top3 题材今日地位 + 近5日题材榜（主线持续天数证据，theme_pulse 主锚）。"""
     prev_dates = trading_dates_before(db, date, 1)
@@ -569,20 +604,9 @@ def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
         if hb:
             top = sorted(hb, key=lambda k: -len(hb[k]))[:3]
             history.append(f"{hd[5:]}: {'/'.join(f'{t}({len(hb[t])})' for t in top)}")
-    # 连续在榜天数（自今日向回数，中断即止）
-    def _streak(name: str) -> int:
-        n, d = 1, date
-        while n < 10:
-            pd_ = trading_dates_before(db, d, 1)
-            if not pd_:
-                break
-            pb = _boards_of(db, pd_[-1])
-            if not pb or name not in sorted(pb, key=lambda k: -len(pb[k]))[:3]:
-                break
-            n += 1
-            d = pd_[-1]
-        return n
-    streaks = [f"{name} 连续{_streak(name)}日top3" for name in cur_top]
+    # 连续在榜天数（自今日向回数，中断即止）——单源 `_sector_top3_streaks`
+    top3_streaks = _sector_top3_streaks(db, date, cur_top)
+    streaks = [f"{name} 连续{top3_streaks.get(name, 0)}日top3" for name in cur_top]
     streak_txt = "；".join(streaks)
     hist_txt = f"\n近5日题材榜：{' ； '.join(history)}" if history else ""
     return (f"题材演化：今日 top3 [{' / '.join(rows)}]；与昨日 top3 重合 {overlap}/3；连续性：{streak_txt}"
@@ -660,12 +684,16 @@ def high_position_trajectory_lines(db: Any, date: str, dataset_id: str = DEFAULT
 # ── 段 3：题材梯队表 top5 ───────────────────────────────────────────────────
 
 
-def theme_ladder_lines(db: Any, date: str, top: int = 5) -> list[str]:
+def theme_ladder_lines(db: Any, date: str, top: int = 5,
+                       mainline: str | None = None) -> list[str]:
     """top5 题材：龙一/二/三（day desc, time asc）+ 板内标签聚合（driver labels）。
 
     2026-10-16 口径修正（用户报「其他板块龙一语料写成10板，应写14天10板」）：龙序仍按
     区间高度 M 排（14天10板 本就是该板块最显高位股），但文案补「N天M板」+ 真连板数——
     「连板」语义不再拿区间 M 冒充（澳弘电子 19天11板真连板=1 之教训）。
+
+    2026-10-19 v6：增 `mainline` 参数——主线板块可能不在家数 top5（家数多但无高位股的
+    板块会遮住它），故强制纳入并置顶（预注册 §三）；个股标签聚合口径不变。
     """
     prev_dates = trading_dates_before(db, date, 1)
     cur_b = _boards_of(db, date)
@@ -678,7 +706,13 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5) -> list[str]:
     failed_items, failed_found = _ths_failed_items(db, date, DEFAULT_DATASET_ID)
     zhaban_codes = set(failed_items) if failed_found else set()
     lines = ["题材梯队表（top5，龙序=高度优先/封板时间次之）："]
-    for name in sorted(cur_b, key=lambda k: -len(cur_b[k]))[:top]:
+    ranked_names = sorted(cur_b, key=lambda k: -len(cur_b[k]))
+    # 主线板块强制纳入 top5（家数多≠主线；用户 2026-10-19 裁决口径）
+    if mainline and mainline in cur_b and mainline not in ranked_names[:top]:
+        ranked_names = [mainline] + ranked_names[:top - 1]
+    else:
+        ranked_names = ranked_names[:top]
+    for name in ranked_names:
         # 龙序规则单源 dragon_rows（jev_label_jiuyan，与 limitup 读口「领涨」列同规）
         dragons = []
         for i, d in enumerate(dragon_rows(cur_b[name], streaks=streaks), 1):
@@ -705,40 +739,511 @@ def theme_ladder_lines(db: Any, date: str, top: int = 5) -> list[str]:
         drv_main = sorted(set(drivers), key=lambda x: (-drivers.count(x), x))[0] if drivers else None
         drv_txt = f"驱动主类 {drv_main}" if drv_main else ""
         prev_n = len(prev_b.get(name) or [])
-        lines.append(f"· {name}：{' / '.join(dragons)}｜{fresh_txt}{('·' + drv_txt) if drv_txt else ''}"
-                     f"｜昨日 {prev_n} 只")
+        tag = "（主线）" if mainline == name else ""
+        lines.append(f"· {name}{tag}：{' / '.join(dragons)}｜{fresh_txt}"
+                     f"{('·' + drv_txt) if drv_txt else ''}｜昨日 {prev_n} 只")
     return lines
 
 
 # ── 段 4：龙头档案 ──────────────────────────────────────────────────────────
 
 
-def leader_profile_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> list[str]:
+def _leader_head_text(leader: dict[str, Any]) -> str:
+    """龙头档案头行（单源：直接消费 `relay_structure` 派生字段，禁二次选股）。"""
+    streak = leader.get("streak")
+    streak_txt = f"·当前连板{streak}板" if isinstance(streak, int) else "·连板不可算"
+    label_txt = (f" · 标签 {leader.get('label')}/{leader.get('freshness')}"
+                 if leader.get("label") else "")
+    rank = leader.get("rank")
+    return (f"龙头档案：{leader.get('name') or leader.get('code')}"
+            f"({leader.get('code')}) {leader.get('rangeText')}{streak_txt}"
+            f" · {leader.get('sector') or '?'}板块 · 封板 {leader.get('time') or '?'}"
+            f" · 板内带动 {leader.get('pull') or 0} 只 · 热榜最高第 {rank if rank else '未上榜'}名"
+            f"{label_txt}")
+
+
+def leader_profile_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                         *, total_leader: dict[str, Any] | None = None) -> list[str]:
     """龙头档案（身位/板序/板型/带动/热榜/标签）。
 
     2026-10-16 口径修正：龙头仍按区间高度 M 选（19天11板 就是市场总龙头），但头行改
     「N天M板·当前连板X板」——旧头行只写 M（「11板」）与自家板序行「当前连板 1」自相矛盾，
     模型拿到互相打架的身位证据（10-15 审计问题 #8）。
+
+    2026-10-19 v6：`total_leader` 由 `relay_structure` 传入（单一选股事实源，防龙头结构段与
+    本段选出两只不同股）；缺省时内部自算（直调兼容，口径与本段原实现完全一致）。
     """
     pool = _pool_of(db, date)
     if not pool:
         return ["龙头档案：韭研 final 缺失（fail-visible）"]
-    code, entry = sorted(pool.items(), key=lambda kv: (
-        -_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[0]
-    name = entry.get("name") or code
-    board = entry.get("board") or "?"
-    board_pull = sum(1 for e in pool.values() if e.get("board") == board)
-    rank = hotlist_ranks(db, date, [code], dataset_id).get(code)
-    label = db["hotlist_jev_driver_labels"].find_one({"_id": f"{date}:{code}"}) or {}
-    streak = jiuyan_streak_map(db, date).get(code)
-    streak_txt = (f"·当前连板{streak}板" if isinstance(streak, int) else "·连板不可算")
-    lines = [f"龙头档案：{name}({code}) {_range_num_txt(entry)}{streak_txt} · {board}板块 · "
-             f"封板 {entry.get('time') or '?'}"
-             f" · 板内带动 {board_pull} 只 · 热榜最高第 {rank if rank else '未上榜'}名"
-             + (f" · 标签 {label.get('label')}/{label.get('freshness')}" if label.get("label") else "")]
+    if total_leader is None:
+        code0, entry0 = sorted(pool.items(), key=lambda kv: (
+            -_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[0]
+        rank0 = hotlist_ranks(db, date, [code0], dataset_id).get(code0)
+        label0 = db["hotlist_jev_driver_labels"].find_one({"_id": f"{date}:{code0}"}) or {}
+        streak0 = jiuyan_streak_map(db, date).get(code0)
+        total_leader = {
+            "code": code0, "name": entry0.get("name") or code0,
+            "rangeText": _range_num_txt(entry0),
+            "streak": streak0 if isinstance(streak0, int) else None,
+            "sector": entry0.get("board"), "time": (entry0.get("time") or None),
+            "pull": sum(1 for e in pool.values() if e.get("board") == entry0.get("board")),
+            "rank": rank0, "label": label0.get("label"),
+            "freshness": label0.get("freshness"),
+        }
+    code, name = total_leader.get("code"), total_leader.get("name")
+    lines = [_leader_head_text(total_leader)]
     lines.append(stock_position_line(date, code))
     lines.append(limitup_sequence_line(date, code, name))
     lines.append(stock_board_shape_line(date, code, name, _prev_close_of_date(date, code)))
+    return lines
+
+
+# ── 段 3.5 / 4.5：板块接力链 + 龙头结构（v6，2026-10-19）───────────────────
+# 预注册：docs/hotlist-jev/jev-relay-sector-leader-preregistration.md
+# 口径（用户 2026-10-19 裁决，不得漂移）：
+#   · 总龙头 = 区间高度 M 最高（并列封板早）——与龙头档案同源；
+#   · 情绪龙头 = 当前真连板最高（并列 M→封板早）；
+#   · 板块龙头 = dragon_rows 龙一（与涨停复盘「领涨」列同源）；
+#   · 主线板块 = 三日链存活股归属最多，逐级降级可数（存活→晋级→家数→最高板）；
+#   · 首板日 = 韭研「N天M板」的 N 推算 + 池史单点校验（缺失才回退 60 日池史回溯），
+#     **全程不读 TDX**：回放历史日不受「日线取现在」缺口影响。
+_SECTOR_BASIS_CN = {
+    "three_day_survivors": "三日链存活股归属最多",
+    "promoted": "存活是真零（三日链可算），改用今日晋级股归属",
+    "d0_count": "存活与晋级均为真零（三日链可算），改用今日板块涨停家数",
+    "chain_na": "三日链不可算，改用今日板块涨停家数",
+}
+# 韭研泛板块（非题材口径）：家数天然最大，若不过滤，主线永远被“其他/公告/新股”吃掉
+# （2026-10-19 生产干跑实测：10-16 三日链存活最多的是“其他”，龙一却是真题材股）。
+# 只在**主线选择**里降权（真题材优先），展示与统计仍如实列出并标「泛板块」。
+_PSEUDO_BOARDS = {"其他", "公告", "新股"}
+_STATUS_CN = {"sealed": "封板", "broken": "断板", "suspended": "停牌跳过", "unknown": "不可验"}
+
+
+def _streak_txt(v: Any) -> str:
+    """真连板文案（不可验不回落区间 M）。"""
+    return f"{v}" if isinstance(v, int) else "不可算"
+
+
+def _sector_day_stat(stocks: list[dict[str, Any]],
+                     streaks: dict[str, int | None] | None = None) -> dict[str, Any]:
+    """单板块单日结构：家数 + 区间最高（龙序首名）+ 真连板。空列表 = 合法 0 家。"""
+    if not stocks:
+        return {"count": 0, "maxBoard": None, "maxBoardText": None,
+                "streak": None, "top": None}
+    top = dragon_rows(stocks, streaks=streaks, top=1)
+    t = top[0] if top else None
+    if not t:
+        return {"count": len(stocks), "maxBoard": None, "maxBoardText": None,
+                "streak": None, "top": None}
+    return {"count": len(stocks),
+            "maxBoard": t.get("boards"),
+            "maxBoardText": _range_num_txt({"boards": t.get("boards"),
+                                            "days": t.get("days")}),
+            "streak": t.get("streak"),
+            "top": t}
+
+
+def _leader_genesis(db: Any, date: str, code: str, entry: dict[str, Any],
+                    streak: int | None) -> dict[str, Any]:
+    """总龙头诞生轨迹：首板日 / 距今交易日数 / 区间内断板次数 / 当前真连板。
+
+    首板日推算 = 韭研「N天M板」的 N（N 天窗口的首日）；随后**单点校验**该日是否真在
+    韭研池（不一致则标口径偏差，不静默）。N 缺失时才回退 60 日池史回溯（需 60 次查库，
+    仅罕见路径）。全程只用韭研池史，不读 TDX（回放历史日不受「日线取现在」缺陷影响）。
+    """
+    boards, days = entry.get("boards"), entry.get("days")
+    out: dict[str, Any] = {"firstBoardDate": None, "tradingDaysAgo": None,
+                           "breaks": None, "streak": streak, "degraded": None}
+    if not boards or boards <= 1:
+        out.update(firstBoardDate=date, tradingDaysAgo=0, breaks=0)
+        return out
+    span = days if isinstance(days, int) and days > 1 else None
+    if span is None:
+        hist = trading_dates_before(db, date, 60)
+        for i, d in enumerate(hist):
+            if code in _pool_of(db, d):
+                out.update(firstBoardDate=d, tradingDaysAgo=len(hist) - i)
+                edge = "；首板日已在 60 日窗沿，实际可能更早" if i == 0 else ""
+                out["degraded"] = ("韭研区间天数缺失，首板日由 60 日池史回溯、"
+                                   f"断板次数不可算{edge}")
+                return out
+        out["degraded"] = "首板日超出 60 日回溯窗（fail-visible）"
+        return out
+    # 韭研「N天M板」的 N 是**区间跨度（含今日）**，故首板日 = N-1 个交易日前（
+    # 2026-10-19 review P1：旧写 N 与同时打印的日期相差一天，段内自相矛盾）。
+    out["tradingDaysAgo"] = span - 1
+    out["breaks"] = max(span - boards, 0)
+    hist = trading_dates_before(db, date, span - 1)
+    if not hist or len(hist) < span - 1:
+        out["degraded"] = f"首板日超出可取交易日史（需回溯 {span} 个交易日）"
+        return out
+    first = hist[0]
+    out["firstBoardDate"] = first
+    if code not in _pool_of(db, first):
+        out["degraded"] = (f"韭研区间 {span}天{boards}板 的首板日 {first} 不在韭研池"
+                           f"（首板日仅为推算，口径不一致）")
+    return out
+
+
+def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
+    """板块接力链 + 龙头结构：v6 **唯一计算入口**（叙事渲染与文档落库共用，防三处漂移）。
+
+    结构见预注册 §二；fail-visible：任一段不可算落 `degraded` 并写明原因，不伪造 0。
+    """
+    axis_prev = trading_dates_before(db, date, 2, dataset_id=dataset_id)
+    axis = list(axis_prev) + [date]
+    dates = {"d2": axis[-3] if len(axis) >= 3 else None,
+             "d1": axis[-2] if len(axis) >= 2 else None,
+             "d0": date}
+    out: dict[str, Any] = {"dates": dates, "sectors": [], "mainline": None,
+                           "mainlineDragon": None, "totalLeader": None,
+                           "sentimentLeader": None, "sameStock": None,
+                           "leaderIsMainlineDragon": None, "genesis": None,
+                           "succession": None, "chain": {"ok": False, "reason": None},
+                           "degraded": []}
+    pools: dict[str, dict[str, dict[str, Any]]] = {}
+    boards: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for d in axis:
+        pools[d] = _pool_of(db, d)
+        boards[d] = _boards_of(db, d)
+        if not pools[d]:
+            out["degraded"].append(f"{d} 韭研 final 缺失")
+    if not pools[date]:
+        return out
+    streaks = jiuyan_streak_map(db, date, dataset_id)
+    pool = pools[date]
+
+    # ── 三日链存活 / 今日晋级（口径同 three_day_chain_line：_promotion_stats 单源）
+    # chain.ok=False（链日无韭研 final / 历史不足）时 survivors/promoted 一律 None——
+    # 缺料绝不得渲染成「0 只」（AGENTS §4.0；2026-10-19 review P1 伪 0）。
+    survivors: set[str] = set()
+    promoted_today: set[str] = set()
+    chain_reason: str | None = None
+    if not dates["d2"]:
+        chain_reason = "历史不足（<3 交易日）"
+    else:
+        missing_chain = [d for d in (dates["d2"], dates["d1"]) if not pools[d]]
+        if missing_chain:
+            chain_reason = f"{'/'.join(missing_chain)} 韭研 final 缺失"
+    if chain_reason is None:
+        stats_a = _promotion_stats(db, dates["d2"], dates["d1"], dataset_id)
+        stats_b = _promotion_stats(db, dates["d1"], date, dataset_id)
+        if stats_a.get("ok") and stats_b.get("ok"):
+            survivors = set(stats_a["promoted"]) & set(stats_b["promoted"])
+            promoted_today = set(stats_b["promoted"])
+        else:
+            chain_reason = f"{dates['d2']}/{dates['d1']} 晋级率不可算（池缺失）"
+    chain_ok = chain_reason is None
+    out["chain"] = {"ok": chain_ok, "reason": chain_reason}
+    if chain_reason:
+        out["degraded"].append(f"三日链不可算（{chain_reason}），主线降级为今日家数口径")
+    else:
+        for c in sorted(survivors | promoted_today):
+            if c not in pool:
+                out["degraded"].append(f"{c} 不在今日韭研池（日线补证封板/口径不一致）")
+
+    names: list[str] = []
+    for d in axis:
+        for n in boards[d]:
+            if n not in names:
+                names.append(n)
+    if not names:
+        out["degraded"].append("韭研板块结构为空")
+        return out
+    # 个股归属（存活/晋级/龙头）取 _pool_of 首个板块；家数/最高板按韭研全部归属不去重
+    surv_by = Counter(pool[c].get("board") for c in survivors if c in pool and pool[c].get("board"))
+    prom_by = Counter(pool[c].get("board") for c in promoted_today
+                      if c in pool and pool[c].get("board"))
+    rows: list[dict[str, Any]] = []
+    for n in names:
+        d0 = _sector_day_stat(boards[date].get(n) or [], streaks)
+        # 韭研 final 缺失日 → stat=None（渲染写「缺失」），不得落成「0 只」（AGENTS §4.0 伪 0）
+        rows.append({
+            "name": n,
+            "d2": (_sector_day_stat(boards[dates["d2"]].get(n) or [])
+                   if dates["d2"] and pools[dates["d2"]] else None),
+            "d1": (_sector_day_stat(boards[dates["d1"]].get(n) or [])
+                   if dates["d1"] and pools[dates["d1"]] else None),
+            "d0": d0,
+            "survivors": surv_by.get(n, 0) if chain_ok else None,
+            "survivorNames": (sorted(pool[c].get("name") or c for c in survivors
+                                     if c in pool and pool[c].get("board") == n)
+                              if chain_ok else []),
+            "promoted": prom_by.get(n, 0) if chain_ok else None,
+            "top3Streak": 0,
+            "dragon": d0.get("top"),
+        })
+
+    def _rank_key(r: dict[str, Any]) -> tuple:
+        d0 = r.get("d0") or {}
+        return (-(r.get("survivors") or 0), -(r.get("promoted") or 0),
+                -(d0.get("count") or 0), -(d0.get("maxBoard") or 0), r["name"])
+
+    def _basis_of(row: dict[str, Any]) -> str | None:
+        """主线依据键；三日链不可算时只会落到「今日家数」档（文案与真零区分）。"""
+        d0 = row.get("d0") or {}
+        if chain_ok:
+            if row.get("survivors"):
+                return "three_day_survivors"
+            if row.get("promoted"):
+                return "promoted"
+        if d0.get("count"):
+            return "d0_count" if chain_ok else "chain_na"
+        return None
+
+    ranked = sorted(rows, key=_rank_key)
+    # 主线优先选真题材，泛板块只在真题材全无证据时傅底（均显式披露）
+    real_rows = [r for r in ranked if r["name"] not in _PSEUDO_BOARDS]
+    main_row: dict[str, Any] | None = None
+    basis: str | None = None
+    for cand in [*real_rows, *ranked]:
+        b = _basis_of(cand)
+        if b:
+            main_row, basis = cand, b
+            break
+    pseudo_top: str | None = None
+    if main_row and main_row["name"] not in _PSEUDO_BOARDS and ranked:
+        if ranked[0]["name"] in _PSEUDO_BOARDS and ranked[0]["name"] != main_row["name"]:
+            pseudo_top = ranked[0]["name"]
+    display_names = [r["name"] for r in ranked[:5]]
+    if main_row and main_row["name"] not in display_names:
+        display_names = [main_row["name"]] + display_names[:4]
+    st = _sector_top3_streaks(db, date, display_names)
+    for r in rows:
+        r["top3Streak"] = st.get(r["name"], 0)
+    if main_row:
+        out["mainline"] = {
+            "name": main_row["name"],
+            "basis": basis,
+            "survivors": main_row.get("survivors"),
+            "holdings": main_row.get("survivorNames") or [],
+            "d0Count": (main_row.get("d0") or {}).get("count") or 0,
+            "d0MaxBoard": (main_row.get("d0") or {}).get("maxBoard"),
+            "d0MaxBoardText": (main_row.get("d0") or {}).get("maxBoardText"),
+            "top3Streak": main_row.get("top3Streak") or 0,
+            "dragon": main_row.get("dragon"),
+            "pseudoExcluded": pseudo_top,
+            "chainOk": chain_ok,
+        }
+        order = {n: i for i, n in enumerate(display_names)}
+        out["sectors"] = sorted([r for r in ranked if r["name"] in display_names],
+                                key=lambda r: order.get(r["name"], 99))
+    else:
+        out["sectors"] = ranked[:5]
+        out["degraded"].append("主线板块不可算（三日链与今日板块结构均无有效股）")
+
+    # ── 龙头结构（总/情绪/板块龙一）
+    total_code, total_entry = sorted(pool.items(), key=lambda kv: (
+        -_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[0]
+    total_streak = streaks.get(total_code)
+    label_doc = db["hotlist_jev_driver_labels"].find_one({"_id": f"{date}:{total_code}"}) or {}
+    out["totalLeader"] = {
+        "code": total_code, "name": total_entry.get("name") or total_code,
+        "boards": total_entry.get("boards"), "days": total_entry.get("days"),
+        "rangeText": _range_num_txt(total_entry),
+        "streak": total_streak if isinstance(total_streak, int) else None,
+        "sector": total_entry.get("board"),
+        "time": (total_entry.get("time") or None),
+        "pull": sum(1 for e in pool.values() if e.get("board") == total_entry.get("board")),
+        "rank": hotlist_ranks(db, date, [total_code], dataset_id).get(total_code),
+        "label": label_doc.get("label"), "freshness": label_doc.get("freshness"),
+    }
+    cand = [(c, e) for c, e in pool.items() if isinstance(streaks.get(c), int)]
+    if cand:
+        sent_code, sent_entry = sorted(cand, key=lambda kv: (
+            -streaks[kv[0]], -_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[0]
+        out["sentimentLeader"] = {
+            "code": sent_code, "name": sent_entry.get("name") or sent_code,
+            "boards": sent_entry.get("boards"), "days": sent_entry.get("days"),
+            "rangeText": _range_num_txt(sent_entry),
+            "streak": streaks[sent_code], "sector": sent_entry.get("board"),
+            "time": (sent_entry.get("time") or None),
+        }
+        out["sameStock"] = sent_code == total_code
+    else:
+        out["degraded"].append("情绪龙头不可算（池内无真连板可验）")
+
+    if main_row:
+        dragons = dragon_rows(boards[date].get(main_row["name"]) or [],
+                              streaks=streaks, top=3)
+        out["mainlineDragon"] = dragons[0] if dragons else None
+        out["leaderIsMainlineDragon"] = bool(dragons) and dragons[0].get("code") == total_code
+
+    out["genesis"] = _leader_genesis(
+        db, date, total_code, total_entry,
+        total_streak if isinstance(total_streak, int) else None)
+
+    prev_dates = trading_dates_before(db, date, 1, dataset_id=dataset_id)
+    if prev_dates:
+        prev_date = prev_dates[-1]
+        prev_pool = pools.get(prev_date) or _pool_of(db, prev_date)
+        succ: dict[str, Any] = {"prevDate": prev_date, "prevLeader": None,
+                                "changed": False, "prevStatus": None}
+        if prev_pool:
+            prev_code, prev_entry = sorted(prev_pool.items(), key=lambda kv: (
+                -_day_eff(kv[1]), str(kv[1].get("time") or "99:99")))[0]
+            succ["prevLeader"] = {
+                "code": prev_code, "name": prev_entry.get("name") or prev_code,
+                "rangeText": _range_num_txt(prev_entry),
+                "sector": prev_entry.get("board"),
+            }
+            succ["changed"] = prev_code != total_code
+            if succ["changed"]:
+                status, _ = _status_map(db, date, pool, {prev_code}, dataset_id)
+                succ["prevStatus"] = status.get(prev_code)
+        else:
+            succ["degraded"] = f"{prev_date} 韭研 final 缺失"
+        out["succession"] = succ
+    else:
+        out["degraded"].append("龙头更替不可算（无上一交易日）")
+    return out
+
+
+def sector_relay_lines(struct: dict[str, Any]) -> list[str]:
+    """段 A：板块接力链（三日）+ 主线板块结论（消费 relay_structure，不重复计算）。"""
+    dates = struct.get("dates") or {}
+    sectors = struct.get("sectors") or []
+    if not sectors:
+        reason = "；".join(struct.get("degraded") or []) or "韭研 final 缺失"
+        return [f"板块接力链（三日）：不可算（{reason}，fail-visible）"]
+    main = struct.get("mainline") or {}
+    chain = struct.get("chain") or {}
+    chain_ok = bool(chain.get("ok"))
+    chain_reason = chain.get("reason") or "链日数据缺失"
+    lines = ["板块接力链（三日 D-2→D0；主线=存活股优先，存活为零或不可算时逐级降级，依据见结论行；"
+             "个股归属取韭研首个板块，家数按全部归属不去重）："]
+    for s in sectors:
+        cols = []
+        for key in ("d2", "d1"):
+            d = dates.get(key)
+            if not d:
+                cols.append("历史不足")
+                continue
+            stat = s.get(key)
+            if stat is None:
+                cols.append(f"{d[5:]} 缺失")
+            elif not stat.get("count"):
+                cols.append(f"{d[5:]} 0只（未上榜）")
+            else:
+                cols.append(f"{d[5:]} {stat.get('count')}只/最高"
+                            f"{stat.get('maxBoardText') or '?'}")
+        d0 = s.get("d0") or {}
+        cols.append(f"{dates.get('d0', '')[5:]} {d0.get('count') or 0}只"
+                    + (f"/最高{d0.get('maxBoardText')}" if d0.get("count") else "（未上榜）"))
+        surv = s.get("survivors")
+        if not chain_ok:
+            surv_txt = f"三日存活 不可算（{chain_reason}）"
+        else:
+            surv_txt = f"三日存活 {surv or 0} 只" + (
+                f"（{'、'.join(s.get('survivorNames') or [])}）" if surv else "")
+        prom_txt = (f"今日晋级 不可算（{chain_reason}）" if not chain_ok
+                    else f"今日晋级 {s.get('promoted') or 0} 只")
+        dragon = s.get("dragon") or {}
+        drg_txt = (f"龙一 {dragon.get('name') or dragon.get('code')}"
+                   f"({d0.get('maxBoardText') or '首板'}"
+                   f"·连板{_streak_txt(dragon.get('streak'))})" if dragon else "龙一 不可算")
+        if main.get("name") == s.get("name"):
+            tag = "（主线·泛板块）" if s.get("name") in _PSEUDO_BOARDS else "（主线）"
+        else:
+            tag = "（泛板块）" if s.get("name") in _PSEUDO_BOARDS else ""
+        # 「连续top3 0日」不渲染：0 不携带信息（今日不在家数 top3 的板块本就不该占位），
+        # 今日 top3 及其连续天数已由「题材演化」段给出，此处只作补充证据。
+        streak_txt = (f"｜连续top3 {s.get('top3Streak')}日"
+                      if s.get("top3Streak") else "")
+        lines.append(f"· {s.get('name')}{tag}：{' → '.join(cols)}｜{surv_txt}"
+                     f"｜{prom_txt}{streak_txt}｜{drg_txt}")
+    if main:
+        hold_txt = f"（{'、'.join(main.get('holdings') or [])}）" if main.get("holdings") else ""
+        leader_sector = (struct.get("totalLeader") or {}).get("sector")
+        in_main = "是" if leader_sector and leader_sector == main.get("name") else "否"
+        surv_txt = ("三日存活 不可算" if main.get("survivors") is None
+                    else f"三日存活 {main.get('survivors') or 0} 只")
+        fallback_txt = ("；真题材全无证据，泛板块傅底"
+                        if main.get("name") in _PSEUDO_BOARDS else "")
+        lines.append(
+            f"主线板块：{main.get('name')}"
+            f"（依据 {_SECTOR_BASIS_CN.get(main.get('basis'), main.get('basis'))}"
+            + (f"；三日链不可算：{chain_reason}"
+               if not chain_ok and main.get("basis") == "chain_na" else "")
+            + f"；{surv_txt}{hold_txt}、"
+            f"今日 {main.get('d0Count') or 0} 只·最高{main.get('d0MaxBoardText') or '?'}）"
+            + (f"；泛板块「{main['pseudoExcluded']}」家数/存活更多但非题材口径，已排除"
+               if main.get("pseudoExcluded") else "")
+            + fallback_txt
+            + f"；总龙头在本板块：{in_main}")
+    else:
+        lines.append(f"主线板块：不可算（{'；'.join(struct.get('degraded') or []) or '无有效板块'}）")
+    return lines
+
+
+def leader_structure_lines(struct: dict[str, Any]) -> list[str]:
+    """段 B：龙头结构（总/情绪/板块龙头 + 一致性 + 升位关系 + 诞生轨迹 + 更替）。"""
+    total = struct.get("totalLeader")
+    if not total:
+        reason = "；".join(struct.get("degraded") or []) or "韭研 final 缺失"
+        return [f"龙头结构：不可算（{reason}，fail-visible）"]
+    lines = ["龙头结构（总龙头=区间高度M最高；情绪龙头=当前真连板最高；"
+             "板块龙头=dragon_rows 龙一）："]
+    lines.append(
+        f"· 总龙头 {total.get('name')}({total.get('code')}) {total.get('rangeText')}"
+        f"·真连板{_streak_txt(total.get('streak'))}·{total.get('sector') or '?'}板块"
+        f"·封板{total.get('time') or '?'}·板内带动{total.get('pull') or 0}只"
+        f"·热榜{('第' + str(total.get('rank')) + '名') if total.get('rank') else '未上榜'}")
+    sent = struct.get("sentimentLeader")
+    if sent:
+        lines.append(
+            f"· 情绪龙头 {sent.get('name')}({sent.get('code')}) 真连板{sent.get('streak')}"
+            f"·{sent.get('rangeText')}·{sent.get('sector') or '?'}板块"
+            f"·封板{sent.get('time') or '?'}")
+        if struct.get("sameStock"):
+            lines.append("· 一致性：总龙头与情绪龙头为同一只")
+        else:
+            lines.append("· 一致性：总龙头与情绪龙头不同（总龙头区间高度最高、情绪龙头真连板最高）")
+    else:
+        lines.append("· 情绪龙头 不可算（池内无真连板可验：今日 THS 炸板池缺失或全池无连板）")
+        lines.append("· 一致性：不可判（情绪龙头不可算）")
+    main = struct.get("mainline") or {}
+    if main:
+        if struct.get("leaderIsMainlineDragon"):
+            lines.append(f"· 升位关系：总龙头是主线板块「{main.get('name')}」的龙一"
+                         f" → 由主线板块龙头升位")
+        else:
+            dragon = main.get("dragon") or {}
+            lines.append(f"· 升位关系：总龙头不是主线板块「{main.get('name')}」的龙一"
+                         f"（该板块龙一为 {dragon.get('name') or '不可算'}）→ 龙头与主线分离")
+    else:
+        lines.append("· 升位关系：主线板块不可算，升位关系不可判")
+    genesis = struct.get("genesis") or {}
+    if genesis.get("firstBoardDate"):
+        breaks = ("断板次数不可算" if genesis.get("breaks") is None
+                  else f"区间内断板 {genesis.get('breaks')} 次")
+        ago = genesis.get("tradingDaysAgo")
+        ago_txt = "当日" if ago == 0 else f"{ago} 个交易日前"
+        lines.append(
+            f"· 诞生轨迹：首板 {genesis['firstBoardDate'][5:]}"
+            f"（{ago_txt}）→ 区间 {total.get('rangeText')}"
+            f"（{breaks}）→ 当前真连板{_streak_txt(genesis.get('streak'))}")
+        if genesis.get("degraded"):
+            lines.append(f"  （{genesis['degraded']}）")
+    else:
+        lines.append(f"· 诞生轨迹：不可算（{genesis.get('degraded') or '首板日不可得'}）")
+    succ = struct.get("succession") or {}
+    prev_leader = succ.get("prevLeader")
+    if prev_leader:
+        if succ.get("changed"):
+            if succ.get("prevStatus") == "sealed":
+                why = "旧龙头今日仍封板、龙头位次被超越"
+            else:
+                why = f"旧龙头今日{_STATUS_CN.get(succ.get('prevStatus') or '', '不可验')}"
+            lines.append(f"· 更替：{succ.get('prevDate', '')[5:]} 总龙头 {prev_leader.get('name')}"
+                         f" → 今日换龙头（{why}）")
+        else:
+            lines.append(f"· 更替：{succ.get('prevDate', '')[5:]} 总龙头 {prev_leader.get('name')}"
+                         f" → 今日延续")
+    else:
+        lines.append(f"· 更替：不可算（{succ.get('degraded') or '无上一交易日/韭研 final 缺失'}）")
     return lines
 
 
@@ -1109,7 +1614,11 @@ def narrative_context_lines(db: Any, date: str) -> list[str]:
 # ── 组装与 run ──────────────────────────────────────────────────────────────
 
 
-def build_relay_narrative(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+def build_relay_narrative(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                          struct: dict[str, Any] | None = None) -> str:
+    # v6：板块/龙头结构先算一次（单一事实源）——叙事渲染与文档落库共用同一 struct，
+    # 防「叙事说 A、前端说 B」三处漂移（预注册 §二/§十）。
+    struct = struct if struct is not None else relay_structure(db, date, dataset_id)
     lines: list[str] = [f"{date} 交易日 · 连板情绪指数判定（叙事）"]
     # 段1 总账（market_facts_line 已含双源梯队/分位）+ 今日炸板面（2026-10-11 StepB）
     lines.append(market_facts_line(db, date, dataset_id))
@@ -1119,12 +1628,17 @@ def build_relay_narrative(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
     # 段2 记忆
     lines.append(three_day_chain_line(db, date, dataset_id))
     lines.append(theme_evolution_line(db, date))
+    # 段2a' 板块接力链（v6，2026-10-19）：三日链的板块归属 + 主线板块结论
+    lines.extend(sector_relay_lines(struct))
     # 段2c 高位股多日轨迹（v4，2026-10-16 预注册 §2.3；有帽，非打分依据）
     lines.extend(high_position_trajectory_lines(db, date, dataset_id))
-    # 段3 题材梯队
-    lines.extend(theme_ladder_lines(db, date))
-    # 段4 龙头
-    lines.extend(leader_profile_lines(db, date, dataset_id))
+    # 段3 题材梯队（主线板块强制纳入，家数多≠主线）
+    lines.extend(theme_ladder_lines(db, date, mainline=(struct.get("mainline") or {}).get("name")))
+    # 段4a 龙头结构（v6）：总/情绪/板块龙头 + 一致性 + 升位 + 诞生轨迹 + 更替
+    lines.extend(leader_structure_lines(struct))
+    # 段4b 龙头档案（总龙头明细；选股由 struct 单源供给）
+    lines.extend(leader_profile_lines(db, date, dataset_id,
+                                     total_leader=struct.get("totalLeader")))
     # 段5 轨迹
     lines.append(relay_trajectory_line(db, date, dataset_id))
     # 段6 叙事参照
@@ -1145,7 +1659,8 @@ def run_relay_index_day(db: Any, dates: list[str], *,
         if not _pool_of(db, date):
             print(f"[relay] {date} 韭研 final 缺失，跳过（fail-visible）")
             continue
-        narrative = build_relay_narrative(db, date, dataset_id)
+        struct = relay_structure(db, date, dataset_id)
+        narrative = build_relay_narrative(db, date, dataset_id, struct=struct)
         if dry_run:
             print(f"[dry] {date} narrative_chars={len(narrative)}")
             print(narrative)
@@ -1159,6 +1674,9 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "status": "ok" if parsed["ok"] else "degraded",
                "questionSetVersion": QUESTION_SET_VERSION_RELAY,
                "narrative": narrative, "questionsRaw": QUESTIONS_RELAY,
+               # v6（2026-10-19）：板块接力链 + 龙头结构派生体（叙事/前端同一事实源，
+               # 历史 v5 文档无此字段 → 读口 null，前端显「旧代未采集」，不补 0）
+               "relayStructure": struct,
                # 主锚缺位标记（F2）：数据质量事实，不改打分（前端徽标/README 说明消费）
                # 2026-10-18 分层：anchorGaps=整根主锚不可用（琥珀）；anchorGapsDerived=子项级缺位（灰）
                # 日线原料溯源（2026-10-18 开长窗）：本地 vipdoc / 线上回退各供了多少只股——

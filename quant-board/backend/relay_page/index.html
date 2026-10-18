@@ -410,6 +410,23 @@
       </div>
     </div>
 
+    <!-- ④ 板块与龙头（v6，2026-10-19）：数据取自该日存档 relayStructure，与 JEV 叙事同一事实源 -->
+    <div class="rv" id="rv-leaders">
+      <div class="page-head" style="margin-top:18px"><div>
+        <h2>板块与龙头</h2>
+        <p>三日接力链的板块归属、主线板块与各板块龙一，以及总龙头/情绪龙头/板块龙头的一致性与总龙头诞生轨迹。
+        数据取自该日存档的 relayStructure（与 JEV 叙事同一事实源，不在前端重算）。</p></div></div>
+      <div class="ph-line"></div>
+      <div class="card">
+        <h3>🧵 板块接力链（三日）<span class="hint" id="sectorChainHint"></span></h3>
+        <div id="sectorChain"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h3>🐉 龙头结构 <span class="hint" id="leaderStructHint"></span></h3>
+        <div id="leaderStruct"></div>
+      </div>
+    </div>
+
     <!-- ⑤ 判定明细 -->
     <div class="rv" id="rv-detail">
       <div class="page-head" style="margin-top:18px"><div>
@@ -1148,6 +1165,7 @@ function renderRelayTab(){
     && (!f.zone || zoneKey(zoneOf(r)) === f.zone)
     && (!f.leader || leaderBandOf(r) === f.leader));
   renderRelayKpi(shown);
+  renderLeaders();
   const s = STATE.relaySort;
   const kv = { date: r => r.tradingDate || '', idx: r => r.relayIndex == null ? -1 : r.relayIndex,
     leader: r => r.leaderStrength == null ? -1 : r.leaderStrength,
@@ -1253,6 +1271,157 @@ function renderRelayKpi(shown){
     + card('题材脉络', `${themeB(d.themePulse)}${confChip(aOf('theme_pulse').confidence)}`, tierDesc('theme_pulse', d.themePulse, THEME_DESC[d.themePulse]))
     + `<div class="kpi"><div class="k">龙头强度</div><div class="v phase-big" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}${confChip(aOf('leader_strength').confidence)}</div><div class="s kpi-desc">${esc(leaderDesc(d.leaderStrength))}</div></div>`
     + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`;
+}
+
+// ---------- 板块与龙头（v6，2026-10-19）----------
+// 数据 = 该日 relay 存档的 relayStructure（与 JEV 叙事同一事实源）；v5 旧代文档无此字段
+// → 显「旧代未采集」（fail-visible），不写 '-' 冒充；选中行没预入缓存时走 relayDocFetch 懒拉。
+const SECTOR_BASIS_CN = {
+  three_day_survivors: '三日链存活股归属最多',
+  promoted: '存活是真零（三日链可算），改用今日晋级股归属',
+  d0_count: '存活与晋级均为真零（三日链可算），改用今日板块涨停家数',
+  chain_na: '三日链不可算，改用今日板块涨停家数',
+};
+const PSEUDO_BOARDS = new Set(['其他', '公告', '新股']);
+const STATUS_CN = { sealed: '封板', broken: '断板', suspended: '停牌跳过', unknown: '不可验' };
+const rangeTextOf = (boards, days) => (!boards || boards <= 1) ? '首板' : (days ? days + '天' + boards + '板' : boards + '板');
+const streakText = v => (typeof v === 'number' && isFinite(v)) ? v : '不可算';
+
+function leadersKey(){
+  // 与 renderRelayKpi 同规的日期选择（行选 → 当日存档 → 区间内最新一日），避免同页两卡口径不一。
+  const rows = (typeof rangedSeries === 'function' ? rangedSeries() : STATE.series) || [];
+  if (STATE.relayFocus && rows.some(r => r.tradingDate === STATE.relayFocus)) return STATE.relayFocus;
+  const dayOk = STATE.day && STATE.day.relayIndex != null;
+  if (dayOk) return STATE.day.tradingDate || '';
+  const last = rows.length ? rows[rows.length - 1] : null;
+  return (last && last.tradingDate) || (STATE.day && STATE.day.tradingDate) || '';
+}
+function renderLeaders(){
+  const key = leadersKey();
+  const hostS = $('sectorChain'), hostL = $('leaderStruct');
+  const hintS = $('sectorChainHint'), hintL = $('leaderStructHint');
+  if (!key){
+    hostS.innerHTML = '<div class="prov">无连板指数存档，无法展示板块/龙头结构。</div>';
+    hostL.innerHTML = ''; hintS.textContent = ''; hintL.textContent = '';
+    return;
+  }
+  const raw = STATE.relayDocs[key];
+  if (raw === undefined || (raw && raw.__loading)){
+    relayDocFetch(key);   // 占位防并发；拉回后本函数重跑
+    hostS.innerHTML = '<div class="prov">加载中…</div>'; hostL.innerHTML = '';
+    hintS.textContent = ''; hintL.textContent = '';
+    return;
+  }
+  if (relayDocIsErr(raw)){
+    hostS.innerHTML = '<div class="prov" style="color:var(--red)">该日存档拉取失败（点判定明细行可重试）。</div>';
+    hostL.innerHTML = ''; hintS.textContent = ''; hintL.textContent = '';
+    return;
+  }
+  if (raw === null){
+    // 服务端确认该日无档 ≠ 旧代文档（两意不得合并），fail-visible 分开措辞
+    hostS.innerHTML = '<div class="prov">该日无连板指数存档（服务端确认），无法展示板块/龙头结构。</div>';
+    hostL.innerHTML = ''; hintS.textContent = ''; hintL.textContent = '';
+    return;
+  }
+  const doc = raw;
+  const st = doc.relayStructure;
+  if (!st){
+    const ver = doc.questionSetVersion ? esc(doc.questionSetVersion) : '旧代';
+    hostS.innerHTML = `<div class="prov">该日档案为 ${ver}，未采集板块/龙头结构（relayStructure 字段缺失）。</div>`;
+    hostL.innerHTML = ''; hintS.textContent = ''; hintL.textContent = '旧代文档不回改，需重放该日';
+    return;
+  }
+  const main = st.mainline || {};
+  const dates = st.dates || {};
+  const chain = st.chain || {};
+  const chainOk = !!chain.ok;
+  const chainReason = chain.reason || '链日数据缺失';
+  hintS.textContent = main.name
+    ? `主线 ${main.name} · 依据 ${SECTOR_BASIS_CN[main.basis] || '—'}`
+    : '主线不可算';
+  const dayCell = d => (d == null ? '缺失'
+    : (!d.count ? '0 只（未上榜）' : `${d.count} 只 / 最高 ${d.maxBoardText || '?'}`));
+  const rows = st.sectors || [];
+  if (!rows.length){
+    hostS.innerHTML = `<div class="prov">板块结构不可算：${esc((st.degraded || []).join('；') || '韭研 final 缺失')}</div>`;
+  } else {
+    const heads = ['d2', 'd1', 'd0'].map(k => {
+      if (k === 'd0') return String(dates.d0 || '').slice(5) || 'D0';
+      return dates[k] ? String(dates[k]).slice(5) : (k === 'd2' ? 'D-2 历史不足' : 'D-1 历史不足');
+    });
+    hostS.innerHTML = '<div class="lg-table"><table><tr><th>板块</th>'
+      + heads.map(h => `<th>${esc(h)}</th>`).join('')
+      + '<th>三日存活</th><th>今日晋级</th><th>连续top3</th><th>龙一</th></tr>'
+      + rows.map(s => {
+          const isMain = !!main.name && s.name === main.name;
+          const dg = s.dragon || {};
+          const isPseudo = PSEUDO_BOARDS.has(s.name);
+          const mainTag = isPseudo ? '主线·泛板块' : '主线';
+          const tag = isMain ? ` <span class="badge b-purple">${mainTag}</span>`
+            : (isPseudo ? ' <span class="badge b-gray" title="韭研泛板块（非题材口径），不参与主线选择">泛板块</span>' : '');
+          const surv = !chainOk ? `<span style="color:var(--muted)">不可算（${esc(chainReason)}）</span>`
+            : `${s.survivors || 0}${s.survivors ? ' · ' + esc((s.survivorNames || []).join('、')) : ''}`;
+          const prom = !chainOk ? '不可算' : `${s.promoted || 0}`;
+          const drg = dg.name || dg.code
+            ? `${esc(dg.name || dg.code)}（${esc(rangeTextOf(dg.boards, dg.days))}·连板${esc(String(streakText(dg.streak)))}）`
+            : '—';
+          return `<tr${isMain ? ' style="background:#f5f3ff"' : ''}>`
+            + `<td>${esc(s.name)}${tag}</td>`
+            + ['d2', 'd1', 'd0'].map(k => `<td class="num">${esc(dayCell(s[k]))}</td>`).join('')
+            + `<td class="num">${surv}</td><td class="num">${prom}</td>`
+            + `<td class="num">${s.top3Streak || 0}</td><td>${drg}</td></tr>`;
+        }).join('') + '</table></div>'
+      + (main.pseudoExcluded
+          ? `<div class="prov" style="margin-top:6px">泛板块「${esc(main.pseudoExcluded)}」家数/存活更多但非题材口径，主线已排除。</div>`
+          : '')
+      + ((main.name && PSEUDO_BOARDS.has(main.name))
+          ? '<div class="prov" style="margin-top:6px">真题材全无证据，主线为泛板块兜底。</div>' : '');
+  }
+
+  const tl = st.totalLeader, sl = st.sentimentLeader, gen = st.genesis || {};
+  const succ = st.succession || {}, pl = succ.prevLeader;
+  const kv = (k, v, cls) => `<div><div class="k">${esc(k)}</div><div class="v${cls ? ' ' + cls : ''}">${v}</div></div>`;
+  if (!tl){
+    hostL.innerHTML = `<div class="prov">龙头结构不可算：${esc((st.degraded || []).join('；') || '韭研 final 缺失')}</div>`;
+    hintL.textContent = '';
+    return;
+  }
+  hintL.textContent = `该日 ${esc(String(doc.tradingDate || key).slice(5))} · ${esc(doc.questionSetVersion || '')}`;
+  const totalTxt = `${esc(tl.name)}（${esc(tl.code)}）· ${esc(tl.rangeText)} · 真连板 ${esc(String(streakText(tl.streak)))}`
+    + ` · ${esc(tl.sector || '?')}板块 · 封板 ${esc(tl.time || '?')} · 板内带动 ${tl.pull || 0} 只`
+    + ` · 热榜${tl.rank ? '第' + tl.rank + '名' : '未上榜'}`
+    + (tl.label ? ` · 标签 ${esc(tl.label)}/${esc(tl.freshness || '')}` : '');
+  const sentTxt = sl
+    ? `${esc(sl.name)}（${esc(sl.code)}）· 真连板 ${esc(String(sl.streak))} · ${esc(sl.rangeText)}`
+      + ` · ${esc(sl.sector || '?')}板块 · 封板 ${esc(sl.time || '?')}`
+    : '<span style="color:var(--muted)">不可算（池内无真连板可验）</span>';
+  const sameTxt = !sl ? '不可判'
+    : (st.sameStock === true ? '同一只'
+       : (st.sameStock === false ? '不同（总龙头区间高度最高、情绪龙头真连板最高）' : '不可判'));
+  const dragonName = (main.dragon || {}).name;
+  const riseTxt = !main.name ? '不可判（主线不可算）'
+    : (st.leaderIsMainlineDragon
+        ? `是主线板块「${esc(main.name)}」的龙一 → 由主线板块龙头升位`
+        : `不是主线板块「${esc(main.name)}」的龙一（该板块龙一为 ${esc(dragonName || '不可算')}）→ 龙头与主线分离`);
+  const genTxt = gen.firstBoardDate
+    ? `首板 ${esc(gen.firstBoardDate.slice(5))}（${gen.tradingDaysAgo === 0 ? '当日' : gen.tradingDaysAgo + ' 个交易日前'}）→ 区间 ${esc(tl.rangeText)}`
+      + `（${gen.breaks == null ? '断板次数不可算' : '区间内断板 ' + gen.breaks + ' 次'}）→ 当前真连板 ${esc(String(streakText(gen.streak)))}`
+    : `<span style="color:var(--muted)">不可算（${esc(gen.degraded || '首板日不可得')}）</span>`;
+  const succTxt = pl
+    ? (succ.changed
+        ? `${esc(String(succ.prevDate || '').slice(5))} ${esc(pl.name)} → 今日换龙头（${succ.prevStatus === 'sealed' ? '旧龙头仍封板、位次被超越' : '旧龙头今日' + (STATUS_CN[succ.prevStatus] || '不可验')}）`
+        : `${esc(String(succ.prevDate || '').slice(5))} ${esc(pl.name)} → 今日延续`)
+    : `不可算（${esc(succ.degraded || '无上一交易日/韭研 final 缺失')}）`;
+  hostL.innerHTML = `<div class="grid g2" style="gap:10px 18px">`
+    + kv('总龙头', totalTxt)
+    + kv('情绪龙头', sentTxt)
+    + kv('一致性', sameTxt)
+    + kv('升位关系', riseTxt)
+    + `<div style="grid-column:1/-1">${kv('诞生轨迹', genTxt)}</div>`
+    + `<div style="grid-column:1/-1">${kv('更替', succTxt)}</div>`
+    + '</div>'
+    + ((st.degraded || []).length
+        ? `<div class="prov" style="margin-top:8px;color:#b45309">降级披露：${esc((st.degraded || []).join('；'))}</div>` : '');
 }
 // 判定明细行展开：series 行不含 raw 大字段，按日懒拉完整存档（relayDocs 缓存；当日已在 loadAll 预入）
 // relayDocs 三态（不能用 null 兼表两意）：undefined=未拉；{__err:true}=拉取失败（可重试）；
@@ -2109,6 +2278,7 @@ function lgCopy(view, what, ev){
 //   一级 < 5 个，连板指数 5 个子视图各占一页（每页 ≤2 卡，杜绝一页长条）
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
+                     ['leaders', '板块与龙头', '🐉'],
                      ['detail', '判定明细', '🗓️']];
 const NAV = [
   {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️']]},

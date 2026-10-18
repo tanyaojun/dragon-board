@@ -140,22 +140,24 @@ EOD 另有逐帧证据+当日累计（新进/淘汰/主力净额合计/最高板
 
 ### C. 连板接力（7 题）
 
-**现有原料**（build_relay_narrative 七段，jev_relay_index.py:513-531）：盘面事实+今日炸板面
+**现有原料**（build_relay_narrative 十三段，jev_relay_index.py）：盘面事实+今日炸板面
 （zhaban_face_line：炸板家数分位/反复开板占比/昨日池股今日炸分层/炸板收盘中位/
 大面/代表 top3/炸板归因分布聚合/**较昨日增减**——2026-10-15 诊断补供，炸板与反复开板
 家数昨日→今日直给，criteria「较昨日收敛/恶化」此前无可比数）→ 晋级断板与隔日溢价 →
 梯队结构（首板/二板/三板+/二板÷三板+ 比率）→ 三日晋级链+题材演化（三日链行尾
 **边际对比**：昨日池今日晋级率 vs 前日池昨日晋级率直给，2026-10-15 诊断补供）→
-题材梯队表 top5（消费 driver 标签聚合）→
+题材梯队表 top5（消费 driver 标签聚合；主线板块强制纳入并置顶）→
+**板块接力链（三日）**（v6：三日晋级链的板块归属 / 主线板块 / 各板块龙一 / 今日晋级）→
+**龙头结构**（v6：总龙头 / 情绪龙头 / 板块龙头 + 一致性 + 升位关系 + 诞生轨迹 + 更替）→
 龙头档案（最高板+身位/板序/板型三行）→ 近 10 日轨迹+防锚定参照段（显式标注
-「非今日证据」）。
+「非今日证据」）。v6 口径与验收见 `jev-relay-sector-leader-preregistration.md`。
 
 | 题 | 档 | 缺口 |
 |---|---|---|
 | relay_phase | B | divergence 38/60 中心化（collapse→divergence 粒度偏细，phase2-report §五登记 4 周复查）；topP50 0.66 骑墙 40%。判据侧次级缺口已补（§九第二批）：断板亏钱「扩散/增多」与首板占比「明显升高」的昨日可比数、反复开板分位于 2026-10-16 直供叙事 |
 | relay_index / leader_strength | A(观测) | score 题分布未落库（runner 只存归一分 jev_relay_index.py:505/510），hstd 不可测；ρ=0.895 与规则轨相关超带，长期观察 ≥40 交易日复测 |
 | relay_momentum | B | **2026-10-15 逃生诊断（§九）**：全库 43/107（40%）insufficient_evidence，仅次于 weakening（45%）；「近1月仅 2 次」是展示窗口假象。根因=两个主锚的「较昨日对比」全库从未组装（分位/均值只给绝对位置）+ criteria 合取项引用未供给证据；判据零改动，语料侧已补（§九） |
-| ladder_health / money_effect / theme_pulse | — | probabilities 历史文档未落库（P0-2/P0-3 起新文档有 `answers` 包可测，存量不可回补）；判据侧 ladder_health 已绑量化阈值、theme_pulse 已定连续 ≥3 日门槛（phase2 修正项） |
+| ladder_health / money_effect / theme_pulse | — | probabilities 历史文档未落库（P0-2/P0-3 起新文档有 `answers` 包可测，存量不可回补）；判据侧 ladder_health 已绑量化阈值、theme_pulse 已定连续 ≥3 日门槛（phase2 修正项）。**2026-10-19 v6 补供**：板块/龙头结构已入叙事（板块接力链 + 龙头结构），`leader_strength`/`theme_pulse` 判据增引用，`relay_phase`/`relay_index` 各增一句非打分参照句；是否加题已由用户裁决为「不加」 |
 | 跨轨依赖 | A | 题材梯队表消费 hotlist_jev_driver_labels 的 freshness/driver 聚合——打标链某日未跑则该段降级；龙头档案同理。**当日炸板归因打标（hotlist_jev_zhaban_labels）同属跨轨依赖，2026-10-15 发现调度链反序致 relay 叙事恒未见当日归因，已修（§九）** |
 
 ### D. 炸板归因（zhaban_cause）
