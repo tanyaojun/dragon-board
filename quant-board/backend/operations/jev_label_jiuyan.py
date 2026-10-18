@@ -330,8 +330,10 @@ def _ths_pool_counts(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tup
     读口原实现只认 items → 这些天整段写「不可算」，把同帧已有的家数一并丢弃
     （AGENTS §4.0「有可用数据就必须展示可计算部分」）。本函数供调用方做同源家数级降级。
 
-    返回 (counts, found)：found=False = 连家数都没有（帧缺失/池未拉取）。
+    返回 (counts, found)：found=False = 连家数都没有（帧缺失/池未拉取/占位零降级）。
     口径：`poolCounts.failed` 与 `len(pools.failed.items)` 同为 THS 炸板池家数（同源字段）。
+    2026-10-18 review P1-3：`degraded:true` 且三池家数全 0 = 上游整池拉取失败的**占位零**，
+    found=False（不得输出「炸板 0 家」，§4.0）；只要任一池非零则视为合法读数（部分池失败可用）。
     """
     f = db["snapshot_frames"].find_one(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date,
@@ -340,6 +342,14 @@ def _ths_pool_counts(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> tup
     tp = ((f or {}).get("limitSummary") or {}).get("thsPools") or {}
     counts = tp.get("poolCounts")
     if not isinstance(counts, dict) or not counts:
+        return None, False
+    # 占位零判别（2026-10-18 review P1-3，§4.0）：旧采集 schema 在 THS 整池拉取失败时写
+    # `degraded:true` + **poolCounts 全 0**（`src/services/DragonBreathAnalyzer.ts` 的
+    # `degraded = unavailable || ...` 分支）。这些 0 是占位，不是「炸板 0 家」——直接当读数
+    # 会把「取不到」写成「炸板 0 家」（实测库中存在 35 帧此种形态）。
+    # 保留合法降级：只要**任一**池有非零家数，说明本次确实取到了池（部分池失败可接受）。
+    if tp.get("degraded") and not any(
+            counts.get(k) for k in ("failed", "rushing", "drawdown")):
         return None, False
     return {"failed": counts.get("failed"), "rushing": counts.get("rushing"),
             "drawdown": counts.get("drawdown"), "maxDrawdown": tp.get("maxDrawdown"),
@@ -1486,8 +1496,19 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
 
 def trajectory_line(db, date: str, n: int = 10,
                     dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    """近 n 个交易日逐日序列：日期|涨停(较昨日Δ)|跌停|炸板率%|大幅回撤|最高板。"""
-    window = trading_dates_before(db, date, n + 1, dataset_id=dataset_id)  # 首日仅为算首格 Δ
+    """近 n 个交易日（含当日）逐日序列：日期|涨停(较昨日Δ)|跌停|炸板率%|大幅回撤|最高板。
+
+    轴 = `trading_dates_before(date, n-1) + [date]`（与同族 `high_position_trajectory_lines`
+    `jev_relay_index.py:611` 同式）——**必须含当日**。
+    2026-10-18 review P1-2：旧式 `trading_dates_before(date, n+1)` 查 `tradingDate < date`
+    （严格早于），当日永不入列 → 序列实际截止昨日，head 却写「近 N 个交易日」且无语境提示；
+    批次2 的当日口径标注（`d == date` / `day_is_pool` / 行尾「当日格」）在真库**不可达**。
+    """
+    hist = trading_dates_before(db, date, max(n - 1, 1), dataset_id=dataset_id)
+    if hist and hist[-1] == date:      # 防御：调用方传入未来日/异常时不让日重复
+        hist = hist[:-1]
+    axis = hist + ([date] if date not in hist else [])
+    window = axis
     # 跌停=全市场口径（2026-10-16 口径修正；2026-10-17 F7 补本地日线重算源）：历史窗口一次
     # find 批量读参考集合（禁逐日连发），当日允许懒加载。**同一列内不得混口径**——
     # pool_rows（250 只采集池）与全市场差 4 倍量级，混采会让「跌停翻六倍」这种观感其实
@@ -1535,9 +1556,9 @@ def trajectory_line(db, date: str, n: int = 10,
                        "mb": mb if isinstance(mb, (int, float)) else None,
                        "degraded": row_degraded})
     rows = []
-    for i, r in enumerate(series[1:]):
-        prev = series[i]
-        if r["zt"] is not None and prev["zt"] is not None:
+    for i, r in enumerate(series):
+        prev = series[i - 1] if i > 0 else None      # 首格无昨日基线 → Δ 记 ?
+        if prev is not None and r["zt"] is not None and prev["zt"] is not None:
             delta = f'{r["zt"] - prev["zt"]:+d}'
         else:
             delta = "?"
@@ -1549,9 +1570,7 @@ def trajectory_line(db, date: str, n: int = 10,
         ad = advdec_ratio(db, r["d"], dataset_id)
         ad_txt = f'{ad[3]}' if ad else "?"
         rows.append(f'{r["d"][5:]}|涨停{zt_txt}({delta})|跌停{die_txt}|炸板{r["rate"]}|回撤{dd_txt}|板{mb_txt}|涨跌比{ad_txt}')
-    head = f'近{len(rows)}个交易日序列（日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板|池内涨跌比）：'
-    # 口径头注（2026-10-16 review 补）：跌停列的源 + 降级格标记。没有这行，跨源混采的
-    # 序列会被读成真实情绪摆动。
+    head = f'近{len(rows)}个交易日序列（含当日；日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板|池内涨跌比）：'
     # 口径头注（2026-10-16 review 补）：跌停列的源 + 降级格标记。没有这行，跨源混采的
     # 序列会被读成真实情绪摆动。当日回落采集池时必须单独点名：否则头注的 die_scope
     # （由历史窗推导）会让读者以为当日也是全市场口径（2026-10-18 review B4）。

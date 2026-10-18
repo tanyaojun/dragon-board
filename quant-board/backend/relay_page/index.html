@@ -725,10 +725,12 @@ function rankOf(xs){
   return r;
 }
 const spearmanOf = (xs, ys) => xs.length < 3 ? null : pearsonOf(rankOf(xs), rankOf(ys));
-// 聚合：bandDays（全部窗口内判定日）→ have（有次日实测的行，口径与 measurable 同）
+// 聚合：bandDays（全部窗口内判定日）→ have（有次日实测的行）
+// 口径与 scripts/jev_relay_band_diagnostic.py:288 同式：`premA != null || promo != null`
+// （只判 premA 会把「有晋级率但无溢价」的行丢掉，而与产物 window.evaluated / 脚本表 n 不一致）。
 function bandAgg(rows){
   rows = rows || winBandDays();
-  const have = rows.filter(o => o.premA != null);
+  const have = rows.filter(o => o.premA != null || o.promo != null);
   const agg = (keyFn) => {
     const g = {};
     for (const o of have){ const k = keyFn(o); if (k != null) (g[k] = g[k] || []).push(o); }
@@ -823,8 +825,17 @@ async function loadAll(){
     return;
   }
   if (seq !== _loadSeq) return; // 过期响应不覆盖（快速切日期竞态守卫）
-  $('srcPill').className = 'pill';
-  $('srcPill').innerHTML = '<span class="dot"></span>数据源 :8000';
+  // HTTP 200 + ok:false = 服务端读库失败（hotlist_jev_routes 的降级响应）：不得当成
+  // 「空序列」静默展示（§4.0）。2026-10-18 review P2-3。
+  if (series && series.ok === false) {
+    $('srcPill').className = 'pill bad';
+    $('srcPill').innerHTML = '<span class="dot"></span>读库降级';
+    $('refreshAt').textContent = '降级 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false})
+      + (series.reason ? '（' + series.reason + '）' : '');
+  }
+  $('srcPill').className = (series && series.ok === false) ? 'pill bad' : 'pill';
+  $('srcPill').innerHTML = (series && series.ok === false)
+    ? '<span class="dot"></span>读库降级' : '<span class="dot"></span>数据源 :8000';
   STATE.series = series.series || [];
   STATE.day = series.day || null;
   STATE.rawSlots = slots.slots || [];
@@ -1267,7 +1278,11 @@ function relayDocFetch(key){
   if (cur !== undefined && !relayDocIsErr(cur)) return;   // 已拉完（含确认无档）不再拉
   STATE.relayDocs[key] = { __err: false, __loading: true };  // 占位防并发重复拉
   jget('/api/hotlist-jev/relay-index?days=1&date=' + encodeURIComponent(key))
-    .then(r => { STATE.relayDocs[key] = r.day || null; renderRelayTab(); })
+    .then(r => {
+      // HTTP 200 + ok:false（读库降级）也算失败 → 可重试，不得显示为「确认无档」（§4.0，P2-3）
+      STATE.relayDocs[key] = (r && r.ok === false) ? { __err: true } : (r.day || null);
+      renderRelayTab();
+    })
     .catch(() => { STATE.relayDocs[key] = { __err: true }; renderRelayTab(); });  // 失败可见且可重试
 }
 

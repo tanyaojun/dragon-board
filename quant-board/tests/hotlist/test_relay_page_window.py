@@ -654,3 +654,29 @@ def test_jump_date_clears_relay_focus(js: str):
     jd = _fn(js, "jumpDate")
     assert "STATE.relayFocus = null" in jd, "jumpDate 应清 STATE.relayFocus"
     assert "loadAll()" in jd
+
+
+def test_band_have_matches_diagnostic_script(js: str):
+    """页面 bandAgg 的 have 口径须与诊断脚本同式（review P2-1）。
+
+    旧版页面 `o.premA != null`（仅 premA），脚本 `premA is not None or promo is not None`（或）；
+    同一张卡里「有次日实测 N 日」（产物 evaluated）与「可实测 N 日」（页面重算）会不一致，
+    且注释谎称「口径与 measurable 同」。
+    """
+    agg = _fn(js, "bandAgg")
+    assert re.search(r"premA\s*!=\s*null\s*\|\|\s*o?\.?promo\s*!=\s*null", agg), \
+        "bandAgg 的 have 应为 premA 或 promo（与脚本同式）"
+
+
+def test_load_all_flags_ok_false_degradation(js: str):
+    """HTTP200+ok:false 必须亮红，不得当空序列静默展示（review P2-3，§4.0）。"""
+    la = _fn(js, "loadAll")
+    assert "ok === false" in la, "loadAll 应检查 series.ok === false"
+    assert "读库降级" in la or "bad" in la
+
+
+def test_relay_doc_fetch_treats_ok_false_as_error(js: str):
+    """懒拉的 HTTP200+ok:false 也要走失败哨兵（可重试），不得显示为「确认无档」（review P2-3）。"""
+    fetch = _fn(js, "relayDocFetch")
+    assert "ok === false" in fetch, "relayDocFetch 应把 ok:false 视为失败"
+    assert "__err" in fetch

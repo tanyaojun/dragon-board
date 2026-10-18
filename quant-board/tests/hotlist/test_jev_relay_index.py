@@ -981,3 +981,77 @@ def test_adj_prev_series_bounded_lookback(monkeypatch):
     assert len(seen) <= J._ADJ_LOOKBACK                 # 有界：不再整窗 199 次外呼
     assert set(out) <= {b["date"] for b in bars[-J._ADJ_LOOKBACK:]}   # 只出近端键
     assert J._ADJ_LOOKBACK == 45
+
+
+def test_relay_flow_line_today_bars_missing_not_fake_coverage(monkeypatch):
+    """当日 TDX 日线**整体缺失** → 写「今日 TDX 日线缺失」，不得伪造成「覆盖 0/N」（review P1-1）。
+
+    旧式 `covered if cur_stats else 0` 把 `_broken_stats` 返回 None（= 无任何日线）渲染成
+    一个并不存在的读数「TDX 覆盖 0/5」，归因也从「日线缺失」误成「样本不足」。
+    §4.0：缺失必须显式可见，不得用 0 伪装。
+    """
+    # 昨日断板统计可用（≥5 只），今日断板 ≥5 只但当日日线源整体不可用（_daily_bars → []）
+    bars = {
+        "600002": [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}],   # 昨日断板
+        "600003": [{"date": _D2, "close": 20.0}, {"date": _D1, "close": 20.2}],  # 昨日断板
+    }
+    yest_fillers = [{"code": f"6011{i}", "name": f"YF{i}", "num": "2天2板"} for i in range(1, 4)]
+    for s in yest_fillers:                       # 昨日断板凑到 5 只，越过 F4 门槛
+        bars[s["code"]] = [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}]
+
+    def _bars(code):
+        # 仅有 _D1/_D2 两日；当日 _D0 无任何棒 → 当日日线整体缺失（不是「覆盖 0」）
+        return bars.get(code, [])
+
+    monkeypatch.setattr(relay, "_daily_bars", _bars)
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0], failed_by_date={_D1: [], _D0: []}),
+        "jiuyan_action": FakeCol([_final(_D2, _STOCKS[_D2] + yest_fillers),
+                                  _final(_D1, _STOCKS[_D1]),
+                                  _final(_D0, _STOCKS[_D0])]),
+    })
+    line = relay_flow_line(db, _D0)
+    assert "今日 TDX 日线缺失" in line, f"未如实归因：{line}"
+    assert "覆盖 0/" not in line, f"把「无日线」渲染成「覆盖 0/N」（伪 0）：{line}"
+
+
+def _frame_legacy_poolcounts(date, counts, *, degraded=True):
+    """旧采集 schema 帧：只有 `poolCounts` 家数（无 `pools.*.items`），P1-3 的真实形态。"""
+    tp = {"date": date.replace("-", ""), "source": "ths", "poolCounts": dict(counts)}
+    if degraded:
+        tp["degraded"] = True
+    return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
+            "slotTime": "15:00", "snapshotId": f"h:{date}", "timestamp": 2,
+            "limitSummary": {"zhaban": {"ztCount": 36, "count": 0, "rate": 16.3},
+                             "drawdown": {"count": 5}, "continuousBoards": {"maxBoard": 5},
+                             "thsPools": tp}}
+
+
+def test_zhaban_face_legacy_placeholder_zero_not_fake_zero():
+    """旧 schema 占位零（degraded:true + 三池全 0）→ 写「不可算」，不得输出「炸板 0 家」（review P1-3）。
+
+    实测库中存在 35 帧此形态（THS 整池拉取失败时旧前端写 `degraded:true` + poolCounts 全 0）。
+    旧实现不看 degraded → 把占位零当读数，输出「炸板 0 家；冲刺未封 0 家；涨停股回撤榜 0 家」。
+    §4.0：不得用 0 伪装缺失。
+    """
+    zero = {"one": 0, "two": 0, "three": 0, "four": 0, "high": 0,
+            "failed": 0, "rushing": 0, "drawdown": 0}
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_frame_legacy_poolcounts(_D0, zero)]),
+        "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "炸板 0 家" not in line, f"占位零被当成读数（伪 0）：{line}"
+    assert "不可算" in line, f"应显式标不可算：{line}"
+
+
+def test_zhaban_face_legacy_partial_pool_kept():
+    """合法降级：个别池失败但任一池有非零家数 → 家数读数保留（不得一刀切丢弃，§4.0）。"""
+    counts = {"one": 0, "two": 0, "three": 0, "four": 0, "high": 0,
+              "failed": 7, "rushing": 0, "drawdown": 0}
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_frame_legacy_poolcounts(_D0, counts)]),
+        "jiuyan_action": FakeCol([_final(_D0, _STOCKS[_D0])]),
+    })
+    line = zhaban_face_line(db, _D0)
+    assert "炸板 7 家" in line, f"有可用家数应照常展示：{line}"

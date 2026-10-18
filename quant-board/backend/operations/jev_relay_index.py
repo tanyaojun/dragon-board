@@ -348,9 +348,16 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
             elif not broken:
                 prev_broken_txt = (f"较昨日断板：昨日中位 {ps['median']:+}%、"
                                    f"大面 {ps['big']} 只 → 今日断板 0 只{calib2}")
+            elif cur_stats is None:
+                # `_broken_stats` 返 None = 当日**无任何日线**（非「覆盖 0」）。2026-10-18
+                # review P1-1：旧式 `covered if cur_stats else 0` 会把「日线源整体不可用」
+                # 渲染成「TDX 覆盖 0/N」这个并不存在的读数（伪 0，§4.0），且归因词也从
+                # 「日线缺失」误成「样本不足」——同函数今日段（broken_txt）早就写作
+                # 「不可算（TDX 日线缺失）」，此处与之对齐。
+                prev_broken_txt = "较昨日断板：不可算（今日 TDX 日线缺失）"
             elif not cur_stats_ok:
                 prev_broken_txt = ("较昨日断板：今日断板样本不足"
-                                   f"（TDX 覆盖 {cur_stats['covered'] if cur_stats else 0}/{len(broken)}），不可比")
+                                   f"（TDX 覆盖 {cur_stats['covered']}/{len(broken)}），不可比")
             else:
                 prev_broken_txt = (f"较昨日断板：中位 {ps['median']:+}%→{cur_stats['median']:+}%、"
                                    f"大面 {ps['big']}→{cur_stats['big']} 只{calib2}")

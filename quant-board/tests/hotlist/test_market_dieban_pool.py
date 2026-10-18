@@ -20,6 +20,7 @@ monkeypatch `get_hotlist_redis_client`/`today_str`/`_em_http_client`。
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -45,6 +46,16 @@ class FakeCol:
                     if "$exists" in v and (r.get(k) is None) != (not v["$exists"]):
                         return False
                     if "$ne" in v and r.get(k) == v["$ne"]:
+                        return False
+                    # 2026-10-18 review P1-2：旧版不认 $lt/$lte/$in → 查询直接落空 return True，
+                    # 使 trading_dates_before($lt) 在假库里“含当日”，伪造了守卫通过。
+                    if "$lt" in v and not (r.get(k) is not None and r[k] < v["$lt"]):
+                        return False
+                    if "$lte" in v and not (r.get(k) is not None and r[k] <= v["$lte"]):
+                        return False
+                    if "$gt" in v and not (r.get(k) is not None and r[k] > v["$gt"]):
+                        return False
+                    if "$in" in v and r.get(k) not in v["$in"]:
                         return False
                 elif r.get(k) != v:
                     return False
@@ -651,6 +662,40 @@ def test_backfill_outside_window_with_tdx_row_reports_skip_not_gap(monkeypatch, 
     assert out.count("[缺口]") == 1
 
 
+def test_trajectory_line_axis_includes_today(monkeypatch):
+    """轴必须含当日（review P1-2）：`trading_dates_before` 是严格早于，需显式 + [date]。
+
+    旧实现的 `trading_dates_before(date, n+1)` 使当日永不入列，序列实际截止昨日而 head
+    仍写「近 N 个交易日」；本测试直接钉轴（末格 == date），不依赖其它分支副作用。
+    """
+    from backend.operations import jev_label_jiuyan as jj
+
+    hist = ["2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13",
+            "2026-10-14", "2026-10-15", "2026-10-16"]
+    cols = {"snapshot_frames": FakeCol(
+        [{"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": d,
+          "slotTime": "15:00"} for d in hist])}
+    cols[mdp.COLLECTION] = FakeCol(
+        [{"_id": d, "count": 10 + i, "source": mdp.SOURCE_EM} for i, d in enumerate(hist)])
+
+    class _Db:
+        def __getitem__(self, name):
+            return cols.setdefault(name, FakeCol())
+
+    monkeypatch.setattr(jj, "market_metrics", lambda db, d, dataset_id=None: {})
+    monkeypatch.setattr(jj, "advdec_ratio", lambda db, d, dataset_id=None: None)
+    monkeypatch.setattr(jj, "limit_down_count", lambda db, d, dataset_id=None: (26, mdp.SOURCE_EM))
+
+    for n in (5, 10):
+        line = jj.trajectory_line(_Db(), "2026-10-16", n=n)
+        cells = re.findall(r"\d{2}-\d{2}\|", line)
+        assert cells[-1] == "10-16|", f"n={n} 末格不是当日：{cells}"
+        # 窗口上限受可用交易日数约束：n=10 时库里只 7 日 → 输出 7 格
+        assert len(cells) == min(n, len(hist)), \
+            f"n={n} 应输出 {min(n, len(hist))} 格（含当日），实得 {len(cells)}"
+        assert f"近{len(cells)}个交易日序列（含当日" in line, f"head 未声明含当日：{line[:40]}"
+
+
 def test_trajectory_line_marks_today_pool_fallback(monkeypatch):
     """当日回落采集池 → 当日格打 * 且行尾点名当日口径（review B4）。
 
@@ -678,8 +723,11 @@ def test_trajectory_line_marks_today_pool_fallback(monkeypatch):
     monkeypatch.setattr(jj, "dieban_count", lambda db, d, dataset_id=None: 6)
 
     line = jj.trajectory_line(_Db(), "2026-10-16")
-    today_cell = line.split("|")[2]                      # 首格(10-09)起：日期|涨停(Δ)|跌停…
     assert "跌停" in line
     assert line.rstrip().endswith("）") or "（" in line
+    # 轴必须含当日（review P1-2 回归点）：旧版 $lt 严格早于 → 当日永不入列，
+    # 本测试在“不认 $lt”的旧假库里靠脏匹配假绿。现在两处都钉死。
+    assert "10-16|" in line, f"序列未含当日（轴少了 date）：{line}"
+    assert re.findall(r"\d{2}-\d{2}\|", line)[-1] == "10-16|", f"末格不是当日：{line}"
     assert "采集池口径" in line, f"当日口径未点名：{line}"
     assert "6*" in line, f"当日格未打降级星号：{line}"

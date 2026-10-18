@@ -82,3 +82,19 @@ def test_relay_band_default_path_under_repo(tmp_path, monkeypatch):
     body = client.get("/api/hotlist-jev/relay-band").json()
     expected = Path(__file__).resolve().parents[2] / "data" / "backups" / "relay-band-table.json"
     assert Path(body["artifactPath"]) == expected
+
+
+def test_relay_band_rejects_non_list_days(tmp_path, monkeypatch):
+    """days 非列表/空列表的损坏产物 → ok:false + reason（review P2-4），不得放行成 ok:true。"""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+    from backend.api import hotlist_jev_routes as routes
+
+    bad = tmp_path / "relay-band-table.json"
+    bad.write_text(json.dumps({"days": "x", "window": {}}), encoding="utf-8")
+    monkeypatch.setattr(routes, "_relay_band_table_path", lambda: bad)
+    r = TestClient(app).get("/api/hotlist-jev/relay-band")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and body["reason"] == "band_table_empty"
+    assert body.get("hint") and body.get("artifactPath")

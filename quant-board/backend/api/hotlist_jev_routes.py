@@ -456,7 +456,10 @@ def get_relay_band() -> dict[str, Any]:
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"band_table_unreadable: {exc}",
                 "hint": hint, "artifactPath": str(path)}
-    if not isinstance(payload, dict) or not payload.get("days"):
+    # days 必须是**非空列表**：2026-10-18 review P2-4——旧式 `not payload.get("days")`
+    # 会放行 `"days": "x"` / 字典等损坏产物，页面 `bandDoc()` 因 `Array.isArray` 失败返回 null，
+    # 而 `bandDiagMissing` 见 `ok===true` 返回空串 → 落到「无分带读数」且不显示 reason/hint（fail-visible 退化）。
+    if not isinstance(payload, dict) or not isinstance(payload.get("days"), list) or not payload["days"]:
         return {"ok": False, "degraded": True, "reason": "band_table_empty",
                 "hint": hint, "artifactPath": str(path)}
     payload = dict(payload)
