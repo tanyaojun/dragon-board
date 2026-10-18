@@ -610,3 +610,19 @@ def test_trajectory_line_labels_mixed_full_market_sources(monkeypatch):
     assert "全市场·东财跌停池＋全市场·本地日线重算" in line
     assert "|跌停32|" in line                 # TDX 读数照出，不回退采集池
     assert "采集池降级格" not in line
+
+
+def test_backfill_em_upgrades_tdx_rows(monkeypatch, capsys):
+    """F7：本地日线行（SOURCE_TDX）不算「已回填」——EM 窗口内一律用 EM 升级覆盖。
+
+    否则早期回填的 TDX 行会把窗口内更权威的 EM 挡住，参考集合静默停在次要源。
+    """
+    _patch_em(monkeypatch, responses=[_FakeResponse(payload=_pool_payload(26))])
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
+    col = FakeCol([{"_id": "2026-10-15", "count": 28, "source": mdp.SOURCE_TDX}])
+    db = FakeDb({mdp.COLLECTION: col,
+                 "snapshot_frames": _frames_col(["2026-10-15"])})
+    mdp.backfill(db, "2026-10-15", "2026-10-15", apply=True)
+    assert [d["source"] for _, d in col.writes] == [mdp.SOURCE_EM]
+    assert col.writes[0][1]["count"] == 26
+    assert "待处理 1 日" in capsys.readouterr().out

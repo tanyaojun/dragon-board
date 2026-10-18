@@ -296,7 +296,9 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
              sleep: Any = None) -> None:
     """EM 跌停池回填（dry-run 默认）：窗口内逐日 fetch + upsert；窗口外只披露缺口。
 
-    - 已回填日跳过（幂等，不重复外呼）；
+    - 已回填日跳过（幂等，不重复外呼）；但**本地日线口径（SOURCE_TDX）不算已回填**——
+      EM 是更权威的主源，窗口内一律用 EM 升级覆盖（2026-10-17 F7：否则早期 TDX 行会
+      把窗口内的 EM 挡住，参考集合静默停在次要源）；
     - 窗口外/上游不可用/**连续**失败 → 披露缺口，**绝不写 0 行**（「取不到」≠「真的 0」）；
     - **连续** `_EM_MAX_CONSECUTIVE_FAILURES` 次失败即熔断（东财封 IP 前科），剩余日照实披露。
       计数必须**成功即清零**：累计计数会让「一次抖动 + 隔日两次抖动」在第 4 天误熔断，
@@ -306,7 +308,9 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
                     if r.get("tradingDate") and start <= str(r["tradingDate"]) <= end})
     col = db[COLLECTION]
     # 一次 find 批量读已回填日（模块自身规则「一次 find 批量读，禁逐日连发」）
-    have = {str(d["_id"]) for d in col.find({"_id": {"$in": dates}}, {"_id": 1})} if dates else set()
+    # TDX 行不算「已回填」：EM 窗口内以 EM 升级（源优先级 EM > 快照 > TDX > 采集池）
+    have = {str(d["_id"]) for d in col.find({"_id": {"$in": dates}}, {"_id": 1, "source": 1})
+            if str(d.get("source") or "") != SOURCE_TDX} if dates else set()
     window_start = _em_window_start()
     todo = [d for d in dates if d not in have]
     in_window = [d for d in todo if d >= window_start]
