@@ -443,7 +443,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   slotEntries: [], relayEntries: [],
   // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
-  relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉；undefined=未拉，null=已拉无档）
+  relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉）
+                  // 三态：undefined=未拉；{__err:true}=拉取失败(可重试)；对象/null=已拉完(null=服务端确认无档)
   quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' }, res: { mode: 'detail', q1: '', q2: '' }, trd: { mode: 'detail', q1: '', q2: '' },
     hea: { mode: 'detail', q1: '', q2: '' }, vpq: { mode: 'detail', q1: '', q2: '' } },
   quotesSlots: [],  // 当日有 jev 判读的槽位（quotes-review 响应 voteSlots，帧选择器数据源）
@@ -1235,10 +1236,16 @@ function renderRelayKpi(shown){
     + `<div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s kpi-desc">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺'}</div></div>`;
 }
 // 判定明细行展开：series 行不含 raw 大字段，按日懒拉完整存档（relayDocs 缓存；当日已在 loadAll 预入）
+// relayDocs 三态（不能用 null 兼表两意）：undefined=未拉；{__err:true}=拉取失败（可重试）；
+// 其余（对象或 null）=已拉完（null = 服务端确认该日无档）。旧版把「占位/已拉无档/拉取失败」
+// 全写 null，失败与「确实没档」同形且永不重试（AGENTS §4.0：不得用空结果伪装缺失）。
+function relayDocIsErr(v){ return !!(v && v.__err); }
 function relayEntryOf(r){
   const date = String(r.tradingDate || '');
-  const doc = STATE.relayDocs[date] !== undefined ? STATE.relayDocs[date] : r;
-  return { key: date, kind: 'relay', label: date + ' 连板指数', doc: doc || r };
+  const raw = STATE.relayDocs[date];
+  const doc = (raw === undefined || relayDocIsErr(raw)) ? r : (raw || r);
+  return { key: date, kind: 'relay', label: date + ' 连板指数', doc: doc || r,
+           docErr: relayDocIsErr(raw) };
 }
 function relayRow(key){
   // 点行 = 只选中（页头 KPI 卡联动到该日）；再点同一行取消选中回到日期框当日。
@@ -1251,13 +1258,17 @@ function relayToggle(key){
   const ui = STATE.detailUi.relay;
   if (ui.openKey === key){ ui.openKey = null; ui.q1 = ''; ui.q2 = ''; renderRelayTab(); return; }
   ui.openKey = key; ui.q1 = ''; ui.q2 = '';
-  if (STATE.relayDocs[key] === undefined){
-    STATE.relayDocs[key] = null;  // 占位防并发重复拉
-    jget('/api/hotlist-jev/relay-index?days=1&date=' + encodeURIComponent(key))
-      .then(r => { STATE.relayDocs[key] = r.day || null; renderRelayTab(); })
-      .catch(() => { STATE.relayDocs[key] = null; renderRelayTab(); });
-  }
+  relayDocFetch(key);
   renderRelayTab();
+}
+// 拉取该日完整存档：未拉 → 拉；失败哨兵 → 重试（占位与失败必须可区分，且失败可重试）。
+function relayDocFetch(key){
+  const cur = STATE.relayDocs[key];
+  if (cur !== undefined && !relayDocIsErr(cur)) return;   // 已拉完（含确认无档）不再拉
+  STATE.relayDocs[key] = { __err: false, __loading: true };  // 占位防并发重复拉
+  jget('/api/hotlist-jev/relay-index?days=1&date=' + encodeURIComponent(key))
+    .then(r => { STATE.relayDocs[key] = r.day || null; renderRelayTab(); })
+    .catch(() => { STATE.relayDocs[key] = { __err: true }; renderRelayTab(); });  // 失败可见且可重试
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
@@ -2001,6 +2012,13 @@ function lgEntries(view){ return view === 'lab' ? STATE.labelEntries
 function lgAfter(view){ if (view === 'lab') renderLabels(); else if (view === 'slot') renderSlots(); else renderRelayTab(); }
 function lgOpenEntry(view){ return (lgEntries(view) || []).find(x => x.key === lgUi(view).openKey) || null; }
 function detailHtml(e, view){
+  // 懒拉失败：显式展示失败与重试入口，不静默回落到瘦行（§4.0 不得用空结果伪装缺失）
+  if (e.docErr && view === 'relay'){
+    return `<div class="lg-head"><div class="lg-title">⚠️ ${esc(e.label)} 完整存档拉取失败</div></div>
+      <div class="lg-meta"><div><div class="k">原因</div><div class="v">读口不可用（网络/服务）</div></div>
+      <div><div class="k">说明</div><div class="v">下方仍为列表接口返回的日级读数，非最终档</div></div></div>
+      <div style="margin-top:8px"><button onclick="relayDocFetch('${esc(e.key)}');renderRelayTab();">重试拉取</button></div>`;
+  }
   const d = e.doc, u = d.usage || {}, ui = lgUi(view);
   const st = d.status || '-';
   const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
@@ -2330,7 +2348,7 @@ function zoneKey(z){
   return Object.keys(ZONE_DEF).find(k => ZONE_DEF[k].label === l) || 'other';
 }
 function setHitFilter(k){ STATE.hitFilter = k; renderZoneHits(); }
-function jumpDate(d){ $('date').value = d; loadAll(); }
+function jumpDate(d){ $('date').value = d; STATE.relayFocus = null; loadAll(); }
 
 function renderDiagPanel(agg){
   const b = bandDoc(); const el = $('diagBands'); if (!el) return;

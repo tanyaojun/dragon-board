@@ -251,7 +251,10 @@ def test_row_click_selects_only_caret_toggles_panel(html: str, js: str):
     tog = _fn(js, "relayToggle")
     assert "STATE.detailUi.relay" in tog and "openKey" in tog, "三角应控展开态"
     assert "relayFocus" not in tog, "BUG: 三角不得改动选中态"
-    assert "relay-index?days=1" in tog, "三角展开时懒拉当日 JEV 存档"
+    # 懒拉实现已抽到 relayDocFetch（2026-10-18 review B6：失败哨兵/重试要单点）；
+    # 这里守的是「三角展开确实会触发 JEV 存档拉取」这一行为契约。
+    assert "relayDocFetch(" in tog, "三角展开时懒拉当日 JEV 存档（走 relayDocFetch）"
+    assert "relay-index?days=1" in _fn(js, "relayDocFetch"), "拉取实现应在 relayDocFetch 内"
 
     # 行内三角：stopPropagation（不触发选中切换）+ 指向 relayToggle
     rt = _fn(js, "renderRelayTab")
@@ -617,3 +620,37 @@ def test_merged_page_section_headers(html: str):
     assert seg.count('class="sec-h"') >= 2, "应有钱效分带 / 毒带观察两个区块标题"
     assert ".sec-h{" in html, "应有 .sec-h 样式"
     assert seg.count('class="card"') >= 4, "三个区块 + 交叉表应各自独立成卡"
+
+
+# ── 批次3（review B6）：前端状态错误哨兵与焦点清理 ────────────────────────
+
+def test_relay_doc_fetch_distinguishes_failure_from_empty(js: str):
+    """懒拉失败必须与「服务端确认无档」可区分，且失败可重试（review B6，AGENTS §4.0）。
+
+    旧实现 `relayDocs[key] = null` 同时承担「占位」「已拉无档」「拉取失败」三种语义，
+    catch 里也写 null —— 失败与空结果同形，且 `!== undefined` 判定让该日永不重试，
+    读者看到的是静默回落的瘦行（无法得知完整存档其实没拉回来）。
+    """
+    fetch = _fn(js, "relayDocFetch")
+    # 失败写独立哨兵，不再与 null(无档) 合流
+    assert "__err" in fetch, "失败必须写 {__err:true} 哨兵，不得与 null 同形"
+    assert "{ __err: true }" in fetch or "{__err:true}" in fetch.replace(" ", "")
+    # 占位态不得复用 null
+    assert re.search(r"relayDocs\[key\]\s*=\s*null", fetch) is None, \
+        "占位不得再写 null（会与已拉无档混淆）"
+    # 失败可重试：入口按「已拉完（非 err）」才短路
+    assert "relayDocIsErr" in fetch, "重试判定应走 relayDocIsErr"
+    # 入口必须真的被 relayToggle 调用（否则哨兵写好也没人重拉）
+    assert "relayDocFetch(" in _fn(js, "relayToggle")
+    # 错误可见：detailHtml 显式渲染失败 + 重试按钮，不静默回落瘦行
+    dh = _fn(js, "detailHtml")
+    assert "docErr" in dh and "拉取失败" in dh and "重试拉取" in dh
+    # relayEntryOf 透出错误标志
+    assert "docErr" in _fn(js, "relayEntryOf")
+
+
+def test_jump_date_clears_relay_focus(js: str):
+    """换日必须清选中态（review B6）：否则 KPI 仍联动到一个不在当前区间/已过期的前一日行。"""
+    jd = _fn(js, "jumpDate")
+    assert "STATE.relayFocus = null" in jd, "jumpDate 应清 STATE.relayFocus"
+    assert "loadAll()" in jd
