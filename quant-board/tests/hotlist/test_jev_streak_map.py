@@ -460,8 +460,11 @@ def test_daily_bars_transient_failure_not_cached(monkeypatch):
 
     try:
         monkeypatch.setattr(runner, "_tdx_daily_client", lambda: _Client())
+        # 2026-10-18：本地优先后，本用例专测**线上回退**路径 → 显式关掉本地源
+        monkeypatch.setattr(runner, "_local_root", lambda: None)
+        runner._LOCAL_MISS.clear()
         real = runner._REAL_DAILY_BARS      # 离线护栏把模块属性打空了，这里取回真实实现
-        key = (runner._bars_offset(), "600825")   # v5：缓存键含 bars offset（JEV_BARS_OFFSET）
+        key = (f"online:{runner._bars_offset()}", "600825")   # v6：缓存键带来源标签
         assert real("600825") == []                      # 首次失败：降级但不写缓存
         assert runner._DAILY_BARS_CACHE.get(key) is None
         assert len(real("600825")) == 1                   # 重试即恢复
@@ -469,3 +472,90 @@ def test_daily_bars_transient_failure_not_cached(monkeypatch):
     finally:
         runner._TDX_DOWN_UNTIL, runner._DAILY_CLIENT = saved
         runner._DAILY_BARS_CACHE.clear()
+
+
+# ── 2026-10-18「开长窗」：日线原料本地优先（vipdoc 全历史）──────────────────
+
+def _mk_day_file(root: Path, market: str, code: str, bars: list[tuple[str, float, float]]) -> None:
+    """写一根 32 字节定长日线（date, high, close；与 vipdoc 同格式）。"""
+    import struct
+    d = root / "vipdoc" / market / "lday"
+    d.mkdir(parents=True, exist_ok=True)
+    pack = b"".join(struct.pack("<IIIIIfII", int(dt.replace("-", "")), int(round(c * 100)),
+                                int(round(h * 100)), int(round(c * 100)), int(round(c * 100)),
+                                0.0, 1, 0) for dt, h, c in bars)
+    (d / f"{market}{code}.day").write_bytes(pack)
+
+
+def _reset_bars_state(monkeypatch):
+    monkeypatch.setattr(runner, "_LOCAL_ROOT_CACHE", [])
+    runner._LOCAL_MISS.clear()
+    runner._DAILY_BARS_CACHE.clear()
+    monkeypatch.setattr(runner, "_BARS_SOURCE_COUNTS", {})
+
+
+def test_daily_bars_local_first_uses_vipdoc_and_skips_online(tmp_path, monkeypatch):
+    """本地有 vipdoc → 直接用本地全历史（不碰线上）：这是「开长窗」的实现方式。"""
+    _mk_day_file(tmp_path, "sh", "600825", [("2025-02-05", 9.0, 8.5), ("2026-10-16", 15.5, 15.16)])
+    _reset_bars_state(monkeypatch)
+    monkeypatch.setattr(runner, "_local_root", lambda: str(tmp_path))
+    monkeypatch.setattr(runner, "_tdx_daily_client",
+                        lambda: pytest.fail("本地命中时不得走线上回退"))
+
+    bars = runner._REAL_DAILY_BARS("600825")
+    assert [b["date"] for b in bars] == ["2025-02-05", "2026-10-16"]
+    assert bars[-1]["close"] == 15.16 and bars[-1]["high"] == 15.5
+    assert runner.bars_source_provenance()["counts"] == {"local": 1}
+    # 缓存键带来源标签，避免与线上回退窗混用
+    assert runner._DAILY_BARS_CACHE.get(("local", "600825"))
+
+
+def test_daily_bars_local_miss_falls_back_to_online(tmp_path, monkeypatch):
+    """本地无该股文件 → 线上回退（不是「该股无数据」）；已试过的 code 记入 _LOCAL_MISS。"""
+    _mk_day_file(tmp_path, "sh", "600000", [("2026-10-16", 11.0, 11.0)])
+    _reset_bars_state(monkeypatch)
+    monkeypatch.setattr(runner, "_local_root", lambda: str(tmp_path))
+    calls = []
+
+    class _Df:
+        def __len__(self):
+            return 1
+
+        def iterrows(self):
+            yield 0, {"year": 2026, "month": 10, "day": 16, "high": 12.0, "close": 12.0}
+
+    class _Client:
+        def bars(self, **kw):
+            calls.append(kw)
+            return _Df()
+
+    monkeypatch.setattr(runner, "_tdx_daily_client", lambda: _Client())
+    bars = runner._REAL_DAILY_BARS("600825")
+    assert [b["date"] for b in bars] == ["2026-10-16"]     # 线上回退供数
+    assert calls and calls[0]["offset"] == runner._bars_offset()
+    assert "600825" in runner._LOCAL_MISS
+    prov = runner.bars_source_provenance()["counts"]
+    assert prov.get(f"online:{runner._bars_offset()}") == 1
+
+
+def test_bars_offset_default_is_long_window_with_env_override(monkeypatch):
+    """长窗默认 250（覆盖回放区间；`_close_pct` 按日期取棒 → 只增证据不改已有数字）。"""
+    monkeypatch.delenv("JEV_BARS_OFFSET", raising=False)
+    assert runner._bars_offset() == 250
+    monkeypatch.setenv("JEV_BARS_OFFSET", "60")
+    assert runner._bars_offset() == 60
+    monkeypatch.setenv("JEV_BARS_OFFSET", "3")       # 下限 20
+    assert runner._bars_offset() == 20
+    monkeypatch.setenv("JEV_BARS_OFFSET", "abc")
+    assert runner._bars_offset() == 250
+
+
+def test_local_bar_file_market_prefix(tmp_path):
+    """6 位代码 → sh/sz/bj 目录（与 market_dieban_tdx 目录布局一致）；未知段/非 6 位返回 None。"""
+    root = str(tmp_path)
+    assert runner._local_bar_file(root, "600825").endswith("sh600825.day")
+    assert runner._local_bar_file(root, "300750").endswith("sz300750.day")
+    assert runner._local_bar_file(root, "002594").endswith("sz002594.day")
+    assert runner._local_bar_file(root, "920162").endswith("bj920162.day")
+    assert runner._local_bar_file(root, "12345") is None
+    assert runner._local_bar_file(root, "900001") is None     # B 股段不在册

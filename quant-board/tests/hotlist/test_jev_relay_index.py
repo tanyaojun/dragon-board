@@ -948,13 +948,36 @@ def test_anchor_gaps_derived_marks_subitem_loss(text, expected):
 
 
 def test_bars_offset_env(monkeypatch):
-    """F5：回放长窗开关（默认 60 = 生产口径不变）。"""
+    """F5/F6：回放长窗开关（2026-10-18「开长窗」后默认 250 = 线上回退窗；本地优先时本值不参与）。"""
     from backend.operations.jev_label_jiuyan import _bars_offset
     monkeypatch.delenv("JEV_BARS_OFFSET", raising=False)
-    assert _bars_offset() == 60
-    monkeypatch.setenv("JEV_BARS_OFFSET", "250")
     assert _bars_offset() == 250
-    monkeypatch.setenv("JEV_BARS_OFFSET", "abc")
+    monkeypatch.setenv("JEV_BARS_OFFSET", "60")
     assert _bars_offset() == 60
+    monkeypatch.setenv("JEV_BARS_OFFSET", "abc")
+    assert _bars_offset() == 250
     monkeypatch.setenv("JEV_BARS_OFFSET", "5")
     assert _bars_offset() == 20          # 下限保护
+
+
+def test_adj_prev_series_bounded_lookback(monkeypatch):
+    """除权日程查询有界回看（2026-10-18「开长窗」配套）：
+
+    本地全历史棒把窗口 60→400 后，`_adj_prev_series` 的「每链接日一次百度日程」外呼被放大
+    6.7×（实测单日重算卡 >18 分钟）。消费者只用近端键（`_bar_verdict` 取 `adj.get(date)`、
+    真连板回溯 ≤ 区间板数、位置/序列 ≤10 天）→ 只算最近 `_ADJ_LOOKBACK` 个链接。
+    """
+    from backend.operations import jev_label_jiuyan as J
+    seen: list[str] = []
+
+    def fake_div(date: str) -> dict:
+        seen.append(date)
+        return {"600000": (0.5, 0.0)}          # 每个链接日都有除权事件
+
+    monkeypatch.setattr(J, "_div_event_list", fake_div)
+    bars = [{"date": f"2026-{1 + (i // 28):02d}-{1 + (i % 28):02d}", "high": 10.0, "close": 10.0}
+            for i in range(200)]
+    out = J._adj_prev_series(bars[-1]["date"], "600000", bars)
+    assert len(seen) <= J._ADJ_LOOKBACK                 # 有界：不再整窗 199 次外呼
+    assert set(out) <= {b["date"] for b in bars[-J._ADJ_LOOKBACK:]}   # 只出近端键
+    assert J._ADJ_LOOKBACK == 45

@@ -27,6 +27,7 @@ from backend.operations.jev_label_jiuyan import (
     DEFAULT_DATASET_ID,
     _adj_prev_series,
     _daily_bars,
+    bars_source_provenance,
     _dispatch_jev,
     _jiuyan_board_count,
     _jiuyan_days_boards,
@@ -1153,6 +1154,9 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "narrative": narrative, "questionsRaw": QUESTIONS_RELAY,
                # 主锚缺位标记（F2）：数据质量事实，不改打分（前端徽标/README 说明消费）
                # 2026-10-18 分层：anchorGaps=整根主锚不可用（琥珀）；anchorGapsDerived=子项级缺位（灰）
+               # 日线原料溯源（2026-10-18 开长窗）：本地 vipdoc / 线上回退各供了多少只股——
+               # 数据层事实，不入 prompt；供日后核对某日叙事拿的是全历史本地棒还是回退窗
+               "barsSource": bars_source_provenance(),
                "anchorGaps": anchor_gaps(narrative),
                "anchorGapsDerived": anchor_gaps_derived(narrative),
                # answers 原样落库（P0-2/P0-3）：七题 confidence/momentum 等四题 probabilities/

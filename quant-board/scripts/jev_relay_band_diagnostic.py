@@ -42,31 +42,22 @@ ZONE_AVOID = ("回避 40-60∧温≥56", lambda o: 40 <= o["idx"] < 60
               and o.get("temp") is not None and o["temp"] >= 56)
 ZONE_RED = ("红灯 <25", lambda o: o["idx"] < 25)
 
-_BARS_LOCK = threading.Lock()
 _BARS_CACHE: dict[str, list[dict]] = {}
-_BAR_OFFSET = 150  # main() 里按最早判定日动态放大（覆盖 2026-05 起 ≈115 根，150 为冒烟下限）
 
 
 def _bars_long(code: str) -> list[dict]:
+    """全历史日线——**直接复用生产口径** `_daily_bars`（本地 vipdoc 优先 + 线上回退）。
+
+    2026-10-18：本脚本原先自带一份线上 mootdx 取数（offset 按最早判定日动态放大）——与生产
+    口径分叉（分带读数用一套棒、弹药/叙事用另一套），且线上来源不可靠（当日实测全 0 根，
+    详见预注册 §12）。改为复用生产单一事实源；除权修正仍由 `_adj_prev_series` 提供。
+    """
     cached = _BARS_CACHE.get(code)
     if cached is not None:
         return cached
-    from backend.operations.jev_label_jiuyan import _tdx_daily_client
-    bars: list[dict] = []
-    client = _tdx_daily_client()
-    if client is not None:
-        try:
-            with _BARS_LOCK:
-                df = client.bars(symbol=code, frequency=9, start=0, offset=_BAR_OFFSET)
-            if df is not None and len(df) > 0:
-                for _, r in df.iterrows():
-                    bars.append({"date": f"{int(r['year']):04d}-{int(r['month']):02d}-{int(r['day']):02d}",
-                                 "close": float(r["close"])})
-                bars.sort(key=lambda b: b["date"])
-        except Exception:
-            bars = []
-    _BARS_CACHE[code] = bars
-    return bars
+    from backend.operations.jev_label_jiuyan import _daily_bars
+    _BARS_CACHE[code] = _daily_bars(code)
+    return _BARS_CACHE[code]
 
 
 def _link_pct(code: str, d0: str, d1: str) -> float | None:
@@ -142,7 +133,6 @@ def band_of(v) -> tuple[int, int] | None:
 
 
 def main() -> None:
-    global _BAR_OFFSET
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=0, help="只取最近 N 个判定日（冒烟用，0=全窗口）")
     args = ap.parse_args()
@@ -168,10 +158,6 @@ def main() -> None:
         print("无可用判定日（fail-visible），退出")
         return
     dates = [r["tradingDate"] for r in relay]
-
-    # TDX 棒数按最早判定日动态放大（~每年 250 根 + 余量），滚动窗口不再静默丢早期样本
-    span_days = (_date.today() - _date(int(dates[0][:4]), int(dates[0][5:7]), int(dates[0][8:]))).days
-    _BAR_OFFSET = max(150, min(800, int(span_days * 0.75) + 60))
 
     # 交易日轴（快照帧）+ 次日/次次日映射
     axis = sorted({str(r["tradingDate"]) for r in db["snapshot_frames"].find(
@@ -210,7 +196,7 @@ def main() -> None:
         codes_all |= set(pool(d))
         codes_all |= set(pool(nxt.get(d)))
     print(f"判定日 {len(dates)} 个（{dates[0]}..{dates[-1]}），池内去重股票 {len(codes_all)} 只，"
-          f"逐只拉 TDX 日线（offset={_BAR_OFFSET}）…")
+          f"逐只取日线（本地 vipdoc 全历史优先 / 线上回退）…")
     for i, c in enumerate(sorted(codes_all), 1):
         _bars_long(c)
         if i % 200 == 0:

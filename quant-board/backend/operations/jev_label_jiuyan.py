@@ -876,25 +876,105 @@ _DIV_LIST_CACHE: dict[str, dict[str, tuple[float, float]]] = {}
 _DIV_FAIL_UNTIL: dict[str, float] = {}  # 失败负缓存（5 分钟退避，防重试风暴 review P1-2）
 _DIV_FAIL_TTL = 300.0
 _DAILY_CLIENT: Any = None
-_DAILY_BARS_CACHE: dict[tuple[int, str], list[dict]] = {}
+_DAILY_BARS_CACHE: dict[tuple, list[dict]] = {}
 _TDX_DOWN_UNTIL = 0.0
 _TDX_RETRY_SECONDS = 300
-_BARS_OFFSET_DEFAULT = 60
+_BARS_OFFSET_DEFAULT = 250
+
+# 2026-10-18「开长窗」落地：日线原料改**本地优先**（通达信 vipdoc 全历史）。
+# 动因（三条均为实测/已记录缺陷，非推测）：
+#   ① 线上 mootdx 取数不可靠——2026-10-18 实测 offset 60/250/400 全返回 0 根，而 v5 重放的
+#      58 天钱效数字偏偏来自线上窗 → 同一历史日的证据依赖「重放那一刻外网是否通」；
+#   ② 线上 60 根窗使早于 ~07-16 的历史日钱效/隔日溢价/连板高度全不可算（诊断文档 §7）；
+#   ③ 同一天在不同时间点/进程取到的棒不同 → 叙事不可复现（与 F6 同类的确定性缺陷）。
+# 本地 vipdoc 为定长二进制全历史，零外呼、可复现，且与 F7 全市场跌停回填同一数据源
+# （单一事实源 §1.2.1）；线上保留为**回退**（本机无通达信目录/目录内无该股文件）。
+_LOCAL_TAKE = 400             # 与 market_dieban_tdx.DEFAULT_TAKE 同口径（≈1.6 年，覆盖回放区间）
+_LOCAL_ROOT_CACHE: list[Any] = []   # 进程内惰性解析的通达信目录
+_LOCAL_MISS: set[str] = set()       # 本地无文件/不可用的 code（进程内，免反复 stat）
+_BARS_SOURCE_COUNTS: dict[str, int] = {}   # 溯源：本进程各来源实际供数次数
+_LOCAL_MARKETS = (("60", "sh"), ("68", "sh"), ("00", "sz"), ("30", "sz"),
+                  ("43", "bj"), ("83", "bj"), ("87", "bj"), ("92", "bj"))
 
 
 def _bars_offset() -> int:
-    """日线棒根数（默认 60 = 生产口径不变）。
+    """线上回退日线棒根数（默认 250）。
 
-    2026-10-17 IE 修复 F5：`JEV_BARS_OFFSET` 允许回放取长窗（如 250）——「取现在往前 60 根」
-    使早于窗起的历史日 TDX 指标（断板亏钱/隔日溢价/连板高度）全不可算（诊断文档 §7）。
-    **仅回放再用**：生产当日数据必在 60 根内，长窗只增开销，故默认 60 不启用；
-    早期历史日的长窗重放属另立裁决（会改早期断板口径与毒带读数）。
+    2026-10-17 IE 修复 F5 引入 `JEV_BARS_OFFSET`；2026-10-18「开长窗」把默认 60→250：
+    60 根使早于窗起的历史日 TDX 指标（断板亏钱/隔日溢价/连板高度）全不可算（诊断 §7），
+    而 `_close_pct` 按**日期取棒**（`bars[date]`）→ 加长只增证据、不改已有数字（单调安全）。
+    **本地优先生效时本值不参与**（本地全历史）；本值只决定无本地通达信时的回退窗。
     """
     raw = os.environ.get("JEV_BARS_OFFSET")
     try:
         return max(20, int(raw)) if raw else _BARS_OFFSET_DEFAULT
     except (TypeError, ValueError):
         return _BARS_OFFSET_DEFAULT
+
+
+def _local_root() -> str | None:
+    """本机通达信目录（末棒最新者；进程内缓存）；无 → None（走线上回退）。"""
+    if not _LOCAL_ROOT_CACHE:
+        root: str | None = None
+        try:
+            from backend.operations.market_dieban_tdx import resolve_root
+            root = resolve_root()[0]
+        except Exception:
+            root = None
+        _LOCAL_ROOT_CACHE.append(root)
+    return _LOCAL_ROOT_CACHE[0]
+
+
+def _local_bar_file(root: str, code: str) -> str | None:
+    """6 位 A 股代码 → 本地 `.day` 路径（市场段判法同 `market_dieban_tdx._A_SHARE`）。"""
+    digits = "".join(ch for ch in str(code) if ch.isdigit())[-6:]
+    if len(digits) != 6:
+        return None
+    for prefix, market in _LOCAL_MARKETS:
+        if digits.startswith(prefix):
+            return os.path.join(root, "vipdoc", market, "lday", f"{market}{digits}.day")
+    return None
+
+
+def _local_daily_bars(code: str) -> list[dict] | None:
+    """本地 vipdoc 日线（升序，尾 `_LOCAL_TAKE` 根）。
+
+    返回 None = 本地不可用（无目录/无该股文件/空文件）→ 调用方走线上回退（不缓存 None）。
+    语义与 F7 覆盖闸一致：本地缺该股文件只意味着「来源退回线上」，不是「该股无数据」。
+    """
+    root = _local_root()
+    if not root:
+        return None
+    path = _local_bar_file(root, code)
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        from backend.operations.market_dieban_tdx import _iso, read_lday
+        recs = read_lday(path, take=_LOCAL_TAKE)
+        if not recs:
+            return None
+        bars = [{"date": _iso(r[0]), "high": r[2] / 100.0, "close": r[4] / 100.0,
+                 "vol": float(r[6])} for r in recs]
+    except Exception:
+        return None
+    bars.sort(key=lambda b: b["date"])
+    return bars or None
+
+
+def bars_source_provenance() -> dict[str, Any]:
+    """本进程日线原料溯源（落 relay 文档 `barsSource`，不入 prompt）：哪个来源供了多少只股
+    + 本地目录/末棒/回退窗——供日后核对某日叙事是否拿的是全历史本地棒（fail-visible 溯源）。
+    """
+    root = _local_root()
+    last = None
+    if root:
+        try:
+            from backend.operations.market_dieban_tdx import last_bar_date
+            last = last_bar_date(root)
+        except Exception:
+            last = None
+    return {"counts": dict(_BARS_SOURCE_COUNTS), "localRoot": root, "localLastBar": last,
+            "onlineFallbackOffset": _bars_offset(), "localTake": _LOCAL_TAKE}
 
 
 def _tdx_hosts_path() -> Path:
@@ -938,16 +1018,29 @@ def _tdx_daily_client():
 
 
 def _daily_bars(code: str) -> list[dict]:
-    """日线棒升序（date/high/close/vol），取最近 60 根覆盖 20 日窗口；失败返回 []（调用方 fail-visible）。
+    """日线棒升序（date/high/close/vol）——**本地 vipdoc 优先，线上 mootdx 回退**（2026-10-18）。
 
     瞬时失败**不落空缓存**：一次客户端抖动若把 [] 缓存住，而 `_DAILY_CLIENT` 已缓存使
     `_TDX_DOWN_UNTIL` 负缓存不会介入，整轮回溯就永久降级成池口径、进程内再无恢复路径
     （2026-10-16 code review 实测）。合法空（新上市/当日无棒）仍缓存，避免逐股重取。
 
-    2026-10-17：根数改由 `_bars_offset()`（`JEV_BARS_OFFSET`，默认 60）——缓存键含 offset。
+    2026-10-17：根数改由 `_bars_offset()`（`JEV_BARS_OFFSET`），缓存键含来源。
+    2026-10-18 本地优先：缓存键 `("local", code)` / `("online:<offset>", code)`；本地不可用记入
+    `_LOCAL_MISS`（免反复 stat，不落空棒），线上成功（含合法空）才落缓存。
     """
+    if code not in _LOCAL_MISS:
+        cached_local = _DAILY_BARS_CACHE.get(("local", code))
+        if cached_local is not None:
+            return cached_local
+        local = _local_daily_bars(code)
+        if local:
+            _DAILY_BARS_CACHE[("local", code)] = local
+            _BARS_SOURCE_COUNTS["local"] = _BARS_SOURCE_COUNTS.get("local", 0) + 1
+            return local
+        _LOCAL_MISS.add(code)   # 不铸造「空棒」：只是本地无此股文件，证据需求交线上回退
     offset = _bars_offset()
-    cached = _DAILY_BARS_CACHE.get((offset, code))
+    key = (f"online:{offset}", code)
+    cached = _DAILY_BARS_CACHE.get(key)
     if cached is not None:
         return cached
     bars: list[dict] = []
@@ -964,9 +1057,11 @@ def _daily_bars(code: str) -> list[dict]:
                         "vol": float(r.get("vol") or 0),
                     })
                 bars.sort(key=lambda b: b["date"])
+                _BARS_SOURCE_COUNTS[f"online:{offset}"] = \
+                    _BARS_SOURCE_COUNTS.get(f"online:{offset}", 0) + 1
         except Exception:
             return []   # 不缓存：下次调用重试，不把一次抖动变成整轮回调
-    _DAILY_BARS_CACHE[(offset, code)] = bars
+    _DAILY_BARS_CACHE[key] = bars
     return bars
 
 
@@ -1026,15 +1121,26 @@ def _div_event_list(date: str) -> dict[str, tuple[float, float]]:
     return out
 
 
+_ADJ_LOOKBACK = 45   # 除权参考价只算最近 N 个链接日
+
+
 def _adj_prev_series(date: str, code: str, bars: list[dict]) -> dict[str, float]:
     """窗口内逐链接的除权参考价 {链接日 t: 交易所参考价}——仅 t 为该股除权日才有键（P1-1）。
 
     参考价 = round((原始前收 − 每股分红) / (1 + 每股送转), 2)（交易所除权除息公式）。
+
+    2026-10-18（「开长窗」配套）：只算最近 `_ADJ_LOOKBACK` 个链接。本函数为**每个链接日**
+    查一次百度除权日程（akshare 无批量口），而本地全历史棒把窗口从 60 → 400 根，外呼被放大
+    6.7×（实测单日重算卡在日程拉取 >18 分钟）。消费方只用近端键——`_bar_verdict` 取
+    `adj.get(date)`（末链接）、`jiuyan_consecutive_streaks` 回溯链路 ≤ 区间板数（实测 ≤12），
+    `position/sequence_line_from_bars` ≤10 天——45 有 3.75× 余量。再远的链接回退原口径
+    （与旧 60 根窗时代一致：窗口外的链接本来也没有除权修正）。
     """
     window = [b for b in bars if b["date"] <= date]
     out: dict[str, float] = {}
     band = limit_ratio(code) + 0.05
-    for i in range(1, len(window)):
+    start = max(1, len(window) - _ADJ_LOOKBACK)
+    for i in range(start, len(window)):
         ev = _div_event_list(window[i]["date"]).get(code)
         prev_close = window[i - 1]["close"]
         cur_close = window[i].get("close")

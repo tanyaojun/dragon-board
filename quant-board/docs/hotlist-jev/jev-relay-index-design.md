@@ -495,6 +495,10 @@ TDX 60 棒窗口，需先给 `_daily_bars` 加按叙事日取数（或显式标�
     **v5 全量重放已执行**（2026-10-18）：108/108 ok、661K tokens/$0.066、22.5 分钟；
     IE 相位 14→8 / 边际 8→3 / 梯队 3→0 / 钱效 42→50（预声明的伪精度拦下）；
     `anchorGaps`（主锚，3 天，琥珀）与 `anchorGapsDerived`（子项，67 天，详情行）分层。
+12. **开长窗（2026-10-18）**：`_daily_bars` 改本地 vipdoc 全历史优先（线上回退窗 60→250），
+    除权日程查询有界回看 45 链接，新增 `barsSource` 溯源字段；零调用 diff 103/108 天变化、
+    回归 0 处；重放 103 天（637K tokens）后钱效 IE 50→1、`样本不足/TDX 日线缺失` 残留 0；
+    分带复算见 `jev-relay-band-toxic-diagnostic.md` §9。
 11. **F7 跌停口径：全市场家族 + 本地日线重算**（2026-10-17）。参考集合
     `market_daily_limit_down` 每行带 `source`，`market_dieban_pool.FULL_MARKET_SOURCES`
     = 东财池 / 行情快照 / **本地日线重算**（`tdx_local_bars`，离线，`market_dieban_tdx.py`
