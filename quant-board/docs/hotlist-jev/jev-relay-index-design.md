@@ -492,6 +492,9 @@ TDX 60 棒窗口，需先给 `_daily_bars` 加按叙事日取数（或显式标�
     （`JEV_BARS_OFFSET`，默认 60 不启用）· F6 叙事可复现性修复（`max(set(...), key=count)`
     在计数并列时受 `PYTHONHASHSEED` 影响而跨进程漂移）· **F7 全市场跌停口径回填**（见下）。
     全库 108 天零调用 diff：全部变化 100 天（修复类 93）。
+    **v5 全量重放已执行**（2026-10-18）：108/108 ok、661K tokens/$0.066、22.5 分钟；
+    IE 相位 14→8 / 边际 8→3 / 梯队 3→0 / 钱效 42→50（预声明的伪精度拦下）；
+    `anchorGaps`（主锚，3 天，琥珀）与 `anchorGapsDerived`（子项，67 天，详情行）分层。
 11. **F7 跌停口径：全市场家族 + 本地日线重算**（2026-10-17）。参考集合
     `market_daily_limit_down` 每行带 `source`，`market_dieban_pool.FULL_MARKET_SOURCES`
     = 东财池 / 行情快照 / **本地日线重算**（`tdx_local_bars`，离线，`market_dieban_tdx.py`

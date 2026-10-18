@@ -119,28 +119,59 @@ def _median(vals: list[float]) -> float | None:
     return round((s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2), 2)
 
 
-_ANCHOR_GAP_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("炸板面", ("今日炸板面：不可算",)),
-    ("炸板面个股级", ("个股级子项不可算", "反复开板/昨日池股炸板/炸板股收盘涨幅 不可算")),
-    ("炸板面对比", ("较昨日：不可算",)),
-    ("韭研池", ("韭研 final 缺失",)),
-    ("梯队", ("梯队结构量化：梯队数据缺失",)),
-    ("断板钱效", ("TDX 日线缺失", "样本不足（TDX 覆盖")),
-    ("盘面事实", ("盘面指标缺失",)),
+# 标记表：(名字, 行首作用域 | None, 针字符串表)。带行首作用域时可区分同字符串的两种语义——
+# 如「韭研 final 缺失」在「题材梯队表：」（整表缺 → 主锚）与「三日晋级链：」（链上某日缺
+# → 子项）下含义不同（2026-10-18 实测：首两日被误标为主锚缺位）。
+# 主锚缺位（**整根锚不可用**：对应判据当日无原料）→ 定量：锚缺位×N（琥珀）
+_MARKER = tuple[str, str | None, tuple[str, ...]]
+_PRIMARY_ANCHOR_GAPS: tuple[_MARKER, ...] = (
+    ("盘面事实", "盘面事实", ("盘面指标缺失",)),
+    ("炸板面", "今日炸板面", ("今日炸板面：不可算",)),
+    ("梯队", "梯队结构量化", ("梯队数据缺失",)),
+    ("题材梯队表", "题材梯队表", ("韭研 final 缺失",)),
+)
+# 子项缺位（**主锚在、其子统计/对比/样本不可算**）→ 定量：子项缺×N（灰）
+# 2026-10-18 分层动因（用户报「全部显示锚缺位」）：旧单列把派生项与主锚混在一起，
+# 108 天里 67 天非空、其中 45 天只命中「断板钱效」（早期 TDX 60 棒窗够不到钱效样本）——
+# 主锚其实齐备，徽标却漫天飞，例外标记退化成背景噪声。
+_DERIVED_ANCHOR_GAPS: tuple[_MARKER, ...] = (
+    ("炸板面个股级", "今日炸板面", ("个股级子项不可算", "反复开板/昨日池股炸板/炸板股收盘涨幅 不可算")),
+    ("炸板面对比", "今日炸板面", ("较昨日：不可算",)),
+    ("断板钱效", None, ("TDX 日线缺失", "样本不足（TDX 覆盖")),
+    ("晋级链前池", "三日晋级链", ("韭研 final 缺失",)),
 )
 
 
-def anchor_gaps(narrative: str) -> list[str]:
-    """叙事中「主锚缺位」标记（F2，2026-10-17 预注册 §2.4）：纯函数，**不改打分**。
+def _scan_markers(narrative: str, markers: tuple[_MARKER, ...]) -> list[str]:
+    """按标记表扫叙事→命中名列表（纯函数）；带行首作用域时只在该前缀行内匹配。"""
+    lines = narrative.splitlines()
+    found: list[str] = []
+    for name, scope, needles in markers:
+        for line in lines:
+            if scope and not line.startswith(scope):
+                continue
+            if any(needle in line for needle in needles):
+                found.append(name)
+                break
+    return found
 
-    落库为 relay 文档 `anchorGaps` 字段，供前端显式呈现「本日哪根主锚缺位」——
+
+def anchor_gaps(narrative: str) -> list[str]:
+    """叙事中「**主锚**缺位」标记（F2，2026-10-17 预注册 §2.4）：纯函数，**不改打分**。
+
+    落库为 relay 文档 `anchorGaps` 字段，供前端琥珀徽标呈现「本日哪根主锚整根不可用」——
     避免把 IE 读成模型能力问题（诊断文档四批 IE 全在原料/读口径层，非模型/判据）。
+    子统计级缺位另走 `anchor_gaps_derived`（不占主锚徽标，防例外标记退化成噪声）。
     """
-    gaps: list[str] = []
-    for name, markers in _ANCHOR_GAP_MARKERS:
-        if any(m in narrative for m in markers):
-            gaps.append(name)
-    return gaps
+    return _scan_markers(narrative, _PRIMARY_ANCHOR_GAPS)
+
+
+def anchor_gaps_derived(narrative: str) -> list[str]:
+    """叙事中「子项缺位」标记（主锚在，但子统计/对比/样本不可算）：纯函数，不改打分。
+
+    落库为 `anchorGapsDerived`，供前端灰色徽标（区分于主锚缺位的琥珀）与细节展示。
+    """
+    return _scan_markers(narrative, _DERIVED_ANCHOR_GAPS)
 
 
 # 断板/溢价 TDX 统计的最小样本门槛（2026-10-17 IE 修复 F4，预注册 §2.3）。
@@ -1121,7 +1152,9 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "questionSetVersion": QUESTION_SET_VERSION_RELAY,
                "narrative": narrative, "questionsRaw": QUESTIONS_RELAY,
                # 主锚缺位标记（F2）：数据质量事实，不改打分（前端徽标/README 说明消费）
+               # 2026-10-18 分层：anchorGaps=整根主锚不可用（琥珀）；anchorGapsDerived=子项级缺位（灰）
                "anchorGaps": anchor_gaps(narrative),
+               "anchorGapsDerived": anchor_gaps_derived(narrative),
                # answers 原样落库（P0-2/P0-3）：七题 confidence/momentum 等四题 probabilities/
                # 两个 score 题直方图此前未落库，自此保全（历史文档不可回补）
                "answers": parsed.get("answers"),

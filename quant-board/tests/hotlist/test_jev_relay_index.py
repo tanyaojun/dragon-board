@@ -15,6 +15,7 @@ from backend.operations.jev_relay_index import (
     _pool_of,
     _tdx_sample_ok,
     anchor_gaps,
+    anchor_gaps_derived,
     high_position_trajectory_lines,
     ladder_structure_line,
     relay_flow_line,
@@ -502,6 +503,7 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     # F2：主锚缺位标记随叙事落库（前端徽标读口；v5 起）
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
+    assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
     assert doc["questionSetVersion"] == "v5"
     # 幂等：status=ok 已存在 → 跳过
     col.rows.append(doc)
@@ -917,16 +919,32 @@ def test_relay_flow_drops_pseudo_precision_median(monkeypatch):
     ("", []),
     ("今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）", ["炸板面"]),
     ("今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）：炸板 17 家；较昨日：不可算（无昨日交易日）",
+     []),                                  # 家数级降级：主锚在（家数可算）→ 不进主锚清单
+    ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", []),
+    ("梯队结构量化：梯队数据缺失（fail-visible）", ["梯队"]),
+    ("题材梯队表：韭研 final 缺失（fail-visible）", ["题材梯队表"]),
+    ("2026-05-06 交易日\n题材梯队表（top5）：· 板块A：龙一 X｜昨日 1 只", []),
+    ("盘面事实：2026-07-06 盘面指标缺失（fail-visible）", ["盘面事实"]),
+])
+def test_anchor_gaps_marks_only_whole_anchor_loss(text, expected):
+    """F2 主锚层（2026-10-18 分层）：只标「整根锚不可用」，派生项一律不入主锚清单。"""
+    assert anchor_gaps(text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("", []),
+    ("今日炸板面：不可算（THS 炸板池缺失/降级，fail-visible）", []),      # 整段缺 → 归主锚
+    ("今日炸板面（家数口径·旧采集 schema：仅家数可算，个股级子项不可算）：炸板 17 家；较昨日：不可算（无昨日交易日）",
      ["炸板面个股级", "炸板面对比"]),
     ("断板 66 只：样本不足（TDX 覆盖 1/66，门槛 ≥5 只且 ≥20%），不可作钱效依据", ["断板钱效"]),
     ("断板 24 只：今日表现不可算（TDX 日线缺失）", ["断板钱效"]),
-    ("梯队结构量化：梯队数据缺失（fail-visible）", ["梯队"]),
-    ("三日晋级链：2026-04-29/2026-04-30 韭研 final 缺失（fail-visible）", ["韭研池"]),
-    ("盘面事实：2026-07-06 盘面指标缺失（fail-visible）", ["盘面事实"]),
+    ("三日晋级链：2026-04-29/2026-04-30 韭研 final 缺失（fail-visible）", ["晋级链前池"]),
+    ("题材梯队表：韭研 final 缺失（fail-visible）", []),      # 整表缺 → 主锚，不在子项
+    ("盘面事实：2026-07-06 盘面指标缺失（fail-visible）", []),
 ])
-def test_anchor_gaps_markers(text, expected):
-    """F2：主锚缺位标记为纯函数扫描，不改打分；供落库 + 前端徽标。"""
-    assert anchor_gaps(text) == expected
+def test_anchor_gaps_derived_marks_subitem_loss(text, expected):
+    """F2 子项层：主锚在、子统计/对比/样本不可算 → 灰徽标（不占主锚位）。"""
+    assert anchor_gaps_derived(text) == expected
 
 
 def test_bars_offset_env(monkeypatch):
