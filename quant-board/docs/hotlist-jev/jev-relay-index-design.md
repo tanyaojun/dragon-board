@@ -505,6 +505,10 @@ TDX 60 棒窗口，需先给 `_daily_bars` 加按叙事日取数（或显式标�
     新增只读离线产物读口 `GET /api/hotlist-jev/relay-band`（不加工不重算，缺失 fail-visible）；
     判定明细增「分区」列 + KPI 增「分区定位」卡（分区徽标单实现 `zoneOf()`）。
     详见 `jev-relay-band-toxic-diagnostic.md` §5.1。
+14. **CF 范式页面重构（2026-10-18，用户要求参照 Cloudflare Dashboard）**：外壳改为
+    左侧栏（分组导航 + 快速搜索 + 底部口径状态）+ 顶栏（面包屑 + 日期 / 数据源 / 刷新）+
+    对象内 tab 行 + 页面标题块 + KPI 指标条；连板指数 6 卡拆 5 子视图（每页 ≤2 卡）。
+    纯前端（单文件 relay_page/index.html），既有 element id 与渲染契约不变。
 11. **F7 跌停口径：全市场家族 + 本地日线重算**（2026-10-17）。参考集合
     `market_daily_limit_down` 每行带 `source`，`market_dieban_pool.FULL_MARKET_SOURCES`
     = 东财池 / 行情快照 / **本地日线重算**（`tdx_local_bars`，离线，`market_dieban_tdx.py`

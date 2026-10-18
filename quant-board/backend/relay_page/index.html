@@ -29,9 +29,6 @@
   button:hover{border-color:var(--blue);color:var(--blue)}
   button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
   button.primary:hover{background:#1d4ed8;color:#fff}
-  nav{display:flex;gap:4px;background:#fff;border-bottom:1px solid var(--border);padding:0 28px}
-  nav .tab{padding:12px 20px;font-size:14px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
-  nav .tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
   main{padding:20px 28px;max-width:1560px;margin:0 auto}
   .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 18px}
   .card h3{font-size:14px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
@@ -170,27 +167,107 @@
   .prov{font-size:11px;color:var(--muted2);line-height:1.7}
   .prov code{background:#f1f5f9;border-radius:4px;padding:0 4px}
   .warn{background:var(--amber-bg);color:var(--amber);border:1px solid #fde68a;border-radius:8px;padding:6px 10px;font-size:12px}
+  /* ══════════ Cloudflare Dashboard 范式外壳（2026-10-18 重构） ══════════ */
+  :root{ --cf-blue:#0051c3; --sb-bg:#fafafa; --sb-w:238px; --top-h:53px; }
+  .app{display:flex;min-height:100vh;align-items:flex-start}
+  .app.collapsed .sidebar{display:none}
+  .sidebar{width:var(--sb-w);flex:none;background:var(--sb-bg);border-right:1px solid var(--border);
+           position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column}
+  .sb-brand{display:flex;gap:10px;align-items:center;padding:14px 14px 10px}
+  .sb-logo{width:30px;height:30px;border-radius:7px;background:#fff;border:1px solid var(--border);
+           display:flex;align-items:center;justify-content:center;font-size:15px;flex:none}
+  .sb-title{font-size:13px;font-weight:700;line-height:1.25}
+  .sb-sub{font-size:11px;color:var(--muted2);line-height:1.35}
+  .sb-search{margin:2px 10px 10px;display:flex;align-items:center;gap:6px;background:#fff;
+             border:1px solid var(--border);border-radius:7px;padding:5px 8px}
+  .sb-search span{font-size:11px;color:var(--muted2)}
+  .sb-search input{border:0;outline:none;font:inherit;font-size:12px;flex:1;min-width:0;background:transparent}
+  .sb-search kbd{font-size:10px;color:var(--muted2);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+  .sb-nav{display:block;background:transparent;border:0;padding:0 8px 12px;flex:1}
+  .sb-group{font-size:11px;color:var(--muted2);padding:12px 8px 4px;letter-spacing:.02em}
+  .sb-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:7px;font-size:13px;
+           color:#334155;cursor:pointer;line-height:1.35}
+  .sb-item:hover{background:#f1f5f9;color:var(--text)}
+  .sb-item.on{background:#e8eaed;color:var(--text);font-weight:600}
+  .sb-item .ic{width:16px;text-align:center;flex:none;font-size:12px}
+  .sb-item.sub{padding-left:22px}
+  .sb-foot{margin-top:auto;padding:10px 14px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted2)}
+  .sb-kv{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+  .sb-kv b{color:var(--muted);font-weight:600}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .topbar{display:flex;align-items:center;position:sticky;top:0;z-index:30;background:#fff;border-bottom:1px solid var(--border);
+          padding:9px 22px;display:flex;align-items:center;gap:10px;min-height:var(--top-h)}
+  .crumb{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+  .crumb b{color:var(--text);font-weight:600}
+  .crumb .sep{color:var(--muted2)}
+  .icon-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;
+            border:1px solid var(--border2);border-radius:7px;background:#fff;color:var(--muted);cursor:pointer}
+  .icon-btn:hover{border-color:var(--cf-blue);color:var(--cf-blue)}
+  .tabbar{position:sticky;top:var(--top-h);z-index:29;background:#fff;border-bottom:1px solid var(--border);
+          padding:0 22px;display:flex;align-items:center;gap:2px;min-height:44px;flex-wrap:wrap}
+  .tabbar:empty{display:none}
+  .tabbar .tab{padding:7px 12px;margin:6px 0;font-size:13px;color:var(--muted);border-radius:7px;cursor:pointer;white-space:nowrap}
+  .tabbar .tab:hover{background:#f8fafc;color:var(--text)}
+  .tabbar .tab.on{background:#f1f5f9;color:var(--text);font-weight:600}
+  .tabbar .right{margin-left:auto;display:flex;align-items:center;gap:8px;padding:6px 0}
+  .tabchip{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;
+           padding:3px 9px;background:#fff;white-space:nowrap}
+  main.content{flex:1;padding:20px 22px 44px;max-width:1560px;width:100%;margin:0 auto}
+  .page-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:14px}
+  .page-head h2{font-size:20px;font-weight:700;line-height:1.3}
+  .page-head p{font-size:12.5px;color:var(--muted);margin-top:5px;max-width:1100px;line-height:1.6}
+  .page-head .act{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+  .ph-line{height:1px;background:var(--border);margin:0 0 16px}
+  /* KPI 条（CF Analytics 指标条：单边框容器 + 竖分隔） */
+  .kpi-strip{display:flex;flex-wrap:wrap;border:1px solid var(--border);border-radius:8px;background:#fff;overflow:hidden}
+  .kpi-strip>.kpi{flex:1 1 0;min-width:118px;border:0;border-right:1px solid var(--border);border-radius:0;padding:11px 14px}
+  .kpi-strip>.kpi:last-child{border-right:0}
+  .kpi-strip>.kpi-note{flex:1 1 100%;border-radius:0;border:0;border-bottom:1px solid var(--border)}
+  .banner{display:flex;gap:9px;align-items:flex-start;background:#eff6ff;border:1px solid #dbeafe;
+          color:#1e40af;border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:1.55;margin-bottom:14px}
+  .banner.amber{background:var(--amber-bg);border-color:#fde68a;color:var(--amber)}
+  .banner .x{margin-left:auto;border:0;background:none;color:currentColor;cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+  .cmdbox{display:flex;gap:8px;align-items:center;background:#0f172a;color:#e2e8f0;border-radius:8px;
+          padding:9px 12px;font:12px/1.5 ui-monospace,Consolas,monospace;overflow:auto;white-space:pre}
+  .cmdbox button{background:#1e293b;border-color:#334155;color:#e2e8f0;padding:3px 9px;font-size:11px}
+  .cmdbox button:hover{border-color:#60a5fa;color:#93c5fd}
+  .rv{display:none}
+  .rv.on{display:block}
 </style>
 </head>
 <body>
-<header>
-  <div><h1>🧭 JEV 叙事工作台</h1><div class="sub">连板情绪指数 · 热榜叙事 · 涨停复盘 —— 数据实时透传 :8000</div></div>
-  <div class="spacer"></div>
-  <input type="date" id="date">
-  <span class="pill" id="srcPill"><span class="dot"></span>数据源 :8000</span>
-  <span class="pill" id="refreshPill"><span class="dot"></span><span id="refreshAt">未刷新</span></span>
-  <button onclick="loadAll()">刷新</button>
-  <button class="primary" onclick="loadAll()">实时</button>
-</header>
-<nav>
-  <div class="tab active" data-tab="overview">📊 总览</div>
-  <div class="tab" data-tab="quotes">📈 热榜行情</div>
-  <div class="tab" data-tab="relay">🧮 连板指数</div>
-  <div class="tab" data-tab="labels">🏷️ 涨停复盘</div>
-</nav>
-<main>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-brand">
+      <div class="sb-logo">🧭</div>
+      <div><div class="sb-title">JEV 叙事工作台</div><div class="sb-sub">连板情绪指数 · 热榜叙事 · 涨停复盘</div></div>
+    </div>
+    <div class="sb-search"><span>🔍</span><input id="sbSearch" placeholder="快速搜索…" oninput="sbFilter(this.value)"><kbd>Ctrl K</kbd></div>
+    <nav class="sb-nav" id="sbNav"></nav>
+    <div class="sb-foot" id="sbFoot">
+      <div class="sb-kv"><span>判定口径</span><b id="sbVer">--</b></div>
+      <div class="sb-kv"><span>诊断窗口</span><b id="sbWin">--</b></div>
+      <div class="sb-kv"><span>分带表</span><b id="sbBand">--</b></div>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="sbToggle" onclick="toggleSidebar()" title="收起 / 展开侧栏（⌘/Ctrl+B）">▤</button>
+      <div class="crumb" id="crumb"></div>
+      <div class="spacer"></div>
+      <input type="date" id="date">
+      <span class="pill" id="srcPill"><span class="dot"></span>数据源 :8000</span>
+      <span class="pill" id="refreshPill"><span class="dot"></span><span id="refreshAt">未刷新</span></span>
+      <button onclick="loadAll()">刷新</button>
+      <button class="primary" onclick="loadAll()">实时</button>
+    </header>
+    <div class="tabbar" id="tabbar"></div>
+    <main class="content" id="content">
   <section id="tab-overview">
-    <div class="kpi-row" id="kpiRow"></div>
+    <div class="page-head"><div><h2>总览</h2>
+      <p>当日逐槽日内演化 · EOD 日级窗口 · 近 15 日连板指数与热度温度。数据实时透传 :8000，缺数与降级原因始终显式标注。</p></div></div>
+    <div class="ph-line"></div>
+    <div class="kpi-strip" id="kpiRow"></div>
     <div class="grid g3" style="margin-top:14px">
       <div class="card"><h3>📈 当日逐槽 · 日内演化 <span class="hint" id="slotHint"></span></h3>
         <table id="slotTable"></table></div>
@@ -205,82 +282,129 @@
   </section>
 
   <section id="tab-quotes" style="display:none">
+    <div class="page-head"><div><h2>热榜行情</h2>
+      <p>八平台热榜个股的投票 / 生命周期 / 共振 / 趋势 / 热度 / 量价五维判读，按帧回看与筛选。</p></div></div>
+    <div class="ph-line"></div>
     <div class="card">
       <h3>热榜行情 <span class="hint" id="quotesHint"></span></h3>
       <div class="lf-bar" style="margin-bottom:8px">帧选择：<select id="quoteSlotSel" onchange="qSlotChange(this.value)"><option value="">加载中…</option></select><span id="quoteSlotHint" style="color:var(--muted2);margin-left:8px"></span></div>
-      <div class="kpi-row" id="quotesKpi" style="grid-template-columns:repeat(6,1fr);margin-bottom:12px"></div>
+      <div class="kpi-strip" id="quotesKpi" style="margin-bottom:12px"></div>
       <div class="lf-bar" id="quotesFilterBar"></div>
       <table id="quotesTable"></table>
     </div>
   </section>
 
   <section id="tab-relay" style="display:none">
-    <div class="kpi-row" id="relayKpi" style="grid-template-columns:repeat(8,1fr)"></div>
+    <div class="kpi-strip" id="relayKpi"></div>
 
-    <div class="card" style="margin-top:14px">
-      <h3>🎯 相位分线 · 指数分区 <span class="hint" id="phaseChartHint"></span></h3>
+    <!-- ① 相位分线 · 指数分区 -->
+    <div class="rv on" id="rv-phase">
+      <div class="page-head" style="margin-top:18px"><div>
+        <h2>相位分线 · 指数分区</h2>
+        <p>连板情绪指数按日分区（冰点 &lt;25 / 40-60 观察带 / 绿灯 ≥60），叠加 EOD 温度线与两条日级条带（相位分段、钱效档位）；
+           标记 ▲ 毒带观察（40-60 且温度≥56）、○红 冰点、○绿 绿灯。<b>分区是门卫不是号手——观察线索非交易规则。</b></p></div>
+        <div class="act"><span class="tabchip" id="phaseChartHint"></span></div></div>
+      <div class="ph-line"></div>
       <div class="lf-bar" id="chartScopeBar"></div>
-      <div id="relayChart2"></div>
-      <div class="legend" id="phaseChartLegend" style="margin-top:10px;flex-wrap:wrap;gap:8px 18px">
-        <span><i style="background:#f0fdf4;border:1px solid #dcfce7"></i>绿灯 ≥60（放行区）</span>
-        <span><i style="background:#fffbeb;border:1px solid #fde68a"></i>40-60 观察带（▲ 毒带观察 = ∧温度≥56 · 退潮期）</span>
-        <span><i style="background:#fef2f2;border:1px solid #fee2e2"></i>冰点 &lt;25（○红）</span>
-        <span><i style="background:#1d4ed8;height:3px"></i>连板指数</span>
-        <span><i style="background:#f59e0b;height:3px"></i>EOD 温度分</span>
-        <span>圆点色 = 当日相位</span>
-        <span>下方两条带 = 相位分段 / 钱效档位</span>
+      <div class="card" style="padding:14px 16px 10px">
+        <div id="relayChart2"></div>
+        <div class="legend" id="phaseChartLegend" style="margin-top:10px;flex-wrap:wrap;gap:8px 18px">
+          <span><i style="background:#f0fdf4;border:1px solid #dcfce7"></i>绿灯 ≥60（放行区）</span>
+          <span><i style="background:#fffbeb;border:1px solid #fde68a"></i>40-60 观察带（▲ 毒带观察 = ∧温度≥56 · 退潮期）</span>
+          <span><i style="background:#fef2f2;border:1px solid #fee2e2"></i>冰点 &lt;25（○红）</span>
+          <span><i style="background:#1d4ed8;height:3px"></i>连板指数</span>
+          <span><i style="background:#f59e0b;height:3px"></i>EOD 温度分</span>
+          <span>圆点色 = 当日相位</span>
+          <span>下方两条带 = 相位分段 / 钱效档位</span>
+        </div>
       </div>
-    </div>
-
-    <div class="grid g2" style="margin-top:14px">
-      <div class="card">
-        <h3>🧩 相位分段 <span class="hint" id="phaseSegHint"></span></h3>
+      <div class="card" style="margin-top:14px">
+        <h3>🧩 相位分段与统计 <span class="hint" id="phaseSegHint"></span></h3>
         <div class="seg-list" id="phaseSegs"></div>
         <div id="phaseStats" style="margin-top:14px"></div>
       </div>
+    </div>
+
+    <!-- ② 钱效分带 -->
+    <div class="rv" id="rv-money">
+      <div class="page-head" style="margin-top:18px"><div>
+        <h2>钱效分带</h2>
+        <p>当日接力赚钱效应档位（赚钱 / 中性 / 亏钱 / 证据不足）→ 次日指数变化与 D→次日实测接力结果；
+           左侧为客户端统计（只计有次日数据的判定日），右侧为离线诊断权威读数（晋级率 / 溢价A / 溢价B / 大面占比）。</p></div>
+        <div class="act"><span class="tabchip" id="moneyHint"></span></div></div>
+      <div class="ph-line"></div>
       <div class="card">
+        <div id="moneyRibbon"></div>
+        <div class="grid g2" style="margin-top:14px">
+          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">档位统计（当日档位 → 次日指数变化 · 含可实测日）</div><div id="moneyStats"></div></div>
+          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">分档实测（离线诊断 · D 日档位 → 次日接力结果）</div><div id="moneyDiag"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ③ 毒带观察（退潮期）· 冰点 · 绿灯 -->
+    <div class="rv" id="rv-toxic">
+      <div class="page-head" style="margin-top:18px"><div>
+        <h2>40-60 毒带（退潮期）· 冰点 · 绿灯</h2>
+        <p>分区命中清单：逐日列出指数 / 温度 / 相位 / 钱效 / 分区徽标与<b>次日实测结果</b>（指数Δ / 溢价A / 大面% / 晋级率 / 覆盖）。
+           注意 40-60 带整体为 +0.6%（<b>不是亏损带</b>），负号只出现在「∧温度≥56」的条件切分上。</p></div>
+        <div class="act"><span class="tabchip" id="hitHint"></span></div></div>
+      <div class="ph-line"></div>
+      <div class="card">
+        <div class="lf-bar" id="hitChips"></div>
+        <div id="hitTable"></div>
+        <div class="prov" id="hitNote" style="margin-top:10px"></div>
+      </div>
+    </div>
+
+    <!-- ④ 分带实测 -->
+    <div class="rv" id="rv-bands">
+      <div class="page-head" style="margin-top:18px"><div>
+        <h2>分带实测</h2>
+        <p>离线诊断（零模型调用，本地通达信全历史日线）——按指数带 / 相位×带 / 五区看 D 判定日的次日接力赔率结构，
+           含相关性切分力与 provenance。<b>数字来自研究结论单一事实源，不由前端重算。</b></p></div>
+        <div class="act"><span class="tabchip" id="diagProvenance"></span>
+          <button onclick="showBandCmd()">重跑分带表</button></div></div>
+      <div class="ph-line"></div>
+      <div id="diagWarn"></div>
+      <div id="bandCmd" style="display:none;margin-bottom:14px"></div>
+      <div class="card">
+        <div class="grid g2">
+          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">按连板指数分带（D 判定 → 次日实测）</div><div id="diagBands"></div></div>
+          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">五区赔率结构（赢:输比均值更贴操作）</div><div id="diagZones"></div></div>
+        </div>
+        <div id="diagCorr" style="margin-top:14px"></div>
+        <div class="prov" id="diagNotes" style="margin-top:10px"></div>
+      </div>
+      <div class="card" style="margin-top:14px">
         <h3>🔲 相位 × 指数带 交叉表 <span class="hint">格内 n ／ 次日溢价A ／ 大面%</span></h3>
         <div id="phaseMatrix"></div>
         <div class="prov" id="phaseMatrixNote" style="margin-top:8px"></div>
       </div>
     </div>
 
-    <div class="card" style="margin-top:14px">
-      <h3>💰 钱效分带（接力赚钱效应 → 次日实测） <span class="hint" id="moneyHint"></span></h3>
-      <div id="moneyRibbon"></div>
-      <div class="grid g2" style="margin-top:14px">
-        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">档位统计（当日档位 → 次日指数变化 · 含可实测日）</div><div id="moneyStats"></div></div>
-        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">分档实测（离线诊断 · D 日档位 → 次日接力结果）</div><div id="moneyDiag"></div></div>
+    <!-- ⑤ 判定明细 -->
+    <div class="rv" id="rv-detail">
+      <div class="page-head" style="margin-top:18px"><div>
+        <h2>判定明细</h2>
+        <p>逐日判定记录（指数 / 分区 / 相位 / 边际 / 梯队 / 钱效 / 题材 / token / 判定时间），可按日期区间与五档位筛选，
+           点击行展开该日完整调用日志与叙事文本。</p></div>
+        <div class="act"><span class="tabchip" id="relayHint">加载中…</span></div></div>
+      <div class="ph-line"></div>
+      <div class="card">
+        <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
+        <table id="relayTable"></table>
       </div>
     </div>
-
-    <div class="card" style="margin-top:14px">
-      <h3>⚠️ 40-60 毒带（退潮期）· 冰点 · 绿灯 命中清单 <span class="hint" id="hitHint"></span></h3>
-      <div class="lf-bar" id="hitChips"></div>
-      <div id="hitTable"></div>
-      <div class="prov" id="hitNote" style="margin-top:10px"></div>
-    </div>
-
-    <div class="card" style="margin-top:14px">
-      <h3>📐 分带实测 · 指数分区结论 <span class="hint" id="diagProvenance"></span></h3>
-      <div id="diagWarn"></div>
-      <div class="grid g2" style="margin-top:2px">
-        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">按连板指数分带（D 判定 → 次日实测）</div><div id="diagBands"></div></div>
-        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">五区赔率结构（赢:输比均值更贴操作）</div><div id="diagZones"></div></div>
-      </div>
-      <div id="diagCorr" style="margin-top:14px"></div>
-      <div class="prov" id="diagNotes" style="margin-top:10px"></div>
-    </div>
-
-    <div class="card" style="margin-top:14px"><h3>🗓️ 判定明细 <span class="hint" id="relayHint">加载中…</span></h3>
-      <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
-      <table id="relayTable"></table></div>
   </section>
 
   <section id="tab-labels" style="display:none">
+    <div class="page-head"><div><h2>涨停复盘</h2>
+      <p>韭研触板名单按 THS 炸板池二分（涨停 / 炸板 / 剔除）后的梯队分布、连板高度与驱动标签汇总，可下钻到个股调用日志。</p></div></div>
+    <div class="ph-line"></div>
     <div class="card">
       <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
-      <div class="kpi-row" id="labelKpi" style="grid-template-columns:repeat(7,1fr);margin-bottom:12px"></div>
+      <div class="kpi-strip" id="labelKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="labelBoardRow"></div>
       <div class="lf-bar" id="labelFilterBar"></div>
       <table id="labelTable"></table>
@@ -305,6 +429,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '' },
   hitFilter: 'toxic',  // 「分区命中清单」筛选：all|toxic|ice|green（默认毒带=用户关注点）
   chartScope: 'full',  // 相位分线图范围：full=诊断全窗｜range=跟随判定明细区间
+  view: 'overview', relayView: 'phase',   // 当前一级视图 / 连板指数子视图
   relayRange: null,  // 判定明细日期区间 {start,end}；null=未初始化（首次渲染按近1月兜）；end=null=跟随最新
   relaySort: { key: 'date', dir: -1 },
   labelSort: { key: 'rank', dir: 1 } };
@@ -554,7 +679,9 @@ async function loadAll(){
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderQuotes(); renderCharts();
+  renderRelayTab(); renderLabels(); renderQuotes();
+  if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行窗口 chip + 重绘
+  else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
 }
 
@@ -727,11 +854,12 @@ function rangedSeries(){
   const s = STATE.series;
   if (!STATE.relayRange){
     const last = (s[s.length-1] || {}).tradingDate;
-    if (last){
-      const d = new Date(last + 'T00:00:00');
-      d.setMonth(d.getMonth() - 1); d.setDate(d.getDate() + 1);
-      STATE.relayRange = { start: ymdLocal(d), end: null };
-    } else STATE.relayRange = { start: null, end: null };
+    // 数据未到（首帧 setView→renderCharts 早于 loadAll）不得固化区间：
+    // 否则会被钉成 {start:null,end:null}=全部，之后判定明细一直渲全量
+    if (!last) return [];
+    const d = new Date(last + 'T00:00:00');
+    d.setMonth(d.getMonth() - 1); d.setDate(d.getDate() + 1);
+    STATE.relayRange = { start: ymdLocal(d), end: null };
   }
   const {start, end} = STATE.relayRange;
   return s.filter(r => { const dt = r.tradingDate || '';
@@ -836,6 +964,7 @@ function renderRelayTab(){
   $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>分区</th><th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
     + (body || '<tr><td colspan="10" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   renderRelayAnalysis();
+  const sbv = $('sbVer'); if (sbv) sbv.textContent = vers.length > 1 ? vers.join('+') : (vers[0] || '?');
   const hintEl = $('relayHint');
   if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点观察<25（长窗代际 0-25 均值 −0.1%、大面 19.3%，未复现 v3 显著亏损） · 毒带观察=40-60且温度≥56（观察线索非规则）· 锚缺位×N=本日主锚整根不可用（琥珀，数据质量标记；子项缺位见 hover/详情）· P=模型置信度（灰≥60 正常 / 琥珀 35-60 存疑 / 红<35 两可勿当结论；旧版判定无置信不显示）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'} · 点击行查看调用日志`;
 }
@@ -1661,6 +1790,78 @@ function lgCopy(view, what, ev){
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// 视图路由（Cloudflare Dashboard 范式，2026-10-18）：
+//   侧栏 = 一级导航（工作台 / 连板指数子视图）｜tab 行 = 当前对象内的子视图
+//   一级 < 5 个，连板指数 5 个子视图各占一页（每页 ≤2 卡，杜绝一页长条）
+// ══════════════════════════════════════════════════════════════════════════════
+const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['money', '钱效分带', '💰'],
+                     ['toxic', '毒带观察', '⚠️'], ['bands', '分带实测', '📐'],
+                     ['detail', '判定明细', '🗓️']];
+const NAV = [
+  {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️']]},
+  {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
+];
+const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'],
+                    relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
+
+function renderSidebar(){
+  $('sbNav').innerHTML = NAV.map(g => `<div class="sb-group">${esc(g.group)}</div>`
+    + g.items.map(([k, label, ic]) => `<div class="sb-item${k.startsWith('relay/') ? ' sub' : ''}" data-view="${k}"
+        onclick="setView('${k}')"><span class="ic">${ic}</span><span>${esc(label)}</span></div>`).join('')).join('');
+}
+function sbFilter(q){
+  const t = (q || '').trim().toLowerCase();
+  for (const el of document.querySelectorAll('#sbNav .sb-item')){
+    const label = el.innerText.toLowerCase().replace(/\s/g, '');
+    el.style.display = (!t || label.includes(t.replace(/\s/g, ''))) ? '' : 'none';
+  }
+  for (const g of document.querySelectorAll('#sbNav .sb-group')){
+    let n = 0, nx = g.nextElementSibling;
+    while (nx && nx.classList.contains('sb-item')){ if (nx.style.display !== 'none') n++; nx = nx.nextElementSibling; }
+    g.style.display = n ? '' : 'none';
+  }
+}
+function toggleSidebar(){ $('app').classList.toggle('collapsed'); }
+function setView(key){
+  const [main, sub] = key.split('/');
+  STATE.view = main;
+  STATE.relayView = main === 'relay' ? (sub || 'phase') : '';
+  for (const sec of document.querySelectorAll('#content > section'))
+    sec.style.display = (sec.id === 'tab-' + main) ? '' : 'none';
+  for (const el of document.querySelectorAll('#tab-relay .rv'))
+    el.classList.toggle('on', el.id === 'rv-' + STATE.relayView);
+  for (const el of document.querySelectorAll('#sbNav .sb-item')) el.classList.toggle('on', el.dataset.view === key);
+  // 面包屑
+  const c = VIEW_CRUMB[main] || [main];
+  const tail = (main === 'relay') ? (c[1][STATE.relayView] || '') : '';
+  $('crumb').innerHTML = `<span>JEV 叙事工作台</span><span class="sep">›</span><b>${esc(c[0])}</b>`
+    + (tail ? `<span class="sep">›</span><span>${esc(tail)}</span>` : '');
+  // tab 行（仅连板指数有子视图；右侧 CF 风格 chip + 动作）
+  const tb = $('tabbar');
+  if (main !== 'relay'){ tb.innerHTML = ''; }
+  else {
+    const b = bandDoc();
+    const win = b ? `${(b.window || {}).start} ~ ${(b.window || {}).end} · ${(b.window || {}).judged} 日` : '分带表未就绪';
+    tb.innerHTML = RELAY_VIEWS.map(([k, label]) => `<div class="tab${STATE.relayView === k ? ' on' : ''}"
+        onclick="setView('relay/${k}')">${esc(label)}</div>`).join('')
+      + `<div class="right"><span class="tabchip">诊断窗口 ${esc(win)}</span>
+         <button onclick="loadAll()">刷新</button></div>`;
+  }
+  window.scrollTo({top: 0});
+  renderCharts();          // 图表按当前 scope 重绘（切页后立即可见）
+}
+function showBandCmd(){
+  const el = $('bandCmd');
+  if (el.style.display !== 'none'){ el.style.display = 'none'; return; }
+  const b = bandDoc() || {};
+  const path = b.artifactPath || 'data/backups/relay-band-table.json';
+  el.innerHTML = `<div class="cmdbox"><span>python scripts/jev_relay_band_diagnostic.py --emit-json ${esc(path)}</span>`
+    + `<button onclick="copyText(this.previousElementSibling.innerText, this)">复制</button></div>
+    <div class="prov" style="margin-top:6px">零模型调用（只读 Mongo + 本地通达信日线），全窗约 5–9 分钟；生成后本页刷新即变（含生成时间与滞后警告）。</div>`;
+  el.style.display = '';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // 连板指数「结论可视化」（2026-10-18 用户需求：相位分线 / 钱效分带 / 40-60 毒带（退潮期）
 // 三类高价值信息必须图形化重点呈现，不能只有文字与基础列表）——
 //   · 图：分区底色 + 指数线 + 温度线 + 相位/钱效条带 + 毒带/冰点/绿灯标记
@@ -1833,6 +2034,8 @@ function renderDiagPanel(){
   if (!b){ el.innerHTML = bandDiagMissing(); $('diagZones').innerHTML = ''; $('diagCorr').innerHTML = '';
     $('diagProvenance').textContent = ''; $('diagNotes').innerHTML = ''; return; }
   const w = b.window || {};
+  const sbw = $('sbWin'); if (sbw) sbw.textContent = `${w.start} ~ ${w.end}`;
+  const sbb = $('sbBand'); if (sbb) sbb.textContent = String(b.generatedAt || '').replace('T', ' ').slice(5);
   const latest = (STATE.series[STATE.series.length - 1] || {}).tradingDate || '';
   const lag = latest && w.end && latest > w.end ? ` · ⚠ 滞后：序列已到 ${latest}，分带表止于 ${w.end}` : '';
   $('diagProvenance').textContent = `生成 ${b.generatedAt || '?'} · 窗口 ${w.start}~${w.end}（判定 ${w.judged} 日 / 有次日实测 ${w.evaluated} 日）· relay 代际 ${(b.relayGeneration || []).join('+')}${lag}`;
@@ -1988,16 +2191,17 @@ function drawChart(id, pts, temps){
     <path d="${pathR}" fill="none" stroke="#2563eb" stroke-width="2.4"/>${dotsR}</svg>`;
 }
 
-document.querySelectorAll('nav .tab').forEach(t => t.onclick = () => {
-  document.querySelectorAll('nav .tab').forEach(x => x.classList.remove('active'));
-  t.classList.add('active');
-  for (const s of document.querySelectorAll('main section')) s.style.display = 'none';
-  $('tab-' + t.dataset.tab).style.display = '';
-});
+renderSidebar();
 const _d = new Date();
 $('date').value = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
 // 只监听 change：input 事件会在 fill/清空中间态触发空 date 请求（422 竞态覆盖）
 $('date').addEventListener('change', loadAll);
+// 快捷键：Ctrl/Cmd+K 聚焦侧栏搜索；Ctrl/Cmd+B 收起侧栏（对齐 CF 控制台习惯）
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k'){ e.preventDefault(); $('sbSearch').focus(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b'){ e.preventDefault(); toggleSidebar(); }
+});
+setView('overview');
 loadAll();
 setInterval(loadAll, 60000); // 实时：60s 轮询
 </script>
