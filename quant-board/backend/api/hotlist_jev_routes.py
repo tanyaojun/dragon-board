@@ -31,6 +31,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY
 from backend.data.repositories import repository_factory
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
@@ -423,6 +424,22 @@ def _relay_band_table_path() -> Path:
     if not path.is_absolute():
         path = Path(__file__).resolve().parents[2] / path   # quant-board/ 根
     return path
+
+
+@router.get("/relay-questions")
+def get_relay_questions() -> dict[str, Any]:
+    """连板指数题目集 criteria 只读快照（2026-10-18 SSOT 收敛，review B1/B2）。
+
+    单一事实源 = backend/analysis/hotlist/jev_relay_ammo.py 的 QUESTIONS_RELAY。
+    前端 KPI 档位描述与判定明细行 tooltip 消费本读口的**全文**；页面内静态 DESC 表
+    仅作读口失败时的回落（页面注释已声明为摘要，不再声称逐字）。
+    纯读、零计算、零模型调用。
+    """
+    questions: dict[str, dict[str, str]] = {}
+    for qid, spec in QUESTIONS_RELAY.items():
+        if spec.get("type") == "choice" and isinstance(spec.get("criteria"), dict):
+            questions[qid] = dict(spec["criteria"])
+    return {"ok": True, "questions": questions}
 
 
 @router.get("/relay-band")
