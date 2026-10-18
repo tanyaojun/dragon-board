@@ -299,6 +299,10 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
     - 已回填日跳过（幂等，不重复外呼）；但**本地日线口径（SOURCE_TDX）不算已回填**——
       EM 是更权威的主源，窗口内一律用 EM 升级覆盖（2026-10-17 F7：否则早期 TDX 行会
       把窗口内的 EM 挡住，参考集合静默停在次要源）；
+    - 窗口外已有 SOURCE_TDX 行的日期**按「跳过」打印**（保留既有本地日线读数），
+      不得混在「[缺口] 无可回填全市场源」里——那会让读者把「有 TDX 读数」误读成「无数据」
+      （2026-10-18 review B5：漏报的是该日尚未拿到 EM，而非该日无任何全市场源）；
+      只有窗口外**确实无任何行**的日期才打印缺口。
     - 窗口外/上游不可用/**连续**失败 → 披露缺口，**绝不写 0 行**（「取不到」≠「真的 0」）；
     - **连续** `_EM_MAX_CONSECUTIVE_FAILURES` 次失败即熔断（东财封 IP 前科），剩余日照实披露。
       计数必须**成功即清零**：累计计数会让「一次抖动 + 隔日两次抖动」在第 4 天误熔断，
@@ -308,9 +312,11 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
                     if r.get("tradingDate") and start <= str(r["tradingDate"]) <= end})
     col = db[COLLECTION]
     # 一次 find 批量读已回填日（模块自身规则「一次 find 批量读，禁逐日连发」）
+    rows = {str(d["_id"]): str(d.get("source") or "")
+            for d in col.find({"_id": {"$in": dates}}, {"_id": 1, "source": 1})} if dates else {}
     # TDX 行不算「已回填」：EM 窗口内以 EM 升级（源优先级 EM > 快照 > TDX > 采集池）
-    have = {str(d["_id"]) for d in col.find({"_id": {"$in": dates}}, {"_id": 1, "source": 1})
-            if str(d.get("source") or "") != SOURCE_TDX} if dates else set()
+    have = {d for d, s in rows.items() if s != SOURCE_TDX}
+    tdx_kept = {d for d, s in rows.items() if s == SOURCE_TDX}
     window_start = _em_window_start()
     todo = [d for d in dates if d not in have]
     in_window = [d for d in todo if d >= window_start]
@@ -319,7 +325,12 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
           f"已回填 {len(have)} 日，待处理 {len(todo)} 日（EM 窗口 {window_start} 起 "
           f"{len(in_window)} 日 / 窗口外 {len(out_window)} 日）==")
     for d in out_window:
-        print(f"[缺口] {d}: 早于 EM 30 日窗口 → 无可回填全市场源（叙事回退采集池口径并标注）")
+        # 窗口外且窗口外已存本地日线行：**不是缺口**，是刻意保留的次要源读数。
+        # 旧版把这类日期一并打成「无可回填全市场源」，读者会误以为该日无数据。
+        if d in tdx_kept:
+            print(f"[跳过] {d}: 已有 {SOURCE_TDX} 行（EM 窗口外，保留既有本地日线读数，不回填）")
+        else:
+            print(f"[缺口] {d}: 早于 EM 30 日窗口 → 无可回填全市场源（叙事回退采集池口径并标注）")
     ok = fail = 0
     for i, d in enumerate(in_window):
         n = fetch_limit_down_em(d)

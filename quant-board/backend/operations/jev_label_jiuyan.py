@@ -1495,7 +1495,12 @@ def trajectory_line(db, date: str, n: int = 10,
     # 全市场家族内部（东财池/快照/本地日线重算）逐日回退，并在行尾列明本列实际用到的源
     # （跨 09-15/09-16 切换的窗口会同时用到「本地日线重算＋东财池」，不许默默并排）。
     # 参考集合 miss 且无全市场源的历史日才回落采集池口径，逐格打 * 并在行尾注明。
+    # 当日同理：`limit_down_count` 可能在 EM/快照都不可用时回落采集池（src=pool_rows），
+    # 此时当日格也是采集池口径，必须和历史降级格一样打 * 并在行尾列明——
+    # 旧版 `degraded = d != date and ...` 让当日恒 False，行尾写「跌停列=全市场·…」，
+    # 而当日数字其实是 250 只采集池（差 4 倍量级），模型会把口径切换读成情绪暴跌。
     die, src = limit_down_count(db, date, dataset_id)
+    day_is_pool = src not in FULL_MARKET_SOURCES
     by_src = {s: reference_counts(db, window, s) for s in FULL_MARKET_SOURCES}
     used_srcs = [s for s in FULL_MARKET_SOURCES
                  if s == src or any(d in by_src[s] for d in window)]
@@ -1512,11 +1517,14 @@ def trajectory_line(db, date: str, n: int = 10,
         m = market_metrics(db, d, dataset_id) or {}
         if d == date:
             cur_die = die
+            row_degraded = day_is_pool
         elif d in die_ref:
             cur_die = die_ref[d]
+            row_degraded = False
         else:
             cur_die = pool_fallback.get(d)
-            degraded = degraded or cur_die is not None
+            row_degraded = cur_die is not None
+        degraded = degraded or row_degraded
         rate = m.get("zhabanRate")
         rate_txt = f'{round(rate, 1)}%' if isinstance(rate, (int, float)) else "?"
         zt = m.get("ztCount") if isinstance(m.get("ztCount"), (int, float)) else None
@@ -1525,7 +1533,7 @@ def trajectory_line(db, date: str, n: int = 10,
         series.append({"d": d, "zt": zt, "die": cur_die, "rate": rate_txt,
                        "dd": dd if isinstance(dd, (int, float)) else None,
                        "mb": mb if isinstance(mb, (int, float)) else None,
-                       "degraded": d != date and d not in die_ref})
+                       "degraded": row_degraded})
     rows = []
     for i, r in enumerate(series[1:]):
         prev = series[i]
@@ -1544,7 +1552,15 @@ def trajectory_line(db, date: str, n: int = 10,
     head = f'近{len(rows)}个交易日序列（日期|涨停(较昨日Δ)|跌停|炸板率|大幅回撤|最高板|池内涨跌比）：'
     # 口径头注（2026-10-16 review 补）：跌停列的源 + 降级格标记。没有这行，跨源混采的
     # 序列会被读成真实情绪摆动。
-    note = f"（跌停列={die_scope}" + ("；* 为采集池降级格，全市场源缺失）" if degraded else "）")
+    # 口径头注（2026-10-16 review 补）：跌停列的源 + 降级格标记。没有这行，跨源混采的
+    # 序列会被读成真实情绪摆动。当日回落采集池时必须单独点名：否则头注的 die_scope
+    # （由历史窗推导）会让读者以为当日也是全市场口径（2026-10-18 review B4）。
+    parts = [f"跌停列={die_scope}"]
+    if day_is_pool:
+        parts.append(f"当日格={source_label(SOURCE_POOL)}（全市场源不可用，已打 *）")
+    if degraded:
+        parts.append("* 为采集池降级格，全市场源缺失")
+    note = "（" + "；".join(parts) + "）"
     return head + " ； ".join(rows) + note
 
 

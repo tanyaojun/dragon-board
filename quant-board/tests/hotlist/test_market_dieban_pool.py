@@ -626,3 +626,60 @@ def test_backfill_em_upgrades_tdx_rows(monkeypatch, capsys):
     assert [d["source"] for _, d in col.writes] == [mdp.SOURCE_EM]
     assert col.writes[0][1]["count"] == 26
     assert "待处理 1 日" in capsys.readouterr().out
+
+
+def test_backfill_outside_window_with_tdx_row_reports_skip_not_gap(monkeypatch, capsys):
+    """窗口外已存 SOURCE_TDX 行 → 打印「跳过：保留既有行」，不得混进「[缺口] 无可回填」。
+
+    2026-10-18 review B5：`have` 刻意排除 SOURCE_TDX（EM 是更权威主源，窗口内要用 EM
+    升级覆盖），但**窗口外**的 TDX 行是离线回填的合法读数，旧版把它们一并打成
+    「早于 EM 30 日窗口 → 无可回填全市场源」，读者会误以为该日无任何全市场数据。
+    """
+    http = _patch_em(monkeypatch)
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
+    col = FakeCol([{"_id": "2026-05-06", "count": 9, "source": mdp.SOURCE_TDX},
+                   {"_id": "2026-05-07", "count": 12, "source": mdp.SOURCE_EM}])
+    db = FakeDb({mdp.COLLECTION: col,
+                 "snapshot_frames": _frames_col(["2026-05-06", "2026-05-07", "2026-08-03"])})
+    mdp.backfill(db, "2026-05-06", "2026-08-03", apply=True)
+    assert col.writes == [] and http.calls == []       # 窗口外不外呼、不落库
+    out = capsys.readouterr().out
+    assert "[跳过] 2026-05-06" in out and mdp.SOURCE_TDX in out
+    assert "保留既有" in out
+    assert "[缺口] 2026-05-06" not in out               # 有 TDX 行的日期不得报缺口
+    assert "[缺口] 2026-08-03" in out                   # 真无线索的日期照报缺口
+    assert out.count("[缺口]") == 1
+
+
+def test_trajectory_line_marks_today_pool_fallback(monkeypatch):
+    """当日回落采集池 → 当日格打 * 且行尾点名当日口径（review B4）。
+
+    旧版 `degraded = d != date and d not in die_ref` 让当日恒 False：当日数字其实是
+    250 只采集池、行尾却写「跌停列=全市场·…」，跨口径切换会被模型读成情绪暴跌。
+    """
+    from backend.operations import jev_label_jiuyan as jj
+
+    hist = ["2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13",
+            "2026-10-14", "2026-10-15", "2026-10-16"]
+    cols = {"snapshot_frames": FakeCol(
+        [{"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": d,
+          "slotTime": "15:00"} for d in hist])}
+    # 历史窗只有 EM 读数；当日 EM/快照都不可用 → limit_down_count 回落采集池
+    cols[mdp.COLLECTION] = FakeCol(
+        [{"_id": d, "count": 10 + i, "source": mdp.SOURCE_EM} for i, d in enumerate(hist[:-1])])
+
+    class _Db:
+        def __getitem__(self, name):
+            return cols.setdefault(name, FakeCol())
+
+    monkeypatch.setattr(jj, "market_metrics", lambda db, d, dataset_id=None: {})
+    monkeypatch.setattr(jj, "advdec_ratio", lambda db, d, dataset_id=None: None)
+    monkeypatch.setattr(jj, "limit_down_count", lambda db, d, dataset_id=None: (6, mdp.SOURCE_POOL))
+    monkeypatch.setattr(jj, "dieban_count", lambda db, d, dataset_id=None: 6)
+
+    line = jj.trajectory_line(_Db(), "2026-10-16")
+    today_cell = line.split("|")[2]                      # 首格(10-09)起：日期|涨停(Δ)|跌停…
+    assert "跌停" in line
+    assert line.rstrip().endswith("）") or "（" in line
+    assert "采集池口径" in line, f"当日口径未点名：{line}"
+    assert "6*" in line, f"当日格未打降级星号：{line}"
