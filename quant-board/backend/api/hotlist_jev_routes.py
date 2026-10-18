@@ -12,11 +12,19 @@
   ambiguous/pending + 备注），幂等更新。
 - GET  /api/hotlist-jev/jiuyan-action：韭研公社异动读口（W-jiuyan，2026-10-02）——
   无 date 返回 {dates, doc=最新 final}；带 date 返回该日文档（kind 默认 final）。纯读。
+- GET  /api/hotlist-jev/relay-band：连板指数**分带实测读数**读口（2026-10-18）——
+  数据源 = `scripts/jev_relay_band_diagnostic.py --emit-json <PATH>` 的产物（离线零模型调用，
+  含逐日 D→次日实测 + 分带/五区/相关表 + provenance）。本读口**不加工不重算**：
+  文件缺失/损坏 → ok=False + reason + hint（fail-visible：前端显式标注「分带表未生成」，
+  不静默给空表，也不拿前端序列直算冒充实测）。
 
 读口只返回 hotlist_jev_sentiment 原文档（独立观察轨道），不与规则情绪文档合并。
 """
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
@@ -402,3 +410,39 @@ def get_hotlist_jev_sentiment_overview(date: str | None = None) -> dict[str, Any
                           else ("规则 EOD 未落库" if rule is None else f"v2 status={doc.get('status')}")}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"sentiment_overview_read_failed: {exc}"}
+
+
+# 分带实测读数（离线诊断产物；不加工不重算，缺失/损坏 fail-visible）
+RELAY_BAND_TABLE_ENV = "QUANT_BOARD_RELAY_BAND_TABLE"
+RELAY_BAND_TABLE_DEFAULT = "data/backups/relay-band-table.json"
+
+
+def _relay_band_table_path() -> Path:
+    raw = os.environ.get(RELAY_BAND_TABLE_ENV) or RELAY_BAND_TABLE_DEFAULT
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[2] / path   # quant-board/ 根
+    return path
+
+
+@router.get("/relay-band")
+def get_relay_band() -> dict[str, Any]:
+    """连板指数分带实测读数（离线诊断产物；fail-visible，不重算不伪造）。"""
+    path = _relay_band_table_path()
+    hint = (f"未生成：跑 python scripts/jev_relay_band_diagnostic.py --emit-json "
+            f"{path} （零模型调用，全窗约 9 分钟）")
+    if not path.exists():
+        return {"ok": False, "degraded": True, "reason": "band_table_missing",
+                "hint": hint, "artifactPath": str(path)}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"band_table_unreadable: {exc}",
+                "hint": hint, "artifactPath": str(path)}
+    if not isinstance(payload, dict) or not payload.get("days"):
+        return {"ok": False, "degraded": True, "reason": "band_table_empty",
+                "hint": hint, "artifactPath": str(path)}
+    payload = dict(payload)
+    payload["artifactPath"] = str(path)
+    payload["artifactMtime"] = path.stat().st_mtime
+    return payload

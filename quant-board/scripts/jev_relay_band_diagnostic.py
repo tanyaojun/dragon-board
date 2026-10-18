@@ -21,6 +21,9 @@ docs/hotlist-jev/jev-relay-band-toxic-diagnostic.md，11 月底复验跑本脚�
 CLI：
   python scripts/jev_relay_band_diagnostic.py             # 全窗口
   python scripts/jev_relay_band_diagnostic.py --days 8    # 冒烟（最近 8 个判定日）
+  python scripts/jev_relay_band_diagnostic.py --emit-json data/backups/relay-band-table.json
+      → 同时产出**机器可读读数**（relay_page「分带实测」卡消费；GET /api/hotlist-jev/relay-band）；
+        打印与 JSON 由同一组纯函数（agg_stats/odds_stats/corr_stats）产出，防两套口径漂移。
 """
 from __future__ import annotations
 
@@ -135,6 +138,8 @@ def band_of(v) -> tuple[int, int] | None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=0, help="只取最近 N 个判定日（冒烟用，0=全窗口）")
+    ap.add_argument("--emit-json", default="", metavar="PATH",
+                    help="额外产出机器可读读数 JSON（relay_page 分带卡消费；留空=只打印）")
     args = ap.parse_args()
 
     from backend.data.repositories import repository_factory
@@ -273,22 +278,12 @@ def main() -> None:
         print(f"\n== 分带表（按{key_name}，D 日分带 → 次日实测均值）==")
         print(f"{'带':>12} {'n':>3} {'晋级率':>7} {'高位晋级':>8} {'溢价A(日中位均)':>12} {'溢价B(日中位均)':>12} "
               f"{'大面%':>6} {'A<0天':>7}")
-        groups: dict = {}
-        for o in rows:
-            k = key_fn(o)
-            if k is not None:
-                groups.setdefault(k, []).append(o)
-        mean = lambda vs: round(sum(vs) / len(vs), 1) if vs else float("nan")
-        for k in sorted(groups, key=lambda x: (x is None, x)):
-            g = groups[k]
-            promo = mean([o["promo"] for o in g if o.get("promo") is not None])
-            hip = mean([o["hi_promo"] for o in g if o.get("hi_promo") is not None])
-            pa = mean([o["premA"] for o in g if o.get("premA") is not None])
-            pb = mean([o["premB"] for o in g if o.get("premB") is not None])
-            bf = mean([o["bigface"] for o in g if o.get("bigface") is not None])
-            negA = sum(1 for o in g if (o.get("premA") or 0) < 0)
-            kname = {b: BAND_TXT[b] for b in BANDS}.get(k, str(k))
-            print(f"{kname:>12} {len(g):>3} {promo:>6}% {hip:>7}% {pa:>+11}% {pb:>+11}% {bf:>5}% {negA}/{len(g)}")
+        # 缺值打印 '?'（不打 nan，fail-visible）；列宽与 2026-10-11 版逐字符一致（重构零漂移）
+        f1 = lambda v, w=6: f"{v:>{w}}" if v is not None else " " * (w - 2) + "? "
+        f2 = lambda v: f"{v:>+11}" if v is not None else "          ?"
+        for st in agg_stats(key_fn, rows):
+            print(f"{st['name']:>12} {st['n']:>3} {f1(st['promo'])}% {f1(st['hiPromo']):>7}% "
+                  f"{f2(st['premA'])}% {f2(st['premB'])}% {f1(st['bigface'], 5)}% {st['negA']}/{st['n']}")
 
     have = [o for o in obs if o.get("premA") is not None or o.get("promo") is not None]
     agg_table(lambda o: band_of(o["idx"]), "relayIndex", have)
@@ -311,19 +306,14 @@ def main() -> None:
     def odds_table(title: str, rows: list[dict]) -> None:
         print(f"\n== 五区赔率表（{title}）==")
         print(f"{'区':>16} {'n':>3} {'均值':>7} {'正/负':>6} {'赢日均':>7} {'输日均':>7} {'大面%':>6}")
-        mean = lambda vs: round(sum(vs) / len(vs), 2) if vs else float("nan")
-        for name, pred in (ZONE_GREEN, ZONE_SEMI, ZONE_MID, ZONE_AVOID, ZONE_RED):
-            g = [o for o in rows if pred(o) and o.get("premA") is not None]
-            if not g:
-                print(f"{name:>16} {0:>3}    -      -       -       -       -")
+        for st in odds_stats(rows):
+            if not st["n"]:
+                print(f"{st['zone']:>16} {0:>3}    -      -       -       -       -")
                 continue
-            pos = [o["premA"] for o in g if o["premA"] > 0]
-            neg = [o["premA"] for o in g if o["premA"] <= 0]
-            bf = mean([o["bigface"] for o in g if o.get("bigface") is not None])
-            print(f"{name:>16} {len(g):>3} {mean([o['premA'] for o in g]):>+6}% "
-                  f"{len(pos):>3}/{len(neg):<3} {mean(pos):>+6}% {mean(neg):>+6}% {bf:>5}%"
-                  + ("   逐日: " + " ".join(f"{o['d'][5:]}:{o['premA']:+.1f}" for o in g)
-                     if len(g) <= 16 else ""))
+            print(f"{st['zone']:>16} {st['n']:>3} {st['mean']:>+6}% "
+                  f"{st['pos']:>3}/{st['neg']:<3} {st['winAvg']:>+6}% {st['loseAvg']:>+6}% {st['bigface']:>5}%"
+                  + ("   逐日: " + " ".join(f"{d[5:]}:{v:+.1f}" for d, v in st["dayList"])
+                     if st["n"] <= 16 else ""))
 
     odds_table(f"全样本 n={len(have)}（含 v1 判定）", have)
 
@@ -398,10 +388,127 @@ def main() -> None:
         agg_table(lambda o: band_of(o["idx"]), "relayIndex(v3 only)", v3)
         odds_table(f"v3-only n={len(v3)}", v3)
 
+    if args.emit_json:
+        _emit_json(args.emit_json, obs, have, dates, ok_n, len(codes_all))
+
+
+def _meanr(vs: list[float], nd: int = 1) -> float | None:
+    """均值（保留 nd 位）；空 → None（fail-visible，不写 0 冒充）。"""
+    return round(sum(vs) / len(vs), nd) if vs else None
+
+
+def _json_key(k):
+    """分组键 JSON 化（指数带是 (lo, hi) 元组）。"""
+    return list(k) if isinstance(k, tuple) else k
+
+
+def agg_stats(key_fn, rows: list[dict]) -> list[dict]:
+    """按分组键聚合「D 日分带 → 次日实测均值」——打印与 --emit-json 同源（单一事实源）。"""
+    groups: dict = {}
+    for o in rows:
+        k = key_fn(o)
+        if k is not None:
+            groups.setdefault(k, []).append(o)
+    out: list[dict] = []
+    for k in sorted(groups, key=lambda x: (x is None, x)):
+        g = groups[k]
+        out.append({
+            "key": _json_key(k), "name": {b: BAND_TXT[b] for b in BANDS}.get(k, str(k)), "n": len(g),
+            "promo": _meanr([o["promo"] for o in g if o.get("promo") is not None]),
+            "hiPromo": _meanr([o["hi_promo"] for o in g if o.get("hi_promo") is not None]),
+            "premA": _meanr([o["premA"] for o in g if o.get("premA") is not None]),
+            "premB": _meanr([o["premB"] for o in g if o.get("premB") is not None]),
+            "bigface": _meanr([o["bigface"] for o in g if o.get("bigface") is not None]),
+            "negA": sum(1 for o in g if (o.get("premA") or 0) < 0),
+        })
+    return out
+
+
+def odds_stats(rows: list[dict]) -> list[dict]:
+    """五区赔率表（绿灯/半绿/黄灯/回避/红灯；回避=温度叠加切分，非互斥分区）。"""
+    out: list[dict] = []
+    for name, pred in (ZONE_GREEN, ZONE_SEMI, ZONE_MID, ZONE_AVOID, ZONE_RED):
+        g = [o for o in rows if pred(o) and o.get("premA") is not None]
+        pos = [o["premA"] for o in g if o["premA"] > 0]
+        neg = [o["premA"] for o in g if o["premA"] <= 0]
+        out.append({"zone": name, "n": len(g), "mean": _meanr([o["premA"] for o in g], 2),
+                    "pos": len(pos), "neg": len(neg), "winAvg": _meanr(pos, 2),
+                    "loseAvg": _meanr(neg, 2),
+                    "bigface": _meanr([o["bigface"] for o in g if o.get("bigface") is not None], 2),
+                    "dayList": [[o["d"], round(o["premA"], 1)] for o in g]})
+    return out
+
+
+def corr_stats(obs: list[dict]) -> dict:
+    """相关系数（pearson/spearman）——页面与打印同源。"""
+    def line(label: str, pairs: list[tuple]) -> dict:
+        xs = [a for a, _ in pairs]
+        ys = [b for _, b in pairs]
+        return {"label": label, "pearson": round(_pearson(xs, ys), 3),
+                "spearman": round(_spearman(xs, ys), 3), "n": len(xs)}
+    return {
+        "idx_premA": line("corr(relayIndex, 溢价A)",
+                          [(o["idx"], o["premA"]) for o in obs if o.get("premA") is not None]),
+        "idx_premB": line("corr(relayIndex, 溢价B)",
+                          [(o["idx"], o["premB"]) for o in obs if o.get("premB") is not None]),
+        "idx_promo": line("corr(relayIndex, 晋级率)",
+                          [(o["idx"], o["promo"]) for o in obs if o.get("promo") is not None]),
+        "didx_premA": line("corr(Δidx, 溢价A)",
+                           [(o["didx"], o["premA"]) for o in obs
+                            if o.get("didx") is not None and o.get("premA") is not None]),
+        "temp_premA": line("corr(EOD温度, 溢价A)",
+                           [(o["temp"], o["premA"]) for o in obs
+                            if o.get("premA") is not None and o.get("temp") is not None]),
+    }
+
 
 def _jiuyan_boards(stock: dict) -> int | None:
     from backend.operations.jev_label_jiuyan import _jiuyan_board_count
     return _jiuyan_board_count(stock)
+
+
+def _emit_json(path: str, obs: list[dict], have: list[dict], dates: list[str],
+               ok_n: int, n_codes: int) -> None:
+    """机器可读分带读数（relay_page 分带卡 + GET /api/hotlist-jev/relay-band 消费）。
+
+    fail-visible：逐日行保留 cov / n_pool（覆盖分子分母），缺棒日不写 0 冒充；
+    provenance 带生成时间、窗口、relay 判定代际与日线来源（本地 vipdoc or 线上回退）。
+    """
+    import json
+    from datetime import datetime
+    from pathlib import Path
+    try:
+        from backend.operations.jev_label_jiuyan import bars_source_provenance
+        bars_src = bars_source_provenance()
+    except Exception as exc:                      # pragma: no cover - 溯源失败不阻断出数
+        bars_src = {"degraded": f"provenance_unavailable: {exc}"}
+    payload = {
+        "ok": True,
+        "generatedAt": datetime.now().isoformat(timespec="seconds"),
+        "window": {"start": dates[0], "end": dates[-1], "judged": len(dates),
+                   "evaluated": len(have)},
+        "relayGeneration": sorted({str(o.get("ver")) for o in obs}),
+        "bars": {"okCodes": ok_n, "codes": n_codes, **bars_src},
+        "bands": agg_stats(lambda o: band_of(o["idx"]), have),
+        "bandsTemp": agg_stats(lambda o: band_of(o.get("temp")), have),
+        "bandsPhase": agg_stats(lambda o: o.get("phase"), have),
+        "bandsMoney": agg_stats(lambda o: o.get("money"), have),
+        "zones": odds_stats(have),
+        "corr": corr_stats(obs),
+        "days": obs,
+        "notes": [
+            "溢价以收盘价近似打板成本，未剔一字板（实际收益只会更差，带间比较中性）",
+            "韭研池含盘中炸板股，溢价为「触板人群」口径",
+            "回避区 40-60∧温度≥56 为黄灯/半绿区上的温度叠加切分，非互斥分区",
+            "单带 n<10 的读数是观察线索，转交易规则须新预登记+裁决",
+            "弹药代际分层代理（叙事「不可算」计数）会随口径变化漂移，只作噪声线索",
+        ],
+    }
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
+    print(f"\n[emit-json] 已写 {out}（{out.stat().st_size} 字节；逐日 {len(obs)} 行，"
+          f"分带 {len(payload['bands'])} 表）")
 
 
 if __name__ == "__main__":

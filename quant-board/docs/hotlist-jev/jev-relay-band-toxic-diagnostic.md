@@ -72,15 +72,39 @@
   指数做否决门：≥60 放行 / 25-55 凭手艺 / 40-60∧温≥56 降仓 / <25 一票否决追板。
   深谷低吸与冰点禁追板不矛盾（低吸买超跌反弹 vs 追板接力是两笔交易）
 
-## 5. 前端消费（研究结论与展示同步，2026-10-11 同轮交付）
+## 5. 前端消费（研究结论与展示同步）
 
-- `GET /api/hotlist-jev/relay-index` series/day 补 `dayTemperature`（join hotlist_jev_sentiment
+### 5.1 2026-10-18：结论图形化（用户需求「不能只用文字，列表+图标+标识符」）
+
+relay_page「🧮 连板指数」页从「KPI + 判定明细 + 一条折线」扩为完整结论面板（全部跟随
+「诊断全窗 / 判定明细区间」可切）：
+
+| 卡 | 内容 | 数据源 |
+|---|---|---|
+| 🎯 相位分线 · 指数分区 | 分区底色（冰点 <25 / 40-60 观察带 / 绿灯 ≥60）+ 指数线 + EOD 温度线 + **相位条带**（连续同相位日成段）+ **钱效条带**（逐日档位）+ 标记（▲毒带观察 / ○红冰点 / ○绿绿灯） | relay-index series（`dayTemperature` 由读口 join） |
+| 🧩 相位分段 + 相位统计 | 相位段列表（起止/天数/指数区间/段内次日溢价A）+ 相位 → 次日指数Δ中位/溢价A/大面% | relay-band `days` |
+| 🔲 相位 × 指数带 交叉表 | 6 相位 × 4 带；格内 n／溢价A／大面%（底色按溢价A 正负、大面 ≥20 标红） | relay-band `days` |
+| 💰 钱效分带 | 逐日钱效条带 + 档位统计（→ 次日指数Δ）+ **分档实测**（晋级率/溢价A/溢价B/大面%/A<0天） | relay-band `days`/`bandsMoney` |
+| ⚠️ 40-60 毒带（退潮期）· 冰点 · 绿灯 命中清单 | chips 分类（含各自命中日数）+ 逐日实测（次日指数Δ/溢价A/大面%/晋级率/覆盖）+「看该日」跳转 | relay-band `days` |
+| 📐 分带实测 · 指数分区结论 | 指数带表 + 五区赔率表 + 相关性 chips + provenance（生成时间/窗口/代际/日线来源/**滞后警告**） | relay-band 聚合段 |
+
+**读口** `GET /api/hotlist-jev/relay-band`（`backend/api/hotlist_jev_routes.py`）——**不加工不重算**，
+只读离线诊断产物 `data/backups/relay-band-table.json`（由
+`scripts/jev_relay_band_diagnostic.py --emit-json` 产出；env `QUANT_BOARD_RELAY_BAND_TABLE` 可覆盖）。
+产物缺失/损坏/空 → `ok=false + reason + hint`，页面显式标「分带表未就绪 + 重跑命令」，
+**不静默空表、也不拿前端序列直算冒充实测**（fail-visible）；产物窗口 end < 序列最新日 → 亮琥珀
+「滞后」警告提示重跑（零模型调用）。
+
+**分区徽标**（`zoneOf()` 单实现，四类：绿灯区/毒带观察/冰点观察/中性）贯穿 KPI「分区定位」卡、
+判定明细「分区」列、命中清单——**取代** 2026-10-11「只给指数字号三色、不放文字徽章」的裁决
+（用户本轮要求显式标识符；三色仍在，徽标叠加其上）。
+
+### 5.2 2026-10-11：`dayTemperature` 与三色数字（历史）
+
+- `GET /api/hotlist-jev/relay-index` series/day 补 `dayTemperature`（join `hotlist_jev_sentiment`
   EOD，唯一事实源在后端；缺 EOD=None 不伪造），测试 `tests/hotlist/test_jev_relay_index_api.py`
-- relay_page 指数分区**三色数字**（`zoneIdxColor`，2026-10-11 用户裁决：不放文字徽章，
-  判定明细与两处 KPI 卡的指数字号直接着色）：**绿=idx≥60**（赔率 3.4:1）/
-  **红=idx<25**（1:2.2）/ **黄=40-60∧温≥56**；其余中性区灰、缺温度不判黄（fail-visible）。
-  判据图例在判定明细 hint 行。绿灯/红只依赖 relayIndex（旧版 API 亦生效）；
-  黄依赖 dayTemperature（需 8000 重启后生效）
+- relay_page 指数分区三色数字（`zoneIdxColor`）：绿=idx≥60 / 红=idx<25 / 黄=40-60∧温≥56；
+  其余中性区灰、缺温度不判黄（fail-visible）。该三色逻辑被 5.1 的徽标复用，未删除。
 
 ## 6. 口径与样本警示（引用读数时必须随带）
 

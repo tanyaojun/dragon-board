@@ -141,6 +141,35 @@
   .lf-bar .cnt{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
   .board-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:2px 0 12px}
   .board-row .k{font-size:12px;color:var(--muted2);flex:none}
+  /* ---------- 连板指数分带/相位可视化（2026-10-18：结论图形化，不只用文字） ---------- */
+  .ribbon{display:flex;gap:1px;height:18px;border-radius:5px;overflow:hidden;background:#f1f5f9}
+  .ribbon i{flex:1 1 0;min-width:2px;cursor:default}
+  .ribbon-wrap{margin:4px 0 2px}
+  .ribbon-cap{font-size:11px;color:var(--muted2);display:flex;justify-content:space-between;margin-bottom:2px}
+  .seg-list{display:flex;flex-wrap:wrap;gap:6px;max-height:260px;overflow:auto;padding-right:4px}
+  .seg{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:8px;
+       padding:4px 9px;font-size:12px;background:#fff}
+  .seg i{width:9px;height:9px;border-radius:2px;flex:none}
+  .seg b{font-variant-numeric:tabular-nums}
+  .mx{width:100%;border-collapse:separate;border-spacing:2px;font-size:12px;table-layout:fixed}
+  .mx th{padding:4px 2px;text-align:center;color:var(--muted);font-weight:500;background:#fff}
+  .mx th.rowh{text-align:left;width:74px;white-space:nowrap}
+  .mx td{padding:4px 2px;text-align:center;border-radius:6px;background:#f8fafc;font-variant-numeric:tabular-nums}
+  .mx td.empty{color:var(--muted2);background:#fbfcfe}
+  .mx td .n{font-weight:700}
+  .mx td .s{font-size:10px;color:var(--muted)}
+  .mcards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .mcard{border:1px solid var(--border);border-radius:9px;padding:9px 11px;background:#fff}
+  .mcard .k{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:5px}
+  .mcard .k i{width:8px;height:8px;border-radius:2px;flex:none}
+  .mcard .v{font-size:18px;font-weight:700;margin-top:2px}
+  .mcard .s{font-size:11px;color:var(--muted2)}
+  .mini{font-size:12px}
+  .mini th{font-size:11px}
+  .mini td{padding:5px 7px}
+  .prov{font-size:11px;color:var(--muted2);line-height:1.7}
+  .prov code{background:#f1f5f9;border-radius:4px;padding:0 4px}
+  .warn{background:var(--amber-bg);color:var(--amber);border:1px solid #fde68a;border-radius:8px;padding:6px 10px;font-size:12px}
 </style>
 </head>
 <body>
@@ -186,11 +215,66 @@
   </section>
 
   <section id="tab-relay" style="display:none">
-    <div class="kpi-row" id="relayKpi" style="grid-template-columns:repeat(7,1fr)"></div>
+    <div class="kpi-row" id="relayKpi" style="grid-template-columns:repeat(8,1fr)"></div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>🎯 相位分线 · 指数分区 <span class="hint" id="phaseChartHint"></span></h3>
+      <div class="lf-bar" id="chartScopeBar"></div>
+      <div id="relayChart2"></div>
+      <div class="legend" id="phaseChartLegend" style="margin-top:10px;flex-wrap:wrap;gap:8px 18px">
+        <span><i style="background:#f0fdf4;border:1px solid #dcfce7"></i>绿灯 ≥60（放行区）</span>
+        <span><i style="background:#fffbeb;border:1px solid #fde68a"></i>40-60 观察带（▲ 毒带观察 = ∧温度≥56 · 退潮期）</span>
+        <span><i style="background:#fef2f2;border:1px solid #fee2e2"></i>冰点 &lt;25（○红）</span>
+        <span><i style="background:#1d4ed8;height:3px"></i>连板指数</span>
+        <span><i style="background:#f59e0b;height:3px"></i>EOD 温度分</span>
+        <span>圆点色 = 当日相位</span>
+        <span>下方两条带 = 相位分段 / 钱效档位</span>
+      </div>
+    </div>
+
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card">
+        <h3>🧩 相位分段 <span class="hint" id="phaseSegHint"></span></h3>
+        <div class="seg-list" id="phaseSegs"></div>
+        <div id="phaseStats" style="margin-top:14px"></div>
+      </div>
+      <div class="card">
+        <h3>🔲 相位 × 指数带 交叉表 <span class="hint">格内 n ／ 次日溢价A ／ 大面%</span></h3>
+        <div id="phaseMatrix"></div>
+        <div class="prov" id="phaseMatrixNote" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>💰 钱效分带（接力赚钱效应 → 次日实测） <span class="hint" id="moneyHint"></span></h3>
+      <div id="moneyRibbon"></div>
+      <div class="grid g2" style="margin-top:14px">
+        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">档位统计（当日档位 → 次日指数变化 · 含可实测日）</div><div id="moneyStats"></div></div>
+        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">分档实测（离线诊断 · D 日档位 → 次日接力结果）</div><div id="moneyDiag"></div></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>⚠️ 40-60 毒带（退潮期）· 冰点 · 绿灯 命中清单 <span class="hint" id="hitHint"></span></h3>
+      <div class="lf-bar" id="hitChips"></div>
+      <div id="hitTable"></div>
+      <div class="prov" id="hitNote" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>📐 分带实测 · 指数分区结论 <span class="hint" id="diagProvenance"></span></h3>
+      <div id="diagWarn"></div>
+      <div class="grid g2" style="margin-top:2px">
+        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">按连板指数分带（D 判定 → 次日实测）</div><div id="diagBands"></div></div>
+        <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">五区赔率结构（赢:输比均值更贴操作）</div><div id="diagZones"></div></div>
+      </div>
+      <div id="diagCorr" style="margin-top:14px"></div>
+      <div class="prov" id="diagNotes" style="margin-top:10px"></div>
+    </div>
+
     <div class="card" style="margin-top:14px"><h3>🗓️ 判定明细 <span class="hint" id="relayHint">加载中…</span></h3>
       <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
       <table id="relayTable"></table></div>
-    <div class="card" style="margin-top:14px"><h3>📈 连板指数序列 <span class="hint">跟随判定明细区间筛选</span></h3><div id="relayChart2"></div></div>
   </section>
 
   <section id="tab-labels" style="display:none">
@@ -219,6 +303,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '' },
+  hitFilter: 'toxic',  // 「分区命中清单」筛选：all|toxic|ice|green（默认毒带=用户关注点）
+  chartScope: 'full',  // 相位分线图范围：full=诊断全窗｜range=跟随判定明细区间
   relayRange: null,  // 判定明细日期区间 {start,end}；null=未初始化（首次渲染按近1月兜）；end=null=跟随最新
   relaySort: { key: 'date', dir: -1 },
   labelSort: { key: 'rank', dir: 1 } };
@@ -343,6 +429,68 @@ const zoneIdxColor = r => {
   return 'var(--muted)';
 };
 
+// ---------- 连板指数分区/相位/钱效 可视化常量（2026-10-18） ----------
+// 分区定义与 docs/hotlist-jev/jev-relay-band-toxic-diagnostic.md §9（长窗代际）同源；
+// 一句口径：连板指数是门卫不是号手——分区是观察线索，转交易规则须新预登记+裁决。
+const PHASE_COLOR = {relay_heat:'#16a34a', divergence:'#f59e0b', collapse:'#dc2626',
+                     launch:'#2563eb', bottoming:'#0891b2', insufficient_evidence:'#cbd5e1'};
+const MONEY_COLOR = {strong:'#16a34a', neutral:'#94a3b8', losing:'#dc2626',
+                     insufficient_evidence:'#e2e8f0'};
+const MONEY_ORDER = ['strong','neutral','losing','insufficient_evidence'];
+const BAND_ORDER = ['0-25','25-40','40-60','≥60'];
+const BAND_COLOR = {'0-25':'#38bdf8','25-40':'#94a3b8','40-60':'#f59e0b','≥60':'#16a34a'};
+const ZONE_DEF = {
+  green:{label:'绿灯区', cls:'b-green', color:'#16a34a',
+    tip:'指数 ≥60：长窗代际 n=17 溢价A +0.75%、大面 11.6%、赢/输 +1.89%/-0.88%（赔率≈2.1:1）——分带结论里唯一明确放行区'},
+  toxic:{label:'毒带观察', cls:'b-amber', color:'#d97706',
+    tip:'指数 40-60 且 EOD 温度 ≥56（俗称「退潮期毒带」，实为温度叠加条件，不限定相位）：长窗代际 n=11 溢价A -0.45%、4/7 负；注意 40-60 整体为 +0.6%（非亏损带），负号来自 ∧温度≥56 的条件切分'},
+  ice:{label:'冰点观察', cls:'b-red', color:'#dc2626',
+    tip:'指数 <25：长窗代际 n=14 溢价A -0.1%、大面 19.3%（未破 20% 门槛）；v3 代际曾为「毒带」，v4/长窗未复现显著亏损——观察线索非规则'},
+  mid:{label:'中性 40-60', cls:'b-gray', color:'#94a3b8',
+    tip:'指数 40-60 但温度 <56 或当日无温度：fail-visible 不判黄（温度缺则不判毒带观察）'},
+  neutral:{label:'中性区', cls:'b-gray', color:'#94a3b8', tip:'指数 25-40 中性区'},
+  na:{label:'—', cls:'b-gray', color:'#94a3b8', tip:'当日无连板指数存档'},
+};
+// 分区判定（唯一实现，KPI/明细/命中清单共用；与 zoneIdxColor 同一套阈值）
+function zoneOf(r){
+  if (!r || r.relayIndex == null) return ZONE_DEF.na;
+  const idx = r.relayIndex, t = r.dayTemperature;
+  if (idx >= 60) return ZONE_DEF.green;
+  if (idx < 25) return ZONE_DEF.ice;
+  if (idx >= 40 && t != null && t >= 56) return ZONE_DEF.toxic;
+  if (idx >= 40) return ZONE_DEF.mid;
+  return ZONE_DEF.neutral;
+}
+const zoneBadge = r => { const z = zoneOf(r);
+  return `<span class="badge ${z.cls}" title="${esc(z.tip)}">${esc(z.label)}</span>`; };
+const bandOfIdx = v => v == null ? null
+  : (v < 25 ? '0-25' : v < 40 ? '25-40' : v < 60 ? '40-60' : '≥60');
+const median = arr => { if (!arr || !arr.length) return null;
+  const a = arr.slice().sort((p, q) => p - q), m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+const meanOf = arr => (arr && arr.length) ? arr.reduce((p, q) => p + q, 0) / arr.length : null;
+const fx1 = (v, suffix) => v == null || !isFinite(v) ? '--' : (v > 0 ? '+' : '') + v.toFixed(1) + (suffix || '');
+const f0 = (v, suffix) => v == null || !isFinite(v) ? '--' : (v > 0 ? '+' : '') + v.toFixed(0) + (suffix || '');
+const fp = (v, d) => v == null || !isFinite(v) ? '--' : v.toFixed(d == null ? 1 : d) + '%';   // 恒非负率值
+// 分带实测读数（离线诊断产物；STATE.band）。缺失/损坏 → null（fail-visible，不给空表）
+const bandDoc = () => (STATE.band && STATE.band.ok && Array.isArray(STATE.band.days)) ? STATE.band : null;
+const bandDays = () => { const b = bandDoc(); return b ? b.days.slice().sort((x, y) => x.d < y.d ? -1 : 1) : []; };
+const bandDayMap = () => { const m = {}; for (const o of bandDays()) m[o.d] = o; return m; };
+// 有次日实测的判定日（与离线诊断 have 同口径：premA 非空 ⇔ 次日池/棒齐）——
+// 客户端统计表统一用它，避免「客户端 n=64 / 诊断 n=63」类口径不一致
+const measurable = rows => rows.filter(o => o.premA != null);
+const bandDiagMissing = () => { const b = STATE.band || {};
+  return !b.ok ? `<div class="warn">离线分带表未就绪（${esc(b.reason || 'unknown')}）——${esc(b.hint || '跑 scripts/jev_relay_band_diagnostic.py --emit-json')}</div>` : ''; };
+// 相位分段：连续同相位日聚为一段（相位分线的「列表化」形态）
+function phaseSegments(rows){
+  const out = [];
+  for (const r of rows){
+    const ph = r.phase || '?', last = out[out.length - 1];
+    if (last && last.phase === ph){ last.end = r.d; last.n++; if (r.idx != null) last.idx.push(r.idx); }
+    else out.push({phase: ph, start: r.d, end: r.d, n: 1, idx: r.idx == null ? [] : [r.idx]});
+  }
+  return out;
+}
 async function jget(path){ const r = await fetch(path); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
 
 // EOD 文档可用性（2026-10-14）：degraded / missing_token 的 EOD 文档 answers 与 scores
@@ -373,13 +521,16 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels, quotes;
+  let series, slots, labels, quotes, band;
   try {
-    [series, slots, labels, quotes] = await Promise.all([
+    [series, slots, labels, quotes, band] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
       jget('/api/hotlist-jev/quotes-review?with_docs=1' + (date ? '&date=' + date : '')).then(r => { STATE.quotesSlots = r.voteSlots || []; return r; }),
+      // 离线分带读数（fail-visible：缺失/损坏 → {ok:false,reason,hint}，页面显式标注未生成）
+      jget('/api/hotlist-jev/relay-band').catch(e => ({ ok: false, degraded: true,
+        reason: 'band_read_failed: ' + (e && e.message ? e.message : '?') })),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -399,6 +550,7 @@ async function loadAll(){
   STATE.eod = slots.eod;
   STATE.labels = labels;
   STATE.quotes = quotes;
+  STATE.band = band;
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
@@ -624,14 +776,23 @@ function renderRelayTab(){
   const curVer = (STATE.series[STATE.series.length - 1] || {}).questionSetVersion;
   const verBadge = r => (mixed && r.questionSetVersion)
     ? badge(r.questionSetVersion, r.questionSetVersion === curVer ? 'b-gray' : 'b-amber') : '';
-  $('relayKpi').innerHTML = `
+  // 所选日无存档（非交易日/未生成）：明说 + 指向最近可得，不给一片 '-'
+  const noDay = d.relayIndex == null;
+  const ref0 = noDay ? prevTradingDayRef() : null;
+  const kpiNote = noDay
+    ? `<div class="kpi-note">所选日期 ${esc(selectedDate() || '')} 无连板指数存档（非交易日或尚未生成）——`
+      + `下方「相位分线 / 钱效分带 / 分区命中清单 / 分带实测」均为诊断窗口读数`
+      + `${ref0 && ref0.row ? `；${ref0.label} ${esc(String(ref0.row.tradingDate || '').slice(5))} 指数 ${ref0.row.relayIndex}（${esc(PHASE_CN[ref0.row.relayPhase] || '-')}）` : ''}。</div>`
+    : '';
+  $('relayKpi').innerHTML = kpiNote + `
     <div class="kpi"><div class="k">连板情绪指数</div><div class="v phase-big" style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}${confChip(((d.answers||{}).relay_index||{}).confidence)}</div><div class="s">0-100</div></div>
     <div class="kpi"><div class="k">接力相位</div><div class="v" style="font-size:16px">${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}</div><div class="s">主锚三日链·高位轨迹</div></div>
     <div class="kpi"><div class="k">边际方向</div><div class="v" style="font-size:16px">${momB(d.relayMomentum)}${confChip(((d.answers||{}).relay_momentum||{}).confidence)}</div><div class="s">今日 vs 昨日</div></div>
     <div class="kpi"><div class="k">梯队结构</div><div class="v" style="font-size:16px">${ladderB(d.ladderHealth)}${confChip(((d.answers||{}).ladder_health||{}).confidence)}</div><div class="s">量化比率口径</div></div>
     <div class="kpi"><div class="k">接力钱效</div><div class="v" style="font-size:16px">${moneyB(d.moneyEffect)}${confChip(((d.answers||{}).money_effect||{}).confidence)}</div><div class="s">晋级/断板/溢价</div></div>
     <div class="kpi"><div class="k">题材脉络</div><div class="v" style="font-size:16px">${themeB(d.themePulse)}${confChip(((d.answers||{}).theme_pulse||{}).confidence)}</div><div class="s">近5日榜</div></div>
-    <div class="kpi"><div class="k">龙头强度</div><div class="v" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}${confChip(((d.answers||{}).leader_strength||{}).confidence)}</div><div class="s">最高板地位</div></div>`;
+    <div class="kpi"><div class="k">龙头强度</div><div class="v" style="color:${tempColor(d.leaderStrength)}">${d.leaderStrength ?? '-'}${confChip(((d.answers||{}).leader_strength||{}).confidence)}</div><div class="s">最高板地位</div></div>
+    <div class="kpi" title="${esc(zoneOf(d).tip)}"><div class="k">分区定位</div><div class="v" style="font-size:16px">${zoneBadge(d)}</div><div class="s">${d.dayTemperature != null ? '温度 ' + d.dayTemperature.toFixed(1) : '温度缺（不判毒带）'}</div></div>`;
   const f = STATE.relayFilter;
   // 区间过滤为底，五下拉在区间内叠加（AND）；计数/hint/图表均用区间集
   const all = rangedSeries();
@@ -653,6 +814,7 @@ function renderRelayTab(){
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="relayRow('${js(r.tradingDate || '')}')">
     <td class="num"><span class="lg-caret">▶</span>${(r.tradingDate||'').slice(5)}${verBadge(r)}${gapBadge(r)}</td>
     <td class="num" style="color:${zoneIdxColor(r)};font-size:14px">${r.relayIndex ?? '-'}${confChip(((r.answers||{}).relay_index||{}).confidence)}</td>
+    <td>${zoneBadge(r)}</td>
     <td>${phaseB(r.relayPhase)}${confChip(((r.answers||{}).relay_phase||{}).confidence)}</td>
     <td>${momB(r.relayMomentum)}${confChip(((r.answers||{}).relay_momentum||{}).confidence)}</td>
     <td>${ladderB(r.ladderHealth)}${confChip(((r.answers||{}).ladder_health||{}).confidence)}</td>
@@ -660,7 +822,7 @@ function renderRelayTab(){
     <td>${themeB(r.themePulse)}${confChip(((r.answers||{}).theme_pulse||{}).confidence)}</td>
     <td class="num" style="color:var(--muted)">${((r.usage||{}).input_tokens||0) + ((r.usage||{}).output_tokens||0)}</td>
     <td style="color:var(--muted2)">${(r.computedAt||'').slice(5,16)}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="9">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
+    + (open ? `<tr class="lg-detail"><td colspan="10">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
   }).join('');
   STATE.relayEntries = shown.map(r => relayEntryOf(r));
   const bar = $('relayFilterBar');
@@ -671,8 +833,9 @@ function renderRelayTab(){
     bar.innerHTML = rRangeBar() + rSel('相位', 'phase') + rSel('边际', 'momentum') + rSel('梯队', 'ladder')
       + rSel('钱效', 'money') + rSel('题材', 'theme')
       + `<button onclick="rClear()">清除筛选</button><span class="cnt">${shown.length} / ${all.length} 日（全库 ${STATE.series.length}）</span>`;
-  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
-    + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}<th>分区</th><th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('tokens', 'tokens')}${th('判定时间', 'time')}</tr>`
+    + (body || '<tr><td colspan="10" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  renderRelayAnalysis();
   const hintEl = $('relayHint');
   if (hintEl) hintEl.textContent = `判定口径 ${vers.length > 1 ? vers.join('+') + ' 混版' : (vers[0] || '?')} · ${shown.length}/${all.length} 日 · 全库 ${STATE.series.length} 日 · 绿灯≥60 · 冰点观察<25（长窗代际 0-25 均值 −0.1%、大面 19.3%，未复现 v3 显著亏损） · 毒带观察=40-60且温度≥56（观察线索非规则）· 锚缺位×N=本日主锚整根不可用（琥珀，数据质量标记；子项缺位见 hover/详情）· P=模型置信度（灰≥60 正常 / 琥珀 35-60 存疑 / 红<35 两可勿当结论；旧版判定无置信不显示）${s.key === 'date' && s.dir === -1 ? '' : ' · 已排序'} · 点击行查看调用日志`;
 }
@@ -1497,11 +1660,291 @@ function lgCopy(view, what, ev){
   copyText(txt, ev.currentTarget);
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// 连板指数「结论可视化」（2026-10-18 用户需求：相位分线 / 钱效分带 / 40-60 毒带（退潮期）
+// 三类高价值信息必须图形化重点呈现，不能只有文字与基础列表）——
+//   · 图：分区底色 + 指数线 + 温度线 + 相位/钱效条带 + 毒带/冰点/绿灯标记
+//   · 列表：相位分段、分区命中清单、五区赔率
+//   · 标识符：分区徽标（绿灯/毒带观察/冰点观察/中性）贯穿 KPI、明细、清单
+// 口径：分区是观察线索非交易规则；数字全部来自 docs/hotlist-jev/
+// jev-relay-band-toxic-diagnostic.md §9 与 /api/hotlist-jev/relay-band 权威读数。
+// ══════════════════════════════════════════════════════════════════════════════
+function renderRelayAnalysis(){
+  renderPhasePanel();
+  renderPhaseMatrix();
+  renderMoneyPanel();
+  renderZoneHits();
+  renderDiagPanel();
+}
+
+function renderPhasePanel(){
+  const rows = bandDays();
+  const rowsM = measurable(rows);            // 统计表只用可实测日
+  const el = $('phaseSegs'); if (!el) return;
+  if (!rows.length){ el.innerHTML = '<div class="empty">无分带读数</div>'; $('phaseStats').innerHTML = bandDiagMissing(); $('phaseSegHint').textContent = ''; return; }
+  const segs = phaseSegments(rows);
+  $('phaseSegHint').textContent = `${rows[0].d} ~ ${rows[rows.length - 1].d} · ${rows.length} 判定日 · ${segs.length} 段`;
+  el.innerHTML = segs.map(g => {
+    const c = PHASE_COLOR[g.phase] || '#94a3b8';
+    const lo = g.idx.length ? Math.min(...g.idx) : null, hi = g.idx.length ? Math.max(...g.idx) : null;
+    const seg = rows.filter(x => x.d >= g.start && x.d <= g.end);   // 段内次日实测（跨全部命中日）
+    const pa = median(seg.map(x => x.premA).filter(v => v != null));
+    return `<span class="seg" title="${esc(seg.map(x => `${x.d.slice(5)} 指数${x.idx ?? '-'}${x.temp != null ? ' 温' + x.temp.toFixed(0) : ''}`).join('、'))}">
+      <i style="background:${c}"></i><span style="font-weight:600">${esc(PHASE_CN[g.phase] || g.phase)}</span>
+      <b>${g.n}天</b><span style="color:var(--muted2)">${g.start.slice(5)}~${g.end.slice(5)}</span>
+      <span style="color:var(--muted)">指数 ${lo ?? '-'}~${hi ?? '-'}</span>
+      <span style="color:${pa == null ? 'var(--muted2)' : pa > 0 ? 'var(--green)' : 'var(--red)'}">次日溢价A ${fx1(pa, '%')}</span></span>`;
+  }).join('');
+  // 相位统计（当日相位 → 次日指数变化 / 实测溢价）
+  const st = {}; for (const o of rowsM){ const k = o.phase || '?'; (st[k] = st[k] || []).push(o); }
+  const body = Object.entries(st).map(([k, g]) => {
+    const d = g.map(x => x.didx).filter(v => v != null);
+    const pa = g.map(x => x.premA).filter(v => v != null);
+    const bf = g.map(x => x.bigface).filter(v => v != null);
+    const dm = median(d);
+    return `<tr><td><span class="badge" style="background:${PHASE_COLOR[k] || '#94a3b8'}1a;color:${PHASE_COLOR[k] || '#64748b'}">${esc(PHASE_CN[k] || k)}</span></td>
+      <td class="num">${g.length}</td>
+      <td class="num" style="color:${dm == null ? 'var(--muted2)' : dm > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(dm)}</td>
+      <td class="num" style="color:${pa.length && meanOf(pa) > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(meanOf(pa), '%')}</td>
+      <td class="num" style="color:${meanOf(bf) >= 20 ? 'var(--red)' : 'var(--muted)'}">${fp(meanOf(bf), 1)}</td></tr>`;
+  }).join('');
+  $('phaseStats').innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">相位统计（当日相位 → 次日变化）· n=${rowsM.length} 可实测日</div>
+    <table class="mini"><tr><th>相位</th><th>n</th><th>次日指数Δ中位</th><th>次日溢价A均值</th><th>次日大面%</th></tr>${body}</table>`;
+}
+
+function renderPhaseMatrix(){
+  const el = $('phaseMatrix'); if (!el) return;
+  const rows = measurable(bandDays());
+  if (!rows.length){ el.innerHTML = '<div class="empty">无分带读数</div>'; $('phaseMatrixNote').innerHTML = ''; return; }
+  const phases = Object.keys(PHASE_CN).filter(p => rows.some(o => (o.phase || '?') === p) || ['relay_heat', 'divergence', 'collapse'].includes(p));
+  const cell = {};                                     // phase → band → {pa:[], bf:[], n:0}
+  for (const o of rows){
+    const b = bandOfIdx(o.idx); if (!b) continue;
+    const k = o.phase || '?';
+    cell[k] = cell[k] || {}; const c = cell[k][b] = cell[k][b] || {pa: [], bf: [], n: 0};
+    c.n++; if (o.premA != null) c.pa.push(o.premA); if (o.bigface != null) c.bf.push(o.bigface);
+  }
+  const head = `<tr><th class="rowh"></th>${BAND_ORDER.map(b => `<th style="color:${BAND_COLOR[b]}">${b}</th>`).join('')}</tr>`;
+  const body = phases.map(p => {
+    const tds = BAND_ORDER.map(b => {
+      const c = (cell[p] || {})[b];
+      if (!c || !c.n) return '<td class="empty">·</td>';
+      const pa = meanOf(c.pa), bf = meanOf(c.bf);
+      const bg = pa == null ? '#f8fafc' : pa > 0.5 ? '#dcfce7' : pa < -0.5 ? '#fee2e2' : '#f8fafc';
+      return `<td style="background:${bg}" title="${esc(PHASE_CN[p] || p)} × ${b}：n=${c.n} 溢价A=${fx1(pa, '%')} 大面=${f0(bf, '%')}">
+        <div class="n">${c.n}</div><div class="s" style="color:${pa == null ? 'var(--muted2)' : pa > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(pa, '%')}</div>
+        <div class="s" style="color:${bf >= 20 ? 'var(--red)' : 'var(--muted2)'}">${fp(bf, 1)}</div></td>`;
+    }).join('');
+    const n = Object.values(cell[p] || {}).reduce((acc, c) => acc + c.n, 0);
+    return `<tr><th class="rowh"><span class="badge" style="background:${PHASE_COLOR[p] || '#94a3b8'}1a;color:${PHASE_COLOR[p] || '#64748b'}">${esc(PHASE_CN[p] || p)}</span> <span style="color:var(--muted2)">${n}</span></th>${tds}</tr>`;
+  }).join('');
+  el.innerHTML = `<table class="mx">${head}${body}</table>`;
+  $('phaseMatrixNote').innerHTML = '底色：溢价A &gt;+0.5% 绿、&lt;-0.5% 红；大面% ≥20 标红。用途：看「退潮/崩塌相位是否集中在 40-60 带」以及该格是否真亏钱。';
+}
+
+function moneyStatsTable(rowsAll){
+  const rows = measurable(rowsAll);           // 与离线诊断同口径（只计有次日实测日）
+  const body = MONEY_ORDER.map(k => {
+    const g = rows.filter(o => (o.money || '?') === k);
+    if (!g.length) return '';
+    const d = g.map(x => x.didx).filter(v => v != null);
+    const pa = g.map(x => x.premA).filter(v => v != null);
+    const bf = g.map(x => x.bigface).filter(v => v != null);
+    const dm = median(d);
+    return `<tr><td><span class="badge" style="background:${MONEY_COLOR[k]}1a;color:${MONEY_COLOR[k]}">${esc(MONEY_CN[k] || k)}</span></td>
+      <td class="num">${g.length}</td>
+      <td class="num" style="color:${dm == null ? 'var(--muted2)' : dm > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(dm)}</td>
+      <td class="num" style="color:${meanOf(pa) > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(meanOf(pa), '%')}</td>
+      <td class="num" style="color:${meanOf(bf) >= 20 ? 'var(--red)' : 'var(--muted)'}">${fp(meanOf(bf), 1)}</td></tr>`;
+  }).join('');
+  return `<table class="mini"><tr><th>钱效档位</th><th>n</th><th>次日指数Δ中位</th><th>次日溢价A均值</th><th>次日大面%</th></tr>${body || '<tr><td colspan="5" class="empty">无数据</td></tr>'}</table>`;
+}
+
+function renderMoneyPanel(){
+  const rows = bandDays();
+  const el = $('moneyRibbon'); if (!el) return;
+  if (!rows.length){ el.innerHTML = bandDiagMissing() || '<div class="empty">无分带读数</div>'; $('moneyStats').innerHTML = ''; $('moneyDiag').innerHTML = ''; return; }
+  $('moneyHint').textContent = `${rows[0].d} ~ ${rows[rows.length - 1].d} · ${rows.length} 日（悬停看当日档位与次日实测）`;
+  // 条带（逐日一格）
+  const cells = rows.map(o => {
+    const c = MONEY_COLOR[o.money] || '#e2e8f0';
+    return `<i style="background:${c}" title="${esc(`${o.d} ${MONEY_CN[o.money] || o.money || '?'}｜指数 ${o.idx ?? '-'}｜相位 ${PHASE_CN[o.phase] || o.phase || '?'}｜次日溢价A ${fx1(o.premA, '%')}｜次日大面 ${f0(o.bigface, '%')}`)}"></i>`;
+  }).join('');
+  el.innerHTML = `<div class="ribbon-cap"><span>${rows[0].d.slice(5)} · 钱效逐日</span><span>${rows[rows.length - 1].d.slice(5)}</span></div>
+    <div class="ribbon">${cells}</div>
+    <div class="legend" style="margin-top:6px">${MONEY_ORDER.map(k => `<span><i style="background:${MONEY_COLOR[k]}"></i>${MONEY_CN[k]}</span>`).join('')}</div>`;
+  $('moneyStats').innerHTML = moneyStatsTable(rows);
+  const b = bandDoc();
+  const diag = (b && b.bandsMoney) ? b.bandsMoney : [];
+  $('moneyDiag').innerHTML = diag.length
+    ? `<table class="mini"><tr><th>钱效档位</th><th>n</th><th>晋级率</th><th>溢价A</th><th>溢价B</th><th>大面%</th><th>A&lt;0天</th></tr>`
+      + diag.map(r => `<tr><td><span class="badge" style="background:${MONEY_COLOR[r.key] || '#94a3b8'}1a;color:${MONEY_COLOR[r.key] || '#64748b'}">${esc(MONEY_CN[r.key] || r.name)}</span></td>
+        <td class="num">${r.n}</td><td class="num">${fp(r.promo, 0)}</td>
+        <td class="num" style="color:${r.premA > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(r.premA, '%')}</td>
+        <td class="num" style="color:${r.premB > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(r.premB, '%')}</td>
+        <td class="num" style="color:${r.bigface >= 20 ? 'var(--red)' : 'var(--muted)'}">${fp(r.bigface, 1)}</td>
+        <td class="num" style="color:var(--muted)">${r.negA}/${r.n}</td></tr>`).join('') + '</table>'
+    : (bandDiagMissing() || '<div class="empty">无实测表</div>');
+}
+
+function renderZoneHits(){
+  const el = $('hitChips'); if (!el) return;
+  const rows = bandDays();
+  if (!rows.length){ el.innerHTML = ''; $('hitTable').innerHTML = bandDiagMissing() || ''; $('hitNote').innerHTML = ''; return; }
+  const typed = rows.map(o => ({o, z: zoneOf({relayIndex: o.idx, dayTemperature: o.temp})}));
+  const F = STATE.hitFilter || 'toxic';
+  const groups = [['toxic', '毒带观察'], ['ice', '冰点观察'], ['green', '绿灯区'], ['all', '全部窗口']];
+  const cnt = k => k === 'all' ? rows.length : typed.filter(x => zoneKey(x.z) === k).length;
+  el.innerHTML = groups.map(([k, t2]) => `<span class="chip${F === k ? ' on' : ''}" onclick="setHitFilter('${k}')">${t2} ${cnt(k)}</span>`).join('')
+    + `<span class="chip plain">区间口径：诊断窗口 ${rows.length} 日</span>`;
+  const shown = (F === 'all' ? typed : typed.filter(x => zoneKey(x.z) === F)).slice().reverse();
+  const tr = shown.map(({o, z}) => `<tr><td class="num">${o.d}</td>
+      <td class="num" style="color:${z.color};font-weight:700">${o.idx ?? '-'}</td>
+      <td class="num">${o.temp != null ? o.temp.toFixed(1) : '--'}</td>
+      <td><span class="badge" style="background:${PHASE_COLOR[o.phase] || '#94a3b8'}1a;color:${PHASE_COLOR[o.phase] || '#64748b'}">${esc(PHASE_CN[o.phase] || o.phase || '?')}</span></td>
+      <td>${o.money ? badge(MONEY_CN[o.money] || o.money, o.money === 'strong' ? 'b-green' : o.money === 'losing' ? 'b-red' : 'b-gray') : '-'}</td>
+      <td>${zoneBadge({relayIndex: o.idx, dayTemperature: o.temp})}</td>
+      <td class="num" style="color:${o.didx == null ? 'var(--muted2)' : o.didx > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(o.didx)}</td>
+      <td class="num" style="color:${o.premA == null ? 'var(--muted2)' : o.premA > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(o.premA, '%')}</td>
+      <td class="num" style="color:${o.bigface >= 20 ? 'var(--red)' : 'var(--muted)'}">${fp(o.bigface, 1)}</td>
+      <td class="num">${fp(o.promo, 0)}</td>
+      <td class="num" style="color:var(--muted2)">${o.cov == null ? '--' : o.cov + '/' + o.n_pool}</td>
+      <td><button style="padding:2px 8px;font-size:11px" onclick="jumpDate('${js(o.d)}')">看该日</button></td></tr>`).join('');
+  $('hitTable').innerHTML = `<table class="mini"><tr><th>日期</th><th>指数</th><th>温度</th><th>相位</th><th>钱效</th><th>分区</th>
+    <th>次日指数Δ</th><th>次日溢价A</th><th>次日大面%</th><th>次日晋级率</th><th>覆盖</th><th></th></tr>`
+    + (tr || '<tr><td colspan="12" class="empty">该分区在诊断窗口内无命中日</td></tr>');
+  const b = bandDoc();
+  $('hitHint').textContent = `${rows.length} 日诊断窗口中：毒带（40-60∧温≥56）${cnt('toxic')} 日 · 冰点（<25）${cnt('ice')} 日 · 绿灯（≥60）${cnt('green')} 日`;
+  $('hitNote').innerHTML = `口径：溢价A = D 日池内各股 D→次日收盘涨跌中位（打板成本近似，未剔一字板）；大面 = ≤-5% 占比；`
+    + `覆盖 = 有日线棒的股数/池内股数（缺棒不计 0，fail-visible）。分区判据见徽标悬停；`
+    + `<b>观察线索非交易规则</b>${b && b.generatedAt ? `。读数生成 ${esc(b.generatedAt)}，窗口 ${esc((b.window || {}).start)}~${esc((b.window || {}).end)}` : ''}。`;
+}
+
+function setChartScope(k){ STATE.chartScope = k; renderCharts(); renderRelayAnalysis(); }
+function zoneKey(z){
+  const l = z && z.label;
+  return l === '毒带观察' ? 'toxic' : l === '冰点观察' ? 'ice' : l === '绿灯区' ? 'green' : 'other';
+}
+function setHitFilter(k){ STATE.hitFilter = k; renderZoneHits(); }
+function jumpDate(d){ $('date').value = d; loadAll(); }
+
+function renderDiagPanel(){
+  const b = bandDoc(); const el = $('diagBands'); if (!el) return;
+  if (!b){ el.innerHTML = bandDiagMissing(); $('diagZones').innerHTML = ''; $('diagCorr').innerHTML = '';
+    $('diagProvenance').textContent = ''; $('diagNotes').innerHTML = ''; return; }
+  const w = b.window || {};
+  const latest = (STATE.series[STATE.series.length - 1] || {}).tradingDate || '';
+  const lag = latest && w.end && latest > w.end ? ` · ⚠ 滞后：序列已到 ${latest}，分带表止于 ${w.end}` : '';
+  $('diagProvenance').textContent = `生成 ${b.generatedAt || '?'} · 窗口 ${w.start}~${w.end}（判定 ${w.judged} 日 / 有次日实测 ${w.evaluated} 日）· relay 代际 ${(b.relayGeneration || []).join('+')}${lag}`;
+  const bars = b.bars || {};
+  $('diagWarn').innerHTML = lag ? `<div class="warn" style="margin-bottom:10px">分带表与当前序列不同步（${esc(lag.replace(' · ', ''))}）——重跑 scripts/jev_relay_band_diagnostic.py --emit-json 即可刷新（零模型调用）</div>` : '';
+  const bandRows = (b.bands || []).filter(r => BAND_ORDER.includes(r.name));
+  el.innerHTML = `<table class="mini"><tr><th>指数带</th><th>n</th><th>晋级率</th><th>高位晋级</th><th>溢价A</th><th>溢价B</th><th>大面%</th><th>A&lt;0天</th></tr>`
+    + bandRows.map(r => `<tr style="background:${BAND_COLOR[r.name]}0d">
+        <td><span class="badge" style="background:${BAND_COLOR[r.name]}1a;color:${BAND_COLOR[r.name]}">${esc(r.name)}</span></td>
+        <td class="num">${r.n}</td><td class="num">${fp(r.promo, 0)}</td><td class="num">${fp(r.hiPromo, 0)}</td>
+        <td class="num" style="color:${r.premA > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(r.premA, '%')}</td>
+        <td class="num" style="color:${r.premB > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(r.premB, '%')}</td>
+        <td class="num" style="color:${r.bigface >= 20 ? 'var(--red)' : 'var(--muted)'}">${fx1(r.bigface, '%')}</td>
+        <td class="num" style="color:var(--muted)">${r.negA}/${r.n}</td></tr>`).join('') + '</table>'
+    + `<div class="prov" style="margin-top:6px">判定：40-60 带溢价A ${fx1((bandRows.find(r => r.name === '40-60') || {}).premA, '%')} 非亏损带（「40-60 毒带」命题否）；负号只出现在 ∧温度≥56 的条件下切分（见右表回避区）。</div>`;
+  const zones = b.zones || [];
+  $('diagZones').innerHTML = `<table class="mini"><tr><th>区</th><th>n</th><th>均值</th><th>正/负</th><th>赢日均</th><th>输日均</th><th>大面%</th></tr>`
+    + zones.map(z => {
+      const col = /绿灯/.test(z.zone) ? 'var(--green)' : /红灯|回避/.test(z.zone) ? 'var(--red)' : 'var(--muted)';
+      return `<tr><td style="color:${col};font-weight:600">${esc(z.zone)}</td><td class="num">${z.n}</td>
+        <td class="num" style="color:${z.mean > 0 ? 'var(--green)' : z.mean < 0 ? 'var(--red)' : 'var(--muted)'}">${z.mean == null ? '--' : fx1(z.mean, '%')}</td>
+        <td class="num">${z.pos}/${z.neg}</td>
+        <td class="num" style="color:var(--green)">${fx1(z.winAvg, '%')}</td>
+        <td class="num" style="color:var(--red)">${fx1(z.loseAvg, '%')}</td>
+        <td class="num" style="color:${z.bigface >= 20 ? 'var(--red)' : 'var(--muted)'}">${fx1(z.bigface, '%')}</td></tr>`;
+    }).join('') + '</table>'
+    + `<div class="prov" style="margin-top:6px">回避区 = 40-60 ∧ 温度≥56 的温度叠加切分（与黄灯/半绿区不互斥）——「退潮期降仓」的量化依据。</div>`;
+  const c = b.corr || {};
+  $('diagCorr').innerHTML = `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">切分力（relay 指数对隔日接力的相关性）</div>
+    <div class="flex" style="gap:10px">${['idx_premA', 'idx_premB', 'idx_promo', 'didx_premA', 'temp_premA'].map(k => {
+      const v = c[k]; if (!v) return '';
+      const warn = Math.abs(v.pearson) < 0.1;
+      return `<span class="chip plain" title="n=${v.n}">${esc(v.label)} <b style="color:${warn ? 'var(--muted2)' : v.pearson > 0 ? 'var(--green)' : 'var(--red)'}">${v.pearson.toFixed(3)}</b> ／ ρ ${v.spearman.toFixed(3)}</span>`;
+    }).join('')}</div>
+    <div class="prov" style="margin-top:6px">指数对隔日溢价有正切分力（未破 0.3），EOD 温度 ≈0（独立轴，不做冗余替代）。</div>`;
+  $('diagNotes').innerHTML = `日线来源：本地 ${esc((bars || {}).localRoot || '?')}（末棒 ${esc((bars || {}).localLastBar || '?')}）· 有棒 ${bars.okCodes ?? '?'}/${bars.codes ?? '?'}。`
+    + `口径警示：${(b.notes || []).map(esc).join('；')}。`;
+}
+
+// 相位/钱效/分区 富图表：分区底色 + 指数线 + 温度线 + 相位条带 + 钱效条带 + 标记
+function drawRelayChart(id, pts, temps){
+  const W = 1460, H = 292, PL = 46, PR = 16, PT = 16, PB = 108;
+  const plotH = H - PT - PB, n = pts.length;
+  const x = i => n === 1 ? PL + (W - PL - PR) / 2 : PL + i * (W - PL - PR) / (n - 1);
+  const y = v => PT + (1 - v / 100) * plotH;
+  let bg = '', grid = '', lb = '';
+  for (const [lo, hi, fill, txt] of [[0, 25, '#fef2f2', '冰点 <25'], [25, 40, '#f8fafc', ''],
+    [40, 60, '#fffbeb', '40-60 观察带（毒带观察=∧温度≥56）'], [60, 100, '#f0fdf4', '绿灯 ≥60']]){
+    bg += `<rect x="${PL}" y="${y(hi)}" width="${W - PL - PR}" height="${Math.max(0, y(lo) - y(hi))}" fill="${fill}"/>`;
+    if (txt) bg += `<text x="${PL + 6}" y="${y(hi) + 12}" font-size="10" fill="#94a3b8" stroke="#fff" stroke-width="3" paint-order="stroke">${esc(txt)}</text>`;
+  }
+  for (let g = 0; g <= 4; g++){ const v = g * 25;
+    grid += `<line x1="${PL}" y1="${y(v)}" x2="${W - PR}" y2="${y(v)}" stroke="#e2e8f0"/>`;
+    lb += `<text x="${PL - 8}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#94a3b8">${v}</text>`; }
+  const step = Math.max(1, Math.ceil(n / 12));
+  let pathR = '', pathT = '', dots = '', marks = '';
+  pts.forEach((r, i) => {
+    if (i % step === 0 || i === n - 1)
+      lb += `<text x="${x(i)}" y="${y(0) + 15}" text-anchor="middle" font-size="10" fill="#94a3b8">${esc((r.tradingDate || '').slice(5))}</text>`;
+    const z = zoneOf(r);
+    pathR += `${i ? 'L' : 'M'}${x(i)},${y(r.relayIndex)}`;
+    const t = temps[r.tradingDate];
+    if (t != null) pathT += `${pathT ? 'L' : 'M'}${x(i)},${y(t)}`;   // 首点缺温度时勿以 L 开头（SVG 报错）
+    const tip = `${r.tradingDate} 指数${r.relayIndex} ${PHASE_CN[r.relayPhase] || ''}｜${z.label}`
+      + `${r.dayTemperature != null ? '｜温度 ' + r.dayTemperature.toFixed(1) : ''}｜钱效 ${MONEY_CN[r.moneyEffect] || '-'}`;
+    dots += `<circle cx="${x(i)}" cy="${y(r.relayIndex)}" r="3.4" fill="${PHASE_COLOR[r.relayPhase] || '#94a3b8'}" stroke="#fff" stroke-width="1"><title>${esc(tip)}</title></circle>`;
+    const zk = zoneKey(z);
+    if (zk === 'toxic')
+      marks += `<polygon points="${x(i)},${y(r.relayIndex) - 9} ${x(i) - 5},${y(r.relayIndex) - 19} ${x(i) + 5},${y(r.relayIndex) - 19}" fill="#d97706"><title>${esc('毒带观察（退潮期）：' + tip)}</title></polygon>`;
+    if (zk === 'ice')
+      marks += `<circle cx="${x(i)}" cy="${y(r.relayIndex)}" r="7" fill="none" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="2 2"><title>${esc('冰点观察：' + tip)}</title></circle>`;
+    if (zk === 'green')
+      marks += `<circle cx="${x(i)}" cy="${y(r.relayIndex)}" r="6" fill="none" stroke="#16a34a" stroke-width="1.2"><title>${esc('绿灯区：' + tip)}</title></circle>`;
+  });
+  // 相位条带
+  const rY = y(0) + 26, rH = 20, cellsR = [];
+  for (const g of phaseSegments(pts.map(r => ({d: r.tradingDate, idx: r.relayIndex, phase: r.relayPhase})))){
+    const i0 = pts.findIndex(r => r.tradingDate === g.start), i1 = pts.findIndex(r => r.tradingDate === g.end);
+    if (i0 < 0 || i1 < 0) continue;
+    const x0 = x(i0) - 3, x1 = x(i1) + 3, w = Math.max(3, x1 - x0);
+    const c = PHASE_COLOR[g.phase] || '#94a3b8';
+    cellsR.push(`<rect x="${x0}" y="${rY}" width="${w}" height="${rH}" rx="3" fill="${c}" opacity="0.92"><title>${esc(`${PHASE_CN[g.phase] || g.phase} ${g.start}~${g.end}（${g.n} 日）`)}</title></rect>`);
+    if (w >= 46) cellsR.push(`<text x="${x0 + w / 2}" y="${rY + 14}" text-anchor="middle" font-size="10" fill="#fff">${esc((PHASE_CN[g.phase] || g.phase).slice(0, 4))}${g.n > 1 ? ' ' + g.n + 'd' : ''}</text>`);
+  }
+  // 钱效条带
+  const mY = rY + rH + 4, mH = 14;
+  const cellsM = pts.map((r, i) => {
+    const w = Math.max(2, (W - PL - PR) / Math.max(1, n - 1) + 1);
+    return `<rect x="${x(i) - w / 2}" y="${mY}" width="${w}" height="${mH}" fill="${MONEY_COLOR[r.moneyEffect] || '#e2e8f0'}"><title>${esc(`${r.tradingDate} 钱效 ${MONEY_CN[r.moneyEffect] || '-'}`)}</title></rect>`;
+  }).join('');
+  const capY = mY + mH + 12;
+  $(id).innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${bg}${grid}${lb}
+    ${pathT ? `<path d="${pathT}" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 4" opacity="0.85"/>` : ''}
+    <path d="${pathR}" fill="none" stroke="#1d4ed8" stroke-width="2.4"/>${dots}${marks}
+    ${cellsR.join('')}<text x="${PL - 40}" y="${rY + 14}" font-size="10" fill="#94a3b8">相位</text>
+    ${cellsM}<text x="${PL - 40}" y="${mY + 11}" font-size="10" fill="#94a3b8">钱效</text>
+    <text x="${W - PR}" y="${capY}" text-anchor="end" font-size="10" fill="#94a3b8">相位条带=连续同相位日段｜钱效条带=逐日档位｜▲=毒带观察（40-60∧温≥56）○红=冰点 <25 ○绿=绿灯 ≥60</text></svg>`;
+}
+
 function renderCharts(){
   const seq = _loadSeq;
-  // 总览卡固定近15日；连板指数页卡跟随判定明细区间（rangedSeries）
+  // 总览卡固定近15日；相位分线图按 chartScope（默认全窗 = 诊断代际全量，可切跟随区间）
+  const full = STATE.chartScope !== 'range';
   const pts15 = STATE.series.slice(-15).filter(r => r.relayIndex != null);
-  const ptsR = rangedSeries().filter(r => r.relayIndex != null);
+  const ptsR = (full ? STATE.series : rangedSeries()).filter(r => r.relayIndex != null);
+  // 温度随点自带（relay-index 读口已 join EOD day_temperature，全窗可用；/range 仅 60 天上限）
+  const tempsR = {}; for (const r of ptsR) if (r.dayTemperature != null) tempsR[r.tradingDate] = r.dayTemperature;
+  const bar = $('chartScopeBar');
+  if (bar) bar.innerHTML = `<span class="chip${full ? ' on' : ''}" onclick="setChartScope('full')">诊断全窗 ${STATE.series.length} 日</span>`
+    + `<span class="chip${full ? '' : ' on'}" onclick="setChartScope('range')">跟随判定明细区间 ${rangedSeries().length} 日</span>`
+    + `<span class="chip plain">▲ 毒带观察（40-60∧温≥56）· ○红 冰点 · ○绿 绿灯</span>`;
+  $('phaseChartHint').textContent = `${ptsR[0]?.tradingDate || ''} ~ ${ptsR[ptsR.length - 1]?.tradingDate || ''} · ${ptsR.length} 判定日 · 相位条带 ${phaseSegments(ptsR.map(r => ({d: r.tradingDate, idx: r.relayIndex, phase: r.relayPhase}))).length} 段`;
   if (pts15.length < 2) $('relayChart').innerHTML = '<div class="empty">序列不足</div>';
   if (ptsR.length < 2) $('relayChart2').innerHTML = '<div class="empty">区间内序列不足</div>';
   if (pts15.length < 2 && ptsR.length < 2) return;
@@ -1515,10 +1958,10 @@ function renderCharts(){
       if (t != null) temps[day.tradingDate] = t;
     }
     if (pts15.length >= 2) drawChart('relayChart', pts15, temps);
-    if (ptsR.length >= 2) drawChart('relayChart2', ptsR, temps);
+    if (ptsR.length >= 2) drawRelayChart('relayChart2', ptsR, tempsR);
   }).catch(() => { if (seq === _loadSeq) {
     if (pts15.length >= 2) drawChart('relayChart', pts15, {});
-    if (ptsR.length >= 2) drawChart('relayChart2', ptsR, {});
+    if (ptsR.length >= 2) drawRelayChart('relayChart2', ptsR, tempsR);
   } });
 }
 
@@ -1538,7 +1981,7 @@ function drawChart(id, pts, temps){
     pathR += `${i ? 'L' : 'M'}${x(i)},${y(r.relayIndex)}`;
     dotsR += `<circle cx="${x(i)}" cy="${y(r.relayIndex)}" r="3.2" fill="#2563eb"><title>${esc(r.tradingDate)} 指数${r.relayIndex} ${esc(PHASE_CN[r.relayPhase]||'')}</title></circle>`;
     const t = temps[r.tradingDate];
-    if (t != null) pathT += `${i ? 'L' : 'M'}${x(i)},${y(t)}`;
+    if (t != null) pathT += `${pathT ? 'L' : 'M'}${x(i)},${y(t)}`;
   });
   $(id).innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto">${grid}${labels}
     ${pathT ? `<path d="${pathT}" fill="none" stroke="#f59e0b" stroke-width="2" stroke-dasharray="5 4"/>` : ''}

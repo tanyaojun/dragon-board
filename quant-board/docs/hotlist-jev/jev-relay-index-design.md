@@ -499,6 +499,12 @@ TDX 60 棒窗口，需先给 `_daily_bars` 加按叙事日取数（或显式标�
     除权日程查询有界回看 45 链接，新增 `barsSource` 溯源字段；零调用 diff 103/108 天变化、
     回归 0 处；重放 103 天（637K tokens）后钱效 IE 50→1、`样本不足/TDX 日线缺失` 残留 0；
     分带复算见 `jev-relay-band-toxic-diagnostic.md` §9。
+13. **结论图形化（2026-10-18）**：relay_page 连板指数页新增 6 张结论卡——相位分线图（分区底色 +
+    指数/温度线 + 相位/钱效条带 + 毒带/冰点/绿灯标记）、相位分段与统计、相位×指数带矩阵、钱效分带、
+    毒带（退潮期）/冰点/绿灯命中清单、分带实测（指数带 + 五区赔率 + 相关性 + provenance）；
+    新增只读离线产物读口 `GET /api/hotlist-jev/relay-band`（不加工不重算，缺失 fail-visible）；
+    判定明细增「分区」列 + KPI 增「分区定位」卡（分区徽标单实现 `zoneOf()`）。
+    详见 `jev-relay-band-toxic-diagnostic.md` §5.1。
 11. **F7 跌停口径：全市场家族 + 本地日线重算**（2026-10-17）。参考集合
     `market_daily_limit_down` 每行带 `source`，`market_dieban_pool.FULL_MARKET_SOURCES`
     = 东财池 / 行情快照 / **本地日线重算**（`tdx_local_bars`，离线，`market_dieban_tdx.py`
