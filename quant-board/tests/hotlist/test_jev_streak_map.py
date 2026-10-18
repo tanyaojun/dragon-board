@@ -559,3 +559,33 @@ def test_local_bar_file_market_prefix(tmp_path):
     assert runner._local_bar_file(root, "920162").endswith("bj920162.day")
     assert runner._local_bar_file(root, "12345") is None
     assert runner._local_bar_file(root, "900001") is None     # B 股段不在册
+
+
+def test_bars_source_counts_scope_and_thread_safety(monkeypatch):
+    """P2-5：counts 是**进程累计**（须显式声明 scope），且并发自增不丢增量。
+
+    旧版语义只能从变量名猜（会被读成「本次/本日构成」），且 `d[k] = d.get(k,0)+1`
+    非原子——FastAPI 线程池下并发叙事会丢计数。
+    """
+    import threading
+    _reset_bars_state(monkeypatch)
+    prov = runner.bars_source_provenance()
+    assert prov["countsScope"] == "process_cumulative", "应显式声明进程累计语义"
+
+    threads = [threading.Thread(target=lambda: [runner._bars_count("local") for _ in range(200)])
+               for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # 无锁时该断言会随机失败（丢增量）；有锁则恒等于 1600
+    assert runner.bars_source_provenance()["counts"]["local"] == 8 * 200
+
+
+def test_local_take_single_source_with_tdx_module():
+    """P2-2 SSOT：_LOCAL_TAKE 必须来自 market_dieban_tdx.DEFAULT_TAKE，不得手抄字面量。"""
+    from backend.operations import market_dieban_tdx as tdx
+    assert runner._LOCAL_TAKE is tdx.DEFAULT_TAKE or runner._LOCAL_TAKE == tdx.DEFAULT_TAKE
+    import inspect
+    src = inspect.getsource(runner)
+    assert "_LOCAL_TAKE = _TDX_DEFAULT_TAKE" in src, "不得退回手抄 400 字面量"

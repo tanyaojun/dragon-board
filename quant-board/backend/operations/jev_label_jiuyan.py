@@ -50,6 +50,7 @@ from backend.operations.market_dieban_pool import (
     reference_counts,
     source_label,
 )
+from backend.operations.market_dieban_tdx import DEFAULT_TAKE as _TDX_DEFAULT_TAKE
 from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
@@ -899,10 +900,22 @@ _BARS_OFFSET_DEFAULT = 250
 #   ③ 同一天在不同时间点/进程取到的棒不同 → 叙事不可复现（与 F6 同类的确定性缺陷）。
 # 本地 vipdoc 为定长二进制全历史，零外呼、可复现，且与 F7 全市场跌停回填同一数据源
 # （单一事实源 §1.2.1）；线上保留为**回退**（本机无通达信目录/目录内无该股文件）。
-_LOCAL_TAKE = 400             # 与 market_dieban_tdx.DEFAULT_TAKE 同口径（≈1.6 年，覆盖回放区间）
+# 每股读取根数：单一事实源 = market_dieban_tdx.DEFAULT_TAKE（2026-10-18 review P2-2，
+# 原先手抄 400 易与回填端漂移；两者必须同口径「≈1.6 年，覆盖回放区间」）。
+_LOCAL_TAKE = _TDX_DEFAULT_TAKE
 _LOCAL_ROOT_CACHE: list[Any] = []   # 进程内惰性解析的通达信目录
 _LOCAL_MISS: set[str] = set()       # 本地无文件/不可用的 code（进程内，免反复 stat）
-_BARS_SOURCE_COUNTS: dict[str, int] = {}   # 溯源：本进程各来源实际供数次数
+_BARS_LOCK = threading.Lock()
+# 溯源：本进程各来源实际供数**次数**（逐 code 首次命中计 1，跨日/跨请求累加，非「本次构成」）。
+# 2026-10-18 review P2-5：① 语义是 process 级累计，字段名/注释须写明，不得被读成 per-run；
+# ② 自增非原子 —— FastAPI 线程池下并发叙事会丢增量 → 统一走 _BARS_LOCK。
+_BARS_SOURCE_COUNTS: dict[str, int] = {}
+
+
+def _bars_count(src: str) -> None:
+    """来源计数自增（进程级累计，加锁防并发丢增量；P2-5）。"""
+    with _BARS_LOCK:
+        _BARS_SOURCE_COUNTS[src] = _BARS_SOURCE_COUNTS.get(src, 0) + 1
 _LOCAL_MARKETS = (("60", "sh"), ("68", "sh"), ("00", "sz"), ("30", "sz"),
                   ("43", "bj"), ("83", "bj"), ("87", "bj"), ("92", "bj"))
 
@@ -983,7 +996,8 @@ def bars_source_provenance() -> dict[str, Any]:
             last = last_bar_date(root)
         except Exception:
             last = None
-    return {"counts": dict(_BARS_SOURCE_COUNTS), "localRoot": root, "localLastBar": last,
+    return {"counts": dict(_BARS_SOURCE_COUNTS), "countsScope": "process_cumulative",
+            "localRoot": root, "localLastBar": last,
             "onlineFallbackOffset": _bars_offset(), "localTake": _LOCAL_TAKE}
 
 
@@ -1045,7 +1059,7 @@ def _daily_bars(code: str) -> list[dict]:
         local = _local_daily_bars(code)
         if local:
             _DAILY_BARS_CACHE[("local", code)] = local
-            _BARS_SOURCE_COUNTS["local"] = _BARS_SOURCE_COUNTS.get("local", 0) + 1
+            _bars_count("local")
             return local
         _LOCAL_MISS.add(code)   # 不铸造「空棒」：只是本地无此股文件，证据需求交线上回退
     offset = _bars_offset()
@@ -1067,8 +1081,7 @@ def _daily_bars(code: str) -> list[dict]:
                         "vol": float(r.get("vol") or 0),
                     })
                 bars.sort(key=lambda b: b["date"])
-                _BARS_SOURCE_COUNTS[f"online:{offset}"] = \
-                    _BARS_SOURCE_COUNTS.get(f"online:{offset}", 0) + 1
+                _bars_count(f"online:{offset}")
         except Exception:
             return []   # 不缓存：下次调用重试，不把一次抖动变成整轮回调
     _DAILY_BARS_CACHE[key] = bars
@@ -1526,9 +1539,12 @@ def trajectory_line(db, date: str, n: int = 10,
     used_srcs = [s for s in FULL_MARKET_SOURCES
                  if s == src or any(d in by_src[s] for d in window)]
     die_ref: dict[str, int] = {}
+    die_ref_src: dict[str, str] = {}        # 逐格归属（P2-2）：本格数字实际来自哪个源
     for s in FULL_MARKET_SOURCES:            # 源内优先级 = FULL_MARKET_SOURCES 顺序（EM 最权威）
         for d, v in by_src[s].items():
-            die_ref.setdefault(d, v)
+            if d not in die_ref:
+                die_ref[d] = v
+                die_ref_src[d] = s
     die_scope = "＋".join(source_label(s) for s in used_srcs) if used_srcs else source_label(SOURCE_POOL)
     pool_fallback = {d: dieban_count(db, d, dataset_id) for d in window
                      if d not in die_ref and d != date}
@@ -1539,12 +1555,15 @@ def trajectory_line(db, date: str, n: int = 10,
         if d == date:
             cur_die = die
             row_degraded = day_is_pool
+            cell_src = src
         elif d in die_ref:
             cur_die = die_ref[d]
             row_degraded = False
+            cell_src = die_ref_src.get(d)
         else:
             cur_die = pool_fallback.get(d)
             row_degraded = cur_die is not None
+            cell_src = SOURCE_POOL if row_degraded else None
         degraded = degraded or row_degraded
         rate = m.get("zhabanRate")
         rate_txt = f'{round(rate, 1)}%' if isinstance(rate, (int, float)) else "?"
@@ -1554,7 +1573,17 @@ def trajectory_line(db, date: str, n: int = 10,
         series.append({"d": d, "zt": zt, "die": cur_die, "rate": rate_txt,
                        "dd": dd if isinstance(dd, (int, float)) else None,
                        "mb": mb if isinstance(mb, (int, float)) else None,
+                       "src": cell_src,
                        "degraded": row_degraded})
+    # 列内通常源 = 出现最多的全市场源（平票按 FULL_MARKET_SOURCES 序）；非通常源的格打 ^。
+    # P2-2：跨源并排靠整列头注区分不够——TDX−EM 实测均值 +1.65（+0..+4），读者需知道
+    # **哪些天**换了源才不会被源差读成情绪摆动。
+    full_cells = [r["src"] for r in series
+                  if r["die"] is not None and r["src"] in FULL_MARKET_SOURCES]
+    col_src = None
+    if full_cells:
+        col_src = max(FULL_MARKET_SOURCES,
+                      key=lambda s: (full_cells.count(s), -FULL_MARKET_SOURCES.index(s)))
     rows = []
     for i, r in enumerate(series):
         prev = series[i - 1] if i > 0 else None      # 首格无昨日基线 → Δ 记 ?
@@ -1564,6 +1593,10 @@ def trajectory_line(db, date: str, n: int = 10,
             delta = "?"
         die_txt = f'{r["die"]}*' if r["degraded"] and r["die"] is not None else (
             r["die"] if r["die"] is not None else "?")
+        # 跨源格标记 ^（P2-2）：与列内通常源不同（且不是采集池降级格）——降级格已打 *
+        if (not r["degraded"] and r["die"] is not None and col_src
+                and r["src"] in FULL_MARKET_SOURCES and r["src"] != col_src):
+            die_txt = f'{die_txt}^'
         dd_txt = r["dd"] if r["dd"] is not None else "?"
         mb_txt = r["mb"] if r["mb"] is not None else "?"
         zt_txt = r["zt"] if r["zt"] is not None else "?"
@@ -1579,6 +1612,17 @@ def trajectory_line(db, date: str, n: int = 10,
         parts.append(f"当日格={source_label(SOURCE_POOL)}（全市场源不可用，已打 *）")
     if degraded:
         parts.append("* 为采集池降级格，全市场源缺失")
+    # 跨源并排的区间式说明（P2-2）：列内出现与通常源不同的全市场源时列出该源所占日期段
+    if col_src:
+        others = {}
+        for r in series:
+            if (r["die"] is not None and r["src"] in FULL_MARKET_SOURCES
+                    and r["src"] != col_src):
+                others.setdefault(r["src"], []).append(r["d"][5:])
+        for s, ds in others.items():
+            which = ds[0] if len(ds) == 1 else f"{ds[0]}~{ds[-1]}（{len(ds)} 日）"
+            parts.append(f"^ {which}={source_label(s)}（非列内主要源 {source_label(col_src)}，"
+                         "源间存在系统性差，勿读作情绪摆动）")
     note = "（" + "；".join(parts) + "）"
     return head + " ； ".join(rows) + note
 

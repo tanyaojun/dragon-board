@@ -621,6 +621,12 @@ def test_trajectory_line_labels_mixed_full_market_sources(monkeypatch):
     assert "全市场·东财跌停池＋全市场·本地日线重算" in line
     assert "|跌停32|" in line                 # TDX 读数照出，不回退采集池
     assert "采集池降级格" not in line
+    # P2-2：跨源格逐格标 ^ + 区间式说明（源间实测 +1.65 系统差，不能只靠整列头注）。
+    # 本夹具 TDX 8 格 vs EM 2 格 → 列内主要源 = TDX，非主要源的 EM 格标 ^。
+    assert "4^" in line and "2^" in line, f"非主要源（EM）格未标 ^：{line}"
+    assert "32^" not in line, f"主要源（TDX）格不应标 ^：{line}"
+    assert "^ 09-16~09-17" in line, f"缺跨源区间说明：{line}"
+    assert "勿读作情绪摆动" in line
 
 
 def test_backfill_em_upgrades_tdx_rows(monkeypatch, capsys):
@@ -731,3 +737,13 @@ def test_trajectory_line_marks_today_pool_fallback(monkeypatch):
     assert re.findall(r"\d{2}-\d{2}\|", line)[-1] == "10-16|", f"末格不是当日：{line}"
     assert "采集池口径" in line, f"当日口径未点名：{line}"
     assert "6*" in line, f"当日格未打降级星号：{line}"
+
+
+def test_limit_down_count_doc_lists_all_returnable_sources():
+    """P2-2：source 枚举须覆盖实际可返回的全部源（含 F7 的 tdx_local_bars）。"""
+    doc = mdp.limit_down_count.__doc__ or ""
+    for s in (mdp.SOURCE_EM, "quotes_snapshot", mdp.SOURCE_TDX,
+              mdp.SOURCE_POOL, "missing"):
+        assert s in doc, f"枚举漏了实际可返回的 {s}"
+    assert "tdx_local_bars" in (mdp.__doc__ or ""), "模块级文档也要含 tdx_local_bars"
+    assert mdp.SOURCE_SNAPSHOT.endswith("quotes_snapshot")   # 文档用词与常量一致（防常量改名后文档漂移）

@@ -34,7 +34,7 @@ fail-visible：任何一步取不到都不写成 0。
 - `fetch_limit_down_em(date)`：东财跌停池家数；窗口外/熔断/异常/坏负载 → None。
 - `full_market_dieban_from_quotes()`：读 Redis 行情快照统计全市场跌停；不可用 → None。
 - `limit_down_count(db, date, dataset_id, allow_fetch)`：(count, source)，source ∈
-  {em_pool, quotes_snapshot, pool_rows, missing}。当日 miss 且 allow_fetch 且已过收盘截点
+  {em_pool, quotes_snapshot, tdx_local_bars, pool_rows, missing}。当日 miss 且 allow_fetch 且已过收盘截点
   → EM → 快照 → upsert 懒加载再读；历史日只读参考集合；全无 → 采集池降级/missing。
 - `reference_counts(db, dates, source)`：参考集合批量同源读（一次 find，禁逐日连发）。
 - `backfill(db, start, end, apply)`：EM 回填（dry-run 默认）。窗口内逐日 fetch+upsert，
@@ -264,7 +264,10 @@ def reference_counts(db: Any, dates: Any, source: str | None = None) -> dict[str
 
 def limit_down_count(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                      allow_fetch: bool = True) -> tuple[int | None, str]:
-    """(全市场跌停家数, source)。source ∈ {em_pool, quotes_snapshot, pool_rows, missing}。
+    """(全市场跌停家数, source)。source ∈ {em_pool, quotes_snapshot, tdx_local_bars, pool_rows, missing}。
+
+    2026-10-18 review P2-2：枚举补 `tdx_local_bars`（F7 新增：读既有本地日线回填行时返回，
+    属 FULL_MARKET_SOURCES 家族）；消费方按 `src in FULL_MARKET_SOURCES` 分支，不得只认 EM/快照。
 
     懒加载（只当日）：参考集合 miss 且 allow_fetch 且 date=当日 且已过收盘截点 →
     东财跌停池优先，失败退行情快照，upsert 再读。

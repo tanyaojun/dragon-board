@@ -77,7 +77,11 @@ def main() -> None:
         old = have.get(d)
         old_txt = f"{mdp.source_label(old)}({old})" if old else "无"
         n = counts[d]
-        cur = mdp.reference_counts(db, [d], mdp.SOURCE_POOL).get(d)
+        # 池内对照（2026-10-18 review P2-2）：原先查 `reference_counts(SOURCE_POOL)`——
+        # 但全库**无任何路径写 source=pool_rows 到参考集合**，该列恒为 `-`（死查询）。
+        # 采集池口径的真源在 snapshot 聚合（`dieban_count`），直调以得到真实对照数。
+        from backend.operations.jev_label_jiuyan import dieban_count
+        cur = dieban_count(db, d, args.dataset_id)
         delta = f"{n - cur:+d}" if isinstance(cur, int) else "-"
         print(f"  [回填] {d}: TDX 全市场 {n:>3} 家 | 现状 {old_txt} "
               f"| 池内对照 {cur if cur is not None else '-'}（Δ {delta}）")
