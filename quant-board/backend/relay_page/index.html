@@ -399,8 +399,8 @@
       <!-- ③-3 分带实测 -->
       <div class="card" style="margin-top:14px">
         <div class="grid g2">
-          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">按连板指数分带（D 判定 → 次日实测）</div><div id="diagBands"></div></div>
-          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">五区赔率结构（赢:输比均值更贴操作）</div><div id="diagZones"></div></div>
+          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">按连板指数分带（D 判定 → 次日实测 · 区间内重算）</div><div id="diagBands"></div></div>
+          <div><div style="font-size:12px;color:var(--muted);margin-bottom:6px">五区赔率结构（赔率分区，非判定分区；赢:输比均值更贴操作）</div><div id="diagZones"></div></div>
         </div>
         <div id="diagCorr" style="margin-top:14px"></div>
       </div>
@@ -646,6 +646,11 @@ const MONEY_COLOR = {strong:'#16a34a', neutral:'#94a3b8', losing:'#dc2626',
 const MONEY_ORDER = ['strong','neutral','losing','insufficient_evidence'];
 const BAND_ORDER = ['0-25','25-40','40-60','≥60'];
 const BAND_COLOR = {'0-25':'#38bdf8','25-40':'#94a3b8','40-60':'#f59e0b','≥60':'#16a34a'};
+// ══ 判定分区（ZONE_DEF）══ 用于：判定明细「分区」列与表头筛选 / KPI 分区定位 / 毒带命中清单。
+// **与分带观察页的「五区赔率分区」不是同一套切口**（那套见下方 ZONES_DEF，与脚本
+// ZONE_* 逐字同源：绿灯≥60 / 半绿55-60 / 黄灯25-55 / 回避40-60∧T≥56 / 红灯<25）；
+// 本套是判定用分区（40-60 再按温度切成「毒带观察/中性带」）。两套 label 刻意不同名
+// （守卫 test_zone_systems_use_disjoint_labels 锁定），避免用户拿筛选枚举去赔率表找对应行。
 const ZONE_DEF = {
   green:{label:'绿灯区', cls:'b-green', color:'#16a34a',
     tip:'指数 ≥60：长窗代际 n=17 溢价A +0.75%、大面 11.6%、赢/输 +1.89%/-0.88%（赔率≈2.1:1）——分带结论里唯一明确放行区'},
@@ -653,9 +658,10 @@ const ZONE_DEF = {
     tip:'指数 40-60 且 EOD 温度 ≥56（俗称「退潮期毒带」，实为温度叠加条件，不限定相位）：长窗代际 n=11 溢价A -0.45%、4/7 负；注意 40-60 整体为 +0.6%（非亏损带），负号来自 ∧温度≥56 的条件切分'},
   ice:{label:'冰点观察', cls:'b-red', color:'#dc2626',
     tip:'指数 <25：长窗代际 n=14 溢价A -0.1%、大面 19.3%（未破 20% 门槛）；v3 代际曾为「毒带」，v4/长窗未复现显著亏损——观察线索非规则'},
-  mid:{label:'中性 40-60', cls:'b-gray', color:'#94a3b8',
-    tip:'指数 40-60 但温度 <56 或当日无温度：fail-visible 不判黄（温度缺则不判毒带观察）'},
-  neutral:{label:'中性区', cls:'b-gray', color:'#94a3b8', tip:'指数 25-40 中性区'},
+  mid:{label:'中性带 40-60', cls:'b-gray', color:'#94a3b8',
+    tip:'（判定分区）指数 40-60 但温度 <56 或当日无温度：fail-visible 不判黄（温度缺则不判毒带观察）。注意：赔率分区里 40-60 横跨「黄灯 25-55」与「半绿 55-60」两行，本分区与其不可互查'},
+  neutral:{label:'中性带 25-40', cls:'b-gray', color:'#94a3b8',
+    tip:'（判定分区）指数 25-40：无温度叠加条件时的中位区间；对应赔率分区里的「黄灯 25-55」下段'},
   na:{label:'—', cls:'b-gray', color:'#94a3b8', tip:'当日无连板指数存档'},
 };
 // 分区判定（唯一实现，KPI/明细/命中清单共用；与 zoneIdxColor 同一套阈值）
@@ -698,6 +704,8 @@ const bandDiagMissing = () => { const b = STATE.band || {};
 const bandKeyOf = v => v == null || !isFinite(v) ? null
   : (v < 25 ? '0-25' : v < 40 ? '25-40' : v < 60 ? '40-60' : '≥60');
 // 五区赔率切口（与脚本 ZONE_* 常量逐字同源；回避=温度叠加切分，非互斥分区）
+// 名称/切口均由守卫 test_zones_def_still_matches_script_zone_cuts 锁定。
+// **这 5 个 label 与判定分区 ZONE_DEF 刻意不重名**（test_zone_systems_use_disjoint_labels）。
 const ZONES_DEF = [
   ['绿灯 ≥60', o => o.idx >= 60],
   ['半绿 55-60', o => o.idx >= 55 && o.idx < 60],
@@ -1191,8 +1199,8 @@ const ZONE_FILTER_LIST = ['green', 'toxic', 'mid', 'neutral', 'ice', 'na']
   .map(k => [k, ZONE_DEF[k].label === '—' ? '无指数' : ZONE_DEF[k].label]);
 function rZoneSel(){
   const cur = STATE.relayFilter.zone;
-  return `<select title="分区筛选" onchange="rSet('zone', this.value)">`
-    + [['', '分区 · 全部']].concat(ZONE_FILTER_LIST)
+  return `<select title="分区筛选（判定分区，非分带观察页的赔率分区）" onchange="rSet('zone', this.value)">`
+    + [['', '判定分区 · 全部']].concat(ZONE_FILTER_LIST)
         .map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('')
     + `</select>`;
 }
@@ -2394,9 +2402,17 @@ function renderDiagPanel(agg){
         <td class="num" style="color:${r.premB > 0 ? 'var(--green)' : 'var(--red)'}">${fx1(r.premB, '%')}</td>
         <td class="num" style="color:${r.bigface >= 20 ? 'var(--red)' : 'var(--muted)'}">${fx1(r.bigface, '%')}</td>
         <td class="num" style="color:var(--muted)">${r.negA}/${r.n}</td></tr>`).join('') + '</table>'
-    + `<div style="margin-top:10px"><div class="tbl-h">指数带分布（窗口内天数 · 次日溢价A均值）</div>${barChart(bandRows.map(r => ({ key: r.name, label: r.name, n: r.n, premA: r.premA })), k => BAND_COLOR[k] || '#94a3b8')}</div>`;
+    + `<div style="margin-top:10px"><div class="tbl-h">指数带分布（区间内天数 · 次日溢价A均值）</div>${barChart(bandRows.map(r => ({ key: r.name, label: r.name, n: r.n, premA: r.premA })), k => BAND_COLOR[k] || '#94a3b8')}</div>`;
   const zones = agg.zones;
-  $('diagZones').innerHTML = `<table class="mini"><tr><th>区</th><th>n</th><th>均值</th><th>正/负</th><th>赢日均</th><th>输日均</th><th>大面%</th></tr>`
+  // 区间内标注（review 2026-10-18）：本表按当前选定区间客户端重算，与离线产物的**全窗口**
+  // 预聚合（relay-band-table.json，如 108 判定日 / 107 可实测）口径不同——不加说明的话，
+  // 读者直接对比两边 n 会误以为数字错了。
+  const rangeHint = `<div style="font-size:11px;color:var(--muted2);margin-bottom:6px">`
+    + `区间内重算：${agg.have.length} 可实测日（本表 n 合计可据此核对）；`
+    + `离线产物为全窗口 ${w.evaluated != null ? w.evaluated : '?'} 日读数，两者 n 不可直接比较</div>`;
+  $('diagZones').innerHTML = rangeHint
+    + `<div class="tbl-h">赔率分区（5 区，非判定分区；回避=温度叠加切分，非互斥分区）</div>`
+    + `<table class="mini"><tr><th>区</th><th>n</th><th>均值</th><th>正/负</th><th>赢日均</th><th>输日均</th><th>大面%</th></tr>`
     + zones.map(z => {
       const col = /绿灯/.test(z.zone) ? 'var(--green)' : /红灯|回避/.test(z.zone) ? 'var(--red)' : 'var(--muted)';
       return `<tr><td style="color:${col};font-weight:600">${esc(z.zone)}</td><td class="num">${z.n}</td>

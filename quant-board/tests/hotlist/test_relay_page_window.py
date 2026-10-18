@@ -61,6 +61,22 @@ def _const(js: str, name: str) -> str:
     return js[start : end + 1]
 
 
+def _const_block(js: str, name: str) -> str:
+    """取一个顶层 `const NAME = {...};` 对象字面量文本（按花括号配对，不向下溢出）。"""
+    start = js.index(f"const {name} = ")
+    brace = js.index("{", start)
+    depth = 0
+    for i in range(brace, len(js)):
+        ch = js[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return js[start : i + 1]
+    raise AssertionError(f"未找到 {name} 的对象字面量结尾")
+
+
 
 # ── 需求 1：页头 = 2 日期 + 3 按钮；无多余控件与文字说明 ─────────────────────
 def test_range_bar_is_two_inputs_three_buttons(js: str):
@@ -680,3 +696,72 @@ def test_relay_doc_fetch_treats_ok_false_as_error(js: str):
     fetch = _fn(js, "relayDocFetch")
     assert "ok === false" in fetch, "relayDocFetch 应把 ok:false 视为失败"
     assert "__err" in fetch
+
+
+# ── 2026-10-18 分区术语收敛（review：同页两套分区撞名）────────────────────
+# 页面并存两套**不同**分区：
+#   ZONE_DEF  = 判定分区（判定明细分区列 / 表头筛选 / KPI / 毒带清单）
+#   ZONES_DEF = 五区赔率分区（分带观察的赔率表，切口与脚本 ZONE_* 逐字同源）
+# 两套切口不同（40-60∧T 叠加 vs 25-55/55-60），却共用「中性/绿灯/毒带」等词，
+# 用户看到筛选枚举「中性 40-60」而在赔率表里找不到对应行。守卫：label 集合不得相交。
+
+def _zone_def_labels(js: str) -> set[str]:
+    body = _const_block(js, "ZONE_DEF")
+    return {m for m in re.findall(r"label:'([^']+)'", body)}
+
+
+def _zones_def_labels(js: str) -> set[str]:
+    block = js[js.index("const ZONES_DEF = ["):]
+    block = block[:block.index("];")]
+    return set(re.findall(r"\['([^']+)'", block))
+
+
+def test_zone_systems_use_disjoint_labels(js: str):
+    """判定分区（ZONE_DEF）与赔率分区（ZONES_DEF）的 label 必须不相交（防术语撞车）。"""
+    a, b = _zone_def_labels(js), _zones_def_labels(js)
+    assert a, "ZONE_DEF 应有 label"
+    assert b, "ZONES_DEF 应有 label"
+    overlap = a & b
+    assert not overlap, f"两套分区 label 撞车：{sorted(overlap)}"
+    # 具体回归：判定分区不得再叫裸「中性 40-60」（与赔率表的 25-55 覆盖重叠区间却同名）
+    assert "中性 40-60" not in a, "判定分区 label 应是带限定的『中性带 40-60』"
+
+
+def test_zone_systems_are_labeled_as_different_partitions(js: str):
+    """UI 必须显式声明两套分区不是同一套切口（否则读者会互相找对应行）。"""
+    assert "判定分区" in js, "应标注判定分区"
+    assert "赔率分区" in js, "应标注赔率分区"
+    # 赔率表表头/周边须点明与判定分区不同源
+    assert re.search(r"赔率分区[^<]{0,40}(非|≠|不同)", js) or "判据分区（非赔率分区）" in js, \
+        "应说明两套分区的关系"
+
+
+def test_zone_def_cuts_unchanged_by_rename(js: str):
+    """改名不得改切口（回归）：判定分区边界仍是 60 / 40∧T56 / 40 / 25。"""
+    zo = _fn(js, "zoneOf")
+    for cut in ("idx >= 60", "idx < 25", "idx >= 40 && t != null && t >= 56", "idx >= 40"):
+        assert cut in zo, f"zoneOf 切口漂移：缺 {cut}"
+
+
+def test_zones_def_still_matches_script_zone_cuts(js: str):
+    """赔率分区切口须仍与脚本 ZONE_* 逐字同源（改名不得动切口）。"""
+    from scripts.jev_relay_band_diagnostic import (ZONE_AVOID, ZONE_GREEN, ZONE_MID,
+                                                   ZONE_RED, ZONE_SEMI)
+    labels = _zones_def_labels(js)
+    for name, _ in (ZONE_GREEN, ZONE_SEMI, ZONE_MID, ZONE_AVOID, ZONE_RED):
+        assert name in labels, f"ZONES_DEF 缺脚本切口 {name}"
+
+
+def test_band_panel_labels_sample_scope_as_within_range(js: str):
+    """分带观察的 n 必须标注「区间内」（否则与产物全窗口 n 直接对比会误判为数字错）。
+
+    守点必须钉在**五区/赔率表自身**的渲染处（区间内重算 n + 与全窗口产物不可比的声明），
+    不能靠同函数里其它文案（如「区间内天数」）假绿。
+    """
+    rdp = _fn(js, "renderDiagPanel")
+    # 1) 五区表前必须有区间内 n 的口径声明
+    assert re.search(r"区间内重算：\$\{agg\.have\.length\}", rdp), \
+        "五区表应显式给出区间内可实测日数"
+    # 2) 必须声明与离线产物（全窗口）不可直接比较
+    assert "不可直接比较" in rdp or "不可比" in rdp, "应声明与离线产物 n 不可比"
+    assert "全窗口" in rdp, "应点明产物是全窗口口径"
