@@ -83,12 +83,14 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     # 炸板归因打标（hotlist_jev_zhaban_labels），反序则当日归因永远赶不上叙事组装
     # （2026-10-14/10-15 实证：relay 16:18-16:27 出数、归因 16:20-16:36 才落库，
     # 叙事只能写「未覆盖（0/N，归因证据缺失）」）。
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
     assert "jevVoteRecheck" not in result["results"]  # 2026-10-15 用户裁决摘除（浪费 token）
     assert result["results"]["calibDriftMonitor"]["skipped"] is True  # dry_run 短路
     assert result["results"]["relayIndex"]["skipped"] is True  # dry_run 短路
+    assert result["results"]["relayBand"]["skipped"] is True  # dry_run 短路
+    assert result["results"]["relayBand"]["reason"] == "dry_run"
     assert result["results"]["hotlistSentiment"]["written"] == 1
     assert result["results"]["mongodbBackup"]["skipped"] is True
     assert result["results"]["snapshotArchiveR2"]["ok"] is True
@@ -171,6 +173,13 @@ def test_after_market_job_in_mongodb_mode_hotlist_failure_still_backs_up(monkeyp
         lambda *, dry_run=False: calls.append("archiveR2")
         or {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
     )
+    # 2026-10-19 评审 F1：本测试 dry_run=False 且 db stub 是字符串，新 advisory 步（relayBand）
+    # 若真执行会起真实子进程（实测截断 data/backups/relay-band-refresh.log）。显式打桩，保持用例
+    # 与其它 advisory 步一致的隔离性（步自身行为另见 tests/platform/test_relay_band_schedule_step.py）。
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_relay_band_step",
+        lambda today, dry_run=False: {"ok": True, "skipped": True, "reason": "test_stub"},
+    )
 
     from backend.operations.schedule import run_after_market_once
 
@@ -217,6 +226,11 @@ def test_after_market_job_in_mongodb_mode_surfaces_backup_failure(monkeypatch: A
     monkeypatch.setattr(
         "backend.operations.schedule.run_mongodb_snapshot_archive_once",
         lambda *, dry_run=False: {"ok": True, "dryRun": dry_run, "snapshotTypes": {}},
+    )
+    # 2026-10-19 评审 F1：同上，隔离 relayBand advisory 步，避免真实子进程污染本地产物/日志。
+    monkeypatch.setattr(
+        "backend.operations.schedule._run_relay_band_step",
+        lambda today, dry_run=False: {"ok": True, "skipped": True, "reason": "test_stub"},
     )
 
     from backend.operations.schedule import run_after_market_once

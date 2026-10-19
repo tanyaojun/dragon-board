@@ -85,6 +85,12 @@
   .lg-toggle{margin-left:auto;display:flex;gap:8px}
   .lg-toggle button{padding:4px 12px;border-radius:8px;font-size:12px}
   .lg-toggle button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  .lg-toggle button.rerun{border-color:var(--amber);color:var(--amber)}
+  .lg-toggle button.rerun:hover{background:var(--amber-bg);color:var(--amber);border-color:var(--amber)}
+  .lg-toggle button.rerun[disabled]{opacity:.55;cursor:default;background:#fff;color:var(--amber)}
+  button.rerun{padding:4px 12px;border-radius:8px;font-size:12px;border:1px solid var(--amber);color:var(--amber);background:#fff;cursor:pointer}
+  button.rerun:hover{background:var(--amber-bg)}
+  button.rerun[disabled]{opacity:.55;cursor:default;background:#fff;color:var(--amber)}
   .lg-meta{display:flex;gap:40px;margin:12px 0 2px;flex-wrap:wrap}
   .lg-meta .k{font-size:12px;color:var(--muted)}
   .lg-meta .v{font-size:15px;font-weight:600;margin-top:2px}
@@ -138,6 +144,14 @@
   .lf-bar input[type=date]{width:116px;padding:6px 8px;font-size:12px}  /* 区间日期控件收窄：原生默认宽右侧留白（2026-10-10 用户指出瑕疵） */
   .lf-bar .sep{font-size:12px;color:var(--muted2)}  /* 区间分隔符：勿用 .cnt（其 margin-left:auto 会吞空白） */
   .lf-bar .cnt{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* 涨停分析表分页（2026-10-19 用户需求：原计数改为分页，每页上限 20 条） */
+  .lf-bar .pager{margin-left:auto;display:flex;gap:6px;align-items:center;white-space:nowrap}
+  .lf-bar .pager button{border:1px solid var(--border2);border-radius:8px;background:#fff;color:var(--text);
+                        padding:4px 9px;font-size:12px;cursor:pointer}
+  .lf-bar .pager button:hover:not([disabled]){border-color:var(--blue);color:var(--blue)}
+  .lf-bar .pager button[disabled]{opacity:.45;cursor:default}
+  .lf-bar .pager .cnt{margin-left:0}
+  .lf-bar .pager select{max-width:110px}
   .board-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:2px 0 12px}
   .board-row .k{font-size:12px;color:var(--muted2);flex:none}
   /* ---------- 连板指数分带/相位可视化（2026-10-18：结论图形化，不只用文字） ---------- */
@@ -239,8 +253,6 @@
   .ch-tip-r b{font-weight:600;font-variant-numeric:tabular-nums}
   .ch-hit{cursor:crosshair}
   .tbl-h{font-size:12px;color:var(--muted);margin:0 0 6px}
-  .tabchip{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:6px;
-           padding:3px 9px;background:#fff;white-space:nowrap}
   /* 合并页内的子区块标题（钱效分带 / 毒带观察 / 分带实测 三块共用一页） */
   .sec-h{font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:8px}
   .sec-h .hint{font-size:11px;color:var(--muted2);font-weight:400;margin-left:auto}
@@ -262,10 +274,6 @@
           color:#1e40af;border-radius:8px;padding:9px 12px;font-size:12.5px;line-height:1.55;margin-bottom:14px}
   .banner.amber{background:var(--amber-bg);border-color:#fde68a;color:var(--amber)}
   .banner .x{margin-left:auto;border:0;background:none;color:currentColor;cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
-  .cmdbox{display:flex;gap:8px;align-items:center;background:#0f172a;color:#e2e8f0;border-radius:8px;
-          padding:9px 12px;font:12px/1.5 ui-monospace,Consolas,monospace;overflow:auto;white-space:pre}
-  .cmdbox button{background:#1e293b;border-color:#334155;color:#e2e8f0;padding:3px 9px;font-size:11px}
-  .cmdbox button:hover{border-color:#60a5fa;color:#93c5fd}
   .rv{display:none}
   .rv.on{display:block}
   /* KPI 卡第三行=档位描述（2026-10-18）：小字、可截断、悬停看全文；不再放统计口径语义 */
@@ -345,11 +353,7 @@
 
     <!-- ① 相位分线 · 指数分区 -->
     <div class="rv on" id="rv-phase">
-      <div class="page-head" style="margin-top:18px"><div>
-        <h2>相位分线 · 指数分区</h2></div>
-        <div class="act"><span class="tabchip" id="phaseChartHint"></span></div></div>
-      <div class="ph-line"></div>
-      <div class="card" style="padding:14px 16px 10px">
+      <div class="card" style="margin-top:18px;padding:14px 16px 10px">
         <div id="relayChart2"></div>
         <div class="legend" id="phaseChartLegend" style="margin-top:10px;flex-wrap:wrap;gap:8px 18px">
           <span><i style="background:#f0fdf4;border:1px solid #dcfce7"></i>绿灯 ≥60</span>
@@ -371,13 +375,7 @@
     <!-- ② 钱效分带 -->
     <!-- ③ 分带观察（2026-10-18 用户裁决：钱效分带 + 毒带观察 + 分带实测 三页合并） -->
     <div class="rv" id="rv-bands">
-      <div class="page-head" style="margin-top:18px"><div>
-        <h2>分带观察</h2></div>
-        <div class="act"><span class="tabchip" id="diagProvenance"></span>
-          <button onclick="showBandCmd()">重跑分带表</button></div></div>
-      <div class="ph-line"></div>
-      <div id="diagWarn"></div>
-      <div id="bandCmd" style="display:none;margin-bottom:14px"></div>
+      <div id="diagWarn" style="margin-top:18px"></div>
 
       <!-- ③-1 钱效分带 -->
       <div class="card">
@@ -412,12 +410,7 @@
 
     <!-- ④ 板块与龙头（v6，2026-10-19）：数据取自该日存档 relayStructure，与 JEV 叙事同一事实源 -->
     <div class="rv" id="rv-leaders">
-      <div class="page-head" style="margin-top:18px"><div>
-        <h2>板块与龙头</h2>
-        <p>三日接力链的板块归属、主线板块与各板块龙一，以及总龙头/情绪龙头/板块龙头的一致性与总龙头诞生轨迹。
-        数据取自该日存档的 relayStructure（与 JEV 叙事同一事实源，不在前端重算）。</p></div></div>
-      <div class="ph-line"></div>
-      <div class="card">
+      <div class="card" style="margin-top:18px">
         <h3>🧵 板块接力链（三日）<span class="hint" id="sectorChainHint"></span></h3>
         <div id="sectorChain"></div>
       </div>
@@ -427,12 +420,9 @@
       </div>
     </div>
 
-    <!-- ⑤ 判定明细 -->
+    <!-- ⑤ 涨停分析（原「判定明细」，2026-10-19 改名；行内展开的判定明细卡沿用原名） -->
     <div class="rv" id="rv-detail">
-      <div class="page-head" style="margin-top:18px"><div>
-        <h2>判定明细</h2></div></div>
-      <div class="ph-line"></div>
-      <div class="card">
+      <div class="card" style="margin-top:18px">
         <div class="lf-bar" id="relayFilterBar" style="margin-top:2px"></div>
         <table id="relayTable"></table>
       </div>
@@ -462,6 +452,10 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
   relayDocs: {},  // date → 该日连板指数完整存档（判定明细行展开懒拉）
                   // 三态：undefined=未拉；{__err:true}=拉取失败(可重试)；对象/null=已拉完(null=服务端确认无档)
+  rerunBusy: null,       // 正在重跑的 entry key（relay 日 / slot 槽共用；非 null 时全局禁用重跑，防并发烧 token）
+  rerunMsg: null,        // {key,ok,text}：最近一次重跑结果，按 entry 显示在详情卡内（fail-visible）
+  bandRefresh: null,     // 分带表刷新任务 {running,startedAt,error,logTail}（零模型调用，页面轮询）
+  bandRefreshTimer: null,
   quotesEntries: [], quotesUi: { openKey: null, vote: { mode: 'detail', q1: '', q2: '' }, lc: { mode: 'detail', q1: '', q2: '' }, res: { mode: 'detail', q1: '', q2: '' }, trd: { mode: 'detail', q1: '', q2: '' },
     hea: { mode: 'detail', q1: '', q2: '' }, vpq: { mode: 'detail', q1: '', q2: '' } },
   quotesSlots: [],  // 当日有 jev 判读的槽位（quotes-review 响应 voteSlots，帧选择器数据源）
@@ -478,6 +472,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayBack: null,    // 预设按钮的回退点（“再点一次恢复上次区间”）
   relayPreset: null,  // 最近点过的预设（展示意图；高亮以区间等价判定为准）
   relaySort: { key: 'date', dir: -1 },
+  relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   labelSort: { key: 'rank', dir: 1 } };
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
@@ -708,7 +703,92 @@ const bandDayMap = () => { const m = {}; for (const o of bandDays()) m[o.d] = o;
 // 客户端统计表统一用它，避免「客户端 n=64 / 诊断 n=63」类口径不一致
 const measurable = rows => rows.filter(o => o.premA != null);
 const bandDiagMissing = () => { const b = STATE.band || {};
-  return !b.ok ? `<div class="warn">离线分带表未就绪（${esc(b.reason || 'unknown')}）——${esc(b.hint || '跑 scripts/jev_relay_band_diagnostic.py --emit-json')}</div>` : ''; };
+  return !b.ok ? `<div class="warn">离线分带表未就绪（${esc(b.reason || 'unknown')}）——${esc(b.hint || '跑 scripts/jev_relay_band_diagnostic.py --emit-json')} ${bandRefreshBtn()}</div>` : ''; };
+
+// ══ 分带表刷新（2026-10-19 用户需求）══════════════════════════════════════════
+// 【分带观察】滞后/缺失时页面内一键重算，不再要求手敲命令行。后端在 :8000 起后台任务跑
+// scripts/jev_relay_band_diagnostic.py --emit-json（零模型调用：只读 Mongo + 本地通达信日线，
+// 全窗约 5–9 分钟），产物先写临时文件、成功退出后原子替换；本页每 5s 轮询任务状态，
+// 完成后 loadAll 重取新表。fail-visible：失败保留旧表并把日志尾部/错误原因放回 banner。
+const bandRefreshBusy = () => !!(STATE.bandRefresh && STATE.bandRefresh.running);
+const bandElapsed = ts => { if (!ts) return '?';
+  const s = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 1000));
+  return s >= 60 ? `${Math.floor(s / 60)}m${s % 60}s` : `${s}s`; };
+const bandRefreshBtn = (label) => {
+  const st = STATE.bandRefresh || {};
+  return `<button class="rerun"${st.running ? ' disabled' : ''}
+    title="零模型调用（只读 Mongo + 本地通达信日线），全窗约 5–9 分钟；完成后本页自动刷新"
+    onclick="event.stopPropagation(); bandRefresh()">${esc(st.running ? `刷新中…（${bandElapsed(st.startedAt)}）` : (label || '刷新分带表（零模型调用）'))}</button>`;
+};
+function bandRefreshWarnHtml(){
+  const st = STATE.bandRefresh || {};
+  const latestD = ((STATE.series || []).slice(-1)[0] || {}).tradingDate || '';
+  const w = (bandDoc() || {}).window || {};
+  const lag = !!(latestD && w.end && latestD > w.end);
+  // 表缺失时不在这里重复警示：renderDiagPanel 的 bandDiagMissing() 已给出「未就绪 + 刷新按钮」，
+  // 两者同屏会出现两条几乎相同的警示（评审 F-minor-2）。本 banner 只负责「滞后 / 刷新任务态 / 刷新失败」。
+  if (!lag && !st.running && !st.error) return '';
+  let text;
+  if (st.running) text = `分带表刷新中…（${st.startedAt ? esc(String(st.startedAt).replace('T', ' ')) + ' 起，已 ' + bandElapsed(st.startedAt) : '正在启动'}）`;
+  else if (st.error) text = `分带表刷新失败（${esc(st.error)}）——旧表保留，可重试`;
+  else text = `分带表与当前序列不同步（⚠ 滞后：序列已到 ${esc(latestD)}，分带表止于 ${esc(w.end)}）——盘后链 16:00 会自动重算，需立刻刷新点右侧按钮`;
+  const tail = (!st.running && st.logTail)
+    ? `<div class="prov" style="margin-top:6px;white-space:pre-wrap;max-height:110px;overflow:auto">${esc(st.logTail)}</div>` : '';
+  return `<div class="warn" style="margin-bottom:10px">${text} —— ${bandRefreshBtn()}${tail}</div>`;
+}
+function renderBandRefreshWarn(){ const el = $('diagWarn'); if (el) el.innerHTML = bandRefreshWarnHtml(); }
+// 接管已在跑的任务（多标签/刷新页面/双击重入）：POST 返回 already_running 或页面加载时
+// 发现后端有任务 → 直接进入轮询，不当作失败（2026-10-19 用户报「刷新失败（already_running）」修复）。
+function bandRefreshAdopt(startedAt){
+  STATE.bandRefresh = { running: true, startedAt: startedAt || null };
+  renderBandRefreshWarn(); pollBandRefresh();
+}
+function bandRefreshSync(){
+  if (bandRefreshBusy()) return;                 // 本地已在轮询，不重复
+  jget('/api/hotlist-jev/relay-band/refresh').then(st => {
+    if (st && st.running) bandRefreshAdopt(st.startedAt);
+  }).catch(() => {});
+}
+function bandRefresh(){
+  if (bandRefreshBusy()) return;
+  // 先占位再弹确认：防止 confirm 弹窗期间重复点击 → 并发 POST 得到 already_running
+  STATE.bandRefresh = { running: true, startedAt: null };
+  renderBandRefreshWarn();
+  const ok = window.confirm('刷新离线分带表？\n\n零模型调用（只读 Mongo + 本地通达信日线），全窗约 5–9 分钟。\n期间本页每 5 秒轮询，完成后自动刷新。');
+  if (!ok){ STATE.bandRefresh = null; renderBandRefreshWarn(); return; }
+  jpost('/api/hotlist-jev/relay-band/refresh', {})
+    .then(r => {
+      if (r && r.ok){ bandRefreshAdopt(r.startedAt); return; }
+      if (r && r.reason === 'already_running'){ bandRefreshAdopt(r.startedAt); return; }
+      STATE.bandRefresh = { running: false, error: (r && (r.reason || r.error)) || 'unknown' };
+      renderBandRefreshWarn();
+    })
+    .catch(err => {
+      STATE.bandRefresh = { running: false, error: '请求失败：' + (err && err.message ? err.message : err) };
+      renderBandRefreshWarn();
+    });
+}
+function pollBandRefresh(){
+  clearTimeout(STATE.bandRefreshTimer);
+  STATE.bandRefreshTimer = setTimeout(() => {
+    jget('/api/hotlist-jev/relay-band/refresh').then(st => {
+      if (st && st.running){
+        STATE.bandRefresh = { running: true, startedAt: st.startedAt, logTail: st.logTail };
+        renderBandRefreshWarn(); pollBandRefresh(); return;
+      }
+      if (st && st.ok){ STATE.bandRefresh = null; renderBandRefreshWarn(); loadAll(); return; }
+      // 后端无任务记录（服务重启/升级）→ 给明确原因，不显示 `exit null` 之类无信息量文案
+      const err = st && st.error ? st.error
+        : (st && st.returncode != null) ? `exit ${st.returncode}`
+        : '任务状态丢失（服务可能已重启），可重试';
+      STATE.bandRefresh = { running: false, error: err, logTail: st && st.logTail };
+      renderBandRefreshWarn(); loadAll();   // 失败也重取：至少把旧表/新错误原因反映到页面
+    }).catch(err => {
+      STATE.bandRefresh = { running: false, error: '轮询失败：' + (err && err.message ? err.message : err) };
+      renderBandRefreshWarn();
+    });
+  }, 5000);
+}
 
 // ══ 窗口内分带聚合（2026-10-18）══════════════════════════════════════════════
 // 离线分带 JSON 的 bands/bandsTemp/bandsPhase/bandsMoney/zones/corr 都是**全窗口预聚合**，
@@ -801,6 +881,13 @@ function phaseSegments(rows){
   return out;
 }
 async function jget(path){ const r = await fetch(path); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+// POST 助手（2026-10-19 工作台「重跑」）：非 2xx 也返回解析体，由调用方按 ok/reason 呈现（fail-visible）
+async function jpost(path, body){
+  const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                               body: JSON.stringify(body || {})});
+  const txt = await r.text();
+  try { return JSON.parse(txt); } catch (e) { throw new Error('HTTP ' + r.status); }
+}
 
 // EOD 文档可用性（2026-10-14）：degraded / missing_token 的 EOD 文档 answers 与 scores
 // 都是 null，给不出任何读数——此时它和「没有 EOD」等价，必须走盘中降级，
@@ -869,6 +956,7 @@ async function loadAll(){
   STATE.labels = labels;
   STATE.quotes = quotes;
   STATE.band = band;
+  bandRefreshSync();   // 接管后端正在跑的分带刷新任务（页面刷新/多标签/双击重入时不断链）
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
@@ -1038,9 +1126,31 @@ function rSel(label, key){
   return `<select title="${esc(label)}筛选" onchange="rSet('${key}', this.value)">`
     + list.map(([v, t2]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t2)}</option>`).join('') + '</select>';
 }
-function rSet(k, v){ STATE.relayFilter[k] = v; renderRelayTab(); }
+function rSet(k, v){ STATE.relayFilter[k] = v; STATE.relayPage = 1; renderRelayTab(); }
 function rClear(){ STATE.relayFilter = { phase: '', momentum: '', ladder: '', money: '', theme: '', zone: '', leader: '' };
-  renderRelayTab(); }
+  STATE.relayPage = 1; renderRelayTab(); }
+// ── 涨停分析表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
+// 每页上限 20 条；只影响本表行切片，KPI/分带/相位等仍吃全量筛选集（口径不变）。
+const RELAY_PAGE_SIZE = 20;
+function relayPageTotal(n){ return Math.max(1, Math.ceil(n / RELAY_PAGE_SIZE)); }
+// 页码切片（越界/筛选后自动 clamp 到有效页）——纯函数，便于行为探针直接验证分页数学。
+function relayPageSlice(rows, page){
+  const total = relayPageTotal(rows.length);
+  const p = Math.min(Math.max(1, page || 1), total);
+  return {page: p, total: total, rows: rows.slice((p - 1) * RELAY_PAGE_SIZE, p * RELAY_PAGE_SIZE)};
+}
+function rPage(v){ STATE.relayPage = v; renderRelayTab(); }   // 越界在 renderRelayTab 内 clamp 后回写
+// 文案（2026-10-19 用户裁决）：右侧只报总页数「共 X 页」，不再列日数与每页条数
+function relayPager(page, total){
+  const nav = total > 1
+    ? `<button onclick="rPage(${page-1})"${page <= 1 ? ' disabled' : ''}>‹ 上一页</button>`
+      + `<select class="pgjump" title="跳页" onchange="rPage(parseInt(this.value,10))">`
+      + Array.from({length: total}, (_, i) => `<option value="${i+1}"${page === i+1 ? ' selected' : ''}>第 ${i+1} / ${total} 页</option>`).join('')
+      + `</select>`
+      + `<button onclick="rPage(${page+1})"${page >= total ? ' disabled' : ''}>下一页 ›</button>`
+    : '';
+  return `<span class="pager" id="relayPager">${nav}<span class="cnt">共 ${total} 页</span></span>`;
+}
 // ── 判定明细日期区间（2026-10-10 原作者实现；2026-10-18 用户裁决：控件从筛选条上提到页头，源码其余逐字保留）
 // 全量 series 客户端过滤（relay-index 文档 ~1KB/日，交互零延迟）；end=null=跟随最新（新交易日自动进窗）
 function ymdLocal(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
@@ -1061,7 +1171,7 @@ function rangedSeries(){
 // 区间变更 → 重绘所有依赖区间的视图（判定明细表 + 4 个子页 + 图表）。
 // 2026-10-18 用户需求：区间控件虽挂在判定明细页头，但是**全局**筛选条件，
 // 相位分线 / 钱效分带 / 毒带观察 / 分带实测 全部跟随联动（四个子页都吃 bandAgg→winBandDays）。
-function rangeRefresh(){ renderRelayTab(); renderCharts(); renderRelayAnalysis(); }
+function rangeRefresh(){ STATE.relayPage = 1; renderRelayTab(); renderCharts(); renderRelayAnalysis(); }
 function rRange(k, v){
   if (!STATE.relayRange) STATE.relayRange = {};
   STATE.relayRange[k] = v || null;
@@ -1143,6 +1253,7 @@ function winBandDays(){
 function setRelaySort(key){
   const s = STATE.relaySort;
   if (s.key === key) s.dir = -s.dir; else { s.key = key; s.dir = key === 'date' || key === 'time' ? -1 : 1; }
+  STATE.relayPage = 1;   // 排序键变更 → 回第 1 页（否则会停在一个语义已变的页码上）
   renderRelayTab();
 }
 function sortMark(sortState, key){ return sortState.key === key ? (sortState.dir === 1 ? ' ▲' : ' ▼') : ''; }
@@ -1172,8 +1283,12 @@ function renderRelayTab(){
     zone: r => zoneOf(r).label || '' };
   const rows = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
+  // 分页（2026-10-19 用户需求）：只切本表展示行，KPI / 分带 / 相位仍吃全量筛选集
+  const pg = relayPageSlice(rows, STATE.relayPage);
+  STATE.relayPage = pg.page;   // 越界或筛选后回写，避免停在空页（页码是展示态，不参与口径）
+  const pageRows = pg.rows;
   const th = (label, key) => `<th class="sortable" onclick="setRelaySort('${key}')">${label}${sortMark(s, key)}</th>`;
-  const body = rows.map(r => {
+  const body = pageRows.map(r => {
     const open = STATE.detailUi.relay.openKey === (r.tradingDate || '');
     const focused = STATE.relayFocus === r.tradingDate;
     const dkey = js(r.tradingDate || '');
@@ -1200,11 +1315,16 @@ function renderRelayTab(){
   winMount();
   // 守卫只拦筛选条重建（60s 轮询不夺焦点）；表格必须始终渲染——
   // 否则 onchange 触发时控件仍持焦，rSet 的重渲染会被吞掉（review I-1 实证）
-  if (!(ae && bar.contains(ae) && ae.tagName === 'SELECT'))
+  if (!(ae && bar.contains(ae) && ae.tagName === 'SELECT' && !ae.classList.contains('pgjump')))
     bar.innerHTML = rSel('相位', 'phase') + rSel('边际', 'momentum') + rSel('梯队', 'ladder')
       + rSel('钱效', 'money') + rSel('题材', 'theme')
       + rZoneSel() + rLeaderSel()
-      + `<button onclick="rClear()">清除筛选</button><span class="cnt">${shown.length} / ${all.length} 日（全库 ${STATE.series.length}）</span>`;
+      + `<button onclick="rClear()">清除筛选</button>` + relayPager(pg.page, pg.total);
+  else {
+    // 筛选 select 持焦时整条 bar 不重建（防夺焦，见上）；但分页必须单独刷新：
+    // rSet/rClear 已把页码重置回 1，若不同步，pager 会停在旧页码/旧禁用态（评审 F-minor-1）。
+    const pgEl = $('relayPager'); if (pgEl) pgEl.innerHTML = relayPager(pg.page, pg.total);
+  }
   $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('龙头强度', 'leader')}</tr>`
     + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   renderRelayAnalysis();
@@ -1233,7 +1353,7 @@ const tierDesc = (qid, choice, fallback) => critText(qid, choice) || fallback ||
 // 列表行字段 tooltip（2026-10-18 用户需求：题目文案全文显示在 tooltip 上）
 const critTip = (qid, choice, label, fallback) => {
   const t = critText(qid, choice) || fallback;
-  return t ? ` title="${esc(label + '判据（题目集全文）：' + t)}"` : '';
+  return t ? ` title="${esc(label + '判据：' + t)}"` : '';
 };
 function rLeaderSel(){
   const cur = STATE.relayFilter.leader;
@@ -1463,6 +1583,91 @@ function relayDocFetch(key){
       renderRelayTab();
     })
     .catch(() => { STATE.relayDocs[key] = { __err: true }; renderRelayTab(); });  // 失败可见且可重试
+}
+// 单日复跑（2026-10-19 用户需求）：网络抖动/降级日手动重判。
+// 真实调用 jev 模型（≈7.5K tokens），走 POST /api/hotlist-jev/relay-index/rerun（后端 default force）；
+// 成功后丢弃旧存档并 loadAll 刷新序列 + 重拉当日完整存档；失败/降级结果落卡片内 banner（不弹阻断式 alert）。
+function relayRerun(key){
+  if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
+  const ok = window.confirm(`重跑 ${key} 连板指数？\n\n将真实调用 jev 模型（约 7.5K tokens）重新判定该日并覆盖存档。\n建议仅在网络抖动导致 degraded 时使用。`);
+  if (!ok) return;
+  STATE.rerunBusy = key;
+  STATE.rerunMsg = null;
+  renderRelayTab();
+  jpost('/api/hotlist-jev/relay-index/rerun', { date: key, force: true })
+    .then(r => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
+        ? `重跑成功：指数 ${r.relayIndex ?? '-'} · ${r.relayPhase || '-'}（${r.errorCode || 'ok'}）`
+        : `重跑未成功（${(r && (r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+      delete STATE.relayDocs[key];   // 旧存档可能为 degraded，丢弃重拉（含 relayStructure）
+      return loadAll();
+    })
+    .then(() => relayDocFetch(key))
+    .catch(err => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: false,
+        text: '重跑请求失败：' + (err && err.message ? err.message : err) };
+      renderRelayTab();
+    });
+}
+// 帧级槽位复跑（2026-10-19 用户需求）：网络抖动/降级槽手动重判。
+// 真实调用 jev 模型（≈3K tokens），走 POST /api/hotlist-jev/slots/rerun（复用 compute_and_upsert_for_slot）；
+// 成功后 loadAll 重拉当日全部槽（槽文档 _id 稳定，展开态/选中态由 openKey 维持）。
+function slotRerun(key){
+  if (STATE.rerunBusy) return;
+  const e = (STATE.slotEntries || []).find(x => x.key === key);
+  const d = e && e.doc;
+  if (!d) return;
+  const label = `${d.tradingDate || ''} ${d.slotTime || ''}`.trim();
+  const ok = window.confirm(`重跑 ${label} 帧级槽位情绪？\n\n将真实调用 jev 模型（约 3K tokens）重新判定该槽并覆盖存档。\n建议仅在网络抖动导致 degraded/no_data 时使用。`);
+  if (!ok) return;
+  STATE.rerunBusy = key;
+  STATE.rerunMsg = null;
+  renderSlots();
+  jpost('/api/hotlist-jev/slots/rerun', { tradingDate: d.tradingDate, slotTime: d.slotTime,
+    snapshotType: d.snapshotType || 'half_hour', datasetId: d.datasetId || 'dragonboard_live' })
+    .then(r => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
+        ? `重跑成功：槽位 ${d.slotTime} · 温度 ${(r.slot && r.slot.scores && r.slot.scores.temperature) ?? '-'}`
+        : `重跑未成功（${(r && (r.status || r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+      return loadAll();
+    })
+    .catch(err => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: false,
+        text: '重跑请求失败：' + (err && err.message ? err.message : err) };
+      renderSlots();
+    });
+}
+// 日级 EOD 复跑（2026-10-19 用户需求）：网络抖动/降级 EOD 手动重判。
+// 走 POST /api/hotlist-jev/eod/rerun（复用 compute_and_upsert_for_day）；成功后 loadAll 重拉当日 EOD。
+function eodRerun(key){
+  if (STATE.rerunBusy) return;
+  const e = (STATE.slotEntries || []).find(x => x.key === key && x.kind === 'eod');
+  const d = e && e.doc;
+  if (!d) return;
+  const ok = window.confirm(`重跑 ${d.tradingDate || ''} 日级 EOD 情绪？\n\n将真实调用 jev 模型（约 4K tokens）重新判定当日收盘口径并覆盖存档。\n建议仅在网络抖动导致 degraded/no_data 时使用。`);
+  if (!ok) return;
+  STATE.rerunBusy = key;
+  STATE.rerunMsg = null;
+  renderSlots();
+  jpost('/api/hotlist-jev/eod/rerun', { tradingDate: d.tradingDate,
+    snapshotType: d.snapshotType || 'half_hour', datasetId: d.datasetId || 'dragonboard_live' })
+    .then(r => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
+        ? `重跑成功：EOD 温度 ${(r.eod && r.eod.scores && r.eod.scores.day_temperature) ?? '-'}`
+        : `重跑未成功（${(r && (r.status || r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+      return loadAll();
+    })
+    .catch(err => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: false,
+        text: '重跑请求失败：' + (err && err.message ? err.message : err) };
+      renderSlots();
+    });
 }
 
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
@@ -2216,8 +2421,24 @@ function detailHtml(e, view){
   const d = e.doc, u = d.usage || {}, ui = lgUi(view);
   const st = d.status || '-';
   const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
+  // 复跑入口（2026-10-19 用户需求）：relay 日级卡=单日复跑；slot 帧级卡（不含 EOD）=单槽复跑。
+  // 均置于【详细信息】左侧；busy 时全局禁用，防并发重复调用模型（成本护栏）。
+  const rerunKind = view === 'relay' ? 'relay'
+    : view === 'slot' ? (e.kind === 'slot' ? 'slot' : (e.kind === 'eod' ? 'eod' : null))
+    : null;
+  const busy = !!rerunKind && STATE.rerunBusy === e.key;
+  const rerunCall = rerunKind === 'relay' ? `relayRerun('${js(e.key)}')`
+    : rerunKind === 'slot' ? `slotRerun('${js(e.key)}')` : `eodRerun('${js(e.key)}')`;
+  const rerunHint = rerunKind === 'relay'
+    ? '真实调用 jev 模型重判该日（≈7.5K tokens），仅用于网络抖动导致的 degraded'
+    : rerunKind === 'slot'
+    ? '真实调用 jev 模型重判该槽（≈3K tokens），仅用于网络抖动导致的 degraded/no_data'
+    : '真实调用 jev 模型重判当日 EOD 情绪（≈4K tokens），仅用于网络抖动导致的 degraded/no_data';
+  const rerunBtn = rerunKind
+    ? `<button class="rerun"${busy ? ' disabled' : ''} title="${rerunHint}"
+        onclick="event.stopPropagation(); ${rerunCall}">${busy ? '重跑中…' : '重跑'}</button>` : '';
   const head = `<div class="lg-head"><div class="lg-title">🕐 jev · ${esc(e.label)}<span class="lg-asof">${esc(d.asOf || fmtTime(d.computedAt))}</span></div>
-    <div class="lg-toggle"><button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="lgMode('${view}', 'detail', event)">详细信息</button>
+    <div class="lg-toggle">${rerunBtn}<button class="${ui.mode === 'detail' ? 'on' : ''}" onclick="lgMode('${view}', 'detail', event)">详细信息</button>
     <button class="${ui.mode === 'raw' ? 'on' : ''}" onclick="lgMode('${view}', 'raw', event)">原始 JSON</button></div></div>`;
   const meta = `<div class="lg-meta">
     <div><div class="k">持续时间</div><div class="v">${d.latencyMs != null ? d.latencyMs + ' ms' : '-'}</div></div>
@@ -2244,7 +2465,10 @@ function detailHtml(e, view){
     <span><span class="k">来源</span> <code>${esc(d.origin || '-')}</code></span>
     <span><span class="k">题集版本</span> <code>${esc(d.questionSetVersion || '未知（旧文档）')}</code></span>
     <span><span class="k">存档 _id</span> <code>${esc(String(d._id || '-'))}</code></span></div>`;
-  return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${body}${foot}</div>`;
+  const rm = (STATE.rerunMsg && STATE.rerunMsg.key === e.key)
+    ? `<div class="prov" style="margin:10px 0 0;color:${STATE.rerunMsg.ok ? 'var(--green)' : 'var(--amber)'}">${esc(STATE.rerunMsg.text)}</div>`
+    : '';
+  return `<div class="lg-card" onclick="event.stopPropagation()">${head}${meta}${rm}${body}${foot}</div>`;
 }
 function lgRow(view, key){
   const e = (lgEntries(view) || []).find(x => x.key === key);
@@ -2281,7 +2505,9 @@ function lgCopy(view, what, ev){
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
                      ['leaders', '板块与龙头', '🐉'],
-                     ['detail', '判定明细', '🗓️']];
+                     // 2026-10-19 用户裁决：页名由「判定明细」改为「涨停分析」（表内行展开的
+                     //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
+                     ['detail', '涨停分析', '🗓️']];
 const NAV = [
   {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
@@ -2332,16 +2558,6 @@ function setView(key){
   }
   window.scrollTo({top: 0});
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
-}
-function showBandCmd(){
-  const el = $('bandCmd');
-  if (el.style.display !== 'none'){ el.style.display = 'none'; return; }
-  const b = bandDoc() || {};
-  const path = b.artifactPath || 'data/backups/relay-band-table.json';
-  el.innerHTML = `<div class="cmdbox"><span>python scripts/jev_relay_band_diagnostic.py --emit-json ${esc(path)}</span>`
-    + `<button onclick="copyText(this.previousElementSibling.innerText, this)">复制</button></div>
-    <div class="prov" style="margin-top:6px">零模型调用（只读 Mongo + 本地通达信日线），全窗约 5–9 分钟；生成后本页刷新即变（含生成时间与滞后警告）。</div>`;
-  el.style.display = '';
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -2549,18 +2765,15 @@ function renderDiagPanel(agg){
   const b = bandDoc(); const el = $('diagBands'); if (!el) return;
   agg = agg || bandAgg();
   if (!b){ el.innerHTML = bandDiagMissing(); $('diagZones').innerHTML = ''; $('diagCorr').innerHTML = '';
-    $('diagProvenance').textContent = ''; return; }
+    renderBandRefreshWarn(); return; }
   const w = b.window || {};
   const rows = agg.rows;
   const sbw = $('sbWin'); const rg = STATE.relayRange || {};
   if (sbw) sbw.textContent = rows.length ? `${rows[0].d} ~ ${rows[rows.length-1].d}（${rows.length} 日）`
     : (rg.start || rg.end ? '区间内无读数' : `${w.start} ~ ${w.end}`);
   const sbb = $('sbBand'); if (sbb) sbb.textContent = String(b.generatedAt || '').replace('T', ' ').slice(5);
-  const latest = (STATE.series[STATE.series.length - 1] || {}).tradingDate || '';
-  const lag = latest && w.end && latest > w.end ? ` · ⚠ 滞后：序列已到 ${latest}，分带表止于 ${w.end}` : '';
-  $('diagProvenance').textContent = `离线表生成 ${b.generatedAt || '?'} · 逐日行全量 ${w.start}~${w.end}（判定 ${w.judged} 日 / 有次日实测 ${w.evaluated} 日）· relay 代际 ${(b.relayGeneration || []).join('+')}${lag}`;
   const bars = b.bars || {};
-  $('diagWarn').innerHTML = lag ? `<div class="warn" style="margin-bottom:10px">分带表与当前序列不同步（${esc(lag.replace(' · ', ''))}）——重跑 scripts/jev_relay_band_diagnostic.py --emit-json 即可刷新（零模型调用）</div>` : '';
+  renderBandRefreshWarn();   // 滞后/缺失/刷新中 → banner（含一键刷新按钮，零模型调用）
   const bandRows = agg.bands.filter(r => BAND_ORDER.includes(r.name));
   if (!bandRows.length){
     el.innerHTML = bandDiagMissing() || '<div class="empty">当前统计窗口内无分带读数</div>';
@@ -2725,9 +2938,6 @@ function renderCharts(){
   const ptsR = rangedSeries().filter(r => r.relayIndex != null);
   // 温度随点自带（relay-index 读口已 join EOD day_temperature，全窗可用；/range 仅 60 天上限）
   const tempsR = {}; for (const r of ptsR) if (r.dayTemperature != null) tempsR[r.tradingDate] = r.dayTemperature;
-  $('phaseChartHint').textContent = ptsR.length
-    ? `${ptsR[0]?.tradingDate || ''} ~ ${ptsR[ptsR.length - 1]?.tradingDate || ''} · ${ptsR.length} 判定日 · 相位条带 ${phaseSegments(ptsR.map(r => ({d: r.tradingDate, idx: r.relayIndex, phase: r.relayPhase}))).length} 段`
-    : '当前统计窗口内无判定日';
   if (pts15.length < 2) $('relayChart').innerHTML = '<div class="empty">序列不足</div>';
   if (ptsR.length < 2) $('relayChart2').innerHTML = '<div class="empty">当前统计窗口内序列不足（放宽度或点「全部」）</div>';
   if (pts15.length < 2 && ptsR.length < 2) return;

@@ -25,8 +25,14 @@ import urllib.request
 DEFAULT_ACCOUNT_ID = "921cf15176f84c90ea49865334af32c6"
 
 # 瞬时失败重试退避（秒）：2026-10-09 实测上游间歇性执行故障（500/2002）存在亚分钟级
-# 抖动（同载荷 9 秒内 ✅→❌→✅），秒级重试可接住翻转窗口；重试仅消耗失败请求（0 token，零计费）
-JEV_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0)
+# 抖动（同载荷 9 秒内 ✅→❌→✅），秒级重试可接住翻转窗口；重试仅消耗失败请求（0 token，零计费）。
+# 2026-10-19 加长尾（2s/5s/15s/30s，共 5 次尝试）：连板情绪 10-19 日判定因网络层
+# TLS 重置（`[SSL: UNEXPECTED_EOF_WHILE_READING]`，usage={} 即 0 token）在旧的 3 次尝试
+# （2s/5s 间距过近，落在同一抖动窗内）未恢复而 degraded；实测对 api.typesafe.ai 连续
+# 连接约 2-5 成失败、间隔 15s 后失败率明显回落，故退避尾部拉长到 30s。
+# 全部失败仍返回最后一次 failure envelope（fail-visible，绝不伪造成功）。
+# 尝试次数 = len(JEV_RETRY_DELAYS) + 1（首试 + 4 段退避，共 5 次）。
+JEV_RETRY_DELAYS: tuple[float, ...] = (2.0, 5.0, 15.0, 30.0)
 
 
 def _envelope_completed(envelope: dict) -> bool:

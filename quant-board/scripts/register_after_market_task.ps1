@@ -30,6 +30,14 @@
 #   （10-14/10-15 实证：relay 16:18-16:27 出数、归因 16:20-16:36 才落库，叙事恒写
 #   「未覆盖（0/N，归因证据缺失）」）。
 #
+# 2026-10-19 新增 relayBand 步（用户裁决 A+A1：分带表零人工挂链）：relayIndex 之后，重算
+#   分带实测表 data/backups/relay-band-table.json（页面【分带观察】读数）。**零模型调用**
+#   （只读 Mongo + 本地通达信全历史，实测 5–9 分钟）。门控自愈式：产物 window.end < 最新
+#   ok 判定日才重算（已覆盖当天零成本跳过）；门控查询失败按 skipped 处理（与兄弟 advisory 步
+#   一致，不同 fail-open——此时子进程读 Mongo 也会失败）。产物写临时文件、成功退出后原子替换
+#   ——刷新期间旧表完整可读；A1 策略=全窗就地重建，审计靠产物 generatedAt/relayGeneration/provenance。
+#   advisory 语义（失败不翻转整体 ok）。
+#
 # 2026-09-16 起备份并入本任务；旧的 QuantBoard-LightBackup / QuantBoard-FullBackup
 # 独立任务由本脚本幂等清理。
 #
@@ -74,7 +82,7 @@ Register-ScheduledTask `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
-    -Description 'QuantBoard 盘后链（16:00）：热榜情绪计算 + MongoDB 备份（交易日 light / 周五 full，含 verify/prune/周五 R2 push）+ 四类型快照 R2 日归档 + 脉拍等 advisory 步' `
+    -Description 'QuantBoard 盘后链（16:00）：热榜情绪计算 + MongoDB 备份（交易日 light / 周五 full，含 verify/prune/周五 R2 push）+ 四类型快照 R2 日归档 + 分带表重算（零模型调用）+ 脉拍等 advisory 步' `
     | Out-Null
 
 Write-Host "registered task '$taskName'"

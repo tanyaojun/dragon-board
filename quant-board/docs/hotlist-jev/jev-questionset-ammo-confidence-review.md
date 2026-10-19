@@ -88,7 +88,9 @@ leader_strength（score）、money_effect（choice 四）、theme_pulse（choice
 ### 调用与解析通道（全部题目集共享）
 
 - 双通道：`_dispatch_jev`（jev_sentiment_compute.py:32-40）官方直连优先、CF 网关回退；
-  重试 (2.0, 5.0)s（jev_client.py:29）。
+  重试退避 `JEV_RETRY_DELAYS = (2.0, 5.0, 15.0, 30.0)s`（共 5 次尝试，jev_client.py；
+  2026-10-19 因 10-19 连板情绪判定被 TLS 重置（`[SSL: UNEXPECTED_EOF_WHILE_READING]`，
+  0 token）打穿旧的 3 次 2s/5s 窗口而加长尾部退避）。
 - 协议三原语 choice/score/noul；score 返回「锚点概率加权期望+legend+全档位分布+confidence」，
   归一公式 `score/(len(legend)-1)*100`（jev_client.py:139-148）。
 - **confidence 与 probabilities 均为模型自报，代码零计算**（jev_client.py:149 原样透传）。

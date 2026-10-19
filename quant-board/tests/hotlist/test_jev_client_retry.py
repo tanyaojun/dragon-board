@@ -29,7 +29,7 @@ def _no_real_sleep(monkeypatch):
 
 
 def test_retry_converts_transient_failure(monkeypatch, _no_real_sleep):
-    """前两次失败、第三次成功 → 返回成功；恰好重试 2 次、退避 2s/5s。"""
+    """前两次失败、第三次成功 → 返回成功；在第三次即收敛，退避 2s/5s。"""
     seq = [dict(FAIL), dict(FAIL), dict(OK)]
     calls: list[int] = []
 
@@ -39,18 +39,19 @@ def test_retry_converts_transient_failure(monkeypatch, _no_real_sleep):
 
     monkeypatch.setattr(jev_client, "_call_primary", _fake_primary)
     envelope, _ = call_jev("acc", "tok", {}, {})
-    assert len(calls) == 3  # 共 3 次尝试
+    assert len(calls) == 3  # 第三次成功即停，不耗剩余重试
     assert _envelope_completed(envelope) is True
-    assert _no_real_sleep == [2.0, 5.0]  # 失败后才退避，序列与 JEV_RETRY_DELAYS 一致
+    assert _no_real_sleep == [2.0, 5.0]  # 退避前缀与 JEV_RETRY_DELAYS 一致
 
 
-def test_retry_all_fail_returns_last(monkeypatch):
-    """全败：共 3 次尝试，返回最后一次的 failure envelope。"""
+def test_retry_all_fail_returns_last(monkeypatch, _no_real_sleep):
+    """全败：尝试次数 = len(JEV_RETRY_DELAYS)+1，按完整退避序列跑完，返回最后一次 failure envelope。"""
     calls: list[int] = []
     monkeypatch.setattr(jev_client, "_call_primary",
                         lambda *a, **k: (calls.append(1) or (dict(FAIL), 10)))
     envelope, _ = call_jev("acc", "tok", {}, {})
-    assert len(calls) == 3
+    assert len(calls) == len(jev_client.JEV_RETRY_DELAYS) + 1
+    assert _no_real_sleep == list(jev_client.JEV_RETRY_DELAYS)
     assert envelope["errors"] == FAIL["errors"]
 
 

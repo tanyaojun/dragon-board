@@ -633,6 +633,14 @@ MongoDB 模式下，该入口只执行日终热榜情绪落库：
 
 迁移前 SQLite 模式仍保留旧 `backup-snapshot-day -> archive-auto-once -> push-archive-backup -> prune-backup` 编排；MongoDB 模式不得触碰旧 archive/prune 链路。
 
+MongoDB 模式盘后链（`scripts/register_after_market_task.ps1` 注册，每日 16:00）在三个生产步
+（`hotlistSentiment` / `mongodbBackup` / `snapshotArchiveR2`，任一失败置 `stoppedAt`）之后跑一串
+**advisory 步**（失败/跳过只进 `results`，不翻转整体 ok、不参与 `stoppedAt`）：`phasePulse`、
+`jiuyanLabel`、`zhabanLabel`、`relayIndex`、`relayBand`、`phaseBand`、`deepValley`、
+`peakRevalidate`、`jevDailyLine`、`calibDriftMonitor`、`amountVsSameRecord`、`voteWinrateLedger`。
+其中 `relayBand`（2026-10-19）重算分带实测表（零模型调用，门控=产物 `window.end` < 最新 ok 判定日
+才跑；失败保留旧表并撤掉半成品）。
+
 ## jev 热榜情绪观察轨道 API（2026-10-08）
 
 独立观察轨道（详见 `architecture.md` jev 节与 `docs/hotlist-jev/hotlist-jev-emotion-observe-design.md`）。
@@ -647,6 +655,75 @@ MongoDB 模式下，该入口只执行日终热榜情绪落库：
 
 `scope` = `slot`（缺省 slotTime 取当日最新已采 half_hour 槽）或 `day`（盘后日级固定）。返回
 `{ok, status: ok|degraded|no_data, ...}`；当日无帧且未给 slotTime → 404 `errorCode=no_slot`。
+
+### `POST /api/hotlist-jev/relay-index/rerun`
+
+连板情绪指数**单日复跑**（2026-10-19，JEV 叙事工作台「重跑」按钮）：网络抖动导致的 degraded
+日手动重判。**不受 `JEV_SENTIMENT_ENABLED` gate 限制**（显式意图），复用生产入口
+`run_relay_index_day`（叙事拼装 + jev 退避重试），origin 仍为 `relay_index_daily`：
+
+```json
+{ "date": "2026-10-19", "force": true, "datasetId": "dragonboard_live" }
+```
+
+返回 `{ok, date, day, status, relayIndex, relayPhase, errorCode, errorDetail}`；`day` 与
+`GET /relay-index` 的单日文档同形（含 `relayStructure`）。失败/降级照常落库并原样透出原因，
+**不伪造读数**；韭研 final 缺失（入口跳过不写）→ `errorCode=not_written`；**该日已有旧档但入口未重判**
+（`computedAt` 未刷新）→ `errorCode=not_rerun`（旧档状态不代表本次结果）；token 未配置 →
+`missing_token`。页面 :8008 经 `serve_relay_page` POST 透传（超时 `_POST_PROXY_TIMEOUT_SECONDS=400s`，
+≥jev 退避预算）。
+
+### `POST /api/hotlist-jev/slots/rerun`
+
+jev 帧级槽位情绪**单日单槽复跑**（2026-10-19，工作台当日逐槽详情卡「重跑」按钮）：网络抖动
+导致的 degraded/no_data 槽手动重判。**不受 `JEV_SENTIMENT_ENABLED` gate 限制**（显式意图），
+复用生产入口 `compute_and_upsert_for_slot`（origin=`manual`，与 /evaluate 手动补评同源）：
+
+```json
+{ "tradingDate": "2026-10-19", "slotTime": "10:00", "snapshotType": "half_hour", "datasetId": "dragonboard_live" }
+```
+
+`snapshotType` 显式透传（防 quarter_hour 槽被按 half_hour 重判），缺省 `half_hour`。返回
+`{ok, slot, status, errorCode, errorDetail}`；`slot` 与 `GET /series` 的槽位文档同形。
+失败/降级照常落库并原样透出原因，**不伪造读数**；入口未落文档 → `errorCode=not_written`；
+token 未配置 → `missing_token`；缺 tradingDate/slotTime → `bad_slot`。
+
+### `POST /api/hotlist-jev/eod/rerun`
+
+日级 EOD 情绪**单日复跑**（2026-10-19，当日逐槽表 EOD 行「重跑」按钮）：网络抖动导致的
+degraded/no_data EOD 手动重判。**不受 `JEV_SENTIMENT_ENABLED` gate 限制**（显式意图），
+复用生产入口 `compute_and_upsert_for_day`（origin=`manual`）：
+
+```json
+{ "tradingDate": "2026-10-19", "snapshotType": "half_hour", "datasetId": "dragonboard_live" }
+```
+
+返回 `{ok, eod, status, errorCode, errorDetail}`；`eod` 与 `GET /series` 的 `eod` 文档同形。
+失败/降级照常落库并原样透出原因，**不伪造读数**；入口未落文档 → `errorCode=not_written`；
+token 未配置 → `missing_token`；缺 tradingDate → `bad_date`。
+
+### `GET /api/hotlist-jev/relay-band`
+
+连板指数**分带实测读数**读口（离线诊断产物）——不加工不重算，只读
+`data/backups/relay-band-table.json`（env `QUANT_BOARD_RELAY_BAND_TABLE` 可覆盖）。
+产物缺失/损坏/空 → `ok=false + reason + hint`（fail-visible，不静默空表）。
+
+### `POST` / `GET /api/hotlist-jev/relay-band/refresh`
+
+分带表**后台重算**（2026-10-19 用户需求；页面滞后黄条 / 未就绪提示内置按钮触发）——**零模型调用**
+（只读 Mongo + 本地通达信日线，全窗约 5–9 分钟）。POST 起任务（`{days?: 0}`，0=全窗），已运行
+时不重复起（`already_running`）；GET 轮询状态 `{running, ok, startedAt, finishedAt, returncode,
+error, days, logPath, artifactPath, logTail}`。产物先写临时文件、成功退出后原子替换：
+**刷新期间旧表完整可读**，失败保留旧表并原样透出 `script_exit_N` / `artifact_missing` /
+`artifact_replace_failed`，以及 spawn/log 类结构化错误（`spawn_failed` / `log_dir_failed` /
+`log_open_failed` / `band_refresh_timeout`）。`days>0` 为**冒烟跑**：因产物 `window.end` 仍是全量末日，产物**另存**
+`data/backups/relay-band-table-days<N>.json`，绝不覆盖正式读数（否则门控会误判已覆盖最新日、
+永久跳过全窗重建）。
+
+该重算亦已挂入 **16:00 盘后链**（advisory 步 `relayBand`，`backend/operations/schedule.py`；
+路径/命令/原子替换的单一事实源 = `backend/services/jev/relay_band.py`）：门控自愈式，产物
+`window.end` < 最新 `status=ok 且 relayIndex 非空` 判定日才重算（已覆盖则零成本跳过；门控查询
+失败按 skipped 处理，与兄弟 advisory 步一致），因此页面日常不再滞后。
 
 ### `GET /api/hotlist-jev/series`
 

@@ -17,6 +17,10 @@
   含逐日 D→次日实测 + 分带/五区/相关表 + provenance）。本读口**不加工不重算**：
   文件缺失/损坏 → ok=False + reason + hint（fail-visible：前端显式标注「分带表未生成」，
   不静默给空表，也不拿前端序列直算冒充实测）。
+- GET/POST /api/hotlist-jev/relay-band/refresh（2026-10-19，用户需求）：页面【分带观察】
+  滞后/缺失时一键重算分带表。**零模型调用**（只读 Mongo + 本地通达信日线），并后台子进程跑
+  `scripts/jev_relay_band_diagnostic.py --emit-json`；POST 起任务，GET 轮询状态，产物经临时文件
+  原子替换（刷新期间旧表可读、不读到半成品）。
 
 读口只返回 hotlist_jev_sentiment 原文档（独立观察轨道），不与规则情绪文档合并。
 """
@@ -24,6 +28,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +40,19 @@ from pydantic import BaseModel, Field
 
 from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY
 from backend.data.repositories import repository_factory
+from backend.services.jev.relay_band import (
+    RELAY_BAND_REFRESH_LOG_ENV,      # 再导出：测试与运维引用 routes.<name>
+    RELAY_BAND_TABLE_ENV,            # 再导出：读口 env 覆盖名
+    band_refresh_command,
+    discard_tmp,
+    quant_board_root,
+    relay_band_refresh_log_path,
+    relay_band_script_path,
+    relay_band_table_path,
+    replace_artifact,
+    smoke_artifact_path,
+    tmp_artifact_path,
+)
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
 
@@ -252,6 +272,157 @@ def get_relay_index(
         return {"ok": False, "degraded": True, "reason": f"relay_index_read_failed: {exc}"}
 
 
+class JevRelayRerunPayload(BaseModel):
+    date: str
+    force: bool = True   # 默认重判（含已 ok 日）；false 时交给 run_relay_index_day 的幂等跳过
+    datasetId: str = "dragonboard_live"
+
+
+@router.post("/relay-index/rerun")
+def post_relay_index_rerun(payload: JevRelayRerunPayload) -> dict[str, Any]:
+    """连板情绪指数**单日复跑**（2026-10-19 用户需求）：网络抖动/降级日手动重判。
+
+    - 显式用户意图（同 /evaluate：不受 JEV_SENTIMENT_ENABLED gate 限制），origin 仍由
+      ``run_relay_index_day`` 落 ``relay_index_daily``（不新增 origin，保持存储单主链）。
+    - 复用生产判定入口（叙事拼装 + ``_dispatch_jev`` 退避重试），**不另写一份调用链**。
+    - 失败照常落 degraded 文档，响应透出 ``errorCode/errorDetail``，不伪造读数（§4.0）。
+    - 「本次是否真重判」以 ``computedAt`` 是否刷新为准（评审 F6）：入口对韭研 final 缺失只跳过
+      不写文档，若该日已有旧档，旧档状态不得冒充本次结果 → ``errorCode=not_rerun``。
+    - 返回落库后的完整单日文档（与 GET ``day`` 同形，含 relayStructure/narrative）。
+    """
+    if not ((os.environ.get("JEV_TYPESAFE_KEY") or "").strip()
+            or (os.environ.get("JEV_CF_TOKEN") or "").strip()):
+        return {"ok": False, "errorCode": "missing_token",
+                "error": "JEV_TYPESAFE_KEY / JEV_CF_TOKEN not configured"}
+    date = (payload.date or "").strip()
+    if not date:
+        return {"ok": False, "errorCode": "bad_date", "error": "date required"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.operations.jev_relay_index import COLLECTION, run_relay_index_day
+
+        # 重算新鲜度基线：入口对「韭研 final 缺失」只跳过不写文档，若该日已有旧档，
+        # 旧 computedAt 会被反推成「本次重跑结果」——必须区分「本次真重判」与「本次被跳过」
+        # （2026-10-19 评审 F6：否则会用旧档冒充成功，且把「原料缺失」误报成「网络抖动」）。
+        before = db[COLLECTION].find_one({"_id": f"{date}:RELAY"}, {"computedAt": 1})
+        before_at = (before or {}).get("computedAt")
+        run_relay_index_day(db, [date], force=bool(payload.force),
+                            dataset_id=payload.datasetId)
+        day_doc = db[COLLECTION].find_one({"_id": f"{date}:RELAY"})
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"relay_rerun_failed: {exc}"}
+    if day_doc is None:
+        # run_relay_index_day 对「韭研 final 缺失」只跳过不写文档 → 显式报错，不伪装成功
+        return {"ok": False, "errorCode": "not_written",
+                "error": f"no relay doc for {date}（非交易日或韭研 final 缺失）"}
+    if before is not None and day_doc.get("computedAt") == before_at:
+        # 该日**本已有档**且 computedAt 未刷新 ⇒ 入口本次没重判（韭研 final 缺失而跳过）。
+        # 旧档状态不能代表本次结果：既不能用它报 ok，也不能把「原料缺失」说成「网络抖动」。
+        return {"ok": False, "errorCode": "not_rerun", "date": date, "day": day_doc,
+                "status": day_doc.get("status"),
+                "error": ("入口未重判（当日韭研 final 缺失，已按旧档保留）；"
+                          "旧档状态不代表本次结果")}
+    return {"ok": day_doc.get("status") == "ok", "date": date, "day": day_doc,
+            "status": day_doc.get("status"), "relayIndex": day_doc.get("relayIndex"),
+            "relayPhase": day_doc.get("relayPhase"), "errorCode": day_doc.get("errorCode"),
+            "errorDetail": day_doc.get("errorDetail")}
+
+
+class JevSlotRerunPayload(BaseModel):
+    tradingDate: str
+    slotTime: str
+    snapshotType: str = "half_hour"
+    datasetId: str = "dragonboard_live"
+
+
+@router.post("/slots/rerun")
+def post_slot_rerun(payload: JevSlotRerunPayload) -> dict[str, Any]:
+    """jev 帧级槽位情绪**单日单槽复跑**（2026-10-19 用户需求）：网络抖动/降级槽手动重判。
+
+    - 显式用户意图（同 /evaluate：不受 JEV_SENTIMENT_ENABLED gate 限制），origin=manual
+      （与 /evaluate 手动补评同源，不新增 origin）。
+    - 复用生产计算入口 ``compute_and_upsert_for_slot``（帧/行/锚装配 + jev 退避重试），
+      不另写一份调用链；``snapshotType`` 显式透传，防 quarter_hour 槽被按 half_hour 重判。
+    - 失败照常落 degraded/no_data 文档，响应透出 ``errorCode/errorDetail``，不伪造读数（§4.0）。
+    - 返回落库后的完整槽位文档（与 GET ``/series`` 的槽位同形，含 narrative/answers）。
+    """
+    if not ((os.environ.get("JEV_TYPESAFE_KEY") or "").strip()
+            or (os.environ.get("JEV_CF_TOKEN") or "").strip()):
+        return {"ok": False, "errorCode": "missing_token",
+                "error": "JEV_TYPESAFE_KEY / JEV_CF_TOKEN not configured"}
+    trading_date = (payload.tradingDate or "").strip()
+    slot_time = (payload.slotTime or "").strip()
+    if not trading_date or not slot_time:
+        return {"ok": False, "errorCode": "bad_slot",
+                "error": "tradingDate and slotTime required"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.services.jev.jev_sentiment_compute import compute_and_upsert_for_slot
+
+        compute_and_upsert_for_slot(
+            db, dataset_id=payload.datasetId, snapshot_type=payload.snapshotType,
+            trading_date=trading_date, slot_time=slot_time, origin="manual")
+        doc = _slots_collection(db).find_one(
+            {"_id": f"{payload.datasetId}:{payload.snapshotType}:{trading_date}:{slot_time}"})
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"slot_rerun_failed: {exc}"}
+    if doc is None:
+        return {"ok": False, "errorCode": "not_written",
+                "error": f"no slot doc for {trading_date} {slot_time}"}
+    return {"ok": doc.get("status") == "ok", "slot": doc, "status": doc.get("status"),
+            "errorCode": doc.get("errorCode"), "errorDetail": doc.get("errorDetail")}
+
+
+class JevEodRerunPayload(BaseModel):
+    tradingDate: str
+    snapshotType: str = "half_hour"
+    datasetId: str = "dragonboard_live"
+
+
+@router.post("/eod/rerun")
+def post_eod_rerun(payload: JevEodRerunPayload) -> dict[str, Any]:
+    """日级 EOD 情绪**单日复跑**（2026-10-19 用户需求）：网络抖动/降级 EOD 手动重判。
+
+    - 显式用户意图（同 /evaluate：不受 JEV_SENTIMENT_ENABLED gate 限制），origin=manual。
+    - 复用生产计算入口 ``compute_and_upsert_for_day``（当日槽位证据汇总 + 锚装配 + jev 退避重试），
+      不另写一份调用链；``snapshotType`` 显式透传，与「当日逐槽」表消费的槽口径一致。
+    - 失败照常落 degraded/no_data 文档，响应透出 ``errorCode/errorDetail``，不伪造读数（§4.0）。
+    - 返回落库后的完整 EOD 文档（与 GET ``/series`` 的 ``eod`` 同形，含 narrative/answers）。
+    """
+    if not ((os.environ.get("JEV_TYPESAFE_KEY") or "").strip()
+            or (os.environ.get("JEV_CF_TOKEN") or "").strip()):
+        return {"ok": False, "errorCode": "missing_token",
+                "error": "JEV_TYPESAFE_KEY / JEV_CF_TOKEN not configured"}
+    trading_date = (payload.tradingDate or "").strip()
+    if not trading_date:
+        return {"ok": False, "errorCode": "bad_date", "error": "tradingDate required"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.services.jev.jev_sentiment_compute import compute_and_upsert_for_day
+
+        compute_and_upsert_for_day(
+            db, dataset_id=payload.datasetId, snapshot_type=payload.snapshotType,
+            trading_date=trading_date, origin="manual")
+        doc = _slots_collection(db).find_one(
+            {"_id": f"{payload.datasetId}:{payload.snapshotType}:{trading_date}:EOD"})
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"eod_rerun_failed: {exc}"}
+    if doc is None:
+        return {"ok": False, "errorCode": "not_written",
+                "error": f"no EOD doc for {trading_date}"}
+    return {"ok": doc.get("status") == "ok", "eod": doc, "status": doc.get("status"),
+            "errorCode": doc.get("errorCode"), "errorDetail": doc.get("errorDetail")}
+
+
 class JevReviewRulingPayload(BaseModel):
     id: str
     status: str = Field(..., description="rule_right | jev_right | ambiguous | pending")
@@ -415,17 +586,9 @@ def get_hotlist_jev_sentiment_overview(date: str | None = None) -> dict[str, Any
         return {"ok": False, "degraded": True, "reason": f"sentiment_overview_read_failed: {exc}"}
 
 
-# 分带实测读数（离线诊断产物；不加工不重算，缺失/损坏 fail-visible）
-RELAY_BAND_TABLE_ENV = "QUANT_BOARD_RELAY_BAND_TABLE"
-RELAY_BAND_TABLE_DEFAULT = "data/backups/relay-band-table.json"
-
-
-def _relay_band_table_path() -> Path:
-    raw = os.environ.get(RELAY_BAND_TABLE_ENV) or RELAY_BAND_TABLE_DEFAULT
-    path = Path(raw)
-    if not path.is_absolute():
-        path = Path(__file__).resolve().parents[2] / path   # quant-board/ 根
-    return path
+# 分带实测读数（离线诊断产物；不加工不重算，缺失/损坏 fail-visible）。
+# 路径/命令/原子替换的单一事实源 = backend/services/jev/relay_band.py（盘后链共用）。
+_relay_band_table_path = relay_band_table_path   # 保留模块级别名（测试可 monkeypatch）
 
 
 @router.get("/relay-questions")
@@ -448,8 +611,9 @@ def get_relay_questions() -> dict[str, Any]:
 def get_relay_band() -> dict[str, Any]:
     """连板指数分带实测读数（离线诊断产物；fail-visible，不重算不伪造）。"""
     path = _relay_band_table_path()
-    hint = (f"未生成：跑 python scripts/jev_relay_band_diagnostic.py --emit-json "
-            f"{path} （零模型调用，全窗约 9 分钟）")
+    hint = (f"未生成：点页面【分带表未就绪】提示内的刷新按钮，或 cd quant-board 后跑 "
+            f"python scripts/jev_relay_band_diagnostic.py --emit-json {path}"
+            f"（零模型调用，全窗约 5–9 分钟）")
     if not path.exists():
         return {"ok": False, "degraded": True, "reason": "band_table_missing",
                 "hint": hint, "artifactPath": str(path)}
@@ -468,3 +632,144 @@ def get_relay_band() -> dict[str, Any]:
     payload["artifactPath"] = str(path)
     payload["artifactMtime"] = path.stat().st_mtime
     return payload
+
+
+# ── 分带表刷新任务（2026-10-19 用户需求）────────────────────────────────────
+# 页面【分带观察】滞后/缺失时一键重算：零模型调用（只读 Mongo + 本地通达信日线，
+# 全窗约 5–9 分钟）。后台子进程跑 scripts/jev_relay_band_diagnostic.py --emit-json，
+# POST 起任务、GET 轮询状态；产物先写临时文件、成功退出后原子替换，
+# 保证刷新期间旧表仍可读、不会读到半成品（fail-visible：失败保留旧表 + 日志尾部）。
+_BAND_REFRESH: dict[str, Any] = {
+    "proc": None, "startedAt": None, "finishedAt": None, "returncode": None,
+    "error": None, "days": 0, "logPath": None, "tmpPath": None, "targetPath": None,
+}
+_BAND_REFRESH_LOCK = threading.Lock()
+
+
+# API 侧后台任务的最长运行时间（评审 uncertain U1）：裸 Popen 无 timeout，若诊断脚本挂死，
+# 页面会无限 5s 轮询「刷新中…」且无失败出口。须 > 盘后链 sync 路径的 900s（同脚本同窗）。
+_BAND_REFRESH_MAX_RUNTIME_SECONDS = 1200
+
+
+def _band_now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _band_refresh_view(running: bool) -> dict[str, Any]:
+    """任务状态视图（调用方持锁）。logTail 便于页面直接看到失败原因/进度。"""
+    st = _BAND_REFRESH
+    log = Path(st["logPath"]) if st.get("logPath") else relay_band_refresh_log_path()
+    out: dict[str, Any] = {
+        "running": running,
+        "ok": bool(not running and st.get("returncode") == 0 and not st.get("error")),
+        "startedAt": st.get("startedAt"), "finishedAt": st.get("finishedAt"),
+        "returncode": st.get("returncode"), "error": st.get("error"),
+        "days": st.get("days", 0),
+        # 任务视图报**本次任务**的产物路径（days>0 冒烟走另存路径，不能报正式读数路径）
+        "logPath": str(log),
+        "artifactPath": str(st.get("targetPath") or _relay_band_table_path()),
+    }
+    if log.exists():
+        try:
+            out["logTail"] = log.read_text(encoding="utf-8", errors="replace")[-1500:]
+        except Exception:
+            pass
+    return out
+
+
+def _band_refresh_poll() -> dict[str, Any]:
+    """轮询任务；子进程结束则**恰好一次**收尾（成功→原子替换产物；失败→撤掉临时文件）。"""
+    with _BAND_REFRESH_LOCK:
+        proc = _BAND_REFRESH.get("proc")
+        if proc is None:
+            return _band_refresh_view(running=False)
+        if proc.poll() is None:
+            # 挂死保护（评审 uncertain U1）：超过预算即 kill 并结构化收尾，避免页面无限轮询。
+            started = _BAND_REFRESH.get("startedAt") or ""
+            try:
+                elapsed = (datetime.now() - datetime.fromisoformat(started)).total_seconds()
+            except Exception:
+                elapsed = 0.0
+            if elapsed > _BAND_REFRESH_MAX_RUNTIME_SECONDS:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                _BAND_REFRESH["returncode"] = proc.poll()
+                _BAND_REFRESH["finishedAt"] = _band_now_iso()
+                _BAND_REFRESH["error"] = f"band_refresh_timeout: {_BAND_REFRESH_MAX_RUNTIME_SECONDS}s"
+                tmp = _BAND_REFRESH.get("tmpPath")
+                if tmp:
+                    discard_tmp(Path(tmp))
+                _BAND_REFRESH["proc"] = None
+                return _band_refresh_view(running=False)
+            return _band_refresh_view(running=True)
+        rc = proc.returncode
+        _BAND_REFRESH["returncode"] = rc
+        _BAND_REFRESH["finishedAt"] = _band_now_iso()
+        tmp = _BAND_REFRESH.get("tmpPath")
+        target = _BAND_REFRESH.get("targetPath")
+        if rc == 0 and tmp and target and Path(tmp).exists():
+            replaced = replace_artifact(Path(tmp), Path(target))   # 旧表到此刻一直完整可读
+            if not replaced.get("ok"):
+                _BAND_REFRESH["error"] = replaced["error"]
+                discard_tmp(Path(tmp))   # 替换失败同样撤半成品（评审 F3）
+        else:
+            # 失败照常如实上报，旧表不动；清掉半成品临时文件（不落 0/空表冒充）
+            _BAND_REFRESH["error"] = (f"script_exit_{rc}" if rc else "artifact_missing")
+            if tmp:
+                discard_tmp(Path(tmp))
+        _BAND_REFRESH["proc"] = None
+        return _band_refresh_view(running=False)
+
+
+class JevBandRefreshPayload(BaseModel):
+    days: int = 0   # 0=全窗口；>0 只取最近 N 个判定日（冒烟用）
+
+
+@router.post("/relay-band/refresh")
+def post_relay_band_refresh(payload: JevBandRefreshPayload | None = None) -> dict[str, Any]:
+    """启动分带表重算后台任务（零模型调用）。已运行时不重复起（防并发）。"""
+    days = int(payload.days) if payload else 0
+    if days < 0:
+        return {"ok": False, "reason": "bad_days", "error": "days must be >= 0"}
+    script = relay_band_script_path()
+    if not script.exists():
+        return {"ok": False, "reason": "script_missing", "scriptPath": str(script)}
+    target = _relay_band_table_path()
+    if days:
+        # days>0 = 冒烟跑（截断窗口），产物另存，不得覆盖正式读数（评审 F5）
+        target = smoke_artifact_path(target, days)
+    log = relay_band_refresh_log_path()
+    with _BAND_REFRESH_LOCK:
+        proc = _BAND_REFRESH.get("proc")
+        if proc is not None and proc.poll() is None:
+            return {"ok": False, "reason": "already_running", "running": True,
+                    "startedAt": _BAND_REFRESH.get("startedAt")}
+        try:
+            log.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            return {"ok": False, "reason": f"log_dir_failed: {exc}"}
+        tmp = tmp_artifact_path(target, str(os.getpid()))
+        try:
+            with open(log, "w", encoding="utf-8") as fh:
+                p = subprocess.Popen(                      # noqa: S603 - 固定脚本+固定参数
+                    band_refresh_command(tmp, days), cwd=str(quant_board_root()),
+                    stdout=fh, stderr=subprocess.STDOUT,
+                    env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        except Exception as exc:
+            return {"ok": False, "reason": f"spawn_failed: {exc}"}
+        _BAND_REFRESH.update({
+            "proc": p, "startedAt": _band_now_iso(), "finishedAt": None,
+            "returncode": None, "error": None, "days": days, "logPath": str(log),
+            "tmpPath": str(tmp), "targetPath": str(target),
+        })
+        return {"ok": True, "running": True, "startedAt": _BAND_REFRESH["startedAt"],
+                "pid": p.pid, "days": days, "scriptPath": str(script),
+                "artifactPath": str(target), "logPath": str(log)}
+
+
+@router.get("/relay-band/refresh")
+def get_relay_band_refresh() -> dict[str, Any]:
+    """分带表刷新任务状态（页面 5s 轮询；纯读，零模型调用）。"""
+    return _band_refresh_poll()

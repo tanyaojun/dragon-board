@@ -310,6 +310,68 @@ def _run_relay_index_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+_RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 ×约3000 只（实测 5–9 分钟），15min 冗余
+
+
+def _run_relay_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """分带表重算（advisory 步，2026-10-19 用户裁决 A+A1 挂链）。
+
+    - 背景：分带表是页面常驻读数，生成长期靠人工手跑 → 序列前进、表停在旧日，滞后警告
+      天天亮（2026-10-19 实证：序列已到 10-19、表止于 10-16）；本步把它从「人工动作」变成
+      盘后链的一环（与 2026-10-12 relayIndex 挂链同因同法）。
+    - 门控=**自愈式**：产物 `window.end` < 最新 ok 判定日才重算（产物缺失/损坏同样重算）——
+      已覆盖当天则零成本跳过，advisory 步不空转 5–9 分钟。
+    - 子进程=scripts/jev_relay_band_diagnostic.py --emit-json（**零模型调用**：只读 Mongo +
+      本地通达信日线），产物写临时文件、成功退出后原子替换（刷新期间旧表完整可读）。
+    - A1 产物策略：**全窗就地重建**，审计靠产物自带 generatedAt / relayGeneration / bars
+      provenance + 本步结果（失败回退只靠 git / 产物重建，不建平行备份集合）。
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok、不参与 stopped_at（研究证据链）。
+      门控查询失败也按 skipped 返回（与 11 个兄弟 advisory 步一致；且此时子进程读 Mongo 同样
+      会失败，fail-open 只会白起一次进程——2026-10-19 评审 F1）。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run", "date": today}
+    from backend.services.jev.relay_band import (
+        read_artifact_window_end,
+        relay_band_table_path,
+        run_band_refresh_sync,
+    )
+
+    table = relay_band_table_path()
+    artifact_end = read_artifact_window_end(table)
+    latest_judged: str | None = None
+    gate_error: str | None = None
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        # 口径与脚本取数一致（scripts/jev_relay_band_diagnostic.py：status=ok 且 relayIndex 非空
+        # 才算可判定日）；只看 status 会在「ok 但缺 relayIndex」的退化日上每晚白跑一次（评审 uncertain 2）
+        latest_judged = max(
+            (str(row.get("tradingDate"))
+             for row in db["hotlist_jev_relay_index"].find(
+                 {"status": "ok", "relayIndex": {"$ne": None}}, {"tradingDate": 1})
+             if row.get("tradingDate")), default=None)
+    except Exception as exc:  # noqa: BLE001 — 门控失败：与兄弟步一致按跳过处理（fail-visible 记原因）
+        gate_error = f"gate error: {exc}"
+    if gate_error is not None:
+        return {"ok": True, "skipped": True, "reason": gate_error,
+                "date": today, "artifactEnd": artifact_end}
+    if latest_judged is None:
+        return {"ok": True, "skipped": True, "reason": "no ok relay judgment",
+                "date": today, "artifactEnd": artifact_end}
+    if artifact_end and artifact_end >= latest_judged:
+        return {"ok": True, "skipped": True,
+                "reason": f"up_to_date ({artifact_end} >= {latest_judged})",
+                "date": today, "artifactEnd": artifact_end, "latestJudged": latest_judged}
+
+    result = run_band_refresh_sync(timeout=_RELAY_BAND_TIMEOUT_SECONDS)
+    result["date"] = today
+    result["latestJudged"] = latest_judged
+    result["artifactEndBefore"] = artifact_end
+    result["reason"] = ("artifact_missing_or_unreadable" if not artifact_end
+                        else f"stale ({artifact_end} < {latest_judged})")
+    return result
+
+
 def _run_deep_valley_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """C9 深谷状态月度复验（advisory 步，2026-10-03 协议 §十四/M4 §8）。
 
@@ -726,6 +788,9 @@ def run_after_market_once(
         # 叙事恒写「未覆盖（0/N，归因证据缺失）」，zhabanLabel 步的补全目的被顺序抵消）。
         zhaban_label_result = _run_zhaban_label_step(today, dry_run=dry_run)
         relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
+        # 分带表重算（advisory）：链序在 relayIndex 之后——门控比对「最新 ok 判定日」与
+        # 产物 window.end，当日新判定刚落库时自愈补齐（零模型调用，产物原子替换）
+        relay_band_result = _run_relay_band_step(today, dry_run=dry_run)
         phase_band_result = _run_phase_band_step(today, dry_run=dry_run)
         deep_valley_result = _run_deep_valley_step(today, dry_run=dry_run)
         peak_revalidate_result = _run_peak_revalidate_step(today, dry_run=dry_run)
@@ -736,7 +801,7 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -745,6 +810,7 @@ def run_after_market_once(
                 "jiuyanLabel": jiuyan_label_result,
                 "zhabanLabel": zhaban_label_result,
                 "relayIndex": relay_index_result,
+                "relayBand": relay_band_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,
                 "peakRevalidate": peak_revalidate_result,

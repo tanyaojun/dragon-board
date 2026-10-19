@@ -7,8 +7,14 @@
 2. 明细表删除 tokens / 判定时间两列，新增「龙头强度」列。
 3. 表头筛选新增「分区」「龙头强度」两个下拉。
 4. 「判定明细」标题后不再有大段文字说明；标题字号与其他页一致（不放大）。
+   （2026-10-19 用户裁决：四页（相位分线/分带观察/板块与龙头/判定明细）页头**整块**
+   ——粗体标题 + 小字辅助行（hint/provenance/说明段）+ 命令面板 + 分隔线——全部删除；
+   手动刷新入口改由滞后黄条 / 未就绪提示内置按钮提供。）
 5. 点列表行 → 页头 KPI 卡联动到该日；KPI 第三行改为**档位描述**（该档位意味着什么），
    不再显示「量化比率口径」这类统计口径文字。
+6. （2026-10-19 用户裁决）页名「判定明细」→「**涨停分析**」；其日级表右上原计数
+   「59 / 59 日（全库 109）」改为**分页控件**，每页上限 20 条，右侧只报总页数「共 X 页」
+   （筛选/区间/排序变更回第 1 页，越界自动 clamp；分页只切展示行，KPI/分带/相位口径不变）。
 
 本测试是**静态源码守卫**（无浏览器、零网络、零 jev 调用，AGENTS §1.2-7）。
 """
@@ -231,14 +237,36 @@ def test_two_new_filters_zone_and_leader(js: str):
 
 
 # ── 需求 4：标题后无大段说明、字号一致 ─────────────────────────────────────
-def test_detail_head_has_no_long_description(html: str):
-    """判定明细页头只有 h2（无 <p> 长说明），且 h2 不单独放大。"""
-    seg = html[html.index('id="rv-detail"'):]
-    seg = seg[: seg.index("</section>")]
-    head = seg[: seg.index('class="ph-line"')]
-    assert "<p" not in head, "页头不应再有大段文字说明"
-    # 字号：与其它页共用 .page-head h2（20px），不额外覆盖
-    assert "font-size" not in head.split("<h2")[1].split(">")[0]
+# 2026-10-19 用户裁决（截图）：四页页头粗体标题（<h2>）与 tab 名重复，全部删除；
+# 功能性内容（区间 hint / 产物 provenance / 重跑按钮 / 数据来源说明）一律保留。
+def test_four_views_have_no_bold_page_titles(html: str):
+    """相位分线 / 分带观察 / 板块与龙头 / 判定明细 四页不得再有页头（含 <h2> 与整块辅助行）。"""
+    bounds = [('id="rv-phase"', 'id="rv-bands"'), ('id="rv-bands"', 'id="rv-leaders"'),
+              ('id="rv-leaders"', 'id="rv-detail"'), ('id="rv-detail"', "</section>")]
+    for anchor, end in bounds:
+        seg = html[html.index(anchor):]
+        seg = seg[: seg.index(end)]
+        assert "<h2" not in seg, f"{anchor} 页头粗体标题应已删除（与 tab 名重复）"
+        assert 'class="page-head"' not in seg, f"{anchor} 整块页头（标题+小字辅助行）应已删除"
+        assert 'class="ph-line"' not in seg, f"{anchor} 页头分隔线应已删除"
+    # 其它工作台页（总览/热榜行情/涨停复盘）不在本次范围，标题保留
+    assert html.count("<h2>") >= 3, "非 relay 子页的页头标题不应被误删"
+
+
+def test_removed_page_head_leaves_no_dead_hooks(html: str, js: str):
+    """删整块后不得留悬空钩子：挂载点/写入语句/命令面板全部清掉，刷新入口仍在。"""
+    for gone in ('id="phaseChartHint"', 'id="diagProvenance"', 'id="bandCmd"'):
+        assert gone not in html, f"悬空挂载点 {gone} 应已删除"
+    for dead in ("$('phaseChartHint')", "$('diagProvenance')", "function showBandCmd(",
+                 "$('bandCmd')", ".cmdbox", ".tabchip"):
+        assert dead not in html, f"悬空引用 {dead} 应已删除（含死 CSS）"
+    detail = html[html.index('id="rv-detail"'):]
+    detail = detail[: detail.index("</section>")]
+    assert "<p" not in detail, "判定明细页头说明应已删除"
+    # 手动刷新逃生口不得随之丢失：滞后黄条 / 未就绪提示内仍带按钮
+    assert "bandRefreshBtn()" in _fn(js, "bandRefreshWarnHtml")
+    assert "bandRefreshBtn()" in js[js.index("const bandDiagMissing"):js.index("const bandRefreshBusy")]
+    assert "function bandRefresh(" in js, "刷新实现与入口不应被删"
 
 
 # ── 需求 5：点行联动 KPI + 档位描述 ────────────────────────────────────────
@@ -614,8 +642,8 @@ def test_merged_page_holds_all_three_sections(html: str):
         assert t in seg, f"合并页应含区块「{t}」"
     for el in ("moneyRibbon", "moneyStats", "moneyDiag", "moneyHint",
                "hitChips", "hitTable", "hitHint",
-               "diagBands", "diagZones", "diagCorr", "diagProvenance",
-               "diagWarn", "bandCmd", "phaseMatrix"):
+               "diagBands", "diagZones", "diagCorr",
+               "diagWarn", "phaseMatrix"):
         assert f'id="{el}"' in seg, f"合并页应含挂载点 #{el}"
 
 
@@ -898,3 +926,433 @@ def test_leaders_helper_behaviour(tmp_path, js: str):
     got = json.loads(cp.stdout.strip())
     assert got == ["首板", "首板", "4天4板", "16天8板", "3板", 4, "不可算", "不可算"], \
         f"文案派生不符：{got}"
+
+
+# ── 2026-10-19：判定明细详情卡【重跑】按钮（单日复跑，网络抖动恢复）──────────
+def test_relay_rerun_button_in_relay_detail_head(js: str):
+    """【重跑】置于【详细信息】左侧；仅 relay 日级卡提供；进行中禁用（成本护栏）。"""
+    dh = _fn(js, "detailHtml")
+    assert "重跑" in dh and "relayRerun(" in dh, "判定明细详情卡应有【重跑】按钮"
+    assert "view === 'relay'" in dh, "重跑仅 relay 日级卡提供（单日=连板指数日判定）"
+    assert dh.index("${rerunBtn}<button") < dh.index(">详细信息</button>"), \
+        "重跑按钮必须在【详细信息】左侧"
+    assert "disabled" in dh and "STATE.rerunBusy" in dh, "重跑进行中应禁用（防并发重复计费）"
+
+
+def test_relay_rerun_flow_and_endpoint(js: str, html: str):
+    """重跑：二次确认 → POST 复跑写口（force）→ 丢弃旧档 → 刷新序列 + 重拉当日档。"""
+    rr = _fn(js, "relayRerun")
+    assert "window.confirm" in rr, "真实模型调用须二次确认"
+    assert "/api/hotlist-jev/relay-index/rerun" in rr, "应 POST 单日复跑写口"
+    assert "force" in rr, "应默认 force 重判"
+    assert "if (STATE.rerunBusy) return" in rr, "并发护栏：同时只允许一次重跑"
+    assert "delete STATE.relayDocs[key]" in rr, "旧 degraded 存档须丢弃重拉"
+    assert "loadAll()" in rr and "relayDocFetch(" in rr, "重跑后刷新序列与当日完整存档"
+    # 结果落卡片内 banner（fail-visible，不弹阻断式 alert）
+    dh = _fn(js, "detailHtml")
+    assert "rerunMsg" in rr and "rerunMsg" in dh
+    assert "rerunMsg.key === e.key" in dh, "重跑结果按 entry 显示在详情卡内"
+    assert "async function jpost(" in js and "jpost(" in rr, "应有 jpost 助手"
+    assert ".lg-toggle button.rerun" in html, "重跑按钮样式缺失"
+
+
+def test_relay_page_post_proxy_supports_rerun():
+    """页面 :8008 必须能透传 POST（否则重跑按钮 405）；超时须覆盖退避重试预算。
+
+    2026-10-19 评审 F7：旧值 180s < 退避预算最坏 ≈5×60+52≈352s，会先截断导致
+    「页面报失败而 :8000 实际仍在跑并可能写库成功」→ 用户重试白烧第二次真实模型调用。
+    """
+    import re as _re
+    from backend.services.jev.jev_client import JEV_RETRY_DELAYS
+
+    src = (_PAGE.parents[1] / "serve_relay_page.py").read_text(encoding="utf-8")
+    assert '@app.post("/api/hotlist-jev/{rest:path}")' in src, "缺 POST 透传路由"
+    assert "proxy_post" in src
+    m = _re.search(r"_POST_PROXY_TIMEOUT_SECONDS\s*=\s*(\d+)", src)
+    assert m, "缺 _POST_PROXY_TIMEOUT_SECONDS（POST 透传须显式超时，不用默认 20s/180s 魔数）"
+    worst = (len(JEV_RETRY_DELAYS) + 1) * 60 + sum(JEV_RETRY_DELAYS)   # 5 次尝试×60s 读超时 + 退避
+    assert int(m.group(1)) >= worst, \
+        f"透传超时 {m.group(1)}s 须≥退避预算 {worst}s（否则截断→用户重试→白烧第二次模型调用）"
+
+
+def test_relay_rerun_executes_post_and_refresh(js: str, tmp_path):
+    """**行为**回归（node 探针）：真跑 relayRerun，断言请求体/刷新链/旧档丢弃/取消路径。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        _fn(js, "relayRerun"),
+        "globalThis.window = { confirm: () => true };",
+        "const STATE = { rerunBusy: null, rerunMsg: null,",
+        "  relayDocs: { '2026-10-19': { tradingDate: '2026-10-19', status: 'degraded' } } };",
+        "const calls = [];",
+        "const renderRelayTab = () => calls.push(['render']);",
+        "const jpost = (path, body) => { calls.push(['post', path, body]);",
+        "  return Promise.resolve({ ok: true, relayIndex: 40.7, relayPhase: 'bottoming' }); };",
+        "const loadAll = () => { calls.push(['loadAll']); return Promise.resolve(); };",
+        "const relayDocFetch = k => calls.push(['fetch', k]);",
+        "(async () => {",
+        "  relayRerun('2026-10-19');",
+        "  await new Promise(r => setTimeout(r, 10));",
+        "  window.confirm = () => false;",
+        "  relayRerun('2026-10-18');",   # 取消：不得再发请求
+        "  console.log(JSON.stringify({ calls, busy: STATE.rerunBusy,",
+        "    msg: STATE.rerunMsg, docs: Object.keys(STATE.relayDocs) }));",
+        "})();",
+    ])
+    script = tmp_path / "rerun_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    posts = [c for c in got["calls"] if c[0] == "post"]
+    assert len(posts) == 1, f"取消后不得再发请求：{got['calls']}"
+    assert posts[0][1] == "/api/hotlist-jev/relay-index/rerun"
+    assert posts[0][2] == {"date": "2026-10-19", "force": True}
+    assert any(c[:1] == ["loadAll"] for c in got["calls"]), "成功后应刷新序列"
+    assert ["fetch", "2026-10-19"] in got["calls"], "应重拉当日完整存档"
+    assert got["busy"] is None, "完成后应清进行中状态"
+    assert got["msg"]["ok"] is True and got["msg"]["key"] == "2026-10-19"
+    assert "2026-10-19" not in got["docs"], "旧存档应被丢弃（触发重拉）"
+
+
+# ── 2026-10-19：当日逐槽详情卡【重跑】按钮（单槽复跑，网络抖动恢复）──────────
+def test_slot_rerun_button_in_slot_detail_head(js: str):
+    """slot 帧级卡与 EOD 日级卡都有【重跑】，同样位于【详细信息】左侧。"""
+    dh = _fn(js, "detailHtml")
+    assert "slotRerun(" in dh, "槽位详情卡应有【重跑】按钮"
+    assert "view === 'slot'" in dh and "e.kind === 'slot'" in dh, "帧级 slot 卡可复跑"
+    assert "e.kind === 'eod'" in dh and "eodRerun(" in dh, "EOD 日级卡也应可复跑"
+    assert dh.index("${rerunBtn}<button") < dh.index(">详细信息</button>"), \
+        "重跑按钮必须在【详细信息】左侧"
+    assert "STATE.rerunBusy" in dh and "disabled" in dh
+
+
+def test_slot_rerun_flow_and_endpoint(js: str):
+    """单槽复跑：确认 → POST /slots/rerun（带 tradingDate/slotTime/snapshotType/datasetId）→ loadAll。"""
+    sr = _fn(js, "slotRerun")
+    assert "window.confirm" in sr, "真实模型调用须二次确认"
+    assert "/api/hotlist-jev/slots/rerun" in sr, "应 POST 单槽复跑写口"
+    assert "tradingDate" in sr and "slotTime" in sr and "snapshotType" in sr and "datasetId" in sr, \
+        "请求体必须带全四元组（防 quarter_hour 槽被按 half_hour 重判）"
+    assert "d.snapshotType || 'half_hour'" in sr, "snapshotType 缺字段回落 half_hour"
+    assert "if (STATE.rerunBusy) return" in sr, "并发护栏（与 relay 重跑共用）"
+    assert "STATE.slotEntries" in sr, "应按 key 从 slotEntries 取回槽文档"
+    assert "loadAll()" in sr, "重跑后刷新当日全部槽"
+    assert "rerunMsg" in sr
+
+
+def test_slot_rerun_executes_post_and_refresh(js: str, tmp_path):
+    """**行为**回归（node 探针）：真跑 slotRerun，断言请求体/刷新/取消路径。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        _fn(js, "slotRerun"),
+        "globalThis.window = { confirm: () => true };",
+        "const KEY = 'dragonboard_live:half_hour:2026-10-19:10:00';",
+        "const STATE = { rerunBusy: null, rerunMsg: null, slotEntries: [",
+        "  { key: KEY, kind: 'slot', doc: { tradingDate: '2026-10-19', slotTime: '10:00',",
+        "    snapshotType: 'half_hour', datasetId: 'dragonboard_live', status: 'degraded' } }] };",
+        "const calls = [];",
+        "const renderSlots = () => calls.push(['render']);",
+        "const jpost = (path, body) => { calls.push(['post', path, body]);",
+        "  return Promise.resolve({ ok: true, status: 'ok', slot: { scores: { temperature: 61.2 } } }); };",
+        "const loadAll = () => { calls.push(['loadAll']); return Promise.resolve(); };",
+        "(async () => {",
+        "  slotRerun(KEY);",
+        "  await new Promise(r => setTimeout(r, 10));",
+        "  window.confirm = () => false;",
+        "  slotRerun(KEY);",
+        "  console.log(JSON.stringify({ calls, busy: STATE.rerunBusy, msg: STATE.rerunMsg }));",
+        "})();",
+    ])
+    script = tmp_path / "slot_rerun_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    posts = [c for c in got["calls"] if c[0] == "post"]
+    assert len(posts) == 1, f"取消后不得再发请求：{got['calls']}"
+    assert posts[0][1] == "/api/hotlist-jev/slots/rerun"
+    assert posts[0][2] == {"tradingDate": "2026-10-19", "slotTime": "10:00",
+                           "snapshotType": "half_hour", "datasetId": "dragonboard_live"}
+    assert any(c[:1] == ["loadAll"] for c in got["calls"]), "成功后应刷新当日槽"
+    assert got["busy"] is None and got["msg"]["ok"] is True
+
+
+# ── 2026-10-19：日级 EOD 情绪卡【重跑】按钮（单日 EOD 复跑，网络抖动恢复）──────
+def test_eod_rerun_flow_and_endpoint(js: str):
+    """EOD 复跑：确认 → POST /eod/rerun（带 tradingDate/snapshotType/datasetId）→ loadAll。"""
+    er = _fn(js, "eodRerun")
+    assert "window.confirm" in er, "真实模型调用须二次确认"
+    assert "/api/hotlist-jev/eod/rerun" in er, "应 POST 日级 EOD 复跑写口"
+    assert "tradingDate" in er and "snapshotType" in er and "datasetId" in er
+    assert "d.snapshotType || 'half_hour'" in er, "snapshotType 缺字段回落 half_hour"
+    assert "if (STATE.rerunBusy) return" in er, "并发护栏（与 relay/slot 重跑共用）"
+    assert "x.kind === 'eod'" in er, "应从 slotEntries 取 kind=eod 的当日 EOD 文档"
+    assert "loadAll()" in er, "重跑后刷新当日 EOD"
+    assert "rerunMsg" in er
+    # 与 relay/slot 同用统一 busy/msg（全局互斥）
+    assert "STATE.rerunBusy = key" in er and "STATE.rerunMsg =" in er
+
+
+def test_eod_rerun_executes_post_and_refresh(js: str, tmp_path):
+    """**行为**回归（node 探针）：真跑 eodRerun，断言请求体/刷新/取消路径。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        _fn(js, "eodRerun"),
+        "globalThis.window = { confirm: () => true };",
+        "const KEY = 'dragonboard_live:half_hour:2026-10-19:EOD';",
+        "const STATE = { rerunBusy: null, rerunMsg: null, slotEntries: [",
+        "  { key: KEY, kind: 'eod', doc: { tradingDate: '2026-10-19', snapshotType: 'half_hour',",
+        "    datasetId: 'dragonboard_live', kind: 'eod', status: 'degraded' } }] };",
+        "const calls = [];",
+        "const renderSlots = () => calls.push(['render']);",
+        "const jpost = (path, body) => { calls.push(['post', path, body]);",
+        "  return Promise.resolve({ ok: true, status: 'ok', eod: { scores: { day_temperature: 55.9 } } }); };",
+        "const loadAll = () => { calls.push(['loadAll']); return Promise.resolve(); };",
+        "(async () => {",
+        "  eodRerun(KEY);",
+        "  await new Promise(r => setTimeout(r, 10));",
+        "  window.confirm = () => false;",
+        "  eodRerun(KEY);",
+        "  console.log(JSON.stringify({ calls, busy: STATE.rerunBusy, msg: STATE.rerunMsg }));",
+        "})();",
+    ])
+    script = tmp_path / "eod_rerun_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    posts = [c for c in got["calls"] if c[0] == "post"]
+    assert len(posts) == 1, f"取消后不得再发请求：{got['calls']}"
+    assert posts[0][1] == "/api/hotlist-jev/eod/rerun"
+    assert posts[0][2] == {"tradingDate": "2026-10-19", "snapshotType": "half_hour",
+                           "datasetId": "dragonboard_live"}
+    assert any(c[:1] == ["loadAll"] for c in got["calls"]), "成功后应刷新当日 EOD"
+    assert got["busy"] is None and got["msg"]["ok"] is True
+
+
+# ── 2026-10-19：【分带观察】滞后/缺失改为一键刷新按钮（零模型调用）──────────────
+def test_band_refresh_button_replaces_manual_command(js: str, html: str):
+    """滞后 banner 不再是「手敲命令行」提示，而是可点击的一键刷新按钮。"""
+    warn = _fn(js, "bandRefreshWarnHtml")
+    assert "分带表与当前序列不同步" in warn, "滞后提示须保留（fail-visible）"
+    assert "bandRefreshBtn()" in warn, "滞后 banner 内须有一键刷新按钮"
+    assert "重跑 scripts/jev_relay_band_diagnostic.py --emit-json" not in js, \
+        "手敲命令行的说明应已被按钮取代"
+    # 未生成时的提示同样带按钮（缺失场景可一键补齐）
+    assert "bandRefreshBtn()" in js[js.index("const bandDiagMissing"):js.index("const bandRefreshBusy")]
+    # 2026-10-19 用户裁决：页头整块（含命令面板）已删除；手工命令文案仍留在
+    # bandDiagMissing 的后端 hint 回退里，且后端 hint 自带 cwd 指引
+    assert "function showBandCmd(" not in html, "页头删除后命令面板连同其触发按钮一并移除"
+
+
+def test_band_refresh_flow_and_endpoints(js: str):
+    """刷新流程：确认 → POST 后台任务 → 5s 轮询 → 完成 loadAll；失败保留旧表 + 结构化原因。"""
+    br = _fn(js, "bandRefresh")
+    assert "window.confirm" in br, "重算耗时 5–9 分钟，须二次确认"
+    assert "'/api/hotlist-jev/relay-band/refresh'" in br, "应 POST 刷新写口"
+    assert "bandRefreshBusy()" in br, "并发护栏：任务在跑时不重复起"
+    assert "pollBandRefresh()" in br or "bandRefreshAdopt(" in br, "起任务成功后进入轮询"
+    poll = _fn(js, "pollBandRefresh")
+    assert "jget('/api/hotlist-jev/relay-band/refresh')" in poll, "轮询读任务状态"
+    assert "5000" in poll, "轮询间隔 5s"
+    assert "st.ok" in poll and "loadAll()" in poll, "完成后重取新表"
+    assert "error" in poll, "失败原因须结构化透出（fail-visible）"
+    assert "running" in poll, "运行中继续轮询"
+    # 按钮：运行中禁用 + 显示已耗时
+    btn = js[js.index("const bandRefreshBtn"):js.index("function bandRefreshWarnHtml")]
+    assert "disabled" in btn and "bandElapsed" in btn
+    # renderDiagPanel 改用统一 banner
+    dp = _fn(js, "renderDiagPanel")
+    assert "renderBandRefreshWarn()" in dp
+    # already_running 不得当失败：接管在跑任务继续轮询（2026-10-19 用户报错修复）
+    assert "'already_running'" in br and "bandRefreshAdopt" in br, \
+        "双击/多标签/刷新重入 → 接管在跑任务，不报错"
+    assert "pollBandRefresh()" in _fn(js, "bandRefreshAdopt")
+    # 先占位再确认：防 confirm 弹窗期间重复点击 → 并发 POST 得到 already_running
+    assert br.index("STATE.bandRefresh = { running: true, startedAt: null }") \
+        < br.index("window.confirm"), "应在弹确认前先置忙占位"
+    # 页面加载/切日期时接管后端在跑任务（刷新页面不断链）
+    assert "bandRefreshSync()" in _fn(js, "loadAll")
+    assert "/api/hotlist-jev/relay-band/refresh" in _fn(js, "bandRefreshSync")
+    # 后端无任务记录（服务重启）→ 明确原因，不给 `exit null` 类无信息量文案
+    assert "任务状态丢失" in poll
+
+
+def test_band_refresh_executes_post_and_polls(js: str, tmp_path):
+    """**行为**回归（node 探针）：真跑 bandRefresh，断言请求体/轮询接线/并发护栏。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        "const bandRefreshBusy = () => !!(STATE.bandRefresh && STATE.bandRefresh.running);",
+        "const STATE = { bandRefresh: null, bandRefreshTimer: null };",
+        "globalThis.window = { confirm: () => true };",
+        "const calls = [];",
+        "const renderBandRefreshWarn = () => calls.push(['render', STATE.bandRefresh && STATE.bandRefresh.running]);",
+        "const pollBandRefresh = () => calls.push(['poll', STATE.bandRefresh && STATE.bandRefresh.running]);",
+        "const jpost = (p, b) => { calls.push(['post', p, b]);",
+        "  return Promise.resolve({ ok: true, running: true, startedAt: '2026-10-19T10:00:05', pid: 7 }); };",
+        _fn(js, "bandRefreshAdopt"),
+        _fn(js, "bandRefresh"),
+        "(async () => {",
+        "  bandRefresh();",
+        "  await new Promise(r => setTimeout(r, 20));",
+        "  const first = JSON.parse(JSON.stringify(STATE.bandRefresh));",
+        "  globalThis.window.confirm = () => false;",
+        "  bandRefresh();   // 已在跑 → 并发护栏拦下：不得再发请求，也不得清掉在跑状态",
+        "  console.log(JSON.stringify({ calls, first, state: STATE.bandRefresh }));",
+        "})();",
+    ])
+    script = tmp_path / "band_refresh_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    posts = [c for c in got["calls"] if c[0] == "post"]
+    assert len(posts) == 1, f"并发期不得重复起任务：{got['calls']}"
+    assert posts[0][1] == "/api/hotlist-jev/relay-band/refresh" and posts[0][2] == {}
+    assert any(c[:1] == ["poll"] and c[1] is True for c in got["calls"]), "起任务后应轮询"
+    assert got["first"]["running"] is True and got["first"]["startedAt"] == "2026-10-19T10:00:05"
+    assert got["state"] == got["first"], "在跑状态不得被重复点击清掉"
+
+
+def test_band_refresh_adopts_already_running(js: str, tmp_path):
+    """**行为**回归（node 探针）：后端返回 already_running → 接管在跑任务继续轮询，不报错。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        "const bandRefreshBusy = () => !!(STATE.bandRefresh && STATE.bandRefresh.running);",
+        "const STATE = { bandRefresh: null, bandRefreshTimer: null };",
+        "globalThis.window = { confirm: () => true };",
+        "const calls = [];",
+        "const renderBandRefreshWarn = () => {};",
+        "const pollBandRefresh = () => calls.push(['poll', STATE.bandRefresh && STATE.bandRefresh.running]);",
+        "const jpost = () => { calls.push(['post']);",
+        "  return Promise.resolve({ ok: false, reason: 'already_running', running: true,",
+        "    startedAt: '2026-10-19T18:05:36' }); };",
+        _fn(js, "bandRefreshAdopt"),
+        _fn(js, "bandRefresh"),
+        "(async () => {",
+        "  bandRefresh();",
+        "  await new Promise(r => setTimeout(r, 20));",
+        "  console.log(JSON.stringify({ calls, state: STATE.bandRefresh }));",
+        "})();",
+    ])
+    script = tmp_path / "band_refresh_adopt_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert any(c[:1] == ["poll"] and c[1] is True for c in got["calls"]), \
+        "already_running 应立即接管轮询"
+    assert got["state"]["running"] is True
+    assert got["state"]["startedAt"] == "2026-10-19T18:05:36", "沿用后端真实启动时间"
+    assert not got["state"].get("error"), "不得标为失败"
+
+
+# ── 2026-10-19 用户裁决：页名「判定明细」→「涨停分析」+ 表计数改分页（每页 ≤20 条）──
+def test_detail_view_renamed_to_limitup_analysis(js: str, html: str):
+    """子页名改为「涨停分析」（导航/面包屑/tab 共用 RELAY_VIEWS，故一处即全改）。"""
+    rv = _const(js, "RELAY_VIEWS")
+    assert "'detail', '涨停分析'" in rv, "子页名应为「涨停分析」"
+    assert "'判定明细'" not in rv, "页名不应再叫「判定明细」"
+    assert "<!-- ⑤ 涨停分析" in html, "页区块注释应同步改名"
+    assert "RELAY_VIEWS.map" in _const(js, "NAV") or "RELAY_VIEWS" in js
+    # 行内展开的判定明细卡（单日七题全文）沿用原名：不得连卡片一起改名
+    assert "判定明细" in js, "行内判定明细卡（题面/判据）应保留原名，只改页名"
+
+
+def test_detail_table_paged_20_per_page(js: str):
+    """原「59 / 59 日（全库 109）」计数改为分页控件；表体按页切片，KPI 仍吃全量。"""
+    rt = _fn(js, "renderRelayTab")
+    assert "RELAY_PAGE_SIZE = 20" in js, "每页上限 20 条"
+    assert "relayPageSlice(rows, STATE.relayPage)" in rt, "表体须按页切片"
+    assert "pageRows.map(" in rt, "应渲染当前页行（不再一次性渲染全部）"
+    assert "relayPager(pg.page, pg.total)" in rt, "筛选条应渲染分页控件"
+    assert "STATE.relayPage = pg.page" in rt, "越界/筛选后须回写 clamp 后的页码"
+    assert "全库 ${STATE.series.length}" not in js, "原计数文案应已被分页取代"
+    # 分页不得改口径：KPI / 龙头 / 分带仍吃筛选集全量
+    assert "renderRelayKpi(shown)" in rt and "renderRelayKpi(pageRows)" not in rt
+    assert "renderLeaders()" in rt
+    # 跳页 select 须豁免筛选条焦点守卫，否则页码/禁用态会陈旧
+    assert "!ae.classList.contains('pgjump')" in rt
+    assert 'class="pgjump"' in js
+
+
+def test_detail_table_paging_resets_on_view_change(js: str):
+    """筛选 / 清除 / 区间（含预设）/ 排序变更 → 回第 1 页。"""
+    for fname in ("rSet", "rClear", "rangeRefresh", "setRelaySort"):
+        assert "STATE.relayPage = 1" in _fn(js, fname), f"{fname} 应重置页码"
+    assert "relayPage: 1," in js, "STATE 应初始化 relayPage"
+
+
+def test_detail_table_pagination_math(js: str, tmp_path):
+    """**行为**回归（node 探针）：页数/切片/越界 clamp/控件禁用态/跳页接线。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        "const STATE = { relayPage: 1 };",
+        "function renderRelayTab(){ STATE.renders = (STATE.renders || 0) + 1; }",
+        _const(js, "RELAY_PAGE_SIZE"),
+        _fn(js, "relayPageTotal"),
+        _fn(js, "relayPageSlice"),
+        _fn(js, "relayPager"),
+        _fn(js, "rPage"),
+        "const rows = Array.from({length: 59}, (_, i) => i);",
+        "const s1 = relayPageSlice(rows, 1), s3 = relayPageSlice(rows, 3);",
+        "const s99 = relayPageSlice(rows, 99), s0 = relayPageSlice(rows, 0);",
+        "const p1 = relayPager(1, 3), p3 = relayPager(3, 3);",
+        "const pone = relayPager(1, 1);",
+        "rPage(5);",
+        "console.log(JSON.stringify({",
+        "  totals: [relayPageTotal(0), relayPageTotal(20), relayPageTotal(21), relayPageTotal(100)],",
+        "  s1: {p: s1.page, t: s1.total, n: s1.rows.length, first: s1.rows[0], last: s1.rows[19]},",
+        "  s3: {p: s3.page, n: s3.rows.length, first: s3.rows[0], last: s3.rows[s3.rows.length-1]},",
+        "  s99: {p: s99.page, n: s99.rows.length}, s0: {p: s0.page, n: s0.rows.length},",
+        "  p1: {prevOff: p1.includes('rPage(0)\" disabled'), nextOn: p1.includes('rPage(2)\">下一页 ›'),",
+        "       sel: p1.includes('value=\"1\" selected'), totalTxt: p1.includes('共 3 页'),",
+        "       noDays: !p1.includes('共 59 日') && !p1.includes('每页 20')},",
+        "  p3: {nextOff: p3.includes('rPage(4)\" disabled'), prevOn: p3.includes('rPage(2)\">‹ 上一页')},",
+        "  pone: {noNav: !pone.includes('pgjump') && !pone.includes('‹ 上一页'),",
+        "         txt: pone.includes('共 1 页')},",
+        "  state: STATE.relayPage, renders: STATE.renders}));",
+    ])
+    script = tmp_path / "relay_pager_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert got["totals"] == [1, 1, 2, 5], "页数 = ceil(n/20)，空集至少 1 页"
+    assert got["s1"] == {"p": 1, "t": 3, "n": 20, "first": 0, "last": 19}, "每页 20 条"
+    assert got["s3"] == {"p": 3, "n": 19, "first": 40, "last": 58}, "末页取余数，不丢行"
+    assert got["s99"]["p"] == 3 and got["s99"]["n"] == 19, "越界页码 clamp 到末页"
+    assert got["s0"]["p"] == 1 and got["s0"]["n"] == 20, "非法页码回第 1 页"
+    assert got["p1"]["prevOff"] and got["p1"]["nextOn"], "首页：上一页禁用、下一页可用"
+    assert got["p1"]["sel"] and got["p1"]["totalTxt"], "跳页器默认选中当前页，右侧报总页数"
+    assert got["p1"]["noDays"], "右侧不再列日数/每页条数（2026-10-19 用户裁决：改「共 X 页」）"
+    assert got["p3"]["nextOff"] and got["p3"]["prevOn"], "末页：下一页禁用、上一页可用"
+    assert got["pone"]["noNav"] and got["pone"]["txt"], "单页：无翻页件，只显示「共 1 页」"
+    assert got["state"] == 5 and got["renders"] == 1, "rPage 只写页码并触发一次重绘"
+
+
+# ── 2026-10-19 评审（frontend-ui lane）修复守卫 ────────────────────────────────
+def test_pager_updates_even_when_filter_select_holds_focus(js: str):
+    """F-minor-1：筛选 select 持焦跳过整条 bar 重建时，分页节点必须单独刷新（否则页码陈旧）。"""
+    rt = _fn(js, "renderRelayTab")
+    assert 'id="relayPager"' in js, "pager 须有独立挂载点"
+    assert "const pgEl = $('relayPager'); if (pgEl) pgEl.innerHTML = relayPager(pg.page, pg.total);" in rt
+
+
+def test_band_warn_banner_does_not_duplicate_missing_notice(js: str):
+    """F-minor-2：表缺失时 bandDiagMissing() 已给警示+按钮，banner 不得再重复一条。"""
+    warn = _fn(js, "bandRefreshWarnHtml")
+    assert "离线分带表未就绪" not in warn, "缺失提示只由 bandDiagMissing 呈现（避免同屏两条重复警示）"
+    assert "if (!lag && !st.running && !st.error) return ''" in warn
