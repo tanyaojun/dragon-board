@@ -39,6 +39,13 @@ internal enum ServiceExternalPolicy
 
 internal sealed class ManagedService
 {
+    /// <summary>
+    /// 本次退出是否为管理器主动停止（StopService）。
+    /// 仅用于退出日志定性："主动停止"与"意外退出/被杀"必须能区分
+    /// （2026-10-19 复盘：旧日志无法区分，盘中突然退出无法归因）。
+    /// </summary>
+    public bool StopRequested { get; set; }
+
     public ManagedService(
         string name,
         int port,

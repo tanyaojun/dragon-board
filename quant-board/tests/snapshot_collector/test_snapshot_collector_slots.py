@@ -12,6 +12,7 @@ from backend.snapshot_collector.slots import (
     SLOT_TIMES,
     generate_slots,
     is_slot_eligible,
+    slot_due_timestamp_ms,
 )
 
 TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -300,3 +301,42 @@ class TestIsSlotEligible:
         assert is_slot_eligible(slot_ts, slot) is True
         assert is_slot_eligible(slot_ts - 1, slot) is False
         assert is_slot_eligible(slot_ts + 10 * 60_000, slot) is False  # 10 min after
+
+
+class TestSlotDueTimestamp:
+    """`slot_due_timestamp_ms`：到期判定单一事实源（2026-10-19 复盘新增）。
+
+    补采/回填必须先问“是否已到期”，否则会把当前行情盖到未来槽位上。
+    """
+
+    def test_matches_generate_slots(self):
+        for slot in generate_slots("2026-06-11", ["five_minutes", "half_hour"]):
+            assert (
+                slot_due_timestamp_ms(slot.snapshot_type, slot.trading_date, slot.slot_time)
+                == slot.timestamp_ms
+            )
+
+    def test_open_slot_includes_collection_delay(self):
+        """09:30 槽到期时刻是 09:40（开盘槽采集延迟），不是 09:30。"""
+        assert slot_due_timestamp_ms("half_hour", "2026-06-11", "09:30") == _make_ts(
+            "2026-06-11", "09:40"
+        )
+        assert slot_due_timestamp_ms("half_hour", "2026-06-11", "10:00") == _make_ts(
+            "2026-06-11", "10:00"
+        )
+
+    def test_unknown_type_or_slot_returns_none(self):
+        assert slot_due_timestamp_ms("not_a_type", "2026-06-11", "10:00") is None
+        assert slot_due_timestamp_ms("half_hour", "2026-06-11", "10:07") is None
+
+
+class TestSlotDueInvalidInput:
+    """code review 修正：非法日期不得抛异常（否则 backfill 入口变 500）。"""
+
+    def test_invalid_date_returns_none(self) -> None:
+        assert slot_due_timestamp_ms("half_hour", "", "") is None
+        assert slot_due_timestamp_ms("half_hour", "2026-13-45", "10:00") is None
+        assert slot_due_timestamp_ms("half_hour", "not-a-date", "10:00") is None
+
+    def test_unknown_type_returns_none(self) -> None:
+        assert slot_due_timestamp_ms("nope", "2026-10-19", "10:00") is None

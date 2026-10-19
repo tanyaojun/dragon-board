@@ -41,6 +41,8 @@ internal sealed class LauncherForm : Form
 
     // 采集健康决策内核：防抖 + Restartable 判定 + 恢复日志（无 UI 依赖）。
     private readonly CollectorHealthGuard _collectorGuard = new();
+    // 上一次刷新得到的每服务运行状态：用于记录状态跳变（"掉线又自动恢复"取证）。
+    private readonly Dictionary<string, bool> _lastStatuses = new(StringComparer.Ordinal);
     // 自动重启策略：冷却 + 连续失败上限 + 指数退避（防重启风暴）。
     private readonly RestartPolicy _restartPolicy = new();
     // 重启被冷却拦截时，仅当原因变化才记日志，避免每 3 秒刷一条。
@@ -555,19 +557,17 @@ internal sealed class LauncherForm : Form
             statuses = await Task.Run(() => services.ToDictionary(
                 kv => kv.Key,
                 kv => LauncherProcessManager.IsServiceRunning(kv.Value)));
-            if (statuses.GetValueOrDefault("collector"))
-            {
-                collectorHealth = await SnapshotCollectorProbe.GetHealthAsync();
-            }
-            else
-            {
-                // 端口关闭：先读启动失败标记（锁冲突等场景 restartable=false/wait），
-                // 无标记才按普通离线处理（需拉起）。
-                collectorHealth = SnapshotCollectorProbe.TryReadStartupFailure()
-                    ?? SnapshotCollectorHealth.Unhealthy(
-                        "collector-offline",
-                        "快照采集错误: 采集服务(8001)未运行，调度器无法采集快照");
-            }
+            // 采集健康以 HTTP 契约为准，不再用端口探测做门禁（2026-10-19 复盘）：
+            // 端口探测是 netstat/TCP 表 + 500ms 连接回退的双重启发式，TCP 表损坏
+            // （LISTENING 行缺失）叠加线程池争用时会对活着的 8001 连续假阴性，旧逻辑
+            // 据此判"离线"→ EnsureHealthy 停掉健康实例 → 残留锁 + 等锁实例自杀，
+            // 当日 10:30 就是这样打断采集链的。服务能自报健康契约即证明它在监听。
+            collectorHealth = await SnapshotCollectorProbe.GetHealthAsync();
+            // 端口探测与健康契约合并（Core 判定）：服务自报成功即视为运行中，
+            // 修正端口探测的瞬断假阴性，避免误走离线重启路径（2026-10-19 复盘）。
+            statuses["collector"] = CollectorStatusResolver.IsRunning(
+                statuses.GetValueOrDefault("collector"),
+                collectorHealth);
         }
         finally
         {
@@ -575,6 +575,21 @@ internal sealed class LauncherForm : Form
         }
 
         if (IsDisposed) return;
+
+        // 状态跳变记录（2026-10-19 复盘）："盘中掉线又自动恢复"此前在日志里完全无痕，
+        // 无法判断是端口探测假阴性还是进程真的退出。
+        foreach (var kv in statuses)
+        {
+            if (_lastStatuses.TryGetValue(kv.Key, out var previous) && previous != kv.Value &&
+                _services.TryGetValue(kv.Key, out var changed))
+            {
+                Log(kv.Value
+                    ? $"{changed.Name} 状态变为运行中。"
+                    : $"{changed.Name} 状态变为已停止（端口探测与深探测均未通过）。");
+            }
+
+            _lastStatuses[kv.Key] = kv.Value;
+        }
 
         // 采集健康决策走内核：guard 做防抖 + Restartable 判定 + 恢复日志，
         // policy 做冷却/连续失败上限/指数退避。只有 guard 判定"应重启"且

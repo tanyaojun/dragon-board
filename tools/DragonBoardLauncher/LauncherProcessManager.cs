@@ -1,11 +1,20 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using DragonBoardLauncher.Core;
 
 namespace DragonBoardLauncher;
 
 internal sealed class LauncherProcessManager
 {
+    /// <summary>
+    /// 本会话中观察到"确实在跑"的端口（存活判定用；见 ServiceLivenessResolver）。
+    /// 用途：端口探测说没跑、但该服务刚才还在跑时，做一次更长超时的深探测复核，
+    /// 避免把"忙但活着"的服务误判为离线（误判会抖动 UI 并诱发重复启动 10048）。
+    /// 多个线程会并发读写（UI 刷新的 Task.Run、StartService、就绪等待），
+    /// 故用并发字典而不是 HashSet——后者的并发 Add/Remove 会破坏内部结构。
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, byte> _portsObservedUp = new();
     private static readonly IReadOnlyDictionary<int, Uri> ReadinessUris =
         new Dictionary<int, Uri>
         {
@@ -343,6 +352,24 @@ internal sealed class LauncherProcessManager
                 return;
             }
 
+            // 采集服务：已有实例正在等采集锁时不重复拉起（2026-10-19 复盘）。
+            // 等锁实例不监听 8001（uvicorn 在 lifespan 完成前不 bind），IsServiceRunning
+            // 判否，于是每个启动请求都再拉一个：双实例竞争同一把残留锁，后到者等锁
+            // 预算（160s）耗尽后 RuntimeError 自杀，并写下 restartable=false 标记，
+            // 让 8001 长时间显示"起不来"。等锁标记新鲜 + 存在活实例 = 确认在等锁。
+            // 标记过期（10 分钟）或实例已退出时本判定自动失效，恢复拉起能力；
+            // 确需强制重拉时先点"停止"（StopService 会杀掉托管进程树）。
+            if (service.Port == 8001 &&
+                SnapshotCollectorProbe.IsLockWaitStartupFailureMarker(
+                    SnapshotCollectorProbe.TryReadStartupFailure()?.Fingerprint ?? "") &&
+                FindServicePidsByCommandLine(service, "等锁实例检查").Count > 0)
+            {
+                _log(
+                    $"{service.Name} 已有实例正在等待采集锁，忽略本次重复启动请求" +
+                    "（确需强制重拉请先点\"停止\"）。");
+                return;
+            }
+
             // 最小拉起间隔：_starting 只挡并发，挡不住秒级连发（用户连点启动、
             // 修复循环与锁等待重拉叠加），多实例各自等锁空转后 RuntimeError，
             // 喂大连续失败计数直至熔断（2026-10-12 复盘 11:32 三连发）。
@@ -392,7 +419,14 @@ internal sealed class LauncherProcessManager
             {
                 // 进程已不在：节流立即解除，"死→再拉"的修复路径不受影响。
                 _startThrottle.Reset(service.Name);
-                _log($"{service.Name} 已退出。");
+                // 退出码 + 是否由管理器请求停止：2026-10-19 复盘发现盘中"服务突然退出"
+                // 旧日志完全无法区分"用户/管理器停的"与"自己崩的/被外部杀的"
+                // （10-12 09:23、10-13 13:20、10-18 10:53 三例均无原因可查）。
+                var exitCode = -1;
+                try { exitCode = process.ExitCode; } catch { /* 句柄不可读时忽略 */ }
+                _log(service.StopRequested
+                    ? $"{service.Name} 已退出。（退出码={exitCode}，本次由管理器主动停止）"
+                    : $"{service.Name} 已退出。（退出码={exitCode}，管理器未请求停止 → 进程自行结束或被杀，请查该服务自身输出）");
             };
 
             if (!process.Start())
@@ -407,6 +441,7 @@ internal sealed class LauncherProcessManager
             process.BeginErrorReadLine();
             service.Process = process;
             service.PortOwnerProcess = null;
+            service.StopRequested = false; // 新进程不是"被停止"的对象
             service.AdoptedExe = null; // 新拉起进程非接管，清 Refuse 接管标记
             _log($"已启动 {service.Name}，PID={process.Id}。");
             // 后台跟踪实际监听进程（uvicorn 启动慢，可能远超 5 秒），不阻塞后续核心服务启动。
@@ -740,6 +775,8 @@ internal sealed class LauncherProcessManager
     {
         try
         {
+            // 标记本次退出是管理器主动停的（Exited 日志据此区分"主动停"与"意外退出"）。
+            service.StopRequested = true;
             // 显式停止解除拉起节流：用户"停止→再启动"永远放行。
             _startThrottle.Reset(service.Name);
 
@@ -891,6 +928,48 @@ internal sealed class LauncherProcessManager
     }
 
     public static bool IsServiceRunning(ManagedService service)
+    {
+        var probeSaysRunning = IsServiceRunningFast(service);
+        if (probeSaysRunning)
+        {
+            _portsObservedUp.TryAdd(service.Port, 0);
+            return true;
+        }
+
+        // 端口探测假阴性复核（2026-10-19 复盘）：TCP 表损坏 / 机器负载高 / 服务事件
+        // 循环被同步长任务堵住时，短超时探测会把活着的服务判成没运行——显示层表现为
+        // "掉线又自动恢复"，启动路径则会拉起重复实例（[Errno 10048] 自杀）。
+        // 只在有"本该在跑"的强证据时做一次深探测，避免给真正的冷启动加延迟。
+        // 语音服务的快速判定本身就是 HTTP 健康探针（不是 TCP 表启发式），没有
+        // "更长超时"的第二层，不做重复探测。
+        var strongEvidenceAlive = service.IsVoiceWorker
+            ? false
+            : service.Process is { HasExited: false } || _portsObservedUp.ContainsKey(service.Port);
+        var resolved = ServiceLivenessResolver.IsRunning(
+            probeSaysRunning,
+            strongEvidenceAlive,
+            () => DeepProbe(service));
+        if (resolved) return true;
+
+        // 深探测也失败：认死，清掉"曾观察到在跑"，后续轮询走快速路径不再叠加延迟。
+        _portsObservedUp.TryRemove(service.Port, out _);
+        return false;
+    }
+
+    /// <summary>
+    /// 深探测（更长超时）：服务在忙（同步长任务占满事件循环、accept 队列不消费）时，
+    /// 短超时连接会失败而实际仍在监听，加长到 2s 可跨过这个窗口。
+    /// 只对端口类服务有意义：语音服务的快速判定本身就是 HTTP 健康探针，
+    /// 不会进入本方法（见 IsServiceRunning 的 IsVoiceWorker 分支）。
+    /// </summary>
+    private static bool DeepProbe(ManagedService service)
+    {
+        return LauncherPorts.IsTcpListeningOn("127.0.0.1", service.Port, 2000) ||
+               LauncherPorts.IsTcpListeningOn("::1", service.Port, 2000);
+    }
+
+    /// <summary>快速端口探测（TCP 表命中或 500ms 连接成功）。</summary>
+    private static bool IsServiceRunningFast(ManagedService service)
     {
         if (service.IsVoiceWorker)
             return VoiceWorkerProbe.IsHealthy();

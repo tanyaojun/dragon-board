@@ -6,10 +6,6 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from backend.market_proxy.akshare_fund_provider import (
-    SYSTEMIC_ERRORS as AKSHARE_SYSTEMIC_ERRORS,
-)
-from backend.market_proxy.akshare_fund_provider import get_akshare_fund_provider
 from backend.market_proxy.eastmoney_fund_provider import (
     SYSTEMIC_ERRORS as EASTMONEY_SYSTEMIC_ERRORS,
 )
@@ -28,12 +24,12 @@ class MarketFundScheduler:
     """theme_fund 题材主力资金全市场刷新调度器。
 
     上游可插拔（2026-XX 用户确认题材主力资金切换东财口径）：
-    - 默认 ``EastmoneyFundProvider``：东财 push2 ulist.np 批量（httpx 独立
+    - ``EastmoneyFundProvider``：东财 push2 ulist.np 批量（httpx 独立
       URL 直连，不走 akshare），universe 用腾讯全市场行情缓存；风控纪律
       （串行 + 请求间隔 + 命中 429 立即中止）由 provider 内部保证，调度器
-      收到系统性错误/截断标记即熔断冷却，不会短时间连续打东财 API；
-    - 回退 ``AkshareFundProvider``（QUANT_BOARD_THEME_FUND_SOURCE=akshare）：
-      akshare 同花顺网页个股资金流，一次调用返回全市场。
+      收到系统性错误/截断标记即熔断冷却，不会短时间连续打东财 API。
+      2026-10-19：akshare 同花顺网页回退源已删除（akshare 被风控限流），
+      题材源现在只有东财这一条（`AkshareFundProvider` 模块保留但不再被选中）。
 
     行写入 Redis theme-fund 题材 hash（TTL，跨进程/重启共享）+ 进程内
     last-good。启动预热在无订阅者时也抓一轮，题材聚合首屏可直接命中。
@@ -63,11 +59,8 @@ class MarketFundScheduler:
         # batch(rows/failures/fetched_at_ms/session_date/source[/truncated_by])；
         # 失败异常带 .code 结构化错误码（Akshare/Eastmoney provider 均满足）。
         self.provider = provider
-        # 系统性错误码合并两源命名空间（ems/ths 前缀不同，合并不会误伤），
-        # 显式传参仍可覆盖（测试用）。
-        self._systemic_error_codes = systemic_error_codes or (
-            AKSHARE_SYSTEMIC_ERRORS | EASTMONEY_SYSTEMIC_ERRORS
-        )
+        # 系统性错误码（单一源命名空间；显式传参仍可覆盖，测试用）。
+        self._systemic_error_codes = systemic_error_codes or EASTMONEY_SYSTEMIC_ERRORS
         self._is_trading_day = is_trading_day
         self._now = now or (lambda: datetime.now(TZ_SHANGHAI))
         self.min_refresh_interval_seconds = max(30.0, float(min_refresh_interval_seconds))
@@ -412,41 +405,29 @@ class MarketFundScheduler:
 
 
 def _build_default_provider() -> Any:
-    """按 QUANT_BOARD_THEME_FUND_SOURCE 选择题材主力资金上游。
+    """题材主力资金上游：东财 push2 独立 URL 直连（唯一源）。
 
-    默认 eastmoney（东财 push2 独立 URL 直连）；akshare 保留为显式回退。
+    2026-10-19：akshare 同花顺网页回退源已按用户决定删除（akshare 被风控限流），
+    不再按 ``QUANT_BOARD_THEME_FUND_SOURCE`` 分支。
     """
-    settings = get_settings()
-    if settings.theme_fund_source == "eastmoney":
-        return get_eastmoney_fund_provider()
-    return get_akshare_fund_provider()
+    return get_eastmoney_fund_provider()
 
 
 def _build_market_fund_scheduler() -> MarketFundScheduler:
     settings = get_settings()
     # 东财风控专用参数（2026-09-30 二次论断）:
-    # - 刷新周期 1800s（30 分钟一轮，轮内约 6 分钟完成、其余静默），
-    #   独立于 akshare 模式的 theme_fund_refresh_interval_seconds（300s）；
+    # - 刷新周期 1800s（30 分钟一轮，轮内约 6 分钟完成、其余静默）；
     # - 断连/限流冷却 1800s：push2 断连即已被风控，半小时内不再碰
     #   （2026-09-30 盘中实透：短冷却重试反复刺激 WAF，IP 被临时拉黑）；
     # - fetch 预算 600s：覆盖最坏 6×60s 批间距 + 7×15s 响应超时 ≈ 465s，
     #   避免正常慢轮被半路抬新断（to_thread 僵尸线程跑完但结果被丢）。
-    eastmoney_mode = settings.theme_fund_source == "eastmoney"
     return MarketFundScheduler(
         cache=get_theme_fund_cache(),
         stream=get_market_fund_stream(),
         provider=_build_default_provider(),
-        refresh_interval_seconds=(
-            settings.theme_fund_em_refresh_interval_seconds
-            if eastmoney_mode
-            else settings.theme_fund_refresh_interval_seconds
-        ),
-        fetch_timeout_seconds=(
-            max(600.0, settings.market_fund_fetch_timeout_seconds)
-            if eastmoney_mode
-            else settings.market_fund_fetch_timeout_seconds
-        ),
-        systemic_cooldown_seconds=1800.0 if eastmoney_mode else 300.0,
+        refresh_interval_seconds=settings.theme_fund_em_refresh_interval_seconds,
+        fetch_timeout_seconds=max(600.0, settings.market_fund_fetch_timeout_seconds),
+        systemic_cooldown_seconds=1800.0,
     )
 
 

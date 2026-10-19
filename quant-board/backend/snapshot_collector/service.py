@@ -36,7 +36,7 @@ from .models import (
     SnapshotSlot,
     SourceHealth,
 )
-from .slots import SECTOR_SNAPSHOT_TYPES
+from .slots import SECTOR_SNAPSHOT_TYPES, slot_due_timestamp_ms
 from .state import record_run as _record_run
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -81,6 +81,31 @@ def _capture_mode_for_slot(
     if slot_timestamp_ms > 0 and actual_timestamp_ms > slot_timestamp_ms + grace_ms:
         return "delayed"
     return "real_time"
+
+
+def _server_market_evidence_flags(market_context: MarketDataContext) -> list[str]:
+    """`server_market_evidence` 的帧级标记（fail-visible，2026-10-19 复盘）。
+
+    - 用了 last-good（上游不可用但缓存可用）→ `indices_stale[:<age>s]`；
+    - 完全取不到（超时/报错）→ `indices_missing:<upstream_timeout|upstream_error>`。
+
+    两种情形都只能去 run doc 的 sourceHealth 里才能看到细节，故升到帧级 qualityFlags。
+    """
+    flags: list[str] = []
+    for sh in market_context.source_health:
+        if sh.source != "server_market_evidence":
+            continue
+        details = sh.details if isinstance(sh.details, dict) else {}
+        if details.get("stale"):
+            age = details.get("staleSeconds")
+            flags.append("indices_stale" if age is None else f"indices_stale:{age}s")
+        elif not market_context.indices:
+            error = str(sh.error or "")
+            if error.startswith("indices_timeout"):
+                flags.append("indices_missing:upstream_timeout")
+            elif error.startswith("indices_failed"):
+                flags.append("indices_missing:upstream_error")
+    return flags
 
 
 def _source_health_dicts(market_context: MarketDataContext) -> list[dict[str, Any]]:
@@ -523,6 +548,11 @@ class SnapshotCollectorService:
             # autonomous 模式下前端离线 → bundle 缺失 → snapshotContext 证据缺位：
             # fail-visible 打标，不阻断采集（spec §4 错误处理表）
             quality.warnings.append("snapshot_context_missing")
+        # 指数取的是 last-good（上游不可用，现为行情桥/历史 akshare）：值可用但
+        # 不新鲜，或完全取不到——两者都必须让帧的 qualityFlags 看得见，避免下游把
+        # 旧指数当当前行情、或把“取不到”当“没需要”（2026-10-19 复盘，用户指出
+        # 短 TTL 后重审 last-good 语义）。
+        quality.warnings.extend(_server_market_evidence_flags(market_context))
         if not sector_rows_enabled:
             # 高频类型不携带题材行是口径决策（题材只走 half_hour/hourly/daily）：
             # 打标进 qualityFlags，防止下游把空题材行误读为采集失败。
@@ -900,12 +930,34 @@ class SnapshotCollectorService:
             }
 
         summary = {"total": 0, "succeeded": 0, "failed": 0, "blocked": 0, "deduped": 0, "details": []}
+        now_ts = int(time.time() * 1000)
+        grace_ms = self._close_grace_minutes() * 60 * 1000
         for slot_item in slots:
+            trading_date = slot_item.get("trading_date", "")
+            slot_time = slot_item.get("slot_time", "")
+            snapshot_type = getattr(request, "snapshot_type", "")
+            snapshot_id = f"{snapshot_type}:{trading_date}:{slot_time}"
+            # 未到期槽位不采（fail-visible：计入 blocked 并给出原因）。
+            # 2026-10-19 复盘：backfill-slots 按整天生成槽位，盘中执行会把当前行情
+            # 盖到 11:20/13:00/15:00 等尚未发生的槽位上，伪造出未来帧。
+            # 与 collector_main catch-up 同口径：到期后还要留 grace 窗口。
+            due_ts = slot_due_timestamp_ms(snapshot_type, trading_date, slot_time)
+            if due_ts is not None and now_ts <= due_ts + grace_ms:
+                summary["total"] += 1
+                summary["blocked"] += 1
+                summary["details"].append(
+                    {
+                        "snapshotId": snapshot_id,
+                        "status": "blocked",
+                        "message": "slot_not_due: grace window not passed yet",
+                    }
+                )
+                continue
             sub_req = CollectorRunRequest(
                 dataset_id=getattr(request, "dataset_id", ""),
-                snapshot_type=getattr(request, "snapshot_type", ""),
-                trading_date=slot_item.get("trading_date", ""),
-                slot_time=slot_item.get("slot_time", ""),
+                snapshot_type=snapshot_type,
+                trading_date=trading_date,
+                slot_time=slot_time,
                 dry_run=getattr(request, "dry_run", False),
                 force=getattr(request, "force", False),
             )

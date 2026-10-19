@@ -181,3 +181,45 @@ assert.deepEqual(disabled.status(), {
 await assert.rejects(() => disabled.sendEvents([event]), /FEISHU_EVENT_RADAR_ENABLED is not true/)
 
 console.log('notifications route internals ok')
+
+// 2026-10-16 10:20:02 复盘回归：定时批量刷新失败（feishu webhook DNS ENOTFOUND）时，
+// 未捕获的 rejection 按 Node 默认行为会**终止代理进程**（3000 断了 5 小时，
+// 启动器不会自动拉起它）。这里直接驱动定时器回调，断言它把错误吃掉。
+{
+  const unhandled = []
+  const onUnhandled = (reason) => unhandled.push(reason)
+  process.on('unhandledRejection', onUnhandled)
+
+  let scheduled = null
+  const failingClient = createFeishuEventRadarClient({
+    readConfig: (name) => ({
+      FEISHU_EVENT_RADAR_ENABLED: 'true',
+      FEISHU_EVENT_RADAR_WEBHOOK: 'https://open.feishu.cn/open-apis/bot/v2/hook/test',
+      FEISHU_EVENT_RADAR_SECRET: 'secret',
+      FEISHU_EVENT_RADAR_BATCH_WINDOW_MS: '10',
+    })[name] || '',
+    fetcher: async () => {
+      const error = new Error('getaddrinfo ENOTFOUND open.feishu.cn')
+      error.code = 'ENOTFOUND'
+      throw error
+    },
+    setTimeoutFn: (callback) => {
+      scheduled = callback
+      return 77
+    },
+    clearTimeoutFn: () => {},
+  })
+
+  const queued = await failingClient.sendEvents([event])
+  assert.equal(queued.queued, 1)
+  assert.equal(typeof scheduled, 'function', '批量事件应排入定时刷新')
+
+  // 修复前：定时器回调直接 return flushPending() → 无人 catch → 进程被杀。
+  const flushResult = await scheduled()
+  assert.equal(flushResult.ok, false)
+  assert.match(String(flushResult.error), /ENOTFOUND/)
+
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.deepEqual(unhandled, [], '批量刷新失败不得产生未处理 rejection（会崩掉代理进程）')
+  process.off('unhandledRejection', onUnhandled)
+}

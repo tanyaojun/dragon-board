@@ -23,13 +23,13 @@ internal static class LauncherPorts
         return IsTcpListeningOn("127.0.0.1", port) || IsTcpListeningOn("::1", port);
     }
 
-    public static bool IsTcpListeningOn(string host, int port)
+    public static bool IsTcpListeningOn(string host, int port, int timeoutMs = 500)
     {
         try
         {
             using var client = new System.Net.Sockets.TcpClient();
             var task = client.ConnectAsync(host, port);
-            return task.Wait(TimeSpan.FromMilliseconds(500)) && client.Connected;
+            return task.Wait(TimeSpan.FromMilliseconds(timeoutMs)) && client.Connected;
         }
         catch
         {

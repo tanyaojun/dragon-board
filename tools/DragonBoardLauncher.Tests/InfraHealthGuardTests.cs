@@ -24,9 +24,9 @@ public class TradingWindowTests
 
 public class SnapshotCollectorProbeEvidenceTests
 {
-    // 健康证据可靠性判定（P0-B 细化 + P1-C）：只有 probe:*（探针超时/不可达，
-    // 没读到服务自报状态）算不可靠；服务自报契约（http:/hard:/startup-failure:/
-    // no-restart:/collector-offline/healthy）都是可靠证据。
+    // 健康证据可靠性判定（P0-B 细化 + P1-C）：只有 probe:*（探针连不上 8001，
+    // 没读到服务自报状态）算不可靠；服务自报契约（healthy/http:/hard:/
+    // startup-failure:/no-restart:）都是可靠证据。
     [Theory]
     [InlineData("probe:TimeoutException:The request was canceled", true)]
     [InlineData("probe:HttpRequestException: 无法连接", true)]
@@ -34,7 +34,7 @@ public class SnapshotCollectorProbeEvidenceTests
     [InlineData("hard:调度器未运行", false)]
     [InlineData("startup-failure:wait", false)]
     [InlineData("no-restart:alert:数据源失败", false)]
-    [InlineData("collector-offline", false)]
+    [InlineData("missing-status", false)]
     [InlineData("healthy", false)]
     [InlineData("", false)]
     public void IsUnreliableHealthEvidence_OnlyProbePrefixIsUnreliable(
@@ -51,7 +51,7 @@ public class SnapshotCollectorProbeEvidenceTests
     [InlineData("startup-failure:restart", true)]
     [InlineData("probe:TimeoutException:x", false)]
     [InlineData("hard:调度器未运行", false)]
-    [InlineData("collector-offline", false)]
+    [InlineData("missing-status", false)]
     [InlineData("", false)]
     public void IsLockWaitStartupFailureMarker_OnlyStartupFailurePrefix(
         string fingerprint,

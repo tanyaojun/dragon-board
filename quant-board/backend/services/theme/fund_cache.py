@@ -12,7 +12,6 @@ from typing import Any
 from backend.core.fund_sources import (
     FUND_HASH_AKSHARE,
     FUND_HASH_LATEST,
-    FUND_SOURCE_AKSHARE_THS_INDIVIDUAL,
     FUND_SOURCE_EASTMONEY_MAIN,
     FUND_SOURCE_HASH,
     FUND_SOURCE_THS_MAIN_MONITOR,
@@ -24,12 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 # 允许写入运行态资金缓存的来源由 backend.core.fund_sources.SUPPORTED_FUND_SOURCES
-# 统一提供（L2 主源 + 东财题材源 + akshare 题材回退源）；本模块不再本地重定义。
-# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(3) > 东财题材(2) >
-# akshare 题材回退(1)。rank 只在各自 hash 内比较（latest 仅 ths_main_monitor，
-# 题材 hash 内 eastmoney 压过 akshare），跨 hash 永不相遇。
+# 统一提供（L2 主源 + 东财题材源）；本模块不再本地重定义。
+# 同一 sessionDate 下 source rank 高者覆盖低者：L2 主源(3) > 东财题材(2)。
+# rank 只在各自 hash 内比较（latest 仅 ths_main_monitor，题材 hash 仅 eastmoney），
+# 跳 hash 永不相遇。
+# 2026-10-19：akshare_ths_individual 源已删除（akshare 被风控限流），
+# 由此不再有 rank=1 的题材回退源；缓存里残留的同名行因 FUND_SOURCE_HASH 无路由
+# 而不再被接受/读取，由东财行同 hash 覆盖或 TTL 自然淘汰。
 FUND_SOURCE_RANK: dict[str, int] = {
-    FUND_SOURCE_AKSHARE_THS_INDIVIDUAL: 1,
     FUND_SOURCE_EASTMONEY_MAIN: 2,
     FUND_SOURCE_THS_MAIN_MONITOR: 3,
 }
@@ -48,10 +49,9 @@ class ThemeFundCache:
         self._base = f"{prefix.strip(':')}:theme-fund:v3"
         # L2 主源（ths_main_monitor）行：供热榜资金列 / fund-stream
         self._latest: dict[str, dict[str, object]] = {}
-        # 题材估算源（eastmoney_main 默认 / akshare_ths_individual 回退）行：供
-        # theme_fund 题材聚合。2026-09-29 用户确认：题材默认切东财 push2 口径，
-        # 与 L2 分 hash 存储互不覆盖；hash 内 eastmoney rank 高于 akshare，
-        # 切换后同日残留 akshare 行会被东财行自动覆盖。
+        # 题材估算源（eastmoney_main）行：供 theme_fund 题材聚合。
+        # 2026-09-29 用户确认：题材默认切东财 push2 口径，与 L2 分 hash 存储互不覆盖；
+        # 2026-10-19：akshare_ths_individual 源已删除，本 hash 现仅由 eastmoney 写入。
         self._akshare: dict[str, dict[str, object]] = {}
         self._owners: dict[str, list[str]] = {}
         self._owners_loaded = False
@@ -70,8 +70,8 @@ class ThemeFundCache:
         if parsed is None:
             raise ValueError("invalid fund row")
         source = str(row.get("moneyFlowSource") or row.get("source") or "").strip()
-        # latest hash 只接受路由到 latest 的源（ths_main_monitor）：akshare 题材源
-        # 必须走 put_many（写 akshare 独立 hash），避免两源串线（2026-08-14）。
+        # latest hash 只接受路由到 latest 的源（ths_main_monitor）：题材估算源
+        # 必须走 put_many（写题材独立 hash），避免两源串线（2026-08-14）。
         if FUND_SOURCE_HASH.get(source) != FUND_HASH_LATEST:
             raise ValueError(f"latest hash rejects source={source or 'empty'}")
         code, session_date, zlje = parsed
@@ -116,7 +116,7 @@ class ThemeFundCache:
                 logger.warning("theme-fund 清理旧交易日行失败 codes=%s", len(stale), exc_info=True)
 
     def _prune_akshare_stale_sessions(self, current_session: str) -> None:
-        """清理 akshare 题材源 hash 的旧交易日行（与 latest 独立，2026-08-14）。"""
+        """清理题材估算源 hash（Redis key 名 `akshare`）的旧交易日行（与 latest 独立，2026-08-14）。"""
         stale = [
             code
             for code, value in self._akshare.items()
@@ -164,7 +164,7 @@ class ThemeFundCache:
             "zlje": zlje,
             "sessionDate": session_date,
             "tradingDate": session_date,
-            # 数据源诚实标识（2026-08-12）：保留行原始 source（akshare_ths_individual
+            # 数据源诚实标识（2026-08-12）：保留行原始 source（题材源 = eastmoney_main
             # 或 ths_main_monitor），不再硬编码 L2；回退 ths_main_monitor 兼容历史行。
             "source": str(row.get("source") or row.get("moneyFlowSource") or FUND_SOURCE_THS_MAIN_MONITOR),
             "moneyFlowSource": str(
@@ -195,7 +195,7 @@ class ThemeFundCache:
                 failures.append({"code": code, "reason": "invalid fund row"})
                 continue
             source = str(row.get("moneyFlowSource") or row.get("source") or "").strip()
-            # akshare 题材源 hash 只接受路由到 akshare 的源（akshare_ths_individual）：
+            # 题材 hash 只接受路由到该 hash 的源（现已只有 eastmoney_main）：
             # L2 主源行必须走 put（写 latest hash）。否则 MongoDB 冷启动恢复等 L2
             # 路径会把 ths_main_monitor 串线到题材源（2026-08-14 实盘）。
             if FUND_SOURCE_HASH.get(source) != FUND_HASH_AKSHARE:
@@ -203,7 +203,7 @@ class ThemeFundCache:
                 failures.append(
                     {
                         "code": code,
-                        "reason": f"akshare hash rejects source={source or 'empty'}",
+                        "reason": f"theme-estimate hash rejects source={source or 'empty'}",
                     }
                 )
                 continue
@@ -214,7 +214,7 @@ class ThemeFundCache:
             return [], failures
 
         saved_rows: list[dict[str, object]] = []
-        # akshare 题材源独立 hash（2026-08-14）：与 L2 分库，题材聚合只读 akshare
+        # 题材估算源独立 hash（key 名 `akshare`，2026-08-14）：与 L2 分库，题材聚合只读它
         hash_key = self._key("akshare")
         with self._lock:
             # 1) 批量读缺失 code 的最新行（单次 hmget，避免逐行 redis 读）
@@ -316,7 +316,7 @@ class ThemeFundCache:
             missing = [code for code in normalized if code not in self._latest]
             for code, value in self._read_hash_many(self._key("latest"), missing).items():
                 # latest hash 只承载路由到 latest 的源（ths_main_monitor），
-                # akshare 题材源不进入此内存（2026-08-14 source 隔离）。
+                # 题材估算源不进入此内存（2026-08-14 source 隔离）。
                 if FUND_SOURCE_HASH.get(value.get("moneyFlowSource")) == FUND_HASH_LATEST:
                     self._latest[code] = value
             for code in normalized:
@@ -327,14 +327,14 @@ class ThemeFundCache:
 
     def get_akshare_latest(self, codes: list[str]) -> dict[str, dict[str, object]]:
         """读题材估算源 hash 的最新行（题材聚合统一估算口径；2026-09-29 起默认
-        东财 eastmoney_main，回退 akshare_ths_individual——两者同 hash，按
+        题材估算源 eastmoney_main（hash key 名为 `akshare`），按
         FUND_SOURCE_HASH 路由过滤，其他源不进内存）。"""
         normalized = list(dict.fromkeys(str(value).strip() for value in codes if str(value).strip()))
         result: dict[str, dict[str, object]] = {}
         with self._lock:
             missing = [code for code in normalized if code not in self._akshare]
             for code, value in self._read_hash_many(self._key("akshare"), missing).items():
-                # 只加载路由到 akshare 的源（akshare_ths_individual）行：避免把
+                # 只加载路由到题材 hash 的源（现只有 eastmoney_main）行：避免把
                 # 历史串线的 ths_main_monitor 行读进 _akshare 内存，进而被
                 # _ensure_redis_cache_alive 写回 akshare hash 形成恶性循环（2026-08-14）。
                 if FUND_SOURCE_HASH.get(value.get("moneyFlowSource")) == FUND_HASH_AKSHARE:
@@ -362,7 +362,7 @@ class ThemeFundCache:
             return [dict(value) for value in self._latest.values()]
 
     def has_akshare_redis_data(self) -> bool:
-        """Redis 里 theme-fund:akshare key 是否有行（akshare 题材源独立 hash，2026-08-14）。"""
+        """Redis 里 theme-fund:akshare key 是否有行（题材估算源独立 hash，key 名 `akshare`）。"""
         if self._redis is None:
             return False
         try:
@@ -374,7 +374,7 @@ class ThemeFundCache:
     def akshare_memory_rows(self) -> list[dict[str, object]]:
         """导出进程内题材估算源 hash 全部行（Redis key 缺失时写回）。
 
-        只导出路由到题材 hash 的源（eastmoney_main / akshare_ths_individual）：
+        只导出路由到题材 hash 的源（eastmoney_main）：
         历史串线的 ths_main_monitor 行不得被 _ensure_redis_cache_alive 写回
         题材 hash（2026-08-14）。
         """
@@ -582,7 +582,7 @@ def get_theme_fund_cache() -> ThemeFundCache:
     global _theme_fund_cache
     if _theme_fund_cache is None:
         settings = get_settings()
-        # akshare 全市场批量刷新，结果写入 Redis（TTL）供跨进程/跨重启共享，
+        # 题材全市场批量刷新，结果写入 Redis（TTL）供跨进程/跨重启共享，
         # 进程内 last-good 继续作为兜底；Redis 故障自动回退不阻断。
         from backend.market_proxy.redis_client import get_hotlist_redis_client
 

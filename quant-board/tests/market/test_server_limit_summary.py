@@ -155,7 +155,7 @@ _OK_PAYLOAD = {"data": {"info": [{"code": "600825", "continue_day": 4}]}}
 
 
 class _FakeOverviewService:
-    async def get_overview(self):
+    async def get_overview(self, timeout_s=None):
         return {"items": [{"code": "sh000001", "change": -1.0}]}
 
 
@@ -268,3 +268,88 @@ def test_build_server_limit_summary_seal_quality_block():
     sq = summary["sealQuality"]
     assert sq == {"byzCount": 1, "hardCount": 2, "rottenCount": 2, "rottenShare": 0.4,
                   "avgSucRate": 0.6}
+
+
+# ── 子步骤预算封顶（2026-10-19 复盘：本 provider 曾单源跑 130~299s 拖垮槽位组）──
+
+
+class _HangingLimitupService:
+    """get_limit_up_list 永久挂住：模拟 THS 限流无响应。
+
+    不能用 ``asyncio.sleep``（本文件用例会 monkeypatch 掉它），改用永不 set 的 Event。
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_limit_up_list(self, date=None):
+        import asyncio
+
+        self.calls += 1
+        await asyncio.Event().wait()
+        return _OK_PAYLOAD
+
+    async def get_ths_pools(self, date=None, keys=None):
+        return {"pools": {}}
+
+
+def test_provider_bounds_ths_attempts_by_timeout_ms(monkeypatch):
+    import asyncio
+    import time
+
+    from backend.snapshot_collector.gateway import InProcessMarketDataGateway
+    from backend.snapshot_collector import providers as providers_module
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(
+        "backend.market_proxy.limitup.get_limitup_service", lambda: _HangingLimitupService()
+    )
+    monkeypatch.setattr(
+        "backend.market_proxy.indices.get_market_overview_service",
+        lambda: _FakeOverviewService(),
+    )
+    monkeypatch.setattr(providers_module.asyncio, "sleep", _no_sleep)
+    providers_module._SERVER_EVIDENCE_CACHE.clear()
+    provider = ServerMarketEvidenceProvider(
+        trading_date="2026-09-24", gateway=InProcessMarketDataGateway())
+
+    started = time.monotonic()
+    evidence, health = asyncio.run(provider.acollect(timeout_ms=300))
+    elapsed = time.monotonic() - started
+
+    # timeout_ms=300ms → 每试预算下限 1s，首试+重试仍被短时间封顶（绝不出现 130~299s）
+    assert elapsed < 8.0, f"provider 未尊重 timeout_ms：{elapsed:.1f}s"
+    assert "limitSummary" not in evidence  # 取不到就不携带（不伪装全零证据）
+    assert health.ok is False
+    assert "超时" in health.error
+    assert health.latency_ms < 8000
+
+
+def test_provider_keeps_indices_when_ths_times_out(monkeypatch):
+    import asyncio
+
+    from backend.snapshot_collector.gateway import InProcessMarketDataGateway
+    from backend.snapshot_collector import providers as providers_module
+
+    async def _no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(
+        "backend.market_proxy.limitup.get_limitup_service", lambda: _HangingLimitupService()
+    )
+    monkeypatch.setattr(
+        "backend.market_proxy.indices.get_market_overview_service",
+        lambda: _FakeOverviewService(),
+    )
+    monkeypatch.setattr(providers_module.asyncio, "sleep", _no_sleep)
+    providers_module._SERVER_EVIDENCE_CACHE.clear()
+    provider = ServerMarketEvidenceProvider(
+        trading_date="2026-09-24", gateway=InProcessMarketDataGateway())
+
+    evidence, health = asyncio.run(provider.acollect(timeout_ms=300))
+
+    # 部分失败不丢可用部分：THS 超时仍保留 indices（fail-visible 且不整槽报废）
+    assert evidence["indices"] == {"sh": {"change": -1.0}}
+    assert health.ok is False

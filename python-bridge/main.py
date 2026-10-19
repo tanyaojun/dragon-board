@@ -486,6 +486,51 @@ def normalize_code(value: Any) -> str:
     return digits[-6:] if digits else ""
 
 
+# 指数默认清单（对应 frame.indices 的键位：sh/hs300/zz500/zz1000 + 两市成交额；
+# 另带创业板指与科创 50 供前端展示）。TDX 指数与股票共用同一五档行情接口，
+# 靠 market 区分：沪市指数 market=1，深市指数 market=0。
+DEFAULT_INDEX_CODES = (
+    "sh000001",  # 上证指数
+    "sz399001",  # 深证成指
+    "sz399006",  # 创业板指
+    "sh000300",  # 沪深300
+    "sh000905",  # 中证500
+    "sh000852",  # 中证1000
+    "sh000688",  # 科创50
+)
+
+
+def normalize_index_code(value: Any) -> str:
+    """指数代码归一：保留 sh/sz/bj 市场前缀（指数与股票会遇到同码不同标的，
+    如 000001 既是上证指数（sh）也是平安银行（sz），所以指数请求必须带前缀）。
+
+    裸 6 位码按指数惯例补前缀：399/980/159 开头归深市，其余归沪市。
+    返回形如 ``sh000001``；非法输入返回空串。
+    """
+    text = str(value or "").strip().lower().replace(".", "")
+    if not text:
+        return ""
+    prefix = ""
+    for candidate in ("sh", "sz", "bj"):
+        if text.startswith(candidate):
+            prefix = candidate
+            text = text[len(candidate) :]
+            break
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) < 6:
+        return ""
+    code = digits[-6:]
+    if not prefix:
+        # 与 mootdx get_stock_market 同规则：399/980/159→深，4/8 开头→北交，其余→沪
+        if code.startswith(("399", "980", "159")):
+            prefix = "sz"
+        elif code.startswith(("4", "8")):
+            prefix = "bj"
+        else:
+            prefix = "sh"
+    return f"{prefix}{code}"
+
+
 def pick(row: dict[str, Any], *keys: str, default: Any = None) -> Any:
     for key in keys:
         if key in row:
@@ -2328,6 +2373,87 @@ class TdxL2Bridge:
                         "l2": self.l2_state,
                     }
                 )
+
+        @app.get("/api/quotes/index-snapshot", summary="指数快照（TDX，替代 akshare）")
+        async def index_snapshot(codes: str = "") -> JSONResponse:
+            """指数实时快照：与股票共用 TDX 五档行情接口，但保留市场前缀。
+
+            为什么单独开一个口（2026-10-19 复盘）：指数与股票会遇到同码不同标的
+            （000001 = 上证指数(sh) 也是 平安银行(sz)），而 ``/api/quotes/snapshot``
+            为股票场景把代码归一成纯 6 位（丢前缀）——指数走那条路会拿到错误标的。
+
+            上游 akshare（新浪）被风控限流后，这里的权威源是本地行情桥直连的 TDX
+            主站：不经过第三方 HTTP、不受限流影响。
+            """
+            requested = [normalize_index_code(item) for item in codes.split(",")]
+            requested = [code for code in requested if code]
+            if not requested:
+                requested = list(DEFAULT_INDEX_CODES)
+
+            try:
+                async with self.fetch_lock:
+                    await self.ensure_client()
+
+                    def _fetch():
+                        assert self.quote_client is not None
+                        return self.quote_client.quotes(symbol=list(requested))
+
+                    frame = await asyncio.to_thread(_fetch)
+                records = frame_to_records(frame)
+            except Exception as error:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": str(error),
+                        "source": "python_bridge_tdx_index",
+                        "serverTs": now_ms(),
+                        "requestedCount": len(requested),
+                        "quotes": [],
+                    }
+                )
+
+            quotes: list[dict[str, Any]] = []
+            for row in records:
+                if not isinstance(row, dict):
+                    continue
+                market = to_int(pick(row, "market", default=-1))
+                code = normalize_code(pick(row, "code", "symbol"))
+                if not code:
+                    continue
+                # 市场号 → 前缀（与 mootdx 常量一致：1 沪 / 0 深 / 2 北交）
+                prefix = {1: "sh", 0: "sz", 2: "bj"}.get(market, "")
+                price = to_number(pick(row, "price"))
+                pre_close = to_number(pick(row, "last_close", "pre_close", "preClose"))
+                change = price - pre_close if price > 0 and pre_close > 0 else 0.0
+                change_pct = (change / pre_close * 100) if pre_close > 0 else 0.0
+                quotes.append(
+                    {
+                        "code": f"{prefix}{code}" if prefix else code,
+                        "market": market,
+                        "lastPrice": price,
+                        "preClose": pre_close,
+                        "changeAmount": round(change, 4),
+                        "changePct": round(change_pct, 4),
+                        "open": to_number(pick(row, "open")),
+                        "high": to_number(pick(row, "high")),
+                        "low": to_number(pick(row, "low")),
+                        "volume": to_number(pick(row, "volume", "vol", "trade")),
+                        "amount": to_number(pick(row, "amount", "turnover")),
+                        "servertime": str(pick(row, "servertime", "server_time", default="") or ""),
+                        "sourceTs": now_ms(),
+                    }
+                )
+
+            return JSONResponse(
+                {
+                    "ok": bool(quotes),
+                    "error": "" if quotes else "index quote fetch returned no rows",
+                    "source": "python_bridge_tdx_index",
+                    "serverTs": now_ms(),
+                    "requestedCount": len(requested),
+                    "quotes": quotes,
+                }
+            )
 
         @app.post("/api/quotes/subscriptions", summary="设置后端采集订阅池")
         async def set_subscriptions(payload: dict) -> JSONResponse:

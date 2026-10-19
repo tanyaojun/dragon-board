@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pandas as pd
 import pytest
@@ -583,3 +584,339 @@ async def test_quotes_cache_all_codes_in_memory_and_redis_fallback() -> None:
         ttl_seconds=300,
     )
     assert broken.all_codes() == []
+
+
+# ── 上游超时封顶（2026-10-19 复盘：akshare 同步抓取无超时，曾单源阻塞 130~299s，
+#    把采集槽位组拖过 240s 看门狗 —— 当日 6 次掉槽的全部来源）──────────────────
+
+
+class _HangingIndexAkshare:
+    """模拟新浪限流：同步抓取挂住很久（超时后才返回）。"""
+
+    def __init__(self, hang_s: float = 5.0) -> None:
+        self.hang_s = hang_s
+        self.calls = 0
+
+    def stock_zh_index_spot_sina(self):
+        self.calls += 1
+        time.sleep(self.hang_s)
+        return pd.DataFrame([{"代码": "sh000001", "名称": "上证指数", "最新价": 1.0}])
+
+
+def test_market_overview_fetch_timeout_raises_without_last_good() -> None:
+    ak = _HangingIndexAkshare(hang_s=1.5)
+    service = MarketOverviewService(akshare_module=ak, fetch_timeout_s=0.05)
+
+    async def _measure() -> float:
+        # 生产是常驻事件循环：调用方在 timeout 后立即拿回控制权。
+        # （asyncio.run 的收尾会 join 卡死的线程，故不能在 asyncio.run 外层计时。）
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            await service.get_overview()
+        return time.monotonic() - started
+
+    elapsed = asyncio_run(_measure())
+    assert elapsed < 1.0  # 调用方不再被 130~299s 的上游拖住
+
+
+def test_market_overview_fetch_timeout_serves_stale_and_backs_off() -> None:
+    good = pd.DataFrame(
+        [
+            {
+                "代码": "sh000001",
+                "名称": "上证指数",
+                "最新价": 3832.26,
+                "涨跌额": 27.57,
+                "涨跌幅": 0.725,
+            }
+        ]
+    )
+    clock = {"now": 1_000_000}
+    good_ak = FakeIndexAkshare(frame=good)
+    service = MarketOverviewService(
+        akshare_module=good_ak,
+        ttl_seconds=10,
+        now_ms=lambda: clock["now"],
+        fetch_timeout_s=0.05,
+        timeout_backoff_s=60.0,
+    )
+    first = asyncio_run(service.get_overview())
+    assert first["stale"] is False
+
+    # TTL 过期 + 上游挂死：超时后退避，返回 last-good 并显式标 stale（暴露不隐藏）
+    clock["now"] += 60_000
+    service._ak = _HangingIndexAkshare(hang_s=1.5)
+    stale = asyncio_run(service.get_overview())
+    assert stale["stale"] is True
+    assert stale["errorCode"] == "upstream_timeout"
+    assert stale["items"][0]["code"] == "sh000001"
+
+    # 退避窗口内不再等上游：立刻返回，且不产生新的上游调用
+    calls_before = service._ak.calls
+    started = time.monotonic()
+    again = asyncio_run(service.get_overview())
+    assert time.monotonic() - started < 0.5
+    assert again["errorCode"] == "upstream_timeout_backoff"
+    assert service._ak.calls == calls_before
+
+
+def test_market_overview_recovers_after_backoff_window() -> None:
+    clock = {"now": 1_000_000}
+    hanging = _HangingIndexAkshare(hang_s=0.3)
+    service = MarketOverviewService(
+        akshare_module=hanging,
+        now_ms=lambda: clock["now"],
+        fetch_timeout_s=0.05,
+        timeout_backoff_s=60.0,
+    )
+    with pytest.raises(TimeoutError):
+        asyncio_run(service.get_overview())
+
+    clock["now"] += 61_000
+    time.sleep(0.5)  # 等挂死的抓取真正结束（单 worker 断路器释放）
+    good = FakeIndexAkshare(
+        frame=pd.DataFrame([{"代码": "sh000001", "名称": "上证指数", "最新价": 3832.26}])
+    )
+    service._ak = good
+    snapshot = asyncio_run(service.get_overview())
+    assert snapshot["stale"] is False
+    assert good.calls == 1  # 退避窗口结束后恢复真实取数
+    assert hanging.calls == 1
+
+
+def test_market_overview_single_worker_acts_as_circuit_breaker() -> None:
+    """挂死的抓取占用唯一 worker：后续提交排队并被超时取消，不再打上游、不堆积线程。"""
+    ak = _HangingIndexAkshare(hang_s=0.8)
+    clock = {"now": 1_000_000}
+    service = MarketOverviewService(
+        akshare_module=ak,
+        now_ms=lambda: clock["now"],
+        fetch_timeout_s=0.05,
+        timeout_backoff_s=1.0,
+    )
+
+    async def _two_misses() -> tuple[bool, bool]:
+        try:
+            await service.get_overview()
+        except TimeoutError:
+            pass
+        clock["now"] += 2_000  # 退出退避窗口
+        clock["now"] += 0
+        service._next_attempt_ms = 0
+        second_timed_out = False
+        try:
+            await service.get_overview()
+        except TimeoutError:
+            second_timed_out = True
+        return True, second_timed_out
+
+    _, second_timed_out = asyncio_run(_two_misses())
+    assert ak.calls == 1  # 卡死期间不产生第二次上游调用（断路器生效）
+    assert second_timed_out is True
+
+
+# ── last-good 兜底库（2026-10-19：新鲜缓存 TTL 10s 撑不过重启/上游故障）───────
+
+
+def _ok_frame(price: float = 3832.26) -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"代码": "sh000001", "名称": "上证指数", "最新价": price, "涨跌额": 1.0, "涨跌幅": 0.1}]
+    )
+
+
+def test_market_overview_writes_separate_last_good_key() -> None:
+    redis = FakeRedis()
+    service = MarketOverviewService(
+        akshare_module=FakeIndexAkshare(frame=_ok_frame()),
+        redis_client=redis,
+        redis_key_prefix="test",
+        ttl_seconds=10,
+        now_ms=lambda: 1000,
+    )
+    asyncio_run(service.get_overview())
+
+    assert redis.expires["test:market:overview:v1"] == 10  # 新鲜缓存 TTL 不变
+    assert redis.expires["test:market:overview:last-good:v1"] == 300  # 兜底库更长
+
+
+def test_market_overview_timeout_uses_redis_last_good_of_previous_process() -> None:
+    """进程重启（内存态丢失）+ 上游超时：仍能拿到 last-good，且必须标 stale。"""
+    redis = FakeRedis()
+    first = MarketOverviewService(
+        akshare_module=FakeIndexAkshare(frame=_ok_frame()),
+        redis_client=redis,
+        redis_key_prefix="test",
+        ttl_seconds=10,
+        now_ms=lambda: 1000,
+    )
+    asyncio_run(first.get_overview())
+
+    # 模拟重启后的新实例：无内存快照、新鲜缓存已过期（10s）
+    clock = {"now": 1_000_000}  # 距 timestamp=1000 已很久
+    restarted = MarketOverviewService(
+        akshare_module=_HangingIndexAkshare(hang_s=0.3),
+        redis_client=redis,
+        redis_key_prefix="test",
+        now_ms=lambda: clock["now"],
+        fetch_timeout_s=0.05,
+    )
+    # 新鲜缓存 key 已过期 → 用会失效的语义：直接从 Redis 删掉新鲜 key 模拟 TTL 到期
+    redis.values.pop("test:market:overview:v1", None)
+    snapshot = asyncio_run(restarted.get_overview())
+
+    assert snapshot["stale"] is True
+    assert snapshot["errorCode"] == "upstream_timeout"
+    assert snapshot["items"][0]["code"] == "sh000001"
+    assert snapshot["staleSeconds"] is not None and snapshot["staleSeconds"] > 0
+
+
+def test_market_overview_happy_path_ignores_last_good() -> None:
+    """新鲜取数成功时绝不使用 last-good（不把旧数据当新鲜）。"""
+    redis = FakeRedis()
+    redis.values["test:market:overview:last-good:v1"] = json.dumps(
+        {
+            "ok": True,
+            "source": "akshare-sina-index",
+            "timestamp": 1,  # 很旧
+            "stale": False,
+            "items": [{"code": "sh000001", "name": "旧值", "price": 1.0}],
+        }
+    )
+    service = MarketOverviewService(
+        akshare_module=FakeIndexAkshare(frame=_ok_frame(price=3999.0)),
+        redis_client=redis,
+        redis_key_prefix="test",
+        now_ms=lambda: 5000,
+    )
+    snapshot = asyncio_run(service.get_overview())
+    assert snapshot["stale"] is False
+    assert snapshot["items"][0].get("price") == 3999.0
+
+
+# ── 指数源切换：行情桥为主源（2026-10-19，akshare 被风控限流） ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_market_overview_defaults_to_bridge_source() -> None:
+    from backend.market_proxy.indices import MarketOverviewService
+
+    calls: list[float] = []
+
+    async def fake_bridge(*, timeout_s: float):
+        calls.append(timeout_s)
+        return [
+            {
+                "code": "sh000001",
+                "name": "上证指数",
+                "price": 3716.02,
+                "change": -0.26,
+                "changePct": -0.007,
+                "prevClose": 3716.28,
+                "open": 3694.12,
+                "high": 3733.86,
+                "low": 3692.29,
+                "volume": 303356328,
+                "amount": 501436579840.0,
+            }
+        ]
+
+    service = MarketOverviewService(bridge_fetcher=fake_bridge, now_ms=lambda: 1)
+    snapshot = await service.get_overview()
+
+    assert snapshot["ok"] is True
+    assert snapshot["source"] == "tdx-bridge-index"
+    assert snapshot["items"][0]["code"] == "sh000001"
+    assert calls, "桥取数应被调用"
+
+
+@pytest.mark.asyncio
+async def test_market_overview_bridge_failure_serves_last_good_stale() -> None:
+    from backend.market_proxy.indices import MarketOverviewService
+
+    state = {"fail": False, "now": 1_000}
+
+    async def fake_bridge(*, timeout_s: float):
+        if state["fail"]:
+            raise RuntimeError("index bridge snapshot unusable: HTTP 404")
+        return [{"code": "sh000001", "price": 3716.02, "change": -0.26, "changePct": -0.007}]
+
+    service = MarketOverviewService(bridge_fetcher=fake_bridge, now_ms=lambda: state["now"])
+    first = await service.get_overview()
+    assert first["stale"] is False and first["source"] == "tdx-bridge-index"
+
+    # 新鲜缓存过期 + 桥失败 → 必须回退 last-good 并显式标 stale（fail-visible）
+    state["fail"] = True
+    state["now"] += 60_000
+    second = await service.get_overview()
+
+    assert second["stale"] is True
+    assert second["errorCode"] == "upstream_error"
+    assert second["items"][0]["price"] == 3716.02
+
+
+@pytest.mark.asyncio
+async def test_market_overview_bridge_failure_without_last_good_raises() -> None:
+    from backend.market_proxy.indices import MarketOverviewService
+
+    async def failing_bridge(*, timeout_s: float):
+        raise RuntimeError("bridge down")
+
+    service = MarketOverviewService(bridge_fetcher=failing_bridge, now_ms=lambda: 1000)
+    with pytest.raises(RuntimeError, match="bridge down"):
+        await service.get_overview()
+
+
+@pytest.mark.asyncio
+async def test_market_overview_bridge_then_akshare_falls_back() -> None:
+    """迁移期选项：桥失败时回退 akshare（默认不走这条路）。"""
+    from backend.market_proxy.indices import MarketOverviewService
+
+    async def failing_bridge(*, timeout_s: float):
+        raise RuntimeError("bridge down")
+
+    ak = FakeIndexAkshare(
+        frame=pd.DataFrame(
+            [{"代码": "sh000001", "名称": "上证指数", "最新价": 3716.02, "涨跌额": -0.26}]
+        )
+    )
+    service = MarketOverviewService(
+        akshare_module=ak,
+        bridge_fetcher=failing_bridge,
+        source="bridge_then_akshare",
+        now_ms=lambda: 1,
+    )
+
+    snapshot = await service.get_overview()
+
+    assert snapshot["source"] == "akshare-sina-index"
+    assert snapshot["items"][0]["code"] == "sh000001"
+    assert ak.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_market_overview_empty_bridge_result_is_not_cached_as_success() -> None:
+    """空 items 不得当成功写缓存/last-good（否则兜底库被清空）。"""
+    from backend.market_proxy.indices import MarketOverviewService
+
+    async def empty_bridge(*, timeout_s: float):
+        return []
+
+    service = MarketOverviewService(bridge_fetcher=empty_bridge, now_ms=lambda: 1000)
+    with pytest.raises(RuntimeError, match="empty items"):
+        await service.get_overview()
+    assert service._snapshot is None
+
+
+def test_market_overview_source_resolution_precedence() -> None:
+    from backend.market_proxy.indices import MarketOverviewService
+
+    assert MarketOverviewService._resolve_source(None, None, lambda **_: []) == "bridge"
+    assert MarketOverviewService._resolve_source(None, object(), None) == "akshare"
+    assert MarketOverviewService._resolve_source("akshare", None, None) == "akshare"
+    assert MarketOverviewService._resolve_source("bridge_then_akshare", None, None) == "bridge_then_akshare"
+    assert MarketOverviewService._resolve_source("nonsense", None, None) == "bridge"
+    # 显式 source 优先于"注入即锁定"的启发式（bridge_then_akshare 需要两个源都在）
+    assert (
+        MarketOverviewService._resolve_source("bridge_then_akshare", object(), lambda **_: [])
+        == "bridge_then_akshare"
+    )

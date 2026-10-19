@@ -2355,8 +2355,16 @@ class ServerMarketEvidenceProvider:
         info_items: list[dict[str, Any]] = []
         pools_body: dict[str, Any] = {}
         indices: dict[str, Any] = {}
+        indices_meta: dict[str, Any] = {}
         limit_summary: dict[str, Any] = {}
         errors: list[str] = []
+        # 子步骤预算（2026-10-19 复盘）：本 provider 是采集链最慢的一步，必须尊重
+        # ``timeout_ms`` 合约。实测它曾单源跑 130~299s（全部来自 akshare 同步抓取
+        # 无超时 + THS 双试），把整个槽位组拖过调度器 240s 看门狗 → 掉槽。
+        # THS 每次尝试分 1/3 预算（下限 1s，首试+重试各自独立）；
+        # indices 用「本 provider 剩余预算」（下限 3s）——THS 快则 indices 等得久
+        # （数据完整性优先），THS 慢则自动收紧。两者合计不超 timeout_ms。
+        step_budget_s = max(1.0, timeout_ms / 1000.0 / 3.0)
         try:
             if _is_in_process_gateway(self._gateway):
                 from backend.market_proxy.indices import get_market_overview_service
@@ -2386,7 +2394,12 @@ class ServerMarketEvidenceProvider:
                 # 重试若落在退避窗口内会直接复用空结果（不再打上游），不会放大突发
                 first_errors: list[str] = []
                 try:
-                    info_items, pools_body, first_errors = await _attempt_limit_evidence()
+                    info_items, pools_body, first_errors = await asyncio.wait_for(
+                        _attempt_limit_evidence(), timeout=step_budget_s
+                    )
+                except (asyncio.TimeoutError, TimeoutError):
+                    first_errors = [f"THS 首试超时（预算 {step_budget_s:.0f}s）"]
+                    info_items, pools_body = [], {}
                 except Exception as exc:
                     first_errors = [str(exc)[:200]]
                     info_items, pools_body = [], {}
@@ -2394,7 +2407,12 @@ class ServerMarketEvidenceProvider:
                     logger.warning("server_market_evidence THS 首试失败，重试一次：%s", first_errors)
                     await asyncio.sleep(_THS_RETRY_DELAY_S)
                     try:
-                        info_items, pools_body, retry_errors = await _attempt_limit_evidence()
+                        info_items, pools_body, retry_errors = await asyncio.wait_for(
+                            _attempt_limit_evidence(), timeout=step_budget_s
+                        )
+                    except (asyncio.TimeoutError, TimeoutError):
+                        retry_errors = [f"THS 重试超时（预算 {step_budget_s:.0f}s）"]
+                        info_items, pools_body = [], {}
                     except Exception as exc:
                         retry_errors = [str(exc)[:200]]
                         info_items, pools_body = [], {}
@@ -2409,10 +2427,33 @@ class ServerMarketEvidenceProvider:
                         if isinstance(pool, dict) and pool.get("ok") is False:
                             errors.append(f"ths pool {pool_key} 上游失败")
                 try:
-                    overview = await get_market_overview_service().get_overview()
+                    # indices 子步骤同样封顶：无论走桥还是 akshare，取数都由
+                    # MarketOverviewService 套 fetch_timeout_s 上限
+                    # （2026-10-19 复盘：akshare-sina 曾单源阻塞 130~299s；
+                    #  现在权威源是本地行情桥 TDX，不受 akshare 限流影响）。
+                    # 用「本 provider 剩余预算」而不是固定值：THS 快时 indices 能等到
+                    # 接近整个 timeout_ms（数据完整性优先），THS 慢时自动收紧（不拖垮组）。
+                    # 读到 indices_stale:Ns 见下方 qualityFlags 链路。
+                    remaining_budget_s = max(
+                        3.0, timeout_ms / 1000.0 - (time.monotonic() - start)
+                    )
+                    overview = await get_market_overview_service().get_overview(
+                        timeout_s=remaining_budget_s
+                    )
                     indices = build_server_indices(overview)
+                except (asyncio.TimeoutError, TimeoutError) as exc:
+                    errors.append(f"indices_timeout: {str(exc)[:120]}")
                 except Exception as exc:
                     errors.append(f"indices_failed: {str(exc)[:120]}")
+                else:
+                    if isinstance(overview, dict) and overview.get("stale"):
+                        # 上游不可用但用了 last-good：可观察到但不判失败
+                        # （数据可用，只是不新鲜；细节进 run doc 的 sourceHealth.details）
+                        indices_meta = {
+                            "stale": True,
+                            "staleSeconds": overview.get("staleSeconds"),
+                            "errorCode": overview.get("errorCode"),
+                        }
             else:
                 errors.append("in-process gateway unavailable")
         except Exception as exc:
@@ -2425,13 +2466,24 @@ class ServerMarketEvidenceProvider:
         evidence: dict[str, Any] = {"indices": indices}
         if limit_summary:
             evidence["limitSummary"] = limit_summary
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        if elapsed_ms >= 5000:
+            # 逐槽可见的慢源告警（即使槽位组之后被看门狗取消，launcher 日志也留有证据）
+            logger.warning(
+                "server_market_evidence 单源耗时 %.1fs（indices=%d，limitSummary=%s，errors=%s）",
+                elapsed_ms / 1000.0,
+                len(indices),
+                bool(limit_summary),
+                "; ".join(errors) or "-",
+            )
         health = SourceHealth(
             source="server_market_evidence",
             ok=not errors,
-            latency_ms=int((time.monotonic() - start) * 1000),
+            latency_ms=elapsed_ms,
             row_count=len(info_items),
             error="; ".join(errors),
             captured_at=_iso_now(),
+            details=dict(indices_meta),
         )
         # 只缓存成功证据：失败不缓存（下一槽组应重试新鲜数据）
         if not errors:

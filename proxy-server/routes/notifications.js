@@ -151,7 +151,16 @@ export function createFeishuEventRadarClient(options = {}) {
     if (queued > 0 && batchTimer === null) {
       batchTimer = setTimeoutFn(() => {
         batchTimer = null
-        return flushPending()
+        // 定时刷新必须吞掉 rejection（2026-10-16 10:20:02 复盘）：flushPending 会把
+        // sendPayload 的错误原样抛出，而这里没人 catch → Node 默认把未处理 rejection
+        // 当致命错误 → 整个代理进程（3000）崩掉。实测 traceback：
+        // TypeError: fetch failed / getaddrinfo ENOTFOUND open.feishu.cn（sendPayload
+        // ← flushPending），而启动器不会自动拉起 3000，该次代理断了 5 小时。
+        // 事件已由 flushPending 的 catch 分支放回 pendingEvents，下次窗口重试。
+        return flushPending().catch((error) => {
+          console.warn(`[feishu-event-radar] flush failed (kept for retry): ${error?.message || error}`)
+          return { ok: false, sent: 0, skipped: 0, error: error?.message || String(error) }
+        })
       }, readBatchWindowMs(readConfig))
     }
     return queued

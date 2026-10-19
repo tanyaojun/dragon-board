@@ -7,7 +7,8 @@ import { isDashboardFundSource } from './moneyFlowSourcePriority'
  * 行情主页主力资金流订阅（前端只消费）。
  *
  * 后端链路（quant-board）：
- *   题材估算源全市场批量抓取（默认东财 push2 eastmoney_main，回退 akshare；300 只/请求批量）
+ *   题材估算源全市场批量抓取（东财 push2 eastmoney_main；300 只/请求批量。
+ *   2026-10-19：后端已删除 akshare 题材回退源，前端常量仅用于标注历史行）
  *     → MarketFundScheduler 周期刷新 + 启动预热（写入 Redis TTL，跨进程/跨重启共享）
  *     → ThemeFundCache（进程内 last-good 兜底）→ MarketFundStream（fund_full_state / fund_patch）
  *     → ws://127.0.0.1:8000/api/market/fund-stream

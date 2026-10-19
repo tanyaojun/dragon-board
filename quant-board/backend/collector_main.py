@@ -79,16 +79,43 @@ def _build_redis_client(redis_url: str) -> Any | None:
         return None
 
 
+_LOCK_STATE: dict[str, str] = {"mode": "unknown", "error": ""}
+"""单实例协调状态（fail-visible）：mode ∈ {unknown, redis, degraded}。
+
+2026-10-19 复盘新增：Redis 不可达时 acquire() 是 fail-open（可用性优先，采集
+不能因为缓存/协调层挂了就起不来），但“无 Redis 协调”必须能在 /api/health 里
+看见，否则运维只能看到“一切 ok”而双采风险已经在场上。
+
+注意：它是**启动快照**，只作为拿不到活锁对象时的兜底；健康输出优先读当前锁
+对象的 ``degraded_reason``（见 ``_live_lock_state``），否则一次瞬时抖动会把
+health 永久钉在 degraded。
+"""
+
+# 当前活着的实例锁对象（供 /api/health 读“当下”的协调状态）。
+_ACTIVE_LOCK: Any | None = None
+
+
+def _live_lock_state() -> tuple[str, str]:
+    """``(mode, error)``：优先用活锁对象的当下状态，没有则回退启动快照。"""
+    lock = _ACTIVE_LOCK
+    if lock is not None:
+        reason = getattr(lock, "degraded_reason", None)
+        return ("degraded" if reason else "redis", reason or "")
+    return (_LOCK_STATE.get("mode") or "unknown", _LOCK_STATE.get("error") or "")
+
+
 def _lock_wait_tries(ttl_seconds: int, interval_seconds: float) -> int:
     """等锁预算次数：总等待必须覆盖残留锁的最长寿命（TTL）。
 
     launcher 停止服务是 taskkill 强杀，collector 来不及走 lifespan finally 的
-    lock.release()，锁必然残留 0~TTL 秒；acquire() 的死持有者清锁依赖 PID
-    存活检测，launcher 每 3 秒轮询 spawn 的 netstat/taskkill 加速 Windows PID
-    复用，使其不可靠（2026-10-12 复盘：11:34:52 杀掉持有者后新实例仍干等到
-    11:36:53 TTL 自然过期）。旧预算 10×5s=50s < TTL 120s，等锁实例必然
-    RuntimeError 自杀，喂大 launcher 连续失败计数直至熔断，形成重启风暴。
+    lock.release()，锁必然残留 0~TTL 秒；旧预算 10×5s=50s < TTL 120s，等锁实例
+    必然 RuntimeError 自杀，喂大 launcher 连续失败计数直至熔断，形成重启风暴
+    （2026-10-12 复盘：11:34:52 杀掉持有者后新实例仍干等到 11:36:53 TTL 自然过期）。
     预算 = TTL/interval + 8 次余量。
+
+    2026-10-19 复盘后 acquire() 的残留锁判定改为「退出码 + 创建时间」双重身份
+    （见 instance_lock._process_identity），强杀后通常首次尝试即可清锁重抢；本预算
+    仍必须覆盖 TTL 全长——判活不可判定时按存活处理，那时只能等 TTL 自然过期。
     """
     return int(ttl_seconds / interval_seconds) + 8
 
@@ -125,6 +152,41 @@ async def _acquire_lock_with_retry(
 
 
 _CLOSE_BACKFILL_MIN_SLOT_TIME = "15:00"
+
+
+def _degraded_lock_peer_running(lock: Any, *, port: int = 8001) -> bool:
+    """锁后端不可用（fail-open 抢锁）+ 8001 已被别的实例服务 = 本进程必须退出。
+
+    fail-open 的代价是"无 Redis 协调"：若此时已有活实例在采（8001 自报健康契约），
+    再起一个就是双采（项目红线）。所以降级抢锁后必须再查一次对端；
+    查不到对端才允许单实例继续跑（并在 /api/health 暴露 lockBackend=degraded）。
+    """
+    if not getattr(lock, "degraded_reason", None):
+        return False
+    return _collector_serving_elsewhere(port=port)
+
+
+def _collector_serving_elsewhere(port: int = 8001, timeout: float = 3.0) -> bool:
+    """8001 是否已由另一个采集实例提供健康契约（冗余实例判定）。
+
+    等锁预算耗尽时用：若 8001 已被活实例 serve，本进程是多余的那一个。
+    2026-10-19 复盘：输家实例自杀时写下 restartable=false 标记，launcher 据此
+    10 分钟内不再拉起采集；但标记对“8001 已被另一个实例正常服务”是错的消息。
+    锁后端降级（无 Redis 协调）时也用它做防双采复查。
+    """
+    import json as _json
+    import urllib.request as _urllib_request
+
+    try:
+        with _urllib_request.urlopen(
+            f"http://127.0.0.1:{port}/api/health", timeout=timeout
+        ) as response:
+            if getattr(response, "status", 200) != 200:
+                return False
+            payload = _json.loads(response.read().decode("utf-8", "replace"))
+    except Exception:
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("snapshotCollector"), dict)
 
 
 class _CatchupState:
@@ -270,6 +332,8 @@ async def lifespan(app: FastAPI):
         _build_redis_client(settings.redis_url),
         settings.snapshot_collector_dataset_id,
     )
+    global _ACTIVE_LOCK
+    _ACTIVE_LOCK = lock  # /api/health 据此读“当下”的协调状态
     if not await _acquire_lock_with_retry(lock):
         remaining = lock.remaining_ttl()
         reason = (
@@ -277,10 +341,45 @@ async def lifespan(app: FastAPI):
             f"{settings.snapshot_collector_dataset_id}"
             + (f" (remaining TTL {remaining}s)" if remaining is not None else "")
         )
+        # 冗余实例判定（2026-10-19 复盘）：8001 已被另一实例正常服务时，本进程
+        # 退出前清掉等待标记——那个标记只用于“确实没人在采集”时防重启风暴，
+        # 留着会让 launcher 把“不可重启”状态拖满 10 分钟窗口。
+        if await asyncio.to_thread(_collector_serving_elsewhere):
+            _clear_startup_failure()
+            logger.warning(
+                "another collector instance is already serving 8001; "
+                "exiting this redundant instance"
+            )
+            raise RuntimeError(
+                "another snapshot collector instance is already serving port 8001; "
+                "this redundant instance exits (8001 采集正常，无需处理)"
+            )
         # 启动失败原因落盘，launcher 探针在 8001 不可达时读取后按 wait 处理，
         # 不再"先杀再启"触发锁竞争重启风暴（2026-08-05 复盘）。
         _write_startup_failure(reason, recommended_action="wait")
         raise RuntimeError(reason)
+
+    # 锁后端降级（Redis 不可达，fail-open）时的防双采复查（2026-10-19 复盘）：
+    # Redis 挂了不能让采集起不来，但也不能在“别的实例已在采”时盲起——那样是双采。
+    lock_state = getattr(lock, "degraded_reason", None)
+    if await asyncio.to_thread(_degraded_lock_peer_running, lock):
+        _clear_startup_failure()
+        logger.error(
+            "lock backend degraded (%s) and 8001 is already served by another "
+            "instance; exiting this instance to avoid double collection",
+            lock_state,
+        )
+        raise RuntimeError(
+            "lock backend unavailable and 8001 already served by another instance; "
+            "exiting to avoid double collection (单实例协调降级，防双采退出)"
+        )
+    if lock_state:
+        logger.warning(
+            "single-instance coordination degraded: %s; continuing as sole instance",
+            lock_state,
+        )
+    _LOCK_STATE["mode"] = "degraded" if lock_state else "redis"
+    _LOCK_STATE["error"] = lock_state or ""
 
     # 成功拿到锁后清除历史失败标记，探针回到正常契约判定。
     _clear_startup_failure()
@@ -292,7 +391,7 @@ async def lifespan(app: FastAPI):
     try:
         await start_market_quotes_refresh()
         await start_hotlist_refresh()
-        # 资金数据（theme-fund）由 8000 的 fund_scheduler 维护（akshare 全量 +
+        # 资金数据（theme-fund）由 8000 的 fund_scheduler 维护（东财全量 +
         # THS L2 补充）；8001 只通过 MarketFundCacheProvider 读 Redis theme-fund
         # 做快照资金列，不再自己启动 fund_scheduler——否则 8000/8001 双进程并发
         # put_many 会互相触发旧行清理，导致 theme-fund:latest key 反复消失
@@ -364,6 +463,11 @@ def health() -> dict:
     status = snapshot_collector_scheduler.status()
     status["calendarSource"] = _last_calendar_source
     status["background"] = _background_task_status()
+    # 单实例协调状态（2026-10-19 复盘）：Redis 不可达时 acquire 是 fail-open，
+    # 必须让 launcher/运维看得见“当前无 Redis 协调”（否则双采风险静默）。
+    status["lockBackend"], lock_error = _live_lock_state()
+    if lock_error:
+        status["lockError"] = lock_error
     if not status.get("last_run_at"):
         # 进程重启后内存态 last_run_at 会清零，导致 launcher 探针在"已收盘但
         # 进程刚启动"时误报。用 MongoDB 里最近且属于当前交易日的 completed
@@ -433,6 +537,14 @@ def _collector_health_contract(status: dict[str, Any]) -> dict[str, Any]:
             "reason": "调度器未运行",
         }
     last_error = status.get("last_error")
+    if status.get("lockBackend") == "degraded":
+        return {
+            "status": "degraded",
+            "restartable": False,
+            "recommendedAction": "alert",
+            "reason": "单实例协调降级（锁后端不可用）: "
+            + str(status.get("lockError") or "unknown"),
+        }
     if last_error:
         return {
             "status": "degraded",

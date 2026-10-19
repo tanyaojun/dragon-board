@@ -138,6 +138,9 @@ class Settings(BaseModel):
     snapshot_collector_close_grace_minutes: int = Field(default=5)
     snapshot_collector_proxy_base_url: str = Field(default="http://127.0.0.1:3000")
     snapshot_collector_bridge_base_url: str = Field(default="http://127.0.0.1:8765")
+    # 指数源（2026-10-19 复盘）：akshare 新浪被风控限流后，指数改由本地行情桥直连 TDX
+    # （bridge）。可选 akshare（旧源，仅显式保留）、bridge_then_akshare（桥失败再试旧源）。
+    index_source: str = Field(default="bridge")
     snapshot_collector_provider_timeout_ms: int = Field(default=30000)
     # 采集池来源模式（2026-09-20 spec：docs/superpowers/specs/2026-09-19-snapshot-pool-autonomous-source-design.md）
     # autonomous = 八平台热榜实时合并池为主池（bundle 只供 snapshotContext）；
@@ -166,17 +169,14 @@ class Settings(BaseModel):
     theme_fund_ths_upstream_url: str = Field(
         default="https://vaserviece.10jqka.com.cn/Level2/index.php"
     )
-    theme_fund_refresh_interval_seconds: int = Field(default=300)
     theme_fund_cache_ttl_seconds: int = Field(default=259200)  # 3 天（容灾 1 交易日 + 跨周末）
-    # akshare 同花顺网页全市场资金源开关（2026-08-14：默认启用，专供 theme_fund
-    # 题材资金聚合；原“种子首屏占位”方案废弃，冷启动改由 Redis dump.rdb 恢复 L2）
+    # 冷启动首屏占位开关（2026-08-14）：冷启动改由 Redis dump.rdb 恢复 L2 数据
     theme_fund_seed_enabled: bool = Field(default=True)
-    # 题材主力资金上游（2026-09-29 用户确认切换）：默认 eastmoney（push2 ulist.np
-    # 独立 URL 直连，不走 akshare——东财接口风控限流严重，必须精确控制请求节奏）；
-    # akshare 同花顺网页口径保留为回退（QUANT_BOARD_THEME_FUND_SOURCE=akshare）。
-    # 注意：同 sessionDate 下 rank 高者权威（eastmoney > akshare），当日盘中
-    # 切回 akshare 不会覆盖当日已写入的东财行——切源需跨交易日生效，
-    # 调度器 status 以 provider_source_stale_rows 暴露行源不一致（fail-visible）。
+    # 题材主力资金上游（2026-09-29 用户确认切换）：eastmoney 唯一源——push2 ulist.np
+    # 独立 URL 直连，不走 akshare（akshare 被风控限流）。
+    # 2026-10-19 用户决定：删除 akshare 同花顺网页回退源
+    # （QUANT_BOARD_THEME_FUND_SOURCE=akshare 不再有效，设了会告警并回落本值）。
+    # 保留该字段供调度器 status 的 configuredSource 诚实回显。
     theme_fund_source: str = Field(default="eastmoney")
     # 题材主力资金东财批量参数（风控纪律，2026-09-30 二次论断定稿）。
     # 核心原则：东财压力 ∝ 请求次数，绝不短间距频繁请求。
@@ -187,8 +187,7 @@ class Settings(BaseModel):
     theme_fund_em_batch_size: int = Field(default=800)
     theme_fund_em_request_interval_seconds: float = Field(default=60.0)
     theme_fund_em_request_timeout_seconds: float = Field(default=15.0)
-    # 东财模式刷新周期：30 分钟一轮（轮内约 6 分钟完成、其余静默），
-    # 独立于 akshare 模式的 theme_fund_refresh_interval_seconds（300s）
+    # 东财模式刷新周期：30 分钟一轮（轮内约 6 分钟完成、其余静默）
     theme_fund_em_refresh_interval_seconds: int = Field(default=1800)
     # KPL 题材个股人气后台刷新周期（2026-09：热度口径切换为 KPL 人气总和，
     # 对齐 tck2.js 的 10 分钟全量刷新节奏；下限 60s 由 KplHotnessCache 兜底）
@@ -460,6 +459,17 @@ class Settings(BaseModel):
             "QUANT_BOARD_SNAPSHOT_COLLECTOR_BRIDGE_BASE_URL",
             self.snapshot_collector_bridge_base_url,
         )
+        # 指数源：默认 bridge（本地行情桥 TDX）；拼错源名时显式告警并保留默认，
+        # 不静默回落——指数缺位会直接污染 frame.indices（2026-10-19 复盘）。
+        index_source = os.environ.get("QUANT_BOARD_INDEX_SOURCE", "").strip().lower()
+        if index_source in {"bridge", "akshare", "bridge_then_akshare"}:
+            self.index_source = index_source
+        elif index_source:
+            logging.getLogger(__name__).warning(
+                "QUANT_BOARD_INDEX_SOURCE=%r not in {bridge, akshare, bridge_then_akshare}; keep default %s",
+                index_source,
+                self.index_source,
+            )
         self.snapshot_collector_provider_timeout_ms = max(
             100,
             _env_int(
@@ -509,13 +519,6 @@ class Settings(BaseModel):
             "QUANT_BOARD_THEME_FUND_THS_UPSTREAM_URL",
             self.theme_fund_ths_upstream_url,
         ).strip()
-        self.theme_fund_refresh_interval_seconds = max(
-            60,
-            _env_int(
-                "QUANT_BOARD_THEME_FUND_REFRESH_INTERVAL_SECONDS",
-                self.theme_fund_refresh_interval_seconds,
-            ),
-        )
         self.theme_fund_cache_ttl_seconds = max(
             60,
             _env_int(
@@ -527,12 +530,14 @@ class Settings(BaseModel):
         if seed_flag is not None:
             self.theme_fund_seed_enabled = seed_flag.strip().lower() in {"1", "true", "yes", "on"}
         fund_source = os.environ.get("QUANT_BOARD_THEME_FUND_SOURCE", "").strip().lower()
-        if fund_source in {"eastmoney", "akshare"}:
+        if fund_source == "eastmoney":
             self.theme_fund_source = fund_source
         elif fund_source:
-            # 拼错源名（如 em/east）静默回落默认会误导排障：显式告警（m5）
+            # 2026-10-19：akshare 回退源已删除（akshare 被风控限流）；拼错或已删源名
+            # 必须显式告警并回落，不静默接受
             logging.getLogger(__name__).warning(
-                "QUANT_BOARD_THEME_FUND_SOURCE=%r not in {eastmoney, akshare}; keep default %s",
+                "QUANT_BOARD_THEME_FUND_SOURCE=%r not in {eastmoney} "
+                "(akshare fallback removed 2026-10-19); keep default %s",
                 fund_source,
                 self.theme_fund_source,
             )

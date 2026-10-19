@@ -129,3 +129,26 @@ def is_slot_eligible(
     """
     grace_ms = grace_minutes * 60 * 1000
     return slot.timestamp_ms <= now_ts <= slot.timestamp_ms + grace_ms
+
+
+def slot_due_timestamp_ms(
+    snapshot_type: str,
+    trading_date: str,
+    slot_time: str,
+) -> int | None:
+    """单槽到期时刻（epoch ms，含开盘槽采集延迟）；未知类型/槽位返回 None。
+
+    与 `generate_slots` 同一口径——补采/回填前必须用它判定“是否已到期”，
+    否则会把当前行情盖到尚未发生的槽位上（2026-10-19 复盘：`backfill-slots`
+    按整天生成槽位，盘中执行会为未来槽位生成伪帧）。
+
+    日期/时间非法同样返回 None（不抛）：调用方（补采入口）应让后续请求校验给出
+    明确错误，而不是在“算到期时刻”这一步把整个请求变成 500。
+    """
+    try:
+        for slot in generate_slots(trading_date, [snapshot_type]):
+            if slot.slot_time == slot_time:
+                return slot.timestamp_ms
+    except ValueError:
+        return None
+    return None

@@ -265,9 +265,9 @@ class ThemeHeatService:
         else:
             quote_rows, quote_health = cached_quotes
         fund_rows = self.get_fund_rows(stock_codes) if include_runtime_funds else {}
-        # 运行态资金行按实际行来源标注（题材源默认 eastmoney_main、回退
-        # akshare_ths_individual；L2 行不会出现在题材 hash），不把估算伪装成 L2 权威。
-        # 同 hash 过渡期可能混有 eastmoney/akshare 行：source 取行数多数，
+        # 运行态资金行按实际行来源标注（题材源只有 eastmoney_main；L2 行不会出现在
+        # 题材 hash），不把估算伪装成 L2 权威。同 hash 过渡期可能混有历史行
+        # （如已删除的 akshare_ths_individual 残留）：source 取行数多数，
         # 混合态显式标 mixed，不冒充单一来源。
         fund_source_counts: dict[str, int] = {}
         for row in fund_rows.values():

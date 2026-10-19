@@ -278,8 +278,13 @@ async def test_partial_cache_rejection_keeps_valid_rows_and_reports() -> None:
 
 @pytest.mark.asyncio
 async def test_systemic_failure_opens_circuit_and_keeps_last_good() -> None:
+    """系统性错误（风控/上游不可用）→ 熔断冷却 + 保留 last-good。
+
+    2026-10-19：题材源只剩东财，错误码命名空间随之只剩 em_*（akshare 的 ths_* 命名
+    空间随回退源一起删除）。本用例改用 em_rate_limited 以继续覆盖同一行为。
+    """
     current = datetime(2026, 7, 30, 10, 0, 0, tzinfo=TZ)
-    provider = FakeProvider(error_code="ths_rate_limited")
+    provider = FakeProvider(error_code="em_rate_limited")
     scheduler = _scheduler(provider=provider, current=current)
 
     await scheduler.run_once()
@@ -287,7 +292,7 @@ async def test_systemic_failure_opens_circuit_and_keeps_last_good() -> None:
 
     await scheduler.run_once()
     assert provider.calls == ["2026-07-30"]
-    assert scheduler.status()["lastError"] == "ths_rate_limited"
+    assert scheduler.status()["lastError"] == "em_rate_limited"
 
 
 @pytest.mark.asyncio
@@ -554,7 +559,7 @@ def test_eastmoney_scheduler_uses_conservative_rate_profile(monkeypatch) -> None
         source = "eastmoney_main"
 
     monkeypatch.setattr(module, "_build_default_provider", lambda: _FakeEMProvider())
-    monkeypatch.setattr(module.get_settings(), "theme_fund_source", "eastmoney")
+    # 2026-10-19：题材源只剩东财，调度器不再按 QUANT_BOARD_THEME_FUND_SOURCE 分支
     scheduler = module._build_market_fund_scheduler()
 
     assert scheduler.refresh_interval_seconds == 1800.0
@@ -563,16 +568,22 @@ def test_eastmoney_scheduler_uses_conservative_rate_profile(monkeypatch) -> None
     assert scheduler.provider_source() == "eastmoney_main"
 
 
-def test_akshare_scheduler_keeps_original_profile(monkeypatch) -> None:
-    """akshare 回退模式保持原节奏（300s 周期 / 300s 冷却），互不影响。"""
+def test_scheduler_ignores_removed_akshare_source_setting(monkeypatch) -> None:
+    """删除 akshare 回退后：即便环境变量还写着 akshare，也不得回退到旧档位。
+
+    2026-10-19 用户决定删除 akshare_ths_individual 题材源；生产 .env.local 里
+    残留的 QUANT_BOARD_THEME_FUND_SOURCE=akshare 必须只产生告警 + 固定东财档位，
+    不能再出现 300s 周期/300s 冷却的旧行为。
+    """
     import backend.services.market.fund_scheduler as module
 
-    class _FakeAkshareProvider:
-        source = "akshare_ths_individual"
+    class _FakeEMProvider:
+        source = "eastmoney_main"
 
-    monkeypatch.setattr(module, "_build_default_provider", lambda: _FakeAkshareProvider())
+    monkeypatch.setattr(module, "_build_default_provider", lambda: _FakeEMProvider())
     monkeypatch.setattr(module.get_settings(), "theme_fund_source", "akshare")
     scheduler = module._build_market_fund_scheduler()
 
-    assert scheduler.refresh_interval_seconds == 300.0
-    assert scheduler.systemic_cooldown_seconds == 300.0
+    assert scheduler.refresh_interval_seconds == 1800.0
+    assert scheduler.systemic_cooldown_seconds == 1800.0
+    assert scheduler.fetch_timeout_seconds >= 600.0

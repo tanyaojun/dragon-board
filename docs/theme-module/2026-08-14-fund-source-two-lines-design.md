@@ -1,3 +1,8 @@
+> **状态更新（2026-10-19）**：本文描述的 `akshare_ths_individual` 题材回退源已按用户决定删除
+> （akshare 被风控限流）。现状：题材估算源只有 `eastmoney_main` 一条；`SUPPORTED_FUND_SOURCES`
+> 为 `{ths_main_monitor, eastmoney_main}`；`FUND_HASH_AKSHARE` 仅作 Redis hash 名保留
+> （改 key 会丢已预热缓存）。正文保留当时结论，不再代表当前实现。
+
 # 资金数据源两条线方案（2026-08-14）
 
 ## 状态

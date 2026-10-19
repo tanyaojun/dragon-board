@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import warnings
 from time import perf_counter
 from pathlib import Path
 from typing import Any
@@ -76,16 +75,6 @@ from backend.core.utils import json_loads
 
 
 logger = logging.getLogger(__name__)
-
-
-# akshare stock_fund_flow 内部 pd.concat 与新版 pandas 存在已知弃用警告
-# （第三方库内部实现，无法在调用方修复）。全市场资金流刷新每次都会触发并刷屏日志，
-# 这里按模块精确静默该类 FutureWarning，不影响其它警告的可见性。
-warnings.filterwarnings(
-    "ignore",
-    category=FutureWarning,
-    module=r"akshare\.stock_feature\.stock_fund_flow",
-)
 
 
 app = FastAPI(

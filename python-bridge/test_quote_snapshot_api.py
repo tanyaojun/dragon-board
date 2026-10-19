@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import main
 from main import (
     BridgeConfig,
     QuoteFetchStats,
@@ -15,6 +16,7 @@ from main import (
     is_trading_session_now,
     latest_completed_trading_date,
     normalize_code,
+    normalize_index_code,
     resolve_requested_session_date,
     resolve_minute_session_date,
 )
@@ -770,3 +772,104 @@ class QuoteSnapshotApiTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IndexSnapshotApiTest(unittest.TestCase):
+    """指数快照口（2026-10-19）：akshare 被风控限流后，指数改由本地行情桥直连 TDX。
+
+    关键点：指数必须保留市场前缀——000001 既是上证指数(sh) 也是平安银行(sz)，
+    `/api/quotes/snapshot` 为股票场景把代码归一成纯 6 位，指数走那条路会拿错标的。
+    """
+
+    def setUp(self):
+        self.bridge = TdxL2Bridge(BridgeConfig())
+        self.app = self.bridge.create_app()
+        self.client = TestClient(self.app)
+
+    def test_index_codes_keep_market_prefix(self):
+        self.assertEqual(normalize_index_code("sh000001"), "sh000001")
+        self.assertEqual(normalize_index_code("000001"), "sh000001")
+        self.assertEqual(normalize_index_code("sz399001"), "sz399001")
+        self.assertEqual(normalize_index_code("399006"), "sz399006")
+        self.assertEqual(normalize_index_code("sh000300"), "sh000300")
+        self.assertEqual(normalize_index_code("sh000001.SH"), "sh000001")
+        self.assertEqual(normalize_index_code(""), "")
+        self.assertEqual(normalize_index_code("abc"), "")
+
+    def test_index_snapshot_maps_tdx_rows_to_contract(self):
+        seen_symbols: list[list[str]] = []
+
+        class FakeQuoteClient:
+            def quotes(self, symbol):
+                seen_symbols.append([s.strip("sh").strip("sz") if False else s for s in symbol])
+                rows = []
+                for item in symbol:
+                    code = item[2:] if item[:2] in ("sh", "sz") else item
+                    market = 1 if item.startswith("sh") else 0
+                    rows.append(
+                        {
+                            "market": market,
+                            "code": code,
+                            "price": 3716.02 if code == "000001" else 11754.03,
+                            "last_close": 3716.28 if code == "000001" else 11802.46,
+                            "open": 3694.12,
+                            "high": 3733.86,
+                            "low": 3692.29,
+                            "vol": 303356328,
+                            "amount": 501436579840.0,
+                        }
+                    )
+                return rows
+
+        self.bridge.quote_client = FakeQuoteClient()
+
+        response = self.client.get("/api/quotes/index-snapshot?codes=sh000001,sz399001")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["source"], "python_bridge_tdx_index")
+        self.assertEqual(seen_symbols[0], ["sh000001", "sz399001"])
+
+        by_code = {quote["code"]: quote for quote in payload["quotes"]}
+        self.assertEqual(set(by_code), {"sh000001", "sz399001"})
+        self.assertEqual(by_code["sh000001"]["lastPrice"], 3716.02)
+        self.assertAlmostEqual(by_code["sh000001"]["changeAmount"], -0.26, places=2)
+        self.assertAlmostEqual(by_code["sh000001"]["changePct"], -0.007, places=3)
+        self.assertEqual(by_code["sz399001"]["market"], 0)
+        self.assertGreater(by_code["sz399001"]["amount"], 0)
+
+    def test_index_snapshot_defaults_to_standard_indices(self):
+        requested: list[list[str]] = []
+
+        class FakeQuoteClient:
+            def quotes(self, symbol):
+                requested.append(list(symbol))
+                return []
+
+        self.bridge.quote_client = FakeQuoteClient()
+
+        response = self.client.get("/api/quotes/index-snapshot")
+        payload = response.json()
+
+        # 空返回必须 ok=false（fail-visible），且默认清单覆盖 frame.indices 需要的键位
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            requested[0],
+            list(main.DEFAULT_INDEX_CODES),
+        )
+        for required in ("sh000001", "sz399001", "sh000300", "sh000905", "sh000852"):
+            self.assertIn(required, requested[0])
+
+    def test_index_snapshot_reports_upstream_failure(self):
+        class ExplodingQuoteClient:
+            def quotes(self, symbol):
+                raise RuntimeError("no_tdx_server_available")
+
+        self.bridge.quote_client = ExplodingQuoteClient()
+
+        response = self.client.get("/api/quotes/index-snapshot")
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(payload["ok"])
+        self.assertIn("no_tdx_server_available", payload["error"])
+        self.assertEqual(payload["quotes"], [])

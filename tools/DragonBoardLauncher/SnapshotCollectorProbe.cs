@@ -6,15 +6,20 @@ internal sealed record SnapshotCollectorHealth(
     bool IsHealthy,
     string Fingerprint,
     string Message,
-    bool Restartable = true)
+    bool Restartable = true,
+    // HTTP 探针是否真的拿到服务自报状态（false = 连不上 8001，结论来自兜底：
+    // 启动失败标记 / probe:* 连接异常）。2026-10-19 复盘新增：调用方据此区分
+    // "端口探测瞬断但服务自己答了健康"与"服务确实不可达"，前者不得走离线重启。
+    bool HttpReached = true)
 {
     public static SnapshotCollectorHealth Healthy() => new(true, "healthy", "快照采集运行正常");
 
     public static SnapshotCollectorHealth Unhealthy(
         string fingerprint,
         string message,
-        bool Restartable = true) =>
-        new(false, fingerprint, message, Restartable);
+        bool Restartable = true,
+        bool HttpReached = true) =>
+        new(false, fingerprint, message, Restartable, HttpReached);
 
     // 业务进度类告警（盘中长时间未采集等）：展示并记录日志，但不触发自动重启。
     // 漏槽/超时未采集是数据可用性问题，重启无法补采，还可能引发锁竞争和
@@ -97,7 +102,8 @@ internal static class SnapshotCollectorProbe
 
             return SnapshotCollectorHealth.Unhealthy(
                 $"probe:{ex.GetType().Name}:{ex.Message}",
-                $"快照采集错误: 无法读取采集服务(8001)健康状态: {ex.Message}");
+                $"快照采集错误: 无法读取采集服务(8001)健康状态: {ex.Message}",
+                HttpReached: false);
         }
     }
 
@@ -213,7 +219,8 @@ internal static class SnapshotCollectorProbe
             return SnapshotCollectorHealth.Unhealthy(
                 $"startup-failure:{action}",
                 $"快照采集提示: {reason}",
-                Restartable: false);
+                Restartable: false,
+                HttpReached: false);
         }
         catch
         {

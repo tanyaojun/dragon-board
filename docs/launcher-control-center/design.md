@@ -46,9 +46,24 @@ Frontend、Python Bridge、QuantBoard API、Snapshot Collector、QuantBoard UI �
 ### 3.3 健康检查与自动重启
 
 - UI 每 3s `RefreshStatusesAsync`：全部服务端口探测（`LauncherPorts.IsPortOpen`）+ collector 额外 `SnapshotCollectorProbe.GetHealthAsync`。
+- collector 存活以 HTTP 健康契约为准（2026-10-19）：端口探测失败时仍读 `http://127.0.0.1:8001/api/health`；
+  只要能拿到服务自报状态（`HttpReached=true`）即按运行中处理（`Core/CollectorStatusResolver`），
+  只有 HTTP 也不可达才走离线拉起。端口探测（netstat/TCP 表 + 500ms 连接回退）在 TCP 表损坏时
+  会对活着的 8001 连续假阴性（当日 10:30 误判离线 → 停启式重启打断采集 → 残留锁 → 等锁实例自杀）。
 - collector 自动重启（`EnsureHealthy`）：60s 冷却 + 连续 3 次上限；端口占用且不健康→先停再启。
-- `SnapshotCollectorProbe` 解析 8001 `/api/health` 的 `snapshotCollector` 字段（enabled/running/last_error）
-  自行判定 hard（可重启）与 warning（Restartable=false，不重启）。fingerprint 字符串为 C# 私有约定。
+- 通用服务存活判定（2026-10-19，用户反馈 3000/8000/8008/32145 盘中"掉线又自动恢复"）：
+  除 8001 走健康契约外，其余服务走"快速端口探测 + 强证据深探测复核"
+  （`Core/ServiceLivenessResolver`）：探测说在跑→在跑；说没跑但有强证据（跟踪子进程存活 /
+  本会话曾见它在跑）→ 2s 超时深探测复核；复核也失败才认死并清除记忆。原因是短超时探测
+  在 TCP 表损坏/机器高负载/事件循环被同步长任务堵住时会对活服务假阴性——显示层表现为红点抖动，
+  启动路径则会拉起重复实例（10-14 13:37:26 量化后端 API `[Errno 10048]` 自杀）。
+  语音服务（32145）例外：其快速判定本身就是 HTTP 健康探针，不做第二层探测。
+- 可观测性：服务状态跳变（运行中↔已停止）写日志；子进程退出日志带退出码并区分
+  "管理器主动停止"与"未请求停止（自行结束/被外部杀）"——此前两者完全无法区分，
+  盘中"突然退出"无法归因（10-12 09:23、10-13 13:20、10-18 10:53 三例）。
+- `SnapshotCollectorProbe` 消费 8001 `/api/health` 的 `status/restartable/recommendedAction/reason` 契约
+  判定 hard（可重启）与 warning（Restartable=false，不重启）；`fingerprint` 为 C# 内部去重键（`probe:*` 表示
+  没读到服务自报状态，属不可靠证据）。
 
 ### 3.4 日志
 
