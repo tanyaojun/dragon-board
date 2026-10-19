@@ -1356,3 +1356,19 @@ def test_band_warn_banner_does_not_duplicate_missing_notice(js: str):
     warn = _fn(js, "bandRefreshWarnHtml")
     assert "离线分带表未就绪" not in warn, "缺失提示只由 bandDiagMissing 呈现（避免同屏两条重复警示）"
     assert "if (!lag && !st.running && !st.error) return ''" in warn
+
+
+# ── 2026-10-19 用户报障：涨停复盘 KPI 真连板口径 ─────────────────────────────
+def test_review_kpi_height_buckets_use_streak_not_space_boards(js: str):
+    """KPI 高度四卡/最高板/高度筛选/排序/高度列必须吃 streakOf（真连板），
+    不得再用空间板数 s.boards 冒充（7天4板曾被计成「四板」）。"""
+    kpi = _fn(js, "lfRenderKpi")
+    assert "streakOf" in kpi, "KPI 分桶须走 streakOf（真连板单源）"
+    for old in ["s.boards === 2", "s.boards === 3", "(s.boards || 0) >= 4",
+                "Math.max(m, s.boards || 1)"]:
+        assert old not in kpi, f"KPI 仍残留空间口径分桶：{old}"
+    assert "真连板未定" in kpi, "streak null（回溯不可算）须单列注记（fail-visible）"
+    m = _fn(js, "labelMatches")
+    assert "streakOf" in m and "(s.boards || 0) < 4" not in m, "高度筛选须吃真连板"
+    assert "function streakOf(s){ return s.streak === undefined ? (s.boards || null) : s.streak; }" in js, \
+        "streakOf 须保留 undefined→boards 回落（旧档/join 缺失不新增猜数）"

@@ -45,7 +45,7 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
         # （join 抽 jev_label_jiuyan.jiuyan_board_info，与 _jiuyan_ladder 同口径；
         #   失败/降级置结构化旗标，不阻断主读口，前端据旗标注记高度口径状态）
         try:
-            from backend.operations.jev_label_jiuyan import jiuyan_board_info
+            from backend.operations.jev_label_jiuyan import jiuyan_board_info, jiuyan_streak_map
             board_info, meta = jiuyan_board_info(db, date)
             if not meta.get("jiuyanFinalFound"):
                 result["boardJoinDegraded"] = "jiuyan_final_missing"
@@ -75,6 +75,15 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                             stock["openNum"] = info["openNum"]
                     if info.get("excluded"):
                         stock["excluded"] = info["excluded"]
+            # 2026-10-19 增补（用户报障：涨停复盘 KPI 四板以上/最高板显示的是空间最高板）：
+            # 真连板口径与 market_metrics/quotes-review 同源 jiuyan_streak_map（N==M 直取 /
+            # N>M 回溯 / num=None→首板 1；断板回溯不可算→None 不冒充；今日炸板→None）。
+            # boards 保留「N天M板」空间口径作注记；KPI 分桶/筛选/排序改吃 streak。
+            streaks = jiuyan_streak_map(db, date)
+            for stock in result.get("stocks") or []:
+                code6 = str(stock.get("code") or "")[-6:]
+                if code6 in streaks:
+                    stock["streak"] = streaks[code6]
             # THS 炸板池总数（含韭研未收录股，炸板卡「榜外」差额注记用）
             if meta.get("thsZhabanTotal") is not None:
                 result["thsZhabanTotal"] = meta["thsZhabanTotal"]

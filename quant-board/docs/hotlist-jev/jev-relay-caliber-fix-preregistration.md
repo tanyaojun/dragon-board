@@ -196,3 +196,21 @@ phase/momentum/money/theme 四判定不变；600825 打标标签分类未变（m
 ① `money_effect` 判据纳入「全市场跌停家数/断板股跌停只数」；② `theme_pulse` 的
 「龙一高度 ≤2板」明确为「龙一连板高度」；③ 冲刺股标「触板未封/冲高未触」
 （TDX 最高价 vs 涨停价，10-15 六只里仅金种子酒/紫竹高科真触板）。
+
+## 7. 2026-10-19 补齐：涨停复盘页 KPI 真连板口径（用户报障）
+
+§2 的真连板裁决落地时覆盖了 `market_metrics`（maxBoard/ladder）与 quotes-review 个股
+`boards`，但**漏了涨停复盘页（relay_page /limitup-labels 轨道）的 KPI 卡**：个股 join 仍只透
+`boards`（韭研 num「N天M板」的 M=空间板数），前端 首板/二板/三板/四板以上/最高板 分桶
+直接吃它——断板股（如 7天4板）被计成「四板」，空间最高板冒充最高连板（10-15 澳弘电子
+同类病灶在复盘页的残留）。
+
+**修法（读口透传 + 前端改吃 streak， boards/days 保留为空间注记）**：
+- limitup-labels 路由 board join 段补 `stock["streak"] = jiuyan_streak_map(db, date)[code6]`
+  （单一事实源不变）；`boards/days` 原样保留（「N天M板」注记与漏标/炸板二分不变）。
+- relay_page `streakOf(s)`：number=真连板；null=断板回溯不可算（不入桶，KPI 注「N 家真连板
+  未定」）；undefined=旧档/join 缺失回落 boards（不新增猜数）。KPI 高度四卡、最高板卡、
+  高度筛选（1/2/3/4p）、高度排序、高度列全部改吃 streakOf；高度列主文「K板」+断板股
+  空间注记「（N天M板）」，不可算显「N天M板 · 真连板未定」。
+
+**范围**：只改复盘页展示口径，不动 jev 判定、不动 relayIndex 语料、零模型调用、无需回放。

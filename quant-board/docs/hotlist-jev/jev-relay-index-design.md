@@ -341,6 +341,12 @@ favicon 404（既有，无害）。pytest：全量 `3542 passed`（`-m hotlist` 
   命中**唯一一条**龙序，只渲染角色字；非领涨股（板块有龙一二三但本股不在其中）与
   韭研 final 缺失 → '-'，不伪造身位。高度列改为 `${days}天${boards}板`；`days` 缺失
   回落 `${boards}板`；`boards≤1`/缺失仍为「首板」（韭研首板不标 num，不伪造天数）。
+- **2026-10-19 增补（用户报障：涨停复盘 KPI 四板以上/最高板显示的是空间最高板）**：
+  limitup-labels 路由 board join 段再透传 `stock["streak"] = jiuyan_streak_map(db, date)[code]`
+  （真连板单一事实源，与 market_metrics/quotes-review 10-16 修正同源）；涨停复盘页
+  KPI 高度分桶/最高板卡/高度筛选/排序/高度列全部改吃 `streakOf(s)`（streak 缺失回落旧
+  boards，不新增猜数），`boards/days` 保留为「N天M板」空间注记；streak=null（断板回溯
+  不可算）不入桶，KPI 注「N 家真连板未定」（fail-visible）。详见 caliber-fix 预注册 §7。
 
 **测试**：`tests/hotlist/test_jev_board_info.py` +2——
 `test_dragon_rows_carries_code_for_own_role_match`（code 透出/末 6 位归一化/None 兜底/

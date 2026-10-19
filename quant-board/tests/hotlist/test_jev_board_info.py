@@ -378,3 +378,62 @@ def test_limitup_route_own_dragon_role_and_days(monkeypatch):
     assert own_role(by_code["603237"]) == []
     # 韭研 final 无该板块 → 空数组 → '-'
     assert by_code["605003"]["boardDragons"] == []
+
+
+def test_limitup_route_streak_passthrough(monkeypatch):
+    """2026-10-19 用户报障：涨停复盘 KPI 四板以上/最高板显示的是空间最高板。
+
+    修法：路由 board join 段透传 streak（jiuyan_streak_map 真连板单一事实源，与
+    market_metrics/quotes-review 同源）；boards/days 保留「N天M板」空间口径作注记。
+    - 纯连板 5天5板 → streak=5；
+    - 断板股 7天4板 → streak=回溯值（本测 2，由单源给），空间 M=4 不冒充；
+    - 韭研首板（num=None）→ streak=1；
+    - final 外个股无 join → 不伪造 streak（键不存在）。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+    from backend.api import hotlist_jev_limitup_routes as limitup_module
+
+    labels = [
+        {"_id": "2026-10-09:002696", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "002696", "name": "百洋股份",
+         "label": "ma_restructure", "jiuyanContext": {"board": "大消费"}},
+        {"_id": "2026-10-09:001318", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "001318", "name": "阳光乳业",
+         "label": "ma_restructure", "jiuyanContext": {"board": "大消费"}},
+        {"_id": "2026-10-09:603237", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "603237", "name": "五芳斋",
+         "label": "ma_restructure", "jiuyanContext": {"board": "大消费"}},
+        {"_id": "2026-10-09:605003", "tradingDate": "2026-10-09", "status": "ok",
+         "origin": "driver_label_jiuyan_v3_pilot", "code": "605003", "name": "众望布艺",
+         "label": "ma_restructure", "jiuyanContext": {"board": "域外板块"}},
+    ]
+    db = MultiFakeDb({
+        "hotlist_jev_driver_labels": _LabelsCol(labels),
+        "jiuyan_action": FinalCol([
+            _final("2026-10-09", [("大消费", [
+                {"code": "002696", "name": "百洋股份", "num": "5天5板", "time": "09:58:00"},
+                {"code": "001318", "name": "阳光乳业", "num": "7天4板", "time": "09:30:00"},
+                {"code": "603237", "name": "五芳斋", "num": None, "time": "13:36:00"}])]),
+        ]),
+        "snapshot_frames": FramesCol([_pool_frame("2026-10-09", [])]),
+    })
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    # 真连板单源打桩（N>M 回溯会触 TDX 日线 IO，测试禁真调用，§1.2-7）：回溯值 2 由单源给
+    monkeypatch.setattr(jiuyan_mod, "jiuyan_streak_map",
+                        lambda db_, date_, dataset_id=None:
+                        {"002696": 5, "001318": 2, "603237": 1})
+    app = FastAPI()
+    app.include_router(limitup_module.router)
+    resp = TestClient(app).get("/api/hotlist-jev/limitup-labels", params={"date": "2026-10-09"})
+    assert resp.status_code == 200
+    by_code = {s["code"]: s for s in resp.json()["stocks"]}
+
+    assert by_code["002696"]["streak"] == 5                       # 纯连板直取
+    assert by_code["001318"]["streak"] == 2                       # 断板股=回溯真连板
+    assert by_code["001318"]["boards"] == 4 and by_code["001318"]["days"] == 7  # 空间注记保留
+    assert by_code["603237"]["streak"] == 1                       # 韭研首板口径
+    assert "streak" not in by_code["605003"]                      # final 外不伪造

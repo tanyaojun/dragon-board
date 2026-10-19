@@ -1677,17 +1677,25 @@ const SCOPE_CN = { zt: '涨停', zhaban: '炸板', excluded: 'ST·北交所', al
 const SCOPE_PRED = { zt: s => !s.zhaban && !s.excluded, zhaban: s => s.zhaban,
   excluded: s => s.excluded, all: () => true };
 function labelBoardOf(s){ return s.boardName || s.board || '未分板块'; }
+// 真连板口径（2026-10-19 用户裁决：KPI/筛选/排序吃真连板，不再用空间板数 M 冒充；
+// 后端与 market_metrics/quotes-review 同源 jiuyan_streak_map）：
+// number=「至今日」连续封板数（N==M 直取 / N>M 回溯 / num=None→1）；
+// null=断板股回溯不可算（不冒充，单列「真连板未定」）；
+// undefined=旧档/连板 join 缺失（随 boardJoinDegraded 注记）→ 回落 boards 旧口径，不新增猜数
+function streakOf(s){ return s.streak === undefined ? (s.boards || null) : s.streak; }
 function labelMatches(s, f, skipHeight){
   if (f.q){ const q = f.q.toLowerCase();
     if (!String(s.code || '').toLowerCase().includes(q) && !String(s.name || '').toLowerCase().includes(q)) return false; }
   if (f.board && labelBoardOf(s) !== f.board) return false;
   if (!skipHeight && f.height){
     // 漏标连板（boardUnmarked，num 空且昨日在「昨日涨停池」）单列：不归首板不猜高度（fail-visible）
-    // 首板桶含 boards===1（韭研 one 桶=≤1 板）；2/3 精确匹配；4p=≥4 板
+    // 高度分桶吃**真连板**（streakOf）：首板桶=streak 1（含 join 缺失回落）；2/3 精确；4p=≥4；
+    // streak null 且空间 M>1（断板回溯不可算）→ 不入任何数值桶（fail-visible，KPI 卡注记未定数）
+    const sv = streakOf(s);
     if (f.height === 'um'){ if (!s.boardUnmarked) return false; }
-    else if (f.height === '4p'){ if ((s.boards || 0) < 4) return false; }
-    else if (f.height === '1'){ if (s.boardUnmarked || (s.boards && s.boards !== 1)) return false; }
-    else if (String(s.boards || 0) !== f.height) return false;
+    else if (f.height === '4p'){ if (!(sv >= 4)) return false; }
+    else if (f.height === '1'){ if (s.boardUnmarked || !(sv === 1 || (sv == null && !(s.boards > 1)))) return false; }
+    else if (String(sv || 0) !== f.height) return false;
   }
   if (f.driver && (s.label || '') !== f.driver) return false;
   if (f.depth && (s.catalystDepth || '') !== f.depth) return false;
@@ -1712,16 +1720,20 @@ function lfRenderKpi(stocks, f){
   const base = otherFilter ? zt.filter(s => labelMatches(s, f, true)) : zt;
   const pct = v => base.length ? Math.round(v / base.length * 100) : 0;
   const bum = zt.filter(s => s.boardUnmarked).length;
-  // 首板桶=无板数或 1 板（韭研 one 桶=≤1 板）且非漏标；漏标连板单列注记，不进任何高度桶
-  const b1 = base.filter(s => !s.boardUnmarked && (!s.boards || s.boards === 1)).length;
-  const b2 = base.filter(s => s.boards === 2).length;
-  const b3 = base.filter(s => s.boards === 3).length;
-  const b4p = base.filter(s => (s.boards || 0) >= 4).length;
-  const maxBoard = zt.reduce((m, s) => Math.max(m, s.boards || 1), 0);
-  const leaders = zt.filter(s => (s.boards || 1) === maxBoard);
+  // 高度分桶吃**真连板** streakOf（2026-10-19 用户裁决，同源 jiuyan_streak_map；不再用空间 M 冒充）：
+  // 首板桶=streak 1（含 join 缺失回落）；2/3 精确；4p=≥4；
+  // streak null 且空间 M>1 = 断板回溯不可算 → 单列「真连板未定」注记，不入桶不猜（fail-visible）
+  const sv = s => streakOf(s);
+  const b1 = base.filter(s => !s.boardUnmarked && (sv(s) === 1 || (sv(s) == null && !(s.boards > 1)))).length;
+  const b2 = base.filter(s => sv(s) === 2).length;
+  const b3 = base.filter(s => sv(s) === 3).length;
+  const b4p = base.filter(s => sv(s) >= 4).length;
+  const stUnknown = base.filter(s => !s.boardUnmarked && sv(s) == null && (s.boards || 0) > 1).length;
+  const maxBoard = zt.reduce((m, s) => { const v = sv(s); return v ? Math.max(m, v) : m; }, 0);
+  const leaders = zt.filter(s => sv(s) === maxBoard);
   const leaderTxt = maxBoard > 1
     ? esc((leaders[0].name || leaders[0].code || '-')) + (leaders.length > 1 ? ` 等${leaders.length}只` : '')
-    : '全为首板';
+    : (maxBoard === 1 ? '全为首板' : '高度未定');
   const L = STATE.labels || {}, deg = (L.summary || {}).degradedCount || 0;
   const JOIN_CN = {jiuyan_final_missing: '韭研final缺失', prev_pool_missing: '昨日池缺失',
     ths_pool_missing: '今日炸板池缺失', prev_ths_pool_missing: '昨日炸板池缺失'};
@@ -1743,7 +1755,8 @@ function lfRenderKpi(stocks, f){
       + (bum ? ` · 漏标连板 ${bum}` : '') + joinNote + (deg ? ` · degraded ${deg}` : ''))
     + zbCard
     + hCard('首板', b1, '1') + hCard('二板', b2, '2') + hCard('三板', b3, '3') + hCard('四板以上', b4p, '4p')
-    + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt);
+    + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt
+      + (stUnknown ? ` · ${stUnknown}家真连板未定` : ''));
 }
 function lfRenderBoards(pool, f){
   const dist = {};
@@ -1782,7 +1795,7 @@ function lfRenderRows(){
   const pool = scopePool(stocks, f);
   let filtered = pool.filter(s => labelMatches(s, f, f.scope !== 'zt'));
   const ls = STATE.labelSort;
-  const lkv = { code: x => x.code || '', boards: x => x.boards || 0,
+  const lkv = { code: x => x.code || '', boards: x => streakOf(x) || 0,
     time: x => x.limitUpTime || '', rank: x => x.rank == null ? 9999 : x.rank };
   filtered = filtered.slice().sort((a, b) => { const va = lkv[ls.key](a), vb = lkv[ls.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * ls.dir; });
@@ -1793,10 +1806,14 @@ function lfRenderRows(){
   const rows = filtered.map((s, i) => {
     const entry = STATE.labelEntries[i];
     const open = ui.openKey === entry.key;
-    // 高度=韭研 num「N天M板」：M=板数、N=跨度天数。M>1 且 N 可得 →「N天M板」（5天5板）；
-    // N 缺失（num 不可解析）宁缺毋猜，回落「M板」；M≤1/缺失 → 首板（韭研首板不标 num，不伪造天数）
-    const heightText = (s.boards && s.boards > 1)
-      ? (s.days ? `${s.days}天${s.boards}板` : `${s.boards}板`) : '首板';
+    // 高度列吃**真连板** streakOf（2026-10-19 用户裁决）：主文「K板」；断板股附空间注记「（N天M板）」；
+    // streak null 且空间 M>1 = 回溯不可算 → 显空间「N天M板 · 真连板未定」（不冒充）；其余 → 首板
+    const sv = streakOf(s);
+    const spaceTxt = (s.days && s.boards && s.days > s.boards) ? `（${s.days}天${s.boards}板）` : '';
+    const heightText = (sv != null && sv > 1) ? `${sv}板${spaceTxt}`
+      : (sv == null && (s.boards || 0) > 1)
+        ? ((s.days ? `${s.days}天${s.boards}板` : `${s.boards}板`) + ' · 真连板未定')
+        : '首板';
     const hCell = s.zhaban ? badge(`炸板${s.openNum ? '·' + s.openNum + '开' : ''}`, 'b-red')
       : s.excluded ? badge(s.excluded === 'st' ? 'ST剔除' : '北交所', 'b-amber')
       : s.boardUnmarked ? badge('漏标连板', 'b-amber')
