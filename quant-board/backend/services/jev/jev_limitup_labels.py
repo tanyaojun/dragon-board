@@ -86,6 +86,10 @@ def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[s
                 "board": ctx.get("board"),
                 "inHotlist": bool(ctx.get("inHotlist")),
                 "rank": rank,
+                # 投喂槽位（2026-10-20）：midday=12:30 午盘投喂（收盘幂等不重复投喂）/final=收盘投喂；
+                # 旧档无此字段 → None（前端不伪造槽位，也不当收盘档冒充）
+                "labelSlot": d.get("labelSlot"),
+                "jiuyanFetchedAt": d.get("jiuyanFetchedAt"),
                 # 个股相位分线（2026-10-04 试点字段，--stock-phase-date 单题补跑写入；未跑日为 None=fail-visible）
                 "stockPhasePosition": d.get("stockPhasePosition"),
                 "stockPhaseProbabilities": d.get("stockPhaseProbabilities"),

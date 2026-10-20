@@ -15,7 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.operations.jev_label_jiuyan import dragon_rows, jiuyan_board_dragons, jiuyan_board_info
+from backend.operations.jev_label_jiuyan import (
+    dragon_rows,
+    expound_reason,
+    jiuyan_board_dragons,
+    jiuyan_board_info,
+)
 
 
 class FinalCol:
@@ -251,8 +256,35 @@ class _LabelsCol:
                 and d.get("origin") != excluded]
 
 
-def test_limitup_route_attaches_board_dragons(monkeypatch):
-    """路由把 boardDragons 按板块挂到每行；韭研 final 外的板块 → 空数组（前端显示 '-'）。"""
+def test_board_info_carries_reason_first_line():
+    """涨停复盘【原因】列（2026-10-20 用户需求）：取值=韭研异动解析**首行**。
+
+    实测 603278 大业股份：expound 首行「人形机器人（金属腱绳）+商业航天+光伏+轮胎」，
+    次行起才是 1/2/3 逐条核实段落——只取首行，不拼接、不裁剪。缺失 → None（不伪造）。
+    """
+    today = [
+        {"code": "603278", "name": "大业股份", "num": "3天3板", "time": "09:25:00",
+         "expound": "人形机器人（金属腱绳）+商业航天+光伏+轮胎\n1、公司主营业务以胎圈钢丝…"},
+        {"code": "600007", "name": "解析缺失", "num": None, "time": "10:00:00"},
+        {"code": "600008", "name": "空解析", "num": None, "time": "10:05:00", "expound": "   \n"},
+    ]
+    info, _meta = jiuyan_board_info(_std_cols(today, prev_codes=[]), "2026-10-09")
+    assert info["603278"]["reason"] == "人形机器人（金属腱绳）+商业航天+光伏+轮胎"
+    assert info["600007"]["reason"] is None
+    assert info["600008"]["reason"] is None
+
+
+def test_expound_reason_first_line_and_fallbacks():
+    """首行取法：跳过前导空行；expound 缺失时回退同义 reason 字段；两者都空→None。"""
+    assert expound_reason({"expound": "\n  主线A+题材B\n1、细节"}) == "主线A+题材B"
+    assert expound_reason({"expound": "", "reason": "历史字段原因"}) == "历史字段原因"
+    assert expound_reason({"expound": "\n  ", "reason": "  "}) is None
+    assert expound_reason({}) is None
+
+
+def test_limitup_route_attaches_board_dragons_and_reason(monkeypatch):
+    """路由把 boardDragons 按板块挂到每行 + 【原因】取解析首行（2026-10-20）；
+    韭研 final 外的板块 → 空数组、解析缺失 → reason=None（前端 '-'，不伪造）。"""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -271,7 +303,8 @@ def test_limitup_route_attaches_board_dragons(monkeypatch):
         "hotlist_jev_driver_labels": _LabelsCol(labels),
         "jiuyan_action": FinalCol([
             _final("2026-10-09", [("AI影视", [
-                {"code": "600001", "name": "龙一甲", "num": "3天3板", "time": "09:25:00"},
+                {"code": "600001", "name": "龙一甲", "num": "3天3板", "time": "09:25:00",
+                 "expound": "人形机器人（金属腱绳）+商业航天+光伏+轮胎\n1、细节段落"},
                 {"code": "600002", "name": "龙二乙", "num": "3天3板", "time": "09:30:00"}])]),
             _final("2026-10-08", [("X", [{"code": "600001", "num": "2天2板"}])]),
         ]),
@@ -289,6 +322,10 @@ def test_limitup_route_attaches_board_dragons(monkeypatch):
     assert [d["name"] for d in dragons] == ["龙一甲", "龙二乙"]
     assert dragons[0]["role"] == "龙一" and dragons[0]["boards"] == 3
     assert by_code["600009"]["boardDragons"] == []
+    # 【原因】列（2026-10-20 用户需求）：解析首行，多行正文不入选；缺失 → None
+    assert by_code["600001"]["reason"] == "人形机器人（金属腱绳）+商业航天+光伏+轮胎"
+    # 不在韭研名单的个股不挂 reason 键（与 boards 同口径：缺键=无原料，前端显示 '-'）
+    assert by_code["600009"].get("reason") is None
 
 
 def test_dragon_rows_carries_code_for_own_role_match():

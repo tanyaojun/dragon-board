@@ -58,7 +58,7 @@ def test_run_survives_single_stock_exception(monkeypatch, capsys):
     """一只股票抛异常：当日其余照常处理，异常不穿出 run()（部分异常仍写入仍继续）。"""
     db = _FakeDb(_FakeCol())
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": "600001", "name": "甲"}, "board": "b"},
         {"stock": {"code": "600002", "name": "乙"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
@@ -87,7 +87,7 @@ def test_final_usage_is_this_run_only(monkeypatch, capsys):
     # 预埋历史 usage 文档：不得计入 FINAL
     db._col.docs["old:1"] = {"_id": "old:1", "usage": {"total_tokens": 999999}}
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": "600001", "name": "甲"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
     monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
@@ -179,7 +179,7 @@ def test_run_force_rejudges_ok_docs(monkeypatch):
     db = _FakeDb(_FakeCol({"2026-10-09:600001": {"_id": "2026-10-09:600001", "code": "600001",
                                                  "tradingDate": "2026-10-09", "status": "ok"}}))
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": "600001", "name": "甲"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
     monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
@@ -212,7 +212,7 @@ def test_run_codes_filter_rejudges_only_named_stocks(monkeypatch, capsys):
                                                "tradingDate": "2026-10-09", "status": "ok"}
                            for c in ("600001", "600002", "600003")}))
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": c, "name": f"股{c}"}, "board": "b"}
         for c in ("600001", "600002", "600003")])
     monkeypatch.setattr(runner, "_strip", lambda c: c)

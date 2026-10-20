@@ -29,6 +29,7 @@ from backend.operations.jev_label_jiuyan import (
     DEFAULT_DATASET_ID,
     _adj_prev_series,
     _daily_bars,
+    bars_need_upto,
     bars_source_provenance,
     _dispatch_jev,
     _jiuyan_board_count,
@@ -1641,6 +1642,14 @@ def narrative_context_lines(db: Any, date: str) -> list[str]:
 
 def build_relay_narrative(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                           struct: dict[str, Any] | None = None) -> str:
+    # 日线上下文：本地 vipdoc 末棒落后于 date 时按需线上补尾（2026-10-20：闭市后未跑通达信
+    # 盘后下载 → 断板钱效/隔日溢价/位置/板序/板型全不可算，现自动补当日棒）
+    with bars_need_upto(date):
+        return _build_relay_narrative_inner(db, date, dataset_id, struct)
+
+
+def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                                 struct: dict[str, Any] | None = None) -> str:
     # v6：板块/龙头结构先算一次（单一事实源）——叙事渲染与文档落库共用同一 struct，
     # 防「叙事说 A、前端说 B」三处漂移（预注册 §二/§十）。
     struct = struct if struct is not None else relay_structure(db, date, dataset_id)

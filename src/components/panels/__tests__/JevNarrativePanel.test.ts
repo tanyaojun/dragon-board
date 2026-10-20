@@ -318,3 +318,61 @@ describe('涨停生态断层标注（§十三，研究↔展示同步）', () =>
     expect(source).toContain('break-card')
   })
 })
+
+describe('JevNarrativePanel 题材龙头页签（v2 题目集投喂可见性，2026-10-20）', () => {
+  test('页签存在且消费独立读口 fetchHotlistJevThemeLeaders', () => {
+    const source = panelSource()
+    expect(source).toContain("key: 'themeLeader'")
+    expect(source).toContain('题材龙头')
+    expect(panelScriptSource()).toContain('fetchHotlistJevThemeLeaders')
+  })
+
+  test('落库口径与模型原答双显：被证据门覆盖时必须两者都可见', () => {
+    const source = panelSource()
+    // 展示侧：模型原答列 + 覆盖标记 + 门原因
+    expect(source).toContain('模型原答')
+    expect(source).toContain('tl-overridden')
+    expect(source).toContain('tl-gate-tag')
+    expect(source).toContain('THEME_GATE_NAMES')
+    // 只显示一个都是漂移：两个字段都必须被模板引用
+    expect(source).toContain('row.modelChoice')
+    expect(source).toContain('row.choice')
+  })
+
+  test('结局未封不得显示为「未续」：null 单独一档', () => {
+    const source = panelSource()
+    expect(source).toContain('row.outcomeSealedNextDay === null')
+    expect(source).toContain('未封')
+  })
+
+  test('回填样本带警示（含语料未来信息，不得当结论）', () => {
+    const source = panelSource()
+    expect(source).toContain("origin === 'backfill'")
+    expect(source).toContain('回填（含未来信息）')
+    expect(source).toContain('tl-row-backfill')
+  })
+
+  test('投喂语料按需加载（with_narrative）且展示代际戳', () => {
+    const script = panelScriptSource()
+    expect(script).toContain('fetchHotlistJevThemeLeaders(selectedDate.value, true)')
+    const source = panelSource()
+    expect(source).toContain('实际投喂语料')
+    expect(source).toContain('row.questionSetHash')
+  })
+})
+  test('语料缓存按日隔离：换日必须清缓存（P1 修复回归）', () => {
+    // 事故窗口：连板股同 code 跨日重现（603278 三连板），缓存仅以 code 为键时
+    // B 日抽屉显示 A 日语料全文，且抽屉标题挂 B 日代际戳——内容与代际错配。
+    const script = panelScriptSource()
+    expect(script).toContain('themeLeaderNarratives.value = {}')
+    // 该清缓存必须发生在 ensureThemeLeaders（换日入口）函数体内
+    const fn = script.slice(script.indexOf('async function ensureThemeLeaders'))
+    const body = fn.slice(0, fn.indexOf('\n}'))
+    expect(body).toContain('themeLeaderNarratives.value = {}')
+  })
+
+  test('语料抽屉缺失明示，不伪装「加载中」（P2 修复回归）', () => {
+    const source = panelSource()
+    expect(source).toContain('missing')
+    expect(source).toContain('该档未存投喂语料')
+  })

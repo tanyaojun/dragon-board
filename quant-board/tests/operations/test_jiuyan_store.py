@@ -27,8 +27,29 @@ class FakeCollection:
         if key in self.docs or upsert:
             self.docs[key] = doc
 
-    def find_one(self, flt):
-        return self.docs.get(flt["_id"])
+    def find_one(self, flt, projection=None):
+        doc = self.docs.get(flt["_id"])
+        if doc is None or not projection:
+            return doc
+        return {k: doc.get(k) for k, v in projection.items() if v}
+
+    def update_one(self, flt, update):
+        doc = self.docs.get(flt["_id"])
+        if doc is None:
+            return
+        for path, value in (update.get("$set") or {}).items():
+            if "." in path:
+                head, tail = path.split(".", 1)
+                doc.setdefault(head, {})[tail] = value
+            else:
+                doc[path] = value
+        for path, spec in (update.get("$push") or {}).items():
+            items = spec.get("$each") if isinstance(spec, dict) else [spec]
+            arr = list(doc.get(path) or []) + list(items or [])
+            if isinstance(spec, dict) and "$slice" in spec:
+                n = spec["$slice"]
+                arr = arr[n:] if n < 0 else arr[:n]
+            doc[path] = arr
 
     def find(self, flt=None, projection=None):
         return list(self.docs.values())
@@ -164,3 +185,77 @@ def test_session_cache_redis_down_fail_visible(monkeypatch):
     assert jiuyan_store.get_cached_session() is None
     assert jiuyan_store.save_session(session="S", source="login") is False
     jiuyan_store.clear_cached_session()
+
+
+# ── 午盘事实源保护（2026-10-20 重启自愈覆盖真午盘实测缺陷） ──────────────
+def _noon_doc(db, fetched_at, total=65):
+    save_action_doc(db, date="2026-10-20", kind="midday",
+                    parsed={"fields": [{"name": "机器人", "count": 3, "stocks": [{}, {}, {}]}],
+                            "totalStocks": total, "degradedSources": []},
+                    counts={"all": 65})
+    doc = db["jiuyan_action"].docs["2026-10-20:midday"]
+    doc["fetchedAt"] = fetched_at
+    return doc
+
+
+def test_in_midday_noon_window_boundaries():
+    assert jiuyan_store.in_midday_noon_window("2026-10-20T12:06:11")
+    assert jiuyan_store.in_midday_noon_window("2026-10-20T11:00:00")
+    assert jiuyan_store.in_midday_noon_window("2026-10-20T13:30:00")
+    assert not jiuyan_store.in_midday_noon_window("2026-10-20T14:44:01")
+    assert not jiuyan_store.in_midday_noon_window("2026-10-20T10:59:59")
+    assert not jiuyan_store.in_midday_noon_window("")
+    assert jiuyan_store.MIDDAY_NOON_WINDOW == jiuyan_store.MIDDAY_NOON_WINDOW
+
+
+def test_noon_snapshot_survives_late_heal():
+    db = FakeDB()
+    _noon_doc(db, "2026-10-20T12:06:11")
+    noon_fields = db["jiuyan_action"].docs["2026-10-20:midday"]["fields"]
+    save_action_doc(db, date="2026-10-20", kind="midday",
+                    parsed={"fields": [{"name": "公告", "count": 7, "stocks": [{}] * 7}],
+                            "totalStocks": 71, "degradedSources": []},
+                    counts={"all": 71}, fetched_at="2026-10-20T14:44:01")
+    doc = db["jiuyan_action"].docs["2026-10-20:midday"]
+    assert doc["fetchedAt"] == "2026-10-20T12:06:11", "真午盘 fetchedAt 不得被收盘后的抓取覆盖"
+    assert doc["fields"] == noon_fields and doc["totalStocks"] == 65
+    assert doc["quality"]["noonPreserved"] is True
+    assert doc["laterObservations"] == [{
+        "fetchedAt": "2026-10-20T14:44:01", "counts": {"all": 71}, "totalStocks": 71,
+        "boards": [{"name": "公告", "stocks": 7}]}]
+
+
+def test_late_heal_observations_are_bounded():
+    db = FakeDB()
+    _noon_doc(db, "2026-10-20T12:06:11")
+    for minute in range(1, 9):
+        save_action_doc(db, date="2026-10-20", kind="midday",
+                        parsed={"fields": [], "totalStocks": minute, "degradedSources": []},
+                        fetched_at=f"2026-10-20T15:{minute:02d}:00")
+    doc = db["jiuyan_action"].docs["2026-10-20:midday"]
+    assert doc["quality"]["noonPreserved"] is True
+    assert len(doc["laterObservations"]) == jiuyan_store.LATER_OBSERVATION_LIMIT
+    assert doc["laterObservations"][-1]["fetchedAt"] == "2026-10-20T15:08:00"
+
+
+def test_noon_overwrites_noon_and_pseudo_noon_is_flagged():
+    db = FakeDB()
+    # 首次就是伪午盘（无更早的真午盘）→ 照写，但显式标记窗口外，不假装是真午盘
+    save_action_doc(db, date="2026-10-20", kind="midday",
+                    parsed={"fields": [], "totalStocks": 71, "degradedSources": []},
+                    fetched_at="2026-10-20T20:04:00")
+    doc = db["jiuyan_action"].docs["2026-10-20:midday"]
+    assert doc["quality"]["noonWindowOk"] is False and doc["totalStocks"] == 71
+    assert "laterObservations" not in doc
+    # 真午盘刷新真午盘 → 正常覆盖（更新鲜的午盘数据）
+    save_action_doc(db, date="2026-10-20", kind="midday",
+                    parsed={"fields": [], "totalStocks": 66, "degradedSources": []},
+                    fetched_at="2026-10-20T12:20:00")
+    doc = db["jiuyan_action"].docs["2026-10-20:midday"]
+    assert doc["totalStocks"] == 66 and doc["quality"]["noonWindowOk"] is True
+    assert "laterObservations" not in doc
+
+
+def test_midday_source_state_and_store_share_one_window():
+    from backend.operations.jev_label_jiuyan import _MIDDAY_FETCH_WINDOW
+    assert _MIDDAY_FETCH_WINDOW == jiuyan_store.MIDDAY_NOON_WINDOW

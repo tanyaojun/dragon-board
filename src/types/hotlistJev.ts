@@ -263,6 +263,12 @@ export interface HotlistJevLimitUpStock {
   stockPhasePosition: string | null
   stockPhaseProbabilities: Record<string, number> | null
   computedAt: string | null
+  /** 涨停原因=韭研异动解析首行（2026-10-20 读口 join；缺失时字段不出现，展示 '-'） */
+  reason?: string | null
+  /** 投喂槽位：midday=12:30 午盘投喂（收盘幂等不重复投喂）/final=收盘投喂；旧档为 null */
+  labelSlot?: string | null
+  /** 打标所用韭研名单的抓取时点（原料时点可追溯，如 2026-10-20T12:06:00） */
+  jiuyanFetchedAt?: string | null
 }
 
 /** 日级相位哨兵（_id={date}:PHASE） */
@@ -285,4 +291,73 @@ export interface HotlistJevLimitUpDay {
   }
   noData: boolean
   reason: string | null
+}
+
+/** 题材层「板块龙头隔日连板」单只投喂记录（GET /api/hotlist-jev/theme-leaders）。 */
+export interface HotlistJevThemeLeaderRow {
+  /** 存档 _id（{date}:{code}） */
+  docId?: string | null
+  code: string
+  name: string | null
+  board: string | null
+  streak: number | null
+  time: string | null
+  boardN: number | null
+  ladderFollowers: number | null
+  prevBoardN: number | null
+  /** 落库口径（过证据门后）= 消费端单一事实源 */
+  choice: string | null
+  probabilities: Record<string, number> | null
+  /** 模型原答（审计用）：与 choice 不同时说明被证据门覆盖过，必须双显 */
+  modelChoice: string | null
+  modelProbabilities: Record<string, number> | null
+  catalystStage: string | null
+  gate: { applied?: boolean; reason?: string | null; label?: string | null } | null
+  evidenceMissing: boolean
+  evidenceMissingReason: string | null
+  evidenceIndustry: string | null
+  evidenceEventTitles: string[]
+  baselineKey: string | null
+  baselineMeta: { start?: string | null; end?: string | null; rows?: number } | null
+  /** 次一交易日是否仍封板；null = 结局未封（不得展示为「未续」） */
+  outcomeSealedNextDay: boolean | null
+  status: string | null
+  /** live = 当日 16:20 前瞻挂链；backfill = 事后回填（含语料未来信息，不得当结论） */
+  sampleOrigin: string
+  questionSetVersion: string | null
+  questionSetHash: string | null
+  ammoVersion: string | null
+  usage: { input_tokens?: number; output_tokens?: number } | null
+  latencyMs: number | null
+  computedAt: string | null
+  errorCode: string | null
+  errorDetail: string | null
+  /** 后端透出（2026-10-20 review P2-3 补齐）：档案 _id 中的日期部分（=读口径 date） */
+  tradingDate?: string | null
+  /** 结局回填元数据（schedule 自愈写入） */
+  outcomeMeta?: Record<string, unknown> | null
+  /** jev 模型标识（审计） */
+  model?: string | null
+  /** with_narrative=1 才返回：jev 响应原文（成功路径存解析结果的 envelope） */
+  responseRaw?: Record<string, unknown> | null
+  /** with_narrative=1 才返回：实际投喂给 jev 的语料全文 */
+  narrative?: string | null
+  /** with_narrative=1 才返回：v2 题目集原文 */
+  questionsRaw?: Record<string, unknown> | null
+}
+
+export interface HotlistJevThemeLeaderDay {
+  ok: boolean
+  date: string
+  no_data?: boolean
+  count: number
+  versions: Record<string, number>
+  mixedVersions: boolean
+  origins: Record<string, number>
+  questionSetHash: string | null
+  ammoVersion: string | null
+  statusCounts: Record<string, number>
+  gatedCount: number
+  sealedCount: number
+  leaders: HotlistJevThemeLeaderRow[]
 }

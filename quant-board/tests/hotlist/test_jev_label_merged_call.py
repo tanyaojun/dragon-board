@@ -119,7 +119,7 @@ def test_run_flag_reaches_label_call(monkeypatch):
     """run(with_stock_phase=True) 传穿到每次 _label_one 的题目集（端到端合同）。"""
     db = _FakeDb(_FakeCol())
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
     monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
@@ -140,7 +140,7 @@ def test_run_default_no_phase_questions(monkeypatch):
     """默认 run（旗标关）：题目集=四题，行为与历史逐位一致。"""
     db = _FakeDb(_FakeCol())
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
     monkeypatch.setattr(runner, "hotlist_ranks", lambda db_, date, codes, *a, **k: {})
@@ -163,7 +163,7 @@ def test_run_budget_guard_aborts_without_confirm(monkeypatch, capsys):
 
     db = _FakeDb(_FakeCol())
     monkeypatch.setattr(runner, "_db", lambda: db)
-    monkeypatch.setattr(runner, "day_population", lambda db_, date: [
+    monkeypatch.setattr(runner, "day_population", lambda db_, date, slot="final": [
         {"stock": {"code": "600825", "name": "X"}, "board": "b"}])
     monkeypatch.setattr(runner, "_strip", lambda c: c)
     fired: list = []

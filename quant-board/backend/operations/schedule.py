@@ -15,7 +15,7 @@ from backend.data.backup.mongodb_backup import get_mongodb_backup_service
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
 from backend.operations.jev_vote_winrate_ledger import build_ledger, persist as persist_winrate_ledger
 from backend.core.settings import get_settings
-from backend.snapshot_collector.trading_calendar import is_trading_day
+from backend.snapshot_collector.trading_calendar import is_trading_day, is_trading_day_cached
 
 _TZ = ZoneInfo("Asia/Shanghai")
 
@@ -23,6 +23,16 @@ _PULSE_OUT_DIR = Path("data/reports/phase-monitor")
 _PULSE_TIMEOUT_SECONDS = 2700  # SP2-B：多臂脉拍（基线+champion+≤2 挑战者）由 900 提升至 45min
 _JEV_DAILY_LINE_TIMEOUT_SECONDS = 600  # 日度一句话：单次 jev 调用（client 内部 60s）+ 规则/落库，600s 冗余
 _RELAY_INDEX_TIMEOUT_SECONDS = 600  # 连板指数：单次 jev 调用（七题一 call，实测 <1s）+ 原料拼装/落库，600s 冗余
+# 午盘投喂（12:30）：单日 ≈65 只串行 2 workers，实测 3-6 分钟；留 30 分钟给 TDX/网络拖尾
+_MIDDAY_LABEL_TIMEOUT_SECONDS = 1800
+# 480s 覆盖最坏情况：每源 = 间隔 20s + HTTP 20s + 退避 60s + 重试间隔 20s + HTTP 20s = 140s，
+# 3 源 = 420s（2026-10-20 review P1：原 300s 核算漏了重试迭代内的间隔，限流日会撞穿），
+# +60s 落库/拼装冗余。逐段先落库（jiuyan_theme_collect），超时被杀只丢未抓的源。
+# 实测 errCode=9 是短时限流，退避太短等于白打；见 theme-leader-nextday-preregistration §5.3
+_THEME_COLLECT_TIMEOUT_SECONDS = 480
+# 龙头级投喂（每日 1 call/龙头，实测 13 只 13 次调用 <2s/次 + 基线/取数）：1800s 冗余
+_THEME_LEADER_TIMEOUT_SECONDS = 1800
+_THEME_LEADER_SETTLE_TIMEOUT_SECONDS = 300   # 结局回填：纯读库+写字段
 _ARMS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "phase_pulse_arms.json"
 
 
@@ -200,11 +210,257 @@ def _run_phase_band_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+def jiuyan_midday_label_enabled() -> bool:
+    """午盘投喂开关（2026-10-20 用户裁决挂链；默认开，`JIUYAN_MIDDAY_LABEL_ENABLED=0` 可关）。"""
+    return os.environ.get("JIUYAN_MIDDAY_LABEL_ENABLED", "1") != "0"
+
+
+def run_jiuyan_midday_label_once(today: str | None = None, *,
+                                 dry_run: bool = False) -> dict[str, Any]:
+    """午盘涨停打标（12:30 调度，2026-10-20 用户裁决）：午盘名单投喂 jev，收盘不重复投喂。
+
+    门控：开关（`JIUYAN_MIDDAY_LABEL_ENABLED`）→ 交易日 → `{date}:midday` 存在且 `fetchedAt`
+    落在午盘窗（`midday_source_state`）。最后一道是防「伪午盘」：实测 2026-10-14/16/19 采集
+    进程在收盘后才启动，当日的 midday 文档是用收盘数据补写的（fetchedAt 15:20/20:04/20:23），
+    拿它做午盘投喂等于把收盘数据冒充午盘证据 → 一律拒绝，交收盘链投喂。
+
+    子进程=`jev_label_jiuyan --slot midday --confirm-budget`：
+    - 幂等=当日已 status=ok 的个股自动跳过 → 16:00 收盘链不会重复投喂同一只股票；
+    - advisory 语义：失败/跳过不翻转调用方整体 ok（研判证据链，非生产数据链）。
+    """
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run", "date": today}
+    if not jiuyan_midday_label_enabled():
+        return {"ok": True, "skipped": True, "reason": "disabled", "date": today}
+    try:
+        # 非抛错日历：python-bridge 宕机时降级为 cache/周内启发，不把「桥不可用」变成「今天不投喂」
+        trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
+        if not trading:
+            return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
+                    "calendarSource": cal_source}
+        db = repository_factory.get_runtime_mongodb_database()
+        from backend.operations.jev_label_jiuyan import midday_source_state
+        state = midday_source_state(db, today)
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        return {"ok": False, "date": today,
+                "error": {"code": "midday_gate_failed", "message": f"{type(exc).__name__}: {exc}"}}
+    if not state["ok"]:
+        return {"ok": True, "skipped": True, "date": today, "reason": state["reason"],
+                "detail": state["detail"], "fetchedAt": state["fetchedAt"]}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.jev_label_jiuyan",
+             "--start", today, "--end", today, "--slot", "midday",
+             # 挂链常态预算批准（2026-10-20 用户裁决：午盘投喂 ≈65 只/日）
+             "--confirm-budget"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_MIDDAY_LABEL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "date": today,
+                "error": {"code": "midday_label_timeout",
+                          "message": f"timeout {_MIDDAY_LABEL_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "date": today,
+                "error": {"code": "midday_label_failed",
+                          "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    labeled = degraded = None
+    verify_error: str | None = None
+    try:
+        docs = list(db["hotlist_jev_driver_labels"].find(
+            {"tradingDate": today, "labelSlot": "midday",
+             "origin": {"$ne": "phase_band_daily"}}, {"status": 1}))
+        labeled = sum(1 for d in docs if d.get("status") == "ok")
+        degraded = len(docs) - labeled
+    except Exception as exc:  # noqa: BLE001 — advisory 步不翻转整体状态
+        verify_error = f"verify_failed: {exc}"
+    result: dict[str, Any] = {"ok": True, "date": today, "labeledMidday": labeled,
+                              "degradedMidday": degraded, "sourceFetchedAt": state["fetchedAt"]}
+    if verify_error:
+        result["verifyError"] = verify_error
+    return result
+
+
+def jiuyan_theme_collect_enabled() -> bool:
+    """题材/事件语料采集开关（L3，2026-10-20；默认开，`JIUYAN_THEME_COLLECT_ENABLED=0` 可关）。"""
+    return os.environ.get("JIUYAN_THEME_COLLECT_ENABLED", "1") != "0"
+
+
+def theme_leader_label_enabled() -> bool:
+    """题材层龙头投喂开关（2026-10-20 用户裁决每日自动投喂；默认开）。"""
+    return os.environ.get("THEME_LEADER_LABEL_ENABLED", "1") != "0"
+
+
+def run_theme_leader_label_once(today: str | None = None, *,
+                                dry_run: bool = False) -> dict[str, Any]:
+    """题材层「板块龙头隔日连板」投喂（16:20 调度，2026-10-20 用户裁决挂链）。
+
+    与个股驱动链的关系：完全独立集合（`hotlist_jev_theme_leader_labels`）、独立题集代际，
+    每条 = 一个**板块龙头**（不是每只涨停股），**1 call/龙头/日**（≈13–20 次/日，
+    实测 2026-10-19：13 次真调用 29,014 tokens）。
+
+    门控：开关（`THEME_LEADER_LABEL_ENABLED`）→ 交易日（非抛错日历：bridge 宕机不丢一天）→
+    子进程自身幂等（`_id={date}:{code}` 已 `status=ok` 跳过，重跑不重复烧 token）。
+    时点选 16:20：晚于 16:10 的题材语料刷新（当日晚于收盘的催化正文先进库）与 15:35 收盘名单。
+
+    预算语义（§1.2-7）：本步属**预登记日包络**下的常态挂链（用户已批准 ≈29k tokens/交易日），
+    故直接带 `--confirm-budget`；无包络的路必须走 CLI 人工批准。
+
+    advisory 语义：失败/跳过不翻转调用方整体 ok。
+    """
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run", "date": today}
+    if not theme_leader_label_enabled():
+        return {"ok": True, "skipped": True, "reason": "disabled", "date": today}
+    try:
+        trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_leader_gate_failed", "message": f"{type(exc).__name__}: {exc}"}}
+    if not trading:
+        return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
+                "calendarSource": cal_source}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.theme_leader_label",
+             "--date", today, "--confirm-budget"],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_THEME_LEADER_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_leader_timeout",
+                          "message": f"timeout {_THEME_LEADER_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_leader_failed",
+                          "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    try:
+        result = json.loads(proc.stdout[proc.stdout.index("{"):])
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_leader_parse_failed", "message": str(exc)}}
+    out: dict[str, Any] = {"ok": bool(result.get("ok")), "date": today,
+                           "leaders": result.get("leaders"), "labeled": result.get("labeled"),
+                           "degraded": result.get("degraded"), "tokensUsed": result.get("tokensUsed"),
+                           "estimatedTokensBudgetGuard": result.get("estimatedTokensBudgetGuard"),
+                           "questionSetVersion": result.get("questionSetVersion")}
+    # 同一步顺带回填**近期未封**的次日结局（零 token，只读库 + 写 outcome 字段）：
+    # 否则 pilot 会只攒标签不攒结局，20 日门槛永远算不出来（2026-10-20 加）。
+    settled = _settle_recent_theme_leader_days(today)
+    if settled:
+        out["settledRecentDays"] = settled
+    return out
+
+
+def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict[str, Any]]:
+    """回填近 `lookback` 个交易日里**仍未封**（`outcomeSealedNextDay` 缺失/None）的结局。
+
+    - 自愈语义：某天因次日 THS 池缺失/采集中断而没封上，之后任一次挂链都会补（不靠人记得手跑）；
+    - 已封的日子不重算（幂等，省进程）；零模型调用（只读库 + 写 outcome 字段）；
+    - 单日失败只记该日结果，不翻转本步 ok（advisory）。
+    """
+    results: list[dict[str, Any]] = []
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        from backend.operations.theme_leader_baseline import trading_dates
+        days = [d for d in trading_dates(db, "2000-01-01", today) if d < today][-lookback:]
+        col = db["hotlist_jev_theme_leader_labels"]
+        for day in days:
+            pending = col.count_documents({"tradingDate": day,
+                                           "status": "ok",
+                                           "outcomeSealedNextDay": None})
+            if not pending:
+                continue
+            proc = subprocess.run(
+                [sys.executable, "scripts/theme_leader_pilot_eval.py",
+                 "--date", day, "--write-outcome"],
+                cwd=str(Path(__file__).resolve().parents[2]),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=_THEME_LEADER_SETTLE_TIMEOUT_SECONDS,
+            )
+            lines_ = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()]
+            head = [ln for ln in lines_ if "→ 次日" in ln] or lines_[-1:]
+            results.append({
+                "ok": proc.returncode == 0, "date": day, "pending": pending,
+                "summary": head[0] if head else "",
+                # 成功时不把 stderr 噪声（如政策提示 banner）当 error 上抛，避免把正常当故障看
+                "error": ((proc.stderr or "")[-200:] or None) if proc.returncode else None})
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        results.append({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    return results
+
+
+def run_jiuyan_theme_collect_once(today: str | None = None, *,
+                                  dry_run: bool = False,
+                                  sources: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """韭研题材/事件语料采集（L3，2026-10-20）：板块级催化原文 + 投资日历 + 事件时间轴。
+
+    时点与分源（2026-10-20 额度实测后定）：
+    - 盘前 08:45：只要**事件日历**（`timeline_news,timeline_list`）——当日/未来 1-3 日既定事件；
+    - 收盘后 16:10：只要**板块催化正文**（`ai_industry`）——当日催化刷新。
+    理由：题材端点（`/jystock-app/api/v1/*`）有独立日额度，实测被探测烧穿后当天全灭
+    （errCode=9 但 msg 伪装「服务繁忙」）。故调度**拆分源**（每日 3 次调用而非 6 次）并叠加
+    调用计数护栏（`JIUYAN_THEME_DAILY_CALL_BUDGET`）。
+
+    门控 = 开关 → 交易日；多源互相独立，任一源失败只降级该源（§4.0 fail-visible）。
+    只落 `jiuyan_timeline` / `jiuyan_ai_industry`，不碰异动与打标链（advisory 步）。
+    """
+    today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run", "date": today}
+    if not jiuyan_theme_collect_enabled():
+        return {"ok": True, "skipped": True, "reason": "disabled", "date": today}
+    try:
+        # 研究证据链用非抛错日历（bridge 宕机 → cache → 周内启发），不因 python-bridge 不在而丢一整天语料
+        trading, cal_source = is_trading_day_cached(datetime.strptime(today, "%Y-%m-%d").date())
+    except Exception as exc:  # noqa: BLE001 — advisory 步，失败结构化返回
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_gate_failed", "message": f"{type(exc).__name__}: {exc}"}}
+    if not trading:
+        return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
+                "calendarSource": cal_source}
+    try:
+        cmd = [sys.executable, "-m", "backend.operations.jiuyan_theme_collect", "--date", today]
+        if sources:
+            cmd += ["--sources", ",".join(sources)]
+        proc = subprocess.run(
+            cmd,
+            cwd=str(Path(__file__).resolve().parents[2]),
+            # Windows 默认 GBK 解码会把中文输出读崩（实测 UnicodeDecodeError），显式 utf-8
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=_THEME_COLLECT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_collect_timeout",
+                          "message": f"timeout {_THEME_COLLECT_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_collect_failed",
+                          "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    try:
+        result = json.loads(proc.stdout[proc.stdout.index("{"):])
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "date": today,
+                "error": {"code": "theme_collect_parse_failed", "message": str(exc)}}
+    return {"ok": bool(result.get("ok")), "date": today,
+            "timeline": result.get("timeline"), "industry": result.get("industry"),
+            "degraded": result.get("degraded") or [],
+            "callsUsedToday": result.get("callsUsedTodayAfter") or result.get("callsUsedToday"),
+            "skippedByBudget": result.get("skippedByBudget") or []}
+
+
 def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     """个股驱动打标日增量（advisory 步，2026-10-03 用户裁决挂链）。
 
     - 门控与相位哨兵同源（当日 jiuyan final + 15:00 盘面帧）；
     - 子进程=jev_label_jiuyan --start/--end 当日（幂等：已 ok 标签自动跳过，≈21 万 tokens/交易日，用户裁决挂链）；
+    - 午盘已投喂的个股（labelSlot=midday，2026-10-20 起）在本步**幂等跳过**：单日每股只投喂一次。
     - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok（证据链积累，非生产数据链）。
     """
     if dry_run:

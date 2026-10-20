@@ -69,8 +69,13 @@ class SnapshotCollectorScheduler:
         self._completed_today: set[str] = set()
         self._completed_date: str | None = None
         # 韭研公社异动支线（交易日 12:05 midday / 15:35 final，每日各 ≤1 次）
+        # + 午盘投喂（12:30，2026-10-20 用户裁决：午盘名单投喂 jev，收盘链幂等跳过）
         self._jiuyan_task: asyncio.Task[None] | None = None
         self._jiuyan_last: dict[str, Any] | None = None
+        self._jiuyan_label_last: dict[str, Any] | None = None
+        self._jiuyan_theme_last: dict[str, Any] | None = None
+        # 题材层龙头投喂（16:20，2026-10-20 用户裁决：每日 ≈29k tokens 包络，幂等）
+        self._theme_leader_last: dict[str, Any] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -140,6 +145,9 @@ class SnapshotCollectorScheduler:
             "error_count": self._error_count,
             "in_flight_slots": sorted(self._in_flight_slots),
             "jiuyan": self._jiuyan_last,
+            "jiuyanLabel": self._jiuyan_label_last,
+            "jiuyanTheme": self._jiuyan_theme_last,
+            "themeLeader": self._theme_leader_last,
         }
 
     # ── timer loop ──────────────────────────────────────────────────────────
@@ -496,11 +504,54 @@ _JIUYAN_ATTEMPTS = (
     (datetime.time(15, 35), "final"),
 )
 
+# 题材/事件语料采集时点（L3，2026-10-20）：盘前 08:45 只取事件日历（当日+未来 1-3 日既定事件），
+# 收盘后 16:10 只刷新板块催化正文。分源的理由：题材端点有独立日额度（实测被探测烧穿后当天全灭），
+# 每日调用从 6 次降到 3 次；只写 jiuyan_timeline / jiuyan_ai_industry。
+_JIUYAN_THEME_EVENT_SOURCES = ("timeline_news", "timeline_list")
+_JIUYAN_THEME_INDUSTRY_SOURCES = ("ai_industry",)
+_JIUYAN_THEME_ATTEMPTS = (
+    (datetime.time(8, 45), "preopen", _JIUYAN_THEME_EVENT_SOURCES),
+    (datetime.time(16, 10), "postclose", _JIUYAN_THEME_INDUSTRY_SOURCES),
+)
+
+# 午盘投喂时点（2026-10-20 用户裁决）：12:05 午盘名单落库后隔 25 分钟再喂 jev
+# （名单覆盖稳定 + 避免与采集抢网络）；16:00 收盘链对已投喂个股幂等跳过。
+_JIUYAN_MIDDAY_LABEL_AT = datetime.time(12, 30)
+
+# 题材层龙头投喂时点（2026-10-20 用户裁决「每日自动投喂、累积到 20 交易日」）：
+# 16:20 = 晚于 16:10 题材语料刷新（当日催化正文先入库）+ 15:35 收盘名单；
+# 每日 1 call/龙头（实测 13 只 ≈29k tokens/日），子进程幂等（同股同日不重复投喂）。
+_THEME_LEADER_LABEL_AT = datetime.time(16, 20)
+# 失败重试：每日最多 3 次，间隔 ≥10 分钟（防一次通道抖动吃掉整天 pilot 样本）
+_THEME_LEADER_MAX_ATTEMPTS = 3
+_THEME_LEADER_RETRY_AFTER = datetime.timedelta(minutes=10)
+
+
+def _parse_iso(v: Any) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.fromisoformat(str(v)) if v else None
+    except (TypeError, ValueError):
+        return None
+
 
 def jiuyan_enabled() -> bool:
     import os
 
     return os.environ.get("JIUYAN_ENABLED", "1") != "0"
+
+
+def jiuyan_theme_collect_enabled() -> bool:
+    """题材语料采集开关（L3；默认开，`JIUYAN_THEME_COLLECT_ENABLED=0` 关闭）。"""
+    import os
+
+    return os.environ.get("JIUYAN_THEME_COLLECT_ENABLED", "1") != "0"
+
+
+def jiuyan_midday_label_enabled() -> bool:
+    """午盘投喂开关（2026-10-20 用户裁决挂链；默认开，`JIUYAN_MIDDAY_LABEL_ENABLED=0` 关闭）。"""
+    import os
+
+    return os.environ.get("JIUYAN_MIDDAY_LABEL_ENABLED", "1") != "0"
 
 
 async def run_jiuyan_attempt(date: str, kind: str) -> dict:
@@ -512,6 +563,9 @@ async def run_jiuyan_attempt(date: str, kind: str) -> dict:
 async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
     """交易日 12:05 采 midday、15:35 采 final（每日各 ≤1 次）；authFailed 自愈重试一次
     （清缓存重新解析，可触发浏览器铸造/登录，见 jiuyan_auth），仍失败如实记状态。
+
+    12:30 追加「午盘投喂」一步（2026-10-20 用户裁决）：调 `run_jiuyan_midday_label_once`
+    把午盘涨停名单喂给 jev 打标；午盘已投喂的个股在 16:00 收盘链幂等跳过（单日每股一次）。
 
     与主采集循环互不阻塞（collect 走 asyncio.to_thread）。60s 轮询足够（时点粒度=分钟）。
     """
@@ -538,6 +592,70 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                         logger.info("jiuyan collect %s %s: %s", kind, trading_date,
                                     json.dumps(result, ensure_ascii=False, default=str)[:200])
                         break
+                # 题材/事件语料（L3，2026-10-20）：盘前 08:45 取当日+未来事件日历，
+                # 收盘后 16:10 刷新板块催化正文。失败只记状态，不影响异动采集与打标。
+                if jiuyan_theme_collect_enabled():
+                    for theme_time, theme_kind, theme_sources in _JIUYAN_THEME_ATTEMPTS:
+                        key = f"theme:{theme_kind}"
+                        if key in state["done"]:
+                            continue
+                        if (now.hour, now.minute) >= (theme_time.hour, theme_time.minute):
+                            state["done"].add(key)
+                            from backend.operations.schedule import run_jiuyan_theme_collect_once
+                            theme_result = await asyncio.to_thread(
+                                run_jiuyan_theme_collect_once, trading_date,
+                                sources=theme_sources)
+                            sched._jiuyan_theme_last = {
+                                **theme_result, "at": now.isoformat(timespec="seconds")}
+                            logger.info("jiuyan theme corpus %s %s: %s", theme_kind, trading_date,
+                                        json.dumps(theme_result, ensure_ascii=False,
+                                                   default=str)[:200])
+                            break
+                # 午盘投喂（2026-10-20 用户裁决）：12:30 用当日午盘名单喂 jev；
+                # 子进程内部再卡一次「午盘名单 fetchedAt 窗口」，重启补跑时不会拿收盘数据冒充午盘
+                # 题材层龙头投喂（16:20）：独立集合/独立题集代际。
+                # **限次退避重试**：失败（通道/取数/子进程）不一次判死——否则 8001 重启撞上
+                # 通道短暂不可用就会让那一天永远补不上（2026-10-20 实测：代理挂 → 9/9 degraded）。
+                # 规则：每日最多 `_THEME_LEADER_MAX_ATTEMPTS` 次，两次间隔 ≥ `_THEME_LEADER_RETRY_AFTER`。
+                if now.time() >= _THEME_LEADER_LABEL_AT:
+                    from backend.operations.schedule import (
+                        run_theme_leader_label_once, theme_leader_label_enabled)
+                    if theme_leader_label_enabled():
+                        attempts = int(state.get("theme_leader_attempts") or 0)
+                        prev = sched._theme_leader_last or {}
+                        prev_at = _parse_iso(prev.get("at"))
+                        retry_due = (
+                            not prev.get("ok")
+                            and attempts < _THEME_LEADER_MAX_ATTEMPTS
+                            and (prev_at is None
+                                 or (now - prev_at).total_seconds() >= _THEME_LEADER_RETRY_AFTER.total_seconds())
+                        )
+                        first_run = "theme_leader_label" not in state["done"]
+                        if first_run or retry_due:
+                            if first_run:
+                                state["done"].add("theme_leader_label")
+                            state["theme_leader_attempts"] = attempts + 1
+                            if attempts and not first_run:
+                                logger.info("theme leader label 重试第 %s 次（%s）",
+                                            attempts + 1, trading_date)
+                            leader_result = await asyncio.to_thread(
+                                run_theme_leader_label_once, trading_date)
+                            sched._theme_leader_last = {
+                                **leader_result, "attempt": attempts + 1,
+                                "at": now.isoformat(timespec="seconds")}
+                            logger.info("theme leader label %s: %s", trading_date,
+                                        json.dumps(leader_result, ensure_ascii=False,
+                                                   default=str)[:200])
+                if ("midday_label" not in state["done"] and jiuyan_midday_label_enabled()
+                        and now.time() >= _JIUYAN_MIDDAY_LABEL_AT):
+                    state["done"].add("midday_label")
+                    from backend.operations.schedule import run_jiuyan_midday_label_once
+                    label_result = await asyncio.to_thread(
+                        run_jiuyan_midday_label_once, trading_date)
+                    sched._jiuyan_label_last = {**label_result,
+                                                "at": now.isoformat(timespec="seconds")}
+                    logger.info("jiuyan midday label %s: %s", trading_date,
+                                json.dumps(label_result, ensure_ascii=False, default=str)[:200])
             await asyncio.sleep(60)
         except asyncio.CancelledError:
             raise

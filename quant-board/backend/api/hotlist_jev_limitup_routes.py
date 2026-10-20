@@ -9,7 +9,10 @@
 """
 from __future__ import annotations
 
+import os
 from typing import Any
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
@@ -62,6 +65,9 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                 info = board_info.get(str(stock.get("code") or "")[-6:])
                 if info:
                     stock["boards"] = info["boards"]
+                    # 涨停原因（2026-10-20 用户需求）：韭研异动解析首行（如 603278
+                    # 「人形机器人（金属腱绳）+商业航天+光伏+轮胎」）；缺失 → None（前端 '-'，不伪造）
+                    stock["reason"] = info.get("reason")
                     # 2026-10-15 增补：days=num「N天M板」的 N（跨度天数），与 boards 一并透传，
                     # 前端「高度」列拼「N天M板」（5天5板）；None=num 不可解析，前端回落「M板」不猜天数
                     stock["days"] = info.get("days")
@@ -102,3 +108,195 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
         return result
     except Exception as exc:  # noqa: BLE001 — 读口错误显式返回（fail-visible）
         return JSONResponse(status_code=502, content={"ok": False, "reason": f"db error: {exc}"})
+
+
+# ── 题材层「板块龙头隔日连板」投喂读口（2026-10-20 加） ──
+# 集合：hotlist_jev_theme_leader_labels（16:20 每日投喂 / 或 scripts/theme_leader_pilot_eval 回填）
+# 目的：让「v2 题目集 + 实际投喂的语料」在前端可见（研究↔展示同步，AGENTS §1.2-5）。
+# 纯读；无文档 → no_data=true（fail-visible，不伪造空成功）。
+@router.get("/theme-leaders")
+def get_theme_leaders(date: str | None = None, start: str | None = None,
+                      end: str | None = None, with_narrative: int = 0) -> Any:
+    """龙头投喂读口：逐只结构事实 + 过门后答案 + 模型原答 + （可选）叙事全文。
+
+    两种查询形态（二选一）：
+    - `date=YYYY-MM-DD`：单日（根前端 JevNarrativePanel 消费，合同不变）；
+    - `start`/`end`：闭区间（relay_page【题材龙头】子页与连板指数时间范围控件共用）。
+      两参可只给其一（start=只看某日之后；end=只看某日之前）。
+
+    - `with_narrative=1`：附带 `narrative`（实际投喂给 jev 的语料全文）与 `questionsRaw`
+      （v2 题目集原文）——用于前端「投喂语料」抽屉；
+    - `evidenceMissingReason` / `gate.reason` 逐只透出（口径差异必须人眼可见）；
+    - `sampleOrigin` 区分 live 前瞻 / backfill 回填（回填含语料未来信息，不得当结论）。
+    """
+    # 无参 = 全量（relay_page 时间范围选「全部」时 start/end 均空）；根前端始终带 date。
+    # date 与 start/end 同给时 date 优先（docstring 二选一契约）。
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        col = db["hotlist_jev_theme_leader_labels"]
+        query: dict[str, Any] = {}
+        if date:
+            query["tradingDate"] = date
+        else:
+            rng: dict[str, Any] = {}
+            if start:
+                rng["$gte"] = start
+            if end:
+                rng["$lte"] = end
+            if rng:
+                query["tradingDate"] = rng
+        # P2 修复（2026-10-20 review）：无区间全量加默认上限——relay_page 60s 轮询
+        # 「全部」时无界拉取会随集合增长线性放大；上限 500 档（≈两个月），截断显式回显。
+        cursor = col.find(query).sort([("tradingDate", -1), ("board", 1), ("code", 1)])
+        if not query:
+            cursor = cursor.limit(500)
+        docs = list(cursor)
+        truncated = bool(not query) and len(docs) >= 500
+        if not docs:
+            return {"ok": True, "date": date, "no_data": True, "leaders": [], "count": 0}
+        rows = []
+        for d in docs:
+            ans = (d.get("answers") or {}).get("leader_nextday_continue") or {}
+            model_ans = (d.get("modelAnswers") or {}).get("leader_nextday_continue") or {}
+            stage = d.get("answers", {}).get("catalyst_stage") or {}
+            row = {
+                "docId": d.get("_id"),
+                "tradingDate": d.get("tradingDate"),
+                "code": d.get("code"), "name": d.get("name"), "board": d.get("board"),
+                "streak": (d.get("structure") or {}).get("streak"),
+                "time": (d.get("structure") or {}).get("time"),
+                "boardN": (d.get("structure") or {}).get("boardN"),
+                "ladderFollowers": (d.get("structure") or {}).get("ladderFollowers"),
+                "prevBoardN": (d.get("structure") or {}).get("prevBoardN"),
+                # 落库口径（过门后）= 消费端单一事实源
+                "choice": ans.get("choice"),
+                "probabilities": ans.get("probabilities"),
+                # 模型原答（审计；与落库口径不一致时前端要双显，不得只显示一个）
+                "modelChoice": model_ans.get("choice"),
+                "modelProbabilities": model_ans.get("probabilities"),
+                "catalystStage": stage.get("choice"),
+                "gate": d.get("gate"),
+                "evidenceMissing": bool(d.get("evidenceMissing")),
+                "evidenceMissingReason": d.get("evidenceMissingReason"),
+                "evidenceIndustry": d.get("evidenceIndustry"),
+                "evidenceEventTitles": d.get("evidenceEventTitles") or [],
+                "baselineKey": d.get("baselineKey"),
+                "baselineMeta": d.get("baselineMeta"),
+                "outcomeSealedNextDay": d.get("outcomeSealedNextDay"),
+                "outcomeMeta": d.get("outcomeMeta"),
+                "status": d.get("status"),
+                "sampleOrigin": d.get("sampleOrigin") or "live",
+                "questionSetVersion": d.get("questionSetVersion"),
+                "questionSetHash": d.get("questionSetHash"),
+                "ammoVersion": d.get("ammoVersion"),
+                "usage": d.get("usage"),
+                "latencyMs": d.get("latencyMs"),
+                "model": d.get("model"),
+                "computedAt": d.get("computedAt"),
+                "errorCode": d.get("errorCode"),
+                "errorDetail": d.get("errorDetail"),
+            }
+            if with_narrative:
+                row["narrative"] = d.get("narrative")
+                row["questionsRaw"] = d.get("questionsRaw")
+                row["responseRaw"] = d.get("responseRaw")
+            rows.append(row)
+        # 代际/来源分布（跨代混评是硬伤，前端要能一眼看出这天是不是混代）
+        versions: dict[str, int] = {}
+        origins: dict[str, int] = {}
+        for r in rows:
+            versions[str(r["questionSetVersion"])] = versions.get(str(r["questionSetVersion"]), 0) + 1
+            origins[str(r["sampleOrigin"])] = origins.get(str(r["sampleOrigin"]), 0) + 1
+        dates = sorted({str(r.get("tradingDate")) for r in rows if r.get("tradingDate")},
+                       reverse=True)
+        return {
+            "ok": True, "date": date,
+            "range": None if date else {"start": start, "end": end},
+            "dates": None if date else dates,
+            "count": len(rows),
+            "truncated": truncated,   # 无参全量触顶 500（响应注记，§4.0 不静默截断）
+            "versions": versions, "mixedVersions": len(versions) > 1,
+            "origins": origins,
+            "questionSetHash": rows[0]["questionSetHash"],
+            "ammoVersion": rows[0]["ammoVersion"],
+            "statusCounts": {s: sum(1 for r in rows if r["status"] == s)
+                             for s in {r["status"] for r in rows}},
+            "gatedCount": sum(1 for r in rows if (r.get("gate") or {}).get("applied")),
+            "sealedCount": sum(1 for r in rows if r.get("outcomeSealedNextDay") is not None),
+            "leaders": rows,
+        }
+    except Exception as exc:  # noqa: BLE001 — 读口错误显式返回（fail-visible）
+        return JSONResponse(status_code=502, content={"ok": False, "reason": f"db error: {exc}"})
+
+
+class ThemeLeaderRerunPayload(BaseModel):
+    """单只龙头-日重跑（页面【重跑】按钮；真实调用 jev ≈2.3K tokens/次）。"""
+    date: str
+    code: str
+    datasetId: str | None = None
+
+
+@router.post("/theme-leaders/rerun")
+def post_theme_leader_rerun(payload: ThemeLeaderRerunPayload) -> dict[str, Any]:
+    """单只龙头-日**重跑**（2026-10-20 用户需求，对齐 relay-index/rerun 范式）：
+
+    - 复用生产投喂入口 ``theme_leader_label.run``（叙事拼装 + ``_dispatch_jev``），
+      ``codes`` 过滤只重建命中的龙头（不过滤会整日重跑烧 30K+ tokens）；
+    - ``force=True`` 覆盖幂等（status=ok 档也重判）；失败照常落 degraded 文档；
+    - 「本次是否真重判」以 ``computedAt`` 是否刷新为准（F6）：code 不在该日龙头集合、
+      或 jev 通道不可达时**显式报错**，不得用旧档冒充成功（§4.0）。
+    """
+    if not ((os.environ.get("JEV_TYPESAFE_KEY") or "").strip()
+            or (os.environ.get("JEV_CF_TOKEN") or "").strip()):
+        return {"ok": False, "errorCode": "missing_token",
+                "error": "JEV_TYPESAFE_KEY / JEV_CF_TOKEN not configured"}
+    date = (payload.date or "").strip()
+    code = (payload.code or "").strip()
+    if not date or not code:
+        return {"ok": False, "errorCode": "bad_payload", "error": "date and code required"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
+        from backend.operations.theme_leader_label import COLLECTION, SAMPLE_ORIGIN_LIVE, run
+
+        col = db[COLLECTION]
+        # P1 修复（2026-10-20 review）：before 带出 sampleOrigin —— 重跑必须透传旧档起源，
+        # 否则 run() 默认 live 会把 backfill 档静默翻成 live（泄漏进前瞻合计，破坏分组隔离）。
+        before = col.find_one({"_id": f"{date}:{code}"}, {"computedAt": 1, "sampleOrigin": 1})
+        before_at = (before or {}).get("computedAt")
+        # P1 修复：datasetId 缺省必须用 DEFAULT_DATASET_ID（传 None 会查不到 snapshot_frames，
+        # 重跑叙事的盘面事实行恒降级，且 force 覆盖掉原 ok 档）。
+        summary = run(date, confirm_budget=True, force=True,
+                      codes={code},
+                      dataset_id=payload.datasetId or DEFAULT_DATASET_ID,
+                      sample_origin=(before or {}).get("sampleOrigin") or SAMPLE_ORIGIN_LIVE)
+        doc = col.find_one({"_id": f"{date}:{code}"})
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"theme_leader_rerun_failed: {exc}"}
+    if doc is None:
+        return {"ok": False, "errorCode": "not_written",
+                "error": f"{date}:{code} 无存档（该 code 不在当日龙头集合，或韭研 final 缺失）"}
+    if before is not None and doc.get("computedAt") == before_at:
+        return {"ok": False, "errorCode": "not_rerun",
+                "error": f"{date}:{code} computedAt 未刷新（入口跳过或幂等命中，未真重判）"}
+    return {
+        "ok": True,
+        "summary": {"labeled": summary.get("labeled"), "okCount": summary.get("ok"),
+                    "degraded": summary.get("degraded"),
+                    "tokensUsed": summary.get("tokensUsed")},
+        "doc": {
+            "tradingDate": doc.get("tradingDate"), "code": doc.get("code"),
+            "name": doc.get("name"), "board": doc.get("board"),
+            "status": doc.get("status"),
+            "sampleOrigin": doc.get("sampleOrigin"),
+            "choice": (doc.get("answers") or {}).get("leader_nextday_continue", {}).get("choice"),
+            "gate": doc.get("gate"),
+            "model": doc.get("model"), "usage": doc.get("usage"),
+            "latencyMs": doc.get("latencyMs"),
+            "errorCode": doc.get("errorCode"), "errorDetail": doc.get("errorDetail"),
+            "computedAt": doc.get("computedAt"),
+        },
+    }

@@ -598,6 +598,125 @@
               <div v-else class="empty-row">该驱动类型下暂无个股</div>
             </template>
           </section>
+
+          <!-- 题材龙头：v2 题目集 + 实际投喂语料可见性（2026-10-20） -->
+          <section v-show="view === 'themeLeader'" class="tab-pane">
+            <div v-if="themeLeaderLoading" class="empty-row">题材龙头投喂加载中…</div>
+            <div v-else-if="themeLeaderError" class="state-block error">
+              ⚠️ {{ themeLeaderError }}
+              <button class="retry-btn" @click="selectedDate && ensureThemeLeaders(selectedDate)">重试</button>
+            </div>
+            <div v-else-if="!selectedDate" class="empty-row">窗口内无选中交易日</div>
+            <div v-else-if="themeLeaderDay?.no_data" class="empty-row">
+              {{ themeLeaderDay.date }} 无题材龙头投喂记录（该日未跑 16:20 槽位或未回填）
+            </div>
+            <template v-else-if="themeLeaderDay">
+              <div class="tl-meta">
+                <span class="tl-meta-chip">题目集 {{ themeLeaderDay.versions ? Object.keys(themeLeaderDay.versions).join('/') : '-' }} · {{ themeLeaderDay.questionSetHash ?? '-' }}</span>
+                <span class="tl-meta-chip">原料 {{ themeLeaderDay.ammoVersion ?? '-' }}</span>
+                <span class="tl-meta-chip">共 {{ themeLeaderDay.count }} 只</span>
+                <span class="tl-meta-chip" :class="{ warn: themeLeaderDay.gatedCount > 0 }">证据门覆盖 {{ themeLeaderDay.gatedCount }}</span>
+                <span class="tl-meta-chip">结局已封 {{ themeLeaderDay.sealedCount }}/{{ themeLeaderDay.count }}</span>
+                <span v-for="(n, origin) in themeLeaderDay.origins" :key="`o-${origin}`" class="tl-meta-chip"
+                  :class="{ warn: origin === 'backfill' }">
+                  {{ origin === 'backfill' ? '回填（含未来信息）' : '前瞻' }} {{ n }}
+                </span>
+              </div>
+              <div v-if="themeLeaderDay.mixedVersions" class="tl-warn-row">
+                ⚠️ 该日存在多代际标签（{{ Object.entries(themeLeaderDay.versions).map(([v, n]) => `${v}=${n}`).join('，') }}），跨代不可比较
+              </div>
+              <div class="limitup-controls">
+                <div class="search-box">
+                  <input type="text" v-model="themeLeaderSearch" placeholder="搜索代码/名称/板块..." class="search-input" />
+                  <span v-if="themeLeaderSearch" class="search-clear" @click="themeLeaderSearch = ''">✕</span>
+                </div>
+                <div class="sort-controls">
+                  <select v-model="themeLeaderOriginFilter" class="sort-select">
+                    <option value="">全部来源</option>
+                    <option value="live">仅前瞻</option>
+                    <option value="backfill">仅回填</option>
+                  </select>
+                </div>
+              </div>
+              <div class="limitup-table-container" v-if="filteredThemeLeaders.length">
+                <table class="limitup-table tl-table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>板块</th>
+                      <th>龙头</th>
+                      <th>连板</th>
+                      <th>封板</th>
+                      <th>家数</th>
+                      <th>续板概率</th>
+                      <th>档位</th>
+                      <th>模型原答</th>
+                      <th>催化阶段</th>
+                      <th>题材证据</th>
+                      <th>同桶基线</th>
+                      <th>结局</th>
+                      <th>语料</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template v-for="(row, i) in filteredThemeLeaders" :key="row.code">
+                      <tr :class="{ 'tl-row-backfill': row.sampleOrigin === 'backfill' }">
+                        <td class="num">{{ i + 1 }}</td>
+                        <td>{{ row.board ?? '-' }}</td>
+                        <td>{{ row.name ?? '-' }} <span class="limitup-code">{{ row.code }}</span></td>
+                        <td class="num">{{ row.streak ?? '-' }}</td>
+                        <td class="num">{{ row.time ?? '-' }}</td>
+                        <td class="num">{{ row.boardN ?? '-' }}</td>
+                        <td class="num">{{ themeContinueProb(row) }}</td>
+                        <td>
+                          <span :class="['tl-choice', `tl-choice-${row.choice ?? 'none'}`]">
+                            {{ THEME_LEADER_CHOICE_NAMES[row.choice ?? ''] ?? row.choice ?? '-' }}
+                          </span>
+                        </td>
+                        <td :title="row.gate?.label ?? ''">
+                          <template v-if="row.modelChoice && row.modelChoice !== row.choice">
+                            <span class="tl-overridden">{{ THEME_LEADER_CHOICE_NAMES[row.modelChoice] ?? row.modelChoice }}</span>
+                            <span class="tl-gate-tag">{{ THEME_GATE_NAMES[row.gate?.reason ?? ''] ?? row.gate?.reason }}</span>
+                          </template>
+                          <span v-else class="tl-same">同档位</span>
+                        </td>
+                        <td>{{ row.catalystStage ?? '-' }}</td>
+                        <td :title="(row.evidenceEventTitles ?? []).join('\n')">
+                          {{ row.evidenceIndustry ?? (row.evidenceMissingReason ? `缺失：${THEME_GATE_NAMES[row.evidenceMissingReason] ?? row.evidenceMissingReason}` : '已映射') }}
+                        </td>
+                        <td class="num" :title="`窗口 ${row.baselineMeta?.start ?? '-'} ~ ${row.baselineMeta?.end ?? '-'}（${row.baselineMeta?.rows ?? 0} 样本）`">
+                          {{ row.baselineKey ?? '-' }}
+                        </td>
+                        <td class="num">
+                          <span v-if="row.outcomeSealedNextDay === null" class="tl-unsealed">未封</span>
+                          <span v-else-if="row.outcomeSealedNextDay" class="tl-win">续板</span>
+                          <span v-else class="tl-lose">未续</span>
+                        </td>
+                        <td>
+                          <button class="retry-btn" @click="toggleThemeNarrative(row.code)">
+                            {{ themeLeaderOpenCode === row.code ? '收起' : '查看' }}
+                          </button>
+                        </td>
+                      </tr>
+                      <tr v-if="themeLeaderOpenCode === row.code" class="tl-narrative-row">
+                        <td colspan="14">
+                          <div class="tl-narrative-title">实际投喂语料（{{ row.questionSetVersion }} · {{ row.questionSetHash }}）</div>
+                          <pre v-if="themeLeaderNarratives[row.code]?.missing" class="tl-narrative">（该档未存投喂语料：旧文档或降级路径未落 narrative；可重跑后回看）</pre>
+                          <pre v-else class="tl-narrative">{{ themeLeaderNarratives[row.code]?.narrative ?? '加载中…' }}</pre>
+                          <div v-if="row.modelChoice && row.modelChoice !== row.choice" class="tl-gate-note">
+                            证据门覆盖：模型原答 {{ THEME_LEADER_CHOICE_NAMES[row.modelChoice] ?? row.modelChoice }}
+                            → 落库 {{ THEME_LEADER_CHOICE_NAMES[row.choice ?? ''] ?? row.choice }}
+                            （{{ row.gate?.label ?? row.gate?.reason ?? '证据缺失' }}）
+                          </div>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else class="empty-row">该筛选下暂无龙头</div>
+            </template>
+          </section>
         </template>
       </div>
     </div>
@@ -608,6 +727,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import {
   fetchHotlistJevLimitUpLabels,
+  fetchHotlistJevThemeLeaders,
   fetchHotlistJevRange,
   fetchHotlistJevSeries,
   JEV_BUYSIDE_NAMES,
@@ -645,7 +765,15 @@ import {
   type JevNarrativeProjection,
   type LimitUpSortKey,
 } from '@/services/hotlist/jevNarrativeProjection'
-import type { HotlistJevDoc, HotlistJevDayEntry, HotlistJevLimitUpDay, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
+import type {
+  HotlistJevDoc,
+  HotlistJevDayEntry,
+  HotlistJevLimitUpDay,
+  HotlistJevLimitUpStock,
+  HotlistJevMissingDay,
+  HotlistJevThemeLeaderDay,
+  HotlistJevThemeLeaderRow,
+} from '@/types/hotlistJev'
 
 const props = defineProps<{ visible: boolean; triggerRect?: DOMRect | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -658,6 +786,7 @@ const TABS = [
   { key: 'narrative', label: '叙事全文', icon: '📜' },
   { key: 'raw', label: '原始返回', icon: '🧾' },
   { key: 'limitup', label: '涨停复盘', icon: '🏷️' },
+  { key: 'themeLeader', label: '题材龙头', icon: '👑' },
 ] as const
 type ViewKey = (typeof TABS)[number]['key']
 
@@ -808,6 +937,110 @@ async function ensureLimitUp(date: string) {
 
 watch([view, selectedDate], ([tab, date]) => {
   if (tab === 'limitup' && date) void ensureLimitUp(date)
+})
+
+// ---------- 题材龙头（v2 题目集投喂可见性，2026-10-20） ----------
+// 存在理由：v2 判据与实际投喂语料必须在前端可见（AGENTS §1.2-5 研究↔展示同步）。
+// 落库口径（过门后）与模型原答**双显**；回填样本（sampleOrigin=backfill）单独打标，
+// 因为它含语料未来信息，不得当结论看。
+const themeLeaderDay = ref<HotlistJevThemeLeaderDay | null>(null)
+const themeLeaderLoading = ref(false)
+const themeLeaderError = ref<string | null>(null)
+const themeLeaderSearch = ref('')
+const themeLeaderOriginFilter = ref('')
+/** 展开查看投喂语料的个股 code（空=未展开） */
+const themeLeaderOpenCode = ref('')
+const themeLeaderNarratives = ref<Record<string, { narrative?: string | null; questionsRaw?: Record<string, unknown> | null; missing?: boolean }>>({})
+let themeLeaderReqId = 0
+
+const THEME_LEADER_CHOICE_NAMES: Record<string, string> = {
+  high_ge65: '高 ≥65%',
+  mid_45_65: '中 45-65%',
+  low_25_45: '低 25-45%',
+  verylow_lt25: '很低 <25%',
+  insufficient: '证据不足',
+}
+
+const THEME_GATE_NAMES: Record<string, string> = {
+  board_unmapped: '板块未映射',
+  corpus_not_collected: '语料未采集',
+  no_content_no_event: '无正文且无事件',
+}
+
+const filteredThemeLeaders = computed(() => {
+  const rows = themeLeaderDay.value?.leaders ?? []
+  const kw = themeLeaderSearch.value.trim().toLowerCase()
+  return rows.filter((row) => {
+    if (themeLeaderOriginFilter.value && row.sampleOrigin !== themeLeaderOriginFilter.value) return false
+    if (!kw) return true
+    return `${row.code}${row.name ?? ''}${row.board ?? ''}`.toLowerCase().includes(kw)
+  })
+})
+
+function themeContinueProb(row: HotlistJevThemeLeaderRow): string {
+  const probs = row.probabilities ?? {}
+  if (!probs.insufficient || probs.insufficient < 0.999) {
+    const sum = Object.entries(probs).reduce((acc, [key, val]) => (key === 'insufficient' ? acc : acc + Number(val)), 0)
+    if (sum > 0) return `${Math.round(sum * 100)}%`
+  }
+  // P2 修复（2026-10-20 review）：门强制 insufficient（quality<1）与模型自判 insufficient
+  // 都按「其余四档归一」显示，括号回退模型原答的双口径废除——统一为归一四档，无分可归
+  // （模型也没答）时显「-」，原答在展开行「证据门覆盖」处双显（预登记口径不变）。
+  return '-'
+}
+
+async function ensureThemeLeaders(date: string) {
+  if (!date || (themeLeaderDay.value?.date === date && !themeLeaderError.value)) return
+  const reqId = ++themeLeaderReqId
+  themeLeaderLoading.value = true
+  themeLeaderError.value = null
+  themeLeaderOpenCode.value = ''
+  // P1 修复（2026-10-20 review）：语料缓存必须按日隔离——连板股同 code 跨日重现时，
+  // 旧缓存会让 B 日抽屉显示 A 日语料全文，且标题挂 B 日代际戳（内容与代际错配）。
+  themeLeaderNarratives.value = {}
+  try {
+    const result = await fetchHotlistJevThemeLeaders(date)
+    if (reqId !== themeLeaderReqId) return
+    if (result.degraded || !result.day) {
+      themeLeaderError.value = result.reason || '题材龙头读口不可用'
+      themeLeaderDay.value = null
+    } else {
+      themeLeaderDay.value = result.day
+    }
+  } finally {
+    if (reqId === themeLeaderReqId) themeLeaderLoading.value = false
+  }
+}
+
+async function toggleThemeNarrative(code: string) {
+  if (themeLeaderOpenCode.value === code) {
+    themeLeaderOpenCode.value = ''
+    return
+  }
+  themeLeaderOpenCode.value = code
+  if (themeLeaderNarratives.value[code] || !selectedDate.value) return
+  const result = await fetchHotlistJevThemeLeaders(selectedDate.value, true)
+  if (result.degraded || !result.day) {
+    // P2 修复（§4.0）：读口失败显式可重试，不伪装「加载中」
+    themeLeaderNarratives.value = {
+      ...themeLeaderNarratives.value,
+      [code]: { narrative: null, questionsRaw: null, missing: true },
+    }
+    themeLeaderError.value = result.reason || '题材龙头读口不可用'
+    return
+  }
+  const row = result.day.leaders.find((item) => item.code === code)
+  // 命中但无 narrative（旧档/降级未保存）也明示缺失，不留永久中间态
+  themeLeaderNarratives.value = {
+    ...themeLeaderNarratives.value,
+    [code]: row
+      ? { narrative: row.narrative, questionsRaw: row.questionsRaw, missing: row.narrative == null }
+      : { narrative: null, questionsRaw: null, missing: true },
+  }
+}
+
+watch([view, selectedDate], ([tab, date]) => {
+  if (tab === 'themeLeader' && date) void ensureThemeLeaders(date)
 })
 
 // 换日重置驱动过滤与搜索：不同日驱动类型集合可能不同，残留过滤会让列表假性为空
@@ -2846,5 +3079,93 @@ onUnmounted(() => {
   padding: 8px 12px;
   font-size: 12px;
   margin-bottom: 10px;
+}
+
+/* ── 题材龙头（v2 题目集投喂可见性，2026-10-20） ── */
+.tl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.tl-meta-chip {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  background: rgba(120, 140, 180, 0.18);
+  color: var(--text-secondary, #9aa7bd);
+}
+.tl-meta-chip.warn {
+  background: rgba(220, 150, 60, 0.22);
+  color: #e0a95c;
+}
+.tl-warn-row {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 3px solid #e0a95c;
+  background: rgba(220, 150, 60, 0.1);
+  font-size: 12px;
+  color: #e0a95c;
+}
+.tl-table {
+  font-size: 12px;
+}
+.tl-row-backfill {
+  opacity: 0.82;
+}
+.tl-choice {
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: rgba(120, 140, 180, 0.2);
+}
+.tl-choice-high_ge65 { background: rgba(220, 90, 90, 0.3); color: #e88; }
+.tl-choice-mid_45_65 { background: rgba(220, 170, 60, 0.28); color: #e0b45c; }
+.tl-choice-low_25_45 { background: rgba(90, 170, 220, 0.24); color: #7fb6dc; }
+.tl-choice-verylow_lt25 { background: rgba(120, 140, 180, 0.22); color: #9aa7bd; }
+.tl-choice-insufficient { background: rgba(140, 140, 140, 0.22); color: #9a9a9a; }
+.tl-overridden {
+  color: #e0a95c;
+  margin-right: 4px;
+}
+.tl-gate-tag {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(220, 150, 60, 0.22);
+  color: #e0a95c;
+}
+.tl-same {
+  color: var(--text-tertiary, #6b7787);
+  font-size: 11px;
+}
+.tl-win { color: #67c07a; }
+.tl-lose { color: #c9757a; }
+.tl-unsealed { color: var(--text-tertiary, #6b7787); }
+.tl-narrative-row td {
+  background: rgba(0, 0, 0, 0.18);
+}
+.tl-narrative-title {
+  font-size: 11px;
+  color: #7fb6dc;
+  margin-bottom: 4px;
+}
+.tl-narrative {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text-secondary, #b6c0d0);
+}
+.tl-gate-note {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #e0a95c;
 }
 </style>

@@ -27,8 +27,29 @@ class FakeCollection:
         if key in self.docs or upsert:
             self.docs[key] = doc
 
-    def find_one(self, flt):
-        return self.docs.get(flt["_id"])
+    def find_one(self, flt, projection=None):
+        doc = self.docs.get(flt["_id"])
+        if doc is None or not projection:
+            return doc
+        return {k: doc.get(k) for k, v in projection.items() if v}
+
+    def update_one(self, flt, update):
+        doc = self.docs.get(flt["_id"])
+        if doc is None:
+            return
+        for path, value in (update.get("$set") or {}).items():
+            if "." in path:
+                head, tail = path.split(".", 1)
+                doc.setdefault(head, {})[tail] = value
+            else:
+                doc[path] = value
+        for path, spec in (update.get("$push") or {}).items():
+            items = spec.get("$each") if isinstance(spec, dict) else [spec]
+            arr = list(doc.get(path) or []) + list(items or [])
+            if isinstance(spec, dict) and "$slice" in spec:
+                n = spec["$slice"]
+                arr = arr[n:] if n < 0 else arr[:n]
+            doc[path] = arr
 
 
 class FakeDB:

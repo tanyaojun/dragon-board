@@ -7,12 +7,17 @@
   2) 弹药三新块全结构化直供（THS 身位块 / 板块地位块 / 分位盘面事实行）——不含规则情绪分（Q5 防锚定污染）。
 
 用法（Git Bash，JEV_CF_TOKEN 取自 .env.local）：
-  ./.venv/Scripts/python.exe -m backend.operations.jev_label_pilot \
+  ./.venv/Scripts/python.exe -m backend.operations.jev_label_jiuyan \
       --start 2026-09-04 --end 2026-09-29 [--dry-run] [--workers 2]
+  # 午盘槽位（12:30 调度投喂午盘名单，收盘链幂等跳过）：
+  ./.venv/Scripts/python.exe -m backend.operations.jev_label_jiuyan \
+      --start 2026-10-20 --end 2026-10-20 --slot midday --confirm-budget
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
 import json
 import os
 import threading
@@ -30,6 +35,8 @@ from backend.analysis.hotlist.jev_driver_ammo import (
     QUESTION_SET_VERSION_PHASE_BAND,
     QUESTIONS_PHASE,
     QUESTIONS_STOCK,
+    QUESTIONS_STOCK_BUYSIDE,
+    QUESTIONS_STOCK_BUYSIDE_WITH_PHASE,
     QUESTIONS_STOCK_PHASE,
     QUESTIONS_STOCK_WITH_PHASE,
     THS_KEYS,
@@ -40,7 +47,16 @@ from backend.analysis.hotlist.jev_driver_ammo import (
     percentile_rank,
 )
 from backend.analysis.hotlist import jev_driver_ammo as ammo
+from backend.analysis.hotlist import jev_carry_forward as carry_mod
+from backend.analysis.hotlist.jev_carry_forward import (
+    CARRY_KEYS,
+    MAX_GAP_TRADING_DAYS,
+    carry_decision,
+    compress_narrative,
+    expound_signature,
+)
 from backend.core.limit_rules import is_limit_down_pct, limit_ratio
+from backend.operations import jiuyan_store
 from backend.operations.market_dieban_pool import (
     FULL_MARKET_SOURCES,
     SOURCE_EM,
@@ -159,6 +175,23 @@ def _jiuyan_days_boards(stock: dict) -> tuple[int | None, int | None]:
     days = int(m.group(1))
     boards = int(m.group(2))
     return (days if days > 0 else None), (boards if boards > 0 else None)
+
+
+def expound_reason(stock: dict) -> str | None:
+    """韭研「异动解析」首行 = 涨停原因（2026-10-20 用户需求：涨停复盘加【原因】列）。
+
+    实测（603278 大业股份 10-16/10-19/10-20 三天）：`expound` 首行就是题材归因短句
+    「人形机器人（金属腱绳）+商业航天+光伏+轮胎」，次行起才是 1/2/3 逐条核实段落，
+    因此取**第一条非空行原样输出**，不做启发式改写、不裁剪长度（前端按列宽截断+title 展示全文）。
+    `expound` 缺失时才回退文档内同义字段 `reason`（历史 schema 有此键，实测恒为 None）；
+    两者皆空 → None（前端显示 '-'，不伪造原因，AGENTS §4.0）。
+    """
+    for line in str(stock.get("expound") or "").splitlines():
+        text = line.strip()
+        if text:
+            return text
+    fallback = str(stock.get("reason") or "").strip()
+    return fallback or None
 
 
 def _range_height_text(entry: dict) -> str:
@@ -392,7 +425,8 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
     doc = db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"},
         {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1,
-         "fields.stocks.name": 1, "fields.name": 1})
+         "fields.stocks.name": 1, "fields.stocks.expound": 1, "fields.stocks.reason": 1,
+         "fields.name": 1})
     fields = (doc or {}).get("fields") or []
     final_found = any(field.get("stocks") for field in fields)
     failed_today, ths_found = _ths_failed_items(db, date)
@@ -415,7 +449,9 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
             if code and code not in out:
                 days, boards = _jiuyan_days_boards(stock)
                 info = {"boards": boards, "days": days, "limitUpTime": stock.get("time"),
-                        "boardName": field.get("name")}
+                        "boardName": field.get("name"),
+                        # 涨停复盘【原因】列（2026-10-20）：异动解析首行，缺失 None 不伪造
+                        "reason": expound_reason(stock)}
                 if ths_found and code in failed_today:
                     info["zhaban"] = True
                     if failed_today[code].get("open_num") is not None:
@@ -906,6 +942,32 @@ _LOCAL_TAKE = _TDX_DEFAULT_TAKE
 _LOCAL_ROOT_CACHE: list[Any] = []   # 进程内惰性解析的通达信目录
 _LOCAL_MISS: set[str] = set()       # 本地无文件/不可用的 code（进程内，免反复 stat）
 _BARS_LOCK = threading.Lock()
+# 线上补尾（2026-10-20 实测缺陷）：本地 vipdoc 末棒落后于叙事目标日时（闭市后未跑通达信
+# 盘后下载），旧逻辑是「本地文件存在即用」→ 今日断板钱效/隔日溢价/分时位置/板序/板型
+# 全部不可算，而线上 mootdx 当天已有棒。现在按「只补本地没有的日期」合并：
+# 重叠日期一律以本地为准（本地是全历史定长源，历史数字不被线上改写 → 保持可复现）。
+_BARS_TAIL_ENV = "JEV_BARS_ONLINE_TAIL"
+_TAIL_FAIL_UNTIL: dict[str, float] = {}   # 补尾失败负缓存（防逐 code 重试风暴）
+_TAIL_FAIL_TTL = 60.0
+_TAIL_MERGED: dict[str, str] = {}         # code → 合并进来的最后日期（溯源用）
+_TAIL_FAIL_CODES: set[str] = set()        # 补尾失败且线上也无该日期的 code（fail-visible 计数）
+_TAIL_VOL_SOURCE: dict[str, str] = {}     # code → 量纲校准来源（overlap=实测比值 / assumed=兜底 100）
+_ONLINE_VOL_TO_LOCAL_DEFAULT = 100.0      # 线上 vol=手、本地 vipdoc vol=股（实测恒 100）
+# 「本次叙事要用到的最新交易日」上下文：由 `bars_need_upto(date)` 在叙事组装期间声明。
+# 用上下文变量而非逐调用点传参：`_daily_bars` 在生产有 6+ 调用点、测试普遍把它打成
+# 单参 lambda（conftest 离线护栏）——加参数会同时改生产签名与全库测试夹具（2026-10-20 实测）。
+_BARS_NEED_UPTO: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "jev_bars_need_upto", default=None)
+
+
+@contextlib.contextmanager
+def bars_need_upto(date: str | None):
+    """声明「本次要用到的最新交易日」→ 本地末棒落后时按需线上补尾（§_daily_bars）。"""
+    token = _BARS_NEED_UPTO.set(date)
+    try:
+        yield
+    finally:
+        _BARS_NEED_UPTO.reset(token)
 # 溯源：本进程各来源实际供数**次数**（逐 code 首次命中计 1，跨日/跨请求累加，非「本次构成」）。
 # 2026-10-18 review P2-5：① 语义是 process 级累计，字段名/注释须写明，不得被读成 per-run；
 # ② 自增非原子 —— FastAPI 线程池下并发叙事会丢增量 → 统一走 _BARS_LOCK。
@@ -998,7 +1060,13 @@ def bars_source_provenance() -> dict[str, Any]:
             last = None
     return {"counts": dict(_BARS_SOURCE_COUNTS), "countsScope": "process_cumulative",
             "localRoot": root, "localLastBar": last,
-            "onlineFallbackOffset": _bars_offset(), "localTake": _LOCAL_TAKE}
+            "onlineFallbackOffset": _bars_offset(), "localTake": _LOCAL_TAKE,
+            # 线上补尾溯源（2026-10-20）：本地末棒落后于叙事日时补了哪些日期、漏了哪些股。
+            "tailEnabled": _tail_enabled(),
+            "tailMergedUpTo": max(_TAIL_MERGED.values()) if _TAIL_MERGED else None,
+            "tailMergedCodes": len(_TAIL_MERGED), "tailMissCodes": len(_TAIL_FAIL_CODES),
+            "tailVolCalib": {"overlap": sum(1 for v in _TAIL_VOL_SOURCE.values() if v == "overlap"),
+                             "assumed": sum(1 for v in _TAIL_VOL_SOURCE.values() if v == "assumed")}}
 
 
 def _tdx_hosts_path() -> Path:
@@ -1044,6 +1112,11 @@ def _tdx_daily_client():
 def _daily_bars(code: str) -> list[dict]:
     """日线棒升序（date/high/close/vol）——**本地 vipdoc 优先，线上 mootdx 回退**（2026-10-18）。
 
+    线上补尾（2026-10-20 修复）：叙事组装期间由 `bars_need_upto(date)` 声明「本次要用到的
+    最新交易日」；若本地末棒早于它（闭市后没跑通达信盘后下载），只从线上补「比本地末棒更新的
+    日期」并合并，重叠日期一律以本地为准（历史数字不被线上改写）。未声明日期 → 不补（旧行为）。
+    `JEV_BARS_ONLINE_TAIL=0` 可关（纯本地可复现/离线重放）。
+
     瞬时失败**不落空缓存**：一次客户端抖动若把 [] 缓存住，而 `_DAILY_CLIENT` 已缓存使
     `_TDX_DOWN_UNTIL` 负缓存不会介入，整轮回溯就永久降级成池口径、进程内再无恢复路径
     （2026-10-16 code review 实测）。合法空（新上市/当日无棒）仍缓存，避免逐股重取。
@@ -1054,14 +1127,35 @@ def _daily_bars(code: str) -> list[dict]:
     """
     if code not in _LOCAL_MISS:
         cached_local = _DAILY_BARS_CACHE.get(("local", code))
-        if cached_local is not None:
-            return cached_local
-        local = _local_daily_bars(code)
+        local = cached_local if cached_local is not None else _local_daily_bars(code)
         if local:
-            _DAILY_BARS_CACHE[("local", code)] = local
-            _bars_count("local")
+            if cached_local is None:
+                _DAILY_BARS_CACHE[("local", code)] = local
+                _bars_count("local")
+            if _tail_enabled():
+                need = _BARS_NEED_UPTO.get()
+                if need and local[-1]["date"] < need:
+                    merged = _merged_with_online_tail(code, local, need)
+                    if merged is not None:
+                        return merged
             return local
         _LOCAL_MISS.add(code)   # 不铸造「空棒」：只是本地无此股文件，证据需求交线上回退
+    return _online_daily_bars(code)
+
+
+def _tail_enabled() -> bool:
+    """线上补尾开关（默认开；`JEV_BARS_ONLINE_TAIL=0` 关 → 纯本地/离线可复现）。"""
+    raw = os.environ.get(_BARS_TAIL_ENV)
+    if raw is None or str(raw).strip() == "":
+        return True
+    return str(raw).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _online_daily_bars(code: str) -> list[dict]:
+    """线上 mootdx 日线（升序，尾 `_bars_offset()` 根）——本地不可用时的回退 / 补尾源。
+
+    瞬时失败返回 [] 且**不缓存**（下一次调用重试），不把一次抖动变成整轮回调。
+    """
     offset = _bars_offset()
     key = (f"online:{offset}", code)
     cached = _DAILY_BARS_CACHE.get(key)
@@ -1086,6 +1180,54 @@ def _daily_bars(code: str) -> list[dict]:
             return []   # 不缓存：下次调用重试，不把一次抖动变成整轮回调
     _DAILY_BARS_CACHE[key] = bars
     return bars
+
+
+def _merged_with_online_tail(code: str, local: list[dict], need_upto: str) -> list[dict] | None:
+    """本地棒 + 线上尾部（只取 `> 本地末棒` 的日期）合并；拿不到补尾 → None（调用方保留本地）。
+
+    口径：重叠日期**一律本地为准**（线上只当“今天这根”的补丁，不改历史数字）。
+    拿不到就如实不补（调用方照旧 fail-visible 标不可算），并计 `tailMiss` 供溯源；
+    失败按 code 负缓存 `_TAIL_FAIL_TTL` 秒，避免完整叙事里逐股重生线上重试。
+
+    **量纲归一（必须）**：线上 `vol` 单位=手，本地 vipdoc `vol` 单位=股（实测比值恒 100）——
+    直接拼接会把“量能”算成 1/100（实测 002242 曾被算出“今日为前3日均量的 0.01 倍”）。
+    故用重叠日期的中位比值反推每只股的换算系数，只对尾部做归一；重叠不足时兜底 100
+    并在 `_TAIL_VOL_SOURCE` 标 assumed（fail-visible，不静默假造一致）。
+    """
+    key = (f"local+tail:{need_upto}", code)
+    cached = _DAILY_BARS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if time.time() < _TAIL_FAIL_UNTIL.get(code, 0.0):
+        return None
+    last_local = local[-1]["date"]
+    online_all = _online_daily_bars(code)
+    tail = [b for b in online_all if b["date"] > last_local]
+    if not tail:
+        _TAIL_FAIL_UNTIL[code] = time.time() + _TAIL_FAIL_TTL
+        _TAIL_FAIL_CODES.add(code)
+        return None
+    factor, src = _online_vol_factor(local, online_all)
+    tail = [{**b, "vol": b["vol"] * factor} for b in tail]
+    merged = local + tail
+    _DAILY_BARS_CACHE[key] = merged
+    with _BARS_LOCK:
+        _BARS_SOURCE_COUNTS["local+onlineTail"] = _BARS_SOURCE_COUNTS.get("local+onlineTail", 0) + 1
+        _TAIL_MERGED[code] = tail[-1]["date"]
+        _TAIL_VOL_SOURCE[code] = src
+    return merged
+
+
+def _online_vol_factor(local: list[dict], online: list[dict]) -> tuple[float, str]:
+    """线上 vol → 本地 vol 的换算系数（用重叠日期中位比值；无重叠时兜底 100 并标 assumed）。"""
+    lo = {b["date"]: b for b in local}
+    ratios = sorted(lo[b["date"]]["vol"] / b["vol"] for b in online
+                    if b.get("date") in lo and b.get("vol") and lo[b["date"]].get("vol"))
+    if ratios:
+        med = ratios[len(ratios) // 2]
+        if 0.01 <= med <= 1000:
+            return round(med, 6), "overlap"
+    return _ONLINE_VOL_TO_LOCAL_DEFAULT, "assumed"
 
 
 def _div_num(v: Any) -> float:
@@ -1271,14 +1413,112 @@ def board_position(jiuyan_doc, code: str) -> str:
     return f'板块地位：所属韭研板块「{best["board"]}」今日涨停 {best["n"]} 家，该股板块内 {pos}'
 
 
+# ── 投喂槽位（2026-10-20 用户裁决：12:30 午盘投喂 + 16:00 收盘幂等跳过） ──────────
+# 单日每股只投喂一次：两个槽位共用 `_id={date}:{code}` 与同一 `done` 判据（status=ok），
+# 午盘已投喂的股票在收盘链自动跳过（幂等），不靠额外状态表。
+SLOT_FINAL = "final"
+SLOT_MIDDAY = "midday"
+_SLOTS = (SLOT_FINAL, SLOT_MIDDAY)
+# 午盘可投喂窗（fetchedAt 的 HH:MM）：唯一来源 = jiuyan_store.MIDDAY_NOON_WINDOW
+# （存储层的「午盘事实源保护」与这里的投喂门控必须同一口径，否则会出现
+#  「入库时认为是真午盘、投喂时又认为不是」的漂移）。
+_MIDDAY_FETCH_WINDOW = jiuyan_store.MIDDAY_NOON_WINDOW
+
+
+def midday_source_state(db, date: str) -> dict:
+    """午盘名单可投喂性（2026-10-20）：`{date}:midday` 存在且 fetchedAt 落在午盘窗内。
+
+    实测缺陷（2026-10-14/10-16/10-19）：采集进程若在收盘后才启动，当日「午盘尝试」会用
+    **收盘数据**补写 `midday` 文档（fetchedAt=15:20/20:04/20:23，名单与 final 逐字相同）。
+    拿这种文档做「12:30 午盘投喂」等于把收盘数据冒充午盘证据，因此按 fetchedAt 窗口判定：
+    窗口外一律 fail-visible 拒绝（交收盘链投喂），不靠「文档存在」冒充时点。
+    """
+    doc = db["jiuyan_action"].find_one({"_id": f"{date}:{SLOT_MIDDAY}"}, {"fetchedAt": 1})
+    if not doc:
+        return {"ok": False, "found": False, "fetchedAt": None,
+                "reason": "no_midday_doc", "detail": f"{date}:midday 缺失"}
+    fetched = str(doc.get("fetchedAt") or "")
+    import re  # 局部 import 与 _jiuyan_days_boards 同规（避免模块顶部再引入未用符号）
+    m = re.search(r"(\d{2}):(\d{2})", fetched[:19])
+    hhmm = f"{m.group(1)}:{m.group(2)}" if m else ""
+    lo, hi = _MIDDAY_FETCH_WINDOW
+    if not hhmm or not (lo <= hhmm <= hi):
+        return {"ok": False, "found": True, "fetchedAt": fetched,
+                "reason": "midday_doc_not_noon",
+                "detail": f"fetchedAt={fetched or '?'} 不在午盘窗 {lo}~{hi}"}
+    return {"ok": True, "found": True, "fetchedAt": fetched, "reason": None, "detail": None}
+
+
+def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, rank,
+                           dataset_id: str = DEFAULT_DATASET_ID,
+                           jiuyan_doc: dict | None = None) -> str:
+    """午盘投喂弹药（12:30 槽位）：只写午盘确实拿得到的证据，缺的明确标注不可得。
+
+    午盘（11:30-13:00）与收盘的可得证据差：
+    - 盘面事实行（market_facts_line/market_metrics）依赖 15:00 帧 → 午盘不存在；
+    - THS 封板梯队/封板质量/炸板二分也只在 15:00 帧生成 → 午盘不可得；
+    - TDX 当日日线棒/5 分钟棒：实测 12:30 本地 vipdoc **尚无当日棒**（收盘后才落盘），
+      因此位置轴/板序/当日板型三项在午盘实际缺席——一律标「午盘不可得」，不拿 T-1 冒充当日。
+    可给的：韭研午盘名单的 N天M板/触板时间/解析全文 + 日线历史锚 + 韭研板块结构。
+    """
+    jy = jiuyan_doc or {}
+    fetched = str(jy.get("fetchedAt") or "")
+    noon = fetched[11:16] if len(fetched) >= 16 else "时点未知"
+    num_txt = str(stock.get("num") or "").strip()
+    if num_txt and "板" not in num_txt:
+        num_txt += "板"
+    day_txt = str(stock.get("day") or "").strip()
+    if day_txt and "天" not in day_txt:
+        day_txt += "天"
+    if num_txt and "天" in num_txt:   # 韭研 num 自带「2天2板」完整口径，与 day 拼接会重复
+        day_num = f"，{num_txt}"
+    else:
+        day_num = f"，{day_txt}{num_txt}" if (day_txt or num_txt) else ""
+    hot = f"今日热榜最高排名第 {rank} 位" if rank else "未进热榜"
+    expound = str(stock.get("expound") or "").strip()
+    # 位置轴/板序：午盘 TDX 当日日线棒**收盘后才写入**（实测 12:30 本地 vipdoc 仍无当日棒）。
+    # 旧文案「无当日日线棒（停牌或数据缺口）」在午盘会把「棒未生成」误读成停牌，
+    # 这里换成午盘专有口径；真有盘中棒才附「盘中未收值」注记。
+    pos_raw = stock_position_line(date, code)
+    pos = ("个股位置：午盘不可得（当日日线棒收盘后才写入，不拿 T-1 冒充当日；fail-visible）"
+           if "fail-visible" in pos_raw else f"（午盘口径·当日日线棒为盘中未收值）{pos_raw}")
+    seq_raw = limitup_sequence_line(date, code, stock.get("name"))
+    seq = ("板序：午盘不可得（同上，当日日线棒未生成，不拿 T-1 冒充今日；fail-visible）"
+           if "fail-visible" in seq_raw else f"（午盘口径·当日日线棒为盘中未收值）{seq_raw}")
+    return "\n".join([
+        f"{date} 交易日午盘 · 打标时点=韭研 {noon} 午盘名单（收盘口径盘面事实行/THS 封板梯队/"
+        f"封板质量/炸板二分午盘不可得，fail-visible）",
+        f"该股：{stock.get('name')}（{code}），午盘涨停价 {stock.get('price')}{day_num}，"
+        f"触板时间 {stock.get('time')}；{hot}",
+        f"身位：韭研午盘名单口径 {num_txt or '首板（韭研未标 N天M板）'}"
+        f"（THS 封板梯队槽位收盘才生成，午盘不可得）",
+        pos,
+        seq,
+        "当日板型：午盘不可判（首触/炸板波次/末封需收盘 5 分钟棒，fail-visible）",
+        f"（午盘名单口径，家数=已触板）{board_position(jy, code)}",
+        "韭研解析全文：",
+        expound if expound else "（韭研解析缺失，fail-visible）",
+    ])
+
+
 def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, rank,
                           dataset_id: str = DEFAULT_DATASET_ID,
-                          jiuyan_doc: dict | None = None) -> str:
+                          jiuyan_doc: dict | None = None,
+                          slot: str = SLOT_FINAL) -> str:
     """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 个股位置行（价格轴）+ 板序行（几天几板/断板反包）+ 当日板型行（炸板波次/回封）+ 板块地位块 + 热榜。
 
     批次C I10（顺手）：jiuyan_doc 由调用方传入（day_population 已读过同一文档），
     缺省时兼容旧路径自行读取——消除每股一次整日文档的 N+1 查询。
+
+    2026-10-20（用户裁决「12:30 午盘投喂 + 收盘幂等跳过」）：`slot=midday` 分流到
+    `build_midday_narrative`（只用午盘可得证据，收盘口径弹药显式标不可得）；
+    `slot=final`（默认）叙事与历史逐字一致（判据代际可比，不做顺手改写）。
     """
+    if slot == SLOT_MIDDAY:
+        jy_mid = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
+            {"_id": f"{date}:{SLOT_MIDDAY}"}, {"fields": 1, "fetchedAt": 1}) or {}
+        return build_midday_narrative(db, date, code, stock, board, rank,
+                                      dataset_id=dataset_id, jiuyan_doc=jy_mid)
     jy = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"}, {"fields": 1}) or {}
     ths = ths_positions(db, date, dataset_id).get(code)
@@ -1321,8 +1561,58 @@ def _db():
     return get_runtime_mongodb_database()
 
 
-def day_population(db, date: str) -> list[dict]:
-    doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"})
+def carry_forward_enabled() -> bool:
+    """A+B 承接/压缩开关（2026-10-20 用户裁决；默认开，`JEV_CARRY_FORWARD_ENABLED=0` 关闭）。"""
+    return os.environ.get("JEV_CARRY_FORWARD_ENABLED", "1") != "0"
+
+
+# 承接候选读取的字段（只取判定与合并所需，不拉全套大字段）
+_CARRY_PREV_PROJECTION = {
+    "code": 1, "tradingDate": 1, "status": 1, "questionSetHash": 1, "ammoVersion": 1,
+    "expoundSignature": 1, "narrative": 1, "answers": 1, "label": 1,
+    "driverProbabilities": 1, "catalystDepth": 1, "catalystDepthProbabilities": 1,
+    "freshness": 1, "buySideLogic": 1, "buySideProbabilities": 1, "origin": 1,
+}
+
+
+def _carry_prev_docs(db, col, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                     max_gap: int = MAX_GAP_TRADING_DAYS) -> tuple[dict[str, dict], list[str]]:
+    """最近 max_gap 个交易日的已判文档 {code: doc}（同 code 取最近一日）+ 交易日轴（升序）。
+
+    承接只看**真·最近一次判定**：超过 max_gap 个交易日的旧判定不再承接（题材可能已换代）。
+    PHASE 哨兵日级文档无 code，自然被过滤。
+    """
+    prev_dates = trading_dates_before(db, date, max_gap, dataset_id)
+    if not prev_dates:
+        return {}, prev_dates
+    order = {d: i for i, d in enumerate(prev_dates)}
+    pool: dict[str, dict] = {}
+    for d in col.find({"tradingDate": {"$in": prev_dates}, "status": "ok"},
+                      _CARRY_PREV_PROJECTION):
+        code = str(d.get("code") or "")
+        if not code:
+            continue
+        cur = pool.get(code)
+        if cur is None or order.get(str(d.get("tradingDate")), -1) > order.get(
+                str(cur.get("tradingDate")), -1):
+            pool[code] = d
+    return pool, prev_dates
+
+
+def _carry_gap(prev_doc: dict | None, prev_dates: list[str]) -> int | None:
+    """上一标签日距当日几个交易日（1=前一日）——不在轴内返回 None（不承接）。"""
+    if not prev_doc or not prev_dates:
+        return None
+    d = str(prev_doc.get("tradingDate") or "")
+    try:
+        return len(prev_dates) - prev_dates.index(d)
+    except ValueError:
+        return None
+
+
+def day_population(db, date: str, slot: str = SLOT_FINAL) -> list[dict]:
+    """当日名单人口（个股 × 板块）。slot=midday 读午盘名单、final 读收盘名单（2026-10-20）。"""
+    doc = db["jiuyan_action"].find_one({"_id": f"{date}:{slot}"})
     if not doc:
         return []
     out = []
@@ -1347,16 +1637,32 @@ def hotlist_ranks(db, date: str, codes: list[str],
 
 def _label_one(db, col, acc, token, date, code, stock, board, rank,
                include_stock_phase: bool = False,
-               dataset_id: str = DEFAULT_DATASET_ID, jiuyan_doc: dict | None = None) -> tuple[bool, int]:
+               dataset_id: str = DEFAULT_DATASET_ID, jiuyan_doc: dict | None = None,
+               slot: str = SLOT_FINAL,
+               carry: dict | None = None) -> tuple[bool, int]:
     """单只个股打标一次 jev 调用；include_stock_phase=True 时题目集升级为五题合并同 call
     （QUESTIONS_STOCK_WITH_PHASE，2026-10-04 用户裁决），相位答案随主 doc 同落——共享 narrative
     输入，相位边际成本≈题干+答案。usage/latency 为五题整 call 实付口径（stockPhaseUsage 同值）。
     批次B：新文档盖 ammoVersion 戳（原料代际，缺戳=旧代，fail-visible）。
     批次C：返回 (ok, 本次实付 tokens)（I12 成本口径=本次运行，不再全集合扫描）；
-    doc 盖 questionSetVersion/questionSetHash（I15 判据代际）。"""
-    questions = QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK
+    doc 盖 questionSetVersion/questionSetHash（I15 判据代际）。
+    2026-10-20：slot=midday 时叙事换午盘口径（build_midday_narrative），文档盖
+    labelSlot/jiuyanSourceId/jiuyanFetchedAt，供追溯「这条标签用的是午盘还是收盘名单」。
+    2026-10-20 A+B（carry 非空时）：只问 `buy_side_logic`（+相位），叙事走 B 压缩；
+    driver/depth/freshness 从 `carry['prev']` 承接，文档盖 labelSource/carriedFrom/
+    carriedQuestionKeys/reevaluatedQuestionKeys（承接可追溯、可分组，不伪装成当日独立判定）。
+    """
+    if carry:
+        questions = (QUESTIONS_STOCK_BUYSIDE_WITH_PHASE if include_stock_phase
+                     else QUESTIONS_STOCK_BUYSIDE)
+    else:
+        questions = QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK
     narrative = build_pilot_narrative(db, date, code, stock, board, rank,
-                                      dataset_id=dataset_id, jiuyan_doc=jiuyan_doc)
+                                      dataset_id=dataset_id, jiuyan_doc=jiuyan_doc,
+                                      slot=slot)
+    compression: dict | None = None
+    if carry:
+        narrative, compression = compress_narrative(narrative, carry["prevDate"])
     # 2026-10-10 起走 _dispatch_jev 分流（JEV_TYPESAFE_KEY 优先官方直连，否则 CF）；
     # acc/token 参数仅为调用方签名兼容，通道配置统一由 dispatch 自取 env。
     env, ms = _dispatch_jev(narrative, questions)
@@ -1364,18 +1670,35 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
     parsed = parse_jev_response(env, ms, expected_keys=set(questions))
     used = _usage_tokens(parsed.get("usage"))
     answers = parsed.get("answers") or {}
+    carried_answers: dict = {}
+    if carry:
+        prev_answers = (carry.get("prev") or {}).get("answers") or {}
+        carried_answers = {k: prev_answers[k] for k in CARRY_KEYS if prev_answers.get(k)}
+        # 承接题 + 本次实判题合并：顶层字段/answers 均为完整四题口径，下游消费零变化；
+        # 来源差异由 labelSource/carriedQuestionKeys 显式标注
+        answers = {**carried_answers, **answers}
     doc = {"_id": f"{date}:{code}", "origin": "driver_label_jiuyan_v3_pilot", "tradingDate": date,
            "code": code, "name": stock.get("name"), "ammoVersion": AMMO_VERSION,
+           # 投喂槽位（2026-10-20）：midday=12:30 午盘投喂（收盘幂等不重复投喂）、final=收盘投喂；
+           # jiuyanSourceId/jiuyanFetchedAt 记原料文档与抓取时点，追溯「标签用的哪一版名单」
+           "labelSlot": slot, "jiuyanSourceId": f"{date}:{slot}",
+           "jiuyanFetchedAt": (jiuyan_doc or {}).get("fetchedAt"),
            "questionSetVersion": QUESTION_SET_VERSION_DRIVER,
-           "questionSetHash": _questions_hash(questions),
+           # questionSetHash 始终=完整四题集（判据代际，承接文档与实判文档可比）；
+           # 本次实际下发的题集另记 askedQuestionSetHash（承接路径=单题集）
+           "questionSetHash": _questions_hash(
+               QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK),
+           "askedQuestionSetHash": _questions_hash(questions),
+           "expoundSignature": expound_signature(stock.get("expound")),
            "jiuyanContext": {"board": board, "day": stock.get("day"), "num": stock.get("num"),
                              "time": stock.get("time"), "inHotlist": rank is not None, "rank": rank},
            "status": "ok" if parsed["ok"] else "degraded",
            "narrative": narrative, "questionsRaw": questions,
            # answers 原样落库（P0-2/P0-3，jev-questionset-ammo-confidence-review.md §五）：
            # 对齐情绪链先例，保全模型自报 confidence/缺失 probabilities/未来新字段，
-           # 只向前生效，历史文档不可回补
-           "answers": parsed.get("answers"),
+           # 只向前生效，历史文档不可回补。
+           # 承接路径下 `answers` = 承接题（carriedAnswers 同值）+ 本次实判题的完整四题口径。
+           "answers": answers,
            "label": answers.get("driver_type", {}).get("choice"),
            "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
            "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
@@ -1389,6 +1712,20 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
            "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
            "responseRaw": None if parsed["ok"] else env,
            "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    if carry:
+        # 承接痕迹（A）：来源、上一标签日、承接/实判分别哪些题、上一判定题集 hash、压缩统计
+        doc.update({
+            "labelSource": "carry_forward",
+            "carriedFrom": carry["prevDate"],
+            "carriedQuestionKeys": list(CARRY_KEYS),
+            "reevaluatedQuestionKeys": (["buy_side_logic", "stock_phase_position"]
+                                        if include_stock_phase else ["buy_side_logic"]),
+            "carriedQuestionSetHash": (carry.get("prev") or {}).get("questionSetHash"),
+            "carriedAnswers": carried_answers,
+            "narrativeCompression": compression,
+        })
+    else:
+        doc["labelSource"] = "fresh_judgment"
     if include_stock_phase:
         # 相位答案随主 call 落档（字段与单题版 run_stock_phase_pilot 逐字段对齐，聚合层无感）；
         # 相位答案缺失时 Position=None（聚合层 no_data fail-visible 已处理，不整 call 降级）
@@ -1414,21 +1751,45 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
 def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int = 2,
         with_stock_phase: bool = False, dataset_id: str = DEFAULT_DATASET_ID,
         confirm_budget: bool = False, max_stocks: int | None = None,
-        force: bool = False, only_codes: set[str] | None = None):
+        force: bool = False, only_codes: set[str] | None = None,
+        slot: str = SLOT_FINAL, carry_forward: bool | None = None):
+    """个股驱动打标主循环。
+
+    slot（2026-10-20 用户裁决）：
+    - `final`（默认）：收盘链（16:00 盘后链）投喂收盘涨停名单；
+    - `midday`：12:30 午盘投喂午盘涨停名单，叙事走午盘口径（build_midday_narrative），
+      并以 `midday_source_state` 卡住「收盘后才补写的伪午盘文档」。
+    **两个槽位共用 `_id={date}:{code}` 与同一 done 判据（status=ok）** → 午盘已投喂的
+    个股在收盘运行时自动跳过（幂等），单日每股只烧一次 token。`force=True`（口径代际
+    重放）是唯一例外，不受幂等约束。
+
+    carry_forward（A+B，2026-10-20 用户裁决）：None=读环境开关（`JEV_CARRY_FORWARD_ENABLED`，
+    默认开），True/False 显式覆盖；`force=True` 时一律全量实判（不承接、不压缩）。
+    """
     db = _db()
     col = db["hotlist_jev_driver_labels"]
     dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
-        {"kind": "jiuyan_action", "tradingDate": {"$gte": start, "$lte": end}},
+        {"kind": "jiuyan_action", "tradingDate": {"$gte": start, "$lte": end},
+         "_id": {"$regex": f":{slot}$"}},
         {"tradingDate": 1}) if d.get("tradingDate")})
     if not dates:
-        print(f"窗口 {start}~{end} 无 jiuyan_action final 文档，退出（fail-visible）")
+        print(f"窗口 {start}~{end} 无 jiuyan_action {slot} 文档，退出（fail-visible）")
         return
     n_ok = n_deg = 0
+    n_carried = n_rejudged = 0   # A+B 口径计数（承接 vs 全量实判）
+    carry_on = (carry_forward_enabled() if carry_forward is None else bool(carry_forward)) and not force
     run_tokens: list[int] = []  # 批次C I12：本次运行实付（total_tokens 优先，否则 input+output）
     for di, date in enumerate(dates):
-        pop = day_population(db, date)
+        if slot == SLOT_MIDDAY:
+            state = midday_source_state(db, date)
+            if not state["ok"]:
+                # 午盘名单不可信/缺失：绝不拿收盘补写的「伪午盘」或昨日数据冒充（AGENTS §4.0）
+                print(f"[{di + 1}/{len(dates)}] {date} 午盘名单不可投喂"
+                      f"（{state['reason']}：{state['detail']}），跳过——收盘链会另行投喂")
+                continue
+        pop = day_population(db, date, slot)
         if not pop:
-            print(f"[{di + 1}/{len(dates)}] {date} 无韭研 final 文档，跳过（披露）")
+            print(f"[{di + 1}/{len(dates)}] {date} 无韭研 {slot} 文档，跳过（披露）")
             continue
         items: dict[str, dict] = {}
         for entry in pop:
@@ -1437,6 +1798,9 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         codes = list(items.keys())
         done = {d["code"] for d in col.find({"tradingDate": date, "status": "ok"}, {"code": 1})
                 if d.get("code")}  # PHASE 日级文档无 code，跳过防 KeyError
+        # 单日每股只投喂一次（2026-10-20 用户裁决）：done 不区分槽位——午盘已投喂的
+        # 个股在收盘（或重跑）时自动幂等跳过，不额外维护「已投喂」状态表
+        skipped_labeled = [c for c in codes if c in done and not force]
         # force=口径代际升级重放（2026-10-16 连板口径修正回填）：已 ok 也重判，
         # replace_one 幂等覆盖；不带 force 维持增量补跑语义（已 ok 跳过）
         codes = [c for c in codes if force or c not in done]
@@ -1452,7 +1816,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
                 print(f"[{di + 1}/{len(dates)}] {date} --codes {c} 当日已 status=ok，"
                       f"跳过（披露）；口径代际回放请加 --force")
         if not codes:
-            print(f"[{di + 1}/{len(dates)}] {date} 无需打的股票，跳过")
+            skip_txt = f"（{len(skipped_labeled)} 只当日已投喂，幂等跳过）" if skipped_labeled else ""
+            print(f"[{di + 1}/{len(dates)}] {date} 无需打的股票，跳过{skip_txt}")
             continue
         if max_stocks is not None and len(codes) > max_stocks:
             print(f"[{di + 1}/{len(dates)}] {date} {len(codes)} 只超上限 {max_stocks}，"
@@ -1462,29 +1827,60 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             # 批次C I13：开火前预算确认（AGENTS §1.2-7）。排程链由 --confirm-budget 携带
             # 2026-10-03 挂链裁决的常态批准；手动多日回填必须显式确认。
             raise SystemExit(
-                f"预算护栏：本窗口预计至少 {len(codes)} 次 jev 真实调用（首日 {date}，"
-                f"全量口径参考 ≈21 万 tokens/交易日）。确认预算请加 --confirm-budget；"
+                f"预算护栏：本窗口（{slot} 槽位）预计至少 {len(codes)} 次 jev 真实调用"
+                f"（首日 {date}，全量口径参考 ≈21 万 tokens/交易日）。确认预算请加 --confirm-budget；"
                 f"或先 --dry-run 查看叙事。")
         ranks = hotlist_ranks(db, date, list(items.keys()), dataset_id)
         # 批次C I10（顺手）：整日韭研文档只读一次，传给每只股票的叙事构造（原每股重读一次）
-        jy_doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
+        jy_doc = db["jiuyan_action"].find_one(
+            {"_id": f"{date}:{slot}"}, {"fields": 1, "fetchedAt": 1}) or {}
+
+        # A+B：承接候选池（最近 MAX_GAP_TRADING_DAYS 个交易日的已判文档；force/关闭时为空）
+        prev_pool: dict[str, dict] = {}
+        prev_dates: list[str] = []
+        if carry_on:
+            prev_pool, prev_dates = _carry_prev_docs(db, col, date, dataset_id)
+        full_qs_hash = _questions_hash(
+            QUESTIONS_STOCK_WITH_PHASE if with_stock_phase else QUESTIONS_STOCK)
+
+        def carry_of(code: str) -> dict | None:
+            """单股承接判定（A）：不可承接返回 None（条件不满足则全量实判，不静默降级）。"""
+            if not carry_on:
+                return None
+            prev_doc = prev_pool.get(code)
+            decision = carry_decision(
+                today_expound=items[code]["stock"].get("expound"),
+                prev_doc=prev_doc,
+                today_question_set_hash=full_qs_hash,
+                today_ammo_version=AMMO_VERSION,
+                gap_trading_days=_carry_gap(prev_doc, prev_dates))
+            return decision if decision["eligible"] else None
+
         if dry_run:
             sample = items[codes[0]]
-            print(f"[dry] {date} {sample['stock'].get('name')}\n" + build_pilot_narrative(
+            carry_sample = carry_of(codes[0])
+            narrative = build_pilot_narrative(
                 db, date, codes[0], sample["stock"], sample["board"], ranks.get(codes[0]),
-                dataset_id=dataset_id, jiuyan_doc=jy_doc))
-            print(f"[{di + 1}/{len(dates)}] {date} population={len(codes)} hotlistHit={len(ranks)}")
+                dataset_id=dataset_id, jiuyan_doc=jy_doc, slot=slot)
+            if carry_sample:
+                narrative, cmp_stats = compress_narrative(narrative, carry_sample["prevDate"])
+                print(f"[dry] A 可承接：上标签日 {carry_sample['prevDate']}；B 压缩={cmp_stats}")
+            print(f"[dry] {date} [{slot}] {sample['stock'].get('name')}\n" + narrative)
+            print(f"[{di + 1}/{len(dates)}] {date} population={len(codes)} hotlistHit={len(ranks)}"
+                  f" carryEligible={sum(1 for c in codes if carry_of(c))}")
             continue
 
         def work(code):
             entry = items[code]
+            carry = carry_of(code)
             last_err: str | None = None
             for attempt in range(2):
                 try:
                     ok, used = _label_one(db, col, acc, token, date, code, entry["stock"],
                                           entry["board"], ranks.get(code),
                                           include_stock_phase=with_stock_phase,
-                                          dataset_id=dataset_id, jiuyan_doc=jy_doc)
+                                          dataset_id=dataset_id, jiuyan_doc=jy_doc, slot=slot,
+                                          carry=carry)
                     run_tokens.append(used)
                     if ok:
                         return True
@@ -1498,10 +1894,17 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             results = list(ex.map(work, codes))
         n_ok += sum(results)
         n_deg += len(results) - sum(results)
-        print(f"[{di + 1}/{len(dates)}] {date} done n={len(codes)} (cum ok={n_ok} deg={n_deg})")
+        carried_today = sum(1 for c in codes if carry_of(c))
+        n_carried += carried_today
+        n_rejudged += len(codes) - carried_today
+        skip_txt = f" skippedLabeled={len(skipped_labeled)}" if skipped_labeled else ""
+        carry_txt = f" carried={carried_today}" if carry_on else ""
+        print(f"[{di + 1}/{len(dates)}] {date} [{slot}] done n={len(codes)}{skip_txt}{carry_txt}"
+              f" (cum ok={n_ok} deg={n_deg})")
     if not dry_run:
         # 批次C I12：FINAL 口径=本次运行实付（不再全集合扫历史 usage，不再 total_tokens/input+output 键名漂移）
-        print("FINAL:", {"ok": n_ok, "degraded": n_deg,
+        print("FINAL:", {"slot": slot, "ok": n_ok, "degraded": n_deg,
+                         "carried": n_carried, "rejudged": n_rejudged,
                          "totalTokens": sum(run_tokens), "calls": len(run_tokens)})
 
 
@@ -1908,9 +2311,18 @@ if __name__ == "__main__":
                     help="口径代际升级重放：已 status=ok 的个股也重新判定（replace_one 幂等覆盖）")
     ap.add_argument("--max-stocks", dest="max_stocks", type=int, default=None,
                     help="批次C I13：单日打标上限（超出部分截断并披露），不给=不限")
+    ap.add_argument("--no-carry-forward", dest="no_carry_forward", action="store_true",
+                    help="关闭 A+B（承接 + 解析去重压缩）：强制全量实判。默认读环境开关"
+                         "JEV_CARRY_FORWARD_ENABLED（默认为开）；需重测或对比基线时用。"
+                         "口径代际回放（--force）本就全量实判，不需本开关")
     ap.add_argument("--codes", dest="codes", default=None,
                     help="只打指定股票（逗号分隔，如 600825,002343）。口径修正只影响个别股时"
                          "用——避免为改一行共享语料把整日 100+ 只全部重烧一遍")
+    ap.add_argument("--slot", dest="slot", choices=list(_SLOTS), default=SLOT_FINAL,
+                    help="投喂槽位（2026-10-20 用户裁决）：final=收盘链（默认，名单取 "
+                         "{date}:final）；midday=12:30 午盘投喂（名单取 {date}:midday，叙事午盘口径）。"
+                         "两槽位共享 _id={date}:{code} + status=ok 幂等判据：午盘已投喂的个股在"
+                         "收盘运行自动跳过，单日每股只投喂一次")
     args = ap.parse_args()
     tok = os.environ.get("JEV_CF_TOKEN") or ""
     # 2026-10-10：官方直连（JEV_TYPESAFE_KEY）为合法替代通道，护栏二选一即可
@@ -1951,4 +2363,6 @@ if __name__ == "__main__":
             confirm_budget=args.confirm_budget, max_stocks=args.max_stocks,
             force=args.force,
             only_codes={c.strip()[-6:] for c in args.codes.split(",") if c.strip()}
-            if args.codes else None)
+            if args.codes else None,
+            slot=args.slot,
+            carry_forward=False if args.no_carry_forward else None)

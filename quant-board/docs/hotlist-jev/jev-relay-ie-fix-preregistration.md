@@ -248,6 +248,7 @@ F4 的 06-24/07-01/07-03/07-20 等来自隔日对比一侧覆盖不足。
 | 项 | 改动 |
 |---|---|
 | `_daily_bars` | **本地优先**：`market_dieban_tdx.resolve_root()` + `read_lday(take=400)`（≈1.6 年全历史）；本地无该股文件 → 记 `_LOCAL_MISS` 后走线上回退（不铸造空棒） |
+| 线上**补尾**（2026-10-20 增补） | 本地末棒**落后于叙事目标日**时（闭市后未跑通达信盘后下载），只从线上补「比本地末棒更新的日期」并合并；重叠日一律本地为准；`bars_need_upto(date)` 上下文声明目标日，`JEV_BARS_ONLINE_TAIL=0` 可关 |
 | 线上回退窗 | `_BARS_OFFSET_DEFAULT` 60 → **250**（`JEV_BARS_OFFSET` 仍可覆盖，下限 20） |
 | 缓存键 | `("local", code)` / `("online:<offset>", code)`——防两种来源互相污染 |
 | `_adj_prev_series` | 除权日程查询加**有界回看 45 链接**（见下） |
@@ -305,3 +306,47 @@ F4 的 06-24/07-01/07-03/07-20 等来自隔日对比一侧覆盖不足。
 `jev-relay-band-toxic-diagnostic.md` §9——0-25 冰点带 +0.1%→**−0.1%**（弱负号，大面 19.3%）、
 40-60 继续否（+0.6%）、钱效分带首次成形（strong +1.3%/neutral +0.3%/losing −0.3%）；
 前端图例已同轮同步（§1.2.5）。
+
+---
+
+## 13. 增补（2026-10-20）：本地末棒落后 → 线上补尾（用户报障修复）
+
+**报障**：2026-10-20 情绪叙事里「断板 35 只：今日表现不可算（TDX 日线缺失）」「隔日溢价不可算」
+「个股位置/板序：当日日线棒缺失」「板型：昨收缺失无法判定涨停价」，`anchorGapsDerived=["断板钱效"]`，
+`moneyEffect=insufficient_evidence`。
+
+**取证与根因**（零模型调用）：
+- 本地 `D:/APP_SOFT/TDX` 末棒 = **2026-10-19**（当天没跑通达信盘后数据下载）；
+- 同一时刻线上 mootdx 对 002242/003029 **已返回 2026-10-20 的日线**（250 根，末棒当日）；
+- 旧逻辑是「本地文件存在即用」，**从不检查本地末棒是否落后于目标日** → 不回退线上，
+  于是当日证据整段不可算（fail-visible 没错，但本可算的数据被放弃——属"有数据不展示"）。
+
+**修复**（`jev_label_jiuyan._merged_with_online_tail` + `bars_need_upto()` 上下文）：
+| 项 | 口径 |
+| --- | --- |
+| 触发 | 叙事组装期间声明目标日（relay 链在 `build_relay_narrative` 内），且本地末棒 < 目标日 |
+| 合并 | 只取 `> 本地末棒` 的线上日期；**重叠日一律本地为准**（历史数字不被线上改写） |
+| **量纲归一（必须）** | 线上 `vol`=手、本地 `vol`=股（实测比值恒 100）→ 用重叠日中位比值反推每股换算系数；重叠不足兜底 100 并标 `assumed`。不做归一曾把 002242「量能」算成**前 3 日均量的 0.01 倍**（本轮实测抓到的次生缺陷） |
+| 拿不到 | 如实不补（继续 fail-visible），记 `tailMissCodes`；负缓存 60s 防逐股重试风暴 |
+| 开关/溯源 | `JEV_BARS_ONLINE_TAIL=0` 关（纯本地可复现）；`barsSource` 增 `tailEnabled/tailMergedUpTo/tailMergedCodes/tailMissCodes/tailVolCalib` |
+| 作用域 | **仅情绪叙事链**（relay 文档）——驱动链逐股叙事保持逐字代际不变（v3 pilot 不因取数修复产生代际漂移） |
+
+**同日修复验证（2026-10-20，1 次生产链重算，7,312+337 tokens）**：
+
+| 项 | 修复前（16:35） | 修复后（16:54） |
+| --- | --- | --- |
+| 断板钱效 | 不可算（TDX 日线缺失） | **中位 −1.13% · 大面 6 只 · 覆盖 35/35** |
+| 隔日溢价 | 不可算 | **−0.1%（覆盖 49/49）** |
+| 个股位置/板序/板型 | 缺失（fail-visible） | 全部出数（位置 20.56／板序含今日／板型=炸板回封） |
+| 叙事「TDX 日线缺失」字样 | 多处 | **0** |
+| `anchorGapsDerived` | `["断板钱效"]` | **`[]`** |
+| 结论 | index 49.9 / leaderStrength 47.6 / moneyEffect `insufficient_evidence` | **index 52.8 / leaderStrength 52.8 / moneyEffect `neutral`**（其余 4 题不变） |
+| 溯源 | `localLastBar=2026-10-19`、无补尾字段 | `local+onlineTail=192`、`tailMergedUpTo=2026-10-20`、`tailVolCalib={overlap:192,assumed:0}`、`tailMissCodes=4` |
+
+修复前文档已归档 `data/backups/relay-2026-10-20-prefix-degraded-bars.json`（对照可查，不进业务库）。
+
+**残留缺口（结构化，非静默）**：4 只未补上当日棒 = **北交所 `920006/920196/920627/920690`**
+——线上 std 客户端不提供北交所日线（本地能读、线上不能补），这类股当日证据继续按 fail-visible 标注。
+
+**测试**：`tests/hotlist/test_jev_bars_online_tail.py`（6 例：补尾+量纲、重叠以本地为准、无上下文/开关关闭不外呼、
+线上无当日不伪造、本地缺失走线上、同上下文只补一次）。

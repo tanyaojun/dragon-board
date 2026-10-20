@@ -1489,3 +1489,24 @@ def test_dieban_full_market_rows_display(js: str):
     assert "countDisputed" in hint, "hint 须标注家数存疑"
     # 读为主非纯读：懒加载写库须在注释/文案里如实说明
     assert "非纯读" in js
+
+
+# ── 2026-10-20 用户需求：涨停复盘【原因】列（韭研异动解析首行）────────────────────
+def test_limitup_reason_column_present(js: str, html: str):
+    """表头/行体都须有【原因】列，取值 s.reason（后端 join 解析首行）；
+    列宽截断 + title 保全文（不丢数据）；缺失显示 '-' 不伪造。"""
+    rows = _fn(js, "lfRenderRows")
+    assert "<th>原因</th>" in rows, "表头须有【原因】列"
+    assert "s.reason" in rows and "lg-reason" in rows, "行体须渲染 s.reason 并带列样式类"
+    assert 'title="${esc(reasonTxt)}"' in rows, "完整原因须进 title（列宽省略不丢数据）"
+    assert "韭研异动解析首行缺失" in rows, "缺失时须给 '-' 与可见原因说明（fail-visible）"
+    assert ".lg-reason{" in html and "text-overflow:ellipsis" in html, "原因列须限宽省略"
+
+
+def test_limitup_slot_tag_marks_midday_feed(js: str):
+    """午盘投喂标记（2026-10-20）：labelSlot=midday 的个股须可见标注「午盘」，
+    并说明收盘链已幂等跳过（否则读者无法分辨午盘/收盘两种投喂口径）。"""
+    rows = _fn(js, "lfRenderRows")
+    assert "s.labelSlot === 'midday'" in rows and "午盘" in rows
+    assert "幂等跳过" in rows, "午盘标记须说明收盘未重复投喂"
+    assert "s.jiuyanFetchedAt" in rows, "午盘标记须带名单抓取时点（原料时点可追溯）"

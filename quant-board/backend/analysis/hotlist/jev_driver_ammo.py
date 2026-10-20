@@ -128,6 +128,14 @@ QUESTIONS_STOCK_PHASE = {"stock_phase_position": {"type": "choice",
 # 独立调用降至题干+答案数百 tokens）。存量老文档补齐仍走单题 CLI（run_stock_phase_pilot 保留）。
 QUESTIONS_STOCK_WITH_PHASE = {**QUESTIONS_STOCK, "stock_phase_position": QUESTIONS_STOCK_PHASE["stock_phase_position"]}
 
+# 承接路径单题集（2026-10-20 用户裁决「采纳 A+B」）：只问买盘逻辑（+相位，若开启）。
+# 题干/判据**逐字取自** QUESTIONS_STOCK，不得改写（改写即换代，跨代不可比）。
+QUESTIONS_STOCK_BUYSIDE = {"buy_side_logic": QUESTIONS_STOCK["buy_side_logic"]}
+QUESTIONS_STOCK_BUYSIDE_WITH_PHASE = {
+    **QUESTIONS_STOCK_BUYSIDE,
+    "stock_phase_position": QUESTIONS_STOCK_PHASE["stock_phase_position"],
+}
+
 # 批次C I15：题目集代际戳（对齐情绪链 QUESTION_SET_VERSION 裁决）。v3.1=四题+合并相位（2026-10-04 定版）。
 # 文档缺 questionSetVersion/questionSetHash = 旧代产物（判据口径未知，fail-visible），跨代不可比。
 QUESTION_SET_VERSION_DRIVER = "v3.1"

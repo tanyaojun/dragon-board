@@ -3,6 +3,7 @@
 // 只做 fetch + 类型化，无兜底计算（结论唯一来源 = QuantBoard 后端 jev 轨道落库）。
 import type {
   HotlistJevLimitUpDay,
+  HotlistJevThemeLeaderDay,
   HotlistJevDoc,
   HotlistJevDayEntry,
   HotlistJevMissingDay,
@@ -414,6 +415,32 @@ export async function fetchHotlistJevLimitUpLabels(
     const body = (await response.json()) as HotlistJevLimitUpDay
     if (!body.ok) {
       return { ok: false, degraded: true, day: null, reason: body.reason || 'degraded' }
+    }
+    return { ok: true, degraded: false, day: body, reason: null }
+  } catch (error) {
+    return { ok: false, degraded: true, day: null, reason: String(error) }
+  }
+}
+
+/**
+ * 题材层龙头投喂单日读口（GET /api/hotlist-jev/theme-leaders，纯读 fail-visible）。
+ * `withNarrative=true` 时附带叙事全文与题目集原文（前端「投喂语料」抽屉用）。
+ */
+export async function fetchHotlistJevThemeLeaders(
+  date: string,
+  withNarrative = false,
+): Promise<{ ok: boolean; degraded: boolean; day: HotlistJevThemeLeaderDay | null; reason: string | null }> {
+  if (!date) return { ok: false, degraded: true, day: null, reason: '缺日期' }
+  try {
+    const params = new URLSearchParams({ date })
+    if (withNarrative) params.set('with_narrative', '1')
+    const response = await fetch(`/api/hotlist-jev/theme-leaders?${params.toString()}`)
+    if (!response.ok) {
+      return { ok: false, degraded: true, day: null, reason: `HTTP ${response.status}` }
+    }
+    const body = (await response.json()) as HotlistJevThemeLeaderDay
+    if (!body.ok) {
+      return { ok: false, degraded: true, day: null, reason: (body as { reason?: string }).reason || 'degraded' }
     }
     return { ok: true, degraded: false, day: body, reason: null }
   } catch (error) {

@@ -78,6 +78,9 @@
   .lg-caret:hover{background:#e2e8f0;color:var(--text)}
   .lg-row.open .lg-caret{transform:rotate(90deg)}
   .lg-detail>td{background:#fbfcfe;padding:14px 16px 18px;white-space:normal}
+  /* 涨停复盘【原因】列（2026-10-20）：异动解析首行可能很长（603278 示例 20 字），
+     列宽限 260px 单行省略，完整文案走 title 不丢数据 */
+  .lg-reason{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
   .lg-card{border:1px solid var(--border);border-radius:10px;background:#fff;padding:14px 16px}
   .lg-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .lg-title{font-size:14px;font-weight:700}
@@ -214,6 +217,32 @@
   .icon-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;
             border:1px solid var(--border2);border-radius:7px;background:#fff;color:var(--muted);cursor:pointer}
   .icon-btn:hover{border-color:var(--cf-blue);color:var(--cf-blue)}
+  /* ---------- 题材龙头台账（2026-10-20；面板/表格/展开完全复用涨停复盘样式） ---------- */
+  /* 只补涨停复盘没有的增量：证据门/回填/同桶键/明细卡内标题。
+     右三角、行展开、明细卡底、板块 chip、筛选条、KPI 条**一律复用**原样式，
+     不另造并行类（用户 2026-10-20：样式风格须与涨停分析一致）。 */
+  #tlTable tr.tl-backfill > td{background:#fffdf5}
+  #tlTable tr.tl-backfill.lg-row:hover > td{background:#fffaeb}
+  .tl-origin{display:inline-block;margin-left:5px;padding:0 5px;border-radius:5px;font-size:10px;
+    background:#fef3c7;color:#b45309;font-weight:600;vertical-align:middle}
+  .tl-gate{font-size:10px;padding:0 5px;margin-left:4px;border-radius:5px;background:#fef3c7;
+    color:#b45309;white-space:nowrap}
+  .tl-same{color:var(--muted2);font-size:11px}
+  .tl-raw{color:var(--muted);font-weight:600}
+  .tl-ev{font-size:10px;padding:0 4px;border-radius:5px;background:#e0f2fe;color:#0369a1;
+    white-space:nowrap}
+  .tl-base{font-size:11.5px;color:var(--muted);white-space:nowrap}
+  .lf-chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
+  .lf-chk input{cursor:pointer}
+  .lf-warn{margin:0 0 12px;padding:9px 12px;border-left:3px solid #d97706;border-radius:6px;
+    background:#fffbeb;color:#92400e;font-size:12.5px;line-height:1.7}
+  .lf-pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:12px 0 2px;
+    font-size:12px;color:var(--muted)}
+  .lf-pager button{padding:4px 12px;border:1px solid var(--border);border-radius:6px;background:#fff;
+    font-size:12px;color:var(--text);cursor:pointer}
+  .lf-pager button:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+  .lf-pager button:disabled{opacity:.45;cursor:not-allowed}
+  /* 明细卡内部（底层 .lg-detail>td 背景/内距已由涨停复盘样式提供） */
   .tabbar{position:sticky;top:var(--top-h);z-index:29;background:#fff;border-bottom:1px solid var(--border);
           padding:0 22px;display:flex;align-items:center;gap:2px;min-height:44px;flex-wrap:wrap}
   .tabbar:empty{display:none}
@@ -427,6 +456,20 @@
         <table id="relayTable"></table>
       </div>
     </div>
+
+    <!-- ⑥ 题材龙头（2026-10-20）：v2 题目集投喂台账。与涨停分析同构——共用页头
+        #relayKpi（点行=KPI 联动该日）与 tabbar 右侧时间范围控件（rangedSeries 同一区间）；
+        行=区间内全部龙头-日，左侧三角展开 jev 调用日志卡（lg-card 范式）。
+        KPI 卡不另建（删除初版 tlKpi：与涨停分析并排两套 KPI 是重复视觉）。 -->
+    <div class="rv" id="rv-themes">
+      <div class="card" style="margin-top:18px">
+        <div id="tlBanner"></div>
+        <div class="board-row" id="tlBoardRow"></div>
+        <div class="lf-bar" id="tlFilterBar" style="margin-top:2px"></div>
+        <table id="tlTable"></table>
+        <div id="tlPager"></div>
+      </div>
+    </div>
   </section>
 
   <section id="tab-labels" style="display:none">
@@ -460,7 +503,17 @@
 <script>
 const $ = id => document.getElementById(id);
 const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, quotes: null, dieban: null,
+  tlData: { loading: false, error: null, doc: null, rows: [] },
+                        // 题材龙头（rv-themes）：区间内全部龙头-日（tlFetch 按 relayRange 取）
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
+  // 题材龙头台账 UI（对齐涨停复盘 labelFilter/labelSort/labelUi 三分法）：
+  // tlUi=筛选+展开+分页, tlSort=表头排序, tlNarr=投喂语料懒拉缓存
+  tlUi: { q: '', board: '', industry: '', origin: '', bucket: '', choice: '', stage: '',
+          outcome: '', gateOnly: false, openKey: null, page: 1,
+          // 明细卡（对齐涨停分析 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
+          mode: 'detail', q1: '', q2: '' },
+  tlSort: { key: 'date', dir: -1 },   // 区间台账默认最新在前（同 relay/detail 的日期列）
+  tlNarr: {},           // code → {narrative, questionsRaw}（懒拉；null=请求中）
   diebanEntries: [], diebanUi: { openKey: null },
   slotEntries: [], relayEntries: [],
   // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
@@ -982,6 +1035,7 @@ async function loadAll(){
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
   renderRelayTab(); renderLabels(); renderQuotes(); renderDieban();
+  tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -1192,7 +1246,11 @@ function rangedSeries(){
 // 区间变更 → 重绘所有依赖区间的视图（判定明细表 + 4 个子页 + 图表）。
 // 2026-10-18 用户需求：区间控件虽挂在判定明细页头，但是**全局**筛选条件，
 // 相位分线 / 钱效分带 / 毒带观察 / 分带实测 全部跟随联动（四个子页都吃 bandAgg→winBandDays）。
-function rangeRefresh(){ STATE.relayPage = 1; renderRelayTab(); renderCharts(); renderRelayAnalysis(); }
+function rangeRefresh(){
+  STATE.relayPage = 1; STATE.tlUi.page = 1;
+  renderRelayTab(); renderCharts(); renderRelayAnalysis();
+  tlFetch();   // 题材龙头行源 = 区间内全部龙头-日，跟随区间重拉（2026-10-20 用户裁决共用时间范围）
+}
 function rRange(k, v){
   if (!STATE.relayRange) STATE.relayRange = {};
   STATE.relayRange[k] = v || null;
@@ -1691,6 +1749,562 @@ function eodRerun(key){
     });
 }
 
+// ---------- 题材龙头（连板指数子视图 rv-themes，2026-10-20） ----------
+// 与【涨停分析】同构（用户裁决：共用 KPI 卡与时间范围，删除初版自建 KPI）：
+//   · 行源 = **当前区间内全部龙头-日**（`/api/hotlist-jev/theme-leaders?start&end`，
+//     区间与 rangedSeries 同一 `STATE.relayRange`，rangeRefresh 联动重拉）；
+//   · 页头 KPI = 共用 `#relayKpi`（点行 = relayRow(date) 选中该日，KPI 跟随）；
+//   · 左侧三角 = 展开 jev 调用日志卡（lg-card 范式，懒拉 narrative）；
+//   · 展示硬约束：落库口径与模型原答双显 / 结局 null=未封 / 回填样本标橙。
+const TL_CHOICE_CN = { high_ge65: '高 ≥65%', mid_45_65: '中 45-65%', low_25_45: '低 25-45%',
+                       verylow_lt25: '很低 <25%', insufficient: '证据不足' };
+const TL_GATE_CN = { board_unmapped: '板块未映射', corpus_not_collected: '语料未采集',
+                     no_content_no_event: '无正文且无事件' };
+const TL_STAGE_CN = { new_today: '今日新增', ongoing: '持续发酵', stale: '陈旧', none: '无催化',
+                      insufficient: '证据不足' };
+const TL_ORIGIN_CN = { live: '前瞻', backfill: '回填' };
+
+function tlRows(){ return (STATE.tlData && STATE.tlData.rows) || []; }
+function tlKey(r){ return (r.tradingDate || '') + ':' + (r.code || ''); }
+function tlProb(row){
+  // 过门后口径：非 insufficient 质量之和；全量判 insufficient 时回落展示模型原答（带括号）。
+  const sumOf = p => Object.entries(p || {}).reduce((a, kv) =>
+    kv[0] === 'insufficient' ? a : a + Number(kv[1] || 0), 0);
+  const main = sumOf(row.probabilities);
+  if (main > 0.0001) return { text: Math.round(main * 100) + '%', raw: false };
+  const model = sumOf(row.modelProbabilities);
+  if (model > 0.0001) return { text: '(' + Math.round(model * 100) + '%)', raw: true };
+  return { text: '-', raw: false };
+}
+function tlOutcomeKey(row){
+  if (row.outcomeSealedNextDay === null || row.outcomeSealedNextDay === undefined) return 'pending';
+  return row.outcomeSealedNextDay ? 'sealed' : 'broken';
+}
+function tlMatches(row, f){
+  if (f.board && (row.board || '未分板块') !== f.board) return false;
+  if (f.origin && (row.sampleOrigin || 'live') !== f.origin) return false;
+  if (f.bucket && (row.baselineKey || '') !== f.bucket) return false;
+  if (f.choice && (row.choice || '') !== f.choice) return false;
+  if (f.stage && (row.catalystStage || '') !== f.stage) return false;
+  if (f.outcome && tlOutcomeKey(row) !== f.outcome) return false;
+  if (f.industry && (row.evidenceIndustry || '') !== f.industry) return false;
+  if (f.gateOnly && !(row.gate && row.gate.applied)) return false;
+  if (f.q){
+    const q = f.q.toLowerCase();
+    const hay = String(row.code || '') + String(row.name || '') + String(row.board || '');
+    if (!hay.toLowerCase().includes(q)) return false;
+  }
+  return true;
+}
+function tlFiltered(){ return tlRows().filter(r => tlMatches(r, STATE.tlUi)); }
+function tlSorted(list){
+  const st = STATE.tlSort;
+  const kv = { date: r => r.tradingDate || '', code: r => r.code || '', name: r => r.name || '',
+    board: r => r.board || '', streak: r => r.streak == null ? -1 : r.streak,
+    time: r => r.time || '', boardN: r => r.boardN == null ? -1 : r.boardN };
+  if (!kv[st.key]) return list;
+  return list.slice().sort((a, b) => { const va = kv[st.key](a), vb = kv[st.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * st.dir; });
+}
+function tlSet(key, value){
+  STATE.tlUi[key] = value;
+  if (key !== 'page') STATE.tlUi.page = 1;
+  tlRefresh();
+}
+function tlBoard(name){ STATE.tlUi.board = (STATE.tlUi.board === name ? '' : name);
+  STATE.tlUi.page = 1; tlRefresh(); }
+function tlPage(v){ STATE.tlUi.page = v; tlRefresh(); }
+function tlSortBy(key){
+  const st = STATE.tlSort;
+  if (st.key === key) st.dir = -st.dir; else { st.key = key; st.dir = key === 'date' ? -1 : 1; }
+  STATE.tlUi.page = 1;
+  tlRefresh();
+}
+function tlClear(){
+  STATE.tlUi = { q: '', board: '', industry: '', origin: '', bucket: '', choice: '', stage: '',
+                 outcome: '', gateOnly: false, openKey: null, page: 1,
+                 mode: STATE.tlUi.mode, q1: '', q2: '' };
+  tlRefresh();
+}
+// 文本搜索只重渲染表体（筛选条不动，输入焦点不丢；同涨停复盘 lfQ）
+function tlQ(v){ STATE.tlUi.q = v; STATE.tlUi.page = 1; tlRenderRows(); }
+
+// 区间取数：与 rangedSeries 同一 STATE.relayRange；rangeRefresh / loadAll 触发。
+// seq 守卫防快速改区间的过期响应覆盖（同 loadAll 的 _loadSeq 范式）。
+let _tlSeq = 0;
+function tlRangeKey(){
+  const rg = STATE.relayRange || { start: null, end: null };
+  return (rg.start || '') + '~' + (rg.end || '');
+}
+async function tlFetch(){
+  if (!STATE.series || !STATE.series.length) return;   // 序列未到 → 区间未定（首屏竞态）
+  const seq = ++_tlSeq;
+  if (!STATE.relayRange) rangedSeries();               // 惰性初始化默认近1月
+  const rg = STATE.relayRange || { start: null, end: null };
+  const qs = [];
+  if (rg.start) qs.push('start=' + encodeURIComponent(rg.start));
+  if (rg.end) qs.push('end=' + encodeURIComponent(rg.end));
+  // 刷新机制对齐涨停分析（2026-10-20 用户裁决）：60s 轮询同区间 → **后台静默刷新**，
+  // 旧数据保持可见（不闪「加载中」、不丢焦点/展开态）；只有区间真正变化才显示加载态。
+  const key = tlRangeKey();
+  const bg = STATE.tlData && STATE.tlData.rangeKey === key && (STATE.tlData.rows || []).length > 0;
+  STATE.tlData = { loading: !bg, error: null, rangeKey: key,
+                   doc: bg ? STATE.tlData.doc : null, rows: STATE.tlData.rows || [] };
+  tlRefresh();
+  try {
+    const doc = await jget('/api/hotlist-jev/theme-leaders' + (qs.length ? '?' + qs.join('&') : ''));
+    if (seq !== _tlSeq) return;
+    STATE.tlData = { loading: false, rangeKey: key,
+                     error: (doc && doc.ok === false) ? (doc.reason || '读库降级') : null,
+                     doc: doc, rows: (doc && doc.leaders) || [] };
+  } catch (e) {
+    if (seq !== _tlSeq) return;
+    // 后台刷新失败 → 保留旧数据可见 + banner 报错（不清空列表，fail-visible 不闪断）
+    if (bg){
+      STATE.tlData = { loading: false, rangeKey: key, error: 'theme_leaders_read_failed: '
+        + (e && e.message ? e.message : e), doc: STATE.tlData.doc, rows: STATE.tlData.rows };
+    } else {
+      STATE.tlData = { loading: false, rangeKey: key, error: 'theme_leaders_read_failed: '
+        + (e && e.message ? e.message : e), doc: null, rows: [] };
+    }
+  }
+  tlRefresh();
+}
+
+function renderThemes(){ tlRefresh(); }
+function tlRefresh(){
+  tlRenderBanner();
+  tlRenderBoards();
+  tlRenderBar();
+  tlRenderRows();
+}
+
+// 区间级告警（混代际 / 含回填）：fail-visible，不与涨停分析 KPI 混放
+function tlRenderBanner(){
+  const el = $('tlBanner'); if (!el) return;
+  const d = STATE.tlData;
+  if (!d){ el.innerHTML = ''; return; }
+  if (d.error && !(d.rows || []).length){
+    el.innerHTML = '<div class="lf-warn">⚠️ 题材龙头读口异常：' + esc(d.error)
+      + '（非「区间内无投喂」）</div>';
+    return;
+  }
+  // 后台静默刷新失败 + 旧数据仍可见（§4.0）：错误必须有出口，不得伪装成正常数据
+  const bgErr = d.error && (d.rows || []).length
+    ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error)
+      + '）——当前展示的是上次成功数据</div>' : '';
+  const doc = d.doc || {};
+  if (doc.no_data){ el.innerHTML = '<div class="lf-warn">区间内无题材龙头投喂记录'
+    + '（16:20 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
+  const verTxt = Object.entries(doc.versions || {}).map(kv => kv[0] + '=' + kv[1]).join('，');
+  const warns = [];
+  if (doc.mixedVersions) warns.push('⚠️ 区间内存在多代际标签（' + esc(verTxt)
+    + '）——跨代不可比较，评估只出各代分组指标');
+  if ((doc.origins || {}).backfill) warns.push('⚠️ 含<b>回填</b>样本 '
+    + esc(String(doc.origins.backfill)) + ' 只：事后补跑，题材语料含未来信息，'
+    + '只能当结构/事件层观察，不得当题材判据结论');
+  el.innerHTML = (bgErr ? bgErr : '')
+    + (warns.length ? '<div class="lf-warn">' + warns.join('<br>') + '</div>' : '');
+}
+
+// 板块分布 chips（.board-row .k + .chip；超 10 类折叠「其他 N 类」；同涨停复盘）
+function tlRenderBoards(){
+  const el = $('tlBoardRow'); if (!el) return;
+  const f = STATE.tlUi;
+  const pool = tlRows().filter(r => tlMatches(r, Object.assign({}, f, { board: '' })));
+  const dist = {};
+  for (const r of pool){ const b = r.board || '未分板块'; dist[b] = (dist[b] || 0) + 1; }
+  const arr = Object.entries(dist).sort((a, b) => b[1] - a[1]);
+  const top = arr.slice(0, 10), rest = arr.length - top.length;
+  el.innerHTML = '<span class="k">板块分布</span>'
+    + top.map(kv => '<span class="chip' + (f.board === kv[0] ? ' on' : '')
+        + '" title="点击筛选该板块" onclick="tlBoard(' + JSON.stringify(kv[0]).replace(/"/g, '&quot;')
+        + ')">' + esc(kv[0]) + ' ' + kv[1] + '</span>').join('')
+    + (rest > 0 ? '<span class="chip plain">其他 ' + rest + ' 类</span>' : '');
+}
+
+// 筛选条（lfSel 同款下拉 + 焦点守卫 + 清除筛选 + 计数；区间控件在 tabbar，不在此重复）
+function tlSel(label, key, opts){
+  const cur = STATE.tlUi[key];
+  const list = [['', label + ' · 全部']].concat(opts);
+  return '<select title="' + esc(label) + '筛选" onchange="tlSet(\'' + key + '\', this.value)">'
+    + list.map(kv => '<option value="' + esc(kv[0]) + '"' + (cur === kv[0] ? ' selected' : '')
+      + '>' + esc(kv[1]) + '</option>').join('') + '</select>';
+}
+function tlRenderBar(){
+  const bar = $('tlFilterBar'); if (!bar) return;
+  const ae = document.activeElement;
+  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
+  const rows = tlRows();
+  if (!rows.length){ bar.innerHTML = ''; return; }
+  const uniq = key => Array.from(new Set(rows.map(r => r[key]).filter(Boolean))).sort();
+  const boards = Array.from(new Set(rows.map(r => r.board || '未分板块')))
+    .sort((a, b) => a.localeCompare(b)).map(v => [v, v]);
+  bar.innerHTML =
+    '<input class="lf-q" placeholder="搜代码 / 名称 / 板块…" value="' + esc(STATE.tlUi.q)
+      + '" oninput="tlQ(this.value)">'
+    + tlSel('板块', 'board', boards)
+    + tlSel('题材证据', 'industry', uniq('evidenceIndustry').map(v => [v, v]))
+    + tlSel('档位', 'choice', Object.entries(TL_CHOICE_CN))
+    + tlSel('催化阶段', 'stage', Object.entries(TL_STAGE_CN))
+    + tlSel('结局', 'outcome', [['sealed', '续板'], ['broken', '未续'], ['pending', '未封（等次日）']])
+    + tlSel('来源', 'origin', uniq('sampleOrigin').map(v => [v, TL_ORIGIN_CN[v] || v]))
+    + tlSel('同桶', 'bucket', uniq('baselineKey').map(v => [v, v]))
+    + '<label class="lf-chk"><input type="checkbox"' + (STATE.tlUi.gateOnly ? ' checked' : '')
+      + ' onchange="tlSet(\'gateOnly\', this.checked)"> 仅看被证据门覆盖</label>'
+    + '<button onclick="tlClear()">清除筛选</button>'
+    + '<span class="cnt" id="tlCnt"></span>';
+}
+
+// 表格：日期列 + 可排序表头 + 分页 20（relayPageSlice 同规格）；点行=选中该日（KPI 联动），
+// 三角=展开调用日志卡（与涨停分析的 relayRow/relayToggle 分工完全一致）。
+function tlRenderRows(){
+  const el = $('tlTable'); if (!el) return;
+  const d = STATE.tlData || {};
+  const f = STATE.tlUi;
+  // 加载态只在「无旧数据可显示」时占整行（区间切换/首载）；后台静默刷新走旧数据
+  if (d.loading && !(d.rows || []).length){
+    el.innerHTML = '<tr><td class="empty">题材龙头投喂加载中…</td></tr>';
+    $('tlPager').innerHTML = ''; const c = $('tlCnt'); if (c) c.textContent = '';
+    return;
+  }
+  if (d.error && !(d.rows || []).length){
+    el.innerHTML = '<tr><td class="empty">读口异常，未能取数（非「区间内无投喂」）</td></tr>';
+    $('tlPager').innerHTML = ''; return;
+  }
+  const doc = d.doc || {};
+  if (doc.no_data){
+    el.innerHTML = '<tr><td class="empty">' + esc((STATE.relayRange || {}).start || '最早')
+      + ' ~ ' + esc((STATE.relayRange || {}).end || '最新')
+      + ' 无题材龙头投喂记录（16:20 槽位未跑，或区间早于投产日）</td></tr>';
+    $('tlPager').innerHTML = ''; return;
+  }
+  const rows = tlSorted(tlFiltered());
+  const pg = relayPageSlice(rows, f.page);
+  f.page = pg.page;
+  const hasFilter = !!(f.q || f.board || f.industry || f.origin || f.bucket || f.choice
+    || f.stage || f.outcome || f.gateOnly);
+  const hint = $('tlHint'); if (hint) hint.textContent = '';
+  const cnt = $('tlCnt');
+  if (cnt) cnt.textContent = filteredCountText(rows.length, f, doc);
+  const th = (label, key) => '<th class="sortable" onclick="tlSortBy(\'' + key + '\')">'
+    + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
+  el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
+    + th('板块', 'board') + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
+    + '<th>续板概率</th><th>档位</th><th>模型原答</th><th>催化阶段</th><th>题材证据</th>'
+    + '<th>同桶基线</th><th>结局</th></tr>'
+    + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
+      : '<tr><td class="empty" colspan="14">无匹配龙头（调整区间或筛选条件）</td></tr>');
+  $('tlPager').innerHTML = tlPager(pg.page, pg.total);
+}
+function filteredCountText(total, f, doc){
+  const parts = [];
+  const dates = doc.dates || [];
+  parts.push('题目集 ' + Object.keys(doc.versions || {}).join('/'));
+  parts.push(dates.length ? (dates[0] + ' ~ ' + dates[dates.length - 1] + '（' + dates.length + ' 个交易日）') : '');
+  return parts.join(' · ') + ' · 共 ' + total + ' 只';
+}
+function tlPager(page, total){
+  const nav = total > 1
+    ? '<button onclick="tlPage(' + (page - 1) + ')"' + (page <= 1 ? ' disabled' : '') + '>‹ 上一页</button>'
+      + '<select class="pgjump" title="跳页" onchange="tlPage(parseInt(this.value,10))">'
+      + Array.from({length: total}, (_, i) => '<option value="' + (i + 1) + '"'
+        + (page === i + 1 ? ' selected' : '') + '>第 ' + (i + 1) + ' / ' + total + ' 页</option>').join('')
+      + '</select>'
+      + '<button onclick="tlPage(' + (page + 1) + ')"' + (page >= total ? ' disabled' : '') + '>下一页 ›</button>'
+    : '';
+  return '<span class="pager" id="tlPagerEl">' + nav + '<span class="cnt">共 ' + total + ' 页</span></span>';
+}
+function tlRowHtml(r, f){
+  const p = tlProb(r);
+  const open = f.openKey === tlKey(r);
+  const outKey = tlOutcomeKey(r);
+  const outcome = outKey === 'pending'
+    ? badge('未封', 'b-gray')
+    : (outKey === 'sealed' ? badge('续板', 'b-green') : badge('未续', 'b-red'));
+  const choice = badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
+    r.choice === 'high_ge65' ? 'b-red' : r.choice === 'mid_45_65' ? 'b-amber'
+      : r.choice === 'insufficient' ? 'b-gray' : 'b-blue');
+  const overridden = r.modelChoice && r.modelChoice !== r.choice;
+  const modelCell = overridden
+    ? badge(TL_CHOICE_CN[r.modelChoice] || r.modelChoice, 'b-amber')
+      + '<span class="tl-gate">' + esc(TL_GATE_CN[(r.gate || {}).reason] || '证据门') + '</span>'
+    : '<span class="tl-same">同档位</span>';
+  const evid = r.evidenceIndustry
+    ? esc(r.evidenceIndustry) + (r.evidenceEventTitles && r.evidenceEventTitles.length
+        ? ' <span class="tl-ev" title="' + esc(r.evidenceEventTitles.join(' / ')) + '">+'
+          + r.evidenceEventTitles.length + '事件</span>' : '')
+    : (r.evidenceMissingReason
+        ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
+        : '<span class="badge b-gray">-</span>');
+  const bm = r.baselineMeta || {};
+  const baseTxt = r.baselineKey
+    ? '<span class="tl-base" title="窗口 ' + esc(bm.start || '-') + ' ~ ' + esc(bm.end || '-')
+      + '（' + esc(String(bm.rows || 0)) + ' 样本）">' + esc(r.baselineKey) + '</span>' : '-';
+  const originTag = (r.sampleOrigin === 'backfill')
+    ? '<span class="tl-origin" title="事后回填：题材语料含未来信息，不得当结论">回填</span>' : '';
+  const dkey = js(r.tradingDate || '');
+  return '<tr class="lg-row' + (open ? ' open' : '')
+      + (STATE.relayFocus === r.tradingDate ? ' focus' : '')
+      + (r.sampleOrigin === 'backfill' ? ' tl-backfill' : '')
+      + '" onclick="tlRow(\'' + dkey + '\')">'
+    + '<td class="num"><span class="lg-caret" title="展开/收敛 JEV 调用日志"'
+      + ' onclick="event.stopPropagation(); tlToggle(\'' + js(tlKey(r)) + '\')">▶</span>'
+      + esc((r.tradingDate || '').slice(5)) + '</td>'
+    + '<td>' + esc(r.code) + '</td>'
+    + '<td>' + esc(r.name || '') + originTag + '</td>'
+    + '<td>' + esc(r.board || '-') + '</td>'
+    + '<td class="num">' + (r.streak == null ? '-' : esc(String(r.streak))) + '</td>'
+    + '<td class="num">' + esc(r.time || '-') + '</td>'
+    + '<td class="num">' + (r.boardN == null ? '-' : esc(String(r.boardN))) + '</td>'
+    + '<td class="num"><b class="' + (p.raw ? 'tl-raw' : '') + '">' + p.text + '</b></td>'
+    + '<td>' + choice + '</td><td>' + modelCell + '</td>'
+    + '<td>' + badge(TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-', 'b-gray') + '</td>'
+    + '<td>' + evid + '</td><td>' + baseTxt + '</td><td>' + outcome + '</td></tr>'
+    + (open ? '<tr class="lg-detail"><td colspan="14">' + tlDetailHtml(r) + '</td></tr>' : '');
+}
+
+// ── 明细卡：jev 调用日志卡（lg-card 范式，与涨停分析同构） ──
+function tlOpenRow(){
+  const k = STATE.tlUi.openKey;
+  if (!k) return null;
+  return tlRows().find(r => tlKey(r) === k) || null;
+}
+function tlNarrOf(key){
+  const store = STATE.tlNarr || {};
+  return store[key] && store[key] !== null ? store[key] : null;
+}
+function tlEntryReq(r){
+  const got = tlNarrOf(tlKey(r)) || {};
+  // P1 修复（2026-10-20 review）：拉取失败是读口/网络错误，必须显式报错，
+  // 不得伪装成「旧档缺 questionsRaw」（§4.0 禁止把异常转成缺失原因造假）
+  if (got.error != null) return { state: null, model: r.model != null ? r.model : null,
+    questions: { _err: '语料拉取失败：' + got.error + '（收起后重开该行可重试）' } };
+  return { state: got.narrative != null ? got.narrative : null,
+           model: r.model != null ? r.model : null,
+           questions: got.questionsRaw != null ? got.questionsRaw
+             : { _note: '该存档未落 questionsRaw（旧文档）' } };
+}
+function tlEntryResp(r){
+  const got = tlNarrOf(tlKey(r)) || {};
+  if (got.responseRaw) return got.responseRaw;
+  return { _note: 'responseRaw 未存档（成功路径仅存解析结果；envelope 原文见 CF AI Gateway 日志）',
+           answers: { leader_nextday_continue: { choice: r.choice, probabilities: r.probabilities } },
+           modelAnswers: { leader_nextday_continue: { choice: r.modelChoice,
+             probabilities: r.modelProbabilities } },
+           gate: r.gate || null, catalystStage: r.catalystStage,
+           evidenceMissing: r.evidenceMissing, evidenceMissingReason: r.evidenceMissingReason,
+           model: r.model, usage: r.usage };
+}
+function tlDetailDoc(r){
+  const got = tlNarrOf(tlKey(r)) || {};
+  const doc = Object.assign({}, r);
+  if (got.narrative != null) doc.narrative = got.narrative;
+  if (got.questionsRaw != null) doc.questionsRaw = got.questionsRaw;
+  if (got.responseRaw != null) doc.responseRaw = got.responseRaw;
+  return doc;
+}
+function tlMode(m, ev){
+  if (ev) ev.stopPropagation();
+  STATE.tlUi.mode = m;
+  tlRenderRows();
+}
+function tlFilter(side, v){
+  const ui = STATE.tlUi;
+  if (side === 'req') ui.q1 = v; else ui.q2 = v;
+  tlRedrawTrees();
+}
+function tlRedrawTrees(){
+  const r = tlOpenRow(); if (!r) return;
+  const ui = STATE.tlUi;
+  const a = $('tlReqTree'), b = $('tlRespTree');
+  if (a) a.innerHTML = treeHtml(tlEntryReq(r), ui.q1 || '');
+  if (b) b.innerHTML = treeHtml(tlEntryResp(r), ui.q2 || '');
+}
+function tlCopy(what, ev){
+  if (ev) ev.stopPropagation();
+  const r = tlOpenRow(); if (!r) return;
+  const txt = JSON.stringify(what === 'doc' ? tlDetailDoc(r)
+    : what === 'req' ? tlEntryReq(r) : tlEntryResp(r), null, 2);
+  copyText(txt, ev.currentTarget);
+}
+function tlDetailHtml(r){
+  const ui = STATE.tlUi;
+  const mode = ui.mode || 'detail';
+  const loading = tlNarrOf(tlKey(r)) === null;
+  const st = r.status || '-';
+  const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
+  const u = r.usage || {};
+  const outKey = tlOutcomeKey(r);
+  const outTxt = outKey === 'pending' ? '未封（等次一交易日）'
+    : (outKey === 'sealed' ? '续板' : '未续');
+  const outColor = outKey === 'pending' ? 'var(--muted)' : outKey === 'sealed' ? '#16a34a' : '#dc2626';
+  const gated = r.gate && r.gate.applied;
+  const tKey = tlKey(r);
+  const anyBusy = !!STATE.rerunBusy;
+  const busy = STATE.rerunBusy === tKey;
+  // 重跑入口（同 relay/detail）：置于【详细信息】左侧；busy 全局禁用防并发烧 token
+  const rerunBtnHtml = '<button class="rerun"'
+    + (busy ? ' disabled'
+        : anyBusy ? ' disabled title="另有重跑进行中，防并发烧 token"'
+        : ' title="真实调用 jev 模型重判该龙头-日（约 2.3K tokens），仅用于网络抖动导致 degraded/需更新时"')
+    + ' onclick="event.stopPropagation(); tlRerun(\'' + js(tKey) + '\')">'
+    + (busy ? '重跑中…' : '重跑') + '</button>';
+  const rm = (STATE.rerunMsg && STATE.rerunMsg.key === tKey)
+    ? '<div class="prov" style="margin:10px 0 0;color:'
+      + (STATE.rerunMsg.ok ? 'var(--green)' : 'var(--amber)') + '">'
+      + esc(STATE.rerunMsg.text) + '</div>' : '';
+  const head = '<div class="lg-head"><div class="lg-title">🕐 jev · '
+    + esc(r.tradingDate || '') + ' · ' + esc(r.name || '') + '（' + esc(r.code) + '）· '
+    + esc(r.board || '-')
+    + '<span class="lg-asof">' + esc(r.computedAt || '') + '</span></div>'
+    + '<div class="lg-toggle">' + rerunBtnHtml
+    + '<button class="' + (mode === 'detail' ? 'on' : '')
+    + '" onclick="tlMode(\'detail\', event)">详细信息</button>'
+    + '<button class="' + (mode === 'raw' ? 'on' : '')
+    + '" onclick="tlMode(\'raw\', event)">原始 JSON</button></div></div>';
+  const meta = '<div class="lg-meta">'
+    + '<div><div class="k">持续时间</div><div class="v">'
+    + (r.latencyMs != null ? esc(String(r.latencyMs)) + ' ms' : '-') + '</div></div>'
+    + '<div><div class="k">输入 tokens</div><div class="v">'
+    + (u.input_tokens != null ? Number(u.input_tokens).toLocaleString() : '-') + '</div></div>'
+    + '<div><div class="k">输出 tokens</div><div class="v">'
+    + (u.output_tokens != null ? Number(u.output_tokens).toLocaleString() : '-') + '</div></div>'
+    + '<div><div class="k">状态</div><div class="v" style="color:' + stColor + '">'
+    + esc(st) + '</div></div>'
+    + '<div><div class="k">续板档位</div><div class="v">'
+    + esc(TL_CHOICE_CN[r.choice] || r.choice || '-') + '</div></div>'
+    + '<div><div class="k">结局</div><div class="v" style="color:' + outColor + '">'
+    + esc(outTxt) + '</div></div>'
+    + (gated ? '<div><div class="k">证据门</div><div class="v" style="color:#a16207">'
+        + esc(TL_GATE_CN[(r.gate || {}).reason] || (r.gate || {}).reason || '-')
+        + '</div></div>' : '')
+    + (r.errorCode ? '<div><div class="k">错误码</div><div class="v" style="color:#dc2626">'
+        + esc(r.errorCode) + '</div></div>' : '')
+    + '</div>';
+  let body;
+  if (mode === 'raw'){
+    body = '<div class="lg-raw"><div class="lg-phead" style="border-bottom:none;padding:10px 0 0">'
+      + '<b>存档文档 JSON（原始）</b>'
+      + '<button class="lg-copy" onclick="tlCopy(\'doc\', event)">⧉ 复制</button></div>'
+      + '<pre>' + esc(JSON.stringify(tlDetailDoc(r), null, 2)) + '</pre></div>';
+  } else if (loading){
+    body = '<div class="lg-empty" style="padding:18px">投喂语料载入中…</div>';
+  } else {
+    body = '<div class="lg-panels">'
+      + '<div class="lg-panel"><div class="lg-phead"><b>请求</b>'
+      + '<span class="st">state+model+questions</span>'
+      + '<button class="lg-copy" onclick="tlCopy(\'req\', event)">⧉ 复制</button></div>'
+      + '<input class="lg-filter" placeholder="筛选 JSON..." value="' + esc(ui.q1 || '')
+      + '" oninput="tlFilter(\'req\', this.value)">'
+      + '<div class="lg-tree" id="tlReqTree">' + treeHtml(tlEntryReq(r), ui.q1 || '') + '</div></div>'
+      + '<div class="lg-panel"><div class="lg-phead"><b>响应</b>'
+      + '<span class="dot" style="background:' + stColor + '"></span>'
+      + '<span class="st">' + esc(st) + '</span>'
+      + '<button class="lg-copy" onclick="tlCopy(\'resp\', event)">⧉ 复制</button></div>'
+      + '<input class="lg-filter" placeholder="筛选 JSON..." value="' + esc(ui.q2 || '')
+      + '" oninput="tlFilter(\'resp\', this.value)">'
+      + '<div class="lg-tree" id="tlRespTree">' + treeHtml(tlEntryResp(r), ui.q2 || '') + '</div></div>'
+      + '</div>';
+  }
+  const overridden = r.modelChoice && r.modelChoice !== r.choice;
+  const warn = overridden
+    ? '<div class="prov" style="margin:10px 0 0;color:var(--amber)">证据门覆盖：模型原答 '
+      + esc(TL_CHOICE_CN[r.modelChoice] || r.modelChoice) + ' → 落库 '
+      + esc(TL_CHOICE_CN[r.choice] || r.choice) + '（'
+      + esc((r.gate || {}).label || TL_GATE_CN[(r.gate || {}).reason] || '证据缺失')
+      + '）；原答保留在 modelAnswers，消费端只用落库口径</div>' : '';
+  const err = r.errorCode
+    ? '<div class="prov" style="margin:10px 0 0;color:var(--red)">调用异常 '
+      + esc(r.errorCode) + '：' + esc(r.errorDetail || '') + '</div>' : '';
+  const foot = '<div class="lg-foot">'
+    + '<span><span class="k">终端点</span> <code>POST /v1/systemone</code></span>'
+    + '<span><span class="k">模型</span> <code>' + esc(r.model || '-') + '</code></span>'
+    + '<span><span class="k">来源</span> <code>'
+    + esc(TL_ORIGIN_CN[r.sampleOrigin] || r.sampleOrigin || '-') + '</code></span>'
+    + '<span><span class="k">题集版本</span> <code>' + esc(r.questionSetVersion || '-')
+    + '</code> <code>' + esc(r.questionSetHash || '-') + '</code></span>'
+    + '<span><span class="k">原料</span> <code>' + esc(r.ammoVersion || '-') + '</code></span>'
+    + '<span><span class="k">存档 _id</span> <code>' + esc(r.docId || '-') + '</code></span>'
+    + '</div>';
+  return '<div class="lg-card" onclick="event.stopPropagation()">' + head + meta + rm + warn + err
+    + body + foot + '</div>';
+}
+// 点行 = 选中该日（共用页头 KPI 联动；再点取消）；展开/收敛只归左侧三角
+function tlRow(date){
+  relayRow(date);
+  tlRenderRows();
+}
+// 左侧三角：展开/收敛该龙头-日的调用日志卡（不动选中态；同 relayToggle 分工）
+function tlToggle(key){
+  const ui = STATE.tlUi;
+  if (ui.openKey === key){ ui.openKey = null; ui.q1 = ''; ui.q2 = ''; tlRenderRows(); return; }
+  ui.openKey = key; ui.q1 = ''; ui.q2 = '';
+  tlRenderRows();
+  const r = tlRows().find(x => tlKey(x) === key);
+  if (r && !STATE.tlNarr[key]) void tlLoadNarrative(r);
+}
+// 单只龙头-日重跑（对齐 relayRerun 范式）：confirm（≈2.3K tokens）→ busy 全局防并发 →
+// POST /theme-leaders/rerun（force 覆盖幂等）→ 清 narrative 缓存 → 静默 loadAll（不闪列表）。
+function tlRerun(key){
+  if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
+  const idx = key.indexOf(':');
+  const date = key.slice(0, idx), code = key.slice(idx + 1);
+  const ok = window.confirm(`重跑 ${date} ${code} 龙头投喂？
+
+将真实调用 jev 模型（约 2.3K tokens）重新生成投喂语料并重判、覆盖存档（回填档保持回填标记；结局字段将清空，由次日自愈/评估回填）。
+建议仅在网络抖动导致 degraded 时使用。`)
+  if (!ok) return;
+  STATE.rerunBusy = key;
+  STATE.rerunMsg = null;
+  tlRenderRows();
+  jpost('/api/hotlist-jev/theme-leaders/rerun', { date: date, code: code })
+    .then(r => {
+      STATE.rerunBusy = null;
+      const d = (r && r.doc) || {};
+      STATE.rerunMsg = { key: key, ok: !!(r && r.ok),
+        text: (r && r.ok)
+          ? ('重跑完成：状态 ' + (d.status || '-') + ' · 档位 ' + (TL_CHOICE_CN[d.choice] || d.choice || '-')
+             + ' · tokens ' + JSON.stringify(d.usage || {}))
+          : ('重跑未成功（' + ((r && (r.errorCode || r.reason || r.detail)) || 'unknown') + '）：'
+             + ((r && (r.errorDetail || r.error || '')) || '')) };
+      delete STATE.tlNarr[key];      // 旧语料已过期，丢弃重拉
+      return loadAll();              // 静默刷新（同区间不闪列表）
+    })
+    .then(() => {
+      const r = tlOpenRow();
+      if (r && STATE.tlUi.openKey === key) void tlLoadNarrative(r);
+      tlRenderRows();   // P2 修复：loadAll 早期失败时立即重绘，按钮不留过期 busy 态
+    })
+    .catch(err => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: false,
+        text: '重跑请求失败：' + (err && err.message ? err.message : err) };
+      tlRenderRows();
+    });
+}
+async function tlLoadNarrative(r){
+  const key = tlKey(r);
+  if (!r.tradingDate) return;
+  STATE.tlNarr = STATE.tlNarr || {};
+  if (STATE.tlNarr[key] === null) return;
+  STATE.tlNarr[key] = null;
+  const gen = r.computedAt || '';   // 代际哨兵：重跑刷新 computedAt，旧 in-flight 回写作废
+  try {
+    const doc = await jget('/api/hotlist-jev/theme-leaders?with_narrative=1&date='
+      + encodeURIComponent(r.tradingDate));
+    const row = ((doc && doc.leaders) || []).find(x => x.code === r.code);
+    // 代际守卫：当前行 computedAt 已变（重跑完成覆盖）→ 丢弃本次旧语料，重开重拉
+    const cur = (typeof tlOpenRow === 'function' && tlOpenRow()) || null;
+    if (gen && cur && cur.computedAt && cur.computedAt !== gen) return;
+    STATE.tlNarr[key] = row ? { narrative: row.narrative, questionsRaw: row.questionsRaw,
+                                responseRaw: row.responseRaw } : {};
+  } catch (e) {
+    STATE.tlNarr[key] = { error: String(e) };
+  }
+  if (STATE.tlUi.openKey === key) tlRenderRows();
+}
+
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
 // 范围二分（方案A，2026-10-11 用户裁决）：韭研触板名单经 THS 炸板池二分——
 // 涨停=触板-炸板（官方简图口径）再剔 ST/北交所；漏标连板判定已按「昨日涨停池」修正
@@ -1844,19 +2458,30 @@ function lfRenderRows(){
     const ownDragon = (s.boardDragons || []).find(d =>
       d.code && String(d.code).slice(-6) === String(s.code || '').slice(-6));
     const dragons = ownDragon ? `<span style="color:var(--muted2)">${esc(ownDragon.role || '')}</span>` : '';
+    // 原因=韭研异动解析首行（后端板块 join 的 reason，2026-10-20 用户需求）：
+    // 完整首行放 title（列宽有限不重截断数据），缺失显示 '-'（不伪造原因）
+    const reasonTxt = s.reason || '';
+    const reasonCell = reasonTxt
+      ? `<td class="lg-reason" title="${esc(reasonTxt)}">${esc(reasonTxt)}</td>`
+      : '<td class="lg-reason" title="韭研异动解析首行缺失">-</td>';
+    // 投喂槽位（2026-10-20）：midday=12:30 午盘投喂（收盘幂等未重复投喂）/final=收盘投喂；
+    // 旧档无 labelSlot → 不标标记（不当收盘档冒充）
+    const slotTag = s.labelSlot === 'midday'
+      ? `<span class="badge b-amber" title="午盘 12:30 投喂（原始名单 ${esc(s.jiuyanFetchedAt || '时点未知')}）；收盘链已幂等跳过，未重复投喂">午盘</span> `
+      : '';
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
     <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
     <td style="font-size:12px">${dragons || '-'}</td>
-    <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>
-    <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
+    <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>${reasonCell}
+    <td>${slotTag}${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
     <td>${badge(CAT_DEPTH_CN[s.catalystDepth] || s.catalystDepth || '-', 'b-gray')}</td>
     <td>${badge(FRESH_CN[s.freshness] || s.freshness || '-', s.freshness === 'fresh_catalyst' ? 'b-green' : 'b-gray')}</td>
     <td>${badge(BUY_SIDE_CN[s.buySideLogic] || s.buySideLogic || '-', 'b-gray')}</td>${s.rank ? `<td class="num">#${s.rank}</td>` : '<td></td>'}</tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="11">${detailHtml(entry, 'lab')}</td></tr>` : '');
+    + (open ? `<tr class="lg-detail"><td colspan="12">${detailHtml(entry, 'lab')}</td></tr>` : '');
   }).join('');
   const lth = (label, key) => `<th class="sortable" onclick="setLabelSort('${key}')">${label}${sortMark(ls, key)}</th>`;
-  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th><th>领涨</th>${lth('高度', 'boards')}${lth('封板', 'time')}<th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
-    + (rows || '<tr><td colspan="11" class="empty">无匹配个股（调整筛选条件）</td></tr>');
+  $('labelTable').innerHTML = `<tr>${lth('代码', 'code')}<th>名称</th><th>板块</th><th>领涨</th>${lth('高度', 'boards')}${lth('封板', 'time')}<th>原因</th><th>驱动</th><th>催化深度</th><th>新鲜度</th><th>买方逻辑</th>${lth('热榜', 'rank')}</tr>`
+    + (rows || '<tr><td colspan="12" class="empty">无匹配个股（调整筛选条件）</td></tr>');
 }
 function renderLabels(){
   const L = STATE.labels || {};
@@ -2844,7 +3469,7 @@ function lgCopy(view, what, ev){
 //   一级 < 5 个，连板指数 5 个子视图各占一页（每页 ≤2 卡，杜绝一页长条）
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
-                     ['leaders', '板块与龙头', '🐉'],
+                     ['leaders', '板块与龙头', '🐉'], ['themes', '题材龙头', '👑'],
                      // 2026-10-19 用户裁决：页名由「判定明细」改为「涨停分析」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
                      ['detail', '涨停分析', '🗓️']];

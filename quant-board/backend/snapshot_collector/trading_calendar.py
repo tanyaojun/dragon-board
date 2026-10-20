@@ -136,6 +136,23 @@ def is_trading_day(date: datetime.date) -> bool:
     return result
 
 
+def is_trading_day_cached(date: datetime.date) -> tuple[bool, str]:
+    """Non-raising trading-day check: bridge -> local cache -> weekday heuristic.
+
+    Advisory/research chains (韭研午盘投喂、题材语料采集) must degrade instead of failing
+    when python-bridge is down: a missing bridge is not "no data", and stopping the whole
+    step silently loses the day's evidence (AGENTS §4.0 fail-visible). Returns
+    ``(is_trading_day, source)`` with source in ``bridge|cache|weekday`` so callers can
+    record where the judgement came from.
+    """
+    if not _fetch_bridge_calendar(date):
+        cached = _read_calendar_cache().get(date.isoformat())
+        if cached is not None:
+            return cached, "cache"
+        return _weekday_heuristic(date), "weekday"
+    return True, "bridge"
+
+
 def trading_date_from_ts(now_ts_ms: int) -> str | None:
     """Convert epoch milliseconds to an Asia/Shanghai trading date.
 

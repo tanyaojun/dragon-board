@@ -85,6 +85,22 @@ def test_collect_passthrough_stock_phase_fields():
     assert by_code["000001"]["stockPhaseProbabilities"] is None
 
 
+def test_collect_passthrough_label_slot():
+    """投喂槽位透传（2026-10-20）：midday=午盘 12:30 投喂，final=收盘投喂；
+    旧档无 labelSlot → None（前端不伪造档位，也不把旧档当收盘档膏称）。"""
+    mid = _stock("603278", 5)
+    mid["labelSlot"] = "midday"
+    mid["jiuyanFetchedAt"] = "2026-10-20T12:06:00"
+    fin = _stock("600001", 1)
+    fin["labelSlot"] = "final"
+    out = collect_limitup_labels(FakeDb([mid, fin, _stock("000001")]), "2026-09-30")
+    by_code = {s["code"]: s for s in out["stocks"]}
+    assert by_code["603278"]["labelSlot"] == "midday"
+    assert by_code["603278"]["jiuyanFetchedAt"] == "2026-10-20T12:06:00"
+    assert by_code["600001"]["labelSlot"] == "final"
+    assert by_code["000001"]["labelSlot"] is None
+
+
 def test_collect_no_data_fail_visible():
     out = collect_limitup_labels(FakeDb([]), "2026-10-11")
     assert out["ok"] is True and out["noData"] is True
