@@ -730,6 +730,39 @@ error, days, logPath, artifactPath, logTail}`。产物先写临时文件、成�
 单日读口：`?dataset_id=&date=YYYY-MM-DD`（缺省取库内最新交易日）→
 `{ok, date, slots: [槽位文档升序], eod, degradedCount}`；无文档时返回空集不报错（v1 无缓存）。
 
+### `GET /api/hotlist-jev/dieban-review`
+
+**跌停复盘**读口（2026-10-20，JEV 叙事工作台【跌停复盘】页）：`?date=YYYY-MM-DD` →
+当日负反馈名单 + 口径统计（聚合逻辑单源 = `services/jev/jev_dieban_review.py`，纯读、零模型调用）：
+
+- `pool`：采集池（250 只热榜池）当日快照行结构——`rows/up/down/flat/ratio/dieban/deepDrop/
+deepDropOnly/oneWord/streak2/maxStreak(+Code/Name)`；跌停判定委托
+  `core/limit_rules.is_limit_down_pct`（板块阈值 + 0.2pp 容差，无 ST 特判）。
+- `stocks[]`：`code/name/board/pctChange/price/preClose/high/low/turnoverRate/volumeRatio/
+amount/mainNet/mainNetRatio/limitDownPrice` + 派生 `limitDown`、`oneWordLimitDown`（全天最高价=跌停价）、
+  `deepDrop`（≤-7%）、`streak`（连续跌停天数，逐日回溯同槽跌停集合）、`ret3d`（近 3 交易日累计跌幅）、
+  `intradayDrawdownPct`（当日最高→最新）、`maxDrawdownPct`（THS 大幅回撤池 `max_drawdown`，正幅值）、
+  `sources`（`full_market` / `pool` / `ths_drawdown`，并集判定与池口径分域见 `limitDown` / `limitDownPool`）、
+  `raw`（采集池行或 EM 逐股原始字段）、`ths`（回撤池原始项含 `time_preview`）。
+- `fullMarket`：`count/source/sourceLabel/fullMarketScope/history/historyDays/percentile`——全市场跌停
+  家数取 `market_dieban_pool.limit_down_count`（东财池 → 行情快照 → 本地日线 → 采集池末位降级），
+  分位只在**同源**历史 ≥10 日时给出（否则 `percentile=null`）。
+- `fullMarket.rowsCount/rowsSource(Label)/rowsTruncated/rowsBad/rowsMissing`：**全市场逐股明细**
+  （2026-10-20 立项，集合 `market_daily_limit_down_stocks`，一天一文档；预登记
+  `docs/hotlist-jev/jev-dieban-fullmarket-preregistration.md`）。有文档时逐股并入 `stocks`
+  （来源标 `full_market`，附 `emStreakDays/openNum/lastSealTime`），并覆盖全市场股（采集池外）；
+  缺文档 → `rowsMissing='no_rows_doc'` + `degraded`（名单仅采集池口径，页面横幅标注）。连跌回溯
+  吃「全市场逐股 ∪ 采集池」并集（同一条 `core/limit_rules` 阈值线），覆盖天数见
+  `stats.streakDays`。家数与逐股**允许跨源**（EM 窗口滑出日：家数 EM 权威、逐股 TDX 重算，
+  两源自洽、来源各自标注），截断日 `rowsTruncated=true`。
+- `drawdown`：`count/avgDrawdownPct/deepestDrawdownPct/itemCount/degraded`——回撤池未采集或上游失败
+  时 `itemCount=null` + `degraded` 原因（不伪 0）。
+- `negative`/`stats`/`degraded`/`noData`/`reason`：净流出合计与最大流出股、板块集中度、跌幅最深股；
+  三源（快照行 / 回撤池逐股 / 全市场家数）全无 → `noData=true`；「0 家跌停」是**真读数**（`noData=false`）。
+
+盘中（15:00 帧未到）回落当日最新 `half_hour` 槽并置 `intraday=true`（`slotTime` 如实透出），
+连跌/近3日基准仍取已完成交易日的 15:00 收盘槽。缺 `date` → 422；读库异常 → 502 `{ok:false,reason}`。
+
 ### 回放 runner
 
 ```bash

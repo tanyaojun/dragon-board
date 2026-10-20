@@ -1372,3 +1372,120 @@ def test_review_kpi_height_buckets_use_streak_not_space_boards(js: str):
     assert "streakOf" in m and "(s.boards || 0) < 4" not in m, "高度筛选须吃真连板"
     assert "function streakOf(s){ return s.streak === undefined ? (s.boards || null) : s.streak; }" in js, \
         "streakOf 须保留 undefined→boards 回落（旧档/join 缺失不新增猜数）"
+
+
+# ── 2026-10-20 用户需求：新增【跌停复盘】页（样式与涨停复盘同源）─────────────────
+def test_dieban_page_registered_like_limitup_review(html: str, js: str):
+    """侧栏/面包屑/载入链/挂载点齐备，展示骨架与涨停复盘同源（KPI 条+板块 chips+筛选条+表）。"""
+    assert "['dieban', '跌停复盘'," in js, "侧栏须有【跌停复盘】入口"
+    assert "dieban: ['跌停复盘']" in js, "面包屑须含跌停复盘"
+    assert 'id="tab-dieban"' in html, "须有 tab-dieban 区块"
+    seg = html[html.index('id="tab-dieban"'):]
+    seg = seg[: seg.index("</section>")]
+    for hook in ('class="page-head"', "<h2>跌停复盘</h2>", 'id="diebanBanner"',
+                 'id="diebanHint"', 'id="diebanKpi"', 'id="diebanBoardRow"',
+                 'id="diebanFilterBar"', 'id="diebanTable"'):
+        assert hook in seg, f"跌停复盘页缺展示骨架：{hook}"
+    assert 'class="kpi-strip" id="diebanKpi"' in seg, "KPI 条须复用涨停复盘的 kpi-strip 样式"
+    assert 'class="lf-bar" id="diebanFilterBar"' in seg, "筛选条须复用 lf-bar 样式"
+    load = _fn(js, "loadAll")
+    assert "/api/hotlist-jev/dieban-review" in load, "loadAll 须拉取跌停复盘读口"
+    assert "renderDieban()" in load, "loadAll 须触发跌停复盘重绘"
+    # 读口失败不得静默当空页：catch 必须带 reason
+    assert "dieban_read_failed" in load
+
+
+def test_dieban_page_fail_visible_banner(js: str):
+    """读口不可用/降级/盘中口径/无数据都要在 banner 显式标注，不用空表冒充。"""
+    banner = _fn(js, "dbRenderBanner")
+    for key in ("ok === false", "intraday", "D.degraded", "noData", "读口不可用"):
+        assert key in banner, f"banner 缺 fail-visible 分支：{key}"
+    render = _fn(js, "renderDieban")
+    assert "D.ok === false" in render and "D.noData" in render, "无数据/读口失败须走空态分支"
+    # 读口不可用 ≠ 当日无负反馈：两个空态文案必须分开（不得把读失败说成「无数据」）
+    assert "读口不可用：未取到名单" in render and "当日无任何可用原始记录" in render
+    assert "当日无负反馈记录" not in render, "旧文案把读失败与真无数据混为一谈"
+    # 新增披露字段必须在 banner/KPI 有消费（否则等于没披露）
+    for key in ("full_market_count_disputed", "streak_lookback", "countDisputed"):
+        assert key in (banner if key != "countDisputed" else _fn(js, "dbRenderKpi")),             f"新披露字段未被消费：{key}"
+    assert "未落库" not in js, "页面/注释不得再称全市场逐股未落库（§1.2-5 展示须随结论同步）"
+
+
+def test_dieban_scope_predicates_behaviour(js: str, tmp_path):
+    """**行为**回归（node 探针）：负反馈范围谓词与筛选（跌停/连跌/一字/大跌/回撤/下跌）。"""
+    if shutil.which("node") is None:
+        pytest.skip("node 不可用")
+    src = "\n".join([
+        _const_block(js, "DB_SCOPE_PRED"),
+        _fn(js, "dbMatches"),
+        "const rows = [",
+        "  {code:'600001', name:'A', board:'算力', pctChange:-10, limitDown:true, oneWordLimitDown:true, deepDrop:true, streak:3, maxDrawdownPct:null},",
+        "  {code:'600002', name:'B', board:'算力', pctChange:-8, limitDown:false, oneWordLimitDown:false, deepDrop:true, streak:null, maxDrawdownPct:12.5},",
+        "  {code:'600003', name:'C', board:'医药', pctChange:2.5, limitDown:false, oneWordLimitDown:false, deepDrop:false, streak:null, maxDrawdownPct:null},",
+        "  {code:'600004', name:'D', board:'医药', pctChange:-3, limitDown:false, oneWordLimitDown:false, deepDrop:false, streak:null, maxDrawdownPct:15},",
+        "];",
+        "const pick = k => rows.filter(DB_SCOPE_PRED[k]).map(r => r.code);",
+        "console.log(JSON.stringify({",
+        "  neg: pick('neg'), die: pick('die'), streak: pick('streak'), oneword: pick('oneword'),",
+        "  big: pick('big'), draw: pick('draw'), down: pick('down'), all: pick('all'),",
+        "  q: rows.filter(r => dbMatches(r, {q:'60000', board:'', scope:'neg', streak:'', draw:''})).length,",
+        "  board: rows.filter(r => dbMatches(r, {q:'', board:'医药', scope:'all', streak:'', draw:''})).map(r => r.code),",
+        "  streak2: rows.filter(r => dbMatches(r, {q:'', board:'', scope:'neg', streak:'2', draw:''})).map(r => r.code),",
+        "  draw10: rows.filter(r => dbMatches(r, {q:'', board:'', scope:'neg', streak:'', draw:'10'})).map(r => r.code),",
+        "}));",
+    ])
+    script = tmp_path / "dieban_scope_probe.js"
+    script.write_text(src, encoding="utf-8")
+    cp = subprocess.run(["node", str(script)], capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", timeout=30)
+    assert cp.returncode == 0, f"node 执行失败：{cp.stderr}"
+    got = json.loads(cp.stdout.strip())
+    assert got["neg"] == ["600001", "600002", "600004"], "负反馈全部=跌停∪大跌∪触板回撤（不含上涨股）"
+    assert got["die"] == ["600001"] and got["oneword"] == ["600001"]
+    assert got["streak"] == ["600001"], "连跌≥2 只看 streak 天数"
+    assert got["big"] == ["600001", "600002"], "大跌≤-7%（含跌停）"
+    assert got["draw"] == ["600002", "600004"], "触板回撤只看 THS 回撤幅值"
+    assert got["down"] == ["600001", "600002", "600004"], "下跌=跌幅<0"
+    assert got["all"] == ["600001", "600002", "600003", "600004"]
+    assert got["q"] == 4, "代码搜索命中"
+    assert got["board"] == ["600003", "600004"], "板块筛选"
+    assert got["streak2"] == ["600001"] and got["draw10"] == ["600002", "600004"]
+
+
+def test_dieban_table_marks_and_sort_keys(js: str):
+    """表格列与排序键成对齐（避免点了表头不生效）；类型徽标覆盖五类负反馈。"""
+    rows = _fn(js, "dbRenderRows")
+    for key in ("'code'", "'pctChange'", "'streak'", "'ret3d'", "'maxDrawdownPct'",
+                "'turnoverRate'", "'volumeRatio'", "'mainNet'"):
+        assert key in rows, f"排序键缺失：{key}"
+    badges = _fn(js, "dbTypeBadges")
+    for label in ("跌停", "一字跌停", "连跌", "大跌", "触板回撤"):
+        assert label in badges, f"类型徽标缺：{label}"
+    detail = _fn(js, "dbDetailHtml")
+    assert "口径与读数" in detail and "读口行 JSON" in detail, "行展开须给口径读数 + 原始行 JSON"
+    assert "is_limit_down_pct" in detail, "展开卡须标注跌停判定单一事实源"
+
+
+# ── 2026-10-20 立项：全市场逐股明细接入（EM/TDX 回填 + 读口合并）────────────────
+def test_dieban_full_market_rows_display(js: str):
+    """全市场逐股接入后的展示守卫：来源徽标/EM 封板字段/截断与缺文档注记/KPI 主值。"""
+    kpi = _fn(js, "dbRenderKpi")
+    assert "跌停家数（全市场）" in kpi, "KPI 主值应升级为全市场家数"
+    assert "rowsMissing" in kpi and "rowsCount" in kpi, "逐股覆盖（缺/行数）须在副行标注"
+    assert "rowsSourceLabel" in kpi, "逐股来源须标注（EM/快照/本地日线跨源）"
+    banner = _fn(js, "dbRenderBanner")
+    assert "full_market_rows" in banner, "缺逐股文档须进 banner（fail-visible）"
+    assert "rowsTruncated" in banner and "rowsBad" in banner, "截断/坏行须显式注记"
+    src = _const(js, "dbSrcTxt")
+    assert "full_market" in src and "全市场逐股" in src, "来源列须含全市场逐股"
+    detail = _fn(js, "dbDetailHtml")
+    for field in ("emStreakDays", "openNum", "lastSealTime"):
+        assert field in detail, f"行展开须带 EM 封板字段：{field}"
+    # 未知不得判否：无一字判据的行必须渲染 null（不是 false）
+    assert "s.oneWordLimitDown == null ? null : !!s.oneWordLimitDown" in detail
+    # 截取自 renderDieban 真实函数体（旧写法切到文件末尾 → 断言恒真，属空洞守卫）
+    hint = _fn(js, "renderDieban")
+    assert "全市场逐股" in hint and "fm.rowsMissing" in hint, "hint 须标注逐股覆盖状态"
+    assert "countDisputed" in hint, "hint 须标注家数存疑"
+    # 读为主非纯读：懒加载写库须在注释/文案里如实说明
+    assert "非纯读" in js

@@ -635,3 +635,21 @@ genesis 归因修复后定向重放 25 天，均 108/108 ok；三批合计 994,6
 跨日边际判断已由客观昨日对比驱动（同向率 53/65 = 81.5%）。
 若产品偏好上仍需自参照，需走完 P2–P10 并以 P4 冻结门限（v6 基线：lag-1 ρ −0.070、翻转率 61.7%、
 中位 |Δindex| 15.0）。
+
+### 11.7 工作台页签登记：新增【跌停复盘】页（2026-10-20，负反馈名单）
+
+**用户需求**：JEV 叙事工作台增加【跌停复盘】页，内容=嘀停/回撤等每日负反馈股票，样式参照
+【涨停复盘】页（KPI 条 + 板块 chips + 筛选条 + 可排序表 + 行展开）。
+
+**落地**：读口 `GET /api/hotlist-jev/dieban-review?date=`（聚合单源
+`backend/services/jev/jev_dieban_review.py`，纯读零模型调用）；页面 `tab-dieban` 复用既有
+`.kpi-strip/.chip/.lf-bar/.lg-*` 样式类，未新增主题样式。
+
+**口径边界（必须与展示同轮；2026-10-20 立项后更新）**：个股名单 = **全市场逐股**
+（`market_daily_limit_down_stocks`，EM/快照/本地日线按源优先级）∪ 热榜采集池快照行 ∪ 同花顺
+大幅回撤池逐股，逐行标来源；全市场跌停家数 KPI 与逐股同源可对账（`count == len(rows)`），
+家数与逐股允许跨源日（EM 窗口滑出日家数 EM 权威、逐股 TDX 重算，各自标注）。缺逐股文档日
+fail-visible（`rowsMissing`），不冒充。跌停判定与 `dieban_count`/规则情绪链同源
+（`core/limit_rules`）。逐股回填/对账见 `jev-dieban-fullmarket-preregistration.md`。
+
+**详情**：`jev-dieban-review-design.md`（口径表 / fail-visible 规则 / 验证命令 / 后续立项边界）。

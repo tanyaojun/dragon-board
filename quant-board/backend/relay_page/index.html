@@ -295,7 +295,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="sb-brand">
       <div class="sb-logo">🧭</div>
-      <div><div class="sb-title">JEV 叙事工作台</div><div class="sb-sub">连板情绪指数 · 热榜叙事 · 涨停复盘</div></div>
+      <div><div class="sb-title">JEV 叙事工作台</div><div class="sb-sub">连板情绪指数 · 热榜叙事 · 涨/跌停复盘</div></div>
     </div>
     <div class="sb-search"><span>🔍</span><input id="sbSearch" placeholder="快速搜索…" oninput="sbFilter(this.value)"><kbd>Ctrl K</kbd></div>
     <nav class="sb-nav" id="sbNav"></nav>
@@ -441,12 +441,27 @@
       <table id="labelTable"></table>
     </div>
   </section>
+
+  <section id="tab-dieban" style="display:none">
+    <div class="page-head"><div><h2>跌停复盘</h2>
+      <p>个股名单三源并集：<b>全市场逐股跌停</b>（东财跌停池 → 行情快照 → 本地日线重算，一天一文档，逐行标来源）∪ 采集池（250 只热榜池）当日快照行 ∪ 同花顺大幅回撤池逐股；跌停判定与连跌回溯统一走 <code>core/limit_rules</code> 同一条阈值线。全市场跌停家数单列 KPI 并与逐股同源对账。缺逐股文档、家数存疑、口径降级、池内/全市场差额始终显式标注（fail-visible，不伪 0）。</p></div></div>
+    <div class="ph-line"></div>
+    <div class="card">
+      <h3>负反馈名单与口径汇总 <span class="hint" id="diebanHint"></span></h3>
+      <div id="diebanBanner"></div>
+      <div class="kpi-strip" id="diebanKpi" style="margin-bottom:12px"></div>
+      <div class="board-row" id="diebanBoardRow"></div>
+      <div class="lf-bar" id="diebanFilterBar"></div>
+      <table id="diebanTable"></table>
+    </div>
+  </section>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
-const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, quotes: null,
+const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, labels: null, quotes: null, dieban: null,
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
+  diebanEntries: [], diebanUi: { openKey: null },
   slotEntries: [], relayEntries: [],
   // 行展开详情 UI（明细存档页已删除，平移至总览逐槽表 / 连板指数判定明细行内展开）
   detailUi: { slot: { openKey: null, mode: 'detail', q1: '', q2: '' }, relay: { openKey: null, mode: 'detail', q1: '', q2: '' } },
@@ -462,6 +477,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   quotesFilter: { q: '', vote: '', lc: '', res: '', trd: '', hea: '', vpq: '', agree: '' },
   quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
+  diebanFilter: { q: '', board: '', scope: 'neg', streak: '', draw: '' },
   relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '', zone: '', leader: '' },
   // 判定明细行选中（2026-10-18）：点行 → 页头 KPI 卡跟随该日联动；null=用日期框当日
   relayFocus: null,
@@ -473,7 +489,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayPreset: null,  // 最近点过的预设（展示意图；高亮以区间等价判定为准）
   relaySort: { key: 'date', dir: -1 },
   relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
-  labelSort: { key: 'rank', dir: 1 } };
+  labelSort: { key: 'rank', dir: 1 },
+  diebanSort: { key: 'pctChange', dir: 1 } };
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
@@ -917,9 +934,9 @@ let _loadSeq = 0;
 async function loadAll(){
   const seq = ++_loadSeq;
   const date = $('date').value;
-  let series, slots, labels, quotes, band;
+  let series, slots, labels, quotes, band, dieban;
   try {
-    [series, slots, labels, quotes, band] = await Promise.all([
+    [series, slots, labels, quotes, band, dieban] = await Promise.all([
       jget('/api/hotlist-jev/relay-index?days=400' + (date ? '&date=' + date : '')),
       jget('/api/hotlist-jev/series' + (date ? '?date=' + date : '')),
       jget('/api/hotlist-jev/limitup-labels' + (date ? '?date=' + date + '&with_raw=1' : '?with_raw=1')),
@@ -927,6 +944,9 @@ async function loadAll(){
       // 离线分带读数（fail-visible：缺失/损坏 → {ok:false,reason,hint}，页面显式标注未生成）
       jget('/api/hotlist-jev/relay-band').catch(e => ({ ok: false, degraded: true,
         reason: 'band_read_failed: ' + (e && e.message ? e.message : '?') })),
+      // 跌停复盘（负反馈名单）：读口异常同样不得静默当空页，带 reason 回填 banner
+      jget('/api/hotlist-jev/dieban-review' + (date ? '?date=' + date : '')).catch(e => ({ ok: false, degraded: true,
+        reason: 'dieban_read_failed: ' + (e && e.message ? e.message : '?') })),
     ]);
   } catch (err) {
     if (seq !== _loadSeq) return;
@@ -956,11 +976,12 @@ async function loadAll(){
   STATE.labels = labels;
   STATE.quotes = quotes;
   STATE.band = band;
+  STATE.dieban = dieban;
   bandRefreshSync();   // 接管后端正在跑的分带刷新任务（页面刷新/多标签/双击重入时不断链）
   // 连板指数当日完整存档预入缓存（判定明细行展开当日零请求；series 行不含 raw 大字段）
   if (STATE.day && STATE.day.tradingDate) STATE.relayDocs[STATE.day.tradingDate] = STATE.day;
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
-  renderRelayTab(); renderLabels(); renderQuotes();
+  renderRelayTab(); renderLabels(); renderQuotes(); renderDieban();
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -1881,6 +1902,305 @@ function setLabelSort(key){
   renderLabels();
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// 跌停复盘：负反馈名单（跌停 / 连跌 / 一字跌停 / 大跌 / 触板回撤）
+// 口径单一事实源 = 后端 services/jev/jev_dieban_review.py，页面只做展示与筛选：
+//   · 个股明细 = 全市场逐股跌停（market_daily_limit_down_stocks：EM > 快照 > 本地日线，
+//     一天一文档、逐行标来源）∪ 采集池（250 只热榜池）当日快照行 ∪ 同花顺大幅回撤池逐股；
+//   · 全市场跌停家数与逐股同源对账（count == len(rows)）；跨源日/家数存疑显式标注，
+//     KPI 主值 = 家数、副行标「逐股 N 行 · 来源」与池内差额，不拿采集池名单冒充全市场（§4.0）；
+//   · 读为主，非纯读：当日收盘后首次读可能触发一次东财懒加载（1 次/日，120s 缓存）；
+//   · 连跌 = 逐日回溯同槽跌停集合；近3日跌幅/日内回撤由快照行派生，不可算一律 '--'。
+// 样式与涨停复盘同源：KPI 条（可点筛选）+ 板块 chips + 筛选条 + 可排序表 + 行展开。
+// ══════════════════════════════════════════════════════════════════════════════
+const DB_SCOPE_CN = { neg: '负反馈全部', die: '跌停', streak: '连跌≥2', oneword: '一字跌停',
+                     big: '大跌≤-7%', draw: '触板回撤', down: '下跌', all: '全部个股' };
+const DB_SCOPE_PRED = {
+  neg: s => !!(s.limitDown || s.deepDrop || s.maxDrawdownPct != null),
+  die: s => !!s.limitDown,
+  streak: s => (s.streak || 0) >= 2,
+  oneword: s => !!s.oneWordLimitDown,
+  big: s => !!s.deepDrop,
+  draw: s => s.maxDrawdownPct != null,
+  down: s => s.pctChange != null && s.pctChange < 0,
+  all: () => true,
+};
+const dbScopePool = (stocks, f) => (stocks || []).filter(DB_SCOPE_PRED[f.scope] || DB_SCOPE_PRED.neg);
+function dbMatches(s, f){
+  if (f.q){ const q = f.q.toLowerCase();
+    if (!String(s.code || '').toLowerCase().includes(q) && !String(s.name || '').toLowerCase().includes(q)) return false; }
+  if (f.board && (s.board || '未分板块') !== f.board) return false;
+  if (f.streak && (s.streak || 0) < Number(f.streak)) return false;
+  if (f.draw && !(s.maxDrawdownPct != null && s.maxDrawdownPct >= Number(f.draw))) return false;
+  return true;
+}
+// 类型徽标：跌停/一字/连跌/大跌/回撤（同股可多标，不重复报跌停与大跌）
+function dbTypeBadges(s){
+  const out = [];
+  if (s.limitDown) out.push(`<span class="badge b-red">跌停</span>`);
+  if (s.oneWordLimitDown) out.push(`<span class="badge b-red">一字跌停</span>`);
+  if ((s.streak || 0) >= 2) out.push(`<span class="badge b-red">连跌${s.streak}</span>`);
+  if (s.deepDrop && !s.limitDown) out.push(`<span class="badge b-amber">大跌</span>`);
+  if (s.maxDrawdownPct != null) out.push(`<span class="badge b-amber">触板回撤</span>`);
+  return out.length ? out.join(' ') : '<span class="badge b-gray">-</span>';
+}
+const dbSrcTxt = s => (s.sources || []).map(x => x === 'pool' ? '采集池快照'
+  : x === 'full_market' ? '全市场逐股' : 'THS回撤池').join(' + ') || '-';
+function dbEntryOf(s, i){
+  return { key: String(s.code || ('db:' + i)), kind: 'die',
+    label: (s.name || s.code || '?') + ' ' + (s.code || ''), doc: s };
+}
+function dbRenderBanner(D){
+  const host = $('diebanBanner');
+  if (!host) return;
+  if (!D || D.ok === false){
+    host.innerHTML = `<div class="banner amber"><span>⚠️</span><span>跌停复盘读口不可用：${esc((D && D.reason) || '未知原因')}（不展示空页冒充无数据）</span></div>`;
+    return;
+  }
+  const msgs = [];
+  if (D.intraday) msgs.push(`盘中口径 · ${esc(D.slotTime || '')}（收盘后为 15:00 收盘口径；连跌/近3日基准仍取已收盘交易日）`);
+  const DEG_CN = { ths_drawdown_pool: '同花顺大幅回撤池不可用（回撤逐股缺失）',
+    snapshot_frame: '当日无 half_hour 快照帧', snapshot_stock_rows: '该槽无采集池行',
+    full_market_limit_down: '全市场跌停家数降级为采集池口径',
+    full_market_rows: '全市场逐股明细缺（回填/懒加载未覆盖该日，名单仅采集池口径）',
+    full_market_rows_cross_source: '家数与逐股来自不同源（EM 窗口滑出日：家数=权威源、逐股=本地日线重算），各自自洽，勿把行数当家数相减',
+    full_market_count_disputed: '家数存疑：当日逐股名单比家数多（典型为 EM 空池被记成 0 家）→ 该日已剔出同源分位窗，家数仅供参考',
+    streak_lookback: '连跌回溯窗内缺 15:00 采集池行 → 连跌天数可能被截断（缺几日已在 reason 标注）',
+    ret3d: '历史不足，近3日跌幅不可算' };
+  for (const d of (D.degraded || [])) msgs.push(DEG_CN[d.scope] || `${d.scope}: ${d.reason}`);
+  const fmB = D.fullMarket || {};
+  if (fmB.rowsTruncated) msgs.push(`全市场逐股已截断（源自报 ${fmB.rowsDocCount ?? '--'} 家，仅返回 ${fmB.rowsCount ?? '--'} 行；家数以自报数为准，行数为实际可用名单）`);
+  if (fmB.rowsBad > 0) msgs.push(`全市场逐股坏行 ${fmB.rowsBad} 条已跳过（不阻断其余行）`);
+  if (D.noData) msgs.push(D.reason || '当日无可用记录');
+  host.innerHTML = msgs.length
+    ? `<div class="banner amber"><span>⚠️</span><span>${msgs.map(esc).join(' ｜ ')}</span></div>`
+    : '';
+}
+function dbRenderKpi(D){
+  const p = D.pool || {}, fm = D.fullMarket || {}, dd = D.drawdown || {};
+  const neg = D.negative || {}, big = (D.stats || {}).biggestDrop || {};
+  const f = STATE.diebanFilter;
+  const fx = v => (v == null || !isFinite(v)) ? '--' : String(v);
+  const num = (v, d) => v == null ? '--' : (isFinite(v) ? Number(v).toFixed(d == null ? 2 : d) : '--');
+  const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const clickable = (k, v, sub, scope, title) => `<div class="kpi click${f.scope === scope ? ' on' : ''}"
+    title="点击筛选：${esc(title || k)}" onclick="dbScope('${scope}')"><div class="k">${k}</div>
+    <div class="v">${v}</div><div class="s">${sub}</div></div>`;
+  const pctTxt = fm.percentile == null ? '分位不可算'
+    : `${fm.percentile >= 0.8 ? '极高' : fm.percentile >= 0.6 ? '偏高' : fm.percentile <= 0.2 ? '极低' : fm.percentile <= 0.4 ? '偏低' : '中性'} ${Math.round(fm.percentile * 100)} 分位（${fm.historyDays || 0} 日同源）`;
+  const gap = fm.count == null ? null : fm.count - (p.dieban || 0);
+  // 跨源/家数存疑日两个读数不同源，做差会印出无意义负数 → 明确说明不做差（review minor）
+  const diffTxt = gap == null ? '' : (fm.crossSource || fm.countDisputed)
+    ? '（家数与逐股跨源 · 不做差）' : `（池外 ${gap}）`;
+  const rowsTxt = fm.rowsMissing ? '逐股明细缺 · 名单仅采集池口径'
+    : fm.rowsCount != null ? `逐股 ${fm.rowsCount} 行 · ${esc(fm.rowsSourceLabel || '源未知')}`
+    : '逐股明细缺';
+  const countTitle = fm.fullMarketScope === false ? '跌停家数（采集池口径）' : '跌停家数（全市场）';
+  const countSub = `${rowsTxt}${diffTxt} · 池内 ${fx(p.dieban)} · ${esc(fm.sourceLabel || '口径未知')} · ${esc(pctTxt)}`
+    + (fm.countDisputed ? ' · ⚠️家数存疑' : '');
+  const ddSub = `回撤池 ${fx(dd.itemCount)} 只逐股 · 均值 ${num(dd.avgDrawdownPct)}% · 最深 ${num(dd.deepestDrawdownPct)}%`;
+  const worst = neg.netOutflowWorst || null;
+  $('diebanKpi').innerHTML =
+    clickable(countTitle, fm.count != null ? fx(fm.count) : fx(p.dieban), countSub, 'die')
+    + clickable('连跌≥2 天', fx(p.streak2), `最长 ${fx(p.maxStreak)} 天${p.maxStreakName ? ' · ' + esc(p.maxStreakName) : ''}（回溯 ${((D.stats || {}).streakLookback ?? '--')} 日：逐股 ${((D.stats || {}).streakDays || {}).fullMarket ?? '--'} 日+采集池 ${((D.stats || {}).streakDays || {}).pool ?? '--'} 日，槽覆盖 ${((D.stats || {}).streakDays || {}).slotDays ?? '--'}/${((D.stats || {}).streakDays || {}).priorDays ?? '--'}）`, 'streak')
+    + clickable('一字跌停', fx(p.oneWord), '开盘即封 · 全天无逃逸（最高价=跌停价）', 'oneword')
+    + clickable('大跌≤-7%', fx(p.deepDrop), `其中跌停 ${fx(p.dieban)} · 非跌停 ${fx(p.deepDropOnly)}`, 'big')
+    + clickable('下跌家数', fx(p.down), `池内涨跌比 ${fx(p.ratio)}（涨 ${fx(p.up)} / 平 ${fx(p.flat)} / 池 ${fx(p.rows)} 只）`, 'down')
+    + clickable('触板回撤', fx(dd.count), ddSub, 'draw')
+    + card('跌幅最深', big.name ? `<span style="color:var(--red)">${esc(big.name)}</span> ${num(big.pctChange)}%`
+        : '--', [big.board, (big.sources || []).includes('pool') ? '' :
+        `（来源：${esc((big.sources || []).join('+'))}）`].filter(Boolean).join('')
+        || '当日采集池内最深')
+    + card('主力净流出', neg.netOutflowTotal == null ? '--' : fmtYi(neg.netOutflowTotal) + ' 亿',
+        worst ? `最大流出 ${esc(worst.name || worst.code)} ${fmtYi(worst.mainNet)} 亿` : '缺主力净额字段（--）');
+}
+function dbRenderBoards(D){
+  const top = ((D.negative || {}).topBoards) || [];
+  const f = STATE.diebanFilter;
+  $('diebanBoardRow').innerHTML = '<span class="k">板块分布</span>'
+    + (top.length ? top.map(b => `<span class="chip${f.board === b.board ? ' on' : ''}"
+        title="点击筛选该板块" onclick="dbBoard('${js(b.board)}')">${esc(b.board)} ${b.count}</span>`).join('')
+      : '<span class="chip plain">无负反馈股</span>');
+}
+function dbSel(label, key, opts){
+  const cur = STATE.diebanFilter[key];
+  return `<select title="${esc(label)}筛选" onchange="dbSet('${key}', this.value)">`
+    + [['', label + ' · 全部']].concat(opts).map(([v, t]) =>
+        `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('') + '</select>';
+}
+function dbRenderBar(pool){
+  const bar = $('diebanFilterBar');
+  const ae = document.activeElement;
+  // 输入/下拉聚焦时跳过重建（60s 轮询不夺焦点；状态由 STATE 持有）
+  if (ae && bar.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'SELECT')) return;
+  const dist = {};
+  for (const s of pool){ const b = s.board || '未分板块'; dist[b] = (dist[b] || 0) + 1; }
+  const boards = Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([v]) => [v, v]);
+  $('diebanFilterBar').innerHTML =
+    dbSel('范围', 'scope', Object.entries(DB_SCOPE_CN))
+    + `<input class="lf-q" placeholder="搜代码 / 名称…" value="${esc(STATE.diebanFilter.q)}" oninput="dbQ(this.value)">`
+    + dbSel('板块', 'board', boards)
+    + dbSel('连跌', 'streak', [['2', '≥2 天'], ['3', '≥3 天']])
+    + dbSel('回撤', 'draw', [['10', '≥10%'], ['15', '≥15%'], ['20', '≥20%']])
+    + `<button onclick="dbClear()">清除筛选</button>`
+    + `<span class="cnt" id="diebanCnt"></span>`;
+}
+function dbRenderRows(){
+  const D = STATE.dieban || {};
+  const stocks = D.stocks || [], f = STATE.diebanFilter, ui = STATE.diebanUi;
+  const pool = dbScopePool(stocks, f);
+  const filtered = pool.filter(s => dbMatches(s, f));
+  const ds = STATE.diebanSort;
+  const dkv = { code: x => x.code || '', name: x => x.name || '',
+    pctChange: x => x.pctChange == null ? 99 : x.pctChange,
+    streak: x => x.streak || 0,
+    ret3d: x => x.ret3d == null ? 999 : x.ret3d,
+    maxDrawdownPct: x => x.maxDrawdownPct == null ? -1 : x.maxDrawdownPct,
+    turnoverRate: x => x.turnoverRate == null ? -1 : x.turnoverRate,
+    volumeRatio: x => x.volumeRatio == null ? -1 : x.volumeRatio,
+    mainNet: x => x.mainNet == null ? 0 : x.mainNet };
+  filtered.sort((a, b) => { const va = dkv[ds.key](a), vb = dkv[ds.key](b);
+    return (va < vb ? -1 : va > vb ? 1 : 0) * ds.dir; });
+  STATE.diebanEntries = filtered.map(dbEntryOf);
+  const cnt = $('diebanCnt');
+  if (cnt) cnt.textContent = `${filtered.length} / ${stocks.length} 只`;
+  const ddCell = s => s.maxDrawdownPct != null
+    ? `<span class="num" style="color:var(--amber)" title="触板后自当日高点回撤（THS 大幅回撤池 max_drawdown）">${s.maxDrawdownPct.toFixed(2)}%</span>`
+    : (s.intradayDrawdownPct != null
+      ? `<span style="color:var(--muted2)" title="当日最高价→最新价回落（快照派生，非触板口径）">${s.intradayDrawdownPct.toFixed(2)}%</span>`
+      : '-');
+  const netCell = s => s.mainNet == null ? '-'
+    : `<span class="num" style="color:${s.mainNet < 0 ? 'var(--red)' : 'var(--muted)'}">${fmtYi(s.mainNet)}</span>`;
+  const rows = filtered.map((s, i) => {
+    const entry = STATE.diebanEntries[i];
+    const open = ui.openKey === entry.key;
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('die', '${js(entry.key)}')">
+      <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td>
+      <td>${esc(s.board || '未分板块')}</td><td style="font-size:12px">${dbTypeBadges(s)}</td>
+      <td class="num" style="color:${(s.pctChange || 0) < 0 ? 'var(--red)' : 'var(--text)'}">${fmtPctChg(s.pctChange)}</td>
+      <td>${s.streak ? `<span class="num">${s.streak} 天</span>` : '-'}</td>
+      <td class="num">${fmtPctChg(s.ret3d)}</td><td>${ddCell(s)}</td>
+      <td class="num">${s.turnoverRate == null ? '-' : s.turnoverRate.toFixed(2) + '%'}</td>
+      <td class="num">${s.volumeRatio == null ? '-' : s.volumeRatio.toFixed(2)}</td>
+      <td>${netCell(s)}</td><td style="font-size:12px;color:var(--muted2)">${esc(dbSrcTxt(s))}</td></tr>`
+      + (open ? `<tr class="lg-detail"><td colspan="12">${detailHtml(entry, 'die')}</td></tr>` : '');
+  }).join('');
+  const th = (label, key) => `<th class="sortable" onclick="setDiebanSort('${key}')">${label}${sortMark(ds, key)}</th>`;
+  $('diebanTable').innerHTML = `<tr>${th('代码', 'code')}<th>名称</th><th>板块</th><th>类型</th>${th('跌幅', 'pctChange')}${th('连跌', 'streak')}${th('近3日', 'ret3d')}${th('回撤', 'maxDrawdownPct')}${th('换手', 'turnoverRate')}${th('量比', 'volumeRatio')}${th('主力净额(亿)', 'mainNet')}<th>来源</th></tr>`
+    + (rows || `<tr><td colspan="12" class="empty">无匹配个股（调整筛选条件）</td></tr>`);
+}
+function renderDieban(){
+  const D = STATE.dieban || {};
+  dbRenderBanner(D);
+  const stocks = (D && D.ok !== false && !D.noData) ? (D.stocks || []) : [];
+  if (!stocks.length){
+    $('diebanKpi').innerHTML = ''; $('diebanBoardRow').innerHTML = ''; $('diebanFilterBar').innerHTML = '';
+    STATE.diebanEntries = [];
+    $('diebanHint').textContent = (D && (D.reason || (D.ok === false ? '读口不可用' : ''))) || '';
+    // 读失败不得谎称「当日无负反馈」（review minor：ok=false 与 noData 语义不同）
+    $('diebanTable').innerHTML = (D && D.ok === false)
+      ? '<tr><td class="empty">读口不可用：未取到名单（原因见上方横幅）</td></tr>'
+      : '<tr><td class="empty">当日无任何可用原始记录（无采集池行 / 无全市场逐股 / 无回撤池逐股；见横幅）</td></tr>';
+    return;
+  }
+  const pool = dbScopePool(stocks, STATE.diebanFilter);
+  // 0 是真读数（全池无一落入负反馈），不得用 || 兜成池大小（review minor）
+  const negN = (D.negative && D.negative.count != null) ? D.negative.count : pool.length;
+  const fm = D.fullMarket || {};
+  $('diebanHint').textContent = `${D.date || ''} · ${D.intraday ? '盘中口径 ' + (D.slotTime || '') : '收盘口径 15:00'}`
+    + ` · 池内 ${(D.pool || {}).rows} 只 · 负反馈 ${negN} 只`
+    + (fm.rowsMissing ? ' · 全市场逐股缺（名单仅采集池口径）'
+       : ` · 全市场逐股 ${fm.rowsCount ?? '--'} 行（${fm.rowsSourceLabel || '源未知'}）`)
+    + (fm.countDisputed ? ' · ⚠️ 家数存疑（已剔出分位窗）' : '')
+    + ' · 点击行查看口径与原始字段';
+  dbRenderKpi(D);
+  dbRenderBoards(D);
+  dbRenderBar(pool);
+  dbRenderRows();
+}
+// 文本搜索只重渲染表体（筛选条不动，输入焦点不丢）
+function dbQ(v){ STATE.diebanFilter.q = v; dbRenderRows(); }
+function dbSet(k, v){
+  STATE.diebanFilter[k] = v;
+  const stocks = (STATE.dieban || {}).stocks || [];
+  let pool = dbScopePool(stocks, STATE.diebanFilter);
+  // 切换范围后若原板块在新池内不存在，选项会退化成「全部」而筛选仍生效 → 0 行假象（review minor）
+  if (STATE.diebanFilter.board && !pool.some(x => (x.board || '') === STATE.diebanFilter.board)){
+    STATE.diebanFilter.board = '';
+    pool = dbScopePool(stocks, STATE.diebanFilter);
+  }
+  dbRenderKpi(STATE.dieban || {});
+  dbRenderBoards(STATE.dieban || {});
+  dbRenderBar(pool);
+  dbRenderRows();
+}
+// KPI 卡点击切换范围；再点一次回「负反馈全部」
+function dbScope(v){
+  const f = STATE.diebanFilter;
+  f.scope = f.scope === v ? 'neg' : v;
+  dbSet('scope', f.scope);
+}
+function dbBoard(v){ const f = STATE.diebanFilter; f.board = f.board === v ? '' : v; dbSet('board', f.board); }
+function dbClear(){
+  STATE.diebanFilter = { q: '', board: '', scope: 'neg', streak: '', draw: '' };
+  renderDieban();
+}
+function setDiebanSort(key){
+  const s = STATE.diebanSort;
+  if (s.key === key) s.dir = -s.dir; else s.key = key, s.dir = key === 'pctChange' ? 1 : -1;
+  dbRenderRows();
+}
+// 行展开：派生读数（可核字段）+ 读口行 JSON。本页无模型调用，故不讲 tokens/耗时而讲口径。
+function dbDetailHtml(e){
+  const s = e.doc || {};
+  const num = v => (v == null || !isFinite(v)) ? null : +Number(v).toFixed(2);
+  const derived = {
+    '代码/名称': `${s.code || '--'} ${s.name || ''}`.trim(),
+    '板块': s.board || '未分板块',
+    '跌停判定': {
+      '跌停（板块阈值线）': !!s.limitDown,
+      '一字跌停（全天最高价=跌停价）': s.oneWordLimitDown == null ? null : !!s.oneWordLimitDown,
+      '跌停价': num(s.limitDownPrice),
+      '收盘/最新价': num(s.price),
+    },
+    '连续跌停': s.streak == null ? null : { '天数（含当日，逐日回溯）': s.streak,
+      'EM 自报连跌天数': num(s.emStreakDays) },
+    '封板信息': { '开板次数': num(s.openNum), '最后封板时间': s.lastSealTime || null },
+    '回撤': {
+      '触板后回撤%（THS 回撤池）': num(s.maxDrawdownPct),
+      '日内回撤%（当日最高→最新）': num(s.intradayDrawdownPct),
+    },
+    '涨跌与量能': {
+      '涨跌幅%': num(s.pctChange),
+      '近3日累计跌幅%': num(s.ret3d),
+      '昨收': num(s.preClose),
+      '最高/最低': [num(s.high), num(s.low)],
+      '换手%': num(s.turnoverRate),
+      '量比': num(s.volumeRatio),
+    },
+    '资金': {
+      '主力净额（元）': num(s.mainNet),
+      '主力净占比%': num(s.mainNetRatio),
+      '成交额（元）': num(s.amount),
+    },
+    '数据来源': dbSrcTxt(s),
+  };
+  return `<div class="lg-card" onclick="event.stopPropagation()">
+    <div class="lg-head"><div class="lg-title">📉 ${esc(e.label)}</div>
+      <span class="lg-asof">${dbTypeBadges(s)} · 来源 ${esc(dbSrcTxt(s))}</span>
+      <div class="lg-toggle"><button onclick="lgCopy('die', 'doc', event)">⧉ 复制读口行</button></div></div>
+    <div class="lg-panels" style="margin-top:10px">
+      <div class="lg-panel"><div class="lg-phead"><b>口径与读数</b><span class="st">派生字段（null=不可算，不补 0）</span></div>
+        <div class="lg-tree">${treeHtml(derived, '')}</div></div>
+      <div class="lg-panel"><div class="lg-phead"><b>读口行 JSON</b><span class="st">GET /api/hotlist-jev/dieban-review</span></div>
+        <div class="lg-tree">${treeHtml(s, '')}</div></div>
+    </div>
+    <div class="lg-foot"><span><span class="k">跌停判定</span> <code>core/limit_rules.is_limit_down_pct</code></span>
+      <span><span class="k">回撤口径</span> <code>THS max_drawdown / 快照 high→price</code></span>
+      <span><span class="k">全市场逐股</span> <code>market_daily_limit_down_stocks（EM &gt; 快照 &gt; 本地日线，逐行标 source）</code></span></div>
+  </div>`;
+}
+
 // ---------- 热榜行情：15:00 收盘槽全量 + 五维档位 + 双题集复核台账（quotes-review 读口） ----------
 // 展示语言对齐涨停复盘页：KPI 卡（一致/分歧卡可点击筛选）+ 筛选条 + 可排序表 + 行展开
 // jev 请求/返回/原始 JSON（复用 JSON 树/复制/元信息组件）；缺失一律 '--'（fail-visible）。
@@ -2422,12 +2742,15 @@ function entryResp(e){
   if (d.answers || d.scores) return { _note: 'responseRaw 未存档（旧文档）', answers: d.answers, scores: d.scores };
   return { _note: 'responseRaw 未存档' };
 }
-function lgUi(view){ return view === 'lab' ? STATE.labelUi : STATE.detailUi[view]; }
-function lgEntries(view){ return view === 'lab' ? STATE.labelEntries
+function lgUi(view){ return view === 'lab' ? STATE.labelUi : view === 'die' ? STATE.diebanUi : STATE.detailUi[view]; }
+function lgEntries(view){ return view === 'lab' ? STATE.labelEntries : view === 'die' ? STATE.diebanEntries
   : view === 'slot' ? STATE.slotEntries : STATE.relayEntries; }
-function lgAfter(view){ if (view === 'lab') renderLabels(); else if (view === 'slot') renderSlots(); else renderRelayTab(); }
+function lgAfter(view){ if (view === 'lab') renderLabels(); else if (view === 'die') renderDieban();
+  else if (view === 'slot') renderSlots(); else renderRelayTab(); }
 function lgOpenEntry(view){ return (lgEntries(view) || []).find(x => x.key === lgUi(view).openKey) || null; }
 function detailHtml(e, view){
+  // 跌停复盘行展开（2026-10-20）：非模型调用日志 → 口径读数 + 读口行 JSON
+  if (view === 'die') return dbDetailHtml(e);
   // 懒拉失败：显式展示失败与重试入口，不静默回落到瘦行（§4.0 不得用空结果伪装缺失）
   if (e.docErr && view === 'relay'){
     return `<div class="lg-head"><div class="lg-title">⚠️ ${esc(e.label)} 完整存档拉取失败</div></div>
@@ -2526,10 +2849,10 @@ const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察'
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
                      ['detail', '涨停分析', '🗓️']];
 const NAV = [
-  {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️']]},
+  {group: '工作台', items: [['overview', '总览', '📊'], ['quotes', '热榜行情', '📈'], ['labels', '涨停复盘', '🏷️'], ['dieban', '跌停复盘', '📉']]},
   {group: '连板指数 · 日级判定', items: RELAY_VIEWS.map(v => ['relay/' + v[0], v[1], v[2]])},
 ];
-const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'],
+const VIEW_CRUMB = {overview: ['总览'], quotes: ['热榜行情'], labels: ['涨停复盘'], dieban: ['跌停复盘'],
                     relay: ['连板指数', RELAY_VIEWS.reduce((m, v) => (m[v[0]] = v[1], m), {})]};
 
 function renderSidebar(){

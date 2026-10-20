@@ -159,6 +159,10 @@ class FakeCol:
             rows = [r for r in rows if r.get("_id") == q]
         return [dict(r) for r in rows]
 
+    def find_one(self, query=None, projection=None, sort=None):
+        found = self.find(query)
+        return found[0] if found else None
+
     def replace_one(self, query, doc, upsert=False):
         self.replaced.append((query, doc))
         self.rows = [r for r in self.rows if r.get("_id") != doc.get("_id")] + [dict(doc)]
@@ -179,13 +183,20 @@ def _fake_frames(dates: list[str]) -> FakeCol:
 
 
 def test_tool_dry_run_then_apply_skips_authoritative(tmp_path, monkeypatch, capsys):
-    """dry-run 不写库；apply 只写权威源未覆盖的日期，0 值日照写、无棒日不写。"""
-    _write(tmp_path, "sh", "600001", [_rec(D1, c=10.0), _rec(D2, c=9.00)])
+    """dry-run 不写库；apply 不覆盖权威家数，但**逐股与家数解耦**：权威日照补 TDX 逐股。
+
+    2026-07-09 前置一根棒 → D1 有前收（首个交易日不入 seen），D1 才真进 counts；
+    否则 D1 永远不在 counts 里，「不覆盖 EM 家数」这条分支是零覆盖的空断言
+    （2026-10-20 review minor）。
+    """
+    _write(tmp_path, "sh", "600001",
+           [_rec("2026-07-09", c=10.5), _rec(D1, c=10.0), _rec(D2, c=9.00)])
     db = FakeDb({
         "snapshot_frames": _fake_frames([D1, D2, "2026-07-14"]),
         "stock_names": FakeCol([{"code": "600001", "type": "stock"},
                                 {"code": "600002", "type": "stock"}]),
         mdp.COLLECTION: FakeCol([{"_id": D1, "count": 3, "source": mdp.SOURCE_EM}]),
+        mdp.COLLECTION_ROWS: FakeCol([]),
     })
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
@@ -195,14 +206,23 @@ def test_tool_dry_run_then_apply_skips_authoritative(tmp_path, monkeypatch, caps
     tool.main()
     out = capsys.readouterr().out
     assert "dry-run 未写库" in out and db[mdp.COLLECTION].replaced == []
-    assert "待处理 2 日" in out             # D1 是 EM 权威源 → 跳过
+    assert "待处理 2 日" in out             # D1 是 EM 权威源 → 家数跳过
 
     monkeypatch.setattr(sys, "argv", base + ["--apply"])
     tool.main()
     written = {q["_id"]: doc for q, doc in db[mdp.COLLECTION].replaced}
-    assert set(written) == {D2}             # D1（EM）不覆盖；2026-07-14 无棒 → 不写 0
+    assert set(written) == {D2}             # D1（EM）家数不覆盖；2026-07-14 无棒 → 不写 0
     assert written[D2]["source"] == mdp.SOURCE_TDX and written[D2]["count"] == 1
     assert db[mdp.COLLECTION].rows[0]["source"] == mdp.SOURCE_EM   # 权威行保持
+    # 逐股明细与家数解耦：D1 家数虽为 EM 权威，逐股仍由本地日线补（窗口外唯一可得）
+    rows_docs = {q["_id"]: doc for q, doc in db[mdp.COLLECTION_ROWS].replaced}
+    assert set(rows_docs) == {D1, D2}
+    assert all(d["source"] == mdp.SOURCE_TDX for d in rows_docs.values())
+    assert rows_docs[D2]["count"] == len(rows_docs[D2]["rows"]) == 1
+    assert rows_docs[D2]["rows"][0]["code"] == "600001"
+    assert rows_docs[D2]["rows"][0]["name"] is None      # 名称表无该股 → 不伪名称
+    # 跨源对账打印留档（家数 EM 权威 3 vs TDX 逐股 1）
+    assert "[跨源对账]" in capsys.readouterr().out
 
 
 def test_tool_writes_legit_zero_day(tmp_path, monkeypatch):
@@ -210,7 +230,7 @@ def test_tool_writes_legit_zero_day(tmp_path, monkeypatch):
     _write(tmp_path, "sh", "600001", [_rec(D1, c=10.0), _rec(D2, c=10.5)])
     db = FakeDb({"snapshot_frames": _fake_frames([D2]),
                  "stock_names": FakeCol([{"code": "600001", "type": "stock"}]),
-                 mdp.COLLECTION: FakeCol()})
+                 mdp.COLLECTION: FakeCol(), mdp.COLLECTION_ROWS: FakeCol()})
     monkeypatch.setattr(
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
     monkeypatch.setattr(tdx, "resolve_root", lambda roots=None: (str(tmp_path), "2026-10-16"))
@@ -219,3 +239,42 @@ def test_tool_writes_legit_zero_day(tmp_path, monkeypatch):
     tool.main()
     written = {q["_id"]: doc for q, doc in db[mdp.COLLECTION].replaced}
     assert written[D2]["count"] == 0 and written[D2]["source"] == mdp.SOURCE_TDX
+
+
+# ── 逐股名单（2026-10-20 立项：scan_rows 与家数同源同数）────────────────────
+
+def test_scan_rows_returns_rows_with_names_and_same_count(tmp_path):
+    """逐股行 = 家数的同一事实：counts[d] == len(rows[d])，且名称按 stock_names 补齐。"""
+    pre = _rec("2026-07-09", c=10.00)
+    _write(tmp_path, "sh", "600001", [pre, _rec(D1, c=10.00), _rec(D2, c=9.00)])
+    _write(tmp_path, "sz", "300001", [pre, _rec(D1, c=10.00), _rec(D2, c=8.00)])
+    _write(tmp_path, "sh", "600002", [pre, _rec(D1, c=10.0), _rec(D2, c=10.1)])   # 无跌停
+    uni = {"600001", "300001", "600002"}
+    names = {"600001": "甲股份", "300001": "乙科技"}
+    rows_by_date, meta = tdx.scan_rows([D1, D2], root=str(tmp_path), universe=uni, names=names)
+    counts, meta_counts = tdx.scan_counts([D1, D2], root=str(tmp_path), universe=uni)
+
+    assert {d: len(r) for d, r in rows_by_date.items()} == counts
+    assert counts[D2] == 2 and meta["zero_days"] == 1
+    codes = sorted(r["code"] for r in rows_by_date[D2])
+    assert codes == ["300001", "600001"]
+    by_code = {r["code"]: r for r in rows_by_date[D2]}
+    assert by_code["600001"]["name"] == "甲股份"
+    assert by_code["300001"]["name"] == "乙科技"
+    assert by_code["600001"]["price"] == 9.0 and by_code["600001"]["prevClose"] == 10.0
+    assert by_code["600001"]["limitDownPrice"] == 9.0
+    assert by_code["600001"]["pctChange"] == -10.0
+    assert rows_by_date[D1] == []                  # 覆盖足但无跌停 = 空名单（不是缺口）
+    assert meta_counts["partial"] == meta["partial"]
+
+
+def test_scan_rows_partial_coverage_day_has_no_rows(tmp_path):
+    """覆盖不足日（读取窗边缘）→ 连逐股行一起不出（与家数同规，不静默少列）。"""
+    _write(tmp_path, "sh", "600001", [_rec("2026-07-09", c=10.0), _rec(D1, c=10.5), _rec(D2, c=9.45)])
+    # 600002 缺 D1 棒（只有前收 + D2）→ D1 有棒股数 1 vs 峰值 2 → 覆盖不足
+    _write(tmp_path, "sh", "600002", [_rec("2026-07-09", c=10.0), _rec(D2, c=10.0)])
+    uni = {"600001", "600002"}
+    rows_by_date, meta = tdx.scan_rows([D1, D2], root=str(tmp_path), universe=uni)
+    assert D1 not in rows_by_date
+    assert meta["partial"] == [D1]
+    assert [r["code"] for r in rows_by_date[D2]] == ["600001"]

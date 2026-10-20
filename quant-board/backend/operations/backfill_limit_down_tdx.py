@@ -18,6 +18,12 @@
 - 该日全市场无可用棒、或当日有棒股数远低于峰值（读取窗边缘）→ 披露缺口，**绝不写数**；
 - **0 家跌停**（覆盖足但无股跌停）是**真读数**，照写（不得当缺口）。
 - 顺带对账：已有 em_pool 的日期打印 TDX 与 EM 偏差（精度留档，供 §9 复核）。
+- **逐股明细（2026-10-20 立项）**：同一次扫描的 `scan_rows` 结果写入
+  `market_daily_limit_down_stocks`（source=tdx_local_bars，names 取自 `stock_names`）；
+  已有 EM/快照逐股行的日期由 `save_limit_down_rows` 源优先级自动跳过（TDX 不覆盖权威源）。
+  **逐股与家数解耦**：家数已是 EM 权威的日期照样补 TDX 逐股（EM 窗口滑出后逐股只能靠
+  本地日线；TDX 行数与 EM 家数的偏差显式打印留档，两源各自自洽——EM 家数权威、TDX 名单
+  是「窗口外唯一可得的全市场逐股」，fail-visible 标注优先于伪造一致）。
 """
 from __future__ import annotations
 
@@ -53,8 +59,9 @@ def main() -> None:
         {"datasetId": args.dataset_id}, {"tradingDate": 1})
         if r.get("tradingDate") and args.start <= str(r["tradingDate"]) <= args.end})
     col = db[mdp.COLLECTION]
-    have = {str(d["_id"]): str(d.get("source") or "")
-            for d in col.find({"_id": {"$in": dates}}, {"source": 1})}
+    count_docs = {str(r["_id"]): r for r in
+                  (col.find({"_id": {"$in": dates}}, {"source": 1, "count": 1}) if dates else [])}
+    have = {d: str(r.get("source") or "") for d, r in count_docs.items()}
     authoritative = {d for d, s in have.items() if s in (mdp.SOURCE_EM, mdp.SOURCE_SNAPSHOT)}
     todo = [d for d in dates if d not in authoritative]
     print(f"== 本地日线跌停回填 {args.start}~{args.end}：日轴 {len(dates)} 日，"
@@ -69,9 +76,25 @@ def main() -> None:
         print(f"[警告] 目录末棒 {last_bar} 早于 --end {args.end}：该段无棒日将列缺口")
 
     universe = tdx.universe_from_db(db)
-    counts, meta = tdx.scan_counts(dates, root=root, universe=universe, take=args.take)
-    print(f"扫描：宇宙 {len(universe)} 只（目录内命中 {meta['files']}，目录外 {meta['skipped']}，"
-          f"宇宙内缺日线 {meta['missing']}）；有跌停读数 {len(counts)} 日")
+    names = tdx.names_from_db(db)
+    rows_by_date, meta = tdx.scan_rows(dates, root=root, universe=universe, take=args.take,
+                                       names=names)
+    counts = {d: len(rows) for d, rows in rows_by_date.items()}
+    print(f"扫描：宇宙 {len(universe)} 只（命中日线 {meta.get('universe_hits', 0)} 只 / 目录内文件 "
+          f"{meta['files']}（同码跨市场会多计），目录外文件 {meta['skipped']}，"
+          f"宇宙内缺日线 {meta['missing']}，名称表 {len(names)} 只）；"
+          f"有跌停读数 {len(counts)} 日，逐股行 {sum(counts.values())} 行")
+    have_rows = {str(d["_id"]): str(d.get("source") or "")
+                 for d in db[mdp.COLLECTION_ROWS].find({"_id": {"$in": sorted(counts)}},
+                                                       {"_id": 1, "source": 1})}
+    skipped_rows = sorted(d for d, s0 in have_rows.items()
+                          if s0 in (mdp.SOURCE_EM, mdp.SOURCE_SNAPSHOT))
+    keep_rows = sorted(d for d, s0 in have_rows.items() if s0 == mdp.SOURCE_TDX)
+    if skipped_rows:
+        print(f"[逐股跳过] {len(skipped_rows)} 日已有权威逐股行（EM/快照），TDX 不覆盖："
+              f"{' '.join(skipped_rows[:8])}{' …' if len(skipped_rows) > 8 else ''}")
+    if keep_rows:
+        print(f"[逐股覆写] {len(keep_rows)} 日已有 TDX 行 → 本次重算覆写（同源幂等）")
 
     for d in sorted(counts):
         old = have.get(d)
@@ -83,7 +106,7 @@ def main() -> None:
         from backend.operations.jev_label_jiuyan import dieban_count
         cur = dieban_count(db, d, args.dataset_id)
         delta = f"{n - cur:+d}" if isinstance(cur, int) else "-"
-        print(f"  [回填] {d}: TDX 全市场 {n:>3} 家 | 现状 {old_txt} "
+        print(f"  [回填] {d}: TDX 全市场 {n:>3} 家 / 逐股 {n:>3} 行 | 现状 {old_txt} "
               f"| 池内对照 {cur if cur is not None else '-'}（Δ {delta}）")
 
     gaps = [d for d in todo if d not in counts]
@@ -103,15 +126,32 @@ def main() -> None:
         print("dry-run 未写库；确认后加 --apply（只写权威源未覆盖的日期，绝不覆盖 em_pool）")
         return
     now = time.strftime("%Y-%m-%dT%H:%M:%S")
-    n_written = 0
+    n_written = n_rows_written = n_rows_skipped = n_rows_crosssource = 0
     for d in sorted(counts):
-        if d in authoritative:
-            continue
-        col.replace_one({"_id": d}, {"_id": d, "count": counts[d], "source": mdp.SOURCE_TDX,
-                                     "fetchedAt": now}, upsert=True)
-        n_written += 1
+        rows = rows_by_date.get(d) or []
+        authoritative_count = count_docs.get(d, {}).get("count") if d in authoritative else None
+        if d not in authoritative:
+            col.replace_one({"_id": d}, {"_id": d, "count": counts[d], "source": mdp.SOURCE_TDX,
+                                         "fetchedAt": now}, upsert=True)
+            n_written += 1
+        if mdp.save_limit_down_rows(db, d, {"count": len(rows), "rows": rows, "total": None,
+                                            "truncated": False, "badRows": 0},
+                                    mdp.SOURCE_TDX):
+            n_rows_written += 1
+            # 跨源对账：家数是 EM 权威、逐股是 TDX 重算 → 偏差打印留档（不互改，fail-visible）
+            if isinstance(authoritative_count, int) and authoritative_count != len(rows):
+                n_rows_crosssource += 1
+                print(f"[跨源对账] {d}: 家数(EM 权威) {authoritative_count} vs "
+                      f"TDX 逐股 {len(rows)} 行（两源自洽，偏差即本地日线重算口径，已标注不互改）")
+        else:
+            n_rows_skipped += 1
+    if n_rows_crosssource:
+        print(f"[跨源对账] 合计 {n_rows_crosssource} 日：家数为权威源（EM/快照）而逐股由本地日线补；"
+              f"两源自洽、已逐日打印，读口按 fullMarket.crossSource/countDisputed 披露")
     print(f"[market_daily_limit_down] 已写 {n_written} 日（source={mdp.SOURCE_TDX}，"
           f"root={root}，末棒 {last_bar}，take={args.take}）")
+    print(f"[market_daily_limit_down_stocks] 已写 {n_rows_written} 日逐股"
+          f"（{n_rows_skipped} 日被权威源挡下 → 不覆盖）")
 
 
 if __name__ == "__main__":

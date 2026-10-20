@@ -135,6 +135,15 @@ def _pool_payload(n, tc=None):
                      "pool": [{"c": f"60000{i}"} for i in range(max(n, 0))]}}
 
 
+def _rows_payload(n, tc=None):
+    """带完整逐股字段的 EM 载荷（p 为 ×1000 定点，与实测一致）。"""
+    return {"data": {"tc": n if tc is None else tc,
+                     "pool": [{"c": f"6000{i:02d}", "n": f"股{i}", "p": 9000 + i,
+                               "zdp": -10.0, "hs": 4.5, "amount": 1e8, "ltsz": 1e9,
+                               "days": 1, "oc": 0, "lbt": 145406, "hybk": "测试行业"}
+                              for i in range(max(n, 0))]}}
+
+
 def _patch_em(monkeypatch, *, responses=None, exc=None):
     """注入假东财客户端 + 冻结节流状态（禁测试内真 sleep / 禁触网）。"""
     fake = _FakeHttp(responses, exc)
@@ -265,10 +274,14 @@ def test_limit_down_count_snapshot_fallback_when_em_unavailable(monkeypatch):
     monkeypatch.setattr(mdp, "_snapshot_is_closing", lambda: True)
     _patch_em(monkeypatch, exc=httpx.ConnectError("blocked"))
     monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
-    monkeypatch.setattr(mdp, "full_market_dieban_from_quotes", lambda: 19)
+    monkeypatch.setattr(mdp, "full_market_dieban_rows_from_quotes", lambda: {
+        "count": 1, "total": None, "badRows": 0, "truncated": False,
+        "rows": [{"code": "600693", "name": "东百集团", "pctChange": -10.01, "price": 9.0}]})
     db = FakeDb({})
-    assert mdp.limit_down_count(db, "2026-10-16") == (19, mdp.SOURCE_SNAPSHOT)
+    assert mdp.limit_down_count(db, "2026-10-16") == (1, mdp.SOURCE_SNAPSHOT)
     assert db.cols[mdp.COLLECTION].rows[0]["source"] == mdp.SOURCE_SNAPSHOT
+    rows_doc = db.cols[mdp.COLLECTION_ROWS].rows[0]
+    assert rows_doc["source"] == mdp.SOURCE_SNAPSHOT and rows_doc["rows"][0]["code"] == "600693"
 
 
 def test_limit_down_count_history_date_never_fetches(monkeypatch):
@@ -367,16 +380,20 @@ def test_backfill_dry_run_writes_nothing(monkeypatch, capsys):
 
 
 def test_backfill_applies_em_rows_and_skips_existing(monkeypatch):
-    """--apply：窗口内逐日 fetch + upsert；已回填日跳过（幂等，不重复外呼）。"""
-    http = _patch_em(monkeypatch, responses=[_FakeResponse(payload=_pool_payload(26))])
+    """--apply：家数已回填日不重写家数，但逐股缺时仍补拉一次（2026-10-20 预登记 §8）。"""
+    http = _patch_em(monkeypatch, responses=[_FakeResponse(payload=_rows_payload(26)),
+                                             _FakeResponse(payload=_rows_payload(11))])
     monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
     col = FakeCol([{"_id": "2026-10-14", "count": 11, "source": mdp.SOURCE_EM}])
-    db = FakeDb({mdp.COLLECTION: col,
+    rows_col = FakeCol([])
+    db = FakeDb({mdp.COLLECTION: col, mdp.COLLECTION_ROWS: rows_col,
                  "snapshot_frames": _frames_col(["2026-10-14", "2026-10-15"])})
     mdp.backfill(db, "2026-10-14", "2026-10-15", apply=True)
-    assert http.calls == ["20261015"]                   # 10-14 已回填，跳过
+    # 10-15 家数缺失 → 正常回填；10-14 家数已有但逐股缺 → 只补逐股一次
+    assert http.calls == ["20261015", "20261014"]
     assert sorted(r["_id"] for r in col.rows) == ["2026-10-14", "2026-10-15"]
     assert col.rows[-1]["count"] == 26 and col.rows[-1]["source"] == mdp.SOURCE_EM
+    assert {r["_id"] for r in rows_col.rows} == {"2026-10-14", "2026-10-15"}
 
 
 def test_backfill_outside_window_reports_gap_not_zero(monkeypatch, capsys):
@@ -747,3 +764,162 @@ def test_limit_down_count_doc_lists_all_returnable_sources():
         assert s in doc, f"枚举漏了实际可返回的 {s}"
     assert "tdx_local_bars" in (mdp.__doc__ or ""), "模块级文档也要含 tdx_local_bars"
     assert mdp.SOURCE_SNAPSHOT.endswith("quotes_snapshot")   # 文档用词与常量一致（防常量改名后文档漂移）
+
+
+# ── 逐股明细（2026-10-20 立项：全市场跌停名单落库）──────────────────────────
+
+def test_parse_em_pool_rows_maps_fields_and_counts_bad_rows():
+    """EM 逐股载荷映射（p 为 ×1000 定点）；缺代码/缺价+跌幅记坏行，不阻断其余行。"""
+    rows, bad = mdp.parse_em_pool_rows([
+        {"c": "000949", "n": "新乡化纤", "p": 5790, "zdp": -9.9533, "amount": 4.46e8,
+         "hs": 4.51, "ltsz": 9.59e9, "tshare": 9.59e9, "pe": 13.9, "hybk": "化学纤维",
+         "days": 1, "oc": 16, "lbt": 145406, "fund": 3517425, "fba": 69854613},
+        {"n": "无代码"},                     # 缺 code → 坏行
+        {"c": "600000"},                     # 缺价且缺跌幅 → 坏行
+        "not-a-dict",                        # 非字典 → 坏行
+    ])
+    assert bad == 3 and len(rows) == 1
+    row = rows[0]
+    assert row["code"] == "000949" and row["price"] == 5.79
+    assert row["pctChange"] == -9.9533 and row["industry"] == "化学纤维"
+    assert row["emStreakDays"] == 1 and row["openNum"] == 16
+    assert row["lastSealTime"] == "14:54:06"
+    assert row["raw"] == {"fund": 3517425, "fba": 69854613, "days": 1, "oc": 16, "lbt": 145406}
+
+
+def test_fetch_limit_down_em_rows_flags_truncation(monkeypatch):
+    """池行数 < EM 自报 tc → count 取 tc 且 truncated=True（页面须标注，不静默少列）。"""
+    _patch_em(monkeypatch, responses=[_FakeResponse(payload=_rows_payload(3, tc=26))])
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
+    out = mdp.fetch_limit_down_em_rows("2026-10-15")
+    assert out["count"] == 26 and len(out["rows"]) == 3 and out["truncated"] is True
+    assert out["badRows"] == 0
+
+
+def test_fetch_limit_down_em_rows_empty_pool_is_zero_not_gap(monkeypatch):
+    """窗口内空池 = 合法 0（rows=[] 且 truncated=False），与「取不到」区分。"""
+    _patch_em(monkeypatch, responses=[_FakeResponse(payload=_rows_payload(0))])
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-09-16")
+    out = mdp.fetch_limit_down_em_rows("2026-09-25")
+    assert out["count"] == 0 and out["rows"] == [] and out["truncated"] is False
+
+
+def test_save_limit_down_rows_never_downgrades_source():
+    """源优先级 EM > 快照 > TDX：低级源不得覆盖高级源；同级可幂等覆写。"""
+    payload = {"count": 1, "total": 1, "truncated": False, "badRows": 0,
+               "rows": [{"code": "600693", "name": "A", "pctChange": -10.0, "price": 9.0}]}
+    col = FakeCol([])
+    db = FakeDb({mdp.COLLECTION_ROWS: col})
+    assert mdp.save_limit_down_rows(db, "2026-10-19", payload, mdp.SOURCE_EM) is True
+    assert mdp.save_limit_down_rows(db, "2026-10-19", payload, mdp.SOURCE_TDX) is False
+    assert mdp.save_limit_down_rows(db, "2026-10-19", payload, mdp.SOURCE_SNAPSHOT) is False
+    assert col.rows[0]["source"] == mdp.SOURCE_EM
+    assert col.rows[0]["count"] == 1 and col.rows[0]["rows"][0]["code"] == "600693"
+    # TDX 先落 → EM 可升级覆盖（与家数回填同规）
+    col2 = FakeCol([])
+    db2 = FakeDb({mdp.COLLECTION_ROWS: col2})
+    assert mdp.save_limit_down_rows(db2, "2026-09-15", payload, mdp.SOURCE_TDX) is True
+    assert mdp.save_limit_down_rows(db2, "2026-09-15", payload, mdp.SOURCE_EM) is True
+    assert col2.rows[0]["source"] == mdp.SOURCE_EM
+
+
+def test_save_limit_down_rows_refuses_empty_list_when_count_positive():
+    """解析全失败/截断到 0 行 + count>0 → **不写**（不得落成「当日 0 家」）；count=0 合法空名单照写。"""
+    col = FakeCol([])
+    db = FakeDb({mdp.COLLECTION_ROWS: col})
+    assert mdp.save_limit_down_rows(db, "2026-10-19",
+                                    {"count": 22, "rows": [], "badRows": 22}, mdp.SOURCE_EM) is False
+    assert col.writes == []
+    assert mdp.save_limit_down_rows(db, "2026-09-18",
+                                    {"count": 0, "rows": [], "badRows": 0}, mdp.SOURCE_EM) is True
+    assert col.rows[0]["count"] == 0 and col.rows[0]["rows"] == []
+
+
+def test_full_market_rows_from_quotes_collects_rows_and_bad(monkeypatch):
+    """快照兜底同样给逐股（code/name/价/额/换手/流通值），坏行计数不阻断。"""
+    _patch_redis(monkeypatch, {
+        "600693": json.dumps({"f12": "600693", "f14": "东百集团", "f2": 9.0, "f3": -10.01,
+                             "f5": 1e8, "f8": 12.3, "f21": 5e9, "f9": 20.0}),
+        "300301": json.dumps({"f12": "300301", "f14": "长方集团", "f2": 4.0, "f3": -12.47}),
+        "bad": "{not-json",
+        "600000": json.dumps({"f12": "600000", "f14": "浦发银行", "f3": 1.68}),
+    })
+    out = mdp.full_market_dieban_rows_from_quotes()
+    assert out["count"] == 1 and out["badRows"] == 1
+    row = out["rows"][0]
+    assert row["code"] == "600693" and row["name"] == "东百集团"
+    assert row["price"] == 9.0 and row["turnoverRate"] == 12.3
+    # 家数薄壳与逐股同源
+    assert mdp.full_market_dieban_from_quotes() == 1
+
+
+def test_rows_for_date_reads_rows_collection():
+    col = FakeCol([{"_id": "2026-10-19", "source": mdp.SOURCE_EM, "count": 1, "rows": []}])
+    db = FakeDb({mdp.COLLECTION_ROWS: col})
+    doc = mdp.rows_for_date(db, "2026-10-19")
+    assert doc["source"] == mdp.SOURCE_EM
+    assert mdp.rows_for_date(db, "2026-10-16") is None
+
+
+# ── 2026-10-20 review 修复：空池二义性闸 / 快照全坏行 / rowsReturned / 补拉熔断 ──
+
+def test_em_empty_pool_requires_explicit_zero(monkeypatch):
+    """EM 空池必须**显式自报 tc==0** 才认合法 0；否则判不可用（限流/窗口边界的伪 0 通路）。
+
+    反例：把空池无条件当 0 → 家数与逐股同源同数写 0，crossSource=false、无 degraded，
+    页面显示「全市场 0 家」且该 0 进入同源分位（AGENTS §4.0 零披露伪 0）。
+    """
+    fake = _patch_em(monkeypatch, responses=[
+        _FakeResponse(payload={"data": {"pool": []}}),            # 空池未自报 0 → 不可用
+        _FakeResponse(payload={"data": {"tc": 0, "pool": []}}),   # 显式 tc=0 → 合法 0
+    ])
+    assert mdp.fetch_limit_down_em("2026-10-19") is None
+    rows = mdp.fetch_limit_down_em_rows("2026-10-19")
+    assert rows is not None and rows["count"] == 0 and rows["rows"] == []
+    assert fake.calls == ["20261019", "20261019"]
+
+
+def test_snapshot_all_bad_rows_unavailable(monkeypatch):
+    """快照载荷整段畸形（全部行解析失败）→ 不可算 None，不得写 count=0。"""
+    _patch_redis(monkeypatch, rows={"600001": "{not json", "600002": "[]"})
+    assert mdp.full_market_dieban_rows_from_quotes() is None
+    assert mdp.full_market_dieban_from_quotes() is None
+
+
+def test_rows_payload_exposes_rows_returned(monkeypatch):
+    """rowsReturned = 池条目数（= len(rows)+badRows）；count>rowsReturned 才是真截断。"""
+    payload = {"data": {"tc": 4, "pool": [
+        {"c": "600001", "n": "好行", "p": 9000, "zdp": -10.0},
+        {"c": "600002"},          # 缺价+缺涨跌幅 → 坏行
+        "junk",                   # 非 dict → 坏行
+    ]}}
+    _patch_em(monkeypatch, responses=[_FakeResponse(payload=payload)])
+    out = mdp.fetch_limit_down_em_rows("2026-10-19")
+    assert out["rowsReturned"] == 3 and len(out["rows"]) == 1 and out["badRows"] == 2
+    assert out["count"] == 4 and out["truncated"] is True   # EM 自报 4 > 实返 3 → 真截断
+
+
+def test_save_limit_down_rows_persists_rows_returned(monkeypatch):
+    """落库带回 rowsReturned（读口据此把「逐股 N 行」渲染成实际行数，不当家数用）。"""
+    col = FakeCol()
+    db = FakeDb({mdp.COLLECTION_ROWS: col})
+    assert mdp.save_limit_down_rows(db, "2026-10-19",
+                                    {"count": 4, "rows": [{"code": "600001"}], "badRows": 2,
+                                     "rowsReturned": 3, "truncated": True}, mdp.SOURCE_EM)
+    doc = col.find_one({"_id": "2026-10-19"})
+    assert doc["rowsReturned"] == 3 and doc["truncated"] is True
+
+
+def test_backfill_rows_topping_out_obeys_breaker(monkeypatch, capsys):
+    """逐股补拉循环同样遵守连续失败熔断：达阈值后不再逐日硬打（不绕开外呼纪律）。"""
+    fake = _patch_em(monkeypatch, exc=httpx.ConnectError("blocked"))
+    monkeypatch.setattr(mdp, "_em_window_start", lambda: "2026-01-01")
+    monkeypatch.setattr(mdp, "_EM_MAX_CONSECUTIVE_FAILURES", 2)
+    days = ["2026-10-13", "2026-10-14", "2026-10-15"]
+    col = FakeCol([{"_id": d, "count": 3, "source": mdp.SOURCE_EM} for d in days])
+    db = FakeDb({mdp.COLLECTION: col, "snapshot_frames": _frames_col(days)})
+    mdp.backfill(db, days[0], days[-1], apply=False)
+    out = capsys.readouterr().out
+    assert fake.calls == ["20261013", "20261014"]      # 第 3 天熔断，无第 3 次外呼
+    assert "熔断未尝试" in out
+    assert "逐股补拉 0 日 / 缺口 3 日" in out

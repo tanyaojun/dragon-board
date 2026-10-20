@@ -22,7 +22,9 @@ Referer、无会话复用。skills/a-stock-data/SKILL.md「东财防封」铁律
 
 **EM 窗口边界**：`date < 今天-30 自然日` 直接判不可用且不外呼。EM 对窗口外日期只返 0 行，
 与「当日真的 0 家」在响应上无法区分——把窗口外伪成 0 家会成片污染分位数（AGENTS §4.0：
-「取不到」与「真的 0」是两件事）。窗口内返空池 = 合法 0（当日确实无跌停）。
+「取不到」与「真的 0」是两件事）。**窗口内空池也必须由 EM 显式自报 `tc == 0` 才认合法 0**：
+限流/软拦截同样会返 HTTP 200 + 空池（2026-10-20 review major：这是唯一能落成「零披露伪 0」
+的通路），未自报 0 的空池一律判不可用（可降级到行情快照/本地日线，不伪 0）。
 
 **实时口径边界**：行情快照 TTL 300s、每 5 分钟刷新，只服务「当日」叙事；历史日不走此路，
 回退采集池口径并显式标注——不拿实时快照冒充历史日收盘（fail-visible）。
@@ -39,6 +41,11 @@ fail-visible：任何一步取不到都不写成 0。
 - `reference_counts(db, dates, source)`：参考集合批量同源读（一次 find，禁逐日连发）。
 - `backfill(db, start, end, apply)`：EM 回填（dry-run 默认）。窗口内逐日 fetch+upsert，
   已回填跳过；窗口外/连续失败 → 披露缺口，绝不写 0 行。
+- **逐股明细（2026-10-20 立项，用户指令「第2项」）**：家数参考集合之外，另落
+  `market_daily_limit_down_stocks`（一天一文档，`rows` 逐股 + source 优先级 EM > 快照 > TDX）。
+  `fetch_limit_down_em_rows()` 与 `fetch_limit_down_em()` 共用同一次 HTTP 载荷（不重复外呼）；
+  `rows_for_date()` 供【跌停复盘】页读全市场逐股名单；`save_limit_down_rows()` 遵守
+  「高级源不被低级源覆盖」，解析全失败不留空名单（fail-visible）。
 """
 from __future__ import annotations
 
@@ -59,6 +66,9 @@ from backend.market_proxy.quotes import market_quotes_redis_key
 from backend.market_proxy.redis_client import get_hotlist_redis_client
 
 COLLECTION = "market_daily_limit_down"
+# 逐股明细集合（一天一文档）：全市场跌停名单的单一事实源；与家数集合分表是因为
+# 逐股载荷体积大且回填节奏不同（家数表有 EM 窗口外的 TDX 行，逐股表要跟源优先级走）。
+COLLECTION_ROWS = "market_daily_limit_down_stocks"
 
 # source 取值（参考集合每行带 source；分位采样必须同源，跨口径混采会污染分位）
 SOURCE_EM = "em_pool"                       # 东财跌停池（主源，有历史）
@@ -70,6 +80,9 @@ SOURCE_POOL = "pool_rows"                   # 采集池口径（末位降级，�
 # 采集池口径（仅 250 只）**不在**此列——它系统性低估（10-15 实证池内 6 vs 全市场 26），
 # 与全市场口径混采会把「换源」读成真实情绪摆动（2026-10-16 审计问题 #1）。
 FULL_MARKET_SOURCES = (SOURCE_EM, SOURCE_SNAPSHOT, SOURCE_TDX)
+
+# 逐股明细的源优先级（数字越大越权威）：主页写库/`save_limit_down_rows` 只允许同级或更高级覆盖
+SOURCE_RANK = {SOURCE_POOL: 0, SOURCE_TDX: 1, SOURCE_SNAPSHOT: 2, SOURCE_EM: 3}
 
 SOURCE_LABELS = {
     SOURCE_EM: "全市场·东财跌停池",
@@ -104,10 +117,16 @@ _em_client: httpx.Client | None = None
 
 
 def reset_em_throttle_state() -> None:
-    """清节流/冷却状态（测试夹具用：模块级状态跨用例残留会误导后续用例）。"""
+    """清节流/冷却状态与 HTTP 客户端单例（测试夹具用：模块级状态跨用例残留会误导后续用例）。
+
+    2026-10-20 review nit：只清 `_em_state` 会让 Keep-Alive 连接池跨用例残留（当前靠
+    conftest 的离线护栏才不可达，属潜伏）；一并清 `_em_client`。
+    """
+    global _em_client
     with _em_lock:
         _em_state["last"] = None
         _em_state["cooldown_until"] = 0.0
+    _em_client = None
 
 
 def today_str() -> str:
@@ -162,14 +181,16 @@ def _em_http_client() -> httpx.Client:
     return _em_client
 
 
-def fetch_limit_down_em(date: str, *, client: httpx.Client | None = None) -> int | None:
-    """全市场跌停家数：东财跌停股池 `getTopicDTPool`（主源）。
+def _em_pool_payload(date: str, *, client: httpx.Client | None = None) -> dict[str, Any] | None:
+    """东财跌停池原始载荷 → {pool: [...], total: tc|None}；不可用 → None。
 
+    所有外呼护栏集中在这一个实现里（家数读口与逐股读口共用，禁写第二份）：
     - 窗口外（date < 今天-30 自然日）→ None 且**不外呼**（见 _em_window_start）。
     - 冷却期内（刚吃过 429/403）→ None，不刺激 WAF。
     - 429/403 → 进 30 分钟冷却并返 None；东财风控信号，绝不重试（SKILL 铁律）。
     - 其它异常 / HTTP 200 但 body 非池结构（风控返空/HTML）→ None。
-    - 窗口内池为空 = 合法 0（当日确实无跌停）。
+    - 窗口内池为空：**必须 EM 显式自报 `tc == 0` 才是合法 0**；空池且未自报 0（限流/软
+      拦截的典型形态）→ None（不可用，交调用方降级），绝不伪 0（AGENTS §4.0）。
     """
     if date < _em_window_start():
         return None
@@ -204,41 +225,247 @@ def fetch_limit_down_em(date: str, *, client: httpx.Client | None = None) -> int
     pool = data.get("pool") if isinstance(data, dict) else None
     if not isinstance(pool, list):
         return None
-    count = len(pool)
     total = data.get("tc") if isinstance(data, dict) else None
-    # pagesize=10000 实际不可达截断；真截断时以 EM 自报总数兜底（宁多勿少）
+    total_ok = isinstance(total, int) and not isinstance(total, bool)
+    if not pool:
+        # 空池二义性闸（2026-10-20 review major）：只有 EM 显式自报总数为 0 才认「当日真 0 家」；
+        # 否则（tc 缺失/非 0，典型于限流与窗口边界）判不可用，由快照/本地日线/采集池降级兜底。
+        return {"pool": [], "total": total} if total_ok and total == 0 else None
+    return {"pool": pool, "total": total}
+
+
+def _em_price(value: object) -> float | None:
+    """EM 池价格 `p` 为 ×1000 定点（5790 → 5.79）；非法/非正 → None。"""
+    number = _as_float(value)
+    if number is None or number <= 0:
+        return None
+    return round(number / 1000, 2)
+
+
+def _as_float(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str):
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _as_int(value: object) -> int | None:
+    number = _as_float(value)
+    return int(number) if number is not None and number == int(number) else None
+
+
+def _em_time_text(value: object) -> str | None:
+    """EM 封板时间（HHMMSS 整数，如 145406）→ '14:54:06'；非法 → None。"""
+    digits = str(value or "").strip()
+    if not digits.isdigit():
+        return None
+    digits = digits.zfill(6)
+    hour, minute, second = int(digits[:2]), int(digits[2:4]), int(digits[4:6])
+    if hour > 23 or minute > 59 or second > 59:
+        return None
+    return f"{hour:02d}:{minute:02d}:{second:02d}"
+
+
+def parse_em_pool_rows(pool: Any) -> tuple[list[dict[str, Any]], int]:
+    """EM 跌停池原始条目 → 逐股行（(rows, badRows)）。
+
+    字段映射（2026-10-20 实测载荷）：`c` 代码 / `n` 名称 / `p` 价格(×1000) / `zdp` 涨跌幅 /
+    `amount` 成交额 / `hs` 换手 / `ltsz` 流通市值 / `tshare` 总市值 / `pe` /
+    `hybk` 行业板块 / `days` EM 自报连跌天数 / `oc` 开板次数 / `lbt` 最后封板时间 /
+    `fund`+`fba`（语义未定，原样留 raw，不臆造中文名）。
+    缺代码或缺价+涨跌幅 → 记 badRows 跳过（不阻断其余行，AGENTS §4.0）。
+    """
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    for item in pool if isinstance(pool, list) else []:
+        if not isinstance(item, dict):
+            bad += 1
+            continue
+        code = str(item.get("c") or item.get("code") or "").strip()
+        if not code:
+            bad += 1
+            continue
+        price = _em_price(item.get("p"))
+        pct = _as_float(item.get("zdp"))
+        if price is None and pct is None:
+            bad += 1
+            continue
+        row: dict[str, Any] = {
+            "code": code,
+            "name": (str(item.get("n") or "").strip() or None),
+            "pctChange": pct,
+            "price": price,
+            "amount": _as_float(item.get("amount")),
+            "turnoverRate": _as_float(item.get("hs")),
+            "floatMarketCap": _as_float(item.get("ltsz")),
+            "totalMarketCap": _as_float(item.get("tshare")),
+            "pe": _as_float(item.get("pe")),
+            "industry": (str(item.get("hybk") or "").strip() or None),
+            "emStreakDays": _as_int(item.get("days")),
+            "openNum": _as_int(item.get("oc")),
+            "lastSealTime": _em_time_text(item.get("lbt")),
+            "raw": {k: item.get(k) for k in ("m", "fund", "fba", "days", "oc", "lbt")
+                    if item.get(k) is not None},
+        }
+        rows.append(row)
+    return rows, bad
+
+
+def fetch_limit_down_em(date: str, *, client: httpx.Client | None = None) -> int | None:
+    """全市场跌停家数：东财跌停股池 `getTopicDTPool`（主源）；不可用 → None。
+
+    截断日（pagesize=10000 实际不可达，池行数 < EM 自报 tc）以 tc 兜底，宁多勿少。
+    逐股名单走 `fetch_limit_down_em_rows`；两者共用 `_em_pool_payload` 同一实现（口径不漂移）
+    但各自独立外呼——生产路径已统一走 rows 版（家数 + 逐股一次载荷），本函数只保留给
+    家数专用读口与单测（2026-10-20 review nit：旧 docstring 称「同一次载荷」与实现不符）。
+    """
+    payload = _em_pool_payload(date, client=client)
+    if payload is None:
+        return None
+    count = len(payload["pool"])
+    total = payload.get("total")
     if isinstance(total, int) and not isinstance(total, bool) and total > count:
         count = total
     return count
 
 
-def full_market_dieban_from_quotes() -> int | None:
-    """全市场跌停家数：读 market_proxy 全市场行情 Redis 快照统计；不可用 → None。
+def fetch_limit_down_em_rows(date: str, *, client: httpx.Client | None = None) -> dict[str, Any] | None:
+    """全市场跌停**逐股**名单：东财跌停池（主源）；不可用 → None。
 
-    快照行形状（to_tencent_diff_item）：f12=code、f14=name、f3=涨跌幅%。
-    行级解析失败跳过（不阻断整体统计）；全量不可用（Redis 挂/key 过期/空）→ None。
+    返回 `{count, total, rows, badRows, rowsReturned, truncated}`：
+    - `count` = EM 自报 tc（缺/更小时用池行数），与家数读口同式（宁多勿少）；
+    - `rowsReturned` = 池实际返回条目数（= `len(rows) + badRows`）；**只有无坏行时
+      `count == len(rows)`**，坏行日 `count > len(rows)` 由 `badRows` 披露（2026-10-20 review
+      minor：预登记笼统写「count == len(rows)」，按差值判截断的下游会误读）；
+    - `truncated` = `count > rowsReturned`（真截断：EM 自报数多于池实际返回条目），页面须显式标注；
+    - `badRows` = 解析失败行数（跳过不阻断，不伪 0）；全行失败时 `rows=[]`，
+      调用方（save/backfill）**不写空名单**，避免把解析故障落成「当日 0 家」。
+    """
+    payload = _em_pool_payload(date, client=client)
+    if payload is None:
+        return None
+    pool = payload["pool"]
+    rows, bad = parse_em_pool_rows(pool)
+    total = payload.get("total")
+    count = len(pool)
+    if isinstance(total, int) and not isinstance(total, bool) and total > count:
+        count = total
+    return {"count": count, "total": total if isinstance(total, int) else None,
+            "rows": rows, "badRows": bad, "rowsReturned": len(pool),
+            "truncated": count > len(pool)}
+
+
+def full_market_dieban_rows_from_quotes() -> dict[str, Any] | None:
+    """全市场跌停**逐股**（market_proxy 全市场行情 Redis 快照，仅当日）；不可用 → None。
+
+    快照行形状（to_tencent_diff_item）：f12=code、f14=name、f2=价、f3=涨跌幅%、
+    f5=成交额、f8=换手、f9=pe、f21=流通市值（元）。
+    行级解析失败跳过并计入 `badRows`（不阻断整体，AGENTS §4.0）；全量不可用
+    （Redis 挂/ key 过期 / 空）→ None（不可算，调用方降级，不伪 0）。
+    **全部行都解析失败**（`rows` 空且有 `badRows`）→ None：载荷整体畸变/结构变更时
+    不得写 count=0（2026-10-20 review minor：快照分支原先缺 EM 分支的等价护栏）。
+    返回与 `fetch_limit_down_em_rows` 同形：
+    {count, total, rows, badRows, rowsReturned, truncated}。
     """
     client = get_hotlist_redis_client()
     if client is None:
         return None
     try:
-        rows = client.hgetall(market_quotes_redis_key())
+        raw_rows = client.hgetall(market_quotes_redis_key())
     except Exception:  # noqa: BLE001 — Redis 不可用一律不可算，调用方降级
         return None
-    if not rows:
+    if not raw_rows:
         return None
-    n = 0
-    for code, payload in rows.items():
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    for key, payload in raw_rows.items():
         try:
             row = json.loads(payload) if isinstance(payload, (str, bytes)) else payload
         except Exception:  # noqa: BLE001 — 单行畸形跳过，不伪 0 不阻断
+            bad += 1
             continue
         if not isinstance(row, dict):
+            bad += 1
             continue
+        code = str(row.get("f12") or key or "").strip()
         pct = row.get("f3")
-        if isinstance(pct, (int, float)) and not isinstance(pct, bool) and is_limit_down_pct(pct, code):
-            n += 1
-    return n
+        if not code or not isinstance(pct, (int, float)) or isinstance(pct, bool):
+            bad += 1
+            continue
+        if not is_limit_down_pct(pct, code):
+            continue
+        rows.append({
+            "code": code,
+            "name": (str(row.get("f14") or "").strip() or None),
+            "pctChange": float(pct),
+            "price": _as_float(row.get("f2")),
+            "amount": _as_float(row.get("f5")),
+            "turnoverRate": _as_float(row.get("f8")),
+            "floatMarketCap": _as_float(row.get("f21")),
+            "totalMarketCap": _as_float(row.get("f20")),
+            "pe": _as_float(row.get("f9")),
+            "industry": None,
+            "emStreakDays": None,
+            "openNum": None,
+            "lastSealTime": None,
+            "raw": None,
+        })
+    if not rows and bad:
+        return None   # 全行畸形：不可算（不写 0 家），与 EM 分支「解析全失败不留空名单」同规
+    return {"count": len(rows), "total": None, "rows": rows, "badRows": bad,
+            "rowsReturned": len(rows) + bad, "truncated": False}
+
+
+def full_market_dieban_from_quotes() -> int | None:
+    """全市场跌停家数（行情快照口径）；不可用 → None（薄壳：名单唯一实现在 rows 版）。"""
+    snapshot = full_market_dieban_rows_from_quotes()
+    return None if snapshot is None else snapshot["count"]
+
+
+def save_limit_down_rows(db: Any, date: str, payload: dict[str, Any], source: str) -> bool:
+    """写逐股明细文档（一天一文档）；返回是否写入。
+
+    - **高级源不被低级覆盖**（EM > 行情快照 > 本地日线），同源可重复覆写（幂等刷新）；
+    - `rows` 为空且 `count != 0` → **不写**（解析全失败/异常截断不得落成「当日 0 家」）；
+      `count == 0` 的空名单是合法真读数，照写；
+    - 不做任何覆盖率/质量门禁：部分行解析失败只计入 `badRows`，其余行照写。
+    """
+    rows = payload.get("rows") or []
+    count = payload.get("count")
+    if not rows and count != 0:
+        return False
+    col = db[COLLECTION_ROWS]
+    existing = col.find_one({"_id": date}, {"source": 1})
+    prev = str((existing or {}).get("source") or "")
+    if prev and SOURCE_RANK.get(prev, -1) > SOURCE_RANK.get(source, -1):
+        return False
+    col.replace_one({"_id": date}, {
+        "_id": date, "source": source, "count": count,
+        "total": payload.get("total"), "truncated": bool(payload.get("truncated")),
+        "badRows": payload.get("badRows") or 0, "rows": rows,
+        # rowsReturned 供读口把「逐股 N 行」渲染成实际行数（截断日 count > 行数，
+        # 页面不得把 count 当家数又当行数：2026-10-20 review minor）
+        "rowsReturned": (payload.get("rowsReturned")
+                        if isinstance(payload.get("rowsReturned"), int)
+                        else len(rows) + (payload.get("badRows") or 0)),
+        "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }, upsert=True)
+    return True
+
+
+def rows_for_date(db: Any, date: str) -> dict[str, Any] | None:
+    """逐股明细文档（`market_daily_limit_down_stocks` 一天一文档）；无 → None。"""
+    return db[COLLECTION_ROWS].find_one({"_id": date})
 
 
 def reference_counts(db: Any, dates: Any, source: str | None = None) -> dict[str, int]:
@@ -276,11 +503,20 @@ def limit_down_count(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     col = db[COLLECTION]
     doc = col.find_one({"_id": date})
     if doc is None and allow_fetch and date == today_str() and _snapshot_is_closing():
-        n = fetch_limit_down_em(date)
+        # 逐股与家数同一次 EM 载荷（不重复外呼）；EM 拿到载荷即以 EM 为准（即便逐股
+        # 全行解析失败也只写家数，不回落快照——回落会把换源读成真实摆动）。
+        payload = fetch_limit_down_em_rows(date)
+        n: int | None = None
         src = SOURCE_EM
-        if n is None:
-            n = full_market_dieban_from_quotes()
-            src = SOURCE_SNAPSHOT
+        if payload is not None:
+            n = payload["count"]
+            save_limit_down_rows(db, date, payload, SOURCE_EM)
+        else:
+            snapshot = full_market_dieban_rows_from_quotes()
+            if snapshot is not None:
+                n = snapshot["count"]
+                src = SOURCE_SNAPSHOT
+                save_limit_down_rows(db, date, snapshot, SOURCE_SNAPSHOT)
         if n is not None:
             doc = {"_id": date, "count": n, "source": src,
                    "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
@@ -310,6 +546,8 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
     - **连续** `_EM_MAX_CONSECUTIVE_FAILURES` 次失败即熔断（东财封 IP 前科），剩余日照实披露。
       计数必须**成功即清零**：累计计数会让「一次抖动 + 隔日两次抖动」在第 4 天误熔断，
       把 EM 健康的日子整段标成缺口、叙事回退采集池口径（正是要避免的分位污染）。
+    - **逐股明细**（2026-10-20）：同一次 EM 载荷顺带落 `market_daily_limit_down_stocks`；
+      家数已回填但逐股缺的日子也要再拉一次（`todo_rows`）——否则页面永远只有家数没有名单。
     """
     dates = sorted({str(r["tradingDate"]) for r in db["snapshot_frames"].find({}, {"tradingDate": 1})
                     if r.get("tradingDate") and start <= str(r["tradingDate"]) <= end})
@@ -317,6 +555,8 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
     # 一次 find 批量读已回填日（模块自身规则「一次 find 批量读，禁逐日连发」）
     rows = {str(d["_id"]): str(d.get("source") or "")
             for d in col.find({"_id": {"$in": dates}}, {"_id": 1, "source": 1})} if dates else {}
+    rows_doc = {str(d["_id"]): str(d.get("source") or "")
+                for d in db[COLLECTION_ROWS].find({"_id": {"$in": dates}}, {"_id": 1, "source": 1})} if dates else {}
     # TDX 行不算「已回填」：EM 窗口内以 EM 升级（源优先级 EM > 快照 > TDX > 采集池）
     have = {d for d, s in rows.items() if s != SOURCE_TDX}
     tdx_kept = {d for d, s in rows.items() if s == SOURCE_TDX}
@@ -324,9 +564,13 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
     todo = [d for d in dates if d not in have]
     in_window = [d for d in todo if d >= window_start]
     out_window = [d for d in todo if d < window_start]
+    # 家数已有 EM 但逐股缺的日子：补拉逐股（家数文档保持不动，只写逐股集合）
+    todo_rows = [d for d in dates
+                 if d >= window_start and d not in in_window
+                 and rows_doc.get(d) != SOURCE_EM]
     print(f"== 全市场跌停参考集合核查（{start}~{end}）：候选 {len(dates)} 日，"
           f"已回填 {len(have)} 日，待处理 {len(todo)} 日（EM 窗口 {window_start} 起 "
-          f"{len(in_window)} 日 / 窗口外 {len(out_window)} 日）==")
+          f"{len(in_window)} 日 / 窗口外 {len(out_window)} 日）；逐股待补 {len(todo_rows)} 日 ==")
     for d in out_window:
         # 窗口外且窗口外已存本地日线行：**不是缺口**，是刻意保留的次要源读数。
         # 旧版把这类日期一并打成「无可回填全市场源」，读者会误以为该日无数据。
@@ -336,8 +580,8 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
             print(f"[缺口] {d}: 早于 EM 30 日窗口 → 无可回填全市场源（叙事回退采集池口径并标注）")
     ok = fail = 0
     for i, d in enumerate(in_window):
-        n = fetch_limit_down_em(d)
-        if n is None:
+        payload = fetch_limit_down_em_rows(d)
+        if payload is None:
             fail += 1
             print(f"[缺口] {d}: EM 上游不可用（限流/熔断/坏负载）→ 不写 0 行")
             if fail >= _EM_MAX_CONSECUTIVE_FAILURES:
@@ -348,15 +592,44 @@ def backfill(db: Any, start: str, end: str, *, apply: bool = False,
         else:
             ok += 1
             fail = 0        # 连续计数：成功即清零，别把历史上的抖动算进本次连续失败
+            n = payload["count"]
             if apply:
                 col.replace_one({"_id": d}, {"_id": d, "count": n, "source": SOURCE_EM,
                                              "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S")},
                                 upsert=True)
-            print(f"[{'回填' if apply else '待回填'}] {d}: {n} 家（东财跌停池）")
+                save_limit_down_rows(db, d, payload, SOURCE_EM)
+            bad_txt = f" · 坏行 {payload['badRows']}" if payload.get("badRows") else ""
+            trunc_txt = "（截断）" if payload.get("truncated") else ""
+            print(f"[{'回填' if apply else '待回填'}] {d}: {n} 家 / 逐股 {len(payload['rows'])} 行"
+                  f"{trunc_txt}{bad_txt}")
         if i < len(in_window) - 1 and sleep is not None:
             sleep(_EM_MIN_INTERVAL)
+
+    # 家数已有、逐股缺 → 补拉逐股（只写逐股集合，不重写家数）
+    # `fail` 是与主循环共享的**连续失败**计数（成功即清零，用于熔断）；
+    # `rows_*` 只用于本批报告，不混进「家数缺口」的汇总数字（2026-10-20 review minor）。
+    rows_ok = rows_fail = 0
+    for j, d in enumerate(todo_rows):
+        if fail >= _EM_MAX_CONSECUTIVE_FAILURES:
+            print(f"[缺口] {d}: 前序连续失败已达阈值，逐股补拉熔断未尝试（家数保留）")
+            rows_fail += 1
+            continue
+        payload = fetch_limit_down_em_rows(d)
+        if payload is None:
+            fail += 1
+            rows_fail += 1
+            print(f"[缺口] {d}: EM 逐股补拉不可用 → 逐股仍缺（家数保留）")
+        else:
+            fail = 0
+            rows_ok += 1
+            if apply:
+                save_limit_down_rows(db, d, payload, SOURCE_EM)
+            print(f"[{'回填' if apply else '待回填'}·逐股] {d}: {payload['count']} 家 / {len(payload['rows'])} 行")
+        if j < len(todo_rows) - 1 and sleep is not None:
+            sleep(_EM_MIN_INTERVAL)
     print(f"== 核查完成：可回填 {ok} 日，缺口 {fail} 日"
-          f"（{'APPLY 已落库' if apply else 'dry-run，加 --apply 落库'}）==")
+          + (f"；逐股补拉 {rows_ok} 日 / 缺口 {rows_fail} 日" if todo_rows else "")
+          + f"（{'APPLY 已落库' if apply else 'dry-run，加 --apply 落库'}）==")
 
 
 def _db():

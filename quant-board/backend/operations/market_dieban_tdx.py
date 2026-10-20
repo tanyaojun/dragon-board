@@ -20,6 +20,11 @@
 
 fail-visible（AGENTS §4.0）：目录/文件缺失、空文件、记录损坏一律**跳过并计数**，绝不伪 0；
 某日无任何可用棒 → 该日不进结果（调用方按缺口披露，不写 0 行）。
+
+**逐股明细（2026-10-20 立项）**：`scan_rows()` 与家数同一次扫描产出逐股行
+（代码/名称/收盘/前收/涨跌幅/精确跌停价），供 `market_daily_limit_down_stocks`
+（source=tdx_local_bars）落库；`scan_counts()` 由 `scan_rows()` 派生家数，
+**同一实现不漂移**（家数 == 行数）。
 """
 from __future__ import annotations
 
@@ -105,13 +110,14 @@ def _iso(raw: int) -> str:
     return f"{s[:4]}-{s[4:6]}-{s[6:]}"
 
 
-def _scan_file(recs: list[tuple], code: str, dates: set[str]) -> tuple[dict[str, int], set[str]]:
-    """单只股票在 dates 内的 (跌停日计数, 有棒日期集)。
+def _scan_file(recs: list[tuple], code: str, dates: set[str]) -> tuple[dict[str, dict], set[str]]:
+    """单只股票在 dates 内的 (跌停日 → 逐股行, 有棒日期集)。
 
     有棒日期集用于**覆盖闸**：日线文件尾部按 take 截断，窗口边缘只少数文件有棒，
     直接计数会把「只读到部分股票」当成真实家数（静默少算）。
+    逐股行 = 家数的同一份事实（家数由 `len(rows)` 派生），不另写一套判定。
     """
-    out: dict[str, int] = {}
+    out: dict[str, dict] = {}
     seen: set[str] = set()
     for i in range(1, len(recs)):
         raw_date = recs[i][0]
@@ -125,45 +131,44 @@ def _scan_file(recs: list[tuple], code: str, dates: set[str]) -> tuple[dict[str,
         close = recs[i][4] / 100.0
         if prev_close <= 0 or close <= 0:
             continue          # 停牌/坏数据：不伪跌停
-        if not is_limit_down_pct((close / prev_close - 1) * 100, code):
+        pct = (close / prev_close - 1) * 100
+        if not is_limit_down_pct(pct, code):
             continue
-        if abs(close - limit_down_price(code, prev_close)) > 0.005:
+        exact = limit_down_price(code, prev_close)
+        if abs(close - exact) > 0.005:
             continue          # 价格精确闸：近似跌幅不算封跌停
-        out[date] = out.get(date, 0) + 1
+        out[date] = {"code": code, "name": None, "pctChange": round(pct, 2),
+                     "price": round(close, 2), "prevClose": round(prev_close, 2),
+                     "limitDownPrice": round(float(exact) + 1e-9, 2)}
     return out, seen
 
 
-def scan_counts(dates: Iterable[str], *, root: str | None = None,
-                universe: set[str] | None = None,
-                take: int = DEFAULT_TAKE) -> tuple[dict[str, int], dict[str, Any]]:
-    """一次性扫全市场日线重算各日跌停家数 → (counts, meta)。
+def scan_rows(dates: Iterable[str], *, root: str | None = None,
+              universe: set[str] | None = None, take: int = DEFAULT_TAKE,
+              names: dict[str, str] | None = None) -> tuple[dict[str, list[dict]], dict[str, Any]]:
+    """一次性扫全市场日线重算各日跌停**逐股名单** → (rows_by_date, meta)。
 
-    - `root` 显式给定时不做目录探测（测试/离线复算用）；未给 → `resolve_root()`。
-    - `universe` 给定时按其过滤（工具传 `universe_from_db`）；未给 → `looks_like_a_share` 兜底。
-    - **覆盖闸**：当日有棒股数 < 峰值 × `COVERAGE_MIN_RATIO` → 列入 `meta["partial"]`
-      **且不出数**（读取窗边缘只读到部分股票时，直接计数会静默少算）。
-    - **0 是真值**：覆盖足但无股跌停 → `counts[date] = 0`（不可写成缺口）；
-      仅「全市场无任何棒」才是缺口（`meta["dates_without_bar"]`）。
-    - meta：root / last_bar / files（命中宇宙的文件数）/ skipped（目录外文件数）/
-      missing（宇宙内无日线文件的代码数）/ coverage_max / partial / dates_without_bar / zero_days。
+    判定/覆盖闸/缺口语义与家数完全一致（同一实现）：`rows_by_date[d]` 为空列表表示
+    「覆盖足但当日无股跌停」（真读数 0），日期缺失表示缺口（不在 dict 里）。
+    `names` 给定时补 code → 名称（`stock_names`），缺失保持 None（不伪名称）。
     """
     wanted = {str(d) for d in dates}
     meta: dict[str, Any] = {"root": root, "last_bar": None, "files": 0, "skipped": 0,
-                            "missing": 0, "coverage_max": 0, "partial": [],
+                            "universe_hits": 0, "missing": 0, "coverage_max": 0, "partial": [],
                             "dates_without_bar": [], "zero_days": 0, "take": take}
+    rows_by_date: dict[str, list[dict]] = {}
     if not wanted:
-        return {}, meta
+        return rows_by_date, meta
     if root is None:
         root, last_bar = resolve_root()
         meta["last_bar"] = last_bar
     if not root:
         meta["dates_without_bar"] = sorted(wanted)
-        return {}, meta
+        return rows_by_date, meta
     paths: list[tuple[str, str]] = []
     for market in ("sh", "sz", "bj"):
         for path in sorted(glob.glob(os.path.join(root, "vipdoc", market, "lday", "*.day"))):
             paths.append((os.path.basename(path)[2:8], path))
-    counts: dict[str, int] = {}
     seen: dict[str, int] = {}
     seen_codes: set[str] = set()
     for code, path in paths:
@@ -179,18 +184,46 @@ def scan_counts(dates: Iterable[str], *, root: str | None = None,
         hits, days = _scan_file(read_lday(path, take), code, wanted)
         for date in days:
             seen[date] = seen.get(date, 0) + 1
-        for date, n in hits.items():
-            counts[date] = counts.get(date, 0) + n
+        for date, row in hits.items():
+            if names and not row.get("name"):
+                row["name"] = names.get(code)
+            rows_by_date.setdefault(date, []).append(row)
     if universe is not None:
+        # universe_hits = 去重后的宇宙命中代码数（`files` 是文件数：同一代码在 sh/sz 目录
+        # 各有一份时会多计 → 与 missing 直接相减会得出矛盾数，2026-10-20 review minor）
+        meta["universe_hits"] = len(seen_codes)
         meta["missing"] = len(universe - seen_codes)
     meta["coverage_max"] = max(seen.values()) if seen else 0
     floor = meta["coverage_max"] * COVERAGE_MIN_RATIO
     meta["partial"] = sorted(d for d, c in seen.items() if c < floor)
     for date in seen:
         if date in meta["partial"]:
-            counts.pop(date, None)       # 覆盖不足：不冒充真实家数（fail-visible）
+            rows_by_date.pop(date, None)     # 覆盖不足：不冒充真实名单/家数（fail-visible）
         else:
-            counts.setdefault(date, 0)   # 覆盖足 → 0 家跌停是合法读数
-    meta["zero_days"] = sum(1 for d in counts if counts[d] == 0)
+            rows_by_date.setdefault(date, [])  # 覆盖足 → 空列表是合法 0 家
+    meta["zero_days"] = sum(1 for rows in rows_by_date.values() if not rows)
     meta["dates_without_bar"] = sorted(wanted - set(seen))
-    return counts, meta
+    return rows_by_date, meta
+
+
+def names_from_db(db: Any) -> dict[str, str]:
+    """code → 名称（`stock_names` type=stock）；同名缺失不补（保持 None 由页面 '--'）。"""
+    out: dict[str, str] = {}
+    for doc in db["stock_names"].find({"type": "stock"}, {"code": 1, "name": 1}):
+        code = str(doc.get("code") or "").zfill(6)
+        name = str(doc.get("name") or "").strip()
+        if code and name:
+            out[code] = name
+    return out
+
+
+def scan_counts(dates: Iterable[str], *, root: str | None = None,
+                universe: set[str] | None = None,
+                take: int = DEFAULT_TAKE) -> tuple[dict[str, int], dict[str, Any]]:
+    """一次性扫全市场日线重算各日跌停家数 → (counts, meta)。
+
+    家数**由逐股名单派生**（`len(rows)`），判定/覆盖闸/缺口/0 值语义全部继承 `scan_rows`，
+    不保留第二份扫描实现（2026-10-20 逐股立项：家数与名单必须同源同数）。
+    """
+    rows_by_date, meta = scan_rows(dates, root=root, universe=universe, take=take)
+    return {date: len(rows) for date, rows in rows_by_date.items()}, meta
