@@ -26,7 +26,7 @@ THS_KEYS = ("one", "two", "three", "four", "high")
 # 2026-10-16（预注册 jev-relay-caliber-fix-preregistration.md §5b）：涨停价取整由内置
 # round 改十进制 ROUND_HALF_UP（内置 round 在分位为 5 时低取一分，差一分未封的棒会被
 # 判成封板，虚报连板高度），板序/封板判定输出可能变 → 原料代际顺延。
-AMMO_VERSION = "2026-10-16a"
+AMMO_VERSION = "2026-10-20a"
 DEFAULT_DATASET_ID = "dragonboard_live"
 
 # ── 题目集（原文平移，判据改动须走改门） ──
@@ -384,7 +384,11 @@ def board_shape_line_from_bars(date: str, code: str, name: str | None,
     bars = [b for b in intraday if b["date"] == date]
     if not bars:
         return "板型：当日 5 分钟棒缺失（fail-visible）"
-    lp = round(prev_close * (1 + _limit_pct_of(code, name)), 2)
+    # 涨停价唯一实现 = `_limit_price`（Decimal ROUND_HALF_UP）。2026-10-20 修正：本函数
+    # 曾用内置 `round(prev_close*(1+ratio), 2)`——银行家舍入且作用于二进制浮点，前收分位为
+    # 5 时会低取一分（实测 10-16 三只：001319 铭科精技 21.39 vs 21.40、001358 欣兴新材、
+    # 002903 宇环数控），导致同一只股「板序=未涨停」与「板型=封板至收盘」并存。
+    lp = _limit_price(code, prev_close, name)
     tol = 1e-6
     touches = [b for b in bars if b["high"] >= lp - tol]
     if not touches:

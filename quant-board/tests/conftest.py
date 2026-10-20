@@ -139,6 +139,26 @@ def _tdx_daily_bars_offline_guard(monkeypatch):
     del _runner._REAL_INTRADAY_BARS
 
 
+# jev_label_jiuyan 的模块级 IO/叙述缓存（键多为 (dataset, date) 或 code）：pytest 会话内
+# 多文件共用进程，同日期不同夹具会互相污染 → 每个用例前后一律清空。
+# 2026-10-20 v3.2 审查 P1-1：新增的五个叙事缓存（市场坐标/交易日轴/解析表/昨日板块/THS 池态）
+# 必须同批清，否则只有自带 autouse 清理的 test_jev_label_v32_corpus 是隔离的，
+# 其余调用 build_pilot_narrative 的文件会串读前一个夹具算出的文本（同日期）。
+_JEV_RUNNER_CACHES = (
+    "_STREAK_CACHE", "_FACTS_CACHE", "_ADVDEC_CACHE", "_THS_CACHE",
+    "_DAILY_BARS_CACHE", "_INTRA_CACHE", "_DIV_LIST_CACHE", "_DIV_FAIL_UNTIL",
+    "_MKT_COORD_CACHE", "_DATE_AXIS_CACHE", "_JIYAN_EXPOUND_CACHE",
+    "_BOARD_PREV_CACHE", "_THS_STATE_CACHE", "_PREV_TRADING_DATE_CACHE",
+)
+
+
+def _clear_jev_runner_caches(runner) -> None:
+    for name in _JEV_RUNNER_CACHES:
+        cache = getattr(runner, name, None)
+        if cache is not None:
+            cache.clear()
+
+
 @pytest.fixture(autouse=True)
 def _clear_io_caches():
     """清 operations/jev_label_jiuyan 的模块级 IO 缓存（_STREAK_CACHE/_FACTS_CACHE/
@@ -156,25 +176,13 @@ def _clear_io_caches():
     from backend.operations import jev_label_jiuyan as _runner
     from backend.operations import market_dieban_pool as _dieban
 
-    for cache in (_runner._STREAK_CACHE, _runner._FACTS_CACHE, _runner._ADVDEC_CACHE):
-        cache.clear()
-    _runner._THS_CACHE.clear()
-    _runner._DAILY_BARS_CACHE.clear()
-    _runner._INTRA_CACHE.clear()
     # 除权因子源（百度）的缓存/失败退避也是模块级 IO 状态：残留会让后续用例静默拿到
     # 空事件表而假失败（2026-10-16 实测：test_jev_streak_map 跑完后
     # test_jev_dividend_adjust 的除权解析用例 KeyError）
-    _runner._DIV_LIST_CACHE.clear()
-    _runner._DIV_FAIL_UNTIL.clear()
+    _clear_jev_runner_caches(_runner)
     _dieban.reset_em_throttle_state()
     yield
-    for cache in (_runner._STREAK_CACHE, _runner._FACTS_CACHE, _runner._ADVDEC_CACHE):
-        cache.clear()
-    _runner._THS_CACHE.clear()
-    _runner._DAILY_BARS_CACHE.clear()
-    _runner._INTRA_CACHE.clear()
-    _runner._DIV_LIST_CACHE.clear()
-    _runner._DIV_FAIL_UNTIL.clear()
+    _clear_jev_runner_caches(_runner)
     _dieban.reset_em_throttle_state()
 
 

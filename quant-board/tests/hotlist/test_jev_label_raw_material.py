@@ -248,7 +248,9 @@ def test_ammo_version_stamp_constant():
     # P1-1（预登记 jev-ammo-p1-preregistration.md §一）：除权修正因子入叙事，代际顺延
     # 2026-10-16（预注册 jev-relay-caliber-fix-preregistration.md §5b）：涨停价取整改十进制
     # 四舍五入（内置 round 分位为 5 时低取一分，差一分未封的棒会被判成封板），代际再顺延
-    assert AMMO_VERSION == "2026-10-16a"
+    # 2026-10-20（预注册 jev-driver-label-v32-preregistration.md）：个股链语料瘦身/增益
+    # （市场坐标/交易日轴/封板时间坐标/解析续期/THS 缺日回退）→ 代际顺延
+    assert AMMO_VERSION == "2026-10-20a"
     assert DEFAULT_DATASET_ID == "dragonboard_live"
 
 

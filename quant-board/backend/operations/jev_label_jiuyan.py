@@ -18,8 +18,10 @@ from __future__ import annotations
 import argparse
 import contextlib
 import contextvars
+import datetime
 import json
 import os
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -914,6 +916,271 @@ def _pct_txt(vals, cur_v) -> str:
     return rank if rank == "分位不可算" else f"{rank} 分位"
 
 
+# ── v3.2 语料瘦身/增益（2026-10-20 预注册 docs/hotlist-jev/jev-driver-label-v32-preregistration.md）──
+# 盘点结论（只读生产库实测）：个股四题判据对【盘面事实行】零独有字段引用，却每只重复投喂
+# 135 字（68 只/日 ≈9.2k tokens 同文重复）；而判据真正需要、语料却缺席的四项证据是：
+#   ① `catalyst_freshness`「≤2 个交易日」的交易日轴（语料只有公历日期）；
+#   ② `buy_side_logic`「封板时间偏晚」的分布基线（只有 09:36 这种绝对值）；
+#   ③ freshness/driver 需要的「解析是不是新的」跨日对比（只有当日解析）；
+#   ④ `buy_side`「同板块多股集体异动」的昨日对照（只有今日家数）。
+# 分工红线：`market_facts_line` 是 relay v7 / cycle / theme_leader 共用的**打分坐标系**，
+# 一行不改（否则 relay v7 语料连带漂移、验收门作废）；个股链改用下列轻量行。
+_MKT_COORD_CACHE: dict[tuple, str] = {}
+_DATE_AXIS_CACHE: dict[tuple, str] = {}
+_JIYAN_EXPOUND_CACHE: dict[tuple, dict[str, str]] = {}
+_BOARD_PREV_CACHE: dict[tuple, dict] = {}
+_THS_STATE_CACHE: dict[tuple, dict] = {}
+_PREV_TRADING_DATE_CACHE: dict[tuple, str | None] = {}
+_WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
+
+
+def _weekday_cn(date: str) -> str:
+    """YYYY-MM-DD → 周一..周日；非法日期返回空串（不猜）。"""
+    try:
+        return _WEEKDAY_CN[datetime.date.fromisoformat(str(date)).weekday()]
+    except Exception:
+        return ""
+
+
+def market_coordinate_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+    """个股叙事用的轻量市场坐标（v3.2 D5-B，三数）。
+
+    与 `market_facts_line` 的分工：后者是 relay/PHASE 的**打分坐标系**（涨停/跌停/炸板率/
+    回撤/梯队各带近 20 日分位），个股四题判据实测 0 处引用其独有字段；整行逐股投喂既浪费
+    又给模型一个跨轨锚（拿市场温度当个股驱动）。本行只留「退潮日」的最低语境，**不带分位**。
+    """
+    key = (dataset_id, date)
+    if key in _MKT_COORD_CACHE:
+        return _MKT_COORD_CACHE[key]
+    cur = market_metrics(db, date, dataset_id)
+    if not cur:
+        line = f"市场坐标：{date} 盘面指标缺失（fail-visible）"
+    else:
+        zt, mb = cur.get("ztCount"), cur.get("maxBoard")
+        parts = [f"涨停 {zt} 家" if isinstance(zt, int) and not isinstance(zt, bool)
+                 else "涨停 不可算",
+                 f"最高 {mb} 板" if isinstance(mb, int) and not isinstance(mb, bool)
+                 else "最高板 不可算"]
+        ad = advdec_ratio(db, date, dataset_id)
+        parts.append(f"池内涨跌比 {ad[3]}（涨{ad[0]}/跌{ad[1]}）" if ad else "池内涨跌比 不可算")
+        line = "市场坐标：" + " · ".join(parts)
+    _MKT_COORD_CACHE[key] = line
+    return line
+
+
+def date_axis_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+    """交易日轴（v3.2 D6）：让 `catalyst_freshness` 的「≤2 个交易日」可数。
+
+    语料只给公历日期，跨周末/长假（如 10-17 周五 → 10-20 周一）时「2 个交易日」需要模型
+    自行查日历；本行直接给出前 1/前 2 个交易日的日期与星期，**判据一字不改**。
+    """
+    key = (dataset_id, date)
+    if key in _DATE_AXIS_CACHE:
+        return _DATE_AXIS_CACHE[key]
+    prev = trading_dates_before(db, date, 2, dataset_id=dataset_id)
+    wd = _weekday_cn(date)
+    parts = [f"今日 {date}" + (f"（{wd}）" if wd else "")]
+    for i in (1, 2):
+        if len(prev) >= i:
+            d = prev[-i]
+            w = _weekday_cn(d)
+            parts.append(f"前{i}交易日 {d}" + (f"（{w}）" if w else ""))
+        else:
+            parts.append(f"前{i}交易日 不可算")
+    line = "交易日轴：" + " · ".join(parts)
+    _DATE_AXIS_CACHE[key] = line
+    return line
+
+
+def _jiuyan_expound_map(db, date: str, slot: str = "final") -> dict[str, str]:
+    """某日韭研名单 code→解析正文（按 (日, 槽位) 缓存，零额外外呼）。缺失日返回 {}。"""
+    key = (date, slot)
+    if key in _JIYAN_EXPOUND_CACHE:
+        return _JIYAN_EXPOUND_CACHE[key]
+    doc = db["jiuyan_action"].find_one({"_id": f"{date}:{slot}"}, {"fields": 1}) or {}
+    out: dict[str, str] = {}
+    for fl in doc.get("fields") or []:
+        for s in fl.get("stocks") or []:
+            code = _strip(s.get("code"))
+            text = str(s.get("expound") or "").strip()
+            if code and text and code not in out:
+                out[code] = text
+    _JIYAN_EXPOUND_CACHE[key] = out
+    return out
+
+
+def _prev_trading_date(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str | None:
+    """date 的上一交易日（按 (dataset, date) 缓存：解析续期逐股调用，不能每股一次查询）。"""
+    key = (dataset_id, date)
+    if key not in _PREV_TRADING_DATE_CACHE:
+        prev = trading_dates_before(db, date, 1, dataset_id=dataset_id)
+        _PREV_TRADING_DATE_CACHE[key] = prev[-1] if prev else None
+    return _PREV_TRADING_DATE_CACHE[key]
+
+
+def _first_line(text: str, limit: int = 24) -> str:
+    """解析正文首个非空行（截断到 limit 字）——「上日首行」类文案的唯一取法。"""
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if line:
+            return line if len(line) <= limit else line[:limit] + "…"
+    return ""
+
+
+def expound_trace_line(db, date: str, code: str, today_expound: str | None,
+                       slot: str = "final",
+                       dataset_id: str = DEFAULT_DATASET_ID) -> str | None:
+    """解析续期（v3.2 D8）：与上一交易日同一只股的解析逐字对比。
+
+    `catalyst_freshness`（「持续/新催化」）与 `driver_type`（「催化本身无新意」）都要回答
+    「今天这句解析是不是新的」，而语料只给当日解析（含日期率 91.6%，但无跨日可比锚）。
+    返回 None = 上一交易日该股不在名单（无对比基准）→ **不出行**（裁决 5B：省字；
+    「首板/断板回归」语义由板序行 ○● 序列承担）。实测覆盖：10-19 人口 63 只中 28 只（44%）
+    近 5 日有解析记录，覆盖恰好落在判据最需要的连板/反复股上。
+    """
+    prev_date = _prev_trading_date(db, date, dataset_id)
+    if not prev_date:
+        return None
+    prev_txt = _jiuyan_expound_map(db, prev_date, slot).get(_strip(code))
+    today_txt = str(today_expound or "").strip()
+    if not prev_txt or not today_txt:
+        return None
+    if expound_signature(today_txt) == expound_signature(prev_txt):
+        return f"解析续期：与上一交易日（{prev_date}）解析逐字相同（无新增事项）"
+    return (f"解析续期：较上一交易日（{prev_date}）有更新"
+            f" · 上日首行「{_first_line(prev_txt)}」")
+
+
+def _minutes_of(hhmmss: Any) -> int | None:
+    """'09:36:14' / '09:36' → 当日分钟数；不可解析返回 None（不猜）。"""
+    m = _TIME_RE.match(str(hhmmss or "").strip())
+    if not m:
+        return None
+    h, mi = int(m.group(1)), int(m.group(2))
+    if not (0 <= h <= 23 and 0 <= mi <= 59):
+        return None
+    return h * 60 + mi
+
+
+def _hhmm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _median_minutes(vals: list[int]) -> int:
+    s = sorted(vals)
+    return s[len(s) // 2]
+
+
+def seal_time_line(jiuyan_doc, code: str, scope: str = "final") -> str:
+    """封板时间坐标（v3.2 D7）：给 `buy_side_logic`「该股封板时间偏晚」一把尺子。
+
+    旧语料只给绝对时刻（该股 09:36:14），「偏晚」没有基线——实测 10-19 名单中位 11:28，
+    同一时刻在早盘密集日与午后集中日含义完全不同。本行给「全名单中位 + 第 N 早 + 板块内中位」，
+    全部来自当日韭研名单（time 字段覆盖率 78%，缺失不参与分位并如实标注样本数）。
+    """
+    label = "午盘名单" if scope == "midday" else "当日名单"
+    rows: list[tuple[str, int | None]] = []
+    board_of_mine: str | None = None
+    mine: int | None = None
+    for fl in jiuyan_doc.get("fields") or []:
+        board = str(fl.get("name") or "")
+        for s in fl.get("stocks") or []:
+            mins = _minutes_of(s.get("time"))
+            rows.append((board, mins))
+            if board_of_mine is None and _strip(s.get("code")) == _strip(code):
+                board_of_mine, mine = board, mins
+    vals = [m for _, m in rows if m is not None]
+    if not vals:
+        return f"封板时间坐标（{label}）：名单无可用时间（fail-visible）"
+    total = len(rows)
+    med = _median_minutes(vals)
+    if mine is None or board_of_mine is None:
+        return (f"封板时间坐标（{label}）：该股时间缺失（fail-visible）"
+                f" · 名单中位 {_hhmm(med)}（{len(vals)}/{total} 只可算）")
+    parts = [f"封板时间坐标（{label}）：该股 {_hhmm(mine)}（第 "
+             f"{sum(1 for v in vals if v < mine) + 1} 早/{len(vals)} 只）",
+             f"名单中位 {_hhmm(med)}"]
+    board_vals = [m for b, m in rows if b == board_of_mine and m is not None]
+    parts.append(f"板块内中位 {_hhmm(_median_minutes(board_vals))}" if board_vals
+                 else "板块内中位 不可算")
+    tail = f"（{len(vals)}/{total} 只可算）" if len(vals) < total else ""
+    return " · ".join(parts) + tail
+
+
+def board_prev_info(db, date: str, board: str,
+                    dataset_id: str = DEFAULT_DATASET_ID) -> dict:
+    """上一交易日同一韭研板块的涨停家数（v3.2 D7）。
+
+    `buy_side_logic` 判据写「同板块多股今日集体异动」（板块跟随）与「无板块协同」，
+    但语料只给今日家数 → 「板块启动中的跟随」与「板块退潮中的跟随」无法区分。
+    返回 `{ok, count, reason}`：reason 区分两种不可比（**不补 0 冒充**）：
+    - `no_prev_doc`：上一交易日名单缺失（fail-visible）；
+    - `board_absent`：昨日名单里没有同名板块（韭研板块命名昨今会漂移，实测同名可比率 65.9%）。
+    """
+    if not board:
+        return {"ok": False, "count": None, "reason": "no_board"}
+    key = (dataset_id, date, board)
+    if key in _BOARD_PREV_CACHE:
+        return _BOARD_PREV_CACHE[key]
+    prev = trading_dates_before(db, date, 1, dataset_id=dataset_id)
+    if not prev:
+        info = {"ok": False, "count": None, "reason": "no_prev_doc"}
+    else:
+        doc = db["jiuyan_action"].find_one({"_id": f"{prev[-1]}:final"}, {"fields": 1})
+        if doc is None:
+            info = {"ok": False, "count": None, "reason": "no_prev_doc"}
+        else:
+            info = {"ok": False, "count": None, "reason": "board_absent"}
+            for fl in doc.get("fields") or []:
+                if str(fl.get("name") or "") == board:
+                    info = {"ok": True, "count": len(fl.get("stocks") or []), "reason": None}
+                    break
+    _BOARD_PREV_CACHE[key] = info
+    return info
+
+
+def board_prev_count(db, date: str, board: str,
+                     dataset_id: str = DEFAULT_DATASET_ID) -> int | None:
+    """只取家数（None=不可比）；口径与 `board_prev_info` 同一实现，禁双轨。"""
+    return board_prev_info(db, date, board, dataset_id)["count"]
+
+
+def ths_ladder_state(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict:
+    """THS **封板梯队池**可用性（v3.2 D2）——区分「整池未采集」与「该股真未进池」。
+
+    实测缺陷：`ths_positions` 对两种语义返回同一个空结果，叙事无从分辨，旧文案把整池缺失日
+    （7/30 天、457 只 = 21.2%）的**当日涨停股**一律写成「未进 THS 封板池（今日触板未封/炸板
+    口径）」——这是事实错误的文案，且与同段「今日涨停价…」自相矛盾。
+    实测池形（10-19 全池 / 10-08 只有 failed+rushing+drawdown / 09-02 pools 空）。
+    """
+    key = (dataset_id, date)
+    if key in _THS_STATE_CACHE:
+        return _THS_STATE_CACHE[key]
+    f = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date,
+         "slotTime": "15:00"},
+        {"limitSummary.thsPools": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
+    tp = ((f or {}).get("limitSummary") or {}).get("thsPools") or {}
+    pools = tp.get("pools") or {}
+    # 对齐 relay 先例（jev_relay_index `_relay_...`）：池自身 ok=False 不算「采集到」，
+    # 否则一个上游失败的空池会被当成「该股真未进池」（P2 审查 Nit-5）
+    present = [k for k in THS_KEYS
+               if isinstance(pools.get(k), dict) and (pools.get(k) or {}).get("ok") is not False]
+    if f is None:
+        state = {"ok": False, "reason": "15:00 帧缺失"}
+    elif not pools:
+        state = {"ok": False, "reason": "THS 池未拉取（旧 schema/占位零）"}
+    elif not present:
+        state = {"ok": False, "reason": "封板梯队池未采集（仅炸板/冲刺池）"}
+    elif tp.get("degraded") and not any((pools.get(k) or {}).get("items") for k in present):
+        state = {"ok": False, "reason": "封板梯队池占位零降级"}
+    else:
+        state = {"ok": True, "reason": None}
+    _THS_STATE_CACHE[key] = state
+    return state
+
+
 # ---- 弹药 6：个股价格位置轴（2026-10-04 用户令接入：距 20 日最高/窗口涨幅/量能缩放——
 #      首板单锚判不出高位，龙版传媒 605577 首板但距 20 日高点仅 7.8%/窗口涨幅 62.5% 实锤） ----
 _POSITION_LOCK = threading.Lock()
@@ -1395,8 +1662,13 @@ def stock_board_shape_line(date: str, code: str, name: str | None,
         return f"板型：计算失败 {e}（fail-visible）"
 
 
-def board_position(jiuyan_doc, code: str) -> str:
-    """弹药 5：板块地位（所属韦研板块今日涨停家数 + 该股按涨停时间的封板序）。"""
+def board_position(jiuyan_doc, code: str, db=None, date: str | None = None,
+                   dataset_id: str = DEFAULT_DATASET_ID) -> str:
+    """弹药 5：板块地位（所属韭研板块今日涨停家数 + 该股按涨停时间的封板序）。
+
+    v3.2 D7：传入 db/date 时附「昨日同板块家数」——`buy_side_logic` 的「同板块多股集体
+    异动」与「无板块协同」判据需要昨日对照才能区分板块启动中的跟随与退潮中的跟随。
+    """
     best = None
     for fl in jiuyan_doc.get("fields") or []:
         stocks = fl.get("stocks") or []
@@ -1410,7 +1682,18 @@ def board_position(jiuyan_doc, code: str) -> str:
     if not best:
         return "板块地位：未在韭研板块结构中定位（fail-visible）"
     pos = f'第 {best["pos"]} 封板' if best["pos"] else "封板序不可考"
-    return f'板块地位：所属韭研板块「{best["board"]}」今日涨停 {best["n"]} 家，该股板块内 {pos}'
+    prev_txt = ""
+    if db is not None and date:
+        info = board_prev_info(db, date, str(best["board"] or ""), dataset_id)
+        if info["ok"]:
+            prev_txt = f'（昨日同板块涨停 {info["count"]} 家）'
+        elif info["reason"] == "no_prev_doc":
+            prev_txt = "（昨日同板块 不可比：上一交易日名单缺失）"
+        elif info["reason"] == "board_absent":
+            # 韭研板块命名昨今会漂移（实测同名可比率 65.9%）——不可比就写不可比
+            prev_txt = "（昨日同板块 不可比：昨日无该板块名）"
+    return (f'板块地位：所属韭研板块「{best["board"]}」今日涨停 {best["n"]} 家{prev_txt}，'
+            f'该股板块内 {pos}')
 
 
 # ── 投喂槽位（2026-10-20 用户裁决：12:30 午盘投喂 + 16:00 收盘幂等跳过） ──────────
@@ -1456,10 +1739,12 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
 
     午盘（11:30-13:00）与收盘的可得证据差：
     - 盘面事实行（market_facts_line/market_metrics）依赖 15:00 帧 → 午盘不存在；
-    - THS 封板梯队/封板质量/炸板二分也只在 15:00 帧生成 → 午盘不可得；
-    - TDX 当日日线棒/5 分钟棒：实测 12:30 本地 vipdoc **尚无当日棒**（收盘后才落盘），
-      因此位置轴/板序/当日板型三项在午盘实际缺席——一律标「午盘不可得」，不拿 T-1 冒充当日。
-    可给的：韭研午盘名单的 N天M板/触板时间/解析全文 + 日线历史锚 + 韭研板块结构。
+    - THS 封板梯队仅在 15:00 帧生成 → 午盘不可得；
+    - 当日板型需收盘 5 分钟棒 → 午盘不可判。
+    **v3.2 D10（2026-10-20 用户裁决）：位置轴/板序改用 T-1 收盘口径**——旧口径把这两项
+    也判「午盘不可得」，但它们只依赖历史日线（20 日窗口），T-1 收盘就能完整算出；
+    唯一物理不可得的是「当日盘中棒」。行内显式标 T-1，**不拿 T-1 冒充当日**（§4.0）。
+    同时把 4 行「不可得」声明压成首行 1 处，省 ≈90 字/只。
     """
     jy = jiuyan_doc or {}
     fetched = str(jy.get("fetchedAt") or "")
@@ -1474,28 +1759,36 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
         day_num = f"，{num_txt}"
     else:
         day_num = f"，{day_txt}{num_txt}" if (day_txt or num_txt) else ""
-    hot = f"今日热榜最高排名第 {rank} 位" if rank else "未进热榜"
     expound = str(stock.get("expound") or "").strip()
-    # 位置轴/板序：午盘 TDX 当日日线棒**收盘后才写入**（实测 12:30 本地 vipdoc 仍无当日棒）。
-    # 旧文案「无当日日线棒（停牌或数据缺口）」在午盘会把「棒未生成」误读成停牌，
-    # 这里换成午盘专有口径；真有盘中棒才附「盘中未收值」注记。
-    pos_raw = stock_position_line(date, code)
-    pos = ("个股位置：午盘不可得（当日日线棒收盘后才写入，不拿 T-1 冒充当日；fail-visible）"
-           if "fail-visible" in pos_raw else f"（午盘口径·当日日线棒为盘中未收值）{pos_raw}")
-    seq_raw = limitup_sequence_line(date, code, stock.get("name"))
-    seq = ("板序：午盘不可得（同上，当日日线棒未生成，不拿 T-1 冒充今日；fail-visible）"
-           if "fail-visible" in seq_raw else f"（午盘口径·当日日线棒为盘中未收值）{seq_raw}")
+    # 位置轴/板序：T-1 收盘口径（历史日线可得，当日盘中值不可得）
+    prev = trading_dates_before(db, date, 1, dataset_id=dataset_id)
+    t1 = prev[-1] if prev else None
+    if t1:
+        # T-1 也可能本地未落棒（本地落后 ≥2 日）：声明后线上可补 T-1，仍不碰当日
+        with bars_need_upto(t1):
+            pos_raw = stock_position_line(t1, code)
+            seq_raw = limitup_sequence_line(t1, code, stock.get("name"))
+        pos = (f"个股位置：上一交易日（{t1}）收盘口径 · {pos_raw.split('：', 1)[1]}"
+               if "fail-visible" not in pos_raw
+               else f"个股位置：上一交易日（{t1}）日线不可用（fail-visible，今日盘中值亦不可得）")
+        # 纯计算层文案写的是「末位今日」——午盘用 T-1 口径时必须换掉，否则行内自相矛盾
+        seq_body = seq_raw.split("：", 1)[1].replace("末位今日", f"末位={t1}")
+        seq = (f"板序：上一交易日（{t1}）收盘口径 · {seq_body}"
+               if "fail-visible" not in seq_raw
+               else f"板序：上一交易日（{t1}）日线不可用（fail-visible，今日盘中值亦不可得）")
+    else:
+        pos = "个股位置：上一交易日不可算（交易日轴缺失，fail-visible）"
+        seq = "板序：上一交易日不可算（交易日轴缺失，fail-visible）"
     return "\n".join([
-        f"{date} 交易日午盘 · 打标时点=韭研 {noon} 午盘名单（收盘口径盘面事实行/THS 封板梯队/"
-        f"封板质量/炸板二分午盘不可得，fail-visible）",
+        f"{date} 交易日午盘 · 打标时点=韭研 {noon} 午盘名单 · 午盘不可得项：收盘盘面事实行/"
+        f"THS 封板梯队/当日板型（fail-visible）",
         f"该股：{stock.get('name')}（{code}），午盘涨停价 {stock.get('price')}{day_num}，"
-        f"触板时间 {stock.get('time')}；{hot}",
-        f"身位：韭研午盘名单口径 {num_txt or '首板（韭研未标 N天M板）'}"
-        f"（THS 封板梯队槽位收盘才生成，午盘不可得）",
+        f"触板时间 {stock.get('time')}",
+        f"身位：韭研午盘名单口径 {num_txt or '首板（韭研未标 N天M板）'}",
         pos,
         seq,
-        "当日板型：午盘不可判（首触/炸板波次/末封需收盘 5 分钟棒，fail-visible）",
-        f"（午盘名单口径，家数=已触板）{board_position(jy, code)}",
+        f"（午盘名单口径，家数=已触板）{board_position(jy, code, db=db, date=date, dataset_id=dataset_id)}",
+        seal_time_line(jy, code, scope="midday"),
         "韭研解析全文：",
         expound if expound else "（韭研解析缺失，fail-visible）",
     ])
@@ -1504,15 +1797,24 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
 def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, rank,
                           dataset_id: str = DEFAULT_DATASET_ID,
                           jiuyan_doc: dict | None = None,
-                          slot: str = SLOT_FINAL) -> str:
-    """v3 弹药叙事：盘面事实行（无情绪分）+ 个股解析 + THS 身位块 + 个股位置行（价格轴）+ 板序行（几天几板/断板反包）+ 当日板型行（炸板波次/回封）+ 板块地位块 + 热榜。
+                          slot: str = SLOT_FINAL,
+                          expound_trace: bool = True) -> str:
+    """v3.2 弹药叙事（2026-10-20 语料代际）：市场坐标 + 交易日轴 + 该股 + 身位 + 个股位置
+    + 板序 + 当日板型 + 板块地位（含昨日家数）+ 封板时间坐标 + 解析续期 + 解析全文。
+
+    v3.2 瘦身/增益（预注册 `docs/hotlist-jev/jev-driver-label-v32-preregistration.md`）：
+    - 删：整行盘面事实（四题零独有引用）→ 轻量市场坐标；热榜最高排名（零引用且跨轨）；
+      THS 主力净额（零引用且无单位）；
+    - 增：交易日轴（freshness 判据的「≤2 交易日」）、封板时间分位（buy_side「偏晚」）、
+      同板块昨日家数（板块联动）、解析续期（freshness/driver 的新意锚）；
+    - 修：THS 整池未采集日不再写成「今日触板未封/炸板」（事实错误文案）。
+    `expound_trace=False`（承接路径）：解析逐字相同已由承接压缩标记声明，不再多给一行。
 
     批次C I10（顺手）：jiuyan_doc 由调用方传入（day_population 已读过同一文档），
     缺省时兼容旧路径自行读取——消除每股一次整日文档的 N+1 查询。
 
     2026-10-20（用户裁决「12:30 午盘投喂 + 收盘幂等跳过」）：`slot=midday` 分流到
-    `build_midday_narrative`（只用午盘可得证据，收盘口径弹药显式标不可得）；
-    `slot=final`（默认）叙事与历史逐字一致（判据代际可比，不做顺手改写）。
+    `build_midday_narrative`。
     """
     if slot == SLOT_MIDDAY:
         jy_mid = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
@@ -1522,38 +1824,59 @@ def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, ran
     jy = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"}, {"fields": 1}) or {}
     ths = ths_positions(db, date, dataset_id).get(code)
-    if ths:
-        ladder_txt = str(ths["continueDay"]) if ths["continueDay"] is not None else "?"
-        if "连板" not in ladder_txt and "板" not in ladder_txt:
-            ladder_txt += "连板"
-        ths_line = (f'THS 封板梯队：{ladder_txt} · 首封 {ths["firstSeal"]}'
-                    f' · 所属板块 {ths["industry"] or "缺"} · 主力净额 {ths["mainNet"]}')
-    else:
-        ths_line = "未进 THS 封板池（今日触板未封/炸板口径）"
-    expound = str(stock.get("expound") or "").strip()
-    expound_line = expound if expound else "（韦研解析缺失，fail-visible）"
     day_txt = str(stock.get("day") or "")
     if day_txt and "天" not in day_txt:
         day_txt += "天"
     num_txt = str(stock.get("num") or "")
     if num_txt and "板" not in num_txt:
         num_txt += "板"
-    if num_txt and "天" in num_txt:  # 韦研 num 可能自带「2天2板」完整口径，与 day 拼接会重复
+    if num_txt and "天" in num_txt:  # 韭研 num 可能自带「2天2板」完整口径，与 day 拼接会重复
         day_num = f'，{num_txt}'
     else:
         day_num = f'，{day_txt}{num_txt}' if (day_txt or num_txt) else ""
-    hot = f"今日热榜最高排名第 {rank} 位" if rank else "未进热榜"
-    return "\n".join([
-        f"{date} 交易日 · {market_facts_line(db, date, dataset_id)}",
-        f"该股：{stock.get('name')}（{code}），今日涨停价 {stock.get('price')}{day_num}，涨停时间 {stock.get('time')}；{hot}",
-        f"身位：{ths_line}",
-        stock_position_line(date, code),
-        limitup_sequence_line(date, code, stock.get("name")),
-        stock_board_shape_line(date, code, stock.get("name"), _prev_close_of_date(date, code)),
-        board_position(jy, code),
-        "韭研解析全文：",
-        expound_line,
-    ])
+    if ths:
+        ladder_txt = str(ths["continueDay"]) if ths["continueDay"] is not None else "?"
+        if "连板" not in ladder_txt and "板" not in ladder_txt:
+            ladder_txt += "连板"
+        # v3.2 D4b：删「主力净额」——四题零引用、无单位、无可比基线（73794032 裸数字）
+        ths_line = (f'THS 封板梯队：{ladder_txt} · 首封 {ths["firstSeal"]}'
+                    f' · 所属板块 {ths["industry"] or "缺"}')
+    else:
+        state = ths_ladder_state(db, date, dataset_id)
+        if state["ok"]:
+            ths_line = ("未进 THS 封板池（梯队池已采集，该股未入；可能触板未封/炸板口径，"
+                        "与下方板序冲突时以板序为准）")
+        else:
+            # v3.2 D2：整池未采集≠该股未进池。旧文案把 457 只当日涨停股写成「今日触板未封/炸板」
+            ths_line = (f'THS 封板梯队未采集（{state["reason"]}，fail-visible，'
+                        f'非「触板未封」）· 身位证据改用韭研口径 '
+                        f'{num_txt or "首板（韭研未标 N天M板）"} + 下方板序行「当前连板」')
+    expound = str(stock.get("expound") or "").strip()
+    expound_line = expound if expound else "（韭研解析缺失，fail-visible）"
+    # v3.2 D1：声明「本次叙事要用到的最新交易日」→ 本地 vipdoc 末棒落后时按需线上补尾。
+    # 必须在叙事组装处声明（不是 run() 外层）：`_BARS_NEED_UPTO` 是 ContextVar，
+    # `ThreadPoolExecutor` **不复制**调用方上下文 → 写在 work() 外对 worker 线程无效。
+    # 实测缺陷：10-20 当日 77/77 只位置/板序/板型全灭，而同日 relay（已接线）三行齐全。
+    with bars_need_upto(date):
+        lines = [
+            f"{date} 交易日 · {market_coordinate_line(db, date, dataset_id)}",
+            date_axis_line(db, date, dataset_id),
+            f"该股：{stock.get('name')}（{code}），今日涨停价 {stock.get('price')}{day_num}，"
+            f"涨停时间 {stock.get('time')}",
+            f"身位：{ths_line}",
+            stock_position_line(date, code),
+            limitup_sequence_line(date, code, stock.get("name")),
+            stock_board_shape_line(date, code, stock.get("name"),
+                                   _prev_close_of_date(date, code)),
+            board_position(jy, code, db=db, date=date, dataset_id=dataset_id),
+            seal_time_line(jy, code),
+        ]
+    if expound_trace:
+        trace = expound_trace_line(db, date, code, expound, dataset_id=dataset_id)
+        if trace:
+            lines.append(trace)
+    lines += ["韭研解析全文：", expound_line]
+    return "\n".join(lines)
 
 
 def _db():
@@ -1659,7 +1982,9 @@ def _label_one(db, col, acc, token, date, code, stock, board, rank,
         questions = QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK
     narrative = build_pilot_narrative(db, date, code, stock, board, rank,
                                       dataset_id=dataset_id, jiuyan_doc=jiuyan_doc,
-                                      slot=slot)
+                                      slot=slot,
+                                      # 承接路径：解析逐字相同已由 B 压缩标记声明，不再多给一行
+                                      expound_trace=not carry)
     compression: dict | None = None
     if carry:
         narrative, compression = compress_narrative(narrative, carry["prevDate"])
@@ -1861,7 +2186,9 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             carry_sample = carry_of(codes[0])
             narrative = build_pilot_narrative(
                 db, date, codes[0], sample["stock"], sample["board"], ranks.get(codes[0]),
-                dataset_id=dataset_id, jiuyan_doc=jy_doc, slot=slot)
+                dataset_id=dataset_id, jiuyan_doc=jy_doc, slot=slot,
+                # 与实跑同口径：承接样本不会出「解析续期」行（否则 dry-run 字符数虚高）
+                expound_trace=not carry_sample)
             if carry_sample:
                 narrative, cmp_stats = compress_narrative(narrative, carry_sample["prevDate"])
                 print(f"[dry] A 可承接：上标签日 {carry_sample['prevDate']}；B 压缩={cmp_stats}")
@@ -1903,9 +2230,14 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
               f" (cum ok={n_ok} deg={n_deg})")
     if not dry_run:
         # 批次C I12：FINAL 口径=本次运行实付（不再全集合扫历史 usage，不再 total_tokens/input+output 键名漂移）
+        # v3.2 D1：补 tailMiss/补尾溯源——线上补尾失败时不再静默（2026-10-20 教训：
+        # 「机制修好了但没人知道它在哪些股上失败」导致三轴全灭被当成数据缺口锁存三个月）
+        prov = bars_source_provenance()
         print("FINAL:", {"slot": slot, "ok": n_ok, "degraded": n_deg,
                          "carried": n_carried, "rejudged": n_rejudged,
-                         "totalTokens": sum(run_tokens), "calls": len(run_tokens)})
+                         "totalTokens": sum(run_tokens), "calls": len(run_tokens),
+                         "barsSource": {k: prov.get(k) for k in
+                                        ("counts", "tailMergedCodes", "tailMissCodes")}})
 
 
 
@@ -2156,6 +2488,77 @@ def run_cycle_stage_day(db, dates: list[str], token: str, acc: str,
               f"tokens={(u.get('input_tokens') or 0) + (u.get('output_tokens') or 0)}")
 
 
+def _board_effect_stats(jiuyan_doc) -> dict | None:
+    """韭研板块结构统计（**按 code 去重**，防同一只股在两个板块里被合计两次）。
+
+    2026-10-20 审查 Nit-4：旧版分母用「各 field 成员数之和」，一只股出现在两个板块时
+    「占 X%」会超过真实占比。去重后 total=当日涨停只数，占比=占当日涨停只数的份额。
+    """
+    seen: set[str] = set()
+    per_board: dict[str, int] = {}
+    for fl in jiuyan_doc.get("fields") or []:
+        board = str(fl.get("name") or "")
+        for s_ in fl.get("stocks") or []:
+            code = _strip(s_.get("code"))
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            if board:
+                per_board[board] = per_board.get(board, 0) + 1
+    if not seen or not per_board:
+        return None
+    total = len(seen)
+    ordered = sorted(per_board.values(), reverse=True)
+    top_board = max(per_board.items(), key=lambda kv: kv[1])[0]
+    return {"boards": len(per_board), "total": total, "top_board": top_board,
+            "top_n": ordered[0], "top_share": ordered[0] / total * 100,
+            "top3_share": sum(ordered[:3]) / total * 100}
+
+
+def phase_band_extra_lines(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> list[str]:
+    """日级哨兵补料（v3.2 D9）：判据引用「板块效应」与「梯队总量近 20 日分位」而旧语料没有。
+
+    `QUESTIONS_PHASE` 的判断段写「涨停家数、炸板率、连板梯队、**板块效应**及各自**近 20 日
+    分位**」，`cold_lt40`/`strong_ge60` 更是直接引用「板块效应处于近 20 日低位区/高位区」——
+    而 `market_facts_line` 里既没有板块效应、也没有梯队总量分位（只有逐桶家数与最高板分位）。
+    本函数补三行客观事实（1 次/日）：板块效应绝对值 + **板块集中度近 20 日分位** + 梯队总量分位。
+    2026-10-20 审查 P2-1：首版只给了板块效应绝对值，判据里的「低位区/高位区」仍半空洞，
+    故补分位（历史 20 日韭研板块结构，零额外外呼）。
+    **不改 `market_facts_line`**（relay v7 段 1 / cycle / theme_leader 共用，改了会连带漂移）。
+    """
+    lines: list[str] = []
+    jy = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
+    cur_stats = _board_effect_stats(jy)
+    if cur_stats is None:
+        lines.append("板块效应：韭研板块结构缺失（fail-visible）")
+    else:
+        lines.append(f"板块效应：今日涨停 {cur_stats['total']} 只分布于 {cur_stats['boards']} 个"
+                     f"韭研板块，最大「{cur_stats['top_board']}」{cur_stats['top_n']} 家"
+                     f"（占 {cur_stats['top_share']:.0f}%），前三合计 {cur_stats['top3_share']:.0f}%")
+        shares: list[float] = []
+        for d in trading_dates_before(db, date, dataset_id=dataset_id):
+            prev_jy = db["jiuyan_action"].find_one({"_id": f"{d}:final"}, {"fields": 1}) or {}
+            prev_stats = _board_effect_stats(prev_jy)
+            if prev_stats:
+                shares.append(prev_stats["top_share"])
+        rank = percentile_rank(shares, cur_stats["top_share"])
+        lines.append(f"板块集中度：最大板块占 {cur_stats['top_share']:.0f}%"
+                     f"（{rank if rank == '分位不可算' else rank + ' 分位'}，近 {len(shares)} 日样本）")
+    cur = market_metrics(db, date, dataset_id)
+    pool_total = (cur or {}).get("ladderPoolTotal")
+    if isinstance(pool_total, int) and not isinstance(pool_total, bool):
+        hist = [m["ladderPoolTotal"]
+                for m in (market_metrics(db, d, dataset_id)
+                          for d in trading_dates_before(db, date, dataset_id=dataset_id))
+                if m and isinstance(m.get("ladderPoolTotal"), int)
+                and not isinstance(m.get("ladderPoolTotal"), bool)]
+        rank = percentile_rank(hist, pool_total)
+        lines.append(f"梯队总量：{pool_total} 只（{rank if rank == '分位不可算' else rank + ' 分位'}）")
+    else:
+        lines.append("梯队总量：不可算（梯队池缺失，fail-visible）")
+    return lines
+
+
 def run_phase_band_day(db, dates: list[str], token: str, acc: str,
                        dataset_id: str = DEFAULT_DATASET_ID) -> None:
     """方案 A：Q5 拆日级独立调用——每交易日一次、只喂盘面事实行不喂个股解析（去语境污染）。
@@ -2166,7 +2569,8 @@ def run_phase_band_day(db, dates: list[str], token: str, acc: str,
         if done:
             print(f"[phase] {date} 已判（{done.get('phaseBand')}），跳过")
             continue
-        narrative = f"{date} 交易日 · {market_facts_line(db, date, dataset_id)}"
+        narrative = "\n".join([f"{date} 交易日 · {market_facts_line(db, date, dataset_id)}",
+                              *phase_band_extra_lines(db, date, dataset_id)])
         env, ms = _dispatch_jev(narrative, QUESTIONS_PHASE)
         parsed = parse_jev_response(env, ms, expected_keys=set(QUESTIONS_PHASE))
         answers = parsed.get("answers") or {}

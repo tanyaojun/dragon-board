@@ -20,6 +20,7 @@ from backend.analysis.hotlist.jev_relay_ammo import (
     QUESTIONS_ZHABAN,
     ZHABAN_AMMO_VERSION,
 )
+from backend.core.limit_rules import limit_threshold_pct
 from backend.operations.jev_label_jiuyan import (
     DEFAULT_DATASET_ID,
     _dispatch_jev,
@@ -33,14 +34,24 @@ from backend.operations.jev_relay_index import _pool_of, _range_num_txt
 
 COLLECTION = "hotlist_jev_zhaban_labels"
 
-_TOUCH_LIMITS = {"GEM": 19.8, "STAR": 19.8}  # 其余（HS 主板）9.8；ST 由名称判定 4.8
-
 
 def _touch_limit(item: dict[str, Any]) -> float:
-    mt = str(item.get("market_type") or "")
-    if "ST" in str(item.get("name") or "").upper():
-        return 4.8
-    return _TOUCH_LIMITS.get(mt, 9.8)
+    """触板判定线（§1.2-1 单一事实源）——委托 `core/limit_rules`：9.8/19.8/29.8。
+
+    2026-10-20 撤销本模块的硬编码副本（原 `_TOUCH_LIMITS = {"GEM":19.8,"STAR":19.8}` +
+    默认 9.8 + ST 名称→4.8），三处与既有裁决冲突：
+    1. ST ±5% 特判已由 2026-10-05 「阈值公共函数，禁硬编码副本」裁决废除（2026-09 新规
+       主板 ST 亦 ±10%）——本模块是漏网副本；
+    2. 北交所 30% 未覆盖（落到默认 9.8 → 北交所 +10% 就被判成触板）；
+    3. 阈值只按 `market_type`（HS/GEM/STAR）分支，与板籍前缀口径（688/30/43/8/92）双源。
+    触板轨迹（首触/末触/时长/开板次数）的上游数值，口径漂移会直接改写炸板归因。
+
+    审查 P1-2（2026-10-20）：改委托后必须先把 code 归一成裸 6 位——`limit_ratio` 对任何
+    带前缀的字符串（`sz300001`/`bj830799`）都会落到主板 0.10，则 20cm 股按 9.8 判触板，
+    首触/开板次数全错（旧实现按 `market_type` 分支，天然不受 code 形状影响，故此处是新风险）。
+    同模块 `run_zhaban_label_day` 落库键也用 `[-6:]`，口径一致。
+    """
+    return limit_threshold_pct(str(item.get("code") or "").strip()[-6:])
 
 
 def _touch_profile(item: dict[str, Any]) -> dict[str, Any]:

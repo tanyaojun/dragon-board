@@ -185,15 +185,41 @@ def test_midday_narrative_marks_unavailable_evidence(no_tdx):
     jy_doc = db["jiuyan_action"].find_one({"_id": f"{DATE}:midday"})
     stock = jy_doc["fields"][0]["stocks"][0]
     text = build_midday_narrative(db, DATE, "603278", stock, "机器人", None, jiuyan_doc=jy_doc)
-    assert "午盘" in text.splitlines()[0] and "12:06" in text.splitlines()[0]
-    assert "盘面事实行" in text and "午盘不可得" in text          # 收盘口径事实行不伪造
-    assert "THS 封板梯队槽位收盘才生成" in text                    # 收盘身位块不可得
-    assert "当日板型：午盘不可判" in text                          # 板型需收盘 5 分钟棒
-    # 午盘没有当日日线棒（实测 12:30 本地 vipdoc 仍无当日棒）：换午盘口径，不误读成停牌
-    assert "个股位置：午盘不可得" in text and "板序：午盘不可得" in text
+    head = text.splitlines()[0]
+    assert "午盘" in head and "12:06" in head
+    # v3.2 D10：三项物理不可得压成首行 1 处（原先 4 行各说一次，≈90 字/只）
+    assert "午盘不可得项" in head and "当日板型" in head
+    assert text.count("午盘不可得") == 1
+    # 位置轴/板序：T-1 收盘口径（T-1 不可得时如实标不可算，不冒充当日）
+    assert "个股位置：上一交易日" in text and "板序：上一交易日" in text
     assert "停牌" not in text, "午盘无当日棒不得写成「停牌或数据缺口」（会误导读模型）"
+    # v3.2 D4a：热榜排名不再投喂（零引用 + 跨轨坐标系；落库字段照存）
+    assert "热榜" not in text
     assert EXPLAIN in text                                        # 解析首行（=原因）在场
     assert "3天3板" in text
+
+
+def test_midday_position_uses_t1_close_caliber(monkeypatch):
+    """v3.2 D10：午盘位置/板序用 T-1 收盘口径（真实可得），行内显式标 T-1、不冒充当日。"""
+    db = _db_with()
+    jy_doc = db["jiuyan_action"].find_one({"_id": f"{DATE}:midday"})
+    stock = jy_doc["fields"][0]["stocks"][0]
+    monkeypatch.setattr(runner, "trading_dates_before",
+                        lambda db_, d, n=20, dataset_id=None: ["2026-10-16", "2026-10-19"][-n:])
+    bars = []
+    for i, d in enumerate(["2026-10-08", "2026-10-09", "2026-10-12", "2026-10-13",
+                           "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-19"]):
+        close = 10.0 + i * 0.1
+        bars.append({"date": d, "close": close, "high": close, "vol": 1e7})
+    monkeypatch.setattr(runner, "_daily_bars", lambda code: bars)
+    monkeypatch.setattr(runner, "_intraday_bars", lambda code: [])
+    text = build_midday_narrative(db, DATE, "603278", stock, "机器人", None, jiuyan_doc=jy_doc)
+    assert "个股位置：上一交易日（2026-10-19）收盘口径" in text
+    assert "板序：上一交易日（2026-10-19）收盘口径 · 近 " in text
+    assert "末位=2026-10-19" in text and "末位今日" not in text   # T-1 口径下不得写「末位今日」
+    assert "现价" in text and "当前连板" in text      # T-1 真实可算的数字直供
+    assert "午盘涨停价 10.0" in text                # 当日韭研事实不受影响
+    assert "昨日同板块" in text                       # v3.2 D7 昨日对照
 
 
 def test_final_narrative_unchanged_shape(no_tdx):
