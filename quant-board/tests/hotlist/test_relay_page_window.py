@@ -319,6 +319,27 @@ def test_kpi_third_line_is_tier_description(js: str):
         assert stale not in js, f"旧统计口径文案应删除：{stale}"
 
 
+def test_ladder_balanced_displayed_and_filterable(js: str):
+    """v7 ladder_health 新增 balanced 过渡档，前端三面同步（2026-10-20 用户需求）。
+
+    背景：v7 D7-1 给 ladder_health 补了 balanced 档（中位偏薄未断层：二板/三板+比率
+    0.5-1.5 且梯队总量处参照正常带，权威全文 = jev_relay_ammo.QUESTIONS_RELAY），
+    relay index 已可能产出该值。前端 KPI 徽标 / 涨停分析表 / 梯队结构卡 / 折线 tooltip
+    共用 LADDER_CN，漏加即显示英文原文，且筛选枚举（Object.entries(LADDER_CN) 派生）
+    也无该项——四角同源，补一处全通。
+    """
+    # ① 中文类型（筛选下拉枚举同源派生，含 balanced 即自动可筛）
+    m = re.search(r"const LADDER_CN = \{[^}]*\}", js)
+    assert m and "balanced:" in m.group(0), "LADDER_CN 应含 balanced 中文类型（筛选枚举同源）"
+    assert "ladder: Object.entries(LADDER_CN)" in js, "筛选枚举应派生自 LADDER_CN（balanced 自动可筛）"
+    # ② 摘要描述（读口失败时的回落，漏加即 tooltip 回落空）
+    m = re.search(r"const LADDER_DESC = \{[\s\S]*?\};", js)
+    assert m and "balanced:" in m.group(0), "LADDER_DESC 应含 balanced 摘要描述"
+    # ③ 徽标色：ladderB 对 balanced 显式配色（该档属健康带——未断层未倒挂、总量正常，非警示非证据缺失）
+    lb = re.search(r"const ladderB = [^\n]+", js)
+    assert lb and "balanced" in lb.group(0), "ladderB 应对 balanced 显式配色"
+
+
 def test_desc_tables_declare_summary_not_verbatim(js: str):
     """档位描述表必须自我声明为「摘要」且回落机制存在（review B1，2026-10-18 用户裁决）。
 

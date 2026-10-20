@@ -547,7 +547,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
 
 const PHASE_CN = {relay_heat:'接力顺畅', divergence:'高位分歧', collapse:'退潮崩塌', launch:'启动首板', bottoming:'冰点出清', insufficient_evidence:'证据不足'};
 const MOM_CN = {accelerating:'加速', holding:'惯性', weakening:'退潮', reversing:'逆转', insufficient_evidence:'证据不足'};
-const LADDER_CN = {pyramid:'金字塔', fracture:'中位断层', inverted:'高位倒挂', sparse:'稀疏', insufficient_evidence:'证据不足'};
+const LADDER_CN = {pyramid:'金字塔', balanced:'中位偏薄', fracture:'中位断层', inverted:'高位倒挂', sparse:'稀疏', insufficient_evidence:'证据不足'};
 const MONEY_CN = {strong:'赚钱', neutral:'中性', losing:'亏钱', insufficient_evidence:'证据不足'};
 const THEME_CN = {mainline_continue:'主线延续', rotation:'轮动', scattered:'散乱', insufficient_evidence:'证据不足'};
 // 档位描述（KPI 卡第三行，2026-10-18 用户裁决）：不用「统计口径」语义，直接说该档位意味着什么。
@@ -557,6 +557,7 @@ const THEME_CN = {mainline_continue:'主线延续', rotation:'轮动', scattered
 // 加载成功后 KPI 与判定明细行 tooltip 一律显示全文，本表仅作读口失败时的回落。
 const LADDER_DESC = {
   pyramid:'金字塔完整：二板/三板+比率 > 1.5 且首板占比充足，中位层次健康',
+  balanced:'中位偏薄未断层：二板/三板+比率在 0.5-1.5 之间，高度未集中少数高位股，梯队总量与首板供给处参照正常带',
   fracture:'中位断层：二板明显稀薄，接力链条断裂风险高',
   inverted:'高位倒挂：高度集中在少数高位股（孤板/妖股结构）',
   sparse:'全面稀疏：各级家数均处参照低位，梯队整体萎缩',
@@ -688,7 +689,7 @@ const gapBadge = r => {
 };
 const phaseB = v => badge(PHASE_CN[v]||v, v==='relay_heat'?'b-green':v==='divergence'?'b-amber':v==='collapse'?'b-red':v==='launch'?'b-blue':'b-gray');
 const momB = v => badge(MOM_CN[v]||v, v==='accelerating'?'b-green':v==='holding'?'b-gray':v==='weakening'?'b-amber':'b-purple');
-const ladderB = v => badge(LADDER_CN[v]||v, v==='pyramid'?'b-green':v==='fracture'?'b-amber':v==='inverted'?'b-red':'b-gray');
+const ladderB = v => badge(LADDER_CN[v]||v, v==='pyramid'||v==='balanced'?'b-green':v==='fracture'?'b-amber':v==='inverted'?'b-red':'b-gray');
 const moneyB = v => badge(MONEY_CN[v]||v, v==='strong'?'b-green':v==='neutral'?'b-gray':'b-red');
 const themeB = v => badge(THEME_CN[v]||v, v==='mainline_continue'?'b-purple':v==='rotation'?'b-blue':'b-gray');
 const gapDetailCell = d => {
