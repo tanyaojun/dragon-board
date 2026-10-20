@@ -12,6 +12,7 @@ CLI：python -m backend.operations.jev_zhaban_label --zhaban-day 2026-09-18 [--z
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from typing import Any
 
@@ -29,10 +30,79 @@ from backend.operations.jev_label_jiuyan import (
     parse_jev_response,
     ths_positions,
 )
-from backend.operations.jev_label_jiuyan import _ths_failed_items
+from backend.operations.jev_label_jiuyan import _ths_failed_items, _tdx_daily_client
 from backend.operations.jev_relay_index import _pool_of, _range_num_txt
 
 COLLECTION = "hotlist_jev_zhaban_labels"
+
+_SH_PCT_CACHE: dict[tuple, tuple] = {}
+_SH_INDEX_LDAY = ("sh", "sh000001")     # 上证指数本地日线（vipdoc/sh/lday/sh000001.day）
+_SH_INDEX_ONLINE = "999999"            # mootdx index_bars 的上证综指符号
+
+
+def _sh_index_change_pct(db: Any, date: str,
+                         dataset_id: str = DEFAULT_DATASET_ID) -> tuple[float | None, str | None]:
+    """上证指数当日涨跌幅（炸板链大盘行的历史补数，2026-10-20）。
+
+    缺陷：历史 15:00 帧缺 `indices.sh`，67 个打标日里 84.5%（1438/1701）的炸板文档被迫写
+    「大盘：不可考（帧缺失）」——`broad_market`（大盘拖累）判据在这部分样本上等于没有输入。
+    但**指数涨跌幅是客观事实、可从日线重算**（AGENTS §4.0：不得因为帧缺就冒充「没有」）。
+    回退链（逐级，行内必须标实际用的源，禁把重算值伪装成帧值）：
+      ① 15:00 帧 `indices.sh.changePct`（relay/情绪链同源，首选）；
+      ② 本地 vipdoc `sh000001.day` 日线重算（close vs 前收，零外呼、可复现）；
+      ③ 线上 mootdx `index_bars(999999)` 日线重算（本地未落当日棒时兜底）。
+    全缺 → (None, None)：调用方如实写「不可考（帧与日线皆缺）」，不补 0。
+    """
+    key = (dataset_id, date)
+    if key in _SH_PCT_CACHE:
+        return _SH_PCT_CACHE[key]
+    result: tuple[float | None, str | None] = (None, None)
+    rows: list[tuple[str, float]] = []
+    try:  # ② 本地日线（全历史、零外呼）
+        from backend.operations.market_dieban_tdx import read_lday, resolve_root
+        root, _ = resolve_root()
+        if root:
+            path = os.path.join(root, "vipdoc", _SH_INDEX_LDAY[0], "lday",
+                                f"{_SH_INDEX_LDAY[1]}.day")
+            for rec in read_lday(path, 400):
+                raw = str(rec[0])
+                if len(raw) == 8:
+                    rows.append((f"{raw[:4]}-{raw[4:6]}-{raw[6:]}", float(rec[4]) / 100.0))
+            pct = _pct_of_date(rows, date)
+            if pct is not None:
+                result = (pct, "本地日线重算")
+    except Exception:  # noqa: BLE001 — 本地不可用不算失败，继续线上
+        rows = []
+    if result[0] is None:
+        try:  # ③ 线上指数日线
+            client = _tdx_daily_client()
+            if client is not None:
+                df = client.index_bars(symbol=_SH_INDEX_ONLINE, frequency=9, start=0, offset=300)
+                online = []
+                if df is not None and len(df) > 0:
+                    for _, r in df.iterrows():
+                        online.append((f"{int(r['year']):04d}-{int(r['month']):02d}-"
+                                       f"{int(r['day']):02d}", float(r["close"])))
+                pct = _pct_of_date(online, date)
+                if pct is not None:
+                    result = (pct, "线上指数日线重算")
+        except Exception:  # noqa: BLE001 — 线上失败保持 (None, None)，调用方 fail-visible
+            result = (None, None)
+    _SH_PCT_CACHE[key] = result
+    return result
+
+
+def _pct_of_date(rows: list[tuple[str, float]], date: str) -> float | None:
+    """(date, close) 升序序列里求 date 相对前一交易日收盘的涨跌幅（%）；缺当日/缺前一日 → None。"""
+    for i, (d, close) in enumerate(rows):
+        if d == date:
+            if i == 0 or close <= 0:
+                return None
+            prev = rows[i - 1][1]
+            if prev <= 0:
+                return None
+            return (close - prev) / prev * 100
+    return None
 
 
 def _touch_limit(item: dict[str, Any]) -> float:
@@ -154,21 +224,28 @@ def build_zhaban_narrative(db: Any, date: str, item: dict[str, Any],
     else:
         sec_txt = (f"板块语境：韭研触板池未收录该股（板块不可考）；"
                    f"全市场今日触板 {sec['pool_total']} 家、炸板 {len(zhaban_items)} 家")
-    # 大盘（③15:00 帧 indices 现成）
-    idx_txt = "大盘：不可考（帧缺失）"
+    # 大盘（③15:00 帧 indices 现成；帧缺 → 指数日线重算，见 _sh_index_change_pct）
+    idx_txt = "大盘：不可考（15:00 帧与指数日线皆缺，fail-visible）"
     fr = db["snapshot_frames"].find_one(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
         {"indices.sh": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
     sh = ((fr or {}).get("indices") or {}).get("sh") or {}
     pct = sh.get("changePct")
+    change = sh.get("change")
     if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-        idx_txt = f"大盘：上证今日 {pct:+.2f}%"
-    elif isinstance(sh.get("change"), (int, float)) and not isinstance(sh.get("change"), bool):
+        idx_txt = f"大盘：上证今日 {pct:+.2f}%（15:00 帧）"
+    elif isinstance(change, (int, float)) and not isinstance(change, bool):
         # 存量帧只落 change=涨跌额（点位）：按 % 呈现即伪造暴跌（2026-10-16 单位错位排查，
         # 10-12 两只 label 因「上证 -19.19%」假暴跌误判 broad_market，真实约 -0.5%）。
         # fail-visible：点位是真实可观测数据不丢弃，带单位呈现（对齐情绪链证据行「点」口径），
         # 缺的涨跌幅明示缺失，由模型按 conditional 判据自行裁量
-        idx_txt = f"大盘：上证今日 {sh['change']:+.2f} 点（涨跌幅缺失，点位口径）"
+        idx_txt = f"大盘：上证今日 {change:+.2f} 点（涨跌幅缺失，点位口径）"
+    else:
+        # 帧无 indices：用指数日线重算（2026-10-20 补数，历史 84.5% 的「不可考」由此可修）
+        pct2, src = _sh_index_change_pct(db, date, dataset_id)
+        if isinstance(pct2, (int, float)) and not isinstance(pct2, bool):
+            idx_txt = f"大盘：上证今日 {pct2:+.2f}%（{src}）"
+
     return (f"{date} 交易日 · 炸板股归因（个股单题）\n"
             f"个股：{name}({code})\n{traj_txt}\n{pos_txt_full}\n{ths_txt}\n{seq_txt}\n{sec_txt}\n{idx_txt}")
 

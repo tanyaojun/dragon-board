@@ -436,3 +436,16 @@ v0.3 与预登记推演（start≈46/ferment 9-13/climax 8-10/divergence 若干�
 板型 0/77，残余 2 只均为北交所 920xxx（`_online_daily_bars` 无 BJ 日线，结构性缺口，10-20 的 2.6% 未达门 1 的 2%，
 已申请单列豁免）；10-16 为 1/100。
 预算按同股同日对账：10-16 **1074 → 1016 字/只（−5.4%，干净瘦身口径）**；10-20 945 → 1023（+8.3%，增量≈D1 恢复的三轴证据，语料本身仍 −5%）。
+
+
+## 个股相位分线题产线开启（2026-10-20 用户裁决「开启相位分线题，合并」）
+
+- 开关：`quant-board/.env.local` → `JIUYAN_STOCK_PHASE_ENABLED=1`；排程步
+  `_run_jiuyan_label_step` 凭此为打标命令加 `--with-stock-phase`，即 **QUESTIONS_STOCK_WITH_PHASE
+  真合并同 call**（同一 narrative 五题一次调用，边际成本≈题干+答案 ≈+34% token/只）。
+  走单题独立 call（实测 2428 tokens/只）的历史试点路径不再用于产线。
+- 测试：`tests/platform/test_operations_schedule.py`（F2 成本防火墙：未设 → 命令不含该旗标）；
+  `tests/hotlist/test_jev_label_merged_call.py`（合并路径全链 mock）。
+- 口径：合并路径产出的文档 `stockPhase*` 字段与单题版逐字段对齐（聚合层无感）；
+  `questionSetHash` 仍=完整四题集，`askedQuestionSetHash`=五题集（承接可分组）。
+- 成本：v3.2 语料后单只 ≈3.5k tokens → 合并后 ≈4.7k/只；68 只/日 ≈ 32 万 tokens/日（原 23.8 万）。
