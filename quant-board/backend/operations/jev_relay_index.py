@@ -292,39 +292,39 @@ def _money_hist_series(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     """近 n 个交易日（**严格早于当日**，零未来函数）的接力生态逐日序列：
     晋级率 / 炸板家数 / 断板中位+大面 / 隔日溢价中位（v7 D3/D4 分位与刻度的原料）。
 
-    口径与近10日轨迹段同源（二分 prev_zt∩cur_zt/prev_zt，THS 缺失日回退触板）；
-    断板/溢价中位走 `_close_pct`（TDX 日线，F4 门槛不足该日不入样本，None 缺席）。
-    每日一项不可算 → None（调用方按有效样本数披露，不补 0）。韭研 final 缺失日
-    **整日不入序列**（评审修复：旧实现 cur 池缺失时 cur_zt=空集 → promo 落 0 +
-    断板=昨日全池，伪造数据污染分位刻度，§4.0）。
+    口径与今日主行 relay_flow_line **单源同规**（`_promotion_stats`：二分封板 +
+    v4 停牌/不可验同剔分子分母——评审修复第二刀，旧手搓 |prev_zt∩cur_zt|/|prev_zt|
+    把停牌股算成「未晋级」，分位刻度被系统性压低）；premium 基数同改
+    promoted∪broken（与主行 elig 一致）。断板/溢价中位走 `_close_pct`（TDX 日线，
+    F4 门槛不足该日不入样本，None 缺席）。每日一项不可算 → None（调用方按有效
+    样本数披露，不补 0）。韭研 final 缺失日**整日不入序列**（评审修复第一刀：
+    旧实现 cur 池缺失时 promo 落 0 + 断板=昨日全池，伪造数据污染分位刻度，§4.0）。
     """
     hist = trading_dates_before(db, date, n, dataset_id=dataset_id)
     rows: list[dict[str, Any]] = []
     for i, d in enumerate(hist):
         prev = hist[i - 1] if i > 0 else (
             trading_dates_before(db, d, 1, dataset_id=dataset_id) or [None])[-1]
-        if not prev:
+        if not prev or not _pool_of(db, d):
             continue
-        pool_p, pool_d = _pool_of(db, prev), _pool_of(db, d)
-        if not pool_p or not pool_d:
+        stats = _promotion_stats(db, prev, d, dataset_id)
+        if not stats.get("ok"):
             continue
-        prev_zt, _f1 = _sealed_codes(db, prev, set(pool_p), dataset_id)
-        cur_zt, _f2 = _sealed_codes(db, d, set(pool_d), dataset_id)
+        promoted, broken = set(stats["promoted"]), set(stats["broken"])
         row: dict[str, Any] = {"date": d, "promo": None, "zhaban": None,
                                "broken_median": None, "big": None, "premium_median": None}
-        if prev_zt:
-            row["promo"] = round(len(prev_zt & cur_zt) / len(prev_zt) * 100, 1)
+        row["promo"] = stats["rate"]
         items, found = _ths_failed_items(db, d, dataset_id)
         if found:
             row["zhaban"] = len(items)
-        broken = prev_zt - cur_zt
         if broken:
             pcts = [p for p in (_close_pct(c, prev, d) for c in sorted(broken)) if p is not None]
             if _tdx_sample_ok(len(pcts), len(broken)):
                 row["broken_median"] = _median(pcts)
                 row["big"] = sum(1 for p in pcts if p <= -5)
-        prem = [p for p in (_close_pct(c, prev, d) for c in sorted(prev_zt)) if p is not None]
-        if _tdx_sample_ok(len(prem), len(prev_zt)):
+        elig = sorted(promoted | broken)
+        prem = [p for p in (_close_pct(c, prev, d) for c in elig) if p is not None]
+        if _tdx_sample_ok(len(prem), len(elig)):
             row["premium_median"] = _median(prem)
         rows.append(row)
     return rows

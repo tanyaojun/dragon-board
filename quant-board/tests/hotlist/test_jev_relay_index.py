@@ -1825,6 +1825,34 @@ def test_money_hist_series_skips_day_with_missing_final():
     assert all(r["promo"] != 0.0 for r in rows)  # 无伪造 0 晋级日
 
 
+def test_money_hist_series_suspension_skips_denominator(monkeypatch):
+    """D3/D4 评审修复（第二刀）：历史序列 promo 与主行 v4 口径一致——停牌剔分母。
+
+    旧实现 |prev_zt∩cur_zt|/|prev_zt| 把停牌股算成「未晋级」（1/2=50%），
+    20 日分位刻度被系统性压低；修复后复用 _promotion_stats 单源
+    （停牌/不可验同剔分子分母 → 1/1=100%），premium 基数同改 promoted∪broken。
+    """
+    bars = {
+        # 600001 在 _D1 停牌：棒缺 _D1、前后（_D2/_D0）都在 → day_status_of=suspended
+        "600001": _bars([(_D2, 10.0), (_D0, 11.0)]),
+        "600002": _bars([(_D2, 10.0), (_D1, 9.5)]),
+    }
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0]),
+        "jiuyan_action": FakeCol([
+            _final(_D2, [{"code": "600001", "name": "A", "num": "2天2板"},
+                         {"code": "600002", "name": "B", "num": "2天2板"}]),
+            _final(_D1, [{"code": "600002", "name": "B", "num": "3天3板"}]),
+            _final(_D0, _STOCKS[_D0]),
+        ]),
+    })
+    rows = relay._money_hist_series(db, _D0)
+    by_date = {r["date"]: r for r in rows}
+    assert _D1 in by_date
+    assert by_date[_D1]["promo"] == 100.0  # 停牌 1 只剔分母：1/1，非旧口径 1/2=50.0
+
+
 def test_questions_v7_criteria_revisions():
     """D7：判据修订四处——ladder 补 balanced 过渡档、momentum 冲突消解序、
     theme_pulse 主线双定义消歧、money_effect 线化 + relay_index 锚定句。"""

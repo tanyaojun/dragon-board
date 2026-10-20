@@ -265,5 +265,13 @@ test_server_limit_summary 侧锁定）。
    韭研 final 缺失时 `cur_zt=空集` → 该日 promo 落 0.0、断板=昨日全池（伪造），
    污染 20 日分位刻度（§4.0 违例）。修复：`pool_d` 缺失整日不入序列。
    测试：`test_money_hist_series_skips_day_with_missing_final`。
+3. **钱效历史序列 promo 未剔停牌（D3/D4，同日第二刀）**：旧实现手搓
+   `|prev_zt∩cur_zt|/|prev_zt|` 把停牌股算成「未晋级」（v4 主行口径是停牌/不可验
+   同剔分子分母），20 日分位刻度被系统性压低；premium 基数也用的是昨日全池
+   而非主行 elig（promoted∪broken）。修复：整段改复用 `_promotion_stats` 单源
+   （promo=stats.rate，elig=promoted∪broken），历史序列与今日主行逐项同规。
+   测试：`test_money_hist_series_suspension_skips_denominator`（停牌 1 只 →
+   promo 1/1=100%，非旧口径 1/2=50%）。
 
-修复后四子集 1,470 passed。
+修复后四子集 1,470 passed；第三刀后 1,495 passed（测试总数增长来自并行 v3.2
+工作流新增用例）。
