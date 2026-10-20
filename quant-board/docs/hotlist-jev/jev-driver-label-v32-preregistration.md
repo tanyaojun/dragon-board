@@ -448,6 +448,15 @@ D5 **只能在 `build_pilot_narrative` 侧另写轻量行**，不得改 `market_
 - 目的：v3.2 语料代际的首批真实验证 + 修复 10-20 那批三轴全灭的坏标签。
 - 命令：`--start/end 2026-10-20 --force --confirm-budget --workers 2`（force=口径代际重放，
   承接链按预期整体转 fresh_judgment；未含相位题）。
-- 预算：≈78 次 × ≈3.5k tokens ≈ 27 万 tokens（≈$0.28）；实付以 FINAL 行为准，回填于本节。
-- 验收对照：重放后 10-20 的 `stockPhasePosition` 仍为 None（相位题未并入）；三轴 fail-visible
-  应从 77 降到 ≤2（北交所结构性缺口）；四题分布与 v3.1 基线对比记入后续复盘。
+- 预算：≈78 次 × ≈3.5k tokens ≈ 27 万 tokens（≈$0.28）；**实付 FINAL：77 ok / 0 degraded，
+  269,663 tokens，77 calls，tailMerged=75 / tailMiss=2（恰为两只北交所）**。
+- 验收实测（重放后）：
+  - 三轴 fail-visible：位置 2/77、板序 2/77、板型 0/77（v3.1 为 77/77 全灭；残余=北交所结构性缺口）；
+  - `catalyst_freshness=unclear` **11.1% → 3/77=3.9%**（交易日轴 + 解析续期生效，门 2 达标）；
+  - confidence 四题全带（308/308 可测）；`stockPhasePosition` 77 只均 None（本轮未并入相位题）；
+  - 叙事 p50 = 1023 字（与 §10.2 同股对账一致）；
+  - 分布（n=77，单日小样本只登记不解读）：driver capital_flow 30% / concept_stretch 18% /
+    order_earnings 18% / product_event 16% / industry_cycle 9% / ma_restructure 6% / policy 3%；
+    depth core 40% / scaling 26% / early 23% / equity 9% / insufficient 1%；
+    fresh continuing 70% / fresh_catalyst 26% / unclear 4%；
+    buy sector_follow 64% / independent 27% / high_board_relay 8% / pure_sentiment 1%。
