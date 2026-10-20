@@ -1797,7 +1797,9 @@ def market_index_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) 
             return f"{name} 缺失"
         pct = entry.get("changePct")
         if isinstance(pct, (int, float)) and not isinstance(pct, bool):
-            return f"{name} {pct:+.2f}%"
+            # 历史回填口径标注（backfill_frame_indices）：回填值非 15:00 实采，不伪装成帧值
+            tag = "（日线回填）" if entry.get("src") == "tdx_daily_backfill" else ""
+            return f"{name} {pct:+.2f}%{tag}"
         ch = entry.get("change")
         if isinstance(ch, (int, float)) and not isinstance(ch, bool):
             return f"{name} {ch:+.2f}点（点位口径）"
