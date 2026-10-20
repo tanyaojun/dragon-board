@@ -2,10 +2,12 @@
 """连板情绪指数轨道（relay sentiment index，2026-10-10 Phase 1）。
 
 - 叙事结构（§3 设计 + 2026-10-11 StepB 炸板面段 + 2026-10-16 v4 高位股多日轨迹段
-  + 2026-10-19 v6 板块接力链/龙头结构段）：
-  总账 → 今日炸板面 → 晋级断板 → 梯队量化 → 三日链 → 题材演化 → **板块接力链（三日）**
-  → 高位股多日轨迹 → 题材梯队表 → **龙头结构** → 龙头档案 → 近10日轨迹 → 热榜叙事参照段
-- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v6）
+  + 2026-10-19 v6 板块接力链/龙头结构段 + 2026-10-20 v7 全语料盘点）：
+  总账 → **大盘指数（v7 D2）** → 今日炸板面 → 晋级断板（含钱效 20 日分位）→ 梯队量化
+  （含昨日分层）→ 三日链 → 题材演化 → **题材证据块（v7 D5）** → 板块接力链（三日，
+  含同桶基线）→ 高位股多日轨迹 → 题材梯队表 → 龙头结构 → 龙头档案 → 近10日轨迹
+  （含今日）→ 近20日参照锚（含分位刻度；v7 D1 删热榜 slot/EOD 叙事两行）
+- 题目集：analysis/hotlist/jev_relay_ammo.QUESTIONS_RELAY（7 题一 call，questionSetVersion v7）
 - 存储：hotlist_jev_relay_index，_id={date}:RELAY；幂等跳过 status=ok
 - 通道：_dispatch_jev 分流（官方直连优先，CF 回退）
 - 口径：涨停/晋级 = 触板 − THS 炸板池（方案A 二分，_sealed_codes）；THS 缺失日回退触板口径并注记
@@ -22,8 +24,14 @@ import time
 from collections import Counter
 from typing import Any
 
-from backend.analysis.hotlist.jev_driver_ammo import THS_KEYS
+from backend.analysis.hotlist.jev_driver_ammo import THS_KEYS, percentile_fraction
 from backend.analysis.hotlist.jev_relay_ammo import QUESTIONS_RELAY, QUESTION_SET_VERSION_RELAY
+from backend.analysis.hotlist.theme_event_digest import (
+    BLOCK_HEADER,
+    build_theme_evidence_block,
+    corpus_state,
+)
+from backend.analysis.hotlist.theme_leader_ammo import rank_board_stocks
 from backend.core.limit_rules import is_limit_down_pct
 from backend.operations.jev_label_jiuyan import (
     DEFAULT_DATASET_ID,
@@ -51,6 +59,11 @@ from backend.operations.jev_label_jiuyan import (
     stock_position_line,
     swing_summary_line,
     trading_dates_before,
+)
+from backend.operations.theme_leader_baseline import (
+    SUSTAIN_OVERALL,
+    SUSTAIN_WINDOW,
+    sustain_baseline_for,
 )
 
 COLLECTION = "hotlist_jev_relay_index"
@@ -149,6 +162,8 @@ _DERIVED_ANCHOR_GAPS: tuple[_MARKER, ...] = (
         "板块接力链", None, ("板块接力链（三日）：不可算", "主线板块：不可算",
                             "三日存活 不可算")),
     ("龙头结构", "龙头结构", ("龙头结构：不可算",)),
+    # v7 D5：题材证据块语料未采集（2026-10-20 起积累，历史日恒缺）→ 子项缺位
+    ("题材证据", "题材证据", ("语料未采集",)),
 )
 
 
@@ -272,11 +287,59 @@ def _promotion_stats(db: Any, prev_date: str, date: str,
             "prev_pool": prev_pool, "cur_pool": cur_pool}
 
 
-def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+def _money_hist_series(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                       n: int = 20) -> list[dict[str, Any]]:
+    """近 n 个交易日（**严格早于当日**，零未来函数）的接力生态逐日序列：
+    晋级率 / 炸板家数 / 断板中位+大面 / 隔日溢价中位（v7 D3/D4 分位与刻度的原料）。
+
+    口径与近10日轨迹段同源（二分 prev_zt∩cur_zt/prev_zt，THS 缺失日回退触板）；
+    断板/溢价中位走 `_close_pct`（TDX 日线，F4 门槛不足该日不入样本，None 缺席）。
+    每日一项不可算 → None（调用方按有效样本数披露，不补 0）。韭研 final 缺失日
+    **整日不入序列**（评审修复：旧实现 cur 池缺失时 cur_zt=空集 → promo 落 0 +
+    断板=昨日全池，伪造数据污染分位刻度，§4.0）。
+    """
+    hist = trading_dates_before(db, date, n, dataset_id=dataset_id)
+    rows: list[dict[str, Any]] = []
+    for i, d in enumerate(hist):
+        prev = hist[i - 1] if i > 0 else (
+            trading_dates_before(db, d, 1, dataset_id=dataset_id) or [None])[-1]
+        if not prev:
+            continue
+        pool_p, pool_d = _pool_of(db, prev), _pool_of(db, d)
+        if not pool_p or not pool_d:
+            continue
+        prev_zt, _f1 = _sealed_codes(db, prev, set(pool_p), dataset_id)
+        cur_zt, _f2 = _sealed_codes(db, d, set(pool_d), dataset_id)
+        row: dict[str, Any] = {"date": d, "promo": None, "zhaban": None,
+                               "broken_median": None, "big": None, "premium_median": None}
+        if prev_zt:
+            row["promo"] = round(len(prev_zt & cur_zt) / len(prev_zt) * 100, 1)
+        items, found = _ths_failed_items(db, d, dataset_id)
+        if found:
+            row["zhaban"] = len(items)
+        broken = prev_zt - cur_zt
+        if broken:
+            pcts = [p for p in (_close_pct(c, prev, d) for c in sorted(broken)) if p is not None]
+            if _tdx_sample_ok(len(pcts), len(broken)):
+                row["broken_median"] = _median(pcts)
+                row["big"] = sum(1 for p in pcts if p <= -5)
+        prem = [p for p in (_close_pct(c, prev, d) for c in sorted(prev_zt)) if p is not None]
+        if _tdx_sample_ok(len(prem), len(prev_zt)):
+            row["premium_median"] = _median(prem)
+        rows.append(row)
+    return rows
+
+
+def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                    money_hist: list[dict[str, Any]] | None = None) -> str:
     """晋级率 + 断板亏钱 + 隔日溢价（D-1 池 × D0；v4 停牌跳过续算）。
 
     停牌/不可验股既不进晋级也不进断板（分母同剔，文案披露）；断板亏钱带较昨日对比
     （2026-10-16 二级审计补供 relay_phase.divergence 判据）；分层顶层 cap=_LAYER_CAP。
+    v7 D3：断板中位/大面/隔日溢价各带近 20 日分位——此前钱效只有「较昨日」单对照点，
+    昨日恰为极差日（如 10-19 大面 17）会把今日衬成收敛；分位算法单源
+    jev_driver_ammo.percentile_fraction（样本 <10 返 None → 不输出，不伪刻度）。
+    `money_hist` 由叙事组装一次算齐传入（与锚段刻度共用，防双算）；缺省自算。
     """
     prev_dates = trading_dates_before(db, date, 1)
     if not prev_dates:
@@ -381,9 +444,26 @@ def relay_flow_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
         prem_txt = _sample_short_txt("隔日溢价样本", len(elig), len(prem))
     # 涨停家数口径对账（2026-10-16）：同花顺涨停池参照，差集=触板未封/新股，防两口径数字打架
     caliber = _zt_caliber_note(db, prev_date, dataset_id, set(base), prev_pool)
+    # 钱效近20日分位（v7 D3）：今日值 vs 严格早于当日的近 20 日序列（zero 前视）。
+    # 今日断板中位/大面须过 F4 样本门（cur_stats_ok）才参与，防 n=1 伪精度进分位。
+    if money_hist is None:
+        money_hist = _money_hist_series(db, date, dataset_id)
+    pct_items = []
+    if cur_stats_ok:
+        for label, cur, key in (("断板中位", cur_stats["median"], "broken_median"),
+                                ("大面", cur_stats["big"], "big")):
+            p = percentile_fraction([r.get(key) for r in money_hist], cur)
+            pct_items.append(f"{label} P{round(p * 100)}" if p is not None
+                             else f"{label} 分位不可算")
+    if prem and _tdx_sample_ok(len(prem), len(elig)):
+        p = percentile_fraction([r.get("premium_median") for r in money_hist], _median(prem))
+        pct_items.append(f"隔日溢价 P{round(p * 100)}" if p is not None else "隔日溢价 分位不可算")
+    pct_txt = (f" · 钱效近20日分位（{len(money_hist)} 日）：{' · '.join(pct_items)}"
+               if pct_items else "")
     return (f"晋级与断板：昨日 {len(base)} 只涨停（触板二分口径）{calib}{caliber} → "
             f"今日仍涨停 {len(promoted)} 只"
-            f"（晋级率 {rate_txt}）{skip_txt}[{layer_txt}] · {broken_txt} · {prev_broken_txt} · {prem_txt}")
+            f"（晋级率 {rate_txt}）{skip_txt}[{layer_txt}] · {broken_txt} · {prev_broken_txt} · {prem_txt}"
+            f"{pct_txt}")
 
 
 # ── 段 2a：三日晋级链 ───────────────────────────────────────────────────────
@@ -438,8 +518,12 @@ def ladder_structure_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
         src_txt = f"（梯队来源 {src}）"  # THS 回退日叙事披露来源（review M4）
     else:
         src_txt = ""
+    # v7 D6：昨日分层家数入语料——ladder fracture 判据「二板较昨日腰斩」自此可验
+    # （判据引用什么语料给什么；昨日梯队缺失 → 不输出，不伪 0）
+    prev_layer_txt = (f" · 昨日梯队：一板 {prev_one}/二板 {prev_two}/三板+ {prev_tp}"
+                      if prev_total else "")
     return (f"梯队结构量化：{first_txt} · 二板 {two} 只 · "
-            f"三板+ {three_plus} 只 · {ratio_txt}{src_txt}")
+            f"三板+ {three_plus} 只 · {ratio_txt}{src_txt}{prev_layer_txt}")
 
 
 def three_day_chain_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
@@ -612,6 +696,41 @@ def theme_evolution_line(db: Any, date: str, lookback: int = 5) -> str:
     hist_txt = f"\n近5日题材榜：{' ； '.join(history)}" if history else ""
     return (f"题材演化：今日 top3 [{' / '.join(rows)}]；与昨日 top3 重合 {overlap}/3；连续性：{streak_txt}"
             f"（{'主线延续' if overlap >= 2 else '轮动换线' if overlap == 1 else '全面换血'}）{hist_txt}")
+
+
+# ── 段 2b'：题材证据块（v7 D5，韭研产业树+投资日历确定性拼装）─────────────────
+
+
+def theme_evidence_lines(db: Any, date: str, top: int = 3) -> list[str]:
+    """top3 板块的题材证据块（L3 语料，确定性拼装、零模型调用）。
+
+    题材持续性与龙头强度判读自此有事件驱动证据（此前 relay 叙事只吃池结构数据，
+    韭研产业树/投资日历 2026-10-20 起采集但 relay 零消费）。未映射板块如实标注
+    「不代表无催化」，不做模糊猜测；语料未采集 → 单行 fail-visible 并计入
+    anchorGapsDerived（子项缺位）。逐板块渲染复用 theme_event_digest 单源（禁二次
+    实现），仅把 BLOCK_HEADER 与「取数日」行上提段头（top3 各重复一遍 = 烧 token）。
+    """
+    cur_b = _boards_of(db, date)
+    if not cur_b:
+        return ["题材证据：韭研 final 缺失（fail-visible）"]
+    state = corpus_state(db, date=date)
+    if not state.get("ok"):
+        return ["题材证据：语料未采集（fail-visible：无数据 ≠ 无催化，请勿据此判断催化有无）"]
+    stale_txt = (f"，语料最近采集日 {state.get('latestFetchDate')}，非当日"
+                 if state.get("stale") else "")
+    lines = [f"题材证据（韭研产业树+投资日历，top3 板块；取数日 {date}，"
+             f"语料 {state.get('timeline')} 条事件 / {state.get('industry')} 个产业节点"
+             f"{stale_txt}；确定性事实，非模型结论）："]
+    names = sorted(cur_b, key=lambda k: -len(cur_b[k]))[:top]
+    for name in names:
+        block = build_theme_evidence_block(db, board_name=name, date=date)
+        body = block["text"].splitlines()
+        if body and body[0].startswith(BLOCK_HEADER):
+            body = body[1:]
+            if body and body[0].startswith("取数日"):
+                body = body[1:]  # 已上提段头
+        lines.append(f"· {name}｜" + "\n  ".join(body))
+    return lines
 
 
 # ── 段 2c：高位股多日轨迹（v4，2026-10-16 预注册 §2.3）───────────────────────
@@ -913,6 +1032,34 @@ def _leader_genesis(db: Any, date: str, code: str, entry: dict[str, Any],
     return out
 
 
+def _mainline_sustain(db: Any, date: str, board_name: str,
+                      pool: dict[str, dict[str, Any]],
+                      boards_today: dict[str, list[dict[str, Any]]],
+                      streaks: dict[str, int | None],
+                      dataset_id: str) -> dict[str, Any] | None:
+    """主线板块的同桶基线桶键（封板口径；v7 D5 评审修复）。
+
+    与 SUSTAIN 表构建口径（theme_leader_baseline.day_leader_rows）逐项对齐：
+    家数=板块内真实封板股（触板池 − THS 炸板池）；龙一=rank_board_stocks 真连板
+    序（非区间 M 序）。THS 池缺失日二分不可用 → 按触板口径并打 `touchCaliber`
+    （调用方披露，不静默混口径）；板块无成员 → None（fail-visible，不猜桶）。
+    """
+    sealed, found = _sealed_codes(db, date, set(pool), dataset_id)
+    members = [s for s in boards_today.get(board_name) or []
+               if (str(s.get("code") or "")[-6:]) in sealed]
+    if not members:
+        return None
+    ranked = rank_board_stocks([
+        {"code": str(s.get("code") or "")[-6:], "name": s.get("name"),
+         "time": s.get("time"),
+         "streak": streaks.get(str(s.get("code") or "")[-6:])}
+        for s in members])
+    leader = ranked[0]
+    return {"code": leader["code"], "name": leader.get("name"),
+            "streak": leader.get("streak"), "time": leader.get("time"),
+            "boardN": len(members), "touchCaliber": not found}
+
+
 def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
     """板块接力链 + 龙头结构：v6 **唯一计算入口**（叙事渲染与文档落库共用，防三处漂移）。
 
@@ -1050,6 +1197,12 @@ def relay_structure(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) ->
             "d0MaxBoardText": (main_row.get("d0") or {}).get("maxBoardText"),
             "top3Streak": main_row.get("top3Streak") or 0,
             "dragon": main_row.get("dragon"),
+            # v7 D5 评审修复：同桶基线桶键（封板二分 + 真连板序，与 SUSTAIN 表构建口径
+            # 一致）。dragon/d0Count 是区间 M 序/触板池口径——炸板股会算进「板块家数」、
+            # M 序龙一的 streak/time 不必然是真连板龙一的，直接入桶 = 同桶不同桶。
+            # 龙序单源 rank_board_stocks（theme_leader_baseline 同款，禁第二套）。
+            "sustain": _mainline_sustain(db, date, main_row["name"], pool, boards[date],
+                                         streaks, dataset_id),
             "pseudoExcluded": pseudo_top,
             "chainOk": chain_ok,
         }
@@ -1201,6 +1354,34 @@ def sector_relay_lines(struct: dict[str, Any]) -> list[str]:
             + f"；总龙头在本板块：{in_main}")
     else:
         lines.append(f"主线板块：不可算（{'；'.join(struct.get('degraded') or []) or '无有效板块'}）")
+    # v7 D5：同桶隔日连板基线（结构基线零模型查表，单一事实源 theme_leader_baseline；
+    # 主线板块龙一的「高度×家数×封板时段」桶对应历史隔日连板率——任何题材判定必须
+    # 先超的基准。桶键取 mainline.sustain（封板二分+真连板序，与表同口径；评审修复
+    # 前误用 dragon/d0Count 触板池口径）；真连板不可算/板块无封板股 → 桶不可定位，
+    # 只给总体，不猜桶）
+    if main:
+        sus = main.get("sustain")
+        if sus:
+            bl = sustain_baseline_for(sus.get("streak"), sus.get("boardN"),
+                                      sus.get("time"))
+            calib = "（THS 池缺失，桶键按触板口径）" if sus.get("touchCaliber") else ""
+            if bl.get("bucketTxt"):
+                combo = bl.get("combo")
+                combo_txt = (f"同桶历史率 {combo[0]}%（{combo[1]} 样本）" if combo
+                             else f"同桶样本不足，按高度档 {bl['byStreak'][0]}%"
+                             f"（{bl['byStreak'][1]} 样本）")
+                lines.append(f"同桶隔日连板基线（主线板块龙一（封板口径）"
+                             f"{sus.get('name') or sus.get('code')}："
+                             f"{bl['bucketTxt']}{calib}）：{combo_txt}｜总体 {bl['overall'][0]}%"
+                             f"（{bl['overall'][1]} 样本，窗口 {bl['window']}；"
+                             f"结构基线零模型，题材证据见题材段）")
+            else:
+                lines.append(f"同桶隔日连板基线：桶不可定位（真连板不可算）｜总体 {bl['overall'][0]}%"
+                             f"（{bl['overall'][1]} 样本，窗口 {bl['window']}；结构基线零模型）")
+        else:
+            lines.append(f"同桶隔日连板基线：桶不可定位（主线板块无封板股）｜"
+                         f"总体 {SUSTAIN_OVERALL[0]}%（{SUSTAIN_OVERALL[1]} 样本，"
+                         f"窗口 {SUSTAIN_WINDOW}；结构基线零模型）")
     return lines
 
 
@@ -1278,8 +1459,13 @@ def leader_structure_lines(struct: dict[str, Any]) -> list[str]:
 
 def relay_trajectory_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                           n: int = 10) -> str:
-    """家数/最高板/晋级率逐日 + 涨停摆动锚（swing_summary_line 复用）。"""
-    hist = trading_dates_before(db, date, n, dataset_id=dataset_id)
+    """家数/最高板/晋级率逐日 + 涨停摆动锚（swing_summary_line 复用）。
+
+    v7 D6：段名对齐判据引用名【近10日连板轨迹】——「近 n 日」= 今日+近 n-1 日
+    （与高位股多日轨迹段「近10个交易日」同规；旧实现 10 前+今日=11 行、段名写
+    「近11日」与题干字面检索对不上）。摆动锚窗口同步（swing n-1 → 含今日 n 日）。
+    """
+    hist = trading_dates_before(db, date, n - 1, dataset_id=dataset_id)
     axis = hist + [date]
     rows = []
     degrade = False
@@ -1299,8 +1485,9 @@ def relay_trajectory_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_
         mb = m.get("maxBoard") if isinstance(m.get("maxBoard"), (int, float)) else "?"
         rows.append(f"{d[5:]}|涨停{zt}|最高{mb}板|晋级{promo}")
     calib = "（THS炸板池缺失日晋级按触板口径）" if degrade else ""
-    return (f"近{len(rows)}日连板轨迹（日期|涨停|最高板|晋级率）：{' ； '.join(rows)}{calib}\n"
-            + swing_summary_line(db, date, n, dataset_id=dataset_id))
+    return (f"近{len(rows)}日连板轨迹（含今日；日期|涨停|最高板|晋级率）："
+            f"{' ； '.join(rows)}{calib}\n"
+            + swing_summary_line(db, date, n - 1, dataset_id=dataset_id))
 
 
 # ── 段 5.5：今日炸板面（2026-10-11 预登记 StepB）─────────────────────────────
@@ -1578,41 +1765,99 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             f"反复开板代表：{rep_txt or '无'}；{dist_txt}；{cmp_txt}；{rush_txt}；{rotten_txt}")
 
 
-# ── 段 6：热榜叙事参照段 ────────────────────────────────────────────────────
+# ── 段 0b：大盘指数行（v7 D2）───────────────────────────────────────────────
+
+# 顶层 4 指数（frame.indices 浏览器原键位）+ indexExtra 三指数（v7 D2a 采集层新增）
+_INDEX_MAIN_DISPLAY = (("sh", "上证"), ("hs300", "沪深300"),
+                       ("zz500", "中证500"), ("zz1000", "中证1000"))
+_INDEX_EXTRA_DISPLAY = (("szcz", "深证成指"), ("cybz", "创业板指"), ("kc50", "科创50"))
 
 
-def narrative_context_lines(db: Any, date: str) -> list[str]:
-    """今日 slot 叙事轨迹 + 近5日 EOD 叙事 + 近20日极值锚（防锚定：显式标注参照）。"""
-    lines = ["【周期定位参照，非今日证据——防锚定段，打分锚以客观事实+分位为准】"]
-    slots = sorted(db["hotlist_jev_sentiment"].find(
-        {"tradingDate": date, "kind": "slot", "status": "ok"},
-        {"slotTime": 1, "answers": 1, "scores": 1}), key=lambda s: str(s.get("slotTime") or ""))
-    if slots:
-        seg = []
-        for s in slots:
-            a = s.get("answers") or {}
-            stage = (a.get("frame_stage") or {}).get("choice") or "?"
-            temp = (a.get("temperature") or {}).get("score")
-            crowd = (a.get("crowding") or {}).get("choice") or "?"
-            seg.append(f"{s.get('slotTime')} {stage}(t{temp if temp is not None else '?'}·{crowd})")
-        lines.append(f"今日热榜叙事轨迹（{len(seg)}槽）：{' → '.join(seg)}")
-    else:
-        lines.append("今日热榜叙事轨迹：无 ok 槽文档（fail-visible）")
-    eods = sorted(db["hotlist_jev_sentiment"].find(
-        {"tradingDate": {"$lt": date}, "kind": "eod", "status": "ok"},
-        {"tradingDate": 1, "answers": 1, "scores": 1}),
-        key=lambda e: str(e.get("tradingDate") or ""), reverse=True)[:5]
-    if eods:
-        seg = []
-        for e in reversed(eods):
-            a = e.get("answers") or {}
-            stage = (a.get("day_stage") or {}).get("choice") or "?"
-            pattern = (a.get("day_pattern") or {}).get("choice") or "?"
-            temp = (e.get("scores") or {}).get("day_temperature")
-            seg.append(f"{e.get('tradingDate')[5:]} {stage}(T{round(temp) if temp is not None else '?'}/{pattern})")
-        lines.append(f"近{len(seg)}日 EOD 叙事：{' → '.join(seg)}")
-    else:
-        lines.append("近5日 EOD 叙事：无（fail-visible）")
+def market_index_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+    """大盘指数行（7 指数收盘涨跌，15:00 帧客观事实）。
+
+    v7 D2 前的空白支票：zhaban 归因判据写「大盘拖累…叙事若给大盘时段参照」、
+    relay_index 写「与大盘热度不必同幅」——relay 叙事从未有过任何指数行，两处判据
+    引用自上线起悬空。本行补位（① broad_market 归因语料供给；② 接力 vs 大盘的
+    对照锚；③ 深成/创业板指对深市与 20cm 情绪敏感股的板块偏向坐标）。
+    changePct 优先；缺失降级点位口径并显式标注（不拿点位冒充百分比）。
+    历史帧无 indexExtra（2026-10-20 前采集）→ 4 指数 + 「该日未采集」注（fail-visible）。
+    """
+    f = db["snapshot_frames"].find_one(
+        {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"},
+        {"indices": 1}, sort=[("timestamp", -1), ("snapshotId", -1)])
+    idx = (f or {}).get("indices")
+    if not isinstance(idx, dict) or not idx:
+        return "大盘指数：不可算（15:00 帧缺失/indices 空，fail-visible）"
+    extra = idx.get("indexExtra")
+    extra = extra if isinstance(extra, dict) else {}
+
+    def _one(name: str, entry: Any) -> str:
+        if not isinstance(entry, dict):
+            return f"{name} 缺失"
+        pct = entry.get("changePct")
+        if isinstance(pct, (int, float)) and not isinstance(pct, bool):
+            return f"{name} {pct:+.2f}%"
+        ch = entry.get("change")
+        if isinstance(ch, (int, float)) and not isinstance(ch, bool):
+            return f"{name} {ch:+.2f}点（点位口径）"
+        return f"{name} 缺失"
+
+    parts = ([_one(name, idx.get(key)) for key, name in _INDEX_MAIN_DISPLAY]
+             + [_one(name, extra.get(key)) for key, name in _INDEX_EXTRA_DISPLAY])
+    note = "" if extra else "（深证成指/创业板指/科创50 该日未采集）"
+    return f"大盘指数：{' · '.join(parts)}{note}"
+
+
+# ── 段 6：近20日参照锚（v7 D1 瘦身 + D4 分位刻度）──────────────────────────
+
+
+def _quantile(vals: list, q: float):
+    """近邻秩分位数（P20/P50/P80 刻度用）——percentile_fraction 的逆形状（值→秩）。
+    样本 <10 返 None（与 percentile_fraction 同门槛，fail-visible 不伪刻度）。"""
+    vs = sorted(v for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool))
+    if len(vs) < 10:
+        return None
+    return vs[min(len(vs) - 1, int(round(q * (len(vs) - 1))))]
+
+
+def _percentile_scale_line(money_hist: list[dict[str, Any]]) -> str:
+    """D4：锚段分位刻度行——晋级率/炸板家数/断板中位/隔日溢价的 P20/P50/P80。
+
+    样本=严格早于当日的近 20 个交易日（与今日炸板面分位同窗规，零未来函数）；
+    各轴独立披露有效样本数（TDX 覆盖不足日不入样本，不补 0）。
+    """
+    if not money_hist:
+        return "近20日分位刻度：不可算（无历史样本，fail-visible）"
+    total = len(money_hist)
+    axes = (("晋级率", "promo", False), ("炸板家数", "zhaban", False),
+            ("断板中位", "broken_median", True), ("隔日溢价", "premium_median", True))
+    parts = []
+    for label, key, signed in axes:
+        vals = [r.get(key) for r in money_hist]
+        valid = [v for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        q20, q50, q80 = (_quantile(vals, q) for q in (0.2, 0.5, 0.8))
+        if q20 is None:
+            parts.append(f"{label} 不可算（有效 {len(valid)}/{total} 日）")
+            continue
+        fmt = (lambda v: f"{v:+.1f}%") if signed else (lambda v: f"{round(v)}")
+        parts.append(f"{label} P20/P50/P80={fmt(q20)}/{fmt(q50)}/{fmt(q80)}"
+                     f"（有效 {len(valid)}/{total} 日）")
+    return ("近20日分位刻度（样本=严格早于当日的近20个交易日，打分参照带）："
+            + " · ".join(parts))
+
+
+def anchor_lines(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                 money_hist: list[dict[str, Any]] | None = None) -> list[str]:
+    """近20日参照锚（客观事实，打分坐标系）。
+
+    v7 D1：删「今日热榜叙事轨迹」「近5日 EOD 叙事」两行——全叙事 13 段中唯一的
+    「另一模型结论」混入点（七题判据零引用，grep 实证；热榜 ferment t5.6 与接力
+    客观证据反向时即误判温床）。防锚定提示随之简化：本段已全是客观事实。
+    保留近20日极值锚（relay_index/phase/ladder 三题显式引用的坐标系）。
+    v7 D4：补分位刻度行（`money_hist` 由叙事组装一次算齐传入，缺省自算）。
+    """
+    lines = ["【近20日参照锚（客观事实，打分坐标系；非模型结论）】"]
     # 近20日极值锚（涨停家数/最高板）；market_metrics None（帧缺失日）跳过——数据不足由下方分支兜底。
     # 含今日：trading_dates_before 严格早于 date，今日创新高时锚会显示旧峰值，与事实行
     # 「最高 11 板（100 分位）」自相矛盾（2026-10-16 600825 停牌复牌实证）。
@@ -1634,6 +1879,8 @@ def narrative_context_lines(db: Any, date: str) -> list[str]:
                      f"（{z_low[0][5:]}）{board_anchor}")
     else:
         lines.append("近20日锚：历史数据不足（fail-visible）")
+    lines.append(_percentile_scale_line(
+        money_hist if money_hist is not None else _money_hist_series(db, date, dataset_id)))
     return lines
 
 
@@ -1653,16 +1900,21 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     # v6：板块/龙头结构先算一次（单一事实源）——叙事渲染与文档落库共用同一 struct，
     # 防「叙事说 A、前端说 B」三处漂移（预注册 §二/§十）。
     struct = struct if struct is not None else relay_structure(db, date, dataset_id)
+    # v7 D3/D4：钱效/晋级 20 日历史序列一次算齐（钱效分位行与锚段刻度行共用，防双算）
+    money_hist = _money_hist_series(db, date, dataset_id)
     lines: list[str] = [f"{date} 交易日 · 连板情绪指数判定（叙事）"]
-    # 段1 总账（market_facts_line 已含双源梯队/分位）+ 今日炸板面（2026-10-11 StepB）
+    # 段1 总账（market_facts_line 已含双源梯队/分位）+ 大盘指数（v7 D2）+ 今日炸板面（2026-10-11 StepB）
     lines.append(market_facts_line(db, date, dataset_id))
+    lines.append(market_index_line(db, date, dataset_id))
     lines.append(zhaban_face_line(db, date, dataset_id))
-    lines.append(relay_flow_line(db, date, dataset_id))
+    lines.append(relay_flow_line(db, date, dataset_id, money_hist=money_hist))
     lines.append(ladder_structure_line(db, date))
     # 段2 记忆
     lines.append(three_day_chain_line(db, date, dataset_id))
     lines.append(theme_evolution_line(db, date))
-    # 段2a' 板块接力链（v6，2026-10-19）：三日链的板块归属 + 主线板块结论
+    # 段2b' 题材证据块（v7 D5）：韭研产业树+投资日历确定性拼装，top3 板块
+    lines.extend(theme_evidence_lines(db, date))
+    # 段2a' 板块接力链（v6，2026-10-19）：三日链的板块归属 + 主线板块结论 + 同桶基线（v7 D5）
     lines.extend(sector_relay_lines(struct))
     # 段2c 高位股多日轨迹（v4，2026-10-16 预注册 §2.3；有帽，非打分依据）
     lines.extend(high_position_trajectory_lines(db, date, dataset_id))
@@ -1675,8 +1927,8 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
                                      total_leader=struct.get("totalLeader")))
     # 段5 轨迹
     lines.append(relay_trajectory_line(db, date, dataset_id))
-    # 段6 叙事参照
-    lines.extend(narrative_context_lines(db, date))
+    # 段6 近20日参照锚（v7 D1 删热榜叙事两行；D4 扩分位刻度）
+    lines.extend(anchor_lines(db, date, dataset_id, money_hist=money_hist))
     return "\n".join(lines)
 
 

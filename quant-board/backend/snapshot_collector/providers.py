@@ -2270,6 +2270,16 @@ _INDEX_ALIASES = {
     "sh000905": "zz500",
     "sh000852": "zz1000",
 }
+# v7 D2a（2026-10-20 预注册 jev-relay-v7 §3 D2）：relay 叙事增补的三指数落
+# `indices.indexExtra` 嵌套子键（与 totalAmount 同款嵌套位，值不带顶层 change 键 →
+# rotation `_market_change` 免疫，RankTrend golden 零漂移；免疫性由
+# test_index_extra_immune_to_rotation_market_change 回归锁定）。行情桥
+# DEFAULT_INDEX_CODES 一直在采这三只，此前 _INDEX_ALIASES 只写 4 键进帧（采了被丢）。
+_INDEX_EXTRA_ALIASES = {
+    "sz399001": "szcz",   # 深证成指
+    "sz399006": "cybz",   # 创业板指
+    "sh000688": "kc50",   # 科创50
+}
 
 
 def build_server_indices(overview: dict[str, Any]) -> dict[str, Any]:
@@ -2283,25 +2293,34 @@ def build_server_indices(overview: dict[str, Any]) -> dict[str, Any]:
     此前只落点位，消费端按 % 呈现即伪造暴跌（实证：帧值 -60.75 点被渲染成「上证 -60.75%」，
     10-12 两只 zhaban label 因此误判 broad_market）。rotation 引擎只取 change 键，
     新增键对其免疫；changePct 缺失（上游未给）时只落点位，由消费端诚实降级。
+    2026-10-20 增补 indexExtra（v7 D2a）：深证成指/创业板指/科创50 落嵌套子键
+    `indices.indexExtra`（szcz/cybz/kc50，changePct 伴生同上规）；**顶层 4 键位零变动**，
+    历史帧无 indexExtra 由消费端 fail-visible 降级（不补 0）。
     """
     items = overview.get("items") if isinstance(overview, dict) else []
     out: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     market_amounts: list[float] = []
     for item in items if isinstance(items, list) else []:
         if not isinstance(item, dict):
             continue
         code = str(item.get("code") or "")
-        alias = _INDEX_ALIASES.get(code)
         change = item.get("change")
         pct = item.get("changePct")
+        alias = _INDEX_ALIASES.get(code) or _INDEX_EXTRA_ALIASES.get(code)
         if alias and isinstance(change, (int, float)) and not isinstance(change, bool):
             entry: dict[str, Any] = {"change": change}
             if isinstance(pct, (int, float)) and not isinstance(pct, bool):
                 entry["changePct"] = pct
-            out[alias] = entry
+            if code in _INDEX_EXTRA_ALIASES:
+                extra[_INDEX_EXTRA_ALIASES[code]] = entry
+            else:
+                out[alias] = entry
         if code in ("sh000001", "sz399001") and isinstance(item.get("amount"), (int, float)) \
                 and not isinstance(item.get("amount"), bool):
             market_amounts.append(float(item["amount"]))
+    if extra:
+        out["indexExtra"] = extra
     if len(market_amounts) == 2:
         # 两市都可得才写（避免单市场半口径伪装全口径）
         out["totalAmount"] = {"amount": sum(market_amounts)}

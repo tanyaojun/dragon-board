@@ -54,6 +54,10 @@ class FakeCol:
                             return False
                         if op == "$lt" and not (r.get(k) is not None and r.get(k) < ov):
                             return False
+                        if op == "$gte" and not (r.get(k) is not None and r.get(k) >= ov):
+                            return False
+                        if op == "$lte" and not (r.get(k) is not None and r.get(k) <= ov):
+                            return False
                         if op == "$regex" and ov not in str(r.get(k) or ""):
                             return False
                 elif r.get(k) != v:
@@ -64,6 +68,10 @@ class FakeCol:
     def find_one(self, query=None, projection=None, sort=None):
         found = self.find(query)
         return found[0] if found else None
+
+    def count_documents(self, query=None):
+        # v7：题材证据块 corpus_state 消费（jiuyan_timeline/jiuyan_ai_industry 计数）
+        return len(self.find(query or {}))
 
     def replace_one(self, q, doc, upsert=False):
         self.updates.append((q, doc))
@@ -165,7 +173,7 @@ def test_narrative_context_anchor_includes_today():
                           "num": "11天11板" if d == today else "10天10板"}]) for d in dates]
     db = FakeDb({"snapshot_frames": _frames(dates),
                  "jiuyan_action": FakeCol(finals)})
-    lines = relay.narrative_context_lines(db, today)
+    lines = relay.anchor_lines(db, today)
     anchor = next(l for l in lines if l.startswith("近20日锚"))
     # 今日 11 板必须是锚内峰值（旧口径会报前一日 10 板）
     assert f"最高板峰值 11 板（{today[5:]}）" in anchor
@@ -511,7 +519,7 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v6"
+    assert doc["questionSetVersion"] == "v7"
     # v6：板块/龙头结构随文档落库（前端同源读取，无需二次计算）
     assert isinstance(doc.get("relayStructure"), dict)
     assert doc["relayStructure"]["mainline"] is not None
@@ -677,7 +685,7 @@ def test_narrative_context_anchor_maxboard_uncomputable():
     dates = dates[:20]
     db = FakeDb({"snapshot_frames": _frames(dates, ths_missing=set(dates)),
                  "jiuyan_action": FakeCol([_final(dates[-1], _STOCKS[_D0])])})
-    lines = relay.narrative_context_lines(db, dates[-1])
+    lines = relay.anchor_lines(db, dates[-1])
     assert any("最高板峰值 不可算（窗口内无真连板高度，fail-visible）" in x for x in lines)
     assert any("涨停峰值" in x for x in lines)
 
@@ -1119,8 +1127,9 @@ def test_relay_structure_mainline_by_three_day_survivors():
     counts = {s["name"]: s["d0"]["count"] for s in struct["sectors"]}
     assert counts["乙板块"] > counts["甲板块"]
     assert struct["sectors"][0]["name"] == "甲板块"
-    line = relay.sector_relay_lines(struct)[-1]
-    assert line.startswith("主线板块：甲板块") and "总龙头在本板块：是" in line
+    main_line = next(x for x in relay.sector_relay_lines(struct)
+                     if x.startswith("主线板块："))
+    assert main_line.startswith("主线板块：甲板块") and "总龙头在本板块：是" in main_line
 
 
 def test_relay_structure_mainline_degrades_when_no_survivor():
@@ -1139,7 +1148,8 @@ def test_relay_structure_mainline_degrades_when_no_survivor():
     struct = relay.relay_structure(db, _D0)
     assert struct["mainline"]["name"] == "乙板块"
     assert struct["mainline"]["basis"] == "d0_count"
-    assert "今日板块涨停家数" in relay.sector_relay_lines(struct)[-1]
+    assert any("今日板块涨停家数" in x and x.startswith("主线板块：")
+               for x in relay.sector_relay_lines(struct))
 
 
 def test_relay_structure_missing_history_is_fail_visible():
@@ -1163,7 +1173,8 @@ def test_relay_structure_missing_history_is_fail_visible():
     assert "0只" not in row and "0 只" not in row
     # 依据文案不得声称「均为零」（那是把缺料读成事实）
     assert "chain_na" == struct["mainline"]["basis"]
-    assert "三日链不可算" in lines[-1] and "均为真零" not in lines[-1]
+    main_line = next(x for x in lines if x.startswith("主线板块："))
+    assert "三日链不可算" in main_line and "均为真零" not in main_line
     assert struct["mainline"]["survivors"] is None
     assert anchor_gaps_derived("\n".join(lines)) == ["板块接力链"]
 
@@ -1186,7 +1197,8 @@ def test_relay_structure_mainline_degrades_when_chain_ok_and_truly_zero():
     assert struct["mainline"]["basis"] == "d0_count"
     row = next(x for x in relay.sector_relay_lines(struct) if x.startswith("· 甲板块"))
     assert "三日存活 0 只" in row and "今日晋级 0 只" in row
-    assert "均为真零" in relay.sector_relay_lines(struct)[-1]
+    assert any("均为真零" in x and x.startswith("主线板块：")
+               for x in relay.sector_relay_lines(struct))
 
 
 def test_relay_structure_leader_same_stock():
@@ -1532,5 +1544,299 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     assert f"主线板块：{struct['mainline']['name']}" in narrative
     assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
     assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
-    assert doc["questionSetVersion"] == "v6"
+    assert doc["questionSetVersion"] == "v7"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v7（2026-10-20）全语料盘点 + 瘦身增益
+# 预注册：docs/hotlist-jev/jev-relay-v7-preregistration.md
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _frame_indices(date, indices):
+    """15:00 帧夹具（v7 D2：带 indices/indexExtra）。"""
+    return {"datasetId": "dragonboard_live", "type": "half_hour", "tradingDate": date,
+            "slotTime": "15:00", "snapshotId": f"h:{date}", "timestamp": 2,
+            "limitSummary": {"zhaban": {"ztCount": 50, "count": 0, "rate": 0.0}},
+            "indices": indices}
+
+
+def test_market_index_line_seven_indices():
+    """D2：大盘指数行 7 指数全渲染（changePct 口径，zhaban broad_market/relay_index 对照锚）。"""
+    idx = {"sh": {"change": -12.3, "changePct": -0.35},
+           "hs300": {"change": -8.1, "changePct": -0.21},
+           "zz500": {"change": -12.9, "changePct": -0.27},
+           "zz1000": {"change": -10.5, "changePct": -0.15},
+           "indexExtra": {"szcz": {"change": -40.2, "changePct": -0.38},
+                          "cybz": {"change": -88.9, "changePct": -1.56},
+                          "kc50": {"change": 6.7, "changePct": 0.07}}}
+    db = FakeDb({"snapshot_frames": FakeCol([_frame_indices(_D0, idx)])})
+    line = relay.market_index_line(db, _D0)
+    assert line.startswith("大盘指数：")
+    for frag in ("上证 -0.35%", "深证成指 -0.38%", "沪深300 -0.21%", "中证500 -0.27%",
+                 "中证1000 -0.15%", "创业板指 -1.56%", "科创50 +0.07%"):
+        assert frag in line, frag
+    assert "未采集" not in line and "点位口径" not in line and "不可算" not in line
+
+
+def test_market_index_line_old_frame_degrades_to_four():
+    """D2 fail-visible：历史帧无 indexExtra → 4 指数 + 「该日未采集」注（不补 0）。"""
+    idx = {"sh": {"change": -12.3, "changePct": -0.35},
+           "hs300": {"change": -8.1, "changePct": -0.21}}
+    db = FakeDb({"snapshot_frames": FakeCol([_frame_indices(_D0, idx)])})
+    line = relay.market_index_line(db, _D0)
+    assert "上证 -0.35%" in line and "沪深300 -0.21%" in line
+    assert "深证成指/创业板指/科创50 该日未采集" in line
+    assert "-0.38%" not in line and "-1.56%" not in line
+
+
+def test_market_index_line_point_only_degrades():
+    """D2：changePct 缺失 → 点位口径显式标注（不拿点位冒充百分比，10-12 教训）。"""
+    idx = {"sh": {"change": -12.3},
+           "indexExtra": {"szcz": {"change": -40.2}}}
+    db = FakeDb({"snapshot_frames": FakeCol([_frame_indices(_D0, idx)])})
+    line = relay.market_index_line(db, _D0)
+    assert "上证 -12.30点（点位口径）" in line and "深证成指 -40.20点（点位口径）" in line
+    assert "% ｜" not in line
+
+
+def test_market_index_line_missing_frame_fail_visible():
+    db = FakeDb({"snapshot_frames": FakeCol([])})
+    line = relay.market_index_line(db, _D0)
+    assert line.startswith("大盘指数：不可算")
+
+
+def test_anchor_lines_drop_sentiment_keep_objective_anchor():
+    """D1：删热榜 slot/EOD 叙事两行（全叙事唯一「另一模型结论」混入点，七题判据零引用），
+    保留近20日锚（relay_index/phase/ladder 坐标系）。"""
+    db = _db()
+    db.cols["hotlist_jev_sentiment"] = FakeCol([
+        {"tradingDate": _D0, "kind": "slot", "status": "ok", "slotTime": "15:00",
+         "answers": {"frame_stage": {"choice": "ferment"},
+                     "temperature": {"score": 5.6},
+                     "crowding": {"choice": "breadth_climax"}}},
+        {"tradingDate": _D1, "kind": "eod", "status": "ok",
+         "answers": {"day_stage": {"choice": "climax"}, "day_pattern": {"choice": "wide_swing"}},
+         "scores": {"day_temperature": 68.0}},
+    ])
+    lines = relay.anchor_lines(db, _D0)
+    text = "\n".join(lines)
+    assert "热榜叙事轨迹" not in text and "EOD 叙事" not in text
+    assert "ferment" not in text and "climax" not in text
+    assert any(l.startswith("【近20日参照锚") for l in lines)
+    assert any(l.startswith("近20日锚") for l in lines)
+
+
+def test_anchor_lines_percentile_scale():
+    """D4：锚段补分位刻度（晋级率/炸板/断板中位/溢价的 P20/P50/P80），
+    relay_index「参照带中高位」自此有刻度（对齐温度题锚定法）。"""
+    hist = [{"date": f"2026-09-{d:02d}", "promo": 10.0 + d % 5, "zhaban": 15 + d % 7,
+             "broken_median": -1.0 - (d % 3), "premium_median": -0.2 + (d % 5) * 0.1}
+            for d in range(1, 21)]
+    lines = relay.anchor_lines(_db(), _D0, money_hist=hist)
+    scale = next(l for l in lines if "分位刻度" in l)
+    for axis in ("晋级率", "炸板家数", "断板中位", "隔日溢价"):
+        assert axis in scale, axis
+    assert "P20" in scale and "P50" in scale and "P80" in scale
+    assert "有效 20/20" in scale
+
+
+def test_anchor_lines_percentile_insufficient_fail_visible():
+    """D4 fail-visible：历史样本 <10 → 刻度行写不可算（percentile_fraction 门槛），不补 0。"""
+    hist = [{"date": f"2026-09-{d:02d}", "promo": 10.0 + d, "zhaban": 15 + d,
+             "broken_median": -1.0, "premium_median": 0.1} for d in range(1, 6)]
+    lines = relay.anchor_lines(_db(), _D0, money_hist=hist)
+    scale = next(l for l in lines if "分位刻度" in l)
+    assert "不可算" in scale and "有效 5/5" in scale
+    assert "P20" not in scale
+
+
+def test_relay_flow_line_money_percentile(monkeypatch):
+    """D3：断板中位/大面/隔日溢价各带近 20 日分位（此前钱效只有昨日一个对照点）。"""
+    bars = {
+        "600004": [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}],    # 今日断板 -10%
+        "600001": [{"date": _D1, "close": 20.0}, {"date": _D0, "close": 20.4}],   # 晋级 +2%
+        "600002": [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}],
+        "600003": [{"date": _D2, "close": 20.0}, {"date": _D1, "close": 20.2}],
+    }
+    today_fillers = [{"code": f"6010{i}", "name": f"TF{i}", "num": "2天2板"} for i in range(1, 5)]
+    yest_fillers = [{"code": f"6011{i}", "name": f"YF{i}", "num": "2天2板"} for i in range(1, 4)]
+    for s in today_fillers:
+        bars[s["code"]] = [{"date": _D1, "close": 10.0}, {"date": _D0, "close": 9.0}]
+    for s in yest_fillers:
+        bars[s["code"]] = [{"date": _D2, "close": 10.0}, {"date": _D1, "close": 9.5}]
+    monkeypatch.setattr(relay, "_daily_bars", lambda code: bars.get(code, []))
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0], failed_by_date={_D1: [], _D0: []}),
+        "jiuyan_action": FakeCol([_final(_D2, _STOCKS[_D2] + yest_fillers),
+                                  _final(_D1, _STOCKS[_D1] + today_fillers),
+                                  _final(_D0, _STOCKS[_D0])]),
+    })
+    hist = [{"date": f"2026-09-{d:02d}", "promo": 10.0 + d, "zhaban": 15 + d,
+             "broken_median": -1.0 - (d % 3) * 0.5, "big": 1 + d % 4,
+             "premium_median": -0.2 + (d % 5) * 0.1} for d in range(1, 21)]
+    line = relay_flow_line(db, _D0, money_hist=hist)
+    assert "钱效近20日分位（20 日）" in line
+    assert "断板中位 P" in line and "大面 P" in line and "隔日溢价 P" in line
+
+
+def test_relay_flow_line_money_percentile_skipped_when_hist_short():
+    """D3 fail-visible：历史 <10 日 → 不输出分位（不伪刻度），叙事其余部分不受影响。"""
+    hist = [{"date": f"2026-09-{d:02d}", "promo": 10.0, "zhaban": 15,
+             "broken_median": -1.0, "premium_median": 0.1} for d in range(1, 4)]
+    line = relay_flow_line(_db(), _D0, money_hist=hist)
+    assert "钱效近20日分位" not in line
+
+
+def test_ladder_structure_prev_layers():
+    """D6：昨日梯队分层家数入语料——ladder fracture「二板较昨日腰斩」判据自此可验。"""
+    line = ladder_structure_line(_db(), _D0)
+    assert "昨日梯队：一板 1/二板 0/三板+ 1" in line
+
+
+def test_relay_trajectory_title_and_swing_aligned():
+    """D6：段名对齐判据引用名【近10日连板轨迹】——近10日=今日+近9日（与高位轨迹段
+    「近10个交易日」同规）；摆动锚窗口同步 10 日。"""
+    dates = [f"2026-09-{d:02d}" for d in range(11, 21)] + ["2026-09-30"]
+    finals = [_final(d, _STOCKS[_D0]) for d in dates]
+    db = FakeDb({"snapshot_frames": _frames(dates), "jiuyan_action": FakeCol(finals)})
+    line = relay.relay_trajectory_line(db, dates[-1])
+    assert line.startswith("近10日连板轨迹（含今日")
+    assert "近11日连板轨迹" not in line
+    assert "近10个交易日涨停峰值" in line
+
+
+def test_theme_evidence_lines_top3_boards():
+    """D5：题材证据块（韭研产业树+投资日历确定性拼装，top3 板块）注入题材段；
+    未映射板块如实标注，不做模糊猜测。"""
+    boards = {"机器人": [{"code": "600001", "name": "A", "num": "4天4板", "time": "09:25"}],
+              "低空经济": [{"code": "600002", "name": "B", "num": "3天3板", "time": "09:44"}],
+              "公告": [{"code": "600003", "name": "C"}]}
+    db = FakeDb({
+        "jiuyan_action": FakeCol([_final_multi(_D0, boards)]),
+        "jiuyan_timeline": FakeCol([
+            {"_id": "t1", "date": "2026-10-01", "title": "英伟达GTC大会",
+             "content": "黄仁勋发表主题演讲，发布物理AI机器人平台",
+             "grade": 5, "themes": ["机器人"], "firstSeenDate": "2026-09-29",
+             "lastFetchDate": "2026-09-30"},
+        ]),
+        "jiuyan_ai_industry": FakeCol([
+            {"_id": "i1", "code": "n1", "name": "机器人", "level": 2,
+             "content": "2026年9月25日，特斯拉已将Optimus人形机器人产量扩大到约10倍",
+             "hot": 19.11, "contentChangedDate": "2026-09-30",
+             "lastFetchDate": "2026-09-30"},
+        ]),
+    })
+    lines = relay.theme_evidence_lines(db, _D0)
+    text = "\n".join(lines)
+    assert "题材证据（韭研产业树+投资日历" in lines[0] and "top3" in lines[0]
+    assert "取数日 2026-09-30" in lines[0]
+    assert "板块级催化原文（韭研产业树「机器人」" in text
+    assert "未来 3 日既定事件" in text and "英伟达GTC大会" in text
+    # 公告=粗分桶（NOT_A_THEME）→ 未映射如实标注
+    assert "未映射" in text and "不代表无催化" in text
+
+
+def test_theme_evidence_lines_corpus_missing_fail_visible():
+    """D5 fail-visible：题材语料未采集（2026-10-20 起才有）→ 显式标注，并计入
+    anchorGapsDerived（子项缺位，不抬主锚徽标）。"""
+    db = FakeDb({"jiuyan_action": FakeCol(
+        [_final_multi(_D0, {"机器人": [{"code": "600001", "name": "A"}]})])})
+    lines = relay.theme_evidence_lines(db, _D0)
+    assert len(lines) == 1
+    assert "语料未采集" in lines[0] and "无催化" in lines[0]
+    assert anchor_gaps_derived("\n".join(lines)) == ["题材证据"]
+
+
+def test_sector_lines_sustain_baseline():
+    """D5：板块接力链段尾增同桶隔日连板基线行（结构基线单一事实源
+    theme_leader_baseline；主线甲板块龙一甲A=4板/2家/早封 → 组合桶 62.5%）。"""
+    struct = relay.relay_structure(_sector_db(), _D0)
+    lines = relay.sector_relay_lines(struct)
+    line = next(l for l in lines if "同桶隔日连板基线" in l)
+    assert "甲A" in line and "62.5%（8 样本）" in line
+    assert "总体 34.3%（341 样本" in line
+    assert "2026-08-01~10-19" in line
+
+
+def test_sector_lines_sustain_baseline_streak_unknown():
+    """D5 fail-visible：主线龙一真连板不可算 → 桶不可定位，只给总体基线，不猜桶。"""
+    struct = relay.relay_structure(_sector_db(), _D0)
+    struct["mainline"]["sustain"]["streak"] = None
+    lines = relay.sector_relay_lines(struct)
+    line = next(l for l in lines if "同桶隔日连板基线" in l)
+    assert "桶不可定位（真连板不可算）" in line and "总体 34.3%" in line
+    assert "62.5%" not in line
+
+
+def test_sector_lines_sustain_baseline_caliber_sealed_and_streak():
+    """D5 评审修复：同桶基线桶键与 SUSTAIN 表同口径（封板二分 + 真连板序）。
+
+    旧实现拿 struct 的 dragon（区间 M 序）+ d0Count（触板池全量）入桶：
+    炸板股被算进「板块家数」、M 序龙一的 streak/time 冒充真连板龙一——桶键错口径
+    = 同桶不同桶。修复后：炸板股不入家数、龙一取真连板最高（rank_board_stocks
+    单源），THS 池缺失日按触板口径并披露。
+    """
+    boards = {
+        _D2: {"甲板块": [{"code": "600502", "name": "龙Y", "num": "1天1板", "time": "09:40"}]},
+        _D1: {"甲板块": [{"code": "600502", "name": "龙Y", "num": "2天2板", "time": "09:40"}]},
+        _D0: {"甲板块": [
+            # 妖股X：M 序第一（14天10板）但今日炸板（进 failed 池，不封板）
+            {"code": "600501", "name": "妖X", "num": "14天10板", "time": "09:35"},
+            {"code": "600502", "name": "龙Y", "num": "3天3板", "time": "09:40"}]},
+    }
+    db = FakeDb({
+        "snapshot_frames": _frames([_D2, _D1, _D0], failed_by_date={_D0: ["600501"]}),
+        "jiuyan_action": FakeCol([_final_multi(d, boards[d]) for d in (_D2, _D1, _D0)]),
+        "snapshot_stock_rows": FakeCol([]),
+        "hotlist_jev_driver_labels": FakeCol([]),
+        "hotlist_jev_sentiment": FakeCol([]),
+    })
+    struct = relay.relay_structure(db, _D0)
+    sus = struct["mainline"]["sustain"]
+    # 桶键=封板口径：妖X 炸板不入家数（boardN=1）；龙一=真连板序（龙Y streak 3）
+    assert sus["boardN"] == 1 and sus["streak"] == 3 and sus["name"] == "龙Y"
+    lines = relay.sector_relay_lines(struct)
+    line = next(l for l in lines if "同桶隔日连板基线" in l)
+    assert "龙Y" in line and "妖X" not in line
+    # (3, 1-2, early) 无组合桶 → 按高度档回退 46.2%；旧口径 (1, 2家) 会给 19.2%
+    assert "46.2%（39 样本）" in line and "19.2%" not in line
+
+
+def test_money_hist_series_skips_day_with_missing_final():
+    """D3/D4 评审修复：历史日韭研 final 缺失 → 该日整体不入钱效序列。
+
+    旧实现 cur 池缺失时 cur_zt=空集 → promo 落 0.0 + 断板=昨日全池（伪造），
+    污染 20 日分位刻度与钱效分位（§4.0：不可算 ≠ 0 晋级）。
+    """
+    d4, d3, d2, d1 = "2026-09-25", "2026-09-26", "2026-09-27", "2026-09-28"
+    finals = [
+        _final_multi(d4, {"甲": [{"code": "600601", "name": "A", "num": "1天1板"}]}),
+        _final_multi(d3, {"甲": [{"code": "600601", "name": "A", "num": "2天2板"}]}),
+        # d2 韭研 final 缺失（采集失败日）
+        _final_multi(d1, {"甲": [{"code": "600602", "name": "B", "num": "1天1板"}]}),
+    ]
+    db = FakeDb({"snapshot_frames": _frames([d4, d3, d2, d1]),
+                 "jiuyan_action": FakeCol(finals)})
+    rows = relay._money_hist_series(db, _D0)
+    # 只有 d3 一日两头齐全（d4 无前日、d2 缺 final、d1 前日=d2 缺 final）
+    assert [r["date"] for r in rows] == [d3]
+    assert rows[0]["promo"] == 100.0      # A 昨日封板今日仍封板
+    assert all(r["promo"] != 0.0 for r in rows)  # 无伪造 0 晋级日
+
+
+def test_questions_v7_criteria_revisions():
+    """D7：判据修订四处——ladder 补 balanced 过渡档、momentum 冲突消解序、
+    theme_pulse 主线双定义消歧、money_effect 线化 + relay_index 锚定句。"""
+    lh = QUESTIONS_RELAY["ladder_health"]["criteria"]
+    assert "balanced" in lh and "0.5" in lh["balanced"] and "1.5" in lh["balanced"]
+    assert "断板亏钱与炸板面证据定档" in QUESTIONS_RELAY["relay_momentum"]["instructions"]
+    assert "三日存活口径" in QUESTIONS_RELAY["theme_pulse"]["instructions"]
+    assert "≤-2%" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
+    assert "近20日分位" in QUESTIONS_RELAY["money_effect"]["criteria"]["losing"]
+    assert "分位刻度" in QUESTIONS_RELAY["relay_index"]["instructions"]
+    # 版本与题数：v7 仍七题一 call（第八题暂缓，门=theme-leader pilot 过验收）
+    from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
+    assert QUESTION_SET_VERSION_RELAY == "v7"
+    assert len(QUESTIONS_RELAY) == 7
 

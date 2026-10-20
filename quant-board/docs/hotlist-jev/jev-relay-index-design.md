@@ -653,3 +653,43 @@ fail-visible（`rowsMissing`），不冒充。跌停判定与 `dieban_count`/规
 （`core/limit_rules`）。逐股回填/对账见 `jev-dieban-fullmarket-preregistration.md`。
 
 **详情**：`jev-dieban-review-design.md`（口径表 / fail-visible 规则 / 验证命令 / 后续立项边界）。
+
+## 12. 2026-10-20 语料全量盘点与瘦身增益落地（v7）
+
+> 预注册：`jev-relay-v7-preregistration.md`（13 段审计表 / D1–D8 改动清单 / 追溯表 / 验收门 / 落地记录）。
+> 触发：用户「投喂给 jev 的语料中，每一个字都能价值千金，该有的一个都不能烧，
+> 不该有的一个都不要喂」+ 补三只大盘指数（深证成指/创业板指/科创50）。
+
+### 12.1 改动骨架（D1–D8，细节见预注册 §3）
+
+- **D1 瘦身**：删「今日热榜叙事轨迹/近5日EOD叙事」两行（零判据引用 + 唯一「另一模型
+  结论」混入点）；近20日锚保留并重新定位为「客观事实坐标系」。
+- **D2 大盘指数行**：7 指数（sh/hs300/zz500/zz1000 + szcz/cybz/kc50）。采集层
+  `build_server_indices` 增嵌套子键 `indices.indexExtra`（沿 totalAmount 先例，值无顶层
+  `change` 键 → rotation `_market_change` 天然免疫，golden 回归测试已锁）。桥源 7 指数
+  原本已在采（`DEFAULT_INDEX_CODES`），旧别名映射只写 4 键——**采了被丢**，本轮接上。
+- **D3/D4 钱效与锚的分位化**：晋级断板段增「钱效近20日分位」行（bisect 口径 + `_tdx_sample_ok`
+  门槛）；近20日锚段增 P20/P50/P80 分位刻度行（`_quantile` <10 样本 → None）。
+- **D5 题材证据块**：韭研产业树催化原文 + 投资日历 → `theme_event_digest.build_theme_evidence_block`
+  确定性证据块（top3 板块，预算 ≤900 字）；板块接力链段注入同桶隔日连板基线
+  （`theme_leader_baseline.sustain_baseline_for` 查表，零模型调用）。
+- **D6 昨日梯队分层 + 段名对齐**：梯队量化段补昨日一板/二板/三板+家数；段名统一
+  「近10日连板轨迹」（语料向判据契约对齐）。
+- **D7 判据修订 4 处**：ladder 增 `balanced` 过渡档 / momentum 冲突消解序（断板亏钱与
+  炸板面优先）/ theme_pulse 主线双定义消歧 / money_effect 线化 + relay_index 锚定句。
+- **D8 版本 v7**：`QUESTION_SET_VERSION_RELAY = "v7"`；历史 v1–v6 不回改。
+
+### 12.2 验证状态（pytest 级，2026-10-20）
+
+tests/hotlist + tests/market + tests/api + tests/operations 四子集 1,468 passed；
+全量 `--collect-only` 4,192 collected 零导入错误。新增测试：指数行×4 / 分位行×3 /
+证据块×2 / 同桶基线×2 / indexExtra 嵌套形状 + rotation 免疫 golden / 桥契约（8）。
+
+**§5 验收门 1–6（真实 jev 重放门）尚未开火**——15 日门 + 全量 108 天重放
+（≈95 万 tokens ≈$0.10）待用户批预算后按 v5 重放驱动执行。
+
+### 12.3 同轮同步说明
+
+前端零改动：v7 叙事只增客观事实行（判据消费面），不新增前端展示字段；§11.4 的
+`relayStructure` 子视图不受影响。采集层 `indexExtra` 为纯增量子键（models 注释已标
+additive-only），无破坏面。

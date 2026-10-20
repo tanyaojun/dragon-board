@@ -109,7 +109,9 @@ class MarketDataContext:
     # 服务端直连 THS 构建的 limitSummary（ServerMarketEvidenceProvider），
     # 优先于浏览器 startup-bundle 原料（根治浏览器断供导致 limitSummary 为空）。
     limit_summary: dict[str, Any] = field(default_factory=dict)
-    # 服务端指数证据（sh/hs300/zz500/zz1000 涨跌），题材轮动 _market_change 输入
+    # 服务端指数证据（sh/hs300/zz500/zz1000 涨跌），题材轮动 _market_change 输入；
+    # 2026-10-20 v7 起可含嵌套子键 indexExtra（szcz/cybz/kc50，relay 叙事消费）——
+    # additive-only，rotation 引擎对其免疫（值无顶层 change 键，golden 零漂移）
     indices: dict[str, Any] = field(default_factory=dict)
 
 

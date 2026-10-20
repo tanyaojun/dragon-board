@@ -24,7 +24,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     assert drv.QUESTION_SET_VERSION_DRIVER == "v3.1"                   # 个股打标+合并相位
     assert drv.QUESTION_SET_VERSION_CYCLE == "v5"                      # cycle 阶段（链外）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
-    assert relay.QUESTION_SET_VERSION_RELAY == "v6"                    # 连板指数（v6 板块/龙头结构）
+    assert relay.QUESTION_SET_VERSION_RELAY == "v7"                    # 连板指数（v7 语料盘点/判据修订）
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
     assert vote.QUESTION_SET_VERSION_VOTE_CONFIRM == "v4-material"     # 方向判读（代际覆盖）
     assert vote.VOTE_AMMO_VERSION == "2026-10-13b"                     # b 代：四条款修订（同日复验）

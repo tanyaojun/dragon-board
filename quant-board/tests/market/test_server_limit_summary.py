@@ -114,7 +114,7 @@ def test_build_server_indices_maps_aliases_and_skips_unknown():
             {"code": "sh000300", "change": -1.73, "changePct": -0.04},
             {"code": "sh000905", "change": -2.15},                # 无 changePct → 只落点位
             {"code": "sh000852", "change": -2.26, "changePct": None},  # None → 不落
-            {"code": "sz399001", "change": -1.5},  # 未登记别名 → 跳过
+            {"code": "sz399005", "change": -1.5},  # 未登记（中小100）→ 跳过
             {"code": "sh000002", "change": None},  # 非数值 → 跳过
         ]
     }
@@ -125,7 +125,46 @@ def test_build_server_indices_maps_aliases_and_skips_unknown():
         "hs300": {"change": -1.73, "changePct": -0.04},
         "zz500": {"change": -2.15},
         "zz1000": {"change": -2.26},
+        # 无三指数行 → indexExtra 整键缺席（历史帧形态；消费端 fail-visible 降级）
     }
+
+
+def test_build_server_indices_extra_indices_nested():
+    """v7 D2a：深证成指/创业板指/科创50 落 `indices.indexExtra` 嵌套子键。
+
+    行情桥 DEFAULT_INDEX_CODES 一直在采三指数，旧 _INDEX_ALIASES 只写 4 键进帧（采了被丢）。
+    落位与 totalAmount 同款——嵌在 indices 内的独立子键，值不带顶层 change 键，
+    rotation `_market_change` 免疫（RankTrend golden 零漂移，下个用例锁定）。
+    """
+    overview = {
+        "items": [
+            {"code": "sh000001", "change": -1.22, "changePct": -0.03},
+            {"code": "sz399001", "change": -1.5, "changePct": -0.14},
+            {"code": "sz399006", "change": -12.3},               # 无 changePct → 只落点位
+            {"code": "sh000688", "change": 4.5, "changePct": 0.05},
+            {"code": "sz399005", "change": -1.0},                # 未登记（中小100）→ 跳过
+        ]
+    }
+    assert build_server_indices(overview) == {
+        "sh": {"change": -1.22, "changePct": -0.03},
+        "indexExtra": {
+            "szcz": {"change": -1.5, "changePct": -0.14},   # 深证成指
+            "cybz": {"change": -12.3},                      # 创业板指（pct 缺 → 点位口径）
+            "kc50": {"change": 4.5, "changePct": 0.05},     # 科创50
+        },
+    }
+
+
+def test_index_extra_immune_to_rotation_market_change():
+    """golden 红线回归：indexExtra 不改 rotation `_market_change` 输出（AGENTS §4.2）。"""
+    from backend.analysis.theme.rotation.engine import _market_change
+
+    base = {"sh": {"change": -1.22}, "hs300": {"change": -1.73},
+            "zz500": {"change": -2.15}, "zz1000": {"change": -2.26}}
+    with_extra = {**base, "indexExtra": {"szcz": {"change": -1.5, "changePct": -0.14},
+                                         "cybz": {"change": -12.3},
+                                         "kc50": {"change": 4.5, "changePct": 0.05}}}
+    assert _market_change(with_extra) == _market_change(base)
 
 
 # ── THS 拉取重试（2026-10-02：9 月 15:00 缺 13/21 帧的根因缓解）───────────────

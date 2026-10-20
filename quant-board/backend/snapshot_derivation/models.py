@@ -36,7 +36,9 @@ class MarketFactBundle:
     # 服务端直连 THS 构建的 limitSummary（2026-09-25 根治浏览器 bundle 断供依赖，
     # 非空时优先于 snapshot_context.marketData / market_meta 原料）
     limit_summary: dict[str, Any] = field(default_factory=dict)
-    # 服务端指数证据（sh/hs300/zz500/zz1000 涨跌），题材轮动 _market_change 输入
+    # 服务端指数证据（sh/hs300/zz500/zz1000 涨跌），题材轮动 _market_change 输入；
+    # 2026-10-20 v7 起可含嵌套子键 indexExtra（szcz/cybz/kc50，relay 叙事消费）——
+    # additive-only，rotation 引擎对其免疫（值无顶层 change 键，golden 零漂移）
     indices: dict[str, Any] = field(default_factory=dict)
 
     algorithm_version: str = "snapshot_derivation_v1"

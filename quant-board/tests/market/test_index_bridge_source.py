@@ -164,12 +164,21 @@ async def test_fetch_index_items_propagates_http_error() -> None:
 
 
 def test_bridge_items_produce_same_frame_indices_contract() -> None:
-    """键位契约锁定：sh / hs300 / zz500 / zz1000 + totalAmount（sh000001+sz399001）。"""
+    """键位契约锁定：sh / hs300 / zz500 / zz1000 + totalAmount（sh000001+sz399001）。
+
+    v7（2026-10-20）起 BRIDGE_ROWS 里的深证成指/创业板指/科创50 落嵌套子键
+    indexExtra（rotation `_market_change` 免疫，见 test_index_extra_immune_to_rotation_market_change）。
+    """
     items = normalize_bridge_items(BRIDGE_ROWS)
 
     indices = build_server_indices({"ok": True, "items": items})
 
-    assert set(indices) == {"sh", "hs300", "zz500", "zz1000", "totalAmount"}
+    # BRIDGE_ROWS 只含深证成指一只三指数成员（sz399001→szcz）；cybz/kc50 的完整形状
+    # 已由 test_server_limit_summary.py::test_build_server_indices_extra_indices_nested 锁定
+    assert set(indices) == {"sh", "hs300", "zz500", "zz1000", "totalAmount", "indexExtra"}
+    extra = indices["indexExtra"]
+    assert set(extra) == {"szcz"}
+    assert extra["szcz"]["change"] == pytest.approx(-48.43)
     assert indices["sh"]["change"] == -0.26
     assert indices["sh"]["changePct"] == -0.007
     assert indices["hs300"]["change"] == pytest.approx(10.0)
