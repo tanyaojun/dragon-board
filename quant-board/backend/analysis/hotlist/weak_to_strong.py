@@ -16,10 +16,16 @@
   None      40 < idx < 50 中性区（不标）
 
 fail-visible：任一原料缺失 → hit=False 且 reason 结构化（不伪 0、不静默）。
-全史基线（18 次样本统计）从存储数据现算 + 进程内缓存（research 重跑代码即跟随）。
+
+节点定格（2026-10-22 用户裁决 §6.3，回应「重跑改写节点→判定标准不稳定」）：
+  收盘首次落库时定档（settle_day），写入 relay 文档 wzs 字段，此后一次定格：
+  重跑只更新叙事/评分，已定格节点不改写（first-write-wins）；未定格日回退现算。
+  全史基线/读口/语料行统一从「定格优先、现算兑底」的 classify_series 取数（单一事实源）。
+历史回填用一次性 CLI（支持存档 idx override，如 10-20 定档值 50.1 记录于研究档案 §1）。
 """
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from backend.analysis.hotlist.market_facts import frame_market_facts
@@ -69,8 +75,20 @@ def zt_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, int]:
     return out
 
 
+def _settled_stamps(db: Any) -> dict[str, dict]:
+    """已定格节点（relay 文档内嵌 wzs 字段，收盘定档一次定格）。"""
+    out: dict[str, dict] = {}
+    for doc in db["hotlist_jev_relay_index"].find({}, {"wzs": 1, "tradingDate": 1}):
+        w = doc.get("wzs")
+        if isinstance(w, dict) and "state" in w:
+            d = doc.get("tradingDate") or str(doc["_id"]).split(":")[0]
+            out[str(d)] = w
+    return out
+
+
 def classify_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, dict]:
-    """全序列逐日分类：{date: {"hit", "continuation", "prevIdx", "idx", "confirm", "reason"}}。
+    """全序列逐日分类：{date: {..., "state"}}。定格优先（已定档日用存档节点），
+    未定档日回退现算；continuation 链用叠加后的 hit 传导（定格命中传给未定格次日）。
 
     原料缺一日 → 该日 hit=False + reason（'prev_idx_missing' / 'idx_missing' / 'insufficient_history'），
     结构确认项缺失时该侧不参与（两侧全缺 → 'no_structural_confirm'）。
@@ -79,7 +97,7 @@ def classify_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, 
     dt = limit_down_series(db)
     zt = zt_series(db, dataset_id)
     dates = sorted(idx)
-    out: dict[str, dict] = {}
+    live: dict[str, dict] = {}
     for i, d in enumerate(dates):
         confirm: list[str] = []
         if i > 0:
@@ -89,8 +107,8 @@ def classify_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, 
             if zt.get(p) is not None and zt.get(d) is not None and zt[d] > zt[p]:
                 confirm.append("zt_up")
         if i == 0:
-            out[d] = {"hit": False, "continuation": False, "prevIdx": None, "idx": idx[d],
-                      "confirm": confirm, "reason": "insufficient_history"}
+            live[d] = {"hit": False, "continuation": False, "prevIdx": None, "idx": idx[d],
+                       "confirm": confirm, "reason": "insufficient_history"}
             continue
         p = dates[i - 1]
         reason = None
@@ -102,26 +120,102 @@ def classify_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, 
             reason = "delta_below_threshold"
         elif not confirm:
             reason = "no_structural_confirm"
-        out[d] = {"hit": reason is None, "continuation": False,
-                  "prevIdx": idx[p], "idx": idx[d], "confirm": confirm, "reason": reason}
+        live[d] = {"hit": reason is None, "continuation": False,
+                   "prevIdx": idx[p], "idx": idx[d], "confirm": confirm, "reason": reason}
+    # 节点三态（优先级=转换节点>状态；研究 §6 落地登记）
     for d in dates:
-        j = dates.index(d)
-        p = dates[j - 1] if j > 0 else None
-        if p is not None:
-            out[d]["continuation"] = bool(out[p]["hit"])
-        # 节点三态（优先级=转换节点>状态；研究 §6 落地登记）
-        i_ = out[d]["idx"]
-        out[d]["state"] = ("wzs" if out[d]["hit"]
-                           else "strong" if i_ >= STRONG_IDX_MIN
-                           else "weak" if i_ <= WEAK_IDX_MAX else None)
+        i_ = live[d]["idx"]
+        live[d]["state"] = ("wzs" if live[d]["hit"]
+                            else "strong" if i_ >= STRONG_IDX_MIN
+                            else "weak" if i_ <= WEAK_IDX_MAX else None)
+    # 定格叠加 + continuation 链（叠加后 hit 传导，重跑不改写已定格节点）
+    stamps = _settled_stamps(db)
+    out: dict[str, dict] = {}
+    for d in dates:
+        if d in stamps:
+            s = stamps[d]
+            out[d] = {"hit": bool(s.get("hit")), "continuation": bool(s.get("continuation")),
+                      "prevIdx": s.get("prevIdx"), "idx": s.get("idx"),
+                      "confirm": list(s.get("confirm") or []), "reason": s.get("reason"),
+                      "state": s.get("state"), "settled": True}
+        else:
+            out[d] = live[d]
+    for j, d in enumerate(dates):
+        if d not in stamps:
+            out[d]["continuation"] = bool(out[dates[j - 1]]["hit"]) if j > 0 else False
     return out
 
 
 def classify_day(db: Any, date: str, dataset_id: str = "dragonboard_live") -> dict:
-    """单日分类（classify_series 的单日取用；读口/语料行共用）。"""
+    """单日分类（classify_series 的单日取用；读口/语料行共用，定格优先）。"""
     return classify_series(db, dataset_id).get(date) or {
         "hit": False, "continuation": False, "prevIdx": None, "idx": None,
         "confirm": [], "reason": "no_relay_doc"}
+
+
+def _settle_entry(idx_today, prev_idx, prev_hit: bool, confirm: list[str]) -> dict:
+    """单日定档条目（与 classify_series 同一判定规则，零第二份阈值）。"""
+    reason = None
+    if prev_idx is None:
+        reason = "insufficient_history"
+    elif idx_today is None:
+        reason = "no_relay_doc"
+    elif prev_idx > WEAK_IDX_MAX:
+        reason = "prev_not_weak"
+    elif idx_today < STRONG_IDX_MIN:
+        reason = "idx_below_strong"
+    elif idx_today - prev_idx < MIN_IDX_DELTA:
+        reason = "delta_below_threshold"
+    elif not confirm:
+        reason = "no_structural_confirm"
+    state = ("wzs" if reason is None
+             else "strong" if (idx_today is not None and idx_today >= STRONG_IDX_MIN)
+             else "weak" if (idx_today is not None and idx_today <= WEAK_IDX_MAX) else None)
+    return {"hit": reason is None, "continuation": bool(prev_hit), "prevIdx": prev_idx,
+            "idx": idx_today, "confirm": confirm, "reason": reason, "state": state}
+
+
+def settle_day(db: Any, date: str, dataset_id: str = "dragonboard_live",
+               idx_override: float | None = None) -> dict:
+    """收盘定档：以本次落库 relayIndex（或存档 override，如 10-20=50.1）为当日指数。
+
+    幂等 first-write-wins：已定档日直接返回现有存档节点（重跑不改写，判定标准稳定的
+    唯一来源）；idx_override 仅限历史回填时引用研究档案存档值，需在档案登记依据。
+    """
+    col = db["hotlist_jev_relay_index"]
+    doc = col.find_one({"_id": f"{date}:RELAY"}) or {}
+    if isinstance(doc.get("wzs"), dict) and "state" in doc["wzs"]:
+        return doc["wzs"]
+    cls_series = classify_series(db, dataset_id)
+    dates = sorted(set(list(cls_series) + [date]))
+    j = dates.index(date)
+    prev = dates[j - 1] if j > 0 else None
+    prev_idx = cls_series[prev]["idx"] if prev else None
+    prev_hit = bool(cls_series[prev]["hit"]) if prev else False
+    dt = limit_down_series(db)
+    zt = zt_series(db, dataset_id)
+    confirm: list[str] = []
+    if prev:
+        if dt.get(prev) is not None and dt.get(date) is not None and dt[date] < dt[prev]:
+            confirm.append("dt_down")
+        if zt.get(prev) is not None and zt.get(date) is not None and zt[date] > zt[prev]:
+            confirm.append("zt_up")
+    entry = _settle_entry(idx_override if idx_override is not None else doc.get("relayIndex"),
+                          prev_idx, prev_hit, confirm)
+    entry["settledAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    return entry
+
+
+def write_settlement(db: Any, date: str, dataset_id: str = "dragonboard_live",
+                     idx_override: float | None = None, dry_run: bool = False) -> dict | None:
+    """写定档（幂等）；dry_run 零写入。返回定档条目；无文档返回 None（fail-visible 由调用方呈现）。"""
+    if not db["hotlist_jev_relay_index"].find_one({"_id": f"{date}:RELAY"}):
+        return None
+    entry = settle_day(db, date, dataset_id, idx_override=idx_override)
+    if not dry_run:
+        db["hotlist_jev_relay_index"].update_one(
+            {"_id": f"{date}:RELAY"}, {"$set": {"wzs": entry}})
+    return entry
 
 
 def weak_to_strong_baseline(db: Any, dataset_id: str = "dragonboard_live") -> dict:

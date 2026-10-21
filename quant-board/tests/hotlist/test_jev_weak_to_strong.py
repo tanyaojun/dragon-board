@@ -22,6 +22,13 @@ class FakeCol:
     def find(self, q=None, p=None, sort=None, limit=None):
         return [dict(r) for r in self.rows if all(r.get(k) == v for k, v in (q or {}).items())]
 
+    def update_one(self, q=None, update=None):
+        for r in self.rows:
+            if all(r.get(k) == v for k, v in (q or {}).items()):
+                r.update((update or {}).get("$set") or {})
+                return
+        self.rows.append(dict((update or {}).get("$set") or {}))
+
     def find_one(self, q=None, p=None, sort=None):
         for r in self.rows:
             if all(r.get(k) == v for k, v in (q or {}).items()):
@@ -210,3 +217,78 @@ def test_weak_to_strong_line_idx_below_but_structural_confirm_wording():
     # 夹具无涨停帧，确认侧只有跌停证据（与 classify 的 confirm=[dt_down] 一致）
     assert "结构确认已满足：跌停 20→5↓" in line
     assert "结构确认未命中" not in line
+
+
+# ── 节点定格（2026-10-22 用户裁决 §6.3：判定标准必须稳定，重跑不改写） ──────────
+def test_settlement_first_write_wins():
+    """定档一次定格：先定档 55（命中），改底层评分为 44 再定档 → 存档节点不变。"""
+    db = _mk_db()
+    W._ZT_SERIES_CACHE.clear()
+    e1 = W.write_settlement(db, "2026-03-04")
+    assert e1["hit"] is True and e1["idx"] == 55.0 and "settledAt" in e1
+    for r in db["hotlist_jev_relay_index"].rows:      # 模拟重跑改写评分
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    e2 = W.settle_day(db, "2026-03-04")               # first-write-wins：已定档返回存档
+    assert e2 == e1 and e2["hit"] is True and e2["idx"] == 55.0
+
+
+def test_classify_series_prefers_settled_and_chain_carries():
+    """定格优先：已定档日用存档节点；未定格次日 continuation 由定格 hit 传导。"""
+    db = _mk_db()
+    for r in db["hotlist_jev_relay_index"].rows:      # 模拟重跑把 03-04 评分改到 44
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    W.write_settlement(db, "2026-03-04", idx_override=55.0)   # 收盘定档 55（存档值）
+    cls = W.classify_series(db)
+    assert cls["2026-03-04"]["settled"] is True and cls["2026-03-04"]["hit"] is True
+    assert cls["2026-03-04"]["idx"] == 55.0           # 定档值，非重跑值
+    assert cls["2026-03-05"]["continuation"] is True  # 定格命中传导给未定格次日
+    assert cls["2026-03-06"]["continuation"] is False
+
+
+def test_baseline_uses_settlement():
+    """基线从定格节点统计：重跑后 idx 44 不再吞掉命中，基线命中数不漂移。"""
+    db = _mk_db()
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    W.write_settlement(db, "2026-03-04", idx_override=55.0)
+    W._BASELINE_CACHE.clear()
+    base = W.weak_to_strong_baseline(db)
+    assert base["hitN"] == 1                          # 03-04 定格命中计入
+
+
+def test_apply_settlement_carry_on_rerun():
+    """重跑路径：已定档随档原样带过（不改写）；未定档以本次落库值首次定档。"""
+    from backend.operations.jev_relay_index import _apply_settlement
+    db = _mk_db()
+    W.write_settlement(db, "2026-03-04", idx_override=55.0)
+    prev = db["hotlist_jev_relay_index"].find_one({"_id": "2026-03-04:RELAY"})
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    new_doc = {"_id": "2026-03-04:RELAY", "tradingDate": "2026-03-04", "relayIndex": 44.0}
+    _apply_settlement(prev, new_doc, db, "dragonboard_live")
+    assert new_doc["wzs"]["hit"] is True and new_doc["wzs"]["idx"] == 55.0
+    # 未定档日：以本次落库值首次定档
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-05:RELAY":
+            r["relayIndex"] = 70.0
+    new2 = {"_id": "2026-03-05:RELAY", "tradingDate": "2026-03-05", "relayIndex": 70.0}
+    _apply_settlement(None, new2, db, "dragonboard_live")
+    assert new2["wzs"]["hit"] is False and new2["wzs"]["idx"] == 70.0
+    assert new2["wzs"]["continuation"] is True        # 03-04 定格命中传导
+
+
+def test_weak_to_strong_line_divergence_note():
+    """语料行定格 vs 重评分歧注记：重跑改评分后，语料行按定档节点表述并显式注记重评值。"""
+    from backend.operations.jev_relay_index import weak_to_strong_line
+    db = _mk_db()
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    W.write_settlement(db, "2026-03-04", idx_override=55.0)
+    line = weak_to_strong_line(db, "2026-03-04")
+    assert "符合历史弱转强形态" in line                # 按定档节点（55 命中）表述
+    assert "重跑重评 44.0" in line and "收盘定档 55.0" in line

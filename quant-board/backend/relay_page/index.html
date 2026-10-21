@@ -1365,7 +1365,7 @@ function renderRelayTab(){
   const wzsB = r => {
     const w = r.wzs;
     if (!w || !w.state) return '<span style="color:var(--muted2)">-</span>';
-    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点：昨日 idx ${w.prevIdx} → 今日 ${w.idx}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
+    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点（收盘定档，重跑不改写）：昨日 idx ${w.prevIdx} → 今日 ${w.idx}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
     if (w.state === 'strong') {
       const cont = w.continuation ? '；弱转强次日延续（全史延续率 3/18，一日游为主）' : '';
       return `<span class="badge b-blue" title="强势区（relayIndex≥50）${cont}">强</span>`;

@@ -1824,6 +1824,12 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
         else:
             parts.append(f"今日结构：{'、'.join(conf) if conf else '原料缺失'}"
                          f"（昨日非弱势区，不贴形态标）")
+    # 定格 vs 重评分歧注记（fail-visible，不静默）：重跑改了评分但节点已定格
+    if slot == "15:00" and cls.get("idx") is not None:
+        _d = (db[COLLECTION].find_one({"_id": f"{date}:RELAY"}) or {}).get("relayIndex")
+        if isinstance(_d, (int, float)) and not isinstance(_d, bool) \
+                and abs(float(_d) - float(cls["idx"])) > 1e-9:
+            parts.append(f"重跑重评 {round(float(_d), 1)}，节点以收盘定档 {cls['idx']} 为准")
     parts.append(f"历史基线（05-06 起 {base.get('hitN', '?')} 次）："
                  f"弱转强日反包率均值 {_pct_txt(base.get('hitRewrapMean'))}"
                  f"（全体 {_pct_txt(base.get('allRewrapMean'))}）"
@@ -2075,6 +2081,18 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     return "\n".join(lines)
 
 
+def _apply_settlement(prev_doc: dict | None, doc: dict, db: Any, dataset_id: str) -> None:
+    """节点定格（2026-10-22 §6.3，用户裁决：判定标准必须稳定）：
+    已定档日原样随档（重跑只更新叙事/评分，不改写节点）；未定档日以本次落库值首次定档。"""
+    from backend.analysis.hotlist.weak_to_strong import settle_day
+    pw = (prev_doc or {}).get("wzs")
+    if isinstance(pw, dict) and "state" in pw:
+        doc["wzs"] = pw
+        return
+    doc["wzs"] = settle_day(db, doc["tradingDate"], dataset_id,
+                            idx_override=doc.get("relayIndex"))
+
+
 def run_relay_index_day(db: Any, dates: list[str], *,
                         dry_run: bool = False,
                         dataset_id: str = DEFAULT_DATASET_ID,
@@ -2128,6 +2146,8 @@ def run_relay_index_day(db: Any, dates: list[str], *,
                "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
                "responseRaw": None if parsed["ok"] else env,
                "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        # 节点定格：已定档随档不改写；未定档以本次落库值首次定档（重跑≠改写历史节点）
+        _apply_settlement(col.find_one({"_id": doc["_id"]}), doc, db, dataset_id)
         col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         print(f"[relay] {date} → index={doc['relayIndex']} phase={doc['relayPhase']} "
               f"momentum={doc['relayMomentum']} ladder={doc['ladderHealth']} "

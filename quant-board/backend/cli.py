@@ -173,6 +173,51 @@ def cmd_rewrap_pool_backfill(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def cmd_wzs_settle_backfill(args: argparse.Namespace) -> None:
+    """弱转强节点历史回填定档（2026-10-22 §6.3 节点定格；幂等 first-write-wins）。
+
+    --idx-override 日期=指数（可重复）：仅限引用研究档案存档定档值（如 2026-10-20=50.1，
+    记录于 jev-weak-to-strong-day-study.md §1），使用须在档案登记依据。
+    """
+    from backend.analysis.hotlist import weak_to_strong as W
+    from backend.data.repositories import repository_factory
+    db = repository_factory.get_runtime_mongodb_database()
+    overrides = {}
+    for item in (args.idx_override or []):
+        if "=" not in item:
+            raise SystemExit(f"--idx-override 格式应为 日期=指数，得到: {item}")
+        d, v = item.split("=", 1)
+        overrides[d.strip()] = float(v)
+    dates = [str(x["_id"]).split(":")[0]
+             for x in db["hotlist_jev_relay_index"].find({"status": "ok"}, {"_id": 1})
+             if args.start <= str(x["_id"]).split(":")[0] <= args.end]
+    stamped = skipped = missing = 0
+    details = []
+    for d in sorted(dates):
+        doc = db["hotlist_jev_relay_index"].find_one({"_id": f"{d}:RELAY"}) or {}
+        if isinstance(doc.get("wzs"), dict) and "state" in doc["wzs"]:
+            skipped += 1
+            continue
+        entry = W.write_settlement(db, d, idx_override=overrides.get(d),
+                                   dry_run=bool(args.dry_run))
+        if entry is None:
+            missing += 1
+            details.append({"date": d, "result": "missing_doc"})
+        else:
+            stamped += 1
+            details.append({"date": d, "result": "dry-run" if args.dry_run else "stamped",
+                            "hit": entry.get("hit"), "state": entry.get("state"),
+                            "idx": entry.get("idx"),
+                            "override": overrides.get(d) is not None})
+    result = {"ok": True, "range": [args.start, args.end],
+              "stamped": stamped, "skippedAlreadySettled": skipped,
+              "missingDoc": missing, "dryRun": bool(args.dry_run),
+              "overrides": overrides, "details": details}
+    print_json(result)
+    if missing and not args.dry_run:
+        raise SystemExit(1)
+
+
 def cmd_after_market_once(args: argparse.Namespace) -> None:
     result = run_after_market_once(
         archive_limit=args.archive_limit,
@@ -1378,6 +1423,17 @@ def build_parser() -> argparse.ArgumentParser:
     rewrap_backfill_cmd.add_argument("--slot", choices=("final", "midday", "both"), default="final")
     rewrap_backfill_cmd.add_argument("--dry-run", action="store_true")
     rewrap_backfill_cmd.set_defaults(func=cmd_rewrap_pool_backfill)
+
+    wzs_backfill_cmd = sub.add_parser(
+        "wzs-settle-backfill",
+        help="Backfill weak-to-strong node settlements (idempotent; first-write-wins)")
+    wzs_backfill_cmd.add_argument("--start", required=True)
+    wzs_backfill_cmd.add_argument("--end", required=True)
+    wzs_backfill_cmd.add_argument("--idx-override", action="append", default=[],
+                                   metavar="DATE=IDX",
+                                   help="archived settlement idx (e.g. 2026-10-20=50.1)")
+    wzs_backfill_cmd.add_argument("--dry-run", action="store_true")
+    wzs_backfill_cmd.set_defaults(func=cmd_wzs_settle_backfill)
 
     archive_backfill_cmd = sub.add_parser(
         "snapshot-archive-backfill",
