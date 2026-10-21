@@ -29,7 +29,7 @@ THS_KEYS = ("one", "two", "three", "four", "high")
 # 2026-10-21（v3.2b，用户裁决「请修复」）：午盘槽位补接 D6 交易日轴 + D8 解析续期
 # （解析续期扩展为近 10 交易日首现回溯）+ 板块昨日家数 T-2 回看 → 叙事内容变，代际顺延；
 # 判据零改动（QUESTION_SET_VERSION_DRIVER 维持 v3.1），换代首日承接率归零为预期行为。
-AMMO_VERSION = "2026-10-22a"
+AMMO_VERSION = "2026-10-22b"
 DEFAULT_DATASET_ID = "dragonboard_live"
 
 # ── 题目集（原文平移，判据改动须走改门） ──

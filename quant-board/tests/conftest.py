@@ -186,12 +186,10 @@ def _clear_io_caches():
     _clear_jev_runner_caches(_runner)
     # 弱转强基线/涨停序列缓存（analysis 层，非 runner 属性，单独清；2026-10-22a）
     _wzs._BASELINE_CACHE.clear()
-    _wzs._ZT_SERIES_CACHE.clear()
     _dieban.reset_em_throttle_state()
     yield
     _clear_jev_runner_caches(_runner)
     _wzs._BASELINE_CACHE.clear()
-    _wzs._ZT_SERIES_CACHE.clear()
     _dieban.reset_em_throttle_state()
 
 

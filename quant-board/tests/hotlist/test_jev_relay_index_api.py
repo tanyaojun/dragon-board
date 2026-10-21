@@ -190,6 +190,11 @@ def test_relay_index_attaches_wzs_per_row(client, monkeypatch):
     assert series[_D2]["wzs"]["hit"] is True and series[_D2]["wzs"]["state"] == "wzs"
     assert series[_D3]["wzs"]["continuation"] is True and series[_D3]["wzs"]["state"] == "strong"
     assert body["day"]["wzs"]["continuation"] is True
+    # SF-2：全史延续率由读口透传（现算），前端不得硬编码快照数字
+    monkeypatch.setattr(W, "weak_to_strong_baseline",
+                        lambda db, *a, **k: {"contOk": 3, "contTotal": 18})
+    body2 = client.get("/api/hotlist-jev/relay-index").json()
+    assert body2["wzsBaseline"] == {"contOk": 3, "contTotal": 18}
 
 
 def test_relay_index_wzs_failure_degrades_not_route(client, monkeypatch):

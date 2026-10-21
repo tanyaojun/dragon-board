@@ -1787,8 +1787,15 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
     zt = zt_series(db, dataset_id)
     parts: list[str] = []
     prev_date = _prev_relay_date(db, date)
+    # 首判路径（审查 MF-1）：当日 doc 未落库时 classify_day 走 no_relay_doc fallback，
+    # prevIdx 需从昨日序列现算（与 settle_day 同源），否则每个新交易日的首算必然误报「昨日缺失」
+    if cls.get("prevIdx") is None and prev_date is not None:
+        _p = relay_idx_series(db).get(prev_date)
+        if _p is not None:
+            cls = dict(cls, prevIdx=_p)
+    first_run = db[COLLECTION].find_one({"_id": f"{date}:RELAY"}) is None
     if cls.get("prevIdx") is None or prev_date is None:
-        parts.append(f"昨日 relayIndex 缺失（形态不可判，fail-visible）")
+        parts.append("昨日 relayIndex 缺失（形态不可判，fail-visible）")
     else:
         prev_i = cls["prevIdx"]
         zone_txt = "弱势区" if prev_i <= WEAK_IDX_MAX else (
@@ -1810,6 +1817,10 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
         if slot != "15:00":
             # 午盘档：形态不落地，只给预检参照（分类器确认基于收盘序列，不伪判）
             parts.append(f"午盘预检：{'、'.join(conf) if conf else '原料缺失'}（形态盘后定档）")
+        elif first_run:
+            # 首判（审查 MF-1）：今日评分未落库，形态不可判，只给结构预检；不冒充未命中
+            parts.append(f"今日 relayIndex 待落库（形态随收盘评分定档）"
+                         f" · 结构预检：{'、'.join(conf) if conf else '原料缺失'}")
         elif weak_zone:
             if cls.get("hit"):
                 parts.append(f"结构确认命中：{'、'.join(conf) if conf else '无'} → 符合历史弱转强形态")
@@ -2083,14 +2094,21 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
 
 def _apply_settlement(prev_doc: dict | None, doc: dict, db: Any, dataset_id: str) -> None:
     """节点定格（2026-10-22 §6.3，用户裁决：判定标准必须稳定）：
-    已定档日原样随档（重跑只更新叙事/评分，不改写节点）；未定档日以本次落库值首次定档。"""
-    from backend.analysis.hotlist.weak_to_strong import settle_day
+    已定档日原样随档（重跑只更新叙事/评分，不改写节点）；未定档日以本次落库值首次定档。
+
+    审查 MF-2：degraded/失败判定（status≠ok 或 relayIndex 非数值）不是有效收盘定档，
+    不得定格——否则「当日暂无评分」被 first-write-wins 永久锁死；下轮成功后自然定档。"""
     pw = (prev_doc or {}).get("wzs")
     if isinstance(pw, dict) and "state" in pw:
         doc["wzs"] = pw
         return
-    doc["wzs"] = settle_day(db, doc["tradingDate"], dataset_id,
-                            idx_override=doc.get("relayIndex"))
+    if doc.get("status") != "ok":
+        return
+    from backend.analysis.hotlist.weak_to_strong import settle_day
+    entry = settle_day(db, doc["tradingDate"], dataset_id,
+                       idx_override=doc.get("relayIndex"))
+    if entry is not None:
+        doc["wzs"] = entry
 
 
 def run_relay_index_day(db: Any, dates: list[str], *,

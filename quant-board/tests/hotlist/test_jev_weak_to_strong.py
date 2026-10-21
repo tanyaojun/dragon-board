@@ -79,14 +79,19 @@ def _mk_db():
                           ("2026-03-05", 60.0), ("2026-03-06", 44.0)]]
     dt = [{"_id": d, "count": c} for d, c in [("2026-03-02", 3), ("2026-03-03", 20), ("2026-03-04", 5),
                                               ("2026-03-05", 6), ("2026-03-06", 5)]]
+    # 涨停帧（15:00 口径）：settle 定档要求确认两侧原料齐全（审查 MF-3/SF-3）；
+    # 03-03/03-04 同值 46 不引入 zt_up，保持既有 classify 断言
+    zt_rows = [{"datasetId": "dragonboard_live", "type": "half_hour", "slotTime": "15:00",
+                "tradingDate": d, "limitSummary": {"zhaban": {"ztCount": 46}}}
+               for d in ("2026-03-03", "2026-03-04")]
     return FakeDb({
         "hotlist_jev_relay_index": FakeCol(relay),
         "market_daily_limit_down": FakeCol(dt),
+        "snapshot_frames": FakeCol(zt_rows),
     })
 
 
 W._BASELINE_CACHE.clear()
-W._ZT_SERIES_CACHE.clear()
 
 
 def test_classify_hit_and_continuation():
@@ -223,7 +228,6 @@ def test_weak_to_strong_line_idx_below_but_structural_confirm_wording():
 def test_settlement_first_write_wins():
     """定档一次定格：先定档 55（命中），改底层评分为 44 再定档 → 存档节点不变。"""
     db = _mk_db()
-    W._ZT_SERIES_CACHE.clear()
     e1 = W.write_settlement(db, "2026-03-04")
     assert e1["hit"] is True and e1["idx"] == 55.0 and "settledAt" in e1
     for r in db["hotlist_jev_relay_index"].rows:      # 模拟重跑改写评分
@@ -275,7 +279,8 @@ def test_apply_settlement_carry_on_rerun():
     for r in db["hotlist_jev_relay_index"].rows:
         if r.get("_id") == "2026-03-05:RELAY":
             r["relayIndex"] = 70.0
-    new2 = {"_id": "2026-03-05:RELAY", "tradingDate": "2026-03-05", "relayIndex": 70.0}
+    new2 = {"_id": "2026-03-05:RELAY", "tradingDate": "2026-03-05", "status": "ok",
+            "relayIndex": 70.0}
     _apply_settlement(None, new2, db, "dragonboard_live")
     assert new2["wzs"]["hit"] is False and new2["wzs"]["idx"] == 70.0
     assert new2["wzs"]["continuation"] is True        # 03-04 定格命中传导
@@ -329,3 +334,94 @@ def test_reset_backfill_restamps_under_new_generation(monkeypatch):
             r["relayIndex"] = 99.0
     e2 = W.settle_day(db, "2026-03-04")
     assert e2["gen"] == "v8.0" and e2["idx"] == 44.0
+
+
+# ── 独立审查处置（2026-10-22 reviewer：MF-1/2/3、SF-3/4） ────────────────────
+def test_first_run_line_without_today_doc():
+    """MF-1 回归：首判时当日 doc 未落库，语料行不得误报「昨日 relayIndex 缺失」，
+    也不得把形态写成未命中——只给昨日分区 + 结构预检 + 待落库注记。"""
+    from backend.operations.jev_relay_index import weak_to_strong_line
+    db = _mk_db()
+    db["hotlist_jev_relay_index"].rows = [
+        r for r in db["hotlist_jev_relay_index"].rows if r.get("_id") != "2026-03-04:RELAY"]
+    line = weak_to_strong_line(db, "2026-03-04")
+    assert "昨日 relayIndex 30.0（弱势区）" in line
+    assert "今日 relayIndex 待落库（形态随收盘评分定档）" in line
+    assert "结构预检：跌停 20→5↓" in line
+    assert "缺失（形态不可判）" not in line and "未命中" not in line
+
+
+def test_degraded_result_never_settles():
+    """MF-2 回归：degraded/失败判定不是有效收盘定档；下轮成功后按真实评分定档。"""
+    from backend.operations.jev_relay_index import _apply_settlement
+    db = _mk_db()
+    new_doc = {"_id": "2026-03-04:RELAY", "tradingDate": "2026-03-04",
+               "status": "degraded", "relayIndex": None}
+    _apply_settlement(None, new_doc, db, "dragonboard_live")
+    assert "wzs" not in new_doc                       # 不定格
+    ok_doc = {"_id": "2026-03-04:RELAY", "tradingDate": "2026-03-04",
+              "status": "ok", "relayIndex": 55.0}
+    _apply_settlement(None, ok_doc, db, "dragonboard_live")
+    assert ok_doc["wzs"]["hit"] is True               # 成功后正常定档
+
+
+def test_settle_refused_when_confirm_material_missing():
+    """SF-3 回归：指数条件满足但跌停/涨停任一侧原料缺失 → 拒绝定档（返回 None，
+    不把原料缺失定格成「判定未命中」）；原料齐后可定档。"""
+    db = _mk_db()
+    db["market_daily_limit_down"].rows = [r for r in db["market_daily_limit_down"].rows
+                                          if r.get("_id") != "2026-03-04"]  # 当日跌停缺失
+    db["snapshot_frames"].rows = []                    # 涨停帧全缺
+    entry = W.settle_day(db, "2026-03-04", idx_override=55.0)
+    assert entry is None
+    assert W.write_settlement(db, "2026-03-04", idx_override=55.0) is None
+    doc = db["hotlist_jev_relay_index"].find_one({"_id": "2026-03-04:RELAY"})
+    assert "wzs" not in doc
+    # 原料齐（跌停当日档 + 涨停帧回补）→ 可定档
+    db["market_daily_limit_down"].rows.append({"_id": "2026-03-04", "count": 5})
+    db["snapshot_frames"].rows = [{"datasetId": "dragonboard_live", "type": "half_hour",
+                                   "slotTime": "15:00", "tradingDate": d,
+                                   "limitSummary": {"zhaban": {"ztCount": 46}}}
+                                  for d in ("2026-03-03", "2026-03-04")]
+    assert W.settle_day(db, "2026-03-04", idx_override=55.0)["hit"] is True
+
+
+def test_cli_wzs_settle_backfill(tmp_path, monkeypatch, capsys):
+    """SF-4：CLI 命令本体——override 解析、skip 计数、--reset 归档先于覆盖、dry-run 不归档。"""
+    import argparse, json
+    import backend.cli as C
+    db = _mk_db()
+    W.write_settlement(db, "2026-03-03")              # 预置一格已定档 → skip
+    from backend.data.repositories import repository_factory
+    monkeypatch.setattr(repository_factory, "get_runtime_mongodb_database", lambda: db)
+    monkeypatch.chdir(tmp_path)
+    def run(**kw):
+        args = argparse.Namespace(start="2026-03-01", end="2026-03-06",
+                                  idx_override=kw.get("ov", []), reset=kw.get("reset", False),
+                                  dry_run=kw.get("dry", False))
+        C.cmd_wzs_settle_backfill(args)
+        return json.loads(capsys.readouterr().out)
+    # 坏 override 格式
+    try:
+        run(ov=["badformat"])
+        assert False, "应 SystemExit"
+    except SystemExit:
+        pass
+    # 正常：03-04 定档（skip 03-03），override 存档值 55
+    r = run(ov=["2026-03-04=55.0"])
+    assert r["stamped"] == 4 and r["skippedAlreadySettled"] == 1 and r["missingDoc"] == 0
+    d = [x for x in r["details"] if x["date"] == "2026-03-04"][0]
+    assert d["hit"] is True and d["override"] is True
+    doc = db["hotlist_jev_relay_index"].find_one({"_id": "2026-03-04:RELAY"})
+    assert doc["wzs"]["idx"] == 55.0
+    # dry-run + reset：不归档不写入
+    before = doc["wzs"]
+    r2 = run(reset=True, dry=True)
+    assert r2["archivedTo"] is None
+    assert db["hotlist_jev_relay_index"].find_one({"_id": "2026-03-04:RELAY"})["wzs"] == before
+    # reset 实跑：归档先于覆盖
+    r3 = run(reset=True)
+    assert r3["archivedTo"] and (tmp_path / r3["archivedTo"]).exists()
+    archived = json.loads((tmp_path / r3["archivedTo"]).read_text(encoding="utf-8"))
+    assert before["idx"] in [v["idx"] for v in archived["settlements"].values()]
+

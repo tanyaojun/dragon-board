@@ -273,11 +273,22 @@ def get_relay_index(
         for r in [*series, day_doc]:
             if r:
                 r["wzs"] = wzs_map.get(str(r.get("tradingDate")))
+        # 全史基线延续率透传（审查 SF-2：前端不得硬编码 3/18 快照数字，现算为准）
+        wzs_baseline = None
+        try:
+            from backend.analysis.hotlist.weak_to_strong import weak_to_strong_baseline
+            b = weak_to_strong_baseline(db, dataset_id) or {}
+            if b.get("contTotal"):
+                wzs_baseline = {"contOk": b["contOk"], "contTotal": b["contTotal"]}
+        except Exception as exc:
+            import sys
+            print(f"[relay-index] weak_to_strong baseline failed: {exc}", file=sys.stderr)
         payload = {
             "ok": True, "datasetId": dataset_id, "date": latest,
             "day": day_doc,
             "series": series,
             "degradedCount": sum(1 for r in [*series, day_doc] if r and r.get("status") != "ok"),
+            "wzsBaseline": wzs_baseline,
         }
         if join_error:
             payload["dayTemperatureDegraded"] = join_error

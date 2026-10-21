@@ -1024,6 +1024,7 @@ async function loadAll(){
     ? '<span class="dot"></span>读库降级' : '<span class="dot"></span>数据源 :8000';
   STATE.series = series.series || [];
   STATE.day = series.day || null;
+  STATE.wzsBaseline = series.wzsBaseline || null;   // 全史延续率（现算，审查 SF-2）
   STATE.rawSlots = slots.slots || [];
   STATE.slots = STATE.rawSlots.filter(s => s.status === 'ok');
   STATE.eod = slots.eod;
@@ -1365,12 +1366,15 @@ function renderRelayTab(){
   const wzsB = r => {
     const w = r.wzs;
     if (!w || !w.state) return '<span style="color:var(--muted2)">-</span>';
-    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点（收盘定档，重跑不改写）：昨日 idx ${w.prevIdx} → 今日 ${w.idx}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
+    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点（收盘定档，重跑不改写）：昨日 idx ${esc(w.prevIdx)} → 定档 idx ${esc(w.idx)}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
     if (w.state === 'strong') {
-      const cont = w.continuation ? '；弱转强次日延续（全史延续率 3/18，一日游为主）' : '';
+      const B = STATE.wzsBaseline;
+      const cont = w.continuation
+        ? `；弱转强次日延续（全史延续率 ${B ? B.contOk + '/' + B.contTotal : '少见'}，一日游为主）` : '';
       return `<span class="badge b-blue" title="强势区（relayIndex≥50）${cont}">强</span>`;
     }
-    return `<span class="badge b-amber" title="弱势区（relayIndex≤40，含冰点；若次日构成转换则本日为弱转强的弱端点）">弱</span>`;
+    if (w.state === 'weak') return `<span class="badge b-amber" title="弱势区（relayIndex≤40，含冰点；若次日构成转换则本日为弱转强的弱端点）">弱</span>`;
+    return '-';   // 未知枚举显式不标（审查 nit：不得 fall-through 伪装成弱）
   };
   const wzsKey = r => ({ wzs: 3, strong: 2, weak: 1 }[(r.wzs || {}).state] || 0);
   const kv = { date: r => r.tradingDate || '', idx: r => r.relayIndex == null ? -1 : r.relayIndex,

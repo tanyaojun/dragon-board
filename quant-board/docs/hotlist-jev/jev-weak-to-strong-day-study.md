@@ -134,3 +134,22 @@ v7.1 初代）；`_settled_stamps` 只采纳 gen=当前代 的定格，代际不
 （fail-visible：升代后未重定档期间节点显示现算值，不静默沿用旧档）；--reset 仅供
 升代重放后使用，正常运行路径永远 first-write-wins。测试 3 例（gen 记录/旧代失效/
 reset 重定档），tests/hotlist 1020 passed。
+
+### 6.5 独立审查处置登记（2026-10-22 reviewer 子代理，结论=需修复→全修）
+
+MF-1 首判路径语料行误报「昨日 relayIndex 缺失」（当日 doc 未落库时 classify_day 走
+fallback）：修——prevIdx 从昨日序列现算（与 settle_day 同源），首判日该行改述
+「今日 relayIndex 待落库（形态随收盘评分定档）· 结构预检：…」，不冒充未命中；
+新增首判回归测试。MF-2 degraded/失败判定不得定格（否则 first-write-wins 永锁
+「无评分」态）：修——_apply_settlement 仅 status=ok 且 relayIndex 数值时定档，
+settle_day 对无有效评分返回 None；新增 degraded→成功重跑回归。MF-3 _ZT_SERIES_CACHE
+常驻进程陈旧导致错定格不可改写：修——删除该缓存（zt 序列改即时聚合，与跌停序列一致）。
+SF-1 定格与现算双实现漂移风险：修——settle_day 注入本次评分复用 classify_series
+同一判定逻辑（idx_map 参数），删除 _settle_entry。SF-2 前端硬编码「3/18」快照数字：
+修——读口透传 wzsBaseline（现算 contOk/contTotal），tooltip 动态取用，静态守卫禁止
+"3/18" 再现。SF-3 原料缺失定格成「未命中」：修——指数条件满足但确认两侧原料不齐时
+拒绝定档（返回 None，fail-visible；原料齐后重跑/回填补档）；生产审计 0 误定格。
+SF-4 CLI 命令零测试：补 4 场景单测（坏 override/SystemExit、skip 计数、dry-run 不归档、
+reset 归档先于覆盖）。nit：tooltip esc()、未知 state 显式 '-'（不 fall-through 伪装弱）、
+无占位符 f-string 清理。AMMO_VERSION → 2026-10-22b（语料行新增首判分支）。
+tests/hotlist 1024+ passed。
