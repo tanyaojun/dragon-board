@@ -159,6 +159,20 @@ def cmd_smoke_object_backup(_: argparse.Namespace) -> None:
     print_json(store.smoke_test())
 
 
+
+
+def cmd_rewrap_pool_backfill(args: argparse.Namespace) -> None:
+    from backend.data.repositories import repository_factory
+    from backend.operations.rewrap_pool import backfill_rewrap_pool
+    db = repository_factory.get_runtime_mongodb_database()
+    slots = (("final", "midday") if args.slot == "both" else (args.slot,))
+    result = backfill_rewrap_pool(db, args.start, args.end, slots=slots,
+                                  dry_run=bool(args.dry_run))
+    print_json(result)
+    if not result.get("ok"):
+        raise SystemExit(1)
+
+
 def cmd_after_market_once(args: argparse.Namespace) -> None:
     result = run_after_market_once(
         archive_limit=args.archive_limit,
@@ -1355,6 +1369,15 @@ def build_parser() -> argparse.ArgumentParser:
     after_market_cmd.add_argument("--backup-limit", type=int, default=None)
     after_market_cmd.add_argument("--dry-run", action="store_true")
     after_market_cmd.set_defaults(func=cmd_after_market_once)
+
+    rewrap_backfill_cmd = sub.add_parser(
+        "rewrap-pool-backfill",
+        help="Backfill rewrap pool snapshots (idempotent; midday only for genuine noon lists)")
+    rewrap_backfill_cmd.add_argument("--start", required=True)
+    rewrap_backfill_cmd.add_argument("--end", required=True)
+    rewrap_backfill_cmd.add_argument("--slot", choices=("final", "midday", "both"), default="final")
+    rewrap_backfill_cmd.add_argument("--dry-run", action="store_true")
+    rewrap_backfill_cmd.set_defaults(func=cmd_rewrap_pool_backfill)
 
     archive_backfill_cmd = sub.add_parser(
         "snapshot-archive-backfill",

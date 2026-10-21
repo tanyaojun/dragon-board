@@ -260,3 +260,17 @@ relay v7.1 三题与反包语义的对账：
 
 修复后 `tests/hotlist` **1001 passed**（较审查基线 994 净增 7：新增审查修复项测试，
 部分既有断言随 SF9 措辞更新）。commit-ready。
+
+### 11.5 池数据状态与历史回填（2026-10-21 用户问询后补）
+
+- **今日（10-21）**：两条快照均已落库——`{date}:midday`（12:06 真午盘名单，触板口径 11/193，
+  generatedAt 15:52）与 `{date}:final`（封板口径 12/193，generatedAt 16:11），链路自更新验证通过。
+- **回填入口**：新增 `backend.cli rewrap-pool-backfill --start --end [--slot final|midday|both] [--dry-run]`
+  （`backfill_rewrap_pool`，幂等 upsert；midday 硬门=`midday_source_state` 真午盘判定，
+  收盘补写的伪午盘一律 skip 给 reason，不冒充触板口径）。测试 +2（写入/伪午盘拒绝/dry-run 零写入）。
+- **回填实况**：`--start 2026-05-06 --end 2026-10-21 --slot both` → 111 final（全史）+ 3 midday
+  （10-13/10-15/10-21 三天 fetchedAt 落真午盘窗，其余 108 天 skip：101 无 midday 文档 +
+  7 伪午盘）；抽查 3 天快照与现算逐值一致。missing 结构化：19 天昨日炸板池缺失（回封率段
+  不可算）、1 天轴起点昨日名单缺失。
+- 注意：10-21 之前的盘中口径**没有真午盘样本**，反包率的「当日状态锚」研究（R3）全部基于
+  EOD 封板口径；midday 快照自 10-21 起前向积累（G5 观察窗）。

@@ -443,3 +443,33 @@ def test_limitup_route_rewrap_payload(monkeypatch):
     by_code = {s["code"]: s for s in result["stocks"]}
     assert by_code["sz600003"].get("rewrap") is True
     assert "rewrap" not in by_code["sz600006"]
+
+
+# ── 历史回填入口（2026-10-21 用户问询「历史数据怎么回填」） ─────────────────
+def test_backfill_final_writes_and_midday_rejects_backfill_doc():
+    """final 逐日幂等写入；midday 只收真午盘名单（收盘补写的伪午盘 skip 并给 reason）。"""
+    from backend.operations.rewrap_pool import backfill_rewrap_pool
+    db = _db_days()
+    # D1/D0 final 在轴上；D0 midday fetchedAt=12:06（真午盘）
+    res = backfill_rewrap_pool(db, D5, D0, slots=("final", "midday"))
+    assert res["written"] == 7 and res["skipped"] == 5       # 6 日 final + D0 真午盘 midday；
+    # D5..D1 无 midday 文档 → 逐日 skip（reason=no_midday_doc，fail-visible）
+    assert db["hotlist_rewrap_pool"].find_one({"_id": f"{D0}:final"})
+    # midday：D0 真午盘写入
+    assert db["hotlist_rewrap_pool"].find_one({"_id": f"{D0}:midday"})
+    # 伪午盘（fetchedAt 收盘后）→ skip
+    db["jiuyan_action"].rows.append(
+        {"_id": f"{D1}:midday", "kind": "jiuyan_action", "tradingDate": D1,
+         "fetchedAt": "2026-10-20T20:04:07",
+         "fields": [{"name": "板块A", "stocks": [_st("600003", "五连板股")]}]})
+    res2 = backfill_rewrap_pool(db, D1, D1, slots=("midday",))
+    assert res2["written"] == 0 and res2["skipped"] == 1
+    assert res2["results"][0]["reason"] == "midday_doc_not_noon"
+
+
+def test_backfill_dry_run_zero_write():
+    from backend.operations.rewrap_pool import backfill_rewrap_pool
+    db = _db_days()
+    res = backfill_rewrap_pool(db, D5, D0, slots=("final",), dry_run=True)
+    assert res["dryRun"] is True and res["written"] == 0
+    assert db["hotlist_rewrap_pool"].find({}) == []

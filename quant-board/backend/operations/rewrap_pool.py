@@ -42,3 +42,43 @@ def update_rewrap_pool(db: Any, date: str, slot: str = "final",
 def get_rewrap_pool(db: Any, date: str, slot: str = "final") -> dict | None:
     """读取池快照（可能为 None=未更新；消费方应回落现算并注记，不冒充）。"""
     return db[COLLECTION].find_one({"_id": f"{date}:{slot}"})
+
+
+def backfill_rewrap_pool(db: Any, start: str, end: str,
+                         slots: tuple[str, ...] = ("final",),
+                         dry_run: bool = False,
+                         dataset_id: str = DEFAULT_DATASET_ID) -> dict:
+    """历史回填池快照（幂等 upsert；2026-10-21 用户问询后补的批量入口）。
+
+    日期轴 = 区间内存在 `{date}:final` 的韭研交易日（与打标主循环同源查询）。
+    midday 槽硬门：只回填 `midday_source_state` 判定「真午盘」的名单（fetchedAt 落午盘窗）——
+    实测 2026-10-14/16/19/20 的 midday 文档是收盘后补写的，拿它算「触板口径」等于
+    把收盘数据冒充午盘（AGENTS §4.0），一律 skip 并给 reason，不补写。
+    dry_run=True 零写入（只报各日可算性）。结果逐日结构化（fail-visible：missing 标志随档）。"""
+    from backend.analysis.hotlist.rewrap_pool import build_rewrap_pool
+    dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
+        {"kind": "jiuyan_action", "tradingDate": {"$gte": start, "$lte": end},
+         "_id": {"$regex": ":final$"}}, {"tradingDate": 1}) if d.get("tradingDate")})
+    results: list[dict] = []
+    written = skipped = 0
+    for date in dates:
+        for slot in slots:
+            if slot == "midday":
+                from backend.operations.jev_label_jiuyan import midday_source_state
+                state = midday_source_state(db, date)
+                if not state["ok"]:
+                    results.append({"date": date, "slot": slot, "written": False,
+                                    "reason": state["reason"]})
+                    skipped += 1
+                    continue
+            if dry_run:
+                doc = build_rewrap_pool(db, date, slot, dataset_id)
+            else:
+                doc = update_rewrap_pool(db, date, slot, dataset_id)
+            results.append({"date": date, "slot": slot, "written": not dry_run,
+                            "candidate": doc.get("candidateN"), "rewrap": doc.get("rewrapN"),
+                            "rewrapRate": doc.get("rewrapRate"), "missing": doc.get("missing")})
+            written += 0 if dry_run else 1
+    return {"ok": True, "start": start, "end": end, "slots": list(slots),
+            "dryRun": dry_run, "dates": len(dates), "written": written,
+            "skipped": skipped, "results": results}
