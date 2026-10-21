@@ -35,7 +35,7 @@ from backend.analysis.hotlist.jev_state import SCORE_ANCHORS_10
 # 消解序 / theme_pulse 主线双定义消歧 / money_effect 线化 + relay_index 锚定句）。
 # 题数不变（第八题暂缓，门=theme-leader pilot 过其预注册 §6 验收）。
 # 旧代已判 relay_index 不回改；新旧代序列对比与判定卡须注记代际（questionSetVersion 落库）。
-QUESTION_SET_VERSION_RELAY = "v7"
+QUESTION_SET_VERSION_RELAY = "v7.1"
 
 _RELAY_INSTR = ("连板情绪指数（0=接力生态彻底冰点，100=接力极度亢奋）。"
                 "以【近10日连板轨迹】与【近20日参照】为坐标系：接力意愿（晋级率位置）、"
@@ -94,7 +94,9 @@ QUESTIONS_RELAY: dict[str, dict] = {
     "ladder_health": {
         "type": "choice",
         "instructions": ("今日连板梯队结构形态？直接以叙事给出的梯队分布、首板占比与二板/三板+比率为准"
-                         "（数据已算好，勿自行心算），对照【近20日参照】分位；只判结构，不判方向"),
+                         "（数据已算好，勿自行心算），对照【近20日参照】分位；只判结构，不判方向；"
+                         "多档条件同时命中时按 fracture > inverted > balanced 取档（更保守优先，"
+                         "v7.1 边界消歧：比率恰=0.5 时 fracture 优先于 balanced）"),
         "criteria": {
             "pyramid": "金字塔完整：二板/三板+比率 > 1.5 且首板占比充足，中位层次健康",
             "balanced": "中位偏薄未断层：二板/三板+比率在 0.5-1.5 之间（未及金字塔线也未及断层线），高度未集中少数高位股（非孤板/妖股结构），且梯队总量与首板供给处参照正常带（未腰斩、非全面稀疏）",
@@ -113,7 +115,7 @@ QUESTIONS_RELAY: dict[str, dict] = {
                          "叙事标注「样本不足（TDX 覆盖 k/n）」的断板/溢价数字**不得**作为钱效依据"
                          "（样本门槛见预注册 §2.3；缺主锚证据时选 insufficient_evidence）"),
         "criteria": {
-            "strong": "接力赚钱：晋级顺畅且断板股/昨日涨停股整体中位数为正（约 ≥+1% 或处近20日分位 P20 以下），大面少（占断板比 <10%）",
+            "strong": "接力赚钱：晋级顺畅且断板股/昨日涨停股整体中位数为正（约 ≥+1% 或处近20日分位 P80 以上；两分支均不满足时不得判 strong，v7.1 边界修正），大面少（占断板比 <10%）",
             "neutral": "中性：晋级与断板大致平衡，中位数在零附近，无明显亏钱扩散",
             "losing": "接力亏钱：断板股中位 ≤-2% 或大面占断板比 ≥30% 或大面家数处近20日分位高位，或隔日溢价转负，亏钱效应扩散",
             "insufficient_evidence": "晋级/断板表现证据缺失，无法判断",

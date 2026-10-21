@@ -303,12 +303,18 @@ D3 `percentile_fraction` 单源、D4 分位刻度、D5 证据块+同桶基线（
 | 6 | §5 验收门 4/6 措辞与回填后现实不符 | **本节同轮改写**（见 §5 门 4/门 6） |
 | 7 | 无害措辞：锚段头多「；非模型结论」5 字；指数排列主4+extra3 与设计文字顺序不同 | 登记不处理 |
 
-### 10.1 v7.1 判据修订清单（待办，随 15 日门后一并，届时升代）
+### 10.1 v7.1 判据修订清单（✅ 2026-10-21 已执行，全量门 6 例 strong 误判实证后提前）
 
-1. `money_effect` strong：「处近20日分位 P20 以下」→「处近20日分位 **P80 以上**」（修恒假分支）；
-2. `ladder_health`：`balanced`/`fracture` 在比率=0.5 的重叠补优先序（建议 fracture 优先，
-   「断层」语义强于「偏薄」）；`fracture`/`inverted` 重叠同补；
-3. 以上均为 wording 级修订，narrative 零改动，修订后 `QUESTION_SET_VERSION_RELAY` v7→v7.1。
+1. ✅ `money_effect` strong：「处近20日分位 P20 以下」→「**处近20日分位 P80 以上**」（修恒假
+   分支），并加「两分支均不满足时不得判 strong」防裁量句；
+2. ✅ `ladder_health`：instructions 加「多档条件同时命中时按 **fracture > inverted > balanced**
+   取档（更保守优先）」，明写「比率恰=0.5 时 fracture 优先于 balanced」；
+3. ✅ `QUESTION_SET_VERSION_RELAY` v7→**v7.1**；叙事零改动；历史 v7 文档不回改
+   （relay_page 代际徽标自然分段）。
+   测试：`test_jev_version_stamps.py::test_relay_v7_1_criteria_wording`（文案锁定）+
+   代际戳断言升级；tests/hotlist 965 passed。
+   **受影响 6 日重放（06-01/07-31/08-12/08-17/09-29/10-09，≈5.4 万 tokens）待用户确认。**
+   协议级 rationale 支持仍待议（门 5 改写说明）。
 
 **重放开火状态（2026-10-21 15 日门已开火，09-22~10-20，`--force` 代际重放）**：
 

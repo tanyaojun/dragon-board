@@ -24,7 +24,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     assert drv.QUESTION_SET_VERSION_DRIVER == "v3.1"                   # 个股打标+合并相位
     assert drv.QUESTION_SET_VERSION_CYCLE == "v5"                      # cycle 阶段（链外）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
-    assert relay.QUESTION_SET_VERSION_RELAY == "v7"                    # 连板指数（v7 语料盘点/判据修订）
+    assert relay.QUESTION_SET_VERSION_RELAY == "v7.1"                  # 连板指数（v7.1 边界修正：strong P80/fracture 优先序）
     assert relay.QUESTION_SET_VERSION_ZHABAN == "v1"                   # 炸板归因（已挂链）
     assert vote.QUESTION_SET_VERSION_VOTE_CONFIRM == "v4-material"     # 方向判读（代际覆盖）
     assert vote.VOTE_AMMO_VERSION == "2026-10-13b"                     # b 代：四条款修订（同日复验）
@@ -47,3 +47,17 @@ def test_phase_band_doc_uses_dedicated_stamp():
     src = inspect.getsource(jl.run_phase_band_day)
     assert "QUESTION_SET_VERSION_PHASE_BAND" in src
     assert "QUESTION_SET_VERSION_DRIVER" not in src
+
+
+def test_relay_v7_1_criteria_wording():
+    """v7.1 边界修正锁定（预注册 §10.1，2026-10-21 全量门 6 例 strong 误判实证）。"""
+    from backend.analysis.hotlist import jev_relay_ammo as relay
+    q = relay.QUESTIONS_RELAY
+    strong = q["money_effect"]["criteria"]["strong"]
+    assert "P80 以上" in strong and "P20 以下" not in strong   # 恒假分支修复
+    assert "两分支均不满足时不得判 strong" in strong
+    assert "fracture > inverted > balanced" in q["ladder_health"]["instructions"]
+    assert "比率恰=0.5 时 fracture 优先于 balanced" in q["ladder_health"]["instructions"]
+    # 叙事零改动：判据外的题目集结构不变（七题、score/choice 类型）
+    assert list(q) == ["relay_index", "relay_phase", "relay_momentum", "ladder_health",
+                       "leader_strength", "money_effect", "theme_pulse"]

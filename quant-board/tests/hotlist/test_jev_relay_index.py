@@ -519,7 +519,7 @@ def test_run_relay_index_day_writes_doc(monkeypatch):
     assert "anchorGaps" in doc and isinstance(doc["anchorGaps"], list)
     assert anchor_gaps(doc["narrative"]) == doc["anchorGaps"]
     assert doc["anchorGapsDerived"] == anchor_gaps_derived(doc["narrative"])
-    assert doc["questionSetVersion"] == "v7"
+    assert doc["questionSetVersion"] == "v7.1"
     # v6：板块/龙头结构随文档落库（前端同源读取，无需二次计算）
     assert isinstance(doc.get("relayStructure"), dict)
     assert doc["relayStructure"]["mainline"] is not None
@@ -1544,7 +1544,7 @@ def test_relay_structure_narrative_and_doc_are_single_source(monkeypatch):
     assert f"主线板块：{struct['mainline']['name']}" in narrative
     assert f"总龙头 {struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
     assert f"龙头档案：{struct['totalLeader']['name']}({struct['totalLeader']['code']})" in narrative
-    assert doc["questionSetVersion"] == "v7"
+    assert doc["questionSetVersion"] == "v7.1"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1865,6 +1865,6 @@ def test_questions_v7_criteria_revisions():
     assert "分位刻度" in QUESTIONS_RELAY["relay_index"]["instructions"]
     # 版本与题数：v7 仍七题一 call（第八题暂缓，门=theme-leader pilot 过验收）
     from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
-    assert QUESTION_SET_VERSION_RELAY == "v7"
+    assert QUESTION_SET_VERSION_RELAY == "v7.1"
     assert len(QUESTIONS_RELAY) == 7
 
