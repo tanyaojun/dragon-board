@@ -1353,12 +1353,26 @@ function renderRelayTab(){
     && (!f.ladder || (r.ladderHealth || '') === f.ladder)
     && (!f.money || (r.moneyEffect || '') === f.money)
     && (!f.theme || (r.themePulse || '') === f.theme)
-    && (!f.wzs || (f.wzs === 'hit' ? (r.wzs && r.wzs.hit) : (r.wzs && r.wzs.continuation)))
+    && (!f.wzs || (r.wzs && r.wzs.state === f.wzs))
     && (!f.zone || zoneKey(zoneOf(r)) === f.zone)
     && (!f.leader || leaderBandOf(r) === f.leader));
   renderRelayKpi(shown);
   renderLeaders();
   const s = STATE.relaySort;
+  // 弱转强节点列（2026-10-21 立项；2026-10-22 用户裁决：枚举三态=弱/弱转强/强，
+  // 单源 analysis/hotlist/weak_to_strong，state 字段优先级=转换节点>状态）：
+  // wzs=命中日（绿）；strong=中强区（蓝，命中次日 tooltip 标注延续率）；weak=弱势区（琥珀）；中性/缺='-'
+  const wzsB = r => {
+    const w = r.wzs;
+    if (!w || !w.state) return '<span style="color:var(--muted2)">-</span>';
+    if (w.state === 'wzs') return `<span class="badge b-green" title="弱转强节点：昨日 idx ${w.prevIdx} → 今日 ${w.idx}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
+    if (w.state === 'strong') {
+      const cont = w.continuation ? '；弱转强次日延续（全史延续率 3/18，一日游为主）' : '';
+      return `<span class="badge b-blue" title="强势区（relayIndex≥50）${cont}">强</span>`;
+    }
+    return `<span class="badge b-amber" title="弱势区（relayIndex≤40，含冰点；若次日构成转换则本日为弱转强的弱端点）">弱</span>`;
+  };
+  const wzsKey = r => ({ wzs: 3, strong: 2, weak: 1 }[(r.wzs || {}).state] || 0);
   const kv = { date: r => r.tradingDate || '', idx: r => r.relayIndex == null ? -1 : r.relayIndex,
     leader: r => r.leaderStrength == null ? -1 : r.leaderStrength,
     zone: r => zoneOf(r).label || '', wzs: wzsKey };
@@ -1369,16 +1383,6 @@ function renderRelayTab(){
   STATE.relayPage = pg.page;   // 越界或筛选后回写，避免停在空页（页码是展示态，不参与口径）
   const pageRows = pg.rows;
   const th = (label, key) => `<th class="sortable" onclick="setRelaySort('${key}')">${label}${sortMark(s, key)}</th>`;
-  // 弱转强节点徽标（2026-10-21 立项，读口 wzs 字段；单源 analysis/hotlist/weak_to_strong）：
-  // hit=当日产生弱转强节点（绿）；continuation=前日节点次日延续（蓝）；无=灰点。缺 wzs（旧档/降级）→ '-'
-  const wzsB = r => {
-    const w = r.wzs;
-    if (!w) return '<span style="color:var(--muted2)">-</span>';
-    if (w.hit) return `<span class="badge b-green" title="弱转强节点：昨日 idx ${w.prevIdx} → 今日 ${w.idx}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
-    if (w.continuation) return '<span class="badge b-blue" title="前日弱转强节点的次日延续（全史延续率 3/18，一日游为主）">延续</span>';
-    return '-';
-  };
-  const wzsKey = r => r.wzs && r.wzs.hit ? 2 : (r.wzs && r.wzs.continuation ? 1 : 0);
   const body = pageRows.map(r => {
     const open = STATE.detailUi.relay.openKey === (r.tradingDate || '');
     const focused = STATE.relayFocus === r.tradingDate;
@@ -1430,8 +1434,8 @@ const ZONE_FILTER_LIST = ['green', 'toxic', 'mid', 'neutral', 'ice', 'na']
   .map(k => [k, ZONE_DEF[k].label === '—' ? '无指数' : ZONE_DEF[k].label]);
 function rWzsSel(){
   const cur = STATE.relayFilter.wzs || '';
-  return `<select title="弱转强节点筛选（确定性口径，非模型判读）" onchange="rSet('wzs', this.value)">`
-    + [['', '节点 · 全部'], ['hit', '弱转强'], ['cont', '延续']]
+  return `<select title="弱转强节点筛选（确定性口径，非模型判读；三态=弱/弱转强/强）" onchange="rSet('wzs', this.value)">`
+    + [['', '节点 · 全部'], ['wzs', '弱转强'], ['strong', '强'], ['weak', '弱']]
         .map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('')
     + `</select>`;
 }

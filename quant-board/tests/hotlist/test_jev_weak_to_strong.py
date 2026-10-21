@@ -90,6 +90,11 @@ def test_classify_hit_and_continuation():
     assert cls["2026-03-02"]["reason"] == "insufficient_history"
     # D6 44.0：非弱势未贴标（防标签通胀）
     assert cls["2026-03-06"]["hit"] is False and cls["2026-03-06"]["reason"] == "prev_not_weak"
+    # 节点三态（2026-10-22 用户裁决：弱/弱转强/强；优先级=转换节点>状态）
+    assert cls["2026-03-04"]["state"] == "wzs"          # 命中日优先（idx 55 同时 ≥50）
+    assert cls["2026-03-05"]["state"] == "strong"       # 中强区延续日
+    assert cls["2026-03-03"]["state"] == "weak"         # 弱势区
+    assert cls["2026-03-06"]["state"] is None           # 44 中性区不标
 
 
 def test_classify_reasons():

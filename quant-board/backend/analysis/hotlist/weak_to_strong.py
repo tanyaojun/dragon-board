@@ -9,6 +9,12 @@
   结构确认   跌停家数下降 或 涨停家数回升，至少其一
   hit(T)     三者同时满足；continuation(T) = hit(T-1)
 
+节点三态（2026-10-22 用户裁决：列表枚举=弱/弱转强/强；优先级=转换节点>状态）：
+  "wzs"     hit=True（命中日 idx 必 ≥50，与强重叠时取转换节点优先）
+  "strong"  relayIndex >= 50 且非命中日（命中次日即延续，前端 tooltip 标注全史延续率）
+  "weak"    relayIndex <= 40（弱势区状态日，含冰点）
+  None      40 < idx < 50 中性区（不标）
+
 fail-visible：任一原料缺失 → hit=False 且 reason 结构化（不伪 0、不静默）。
 全史基线（18 次样本统计）从存储数据现算 + 进程内缓存（research 重跑代码即跟随）。
 """
@@ -99,9 +105,15 @@ def classify_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, 
         out[d] = {"hit": reason is None, "continuation": False,
                   "prevIdx": idx[p], "idx": idx[d], "confirm": confirm, "reason": reason}
     for d in dates:
-        p = dates[dates.index(d) - 1] if dates.index(d) > 0 else None
+        j = dates.index(d)
+        p = dates[j - 1] if j > 0 else None
         if p is not None:
             out[d]["continuation"] = bool(out[p]["hit"])
+        # 节点三态（优先级=转换节点>状态；研究 §6 落地登记）
+        i_ = out[d]["idx"]
+        out[d]["state"] = ("wzs" if out[d]["hit"]
+                           else "strong" if i_ >= STRONG_IDX_MIN
+                           else "weak" if i_ <= WEAK_IDX_MAX else None)
     return out
 
 

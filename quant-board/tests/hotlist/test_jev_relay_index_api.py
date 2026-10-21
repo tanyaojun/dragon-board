@@ -178,17 +178,17 @@ def test_relay_index_attaches_wzs_per_row(client, monkeypatch):
     """series/day 每行携带 wzs 分类结果（单源 analysis/hotlist/weak_to_strong）。"""
     import backend.analysis.hotlist.weak_to_strong as W
     fixed = {_D1: {"hit": False, "continuation": False, "prevIdx": None, "idx": 46.3,
-                   "confirm": [], "reason": "prev_not_weak"},
+                   "confirm": [], "reason": "prev_not_weak", "state": None},
              _D2: {"hit": True, "continuation": False, "prevIdx": 39.0, "idx": 64.4,
-                   "confirm": ["dt_down", "zt_up"], "reason": None},
+                   "confirm": ["dt_down", "zt_up"], "reason": None, "state": "wzs"},
              _D3: {"hit": False, "continuation": True, "prevIdx": 64.4, "idx": 51.1,
-                   "confirm": [], "reason": "prev_not_weak"}}
+                   "confirm": [], "reason": "prev_not_weak", "state": "strong"}}
     monkeypatch.setattr(W, "classify_series", lambda db, *a, **k: fixed)
     body = client.get("/api/hotlist-jev/relay-index").json()
     assert body["ok"] is True and "wzsDegraded" not in body
     series = {s["tradingDate"]: s for s in body["series"]}
-    assert series[_D2]["wzs"]["hit"] is True
-    assert series[_D3]["wzs"]["continuation"] is True
+    assert series[_D2]["wzs"]["hit"] is True and series[_D2]["wzs"]["state"] == "wzs"
+    assert series[_D3]["wzs"]["continuation"] is True and series[_D3]["wzs"]["state"] == "strong"
     assert body["day"]["wzs"]["continuation"] is True
 
 

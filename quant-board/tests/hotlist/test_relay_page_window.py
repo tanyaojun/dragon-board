@@ -158,6 +158,9 @@ def test_table_columns_drop_tokens_time_add_leader(js: str):
     assert "节点" in head and "wzsB" in rt, "表头应含弱转强节点列（2026-10-21 立项）"
     assert 'colspan="10"' in rt, "展开详情行 colspan 应为 10（加节点列后）"
     assert 'rWzsSel' in js, "节点筛选下拉必须接线"
+    assert "'weak', '弱']" in js and "'strong', '强']" in js and "'wzs', '弱转强']" in js,         "节点筛选枚举必须三态（弱/弱转强/强，2026-10-22 用户裁决）"
+    assert "w.state === 'wzs'" in rt and "w.state === 'strong'" in rt,         "节点徽标须按 state 分支（wzs/strong）"
+    assert "弱势区（relayIndex≤40" in rt, "弱徽标 fall-through 分支必须在场（三态=弱/弱转强/强）"
     # 行体不再渲染 token 数 / computedAt 单元格
     assert "input_tokens" not in rt and "output_tokens" not in rt
     assert "computedAt" not in rt
