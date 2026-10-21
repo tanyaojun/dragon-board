@@ -480,7 +480,6 @@
       <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
       <div class="kpi-strip" id="labelKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="labelBoardRow"></div>
-      <div class="board-row" id="labelRewrapRow"></div>
       <div class="lf-bar" id="labelFilterBar"></div>
       <table id="labelTable"></table>
     </div>
@@ -2441,20 +2440,6 @@ function lfRenderKpi(stocks, f){
     + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt
       + (stUnknown ? ` · ${stUnknown}家真连板未定` : ''));
 }
-function lfRenderRewrap(){
-  // 反包明细行（2026-10-21 立项 R2）：池内股点名（区间高度/断板天数/昨日炸板回封标记）；
-  // 详细字段在主表（点击 KPI 卡筛选后即可见），此处给一屏速览；无池 → 容器清空（fail-visible）
-  const R = (STATE.labels || {}).rewrap;
-  const el = $('labelRewrapRow');
-  if (!el) return;
-  if (!R || !R.stocks || !R.stocks.length){ el.innerHTML = ''; return; }
-  const items = R.stocks.map(s =>
-    `<span class="chip${s.reseal ? '' : ' plain'}" title="${esc(s.code || '')} · 近5日在板，断 ${esc(String(s.breakDays ?? '-'))} 交易日后今日回封${s.reseal ? ' · 昨日炸板回封' : ''} · ${esc(String(s.time || ''))}">`
-    + esc(s.name || s.code || '-') + `（${esc(s.num || '首板')}·断${esc(String(s.breakDays ?? '-'))}日）</span>`).join('');
-  const cal = R.caliber === 'touched' ? ' · 午盘触板口径（回封待收盘确认）' : '';
-  el.innerHTML = '<span class="k">反包池 ' + R.stocks.length + ' 只</span>' + items
-    + '<span class="chip plain">候选池含停牌复牌未分辨' + cal + '</span>';
-}
 function lfRenderBoards(pool, f){
   const dist = {};
   for (const s of pool){ const b = labelBoardOf(s); dist[b] = (dist[b] || 0) + 1; }
@@ -2526,16 +2511,11 @@ function lfRenderRows(){
     const reasonCell = reasonTxt
       ? `<td class="lg-reason" title="${esc(reasonTxt)}">${esc(reasonTxt)}</td>`
       : '<td class="lg-reason" title="韭研异动解析首行缺失">-</td>';
-    // 投喂槽位（2026-10-20）：midday=12:30 午盘投喂（收盘幂等未重复投喂）/final=收盘投喂；
-    // 旧档无 labelSlot → 不标标记（不当收盘档冒充）
-    const slotTag = s.labelSlot === 'midday'
-      ? `<span class="badge b-amber" title="午盘 12:30 投喂（原始名单 ${esc(s.jiuyanFetchedAt || '时点未知')}）；收盘链已幂等跳过，未重复投喂">午盘</span> `
-      : '';
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('lab', '${js(entry.key)}')">
     <td><span class="lg-caret">▶</span>${esc(s.code || '')}</td><td>${esc(s.name || '')}</td><td>${esc(labelBoardOf(s))}</td>
     <td style="font-size:12px">${dragons || '-'}</td>
     <td>${hCell}</td><td class="num">${esc((s.limitUpTime || '').slice(0, 5))}</td>${reasonCell}
-    <td>${slotTag}${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
+    <td>${badge(DRIVER_CN[s.label] || s.label || '-', 'b-blue')}</td>
     <td>${badge(CAT_DEPTH_CN[s.catalystDepth] || s.catalystDepth || '-', 'b-gray')}</td>
     <td>${badge(FRESH_CN[s.freshness] || s.freshness || '-', s.freshness === 'fresh_catalyst' ? 'b-green' : 'b-gray')}</td>
     <td>${badge(BUY_SIDE_CN[s.buySideLogic] || s.buySideLogic || '-', 'b-gray')}</td>${s.rank ? `<td class="num">#${s.rank}</td>` : '<td></td>'}</tr>`
@@ -2549,7 +2529,7 @@ function renderLabels(){
   const L = STATE.labels || {};
   const stocks = (L && L.ok !== false && !L.noData) ? (L.stocks || []) : [];
   if (!stocks.length){
-    $('labelKpi').innerHTML = ''; $('labelBoardRow').innerHTML = ''; $('labelRewrapRow').innerHTML = ''; $('labelFilterBar').innerHTML = '';
+    $('labelKpi').innerHTML = ''; $('labelBoardRow').innerHTML = ''; $('labelFilterBar').innerHTML = '';
     STATE.labelEntries = [];
     $('labelHint').textContent = (L && L.reason) || '';
     $('labelTable').innerHTML = '<tr><td class="empty">当日无打标存档</td></tr>';
@@ -2558,7 +2538,6 @@ function renderLabels(){
   const pool = scopePool(stocks, STATE.labelFilter);
   lfRenderKpi(stocks, STATE.labelFilter);
   lfRenderBoards(pool, STATE.labelFilter);
-  lfRenderRewrap();
   lfRenderBar(pool);
   lfRenderRows();
 }
@@ -2570,7 +2549,6 @@ function lfSet(k, v){
   const pool = scopePool(stocks, STATE.labelFilter);
   lfRenderKpi(stocks, STATE.labelFilter);
   lfRenderBoards(pool, STATE.labelFilter);
-  lfRenderRewrap();
   lfRenderBar(pool);
   lfRenderRows();
 }

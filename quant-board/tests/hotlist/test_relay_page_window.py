@@ -1525,20 +1525,20 @@ def test_limitup_reason_column_present(js: str, html: str):
 
 
 def test_limitup_slot_tag_marks_midday_feed(js: str):
-    """午盘投喂标记（2026-10-20）：labelSlot=midday 的个股须可见标注「午盘」，
-    并说明收盘链已幂等跳过（否则读者无法分辨午盘/收盘两种投喂口径）。"""
+    """驱动列「午盘」徽标已删（2026-10-21 用户裁决：纯多余；槽位口径可追溯性由落库
+    labelSlot/jiuyanFetchedAt 字段承担，页面不再逐股贴标；取代 2026-10-20 的在场断言）。"""
     rows = _fn(js, "lfRenderRows")
-    assert "s.labelSlot === 'midday'" in rows and "午盘" in rows
-    assert "幂等跳过" in rows, "午盘标记须说明收盘未重复投喂"
-    assert "s.jiuyanFetchedAt" in rows, "午盘标记须带名单抓取时点（原料时点可追溯）"
+    assert "slotTag" not in rows and ">午盘</span>" not in rows, "驱动列不得再贴「午盘」徽标"
 
 
 # ── 2026-10-21 立项 R2：反包 KPI 卡 + 明细行（jev-rewrap-factor-preregistration.md）──
 def test_relay_page_has_rewrap_kpi_and_row():
-    """反包卡（点击筛选 scope=rewrap）+ 反包池明细行容器/渲染函数必须静态在场。"""
+    """反包 KPI 卡（点击筛选 scope=rewrap）必须在场；文字明细行与驱动列「午盘」徽标已删
+   （2026-10-21 用户反馈：纯多余，反包详情点击 KPI 卡筛选主表即可见）。"""
     html = (Path(__file__).resolve().parents[2] / "backend" / "relay_page" / "index.html").read_text(encoding="utf-8")
     assert "rewrap: '反包'" in html, "SCOPE_CN 缺反包范围"
     assert "onclick=\"lfScope('rewrap')\"" in html, "KPI 反包卡缺点击筛选"
-    assert 'id="labelRewrapRow"' in html and "function lfRenderRewrap" in html, "反包明细行缺容器/渲染"
-    assert "lfRenderRewrap();" in html, "反包明细行未接渲染链"
-    assert "午盘触板口径" in html, "反包卡/明细行缺口径徽标（触板≠封板）"
+    assert "午盘触板口径" in html, "反包卡缺口径徽标（触板≠封板）"
+    assert 'id="labelRewrapRow"' not in html and "lfRenderRewrap" not in html, "反包池文字行应已删除"
+    assert "反包池 " not in html, "反包池文字描述应已删除"
+    assert 'slotTag' not in html and ">午盘</span>" not in html, "驱动列「午盘」徽标应已删除"
