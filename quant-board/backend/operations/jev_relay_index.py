@@ -1779,7 +1779,7 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
     """
     from backend.analysis.hotlist.weak_to_strong import (
         classify_day, weak_to_strong_baseline, zt_series, limit_down_series,
-        relay_idx_series, STRONG_IDX_MIN, WEAK_IDX_MAX)
+        relay_idx_series, STRONG_IDX_MIN, WEAK_IDX_MAX, MIN_IDX_DELTA)
     from backend.operations.rewrap_pool import get_rewrap_pool
     cls = classify_day(db, date, dataset_id)
     base = weak_to_strong_baseline(db, dataset_id)
@@ -1811,9 +1811,16 @@ def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
             # 午盘档：形态不落地，只给预检参照（分类器确认基于收盘序列，不伪判）
             parts.append(f"午盘预检：{'、'.join(conf) if conf else '原料缺失'}（形态盘后定档）")
         elif weak_zone:
-            parts.append((f"结构确认命中：{'、'.join(conf) if conf else '无'} → 符合历史弱转强形态")
-                         if cls.get("hit") else
-                         f"结构确认未命中（{'、'.join(conf) if conf else '原料缺失'}），不贴形态标")
+            if cls.get("hit"):
+                parts.append(f"结构确认命中：{'、'.join(conf) if conf else '无'} → 符合历史弱转强形态")
+            elif cls.get("reason") in ("idx_below_strong", "delta_below_threshold"):
+                # 未达标的是指数侧（idx/Δ），结构侧状态单独表述（2026-10-22 措辞修复：
+                # 10-20 重跑后 idx 47.8<50 但 dt↓+zt↑ 均确认，旧文案误写「结构确认未命中」自相矛盾）
+                parts.append(f"指数未达强势区（{cls.get('idx')}，判据需≥{STRONG_IDX_MIN:g} 且 Δ≥{MIN_IDX_DELTA:g}）"
+                             + (f" · 结构确认已满足：{'、'.join(conf)}" if conf else " · 结构确认未满足")
+                             + "，不贴形态标")
+            else:
+                parts.append(f"结构确认未命中（{'、'.join(conf) if conf else '原料缺失'}），不贴形态标")
         else:
             parts.append(f"今日结构：{'、'.join(conf) if conf else '原料缺失'}"
                          f"（昨日非弱势区，不贴形态标）")

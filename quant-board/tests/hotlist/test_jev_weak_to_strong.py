@@ -193,3 +193,20 @@ def test_weak_to_strong_line_prev_missing_fail_visible(monkeypatch):
                  "snapshot_frames": FakeCol([])})
     line = R.weak_to_strong_line(db, "2026-03-04")
     assert "昨日 relayIndex 缺失" in line and "fail-visible" in line
+
+
+def test_weak_to_strong_line_idx_below_but_structural_confirm_wording():
+    """2026-10-20 重跑实证（idx 47.8<50 但 dt↓+zt↑ 均确认）暴露的措辞 bug 回归：
+    未达标的是指数侧时，文案必须把「指数未达」与「结构确认已满足」分开表述，
+    不得再写自相矛盾的「结构确认未命中（跌停 22→5↓、涨停 46→52↑）」。"""
+    db = _mk_db()  # 03-02 idx55 / 03-03 idx30(弱) / 03-04 idx55 命中 / ...
+    # 改造：03-04 落到 44（指数未达强势区），但跌停 20→5、涨停 30→55 结构双确认
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    from backend.operations.jev_relay_index import weak_to_strong_line
+    line = weak_to_strong_line(db, "2026-03-04")
+    assert "指数未达强势区（44.0" in line and "不贴形态标" in line
+    # 夹具无涨停帧，确认侧只有跌停证据（与 classify 的 confirm=[dt_down] 一致）
+    assert "结构确认已满足：跌停 20→5↓" in line
+    assert "结构确认未命中" not in line
