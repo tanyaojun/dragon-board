@@ -531,7 +531,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   quotesSort: { key: 'rank', dir: 1 },
   labelFilter: { q: '', board: '', height: '', driver: '', depth: '', fresh: '', buy: '', scope: 'zt' },
   diebanFilter: { q: '', board: '', scope: 'neg', streak: '', draw: '' },
-  relayFilter: { phase: '', momentum: '', ladder: '', money: '', theme: '', zone: '', leader: '' },
+  relayFilter: { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' },
   // 判定明细行选中（2026-10-18）：点行 → 页头 KPI 卡跟随该日联动；null=用日期框当日
   relayFocus: null,
   hitFilter: 'toxic',  // 「分区命中清单」筛选：all|toxic|ice|green（默认毒带=用户关注点）
@@ -1203,7 +1203,7 @@ function rSel(label, key){
     + list.map(([v, t2]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t2)}</option>`).join('') + '</select>';
 }
 function rSet(k, v){ STATE.relayFilter[k] = v; STATE.relayPage = 1; renderRelayTab(); }
-function rClear(){ STATE.relayFilter = { phase: '', momentum: '', ladder: '', money: '', theme: '', zone: '', leader: '' };
+function rClear(){ STATE.relayFilter = { phase: '', momentum: '', wzs: '', ladder: '', money: '', theme: '', zone: '', leader: '' };
   STATE.relayPage = 1; renderRelayTab(); }
 // ── 涨停分析表分页（2026-10-19 用户需求：表右上原「59 / 59 日（全库 109）」计数改为分页）──
 // 每页上限 20 条；只影响本表行切片，KPI/分带/相位等仍吃全量筛选集（口径不变）。
@@ -1353,6 +1353,7 @@ function renderRelayTab(){
     && (!f.ladder || (r.ladderHealth || '') === f.ladder)
     && (!f.money || (r.moneyEffect || '') === f.money)
     && (!f.theme || (r.themePulse || '') === f.theme)
+    && (!f.wzs || (f.wzs === 'hit' ? (r.wzs && r.wzs.hit) : (r.wzs && r.wzs.continuation)))
     && (!f.zone || zoneKey(zoneOf(r)) === f.zone)
     && (!f.leader || leaderBandOf(r) === f.leader));
   renderRelayKpi(shown);
@@ -1360,7 +1361,7 @@ function renderRelayTab(){
   const s = STATE.relaySort;
   const kv = { date: r => r.tradingDate || '', idx: r => r.relayIndex == null ? -1 : r.relayIndex,
     leader: r => r.leaderStrength == null ? -1 : r.leaderStrength,
-    zone: r => zoneOf(r).label || '' };
+    zone: r => zoneOf(r).label || '', wzs: wzsKey };
   const rows = shown.slice().sort((a, b) => { const va = kv[s.key](a), vb = kv[s.key](b);
     return (va < vb ? -1 : va > vb ? 1 : 0) * s.dir; });
   // 分页（2026-10-19 用户需求）：只切本表展示行，KPI / 分带 / 相位仍吃全量筛选集
@@ -1368,6 +1369,16 @@ function renderRelayTab(){
   STATE.relayPage = pg.page;   // 越界或筛选后回写，避免停在空页（页码是展示态，不参与口径）
   const pageRows = pg.rows;
   const th = (label, key) => `<th class="sortable" onclick="setRelaySort('${key}')">${label}${sortMark(s, key)}</th>`;
+  // 弱转强节点徽标（2026-10-21 立项，读口 wzs 字段；单源 analysis/hotlist/weak_to_strong）：
+  // hit=当日产生弱转强节点（绿）；continuation=前日节点次日延续（蓝）；无=灰点。缺 wzs（旧档/降级）→ '-'
+  const wzsB = r => {
+    const w = r.wzs;
+    if (!w) return '<span style="color:var(--muted2)">-</span>';
+    if (w.hit) return `<span class="badge b-green" title="弱转强节点：昨日 idx ${w.prevIdx} → 今日 ${w.idx}，结构确认 ${(w.confirm||[]).map(x=>x==='dt_down'?'跌停降':'涨停升').join('+')||'无'}（口径：relayIndex≤40→≥50 且 Δ≥+10，见 jev-weak-to-strong-day-study.md）">弱转强</span>`;
+    if (w.continuation) return '<span class="badge b-blue" title="前日弱转强节点的次日延续（全史延续率 3/18，一日游为主）">延续</span>';
+    return '-';
+  };
+  const wzsKey = r => r.wzs && r.wzs.hit ? 2 : (r.wzs && r.wzs.continuation ? 1 : 0);
   const body = pageRows.map(r => {
     const open = STATE.detailUi.relay.openKey === (r.tradingDate || '');
     const focused = STATE.relayFocus === r.tradingDate;
@@ -1381,11 +1392,12 @@ function renderRelayTab(){
     <td>${zoneBadge(r)}</td>
     <td><span${critTip('relay_phase', r.relayPhase, '相位', PHASE_DESC[r.relayPhase])}>${phaseB(r.relayPhase)}${confChip(((r.answers||{}).relay_phase||{}).confidence)}</span></td>
     <td><span${critTip('relay_momentum', r.relayMomentum, '边际', MOM_DESC[r.relayMomentum])}>${momB(r.relayMomentum)}${confChip(((r.answers||{}).relay_momentum||{}).confidence)}</span></td>
+    <td>${wzsB(r)}</td>
     <td><span${critTip('ladder_health', r.ladderHealth, '梯队', LADDER_DESC[r.ladderHealth])}>${ladderB(r.ladderHealth)}${confChip(((r.answers||{}).ladder_health||{}).confidence)}</span></td>
     <td><span${critTip('money_effect', r.moneyEffect, '钱效', MONEY_DESC[r.moneyEffect])}>${moneyB(r.moneyEffect)}${confChip(((r.answers||{}).money_effect||{}).confidence)}</span></td>
     <td><span${critTip('theme_pulse', r.themePulse, '题材', THEME_DESC[r.themePulse])}>${themeB(r.themePulse)}${confChip(((r.answers||{}).theme_pulse||{}).confidence)}</span></td>
     <td class="num" style="color:${tempColor(r.leaderStrength)};font-weight:600">${r.leaderStrength ?? '-'}</td></tr>`
-    + (open ? `<tr class="lg-detail"><td colspan="9">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
+    + (open ? `<tr class="lg-detail"><td colspan="10">${detailHtml(relayEntryOf(r), 'relay')}</td></tr>` : '');
   }).join('');
   STATE.relayEntries = shown.map(r => relayEntryOf(r));
   const bar = $('relayFilterBar');
@@ -1396,7 +1408,8 @@ function renderRelayTab(){
   // 守卫只拦筛选条重建（60s 轮询不夺焦点）；表格必须始终渲染——
   // 否则 onchange 触发时控件仍持焦，rSet 的重渲染会被吞掉（review I-1 实证）
   if (!(ae && bar.contains(ae) && ae.tagName === 'SELECT' && !ae.classList.contains('pgjump')))
-    bar.innerHTML = rSel('相位', 'phase') + rSel('边际', 'momentum') + rSel('梯队', 'ladder')
+    bar.innerHTML = rSel('相位', 'phase') + rSel('边际', 'momentum')
+      + rWzsSel() + rSel('梯队', 'ladder')
       + rSel('钱效', 'money') + rSel('题材', 'theme')
       + rZoneSel() + rLeaderSel()
       + `<button onclick="rClear()">清除筛选</button>` + relayPager(pg.page, pg.total);
@@ -1405,8 +1418,8 @@ function renderRelayTab(){
     // rSet/rClear 已把页码重置回 1，若不同步，pager 会停在旧页码/旧禁用态（评审 F-minor-1）。
     const pgEl = $('relayPager'); if (pgEl) pgEl.innerHTML = relayPager(pg.page, pg.total);
   }
-  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>梯队</th><th>钱效</th><th>题材</th>${th('龙头强度', 'leader')}</tr>`
-    + (body || '<tr><td colspan="9" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
+  $('relayTable').innerHTML = `<tr>${th('日期', 'date')}${th('指数', 'idx')}${th('分区', 'zone')}<th>相位</th><th>边际</th><th>节点</th><th>梯队</th><th>钱效</th><th>题材</th>${th('龙头强度', 'leader')}</tr>`
+    + (body || '<tr><td colspan="10" class="empty">无匹配判定（调整区间或筛选条件）</td></tr>');
   renderRelayAnalysis();
   const sbv = $('sbVer'); if (sbv) sbv.textContent = vers.length > 1 ? vers.join('+') : (vers[0] || '?');
 }
@@ -1415,6 +1428,13 @@ function renderRelayTab(){
 // 2026-10-18 BUG 复盘：手抄导致枚举与 zoneKey 分叉，两个「中性」选项筛不出结果）
 const ZONE_FILTER_LIST = ['green', 'toxic', 'mid', 'neutral', 'ice', 'na']
   .map(k => [k, ZONE_DEF[k].label === '—' ? '无指数' : ZONE_DEF[k].label]);
+function rWzsSel(){
+  const cur = STATE.relayFilter.wzs || '';
+  return `<select title="弱转强节点筛选（确定性口径，非模型判读）" onchange="rSet('wzs', this.value)">`
+    + [['', '节点 · 全部'], ['hit', '弱转强'], ['cont', '延续']]
+        .map(([v, t]) => `<option value="${esc(v)}"${cur === v ? ' selected' : ''}>${esc(t)}</option>`).join('')
+    + `</select>`;
+}
 function rZoneSel(){
   const cur = STATE.relayFilter.zone;
   return `<select title="分区筛选（判定分区，非分带观察页的赔率分区）" onchange="rSet('zone', this.value)">`

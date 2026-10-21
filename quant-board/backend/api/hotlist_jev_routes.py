@@ -259,6 +259,20 @@ def get_relay_index(
         for r in [*series, day_doc]:
             if r:
                 r["dayTemperature"] = temps.get(str(r.get("tradingDate")))
+        # 弱转强节点信号（2026-10-21 立项，用户需求：列表直观看节点）：单源
+        # analysis/hotlist/weak_to_strong.classify_series；失败降级不连坐读口（SF5 纪律）
+        wzs_error: str | None = None
+        wzs_map: dict[str, dict] = {}
+        try:
+            from backend.analysis.hotlist.weak_to_strong import classify_series
+            wzs_map = classify_series(db, dataset_id)
+        except Exception as exc:
+            import sys
+            print(f"[relay-index] weak_to_strong classify failed: {exc}", file=sys.stderr)
+            wzs_error = f"weak_to_strong_classify_failed: {exc}"
+        for r in [*series, day_doc]:
+            if r:
+                r["wzs"] = wzs_map.get(str(r.get("tradingDate")))
         payload = {
             "ok": True, "datasetId": dataset_id, "date": latest,
             "day": day_doc,
@@ -267,6 +281,8 @@ def get_relay_index(
         }
         if join_error:
             payload["dayTemperatureDegraded"] = join_error
+        if wzs_error:
+            payload["wzsDegraded"] = wzs_error
         return payload
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"relay_index_read_failed: {exc}"}

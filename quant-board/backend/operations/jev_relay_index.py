@@ -1767,6 +1767,84 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
 
 # ── 段 0a-2：反包修复行（2026-10-21 立项，jev-rewrap-factor-preregistration.md R1）───
 
+def weak_to_strong_line(db: Any, date: str, slot: str = "15:00",
+                        dataset_id: str = DEFAULT_DATASET_ID) -> str:
+    """弱转强形态参照行（2026-10-21 立项，用户裁决 A 路线：语料增补、题目集零改动）。
+
+    规则/基线单源 = `analysis/hotlist/weak_to_strong`（与 jev-weak-to-strong-day-study.md 同链）。
+    设计纪律：形态判定不用当日 relayIndex（循环依赖），只用「昨日 idx≤40 + 今日结构确认」；
+    昨日非弱势区不贴标（防标签通胀），只给基率参照；T+1 延续率（一日游为主）始终在场——
+    它是本行给模型的最重要反直觉锚。
+    午盘档：跌停家数由盘后链写入，午盘只做涨停侧确认并显式注记（不伪判），形态盘后定档。
+    """
+    from backend.analysis.hotlist.weak_to_strong import (
+        classify_day, weak_to_strong_baseline, zt_series, limit_down_series,
+        relay_idx_series, STRONG_IDX_MIN, WEAK_IDX_MAX)
+    from backend.operations.rewrap_pool import get_rewrap_pool
+    cls = classify_day(db, date, dataset_id)
+    base = weak_to_strong_baseline(db, dataset_id)
+    dt = limit_down_series(db)
+    zt = zt_series(db, dataset_id)
+    parts: list[str] = []
+    prev_date = _prev_relay_date(db, date)
+    if cls.get("prevIdx") is None or prev_date is None:
+        parts.append(f"昨日 relayIndex 缺失（形态不可判，fail-visible）")
+    else:
+        prev_i = cls["prevIdx"]
+        zone_txt = "弱势区" if prev_i <= WEAK_IDX_MAX else (
+            "中强区" if prev_i >= STRONG_IDX_MIN else "中性区")
+        from backend.analysis.hotlist.market_facts import frame_market_facts
+        conf: list[str] = []
+        p_dt, c_dt = dt.get(prev_date), dt.get(date)
+        p_zt = zt.get(prev_date)
+        c_zt = (frame_market_facts(db, date, slot, dataset_id) or {}).get("ztCount") \
+            if slot != "15:00" else zt.get(date)
+        if c_dt is not None and p_dt is not None:
+            conf.append(f"跌停 {p_dt}→{c_dt}" + ("↓" if c_dt < p_dt else ""))
+        elif slot != "15:00":
+            conf.append("跌停盘后写入（午盘不可判）")
+        if c_zt is not None and p_zt is not None:
+            conf.append(f"涨停 {p_zt}→{int(c_zt)}" + ("↑" if c_zt > p_zt else ""))
+        parts.append(f"昨日 relayIndex {prev_i}（{zone_txt}）")
+        weak_zone = prev_i <= WEAK_IDX_MAX
+        if slot != "15:00":
+            # 午盘档：形态不落地，只给预检参照（分类器确认基于收盘序列，不伪判）
+            parts.append(f"午盘预检：{'、'.join(conf) if conf else '原料缺失'}（形态盘后定档）")
+        elif weak_zone:
+            parts.append((f"结构确认命中：{'、'.join(conf) if conf else '无'} → 符合历史弱转强形态")
+                         if cls.get("hit") else
+                         f"结构确认未命中（{'、'.join(conf) if conf else '原料缺失'}），不贴形态标")
+        else:
+            parts.append(f"今日结构：{'、'.join(conf) if conf else '原料缺失'}"
+                         f"（昨日非弱势区，不贴形态标）")
+    parts.append(f"历史基线（05-06 起 {base.get('hitN', '?')} 次）："
+                 f"弱转强日反包率均值 {_pct_txt(base.get('hitRewrapMean'))}"
+                 f"（全体 {_pct_txt(base.get('allRewrapMean'))}）"
+                 + (f" · T-1 跌停中位 {base['dtPrevMedian']}→当日 {base['dtHitMedian']} 家"
+                    if base.get("dtPrevMedian") is not None else "")
+                 + (f" · T+1 延续率 {base['contOk']}/{base['contTotal']}（一日游为主，次日回踩常见）"
+                    if base.get("contTotal") else ""))
+    # 今日反包率相对基线位置（率口径，池快照缺失则不写）
+    today_pool = get_rewrap_pool(db, date, "final") or {}
+    tr = today_pool.get("rewrapRate")
+    if isinstance(tr, (int, float)) and not isinstance(tr, bool) and base.get("hitRewrapMean"):
+        pos = "带内" if abs(tr - base["hitRewrapMean"]) <= base["hitRewrapMean"] * 0.3 else (
+            "高于" if tr > base["hitRewrapMean"] else "低于")
+        parts.append(f"今日反包率 {round(tr * 100, 1)}%{pos}弱转强日均值")
+    return "弱转强参照：" + " · ".join(parts)
+
+
+def _prev_relay_date(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str | None:
+    """relayIndex 序列里严格早于 date 的最近一日（分类器同源轴）。"""
+    from backend.analysis.hotlist.weak_to_strong import relay_idx_series
+    prevs = [d for d in sorted(relay_idx_series(db)) if d < date]
+    return prevs[-1] if prevs else None
+
+
+def _pct_txt(v: float | None) -> str:
+    return f"{round(v * 100, 1)}%" if isinstance(v, (int, float)) else "—"
+
+
 def rewrap_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
     """反包修复行：昨日断板候选池 × 今日回封（断板反包）+ 昨日炸板池今日回封。
 
@@ -1963,6 +2041,8 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     lines.append(zhaban_face_line(db, date, dataset_id))
     # 段 0a-2 反包修复行（2026-10-21 立项 R1）：分歧证据（炸板面）×修复证据（反包）相邻对读
     lines.append(rewrap_face_line(db, date, dataset_id))
+    # 段 0a-3 弱转强形态参照行（2026-10-21 立项，用户裁决 A 路线）：修复证据 × 历史基率对读
+    lines.append(weak_to_strong_line(db, date, slot="15:00", dataset_id=dataset_id))
     lines.append(relay_flow_line(db, date, dataset_id, money_hist=money_hist))
     lines.append(ladder_structure_line(db, date))
     # 段2 记忆

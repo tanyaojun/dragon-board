@@ -171,3 +171,40 @@ def test_relay_index_join_failure_degrades_field_not_route(monkeypatch):
     assert body["ok"] is True and len(body["series"]) == 1
     assert body["series"][0]["dayTemperature"] is None
     assert "dayTemperatureDegraded" in body
+
+
+# ── 弱转强节点信号（2026-10-21 立项，用户需求：列表直观看节点） ─────────────
+def test_relay_index_attaches_wzs_per_row(client, monkeypatch):
+    """series/day 每行携带 wzs 分类结果（单源 analysis/hotlist/weak_to_strong）。"""
+    import backend.analysis.hotlist.weak_to_strong as W
+    fixed = {_D1: {"hit": False, "continuation": False, "prevIdx": None, "idx": 46.3,
+                   "confirm": [], "reason": "prev_not_weak"},
+             _D2: {"hit": True, "continuation": False, "prevIdx": 39.0, "idx": 64.4,
+                   "confirm": ["dt_down", "zt_up"], "reason": None},
+             _D3: {"hit": False, "continuation": True, "prevIdx": 64.4, "idx": 51.1,
+                   "confirm": [], "reason": "prev_not_weak"}}
+    monkeypatch.setattr(W, "classify_series", lambda db, *a, **k: fixed)
+    body = client.get("/api/hotlist-jev/relay-index").json()
+    assert body["ok"] is True and "wzsDegraded" not in body
+    series = {s["tradingDate"]: s for s in body["series"]}
+    assert series[_D2]["wzs"]["hit"] is True
+    assert series[_D3]["wzs"]["continuation"] is True
+    assert body["day"]["wzs"]["continuation"] is True
+
+
+def test_relay_index_wzs_failure_degrades_not_route(client, monkeypatch):
+    """分类器抛异常（存储故障）→ wzs=None + degraded 标注，读口不倒；
+    原料缺失（如 zt 帧缺）不走降级，分类器按「结构确认缺失」正常归类（fail-visible 语义）。"""
+    body = client.get("/api/hotlist-jev/relay-index").json()
+    assert body["ok"] is True
+    assert all(s.get("wzs") is not None for s in body["series"]), "原料缺失≠降级：仍出分类（无 zt 序列→结构确认缺失路径）"
+    assert all(s["wzs"]["reason"] in ("insufficient_history", "prev_not_weak", "no_structural_confirm")
+               for s in body["series"])
+    assert "wzsDegraded" not in body
+    import backend.analysis.hotlist.weak_to_strong as W
+    def _boom(db, *a, **k):
+        raise RuntimeError("storage broken")
+    monkeypatch.setattr(W, "classify_series", _boom)
+    body2 = client.get("/api/hotlist-jev/relay-index").json()
+    assert body2["ok"] is True and all(s.get("wzs") is None for s in body2["series"])
+    assert "wzsDegraded" in body2

@@ -178,14 +178,20 @@ def _clear_io_caches():
     """
     from backend.operations import jev_label_jiuyan as _runner
     from backend.operations import market_dieban_pool as _dieban
+    from backend.analysis.hotlist import weak_to_strong as _wzs
 
     # 除权因子源（百度）的缓存/失败退避也是模块级 IO 状态：残留会让后续用例静默拿到
     # 空事件表而假失败（2026-10-16 实测：test_jev_streak_map 跑完后
     # test_jev_dividend_adjust 的除权解析用例 KeyError）
     _clear_jev_runner_caches(_runner)
+    # 弱转强基线/涨停序列缓存（analysis 层，非 runner 属性，单独清；2026-10-22a）
+    _wzs._BASELINE_CACHE.clear()
+    _wzs._ZT_SERIES_CACHE.clear()
     _dieban.reset_em_throttle_state()
     yield
     _clear_jev_runner_caches(_runner)
+    _wzs._BASELINE_CACHE.clear()
+    _wzs._ZT_SERIES_CACHE.clear()
     _dieban.reset_em_throttle_state()
 
 

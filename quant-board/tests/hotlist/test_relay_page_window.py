@@ -155,7 +155,9 @@ def test_table_columns_drop_tokens_time_add_leader(js: str):
     assert "tokens" not in head, "表头不应再含 tokens 列"
     assert "判定时间" not in head, "表头不应再含判定时间列"
     assert "龙头强度" in head, "表头应含龙头强度列"
-    assert 'colspan="9"' in rt, "展开详情行 colspan 应为 9"
+    assert "节点" in head and "wzsB" in rt, "表头应含弱转强节点列（2026-10-21 立项）"
+    assert 'colspan="10"' in rt, "展开详情行 colspan 应为 10（加节点列后）"
+    assert 'rWzsSel' in js, "节点筛选下拉必须接线"
     # 行体不再渲染 token 数 / computedAt 单元格
     assert "input_tokens" not in rt and "output_tokens" not in rt
     assert "computedAt" not in rt
