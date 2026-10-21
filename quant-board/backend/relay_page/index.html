@@ -1750,6 +1750,37 @@ function eodRerun(key){
     });
 }
 
+// 个股驱动打标单股复跑（2026-10-21 用户需求）：涨停复盘行展开的 jev 日志详情卡【重跑】。
+// 真实调用 jev 模型（≈2K tokens/股），走 POST /api/hotlist-jev/limitup-labels/rerun
+// （后端复用 jev_label_jiuyan.run，force+only_codes 单股，沿用原投喂槽位口径）；
+// 成功后 loadAll 重拉涨停复盘读口（行文档 _id={date}:{code} 稳定，展开态由 openKey 维持）。
+function labRerun(key){
+  if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
+  const e = (STATE.labelEntries || []).find(x => x.key === key);
+  const d = e && e.doc;
+  if (!d) return;
+  const ok = window.confirm(`重跑 ${d.tradingDate || ''} ${d.name || d.code || ''} 驱动打标？\n\n将真实调用 jev 模型（约 2K tokens）重新判定该股四题并覆盖存档（沿用${d.labelSlot === 'midday' ? '午盘' : '收盘'}槽位口径）。`);
+  if (!ok) return;
+  STATE.rerunBusy = key;
+  STATE.rerunMsg = null;
+  renderLabels();
+  jpost('/api/hotlist-jev/limitup-labels/rerun', { date: d.tradingDate,
+    code: String(d.code || '').slice(-6), datasetId: d.datasetId || undefined })
+    .then(r => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
+        ? `重跑成功：${(r.doc && (r.doc.name || r.doc.code)) || d.code} · 驱动 ${((r.doc || {}).label) || '-'} · ${(r.doc && r.doc.labelSlot) || '-'} 槽`
+        : `重跑未成功（${(r && (r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+      return loadAll();
+    })
+    .catch(err => {
+      STATE.rerunBusy = null;
+      STATE.rerunMsg = { key: key, ok: false,
+        text: '重跑请求失败：' + (err && err.message ? err.message : err) };
+      renderLabels();
+    });
+}
+
 // ---------- 题材龙头（连板指数子视图 rv-themes，2026-10-20） ----------
 // 与【涨停分析】同构（用户裁决：共用 KPI 卡与时间范围，删除初版自建 KPI）：
 //   · 行源 = **当前区间内全部龙头-日**（`/api/hotlist-jev/theme-leaders?start&end`，
@@ -2373,8 +2404,11 @@ function lfRenderKpi(stocks, f){
   const L = STATE.labels || {}, deg = (L.summary || {}).degradedCount || 0;
   const JOIN_CN = {jiuyan_final_missing: '韭研final缺失', prev_pool_missing: '昨日池缺失',
     ths_pool_missing: '今日炸板池缺失', prev_ths_pool_missing: '昨日炸板池缺失'};
+  // 2026-10-21：盘中 final 未出、午盘名单兑底（后端 boardJoinSlot=midday）→ 显式注记口径
+  const slotNote = L.boardJoinSlot === 'midday' ? ' · 高度join=午盘名单' : '';
   const joinNote = L.boardJoinError ? ' · 高度join失败'
-    : (L.boardJoinDegraded ? ' · 高度降级:' + (JOIN_CN[L.boardJoinDegraded] || L.boardJoinDegraded) : '');
+    : (L.boardJoinDegraded ? ' · 高度降级:' + (JOIN_CN[L.boardJoinDegraded] || L.boardJoinDegraded) : '')
+    + slotNote;
   const card = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
   const hCard = (k, v, key) => canHeight
     ? `<div class="kpi click${f.height === key ? ' on' : ''}" title="点击筛选：${k}" onclick="lfHeight('${key}')"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${pct(v)}% · 点击筛选</div></div>`
@@ -3388,17 +3422,22 @@ function detailHtml(e, view){
   const st = d.status || '-';
   const stColor = st === 'ok' ? '#16a34a' : st === 'degraded' ? '#a16207' : '#dc2626';
   // 复跑入口（2026-10-19 用户需求）：relay 日级卡=单日复跑；slot 帧级卡（不含 EOD）=单槽复跑。
+  // 2026-10-21 增补（用户需求）：lab=涨停复盘个股驱动打标单股复跑（POST /limitup-labels/rerun）。
   // 均置于【详细信息】左侧；busy 时全局禁用，防并发重复调用模型（成本护栏）。
   const rerunKind = view === 'relay' ? 'relay'
     : view === 'slot' ? (e.kind === 'slot' ? 'slot' : (e.kind === 'eod' ? 'eod' : null))
+    : view === 'lab' ? 'lab'
     : null;
   const busy = !!rerunKind && STATE.rerunBusy === e.key;
   const rerunCall = rerunKind === 'relay' ? `relayRerun('${js(e.key)}')`
-    : rerunKind === 'slot' ? `slotRerun('${js(e.key)}')` : `eodRerun('${js(e.key)}')`;
+    : rerunKind === 'slot' ? `slotRerun('${js(e.key)}')`
+    : rerunKind === 'lab' ? `labRerun('${js(e.key)}')` : `eodRerun('${js(e.key)}')`;
   const rerunHint = rerunKind === 'relay'
     ? '真实调用 jev 模型重判该日（≈7.5K tokens），仅用于网络抖动导致的 degraded'
     : rerunKind === 'slot'
     ? '真实调用 jev 模型重判该槽（≈3K tokens），仅用于网络抖动导致的 degraded/no_data'
+    : rerunKind === 'lab'
+    ? '真实调用 jev 模型重判该股驱动四题（≈2K tokens），沿用原投喂槽位口径'
     : '真实调用 jev 模型重判当日 EOD 情绪（≈4K tokens），仅用于网络抖动导致的 degraded/no_data';
   const rerunBtn = rerunKind
     ? `<button class="rerun"${busy ? ' disabled' : ''} title="${rerunHint}"

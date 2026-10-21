@@ -47,20 +47,29 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
         # 2026-10-10 增补：个股高度/封板时间/板块 + 漏标连板标记
         # （join 抽 jev_label_jiuyan.jiuyan_board_info，与 _jiuyan_ladder 同口径；
         #   失败/降级置结构化旗标，不阻断主读口，前端据旗标注记高度口径状态）
+        # 2026-10-21 用户报障修复：盘中只有 {date}:midday 午盘名单（12:30 投喂槽），
+        # final 缺失导致封板时间/原因/高度/领涨四列恒空 → 开启午盘兑底，
+        # 并以 boardJoinSlot=midday 显式注记口径（不冒充收盘，§4.0）
         try:
             from backend.operations.jev_label_jiuyan import jiuyan_board_info, jiuyan_streak_map
-            board_info, meta = jiuyan_board_info(db, date)
-            if not meta.get("jiuyanFinalFound"):
+            board_info, meta = jiuyan_board_info(db, date, allow_midday_fallback=True)
+            # 降级优先级：final+midday 双缺 > 今日炸板池缺 > 昨日池缺 > 昨日炸板池缺；
+            # 午盘兑底生效时不算「final 缺失」降级（数据在，口径不同，由 boardJoinSlot 注记），
+            # 但 THS/prev 池降级仍独立检查（盘中 15:00 池本不存在，必须 fail-visible）
+            if meta.get("middayFallbackUsed"):
+                result["boardJoinSlot"] = "midday"
+            elif not meta.get("jiuyanFinalFound"):
                 result["boardJoinDegraded"] = "jiuyan_final_missing"
-            elif not meta.get("thsPoolFound"):
-                # 今日炸板池缺失 → 触板名单无法二分，涨停口径退化为触板口径（最严重，优先暴露）
-                result["boardJoinDegraded"] = "ths_pool_missing"
-            elif not meta.get("prevPoolFound"):
-                # 昨日池轴缺失 → 漏标判定不可用，漏标股会落回首板口径（必须可见）
-                result["boardJoinDegraded"] = "prev_pool_missing"
-            elif meta.get("prevThsPoolFound") is False:
-                # 昨日炸板池缺失 → 漏标判定不可信（宁漏标不误标，已置空 prev_sealed）
-                result["boardJoinDegraded"] = "prev_ths_pool_missing"
+            if not result.get("boardJoinDegraded"):
+                if not meta.get("thsPoolFound"):
+                    # 今日炸板池缺失 → 触板名单无法二分，涨停口径退化为触板口径（最严重，优先暴露）
+                    result["boardJoinDegraded"] = "ths_pool_missing"
+                elif not meta.get("prevPoolFound"):
+                    # 昨日池轴缺失 → 漏标判定不可用，漏标股会落回首板口径（必须可见）
+                    result["boardJoinDegraded"] = "prev_pool_missing"
+                elif meta.get("prevThsPoolFound") is False:
+                    # 昨日炸板池缺失 → 漏标判定不可信（宁漏标不误标，已置空 prev_sealed）
+                    result["boardJoinDegraded"] = "prev_ths_pool_missing"
             for stock in result.get("stocks") or []:
                 info = board_info.get(str(stock.get("code") or "")[-6:])
                 if info:
@@ -85,7 +94,7 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
             # 真连板口径与 market_metrics/quotes-review 同源 jiuyan_streak_map（N==M 直取 /
             # N>M 回溯 / num=None→首板 1；断板回溯不可算→None 不冒充；今日炸板→None）。
             # boards 保留「N天M板」空间口径作注记；KPI 分桶/筛选/排序改吃 streak。
-            streaks = jiuyan_streak_map(db, date)
+            streaks = jiuyan_streak_map(db, date, allow_midday_fallback=True)
             for stock in result.get("stocks") or []:
                 code6 = str(stock.get("code") or "")[-6:]
                 if code6 in streaks:
@@ -99,7 +108,7 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
             # 2026-10-15：dragon_rows 增带 code，前端据此只渲染与本行 code 相同的那条龙序
             # （「领涨」列从「板块龙一二三全列」改为「本股身位」，非领涨股显示 '-'）
             from backend.operations.jev_label_jiuyan import jiuyan_board_dragons
-            dragons = jiuyan_board_dragons(db, date)
+            dragons = jiuyan_board_dragons(db, date, allow_midday_fallback=True)
             for stock in result.get("stocks") or []:
                 stock["boardDragons"] = dragons.get(
                     stock.get("boardName") or stock.get("board") or "") or []
@@ -298,5 +307,79 @@ def post_theme_leader_rerun(payload: ThemeLeaderRerunPayload) -> dict[str, Any]:
             "latencyMs": doc.get("latencyMs"),
             "errorCode": doc.get("errorCode"), "errorDetail": doc.get("errorDetail"),
             "computedAt": doc.get("computedAt"),
+        },
+    }
+
+
+# ── 涨停复盘个股驱动打标「单股复跑」（2026-10-21 用户需求，日志详情卡【重跑】） ──
+# 范式对齐 /theme-leaders/rerun（F6：computedAt 未刷新=未真重判，显式报错不冒充成功）。
+class LimitupLabelRerunPayload(BaseModel):
+    """单只个股-日驱动打标重跑（真实调用 jev ≈2K tokens/次）。"""
+    date: str
+    code: str
+    datasetId: str | None = None
+
+
+@router.post("/limitup-labels/rerun")
+def post_limitup_label_rerun(payload: LimitupLabelRerunPayload) -> dict[str, Any]:
+    """单股**重跑**驱动打标（涨停复盘行展开日志详情卡【重跑】按钮）：
+
+    - 复用生产打标入口 ``jev_label_jiuyan.run``（``force=True`` + ``only_codes`` 单股过滤，
+      不带 only_codes 会整日重烧 ≈21 万 tokens）；
+    - 槽位沿用旧档 ``labelSlot``（midday 档沿午盘口径重判；伪午盘/名单缺失显式报错）；
+    - 旧档带 phaseBand（五题合并代际）→ ``with_stock_phase=True`` 同 call 重建，相位不丢；
+    - ``force=True`` 覆盖幂等；失败照常落 degraded 或不覆盖（computedAt 未刷新 → not_rerun）。
+    """
+    if not ((os.environ.get("JEV_TYPESAFE_KEY") or "").strip()
+            or (os.environ.get("JEV_CF_TOKEN") or "").strip()):
+        return {"ok": False, "errorCode": "missing_token",
+                "error": "JEV_TYPESAFE_KEY / JEV_CF_TOKEN not configured"}
+    date = (payload.date or "").strip()
+    code = (payload.code or "").strip()[-6:]
+    if not date or not code:
+        return {"ok": False, "errorCode": "bad_payload", "error": "date and code required"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
+        from backend.operations.jev_label_jiuyan import (
+            DEFAULT_ACCOUNT_ID, SLOT_MIDDAY, midday_source_state, run)
+
+        col = db["hotlist_jev_driver_labels"]
+        before = col.find_one({"_id": f"{date}:{code}"})
+        if before is None:
+            return {"ok": False, "errorCode": "not_found",
+                    "error": f"{date}:{code} 无驱动打标存档（该 code 不在当日名单）"}
+        slot = before.get("labelSlot") if before.get("labelSlot") in ("final", "midday") else "final"
+        if slot == SLOT_MIDDAY:
+            state = midday_source_state(db, date)
+            if not state["ok"]:
+                return {"ok": False, "errorCode": "midday_not_feedable",
+                        "error": f"午盘名单不可投喂（{state['reason']}）：{state['detail']}"
+                                 f"；该档不可按午盘口径重判，走收盘链投喂"}
+        before_at = before.get("computedAt")
+        tok = os.environ.get("JEV_CF_TOKEN") or ""
+        acc = os.environ.get("JEV_CF_ACCOUNT", DEFAULT_ACCOUNT_ID)
+        run(date, date, False, tok, acc, workers=1,
+            with_stock_phase=bool(before.get("phaseBand")),
+            dataset_id=payload.datasetId or DEFAULT_DATASET_ID,
+            confirm_budget=True, force=True, only_codes={code}, slot=slot)
+        doc = col.find_one({"_id": f"{date}:{code}"})
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"limitup_label_rerun_failed: {exc}"}
+    if doc is None or doc.get("computedAt") == before_at:
+        return {"ok": False, "errorCode": "not_rerun",
+                "error": f"{date}:{code} computedAt 未刷新（入口跳过或两次 jev 调用均失败，未真重判）"}
+    return {
+        "ok": True,
+        "doc": {
+            "tradingDate": doc.get("tradingDate"), "code": doc.get("code"),
+            "name": doc.get("name"), "labelSlot": doc.get("labelSlot"),
+            "status": doc.get("status"), "label": doc.get("label"),
+            "errorCode": doc.get("errorCode"), "errorDetail": doc.get("errorDetail"),
+            "model": doc.get("model"), "usage": doc.get("usage"),
+            "latencyMs": doc.get("latencyMs"), "computedAt": doc.get("computedAt"),
         },
     }

@@ -107,7 +107,8 @@ def test_board_info_bisect_and_unmarked():
         _std_cols(today, prev_codes=["600001", "600002", "600003"],
                   today_failed=["600004"], prev_failed=["600001"]), "2026-10-09")
     assert meta == {"jiuyanFinalFound": True, "prevPoolFound": True,
-                    "thsPoolFound": True, "prevThsPoolFound": True, "thsZhabanTotal": 1}
+                    "thsPoolFound": True, "prevThsPoolFound": True, "thsZhabanTotal": 1,
+                    "jiuyanSlot": "final", "middayFallbackUsed": False}
     assert "boardUnmarked" not in info["600001"]  # 昨日炸板股今日涨停=首板，不误标
     assert info["600002"]["boardUnmarked"] is True  # 昨日封板今日 num 空 → 真漏标
     assert info["600003"]["boards"] == 2 and "boardUnmarked" not in info["600003"]
@@ -461,7 +462,7 @@ def test_limitup_route_streak_passthrough(monkeypatch):
         "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
     # 真连板单源打桩（N>M 回溯会触 TDX 日线 IO，测试禁真调用，§1.2-7）：回溯值 2 由单源给
     monkeypatch.setattr(jiuyan_mod, "jiuyan_streak_map",
-                        lambda db_, date_, dataset_id=None:
+                        lambda db_, date_, dataset_id=None, allow_midday_fallback=False:
                         {"002696": 5, "001318": 2, "603237": 1})
     app = FastAPI()
     app.include_router(limitup_module.router)
@@ -474,3 +475,93 @@ def test_limitup_route_streak_passthrough(monkeypatch):
     assert by_code["001318"]["boards"] == 4 and by_code["001318"]["days"] == 7  # 空间注记保留
     assert by_code["603237"]["streak"] == 1                       # 韭研首板口径
     assert "streak" not in by_code["605003"]                      # final 外不伪造
+    # 2026-10-21 review 护栏：兜底注记只在真兜底（final 缺失回退午盘）时出现，
+    # EOD 路径（final 在档）不得携带 boardJoinSlot
+    assert "boardJoinSlot" not in resp.json()
+
+
+def test_board_info_midday_fallback_intraday():
+    """盘中兜底（2026-10-21 用户报障）：盘中只有 {date}:midday 午盘名单，final 缺失
+    导致涨停复盘封板时间/原因/高度/领涨四列恒空。修法 = allow_midday_fallback=True
+    时回退读午盘名单（同结构 join），meta 显式记口径（middayFallbackUsed/jiuyanSlot）；
+    默认 False（EOD 消费方）不兜底 → 空结果，既有契约零变化。"""
+    midday = {"_id": "2026-10-09:midday",
+              "fields": [{"name": "大农业", "stocks": [
+                  {"code": "600003", "name": "双连板", "num": "2天2板", "time": "09:31:00",
+                   "expound": "人形机器人（金属腱绳）+光伏\n1. 已核实…"}]}]}
+    db = MultiFakeDb({"jiuyan_action": FinalCol([midday]),
+                      "snapshot_frames": FramesCol([])})
+    info, meta = jiuyan_board_info(db, "2026-10-09", allow_midday_fallback=True)
+    assert meta["jiuyanFinalFound"] is False
+    assert meta["middayFallbackUsed"] is True and meta["jiuyanSlot"] == "midday"
+    assert info["600003"]["limitUpTime"] == "09:31:00"
+    assert info["600003"]["boards"] == 2 and info["600003"]["days"] == 2
+    assert info["600003"]["reason"] == "人形机器人（金属腱绳）+光伏"
+    assert info["600003"]["boardName"] == "大农业"
+    # THS 15:00 池盘中不存在 → 二分不可用，meta 如实降级（宁缺不冒充封板）
+    assert meta["thsPoolFound"] is False
+    # 默认关兜底：final 缺失 → 空 join（EOD 消费方零变化）
+    info2, meta2 = jiuyan_board_info(db, "2026-10-09")
+    assert info2 == {}
+    assert meta2["middayFallbackUsed"] is False and meta2["jiuyanSlot"] == "final"
+
+
+def test_board_dragons_midday_fallback():
+    """领涨 join 同病同修：final 缺失时 allow_midday_fallback=True 回退午盘名单。"""
+    midday = {"_id": "2026-10-09:midday",
+              "fields": [{"name": "大农业", "stocks": [
+                  {"code": "600003", "name": "双连板", "num": "2天2板", "time": "09:31:00"}]}]}
+    db = MultiFakeDb({"jiuyan_action": FinalCol([midday]),
+                      "snapshot_frames": FramesCol([])})
+    dragons = jiuyan_board_dragons(db, "2026-10-09", allow_midday_fallback=True)
+    assert [d["name"] for d in dragons["大农业"]] == ["双连板"]
+    assert dragons["大农业"][0]["role"] == "龙一"
+    # 默认关兜底：空 map（降级由调用方 boardJoinDegraded 旗标注记）
+    assert jiuyan_board_dragons(db, "2026-10-09") == {}
+
+
+def test_limitup_route_intraday_midday_fallback(monkeypatch):
+    """盘中读口端到端（2026-10-21 用户报障）：final 未出、打标档来自午盘投喂 →
+
+    - boardJoinSlot=midday 口径注记（不冒充收盘，§4.0），不标 jiuyan_final_missing；
+    - 封板时间/涨停原因/高度/领涨四列有值（午盘名单 join 兑底生效）；
+    - THS 15:00 池盘中不存在 → boardJoinDegraded=ths_pool_missing（fail-visible，
+      涨停口径退化为触板口径必须可见）。
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import backend.operations.jev_label_jiuyan as jiuyan_mod
+    from backend.api import hotlist_jev_limitup_routes as limitup_module
+
+    labels = [{"_id": "2026-10-09:600003", "tradingDate": "2026-10-09", "status": "ok",
+               "origin": "driver_label_jiuyan_v3_pilot", "code": "600003", "name": "双连板",
+               "label": "ma_restructure", "labelSlot": "midday",
+               "jiuyanContext": {"board": "大农业"}}]
+    db = MultiFakeDb({
+        "hotlist_jev_driver_labels": _LabelsCol(labels),
+        "jiuyan_action": FinalCol([
+            {"_id": "2026-10-09:midday", "fields": [{"name": "大农业", "stocks": [
+                {"code": "600003", "name": "双连板", "num": "2天2板", "time": "09:31:00",
+                 "expound": "人形机器人+光伏"}]}]},
+        ]),
+        "snapshot_frames": FramesCol([]),
+    })
+    monkeypatch.setattr(
+        "backend.data.repositories.repository_factory.get_runtime_mongodb_database", lambda: db)
+    # 真连板单源打桩：盘中 THS 池缺失 → 全股 None（缓存键含 fallback 旗标，测试内直打桩避免 IO）
+    monkeypatch.setattr(jiuyan_mod, "jiuyan_streak_map",
+                        lambda db_, date_, dataset_id=None, allow_midday_fallback=False: {})
+    app = FastAPI()
+    app.include_router(limitup_module.router)
+    resp = TestClient(app).get("/api/hotlist-jev/limitup-labels", params={"date": "2026-10-09"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["boardJoinSlot"] == "midday"
+    assert body["boardJoinDegraded"] == "ths_pool_missing"
+    s = body["stocks"][0]
+    assert s["limitUpTime"] == "09:31:00"
+    assert s["reason"] == "人形机器人+光伏"
+    assert s["boards"] == 2 and s["days"] == 2
+    assert s["boardName"] == "大农业"
+    assert [d["name"] for d in s["boardDragons"]] == ["双连板"]

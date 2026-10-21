@@ -589,3 +589,26 @@ def test_local_take_single_source_with_tdx_module():
     import inspect
     src = inspect.getsource(runner)
     assert "_LOCAL_TAKE = _TDX_DEFAULT_TAKE" in src, "不得退回手抄 400 字面量"
+
+
+def test_transitional_not_cached_pool_late():
+    """2026-10-21 review P1：final 已落但 THS 15:00 帧未到（transitional）→ 全股 None
+    且**不落缓存**——帧落库后重算即得真值，不得把盘中不可算态锁存到收盘后
+    （否则同进程内 boards 已是 final 口径而 streak 恒 None，混口径直到重启）。"""
+    frames = FakeCol([])   # 15:00 帧未落
+    jiuyan = FakeCol([_final("2026-10-15", [{"code": "002343", "name": "慈文传媒", "num": "5天5板"}])])
+    db = FakeDb({"snapshot_frames": frames, "jiuyan_action": jiuyan})
+    assert jiuyan_streak_map(db, "2026-10-15") == {"002343": None}
+    # 帧落库（盘后链到位）→ 重算得真值，而非命中陈旧 None
+    frames.rows.append(_frame("2026-10-15"))
+    assert jiuyan_streak_map(db, "2026-10-15") == {"002343": 5}
+
+
+def test_transitional_not_cached_final_late():
+    """final 未落档（含午盘兜底口径 info 非空但 jiuyanFinalFound=False）→ 不落缓存：
+    收盘 final 到位后同键重算得终口径。"""
+    jiuyan = FakeCol([])
+    db = FakeDb({"snapshot_frames": FakeCol([_frame("2026-10-15")]), "jiuyan_action": jiuyan})
+    assert jiuyan_streak_map(db, "2026-10-15") == {}
+    jiuyan.rows.append(_final("2026-10-15", [{"code": "002343", "name": "慈文传媒", "num": "5天5板"}]))
+    assert jiuyan_streak_map(db, "2026-10-15") == {"002343": 5}

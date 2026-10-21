@@ -240,14 +240,22 @@ def dragon_rows(stocks: list[dict], top: int = 3,
     return out
 
 
-def jiuyan_board_dragons(db, date: str, top: int = 3) -> dict[str, list[dict]]:
+def jiuyan_board_dragons(db, date: str, top: int = 3,
+                         allow_midday_fallback: bool = False) -> dict[str, list[dict]]:
     """韭研 final 各板块龙一/二/三：{板块名: [dragon_rows]}；final 缺失/无个股 → {}。
 
     调用方 fail-visible：空 map 时「领涨」列缺省，降级原因由既有
     boardJoinDegraded=jiuyan_final_missing 旗标注记，不在此重复。
+    allow_midday_fallback（2026-10-21）：final 缺失时回退 `{date}:midday` 午盘名单——
+    与 jiuyan_board_info 同参同口径（盘中「领涨」列同病同修），口径注记由 board_info
+    的 meta（jiuyanSlot/middayFallbackUsed）承担，本函数不重复标记。
     """
     doc = db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"}, {"fields.name": 1, "fields.stocks": 1})
+    if allow_midday_fallback and not any(
+            f.get("stocks") for f in (doc or {}).get("fields") or []):
+        doc = db["jiuyan_action"].find_one(
+            {"_id": f"{date}:{SLOT_MIDDAY}"}, {"fields.name": 1, "fields.stocks": 1})
     out: dict[str, list[dict]] = {}
     for field in (doc or {}).get("fields") or []:
         name = field.get("name")
@@ -409,7 +417,8 @@ def _official_exclude(stock_name: Any, code: str) -> str | None:
     return None
 
 
-def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
+def jiuyan_board_info(db, date: str,
+                      allow_midday_fallback: bool = False) -> tuple[dict[str, dict], dict]:
     """韭研个股高度/封板时间/板块 join + 触板二分（2026-10-11 方案A，用户裁决）。
 
     韭研 final fields.stocks = 盘中曾触板名单（封板+炸板，10-09 实测 82=69涨停+13炸板），
@@ -423,6 +432,12 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
     - 同 code 多板块取首现；boards=_jiuyan_board_count(num「N天M板」的 M)，None=宁缺毋猜。
     meta = {jiuyanFinalFound, prevPoolFound, thsPoolFound, prevThsPoolFound}：
     任一池缺失时二分不可用（boardUnmarked/zhaban 缺席），调用方必须结构化降级。
+
+    allow_midday_fallback（2026-10-21 用户报障：盘中涨停复盘无封板时间/原因/领涨）：
+    final 缺失时回退读 `{date}:midday` 午盘名单（12:30 投喂槽）——盘中涨停复盘页的
+    时间/原因/板块/高度全部来自本 join，不回退则盘中四列恒空。回退是**显式口径**：
+    meta 补 jiuyanSlot（实际取数槽位）与 middayFallbackUsed=True，调用方必须把
+    「午盘名单口径」透传展示，不得冒充收盘口径；默认 False，EOD 消费方零变化。
     """
     doc = db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"},
@@ -431,6 +446,18 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
          "fields.name": 1})
     fields = (doc or {}).get("fields") or []
     final_found = any(field.get("stocks") for field in fields)
+    slot_used = SLOT_FINAL
+    midday_fallback_used = False
+    if not final_found and allow_midday_fallback:
+        doc = db["jiuyan_action"].find_one(
+            {"_id": f"{date}:{SLOT_MIDDAY}"},
+            {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1,
+             "fields.stocks.name": 1, "fields.stocks.expound": 1, "fields.stocks.reason": 1,
+             "fields.name": 1})
+        fields = (doc or {}).get("fields") or []
+        midday_fallback_used = any(field.get("stocks") for field in fields)
+        if midday_fallback_used:
+            slot_used = SLOT_MIDDAY
     failed_today, ths_found = _ths_failed_items(db, date)
     prev_dates = trading_dates_before(db, date, 1)
     prev_sealed: set[str] = set()
@@ -466,6 +493,9 @@ def jiuyan_board_info(db, date: str) -> tuple[dict[str, dict], dict]:
                 out[code] = info
     meta = {"jiuyanFinalFound": final_found, "prevPoolFound": bool(prev_dates),
             "thsPoolFound": ths_found, "prevThsPoolFound": prev_ths_found,
+            # 取数槽位（2026-10-21）：middayFallbackUsed=True = final 缺失、午盘名单兜底
+            # （盘中涨停复盘口径注记，调用方必须透传展示，不冒充收盘）；jiuyanSlot=实际槽位
+            "jiuyanSlot": slot_used, "middayFallbackUsed": midday_fallback_used,
             # THS 炸板池总数（含韭研未收录股）：前端炸板卡注记「榜外」差额，fail-visible
             "thsZhabanTotal": len(failed_today) if ths_found else None}
     return out, meta
@@ -655,7 +685,8 @@ _STREAK_CACHE: dict[tuple[str, str], dict[str, int | None]] = {}
 _STREAK_WALK_MAX_DATES = 60
 
 
-def jiuyan_streak_map(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, int | None]:
+def jiuyan_streak_map(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
+                      allow_midday_fallback: bool = False) -> dict[str, int | None]:
     """当日触板池每股真实连板高度（连板口径单一事实源，2026-10-16 口径修正）。
 
     审计背景（docs/hotlist-jev/jev-relay-caliber-fix-preregistration.md §1）：区间板数 M
@@ -672,21 +703,28 @@ def jiuyan_streak_map(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> di
     - 回溯撞上 THS 炸板池缺失日 → None（不可算，不按 M 伪算）；
     - 今日未封板（炸板/触板未封）→ None；今日 THS 池缺失（封板不可二分）→ 全股 None。
 
-    返回 {code: streak|None}；韭研 final 缺失 → {}。按 (dataset, date) 缓存。
+    返回 {code: streak|None}；韭研 final 缺失 → {}（allow_midday_fallback=True 时回退
+    午盘名单；盘中 THS 15:00 池不存在 → 全股 None，真连板不可算不冒充）。缓存键含
+    fallback 旗标，两种口径不互串。**缓存只在 final 已落档时写入**（2026-10-21
+    review P1）：盘中/transitional 状态（final 未出、THS 池未落）不落缓存——否则
+    12:35 写入的「全股 None」会锁存到收盘后，final+15:00 帧已更新仍命中陈旧值，
+    同响应内 boards/limitUpTime 已是 final 口径而 streak 恒 None（混口径直到进程重启）。
     消费方：market_metrics 连板梯队、relay 三日链/龙头档案/题材梯队表。
     """
-    cache_key = (dataset_id, date)
+    cache_key = (dataset_id, date, bool(allow_midday_fallback))
     if cache_key in _STREAK_CACHE:
         return _STREAK_CACHE[cache_key]
-    info, meta = jiuyan_board_info(db, date)
+    info, meta = jiuyan_board_info(db, date, allow_midday_fallback=allow_midday_fallback)
+    # transitional（final 未落档）不落缓存：盘后 final 到位后重算即得终口径，不锁存盘中态
     if not info:
-        _STREAK_CACHE[cache_key] = {}
-        return _STREAK_CACHE[cache_key]
+        return {}
+    if not meta.get("jiuyanFinalFound"):
+        # 午盘兑底口径（info 非空但来自 midday）：真连板不可算，全股 None（不冒充、不缓存）
+        return {code: None for code in info}
     if not meta.get("thsPoolFound"):
-        # 今日 THS 炸板池缺失 → 封板不可二分，全部不可算（不把触板当封板，fail-visible）
-        out = {code: None for code in info}
-        _STREAK_CACHE[cache_key] = out
-        return out
+        # 今日 THS 炸板池缺失 → 封板不可二分，全部不可算（不把触板当封板，fail-visible）；
+        # final 已在但 15:00 帧可能晚到 → 同样不落缓存，帧落库后重算
+        return {code: None for code in info}
     today_sealed = {c for c, i in info.items() if not i.get("zhaban")}
     walk_targets: dict[str, int] = {}
     out = {}
