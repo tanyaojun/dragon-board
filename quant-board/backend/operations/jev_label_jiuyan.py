@@ -1842,15 +1842,24 @@ def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, ran
         ths_line = (f'THS 封板梯队：{ladder_txt} · 首封 {ths["firstSeal"]}'
                     f' · 所属板块 {ths["industry"] or "缺"}')
     else:
-        state = ths_ladder_state(db, date, dataset_id)
-        if state["ok"]:
-            ths_line = ("未进 THS 封板池（梯队池已采集，该股未入；可能触板未封/炸板口径，"
-                        "与下方板序冲突时以板序为准）")
+        if limit_ratio(code) == 0.30:
+            # 北交所：THS 连板封板池结构性不覆盖（10-16/19/20 三日 327 只 0 只 bj）——
+            # 真涨停的 bj 股落「池 ok 未入」分支会被写成触板未封嫌疑，且缓冲句
+            # 「与板序冲突以板序为准」对 bj 常落空（北交所日线无源，板序行 fail-visible）。
+            # 身位直接改韭研口径（同 D2 回退哲学）；不写前缀副本，判定单源 = limit_ratio。
+            ths_line = ("THS 封板梯队：THS 池不覆盖北交所（覆盖边界，非触板未封口径）"
+                        f"· 身位证据改用韭研口径 "
+                        f"{num_txt or '首板（韭研未标 N天M板）'}")
         else:
-            # v3.2 D2：整池未采集≠该股未进池。旧文案把 457 只当日涨停股写成「今日触板未封/炸板」
-            ths_line = (f'THS 封板梯队未采集（{state["reason"]}，fail-visible，'
-                        f'非「触板未封」）· 身位证据改用韭研口径 '
-                        f'{num_txt or "首板（韭研未标 N天M板）"} + 下方板序行「当前连板」')
+            state = ths_ladder_state(db, date, dataset_id)
+            if state["ok"]:
+                ths_line = ("未进 THS 封板池（梯队池已采集，该股未入；可能触板未封/炸板口径，"
+                            "与下方板序冲突时以板序为准）")
+            else:
+                # v3.2 D2：整池未采集≠该股未进池。旧文案把 457 只当日涨停股写成「今日触板未封/炸板」
+                ths_line = (f'THS 封板梯队未采集（{state["reason"]}，fail-visible，'
+                            f'非「触板未封」）· 身位证据改用韭研口径 '
+                            f'{num_txt or "首板（韭研未标 N天M板）"} + 下方板序行「当前连板」')
     expound = str(stock.get("expound") or "").strip()
     expound_line = expound if expound else "（韭研解析缺失，fail-visible）"
     # v3.2 D1：声明「本次叙事要用到的最新交易日」→ 本地 vipdoc 末棒落后时按需线上补尾。

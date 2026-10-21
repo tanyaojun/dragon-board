@@ -236,6 +236,32 @@ def test_narrative_does_not_call_zhaban_when_pool_missing(no_tdx):
     assert "今日触板未封/炸板口径" not in text
 
 
+def test_narrative_bj_stock_not_misread_as_touch_unsealed(no_tdx):
+    """北交所股、THS 池已采集但未入池：文案不得写「可能触板未封/炸板口径」。
+
+    实测（2026-10-16/19/20 三日，THS 连板封板池 327 只 0 只北交所）：THS 池结构性
+    不覆盖北交所——真涨停的 bj 股（韭研有涨停价与封板时刻）落进「池 ok 未入」分支
+    就被写成触板未封嫌疑，且缓冲句「与板序冲突以板序为准」对北交所恰好落空
+    （板序行本身 fail-visible，北交所日线无源）。身位改用韭研口径直供（同 D2 回退）。
+    判定单源 = `core.limit_rules.limit_ratio(code) == 0.30`（43/8/92 前缀），不写副本。
+    """
+    db = _Db({"snapshot_frames": _Col([
+        _frame({"one": {"ok": True, "items": [
+            {"stock_code": "600001", "continue_day": "2连板", "limit_up_time": "09:31",
+             "industry_block": "机器人"}]}})])})
+    jy = _jy(DATE, [("公告", [_stock("920641", "格利尔", num="3天3板", day="3")])])
+    text = runner.build_pilot_narrative(db, DATE, "920641", jy["fields"][0]["stocks"][0],
+                                        "公告", 1, jiuyan_doc=jy)
+    assert "THS 池不覆盖北交所" in text, "应显式声明覆盖边界（非触板未封口径推断）"
+    assert "可能触板未封/炸板口径" not in text
+    assert "身位证据改用韭研口径 3天3板" in text, "身位改韭研 N天M板 直供（同 D2 回退）"
+    # 对照：主板股池-ok 未入池仍走原「未入池」分支（语义未被误改）
+    jy2 = _jy(DATE, [("公告", [_stock("600601", "乙", num="2天2板", day="2")])])
+    text2 = runner.build_pilot_narrative(db, DATE, "600601", jy2["fields"][0]["stocks"][0],
+                                         "公告", 1, jiuyan_doc=jy2)
+    assert "未进 THS 封板池" in text2 and "THS 池不覆盖北交所" not in text2
+
+
 # ── D4 删零引用投喂 ─────────────────────────────────────────────────────────
 def test_narrative_drops_hotlist_rank_and_main_net(no_tdx):
     db = _Db({"snapshot_frames": _Col([

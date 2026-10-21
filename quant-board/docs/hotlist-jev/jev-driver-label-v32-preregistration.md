@@ -460,3 +460,23 @@ D5 **只能在 `build_pilot_narrative` 侧另写轻量行**，不得改 `market_
     depth core 40% / scaling 26% / early 23% / equity 9% / insufficient 1%；
     fresh continuing 70% / fresh_catalyst 26% / unclear 4%；
     buy sector_follow 64% / independent 27% / high_board_relay 8% / pure_sentiment 1%。
+
+### 10.6 重放后叙事复核修复（2026-10-21，零 jev 调用）
+
+对 §10.5 重放叙事逐段复核（对照 §4 改动清单），发现 **D2 同族新洞**并当日修复：
+
+- **北交所身位文案**：THS 连板封板池**结构性不覆盖北交所**（10-16/19/20 三日
+  327 只 0 只 bj，池侧实证），但 `ths_ladder_state` 四态无「覆盖边界」态——
+  真涨停的 bj 股（920641 格利尔/920096 嘉晨智能，韭研有涨停价与封板时刻）落
+  「池 ok 未入」分支被写成「可能触板未封/炸板口径」，且缓冲句「与板序冲突以
+  板序为准」恰好落空（北交所日线无源，这两只板序行本身 fail-visible）。
+  修复：`build_pilot_narrative` 池-ok 分支前加 `limit_ratio(code) == 0.30` 判定
+  （单源 = core/limit_rules，不写前缀副本），北交所文案改「THS 池不覆盖北交所
+  （覆盖边界，非触板未封口径）· 身位证据改用韭研口径 N天M板」，不再引用常缺的
+  板序行作回落。测试：`test_narrative_bj_stock_not_misread_as_touch_unsealed`
+  （红→绿；对照断言主板「未进池」分支语义不变）。
+- 复核同时确认的其余项：D1/D4/D5-B/D6/D7（board_absent 实证：大消费→「昨日无该
+  板块名」）/D8（002242 逐字相同行命中）/D11 代际戳均按 §10.1 落地无漂移；
+  观察项（不修，15 日门顺带核）：同股三时刻并陈（THS 首封/韭研涨停时间/板型
+  首触·末封）无调和说明——各有来源标注，buy_side 一致率若异常再议。
+- 修复后 `tests/hotlist` **964 passed**（总数增长来自并行 v3.2 相位题工作流新增用例）。
