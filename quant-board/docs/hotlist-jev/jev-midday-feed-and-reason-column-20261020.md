@@ -249,3 +249,39 @@ cd quant-board
   （重启后当天若已过 12:30，会自动补跑一次；`midday_source_state` 会拦住伪午盘文档）。
 - 16:00 盘后链无需改动（`jiuyanLabel` 步天然幂等跳过午盘已投喂个股）。
 - 新增 env：`JIUYAN_MIDDAY_LABEL_ENABLED`（默认 1=开）。
+
+## 7. 2026-10-21 盘中复盘接线补全（v3.2b2，用户报障驱动）
+
+本日盘中复盘链共三步接线，前两步上午完成（board_info/领涨/原因/封板时间兜底 +
+`boardJoinSlot=midday` 口径注记），第三步为本轮补全：
+
+### 7.1 报障与根因
+
+用户报障：盘中涨停复盘**连板股全部显示「真连板未定」**。只读生产库复算（10-21 午盘，
+`jiuyan_streak_map(allow_midday_fallback=True)`）：51 只全 None——根因是午盘兜底分支
+一刀切 `jiuyanFinalFound=False → {code: None}`，把**韭研自证**的直取规则也误杀了。
+
+### 7.2 修法（`jiuyan_streak_map` 午盘兜底分支，10-21 复盘口径）
+
+韭研自证规则不依赖「今日封板」二分，午盘口径照常直取：
+
+| 规则 | 午盘口径 | 依据 |
+| --- | --- | --- |
+| N==M（纯连板，如 2天2板） | **直取 M** | 韭研 num 自证窗口内每日板（含今日），无需 THS 二分 |
+| num=None | **1**（首板口径） | 同 final 规则 |
+| N>M（断板反包，如 3天2板） | **维持 None（未定）** | 「至今日」连板需今日封板二分，午盘触板≠封板，不按 M 伪算不猜链 |
+
+fail-visible 三件套不破：口径由 `meta.middayFallbackUsed` / 读口 `boardJoinSlot=midday`
+/页面「高度join=午盘名单」注记承担；**transitional 不落缓存**（final+15:00 帧落档后
+重算即得终口径，不锁存盘中值）。
+
+10-21 午盘 51 只实测：N==M 直取 12 只（2~4 板）、首板 30 只、N>M 未定 9 只
+（002368 3天2板、603636 4天3板等反包股——收盘 final 落档后自动出终值）。
+
+### 7.3 测试与遗留
+
+- `tests/hotlist/test_jev_streak_map.py` 新增 3 用例（自证直取/transitional 不落缓存/N>M 维持 None），先红后绿；`tests/hotlist` **984 passed**。
+- 遗留（待裁决）：N>M 反包股若要在盘中给「≥N 板（今日封板待确认）」下界（streakFloor），
+  需 streak 值型扩展 + relay_page 前端改列文案，涉及真连板单源消费方（market_metrics 梯队/
+  relay/复盘 KPI）合同，另立预注册。
+- 部署：uvicorn（8000）/snapshot_collector（8001）需重启生效。

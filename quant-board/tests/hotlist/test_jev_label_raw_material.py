@@ -250,7 +250,8 @@ def test_ammo_version_stamp_constant():
     # 四舍五入（内置 round 分位为 5 时低取一分，差一分未封的棒会被判成封板），代际再顺延
     # 2026-10-20（预注册 jev-driver-label-v32-preregistration.md）：个股链语料瘦身/增益
     # （市场坐标/交易日轴/封板时间坐标/解析续期/THS 缺日回退）→ 代际顺延
-    assert AMMO_VERSION == "2026-10-20a"
+    # 2026-10-21（v3.2b）：午盘槽位补接 D6/D8 + 解析首现回溯 10 交易日 + 板块 T-2 回看
+    assert AMMO_VERSION == "2026-10-21a"
     assert DEFAULT_DATASET_ID == "dragonboard_live"
 
 

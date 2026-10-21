@@ -480,6 +480,7 @@
       <h3>梯队分布与打标汇总 <span class="hint" id="labelHint"></span></h3>
       <div class="kpi-strip" id="labelKpi" style="margin-bottom:12px"></div>
       <div class="board-row" id="labelBoardRow"></div>
+      <div class="board-row" id="labelRewrapRow"></div>
       <div class="lf-bar" id="labelFilterBar"></div>
       <table id="labelTable"></table>
     </div>
@@ -2340,9 +2341,11 @@ async function tlLoadNarrative(r){
 // ---------- 涨停复盘：KPI 总览 + 板块 chips + 字段筛选 + 可展开明细 ----------
 // 范围二分（方案A，2026-10-11 用户裁决）：韭研触板名单经 THS 炸板池二分——
 // 涨停=触板-炸板（官方简图口径）再剔 ST/北交所；漏标连板判定已按「昨日涨停池」修正
-const SCOPE_CN = { zt: '涨停', zhaban: '炸板', excluded: 'ST·北交所', all: '触板全部' };
+const SCOPE_CN = { zt: '涨停', zhaban: '炸板', excluded: 'ST·北交所', all: '触板全部', rewrap: '反包' };
+// 反包=反包板池命中股（昨日断板/昨日炸板，今日回封；2026-10-21 立项 jev-rewrap-factor-preregistration.md）
+const REWRAP_PRED = s => !!s.rewrap;
 const SCOPE_PRED = { zt: s => !s.zhaban && !s.excluded, zhaban: s => s.zhaban,
-  excluded: s => s.excluded, all: () => true };
+  excluded: s => s.excluded, all: () => true, rewrap: REWRAP_PRED };
 function labelBoardOf(s){ return s.boardName || s.board || '未分板块'; }
 // 真连板口径（2026-10-19 用户裁决：KPI/筛选/排序吃真连板，不再用空间板数 M 冒充；
 // 后端与 market_metrics/quotes-review 同源 jiuyan_streak_map）：
@@ -2419,14 +2422,38 @@ function lfRenderKpi(stocks, f){
   const zbTotal = (STATE.labels || {}).thsZhabanTotal;
   const zbSub = `炸板率 ${zbRate}% · 反复开板≥2 ${zbOpen} 家`
     + (zbTotal != null && zbTotal !== zhaban.length ? ` · THS池 ${zbTotal}（榜外 ${zbTotal - zhaban.length}）` : '');
+  // 反包 KPI 卡（2026-10-21 立项 R2）：点击筛选反包股；率/分位/回封来自后端 rewrap 块（fail-visible 缺省 '-'）
+  const R = L.rewrap;
+  const rwRate = (R && R.rate != null) ? Math.round(R.rate * 100) + '%' : '-';
+  const rwPct = (R && R.ratePct20d != null) ? R.ratePct20d + ' 分位' : '-';
+  const rwSeal = (R && R.reseal && R.reseal.total) ? `${R.reseal.n}/${R.reseal.total}（${Math.round(R.reseal.rate * 100)}%）` : '-';
+  const rwCaliber = (R && R.caliber === 'touched') ? ' · 午盘触板口径' : '';
+  const rwCard = (R && R.count != null)
+    ? `<div class="kpi click${f.scope === 'rewrap' ? ' on' : ''}" title="反包=昨日断板（近5交易日在板、昨日未板）今日回封；弱转强信号。点击筛选反包股" onclick="lfScope('rewrap')"><div class="k">反包</div><div class="v">${R.count}</div><div class="s">反包率 ${rwRate} · 候选 ${R.candidate} · ${rwPct} · 炸板回封 ${rwSeal}${rwCaliber}</div></div>`
+    : '';
   const zbCard = `<div class="kpi click${f.scope === 'zhaban' ? ' on' : ''}" title="炸板率=名单内炸板/触板总数；反复开板=THS 开板次数≥2。点击筛选炸板范围" onclick="lfScope('zhaban')"><div class="k">炸板</div><div class="v">${zhaban.length}</div><div class="s">${zbSub}</div></div>`;
   $('labelKpi').innerHTML =
     card('涨停家数', zt.length, `触板 ${stocks.length} · 炸板 ${zhaban.length} · 剔ST/北交所 ${excluded.length}`
       + (bum ? ` · 漏标连板 ${bum}` : '') + joinNote + (deg ? ` · degraded ${deg}` : ''))
+    + rwCard
     + zbCard
     + hCard('首板', b1, '1') + hCard('二板', b2, '2') + hCard('三板', b3, '3') + hCard('四板以上', b4p, '4p')
     + card('最高板', maxBoard ? maxBoard + ' 板' : '-', leaderTxt
       + (stUnknown ? ` · ${stUnknown}家真连板未定` : ''));
+}
+function lfRenderRewrap(){
+  // 反包明细行（2026-10-21 立项 R2）：池内股点名（区间高度/断板天数/昨日炸板回封标记）；
+  // 详细字段在主表（点击 KPI 卡筛选后即可见），此处给一屏速览；无池 → 容器清空（fail-visible）
+  const R = (STATE.labels || {}).rewrap;
+  const el = $('labelRewrapRow');
+  if (!el) return;
+  if (!R || !R.stocks || !R.stocks.length){ el.innerHTML = ''; return; }
+  const items = R.stocks.map(s =>
+    `<span class="chip${s.reseal ? '' : ' plain'}" title="${esc(s.code || '')} · 近5日在板，断 ${esc(String(s.breakDays ?? '-'))} 交易日后今日回封${s.reseal ? ' · 昨日炸板回封' : ''} · ${esc(String(s.time || ''))}">`
+    + esc(s.name || s.code || '-') + `（${esc(s.num || '首板')}·断${esc(String(s.breakDays ?? '-'))}日）</span>`).join('');
+  const cal = R.caliber === 'touched' ? ' · 午盘触板口径（回封待收盘确认）' : '';
+  el.innerHTML = '<span class="k">反包池 ' + R.stocks.length + ' 只</span>' + items
+    + '<span class="chip plain">候选池含停牌复牌未分辨' + cal + '</span>';
 }
 function lfRenderBoards(pool, f){
   const dist = {};
@@ -2522,7 +2549,7 @@ function renderLabels(){
   const L = STATE.labels || {};
   const stocks = (L && L.ok !== false && !L.noData) ? (L.stocks || []) : [];
   if (!stocks.length){
-    $('labelKpi').innerHTML = ''; $('labelBoardRow').innerHTML = ''; $('labelFilterBar').innerHTML = '';
+    $('labelKpi').innerHTML = ''; $('labelBoardRow').innerHTML = ''; $('labelRewrapRow').innerHTML = ''; $('labelFilterBar').innerHTML = '';
     STATE.labelEntries = [];
     $('labelHint').textContent = (L && L.reason) || '';
     $('labelTable').innerHTML = '<tr><td class="empty">当日无打标存档</td></tr>';
@@ -2531,6 +2558,7 @@ function renderLabels(){
   const pool = scopePool(stocks, STATE.labelFilter);
   lfRenderKpi(stocks, STATE.labelFilter);
   lfRenderBoards(pool, STATE.labelFilter);
+  lfRenderRewrap();
   lfRenderBar(pool);
   lfRenderRows();
 }
@@ -2542,6 +2570,7 @@ function lfSet(k, v){
   const pool = scopePool(stocks, STATE.labelFilter);
   lfRenderKpi(stocks, STATE.labelFilter);
   lfRenderBoards(pool, STATE.labelFilter);
+  lfRenderRewrap();
   lfRenderBar(pool);
   lfRenderRows();
 }

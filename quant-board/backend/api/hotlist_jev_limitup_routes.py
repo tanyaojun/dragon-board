@@ -99,6 +99,36 @@ def get_limitup_labels(date: str, with_raw: int = 0) -> Any:
                 code6 = str(stock.get("code") or "")[-6:]
                 if code6 in streaks:
                     stock["streak"] = streaks[code6]
+            # 反包板池读口（2026-10-21 立项 R2，jev-rewrap-factor-preregistration.md）：
+            # KPI 统计 + 池内股标记（前端点击 KPI 卡筛选明细）；口径随 boardJoinSlot——
+            # 盘中=午盘触板口径（触板≠封板，与 EOD 不可直接比），盘后=封板口径。
+            # 计算单源 = analysis/hotlist/rewrap_pool.build_rewrap_pool（快照集合仅审计）；
+            # 失败不阻断主读口（fail-visible：result["rewrap"]=None）
+            try:
+                from backend.analysis.hotlist.rewrap_pool import build_rewrap_pool
+                from backend.operations.rewrap_pool import get_rewrap_pool
+                rw_slot = "midday" if result.get("boardJoinSlot") == "midday" else "final"
+                rw = build_rewrap_pool(db, date, rw_slot)
+                rewrap_set = set(rw.get("rewrapCodes") or [])
+                for stock in result.get("stocks") or []:
+                    if str(stock.get("code") or "")[-6:] in rewrap_set:
+                        stock["rewrap"] = True
+                result["rewrap"] = {
+                    "slot": rw_slot, "caliber": rw.get("caliber"),
+                    "candidate": rw.get("candidateN"), "count": rw.get("rewrapN"),
+                    "rate": rw.get("rewrapRate"),
+                    "ratePct20d": ((get_rewrap_pool(db, date, rw_slot) or {}).get("ratePct20d")
+                                   if rw.get("rewrapRate") is not None else None),
+                    "reseal": ({"n": rw.get("resealN"), "total": rw.get("prevFailedN"),
+                                "rate": rw.get("resealRate")}
+                               if rw.get("prevFailedFound") else None),
+                    "missing": rw.get("missing"), "stocks": rw.get("stocks"),
+                }
+            except Exception as exc:  # noqa: BLE001 — 不阻断主读口，但不得裸吞（审查 SF5）
+                import sys as _sys
+                print(f"[rewrap] 读口构建失败（fail-visible）: {type(exc).__name__}: {exc}",
+                      file=_sys.stderr)
+                result["rewrap"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
             # THS 炸板池总数（含韭研未收录股，炸板卡「榜外」差额注记用）
             if meta.get("thsZhabanTotal") is not None:
                 result["thsZhabanTotal"] = meta["thsZhabanTotal"]

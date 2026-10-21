@@ -1765,6 +1765,58 @@ def zhaban_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -
             f"反复开板代表：{rep_txt or '无'}；{dist_txt}；{cmp_txt}；{rush_txt}；{rotten_txt}")
 
 
+# ── 段 0a-2：反包修复行（2026-10-21 立项，jev-rewrap-factor-preregistration.md R1）───
+
+def rewrap_face_line(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
+    """反包修复行：昨日断板候选池 × 今日回封（断板反包）+ 昨日炸板池今日回封。
+
+    判据对接（预注册 §5）：`relay_momentum.reversing`「昨日弱今日明确修复」与
+    `relay_phase.launch/divergence` 的「断板亏钱可控/恶化」首次有了直接计数锚。
+    口径纪律：跨日比较一律用**率**（裸计数与当日涨停家数 corr=0.684 共线，预注册 §4）；
+    候选池未分辨停牌复牌（与断板同形）→ 行内静态注记，不冒充纯断板池；
+    池空/昨日炸板池缺失 → 对应段 fail-visible，不补 0。
+    计算单源 = `analysis/hotlist/rewrap_pool.build_rewrap_pool`（池快照集合仅审计存档）。
+    """
+    from backend.analysis.hotlist.rewrap_pool import (
+        build_rewrap_pool, rewrap_rate_series, percentile_of)
+    pool = build_rewrap_pool(db, date, "final", dataset_id)
+    miss = pool.get("missing") or {}
+    if miss.get("axis_short") or miss.get("today_list_empty"):
+        return (f"反包修复：不可算（{'交易日轴不足' if miss.get('axis_short') else '当日名单为空'}，"
+                f"fail-visible）")
+    if miss.get("prev_final_missing"):
+        return "反包修复：不可算（昨日名单缺失，候选池不可验，fail-visible）"
+    # 近 20 日分位：优先读池快照已算好的 ratePct20d（relay 链在打标步之后，快照已落库），
+    # 缺失再现算序列（审查 nit13：避免每次叙事构建 20 日 × 全池重算）
+    rate_pct = None
+    try:
+        from backend.operations.rewrap_pool import get_rewrap_pool
+        rate_pct = (get_rewrap_pool(db, date, "final") or {}).get("ratePct20d")
+    except Exception:
+        rate_pct = None
+    if rate_pct is None:
+        rate_pct = percentile_of([r for _, r in rewrap_rate_series(db, date, 20, dataset_id)],
+                                 pool.get("rewrapRate"))
+    head = (f"反包修复：昨日断板候选 {pool['candidateN']} 只 · 今日反包 {pool['rewrapN']} 只"
+            f"（反包率 {_pct_txt(pool.get('rewrapRate'))}"
+            + (f"，近20日 {rate_pct} 分位" if rate_pct is not None else "，近20日分位不可算") + "）")
+    if pool.get("prevFailedFound"):
+        head += f" · 昨日炸板回封 {pool['resealN']}/{pool['prevFailedN']}（{_pct_txt(pool.get('resealRate'))}）"
+    else:
+        head += " · 昨日炸板池缺失（回封率不可算，fail-visible）"
+    reps = pool.get("stocks") or []
+    if reps:
+        rep_txt = "、".join(
+            f"{r.get('name') or r['code']}（{r.get('num') or '首板'}·断"
+            f"{r.get('breakDays') or '?'}日）" for r in reps[:3])
+        head += f" · 代表：{rep_txt}"
+    return head + " · 候选池含停牌复牌未分辨"
+
+
+def _pct_txt(rate: float | None) -> str:
+    return f"{rate * 100:.1f}%" if isinstance(rate, (int, float)) and not isinstance(rate, bool) else "不可算"
+
+
 # ── 段 0b：大盘指数行（v7 D2）───────────────────────────────────────────────
 
 # 顶层 4 指数（frame.indices 浏览器原键位）+ indexExtra 三指数（v7 D2a 采集层新增）
@@ -1909,6 +1961,8 @@ def _build_relay_narrative_inner(db: Any, date: str, dataset_id: str = DEFAULT_D
     lines.append(market_facts_line(db, date, dataset_id))
     lines.append(market_index_line(db, date, dataset_id))
     lines.append(zhaban_face_line(db, date, dataset_id))
+    # 段 0a-2 反包修复行（2026-10-21 立项 R1）：分歧证据（炸板面）×修复证据（反包）相邻对读
+    lines.append(rewrap_face_line(db, date, dataset_id))
     lines.append(relay_flow_line(db, date, dataset_id, money_hist=money_hist))
     lines.append(ladder_structure_line(db, date))
     # 段2 记忆

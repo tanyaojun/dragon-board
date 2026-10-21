@@ -26,7 +26,10 @@ THS_KEYS = ("one", "two", "three", "four", "high")
 # 2026-10-16（预注册 jev-relay-caliber-fix-preregistration.md §5b）：涨停价取整由内置
 # round 改十进制 ROUND_HALF_UP（内置 round 在分位为 5 时低取一分，差一分未封的棒会被
 # 判成封板，虚报连板高度），板序/封板判定输出可能变 → 原料代际顺延。
-AMMO_VERSION = "2026-10-20a"
+# 2026-10-21（v3.2b，用户裁决「请修复」）：午盘槽位补接 D6 交易日轴 + D8 解析续期
+# （解析续期扩展为近 10 交易日首现回溯）+ 板块昨日家数 T-2 回看 → 叙事内容变，代际顺延；
+# 判据零改动（QUESTION_SET_VERSION_DRIVER 维持 v3.1），换代首日承接率归零为预期行为。
+AMMO_VERSION = "2026-10-21a"
 DEFAULT_DATASET_ID = "dragonboard_live"
 
 # ── 题目集（原文平移，判据改动须走改门） ──

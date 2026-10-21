@@ -719,8 +719,22 @@ def jiuyan_streak_map(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     if not info:
         return {}
     if not meta.get("jiuyanFinalFound"):
-        # 午盘兑底口径（info 非空但来自 midday）：真连板不可算，全股 None（不冒充、不缓存）
-        return {code: None for code in info}
+        # 午盘兑底口径（info 非空但来自 midday）：final 未落档、午盘名单口径=已触板，
+        # 「至今日」封板二分不可得 → N>M 回溯链不可算维持 None（不冒充）。
+        # 但韭研**自证**直取规则不依赖封板二分：N==M → M、num=None → 1，照常直取
+        # （v3.2b2 2026-10-21 用户报障：一刀切 None 把自证规则也误杀，连板股全显
+        # 「真连板未定」）。口径由 meta.middayFallbackUsed / boardJoinSlot=midday 注记承担；
+        # transitional 不落缓存（final 落档后重算即得终口径，不锁存盘中值）。
+        out = {}
+        for code, i in info.items():
+            boards, days = i.get("boards"), i.get("days")
+            if boards is not None and days is not None and days == boards:
+                out[code] = boards       # 韭研自证纯连板（num 含今日），直取不回溯
+            elif boards is None:
+                out[code] = 1            # 韭研首板口径（同 final 规则）
+            else:
+                out[code] = None         # N>M：今日封板不可二分，不按 M 伪算不猜链
+        return out
     if not meta.get("thsPoolFound"):
         # 今日 THS 炸板池缺失 → 封板不可二分，全部不可算（不把触板当封板，fail-visible）；
         # final 已在但 15:00 帧可能晚到 → 同样不落缓存，帧落库后重算
@@ -968,7 +982,10 @@ _DATE_AXIS_CACHE: dict[tuple, str] = {}
 _JIYAN_EXPOUND_CACHE: dict[tuple, dict[str, str]] = {}
 _BOARD_PREV_CACHE: dict[tuple, dict] = {}
 _THS_STATE_CACHE: dict[tuple, dict] = {}
-_PREV_TRADING_DATE_CACHE: dict[tuple, str | None] = {}
+# v3.2b（2026-10-21）：解析首现回溯/板块 T-2 回看用多日轴记忆化（(dataset,date,n)），
+# 逐股调用不能每股一次查询；conftest `_JEV_RUNNER_CACHES` 同步注册。
+# （v3.2 旧单日缓存 `_PREV_TRADING_DATE_CACHE` 随 D8 回看扩展退役删除，多日轴单源。）
+_PREV_TRADING_DATES_CACHE: dict[tuple, list[str]] = {}
 _WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
 _TIME_RE = re.compile(r"(\d{1,2}):(\d{2})")
 
@@ -1048,13 +1065,17 @@ def _jiuyan_expound_map(db, date: str, slot: str = "final") -> dict[str, str]:
     return out
 
 
-def _prev_trading_date(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str | None:
-    """date 的上一交易日（按 (dataset, date) 缓存：解析续期逐股调用，不能每股一次查询）。"""
-    key = (dataset_id, date)
-    if key not in _PREV_TRADING_DATE_CACHE:
-        prev = trading_dates_before(db, date, 1, dataset_id=dataset_id)
-        _PREV_TRADING_DATE_CACHE[key] = prev[-1] if prev else None
-    return _PREV_TRADING_DATE_CACHE[key]
+def _prev_trading_dates(db, date: str, n: int,
+                        dataset_id: str = DEFAULT_DATASET_ID) -> list[str]:
+    """date 之前 n 个交易日（升序；(dataset, date, n) 记忆化，v3.2b 新增）。
+
+    P0-2 解析首现回溯与 P1-1 板块 T-2 回看都逐股调用多日轴，不能每股一次查询；
+    复用同一 `trading_dates_before`（单一事实源），只加缓存。"""
+    key = (dataset_id, date, n)
+    if key not in _PREV_TRADING_DATES_CACHE:
+        _PREV_TRADING_DATES_CACHE[key] = trading_dates_before(
+            db, date, n, dataset_id=dataset_id)
+    return _PREV_TRADING_DATES_CACHE[key]
 
 
 def _first_line(text: str, limit: int = 24) -> str:
@@ -1066,28 +1087,61 @@ def _first_line(text: str, limit: int = 24) -> str:
     return ""
 
 
+EXPOUND_TRACE_LOOKBACK = 10
+
+
 def expound_trace_line(db, date: str, code: str, today_expound: str | None,
                        slot: str = "final",
                        dataset_id: str = DEFAULT_DATASET_ID) -> str | None:
-    """解析续期（v3.2 D8）：与上一交易日同一只股的解析逐字对比。
+    """解析续期/首现（v3.2 D8；v3.2b 扩展为近 10 个交易日回看）。
+
+    `slot` 参数=对比基准文档的槽位（默认 final，权威口径）：所有调用点（收盘/午盘/承接）
+    都用「昨日 final」作基准，与当日投喂槽位无关（审查 nit14：参数语义在此显式声明）。
 
     `catalyst_freshness`（「持续/新催化」）与 `driver_type`（「催化本身无新意」）都要回答
     「今天这句解析是不是新的」，而语料只给当日解析（含日期率 91.6%，但无跨日可比锚）。
-    返回 None = 上一交易日该股不在名单（无对比基准）→ **不出行**（裁决 5B：省字；
-    「首板/断板回归」语义由板序行 ○● 序列承担）。实测覆盖：10-19 人口 63 只中 28 只（44%）
-    近 5 日有解析记录，覆盖恰好落在判据最需要的连板/反复股上。
+    v3.2b 实证缺陷（2026-10-21 午盘 002368）：D8 只与上一交易日比对，而反复股（3天2板等）
+    上一交易日往往不在名单 → 锚恰好丢失。扩展：回看近 10 个交易日，
+    - 存在逐字相同记录 → 锚=最早相同记录：「该解析最早见于 {d}（距今 {gap} 个交易日，
+      回看 {lookback} 交易日）」——对齐判据「催化事件首次出现距今 ≤2 个交易日」的首现语义；
+    - 无相同记录但有更早解析 → 锚=最近一次记录：「较 {d}（距今 {gap} 个交易日）有更新」；
+    - 近 10 个交易日无任何记录 → 不出行（裁决 5B：省字；「首次进榜」不构成新旧证据，
+      催化可能早于窗口存在，不写「首现」冒充）。
+    对比用上一交易日的 `final` 收盘名单（权威口径），与当日投喂槽位无关。
     """
-    prev_date = _prev_trading_date(db, date, dataset_id)
-    if not prev_date:
-        return None
-    prev_txt = _jiuyan_expound_map(db, prev_date, slot).get(_strip(code))
     today_txt = str(today_expound or "").strip()
-    if not prev_txt or not today_txt:
+    if not today_txt:
         return None
-    if expound_signature(today_txt) == expound_signature(prev_txt):
-        return f"解析续期：与上一交易日（{prev_date}）解析逐字相同（无新增事项）"
-    return (f"解析续期：较上一交易日（{prev_date}）有更新"
-            f" · 上日首行「{_first_line(prev_txt)}」")
+    prev_dates = _prev_trading_dates(db, date, EXPOUND_TRACE_LOOKBACK, dataset_id)
+    if not prev_dates:
+        return None
+    sig = expound_signature(today_txt)
+    identical: tuple[str, int] | None = None   # 最早逐字相同记录 (日, 距今交易日数)
+    latest_any: tuple[str, int, str] | None = None  # 最近一次有解析的记录 (日, 距今, 文本)
+    for d in prev_dates:
+        prev_txt = _jiuyan_expound_map(db, d, slot).get(_strip(code))
+        if not prev_txt:
+            continue
+        gap = len(prev_dates) - prev_dates.index(d)
+        if identical is None and expound_signature(prev_txt) == sig:
+            identical = (d, gap)
+        # 升序遍历，不设 None 卫冕 → 循环结束后留下的是最近一次记录
+        latest_any = (d, gap, prev_txt)
+    if identical:
+        d, gap = identical
+        axis_txt = f"回看 {len(prev_dates)} 个交易日"
+        if latest_any and latest_any[0] == d:
+            return (f"解析续期：该解析最早见于 {d}（距今 {gap} 个交易日，{axis_txt}），"
+                    f"此后逐字相同（无新增事项）")
+        # 中间有更新：不得写「此后逐字相同」（审查 SF9：边界措辞失实）
+        d2, gap2, latest_txt = latest_any
+        return (f"解析续期：该解析最早见于 {d}（距今 {gap} 个交易日，{axis_txt}）逐字相同；"
+                f"最近一次记录 {d2}（距今 {gap2} 个交易日）已有更新 · 当时首行「{_first_line(latest_txt)}」")
+    if latest_any:
+        d, gap, prev_txt = latest_any
+        return (f"解析续期：较 {d}（距今 {gap} 个交易日）有更新"
+                f" · 当时首行「{_first_line(prev_txt)}」")
+    return None
 
 
 def _minutes_of(hhmmss: Any) -> int | None:
@@ -1148,32 +1202,64 @@ def seal_time_line(jiuyan_doc, code: str, scope: str = "final") -> str:
 
 def board_prev_info(db, date: str, board: str,
                     dataset_id: str = DEFAULT_DATASET_ID) -> dict:
-    """上一交易日同一韭研板块的涨停家数（v3.2 D7）。
+    """上一交易日同一韭研板块的涨停家数（v3.2 D7；v3.2b 增 T-2 回看）。
 
     `buy_side_logic` 判据写「同板块多股今日集体异动」（板块跟随）与「无板块协同」，
     但语料只给今日家数 → 「板块启动中的跟随」与「板块退潮中的跟随」无法区分。
-    返回 `{ok, count, reason}`：reason 区分两种不可比（**不补 0 冒充**）：
-    - `no_prev_doc`：上一交易日名单缺失（fail-visible）；
-    - `board_absent`：昨日名单里没有同名板块（韭研板块命名昨今会漂移，实测同名可比率 65.9%）。
+    v3.2b 实证缺陷（2026-10-21 午盘 002368）：韭研板块命名昨今漂移/题材隔日体断
+    （同名可比率 65.9%），只看 T-1 会把「T-1 无同名板块、T-2 有」误写成不可比
+    （10-21 午盘 51 只中 8 只因此丢锚）。回看顺序：T-1 命中直接用；T-1 无同名板块
+    再看 T-2，命中则 `reason="t2_fallback"` + `day=T-2`（文案显式标口径，不冒充昨日）。
+    返回 `{ok, count, reason, day}`：reason 区分两种不可比（**不补 0 冒充**）：
+    - `no_prev_doc`：回看窗内名单缺失（fail-visible）；
+    - `board_absent`：T-1/T-2 名单里都没有同名板块（韭研板块命名昨今会漂移，
+      实测同名可比率 65.9%）。
     """
     if not board:
-        return {"ok": False, "count": None, "reason": "no_board"}
+        return {"ok": False, "count": None, "reason": "no_board", "day": None}
     key = (dataset_id, date, board)
     if key in _BOARD_PREV_CACHE:
         return _BOARD_PREV_CACHE[key]
-    prev = trading_dates_before(db, date, 1, dataset_id=dataset_id)
-    if not prev:
-        info = {"ok": False, "count": None, "reason": "no_prev_doc"}
-    else:
-        doc = db["jiuyan_action"].find_one({"_id": f"{prev[-1]}:final"}, {"fields": 1})
+
+    def _count_in(doc: dict | None) -> int | None:
         if doc is None:
-            info = {"ok": False, "count": None, "reason": "no_prev_doc"}
+            return None
+        for fl in doc.get("fields") or []:
+            if str(fl.get("name") or "") == board:
+                return len(fl.get("stocks") or [])
+        return None
+
+    prev = _prev_trading_dates(db, date, 2, dataset_id)
+    miss: dict = {"ok": False, "count": None, "reason": "no_prev_doc", "day": None,
+                  "t1Found": None, "t2Found": None}
+    if not prev:
+        info = miss
+    else:
+        t1 = prev[-1]
+        t2 = prev[-2] if len(prev) >= 2 else None
+        doc1 = db["jiuyan_action"].find_one({"_id": f"{t1}:final"}, {"fields": 1})
+        c1 = _count_in(doc1)
+        if c1 is not None:
+            info = {"ok": True, "count": c1, "reason": None, "day": t1,
+                    "t1Found": True, "t2Found": None}
+        elif t2 is not None:
+            doc2 = db["jiuyan_action"].find_one({"_id": f"{t2}:final"}, {"fields": 1})
+            c2 = _count_in(doc2)
+            if c2 is not None:
+                info = {"ok": True, "count": c2, "reason": "t2_fallback", "day": t2,
+                        "t1Found": doc1 is not None, "t2Found": True}
+            elif doc1 is None and doc2 is None:
+                info = dict(miss, t1Found=False, t2Found=False)   # 两日名单都缺失
+            else:
+                # doc1 在但无同名板块、doc2 名单缺失 → 不可比（不是「两日都无同名板块」，
+                # 审查 SF6：混合态不得冒充成纯 board_absent 语义）
+                info = {"ok": False, "count": None, "reason": "board_absent", "day": None,
+                        "t1Found": True, "t2Found": False}
+        elif doc1 is None:
+            info = miss
         else:
-            info = {"ok": False, "count": None, "reason": "board_absent"}
-            for fl in doc.get("fields") or []:
-                if str(fl.get("name") or "") == board:
-                    info = {"ok": True, "count": len(fl.get("stocks") or []), "reason": None}
-                    break
+            info = {"ok": False, "count": None, "reason": "board_absent", "day": None,
+                    "t1Found": True, "t2Found": False}
     _BOARD_PREV_CACHE[key] = info
     return info
 
@@ -1724,7 +1810,17 @@ def board_position(jiuyan_doc, code: str, db=None, date: str | None = None,
     if db is not None and date:
         info = board_prev_info(db, date, str(best["board"] or ""), dataset_id)
         if info["ok"]:
-            prev_txt = f'（昨日同板块涨停 {info["count"]} 家）'
+            if info.get("reason") == "t2_fallback":
+                if info.get("t1Found") is False:
+                    # T-1 名单整体缺失（非「无同名板块」，审查 SF6：两种混合态分开措辞）
+                    prev_txt = (f'（T-1 名单缺失，取前 2 交易日（{info["day"]}）'
+                                f'同板块涨停 {info["count"]} 家）')
+                else:
+                    # v3.2b：T-1 名单在但无同名板块、T-2 命中 → 显式标口径，不冒充「昨日」
+                    prev_txt = (f'（前 2 交易日（{info["day"]}）同板块涨停 {info["count"]} 家'
+                                f' · T-1 无同名板块）')
+            else:
+                prev_txt = f'（昨日同板块涨停 {info["count"]} 家）'
         elif info["reason"] == "no_prev_doc":
             prev_txt = "（昨日同板块 不可比：上一交易日名单缺失）"
         elif info["reason"] == "board_absent":
@@ -1772,7 +1868,8 @@ def midday_source_state(db, date: str) -> dict:
 
 def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, rank,
                            dataset_id: str = DEFAULT_DATASET_ID,
-                           jiuyan_doc: dict | None = None) -> str:
+                           jiuyan_doc: dict | None = None,
+                           expound_trace: bool = True) -> str:
     """午盘投喂弹药（12:30 槽位）：只写午盘确实拿得到的证据，缺的明确标注不可得。
 
     午盘（11:30-13:00）与收盘的可得证据差：
@@ -1783,6 +1880,11 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
     也判「午盘不可得」，但它们只依赖历史日线（20 日窗口），T-1 收盘就能完整算出；
     唯一物理不可得的是「当日盘中棒」。行内显式标 T-1，**不拿 T-1 冒充当日**（§4.0）。
     同时把 4 行「不可得」声明压成首行 1 处，省 ≈90 字/只。
+    **v3.2b（2026-10-21 缺陷修复）：D6 交易日轴 + D8 解析续期接线进午盘槽位**——
+    v3.2 只把这两条日期锚接进了收盘叙事，午盘 51 只实测 0/51，导致午盘
+    `catalyst_freshness` 比 收盘少两条日期证据、unclear 率 13.7% vs 收盘 3.9%
+    （半接线复现，同 §3-① 家族）。位置/板序/交易日轴/解析续期均为 T-1 及更早的
+    历史日线/名单数据，午盘真实可得，不属于「不可得项」。
     """
     jy = jiuyan_doc or {}
     fetched = str(jy.get("fetchedAt") or "")
@@ -1817,9 +1919,12 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
     else:
         pos = "个股位置：上一交易日不可算（交易日轴缺失，fail-visible）"
         seq = "板序：上一交易日不可算（交易日轴缺失，fail-visible）"
-    return "\n".join([
+    trace = (expound_trace_line(db, date, code, expound, dataset_id=dataset_id)
+             if expound_trace else None)
+    lines = [
         f"{date} 交易日午盘 · 打标时点=韭研 {noon} 午盘名单 · 午盘不可得项：收盘盘面事实行/"
         f"THS 封板梯队/当日板型（fail-visible）",
+        date_axis_line(db, date, dataset_id),
         f"该股：{stock.get('name')}（{code}），午盘涨停价 {stock.get('price')}{day_num}，"
         f"触板时间 {stock.get('time')}",
         f"身位：韭研午盘名单口径 {num_txt or '首板（韭研未标 N天M板）'}",
@@ -1829,7 +1934,10 @@ def build_midday_narrative(db, date: str, code: str, stock: dict, board: str, ra
         seal_time_line(jy, code, scope="midday"),
         "韭研解析全文：",
         expound if expound else "（韭研解析缺失，fail-visible）",
-    ])
+    ]
+    if trace:
+        lines.insert(-2, trace)   # 解析续期行紧贴「韭研解析全文：」之前（与收盘槽位同序）
+    return "\n".join(lines)
 
 
 def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, rank,
@@ -1857,8 +1965,11 @@ def build_pilot_narrative(db, date: str, code: str, stock: dict, board: str, ran
     if slot == SLOT_MIDDAY:
         jy_mid = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
             {"_id": f"{date}:{SLOT_MIDDAY}"}, {"fields": 1, "fetchedAt": 1}) or {}
+        # v3.2b：承接路径（expound_trace=False）对午盘同样生效——解析逐字相同已由承接
+        # 压缩标记声明，不重复给 trace 行（与收盘槽位同口径）。
         return build_midday_narrative(db, date, code, stock, board, rank,
-                                      dataset_id=dataset_id, jiuyan_doc=jy_mid)
+                                      dataset_id=dataset_id, jiuyan_doc=jy_mid,
+                                      expound_trace=expound_trace)
     jy = jiuyan_doc if jiuyan_doc is not None else db["jiuyan_action"].find_one(
         {"_id": f"{date}:final"}, {"fields": 1}) or {}
     ths = ths_positions(db, date, dataset_id).get(code)
@@ -1936,10 +2047,112 @@ def carry_forward_enabled() -> bool:
     return os.environ.get("JEV_CARRY_FORWARD_ENABLED", "1") != "0"
 
 
+# 反包板池承接窗：反包股在候选窗（前 2~5 交易日在板）内必有打标记录，取 5 个交易日
+# 内最近一次判定复制（2026-10-21 用户裁决「池内反包股免投喂，直接复制前日打标结果」）。
+_REWRAP_CARRY_MAX_GAP = 5
+
+
+def _rewrap_carry_one(db, col, date: str, code: str, entry: dict, slot: str,
+                      dataset_id: str, full_qs_hash: str,
+                      include_stock_phase: bool, jy_doc: dict | None,
+                      rank: int | None) -> bool:
+    """反包板池免投喂承接（2026-10-21 用户裁决）：池内股直接复制前日打标结果，零 jev 调用。
+
+    与 A+B 承接（carry_decision）的区别：**不要求解析逐字相同、不要求原料代际一致**——
+    用户裁决反包股（前几日有过连板、已被打标过）跳过重判以省成本；为不静默伪装成当日
+    独立判定，文档显式盖 `labelSource="rewrap_carry"` / `carriedFrom` / `rewrapCarry=True`。
+    守卫（任一不满足 → 返回 False 回落全量实判，不静默降级）：
+    - 窗内（≤`_REWRAP_CARRY_MAX_GAP` 交易日）存在 status=ok 的前日标签；
+    - 前日 `answers` 四题齐全（choice 均在）；
+    - 前日 `questionSetHash` == 当前完整题集 hash（答案形状兼容；判据换代日自动回落实判）。
+    """
+    prev_dates = trading_dates_before(db, date, _REWRAP_CARRY_MAX_GAP, dataset_id=dataset_id)
+    if not prev_dates:
+        return False
+    order = {d: i for i, d in enumerate(prev_dates)}
+    prev: dict | None = None
+    # 排除 labelSource=rewrap_carry 的前标（审查 SF7）：防链式承接放大——只承接
+    # fresh_judgment / carry_forward 的原生判定，判定年龄不超窗
+    for d in col.find({"code": code, "status": "ok",
+                       "tradingDate": {"$in": prev_dates},
+                       "labelSource": {"$ne": "rewrap_carry"}}, _CARRY_PREV_PROJECTION):
+        if prev is None or order.get(str(d.get("tradingDate")), -1) > order.get(
+                str(prev.get("tradingDate")), -1):
+            prev = d
+    if not prev:
+        return False
+    prev_answers = prev.get("answers") or {}
+    need = list(CARRY_KEYS) + ["buy_side_logic"]
+    if any(not (prev_answers.get(k) or {}).get("choice") for k in need):
+        return False
+    # 相位题守卫（审查 MF1）：产线已开相位题时，承接文档的 questionsRaw 含相位题；
+    # 前标无相位答案 → 回落实判，不得盖 ok 戳静默给 None（正常路径缺题=degraded 契约）
+    if include_stock_phase and not (prev_answers.get("stock_phase_position") or {}).get("choice"):
+        return False
+    if prev.get("questionSetHash") and prev["questionSetHash"] != full_qs_hash:
+        return False
+    stock = entry["stock"]
+    answers = dict(prev_answers)
+    doc = {"_id": f"{date}:{code}", "origin": "driver_label_jiuyan_v3_pilot", "tradingDate": date,
+           "code": code, "name": stock.get("name"), "ammoVersion": AMMO_VERSION,
+           "labelSlot": slot, "jiuyanSourceId": f"{date}:{slot}",
+           "jiuyanFetchedAt": (jy_doc or {}).get("fetchedAt"),
+           "questionSetVersion": QUESTION_SET_VERSION_DRIVER,
+           "questionSetHash": full_qs_hash,
+           "askedQuestionSetHash": None,   # 未下发任何题集（免投喂）
+           "expoundSignature": expound_signature(stock.get("expound")),
+           "jiuyanContext": {"board": entry["board"], "day": stock.get("day"),
+                             "num": stock.get("num"), "time": stock.get("time"),
+                             "inHotlist": rank is not None, "rank": rank},
+           "status": "ok",
+           # 叙事=当日口径证据（人类复核用；零 token 成本），判题结论=前日承接
+           "narrative": build_pilot_narrative(db, date, code, stock, entry["board"], rank,
+                                              dataset_id=dataset_id, jiuyan_doc=jy_doc,
+                                              slot=slot),
+           "questionsRaw": (QUESTIONS_STOCK_WITH_PHASE if include_stock_phase else QUESTIONS_STOCK),
+           "answers": answers,
+           "label": answers.get("driver_type", {}).get("choice"),
+           "driverProbabilities": answers.get("driver_type", {}).get("probabilities"),
+           "catalystDepth": answers.get("catalyst_depth", {}).get("choice"),
+           "catalystDepthProbabilities": answers.get("catalyst_depth", {}).get("probabilities"),
+           "freshness": answers.get("catalyst_freshness", {}).get("choice"),
+           "buySideLogic": answers.get("buy_side_logic", {}).get("choice"),
+           "buySideProbabilities": answers.get("buy_side_logic", {}).get("probabilities"),
+           "model": "rewrap-carry", "usage": {"input_tokens": 0, "output_tokens": 0},
+           "latencyMs": 0, "errorCode": None, "errorDetail": None, "responseRaw": None,
+           "computedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    doc.update({
+        "labelSource": "rewrap_carry",
+        "rewrapCarry": True,
+        "carriedFrom": str(prev.get("tradingDate") or ""),
+        "carriedLabelSlot": prev.get("labelSlot"),   # 审查 SF8：前标槽位可追溯（午盘口径证据行更少）
+        "carriedOriginDate": (prev.get("carriedOriginDate")
+                              or prev.get("carriedFrom")
+                              or prev.get("tradingDate")),  # 原始判定日（防链式年龄失真）
+        "carriedQuestionKeys": need,
+        "reevaluatedQuestionKeys": [],
+        "carriedQuestionSetHash": prev.get("questionSetHash"),
+    })
+    if include_stock_phase:
+        ans_p = prev_answers.get("stock_phase_position") or {}
+        doc.update({
+            "stockPhasePosition": ans_p.get("choice"),
+            "stockPhaseProbabilities": ans_p.get("probabilities"),
+            "stockPhaseConfidence": ans_p.get("confidence"),
+            "stockPhaseQuestionSetHash": _questions_hash(QUESTIONS_STOCK_PHASE),
+            "stockPhaseAmmoVersion": AMMO_VERSION,
+            "stockPhaseModel": "rewrap-carry",
+            "stockPhaseUsage": {"input_tokens": 0, "output_tokens": 0},
+            "stockPhaseLatencyMs": 0,
+        })
+    col.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    return True
+
+
 # 承接候选读取的字段（只取判定与合并所需，不拉全套大字段）
 _CARRY_PREV_PROJECTION = {
     "code": 1, "tradingDate": 1, "status": 1, "questionSetHash": 1, "ammoVersion": 1,
-    "expoundSignature": 1, "narrative": 1, "answers": 1, "label": 1,
+    "expoundSignature": 1, "narrative": 1, "answers": 1, "label": 1, "labelSlot": 1,
     "driverProbabilities": 1, "catalystDepth": 1, "catalystDepthProbabilities": 1,
     "freshness": 1, "buySideLogic": 1, "buySideProbabilities": 1, "origin": 1,
 }
@@ -2149,6 +2362,7 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         return
     n_ok = n_deg = 0
     n_carried = n_rejudged = 0   # A+B 口径计数（承接 vs 全量实判）
+    n_rewrap_carried = n_rewrap_miss = 0   # 反包板池免投喂承接 vs 回落实判（2026-10-21）
     carry_on = (carry_forward_enabled() if carry_forward is None else bool(carry_forward)) and not force
     run_tokens: list[int] = []  # 批次C I12：本次运行实付（total_tokens 优先，否则 input+output）
     for di, date in enumerate(dates):
@@ -2163,6 +2377,18 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         if not pop:
             print(f"[{di + 1}/{len(dates)}] {date} 无韭研 {slot} 文档，跳过（披露）")
             continue
+        # 反包板池一日两更（2026-10-21 用户裁决）：每个 date 先更池再打标——12:30 午盘链
+        # 自然更新 `{date}:midday`（触板口径）、16:00 盘后链更新 `{date}:final`（封板口径）；
+        # dry-run 零写入纪律：不落库，池内股免投喂跳过同样不生效（dry-run 只看叙事）。
+        rewrap_codes: set[str] = set()
+        if not dry_run:
+            from backend.operations.rewrap_pool import update_rewrap_pool
+            pool_doc = update_rewrap_pool(db, date, slot, dataset_id)
+            rewrap_codes = set(pool_doc.get("rewrapCodes") or [])
+            if rewrap_codes:
+                print(f"[{di + 1}/{len(dates)}] {date} [{slot}] 反包板池更新：候选"
+                      f" {pool_doc.get('candidateN')} 反包 {len(rewrap_codes)}（率"
+                      f" {pool_doc.get('rewrapRate')}）")
         items: dict[str, dict] = {}
         for entry in pop:
             code = _strip(entry["stock"].get("code"))
@@ -2244,8 +2470,22 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
                   f" carryEligible={sum(1 for c in codes if carry_of(c))}")
             continue
 
+        rewrap_hit: list = []
+        rewrap_miss: list = []
+
         def work(code):
             entry = items[code]
+            # 反包板池免投喂承接（2026-10-21 用户裁决）：池内股零 jev 调用复制前日标签；
+            # 守卫不满足（窗内无前标/答案缺失/题集换代/相位答案缺失）→ 回落全量实判（不静默降级）。
+            # 计数用 list.append（append 原子；审查 nit12：`list[0] += 1` 非原子）。
+            if code in rewrap_codes:
+                if _rewrap_carry_one(db, col, date, code, entry, slot, dataset_id,
+                                     full_qs_hash, with_stock_phase, jy_doc,
+                                     ranks.get(code)):
+                    run_tokens.append(0)
+                    rewrap_hit.append(1)
+                    return True
+                rewrap_miss.append(1)
             carry = carry_of(code)
             last_err: str | None = None
             for attempt in range(2):
@@ -2268,6 +2508,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
             results = list(ex.map(work, codes))
         n_ok += sum(results)
         n_deg += len(results) - sum(results)
+        n_rewrap_carried += len(rewrap_hit)
+        n_rewrap_miss += len(rewrap_miss)
         carried_today = sum(1 for c in codes if carry_of(c))
         n_carried += carried_today
         n_rejudged += len(codes) - carried_today
@@ -2282,6 +2524,7 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         prov = bars_source_provenance()
         print("FINAL:", {"slot": slot, "ok": n_ok, "degraded": n_deg,
                          "carried": n_carried, "rejudged": n_rejudged,
+                         "rewrapCarried": n_rewrap_carried, "rewrapMiss": n_rewrap_miss,
                          "totalTokens": sum(run_tokens), "calls": len(run_tokens),
                          "barsSource": {k: prov.get(k) for k in
                                         ("counts", "tailMergedCodes", "tailMissCodes")}})

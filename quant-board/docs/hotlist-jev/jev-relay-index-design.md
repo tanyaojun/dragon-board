@@ -693,3 +693,14 @@ tests/hotlist + tests/market + tests/api + tests/operations 四子集 1,468 pass
 前端零改动：v7 叙事只增客观事实行（判据消费面），不新增前端展示字段；§11.4 的
 `relayStructure` 子视图不受影响。采集层 `indexExtra` 为纯增量子键（models 注释已标
 additive-only），无破坏面。
+
+## 段 0a-2 反包修复行（2026-10-21 立项 R1）
+
+`rewrap_face_line`（插在「今日炸板面」之后）：昨日断板候选池（前 2~5 交易日在板 & 昨日未板）
+× 今日回封家数/反包率（近 20 日分位）+ 昨日炸板池今日回封率 + 代表股点名。
+判据零改动（v7.1）；跨日比较一律用率（裸计数与当日涨停家数 corr=0.684 共线）；
+池空/轴不足/炸板池缺失逐段 fail-visible；候选池含停牌复牌未分辨（行内静态注记）。
+计算单源 = `analysis/hotlist/rewrap_pool.build_rewrap_pool`；池快照集合
+`hotlist_rewrap_pool`（一日两更：午盘触板口径 / 盘后封板口径）仅供审计与复盘页 KPI。
+立项与验收：`jev-rewrap-factor-preregistration.md`；预测力结题：`jev-rewrap-predictive-study.md`
+（G6 未达门 → 当日状态锚专用因子，不入打分维）。

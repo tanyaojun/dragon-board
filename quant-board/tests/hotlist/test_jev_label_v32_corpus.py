@@ -33,6 +33,11 @@ PREV1 = "2026-10-19"
 PREV2 = "2026-10-16"
 EXPLAIN = "①公告：中标 3.2 亿元储能订单\n②核实：主营金属腱绳，客户结构稳定"
 
+# v3.2b（2026-10-21）：午盘槽位接线 + 解析首现回溯 + 板块 T-2 回看
+MID_DATE = "2026-10-21"
+MID_T1 = "2026-10-20"
+MID_T2 = "2026-10-19"
+
 
 # ── 极简假集合（只覆盖本模块用到的等值/_id 查询） ────────────────────────────
 class _Col:
@@ -72,7 +77,7 @@ def _jy(date, fields, slot="final"):
 def _clear_caches():
     names = ("_MKT_COORD_CACHE", "_DATE_AXIS_CACHE", "_JIYAN_EXPOUND_CACHE",
              "_BOARD_PREV_CACHE", "_THS_STATE_CACHE", "_THS_CACHE", "_FACTS_CACHE",
-             "_INTRA_CACHE", "_DAILY_BARS_CACHE")
+             "_INTRA_CACHE", "_DAILY_BARS_CACHE", "_PREV_TRADING_DATES_CACHE")
     for name in names:
         getattr(runner, name).clear()
     yield
@@ -292,7 +297,10 @@ def test_narrative_uses_light_market_line_not_full_facts(monkeypatch, no_tdx):
     assert text.splitlines()[0] == f"{DATE} 交易日 · 市场坐标：涨停 68 家 · 最高 6 板 · 池内涨跌比 1.6（涨40/跌25）"
     assert "盘面事实：" not in text                     # 整行事实（含 20 日分位）不再逐股重复
     assert text.splitlines()[1].startswith("交易日轴：")
-    assert "解析续期：与上一交易日（2026-10-19）解析逐字相同" in text
+    # v3.2b：解析续期扩展为近 10 交易日首现回溯，锚行带首现日与实际回看窗宽（审查 SF9：
+    # 窗宽按实际可得轴披露，不写死 10）
+    assert ("解析续期：该解析最早见于 2026-10-19（距今 1 个交易日，回看 2 个交易日），"
+            "此后逐字相同") in text
     assert "韭研解析全文：" in text
     # 顺序：解析续期紧贴解析正文之前（不与身位/位置段混排）
     lines = text.splitlines()
@@ -443,3 +451,152 @@ def test_relay_shares_market_facts_line_but_individual_narrative_does_not(monkey
     monkeypatch.setattr(lab, "phase_band_extra_lines", lambda *a, **k: [])
     lab.run_phase_band_day  # 只校验引用关系，不真跑（run_phase_band_day 会外呼 jev）
     assert lab.QUESTIONS_PHASE and "板块效应" in lab.QUESTIONS_PHASE["phase_band"]["instructions"]
+
+
+# ══ v3.2b（2026-10-21 用户裁决「请修复」）：P0-1 午盘接线 / P0-2 解析首现回溯 /
+#    P1-1 板块昨日家数 T-2 回看。判据零改动（QUESTION_SET_VERSION_DRIVER 维持 v3.1），
+#    语料代际 2026-10-20a → 2026-10-21a（test_jev_label_raw_material 同步）。
+#    实证背景（只读生产库复算，见 docs §10.7）：
+#    - 午盘叙事 0/51 带交易日轴、0/51 带解析续期（v3.2 只接了收盘槽位=半接线复现）；
+#    - 002368 解析逐字最早见于 10-19（距今 2 交易日），但 D8 只回看 1 个交易日且
+#      该股 10-20 不在名单 → 锚丢失 → unclear。
+
+def _mid_doc(stocks):
+    return _jy(MID_DATE, [("数据要素", stocks)], slot="midday")
+
+
+def _patch_prev_days(monkeypatch, days):
+    monkeypatch.setattr(runner, "trading_dates_before",
+                        lambda db_, d, n=20, dataset_id=None: list(days)[-n:])
+
+
+# ── P0-1a：午盘叙事必须带交易日轴（D6 接线进午盘槽位） ──────────────────────
+def test_midday_narrative_carries_date_axis(monkeypatch, no_tdx):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    doc = _mid_doc([_stock("002368", "太极股份", time="11:19:27")])
+    db = _Db({"jiuyan_action": _Col([doc])})
+    text = runner.build_midday_narrative(db, MID_DATE, "002368",
+                                         doc["fields"][0]["stocks"][0],
+                                         "数据要素", None, jiuyan_doc=doc)
+    assert "交易日轴：今日 2026-10-21" in text, "午盘叙事缺 D6 交易日轴（freshness ≤2 交易日不可数）"
+    assert f"前1交易日 {MID_T1}" in text
+
+
+# ── P0-1b：午盘叙事必须带解析续期（D8 接线进午盘槽位） ──────────────────────
+def test_midday_narrative_carries_expound_trace(monkeypatch, no_tdx):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    doc = _mid_doc([_stock("002368", "太极股份", time="11:19:27")])
+    db = _Db({"jiuyan_action": _Col([
+        doc,
+        _jy(MID_T1, [("数据要素", [_stock("600999", "甲")])]),           # T-1 无该股 → 现版 D8 返回 None
+        _jy(MID_T2, [("数据要素", [_stock("002368", "太极股份", time="11:19:27")])]),
+    ])})
+    text = runner.build_midday_narrative(db, MID_DATE, "002368",
+                                         doc["fields"][0]["stocks"][0],
+                                         "数据要素", None, jiuyan_doc=doc)
+    assert "解析续期" in text, "解析在 T-2 已存在（逐字相同），回看 10 交易日后必须出行"
+    assert MID_T2 in text and "2 个交易日" in text
+
+
+def test_midday_carry_path_skips_expound_trace(monkeypatch, no_tdx):
+    """承接路径（expound_trace=False）午盘同样不重复给 trace 行。"""
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    doc = _mid_doc([_stock("002368", "太极股份", time="11:19:27")])
+    db = _Db({"jiuyan_action": _Col([
+        doc,
+        _jy(MID_T2, [("数据要素", [_stock("002368", "太极股份", time="11:19:27")])]),
+    ])})
+    kw = dict(dataset_id=None, jiuyan_doc=doc)
+    text_off = runner.build_pilot_narrative(db, MID_DATE, "002368",
+                                            doc["fields"][0]["stocks"][0],
+                                            "数据要素", None, slot=runner.SLOT_MIDDAY,
+                                            expound_trace=False, **kw)
+    text_on = runner.build_pilot_narrative(db, MID_DATE, "002368",
+                                           doc["fields"][0]["stocks"][0],
+                                           "数据要素", None, slot=runner.SLOT_MIDDAY,
+                                           expound_trace=True, **kw)
+    assert "解析续期" not in text_off
+    assert "解析续期" in text_on
+
+
+# ── P0-2：解析首现回溯（lookback 1 → 10 交易日，锚=最早相同记录） ────────────
+def test_expound_first_seen_prefers_earliest_identical(monkeypatch):
+    """T-1 有不同解析、T-2 有逐字相同解析 → 以最早相同记录为锚（「首次出现」语义），
+    不得被更近的更新记录盖掉。"""
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T1, [("机器人", [_stock("600001", "甲", expound="旧催化文本：昨日事项")])]),
+        _jy(MID_T2, [("机器人", [_stock("600001", "甲", expound=EXPLAIN)])]),
+    ])})
+    line = runner.expound_trace_line(db, MID_DATE, "600001", EXPLAIN)
+    assert MID_T2 in line and "逐字相同" in line and "2 个交易日" in line
+
+
+def test_expound_trace_updated_reports_distance(monkeypatch):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T1, [("机器人", [_stock("600001", "甲",
+                                       expound="此前原因：①公告：中标 1 亿元")])]),
+    ])})
+    line = runner.expound_trace_line(db, MID_DATE, "600001", EXPLAIN)
+    assert "有更新" in line and "中标 1 亿元" in line and "1 个交易日" in line
+
+
+def test_expound_trace_silent_when_no_record_in_lookback(monkeypatch):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T1, [("机器人", [_stock("600002", "乙")])]),
+    ])})
+    assert runner.expound_trace_line(db, MID_DATE, "600001", EXPLAIN) is None
+
+
+def test_expound_first_seen_discloses_lookback_window(monkeypatch):
+    """「最早见于」必须在行内披露回看窗口宽度——最早可比 ≠ 全历史最早，防模型过读。"""
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T2, [("机器人", [_stock("600001", "甲", expound=EXPLAIN)])]),
+    ])})
+    line = runner.expound_trace_line(db, MID_DATE, "600001", EXPLAIN)
+    assert "回看 2 个交易日" in line, "行内须写明实际回看窗口宽度（审查 SF9：不写死 10）"
+
+
+# ── P1-1：板块昨日家数 T-1 无同名板块时回看 T-2（不补 0、显式标口径） ────────
+def test_board_prev_info_falls_back_to_t2(monkeypatch):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T1, [("低空经济", [_stock("300001", "丁")])]),           # T-1 无「机器人」
+        _jy(MID_T2, [("机器人", [_stock("600001", "甲"), _stock("600002", "乙")])]),
+    ])})
+    info = runner.board_prev_info(db, MID_DATE, "机器人")
+    assert info["ok"] is True and info["count"] == 2
+    assert info["reason"] == "t2_fallback" and info["day"] == MID_T2
+    assert runner.board_prev_count(db, MID_DATE, "机器人") == 2
+
+
+def test_board_position_labels_t2_fallback(monkeypatch):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T1, [("低空经济", [_stock("300001", "丁")])]),
+        _jy(MID_T2, [("机器人", [_stock("600001", "甲"), _stock("600002", "乙")])]),
+    ])})
+    line = runner.board_position(_time_doc(), "600002", db=db, date=MID_DATE)
+    assert f"前 2 交易日（{MID_T2}）同板块涨停 2 家" in line
+    assert "T-1 无同名板块" in line
+
+
+def test_board_prev_info_board_absent_in_both_days(monkeypatch):
+    """T-1/T-2 都无同名板块 → 维持 board_absent（不可比，不补 0 冒充）。"""
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([
+        _jy(MID_T1, [("低空经济", [_stock("300001", "丁")])]),
+        _jy(MID_T2, [("低空经济", [_stock("300001", "丁")])]),
+    ])})
+    info = runner.board_prev_info(db, MID_DATE, "机器人")
+    assert info["ok"] is False and info["reason"] == "board_absent" and info["count"] is None
+
+
+def test_board_prev_info_no_prev_doc_at_all(monkeypatch):
+    _patch_prev_days(monkeypatch, [MID_T2, MID_T1])
+    db = _Db({"jiuyan_action": _Col([])})
+    info = runner.board_prev_info(db, MID_DATE, "机器人")
+    assert info["ok"] is False and info["reason"] == "no_prev_doc"

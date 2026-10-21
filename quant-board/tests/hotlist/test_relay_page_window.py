@@ -1531,3 +1531,14 @@ def test_limitup_slot_tag_marks_midday_feed(js: str):
     assert "s.labelSlot === 'midday'" in rows and "午盘" in rows
     assert "幂等跳过" in rows, "午盘标记须说明收盘未重复投喂"
     assert "s.jiuyanFetchedAt" in rows, "午盘标记须带名单抓取时点（原料时点可追溯）"
+
+
+# ── 2026-10-21 立项 R2：反包 KPI 卡 + 明细行（jev-rewrap-factor-preregistration.md）──
+def test_relay_page_has_rewrap_kpi_and_row():
+    """反包卡（点击筛选 scope=rewrap）+ 反包池明细行容器/渲染函数必须静态在场。"""
+    html = (Path(__file__).resolve().parents[2] / "backend" / "relay_page" / "index.html").read_text(encoding="utf-8")
+    assert "rewrap: '反包'" in html, "SCOPE_CN 缺反包范围"
+    assert "onclick=\"lfScope('rewrap')\"" in html, "KPI 反包卡缺点击筛选"
+    assert 'id="labelRewrapRow"' in html and "function lfRenderRewrap" in html, "反包明细行缺容器/渲染"
+    assert "lfRenderRewrap();" in html, "反包明细行未接渲染链"
+    assert "午盘触板口径" in html, "反包卡/明细行缺口径徽标（触板≠封板）"

@@ -612,3 +612,60 @@ def test_transitional_not_cached_final_late():
     assert jiuyan_streak_map(db, "2026-10-15") == {}
     jiuyan.rows.append(_final("2026-10-15", [{"code": "002343", "name": "慈文传媒", "num": "5天5板"}]))
     assert jiuyan_streak_map(db, "2026-10-15") == {"002343": 5}
+
+
+# ── 2026-10-21 v3.2b2 用户报障：盘中（午盘名单兜底）连板股全显「真连板未定」 ──
+# 根因：jiuyan_streak_map 的午盘兜底分支一刀切全股 None——但韭研自证的直取规则
+# （N==M → M、num=None → 1）不依赖「今日封板」二分，被误杀。修法 = 午盘口径下
+# 自证规则照常直取，N>M 回溯链（需今日封板二分）维持 None 不冒充；
+# 口径由 meta.middayFallbackUsed / boardJoinSlot=midday 注记承担（fail-visible）。
+
+def _midday(date, stocks):
+    return {"_id": f"{date}:midday",
+            "fields": [{"name": "板块A", "stocks": list(stocks)}]}
+
+
+def test_streak_map_midday_fallback_self_evident_rules_direct():
+    """午盘兜底：N==M 直取 M、num=None → 1（韭研自证，不依赖今日封板二分）。"""
+    db = FakeDb({
+        "jiuyan_action": FakeCol([_midday("2026-10-21", [
+            {"code": "002368", "name": "太极股份", "num": "3天2板"},   # N>M → 午盘 None
+            {"code": "600003", "name": "双连板", "num": "2天2板"},     # N==M → 2
+            {"code": "603237", "name": "五芳斋"},                      # num=None → 1
+        ])]),
+        "snapshot_frames": FakeCol([]),
+    })
+    out = jiuyan_streak_map(db, "2026-10-21", allow_midday_fallback=True)
+    assert out == {"002368": None, "600003": 2, "603237": 1}
+
+
+def test_streak_map_midday_fallback_not_cached_transitional():
+    """transitional（final 未落档）不落缓存：final+15:00 帧到位后重算即得终口径。"""
+    db = FakeDb({
+        "jiuyan_action": FakeCol([_midday("2026-10-21", [
+            {"code": "600003", "name": "双连板", "num": "2天2板"}])]),
+        "snapshot_frames": FakeCol([]),
+    })
+    out_mid = jiuyan_streak_map(db, "2026-10-21", allow_midday_fallback=True)
+    assert out_mid == {"600003": 2}
+    assert not runner._STREAK_CACHE, "午盘兜底是 transitional 口径，禁止写缓存锁存盘中值"
+    # 盘后 final + 15:00 帧落档 → 同 db 重算给终口径（昨日链：10-20 在池 → 仍 2）
+    db["jiuyan_action"].rows.append(_final("2026-10-21", [
+        {"code": "600003", "name": "双连板", "num": "2天2板"}]))
+    db["snapshot_frames"].rows.extend([
+        _frame("2026-10-20"), _frame("2026-10-21")])
+    out_final = jiuyan_streak_map(db, "2026-10-21", allow_midday_fallback=True)
+    assert out_final == {"600003": 2}
+
+
+def test_streak_map_midday_fallback_broken_streak_stays_none():
+    """N>M 断板股午盘维持 None：今日封板不可二分（触板≠封板），不按 M 伪算不猜链。"""
+    db = FakeDb({
+        "jiuyan_action": FakeCol([_midday("2026-10-21", [
+            {"code": "002368", "name": "太极股份", "num": "3天2板"},
+            {"code": "001318", "name": "阳光乳业", "num": "7天4板"},
+        ])]),
+        "snapshot_frames": FakeCol([]),
+    })
+    out = jiuyan_streak_map(db, "2026-10-21", allow_midday_fallback=True)
+    assert out == {"002368": None, "001318": None}
