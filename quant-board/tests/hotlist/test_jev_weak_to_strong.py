@@ -292,3 +292,40 @@ def test_weak_to_strong_line_divergence_note():
     line = weak_to_strong_line(db, "2026-03-04")
     assert "符合历史弱转强形态" in line                # 按定档节点（55 命中）表述
     assert "重跑重评 44.0" in line and "收盘定档 55.0" in line
+
+
+# ── 定档代际绑定（2026-10-22 §6.4 预注册：题集升代→旧定格失效→--reset 重定档） ────
+def test_settlement_records_generation():
+    """定档条目必须带 gen=当前题集代（跨代可审计的前提）。"""
+    db = _mk_db()
+    e = W.settle_day(db, "2026-03-04")
+    assert e["gen"] == "v7.1"
+
+
+def test_stale_generation_stamp_ignored(monkeypatch):
+    """升代后旧代定格自动失效（回退现算），不静默沿用旧代节点。"""
+    db = _mk_db()
+    W.write_settlement(db, "2026-03-04", idx_override=55.0)
+    assert W.classify_series(db)["2026-03-04"]["hit"] is True
+    monkeypatch.setattr(W, "QUESTION_SET_VERSION_RELAY", "v8.0")   # 模拟题集升代
+    cls = W.classify_series(db)
+    # 关键断言：旧代定格失效，该日回退现算（settled 标记消失，不再锚定旧代 idx）
+    assert cls["2026-03-04"].get("settled") is not True
+
+
+def test_reset_backfill_restamps_under_new_generation(monkeypatch):
+    """--reset 重新定档：旧代定格被覆盖，新档带新 gen；正常运行路径仍 first-write-wins。"""
+    db = _mk_db()
+    W.write_settlement(db, "2026-03-04", idx_override=55.0)
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 44.0
+    monkeypatch.setattr(W, "QUESTION_SET_VERSION_RELAY", "v8.0")
+    e = W.write_settlement(db, "2026-03-04", reset=True)
+    assert e["gen"] == "v8.0" and e["hit"] is False and e["idx"] == 44.0
+    # 正常路径依旧不改写（升代窗口关闭后重跑不能动节点）
+    for r in db["hotlist_jev_relay_index"].rows:
+        if r.get("_id") == "2026-03-04:RELAY":
+            r["relayIndex"] = 99.0
+    e2 = W.settle_day(db, "2026-03-04")
+    assert e2["gen"] == "v8.0" and e2["idx"] == 44.0

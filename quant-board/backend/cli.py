@@ -191,15 +191,34 @@ def cmd_wzs_settle_backfill(args: argparse.Namespace) -> None:
     dates = [str(x["_id"]).split(":")[0]
              for x in db["hotlist_jev_relay_index"].find({"status": "ok"}, {"_id": 1})
              if args.start <= str(x["_id"]).split(":")[0] <= args.end]
+    reset = bool(args.reset)
+    archive_path = None
+    if reset and not args.dry_run:
+        # 升代重定档：旧代定格先归档（§6.4；data/backups 为 gitignore 归档区）
+        import json as _json
+        import time as _time
+        stamps = {}
+        for doc in db["hotlist_jev_relay_index"].find({}, {"wzs": 1, "tradingDate": 1}):
+            w = doc.get("wzs")
+            if isinstance(w, dict) and "state" in w:
+                stamps[str(doc.get("tradingDate") or doc["_id"]).split(":")[0]] = w
+        from pathlib import Path as _Path
+        backup_dir = _Path("data/backups")
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = str(backup_dir / f"wzs_settlements_{_time.strftime('%Y%m%d_%H%M%S')}.json")
+        with open(archive_path, "w", encoding="utf-8") as f:
+            _json.dump({"archivedAt": _time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "count": len(stamps), "settlements": stamps}, f, ensure_ascii=False, indent=1)
     stamped = skipped = missing = 0
     details = []
     for d in sorted(dates):
         doc = db["hotlist_jev_relay_index"].find_one({"_id": f"{d}:RELAY"}) or {}
-        if isinstance(doc.get("wzs"), dict) and "state" in doc["wzs"]:
+        already = isinstance(doc.get("wzs"), dict) and "state" in doc["wzs"]
+        if already and not reset:
             skipped += 1
             continue
         entry = W.write_settlement(db, d, idx_override=overrides.get(d),
-                                   dry_run=bool(args.dry_run))
+                                   dry_run=bool(args.dry_run), reset=reset)
         if entry is None:
             missing += 1
             details.append({"date": d, "result": "missing_doc"})
@@ -211,7 +230,8 @@ def cmd_wzs_settle_backfill(args: argparse.Namespace) -> None:
                             "override": overrides.get(d) is not None})
     result = {"ok": True, "range": [args.start, args.end],
               "stamped": stamped, "skippedAlreadySettled": skipped,
-              "missingDoc": missing, "dryRun": bool(args.dry_run),
+              "missingDoc": missing, "dryRun": bool(args.dry_run), "reset": reset,
+              "archivedTo": archive_path,
               "overrides": overrides, "details": details}
     print_json(result)
     if missing and not args.dry_run:
@@ -1432,6 +1452,8 @@ def build_parser() -> argparse.ArgumentParser:
     wzs_backfill_cmd.add_argument("--idx-override", action="append", default=[],
                                    metavar="DATE=IDX",
                                    help="archived settlement idx (e.g. 2026-10-20=50.1)")
+    wzs_backfill_cmd.add_argument("--reset", action="store_true",
+                                   help="generation upgrade only: re-settle (archive old stamps first)")
     wzs_backfill_cmd.add_argument("--dry-run", action="store_true")
     wzs_backfill_cmd.set_defaults(func=cmd_wzs_settle_backfill)
 

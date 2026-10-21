@@ -22,11 +22,18 @@ fail-visible：任一原料缺失 → hit=False 且 reason 结构化（不伪 0�
   重跑只更新叙事/评分，已定格节点不改写（first-write-wins）；未定格日回退现算。
   全史基线/读口/语料行统一从「定格优先、现算兑底」的 classify_series 取数（单一事实源）。
 历史回填用一次性 CLI（支持存档 idx override，如 10-20 定档值 50.1 记录于研究档案 §1）。
+
+定档代际绑定（2026-10-22 §6.4 预注册）：定档条目记录 gen=questionSetVersion；
+阈值（40/50/Δ10）是在 v7.1 分数分布上预注册的，题集升代全量复跑后旧代定格
+对新序列不再有裁决力——_settled_stamps 只采纳 gen=当前代 的定格，代际不匹配
+自动回退现算（fail-visible），升代后必须执行 --reset 回填重新定档（旧档先归档）。
 """
 from __future__ import annotations
 
 import time
 from typing import Any
+
+from backend.analysis.hotlist.jev_relay_ammo import QUESTION_SET_VERSION_RELAY
 
 from backend.analysis.hotlist.market_facts import frame_market_facts
 
@@ -76,11 +83,16 @@ def zt_series(db: Any, dataset_id: str = "dragonboard_live") -> dict[str, int]:
 
 
 def _settled_stamps(db: Any) -> dict[str, dict]:
-    """已定格节点（relay 文档内嵌 wzs 字段，收盘定档一次定格）。"""
+    """已定格节点（relay 文档内嵌 wzs 字段，收盘定档一次定格）。
+
+    代际绑定：只采纳 gen=当前题集代 的定格（无 gen 的历史档视作 v7.1 初代）；
+    升代后旧代定格自动失效回退现算，待 --reset 回填重新定档（跨代不可比）。"""
     out: dict[str, dict] = {}
     for doc in db["hotlist_jev_relay_index"].find({}, {"wzs": 1, "tradingDate": 1}):
         w = doc.get("wzs")
         if isinstance(w, dict) and "state" in w:
+            if (w.get("gen") or "v7.1") != QUESTION_SET_VERSION_RELAY:
+                continue
             d = doc.get("tradingDate") or str(doc["_id"]).split(":")[0]
             out[str(d)] = w
     return out
@@ -176,15 +188,15 @@ def _settle_entry(idx_today, prev_idx, prev_hit: bool, confirm: list[str]) -> di
 
 
 def settle_day(db: Any, date: str, dataset_id: str = "dragonboard_live",
-               idx_override: float | None = None) -> dict:
+               idx_override: float | None = None, regenerate: bool = False) -> dict:
     """收盘定档：以本次落库 relayIndex（或存档 override，如 10-20=50.1）为当日指数。
 
     幂等 first-write-wins：已定档日直接返回现有存档节点（重跑不改写，判定标准稳定的
     唯一来源）；idx_override 仅限历史回填时引用研究档案存档值，需在档案登记依据。
-    """
+    regenerate=True 仅供题集升代后重新定档（§6.4）：忽略既有定格重新计算。"""
     col = db["hotlist_jev_relay_index"]
     doc = col.find_one({"_id": f"{date}:RELAY"}) or {}
-    if isinstance(doc.get("wzs"), dict) and "state" in doc["wzs"]:
+    if not regenerate and isinstance(doc.get("wzs"), dict) and "state" in doc["wzs"]:
         return doc["wzs"]
     cls_series = classify_series(db, dataset_id)
     dates = sorted(set(list(cls_series) + [date]))
@@ -202,16 +214,22 @@ def settle_day(db: Any, date: str, dataset_id: str = "dragonboard_live",
             confirm.append("zt_up")
     entry = _settle_entry(idx_override if idx_override is not None else doc.get("relayIndex"),
                           prev_idx, prev_hit, confirm)
+    entry["gen"] = QUESTION_SET_VERSION_RELAY
     entry["settledAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     return entry
 
 
 def write_settlement(db: Any, date: str, dataset_id: str = "dragonboard_live",
-                     idx_override: float | None = None, dry_run: bool = False) -> dict | None:
-    """写定档（幂等）；dry_run 零写入。返回定档条目；无文档返回 None（fail-visible 由调用方呈现）。"""
+                     idx_override: float | None = None, dry_run: bool = False,
+                     reset: bool = False) -> dict | None:
+    """写定档（幂等）；dry_run 零写入。返回定档条目；无文档返回 None（fail-visible 由调用方呈现）。
+
+    reset=True 仅供题集升代重放后的重新定档（覆盖旧代定格；调用方须先归档旧档，
+    见 §6.4 升代流程）；正常运行路径永远 first-write-wins。"""
     if not db["hotlist_jev_relay_index"].find_one({"_id": f"{date}:RELAY"}):
         return None
-    entry = settle_day(db, date, dataset_id, idx_override=idx_override)
+    entry = settle_day(db, date, dataset_id, idx_override=idx_override,
+                       regenerate=reset)
     if not dry_run:
         db["hotlist_jev_relay_index"].update_one(
             {"_id": f"{date}:RELAY"}, {"$set": {"wzs": entry}})
