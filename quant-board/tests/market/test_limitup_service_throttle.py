@@ -105,6 +105,31 @@ def test_success_resets_backoff_streak():
     assert len(client.calls) == 4
 
 
+def test_get_ths_pools_partial_failure_reports_degraded_not_crash():
+    """2026-10-22 review 修：任一池失败时 errors 上报路径此前对 (key, dict) 元组调 .get
+    直接 AttributeError——上游故障被伪装成崩溃、失败信息全部丢失。回归锁定：返回
+    ok=False/degraded=True/errors 带池名，其余池照常返回数据。"""
+    now, _ = _now_factory()
+    client = _FakeClient([_OK])
+    original_get = client.get
+    fail_url = "cate=limit_up_two"
+
+    async def flaky_get(url, timeout=None, headers=None):
+        if fail_url in url:
+            raise RuntimeError("upstream 403")
+        return await original_get(url, timeout=timeout, headers=headers)
+
+    client.get = flaky_get
+    svc = LimitUpService(client=client, now_ms=now, min_request_gap_ms=0)
+    payload = asyncio.run(svc.get_ths_pools(
+        "20260929", keys=("one", "two", "three", "four", "high")))
+    assert payload["ok"] is False and payload["degraded"] is True
+    assert payload["errors"][0]["pool"] == "two"
+    assert "403" in payload["errors"][0]["message"]
+    assert payload["pools"]["one"]["ok"] is True
+    assert payload["pools"]["two"]["ok"] is False
+
+
 def test_throttle_enforces_min_gap():
     # 真实场景：同次采集中列表+细分池两个不同键背靠背出网 → 第二发应错峰等待
     now, state = _now_factory()

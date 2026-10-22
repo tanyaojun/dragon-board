@@ -238,6 +238,28 @@ def test_collect_slot_evidence_zt_count_from_boards_when_zhaban_missing():
     assert "指数缺失" in " ".join(ev["quality"]["degradedSources"])
 
 
+def test_collect_slot_evidence_legacy_board_schema_normalized():
+    """2026-07-03 前旧 schema（board1..board4plus）→ 归一化，不得再报「涨停 0」。
+    07-01 09:30 实证：board1=7/board2=3，当前代码旧版只读 yiban… 回退求和得 0。"""
+    frame = {"indices": {}, "limitSummary": {
+        "continuousBoards": {"board1": 7, "board2": 3, "board3": 0, "board4plus": 0},
+        "zhaban": {"count": 4, "rate": 18.18, "fengbanRate": 81.82}}}
+    ev = collect_slot_evidence(frame=frame, rows=[], yesterday_rows=[], analysis_by_code={}, slot_time="09:30")
+    assert ev["limit"]["ztCount"] == 10
+    assert ev["limit"]["boards"] == {"yiban": 7, "erban": 3, "sanban": 0, "sibanPlus": 0}
+    assert "涨停证据缺失" not in " ".join(ev["quality"]["degradedSources"])
+
+
+def test_collect_slot_evidence_empty_board_buckets_not_pseudo_zero():
+    """现代帧桶键全 None 且无 ztCount → 不可求和；必须 None + 缺失披露，不得伪 0。"""
+    frame = {"indices": {}, "limitSummary": {
+        "continuousBoards": {"yiban": None, "erban": None, "sanban": None, "sibanPlus": None},
+        "zhaban": {"count": 4, "rate": 18.18, "fengbanRate": 81.82}}}
+    ev = collect_slot_evidence(frame=frame, rows=[], yesterday_rows=[], analysis_by_code={}, slot_time="09:30")
+    assert ev["limit"]["ztCount"] is None
+    assert "涨停证据缺失" in " ".join(ev["quality"]["degradedSources"])
+
+
 # ── 观察轨道 v3：槽位/日级叙事构建器 ──
 
 
@@ -307,13 +329,120 @@ def test_build_day_jev_state_full_shape():
     assert "2026-10-08" in s and "【逐帧证据】" in s
     assert "09:30｜" in s and "10:30｜" in s
     # 2026-10-22 真连板口径：日级峰值取 maxTrueBoard（4），区间 6 降级为标注
-    assert "【当日累计】" in s and "新进 7" in s and "最高真连板峰值 4 板" in s
+    assert "【当日累计】" in s and "新进 7" in s and "真连板峰值 4 板" in s
     assert "【数据质量】" in s and len(s) <= 6000
 
 
 def test_build_day_jev_state_empty_defensive():
     s = build_day_jev_state(trading_date="2026-10-08", evidences=[])
     assert "无帧证据" in s
+
+
+# ── 2026-10-22 日级 EOD 语料修复：收盘帧全量块 + 帧覆盖 + 结构化质量 + 真连板覆盖标签 ──
+
+
+def _day_evidence(slot, *, close=False, no_indices=False, no_amount=False,
+                  no_heat=False, no_pools=False):
+    import copy
+
+    frame = copy.deepcopy(_v3_frame())
+    if no_indices:
+        frame["indices"] = {}
+    if no_amount and isinstance(frame.get("indices"), dict):
+        frame["indices"] = {k: v for k, v in frame["indices"].items() if k != "totalAmount"}
+    if no_pools:
+        frame["limitSummary"] = {k: v for k, v in frame["limitSummary"].items() if k != "thsPools"}
+    if close:
+        frame["limitSummary"]["sealQuality"] = {
+            "byzCount": 27, "hardCount": 7, "rottenCount": 16,
+            "rottenShare": 0.32, "avgSucRate": 0.812}
+        frame["limitSummary"]["drawdown"] = {
+            "count": 3, "avgDrawdownPct": 12.99, "deepestDrawdownPct": 14.93}
+    rows = [dict(r) for r in _v3_rows()]
+    if no_heat:
+        rows = [dict(r, heat=0) for r in rows]
+    return collect_slot_evidence(
+        frame=frame, rows=rows, yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time=slot,
+        yesterday_same_slot_total_amount=1.0e12)
+
+
+def test_build_day_jev_state_close_block_and_frame_coverage():
+    close = _day_evidence("15:00", close=True)
+    prior = _day_evidence("09:30")
+    s = build_day_jev_state(
+        trading_date="2026-10-21", evidences=[prior, close],
+        expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
+    assert "【收盘帧证据】" in s
+    assert "封板率 85%" in s
+    assert "封板质量：一字/秒板 27 家" in s and "触板回撤池：大幅回撤 3 家" in s
+    assert "焦点个股：" in s and "涨停原因" in s
+    assert "【当日累计】" in s and "收盘涨停 68" in s and "收盘封板率 85%" in s
+    assert "帧 2/2" in s
+    assert "全日真连板峰值 4 板（2/2 帧有真连板）" in s
+    assert "【数据质量】无缺失" in s
+
+
+def test_build_day_jev_state_missing_close_disclosed():
+    mid = _day_evidence("14:00")
+    prior = _day_evidence("09:30")
+    s = build_day_jev_state(
+        trading_date="2026-10-21", evidences=[prior, mid],
+        expected_slots=["09:30", "14:00"], present_slots=["09:30", "14:00"])
+    assert "【收盘帧证据】" in s and "收盘帧缺失（末帧 14:00）" in s
+    assert "非全天口径" in s
+    assert "帧 2/2" in s
+
+
+def test_build_day_jev_state_true_board_coverage_labels():
+    # 早盘无连板层、收盘帧有 → 只能称「收盘真连板」，不得称「全日峰值」
+    prior = _day_evidence("09:30", no_pools=True)
+    close = _day_evidence("15:00", close=True)
+    s = build_day_jev_state(
+        trading_date="2026-10-21", evidences=[prior, close],
+        expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
+    assert "收盘真连板 4 板（仅收盘帧有真连板）" in s
+    assert "全日真连板峰值" not in s
+
+
+def test_build_day_jev_state_quality_counts_not_string_dedup():
+    prior = _day_evidence("09:30", no_indices=True, no_amount=True)
+    close = _day_evidence("15:00", close=True)
+    s = build_day_jev_state(
+        trading_date="2026-10-21", evidences=[prior, close],
+        expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
+    assert "指数缺失 1/2 帧" in s
+    assert "盘中 1 帧无量能字段（收盘帧已采集）" in s
+    assert "两市总成交额缺失（历史帧无该字段）" not in s
+
+
+def test_build_day_jev_state_heat_note_only_when_close_leaders_rendered():
+    # 早盘热度缺、收盘帧热度正常 → 收盘块按热度渲染，早盘槽级噪音不得泄漏到日级质量段
+    prior = _day_evidence("09:30", no_heat=True)
+    close = _day_evidence("15:00", close=True)
+    s = build_day_jev_state(
+        trading_date="2026-10-21", evidences=[prior, close],
+        expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
+    assert "热度字段未采集" not in s
+    # 收盘帧热度全零时收盘块按 rank 渲染 → 该披露必须保留
+    prior2 = _day_evidence("09:30", no_heat=True)
+    close2 = _day_evidence("15:00", close=True, no_heat=True)
+    s2 = build_day_jev_state(
+        trading_date="2026-10-21", evidences=[prior2, close2],
+        expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
+    assert "热度字段未采集" in s2
+
+
+def test_build_history_anchor_effective_sample_and_provenance():
+    stats = [
+        {"date": f"2026-08-{d:02d}", "ztCount": 50, "maxTrueBoard": 4,
+         "maxTrueBoardSource": "frame_15", "amountYi": (None if d == 20 else 16000.0),
+         "zhabanRate": 20.0}
+        for d in range(1, 21)
+    ]
+    out = build_history_anchor(stats)
+    assert "两市成交额：p20=" in out and "有效样本 19/20" in out
+    assert "最高连板来源：" in out and "帧" in out
 
 
 # ── 近20日参照锚 + 封板质量/回撤池/09:30 注记（原 v2 判定测试，2026-10-02 归一）──
@@ -477,20 +606,19 @@ def test_derive_true_ladder_from_pools_caliber():
     pools = {"one": {"ok": True, "items": [{}] * 5}, "two": {"ok": True, "items": [{}] * 2},
              "three": {"ok": True, "items": []}, "four": {"ok": True, "items": []},
              "high": {"ok": True, "items": [{"continue_day_cnt": 11}, {"continue_day_cnt": 7}]}}
-    lad = derive_true_ladder_from_pools(pools, zt_count=46)
+    lad = derive_true_ladder_from_pools(pools)
     assert lad["maxBoard"] == 11 and lad["boards"]["high"] == 2
     # 任一池缺失/不 ok → 整体不可算 None（relay 审查 #8 同规：半池不可用不冒充全量）
     assert derive_true_ladder_from_pools(dict(pools, four={"ok": False, "items": []})) is None
     assert derive_true_ladder_from_pools({"one": pools["one"]}) is None
     assert derive_true_ladder_from_pools(None) is None
-    # 全零且 zt>0（池未就绪，09:30 形态）→ None 不冒充「最高 0 连板」
+    # 五池全零 → None（无法区分「池未就绪」与「真无涨停」，review P2-3 裁决：
+    # 09:30 开盘池未就绪与冰点日同样是全零，任一种按 0 连板呈现都会伪装权威口径）
     empty = {k: {"ok": True, "items": []} for k in ("one", "two", "three", "four", "high")}
-    assert derive_true_ladder_from_pools(empty, zt_count=19) is None
-    # 全零且 zt=0（真无涨停日）→ 合法 0
-    assert derive_true_ladder_from_pools(empty, zt_count=0)["maxBoard"] == 0
+    assert derive_true_ladder_from_pools(empty) is None
     # high 池有条目但高度字段缺失 → 池身份下限 5（宁缺毋猜的下界披露）
     no_cnt = {**empty, "high": {"ok": True, "items": [{"stock_code": "X"}]}}
-    assert derive_true_ladder_from_pools(no_cnt, zt_count=30)["maxBoard"] == 5
+    assert derive_true_ladder_from_pools(no_cnt)["maxBoard"] == 5
 
 
 def test_collect_slot_evidence_true_ladder_param_fallback():
@@ -522,7 +650,7 @@ def test_collect_slot_evidence_index_extra_missing_disclosed():
     frame["indices"] = {k: v for k, v in frame["indices"].items() if k != "indexExtra"}
     ev = _collect(frame=frame, rows=_v3_rows(), yesterday_rows=[], analysis_by_code={},
                   slot_time="10:30")
-    assert "三指数该帧未采集" in " ".join(ev["quality"]["degradedSources"])
+    assert "三指数缺席：深成指、创业板指、科创50" in " ".join(ev["quality"]["degradedSources"])
 
 
 def test_collect_slot_evidence_true_ladder_missing_disclosed():
@@ -545,7 +673,7 @@ def test_slot_narrative_legacy_frame_renders_points_and_4_indices():
     assert "沪指 -12.20点" in s and "中证500 -23.40点" in s
     idx_line = [line for line in s.split("\n") if line.startswith("指数与量能：")][0]
     assert "深成指" not in idx_line and "创业板指" not in idx_line and "科创50" not in idx_line
-    assert "三指数该帧未采集" in s
+    assert "三指数缺席" in s
 
 
 def test_slot_narrative_true_ladder_missing_renders_range_caliber():
@@ -585,7 +713,7 @@ def test_slot_narrative_reasons_total_disclosed():
                   slot_time="14:00")
     assert ev["reasonsTotal"] == 7 and len(ev["reasons"]) == 5
     s = build_slot_jev_state(trading_date="2026-10-21", slot_time="14:00", current=ev, priors=[])
-    assert "涨停原因（有原因个股 7 只，列前 5）" in s
+    assert "涨停原因（有原因个股 7 只，原因列前 5 类）" in s
 
 
 def test_format_evidence_line_seven_indices_and_reversal():
@@ -595,3 +723,53 @@ def test_format_evidence_line_seven_indices_and_reversal():
     assert "沪指 -0.38%" in line and "创业板指 -1.37%" in line and "科创50 +0.27%" in line
     assert "反转 1" in line
     assert "最高 4 连板" in line and "最高区间" not in line
+
+
+def test_collect_slot_evidence_partial_index_extra_disclosed():
+    """indexExtra 部分缺席（如只有深成指）→ 逐键披露，创业板指/科创50 不得静默消失（review P2-2）。"""
+    frame = _v3_frame()
+    frame["indices"]["indexExtra"] = {"szcz": {"change": -40.1, "changePct": -0.40}}
+    ev = _collect(frame=frame, rows=_v3_rows(), yesterday_rows=[], analysis_by_code={},
+                  slot_time="10:30")
+    degraded = " ".join(ev["quality"]["degradedSources"])
+    assert "三指数缺席：创业板指、科创50" in degraded
+    s = build_slot_jev_state(trading_date="2026-10-21", slot_time="10:30", current=ev, priors=[])
+    idx_line = [line for line in s.split("\n") if line.startswith("指数与量能：")][0]
+    assert "深成指 -0.40%" in idx_line
+    assert "创业板指" not in idx_line and "科创50" not in idx_line
+
+
+def test_slot_narrative_day_peak_zero_truthiness():
+    """maxTrueBoard 显式 None 判定（review P3-3）：无连板证据时不把 0 当「缺」的替身。"""
+    frame = _v3_frame()
+    frame["limitSummary"] = {k: v for k, v in frame["limitSummary"].items() if k != "thsPools"}
+    ev = _collect(frame=frame, rows=_v3_rows(), yesterday_rows=[], analysis_by_code={},
+                  slot_time="15:00")
+    s = build_day_jev_state(trading_date="2026-10-21", evidences=[ev])
+    assert "最高区间板峰值 6 板（真连板未采集）" in s
+
+
+def test_collect_slot_evidence_heat_sort_beats_rank_order():
+    """热度序区分性（review P3-7）：heat 倒序夹具——rank 靠后但热度最高者排第一，
+    rank 序实现不得巧合通过。"""
+    rows = [
+        {"code": "000001", "name": "rank1低热", "rank": 1, "heat": 10,
+         "pctChange": 1.0, "change": 1.0, "turnover": 1.0e7},
+        {"code": "000005", "name": "rank5高热", "rank": 5, "heat": 500,
+         "pctChange": 2.0, "change": 2.0, "turnover": 1.0e7},
+    ]
+    ev = _collect(frame=_v3_frame(), rows=rows, yesterday_rows=[], analysis_by_code={},
+                  slot_time="10:30")
+    assert ev["leaders"][0]["name"] == "rank5高热"
+
+
+def test_collect_slot_evidence_index_extra_point_fallback():
+    """indexExtra 有 change 无 changePct → 点位口径降级渲染，changePct 缺席不补 0。"""
+    frame = _v3_frame()
+    frame["indices"]["indexExtra"] = {"kc50": {"change": 3.5}}
+    ev = _collect(frame=frame, rows=_v3_rows(), yesterday_rows=[], analysis_by_code={},
+                  slot_time="10:30")
+    assert ev["indices"]["indexExtra"]["kc50"]["changePct"] is None
+    s = build_slot_jev_state(trading_date="2026-10-21", slot_time="10:30", current=ev, priors=[])
+    idx_line = [line for line in s.split("\n") if line.startswith("指数与量能：")][0]
+    assert "科创50 +3.50点" in idx_line

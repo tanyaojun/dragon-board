@@ -41,7 +41,11 @@ ground truth 源：帧 `indices.indexExtra`（库内直查）、THS 连板层五
      `get_ths_pools(date, keys=连板层)` 现查（服务层 250ms 节流+退避负缓存+TTL 已有）。
      as-of 保护：优先级 帧池（15:00）→ 已存 v2 槽文档 `evidenceRaw.limit`（当日已走帧
      重collect时复用落档 as-of 值，**不现查**——现查返回 now-state 会污染历史帧）→
-     当日当前槽现查 → 历史日按日期查（EOD 态，回放口径，degraded 披露）→ None 降级。
+     当日**当前时钟槽**现查（上海时钟 now ≤ 槽时刻 + 10 分钟容差；超窗=已走槽被回补/
+     重跑，一律 None 降级不现查）→ 历史日按日期查（EOD 态，回放口径，degraded 披露）→
+     None 降级。跨事件循环安全：现查不共享进程单例 AsyncClient（连接池绑定首次循环，
+     跨循环复用实测 RuntimeError），每次调用新建专用 client + 模块级结果缓存（TTL 300s）
+     （详见 §6 #1）。
    - **任一池缺失/不 ok → 整体不可算返 None**（relay 审查 #8 同规）；连板层全零且
      ztCount>0（池未就绪）→ None 不冒充 0 连板。
 3. **锚同口径重算**：`build_history_stats_calendar` 的「最高连板」改 `maxTrueBoard`，
@@ -67,7 +71,7 @@ ground truth 源：帧 `indices.indexExtra`（库内直查）、THS 连板层五
 - `indexPct`：顶层 4 键 changePct（缺失键缺席）；
 - `limit.trueBoards`：`{yiban,erban,sanban,sibanPlus,high}`（真连板口径；sibanPlus=四板+高位）；
 - `limit.maxTrueBoard`：真连板最高板；`limit.trueBoardSource`：`frame_ths_ladder`/
-  `ths_live`/`stored_doc`/`ths_date_eod`；
+  `ths_live`/`stored_doc`/`ths_date_eod`/`external`（外部供给未标来源时的兜底枚举）；
 - `reasonsTotal`：有 reason 行数；
 - `maxBoard`（区间）与既有键零变动。
 
@@ -81,6 +85,8 @@ ground truth 源：帧 `indices.indexExtra`（库内直查）、THS 连板层五
 | emotion_score 连续评分 | `limit.maxBoard`（区间校准曲线） | 不修，独立轨道（§2.4） |
 | 规则情绪链（theme/hotlist_sentiment_compute） | 帧 `limitSummary` 直读 | 帧契约不动，零漂移 |
 | 方向 v4 / vote-confirm pilot | 帧帧 `maxBoard` | 不修（relay §4 既定） |
+| pilot 锚（jev_sentiment_pilot / jev_crowding_score_pilot） | `build_history_stats`（2026-10-22 review P2-1 发现，§6 修） | **已同步修**：改读 `maxTrueBoard`（不回退区间 maxBoard，混口径禁入同一条分位序列），缺值 None 样本不足如实标注 |
+| pilot 槽产物真连板（jev_sentiment_pilot.compute_slot） | `collect_slot_evidence` 未传 true_ladder（review P2-2 发现，§6 修） | **已同步修**：接 `_resolve_slot_true_ladder` 供给链（历史 pilot 日期走按日查 EOD 态，当日走时间窗守卫） |
 | 历史帧回填 indexExtra | 帧缺该字段 | 不回填；10-20 前槽文档叙事 4 指数降级 |
 | 10-22 前存量槽文档 | narrativeRaw 旧口径 | 不回放语料；回放（重算）需真 jev 调用，走预算确认 |
 
@@ -98,7 +104,42 @@ ground truth 源：帧 `indices.indexExtra`（库内直查）、THS 连板层五
 交叉核验：真连板 vs `jiuyan_streak_map` 逐日一致（回填参考集合时抽 2 日对照）；
 锚 maxTrueBoard vs 15:00 帧连板层一致。
 
-## 6. 回放与预算（开火需另行确认）
+## 6. 2026-10-22 提交前 code review（3 个 subagent 平行对抗审查）与修复
+
+提交 1b3ea22c 后审查，落表处置。逐项标注「修复前会产生什么」。
+
+### 修掉的问题
+
+| # | 位置 | 缺陷 | 修复前实证 | 处置 |
+|---|---|---|---|---|
+| 1 | `jev_sentiment_compute._fetch_true_ladder` | **P1 跨事件循环 client**：进程级单例 httpx.AsyncClient 连接池绑定首次事件循环；jev 后处理链在 `asyncio.to_thread` 新循环复用 → 池请求全部 `RuntimeError: Event loop is closed`，真连板供给链在生产两进程内整体失效 | 实测：主循环用单例后再新循环 → RuntimeError；且 `get_ths_pools` 的 errors 推导对 tuple 调 `.get` 抛 AttributeError，故障无日志 | 每次调用新建专用 client（用完即关）+ 模块级 `_LADDER_FETCH_CACHE`（TTL 300s，只缓存成功）吸收重复请求；实测两次新循环现查均成功 |
+| 2 | `_resolve_slot_true_ladder` | **P1 as-of 缺口**：`allow_live` 未校验槽位是否真当前时钟槽——当日早槽被回补/重跑（collector 当槽宕机重算、`/slots/rerun`、全槽重算脚本）时现查 now-state 冒充槽位 as-of | 14:00 槽 15:30 回补 → 写入 15:30 连板态为「14:00 最高 N 连板」，无披露 | 新增 `_slot_is_current`（上海时钟 now ≤ 槽时刻 + 10 分钟容差）；超窗一律 None 降级不现查；测试区分真当前槽与已走槽重跑 |
+| 3 | `market_proxy/limitup.get_ths_pools` | **既有 P1**（review 顺带发现）：errors 列表推导把 `(key, dict)` 元组当 dict 用，任一池失败即 AttributeError——失败上报路径整体不可用 | 单池 403 → 整个 get_ths_pools 崩，其余池数据与错误信息全丢 | 解包 `entry[1]`；补 partial-failure 回归测试 |
+| 4 | `backfill_true_ladder.plan_backfill` | **P2**：日期窗口可含当日盘中——THS 按日查返回 now-state，`--apply` 入库后被明日锚当 EOD 样本消费（回填侧的口径事故入口） | 盘中跑 `--end=今天` → 盘中连板态入参考集合 | 跳过 `date >= 今日`（计数披露）；补测试 |
+| 5 | `_note_slot_ladder_caliber` | **P2**：ths_date_eod 回放口径披露只盖当前槽——priors 与日级逐帧链同样取 EOD 连板层但无标注 | 历史日重放时盘中帧显「最高 N 连板」实为收盘态，模型当 as-of 真值 | 披露下沉到 `_collect_evidence`（priors/day 同享）；当前槽取帧池而 priors 取 EOD 的混合形态也汇入质量段 |
+| 6 | `jev_state.collect_slot_evidence` | **P2**：indexExtra 部分缺席不披露（只有整体为空才报）——上游只返深成指时创业板指/科创50 静默消失 | 部分源失败被当成完整 | 逐键比对缺席名并披露（「三指数缺席：创业板指、科创50」） |
+| 7 | `derive_true_ladder_from_pools` | **P2**：五池全零且 ztCount=0（09:30 池未就绪同样形态）返回「合法 0 连板」——以权威口径呈现未就绪读数 | 09:30 帧写「最高 0 连板（真连板）」 | 全零一律 None（无法区分未就绪/真无涨停 → 降级披露）；zt_count 参数随之退役 |
+| 8 | `jev_state` 侧次级 | P3：热度混类型行 TypeError 一票否决全帧证据；日峰值 `or 0` truthiness；原因「列前 5」措辞歧义；真连板降级归因误导；存储文档畸形炸槽计算 | — | 热度排序 `_finite` 守卫；峰值显式 None 判定；措辞「原因列前 N 类」；降级改中性措辞「连板层不可用」+ 计算层日志承载上游错误；`_stored_doc_ladder` 畸形 → None |
+| 9 | `jev_sentiment_pilot.build_history_stats` | **P2**（测试/文档一致性审查）：仍产 `maxBoard` 键，而 `build_history_anchor` 改读 `maxTrueBoard` → pilot `--anchor recent` 锚「最高连板」整行变「历史样本不足」，pilot 重跑写生产集合锚段缺该指标 | 预注册 §4 未列此轨道的改名遗漏消费方 | 改读 `maxTrueBoard`（不回退区间 maxBoard——混口径进同一条分位序列=混采污染） |
+| 10 | `jev_sentiment_pilot.compute_slot` | **P2**（同上）：pilot 产物未接真连板供给链，盘中槽产物（写生产集合）真连板恒缺席 + degraded | 预注册 §4 未列 | 接 `_resolve_slot_true_ladder`（历史 pilot 日期走按日查 EOD 态，当日走时间窗守卫） |
+| 11 | `tests/conftest.py` | **P2**（同上）：护栏未覆盖 `backfill_true_ladder` 的真网路径（`fetch_many`/`main` 直连 get_limitup_service） | 未来用例调 fetch_many/main 会静默真连 10jqka | 护栏同批打 `backfill_true_ladder.fetch_many` |
+
+### 补的测试（全部验证「revert 即红」）
+
+- `test_limitup_service_throttle`：partial failure → degraded + errors，不崩
+- `test_jev_sentiment_compute`：`_slot_is_current` 窗口、当日早槽重跑不现查、存储文档畸形降级、priors EOD 披露进叙事
+- `test_jev_state`：全零→None、三指数逐键缺席、日峰值 None 判定、原因措辞、热度序倒排夹具、indexExtra 点位降级分支
+- `test_backfill_true_ladder`：当日/未来日跳过、`_LADDER_POOL_KEYS` 三处副本互相对照（单一事实源）
+
+### 审查发现但本次不修（列披露）
+
+- 压缩行在真连板可得时不附区间标注（序列段篇幅取舍，当前帧段保留）
+- 梯队桶个别键 None 会以 0 呈现（现代帧恒出全键，实际风险低）
+- 池计数取 `len(items)` 而非上游 `total`（现全量返回，分页截断为理论边界）
+- 单次槽 compute 新增 Mongo 查询约 80-100 次（priors×stored_doc + 锚日历 20×3）；锚日历结果未在同日多槽间缓存
+- `_anchor_max_true_board`/calendar 的 15:00 帧 find_one 无 sort（与既有 `temperature_percentile` 同病，force 重采多帧时取哪份不确定）
+
+## 7. 回放与预算（开火需另行确认）
 
 - 10-20/10-21 槽文档重放（帧已带 indexExtra）≈ 16 篇 × ~4.7k input tokens ≈ 7.5 万
   tokens；更早历史不回放（indexExtra 缺席、真连板为 EOD 回放口径，价值低）。

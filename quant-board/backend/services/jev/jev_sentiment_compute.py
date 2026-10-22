@@ -27,11 +27,16 @@ from backend.analysis.hotlist.jev_state import (
     collect_slot_evidence,
     derive_true_ladder_from_pools,
     extract_history_anchor_range,
+    summarize_day_evidence,
 )
 from backend.services.jev.jev_client import (DEFAULT_ACCOUNT_ID, call_jev, call_jev_typesafe,
                                              parse_jev_response)
 
 _DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID
+
+# 日级语料口径代际戳（2026-10-22 日级语料修复）：题目集仍 v2.5，本戳只标记语料结构
+# （收盘帧全量块/帧覆盖/真连板 as-of/旧 schema 归一）。存量文档由迁移脚本打 legacy/pre_fix。
+EOD_CORPUS_CALIBER_VERSION = "eod-2026-10-22"
 
 
 def _dispatch_jev(state, questions: dict) -> tuple[dict, int]:
@@ -108,7 +113,8 @@ def _collect_evidence(db: Any, dataset_id: str, snapshot_type: str, trading_date
                       slot_time: str, yesterday_rows: list,
                       yesterday_amounts: dict[str, float] | None = None,
                       daily_total_amount_fallback: float | None = None,
-                      allow_live_ladder: bool = False) -> dict | None:
+                      allow_live_ladder: bool = False,
+                      allow_historical_eod_ladder: bool = True) -> dict | None:
     frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot_time)
     if frame is None:
         return None
@@ -116,14 +122,17 @@ def _collect_evidence(db: Any, dataset_id: str, snapshot_type: str, trading_date
     rows = _load_rows(db, dataset_id, snapshot_id)
     if not rows:
         return None
-    return collect_slot_evidence(
+    evidence = collect_slot_evidence(
         frame=frame, rows=rows, yesterday_rows=yesterday_rows,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, snapshot_id), slot_time=slot_time,
         yesterday_same_slot_total_amount=(yesterday_amounts or {}).get(slot_time),
         daily_total_amount_fallback=daily_total_amount_fallback,
         true_ladder=_resolve_slot_true_ladder(
             db, dataset_id, snapshot_type, trading_date, slot_time, frame,
-            allow_live=allow_live_ladder))
+            allow_live=allow_live_ladder,
+            allow_historical_eod_ladder=allow_historical_eod_ladder))
+    _note_slot_ladder_caliber(evidence)  # 日级逐帧链/priors 同享历史回放口径披露
+    return evidence
 
 
 # ── 真连板供给链（2026-10-22 语料口径修复，jev-slot-corpus-caliber-fix-preregistration.md §2.2）──
@@ -140,17 +149,31 @@ def _sh_today() -> str:
     return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
 
 
-def _frame_zt_count(frame: dict | None) -> int | None:
-    """帧涨停家数（连板层全零判伪用）：zhaban.ztCount 优先，回退 continuousBoards 合计。"""
-    ls = frame.get("limitSummary") if isinstance(frame, dict) and isinstance(frame.get("limitSummary"), dict) else {}
-    zhaban = ls.get("zhaban") if isinstance(ls.get("zhaban"), dict) else {}
-    zt = zhaban.get("ztCount")
-    if isinstance(zt, (int, float)) and not isinstance(zt, bool) and zt > 0:
-        return int(zt)
-    boards = ls.get("continuousBoards") if isinstance(ls.get("continuousBoards"), dict) else {}
-    if boards:
-        return sum(int(boards.get(k) or 0) for k in ("yiban", "erban", "sanban", "sibanPlus"))
-    return None
+def _sh_now_hm() -> str:
+    """上海时区当前时刻 HH:MM（槽位现查 as-of 窗口判定基准）。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
+
+
+# 槽后容差：采集/后处理链在槽时刻后数分钟才跑到是常态；超出即视为「已走槽被回补/重跑」
+_SLOT_LIVE_TOLERANCE_MIN = 10
+
+
+def _slot_is_current(slot_time: str, *, tolerance_min: int = _SLOT_LIVE_TOLERANCE_MIN) -> bool:
+    """槽位时刻是否仍在「当前时钟槽」窗口内（now <= slot + tolerance）。
+
+    as-of 硬约束（2026-10-22 review P1）：只有真正当前槽才允许 THS 现查；已走槽被回补
+    （collector 当槽宕机后重算、API /slots/rerun、全槽重算脚本）时现查返回 now-state，
+    会把收盘连板态写进早槽 as-of 证据（假状态）。超窗 → 走 None 降级，不现查。
+    """
+    try:
+        hh, mm = (int(part) for part in str(slot_time).split(":"))
+        nhh, nmm = (int(part) for part in _sh_now_hm().split(":"))
+    except (TypeError, ValueError):
+        return False
+    return (nhh * 60 + nmm) <= (hh * 60 + mm + tolerance_min)
 
 
 def _frame_has_true_ladder(frame: dict | None) -> bool:
@@ -158,7 +181,7 @@ def _frame_has_true_ladder(frame: dict | None) -> bool:
     ls = frame.get("limitSummary") if isinstance(frame, dict) and isinstance(frame.get("limitSummary"), dict) else {}
     ths_pools = ls.get("thsPools") if isinstance(ls.get("thsPools"), dict) else {}
     pools = ths_pools.get("pools") if isinstance(ths_pools.get("pools"), dict) else None
-    return derive_true_ladder_from_pools(pools, zt_count=_frame_zt_count(frame)) is not None
+    return derive_true_ladder_from_pools(pools) is not None
 
 
 def _stored_doc_ladder(db: Any, dataset_id: str, snapshot_type: str,
@@ -167,6 +190,7 @@ def _stored_doc_ladder(db: Any, dataset_id: str, snapshot_type: str,
 
     trueBoards 落库形状 {yiban,erban,sanban,sibanPlus,high}（sibanPlus=four+high 合并），
     此处还原为 derive 形状（four=sibanPlus-high），maxTrueBoard 精确保留。
+    文档畸形（外部写入字符串/列表等）→ None 降级，不让单文档坏值炸掉槽计算（review P3-3）。
     """
     # 不带 projection：部分测试 FakeCollection.find_one 的第二位置参数是 sort（真实
     # pymongo 支持投影位，但为兼容统一走全文档读取，单文档开销可忽略）
@@ -177,12 +201,15 @@ def _stored_doc_ladder(db: Any, dataset_id: str, snapshot_type: str,
     if not (isinstance(mtb, (int, float)) and not isinstance(mtb, bool)):
         return None
     tb = limit.get("trueBoards") if isinstance(limit.get("trueBoards"), dict) else {}
-    high = int(tb.get("high") or 0)
-    siban = int(tb.get("sibanPlus") or 0)
-    return {"maxBoard": int(mtb), "source": "stored_doc",
-            "boards": {"one": int(tb.get("yiban") or 0), "two": int(tb.get("erban") or 0),
-                       "three": int(tb.get("sanban") or 0), "four": max(siban - high, 0),
-                       "high": high}}
+    try:
+        high = int(tb.get("high") or 0)
+        siban = int(tb.get("sibanPlus") or 0)
+        return {"maxBoard": int(mtb), "source": "stored_doc",
+                "boards": {"one": int(tb.get("yiban") or 0), "two": int(tb.get("erban") or 0),
+                           "three": int(tb.get("sanban") or 0), "four": max(siban - high, 0),
+                           "high": high}}
+    except (TypeError, ValueError):
+        return None
 
 
 def _run_blocking(coro):
@@ -199,35 +226,85 @@ def _run_blocking(coro):
         return executor.submit(asyncio.run, coro).result()
 
 
-def _fetch_true_ladder(date8: str, zt_count: int | None = None) -> dict | None:
+# 真连板按日结果缓存（进程级，仅缓存成功值；TTL 300s）——同一日多槽/多帧重算只出网一次。
+# 不能依赖 LimitUpService 单例缓存：该函数每次在独立事件循环执行，而单例 client 的连接池
+# 绑定首次事件循环（实测跨循环复用 → RuntimeError: Event loop is closed，2026-10-22 review P1）。
+_LADDER_FETCH_TTL_S = 300.0
+_LADDER_FETCH_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _fetch_true_ladder(date8: str) -> dict | None:
     """THS 连板层五池按日拉取 → 真连板梯队（derive 口径，与帧池同源）。
 
     date8=YYYYMMDD：当日=as-of 现查（盘中叙事真连板供给）；历史日=EOD 态（回放口径，
     由调用方标 source=ths_date_eod 并在叙事披露）。任何失败 → None（fail-visible 不伪造，
-    测试离线护栏 monkeypatch 本函数）。服务层自带 250ms 节流+退避负缓存+TTL。
-    """
-    async def _go():
-        from backend.market_proxy.limitup import get_limitup_service
+    测试离线护栏 monkeypatch 本函数）。
 
-        svc = get_limitup_service()
-        body = await svc.get_ths_pools(date8, keys=("one", "two", "three", "four", "high"))
+    跨事件循环安全（2026-10-22 review P1）：**不共享进程单例 client**——本函数在生产两个
+    进程（collector 后处理线程 / FastAPI 同步路由线程池）都在新建的 asyncio.run 循环里执行，
+    单例 httpx.AsyncClient 的连接池绑定首次事件循环，跨循环复用会 RuntimeError: Event loop
+    is closed。改为每次调用新建专用 client（一次调用内 5 池共享），用完即关；跨调用的
+    重复请求由模块级 `_LADDER_FETCH_CACHE`（TTL 300s，只缓存成功值）吸收。
+    服务层节流 250ms 仍生效（新建 service 的 min_request_gap 默认值）。
+    """
+    cached = _LADDER_FETCH_CACHE.get(date8)
+    if cached and time.time() - cached[0] < _LADDER_FETCH_TTL_S:
+        return dict(cached[1])
+
+    async def _go():
+        import httpx
+
+        from backend.market_proxy.limitup import UA, LimitUpService
+
+        client = httpx.AsyncClient(timeout=8.0, headers={"User-Agent": UA})
+        try:
+            svc = LimitUpService(client=client)
+            body = await svc.get_ths_pools(date8, keys=("one", "two", "three", "four", "high"))
+        finally:
+            await client.aclose()
         pools = body.get("pools") if isinstance(body, dict) else None
-        return derive_true_ladder_from_pools(pools, zt_count=zt_count)
+        if isinstance(body, dict) and body.get("degraded"):
+            # 部分池失败：derive 会整体返 None（宁缺毋猜），此处保留上游错误供排障
+            logging.warning("true ladder pools degraded for %s: %s", date8, body.get("errors"))
+        return derive_true_ladder_from_pools(pools)
 
     try:
-        return _run_blocking(_go())
+        ladder = _run_blocking(_go())
     except Exception as exc:  # noqa: BLE001 — 上游失败降级披露，不阻断情绪链
         logging.warning("true ladder fetch failed for %s: %s", date8, exc)
         return None
+    if isinstance(ladder, dict):
+        _LADDER_FETCH_CACHE[date8] = (time.time(), dict(ladder))
+    return ladder
+
+
+_EOD_LADDER_NOTE = "真连板取该日收盘连板层（历史回放口径）"
+
+
+def _note_slot_ladder_caliber(evidence: dict | None) -> str | None:
+    """历史回放口径披露（fail-visible）：真连板来自该日 EOD 连板层时，证据质量段留痕。
+
+    下沉到证据层（而非只在当前槽）——priors 与日级逐帧链同样经 ths_date_eod 供给，
+    若不标注，模型会把盘中帧的收盘态连板当成 as-of 真值（review P2-1）。
+    """
+    source = ((evidence or {}).get("limit") or {}).get("trueBoardSource")
+    if source != "ths_date_eod":
+        return None
+    quality = evidence.setdefault("quality", {}).setdefault("degradedSources", [])
+    if _EOD_LADDER_NOTE not in quality:
+        quality.append(_EOD_LADDER_NOTE)
+    return _EOD_LADDER_NOTE
 
 
 def _resolve_slot_true_ladder(db: Any, dataset_id: str, snapshot_type: str, trading_date: str,
                               slot_time: str, frame: dict | None, *, allow_live: bool) -> dict | None:
     """槽位真连板外部供给解析（帧池优先已由 collect 内部处理，本函数只补外部源）。
 
-    优先级：① 已存槽文档 as-or 复用（当日已走帧唯一合法源——绝不现查，now-state 污染）；
-    ② 当日当前槽（allow_live）THS 现查 as-of；③ 历史日按日查（EOD 态，source=ths_date_eod）；
-    ④ None 降级（叙事「真连板该帧未采集」）。历史回放口径在 compute 层追加披露。
+    优先级：① 已存槽文档 as-of 复用（当日已走帧唯一合法源——绝不现查，now-state 污染）；
+    ② 当日**当前时钟槽**（allow_live 且槽后容差内）THS 现查 as-of——超出容差的当日
+       已走槽重跑/回补一律 None 降级（现查 now-state 会冒充槽位 as-of，review P1）；
+    ③ 历史日按日查（EOD 态，source=ths_date_eod，`_note_slot_ladder_caliber` 披露）；
+    ④ None 降级（叙事「真连板该帧未采集」）。
     """
     if _frame_has_true_ladder(frame):
         return None  # 帧内连板层可用（15:00/EOD 帧）→ collect 自派生，零外部请求
@@ -236,14 +313,15 @@ def _resolve_slot_true_ladder(db: Any, dataset_id: str, snapshot_type: str, trad
         return stored
     today = _sh_today()
     date8 = trading_date.replace("-", "")
-    zt = _frame_zt_count(frame)
-    if allow_live and trading_date == today:
-        ladder = _fetch_true_ladder(date8, zt_count=zt)
+    if trading_date == today:
+        if not (allow_live and _slot_is_current(slot_time)):
+            return None  # 当日已走槽被回补/重跑：不现查（now-state 污染 as-of）
+        ladder = _fetch_true_ladder(date8)
         if ladder is not None:
             ladder["source"] = "ths_live"
         return ladder
     if trading_date < today:
-        ladder = _fetch_true_ladder(date8, zt_count=zt)
+        ladder = _fetch_true_ladder(date8)
         if ladder is not None:
             ladder["source"] = "ths_date_eod"
         return ladder
@@ -338,31 +416,39 @@ def temperature_percentile(db: Any, *, dataset_id: str, trading_date: str,
     return percentile_fraction(refs, current), len(refs)
 
 
-def _anchor_max_true_board(db: Any, dataset_id: str, date: str, doc: dict | None) -> int | None:
+def _anchor_max_true_board_detail(db: Any, dataset_id: str, date: str,
+                                  doc: dict | None) -> tuple[int | None, str]:
     """锚历日真连板最高板四级取数链（2026-10-22 口径修复 §2.3，同源=THS 连板层）：
 
     ① 15:00 v2 槽文档 evidenceRaw.limit.maxTrueBoard（本修复后生产自供）；
     ② 15:00 帧连板层五池派生（10-10 起 EOD 帧入采，as-of）；
     ③ market_true_ladder 参考集合（backfill_true_ladder 工具按日回填，同源采样）；
     ④ None（fail-visible，<8 样本时锚段如实标「历史样本不足」）。
+
+    返回 (值, 来源)；来源进锚叙事，避免四源混成匿名分位（日级审计 P1-3）。
     """
     limit = ((doc or {}).get("evidenceRaw") or {}).get("limit") or {}
     mtb = limit.get("maxTrueBoard")
     if isinstance(mtb, (int, float)) and not isinstance(mtb, bool) and mtb > 0:
-        return int(mtb)
+        return int(mtb), "slot_doc"
     frame = db["snapshot_frames"].find_one(
         {"datasetId": dataset_id, "type": "half_hour", "tradingDate": date, "slotTime": "15:00"})
     ls = (frame or {}).get("limitSummary") if isinstance((frame or {}).get("limitSummary"), dict) else {}
     ths_pools = ls.get("thsPools") if isinstance(ls.get("thsPools"), dict) else {}
     pools = ths_pools.get("pools") if isinstance(ths_pools.get("pools"), dict) else None
-    ladder = derive_true_ladder_from_pools(pools, zt_count=_frame_zt_count(frame))
+    ladder = derive_true_ladder_from_pools(pools)
     if ladder is not None and ladder["maxBoard"] > 0:
-        return int(ladder["maxBoard"])
+        return int(ladder["maxBoard"]), "frame_15"
     ref = db["market_true_ladder"].find_one({"_id": date})
     ref_mtb = (ref or {}).get("maxTrueBoard")
     if isinstance(ref_mtb, (int, float)) and not isinstance(ref_mtb, bool) and ref_mtb > 0:
-        return int(ref_mtb)
-    return None
+        return int(ref_mtb), "market_true_ladder"
+    return None, "none"
+
+
+def _anchor_max_true_board(db: Any, dataset_id: str, date: str, doc: dict | None) -> int | None:
+    """兼容入口：只返回值（测试/旧调用方）。来源见 _anchor_max_true_board_detail。"""
+    return _anchor_max_true_board_detail(db, dataset_id, date, doc)[0]
 
 
 def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
@@ -393,12 +479,15 @@ def build_history_stats_calendar(db: Any, dataset_id: str, trading_date: str,
         zt = limit.get("ztCount")
         # 伪 0 防线（v2.3 教训）：limitSummary 损坏时代 ztCount 记 0 视为缺失而非零值；
         # ztCount 无效=同源 limit 块整体不可信，zhabanRate 联动置 None（真连板独立链不受连带）
-        zt_ok = isinstance(zt, (int, float)) and zt > 0
+        zt_ok = isinstance(zt, (int, float)) and not isinstance(zt, bool) and zt > 0
         zhaban = limit.get("zhabanRate")
+        max_true_board, max_true_board_source = _anchor_max_true_board_detail(
+            db, dataset_id, date, doc)
         stats.append({
             "date": date,
             "ztCount": zt if zt_ok else None,
-            "maxTrueBoard": _anchor_max_true_board(db, dataset_id, date, doc),
+            "maxTrueBoard": max_true_board,
+            "maxTrueBoardSource": max_true_board_source,
             "amountYi": round(amount / 1e8, 1) if isinstance(amount, (int, float)) else None,
             "zhabanRate": round(zhaban, 1) if zt_ok and isinstance(zhaban, (int, float)) else None,
         })
@@ -585,9 +674,12 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
         daily_total_amount_fallback=market_amounts.get(trading_date),
         true_ladder=_resolve_slot_true_ladder(
             db, dataset_id, snapshot_type, trading_date, slot_time, frame, allow_live=True))
-    # 历史回放口径披露（fail-visible）：真连板取该日 EOD 连板层而非槽位 as-of
-    if (current_evidence or {}).get("limit", {}).get("trueBoardSource") == "ths_date_eod":
-        current_evidence["quality"]["degradedSources"].append("真连板取该日收盘连板层（历史回放口径）")
+    # 历史回放口径披露（fail-visible）：当前槽自身取 EOD 连板层时留痕；priors 若取 EOD
+    # 而当前槽取自帧池（历史日 15:00 槽重算的混合形态），也要把披露汇入叙事质量段
+    current_note = _note_slot_ladder_caliber(current_evidence)
+    if current_note is None and any(
+            ((ev.get("limit") or {}).get("trueBoardSource") == "ths_date_eod") for ev in priors):
+        current_evidence["quality"]["degradedSources"].append(_EOD_LADDER_NOTE)
     anchor = build_history_anchor(build_history_stats_calendar(db, dataset_id, trading_date))
     narrative = build_slot_jev_state(
         trading_date=trading_date, slot_time=slot_time,

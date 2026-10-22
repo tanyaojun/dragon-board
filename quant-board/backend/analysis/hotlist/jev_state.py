@@ -27,6 +27,15 @@ _LIFECYCLE_KEYS = ("ignition", "expansion", "crowded", "reversal", "cooling", "u
 _LIFECYCLE_COMPACT_KEYS = ("ignition", "expansion", "crowded", "reversal", "cooling")
 _LEADER_LIMIT = 8
 _ZT_EPS = 0.999
+# 2026-07-03 前旧帧 continuousBoards 键（board1..board4plus）→ 现行 yiban..sibanPlus。
+# 旧 schema 未归一化曾把 07-01 09:30 的 board1=7/board2=3 算成「涨停 0」（2026-10-22
+# 日级语料审计 P0-5）：buckets 是原始计数，归一化是补口径不是造数。
+_LEGACY_BOARD_ALIASES = {
+    "yiban": ("yiban", "board1"),
+    "erban": ("erban", "board2"),
+    "sanban": ("sanban", "board3"),
+    "sibanPlus": ("sibanPlus", "board4plus", "board4Plus"),
+}
 
 # 五档/形态 criteria（v2 口径；_DAY_PATTERN_CRITERIA 为日级 day_pattern 消费的八类路径判据基）
 # v2.5（2026-10-05）：尾盘偷袭自 low_recover 分流单列——「盘中已转强」与「收盘前才转强」对次日含义不同。
@@ -122,7 +131,21 @@ def _finite(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
-def derive_true_ladder_from_pools(pools: dict | None, zt_count: int | None = None) -> dict | None:
+def _normalized_continuous_boards(boards: dict) -> dict:
+    """现行/旧 schema 连板桶归一（只做键位映射，缺失保持 None，不补 0）。"""
+    out: dict[str, int | None] = {}
+    for key, aliases in _LEGACY_BOARD_ALIASES.items():
+        value = None
+        for alias in aliases:
+            raw = boards.get(alias)
+            if _finite(raw):
+                value = int(raw)
+                break
+        out[key] = value
+    return out
+
+
+def derive_true_ladder_from_pools(pools: dict | None) -> dict | None:
     """THS 连板层五池（hotspot_focus）→ 真连板梯队（连板口径单一事实源，2026-10-22）。
 
     池身份=高度（one=1板…four=4板），high 池条目 continue_day_cnt=精确高度（10-16
@@ -132,8 +155,9 @@ def derive_true_ladder_from_pools(pools: dict | None, zt_count: int | None = Non
 
     取数规则（宁缺毋猜）：
     - 任一池缺失/不 ok → None（relay 审查 #8 同规：半池不可用不冒充全量）；
-    - 全零且 zt_count>0（池未就绪，09:30 形态）→ None，不冒充「最高 0 连板」；
-    - 全零且 zt_count==0（真无涨停日）→ 合法 maxBoard=0；
+    - 五池全零 → None（**无法区分「池未就绪」与「真无涨停」**——09:30 开盘池未就绪与
+      冰点日同样是全零，任一种按 0 连板呈现都会把未就绪读数伪装成权威口径；review
+      P2-3 裁决。真无涨停日的连板语义由叙事「真连板未采集」降级位承载）；
     - high 池有条目但高度字段缺失 → 池身份下限 5（≥5 板可知，精确值不可知）。
 
     返回 {"boards": {one..high 池计数}, "maxBoard": 真连板最高板}；pools 非法 → None。
@@ -162,7 +186,7 @@ def derive_true_ladder_from_pools(pools: dict | None, zt_count: int | None = Non
             max_board = int(cnt)
     if high_items and max_board < 5:
         max_board = 5
-    if sum(counts.values()) == 0 and (zt_count or 0) > 0:
+    if sum(counts.values()) == 0:
         return None
     return {"boards": counts, "maxBoard": max_board}
 
@@ -232,11 +256,17 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
                     }
         if index_extra:
             indices["indexExtra"] = index_extra
-        elif indices:
-            # 10-20 前历史帧无 indexExtra → 三指数缺席披露（fail-visible，不补 0）
-            degraded.append("深成/创业板/科创50三指数该帧未采集")
-        if not indices:
+        if not any(key in indices for key in _INDEX_KEYS):
             degraded.append("指数缺失")
+        # 三指数逐键缺席披露（fail-visible）：整体缺席（10-20 前历史帧）与部分失败都要报，
+        # 不得让创业板指/科创50 静默消失（review P2-2）
+        has_core = any(key in indices for key in _INDEX_KEYS)
+        missing_extra = [name for key, name in
+                         (("szcz", "深成指"), ("cybz", "创业板指"), ("kc50", "科创50"))
+                         if key not in index_extra]
+        if missing_extra and (has_core or index_extra):
+            # 全指数块缺失时只报「指数缺失」（不叠加三指数逐键噪音）
+            degraded.append("三指数缺席：" + "、".join(missing_extra))
         total_entry = frame_indices.get("totalAmount")
         if isinstance(total_entry, dict) and _finite(total_entry.get("amount")):
             total_amount = float(total_entry["amount"])
@@ -252,14 +282,19 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         ls = frame.get("limitSummary") if isinstance(frame.get("limitSummary"), dict) else {}
         boards = ls.get("continuousBoards") if isinstance(ls.get("continuousBoards"), dict) else {}
         zhaban = ls.get("zhaban") if isinstance(ls.get("zhaban"), dict) else {}
-        limit["boards"] = {k: boards.get(k) for k in ("yiban", "erban", "sanban", "sibanPlus")}
+        normalized_boards = _normalized_continuous_boards(boards)
+        limit["boards"] = normalized_boards
         limit["maxBoard"] = boards.get("maxBoard") if _finite(boards.get("maxBoard")) else None
         limit["zhabanCount"] = zhaban.get("count") if _finite(zhaban.get("count")) else None
         limit["zhabanRate"] = zhaban.get("rate") if _finite(zhaban.get("rate")) else None
         limit["fengbanRate"] = zhaban.get("fengbanRate") if _finite(zhaban.get("fengbanRate")) else None
         zt = zhaban.get("ztCount") if _finite(zhaban.get("ztCount")) else None
-        if zt is None and boards:
-            zt = sum(int(boards.get(k) or 0) for k in ("yiban", "erban", "sanban", "sibanPlus"))
+        if zt is None:
+            # 伪 0 防线（2026-10-22 日级审计 P0-5）：只有至少一个桶是数值才求和；
+            # 全 None（现代帧未就绪）或旧 schema 已归一后仍有数值桶 → 可算。
+            numeric_buckets = [v for v in normalized_boards.values() if v is not None]
+            if numeric_buckets:
+                zt = sum(numeric_buckets)
         limit["ztCount"] = zt
         if zt is None:
             degraded.append("涨停证据缺失")
@@ -267,7 +302,7 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         # 外部供给（true_ladder）兜底（盘中槽）；区间 maxBoard 原样保留（emotion 链消费）
         ths_pools = ls.get("thsPools") if isinstance(ls.get("thsPools"), dict) else {}
         pools = ths_pools.get("pools") if isinstance(ths_pools.get("pools"), dict) else None
-        frame_ladder = derive_true_ladder_from_pools(pools, zt_count=zt if _finite(zt) else None)
+        frame_ladder = derive_true_ladder_from_pools(pools)
         ladder = frame_ladder if frame_ladder is not None else (
             true_ladder if isinstance(true_ladder, dict) else None)
         if ladder is not None and _finite(ladder.get("maxBoard")):
@@ -287,7 +322,9 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
             else:
                 limit["trueBoardSource"] = str(ladder.get("source") or "external")
         else:
-            degraded.append("真连板未采集（连板层池缺失）")
+            # 中性措辞：池缺失/上游请求失败/外部供给畸形在 collect 层不可分辨，
+            # 具体上游错误由计算层日志承载（review P2-3），此处不做归因误导
+            degraded.append("真连板未采集（连板层不可用）")
         # 封板质量 + 触板回撤池（2026-10-02 弹药扩展接线，回测过验见 ths-limitup-arsenal-audit.md）；
         # 帧无该块（历史帧/上游失败）则键缺席，fail-visible 不伪造
         sq = ls.get("sealQuality") if isinstance(ls.get("sealQuality"), dict) else {}
@@ -415,7 +452,9 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
 
     def _sort_key(row):
         if has_heat:
-            return (-(row.get("heat") or 0), row.get("rank") or 9999)
+            # 热度非数值行按 0 处理（review P3-4：混类型行不得 TypeError 一票否决全帧证据）
+            heat = float(row["heat"]) if _finite(row.get("heat")) else 0.0
+            return (-heat, row.get("rank") or 9999)
         return (row.get("rank") or 9999,)
 
     if rows and not has_heat:
@@ -504,6 +543,8 @@ def _ladder_bits(limit: dict, *, compact: bool) -> list[str]:
 
     真连板可得 → 「最高 N 连板」；不可得 → 「最高区间 M 板」（compact 行）/「最高 M 板
     （区间跨度口径）」+ 降级位。杜绝区间跨度冒充连板（10-21「最高 7 连板」事故）。
+    取舍：compact（已走帧/逐帧压缩行）在真连板可得时不附区间标注——序列段优先连板
+    语义与篇幅，区间观察保留在当前帧段（review P3-2 已披露的设计取舍）。
     """
     bits: list[str] = []
     if limit.get("maxTrueBoard") is not None:
@@ -529,6 +570,8 @@ def format_evidence_line(ev: dict) -> str:
         lim_bits.append(f"炸板率 {float(limit['zhabanRate']):.0f}%")
     elif limit.get("zhabanCount") is not None:
         lim_bits.append(f"炸板 {int(limit['zhabanCount'])} 家")
+    if limit.get("fengbanRate") is not None:
+        lim_bits.append(f"封板率 {float(limit['fengbanRate']):.0f}%")
     parts.append("·".join(lim_bits) if lim_bits else "涨停证据缺")
     breadth = ev.get("breadth") or {}
     breadth_bit = (f"涨跌 涨停{breadth.get('limitUp', 0)}/涨5+{breadth.get('up5', 0)}"
@@ -540,7 +583,8 @@ def format_evidence_line(ev: dict) -> str:
         breadth_bit += f"｜TRIN {float(trin):.2f}"
     amount = ev.get("totalAmount") or {}
     if amount.get("vsSamePct") is not None:
-        breadth_bit += f"｜量能同期{amount['vsSamePct']:+.0f}%"
+        amount_suffix = "（参考回填）" if amount.get("source") == "market_daily_amount_reference" else ""
+        breadth_bit += f"｜量能同期{amount['vsSamePct']:+.0f}%{amount_suffix}"
     parts.append(breadth_bit)
     fund = ev.get("fund") or {}
     if fund.get("zljeSum") is not None:
@@ -566,26 +610,32 @@ def format_evidence_line(ev: dict) -> str:
     else:
         parts.append("昨涨停承接缺")
     lifecycle = ev.get("lifecycle") or {}
-    parts.append("·".join(f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}"
-                          for k in _LIFECYCLE_COMPACT_KEYS))
+    lifecycle_bit = "·".join(f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}"
+                             for k in _LIFECYCLE_COMPACT_KEYS)
+    lifecycle_missing = int(ev.get("lifecycleMissing") or 0)
+    if lifecycle_missing:
+        lifecycle_bit += f"(缺{lifecycle_missing})"
+    parts.append(lifecycle_bit)
     row_flags = ev.get("rowFlags") or {}
-    if row_flags:
+    if row_flags and row_flags.get("judgeable"):
         parts.append(f"强资{row_flags.get('strongMoney', 0)}·风险{row_flags.get('risk', 0)}")
     return "｜".join(parts)
 
 
-def _format_current_evidence_section(ev: dict) -> str:
-    lines = ["【当前帧证据】"]
+def _format_current_evidence_section(ev: dict, *, title: str = "【当前帧证据】") -> str:
+    lines = [title]
     idx_bits = _index_bits(ev)
     # 指数×量能同行（2026-09-30 用户建议）：强化「指数方向 × 总体量能」组合语义的可见性
     amount = ev.get("totalAmount") or {}
     amount_bit = ""
     if amount.get("amount") is not None:
+        source_bit = "（market_daily_amount 参考回填）" if \
+            amount.get("source") == "market_daily_amount_reference" else ""
         if amount.get("vsSamePct") is not None:
             direction = "放量" if amount["vsSamePct"] >= 0 else "缩量"
-            amount_bit = f"；两市总成交额 {_fmt_yi(amount['amount'])}（较昨日同期{direction} {abs(amount['vsSamePct']):.0f}%）"
+            amount_bit = f"；两市总成交额 {_fmt_yi(amount['amount'])}（较昨日同期{direction} {abs(amount['vsSamePct']):.0f}%）{source_bit}"
         else:
-            amount_bit = f"；两市总成交额 {_fmt_yi(amount['amount'])}（昨日同期缺失）"
+            amount_bit = f"；两市总成交额 {_fmt_yi(amount['amount'])}（昨日同期缺失）{source_bit}"
     lines.append("指数与量能：" + ("、".join(idx_bits) if idx_bits else "指数缺失") + amount_bit)
     limit = ev.get("limit") or {}
     boards = limit.get("boards") or {}
@@ -709,10 +759,11 @@ def _format_current_evidence_section(ev: dict) -> str:
         lines.append("焦点个股：" + "；".join(leader_bits))
     reasons = ev.get("reasons") or []
     if reasons:
-        # 原因口径（2026-10-22 E）：披露「有原因个股 N 只，列前 5」（任意截断可见）
+        # 原因口径（2026-10-22 E）：披露「有原因个股 N 只，原因列前 5 类」——reasons 是
+        # distinct 原因聚合，非个股清单，措辞按「类」表述避免「列前 5 只」歧义（review P3-5）
         total = ev.get("reasonsTotal")
         prefix = "涨停原因" if not (_finite(total) and int(total) > len(reasons)) else \
-            f"涨停原因（有原因个股 {int(total)} 只，列前 5）"
+            f"涨停原因（有原因个股 {int(total)} 只，原因列前 {len(reasons)} 类）"
         lines.append(prefix + "：" + "、".join(f"{reason} ×{count}" for reason, count in reasons))
     return "\n".join(lines)
 
@@ -736,7 +787,10 @@ def build_history_anchor(stats: list, window: int = 20) -> str:
         q20, q50, q80 = _q(vals, 0.2), _q(vals, 0.5), _q(vals, 0.8)
         last_date, last = entries[-1]
         # 标注实际样本日期：最近历日缺数时 vals[-1] 可能是更早的值，写"昨日"会误标
-        return f"{name}：p20={fmt(q20)} / p50={fmt(q50)} / p80={fmt(q80)}（{last_date} {fmt(last)}）"
+        # 2026-10-22 日级审计 P1-3：8..19 样本时旧实现静默用薄样本，补「有效 N/20」披露
+        sample_bit = f"，有效样本 {len(entries)}/{window}" if len(entries) < window else ""
+        return (f"{name}：p20={fmt(q20)} / p50={fmt(q50)} / p80={fmt(q80)}"
+                f"（{last_date} {fmt(last)}）{sample_bit}")
 
     if not stats:
         return "【近20日参照】历史参照缺失（无可用历史槽文档）——判读时如实按绝对证据处理，不得虚构对比。"
@@ -748,6 +802,15 @@ def build_history_anchor(stats: list, window: int = 20) -> str:
         _metric("两市成交额", "amountYi", lambda v: f"{v:.0f} 亿"),
         _metric("炸板率", "zhabanRate", lambda v: f"{v:.0f}%"),
     ]
+    # 真连板锚来源覆盖（2026-10-22 日级审计 P1-3）：同一指标跨四源，不披露来源等于
+    # 让模型把「槽文档/帧/参考集合」混成一份匿名分位。
+    sources = Counter(str(s.get("maxTrueBoardSource")) for s in stats
+                      if s.get("maxTrueBoardSource"))
+    if sources:
+        names = {"slot_doc": "槽文档", "frame_15": "15:00帧",
+                 "market_true_ladder": "参考集合", "none": "缺"}
+        lines.append("最高连板来源：" + " / ".join(
+            f"{names.get(key, key)} {count}" for key, count in sources.items()))
     return "\n".join(lines)
 
 
@@ -786,42 +849,263 @@ def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
     return "\n".join(line for line in lines if line)[:4000]
 
 
+def _day_frame_coverage(evidences: list, *, expected_slots: list | None = None,
+                        present_slots: list | None = None,
+                        skipped_frames: list | None = None) -> dict:
+    """日级帧覆盖（2026-10-22 日级审计 P0-4）：预期/实际/缺失/无证据/收盘帧。"""
+    evidence_slots = [str(ev.get("slotTime")) for ev in evidences if isinstance(ev, dict)]
+    if present_slots is None:
+        present_slots = evidence_slots
+    present = sorted({str(s) for s in present_slots})
+    expected = sorted({str(s) for s in (expected_slots if expected_slots is not None else present)})
+    missing = [s for s in expected if s not in present]
+    empty = [dict(x) for x in (skipped_frames or []) if isinstance(x, dict)]
+    last_slot = present[-1] if present else (evidence_slots[-1] if evidence_slots else None)
+    return {
+        "expectedSlots": expected,
+        "presentSlots": present,
+        "evidenceSlots": evidence_slots,
+        "missingSlots": missing,
+        "emptyEvidenceSlots": empty,
+        "lastSlot": last_slot,
+        "hasCloseFrame": bool(evidence_slots) and evidence_slots[-1] == "15:00",
+        "frameCount": len(present),
+        "evidenceCount": len(evidence_slots),
+        "expectedCount": len(expected),
+    }
+
+
+def summarize_day_evidence(evidences: list, *, expected_slots: list | None = None,
+                           present_slots: list | None = None,
+                           skipped_frames: list | None = None) -> dict:
+    """日级证据摘要（叙事与 evidenceRaw 共用，单一事实源）。
+
+    trueBoardCoverage 语义：`full`=全部预期帧都有真连板；`close_only`=仅 15:00
+    收盘帧有真连板（历史回放）；`partial`=有真连板但覆盖不足（可能低估）；
+    `none`=无真连板（区间口径降级）。
+    """
+    evidences = [ev for ev in evidences if isinstance(ev, dict)]
+    coverage = _day_frame_coverage(
+        evidences, expected_slots=expected_slots, present_slots=present_slots,
+        skipped_frames=skipped_frames)
+    close = evidences[-1] if coverage["hasCloseFrame"] else None
+    close_limit = (close.get("limit") or {}) if close else {}
+    true_items = []
+    zt_vals = []
+    range_vals = []
+    for ev in evidences:
+        lim = ev.get("limit") or {}
+        mtb = lim.get("maxTrueBoard")
+        if _finite(mtb):
+            true_items.append((str(ev.get("slotTime")), int(mtb)))
+        mb = lim.get("maxBoard")
+        if _finite(mb):
+            range_vals.append(int(mb))
+        zt = lim.get("ztCount")
+        if _finite(zt):
+            zt_vals.append(int(zt))
+    expected_count = coverage["expectedCount"] or 0
+    true_frames = len(true_items)
+    if not true_items:
+        true_coverage = "none"
+    elif (expected_count and true_frames >= expected_count
+          and coverage["frameCount"] == expected_count
+          and coverage["hasCloseFrame"]
+          and not coverage["emptyEvidenceSlots"]):
+        true_coverage = "full"
+    elif true_frames == 1 and true_items[0][0] == "15:00" and coverage["hasCloseFrame"]:
+        true_coverage = "close_only"
+    else:
+        true_coverage = "partial"
+    close_amount = (close.get("totalAmount") or {}).get("amount") if close else None
+    close_amount_source = (close.get("totalAmount") or {}).get("source") if close else None
+    close_deg = ((close.get("quality") or {}).get("degradedSources") or []) if close else []
+    return {
+        "frameCoverage": coverage,
+        "peakZt": max(zt_vals) if zt_vals else None,
+        "closeZt": int(close_limit["ztCount"]) if _finite(close_limit.get("ztCount")) else None,
+        "peakTrueBoard": max(v for _, v in true_items) if true_items else None,
+        "peakRangeBoard": max(range_vals) if range_vals else None,
+        "trueBoardFrames": true_frames,
+        "trueBoardCoverage": true_coverage,
+        "closeZhabanRate": close_limit.get("zhabanRate") if _finite(close_limit.get("zhabanRate")) else None,
+        "closeFengbanRate": close_limit.get("fengbanRate") if _finite(close_limit.get("fengbanRate")) else None,
+        "closeAmount": close_amount if _finite(close_amount) else None,
+        "closeAmountSource": close_amount_source,
+        "closeHeatMissing": any(s.startswith("热度字段未采集") for s in close_deg),
+    }
+
+
+def _true_board_peak_bit(summary: dict) -> str:
+    peak = summary.get("peakTrueBoard")
+    if peak is not None:
+        frames = summary["trueBoardFrames"]
+        expected = summary["frameCoverage"]["expectedCount"] or frames
+        if summary["trueBoardCoverage"] == "close_only":
+            return f"收盘真连板 {int(peak)} 板（仅收盘帧有真连板）"
+        if summary["trueBoardCoverage"] == "full":
+            return f"全日真连板峰值 {int(peak)} 板（{frames}/{expected} 帧有真连板）"
+        return f"真连板峰值 {int(peak)} 板（{frames}/{expected} 帧有真连板，可能低估）"
+    range_peak = summary.get("peakRangeBoard")
+    if range_peak:
+        return f"最高区间板峰值 {int(range_peak)} 板（真连板未采集）"
+    return "最高连板峰值 缺"
+
+
+def _format_frame_coverage(coverage: dict) -> str:
+    first = coverage["presentSlots"][0] if coverage["presentSlots"] else "无"
+    text = (f"帧 {coverage['frameCount']}/{coverage['expectedCount']}"
+            f"（{first}–{coverage['lastSlot'] or '无'}，收盘帧 "
+            f"{'15:00' if coverage['hasCloseFrame'] else '缺'}）")
+    if coverage["missingSlots"]:
+        text += "；缺失槽位：" + "、".join(coverage["missingSlots"])
+    if coverage["emptyEvidenceSlots"]:
+        text += "；无证据帧：" + "、".join(
+            f"{x.get('slot')}({x.get('reason') or 'unknown'})"
+            for x in coverage["emptyEvidenceSlots"])
+    return text
+
+
+def _aggregate_day_quality(evidences: list, summary: dict) -> list[str]:
+    """日级质量聚合（2026-10-22 日级审计 P0-6）：按槽位/证据种类计数，不做字符串去重。
+
+    槽级缺失噪音（盘中每帧「两市额缺失」、非收盘帧热度）不得淹没/冒充日级真实缺失。
+    """
+    coverage = summary["frameCoverage"]
+    total = max(coverage["evidenceCount"], 1)
+    idx_slots, limit_slots, amount_slots, true_slots = [], [], [], []
+    pct_frames = yesterday_frames = lifecycle_all = 0
+    other: Counter = Counter()
+    for ev in evidences:
+        slot = str(ev.get("slotTime"))
+        deg = (ev.get("quality") or {}).get("degradedSources") or []
+        if any(s == "指数缺失" or s.startswith("三指数缺席") for s in deg):
+            idx_slots.append(slot)
+        if any(s == "涨停证据缺失" for s in deg):
+            limit_slots.append(slot)
+        if any(s.startswith("两市总成交额缺失") for s in deg):
+            amount_slots.append(slot)
+        if any(s.startswith("真连板未采集") for s in deg):
+            true_slots.append(slot)
+        if any(s.startswith("pctChange 缺失") for s in deg):
+            pct_frames += 1
+        if any(s == "昨日行缺失" for s in deg):
+            yesterday_frames += 1
+        if any(s == "生命周期join缺失" for s in deg):
+            lifecycle_all += 1
+        for item in deg:
+            if item.startswith(("指数缺失", "三指数缺席", "涨停证据缺失", "两市总成交额缺失",
+                                "真连板未采集", "pctChange 缺失", "昨日行缺失",
+                                "生命周期join缺失", "热度字段未采集")):
+                continue
+            other[item] += 1
+
+    items: list[str] = []
+    if coverage["missingSlots"]:
+        items.append("缺失槽位：" + "、".join(coverage["missingSlots"]))
+    if coverage["emptyEvidenceSlots"]:
+        items.append("无证据帧：" + "、".join(
+            f"{x.get('slot')}({x.get('reason') or 'unknown'})"
+            for x in coverage["emptyEvidenceSlots"]))
+    if not coverage["hasCloseFrame"]:
+        items.append(f"无 15:00 收盘帧（末帧 {coverage['lastSlot'] or '无'}；日级判读非全天口径）")
+    if idx_slots:
+        items.append(f"指数缺失 {len(idx_slots)}/{total} 帧（{'、'.join(idx_slots)}）")
+    if limit_slots:
+        items.append(f"涨停证据缺失 {len(limit_slots)}/{total} 帧（{'、'.join(limit_slots)}）")
+    if amount_slots:
+        if summary.get("closeAmount") is not None:
+            suffix = "（收盘帧已回填）" if summary.get("closeAmountSource") else "（收盘帧已采集）"
+            items.append(f"盘中 {len(amount_slots)} 帧无量能字段{suffix}")
+        else:
+            items.append(f"两市总成交额缺失 {len(amount_slots)}/{total} 帧；收盘帧亦缺")
+    if true_slots:
+        if (coverage["hasCloseFrame"] and summary.get("trueBoardCoverage") == "close_only"):
+            early = [s for s in true_slots if s != "15:00"]
+            items.append(f"早盘 {len(early)} 帧真连板未采集（收盘帧可得）")
+        else:
+            items.append(f"真连板未采集 {len(true_slots)}/{total} 帧")
+    if pct_frames:
+        items.append(f"pctChange 回退 {pct_frames} 帧（旧行只有 change）")
+    if yesterday_frames:
+        items.append(f"昨日行缺失 {yesterday_frames} 帧")
+    if lifecycle_all:
+        items.append(f"生命周期join缺失 {lifecycle_all} 帧")
+    if summary.get("closeHeatMissing"):
+        items.append("收盘帧热度字段未采集（焦点个股按榜单名次）")
+    for item, count in other.items():
+        items.append(item if count == 1 else f"{item} ×{count}")
+    return items
+
+
 def build_day_jev_state(*, trading_date: str, evidences: list,
                         yesterday_close_total_amount: float | None = None,
-                        history_anchor: str = "") -> str:
-    """日级叙事 state（盘后固定当日总体）。evidences = 全日各帧 evidence 升序。"""
+                        history_anchor: str = "",
+                        expected_slots: list | None = None,
+                        present_slots: list | None = None,
+                        skipped_frames: list | None = None) -> str:
+    """日级叙事 state（盘后固定当日总体）。evidences = 全日各帧 evidence 升序。
+
+    2026-10-22 日级语料修复（jev-eod-corpus-caliber-audit-preregistration.md）：
+    - 增加【收盘帧证据】全量块（day_crowding 判据所需的封板率/封板质量/回撤/焦点/原因）；
+    - 增加【帧覆盖】，缺槽/无 15:00/无证据帧显式披露；
+    - 真连板峰值按覆盖度标注（收盘值不冒充全日峰值）；
+    - 质量段按槽位/证据种类计数，避免槽级噪音淹没日级真实缺失。
+    """
+    evidences = [ev for ev in evidences if isinstance(ev, dict)]
     if not evidences:
         return f"{trading_date} 交易日全天热榜情绪证据轨迹：无帧证据。"
-    degraded: list[str] = []
-    for ev in evidences:
-        for item in (ev.get("quality") or {}).get("degradedSources") or []:
-            if item not in degraded:
-                degraded.append(item)
-    last = evidences[-1]
+    summary = summarize_day_evidence(
+        evidences, expected_slots=expected_slots, present_slots=present_slots,
+        skipped_frames=skipped_frames)
+    coverage = summary["frameCoverage"]
+    close = evidences[-1] if coverage["hasCloseFrame"] else None
+    last = close if close is not None else evidences[-1]
+    last_slot = str(last.get("slotTime") or "?")
     turnover = last.get("turnover") or {}
     fund = last.get("fund") or {}
-    # 真连板口径（2026-10-22）：日级峰值优先 maxTrueBoard；全日不可得时区间降级标注
-    max_true = max(((ev.get("limit") or {}).get("maxTrueBoard") or 0)
-                   for ev in evidences if isinstance(ev, dict))
-    if max_true:
-        peak_bit = f"最高真连板峰值 {int(max_true)} 板"
-    else:
-        max_range = max(((ev.get("limit") or {}).get("maxBoard") or 0)
-                        for ev in evidences if isinstance(ev, dict))
-        peak_bit = f"最高区间板峰值 {int(max_range)} 板（真连板未采集）" if max_range else "最高连板峰值 缺"
+    peak_bit = _true_board_peak_bit(summary)
     new_bit = f"新进 {turnover['newCount']}" if turnover.get("newCount") is not None else "新进 缺"
     dropped_bit = f"淘汰 {turnover['droppedCount']}" if turnover.get("droppedCount") is not None else "淘汰 缺"
+
+    zt_bits: list[str] = []
+    if summary["closeZt"] is not None:
+        zt_bits.append(f"收盘涨停 {summary['closeZt']}")
+    if summary["peakZt"] is not None and summary["peakZt"] != summary["closeZt"]:
+        zt_bits.append(f"全日最高涨停 {summary['peakZt']}")
+    if summary["closeZhabanRate"] is not None:
+        zt_bits.append(f"收盘炸板率 {float(summary['closeZhabanRate']):.0f}%")
+    if summary["closeFengbanRate"] is not None:
+        zt_bits.append(f"收盘封板率 {float(summary['closeFengbanRate']):.0f}%")
+    zt_bit = "、".join(zt_bits) if zt_bits else "收盘涨停/炸板 缺"
+
+    fund_asof = "" if close is not None else f"（截至 {last_slot}）"
     last_amount = (last.get("totalAmount") or {}).get("amount")
-    amount_bit = f"；两市总成交额 {_fmt_yi(last_amount)}"
+    source_suffix = "（参考回填）" if \
+        (last.get("totalAmount") or {}).get("source") == "market_daily_amount_reference" else ""
+    amount_asof = "" if close is not None else f"（截至 {last_slot}）"
+    amount_bit = f"；两市总成交额 {_fmt_yi(last_amount)}{source_suffix}{amount_asof}"
     if last_amount is not None and _finite(yesterday_close_total_amount) and yesterday_close_total_amount > 0:
         pct = (float(last_amount) / float(yesterday_close_total_amount) - 1) * 100
         amount_bit += f"（较昨日全天{'放量' if pct >= 0 else '缩量'} {abs(pct):.0f}%）"
+
     lines = [
         f"{trading_date} 交易日全天热榜情绪证据轨迹（A股短线情绪观察，原始市场证据）。",
         history_anchor,
-        "【逐帧证据】\n" + "\n".join(format_evidence_line(ev) for ev in evidences if isinstance(ev, dict)),
-        f"【当日累计】{new_bit}、{dropped_bit}（对比昨日）；主力净额合计 {_fmt_yi(fund.get('zljeSum'))}；"
-        f"{peak_bit}{amount_bit}",
-        "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
+        "【逐帧证据】\n" + "\n".join(format_evidence_line(ev) for ev in evidences),
     ]
+    if expected_slots is not None or coverage["missingSlots"] or coverage["emptyEvidenceSlots"] \
+            or not coverage["hasCloseFrame"]:
+        lines.append("【帧覆盖】" + _format_frame_coverage(coverage))
+    if close is not None:
+        lines.append(_format_current_evidence_section(close, title="【收盘帧证据】"))
+    else:
+        lines.append(
+            f"【收盘帧证据】\n收盘帧缺失（末帧 {coverage['lastSlot'] or '无'}）；"
+            "日级判读非全天口径，结论谨慎采信。")
+    lines.append(
+        f"【当日累计】{new_bit}、{dropped_bit}（对比昨日）；"
+        f"主力净额合计 {_fmt_yi(fund.get('zljeSum'))}{fund_asof}；{zt_bit}；{peak_bit}{amount_bit}")
+    quality = _aggregate_day_quality(evidences, summary)
+    lines.append("【数据质量】" + ("；".join(quality) if quality else "无缺失") + "。")
     return "\n".join(line for line in lines if line)[:6000]

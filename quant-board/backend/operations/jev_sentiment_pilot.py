@@ -35,6 +35,7 @@ from backend.services.jev.jev_sentiment_compute import (
     _load_analysis_by_code,
     _load_frame,
     _load_rows,
+    _resolve_slot_true_ladder,
     _slots_of_date,
     _yesterday_total_amounts_by_slot,
     load_market_daily_amount_map,
@@ -69,10 +70,14 @@ def build_history_stats(db, dataset_id: str, trading_date: str) -> list[dict]:
         ev = d.get("evidenceRaw") or {}
         limit = ev.get("limit") or {}
         amount = (ev.get("totalAmount") or {}).get("amount")
+        mtb = limit.get("maxTrueBoard")
         stats.append({
             "date": str(d.get("tradingDate")),
             "ztCount": limit.get("ztCount"),
-            "maxBoard": limit.get("maxBoard"),
+            # 2026-10-22 review P2-1：锚「最高连板」切真连板口径（build_history_anchor
+            # 改读 maxTrueBoard）——只取真连板，缺值 None（不回退区间 maxBoard：混口径
+            # 进同一条分位序列=混采污染）；历史样本不足由锚段如实标注
+            "maxTrueBoard": mtb if isinstance(mtb, (int, float)) and not isinstance(mtb, bool) and mtb > 0 else None,
             "amountYi": round(amount / 1e8, 1) if isinstance(amount, (int, float)) else None,
             # v1 evidenceRaw 的 zhabanRate 已是百分数（30.30=30.3%），与 fengbanRate 同制
             "zhabanRate": round(limit["zhabanRate"], 1)
@@ -118,7 +123,11 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, str(frame.get("snapshotId") or "")),
         slot_time=slot_time,
         yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time),
-        daily_total_amount_fallback=market_amounts.get(trading_date))
+        daily_total_amount_fallback=market_amounts.get(trading_date),
+        # 2026-10-22 review P2-2：pilot 产物接真连板供给链（与生产同口径，pilot 写生产集合）；
+        # as-of 由 _slot_is_current 时间窗守卫（历史 pilot 日期走按日查 EOD 态）
+        true_ladder=_resolve_slot_true_ladder(
+            db, dataset_id, snapshot_type, trading_date, slot_time, frame, allow_live=True))
     narrative = build_slot_jev_state(
         trading_date=trading_date, slot_time=slot_time,
         current=current_evidence or {}, priors=priors, missing_slots=missing_slots,

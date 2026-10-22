@@ -243,10 +243,14 @@ class LimitUpService:
 
         entries = await asyncio.gather(*(load(pool) for pool in pools_to_load))
         pools = dict(entries)
+        # 2026-10-22 review 修：entries 元素是 (key, dict) 元组——此前对元组调 .get 会在
+        # 「任一池失败」时抛 AttributeError（失败信息上报路径整体不可用，上游故障被伪装成
+        # 崩溃）。改为解包 entry[1]
         errors = [
-            {"pool": pool["key"], "errorCode": info.get("errorCode"), "message": info.get("message")}
-            for pool, info in zip(pools_to_load, entries)
-            if not info[1].get("ok")
+            {"pool": pool["key"], "errorCode": entry[1].get("errorCode"),
+             "message": entry[1].get("message")}
+            for pool, entry in zip(pools_to_load, entries)
+            if not entry[1].get("ok")
         ]
         payload = {
             "ok": len(errors) == 0,

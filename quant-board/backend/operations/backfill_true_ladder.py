@@ -28,28 +28,36 @@ PROVENANCE_SOURCE = "ths_ladder_backfill"
 def _frame_ladder_served(frame: dict | None) -> bool:
     """15:00 帧已带可用连板层（锚直读帧，无需参考集合）。"""
     from backend.analysis.hotlist.jev_state import derive_true_ladder_from_pools
-    from backend.services.jev.jev_sentiment_compute import _frame_zt_count
 
     ls = (frame or {}).get("limitSummary") if isinstance((frame or {}).get("limitSummary"), dict) else {}
     ths_pools = ls.get("thsPools") if isinstance(ls.get("thsPools"), dict) else {}
     pools = ths_pools.get("pools") if isinstance(ths_pools.get("pools"), dict) else None
-    return derive_true_ladder_from_pools(pools, zt_count=_frame_zt_count(frame)) is not None
+    return derive_true_ladder_from_pools(pools) is not None
 
 
-def plan_backfill(db: Any, start: str, end: str, fetch) -> tuple[list[dict], int, int, list[str]]:
-    """计划回填：返回 (actions, frame_served, already, unresolved)。
+def plan_backfill(db: Any, start: str, end: str, fetch) -> tuple[list[dict], int, int, int, list[str]]:
+    """计划回填：返回 (actions, frame_served, already, skipped_today, unresolved)。
 
-    fetch(date8_to_zt: dict[str, int|None]) -> {date8: ladder|None}（已派生，derive 口径）。
+    fetch(date8_list: list[str]) -> {date8: ladder|None|Exception}（已派生，derive 口径）。
+    当日（盘中）跳过（review P2-2）：THS 按日查在盘中返回 now-state，写入参考集合会被
+    明日锚当 EOD 样本消费——与 10-21「最高 7 连板」同类口径事故的回填侧入口。
     """
+    from backend.services.jev.jev_sentiment_compute import _sh_today
+
+    today = _sh_today()
     dates = sorted({
         str(r["tradingDate"]) for r in db["snapshot_frames"].find(
             {"datasetId": "dragonboard_live", "type": "half_hour",
              "tradingDate": {"$gte": start, "$lte": end}}, {"tradingDate": 1})
         if r.get("tradingDate")
     })
-    need: dict[str, int | None] = {}
-    frame_served = already = 0
+    need: list[str] = []
+    frame_served = already = skipped_today = 0
     for date in dates:
+        if date >= today:
+            # 当日/未来日：盘中 now-state 不可入库（收盘后重跑由次日自然覆盖）
+            skipped_today += 1
+            continue
         frame = db["snapshot_frames"].find_one(
             {"datasetId": "dragonboard_live", "type": "half_hour",
              "tradingDate": date, "slotTime": "15:00"}, {"limitSummary": 1})
@@ -59,19 +67,21 @@ def plan_backfill(db: Any, start: str, end: str, fetch) -> tuple[list[dict], int
         if db["market_true_ladder"].find_one({"_id": date}) is not None:
             already += 1
             continue
-        from backend.services.jev.jev_sentiment_compute import _frame_zt_count
-
-        need[date.replace("-", "")] = _frame_zt_count(frame)
+        need.append(date.replace("-", ""))
     fetched = fetch(need) if need else {}
     actions: list[dict] = []
     unresolved: list[str] = []
     for date8 in sorted(need):
+        date = f"{date8[:4]}-{date8[4:6]}-{date8[6:]}"
         ladder = fetched.get(date8)
-        if not isinstance(ladder, dict) or not isinstance(ladder.get("maxBoard"), int):
-            unresolved.append(f"{date8[:4]}-{date8[4:6]}-{date8[6:]}:THS历史无有效连板层")
+        if isinstance(ladder, Exception):
+            unresolved.append(f"{date}:THS请求失败（{str(ladder)[:80]}）")
             continue
-        actions.append({"date": f"{date8[:4]}-{date8[4:6]}-{date8[6:]}", "ladder": ladder})
-    return actions, frame_served, already, unresolved
+        if not isinstance(ladder, dict) or not isinstance(ladder.get("maxBoard"), int):
+            unresolved.append(f"{date}:THS历史无有效连板层")
+            continue
+        actions.append({"date": date, "ladder": ladder})
+    return actions, frame_served, already, skipped_today, unresolved
 
 
 def apply_backfill(db: Any, actions: list[dict]) -> int:
@@ -90,30 +100,31 @@ def apply_backfill(db: Any, actions: list[dict]) -> int:
     return written
 
 
-async def _fetch_all(date8_to_zt: dict[str, int | None]) -> dict[str, Any]:
+async def _fetch_all(date8_list: list[str]) -> dict[str, Any]:
     """单事件循环批量拉取 THS 连板层（逐条 try：单日失败不影响整批）。
 
     日期间隔 0.8s（2026-10-02 风控复盘：THS 限流返空 200+空 info，高频连发会被静默限流）。
+    整批共享进程单例 client + 单循环（与 providers 既有批量模式一致，无跨循环复用）。
     """
     from backend.analysis.hotlist.jev_state import derive_true_ladder_from_pools
     from backend.market_proxy.limitup import get_limitup_service
 
     svc = get_limitup_service()
     out: dict[str, Any] = {}
-    for i, date8 in enumerate(sorted(date8_to_zt)):
+    for i, date8 in enumerate(sorted(date8_list)):
         if i > 0:
             await asyncio.sleep(0.8)
         try:
             body = await svc.get_ths_pools(date8, keys=LADDER_POOL_KEYS)
             pools = body.get("pools") if isinstance(body, dict) else None
-            out[date8] = derive_true_ladder_from_pools(pools, zt_count=date8_to_zt[date8])
+            out[date8] = derive_true_ladder_from_pools(pools)
         except Exception as exc:  # 单日失败随 map 返回，由计划层如实登记
             out[date8] = exc
     return out
 
 
-def fetch_many(date8_to_zt: dict[str, int | None]) -> dict[str, Any]:
-    return asyncio.run(_fetch_all(date8_to_zt))
+def fetch_many(date8_list: list[str]) -> dict[str, Any]:
+    return asyncio.run(_fetch_all(date8_list))
 
 
 def main() -> None:
@@ -126,9 +137,11 @@ def main() -> None:
     from backend.data.repositories.repository_factory import get_runtime_mongodb_database
 
     db = get_runtime_mongodb_database()
-    actions, frame_served, already, unresolved = plan_backfill(db, args.start, args.end, fetch_many)
+    actions, frame_served, already, skipped_today, unresolved = plan_backfill(
+        db, args.start, args.end, fetch_many)
     print(f"窗口 {args.start}..{args.end}：帧已供给 {frame_served} 日（锚直读帧）、"
-          f"参考已存 {already} 日（幂等跳过）、计划回填 {len(actions)} 日、不可算 {len(unresolved)} 日")
+          f"参考已存 {already} 日（幂等跳过）、当日/未来跳过 {skipped_today} 日、"
+          f"计划回填 {len(actions)} 日、不可算 {len(unresolved)} 日")
     for action in actions:
         b = action["ladder"]["boards"]
         print(f"  {action['date']} maxTrueBoard={action['ladder']['maxBoard']} "

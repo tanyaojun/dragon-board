@@ -114,10 +114,14 @@ def _slot_true_ladder_offline_guard(monkeypatch):
     THS 连板层（_fetch_true_ladder）——不设护栏的话，任何历史日期夹具的槽位计算用例
     都会静默连真实 10jqka。需要模拟现查的用例在自己的 body 里 monkeypatch 覆盖
     （后应用的补丁胜出，见 test_jev_sentiment_compute.test_slot_current_today_uses_live_fetch）。
+    同批打 backfill_true_ladder.fetch_many（2026-10-22 review P2-4：回填工具 main 直连
+    get_limitup_service，无护栏时未来用例调 fetch_many/main 会静默真连 10jqka）。
     """
+    from backend.operations import backfill_true_ladder as _backfill
     from backend.services.jev import jev_sentiment_compute as _v2
 
-    monkeypatch.setattr(_v2, "_fetch_true_ladder", lambda date8, zt_count=None: None)
+    monkeypatch.setattr(_v2, "_fetch_true_ladder", lambda date8: None)
+    monkeypatch.setattr(_backfill, "fetch_many", lambda date8_list: {})
     yield
 
 
