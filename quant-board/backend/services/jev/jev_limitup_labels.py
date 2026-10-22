@@ -76,6 +76,10 @@ def collect_limitup_labels(db: Any, date: str, with_raw: bool = False) -> dict[s
             item = {
                 "code": d.get("code"),
                 "name": d.get("name"),
+                # 归属交易日（2026-10-22 报障修复）：个股复跑（POST /limitup-labels/rerun）
+                # 以行内 tradingDate 组 payload，此前缺此字段 → 前端发 undefined → 后端 422，
+                # 详情卡重跑按钮永远失败（banner 显示 [object Object]）
+                "tradingDate": date,
                 "label": d.get("label"),
                 "labelProbabilities": d.get("driverProbabilities"),
                 "catalystDepth": d.get("catalystDepth"),

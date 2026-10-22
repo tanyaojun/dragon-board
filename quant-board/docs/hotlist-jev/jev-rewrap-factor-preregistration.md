@@ -218,7 +218,7 @@ relay v7.1 三题与反包语义的对账：
 | R1 反包修复行 | `backend/operations/jev_relay_index.py` `rewrap_face_line`（插 `zhaban_face_line` 后） | 断板候选池/反包家数/反包率+近20日分位/炸板回封率/代表股点名；池空、轴不足、炸板池缺失逐段 fail-visible；行尾静态注记「候选池含停牌复牌未分辨」（v1 不做停牌分辨，§3-② 由「标注 k 只」降级为静态注记，如实登记） |
 | 反包板池（计算单源） | `backend/analysis/hotlist/rewrap_pool.py`（新） | §3 口径唯一实现；候选池=前2~5交易日在板&昨日未板；比率口径；missing 结构化 |
 | 池快照（一日两更） | `backend/operations/rewrap_pool.py`（新，集合 `hotlist_rewrap_pool`） | 挂 `jev_label_jiuyan.run()` 入口：12:30 午盘链更 `{date}:midday`（触板口径）、16:00 盘后链更 `{date}:final`（封板口径），幂等可重入；快照带 `generatedAt`+`ratePct20d`；dry-run 零写入 |
-| 免投喂承接 | `jev_label_jiuyan.py` `_rewrap_carry_one` + `run()` work() 旁路 | 池内股零 jev 调用复制前日标签：窗 ≤5 交易日取最近 status=ok 前标，四题答案齐全 + questionSetHash 一致 → 落 `labelSource="rewrap_carry"` / `rewrapCarry=True` / `carriedFrom` / usage 全零（可追溯，不伪装当日实判）；守卫不满足回落实判（FINAL 计 `rewrapMiss`），不静默降级。**注意：与 A+B 承接（carry_decision）的区别=不要求解析逐字相同/原料代际一致（用户裁决的省成本路径），判据换代日自动回落实判** |
+| 免投喂承接 | `jev_label_jiuyan.py` `_rewrap_carry_one` + `run()` work() 旁路 | 池内股零 jev 调用复制前日标签：窗 ≤5 交易日取最近 status=ok 前标，四题答案齐全 + questionSetHash 一致 + 前标 freshness∉{unclear, fresh_catalyst}（2026-10-22 用户裁决新增新鲜度守卫：日期相对题跨日承接语义失真/unclear 承接=信息缺失复制）→ 落 `labelSource="rewrap_carry"` / `rewrapCarry=True` / `carriedFrom` / usage 全零（可追溯，不伪装当日实判）；守卫不满足回落实判（FINAL 计 `rewrapMiss`），不静默降级。**注意：与 A+B 承接（carry_decision）的区别=不要求解析逐字相同/原料代际一致（用户裁决的省成本路径），判据换代日自动回落实判** |
 | R2 读口+页面 | `backend/api/hotlist_jev_limitup_routes.py`（`result["rewrap"]` + 池内股 `rewrap=True` 标记）、`backend/relay_page/index.html`（KPI 反包卡点击筛选 scope=rewrap + `labelRewrapRow` 明细行 + 口径徽标） | 盘中=午盘触板口径徽标（触板≠封板），与 EOD 不可直接比 |
 | R3 预测力研究 | `jev-rewrap-predictive-study.md`（结题） | **G6 未达门**（偏相关 0.181<0.25、同号相位 2<3、分半不稳）→ 反包率登记为「当日状态锚专用因子」，不进打分维；盘中口径 15 日观察后可另立预注册重开 |
 

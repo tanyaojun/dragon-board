@@ -3,7 +3,8 @@
 
 生产集合 hotlist_jev_driver_labels（v2 集合已归档 data/backups 后退役，pilot 集合 rename 平移而来）。
 架构（C 定版）：个股四题 + Q5 相位题日级独立调用（run_phase_band_day）。历代替换：v1/v2 runner 见 git 历史。差异：
-  1) 题目五道（v3.1 三轴原文同题锚 + Q4 买盘逻辑 + Q5 相位强弱分线）；
+  1) 题目五道（v3.1 三轴原文同题锚 + Q4 买盘逻辑 + Q5 相位强弱分线；判据代际
+     v3.2/v3.3/v4.0 演进见 jev_driver_ammo.QUESTION_SET_VERSION_DRIVER 注释）；
   2) 弹药三新块全结构化直供（THS 身位块 / 板块地位块 / 分位盘面事实行）——不含规则情绪分（Q5 防锚定污染）。
 
 用法（Git Bash，JEV_CF_TOKEN 取自 .env.local）：
@@ -2064,6 +2065,8 @@ def _rewrap_carry_one(db, col, date: str, code: str, entry: dict, slot: str,
     守卫（任一不满足 → 返回 False 回落全量实判，不静默降级）：
     - 窗内（≤`_REWRAP_CARRY_MAX_GAP` 交易日）存在 status=ok 的前日标签；
     - 前日 `answers` 四题齐全（choice 均在）；
+    - 前日 freshness∉{unclear, fresh_catalyst}（2026-10-22 用户裁决：日期相对题跨日失真，
+      unclear 承接=信息缺失复制）；
     - 前日 `questionSetHash` == 当前完整题集 hash（答案形状兼容；判据换代日自动回落实判）。
     """
     prev_dates = trading_dates_before(db, date, _REWRAP_CARRY_MAX_GAP, dataset_id=dataset_id)
@@ -2084,6 +2087,15 @@ def _rewrap_carry_one(db, col, date: str, code: str, entry: dict, slot: str,
     prev_answers = prev.get("answers") or {}
     need = list(CARRY_KEYS) + ["buy_side_logic"]
     if any(not (prev_answers.get(k) or {}).get("choice") for k in need):
+        return False
+    # 新鲜度守卫（2026-10-22 用户裁决）：freshness 是日期相对题，跨日承接语义失真——
+    # ① 前标判 unclear =「没判出来」，承接等于把信息不足复制到新一天（当日叙事的
+    #   交易日轴/解析续期日期锚往往可解，例：2026-10-22 林州重机承接 10-16 unclear）；
+    # ② 前标判 fresh_catalyst =「事件首现距今≤2 个交易日」，该距离随承接日漂移，
+    #   跨日复制后「今日新催化」必然失真。
+    # 任一命中 → 回落全量实判，不静默降级。
+    if (prev_answers.get("catalyst_freshness") or {}).get("choice") in (
+            "unclear", "fresh_catalyst"):
         return False
     # 相位题守卫（审查 MF1）：产线已开相位题时，承接文档的 questionsRaw 含相位题；
     # 前标无相位答案 → 回落实判，不得盖 ok 戳静默给 None（正常路径缺题=degraded 契约）
@@ -2476,7 +2488,8 @@ def run(start: str, end: str, dry_run: bool, token: str, acc: str, workers: int 
         def work(code):
             entry = items[code]
             # 反包板池免投喂承接（2026-10-21 用户裁决）：池内股零 jev 调用复制前日标签；
-            # 守卫不满足（窗内无前标/答案缺失/题集换代/相位答案缺失）→ 回落全量实判（不静默降级）。
+            # 守卫不满足（窗内无前标/答案缺失/前标 freshness∈{unclear, fresh_catalyst}/题集换代/相位答案缺失）
+            # → 回落全量实判（不静默降级）。
             # 计数用 list.append（append 原子；审查 nit12：`list[0] += 1` 非原子）。
             if code in rewrap_codes:
                 if _rewrap_carry_one(db, col, date, code, entry, slot, dataset_id,

@@ -361,6 +361,7 @@ export const JEV_DRIVER_NAMES: Record<string, string> = {
   industry_cycle: '行业周期',
   capital_flow: '资金接力',
   concept_stretch: '蹭概念',
+  insufficient_evidence: '信息不足',
 }
 
 export const JEV_DEPTH_NAMES: Record<string, string> = {
@@ -384,6 +385,7 @@ export const JEV_BUYSIDE_NAMES: Record<string, string> = {
   sector_follow: '板块跟随',
   high_board_relay: '高位卡位',
   pure_sentiment: '纯情绪修复',
+  insufficient: '信息不足',
 }
 
 export const JEV_PHASE_BAND_NAMES: Record<string, string> = {

@@ -156,7 +156,7 @@ def test_label_one_stamps_question_generation(monkeypatch):
                           {"name": "X"}, "b", None)
     assert ok is True and used == 77
     doc = col.replaced[0][1]
-    assert doc["questionSetVersion"] == QUESTION_SET_VERSION_DRIVER == "v3.1"
+    assert doc["questionSetVersion"] == QUESTION_SET_VERSION_DRIVER == "v4.0"
     assert doc["questionSetHash"] == _questions_hash(QUESTIONS_STOCK)
     assert doc["ammoVersion"]  # 原料代际同章
 

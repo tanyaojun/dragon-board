@@ -56,12 +56,20 @@ def _app(module):
 def test_rerun_success_final_slot(monkeypatch):
     doc = {"_id": "2026-10-20:600003", "tradingDate": "2026-10-20", "code": "600003",
            "name": "双连板", "labelSlot": "final", "status": "degraded",
+           "label": "capital_flow", "catalystDepth": "core_main_business",
+           "freshness": "continuing", "buySideLogic": "sector_follow",
+           "questionSetVersion": "v3.3",
            "computedAt": "2026-10-20T16:05:00"}
     module, calls = _client(monkeypatch, doc)
     body = _app(module).post("/api/hotlist-jev/limitup-labels/rerun",
                              json={"date": "2026-10-20", "code": "600003"}).json()
     assert body["ok"] is True
     assert body["doc"]["computedAt"] == "2026-10-21T12:35:00"
+    # 2026-10-22 报障修复：返回档必须含三题结论（否则详情卡横幅看不到新鲜度变化）
+    assert body["doc"]["freshness"] == "continuing"
+    assert body["doc"]["catalystDepth"] == "core_main_business"
+    assert body["doc"]["buySideLogic"] == "sector_follow"
+    assert body["doc"]["questionSetVersion"] == "v3.3"
     kw = calls["kw"]
     assert kw.get("force") is True, "重跑必须 force（覆盖幂等）"
     assert kw.get("confirm_budget") is True

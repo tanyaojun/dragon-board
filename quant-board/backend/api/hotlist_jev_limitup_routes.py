@@ -408,6 +408,12 @@ def post_limitup_label_rerun(payload: LimitupLabelRerunPayload) -> dict[str, Any
             "tradingDate": doc.get("tradingDate"), "code": doc.get("code"),
             "name": doc.get("name"), "labelSlot": doc.get("labelSlot"),
             "status": doc.get("status"), "label": doc.get("label"),
+            # 2026-10-22 用户报障修复：返回档补 freshness/depth/buySide（此前复跑后详情卡
+            # 横幅只回显驱动标签，新鲜度/深度/买盘变化不可见，用户误判复跑未生效）
+            "catalystDepth": doc.get("catalystDepth"),
+            "freshness": doc.get("freshness"),
+            "buySideLogic": doc.get("buySideLogic"),
+            "questionSetVersion": doc.get("questionSetVersion"),
             "errorCode": doc.get("errorCode"), "errorDetail": doc.get("errorDetail"),
             "model": doc.get("model"), "usage": doc.get("usage"),
             "latencyMs": doc.get("latencyMs"), "computedAt": doc.get("computedAt"),

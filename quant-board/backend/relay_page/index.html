@@ -609,9 +609,9 @@ function leaderDesc(v){
 const STAGE_CN = {ice:'冰点', start:'启动', ferment:'发酵', climax:'高潮', retreat:'退潮'};
 const CROWD_CN = {no_crowding:'无拥挤', top_acceleration:'高位加速', late_seal_weakness:'封板弱化', breadth_climax:'广度高潮', crowd_clearing:'拥挤解除', insufficient_evidence:'证据不足'};
 const PATTERN_CN = {low_recover:'低开修复', high_fade:'冲高回落', steady_strong:'全天强势', steady_weak:'全天弱势', rally_fade:'冲高回落', late_rescue:'尾盘偷袭', one_way_down:'单边走弱', wide_swing:'剧烈反复', narrow_range:'窄幅平淡', unclear:'证据不足'};
-const DRIVER_CN = {product_event:'产品事件', capital_flow:'资金接力', concept_stretch:'蹭概念', industry_cycle:'行业周期', ma_restructure:'并购重组', order_earnings:'订单业绩', policy:'政策'};
+const DRIVER_CN = {product_event:'产品事件', capital_flow:'资金接力', concept_stretch:'蹭概念', industry_cycle:'行业周期', ma_restructure:'并购重组', order_earnings:'订单业绩', policy:'政策', insufficient_evidence:'信息不足'};
 const CAT_DEPTH_CN = {core_main_business:'核心主业承接', new_business_scaling:'新业务放量承接', new_business_early:'新业务早期承接', equity_or_affiliate:'股权关联传导', concept_assembly:'概念组装弱关联', insufficient_evidence:'信息不足'};
-const BUY_SIDE_CN = {independent_catalyst:'自身独立催化', sector_follow:'板块联动跟随', high_board_relay:'高位卡位/情绪接力', pure_sentiment:'纯情绪修复'};
+const BUY_SIDE_CN = {independent_catalyst:'自身独立催化', sector_follow:'板块联动跟随', high_board_relay:'高位卡位/情绪接力', pure_sentiment:'纯情绪修复', insufficient:'信息不足'};
 const FRESH_CN = {fresh_catalyst:'新鲜', continuing:'延续', none:'无明确催化', unclear:'信息不足'};
 // 热榜行情页（quotes-review 读口）：LC 五段中文名 + 档位序/色（S/A 绿、B 蓝、C 灰、D/E 红；缺 '--'）
 const LC_STAGE_CN = {ignition:'点火', expansion:'扩散', crowded:'拥挤', reversal:'反转', cooling:'降温'};
@@ -1738,7 +1738,7 @@ function relayRerun(key){
       STATE.rerunBusy = null;
       STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
         ? `重跑成功：指数 ${r.relayIndex ?? '-'} · ${r.relayPhase || '-'}（${r.errorCode || 'ok'}）`
-        : `重跑未成功（${(r && (r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+        : `重跑未成功（${rerunErrHead(r)}）：${rerunErrBody(r)}` };
       delete STATE.relayDocs[key];   // 旧存档可能为 degraded，丢弃重拉（含 relayStructure）
       return loadAll();
     })
@@ -1770,7 +1770,7 @@ function slotRerun(key){
       STATE.rerunBusy = null;
       STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
         ? `重跑成功：槽位 ${d.slotTime} · 温度 ${(r.slot && r.slot.scores && r.slot.scores.temperature) ?? '-'}`
-        : `重跑未成功（${(r && (r.status || r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+        : `重跑未成功（${rerunErrHead(r)}）：${rerunErrBody(r)}` };
       return loadAll();
     })
     .catch(err => {
@@ -1798,7 +1798,7 @@ function eodRerun(key){
       STATE.rerunBusy = null;
       STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
         ? `重跑成功：EOD 温度 ${(r.eod && r.eod.scores && r.eod.scores.day_temperature) ?? '-'}`
-        : `重跑未成功（${(r && (r.status || r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+        : `重跑未成功（${rerunErrHead(r)}）：${rerunErrBody(r)}` };
       return loadAll();
     })
     .catch(err => {
@@ -1813,23 +1813,40 @@ function eodRerun(key){
 // 真实调用 jev 模型（≈2K tokens/股），走 POST /api/hotlist-jev/limitup-labels/rerun
 // （后端复用 jev_label_jiuyan.run，force+only_codes 单股，沿用原投喂槽位口径）；
 // 成功后 loadAll 重拉涨停复盘读口（行文档 _id={date}:{code} 稳定，展开态由 openKey 维持）。
+const rerunErrHead = r => {
+  if (!r) return 'unknown';
+  const v = r.errorCode || r.reason || r.detail || r.status || 'unknown';
+  // 2026-10-22 报障修复：FastAPI 422 的 detail 是对象/数组，直接插值会显示 [object Object]，
+  // 统一序列化成可读文本（fail-visible：错误原因必须可读）
+  return (v && typeof v === 'object') ? JSON.stringify(v) : String(v);
+};
+const rerunErrBody = r => {
+  if (!r) return '';
+  const v = r.errorDetail || r.error || '';
+  return (v && typeof v === 'object') ? JSON.stringify(v) : String(v);
+};
+
 function labRerun(key){
   if (STATE.rerunBusy) return;   // 防并发：模型调用有成本，全局同时只允许一次
   const e = (STATE.labelEntries || []).find(x => x.key === key);
   const d = e && e.doc;
   if (!d) return;
-  const ok = window.confirm(`重跑 ${d.tradingDate || ''} ${d.name || d.code || ''} 驱动打标？\n\n将真实调用 jev 模型（约 2K tokens）重新判定该股四题并覆盖存档（沿用${d.labelSlot === 'midday' ? '午盘' : '收盘'}槽位口径）。`);
+  // date 取值双保险（2026-10-22 报障修复）：读口行无缺 tradingDate 时从 _id（"{date}:{code}"）回溯；
+  // 守卫前置到 confirm 前（复审 nit：不弹一次不会发生的重跑确认框）
+  const rerunDate = d.tradingDate || String(d._id || '').split(':')[0] || '';
+  if (!rerunDate) { STATE.rerunMsg = { key: key, ok: false, text: '重跑未发起：行文档缺归属交易日（tradingDate/_id 均不可得，fail-visible）' }; renderLabels(); return; }
+  const ok = window.confirm(`重跑 ${rerunDate} ${d.name || d.code || ''} 驱动打标？\n\n将真实调用 jev 模型（约 2K tokens）重新判定该股四题并覆盖存档（沿用${d.labelSlot === 'midday' ? '午盘' : '收盘'}槽位口径）。`);
   if (!ok) return;
   STATE.rerunBusy = key;
   STATE.rerunMsg = null;
   renderLabels();
-  jpost('/api/hotlist-jev/limitup-labels/rerun', { date: d.tradingDate,
+  jpost('/api/hotlist-jev/limitup-labels/rerun', { date: rerunDate,
     code: String(d.code || '').slice(-6), datasetId: d.datasetId || undefined })
     .then(r => {
       STATE.rerunBusy = null;
       STATE.rerunMsg = { key: key, ok: !!(r && r.ok), text: (r && r.ok)
-        ? `重跑成功：${(r.doc && (r.doc.name || r.doc.code)) || d.code} · 驱动 ${((r.doc || {}).label) || '-'} · ${(r.doc && r.doc.labelSlot) || '-'} 槽`
-        : `重跑未成功（${(r && (r.errorCode || r.reason || r.detail)) || 'unknown'}）：${(r && (r.errorDetail || r.error || '')) || ''}` };
+        ? `重跑成功：${(r.doc && (r.doc.name || r.doc.code)) || d.code} · 驱动 ${DRIVER_CN[((r.doc || {}).label)] || ((r.doc || {}).label) || '-'} · 新鲜度 ${FRESH_CN[((r.doc || {}).freshness)] || ((r.doc || {}).freshness) || '-'} · 深度 ${CAT_DEPTH_CN[((r.doc || {}).catalystDepth)] || ((r.doc || {}).catalystDepth) || '-'} · ${(r.doc && r.doc.labelSlot) || '-'} 槽`
+        : `重跑未成功（${rerunErrHead(r)}）：${rerunErrBody(r)}` };
       return loadAll();
     })
     .catch(err => {
@@ -2357,8 +2374,7 @@ function tlRerun(key){
         text: (r && r.ok)
           ? ('重跑完成：状态 ' + (d.status || '-') + ' · 档位 ' + (TL_CHOICE_CN[d.choice] || d.choice || '-')
              + ' · tokens ' + JSON.stringify(d.usage || {}))
-          : ('重跑未成功（' + ((r && (r.errorCode || r.reason || r.detail)) || 'unknown') + '）：'
-             + ((r && (r.errorDetail || r.error || '')) || '')) };
+          : ('重跑未成功（' + rerunErrHead(r) + '）：' + rerunErrBody(r)) };
       delete STATE.tlNarr[key];      // 旧语料已过期，丢弃重拉
       return loadAll();              // 静默刷新（同区间不闪列表）
     })

@@ -250,6 +250,36 @@ def test_rewrap_carry_guards_fall_back():
                                     "dragonboard_live", h, False, None, None) is False
 
 
+def test_rewrap_carry_freshness_guards_fall_back():
+    """新鲜度守卫（2026-10-22 用户裁决）：freshness 是日期相对题，跨日承接语义失真——
+    前标 unclear（没判出来，承接=永久化信息缺失）或 fresh_catalyst（≤2 交易日随承接日
+    漂移）→ 回落实判；continuing/none 可正常承接。"""
+    db = _db_days()
+    col = db["hotlist_jev_driver_labels"]
+    entry = {"stock": _st("600003", "五连板股", "9天8板"), "board": "板块A"}
+    h = runner._questions_hash(runner.QUESTIONS_STOCK)
+
+    def _with_freshness(choice):
+        prev = _prev_label(D1, "600003")
+        prev["answers"]["catalyst_freshness"] = {"choice": choice}
+        return prev
+
+    # 前标 unclear → False（2026-10-22 林州重机案例：承接 10-16 unclear = 信息缺失复制）
+    col.rows = [_with_freshness("unclear")]
+    assert runner._rewrap_carry_one(db, col, D0, "600003", entry, "final",
+                                    "dragonboard_live", h, False, None, None) is False
+    # 前标 fresh_catalyst → False（今日新催化的「≤2 交易日」随承接日漂移）
+    col.rows = [_with_freshness("fresh_catalyst")]
+    assert runner._rewrap_carry_one(db, col, D0, "600003", entry, "final",
+                                    "dragonboard_live", h, False, None, None) is False
+    # 对照：continuing → 承接成立；none → 承接成立
+    for choice in ("continuing", "none"):
+        col.rows = [_with_freshness(choice)]
+        assert runner._rewrap_carry_one(db, col, D0, "600003", entry, "final",
+                                        "dragonboard_live", h, False, None, None) is True, choice
+        assert col.find_one({"_id": f"{D0}:600003"})["freshness"] == choice
+
+
 # ── run() 集成：池股零调用 + FINAL 计数（沿用午盘槽测试基建的假 dispatch） ────
 def _fake_parse(env, ms, expected_keys=None):
     return {"ok": True, "answers": {"driver_type": {"choice": "capital_flow", "probabilities": {"capital_flow": 0.8}},

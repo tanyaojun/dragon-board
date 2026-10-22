@@ -432,6 +432,7 @@ export const LIMITUP_BUYSIDE_ORDER: Record<string, number> = {
   sector_follow: 1,
   high_board_relay: 2,
   pure_sentiment: 3,
+  insufficient: 9,
 }
 
 export type LimitUpSortKey =

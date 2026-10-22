@@ -9,7 +9,8 @@
   计算单一事实源 = `analysis/hotlist/rewrap_pool.build_rewrap_pool`（读方随时可现算，
   快照缺失/陈旧不阻断读口，fail-visible 注记）。
 - 池内反包股免投喂承接前日标签（`jev_label_jiuyan` 消费），承接守卫见该模块
-  `_rewrap_carry_one`（答案缺失/题集代际不符 → 回落全量实判，不静默降级）。
+  `_rewrap_carry_one`（答案缺失/题集代际不符/前标 freshness∈{unclear, fresh_catalyst}
+  → 回落全量实判，不静默降级）。
 """
 from __future__ import annotations
 

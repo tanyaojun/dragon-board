@@ -250,7 +250,7 @@ def main():
     v = verdict(depth, t3_manual, group, freshness_ok)
 
 
-    lines = ["# jev 涨停打标战报（题目 v3.1）", "",
+    lines = [f"# jev 涨停打标战报（题目 {QUESTION_SET_VERSION_DRIVER}）", "",
              f"- 标签 {len(labels)}（ok），有心照链次日匹配 {len(rows)}，窗口 {dates[0]} → {dates[-1]}", "",
              "## 门A' 六桶方差", "",
              f"- {depth}",

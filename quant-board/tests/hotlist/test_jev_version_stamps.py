@@ -21,7 +21,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
 
     # 每日链 5 线 + 链外登记
     assert jev_state.QUESTION_SET_VERSION == "v2.6"                    # 热榜情绪（日级判据删减）
-    assert drv.QUESTION_SET_VERSION_DRIVER == "v3.1"                   # 个股打标+合并相位
+    assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"                   # 个股打标+合并相位（v3.2 freshness 分界/v3.3 depth 联动判层/v4.0 驱动+买盘兑底选项，均 2026-10-22）
     assert drv.QUESTION_SET_VERSION_CYCLE == "v5"                      # cycle 阶段（链外）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）
     assert relay.QUESTION_SET_VERSION_RELAY == "v7.1"                  # 连板指数（v7.1 边界修正：strong P80/fracture 优先序）
@@ -47,6 +47,45 @@ def test_phase_band_doc_uses_dedicated_stamp():
     src = inspect.getsource(jl.run_phase_band_day)
     assert "QUESTION_SET_VERSION_PHASE_BAND" in src
     assert "QUESTION_SET_VERSION_DRIVER" not in src
+
+
+def test_driver_v3_2_freshness_boundary_wording():
+    """v3.2 判据增补锁定（2026-10-22 用户裁决）：catalyst_freshness none/unclear 分界——
+    解析通篇常设业务介绍、无事件行判 none；仅存在事件但日期不可考才判 unclear
+    （2026-10-22 林州重机/南方路机 unclear 误判实证，见 jev-crowding 相关复盘链）。"""
+    from backend.analysis.hotlist import jev_driver_ammo as drv
+    q = drv.QUESTIONS_STOCK["catalyst_freshness"]
+    assert "无任何事件行时判无明确催化（none）" in q["instructions"]
+    assert "仅当解析存在事件/催化描述但日期不可考时才判信息不足（unclear）" in q["instructions"]
+    assert "无任何事件行时也判本层" in q["criteria"]["none"]
+    assert "解析完全无事件行时不判本层（判 none）" in q["criteria"]["unclear"]
+    assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"   # v3.3 depth 联动判层 + v4.0 驱动/买盘兑底选项（同日叠加增档）
+
+
+def test_driver_v3_3_depth_escape_lane_wording():
+    """v3.3 判据增补锁定（2026-10-22 用户裁决）：catalyst_depth 联动行情判层——
+    解析无催化事件行时按联动板块对应业务落点判层，insufficient_evidence 不得用作
+    「无明确催化」逃生口（当日 3 只 depth=insufficient 全部 label=capital_flow、
+    解析业务信息充分实证，沈鼓集团 601091 insufficient 0.58 为代表）。"""
+    from backend.analysis.hotlist import jev_driver_ammo as drv
+    q = drv.QUESTIONS_STOCK["catalyst_depth"]
+    assert "以与今日联动板块/题材直接相关的解析所述业务判层" in q["instructions"]
+    assert "不得用作「无明确催化」的逃生口" in q["instructions"]
+    assert "不因「无催化」判本层，按联动板块对应业务的落点判层" in q["criteria"]["insufficient_evidence"]
+    assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"
+
+
+def test_driver_v4_0_escape_lanes_for_driver_and_buyside():
+    """v4.0 兑底选项锁定（2026-10-22 用户裁决）：driver_type/buy_side_logic 新增 insufficient——
+    避免 jev 无兑底时乱塞答案拉低置信度，且信息不足可按日复盘成因持续优化题集。"""
+    from backend.analysis.hotlist import jev_driver_ammo as drv
+    qs = drv.QUESTIONS_STOCK
+    d_ins = qs["driver_type"]["criteria"]["insufficient_evidence"]
+    b_ins = qs["buy_side_logic"]["criteria"]["insufficient"]
+    assert "无板块联动或资金面证据可依" in d_ins
+    assert "仍判资金接力，不判本层" in d_ins          # capital_flow 与兑底选项分界
+    assert "判据锚均缺失" in b_ins and "不判本层" in b_ins
+    assert drv.QUESTION_SET_VERSION_DRIVER == "v4.0"
 
 
 def test_relay_v7_1_criteria_wording():

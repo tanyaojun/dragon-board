@@ -101,6 +101,14 @@ def test_collect_passthrough_label_slot():
     assert by_code["000001"]["labelSlot"] is None
 
 
+def test_collect_stock_row_carries_trading_date():
+    """归属交易日透传（2026-10-22 报障修复）：个股复跑 POST /limitup-labels/rerun 以行内
+    tradingDate 组 payload；此前行缺此字段 → 前端发 undefined → 后端 422，重跑按钮永远失败。
+    行内 tradingDate 必须等于读口入参 date（单一事实源，不取存档字段防陈旧）。"""
+    out = collect_limitup_labels(FakeDb([_stock("603278", 5)]), "2026-09-30")
+    assert out["stocks"][0]["tradingDate"] == "2026-09-30"
+
+
 def test_collect_no_data_fail_visible():
     out = collect_limitup_labels(FakeDb([]), "2026-10-11")
     assert out["ok"] is True and out["noData"] is True

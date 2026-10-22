@@ -41,12 +41,27 @@
 
 - **为什么问**：催化落点深度（质量轴）是同一批标签里唯一统计显著的轴：concept_assembly 唯一负桶三验成立；60+ 强带 Kruskal p=0.0255（组装股 0% 续板/−3.18%）。这直接服务"强势日回避纯组装股"的复盘辅助。
 - **选项为什么这么组织**：五实质桶（核心主业/放量承接/早期承接/股权关联/概念组装）+ 信息不足逃生口；判据锚可数证据（动词七级：研发<送样<验证<认证<小批量<量产<规模出货；证据分级 T1-T3：网传传闻不得支撑放量层；core 防偏/early 防吸护栏）。**文案原文不动**（v3.1 定稿判据）。
+- **v3.3 判据增档（2026-10-22 用户裁决）**：联动行情暴露逃生口挪用——题干「以最主要的涨停
+  催化为准」在无催化事件行（板块联动/资金接力，label=capital_flow）时无锚可依，五层判据全部
+  预设「存在催化」，模型把 insufficient_evidence 当「无催化」答案（当日 3 只
+  depth=insufficient 全部 label=capital_flow、解析业务信息充分，沈鼓集团 601091
+  insufficient 0.58/core 0.30 为代表；历史 insufficient 率 0~1.3%，当日 6.4%）。增补：
+  instructions 与 insufficient 判据显式写入——无催化事件行时按联动板块/题材对应业务的落点
+  判层（主业承接 → core；参股/关联 → equity；概念联想 → assembly），insufficient 仅当解析
+  未提供相关可判业务信息时才判。`QUESTION_SET_VERSION_DRIVER` 升 `v3.3`。
 - **锚的证据**：弹药 1（解析中的收入占比/订单/参股行）。
 
 ### Q3 catalyst_freshness（四选一）——保留（机械轴，便宜）
 
 - **为什么问**：新旧催化与续板有观察价值（9 月全量 continuing 74% 符合缩量市）；判据纯日期锚（距今 ≤2 交易日=新），几乎零歧义；每只 token 增量最小。
 - **选项**：fresh_catalyst / continuing / none / unclear——四态 MECE；锚弹药 1 中的日期证据 + 叙事头日期。
+- **v3.2 判据增档（2026-10-22 用户裁决）**：实测（林州重机 002535、南方路机 002307 等）暴露
+  none/unclear 边界混淆——解析通篇常设业务介绍、无任何事件行时，模型倾向按「日期不可考」判
+  unclear，而此类盘面（板块联动/资金接力）按判据本意应归 none。增补：instructions 与 none/unclear
+  判据文案显式写入分界——**解析通篇无任何事件行 → 判 none；仅当存在事件/催化描述但日期不可考 →
+  才判 unclear**。`QUESTION_SET_VERSION_DRIVER` 升 `v3.2`（questionSetHash 随判据文本自动变，
+  换代首日承接率归零为预期行为）；同日 rewrap 免投喂承接新增新鲜度守卫（见
+  jev-rewrap-factor-preregistration.md）。
 
 ### Q4（新增·供你裁决去留与文案）买盘逻辑四选一——「位置>类别」的直接检验
 
@@ -466,6 +481,79 @@ v0.3 与预登记推演（start≈46/ferment 9-13/climax 8-10/divergence 若干�
 002368 新叙事实测三锚齐全（交易日轴 + 「该解析最早见于 2026-10-19（距今 2 个交易日）」
 + 「前 2 交易日（2026-10-19）同板块涨停 4 家」）。测试：`tests/hotlist` 981 passed；
 换代首日承接率归零为预期行为。
+
+
+## 题集 v3.2 判据增档（2026-10-22，catalyst_freshness none/unclear 分界）
+
+触发（用户原话）：午盘打标出现多只【新鲜度】「信息不足」，以林州重机 002535 为例排查。
+排查结论（生产库只读复算）：002535 当日文档实为 `labelSource="rewrap_carry"`（usage 全零），
+四题答案原样承接自 2026-10-16 的实判；该次实判的韭研解析是常设业务介绍（军工/机器人/煤机），
+全文唯一日期为 2025-02-27 拟终止公告，且当时投喂弹药尚无交易日轴/解析续期日期锚
+（v3.2b 前代），模型置信度仅 0.28 落 unclear。今日真实盘面（机器人 16 家涨停 vs 昨日 5 家、
+label=capital_flow 0.68、buySide=sector_follow 0.98）与当日叙事中的解析续期日期锚
+（较 2026-10-16 距今 4 个交易日）本可支撑 none/continuing。同日 fresh_judgment 实判的
+unclear（如南方路机 002307，unclear 0.65/none 0.32）原料同构——**none/unclear 边界混淆是
+系统性问题，承接只是放大器**。
+
+修复（两项，题目/选项结构零改动）：
+
+1. **判据增档（`QUESTION_SET_VERSION_DRIVER` v3.1 → v3.2）**：`catalyst_freshness`
+   instructions 与 none/unclear 判据显式写入分界——解析通篇常设业务介绍、无任何事件行判 none；
+   仅存在事件描述但日期不可考才判 unclear。questionSetHash 随判据文本自动变，换代首日
+   承接率归零为预期行为。
+2. **rewrap 免投喂承接新鲜度守卫**（`jev_label_jiuyan._rewrap_carry_one`）：freshness 是日期
+   相对题，跨日承接语义失真——前标 `catalyst_freshness.choice ∈ {unclear, fresh_catalyst}`
+   → 回落全量实判，不静默降级（unclear 承接=把「没判出来」复制到新一天；fresh_catalyst 的
+   「≤2 交易日」随承接日漂移必然失真）。测试：`test_rewrap_carry_freshness_guards_fall_back`。
+
+存量处置（用户裁决确认）：对当日 `labelSource="rewrap_carry" AND freshness="unclear"`
+的文档（002535、003021）重跑实判；题集换代后承接自动回落实判。
+
+
+## 题集 v3.3 判据增档（2026-10-22，catalyst_depth 联动行情判层）
+
+触发（用户原话）：【催化深度】也有一只显示「信息不足」，沈鼓集团 601091，可能是同一类问题。
+排查结论（生产库只读复算）：与 freshness 同族不同题——601091 解析业务信息极充分
+（压缩机/核泵市占率第一、屏蔽主泵 69.2%），按 insufficient 判据定义（解析未提供业务信息）
+不成立；真正缺的是催化事件（label=capital_flow 0.68、buySide=sector_follow、board=其他、
+触板 10:52 偏晚）。当日 depth=insufficient 3 只（601091/002076/002476）全部
+label=capital_flow，历史 insufficient 率 0~1.3% → 当日 6.4%。归因（§1.2-6 顺序）：
+原料充足 → 题目设计缺口（五层判据全部预设「存在催化」，无 none 层，逃生口被挪用）。
+
+修复（用户裁决文案，题目/选项结构零改动，`QUESTION_SET_VERSION_DRIVER` v3.2 → v3.3）：
+
+1. **instructions 增补**：涨停主要由板块联动/资金接力带动、解析无具体催化事件行时，
+   以与今日联动板块/题材直接相关的解析所述业务判层（主业 → core_main_business；
+   参股/关联实体 → equity_or_affiliate；概念联想 → concept_assembly）；
+   insufficient_evidence 仅当解析未提供与催化所指业务相关的可判业务信息时才判，
+   不得用作「无明确催化」的逃生口。
+2. **insufficient 判据增补**：解析无催化事件行时不因「无催化」判本层，按联动板块
+   对应业务的落点判层。
+
+存量处置（用户裁决确认）：当日 3 只 depth=insufficient（601091/002076/002476）重判
+（601091 的 freshness=unclear 为 v3.1 旧判产物，随新代际一并复判）；002535/003021 保持
+v3.2 档不动（depth 非 insufficient）。测试：`test_driver_v3_3_depth_escape_lane_wording`；
+换代首日承接率归零为预期行为。
+
+
+## 题集 v4.0 兑底选项（2026-10-22，driver_type/buy_side_logic 新增 insufficient）
+
+触发（用户原话）：【驱动】和【买方逻辑】没有「信息不足」选择项，需要增加，避免 jev
+回答时没有兑底选择项而乱塞答案降低置信度；信息不足可按日复盘成因，持续优化题集。
+
+修复（选项新增=答案结构换代，`QUESTION_SET_VERSION_DRIVER` v3.3 → v4.0）：
+
+1. **driver_type 新增 `insufficient_evidence`**：解析近乎空白/关键证据缺失且无板块联动或
+   资金面证据可依时才判；无明确新催化但有联动/资金证据仍判 capital_flow，不判本层。
+2. **buy_side_logic 新增 `insufficient`**：板块地位/封板时间分位/身位梯队等判据锚均缺失
+   时才判；判据锚存在按既有四类判。
+
+配套：复跑路由返回档补 freshness/catalystDepth/buySideLogic/questionSetVersion
+（2026-10-22 用户报障：复跑后详情卡看不到新鲜度变化）；relay_page 与根前端展示映射
+（DRIVER_CN/BUY_SIDE_CN/JEV_DRIVER_NAMES/JEV_BUYSIDE_NAMES）新增兑底项中文名。
+测试：`test_driver_v4_0_escape_lanes_for_driver_and_buyside`。
+第 5 题评估结论（同日）：暂不新增，见 Q2-Q4 增档后的复盘证据——问题集中在判据分界与
+兑底选项而非题量；候选「板块内身位题」备案，触发条件见存档尾注。
 
 
 ## 个股相位分线题产线开启（2026-10-20 用户裁决「开启相位分线题，合并」）
