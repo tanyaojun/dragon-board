@@ -107,6 +107,21 @@ def _forbid_real_jev_calls(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _slot_true_ladder_offline_guard(monkeypatch):
+    """硬护栏（AGENTS §1.2-7 延伸，2026-10-22 语料口径修复）：默认把槽位真连板现查打成空。
+
+    compute_and_upsert_for_slot/day 的真连板供给解析器在「历史日回放」路径会按日查
+    THS 连板层（_fetch_true_ladder）——不设护栏的话，任何历史日期夹具的槽位计算用例
+    都会静默连真实 10jqka。需要模拟现查的用例在自己的 body 里 monkeypatch 覆盖
+    （后应用的补丁胜出，见 test_jev_sentiment_compute.test_slot_current_today_uses_live_fetch）。
+    """
+    from backend.services.jev import jev_sentiment_compute as _v2
+
+    monkeypatch.setattr(_v2, "_fetch_true_ladder", lambda date8, zt_count=None: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _tdx_daily_bars_offline_guard(monkeypatch):
     """硬护栏（AGENTS §1.2-7 延伸）：默认把 TDX 日线/日内棒取数打成空。
 
