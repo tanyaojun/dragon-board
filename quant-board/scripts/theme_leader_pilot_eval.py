@@ -139,11 +139,32 @@ def _metrics(samples: list[dict]) -> dict:
     return m
 
 
+def _next_day_board_n(db, board: str | None, next_date: str | None) -> int | None:
+    """次日该板块封板家数（题材延续性结局锚；次日 final 缺失 → None，不伪造 0）。
+
+    域假设（2026-10-23 实证）：韭研 final 只落当日有封板的板块（fields 内 stocks 恒非空，
+    10-21→10-22 有 7 个零封板板块整组消失）——按 name 精确匹配查无 = 当日 0 家封板，
+    返回 0 是事实不是伪造。"""
+    if not board or not next_date:
+        return None
+    doc = db["jiuyan_action"].find_one({"_id": f"{next_date}:final"}, {"fields": 1}) or {}
+    for field in doc.get("fields") or []:
+        if str(field.get("name") or "") == str(board):
+            return len([s for s in (field.get("stocks") or []) if s])
+    return 0 if doc.get("fields") else None
+
+
 def evaluate(db, date: str, write_outcome: bool = False) -> dict:
     col = db[COLLECTION]
-    labels = list(col.find({"tradingDate": date}))
+    labels_all = list(col.find({"tradingDate": date}))
+    # v3：status=skipped（非题材粗分桶，v3 起不纳入判定范围）不足 degraded 也不进名册——
+    # 单独计数透出（它们本来就没有答案，混进 degradedShare 会把「按设计排除」读成「通道故障」）。
+    labels = [d for d in labels_all if d.get("status") != "skipped"]
+    not_theme_skipped = len(labels_all) - len(labels)
     if not labels:
-        return {"ok": False, "error": f"{date} 无投喂记录（先跑 theme_leader_label）", "date": date}
+        return {"ok": False,
+                "error": f"{date} 无投喂记录（先跑 theme_leader_label）",
+                "date": date, "notThemeSkipped": not_theme_skipped}
 
     nxt = next_trading_date(db, date)
     sealed_next = info_meta = None
@@ -163,8 +184,10 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
         if outcome is None:
             skipped.append(f"{code}{doc.get('name') or ''}: {reason}")
         if write_outcome:
+            board_n_next = _next_day_board_n(db, doc.get("board"), nxt)
             col.update_one({"_id": doc["_id"]}, {"$set": {
                 "outcomeSealedNextDay": outcome,
+                "outcomeBoardNNextDay": board_n_next,
                 "outcomeMeta": {
                     "nextDate": nxt,
                     "source": f"jiuyan_action:{nxt}:final → sealed_and_info",
@@ -199,6 +222,7 @@ def evaluate(db, date: str, write_outcome: bool = False) -> dict:
         "date": date,
         "nextDate": nxt,
         "labeled": len(labels),
+        "notThemeSkipped": not_theme_skipped,
         "evaluable": n,
         "skipped": skipped,
         "degradedCount": len(degraded_docs),
@@ -281,7 +305,13 @@ def _sample_row(doc: dict, outcome: bool | None, lookup) -> dict:
         "sampleOrigin": doc.get("sampleOrigin") or "live",
         "gate": (doc.get("gate") or {}).get("reason"),
         "baselineRate": b_rate, "baselineLevel": b_label, "baselineN": b_n,
+        # v5：题材层三层判断（旧代文档 catalystStage 保留回读；不跨代映射）
+        "themeSpeculationDepth": doc.get("themeSpeculationDepth"),
+        "themeContinuation": doc.get("themeContinuation"),
+        "leaderHeadroom": doc.get("leaderHeadroom"),
         "catalystStage": doc.get("catalystStage"),
+        # 题材延续性结局锚：次日该板块封板家数（None=未回填/不可判）
+        "outcomeBoardNNextDay": doc.get("outcomeBoardNNextDay"),
         # `bucket` = 结构 JSON（审计字段，不可当键）；`bucketKey` = 同桶键（与 baseline 对照同粒度）
         "bucket": doc.get("baselineBucket"),
         "bucketKey": doc.get("baselineKey") or _combo_key_of(doc),
@@ -337,7 +367,9 @@ def main() -> None:
         b = "n/a" if s["baselineRate"] is None else f"{s['baselineRate']:.2f}({s['baselineLevel']},n={s['baselineN']})"
         print(f"  {str(s['code']):6s} {str(s['name'] or ''):6s} {str(s['board'] or ''):8s} "
               f"模型 {prob:12s} 基线 {b:34s} 实际 "
-              f"{'未封' if s['outcome'] is None else ('续板' if s['outcome'] else '未续')} 催化={s['catalystStage']}")
+              f"{'未封' if s['outcome'] is None else ('续板' if s['outcome'] else '未续')} "
+              f"深度={s.get('themeSpeculationDepth')} 延续={s.get('themeContinuation')} "
+              f"空间={s.get('leaderHeadroom')} 次日板块家数={s.get('outcomeBoardNNextDay')}")
     if out.get("perBucket"):
         print("\n同桶聚合：")
         for pb in out["perBucket"]:

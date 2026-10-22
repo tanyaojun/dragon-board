@@ -67,9 +67,11 @@ BASELINE = [
 ENVELOPE = {"result": {"state": "Completed", "result": {
     "model": "jev-test",
     "answers": {
+        "theme_speculation_depth": {"type": "choice", "choice": "fermenting"},
+        "theme_continuation": {"type": "choice", "choice": "strong_extend"},
         "leader_nextday_continue": {"type": "choice", "choice": "mid_45_65",
                                     "probabilities": {"mid_45_65": 0.55}},
-        "catalyst_stage": {"type": "choice", "choice": "new_today"},
+        "leader_headroom": {"type": "choice", "choice": "space_2plus"},
     },
     "usage": {"total_tokens": 1234}}}, "success": True}
 
@@ -114,7 +116,7 @@ def test_dry_run_makes_no_call_and_writes_nothing(env, capsys):
     assert "零 jev 调用（未花 token）" in printed
     assert "待判龙头：大业股份（603278）" in printed
     assert "结构基线（口径=触板−THS炸板二分 + 真连板" in printed
-    assert "【题材证据 · 韭研产业树 + 投资日历】" in printed
+    assert "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】" in printed
 
 
 def test_run_without_confirm_budget_is_blocked(env):
@@ -133,8 +135,8 @@ def test_run_writes_docs_and_is_idempotent(env):
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v2"
-    assert doc["questionSetHash"] == "985c529fded7"   # v2 换代（v1=ff010c50200e 保留在预登记文档）
+    assert doc["questionSetVersion"] == "v6"
+    assert doc["questionSetHash"] == "1d098c87e07e"   # v6 判据修订换代（v1-v5 hash 留档在预登记文档）
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -142,7 +144,6 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["modelAnswers"]["leader_nextday_continue"]["choice"] == "mid_45_65"
     assert doc["gate"]["applied"] is True and doc["gate"]["reason"] == "corpus_not_collected"
     assert doc["gate"]["modelChoice"] == "mid_45_65"
-    assert doc["catalystStage"] == "new_today"
     assert doc["status"] == "ok" and doc["usage"] == {"total_tokens": 1234}
     assert doc["model"] == "jev-test"
     assert doc["leaderNextdayProbabilities"] == {"insufficient": 1.0}
@@ -216,6 +217,10 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     assert doc["gate"]["applied"] is False
     assert doc["leaderNextdayContinue"] == "mid_45_65"
     assert doc["modelAnswers"] == doc["answers"], "不过门时两者应一致（不是两套数）"
+    # v5 四题落库：题材深度/延续性/龙头空间
+    assert doc["themeSpeculationDepth"] == "fermenting"
+    assert doc["themeContinuation"] == "strong_extend"
+    assert doc["leaderHeadroom"] == "space_2plus"
 
 
 def test_channel_unreachable_aborts_early_not_all_calls(env, monkeypatch):
@@ -252,8 +257,64 @@ def test_single_transient_failure_does_not_abort(env, monkeypatch):
     assert len(calls) == 2
 
 
+def test_coarse_buckets_are_excluded_from_jev_scope(env, monkeypatch, capsys):
+    """v3 门控收紧（用户 2026-10-22 裁决）：非题材粗分桶（公告/其他/新股/大消费…）
+    **不纳入 jev 判定范围**——零调用、零 token。v5 起（用户 2026-10-23 裁决）排除行
+    **不落库不显示**（换代后旧字段/空档位行污染前端），排除事实只留运行日志。"""
+    calls, db = env
+    rows_with_coarse = ROWS + [
+        {"date": "2026-10-19", "board": "公告", "code": "600293", "name": "三峡新材",
+         "streak": 3, "time": "09:25:00", "boardN": 1, "othersN": 0, "ladderFollowers": 0,
+         "prevPeers": 0, "prevBoardN": 0},
+        {"date": "2026-10-19", "board": "医疗医药", "code": "002940", "name": "昂利康",
+         "streak": 2, "time": "10:52:00", "boardN": 7, "othersN": 6, "ladderFollowers": 6,
+         "prevPeers": 2, "prevBoardN": 3},
+    ]
+    monkeypatch.setattr(L, "leaders_for",
+                        lambda db_, date, dataset_id=None: ([dict(r) for r in rows_with_coarse],
+                                                            {"thsPoolFound": True}))
+    out = L.run("2026-10-19", confirm_budget=True)
+    # 只对真题材桶调用（机器人/化工），粗分桶零调用：叙事里不得出现被排除的龙头
+    assert len(calls) == 2 and out["labeled"] == 2 and out["ok"] == 2
+    assert out["excludedNotTheme"] == 2
+    assert "公告" in out["excludedBoards"]
+    assert "医疗医药" in out["excludedBoards"], "字序变体也必须命中 NOT_A_THEME"
+    for narrative, _q in calls:
+        assert "三峡新材" not in narrative and "昂利康" not in narrative
+    # v5：排除股不落库——库里只有真实判定的 ok/degraded 行，不得出现排除股文档
+    for code in ("600293", "002940"):
+        assert "2026-10-19:" + code not in db[L.COLLECTION].docs, "排除股不得落库（v5 用户裁决）"
+    assert "排除非题材粗分桶 2 只" in capsys.readouterr().out
+
+
+def test_dry_run_excludes_coarse_buckets_without_writing(env, monkeypatch):
+    """dry-run 同样排除（不投喂不估算），且零写入。"""
+    calls, db = env
+    monkeypatch.setattr(L, "leaders_for", lambda db_, date, dataset_id=None: (
+        [dict(r) for r in ROWS + [{"date": "2026-10-19", "board": "其他", "code": "600838",
+                                   "name": "上海九百", "streak": 2, "time": "10:52:00",
+                                   "boardN": 7, "othersN": 6, "ladderFollowers": 6,
+                                   "prevPeers": 2, "prevBoardN": 3}]],
+        {"thsPoolFound": True}))
+    out = L.run("2026-10-19", dry_run=True)
+    assert calls == [] and out["todo"] == 2 and out["excludedNotTheme"] == 1
+    assert len(db[L.COLLECTION].docs) == 0, "dry-run 绝不写入（含 skipped 台账）"
+
+
 # 22 次真实调用实测账（2026-10-19 v1 13 次 + 2026-10-20 v2 9 次）；
 # (narrative 字符数, usage 总 token) —— 从库中 narrative 长度 × usage 反推，勿改。
+# v6 代（4 题，判据收紧措辞版）真实账：2026-10-23（10-22 backfill 6 条，usage=input+output）
+# v5 首批（fixed 残差 ≤2,682 前的 2,500 版）已被 v6 加长题面实测取代归档。
+_REAL_COST_LEDGER_V6: list[tuple[int, int]] = [
+    (1687, 4419),   # 603278 大业股份/机器人
+    (1446, 4194),   # 001360 南矿集团/俄乌重建
+    (1438, 4183),   # 002724 海洋王/军工
+    (1355, 4105),   # 600202 哈空调/冰雪经济
+    (1639, 4373),   # 603138 海量数据/数据要素
+    (1381, 4107),   # 603933 睿能科技/半导体
+]
+
+# v1-v4 代（2 题）真实账（22 条，从库中 narrative 长度 × usage 反推，勿改）
 _REAL_COST_LEDGER = [
     (715, 2068), (727, 2075), (728, 2078), (728, 2080), (751, 2015), (757, 2020),
     (760, 2023), (761, 2027), (889, 2146), (903, 2158), (972, 2291), (992, 2330),
@@ -263,12 +324,25 @@ _REAL_COST_LEDGER = [
 
 
 def test_budget_guard_is_a_true_upper_bound_on_real_ledger():
-    """护栏 = **上界**：22 条真实调用必须全部落在 [low, high] 内，且上界不虚胖（≤1.35×）。
+    """护栏 = **上界**：历史真实账（v1-v4，2 题代）必须全部落在 [low, high] 内。
 
-    历史缺陷：固定开销 900 → 低估 16%；改 1,250 仍低估 3.9%（2026-10-20 实测 20,237 vs
-    护栏 19,483）。用户批准的是「≤上界」，护栏一旦低于实耗即失效。
+    v5 起题集 2→4 题（输出增长），固定开销 1,700→2,500（低 1,300→1,800）——旧账只验
+    「上界覆盖」（实际消耗不得突破护栏）；**非胖断言（≤1.35×）为代际绑定**：2 题代的
+    旧账对 4 题新护栏必然"过松"，该项断言移入 `_REAL_COST_LEDGER_V6`（首个 v5 真实日后
+    逐条补账，见预登记 §14.4——不补账 = 护栏失去校准依据，属缺陷）。
     """
     for chars, actual in _REAL_COST_LEDGER:
+        est = L.estimate_tokens(chars)
+        # 只验上界：低界常数随 4 题上调后，2 题旧账的实耗本就低于新低界（代际差异，非缺陷）
+        assert actual <= est["high"], f"chars={chars} actual={actual} est={est}"
+
+
+def test_budget_guard_non_bloat_on_v6_ledger():
+    """v6 代真实账（2026-10-23 首批 6 条）：上界覆盖 + 不虚胖（≤1.35×实耗）。
+
+    实测结论：v6 题面加长后 fixed 须 2,750（旧 2,500 时实测 25,381 > 护栏 24,390，
+    低估 4%——§10.5 缺陷当场复标）；最紧一条 603278：4,271→4,521 vs 实耗 4,419。"""
+    for chars, actual in _REAL_COST_LEDGER_V6:
         est = L.estimate_tokens(chars)
         assert est["low"] <= actual <= est["high"], f"chars={chars} actual={actual} est={est}"
         assert est["high"] <= actual * 1.35, f"上界过松：chars={chars} {est['high']} vs {actual}"

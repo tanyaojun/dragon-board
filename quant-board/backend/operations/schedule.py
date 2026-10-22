@@ -30,6 +30,8 @@ _MIDDAY_LABEL_TIMEOUT_SECONDS = 1800
 # +60s 落库/拼装冗余。逐段先落库（jiuyan_theme_collect），超时被杀只丢未抓的源。
 # 实测 errCode=9 是短时限流，退避太短等于白打；见 theme-leader-nextday-preregistration §5.3
 _THEME_COLLECT_TIMEOUT_SECONDS = 480
+# KPL 采集子进程超时（最坏 11 调用 × (3s 间隔+请求) + 1 次退避 20s ≈ 80s，留 3 倍余量）
+_KPL_COLLECT_TIMEOUT_SECONDS = 240
 # 龙头级投喂（每日 1 call/龙头，实测 13 只 13 次调用 <2s/次 + 基线/取数）：1800s 冗余
 _THEME_LEADER_TIMEOUT_SECONDS = 1800
 _THEME_LEADER_SETTLE_TIMEOUT_SECONDS = 300   # 结局回填：纯读库+写字段
@@ -395,20 +397,18 @@ def _settle_recent_theme_leader_days(today: str, lookback: int = 5) -> list[dict
     return results
 
 
-def run_jiuyan_theme_collect_once(today: str | None = None, *,
+def run_theme_corpus_collect_once(today: str | None = None, *,
                                   dry_run: bool = False,
-                                  sources: tuple[str, ...] | None = None) -> dict[str, Any]:
-    """韭研题材/事件语料采集（L3，2026-10-20）：板块级催化原文 + 投资日历 + 事件时间轴。
+                                  collectors: tuple[str, ...] = ("kpl", "jiuyan")) -> dict[str, Any]:
+    """题材语料采集调度入口（2026-10-23 v4 换源：事件层唯一权威源=开盘啦）。
 
-    时点与分源（2026-10-20 额度实测后定）：
-    - 盘前 08:45：只要**事件日历**（`timeline_news,timeline_list`）——当日/未来 1-3 日既定事件；
-    - 收盘后 16:10：只要**板块催化正文**（`ai_industry`）——当日催化刷新。
-    理由：题材端点（`/jystock-app/api/v1/*`）有独立日额度，实测被探测烧穿后当天全灭
-    （errCode=9 但 msg 伪装「服务繁忙」）。故调度**拆分源**（每日 3 次调用而非 6 次）并叠加
-    调用计数护栏（`JIUYAN_THEME_DAILY_CALL_BUDGET`）。
+    - `kpl`：开盘啦题材事件（InfoList+新事件详情）+ 题材新闻流（Kword 标签）+ 前瞻日历
+      （`kpl_theme_collect`，日预算 `KPL_THEME_DAILY_CALL_BUDGET`，默认 20）；
+    - `jiuyan`：韭研产业树正文刷新（`jiuyan_theme_collect`，无 KPL 对应物，保留）。
 
-    门控 = 开关 → 交易日；多源互相独立，任一源失败只降级该源（§4.0 fail-visible）。
-    只落 `jiuyan_timeline` / `jiuyan_ai_industry`，不碰异动与打标链（advisory 步）。
+    时点（snapshot_collector/scheduler 挂链）：盘前 08:45 事件层（kpl）；
+    收盘后 16:10 kpl 刷新 + 韭研产业树正文。门控 = 开关 → 交易日；
+    各采集器互相独立，任一失败只降级该采集器（§4.0 fail-visible）。advisory 步。
     """
     today = today or datetime.now(_TZ).strftime("%Y-%m-%d")
     if dry_run:
@@ -424,35 +424,57 @@ def run_jiuyan_theme_collect_once(today: str | None = None, *,
     if not trading:
         return {"ok": True, "skipped": True, "reason": "non_trading_day", "date": today,
                 "calendarSource": cal_source}
-    try:
-        cmd = [sys.executable, "-m", "backend.operations.jiuyan_theme_collect", "--date", today]
-        if sources:
-            cmd += ["--sources", ",".join(sources)]
-        proc = subprocess.run(
-            cmd,
-            cwd=str(Path(__file__).resolve().parents[2]),
-            # Windows 默认 GBK 解码会把中文输出读崩（实测 UnicodeDecodeError），显式 utf-8
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=_THEME_COLLECT_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "date": today,
-                "error": {"code": "theme_collect_timeout",
-                          "message": f"timeout {_THEME_COLLECT_TIMEOUT_SECONDS}s"}}
-    if proc.returncode != 0:
-        return {"ok": False, "date": today,
-                "error": {"code": "theme_collect_failed",
-                          "message": (proc.stderr or proc.stdout or "")[-400:]}}
-    try:
-        result = json.loads(proc.stdout[proc.stdout.index("{"):])
-    except (ValueError, json.JSONDecodeError) as exc:
-        return {"ok": False, "date": today,
-                "error": {"code": "theme_collect_parse_failed", "message": str(exc)}}
-    return {"ok": bool(result.get("ok")), "date": today,
-            "timeline": result.get("timeline"), "industry": result.get("industry"),
-            "degraded": result.get("degraded") or [],
-            "callsUsedToday": result.get("callsUsedTodayAfter") or result.get("callsUsedToday"),
-            "skippedByBudget": result.get("skippedByBudget") or []}
+
+    results: dict[str, Any] = {}
+    ok_all = True
+    for collector in collectors:
+        if collector == "kpl":
+            cmd = [sys.executable, "-m", "backend.operations.kpl_theme_collect", "--date", today]
+            timeout = _KPL_COLLECT_TIMEOUT_SECONDS
+            parse_key = "kpl"
+        elif collector == "jiuyan":
+            cmd = [sys.executable, "-m", "backend.operations.jiuyan_theme_collect", "--date", today]
+            timeout = _THEME_COLLECT_TIMEOUT_SECONDS
+            parse_key = "jiuyan"
+        else:
+            results[collector] = {"ok": False, "error": {"code": "unknown_collector"}}
+            ok_all = False
+            continue
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(Path(__file__).resolve().parents[2]),
+                # Windows 默认 GBK 解码会把中文输出读崩（实测 UnicodeDecodeError），显式 utf-8
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            results[parse_key] = {"ok": False,
+                                  "error": {"code": "theme_collect_timeout",
+                                            "message": f"timeout {timeout}s"}}
+            ok_all = False
+            continue
+        if proc.returncode != 0:
+            results[parse_key] = {"ok": False,
+                                  "error": {"code": "theme_collect_failed",
+                                            "message": (proc.stderr or proc.stdout or "")[-400:]}}
+            ok_all = False
+            continue
+        try:
+            result = json.loads(proc.stdout[proc.stdout.index("{"):])
+        except (ValueError, json.JSONDecodeError) as exc:
+            results[parse_key] = {"ok": False,
+                                  "error": {"code": "theme_collect_parse_failed", "message": str(exc)}}
+            ok_all = False
+            continue
+        results[parse_key] = {"ok": bool(result.get("ok")),
+                              "degraded": result.get("degraded") or [],
+                              "callsUsedToday": result.get("callsUsedTodayAfter")
+                              or result.get("callsUsedToday"),
+                              "skippedByBudget": result.get("skippedByBudget") or [],
+                              "stats": result}
+        ok_all = ok_all and bool(result.get("ok"))
+    return {"ok": ok_all, "date": today, "collectors": results}
 
 
 def _run_jiuyan_label_step(today: str, dry_run: bool = False) -> dict[str, Any]:

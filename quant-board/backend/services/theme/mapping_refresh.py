@@ -41,6 +41,10 @@ _LONGHUVIP_PARAMS = {
     "Token": "df9cadb87bbba7d04e9fcbaa2aa229b3",
 }
 
+# 开盘啦共用鉴权身份（UserID/DeviceID/Token）的**公共出口**：kpl_theme_fetch 等同账号
+# 体系端点从这里取，禁止另拷一份凭据常量（单一事实源；Token 失效只改这一处）。
+KPL_APP_BASE_PARAMS = dict(_LONGHUVIP_PARAMS)
+
 # ── 限速 ────────────────────────────────────────────────────────────────────
 _BATCH_SIZE = 10
 _BATCH_DELAY_SECONDS = 0.5

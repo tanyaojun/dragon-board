@@ -1714,12 +1714,16 @@ def test_theme_evidence_lines_top3_boards():
               "公告": [{"code": "600003", "name": "C"}]}
     db = FakeDb({
         "jiuyan_action": FakeCol([_final_multi(_D0, boards)]),
-        "jiuyan_timeline": FakeCol([
-            {"_id": "t1", "date": "2026-10-01", "title": "英伟达GTC大会",
+        # v4 换源：事件层 = 开盘啦题材事件（kpl_topic_events）
+        "kpl_topic_events": FakeCol([
+            {"_id": "2026-09-30:2499", "eventId": "2499", "day": "2026-09-30",
+             "title": "英伟达GTC大会来了！黃仁勋重磅演讲",
              "content": "黄仁勋发表主题演讲，发布物理AI机器人平台",
-             "grade": 5, "themes": ["机器人"], "firstSeenDate": "2026-09-29",
+             "source": "开盘啦", "hotVal": 46417, "detailFetched": True,
              "lastFetchDate": "2026-09-30"},
         ]),
+        "kpl_theme_news": FakeCol([]),
+        "kpl_theme_calendar": FakeCol([]),
         "jiuyan_ai_industry": FakeCol([
             {"_id": "i1", "code": "n1", "name": "机器人", "level": 2,
              "content": "2026年9月25日，特斯拉已将Optimus人形机器人产量扩大到约10倍",
@@ -1729,10 +1733,10 @@ def test_theme_evidence_lines_top3_boards():
     })
     lines = relay.theme_evidence_lines(db, _D0)
     text = "\n".join(lines)
-    assert "题材证据（韭研产业树+投资日历" in lines[0] and "top3" in lines[0]
+    assert "题材证据（韭研产业树+开盘啦事件层" in lines[0] and "top3" in lines[0]
     assert "取数日 2026-09-30" in lines[0]
     assert "板块级催化原文（韭研产业树「机器人」" in text
-    assert "未来 3 日既定事件" in text and "英伟达GTC大会" in text
+    assert "当日题材事件（开盘啦题材事件" in text and "英伟达GTC大会" in text
     # 公告=粗分桶（NOT_A_THEME）→ 未映射如实标注
     assert "未映射" in text and "不代表无催化" in text
 

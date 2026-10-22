@@ -22,13 +22,18 @@ def test_question_set_frozen_hash_and_versions():
     """题集/原料代际戳冻结：任何判据字面改动都必须显式换代（跨代不可比）。
 
     代际史：v1 = 2026-10-20（hash `ff010c50200e`，见预登记 §4.2；13 条日标签保留为 v1 代）；
-    v2 = 2026-10-20 晚（用户裁决「证据缺失改确定性门」→ 题面加规则④ + `apply_evidence_gate`），
-    hash 随之换代——**跨代标签不得混评**（评估脚本按版本分组）。
+    v2 = 2026-10-20 晚（确定性证据门，hash `985c529fded7`）；v3 = 2026-10-22 归因修复
+    （L2 板内解析 + 门收窄，hash `b8c00651de47`）；v4 = 2026-10-23 换源（事件层唯一权威源
+    =开盘啦：题材事件/新闻(Kword)/日历，韭研 timeline 退役，hash `56dbb0709335`）——
+    **跨代标签不得混评**（评估按版本分组）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v2"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-20b"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "985c529fded7"
-    assert A.THEME_LEADER_KEYS == ("leader_nextday_continue", "catalyst_stage")
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v6"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-23c"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "1d098c87e07e"
+    # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
+    # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
+    assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
+                                   "leader_nextday_continue", "leader_headroom")
     for key in A.THEME_LEADER_KEYS:
         q = A.QUESTIONS_THEME_LEADER[key]
         assert q["type"] == "choice" and q["instructions"] and q["criteria"]
@@ -155,9 +160,45 @@ def test_evidence_gate_passes_through_when_evidence_present():
 
 
 def test_gate_holds_when_previously_gated_answer_reruns():
-    """幂等/重跑安全：已是 insufficient 的答案再过门不报错、不丢原因。"""
+    """幂等/重跑安全：已是 insufficient 的答案再过门不报错、不重复覆盖（forcedKeys 不含它）。"""
     out, gate = A.apply_evidence_gate(
         {"leader_nextday_continue": {"type": "choice", "choice": "insufficient"}},
         {"evidenceMissing": True, "evidenceMissingReason": "no_content_no_event"})
     assert gate["applied"] is True and gate["modelChoice"] == "insufficient"
-    assert out["leader_nextday_continue"]["gateReason"] == "no_content_no_event"
+    assert out["leader_nextday_continue"]["choice"] == "insufficient"
+    # 模型已自判不足的题不重复覆盖（forcedKeys 不含它）；未作答的其余三题补强制 insufficient
+    assert gate["forcedKeys"] == ["theme_speculation_depth", "theme_continuation",
+                                  "leader_headroom"]
+
+
+def test_gate_forces_all_four_questions_in_v5():
+    """v5 四题全门：证据缺失时四题全部强制 insufficient（模型已自判不足的题不重复覆盖）；
+    forcedKeys 留痕，原答在 modelAnswers 审计。"""
+    answers = {"leader_nextday_continue": {"choice": "mid_45_65",
+                                          "probabilities": {"mid_45_65": 0.55}},
+               "theme_speculation_depth": {"choice": "fermenting"},
+               "theme_continuation": {"choice": "insufficient"},
+               "leader_headroom": {"choice": "space_1"}}
+    out, gate = A.apply_evidence_gate(answers, {"evidenceMissing": True,
+                                                "evidenceMissingReason": "industry_tree_unmapped"})
+    assert gate["forcedKeys"] == ["theme_speculation_depth", "leader_nextday_continue",
+                                  "leader_headroom"], "模型已自判 insufficient 的题不重复覆盖"
+    assert out["theme_speculation_depth"]["choice"] == "insufficient"
+    assert out["leader_headroom"]["choice"] == "insufficient"
+    assert out["theme_continuation"]["choice"] == "insufficient", "原判保留"
+    assert out["leader_nextday_continue"]["probabilities"] == {"insufficient": 1.0}
+    assert gate["modelChoice"] == "mid_45_65"
+
+
+def test_gate_reason_labels_cover_v3_and_legacy():
+    """门原因标签双代覆盖：v3 新原因（industry_tree_unmapped）与 v2 历史档原因
+    （board_unmapped，10-08~10-22 落库文档回读用）都必须有可读标签，不得只留一个。"""
+    for reason in ("corpus_not_collected", "board_unmapped", "industry_tree_unmapped",
+                   "no_content_no_event"):
+        assert reason in A.GATE_REASON_LABELS and A.GATE_REASON_LABELS[reason]
+    out, gate = A.apply_evidence_gate(
+        {"leader_nextday_continue": {"type": "choice", "choice": "mid_45_65",
+                                     "probabilities": {"mid_45_65": 0.55}}},
+        {"evidenceMissing": True, "evidenceMissingReason": "industry_tree_unmapped"})
+    assert gate["applied"] is True and gate["reason"] == "industry_tree_unmapped"
+    assert "产业树未映射" in gate["label"]

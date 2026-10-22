@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """题材层「板块龙头隔日连板」投喂 runner（2026-10-20，L3 语料落地后的判据层首版）。
 
-定位：每条投喂 = **当日一个板块的龙头**（不是每只涨停股）。目标题 = 次一交易日该龙头是否继续
+定位：每条投喂 = **当日一个板块的龙头**（不是每只涨停股）。目标题（v5 四题）= 题材炒作深度/题材延续性/次日该龙头是否继续
 封板，证据 = 结构事实（触板−炸板二分 + 真连板 + 封板时间 + 板块家数 + 跟风/昨日延续）
-+ 同桶历史基准率 + L3 题材证据块（韭研产业树催化原文 + 投资日历前瞻事件）。
++ 同桶历史基准率 + 题材证据块（韭研产业树催化原文 + 开盘啦题材事件/新闻/日历）。
 
 花 token 的口子只有一个：`run()` 里的 `_dispatch_jev`；`--dry-run` / `--estimate` 全程零调用，
 用于人工过目「将来真正下发的文本」与成本估算。真实开火必须 `--confirm-budget`
@@ -67,9 +67,13 @@ BASELINE_MIN_SAMPLES = 8          # 组合桶最小样本（与 ammo.baseline_li
 #   历史教训：第一版固定开销 900（估算 24,460 vs 实耗 29,014，-16%）→ 改 1,250
 #   仍低估（10-20：估算 19,483 vs 实耗 20,237，-3.9%）。**按「护栏是上界」重新定标**：
 #   上界 = 1,700 + 1.05×chars（对 22 条全部覆盖，余量 +18~21%）；下界 = 1,300 + 0.80×chars。
+# v5 题集 2→4 题（深度/延续性/概率/空间）：输出随题数增长，固定开销按比例上调。
+# v6 题面加长（insufficient 边界收紧措辞，instructions 增 ~400 字）：2026-10-23 v6 首批
+# 实测单条 residual（usage−1.05×chars）最高 2,682 > 旧 2,500，护栏低估 4%（§10.5 缺陷，
+# 实测 25,381 > 护栏 24,390）——上调至 2,750 复标（test_budget_guard_* 钉住）。
 TOKENS_PER_CHAR_LOW, TOKENS_PER_CHAR_HIGH = 0.80, 1.05
-TOKENS_FIXED_LOW = 1300
-TOKENS_FIXED_HIGH = 1700
+TOKENS_FIXED_LOW = 1800
+TOKENS_FIXED_HIGH = 2750
 # 连续 N 次「失败且零 usage」→ 判通道不可达并中止（单次抖动仍继续，不误杀）
 _TRANSPORT_FAIL_ABORT = 2
 
@@ -119,9 +123,10 @@ def corpus_line(db: Any, date: str, window_days: int = 3) -> str:
     if not state.get("ok"):
         return (f"题材语料：未采集（最新采集日 {state.get('latestFetchDate') or '无'}，"
                 f"日 {date} 无可用题材证据）——不得据结构特征猜测题材催化")
-    parts = [f"题材语料：韭研产业树 + 投资日历，采集日 {state.get('latestFetchDate')}"
+    parts = [f"题材语料：韭研产业树 + 开盘啦题材事件/新闻/日历，采集日 {state.get('latestFetchDate')}"
              f"（{'当日刷新' if not state.get('stale') else '非当日，可能滞后'}）",
-             f"{state.get('timeline') or 0} 条事件 / {state.get('industry') or 0} 个产业节点"]
+             f"{state.get('industry') or 0} 个产业节点 / 题材事件 {state.get('topic') or 0} · "
+             f"新闻 {state.get('news') or 0} · 日历 {state.get('calendar') or 0} 条"]
     return "；".join(parts)
 
 
@@ -133,7 +138,11 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
 
     if market_line is None:
         market_line = market_facts_line(db, date, dataset_id)
-    block = digest.build_theme_evidence_block(db, board_name=row["board"], date=date)
+    # boardCodes 缺失/为空时传 None（空集会把 L2 全过滤掉，属危险默认；显式回退全量口径+披露）
+    sealed = frozenset(row.get("boardCodes") or ())
+    block = digest.build_theme_evidence_block(db, board_name=row["board"], date=date,
+                                              leader_code=str(row.get("code") or ""),
+                                              sealed_codes=sealed or None)
     narrative = build_leader_narrative(
         date=date,
         market_line=market_line,
@@ -167,12 +176,14 @@ def _label_one(db, col, date: str, row: dict, built: dict,
     env, ms = _dispatch_jev(narrative, questions)
     parsed = parse_jev_response(env, ms, expected_keys=set(questions))
     raw_answers = parsed.get("answers") or {}
-    # v2 确定性门：证据缺失（语料未采集/板块未映射/无正文且无事件）→ 概率题强制 insufficient，
+    # v2 确定性门（v5 起四题全门）：证据缺失（语料未采集/板块未映射/无正文且无事件）→ 判定题强制 insufficient，
     # 模型原答原样存 `modelAnswers`/`gate`（不丢真实输出；避免"无证据"与"模型上调"混在一批数字里）。
     # 只在调用成功时过门：调用 degraded（无答案）走原路径，不得把"没答上来"写成 insufficient。
     answers, gate = apply_evidence_gate(raw_answers, built.get("evidence") or {})         if parsed["ok"] else (raw_answers, {"applied": False, "reason": None})
     cont = answers.get("leader_nextday_continue") or {}
-    stage = answers.get("catalyst_stage") or {}
+    depth = answers.get("theme_speculation_depth") or {}
+    contn = answers.get("theme_continuation") or {}
+    head = answers.get("leader_headroom") or {}
     doc = {
         "_id": f"{date}:{row['code']}", "origin": ORIGIN, "tradingDate": date,
         "code": row["code"], "name": row.get("name"), "board": row["board"],
@@ -190,6 +201,9 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         "evidenceState": built["evidence"]["state"],
         "evidenceIndustry": (built["evidence"].get("industry") or {}).get("name"),
         "evidenceEventTitles": [e.get("title") for e in built["evidence"].get("events") or []],
+        # v3/v4：L2 板内解析可用性 + Kword 题材标签（开盘啦新闻流），前端分层展示用
+        "evidenceBoardResolved": bool(built["evidence"].get("boardResolved")),
+        "evidenceKwordTags": list(built["evidence"].get("kwordTags") or []),
         "evidenceMissing": bool((built.get("evidence") or {}).get("evidenceMissing")),
         "evidenceMissingReason": (built.get("evidence") or {}).get("evidenceMissingReason"),
         "narrative": narrative, "questionsRaw": questions,
@@ -198,8 +212,10 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         "gate": gate,                  # {applied, reason, label, modelChoice, modelProbabilities}
         "leaderNextdayContinue": cont.get("choice"),
         "leaderNextdayProbabilities": cont.get("probabilities"),
-        "catalystStage": stage.get("choice"),
-        "catalystStageProbabilities": stage.get("probabilities"),
+        # v5：题材层三层判断（catalystStage 已被深度题取代；旧代文档仍带 catalystStage 字段）
+        "themeSpeculationDepth": depth.get("choice"),
+        "themeContinuation": contn.get("choice"),
+        "leaderHeadroom": head.get("choice"),
         "status": "ok" if parsed["ok"] else "degraded",
         "model": parsed.get("model"), "usage": parsed.get("usage"), "latencyMs": ms,
         "errorCode": parsed.get("errorCode"), "errorDetail": parsed.get("errorDetail"),
@@ -237,6 +253,17 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         # 单只重跑（页面【重跑】按钮）：只重建/调用命中的龙头，tokens 成本 ≈1 次调用
         # （2026-10-20 加，配合 POST /theme-leaders/rerun；不过滤会整日重跑烧 30K+）
         rows = [r for r in rows if r["code"] in codes]
+    # v3 门控收紧（用户 2026-10-22 裁决）：非题材粗分桶（公告/其他/新股/大消费/大农业/
+    # 医药医疗/医疗医药…）**不纳入 jev 判定范围**。归因实测：这些桶门控率 100%、
+    # 模型原答 49/49 自判 insufficient（均值 1.00）——调用纯属浪费 token。
+    # v5 起排除行**不落库不显示**（用户 2026-10-23 裁决：换代后旧字段/空档位行污染前端；
+    # 排除事实只留运行日志），库内只有真实判定的 ok/degraded 行。
+    excluded = [r for r in rows if digest.normalize_name(r["board"]) in digest.NOT_A_THEME]
+    excluded_boards = sorted({r["board"] for r in excluded})
+    if excluded:
+        print(f"{date} 排除非题材粗分桶 {len(excluded)} 只龙头（{'、'.join(excluded_boards)}）"
+              f"——不纳入 jev 判定（v3 收紧；v5 起不落库不显示，仅日志留痕）")
+        rows = [r for r in rows if digest.normalize_name(r["board"]) not in digest.NOT_A_THEME]
     rows_baseline, baseline_meta = baseline_rows_for(db, date, dataset_id=dataset_id)
     col = db[COLLECTION]
     done = {str(d.get("code")) for d in col.find(
@@ -257,6 +284,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     tokens = sum(b["estimatedTokens"]["budgetGuard"] for b in built_all)
     plan = {"ok": True, "date": date, "leaders": len(rows),
             "leadersTotal": plan_leaders_total, "todo": len(todo),
+            "excludedNotTheme": len(excluded), "excludedBoards": excluded_boards,
             "alreadyLabeled": len(already),
             "questionSetVersion": QUESTION_SET_VERSION_THEME_LEADER,
             "questionSetHash": QUESTION_SET_HASH_THEME_LEADER,

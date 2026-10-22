@@ -327,16 +327,33 @@ describe('JevNarrativePanel 题材龙头页签（v2 题目集投喂可见性，2
     expect(panelScriptSource()).toContain('fetchHotlistJevThemeLeaders')
   })
 
-  test('落库口径与模型原答双显：被证据门覆盖时必须两者都可见', () => {
+  test('表格删「模型原答」「同桶基线」两列；原答仅在展开行门覆盖注记里审计（2026-10-22 用户裁决）', () => {
     const source = panelSource()
-    // 展示侧：模型原答列 + 覆盖标记 + 门原因
-    expect(source).toContain('模型原答')
-    expect(source).toContain('tl-overridden')
-    expect(source).toContain('tl-gate-tag')
+    const ths = source.match(/<th>[^<]*<\/th>/g) ?? []
+    expect(ths.some(t => t.includes('模型原答'))).toBe(false)
+    expect(ths.some(t => t.includes('同桶基线'))).toBe(false)
+    expect(source).not.toContain("row.baselineKey ?? '-'")
+    // 门原因与 v3 新原因仍可见；展开行门覆盖注记保留原答审计
     expect(source).toContain('THEME_GATE_NAMES')
-    // 只显示一个都是漂移：两个字段都必须被模板引用
+    expect(source).toContain('industry_tree_unmapped')
     expect(source).toContain('row.modelChoice')
     expect(source).toContain('row.choice')
+  })
+
+  test('v5 四题列结构：题材深度/延续性/空间三列齐备且明细跨 14 列（review 2026-10-23）', () => {
+    const source = panelSource()
+    expect(source).toContain('<th>题材深度</th>')
+    expect(source).toContain('<th>延续性</th>')
+    expect(source).toContain('<th>空间</th>')
+    expect(source).toContain('THEME_HEAD_NAMES')
+    expect(source).toContain('row.leaderHeadroom')
+    expect(source).toContain('colspan="14"')
+  })
+
+  test('v5 起排除股不落库不显示（用户 2026-10-23 裁决）：面板无 skipped 分支', () => {
+    const source = panelSource()
+    expect(source).not.toContain("row.status === 'skipped'")
+    expect(source).not.toContain('row.skippedReason')
   })
 
   test('结局未封不得显示为「未续」：null 单独一档', () => {

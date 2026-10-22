@@ -9,8 +9,9 @@
 - 点行 = 选中该日（KPI 联动），再点取消；
 - 左侧三角 = 展开/收敛 jev 调用日志卡（stopPropagation，不动选中态）。
 
-展示硬约束（AGENTS §1.2-5 / §4.0）：落库口径与模型原答双显 / 结局 null=未封 /
-回填样本标橙 / 读口异常 ≠ 无数据。
+展示硬约束（AGENTS §1.2-5 / §4.0）：落库口径为准，模型原答仅留展开卡审计
+（2026-10-22 用户裁决删表格「模型原答」「同桶基线」两列——对用户无参考价值）/
+结局 null=未封 / 回填样本标橙 / 读口异常 ≠ 无数据 / 多代际黄牌已结项（2026-10-22）。
 
 本测试是**静态源码守卫**（无浏览器、零网络、零 jev 调用，AGENTS §1.2-7）。
 """
@@ -102,10 +103,27 @@ def test_rows_span_range_with_date_column(html: str) -> None:
 # ── 展示硬约束 ──
 
 def test_gated_row_shows_model_answer_and_reason(html: str) -> None:
+    """2026-10-22 改版：表格删「模型原答」「同桶基线」两列（用户裁决：完全看不懂、
+    无参考价值）；原答保留在展开的调用日志卡 JSON 里供审计；门原因仍可见。"""
+    rows_fn = _fn(html, "tlRenderRows")
+    assert "模型原答" not in rows_fn and "同桶基线" not in rows_fn
     row = _fn(html, "tlRowHtml")
-    assert "r.modelChoice" in row and "r.choice" in row
-    assert "tl-gate" in row
+    assert "r.modelChoice" not in row, "表格行不得再拼模型原答单元格"
+    assert "r.baselineKey" not in row, "表格行不得再拼同桶基线单元格"
+    assert "colspan=\"14\"" in row, "展开明细行跨列数须跟表头（14）"
+    # 门/排除原因仍可见（档位/证据列）+ 展开卡里保留原答审计
     assert "TL_GATE_CN" in html
+    assert "r.modelChoice" in _fn(html, "tlEntryResp")
+
+
+def test_v5_excluded_rows_never_rendered(html: str) -> None:
+    """v5（用户 2026-10-23 裁决）：排除股不落库 → 前端无 skipped 分支/样式残留；
+    未纳入语义只存在于日志层（run 的排除打印），不入页面。"""
+    row = _fn(html, "tlRowHtml")
+    detail = _fn(html, "tlDetailHtml")
+    for fn_src in (row, detail):
+        assert "r.status === 'skipped'" not in fn_src, "不得再有排除行分支（排除股不入库）"
+    assert "tl-skipped" not in html
 
 
 def test_outcome_three_states_never_fake_broken(html: str) -> None:
@@ -116,9 +134,11 @@ def test_outcome_three_states_never_fake_broken(html: str) -> None:
 
 
 def test_backfill_and_mixed_generation_banner(html: str) -> None:
+    """回填警示保留；多代际黄牌已结项（2026-10-22 用户裁决：多日实测后确认
+    历史档不回改是设计内常态，行级版本徽标已可见，长期挂黄牌无增量信息）。"""
     banner = _fn(html, "tlRenderBanner")
     assert "回填" in banner and "未来信息" in banner
-    assert "跨代不可比较" in banner
+    assert "跨代不可比较" not in banner, "多代际警示已结项，不得回潮"
     assert "tl-backfill" in html
 
 
@@ -268,3 +288,21 @@ def test_silent_background_refresh(html: str) -> None:
     banner = _fn(html, "tlRenderBanner")
     assert "d.error && !(d.rows || []).length" in banner or "bg" in fetch, \
         "后台刷新失败保留旧数据可见（不清空列表）"
+
+
+# ── 回归（2026-10-23 截图实测列错位）：行拼装丢 contCell → 表头 13 列/行 12 格 ──
+def test_header_and_row_column_counts_match(html: str) -> None:
+    """表头加「延续性」列后，tlRowHtml 必须同步发出 13 格——少一格后续列整体左移
+    （延续性空、证据/结局错位一格）。"""
+    # 表头块限定在 tlRenderRows 函数体内（避免匹配到页面其他表的「结局」列）
+    block = _fn(html, "tlRenderRows")
+    import re as _re
+    n_th = len(_re.findall(r"th\('[^']+',\s*'[a-zA-Z]+'\)", block)) + block.count("<th>")
+    row = _fn(html, "tlRowHtml")
+    # 展开明细行的 colspan 单独算：数据行 14 格（含空间列）+ 明细跨 14 列
+    n_td = row.count("<td") - row.count("<td colspan")
+    assert n_th == 14, f"表头应 14 列，实为 {n_th}"
+    assert n_td == 14, f"数据行应 14 格，实为 {n_td}（丢格 → 列错位）"
+    assert 'colspan="14"' in row, "展开明细行必须跨 14 列（跟表头同步）"
+    assert "+ contCell +" in row or "+ contCell" in row, "延续性单元格必须拼进行"
+    assert "+ headCell +" in row, "空间列（leaderHeadroom）必须拼进行——v5/v6 核心产出不得只在明细 JSON 里可见"

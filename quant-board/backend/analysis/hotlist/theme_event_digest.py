@@ -1,15 +1,22 @@
 # -*- coding: utf-8 -*-
-"""题材证据块（L3 消费层，2026-10-20）。
+"""题材证据块（L3 消费层；2026-10-23 v4 换源）。
 
-把 `jiuyan_timeline`（未来事件日历）+ `jiuyan_ai_industry`（板块级催化原文 + 热度）压成
-**一段可投喂给 jev 的确定性证据块**，供「板块龙头隔日连板概率」题集使用（尚未接入打标链，
-先交证据层 + 预览脚本，判据变更须预登记，见 docs/hotlist-jev/theme-leader-nextday-preregistration-20261020.md）。
+把 **韭研产业树**（板块级催化原文 + 热度，`jiuyan_ai_industry`）+ **开盘啦题材语料**
+（题材事件 `kpl_topic_events` / 题材新闻 `kpl_theme_news`（Kword 题材标签）/ 前瞻日历
+`kpl_theme_calendar`）+ **韭研异动板内解析**（L2，`jiuyan_action`）压成一段可投喂给
+jev 的确定性证据块，供「板块龙头隔日连板概率」题集使用。
+
+**换源裁决（2026-10-23，方案 A）**：事件层唯一权威源 = 开盘啦；韭研 timeline（投资日历+
+早报）退役（重叠实测：KPL 日历是韭研超集、事件粒度更强、新闻流为韭研所无——
+见 `docs/hotlist-jev/theme-corpus-extra-sources-survey-20261023.md` §8）。
+产业树与板内解析无 KPL 对应物，保留韭研。每类语料一个权威源。
 
 设计要点：
-- **确定性、无模型**：只做名字归一 + 包含匹配 + 截断，不做语义猜测；
+- **确定性、无模型**：只做名字归一 + 包含匹配 + 共享子串锚（≥2 字含汉字）+ 截断，
+  不做语义猜测；Kword 题材标签是开盘啦现成的「事件→题材」关联，优先消费；
 - **fail-visible**：语料未采集 → 明说"未采集"；板块未映射 → 明说"未映射"；无未来事件 →
   明说"无（不代表无催化）"。绝不用 T-1 数据或"无催化"冒充；
-- 每个事实带**来源与时间戳**（热度、内容更新日、事件录入日），让模型能判断新旧；
+- 每个事实带**来源与时间戳**（来源媒体、热度、事件日期），让模型能判断新旧；
 - 文本长度可控（`content_chars`/`max_events`），便于 token 预算。
 """
 from __future__ import annotations
@@ -17,13 +24,14 @@ from __future__ import annotations
 import re
 
 from backend.operations import jiuyan_theme_store as S
+from backend.operations import kpl_theme_store as KS
 
-BLOCK_HEADER = "【题材证据 · 韭研产业树 + 投资日历】"
+BLOCK_HEADER = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】"
 CONTENT_CHARS = 260
 EVENT_CHARS = 200
 MAX_EVENTS = 3
-# 「早报/复盘」是当日事件清单（含题材归因短句），不是既定日程：单独一节展示
-BRIEFING_TITLES = ("早报", "盘前必读", "复盘", "收盘必读")
+EVENT_WINDOW_PAST_DAYS = 3      # 事件/新闻回看窗口（发酵中）
+NEWS_WINDOW_PAST_DAYS = 2
 
 # 板块名归一：去掉这些后缀/噪声，便于与产业树名字对齐（只做确定性别名，不做语义泛化）
 _SUFFIXES = ("概念", "板块", "指数", "行业", "主题", "题材", "产业链", "链")
@@ -44,8 +52,9 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "AI安全": ("网络安全",),
     "出版传媒": ("传媒出版",),
 }
-# 明确**不做**映射的粗分桶（不是题材，映射过去会伪造板块催化）：
-NOT_A_THEME = ("公告", "新股", "其他", "ST板块", "大消费", "大农业", "医药医疗")
+# 明确**不做**映射的粗分桶（不是题材，映射过去会伪造板块催化）；「医疗医药」与
+# 「医药医疗」为韭研同一粗分桶的字序变体（2026-10-22 归因实测漏收，有据收录）。
+NOT_A_THEME = ("公告", "新股", "其他", "ST板块", "大消费", "大农业", "医药医疗", "医疗医药")
 # 产业树里不是题材的兜底节点名（名字命中即跳过，避免「其他」→「外贸-其他」这种空催化）
 GENERIC_NODE_NAMES = ("其他", "杂项", "其它")
 
@@ -106,6 +115,50 @@ def match_industry(nodes: list[dict], board_name: str | None) -> dict:
             "candidates": [n.get("name") for n in pool[:5]]}
 
 
+# ── 确定性关联锚（v3 引入，v4 沿用；早报段落匹配的通用化） ─────────────────
+# 背景：完整板块名子串匹配不上语义同源的事件（「俄乌重建」vs「俄乌和平」）。
+# 规则：①含式命中（关键词 ⊆ 归一文本）；②最长公共连续子串 ≥2 字且含 ≥1 汉字
+# （纯拉丁/数字锚如「AI」不得关联）。关联方式逐条显式披露，不做语义泛化、不加猜测别名。
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _shared_anchor(a: str, b: str) -> str | None:
+    """最长公共连续子串；≥2 字且含 ≥1 汉字才算关联锚（"AI" 这类纯拉丁锚不得关联）。"""
+    if not a or not b:
+        return None
+    best = ""
+    for i in range(len(a)):
+        for j in range(len(b)):
+            k = 0
+            while i + k < len(a) and j + k < len(b) and a[i + k] == b[j + k]:
+                k += 1
+            if k > len(best):
+                best = a[i:i + k]
+    return best if len(best) >= 2 and _CJK_RE.search(best) else None
+
+
+def _anchor_hit(base: str, keys: list[str], text: str,
+                anchor_text: str | None = None) -> dict | None:
+    """确定性关联：含式命中 → 共享子串锚。`anchor_text` 缺省用 text（长文本先给短标题）。"""
+    if not base or not text:
+        return None
+    norm_text = normalize_name(text)
+    if norm_text:
+        for k in keys:
+            if k and (k in norm_text or (anchor_text and k in normalize_name(anchor_text))):
+                return {"how": "包含",
+                        "anchor": k if len(k) <= len(base) else base}
+    anchor = _shared_anchor(base, normalize_name(anchor_text or text))
+    if anchor:
+        return {"how": f"共享子串「{anchor}」", "anchor": anchor}
+    return None
+
+
+def _clip(text: str, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    return text if len(text) <= limit else text[:limit] + f"…[截断，原文 {len(text)} 字]"
+
+
 def _days_between(a: str | None, b: str | None) -> int | None:
     from datetime import datetime
     try:
@@ -114,80 +167,218 @@ def _days_between(a: str | None, b: str | None) -> int | None:
         return None
 
 
-def _clip(text: str, limit: int) -> str:
-    text = re.sub(r"\s+", " ", str(text or "")).strip()
-    return text if len(text) <= limit else text[:limit] + f"…[截断，原文 {len(text)} 字]"
+def board_snapshot(db, date: str, board_name: str | None,
+                   leader_code: str | None = None,
+                   sealed_codes: frozenset[str] | set[str] | None = None) -> dict | None:
+    """韭研异动 `{date}:final` 里该板块的分组与逐股解析（L2 层，原料在库零成本）。
 
-
-def is_briefing(ev: dict) -> bool:
-    """当日事件清单（早报/复盘）而非既定日程。"""
-    title = (ev.get("title") or "").strip()
-    return title in BRIEFING_TITLES or (ev.get("content") or "").startswith("1、热点事件")
-
-
-def match_events(events: list[dict], board_name: str | None,
-                 *, tags: tuple[str, ...] = ()) -> list[dict]:
-    """事件 → 板块：标题/正文/题材标签命中关键词即算（确定性包含匹配）。"""
-    keys = board_keywords(board_name) + [t for t in tags if t]
-    if not keys:
-        return []
-    out = []
-    for ev in events or []:
-        haystack = f"{ev.get('title') or ''} {ev.get('content') or ''} " \
-                   f"{' '.join(ev.get('themes') or [])}"
-        if any(k and k in haystack for k in keys):
-            out.append(ev)
-    return out
+    `sealed_codes` 给出时只保留封板名单（与结构行 boardN 同口径；不把触板未封混进
+    L2 计数，免得同篇叙事出现两个不同的「板内只数」）；未给时为韭研异动全量口径
+    （预览脚本用，段内披露口径）。
+    """
+    try:
+        doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
+    except Exception:   # noqa: BLE001 读不到就如实当无分组，不伪造
+        return None
+    for field in doc.get("fields") or []:
+        if str(field.get("name") or "") == str(board_name or ""):
+            stocks = [s for s in (field.get("stocks") or []) if s]
+            if sealed_codes is not None:
+                stocks = [s for s in stocks
+                          if str(s.get("code") or "")[-6:] in sealed_codes]
+            return {"count": len(stocks), "stocks": stocks,
+                    "sealedFilter": sealed_codes is not None}
+    return None
 
 
 def corpus_state(db, *, date: str) -> dict:
-    """语料新鲜度（fail-visible 用）：最近一次采集日、条目数。"""
-    tl_latest = None
-    ind_latest = None
-    tl_n = ind_n = 0
+    """语料新鲜度（fail-visible 用）：产业树 + KPL 三集合的计数与最近采集日。"""
     try:
-        tl_n = db[S.COLLECTION_TIMELINE].count_documents({})
         ind_n = db[S.COLLECTION_INDUSTRY].count_documents({})
-        row = db[S.COLLECTION_TIMELINE].find_one(
+        kpl = KS.corpus_stats(db)
+        latest = kpl.get("latestFetchDate")
+        row = db[S.COLLECTION_INDUSTRY].find_one(
             {}, {"lastFetchDate": 1}, sort=[("lastFetchDate", -1)]) or {}
-        tl_latest = row.get("lastFetchDate")
-        row2 = db[S.COLLECTION_INDUSTRY].find_one(
-            {}, {"lastFetchDate": 1}, sort=[("lastFetchDate", -1)]) or {}
-        ind_latest = row2.get("lastFetchDate")
+        ind_latest = row.get("lastFetchDate")
+        if ind_latest and (latest is None or ind_latest > latest):
+            latest = ind_latest
     except Exception as exc:  # noqa: BLE001 读不到就如实报未采集，不伪造
-        return {"ok": False, "error": str(exc), "timeline": 0, "industry": 0,
+        return {"ok": False, "error": str(exc), "industry": 0,
                 "latestFetchDate": None, "stale": True}
-    latest = max([d for d in (tl_latest, ind_latest) if d] or [None]) if (tl_latest or ind_latest) else None
-    return {"ok": bool(latest), "timeline": tl_n, "industry": ind_n,
+    return {"ok": bool(latest), "industry": ind_n,
+            "topic": (kpl.get("topic") or {}).get("count"),
+            "news": (kpl.get("news") or {}).get("count"),
+            "calendar": (kpl.get("calendar") or {}).get("count"),
             "latestFetchDate": latest, "stale": latest != date, "date": date}
 
 
-def build_theme_evidence_block(db, *, board_name: str, date: str,
-                              window_days: int = 3, content_chars: int = CONTENT_CHARS,
-                              max_events: int = MAX_EVENTS) -> dict:
-    """生成题材证据块。返回 {text, industry, events, state}（text 直接可拼进叙事）。"""
-    state = corpus_state(db, date=date)
-    if not state.get("ok"):
-        text = (f"{BLOCK_HEADER}\n韭研题材语料未采集（fail-visible：无数据 ≠ 无催化）。"
-                f"请勿据此判断催化有无。")
-        return {"text": text, "industry": None, "events": [], "state": state,
-                "boardMapped": False, "hasContent": False, "eventCount": 0,
-                "evidenceMissing": True, "evidenceMissingReason": "corpus_not_collected"}
+def match_kpl_events(events: list[dict], board_name: str | None,
+                     *, limit: int = MAX_EVENTS) -> list[dict]:
+    """题材事件 → 板块：标题/正文命中关键词即算（确定性包含+共享子串锚，逐条带关联方式）。"""
+    base = normalize_name(board_name)
+    if not base:
+        return []
+    keys = board_keywords(board_name)
+    out = []
+    for ev in events or []:
+        title = str(ev.get("title") or "")
+        hit = _anchor_hit(base, keys, title)
+        if not hit:
+            hit = _anchor_hit(base, keys, str(ev.get("content") or "")[:200])
+        if hit:
+            out.append({**ev, "matchHow": hit["how"]})
+        if len(out) >= limit:
+            break
+    return out
 
-    nodes = S.get_industry_nodes(db)
-    match = match_industry(nodes, board_name)
-    events_all = S.get_timeline_window(db, date=date, window_days=window_days)
-    matched = match_events(events_all, board_name)
-    briefings = [e for e in matched if is_briefing(e)][:1]
-    events = [e for e in matched if not is_briefing(e)][:max_events]
+
+def match_kpl_news(items: list[dict], board_name: str | None,
+                   *, limit: int = MAX_EVENTS) -> list[dict]:
+    """题材新闻 → 板块：**Kword 题材标签优先**（开盘啦现成的关联），回落标题锚。"""
+    base = normalize_name(board_name)
+    if not base:
+        return []
+    keys = board_keywords(board_name)
+    out = []
+    for it in items or []:
+        kw = str(it.get("kword") or "")
+        hit = None
+        if kw:
+            kn = normalize_name(kw)
+            if any(k and (k in kn or (kn and kn in k)) for k in keys):
+                hit = {"how": "Kword标签", "anchor": kn if len(kn) <= len(base) else base}
+            else:
+                a = _shared_anchor(base, kn)
+                if a:
+                    hit = {"how": f"Kword共享子串「{a}」", "anchor": a}
+        if not hit:
+            hit = _anchor_hit(base, keys, str(it.get("title") or ""))
+        if hit:
+            out.append({**it, "matchHow": hit["how"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def match_kpl_calendar(items: list[dict], board_name: str | None,
+                       *, limit: int = MAX_EVENTS) -> list[dict]:
+    """前瞻日历 → 板块：brief 命中关键词/锚（确定性）。"""
+    base = normalize_name(board_name)
+    if not base:
+        return []
+    keys = board_keywords(board_name)
+    out = []
+    for it in items or []:
+        hit = _anchor_hit(base, keys, str(it.get("brief") or ""))
+        if hit:
+            out.append({**it, "matchHow": hit["how"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def theme_heat_series(db, board_name: str | None, *, date: str,
+                      days: int = 5) -> dict:
+    """题材热度序列（v5）：近 `days` 日该题材的新闻条数/事件数/最高热度按日聚合。
+
+    题材延续性与炒作深度判据的核心原料：单日快照只能看「现在有没有催化」，
+    序列才能看「是否断流/见顶回落」。确定性聚合、零模型；匹配口径与事件/新闻相同
+    （Kword 标签优先 + 标题/正文确定性锚）。返回 {series: [{date, newsN, eventN, maxHot}],
+    any: bool}。
+    """
+    base = normalize_name(board_name)
+    if not base:
+        return {"series": [], "any": False}
+    news = KS.get_news_items(db, date=date, include_past_recent=days - 1, window_days=0)
+    events = KS.get_topic_events(db, date=date, include_past_recent=days - 1, window_days=0)
+    news_matched = match_kpl_news(news, board_name, limit=10 ** 6)
+    ev_matched = match_kpl_events(events, board_name, limit=10 ** 6)
+    by_day: dict[str, dict] = {}
+    for it in news_matched:
+        d = it.get("eventDate") or ""
+        if not d:
+            continue
+        by_day.setdefault(d, {"date": d, "newsN": 0, "eventN": 0, "maxHot": None})
+        by_day[d]["newsN"] += 1
+    for ev in ev_matched:
+        d = ev.get("day") or ""
+        if not d:
+            continue
+        by_day.setdefault(d, {"date": d, "newsN": 0, "eventN": 0, "maxHot": None})
+        by_day[d]["eventN"] += 1
+        hv = ev.get("hotVal")
+        if isinstance(hv, (int, float)):
+            cur = by_day[d]["maxHot"]
+            by_day[d]["maxHot"] = hv if cur is None else max(cur, hv)
+    from datetime import datetime, timedelta
+    try:
+        d0 = datetime.strptime(date, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return {"series": [], "any": False}
+    series = []
+    for i in range(days - 1, -1, -1):
+        d = (d0 - timedelta(days=i)).strftime("%Y-%m-%d")
+        series.append(by_day.get(d) or {"date": d, "newsN": 0, "eventN": 0, "maxHot": None})
+    return {"series": series, "any": any(s["newsN"] or s["eventN"] for s in series)}
+
+
+def _heat_line(series: dict) -> str:
+    """热度序列渲染为一行（按日 新闻·事件·最高热度，供模型直读趋势）。"""
+    parts = []
+    for s in series["series"]:
+        seg = f"{s['date'][5:]} 新闻{s['newsN']}·事件{s['eventN']}"
+        if s.get("maxHot") is not None:
+            seg += f"（最高热度{s['maxHot']}）"
+        parts.append(seg)
+    return "；".join(parts)
+
+
+def build_theme_evidence_block(db, *, board_name: str, date: str,
+                              leader_code: str | None = None,
+                              window_days: int = 3, content_chars: int = CONTENT_CHARS,
+                              max_events: int = MAX_EVENTS,
+                              include_l2: bool = True,
+                              sealed_codes: frozenset[str] | set[str] | None = None) -> dict:
+    """生成题材证据块（v4：产业树 + KPL 事件/新闻/日历 + L2 板内解析）。
+
+    返回 {text, industry, events, news, calendar, state, ...}（text 直接可拼进叙事）。
+    代际：v2（2026-10-20 确定性门）→ v3（2026-10-22 L2 板内解析 + 门收窄）→
+    **v4（2026-10-23 事件层换源开盘啦**：韭研 timeline/早报退役；题材事件/新闻/日历
+    三节改消费 `kpl_theme_*`；早报段落匹配泛化为共享子串锚）。
+    `include_l2=False` = relay 兼容形状（不出板内解析/新闻流节；事件层来源标签随换源
+    更新——relay 题材证据行为派生锚（不作主锚、判据未变），来源漂移已登记不重放）。
+    """
+    state = corpus_state(db, date=date)
+    nodes = S.get_industry_nodes(db) if state.get("ok") else []
+    match = (match_industry(nodes, board_name) if nodes
+             else {"matched": False, "method": None, "node": None, "candidates": []})
+    # KPL 语料窗：事件回看 3 日（发酵中）+ 次日；新闻回看 2 日；日历未来 window_days 日
+    kpl_events = (KS.get_topic_events(db, date=date,
+                                      include_past_recent=EVENT_WINDOW_PAST_DAYS, window_days=1)
+                  if state.get("ok") else [])
+    kpl_news = (KS.get_news_items(db, date=date,
+                                  include_past_recent=NEWS_WINDOW_PAST_DAYS, window_days=1)
+                if state.get("ok") else [])
+    kpl_calendar = (KS.get_calendar_items(db, date=date, window_days=window_days)
+                    if state.get("ok") else [])
+    ev_hits = match_kpl_events(kpl_events, board_name, limit=max_events)
+    news_hits = match_kpl_news(kpl_news, board_name, limit=max_events)
+    cal_hits = match_kpl_calendar(kpl_calendar, board_name, limit=max_events)
 
     lines = [BLOCK_HEADER]
-    stale = "" if not state.get("stale") else f"（注意：语料最近采集日 {state.get('latestFetchDate')}，非当日）"
-    lines.append(f"取数日 {date}，语料 {state.get('timeline')} 条事件 / "
-                 f"{state.get('industry')} 个产业节点{stale}")
+    if not state.get("ok"):
+        lines.append("题材语料（韭研产业树 + 开盘啦事件层）未采集（fail-visible：无数据 ≠ 无催化）。"
+                     "请勿据此判断催化有无。")
+    else:
+        stale = "" if not state.get("stale") else f"（注意：语料最近采集日 {state.get('latestFetchDate')}，非当日）"
+        lines.append(f"取数日 {date}，语料：产业树 {state.get('industry')} 节点 / "
+                     f"题材事件 {state.get('topic')} · 新闻 {state.get('news')} · "
+                     f"日历 {state.get('calendar')} 条{stale}")
 
     node = match.get("node")
-    if not match.get("matched"):
+    if not state.get("ok"):
+        pass                                   # 未采集行已在前面给出，不再伪造 L3 明细
+    elif not match.get("matched"):
         coarse = "（该板块属粗分桶，非题材分类）" if normalize_name(board_name) in NOT_A_THEME else ""
         lines.append(f"板块级催化：未映射{coarse}（「{board_name}」在韭研产业树无同名/包含节点；"
                      f"不代表无催化）")
@@ -211,42 +402,127 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             f"{match.get('method')}，热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
             f"{_clip(node.get('content'), content_chars)}")
 
-    for bf in briefings:
-        lines.append(f"当日事件清单（韭研「{bf.get('title')}」，{bf.get('date')}）："
-                     f"{_clip(bf.get('content'), content_chars)}")
-    if not events:
-        lines.append(f"未来 {window_days} 日既定事件：无匹配（「{board_name}」相关事件未命中，"
-                     f"无数据 ≠ 无催化）")
-    else:
-        lines.append(f"未来 {window_days} 日既定事件（韭研投资日历）：")
-        for ev in events:
-            fd = _days_between(date, ev.get("date"))
-            when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
-            meta = []
-            if ev.get("grade"):
-                meta.append(f"重要度{ev.get('grade')}")
-            if ev.get("firstSeenDate"):
-                meta.append(f"录入 {ev.get('firstSeenDate')}")
-            if ev.get("themes"):
-                meta.append("题材:" + "/".join(ev.get("themes")[:3]))
-            lines.append(f"- {when} {ev.get('title')}"
-                         + (f"（{'，'.join(meta)}）" if meta else "")
-                         + f"：{_clip(ev.get('content'), EVENT_CHARS)}")
+    # 当日题材事件（开盘啦 Topic：逐事件全文 + 来源 + 热度）
+    heat = theme_heat_series(db, board_name, date=date) if (include_l2 and state.get("ok")) else None
+    if heat is not None:
+        if heat.get("any"):
+            lines.append(f"题材热度序列（近 5 日新闻/事件按日聚合；看新增密度是否断流/见顶）："
+                         f"{_heat_line(heat)}")
+        else:
+            lines.append(f"题材热度序列：近 5 日无该题材的新闻/事件痕迹（不代表无催化；"
+                         f"若板块当日仍涨停，则纯资金/情绪驱动特征明显）")
+    if state.get("ok"):
+        if not ev_hits:
+            lines.append(f"当日题材事件：无匹配（「{board_name}」相关事件未命中，无数据 ≠ 无催化）")
+        else:
+            lines.append("当日题材事件（开盘啦题材事件，关联方式逐条披露）：")
+            for ev in ev_hits:
+                src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
+                hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
+                body = str(ev.get("content") or "")
+                body_txt = f"：{_clip(body, EVENT_CHARS)}" if body else ""
+                lines.append(f"- {ev.get('day')} {ev.get('title')}"
+                             f"（{ev.get('matchHow')}{src}{hot}）{body_txt}")
 
-    # 结构性「关键证据缺失」标志（2026-10-20 判据 v2 用）：判据层据此**代码强制** insufficient，
-    # 不再只靠模型自觉（v1 实测：未映射板块的催化题判了 insufficient，但概率题仍给 0.34/0.18）。
-    # 口径：未映射 > （已映射但正文空且无未来事件）。**「催化陈旧」不算缺失**——
-    # stale 本身是证据（题集规则：老催化 → 判低概率），缺失才判不足。
+    # 近两日题材新闻（开盘啦 ThemeNews：Kword 题材标签 + 关联个股）——仅 v4 全量形状
+    if include_l2 and state.get("ok"):
+        if not news_hits:
+            lines.append(f"近两日题材新闻：无匹配（Kword 题材标签未命中「{board_name}」，"
+                         f"无数据 ≠ 无催化）")
+        else:
+            lines.append("近两日题材新闻（开盘啦题材新闻，Kword 题材标签关联）：")
+            for it in news_hits:
+                stocks = it.get("stocks") or []
+                top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
+                # KPL Rate 本身就是百分数值（-1.74 = 当日 -1.74%），不再 ×100
+                st_txt = "，关联股 " + "、".join(
+                    f"{s.get('name')}{s.get('rate'):+.2f}%"
+                    if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
+                    for s in top) if top else ""
+                lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
+                             f"（{it.get('matchHow')}{st_txt}）")
+
+    # 前瞻日历（开盘啦 Type=3）
+    if state.get("ok"):
+        if not cal_hits:
+            lines.append(f"未来 {window_days} 日既定事件：无匹配（「{board_name}」相关事件未命中，"
+                         f"无数据 ≠ 无催化）")
+        else:
+            lines.append(f"未来 {window_days} 日既定事件（开盘啦题材日历）：")
+            for ev in cal_hits:
+                fd = _days_between(date, ev.get("date"))
+                when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
+                tag = f" [{ev.get('tagName')}]" if ev.get("tagName") else ""
+                lines.append(f"- {when}{tag} {ev.get('brief')}（{ev.get('matchHow')}）")
+
+    # ── L2 板内解析（韭研异动库：板块分组 + 逐股 expound；v3 起纳入证据）──
+    # include_l2=False（relay 兼容形状）：整节不渲染。
+    snap = board_snapshot(db, date, board_name, leader_code,
+                          sealed_codes=sealed_codes) if include_l2 else None
+    board_resolved = False
+    board_stocks_n = 0
+    if not include_l2:
+        pass
+    elif snap is None:
+        lines.append(f"板内解析：当日韭研异动无「{board_name}」板块分组（如实标注；"
+                     f"非题材桶或当日未收录）")
+    else:
+        board_stocks_n = snap["count"]
+        stocks = snap["stocks"]
+        lead = next((s for s in stocks
+                     if str(s.get("code") or "")[-6:] == str(leader_code or "")),
+                    stocks[0] if stocks else None)
+        exp = str((lead or {}).get("expound") or "")
+        tag_line = exp.splitlines()[0].strip() if exp else ""
+        body = "\n".join(exp.splitlines()[1:]).strip()
+        if lead is not None and exp:
+            board_resolved = True
+            caliber = "" if snap.get("sealedFilter") else "（韭研异动口径，含触板未封）"
+            lines.append(f"板内解析（韭研异动「{board_name}」{board_stocks_n} 只{caliber}）："
+                         f"龙头 {lead.get('name')}（{lead.get('code')}）驱动标签「{tag_line}」｜"
+                         f"解析摘录：{_clip(body or exp, content_chars)}")
+        elif lead is not None:
+            caliber = "" if snap.get("sealedFilter") else "（韭研异动口径，含触板未封）"
+            lines.append(f"板内解析（韭研异动「{board_name}」{board_stocks_n} 只{caliber}）："
+                         f"龙头 {lead.get('name')}（{lead.get('code')}）无异动解析（如实标注）")
+        peer_tags = []
+        for p in [s for s in stocks if s is not lead][:5]:
+            pe = str(p.get("expound") or "")
+            pt = pe.splitlines()[0].strip() if pe else ""
+            if pt:
+                peer_tags.append(f"{p.get('name')}（{pt}）")
+        if peer_tags:
+            board_resolved = True
+            lines.append("板内同伴驱动：" + "、".join(peer_tags))
+
     has_content = bool((node or {}).get("content"))
     missing_reason = None
-    if not match.get("matched"):
-        missing_reason = "board_unmapped"
-    elif not has_content and not events:
-        missing_reason = "no_content_no_event"
+    if include_l2:
+        # v4 口径：L3（产业树/KPL 事件·新闻·日历）与 L2（板内解析）**均无**可用证据才缺——
+        # 缺一层 ≠ 无证据（§4.0）。催化陈旧仍不算缺失（stale 是证据）。
+        l3_evidence = bool((match.get("matched") and has_content) or ev_hits
+                           or news_hits or cal_hits)
+        if not board_resolved and not (ev_hits or news_hits):
+            if not state.get("ok"):
+                missing_reason = "corpus_not_collected"
+            elif not l3_evidence:
+                missing_reason = ("industry_tree_unmapped" if not match.get("matched")
+                                  else "no_content_no_event")
+    else:
+        # relay 兼容口径（relay 不消费缺失标志，仅为形状稳定保留 v2 语义）
+        if not state.get("ok"):
+            missing_reason = "corpus_not_collected"
+        elif not match.get("matched"):
+            missing_reason = "board_unmapped"
+        elif not has_content and not ev_hits and not cal_hits:
+            missing_reason = "no_content_no_event"
     return {"text": "\n".join(lines), "industry": node if match.get("matched") else None,
-            "events": events, "state": state,
+            "events": ev_hits, "news": news_hits, "calendar": cal_hits, "state": state,
             "boardMapped": bool(match.get("matched")), "hasContent": has_content,
-            "eventCount": len(events),
+            "eventCount": len(ev_hits),
+            "boardResolved": board_resolved, "boardStocks": board_stocks_n,
+            "kwordTags": [it.get("kword") for it in news_hits if it.get("kword")],
+            "heatSeries": heat,
             "evidenceMissing": missing_reason is not None,
             "evidenceMissingReason": missing_reason,
             "unmappedCandidates": match.get("candidates") or []}

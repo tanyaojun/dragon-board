@@ -504,14 +504,13 @@ _JIUYAN_ATTEMPTS = (
     (datetime.time(15, 35), "final"),
 )
 
-# 题材/事件语料采集时点（L3，2026-10-20）：盘前 08:45 只取事件日历（当日+未来 1-3 日既定事件），
-# 收盘后 16:10 只刷新板块催化正文。分源的理由：题材端点有独立日额度（实测被探测烧穿后当天全灭），
-# 每日调用从 6 次降到 3 次；只写 jiuyan_timeline / jiuyan_ai_industry。
-_JIUYAN_THEME_EVENT_SOURCES = ("timeline_news", "timeline_list")
-_JIUYAN_THEME_INDUSTRY_SOURCES = ("ai_industry",)
-_JIUYAN_THEME_ATTEMPTS = (
-    (datetime.time(8, 45), "preopen", _JIUYAN_THEME_EVENT_SOURCES),
-    (datetime.time(16, 10), "postclose", _JIUYAN_THEME_INDUSTRY_SOURCES),
+# 题材语料采集时点（2026-10-23 v4 换源）：事件层唯一权威源=开盘啦（韭研 timeline/早报退役，
+# 重叠实测见 theme-corpus-extra-sources-survey-20261023.md §8）。
+# 盘前 08:45：开盘啦题材事件+新闻流+日历（当日炒事件池 + 前瞻）；
+# 收盘后 16:10：开盘啦刷新（当日新闻流收全）+ 韭研产业树正文（无 KPL 对应物，保留）。
+_THEME_CORPUS_ATTEMPTS = (
+    (datetime.time(8, 45), "preopen", ("kpl",)),
+    (datetime.time(16, 10), "postclose", ("kpl", "jiuyan")),
 )
 
 # 午盘投喂时点（2026-10-20 用户裁决）：12:05 午盘名单落库后隔 25 分钟再喂 jev
@@ -595,16 +594,16 @@ async def run_jiuyan_loop(sched: "SnapshotCollectorScheduler") -> None:
                 # 题材/事件语料（L3，2026-10-20）：盘前 08:45 取当日+未来事件日历，
                 # 收盘后 16:10 刷新板块催化正文。失败只记状态，不影响异动采集与打标。
                 if jiuyan_theme_collect_enabled():
-                    for theme_time, theme_kind, theme_sources in _JIUYAN_THEME_ATTEMPTS:
+                    for theme_time, theme_kind, theme_collectors in _THEME_CORPUS_ATTEMPTS:
                         key = f"theme:{theme_kind}"
                         if key in state["done"]:
                             continue
                         if (now.hour, now.minute) >= (theme_time.hour, theme_time.minute):
                             state["done"].add(key)
-                            from backend.operations.schedule import run_jiuyan_theme_collect_once
+                            from backend.operations.schedule import run_theme_corpus_collect_once
                             theme_result = await asyncio.to_thread(
-                                run_jiuyan_theme_collect_once, trading_date,
-                                sources=theme_sources)
+                                run_theme_corpus_collect_once, trading_date,
+                                collectors=theme_collectors)
                             sched._jiuyan_theme_last = {
                                 **theme_result, "at": now.isoformat(timespec="seconds")}
                             logger.info("jiuyan theme corpus %s %s: %s", theme_kind, trading_date,

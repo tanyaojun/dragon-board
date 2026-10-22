@@ -197,7 +197,9 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
         for d in docs:
             ans = (d.get("answers") or {}).get("leader_nextday_continue") or {}
             model_ans = (d.get("modelAnswers") or {}).get("leader_nextday_continue") or {}
-            stage = d.get("answers", {}).get("catalyst_stage") or {}
+            # 键存在但值为 None（skipped 文档 answers=None）时 `d.get("answers", {})` 会返回
+            # None → `.get` 崩 → 读口 502（2026-10-23 实测）；统一 `or {}` 模式
+            stage = (d.get("answers") or {}).get("catalyst_stage") or {}
             row = {
                 "docId": d.get("_id"),
                 "tradingDate": d.get("tradingDate"),
@@ -214,11 +216,23 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 "modelChoice": model_ans.get("choice"),
                 "modelProbabilities": model_ans.get("probabilities"),
                 "catalystStage": stage.get("choice"),
+                # v5：题材层三层判断（旧代文档 catalystStage 保留回读）
+                "themeSpeculationDepth": ((d.get("answers") or {}).get(
+                    "theme_speculation_depth") or {}).get("choice"),
+                "themeContinuation": ((d.get("answers") or {}).get(
+                    "theme_continuation") or {}).get("choice"),
+                "leaderHeadroom": ((d.get("answers") or {}).get(
+                    "leader_headroom") or {}).get("choice"),
+                "outcomeBoardNNextDay": d.get("outcomeBoardNNextDay"),
                 "gate": d.get("gate"),
                 "evidenceMissing": bool(d.get("evidenceMissing")),
                 "evidenceMissingReason": d.get("evidenceMissingReason"),
                 "evidenceIndustry": d.get("evidenceIndustry"),
                 "evidenceEventTitles": d.get("evidenceEventTitles") or [],
+                # v3/v4：板内解析可用性 + Kword 题材标签（开盘啦新闻流）
+                # （v5 起 status=skipped 不落库，读口无排除行）
+                "evidenceBoardResolved": d.get("evidenceBoardResolved"),
+                "evidenceKwordTags": d.get("evidenceKwordTags") or [],
                 "baselineKey": d.get("baselineKey"),
                 "baselineMeta": d.get("baselineMeta"),
                 "outcomeSealedNextDay": d.get("outcomeSealedNextDay"),
@@ -331,7 +345,7 @@ def post_theme_leader_rerun(payload: ThemeLeaderRerunPayload) -> dict[str, Any]:
             "name": doc.get("name"), "board": doc.get("board"),
             "status": doc.get("status"),
             "sampleOrigin": doc.get("sampleOrigin"),
-            "choice": (doc.get("answers") or {}).get("leader_nextday_continue", {}).get("choice"),
+            "choice": ((doc.get("answers") or {}).get("leader_nextday_continue") or {}).get("choice"),
             "gate": doc.get("gate"),
             "model": doc.get("model"), "usage": doc.get("usage"),
             "latencyMs": doc.get("latencyMs"),

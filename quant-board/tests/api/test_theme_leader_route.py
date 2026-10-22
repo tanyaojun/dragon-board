@@ -323,3 +323,25 @@ def test_rerun_passes_default_dataset_id_and_preserves_sample_origin(monkeypatch
     assert kw.get("dataset_id") == DEFAULT_DATASET_ID, "缺省不得传 None（P1-1）"
     assert kw.get("sample_origin") == "backfill", "backfill 必须透传（P1-2）"
     assert body["doc"]["sampleOrigin"] == "backfill"
+
+
+# ── 回归（2026-10-23 实测 502）：skipped 文档 answers=None 不得崩读口 ──────
+def test_theme_leaders_read_survives_answers_none_skipped_docs(monkeypatch):
+    """`d.get("answers", {})` 在键存在但值为 None 时返回 None → `.get` 崩 → 502。
+
+    v3 起粗分桶排除产生 `status=skipped, answers=None` 文档，读口必须照常返回
+    （fail-visible：skipped 行本就是台账的一部分）。
+    """
+    skipped = {"_id": "2026-10-22:000001", "tradingDate": "2026-10-22",
+               "code": "000001", "name": "示例股", "board": "机器人",
+               "status": "skipped", "skippedReason": "not_a_theme_bucket",
+               "answers": None, "modelAnswers": None, "structure": None}
+    tc = _client(monkeypatch, [skipped])
+    r = tc.get("/api/hotlist-jev/theme-leaders",
+               params={"start": "2026-10-22", "end": "2026-10-22"})
+    assert r.status_code == 200, r.text
+    doc = r.json()
+    row = next(x for x in doc["leaders"] if x["code"] == "000001")
+    assert row["status"] == "skipped"
+    assert row["catalystStage"] is None
+    assert row["themeSpeculationDepth"] is None

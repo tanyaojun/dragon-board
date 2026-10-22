@@ -36,6 +36,9 @@ class FakeCol:
         self.docs = [dict(d) for d in docs]
         self.updates: list[tuple] = []
 
+    def find_one(self, query=None, projection=None):
+        return self.docs[0] if self.docs else None
+
     def find(self, query=None, projection=None):
         out = []
         for d in self.docs:
@@ -58,6 +61,9 @@ class FakeDb:
     def __getitem__(self, name):
         if name == E.COLLECTION:
             return self.labels
+        if name == "jiuyan_action":
+            # v5 结局回填读次日板块家数；测试库无异动文档 → fields 空（回填 None/0，不伪造）
+            return FakeCol([])
         raise KeyError(name)
 
 

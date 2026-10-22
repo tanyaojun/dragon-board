@@ -218,20 +218,15 @@
             border:1px solid var(--border2);border-radius:7px;background:#fff;color:var(--muted);cursor:pointer}
   .icon-btn:hover{border-color:var(--cf-blue);color:var(--cf-blue)}
   /* ---------- 题材龙头台账（2026-10-20；面板/表格/展开完全复用涨停复盘样式） ---------- */
-  /* 只补涨停复盘没有的增量：证据门/回填/同桶键/明细卡内标题。
+  /* 只补涨停复盘没有的增量：证据门/回填/早报段/明细卡内标题。
      右三角、行展开、明细卡底、板块 chip、筛选条、KPI 条**一律复用**原样式，
      不另造并行类（用户 2026-10-20：样式风格须与涨停分析一致）。 */
   #tlTable tr.tl-backfill > td{background:#fffdf5}
   #tlTable tr.tl-backfill.lg-row:hover > td{background:#fffaeb}
   .tl-origin{display:inline-block;margin-left:5px;padding:0 5px;border-radius:5px;font-size:10px;
     background:#fef3c7;color:#b45309;font-weight:600;vertical-align:middle}
-  .tl-gate{font-size:10px;padding:0 5px;margin-left:4px;border-radius:5px;background:#fef3c7;
-    color:#b45309;white-space:nowrap}
-  .tl-same{color:var(--muted2);font-size:11px}
-  .tl-raw{color:var(--muted);font-weight:600}
   .tl-ev{font-size:10px;padding:0 4px;border-radius:5px;background:#e0f2fe;color:#0369a1;
     white-space:nowrap}
-  .tl-base{font-size:11.5px;color:var(--muted);white-space:nowrap}
   .lf-chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer}
   .lf-chk input{cursor:pointer}
   .lf-warn{margin:0 0 12px;padding:9px 12px;border-left:3px solid #d97706;border-radius:6px;
@@ -508,7 +503,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   labelEntries: [], labelUi: { openKey: null, mode: 'detail', q1: '', q2: '' },
   // 题材龙头台账 UI（对齐涨停复盘 labelFilter/labelSort/labelUi 三分法）：
   // tlUi=筛选+展开+分页, tlSort=表头排序, tlNarr=投喂语料懒拉缓存
-  tlUi: { q: '', board: '', industry: '', origin: '', bucket: '', choice: '', stage: '',
+  tlUi: { q: '', board: '', industry: '', origin: '', choice: '', stage: '',
           outcome: '', gateOnly: false, openKey: null, page: 1,
           // 明细卡（对齐涨停分析 lgUi）：mode=详细信息/原始JSON；q1/q2=请求/响应 JSON 筛选
           mode: 'detail', q1: '', q2: '' },
@@ -1863,26 +1858,32 @@ function labRerun(key){
 //     区间与 rangedSeries 同一 `STATE.relayRange`，rangeRefresh 联动重拉）；
 //   · 页头 KPI = 共用 `#relayKpi`（点行 = relayRow(date) 选中该日，KPI 跟随）；
 //   · 左侧三角 = 展开 jev 调用日志卡（lg-card 范式，懒拉 narrative）；
-//   · 展示硬约束：落库口径与模型原答双显 / 结局 null=未封 / 回填样本标橙。
+//   · 展示硬约束：落库口径为准（模型原答仅保留在展开的调用日志卡里供审计）/ 结局 null=未封 / 回填样本标橙。
 const TL_CHOICE_CN = { high_ge65: '高 ≥65%', mid_45_65: '中 45-65%', low_25_45: '低 25-45%',
                        verylow_lt25: '很低 <25%', insufficient: '证据不足' };
-const TL_GATE_CN = { board_unmapped: '板块未映射', corpus_not_collected: '语料未采集',
-                     no_content_no_event: '无正文且无事件' };
+const TL_GATE_CN = { board_unmapped: '板块未映射', industry_tree_unmapped: '产业树未映射',
+                     corpus_not_collected: '语料未采集', no_content_no_event: '无正文且无事件',
+                     not_a_theme_bucket: '非题材桶' };
 const TL_STAGE_CN = { new_today: '今日新增', ongoing: '持续发酵', stale: '陈旧', none: '无催化',
+                      insufficient: '证据不足' };   // v1-v4 旧代（催化阶段题）
+// v5 题材层三层判断
+const TL_DEPTH_CN = { igniting: '启动期', fermenting: '发酵期', climax: '高潮期', ebbing: '退潮期',
                       insufficient: '证据不足' };
+const TL_CONT_CN = { strong_extend: '强延续', weak_extend: '弱延续', ending: '临近结束',
+                     insufficient: '证据不足' };
+const TL_HEAD_CN = { space_2plus: '空间≥2板', space_1: '空间≈1板', peak: '空间已尽',
+                     insufficient: '证据不足' };
 const TL_ORIGIN_CN = { live: '前瞻', backfill: '回填' };
 
 function tlRows(){ return (STATE.tlData && STATE.tlData.rows) || []; }
 function tlKey(r){ return (r.tradingDate || '') + ':' + (r.code || ''); }
 function tlProb(row){
-  // 过门后口径：非 insufficient 质量之和；全量判 insufficient 时回落展示模型原答（带括号）。
+  // 落库口径：非 insufficient 质量之和；全量 insufficient（被门/被排除）时显 '-'，
+  // 不再回落展示模型原答括号数（v3：表格只讲消费端口径，原答在展开卡里审计）。
   const sumOf = p => Object.entries(p || {}).reduce((a, kv) =>
     kv[0] === 'insufficient' ? a : a + Number(kv[1] || 0), 0);
   const main = sumOf(row.probabilities);
-  if (main > 0.0001) return { text: Math.round(main * 100) + '%', raw: false };
-  const model = sumOf(row.modelProbabilities);
-  if (model > 0.0001) return { text: '(' + Math.round(model * 100) + '%)', raw: true };
-  return { text: '-', raw: false };
+  return main > 0.0001 ? { text: Math.round(main * 100) + '%' } : { text: '-' };
 }
 function tlOutcomeKey(row){
   if (row.outcomeSealedNextDay === null || row.outcomeSealedNextDay === undefined) return 'pending';
@@ -1891,9 +1892,8 @@ function tlOutcomeKey(row){
 function tlMatches(row, f){
   if (f.board && (row.board || '未分板块') !== f.board) return false;
   if (f.origin && (row.sampleOrigin || 'live') !== f.origin) return false;
-  if (f.bucket && (row.baselineKey || '') !== f.bucket) return false;
   if (f.choice && (row.choice || '') !== f.choice) return false;
-  if (f.stage && (row.catalystStage || '') !== f.stage) return false;
+  if (f.stage && (row.themeSpeculationDepth || '') !== f.stage) return false;
   if (f.outcome && tlOutcomeKey(row) !== f.outcome) return false;
   if (f.industry && (row.evidenceIndustry || '') !== f.industry) return false;
   if (f.gateOnly && !(row.gate && row.gate.applied)) return false;
@@ -1929,7 +1929,7 @@ function tlSortBy(key){
   tlRefresh();
 }
 function tlClear(){
-  STATE.tlUi = { q: '', board: '', industry: '', origin: '', bucket: '', choice: '', stage: '',
+  STATE.tlUi = { q: '', board: '', industry: '', origin: '', choice: '', stage: '',
                  outcome: '', gateOnly: false, openKey: null, page: 1,
                  mode: STATE.tlUi.mode, q1: '', q2: '' };
   tlRefresh();
@@ -2004,10 +2004,9 @@ function tlRenderBanner(){
   const doc = d.doc || {};
   if (doc.no_data){ el.innerHTML = '<div class="lf-warn">区间内无题材龙头投喂记录'
     + '（16:20 槽位未跑，或区间早于投产日 2026-10-08）</div>'; return; }
-  const verTxt = Object.entries(doc.versions || {}).map(kv => kv[0] + '=' + kv[1]).join('，');
+  // 多代际警示已结项（用户 2026-10-22 裁决）：v1/v2/v3 历史档不回改是设计内常态，
+  // 行级版本徽标已可见，长期挂黄牌无增量信息。回填警示保留（数据质量语义本就不同）。
   const warns = [];
-  if (doc.mixedVersions) warns.push('⚠️ 区间内存在多代际标签（' + esc(verTxt)
-    + '）——跨代不可比较，评估只出各代分组指标');
   if ((doc.origins || {}).backfill) warns.push('⚠️ 含<b>回填</b>样本 '
     + esc(String(doc.origins.backfill)) + ' 只：事后补跑，题材语料含未来信息，'
     + '只能当结构/事件层观察，不得当题材判据结论');
@@ -2054,10 +2053,9 @@ function tlRenderBar(){
     + tlSel('板块', 'board', boards)
     + tlSel('题材证据', 'industry', uniq('evidenceIndustry').map(v => [v, v]))
     + tlSel('档位', 'choice', Object.entries(TL_CHOICE_CN))
-    + tlSel('催化阶段', 'stage', Object.entries(TL_STAGE_CN))
+    + tlSel('题材深度', 'stage', Object.entries(TL_DEPTH_CN))
     + tlSel('结局', 'outcome', [['sealed', '续板'], ['broken', '未续'], ['pending', '未封（等次日）']])
     + tlSel('来源', 'origin', uniq('sampleOrigin').map(v => [v, TL_ORIGIN_CN[v] || v]))
-    + tlSel('同桶', 'bucket', uniq('baselineKey').map(v => [v, v]))
     + '<label class="lf-chk"><input type="checkbox"' + (STATE.tlUi.gateOnly ? ' checked' : '')
       + ' onchange="tlSet(\'gateOnly\', this.checked)"> 仅看被证据门覆盖</label>'
     + '<button onclick="tlClear()">清除筛选</button>'
@@ -2090,7 +2088,7 @@ function tlRenderRows(){
   const rows = tlSorted(tlFiltered());
   const pg = relayPageSlice(rows, f.page);
   f.page = pg.page;
-  const hasFilter = !!(f.q || f.board || f.industry || f.origin || f.bucket || f.choice
+  const hasFilter = !!(f.q || f.board || f.industry || f.origin || f.choice
     || f.stage || f.outcome || f.gateOnly);
   const hint = $('tlHint'); if (hint) hint.textContent = '';
   const cnt = $('tlCnt');
@@ -2099,8 +2097,8 @@ function tlRenderRows(){
     + esc(label) + sortMark(STATE.tlSort, key) + '</th>';
   el.innerHTML = '<tr>' + th('日期', 'date') + th('代码', 'code') + th('名称', 'name')
     + th('板块', 'board') + th('连板', 'streak') + th('封板', 'time') + th('家数', 'boardN')
-    + '<th>续板概率</th><th>档位</th><th>模型原答</th><th>催化阶段</th><th>题材证据</th>'
-    + '<th>同桶基线</th><th>结局</th></tr>'
+    + '<th>续板概率</th><th>档位</th><th>题材深度</th><th>延续性</th><th>空间</th><th>题材证据</th>'
+    + '<th>结局</th></tr>'
     + (pg.rows.length ? pg.rows.map(r => tlRowHtml(r, f)).join('')
       : '<tr><td class="empty" colspan="14">无匹配龙头（调整区间或筛选条件）</td></tr>');
   $('tlPager').innerHTML = tlPager(pg.page, pg.total);
@@ -2127,28 +2125,33 @@ function tlRowHtml(r, f){
   const p = tlProb(r);
   const open = f.openKey === tlKey(r);
   const outKey = tlOutcomeKey(r);
-  const outcome = outKey === 'pending'
+  // v5 起排除股不落库（用户 2026-10-23 裁决：不入库不入页面），
+  // 名册只有 ok/degraded 行；旧代 catalystStage 回落展示保留（历史档标签只读）
+  const outcome = (outKey === 'pending'
     ? badge('未封', 'b-gray')
-    : (outKey === 'sealed' ? badge('续板', 'b-green') : badge('未续', 'b-red'));
+    : (outKey === 'sealed' ? badge('续板', 'b-green') : badge('未续', 'b-red')));
   const choice = badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
     r.choice === 'high_ge65' ? 'b-red' : r.choice === 'mid_45_65' ? 'b-amber'
       : r.choice === 'insufficient' ? 'b-gray' : 'b-blue');
-  const overridden = r.modelChoice && r.modelChoice !== r.choice;
-  const modelCell = overridden
-    ? badge(TL_CHOICE_CN[r.modelChoice] || r.modelChoice, 'b-amber')
-      + '<span class="tl-gate">' + esc(TL_GATE_CN[(r.gate || {}).reason] || '证据门') + '</span>'
-    : '<span class="tl-same">同档位</span>';
+  const stage = r.themeSpeculationDepth
+    ? badge(TL_DEPTH_CN[r.themeSpeculationDepth] || r.themeSpeculationDepth, 'b-gray')
+    : badge(TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-', 'b-gray');
+  const contCell = badge(TL_CONT_CN[r.themeContinuation] || r.themeContinuation || '-', 'b-gray');
+  const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-', 'b-gray');
+  // 题材证据分层（v3）：产业树节点 > 板内解析 > 缺失原因
+  const briefN = (r.evidenceKwordTags || []).length;
   const evid = r.evidenceIndustry
-    ? esc(r.evidenceIndustry) + (r.evidenceEventTitles && r.evidenceEventTitles.length
-        ? ' <span class="tl-ev" title="' + esc(r.evidenceEventTitles.join(' / ')) + '">+'
-          + r.evidenceEventTitles.length + '事件</span>' : '')
-    : (r.evidenceMissingReason
+      ? esc(r.evidenceIndustry)
+        + (r.evidenceEventTitles && r.evidenceEventTitles.length
+          ? ' <span class="tl-ev" title="' + esc(r.evidenceEventTitles.join(' / ')) + '">+'
+            + r.evidenceEventTitles.length + '事件</span>' : '')
+        + (briefN ? ' <span class="tl-ev" title="' + esc(r.evidenceKwordTags.join(' / '))
+          + '">+题材' + briefN + '</span>' : '')
+      : (r.evidenceMissingReason
         ? badge(TL_GATE_CN[r.evidenceMissingReason] || r.evidenceMissingReason, 'b-amber')
-        : '<span class="badge b-gray">-</span>');
-  const bm = r.baselineMeta || {};
-  const baseTxt = r.baselineKey
-    ? '<span class="tl-base" title="窗口 ' + esc(bm.start || '-') + ' ~ ' + esc(bm.end || '-')
-      + '（' + esc(String(bm.rows || 0)) + ' 样本）">' + esc(r.baselineKey) + '</span>' : '-';
+        : (r.evidenceBoardResolved || briefN
+          ? badge('板内解析' + (briefN ? '+题材' + briefN : ''), 'b-blue')
+          : '<span class="badge b-gray">-</span>'));
   const originTag = (r.sampleOrigin === 'backfill')
     ? '<span class="tl-origin" title="事后回填：题材语料含未来信息，不得当结论">回填</span>' : '';
   const dkey = js(r.tradingDate || '');
@@ -2165,10 +2168,10 @@ function tlRowHtml(r, f){
     + '<td class="num">' + (r.streak == null ? '-' : esc(String(r.streak))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
     + '<td class="num">' + (r.boardN == null ? '-' : esc(String(r.boardN))) + '</td>'
-    + '<td class="num"><b class="' + (p.raw ? 'tl-raw' : '') + '">' + p.text + '</b></td>'
-    + '<td>' + choice + '</td><td>' + modelCell + '</td>'
-    + '<td>' + badge(TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-', 'b-gray') + '</td>'
-    + '<td>' + evid + '</td><td>' + baseTxt + '</td><td>' + outcome + '</td></tr>'
+    + '<td class="num"><b>' + p.text + '</b></td>'
+    + '<td>' + choice + '</td>'
+    + '<td>' + stage + '</td><td>' + contCell + '</td><td>' + headCell + '</td>'
+    + '<td>' + evid + '</td><td>' + outcome + '</td></tr>'
     + (open ? '<tr class="lg-detail"><td colspan="14">' + tlDetailHtml(r) + '</td></tr>' : '');
 }
 
@@ -2252,6 +2255,7 @@ function tlDetailHtml(r){
   const anyBusy = !!STATE.rerunBusy;
   const busy = STATE.rerunBusy === tKey;
   // 重跑入口（同 relay/detail）：置于【详细信息】左侧；busy 全局禁用防并发烧 token
+  // （v5 起排除股不落库，不存在 skipped 行的「不提供重跑」分支）
   const rerunBtnHtml = '<button class="rerun"'
     + (busy ? ' disabled'
         : anyBusy ? ' disabled title="另有重跑进行中，防并发烧 token"'

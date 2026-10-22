@@ -19,10 +19,13 @@ from typing import Any, Callable
 from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 
 # ── 代际戳 ──
-# 题集/口径任何一字变更必须换代（跨代不可比）。v1 = 2026-10-20 定版（龙头隔日连板两题）。
-QUESTION_SET_VERSION_THEME_LEADER = "v2"
-# 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（产业树催化 + 投资日历）。
-AMMO_VERSION_THEME_LEADER = "2026-10-20b"
+# 题集/口径任何一字变更必须换代（跨代不可比）。v1 = 2026-10-20 定版（龙头隔日连板两题）；
+# v2 = 2026-10-20 晚确定性证据门；v3 = 2026-10-22 归因修复（早报段落级匹配 + L2 板内解析
+# 纳入证据 + 门条件收窄为「L3 与 L2 均无可用证据」+ 非题材粗分桶不纳入判定范围）。
+QUESTION_SET_VERSION_THEME_LEADER = "v6"
+# 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
+# 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
+AMMO_VERSION_THEME_LEADER = "2026-10-23c"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -153,6 +156,53 @@ def summarize_rows(rows: list[dict], min_combo_n: int = 5) -> dict:
 
 # ── 题集（v1 定版，判据冻结：改动必须换代 + 预登记） ──
 QUESTIONS_THEME_LEADER = {
+    "theme_speculation_depth": {
+        "type": "choice",
+        "instructions": "仅依据所给证据（题材热度序列、产业树催化正文、题材事件与热度、"
+                        "题材新闻 Kword 分布、前瞻日历、板块梯队结构），判断该题材当前的"
+                        "**炒作深度/所处阶段**。只判题材层面阶段，不预测个股。判据要点："
+                        "事件与新闻的新增密度（热度序列是否断流/见顶）、板块梯队形态"
+                        "（首板潮/中军成形/高标分化）、龙头高度与板块家数变化。"
+                        "证据不足的判定边界（v6 收紧）：仅当语料未采集，或产业树未映射 + "
+                        "题材事件/新闻近 5 日均无痕迹 + 板内解析亦不可用**三层同时成立**"
+                        "才判 insufficient。特别地：事件/新闻零痕迹而板块当日仍有涨停，"
+                        "= 「无新增催化的纯资金/情绪驱动」信号，**不是证据缺失**——"
+                        "高标孤军高度领先判 climax，板块家数同步萎缩判 ebbing，"
+                        "不得借 insufficient 逃避归类。",
+        "criteria": {
+            "igniting": "启动期：题材由近 1-2 日新事件/新催化点燃，板块以首板为主、"
+                        "家数扩张中，尚无连板梯队",
+            "fermenting": "发酵期：事件/新闻持续新增（热度序列未见顶回落），2-3 板中军成形，"
+                          "板块家数维持或增长",
+            "climax": "高潮期：龙头高度显著领先（≥4 板）而板块开始分化——家数回落、"
+                      "跟风断板增多、新闻/事件密度见顶回落",
+            "ebbing": "退潮期：事件与新闻断流（热度序列连续走低）、板块家数萎缩、"
+                      "龙头断板或出现大面",
+            "insufficient": "证据不足：仅当语料未采集，或产业树/题材事件·新闻/板内解析"
+                            "三层同时无该板块痕迹。事件新闻断流本身是 climax/ebbing 的"
+                            "判据信号，不是证据不足",
+        },
+    },
+    "theme_continuation": {
+        "type": "choice",
+        "instructions": "仅依据所给证据，判断该题材炒作的**延续性**：接下来 1-2 个交易日，"
+                        "题材层面（板块整体，不是单指龙头）还能否继续炒作？判据要点："
+                        "未来 1-3 日既定事件是否排队（前瞻日历）、题材事件/新闻是否仍在新增、"
+                        "催化是否被其他题材分流稀释、板块梯队是否完整。"
+                        "证据不足的判定边界（v6 收窄）：与程序门同口径——产业树未映射 + "
+                        "事件/新闻无痕 + 板内解析不可用三层同时成立才判 insufficient。"
+                        "无新增催化但板块仍活跃 = 存量惯性 → weak_extend；"
+                        "分化/退潮信号明确 → ending——零痕迹不是 insufficient 的理由。",
+        "criteria": {
+            "strong_extend": "强延续：有未落地的既定事件排队或题材事件/新闻持续新增，"
+                             "梯队完整，预计板块还能炒 ≥2 个交易日",
+            "weak_extend": "弱延续：仅存量情绪惯性，无明显新增催化，预计板块炒作 ≤1 个交易日",
+            "ending": "临近结束：高潮分化/退潮信号明确（新闻断流+家数萎缩+龙头分歧），"
+                      "题材层面随时收束",
+            "insufficient": "证据不足：仅当语料未采集或三层证据（产业树/事件·新闻/板内解析）"
+                            "同时无痕迹；无催化零痕迹时按存量惯性与分化信号归类",
+        },
+    },
     "leader_nextday_continue": {
         "type": "choice",
         "instructions": "仅依据所给证据（板块结构、封板质量、题材证据与前瞻事件、同桶历史基准率），"
@@ -160,35 +210,44 @@ QUESTIONS_THEME_LEADER = {
                         "只判概率档位，不预测价格、不给出买卖建议。四条硬规则："
                         "①同桶历史基准率是必须先超的基准——若你的理由仅为「连板高/封板早/板块家数多」"
                         "这类与基准率同源的结构特征，请选与基准率同一档，不得凭感觉上调；"
-                        "②题材证据有明确日期与新鲜度时，其权重高于结构特征；"
-                        "③关键证据缺失（语料未采集、板块未映射、板块结构不可考）必须判 insufficient，"
-                        "不得用结构特征硬填空档；"
-                        "④此规则由程序强制：当叙事「题材证据」行标注未映射/未采集/无正文且无事件时，"
-                        "无论你给出何档，落库一律覆盖为 insufficient（原答另存备查）——"
-                        "所以此时请直接选 insufficient，不要用结构特征凑档位。",
+                        "②题材证据（产业树催化、题材事件/题材新闻、前瞻日历、板内个股解析）"
+                        "有明确日期与新鲜度时，其权重高于结构特征；"
+                        "③关键证据缺失（语料未采集、板块在产业树/题材事件均无可用证据、"
+                        "板块结构不可考）必须判 insufficient，不得用结构特征硬填空档；"
+                        "④此规则由程序强制：当叙事「题材证据」标注证据缺失（产业树未映射且"
+                        "题材事件与板内解析亦无可用证据）时，无论你给出何档，落库一律覆盖为 "
+                        "insufficient（原答另存备查）——所以此时请直接选 insufficient，"
+                        "不要用结构特征凑档位。",
         "criteria": {
             "high_ge65": "高概率 ≥65%：结构位置强（连板高度领先 + 封板早 + 板块家数多）"
-                         "且题材有当日/近两日新催化，或未来 1-2 日有既定事件",
+                         "且题材有当日/近两日新催化（含题材事件/题材新闻新增），"
+                         "或未来 1-2 日有既定事件",
             "mid_45_65": "中等 45%-65%：结构与题材一强一弱，或与同桶历史基准率同档",
             "low_25_45": "偏低 25%-45%：结构位置一般（封板偏晚/板块家数少/跟风薄），"
                          "或题材为老催化且近期无新增",
             "verylow_lt25": "很低 <25%：结构示警（板块家数少 + 封板晚 + 无梯队）"
                             "且题材无催化或已明显退潮",
-            "insufficient": "证据不足：关键证据缺失（语料未采集、板块未映射、板块结构不可考），"
-                            "不强行归类",
+            "insufficient": "证据不足：关键证据缺失（语料未采集、产业树与题材事件与板内解析均无"
+                            "该板块证据、板块结构不可考），不强行归类",
         },
     },
-    "catalyst_stage": {
+    "leader_headroom": {
         "type": "choice",
-        "instructions": "以所给「题材证据」为准，判断该板块当前催化处于哪个阶段？"
-                        "只依据所给证据打标，不预测后市。正文更新日期与事件日期不可考时判 insufficient。",
+        "instructions": "综合前三题的判断（题材炒作深度、题材延续性、次日续板概率）与该龙头"
+                        "在题材内的身位（是否龙一/总龙头、高度领先度、封板质量），判断该龙头"
+                        "**还有多少上涨空间**——在当前连板高度之上还能再走几个板。"
+                        "注意：这是空间判断，不是次日概率判断——强延续题材的龙一通常仍有空间，"
+                        "退潮题材的高标即使次日勉强封板也缺乏空间。硬规则：关键证据缺失必须判 "
+                        "insufficient。",
         "criteria": {
-            "new_today": "今日新增催化：板块催化正文更新日期=当日，或前瞻事件在今日/次日落地",
-            "ongoing": "既有催化持续发酵：催化正文更新在近 3-10 个交易日，"
-                       "或未来 3 日内有既定事件排队",
-            "stale": "催化陈旧：板块催化正文更新距今 >10 个交易日且未来 3 日无既定事件",
-            "none": "无催化：该板块在产业树无催化正文且无相关既定事件（纯资金/情绪驱动）",
-            "insufficient": "证据不足：语料未采集或板块未映射，不强行归类",
+            "space_2plus": "仍有 ≥2 板空间：题材强延续（发酵期）且该龙头是身位无可替代的"
+                           "龙一/总龙头，梯队与催化双支撑",
+            "space_1": "还有约 1 板空间：题材尚可延续或龙头身位尚可，但催化新鲜度、"
+                       "梯队完整性有一项已走弱",
+            "peak": "空间已尽：题材退潮/临近结束，或龙头身位被替代/催化断流，"
+                    "当前高度大概率就是顶部",
+            "insufficient": "证据不足：仅当语料未采集或三层证据（产业树/事件·新闻/板内解析）"
+                            "同时无痕迹",
         },
     },
 }
@@ -208,35 +267,49 @@ CONTINUE_BUCKET_MIDPOINTS = {
 }
 
 
-# 确定性「证据缺失」门（v2，用户 2026-10-20 裁决；纯函数，无 IO）。
+# 确定性「证据缺失」门（v2 引入，v3 收窄触发条件；纯函数，无 IO）。
 # 触发只用**结构化**的缺失标志（`theme_event_digest` 返回的 `evidenceMissing`），不从叙事文字反推。
+# v3 口径：`evidenceMissing` = L3（产业树/日历）与 L2（板内解析/早报段落）**均无**可用证据。
 GATE_REASON_LABELS = {
     "corpus_not_collected": "题材语料未采集",
+    # v2 历史档（10-08~10-22 落库）沿用旧名，保留标签供前端/审计回读：
     "board_unmapped": "板块未映射（韭研产业树无同名/包含节点，不代表无催化）",
-    "no_content_no_event": "已映射但正文为空且未来无既定事件",
+    "industry_tree_unmapped": "产业树未映射且题材事件/板内解析均无可用证据",
+    "no_content_no_event": "已映射但正文为空且无可用事件",
 }
 
 
 def apply_evidence_gate(answers: Any, evidence: Any) -> tuple[Any, dict]:
-    """证据缺失 → 强制 `leader_nextday_continue` 判 insufficient（原答原样存 gate 元数据）。
+    """证据缺失 → **全部判定题**强制 insufficient（原答原样存 gate 元数据）。
 
-    v1 单日 pilot 实测缺口：未映射板块的 `catalyst_stage` 判了 insufficient，但同一份证据下
-    概率题仍给 0.34/0.34/0.26/0.18——规则③只写在题面，靠模型自觉。v2 改为代码强制。
+    v1 单日 pilot 实测缺口：未映射板块的催化题判了 insufficient，但同一份证据下
+    概率题仍给 0.34/0.34/0.26/0.18——规则③只写在题面，靠模型自觉。v2 改为代码强制
+    （仅概率题）；v5 起题集扩为四题（深度/延续性/概率/空间），**无证据时四题全部门**——
+    无题材证据却判「发酵期/强延续/空间≥2板」与「无证据却给 0.34」是同一类失效。
     """
     ev = evidence if isinstance(evidence, dict) else {}
     gate: dict[str, Any] = {"applied": False, "reason": None}
     if not isinstance(answers, dict) or not ev.get("evidenceMissing"):
         return answers, gate
     reason = str(ev.get("evidenceMissingReason") or "unknown")
-    key = "leader_nextday_continue"
-    prev = answers.get(key) if isinstance(answers.get(key), dict) else {}
+    prev_prob = answers.get("leader_nextday_continue") if isinstance(
+        answers.get("leader_nextday_continue"), dict) else {}
     gate.update({"applied": True, "reason": reason,
                  "label": GATE_REASON_LABELS.get(reason, reason),
-                 "modelChoice": prev.get("choice"),
-                 "modelProbabilities": prev.get("probabilities")})
+                 "modelChoice": prev_prob.get("choice"),
+                 "modelProbabilities": prev_prob.get("probabilities"),
+                 "forcedKeys": []})
     out = dict(answers)
-    out[key] = {"type": "choice", "choice": "insufficient", "confidence": 1.0,
-                "probabilities": {"insufficient": 1.0}, "gateReason": reason}
+    for key in QUESTIONS_THEME_LEADER:
+        prev = out.get(key) if isinstance(out.get(key), dict) else {}
+        if prev.get("choice") == "insufficient":
+            continue                      # 模型已自判不足，无须覆盖
+        forced = {"type": "choice", "choice": "insufficient", "confidence": 1.0,
+                  "gateReason": reason}
+        if key == "leader_nextday_continue":
+            forced["probabilities"] = {"insufficient": 1.0}
+        out[key] = forced
+        gate["forcedKeys"].append(key)
     return out, gate
 
 

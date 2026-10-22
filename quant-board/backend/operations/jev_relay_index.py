@@ -718,12 +718,16 @@ def theme_evidence_lines(db: Any, date: str, top: int = 3) -> list[str]:
         return ["题材证据：语料未采集（fail-visible：无数据 ≠ 无催化，请勿据此判断催化有无）"]
     stale_txt = (f"，语料最近采集日 {state.get('latestFetchDate')}，非当日"
                  if state.get("stale") else "")
-    lines = [f"题材证据（韭研产业树+投资日历，top3 板块；取数日 {date}，"
-             f"语料 {state.get('timeline')} 条事件 / {state.get('industry')} 个产业节点"
+    # v4 换源（2026-10-23）：事件层唯一权威源=开盘啦；题材证据行为派生锚（非主锚），
+    # 来源标签随换源更新，已登记不重放（theme-corpus-extra-sources-survey-20261023.md §8）。
+    lines = [f"题材证据（韭研产业树+开盘啦事件层，top3 板块；取数日 {date}，"
+             f"产业树 {state.get('industry')} 节点 / 事件 {state.get('topic')} · "
+             f"新闻 {state.get('news')} · 日历 {state.get('calendar')} 条"
              f"{stale_txt}；确定性事实，非模型结论）："]
     names = sorted(cur_b, key=lambda k: -len(cur_b[k]))[:top]
     for name in names:
-        block = build_theme_evidence_block(db, board_name=name, date=date)
+        block = build_theme_evidence_block(db, board_name=name, date=date,
+                                          include_l2=False)   # relay 叙事代际锁定：v2 兼容形状
         body = block["text"].splitlines()
         if body and body[0].startswith(BLOCK_HEADER):
             body = body[1:]

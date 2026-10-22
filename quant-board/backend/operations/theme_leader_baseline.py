@@ -78,6 +78,8 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             "prevBoardN": (sum(1 for s in stocks if s["code"] in prev_sealed)
                            if prev_sealed is not None else None),
             "peerCodes": [s["code"] for s in others],
+            # 板内封板名单（v3 板内解析用：让 L2 计数与 boardN 同口径，不把触板未封混进来）
+            "boardCodes": [s["code"] for s in stocks],
         })
     return rows, meta
 

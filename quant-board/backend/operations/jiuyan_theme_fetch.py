@@ -1,19 +1,18 @@
 # -*- coding: utf-8 -*-
-"""韭研「题材/事件」语料拉取层（L3 前瞻事件日历 + 板块级催化原文，2026-10-20）。
+"""韭研题材语料拉取层（仅剩产业树 `ai/industry/list`；2026-10-23 v4 换源后单源化）。
 
 背景（用户提问「jev 能不能靠 jiuyan 的板块异动解析判题材」）：
-`/action/field` 只给板块名/家数/名单 + 个股 expound，**没有板块级文本**。但同一套认证下
-韭研另有三个端点携带题材语料（本模块只做拉取+解析，不落库）：
+`/action/field` 只给板块名/家数/名单 + 个股 expound，**没有板块级文本**。同一套认证下
+韭研产业树端点携带板块级催化原文（本模块只做拉取+解析，不落库）：
 
-1. `/timeline/news {limit}` → **未来 1-3 日投资日历**（事件标题 + 内容）+ 当日「早报」事件清单：
-     e.g. 2026-10-21「英伟达GTC大会：将在德国柏林举行，黄仁勋 21 日主题演讲…聚焦物理AI」
-2. `/timeline/list {limit}` → 更宽的时间轴：已发生≈2 周 + **未发生≈2 周**，每条带
-     `grade`（重要度 1-5）、`create_time`（录入时间→事件新近度）、`theme_list`（题材标签）
-3. `/ai/industry/list {}` → AI 产业树：顶层板块 `group_name` + **板块级催化原文 `content`**
-     + `hot`（热度）+ `update_time` + `children`（子行业，各自也有 content）
+- `/ai/industry/list {}` → AI 产业树：顶层板块 `group_name` + **板块级催化原文 `content`**
+  + `hot`（热度）+ `update_time` + `children`（子行业，各自也有 content）
 
-设计裁决（AGENTS §1.2-1/§4.0）：
-- 单一事实源：题材语料只认韭研这三条端点，不接财联社/同花顺（多源会出"看着像催化"的口径漂移）；
+**事件层（日历/早报）已换源**：`timeline/news`、`timeline/list` 两端点随 2026-10-23
+裁决（方案 A：事件层唯一权威源=开盘啦，`kpl_theme_fetch.py`）退役，采集与解析代码删除，
+`jiuyan_timeline` 集合导出归档后 drop（data/backups/jiuyan_timeline-archive-20261023.jsonl）。
+产业树无 KPL 对应物，保留。设计裁决（AGENTS §1.2-1/§4.0）：
+- 单一事实源：事件语料只认开盘啦，产业树催化只认韭研（每类语料一个权威源）；
 - fail-visible：errCode 9=配额、1/110=鉴权失败，结构化返回；解析缺字段不伪造 0/空成功；
 - 与异动采集共用认证链（`jiuyan_auth`），不新建凭据通道。
 """
@@ -22,8 +21,6 @@ from __future__ import annotations
 import json
 
 # 端点（POST，与 /action/field 同一 API_BASE）
-PATH_TIMELINE_NEWS = "/timeline/news"
-PATH_TIMELINE_LIST = "/timeline/list"
 PATH_AI_INDUSTRY = "/ai/industry/list"
 
 
@@ -64,68 +61,6 @@ def _errcode_error(payload: dict, what: str) -> dict | None:
 
 
 # ── 解析（纯函数，可单测） ────────────────────────────────────────────────
-def parse_timeline_news(payload: dict) -> dict:
-    """`/timeline/news` → {ok, days:[{date, items:[{articleId,title,content}]}]}。
-
-    data 形状不稳定（实测有时 list，有时 {msg,data:[...]}）：两种都接受，宁可如实空列表。
-    """
-    data = (payload or {}).get("data")
-    if isinstance(data, dict):
-        data = data.get("data")
-    if not isinstance(data, list):
-        return {"ok": False, "error": f"timeline/news data 形状异常: {type(data).__name__}",
-                "days": []}
-    days = []
-    for block in data:
-        if not isinstance(block, dict):
-            continue
-        items = []
-        for art in block.get("list") or []:
-            if not isinstance(art, dict):
-                continue
-            items.append({
-                "articleId": str(art.get("article_id") or ""),
-                "title": (art.get("title") or "").strip(),
-                "content": (art.get("content") or "").strip(),
-            })
-        days.append({"date": str(block.get("date") or ""), "items": items})
-    return {"ok": True, "days": [d for d in days if d["date"]]}
-
-
-def parse_timeline_list(payload: dict) -> dict:
-    """`/timeline/list` → {ok, items:[{timelineId,articleId,date,title,content,grade,
-    createTime,themes}]}（含**未来**日期 = 事件日历；grade/录入时间用于新近度判定）。"""
-    data = (payload or {}).get("data")
-    if isinstance(data, dict):
-        data = data.get("data")
-    if not isinstance(data, list):
-        return {"ok": False, "error": f"timeline/list data 形状异常: {type(data).__name__}",
-                "items": []}
-    out = []
-    for block in data:
-        if not isinstance(block, dict):
-            continue
-        date = str(block.get("date") or "")
-        for art in block.get("list") or []:
-            if not isinstance(art, dict):
-                continue
-            tl = art.get("timeline") or {}
-            themes = [str(t.get("name") or t.get("title") or t)
-                      for t in (tl.get("theme_list") or art.get("theme_list") or []) if t]
-            grade = tl.get("grade")
-            out.append({
-                "timelineId": str(tl.get("timeline_id") or ""),
-                "articleId": str(art.get("article_id") or ""),
-                "date": str(tl.get("date") or date),
-                "title": (art.get("title") or "").strip(),
-                "content": (art.get("content") or "").strip(),
-                "grade": grade if isinstance(grade, int) else None,
-                "createTime": tl.get("create_time") or None,
-                "themes": [t for t in themes if t],
-            })
-    return {"ok": True, "items": [it for it in out if it["date"] and it["title"]]}
-
-
 def _walk_industry(node: dict, parent_code: str | None, parent_path: list[str],
                    out: list[dict]) -> None:
     """递归展平 `ai/industry/list`（children 可能是 dict/单元素/列表/缺失）。"""
@@ -182,21 +117,6 @@ def parse_ai_industry(payload: dict) -> dict:
     return {"ok": True, "nodes": uniq}
 
 
-def parse_timeline_news_response(payload: dict) -> dict:
-    """`/timeline/news` 完整响应 → 解析结果 + errCode 结构化错误。"""
-    err = _errcode_error(payload, "timeline/news")
-    if err:
-        return {**err, "days": []}
-    return parse_timeline_news(payload)
-
-
-def parse_timeline_list_response(payload: dict) -> dict:
-    err = _errcode_error(payload, "timeline/list")
-    if err:
-        return {**err, "items": []}
-    return parse_timeline_list(payload)
-
-
 def parse_ai_industry_response(payload: dict) -> dict:
     err = _errcode_error(payload, "ai/industry/list")
     if err:
@@ -216,20 +136,6 @@ def _fetch(path: str, body: dict, *, session_cookie: str, token: str, timestamp:
     except json.JSONDecodeError as exc:
         return {"ok": False, "authFailed": False, "error": f"{what}: json {exc}"}
     return parser(payload)
-
-
-def fetch_timeline_news(*, session_cookie: str, token: str, timestamp: str,
-                        limit: int = 20) -> dict:
-    return _fetch(PATH_TIMELINE_NEWS, {"limit": limit}, session_cookie=session_cookie,
-                  token=token, timestamp=timestamp, parser=parse_timeline_news_response,
-                  what="timeline/news")
-
-
-def fetch_timeline_list(*, session_cookie: str, token: str, timestamp: str,
-                        limit: int = 60) -> dict:
-    return _fetch(PATH_TIMELINE_LIST, {"limit": limit}, session_cookie=session_cookie,
-                  token=token, timestamp=timestamp, parser=parse_timeline_list_response,
-                  what="timeline/list")
 
 
 def fetch_ai_industry(*, session_cookie: str, token: str, timestamp: str) -> dict:

@@ -583,3 +583,249 @@ cd quant-board
 | H1 的 81 只计入验收 | 降级为结构/事件层观察，**不进题材判据验收** |
 | 20 交易日 ≈ 4 周 | 仍是 ≈4 周，但样本无泄漏、质量更高 |
 
+
+---
+
+## 12. 题集 v3：证据供给修复 + 门控收紧（2026-10-22 用户裁决，当日落地）
+
+> 触发与归因：用户指出题材龙头面板大量「证据不足/板块未映射」（南矿集团 001360 为例，
+> 韭研实际已归类「俄乌重建」）。全量取证见 `theme-leader-corpus-attribution-20261022.md`
+> （124 条标签零调用复扫）：门控 49/124=39.5%，其中 90% 是粗分桶；模型原答 49/49 自判
+> insufficient（均值 1.00）——降 IE 率只能补证据供给。用户裁决「方案没问题」+ 三点补充。
+
+### 12.1 用户裁决（2026-10-22）
+
+| # | 裁决 | 落地 |
+|---|---|---|
+| D1 | 采纳归因方案（P0 证据层 + P1 门条件 v3 + 前端同步） | §12.2 |
+| D2 | **门控收紧**：公告/其他/新股等明确关联不到题材的个股**不纳入 jev 判定范围**（省 token） | §12.2-1 |
+| D3 | 前端黄色「多代际」警示**结项**（多日实测确认：历史档不回改是设计内常态，行级版本徽标已可见） | §12.4 |
+| D4 | 前端表格「模型原答」「同桶基线」两列**删除**（对用户无参考价值；原答保留在展开的调用日志卡审计） | §12.4 |
+
+### 12.2 实现（代码 + 口径）
+
+1. **粗分桶排除（D2）**：`theme_leader_label.run()` 对 `NOT_A_THEME` 归一命中的板块
+   （公告/新股/其他/ST板块/大消费/大农业/医药医疗/**医疗医药**——字序变体有据收录）
+   在投喂前整行排除：**零调用零 token**；写 `status=skipped`/`skippedReason=not_a_theme_bucket`
+   台账行（fail-visible：前端显「未纳入」而非无声消失或烧完 token 再判证据不足）。
+   `--dry-run` 同样排除但零写入；rerun 端点对 skipped 显式拒绝（`not_rerun`，不冒充成功）。
+   10-22 实测：9 只龙头排除 3 只（公告/其他/新股）。
+2. **早报段落级题材匹配（P0）**：`briefing_paragraphs`/`briefing_paragraph_hits`
+   （确定性，无语义泛化）：早报段落「N）、题材名：正文」的题材名与板块名归一后
+   ①含式命中；②最长公共连续子串 ≥2 字且含 ≥1 汉字（纯拉丁锚如「AI」不得关联，
+   防 AI应用↔AI算力扩产 误配）。关联方式逐条披露。
+   真实样本回归：10-22 早报「俄乌和平」（泽连斯基和谈、11 月初三方谈判）与板块
+   「俄乌重建」按共享子串「俄乌」关联——此前完整板块名子串不命中、当日催化被漏检。
+3. **L2 板内解析纳入证据（P0）**：`board_snapshot` 从 `jiuyan_action {date}:final` 取
+   该板块分组（按 `boardCodes` 封板名单过滤，与结构行 boardN 同口径）+ 龙头 expound
+   （驱动标签 + 正文摘录 260 字截断）+ 板内同伴驱动标签（≤5 只）。
+   归因实测：49/49 门控样本这层**全在库**，此前从未投喂。
+4. **门条件收窄（P1）**：`evidenceMissing` v3 = L3（产业树/日历）与 L2（板内解析/早报段）
+   **均无**可用证据（缺一层 ≠ 无证据，§4.0）；新原因 `industry_tree_unmapped`
+   （v2 历史档 `board_unmapped` 标签保留供回读）。粗分桶已不进判定范围，门残余仅覆盖
+   真题材缺料日（如新股贫料、产业树无节点且无早报段/板内解析的日）。
+5. **代际**：`QUESTION_SET_VERSION_THEME_LEADER` v2→**v3**，hash `b8c00651de47`，
+   ammo `2026-10-22a`。v1/v2 历史档不回改不混评（前端行级版本徽标可见）。
+6. **relay 代际锁定**：`jev_relay_index` 消费 `build_theme_evidence_block(include_l2=False)`
+   ——v2 兼容形状逐字一致（relay 题集未换代，不得随本层升级静默改叙事）；
+   零调用实测 10-16 叙事无 L2/早报段泄漏，差异仅为语料日漂移（与旧代码同源）。
+
+### 12.3 测试（全 mock 零真调，§1.2-7）
+
+- `test_theme_event_digest.py`（+6 例 24）：`_shared_anchor` 汉字锚/拉丁锚、真实早报形状
+  解析、**南矿集团案例回归**（L3 未映射 + 早报段 + 板内解析 → 不判缺失）、L3/L2 均缺才门、
+  医疗医药收录、无解析龙头用同伴标签、sealed_codes 口径一致。
+- `test_theme_leader_ammo.py`：v3 代际戳冻结 + 门标签双代覆盖（v3 新原因 + v2 历史原因）。
+- `test_theme_leader_label.py`（+2 例 15）：粗分桶排除（零调用 + skipped 台账 + 字序变体命中）、
+  dry-run 排除零写入。
+- `test_relay_page_theme_leaders.py`（改 2 例 21）：两列删除 + skipped 行「未纳入」徽标 +
+  重跑按钮不渲染；多代际黄牌结项断言（回填警示保留）。
+- 回归：`pytest -m hotlist` **1082 passed**；`tests/operations` **243 passed**；
+  relay_page 脚本 `node --check` 通过。
+
+### 12.4 前端同步（§1.2-5 同轮交付）
+
+- 表格删「模型原答」「同桶基线」两列（12→14 列改 12 列）；`tlProb` 不再回落模型原答括号数；
+  原答仍可见于展开的调用日志卡 JSON（审计口径不变）。
+- 「同桶」筛选下拉一并删除（raw key 对用户同样不可读；`baselineKey` 仍落库供评估）。
+- 多代际黄牌结项（D3）：`tlRenderBanner` 不再渲染 mixedVersions 警示；回填警示保留。
+- v3 证据分层展示：题材证据列 = 产业树节点（+N事件/+早报段N）→ 板内解析（+早报段）→
+  门原因徽标（产业树未映射/语料未采集/无正文且无事件）→ 非题材桶（skipped 行）。
+- skipped 行：灰显 + 「未纳入」徽标 + 原因；结局列「-」（无档位可验）；重跑按钮不渲染。
+
+### 12.5 成本与验收影响
+
+- **token 净变化**：排除粗分桶（历史日均 ≈4 只 × ≈2.3K ≈ −9K/日）vs L2/早报段增字
+  （+400~800 字/条 ≈ +0.7~1K × ≈6 只 ≈ +4~6K/日）→ **净降 ≈3~5K tokens/日**。
+- 评估：`theme_leader_pilot_eval` 对 `status=skipped` 单独计数（`notThemeSkipped`），
+  不进 degradedShare、不进名册（按设计排除 ≠ 通道故障）。
+- 验收门槛不变（§6/§11.6）：20 交易日 live 累积首评；H1 回填代不进验收；
+  新增观察项：门控率（live）38.1% → 预期 ≤15%（残余=真缺料日）。
+- **未重放**：现存 v2 live 日（10-20~10-22，30 条）保留为 v2 代不回改；自 10-23 起挂链产出 v3。
+  v3 与 v2 分组评估（评估脚本已按版本分组）。
+
+---
+
+## 13. 题集 v4：事件层换源开盘啦（2026-10-23 用户裁决方案 A，当日落地）
+
+> 背景：用户追问「开盘啦题材事件+新闻流与韭研投资日历+产业库有重叠吗？只需要单一源」。
+> 重叠实测（`theme-corpus-extra-sources-survey-20261023.md` §8）：前瞻日历 KPL≈韭研超集
+> （韭研 13 条前瞻中 ~11 条 KPL 也有，KPL 另多 ~40 条）；当日事件事实同源但 KPL 逐条全文
+> +来源+热度（韭研早报为单条汇总）；题材新闻流（Kword 标签+关联股）韭研无对应物；
+> 产业树/板内解析无 KPL 对应物。用户裁决：**方案 A——事件层唯一权威源=开盘啦，
+> 韭研 timeline（日历+早报）退役**。
+
+### 13.1 落地清单
+
+| # | 事项 | 实现 |
+|---|---|---|
+| 1 | KPL 采集链 | 新建 `kpl_theme_fetch.py`（三端点：Topic InfoList/InfoGet、ThemeNews GetList Type=-1/3；鉴权身份复用 `mapping_refresh.KPL_APP_BASE_PARAMS`，零新增凭据）+ `kpl_theme_store.py`（`kpl_topic_events`/`kpl_theme_news`/`kpl_theme_calendar` 三集合幂等 upsert + `kpl_api_calls` 计数）+ `kpl_theme_collect.py`（编排+CLI；详情**只补缺失**、单轮上限 8；日预算 `KPL_THEME_DAILY_CALL_BUDGET` 默认 20；间隔 3s + http_error 退避 1 次；空载荷=降级 §4.0） |
+| 2 | 韭研 timeline 退役 | `jiuyan_theme_fetch/store/collect` 删 timeline 两端点全部代码（单源化=产业树正文）；`jiuyan_timeline` 集合 **79 条 mongodump 式导出归档 `data/backups/jiuyan_timeline-archive-20261023.jsonl` 后 drop**（红线 4.2 单集合显式操作） |
+| 3 | 证据块 v4 | `theme_event_digest` 事件层改消费 KPL：当日题材事件（确定性包含+共享子串锚，逐条带来源/热度）、近两日题材新闻（**Kword 标签优先** + 关联股当日涨跌）、未来 N 日既定事件（开盘啦日历）；早报段落匹配泛化为共享子串锚通用规则；`briefingTopics`→`kwordTags` |
+| 4 | 题集 v4 | `QUESTION_SET_VERSION_THEME_LEADER` v3→**v4**，hash **`56dbb0709335`**，ammo `2026-10-23a`；题面②③④与档位判据的语料来源措辞同步（早报→题材事件/题材新闻）；门条件/档位枚举/打分锚不变 |
+| 5 | 调度 | `schedule.run_theme_corpus_collect_once`（kpl + jiuyan 双采集器互相独立）+ scheduler 挂链：盘前 08:45 = kpl（事件+新闻+日历），收盘后 16:10 = kpl 刷新 + 韭研产业树正文 |
+| 6 | 读口/前端 | `evidenceBriefingTopics`→`evidenceKwordTags`（API/relay_page/根前端同步）；证据列徽标「+早报段N」→「+题材N」 |
+| 7 | relay 兼容 | `jev_relay_index.theme_evidence_lines` 消费 `include_l2=False` 形状：无板内解析/新闻流节；事件/日历行来源标签随换源更新——**题材证据行为派生锚（非主锚、判据未变），来源漂移已登记、relay 不重放不换代**；relay 段头语料计数行同步 v4 形状 |
+
+### 13.2 测试（全 mock 零真调 + 生产库零 token 干跑）
+
+- 新 `test_kpl_theme_collect.py`（16 例）：解析真实样本形状、firstSeen 保留、详情只补缺失、
+  空详情不覆盖正文、窗口取数、预算跳详情保主源、dry-run 零写入照计数、空载荷降级；
+- `test_jiuyan_theme_collect.py` 重写（单源化）：timeline 用例删除、产业树用例保留；
+  **抓出一个真 bug**：`save_industry_nodes` 的 existing 投影漏 `content` 字段 →
+  「空正文不覆盖已采证据」守卫从未生效（§4.0），已修 + 回归锁；
+- `test_theme_event_digest.py` 重写（v4 KPL fixtures，11 例）；
+- 代际戳/门标签/relay_page/eval 测试同步；`pytest -m hotlist` **1079 passed**、
+  `tests/operations` **246 passed**、relay_page `node --check` 通过、根前端 vitest 143 文件全绿、
+  vue-tsc 无错。
+
+### 13.3 生产验证与遗留
+
+- 生产库干跑（零 token）：KPL 采集首日 **49 事件 + 50 新闻 + 50 日历** 全部落库（3 次调用 + 8 详情），
+  二跑幂等（written 49 / newDetails 0）；预算护栏实测生效（14+11>20 → 详情顺延，fail-visible）；
+- 题材龙头 v4 叙事干跑：南矿集团（俄乌重建）证据块 = Kword 标签新闻流（关联股南矿集团+10.00%）
+  + 板内解析全文——v3 时代整档 insufficient 的样本现在有完整三层证据；
+- **遗留**：①`timeline/list` 第 2 页验证事项随韭研日历退役一并作废；②KPL 事件详情 49-8=41 条
+  待次日槽位按预算补齐（护栏顺序：主源优先）；③KPL HTTP 端点限流/迁移 TCP 风险 →
+  `kpl_api_calls` 计数 + 空载荷降级监控，若大面积迁移需另立预注册；④存量 v3 标签
+  （10-22 六条）保留为 v3 代，10-23 起 16:20 槽位产出 v4。
+
+---
+
+## 14. 题集 v5：三层判断重构（题材深度 → 延续性 → 概率 → 空间；2026-10-23 用户裁决，当日落地）
+
+> 用户需求（原文大意）：语料丰富了，把题目集重构，**增加题材延续性判断题**，根据题材产业树
+> 和新闻流判定**题材炒作深度**，从而推断题材龙头连板的概率多大、**能走多远**——而不是单一
+> 论断龙头隔日连板概率（预测个股走势）。
+
+### 14.1 设计（v5 四题，catalyst_stage 被深度题取代）
+
+| # | 题 | 档位 | 判据要点 |
+|---|---|---|---|
+| 1 | `theme_speculation_depth` **题材炒作深度** | `igniting` 启动期 / `fermenting` 发酵期 / `climax` 高潮期 / `ebbing` 退潮期 / `insufficient` | 事件/新闻新增密度（**热度序列是否断流/见顶**）、梯队形态（首板潮/中军/高标分化）、家数变化。**取代 v1-v4 `catalyst_stage`**（后者是它的退化形态；旧代文档字段保留回读，不跨代映射） |
+| 2 | `theme_continuation` **题材延续性** | `strong_extend` ≥2日 / `weak_extend` ≤1日 / `ending` 临近结束 / `insufficient` | 未来 1-3 日既定事件排队（前瞻日历）、事件/新闻是否仍新增、催化是否被分流、梯队完整性 |
+| 3 | `leader_nextday_continue` **次日概率**（不变） | 四档 + insufficient | **保留为校准基线锚**——同桶 Brier 对照验收链不中断 |
+| 4 | `leader_headroom` **龙头剩余空间** | `space_2plus` ≥2板 / `space_1` ≈1板 / `peak` 空间已尽 / `insufficient` | 综合前三题 + 龙头身位（是否龙一/总龙头、高度领先度、封板质量）；题面明示「空间判断≠次日概率判断」 |
+
+逻辑链：**题材层（深度/延续性）→ 个股层（概率/空间）**——正是用户要的「从题材推断龙头，
+而不是单一论断个股」。
+
+### 14.2 配套原料与机制
+
+1. **题材热度序列（新增证据节）**：`theme_heat_series` 近 5 日该题材（确定性关联口径同事件/新闻）
+   新闻条数·事件条数·最高热度按日聚合，一行入证据块（`include_l2` 形状）——单日快照看不出
+   「断流/见顶」，序列才能支撑深度/延续性判断；无痕迹日如实写 0（纯资金/情绪驱动特征明示）。
+2. **确定性门扩为四题全门**：`evidenceMissing` 时四题全部强制 insufficient（模型已自判不足的
+   题不重复覆盖；`gate.forcedKeys` 留痕）——「无证据却判发酵期/强延续/空间≥2板」与 v1 时代
+   「无证据却给 0.34」是同一类失效，不留给模型自觉。
+3. **预算上界重标（4 题）**：fixed low/high 1,300/1,700 → **1,800/2,500**；旧 22 条真实账
+   （2 题代）只验「上界覆盖」，**非胖断言（≤1.35×）代际绑定** `_REAL_COST_LEDGER_V5`
+   （现为空）——**首个 v5 status=ok 日后必须逐条补账**，否则护栏失去校准依据（§10.5 纪律）。
+4. **结局回填扩展（零 token）**：`pilot_eval --write-outcome` 顺带回填 `outcomeBoardNNextDay`
+   （次日该板块封板家数，韭研 final 板块分组）——题材延续性/深度题的结局锚（强延续应见
+   家数维持/增长，ending 应见萎缩）。
+5. **读口/前端**：`themeSpeculationDepth`/`themeContinuation`/`leaderHeadroom`/`outcomeBoardNNextDay`
+   透传；表格「催化阶段」列 → 「题材深度」+「延续性」双列（12→13 列；旧代文档回落显示
+   catalystStage 原样，不跨代映射）。
+
+### 14.3 测试（全 mock 零真调 + 生产库零 token 干跑）
+
+- 代际戳 v5/`2026-10-23b`/`d72d4b183fd8` 冻结；四题键序锁定；
+- 四题全门用例（forcedKeys 精确断言 + 模型自判不足不重复覆盖）；
+- 热度序列三例（按日聚合/空痕迹显式 0/relay 兼容形状不含）；
+- 评估层 `outcomeBoardNNextDay` 回填 + 样本行新字段；
+- `pytest -m hotlist` **1083 passed**、`tests/operations` **247 passed**、根前端 143 文件全绿、
+  vue-tsc 干净；
+- 生产库干跑：6 龙头 v5 叙事 1,355~1,687 字 ≈ 2,884~4,271 tokens/条（上界口径），
+  热度序列逐板块可见（机器人 10-18 事件热度 77172 → 10-21 新闻 1 → 10-22 断流，一眼可读）。
+
+### 14.4 验收与待办
+
+1. **护栏补账（硬性待办）**：首个 v5 status=ok 日后，从 `narrative` 长度 × `usage` 反推
+   逐条补入 `_REAL_COST_LEDGER_V5`，恢复非胖断言（≤1.35×）；
+2. **样本观察期**：四题分布（尤其 `peak`/`ending` 高潮退潮档是否可达、`igniting/fermenting`
+   是否塌陷）随 20 交易日 live 累积首评；
+3. **延续性结局验收**：`theme_continuation=strong_extend` 组的次日板块家数应显著高于
+   `ending` 组（`outcomeBoardNNextDay` 对照表，首评时出）；
+4. 旧代（v1-v4）文档 `catalystStage` 保留原样，前端回落显示，不做跨代映射。
+
+### 14.5 v5 清库重跑记录（2026-10-23 用户裁决）
+
+1. **备份**：`mongodump`（D:\APP_SOFT\MongoDB\tools）单集合导出 124 条（v1×13 + v2×105 + 
+   v3 skipped×3）→ `data/backups/mongodump-theme-leader-labels-20261023/`；另有等规格 JSONL
+   双保险 `hotlist_jev_theme_leader_labels-archive-20261023-v1v4.jsonl`。
+2. **清库**：`hotlist_jev_theme_leader_labels` 整集合 drop（跨代字段与前端/读口错位，
+   用户裁决全部清理重来；恢复 = mongorestore 单集合）。
+3. **排除股不落库（v5 行为变更，覆盖 v3 台账设计）**：非题材粗分桶不入库不入页面
+   （防换代污染），排除事实只留运行日志；读口/rerun 端点/评估脚本/双前端 skipped 分支
+   同步移除，回归测试改锁「排除股不得落库」。
+4. **10-22 backfill（v5 首批 6 条，sampleOrigin=backfill）**：usage 23,654 tokens
+   （6×~3.9K），全 ok、零门控；v5 真实账 6 条已补入 `_REAL_COST_LEDGER_V5`，非胖断言
+   （≤1.35×）恢复生效——最紧一条余量 2.9%，护栏有效无需再调。
+5. **VPN 疑云澄清**：用户以为 VPN 未开导致失败，实测 6/6 真实成功（usage 全真、narrative
+   全长、responseRaw 空是 ok 行设计使然——仅解析失败才落原文）。
+
+---
+
+## 15. v6：insufficient 判据边界收紧（2026-10-23 海洋王归因 → 用户裁决，当日落地）
+
+### 15.1 归因（§1.2-6 固定顺序：原料 → 题目 → 协议 → 方案）
+
+- **原料层**：军工在 KPL 事件/新闻/日历近 5 日**真零痕迹**（探针实测：新闻 Kword 全集
+  =AI算力基建/MLCC/俄乌重建/物理AI/电影消费/算电协同/轻量化材料，事件全文无军工）——
+  匹配器无漏采，市况如此；产业树（exact 命中）+ 板内解析（421 字+同伴）有料。
+- **题目层（主因）**：v5 深度/延续题 insufficient 写「各层证据均无痕迹」但「各层」未定义，
+  与程序门（产业树+事件新闻+板内解析**三层同时**成立才强制）口径不一致；且「新闻断流」
+  同时是 climax/ebbing 的**判据信号**又被写成 insufficient 触发条件——同一事实既当信号又
+  当缺失。天然对照：南矿集团 5 日 1 条新闻→weak_extend，海洋王 0 条→insufficient，
+  4/6 批量自判不足证明是系统性题面问题。
+- **协议/解析层**：干净（四题全落库、门未触发）。
+- **方案层**：不需重设计，判据措辞修订。
+
+### 15.2 v6 修订内容（hash `1d098c87e07e`，ammo `2026-10-23c`）
+
+1. 深度/延续/空间三题 insufficient 判据收紧到**程序门同口径**（三层同时成立）；
+2. 「断流=信号不是缺失」明示入 instructions：零痕迹+板块仍涨停 = 无催化的纯资金/情绪驱动
+   ——高标孤军判 climax、家数萎缩判 ebbing；无新增催化判 weak_extend/ending；
+3. 换代即清：v5 首批 6 条 mongodump 归档（`mongodump-theme-leader-labels-20261023-v5batch`）
+   后 drop，10-22 以 v6 重跑（25,381 tokens，6/6 ok）。
+
+### 15.3 v6 首批结果（10-22 backfill 6 条，全部实质判断、零 insufficient）
+
+| 龙头 | 板块 | 深度 | 延续 | 空间 |
+|---|---|---|---|---|
+| 大业股份 | 机器人 | climax | weak_extend | space_1 |
+| 南矿集团 | 俄乌重建 | **igniting** | weak_extend | peak |
+| 海洋王 | 军工 | **climax**（原 insufficient） | **ending**（原 insufficient） | peak |
+| 哈空调 | 冰雪经济 | **ebbing** | ending | peak |
+| 海量数据 | 数据要素 | climax | ending | space_1 |
+| 睿能科技 | 半导体 | **ebbing** | ending | peak |
+
+海洋王落点与归因推断一致；档位分布拉开（climax×3/ebbing×2/igniting×1）。
+
+### 15.4 护栏复标（§10.5 缺陷当场修复）
+
+v6 题面加长（instructions +~400 字）→ 单条 residual 最高 2,682 > 旧 fixed 2,500，
+首批实测 25,381 > 护栏估算 24,390（低估 4%）——**上界护栏失效即缺陷**，当场复标
+`TOKENS_FIXED_HIGH 2,500→2,750`，v6 真实账 6 条入 `_REAL_COST_LEDGER_V6`，
+非胖断言恢复（最紧一条余量 2.3%）。

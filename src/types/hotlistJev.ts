@@ -333,15 +333,24 @@ export interface HotlistJevThemeLeaderRow {
   /** 落库口径（过证据门后）= 消费端单一事实源 */
   choice: string | null
   probabilities: Record<string, number> | null
-  /** 模型原答（审计用）：与 choice 不同时说明被证据门覆盖过，必须双显 */
+  /** 模型原答（审计用）：仅在展开行「证据门覆盖」注记与调用日志里展示（2026-10-22 删表格列） */
   modelChoice: string | null
   modelProbabilities: Record<string, number> | null
   catalystStage: string | null
+  /** v5：题材层三层判断（深度/延续性/龙头空间，均上表展示；旧代文档无此字段） */
+  themeSpeculationDepth?: string | null
+  themeContinuation?: string | null
+  leaderHeadroom?: string | null
+  /** 题材延续性结局锚：次日该板块封板家数（评估回填） */
+  outcomeBoardNNextDay?: number | null
   gate: { applied?: boolean; reason?: string | null; label?: string | null } | null
   evidenceMissing: boolean
   evidenceMissingReason: string | null
   evidenceIndustry: string | null
   evidenceEventTitles: string[]
+  /** v3/v4：L2 板内解析可用 / Kword 题材标签命中（开盘啦新闻流，题材证据分层展示用） */
+  evidenceBoardResolved?: boolean | null
+  evidenceKwordTags?: string[] | null
   baselineKey: string | null
   baselineMeta: { start?: string | null; end?: string | null; rows?: number } | null
   /** 次一交易日是否仍封板；null = 结局未封（不得展示为「未续」） */

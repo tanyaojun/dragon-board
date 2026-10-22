@@ -622,6 +622,8 @@
                   {{ origin === 'backfill' ? '回填（含未来信息）' : '前瞻' }} {{ n }}
                 </span>
               </div>
+              <!-- 多代际黄牌：relay_page 已按 2026-10-22 用户裁决移除，面板保留（两处读口相同，
+                   面板面向研究复盘保留警示属有意差异，非遗漏） -->
               <div v-if="themeLeaderDay.mixedVersions" class="tl-warn-row">
                 ⚠️ 该日存在多代际标签（{{ Object.entries(themeLeaderDay.versions).map(([v, n]) => `${v}=${n}`).join('，') }}），跨代不可比较
               </div>
@@ -650,10 +652,10 @@
                       <th>家数</th>
                       <th>续板概率</th>
                       <th>档位</th>
-                      <th>模型原答</th>
-                      <th>催化阶段</th>
+                      <th>题材深度</th>
+                      <th>延续性</th>
+                      <th>空间</th>
                       <th>题材证据</th>
-                      <th>同桶基线</th>
                       <th>结局</th>
                       <th>语料</th>
                     </tr>
@@ -673,19 +675,19 @@
                             {{ THEME_LEADER_CHOICE_NAMES[row.choice ?? ''] ?? row.choice ?? '-' }}
                           </span>
                         </td>
-                        <td :title="row.gate?.label ?? ''">
-                          <template v-if="row.modelChoice && row.modelChoice !== row.choice">
-                            <span class="tl-overridden">{{ THEME_LEADER_CHOICE_NAMES[row.modelChoice] ?? row.modelChoice }}</span>
-                            <span class="tl-gate-tag">{{ THEME_GATE_NAMES[row.gate?.reason ?? ''] ?? row.gate?.reason }}</span>
-                          </template>
-                          <span v-else class="tl-same">同档位</span>
+                        <td>
+                          <!-- v5 起 status=skipped 不落库（排除股不入库不入页面）；旧代 catalystStage 回落展示 -->
+                          <span v-if="row.themeSpeculationDepth">{{ THEME_DEPTH_NAMES[row.themeSpeculationDepth] ?? row.themeSpeculationDepth }}</span>
+                          <span v-else>{{ row.catalystStage ?? '-' }}</span>
                         </td>
-                        <td>{{ row.catalystStage ?? '-' }}</td>
+                        <td>
+                          <span>{{ row.themeContinuation ? (THEME_CONT_NAMES[row.themeContinuation] ?? row.themeContinuation) : '-' }}</span>
+                        </td>
+                        <td>
+                          <span>{{ row.leaderHeadroom ? (THEME_HEAD_NAMES[row.leaderHeadroom] ?? row.leaderHeadroom) : '-' }}</span>
+                        </td>
                         <td :title="(row.evidenceEventTitles ?? []).join('\n')">
-                          {{ row.evidenceIndustry ?? (row.evidenceMissingReason ? `缺失：${THEME_GATE_NAMES[row.evidenceMissingReason] ?? row.evidenceMissingReason}` : '已映射') }}
-                        </td>
-                        <td class="num" :title="`窗口 ${row.baselineMeta?.start ?? '-'} ~ ${row.baselineMeta?.end ?? '-'}（${row.baselineMeta?.rows ?? 0} 样本）`">
-                          {{ row.baselineKey ?? '-' }}
+                          {{ row.evidenceIndustry ?? (row.evidenceMissingReason ? `缺失：${THEME_GATE_NAMES[row.evidenceMissingReason] ?? row.evidenceMissingReason}` : (row.evidenceBoardResolved ? '板内解析' : '已映射')) }}
                         </td>
                         <td class="num">
                           <span v-if="row.outcomeSealedNextDay === null" class="tl-unsealed">未封</span>
@@ -941,7 +943,7 @@ watch([view, selectedDate], ([tab, date]) => {
 
 // ---------- 题材龙头（v2 题目集投喂可见性，2026-10-20） ----------
 // 存在理由：v2 判据与实际投喂语料必须在前端可见（AGENTS §1.2-5 研究↔展示同步）。
-// 落库口径（过门后）与模型原答**双显**；回填样本（sampleOrigin=backfill）单独打标，
+// 落库口径（过门后）为准；回填样本（sampleOrigin=backfill）单独打标；
 // 因为它含语料未来信息，不得当结论看。
 const themeLeaderDay = ref<HotlistJevThemeLeaderDay | null>(null)
 const themeLeaderLoading = ref(false)
@@ -961,10 +963,24 @@ const THEME_LEADER_CHOICE_NAMES: Record<string, string> = {
   insufficient: '证据不足',
 }
 
+// v5 题材层三层判断
+const THEME_DEPTH_NAMES: Record<string, string> = {
+  igniting: '启动期', fermenting: '发酵期', climax: '高潮期', ebbing: '退潮期',
+  insufficient: '证据不足',
+}
+const THEME_CONT_NAMES: Record<string, string> = {
+  strong_extend: '强延续', weak_extend: '弱延续', ending: '临近结束', insufficient: '证据不足',
+}
+const THEME_HEAD_NAMES: Record<string, string> = {
+  space_2plus: '空间≥2板', space_1: '空间≈1板', peak: '空间已尽', insufficient: '证据不足',
+}
+
 const THEME_GATE_NAMES: Record<string, string> = {
   board_unmapped: '板块未映射',
+  industry_tree_unmapped: '产业树未映射',
   corpus_not_collected: '语料未采集',
   no_content_no_event: '无正文且无事件',
+  not_a_theme_bucket: '非题材桶',
 }
 
 const filteredThemeLeaders = computed(() => {
