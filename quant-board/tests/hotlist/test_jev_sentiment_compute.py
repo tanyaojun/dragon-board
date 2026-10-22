@@ -263,12 +263,141 @@ def test_compute_day_evidence_raw_coverage_and_historical_asof(monkeypatch):
     assert len(cov["missingSlots"]) == 8
     assert len(ev["frames"]) == 2 and ev["close"]["slotTime"] == "15:00"
     assert ev["summary"]["peakTrueBoard"] == 4
-    assert ev["summary"]["trueBoardCoverage"] in ("partial", "full")
+    # 早盘历史槽不回填收盘态 → 仅收盘帧有真连板，必须标 close_only 而不是「全日峰值」
+    assert ev["summary"]["trueBoardCoverage"] == "close_only"
+    assert "收盘真连板 4 板（仅收盘帧有真连板）" in doc["narrativeRaw"]
     assert doc["frameCoverage"] == cov
     assert doc["corpusCaliberVersion"] == v2_module.EOD_CORPUS_CALIBER_VERSION
-    assert "【收盘帧证据】" in doc["narrativeRaw"]
+    # v2.6 裁决：不补收盘帧全量块；累计段仍给收盘真连板
+    assert "【收盘帧证据】" not in doc["narrativeRaw"]
+    assert "收盘真连板 4 板（仅收盘帧有真连板）" in doc["narrativeRaw"]
     assert "帧 2/10" in doc["narrativeRaw"]
     assert "缺失槽位" in doc["narrativeRaw"]
+
+
+def test_compute_day_historical_early_backfilled_pools_not_used_as_asof(monkeypatch):
+    """历史早盘帧池若为事后回填（ths_hist_backfill），不得冒充该槽 as-of 真连板。
+
+    回填帧的连板层是收盘态（THS 历史=EOD 语义）；日级聚合只允许 15:00 槽采信帧池，
+    早盘槽必须降级披露，否则 review P2-1：帧池捷径绕过日级 as-of 守卫。
+    """
+    monkeypatch.setattr(v2_module, "_sh_today", lambda: "2026-10-01")
+    calls = []
+
+    def fake_fetch(date8):
+        calls.append(date8)
+        return {"maxBoard": 4, "boards": {"one": 30, "two": 12, "three": 1, "four": 3, "high": 0}}
+
+    monkeypatch.setattr(v2_module, "_fetch_true_ladder", fake_fetch)
+    monkeypatch.setattr(v2_module, "_jev_config", lambda: (True, "tok", "acc"))
+    monkeypatch.delenv("JEV_TYPESAFE_KEY", raising=False)
+    early = slot_frame("2026-09-30", "09:30")
+    early["limitSummary"] = {
+        **early["limitSummary"], "source": "ths_hist_backfill",
+        "backfilledAt": "2026-10-01T00:00:00+08:00",
+        "thsPools": {"pools": {
+            "one": {"ok": True, "items": [{}] * 30},
+            "two": {"ok": True, "items": [{}] * 10},
+            "three": {"ok": True, "items": [{}] * 2},
+            "four": {"ok": True, "items": [{}]},
+            "high": {"ok": True, "items": [{}] * 2}}}}
+    db = FakeMongoDb({
+        "snapshot_frames": frame_rows(["2026-09-29"]) + [early, frame_rows(["2026-09-30"])[0]],
+        "snapshot_stock_rows": [{"datasetId": "dragonboard_live",
+                                 "snapshotId": f"half_hour:2026-09-30:{s}",
+                                 "code": "000001", "name": "甲", "rank": 1, "heat": 90,
+                                 "pctChange": 9.9, "change": 9.9, "price": 9.66,
+                                 "limitUpPrice": 9.66, "zlje": 3.0e6}
+                                for s in ("09:30", "15:00")],
+        "hotlist_jev_sentiment": [anchor_slot_doc("2026-09-29", 50)],
+    })
+
+    result = compute_and_upsert_for_day(
+        db, dataset_id="dragonboard_live", trading_date="2026-09-30", dry_run=True)
+
+    assert calls == [], "历史日早盘不得为回填帧池另发现查"
+    early_ev = result["evidenceRaw"]["frames"][0]
+    assert early_ev["slotTime"] == "09:30"
+    assert "maxTrueBoard" not in early_ev["limit"], "回填帧池不得当作 09:30 的 as-of 真连板"
+    assert any("事后回填" in item for item in early_ev["quality"]["degradedSources"])
+    assert result["evidenceRaw"]["summary"]["trueBoardCoverage"] == "close_only"
+    assert "收盘真连板 4 板（仅收盘帧有真连板）" in result["narrative"]
+
+
+def test_evidence_skip_reason_distinguishes_missing_snapshot_id():
+    """帧在但其 snapshotId 缺失/损坏：原因是 snapshot_missing，不是 rows_empty（排障不误导）。"""
+    frame = slot_frame("2026-09-30", "09:30")
+    frame["snapshotId"] = ""
+    db = FakeMongoDb({"snapshot_frames": [frame]})
+    assert v2_module._evidence_skip_reason(
+        db, "dragonboard_live", "half_hour", "2026-09-30", "09:30") == "snapshot_missing"
+
+
+def test_eod_reusable_requires_current_generation_and_close():
+    """daily 幂等复用条件：同代 + ok + 收盘帧完整；旧代/降级/缺收盘一律重算。"""
+    ok = {"status": "ok",
+          "questionSetVersion": v2_module.QUESTION_SET_VERSION,
+          "corpusCaliberVersion": v2_module.EOD_CORPUS_CALIBER_VERSION,
+          "frameCoverage": {"hasCloseFrame": True}}
+    assert v2_module._eod_reusable(ok) is True
+    assert v2_module._eod_reusable(None) is False
+    assert v2_module._eod_reusable({**ok, "status": "degraded"}) is False
+    assert v2_module._eod_reusable({**ok, "questionSetVersion": "v2.5"}) is False
+    assert v2_module._eod_reusable(
+        {**ok, "corpusCaliberVersion": "v2.5_pre_eod_fix"}) is False
+    assert v2_module._eod_reusable({**ok, "frameCoverage": {"hasCloseFrame": False}}) is False
+
+
+def test_compute_day_reuse_complete_skips_jev_call(monkeypatch):
+    monkeypatch.setattr(v2_module, "_jev_config", lambda: (True, "tok", "acc"))
+    existing = {"_id": "dragonboard_live:half_hour:2026-09-30:EOD", "kind": "eod",
+                "status": "ok",
+                "questionSetVersion": v2_module.QUESTION_SET_VERSION,
+                "corpusCaliberVersion": v2_module.EOD_CORPUS_CALIBER_VERSION,
+                "frameCoverage": {"hasCloseFrame": True},
+                "scores": {"day_temperature": 60.0}, "answers": {}, "narrativeRaw": "x"}
+    db = FakeMongoDb({"hotlist_jev_sentiment": [existing]})
+
+    def boom(*args, **kwargs):
+        raise AssertionError("收盘帧完整且同代的 EOD 不得重复调用 jev")
+
+    monkeypatch.setattr(v2_module, "call_jev", boom)
+    result = compute_and_upsert_for_day(
+        db, dataset_id="dragonboard_live", trading_date="2026-09-30",
+        reuse_if_complete=True)
+    assert result["written"] is False and result["reused"] is True
+    assert result["dayTemperature"] == 60.0
+
+
+def test_compute_day_no_frames_no_data_keeps_coverage():
+    """日级无任何帧：no_data 仍落覆盖度/代际戳（不静默丢文档结构）。"""
+    db = FakeMongoDb({})
+    result = compute_and_upsert_for_day(db, dataset_id="dragonboard_live",
+                                        trading_date="2026-09-30")
+    assert result["status"] == "no_data"
+    # 采集链 warning 需要可用原因，不得渲染成 "None"（review P3-2）
+    assert result["reason"] == "no_half_hour_frames"
+    assert result["errorDetail"] == "no half_hour frames"
+    doc = db["hotlist_jev_sentiment"].rows[0]
+    assert doc["status"] == "no_data"
+    assert doc["evidenceRaw"]["frameCoverage"]["expectedCount"] == 10
+    assert doc["evidenceRaw"]["frameCoverage"]["frameCount"] == 0
+    assert doc["frameCoverage"]["hasCloseFrame"] is False
+    assert doc["corpusCaliberVersion"] == v2_module.EOD_CORPUS_CALIBER_VERSION
+
+
+def test_compute_day_frames_without_rows_no_data_reason():
+    """帧在但所有槽无行：no_data 必须带结构化原因，且逐槽标记 rows_empty。"""
+    db = FakeMongoDb({"snapshot_frames": [slot_frame("2026-09-30", "09:30")]})
+    result = compute_and_upsert_for_day(db, dataset_id="dragonboard_live",
+                                        trading_date="2026-09-30")
+    assert result["status"] == "no_data"
+    assert result["reason"] == "frames_present_but_no_rows"
+    assert result["errorDetail"] == "frames present but no rows"
+    cov = result["frameCoverage"]
+    assert cov["emptyEvidenceSlots"] == [{"slot": "09:30", "reason": "rows_empty"}]
+    skipped = db["hotlist_jev_sentiment"].rows[0]["evidenceRaw"]["frames"]
+    assert skipped == []  # 无 evidence 帧，不伪造
 
 
 def test_compute_day_missing_close_disclosed(monkeypatch):
@@ -306,7 +435,7 @@ def test_compute_day_missing_close_disclosed(monkeypatch):
     doc = next(r for r in db["hotlist_jev_sentiment"].rows if r.get("kind") == "eod")
     cov = doc["frameCoverage"]
     assert cov["hasCloseFrame"] is False and cov["lastSlot"] == "14:00"
-    assert "收盘帧缺失" in doc["narrativeRaw"]
+    assert "无 15:00 收盘帧" in doc["narrativeRaw"]
     assert "非全天口径" in doc["narrativeRaw"]
 
 
@@ -668,6 +797,24 @@ def test_slot_stale_today_slot_rerun_no_live_fetch(monkeypatch):
     assert "maxTrueBoard" not in lim
     assert "真连板未采集" in " ".join((result["evidence"] or {}).get("quality", {}).get("degradedSources") or [])
     assert "真连板该帧未采集" in result["narrative"]
+
+
+def test_stored_doc_eod_caliber_not_reused_for_day_early_slot(monkeypatch):
+    """存档里是 ths_date_eod（单槽回放写下的收盘态）→ 日级早盘槽必须拒绝复用。"""
+    monkeypatch.setattr(v2_module, "_sh_today", lambda: "2026-10-22")
+    stored = {"_id": "dragonboard_live:half_hour:2026-10-21:10:00", "kind": "slot",
+              "evidenceRaw": {"limit": {"maxTrueBoard": 4, "trueBoardSource": "ths_date_eod",
+                                        "trueBoards": {"yiban": 34, "erban": 12, "sanban": 1,
+                                                       "sibanPlus": 3, "high": 0}}}}
+    db = FakeMongoDb({"hotlist_jev_sentiment": [stored]})
+    frame = slot_frame("2026-10-21", "10:00")
+    assert v2_module._resolve_slot_true_ladder(
+        db, "dragonboard_live", "half_hour", "2026-10-21", "10:00", frame,
+        allow_live=False, allow_historical_eod_ladder=False) is None
+    used = v2_module._resolve_slot_true_ladder(
+        db, "dragonboard_live", "half_hour", "2026-10-21", "10:00", frame,
+        allow_live=False, allow_historical_eod_ladder=True)
+    assert used and used["source"] == "ths_date_eod"
 
 
 def test_stored_doc_ladder_malformed_degrades_not_crashes():

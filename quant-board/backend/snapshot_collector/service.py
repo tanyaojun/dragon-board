@@ -829,20 +829,36 @@ class SnapshotCollectorService:
             )
 
             if snapshot_type == "daily":
-                # 触发=daily 快照；证据口径恒为 half_hour
+                # 触发=daily 快照；证据口径恒为 half_hour。15:00 half_hour 已算过则复用，
+                # 避免同一 EOD 在 15:00 / 15:30 各烧一次真实调用（2026-10-22 用户裁决）。
                 overview_result = compute_and_upsert_for_day(
                     db, dataset_id=dataset_id, trading_date=trading_date,
-                    snapshot_type="half_hour")
+                    snapshot_type="half_hour", reuse_if_complete=True)
             elif snapshot_type == "half_hour":
                 overview_result = compute_and_upsert_for_slot(
                     db, dataset_id=dataset_id, trading_date=trading_date, slot_time=slot_time)
+                if slot_time == "15:00":
+                    # 收盘帧到达即幂等重跑 EOD（覆盖迟到/重采的收盘帧；不阻断槽级链路）
+                    try:
+                        eod_result = compute_and_upsert_for_day(
+                            db, dataset_id=dataset_id, trading_date=trading_date,
+                            snapshot_type="half_hour")
+                        eod_status = str(eod_result.get("status") or "")
+                        if eod_status in ("degraded", "no_data"):
+                            warnings.append(
+                                f"hotlist_jev_eod_{eod_status}: "
+                                f"{eod_result.get('errorCode') or eod_result.get('reason') or eod_result.get('errorDetail')}")
+                    except Exception as exc:  # noqa: BLE001 — EOD 失败只 warning，不翻转槽级结果
+                        warnings.append(f"hotlist_jev_eod_failed: {exc}")
+                        logging.warning(
+                            "post-persist jev EOD failed for %s 15:00: %s", trading_date, exc)
             else:
                 overview_result = {"written": False, "skipped": True, "reason": "snapshot_type_not_applicable"}
             overview_status = str(overview_result.get("status") or "")
             if overview_status in ("degraded", "no_data"):
                 warnings.append(
                     f"hotlist_jev_{overview_status}: "
-                    f"{overview_result.get('errorCode') or overview_result.get('reason')}"
+                    f"{overview_result.get('errorCode') or overview_result.get('reason') or overview_result.get('errorDetail')}"
                 )
         except Exception as exc:
             warnings.append(f"hotlist_jev_failed: {exc}")

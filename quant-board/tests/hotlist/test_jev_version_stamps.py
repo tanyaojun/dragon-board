@@ -20,7 +20,7 @@ def test_all_jev_lines_have_dedicated_version_stamps():
     from backend.operations import jev_daily_line as daily
 
     # 每日链 5 线 + 链外登记
-    assert jev_state.QUESTION_SET_VERSION == "v2.5"                    # 热榜情绪
+    assert jev_state.QUESTION_SET_VERSION == "v2.6"                    # 热榜情绪（日级判据删减）
     assert drv.QUESTION_SET_VERSION_DRIVER == "v3.1"                   # 个股打标+合并相位
     assert drv.QUESTION_SET_VERSION_CYCLE == "v5"                      # cycle 阶段（链外）
     assert drv.QUESTION_SET_VERSION_PHASE_BAND == "v1"                 # 相位带（复盘修复起戳）

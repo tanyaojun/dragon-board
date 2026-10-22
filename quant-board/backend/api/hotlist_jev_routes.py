@@ -600,7 +600,13 @@ def get_hotlist_jev_sentiment_overview(date: str | None = None) -> dict[str, Any
                        "dayCrowding": _choice("day_crowding"),
                        "dayCrowdingProbabilities": _probs("day_crowding"),
                        "historyAnchorRange": doc.get("historyAnchorRange"),
-                       "computedAt": doc.get("computedAt")},
+                       "computedAt": doc.get("computedAt"),
+                       # 2026-10-22 日级语料修复：覆盖度/代际戳进概览读口（前端角标用；
+                       # 旧文档字段缺失 → null，不伪造）
+                       "anchoredSlotTime": doc.get("anchoredSlotTime"),
+                       "frameCoverage": doc.get("frameCoverage"),
+                       "corpusCaliberVersion": doc.get("corpusCaliberVersion"),
+                       "evidenceRawUnavailable": doc.get("evidenceRawUnavailable")},
                 "rule": None if rule is None else {
                     "score": rule.get("score"),
                     "stageCandidate": rule.get("stageCandidate"),

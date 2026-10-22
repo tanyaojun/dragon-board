@@ -325,6 +325,10 @@ def test_sentiment_overview_dual_table(monkeypatch):
                                      "probabilities": {"no_crowding": 0.6}}},
         "scores": {"day_temperature": 64.0},
         "computedAt": 1790000000,
+        "corpusCaliberVersion": "eod-2026-10-22",
+        "frameCoverage": {"expectedCount": 10, "frameCount": 9,
+                          "missingSlots": ["14:30"], "lastSlot": "15:00",
+                          "hasCloseFrame": True},
     }]
     db["hotlist_sentiment"].rows = [{
         "_id": f"{DATASET}:half_hour:{DATE}:EOD", "datasetId": DATASET,
@@ -341,6 +345,9 @@ def test_sentiment_overview_dual_table(monkeypatch):
     assert body["ok"] is True and body["date"] == DATE
     assert body["jev"]["dayTemperature"] == 64.0
     assert body["jev"]["dayStage"] == "ferment" and body["jev"]["dayCrowding"] == "no_crowding"
+    assert body["jev"]["frameCoverage"]["hasCloseFrame"] is True
+    assert body["jev"]["frameCoverage"]["missingSlots"] == ["14:30"]
+    assert body["jev"]["corpusCaliberVersion"] == "eod-2026-10-22"
     assert body["rule"]["score"] == 59.1 and body["rule"]["stageCandidate"] == "启动"
     assert body["degraded"] is False
 

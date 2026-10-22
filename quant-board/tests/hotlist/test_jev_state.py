@@ -367,16 +367,18 @@ def _day_evidence(slot, *, close=False, no_indices=False, no_amount=False,
         yesterday_same_slot_total_amount=1.0e12)
 
 
-def test_build_day_jev_state_close_block_and_frame_coverage():
+def test_build_day_jev_state_no_close_block_but_cumulative_close_facts():
+    """v2.6 裁决：不补收盘帧全量块，只保留压缩行+当日累计（收盘实况）。"""
     close = _day_evidence("15:00", close=True)
     prior = _day_evidence("09:30")
     s = build_day_jev_state(
         trading_date="2026-10-21", evidences=[prior, close],
         expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
-    assert "【收盘帧证据】" in s
+    assert "【收盘帧证据】" not in s
+    assert "封板质量：" not in s and "触板回撤池：" not in s
+    assert "焦点个股：" not in s and "涨停原因" not in s
+    # 压缩行与累计仍给收盘实况（判据可用的炸板率/封板率/涨停/真连板）
     assert "封板率 85%" in s
-    assert "封板质量：一字/秒板 27 家" in s and "触板回撤池：大幅回撤 3 家" in s
-    assert "焦点个股：" in s and "涨停原因" in s
     assert "【当日累计】" in s and "收盘涨停 68" in s and "收盘封板率 85%" in s
     assert "帧 2/2" in s
     assert "全日真连板峰值 4 板（2/2 帧有真连板）" in s
@@ -389,8 +391,9 @@ def test_build_day_jev_state_missing_close_disclosed():
     s = build_day_jev_state(
         trading_date="2026-10-21", evidences=[prior, mid],
         expected_slots=["09:30", "14:00"], present_slots=["09:30", "14:00"])
-    assert "【收盘帧证据】" in s and "收盘帧缺失（末帧 14:00）" in s
-    assert "非全天口径" in s
+    assert "【收盘帧证据】" not in s
+    assert "收盘帧 缺" in s
+    assert "无 15:00 收盘帧（末帧 14:00；日级判读非全天口径）" in s
     assert "帧 2/2" in s
 
 
@@ -416,21 +419,20 @@ def test_build_day_jev_state_quality_counts_not_string_dedup():
     assert "两市总成交额缺失（历史帧无该字段）" not in s
 
 
-def test_build_day_jev_state_heat_note_only_when_close_leaders_rendered():
-    # 早盘热度缺、收盘帧热度正常 → 收盘块按热度渲染，早盘槽级噪音不得泄漏到日级质量段
+def test_build_day_jev_state_no_slot_only_heat_noise():
+    """v2.6 日级不渲染焦点个股 → 槽级「热度未采集」不得泄漏进日级质量段。"""
     prior = _day_evidence("09:30", no_heat=True)
     close = _day_evidence("15:00", close=True)
     s = build_day_jev_state(
         trading_date="2026-10-21", evidences=[prior, close],
         expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
     assert "热度字段未采集" not in s
-    # 收盘帧热度全零时收盘块按 rank 渲染 → 该披露必须保留
     prior2 = _day_evidence("09:30", no_heat=True)
     close2 = _day_evidence("15:00", close=True, no_heat=True)
     s2 = build_day_jev_state(
         trading_date="2026-10-21", evidences=[prior2, close2],
         expected_slots=["09:30", "15:00"], present_slots=["09:30", "15:00"])
-    assert "热度字段未采集" in s2
+    assert "热度字段未采集" not in s2
 
 
 def test_build_history_anchor_effective_sample_and_provenance():
@@ -509,6 +511,15 @@ def test_v2_question_sets_structure():
         "no_crowding", "insufficient_evidence"}
     assert set(JEV_DAY_QUESTIONS["day_crowding"]["criteria"]) == \
         set(JEV_SLOT_QUESTIONS["crowding"]["criteria"])
+    # v2.6（2026-10-22 用户裁决）：日级判据删去日级语料未供给的封板率/焦点高位股/题材分散；
+    # 槽级判据保留（槽位当前帧段有这些证据）。
+    day_crowd = JEV_DAY_QUESTIONS["day_crowding"]["criteria"]
+    assert "封板率" not in day_crowd["late_seal_weakness"]
+    assert "焦点高位股" not in day_crowd["top_acceleration"]
+    assert "题材分散" not in day_crowd["no_crowding"]
+    assert "封板率" not in day_crowd["insufficient_evidence"]
+    assert "封板率" in JEV_SLOT_QUESTIONS["crowding"]["criteria"]["late_seal_weakness"]
+    assert "焦点高位股" in JEV_SLOT_QUESTIONS["crowding"]["criteria"]["top_acceleration"]
     # 拥挤解除判据须锚叙事已给证据（当日早些帧/参照高位），no_crowding 判据带分流指针
     assert "参照高位" in JEV_SLOT_QUESTIONS["crowding"]["criteria"]["crowd_clearing"]
     assert "crowd_clearing" in JEV_SLOT_QUESTIONS["crowding"]["criteria"]["no_crowding"]
@@ -737,6 +748,20 @@ def test_collect_slot_evidence_partial_index_extra_disclosed():
     idx_line = [line for line in s.split("\n") if line.startswith("指数与量能：")][0]
     assert "深成指 -0.40%" in idx_line
     assert "创业板指" not in idx_line and "科创50" not in idx_line
+
+
+def test_collect_slot_evidence_change_pct_only_not_core_missing():
+    """10-16 回填形态：主指数只有 changePct 没有 change——渲染走 pct，质量层不得报「指数缺失」。"""
+    frame = {"indices": {"sh": {"changePct": -0.5}, "hs300": {"changePct": -0.2},
+                         "zz500": {"changePct": 0.1}, "zz1000": {"changePct": 0.3}},
+             "limitSummary": _v3_frame()["limitSummary"]}
+    ev = _collect(frame=frame, rows=_v3_rows(), yesterday_rows=[], analysis_by_code={},
+                  slot_time="10:30")
+    degraded = " ".join(ev["quality"]["degradedSources"])
+    assert "指数缺失" not in degraded
+    assert "三指数缺席：深成指、创业板指、科创50" in degraded
+    s = build_slot_jev_state(trading_date="2026-10-16", slot_time="10:30", current=ev, priors=[])
+    assert "沪指 -0.50%" in s and "三指数缺席" in s
 
 
 def test_slot_narrative_day_peak_zero_truthiness():

@@ -1125,6 +1125,25 @@ def test_eod_rerun_flow_and_endpoint(js: str):
     assert "STATE.rerunBusy = key" in er and "STATE.rerunMsg =" in er
 
 
+def test_eod_row_displays_frame_coverage_badge(js: str):
+    """2026-10-22 日级语料修复：EOD 行显式展示收盘帧/覆盖度缺口（fail-visible 不静默）。"""
+    rs = _fn(js, "renderSlots")
+    assert "frameCoverage" in rs, "EOD 行应消费后端 frameCoverage 字段"
+    assert "无收盘帧" in rs and "覆盖" in rs, "缺收盘帧/缺槽位应显示角标"
+    assert "无帧" in rs, "全无帧不得说成「缺收盘帧」"
+    assert "历史证据未落档" in rs, "存量未落 evidenceRaw 的文档须显式标记"
+
+
+def test_eod_coverage_note_outside_table_and_counts_empty_slots(js: str):
+    """审查 P2-1/P3-1：覆盖提示放表格外；缺槽位与空证据帧分别披露。"""
+    re_ = _fn(js, "renderEod")
+    assert "$('eodCovNote').innerHTML = covNote" in re_, "提示须注入表格外容器"
+    assert "covNote + head + rows" not in re_, "不得把 div 塞进 table.innerHTML"
+    assert "emptySlots" in re_ and "空证据帧" in re_, "空证据帧须独立披露"
+    assert "missingSlots.length" in re_, "缺槽位须独立计数"
+    assert "eodCovNote" in js, "页面须提供表格外提示容器"
+
+
 def test_eod_rerun_executes_post_and_refresh(js: str, tmp_path):
     """**行为**回归（node 探针）：真跑 eodRerun，断言请求体/刷新/取消路径。"""
     if shutil.which("node") is None:

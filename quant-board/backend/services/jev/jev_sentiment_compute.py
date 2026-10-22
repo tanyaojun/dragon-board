@@ -122,17 +122,71 @@ def _collect_evidence(db: Any, dataset_id: str, snapshot_type: str, trading_date
     rows = _load_rows(db, dataset_id, snapshot_id)
     if not rows:
         return None
+    allow_frame_ladder = _frame_ladder_allowed(frame, slot_time)
     evidence = collect_slot_evidence(
         frame=frame, rows=rows, yesterday_rows=yesterday_rows,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, snapshot_id), slot_time=slot_time,
         yesterday_same_slot_total_amount=(yesterday_amounts or {}).get(slot_time),
         daily_total_amount_fallback=daily_total_amount_fallback,
+        allow_frame_ladder=allow_frame_ladder,
         true_ladder=_resolve_slot_true_ladder(
             db, dataset_id, snapshot_type, trading_date, slot_time, frame,
             allow_live=allow_live_ladder,
-            allow_historical_eod_ladder=allow_historical_eod_ladder))
+            allow_historical_eod_ladder=allow_historical_eod_ladder,
+            allow_frame_ladder=allow_frame_ladder))
     _note_slot_ladder_caliber(evidence)  # 日级逐帧链/priors 同享历史回放口径披露
     return evidence
+
+
+def _evidence_skip_reason(db: Any, dataset_id: str, snapshot_type: str,
+                          trading_date: str, slot: str) -> str:
+    """帧存在但未产出 evidence 的结构化原因（日级覆盖度用，不静默丢槽）。"""
+    frame = _load_frame(db, dataset_id, snapshot_type, trading_date, slot)
+    if frame is None:
+        return "frame_missing"
+    snapshot_id = str(frame.get("snapshotId") or "").strip()
+    if not snapshot_id:
+        return "snapshot_missing"
+    if not _load_rows(db, dataset_id, snapshot_id):
+        return "rows_empty"
+    return "unknown"
+
+
+def _eod_reusable(doc: dict | None) -> bool:
+    """已有 EOD 是否可复用（2026-10-22 裁决：15:00 帧到达后幂等重跑，daily 不再重复烧调用）。
+
+    只有「同代 + 收盘帧完整 + ok」的文档可复用；缺收盘帧/降级/旧代一律重算，
+    保证 15:00 迟到或重采后的 EOD 会被覆盖成 close-complete 版本。
+    """
+    if not isinstance(doc, dict):
+        return False
+    if doc.get("status") != "ok":
+        return False
+    if doc.get("questionSetVersion") != QUESTION_SET_VERSION:
+        return False
+    if doc.get("corpusCaliberVersion") != EOD_CORPUS_CALIBER_VERSION:
+        return False
+    coverage = doc.get("frameCoverage")
+    return isinstance(coverage, dict) and coverage.get("hasCloseFrame") is True
+
+
+def _eod_evidence_payload(evidences: list, *, slots: list, expected_slots: list,
+                          skipped_frames: list) -> tuple[dict, dict]:
+    """EOD 结构化证据（evidenceRaw）+ 摘要（叙事/落库共用同一事实源）。"""
+    summary = summarize_day_evidence(
+        evidences, expected_slots=expected_slots, present_slots=slots,
+        skipped_frames=skipped_frames)
+    close = evidences[-1] if summary["frameCoverage"]["hasCloseFrame"] else None
+    payload = {
+        "frameCoverage": summary["frameCoverage"],
+        "frames": evidences,
+        "close": close,
+        "summary": {key: summary[key] for key in (
+            "peakZt", "closeZt", "peakTrueBoard", "peakRangeBoard", "trueBoardFrames",
+            "trueBoardCoverage", "closeZhabanRate", "closeFengbanRate", "closeAmount",
+            "closeAmountSource")},
+    }
+    return payload, summary
 
 
 # ── 真连板供给链（2026-10-22 语料口径修复，jev-slot-corpus-caliber-fix-preregistration.md §2.2）──
@@ -184,6 +238,25 @@ def _frame_has_true_ladder(frame: dict | None) -> bool:
     return derive_true_ladder_from_pools(pools) is not None
 
 
+def _frame_ladder_backfilled(frame: dict | None) -> bool:
+    """帧连板层是否为事后回填（ths_hist_backfill / limit_summary_backfilled）。
+
+    回填源是 THS 历史=EOD 态；只有 15:00 收盘槽才是该槽的 as-of 真值。
+    """
+    if not isinstance(frame, dict):
+        return False
+    ls = frame.get("limitSummary") if isinstance(frame.get("limitSummary"), dict) else {}
+    flags = frame.get("qualityFlags") if isinstance(frame.get("qualityFlags"), list) else []
+    return (str(ls.get("source") or "").strip() == "ths_hist_backfill"
+            or bool(ls.get("backfilledAt"))
+            or "limit_summary_backfilled" in flags)
+
+
+def _frame_ladder_allowed(frame: dict | None, slot_time: str) -> bool:
+    """非收盘槽不得采信事后回填帧池（review P2-1：帧池捷径绕过日级早盘守卫）。"""
+    return str(slot_time) == "15:00" or not _frame_ladder_backfilled(frame)
+
+
 def _stored_doc_ladder(db: Any, dataset_id: str, snapshot_type: str,
                        trading_date: str, slot_time: str) -> dict | None:
     """已存槽文档 evidenceRaw.limit 的真连板 as-of 复用（当日已走帧不现查的唯一来源）。
@@ -204,7 +277,10 @@ def _stored_doc_ladder(db: Any, dataset_id: str, snapshot_type: str,
     try:
         high = int(tb.get("high") or 0)
         siban = int(tb.get("sibanPlus") or 0)
-        return {"maxBoard": int(mtb), "source": "stored_doc",
+        # 保留落档来源（如 ths_date_eod）：day 聚合对非收盘槽必须能识破
+        # 「存档里是 EOD 回放口径」而拒绝把它当 as-of 真值（2026-10-22 第二轮裁决）。
+        return {"maxBoard": int(mtb),
+                "source": str(limit.get("trueBoardSource") or "stored_doc"),
                 "boards": {"one": int(tb.get("yiban") or 0), "two": int(tb.get("erban") or 0),
                            "three": int(tb.get("sanban") or 0), "four": max(siban - high, 0),
                            "high": high}}
@@ -297,20 +373,31 @@ def _note_slot_ladder_caliber(evidence: dict | None) -> str | None:
 
 
 def _resolve_slot_true_ladder(db: Any, dataset_id: str, snapshot_type: str, trading_date: str,
-                              slot_time: str, frame: dict | None, *, allow_live: bool) -> dict | None:
+                              slot_time: str, frame: dict | None, *,
+                              allow_live: bool,
+                              allow_historical_eod_ladder: bool = True,
+                              allow_frame_ladder: bool = True) -> dict | None:
     """槽位真连板外部供给解析（帧池优先已由 collect 内部处理，本函数只补外部源）。
 
     优先级：① 已存槽文档 as-of 复用（当日已走帧唯一合法源——绝不现查，now-state 污染）；
     ② 当日**当前时钟槽**（allow_live 且槽后容差内）THS 现查 as-of——超出容差的当日
        已走槽重跑/回补一律 None 降级（现查 now-state 会冒充槽位 as-of，review P1）；
     ③ 历史日按日查（EOD 态，source=ths_date_eod，`_note_slot_ladder_caliber` 披露）；
+       日级聚合对非收盘槽传 ``allow_historical_eod_ladder=False``：早盘行不得被收盘态
+       抹平（2026-10-22 日级审计 P0-3）；单槽回放仍默认允许并披露。
     ④ None 降级（叙事「真连板该帧未采集」）。
     """
-    if _frame_has_true_ladder(frame):
+    if allow_frame_ladder and _frame_has_true_ladder(frame):
         return None  # 帧内连板层可用（15:00/EOD 帧）→ collect 自派生，零外部请求
     stored = _stored_doc_ladder(db, dataset_id, snapshot_type, trading_date, slot_time)
     if stored is not None:
-        return stored
+        # 日级聚合对非收盘槽禁用 EOD 回放口径的存档值：否则早盘行仍被收盘态抹平
+        # （即使存档是「早先单槽回放」写入的）。收盘槽 15:00 允许并披露。
+        if (not allow_historical_eod_ladder
+                and stored.get("source") == "ths_date_eod"):
+            stored = None
+        else:
+            return stored
     today = _sh_today()
     date8 = trading_date.replace("-", "")
     if trading_date == today:
@@ -321,6 +408,8 @@ def _resolve_slot_true_ladder(db: Any, dataset_id: str, snapshot_type: str, trad
             ladder["source"] = "ths_live"
         return ladder
     if trading_date < today:
+        if not allow_historical_eod_ladder:
+            return None
         ladder = _fetch_true_ladder(date8)
         if ladder is not None:
             ladder["source"] = "ths_date_eod"
@@ -533,53 +622,92 @@ def evaluate_anchor_escape_alert(db: Any, *, dataset_id: str, trading_date: str)
 
 def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
                                   snapshot_type: str = "half_hour", origin: str = "collector",
-                                  dry_run: bool = False) -> dict[str, Any]:
+                                  dry_run: bool = False,
+                                  reuse_if_complete: bool = False) -> dict[str, Any]:
     """日级 EOD 计算+落库（hotlist_jev_sentiment）。异常向上抛，由链捕获为 warning。
+
+    ``reuse_if_complete=True``（daily 触发用）：已有同代、ok、收盘帧完整的 EOD 直接复用，
+    不再调 jev（15:00 half_hour 先到并已算 EOD 时，daily 15:30 只做幂等确认）。
+    ``False``（15:00 触发 / 手工 evaluate / eod rerun）：强制重算，覆盖迟到/重采的收盘帧。
     """
     _, token, account = _jev_config()
     slots = _slots_of_date(db, dataset_id, snapshot_type, trading_date)
+    expected_slots = [str(slot) for slot in _half_hour_slots()]
     doc_id = f"{dataset_id}:{snapshot_type}:{trading_date}:EOD"
+    if reuse_if_complete and not dry_run:
+        existing = db["hotlist_jev_sentiment"].find_one({"_id": doc_id})
+        if _eod_reusable(existing):
+            return {"written": False, "status": existing.get("status"), "reused": True,
+                    "frameCoverage": existing.get("frameCoverage"),
+                    "dayTemperature": (existing.get("scores") or {}).get("day_temperature")}
     base = {"_id": doc_id, "kind": "eod", "origin": origin, "datasetId": dataset_id,
             "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": "EOD",
             "asOf": f"{trading_date} EOD+08:00", "computedAt": int(time.time()),
             "questionsRaw": JEV_DAY_QUESTIONS, "anchoredSlotTime": slots[-1] if slots else None,
             "questionSetVersion": QUESTION_SET_VERSION,
+            "corpusCaliberVersion": EOD_CORPUS_CALIBER_VERSION,
             "errorCode": None, "errorDetail": None}
     if not slots:
+        empty_payload, _ = _eod_evidence_payload(
+            [], slots=[], expected_slots=expected_slots, skipped_frames=[])
         if not dry_run:
             db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id}, {**base, "status": "no_data", "errorDetail": "no half_hour frames",
                                   "answers": None, "scores": None, "usage": None, "model": None,
-                                  "evidenceRaw": None, "narrativeRaw": None, "responseRaw": None,
+                                  "evidenceRaw": empty_payload,
+                                  "frameCoverage": empty_payload["frameCoverage"],
+                                  "narrativeRaw": None, "responseRaw": None,
                                   "latencyMs": None}, upsert=True)
-        return {"written": True, "status": "no_data"}
+        return {"written": True, "status": "no_data",
+                "reason": "no_half_hour_frames", "errorDetail": "no half_hour frames",
+                "frameCoverage": empty_payload["frameCoverage"]}
 
     yesterday_rows = _latest_yesterday_rows(db, dataset_id, snapshot_type, trading_date)
     yesterday_amounts = _yesterday_total_amounts_by_slot(db, dataset_id, snapshot_type, trading_date)
     market_amounts = load_market_daily_amount_map(db)
     evidences = []
+    skipped_frames = []
     for slot in slots:
-        evidence = _collect_evidence(db, dataset_id, snapshot_type, trading_date, slot,
-                                     yesterday_rows, yesterday_amounts,
-                                     daily_total_amount_fallback=market_amounts.get(trading_date))
+        evidence = _collect_evidence(
+            db, dataset_id, snapshot_type, trading_date, slot,
+            yesterday_rows, yesterday_amounts,
+            daily_total_amount_fallback=market_amounts.get(trading_date),
+            # 日级聚合：历史日仅收盘槽允许按日查 EOD 真连板；早盘行不回填收盘态（as-of）
+            allow_historical_eod_ladder=(slot == "15:00"))
         if evidence is not None:
             evidences.append(evidence)
+        else:
+            skipped_frames.append({"slot": slot, "reason": _evidence_skip_reason(
+                db, dataset_id, snapshot_type, trading_date, slot)})
+    payload, _summary = _eod_evidence_payload(
+        evidences, slots=slots, expected_slots=expected_slots, skipped_frames=skipped_frames)
     if not evidences:
         if not dry_run:
             db["hotlist_jev_sentiment"].replace_one(
                 {"_id": doc_id}, {**base, "status": "no_data", "errorDetail": "frames present but no rows",
                                   "answers": None, "scores": None, "usage": None, "model": None,
-                                  "evidenceRaw": None, "narrativeRaw": None, "responseRaw": None,
+                                  "evidenceRaw": payload, "frameCoverage": payload["frameCoverage"],
+                                  "narrativeRaw": None, "responseRaw": None,
                                   "latencyMs": None}, upsert=True)
-        return {"written": True, "status": "no_data"}
+        return {"written": True, "status": "no_data",
+                "reason": "frames_present_but_no_rows",
+                "errorDetail": "frames present but no rows",
+                "frameCoverage": payload["frameCoverage"]}
 
+    previous_date = _latest_date_before(db, dataset_id, snapshot_type, trading_date)
+    yesterday_close_total_amount = yesterday_amounts.get("15:00")
+    if yesterday_close_total_amount is None and previous_date:
+        # 昨日 15:00 帧缺额时用 market_daily_amount 同源回退（日级审计 P1-2）
+        yesterday_close_total_amount = market_amounts.get(previous_date)
     anchor = build_history_anchor(build_history_stats_calendar(db, dataset_id, trading_date))
     narrative = build_day_jev_state(
         trading_date=trading_date, evidences=evidences,
-        yesterday_close_total_amount=yesterday_amounts.get("15:00"),
-        history_anchor=anchor)
+        yesterday_close_total_amount=yesterday_close_total_amount,
+        history_anchor=anchor, expected_slots=expected_slots, present_slots=slots,
+        skipped_frames=skipped_frames)
     if dry_run:
-        return {"status": "dry", "narrative": narrative}
+        return {"status": "dry", "narrative": narrative, "evidenceRaw": payload,
+                "frameCoverage": payload["frameCoverage"]}
 
     if not token and not os.environ.get("JEV_TYPESAFE_KEY", "").strip():
         # review M8：无 token 重跑的降级 replace 不得抹掉既往 ok 链路写入的锚告警字段
@@ -590,7 +718,8 @@ def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
         db["hotlist_jev_sentiment"].replace_one(
             {"_id": doc_id}, {**base, "status": "degraded", "errorCode": "missing_token",
                               "errorDetail": "JEV_CF_TOKEN / JEV_TYPESAFE_KEY not configured",
-                              "evidenceRaw": None, "narrativeRaw": narrative,
+                              "evidenceRaw": payload, "frameCoverage": payload["frameCoverage"],
+                              "narrativeRaw": narrative,
                               "answers": None, "scores": None, "usage": None, "model": None,
                               "responseRaw": None, "latencyMs": None, **carry}, upsert=True)
         return {"written": True, "status": "degraded", "errorCode": "missing_token"}
@@ -612,7 +741,8 @@ def compute_and_upsert_for_day(db: Any, *, dataset_id: str, trading_date: str,
                 trading_date, escape_alert["todayRate"], escape_alert["prevDate"],
                 escape_alert["prevRate"], escape_alert["threshold"])
     doc = {**base, "status": "ok" if parsed["ok"] else "degraded",
-           "evidenceRaw": None, "narrativeRaw": narrative,
+           "evidenceRaw": payload, "frameCoverage": payload["frameCoverage"],
+           "narrativeRaw": narrative,
            "responseRaw": envelope, "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
            "model": parsed.get("model"), "errorCode": parsed.get("errorCode"),
@@ -666,14 +796,17 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
                                      daily_total_amount_fallback=market_amounts.get(trading_date))
         if evidence is not None:
             priors.append(evidence)
+    allow_frame_ladder = _frame_ladder_allowed(frame, slot_time)
     current_evidence = collect_slot_evidence(
         frame=frame, rows=rows, yesterday_rows=yesterday_rows,
         analysis_by_code=_load_analysis_by_code(db, dataset_id, str(frame.get("snapshotId") or "")),
         slot_time=slot_time,
         yesterday_same_slot_total_amount=yesterday_amounts.get(slot_time),
         daily_total_amount_fallback=market_amounts.get(trading_date),
+        allow_frame_ladder=allow_frame_ladder,
         true_ladder=_resolve_slot_true_ladder(
-            db, dataset_id, snapshot_type, trading_date, slot_time, frame, allow_live=True))
+            db, dataset_id, snapshot_type, trading_date, slot_time, frame, allow_live=True,
+            allow_frame_ladder=allow_frame_ladder))
     # 历史回放口径披露（fail-visible）：当前槽自身取 EOD 连板层时留痕；priors 若取 EOD
     # 而当前槽取自帧池（历史日 15:00 槽重算的混合形态），也要把披露汇入叙事质量段
     current_note = _note_slot_ladder_caliber(current_evidence)

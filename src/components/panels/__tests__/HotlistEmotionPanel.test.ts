@@ -20,6 +20,16 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     }
   })
 
+  test('日级 EOD 语料覆盖度角标：缺收盘帧/缺槽位不静默（2026-10-22）', () => {
+    const source = panelSource()
+
+    expect(source).toContain('overviewCoverageHint')
+    expect(source).toContain('overview-chip-warn')
+    // 文案分支与缺失分类由 formatJevCoverageHint 单测覆盖（含空证据/无帧/历史未落档）
+    expect(source).toContain('formatJevCoverageHint')
+    expect(source).toContain('evidenceRawUnavailable')
+  })
+
   test('路线 B 连续情绪分：hero 分数条 + 可分解 tooltip + 评分不可用态（2026-09-30）', () => {
     const source = panelSource()
 

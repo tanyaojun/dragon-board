@@ -9,6 +9,7 @@ import {
   crowdingTimeline,
   crowdingTransitions,
   findNarrativeSection,
+  formatJevCoverageHint,
   layerStats,
   parseAnchorQuantiles,
   parseNarrativeSections,
@@ -247,5 +248,37 @@ describe('trimRangeWindow 窗口收缩 / countDegradedDocs 降级计数', () => 
     ] as unknown as Parameters<typeof countDegradedDocs>[0]
     expect(countDegradedDocs(days)).toBe(3)
     expect(countDegradedDocs([])).toBe(0)
+  })
+
+  test('formatJevCoverageHint：缺槽位与空证据分开计数，不折叠成「缺 N 帧」', () => {
+    const hint = formatJevCoverageHint({
+      frameCoverage: {
+        frameCount: 10, expectedCount: 10, hasCloseFrame: true,
+        missingSlots: ['09:30', '10:00'],
+        emptyEvidenceSlots: [
+          { slot: '10:30', reason: 'rows_empty' },
+          { slot: '11:00', reason: 'snapshot_missing' },
+          { slot: '11:30', reason: 'unknown' },
+        ],
+      },
+    })
+    expect(hint).toContain('缺槽位 09:30、10:00')
+    expect(hint).toContain('空证据 3 帧')
+    expect(hint).not.toContain('缺 5 帧')
+  })
+
+  test('formatJevCoverageHint：缺收盘帧/无帧/存量未落档/全覆盖', () => {
+    expect(formatJevCoverageHint({
+      frameCoverage: { frameCount: 9, expectedCount: 10, hasCloseFrame: false, lastSlot: '14:30' },
+    })).toBe('覆盖 9/10：缺收盘帧（末帧 14:30）')
+    expect(formatJevCoverageHint({
+      frameCoverage: { frameCount: 0, expectedCount: 10, hasCloseFrame: false,
+                       missingSlots: ['09:30', '10:00'] },
+    })).toBe('EOD 无帧（0/10）')
+    expect(formatJevCoverageHint({ evidenceRawUnavailable: true })).toBe('历史证据未落档')
+    expect(formatJevCoverageHint({
+      frameCoverage: { frameCount: 10, expectedCount: 10, hasCloseFrame: true },
+    })).toBeNull()
+    expect(formatJevCoverageHint({})).toBeNull()
   })
 })

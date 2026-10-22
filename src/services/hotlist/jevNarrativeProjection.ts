@@ -6,7 +6,7 @@
 // 仅当确实缺失时标 noDistribution（fail-visible），不把 TS 类型缺字段当协议事实（2026-10-02 纠错）。
 // 结论唯一来源 = QuantBoard 后端 jev 轨道（hotlist_jev_sentiment）落库文档，本模块零计算补齐。
 
-import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
+import type { HotlistJevAnswer, HotlistJevDayEntry, HotlistJevDoc, HotlistJevFrameCoverage, HotlistJevLimitUpStock, HotlistJevMissingDay } from '@/types/hotlistJev'
 import { JEV_CROWDING_NAMES, JEV_CROWDING_WARN_LAYERS, JEV_DRIVER_NAMES } from './hotlistJevApi'
 
 /** 犹豫阈值（与热榜情绪面板 jevHesitant 同一口径）：top 概率 < 60% 视为低置信 */
@@ -355,6 +355,37 @@ export function trimRangeWindow(days: number, range: JevRangeWindow): JevRangeWi
     days: range.days.filter((day) => windowSet.has(day.tradingDate)).sort(byDate),
     missingDays: range.missingDays.filter((day) => windowSet.has(day.tradingDate)).sort(byDate),
   }
+}
+
+/** 日级 EOD 语料覆盖度角标（2026-10-22）：缺失位置与类型分开披露，不折叠成「缺 N 帧」。 */
+export interface JevCoverageHintInput {
+  frameCoverage?: HotlistJevFrameCoverage | null
+  evidenceRawUnavailable?: boolean | null
+}
+
+export function formatJevCoverageHint(
+  input: JevCoverageHintInput | null | undefined,
+): string | null {
+  if (input?.evidenceRawUnavailable) return '历史证据未落档'
+  const cov = input?.frameCoverage
+  if (!cov) return null
+  const frameCount = cov.frameCount
+  const expected = cov.expectedCount
+  if (frameCount === 0) return `EOD 无帧（0/${expected ?? '--'}）`
+  const bits: string[] = []
+  if (cov.hasCloseFrame === false) bits.push(`缺收盘帧（末帧 ${cov.lastSlot ?? '--'}）`)
+  const missing = cov.missingSlots ?? []
+  if (missing.length) bits.push(`缺槽位 ${missing.join('、')}`)
+  const empty = cov.emptyEvidenceSlots ?? []
+  if (empty.length) {
+    const names = empty.slice(0, 3).map((item) => item.slot).filter(Boolean)
+    const suffix = empty.length > names.length ? ' 等' : ''
+    bits.push(`空证据 ${empty.length} 帧${names.length ? `（${names.join('、')}${suffix}）` : ''}`)
+  }
+  if (!bits.length) return null
+  return frameCount != null
+    ? `覆盖 ${frameCount}/${expected ?? '--'}：${bits.join('；')}`
+    : bits.join('；')
 }
 
 /** 窗口内降级/无数据文档数（slot + eod，与后端 degradedCount 同口径） */

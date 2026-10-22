@@ -85,6 +85,22 @@ _CROWDING_CRITERIA_V2 = {
     "insufficient_evidence": "证据不足：叙事证据无法支撑上述任何一层的判定，不强行归类（注：判定各层所需的涨停数、连板梯队、炸板率、封板率及参照分位均已在叙事中给出，通常不应落入本层）",
 }
 
+# v2.6（2026-10-22 用户裁决「升 2.6」）：日级语料不提供收盘帧全量块/焦点个股/题材原因，
+# day_crowding 判据删去这些语料外引用——只锚日级逐帧行已有的涨停数/连板梯队/炸板率/参照分位。
+# 槽级 crowding 仍用 _CROWDING_CRITERIA_V2（槽位当前帧段有封板率/焦点个股/涨停原因，证据在）。
+_DAY_CROWDING_CRITERIA_V26 = {
+    "top_acceleration": "高位集体加速：最高连板梯队今日仍在上攻/高度处于参照高位（≥p80）刷新，无明显断板",
+    "late_seal_weakness": "封板质量弱化：炸板率高于参照 p50 或较参照明显抬升，涨停数虽多但封板不干脆"
+                          "（判据只用叙事已给出的炸板率，不要求涨停时间信息）",
+    "breadth_climax": "广度高潮：涨停数/连板家数处于参照高位（≥p80），且炸板率未高于参照 p50（封板质量尚可）",
+    "crowd_clearing": "拥挤解除（日内出清）：当日早些帧曾处于拥挤形态——涨停数或连板高度触及参照高位（≥p80），"
+                      "而当前/收盘帧证据显示缓解——涨停数或最高板自当日高位明显回落、或炸板率自高位明显回落，"
+                      "且赚钱效应未死（跌停/大跌未堆积，非单边退潮）",
+    "no_crowding": "无拥挤迹象：涨停数低于参照 p50、炸板率不高于参照 p50，高位股无明显集体行为；"
+                   "注意：当日/近端均未触及参照高位的日子判本层，日内触及高位后回落判 crowd_clearing",
+    "insufficient_evidence": "证据不足：叙事证据无法支撑上述任何一层的判定，不强行归类（注：判定各层所需的涨停数、连板梯队、炸板率及参照分位均已在叙事中给出，通常不应落入本层）",
+}
+
 _TEMP_INSTR_V2 = ("当前短线情绪温度（0=彻底冰点，100=极度亢奋）。"
                   "以【近20日参照】段的分位刻度为坐标系：当前证据相对近20日的位置决定落点，不凭绝对语感")
 _CROWD_INSTR_V2 = ("结合【当前帧】与【当日已走帧】证据及【近20日参照】，当前高位拥挤处于哪种形态？"
@@ -101,7 +117,9 @@ def _stage_question_v2(instructions: str) -> dict:
 # 实测断层（2026-10-02）：7/8 月旧判据与 9 月 v2.4 重跑批拥挤三层概率合计月均值 0.088/0.207/0.416，不可跨代对比。
 # v2.5（2026-10-05 用户裁决「按思路先修改一版」，复跑与否待定）：①crowding 增「拥挤解除」档（出清状态
 # 不再与 no_crowding 混装，五层→六层）；②day_pattern 增「尾盘偷袭」并收窄 low_recover（七类→八类）。
-QUESTION_SET_VERSION = "v2.5"
+# v2.6（2026-10-22 用户裁决）：日级 day_crowding 删去封板率/焦点高位股/题材分散等日级语料
+# 未供给的引用（改为 [收盘帧证据] 块的方案被否决）；槽级 crowding 判据不变。
+QUESTION_SET_VERSION = "v2.6"
 
 
 JEV_SLOT_QUESTIONS = {
@@ -123,7 +141,7 @@ JEV_DAY_QUESTIONS = {
     "day_temperature": _score_question("今日全天" + _TEMP_INSTR_V2),
     "day_crowding": {"type": "choice",
                      "instructions": "综合今日全天连续帧证据及【近20日参照】，今日收盘时高位拥挤处于哪种形态？只判当下形态，不预测后市",
-                     "criteria": dict(_CROWDING_CRITERIA_V2)},
+                     "criteria": dict(_DAY_CROWDING_CRITERIA_V26)},
 }
 
 
@@ -202,7 +220,8 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
                           analysis_by_code: dict, slot_time: str,
                           yesterday_same_slot_total_amount: float | None = None,
                           daily_total_amount_fallback: float | None = None,
-                          true_ladder: dict | None = None) -> dict:
+                          true_ladder: dict | None = None,
+                          allow_frame_ladder: bool = True) -> dict:
     """单帧原始证据聚合（纯函数，无 IO）。
 
     输入仅原始数据：帧（limitSummary/indices）、行情行（pctChange/zlje/turnover/rank/reason）、
@@ -215,6 +234,8 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
     输出形状 + source 键）。优先级：帧连板层五池（15:00/EOD 帧 as-of 派生）> 外部供给
     （盘中槽 ths_live / 已存槽文档 as-of 复用 / 历史日 ths_date_eod）。均不可得 → 真连板
     字段缺席 + degraded 披露，区间 maxBoard 原样保留（emotion_score 消费，零漂移）。
+    allow_frame_ladder=False：帧池为事后回填（非收盘槽）→ 不采信帧连板层，改走外部供给/None，
+    并在 quality.degradedSources 披露（as-of 安全，review P2-1）。
     fail-visible：缺源记 quality.degradedSources，保持 None/缺失，不伪造 0。
     indices.change 为涨跌额点数（帧现口径）；indexPct 为顶层 4 键 changePct 伴生
     （10-16 起帧有，渲染口径）；indices.indexExtra 为三指数帧镜像位（10-20 起）。
@@ -256,11 +277,14 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
                     }
         if index_extra:
             indices["indexExtra"] = index_extra
-        if not any(key in indices for key in _INDEX_KEYS):
+        # changePct-only 帧（10-16 回填形态）也是可用主指数：不能只因缺 change 点位
+        # 就报「指数缺失」——渲染层走 indexPct，质量层必须同口径（2026-10-22 日级审计补）。
+        has_core = (any(key in indices for key in _INDEX_KEYS)
+                    or any(key in index_pct for key in _INDEX_KEYS))
+        if not has_core:
             degraded.append("指数缺失")
         # 三指数逐键缺席披露（fail-visible）：整体缺席（10-20 前历史帧）与部分失败都要报，
         # 不得让创业板指/科创50 静默消失（review P2-2）
-        has_core = any(key in indices for key in _INDEX_KEYS)
         missing_extra = [name for key, name in
                          (("szcz", "深成指"), ("cybz", "创业板指"), ("kc50", "科创50"))
                          if key not in index_extra]
@@ -302,6 +326,10 @@ def collect_slot_evidence(*, frame: dict | None, rows: list, yesterday_rows: lis
         # 外部供给（true_ladder）兜底（盘中槽）；区间 maxBoard 原样保留（emotion 链消费）
         ths_pools = ls.get("thsPools") if isinstance(ls.get("thsPools"), dict) else {}
         pools = ths_pools.get("pools") if isinstance(ths_pools.get("pools"), dict) else None
+        if not allow_frame_ladder:
+            # 回填帧池是收盘态（THS 历史=EOD 语义），非收盘槽采信会污染 as-of
+            pools = None
+            degraded.append("真连板帧池为事后回填（EOD 态），该槽 as-of 不可用")
         frame_ladder = derive_true_ladder_from_pools(pools)
         ladder = frame_ladder if frame_ladder is not None else (
             true_ladder if isinstance(true_ladder, dict) else None)
@@ -919,7 +947,6 @@ def summarize_day_evidence(evidences: list, *, expected_slots: list | None = Non
         true_coverage = "partial"
     close_amount = (close.get("totalAmount") or {}).get("amount") if close else None
     close_amount_source = (close.get("totalAmount") or {}).get("source") if close else None
-    close_deg = ((close.get("quality") or {}).get("degradedSources") or []) if close else []
     return {
         "frameCoverage": coverage,
         "peakZt": max(zt_vals) if zt_vals else None,
@@ -932,7 +959,6 @@ def summarize_day_evidence(evidences: list, *, expected_slots: list | None = Non
         "closeFengbanRate": close_limit.get("fengbanRate") if _finite(close_limit.get("fengbanRate")) else None,
         "closeAmount": close_amount if _finite(close_amount) else None,
         "closeAmountSource": close_amount_source,
-        "closeHeatMissing": any(s.startswith("热度字段未采集") for s in close_deg),
     }
 
 
@@ -973,14 +999,16 @@ def _aggregate_day_quality(evidences: list, summary: dict) -> list[str]:
     """
     coverage = summary["frameCoverage"]
     total = max(coverage["evidenceCount"], 1)
-    idx_slots, limit_slots, amount_slots, true_slots = [], [], [], []
+    idx_slots, extra_idx_slots, limit_slots, amount_slots, true_slots = [], [], [], [], []
     pct_frames = yesterday_frames = lifecycle_all = 0
     other: Counter = Counter()
     for ev in evidences:
         slot = str(ev.get("slotTime"))
         deg = (ev.get("quality") or {}).get("degradedSources") or []
-        if any(s == "指数缺失" or s.startswith("三指数缺席") for s in deg):
+        if any(s == "指数缺失" for s in deg):
             idx_slots.append(slot)
+        if any(s.startswith("三指数缺席") for s in deg):
+            extra_idx_slots.append(slot)
         if any(s == "涨停证据缺失" for s in deg):
             limit_slots.append(slot)
         if any(s.startswith("两市总成交额缺失") for s in deg):
@@ -1011,6 +1039,8 @@ def _aggregate_day_quality(evidences: list, summary: dict) -> list[str]:
         items.append(f"无 15:00 收盘帧（末帧 {coverage['lastSlot'] or '无'}；日级判读非全天口径）")
     if idx_slots:
         items.append(f"指数缺失 {len(idx_slots)}/{total} 帧（{'、'.join(idx_slots)}）")
+    if extra_idx_slots:
+        items.append(f"三指数缺席 {len(extra_idx_slots)}/{total} 帧（{'、'.join(extra_idx_slots)}）")
     if limit_slots:
         items.append(f"涨停证据缺失 {len(limit_slots)}/{total} 帧（{'、'.join(limit_slots)}）")
     if amount_slots:
@@ -1031,8 +1061,7 @@ def _aggregate_day_quality(evidences: list, summary: dict) -> list[str]:
         items.append(f"昨日行缺失 {yesterday_frames} 帧")
     if lifecycle_all:
         items.append(f"生命周期join缺失 {lifecycle_all} 帧")
-    if summary.get("closeHeatMissing"):
-        items.append("收盘帧热度字段未采集（焦点个股按榜单名次）")
+    # 日级不渲染焦点个股（v2.6 裁决：不补收盘帧全量块）→ 槽级热度缺失不泄漏进日级质量段。
     for item, count in other.items():
         items.append(item if count == 1 else f"{item} ×{count}")
     return items
@@ -1047,7 +1076,7 @@ def build_day_jev_state(*, trading_date: str, evidences: list,
     """日级叙事 state（盘后固定当日总体）。evidences = 全日各帧 evidence 升序。
 
     2026-10-22 日级语料修复（jev-eod-corpus-caliber-audit-preregistration.md）：
-    - 增加【收盘帧证据】全量块（day_crowding 判据所需的封板率/封板质量/回撤/焦点/原因）；
+    - v2.6 裁决：不补【收盘帧证据】全量块，改为删减 day_crowding 语料外判据引用；
     - 增加【帧覆盖】，缺槽/无 15:00/无证据帧显式披露；
     - 真连板峰值按覆盖度标注（收盘值不冒充全日峰值）；
     - 质量段按槽位/证据种类计数，避免槽级噪音淹没日级真实缺失。
@@ -1097,12 +1126,8 @@ def build_day_jev_state(*, trading_date: str, evidences: list,
     if expected_slots is not None or coverage["missingSlots"] or coverage["emptyEvidenceSlots"] \
             or not coverage["hasCloseFrame"]:
         lines.append("【帧覆盖】" + _format_frame_coverage(coverage))
-    if close is not None:
-        lines.append(_format_current_evidence_section(close, title="【收盘帧证据】"))
-    else:
-        lines.append(
-            f"【收盘帧证据】\n收盘帧缺失（末帧 {coverage['lastSlot'] or '无'}）；"
-            "日级判读非全天口径，结论谨慎采信。")
+    # v2.6 裁决：不补【收盘帧证据】全量块（改为删减 day_crowding 语料外判据引用）。
+    # 收盘帧的涨停/炸板/封板/真连板摘要仍进【当日累计】；焦点个股/涨停原因不喂日级。
     lines.append(
         f"【当日累计】{new_bit}、{dropped_bit}（对比昨日）；"
         f"主力净额合计 {_fmt_yi(fund.get('zljeSum'))}{fund_asof}；{zt_bit}；{peak_bit}{amount_bit}")

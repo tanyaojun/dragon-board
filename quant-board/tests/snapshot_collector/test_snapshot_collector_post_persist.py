@@ -276,6 +276,51 @@ def test_post_persist_jev_slot_written_when_enabled(monkeypatch):
     assert not any("hotlist_jev" in w for w in (repo.runs[-1].get("warnings") or []))
 
 
+def _mock_chain_jev_v2_slot_and_day_ok(monkeypatch):
+    import backend.services.jev.jev_sentiment_compute as v2_module
+
+    slot_answers = {
+        "frame_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+        "sequence_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+        "temperature": {"type": "score", "score": 5, "legend": {"0": 1, "11": 1}},
+        "crowding": {"type": "choice", "choice": "no_crowding",
+                     "probabilities": {"no_crowding": 0.5}},
+    }
+    day_answers = {
+        "day_stage": {"type": "choice", "choice": "start", "probabilities": {"start": 0.6}},
+        "day_pattern": {"type": "choice", "choice": "steady_strong", "probabilities": {}},
+        "day_temperature": {"type": "score", "score": 5, "legend": {"0": 1, "11": 1}},
+        "day_crowding": {"type": "choice", "choice": "no_crowding", "probabilities": {}},
+    }
+
+    def fake_call(account_id, api_token, state, questions, model="typesafe/jev", timeout=60):
+        answers = day_answers if "day_stage" in questions else slot_answers
+        return {"result": {"state": "Completed", "result": {
+            "model": "jev-1.13.0", "answers": answers,
+            "usage": {"input_tokens": 900, "output_tokens": 100}}}, "success": True}, 900
+
+    monkeypatch.setattr(v2_module, "call_jev", fake_call)
+
+
+def test_post_persist_jev_1500_also_runs_eod(monkeypatch):
+    """2026-10-22 裁决：15:00 收盘帧到达后幂等重跑 EOD（daily 15:30 复用不再重复调用）。"""
+    monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
+    _mock_chain_jev_v2_slot_and_day_ok(monkeypatch)
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service, slot_time="15:00")
+
+    assert result.status == "completed"
+    docs = repo.db["hotlist_jev_sentiment"].rows
+    assert sorted(doc["kind"] for doc in docs) == ["eod", "slot"]
+    eod = next(doc for doc in docs if doc["kind"] == "eod")
+    assert eod["status"] == "ok" and eod["origin"] == "collector"
+    assert eod["frameCoverage"]["hasCloseFrame"] is True
+    assert eod["questionSetVersion"] == "v2.6"
+    assert eod["evidenceRaw"] and eod["evidenceRaw"]["close"]["slotTime"] == "15:00"
+
+
 def test_post_persist_jev_failure_only_warns(monkeypatch):
     monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
     import backend.services.jev.jev_sentiment_compute as v2_module
@@ -293,6 +338,50 @@ def test_post_persist_jev_failure_only_warns(monkeypatch):
     # 前三步产物完好
     assert _slot_doc(repo.db, "10:00") is not None
     assert any("hotlist_jev_failed" in w for w in (repo.runs[-1].get("warnings") or []))
+
+
+def test_post_persist_jev_1500_no_data_warning_has_reason(monkeypatch):
+    """15:00 EOD no_data 的 warning 必须带原因，不得渲染成 "None"（review P3-2）。"""
+    monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
+    import backend.services.jev.jev_sentiment_compute as v2_module
+
+    monkeypatch.setattr(v2_module, "compute_and_upsert_for_slot",
+                        lambda *a, **k: {"written": True, "status": "ok"})
+    monkeypatch.setattr(v2_module, "compute_and_upsert_for_day",
+                        lambda *a, **k: {"written": True, "status": "no_data",
+                                         "reason": "no_half_hour_frames",
+                                         "errorDetail": "no half_hour frames"})
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service, slot_time="15:00")
+
+    assert result.status == "completed"
+    warnings = repo.runs[-1].get("warnings") or []
+    assert any("hotlist_jev_eod_no_data: no_half_hour_frames" in w for w in warnings)
+    assert not any(w.endswith(": None") for w in warnings)
+
+
+def test_post_persist_daily_eod_requests_complete_reuse(monkeypatch):
+    """daily 15:30 触发 EOD 必须显式请求复用，避免与 15:00 首算重复烧调用。"""
+    monkeypatch.setenv("JEV_CF_TOKEN", "test-token")
+    import backend.services.jev.jev_sentiment_compute as v2_module
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_day(db, **kwargs):
+        calls.append(kwargs)
+        return {"written": False, "reused": True, "status": "ok"}
+
+    monkeypatch.setattr(v2_module, "compute_and_upsert_for_day", fake_day)
+    repo = FakeRepo()
+    service = _make_service(monkeypatch, repo, _golden_analyze(repo))
+
+    result = _run_slot(service, slot_time="15:30", snapshot_type="daily")
+
+    assert result.status == "completed"
+    assert calls and calls[0]["reuse_if_complete"] is True
+    assert calls[0]["snapshot_type"] == "half_hour"
 
 
 def test_post_persist_jev_skips_five_minutes(monkeypatch):

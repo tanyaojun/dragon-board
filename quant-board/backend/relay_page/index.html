@@ -355,7 +355,7 @@
       <div class="card"><h3>📈 当日逐槽 · 日内演化 <span class="hint" id="slotHint"></span></h3>
         <table id="slotTable"></table></div>
       <div>
-        <div class="card"><h3>📅 EOD 日级窗口</h3><table id="eodTable"></table></div>
+        <div class="card"><h3>📅 EOD 日级窗口</h3><div id="eodCovNote"></div><table id="eodTable"></table></div>
         <div class="card" style="margin-top:14px"><h3>🧮 今日连板情绪</h3><div id="relayMini" class="empty">加载中…</div></div>
       </div>
     </div>
@@ -1136,8 +1136,18 @@ function renderSlots(){
     const entry = STATE.slotEntries.find(x => x.kind === 'eod');
     const open = ui.openKey === entry.key;
     const u = e.usage || {};
+    // 2026-10-22 日级语料修复：缺收盘帧/缺槽位角标（不静默）
+    const cov = e.frameCoverage || {};
+    const covGap = cov.hasCloseFrame === false || (cov.missingSlots || []).length || (cov.emptyEvidenceSlots || []).length;
+    const covBadge = covGap
+      ? ` ${badge(cov.frameCount === 0 ? '无帧'
+          : cov.hasCloseFrame === false ? '无收盘帧'
+          : `覆盖${cov.frameCount ?? '?'}/${cov.expectedCount ?? '?'}`, 'b-amber')}`
+      : '';
+    const legacyBadge = e.evidenceRawUnavailable
+      ? ` ${badge('历史证据未落档', 'b-amber')}` : '';
     eodRow = `<tr class="lg-row${open ? ' open' : ''}" onclick="lgRow('slot', '${js(entry.key)}')">
-    <td><span class="lg-caret">▶</span><span class="num">EOD</span>${badge(e.status || '-', e.status === 'ok' ? 'b-green' : 'b-amber')}</td>
+    <td><span class="lg-caret">▶</span><span class="num">EOD</span>${badge(e.status || '-', e.status === 'ok' ? 'b-green' : 'b-amber')}${legacyBadge}${covBadge}</td>
     <td style="color:${stageColor(((e.answers||{}).day_stage||{}).choice)};font-weight:700">${STAGE_CN[((e.answers||{}).day_stage||{}).choice] || '-'}${confChip(((e.answers||{}).day_stage||{}).confidence)}</td>
     <td>日级</td>
     <td><div class="flex"><span class="num" style="color:${tempColor(e.scores ? Math.round(e.scores.day_temperature ?? NaN) : null)}">${e.scores && e.scores.day_temperature != null ? Math.round(e.scores.day_temperature) : '-'}</span></div></td>
@@ -1175,6 +1185,27 @@ function renderEod(){
   ].map(([k,v,c]) => `<tr><td style="color:var(--muted)">${k}</td><td class="num">${v}</td>
      <td>${c!=null?`<div class="bar"><i style="width:${Math.round(c*100)}%;background:#2563eb"></i></div>`:''}</td>
      <td class="num">${c!=null?'P'+Math.round(c*100):''}</td></tr>`).join('');
+  // 2026-10-22 日级语料修复：覆盖度缺口在 EOD 卡顶部显式提示（读数保留，不阻断）。
+  // 2026-10-22 审查：提示放表格外（table 直接子 div 会被 CSS 匿名表格压成单列）；
+  // 缺槽位/空证据/无帧分别披露，不折叠成一句「缺帧」。
+  const cov = e && e.frameCoverage;
+  const emptySlots = ((cov && cov.emptyEvidenceSlots) || [])
+    .map(x => typeof x === 'string' ? x : (x && x.slot)).filter(Boolean);
+  const missingSlots = (cov && cov.missingSlots) || [];
+  let covBits = [];
+  if (e && e.evidenceRawUnavailable) {
+    covBits.push('历史证据未落档（旧代文档），覆盖度不可核验');
+  } else if (cov) {
+    if (cov.frameCount === 0) covBits.push('当日无帧');
+    if (cov.hasCloseFrame === false && cov.frameCount !== 0) covBits.push(`缺 15:00 收盘帧（末帧 ${esc(cov.lastSlot || '?')}）`);
+    if (missingSlots.length) covBits.push(`缺槽位 ${esc(missingSlots.join('、'))}`);
+    if (emptySlots.length) covBits.push(`空证据帧 ${esc(emptySlots.join('、'))}`);
+  }
+  const covCount = cov ? `（覆盖 ${cov.frameCount ?? '?'}/${cov.expectedCount ?? '?'}）` : '';
+  const covNote = covBits.length
+    ? `<div class="kpi-note">⚠️ 日级语料覆盖：${covBits.join('；')}${covCount}</div>`
+    : '';
+  $('eodCovNote').innerHTML = covNote;
   $('eodTable').innerHTML = head + rows;
 }
 

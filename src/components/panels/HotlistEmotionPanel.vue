@@ -103,6 +103,7 @@
                 <div v-if="sentimentOverviewEod" class="overview-chips">
                   <span v-if="overviewStageName" class="overview-chip">档位·{{ overviewStageName }}</span>
                   <span v-if="overviewCrowdingName" class="overview-chip" :class="{ 'overview-chip-warn': overviewCrowdingWarn }">拥挤·{{ overviewCrowdingName }}</span>
+                  <span v-if="overviewCoverageHint" class="overview-chip overview-chip-warn">{{ overviewCoverageHint }}</span>
                   <span v-if="overviewDiffText" class="overview-chip">{{ overviewDiffText }}</span>
                   <span v-if="overviewAnchorHint" class="overview-chip overview-chip-muted">{{ overviewAnchorHint }}</span>
                 </div>
@@ -914,6 +915,7 @@ import {
   jevScore,
   postJevReviewRuling,
 } from '@/services/hotlist/hotlistJevApi'
+import { formatJevCoverageHint } from '@/services/hotlist/jevNarrativeProjection'
 import type {
   HotlistJevDayEntry,
   HotlistJevDoc,
@@ -1375,6 +1377,15 @@ const overviewDiffText = computed(() => {
 const overviewAnchorHint = computed(() => {
   const range = sentimentOverview.value?.jev?.historyAnchorRange
   return range ? `锚 ${range.split('，')[0] ?? range}` : null
+})
+// 日级语料覆盖度角标（2026-10-22）：缺收盘帧/缺槽位不静默，EOD 读数保留但标注口径
+const overviewCoverageHint = computed(() => {
+  const eod = sentimentOverviewEod.value
+  if (!eod) return null
+  return formatJevCoverageHint({
+    frameCoverage: eod.frameCoverage,
+    evidenceRawUnavailable: eod.evidenceRawUnavailable,
+  })
 })
 const overviewGaugeTooltip = computed(() => {
   if (!sentimentOverviewEod.value) return ''

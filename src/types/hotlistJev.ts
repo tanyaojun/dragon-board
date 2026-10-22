@@ -24,6 +24,20 @@ export interface HotlistJevScoreAnswer {
 
 export type HotlistJevAnswer = HotlistJevChoiceAnswer | HotlistJevScoreAnswer
 
+/** 日级 EOD 帧覆盖（2026-10-22 日级语料修复；旧文档缺失） */
+export interface HotlistJevFrameCoverage {
+  expectedSlots?: string[]
+  presentSlots?: string[]
+  evidenceSlots?: string[]
+  missingSlots?: string[]
+  emptyEvidenceSlots?: Array<{ slot: string; reason: string }>
+  lastSlot?: string | null
+  hasCloseFrame?: boolean
+  frameCount?: number
+  evidenceCount?: number
+  expectedCount?: number
+}
+
 export interface HotlistJevDoc {
   _id?: string
   kind?: 'slot' | 'eod'
@@ -55,8 +69,14 @@ export interface HotlistJevDoc {
     ecosystemBreak?: { isBreak: boolean; ztCount: number; p20: number; advDecRatio: number; amountYi: number; prevAmountYi: number; detectedAt: string; source: string } | null
     ecoBreadth?: { ztCount: number; p20: number; advDecRatio: number | null; isBreak: boolean; detectedAt: string; source: string } | null
   } | null
-  /** 当前帧结构化证据（slot 文档；EOD/旧文档为 null） */
+  /** 当前帧结构化证据（slot/EOD 新代文档；旧文档为 null） */
   evidenceRaw?: Record<string, unknown> | null
+  /** 日级 EOD 帧覆盖（2026-10-22 起；旧文档缺失） */
+  frameCoverage?: HotlistJevFrameCoverage | null
+  /** 语料口径代际戳（legacy_unversioned / v2.5_pre_eod_fix / eod-2026-10-22） */
+  corpusCaliberVersion?: string | null
+  /** 存量文档未落 evidenceRaw 的显式标记（不伪造证据） */
+  evidenceRawUnavailable?: boolean
   /** 模型原始返回 envelope（jev_client 原样透传；旧文档缺失） */
   responseRaw?: Record<string, unknown> | null
   /** 实际下发题集（slot=四问 / eod=日四问；旧文档可能缺失） */
@@ -226,6 +246,11 @@ export interface HotlistSentimentOverviewEod {
   dayCrowdingProbabilities: Record<string, number> | null
   historyAnchorRange: string | null
   computedAt: number | null
+  /** 2026-10-22 日级语料修复：覆盖度/代际戳（旧文档缺失） */
+  anchoredSlotTime?: string | null
+  frameCoverage?: HotlistJevFrameCoverage | null
+  corpusCaliberVersion?: string | null
+  evidenceRawUnavailable?: boolean
 }
 
 /** 规则 EOD（池内质量计）：hotlist_sentiment emotionScore 摘要 */
