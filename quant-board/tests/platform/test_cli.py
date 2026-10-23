@@ -570,3 +570,41 @@ def test_cli_exposes_sync_and_migration_commands(tmp_path: Path, monkeypatch: py
         "extraMappings",
         "source",
     }
+
+
+def test_cmd_after_market_once_unhandled_exception_writes_failure_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """2026-10-23 事故回归：盘后链未捕获异常（如日历不可用）必须落盘失败 JSON 后再退出，
+    不得只留任务计划裸退出码 1、零日志（fail-visible）。"""
+    import backend.cli as cli_module
+    from backend.core.settings import get_settings
+
+    monkeypatch.setenv("QUANT_BOARD_MONGODB_BACKUP_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    try:
+        def _boom(**_kwargs: object) -> dict[str, object]:
+            raise RuntimeError("calendar unavailable (simulated)")
+
+        monkeypatch.setattr(cli_module, "run_after_market_once", _boom)
+        parser = cli_module.build_parser()
+        args = parser.parse_args(["after-market-once"])
+        with pytest.raises(SystemExit) as excinfo:
+            cli_module.cmd_after_market_once(args)
+        assert excinfo.value.code == 1
+
+        failures = list(tmp_path.glob("after_market-failure-*.json"))
+        assert len(failures) == 1
+        payload = json.loads(failures[0].read_text(encoding="utf-8"))
+        assert payload["ok"] is False
+        assert payload["stoppedAt"] == "unhandled_exception"
+        assert payload["error"]["code"] == "after_market_unhandled_exception"
+        assert "RuntimeError" in payload["error"]["message"]
+
+        log_lines = (tmp_path / "after_market.log").read_text(encoding="utf-8").strip().splitlines()
+        assert log_lines, "failure must append a summary line to after_market.log"
+        summary = json.loads(log_lines[-1])
+        assert summary["ok"] is False
+        assert summary.get("stoppedAt") == "unhandled_exception"
+    finally:
+        get_settings.cache_clear()

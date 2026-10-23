@@ -16,8 +16,6 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
 
-import httpx
-
 import tdx_calendar
 from main import _is_trading_day_cached, is_trading_session_now
 
@@ -40,13 +38,12 @@ class CalendarSelfHealTest(unittest.TestCase):
         tdx_calendar._reset_cache()
         self.addCleanup(tdx_calendar._reset_cache)
 
-    def _fake_response(self):
-        request = httpx.Request("GET", tdx_calendar._TDX_CALENDAR_URL)
-        return httpx.Response(200, content=FIXTURE_TEXT.encode("gbk"), request=request)
+    def _fake_holidays(self):
+        return tdx_calendar.parse_tdx_holiday_text(FIXTURE_TEXT)
 
     def test_returns_result_when_calendar_ok(self):
         # 正常路径：工作日 → True，周末/节假日 → False
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()):
+        with mock.patch("tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()):
             self.assertIs(_is_trading_day_cached(datetime(2026, 7, 27, 10, 0)), True)
             self.assertIs(_is_trading_day_cached(datetime(2026, 7, 25, 10, 0)), False)
             self.assertIs(_is_trading_day_cached(datetime(2026, 1, 1, 10, 0)), False)
@@ -54,7 +51,7 @@ class CalendarSelfHealTest(unittest.TestCase):
     def test_returns_none_when_calendar_unavailable(self):
         # 拉取失败：返回 None（不猜测交易日），调用方按降级处理
         with mock.patch(
-            "tdx_calendar.httpx.get", side_effect=httpx.ConnectError("SSL handshake timeout")
+            "tdx_calendar._fetch_tdx_holidays", side_effect=ConnectionError("SSL handshake timeout")
         ):
             self.assertIsNone(_is_trading_day_cached(datetime(2026, 7, 27, 10, 0)))
         # 调用方降级：is_trading_session_now 不抛异常、直接判非交易时段
@@ -65,14 +62,14 @@ class CalendarSelfHealTest(unittest.TestCase):
         ts = {"v": T0}
         calls = {"n": 0}
 
-        def fake_get(*args, **kwargs):
+        def fake_fetch():
             calls["n"] += 1
             if calls["n"] == 1:
-                raise httpx.ConnectError("down")
-            return self._fake_response()
+                raise ConnectionError("down")
+            return self._fake_holidays()
 
         with mock.patch("tdx_calendar._now_ts", side_effect=lambda: ts["v"]), mock.patch(
-            "tdx_calendar.httpx.get", side_effect=fake_get
+            "tdx_calendar._fetch_tdx_holidays", side_effect=fake_fetch
         ):
             self.assertIsNone(_is_trading_day_cached(datetime(2026, 7, 27, 10, 0)))
             ts["v"] += 120  # 超过失败冷却

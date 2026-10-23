@@ -300,7 +300,7 @@ def test_run_mongodb_backup_once_friday_runs_full_with_push(monkeypatch: Any) ->
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -323,7 +323,7 @@ def test_run_mongodb_backup_once_weekday_runs_light_without_push(monkeypatch: An
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -349,7 +349,7 @@ def test_run_mongodb_backup_once_structured_failure_on_create(monkeypatch: Any) 
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls, full_ok=False),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -369,7 +369,7 @@ def test_run_mongodb_backup_once_structured_failure_on_verify(monkeypatch: Any) 
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls, verify_ok=False),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -387,7 +387,7 @@ def test_run_mongodb_backup_once_skips_non_trading_day_and_dry_run(monkeypatch: 
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: False)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (False, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -398,6 +398,7 @@ def test_run_mongodb_backup_once_skips_non_trading_day_and_dry_run(monkeypatch: 
     assert non_trading["ok"] is True
     assert non_trading["skipped"] is True
     assert non_trading["reason"] == "non_trading_day"
+    assert non_trading["calendarSource"] == "bridge"  # 2026-10-23 事故回归：降级源必须留痕
     assert dry_run["skipped"] is True
     assert dry_run["reason"] == "dry_run"
     assert calls == []
@@ -414,7 +415,7 @@ def test_run_mongodb_backup_once_forces_full_when_last_full_older_than_8_days(mo
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls, last_full_info=last_full, has_object_store=True),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -445,7 +446,7 @@ def test_run_mongodb_backup_once_keeps_light_when_last_full_recent(monkeypatch: 
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls, last_full_info=last_full, has_object_store=True),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 
@@ -464,7 +465,7 @@ def test_run_mongodb_backup_once_no_full_history_with_object_store_forces_first_
         "backend.operations.schedule.get_mongodb_backup_service",
         lambda: FakeBackupService(calls, last_full_info=None, has_object_store=True),
     )
-    monkeypatch.setattr("backend.operations.schedule.is_trading_day", lambda day: True)
+    monkeypatch.setattr("backend.operations.schedule.is_trading_day_cached", lambda day: (True, "bridge"))
 
     from backend.operations.schedule import run_mongodb_backup_once
 

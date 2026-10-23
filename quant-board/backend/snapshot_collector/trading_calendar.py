@@ -145,12 +145,15 @@ def is_trading_day_cached(date: datetime.date) -> tuple[bool, str]:
     ``(is_trading_day, source)`` with source in ``bridge|cache|weekday`` so callers can
     record where the judgement came from.
     """
-    if not _fetch_bridge_calendar(date):
-        cached = _read_calendar_cache().get(date.isoformat())
-        if cached is not None:
-            return cached, "cache"
-        return _weekday_heuristic(date), "weekday"
-    return True, "bridge"
+    if (bridge_result := _fetch_bridge_calendar(date)) is not None:
+        # bridge 明确应答（含节假日 False）是权威判定，不得被 cache/启发覆盖；
+        # 仅 bridge 不可用（None）时才降级（2026-10-23 review P2：False 与 None 同分支会让
+        # 节假日误走 weekday 启发 → 备份照跑且 calendarSource 误标）。
+        return bridge_result, "bridge"
+    cached = _read_calendar_cache().get(date.isoformat())
+    if cached is not None:
+        return cached, "cache"
+    return _weekday_heuristic(date), "weekday"
 
 
 def trading_date_from_ts(now_ts_ms: int) -> str | None:

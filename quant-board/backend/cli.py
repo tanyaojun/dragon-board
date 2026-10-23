@@ -239,11 +239,29 @@ def cmd_wzs_settle_backfill(args: argparse.Namespace) -> None:
 
 
 def cmd_after_market_once(args: argparse.Namespace) -> None:
-    result = run_after_market_once(
-        archive_limit=args.archive_limit,
-        backup_limit=args.backup_limit,
-        dry_run=bool(args.dry_run),
-    )
+    try:
+        result = run_after_market_once(
+            archive_limit=args.archive_limit,
+            backup_limit=args.backup_limit,
+            dry_run=bool(args.dry_run),
+        )
+    except Exception:
+        # 2026-10-23 加固：链内未捕获异常（如日历不可用）曾绕过 _write_after_market_log，
+        # 只留任务计划裸退出码 1、无日志无失败 JSON（fail-visible 缺口）。兜底落盘后退出。
+        import traceback
+
+        traceback.print_exc()
+        _write_after_market_log({
+            "ok": False,
+            "finishedAt": datetime.now(timezone.utc).isoformat(),
+            "stoppedAt": "unhandled_exception",
+            "results": {},
+            "error": {
+                "code": "after_market_unhandled_exception",
+                "message": traceback.format_exc(),
+            },
+        })
+        raise SystemExit(1)
     print_json(result)
     _write_after_market_log(result)
     if not result.get("ok"):

@@ -27,10 +27,9 @@ import os
 import re
 import threading
 import time
+import urllib.request
 from datetime import date, datetime
 from pathlib import Path
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +96,17 @@ def parse_tdx_holiday_text(text: str) -> set[date]:
 
 
 def _fetch_tdx_holidays() -> set[date]:
-    response = httpx.get(
+    # 2026-10-23 起 tdx.com.cn 对 httpx/OpenSSL 默认 ClientHello 掐断 TLS 握手
+    # （SSL: UNEXPECTED_EOF_WHILE_READING），同机 curl/requests/urllib 均正常；
+    # 改用标准库 urllib + 浏览器 UA（不新增依赖），失败语义不变（异常冒泡由调用方降级）。
+    request = urllib.request.Request(
         _TDX_CALENDAR_URL,
-        timeout=_HTTP_TIMEOUT_SECONDS,
-        # 默认 TLS 校验（与 mootdx 对同一 URL 的行为一致）；仅拉取公开文本日历
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
     )
-    response.raise_for_status()
-    response.encoding = "gbk"
-    return parse_tdx_holiday_text(response.text)
+    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+        raw = response.read()
+    text = raw.decode("gbk", errors="replace")
+    return parse_tdx_holiday_text(text)
 
 
 def _load_cache_file() -> tuple[set[date], float] | None:

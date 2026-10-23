@@ -10,6 +10,9 @@ r"""tdx_calendar 单元测试：自实现 tdx.com.cn 交易日历的解析、缓
 运行：
   cd python-bridge
   ..\quant-board\.venv\Scripts\python.exe -m unittest test_tdx_calendar -v
+
+mock 缝隙（2026-10-23）：拉取统一 mock `tdx_calendar._fetch_tdx_holidays`，
+不再绑定具体 HTTP 客户端（httpx → urllib 换源后测试仍有效）。
 """
 
 import json
@@ -18,8 +21,6 @@ import unittest
 from datetime import date, datetime
 from pathlib import Path
 from unittest import mock
-
-import httpx
 
 import tdx_calendar
 from main import _is_trading_day_cached
@@ -51,9 +52,8 @@ class TdxCalendarTest(unittest.TestCase):
         tdx_calendar._reset_cache()
         self.addCleanup(tdx_calendar._reset_cache)
 
-    def _fake_response(self, text: str = FIXTURE_TEXT) -> httpx.Response:
-        request = httpx.Request("GET", tdx_calendar._TDX_CALENDAR_URL)
-        return httpx.Response(200, content=text.encode("gbk"), request=request)
+    def _fake_holidays(self, text: str = FIXTURE_TEXT) -> set:
+        return tdx_calendar.parse_tdx_holiday_text(text)
 
     # ---------- 解析 ----------
 
@@ -78,7 +78,7 @@ class TdxCalendarTest(unittest.TestCase):
     # ---------- 交易日语义（等价 mootdx：周末与节假日非交易日） ----------
 
     def test_is_trading_day_weekday_holiday_weekend(self):
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()):
+        with mock.patch("tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()):
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)  # 周一
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 25)), False)  # 周六
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 1, 1)), False)  # 元旦
@@ -88,14 +88,17 @@ class TdxCalendarTest(unittest.TestCase):
 
     def test_fetch_failure_returns_none(self):
         with mock.patch(
-            "tdx_calendar.httpx.get", side_effect=httpx.ConnectError("SSL handshake timeout")
+            "tdx_calendar._fetch_tdx_holidays", side_effect=ConnectionError("SSL handshake timeout")
         ):
             result = tdx_calendar.is_trading_day(date(2026, 7, 27))
         self.assertIsNone(result)
 
     def test_parse_failure_returns_none(self):
         # 页面结构变化（textarea 缺失）→ 解析异常 → None，不误判为交易日
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response("<html>gone</html>")):
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays",
+            side_effect=ValueError("tdx holiday page: textarea block not found"),
+        ):
             result = tdx_calendar.is_trading_day(date(2026, 7, 27))
         self.assertIsNone(result)
 
@@ -106,28 +109,28 @@ class TdxCalendarTest(unittest.TestCase):
             return ts["v"]
 
         with mock.patch("tdx_calendar._now_ts", side_effect=fake_now), mock.patch(
-            "tdx_calendar.httpx.get", side_effect=httpx.ConnectError("down")
-        ) as get_mock:
+            "tdx_calendar._fetch_tdx_holidays", side_effect=ConnectionError("down")
+        ) as fetch_mock:
             self.assertIsNone(tdx_calendar.is_trading_day(date(2026, 7, 27)))
             ts["v"] += 30  # 冷却期内（60s）
             self.assertIsNone(tdx_calendar.is_trading_day(date(2026, 7, 27)))
-            self.assertEqual(get_mock.call_count, 1)
+            self.assertEqual(fetch_mock.call_count, 1)
             ts["v"] += 60  # 超过冷却 → 重试
             self.assertIsNone(tdx_calendar.is_trading_day(date(2026, 7, 27)))
-            self.assertEqual(get_mock.call_count, 2)
+            self.assertEqual(fetch_mock.call_count, 2)
 
     def test_cooldown_recovers_after_refetch_success(self):
         ts = {"v": T0}
         calls = {"n": 0}
 
-        def fake_get(*args, **kwargs):
+        def fake_fetch():
             calls["n"] += 1
             if calls["n"] == 1:
-                raise httpx.ConnectError("down")
-            return self._fake_response()
+                raise ConnectionError("down")
+            return self._fake_holidays()
 
         with mock.patch("tdx_calendar._now_ts", side_effect=lambda: ts["v"]), mock.patch(
-            "tdx_calendar.httpx.get", side_effect=fake_get
+            "tdx_calendar._fetch_tdx_holidays", side_effect=fake_fetch
         ):
             self.assertIsNone(tdx_calendar.is_trading_day(date(2026, 7, 27)))
             ts["v"] += 120
@@ -136,16 +139,18 @@ class TdxCalendarTest(unittest.TestCase):
     # ---------- 缓存策略 ----------
 
     def test_memory_cache_avoids_network(self):
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()) as get_mock:
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 28)), True)
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 1, 1)), False)
-        self.assertEqual(get_mock.call_count, 1)
+        self.assertEqual(fetch_mock.call_count, 1)
 
     def test_json_cache_written_after_fetch(self):
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()), mock.patch(
-            "tdx_calendar._now_ts", return_value=T0
-        ):
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ), mock.patch("tdx_calendar._now_ts", return_value=T0):
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
         payload = json.loads(tdx_calendar._CACHE_PATH.read_text(encoding="utf-8"))
         self.assertEqual(payload["fetchedAt"], T0)
@@ -156,78 +161,88 @@ class TdxCalendarTest(unittest.TestCase):
         payload = {"fetchedAt": T0 - 3600, "holidays": [d.isoformat() for d in CHINA_HOLIDAYS]}
         tdx_calendar._CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
         with mock.patch("tdx_calendar._now_ts", return_value=T0), mock.patch(
-            "tdx_calendar.httpx.get", return_value=self._fake_response()
-        ) as get_mock:
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 1, 1)), False)
-        get_mock.assert_not_called()
+        fetch_mock.assert_not_called()
 
     def test_expired_json_cache_refetches(self):
         # 缓存文件已过期（超过 24h TTL）→ 触发网络拉取
         payload = {"fetchedAt": T0 - 3 * tdx_calendar._FETCH_TTL_SECONDS, "holidays": []}
         tdx_calendar._CACHE_PATH.write_text(json.dumps(payload), encoding="utf-8")
         with mock.patch("tdx_calendar._now_ts", return_value=T0), mock.patch(
-            "tdx_calendar.httpx.get", return_value=self._fake_response()
-        ) as get_mock:
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
-        get_mock.assert_called_once()
+        fetch_mock.assert_called_once()
 
     def test_corrupt_json_cache_ignored(self):
         tdx_calendar._CACHE_PATH.write_text("{not json", encoding="utf-8")
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()) as get_mock:
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
-        get_mock.assert_called_once()
+        fetch_mock.assert_called_once()
 
     def test_memory_ttl_expiry_refetches(self):
         ts = {"v": T0}
 
-        def fake_get(*args, **kwargs):
-            return self._fake_response()
+        def fake_fetch():
+            return self._fake_holidays()
 
         with mock.patch("tdx_calendar._now_ts", side_effect=lambda: ts["v"]), mock.patch(
-            "tdx_calendar.httpx.get", side_effect=fake_get
-        ) as get_mock:
+            "tdx_calendar._fetch_tdx_holidays", side_effect=fake_fetch
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
             ts["v"] += tdx_calendar._FETCH_TTL_SECONDS + 1  # 超过 TTL
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
-        self.assertEqual(get_mock.call_count, 2)
+        self.assertEqual(fetch_mock.call_count, 2)
 
     def test_http_error_status_returns_none(self):
-        # 非 200（如 500）→ raise_for_status → None，不抛异常
-        request = httpx.Request("GET", tdx_calendar._TDX_CALENDAR_URL)
-        with mock.patch("tdx_calendar.httpx.get", return_value=httpx.Response(500, content=b"boom", request=request)):
+        # 非 200（如 500）→ HTTPError → None，不抛异常
+        import urllib.error
+
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays",
+            side_effect=urllib.error.HTTPError(
+                tdx_calendar._TDX_CALENDAR_URL, 500, "boom", {}, None
+            ),
+        ):
             self.assertIsNone(tdx_calendar.is_trading_day(date(2026, 7, 27)))
 
     def test_cache_write_failure_does_not_block(self):
         # 缓存写失败（磁盘满等）不影响判定：内存缓存仍可用，不抛异常
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()), mock.patch(
-            "tdx_calendar.os.replace", side_effect=OSError("disk full")
-        ):
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ), mock.patch("tdx_calendar.os.replace", side_effect=OSError("disk full")):
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
 
     def test_memory_fresh_ignores_corrupt_file(self):
         # 内存缓存新鲜时直接命中，不读取（已损坏的）磁盘缓存
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()):
+        with mock.patch("tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()):
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
         tdx_calendar._CACHE_PATH.write_text("{corrupt", encoding="utf-8")
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()) as get_mock:
+        with mock.patch(
+            "tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
-        get_mock.assert_not_called()
+        fetch_mock.assert_not_called()
 
     def test_ttl_boundary_expired_refetches(self):
         # TTL 边界：now 恰好等于 fetchedAt + TTL 时判定过期并重拉
         ts = {"v": T0}
 
-        def fake_get(*args, **kwargs):
-            return self._fake_response()
+        def fake_fetch():
+            return self._fake_holidays()
 
         with mock.patch("tdx_calendar._now_ts", side_effect=lambda: ts["v"]), mock.patch(
-            "tdx_calendar.httpx.get", side_effect=fake_get
-        ) as get_mock:
+            "tdx_calendar._fetch_tdx_holidays", side_effect=fake_fetch
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
             ts["v"] += tdx_calendar._FETCH_TTL_SECONDS
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
-        self.assertEqual(get_mock.call_count, 2)
+        self.assertEqual(fetch_mock.call_count, 2)
 
     def test_concurrent_expired_fetch_single_network_call(self):
         # 多线程同时触发过期拉取：只发生一次网络请求（_FETCH_IN_PROGRESS 去重）
@@ -235,12 +250,12 @@ class TdxCalendarTest(unittest.TestCase):
 
         ts = {"v": T0}
 
-        def fake_get(*args, **kwargs):
-            return self._fake_response()
+        def fake_fetch():
+            return self._fake_holidays()
 
         with mock.patch("tdx_calendar._now_ts", side_effect=lambda: ts["v"]), mock.patch(
-            "tdx_calendar.httpx.get", side_effect=fake_get
-        ) as get_mock:
+            "tdx_calendar._fetch_tdx_holidays", side_effect=fake_fetch
+        ) as fetch_mock:
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
             ts["v"] += tdx_calendar._FETCH_TTL_SECONDS + 1  # 过期
             results = []
@@ -253,7 +268,7 @@ class TdxCalendarTest(unittest.TestCase):
                 thread.start()
             for thread in threads:
                 thread.join()
-        self.assertEqual(get_mock.call_count, 2)  # 首次 + 过期后仅一次
+        self.assertEqual(fetch_mock.call_count, 2)  # 首次 + 过期后仅一次
         self.assertTrue(any(result is True for result in results))  # 至少一个线程拿到结果
 
     # ---------- 与 mootdx 共享 pickle 缓存彻底隔离 ----------
@@ -265,7 +280,7 @@ class TdxCalendarTest(unittest.TestCase):
         self.assertNotEqual(tdx_calendar._CACHE_PATH.name, "holiday.plk")
         plk = Path(get_config_path("caches/holiday.plk"))
         before = plk.stat().st_mtime_ns if plk.exists() else None
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()):
+        with mock.patch("tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()):
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 7, 27)), True)
             self.assertIs(tdx_calendar.is_trading_day(date(2026, 1, 1)), False)
         after = plk.stat().st_mtime_ns if plk.exists() else None
@@ -275,11 +290,11 @@ class TdxCalendarTest(unittest.TestCase):
 
     def test_main_is_trading_day_cached_semantics(self):
         with mock.patch(
-            "tdx_calendar.httpx.get", side_effect=httpx.ConnectError("down")
+            "tdx_calendar._fetch_tdx_holidays", side_effect=ConnectionError("down")
         ):
             self.assertIsNone(_is_trading_day_cached(datetime(2026, 7, 27, 10, 0)))
         tdx_calendar._reset_cache()
-        with mock.patch("tdx_calendar.httpx.get", return_value=self._fake_response()):
+        with mock.patch("tdx_calendar._fetch_tdx_holidays", return_value=self._fake_holidays()):
             self.assertIs(_is_trading_day_cached(datetime(2026, 7, 27, 10, 0)), True)
             self.assertIs(_is_trading_day_cached(datetime(2026, 7, 25, 10, 0)), False)
             self.assertIs(_is_trading_day_cached(datetime(2026, 1, 1, 10, 0)), False)

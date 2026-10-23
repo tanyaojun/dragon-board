@@ -205,7 +205,9 @@ QMT 可用时，WebSocket 会新增 `money_flow_patch`，资金流标记为 `mon
 
 现行为：
 
-- 数据源：`httpx GET https://www.tdx.com.cn/url/holiday/` + 正则提取 textarea + `split('|')`
+- 数据源：标准库 `urllib.request` GET `https://www.tdx.com.cn/url/holiday/`（浏览器 UA；
+  2026-10-23 起：上游对 httpx 的 TLS ClientHello 指纹掐断连接致日历 503，curl/requests/urllib
+  均可通，故换 urllib 绕开指纹拦截，不新增第三方依赖）+ 正则提取 textarea + `split('|')`
   （等价 mootdx `_holiday` 逻辑；只保留国家为「中国」的行）。
 - 判定语义与 mootdx 等价：周末与列表中的中国节假日为非交易日；调休上班的周末（上游不标注）
   按非交易日处理。

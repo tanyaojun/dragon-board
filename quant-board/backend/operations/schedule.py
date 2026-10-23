@@ -15,7 +15,7 @@ from backend.data.backup.mongodb_backup import get_mongodb_backup_service
 from backend.operations.hotlist_sentiment import run_hotlist_sentiment_for_latest_day
 from backend.operations.jev_vote_winrate_ledger import build_ledger, persist as persist_winrate_ledger
 from backend.core.settings import get_settings
-from backend.snapshot_collector.trading_calendar import is_trading_day, is_trading_day_cached
+from backend.snapshot_collector.trading_calendar import is_trading_day_cached
 
 _TZ = ZoneInfo("Asia/Shanghai")
 
@@ -1114,8 +1114,13 @@ def run_mongodb_backup_once(*, dry_run: bool = False, now: datetime | None = Non
     summary: dict[str, Any] = {"ok": True, "friday": is_friday, "tradingDate": now.date().isoformat()}
     if dry_run:
         return {**summary, "skipped": True, "reason": "dry_run"}
-    if not is_trading_day(now.date()):
-        return {**summary, "skipped": True, "reason": "non_trading_day"}
+    trading, cal_source = is_trading_day_cached(now.date())
+    if not trading:
+        # 2026-10-23 加固：bridge 日历不可用时（tdx.com.cn 掐 TLS 握手致 /api/calendar 503），
+        # raising 版 is_trading_day 在本步 try 外裸抛 TradingCalendarUnavailable，
+        # 盘后任务整体退出码 1 且不落任何日志/备份（fail-visible 缺口）。
+        # 改用 cached 版降级（bridge → 本地缓存 → 工作日启发），并记录判定来源可追溯。
+        return {**summary, "skipped": True, "reason": "non_trading_day", "calendarSource": cal_source}
 
     service = get_mongodb_backup_service()
     strategy = "full_dump" if is_friday else "light_dump"
