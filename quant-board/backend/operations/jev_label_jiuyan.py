@@ -444,7 +444,7 @@ def jiuyan_board_info(db, date: str,
         {"_id": f"{date}:final"},
         {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1,
          "fields.stocks.name": 1, "fields.stocks.expound": 1, "fields.stocks.reason": 1,
-         "fields.name": 1})
+         "fields.name": 1, "fetchedAt": 1})
     fields = (doc or {}).get("fields") or []
     final_found = any(field.get("stocks") for field in fields)
     slot_used = SLOT_FINAL
@@ -454,7 +454,7 @@ def jiuyan_board_info(db, date: str,
             {"_id": f"{date}:{SLOT_MIDDAY}"},
             {"fields.stocks.code": 1, "fields.stocks.num": 1, "fields.stocks.time": 1,
              "fields.stocks.name": 1, "fields.stocks.expound": 1, "fields.stocks.reason": 1,
-             "fields.name": 1})
+             "fields.name": 1, "fetchedAt": 1})
         fields = (doc or {}).get("fields") or []
         midday_fallback_used = any(field.get("stocks") for field in fields)
         if midday_fallback_used:
@@ -498,7 +498,10 @@ def jiuyan_board_info(db, date: str,
             # （盘中涨停复盘口径注记，调用方必须透传展示，不冒充收盘）；jiuyanSlot=实际槽位
             "jiuyanSlot": slot_used, "middayFallbackUsed": midday_fallback_used,
             # THS 炸板池总数（含韭研未收录股）：前端炸板卡注记「榜外」差额，fail-visible
-            "thsZhabanTotal": len(failed_today) if ths_found else None}
+            "thsZhabanTotal": len(failed_today) if ths_found else None,
+            # 源文档版本戳（2026-10-23 事故）：final 被重采覆写后，进程内缓存键据此换代，
+            # 否则长驻进程（8000）会永选命中旧名单算出的真连板/事实行
+            "sourceFetchedAt": repr((doc or {}).get("fetchedAt"))}
     return out, meta
 
 
@@ -706,16 +709,20 @@ def jiuyan_streak_map(db, date: str, dataset_id: str = DEFAULT_DATASET_ID,
 
     返回 {code: streak|None}；韭研 final 缺失 → {}（allow_midday_fallback=True 时回退
     午盘名单；盘中 THS 15:00 池不存在 → 全股 None，真连板不可算不冒充）。缓存键含
-    fallback 旗标，两种口径不互串。**缓存只在 final 已落档时写入**（2026-10-21
+    fallback 旗标与源文档版本戳入键，两种口径/新旧名单不互串。**缓存只在 final 已落档时写入**（2026-10-21
     review P1）：盘中/transitional 状态（final 未出、THS 池未落）不落缓存——否则
     12:35 写入的「全股 None」会锁存到收盘后，final+15:00 帧已更新仍命中陈旧值，
     同响应内 boards/limitUpTime 已是 final 口径而 streak 恒 None（混口径直到进程重启）。
     消费方：market_metrics 连板梯队、relay 三日链/龙头档案/题材梯队表。
     """
-    cache_key = (dataset_id, date, bool(allow_midday_fallback))
+    info, meta = jiuyan_board_info(db, date, allow_midday_fallback=allow_midday_fallback)
+    # 缓存键含源文档版本戳（2026-10-23 事故）：15:35 过期 final 落档后 8000 长驻进程
+    # 首算缓存，18:0x 重采覆写 final 后键不变 → 复盘页永选命中旧名单算出的真连板
+    #（大业股份 16天8板 显示 8 连板，实际 6）。final 重采 → fetchedAt 变 → 键换代重算。
+    cache_key = (dataset_id, date, bool(allow_midday_fallback),
+                 str(meta.get("sourceFetchedAt")))
     if cache_key in _STREAK_CACHE:
         return _STREAK_CACHE[cache_key]
-    info, meta = jiuyan_board_info(db, date, allow_midday_fallback=allow_midday_fallback)
     # transitional（final 未落档）不落缓存：盘后 final 到位后重算即得终口径，不锁存盘中态
     if not info:
         return {}
@@ -871,8 +878,18 @@ def _advdec_segment(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
 
 
 def market_facts_line(db, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> str:
-    """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。按 (dataset, 日) 缓存。"""
-    cache_key = (dataset_id, date)
+    """弹药 6：分位盘面事实行（不含规则情绪分——Q5 防锚定污染）。按 (dataset, 日, 源版本) 缓存。
+
+    缓存键含 final fetchedAt 版本戳（2026-10-23 事故）：final 被重采覆写后旧行
+    「最高 8 板」会永选命中，长驻进程不重启则不自愈。戳读取失败按 None 入键
+    （退化为旧行为，不阻断主链）。
+    """
+    try:
+        stamp_doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fetchedAt": 1})
+        stamp = repr((stamp_doc or {}).get("fetchedAt"))
+    except Exception:
+        stamp = "?"
+    cache_key = (dataset_id, date, stamp)
     if cache_key in _FACTS_CACHE:
         return _FACTS_CACHE[cache_key]
     cur = market_metrics(db, date, dataset_id)

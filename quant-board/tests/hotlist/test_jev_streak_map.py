@@ -71,8 +71,9 @@ class FakeDb:
         return self.cols.setdefault(k, FakeCol())
 
 
-def _final(date, stocks):
+def _final(date, stocks, fetchedAt=None):
     return {"_id": f"{date}:final",
+            "fetchedAt": fetchedAt,
             "fields": [{"name": "板块A", "stocks": list(stocks)}]}
 
 
@@ -196,18 +197,31 @@ def test_empty_when_final_missing():
     assert jiuyan_streak_map(db, "2026-10-15") == {}
 
 
-def test_cached_per_dataset_date():
-    """同日同 dataset 命中缓存：缓存后改库不改变返回值（与 _FACTS_CACHE 同款语义）。"""
-    frames = FakeCol([_frame("2026-10-15")])
+def test_cached_per_dataset_date(monkeypatch):
+    """同日同 dataset 同版本命中缓存：缓存后改库不改变返回值，且不重跑封板链回溯。
+
+    2026-10-23 修复后 board_info 每次调用都会重读源文档取版本戳（轻量投影），
+    缓存命中信号改用回溯函数调用计数（真正贵的 IO 在回溯窗，不在 3 个投影读）。
+    """
+    frames = FakeCol([_frame("2026-10-14"), _frame("2026-10-15")])
     db = FakeDb({"snapshot_frames": frames,
                  "jiuyan_action": FakeCol([_final("2026-10-15", [
-                     {"code": "002343", "name": "慈文传媒", "num": "5天5板"}])])})
+                     {"code": "002343", "name": "慈文传媒", "num": "5天4板"}])])})
+    walk_calls = []
+    orig_walk = runner.jiuyan_consecutive_streaks
+
+    def _counting_walk(*a, **kw):
+        walk_calls.append(1)
+        return orig_walk(*a, **kw)
+
+    monkeypatch.setattr(runner, "jiuyan_consecutive_streaks", _counting_walk)
     first = jiuyan_streak_map(db, "2026-10-15")
-    calls_after_first = frames.find_calls
+    assert walk_calls, "N>M 应走回溯"
     db.cols["jiuyan_action"].rows.append(
         _final("2026-10-15", [{"code": "002343", "name": "慈文传媒", "num": "9天9板"}]))
     second = jiuyan_streak_map(db, "2026-10-15")
-    assert second == first and frames.find_calls == calls_after_first
+    # 旧档无 fetchedAt → 版本戳不变 → 仍命中缓存（盘后批量语义保留）
+    assert second == first and len(walk_calls) == 1
 
 
 # ── 停牌分辨（2026-10-16 盘后复核新增，600825 停牌复牌实证）─────────────────
@@ -669,3 +683,44 @@ def test_streak_map_midday_fallback_broken_streak_stays_none():
     })
     out = jiuyan_streak_map(db, "2026-10-21", allow_midday_fallback=True)
     assert out == {"002368": None, "001318": None}
+
+
+def test_streak_map_cache_invalidated_on_final_refetch():
+    """2026-10-23 事故回归：final 被重采覆写（fetchedAt 变）后缓存必须换代重算。
+
+    事故链：15:35 过期 final 落档 → 8000 长驻进程首算缓存（键=dataset/date/fallback）→
+    18:0x 重采覆写 final → 键不变永选命中 → 复盘页真连板恒旧值（大业股份 16天8板
+    显示 8 连板，实际 6）。修法：缓存键含源文档 fetchedAt 版本戳，重采 → 键换代。
+    """
+    db = FakeDb({
+        "snapshot_frames": FakeCol([_frame("2026-10-15")]),
+        "jiuyan_action": FakeCol([_final("2026-10-15", [
+            {"code": "603278", "name": "大业股份", "num": "8天8板"}],
+            fetchedAt="2026-10-23T15:35:16")])})
+    first = jiuyan_streak_map(db, "2026-10-15")
+    assert first["603278"] == 8
+    # 重采覆写：fetchedAt 更新 + 名单口径变化（8天8板 → 6天6板）
+    db.cols["jiuyan_action"].rows = [
+        _final("2026-10-15", [{"code": "603278", "name": "大业股份", "num": "6天6板"}],
+               fetchedAt="2026-10-23T18:05:00")]
+    second = jiuyan_streak_map(db, "2026-10-15")
+    assert second["603278"] == 6, "final 重采覆写后不得命中旧缓存（2026-10-23 复盘页 8 板事故）"
+
+
+def test_streak_map_cache_hit_within_same_final_version(monkeypatch):
+    """同版本 final 内重复调用仍命中缓存（不重算；盘后批量语义保留）。"""
+    db = FakeDb({"snapshot_frames": FakeCol([_frame("2026-10-15")]),
+                 "jiuyan_action": FakeCol([_final("2026-10-15", [
+                     {"code": "002343", "name": "慈文传媒", "num": "5天5板"}],
+                     fetchedAt="2026-10-15T15:35:00")])})
+    walk_calls = []
+    orig_walk = runner.jiuyan_consecutive_streaks
+
+    def _counting_walk(*a, **kw):
+        walk_calls.append(1)
+        return orig_walk(*a, **kw)
+
+    monkeypatch.setattr(runner, "jiuyan_consecutive_streaks", _counting_walk)
+    assert jiuyan_streak_map(db, "2026-10-15")["002343"] == 5
+    assert jiuyan_streak_map(db, "2026-10-15")["002343"] == 5
+    assert not walk_calls, "N==M 自证路径不回溯；重复调用应命中缓存零重算"

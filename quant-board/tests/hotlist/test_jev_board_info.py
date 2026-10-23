@@ -108,7 +108,8 @@ def test_board_info_bisect_and_unmarked():
                   today_failed=["600004"], prev_failed=["600001"]), "2026-10-09")
     assert meta == {"jiuyanFinalFound": True, "prevPoolFound": True,
                     "thsPoolFound": True, "prevThsPoolFound": True, "thsZhabanTotal": 1,
-                    "jiuyanSlot": "final", "middayFallbackUsed": False}
+                    "jiuyanSlot": "final", "middayFallbackUsed": False,
+                    "sourceFetchedAt": "None"}
     assert "boardUnmarked" not in info["600001"]  # 昨日炸板股今日涨停=首板，不误标
     assert info["600002"]["boardUnmarked"] is True  # 昨日封板今日 num 空 → 真漏标
     assert info["600003"]["boards"] == 2 and "boardUnmarked" not in info["600003"]
