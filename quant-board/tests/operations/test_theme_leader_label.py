@@ -40,6 +40,14 @@ class FakeCol:
                 out.append({k: d.get(k) for k in projection} if projection else dict(d))
         return out
 
+    def find_one(self, query=None, projection=None):
+        for d in self.docs.values():
+            if all(d.get(k) == v for k, v in (query or {}).items()):
+                # 投影忽略（返回整文档）：点路径投影（fields.stocks.code）不做嵌套裁剪，
+                # 测试只依赖字段存在性，超集无害
+                return dict(d)
+        return None
+
     def update_many(self, flt, update):
         """reconcile 用（$ne/$in/$nin 富匹配；只模拟 $set）。"""
         n = 0
@@ -73,10 +81,30 @@ class FakeDb:
         return self.cols.setdefault(name, FakeCol())
 
 
+@pytest.fixture(autouse=True)
+def _no_calendar_network(monkeypatch):
+    """前向交易日轴（2026-10-24c）日历源全程打桩：测试零网络、零日历缓存文件写入。
+
+    weekday 启发（周一~五=交易日）在本夹具内是确定函数；需要测「非 bridge 源披露」
+    的用例自行再覆盖 `trading_calendar.is_trading_day_cached`。
+    """
+    import backend.snapshot_collector.trading_calendar as _tc
+
+    monkeypatch.setattr(_tc, "is_trading_day_cached",
+                        lambda d: (d.weekday() < 5, "weekday"))
+    L._FWD_AXIS_CACHE.clear()
+    yield
+    L._FWD_AXIS_CACHE.clear()
+
+
 ROWS = [
     {"date": "2026-10-19", "board": "机器人", "code": "603278", "name": "大业股份",
      "streak": 3, "time": "09:25:00", "boardN": 5, "othersN": 4, "ladderFollowers": 1,
-     "prevPeers": 2, "prevBoardN": 3, "peerCodes": ["a", "b"]},
+     "prevPeers": 2, "prevBoardN": 3, "peerCodes": ["a", "b"],
+     # 2026-10-24c 板面扩容字段（day_leader_rows 直出）
+     "prevTotal": 6, "zhabanN": 2, "prevZhabanN": 1,
+     "ladderShape": {"first": 3, "two": 1, "threePlus": 1, "unknown": 0},
+     "secondStreak": 2},
     {"date": "2026-10-19", "board": "化工", "code": "603188", "name": "亚邦股份",
      "streak": 1, "time": "13:16:00", "boardN": 2, "othersN": 1, "ladderFollowers": 1,
      "prevPeers": 0, "prevBoardN": 0, "peerCodes": ["c"]},
@@ -163,7 +191,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["questionSetVersion"] == "v8"
     assert doc["questionSetHash"] == "b0914cdd3e7d"   # v8 越锚铸词内联定义（v1-v7 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-24b"
+    assert doc["ammoVersion"] == "2026-10-24c"
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -272,14 +300,136 @@ def test_build_one_wires_history_and_headroom_anchor():
     n = built["narrative"]
     assert "近 2 日该板块封板家数（旧→新，缺口日不列）：10-16 3 · 10-17 5" in n
     assert "空间锚" in n and "总体平均再走" in n
-    i_struct, i_base = n.index("板块「机器人」今日封板"), n.index("结构基线")
+    # 2026-10-24c 三行：前向轴紧跟盘面行、梯队/炸板面紧跟结构行；昨日口径=总数−仍封出断板
+    # （2026-10-19 是周一；weekday 桩=周一~五交易日）
+    assert "交易日轴（前向）：下一交易日 2026-10-20（周二） · 下下交易日 2026-10-21（周三）" \
+        "（日历源 weekday，节假日顺延未经验证）" in n
+    assert "昨日该板块封板 6 只，今日仍封 3 只（断板 3）" in n
+    assert "板块梯队形态：首板 3 家 / 2板 1 家 / 3板+ 1 家；龙头 3 板，次高 2 板（领先 +1）" in n
+    assert "板内炸板面：今日触板未封 2 家（昨日 1 家）" in n
+    i_struct, i_lad = n.index("板块「机器人」今日封板"), n.index("板块梯队形态")
+    i_zhaban, i_base = n.index("板内炸板面"), n.index("结构基线")
     i_anchor, i_ev = n.index("空间锚"), n.index("【题材证据")
-    assert i_struct < i_base < i_anchor < i_ev
+    assert i_struct < i_lad < i_zhaban < i_base < i_anchor < i_ev
+    rows0 = dict(ROWS[0])
+    rows0["ladderShape"] = None   # 旧形状行：两行 None 不出行，不报错
+    rows0["zhabanN"] = None
+    built_legacy = L.build_one(FakeDb(), "2026-10-19", rows0, rows_baseline,
+                               market_line="涨停 46 家", board_history={})
+    assert "板块梯队形态" not in built_legacy["narrative"]
+    assert "板内炸板面" not in built_legacy["narrative"]
     # 旧形状基线（无 code/date）→ 锚不出；空 history dict → 不可考文案
     built2 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
                          market_line="涨停 46 家", board_history={})
     assert "空间锚" not in built2["narrative"]
     assert "家数序列不可考" in built2["narrative"]
+
+
+def test_label_one_persists_expanded_structure_fields(env):
+    """2026-10-24c 板面扩容字段随 structure 落库（审计与前端可回读，不只在叙事里）。"""
+    calls, db = env
+    L.run("2026-10-19", confirm_budget=True)
+    doc = db[L.COLLECTION].docs["2026-10-19:603278"]
+    st = doc["structure"]
+    assert st["prevTotal"] == 6 and st["zhabanN"] == 2 and st["prevZhabanN"] == 1
+    assert st["secondStreak"] == 2
+    assert st["ladderShape"] == {"first": 3, "two": 1, "threePlus": 1, "unknown": 0}
+    # 无扩容字段的行（化工/旧形状）→ 字段为 None，不报错不伪造
+    doc2 = db[L.COLLECTION].docs["2026-10-19:603188"]
+    assert doc2["structure"]["ladderShape"] is None
+    assert doc2["structure"]["zhabanN"] is None
+
+
+def test_forward_date_axis_line_sources_and_fail_visible(monkeypatch):
+    """前向交易日轴（2026-10-24c）：bridge 源干净出轴；非 bridge 源显式标注未验证；
+    全程无交易日 → 不可算（不猜）。"""
+    import datetime as dt
+
+    import backend.snapshot_collector.trading_calendar as tc
+
+    L._FWD_AXIS_CACHE.clear()
+    # bridge 源：周五 2026-10-23 → 下周一/周二
+    monkeypatch.setattr(tc, "is_trading_day_cached",
+                        lambda d: (d.weekday() < 5, "bridge"))
+    line = L.forward_date_axis_line("2026-10-23")
+    assert line == "交易日轴（前向）：下一交易日 2026-10-26（周一） · 下下交易日 2026-10-27（周二）"
+    # weekday 源 → 必须带未验证披露（fail-visible：长假会被启发误判）
+    monkeypatch.setattr(tc, "is_trading_day_cached",
+                        lambda d: (d.weekday() < 5, "weekday"))
+    L._FWD_AXIS_CACHE.clear()
+    line2 = L.forward_date_axis_line("2026-10-23")
+    assert "2026-10-26（周一）" in line2
+    assert "（日历源 weekday，节假日顺延未经验证）" in line2
+    # 全 False（异常场景）→ 不可算
+    monkeypatch.setattr(tc, "is_trading_day_cached", lambda d: (False, "bridge"))
+    L._FWD_AXIS_CACHE.clear()
+    assert L.forward_date_axis_line("2026-10-23") == \
+        "交易日轴（前向）：不可算（日历源异常，fail-visible）"
+    # 非法日期 → 不可算，不抛
+    L._FWD_AXIS_CACHE.clear()
+    assert "不可算" in L.forward_date_axis_line("not-a-date")
+    # 缓存生效：第一次正常算，第二次换「不许调用」桩仍直接命中缓存
+    monkeypatch.setattr(tc, "is_trading_day_cached",
+                        lambda d: (d.weekday() < 5, "bridge"))
+    L._FWD_AXIS_CACHE.clear()
+    first = L.forward_date_axis_line("2026-10-23")
+    monkeypatch.setattr(tc, "is_trading_day_cached",
+                        lambda d: (_ for _ in ()).throw(AssertionError("should not call")))
+    second = L.forward_date_axis_line("2026-10-23")
+    assert first == second
+
+
+def test_day_leader_rows_board_face_expansion(monkeypatch):
+    """day_leader_rows 2026-10-24c 扩容：梯队形态/次高/炸板面/昨日总数（同名板块精确匹配）。"""
+    import backend.operations.theme_leader_baseline as B
+    import backend.operations.jev_label_jiuyan as J
+
+    info_today = {"603278": {}, "603280": {},
+                  "603281": {"zhaban": True}, "603282": {"zhaban": True}}
+    info_prev = {"603278": {}, "603280": {}, "603285": {},
+                 "603286": {"zhaban": True}}
+
+    def fake_sealed(db, date, dataset_id=None):
+        if date == "2026-10-19":
+            return {"603278", "603280"}, info_today, {"thsPoolFound": True}
+        return {"603278", "603280", "603285"}, info_prev, {"thsPoolFound": True}
+
+    monkeypatch.setattr(B, "sealed_and_info", fake_sealed)
+    monkeypatch.setattr(J, "jiuyan_streak_map",
+                        lambda db, date, dataset_id=None: {"603278": 3, "603280": 1})
+    db = FakeDb()
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-19:final"},
+        {"_id": "2026-10-19:final", "fields": [
+            {"name": "机器人", "stocks": [
+                {"code": "603278", "name": "大业", "time": "09:25"},
+                {"code": "603280", "name": "乙", "time": "10:00"},
+                {"code": "603281", "name": "炸甲", "time": "09:40"},
+                {"code": "603282", "name": "炸乙", "time": "13:30"}]}]})
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-16:final"},
+        {"_id": "2026-10-16:final", "fields": [
+            {"name": "机器人", "stocks": [
+                {"code": "603278", "name": "大业", "time": "09:25"},
+                {"code": "603280", "name": "乙", "time": "10:00"},
+                {"code": "603285", "name": "丙", "time": "11:00"},
+                {"code": "603286", "name": "炸丙", "time": "14:00"}]}]})
+    rows, _meta = B.day_leader_rows(db, "2026-10-19", prev_date="2026-10-16")
+    row = next(r for r in rows if r["board"] == "机器人")
+    assert row["boardN"] == 2 and row["zhabanN"] == 2
+    assert row["ladderShape"] == {"first": 1, "two": 0, "threePlus": 1, "unknown": 0}
+    assert row["secondStreak"] == 1
+    assert row["prevTotal"] == 3 and row["prevZhabanN"] == 1
+    assert row["prevBoardN"] == 2 and row["prevPeers"] == 1
+    # 昨日 THS 池缺失 → 昨日统计不可考（不拿部分数据冒充）
+    monkeypatch.setattr(B, "sealed_and_info",
+                        lambda db_, date, dataset_id=None: (
+                            ({"603278"}, info_today, {"thsPoolFound": True})
+                            if date == "2026-10-19" else (None, {}, {"thsPoolFound": False})))
+    rows2, _m2 = B.day_leader_rows(db, "2026-10-19", prev_date="2026-10-16")
+    row2 = rows2[0]
+    assert row2["prevTotal"] is None and row2["prevZhabanN"] is None
+    assert row2["prevBoardN"] is None and row2["prevPeers"] is None
 
 
 # ── 单一龙头对账（2026-10-24 双龙头事故：10-23 机器人板块赛福天/大业股份并存） ──

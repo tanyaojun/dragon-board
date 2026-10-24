@@ -35,27 +35,50 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                     prev_date: str | None = None) -> tuple[list[dict] | None, dict]:
     """当日各板块龙头的结构事实行（**不含次日结局**）。
 
-    `prev_date` 给出时补 `prevPeers`/`prevBoardN`（昨日同板块其它封板股家数）——承接强度特征。
+    `prev_date` 给出时补 `prevPeers`/`prevBoardN`（昨日同板块其它封板股家数）——承接强度特征；
+    2026-10-24c 起另补 `prevTotal`（昨日封板总数，断板分母）/`prevZhabanN`（昨日板内触板未封）。
+    2026-10-24c 起每行自带板面扩容字段：`ladderShape`（首板/2板/3板+分布）、`secondStreak`
+    （次高连板）、`zhabanN`（今日板内触板未封家数，韭研曾触板−THS炸板二分同口径）。
     返回 `(rows, meta)`；`rows=None` 表示当日 THS 池缺失（不可二分，fail-visible，调用方自己决定跳过口径）。
     """
     from backend.operations.jev_label_jiuyan import jiuyan_streak_map
 
-    sealed, _info, meta = sealed_and_info(db, date, dataset_id)
+    sealed, info, meta = sealed_and_info(db, date, dataset_id)
     if sealed is None:
         return None, meta
     streaks = jiuyan_streak_map(db, date, dataset_id)
     prev_sealed: set[str] | None = None
+    prev_board_sealed: dict[str, int] = defaultdict(int)   # 板块名 → 昨日封板总数（精确同名匹配）
+    prev_board_zhaban: dict[str, int] = defaultdict(int)   # 板块名 → 昨日触板未封家数
     if prev_date:
-        prev_sealed, _pi, _pm = sealed_and_info(db, prev_date, dataset_id)
+        prev_sealed, prev_info, _pm = sealed_and_info(db, prev_date, dataset_id)
+        if prev_sealed is not None:
+            # 昨日盘面统计与今日同口径（同一份 fields 分组 + 触板二分）；板块名逐日可变，
+            # 只做精确匹配（同名才可考，改名板块昨日统计如实不可考，与 S1 序列同哲学）
+            prev_doc = db["jiuyan_action"].find_one(
+                {"_id": f"{prev_date}:final"},
+                {"fields.stocks.code": 1, "fields.name": 1}) or {}
+            for field in prev_doc.get("fields") or []:
+                bname = str(field.get("name") or "")
+                for st in field.get("stocks") or []:
+                    pcode = str(st.get("code") or "")[-6:]
+                    if pcode in prev_sealed:
+                        prev_board_sealed[bname] += 1
+                    elif (prev_info.get(pcode) or {}).get("zhaban"):
+                        prev_board_zhaban[bname] += 1
     doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
     boards_of: dict[str, list[dict]] = defaultdict(list)
+    zhaban_of: dict[str, int] = defaultdict(int)   # 板块名 → 今日触板未封家数（韭研曾触板−THS炸板二分）
     for field in doc.get("fields") or []:
+        bname = str(field.get("name") or "")
         for st in field.get("stocks") or []:
             code = str(st.get("code") or "")[-6:]
             if code in sealed:            # 只算真实封板股（炸板/触板未封不进梯队）
-                boards_of[str(field.get("name") or "")].append(
+                boards_of[bname].append(
                     {"code": code, "name": st.get("name"), "time": st.get("time"),
                      "streak": streaks.get(code)})
+            elif (info.get(code) or {}).get("zhaban"):
+                zhaban_of[bname] += 1
     rows: list[dict] = []
     for board, stocks in boards_of.items():
         if not stocks:
@@ -65,6 +88,22 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         others = [s for s in stocks if s["code"] != leader["code"]]
         prev_peers = (sum(1 for s in others if s["code"] in prev_sealed)
                       if prev_sealed is not None else None)
+        # 板内梯队形态（2026-10-24c）：首板/2板/3板+ 分布 + 次高连板——深度题 climax 判据
+        # 「首板潮/中军成形/高标分化」「龙头高度显著领先」此前只有总数与跟风数两点
+        shape = {"first": 0, "two": 0, "threePlus": 0, "unknown": 0}
+        for s in stocks:
+            sv = s["streak"]
+            if sv is None:
+                shape["unknown"] += 1
+            elif sv == 1:
+                shape["first"] += 1
+            elif sv == 2:
+                shape["two"] += 1
+            else:
+                shape["threePlus"] += 1
+        second_streak = max((s["streak"] for s in others
+                             if isinstance(s["streak"], int)), default=None)
+        prev_total = prev_board_sealed.get(board) if prev_sealed is not None else None
         rows.append({
             "date": date, "board": board,
             "code": leader["code"], "name": leader.get("name"),
@@ -77,6 +116,15 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             "prevPeers": prev_peers,
             "prevBoardN": (sum(1 for s in stocks if s["code"] in prev_sealed)
                            if prev_sealed is not None else None),
+            # 2026-10-24c 板面扩容：昨日封板总数/断板、今日与昨日板内触板未封、
+            # 梯队形态与次高连板（prevBoardN 语义仍是「昨日封板且今日仍封」，
+            # 叙事行不再把它误写为「昨日封板总数」）
+            "prevTotal": prev_total,
+            "zhabanN": zhaban_of.get(board, 0),
+            "prevZhabanN": (prev_board_zhaban.get(board)
+                            if prev_sealed is not None else None),
+            "ladderShape": shape,
+            "secondStreak": second_streak,
             "peerCodes": [s["code"] for s in others],
             # 板内封板名单（v3 板内解析用：让 L2 计数与 boardN 同口径，不把触板未封混进来）
             "boardCodes": [s["code"] for s in stocks],

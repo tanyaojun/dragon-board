@@ -43,7 +43,14 @@ QUESTION_SET_VERSION_THEME_LEADER = "v8"
 # S2 题材热度序列窗 5→10 日（「断流/见顶」需要更长窗）；S3 龙头驱动标签第二匹配通道
 # （板块名命中错位宏观节点时补对口催化，只并列披露不替换）；Q1 新增空间锚行
 # （历史连板周期自当日高度剩余板数分布，右删失剔除）。
-AMMO_VERSION_THEME_LEADER = "2026-10-24b"
+# 2026-10-24c（盘面语料四补，2026-10-24 用户批准；对照韭研个股链 v3.2「判据点名
+# 要、语料缺席」盘点；题面 v8 判据零改动）：①基线行补透出封板时间/跟风梯队/昨日承接
+# 三组单维桶率（此前已算仅落审计）；②板内梯队形态行（首板/2板/3板+分布+次高连板差，
+# climax 判据「首板潮/中军成形/高标分化」直接可读）；③前向交易日轴行（「未来 1-2 个
+# 交易日」跨周末可数，日历源三级降级显式标注）；④板内炸板面行（今日/昨日触板未封，
+# 板内口径同触板二分）+ 结构行昨日口径修正（prevBoardN 语义=昨日封板且今日仍封，
+# 旧文案误写为「昨日封板 N 只」吞掉断板数，本版以 prevTotal−prevBoardN 显式出断板）。
+AMMO_VERSION_THEME_LEADER = "2026-10-24c"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -354,8 +361,11 @@ def continue_point_estimate(probabilities: Any) -> tuple[float | None, float]:
 def baseline_line(rows: list[dict], row: dict, min_combo_n: int = 5) -> str:
     """该龙头所在结构桶的历史基准率行（组合桶样本不足时逐级回退，全部标注样本量）。
 
-    回退顺序：组合桶 → 连板高度桶 → 板块家数桶 → 总体；任一档样本 < min_combo_n 都明示样本量，
-    让模型知道这条基准率的可信度（不隐藏小样本）。
+    2026-10-24c：补透出 `bySealTime`/`byFollowers`/`byPrevPeers` 三组单维桶率（此前
+    `summarize_rows` 已算、仅落审计不喂模型）。verylow 判据「板块家数少+封板晚+无梯队」
+    三维度现在语料都有对应率；各维独立出率（组合桶样本不足时不再整体丢失封板时间维度）。
+    回退顺序：组合桶 → 连板高度 → 板块家数 → 封板时间 → 跟风梯队 → 昨日承接 → 总体；
+    任一档样本 < min_combo_n 都明示样本量，让模型知道这条基准率的可信度（不隐藏小样本）。
     """
     combo = combo_rates(rows, min_combo_n).get(combo_key(row))
     parts: list[str] = []
@@ -363,13 +373,26 @@ def baseline_line(rows: list[dict], row: dict, min_combo_n: int = 5) -> str:
         parts.append(f"同桶[{combo_key(row)}] 历史次日连板率 {combo['rate']:.1%}（{combo['n']} 样本）")
     else:
         parts.append(f"同桶[{combo_key(row)}] 样本不足（<{min_combo_n}），不出率")
-    sb = group_rates(rows, lambda r: streak_bucket(r.get("streak"))).get(streak_bucket(row.get("streak")))
+    sk = streak_bucket(row.get("streak"))
+    sb = group_rates(rows, lambda r: streak_bucket(r.get("streak"))).get(sk)
     if sb:
-        parts.append(f"按连板高度[{streak_bucket(row.get('streak'))}] {sb['rate']:.1%}（{sb['n']} 样本）")
-    cb = group_rates(rows, lambda r: board_count_bucket(r.get("boardN"))).get(
-        board_count_bucket(row.get("boardN")))
+        parts.append(f"按连板高度[{sk}] {sb['rate']:.1%}（{sb['n']} 样本）")
+    ck = board_count_bucket(row.get("boardN"))
+    cb = group_rates(rows, lambda r: board_count_bucket(r.get("boardN"))).get(ck)
     if cb:
-        parts.append(f"按板块家数[{board_count_bucket(row.get('boardN'))}] {cb['rate']:.1%}（{cb['n']} 样本）")
+        parts.append(f"按板块家数[{ck}] {cb['rate']:.1%}（{cb['n']} 样本）")
+    tk = seal_time_bucket(row.get("time"))
+    tb = group_rates(rows, lambda r: seal_time_bucket(r.get("time"))).get(tk)
+    if tb and tk != "unknown":
+        parts.append(f"按封板时间[{tk}] {tb['rate']:.1%}（{tb['n']} 样本）")
+    fk = ladder_bucket(row.get("ladderFollowers"))
+    fb = group_rates(rows, lambda r: ladder_bucket(r.get("ladderFollowers"))).get(fk)
+    if fb and fk != "unknown":
+        parts.append(f"按跟风梯队[{fk}] {fb['rate']:.1%}（{fb['n']} 样本）")
+    pk = prev_peer_bucket(row.get("prevPeers"))
+    pb = group_rates(rows, lambda r: prev_peer_bucket(r.get("prevPeers"))).get(pk)
+    if pb and pk != "prev_unknown":
+        parts.append(f"按昨日承接[{pk}] {pb['rate']:.1%}（{pb['n']} 样本）")
     cont, n, rate = _rate(rows)
     if n:
         parts.append(f"总体 {rate:.1%}（{n} 样本）")
@@ -458,18 +481,28 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
 
 def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladder: int,
                    prev_board_n: int | None, prev_peers: int | None,
+                   prev_total: int | None = None,
                    history: list[tuple[str, int]] | None = None) -> str:
     """该板块当日结构事实行（不含预测）。
 
     `history`（S1，2026-10-24b）= 近 5 日 (date, boardN) 序列：深度/延续题判据
     「家数扩张中/萎缩」此前只有今日/昨日两点，序列才看得出形状。缺口日如实不列。
+    `prev_total`（2026-10-24c）= 昨日该板块封板总数：此前叙事把 `prev_board_n`（语义=
+    昨日封板且今日仍封）误写成「昨日该板块封板 N 只」，断板数被吞——本版修正口径，
+    断板 = prev_total − prev_board_n 显式给出；prev_total 不可考（板块改名/昨日池缺失）
+    时如实写不可考，不拿仍封数冒充总数。
     """
     time_txt = str(leader.get("time") or "时间不可考")
     streak = leader.get("streak")
     streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
-    prev_txt = ("昨日同板块不可考" if prev_peers is None
-                else f"昨日该板块封板 {prev_board_n if prev_board_n is not None else '?'} 只，"
-                     f"其中 {prev_peers} 只今日仍封板")
+    if prev_peers is None:
+        prev_txt = "昨日同板块不可考"
+    elif prev_total is None:
+        prev_txt = f"昨日该板块封板总数不可考（今日仍封 {prev_board_n if prev_board_n is not None else '?'} 只）"
+    else:
+        duan = prev_total - prev_board_n if isinstance(prev_board_n, int) else None
+        duan_txt = f"断板 {duan}" if duan is not None else "断板不可算"
+        prev_txt = (f"昨日该板块封板 {prev_total} 只，今日仍封 {prev_board_n} 只（{duan_txt}）")
     hist_txt = ""
     if history:
         seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
@@ -481,9 +514,55 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
             f"{followers_ge_ladder} 家；{prev_txt}{hist_txt}")
 
 
+def board_ladder_line(row: dict) -> str | None:
+    """板内梯队形态行（2026-10-24c）：首板潮/中军成形/高标分化直接可读。
+
+    深度题 climax 判据点名「板块梯队形态（首板潮/中军成形/高标分化）」「龙头高度显著
+    领先」，此前语料只有封板总数与跟风数两点。`ladderShape` 缺席（旧代行/极端缺失）→
+    None 不出行；次高连板 None=板内无其它可算真连板（孤军），如实写不可考。
+    """
+    shape = row.get("ladderShape")
+    if not isinstance(shape, dict):
+        return None
+    seg = (f"板块梯队形态：首板 {shape.get('first', 0)} 家 / 2板 {shape.get('two', 0)} 家 / "
+           f"3板+ {shape.get('threePlus', 0)} 家")
+    unk = shape.get("unknown", 0)
+    if unk:
+        seg += f"（另有 {unk} 只连板高度不可算）"
+    leader_streak = row.get("streak")
+    second = row.get("secondStreak")
+    if isinstance(leader_streak, int) and isinstance(second, int):
+        seg += f"；龙头 {leader_streak} 板，次高 {second} 板（领先 +{leader_streak - second}）"
+    elif isinstance(leader_streak, int):
+        seg += f"；龙头 {leader_streak} 板，次高 不可考（板内无其它可算真连板）"
+    else:
+        seg += "；龙头连板高度不可算"
+    return seg
+
+
+def board_zhaban_line(row: dict) -> str | None:
+    """板内炸板面行（2026-10-24c）：分化/退潮的板内证据。
+
+    climax 判据「跟风断板增多」、ebbing「龙头断板或出现大面」此前只有全市场炸板率，
+    板内触板未封（韭研曾触板−THS炸板二分同口径，剔 ST/北交所）缺席。昨日数不可考
+    （昨日池缺失/板块改名）时只出今日，如实不列对比。
+    """
+    z = row.get("zhabanN")
+    if not isinstance(z, int):
+        return None
+    seg = f"板内炸板面：今日触板未封 {z} 家"
+    pz = row.get("prevZhabanN")
+    if isinstance(pz, int):
+        seg += f"（昨日 {pz} 家）"
+    return seg
+
+
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
-                           leader_code: str, headroom: str | None = None) -> str:
+                           leader_code: str, headroom: str | None = None,
+                           forward_axis: str | None = None,
+                           ladder_line: str | None = None,
+                           zhaban_line: str | None = None) -> str:
     """投喂给 jev 的完整叙事（顺序固定，便于逐字复现与回归比对）。
 
     evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本），
@@ -491,13 +570,21 @@ def build_leader_narrative(*, date: str, market_line: str, structure: str, basel
     corpus_line 行（原两处信息完全重复，纯 token 浪费）；evidence_block 必须原样嵌入，
     不得在 runner 里二次改写。`headroom`（2026-10-24b Q1）= 空间题历史锚行，排在基线后、
     证据块前；None（无历史样本/无可用周期）不出行。
+    2026-10-24c 三行：`forward_axis`（前向交易日轴，紧跟盘面行后）、`ladder_line`
+    （板内梯队形态）、`zhaban_line`（板内炸板面），均 None 不出行（旧调用形状不变）。
     """
     lines = [
         f"{date} 交易日 · {market_line}",
-        f"待判龙头：{leader_name}（{leader_code}）",
-        structure,
-        baseline,
     ]
+    if forward_axis:
+        lines.append(forward_axis)
+    lines.append(f"待判龙头：{leader_name}（{leader_code}）")
+    lines.append(structure)
+    if ladder_line:
+        lines.append(ladder_line)
+    if zhaban_line:
+        lines.append(zhaban_line)
+    lines.append(baseline)
     if headroom:
         lines.append(headroom)
     lines.append(evidence_block)

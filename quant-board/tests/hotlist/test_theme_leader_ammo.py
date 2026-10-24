@@ -30,9 +30,12 @@ def test_question_set_frozen_hash_and_versions():
     `40c7184a790e`，零样本——首批 10-26 才开火即被 v8 取代）；**v8 = 2026-10-24
     「越锚」铸词内联定义**（review P3：模型直读可能不解裸铸词，改「要选高于锚的
     档位（越锚）时」，hash `b0914cdd3e7d`）——**跨代标签不得混评**（评估按版本分组）。
+    AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
+    （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
+    ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v8"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24b"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24c"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "b0914cdd3e7d"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -108,6 +111,33 @@ def test_baseline_line_discloses_small_samples_and_falls_back():
     assert "按连板高度[1]" in line2, "组合桶不足时回退到单维桶（标注样本量）"
 
 
+def test_baseline_line_surfaces_seal_time_followers_prev_peers_tiers():
+    """2026-10-24c：封板时间/跟风梯队/昨日承接三组桶率透出（此前已算仅落审计）。
+
+    verylow 判据「板块家数少+封板晚+无梯队」三维度语料都有对应率；缺字段（旧形状
+    历史行）的维如实不出行，不伪造。
+    """
+    rows = [
+        {"streak": 2, "boardN": 5, "time": "09:20:00", "ladderFollowers": 2,
+         "prevPeers": 1, "continued": True},
+        {"streak": 2, "boardN": 6, "time": "09:30:00", "ladderFollowers": 2,
+         "prevPeers": 2, "continued": True},
+        {"streak": 3, "boardN": 5, "time": "09:10:00", "ladderFollowers": 2,
+         "prevPeers": 0, "continued": False},
+        {"streak": 1, "boardN": 2, "time": "14:00:00", "ladderFollowers": 0,
+         "prevPeers": None, "continued": False},
+    ]
+    row = {"streak": 2, "boardN": 5, "time": "09:25:00", "ladderFollowers": 2,
+           "prevPeers": 1}
+    line = A.baseline_line(rows, row, min_combo_n=8)
+    assert "按封板时间[early<=10:00] 66.7%（3 样本）" in line
+    assert "按跟风梯队[2] 66.7%（3 样本）" in line
+    assert "按昨日承接[prev1-2] 100.0%（2 样本）" in line
+    # 旧形状（无 ladderFollowers/prevPeers 字段）→ 两维不出行，不报错不伪造
+    legacy = A.baseline_line(_rows(), {"streak": 4, "boardN": 9, "time": "09:20:00"})
+    assert "按跟风梯队" not in legacy and "按昨日承接" not in legacy
+
+
 def test_structure_line_marks_unknown_prev():
     line = A.structure_line(board="机器人", board_n=5,
                             leader={"name": "大业股份", "code": "603278", "streak": 3,
@@ -121,7 +151,50 @@ def test_structure_line_marks_unknown_prev():
                              leader={"name": "X", "code": "1", "streak": None, "time": None},
                              followers_ge_ladder=0, prev_board_n=3, prev_peers=1)
     assert "连板高度不可算" in line2 and "时间不可考" in line2
-    assert "昨日该板块封板 3 只，其中 1 只今日仍封板" in line2
+    # 2026-10-24c 口径修正：prev_board_n 语义=昨日封板且今日仍封；prev_total 未传时
+    # 不得再把仍封数冒充「昨日封板 N 只」（旧文案吞掉断板数）
+    assert "昨日该板块封板总数不可考（今日仍封 3 只）" in line2
+
+
+def test_structure_line_prev_total_surfaces_duanban():
+    """prev_total（2026-10-24c）= 昨日封板总数：断板 = 总数 − 仍封，显式给出。"""
+    line = A.structure_line(board="机器人", board_n=5,
+                            leader={"name": "大业", "code": "1", "streak": 3, "time": "09:25"},
+                            followers_ge_ladder=1, prev_board_n=3, prev_peers=2, prev_total=6)
+    assert "昨日该板块封板 6 只，今日仍封 3 只（断板 3）" in line
+    # 仍封数缺失（防御分支，生产不可达）→ 断板不可算，不猜
+    line2 = A.structure_line(board="机器人", board_n=5,
+                             leader={"name": "X", "code": "1", "streak": 2, "time": "09:30"},
+                             followers_ge_ladder=0, prev_board_n=None, prev_peers=0,
+                             prev_total=6)
+    assert "昨日该板块封板 6 只，今日仍封 None 只（断板不可算）" in line2
+
+
+def test_board_ladder_line_shape_and_second_streak():
+    """板内梯队形态行（2026-10-24c）：首板潮/中军/高标分化直接可读；旧形状行 → None。"""
+    row = {"streak": 5, "secondStreak": 3,
+           "ladderShape": {"first": 4, "two": 1, "threePlus": 2, "unknown": 1}}
+    line = A.board_ladder_line(row)
+    assert line == ("板块梯队形态：首板 4 家 / 2板 1 家 / 3板+ 2 家（另有 1 只连板高度不可算）；"
+                    "龙头 5 板，次高 3 板（领先 +2）")
+    # 孤军：板内无其它可算真连板 → 次高如实不可考
+    solo = A.board_ladder_line({"streak": 3, "secondStreak": None,
+                                "ladderShape": {"first": 2, "two": 0, "threePlus": 1,
+                                                "unknown": 0}})
+    assert "次高 不可考（板内无其它可算真连板）" in solo
+    # 龙头高度不可算 / 旧代行（无 ladderShape）→ 各自如实
+    assert "龙头连板高度不可算" in A.board_ladder_line(
+        {"streak": None, "secondStreak": None,
+         "ladderShape": {"first": 1, "two": 0, "threePlus": 0, "unknown": 0}})
+    assert A.board_ladder_line({"streak": 3}) is None
+
+
+def test_board_zhaban_line_today_and_prev():
+    """板内炸板面行（2026-10-24c）：今日触板未封；昨日不可考只出今日，不伪造对比。"""
+    assert A.board_zhaban_line({"zhabanN": 4, "prevZhabanN": 2}) == \
+        "板内炸板面：今日触板未封 4 家（昨日 2 家）"
+    assert A.board_zhaban_line({"zhabanN": 0}) == "板内炸板面：今日触板未封 0 家"
+    assert A.board_zhaban_line({}) is None, "旧代行/字段缺失 → 不出行，不写 0 冒充"
 
 
 def test_structure_line_renders_board_count_history():
@@ -215,6 +288,31 @@ def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
     assert lines[4].startswith("【题材证据"), "证据块紧跟结构行（2026-10-24a 起无 corpus_line 头行）"
     assert text.endswith(ev), "证据块必须原样嵌在末尾，不得被 runner 二次改写"
     assert "未映射（不代表无催化）" in text and "未采集" in text
+
+
+def test_narrative_order_with_2026_10_24c_lines():
+    """2026-10-24c 三行固定序：前向轴紧跟盘面行，梯队/炸板面紧跟结构行，均 None 不出行。"""
+    ev = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n取数日 2026-10-23"
+    text = A.build_leader_narrative(
+        date="2026-10-23", market_line="涨停 81 家",
+        forward_axis="交易日轴（前向）：下一交易日 2026-10-26（周一）",
+        structure="板块「X」今日封板 3 家",
+        ladder_line="板块梯队形态：首板 1 家 / 2板 1 家 / 3板+ 1 家",
+        zhaban_line="板内炸板面：今日触板未封 2 家（昨日 0 家）",
+        baseline="结构基线：总体 33.9%", evidence_block=ev,
+        leader_name="华林证券", leader_code="002945")
+    lines = text.splitlines()
+    assert lines[0].startswith("2026-10-23 交易日") and lines[1].startswith("交易日轴（前向）")
+    assert lines[2] == "待判龙头：华林证券（002945）"
+    assert lines[3].startswith("板块「X」") and lines[4].startswith("板块梯队形态")
+    assert lines[5].startswith("板内炸板面") and lines[6].startswith("结构基线")
+    assert lines[7].startswith("【题材证据")
+    # 三行全 None → 回到旧形状（行序向后兼容）
+    old = A.build_leader_narrative(
+        date="2026-10-23", market_line="涨停 81 家", structure="板块「X」今日封板 3 家",
+        baseline="结构基线：总体 33.9%", evidence_block=ev,
+        leader_name="华林证券", leader_code="002945").splitlines()
+    assert old[1] == "待判龙头：华林证券（002945）" and old[4].startswith("【题材证据")
 
 
 def test_narrative_places_headroom_anchor_between_baseline_and_evidence():

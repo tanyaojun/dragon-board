@@ -39,6 +39,8 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     THEME_LEADER_KEYS,
     apply_evidence_gate,
     baseline_line,
+    board_ladder_line,
+    board_zhaban_line,
     build_leader_narrative,
     combo_key,
     headroom_anchor_line,
@@ -61,6 +63,56 @@ BASELINE_WINDOW_TRADING_DAYS = 60
 BASELINE_MIN_SAMPLES = 8          # 组合桶最小样本（与 ammo.baseline_line 一致）
 # S1 板块家数趋势序列回看窗（交易日）：判据「家数扩张中/萎缩」需要形状而非两点
 BOARD_HISTORY_DAYS = 5
+# 前向交易日轴回看上限（自然日）：找下 2 个交易日足够（最长长假 8 天），防日历源异常时扫到天边
+FORWARD_AXIS_SCAN_DAYS = 15
+_FWD_AXIS_CACHE: dict[str, str] = {}
+_WEEKDAY_CN = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def forward_date_axis_line(date: str, days: int = 2) -> str:
+    """前向交易日轴（2026-10-24c）：延续/概率题判据的「未来 1-2 个交易日」跨周末可数。
+
+    题材日历节的 T+n 是日历日差，周五取数时周六事件标 T+1、实际是下周一——「未来 1-2
+    个交易日」需要模型自己查日历。本行直接给出下 1/下 2 个交易日与星期。日历源走
+    `is_trading_day_cached` 三级降级（bridge→本地缓存→星期启发），非 bridge 源显式标注
+    「节假日顺延未经验证」（fail-visible：weekday 启发会把长假当交易日）；全程找不到
+    （异常）→「不可算」，不猜。
+    """
+    import datetime as _dt
+
+    from backend.snapshot_collector.trading_calendar import is_trading_day_cached
+
+    if date in _FWD_AXIS_CACHE:
+        return _FWD_AXIS_CACHE[date]
+    try:
+        cur = _dt.date.fromisoformat(str(date))
+    except ValueError:
+        line = "交易日轴（前向）：不可算（日期非法，fail-visible）"
+        _FWD_AXIS_CACHE[date] = line
+        return line
+    found: list[str] = []
+    srcs: set[str] = set()
+    for _ in range(FORWARD_AXIS_SCAN_DAYS):
+        cur += _dt.timedelta(days=1)
+        try:
+            ok, src = is_trading_day_cached(cur)
+        except Exception:
+            break
+        srcs.add(str(src))
+        if ok:
+            wd = _WEEKDAY_CN[cur.weekday()]
+            label = "下一交易日" if len(found) == 0 else "下下交易日"
+            found.append(f"{label} {cur.isoformat()}（{wd}）")
+            if len(found) >= days:
+                break
+    if found:
+        line = "交易日轴（前向）：" + " · ".join(found)
+        if srcs - {"bridge"}:
+            line += f"（日历源 {'/'.join(sorted(srcs))}，节假日顺延未经验证）"
+    else:
+        line = "交易日轴（前向）：不可算（日历源异常，fail-visible）"
+    _FWD_AXIS_CACHE[date] = line
+    return line
 # 字符→token 估算（中文叙事实测经验）。**护栏必须是真的上界**，故低/高界各有一组
 # 「固定开销 + 每字符」参数，任一组都不得低于观测值。
 #
@@ -172,11 +224,14 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
     narrative = build_leader_narrative(
         date=date,
         market_line=market_line,
+        forward_axis=forward_date_axis_line(date),
         structure=structure_line(
             board=row["board"], board_n=row["boardN"], leader=row,
             followers_ge_ladder=row["ladderFollowers"], prev_board_n=row.get("prevBoardN"),
-            prev_peers=row.get("prevPeers"),
+            prev_peers=row.get("prevPeers"), prev_total=row.get("prevTotal"),
             history=board_history.get(row["board"], []) if board_history is not None else None),
+        ladder_line=board_ladder_line(row),
+        zhaban_line=board_zhaban_line(row),
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         evidence_block=block["text"],
@@ -218,7 +273,9 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         "questionSetVersion": QUESTION_SET_VERSION_THEME_LEADER,
         "questionSetHash": QUESTION_SET_HASH_THEME_LEADER,
         "structure": {k: row.get(k) for k in (
-            "streak", "time", "boardN", "othersN", "ladderFollowers", "prevPeers", "prevBoardN")},
+            "streak", "time", "boardN", "othersN", "ladderFollowers", "prevPeers",
+            "prevBoardN", "prevTotal", "zhabanN", "prevZhabanN", "ladderShape",
+            "secondStreak")},
         "baselineBucket": json.dumps({k: row.get(k) for k in ("streak", "boardN", "time")},
                                      ensure_ascii=False, sort_keys=True),
         # 真实的同桶查键（"streak3|n5-7|early<=10:00"）：评估时直接用，不必再从结构重算；
