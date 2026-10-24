@@ -106,7 +106,10 @@ def main(argv: list[str] | None = None) -> int:
             if not (is_wzs or is_ctrl):
                 continue
             codes: set[str] = set()
-            for _d, pool in pools[-5:]:
+            # N10 全员=窗口全部（≤10 个池 ok 日）。首版消费切片 pools[-5:] 在
+            # P2 窗口 5→10 修复时漏改，实际取成「最旧 5 日」人群（2026-10-25
+            # V2c 立项前复核抓出，§二 该跑作废见研究文档更正）。
+            for _d, pool in pools:
                 codes |= pool.get(board, set())
             if not codes:
                 continue
