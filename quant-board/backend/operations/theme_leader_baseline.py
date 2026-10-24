@@ -39,6 +39,9 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     2026-10-24c 起另补 `prevTotal`（昨日封板总数，断板分母）/`prevZhabanN`（昨日板内触板未封）。
     2026-10-24c 起每行自带板面扩容字段：`ladderShape`（首板/2板/3板+分布）、`secondStreak`
     （次高连板）、`zhabanN`（今日板内触板未封家数，韭研曾触板−THS炸板二分同口径）。
+    2026-10-24d 起另补 `prevStill`（昨日同名板块封板股中今日仍封数，**同名成员口径**）——
+    断板 = prevTotal − prevStill 用它算；prevBoardN 是今日成员交集（含昨日他板块迁入股），
+    迁移场景下 prevTotal−prevBoardN 会出负数（2026-10-24 review 处置）。
     返回 `(rows, meta)`；`rows=None` 表示当日 THS 池缺失（不可二分，fail-visible，调用方自己决定跳过口径）。
     """
     from backend.operations.jev_label_jiuyan import jiuyan_streak_map
@@ -48,7 +51,7 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
         return None, meta
     streaks = jiuyan_streak_map(db, date, dataset_id)
     prev_sealed: set[str] | None = None
-    prev_board_sealed: dict[str, int] = defaultdict(int)   # 板块名 → 昨日封板总数（精确同名匹配）
+    prev_board_codes: dict[str, set[str]] = defaultdict(set)   # 板块名 → 昨日封板 code 集（精确同名匹配）
     prev_board_zhaban: dict[str, int] = defaultdict(int)   # 板块名 → 昨日触板未封家数
     if prev_date:
         prev_sealed, prev_info, _pm = sealed_and_info(db, prev_date, dataset_id)
@@ -63,7 +66,7 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 for st in field.get("stocks") or []:
                     pcode = str(st.get("code") or "")[-6:]
                     if pcode in prev_sealed:
-                        prev_board_sealed[bname] += 1
+                        prev_board_codes[bname].add(pcode)
                     elif (prev_info.get(pcode) or {}).get("zhaban"):
                         prev_board_zhaban[bname] += 1
     doc = db["jiuyan_action"].find_one({"_id": f"{date}:final"}, {"fields": 1}) or {}
@@ -103,7 +106,12 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 shape["threePlus"] += 1
         second_streak = max((s["streak"] for s in others
                              if isinstance(s["streak"], int)), default=None)
-        prev_total = prev_board_sealed.get(board) if prev_sealed is not None else None
+        prev_total = (len(prev_board_codes.get(board, ()))
+                      if prev_sealed is not None else None)
+        # 断板口径（2026-10-24d）：同名板块成员——昨日同名封板股中今日仍封数。
+        # 不用 prevBoardN（今日成员交集，含昨日他板块迁入股）：迁移场景减出负数。
+        prev_still = (len(prev_board_codes.get(board, ()) & sealed)
+                      if prev_sealed is not None else None)
         rows.append({
             "date": date, "board": board,
             "code": leader["code"], "name": leader.get("name"),
@@ -117,9 +125,11 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
             "prevBoardN": (sum(1 for s in stocks if s["code"] in prev_sealed)
                            if prev_sealed is not None else None),
             # 2026-10-24c 板面扩容：昨日封板总数/断板、今日与昨日板内触板未封、
-            # 梯队形态与次高连板（prevBoardN 语义仍是「昨日封板且今日仍封」，
-            # 叙事行不再把它误写为「昨日封板总数」）
+            # 梯队形态与次高连板（prevBoardN 语义仍是「昨日封板且今日仍封」按今日成员，
+            # 叙事行不再把它误写为「昨日封板总数」）；2026-10-24d 增 prevStill（同名成员仍封，
+            # 断板=prevTotal−prevStill 恒 ≥0）
             "prevTotal": prev_total,
+            "prevStill": prev_still,
             "zhabanN": zhaban_of.get(board, 0),
             "prevZhabanN": (prev_board_zhaban.get(board)
                             if prev_sealed is not None else None),

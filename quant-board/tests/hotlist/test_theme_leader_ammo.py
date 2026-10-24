@@ -32,10 +32,12 @@ def test_question_set_frozen_hash_and_versions():
     档位（越锚）时」，hash `b0914cdd3e7d`）——**跨代标签不得混评**（评估按版本分组）。
     AMMO 原料代际：2026-10-24b 四补（S1/S2/S3/Q1）→ **2026-10-24c 盘面语料四补**
     （①基线行补封板时间/跟风梯队/昨日承接桶率 ②板内梯队形态行 ③前向交易日轴行
-    ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）。
+    ④板内炸板面行+结构行昨日口径修正；题面 v8 判据零改动，hash 不变）→
+    **2026-10-24d review 处置**（断板改同名成员口径 prevStill，迁移场景不出负数；
+    防御分支原始 None 泄漏修复；前向轴非 bridge 源结果不缓存）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v8"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24c"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24d"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "b0914cdd3e7d"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -157,17 +159,36 @@ def test_structure_line_marks_unknown_prev():
 
 
 def test_structure_line_prev_total_surfaces_duanban():
-    """prev_total（2026-10-24c）= 昨日封板总数：断板 = 总数 − 仍封，显式给出。"""
+    """prev_total（2026-10-24c）= 昨日封板总数：断板 = 总数 − 仍封，显式给出。
+
+    2026-10-24d：断板优先用 prev_still（昨日**同名板块**封板股中今日仍封，恒 ≥0）——
+    prev_board_n 是今日成员交集（含昨日他板块迁入股），迁移场景减出负数甚至
+    「昨日封 0 仍封 2」自相矛盾（2026-10-24 review 实测三例）。
+    """
     line = A.structure_line(board="机器人", board_n=5,
                             leader={"name": "大业", "code": "1", "streak": 3, "time": "09:25"},
                             followers_ge_ladder=1, prev_board_n=3, prev_peers=2, prev_total=6)
-    assert "昨日该板块封板 6 只，今日仍封 3 只（断板 3）" in line
-    # 仍封数缺失（防御分支，生产不可达）→ 断板不可算，不猜
+    assert "昨日该板块封板 6 只，今日仍封 3 只（断板 3）" in line, "无 prev_still 兼容形状退回成员口径"
+    # 同名口径：prev_still 在 → 断板 = prevTotal − prevStill（与成员口径的迁入失真无关）
+    line_same = A.structure_line(board="AI应用", board_n=7,
+                                 leader={"name": "X", "code": "2", "streak": 3, "time": "09:30"},
+                                 followers_ge_ladder=2, prev_board_n=4, prev_peers=2,
+                                 prev_total=3, prev_still=2)
+    assert "昨日该板块封板 3 只，今日仍封 2 只（断板 1）" in line_same, \
+        "同名口径：昨日他板块迁入的 2 只不计入仍封/断板（成员口径会算出断板 -1）"
+    # 迁移场景无 prev_still（兼容形状）：差值为负 → 断板不可算，不出负数
+    line_neg = A.structure_line(board="AI应用", board_n=7,
+                                leader={"name": "X", "code": "2", "streak": 3, "time": "09:30"},
+                                followers_ge_ladder=2, prev_board_n=4, prev_peers=2,
+                                prev_total=3)
+    assert "（断板不可算）" in line_neg and "断板 -1" not in line_neg
+    # 仍封数缺失（防御分支，生产不可达）→ 断板不可算，不泄漏原始 None
     line2 = A.structure_line(board="机器人", board_n=5,
                              leader={"name": "X", "code": "1", "streak": 2, "time": "09:30"},
                              followers_ge_ladder=0, prev_board_n=None, prev_peers=0,
                              prev_total=6)
-    assert "昨日该板块封板 6 只，今日仍封 None 只（断板不可算）" in line2
+    assert "昨日该板块封板 6 只，今日仍封不可考（断板不可算）" in line2
+    assert "None" not in line2
 
 
 def test_board_ladder_line_shape_and_second_streak():

@@ -101,8 +101,8 @@ ROWS = [
     {"date": "2026-10-19", "board": "机器人", "code": "603278", "name": "大业股份",
      "streak": 3, "time": "09:25:00", "boardN": 5, "othersN": 4, "ladderFollowers": 1,
      "prevPeers": 2, "prevBoardN": 3, "peerCodes": ["a", "b"],
-     # 2026-10-24c 板面扩容字段（day_leader_rows 直出）
-     "prevTotal": 6, "zhabanN": 2, "prevZhabanN": 1,
+     # 2026-10-24c 板面扩容字段（day_leader_rows 直出）；2026-10-24d 增 prevStill（同名仍封）
+     "prevTotal": 6, "prevStill": 3, "zhabanN": 2, "prevZhabanN": 1,
      "ladderShape": {"first": 3, "two": 1, "threePlus": 1, "unknown": 0},
      "secondStreak": 2},
     {"date": "2026-10-19", "board": "化工", "code": "603188", "name": "亚邦股份",
@@ -191,7 +191,7 @@ def test_run_writes_docs_and_is_idempotent(env):
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
     assert doc["questionSetVersion"] == "v8"
     assert doc["questionSetHash"] == "b0914cdd3e7d"   # v8 越锚铸词内联定义（v1-v7 hash 留档在预登记文档）
-    assert doc["ammoVersion"] == "2026-10-24c"
+    assert doc["ammoVersion"] == "2026-10-24d"
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -331,7 +331,8 @@ def test_label_one_persists_expanded_structure_fields(env):
     L.run("2026-10-19", confirm_budget=True)
     doc = db[L.COLLECTION].docs["2026-10-19:603278"]
     st = doc["structure"]
-    assert st["prevTotal"] == 6 and st["zhabanN"] == 2 and st["prevZhabanN"] == 1
+    assert st["prevTotal"] == 6 and st["prevStill"] == 3
+    assert st["zhabanN"] == 2 and st["prevZhabanN"] == 1
     assert st["secondStreak"] == 2
     assert st["ladderShape"] == {"first": 3, "two": 1, "threePlus": 1, "unknown": 0}
     # 无扩容字段的行（化工/旧形状）→ 字段为 None，不报错不伪造
@@ -377,6 +378,17 @@ def test_forward_date_axis_line_sources_and_fail_visible(monkeypatch):
                         lambda d: (_ for _ in ()).throw(AssertionError("should not call")))
     second = L.forward_date_axis_line("2026-10-23")
     assert first == second
+    # 2026-10-24d review 处置：非 bridge 源结果**不缓存**——bridge 恢复后重算即升级，
+    # 不把 weekday 启发行固化整天
+    monkeypatch.setattr(tc, "is_trading_day_cached",
+                        lambda d: (d.weekday() < 5, "weekday"))
+    L._FWD_AXIS_CACHE.clear()
+    degraded = L.forward_date_axis_line("2026-10-23")
+    assert "节假日顺延未经验证" in degraded
+    monkeypatch.setattr(tc, "is_trading_day_cached",
+                        lambda d: (d.weekday() < 5, "bridge"))
+    upgraded = L.forward_date_axis_line("2026-10-23")
+    assert "节假日顺延未经验证" not in upgraded, "降级结果不得命中缓存，bridge 恢复后必须重算"
 
 
 def test_day_leader_rows_board_face_expansion(monkeypatch):
@@ -428,8 +440,59 @@ def test_day_leader_rows_board_face_expansion(monkeypatch):
                             if date == "2026-10-19" else (None, {}, {"thsPoolFound": False})))
     rows2, _m2 = B.day_leader_rows(db, "2026-10-19", prev_date="2026-10-16")
     row2 = rows2[0]
-    assert row2["prevTotal"] is None and row2["prevZhabanN"] is None
+    assert row2["prevTotal"] is None and row2["prevStill"] is None
+    assert row2["prevZhabanN"] is None
     assert row2["prevBoardN"] is None and row2["prevPeers"] is None
+
+
+def test_day_leader_rows_prev_still_same_board_scope(monkeypatch):
+    """2026-10-24d（review P2 处置）：prevStill=昨日**同名板块**封板股今日仍封数。
+
+    跨板块迁移场景：昨日机器人才封 1 只、化工封 2 只，今日 3 只全部并入机器人——
+    成员口径 prevBoardN=3，断板 = prevTotal(1)−prevBoardN(3) = **-2**（旧实现的自相矛盾
+    「昨日封 1 只今日仍封 3 只」）；同名口径 prevStill=1，断板 0，恒 ≥0。
+    """
+    import backend.operations.theme_leader_baseline as B
+    import backend.operations.jev_label_jiuyan as J
+    from backend.analysis.hotlist.theme_leader_ammo import structure_line
+
+    info = {"603278": {}, "603280": {}, "603290": {}}
+
+    def fake_sealed(db_, date, dataset_id=None):
+        if date == "2026-10-19":
+            return {"603278", "603280", "603290"}, info, {"thsPoolFound": True}
+        return {"603278", "603280", "603290"}, info, {"thsPoolFound": True}
+
+    monkeypatch.setattr(B, "sealed_and_info", fake_sealed)
+    monkeypatch.setattr(J, "jiuyan_streak_map",
+                        lambda db_, date, dataset_id=None: {"603278": 3, "603280": 1, "603290": 2})
+    db = FakeDb()
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-19:final"},
+        {"_id": "2026-10-19:final", "fields": [
+            {"name": "机器人", "stocks": [
+                {"code": "603278", "name": "大业", "time": "09:25"},
+                {"code": "603280", "name": "乙", "time": "10:00"},
+                {"code": "603290", "name": "迁入股", "time": "11:00"}]}]})
+    db["jiuyan_action"].replace_one(
+        {"_id": "2026-10-16:final"},
+        {"_id": "2026-10-16:final", "fields": [
+            {"name": "机器人", "stocks": [
+                {"code": "603278", "name": "大业", "time": "09:25"}]},
+            {"name": "化工", "stocks": [
+                {"code": "603280", "name": "乙", "time": "10:00"},
+                {"code": "603290", "name": "迁入股", "time": "11:00"}]}]})
+    rows, _m = B.day_leader_rows(db, "2026-10-19", prev_date="2026-10-16")
+    row = next(r for r in rows if r["board"] == "机器人")
+    assert row["prevTotal"] == 1 and row["prevStill"] == 1, "同名口径：昨日机器人的大业今日仍封"
+    assert row["prevBoardN"] == 3, "成员口径含昨日化工迁入的 2 只（对照项，断板不再用它算）"
+    line = structure_line(board="机器人", board_n=3,
+                          leader={"name": "大业", "code": "603278", "streak": 3, "time": "09:25"},
+                          followers_ge_ladder=2, prev_board_n=row["prevBoardN"],
+                          prev_peers=row["prevPeers"], prev_total=row["prevTotal"],
+                          prev_still=row["prevStill"])
+    assert "昨日该板块封板 1 只，今日仍封 1 只（断板 0）" in line
+    assert "断板 -2" not in line and "今日仍封 3 只" not in line, "成员口径的负数/失真不得进叙事"
 
 
 # ── 单一龙头对账（2026-10-24 双龙头事故：10-23 机器人板块赛福天/大业股份并存） ──

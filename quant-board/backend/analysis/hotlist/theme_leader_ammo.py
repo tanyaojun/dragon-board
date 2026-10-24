@@ -50,7 +50,11 @@ QUESTION_SET_VERSION_THEME_LEADER = "v8"
 # 交易日」跨周末可数，日历源三级降级显式标注）；④板内炸板面行（今日/昨日触板未封，
 # 板内口径同触板二分）+ 结构行昨日口径修正（prevBoardN 语义=昨日封板且今日仍封，
 # 旧文案误写为「昨日封板 N 只」吞掉断板数，本版以 prevTotal−prevBoardN 显式出断板）。
-AMMO_VERSION_THEME_LEADER = "2026-10-24c"
+# 2026-10-24d（review 处置，2026-10-24）：断板改同名成员口径——新增 prevStill（昨日同名板块
+# 封板股中今日仍封数，prevTotal−prevStill 恒 ≥0）；旧实现用 prevBoardN（今日成员交集，含昨日
+# 他板块迁入股），迁移场景减出负数甚至「昨日封 0 仍封 2」自相矛盾。同时修防御分支原始 None
+# 泄漏（「今日仍封 None 只」→「今日仍封不可考」）。
+AMMO_VERSION_THEME_LEADER = "2026-10-24d"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -482,6 +486,7 @@ def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> s
 def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladder: int,
                    prev_board_n: int | None, prev_peers: int | None,
                    prev_total: int | None = None,
+                   prev_still: int | None = None,
                    history: list[tuple[str, int]] | None = None) -> str:
     """该板块当日结构事实行（不含预测）。
 
@@ -491,18 +496,28 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
     昨日封板且今日仍封）误写成「昨日该板块封板 N 只」，断板数被吞——本版修正口径，
     断板 = prev_total − prev_board_n 显式给出；prev_total 不可考（板块改名/昨日池缺失）
     时如实写不可考，不拿仍封数冒充总数。
+    `prev_still`（2026-10-24d）= 昨日**同名板块**封板股中今日仍封数，断板 = prev_total −
+    prev_still 按它算（恒 ≥0）——2026-10-24 review 处置：prev_board_n 是今日成员交集，
+    含昨日他板块迁入股，迁移场景减出负数甚至「昨日封 0 仍封 2」自相矛盾；prev_still
+    缺席（手造/旧形状行）时退回 prev_board_n 口径，差值为负则不出断板数只说不可算。
     """
     time_txt = str(leader.get("time") or "时间不可考")
     streak = leader.get("streak")
     streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
+    still_txt = (f"今日仍封 {prev_still} 只" if isinstance(prev_still, int)
+                 else (f"今日仍封 {prev_board_n} 只" if isinstance(prev_board_n, int)
+                       else "今日仍封不可考"))
     if prev_peers is None:
         prev_txt = "昨日同板块不可考"
+    elif isinstance(prev_still, int) and prev_total is not None:
+        prev_txt = (f"昨日该板块封板 {prev_total} 只，{still_txt}"
+                    f"（断板 {prev_total - prev_still}）")
     elif prev_total is None:
-        prev_txt = f"昨日该板块封板总数不可考（今日仍封 {prev_board_n if prev_board_n is not None else '?'} 只）"
+        prev_txt = f"昨日该板块封板总数不可考（{still_txt}）"
     else:
         duan = prev_total - prev_board_n if isinstance(prev_board_n, int) else None
-        duan_txt = f"断板 {duan}" if duan is not None else "断板不可算"
-        prev_txt = (f"昨日该板块封板 {prev_total} 只，今日仍封 {prev_board_n} 只（{duan_txt}）")
+        duan_txt = (f"断板 {duan}" if duan is not None and duan >= 0 else "断板不可算")
+        prev_txt = f"昨日该板块封板 {prev_total} 只，{still_txt}（{duan_txt}）"
     hist_txt = ""
     if history:
         seq = " · ".join(f"{d[5:]} {n}" for d, n in history)

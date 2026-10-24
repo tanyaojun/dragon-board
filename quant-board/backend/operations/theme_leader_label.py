@@ -108,10 +108,13 @@ def forward_date_axis_line(date: str, days: int = 2) -> str:
     if found:
         line = "交易日轴（前向）：" + " · ".join(found)
         if srcs - {"bridge"}:
+            # 2026-10-24d review 处置：非 bridge 源结果**不缓存**——bridge 恢复后重算即升级，
+            # 缓存会把 weekday 启发行固化整天；重算成本 ≤15 次缓存查表，不值得换质量损失
             line += f"（日历源 {'/'.join(sorted(srcs))}，节假日顺延未经验证）"
+        else:
+            _FWD_AXIS_CACHE[date] = line
     else:
         line = "交易日轴（前向）：不可算（日历源异常，fail-visible）"
-    _FWD_AXIS_CACHE[date] = line
     return line
 # 字符→token 估算（中文叙事实测经验）。**护栏必须是真的上界**，故低/高界各有一组
 # 「固定开销 + 每字符」参数，任一组都不得低于观测值。
@@ -229,6 +232,7 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
             board=row["board"], board_n=row["boardN"], leader=row,
             followers_ge_ladder=row["ladderFollowers"], prev_board_n=row.get("prevBoardN"),
             prev_peers=row.get("prevPeers"), prev_total=row.get("prevTotal"),
+            prev_still=row.get("prevStill"),
             history=board_history.get(row["board"], []) if board_history is not None else None),
         ladder_line=board_ladder_line(row),
         zhaban_line=board_zhaban_line(row),
@@ -274,7 +278,7 @@ def _label_one(db, col, date: str, row: dict, built: dict,
         "questionSetHash": QUESTION_SET_HASH_THEME_LEADER,
         "structure": {k: row.get(k) for k in (
             "streak", "time", "boardN", "othersN", "ladderFollowers", "prevPeers",
-            "prevBoardN", "prevTotal", "zhabanN", "prevZhabanN", "ladderShape",
+            "prevBoardN", "prevTotal", "prevStill", "zhabanN", "prevZhabanN", "ladderShape",
             "secondStreak")},
         "baselineBucket": json.dumps({k: row.get(k) for k in ("streak", "boardN", "time")},
                                      ensure_ascii=False, sort_keys=True),
