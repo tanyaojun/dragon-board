@@ -132,7 +132,10 @@ GENERIC_ANCHORS = ("应用", "科技", "智能", "数据", "概念", "技术", "
 def _shared_anchor(a: str, b: str) -> str | None:
     """最长公共连续子串；≥2 字且含 ≥1 汉字才算关联锚（"AI" 这类纯拉丁锚不得关联）。
 
-    锚本身命中泛词黑名单 → 不算关联（泛词任何题材都能共享，不构成题材关联证据）。
+    泛词候选在扫描中直接跳过、不当锚：泛词任何题材都能共享，不构成题材关联证据。
+    只跳过不整体否决（2026-10-24 review 处置）——否则最长锚是泛词时会连坐专有锚
+    （实测「智能驾驶」vs「智能网联驾驶辅助」经「智能」把「驾驶」锚杀掉，且结果取决于
+    泛词在板名里的扫描位置）；全部候选皆泛词时 best 保持空串，同样返回 None。
     """
     if not a or not b:
         return None
@@ -142,10 +145,8 @@ def _shared_anchor(a: str, b: str) -> str | None:
             k = 0
             while i + k < len(a) and j + k < len(b) and a[i + k] == b[j + k]:
                 k += 1
-            if k > len(best):
+            if k > len(best) and a[i:i + k] not in GENERIC_ANCHORS:
                 best = a[i:i + k]
-    if best in GENERIC_ANCHORS:
-        return None
     return best if len(best) >= 2 and _CJK_RE.search(best) else None
 
 
@@ -173,11 +174,13 @@ def _clip(text: str, limit: int) -> str:
 
 # 电头剥离（2026-10-24a）：通稿开头的「新华社北京10月21日消息，」「财联社10月21日讯，」
 # 与条目已带的日期/来源重复，纯 token 冗余。确定性正则（媒体词白名单 + N月N日 + 消息/讯/电
-# 后缀才剥），不命中原文一字不动；只剥开头一处，无任何语义改写。
+# 后缀 + 尾随标点才剥），不命中原文一字不动；只剥开头一处，无任何语义改写。
+# 尾随标点必须存在（2026-10-24 review 处置）：真电头后必跟逗号——可选会截烂
+# 「10月21日电话会议」「9月30日消息面回暖」这类普通词开头（电/消息 后接话·报·面）。
 _DATELINE_RE = re.compile(
     r"^(?:(?:新华社|财联社|央视新闻|界面新闻|证券时报|上海证券报|澎湃新闻|每日经济新闻"
     r"|21世纪经济报道|红星新闻|参考消息|路透社|彭博社)[^，,。]{0,12}?)?"
-    r"\d{1,2}月\d{1,2}日(?:消息|讯|电)(?:[，,、]\s*)?")
+    r"\d{1,2}月\d{1,2}日(?:消息|讯|电)[，,、]\s*")
 
 
 def _strip_dateline(text: str) -> str:

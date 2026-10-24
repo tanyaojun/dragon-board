@@ -324,6 +324,10 @@ def test_shared_anchor_generic_words_are_not_anchors():
     assert D._shared_anchor("AI应用", "意见提出探索典型应用场景") is None, "「应用」泛词不当锚"
     assert D._shared_anchor("机器人", "机器视觉") == "机器", "非泛词锚维持原行为"
     assert D._shared_anchor("俄乌重建", "俄乌和平") == "俄乌", "G2 修复依赖的专有 2 字锚保留"
+    # 泛词只跳过、不整体否决（2026-10-24 review 处置）：专有锚与泛词同现时保留专有锚，
+    # 不因泛词在板名里扫描序靠前就连坐（修复前此处返回 None）
+    assert D._shared_anchor("智能驾驶", "智能网联驾驶辅助政策出台") == "驾驶", \
+        "泛词「智能」不得否决专有锚「驾驶」"
     for w in D.GENERIC_ANCHORS:
         assert len(w) == 2, "黑名单只封 2 字泛词（更长锚自带区分度）"
 
@@ -356,6 +360,11 @@ def test_dateline_stripped_from_event_body():
     assert D._strip_dateline("10月21日电，正文。") == "正文。"
     assert D._strip_dateline("正文里出现10月21日消息不算电头") == "正文里出现10月21日消息不算电头"
     assert D._strip_dateline("3月15日正式发布产品") == "3月15日正式发布产品", "无消息/讯/电后缀不剥"
+    # 尾随标点必选（2026-10-24 review 处置）：电/消息 后接普通词不是电头，一字不动——
+    # 可选分隔符曾把「电话会议」「消息面」截烂成「话会议」「面回暖」
+    assert D._strip_dateline("10月21日电话会议上公司表示") == "10月21日电话会议上公司表示"
+    assert D._strip_dateline("9月30日消息面回暖，资金流入") == "9月30日消息面回暖，资金流入"
+    assert D._strip_dateline("10月21日电报业务复古走红") == "10月21日电报业务复古走红"
     # 端到端：事件正文剥电头后进入叙事
     events = [{"_id": "2026-10-22:x", "day": "2026-10-22", "title": "机器人大会",
                "content": "央视新闻10月22日消息，国产机器人产业大会开幕。",
