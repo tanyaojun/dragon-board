@@ -107,6 +107,10 @@ def _leader_states(db: Any, date: str, prev_rows: list[dict[str, Any]] | None,
 
 # V2 影子聚合的窗口池进程缓存（键 (date, dataset_id)）：回填升序成链时
 # 相邻 settle_day 的窗口日高度重叠，逐日只新增 1 次 day_leader_rows。
+# 消费形态约束（审计 2026-10-24 P3）：缓存键不含源数据版本——final 被重采覆写后
+# 本进程内池是旧值。当前只允许短命子进程消费（backfill CLI / 盘后链 sectorNodes
+# 步，缓存随进程消亡）；若未来把 settle_day 挂进 8000 长驻进程（如进程内 rerun
+# API），必须先加版本键或改直查（防复刻 2026-10-23 源文档版本戳事故）。
 _POOL_CACHE: dict[tuple[str, str], dict[str, set[str]] | None] = {}
 
 

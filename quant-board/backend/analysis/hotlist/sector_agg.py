@@ -66,6 +66,7 @@ def aggregate_day(*, target_date: str, members: set[str],
         return stats
     stats["pctMean"] = round(sum(pcts) / quoted, 2)
     stats["pctMedian"] = round(statistics.median(pcts), 2)
+    # redRatio 语义=「红盘率」（收盘>昨收的成员占比），非盘中绿转红——键名已定型不改
     stats["redRatio"] = round(sum(1 for p in pcts if p > 0) / quoted, 3)
     return stats
 

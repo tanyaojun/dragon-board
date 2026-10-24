@@ -2167,7 +2167,7 @@ function renderNodes(){
       : (agg.pctMean > 0 ? '#dc2626' : agg.pctMean < 0 ? '#16a34a' : 'var(--muted2)');
     const aggTip = agg == null ? '当日未算（旧档早于 V2 投产）'
       : `近${agg.windowDays}日活跃股聚合 · 成员${agg.memberN} · 有行情${agg.quotedN} · 缺棒${agg.missingN}`
-        + ` · 翻红率${agg.redRatio == null ? '—' : Math.round(agg.redRatio * 100) + '%'}（影子证据，不进节点判据）`;
+        + ` · 红盘率${agg.redRatio == null ? '—' : Math.round(agg.redRatio * 100) + '%'}（影子证据，不进节点判据）`;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="nodesToggle('${js(r.board)}')">
       <td><span class="lg-caret" onclick="event.stopPropagation(); nodesToggle('${js(r.board)}')">▶</span>${esc(r.board)}</td>
       <td class="num">${r.count ?? '-'}</td>
@@ -2190,7 +2190,8 @@ function renderNodes(){
             · 龙头状态：${r.leaderState ? esc(NODE_STATE_CN[r.leaderState]) : '—'}
             · 昨日龙一：${r.prevLeader ? esc(r.prevLeader.name || r.prevLeader.code || '—') : '—'}
             · 家数分位：${r.countPct == null ? '不可算' : 'P' + Math.round(r.countPct * 100)}
-            · 板内炸板（昨日 ${r.prevZhabanN == null ? '—' : r.prevZhabanN}）</div>
+            · 板内炸板（昨日 ${r.prevZhabanN == null ? '—' : r.prevZhabanN}）
+            · 指数锚：未接入（二期）——聚合锚≠板块指数锚</div>
         </div></td></tr>` : '');
   }).join('');
   $('nodesTable').innerHTML = `<tr><th>板块</th><th>家数</th><th>Δ较昨</th><th>梯队（首/2/3板+）</th>
@@ -2207,7 +2208,7 @@ function nodesAggCard(r){
   const fmt = x => x == null ? '—' : (x.pctMean == null
     ? `缺棒 ${x.missingN}/${x.memberN}（无可用行情）`
     : `均 ${(x.pctMean > 0 ? '+' : '') + x.pctMean.toFixed(2)}% · 中位 ${(x.pctMedian > 0 ? '+' : '') + (x.pctMedian || 0).toFixed(2)}%`
-      + ` · 翻红 ${Math.round((x.redRatio || 0) * 100)}% · 成员 ${x.memberN}（有行情 ${x.quotedN} / 缺棒 ${x.missingN}）`);
+      + ` · 红盘 ${Math.round((x.redRatio || 0) * 100)}% · 成员 ${x.memberN}（有行情 ${x.quotedN} / 缺棒 ${x.missingN}）`);
   return `<div style="margin-top:8px;padding:6px 8px;background:var(--bg2,rgba(0,0,0,.03));border-radius:6px">
     <div style="font-size:12px;color:var(--muted)">活跃股聚合 · 近${a.windowDays}日池（影子证据，不进节点判据）</div>
     <div style="font-size:12px;margin-top:2px">${fmt(a)}</div>

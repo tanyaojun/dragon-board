@@ -2,6 +2,8 @@
 """V2b 翻红历史回放研究（一次性研究脚本，不进生产链、不挂盘后链）。
 
 预登记：docs/hotlist-jev/sector-nodes-v2-aggregate-preregistration.md §五。
+口径（2026-10-24 复核版）：成员集=**N10** 窗口并集（与落库终裁口径一致；首跑用 N5，
+N10 终裁后按审计 P2 重跑复核，两次结论同留档）。
 问题：弱转强（wzs）日的板块活跃股，盘中翻红率是否有可识别的时点特征
 （如「10:00 前翻红率过半」）？——为 V2c 实时翻红采集立项提供证据。
 
@@ -86,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     for doc in docs:
         date = str(doc.get("tradingDate"))
         pools: list[tuple[str, dict]] = []
-        # 重算 aggN5 成员集（与落库同口径：今日+最近 5 个池 ok 日）
+        # 重算 aggN10 成员集（与落库终裁同口径：今日+最近 10 个池 ok 日）
         from backend.operations.jev_label_jiuyan import trading_dates_before
         candidates = [date] + list(reversed(
             trading_dates_before(db, date, 15, dataset_id=DEFAULT_DATASET_ID)))
@@ -94,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             pool = _window_pool_of(db, d, DEFAULT_DATASET_ID)
             if pool is not None:
                 pools.append((d, pool))
-            if len(pools) >= 5:
+            if len(pools) >= 10:
                 break
         for r in doc.get("rows") or []:
             node, board = r.get("node"), str(r.get("board") or "")
@@ -112,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             if not any(curve[t] for t in TIMES):
                 skipped_far += 1     # 分钟棒窗口外（>16 交易日），如实计数
                 continue
-            (wzs_curves if is_wzs else ctrl_curves).append(curve)
+            (wzs_curves if is_wzs else ctrl_curves).append(curve)  # 组级曲线，统计单元=成员-时点
             if is_wzs:
                 n_ok_wzs += 1
             else:
