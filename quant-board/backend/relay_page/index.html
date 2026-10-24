@@ -481,6 +481,10 @@
         收盘定档，昨日节点读昨日文档成链（弱转强须昨日∈{转弱,退潮}——转折强才是真强）。 -->
     <div class="rv" id="rv-nodes">
       <div class="card" style="margin-top:18px">
+        <!-- V2c 盘中红盘提示（2026-10-25，预登记 sector-nodes-v2c-intraday-preregistration.md）：
+            候选置顶（昨日转弱/退潮）+ 转强提示 chip（聚合涨幅>0 且红盘率≥50%，零新阈值）；
+            成员=昨日封窗 N10 冻结（今日新涨停未含，16:20 判档归位）；提示不进节点判定。 -->
+        <div id="pulseBox" style="margin-bottom:14px"></div>
         <div id="nodesHead"></div>
         <div class="board-row" id="nodesChips"></div>
         <div class="lf-bar" id="nodesFilterBar" style="margin-top:6px">
@@ -569,6 +573,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
+  pulse: { loading: false, error: null, api: null, view: 'candidates' },   // V2c 盘中红盘提示
+  pulseTimer: null,
   labelSort: { key: 'rank', dir: 1 },
   diebanSort: { key: 'pctChange', dir: 1 } };
 
@@ -2214,6 +2220,108 @@ function nodesAggCard(r){
     <div style="font-size:12px;margin-top:2px">${fmt(a)}</div>
   </div>`;
 }
+
+// ── V2c 盘中红盘提示（rv-nodes 内，2026-10-25，预登记 sector-nodes-v2c-intraday）──
+// 候选=昨日转弱/退潮置顶；chip=聚合涨幅>0 且红盘率≥50%（v2 先手分支同条件，零新阈值）；
+// 成员=昨日封窗 N10（今日新涨停未含，16:20 判档归位）；提示不进节点判定（§六 冻结）。
+let _pulseSeq = 0;
+async function pulseFetch(){
+  if (STATE.view !== 'relay' || STATE.relayView !== 'nodes') return;
+  const seq = ++_pulseSeq;
+  const bg = !!(STATE.pulse.api);
+  STATE.pulse.loading = true; STATE.pulse.error = STATE.pulse.error && bg ? STATE.pulse.error : null;
+  pulseRender();
+  try {
+    const r = await jget('/api/hotlist-jev/sector-pulse');
+    if (seq !== _pulseSeq) return;
+    STATE.pulse = { loading: false, error: null, api: r, view: STATE.pulse.view };
+  } catch (e) {
+    if (seq !== _pulseSeq) return;
+    STATE.pulse = { loading: !bg, error: 'sector_pulse_read_failed: ' + (e && e.message ? e.message : e),
+      api: bg ? STATE.pulse.api : null, view: STATE.pulse.view };
+  }
+  pulseRender();
+}
+function pulseSetView(v){ STATE.pulse.view = v; pulseRender(); }
+function pulseFmt(p){
+  if (p == null) return '<span class="badge b-gray">不可考</span>';
+  if (p.pctMean == null) return `<span class="badge b-gray" title="成员 ${p.memberN} 全缺报价">缺报价 ${p.missingN}/${p.memberN}</span>`;
+  const col = p.pctMean > 0 ? '#dc2626' : p.pctMean < 0 ? '#16a34a' : 'var(--muted2)';
+  return `<span style="color:${col};font-weight:600">${p.pctMean > 0 ? '+' : ''}${p.pctMean.toFixed(2)}%</span>`
+    + ` <span style="color:var(--muted2)">红盘 ${Math.round((p.redRatio || 0) * 100)}% · 有行情 ${p.quotedN}/${p.memberN}</span>`;
+}
+function pulseRows(){
+  const r = STATE.pulse.api || {};
+  if (r.source === 'stored') return { cands: [], all: [], doc: r.doc };
+  const cands = (r.candidates || []).slice()
+    .sort((a, b) => (b.hint ? 1 : 0) - (a.hint ? 1 : 0));
+  const all = (r.all || []).slice()
+    .sort((a, b) => ((b.pulse || {}).pctMean ?? -999) - ((a.pulse || {}).pctMean ?? -999));
+  return { cands, all };
+}
+function pulseRender(){
+  const box = $('pulseBox'); if (!box) return;
+  const d = STATE.pulse;
+  if (d.loading && !d.api){
+    box.innerHTML = '<div class="hint">盘中红盘提示加载中…</div>'; return;
+  }
+  if (d.error && !d.api){
+    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口异常：' + esc(d.error) + '（非「无提示」）</div>'; return;
+  }
+  const r = d.api || {};
+  if (r.ok === false){
+    box.innerHTML = '<div class="lf-warn">⚠️ 盘中红盘读口降级：' + esc(r.reason || '未知原因') + '</div>'; return;
+  }
+  const stage = r.evidenceStageCN || '';
+  const meta = r.meta || {};
+  const head = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">'
+    + '<b>盘中红盘提示</b>'
+    + '<span class="hint">' + esc(stage) + ' · 取数 ' + esc(String(r.computedAt || '').replace('T', ' ')) + '</span>'
+    + '<span style="flex:1"></span>'
+    + '<span class="chip' + (STATE.pulse.view === 'candidates' ? ' on' : '') + '" onclick="pulseSetView(\'candidates\')">弱转强候选</span>'
+    + '<span class="chip' + (STATE.pulse.view === 'all' ? ' on' : '') + '" onclick="pulseSetView(\'all\')">全板块</span>'
+    + `<button onclick="pulseFetch()">刷新</button></div>`;
+  const warn = [];
+  if (meta.reason) warn.push('⚠️ ' + esc(meta.reason) + '（读数可能不可考）');
+  if (d.error) warn.push('⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据');
+  if (r.source === 'stored'){
+    if (!r.doc){ warn.push('该日无收盘帧（15:05 后无请求 / 非交易日 / 早于 V2c 投产日）'); }
+  }
+  const note = '成员=昨日封窗 N10 并集，今日新涨停未含（16:20 正式判档归位）；'
+    + '提示 chip=聚合涨幅>0 且红盘率≥50%（不进节点判定，收盘以 16:20 链为准）'
+    + (r.source === 'stored' ? '；本视图展示的是收盘帧' : '');
+  let rowsHtml = '';
+  if (r.source === 'stored'){
+    const doc = r.doc;
+    const rows = doc ? (doc.candidates || []) : [];
+    rowsHtml = '<table><tr><th>板块</th><th>昨日节点</th><th>盘中读数（收盘帧）</th><th>提示</th></tr>'
+      + (rows.map(e => `<tr><td>${esc(e.board)}</td><td>${esc(NODE_CN[e.yesterdayNode] || e.yesterdayNode || '—')}</td>
+          <td>${pulseFmt(e.pulse)}</td>
+          <td>${e.hint ? '<span class="badge b-green">转强提示</span>' : '—'}</td></tr>`).join('')
+        || '<tr><td colspan="4" class="empty">帧内无候选行</td></tr>') + '</table>';
+  } else {
+    const { cands, all } = pulseRows();
+    const list = STATE.pulse.view === 'candidates' ? cands : all;
+    rowsHtml = '<table><tr><th>板块</th>'
+      + (STATE.pulse.view === 'candidates' ? '<th>昨日节点</th>' : '')
+      + '<th>盘中读数</th><th>提示</th></tr>'
+      + (list.map(e => `<tr><td>${esc(e.board)}</td>`
+          + (STATE.pulse.view === 'candidates' ? `<td>${esc(NODE_CN[e.yesterdayNode] || e.yesterdayNode || '—')}</td>` : '')
+          + `<td>${pulseFmt(e.pulse)}</td>`
+          + `<td>${e.hint ? '<span class="badge b-green">转强提示</span>' : (STATE.pulse.view === 'candidates' ? '—' : '')}</td></tr>`).join('')
+        || `<tr><td colspan="4" class="empty">${STATE.pulse.view === 'candidates' ? '昨日无转弱/退潮候选板块' : '无板块行'}</td></tr>`)
+      + '</table>';
+  }
+  box.innerHTML = head + (warn.length ? '<div class="lf-warn">' + warn.join('<br>') + '</div>' : '')
+    + rowsHtml + '<div class="hint" style="margin-top:4px">' + esc(note)
+    + ' · 交易时段每 60s 自动刷新（仅本页签激活时）</div>';
+}
+setInterval(() => {
+  const hm = new Date().toTimeString().slice(0, 5);
+  const inSession = hm >= '09:25' && hm <= '15:05';
+  if (STATE.view === 'relay' && STATE.relayView === 'nodes'
+      && (inSession || !STATE.pulse.api)) pulseFetch();
+}, 60000);
 function tlRefresh(){
   tlRenderBanner();
   tlRenderBoards();
@@ -3906,6 +4014,7 @@ function setView(key){
   }
   window.scrollTo({top: 0});
   renderCharts();          // 图表按当前区间重绘（切页后立即可见）
+  if (main === 'relay' && STATE.relayView === 'nodes') pulseFetch();   // V2c：进入节点页签即取（60s 后端缓存兜）
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

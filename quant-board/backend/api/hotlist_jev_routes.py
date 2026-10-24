@@ -404,6 +404,31 @@ def get_sector_nodes(
         return {"ok": False, "degraded": True, "reason": f"sector_nodes_read_failed: {exc}"}
 
 
+@router.get("/sector-pulse")
+def get_sector_pulse(date: str | None = None) -> dict[str, Any]:
+    """V2c 盘中红盘提示读口（2026-10-25，预登记 sector-nodes-v2c-intraday-preregistration.md）：
+
+    当日=实时计算（60s 缓存 + 交易日 ≥15:05 落 15:00 帧）；历史日只读 stored 帧
+    （盘中报价不可回放，重算会拿当前价错标读数）。fail-visible：TDX 不可用/成员
+    不可考原因透出，不伪 0。提示列不进节点判定（预登记 §六 冻结）。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        from backend.operations.sector_pulse import COLLECTION_PULSE, get_pulse_cached
+        today = datetime.now().strftime("%Y-%m-%d")
+        target = date or today
+        if target != today:
+            frame = db[COLLECTION_PULSE].find_one({"_id": f"{target}:PULSE"})
+            return {"ok": True, "source": "stored", "date": target, "doc": frame,
+                    "reason": None if frame else "该日无收盘帧（15:05 后无请求 / 非交易日 / 早于 V2c 投产日）"}
+        return get_pulse_cached(db, target)
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"sector_pulse_read_failed: {exc}"}
+
+
 class JevRelayRerunPayload(BaseModel):
     date: str
     force: bool = True   # 默认重判（含已 ok 日）；false 时交给 run_relay_index_day 的幂等跳过

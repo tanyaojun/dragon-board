@@ -1487,6 +1487,32 @@ def _tdx_hosts_path() -> Path:
     return Path(__file__).resolve().parents[3] / "python-bridge" / "tdx_hosts.json"
 
 
+_TDX_SETUP_PATCHED = False
+
+
+def _ensure_tdx_setup_patch() -> None:
+    """tdxpy 握手身份 patch（python-bridge/main.py 2026-09-23 生产同款）：跳过
+    SetupCmd3 旧客户端标识，官方现行主站不再软拒绝（4 字节空响应）。懒执行、
+    每进程一次；本模块日线链此前本地 vipdoc 优先未暴露，V2c 盘中报价（quotes）
+    只走线上，不打补丁全节点返回空（2026-10-24 回放研究实测）。设
+    TDX_KEEP_TDXPY_SETUP3=1 恢复 tdxpy 原始三连握手（回退开关）。"""
+    global _TDX_SETUP_PATCHED
+    if _TDX_SETUP_PATCHED:
+        return
+    _TDX_SETUP_PATCHED = True
+    if os.getenv("TDX_KEEP_TDXPY_SETUP3", "") in ("1", "true", "True"):
+        return
+    try:
+        def _setup_without_legacy_identity(self):
+            from tdxpy.parser.setup_commands import SetupCmd1, SetupCmd2
+            SetupCmd1(self.client).call_api()
+            SetupCmd2(self.client).call_api()
+        from tdxpy.hq import TdxHq_API
+        TdxHq_API.setup = _setup_without_legacy_identity
+    except Exception:
+        pass
+
+
 def _tdx_daily_client():
     """TDX 日线客户端单例（节点池探测同 backfill_slot_pctchange 模式）；全节点不可用返回 None。
 
@@ -1494,6 +1520,7 @@ def _tdx_daily_client():
     100 只股票最坏小时级，会撞 schedule 2700s 整步超时；现在最坏每 5 分钟一次。
     """
     global _DAILY_CLIENT, _TDX_DOWN_UNTIL
+    _ensure_tdx_setup_patch()
     with _POSITION_LOCK:
         if _DAILY_CLIENT is not None:
             return _DAILY_CLIENT
