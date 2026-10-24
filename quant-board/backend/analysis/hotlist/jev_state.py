@@ -604,8 +604,15 @@ def _ladder_bits(limit: dict, *, compact: bool) -> list[str]:
     return bits
 
 
-def format_evidence_line(ev: dict) -> str:
-    """单帧证据压缩行（槽位已走段与日级逐帧段共用）。缺项如实写缺。"""
+def format_evidence_line(ev: dict, *, slim: bool = False) -> str:
+    """单帧证据压缩行。缺项如实写缺。
+
+    slim=True（2026-10-24 B1 第二刀，jev-slot-corpus-slim-preregistration-20261024.md §2）：
+    删四组判据外语境证据——TRIN（含涨跌向成交额）、主力净额、生命周期五桶、强资/风险
+    行级标记；保留八题判据与参照系引用的字段（指数/涨停/连板/炸板率/封板率/涨跌分布/
+    量能同期/新进淘汰/昨涨停承接）。调用面=**仅槽级叙事的已走帧段**（priors 重复投喂面，
+    O(帧数²) 增长的大头）；日级逐帧行与默认路径 slim=False 逐字节不变。
+    """
     parts = [str(ev.get("slotTime") or "?")]
     idx_bits = _index_bits(ev)
     parts.append("·".join(idx_bits) if idx_bits else "指数缺")
@@ -627,7 +634,7 @@ def format_evidence_line(ev: dict) -> str:
     if breadth.get("pctMissing"):
         breadth_bit += f"(缺{breadth['pctMissing']})"
     trin = breadth.get("trin")
-    if trin is not None:
+    if trin is not None and not slim:
         breadth_bit += f"｜TRIN {float(trin):.2f}"
     amount = ev.get("totalAmount") or {}
     if amount.get("vsSamePct") is not None:
@@ -635,13 +642,14 @@ def format_evidence_line(ev: dict) -> str:
         breadth_bit += f"｜量能同期{amount['vsSamePct']:+.0f}%{amount_suffix}"
     parts.append(breadth_bit)
     fund = ev.get("fund") or {}
-    if fund.get("zljeSum") is not None:
-        fund_bit = f"主力净额 {_fmt_yi(fund['zljeSum'])}(正{fund.get('zljePos', 0)}负{fund.get('zljeNeg', 0)})"
-        if fund.get("zljeMissing"):
-            fund_bit += f"缺{fund['zljeMissing']}"
-        parts.append(fund_bit)
-    else:
-        parts.append("主力净额缺")
+    if not slim:
+        if fund.get("zljeSum") is not None:
+            fund_bit = f"主力净额 {_fmt_yi(fund['zljeSum'])}(正{fund.get('zljePos', 0)}负{fund.get('zljeNeg', 0)})"
+            if fund.get("zljeMissing"):
+                fund_bit += f"缺{fund['zljeMissing']}"
+            parts.append(fund_bit)
+        else:
+            parts.append("主力净额缺")
     turnover = ev.get("turnover") or {}
     if turnover.get("newCount") is not None:
         parts.append(f"新进 {turnover['newCount']}·淘汰 {turnover['droppedCount']}")
@@ -657,16 +665,17 @@ def format_evidence_line(ev: dict) -> str:
         parts.append("·".join(yl_bits))
     else:
         parts.append("昨涨停承接缺")
-    lifecycle = ev.get("lifecycle") or {}
-    lifecycle_bit = "·".join(f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}"
-                             for k in _LIFECYCLE_COMPACT_KEYS)
-    lifecycle_missing = int(ev.get("lifecycleMissing") or 0)
-    if lifecycle_missing:
-        lifecycle_bit += f"(缺{lifecycle_missing})"
-    parts.append(lifecycle_bit)
-    row_flags = ev.get("rowFlags") or {}
-    if row_flags and row_flags.get("judgeable"):
-        parts.append(f"强资{row_flags.get('strongMoney', 0)}·风险{row_flags.get('risk', 0)}")
+    if not slim:
+        lifecycle = ev.get("lifecycle") or {}
+        lifecycle_bit = "·".join(f"{_LIFECYCLE_NAMES[k]} {lifecycle.get(k, 0)}"
+                                 for k in _LIFECYCLE_COMPACT_KEYS)
+        lifecycle_missing = int(ev.get("lifecycleMissing") or 0)
+        if lifecycle_missing:
+            lifecycle_bit += f"(缺{lifecycle_missing})"
+        parts.append(lifecycle_bit)
+        row_flags = ev.get("rowFlags") or {}
+        if row_flags and row_flags.get("judgeable"):
+            parts.append(f"强资{row_flags.get('strongMoney', 0)}·风险{row_flags.get('risk', 0)}")
     return "｜".join(parts)
 
 
@@ -886,7 +895,7 @@ def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
     degraded = list((current.get("quality") or {}).get("degradedSources") or [])
     if missing_slots:
         degraded.append("缺失槽位：" + "、".join(missing_slots))
-    prior_lines = [format_evidence_line(ev) for ev in priors if isinstance(ev, dict)]
+    prior_lines = [format_evidence_line(ev, slim=True) for ev in priors if isinstance(ev, dict)]
     lines = [
         f"{trading_date} {slot_time} 时点快照（A股短线热榜情绪观察，原始市场证据）。",
         history_anchor,

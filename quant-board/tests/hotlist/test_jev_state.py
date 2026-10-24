@@ -14,6 +14,7 @@ from backend.analysis.hotlist.jev_state import (
     build_slot_jev_state,
     collect_slot_evidence,
     extract_history_anchor_range,
+    format_evidence_line,
     narrative_is_truncated,
 )
 
@@ -288,14 +289,14 @@ def test_build_slot_jev_state_full_shape():
     assert "（一板30/二板10/三板2/四板以上1，真连板口径）" in s
     assert "另有断板股区间高度最高 6 板" in s  # 区间高度降级为标注，杜绝两个「最高板」
     assert "热榜TRIN：1.67" in s and "量价背离" in s
-    assert "TRIN 1.67" in s  # 压缩行也携带
-    assert "量能同期+41%" in s  # 压缩行携带同期量能
+    # B1 第二刀：压缩行 slim 化后，TRIN/主力/生命周期/强资只活在当前帧全量段，
+    # 已走帧压缩行不再携带（"TRIN 1.67"/"强资1·风险1" 旧断言随刀退役）
+    assert "量能同期+41%" in s  # 压缩行携带同期量能（判据引用，保留）
     assert "指数与量能：" in s and "两市总成交额 +14100.00亿（较昨日同期放量 41%）" in s  # 指数×量能同行
-    assert "资金确认 1 只" in s and "占可判定 33%" in s  # 行级标记带占比（跨日可比）
+    assert "资金确认 1 只" in s and "占可判定 33%" in s  # 行级标记带占比（跨日可比，当前帧段）
     assert "风险预警 1 只" in s
-    assert "强资1·风险1" in s  # 压缩行携带
     assert "新进 7" in s and "淘汰 1" in s
-    assert "主力净额" in s and "+0.07亿" in s
+    assert "净额合计" in s and "+0.07亿" in s
     assert "昨涨停承接" in s
     # 2026-10-22 次级修复 C：已走帧压缩行生命周期含「反转」（sequence_stage 退潮判据弹药）
     assert "点火 0" in s and "扩散 1" in s and "反转 1" in s and "冷却 1" in s
@@ -319,6 +320,42 @@ def test_build_slot_jev_state_truncation_disclosed():
     assert narrative_is_truncated(s)
     # 质量段被截掉时，截断注记必须补位说明（只查注记之前的正文）
     assert "【数据质量】" not in s.split(NARRATIVE_TRUNCATION_MARK)[0]
+
+
+def test_format_evidence_line_slim_omits_context_groups_only():
+    # B1 第二刀：slim=True 删四组判据外语境证据（TRIN/主力净额/生命周期/强资风险），
+    # 判据与参照系引用字段（指数/涨停/连板/炸板率/封板率/涨跌分布/量能同期/新进淘汰/
+    # 昨涨停承接）保留；slim=False（默认）逐字节不变（日级逐帧行同享该保证）。
+    ev = collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time="10:00",
+        yesterday_same_slot_total_amount=1.0e12)
+    full = format_evidence_line(ev)
+    slim = format_evidence_line(ev, slim=True)
+    assert "TRIN" in full and "TRIN" not in slim
+    assert "主力净额" in full and "主力净额" not in slim
+    assert "点火" in full and "点火" not in slim
+    assert "强资" in full and "强资" not in slim
+    for kept in ("涨停 ", "炸板率", "封板率", "涨跌 涨停", "量能同期", "新进 ", "昨涨停承接"):
+        assert kept in slim, f"slim 行不得删判据引用字段：{kept}"
+
+
+def test_build_slot_jev_state_slim_scoped_to_priors():
+    # slim 只作用于槽级已走帧段：当前帧全量段与日级逐帧行不受影响
+    prior = collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time="10:00",
+        yesterday_same_slot_total_amount=1.0e12)
+    s = build_slot_jev_state(
+        trading_date="2026-10-08", slot_time="10:30",
+        current=_v3_current_evidence(), priors=[prior])
+    walked = s.split("【当日已走帧证据】")[1].split("【数据质量】")[0]
+    assert "TRIN" not in walked and "主力净额" not in walked and "强资" not in walked
+    assert "热榜TRIN" in s and "资金确认 1 只" in s  # 当前帧全量段保留
+    day = build_day_jev_state(
+        trading_date="2026-10-08",
+        evidences=[prior, _v3_current_evidence()])
+    assert "TRIN" in day  # 日级逐帧行 slim=False 逐字节不变
 
 
 def test_build_slot_jev_state_no_truncation_untouched():

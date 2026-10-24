@@ -39,6 +39,12 @@ _DEFAULT_ACCOUNT = DEFAULT_ACCOUNT_ID
 # （收盘帧全量块/帧覆盖/真连板 as-of/旧 schema 归一）。存量文档由迁移脚本打 legacy/pre_fix。
 EOD_CORPUS_CALIBER_VERSION = "eod-2026-10-22"
 
+# 槽级语料口径代际戳（2026-10-24 B1 第二刀，jev-slot-corpus-slim-preregistration-20261024.md）：
+# 已走帧压缩行 slim 化（删 TRIN/主力净额/生命周期/强资四组判据外语境证据，slim 仅作用于
+# 槽级 priors 渲染；日级逐帧行与当前帧全量段不变）。对照新门 v2 PASS（剔掷硬币 32/32=100%、
+# temperature |Δ|≤4.7，实测日链 input 42,013→38,740 = -7.8%）。旧文档无此戳=旧代语料。
+SLOT_CORPUS_CALIBER_VERSION = "slot-2026-10-24"
+
 
 def _dispatch_jev(state, questions: dict) -> tuple[dict, int]:
     """传输选择：JEV_TYPESAFE_KEY 存在 → 官方直连（可经代理）；否则 CF 网关。
@@ -778,6 +784,7 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
                  "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
                  "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
                  "questionSetVersion": QUESTION_SET_VERSION,
+                 "corpusCaliberVersion": SLOT_CORPUS_CALIBER_VERSION,
                  "status": "no_data", "errorCode": None,
                  "errorDetail": f"frame={'present' if frame else 'missing'} rows={len(rows)}",
                  "questionsRaw": None, "evidenceRaw": None, "narrativeRaw": None,
@@ -829,9 +836,10 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
             {"_id": doc_id},
             {"_id": doc_id, "kind": "slot", "origin": origin, "datasetId": dataset_id,
              "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
-             "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
-             "questionSetVersion": QUESTION_SET_VERSION,
-             "status": "degraded", "errorCode": "missing_token",
+                 "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
+                 "questionSetVersion": QUESTION_SET_VERSION,
+                 "corpusCaliberVersion": SLOT_CORPUS_CALIBER_VERSION,
+                 "status": "degraded", "errorCode": "missing_token",
              "errorDetail": "JEV_CF_TOKEN / JEV_TYPESAFE_KEY not configured",
                  "questionsRaw": JEV_SLOT_QUESTIONS, "evidenceRaw": current_evidence,
                  "narrativeRaw": narrative,
@@ -862,6 +870,7 @@ def compute_and_upsert_for_slot(db: Any, *, dataset_id: str, trading_date: str, 
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
            "questionSetVersion": QUESTION_SET_VERSION,
+           "corpusCaliberVersion": SLOT_CORPUS_CALIBER_VERSION,
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
            "narrativeTruncated": narrative_is_truncated(narrative),

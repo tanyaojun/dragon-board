@@ -515,6 +515,8 @@ def test_compute_slot_happy_path(monkeypatch):
     assert ((doc["answers"] or {})["crowding"]["choice"]) == "no_crowding"
     assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # 槽位 ok 路径盖版本戳
     assert doc["narrativeTruncated"] is False  # A3：未超限恒 False，字段恒在
+    # B1 第二刀（2026-10-24）：槽级语料代际戳落库（additive，旧文档无戳=旧代）
+    assert doc["corpusCaliberVersion"] == v2_module.SLOT_CORPUS_CALIBER_VERSION
 
 
 def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):

@@ -40,6 +40,7 @@ from backend.services.jev.jev_sentiment_compute import (
     _slots_of_date,
     _yesterday_total_amounts_by_slot,
     load_market_daily_amount_map,
+    SLOT_CORPUS_CALIBER_VERSION,
 )
 
 DATASET_DEFAULT = "dragonboard_live"
@@ -102,6 +103,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
                  "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
                  "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
                  "questionSetVersion": QUESTION_SET_VERSION,
+                 "corpusCaliberVersion": SLOT_CORPUS_CALIBER_VERSION,
                  "status": "no_data", "errorDetail": f"frame={'present' if frame else 'missing'} rows={len(rows)}"},
                 upsert=True)
         return {"status": "no_data"}
@@ -141,6 +143,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
            "snapshotType": snapshot_type, "tradingDate": trading_date, "slotTime": slot_time,
            "asOf": f"{trading_date} {slot_time}+08:00", "computedAt": int(time.time()),
            "questionSetVersion": QUESTION_SET_VERSION,
+           "corpusCaliberVersion": SLOT_CORPUS_CALIBER_VERSION,
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
            "narrativeTruncated": narrative_is_truncated(narrative),
