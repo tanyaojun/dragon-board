@@ -134,6 +134,29 @@ def test_gated_answer_and_model_answer_are_both_visible(monkeypatch):
     assert "narrative" not in row and "questionsRaw" not in row
 
 
+def test_per_question_confidence_is_exposed(monkeypatch):
+    """2026-10-24 四题逐题置信度透出：前端「置信度必须可视化」（用户裁决）的数据前提。
+
+    旧代文档缺 confidence → None（fail-visible 缺省，不伪造）；有值原样透出。
+    """
+    doc = _doc("600009", "AI应用", gate={"applied": False})
+    doc["answers"] = {
+        "leader_nextday_continue": {"choice": "low_25_45", "confidence": 0.56,
+                                    "probabilities": {"low_25_45": 0.65,
+                                                      "verylow_lt25": 0.26}},
+        "theme_speculation_depth": {"choice": "fermenting", "confidence": 0.61},
+        "theme_continuation": {"choice": "weak_extend"},   # 缺 confidence → None
+        "leader_headroom": {"choice": "space_1", "confidence": 0.49},
+    }
+    c = _client(monkeypatch, [doc])
+    row = c.get("/api/hotlist-jev/theme-leaders",
+                params={"date": "2026-10-16"}).json()["leaders"][0]
+    assert row["choiceConfidence"] == 0.56
+    assert row["themeSpeculationDepthConfidence"] == 0.61
+    assert row["themeContinuationConfidence"] is None, "缺 confidence 不得编造"
+    assert row["leaderHeadroomConfidence"] == 0.49
+
+
 def test_with_narrative_exposes_corpus_and_question_set(monkeypatch):
     """`with_narrative=1`：前端「投喂语料」抽屉要看的原文（叙事 + 题目集）原样透出。"""
     c = _client(monkeypatch, [_doc("600001", "机器人")])

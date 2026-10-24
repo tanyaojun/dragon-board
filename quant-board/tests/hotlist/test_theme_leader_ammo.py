@@ -28,7 +28,7 @@ def test_question_set_frozen_hash_and_versions():
     **跨代标签不得混评**（评估按版本分组）。
     """
     assert A.QUESTION_SET_VERSION_THEME_LEADER == "v6"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-23c"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24a"
     assert A.QUESTION_SET_HASH_THEME_LEADER == "1d098c87e07e"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
@@ -118,16 +118,19 @@ def test_structure_line_marks_unknown_prev():
 
 
 def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
-    ev = ("【题材证据 · 韭研产业树 + 投资日历】\n板块级催化：未映射（不代表无催化）")
+    ev = ("【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n"
+          "题材语料（韭研产业树 + 开盘啦事件层）未采集（fail-visible：无数据 ≠ 无催化）。\n"
+          "板块级催化：未映射（不代表无催化）")
     text = A.build_leader_narrative(
         date="2026-10-19", market_line="涨停 46 家", structure="板块「X」今日封板 2 家",
-        baseline="结构基线：总体 32.6%", evidence_block=ev, corpus_line="题材语料：未采集",
+        baseline="结构基线：总体 32.6%", evidence_block=ev,
         leader_name="东方嘉盛", leader_code="002889")
     lines = text.splitlines()
     assert lines[0].startswith("2026-10-19 交易日 · 涨停 46 家")
     assert lines[1] == "待判龙头：东方嘉盛（002889）"
+    assert lines[2] == "板块「X」今日封板 2 家" and lines[3] == "结构基线：总体 32.6%"
+    assert lines[4].startswith("【题材证据"), "证据块紧跟结构行（2026-10-24a 起无 corpus_line 头行）"
     assert text.endswith(ev), "证据块必须原样嵌在末尾，不得被 runner 二次改写"
-    assert lines[4] == "题材语料：未采集" and lines[5].startswith("【题材证据")
     assert "未映射（不代表无催化）" in text and "未采集" in text
 
 

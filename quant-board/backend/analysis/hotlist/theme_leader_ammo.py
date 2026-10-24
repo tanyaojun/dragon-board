@@ -25,7 +25,13 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 QUESTION_SET_VERSION_THEME_LEADER = "v6"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
-AMMO_VERSION_THEME_LEADER = "2026-10-23c"
+# 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
+# ① 删叙事重复头行 corpus_line（采集日/节点数/条数与证据块头完全重复）；
+# ② 题材新闻与前瞻日历双空时合并为一行无匹配行；③ 事件正文剥确定性电头；
+# ④ 共享子串锚加泛词黑名单（「应用」级泛词不再充当锚）。ALIASES 不加：
+# kword 词表核验（29 个 distinct 标签，2026-10-24）无字面等价缺口——近义标签
+# （算力概念/算力 等）已由包含匹配覆盖，新闻层瓶颈是供给稀疏（全题材 1-5 条/日），不是词表。
+AMMO_VERSION_THEME_LEADER = "2026-10-24a"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -369,18 +375,19 @@ def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladde
 
 
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
-                           evidence_block: str, corpus_line: str, leader_name: str,
+                           evidence_block: str, leader_name: str,
                            leader_code: str) -> str:
     """投喂给 jev 的完整叙事（顺序固定，便于逐字复现与回归比对）。
 
-    evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本）；
-    corpus_line 说明语料时点与新鲜度；两者都必须原样嵌入，不得在 runner 里二次改写。
+    evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本），
+    其头部已含语料采集日/节点数/条数与新鲜度（含未采集分支），2026-10-24a 起不再单列
+    corpus_line 行（原两处信息完全重复，纯 token 浪费）；evidence_block 必须原样嵌入，
+    不得在 runner 里二次改写。
     """
     return "\n".join([
         f"{date} 交易日 · {market_line}",
         f"待判龙头：{leader_name}（{leader_code}）",
         structure,
         baseline,
-        corpus_line,
         evidence_block,
     ])

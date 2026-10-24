@@ -463,6 +463,7 @@
         <div class="lf-bar" id="tlFilterBar" style="margin-top:2px"></div>
         <table id="tlTable"></table>
         <div id="tlPager"></div>
+        <p class="hint" id="tlHint" style="margin:6px 2px 0"></p>
       </div>
     </div>
   </section>
@@ -1877,13 +1878,30 @@ const TL_ORIGIN_CN = { live: '前瞻', backfill: '回填' };
 
 function tlRows(){ return (STATE.tlData && STATE.tlData.rows) || []; }
 function tlKey(r){ return (r.tradingDate || '') + ':' + (r.code || ''); }
+// 续板概率=四档中值加权期望（与后端 continue_point_estimate / CONTINUE_BUCKET_MIDPOINTS 同口径）。
+// 旧口径「非 insufficient 质量和」语义失真：它=1−P(证据不足)，恒 85%~100%，与「档位=低25-45%」
+// 并列会被读成"100% 会续板"（2026-10-24 用户裁决换口径）。全量 insufficient（被门）仍显 '-'，不编造概率。
+const TL_MIDPOINTS = { high_ge65: 0.75, mid_45_65: 0.55, low_25_45: 0.35, verylow_lt25: 0.125 };
 function tlProb(row){
-  // 落库口径：非 insufficient 质量之和；全量 insufficient（被门/被排除）时显 '-'，
-  // 不再回落展示模型原答括号数（v3：表格只讲消费端口径，原答在展开卡里审计）。
-  const sumOf = p => Object.entries(p || {}).reduce((a, kv) =>
-    kv[0] === 'insufficient' ? a : a + Number(kv[1] || 0), 0);
-  const main = sumOf(row.probabilities);
-  return main > 0.0001 ? { text: Math.round(main * 100) + '%' } : { text: '-' };
+  const p = row.probabilities || {};
+  const parts = Object.entries(TL_MIDPOINTS).map(kv => [Number(p[kv[0]] || 0), kv[1]]);
+  const total = parts.reduce((a, kv) => a + kv[0], 0);
+  if (total <= 0.0001) return { text: '-' };
+  const est = parts.reduce((a, kv) => a + kv[0] * kv[1], 0) / total;
+  return { text: Math.round(est * 100) + '%' };
+}
+// 四题置信芯片（2026-10-24 用户需求）：被证据门强制覆盖的题（gate.forcedKeys）confidence=1.0
+// 是程序写的，显「门」标记而非 P100（程序覆盖不得冒充模型置信）；未过门走通用 confChip
+// （旧文档缺 confidence → 空串，行样式不变，fail-visible）。
+function tlConfChip(r, key){
+  if (r.gate && r.gate.applied && (r.gate.forcedKeys || []).includes(key))
+    return ' <span title="证据门强制 insufficient（程序覆盖，非模型置信）"'
+      + ' style="font-size:11px;font-weight:400;color:var(--muted2)">门</span>';
+  const a = { leader_nextday_continue: r.choiceConfidence,
+              theme_speculation_depth: r.themeSpeculationDepthConfidence,
+              theme_continuation: r.themeContinuationConfidence,
+              leader_headroom: r.leaderHeadroomConfidence }[key];
+  return confChip(a);
 }
 function tlOutcomeKey(row){
   if (row.outcomeSealedNextDay === null || row.outcomeSealedNextDay === undefined) return 'pending';
@@ -2090,7 +2108,8 @@ function tlRenderRows(){
   f.page = pg.page;
   const hasFilter = !!(f.q || f.board || f.industry || f.origin || f.choice
     || f.stage || f.outcome || f.gateOnly);
-  const hint = $('tlHint'); if (hint) hint.textContent = '';
+  const hint = $('tlHint');
+  if (hint) hint.textContent = '左侧三角展开调用日志 · P=模型置信度（红<35 两可勿当结论） · 「门」=证据门强制 insufficient（程序覆盖非模型判定） · 续板概率=档位中值加权期望（非模型直读）';
   const cnt = $('tlCnt');
   if (cnt) cnt.textContent = filteredCountText(rows.length, f, doc);
   const th = (label, key) => '<th class="sortable" onclick="tlSortBy(\'' + key + '\')">'
@@ -2130,14 +2149,18 @@ function tlRowHtml(r, f){
   const outcome = (outKey === 'pending'
     ? badge('未封', 'b-gray')
     : (outKey === 'sealed' ? badge('续板', 'b-green') : badge('未续', 'b-red')));
-  const choice = badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
+  const choice = (badge(TL_CHOICE_CN[r.choice] || r.choice || '-',
     r.choice === 'high_ge65' ? 'b-red' : r.choice === 'mid_45_65' ? 'b-amber'
-      : r.choice === 'insufficient' ? 'b-gray' : 'b-blue');
-  const stage = r.themeSpeculationDepth
+      : r.choice === 'insufficient' ? 'b-gray' : 'b-blue'))
+    + tlConfChip(r, 'leader_nextday_continue');
+  const stage = (r.themeSpeculationDepth
     ? badge(TL_DEPTH_CN[r.themeSpeculationDepth] || r.themeSpeculationDepth, 'b-gray')
-    : badge(TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-', 'b-gray');
-  const contCell = badge(TL_CONT_CN[r.themeContinuation] || r.themeContinuation || '-', 'b-gray');
-  const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-', 'b-gray');
+    : badge(TL_STAGE_CN[r.catalystStage] || r.catalystStage || '-', 'b-gray'))
+    + tlConfChip(r, 'theme_speculation_depth');
+  const contCell = badge(TL_CONT_CN[r.themeContinuation] || r.themeContinuation || '-', 'b-gray')
+    + tlConfChip(r, 'theme_continuation');
+  const headCell = badge(TL_HEAD_CN[r.leaderHeadroom] || r.leaderHeadroom || '-', 'b-gray')
+    + tlConfChip(r, 'leader_headroom');
   // 题材证据分层（v3）：产业树节点 > 板内解析 > 缺失原因
   const briefN = (r.evidenceKwordTags || []).length;
   const evid = r.evidenceIndustry
@@ -2168,7 +2191,7 @@ function tlRowHtml(r, f){
     + '<td class="num">' + (r.streak == null ? '-' : esc(String(r.streak))) + '</td>'
     + '<td class="num">' + esc(r.time || '-') + '</td>'
     + '<td class="num">' + (r.boardN == null ? '-' : esc(String(r.boardN))) + '</td>'
-    + '<td class="num"><b>' + p.text + '</b></td>'
+    + '<td class="num" title="四档概率中值（75/55/35/12.5）加权期望，离线评估同口径；非模型直读单值"><b>' + p.text + '</b></td>'
     + '<td>' + choice + '</td>'
     + '<td>' + stage + '</td><td>' + contCell + '</td><td>' + headCell + '</td>'
     + '<td>' + evid + '</td><td>' + outcome + '</td></tr>'

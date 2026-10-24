@@ -306,3 +306,46 @@ def test_header_and_row_column_counts_match(html: str) -> None:
     assert 'colspan="14"' in row, "展开明细行必须跨 14 列（跟表头同步）"
     assert "+ contCell +" in row or "+ contCell" in row, "延续性单元格必须拼进行"
     assert "+ headCell +" in row, "空间列（leaderHeadroom）必须拼进行——v5/v6 核心产出不得只在明细 JSON 里可见"
+
+
+# ── 2026-10-24：四题置信芯片 + 续板概率改中值加权期望 ─────────────────────
+
+def test_four_judgement_fields_carry_confidence_chips(html: str) -> None:
+    """四字段（档位/题材深度/延续性/空间）必须带模型置信芯片（用户裁决「置信度必须可视化」）。
+
+    被证据门强制覆盖的题 confidence=1.0 是程序写的——必须显「门」标记，
+    不得拿程序覆盖冒充模型置信（P100）。
+    """
+    row = _fn(html, "tlRowHtml")
+    for key in ("leader_nextday_continue", "theme_speculation_depth",
+                "theme_continuation", "leader_headroom"):
+        assert f"tlConfChip(r, '{key}')" in row, f"{key} 徽章必须带置信芯片"
+    chip = _fn(html, "tlConfChip")
+    assert "forcedKeys" in chip and "gate.applied" in chip, "门强制覆盖必须先于 confChip 判定"
+    assert "门" in chip, "门覆盖题显「门」标记而非 P100"
+    assert "confChip(" in chip, "未过门复用全局三级色芯片（灰≥60/琥珀35-60/红<35）"
+    # 数据链完整性：出参四键必须被消费（API 字段 ↔ 前端字段一一对上）
+    for field in ("choiceConfidence", "themeSpeculationDepthConfidence",
+                  "themeContinuationConfidence", "leaderHeadroomConfidence"):
+        assert field in chip, f"出参 {field} 必须接到芯片"
+    # 提示行说明 P 与门的语义（P=模型置信度，红<35 两可勿当结论）
+    assert "P=模型置信度" in _fn(html, "tlRenderRows")
+
+
+def test_continue_probability_is_midpoint_weighted_expectation(html: str) -> None:
+    """续板概率=四档中值加权期望（与后端 continue_point_estimate 同口径）。
+
+    旧口径「非 insufficient 质量和」=1−P(证据不足)，恒 85%~100%，与「档位=低25-45%」
+    并列会被读成"100% 会续板"（2026-10-24 用户裁决换口径）；全 insufficient 仍显 '-'。
+    """
+    fn = _fn(html, "tlProb")
+    assert "TL_MIDPOINTS" in fn, "必须按档位中值加权（0.75/0.55/0.35/0.125）"
+    assert "total <= 0.0001" in fn, "全 insufficient（含被门）必须显 '-'，不编造概率"
+    assert ("const TL_MIDPOINTS = { high_ge65: 0.75, mid_45_65: 0.55, "
+            "low_25_45: 0.35, verylow_lt25: 0.125 }" in html), \
+        "中值表必须与后端 CONTINUE_BUCKET_MIDPOINTS 逐项对齐（离线评估/展示同一口径）"
+    # 旧口径残留不得回潮
+    assert "'insufficient' ? a : a" not in fn, "旧的「非 insufficient 质量和」求和不得复活"
+    # 单元格 tooltip 注明口径（中值加权期望，非模型直读）
+    row = _fn(html, "tlRowHtml")
+    assert "非模型直读" in row

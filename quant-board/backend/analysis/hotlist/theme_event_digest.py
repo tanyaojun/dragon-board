@@ -122,8 +122,18 @@ def match_industry(nodes: list[dict], board_name: str | None) -> dict:
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
+# 共享子串锚的泛词黑名单（2026-10-24a）：横切多题材的 2 字泛词不得充当关联锚——
+# 10-23 实例：中办国办《意见》经「应用」被挂给 AI应用（该事件与 AI应用 的唯一关联
+# 就是这 2 字）。只封泛词；2 字专有锚（俄乌/冰雪 等）不受影响，G2 修复
+# （俄乌重建↔俄乌和平）依赖它们。
+GENERIC_ANCHORS = ("应用", "科技", "智能", "数据", "概念", "技术", "消费", "能源", "金融")
+
+
 def _shared_anchor(a: str, b: str) -> str | None:
-    """最长公共连续子串；≥2 字且含 ≥1 汉字才算关联锚（"AI" 这类纯拉丁锚不得关联）。"""
+    """最长公共连续子串；≥2 字且含 ≥1 汉字才算关联锚（"AI" 这类纯拉丁锚不得关联）。
+
+    锚本身命中泛词黑名单 → 不算关联（泛词任何题材都能共享，不构成题材关联证据）。
+    """
     if not a or not b:
         return None
     best = ""
@@ -134,6 +144,8 @@ def _shared_anchor(a: str, b: str) -> str | None:
                 k += 1
             if k > len(best):
                 best = a[i:i + k]
+    if best in GENERIC_ANCHORS:
+        return None
     return best if len(best) >= 2 and _CJK_RE.search(best) else None
 
 
@@ -157,6 +169,19 @@ def _anchor_hit(base: str, keys: list[str], text: str,
 def _clip(text: str, limit: int) -> str:
     text = re.sub(r"\s+", " ", str(text or "")).strip()
     return text if len(text) <= limit else text[:limit] + f"…[截断，原文 {len(text)} 字]"
+
+
+# 电头剥离（2026-10-24a）：通稿开头的「新华社北京10月21日消息，」「财联社10月21日讯，」
+# 与条目已带的日期/来源重复，纯 token 冗余。确定性正则（媒体词白名单 + N月N日 + 消息/讯/电
+# 后缀才剥），不命中原文一字不动；只剥开头一处，无任何语义改写。
+_DATELINE_RE = re.compile(
+    r"^(?:(?:新华社|财联社|央视新闻|界面新闻|证券时报|上海证券报|澎湃新闻|每日经济新闻"
+    r"|21世纪经济报道|红星新闻|参考消息|路透社|彭博社)[^，,。]{0,12}?)?"
+    r"\d{1,2}月\d{1,2}日(?:消息|讯|电)(?:[，,、]\s*)?")
+
+
+def _strip_dateline(text: str) -> str:
+    return _DATELINE_RE.sub("", str(text or ""), count=1)
 
 
 def _days_between(a: str | None, b: str | None) -> int | None:
@@ -419,41 +444,49 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             for ev in ev_hits:
                 src = f"，来源 {ev.get('source')}" if ev.get("source") else ""
                 hot = f"，热度 {ev.get('hotVal')}" if ev.get("hotVal") is not None else ""
-                body = str(ev.get("content") or "")
+                body = _strip_dateline(str(ev.get("content") or ""))
                 body_txt = f"：{_clip(body, EVENT_CHARS)}" if body else ""
                 lines.append(f"- {ev.get('day')} {ev.get('title')}"
                              f"（{ev.get('matchHow')}{src}{hot}）{body_txt}")
 
-    # 近两日题材新闻（开盘啦 ThemeNews：Kword 题材标签 + 关联个股）——仅 v4 全量形状
-    if include_l2 and state.get("ok"):
-        if not news_hits:
-            lines.append(f"近两日题材新闻：无匹配（Kword 题材标签未命中「{board_name}」，"
-                         f"无数据 ≠ 无催化）")
-        else:
-            lines.append("近两日题材新闻（开盘啦题材新闻，Kword 题材标签关联）：")
-            for it in news_hits:
-                stocks = it.get("stocks") or []
-                top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
-                # KPL Rate 本身就是百分数值（-1.74 = 当日 -1.74%），不再 ×100
-                st_txt = "，关联股 " + "、".join(
-                    f"{s.get('name')}{s.get('rate'):+.2f}%"
-                    if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
-                    for s in top) if top else ""
-                lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
-                             f"（{it.get('matchHow')}{st_txt}）")
-
-    # 前瞻日历（开盘啦 Type=3）
-    if state.get("ok"):
-        if not cal_hits:
-            lines.append(f"未来 {window_days} 日既定事件：无匹配（「{board_name}」相关事件未命中，"
-                         f"无数据 ≠ 无催化）")
-        else:
-            lines.append(f"未来 {window_days} 日既定事件（开盘啦题材日历）：")
-            for ev in cal_hits:
-                fd = _days_between(date, ev.get("date"))
-                when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
-                tag = f" [{ev.get('tagName')}]" if ev.get("tagName") else ""
-                lines.append(f"- {when}{tag} {ev.get('brief')}（{ev.get('matchHow')}）")
+    # 近两日题材新闻（开盘啦 ThemeNews）+ 前瞻日历（开盘啦 Type=3）。
+    # 2026-10-24a：两节均无匹配时合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话，
+    # 纯 token 冗余）；单边有命中维持分列，语义不变。
+    news_section = include_l2 and state.get("ok")
+    cal_section = state.get("ok")
+    news_no_match = news_section and not news_hits
+    cal_no_match = cal_section and not cal_hits
+    if news_no_match and cal_no_match:
+        lines.append(f"题材新闻/前瞻日历：均无匹配（「{board_name}」Kword 标签与日历均未命中，"
+                     f"无数据 ≠ 无催化）")
+    else:
+        if news_section:
+            if news_no_match:
+                lines.append(f"近两日题材新闻：无匹配（Kword 题材标签未命中「{board_name}」，"
+                             f"无数据 ≠ 无催化）")
+            else:
+                lines.append("近两日题材新闻（开盘啦题材新闻，Kword 题材标签关联）：")
+                for it in news_hits:
+                    stocks = it.get("stocks") or []
+                    top = [s for s in stocks if s.get("setTop")][:3] or stocks[:3]
+                    # KPL Rate 本身就是百分数值（-1.74 = 当日 -1.74%），不再 ×100
+                    st_txt = "，关联股 " + "、".join(
+                        f"{s.get('name')}{s.get('rate'):+.2f}%"
+                        if isinstance(s.get("rate"), (int, float)) else str(s.get("name"))
+                        for s in top) if top else ""
+                    lines.append(f"- {it.get('eventDate')} [{it.get('kword')}] {it.get('title')}"
+                                 f"（{it.get('matchHow')}{st_txt}）")
+        if cal_section:
+            if cal_no_match:
+                lines.append(f"未来 {window_days} 日既定事件：无匹配（「{board_name}」相关事件未命中，"
+                             f"无数据 ≠ 无催化）")
+            else:
+                lines.append(f"未来 {window_days} 日既定事件（开盘啦题材日历）：")
+                for ev in cal_hits:
+                    fd = _days_between(date, ev.get("date"))
+                    when = f"{ev.get('date')}" + (f"（T+{fd}）" if isinstance(fd, int) and fd >= 0 else "")
+                    tag = f" [{ev.get('tagName')}]" if ev.get("tagName") else ""
+                    lines.append(f"- {when}{tag} {ev.get('brief')}（{ev.get('matchHow')}）")
 
     # ── L2 板内解析（韭研异动库：板块分组 + 逐股 expound；v3 起纳入证据）──
     # include_l2=False（relay 兼容形状）：整节不渲染。

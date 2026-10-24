@@ -245,7 +245,10 @@ def test_block_fail_visible_paths():
     out4 = D.build_theme_evidence_block(_db(topic=[], news=[], calendar=[]),
                                         board_name="机器人", date="2026-10-22")
     assert "当日题材事件：无匹配" in out4["text"]
-    assert "未来 3 日既定事件：无匹配" in out4["text"]
+    # 2026-10-24a：新闻与日历双空合并为一行（原两行各带一遍「无数据 ≠ 无催化」套话）
+    assert "题材新闻/前瞻日历：均无匹配（「机器人」Kword 标签与日历均未命中" in out4["text"]
+    assert "近两日题材新闻：无匹配" not in out4["text"]
+    assert "未来 3 日既定事件：无匹配" not in out4["text"]
     assert out4["evidenceMissing"] is False, "产业树正文在 → 有可用证据，不判缺失"
 
 
@@ -309,3 +312,72 @@ def test_heat_series_absent_in_relay_compat_shape():
     out = D.build_theme_evidence_block(_db(), board_name="俄乌重建", date="2026-10-22",
                                        include_l2=False)
     assert "题材热度序列" not in out["text"], "relay 兼容形状不出热度序列/新闻流/L2 节"
+
+
+# ── 2026-10-24a：泛词锚黑名单 / 电头剥离 / 双空合并 ─────────────────────
+def test_shared_anchor_generic_words_are_not_anchors():
+    """泛词黑名单：横切多题材的 2 字词（应用/科技/智能…）不得充当关联锚。
+
+    10-23 实例：中办国办《意见》正文含「典型应用场景」，经「应用」被挂给 AI应用——
+    该事件与 AI应用 的唯一关联就是这 2 字泛词。专有 2 字锚（俄乌）不受影响。
+    """
+    assert D._shared_anchor("AI应用", "意见提出探索典型应用场景") is None, "「应用」泛词不当锚"
+    assert D._shared_anchor("机器人", "机器视觉") == "机器", "非泛词锚维持原行为"
+    assert D._shared_anchor("俄乌重建", "俄乌和平") == "俄乌", "G2 修复依赖的专有 2 字锚保留"
+    for w in D.GENERIC_ANCHORS:
+        assert len(w) == 2, "黑名单只封 2 字泛词（更长锚自带区分度）"
+
+
+def test_generic_anchor_blocks_false_event_association():
+    """端到端：事件与板块只共享泛词时不得挂靠（关联方式披露里不得出现该泛词锚）。"""
+    events = [{"_id": "2026-10-21:x", "day": "2026-10-21",
+               "title": "中办国办发布《关于推动科技创新和产业创新深度融合的意见》",
+               "content": "全面实施人工智能+行动，探索典型应用场景与商业模式。",
+               "source": "新华社", "hotVal": 74714, "detailFetched": True,
+               "lastFetchDate": "2026-10-22"}]
+    out = D.build_theme_evidence_block(_db(topic=events, news=[], calendar=[]),
+                                       board_name="AI应用", date="2026-10-22")
+    assert out["events"] == [], "「应用」泛词锚不得把跨题材事件挂给 AI应用"
+    # 对照：含专有别名（智能体）的正文仍经「包含」命中——GTC 类事件不受黑名单影响
+    events2 = [{**events[0], "title": "英伟达GTC大会：从模块化AI工厂到企业级智能体",
+                "content": "英伟达正将竞争优势延伸到智能体与行业应用生态。"}]
+    out2 = D.build_theme_evidence_block(_db(topic=events2, news=[], calendar=[]),
+                                        board_name="AI应用", date="2026-10-22")
+    assert len(out2["events"]) == 1 and "包含" in out2["events"][0]["matchHow"]
+
+
+def test_dateline_stripped_from_event_body():
+    """电头剥离：通稿开头的「媒体+日期+消息/讯」与条目已带的日期/来源重复，剥后截断。
+
+    确定性正则白名单——不命中（无日期模式/无消息·讯·电后缀）原文一字不动。
+    """
+    assert D._strip_dateline("新华社北京10月21日消息，对外发布。") == "对外发布。"
+    assert D._strip_dateline("财联社10月21日讯，黄仁勋发表演讲。") == "黄仁勋发表演讲。"
+    assert D._strip_dateline("10月21日电，正文。") == "正文。"
+    assert D._strip_dateline("正文里出现10月21日消息不算电头") == "正文里出现10月21日消息不算电头"
+    assert D._strip_dateline("3月15日正式发布产品") == "3月15日正式发布产品", "无消息/讯/电后缀不剥"
+    # 端到端：事件正文剥电头后进入叙事
+    events = [{"_id": "2026-10-22:x", "day": "2026-10-22", "title": "机器人大会",
+               "content": "央视新闻10月22日消息，国产机器人产业大会开幕。",
+               "hotVal": 1, "detailFetched": True, "lastFetchDate": "2026-10-22"}]
+    out = D.build_theme_evidence_block(_db(topic=events, news=[], calendar=[]),
+                                       board_name="机器人", date="2026-10-22")
+    assert "国产机器人产业大会开幕" in out["text"]
+    assert "央视新闻10月22日消息，" not in out["text"]
+
+
+def test_news_calendar_merge_only_when_both_empty():
+    """双空合并（2026-10-24a）：单边有命中必须维持分列（语义分层不损失）。"""
+    # 新闻有命中（俄乌重建 Kword）、日历空 → 新闻节出命中行，日历节出独立无匹配行
+    db = _db(calendar=[])
+    db.cols["jiuyan_action"] = FakeCol(RUSSIA_ACTION)
+    out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
+                                       leader_code="001360")
+    assert "近两日题材新闻（开盘啦题材新闻" in out["text"]
+    assert "未来 3 日既定事件：无匹配" in out["text"]
+    assert "题材新闻/前瞻日历：均无匹配" not in out["text"]
+    # relay 兼容形状（无新闻节）：日历空仍出独立无匹配行，不得被合并逻辑吞掉
+    out2 = D.build_theme_evidence_block(_db(news=[], calendar=[]), board_name="机器人",
+                                        date="2026-10-22", include_l2=False)
+    assert "未来 3 日既定事件：无匹配" in out2["text"]
+    assert "题材新闻/前瞻日历" not in out2["text"]

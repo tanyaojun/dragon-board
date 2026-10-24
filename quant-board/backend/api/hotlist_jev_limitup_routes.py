@@ -223,6 +223,15 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                     "theme_continuation") or {}).get("choice"),
                 "leaderHeadroom": ((d.get("answers") or {}).get(
                     "leader_headroom") or {}).get("choice"),
+                # v5 四题逐题模型置信度（2026-10-24 用户需求「置信度必须可视化」；
+                # 旧代文档缺 confidence 时为 None，前端缺省不显示，fail-visible）
+                "choiceConfidence": ans.get("confidence"),
+                "themeSpeculationDepthConfidence": ((d.get("answers") or {}).get(
+                    "theme_speculation_depth") or {}).get("confidence"),
+                "themeContinuationConfidence": ((d.get("answers") or {}).get(
+                    "theme_continuation") or {}).get("confidence"),
+                "leaderHeadroomConfidence": ((d.get("answers") or {}).get(
+                    "leader_headroom") or {}).get("confidence"),
                 "outcomeBoardNNextDay": d.get("outcomeBoardNNextDay"),
                 "gate": d.get("gate"),
                 "evidenceMissing": bool(d.get("evidenceMissing")),

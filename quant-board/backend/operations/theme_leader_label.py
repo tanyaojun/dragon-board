@@ -117,19 +117,6 @@ def leaders_for(db: Any, date: str,
     return day_leader_rows(db, date, dataset_id, prev_dates[-1] if prev_dates else None)
 
 
-def corpus_line(db: Any, date: str, window_days: int = 3) -> str:
-    """题材语料时点/新鲜度行（fail-visible：未采集/未映射/无正文分别说清）。"""
-    state = digest.corpus_state(db, date=date)
-    if not state.get("ok"):
-        return (f"题材语料：未采集（最新采集日 {state.get('latestFetchDate') or '无'}，"
-                f"日 {date} 无可用题材证据）——不得据结构特征猜测题材催化")
-    parts = [f"题材语料：韭研产业树 + 开盘啦题材事件/新闻/日历，采集日 {state.get('latestFetchDate')}"
-             f"（{'当日刷新' if not state.get('stale') else '非当日，可能滞后'}）",
-             f"{state.get('industry') or 0} 个产业节点 / 题材事件 {state.get('topic') or 0} · "
-             f"新闻 {state.get('news') or 0} · 日历 {state.get('calendar') or 0} 条"]
-    return "；".join(parts)
-
-
 def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               dataset_id: str = DEFAULT_DATASET_ID,
               market_line: str | None = None) -> dict:
@@ -152,7 +139,6 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
             prev_peers=row.get("prevPeers")),
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         evidence_block=block["text"],
-        corpus_line=corpus_line(db, date),
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
     )
