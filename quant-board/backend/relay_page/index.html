@@ -1059,6 +1059,7 @@ function renderKpis(){
   // day_temperature↔temperature、day_crowding↔crowding
   const stageAns = intraday ? (sa.sequence_stage || {}) : (ea.day_stage || {});
   const crowdAns = intraday ? (sa.crowding || {}) : (ea.day_crowding || {});
+  const tempAns = intraday ? (sa.temperature || {}) : (ea.day_temperature || {});
   const tempRaw = intraday
     ? (slot.scores ? slot.scores.temperature : null)
     : (eod && eod.scores ? eod.scores.day_temperature : null);
@@ -1087,7 +1088,7 @@ function renderKpis(){
   const note = why.length ? `<div class="kpi-note">⏳ 盘中降级：${why.join('；')}。</div>` : '';
   $('kpiRow').innerHTML = note + `
     <div class="kpi"><div class="k">市场阶段${intraday ? '（盘中）' : ' (EOD)'}</div><div class="v" style="color:${stage==='climax'?'#dc2626':stage==='ferment'?'#a16207':stage==='retreat'?'#64748b':'#2563eb'}">${stageTxt}</div><div class="s">${intraday ? stageSub : (PATTERN_CN[(ea.day_pattern||{}).choice] || '收盘口径')}</div></div>
-    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}</div><div class="s">${stamp === '收盘口径' ? '0-100 · 参照20日' : stamp}</div></div>
+    <div class="kpi"><div class="k">日级温度</div><div class="v" style="color:${tempColor(temp)}">${temp ?? '-'}${confChip(tempAns.confidence)}</div><div class="s">${stamp === '收盘口径' ? '0-100 · 参照20日' : stamp}</div></div>
     <div class="kpi"><div class="k">拥挤形态</div><div class="v" style="font-size:15px">${CROWD_CN[crowd]||'-'}${confChip(crowdAns.confidence)}</div><div class="s">${stamp}</div></div>
     <div class="kpi"><div class="k">档位置信</div><div class="v">P${conf!=null?Math.round(conf*100):'-'}</div><div class="s">${intraday ? 'sequence_stage' : 'day_stage'}</div></div>
     ${relayCard('连板情绪指数', `<span style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</span>`, relaySub)}
@@ -1121,7 +1122,7 @@ function renderSlots(){
     <td><span class="lg-caret">▶</span><span class="num">${esc(s.slotTime||'')}</span>${stBadge}</td>
     <td style="color:${stageColor(stage)};font-weight:700">${STAGE_CN[stage]||stage||'-'}${confChip((a.frame_stage||{}).confidence)}</td>
     <td>${seq && seq!==stage ? `<span style="color:${stageColor(seq)}">${STAGE_CN[seq]||seq}</span>${confChip((a.sequence_stage||{}).confidence)}` : ''}</td>
-    <td><div class="flex"><span class="num" style="color:${tempColor(t)}">${t??'-'}</span><div class="bar"><i style="width:${t??0}%;background:${tempColor(t)}"></i></div></div></td>
+    <td><div class="flex"><span class="num" style="color:${tempColor(t)}">${t??'-'}</span><div class="bar"><i style="width:${t??0}%;background:${tempColor(t)}"></i></div></div>${confChip((a.temperature||{}).confidence)}</td>
     <td>${badge(CROWD_CN[crowd]||'-', crowd==='breadth_climax'?'b-red':crowd==='top_acceleration'?'b-amber':crowd==='late_seal_weakness'?'b-purple':'b-gray')}${confChip((a.crowding||{}).confidence)}</td>
     <td class="num" title="${PCT_TITLE}">${pct!=null?'P'+Math.round(pct*100):'-'}</td></tr>`
     + (open ? `<tr class="lg-detail"><td colspan="6">${detailHtml(entry, 'slot')}</td></tr>` : '');
@@ -1146,7 +1147,7 @@ function renderSlots(){
     <td><span class="lg-caret">▶</span><span class="num">EOD</span>${badge(e.status || '-', e.status === 'ok' ? 'b-green' : 'b-amber')}${legacyBadge}${covBadge}</td>
     <td style="color:${stageColor(((e.answers||{}).day_stage||{}).choice)};font-weight:700">${STAGE_CN[((e.answers||{}).day_stage||{}).choice] || '-'}${confChip(((e.answers||{}).day_stage||{}).confidence)}</td>
     <td>日级</td>
-    <td><div class="flex"><span class="num" style="color:${tempColor(e.scores ? Math.round(e.scores.day_temperature ?? NaN) : null)}">${e.scores && e.scores.day_temperature != null ? Math.round(e.scores.day_temperature) : '-'}</span></div></td>
+    <td><div class="flex"><span class="num" style="color:${tempColor(e.scores ? Math.round(e.scores.day_temperature ?? NaN) : null)}">${e.scores && e.scores.day_temperature != null ? Math.round(e.scores.day_temperature) : '-'}</span></div>${confChip(((e.answers||{}).day_temperature||{}).confidence)}</td>
     <td>${badge(CROWD_CN[((e.answers||{}).day_crowding||{}).choice] || '-', 'b-gray')}${confChip(((e.answers||{}).day_crowding||{}).confidence)}</td>
     <td class="num" style="color:var(--muted)">${fmtTime(e.computedAt)}</td></tr>`
     + (open ? `<tr class="lg-detail"><td colspan="6">${detailHtml(entry, 'slot')}</td></tr>` : '');
@@ -1177,7 +1178,9 @@ function renderEod(){
     ['路径形态', intraday ? 'EOD 后判' : (PATTERN_CN[(a.day_pattern||{}).choice] || '-'),
      intraday ? null : (a.day_pattern||{}).confidence],
     ['拥挤形态', CROWD_CN[(a[crowdKey]||{}).choice] || '-', (a[crowdKey]||{}).confidence],
-    ['日级温度', sc[tempKey] != null ? Math.round(sc[tempKey]) : '-', null],
+    // 日级温度置信（2026-10-24）：score 型答案实测同带 confidence（10-23 实测 0.24-0.56），
+    // 与档位/拥挤同读 answers[tempKey].confidence 单一来源；此前硬编码 null 是漏透出
+    ['日级温度', sc[tempKey] != null ? Math.round(sc[tempKey]) : '-', (a[tempKey]||{}).confidence],
   ].map(([k,v,c]) => `<tr><td style="color:var(--muted)">${k}</td><td class="num">${v}</td>
      <td>${c!=null?`<div class="bar"><i style="width:${Math.round(c*100)}%;background:#2563eb"></i></div>`:''}</td>
      <td class="num">${c!=null?'P'+Math.round(c*100):''}</td></tr>`).join('');

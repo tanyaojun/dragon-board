@@ -1568,3 +1568,25 @@ def test_relay_page_has_rewrap_kpi_and_row():
     assert 'id="labelRewrapRow"' not in html and "lfRenderRewrap" not in html, "反包池文字行应已删除"
     assert "反包池 " not in html, "反包池文字描述应已删除"
     assert 'slotTag' not in html and ">午盘</span>" not in html, "驱动列「午盘」徽标应已删除"
+
+
+# ── 温度置信度透出（2026-10-24 题材龙头方法论回灌：score 型答案实测同带 confidence）──
+
+def test_temperature_confidence_in_slots_table_and_eod_row(js: str):
+    """总览逐槽表温度列与 EOD 行温度补 confChip，同读 answers.temperature/day_temperature。"""
+    rs = _fn(js, "renderSlots")
+    # 槽级温度列：与框架阶段/序列/拥挤列同一 confChip 同一来源（answers.temperature.confidence）
+    assert "confChip((a.temperature||{}).confidence)" in rs, "温度列须挂模型置信 chip"
+    assert "confChip(((e.answers||{}).day_temperature||{}).confidence)" in rs, \
+        "EOD 行温度须挂 day_temperature 置信 chip"
+    # 温度唯一口径不被回归：数值仍来自 scores（answers.temperature.score 是 0-9 原始档位分，两套刻度禁混）
+    assert "s.scores ? s.scores.temperature : null" in rs
+
+
+def test_temperature_confidence_in_kpi_card_and_eod_window(js: str):
+    """KPI「日级温度」卡与 EOD 日级窗口「日级温度」行同源透出置信（后者此前硬编码 null）。"""
+    rk = _fn(js, "renderKpis")
+    assert "const tempAns = intraday ? (sa.temperature || {}) : (ea.day_temperature || {});" in rk
+    assert "${temp ?? '-'}${confChip(tempAns.confidence)}" in rk, "KPI 温度卡须带置信 chip"
+    re_ = _fn(js, "renderEod")
+    assert "(a[tempKey]||{}).confidence" in re_, "日级窗口温度行不得再硬编码 null 置信"
