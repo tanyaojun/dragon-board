@@ -237,6 +237,14 @@
     font-size:12px;color:var(--text);cursor:pointer}
   .lf-pager button:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
   .lf-pager button:disabled{opacity:.45;cursor:not-allowed}
+  /* ---------- 板块节点（rv-nodes，2026-10-24 v1）：家数序列迷你柱 + 依据列 ---------- */
+  .nodes-spark{display:flex;align-items:flex-end;gap:3px;flex-wrap:wrap;margin:6px 0 2px}
+  .ns-col{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:30px}
+  .ns-col i{display:block;width:14px;background:#93c5fd;border-radius:2px}
+  .ns-col b{font-size:10px;font-variant-numeric:tabular-nums;line-height:1.1}
+  .ns-col span{font-size:9px;color:var(--muted2);white-space:nowrap}
+  .ns-col.today i{background:var(--cf-blue)}
+  .nd-basis{max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* 明细卡内部（底层 .lg-detail>td 背景/内距已由涨停复盘样式提供） */
   .tabbar{position:sticky;top:var(--top-h);z-index:29;background:#fff;border-bottom:1px solid var(--border);
           padding:0 22px;display:flex;align-items:center;gap:2px;min-height:44px;flex-wrap:wrap}
@@ -466,6 +474,27 @@
         <div class="hint" id="tlHint" style="margin:6px 2px 0"></div>
       </div>
     </div>
+
+    <!-- ⑦ 板块节点（2026-10-24 v1）：确定性节点判定，单源 analysis/hotlist/sector_nodes；
+        预登记 docs/hotlist-jev/sector-nodes-v1-preregistration.md。
+        锚=家数序列分位+龙头续断（板块指数锚二期，行内显式「未接入」）；
+        收盘定档，昨日节点读昨日文档成链（弱转强须昨日∈{转弱,退潮}——转折强才是真强）。 -->
+    <div class="rv" id="rv-nodes">
+      <div class="card" style="margin-top:18px">
+        <div id="nodesHead"></div>
+        <div class="board-row" id="nodesChips"></div>
+        <div class="lf-bar" id="nodesFilterBar" style="margin-top:6px">
+          <input class="lf-q" placeholder="搜板块 / 龙头名…（回车生效）" value=""
+                 onchange="nodesSet('q', this.value)">
+          <select title="节点筛选（确定性口径，非模型判读）" onchange="nodesSet('node', this.value)">
+            <option value="">节点 · 全部</option>
+          </select>
+          <button onclick="nodesClear()">清除筛选</button>
+        </div>
+        <table id="nodesTable"></table>
+        <div class="hint" id="nodesHint" style="margin:6px 2px 0"></div>
+      </div>
+    </div>
   </section>
 
   <section id="tab-labels" style="display:none">
@@ -538,6 +567,8 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayPreset: null,  // 最近点过的预设（展示意图；高亮以区间等价判定为准）
   relaySort: { key: 'date', dir: -1 },
   relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
+  // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
+  nodesData: null, nodesUi: { node: '', q: '', open: {} },
   labelSort: { key: 'rank', dir: 1 },
   diebanSort: { key: 'pctChange', dir: 1 } };
 
@@ -1034,6 +1065,7 @@ async function loadAll(){
   renderKpis(); renderSlots(); renderEod(); renderRelayMini();
   renderRelayTab(); renderLabels(); renderQuotes(); renderDieban();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
+  nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -2001,6 +2033,163 @@ async function tlFetch(){
 }
 
 function renderThemes(){ tlRefresh(); }
+
+// ── 板块节点（rv-nodes，2026-10-24 v1）：确定性节点判定 ──
+// 单源 analysis/hotlist/sector_nodes（判据见预登记 §三）；收盘定档零模型调用；
+// 弱转强=昨日∈{转弱,退潮}（转折强才是真强）；指数锚二期（行内显式「未接入」）。
+const NODE_CN = { wzs: '弱转强', collapse: '退潮', ice: '冰点', weakening: '转弱',
+                  mainline: '主升', fermenting: '发酵', brewing: '冒头', normal: '平淡',
+                  unknown: '不可判' };
+const NODE_BADGE = { wzs: 'b-green', collapse: 'b-red', ice: 'b-red', weakening: 'b-amber',
+                     mainline: 'b-blue', fermenting: 'b-green', brewing: 'b-purple', normal: 'b-gray',
+                     unknown: 'b-gray' };
+const NODE_TIP = {
+  wzs: '弱转强：昨日转弱/退潮 → 今日家数回升 + 晋级>0 + 龙头续板或首板≥昨日×2（转折强才是真强，昨日非弱势不贴标）',
+  collapse: '退潮：家数较昨日腰斩 + 龙头断板 + 晋级 0',
+  ice: '冰点：今日 0 家封板（或 ≤1 家且龙头断板、晋级 0）',
+  weakening: '转弱：昨日 ≥3 家且（龙头断板或家数回落），未达退潮',
+  mainline: '主升：连续两日家数 ≥P80 分位 + 龙头续板 + 二板以上晋级 ≥1（分位样本<10 降级绝对阈 ≥5 家）',
+  fermenting: '发酵：家数连续两日递增（前日→昨日→今日）',
+  brewing: '冒头：前日 ≤1 家 → 今日 ≥3 家放量首现',
+  normal: '平淡：家数/龙头/晋级均未命中节点判据',
+  unknown: '不可判：今日 THS 池缺失，封板集合不可二分（不伪装成冰点）' };
+const NODE_STATE_CN = { sealed: '续板', broken: '断板', suspended: '停牌',
+                        unknown: '不可考', none: '昨日无龙头' };
+let _nodesSeq = 0;
+async function nodesFetch(date){
+  if (!STATE.series || !STATE.series.length) return;   // 序列未定（首屏竞态）
+  const seq = ++_nodesSeq;
+  const bg = !!(STATE.nodesData && STATE.nodesData.doc);
+  STATE.nodesData = { loading: !bg, error: null, api: null, doc: bg ? STATE.nodesData.doc : null };
+  renderNodes();
+  try {
+    const r = await jget('/api/hotlist-jev/sector-nodes?days=30'
+      + (date ? '&date=' + encodeURIComponent(date) : ''));
+    if (seq !== _nodesSeq) return;
+    STATE.nodesData = { loading: false,
+      error: (r && r.ok === false) ? (r.reason || '读库降级') : null, api: r, doc: (r && r.doc) || null };
+  } catch (e) {
+    if (seq !== _nodesSeq) return;
+    // 后台刷新失败 → 保留旧数据 + banner 报错（§4.0 不闪断不清空）
+    STATE.nodesData = { loading: false,
+      error: 'sector_nodes_read_failed: ' + (e && e.message ? e.message : e),
+      api: null, doc: bg ? STATE.nodesData.doc : null };
+  }
+  renderNodes();
+}
+function nodesSet(key, val){ STATE.nodesUi[key] = val; STATE.nodesUi.open = {}; renderNodes(); }
+function nodesClear(){ STATE.nodesUi = { node: '', q: '', open: {} };
+  const bar = $('nodesFilterBar');
+  const q = bar && bar.querySelector('input'); if (q) q.value = '';
+  const sel = bar && bar.querySelector('select'); if (sel) sel.value = '';
+  renderNodes(); }
+function nodesToggle(b){ const o = STATE.nodesUi.open; o[b] = !o[b]; renderNodes(); }
+function nodesSpark(series, maxN){
+  return '<div class="nodes-spark">' + (series || []).map((p, i) => {
+    const n = p[1] || 0;
+    return `<div class="ns-col${i === (series || []).length - 1 ? ' today' : ''}"
+      title="${esc(p[0])} ${n} 家"><i style="height:${Math.max(2, Math.round(n / maxN * 34))}px"></i>
+      <b>${n}</b><span>${esc(String(p[0]).slice(5))}</span></div>`;
+  }).join('') + '</div>';
+}
+function renderNodes(){
+  const head = $('nodesHead'); if (!head) return;
+  const d = STATE.nodesData || {};
+  const doc = d.doc;
+  const bgErr = d.error && doc
+    ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据</div>' : '';
+  if (d.error && !doc){
+    head.innerHTML = '<div class="lf-warn">⚠️ 板块节点读口异常：' + esc(d.error) + '（非「无存档」）</div>';
+    $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
+    return;
+  }
+  if (!doc){
+    head.innerHTML = '<div class="lf-warn">该日无板块节点存档（盘后链未跑 / 非交易日 / 早于 v1 投产日）</div>';
+    $('nodesChips').innerHTML = ''; $('nodesTable').innerHTML = ''; $('nodesHint').textContent = '';
+    return;
+  }
+  const warns = [];
+  if (doc.status === 'degraded') warns.push('⚠️ 当日降级：' + esc((doc.degraded || []).join('；') || '原因未记录'));
+  head.innerHTML = bgErr + (warns.length ? '<div class="lf-warn">' + warns.join('<br>') + '</div>' : '');
+  const f = STATE.nodesUi;
+  let rows = (doc.rows || []).slice();
+  const dist = {};
+  for (const r of rows) dist[r.node] = (dist[r.node] || 0) + 1;
+  $('nodesChips').innerHTML = '<span class="k">节点分布</span>'
+    + ['wzs', 'mainline', 'fermenting', 'brewing', 'weakening', 'collapse', 'ice', 'normal', 'unknown']
+      .filter(k => dist[k])
+      .map(k => '<span class="chip' + (f.node === k ? ' on' : '') + '" title="' + esc(NODE_TIP[k])
+        + '" onclick="nodesSet(\'node\', \'' + k + '\')">' + NODE_CN[k] + ' ' + dist[k] + '</span>').join('');
+  if (f.node) rows = rows.filter(r => r.node === f.node);
+  // 节点下拉选项重建（静态 bar 不整体重建，防夺焦；只同步 options 与当前值）
+  const sel = $('nodesFilterBar') && $('nodesFilterBar').querySelector('select');
+  if (sel){
+    const cur = f.node || '';
+    sel.innerHTML = '<option value="">节点 · 全部</option>'
+      + ['wzs', 'mainline', 'fermenting', 'brewing', 'weakening', 'collapse', 'ice', 'normal', 'unknown']
+        .map(k => `<option value="${k}"${cur === k ? ' selected' : ''}>${NODE_CN[k]}</option>`).join('');
+  }
+  if (f.q) rows = rows.filter(r => (r.board || '').includes(f.q)
+    || ((r.leader || {}).name || '').includes(f.q));
+  rows.sort((a, b) => (b.count || 0) - (a.count || 0) || (b.promN || 0) - (a.promN || 0));
+  const maxN = Math.max(1, ...(doc.rows || []).map(r => r.count || 0));
+  const meta = doc.meta || {};
+  const body = rows.map(r => {
+    const open = !!f.open[r.board];
+    const delta = (r.prevCount != null && r.count != null) ? r.count - r.prevCount : null;
+    const dtxt = delta == null ? '—' : (delta > 0 ? '+' + delta : String(delta));
+    const dcol = delta == null ? 'var(--muted2)'
+      : (delta > 0 ? '#dc2626' : delta < 0 ? '#16a34a' : 'var(--muted2)');
+    const sh = r.ladderShape || (r.count == null ? null : { first: 0, two: 0, threePlus: 0 });
+    const shTxt = sh ? `首 ${sh.first ?? 0} / 2板 ${sh.two ?? 0} / 3板+ ${sh.threePlus ?? 0}` : '—';
+    const ld = r.leader;
+    const ldTxt = ld ? esc(ld.name || ld.code || '?')
+      + (ld.streak != null ? ' ' + ld.streak + '板' : ' 板数?') : '—';
+    const ls = r.leaderState
+      ? (r.leaderState === 'broken' ? ' <span class="badge b-red">断板</span>'
+        : r.leaderState === 'sealed' ? ' <span class="badge b-green" title="昨日龙一今日续板">续</span>'
+        : r.leaderState === 'suspended' ? ' <span class="badge b-gray" title="停牌不算断板">停</span>'
+        : r.leaderState === 'unknown' ? ' <span class="badge b-gray" title="日线数据洞，不可考">?</span>' : '')
+      : '';
+    const prom = r.promN == null ? '—' : r.promN
+      + ((r.promGe2 != null && r.promGe2 > 0) ? `<span style="color:var(--muted2)">（≥2板 ${r.promGe2}）</span>` : '');
+    const ztxt = (r.brokenN == null ? '—' : '断 ' + r.brokenN)
+      + ' / ' + (r.zhabanN == null ? '—' : '炸 ' + r.zhabanN);
+    const nd = NODE_CN[r.node] || r.node;
+    const tip = NODE_TIP[r.node] || '';
+    const prevTip = r.prevNode ? `；昨日节点=${NODE_CN[r.prevNode]}` : '';
+    const basis = (r.basis || []).join('；');
+    return `<tr class="lg-row${open ? ' open' : ''}" onclick="nodesToggle('${js(r.board)}')">
+      <td><span class="lg-caret" onclick="event.stopPropagation(); nodesToggle('${js(r.board)}')">▶</span>${esc(r.board)}</td>
+      <td class="num">${r.count ?? '-'}</td>
+      <td class="num" style="color:${dcol}">${dtxt}</td>
+      <td class="num" style="color:var(--muted)">${shTxt}</td>
+      <td>${ldTxt}${ls}</td>
+      <td class="num" style="color:var(--muted)">${ztxt}</td>
+      <td class="num">${prom}</td>
+      <td><span class="badge ${NODE_BADGE[r.node] || 'b-gray'}" title="${esc(tip + prevTip)}（v1 确定性规则，收盘定档）">${nd}</span></td>
+      <td class="nd-basis" style="color:var(--muted)" title="${esc(basis)}">${esc(basis)}</td></tr>`
+      + (open ? `<tr class="lg-detail"><td colspan="9"><div class="lg-card" onclick="event.stopPropagation()">
+          <div class="lg-head"><div class="lg-title">${esc(r.board)} · 判定依据（v1 确定性规则，收盘定档）</div></div>
+          <div style="font-size:12px;color:var(--muted)">近 ${((r.countSeries || []).length)} 日封板家数（旧→新，末根=今日）</div>
+          ${nodesSpark(r.countSeries, maxN)}
+          <div style="margin-top:8px">依据：${(r.basis || []).map(esc).join('；')}</div>
+          ${((r.notes || []).length) ? '<div style="margin-top:4px;color:#b45309">注记：' + (r.notes || []).map(esc).join('；') + '</div>' : ''}
+          <div style="margin-top:4px;color:var(--muted)">昨日节点：${r.prevNode ? esc(NODE_CN[r.prevNode]) : '—'}
+            · 龙头状态：${r.leaderState ? esc(NODE_STATE_CN[r.leaderState]) : '—'}
+            · 昨日龙一：${r.prevLeader ? esc(r.prevLeader.name || r.prevLeader.code || '—') : '—'}
+            · 家数分位：${r.countPct == null ? '不可算' : 'P' + Math.round(r.countPct * 100)}
+            · 板内炸板（昨日 ${r.prevZhabanN == null ? '—' : r.prevZhabanN}）
+            · 指数锚：未接入（二期）</div>
+        </div></td></tr>` : '');
+  }).join('');
+  $('nodesTable').innerHTML = `<tr><th>板块</th><th>家数</th><th>Δ较昨</th><th>梯队（首/2/3板+）</th>
+    <th>龙头</th><th>断板 / 板内炸板</th><th>晋级</th><th>节点</th><th>依据</th></tr>`
+    + (body || '<tr><td colspan="9" class="empty">无板块行（筛选过严或当日无存档）</td></tr>');
+  $('nodesHint').textContent = `共 ${(doc.rows || []).length} 板块 · ${doc.version || 'v1'} 收盘定档`
+    + (meta.prevDate ? ` · 昨日节点链自 ${meta.prevDate}` : ' · 昨日节点不可考')
+    + ` · 板块指数锚未接入（二期）`;
+}
 function tlRefresh(){
   tlRenderBanner();
   tlRenderBoards();
@@ -3638,6 +3827,7 @@ function lgCopy(view, what, ev){
 //   一级 < 5 个，连板指数 5 个子视图各占一页（每页 ≤2 卡，杜绝一页长条）
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
+  ['nodes', '板块节点', '🧭'],
                      ['leaders', '板块与龙头', '🐉'], ['themes', '题材龙头', '👑'],
                      // 2026-10-19 用户裁决：页名由「判定明细」改为「涨停分析」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）

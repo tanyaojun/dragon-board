@@ -1,0 +1,196 @@
+# -*- coding: utf-8 -*-
+"""板块节点 v1 CLI（sector-nodes，2026-10-24）：取数→判定→落库，纯本地零 token。
+
+预登记：docs/hotlist-jev/sector-nodes-v1-preregistration.md；判据在
+analysis/hotlist/sector_nodes.py（纯函数，本模块只做单源取数与落库）。
+单一事实源（预登记 §二）：day_leader_rows（家数/龙一/梯队/断板/炸板面）、
+board_count_history（家数序列）、_promotion_stats（晋级链，relay_structure 同款）、
+day_status_of（龙头续断，停牌不算断板 v4）、board_count_history 21 日分位锚。
+集合 hotlist_jev_sector_nodes，`_id={date}:SECTOR_NODES`，确定性输出幂等覆盖。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from typing import Any
+
+from backend.analysis.hotlist.sector_nodes import (
+    NODE_LABELS_CN,
+    SECTOR_NODE_VERSION,
+    assemble_rows,
+)
+from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
+from backend.operations.jev_label_jiuyan import (
+    _adj_prev_series,
+    _daily_bars,
+    day_status_of,
+    jiuyan_streak_map,
+    trading_dates_before,
+)
+from backend.operations.jev_relay_index import _promotion_stats
+from backend.operations.theme_leader_baseline import (
+    board_count_history,
+    day_leader_rows,
+    sealed_and_info,
+)
+
+COLLECTION = "hotlist_jev_sector_nodes"
+_KIND = "sector_nodes"
+
+
+def _prev_nodes_of(db: Any, prev_date: str | None) -> dict[str, str] | None:
+    """昨日节点（doc 读口）；昨日文档缺失 → None（弱转强不贴标，注记）。"""
+    if not prev_date:
+        return None
+    doc = db[COLLECTION].find_one({"_id": f"{prev_date}:SECTOR_NODES"}, {"rows.node": 1,
+                                                                        "rows.board": 1})
+    if not doc:
+        return None
+    return {str(r["board"]): str(r["node"]) for r in doc.get("rows") or []
+            if r.get("board") and r.get("node")}
+
+
+def _promotion_by_board(db: Any, prev_date: str | None, date: str,
+                        dataset_id: str) -> dict[str, Any]:
+    """晋级链按板块归属（relay_structure 同款：prev pool 首个板块口径）。
+
+    promGe2 = 晋级股中今日真连板 ≥2 的家数（主升判据「二板以上晋级」）。
+    """
+    if not prev_date:
+        return {"ok": False, "reason": "无昨日交易日", "byBoard": {}, "ge2ByBoard": {}}
+    stats = _promotion_stats(db, prev_date, date, dataset_id)
+    if not stats.get("ok"):
+        return {"ok": False, "reason": stats.get("reason") or "晋级率不可算",
+                "byBoard": {}, "ge2ByBoard": {}}
+    prev_pool = stats["prev_pool"]
+    streaks = jiuyan_streak_map(db, date, dataset_id)
+    by_board: dict[str, int] = {}
+    ge2_by_board: dict[str, int] = {}
+    for c in stats["promoted"]:
+        board = (prev_pool.get(c) or {}).get("board")
+        if not board:
+            continue
+        by_board[board] = by_board.get(board, 0) + 1
+        if isinstance(streaks.get(c), int) and streaks[c] >= 2:
+            ge2_by_board[board] = ge2_by_board.get(board, 0) + 1
+    return {"ok": True, "byBoard": by_board, "ge2ByBoard": ge2_by_board}
+
+
+def _leader_states(db: Any, date: str, prev_rows: list[dict[str, Any]] | None,
+                   dataset_id: str) -> dict[str, str]:
+    """昨日各板块龙一 → 今日状态（day_status_of：停牌不算断板，v4）。"""
+    if not prev_rows:
+        return {}
+    sealed, info, _meta = sealed_and_info(db, date, dataset_id)
+    # sealed=None（今日 THS 池缺失）交 day_status_of 决策表日线补证，不在此伪造
+    touch = set(info) if info else None
+    out: dict[str, str] = {}
+    for r in prev_rows:
+        board = str(r.get("board") or "")
+        # day_leader_rows 行形状平铺：龙一 code 就是行自身 code（非嵌套 leader.code）
+        code = str(r.get("code") or "")
+        if not board or not code:
+            continue
+        bars = _daily_bars(code)
+        adj = _adj_prev_series(date, code, bars) if bars else {}
+        out[board] = day_status_of(code, date, sealed=sealed, touch=touch,
+                                   bars=bars or None, adj=adj)
+    return out
+
+
+def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
+    """单日计算+落库（幂等覆盖）；昨日节点从昨日文档读（回填升序天然成链）。"""
+    prevs = trading_dates_before(db, date, 2, dataset_id=dataset_id)
+    prev_date = prevs[-1] if prevs else None
+    prev2_date = prevs[-2] if len(prevs) >= 2 else None
+
+    today_rows, meta_today = day_leader_rows(db, date, dataset_id, prev_date)
+    prev_rows, _pmeta = day_leader_rows(db, prev_date, dataset_id) if prev_date else (None, None)
+    prev2_rows, _p2meta = (day_leader_rows(db, prev2_date, dataset_id)
+                           if prev2_date else (None, None))
+
+    prom = _promotion_by_board(db, prev_date, date, dataset_id)
+    leader_status = _leader_states(db, date, prev_rows, dataset_id)
+    count_hist = board_count_history(db, date, days=21, dataset_id=dataset_id)
+    prev_nodes = _prev_nodes_of(db, prev_date)
+
+    built = assemble_rows(date=date, today_rows=today_rows, prev_rows=prev_rows,
+                          prev_date=prev_date, prev2_rows=prev2_rows,
+                          prev2_date=prev2_date, count_hist=count_hist,
+                          prom=prom, leader_status=leader_status,
+                          prev_nodes=prev_nodes)
+    status = "degraded" if today_rows is None else "ok"
+    doc = {"_id": f"{date}:SECTOR_NODES", "kind": _KIND, "tradingDate": date,
+           "version": SECTOR_NODE_VERSION, "status": status,
+           "computedAt": datetime.now(timezone.utc),
+           "rows": built["rows"], "degraded": built["degraded"],
+           "meta": {"thsFound": today_rows is not None,
+                    "prevDate": prev_date, "prev2Date": prev2_date,
+                    "promOk": bool(prom.get("ok")),
+                    "streakSource": "jiuyan_streak_map"}}
+    db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
+    dist: dict[str, int] = {}
+    for r in built["rows"]:
+        dist[r["node"]] = dist.get(r["node"], 0) + 1
+    return {"date": date, "status": status, "boards": len(built["rows"]),
+            "nodes": {NODE_LABELS_CN[k]: v for k, v in sorted(dist.items())},
+            "degraded": built["degraded"]}
+
+
+def _recent_final_date(db: Any) -> str | None:
+    doc = db["jiuyan_action"].find_one({"_id": {"$regex": ":final$"}},
+                                       {"tradingDate": 1},
+                                       sort=[("tradingDate", -1)])
+    return str(doc.get("tradingDate")) if doc and doc.get("tradingDate") else None
+
+
+def backfill(db: Any, start: str, end: str,
+             dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
+    """区间回填（升序逐日，昨日文档自然成链；确定性输出幂等覆盖）。"""
+    dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
+        {"kind": "jiuyan_action", "tradingDate": {"$gte": start, "$lte": end},
+         "_id": {"$regex": ":final$"}}, {"tradingDate": 1}) if d.get("tradingDate")})
+    results = []
+    for d in dates:
+        results.append(settle_day(db, d, dataset_id))
+    ok_n = sum(1 for r in results if r["status"] == "ok")
+    return {"start": start, "end": end, "days": len(results), "ok": ok_n,
+            "degradedDays": [r["date"] for r in results if r["status"] != "ok"],
+            "results": results}
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="板块节点 v1（确定性判定，零 token）")
+    ap.add_argument("--day", help="计算并落库单日（缺省=最近韭研 final 日）")
+    ap.add_argument("--backfill", action="store_true", help="区间回填（需 --from/--to）")
+    ap.add_argument("--from", dest="from_date")
+    ap.add_argument("--to", dest="to_date")
+    ap.add_argument("--dataset-id", default=DEFAULT_DATASET_ID)
+    args = ap.parse_args(argv)
+
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    db = get_runtime_mongodb_database()
+    if args.backfill:
+        if not (args.from_date and args.to_date):
+            print(json.dumps({"ok": False, "error": "backfill 需要 --from 与 --to"},
+                             ensure_ascii=False))
+            return 2
+        out = backfill(db, args.from_date, args.to_date, args.dataset_id)
+        out["ok"] = True
+        print(json.dumps(out, ensure_ascii=False))
+        return 0
+    day = args.day or _recent_final_date(db)
+    if not day:
+        print(json.dumps({"ok": False, "error": "无韭研 final，且未给 --day"},
+                         ensure_ascii=False))
+        return 2
+    out = settle_day(db, day, args.dataset_id)
+    out["ok"] = out["status"] == "ok"
+    print(json.dumps(out, ensure_ascii=False))
+    return 0 if out["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

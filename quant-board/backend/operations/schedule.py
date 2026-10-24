@@ -588,6 +588,45 @@ def _run_relay_index_step(today: str, dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
+_SECTOR_NODES_TIMEOUT_SECONDS = 300  # 板块节点：纯本地（韭研池×THS 二分×TDX 日线回溯），无模型调用
+
+
+def _run_sector_nodes_step(today: str, dry_run: bool = False) -> dict[str, Any]:
+    """板块节点日判定（advisory 步，2026-10-24 v1 挂链，预登记 sector-nodes-v1）。
+
+    - 纯本地确定性判定（analysis/hotlist/sector_nodes 判据表，零 token）；
+    - 门控与 relayIndex 同源（当日韭研 final + 15:00 盘面帧，_should_run_phase_band）；
+    - 链序在 relayIndex 之后：昨日节点从昨日文档读，升序成链（盘后链逐日自然满足）；
+    - **advisory 语义**：失败/跳过不翻转 after-market 整体 ok。
+    """
+    if dry_run:
+        return {"ok": True, "skipped": True, "reason": "dry_run"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        should, reason = _should_run_phase_band(db, today)  # 同 relayIndex 原料门控
+    except Exception as exc:  # noqa: BLE001
+        should, reason = False, f"gate error: {exc}"
+    if not should:
+        return {"ok": True, "skipped": True, "reason": reason}
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "backend.operations.sector_nodes", "--day", today],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, timeout=_SECTOR_NODES_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": {"code": "sector_nodes_timeout",
+                                       "message": f"timeout {_SECTOR_NODES_TIMEOUT_SECONDS}s"}}
+    if proc.returncode != 0:
+        return {"ok": False, "error": {"code": "sector_nodes_failed",
+                                       "message": (proc.stderr or proc.stdout or "")[-400:]}}
+    try:
+        summary = json.loads((proc.stdout or "{}").strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001 — 摘要解析失败不影响步成功（advisory）
+        summary = {"ok": True, "parseWarning": "stdout 摘要不可解析"}
+    return {"ok": True, "date": today, "summary": summary}
+
+
 _RELAY_BAND_TIMEOUT_SECONDS = 900  # 分带表重算：本地通达信全历史 ×约3000 只（实测 5–9 分钟），15min 冗余
 
 
@@ -1066,6 +1105,8 @@ def run_after_market_once(
         # 叙事恒写「未覆盖（0/N，归因证据缺失）」，zhabanLabel 步的补全目的被顺序抵消）。
         zhaban_label_result = _run_zhaban_label_step(today, dry_run=dry_run)
         relay_index_result = _run_relay_index_step(today, dry_run=dry_run)
+        # 板块节点（advisory，2026-10-24 v1）：纯本地确定性判定，昨日节点读昨日文档成链
+        sector_nodes_result = _run_sector_nodes_step(today, dry_run=dry_run)
         # 分带表重算（advisory）：链序在 relayIndex 之后——门控比对「最新 ok 判定日」与
         # 产物 window.end，当日新判定刚落库时自愈补齐（零模型调用，产物原子替换）
         relay_band_result = _run_relay_band_step(today, dry_run=dry_run)
@@ -1079,7 +1120,7 @@ def run_after_market_once(
         return _result(
             ok=hotlist_ok and backup_ok and archive_ok,
             started_at=started_at,
-            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"],
+            steps=["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"],
             results={
                 "hotlistSentiment": hotlist_result,
                 "mongodbBackup": backup_result,
@@ -1088,6 +1129,7 @@ def run_after_market_once(
                 "jiuyanLabel": jiuyan_label_result,
                 "zhabanLabel": zhaban_label_result,
                 "relayIndex": relay_index_result,
+                "sectorNodes": sector_nodes_result,
                 "relayBand": relay_band_result,
                 "phaseBand": phase_band_result,
                 "deepValley": deep_valley_result,

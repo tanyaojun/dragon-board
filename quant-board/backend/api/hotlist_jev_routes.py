@@ -339,6 +339,69 @@ def get_relay_index(
         return {"ok": False, "degraded": True, "reason": f"relay_index_read_failed: {exc}"}
 
 
+@router.get("/sector-nodes")
+def get_sector_nodes(
+    date: str | None = None,
+    days: int = 60,
+) -> dict[str, Any]:
+    """板块节点读口（2026-10-24 v1，预登记 sector-nodes-v1-preregistration.md）：
+
+    单日全行（date 给定或最新）+ 近 N 日序列摘要（节点分布/弱转强名单，不含重载荷行）；
+    fail-visible：文档缺失/降级日原样透出 status=degraded 与 degraded 原因，不伪造。
+    """
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
+    try:
+        col = db["hotlist_jev_sector_nodes"]
+        capped_days = max(1, min(int(days), 400))
+        latest = date
+        if not latest:
+            newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
+            latest = str(newest.get("tradingDate")) if newest else None
+        day_doc = col.find_one({"tradingDate": latest}) if latest else None
+        series = list(col.find(
+            {"tradingDate": {"$ne": None}},
+            # 序列只带节点分布原料（rows 的 board/node/count 子集），全行仅选中日返回
+            {"tradingDate": 1, "version": 1, "status": 1, "degraded": 1,
+             "rows.board": 1, "rows.node": 1, "rows.count": 1, "rows.promN": 1},
+        ).sort("tradingDate", -1).limit(capped_days))
+        series.reverse()
+        # 序列摘要：pop 掉 rows 子集换算节点分布（day_doc 不进此循环——
+        # 它是选中日全量文档，rows 必须原样保留给前端主表，2026-10-24 review 修复）
+        for s in series:
+            if not s:
+                continue
+            dist: dict[str, int] = {}
+            wzs_boards: list[str] = []
+            for r in s.pop("rows", None) or []:
+                node = r.get("node")
+                if node:
+                    dist[node] = dist.get(node, 0) + 1
+                if node == "wzs":
+                    wzs_boards.append(str(r.get("board") or ""))
+            s["nodeDist"] = dist
+            s["wzsBoards"] = wzs_boards
+        if day_doc:
+            dist: dict[str, int] = {}
+            wzs_boards: list[str] = []
+            for r in day_doc.get("rows") or []:
+                node = r.get("node")
+                if node:
+                    dist[node] = dist.get(node, 0) + 1
+                if node == "wzs":
+                    wzs_boards.append(str(r.get("board") or ""))
+            day_doc["nodeDist"] = dist
+            day_doc["wzsBoards"] = wzs_boards
+        return {"ok": True, "date": latest, "days": capped_days,
+                "series": series, "doc": day_doc,
+                "degradedCount": sum(1 for r in [*series, day_doc]
+                                     if r and r.get("status") != "ok")}
+    except Exception as exc:
+        return {"ok": False, "degraded": True, "reason": f"sector_nodes_read_failed: {exc}"}
+
+
 class JevRelayRerunPayload(BaseModel):
     date: str
     force: bool = True   # 默认重判（含已 ok 日）；false 时交给 run_relay_index_day 的幂等跳过

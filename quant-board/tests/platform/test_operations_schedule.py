@@ -83,12 +83,13 @@ def test_after_market_job_in_mongodb_mode_runs_hotlist_sentiment_only(monkeypatc
     # 炸板归因打标（hotlist_jev_zhaban_labels），反序则当日归因永远赶不上叙事组装
     # （2026-10-14/10-15 实证：relay 16:18-16:27 出数、归因 16:20-16:36 才落库，
     # 叙事只能写「未覆盖（0/N，归因证据缺失）」）。
-    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"]
+    assert result["steps"] == ["hotlistSentiment", "mongodbBackup", "snapshotArchiveR2", "phasePulse", "jiuyanLabel", "zhabanLabel", "relayIndex", "sectorNodes", "relayBand", "phaseBand", "deepValley", "peakRevalidate", "jevDailyLine", "calibDriftMonitor", "amountVsSameRecord", "voteWinrateLedger"]
     assert result["results"]["amountVsSameRecord"]["skipped"] is True  # dry_run 短路
     assert result["results"]["jevDailyLine"]["skipped"] is True  # dry_run 短路
     assert "jevVoteRecheck" not in result["results"]  # 2026-10-15 用户裁决摘除（浪费 token）
     assert result["results"]["calibDriftMonitor"]["skipped"] is True  # dry_run 短路
     assert result["results"]["relayIndex"]["skipped"] is True  # dry_run 短路
+    assert result["results"]["sectorNodes"]["skipped"] is True  # 2026-10-24 v1 挂链（纯本地 advisory）
     assert result["results"]["relayBand"]["skipped"] is True  # dry_run 短路
     assert result["results"]["relayBand"]["reason"] == "dry_run"
     assert result["results"]["hotlistSentiment"]["written"] == 1
