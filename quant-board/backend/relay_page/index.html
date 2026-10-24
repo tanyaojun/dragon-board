@@ -2159,6 +2159,15 @@ function renderNodes(){
     const tip = NODE_TIP[r.node] || '';
     const prevTip = r.prevNode ? `；昨日节点=${NODE_CN[r.prevNode]}` : '';
     const basis = (r.basis || []).join('；');
+    // V2 影子聚合（预登记 sector-nodes-v2-aggregate：不进判据，只做对照证据）
+    const agg = r.aggN5;
+    const aggTxt = agg == null ? '—' : (agg.pctMean == null
+      ? `缺棒${agg.missingN}/${agg.memberN}` : (agg.pctMean > 0 ? '+' : '') + agg.pctMean.toFixed(2) + '%');
+    const aggCol = agg == null || agg.pctMean == null ? 'var(--muted2)'
+      : (agg.pctMean > 0 ? '#dc2626' : agg.pctMean < 0 ? '#16a34a' : 'var(--muted2)');
+    const aggTip = agg == null ? '当日未算（旧档早于 V2 投产）'
+      : `近${agg.windowDays}日活跃股聚合 · 成员${agg.memberN} · 有行情${agg.quotedN} · 缺棒${agg.missingN}`
+        + ` · 翻红率${agg.redRatio == null ? '—' : Math.round(agg.redRatio * 100) + '%'}（影子证据，不进节点判据）`;
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="nodesToggle('${js(r.board)}')">
       <td><span class="lg-caret" onclick="event.stopPropagation(); nodesToggle('${js(r.board)}')">▶</span>${esc(r.board)}</td>
       <td class="num">${r.count ?? '-'}</td>
@@ -2167,28 +2176,43 @@ function renderNodes(){
       <td>${ldTxt}${ls}</td>
       <td class="num" style="color:var(--muted)">${ztxt}</td>
       <td class="num">${prom}</td>
+      <td class="num" style="color:${aggCol}" title="${esc(aggTip)}">${aggTxt}</td>
       <td><span class="badge ${NODE_BADGE[r.node] || 'b-gray'}" title="${esc(tip + prevTip)}（v1 确定性规则，收盘定档）">${nd}</span></td>
       <td class="nd-basis" style="color:var(--muted)" title="${esc(basis)}">${esc(basis)}</td></tr>`
-      + (open ? `<tr class="lg-detail"><td colspan="9"><div class="lg-card" onclick="event.stopPropagation()">
+      + (open ? `<tr class="lg-detail"><td colspan="10"><div class="lg-card" onclick="event.stopPropagation()">
           <div class="lg-head"><div class="lg-title">${esc(r.board)} · 判定依据（v1 确定性规则，收盘定档）</div></div>
           <div style="font-size:12px;color:var(--muted)">近 ${((r.countSeries || []).length)} 日封板家数（旧→新，末根=今日）</div>
           ${nodesSpark(r.countSeries, maxN)}
           <div style="margin-top:8px">依据：${(r.basis || []).map(esc).join('；')}</div>
           ${((r.notes || []).length) ? '<div style="margin-top:4px;color:#b45309">注记：' + (r.notes || []).map(esc).join('；') + '</div>' : ''}
+          ${nodesAggCard(r)}
           <div style="margin-top:4px;color:var(--muted)">昨日节点：${r.prevNode ? esc(NODE_CN[r.prevNode]) : '—'}
             · 龙头状态：${r.leaderState ? esc(NODE_STATE_CN[r.leaderState]) : '—'}
             · 昨日龙一：${r.prevLeader ? esc(r.prevLeader.name || r.prevLeader.code || '—') : '—'}
             · 家数分位：${r.countPct == null ? '不可算' : 'P' + Math.round(r.countPct * 100)}
-            · 板内炸板（昨日 ${r.prevZhabanN == null ? '—' : r.prevZhabanN}）
-            · 指数锚：未接入（二期）</div>
+            · 板内炸板（昨日 ${r.prevZhabanN == null ? '—' : r.prevZhabanN}）</div>
         </div></td></tr>` : '');
   }).join('');
   $('nodesTable').innerHTML = `<tr><th>板块</th><th>家数</th><th>Δ较昨</th><th>梯队（首/2/3板+）</th>
-    <th>龙头</th><th>断板 / 板内炸板</th><th>晋级</th><th>节点</th><th>依据</th></tr>`
-    + (body || '<tr><td colspan="9" class="empty">无板块行（筛选过严或当日无存档）</td></tr>');
+    <th>龙头</th><th>断板 / 板内炸板</th><th>晋级</th><th>聚合涨幅</th><th>节点</th><th>依据</th></tr>`
+    + (body || '<tr><td colspan="10" class="empty">无板块行（筛选过严或当日无存档）</td></tr>');
   $('nodesHint').textContent = `共 ${(doc.rows || []).length} 板块 · ${doc.version || 'v1'} 收盘定档`
     + (meta.prevDate ? ` · 昨日节点链自 ${meta.prevDate}` : ' · 昨日节点不可考')
-    + ` · 板块指数锚未接入（二期）`;
+    + (meta.aggVersion ? ` · 活跃股聚合 ${meta.aggVersion}（影子证据，不进判据）` : '');
+}
+// V2 影子聚合展开卡（预登记 §三）：N5/N10 双窗全量统计 + missingN 披露
+function nodesAggCard(r){
+  const a5 = r.aggN5, a10 = r.aggN10;
+  if (!a5 && !a10) return '';
+  const fmt = a => a == null ? '—' : (a.pctMean == null
+    ? `缺棒 ${a.missingN}/${a.memberN}（无可用行情）`
+    : `均 ${(a.pctMean > 0 ? '+' : '') + a.pctMean.toFixed(2)}% · 中位 ${(a.pctMedian > 0 ? '+' : '') + (a.pctMedian || 0).toFixed(2)}%`
+      + ` · 翻红 ${Math.round((a.redRatio || 0) * 100)}% · 成员 ${a.memberN}（有行情 ${a.quotedN} / 缺棒 ${a.missingN}）`);
+  return `<div style="margin-top:8px;padding:6px 8px;background:var(--bg2,rgba(0,0,0,.03));border-radius:6px">
+    <div style="font-size:12px;color:var(--muted)">活跃股聚合（影子证据，不进节点判据）</div>
+    <div style="font-size:12px;margin-top:2px">N5（近${a5 ? a5.windowDays : '?'}日池）：${fmt(a5)}</div>
+    <div style="font-size:12px;margin-top:2px">N10（近${a10 ? a10.windowDays : '?'}日池）：${fmt(a10)}</div>
+  </div>`;
 }
 function tlRefresh(){
   tlRenderBanner();

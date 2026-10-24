@@ -242,3 +242,96 @@ def test_index_anchor_placeholder():
 def test_labels_and_version():
     assert SECTOR_NODE_VERSION == "v1"
     assert NODE_LABELS_CN["wzs"] == "弱转强" and NODE_LABELS_CN["collapse"] == "退潮"
+
+
+# ── V2 影子聚合（预登记 sector-nodes-v2-aggregate §二/§三，判据零参与） ──────
+
+from backend.analysis.hotlist.sector_agg import (
+    AGG_VERSION,
+    aggregate_day,
+    assemble_agg_rows,
+    member_union,
+)
+
+
+def _pool_list():
+    """窗口池：D2 5 家 / D1 3 家 / D0 2 家，AI算力成员部分重叠。"""
+    return [
+        (D0, {"AI算力": {"600001", "600002"}, "机器人": {"700001"}}),
+        (D1, {"AI算力": {"600001", "600003", "600004"}}),
+        (D2, {"AI算力": {"600001", "600003", "600005", "600006", "600007"}}),
+    ]
+
+
+def _bars_by_code():
+    """成员日线棒：600001 三日连续 +2%/-1%；600002 缺今日棒（missingN）；600003 首棒即 D0（无昨收）。"""
+    bars = {
+        "600001": [{"date": D2, "close": 10.0}, {"date": D1, "close": 10.2},
+                   {"date": D0, "close": 10.4}],
+        "600002": [{"date": D2, "close": 5.0}, {"date": D1, "close": 5.1}],
+        "600003": [{"date": D0, "close": 8.0}],
+        "600004": [{"date": D2, "close": 20.0}, {"date": D1, "close": 19.0},
+                   {"date": D0, "close": 18.95}],   # D0 -0.26%
+        "600005": [{"date": D2, "close": 4.0}, {"date": D1, "close": 4.2},
+                   {"date": D0, "close": 4.62}],    # D0 +10%
+        "600006": [{"date": D2, "close": 9.0}, {"date": D1, "close": 8.6},
+                   {"date": D0, "close": 8.5}],     # D0 -1.16%
+        "600007": [{"date": D2, "close": 3.0}, {"date": D1, "close": 3.0},
+                   {"date": D0, "close": 3.0}],     # D0 0%
+        "700001": [{"date": D2, "close": 6.0}, {"date": D1, "close": 6.3},
+                   {"date": D0, "close": 6.9}],     # D0 +9.52%
+    }
+    return bars
+
+
+def test_member_union_n5_n10_short_window():
+    """N5 窗 > 可得 3 日 → 如实缩短 windowDays=3 并 daysShort；并集去重正确。"""
+    u5 = member_union("AI算力", _pool_list(), 5)
+    assert u5["windowDays"] == 3 and u5["daysShort"] is True
+    assert u5["codes"] == {"600001", "600002", "600003", "600004", "600005", "600006", "600007"}
+    u10 = member_union("机器人", _pool_list(), 10)
+    assert u10["codes"] == {"700001"} and u10["daysShort"] is True
+
+
+def test_aggregate_day_missing_no_fake_zero():
+    """缺棒/无昨收成员剔除统计 + missingN 披露；不伪装。"""
+    u = member_union("AI算力", _pool_list(), 5)
+    out = aggregate_day(target_date=D0, members=u["codes"],
+                        bars_by_code=_bars_by_code(), window_days=u["windowDays"])
+    assert out["memberN"] == 7 and out["quotedN"] == 5 and out["missingN"] == 2
+    # quoted: 600001 +1.96%, 600004 -0.26%, 600005 +10.0%, 600006 -1.16%, 600007 0%
+    assert out["pctMean"] == round((1.9608 + (-0.2632) + 10.0 + (-1.1628) + 0.0) / 5, 2)
+    assert out["redRatio"] == round(2 / 5, 3)
+
+
+def test_aggregate_day_all_missing_none():
+    """全成员缺棒 → 统计值 None（不落伪 0），missingN=memberN。"""
+    out = aggregate_day(target_date=D0, members={"999999"},
+                        bars_by_code={}, window_days=3)
+    assert out["pctMean"] is None and out["pctMedian"] is None and out["redRatio"] is None
+    assert out["missingN"] == 1 and out["quotedN"] == 0
+
+
+def test_assemble_agg_rows_coverage_n10_superset():
+    """行覆盖 = N10 并集（含今日无封板板块）；aggN5 ⊆ aggN10 行集；空池板块缺席。"""
+    rows = assemble_agg_rows(target_date=D0, window_pool=_pool_list(),
+                             bars_by_code=_bars_by_code())
+    boards = {r["board"] for r in rows}
+    assert boards == {"AI算力", "机器人"}
+    ai = next(r for r in rows if r["board"] == "AI算力")
+    assert ai["aggN5"]["windowDays"] == 3 and ai["aggN10"]["windowDays"] == 3
+    assert ai["aggN5"]["memberN"] == 7 and ai["aggN10"]["memberN"] == 7
+    # 机器人今日无封板照样有聚合读数（弱转强前兆观察位）
+    ro = next(r for r in rows if r["board"] == "机器人")
+    assert ro["aggN5"]["pctMean"] == 9.52
+
+
+def test_aggregate_day_empty_window_pool():
+    """窗口池全缺 → assemble 空行集（operations 层不再挂载，不伪 0）。"""
+    assert assemble_agg_rows(target_date=D0, window_pool=[],
+                             bars_by_code={}) == []
+
+
+def test_agg_version_frozen():
+    """版本戳冻结（影子列口径变更须新戳+用户批准）。"""
+    assert AGG_VERSION == "2026-10-24a"

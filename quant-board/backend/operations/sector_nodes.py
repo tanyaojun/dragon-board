@@ -25,9 +25,14 @@ from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
 from backend.operations.jev_label_jiuyan import (
     _adj_prev_series,
     _daily_bars,
+    bars_need_upto,
     day_status_of,
     jiuyan_streak_map,
     trading_dates_before,
+)
+from backend.analysis.hotlist.sector_agg import (
+    AGG_VERSION,
+    assemble_agg_rows,
 )
 from backend.operations.jev_relay_index import _promotion_stats
 from backend.operations.theme_leader_baseline import (
@@ -100,6 +105,72 @@ def _leader_states(db: Any, date: str, prev_rows: list[dict[str, Any]] | None,
     return out
 
 
+# V2 影子聚合的窗口池进程缓存（键 (date, dataset_id)）：回填升序成链时
+# 相邻 settle_day 的窗口日高度重叠，逐日只新增 1 次 day_leader_rows。
+_POOL_CACHE: dict[tuple[str, str], dict[str, set[str]] | None] = {}
+
+
+def _window_pool_of(db: Any, date: str, dataset_id: str) -> dict[str, set[str]] | None:
+    """单日 {板块: 封板 code 集}；THS 池缺失 / final 缺失（空列表）→ None（不进窗口）。"""
+    key = (date, dataset_id)
+    if key in _POOL_CACHE:
+        return _POOL_CACHE[key]
+    rows, meta = day_leader_rows(db, date, dataset_id)
+    pool: dict[str, set[str]] | None = None
+    if rows is not None and meta.get("jiuyanFinalFound", True):
+        pool = {}
+        for r in rows:
+            b = str(r.get("board") or "")
+            if b:
+                pool[b] = {str(c) for c in (r.get("boardCodes") or [])}
+    _POOL_CACHE[key] = pool
+    return pool
+
+
+def _agg_attach(db: Any, date: str, dataset_id: str,
+                rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """V2 影子聚合（预登记 sector-nodes-v2-aggregate §二/§三）：返回 (挂载 map, 额外行)。
+
+    窗口 = 今日（若池 ok）+ 最近 10 个池 ok 交易日（trading_dates_before 候选里过滤）；
+    统计日行情棒独立于韭研池（节点 degraded 不停算聚合——影子证据与节点判定解耦）。
+    额外行 = N10 并集中不在 v1 三日窗口 rows 的板块（aggExtraRows 单独放，不扩
+    v1 行集、不参与 nodeDist）。
+    """
+    # trading_dates_before 升序返回（旧→新）——窗口要「今日+最近 10 个池 ok 日」，
+    # 必须 reverse 成新→旧再截断（首版未 reverse 实测取成最旧 9 日，2026-10-24 回填抓出）
+    candidates = [date] + list(reversed(
+        trading_dates_before(db, date, 15, dataset_id=dataset_id)))
+    pool_list: list[tuple[str, dict[str, set[str]]]] = []
+    for d in candidates:
+        pool = _window_pool_of(db, d, dataset_id)
+        if pool is not None:
+            pool_list.append((d, pool))
+        if len(pool_list) >= 10:
+            break
+    boards_v1 = {str(r.get("board") or "") for r in rows}
+    if not pool_list:
+        return {}, []
+    members_all: set[str] = set()
+    for _d, pool in pool_list:
+        for codes in pool.values():
+            members_all |= codes
+    bars_by_code: dict[str, list[dict[str, Any]]] = {}
+    with bars_need_upto(date):
+        for code in sorted(members_all):
+            bars_by_code[code] = _daily_bars(code)
+    agg_rows = assemble_agg_rows(target_date=date, window_pool=pool_list,
+                                 bars_by_code=bars_by_code)
+    mounted: dict[str, dict[str, Any]] = {}
+    extra: list[dict[str, Any]] = []
+    for ar in agg_rows:
+        slot = mounted if ar["board"] in boards_v1 else None
+        if slot is not None:
+            mounted[ar["board"]] = {"aggN5": ar["aggN5"], "aggN10": ar["aggN10"]}
+        else:
+            extra.append(ar)
+    return mounted, extra
+
+
 def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
     """单日计算+落库（幂等覆盖）；昨日节点从昨日文档读（回填升序天然成链）。"""
     prevs = trading_dates_before(db, date, 2, dataset_id=dataset_id)
@@ -132,13 +203,22 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                           prev_nodes=prev_nodes,
                           today_unavailable_reason=today_unavailable_reason)
     status = "degraded" if today_rows is None else "ok"
+    # V2 影子聚合（预登记 §四）：挂 v1 行 + aggExtraRows，判据零参与
+    agg_map, agg_extra = _agg_attach(db, date, dataset_id, built["rows"])
+    for r in built["rows"]:
+        m = agg_map.get(str(r.get("board") or ""))
+        if m:
+            r.update(m)
     doc = {"_id": f"{date}:SECTOR_NODES", "kind": _KIND, "tradingDate": date,
            "version": SECTOR_NODE_VERSION, "status": status,
            "computedAt": datetime.now(timezone.utc),
            "rows": built["rows"], "degraded": built["degraded"],
+           "aggExtraRows": agg_extra,
            "meta": {"thsFound": today_rows is not None,
                     "prevDate": prev_date, "prev2Date": prev2_date,
                     "promOk": bool(prom.get("ok")),
+                    "aggVersion": AGG_VERSION,
+                    "aggExtraCount": len(agg_extra),
                     "streakSource": "jiuyan_streak_map"}}
     db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     dist: dict[str, int] = {}
