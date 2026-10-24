@@ -116,11 +116,21 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
     count_hist = board_count_history(db, date, days=21, dataset_id=dataset_id)
     prev_nodes = _prev_nodes_of(db, prev_date)
 
+    # 审计 P2-2：day_leader_rows 只因 THS 池缺失返回 None；韭研 final 缺失/为空时
+    # 返回空列表（jiuyanFinalFound=False）——不检查会把窗口内全板块伪装成「0 家冰点」。
+    # final 不可考与 THS 不可考同款降级（unknown+家数 None），只改本层不改共享单源。
+    today_unavailable_reason: str | None = None
+    if today_rows is None:
+        today_unavailable_reason = "THS 池缺失，封板集合不可二分"
+    elif not meta_today.get("jiuyanFinalFound", True):
+        today_unavailable_reason = "韭研 final 缺失/为空，板块家数不可考"
+        today_rows = None
     built = assemble_rows(date=date, today_rows=today_rows, prev_rows=prev_rows,
                           prev_date=prev_date, prev2_rows=prev2_rows,
                           prev2_date=prev2_date, count_hist=count_hist,
                           prom=prom, leader_status=leader_status,
-                          prev_nodes=prev_nodes)
+                          prev_nodes=prev_nodes,
+                          today_unavailable_reason=today_unavailable_reason)
     status = "degraded" if today_rows is None else "ok"
     doc = {"_id": f"{date}:SECTOR_NODES", "kind": _KIND, "tradingDate": date,
            "version": SECTOR_NODE_VERSION, "status": status,

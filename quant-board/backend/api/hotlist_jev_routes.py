@@ -394,10 +394,12 @@ def get_sector_nodes(
                     wzs_boards.append(str(r.get("board") or ""))
             day_doc["nodeDist"] = dist
             day_doc["wzsBoards"] = wzs_boards
+        # 审计 P3：series 含选中日、doc 也是选中日，直接相加会双计——按交易日去重
+        degraded_dates = {str(r.get("tradingDate")) for r in [*series, day_doc]
+                          if r and r.get("status") != "ok"}
         return {"ok": True, "date": latest, "days": capped_days,
                 "series": series, "doc": day_doc,
-                "degradedCount": sum(1 for r in [*series, day_doc]
-                                     if r and r.get("status") != "ok")}
+                "degradedCount": len(degraded_dates)}
     except Exception as exc:
         return {"ok": False, "degraded": True, "reason": f"sector_nodes_read_failed: {exc}"}
 

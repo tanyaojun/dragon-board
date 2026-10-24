@@ -74,7 +74,7 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
                  "unknown": "状态不可考", "none": "昨日无龙头"}.get(leader_state, "不可考")
 
     if n0 is None:
-        notes.append("今日 THS 池缺失，封板集合不可二分，节点不可判（不伪装成冰点）")
+        notes.append("今日封板集合不可考，节点不可判（不伪装成冰点）")
         return {"node": "unknown", "basis": basis, "notes": notes,
                 "countPct": None, "prevCountPct": None, "pctDegraded": True}
 
@@ -161,13 +161,18 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
                   prev2_rows: list[dict[str, Any]] | None, prev2_date: str | None,
                   count_hist: dict[str, list[tuple[str, int]]],
                   prom: dict[str, Any], leader_status: dict[str, str],
-                  prev_nodes: dict[str, str] | None) -> dict[str, Any]:
+                  prev_nodes: dict[str, str] | None,
+                  today_unavailable_reason: str | None = None) -> dict[str, Any]:
     """组装当日全部板块-日行（预登记 §三/§四）。
 
     输入均为 operations 层从单源取齐的快照，本函数无 IO。板块覆盖=三日窗口并集
     （今日/昨日/前日 rows；「昨日有今日无」的退潮冰点板块必须在此）。
     count_hist：{board: [(date, n), ...]} 严格早于今日（board_count_history 原样）。
     n1/n2：参照日池 ok → 键缺=合法 0 家；参照日池缺失 → None 不可考（fail-visible）。
+    today_rows=None=今日封板集合不可考，today_unavailable_reason 给根因（THS 池缺失
+    或韭研 final 缺失——审计 P2-2：final 缺失但 THS ok 时 day_leader_rows 返回空列表
+    且不报 None，operations 层须查 meta.jiuyanFinalFound 后置 None，否则窗口内全板块
+    伪装成冰点）。
     """
     today_by = {str(r["board"]): r for r in (today_rows or [])}
     prev_by = {str(r["board"]): r for r in (prev_rows or [])}
@@ -271,7 +276,10 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
             "basis": cls["basis"], "notes": notes,
         })
     if today_rows is None:
-        degraded.append(f"{date} THS 池缺失，封板集合不可二分（整日降级）")
+        reason = today_unavailable_reason or "THS 池缺失，封板集合不可二分"
+        degraded.append(f"{date} {reason}（整日降级）")
+        for r in rows:
+            r["notes"].append(f"今日不可考根因：{reason}")
     if not boards:
         degraded.append("三日窗口内无任何板块封板记录")
     return {"rows": rows, "degraded": degraded}

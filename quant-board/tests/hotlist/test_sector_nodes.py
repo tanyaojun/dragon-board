@@ -219,6 +219,18 @@ def test_ths_missing_whole_day_degraded():
     r = _node_of(out)
     assert r["node"] == "unknown" and r["count"] is None and r["countPct"] is None
     assert any("节点不可判" in n for n in r["notes"])
+    assert any("根因：THS 池缺失" in n for n in r["notes"])
+
+
+def test_final_missing_same_degraded_path():
+    """审计 P2-2：韭研 final 缺失但 THS ok（空列表形态由 operations 置 None）
+    → 与 THS 缺失同款降级，根因注记区分，绝不判全场冰点。"""
+    out = _assemble(today_rows=None, prev_rows=[_row(n=3)],
+                    today_unavailable_reason="韭研 final 缺失/为空，板块家数不可考")
+    assert any("韭研 final 缺失" in d for d in out["degraded"])
+    r = _node_of(out)
+    assert r["node"] == "unknown" and r["count"] is None
+    assert any("根因：韭研 final 缺失" in n for n in r["notes"])
 
 
 def test_index_anchor_placeholder():
