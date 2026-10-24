@@ -21,6 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from types import SimpleNamespace
+
 from backend.operations import theme_leader_label as L
 
 
@@ -37,6 +39,30 @@ class FakeCol:
             if all(d.get(k) == v for k, v in (query or {}).items()):
                 out.append({k: d.get(k) for k in projection} if projection else dict(d))
         return out
+
+    def update_many(self, flt, update):
+        """reconcile 用（$ne/$in/$nin 富匹配；只模拟 $set）。"""
+        n = 0
+        for d in self.docs.values():
+            ok = True
+            for k, cond in (flt or {}).items():
+                val = d.get(k)
+                if isinstance(cond, dict):
+                    for op, arg in cond.items():
+                        if op == "$ne" and val == arg:
+                            ok = False
+                        elif op == "$in" and val not in arg:
+                            ok = False
+                        elif op == "$nin" and val in arg:
+                            ok = False
+                elif val != cond:
+                    ok = False
+                if not ok:
+                    break
+            if ok:
+                d.update(update.get("$set") or {})
+                n += 1
+        return SimpleNamespace(modified_count=n)
 
 
 class FakeDb:
@@ -254,6 +280,76 @@ def test_build_one_wires_history_and_headroom_anchor():
                          market_line="涨停 46 家", board_history={})
     assert "空间锚" not in built2["narrative"]
     assert "家数序列不可考" in built2["narrative"]
+
+
+# ── 单一龙头对账（2026-10-24 双龙头事故：10-23 机器人板块赛福天/大业股份并存） ──
+
+def _seed_ghost(db):
+    """10-23 机器人双行：赛福天=幽灵行（推导已不再指向），大业=现任。"""
+    col = db[L.COLLECTION]
+    col.replace_one({"_id": "2026-10-23:603028"},
+                    {"_id": "2026-10-23:603028", "tradingDate": "2026-10-23",
+                     "board": "机器人", "code": "603028", "name": "赛福天",
+                     "status": "ok", "questionSetVersion": "v6"})
+    col.replace_one({"_id": "2026-10-23:603278"},
+                    {"_id": "2026-10-23:603278", "tradingDate": "2026-10-23",
+                     "board": "机器人", "code": "603278", "name": "大业股份",
+                     "status": "ok", "questionSetVersion": "v8"})
+
+
+def test_reconcile_supersedes_ghost_rows_and_is_idempotent():
+    """退位：同 board 下 code∉现任推导 的 ok/degraded 行打 leaderSuperseded（不删除）；
+    幂等：重跑不重盖、计数归零。"""
+    db = FakeDb()
+    _seed_ghost(db)
+    rows = [{"board": "机器人", "code": "603278"}]
+    rec = L.reconcile_superseded_leaders(db, "2026-10-23", rows)
+    assert rec["superseded"] == 1 and rec["details"][0]["currentLeader"] == "603278"
+    ghost = db[L.COLLECTION].docs["2026-10-23:603028"]
+    assert ghost["leaderSuperseded"] is True and ghost["supersededBy"] == "603278"
+    assert ghost["supersededAt"], "退位时间戳必须落"
+    assert "status" not in ghost or ghost["status"] == "ok", "不删除不篡改原档字段"
+    # 现任行不受影响
+    cur = db[L.COLLECTION].docs["2026-10-23:603278"]
+    assert "leaderSuperseded" not in cur
+    # 幂等：再跑零新增
+    rec2 = L.reconcile_superseded_leaders(db, "2026-10-23", rows)
+    assert rec2["superseded"] == 0
+
+
+def test_reconcile_scoped_by_date_and_skips_other_boards():
+    """只动当日、只动推导涉及的 board：他日/他板文档不受牵连。"""
+    db = FakeDb()
+    _seed_ghost(db)
+    col = db[L.COLLECTION]
+    col.replace_one({"_id": "2026-10-22:603028"},
+                    {"_id": "2026-10-22:603028", "tradingDate": "2026-10-22",
+                     "board": "机器人", "code": "603028", "status": "ok"})
+    rows = [{"board": "机器人", "code": "603278"}]
+    L.reconcile_superseded_leaders(db, "2026-10-23", rows)
+    assert "leaderSuperseded" not in col.docs["2026-10-22:603028"], "他日不牵连"
+
+
+def test_reconcile_no_rows_is_noop():
+    """THS 池缺失（rows=None）推导不可得 → 不动历史（fail-visible，不猜现任）。"""
+    db = FakeDb()
+    _seed_ghost(db)
+    rec = L.reconcile_superseded_leaders(db, "2026-10-23", None)
+    assert rec == {"superseded": 0, "boards": 0, "details": []}
+    assert "leaderSuperseded" not in db[L.COLLECTION].docs["2026-10-23:603028"]
+
+
+def test_reconcile_only_makes_no_call(env):
+    """--reconcile-only：零 jev 调用，返回 reconcile 结果（存量幽灵行被退位）。"""
+    calls, db = env
+    _seed_ghost(db)
+    # env 夹具 leaders_for 桩返回 ROWS（机器人/大业 603278 + 化工）
+    out = L.run("2026-10-23", reconcile_only=True)
+    assert calls == [], "对账零调用"
+    assert out["reconcileOnly"] is True and out["reconcile"]["superseded"] >= 0
+    ghost = db[L.COLLECTION].docs.get("2026-10-23:603028")
+    # env 的 ROWS 推导现任=603278（机器人）→ 幽灵行退位
+    assert ghost is not None and ghost.get("leaderSuperseded") is True
 
 
 def test_channel_unreachable_aborts_early_not_all_calls(env, monkeypatch):

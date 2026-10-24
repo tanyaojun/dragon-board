@@ -2135,6 +2135,8 @@ function filteredCountText(total, f, doc){
   const dates = doc.dates || [];
   parts.push('题目集 ' + Object.keys(doc.versions || {}).join('/'));
   parts.push(dates.length ? (dates[0] + ' ~ ' + dates[dates.length - 1] + '（' + dates.length + ' 个交易日）') : '');
+  // 单一龙头对账退位行（2026-10-24）：服务端已过滤不渲染，数量如实披露（fail-visible）
+  if (doc.supersededCount > 0) parts.push('退位 ' + doc.supersededCount + ' 行（旧推导，审计查库）');
   return parts.join(' · ') + ' · 共 ' + total + ' 只';
 }
 function tlPager(page, total){

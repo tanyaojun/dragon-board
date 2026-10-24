@@ -166,7 +166,9 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
     - `with_narrative=1`：附带 `narrative`（实际投喂给 jev 的语料全文）与 `questionsRaw`
       （v2 题目集原文）——用于前端「投喂语料」抽屉；
     - `evidenceMissingReason` / `gate.reason` 逐只透出（口径差异必须人眼可见）；
-    - `sampleOrigin` 区分 live 前瞻 / backfill 回填（回填含语料未来信息，不得当结论）。
+    - `sampleOrigin` 区分 live 前瞻 / backfill 回填（回填含语料未来信息，不得当结论）；
+    - `leaderSuperseded=True`（单一龙头对账退位行，2026-10-24）默认**不返回**——同一
+      (date, board) 只出现任推导龙一；退位数在 `supersededCount` 披露（审计直接查库）。
     """
     # 无参 = 全量（relay_page 时间范围选「全部」时 start/end 均空）；根前端始终带 date。
     # date 与 start/end 同给时 date 优先（docstring 二选一契约）。
@@ -262,7 +264,13 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
                 row["narrative"] = d.get("narrative")
                 row["questionsRaw"] = d.get("questionsRaw")
                 row["responseRaw"] = d.get("responseRaw")
+            if d.get("leaderSuperseded"):
+                row["_superseded"] = True   # 内部标记：下行过滤掉，不出响应
             rows.append(row)
+        # 单一龙头对账（2026-10-24）：退位行（推导已不再指向的旧任龙头）默认不出——
+        # 同 (date, board) 只出现任推导龙一；数量显式披露，审计直接查库
+        superseded_count = sum(1 for d in docs if d.get("leaderSuperseded"))
+        rows = [r for r in rows if not r.get("_superseded")]
         # 代际/来源分布（跨代混评是硬伤，前端要能一眼看出这天是不是混代）
         versions: dict[str, int] = {}
         origins: dict[str, int] = {}
@@ -276,11 +284,12 @@ def get_theme_leaders(date: str | None = None, start: str | None = None,
             "range": None if date else {"start": start, "end": end},
             "dates": None if date else dates,
             "count": len(rows),
+            "supersededCount": superseded_count,
             "truncated": truncated,   # 无参全量触顶 500（响应注记，§4.0 不静默截断）
             "versions": versions, "mixedVersions": len(versions) > 1,
             "origins": origins,
-            "questionSetHash": rows[0]["questionSetHash"],
-            "ammoVersion": rows[0]["ammoVersion"],
+            "questionSetHash": rows[0]["questionSetHash"] if rows else None,
+            "ammoVersion": rows[0]["ammoVersion"] if rows else None,
             "statusCounts": {s: sum(1 for r in rows if r["status"] == s)
                              for s in {r["status"] for r in rows}},
             "gatedCount": sum(1 for r in rows if (r.get("gate") or {}).get("applied")),

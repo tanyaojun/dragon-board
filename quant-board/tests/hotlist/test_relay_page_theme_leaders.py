@@ -120,6 +120,13 @@ def test_mixed_generation_row_badge_like_relay_chain(html: str) -> None:
     assert "跨代不可比较" not in banner, "结项横幅不得回潮（徽章≠横幅）"
 
 
+def test_superseded_count_disclosed_in_count_text(html: str) -> None:
+    """单一龙头对账（2026-10-24）：退位行服务端已过滤，数量必须在计数行披露（fail-visible）。"""
+    fn = _fn(html, "filteredCountText")
+    assert "doc.supersededCount > 0" in fn
+    assert "退位" in fn and "审计查库" in fn
+
+
 # ── 展示硬约束 ──
 
 def test_gated_row_shows_model_answer_and_reason(html: str) -> None:

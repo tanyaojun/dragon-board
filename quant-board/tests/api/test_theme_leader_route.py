@@ -191,6 +191,31 @@ def test_unsealed_outcome_is_null_not_false(monkeypatch):
     assert body["sealedCount"] == 0
 
 
+def test_superseded_leader_rows_hidden_but_counted(monkeypatch):
+    """单一龙头对账（2026-10-24 双龙头事故）：退位行默认不出响应、supersededCount 披露。
+
+    同 (date, board) 只出现任推导龙一；退位行留库审计（不删除），统计口径=现任行。
+    """
+    docs = [_doc("600001", "机器人"),
+            _doc("600002", "机器人", leaderSuperseded=True,
+                 questionSetVersion="v6", questionSetHash="1d098c87e07e"),
+            _doc("600003", "半导体")]
+    c = _client(monkeypatch, docs)
+    body = c.get("/api/hotlist-jev/theme-leaders", params={"date": "2026-10-16"}).json()
+    assert body["supersededCount"] == 1
+    assert body["count"] == 2
+    assert [r["code"] for r in body["leaders"]] == ["600001", "600003"], "退位行不出 leaders"
+    assert body["versions"] == {"v2": 2}, "代际分布只算现任行"
+    assert body["statusCounts"] == {"ok": 2}
+
+
+def test_superseded_flag_absent_means_current(monkeypatch):
+    """旧文档无 leaderSuperseded 字段 → 视为现任（$ne True 语义，Python 层等价）。"""
+    c = _client(monkeypatch, [_doc("600001", "机器人")])
+    body = c.get("/api/hotlist-jev/theme-leaders", params={"date": "2026-10-16"}).json()
+    assert body["supersededCount"] == 0 and body["count"] == 1
+
+
 # ── 重跑端点（2026-10-20 用户需求；mock 化，绝不真调 jev —— AGENTS §1.2-7） ──
 
 def _rerun_client(monkeypatch, existing_doc):

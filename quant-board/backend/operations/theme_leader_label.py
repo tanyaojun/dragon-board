@@ -121,6 +121,40 @@ def leaders_for(db: Any, date: str,
     return day_leader_rows(db, date, dataset_id, prev_dates[-1] if prev_dates else None)
 
 
+def reconcile_superseded_leaders(db: Any, date: str, rows: list[dict] | None) -> dict:
+    """单一龙头不变式对账（2026-10-24 双龙头事故后加）：同 (date, board) 只留现任推导龙一。
+
+    成因：15:35 final 快照与盘后重采之间推导会变（韭研盘后修正板数/分组），8001 重启
+    触发幂等重跑补标新任龙头（如 10-23 大业股份）后，旧任龙头行（赛福天）无人退位，
+    双行并存冒充双龙头。对账把同 board 下 code∉现任 的历史行显式退位（leaderSuperseded/
+    supersededBy/supersededAt），**不删除**（真实调用成本留审计，Mongo 可查）；
+    幂等（已退位且 supersededBy 相同则不重盖）。rows=None/空（THS 池缺失推导不可得）
+    → 不动历史（fail-visible，不猜现任）。
+    """
+    if not rows:
+        return {"superseded": 0, "boards": 0, "details": []}
+    col = db[COLLECTION]
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    boards = {str(r["board"]) for r in rows}
+    details: list[dict] = []
+    total = 0
+    for board in sorted(boards):
+        current_codes = sorted({str(r["code"]) for r in rows if str(r["board"]) == board})
+        res = col.update_many(
+            {"tradingDate": date, "board": board, "code": {"$nin": current_codes},
+             "status": {"$in": ["ok", "degraded"]}, "leaderSuperseded": {"$ne": True}},
+            {"$set": {"leaderSuperseded": True, "supersededBy": current_codes[0],
+                      "supersededAt": now}})
+        if res.modified_count:
+            total += res.modified_count
+            details.append({"board": board, "currentLeader": current_codes[0],
+                            "superseded": res.modified_count})
+    if total:
+        print(f"{date} 龙头对账：退位 {total} 行（推导已不再指向；"
+              f"{'；'.join(d['board'] + '→' + d['currentLeader'] for d in details)}）")
+    return {"superseded": total, "boards": len(boards), "details": details}
+
+
 def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               dataset_id: str = DEFAULT_DATASET_ID,
               market_line: str | None = None,
@@ -228,8 +262,8 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         max_leaders: int | None = None, boards: set[str] | None = None,
         force: bool = False, dataset_id: str = DEFAULT_DATASET_ID,
         sample_origin: str = SAMPLE_ORIGIN_LIVE,
-        codes: set[str] | None = None) -> dict:
-    """当日投喂主流程。dry_run 全程零 jev 调用。"""
+        codes: set[str] | None = None, reconcile_only: bool = False) -> dict:
+    """当日投喂主流程。dry_run 全程零 jev 调用；reconcile_only 零调用只对账退位。"""
     db = _db()
     rows, meta = leaders_for(db, date, dataset_id)
     if rows is None:
@@ -239,6 +273,7 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         print(f"{date} 当日无封板板块（韭研 final 文档缺或全炸板），跳过（披露）")
         return {"ok": True, "date": date, "leaders": 0, "skippedReason": "no_leaders"}
     rows = sorted(rows, key=lambda r: (-(r["boardN"]), str(r.get("time") or "99:99")))
+    rows_full = list(rows)           # 全量推导行（对账用，不受 codes/boards 过滤影响）
     plan_leaders_total = len(rows)   # 过滤前总数（codes/boards 过滤后 leaders 仅选中数，P2 修复防误读）
     if boards:
         rows = [r for r in rows if r["board"] in boards]
@@ -257,6 +292,11 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         print(f"{date} 排除非题材粗分桶 {len(excluded)} 只龙头（{'、'.join(excluded_boards)}）"
               f"——不纳入 jev 判定（v3 收紧；v5 起不落库不显示，仅日志留痕）")
         rows = [r for r in rows if digest.normalize_name(r["board"]) not in digest.NOT_A_THEME]
+    if reconcile_only:
+        # 零调用对账（手工对账历史日/存量幽灵行）：只做退位，不标注不花 token
+        rec = reconcile_superseded_leaders(db, date, rows_full)
+        return {"ok": True, "date": date, "reconcileOnly": True,
+                "leaders": plan_leaders_total, "reconcile": rec}
     rows_baseline, baseline_meta = baseline_rows_for(db, date, dataset_id=dataset_id)
     col = db[COLLECTION]
     done = {str(d.get("code")) for d in col.find(
@@ -297,8 +337,9 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         print("\n[dry] 零 jev 调用（未花 token）")
         return plan
     if not todo:
+        rec = reconcile_superseded_leaders(db, date, rows_full)
         print(f"{date} 无需投喂（{len(done)} 只已 status=ok，幂等跳过）")
-        return {**plan, "labeled": 0}
+        return {**plan, "labeled": 0, "reconcile": rec}
     if not confirm_budget:
         raise SystemExit(
             f"预算护栏：本次将真实调用 jev {len(todo)} 次（{date}），"
@@ -317,14 +358,17 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
         # 只对「失败且零 usage」的连续两次断——单次抖动仍照旧重试，不误杀。
         transport_fails = transport_fails + 1 if (not ok and used == 0) else 0
         if transport_fails >= _TRANSPORT_FAIL_ABORT:
+            rec = reconcile_superseded_leaders(db, date, rows_full)
             return {**plan, "labeled": i, "ok": n_ok, "degraded": i - n_ok,
                     "tokensUsed": n_used, "aborted": "channel_unreachable",
+                    "reconcile": rec,
                     "remaining": len(built_all) - i,
                     "error": {"code": "jev_channel_unreachable",
                               "message": f"连续 {transport_fails} 次调用零 usage 失败，已中止；"
                                          "检查 jev 通道（JEV_TYPESAFE_PROXY 代理/CF 令牌）后 --force 重跑"}}
+    rec = reconcile_superseded_leaders(db, date, rows_full)
     return {**plan, "labeled": len(built_all), "ok": n_ok,
-            "degraded": len(built_all) - n_ok, "tokensUsed": n_used}
+            "degraded": len(built_all) - n_ok, "tokensUsed": n_used, "reconcile": rec}
 
 
 def main() -> None:
@@ -341,10 +385,12 @@ def main() -> None:
                     choices=[SAMPLE_ORIGIN_LIVE, SAMPLE_ORIGIN_BACKFILL],
                     help="样本代际：live=当日挂链前瞻（默认）；backfill=事后补跑历史日，"
                          "评估分组统计，不与前瞻混评")
+    ap.add_argument("--reconcile-only", action="store_true",
+                    help="零调用：只做单一龙头对账（退位推导已不再指向的旧行），不标注")
     args = ap.parse_args()
     out = run(args.date, dry_run=args.dry_run, confirm_budget=args.confirm_budget,
               max_leaders=args.max_leaders, force=args.force,
-              sample_origin=args.sample_origin,
+              sample_origin=args.sample_origin, reconcile_only=args.reconcile_only,
               boards={b.strip() for b in args.boards.split(",") if b.strip()} if args.boards else None,
               codes={c.strip() for c in args.codes.split(",") if c.strip()} if args.codes else None)
     if not args.dry_run:
