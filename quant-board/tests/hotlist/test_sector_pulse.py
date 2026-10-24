@@ -86,6 +86,9 @@ def env(monkeypatch):
         {"board": "半导体", "node": "wzs"}]}
     db = FakeDB()
     db.nodes = nodes
+    # 默认交易日（compute_pulse 证据段判定走 bridge/cache 探测，测试统一 mock 掉）
+    monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
+                        lambda d: (True, "weekday"))
     return db
 
 
@@ -277,6 +280,31 @@ def test_evidence_stage_boundaries():
     assert _evidence_stage(datetime(2026, 10, 26, 13, 29)) == "early"
     assert _evidence_stage(datetime(2026, 10, 26, 13, 30)) == "strong"
     assert _evidence_stage(datetime(2026, 10, 26, 15, 0)) == "closed"
+
+
+def test_non_trading_day_stage_forced_closed(env, monkeypatch):
+    """非交易日当日读数=最近交易日收盘口径：证据段强制 closed + 注记，
+    不按钟表误标「早盘/盘前」（2026-10-25 用户验收反馈）；且不落帧。"""
+    monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
+                        lambda d: (False, "weekday"))
+    # 周六上午十点访问：钟表处于「早盘」，但读数是周五收盘
+    p = compute_pulse(env, TODAY, now=datetime(2026, 10, 25, 10, 0, 0),
+                      quotes_fetcher=_fetch_ok)
+    assert p["evidenceStage"] == "closed"
+    assert "非交易日" in p["meta"]["tradingDayNote"]
+    assert p["meta"]["framesSaved"] is False and env.pulse.replacements == []
+
+
+def test_trading_day_check_failure_degrades_visibly(env, monkeypatch):
+    """交易日判定不可用 → 按钟表分段 + 注记（fail-visible，不炸读口）。"""
+    def boom(d):
+        raise RuntimeError("bridge down and no cache")
+
+    monkeypatch.setattr(trading_calendar, "is_trading_day_cached", boom)
+    p = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 11, 0, 0),
+                      quotes_fetcher=_fetch_ok)
+    assert p["evidenceStage"] == "early"          # 钟表分段兜底
+    assert "交易日判定不可用" in p["meta"]["tradingDayNote"]
 
 
 def test_get_pulse_cached_60s(env, monkeypatch):

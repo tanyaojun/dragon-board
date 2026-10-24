@@ -1132,7 +1132,28 @@ function renderKpis(){
     ${relayCard('连板情绪指数', `<span style="color:${zoneIdxColor(d)}">${d.relayIndex ?? '-'}</span>`, relaySub)}
     ${relayCard('接力相位', `${phaseB(d.relayPhase)}${confChip(((d.answers||{}).relay_phase||{}).confidence)}`, relaySub)}
     ${relayCard('接力边际', `${momB(d.relayMomentum)}${confChip(((d.answers||{}).relay_momentum||{}).confidence)}`, relaySub)}
-    ${relayCard('梯队 / 钱效', `${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}`, relaySub)}`;
+    ${relayCard('梯队 / 钱效', `${ladderB(d.ladderHealth)} ${moneyB(d.moneyEffect)}`, relaySub)}
+    ${nodesKpiCard()}`;
+}
+
+// 板块节点 KPI 卡（2026-10-25 用户需求）：顶部一眼看当日节点分布，点击进节点页签；
+// 数据源=STATE.nodesData.doc（nodesFetch 完成后联动 renderKpis），不额外发请求。
+function nodesKpiCard(){
+  const d = STATE.nodesData;
+  const doc = d && d.doc;
+  let v = '-', sub = '盘后链未跑 / 非交易日 / 无存档';
+  if (doc){
+    const dist = {};
+    for (const r of (doc.rows || [])) dist[r.node] = (dist[r.node] || 0) + 1;
+    v = `<span style="color:${dist.wzs ? '#16a34a' : 'var(--muted2)'}">弱转强 ${dist.wzs || 0}</span>`
+      + (doc.status === 'degraded' ? ' <span class="badge b-amber" title="当日降级（THS/final 缺失）">降级</span>' : '');
+    sub = `主升 ${dist.mainline || 0} · 发酵 ${dist.fermenting || 0} · 冰点 ${dist.ice || 0} · 退潮 ${dist.collapse || 0}`
+      + ` · ${esc(String(doc.tradingDate || '').slice(5))} 收盘定档`;
+  } else if (d && d.error){
+    v = '?'; sub = '读口异常：' + d.error;
+  }
+  return `<div class="kpi" style="cursor:pointer" title="点击进入板块节点页签（含 V2c 盘中红盘提示）"
+    onclick="setView('relay/nodes')"><div class="k">板块节点</div><div class="v">${v}</div><div class="s">${sub}</div></div>`;
 }
 
 function renderSlots(){
@@ -2082,6 +2103,7 @@ async function nodesFetch(date){
       api: null, doc: bg ? STATE.nodesData.doc : null };
   }
   renderNodes();
+  renderKpis();   // 板块节点 KPI 卡联动（卡数据源=nodesData，nodesFetch 到货后刷新）
 }
 function nodesSet(key, val){ STATE.nodesUi[key] = val; STATE.nodesUi.open = {}; renderNodes(); }
 function nodesClear(){ STATE.nodesUi = { node: '', q: '', open: {} };

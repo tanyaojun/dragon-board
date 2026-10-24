@@ -193,14 +193,27 @@ def compute_pulse(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
 
     候选层=昨日节点∈{转弱,退潮}（弱转强候选，置顶）；全量层=封窗 N10 全部板块。
     交易日 ≥15:05 幂等落 15:00 帧（预登记 §五=A 拍板）。
+    非交易日当日读数=最近交易日收盘口径（报价停留在收盘价），证据段强制
+    closed 并注记——不按钟表误标「早盘/盘前」（2026-10-25 用户验收反馈）。
     """
     now = now or datetime.now()
+    stage = _evidence_stage(now)
+    meta: dict[str, Any] = {"reason": None, "framesSaved": False}
+    try:
+        import datetime as _dt
+        from backend.snapshot_collector.trading_calendar import is_trading_day_cached
+        is_td, td_source = is_trading_day_cached(_dt.date.fromisoformat(today))
+        if not is_td:
+            stage = "closed"
+            meta["tradingDayNote"] = f"今日非交易日（{td_source}），读数为最近交易日收盘口径"
+    except Exception as exc:   # 判定不可用：按钟表分段 + 注记（fail-visible）
+        meta["tradingDayNote"] = f"交易日判定不可用：{exc}"
     payload: dict[str, Any] = {
         "ok": True, "kind": "sector_pulse", "version": PULSE_VERSION,
         "date": today, "computedAt": now.isoformat(timespec="seconds"),
-        "evidenceStage": _evidence_stage(now),
+        "evidenceStage": stage,
         "candidates": [], "all": [],
-        "meta": {"reason": None, "framesSaved": False},
+        "meta": meta,
     }
     members, root = _frozen_union(db, today, dataset_id)
     if root:
