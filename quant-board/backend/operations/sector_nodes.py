@@ -127,14 +127,12 @@ def _window_pool_of(db: Any, date: str, dataset_id: str) -> dict[str, set[str]] 
     return pool
 
 
-def _agg_attach(db: Any, date: str, dataset_id: str,
-                rows: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    """V2 影子聚合（预登记 sector-nodes-v2-aggregate §二/§三）：返回 (挂载 map, 额外行)。
+def _agg_rows_compute(db: Any, date: str, dataset_id: str) -> list[dict[str, Any]]:
+    """V2 聚合行全量计算（预登记 sector-nodes-v2-aggregate §二/§三）。
 
     窗口 = 今日（若池 ok）+ 最近 10 个池 ok 交易日（trading_dates_before 候选里过滤）；
-    统计日行情棒独立于韭研池（节点 degraded 不停算聚合——影子证据与节点判定解耦）。
-    额外行 = N10 并集中不在 v1 三日窗口 rows 的板块（aggExtraRows 单独放，不扩
-    v1 行集、不参与 nodeDist）。
+    统计日行情棒独立于韭研池（节点 degraded 不停算聚合——聚合与节点判定解耦，
+    且 v2 判档在先，必须先于 assemble_rows 算好）。
     """
     # trading_dates_before 升序返回（旧→新）——窗口要「今日+最近 10 个池 ok 日」，
     # 必须 reverse 成新→旧再截断（首版未 reverse 实测取成最旧 9 日，2026-10-24 回填抓出）
@@ -147,9 +145,8 @@ def _agg_attach(db: Any, date: str, dataset_id: str,
             pool_list.append((d, pool))
         if len(pool_list) >= 10:
             break
-    boards_v1 = {str(r.get("board") or "") for r in rows}
     if not pool_list:
-        return {}, []
+        return []
     members_all: set[str] = set()
     for _d, pool in pool_list:
         for codes in pool.values():
@@ -158,17 +155,15 @@ def _agg_attach(db: Any, date: str, dataset_id: str,
     with bars_need_upto(date):
         for code in sorted(members_all):
             bars_by_code[code] = _daily_bars(code)
-    agg_rows = assemble_agg_rows(target_date=date, window_pool=pool_list,
-                                 bars_by_code=bars_by_code)
-    mounted: dict[str, dict[str, Any]] = {}
-    extra: list[dict[str, Any]] = []
-    for ar in agg_rows:
-        slot = mounted if ar["board"] in boards_v1 else None
-        if slot is not None:
-            mounted[ar["board"]] = {"aggN10": ar["aggN10"]}
-        else:
-            extra.append(ar)
-    return mounted, extra
+    return assemble_agg_rows(target_date=date, window_pool=pool_list,
+                             bars_by_code=bars_by_code)
+
+
+def _agg_mount(agg_rows: list[dict[str, Any]],
+               rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """额外行 = N10 并集中不在当日判档行集的板块（aggExtraRows，不扩行集不进 nodeDist）。"""
+    boards = {str(r.get("board") or "") for r in rows}
+    return [ar for ar in agg_rows if ar["board"] not in boards]
 
 
 def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
@@ -186,6 +181,9 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
     leader_status = _leader_states(db, date, prev_rows, dataset_id)
     count_hist = board_count_history(db, date, days=21, dataset_id=dataset_id)
     prev_nodes = _prev_nodes_of(db, prev_date)
+    # v2：聚合先行（判档消费 aggN10——条款 1 资金先手分支/条款 2 防守注记）
+    agg_rows = _agg_rows_compute(db, date, dataset_id)
+    agg_by_board = {str(ar["board"]): ar["aggN10"] for ar in agg_rows}
 
     # 审计 P2-2：day_leader_rows 只因 THS 池缺失返回 None；韭研 final 缺失/为空时
     # 返回空列表（jiuyanFinalFound=False）——不检查会把窗口内全板块伪装成「0 家冰点」。
@@ -201,14 +199,15 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                           prev2_date=prev2_date, count_hist=count_hist,
                           prom=prom, leader_status=leader_status,
                           prev_nodes=prev_nodes,
-                          today_unavailable_reason=today_unavailable_reason)
+                          today_unavailable_reason=today_unavailable_reason,
+                          agg_by_board=agg_by_board)
     status = "degraded" if today_rows is None else "ok"
-    # V2 影子聚合（预登记 §四）：挂 v1 行 + aggExtraRows，判据零参与
-    agg_map, agg_extra = _agg_attach(db, date, dataset_id, built["rows"])
+    # 聚合挂载（判档已用）+ 额外行（N10 独有板块，不进 nodeDist）
+    agg_extra = _agg_mount(agg_rows, built["rows"])
     for r in built["rows"]:
-        m = agg_map.get(str(r.get("board") or ""))
-        if m:
-            r.update(m)
+        m = agg_by_board.get(str(r.get("board") or ""))
+        if m is not None:
+            r["aggN10"] = m
     doc = {"_id": f"{date}:SECTOR_NODES", "kind": _KIND, "tradingDate": date,
            "version": SECTOR_NODE_VERSION, "status": status,
            "computedAt": datetime.now(timezone.utc),

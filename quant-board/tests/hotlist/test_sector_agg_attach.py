@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""V2 影子聚合 operations 层挂载测试（_agg_attach / settle_day 集成形状）。
+"""V2 影子聚合 operations 层测试（_agg_rows_compute / _agg_mount / settle_day 集成形状）。
 
 零 DB：day_leader_rows / trading_dates_before / _daily_bars 全 monkeypatch
 （预登记 sector-nodes-v2-aggregate §四；判据零参与）。
@@ -51,11 +51,13 @@ def test_agg_attach_mount_and_extra(monkeypatch):
         "800001": [{"date": D4, "close": 4.0}, {"date": D0, "close": 4.0}],
     }
     _patch(monkeypatch, pools, [D1, D2, D3, D4], bars)
+    agg_rows = ops._agg_rows_compute(None, D0, "ds")
+    assert {ar["board"] for ar in agg_rows} == {"AI算力", "机器人", "光伏"}
+    ai = next(ar for ar in agg_rows if ar["board"] == "AI算力")
+    assert ai["aggN10"]["pctMean"] == 5.0
+    assert ai["aggN10"]["windowDays"] == 4   # D0,D1,D3,D4（D2 池缺失剔除）
     v1_rows = [{"board": "AI算力", "node": "wzs"}, {"board": "机器人", "node": "brewing"}]
-    mounted, extra = ops._agg_attach(None, D0, "ds", v1_rows)
-    assert set(mounted) == {"AI算力", "机器人"}
-    assert mounted["AI算力"]["aggN10"]["pctMean"] == 5.0
-    assert mounted["AI算力"]["aggN10"]["windowDays"] == 4   # D0,D1,D3,D4（D2 池缺失剔除）
+    extra = ops._agg_mount(agg_rows, v1_rows)
     assert [e["board"] for e in extra] == ["光伏"]
     assert extra[0]["aggN10"]["pctMean"] == 0.0
 
@@ -63,8 +65,8 @@ def test_agg_attach_mount_and_extra(monkeypatch):
 def test_agg_attach_no_pool(monkeypatch):
     """全窗口池缺失 → 空挂载空额外行（不伪 0）。"""
     _patch(monkeypatch, {D0: None, D1: None}, [D1], {})
-    mounted, extra = ops._agg_attach(None, D0, "ds", [{"board": "AI算力"}])
-    assert mounted == {} and extra == []
+    assert ops._agg_rows_compute(None, D0, "ds") == []
+    assert ops._agg_mount([], [{"board": "AI算力"}]) == []
 
 
 def test_settle_day_doc_carries_agg(monkeypatch):

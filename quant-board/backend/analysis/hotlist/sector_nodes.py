@@ -17,7 +17,7 @@ from typing import Any
 
 from backend.analysis.hotlist.jev_driver_ammo import percentile_fraction
 
-SECTOR_NODE_VERSION = "v1"
+SECTOR_NODE_VERSION = "v2"   # v2=wzs 资金先手分支+防守注记（sector-nodes-v2-criteria-preregistration，用户逐条批准 2026-10-24）
 
 # 节点枚举与优先级（预登记 §三：从高到低，命中即定档；改动须新代际）
 NODE_ORDER = ("wzs", "collapse", "ice", "weakening",
@@ -55,8 +55,9 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
                        leader_state: str | None, prom_n: int | None,
                        prom_ge2: int | None, shape: Any,
                        prev_shape_first: int | None,
-                       prev_node: str | None) -> dict[str, Any]:
-    """单板块-日节点判定（预登记 §三判据表逐字实现）。
+                       prev_node: str | None,
+                       agg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """单板块-日节点判定（预登记 §三判据表逐字实现；v2 起消费聚合锚）。
 
     返回 {node, basis, notes, countPct, prevCountPct, pctDegraded}。
     可考性约定：n0=None=今日封板集合不可二分（THS 池缺失）→ 节点不可判（unknown），
@@ -92,22 +93,47 @@ def classify_board_day(*, n0: int | None, n1: int | None, n2: int | None,
             return {"node": "wzs", "basis": basis, "notes": notes,
                     "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
 
+    # 1b 弱转强·资金先手分支（v2 条款 1，A' 收紧版）：不要求 n0≥n1——捕捉
+    # 「家数未回升但板块资金已翻多」的先手变体（v1 §六.3 指数锚盲区）；
+    # agg 不可考 → 不命中并注记（条款 3 fail-visible，不伪 0）
+    agg_pct = agg.get("pctMean") if isinstance(agg, dict) else None
+    agg_red = agg.get("redRatio") if isinstance(agg, dict) else None
+    hand_rest = (prev_node in WEAK_NODES and n0 >= 1
+                 and prom_n is not None and prom_n >= 1)
+    if hand_rest and agg_pct is None:
+        notes.append("聚合不可考（N10 窗无行情/无成员），资金先手分支不判")
+    elif hand_rest and agg_pct > 0 and (agg_red or 0) >= 0.5:
+        basis.append("资金先手分支")
+        basis.append(f"昨日节点={NODE_LABELS_CN[prev_node]}")
+        basis.append(f"今日封板 {n0} 家、晋级 {prom_n} 家（家数未回升，资金先行）")
+        basis.append(f"聚合 +{agg_pct:.2f}%（近10日活跃股，翻红 {agg_red:.0%}）")
+        return {"node": "wzs", "basis": basis, "notes": notes,
+                "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
+
+    # 防守注记（v2 条款 2，不改档）：退潮/冰点但板块资金面未走坏 → 矛盾证据透出
+    def _defense_note() -> None:
+        if agg_pct is not None and agg_pct > 0:
+            notes.append(f"聚合仍强（+{agg_pct:.2f}%，翻红 {agg_red:.0%}），防守信号待复核")
+
     # 2 退潮：腰斩 且 龙头断板 且 晋级=0
     if (n1 is not None and n1 >= 2 and n0 * 2 <= n1
             and leader_state == "broken" and prom_n is not None and prom_n == 0):
         basis.append(f"家数 {n1}→{n0} 腰斩")
         basis.append(f"龙头断板（{_leader_desc(leader)}）")
         basis.append("晋级 0 家")
+        _defense_note()
         return {"node": "collapse", "basis": basis, "notes": notes,
                 "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
 
     # 3 冰点：今日 0 家，或 ≤1 家且龙头断板且晋级 0
     if n0 == 0:
         basis.append("今日封板 0 家")
+        _defense_note()
         return {"node": "ice", "basis": basis, "notes": notes,
                 "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
     if n0 <= 1 and leader_state == "broken" and prom_n is not None and prom_n == 0:
         basis.append(f"仅封 {n0} 家且龙头断板、晋级 0")
+        _defense_note()
         return {"node": "ice", "basis": basis, "notes": notes,
                 "countPct": pct0, "prevCountPct": pct1, "pctDegraded": pct_degraded}
 
@@ -162,8 +188,9 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
                   count_hist: dict[str, list[tuple[str, int]]],
                   prom: dict[str, Any], leader_status: dict[str, str],
                   prev_nodes: dict[str, str] | None,
-                  today_unavailable_reason: str | None = None) -> dict[str, Any]:
-    """组装当日全部板块-日行（预登记 §三/§四）。
+                  today_unavailable_reason: str | None = None,
+                  agg_by_board: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """组装当日全部板块-日行（预登记 §三/§四；v2 起带聚合锚判档）。
 
     输入均为 operations 层从单源取齐的快照，本函数无 IO。板块覆盖=三日窗口并集
     （今日/昨日/前日 rows；「昨日有今日无」的退潮冰点板块必须在此）。
@@ -247,7 +274,8 @@ def assemble_rows(*, date: str, today_rows: list[dict[str, Any]] | None,
         cls = classify_board_day(
             n0=n0, n1=n1, n2=n2, hist_values=hist_values, leader=leader,
             leader_state=leader_state, prom_n=prom_n, prom_ge2=prom_ge2,
-            shape=shape, prev_shape_first=prev_shape_first, prev_node=prev_node)
+            shape=shape, prev_shape_first=prev_shape_first, prev_node=prev_node,
+            agg=(agg_by_board or {}).get(b))
         notes.extend(cls["notes"])
 
         broken_n = None

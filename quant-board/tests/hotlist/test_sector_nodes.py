@@ -240,7 +240,7 @@ def test_index_anchor_placeholder():
 
 
 def test_labels_and_version():
-    assert SECTOR_NODE_VERSION == "v1"
+    assert SECTOR_NODE_VERSION == "v2"
     assert NODE_LABELS_CN["wzs"] == "弱转强" and NODE_LABELS_CN["collapse"] == "退潮"
 
 
@@ -337,3 +337,94 @@ def test_agg_version_frozen():
     assert AGG_VERSION == "2026-10-24b"
     from backend.analysis.hotlist.sector_agg import AGG_WINDOWS
     assert AGG_WINDOWS == (10,)
+
+
+# ── v2 判据（sector-nodes-v2-criteria-preregistration：条款 1/2/3，用户逐条批准） ──
+
+from backend.analysis.hotlist.sector_nodes import SECTOR_NODE_VERSION as _V2
+
+
+def _agg(pct: float | None = 3.5, red: float | None = 0.8, **over) -> dict:
+    a = {"pctMean": pct, "redRatio": red, "quotedN": 10, "missingN": 0,
+         "memberN": 12, "windowDays": 10}
+    a.update(over)
+    return a
+
+
+def _hand_kw(**over):
+    """昨日转弱（n1=5）今日 n0=2 家数未回升 + 晋级 1：分支 3 的 rest 条件底座。"""
+    kw = dict(today_rows=[_row(n=2)], prev_rows=[_row(n=5)],
+              count_hist=_hist([(D2, 3), (D1, 5)]),
+              prom={"ok": True, "byBoard": {"AI算力": 1}, "ge2ByBoard": {"AI算力": 0}},
+              leader_status={"AI算力": "broken"},
+              prev_nodes={"AI算力": "weakening"})
+    kw.update(over)
+    return kw
+
+
+def test_v2_hand_branch_hit():
+    """条款 1 分支 3：昨日转弱+今日仍封+晋级+聚合强红 → wzs（家数未回升的资金先手）。"""
+    out = _assemble(**_hand_kw(agg_by_board={"AI算力": _agg()}))
+    r = _node_of(out)
+    assert r["node"] == "wzs"
+    assert any("资金先手" in b for b in r["basis"])
+    assert any("+3.50%" in b for b in r["basis"])
+
+
+def test_v2_hand_branch_guards():
+    """分支 3 防伪：n0=0 / 翻红<50% / 聚合≤0 各自不命中。"""
+    out = _assemble(**_hand_kw(today_rows=[_row(n=0)],
+                               agg_by_board={"AI算力": _agg()}))
+    assert _node_of(out)["node"] != "wzs"
+    out = _assemble(**_hand_kw(agg_by_board={"AI算力": _agg(red=0.4)}))
+    assert _node_of(out)["node"] != "wzs"
+    out = _assemble(**_hand_kw(agg_by_board={"AI算力": _agg(pct=-1.2)}))
+    assert _node_of(out)["node"] != "wzs"
+    # 红线：昨日非弱势（normal）不贴先手标（转折强才是真强）
+    out = _assemble(**_hand_kw(prev_nodes={"AI算力": "normal"},
+                               agg_by_board={"AI算力": _agg()}))
+    assert _node_of(out)["node"] != "wzs"
+
+
+def test_v2_hand_branch_agg_unavailable():
+    """条款 3：聚合不可考 → 分支不命中并注记（不伪 0），档位按 v1 规则落转弱。"""
+    out = _assemble(**_hand_kw(agg_by_board={"AI算力": _agg(pct=None, red=None)}))
+    r = _node_of(out)
+    assert r["node"] == "weakening"
+    assert any("聚合不可考" in n for n in r["notes"])
+    # agg 整体缺席（旧档/未算）同款
+    out = _assemble(**_hand_kw(agg_by_board=None))
+    assert _node_of(out)["node"] == "weakening"
+
+
+def test_v2_defense_note_on_collapse_and_ice():
+    """条款 2：退潮/冰点命中且聚合仍强 → 注记不改档；聚合弱 → 无注记。"""
+    kw = dict(prom={"ok": True, "byBoard": {"AI算力": 0}, "ge2ByBoard": {"AI算力": 0}},
+              leader_status={"AI算力": "broken"},
+              prev_nodes={"AI算力": "normal"})
+    # 腰斩路径 → collapse + 注记
+    out = _assemble(today_rows=[_row(n=0)], prev_rows=[_row(n=5)],
+                    count_hist=_hist([(D2, 4), (D1, 5)]),
+                    agg_by_board={"AI算力": _agg(pct=6.4, red=1.0)}, **kw)
+    r = _node_of(out)
+    assert r["node"] == "collapse"
+    assert any("聚合仍强" in n and "防守信号待复核" in n for n in r["notes"])
+    # 非腰斩（昨日仅 1 家）→ ice 直落 + 注记
+    out = _assemble(today_rows=[_row(n=0)], prev_rows=[_row(n=1)],
+                    count_hist=_hist([(D2, 1), (D1, 1)]),
+                    agg_by_board={"AI算力": _agg(pct=6.4, red=1.0)}, **kw)
+    r = _node_of(out)
+    assert r["node"] == "ice"
+    assert any("聚合仍强" in n for n in r["notes"])
+    out2 = _assemble(today_rows=[_row(n=0)], prev_rows=[_row(n=5)],
+                     count_hist=_hist([(D2, 4), (D1, 5)]),
+                     prom={"ok": True, "byBoard": {"AI算力": 0}, "ge2ByBoard": {"AI算力": 0}},
+                     leader_status={"AI算力": "broken"},
+                     prev_nodes={"AI算力": "normal"},
+                     agg_by_board={"AI算力": _agg(pct=-2.0, red=0.2)})
+    assert not any("聚合仍强" in n for n in _node_of(out2)["notes"])
+
+
+def test_v2_version_frozen():
+    """v2 版本戳冻结（判据表 sector-nodes-v2-criteria-preregistration 逐字对应）。"""
+    assert _V2 == "v2"
