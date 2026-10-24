@@ -2291,27 +2291,29 @@ function pulseRender(){
     + '提示 chip=聚合涨幅>0 且红盘率≥50%（不进节点判定，收盘以 16:20 链为准）'
     + (r.source === 'stored' ? '；本视图展示的是收盘帧' : '');
   let rowsHtml = '';
-  if (r.source === 'stored'){
-    const doc = r.doc;
-    const rows = doc ? (doc.candidates || []) : [];
-    rowsHtml = '<table><tr><th>板块</th><th>昨日节点</th><th>盘中读数（收盘帧）</th><th>提示</th></tr>'
-      + (rows.map(e => `<tr><td>${esc(e.board)}</td><td>${esc(NODE_CN[e.yesterdayNode] || e.yesterdayNode || '—')}</td>
-          <td>${pulseFmt(e.pulse)}</td>
-          <td>${e.hint ? '<span class="badge b-green">转强提示</span>' : '—'}</td></tr>`).join('')
-        || '<tr><td colspan="4" class="empty">帧内无候选行</td></tr>') + '</table>';
+  // stored 帧与实时 payload 行结构同构（board/yesterdayNode/pulse/hint；doc.all
+  // 无 hint 键=falsy 同全板块视图空提示列），统一走同一渲染路径，「全板块」切换对
+  // 历史日收盘帧同样生效。
+  const stored = r.source === 'stored';
+  let cands, all;
+  if (stored){
+    const doc = r.doc || {};
+    cands = (doc.candidates || []).slice().sort((a, b) => (b.hint ? 1 : 0) - (a.hint ? 1 : 0));
+    all = (doc.all || []).slice()
+      .sort((a, b) => ((b.pulse || {}).pctMean ?? -999) - ((a.pulse || {}).pctMean ?? -999));
   } else {
-    const { cands, all } = pulseRows();
-    const list = STATE.pulse.view === 'candidates' ? cands : all;
-    rowsHtml = '<table><tr><th>板块</th>'
-      + (STATE.pulse.view === 'candidates' ? '<th>昨日节点</th>' : '')
-      + '<th>盘中读数</th><th>提示</th></tr>'
-      + (list.map(e => `<tr><td>${esc(e.board)}</td>`
-          + (STATE.pulse.view === 'candidates' ? `<td>${esc(NODE_CN[e.yesterdayNode] || e.yesterdayNode || '—')}</td>` : '')
-          + `<td>${pulseFmt(e.pulse)}</td>`
-          + `<td>${e.hint ? '<span class="badge b-green">转强提示</span>' : (STATE.pulse.view === 'candidates' ? '—' : '')}</td></tr>`).join('')
-        || `<tr><td colspan="4" class="empty">${STATE.pulse.view === 'candidates' ? '昨日无转弱/退潮候选板块' : '无板块行'}</td></tr>`)
-      + '</table>';
+    ({ cands, all } = pulseRows());
   }
+  const list = STATE.pulse.view === 'candidates' ? cands : all;
+  rowsHtml = '<table><tr><th>板块</th>'
+    + (STATE.pulse.view === 'candidates' ? '<th>昨日节点</th>' : '')
+    + `<th>盘中读数${stored ? '（收盘帧）' : ''}</th><th>提示</th></tr>`
+    + (list.map(e => `<tr><td>${esc(e.board)}</td>`
+        + (STATE.pulse.view === 'candidates' ? `<td>${esc(NODE_CN[e.yesterdayNode] || e.yesterdayNode || '—')}</td>` : '')
+        + `<td>${pulseFmt(e.pulse)}</td>`
+        + `<td>${e.hint ? '<span class="badge b-green">转强提示</span>' : (STATE.pulse.view === 'candidates' ? '—' : '')}</td></tr>`).join('')
+      || `<tr><td colspan="4" class="empty">${STATE.pulse.view === 'candidates' ? (stored ? '帧内无候选行' : '昨日无转弱/退潮候选板块') : '无板块行'}</td></tr>`)
+    + '</table>';
   box.innerHTML = head + (warn.length ? '<div class="lf-warn">' + warn.join('<br>') + '</div>' : '')
     + rowsHtml + '<div class="hint" style="margin-top:4px">' + esc(note)
     + ' · 交易时段每 60s 自动刷新（仅本页签激活时）</div>';

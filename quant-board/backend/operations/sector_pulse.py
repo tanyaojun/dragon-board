@@ -8,19 +8,21 @@
 
 - 成员口径：昨日（最近上一交易日）封窗 N10 并集——以昨日为 target 取
   「昨日+最近 9 个池 ok 日」，盘中不变；今日新涨停股不在内（前端注记披露，
-  16:20 正式判档链归位）。
+  16:20 正式判档链归位）。窗口池直查 `day_leader_rows`（**不走
+  `_window_pool_of`**：其 `_POOL_CACHE` 无版本键，审计 2026-10-24 P3 约束
+  长驻进程禁用，本模块常驻 8000 读口）。
 - 报价：mootdx `client.quotes` 批量（80/批，price/last_close 现成）；客户端复用
   `_tdx_daily_client`（内含 SetupCmd3 握手补丁）；60s 进程内缓存共享上游取数。
-- fail-visible：TDX 全节点不可用 → pulse=None+原因；成员缺报价计 missingN；
-  全缺统计值 None 不伪 0。
+- fail-visible：报价不可考（全节点负缓存 / quotes 全批次异常）→ pulse=None+原因；
+  成员缺报价计 missingN；全缺统计值 None 不伪 0。
 - 15:00 帧：交易日 ≥15:05 首次请求幂等 upsert `hotlist_jev_sector_pulse`
-  （`_id={date}:PULSE`），攒前向校准样本；非交易日不落帧。
+  （`_id={date}:PULSE`），攒前向校准样本；非交易日 / 报价不可考不落帧。
 """
 from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, Callable
 
 from backend.analysis.hotlist.jev_driver_ammo import DEFAULT_DATASET_ID
@@ -29,7 +31,7 @@ from backend.operations.jev_label_jiuyan import (
     _tdx_daily_client,
     trading_dates_before,
 )
-from backend.operations.sector_nodes import _window_pool_of
+from backend.operations.theme_leader_baseline import day_leader_rows
 
 PULSE_VERSION = "2026-10-25a"
 COLLECTION_PULSE = "hotlist_jev_sector_pulse"
@@ -39,9 +41,24 @@ _CACHE_TTL_SECONDS = 60
 _WEAK_CANDIDATE_NODES = {"weakening", "collapse"}
 
 # 60s 读口缓存 {date: (ts, payload)}——多端轮询共享一次上游取数；键含日期，
-# 历史日走 stored 帧不进本缓存（预登记 §三：长驻进程禁止用 _POOL_CACHE 同款
-# 无版本键缓存窗口池，本模块窗口池每次现查）。
+# 历史日走 stored 帧不进本缓存。窗口池不走 `_POOL_CACHE`（无版本键，审计
+# 2026-10-24 P3：长驻进程禁用），本模块每次直查 `day_leader_rows`。
 _PULSE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _day_pool_direct(db: Any, date: str, dataset_id: str
+                     ) -> dict[str, set[str]] | None:
+    """单日 {板块: 封板 code 集}，直查不缓存（与 `_window_pool_of` 同语义的
+    无缓存版：THS 池缺失 / final 缺失 → None 不进窗口）。"""
+    rows, meta = day_leader_rows(db, date, dataset_id)
+    if rows is None or not meta.get("jiuyanFinalFound", True):
+        return None
+    pool: dict[str, set[str]] = {}
+    for r in rows:
+        b = str(r.get("board") or "")
+        if b:
+            pool[b] = {str(c) for c in (r.get("boardCodes") or [])}
+    return pool
 
 
 def _frozen_union(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID
@@ -59,7 +76,7 @@ def _frozen_union(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID
         trading_dates_before(db, prev, 15, dataset_id=dataset_id)))
     pools: list[tuple[str, dict[str, set[str]]]] = []
     for d in candidates:
-        pool = _window_pool_of(db, d, dataset_id)
+        pool = _day_pool_direct(db, d, dataset_id)
         if pool is not None:
             pools.append((d, pool))
         if len(pools) >= 10:
@@ -86,21 +103,25 @@ def _prev_nodes(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID
 
 
 def _fetch_quotes(codes: set[str]) -> dict[str, tuple[float, float]] | None:
-    """批量实时报价 {code: (price, last_close)}；客户端不可用 → None（不可考）。
+    """批量实时报价 {code: (price, last_close)}；不可考 → None。
 
-    price/last_close ≤0（退市/无效/未开盘无昨收）不入表，调用方按缺报价披露。
+    None 两种成因（调用方合并披露）：客户端不可用（全节点负缓存）/ 全批次
+    quotes 异常且零成交（网络/主站断）。price/last_close ≤0（退市/无效/未开盘
+    无昨收）不入表，调用方按缺报价披露；部分批次异常按缺报价披露不整段判死。
     """
     client = _tdx_daily_client()
     if client is None:
         return None
     ordered = sorted(codes)
     out: dict[str, tuple[float, float]] = {}
+    batch_error = False
     for i in range(0, len(ordered), _QUOTES_BATCH):
         batch = ordered[i:i + _QUOTES_BATCH]
         try:
             with _POSITION_LOCK:
                 df = client.quotes(symbol=batch)
         except Exception:
+            batch_error = True
             continue
         if df is None or len(df) == 0:
             continue
@@ -111,6 +132,8 @@ def _fetch_quotes(codes: set[str]) -> dict[str, tuple[float, float]] | None:
                 continue
             if price > 0 and last_close > 0:
                 out[str(r["code"])] = (price, last_close)
+    if not out and batch_error:
+        return None
     return out
 
 
@@ -213,10 +236,16 @@ def compute_pulse(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
                                 and (pulse.get("redRatio") or 0) >= 0.5)
             payload["candidates"].append(cand)
     if quotes_map is None:
-        payload["meta"]["reason"] = "TDX 全节点不可用（负缓存窗口内），盘中报价不可考"
+        payload["meta"]["reason"] = ("TDX 盘中报价不可考（全节点不可用负缓存 / "
+                                     "quotes 全批次异常且零成交）")
     payload["hintAny"] = hint_chip
     payload["evidenceStageCN"] = _EVIDENCE_CN[payload["evidenceStage"]]
-    _maybe_save_frame(db, payload, now)
+    if quotes_map is None:
+        # 报价不可考不落帧：全 None 帧进校准样本集是污染；TDX 恢复后同日再请求
+        # 即可正常落帧（幂等同键）。
+        payload["meta"]["frameSkip"] = "报价不可考，不落 15:00 帧（校准样本不入 null 帧）"
+    else:
+        _maybe_save_frame(db, payload, now)
     return payload
 
 
@@ -224,8 +253,12 @@ def _maybe_save_frame(db: Any, payload: dict[str, Any], now: datetime) -> None:
     """15:00 帧落库（预登记 §五=A）：交易日 ≥15:05 幂等 upsert；非交易日不落。
 
     收盘后报价停留在收盘价（TDX 行为），computedAt 如实记录取数时刻。
+    写库失败不抛（读口展示数据不因次要写库连坐降级），frameSkip 如实披露。
     """
     if payload["evidenceStage"] != "closed":
+        return
+    if now.time() < time(15, 5):
+        payload["meta"]["frameSkip"] = "15:05 前不落帧（预登记 §五）"
         return
     try:
         from backend.snapshot_collector.trading_calendar import is_trading_day_cached
@@ -243,7 +276,12 @@ def _maybe_save_frame(db: Any, payload: dict[str, Any], now: datetime) -> None:
                                      "evidenceStage", "candidates", "all",
                                      "hintAny", "meta") if k in payload}
     frame["_id"] = f"{payload['date']}:PULSE"
-    db[COLLECTION_PULSE].replace_one({"_id": frame["_id"]}, frame, upsert=True)
+    try:
+        db[COLLECTION_PULSE].replace_one({"_id": frame["_id"]}, frame, upsert=True)
+    except Exception as exc:
+        payload["meta"]["framesSaved"] = False
+        payload["meta"]["frameSkip"] = f"帧写入失败：{exc}"
+        return
     payload["meta"]["framesSaved"] = True
 
 
@@ -262,7 +300,6 @@ def get_pulse_cached(db: Any, today: str, dataset_id: str = DEFAULT_DATASET_ID,
 def main(argv: list[str] | None = None) -> int:
     """CLI 冒烟/重放：--day 缺省=今日；历史日只读 stored 帧。"""
     import argparse
-    import sys
     ap = argparse.ArgumentParser(description="V2c 盘中红盘提示（零 token）")
     ap.add_argument("--day", help="目标日（缺省=今天）；历史日读 stored 帧")
     args = ap.parse_args(argv)

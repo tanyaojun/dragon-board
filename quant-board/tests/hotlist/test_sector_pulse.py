@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """V2c 盘中红盘提示测试（预登记 sector-nodes-v2c-intraday-preregistration.md §七）。
 
-全 mock：TDX 报价经 quotes_fetcher 注入、窗口池经 _window_pool_of monkeypatch、
+全 mock：TDX 报价经 quotes_fetcher 注入（_fetch_quotes 单测 patch _tdx_daily_client）、
+窗口池经 day_leader_rows monkeypatch（直查路径，不走 _POOL_CACHE）、
 trading_dates_before patch 到 sector_pulse 模块命名空间、交易日判定 patch 源头模块。
 禁真实 jev 调用（AGENTS §1.2-7）。
 """
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pandas as pd
 import pytest
 
 import backend.snapshot_collector.trading_calendar as trading_calendar
@@ -63,12 +65,20 @@ def env(monkeypatch):
     }
     monkeypatch.setattr(sp, "trading_dates_before",
                         lambda db, date, n, dataset_id=None: dates_before[date][-n:])
+
+    def _rows(board_codes):
+        return [{"board": b, "boardCodes": cs} for b, cs in board_codes.items()]
+
     pools = {
-        PREV: {"机器人": {"600001", "600002"}, "AI算力": {"300001"}},
-        "2026-10-20": {"机器人": {"600001", "600003"}},
-        "2026-10-17": {"机器人": {"600004"}},
+        PREV: (_rows({"机器人": ["600001", "600002"], "AI算力": ["300001"]}),
+               {"jiuyanFinalFound": True}),
+        "2026-10-20": (_rows({"机器人": ["600001", "600003"]}),
+                       {"jiuyanFinalFound": True}),
+        "2026-10-17": (_rows({"机器人": ["600004"]}),
+                       {"jiuyanFinalFound": True}),
     }
-    monkeypatch.setattr(sp, "_window_pool_of", lambda db, d, ds=None: pools.get(d))
+    monkeypatch.setattr(sp, "day_leader_rows",
+                        lambda db, d, ds=None: pools.get(d, (None, {})))
     nodes = FakeCollection()
     nodes.docs[f"{PREV}:SECTOR_NODES"] = {"rows": [
         {"board": "机器人", "node": "weakening"},
@@ -97,6 +107,56 @@ def test_frozen_union_uses_prev_target_not_today(env):
     # 机器人 = PREV∪10-20∪10-17 并集；窗内 10-22/10-21 与 10-16 起池缺失 → 如实缩短
     assert members["机器人"] == {"600001", "600002", "600003", "600004"}
     assert members["AI算力"] == {"300001"}
+
+
+def test_frozen_union_direct_query_not_pool_cache(env, monkeypatch):
+    """窗口池直查 day_leader_rows（审计 2026-10-24 P3：8000 长驻进程禁用
+    _POOL_CACHE 无版本键——final 重采后成员集必须跟随更新）。"""
+    assert not hasattr(sp, "_window_pool_of")   # 模块不得再引用 _POOL_CACHE 消费口
+    calls: list[str] = []
+
+    def spy(db, d, ds=None):
+        calls.append(d)
+        return (None, {})
+
+    monkeypatch.setattr(sp, "day_leader_rows", spy)
+    members, root = sp._frozen_union(env, TODAY)
+    assert members == {} and root is None       # 全部池缺失如实为空，不报错
+    assert calls                                # 确认走直查路径
+
+
+def test_fetch_quotes_batch_error_variants(monkeypatch):
+    """_fetch_quotes 三态：客户端不可用/全批次异常 → None（不可考）；
+    客户端活着但零行情 → 空表（缺报价口径，不与不可考混同）。"""
+    class BoomClient:
+        def quotes(self, symbol):
+            raise RuntimeError("conn reset")
+
+    monkeypatch.setattr(sp, "_tdx_daily_client", lambda: None)
+    assert sp._fetch_quotes({"600001"}) is None
+    monkeypatch.setattr(sp, "_tdx_daily_client", lambda: BoomClient())
+    assert sp._fetch_quotes({"600001", "600002"}) is None
+
+    class EmptyClient:
+        def quotes(self, symbol):
+            return pd.DataFrame(columns=["code", "price", "last_close"])
+
+    monkeypatch.setattr(sp, "_tdx_daily_client", lambda: EmptyClient())
+    assert sp._fetch_quotes({"600001"}) == {}
+
+
+def test_fetch_quotes_partial_batch_error_keeps_data(monkeypatch):
+    """部分批次异常：剩余批次数据保留（缺报价逐板块披露），不整段判死。"""
+    monkeypatch.setattr(sp, "_QUOTES_BATCH", 1)
+
+    class FlakyClient:
+        def quotes(self, symbol):
+            if symbol == ["600001"]:
+                raise RuntimeError("batch1 down")
+            return pd.DataFrame([{"code": "600002", "price": 9.8, "last_close": 10.0}])
+
+    monkeypatch.setattr(sp, "_tdx_daily_client", lambda: FlakyClient())
+    assert sp._fetch_quotes({"600001", "600002"}) == {"600002": (9.8, 10.0)}
 
 
 def test_pulse_stats_manual_check():
@@ -131,12 +191,13 @@ def test_compute_pulse_candidates_and_hint(env):
 
 
 def test_compute_pulse_tdx_down_fail_visible(env):
-    """TDX 全节点不可用 → pulse=None + 根因透出，不伪 0（预登记 §三）。"""
+    """报价不可考 → pulse=None + 根因透出，不伪 0（预登记 §三）。"""
     payload = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 11, 0, 0),
                             quotes_fetcher=lambda codes: None)
     assert payload["ok"] is True
     assert all(e["pulse"] is None for e in payload["all"])
-    assert "TDX 全节点不可用" in payload["meta"]["reason"]
+    assert "TDX 盘中报价不可考" in payload["meta"]["reason"]
+    assert "不落 15:00 帧" in payload["meta"]["frameSkip"]
 
 
 def test_compute_pulse_no_prev_trading_day(env, monkeypatch):
@@ -169,15 +230,44 @@ def test_frame_saved_after_1505_trading_day(env, monkeypatch):
 def test_frame_not_saved_intraday_or_holiday(env, monkeypatch):
     """盘中不落帧；非交易日不落帧（frameSkip 披露判定来源）。"""
     monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
-                        lambda d: (False, "weekday"))
+                        lambda d: (True, "weekday"))
     p1 = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 14, 0, 0),
                        quotes_fetcher=_fetch_ok)
     assert p1["meta"]["framesSaved"] is False and env.pulse.replacements == []
+    monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
+                        lambda d: (False, "weekday"))
     p2 = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 10, 0),
                        quotes_fetcher=_fetch_ok)
     assert p2["meta"]["framesSaved"] is False
     assert "非交易日" in p2["meta"]["frameSkip"]
     assert env.pulse.replacements == []
+
+
+def test_frame_not_saved_between_1500_and_1505(env, monkeypatch):
+    """15:00-15:05 之间不落帧（预登记 §五 ≥15:05 条款，review 修复对齐）。"""
+    monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
+                        lambda d: (True, "weekday"))
+    p = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 2, 0),
+                      quotes_fetcher=_fetch_ok)
+    assert p["evidenceStage"] == "closed"
+    assert p["meta"]["framesSaved"] is False and env.pulse.replacements == []
+    assert "15:05" in p["meta"]["frameSkip"]
+
+
+def test_frame_write_failure_does_not_kill_payload(env, monkeypatch):
+    """帧写库异常不抛——展示数据不因次要写库连坐降级（AGENTS §4.0）。"""
+    monkeypatch.setattr(trading_calendar, "is_trading_day_cached",
+                        lambda d: (True, "weekday"))
+
+    def boom(q, doc, upsert=False):
+        raise RuntimeError("mongo down")
+
+    env.pulse.replace_one = boom
+    p = compute_pulse(env, TODAY, now=datetime(2026, 10, 26, 15, 6, 0),
+                      quotes_fetcher=_fetch_ok)
+    assert p["ok"] is True and len(p["all"]) == 2   # 展示数据完好
+    assert p["meta"]["framesSaved"] is False
+    assert "帧写入失败" in p["meta"]["frameSkip"]
 
 
 def test_evidence_stage_boundaries():
