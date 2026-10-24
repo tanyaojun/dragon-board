@@ -106,11 +106,11 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
                 shape["threePlus"] += 1
         second_streak = max((s["streak"] for s in others
                              if isinstance(s["streak"], int)), default=None)
-        prev_total = (len(prev_board_codes.get(board, ()))
+        prev_total = (len(prev_board_codes.get(board, set()))
                       if prev_sealed is not None else None)
         # 断板口径（2026-10-24d）：同名板块成员——昨日同名封板股中今日仍封数。
         # 不用 prevBoardN（今日成员交集，含昨日他板块迁入股）：迁移场景减出负数。
-        prev_still = (len(prev_board_codes.get(board, ()) & sealed)
+        prev_still = (len(prev_board_codes.get(board, set()) & sealed)
                       if prev_sealed is not None else None)
         rows.append({
             "date": date, "board": board,
