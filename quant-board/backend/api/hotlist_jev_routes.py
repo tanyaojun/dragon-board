@@ -56,6 +56,42 @@ from backend.services.jev.relay_band import (
 
 router = APIRouter(prefix="/api/hotlist-jev", tags=["hotlist-jev"])
 
+# ── 展示投影派生（2026-10-24 A1/A2，slot-eod-corpus-confidence-audit-20261024.md）──
+# 拥挤度数值口径（拥挤三层概率合计）此前只在前端 hotlistJevApi.ts::jevCrowdingProbability
+# 实现（单一事实源债，questionset-review §〇.3/§七登记）——提后端为唯一权威口径；
+# 前端改为优先消费读口值、缺字段回退本地同式计算（旧路径兼容）。
+CROWDING_PROBABILITY_LAYERS = ("top_acceleration", "late_seal_weakness", "breadth_climax")
+
+
+def _crowding_probability_sum(answer: Any) -> float | None:
+    """choice 答案 → 拥挤三层概率合计（0-1）。非 choice/缺分布/三层全缺 → None 不伪造 0。"""
+    if not isinstance(answer, dict) or answer.get("type") != "choice":
+        return None
+    probabilities = answer.get("probabilities")
+    if not isinstance(probabilities, dict):
+        return None
+    total, seen = 0.0, False
+    for layer in CROWDING_PROBABILITY_LAYERS:
+        value = probabilities.get(layer)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            total += float(value)
+            seen = True
+    return total if seen else None
+
+
+def _attach_crowding_probability(doc: Any, answer_key: str) -> Any:
+    """文档浅拷贝附 crowdingProbability 派生字段（不改库内原文档；缺答案 → None）。"""
+    if not isinstance(doc, dict):
+        return doc
+    answer = (doc.get("answers") or {}).get(answer_key)
+    return {**doc, "crowdingProbability": _crowding_probability_sum(answer)}
+
+
+def _answer_confidence(answers: Any, key: str) -> float | None:
+    answer = (answers or {}).get(key) if isinstance(answers, dict) else None
+    value = (answer or {}).get("confidence") if isinstance(answer, dict) else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
 REVIEW_RULING_STATUSES = ("rule_right", "jev_right", "ambiguous", "pending", "consistent")
 
 
@@ -144,10 +180,12 @@ def get_hotlist_jev_series(
         rows = list(_slots_collection(db).find(
             {"datasetId": dataset_id, "tradingDate": trading_date}))
         slots = sorted(
-            (row for row in rows if row.get("kind") == "slot"),
+            (_attach_crowding_probability(row, "crowding")
+             for row in rows if row.get("kind") == "slot"),
             key=lambda row: str(row.get("slotTime") or ""),
         )
         eod = next((row for row in rows if row.get("kind") == "eod"), None)
+        eod = _attach_crowding_probability(eod, "day_crowding") if eod else None
         degraded_count = sum(
             1 for row in [*slots, eod] if row and row.get("status") in ("degraded", "no_data"))
         return {"ok": True, "date": trading_date, "slots": slots, "eod": eod,
@@ -198,10 +236,12 @@ def get_hotlist_jev_range(
                     {"tradingDate": trading_date, "missing": True, "reason": "no_jev_docs"})
                 continue
             slots = sorted(
-                (row for row in day_rows if row.get("kind") == "slot"),
+                (_attach_crowding_probability(row, "crowding")
+                 for row in day_rows if row.get("kind") == "slot"),
                 key=lambda row: str(row.get("slotTime") or ""),
             )
             eod = next((row for row in day_rows if row.get("kind") == "eod"), None)
+            eod = _attach_crowding_probability(eod, "day_crowding") if eod else None
             days_out.append({"tradingDate": trading_date, "slots": slots, "eod": eod})
             degraded_count += sum(
                 1 for row in [*slots, eod] if row and row.get("status") in ("degraded", "no_data"))
@@ -592,13 +632,25 @@ def get_hotlist_jev_sentiment_overview(date: str | None = None) -> dict[str, Any
         def _probs(key: str) -> dict | None:
             return (answers.get(key) or {}).get("probabilities")
 
+        def _prob(key: str) -> float | None:
+            probs = _probs(key) or {}
+            value = probs.get(_choice(key) or "")
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
         return {"ok": True, "date": trading_date,
                 "jev": {"status": doc.get("status"),
                        "dayTemperature": scores.get("day_temperature"),
                        "dayStage": _choice("day_stage"),
-                       "dayStageProbability": ((answers.get("day_stage") or {}).get("probabilities") or {}).get(_choice("day_stage") or ""),
+                       "dayStageProbability": _prob("day_stage"),
+                       "dayStageConfidence": _answer_confidence(answers, "day_stage"),
+                       "dayPattern": _choice("day_pattern"),
+                       "dayPatternProbability": _prob("day_pattern"),
+                       "dayPatternConfidence": _answer_confidence(answers, "day_pattern"),
+                       "dayTemperatureConfidence": _answer_confidence(answers, "day_temperature"),
                        "dayCrowding": _choice("day_crowding"),
                        "dayCrowdingProbabilities": _probs("day_crowding"),
+                       "dayCrowdingProbability": _crowding_probability_sum(answers.get("day_crowding")),
+                       "dayCrowdingConfidence": _answer_confidence(answers, "day_crowding"),
                        "historyAnchorRange": doc.get("historyAnchorRange"),
                        "computedAt": doc.get("computedAt"),
                        # 2026-10-22 日级语料修复：覆盖度/代际戳进概览读口（前端角标用；

@@ -84,6 +84,10 @@ export interface HotlistJevDoc {
   /** 题目判据演进号（如 "v2.4"；compute 落库写入，2026-10-02 起生效）。
    *  缺失=旧代产物（口径未知）：判据随版本漂移（实测拥挤读数月均差 5 倍），跨版本不可对比 */
   questionSetVersion?: string | null
+  /** 拥挤三层概率合计（后端读口派生字段，2026-10-24 A2 单一事实源提后端；缺答案 null） */
+  crowdingProbability?: number | null
+  /** 叙事超限截断标记（2026-10-24 A3 fail-visible；旧文档缺失） */
+  narrativeTruncated?: boolean
 }
 
 export interface HotlistJevSeriesResponse {
@@ -251,6 +255,14 @@ export interface HotlistSentimentOverviewEod {
   frameCoverage?: HotlistJevFrameCoverage | null
   corpusCaliberVersion?: string | null
   evidenceRawUnavailable?: boolean
+  /** 2026-10-24 A1/A2（题材龙头方法论回灌）：路径形态 + 逐题置信 + 拥挤合计提后端（旧文档缺失 null） */
+  dayPattern?: string | null
+  dayPatternProbability?: number | null
+  dayStageConfidence?: number | null
+  dayPatternConfidence?: number | null
+  dayTemperatureConfidence?: number | null
+  dayCrowdingProbability?: number | null
+  dayCrowdingConfidence?: number | null
 }
 
 /** 规则 EOD（池内质量计）：hotlist_sentiment emotionScore 摘要 */

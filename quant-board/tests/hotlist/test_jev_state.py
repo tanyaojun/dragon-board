@@ -8,11 +8,13 @@ import json
 from backend.analysis.hotlist.jev_state import (
     JEV_DAY_QUESTIONS,
     JEV_SLOT_QUESTIONS,
+    NARRATIVE_TRUNCATION_MARK,
     build_day_jev_state,
     build_history_anchor,
     build_slot_jev_state,
     collect_slot_evidence,
     extract_history_anchor_range,
+    narrative_is_truncated,
 )
 
 
@@ -301,6 +303,46 @@ def test_build_slot_jev_state_full_shape():
     assert "10:00｜" in s  # 压缩行进入已走帧段
     assert "无缺失" in s
     assert len(s) <= 4000
+
+
+def test_build_slot_jev_state_truncation_disclosed():
+    # A3（2026-10-24）：超限静默硬切会让末段【数据质量】无声丢失（fail-visible 违规）。
+    # 截断必须显式注记，对模型与人同时对可见；未超限时输出逐字节不变（full_shape 用例守护）。
+    prior = collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time="10:00",
+        yesterday_same_slot_total_amount=1.0e12)
+    s = build_slot_jev_state(
+        trading_date="2026-10-08", slot_time="15:00",
+        current=_v3_current_evidence(), priors=[prior] * 30)
+    assert NARRATIVE_TRUNCATION_MARK in s
+    assert narrative_is_truncated(s)
+    # 质量段被截掉时，截断注记必须补位说明（只查注记之前的正文）
+    assert "【数据质量】" not in s.split(NARRATIVE_TRUNCATION_MARK)[0]
+
+
+def test_build_slot_jev_state_no_truncation_untouched():
+    prior = collect_slot_evidence(
+        frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+        analysis_by_code=_v3_analysis(), slot_time="10:00",
+        yesterday_same_slot_total_amount=1.0e12)
+    s = build_slot_jev_state(
+        trading_date="2026-10-08", slot_time="10:30",
+        current=_v3_current_evidence(), priors=[prior])
+    assert NARRATIVE_TRUNCATION_MARK not in s
+    assert not narrative_is_truncated(s)
+
+
+def test_build_day_jev_state_truncation_disclosed():
+    evidences = [
+        collect_slot_evidence(frame=_v3_frame(), rows=_v3_rows(), yesterday_rows=_v3_yesterday_rows(),
+                              analysis_by_code=_v3_analysis(), slot_time="09:30"),
+        _v3_current_evidence(),
+    ]
+    s = build_day_jev_state(trading_date="2026-10-08", evidences=evidences * 30)
+    assert NARRATIVE_TRUNCATION_MARK in s and narrative_is_truncated(s)
+    s_ok = build_day_jev_state(trading_date="2026-10-08", evidences=evidences)
+    assert not narrative_is_truncated(s_ok)
 
 
 def test_build_slot_jev_state_missing_sources_and_slots():

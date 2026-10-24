@@ -350,6 +350,10 @@ describe('HotlistEmotionPanel 独立热榜情绪面板', () => {
     // 归层判定与三层分解进 tooltip 防与柱高混读；置信=序列档/日级档模型 confidence
     expect(source).toContain('jevCrowdingProbability')
     expect(source).toContain('jevChoiceConfidence')
+    // A1（2026-10-24 题材龙头方法论回灌）：市场热度计概览 chips 补路径形态 + 逐题置信透出
+    expect(source).toContain('overviewPatternName')
+    expect(source).toContain('overviewConfidenceText')
+    expect(source).toContain('dayStageConfidence')
     expect(source).toContain('jevCrowdingPointInfo')
     expect(source).toContain('crowdingBreakdown')
     expect(source).toContain('归层：')

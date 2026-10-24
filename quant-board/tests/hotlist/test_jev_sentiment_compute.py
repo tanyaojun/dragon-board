@@ -190,6 +190,8 @@ def test_compute_day_happy_path(monkeypatch):
     # 2026-10-22 日级语料修复：EOD 落结构化证据 + 覆盖度 + 语料代际戳
     assert doc["corpusCaliberVersion"] == v2_module.EOD_CORPUS_CALIBER_VERSION
     assert doc["evidenceRaw"] and doc["evidenceRaw"]["frames"]
+    # A3（2026-10-24）：叙事截断 fail-visible——未超限为 False（字段恒在，additive）
+    assert doc["narrativeTruncated"] is False
     assert doc["frameCoverage"]["hasCloseFrame"] is True
     assert doc["evidenceRaw"]["frameCoverage"]["expectedCount"] == 10
 
@@ -512,6 +514,7 @@ def test_compute_slot_happy_path(monkeypatch):
     assert doc["evidenceRaw"] and doc["narrativeRaw"] and doc["historyAnchorRange"]
     assert ((doc["answers"] or {})["crowding"]["choice"]) == "no_crowding"
     assert doc["questionSetVersion"] == v2_module.QUESTION_SET_VERSION  # 槽位 ok 路径盖版本戳
+    assert doc["narrativeTruncated"] is False  # A3：未超限恒 False，字段恒在
 
 
 def test_compute_slot_missing_frame_no_data_fail_visible(monkeypatch):

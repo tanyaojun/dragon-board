@@ -132,6 +132,35 @@ describe('拥挤度/置信投影（jev 观察轨道图表数据源，2026-10-02�
     expect(jevCrowdingProbability(null, 'crowding')).toBeNull()
   })
 
+  it('A2 单一事实源提后端：读口附 crowdingProbability 时优先消费，缺字段回退本地合计', () => {
+    const doc = slotDoc({
+      crowdingProbability: 0.42,
+      answers: {
+        crowding: {
+          type: 'choice',
+          choice: 'no_crowding',
+          probabilities: { top_acceleration: 0.21, late_seal_weakness: 0.06, breadth_climax: 0.34 },
+        },
+      },
+    })
+    expect(jevCrowdingProbability(doc, 'crowding')).toBeCloseTo(0.42, 5)
+    // 后端 null（缺答案）不回退——语义=后端判定「不可算」，不是本地补算信号
+    expect(
+      jevCrowdingProbability(slotDoc({ crowdingProbability: null, answers: {} }), 'crowding'),
+    ).toBeNull()
+    // 缺字段（直构/旧形态文档）→ 本地同式合计兜底
+    const legacy = slotDoc({
+      answers: {
+        crowding: {
+          type: 'choice',
+          choice: 'no_crowding',
+          probabilities: { top_acceleration: 0.1, breadth_climax: 0.2 },
+        },
+      },
+    })
+    expect(jevCrowdingProbability(legacy, 'crowding')).toBeCloseTo(0.3, 5)
+  })
+
   it('jevChoiceConfidence 读模型 confidence；缺失/非 choice 为 null（score 型不在此假设）', () => {
     expect(
       jevChoiceConfidence(

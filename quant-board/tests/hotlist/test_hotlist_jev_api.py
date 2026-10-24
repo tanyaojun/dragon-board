@@ -121,7 +121,8 @@ def _mock_jev_ok(monkeypatch):
                                                                     "33": "33", "44": "44", "56": "56",
                                                                     "67": "67", "78": "78", "89": "89",
                                                                     "100": "100"}},
-            "crowding": {"type": "choice", "choice": "no_crowding", "probabilities": {"no_crowding": 0.6}},
+            "crowding": {"type": "choice", "choice": "no_crowding",
+                         "probabilities": {"no_crowding": 0.6, "late_seal_weakness": 0.3}},
         },
         "usage": {"input_tokens": 900, "output_tokens": 90}}}, "success": True}
 
@@ -238,7 +239,11 @@ def test_series_returns_slots_ascending_and_eod(monkeypatch, client):
     db["hotlist_jev_sentiment"].rows.append({
         "_id": f"{DATASET}:half_hour:{DATE}:eod", "kind": "eod", "slotTime": "EOD",
         "tradingDate": DATE, "datasetId": DATASET, "status": "ok",
-        "answers": {"day_stage": {"type": "choice", "choice": "start"}}, "scores": {},
+        "answers": {"day_stage": {"type": "choice", "choice": "start"},
+                    "day_crowding": {"type": "choice", "choice": "late_seal_weakness",
+                                     "probabilities": {"late_seal_weakness": 0.4,
+                                                       "breadth_climax": 0.2}}},
+        "scores": {},
         "errorCode": None, "errorDetail": None, "quality": {"degradedSources": []}})
 
     response = test_client.get("/api/hotlist-jev/series", params={"date": DATE})
@@ -249,6 +254,9 @@ def test_series_returns_slots_ascending_and_eod(monkeypatch, client):
     assert [slot["slotTime"] for slot in body["slots"]] == ["09:30", "10:00"]
     assert body["eod"]["answers"]["day_stage"]["choice"] == "start"
     assert body["degradedCount"] == 0
+    # A2（2026-10-24）：拥挤三层概率合计提后端——读口附 crowdingProbability 派生字段
+    assert body["slots"][0]["crowdingProbability"] == 0.3
+    assert abs(body["eod"]["crowdingProbability"] - 0.6) < 1e-9
 
 
 def test_series_latest_date_when_date_missing(monkeypatch, client):
@@ -320,9 +328,16 @@ def test_sentiment_overview_dual_table(monkeypatch):
         "datasetId": DATASET, "snapshotType": "half_hour", "tradingDate": DATE, "slotTime": "EOD",
         "status": "ok", "historyAnchorRange": "2026-09-01 → 2026-09-29，20 个交易日收盘统计",
         "answers": {"day_stage": {"type": "choice", "choice": "ferment",
-                                  "probabilities": {"ferment": 0.7}},
+                                  "probabilities": {"ferment": 0.7}, "confidence": 0.55},
+                    "day_pattern": {"type": "choice", "choice": "rally_fade",
+                                    "probabilities": {"rally_fade": 0.5}, "confidence": 0.4},
+                    "day_temperature": {"type": "score", "score": 6, "confidence": 0.35,
+                                        "legend": {"0": "0", "11": "11", "22": "22", "33": "33",
+                                                   "44": "44", "56": "56", "67": "67", "78": "78",
+                                                   "89": "89", "100": "100"}},
                     "day_crowding": {"type": "choice", "choice": "no_crowding",
-                                     "probabilities": {"no_crowding": 0.6}}},
+                                     "probabilities": {"no_crowding": 0.6, "breadth_climax": 0.25},
+                                     "confidence": 0.9}},
         "scores": {"day_temperature": 64.0},
         "computedAt": 1790000000,
         "corpusCaliberVersion": "eod-2026-10-22",
@@ -345,6 +360,15 @@ def test_sentiment_overview_dual_table(monkeypatch):
     assert body["ok"] is True and body["date"] == DATE
     assert body["jev"]["dayTemperature"] == 64.0
     assert body["jev"]["dayStage"] == "ferment" and body["jev"]["dayCrowding"] == "no_crowding"
+    # A1（2026-10-24）：日级四题逐题置信 + 路径形态透出（缺失答案 → null 不伪造）
+    assert body["jev"]["dayPattern"] == "rally_fade"
+    assert body["jev"]["dayPatternProbability"] == 0.5
+    assert body["jev"]["dayStageConfidence"] == 0.55
+    assert body["jev"]["dayPatternConfidence"] == 0.4
+    assert body["jev"]["dayTemperatureConfidence"] == 0.35
+    assert body["jev"]["dayCrowdingConfidence"] == 0.9
+    # A2：拥挤三层合计（breadth_climax 0.25，no_crowding 不计入）
+    assert abs(body["jev"]["dayCrowdingProbability"] - 0.25) < 1e-9
     assert body["jev"]["frameCoverage"]["hasCloseFrame"] is True
     assert body["jev"]["frameCoverage"]["missingSlots"] == ["14:30"]
     assert body["jev"]["corpusCaliberVersion"] == "eod-2026-10-22"

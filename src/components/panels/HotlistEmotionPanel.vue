@@ -102,7 +102,9 @@
                 </div>
                 <div v-if="sentimentOverviewEod" class="overview-chips">
                   <span v-if="overviewStageName" class="overview-chip">档位·{{ overviewStageName }}</span>
+                  <span v-if="overviewPatternName" class="overview-chip">路径·{{ overviewPatternName }}</span>
                   <span v-if="overviewCrowdingName" class="overview-chip" :class="{ 'overview-chip-warn': overviewCrowdingWarn }">拥挤·{{ overviewCrowdingName }}</span>
+                  <span v-if="overviewConfidenceText" class="overview-chip overview-chip-muted">{{ overviewConfidenceText }}</span>
                   <span v-if="overviewCoverageHint" class="overview-chip overview-chip-warn">{{ overviewCoverageHint }}</span>
                   <span v-if="overviewDiffText" class="overview-chip">{{ overviewDiffText }}</span>
                   <span v-if="overviewAnchorHint" class="overview-chip overview-chip-muted">{{ overviewAnchorHint }}</span>
@@ -1367,6 +1369,15 @@ const overviewCrowdingName = computed(() => {
 const overviewCrowdingWarn = computed(() =>
   JEV_CROWDING_WARN_LAYERS.has(sentimentOverviewEod.value?.dayCrowding ?? ''),
 )
+// A1（2026-10-24 题材龙头方法论回灌）：路径形态 + 模型置信透出；缺字段不渲染不伪造
+const overviewPatternName = computed(() => {
+  const pattern = sentimentOverviewEod.value?.dayPattern
+  return pattern ? JEV_PATTERN_NAMES[pattern] ?? pattern : null
+})
+const overviewConfidenceText = computed(() => {
+  const confidence = sentimentOverviewEod.value?.dayStageConfidence
+  return confidence == null ? null : `置信 P${Math.round(confidence * 100)}%`
+})
 const overviewDiffText = computed(() => {
   const temp = sentimentOverviewEod.value?.dayTemperature
   const ruleScore = sentimentOverview.value?.rule?.score

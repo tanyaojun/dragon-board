@@ -26,6 +26,7 @@ from backend.analysis.hotlist.jev_state import (
     build_slot_jev_state,
     collect_slot_evidence,
     extract_history_anchor_range,
+    narrative_is_truncated,
 )
 from backend.services.jev.jev_client import DEFAULT_ACCOUNT_ID, call_jev, parse_jev_response
 from backend.services.jev.jev_sentiment_compute import (
@@ -142,6 +143,7 @@ def compute_slot(db, dataset_id: str, trading_date: str, slot_time: str,
            "questionSetVersion": QUESTION_SET_VERSION,
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": current_evidence, "narrativeRaw": narrative,
+           "narrativeTruncated": narrative_is_truncated(narrative),
            "questionsRaw": JEV_SLOT_QUESTIONS, "responseRaw": envelope,
            "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),
@@ -186,6 +188,7 @@ def compute_day(db, dataset_id: str, trading_date: str, history_anchor: str,
            "questionSetVersion": QUESTION_SET_VERSION,
            "status": "ok" if parsed["ok"] else "degraded",
            "evidenceRaw": None, "narrativeRaw": narrative,
+           "narrativeTruncated": narrative_is_truncated(narrative),
            "questionsRaw": JEV_DAY_QUESTIONS, "responseRaw": envelope,
            "answers": parsed.get("answers"), "scores": parsed.get("scores"),
            "usage": parsed.get("usage"), "latencyMs": parsed.get("latencyMs"),

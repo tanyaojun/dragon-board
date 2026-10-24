@@ -97,11 +97,15 @@ export const JEV_CROWDING_LAYERS = ['top_acceleration', 'late_seal_weakness', 'b
  * 拥挤度（0-1）= 拥挤三层概率合计（top_acceleration/late_seal_weakness/breadth_climax），
  * 即模型认为市场处于任一拥挤层的总概率。v2 拥挤是离散归层 choice，无连续分可读；
  * 只聚合落库分布里的已有数值，缺分布/非 choice 返回 null 不伪造（展示层零计算补齐的边界：仅做加总透明聚合）。
+ *
+ * 2026-10-24 A2 单一事实源提后端：读口（/series、/range）已为每文档附 crowdingProbability
+ * （后端同口径三层合计），有后端值直接消费；缺字段（直构文档/旧形态）回退本地同式计算。
  */
 export function jevCrowdingProbability(
   doc: HotlistJevDoc | null | undefined,
   key: string,
 ): number | null {
+  if (doc && typeof doc.crowdingProbability === 'number') return doc.crowdingProbability
   const answer = doc?.answers?.[key]
   if (!answer || answer.type !== 'choice' || !answer.probabilities) return null
   const probabilities = answer.probabilities

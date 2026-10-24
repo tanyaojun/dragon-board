@@ -112,6 +112,26 @@ def _stage_question_v2(instructions: str) -> dict:
     return {"type": "choice", "instructions": instructions, "criteria": dict(_STAGE_CRITERIA_V2)}
 
 
+# ── 叙事截断防线（2026-10-24 A3，slot-eod-corpus-confidence-audit-20261024.md F3）──
+# 叙事超限时静默硬切会让末段【数据质量】无声丢失（fail-visible 违规；15:00 槽实测
+# 3749/4000，余量仅约 1 个压缩行）。截断时追加显式注记，模型与人同时对可见；
+# 未超限时输出逐字节不变。落库面消费 narrative_is_truncated 打 narrativeTruncated 标记。
+NARRATIVE_TRUNCATION_MARK = "【语料截断】"
+_NARRATIVE_TRUNCATION_NOTE = (
+    NARRATIVE_TRUNCATION_MARK + "语料超长已截断（超出上限部分丢弃），末段【数据质量】可能已丢失。"
+)
+
+
+def _apply_cap(text: str, cap: int) -> str:
+    if len(text) <= cap:
+        return text
+    return text[:cap] + "\n" + _NARRATIVE_TRUNCATION_NOTE
+
+
+def narrative_is_truncated(text: str | None) -> bool:
+    return bool(text) and NARRATIVE_TRUNCATION_MARK in text
+
+
 # 题目判据演进号（2026-10-02 用户裁决：所有消费 jev 返回结果的二改方案按版本分段）。
 # 判据/选项文字任何变更必须递增并同步 compute 落库；库里缺失该字段的文档=旧代产物（口径未知，fail-visible）。
 # 实测断层（2026-10-02）：7/8 月旧判据与 9 月 v2.4 重跑批拥挤三层概率合计月均值 0.088/0.207/0.416，不可跨代对比。
@@ -874,7 +894,7 @@ def build_slot_jev_state(*, trading_date: str, slot_time: str, current: dict,
         "【当日已走帧证据】\n" + ("\n".join(prior_lines) if prior_lines else "（本日暂无更早已落库帧）"),
         "【数据质量】" + ("；".join(degraded) if degraded else "无缺失") + "。",
     ]
-    return "\n".join(line for line in lines if line)[:4000]
+    return _apply_cap("\n".join(line for line in lines if line), 4000)
 
 
 def _day_frame_coverage(evidences: list, *, expected_slots: list | None = None,
@@ -1133,4 +1153,4 @@ def build_day_jev_state(*, trading_date: str, evidences: list,
         f"主力净额合计 {_fmt_yi(fund.get('zljeSum'))}{fund_asof}；{zt_bit}；{peak_bit}{amount_bit}")
     quality = _aggregate_day_quality(evidences, summary)
     lines.append("【数据质量】" + ("；".join(quality) if quality else "无缺失") + "。")
-    return "\n".join(line for line in lines if line)[:6000]
+    return _apply_cap("\n".join(line for line in lines if line), 6000)
