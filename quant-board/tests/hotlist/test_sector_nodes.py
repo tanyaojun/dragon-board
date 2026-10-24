@@ -284,18 +284,18 @@ def _bars_by_code():
     return bars
 
 
-def test_member_union_n5_n10_short_window():
-    """N5 窗 > 可得 3 日 → 如实缩短 windowDays=3 并 daysShort；并集去重正确。"""
-    u5 = member_union("AI算力", _pool_list(), 5)
-    assert u5["windowDays"] == 3 and u5["daysShort"] is True
-    assert u5["codes"] == {"600001", "600002", "600003", "600004", "600005", "600006", "600007"}
-    u10 = member_union("机器人", _pool_list(), 10)
-    assert u10["codes"] == {"700001"} and u10["daysShort"] is True
+def test_member_union_n10_short_window():
+    """N10 窗 > 可得 3 日 → 如实缩短 windowDays=3 并 daysShort；并集去重正确。"""
+    u = member_union("AI算力", _pool_list(), 10)
+    assert u["windowDays"] == 3 and u["daysShort"] is True
+    assert u["codes"] == {"600001", "600002", "600003", "600004", "600005", "600006", "600007"}
+    ro = member_union("机器人", _pool_list(), 10)
+    assert ro["codes"] == {"700001"} and ro["daysShort"] is True
 
 
 def test_aggregate_day_missing_no_fake_zero():
     """缺棒/无昨收成员剔除统计 + missingN 披露；不伪装。"""
-    u = member_union("AI算力", _pool_list(), 5)
+    u = member_union("AI算力", _pool_list(), 10)
     out = aggregate_day(target_date=D0, members=u["codes"],
                         bars_by_code=_bars_by_code(), window_days=u["windowDays"])
     assert out["memberN"] == 7 and out["quotedN"] == 5 and out["missingN"] == 2
@@ -312,18 +312,18 @@ def test_aggregate_day_all_missing_none():
     assert out["missingN"] == 1 and out["quotedN"] == 0
 
 
-def test_assemble_agg_rows_coverage_n10_superset():
-    """行覆盖 = N10 并集（含今日无封板板块）；aggN5 ⊆ aggN10 行集；空池板块缺席。"""
+def test_assemble_agg_rows_coverage_n10():
+    """行覆盖 = N10 并集（含今日无封板板块）；只出 aggN10 单窗；空池板块缺席。"""
     rows = assemble_agg_rows(target_date=D0, window_pool=_pool_list(),
                              bars_by_code=_bars_by_code())
     boards = {r["board"] for r in rows}
     assert boards == {"AI算力", "机器人"}
     ai = next(r for r in rows if r["board"] == "AI算力")
-    assert ai["aggN5"]["windowDays"] == 3 and ai["aggN10"]["windowDays"] == 3
-    assert ai["aggN5"]["memberN"] == 7 and ai["aggN10"]["memberN"] == 7
+    assert ai["aggN10"]["windowDays"] == 3 and ai["aggN10"]["memberN"] == 7
+    assert "aggN5" not in ai and set(ai) == {"board", "aggN10"}
     # 机器人今日无封板照样有聚合读数（弱转强前兆观察位）
     ro = next(r for r in rows if r["board"] == "机器人")
-    assert ro["aggN5"]["pctMean"] == 9.52
+    assert ro["aggN10"]["pctMean"] == 9.52
 
 
 def test_aggregate_day_empty_window_pool():
@@ -333,5 +333,7 @@ def test_aggregate_day_empty_window_pool():
 
 
 def test_agg_version_frozen():
-    """版本戳冻结（影子列口径变更须新戳+用户批准）。"""
-    assert AGG_VERSION == "2026-10-24a"
+    """版本戳冻结（影子列口径变更须新戳+用户批准；b=N 窗终裁单算）。"""
+    assert AGG_VERSION == "2026-10-24b"
+    from backend.analysis.hotlist.sector_agg import AGG_WINDOWS
+    assert AGG_WINDOWS == (10,)

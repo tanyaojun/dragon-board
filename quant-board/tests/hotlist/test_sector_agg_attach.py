@@ -37,7 +37,7 @@ def _patch(monkeypatch, pools: dict[str, dict | None],
 
 
 def test_agg_attach_mount_and_extra(monkeypatch):
-    """v1 行内板块挂 aggN5/aggN10；N10 独有板块进额外行；池缺失日不进窗口。"""
+    """v1 行内板块挂 aggN10；N10 独有板块进额外行；池缺失日不进窗口。"""
     pools = {
         D0: {"AI算力": {"600001"}, "机器人": {"700001"}},
         D1: {"AI算力": {"600001", "600002"}},
@@ -54,8 +54,8 @@ def test_agg_attach_mount_and_extra(monkeypatch):
     v1_rows = [{"board": "AI算力", "node": "wzs"}, {"board": "机器人", "node": "brewing"}]
     mounted, extra = ops._agg_attach(None, D0, "ds", v1_rows)
     assert set(mounted) == {"AI算力", "机器人"}
-    assert mounted["AI算力"]["aggN5"]["pctMean"] == 5.0
-    assert mounted["AI算力"]["aggN5"]["windowDays"] == 4   # D0,D1,D3,D4（D2 池缺失剔除）
+    assert mounted["AI算力"]["aggN10"]["pctMean"] == 5.0
+    assert mounted["AI算力"]["aggN10"]["windowDays"] == 4   # D0,D1,D3,D4（D2 池缺失剔除）
     assert [e["board"] for e in extra] == ["光伏"]
     assert extra[0]["aggN10"]["pctMean"] == 0.0
 
@@ -90,8 +90,8 @@ def test_settle_day_doc_carries_agg(monkeypatch):
         "degraded": []})
     out = ops.settle_day(db, D0, "ds")
     doc = _Coll.saved
-    assert doc["meta"]["aggVersion"] == "2026-10-24a"
+    assert doc["meta"]["aggVersion"] == "2026-10-24b"
     r = doc["rows"][0]
-    assert r["aggN5"]["memberN"] == 1 and r["aggN5"]["pctMean"] == 2.0
+    assert r["aggN10"]["memberN"] == 1 and r["aggN10"]["pctMean"] == 2.0
     assert doc["aggExtraRows"] == []
     assert out["boards"] == 1

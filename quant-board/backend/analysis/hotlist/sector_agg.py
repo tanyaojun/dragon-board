@@ -18,8 +18,8 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
-AGG_VERSION = "2026-10-24a"
-AGG_WINDOWS = (5, 10)
+AGG_VERSION = "2026-10-24b"   # b=N 窗终裁单算（2026-10-24 用户裁决：题材炒作周期 5-10 天，N10 覆盖完整周期）
+AGG_WINDOWS = (10,)           # 双算（5/10）影子对照取消；键名保留 aggN10 显式口径
 
 
 def member_union(board: str, window_pool: list[tuple[str, dict[str, set[str]]]],
@@ -73,7 +73,7 @@ def aggregate_day(*, target_date: str, members: set[str],
 def assemble_agg_rows(*, target_date: str,
                       window_pool: list[tuple[str, dict[str, set[str]]]],
                       bars_by_code: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """全部板块的双窗聚合行（aggN5/aggN10）；行覆盖 = N10 并集 ⊇ N5 并集。
+    """全部板块的聚合行（aggN10）；行覆盖 = N10 并集 ⊇ v1 三日窗口。
 
     今日无涨停但 N 窗内曾有涨停的板块照样出聚合行（家数=0 而聚合已翻红是弱转强
     前兆观察位，预登记 §二）；节点行 rows[] 的三日覆盖语义不受影响（影子行独立）。

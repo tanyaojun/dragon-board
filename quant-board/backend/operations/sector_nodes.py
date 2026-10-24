@@ -165,7 +165,7 @@ def _agg_attach(db: Any, date: str, dataset_id: str,
     for ar in agg_rows:
         slot = mounted if ar["board"] in boards_v1 else None
         if slot is not None:
-            mounted[ar["board"]] = {"aggN5": ar["aggN5"], "aggN10": ar["aggN10"]}
+            mounted[ar["board"]] = {"aggN10": ar["aggN10"]}
         else:
             extra.append(ar)
     return mounted, extra
