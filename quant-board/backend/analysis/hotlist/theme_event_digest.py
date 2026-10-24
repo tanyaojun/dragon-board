@@ -32,6 +32,9 @@ EVENT_CHARS = 200
 MAX_EVENTS = 3
 EVENT_WINDOW_PAST_DAYS = 3      # 事件/新闻回看窗口（发酵中）
 NEWS_WINDOW_PAST_DAYS = 2
+# 热度序列窗（S2，2026-10-24b：5→10 日——「断流/见顶回落」判据需要更长窗才看得出
+# 趋势拐点；库内不足的日子自然为 0，fail-visible 不伪造）
+HEAT_WINDOW_DAYS = 10
 
 # 板块名归一：去掉这些后缀/噪声，便于与产业树名字对齐（只做确定性别名，不做语义泛化）
 _SUFFIXES = ("概念", "板块", "指数", "行业", "主题", "题材", "产业链", "链")
@@ -113,6 +116,27 @@ def match_industry(nodes: list[dict], board_name: str | None) -> dict:
                                        len(n.get("name") or "")))
     return {"matched": True, "method": method, "node": pool[0],
             "candidates": [n.get("name") for n in pool[:5]]}
+
+
+# 驱动标签第二匹配通道的候选词切分（S3，2026-10-24b）：韭研 expound 首行按分隔符
+# 确定性切词（**非语义分词**），剔泛词黑名单与 <2 字碎片。动机（10-24 置信度归因）：
+# 板块名命中宽父节点（「半导体」）或未映射（「俄乌重建」）时，龙头驱动标签里的具体
+# 驱动（「存储芯片」「金矿」「华为昇腾」）可补对口产业树节点——真实扫描 10-22/23
+# 共 14 只 fire 9 只。边界如实披露：标签词与节点名无字面子串关系时不触发（如「证券」
+# ↔层级命名「金融-券商」），不编语义别名；对口内容由板内解析 expound 承载。
+_TAG_SPLIT_RE = re.compile(r"[＋+、，,/｜|｜\s（）()【】\[\]]+")
+
+
+def _tag_terms(tag_line: str | None, limit: int = 3) -> list[str]:
+    """「人形机器人（金属腱绳）+商业航天+光伏」→ [人形机器人, 金属腱绳, 商业航天]…（取前 limit）。"""
+    out: list[str] = []
+    for seg in _TAG_SPLIT_RE.split(str(tag_line or "")):
+        w = normalize_name(seg)
+        if len(w) >= 2 and w not in GENERIC_ANCHORS and w not in NOT_A_THEME and w not in out:
+            out.append(w)
+        if len(out) >= limit:
+            break
+    return out
 
 
 # ── 确定性关联锚（v3 引入，v4 沿用；早报段落匹配的通用化） ─────────────────
@@ -380,6 +404,18 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
     nodes = S.get_industry_nodes(db) if state.get("ok") else []
     match = (match_industry(nodes, board_name) if nodes
              else {"matched": False, "method": None, "node": None, "candidates": []})
+    # S3（2026-10-24b）：板内解析提前取——产业树首通道渲染要用龙头驱动标签做第二匹配。
+    # sealed 口径与板内解析节完全一致（boardCodes 封板名单），不引入第二个口径。
+    snap = board_snapshot(db, date, board_name, leader_code,
+                          sealed_codes=sealed_codes) if include_l2 else None
+    leader_tag_line = ""
+    if snap is not None:
+        _stocks = snap.get("stocks") or []
+        _lead = next((s for s in _stocks
+                      if str(s.get("code") or "")[-6:] == str(leader_code or "")),
+                     _stocks[0] if _stocks else None)
+        _exp = str((_lead or {}).get("expound") or "")
+        leader_tag_line = _exp.splitlines()[0].strip() if _exp else ""
     # KPL 语料窗：事件回看 3 日（发酵中）+ 次日；新闻回看 2 日；日历未来 window_days 日
     kpl_events = (KS.get_topic_events(db, date=date,
                                       include_past_recent=EVENT_WINDOW_PAST_DAYS, window_days=1)
@@ -430,15 +466,38 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
             f"{match.get('method')}，热度 {node.get('hot')}，正文更新 {chg}={gap_txt}）："
             f"{_clip(node.get('content'), content_chars)}")
 
+    # S3 驱动标签补充映射（2026-10-24b）：龙头驱动标签词命中产业树**不同**节点时
+    # 并列披露一行（只补最优先一个；命中首通道同名节点/节点无正文 → 不重复不凑数）。
+    # 首通道未映射时同样适用（此时任何命中都是增量）。
+    if include_l2 and state.get("ok") and nodes and leader_tag_line:
+        first_name = normalize_name((node or {}).get("name"))
+        for term in _tag_terms(leader_tag_line):
+            m2 = match_industry(nodes, term)
+            n2 = m2.get("node") or {}
+            if not m2.get("matched") or normalize_name(n2.get("name")) == first_name:
+                continue
+            if not n2.get("content"):
+                continue
+            chg2 = n2.get("contentChangedDate") or "未知"
+            gap2 = _days_between(chg2, date)
+            gap2_txt = ("当日" if gap2 == 0 else f"{gap2} 天前"
+                        if isinstance(gap2, int) and gap2 > 0 else "未知")
+            lines.append(
+                f"驱动标签补充映射（龙头标签「{leader_tag_line}」中词「{term}」经 "
+                f"{m2.get('method')} 命中产业树「{n2.get('name')}」，热度 {n2.get('hot')}，"
+                f"正文更新 {chg2}={gap2_txt}）：{_clip(n2.get('content'), content_chars)}")
+            break
+
     # 当日题材事件（开盘啦 Topic：逐事件全文 + 来源 + 热度）
-    heat = theme_heat_series(db, board_name, date=date) if (include_l2 and state.get("ok")) else None
+    heat = (theme_heat_series(db, board_name, date=date, days=HEAT_WINDOW_DAYS)
+            if (include_l2 and state.get("ok")) else None)
     if heat is not None:
         if heat.get("any"):
-            lines.append(f"题材热度序列（近 5 日新闻/事件按日聚合；看新增密度是否断流/见顶）："
-                         f"{_heat_line(heat)}")
+            lines.append(f"题材热度序列（近 {HEAT_WINDOW_DAYS} 日新闻/事件按日聚合；"
+                         f"看新增密度是否断流/见顶）：{_heat_line(heat)}")
         else:
-            lines.append(f"题材热度序列：近 5 日无该题材的新闻/事件痕迹（不代表无催化；"
-                         f"若板块当日仍涨停，则纯资金/情绪驱动特征明显）")
+            lines.append(f"题材热度序列：近 {HEAT_WINDOW_DAYS} 日无该题材的新闻/事件痕迹"
+                         f"（不代表无催化；若板块当日仍涨停，则纯资金/情绪驱动特征明显）")
     if state.get("ok"):
         if not ev_hits:
             lines.append(f"当日题材事件：无匹配（「{board_name}」相关事件未命中，无数据 ≠ 无催化）")
@@ -493,8 +552,7 @@ def build_theme_evidence_block(db, *, board_name: str, date: str,
 
     # ── L2 板内解析（韭研异动库：板块分组 + 逐股 expound；v3 起纳入证据）──
     # include_l2=False（relay 兼容形状）：整节不渲染。
-    snap = board_snapshot(db, date, board_name, leader_code,
-                          sealed_codes=sealed_codes) if include_l2 else None
+    # snap 已在产业树匹配阶段提前取得（S3 第二匹配通道共用，口径同一份）。
     board_resolved = False
     board_stocks_n = 0
     if not include_l2:

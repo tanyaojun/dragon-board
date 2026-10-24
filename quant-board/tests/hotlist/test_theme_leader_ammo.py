@@ -24,12 +24,15 @@ def test_question_set_frozen_hash_and_versions():
     代际史：v1 = 2026-10-20（hash `ff010c50200e`，见预登记 §4.2；13 条日标签保留为 v1 代）；
     v2 = 2026-10-20 晚（确定性证据门，hash `985c529fded7`）；v3 = 2026-10-22 归因修复
     （L2 板内解析 + 门收窄，hash `b8c00651de47`）；v4 = 2026-10-23 换源（事件层唯一权威源
-    =开盘啦：题材事件/新闻(Kword)/日历，韭研 timeline 退役，hash `56dbb0709335`）——
-    **跨代标签不得混评**（评估按版本分组）。
+    =开盘啦：题材事件/新闻(Kword)/日历，韭研 timeline 退役，hash `56dbb0709335`）；
+    v6 = 2026-10-23 四题判据增档（hash `1d098c87e07e`，14 只样本）；**v7 = 2026-10-24
+    置信度归因后空间题加历史锚规则**（空间题 conf 均值 0.435 全场最差且无锚；判据加
+    「锚必须先对」硬规则，criteria 门不动，hash `40c7184a790e`）——**跨代标签不得混评**
+    （评估按版本分组）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v6"
-    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24a"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "1d098c87e07e"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v7"
+    assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24b"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "40c7184a790e"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
@@ -38,6 +41,8 @@ def test_question_set_frozen_hash_and_versions():
         q = A.QUESTIONS_THEME_LEADER[key]
         assert q["type"] == "choice" and q["instructions"] and q["criteria"]
         assert "insufficient" in q["criteria"], "每题必须留证据不足档，禁止逼模型硬填"
+    # v7 锚规则只加在空间题 instructions（criteria 门不动，space_2plus 零命中先观察）
+    assert "空间锚" in A.QUESTIONS_THEME_LEADER["leader_headroom"]["instructions"]
 
 
 def test_bucket_functions_stable_keys():
@@ -109,12 +114,89 @@ def test_structure_line_marks_unknown_prev():
                             followers_ge_ladder=1, prev_board_n=None, prev_peers=None)
     assert "板块「机器人」今日封板 5 家" in line and "3 连板" in line and "首封 09:25:00" in line
     assert "昨日同板块不可考" in line
+    assert "家数序列" not in line, "history 未传（None）不出序列段——向后兼容旧调用"
 
     line2 = A.structure_line(board="机器人", board_n=5,
                              leader={"name": "X", "code": "1", "streak": None, "time": None},
                              followers_ge_ladder=0, prev_board_n=3, prev_peers=1)
     assert "连板高度不可算" in line2 and "时间不可考" in line2
     assert "昨日该板块封板 3 只，其中 1 只今日仍封板" in line2
+
+
+def test_structure_line_renders_board_count_history():
+    """S1（2026-10-24b）：近 N 日家数序列让判据「扩张中/萎缩」从两点变形状。
+
+    缺口日（板块名逐日未收录/THS 池缺失）如实不列，不插值；空序列=不可考，不伪装趋势。
+    """
+    line = A.structure_line(board="机器人", board_n=13,
+                            leader={"name": "大业", "code": "1", "streak": 5, "time": "09:30:00"},
+                            followers_ge_ladder=0, prev_board_n=1, prev_peers=0,
+                            history=[("2026-10-16", 9), ("2026-10-17", 13),
+                                     ("2026-10-20", 12), ("2026-10-21", 1), ("2026-10-22", 1)])
+    assert "近 5 日该板块封板家数（旧→新，缺口日不列）：10-16 9 · 10-17 13 · 10-20 12 · 10-21 1 · 10-22 1" in line
+
+    empty = A.structure_line(board="机器人", board_n=3,
+                             leader={"name": "X", "code": "1", "streak": 1, "time": "10:00:00"},
+                             followers_ge_ladder=0, prev_board_n=None, prev_peers=None,
+                             history=[])
+    assert "家数序列不可考" in empty
+
+
+def _cycle_rows():
+    """龙头-日样本（date 轴 10-13~10-17 五个交易日）：
+
+    - A：2→3→4 板连板周期 10-15 断板（continued=False）→ 终结确认，剩余 2/1/0
+    - B：1→2 后让位（10-15 无样本）10-17 又以 3 板出现 → 两段皆右删失（次日仍封/隔日断流）
+    - C：单日 1 板次日断 → 终结确认，剩余 0
+    - D：1 板（次日仍封=True）→ 删失；隔两日以 2 板出现且次日断 → 终结，剩余 0
+    - E：streak +2 跳变（2→4）切段；前段删失、后段终结（板宽 9 家，与查询行同组合桶）
+    """
+    def mk(code, date, streak, cont, boardN=6, time="09:30:00"):
+        return {"code": code, "date": date, "streak": streak, "continued": cont,
+                "boardN": boardN, "time": time}
+    return [
+        mk("A", "2026-10-13", 2, True), mk("A", "2026-10-14", 3, True),
+        mk("A", "2026-10-15", 4, False, boardN=9),
+        mk("B", "2026-10-13", 1, True), mk("B", "2026-10-14", 2, True),
+        mk("B", "2026-10-17", 3, True),
+        mk("C", "2026-10-14", 1, False),
+        mk("D", "2026-10-13", 1, True), mk("D", "2026-10-16", 2, False),
+        mk("E", "2026-10-13", 2, True), mk("E", "2026-10-14", 4, False, boardN=9),
+    ]
+
+
+def test_leader_cycles_segments_and_censoring():
+    """周期切段：date 相邻 + streak 严格 +1 才延续；段尾 continued≠False = 右删失整段剔。"""
+    kept, censored = A._leader_cycles(_cycle_rows())
+    by_key = {(r["code"], r["date"]): v for r, v in kept}
+    assert by_key == {("A", "2026-10-13"): 2, ("A", "2026-10-14"): 1, ("A", "2026-10-15"): 0,
+                      ("C", "2026-10-14"): 0,
+                      ("D", "2026-10-16"): 0, ("E", "2026-10-14"): 0}
+    # B 全删失 3；D 前段 1；E 前段 1
+    assert censored == 5
+    # streak None（真连板不可算）不进锚
+    kept2, _ = A._leader_cycles([{"code": "F", "date": "2026-10-13", "streak": None,
+                                  "continued": False, "boardN": 3, "time": "09:30:00"}])
+    assert kept2 == []
+
+
+def test_headroom_anchor_line_fallbacks_and_disclosure():
+    """锚行与 baseline_line 同构：桶回退 + 样本量/删失全披露；无可用周期 → None。"""
+    row = {"streak": 4, "boardN": 9, "time": "09:20:00"}
+    line = A.headroom_anchor_line(_cycle_rows(), row, min_combo_n=2)
+    assert line.startswith("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：")
+    assert "剔右删失周期样本 5 个" in line and "总体平均再走" in line
+    # 同桶（streak4+|n>=8|early）内 A10-15 与 E10-14 两样本（剩余均 0）→ 组合桶成立出锚
+    assert "同桶[streak4+|n>=8|early<=10:00] 历史自当日高度平均再走 0.0 板" in line
+    # 小样本桶明说不出锚
+    tight = A.headroom_anchor_line(_cycle_rows(), {"streak": 2, "boardN": 3, "time": "13:30:00"},
+                                   min_combo_n=8)
+    assert "样本不足（<8），不出锚" in tight and "按连板高度[2] 平均再走" not in tight
+    # 无历史样本 / 全删失 → None（叙事不出行，不编造基准）
+    assert A.headroom_anchor_line([], row) is None
+    all_censored = [{"code": "G", "date": "2026-10-13", "streak": 2, "continued": True,
+                     "boardN": 5, "time": "09:30:00"}]
+    assert A.headroom_anchor_line(all_censored, row) is None
 
 
 def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
@@ -132,6 +214,19 @@ def test_narrative_order_is_fixed_and_keeps_fail_visible_text():
     assert lines[4].startswith("【题材证据"), "证据块紧跟结构行（2026-10-24a 起无 corpus_line 头行）"
     assert text.endswith(ev), "证据块必须原样嵌在末尾，不得被 runner 二次改写"
     assert "未映射（不代表无催化）" in text and "未采集" in text
+
+
+def test_narrative_places_headroom_anchor_between_baseline_and_evidence():
+    """Q1（2026-10-24b）：空间锚行排在基线后、证据块前（固定行序，便于逐字复现）。"""
+    ev = "【题材证据 · 韭研产业树 + 开盘啦题材事件/新闻/日历】\n取数日 2026-10-23"
+    anchor = "空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：同桶[x] 0.0 板"
+    text = A.build_leader_narrative(
+        date="2026-10-23", market_line="涨停 81 家", structure="板块「X」今日封板 3 家",
+        baseline="结构基线：总体 33.9%", evidence_block=ev,
+        leader_name="华林证券", leader_code="002945", headroom=anchor)
+    lines = text.splitlines()
+    assert lines[3].startswith("结构基线") and lines[4] == anchor
+    assert lines[5].startswith("【题材证据"), "锚行紧贴证据块之前，None 时证据块直接跟基线"
 
 
 def test_evidence_gate_forces_insufficient_and_keeps_model_answer():

@@ -293,7 +293,7 @@ def test_heat_series_daily_aggregation_and_trend_line():
     out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
                                        leader_code="001360")
     text = out["text"]
-    assert "题材热度序列（近 5 日新闻/事件按日聚合；看新增密度是否断流/见顶）：" in text
+    assert f"题材热度序列（近 {D.HEAT_WINDOW_DAYS} 日新闻/事件按日聚合；看新增密度是否断流/见顶）：" in text
     # 10-22 有 Kword=俄乌重建 的新闻 1 条
     assert "10-22 新闻1·事件0" in text
     # 无痕迹的日如实写 0（不断流伪装成有数据）
@@ -304,8 +304,21 @@ def test_heat_series_daily_aggregation_and_trend_line():
 def test_heat_series_empty_is_explicit_not_silent():
     db = _db(news=[], topic=[])
     out = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22")
-    assert "题材热度序列：近 5 日无该题材的新闻/事件痕迹（不代表无催化" in out["text"]
+    assert (f"题材热度序列：近 {D.HEAT_WINDOW_DAYS} 日无该题材的新闻/事件痕迹"
+            f"（不代表无催化") in out["text"]
     assert out["heatSeries"]["any"] is False
+
+
+def test_heat_window_widened_to_ten_days():
+    """S2（2026-10-24b）：窗 5→10 日——「断流/见顶」判据需要更长窗看趋势拐点。"""
+    assert D.HEAT_WINDOW_DAYS == 10
+    db = _db()
+    out = D.build_theme_evidence_block(db, board_name="俄乌重建", date="2026-10-22",
+                                       leader_code="001360")
+    # 序列覆盖 10 个日槽（无痕迹日如实写 0）
+    seg = out["text"].split("断流/见顶）：", 1)[1].split("\n", 1)[0]
+    days = [d.split()[0] for d in seg.split("；")]
+    assert len(days) == 10 and days[0] == "10-13" and days[-1] == "10-22"
 
 
 def test_heat_series_absent_in_relay_compat_shape():
@@ -390,3 +403,73 @@ def test_news_calendar_merge_only_when_both_empty():
                                         date="2026-10-22", include_l2=False)
     assert "未来 3 日既定事件：无匹配" in out2["text"]
     assert "题材新闻/前瞻日历" not in out2["text"]
+
+
+# ── S3（2026-10-24b）：驱动标签第二匹配通道 ──────────────────────────────
+def test_driver_tag_channel_supplements_mismatched_first_match():
+    """睿能科技实例（10-22/23 两日真实 fire）：板块名「半导体」命中宽父节点，
+    龙头驱动标签「存储芯片」补对口子节点——只并列披露，不替换首通道。
+
+    注：华林证券（金融）案例经真实库核验**不 fire**（产业树金融类为层级命名
+    「金融-券商」，与标签词「证券」无字面子串关系——确定性匹配的边界，不编语义
+    别名；其对口内容由板内解析 expound 承载）。10-22/23 真实扫描 fire 9/14。
+    """
+    industry = [
+        {"code": "S1", "name": "半导体", "level": 1, "hot": 12.0,
+         "content": "1、2026年8月，全球半导体销售额同比+10%（宽父节点月度旧闻）。",
+         "contentChangedDate": "2026-10-15", "lastFetchDate": "2026-10-22"},
+        {"code": "S2", "name": "存储芯片", "level": 2, "hot": 18.0,
+         "content": "1、2026年10月21日，存储现货价续涨，合约价四季度看涨。",
+         "contentChangedDate": "2026-10-21", "lastFetchDate": "2026-10-22"},
+    ]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "半导体", "count": 4, "stocks": [
+            {"code": "sh603733", "name": "睿能科技",
+             "expound": "存储芯片+机器人+拟收购博泰智能\n1、公司存储芯片业务占比领先。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[])
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="半导体", date="2026-10-22",
+                                       leader_code="603733")
+    text = out["text"]
+    assert "板块级催化原文（韭研产业树「半导体」，匹配方式 exact" in text, "首通道保留不替换"
+    assert "驱动标签补充映射" in text
+    assert "词「存储芯片」" in text and "命中产业树「存储芯片」" in text
+    assert "现货价续涨" in text, "补的是对口催化正文"
+
+
+def test_driver_tag_channel_skips_same_node_and_respects_include_l2():
+    """命中首通道同名节点不重复披露；include_l2=False（relay 兼容）整节压制。"""
+    industry = NODES + [
+        {"code": "B1", "name": "商业航天", "level": 1, "hot": 9.9,
+         "content": "1、2026年10月20日，可回收火箭试飞成功。",
+         "contentChangedDate": "2026-10-20", "lastFetchDate": "2026-10-22"},
+    ]
+    action = [{"_id": "2026-10-22:final", "fields": [
+        {"name": "机器人", "count": 2, "stocks": [
+            {"code": "sh603278", "name": "大业股份",
+             "expound": "人形机器人+商业航天\n1、腱绳产品尚处探索阶段。"},
+        ]},
+    ]}]
+    db = _db(industry=industry, topic=[], news=[], calendar=[])
+    db.cols["jiuyan_action"] = FakeCol(action)
+    out = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22",
+                                       leader_code="603278")
+    text = out["text"]
+    # 切词 [人形机器人, 商业航天]：「人形机器人」经别名命中「国产机器人」=首通道节点 → 跳过；
+    # 「商业航天」exact 命中不同节点 → 补充
+    assert "驱动标签补充映射" in text and "命中产业树「商业航天」" in text
+    assert text.count("板块级催化原文") == 1 and "「国产机器人」" in text
+    # relay 兼容形状：无 L2 → 无板内解析、无补充映射
+    out2 = D.build_theme_evidence_block(db, board_name="机器人", date="2026-10-22",
+                                        leader_code="603278", include_l2=False)
+    assert "驱动标签补充映射" not in out2["text"]
+
+
+def test_tag_terms_split_is_deterministic():
+    """切词确定性：按分隔符切、剥泛词黑名单与 <2 字碎片，不做语义分词。"""
+    assert D._tag_terms("人形机器人（金属腱绳）+商业航天+光伏+轮胎") == \
+        ["人形机器人", "金属腱绳", "商业航天"]
+    assert D._tag_terms("应用+科技") == [], "泛词黑名单内的词不作候选"
+    assert D._tag_terms("") == [] and D._tag_terms(None) == []

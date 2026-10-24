@@ -135,8 +135,9 @@ def test_run_writes_docs_and_is_idempotent(env):
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v6"
-    assert doc["questionSetHash"] == "1d098c87e07e"   # v6 判据修订换代（v1-v5 hash 留档在预登记文档）
+    assert doc["questionSetVersion"] == "v7"
+    assert doc["questionSetHash"] == "40c7184a790e"   # v7 空间题加锚规则换代（v1-v6 hash 留档在预登记文档）
+    assert doc["ammoVersion"] == "2026-10-24b"
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响
     assert doc["answers"]["leader_nextday_continue"]["choice"] == "insufficient"
@@ -205,8 +206,10 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     calls, db = env
     real_build = L.build_one
 
-    def fake_build_one(db_, date, row, rows_baseline, dataset_id, market_line):
-        built = real_build(db_, date, row, rows_baseline, dataset_id, market_line)
+    def fake_build_one(db_, date, row, rows_baseline, dataset_id, market_line,
+                       board_history=None):
+        built = real_build(db_, date, row, rows_baseline, dataset_id, market_line,
+                           board_history=board_history)
         built["evidence"] = {"state": {"ok": True}, "events": [], "evidenceMissing": False,
                              "evidenceMissingReason": None}
         return built
@@ -221,6 +224,36 @@ def test_no_gate_when_evidence_present(env, monkeypatch):
     assert doc["themeSpeculationDepth"] == "fermenting"
     assert doc["themeContinuation"] == "strong_extend"
     assert doc["leaderHeadroom"] == "space_2plus"
+
+
+def test_build_one_wires_history_and_headroom_anchor():
+    """S1/Q1（2026-10-24b）：家数序列与空间锚行进叙事；行序=结构→基线→锚→证据块。
+
+    历史样本行缺 code/date（旧形状）→ 锚 fail-safe 不出；board_history 算过但该板块
+    无收录 → 「不可考」文案（不伪装趋势）。
+    """
+    rows_baseline = [
+        {"code": "603278", "date": "2026-10-15", "streak": 3, "boardN": 5,
+         "time": "09:20:00", "continued": True},
+        {"code": "603278", "date": "2026-10-16", "streak": 4, "boardN": 5,
+         "time": "09:25:00", "continued": False},
+        {"code": "603279", "date": "2026-10-16", "streak": 1, "boardN": 2,
+         "time": "13:20:00", "continued": False},
+    ]
+    built = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), rows_baseline,
+                        market_line="涨停 46 家",
+                        board_history={"机器人": [("2026-10-16", 3), ("2026-10-17", 5)]})
+    n = built["narrative"]
+    assert "近 2 日该板块封板家数（旧→新，缺口日不列）：10-16 3 · 10-17 5" in n
+    assert "空间锚" in n and "总体平均再走" in n
+    i_struct, i_base = n.index("板块「机器人」今日封板"), n.index("结构基线")
+    i_anchor, i_ev = n.index("空间锚"), n.index("【题材证据")
+    assert i_struct < i_base < i_anchor < i_ev
+    # 旧形状基线（无 code/date）→ 锚不出；空 history dict → 不可考文案
+    built2 = L.build_one(FakeDb(), "2026-10-19", dict(ROWS[0]), BASELINE,
+                         market_line="涨停 46 家", board_history={})
+    assert "空间锚" not in built2["narrative"]
+    assert "家数序列不可考" in built2["narrative"]
 
 
 def test_channel_unreachable_aborts_early_not_all_calls(env, monkeypatch):

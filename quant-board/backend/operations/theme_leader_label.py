@@ -41,9 +41,11 @@ from backend.analysis.hotlist.theme_leader_ammo import (
     baseline_line,
     build_leader_narrative,
     combo_key,
+    headroom_anchor_line,
     structure_line,
 )
-from backend.operations.theme_leader_baseline import build_rows, day_leader_rows
+from backend.operations.theme_leader_baseline import (
+    board_count_history, build_rows, day_leader_rows)
 from backend.services.jev.jev_client import parse_jev_response
 from backend.services.jev.jev_sentiment_compute import _dispatch_jev
 
@@ -57,6 +59,8 @@ SAMPLE_ORIGIN_BACKFILL = "backfill"
 # 结构基线回看窗（交易日）：50 日≈341 样本（2026-08 实测），足够支撑同桶率；上限防越界读全库。
 BASELINE_WINDOW_TRADING_DAYS = 60
 BASELINE_MIN_SAMPLES = 8          # 组合桶最小样本（与 ammo.baseline_line 一致）
+# S1 板块家数趋势序列回看窗（交易日）：判据「家数扩张中/萎缩」需要形状而非两点
+BOARD_HISTORY_DAYS = 5
 # 字符→token 估算（中文叙事实测经验）。**护栏必须是真的上界**，故低/高界各有一组
 # 「固定开销 + 每字符」参数，任一组都不得低于观测值。
 #
@@ -119,7 +123,8 @@ def leaders_for(db: Any, date: str,
 
 def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
               dataset_id: str = DEFAULT_DATASET_ID,
-              market_line: str | None = None) -> dict:
+              market_line: str | None = None,
+              board_history: dict[str, list[tuple[str, int]]] | None = None) -> dict:
     """组装一条投喂（叙事 + 附带元数据），零网络零模型。"""
     from backend.operations.jev_label_jiuyan import market_facts_line
 
@@ -136,8 +141,10 @@ def build_one(db: Any, date: str, row: dict, rows_baseline: list[dict],
         structure=structure_line(
             board=row["board"], board_n=row["boardN"], leader=row,
             followers_ge_ladder=row["ladderFollowers"], prev_board_n=row.get("prevBoardN"),
-            prev_peers=row.get("prevPeers")),
+            prev_peers=row.get("prevPeers"),
+            history=board_history.get(row["board"], []) if board_history is not None else None),
         baseline=baseline_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
+        headroom=headroom_anchor_line(rows_baseline, row, BASELINE_MIN_SAMPLES),
         evidence_block=block["text"],
         leader_name=str(row.get("name") or ""),
         leader_code=str(row.get("code") or ""),
@@ -262,9 +269,13 @@ def run(date: str, *, dry_run: bool = False, confirm_budget: bool = False,
     # 盘面事实行全日一致：只算一次（否则每股一次全市场取数，N+1 查询）
     from backend.operations.jev_label_jiuyan import market_facts_line
     market_line = market_facts_line(db, date, dataset_id)
+    # S1（2026-10-24b）：近 5 日各板块封板家数序列，全日一算（逐日 day_leader_rows，
+    # boardN 与结构行同源）；板块名逐日未收录/THS 池缺失日如实留缺口
+    board_history = board_count_history(db, date, days=BOARD_HISTORY_DAYS, dataset_id=dataset_id)
     built_all: list[dict] = []
     for row in todo:
-        built = build_one(db, date, row, rows_baseline, dataset_id, market_line)
+        built = build_one(db, date, row, rows_baseline, dataset_id, market_line,
+                          board_history=board_history)
         built["row"] = row
         built_all.append(built)
     tokens = sum(b["estimatedTokens"]["budgetGuard"] for b in built_all)

@@ -21,8 +21,11 @@ from backend.analysis.hotlist.jev_driver_ammo import _questions_hash
 # ── 代际戳 ──
 # 题集/口径任何一字变更必须换代（跨代不可比）。v1 = 2026-10-20 定版（龙头隔日连板两题）；
 # v2 = 2026-10-20 晚确定性证据门；v3 = 2026-10-22 归因修复（早报段落级匹配 + L2 板内解析
-# 纳入证据 + 门条件收窄为「L3 与 L2 均无可用证据」+ 非题材粗分桶不纳入判定范围）。
-QUESTION_SET_VERSION_THEME_LEADER = "v6"
+# 纳入证据 + 门条件收窄为「L3 与 L2 均无可用证据」+ 非题材粗分桶不纳入判定范围）；
+# v6 = 2026-10-23 四题判据增档；**v7 = 2026-10-24 置信度归因后空间题加历史锚规则**
+# （14 只 v6 样本实测空间题 conf 均值 0.435 全场最差且无锚——判据加「锚必须先对」
+# 硬规则，criteria 各档门不动；同批语料四补见 AMMO 2026-10-24b）。
+QUESTION_SET_VERSION_THEME_LEADER = "v7"
 # 原料代际：板块结构（触板−炸板二分、真连板）+ 题材语料（韭研产业树 + 开盘啦题材事件/
 # 新闻（Kword 标签）/日历 + 题材热度序列 + 板内解析）。
 # 2026-10-24a（语料精简+匹配收紧，2026-10-24 用户批准；题集 v6 冻结不动）：
@@ -31,7 +34,12 @@ QUESTION_SET_VERSION_THEME_LEADER = "v6"
 # ④ 共享子串锚加泛词黑名单（「应用」级泛词不再充当锚）。ALIASES 不加：
 # kword 词表核验（29 个 distinct 标签，2026-10-24）无字面等价缺口——近义标签
 # （算力概念/算力 等）已由包含匹配覆盖，新闻层瓶颈是供给稀疏（全题材 1-5 条/日），不是词表。
-AMMO_VERSION_THEME_LEADER = "2026-10-24a"
+# 2026-10-24b（置信度提升批次，2026-10-24 用户批准四项；与题集 v7 同批换代）：
+# S1 结构行加近 5 日板块封板家数序列（判据「扩张中/萎缩」从两点变形状）；
+# S2 题材热度序列窗 5→10 日（「断流/见顶」需要更长窗）；S3 龙头驱动标签第二匹配通道
+# （板块名命中错位宏观节点时补对口催化，只并列披露不替换）；Q1 新增空间锚行
+# （历史连板周期自当日高度剩余板数分布，右删失剔除）。
+AMMO_VERSION_THEME_LEADER = "2026-10-24b"
 
 
 # ── 分桶（唯一口径：基线脚本与投喂叙事共用） ──
@@ -243,8 +251,11 @@ QUESTIONS_THEME_LEADER = {
                         "在题材内的身位（是否龙一/总龙头、高度领先度、封板质量），判断该龙头"
                         "**还有多少上涨空间**——在当前连板高度之上还能再走几个板。"
                         "注意：这是空间判断，不是次日概率判断——强延续题材的龙一通常仍有空间，"
-                        "退潮题材的高标即使次日勉强封板也缺乏空间。硬规则：关键证据缺失必须判 "
-                        "insufficient。",
+                        "退潮题材的高标即使次日勉强封板也缺乏空间。硬规则：①关键证据缺失必须判 "
+                        "insufficient；②叙事若提供「空间锚」行（同结构历史龙头自当日高度的"
+                        "平均剩余板数分布），它是必须先对的基准——若你的理由仅为「身位强/题材强」"
+                        "这类与锚同源的结构特征，应选与锚一致的档位，不得凭感觉上调；越锚必须"
+                        "给出锚未覆盖的新证据（当日新催化、身位显著领先、封板质量显著占优等）。",
         "criteria": {
             "space_2plus": "仍有 ≥2 板空间：题材强延续（发酵期）且该龙头是身位无可替代的"
                            "龙一/总龙头，梯队与催化双支撑",
@@ -360,34 +371,129 @@ def baseline_line(rows: list[dict], row: dict, min_combo_n: int = 5) -> str:
     return "结构基线（口径=触板−THS炸板二分 + 真连板；历史窗口内板块龙头样本）：" + "；".join(parts)
 
 
+# ── 空间题历史锚（Q1，2026-10-24b 置信度归因后加）────────────────────────────
+# 归因（v6 两日 14 只实测）：空间题 conf 均值 0.435 全场最差且**无任何历史锚**——续板题有
+# 同桶基准率，空间题全凭模型相对判断。「连板周期」= 同一 code 在 date 相邻交易日且
+# streak 严格 +1 的连续段；自当日高度的剩余板数 = 段尾 streak − 当日 streak。
+# 右删失：段尾样本次日仍封板（continued=True）但样本流断（让位龙头/THS 缺失），周期未
+# 确认终结 → 整段剔除并披露，不把未知终点当 0 剩余。streak None（真连板不可算）不进锚。
+
+
+def _leader_cycles(rows: list[dict]) -> tuple[list[tuple[dict, int]], int]:
+    """历史龙头-日样本 → [(样本行, 自当日高度剩余板数), ...] + 右删失样本数。"""
+    dates_axis = sorted({str(r.get("date")) for r in rows if r.get("date")})
+    nxt_of = {d: dates_axis[i + 1] for i, d in enumerate(dates_axis[:-1])}
+    by_code: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        code = str(r.get("code") or "")
+        if code and isinstance(r.get("streak"), int):
+            by_code[code].append(r)
+    kept: list[tuple[dict, int]] = []
+    censored = 0
+
+    def _close(seg: list[dict]) -> None:
+        nonlocal censored
+        if not seg:
+            return
+        if seg[-1].get("continued") is not False:   # 次日仍封/结局不可考 = 周期未确认终结
+            censored += len(seg)
+            return
+        end_streak = seg[-1]["streak"]
+        for s in seg:
+            kept.append((s, end_streak - int(s["streak"])))
+
+    for samples in by_code.values():
+        samples.sort(key=lambda r: str(r.get("date")))
+        seg: list[dict] = []
+        for s in samples:
+            if (seg and str(s.get("date")) == nxt_of.get(str(seg[-1].get("date")))
+                    and s.get("streak") == seg[-1]["streak"] + 1):
+                seg.append(s)
+            else:
+                _close(seg)
+                seg = [s]
+        _close(seg)
+    return kept, censored
+
+
+def headroom_anchor_line(rows: list[dict], row: dict, min_combo_n: int = 8) -> str | None:
+    """空间题历史锚行（与 baseline_line 同构的桶回退；样本量与删失全披露）。
+
+    历史 rows 为空 / 无可用周期 → None（叙事不出行：没有锚时题面锚规则不触发，
+    模型自行判断——fail-visible，不编造基准）。
+    """
+    from statistics import median
+
+    kept, censored = _leader_cycles(rows)
+    if not kept:
+        return None
+
+    def _stat(pairs: list[tuple[dict, int]]) -> str:
+        vals = [float(v) for _, v in pairs]
+        n = len(vals)
+        return (f"{sum(vals) / n:.1f} 板（中位 {median(vals):.1f}，≥2 板率 "
+                f"{sum(1 for v in vals if v >= 2) / n:.1%}，{n} 样本）")
+
+    parts: list[str] = []
+    ck = combo_key(row)
+    combo_pairs = [p for p in kept if combo_key(p[0]) == ck]
+    if len(combo_pairs) >= min_combo_n:
+        parts.append(f"同桶[{ck}] 历史自当日高度平均再走 {_stat(combo_pairs)}")
+    else:
+        parts.append(f"同桶[{ck}] 样本不足（<{min_combo_n}），不出锚")
+    sk = streak_bucket(row.get("streak"))
+    streak_pairs = [p for p in kept if streak_bucket(p[0].get("streak")) == sk]
+    if len(streak_pairs) >= min_combo_n:
+        parts.append(f"按连板高度[{sk}] 平均再走 {_stat(streak_pairs)}")
+    cen = (f"；剔右删失周期样本 {censored} 个（次日仍封但样本流断，周期未确认终结）"
+           if censored else "")
+    return ("空间锚（口径=历史窗内板块龙头连板周期，右删失已剔）：" + "；".join(parts)
+            + f"；总体平均再走 {_stat(kept)}{cen}")
+
+
 def structure_line(*, board: str, board_n: int, leader: dict, followers_ge_ladder: int,
-                   prev_board_n: int | None, prev_peers: int | None) -> str:
-    """该板块当日结构事实行（不含预测）。"""
+                   prev_board_n: int | None, prev_peers: int | None,
+                   history: list[tuple[str, int]] | None = None) -> str:
+    """该板块当日结构事实行（不含预测）。
+
+    `history`（S1，2026-10-24b）= 近 5 日 (date, boardN) 序列：深度/延续题判据
+    「家数扩张中/萎缩」此前只有今日/昨日两点，序列才看得出形状。缺口日如实不列。
+    """
     time_txt = str(leader.get("time") or "时间不可考")
     streak = leader.get("streak")
     streak_txt = f"{streak} 连板" if streak else "连板高度不可算"
     prev_txt = ("昨日同板块不可考" if prev_peers is None
                 else f"昨日该板块封板 {prev_board_n if prev_board_n is not None else '?'} 只，"
                      f"其中 {prev_peers} 只今日仍封板")
+    hist_txt = ""
+    if history:
+        seq = " · ".join(f"{d[5:]} {n}" for d, n in history)
+        hist_txt = f"；近 {len(history)} 日该板块封板家数（旧→新，缺口日不列）：{seq}"
+    elif history is not None and not history:
+        hist_txt = "；近数日家数序列不可考（历史日该板块名无收录或 THS 池缺失）"
     return (f"板块「{board}」今日封板 {board_n} 家；龙头 {leader.get('name')}（{leader.get('code')}）"
             f"{streak_txt}，首封 {time_txt}；板块内真连板≥{max(1, (streak or 1) - 1)} 的跟风 "
-            f"{followers_ge_ladder} 家；{prev_txt}")
+            f"{followers_ge_ladder} 家；{prev_txt}{hist_txt}")
 
 
 def build_leader_narrative(*, date: str, market_line: str, structure: str, baseline: str,
                            evidence_block: str, leader_name: str,
-                           leader_code: str) -> str:
+                           leader_code: str, headroom: str | None = None) -> str:
     """投喂给 jev 的完整叙事（顺序固定，便于逐字复现与回归比对）。
 
     evidence_block 由 `theme_event_digest.build_theme_evidence_block` 生成（fail-visible 文本），
     其头部已含语料采集日/节点数/条数与新鲜度（含未采集分支），2026-10-24a 起不再单列
     corpus_line 行（原两处信息完全重复，纯 token 浪费）；evidence_block 必须原样嵌入，
-    不得在 runner 里二次改写。
+    不得在 runner 里二次改写。`headroom`（2026-10-24b Q1）= 空间题历史锚行，排在基线后、
+    证据块前；None（无历史样本/无可用周期）不出行。
     """
-    return "\n".join([
+    lines = [
         f"{date} 交易日 · {market_line}",
         f"待判龙头：{leader_name}（{leader_code}）",
         structure,
         baseline,
-        evidence_block,
-    ])
+    ]
+    if headroom:
+        lines.append(headroom)
+    lines.append(evidence_block)
+    return "\n".join(lines)

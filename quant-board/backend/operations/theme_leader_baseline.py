@@ -84,6 +84,28 @@ def day_leader_rows(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID,
     return rows, meta
 
 
+def board_count_history(db: Any, date: str, days: int = 5,
+                        dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, list[tuple[str, int]]]:
+    """近 `days` 个交易日各板块封板家数序列（S1，2026-10-24b 置信度归因后加）。
+
+    深度/延续题判据要「板块家数扩张中/萎缩」，此前语料只有今日/昨日两点。
+    复用 `day_leader_rows`（boardN 与结构行同一实现，不造第二套口径）；THS 池缺失的
+    日子整日跳过（如实留缺口，不插值）；板块名逐日未收录 = 该日无该板块（韭研分组
+    名逐日可变，只做精确匹配，不做近似拼接——fail-visible）。
+    """
+    prev_dates = sorted({str(d["tradingDate"]) for d in db["jiuyan_action"].find(
+        {"kind": "jiuyan_action", "tradingDate": {"$lt": date},
+         "_id": {"$regex": ":final$"}}, {"tradingDate": 1}) if d.get("tradingDate")})[-days:]
+    out: dict[str, list[tuple[str, int]]] = {}
+    for d in prev_dates:
+        day_rows, _meta = day_leader_rows(db, d, dataset_id)
+        if day_rows is None:
+            continue                     # 当日 THS 池缺失：整日缺口
+        for r in day_rows:
+            out.setdefault(str(r["board"]), []).append((d, int(r["boardN"])))
+    return out
+
+
 def build_rows(db: Any, start: str, end: str,
                dataset_id: str = DEFAULT_DATASET_ID) -> dict:
     """窗口内逐交易日构建龙头-日样本（含次日结局 `continued`）。
