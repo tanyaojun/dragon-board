@@ -135,8 +135,8 @@ def test_run_writes_docs_and_is_idempotent(env):
     col = db[L.COLLECTION]
     doc = col.docs["2026-10-19:603278"]
     assert doc["origin"] == L.ORIGIN and doc["board"] == "机器人"
-    assert doc["questionSetVersion"] == "v7"
-    assert doc["questionSetHash"] == "40c7184a790e"   # v7 空间题加锚规则换代（v1-v6 hash 留档在预登记文档）
+    assert doc["questionSetVersion"] == "v8"
+    assert doc["questionSetHash"] == "b0914cdd3e7d"   # v8 越锚铸词内联定义（v1-v7 hash 留档在预登记文档）
     assert doc["ammoVersion"] == "2026-10-24b"
     # v2 确定性门：测试库无题材语料（evidenceMissing=corpus_not_collected）→ 概率题被强制 insufficient，
     # 但模型原答必须留档（modelAnswers/gate），且催化题不受影响

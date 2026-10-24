@@ -2108,8 +2108,16 @@ function tlRenderRows(){
   f.page = pg.page;
   const hasFilter = !!(f.q || f.board || f.industry || f.origin || f.choice
     || f.stage || f.outcome || f.gateOnly);
+  // 判据代际混版守卫（P2，2026-10-24 review；与 relay 链 verBadge 同款 fail-visible）：
+  // v8 前向验收窗内 v6 旧档与 v8 新行同表混显时逐行徽章（非最新代琥珀），单版保持干净。
+  // 上下文取自区间全量行（非筛选子集），混版判定不随筛选漂移
+  const allRows = d.rows || [];
+  const vers = [...new Set(allRows.map(r => r.questionSetVersion || '?'))];
+  tlVerCtx.mixed = vers.length > 1;
+  tlVerCtx.curVer = (allRows.find(r => r.questionSetVersion) || {}).questionSetVersion;
   const hint = $('tlHint');
-  if (hint) hint.textContent = '左侧三角展开调用日志 · P=模型置信度（红<35 两可勿当结论） · 「门」=证据门强制 insufficient（程序覆盖非模型判定） · 续板概率=档位中值加权期望（非模型直读）';
+  if (hint) hint.textContent = '左侧三角展开调用日志 · P=模型置信度（红<35 两可勿当结论） · 「门」=证据门强制 insufficient（程序覆盖非模型判定） · 续板概率=档位中值加权期望（非模型直读）'
+    + (tlVerCtx.mixed ? ' · 题集混版：行内琥珀徽章=旧代题集，灰=最新代（版本详见展开卡）' : '');
   const cnt = $('tlCnt');
   if (cnt) cnt.textContent = filteredCountText(rows.length, f, doc);
   const th = (label, key) => '<th class="sortable" onclick="tlSortBy(\'' + key + '\')">'
@@ -2139,6 +2147,13 @@ function tlPager(page, total){
       + '<button onclick="tlPage(' + (page + 1) + ')"' + (page >= total ? ' disabled' : '') + '>下一页 ›</button>'
     : '';
   return '<span class="pager" id="tlPagerEl">' + nav + '<span class="cnt">共 ' + total + ' 页</span></span>';
+}
+// 题材龙头行混版徽章上下文（tlRenderRows 每轮刷新重算；模块级对象避免逐行重扫全量行）
+const tlVerCtx = { mixed: false, curVer: null };
+function tlVerBadge(r){
+  if (!tlVerCtx.mixed || !r.questionSetVersion) return '';
+  return badge(r.questionSetVersion,
+    r.questionSetVersion === tlVerCtx.curVer ? 'b-gray' : 'b-amber');
 }
 function tlRowHtml(r, f){
   const p = tlProb(r);
@@ -2184,7 +2199,7 @@ function tlRowHtml(r, f){
       + '" onclick="tlRow(\'' + dkey + '\')">'
     + '<td class="num"><span class="lg-caret" title="展开/收敛 JEV 调用日志"'
       + ' onclick="event.stopPropagation(); tlToggle(\'' + js(tlKey(r)) + '\')">▶</span>'
-      + esc((r.tradingDate || '').slice(5)) + '</td>'
+      + esc((r.tradingDate || '').slice(5)) + tlVerBadge(r) + '</td>'
     + '<td>' + esc(r.code) + '</td>'
     + '<td>' + esc(r.name || '') + originTag + '</td>'
     + '<td>' + esc(r.board || '-') + '</td>'

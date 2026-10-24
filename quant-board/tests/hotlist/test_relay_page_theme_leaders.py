@@ -100,6 +100,26 @@ def test_rows_span_range_with_date_column(html: str) -> None:
     assert "relayPageSlice(" in rows_fn, "分页复用 relayPageSlice（同涨停分析规格）"
 
 
+def test_mixed_generation_row_badge_like_relay_chain(html: str) -> None:
+    """P2（2026-10-24 review）：v8 验收窗内 v6 旧档与 v8 新行同表混显，行内必须有
+    版本徽章（与 relay 链 verBadge 同款：混版才出、非最新代琥珀），hint 带中性图例。
+
+    边界（10-22 结项裁决不回潮）：混版是设计内常态非告警态——只有**逐行徽章**，
+    不得重建页面级警示横幅；上下文取自区间全量行，不随筛选漂移。
+    """
+    rows_fn = _fn(html, "tlRenderRows")
+    assert "tlVerCtx.mixed = vers.length > 1" in rows_fn
+    assert "(d.rows || [])" in rows_fn, "混版判定必须用区间全量行（非筛选子集）"
+    assert "题集混版" in rows_fn and "旧代题集" in rows_fn, "hint 带图例（中性措辞）"
+    row = _fn(html, "tlRowHtml")
+    assert "tlVerBadge(r)" in row, "行内（日期格）必须挂版本徽章"
+    badge_fn = _fn(html, "tlVerBadge")
+    assert "b-amber" in badge_fn and "b-gray" in badge_fn, "非最新代琥珀/最新代灰"
+    assert "!tlVerCtx.mixed" in badge_fn, "单版序列不出徽章（保持干净）"
+    banner = _fn(html, "tlRenderBanner")
+    assert "跨代不可比较" not in banner, "结项横幅不得回潮（徽章≠横幅）"
+
+
 # ── 展示硬约束 ──
 
 def test_gated_row_shows_model_answer_and_reason(html: str) -> None:

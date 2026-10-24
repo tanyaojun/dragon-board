@@ -25,14 +25,15 @@ def test_question_set_frozen_hash_and_versions():
     v2 = 2026-10-20 晚（确定性证据门，hash `985c529fded7`）；v3 = 2026-10-22 归因修复
     （L2 板内解析 + 门收窄，hash `b8c00651de47`）；v4 = 2026-10-23 换源（事件层唯一权威源
     =开盘啦：题材事件/新闻(Kword)/日历，韭研 timeline 退役，hash `56dbb0709335`）；
-    v6 = 2026-10-23 四题判据增档（hash `1d098c87e07e`，14 只样本）；**v7 = 2026-10-24
-    置信度归因后空间题加历史锚规则**（空间题 conf 均值 0.435 全场最差且无锚；判据加
-    「锚必须先对」硬规则，criteria 门不动，hash `40c7184a790e`）——**跨代标签不得混评**
-    （评估按版本分组）。
+    v6 = 2026-10-23 四题判据增档（hash `1d098c87e07e`，14 只样本）；v7 = 2026-10-24
+    置信度归因后空间题加历史锚规则（空间题 conf 均值 0.435 全场最差且无锚，hash
+    `40c7184a790e`，零样本——首批 10-26 才开火即被 v8 取代）；**v8 = 2026-10-24
+    「越锚」铸词内联定义**（review P3：模型直读可能不解裸铸词，改「要选高于锚的
+    档位（越锚）时」，hash `b0914cdd3e7d`）——**跨代标签不得混评**（评估按版本分组）。
     """
-    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v7"
+    assert A.QUESTION_SET_VERSION_THEME_LEADER == "v8"
     assert A.AMMO_VERSION_THEME_LEADER == "2026-10-24b"
-    assert A.QUESTION_SET_HASH_THEME_LEADER == "40c7184a790e"
+    assert A.QUESTION_SET_HASH_THEME_LEADER == "b0914cdd3e7d"
     # v5：四题 = 题材炒作深度 → 题材延续性 → 次日概率（校准基线锚）→ 龙头剩余空间；
     # catalyst_stage（v1-v4）被深度题取代，保留为旧代字段回读
     assert A.THEME_LEADER_KEYS == ("theme_speculation_depth", "theme_continuation",
