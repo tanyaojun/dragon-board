@@ -137,3 +137,73 @@ def test_refresh_counts_nonexistent_as_empty_not_failed(monkeypatch):
     # 空洞 ID 不误判为失败（应修复：directoryFailedIds 为空）
     assert result["directoryFailedIds"] == []
     assert result["directoryScanCursor"] == 12
+
+
+# ── 目录 diff（2026-10-25 修复：低段补号漏题） ──────────────────────────────
+@pytest.fixture(autouse=True)
+def _no_wzs_http(monkeypatch):
+    """测试禁真实 HTTP：默认目录 diff 走「空目录」零动作（个别用例自行覆盖）。"""
+    monkeypatch.setattr(mapping_refresh, "_fetch_wzs_theme_directory", lambda: [])
+
+
+def test_directory_diff_adds_new_and_renames(monkeypatch):
+    """目录 diff：新 ID 入库 + 改名 upsert；成分走官方端点（mock _fetch_theme_detail）。"""
+    database = _make_database()
+
+    monkeypatch.setattr(mapping_refresh, "_fetch_wzs_theme_directory", lambda: [
+        {"ID": "9", "Name": "旧题材"},                       # 无变化 → 跳过
+        {"ID": "397", "Name": "AI安全"},                     # 新 ID → 入库
+        {"ID": "402", "Name": "俄乌重建"},                   # 新 ID → 入库
+    ])
+
+    def fake_fetch(theme_id):
+        if theme_id == "9":
+            return {"errcode": "0", "Name": "旧题材", "StockList": [{"StockID": "000001"}]}
+        if theme_id == "397":
+            return {"errcode": "0", "Name": "AI安全", "ZSCode": "AISEC",
+                    "StockList": [{"StockID": "000839"}]}
+        if theme_id == "402":
+            return {"errcode": "0", "Name": "俄乌重建", "ZSCode": "RUREB",
+                    "StockList": [{"StockID": "000338"}]}
+        return None
+
+    monkeypatch.setattr(mapping_refresh, "_fetch_theme_detail", fake_fetch)
+    result = mapping_refresh.refresh_theme_stock_mappings(database, diff_only=True)
+    assert result["directoryDiffAdded"] == 2 and result["directoryDiffRenamed"] == 0
+    themes = {d["id"]: d for d in database["themes"].docs}
+    assert themes["402"]["name"] == "俄乌重建" and themes["397"]["name"] == "AI安全"
+    codes = {m["stockCode"] for m in database["theme_stock_mappings"].docs
+             if m.get("themeId") == "402"}
+    assert codes == {"000338"}
+    assert result["themesFetched"] == 0          # diff_only 跳存量
+
+
+def test_directory_diff_renames_existing(monkeypatch):
+    database = _make_database()
+
+    def fake_fetch(theme_id):
+        return {"errcode": "0", "Name": "海南封关概念", "ZSCode": "HNSZ",
+                "StockList": [{"StockID": "000613"}]}
+
+    monkeypatch.setattr(mapping_refresh, "_fetch_theme_detail", fake_fetch)
+    monkeypatch.setattr(mapping_refresh, "_fetch_wzs_theme_directory", lambda: [
+        {"ID": "9", "Name": "海南封关概念"}])       # 库内 9=旧题材 → 改名
+    result = mapping_refresh.refresh_theme_stock_mappings(database, diff_only=True)
+    assert result["directoryDiffRenamed"] == 1 and result["directoryDiffAdded"] == 0
+    assert database["themes"].docs[0]["name"] == "海南封关概念"
+
+
+def test_directory_diff_failure_degrades_visibly(monkeypatch):
+    """第三方目录拉取失败 → 结构化披露不炸主流程（fail-visible）。"""
+    database = _make_database()
+
+    def boom():
+        raise RuntimeError("wzslinker 目录拉取失败: timeout")
+
+    monkeypatch.setattr(mapping_refresh, "_fetch_wzs_theme_directory", boom)
+    monkeypatch.setattr(mapping_refresh, "_fetch_theme_detail",
+                        lambda tid: {"errcode": "0", "Name": "旧题材",
+                                     "StockList": [{"StockID": "000001"}]})
+    result = mapping_refresh.refresh_theme_stock_mappings(database, diff_only=True)
+    assert result["directoryDiffError"].startswith("wzslinker 目录拉取失败")
+    assert result["directoryDiffAdded"] == 0 and result["ok"] is True
