@@ -54,23 +54,21 @@ def _ensure_indexes(db: Any) -> None:
 
 
 def _day_pool_of(db: Any, date: str) -> dict[str, set[str]]:
-    """单日 {题材: boardHeight≥2 涨停 code 集}（进程缓存；THS 封板口径同 _theme_zt_rows）。"""
+    """单日 {题材: boardHeight≥2 涨停 code 集}（进程缓存）。"""
     if date in _POOL_DAY_CACHE:
         return _POOL_DAY_CACHE[date]
     slot = _latest_slot(db, date)
     out: dict[str, set[str]] = {}
     if slot:
-        sealed, _info, _meta = sealed_and_info(db, date, DEFAULT_DATASET_ID)
-        if sealed is not None:
-            for r in db["snapshot_stock_rows"].find(
-                    {"tradingDate": date, "slotTime": slot,
-                     "mainTheme": {"$nin": [None, ""]},
-                     "boardHeight": {"$gte": POPULAR_BOARD_HEIGHT_MIN}},
-                    {"mainTheme": 1, "code": 1}).batch_size(2000):
-                code = str(r.get("code") or "")[-6:]
-                if code in sealed:
-                    theme = str(r["mainTheme"])
-                    out.setdefault(theme, set()).add(code)
+        for r in db["snapshot_stock_rows"].find(
+                {"tradingDate": date, "slotTime": slot, "leadStatus": "涨停",
+                 "mainTheme": {"$nin": [None, ""]},
+                 "boardHeight": {"$gte": POPULAR_BOARD_HEIGHT_MIN}},
+                {"mainTheme": 1, "code": 1}).batch_size(2000):
+            theme = str(r["mainTheme"])
+            code = str(r.get("code") or "")[-6:]
+            if theme and code:
+                out.setdefault(theme, set()).add(code)
     _POOL_DAY_CACHE[date] = out
     return out
 
@@ -83,35 +81,27 @@ def _latest_slot(db: Any, date: str) -> str | None:
     return str(doc["slotTime"]) if doc and doc.get("slotTime") else None
 
 
-def _theme_zt_rows(db: Any, date: str, slot: str | None) -> dict[str, dict[str, Any]] | None:
-    """单日题材→涨停名单行：mainTheme 分组 ∩ THS 封板集合（sealed_and_info 单源）。
+def _theme_zt_rows(db: Any, date: str, slot: str | None) -> dict[str, dict[str, Any]]:
+    """单日题材→涨停名单行：mainTheme 分组（leadStatus=涨停 THS 池口径）。
 
-    不用 leadStatus 字段过滤——旧代快照（≤2026-08 上旬）该字段为空串，改与板块
-    节点同源封板二分（触板−炸板），历史全覆盖；两种口径交集一致（快照池内封板股）。
     返回 {题材: {codes, names, leader, maxStreak, kplZtCount}}；
-    THS 池缺失 → None（整日不可考，fail-visible）；无该日 stock rows → {}。
+    无该日 stock rows → {}（调用方结合 slot 判定整日缺失）。
     """
     if not slot:
         return {}
-    sealed, _info, _meta = sealed_and_info(db, date, DEFAULT_DATASET_ID)
-    if sealed is None:
-        return None
     streaks = jiuyan_streak_map(db, date, DEFAULT_DATASET_ID)
     by_theme: dict[str, list[dict[str, Any]]] = {}
     for r in db["snapshot_stock_rows"].find(
-            {"tradingDate": date, "slotTime": slot,
+            {"tradingDate": date, "slotTime": slot, "leadStatus": "涨停",
              "mainTheme": {"$nin": [None, ""]}},
             {"mainTheme": 1, "code": 1, "name": 1, "firstZtTime": 1,
              "boardHeight": 1}).batch_size(2000):
-        code = str(r.get("code") or "")[-6:]
-        if code not in sealed:
-            continue
         theme = str(r["mainTheme"])
         by_theme.setdefault(theme, []).append({
-            "code": code,
+            "code": str(r.get("code") or "")[-6:],
             "name": r.get("name"),
             "time": r.get("firstZtTime"),
-            "streak": streaks.get(code),
+            "streak": streaks.get(str(r.get("code") or "")[-6:]),
             "boardHeight": r.get("boardHeight"),
         })
     kpl_zt: dict[str, int] = {}
@@ -224,11 +214,10 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
     prev2_slot = _latest_slot(db, prevs[-2]) if len(prevs) >= 2 else None
     prev2_raw = _theme_zt_rows(db, prevs[-2], prev2_slot) if len(prevs) >= 2 else None
 
-    # 今日原料不可考：stock rows 缺失（无槽）或 THS 池缺失（None）→ 整日 unknown（不伪 0）
-    today_by = today_raw if (today_slot and today_raw is not None) else None
-    prev_by = prev_raw if (prev_date and prev_slot is not None and prev_raw is not None) else None
-    prev2_by = prev2_raw if (len(prevs) >= 2 and prev2_slot is not None
-                             and prev2_raw is not None) else None
+    # 今日原料不可考：stock rows 缺失（无槽）→ 整日 unknown（不伪 0）
+    today_by = today_raw if today_slot else None
+    prev_by = prev_raw if (prev_date and prev_slot is not None) else None
+    prev2_by = prev2_raw if (len(prevs) >= 2 and prev2_slot is not None) else None
 
     prev_state_map, prev_doc_found = _prev_cycle_state(db, prev_date)
     count_hist = _count_history(db, date)
@@ -289,9 +278,8 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                           prev_state_map=prev_state_map if prev_doc_found else None,
                           leader_states=leader_states,
                           panic_by=panic_by,
-                          today_missing_reason=(None if today_by is not None else (
-                              "当日 THS 池缺失，封板集合不可二分" if today_slot
-                              else "当日 stock rows 缺失")))
+                          today_missing_reason=(None if today_by is not None
+                                                else "当日 stock rows 缺失"))
     status = "ok" if today_by is not None else "degraded"
     doc = {"_id": f"{date}:THEME_CYCLE", "kind": _KIND, "tradingDate": date,
            "version": THEME_CYCLE_VERSION, "status": status,
