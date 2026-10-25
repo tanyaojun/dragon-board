@@ -499,6 +499,28 @@
         <div class="hint" id="nodesHint" style="margin:6px 2px 0"></div>
       </div>
     </div>
+
+    <!-- ⑧ 题材周期（2026-10-25 v1）：龙头锚四阶段状态机，单源 analysis/hotlist/theme_cycle；
+        预登记 docs/hotlist-jev/theme-cycle-v1-preregistration.md。
+        方法论：题材的锚点是龙头——主升浪（龙头角逐）→转弱势（真金的考验）→弱转强
+        （人气股反包 / ≥3板连板标杆两条路）→终结者；与板块节点（家数锚）独立并存，
+        sectorNode 列为对照展示（两套判据互不引用）。 -->
+    <div class="rv" id="rv-cycle">
+      <div class="card" style="margin-top:18px">
+        <div id="cycleHead"></div>
+        <div class="board-row" id="cycleChips"></div>
+        <div class="lf-bar" id="cycleFilterBar" style="margin-top:6px">
+          <input class="lf-q" placeholder="搜板块 / 龙头名…（回车生效）" value=""
+                 onchange="cycleSet('q', this.value)">
+          <select title="周期档筛选（确定性口径，非模型判读）" onchange="cycleSet('stage', this.value)">
+            <option value="">周期档 · 全部</option>
+          </select>
+          <button onclick="cycleClear()">清除筛选</button>
+        </div>
+        <table id="cycleTable"></table>
+        <div class="hint" id="cycleHint" style="margin:6px 2px 0"></div>
+      </div>
+    </div>
   </section>
 
   <section id="tab-labels" style="display:none">
@@ -573,6 +595,7 @@ const STATE = { series: [], day: null, slots: [], rawSlots: [], eod: null, label
   relayPage: 1,   // 涨停分析表分页（2026-10-19 用户需求：每页上限 20 条；筛选/区间/排序变更即回第 1 页）
   // 板块节点（rv-nodes，2026-10-24 v1）：单日文档 + 节点筛选/搜索/展开态
   nodesData: null, nodesUi: { node: '', q: '', open: {} },
+  cycleData: null, cycleUi: { stage: '', q: '', open: {} },
   pulse: { loading: false, error: null, api: null, view: 'candidates' },   // V2c 盘中红盘提示
   pulseTimer: null,
   labelSort: { key: 'rank', dir: 1 },
@@ -1072,6 +1095,7 @@ async function loadAll(){
   renderRelayTab(); renderLabels(); renderQuotes(); renderDieban();
   tlFetch();   // 题材龙头（rv-themes 子视图）：按当前区间取数
   nodesFetch(date);   // 板块节点（rv-nodes 子视图）：按日期框当日取单日文档
+  cycleFetch(date);   // 题材周期（rv-cycle 子视图）：同一日期联动
   if (STATE.view === 'relay') setView('relay/' + STATE.relayView);   // 回填 tab 行 + 重绘
   else renderCharts();
   $('refreshAt').textContent = '刷新 ' + new Date().toLocaleTimeString('zh-CN', {hour12:false});
@@ -2104,6 +2128,158 @@ async function nodesFetch(date){
   }
   renderNodes();
   renderKpis();   // 板块节点 KPI 卡联动（卡数据源=nodesData，nodesFetch 到货后刷新）
+}
+
+// ── 题材周期（rv-cycle，2026-10-25 v1）：龙头锚四阶段状态机 ──
+// 单源 analysis/hotlist/theme_cycle（判据见预登记 §三）；收盘定档零模型调用；
+// 弱转强=昨日转弱中出精英反包（热榜∧曾≥2板双条件）或 ≥3板新标杆（1-2板只算补涨）；
+// sectorNode 对照列=板块节点同日档位（独立语言，仅展示不进判据）。
+const CYCLE_CN = { wzs: '弱转强', terminator: '终结者', weakening: '转弱势',
+                   main_surge: '主升浪', emerging: '启动', normal: '平淡',
+                   unknown: '不可判' };
+const CYCLE_BADGE = { wzs: 'b-green', terminator: 'b-red', weakening: 'b-amber',
+                      main_surge: 'b-blue', emerging: 'b-purple', normal: 'b-gray',
+                      unknown: 'b-gray' };
+const CYCLE_TIP = {
+  wzs: '弱转强：昨日转弱 → 精英反包（周期内曾≥2板人气股断板后再封 ∧ 热榜在榜）或 ≥3板新连板标杆（1-2板只算补涨）',
+  terminator: '终结者：转弱 3 个可判交易日无精英反包、无 ≥3板新标杆 → 周期归档（终态，新周期须新龙）',
+  weakening: '转弱势：龙一断板（真金的考验）——盯谁能稳住高位不崩塌；终结窗计时中',
+  main_surge: '主升浪：龙一续板且真连板≥2（龙头角逐进行中）',
+  emerging: '启动：有封板但龙一仅首板（龙头角逐未成形）',
+  normal: '平淡：无周期进行中且无封板',
+  unknown: '不可判：今日封板集合不可考（THS 池/final 缺失），周期状态透传、终结窗计时暂停' };
+const LEADER_STATE_CN = { sealed: '续板', broken: '断板', suspended: '停牌',
+                          unknown: '不可考' };
+const EVENT_CN = { burst: '周期开启', relaunch: '新周期', continue: '龙一续板',
+                   leader_break: '龙一断板', wzs: '弱转强', end: '周期终结',
+                   plain_attempt: '补涨尝试' };
+let _cycleSeq = 0;
+async function cycleFetch(date){
+  if (!STATE.series || !STATE.series.length) return;   // 序列未定（首屏竞态）
+  const seq = ++_cycleSeq;
+  const bg = !!(STATE.cycleData && STATE.cycleData.doc);
+  STATE.cycleData = { loading: !bg, error: null, api: null, doc: bg ? STATE.cycleData.doc : null };
+  renderCycle();
+  try {
+    const r = await jget('/api/hotlist-jev/theme-cycle?days=30'
+      + (date ? '&date=' + encodeURIComponent(date) : ''));
+    if (seq !== _cycleSeq) return;
+    STATE.cycleData = { loading: false,
+      error: (r && r.ok === false) ? (r.reason || '读库降级') : null, api: r, doc: (r && r.doc) || null };
+  } catch (e) {
+    if (seq !== _cycleSeq) return;
+    STATE.cycleData = { loading: false,
+      error: 'theme_cycle_read_failed: ' + (e && e.message ? e.message : e),
+      api: null, doc: bg ? STATE.cycleData.doc : null };
+  }
+  renderCycle();
+}
+function cycleSet(key, val){ STATE.cycleUi[key] = val; STATE.cycleUi.open = {}; renderCycle(); }
+function cycleClear(){ STATE.cycleUi = { stage: '', q: '', open: {} };
+  const bar = $('cycleFilterBar');
+  const q = bar && bar.querySelector('input'); if (q) q.value = '';
+  const sel = bar && bar.querySelector('select'); if (sel) sel.value = '';
+  renderCycle(); }
+function cycleToggle(b){ const o = STATE.cycleUi.open; o[b] = !o[b]; renderCycle(); }
+function renderCycle(){
+  const head = $('cycleHead'); if (!head) return;
+  const d = STATE.cycleData || {};
+  const doc = d.doc;
+  const bgErr = d.error && doc
+    ? '<div class="lf-warn">⚠️ 后台刷新失败（' + esc(d.error) + '）——当前展示上次成功数据</div>' : '';
+  if (d.error && !doc){
+    head.innerHTML = '<div class="lf-warn">⚠️ 题材周期读口异常：' + esc(d.error) + '（非「无存档」）</div>';
+    $('cycleChips').innerHTML = ''; $('cycleTable').innerHTML = ''; $('cycleHint').textContent = '';
+    return;
+  }
+  if (!doc){
+    head.innerHTML = '<div class="lf-warn">该日无题材周期存档（盘后链未跑 / 非交易日 / 早于 v1 投产日）</div>';
+    $('cycleChips').innerHTML = ''; $('cycleTable').innerHTML = ''; $('cycleHint').textContent = '';
+    return;
+  }
+  const warns = [];
+  if (doc.status === 'degraded') warns.push('⚠️ 当日降级：' + esc((doc.degraded || []).join('；') || '原因未记录'));
+  const ms = doc.marketState;
+  const msTxt = ms && ms.state
+    ? ' · 大盘状态：<b>' + ({weak: '弱', wzs: '弱转强', strong: '强'}[ms.state] || ms.state)
+      + '</b>（连板指数 ' + ms.idx + '，语境展示非门控）' : '';
+  head.innerHTML = bgErr + (warns.length ? '<div class="lf-warn">' + warns.join('<br>') + '</div>' : '')
+    + '<h3>题材周期 · 四阶段状态机' + esc(msTxt) + '</h3>';
+  const f = STATE.cycleUi;
+  let rows = (doc.rows || []).slice();
+  const dist = {};
+  for (const r of rows) dist[r.stage] = (dist[r.stage] || 0) + 1;
+  $('cycleChips').innerHTML = '<span class="k">周期档分布</span>'
+    + ['wzs', 'main_surge', 'emerging', 'weakening', 'terminator', 'normal', 'unknown']
+      .filter(k => dist[k])
+      .map(k => '<span class="chip' + (f.stage === k ? ' on' : '') + '" title="' + esc(CYCLE_TIP[k])
+        + '" onclick="cycleSet(\'stage\', \'' + k + '\')">' + CYCLE_CN[k] + ' ' + dist[k] + '</span>').join('');
+  if (f.stage) rows = rows.filter(r => r.stage === f.stage);
+  const sel = $('cycleFilterBar') && $('cycleFilterBar').querySelector('select');
+  if (sel){
+    const cur = f.stage || '';
+    sel.innerHTML = '<option value="">周期档 · 全部</option>'
+      + ['wzs', 'main_surge', 'emerging', 'weakening', 'terminator', 'normal', 'unknown']
+        .map(k => `<option value="${k}"${cur === k ? ' selected' : ''}>${CYCLE_CN[k]}</option>`).join('');
+  }
+  if (f.q) rows = rows.filter(r => (r.board || '').includes(f.q)
+    || (((r.leader || {}).name) || '').includes(f.q));
+  // 排序：弱转强 > 主升 > 启动 > 转弱 > 终结 > 平淡 > 不可判；同级按周期号降序
+  const ORD = { wzs: 0, main_surge: 1, emerging: 2, weakening: 3, terminator: 4, normal: 5, unknown: 6 };
+  rows.sort((a, b) => (ORD[a.stage] ?? 9) - (ORD[b.stage] ?? 9) || (b.cycleN || 0) - (a.cycleN || 0));
+  const meta = doc.meta || {};
+  const body = rows.map(r => {
+    const open = !!f.open[r.board];
+    const ld = r.leader;
+    const ldTxt = ld ? esc(ld.name || ld.code || '?')
+      + (ld.streak != null ? ' ' + ld.streak + '板' : '') : '—';
+    const lsTxt = r.leaderState
+      ? ' <span class="badge ' + (r.leaderState === 'sealed' ? 'b-green'
+        : r.leaderState === 'broken' ? 'b-red' : 'b-gray') + '">'
+        + (LEADER_STATE_CN[r.leaderState] || r.leaderState) + '</span>' : '';
+    const evs = (r.events || []).map(e =>
+      '<span class="badge b-purple" title="' + esc((e.stocks || []).map(s => s.name || s.code).join('、')
+        + (e.note ? '：' + e.note : '')) + '">' + (EVENT_CN[e.type] || e.type) + '</span>').join(' ');
+    const cyc = r.cycleN != null ? '第 ' + r.cycleN + ' 轮' : '—';
+    const sn = r.sectorNode
+      ? '<span class="badge ' + (NODE_BADGE[r.sectorNode] || 'b-gray') + '" title="板块节点（家数锚）同日档位对照">'
+        + (NODE_CN[r.sectorNode] || r.sectorNode) + '</span>' : '<span style="color:var(--muted2)">—</span>';
+    const nTxt = r.boardN != null ? r.boardN + ' 家' : '—';
+    const sub = open ? `<tr class="detail"><td colspan="7">
+      <div style="margin:2px 0 6px"><b>判定依据</b>：${(r.basis || []).map(esc).join('；') || '—'}</div>
+      ${(r.notes || []).length ? '<div style="margin:0 0 6px;color:#b45309">注记：' + r.notes.map(esc).join('；') + '</div>' : ''}
+      <div style="margin:0 0 6px"><b>今日事件流</b>：${(r.events || []).map(e =>
+        '<div>· ' + (EVENT_CN[e.type] || e.type) + ' — ' + esc((e.stocks || []).map(s =>
+          (s.name || s.code) + (s.streak != null ? ' ' + s.streak + '板' : '')).join('、') || '—')
+        + (e.note ? '（' + esc(e.note) + '）' : '') + '</div>').join('') || '—'}</div>
+      <div style="margin:0 0 6px"><b>精英反包</b>：${(r.rewrapElite || []).map(s =>
+        esc((s.name || s.code) + (s.streak != null ? ' ' + s.streak + '板' : '')
+          + (s.eliteDegraded ? '（热榜不可考降级）' : '')
+          + (s.inMarketRewrapPool ? '〔在全市场反包池〕' : ''))).join('、') || '无'}</div>
+      <div style="margin:0 0 6px"><b>≥3板新标杆</b>：${(r.newBenchmark || []).map(s =>
+        esc((s.name || s.code) + ' ' + s.streak + '板')).join('、') || '无'}</div>
+      <div><b>普通反包</b>（记事件不改档）：${(r.rewrapPlain || []).map(s =>
+        esc(s.name || s.code)).join('、') || '无'}</div>
+    </td></tr>` : '';
+    return `<tr style="cursor:pointer" onclick="cycleToggle('${esc(r.board)}')">
+      <td><b>${esc(r.board)}</b>${open ? ' ▲' : ' ▼'}</td>
+      <td><span class="badge ${CYCLE_BADGE[r.stage] || 'b-gray'}" title="${esc(CYCLE_TIP[r.stage] || '')}">${CYCLE_CN[r.stage] || r.stage}</span></td>
+      <td>${cyc}</td>
+      <td>${ldTxt}${lsTxt}</td>
+      <td>${nTxt}</td>
+      <td>${evs || '—'}</td>
+      <td>${sn}</td>
+    </tr>${sub}`;
+  }).join('');
+  $('cycleTable').innerHTML = '<thead><tr><th>板块</th><th>周期档</th><th>周期</th><th>龙一</th>'
+    + '<th>今日封板</th><th>事件</th><th>板块节点对照</th></tr></thead><tbody>'
+    + (body || '<tr><td colspan="7" style="color:var(--muted2)">该日无板块行</td></tr>') + '</tbody>';
+  const parts = [];
+  parts.push('热榜在榜：' + (meta.hotlistFound ? '可考' : '不可考（精英判定降级高度代理）'));
+  parts.push('昨日周期文档：' + (meta.prevFound ? '已读（周期成链）' : '缺失（链断，无周期起步）'));
+  parts.push('全市场反包名单 ' + (meta.rewrapPoolN ?? '?') + ' 只（展示徽标非判据）');
+  $('cycleHint').innerHTML = '原料：' + parts.map(esc).join(' · ')
+    + ' · 判据冻结件 docs/hotlist-jev/theme-cycle-v1-preregistration.md（v' + esc(doc.version || '') + '）';
 }
 function nodesSet(key, val){ STATE.nodesUi[key] = val; STATE.nodesUi.open = {}; renderNodes(); }
 function nodesClear(){ STATE.nodesUi = { node: '', q: '', open: {} };
@@ -4025,7 +4201,7 @@ function lgCopy(view, what, ev){
 //   一级 < 5 个，连板指数 5 个子视图各占一页（每页 ≤2 卡，杜绝一页长条）
 // ══════════════════════════════════════════════════════════════════════════════
 const RELAY_VIEWS = [['phase', '相位分线', '🎯'], ['bands', '分带观察', '📐'],
-  ['nodes', '板块节点', '🧭'],
+  ['nodes', '板块节点', '🧭'], ['cycle', '题材周期', '🔄'],
                      ['leaders', '板块与龙头', '🐉'], ['themes', '题材龙头', '👑'],
                      // 2026-10-19 用户裁决：页名由「判定明细」改为「涨停分析」（表内行展开的
                      //   判定明细卡沿用原名，指单日七题判定全文，不当页名）
