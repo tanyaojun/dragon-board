@@ -81,10 +81,25 @@ V2 的 aggN10（近 10 日涨停并集聚合）衡量「**强势股群体**」�
 
 ## 六、验收
 
-- pytest 专项：`test_jiuyan_industry_stocks.py`（归档链 13 用例）、
-  `test_sector_industry_map.py`（映射+静态列 10 用例）、既有 sector_nodes /
-  jiuyan_theme_collect 零回归。
+- pytest 专项：`test_jiuyan_industry_stocks.py`（归档链 15 用例，含 errCode=110
+  重铸自愈两例）、`test_sector_industry_map.py`（映射+静态列 10 用例）、既有
+  sector_nodes / jiuyan_theme_collect 零回归。
 - 首拉冒烟：108/108 ok、成分规模分布合理、`jiuyan_api_calls` 计数=108。
-- 映射冒烟：`--rebuild` 后近 20 日板块映射清单人工过目（多义并集逐条可读）。
+- 映射冒烟：`--rebuild`（默认全史扫描域）后板块映射清单人工过目（多义并集
+  逐条可读）。
 - settle_day 冒烟：单日重算落库，aggStatic 已映射/未收录/缺棒三态抽查。
 - 浏览器验收用户本人做（全成分列+展开卡对照）。
+
+## 七、review 修复（2026-10-25 当轮，用户令确认修复）
+
+- P2 周频守卫在途互斥：当日日志文件存在且 mtime=今日 → skip（拦 15:35 手工
+  挂跑未完时 16:10 守卫双 Popen 并发；完成态仍由批次年龄判定覆盖）。
+- P3-1 动态预算：守卫 Popen 传 `--budget 当日已用+110`（防 collect_once 先用
+  N 次后固定 120 把周刷挤成连续顺延）。
+- P3-2 时长注记：_static_rows_compute docstring 登记「手工重算历史日且 vipdoc
+  未更新 → 线上补尾膨胀，先跑盘后下载或 JEV_BARS_ONLINE_TAIL=0」（生产
+  sectorNodes 步在盘后下载后跑，本地命中毫秒级）。
+- P3-3 rebuild 扫描域默认全史（days=0）：近 20 日窗口会让更老板块 auto 行在
+  产业库换名录后静默残留。
+- P4：验收用例数 13→15 勘正、collect_stock_tree docstring 预算说明对齐
+  代码（max 默认放行）、rebuild 空串过滤防 mapped 虚增。

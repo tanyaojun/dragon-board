@@ -182,6 +182,9 @@ def _static_rows_compute(db: Any, date: str, boards: list[str]) -> dict[str, dic
     """{板块: aggStatic}。未映射（产业库未收录）/空成分快照如实标注，不伪 0。
 
     映射/成分库读取异常落行级 reason（影子列不连坐节点主链，§4.0 fail-visible）。
+    时长注记（review P3-2）：全量成分 ≈2700 码逐码 _daily_bars——本地 vipdoc 命中
+    毫秒级；**手工重算历史日且当日 vipdoc 未更新时**每码走线上补尾会膨胀耗时，
+    先跑当日盘后下载或设 JEV_BARS_ONLINE_TAIL=0。
     """
     from backend.operations.sector_industry_map import static_members
     if not boards:

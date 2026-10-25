@@ -326,19 +326,36 @@ def test_weekly_guard_fresh_batch_skips(monkeypatch, fake_env):
 
 
 def test_weekly_guard_stale_or_never_launches(monkeypatch, fake_env, tmp_path):
+    from datetime import datetime as _dt
     from backend.operations import schedule as SCH
+    # 互斥判定=日志 mtime 是否「今日」，用真实今天驱动（today=now）
+    now = _dt.now()
+    today = now.strftime("%Y-%m-%d")
+    stale_batch = (now - __import__("datetime").timedelta(days=8)).strftime("%Y-%m-%d")
     S.save_industry_stocks(fake_env, code="0079", name="国产机器人",
-                           batch_date="2026-10-18", stocks=_stocks(["300454"]))
+                           batch_date=stale_batch, stocks=_stocks(["300454"]))
     monkeypatch.setattr(SCH.repository_factory, "get_runtime_mongodb_database",
                         lambda: fake_env)
     launched: list[list] = []
     monkeypatch.setattr(SCH.subprocess, "Popen",
                         lambda cmd, **kw: launched.append(cmd))
     monkeypatch.setattr(SCH.Path, "mkdir", lambda self, *a, **k: None, raising=False)
-    out = SCH._maybe_launch_stocktree_weekly("2026-10-26")
-    assert out.get("launched") is True and len(launched) == 1
-    assert "--stock-tree" in launched[0]
+    # in-flight 互斥（review P2）：当日日志已存在（mtime=今日）不再 Popen
+    real_log = Path(__file__).resolve().parents[2] / "logs" / f"stocktree-{today}.log"
+    real_log.parent.mkdir(parents=True, exist_ok=True)
+    real_log.write_text("[1/108] in-flight\n", encoding="utf-8")
+    try:
+        out = SCH._maybe_launch_stocktree_weekly(today)
+        assert str(out.get("reason", "")).startswith("in_flight_or_done_today")
+        assert launched == []
+        real_log.unlink()                      # 清掉 in-flight 标记后再触发
+        out = SCH._maybe_launch_stocktree_weekly(today)
+        assert out.get("launched") is True and len(launched) == 1
+        assert "--stock-tree" in launched[0]
+    finally:
+        if real_log.exists():
+            real_log.unlink()
     # env 关闭 → 不发
     monkeypatch.setenv("JIUYAN_STOCKTREE_WEEKLY_ENABLED", "0")
-    out2 = SCH._maybe_launch_stocktree_weekly("2026-10-26")
+    out2 = SCH._maybe_launch_stocktree_weekly(today)
     assert out2["skipped"] is True

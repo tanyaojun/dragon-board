@@ -316,9 +316,25 @@ def _maybe_launch_stocktree_weekly(today: str) -> dict[str, Any]:
         if age < 7:
             return {"ok": True, "skipped": True, "reason": f"fresh_batch:{batch}"}
     log_path = Path(__file__).resolve().parents[2] / "logs" / f"stocktree-{today}.log"
+    # 在途互斥（review P2）：当日日志已存在（手工挂跑进行中/已跑）不再 Popen——
+    # 完成态由上方批次年龄判定覆盖，这里拦的正是 in-flight 窗口（双进程并发会
+    # 双倍速率撞 errCode=9 + 同日志互写）。
+    if log_path.exists():
+        try:
+            if datetime.fromtimestamp(log_path.stat().st_mtime).strftime("%Y-%m-%d") == today:
+                return {"ok": True, "skipped": True,
+                        "reason": f"in_flight_or_done_today:{log_path.name}"}
+        except OSError:
+            pass
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # 动态预算（review P3-1）：16:10 collect_once 已用 N 次计入同一账本，固定
+    # 120 在 N 大时会把周刷挤成连续顺延——传「当日已用 + 108 全量 + 2 重试余量」。
+    try:
+        used = _ts.calls_recorded(db, today)
+    except Exception:  # noqa: BLE001 — 计数失败不拦刷新，回落静态预算
+        used = 0
     cmd = [sys.executable, "-m", "backend.operations.jiuyan_theme_collect",
-           "--stock-tree", "--date", today]
+           "--stock-tree", "--date", today, "--budget", str(used + 110)]
     try:
         with log_path.open("a", encoding="utf-8") as fh:
             subprocess.Popen(cmd, cwd=str(Path(__file__).resolve().parents[2]),

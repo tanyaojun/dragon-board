@@ -57,6 +57,9 @@ def level1_industries(db: Any) -> list[dict]:
 
 def rebuild(db: Any, boards: list[str]) -> dict:
     """对板块名集合幂等重建 auto 映射（manual 行不动）。返回 diff 摘要。"""
+    # 空串过滤（review P4-3）：set(boards) 计入空串而循环 continue 跳过，
+    # mapped 计数会虚增 1
+    boards = sorted({b for b in boards if b})
     industries = level1_industries(db)
     names = [i["name"] for i in industries]
     name_by_code = {i["name"]: i["code"] for i in industries}
@@ -171,12 +174,19 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _recent_boards(db: Any, days: int = 20) -> list[str]:
-    """近 N 个交易日的 action 板块名（rebuild 扫描域）。"""
+def _recent_boards(db: Any, days: int = 0) -> list[str]:
+    """近 N 个交易日的 action 板块名（rebuild 扫描域）。
+
+    days=0（默认）=全史（review P3-3：只扫近 20 日时，更老板块的 auto 行在
+    产业库换名录后会静默残留脏映射；全史文档 ~130 日毫秒级，无成本）。
+    """
     from backend.operations.sector_nodes import COLLECTION as NODES_COLLECTION
+    cur = db[NODES_COLLECTION].find({}, {"rows.board": 1, "aggExtraRows.board": 1}
+                                    ).sort("_id", -1)
+    if days:
+        cur = cur.limit(days)
     boards: set[str] = set()
-    for doc in db[NODES_COLLECTION].find({}, {"rows.board": 1, "aggExtraRows.board": 1}
-                                         ).sort("_id", -1).limit(days):
+    for doc in cur:
         for r in doc.get("rows") or []:
             if r.get("board"):
                 boards.add(str(r["board"]))
@@ -190,7 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="action 板块名→产业库映射（V3-2）")
     ap.add_argument("--rebuild", action="store_true",
                     help="对近 N 交易日板块名重建 auto 映射（manual 不动）")
-    ap.add_argument("--days", type=int, default=20, help="rebuild 扫描域（默认近 20 交易日）")
+    ap.add_argument("--days", type=int, default=0,
+                    help="rebuild 扫描域（默认 0=全史，防老 auto 行脏映射残留）")
     ap.add_argument("--set", dest="manual", default=None,
                     help="人工固化：板块名=产业名1,产业名2（空值=删除回 auto）")
     ap.add_argument("--list", action="store_true", help="打印当前映射全表")

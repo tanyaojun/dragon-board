@@ -179,9 +179,10 @@ def collect_stock_tree(*, codes: list[str] | None = None, fetch_date: str | None
     """全成分归档（V3-1，2026-10-25 用户三拍板：全量 108 首拉/周频全量/全量纳入+披露强度）。
 
     - 待拉清单 = level1 节点 − 当日已成功（断点续拉；--force 重拉当日）；
-    - 预算：默认日预算 12 会挡 108 次全量——首拉/周刷须 `--budget 120` 或 env
-      `JIUYAN_STOCKTREE_WEEKLY_BUDGET`（调度挂点用后者，默认 120）；
-    - 限流护栏同 collect_once：串行 20s 间隔 + errCode=9 退避 60s 重试 1 次；
+    - 预算：默认 max(日预算 12, 周刷预算 JIUYAN_STOCKTREE_WEEKLY_BUDGET=120)，
+      调度守卫会按当日已用动态传 --budget；手工窄口场景用 --budget 覆盖；
+    - 限流护栏同 collect_once：串行 20s 间隔 + errCode=9 退避 60s 重试 1 次
+      + errCode=110 force_refresh 重铸自愈（token 寿命 ~30 调用，首拉实测）；
     - 单板块失败只降级该板块（failed 列表透出），其余继续（§4.0）。
     """
     fetch_date = fetch_date or datetime.now().strftime("%Y-%m-%d")
