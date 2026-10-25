@@ -23,7 +23,7 @@
 
 | 原料 | 单源 | 说明 |
 |---|---|---|
-| 题材内涨停名单 | `snapshot_stock_rows` 当日最新槽：`mainTheme=题材 ∧ leadStatus=涨停` | THS 池口径；mainTheme 治理后 90.3% 判出，None 行不入任何题材 |
+| 题材内涨停名单 | `snapshot_stock_rows` 当日最新槽 `mainTheme=题材` ∩ **THS 封板集合**（`sealed_and_info` 二分，板块节点同源） | **2026-10-25 实施回改**：初版按 leadStatus=涨停 过滤，回填实测旧代快照（≤2026-08 上旬）该字段为空串致 7 月 22 日空窗口——改与板块节点同源封板二分，历史全覆盖，判据冻结件随代码回改登记 |
 | 题材当日涨停数 n0 | 上名单计数 | KPL `ztCount`（sector_rows）作对照列（口径差如实并排） |
 | 真连板 | `jiuyan_streak_map` | 不可算=None 不猜 |
 | 龙头 | 名单内真连板最高→`firstZtTime` 最早 | 爆发日=最先涨停即龙头（用户裁定） |
