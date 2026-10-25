@@ -404,61 +404,6 @@ def get_sector_nodes(
         return {"ok": False, "degraded": True, "reason": f"sector_nodes_read_failed: {exc}"}
 
 
-@router.get("/theme-cycle")
-def get_theme_cycle(
-    date: str | None = None,
-    days: int = 60,
-) -> dict[str, Any]:
-    """题材周期读口（2026-10-25 v1，预登记 theme-cycle-v1-preregistration.md）：
-
-    单日全行（date 给定或最新）+ 近 N 日序列摘要（阶段分布/wzs 名单，不含重载荷行）；
-    fail-visible：文档缺失/降级日原样透出 status=degraded 与 degraded 原因，不伪造。
-    """
-    try:
-        db = repository_factory.get_runtime_mongodb_database()
-    except Exception as exc:
-        return {"ok": False, "degraded": True, "reason": f"mongodb_unavailable: {exc}"}
-    try:
-        col = db["hotlist_jev_theme_cycle"]
-        capped_days = max(1, min(int(days), 400))
-        latest = date
-        if not latest:
-            newest = col.find_one({}, {"tradingDate": 1}, sort=[("tradingDate", -1)])
-            latest = str(newest.get("tradingDate")) if newest else None
-        day_doc = col.find_one({"tradingDate": latest}) if latest else None
-        series = list(col.find(
-            {"tradingDate": {"$ne": None}},
-            {"tradingDate": 1, "version": 1, "status": 1, "degraded": 1,
-             "rows.theme": 1, "rows.stage": 1, "rows.cycleN": 1, "rows.events": 1},
-        ).sort("tradingDate", -1).limit(capped_days))
-        series.reverse()
-
-        def _summary(rows: list | None) -> tuple[dict[str, int], list[str]]:
-            dist: dict[str, int] = {}
-            wzs_boards: list[str] = []
-            for r in rows or []:
-                stage = r.get("stage")
-                if stage:
-                    dist[stage] = dist.get(stage, 0) + 1
-                if stage == "wzs":
-                    wzs_boards.append(str(r.get("theme") or ""))
-            return dist, wzs_boards
-
-        for s in series:
-            if not s:
-                continue
-            s["stageDist"], s["wzsBoards"] = _summary(s.pop("rows", None))
-        if day_doc:
-            day_doc["stageDist"], day_doc["wzsBoards"] = _summary(day_doc.get("rows"))
-        degraded_dates = {str(r.get("tradingDate")) for r in [*series, day_doc]
-                          if r and r.get("status") != "ok"}
-        return {"ok": True, "date": latest, "days": capped_days,
-                "series": series, "doc": day_doc,
-                "degradedCount": len(degraded_dates)}
-    except Exception as exc:
-        return {"ok": False, "degraded": True, "reason": f"theme_cycle_read_failed: {exc}"}
-
-
 @router.get("/sector-pulse")
 def get_sector_pulse(date: str | None = None) -> dict[str, Any]:
     """V2c 盘中红盘提示读口（2026-10-25，预登记 sector-nodes-v2c-intraday-preregistration.md）：
