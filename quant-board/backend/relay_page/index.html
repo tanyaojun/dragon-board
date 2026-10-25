@@ -2180,7 +2180,7 @@ function cycleClear(){ STATE.cycleUi = { stage: '', q: '', open: {} };
   const q = bar && bar.querySelector('input'); if (q) q.value = '';
   const sel = bar && bar.querySelector('select'); if (sel) sel.value = '';
   renderCycle(); }
-function cycleToggle(b){ const o = STATE.cycleUi.open; o[b] = !o[b]; renderCycle(); }
+function cycleToggle(t){ const o = STATE.cycleUi.open; o[t] = !o[t]; renderCycle(); }
 function renderCycle(){
   const head = $('cycleHead'); if (!head) return;
   const d = STATE.cycleData || {};
@@ -2204,7 +2204,7 @@ function renderCycle(){
     ? ' · 大盘状态：<b>' + ({weak: '弱', wzs: '弱转强', strong: '强'}[ms.state] || ms.state)
       + '</b>（连板指数 ' + ms.idx + '，语境展示非门控）' : '';
   head.innerHTML = bgErr + (warns.length ? '<div class="lf-warn">' + warns.join('<br>') + '</div>' : '')
-    + '<h3>题材周期 · 四阶段状态机' + esc(msTxt) + '</h3>';
+    + '<h3>题材周期 · 四阶段状态机（题材=事件驱动概念标签）' + msTxt + '</h3>';
   const f = STATE.cycleUi;
   let rows = (doc.rows || []).slice();
   const dist = {};
@@ -2222,14 +2222,14 @@ function renderCycle(){
       + ['wzs', 'main_surge', 'emerging', 'weakening', 'terminator', 'normal', 'unknown']
         .map(k => `<option value="${k}"${cur === k ? ' selected' : ''}>${CYCLE_CN[k]}</option>`).join('');
   }
-  if (f.q) rows = rows.filter(r => (r.board || '').includes(f.q)
+  if (f.q) rows = rows.filter(r => (r.theme || '').includes(f.q)
     || (((r.leader || {}).name) || '').includes(f.q));
   // 排序：弱转强 > 主升 > 启动 > 转弱 > 终结 > 平淡 > 不可判；同级按周期号降序
   const ORD = { wzs: 0, main_surge: 1, emerging: 2, weakening: 3, terminator: 4, normal: 5, unknown: 6 };
   rows.sort((a, b) => (ORD[a.stage] ?? 9) - (ORD[b.stage] ?? 9) || (b.cycleN || 0) - (a.cycleN || 0));
   const meta = doc.meta || {};
   const body = rows.map(r => {
-    const open = !!f.open[r.board];
+    const open = !!f.open[r.theme];
     const ld = r.leader;
     const ldTxt = ld ? esc(ld.name || ld.code || '?')
       + (ld.streak != null ? ' ' + ld.streak + '板' : '') : '—';
@@ -2241,9 +2241,8 @@ function renderCycle(){
       '<span class="badge b-purple" title="' + esc((e.stocks || []).map(s => s.name || s.code).join('、')
         + (e.note ? '：' + e.note : '')) + '">' + (EVENT_CN[e.type] || e.type) + '</span>').join(' ');
     const cyc = r.cycleN != null ? '第 ' + r.cycleN + ' 轮' : '—';
-    const sn = r.sectorNode
-      ? '<span class="badge ' + (NODE_BADGE[r.sectorNode] || 'b-gray') + '" title="板块节点（家数锚）同日档位对照">'
-        + (NODE_CN[r.sectorNode] || r.sectorNode) + '</span>' : '<span style="color:var(--muted2)">—</span>';
+    const jy = r.jiuyanBoard && r.jiuyanBoard !== r.theme
+      ? '<span class="badge b-gray" title="对应韭研板块（大盘情绪同源对照）">' + esc(r.jiuyanBoard) + '</span>' : '';
     const nTxt = r.boardN != null ? r.boardN + ' 家' : '—';
     const sub = open ? `<tr class="detail"><td colspan="7">
       <div style="margin:2px 0 6px"><b>判定依据</b>：${(r.basis || []).map(esc).join('；') || '—'}</div>
@@ -2261,22 +2260,23 @@ function renderCycle(){
       <div><b>普通反包</b>（记事件不改档）：${(r.rewrapPlain || []).map(s =>
         esc(s.name || s.code)).join('、') || '无'}</div>
     </td></tr>` : '';
-    return `<tr style="cursor:pointer" onclick="cycleToggle('${esc(r.board)}')">
-      <td><b>${esc(r.board)}</b>${open ? ' ▲' : ' ▼'}</td>
+    return `<tr style="cursor:pointer" onclick="cycleToggle('${esc(r.theme)}')">
+      <td><b>${esc(r.theme)}</b>${jy}${open ? ' ▲' : ' ▼'}</td>
       <td><span class="badge ${CYCLE_BADGE[r.stage] || 'b-gray'}" title="${esc(CYCLE_TIP[r.stage] || '')}">${CYCLE_CN[r.stage] || r.stage}</span></td>
       <td>${cyc}</td>
       <td>${ldTxt}${lsTxt}</td>
       <td>${nTxt}</td>
       <td>${evs || '—'}</td>
-      <td>${sn}</td>
     </tr>${sub}`;
   }).join('');
-  $('cycleTable').innerHTML = '<thead><tr><th>板块</th><th>周期档</th><th>周期</th><th>龙一</th>'
-    + '<th>今日封板</th><th>事件</th><th>板块节点对照</th></tr></thead><tbody>'
-    + (body || '<tr><td colspan="7" style="color:var(--muted2)">该日无板块行</td></tr>') + '</tbody>';
+  $('cycleTable').innerHTML = '<thead><tr><th>题材</th><th>周期档</th><th>周期</th><th>龙一</th>'
+    + '<th>今日封板</th><th>事件</th></tr></thead><tbody>'
+    + (body || '<tr><td colspan="6" style="color:var(--muted2)">该日无题材行</td></tr>') + '</tbody>';
   const parts = [];
   parts.push('热榜在榜：' + (meta.hotlistFound ? '可考' : '不可考（精英判定降级高度代理）'));
   parts.push('昨日周期文档：' + (meta.prevFound ? '已读（周期成链）' : '缺失（链断，无周期起步）'));
+  parts.push('映射批次 ' + (meta.mappingBatchAt ? String(meta.mappingBatchAt).slice(0, 10) : '?')
+    + '（前视口径披露） · 治理缺口题材 ' + (meta.govMissingThemes ?? 0));
   parts.push('全市场反包名单 ' + (meta.rewrapPoolN ?? '?') + ' 只（展示徽标非判据）');
   $('cycleHint').innerHTML = '原料：' + parts.map(esc).join(' · ')
     + ' · 判据冻结件 docs/hotlist-jev/theme-cycle-v1-preregistration.md（v' + esc(doc.version || '') + '）';
@@ -2339,7 +2339,7 @@ function renderNodes(){
   const maxN = Math.max(1, ...(doc.rows || []).map(r => r.count || 0));
   const meta = doc.meta || {};
   const body = rows.map(r => {
-    const open = !!f.open[r.board];
+    const open = !!f.open[r.theme];
     const delta = (r.prevCount != null && r.count != null) ? r.count - r.prevCount : null;
     const dtxt = delta == null ? '—' : (delta > 0 ? '+' + delta : String(delta));
     const dcol = delta == null ? 'var(--muted2)'

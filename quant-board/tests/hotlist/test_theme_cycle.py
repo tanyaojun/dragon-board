@@ -271,7 +271,7 @@ def test_panic_note_insufficient_sample():
 # ── 常量与 fail-visible 兜底 ────────────────────────────────────────────────
 
 def test_constants():
-    assert THEME_CYCLE_VERSION == "v1"
+    assert THEME_CYCLE_VERSION == "v2"
     assert NEW_BENCHMARK_MIN_STREAK == 3
     assert STAGE_LABELS_CN["wzs"] == "弱转强"
     assert STAGE_LABELS_CN["terminator"] == "终结者"

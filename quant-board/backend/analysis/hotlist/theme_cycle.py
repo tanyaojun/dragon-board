@@ -1,28 +1,31 @@
 # -*- coding: utf-8 -*-
-"""题材周期 v1（theme-cycle，2026-10-25）：板块级、以龙头为锚的四阶段炒作周期状态机。
+"""题材周期 v2（theme-cycle，2026-10-25）：题材级、以龙头为锚的四阶段炒作周期状态机。
 
 预登记：docs/hotlist-jev/theme-cycle-v1-preregistration.md（判据表 §三；改门=新代际+用户
 批准，冻结件与 classify_board_cycle 逐字对齐）。方法论来源：《第3课 题材周期》——
 题材的锚点是龙头；主升浪（龙头角逐）→转弱势（真金的考验）→弱转强（新龙再崛起，
 只有人气股反包与连板标杆≥3板两条路）→终结者（再无新龙崛起）。
 
-定位：与板块节点（sector_nodes 家数锚 8 档）独立并存互为对照，两套语言判据互不引用；
-sectorNode/marketState 仅展示层对照列。本模块纯函数零 IO，原料由 operations/theme_cycle.py
-从单源取齐传入（day_leader_rows / jiuyan_streak_map / day_status_of / snapshot_stock_rows
-热榜在榜 / _daily_bars）。
+**对象定义（v2 代际，用户裁定题材≠板块）**：题材=外部事件驱动（新闻/小作文/流量热度）
+的炒作主题，对象载体=`themes` 集合概念标签（longhuvip 245+ 题材，行情总览「题材」列
+同源）+ `theme_stock_mappings` 成分映射（一股可映射多题材，题材独立聚合重叠计入）；
+**板块=产业链内部驱动（龙头带动板块跟风），由板块节点（sector_nodes 家数锚）覆盖，
+两对象不同维度不互为对照**（v1 曾误用韭研 action 当日分组名为对象，与板块节点重叠，
+已归档 data/backups/theme-cycle-v1-jiuyan-group-archive-20261025 后重建）。题材与板块
+长期标签下承载多轮炒作，cycleN 跨终结递增区分（同题材名≠同题材周期）。
 
-与反包池的关系（预登记 §二裁定）：本模块「反包」=周期成员状态转移（c∈周期成员 ∧
-昨日未封 ∧ 今日封板），窗口=周期全长，非 rewrap_pool 5 日窗的第二套反包率；全市场
-反包池名单仅作展示徽标（inMarketRewrapPool），不参与判定。
+本模块纯函数零 IO：classify_board_cycle 接收抽象分组（题材/板块皆可）的当日状态与
+昨日 cycleState，判据对象无关；题材维度的取数与题材归属在 operations/theme_cycle.py
+（单源 themes/theme_stock_mappings/jiuyan_streak_map/day_status_of/snapshot_stock_rows）。
 
-fail-visible：今日封板集合不可考 → 全板块 unknown、周期状态透传且终结窗计时暂停
+fail-visible：今日封板集合不可考 → 全题材 unknown、周期状态透传且终结窗计时暂停
 （停牌哲学同款：不可判日不算推进）；绝不把缺料伪装成 normal/终结。
 """
 from __future__ import annotations
 
 from typing import Any
 
-THEME_CYCLE_VERSION = "v1"
+THEME_CYCLE_VERSION = "v2"
 
 # 阶段枚举与优先级（预登记 §三.1/§三.3：从高到低，命中即定档；改动须新代际）
 STAGE_ORDER = ("unknown", "wzs", "terminator", "weakening",

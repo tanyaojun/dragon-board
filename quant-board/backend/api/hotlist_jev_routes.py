@@ -429,7 +429,7 @@ def get_theme_cycle(
         series = list(col.find(
             {"tradingDate": {"$ne": None}},
             {"tradingDate": 1, "version": 1, "status": 1, "degraded": 1,
-             "rows.board": 1, "rows.stage": 1, "rows.cycleN": 1, "rows.events": 1},
+             "rows.theme": 1, "rows.stage": 1, "rows.cycleN": 1, "rows.events": 1},
         ).sort("tradingDate", -1).limit(capped_days))
         series.reverse()
 
@@ -441,7 +441,7 @@ def get_theme_cycle(
                 if stage:
                     dist[stage] = dist.get(stage, 0) + 1
                 if stage == "wzs":
-                    wzs_boards.append(str(r.get("board") or ""))
+                    wzs_boards.append(str(r.get("theme") or ""))
             return dist, wzs_boards
 
         for s in series:
