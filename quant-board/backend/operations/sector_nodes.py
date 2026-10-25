@@ -32,6 +32,7 @@ from backend.operations.jev_label_jiuyan import (
 )
 from backend.analysis.hotlist.sector_agg import (
     AGG_VERSION,
+    aggregate_day,
     assemble_agg_rows,
 )
 from backend.operations.jev_relay_index import _promotion_stats
@@ -170,6 +171,52 @@ def _agg_mount(agg_rows: list[dict[str, Any]],
     return [ar for ar in agg_rows if ar["board"] not in boards]
 
 
+# V3 静态全成分聚合（2026-10-25，板块节点三期）：与 aggN10 同式同棒链
+# （aggregate_day 复用），成员=映射产业全成分并集（sector_industry_map）。
+# 已知局限：产业库为活库无历史——历史回填日读到的是「当前批次成分」的前视口径，
+# 行级 batchDates 披露成分批次；影子列不进判据（同 V2 范式）。
+AGG_STATIC_VERSION = "2026-10-25a"
+
+
+def _static_rows_compute(db: Any, date: str, boards: list[str]) -> dict[str, dict[str, Any]]:
+    """{板块: aggStatic}。未映射（产业库未收录）/空成分快照如实标注，不伪 0。
+
+    映射/成分库读取异常落行级 reason（影子列不连坐节点主链，§4.0 fail-visible）。
+    """
+    from backend.operations.sector_industry_map import static_members
+    if not boards:
+        return {}
+    members_by_board: dict[str, dict[str, Any]] = {}
+    for b in boards:
+        try:
+            members_by_board[b] = static_members(db, b)
+        except Exception as exc:  # noqa: BLE001 — 影子列降级，主链照常
+            members_by_board[b] = {"mapped": False,
+                                   "reason": f"映射读取失败: {type(exc).__name__}: {exc}"}
+    all_codes: set[str] = set()
+    for m in members_by_board.values():
+        if m.get("mapped") and m.get("codes"):
+            all_codes |= m["codes"]
+    bars_by_code: dict[str, list[dict[str, Any]]] = {}
+    if all_codes:
+        with bars_need_upto(date):
+            for code in sorted(all_codes):
+                bars_by_code[code] = _daily_bars(code)
+    out: dict[str, dict[str, Any]] = {}
+    for board in boards:
+        m = members_by_board[board]
+        if not m.get("mapped") or not m.get("codes"):
+            out[board] = {"mapped": bool(m.get("mapped")),
+                          "reason": m.get("reason") or "成分集为空"}
+            continue
+        stats = aggregate_day(target_date=date, members=m["codes"],
+                              bars_by_code=bars_by_code, window_days=0)
+        out[board] = {"mapped": True, **stats,
+                      "industries": m["industries"], "batchDates": m["batchDates"],
+                      "sharesMedian": m["sharesMedian"]}
+    return out
+
+
 def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict[str, Any]:
     """单日计算+落库（幂等覆盖）；昨日节点从昨日文档读（回填升序天然成链）。"""
     prevs = trading_dates_before(db, date, 2, dataset_id=dataset_id)
@@ -212,6 +259,17 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
         m = agg_by_board.get(str(r.get("board") or ""))
         if m is not None:
             r["aggN10"] = m
+    # V3-3：静态全成分聚合挂全部行（判档行 + aggExtra 行——「未收录」本身是观察信息）
+    static_boards = sorted(({str(r.get("board") or "") for r in built["rows"]}
+                            | {str(ar.get("board") or "") for ar in agg_extra}) - {""})
+    static_by_board = _static_rows_compute(db, date, static_boards)
+    for r in built["rows"]:
+        r["aggStatic"] = static_by_board.get(str(r.get("board") or ""),
+                                             {"mapped": False, "reason": "未计算"})
+    for ar in agg_extra:
+        ar["aggStatic"] = static_by_board.get(str(ar.get("board") or ""),
+                                              {"mapped": False, "reason": "未计算"})
+    static_mapped = sum(1 for v in static_by_board.values() if v.get("mapped"))
     doc = {"_id": f"{date}:SECTOR_NODES", "kind": _KIND, "tradingDate": date,
            "version": SECTOR_NODE_VERSION, "status": status,
            "computedAt": datetime.now(timezone.utc),
@@ -222,6 +280,9 @@ def settle_day(db: Any, date: str, dataset_id: str = DEFAULT_DATASET_ID) -> dict
                     "promOk": bool(prom.get("ok")),
                     "aggVersion": AGG_VERSION,
                     "aggExtraCount": len(agg_extra),
+                    "aggStaticVersion": AGG_STATIC_VERSION,
+                    "staticMapped": static_mapped,
+                    "staticUnmapped": len(static_by_board) - static_mapped,
                     "streakSource": "jiuyan_streak_map"}}
     db[COLLECTION].replace_one({"_id": doc["_id"]}, doc, upsert=True)
     dist: dict[str, int] = {}

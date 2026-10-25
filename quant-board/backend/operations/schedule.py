@@ -290,6 +290,45 @@ def jiuyan_theme_collect_enabled() -> bool:
     return os.environ.get("JIUYAN_THEME_COLLECT_ENABLED", "1") != "0"
 
 
+def _maybe_launch_stocktree_weekly(today: str) -> dict[str, Any]:
+    """V3-1 全成分周频刷新守卫（2026-10-25 用户拍板「每周日全量」的等价实现）。
+
+    周日无交易日挂链 → 改为交易日 16:10 守卫：距 `jiuyan_industry_stocks` 最新
+    成功批次 ≥7 自然日（或从未拉过）则 Popen 挂跑全量，节假日自动顺延补拉。
+    Popen 不等待：108 次 × 20s 间隔 ≈ 36min+ 远超任何步骤超时；断点续拉保证
+    被杀后下一守卫窗口续上。开关 `JIUYAN_STOCKTREE_WEEKLY_ENABLED=0` 可关。
+    """
+    if os.environ.get("JIUYAN_STOCKTREE_WEEKLY_ENABLED", "1") == "0":
+        return {"ok": True, "skipped": True, "reason": "disabled"}
+    try:
+        db = repository_factory.get_runtime_mongodb_database()
+        from backend.operations import jiuyan_theme_store as _ts
+        batch = _ts.latest_industry_stocks_batch(db)
+    except Exception as exc:  # noqa: BLE001 — advisory 守卫，失败结构化返回
+        return {"ok": False, "error": {"code": "stocktree_guard_failed",
+                                       "message": f"{type(exc).__name__}: {exc}"}}
+    if batch:
+        try:
+            age = (datetime.strptime(today, "%Y-%m-%d")
+                   - datetime.strptime(str(batch), "%Y-%m-%d")).days
+        except ValueError:
+            age = 99
+        if age < 7:
+            return {"ok": True, "skipped": True, "reason": f"fresh_batch:{batch}"}
+    log_path = Path(__file__).resolve().parents[2] / "logs" / f"stocktree-{today}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, "-m", "backend.operations.jiuyan_theme_collect",
+           "--stock-tree", "--date", today]
+    try:
+        with log_path.open("a", encoding="utf-8") as fh:
+            subprocess.Popen(cmd, cwd=str(Path(__file__).resolve().parents[2]),
+                             stdout=fh, stderr=subprocess.STDOUT)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": {"code": "stocktree_launch_failed",
+                                       "message": f"{type(exc).__name__}: {exc}"}}
+    return {"ok": True, "launched": True, "lastBatch": batch, "log": str(log_path.name)}
+
+
 def theme_leader_label_enabled() -> bool:
     """题材层龙头投喂开关（2026-10-20 用户裁决每日自动投喂；默认开）。"""
     return os.environ.get("THEME_LEADER_LABEL_ENABLED", "1") != "0"
@@ -474,6 +513,8 @@ def run_theme_corpus_collect_once(today: str | None = None, *,
                               "skippedByBudget": result.get("skippedByBudget") or [],
                               "stats": result}
         ok_all = ok_all and bool(result.get("ok"))
+    # V3-1 全成分周频守卫（16:10 交易日挂链；Popen 挂跑不阻塞本步）
+    results["stock_tree_weekly"] = _maybe_launch_stocktree_weekly(today)
     return {"ok": ok_all, "date": today, "collectors": results}
 
 

@@ -22,6 +22,19 @@ import json
 
 # 端点（POST，与 /action/field 同一 API_BASE）
 PATH_AI_INDUSTRY = "/ai/industry/list"
+# 全成分树（V3-1，2026-10-25 实测定形：GET 被 405 拒「请求方式错误」,不是用GET」，
+# POST body {"code": 一级code} → errCode=0 data=该产业全树，成分挂各级节点 stock_list[]）
+PATH_STOCK_TREE = "/ai/industry/stock-tree"
+
+
+def normalize_stock_code(raw: object) -> str:
+    """sz300454/sh600519 → 6 位纯数字（与 sector 链 code 同型）；非 6 位数字返回 ''（剔）。"""
+    s = str(raw or "").strip().lower()
+    for p in ("sz", "sh", "bj"):
+        if s.startswith(p):
+            s = s[len(p):]
+            break
+    return s if len(s) == 6 and s.isdigit() else ""
 
 
 def api_post_json(url_path: str, body: dict, *, session_cookie: str, token: str,
@@ -142,3 +155,72 @@ def fetch_ai_industry(*, session_cookie: str, token: str, timestamp: str) -> dic
     return _fetch(PATH_AI_INDUSTRY, {}, session_cookie=session_cookie, token=token,
                   timestamp=timestamp, parser=parse_ai_industry_response,
                   what="ai/industry/list")
+
+
+# ── 全成分树（V3-1：板块节点三期全成分增强） ──────────────────────────────
+def parse_stock_tree(payload: dict) -> dict:
+    """`/ai/industry/stock-tree` 响应 → {ok, root}；root = 一级节点全树原样（审计用）。"""
+    err = _errcode_error(payload, "ai/industry/stock-tree")
+    if err:
+        return {**err, "root": None}
+    data = (payload or {}).get("data")
+    if not isinstance(data, dict) or not (data.get("code") or data.get("name")):
+        return {"ok": False, "error": f"stock-tree data 形状异常: {type(data).__name__}",
+                "root": None}
+    return {"ok": True, "root": data}
+
+
+def flatten_stock_tree(root: dict) -> dict:
+    """全树展平为一级产业成分集（V3 预登记 §成分口径=全量纳入+披露强度）。
+
+    同股多节点出现取 shares_range 最高的人次（关联最强口径）；leafPath 记该人次
+    挂的叶子路径（审计「这只股为什么在这」）；非 6 位 code 剔除并计入 invalidN。
+    """
+    industry = {"code": str(root.get("code") or ""),
+                "name": (root.get("name") or root.get("group_name") or "").strip()}
+    best: dict[str, dict] = {}
+    invalid = 0
+
+    def _walk(node: dict, path: list[str]) -> None:
+        nonlocal invalid
+        if not isinstance(node, dict):
+            return
+        seg = str(node.get("name") or node.get("group_name") or "").strip()
+        p = path + ([seg] if seg else [])
+        for s in node.get("stock_list") or []:
+            if not isinstance(s, dict):
+                continue
+            code = normalize_stock_code(s.get("stock_code"))
+            if not code:
+                invalid += 1
+                continue
+            shares = s.get("shares_range")
+            shares = float(shares) if isinstance(shares, (int, float)) else None
+            cur = best.get(code)
+            if cur is not None and (shares is None or (cur.get("sharesRange") or -1.0) >= shares):
+                continue
+            best[code] = {
+                "code": code,
+                "name": str(s.get("stock_name") or "").strip(),
+                "sharesRange": shares,
+                "exaggeratedCount": int(s.get("exaggerated_count") or 0),
+                "isShares": bool(s.get("is_shares")),
+                "content": str(s.get("content") or "").strip(),
+                "leafPath": "/".join(p),
+            }
+        for kid in node.get("children") or []:
+            _walk(kid, p)
+
+    _walk(root, [])
+    return {**industry, "stocks": [best[c] for c in sorted(best)], "invalidN": invalid}
+
+
+def fetch_industry_stock_tree(code: str, *, session_cookie: str, token: str,
+                              timestamp: str) -> dict:
+    """拉单个一级产业全成分树。返回 {ok, root, industry}（industry=展平成分集）。"""
+    res = _fetch(PATH_STOCK_TREE, {"code": str(code)}, session_cookie=session_cookie,
+                 token=token, timestamp=timestamp, parser=parse_stock_tree,
+                 what=f"stock-tree[{code}]")
+    if res.get("ok"):
+        res["industry"] = flatten_stock_tree(res["root"])
+    return res

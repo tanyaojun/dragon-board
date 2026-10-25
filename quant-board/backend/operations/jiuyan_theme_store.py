@@ -105,3 +105,79 @@ def get_industry_nodes(db: Any) -> list[dict]:
         "code": 1, "name": 1, "level": 1, "parentCode": 1, "path": 1, "content": 1,
         "hot": 1, "contentChangedDate": 1, "industryUpdateTime": 1, "lastFetchDate": 1,
     }))
+
+
+# ── 全成分快照（V3-1：板块节点三期全成分增强，2026-10-25） ──────────────────
+COLLECTION_INDUSTRY_STOCKS = "jiuyan_industry_stocks"
+
+
+def _stocks_digest(stocks: list[dict]) -> str:
+    """成分集指纹（code:sharesRange 排序串），变更检测用。"""
+    parts = sorted(f"{s['code']}:{s.get('sharesRange')}" for s in stocks or [])
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def save_industry_stocks(db: Any, *, code: str, name: str, batch_date: str,
+                         stocks: list[dict]) -> dict:
+    """一级产业成分快照幂等 upsert（`_id=code`）。
+
+    同批次重拉不滚 prevDiff；跨批次记录 prevDiff 摘要（added/removed code 列表），
+    不存全量旧版（审计够用、不占库；完整历史不可重放登记为已知局限——读数带
+    batchDate 标注口径）。
+    """
+    existing = db[COLLECTION_INDUSTRY_STOCKS].find_one(
+        {"_id": code}, {"batchDate": 1, "stocks": 1, "prevDiff": 1, "changedAt": 1,
+                        "prevBatchDate": 1}) or {}
+    same_batch = existing.get("batchDate") == batch_date
+    digest = _stocks_digest(stocks)
+    changed = digest != existing.get("stocksDigest")
+    if not existing:
+        prev_diff, prev_batch = None, None            # 首批无 prev
+    elif same_batch:
+        prev_diff = existing.get("prevDiff")
+        prev_batch = existing.get("prevBatchDate")
+    else:
+        old_codes = {s["code"] for s in existing.get("stocks") or []}
+        new_codes = {s["code"] for s in stocks}
+        prev_diff = {"added": sorted(new_codes - old_codes),
+                     "removed": sorted(old_codes - new_codes)}
+        prev_batch = existing.get("batchDate")
+    doc = {
+        "_id": code,
+        "kind": "jiuyan_industry_stocks",
+        "code": code,
+        "name": name,
+        "level": 1,
+        "batchDate": batch_date,
+        "prevBatchDate": prev_batch,
+        "stockN": len(stocks),
+        "stocks": stocks,
+        "stocksDigest": digest,
+        "prevDiff": prev_diff,
+        "changedAt": (datetime.now().isoformat(timespec="seconds")
+                      if changed and not same_batch else existing.get("changedAt")),
+        "updatedAt": _now(),
+    }
+    db[COLLECTION_INDUSTRY_STOCKS].replace_one({"_id": code}, doc, upsert=True)
+    return {"written": 1, "stockN": len(stocks), "changed": bool(changed and not same_batch)}
+
+
+def pending_industry_stock_codes(db: Any, batch_date: str) -> list[dict]:
+    """待拉清单（断点续拉）：level=1 节点 − 当日已成功（batchDate==batch_date 且 stockN>0）。
+
+    返回 [{code, name}]（按 code 排序）——产业树缺失/空时如实返回空清单（fail-visible，
+    调用方以「0 待拉」+根因披露，不伪成功）。
+    """
+    nodes = db[COLLECTION_INDUSTRY].find({"level": 1}, {"code": 1, "name": 1})
+    done = {d["_id"] for d in db[COLLECTION_INDUSTRY_STOCKS].find(
+        {"batchDate": batch_date, "stockN": {"$gt": 0}}, {"_id": 1})}
+    return sorted(({"code": str(n["code"]), "name": str(n.get("name") or "")}
+                   for n in nodes if n["code"] not in done),
+                  key=lambda x: x["code"])
+
+
+def latest_industry_stocks_batch(db: Any) -> str | None:
+    """最新成功批次日期（调度周频守卫用；空库返回 None）。"""
+    doc = db[COLLECTION_INDUSTRY_STOCKS].find_one(
+        {"stockN": {"$gt": 0}}, sort=[("batchDate", -1)], projection={"batchDate": 1})
+    return (doc or {}).get("batchDate")

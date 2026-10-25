@@ -2196,6 +2196,25 @@ function renderNodes(){
     const aggTip = agg == null ? '当日未算（旧档早于 V2 投产）'
       : `近${agg.windowDays}日活跃股聚合 · 成员${agg.memberN} · 有行情${agg.quotedN} · 缺棒${agg.missingN}`
         + ` · 红盘率${agg.redRatio == null ? '—' : Math.round(agg.redRatio * 100) + '%'}（影子证据，不进节点判据）`;
+    // V3 静态全成分聚合（2026-10-25 三期）：与活跃聚合同式对照，两列差=扩散/收缩观察位
+    const st = r.aggStatic;
+    let stTxt = '—', stCol = 'var(--muted2)', stTip = '当日未算（旧档早于 V3 投产）';
+    if (st && st.mapped === false){
+      stTxt = '未收录'; stTip = st.reason || '产业库未收录';
+    } else if (st && st.mapped === true){
+      if (st.pctMean != null){
+        stTxt = (st.pctMean > 0 ? '+' : '') + st.pctMean.toFixed(2) + '%';
+        stCol = st.pctMean > 0 ? '#dc2626' : st.pctMean < 0 ? '#16a34a' : 'var(--muted2)';
+      } else if (st.reason){
+        stTxt = '空'; stTip = st.reason;
+      } else {
+        stTxt = `缺棒${st.missingN}/${st.memberN}`;
+      }
+      stTip = `全成分聚合（${(st.industries || []).join('+') || '?'}）· 成员${st.memberN ?? '?'}`
+        + ` · 红盘率${st.redRatio == null ? '—' : Math.round(st.redRatio * 100) + '%'}`
+        + ` · 成分批次${(st.batchDates || []).join('/') || '?'} · 关联强度中位${st.sharesMedian ?? '—'}`
+        + `（影子证据，不进判据；全成分口径=韭研产业库，含低关联股权股）`;
+    }
     return `<tr class="lg-row${open ? ' open' : ''}" onclick="nodesToggle('${js(r.board)}')">
       <td><span class="lg-caret" onclick="event.stopPropagation(); nodesToggle('${js(r.board)}')">▶</span>${esc(r.board)}</td>
       <td class="num">${r.count ?? '-'}</td>
@@ -2205,9 +2224,10 @@ function renderNodes(){
       <td class="num" style="color:var(--muted)">${ztxt}</td>
       <td class="num">${prom}</td>
       <td class="num" style="color:${aggCol}" title="${esc(aggTip)}">${aggTxt}</td>
+      <td class="num" style="color:${stCol}" title="${esc(stTip)}">${stTxt}</td>
       <td><span class="badge ${NODE_BADGE[r.node] || 'b-gray'}" title="${esc(tip + prevTip)}（v1 确定性规则，收盘定档）">${nd}</span></td>
       <td class="nd-basis" style="color:var(--muted)" title="${esc(basis)}">${esc(basis)}</td></tr>`
-      + (open ? `<tr class="lg-detail"><td colspan="10"><div class="lg-card" onclick="event.stopPropagation()">
+      + (open ? `<tr class="lg-detail"><td colspan="11"><div class="lg-card" onclick="event.stopPropagation()">
           <div class="lg-head"><div class="lg-title">${esc(r.board)} · 判定依据（v1 确定性规则，收盘定档）</div></div>
           <div style="font-size:12px;color:var(--muted)">近 ${((r.countSeries || []).length)} 日封板家数（旧→新，末根=今日）</div>
           ${nodesSpark(r.countSeries, maxN)}
@@ -2223,23 +2243,45 @@ function renderNodes(){
         </div></td></tr>` : '');
   }).join('');
   $('nodesTable').innerHTML = `<tr><th>板块</th><th>家数</th><th>Δ较昨</th><th>梯队（首/2/3板+）</th>
-    <th>龙头</th><th>断板 / 板内炸板</th><th>晋级</th><th>聚合涨幅</th><th>节点</th><th>依据</th></tr>`
-    + (body || '<tr><td colspan="10" class="empty">无板块行（筛选过严或当日无存档）</td></tr>');
+    <th>龙头</th><th>断板 / 板内炸板</th><th>晋级</th><th>聚合涨幅</th><th>全成分</th><th>节点</th><th>依据</th></tr>`
+    + (body || '<tr><td colspan="11" class="empty">无板块行（筛选过严或当日无存档）</td></tr>');
   $('nodesHint').textContent = `共 ${(doc.rows || []).length} 板块 · ${doc.version || 'v1'} 收盘定档`
     + (meta.prevDate ? ` · 昨日节点链自 ${meta.prevDate}` : ' · 昨日节点不可考')
-    + (meta.aggVersion ? ` · 活跃股聚合 ${meta.aggVersion}（影子证据，不进判据）` : '');
+    + (meta.aggVersion ? ` · 活跃股聚合 ${meta.aggVersion}（影子证据，不进判据）` : '')
+    + (meta.aggStaticVersion ? ` · 全成分聚合 ${meta.aggStaticVersion}（已映射 ${meta.staticMapped ?? '?'}/${(meta.staticMapped ?? 0) + (meta.staticUnmapped ?? 0)} 板块，未收录=产业库无此题材）` : '');
 }
-// V2 影子聚合展开卡（预登记 §三）：单窗全量统计 + missingN 披露
+// V2/V3 影子聚合展开卡：活跃股聚合 vs 全成分聚合 对照 + 红盘率差=扩散观察位
+// （两列同式同棒链，差值中性展示，影子期不做判定语义）
 function nodesAggCard(r){
   const a = r.aggN10;
-  if (!a) return '';
-  const fmt = x => x == null ? '—' : (x.pctMean == null
-    ? `缺棒 ${x.missingN}/${x.memberN}（无可用行情）`
+  const s = r.aggStatic;
+  if (!a && !s) return '';
+  const fmt = x => x == null || x.pctMean == null
+    ? (x == null ? '当日未算' : `缺棒 ${x.missingN}/${x.memberN}（无可用行情）`)
     : `均 ${(x.pctMean > 0 ? '+' : '') + x.pctMean.toFixed(2)}% · 中位 ${(x.pctMedian > 0 ? '+' : '') + (x.pctMedian || 0).toFixed(2)}%`
-      + ` · 红盘 ${Math.round((x.redRatio || 0) * 100)}% · 成员 ${x.memberN}（有行情 ${x.quotedN} / 缺棒 ${x.missingN}）`);
+      + ` · 红盘 ${x.redRatio == null ? '—' : Math.round(x.redRatio * 100)}% · 成员 ${x.memberN}（有行情 ${x.quotedN} / 缺棒 ${x.missingN}）`;
+  const line = (label, x, sub) => x ? `<div style="font-size:12px;margin-top:2px"><b>${label}</b> ${fmt(x)}</div>
+      <div style="font-size:11px;color:var(--muted)">${sub}</div>` : '';
+  const activeLine = line('活跃股聚合', a,
+    `近${a ? a.windowDays : '?'}日涨停并集（影子证据，不进节点判据）`);
+  let staticLine = '';
+  if (s && s.mapped === true && s.pctMean != null){
+    staticLine = line('全成分聚合', s,
+      `韭研产业库（${(s.industries || []).join('+') || '?'}）· 批次 ${((s.batchDates || []).join('/') || '?')} · 关联强度中位 ${s.sharesMedian ?? '—'}（含低关联股权股）`);
+  } else if (s && s.mapped === false){
+    staticLine = `<div style="font-size:12px;margin-top:2px;color:var(--muted2)"><b>全成分聚合</b> ${s.reason || '产业库未收录'}</div>`;
+  } else if (s){
+    staticLine = `<div style="font-size:12px;margin-top:2px;color:var(--muted2)"><b>全成分聚合</b> ${s.reason || '成分快照为空/缺棒'}</div>`;
+  }
+  let spread = '';
+  if (a && a.redRatio != null && s && s.mapped === true && s.redRatio != null){
+    const diff = Math.round((s.redRatio - a.redRatio) * 100);
+    spread = `<div style="font-size:12px;margin-top:4px">扩散对照：活跃红盘 ${Math.round(a.redRatio * 100)}% vs 全成分红盘 ${Math.round(s.redRatio * 100)}%`
+      + `（差 ${diff > 0 ? '+' : ''}${diff}pp ${diff >= 0 ? '· 全成分不弱于活跃股（普涨/轮动接替）' : '· 强度集中于活跃股（独角戏未扩散）'}）</div>`;
+  }
   return `<div style="margin-top:8px;padding:6px 8px;background:var(--bg2,rgba(0,0,0,.03));border-radius:6px">
-    <div style="font-size:12px;color:var(--muted)">活跃股聚合 · 近${a.windowDays}日池（影子证据，不进节点判据）</div>
-    <div style="font-size:12px;margin-top:2px">${fmt(a)}</div>
+    <div style="font-size:12px;color:var(--muted)">聚合锚对照（影子证据，不进节点判据）</div>
+    ${activeLine}${staticLine}${spread}
   </div>`;
 }
 

@@ -147,17 +147,144 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="不写业务库，只打印统计（仍计调用额度）")
     ap.add_argument("--budget", type=int, default=None,
                     help=f"当日题材端点调用预算（缺省 env/常量={DEFAULT_DAILY_CALL_BUDGET}）")
+    ap.add_argument("--stock-tree", action="store_true",
+                    help="全成分归档模式（V3-1）：拉 stock-tree 落 jiuyan_industry_stocks，断点续拉")
+    ap.add_argument("--codes", default=None,
+                    help="（--stock-tree）仅拉这些一级 code，逗号分隔；缺省=全量待拉清单")
+    ap.add_argument("--force", action="store_true",
+                    help="（--stock-tree）忽略当日断点（重拉当日已成功板块）")
     ap.add_argument("--json", default=None, help="统计写入该文件")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    result = collect_once(fetch_date=args.date, dry_run=args.dry_run,
-                          budget=args.budget)
+    if args.stock_tree:
+        codes = ([c.strip() for c in args.codes.split(",") if c.strip()]
+                 if args.codes else None)
+        result = collect_stock_tree(codes=codes, fetch_date=args.date,
+                                    force=args.force, dry_run=args.dry_run,
+                                    date=args.date, budget=args.budget)
+    else:
+        result = collect_once(fetch_date=args.date, dry_run=args.dry_run,
+                              budget=args.budget)
     text = json.dumps(result, ensure_ascii=False, indent=1, default=str)
     print(text)
     if args.json:
         from pathlib import Path
         Path(args.json).write_text(text, encoding="utf-8")
     return 0 if result.get("ok") else 1
+
+
+def collect_stock_tree(*, codes: list[str] | None = None, fetch_date: str | None = None,
+                       force: bool = False, dry_run: bool = False,
+                       date: str | None = None, budget: int | None = None) -> dict:
+    """全成分归档（V3-1，2026-10-25 用户三拍板：全量 108 首拉/周频全量/全量纳入+披露强度）。
+
+    - 待拉清单 = level1 节点 − 当日已成功（断点续拉；--force 重拉当日）；
+    - 预算：默认日预算 12 会挡 108 次全量——首拉/周刷须 `--budget 120` 或 env
+      `JIUYAN_STOCKTREE_WEEKLY_BUDGET`（调度挂点用后者，默认 120）；
+    - 限流护栏同 collect_once：串行 20s 间隔 + errCode=9 退避 60s 重试 1 次；
+    - 单板块失败只降级该板块（failed 列表透出），其余继续（§4.0）。
+    """
+    fetch_date = fetch_date or datetime.now().strftime("%Y-%m-%d")
+    from backend.data.repositories.repository_factory import get_runtime_mongodb_database
+    db = get_runtime_mongodb_database()
+
+    if codes is not None:
+        pending = [{"code": c, "name": ""} for c in codes]
+    else:
+        pending = ([] if force else
+                   S.pending_industry_stock_codes(db, fetch_date))
+        if force:
+            pending = list(db[S.COLLECTION_INDUSTRY].find(
+                {"level": 1}, {"code": 1, "name": 1}).sort("code", 1))
+            pending = [{"code": str(n["code"]), "name": str(n.get("name") or "")}
+                       for n in pending]
+
+    default_budget = max(daily_call_budget(), _stocktree_weekly_budget())
+    budget = default_budget if budget is None else int(budget)
+    used = S.calls_recorded(db, fetch_date)
+    stats: dict[str, Any] = {"ok": True, "fetchDate": fetch_date, "mode": "stock_tree",
+                             "pending": len(pending), "budget": budget,
+                             "callsUsedToday": used}
+    if not pending:
+        stats["note"] = "0 待拉（当日已全部成功或产业树空）"
+        return stats
+    if used + len(pending) > budget:
+        stats.update({"ok": False, "skippedByBudget": ["industry_stock_tree"],
+                      "reason": f"当日已用 {used} + 待拉 {len(pending)} > 预算 {budget}"})
+        return stats
+
+    auth = jiuyan_auth.resolve_auth(date=date or fetch_date)
+    if not auth.get("ok"):
+        return {**stats, "ok": False, "error": auth.get("error"),
+                "authFailed": bool(auth.get("authFailed")), "degraded": ["auth"]}
+    kw = {"session_cookie": auth["session"], "token": auth["token"],
+          "timestamp": auth["timestamp"]}
+
+    written = changed = 0
+    failed: list[dict] = []
+    # token 时效 < 全量挂跑时长（2026-10-25 首拉实测：~25 分钟/60+ 次调用后
+    # errCode=110 连串）→ authFailed 时 force_refresh 重铸自愈续跑（限次防死循环）
+    auth_refreshes = 0
+    MAX_AUTH_REFRESHES = 5
+    for i, item in enumerate(pending, 1):
+        code, name = item["code"], item.get("name") or ""
+        retries = 0
+        while True:
+            time.sleep(INTER_CALL_DELAY_SECONDS)
+            S.record_api_calls(db, fetch_date, ("industry_stock_tree",))
+            res = F.fetch_industry_stock_tree(code, **kw)
+            if not res.get("rateLimited") or retries >= RATE_LIMIT_MAX_RETRIES:
+                break
+            retries += 1
+            logger.warning("stock-tree[%s] 被限流（errCode=9），%.0fs 后重试 %d/%d",
+                           code, RATE_LIMIT_RETRY_SLEEP_SECONDS, retries,
+                           RATE_LIMIT_MAX_RETRIES)
+            time.sleep(RATE_LIMIT_RETRY_SLEEP_SECONDS)
+        if res.get("authFailed") and auth_refreshes < MAX_AUTH_REFRESHES:
+            auth_refreshes += 1
+            logger.warning("stock-tree[%s] 认证失效（errCode=110），重铸 token %d/%d",
+                           code, auth_refreshes, MAX_AUTH_REFRESHES)
+            fresh = jiuyan_auth.resolve_auth(date=date or fetch_date, force_refresh=True)
+            if fresh.get("ok"):
+                kw = {"session_cookie": fresh["session"], "token": fresh["token"],
+                      "timestamp": fresh["timestamp"]}
+                S.record_api_calls(db, fetch_date, ("industry_stock_tree",))
+                res = F.fetch_industry_stock_tree(code, **kw)
+        if not res.get("ok"):
+            failed.append({"code": code, "name": name, "error": res.get("error")})
+            logger.warning("[%d/%d] %s %s 失败: %s", i, len(pending), code, name,
+                           res.get("error"))
+            continue
+        industry = res.get("industry") or {}
+        stocks = industry.get("stocks") or []
+        if not stocks:
+            # 空成分按失败记（不落 stockN=0 假成功，防断点续拉把空档当已成功跳过）
+            failed.append({"code": code, "name": name, "error": "空成分（0 股）"})
+            logger.warning("[%d/%d] %s %s 空成分", i, len(pending), code, name)
+            continue
+        if not dry_run:
+            st = S.save_industry_stocks(db, code=code,
+                                        name=name or industry.get("name") or "",
+                                        batch_date=fetch_date, stocks=stocks)
+            written += st["written"]
+            changed += 1 if st["changed"] else 0
+        logger.info("[%d/%d] %s %s → %d 只%s", i, len(pending), code, name,
+                    len(stocks), "（成分变更）" if not dry_run and st["changed"] else "")
+    stats.update({"written": written, "changed": changed, "failed": failed,
+                  "failedN": len(failed),
+                  "ok": len(failed) < len(pending),   # 全失败才算失败（§4.0）
+                  "callsUsedTodayAfter": S.calls_recorded(db, fetch_date)})
+    if dry_run:
+        stats["dryRun"] = True
+    return stats
+
+
+def _stocktree_weekly_budget() -> int:
+    """周刷预算（调度挂点默认 120 = 108 全量 + 产业树 1 + 重试余量；env 可覆盖）。"""
+    try:
+        return max(1, int(os.environ.get("JIUYAN_STOCKTREE_WEEKLY_BUDGET", 120)))
+    except ValueError:
+        return 120
 
 
 if __name__ == "__main__":
